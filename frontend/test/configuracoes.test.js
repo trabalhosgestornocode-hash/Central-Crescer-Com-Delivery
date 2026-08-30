@@ -106,3 +106,13 @@ describe("Configurações — sem resquício hardcoded da Subway", () => {
     assert.doesNotMatch(CODIGO, /email[^\n]*state\.usuario/);
   });
 });
+
+describe("Configurações — Usuários por unidade (Fase C.1)", () => {
+  test("a listagem trata usuário com acesso só por unidade", () => {
+    assert.match(CODIGO, /gerenciavelAqui/);
+    assert.match(CODIGO, /u\.unidades/);
+  });
+  test("não deixa o <select> de cargo ser ligado para vínculo de unidade", () => {
+    assert.match(CODIGO, /select\.cfg-user-perfil/); // seletor de wiring restrito a <select>
+  });
+});

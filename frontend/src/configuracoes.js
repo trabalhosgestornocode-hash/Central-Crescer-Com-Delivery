@@ -419,13 +419,29 @@ const DETALHES = {
     function linhaUsuario(u) {
       const label = PAPEL_LABEL[u.papel] || u.papel || "—";
       const nome = u.nome || u.email || "—";
+      // gerenciavelAqui = tem vínculo de EMPRESA (o <select> e o 🗑️ desta tela
+      // mexem só nisso). Quem entra só por unidade aparece, mas read-only.
+      const soUnidade = u.gerenciavelAqui === false;
+      const unidadesTxt = (u.unidades || [])
+        .map((x) => `${x.unidadeNome}${x.papel ? ` (${PAPEL_LABEL[x.papel] || x.papel})` : " (herda)"}`)
+        .join(", ");
+      const origemBadge = soUnidade
+        ? `<span class="pill warn" title="${escapeHtml(unidadesTxt)}">Só por unidade</span>`
+        : (u.origem === "empresa+unidade"
+          ? `<span class="pill" title="${escapeHtml(unidadesTxt)}">Empresa + unidade</span>` : "");
+      const selCargo = soUnidade
+        ? `<span class="cfg-user-perfil-ro">${escapeHtml(unidadesTxt || "acesso por unidade")}</span>`
+        : `<select class="cfg-user-perfil" data-id="${escapeHtml(u.id)}">${PERFIS.map((p) => `<option ${p === label ? "selected" : ""}>${p}</option>`).join("")}</select>`;
       return `
         <div class="cfg-user" data-id="${escapeHtml(u.id)}">
           <span class="cfg-user-av">${escapeHtml((nome[0] || "?").toUpperCase())}</span>
-          <div class="cfg-user-info"><b>${escapeHtml(nome)}</b><small>${escapeHtml(u.email || "")}</small></div>
-          <select class="cfg-user-perfil" data-id="${escapeHtml(u.id)}">${PERFIS.map((p) => `<option ${p === label ? "selected" : ""}>${p}</option>`).join("")}</select>
+          <div class="cfg-user-info"><b>${escapeHtml(nome)}</b><small>${escapeHtml(u.email || "")}${origemBadge ? " · " : ""}</small></div>
+          ${origemBadge}
+          ${selCargo}
           <span class="pill ${u.ativo ? "ok" : "muted"}">${u.ativo ? "Ativo" : "Inativo"}</span>
-          <button class="cfg-user-del" data-del="${escapeHtml(u.id)}" title="Remover acesso" aria-label="Remover acesso de ${escapeHtml(nome)}">🗑️</button>
+          ${soUnidade
+            ? `<span class="cfg-user-del cfg-user-del--off" title="Gerenciado pelo Administrador da plataforma (vínculo de unidade)">🔒</span>`
+            : `<button class="cfg-user-del" data-del="${escapeHtml(u.id)}" title="Remover acesso" aria-label="Remover acesso de ${escapeHtml(nome)}">🗑️</button>`}
         </div>`;
     }
 
@@ -450,8 +466,8 @@ const DETALHES = {
 
       root.querySelector("#nu-gerar").addEventListener("click", () => { root.querySelector("#nu-senha").value = gerarSenha(); });
       root.querySelector("#nu-add").addEventListener("click", criar);
-      root.querySelectorAll(".cfg-user-del").forEach((b) => b.addEventListener("click", () => excluir(b.dataset.del, lista)));
-      root.querySelectorAll(".cfg-user-perfil").forEach((s) => s.addEventListener("change", () => trocarPerfil(s.dataset.id, PAPEL_ENUM[s.value])));
+      root.querySelectorAll("button.cfg-user-del[data-del]").forEach((b) => b.addEventListener("click", () => excluir(b.dataset.del, lista)));
+      root.querySelectorAll("select.cfg-user-perfil").forEach((s) => s.addEventListener("change", () => trocarPerfil(s.dataset.id, PAPEL_ENUM[s.value])));
     }
 
     async function criar() {
