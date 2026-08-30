@@ -559,6 +559,156 @@ async function abrirDetalheUsuario(id) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Modal "Associar empresas" — visão completa dos vínculos do usuário:
+//   * Vínculos atuais  -> editar cargo (explícito, via atualizarVinculo);
+//   * Adicionar acesso -> selecionar N empresas NÃO associadas de uma vez,
+//     com "mesmo cargo em todas" ou cargo individual (via lote, atômico).
+// Nunca remove vínculo. Nunca altera cargo existente sem o usuário mexer no
+// seletor daquele vínculo.
+// ---------------------------------------------------------------------------
+async function abrirModalAssociarEmpresas(id, nome) {
+  const [detalhe, empresas, papeis] = await Promise.all([
+    adminApi.usuario(id),
+    cache.empresas.length ? cache.empresas : adminApi.empresas().then((r) => (cache.empresas = r)),
+    cache.papeis.length ? cache.papeis : adminApi.papeis().then((r) => (cache.papeis = r)),
+  ]);
+
+  const papelPorOrg = new Map((detalhe.empresas || []).map((v) => [v.organizacaoId, v]));
+  const associadas = (detalhe.empresas || []).slice()
+    .sort((a, b) => a.empresaNome.localeCompare(b.empresaNome, "pt-BR"));
+  const disponiveis = empresas
+    .filter((e) => !papelPorOrg.has(e.id))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+
+  const opcoesPapel = (sel) => papeis
+    .map((p) => `<option value="${escapeHtml(p.valor)}" ${p.valor === sel ? "selected" : ""}>${escapeHtml(p.rotulo)}</option>`).join("");
+
+  const linhaAtual = (v) => `
+    <div class="adm-assoc adm-assoc--atual" data-nome="${escapeHtml(v.empresaNome.toLowerCase())}">
+      <span class="adm-assoc-nome">✓ <b>${escapeHtml(v.empresaNome)}</b>
+        <span class="pill ok">Associado</span>${v.ativo ? "" : '<span class="pill bad">bloqueado</span>'}</span>
+      <select class="assoc-cargo-atual" data-org="${escapeHtml(v.organizacaoId)}" data-original="${escapeHtml(v.papel)}">
+        ${opcoesPapel(v.papel)}
+      </select>
+      <small class="assoc-flag-alterado" hidden>cargo alterado</small>
+    </div>`;
+
+  const linhaNova = (e) => `
+    <label class="adm-assoc adm-assoc--nova" data-nome="${escapeHtml(e.nome.toLowerCase())}">
+      <input type="checkbox" class="assoc-chk" data-org="${escapeHtml(e.id)}" />
+      <span class="adm-assoc-nome">${escapeHtml(e.nome)} ${pill(STATUS_EMPRESA, e.status)}</span>
+      <select class="assoc-cargo-nova" data-org="${escapeHtml(e.id)}">${opcoesPapel("operations")}</select>
+    </label>`;
+
+  const buscaHtml = (associadas.length + disponiveis.length) > 8
+    ? `<label class="adm-campo adm-campo--full"><span>🔎 Buscar empresa</span>
+        <input id="assoc-busca" type="text" placeholder="Filtrar por nome…" /></label>`
+    : "";
+
+  const atuaisHtml = associadas.length
+    ? `<h3 class="adm-det-tit">Vínculos atuais</h3>
+       <p class="adm-nota">Trocar o cargo aqui altera o vínculo que já existe (encerra as sessões daquele usuário nessa empresa). Não cria associação nova.</p>
+       <div class="adm-assoc-lista" id="assoc-atuais">${associadas.map(linhaAtual).join("")}</div>`
+    : "";
+
+  const novasHtml = disponiveis.length
+    ? `<h3 class="adm-det-tit">Adicionar acesso a empresas</h3>
+       <p class="adm-nota">Marque as empresas que este usuário passará a acessar e o cargo em cada uma.</p>
+       <div class="adm-assoc-lista" id="assoc-novas">${disponiveis.map(linhaNova).join("")}</div>
+       <div id="assoc-cargo-modo" hidden>
+         <p class="adm-nota"><b>Este usuário terá o mesmo cargo em todas as empresas selecionadas?</b></p>
+         <label class="adm-radio"><input type="radio" name="assoc-modo" value="mesmo" checked /> Sim — mesmo cargo em todas</label>
+         <label class="adm-radio"><input type="radio" name="assoc-modo" value="individual" /> Não — definir individualmente</label>
+         <div id="assoc-cargo-todas" class="adm-campo">
+           <span>Cargo para todas as selecionadas</span>
+           <select id="assoc-cargo-unico">${opcoesPapel("operations")}</select>
+         </div>
+       </div>`
+    : `<h3 class="adm-det-tit">Adicionar acesso a empresas</h3>
+       <p class="adm-nota">Este usuário já está associado a todas as empresas.</p>`;
+
+  abrirModal({
+    titulo: `Associar empresas — ${nome}`,
+    corpo: `<div class="adm-assoc-modal">${buscaHtml}${atuaisHtml}${novasHtml}</div>`,
+    confirmar: "Associar selecionadas",
+    aoConfirmar: async () => {
+      const body = el("#adm-modal-body");
+      const alteracoes = [...body.querySelectorAll(".assoc-cargo-atual")]
+        .filter((s) => s.value !== s.dataset.original)
+        .map((s) => ({ organizacaoId: s.dataset.org, papel: s.value }));
+
+      const modo = body.querySelector('input[name="assoc-modo"]:checked')?.value || "individual";
+      const cargoUnico = valor("assoc-cargo-unico");
+      const novas = [...body.querySelectorAll(".assoc-chk")]
+        .filter((c) => c.checked)
+        .map((c) => {
+          const org = c.dataset.org;
+          const rowSel = body.querySelector(`.assoc-cargo-nova[data-org="${org}"]`);
+          const papel = modo === "mesmo" && cargoUnico ? cargoUnico : rowSel?.value;
+          return { organizacaoId: org, papel };
+        });
+
+      if (!alteracoes.length && !novas.length) {
+        throw new Error("Marque ao menos uma empresa nova, ou altere o cargo de um vínculo atual.");
+      }
+
+      const resumo = [];
+      // Novas primeiro: operação atômica (ou entra tudo, ou nada).
+      if (novas.length) {
+        const r = await adminApi.associarEmpresasLote(id, novas);
+        resumo.push(`${r.criadas.length} empresa(s) associada(s)`);
+      }
+      // Alterações de cargo em vínculos já existentes (uma a uma, explícitas).
+      for (const a of alteracoes) {
+        await adminApi.atualizarVinculo(id, a.organizacaoId, { papel: a.papel });
+      }
+      if (alteracoes.length) resumo.push(`${alteracoes.length} cargo(s) alterado(s)`);
+
+      toast(resumo.join(" · "));
+      recarregarAdmin();
+    },
+  });
+
+  // --- comportamento dinâmico (mesmo padrão de usuario-associar-unidade) ---
+  const body = el("#adm-modal-body");
+
+  const busca = el("#assoc-busca");
+  busca?.addEventListener("input", () => {
+    const termo = busca.value.trim().toLowerCase();
+    body.querySelectorAll(".adm-assoc").forEach((row) => {
+      row.hidden = !!termo && !(row.dataset.nome || "").includes(termo);
+    });
+  });
+
+  const modoBox = el("#assoc-cargo-modo");
+  const todasBox = el("#assoc-cargo-todas");
+  function sincronizar() {
+    const marcadas = [...body.querySelectorAll(".assoc-chk")].filter((c) => c.checked);
+    if (modoBox) modoBox.hidden = marcadas.length < 2;
+    const modo = body.querySelector('input[name="assoc-modo"]:checked')?.value || "mesmo";
+    if (todasBox) todasBox.hidden = modo !== "mesmo" || marcadas.length < 2;
+    // Cargo por linha: some/desabilita quando "mesmo cargo" está no comando.
+    body.querySelectorAll(".assoc-cargo-nova").forEach((sel) => {
+      const linhaMarcada = sel.closest(".adm-assoc")?.querySelector(".assoc-chk")?.checked;
+      const mandaOUnico = modo === "mesmo" && marcadas.length >= 2 && linhaMarcada;
+      sel.disabled = !!mandaOUnico;
+      sel.classList.toggle("adm-assoc-cargo--off", !!mandaOUnico);
+    });
+  }
+  body.querySelectorAll(".assoc-chk").forEach((c) => c.addEventListener("change", sincronizar));
+  body.querySelectorAll('input[name="assoc-modo"]').forEach((r) => r.addEventListener("change", sincronizar));
+
+  body.querySelectorAll(".assoc-cargo-atual").forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const flag = sel.parentElement.querySelector(".assoc-flag-alterado");
+      if (flag) flag.hidden = sel.value === sel.dataset.original;
+    });
+  });
+
+  sincronizar();
+}
+
 // ===========================================================================
 // 4. FINANCEIRO DO SAAS
 // ===========================================================================
@@ -1342,25 +1492,7 @@ const ACOES = {
 
   "usuario-ver": ({ id }) => abrirDetalheUsuario(id),
 
-  "usuario-associar": async ({ id, nome }) => {
-    if (!cache.empresas.length) cache.empresas = await adminApi.empresas();
-    if (!cache.papeis.length) cache.papeis = await adminApi.papeis();
-    abrirModal({
-      titulo: `Associar empresa — ${nome}`,
-      corpo: grade(
-        selecao({ id: "as-org", label: "Empresa", opcoes: cache.empresas.map((e) => ({ valor: e.id, rotulo: e.nome })) }) +
-        selecao({ id: "as-papel", label: "Cargo nesta empresa", valor: "operations",
-          opcoes: cache.papeis.map((p) => ({ valor: p.valor, rotulo: p.rotulo })),
-          dica: "O cargo vale apenas nesta empresa." })
-      ),
-      confirmar: "Associar",
-      aoConfirmar: async () => {
-        await adminApi.associarEmpresa(id, valor("as-org"), valor("as-papel"));
-        toast("Acesso concedido.");
-        recarregarAdmin();
-      },
-    });
-  },
+  "usuario-associar": ({ id, nome }) => abrirModalAssociarEmpresas(id, nome),
 
   // Associar uma UNIDADE específica — só oferece empresas às quais o usuário
   // já tem acesso (associarUnidade recusa no backend se não tiver). Cargo em

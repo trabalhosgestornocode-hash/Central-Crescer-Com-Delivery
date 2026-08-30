@@ -1846,6 +1846,16 @@ body {
 .adm-assoc-nome { display: flex; align-items: center; gap: 8px; font-size: 13.5px; min-width: 0; }
 .adm-assoc--check { grid-template-columns: auto 1fr; }
 
+/* Modal "Associar empresas" — vínculos atuais x adicionar acesso */
+.adm-assoc--atual { cursor: default; }
+.adm-assoc--nova { cursor: pointer; }
+.assoc-flag-alterado { grid-column: 2 / -1; font-size: 11.5px; color: var(--laranja, #b26a00); font-weight: 600; }
+.adm-assoc-cargo--off { opacity: .4; }
+#assoc-cargo-modo { margin-top: 12px; padding: 12px; background: var(--campo-bg); border-radius: var(--raio-sm); display: grid; gap: 8px; }
+#assoc-cargo-modo .adm-radio { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+#assoc-cargo-todas { display: grid; gap: 4px; margin-top: 4px; }
+#assoc-cargo-todas > span { font-size: 12px; color: var(--cinza); }
+
 /* ---------- Página de detalhe da empresa (Informações/Acessos/Unidades/…) ---------- */
 .adm-empresa-topo { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
 .adm-empresa-nome { display: flex; align-items: center; gap: 10px; font-size: 19px; margin: 0; }
