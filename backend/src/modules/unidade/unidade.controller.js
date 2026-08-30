@@ -5,7 +5,10 @@ import * as service from "./unidade.service.js";
 // aceita unidadeId do corpo/query (ver comentário no topo do service).
 
 export const obterTabelasComerciais = asyncHandler(async (req, res) => {
-  const data = await service.obterTabelasComerciais({ unidadeId: req.tenant.unidadeId });
+  const data = await service.obterTabelasComerciais({
+    unidadeId: req.tenant.unidadeId,
+    organizacaoId: req.tenant.organizacaoId,
+  });
   res.json({ data });
 });
 

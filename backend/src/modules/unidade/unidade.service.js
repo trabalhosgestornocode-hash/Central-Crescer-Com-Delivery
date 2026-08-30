@@ -17,7 +17,7 @@ import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import { auditarReq, ACOES } from "../../shared/auditoria.js";
-import { resolverTabelasComerciaisUnidade, normalizarCanalTabela } from "../../shared/tabelaComercial.js";
+import { resolverTabelasComerciaisUnidade, normalizarCanalTabela, catalogoTabelasComerciais } from "../../shared/tabelaComercial.js";
 
 // Defaults OFICIAIS do sistema para "Metas e Limites de CMV" quando a unidade
 // ainda não tem linha em `unidade_config`. Espelham `CMV_LIMITES` de
@@ -40,9 +40,16 @@ const COLUNAS_DADOS = "id, nome, cnpj, endereco, telefone, responsavel, email, c
  * ANTES de qualquer edição.
  * @param {{unidadeId: string|null}} p
  */
-export async function obterTabelasComerciais({ unidadeId }) {
+export async function obterTabelasComerciais({ unidadeId, organizacaoId }, deps = {}) {
   if (!unidadeId) throw ApiError.badRequest("Selecione uma unidade para ver as tabelas comerciais.");
-  return resolverTabelasComerciaisUnidade({ unidadeId });
+  const sc = deps.supabase ? { supabaseClient: deps.supabase } : undefined;
+  const [atuais, catalogo] = await Promise.all([
+    resolverTabelasComerciaisUnidade({ unidadeId }, sc),
+    catalogoTabelasComerciais({ organizacaoId }, sc),
+  ]);
+  // `catalogo` = opções permitidas (o que a empresa tem preço); `tabelaBalcao`
+  // / `tabelaIfood` = o valor ATUAL oficial da unidade. São coisas diferentes.
+  return { ...atuais, catalogo };
 }
 
 /**

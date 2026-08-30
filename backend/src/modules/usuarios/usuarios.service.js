@@ -33,34 +33,87 @@ import * as v from "../../shared/validar.js";
  */
 
 /**
- * Usuários com vínculo nesta empresa.
+ * Usuários com acesso a esta empresa — pelo vínculo de EMPRESA
+ * (`usuarios_organizacoes`) OU direto por uma UNIDADE dela
+ * (`usuarios_unidades`). Um usuário com os dois vínculos aparece UMA vez.
+ *
+ * `papel` = o cargo NA EMPRESA (vínculo de organização). Quando o acesso é
+ * só por unidade, `papel` é null e `origem` diz "unidade" — o cargo real
+ * naquele caso é o de cada unidade em `unidades[]` (papel null ali = herda).
+ *
  * @param {{organizacaoId: string}} params
+ * @param {{supabase?: any}} [deps]
  * @returns {Promise<UsuarioDaEmpresa[]>}
  */
-export async function listarUsuarios({ organizacaoId }) {
-  const { data: vinculos, error } = await supabase
-    .from("usuarios_organizacoes")
-    .select("usuario_id, papel, ativo, created_at")
-    .eq("organizacao_id", organizacaoId)
-    .order("created_at", { ascending: true });
-  if (error) throw ApiError.internal(error.message);
-  if (!vinculos?.length) return [];
+export async function listarUsuarios({ organizacaoId }, deps = {}) {
+  const db = deps.supabase ?? supabase;
 
-  const { data: perfis } = await supabase
-    .from("perfis").select("id, nome, email, ativo")
-    .in("id", vinculos.map((x) => x.usuario_id));
-  const porId = new Map((perfis ?? []).map((p) => [p.id, p]));
+  const [{ data: vinculosOrg, error: eOrg }, { data: unidades, error: eUn }] = await Promise.all([
+    db.from("usuarios_organizacoes")
+      .select("usuario_id, papel, ativo, created_at")
+      .eq("organizacao_id", organizacaoId)
+      .order("created_at", { ascending: true }),
+    db.from("unidades").select("id, nome").eq("organizacao_id", organizacaoId),
+  ]);
+  if (eOrg) throw ApiError.internal(eOrg.message);
+  if (eUn) throw ApiError.internal(eUn.message);
 
-  return vinculos.map((x) => ({
-    id: x.usuario_id,
-    nome: porId.get(x.usuario_id)?.nome ?? null,
-    email: porId.get(x.usuario_id)?.email ?? null,
-    papel: x.papel,
-    papelRotulo: rotuloPapel(x.papel),
-    ativo: x.ativo,
-    contaAtiva: porId.get(x.usuario_id)?.ativo ?? true,
-    desde: x.created_at,
-  }));
+  const unidadePorId = new Map((unidades ?? []).map((u) => [u.id, u.nome]));
+
+  let vinculosUni = [];
+  if (unidadePorId.size) {
+    const { data, error } = await db.from("usuarios_unidades")
+      .select("usuario_id, unidade_id, papel, ativo, created_at")
+      .in("unidade_id", [...unidadePorId.keys()]);
+    if (error) throw ApiError.internal(error.message);
+    vinculosUni = data ?? [];
+  }
+
+  const idsUsuarios = [...new Set([
+    ...(vinculosOrg ?? []).map((x) => x.usuario_id),
+    ...vinculosUni.map((x) => x.usuario_id),
+  ])];
+  if (!idsUsuarios.length) return [];
+
+  const { data: perfis } = await db.from("perfis")
+    .select("id, nome, email, ativo").in("id", idsUsuarios);
+  const perfilPorId = new Map((perfis ?? []).map((p) => [p.id, p]));
+
+  const orgPorUsuario = new Map((vinculosOrg ?? []).map((x) => [x.usuario_id, x]));
+  const uniPorUsuario = new Map();
+  for (const x of vinculosUni) {
+    if (!uniPorUsuario.has(x.usuario_id)) uniPorUsuario.set(x.usuario_id, []);
+    uniPorUsuario.get(x.usuario_id).push(x);
+  }
+
+  return idsUsuarios.map((uid) => {
+    const org = orgPorUsuario.get(uid) ?? null;
+    const unis = (uniPorUsuario.get(uid) ?? []).map((u) => ({
+      unidadeId: u.unidade_id,
+      unidadeNome: unidadePorId.get(u.unidade_id) ?? "—",
+      papel: u.papel,                                   // null = herda o da empresa
+      papelRotulo: u.papel ? rotuloPapel(u.papel) : "herda da empresa",
+      ativo: u.ativo,
+    }));
+    const perfil = perfilPorId.get(uid);
+    const origem = org && unis.length ? "empresa+unidade" : org ? "empresa" : "unidade";
+
+    return {
+      id: uid,
+      nome: perfil?.nome ?? null,
+      email: perfil?.email ?? null,
+      papel: org?.papel ?? null,
+      papelRotulo: org ? rotuloPapel(org.papel) : (unis.length === 1 ? unis[0].papelRotulo : "acesso por unidade"),
+      ativo: org ? org.ativo : unis.some((u) => u.ativo),
+      contaAtiva: perfil?.ativo ?? true,
+      desde: org?.created_at
+        ?? (uniPorUsuario.get(uid) ?? []).map((u) => u.created_at).sort()[0]
+        ?? null,
+      origem,                         // "empresa" | "unidade" | "empresa+unidade"
+      gerenciavelAqui: !!org,         // o <select> de cargo desta tela só mexe em vínculo de EMPRESA
+      unidades: unis,
+    };
+  });
 }
 
 /**

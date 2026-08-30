@@ -57,3 +57,38 @@ export async function resolverTabelasComerciaisUnidade({ unidadeId }, deps = { s
   if (error) throw ApiError.internal(error.message);
   return { tabelaBalcao: data?.tabela_balcao ?? null, tabelaIfood: data?.tabela_ifood ?? null };
 }
+
+/**
+ * CATÁLOGO de tabelas comerciais que ESTA EMPRESA de fato possui — as tabelas
+ * distintas com preço cadastrado em `vw_produto_margem` (via produto_precos).
+ *
+ * É a fonte correta para "quais opções de tabela oferecer" (dropdown de
+ * comparação, seletor de nova tabela oficial, simulador): uma empresa nova
+ * sem preço "AERO A" nunca vê "AERO A". NÃO é uma lista global hardcoded.
+ *
+ * @param {{organizacaoId: string|null|undefined}} p
+ * @param {{supabaseClient?: typeof supabase}} [deps]
+ * @returns {Promise<{balcao: string[], ifood: string[]}>}
+ */
+export async function catalogoTabelasComerciais({ organizacaoId }, deps = {}) {
+  const db = deps.supabaseClient ?? supabase;
+  const vazio = { balcao: [], ifood: [] };
+  if (!organizacaoId) return vazio;
+
+  const { data, error } = await db
+    .from("vw_produto_margem")
+    .select("canal, tabela")
+    .eq("organizacao_id", organizacaoId)
+    .not("tabela", "is", null);
+  if (error) throw ApiError.internal(error.message);
+
+  const set = { balcao: new Set(), ifood: new Set() };
+  for (const r of data ?? []) {
+    const canal = r.canal === "ifood" ? "ifood" : "balcao";
+    if (r.tabela) set[canal].add(r.tabela);
+  }
+  return {
+    balcao: [...set.balcao].sort((a, b) => a.localeCompare(b, "pt-BR")),
+    ifood: [...set.ifood].sort((a, b) => a.localeCompare(b, "pt-BR")),
+  };
+}
