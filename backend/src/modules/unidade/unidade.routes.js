@@ -13,3 +13,12 @@ const podeGerenciar = requirePermissao(PERMISSOES.CONFIG_GERENCIAR);
 export const unidadeRouter = Router();
 unidadeRouter.get("/tabelas-comerciais", podeVer, controller.obterTabelasComerciais);
 unidadeRouter.patch("/tabelas-comerciais", podeGerenciar, controller.alterarTabelaComercial);
+
+// Dados da Unidade (nome, cnpj, endereço, responsável, e-mail, telefone).
+// Status é read-only aqui — ativar/desativar unidade é só do SuperAdmin.
+unidadeRouter.get("/dados", podeVer, controller.obterDados);
+unidadeRouter.patch("/dados", podeGerenciar, controller.atualizarDados);
+
+// Metas e Limites de CMV da unidade (unidade_config — migration 058).
+unidadeRouter.get("/metas-cmv", podeVer, controller.obterMetasCmv);
+unidadeRouter.patch("/metas-cmv", podeGerenciar, controller.salvarMetasCmv);

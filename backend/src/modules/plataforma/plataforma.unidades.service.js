@@ -44,7 +44,7 @@ function estadoOpcional(bruto, campo) {
  */
 export async function listarUnidades({ busca, status, organizacaoId, limite } = {}) {
   let q = supabase.from("unidades")
-    .select("id, organizacao_id, nome, cnpj, cidade, estado, endereco, telefone, ativo, created_at, organizacoes(id, nome)")
+    .select("id, organizacao_id, nome, cnpj, cidade, estado, endereco, telefone, responsavel, email, ativo, created_at, organizacoes(id, nome)")
     .order("nome")
     .limit(v.limite(limite, 200, 1, 500));
 
@@ -99,6 +99,8 @@ const formatarUnidade = (u) => ({
   estado: u.estado ?? null,
   endereco: u.endereco,
   telefone: u.telefone,
+  responsavel: u.responsavel ?? null,
+  email: u.email ?? null,
   ativo: u.ativo,
   criadoEm: u.created_at,
 });
@@ -108,7 +110,7 @@ export async function obterUnidade(idBruto) {
   const id = v.uuid(idBruto, "Unidade");
 
   const { data: u, error } = await supabase.from("unidades")
-    .select(`id, organizacao_id, nome, cnpj, cidade, estado, endereco, telefone,
+    .select(`id, organizacao_id, nome, cnpj, cidade, estado, endereco, telefone, responsavel, email,
       tabela_balcao, tabela_ifood, ativo, eh_teste, modelo_logistico_ifood,
       created_at, updated_at, organizacoes(id, nome, status)`)
     .eq("id", id).maybeSingle();
@@ -268,6 +270,8 @@ export async function atualizarUnidade(req, idBruto, body) {
   if (body.estado !== undefined) patch.estado = estadoOpcional(body.estado, "Estado");
   if (body.endereco !== undefined) patch.endereco = v.textoOpcional(body.endereco, "Endereço", { max: 300 });
   if (body.telefone !== undefined) patch.telefone = v.telefoneOpcional(body.telefone);
+  if (body.responsavel !== undefined) patch.responsavel = v.textoOpcional(body.responsavel, "Responsável", { max: 160 });
+  if (body.email !== undefined) patch.email = v.emailOpcional(body.email, "E-mail da loja");
   if (body.tabelaBalcao !== undefined) patch.tabela_balcao = v.textoOpcional(body.tabelaBalcao, "Tabela balcão", { max: 20 });
   if (body.tabelaIfood !== undefined) patch.tabela_ifood = v.textoOpcional(body.tabelaIfood, "Tabela iFood", { max: 20 });
   if (!Object.keys(patch).length) throw ApiError.badRequest("Nada para atualizar.");

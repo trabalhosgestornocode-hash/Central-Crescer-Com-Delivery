@@ -13,3 +13,23 @@ export const alterarTabelaComercial = asyncHandler(async (req, res) => {
   const data = await service.alterarTabelaComercial(req, req.body ?? {});
   res.json({ data });
 });
+
+export const obterDados = asyncHandler(async (req, res) => {
+  const data = await service.obterDados({ unidadeId: req.tenant.unidadeId });
+  res.json({ data });
+});
+
+export const atualizarDados = asyncHandler(async (req, res) => {
+  const data = await service.atualizarDados(req, req.body ?? {});
+  res.json({ data });
+});
+
+export const obterMetasCmv = asyncHandler(async (req, res) => {
+  const data = await service.obterMetasCmv({ unidadeId: req.tenant.unidadeId });
+  res.json({ data });
+});
+
+export const salvarMetasCmv = asyncHandler(async (req, res) => {
+  const data = await service.salvarMetasCmv(req, req.body ?? {});
+  res.json({ data });
+});

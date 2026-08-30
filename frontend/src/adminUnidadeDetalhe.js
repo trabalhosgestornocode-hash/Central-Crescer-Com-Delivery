@@ -104,7 +104,7 @@ function ligarAba(aba) {
   if (aba === "informacoes") {
     el("#ud-salvar-info")?.addEventListener("click", () => salvar(() => adminApi.atualizarUnidade(unidadeId, {
       nome: valor("ud-nome"), cnpj: valor("ud-cnpj"), cidade: valor("ud-cidade"), estado: valor("ud-estado"),
-      endereco: valor("ud-endereco"), telefone: valor("ud-tel"),
+      endereco: valor("ud-endereco"), responsavel: valor("ud-resp"), email: valor("ud-email"), telefone: valor("ud-tel"),
       tabelaBalcao: valor("ud-tbalcao"), tabelaIfood: valor("ud-tifood"),
     }), "Informações atualizadas."));
   } else if (aba === "acessos") {
@@ -203,6 +203,8 @@ const CORPOS = {
       campo({ id: "ud-cidade", label: "Cidade", valor: u.cidade }) +
       campo({ id: "ud-estado", label: "Estado (UF)", valor: u.estado, ph: "ex: MA" }) +
       campo({ id: "ud-endereco", label: "Endereço", valor: u.endereco }) +
+      campo({ id: "ud-resp", label: "Responsável", valor: u.responsavel }) +
+      campo({ id: "ud-email", label: "E-mail da loja", valor: u.email, tipo: "email" }) +
       campo({ id: "ud-tel", label: "Telefone", valor: u.telefone, ph: "DDD + número" }) +
       campo({ id: "ud-tbalcao", label: "Tabela de preço (balcão)", valor: u.tabelaBalcao, ph: "ex: A" }) +
       campo({ id: "ud-tifood", label: "Tabela de preço (iFood)", valor: u.tabelaIfood, ph: "ex: Z1" })

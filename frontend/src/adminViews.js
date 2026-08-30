@@ -1290,13 +1290,16 @@ const ACOES = {
       campo({ id: "ue-cidade", label: "Cidade", valor: d.cidade }) +
       campo({ id: "ue-estado", label: "Estado (UF)", valor: d.estado, ph: "ex: MA" }) +
       campo({ id: "ue-endereco", label: "Endereço", valor: d.endereco }) +
+      campo({ id: "ue-resp", label: "Responsável", valor: d.responsavel }) +
+      campo({ id: "ue-email", label: "E-mail da loja", valor: d.email, tipo: "email" }) +
       campo({ id: "ue-tel", label: "Telefone", valor: d.telefone, ph: "DDD + número" })
     ),
     confirmar: "Salvar",
     aoConfirmar: async () => {
       await adminApi.atualizarUnidade(d.id, {
         nome: valor("ue-nome"), cnpj: valor("ue-cnpj"), cidade: valor("ue-cidade"),
-        estado: valor("ue-estado"), endereco: valor("ue-endereco"), telefone: valor("ue-tel"),
+        estado: valor("ue-estado"), endereco: valor("ue-endereco"),
+        responsavel: valor("ue-resp"), email: valor("ue-email"), telefone: valor("ue-tel"),
       });
       toast("Unidade atualizada.");
       recarregarAdmin();
