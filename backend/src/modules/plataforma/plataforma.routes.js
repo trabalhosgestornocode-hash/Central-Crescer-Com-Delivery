@@ -76,6 +76,9 @@ plataformaRouter.post("/usuarios/:id/superadmin", c.definirSuperadmin);
 
 // ---- Associação de usuários a empresas/unidades
 plataformaRouter.post("/usuarios/:id/empresas", c.associarEmpresa);
+// Associação EM MASSA — só cria vínculos NOVOS; recusa (409) se algum já
+// existir. Trocar cargo de vínculo existente é o PATCH abaixo.
+plataformaRouter.post("/usuarios/:id/empresas/lote", c.associarEmpresasLote);
 plataformaRouter.patch("/usuarios/:id/empresas/:organizacaoId", c.atualizarVinculo);
 plataformaRouter.delete("/usuarios/:id/empresas/:organizacaoId", c.removerVinculo);
 plataformaRouter.post("/usuarios/:id/unidades", c.associarUnidade);

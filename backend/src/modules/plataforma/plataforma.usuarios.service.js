@@ -350,6 +350,87 @@ export async function associarEmpresa(req, idBruto, body) {
 }
 
 /**
+ * Associação EM MASSA — cria N vínculos novos numa operação atômica.
+ *
+ * Conceitualmente responsável APENAS por NOVAS associações. Se qualquer
+ * `organizacaoId` da lista já estiver vinculada ao usuário, o endpoint
+ * RECUSA a operação inteira (409) e não grava nada — nem via upsert, nem de
+ * outra forma. Alterar o cargo de um vínculo existente é trabalho do
+ * `atualizarVinculo` (endpoint separado, com revogação de sessão). Assim é
+ * impossível um bug de frontend mudar acidentalmente um cargo já existente
+ * pela tela "Associar empresas".
+ *
+ * Atomicidade: um único INSERT com array. A constraint
+ * `unique (usuario_id, organizacao_id)` (migration 015) garante que uma
+ * corrida (vínculo criado entre a checagem e o insert) derruba o INSERT
+ * INTEIRO — ou entra tudo, ou nada.
+ *
+ * @param {import('express').Request} req
+ * @param {string} idBruto
+ * @param {{itens?: Array<{organizacaoId: string, papel: string}>}} body
+ * @param {{supabase?: any, auditar?: Function}} [deps]
+ */
+export async function associarEmpresasLote(req, idBruto, body, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const registrar = deps.auditar ?? auditar;
+
+  const usuarioId = v.uuid(idBruto, "Usuário");
+  const itens = normalizarEmpresas(body?.itens);
+  if (!itens.length) throw ApiError.badRequest("Selecione ao menos uma empresa.");
+
+  const ids = itens.map((i) => i.organizacaoId);
+  const idsUnicos = [...new Set(ids)];
+  if (idsUnicos.length !== ids.length) throw ApiError.badRequest("Empresa repetida na seleção.");
+
+  const { data: usuario } = await db.from("perfis").select("id, nome").eq("id", usuarioId).maybeSingle();
+  if (!usuario) throw ApiError.notFound("Usuário não encontrado.");
+
+  const { data: orgs, error: eOrgs } = await db.from("organizacoes").select("id, nome").in("id", idsUnicos);
+  if (eOrgs) throw ApiError.internal(eOrgs.message);
+  const orgPorId = new Map((orgs ?? []).map((o) => [o.id, o]));
+  if (orgPorId.size !== idsUnicos.length) {
+    throw ApiError.badRequest("Uma ou mais empresas da seleção não existem.");
+  }
+
+  // NENHUM vínculo já existente pode ser tocado por este fluxo.
+  const { data: existentes, error: eEx } = await db.from("usuarios_organizacoes")
+    .select("organizacao_id").eq("usuario_id", usuarioId).in("organizacao_id", idsUnicos);
+  if (eEx) throw ApiError.internal(eEx.message);
+  if (existentes?.length) {
+    throw new ApiError(409,
+      "Uma ou mais empresas já estão associadas a este usuário. Este fluxo só cria novas associações — "
+      + "para mudar o cargo de um vínculo que já existe, use a edição do vínculo.",
+      { jaAssociadas: existentes.map((x) => ({ organizacaoId: x.organizacao_id, empresaNome: orgPorId.get(x.organizacao_id)?.nome ?? null })) });
+  }
+
+  const linhas = itens.map((i) => ({
+    usuario_id: usuarioId, organizacao_id: i.organizacaoId, papel: i.papel, ativo: true,
+  }));
+  const { error } = await db.from("usuarios_organizacoes").insert(linhas);
+  if (error) {
+    if (/duplicate key|unique|already exists/i.test(error.message || "")) {
+      throw new ApiError(409, "Uma associação foi criada em paralelo. Recarregue e tente de novo.", { corrida: true });
+    }
+    throw ApiError.internal(error.message);
+  }
+
+  const criadas = itens.map((i) => ({
+    organizacaoId: i.organizacaoId,
+    empresaNome: orgPorId.get(i.organizacaoId)?.nome ?? null,
+    papel: i.papel, papelRotulo: rotuloPapel(i.papel), ativo: true,
+  }));
+
+  await registrar({
+    atorId: req.user.id, atorEmail: req.user.email, atorTipo: "superadmin",
+    acao: ACOES.VINCULO_CRIADO, entidade: "vinculo", entidadeId: `${usuarioId}:lote`,
+    detalhes: { usuario: usuario.nome, empresas: criadas.map((c) => ({ organizacaoId: c.organizacaoId, empresa: c.empresaNome, papel: c.papel })) },
+    ...origemDe(req),
+  });
+
+  return { usuarioId, criadas };
+}
+
+/**
  * Troca o cargo ou bloqueia o acesso do usuário APENAS naquela empresa.
  *
  * Revoga as sessões daquele usuário nessa empresa — as permissões ficam

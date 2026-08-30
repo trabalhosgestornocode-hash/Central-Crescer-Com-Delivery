@@ -167,6 +167,9 @@ export const definirSuperadmin = asyncHandler(async (req, res) =>
 export const associarEmpresa = asyncHandler(async (req, res) =>
   ok(res, await usuarios.associarEmpresa(req, req.params.id, v.corpo(req.body)), 201));
 
+export const associarEmpresasLote = asyncHandler(async (req, res) =>
+  ok(res, await usuarios.associarEmpresasLote(req, req.params.id, v.corpo(req.body)), 201));
+
 export const atualizarVinculo = asyncHandler(async (req, res) =>
   ok(res, await usuarios.atualizarVinculo(req, req.params.id, req.params.organizacaoId, v.corpo(req.body))));
 

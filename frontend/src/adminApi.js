@@ -94,6 +94,8 @@ export const adminApi = {
 
   // Associações
   associarEmpresa: (id, organizacaoId, papel) => post(`/usuarios/${id}/empresas`, { organizacaoId, papel }),
+  // Em massa — só NOVAS associações. `itens`: [{ organizacaoId, papel }].
+  associarEmpresasLote: (id, itens) => post(`/usuarios/${id}/empresas/lote`, { itens }),
   atualizarVinculo: (id, organizacaoId, dados) => patch(`/usuarios/${id}/empresas/${organizacaoId}`, dados),
   removerVinculo: (id, organizacaoId) => del(`/usuarios/${id}/empresas/${organizacaoId}`),
   associarUnidade: (id, unidadeId, papel) => post(`/usuarios/${id}/unidades`, { unidadeId, papel }),
