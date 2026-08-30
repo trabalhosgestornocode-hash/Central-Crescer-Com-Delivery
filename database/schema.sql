@@ -87,6 +87,10 @@ create table unidades (
   cnpj text unique,
   endereco text,
   telefone text,
+  responsavel text,     -- nome do responsável pela loja (migration 057)
+  email text,           -- e-mail de contato da loja (migration 057) — nunca o e-mail do usuário logado
+  cidade text,          -- migration 034
+  estado text,          -- UF, 2 letras (migration 034)
   tabela_balcao text,   -- qual tabela de preço balcão esta loja usa (ex: 'A','AERO A')
   tabela_ifood  text,   -- qual tabela iFood esta loja usa (ex: 'A','Z1')
   ativo boolean not null default true,
@@ -94,6 +98,21 @@ create table unidades (
   updated_at timestamptz not null default now()
 );
 create index idx_unidades_org on unidades(organizacao_id);
+
+-- Configuração operacional por unidade (Configurações -> Metas e Limites de
+-- CMV). Migration 058. Uma linha por loja; ausência de linha = defaults do
+-- sistema (cmv_saudavel=32, cmv_atencao=40; metas/margem = null). Isolamento
+-- por unidade_id (PK/FK); o backend filtra sempre por req.tenant.unidadeId.
+create table unidade_config (
+  unidade_id uuid primary key references unidades(id) on delete cascade,
+  cmv_saudavel  numeric(5,2),
+  cmv_atencao   numeric(5,2),
+  meta_fat_dia  numeric(14,2),
+  meta_fat_mes  numeric(14,2),
+  margem_minima numeric(5,2),
+  updated_at    timestamptz not null default now(),
+  atualizado_por uuid
+);
 
 create table perfis (
   id uuid primary key references auth.users(id) on delete cascade,
