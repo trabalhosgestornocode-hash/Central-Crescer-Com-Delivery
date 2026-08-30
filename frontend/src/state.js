@@ -36,11 +36,6 @@ export const state = {
     impersonando: false,
   },
 
-  // Compatibilidade: views antigas leem state.usuario / state.unidade. São
-  // espelhos preenchidos no boot — a fonte é state.sessao.
-  usuario: null,
-  unidade: "—",
-
   // navegação
   rota: "dashboard",
   telaAdmin: "dashboard",
@@ -100,8 +95,6 @@ registrarResetDeContexto(() => {
   state.atualizadoEm = null;
   state.busca = "";
   state.filtroStatus = "todos";
-  state.usuario = null;
-  state.unidade = "—";
   state.detalheAberto = { produto: null, insumo: null, pedido: null, attentionPoint: null };
   state.periodoDashboardExecutivo = { ano: null, mes: null };
   state.contextoParser = { aba: null, ano: null, mes: null };

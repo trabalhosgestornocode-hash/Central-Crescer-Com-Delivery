@@ -216,6 +216,33 @@ function mostrarTela(qual) {
   if (qual !== "admin") fecharPainelAdmin();
 }
 
+// Pinta a topbar + o menu do usuário a partir de state.sessao. Idempotente —
+// chamado por mostrarApp (entrada no shell) e pelo evento
+// `app:contexto-atualizado` (ex.: renomear a unidade em Configurações deve
+// refletir no topbar/seletor sem novo login).
+function atualizarCabecalho() {
+  const { usuario, empresa, unidade, papelRotulo, impersonando } = state.sessao;
+  const nome = usuario?.nome || usuario?.email || "usuário";
+
+  el("#user-nome").textContent = nome;
+  el("#user-avatar").textContent = (nome[0] || "U").toUpperCase();
+  el("#user-empresa").textContent = unidade?.nome ? `${empresa?.nome} · ${unidade.nome}` : (empresa?.nome ?? "—");
+  montarSeletorUnidade({ onTrocar: trocarUnidadeRapido });
+  el("#um-nome").textContent = nome;
+  el("#um-email").textContent = usuario?.email ?? "—";
+  el("#um-papel").textContent = impersonando ? "SuperAdmin (suporte)" : (papelRotulo ?? "—");
+  // "Painel SuperAdmin" só aparece para quem é superadmin — inclusive durante
+  // uma impersonação, que é justamente quando o caminho de volta importa.
+  el("#um-painel").hidden = !state.sessao.superadmin;
+  // Trocar de unidade não faz sentido dentro de uma impersonação: o contexto
+  // não veio de um vínculo do usuário, veio de um acesso de suporte.
+  el("#um-trocar").hidden = !!impersonando;
+
+  const barra = el("#imp-barra");
+  barra.hidden = !impersonando;
+  if (impersonando) el("#imp-empresa").textContent = empresa?.nome ?? "—";
+}
+
 // ---------- tela: app (tenant) ----------
 async function mostrarApp() {
   // FUNIL ÚNICO de entrada no shell do tenant (seleção de unidade,
@@ -227,8 +254,7 @@ async function mostrarApp() {
   resetarEscopoDeContexto();
   const g = geracaoContexto();
 
-  const { usuario, empresa, unidade, papelRotulo, impersonando } = state.sessao;
-  const nome = usuario?.nome || usuario?.email || "usuário";
+  const { unidade } = state.sessao;
 
   // Unidades escolhíveis no seletor global do topbar — buscado FRESCO a cada
   // entrada no shell (nunca reaproveita o snapshot de login em
@@ -259,28 +285,8 @@ async function mostrarApp() {
     }
   }
 
-  // Espelhos de compatibilidade para as views que ainda leem state.usuario.
-  state.usuario = usuario?.email ?? nome;
-  state.unidade = unidade?.nome || empresa?.nome || "—";
-
   mostrarTela("app");
-  el("#user-nome").textContent = nome;
-  el("#user-avatar").textContent = (nome[0] || "U").toUpperCase();
-  el("#user-empresa").textContent = unidade?.nome ? `${empresa?.nome} · ${unidade.nome}` : (empresa?.nome ?? "—");
-  montarSeletorUnidade({ onTrocar: trocarUnidadeRapido });
-  el("#um-nome").textContent = nome;
-  el("#um-email").textContent = usuario?.email ?? "—";
-  el("#um-papel").textContent = impersonando ? "SuperAdmin (suporte)" : (papelRotulo ?? "—");
-  // "Painel SuperAdmin" só aparece para quem é superadmin — inclusive durante
-  // uma impersonação, que é justamente quando o caminho de volta importa.
-  el("#um-painel").hidden = !state.sessao.superadmin;
-  // Trocar de unidade não faz sentido dentro de uma impersonação: o contexto
-  // não veio de um vínculo do usuário, veio de um acesso de suporte.
-  el("#um-trocar").hidden = !!impersonando;
-
-  const barra = el("#imp-barra");
-  barra.hidden = !impersonando;
-  if (impersonando) el("#imp-empresa").textContent = empresa?.nome ?? "—";
+  atualizarCabecalho();
 
   // Restaura o modo de comparação SÓ se for da MESMA unidade (sessionStorage
   // — sobrevive a um F5, nunca atravessa troca de unidade/empresa/logout;
@@ -625,6 +631,18 @@ function wireEventos() {
   document.addEventListener("app:contexto-invalido", async (e) => {
     toast(e.detail || "Contexto encerrado. Escolha a unidade novamente.");
     try { await encaminhar(); } catch { mostrarLogin(); }
+  });
+
+  // Configurações mudou algo do contexto (ex.: nome da unidade) — repinta a
+  // topbar e o seletor SEM novo login. O detalhe traz a unidade já
+  // atualizada; a lista do seletor é rebuscada fresca (tolerante a falha).
+  document.addEventListener("app:contexto-atualizado", async (e) => {
+    const u = e.detail?.unidade;
+    if (u?.id && state.sessao.unidade?.id === u.id) {
+      state.sessao.unidade = { ...state.sessao.unidade, ...u };
+    }
+    try { await listarUnidadesContexto(); } catch { /* chip fica informativo */ }
+    atualizarCabecalho();
   });
 
   // "Selecionar unidade" dentro do aviso de um módulo bloqueado (item 11) —

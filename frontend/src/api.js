@@ -83,12 +83,34 @@ export async function carregarCmv(canal, tabelaComparacao) {
   return { linhas, canal: cmv.canal, tabela: cmv.tabela, tabelaOficial: cmv.tabelaOficial, comparando: !!cmv.comparando };
 }
 
-// ---------- Tabela comercial da unidade (ver backend/src/modules/unidade) ----------
+// ---------- Configuração da unidade (ver backend/src/modules/unidade) ----------
+// Tudo aqui é escopado no servidor por req.tenant.unidadeId (Context Token) —
+// o frontend nunca envia unidade_id. Nada em localStorage.
 export const obterTabelasComerciaisUnidade = () => getJson(`/api/v1/unidade/tabelas-comerciais`);
 export async function alterarTabelaComercialUnidade({ canal, novaTabela, motivo }) {
   const g = geracaoContexto();
   const r = await fetch(`${API_BASE}/api/v1/unidade/tabelas-comerciais`, {
     method: "PATCH", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify({ canal, novaTabela, motivo }),
+  });
+  return tratar(r, g);
+}
+
+// Dados da Unidade (nome, cnpj, endereço, responsável, e-mail, telefone).
+export const obterDadosUnidade = () => getJson(`/api/v1/unidade/dados`);
+export async function atualizarDadosUnidade(patch) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}/api/v1/unidade/dados`, {
+    method: "PATCH", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify(patch ?? {}),
+  });
+  return tratar(r, g);
+}
+
+// Metas e Limites de CMV da unidade (unidade_config — migration 058).
+export const obterMetasCmvUnidade = () => getJson(`/api/v1/unidade/metas-cmv`);
+export async function salvarMetasCmvUnidade(patch) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}/api/v1/unidade/metas-cmv`, {
+    method: "PATCH", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify(patch ?? {}),
   });
   return tratar(r, g);
 }
