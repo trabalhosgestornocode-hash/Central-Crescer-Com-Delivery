@@ -26,11 +26,11 @@
 --   (Context Token), nunca por id vindo do frontend.
 --
 --   ESCOPO DELIBERADAMENTE FORA DESTA MIGRATION:
---     A coloração global de produto (`statusCmv()` no frontend) e outros
---     consumidores de `CMV_LIMITES` continuam usando o default do sistema
---     nesta fase. Torná-los tenant-aware é a 2ª etapa (adaptar consumidores
---     após testes) — ver docs/configuracoes-multitenant-fase-c.md. Esta
---     migration entrega só a PERSISTÊNCIA e a EDIÇÃO real.
+--     ATUALIZAÇÃO (Fase C.1): os consumidores de CMV no frontend JÁ passaram
+--     a respeitar a config da unidade — statusCmv() lê frontend/src/cmvConfig.js,
+--     carregado 1x ao entrar/trocar de unidade (app.js#mostrarApp) e resetado
+--     na troca de contexto. O default 32/40 (frontend/src/config.js#CMV_LIMITES)
+--     é só o fallback quando não há linha aqui.
 --
 -- NÃO DESTRUTIVO / IDEMPOTENTE / REVERSÍVEL.
 --   - Tabela nova e vazia. Ausência de linha = usa default do sistema.
