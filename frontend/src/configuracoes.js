@@ -17,7 +17,7 @@
 // removida por completo.
 import { el, escapeHtml, toast } from "./utils.js";
 import { state } from "./state.js";
-import { TABELAS } from "./config.js";
+import { definirLimitesCmv } from "./cmvConfig.js";
 import {
   obterUsuarios, criarUsuario, atualizarUsuario, excluirUsuario,
   obterTabelasComerciaisUnidade, alterarTabelaComercialUnidade,
@@ -283,6 +283,9 @@ function desenharMetasCmv(root, m) {
         metaFatDia: num("c-fatd"), metaFatMes: num("c-fatm"), margemMinima: num("c-mar"),
       });
       toast("Metas salvas para esta unidade.");
+      // Reflete na hora na classificação de produto (Dashboard/Produtos-CMV)
+      // sem esperar a próxima entrada na unidade.
+      definirLimitesCmv(data);
       desenharMetasCmv(root, data);
     } catch (e) {
       toast("Erro ao salvar: " + e.message);
@@ -342,7 +345,21 @@ function desenharTabelasComerciais(root, data) {
 
 function abrirAlteracaoTabelaComercial(root, canalKey, dadosAtuais) {
   const tabelaAtual = canalKey === "ifood" ? dadosAtuais.tabelaIfood : dadosAtuais.tabelaBalcao;
-  const opcoes = TABELAS[canalKey] || [];
+  // Opções = catálogo REAL da empresa (o que ela tem preço cadastrado), nunca
+  // uma lista global. A tabela atual entra na lista mesmo se não estiver no
+  // catálogo (ex.: preço removido depois) pra não sumir do seletor.
+  const catalogo = dadosAtuais.catalogo?.[canalKey] ?? [];
+  const opcoes = [...new Set([...catalogo, ...(tabelaAtual ? [tabelaAtual] : [])])]
+    .sort((a, b) => String(a).localeCompare(String(b), "pt-BR"));
+
+  if (!opcoes.length) {
+    root.innerHTML = painel(`Alterar tabela — ${CANAL_LABEL_TC[canalKey]}`,
+      `<div class="estado-mini">Esta empresa ainda não tem nenhuma tabela de preço de ${CANAL_LABEL_TC[canalKey]} cadastrada em Produtos/CMV. Cadastre os preços primeiro — as tabelas aparecem aqui automaticamente.</div>`)
+      + `<div class="cfg-acoes"><button class="btn btn-ghost" id="tc-cancelar">Voltar</button></div>`;
+    root.querySelector("#tc-cancelar").addEventListener("click", () => carregarTabelasComerciais(root));
+    return;
+  }
+
   root.innerHTML = painel(`Alterar tabela — ${CANAL_LABEL_TC[canalKey]}`, `
     <div class="cfg-form-grid">
       ${campoFixo("Canal", CANAL_LABEL_TC[canalKey])}

@@ -1,4 +1,4 @@
-import { CMV_LIMITES } from "./config.js";
+import { limitesCmv } from "./cmvConfig.js";
 
 const brlFmt = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -47,12 +47,14 @@ export function normalizarBusca(txt) {
   return (txt ?? "").toString().normalize("NFD").replace(REGEX_DIACRITICOS, "").toLowerCase();
 }
 
-// Classifica o status de CMV a partir do percentual
-export function statusCmv(pct) {
+// Classifica o status de CMV a partir do percentual.
+// Usa os limites da UNIDADE atual (cmvConfig.js) — carregados uma vez ao
+// entrar/trocar de unidade. `limites` explícito só para teste/casos especiais.
+export function statusCmv(pct, limites = limitesCmv()) {
   if (!temValor(pct)) return { chave: "sem", label: "Sem dados", classe: "muted" };
   const p = Number(pct);
-  if (p <= CMV_LIMITES.saudavel) return { chave: "saudavel", label: "Saudável", classe: "ok" };
-  if (p <= CMV_LIMITES.atencao) return { chave: "atencao", label: "Atenção", classe: "warn" };
+  if (p <= limites.saudavel) return { chave: "saudavel", label: "Saudável", classe: "ok" };
+  if (p <= limites.atencao) return { chave: "atencao", label: "Atenção", classe: "warn" };
   return { chave: "critico", label: "Crítico", classe: "bad" };
 }
 

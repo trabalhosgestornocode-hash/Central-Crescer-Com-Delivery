@@ -21,7 +21,7 @@
 // Trocar de unidade, de mês ou mexer no custo dos insumos muda os dois lados,
 // porque os dois lados são recalculados no servidor a cada render.
 import { escapeHtml, fmtMoeda, fmtPct, statusCmv } from "./utils.js";
-import { TABELAS } from "./config.js";
+import { state } from "./state.js";
 import { dashExecSimuladorPreco } from "./api.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./contextoEscopo.js";
 import { icon } from "./icons.js";
@@ -73,10 +73,11 @@ export function montarSimuladorPreco(containerId, unidadeId, mes, ano) {
 
 function render(container, unidadeId, mes, ano) {
   // Garante que a tabela guardada existe na lista do canal (a lista do balcão
-  // e a do iFood são diferentes — ver config.js#TABELAS).
+  // e a do iFood são diferentes). Catálogo real da empresa (state), nunca
+  // uma lista global hardcoded.
   for (const { canal } of PAINEIS) {
-    const lista = TABELAS[canal] ?? [];
-    if (!lista.includes(estado[canal])) estado[canal] = lista[0] ?? "A";
+    const lista = state.tabelasDisponiveis?.[canal] ?? [];
+    if (lista.length && !lista.includes(estado[canal])) estado[canal] = lista[0];
   }
 
   container.innerHTML = `
@@ -142,7 +143,7 @@ function aplicarEstadoExpandido(container) {
 }
 
 function painelHtml({ canal, rotulo, icone }) {
-  const tabelas = TABELAS[canal] ?? [];
+  const tabelas = state.tabelasDisponiveis?.[canal] ?? [];
   return `
     <div class="dex-sim-lado" data-canal="${canal}">
       <div class="dex-sim-lado-topo">

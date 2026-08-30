@@ -14,9 +14,10 @@
 // vazia sem contexto.
 
 import { state, tabelaAtiva, emComparacao } from "./state.js";
-import { MENU, SECOES, TABELAS, INTEGRACOES } from "./config.js";
+import { MENU, SECOES, INTEGRACOES } from "./config.js";
 import { el, els, toast } from "./utils.js";
-import { carregarCmv, obterTabelasComerciaisUnidade } from "./api.js";
+import { carregarCmv, obterTabelasComerciaisUnidade, obterMetasCmvUnidade } from "./api.js";
+import { definirLimitesCmv } from "./cmvConfig.js";
 import { comparacaoSalvaDaUnidade, salvarComparacao, limparComparacaoSalva } from "./comparacaoTabela.js";
 import {
   login, logout, restaurarSessao, listarAcessos, selecionarContexto,
@@ -125,8 +126,14 @@ function popularTabelas() {
   const sel = el("#tabela");
   const oficial = state.tabelasOficiais[state.canal];
   const rotuloOficial = oficial ? `★ Tabela oficial (${oficial})` : "★ Tabela oficial (não configurada)";
+  // Opções vindas do catálogo REAL da empresa (state.tabelasDisponiveis) — o
+  // que ela tem preço cadastrado. Sem hardcode global. A oficial entra na
+  // lista mesmo se (ainda) não estiver no catálogo, pra nunca sumir.
+  const doCanal = state.tabelasDisponiveis?.[state.canal] ?? [];
+  const paraComparar = [...new Set([...doCanal, ...(oficial ? [oficial] : [])])]
+    .sort((a, b) => String(a).localeCompare(String(b), "pt-BR"));
   const opcoes = [`<option value="${VALOR_OFICIAL}">${rotuloOficial}</option>`]
-    .concat(TABELAS[state.canal].map((t) => `<option value="${t}">Comparar: ${t}</option>`));
+    .concat(paraComparar.map((t) => `<option value="${t}">Comparar: ${t}</option>`));
   sel.innerHTML = opcoes.join("");
   sel.value = state.tabelaComparacao ?? VALOR_OFICIAL;
 }
@@ -300,15 +307,24 @@ async function mostrarApp() {
     limparComparacaoSalva();
   }
 
-  // Tabelas oficiais da unidade NOVA, ANTES de desenhar o seletor — evita
-  // mostrar por um instante "★ Tabela oficial (não configurada)" quando na
-  // verdade só ainda não perguntamos (carregar() também atualiza isto, mas
-  // só do canal ativo; aqui pega os dois de uma vez pra Configurações e pro
-  // rótulo do canal que NÃO está selecionado agora).
+  // Config da unidade NOVA, ANTES de desenhar o seletor / classificar CMV:
+  //   * tabelas oficiais (rótulo "★ Tabela oficial (E)")
+  //   * catálogo de tabelas da EMPRESA (opções do dropdown "Comparar")
+  //   * limites de CMV da unidade (statusCmv em Dashboard/Produtos/CMV)
+  // Uma chamada só para tabelas+catálogo; outra para as metas de CMV.
   try {
     const { data } = await obterTabelasComerciaisUnidade();
     state.tabelasOficiais = { balcao: data?.tabelaBalcao ?? null, ifood: data?.tabelaIfood ?? null };
+    state.tabelasDisponiveis = {
+      balcao: Array.isArray(data?.catalogo?.balcao) ? data.catalogo.balcao : [],
+      ifood: Array.isArray(data?.catalogo?.ifood) ? data.catalogo.ifood : [],
+    };
   } catch { /* sem unidade selecionada, ou falha pontual — carregar() tenta de novo a seguir */ }
+  try {
+    const { data } = await obterMetasCmvUnidade();
+    definirLimitesCmv(data);
+  } catch { /* sem unidade / falha: cmvConfig.js já está no default do sistema */ }
+  if (contextoMudou(g)) return;
 
   montarMenu();
   iniciarRelogio();

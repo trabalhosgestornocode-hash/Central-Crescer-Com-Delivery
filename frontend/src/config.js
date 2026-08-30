@@ -1,25 +1,21 @@
 // Configuração central do frontend (escalável — adicionar itens aqui reflete no app)
 export const API_BASE = ""; // mesma origem (backend serve o front)
 
-export const TABELAS = {
-  balcao: ["A", "B", "C", "D", "E", "F", "AERO A", "AERO B"],
-  ifood: ["A", "B", "C", "D", "E", "F", "G", "H", "Z1", "Z2", "Z3", "Z4"],
-};
-
-// Limites de CMV (%) para classificar status.
-// Alinhado à planilha de referência da Crescer com Delivery (aba "Base de
-// Insumos" e fichas): Saudável < 32% · Atenção 32–40% · Crítico ≥ 40%.
+// DEFAULT OFICIAL do sistema para os limites de CMV (%). Só o ponto de
+// partida: a config REAL é por unidade (unidade_config / cmvConfig.js).
+// Alinhado à planilha de referência: Saudável < 32% · Atenção 32–40% · Crítico ≥ 40%.
 export const CMV_LIMITES = { saudavel: 32, atencao: 40 };
 
 // Comissão por canal (espelha canais_venda no banco) — usada no simulador de preço
 export const COMISSAO = { balcao: 0, ifood: 0.27, uber: 0.15, app: 0, outro: 0 };
 
-// Loja no iFood (aba iFood). Cole o link real da loja em `url`.
-export const IFOOD_LOJA = {
-  nome: "Subway Sanduíches - Saci",
-  nota: "⭐ 4.8 · Pedido mínimo R$ 25 · 75–85 min",
-  url: "https://www.ifood.com.br/delivery/teresina-pi/subway-sanduiches---saci-saci/a6e54fa0-1369-4039-bcc7-91c4db0339b9", // ex: https://www.ifood.com.br/delivery/.../subway-sanduiches-saci-...
-};
+// (removidos nesta fase, por serem taxonomia/dados fixos de UM tenant:
+//   * TABELAS — a lista de tabelas comerciais agora vem do backend, por
+//     empresa (o que ela tem preço cadastrado): state.tabelasDisponiveis,
+//     origem GET /api/v1/unidade/tabelas-comerciais -> catalogo.
+//   * IFOOD_LOJA — nome/URL da loja no iFood era hardcoded da Subway. A
+//     vitrine (cardapio.js) era código órfão e foi removida; a integração
+//     iFood real é por unidade, no módulo próprio.)
 
 // Ordem das seções da sidebar
 export const SECOES = ["OPERAÇÃO", "INTEGRAÇÕES", "INTELIGÊNCIA", "SISTEMA"];
