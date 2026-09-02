@@ -24,20 +24,61 @@ import {
 import { validarFormatoPin } from "../../shared/pin.js";
 
 /**
- * Resolve o PERFIL-alvo de uma operação de vínculo (Fase G). Sem `perfilIdBruto`
- * -> o perfil INICIAL da conta (id == contaId; compat com o fluxo de 1 perfil).
- * Com `perfilIdBruto` -> valida que pertence à conta e devolve.
+ * Resolve o `perfil_id` REAL do alvo de uma operação de vínculo (Fase G / H1).
+ *
+ *   * sem `perfilIdBruto` (ou == contaId)  -> o perfil operacional INICIAL,
+ *     cujo `id == conta_id` (backfill da migration 060). Isso É um `perfil_id`
+ *     válido — quem chama SEMPRE escopa por ele; nunca mais existe a sentinela
+ *     "perfilAlvo === usuarioId => não escopar" (que pós-063 deixava um
+ *     UPDATE/DELETE do perfil inicial atingir os perfis irmãos da conta).
+ *   * `perfilIdBruto` de um perfil adicional -> valida que pertence à conta
+ *     (senão 404 genérico — não vaza a existência de perfis de terceiros).
+ *
+ * M4 (decisão de negócio): ACEITA perfil INATIVO de propósito. O SuperAdmin
+ * pode montar empresa/unidade/cargo/permissões ANTES de ativar o perfil.
+ * Configurar um vínculo NÃO ativa o perfil (a ativação é só `alternarAtivoPerfil`).
+ *
+ * Pré-060 (sem a tabela `perfis_operacionais`): devolve `contaId` — nesse
+ * schema a conta é o seu próprio (único) perfil.
+ *
+ * @param {string} contaId
+ * @param {unknown} perfilIdBruto
+ * @param {typeof supabase} [db] injeção para teste
+ * @returns {Promise<string>} o `perfil_id` a usar como escopo (== contaId p/ o inicial)
  */
-async function resolverPerfilAlvo(contaId, perfilIdBruto) {
+async function resolverPerfilAlvo(contaId, perfilIdBruto, db = supabase) {
   if (perfilIdBruto == null || perfilIdBruto === "" || String(perfilIdBruto) === String(contaId)) {
-    return contaId; // perfil inicial (ou pré-060/063 — perfil_id == usuario_id)
+    return contaId; // perfil inicial — perfil_id == conta_id (é um perfil_id real)
   }
   const perfilId = v.uuid(perfilIdBruto, "Perfil");
-  const { data, error } = await supabase.from("perfis_operacionais")
+  const { data, error } = await db.from("perfis_operacionais")
     .select("id, conta_id").eq("id", perfilId).maybeSingle();
-  if (error && /perfis_operacionais|does not exist|schema cache/i.test(error.message || "")) return contaId; // pré-060
+  if (error && /perfis_operacionais|does not exist|schema cache|could not find/i.test(error.message || "")) {
+    return contaId; // pré-060
+  }
   if (!data || data.conta_id !== contaId) throw ApiError.notFound("Perfil não encontrado."); // não vaza posse
   return perfilId;
+}
+
+// H1 — o perfil inicial também tem `perfil_id` (== conta_id). TODA operação de
+// vínculo é escopada por ele. Só o schema pré-060, SEM a coluna, cai no caminho
+// legado (e nesse schema a conta tem no máximo 1 perfil, então é seguro).
+const RE_PERFIL_ID_AUSENTE = /perfil_id|does not exist|schema cache|could not find/i;
+
+/**
+ * Executa a query SEMPRE com `.eq("perfil_id", perfilAlvo)`. Se o banco
+ * reclamar da coluna ausente (pré-060), reexecuta SEM o filtro.
+ * @param {string} perfilAlvo
+ * @param {(escopo: (q: any) => any) => PromiseLike<{data?: any, error?: any}>} montar
+ *   recebe uma função que aplica (ou não) o filtro de perfil_id ao builder.
+ * @returns {Promise<{data?: any, error?: any}>}
+ */
+async function rodarEscopadoPorPerfil(perfilAlvo, montar) {
+  let r = await montar((q) => q.eq("perfil_id", perfilAlvo));
+  if (r?.error && RE_PERFIL_ID_AUSENTE.test(r.error.message || "")) {
+    r = await montar((q) => q); // pré-060: sem a coluna
+  }
+  return r;
 }
 import { buscar } from "./plataforma.repo.js";
 import { JANELA_ONLINE_MS } from "../../middlewares/auth.js";
@@ -539,12 +580,14 @@ export async function criarPerfilNaConta(req, contaIdBruto, body) {
     // ---- 3. vínculos do novo perfil ----
     for (const e of empresas) {
       const err = await inserirVinculoOrgComPerfil({ usuarioId: contaId, perfilId: perfil.id, organizacaoId: e.organizacaoId, papel: e.papel });
+      if (err?.codigo) throw ApiError.badRequest(err.message, { codigo: err.codigo });
       if (err) throw ApiError.internal(err.message);
     }
     for (const u of unidades) {
       const unidadeId = v.uuid(u?.unidadeId, "Unidade");
       const papelU = u?.papel == null || u?.papel === "" ? null : v.umDe(u.papel, "Cargo", PAPEIS);
       const err = await inserirVinculoUnidadeComPerfil({ usuarioId: contaId, perfilId: perfil.id, unidadeId, papel: papelU });
+      if (err?.codigo) throw ApiError.badRequest(err.message, { codigo: err.codigo });
       if (err) throw ApiError.internal(err.message);
     }
     // ---- 4. PIN do novo perfil (sem revogar sessões — o perfil não tem nenhuma) ----
@@ -696,6 +739,7 @@ export async function associarEmpresa(req, idBruto, body) {
     ? await resolverPerfilAlvo(usuarioId, body.perfilId)
     : await garantirPerfilOperacionalInicial({ contaId: usuarioId, nome: usuario.nome });
   const error = await inserirVinculoOrgComPerfil({ usuarioId, perfilId, organizacaoId, papel, upsert: true });
+  if (error?.codigo) throw ApiError.badRequest(error.message, { codigo: error.codigo });
   if (error) throw ApiError.internal(error.message);
 
   await auditar({
@@ -799,30 +843,35 @@ export async function associarEmpresasLote(req, idBruto, body, deps = {}) {
  * seleção de contexto.
  * @param {import('express').Request} req
  */
-export async function atualizarVinculo(req, idBruto, organizacaoIdBruto, body) {
+export async function atualizarVinculo(req, idBruto, organizacaoIdBruto, body, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const registrar = deps.auditar ?? auditar;
+  const revogar = deps.revogar ?? revogarSessoes;
   const usuarioId = v.uuid(idBruto, "Usuário");
   const organizacaoId = v.uuid(organizacaoIdBruto, "Empresa");
-  const perfilAlvo = await resolverPerfilAlvo(usuarioId, body.perfilId);
+  const perfilAlvo = await resolverPerfilAlvo(usuarioId, body.perfilId, db);
 
   const patch = {};
   if (body.papel !== undefined) patch.papel = v.umDe(body.papel, "Cargo", PAPEIS);
   if (body.ativo !== undefined) patch.ativo = v.booleano(body.ativo, true);
   if (!Object.keys(patch).length) throw ApiError.badRequest("Informe o cargo ou o status do acesso.");
 
-  let q = supabase.from("usuarios_organizacoes")
-    .update(patch).eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId);
-  if (perfilAlvo !== usuarioId) q = q.eq("perfil_id", perfilAlvo); // Fase G — vínculo de um perfil específico
-  const { data, error } = await q.select("id, papel, ativo, perfil_id").single();
+  // H1 — SEMPRE escopa por perfil_id (o perfil inicial também tem perfil_id ==
+  // conta_id). Nunca toca a linha de um perfil irmão da mesma conta.
+  const { data, error } = await rodarEscopadoPorPerfil(perfilAlvo, (escopo) =>
+    escopo(db.from("usuarios_organizacoes")
+      .update(patch).eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId))
+      .select("id, papel, ativo, perfil_id").single());
   if (error || !data) throw ApiError.notFound("Associação não encontrada.");
 
   // MODEL Y: só as sessões DAQUELE PERFIL naquela empresa — nunca um perfil
   // irmão da mesma conta, nem a conta em outra empresa.
-  const sessoesRevogadas = await revogarSessoes({
-    perfilId: data.perfil_id ?? usuarioId, organizacaoId,
+  const sessoesRevogadas = await revogar({
+    perfilId: data.perfil_id ?? perfilAlvo, organizacaoId,
     motivo: patch.ativo === false ? "acesso_bloqueado" : "papel_alterado",
   });
 
-  await auditar({
+  await registrar({
     atorId: req.user.id, atorEmail: req.user.email, atorTipo: "superadmin",
     acao: ACOES.VINCULO_EDITADO, entidade: "vinculo", entidadeId: `${usuarioId}:${organizacaoId}`,
     organizacaoId, detalhes: { ...patch, sessoesRevogadas }, ...origemDe(req),
@@ -832,32 +881,39 @@ export async function atualizarVinculo(req, idBruto, organizacaoIdBruto, body) {
 }
 
 /** Remove a associação (e os vínculos de unidade daquela empresa). */
-export async function removerVinculo(req, idBruto, organizacaoIdBruto, opts = {}) {
+export async function removerVinculo(req, idBruto, organizacaoIdBruto, opts = {}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const registrar = deps.auditar ?? auditar;
+  const revogar = deps.revogar ?? revogarSessoes;
   const usuarioId = v.uuid(idBruto, "Usuário");
   const organizacaoId = v.uuid(organizacaoIdBruto, "Empresa");
-  const perfilAlvo = await resolverPerfilAlvo(usuarioId, opts.perfilId);
-  const escopar = (q) => (perfilAlvo !== usuarioId ? q.eq("perfil_id", perfilAlvo) : q);
+  const perfilAlvo = await resolverPerfilAlvo(usuarioId, opts.perfilId, db);
 
-  // perfil_id ANTES de apagar — é o escopo Model Y da revogação.
-  const { data: vinculo } = await escopar(supabase.from("usuarios_organizacoes")
-    .select("perfil_id").eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId)).maybeSingle();
+  // H1 — perfil_id ANTES de apagar (escopo Model Y da revogação). SEMPRE
+  // escopado: o perfil inicial não é exceção.
+  const { data: vinculo } = await rodarEscopadoPorPerfil(perfilAlvo, (escopo) =>
+    escopo(db.from("usuarios_organizacoes")
+      .select("perfil_id").eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId)).maybeSingle());
   const perfilId = vinculo?.perfil_id ?? perfilAlvo;
 
-  const { error } = await escopar(supabase.from("usuarios_organizacoes")
-    .delete().eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId));
+  const { error } = await rodarEscopadoPorPerfil(perfilAlvo, (escopo) =>
+    escopo(db.from("usuarios_organizacoes")
+      .delete().eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId)));
   if (error) throw ApiError.internal(error.message);
 
   // Vínculos de unidade da mesma empresa perderiam sentido — e sobrariam como
-  // acesso residual, já que a unidade sozinha também autoriza a seleção.
-  const unidades = await buscar("unidades", "id", (q) => q.eq("organizacao_id", organizacaoId));
+  // acesso residual, já que a unidade sozinha também autoriza a seleção. Só as
+  // unidades DESTE perfil (H1 — nunca as de um irmão).
+  const unidades = await buscar("unidades", "id", (q) => q.eq("organizacao_id", organizacaoId), db);
   if (unidades.length) {
-    await escopar(supabase.from("usuarios_unidades").delete()
-      .eq("usuario_id", usuarioId).in("unidade_id", unidades.map((u) => u.id)));
+    await rodarEscopadoPorPerfil(perfilAlvo, (escopo) =>
+      escopo(db.from("usuarios_unidades").delete()
+        .eq("usuario_id", usuarioId).in("unidade_id", unidades.map((u) => u.id))));
   }
 
-  const sessoesRevogadas = await revogarSessoes({ perfilId, organizacaoId, motivo: "vinculo_removido" });
+  const sessoesRevogadas = await revogar({ perfilId, organizacaoId, motivo: "vinculo_removido" });
 
-  await auditar({
+  await registrar({
     atorId: req.user.id, atorEmail: req.user.email, atorTipo: "superadmin",
     acao: ACOES.VINCULO_REMOVIDO, entidade: "vinculo", entidadeId: `${usuarioId}:${organizacaoId}`,
     organizacaoId, detalhes: { sessoesRevogadas }, ...origemDe(req),
@@ -872,27 +928,30 @@ export async function removerVinculo(req, idBruto, organizacaoIdBruto, opts = {}
  * contrário o acesso ficaria pendurado numa empresa à qual a pessoa não
  * pertence.
  */
-export async function associarUnidade(req, idBruto, body) {
+export async function associarUnidade(req, idBruto, body, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const registrar = deps.auditar ?? auditar;
   const usuarioId = v.uuid(idBruto, "Usuário");
   const unidadeId = v.uuid(body.unidadeId, "Unidade");
   const papel = body.papel == null || body.papel === "" ? null : v.umDe(body.papel, "Cargo", PAPEIS);
-  const perfilAlvo = await resolverPerfilAlvo(usuarioId, body.perfilId);
+  const perfilAlvo = await resolverPerfilAlvo(usuarioId, body.perfilId, db);
 
-  const { data: unidade } = await supabase.from("unidades")
+  const { data: unidade } = await db.from("unidades")
     .select("id, nome, organizacao_id").eq("id", unidadeId).maybeSingle();
   if (!unidade) throw ApiError.notFound("Unidade não encontrada.");
 
-  let qOrg = supabase.from("usuarios_organizacoes")
-    .select("id, perfil_id").eq("usuario_id", usuarioId).eq("organizacao_id", unidade.organizacao_id);
-  if (perfilAlvo !== usuarioId) qOrg = qOrg.eq("perfil_id", perfilAlvo);
-  const { data: vinculoOrg } = await qOrg.maybeSingle();
+  // H1 — o vínculo de empresa consultado é o DESTE perfil (inclusive o inicial).
+  const { data: vinculoOrg } = await rodarEscopadoPorPerfil(perfilAlvo, (escopo) =>
+    escopo(db.from("usuarios_organizacoes")
+      .select("id, perfil_id").eq("usuario_id", usuarioId).eq("organizacao_id", unidade.organizacao_id)).maybeSingle());
   if (!vinculoOrg) throw ApiError.badRequest("Associe o usuário à empresa desta unidade primeiro.");
 
   const perfilId = vinculoOrg.perfil_id ?? perfilAlvo;
   const error = await inserirVinculoUnidadeComPerfil({ usuarioId, perfilId, unidadeId, papel, upsert: true });
+  if (error?.codigo) throw ApiError.badRequest(error.message, { codigo: error.codigo });
   if (error) throw ApiError.internal(error.message);
 
-  await auditar({
+  await registrar({
     atorId: req.user.id, atorEmail: req.user.email, atorTipo: "superadmin",
     acao: ACOES.VINCULO_CRIADO, entidade: "vinculo_unidade", entidadeId: `${usuarioId}:${unidadeId}`,
     organizacaoId: unidade.organizacao_id,
@@ -903,25 +962,30 @@ export async function associarUnidade(req, idBruto, body) {
 }
 
 /** Remove o vínculo com uma unidade. */
-export async function removerVinculoUnidade(req, idBruto, unidadeIdBruto, opts = {}) {
+export async function removerVinculoUnidade(req, idBruto, unidadeIdBruto, opts = {}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const registrar = deps.auditar ?? auditar;
+  const revogar = deps.revogar ?? revogarSessoes;
   const usuarioId = v.uuid(idBruto, "Usuário");
   const unidadeId = v.uuid(unidadeIdBruto, "Unidade");
-  const perfilAlvo = await resolverPerfilAlvo(usuarioId, opts.perfilId);
-  const escopar = (q) => (perfilAlvo !== usuarioId ? q.eq("perfil_id", perfilAlvo) : q);
+  const perfilAlvo = await resolverPerfilAlvo(usuarioId, opts.perfilId, db);
 
-  const { data: vinculo } = await escopar(supabase.from("usuarios_unidades")
-    .select("perfil_id").eq("usuario_id", usuarioId).eq("unidade_id", unidadeId)).maybeSingle();
+  // H1 — SEMPRE escopado por perfil_id (o perfil inicial não é exceção).
+  const { data: vinculo } = await rodarEscopadoPorPerfil(perfilAlvo, (escopo) =>
+    escopo(db.from("usuarios_unidades")
+      .select("perfil_id").eq("usuario_id", usuarioId).eq("unidade_id", unidadeId)).maybeSingle());
   const perfilId = vinculo?.perfil_id ?? perfilAlvo;
 
-  const { error } = await escopar(supabase.from("usuarios_unidades")
-    .delete().eq("usuario_id", usuarioId).eq("unidade_id", unidadeId));
+  const { error } = await rodarEscopadoPorPerfil(perfilAlvo, (escopo) =>
+    escopo(db.from("usuarios_unidades")
+      .delete().eq("usuario_id", usuarioId).eq("unidade_id", unidadeId)));
   if (error) throw ApiError.internal(error.message);
 
   // MODEL Y — blast radius mínimo: só as sessões desse perfil PRESAS àquela
   // unidade. Quem tem vínculo de empresa segue acessando as outras unidades.
-  const sessoesRevogadas = await revogarSessoes({ perfilId, unidadeId, motivo: "vinculo_unidade_removido" });
+  const sessoesRevogadas = await revogar({ perfilId, unidadeId, motivo: "vinculo_unidade_removido" });
 
-  await auditar({
+  await registrar({
     atorId: req.user.id, atorEmail: req.user.email, atorTipo: "superadmin",
     acao: ACOES.VINCULO_REMOVIDO, entidade: "vinculo_unidade", entidadeId: `${usuarioId}:${unidadeId}`,
     detalhes: { sessoesRevogadas }, ...origemDe(req),
@@ -936,29 +1000,33 @@ export async function removerVinculoUnidade(req, idBruto, unidadeIdBruto, opts =
  * as sessões PRESAS àquela unidade (não a empresa inteira).
  * @param {import('express').Request} req
  */
-export async function atualizarVinculoUnidade(req, idBruto, unidadeIdBruto, body) {
+export async function atualizarVinculoUnidade(req, idBruto, unidadeIdBruto, body, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const registrar = deps.auditar ?? auditar;
+  const revogar = deps.revogar ?? revogarSessoes;
   const usuarioId = v.uuid(idBruto, "Usuário");
   const unidadeId = v.uuid(unidadeIdBruto, "Unidade");
-  const perfilAlvo = await resolverPerfilAlvo(usuarioId, body.perfilId);
+  const perfilAlvo = await resolverPerfilAlvo(usuarioId, body.perfilId, db);
 
   const patch = {};
   if (body.papel !== undefined) patch.papel = body.papel == null || body.papel === "" ? null : v.umDe(body.papel, "Cargo", PAPEIS);
   if (body.ativo !== undefined) patch.ativo = v.booleano(body.ativo, true);
   if (!Object.keys(patch).length) throw ApiError.badRequest("Informe o cargo ou o status do acesso.");
 
-  let q = supabase.from("usuarios_unidades")
-    .update(patch).eq("usuario_id", usuarioId).eq("unidade_id", unidadeId);
-  if (perfilAlvo !== usuarioId) q = q.eq("perfil_id", perfilAlvo);
-  const { data, error } = await q.select("id, papel, ativo, perfil_id").single();
+  // H1 — SEMPRE escopado por perfil_id (o perfil inicial também).
+  const { data, error } = await rodarEscopadoPorPerfil(perfilAlvo, (escopo) =>
+    escopo(db.from("usuarios_unidades")
+      .update(patch).eq("usuario_id", usuarioId).eq("unidade_id", unidadeId))
+      .select("id, papel, ativo, perfil_id").single());
   if (error || !data) throw ApiError.notFound("Associação não encontrada.");
 
   // MODEL Y — só as sessões desse perfil presas àquela unidade.
-  const sessoesRevogadas = await revogarSessoes({
-    perfilId: data.perfil_id ?? usuarioId, unidadeId,
+  const sessoesRevogadas = await revogar({
+    perfilId: data.perfil_id ?? perfilAlvo, unidadeId,
     motivo: patch.ativo === false ? "acesso_bloqueado" : "papel_alterado",
   });
 
-  await auditar({
+  await registrar({
     atorId: req.user.id, atorEmail: req.user.email, atorTipo: "superadmin",
     acao: ACOES.VINCULO_EDITADO, entidade: "vinculo_unidade", entidadeId: `${usuarioId}:${unidadeId}`,
     detalhes: { ...patch, sessoesRevogadas }, ...origemDe(req),

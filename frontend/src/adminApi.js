@@ -107,6 +107,21 @@ export const adminApi = {
   definirPinPerfil: (contaId, perfilId, pin) => put(`/usuarios/${contaId}/perfis/${perfilId}/pin`, { pin }),
   removerPinPerfil: (contaId, perfilId) => del(`/usuarios/${contaId}/perfis/${perfilId}/pin`),
 
+  // Vínculos POR PERFIL (Fase G) — empresa/unidade/cargo são do PERFIL, nunca
+  // da conta. `perfilId` é sempre explícito na URL.
+  associarEmpresaPerfil: (contaId, perfilId, organizacaoId, papel) =>
+    post(`/usuarios/${contaId}/perfis/${perfilId}/empresas`, { organizacaoId, papel }),
+  atualizarVinculoPerfil: (contaId, perfilId, organizacaoId, dados) =>
+    patch(`/usuarios/${contaId}/perfis/${perfilId}/empresas/${organizacaoId}`, dados),
+  removerVinculoPerfil: (contaId, perfilId, organizacaoId) =>
+    del(`/usuarios/${contaId}/perfis/${perfilId}/empresas/${organizacaoId}`),
+  associarUnidadePerfil: (contaId, perfilId, unidadeId, papel) =>
+    post(`/usuarios/${contaId}/perfis/${perfilId}/unidades`, { unidadeId, papel }),
+  atualizarVinculoUnidadePerfil: (contaId, perfilId, unidadeId, dados) =>
+    patch(`/usuarios/${contaId}/perfis/${perfilId}/unidades/${unidadeId}`, dados),
+  removerVinculoUnidadePerfil: (contaId, perfilId, unidadeId) =>
+    del(`/usuarios/${contaId}/perfis/${perfilId}/unidades/${unidadeId}`),
+
   // Associações
   associarEmpresa: (id, organizacaoId, papel) => post(`/usuarios/${id}/empresas`, { organizacaoId, papel }),
   // Em massa — só NOVAS associações. `itens`: [{ organizacaoId, papel }].

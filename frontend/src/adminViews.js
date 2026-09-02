@@ -464,23 +464,62 @@ function lerEmpresasMarcadas() {
     }));
 }
 
-/** Card compacto de um perfil (usuário) na seção "Usuários desta conta". */
-function cardPerfil(contaId, p) {
-  const emp = p.empresas.filter((e) => e.ativo)
-    .map((e) => `${escapeHtml(e.empresaNome)} — ${escapeHtml(e.papelRotulo)}`).join("<br>") || "<i>sem empresa</i>";
-  const pin = p.temPin
-    ? '<span class="pill ok">PIN configurado</span>'
-    : '<span class="pill warn">PIN não configurado</span>';
+/**
+ * Card de um PERFIL (usuário operacional) — com a gestão COMPLETA dos acessos
+ * DELE (empresas, unidades, cargos). Fase G corrigida: empresa/unidade/cargo
+ * pertencem ao perfil, nunca à conta. Todo botão carrega `data-perfil` — nada
+ * usa "usuário inicial" implícito.
+ */
+function cardPerfil(contaId, p, papeis) {
   const d = `data-conta="${escapeHtml(contaId)}" data-perfil="${escapeHtml(p.id)}" data-nome="${escapeHtml(p.nome)}"`;
+  const opcoesPapel = (sel, incluirHerdar) => (incluirHerdar ? '<option value="">Herdar da empresa</option>' : "")
+    + papeis.map((x) => `<option value="${escapeHtml(x.valor)}" ${x.valor === sel ? "selected" : ""}>${escapeHtml(x.rotulo)}</option>`).join("");
+
+  const empresas = p.empresas.length
+    ? p.empresas.map((e) => `
+      <div class="adm-vinculo">
+        <span class="adm-vinculo-nome"><b>${escapeHtml(e.empresaNome)}</b>${pill(STATUS_EMPRESA, e.empresaStatus ?? "ativa")}${e.ativo ? "" : '<span class="pill bad">bloqueado</span>'}</span>
+        <select class="adm-vinculo-papel" data-adm-acao="pf-vinculo-papel" ${d} data-org="${escapeHtml(e.organizacaoId)}">
+          ${opcoesPapel(e.papel, false)}
+        </select>
+        <button class="btn btn-ghost btn-sm" data-adm-acao="pf-vinculo-toggle" ${d} data-org="${escapeHtml(e.organizacaoId)}" data-ativo="${e.ativo}">${e.ativo ? "Bloquear" : "Liberar"}</button>
+        <button class="btn btn-ghost btn-sm" data-adm-acao="pf-vinculo-remover" ${d} data-org="${escapeHtml(e.organizacaoId)}" data-empnome="${escapeHtml(e.empresaNome)}">Remover</button>
+      </div>`).join("")
+    : '<div class="estado-mini">Nenhuma empresa associada.</div>';
+
+  const unidades = p.unidades.length
+    ? p.unidades.map((un) => `
+      <div class="adm-vinculo">
+        <span class="adm-vinculo-nome"><b>${escapeHtml(un.unidadeNome)}</b>${un.ativo ? "" : '<span class="pill bad">bloqueado</span>'}</span>
+        <select class="adm-vinculo-papel" data-adm-acao="pf-vinculo-unidade-papel" ${d} data-unidade="${escapeHtml(un.unidadeId)}">
+          ${opcoesPapel(un.papel, true)}
+        </select>
+        <button class="btn btn-ghost btn-sm" data-adm-acao="pf-vinculo-unidade-toggle" ${d} data-unidade="${escapeHtml(un.unidadeId)}" data-ativo="${un.ativo}">${un.ativo ? "Bloquear" : "Liberar"}</button>
+        <button class="btn btn-ghost btn-sm" data-adm-acao="pf-vinculo-unidade-remover" ${d} data-unidade="${escapeHtml(un.unidadeId)}" data-uninome="${escapeHtml(un.unidadeNome)}">Remover</button>
+      </div>`).join("")
+    : "";
+
   return `
-    <div class="adm-vinculo" style="flex-wrap:wrap">
-      <span class="adm-vinculo-nome"><b>${escapeHtml(p.nome)}</b>
-        ${p.ativo ? '<span class="pill ok">Ativo</span>' : '<span class="pill muted">Inativo</span>'}
-        ${p.inicial ? '<span class="pill muted">usuário inicial</span>' : ""} ${pin}</span>
-      <small style="flex-basis:100%;color:var(--muted)">${emp}</small>
-      <button class="btn btn-ghost btn-sm" data-adm-acao="perfil-renomear" ${d}>Renomear</button>
-      <button class="btn btn-ghost btn-sm" data-adm-acao="perfil-pin" ${d}>${p.temPin ? "Resetar PIN" : "Definir PIN"}</button>
-      <button class="btn btn-ghost btn-sm" data-adm-acao="perfil-toggle" ${d} data-ativo="${p.ativo}">${p.ativo ? "Desativar" : "Ativar"}</button>
+    <div class="adm-perfil-card">
+      <div class="adm-vinculo" style="flex-wrap:wrap;border:0;padding:0">
+        <span class="adm-vinculo-nome"><b>${escapeHtml(p.nome)}</b>
+          ${p.ativo ? '<span class="pill ok">Ativo</span>' : '<span class="pill muted">Inativo</span>'}
+          ${p.inicial ? '<span class="pill muted">usuário inicial</span>' : ""}
+          ${p.temPin ? '<span class="pill ok">PIN configurado</span>' : '<span class="pill warn">PIN não configurado</span>'}</span>
+        <button class="btn btn-ghost btn-sm" data-adm-acao="perfil-renomear" ${d}>Renomear</button>
+        <button class="btn btn-ghost btn-sm" data-adm-acao="perfil-pin" ${d}>${p.temPin ? "Resetar PIN" : "Definir PIN"}</button>
+        <button class="btn btn-ghost btn-sm" data-adm-acao="perfil-toggle" ${d} data-ativo="${p.ativo}">${p.ativo ? "Desativar" : "Ativar"}</button>
+      </div>
+
+      <div class="adm-perfil-acessos">
+        <b class="adm-sub">Empresas</b>
+        <div class="adm-vinculos">${empresas}</div>
+        ${unidades ? `<b class="adm-sub">Unidades</b><div class="adm-vinculos">${unidades}</div>` : ""}
+        <div class="adm-det-acoes">
+          <button class="btn btn-ghost btn-sm" data-adm-acao="perfil-assoc-empresa" ${d}>+ Associar empresa</button>
+          <button class="btn btn-ghost btn-sm" data-adm-acao="perfil-assoc-unidade" ${d}>+ Associar unidade</button>
+        </div>
+      </div>
     </div>`;
 }
 
@@ -493,46 +532,18 @@ async function abrirDetalheUsuario(id) {
   cache.papeis = papeis;
   if (!cache.empresas.length) cache.empresas = await adminApi.empresas();
 
+  // "Usuários desta conta" — a ÚNICA gestão de acessos (empresa/unidade/cargo
+  // são do PERFIL). A conta só carrega o que é dela (e-mail, senha, status,
+  // SuperAdmin, Painel Administrativo) — mostrado em "Acessos globais".
   const perfisHtml = perfisConta ? `
     <h3 class="adm-det-tit">Usuários desta conta</h3>
     ${perfisConta.multiPerfil && !perfisConta.configPinCompleta
       ? '<div class="adm-aviso"><b>Configuração incompleta.</b> Esta conta tem 2+ usuários e nem todos têm PIN — ninguém consegue entrar até que todos tenham. Defina o PIN dos que faltam.</div>' : ""}
-    <div class="adm-vinculos">${perfisConta.perfis.map((p) => cardPerfil(id, p)).join("")}</div>
+    ${perfisConta.perfis.map((p) => cardPerfil(id, p, papeis)).join("")}
     <div class="adm-det-acoes"><button class="btn btn-ghost btn-sm" data-adm-acao="perfil-novo" data-conta="${escapeHtml(id)}">+ Adicionar usuário</button></div>
-  ` : "";
-
-  const vinculos = u.empresas.length
-    ? u.empresas.map((x) => `
-      <div class="adm-vinculo">
-        <span class="adm-vinculo-nome"><b>${escapeHtml(x.empresaNome)}</b>${pill(STATUS_EMPRESA, x.empresaStatus ?? "ativa")}</span>
-        <select class="adm-vinculo-papel" data-adm-acao="vinculo-papel" data-usuario="${escapeHtml(u.id)}" data-org="${escapeHtml(x.organizacaoId)}">
-          ${papeis.map((p) => `<option value="${escapeHtml(p.valor)}" ${p.valor === x.papel ? "selected" : ""}>${escapeHtml(p.rotulo)}</option>`).join("")}
-        </select>
-        <button class="btn btn-ghost btn-sm" data-adm-acao="vinculo-toggle"
-                data-usuario="${escapeHtml(u.id)}" data-org="${escapeHtml(x.organizacaoId)}" data-ativo="${x.ativo}">
-          ${x.ativo ? "Bloquear" : "Liberar"}
-        </button>
-        <button class="btn btn-ghost btn-sm" data-adm-acao="vinculo-remover"
-                data-usuario="${escapeHtml(u.id)}" data-org="${escapeHtml(x.organizacaoId)}" data-nome="${escapeHtml(x.empresaNome)}">Remover</button>
-      </div>`).join("")
-    : '<div class="estado-mini">Nenhuma empresa associada.</div>';
-
-  const vinculosUnidade = u.unidades.length
-    ? u.unidades.map((x) => `
-      <div class="adm-vinculo">
-        <span class="adm-vinculo-nome"><b>${escapeHtml(x.unidadeNome)}</b>${x.ativo ? "" : '<span class="pill bad">bloqueado</span>'}</span>
-        <select class="adm-vinculo-papel" data-adm-acao="vinculo-unidade-papel" data-usuario="${escapeHtml(u.id)}" data-unidade="${escapeHtml(x.unidadeId)}">
-          <option value="">Herdar da empresa</option>
-          ${papeis.map((p) => `<option value="${escapeHtml(p.valor)}" ${p.valor === x.papel ? "selected" : ""}>${escapeHtml(p.rotulo)}</option>`).join("")}
-        </select>
-        <button class="btn btn-ghost btn-sm" data-adm-acao="vinculo-unidade-toggle"
-                data-usuario="${escapeHtml(u.id)}" data-unidade="${escapeHtml(x.unidadeId)}" data-ativo="${x.ativo}">
-          ${x.ativo ? "Bloquear" : "Liberar"}
-        </button>
-        <button class="btn btn-ghost btn-sm" data-adm-acao="vinculo-unidade-remover"
-                data-usuario="${escapeHtml(u.id)}" data-unidade="${escapeHtml(x.unidadeId)}" data-nome="${escapeHtml(x.unidadeNome)}">Remover</button>
-      </div>`).join("")
-    : '<div class="estado-mini">Nenhuma unidade associada — sem isso, o usuário só entra na visão agregada "todas as unidades" da empresa, nunca numa unidade específica.</div>';
+  ` : `
+    <h3 class="adm-det-tit">Usuários desta conta</h3>
+    <div class="adm-aviso">A base ainda não está preparada para múltiplos usuários por conta (migration 060 pendente).</div>`;
 
   const sessoes = tabela({
     colunas: ["Empresa", "Cargo", "Início", "Último uso", "Situação"],
@@ -591,8 +602,6 @@ async function abrirDetalheUsuario(id) {
       </div>
 
       <div class="adm-det-acoes">
-        <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-associar" ${dId}>+ Associar empresa</button>
-        <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-associar-unidade" ${dId}>+ Associar unidade</button>
         <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-senha" ${dId}>Redefinir senha</button>
         <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-email" ${dId} data-email="${escapeHtml(u.emailLogin ?? u.email ?? "")}">Alterar e-mail</button>
         <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-logout" ${dId}>Forçar logout</button>
@@ -603,12 +612,6 @@ async function abrirDetalheUsuario(id) {
       </div>
 
       ${perfisHtml}
-
-      <h3 class="adm-det-tit">Empresas associadas ${perfisConta && perfisConta.multiPerfil ? "<small>(do usuário inicial)</small>" : ""}</h3>
-      <div class="adm-vinculos">${vinculos}</div>
-
-      <h3 class="adm-det-tit">Unidades associadas ${perfisConta && perfisConta.multiPerfil ? "<small>(do usuário inicial)</small>" : ""}</h3>
-      <div class="adm-vinculos">${vinculosUnidade}</div>
 
       <h3 class="adm-det-tit">Sessões</h3>${sessoes}
       <h3 class="adm-det-tit">Histórico</h3>${historico}`,
@@ -1230,6 +1233,17 @@ async function agir(fn, mensagem) {
   }
 }
 
+/** Como `agir`, mas reabre o detalhe da conta (não fecha para a lista). */
+async function agirPerfil(contaId, fn, mensagem) {
+  try {
+    await fn();
+    if (mensagem) toast(mensagem);
+    abrirDetalheUsuario(contaId);
+  } catch (e) {
+    toast("Erro: " + e.message);
+  }
+}
+
 /**
  * Lista, num modal, as contas com acesso ao Painel Administrativo da Crescer.
  * Integra ao fluxo de Usuários (item 9 do pedido) — sem nova navegação.
@@ -1660,59 +1674,77 @@ const ACOES = {
     abrirDetalheUsuario(conta);
   },
 
-  "usuario-associar": ({ id, nome }) => abrirModalAssociarEmpresas(id, nome),
-
-  // Associar uma UNIDADE específica — só oferece empresas às quais o usuário
-  // já tem acesso (associarUnidade recusa no backend se não tiver). Cargo em
-  // branco = herda o da empresa (mesma regra de usuarios_unidades.papel null).
-  "usuario-associar-unidade": async ({ id, nome }) => {
+  // ---- Vínculos POR PERFIL (Fase G corrigida) — sempre com perfilId explícito.
+  "perfil-assoc-empresa": async ({ conta, perfil, nome }) => {
     if (!cache.papeis.length) cache.papeis = await adminApi.papeis();
-    const detalhe = await adminApi.usuario(id);
-    const empresasDoUsuario = detalhe.empresas.filter((e) => e.ativo);
-    if (!empresasDoUsuario.length) {
-      toast(`Associe "${nome}" a uma empresa primeiro.`);
-      return;
-    }
-    const primeiraEmpresa = empresasDoUsuario[0].organizacaoId;
-    const unidadesIniciais = await adminApi.unidadesDaEmpresa(primeiraEmpresa);
-
+    if (!cache.empresas.length) cache.empresas = await adminApi.empresas();
+    const estado = await adminApi.perfisDaConta(conta);
+    const jaTem = new Set((estado.perfis.find((p) => p.id === perfil)?.empresas || []).map((e) => e.organizacaoId));
+    const livres = cache.empresas.filter((e) => !jaTem.has(e.id));
+    if (!livres.length) { toast("Este usuário já está em todas as empresas."); return; }
     abrirModal({
-      titulo: `Associar unidade — ${nome}`,
+      titulo: `Associar empresa — ${nome}`,
       corpo: grade(
-        selecao({
-          id: "ua-empresa", label: "Empresa", valor: primeiraEmpresa,
-          opcoes: empresasDoUsuario.map((e) => ({ valor: e.organizacaoId, rotulo: e.empresaNome })),
-        }) +
-        selecao({
-          id: "ua-unidade", label: "Unidade",
-          opcoes: unidadesIniciais.map((un) => ({ valor: un.id, rotulo: un.nome + (un.ativo ? "" : " (inativa)") })),
-          vazio: unidadesIniciais.length ? "" : "Nenhuma unidade nesta empresa",
-        }) +
-        selecao({
-          id: "ua-papel", label: "Cargo nesta unidade", vazio: "Herdar o cargo da empresa",
-          opcoes: cache.papeis.map((p) => ({ valor: p.valor, rotulo: p.rotulo })),
-          dica: "Deixe em branco pra usar o mesmo cargo que o usuário já tem na empresa.",
-        })
+        selecao({ id: "pe-empresa", label: "Empresa", opcoes: livres.map((e) => ({ valor: e.id, rotulo: e.nome })) }) +
+        selecao({ id: "pe-papel", label: "Cargo nesta empresa", valor: "operations", opcoes: cache.papeis.map((p) => ({ valor: p.valor, rotulo: p.rotulo })) }),
       ),
       confirmar: "Associar",
       aoConfirmar: async () => {
-        const unidadeId = valor("ua-unidade");
-        if (!unidadeId) throw new Error("Selecione uma unidade.");
-        await adminApi.associarUnidade(id, unidadeId, valor("ua-papel") || undefined);
-        toast("Unidade associada.");
-        recarregarAdmin();
+        await adminApi.associarEmpresaPerfil(conta, perfil, valor("pe-empresa"), valor("pe-papel"));
+        toast("Empresa associada a este usuário.");
+        abrirDetalheUsuario(conta);
       },
     });
+  },
 
-    // Trocar de empresa recarrega as unidades — nunca deixa marcado um id de
-    // unidade de outra empresa (o que causaria o 404 "Unidade não encontrada"
-    // ou, pior, associar a unidade errada).
-    el("#ua-empresa").addEventListener("change", async (e) => {
-      const unidades = await adminApi.unidadesDaEmpresa(e.target.value);
-      el("#ua-unidade").innerHTML = unidades.length
-        ? unidades.map((un) => `<option value="${escapeHtml(un.id)}">${escapeHtml(un.nome)}${un.ativo ? "" : " (inativa)"}</option>`).join("")
+  "perfil-assoc-unidade": async ({ conta, perfil, nome }) => {
+    if (!cache.papeis.length) cache.papeis = await adminApi.papeis();
+    const estado = await adminApi.perfisDaConta(conta);
+    const empresasDoPerfil = (estado.perfis.find((p) => p.id === perfil)?.empresas || []).filter((e) => e.ativo);
+    if (!empresasDoPerfil.length) { toast(`Associe "${nome}" a uma empresa primeiro.`); return; }
+    const primeira = empresasDoPerfil[0].organizacaoId;
+    const unidades = await adminApi.unidadesDaEmpresa(primeira);
+    abrirModal({
+      titulo: `Associar unidade — ${nome}`,
+      corpo: grade(
+        selecao({ id: "pu-empresa", label: "Empresa", valor: primeira, opcoes: empresasDoPerfil.map((e) => ({ valor: e.organizacaoId, rotulo: e.empresaNome })) }) +
+        selecao({ id: "pu-unidade", label: "Unidade", opcoes: unidades.map((un) => ({ valor: un.id, rotulo: un.nome + (un.ativo ? "" : " (inativa)") })), vazio: unidades.length ? "" : "Nenhuma unidade nesta empresa" }) +
+        selecao({ id: "pu-papel", label: "Cargo nesta unidade", vazio: "Herdar o cargo da empresa", opcoes: cache.papeis.map((p) => ({ valor: p.valor, rotulo: p.rotulo })) }),
+      ),
+      confirmar: "Associar",
+      aoConfirmar: async () => {
+        const unidadeId = valor("pu-unidade");
+        if (!unidadeId) throw new Error("Selecione uma unidade.");
+        await adminApi.associarUnidadePerfil(conta, perfil, unidadeId, valor("pu-papel") || undefined);
+        toast("Unidade associada a este usuário.");
+        abrirDetalheUsuario(conta);
+      },
+    });
+    el("#pu-empresa").addEventListener("change", async (e) => {
+      const us = await adminApi.unidadesDaEmpresa(e.target.value);
+      el("#pu-unidade").innerHTML = us.length
+        ? us.map((un) => `<option value="${escapeHtml(un.id)}">${escapeHtml(un.nome)}${un.ativo ? "" : " (inativa)"}</option>`).join("")
         : `<option value="">Nenhuma unidade nesta empresa</option>`;
     });
+  },
+
+  "pf-vinculo-papel": ({ conta, perfil, org }, alvo) =>
+    agirPerfil(conta, () => adminApi.atualizarVinculoPerfil(conta, perfil, org, { papel: alvo.value }), "Cargo atualizado."),
+  "pf-vinculo-toggle": ({ conta, perfil, org, ativo }) =>
+    agirPerfil(conta, () => adminApi.atualizarVinculoPerfil(conta, perfil, org, { ativo: ativo !== "true" }),
+      ativo === "true" ? "Acesso bloqueado nesta empresa." : "Acesso liberado."),
+  "pf-vinculo-remover": ({ conta, perfil, org, empnome, nome }) => {
+    if (!confirm(`Remover o acesso de "${nome}" a "${empnome}"?\n\nOs outros usuários da conta não são afetados.`)) return;
+    return agirPerfil(conta, () => adminApi.removerVinculoPerfil(conta, perfil, org), "Acesso removido.");
+  },
+  "pf-vinculo-unidade-papel": ({ conta, perfil, unidade }, alvo) =>
+    agirPerfil(conta, () => adminApi.atualizarVinculoUnidadePerfil(conta, perfil, unidade, { papel: alvo.value || null }), "Cargo atualizado."),
+  "pf-vinculo-unidade-toggle": ({ conta, perfil, unidade, ativo }) =>
+    agirPerfil(conta, () => adminApi.atualizarVinculoUnidadePerfil(conta, perfil, unidade, { ativo: ativo !== "true" }),
+      ativo === "true" ? "Acesso bloqueado nesta unidade." : "Acesso liberado."),
+  "pf-vinculo-unidade-remover": ({ conta, perfil, unidade, uninome, nome }) => {
+    if (!confirm(`Remover o acesso de "${nome}" à unidade "${uninome}"?`)) return;
+    return agirPerfil(conta, () => adminApi.removerVinculoUnidadePerfil(conta, perfil, unidade), "Acesso à unidade removido.");
   },
 
   "usuario-senha": ({ id, nome }) => abrirModal({

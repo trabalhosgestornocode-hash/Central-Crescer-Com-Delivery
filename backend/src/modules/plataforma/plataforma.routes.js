@@ -92,6 +92,15 @@ plataformaRouter.get("/painel-administrativo/usuarios", c.listarUsuariosPainelAd
 plataformaRouter.post("/usuarios/:id/painel-administrativo", c.definirPainelAdministrativo);
 
 // ---- Associação de usuários a empresas/unidades
+// Vínculos POR PERFIL (Fase G) — `:perfilId` estrutural. Antes das rotas
+// legadas `/usuarios/:id/empresas` (prefixo `/perfis/` não colide).
+plataformaRouter.post("/usuarios/:id/perfis/:perfilId/empresas", c.associarEmpresaPerfil);
+plataformaRouter.patch("/usuarios/:id/perfis/:perfilId/empresas/:organizacaoId", c.atualizarVinculoPerfil);
+plataformaRouter.delete("/usuarios/:id/perfis/:perfilId/empresas/:organizacaoId", c.removerVinculoPerfil);
+plataformaRouter.post("/usuarios/:id/perfis/:perfilId/unidades", c.associarUnidadePerfil);
+plataformaRouter.patch("/usuarios/:id/perfis/:perfilId/unidades/:unidadeId", c.atualizarVinculoUnidadePerfil);
+plataformaRouter.delete("/usuarios/:id/perfis/:perfilId/unidades/:unidadeId", c.removerVinculoUnidadePerfil);
+
 plataformaRouter.post("/usuarios/:id/empresas", c.associarEmpresa);
 // Associação EM MASSA — só cria vínculos NOVOS; recusa (409) se algum já
 // existir. Trocar cargo de vínculo existente é o PATCH abaixo.

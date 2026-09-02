@@ -22,9 +22,50 @@ import { garantirPerfilOperacionalInicial, inserirVinculoOrgComPerfil } from "..
 import * as v from "../../shared/validar.js";
 
 // Vínculo é chaveado pela IDENTIDADE OPERACIONAL (`perfil_id`) desde a Fase E —
-// `usuario_id` (a conta) continua gravado (LEGACY). Nesta fase só há 1 perfil
-// por conta (`perfil_id == usuario_id`). Ver perfil.service.js#inserirVinculoOrgComPerfil.
+// `usuario_id` (a conta) continua gravado (LEGACY). Ver
+// perfil.service.js#inserirVinculoOrgComPerfil.
 const inserirVinculoOrg = inserirVinculoOrgComPerfil;
+
+const RE_PERFIL_ID_AUSENTE = /perfil_id|does not exist|schema cache|could not find/i;
+
+/**
+ * Resolve o ÚNICO vínculo `(usuario_id, organizacao_id)` desta empresa (L2 / H1).
+ *
+ * Esta é a tela TENANT ("Equipe desta empresa") — `:id` é a CONTA, não um
+ * perfil, e a UI não distingue perfis irmãos da mesma conta (`listarUsuarios`
+ * mostra uma linha por `usuario_id`). Pós-063 uma conta pode ter 2 perfis na
+ * MESMA empresa; aqui não há como saber QUAL o admin quis editar. Em vez de
+ * tocar os dois (H1), recusa a operação e manda pro Painel Administrativo (que
+ * edita por perfil).
+ *
+ *   0 linhas  -> 404
+ *   1 linha   -> devolve `{ id, perfil_id }` (o caller escopa pelo `id`, a PK)
+ *   2+ linhas -> 400 `VINCULO_AMBIGUO_MULTIPERFIL` (NENHUMA escrita)
+ *
+ * @param {any} db
+ * @param {string} usuarioId
+ * @param {string} organizacaoId
+ * @returns {Promise<{ id: string, perfil_id: string|null }>}
+ */
+async function resolverVinculoUnicoDaEmpresa(db, usuarioId, organizacaoId) {
+  const buscar = (cols) => db.from("usuarios_organizacoes")
+    .select(cols).eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId);
+  let { data, error } = await buscar("id, perfil_id");
+  if (error && RE_PERFIL_ID_AUSENTE.test(error.message || "")) {
+    ({ data, error } = await buscar("id")); // pré-060: sem a coluna
+  }
+  if (error) throw ApiError.internal(error.message);
+  const linhas = data ?? [];
+  if (!linhas.length) throw ApiError.notFound("Usuário não encontrado nesta empresa.");
+  if (linhas.length > 1) {
+    throw ApiError.badRequest(
+      "Esta conta tem mais de um usuário com acesso a esta empresa. "
+      + "Edite (ou remova) o acesso pelo Painel Administrativo, escolhendo o usuário específico.",
+      { codigo: "VINCULO_AMBIGUO_MULTIPERFIL" },
+    );
+  }
+  return linhas[0];
+}
 
 /**
  * @typedef {object} UsuarioDaEmpresa
@@ -150,6 +191,9 @@ export async function criarUsuario({ organizacaoId, nome, email, senha, papel })
 
     const perfilId = await garantirPerfilOperacionalInicial({ contaId: existente.id, nome: existente.nome, ativo: existente.ativo });
     const error = await inserirVinculoOrg({ usuarioId: existente.id, perfilId, organizacaoId, papel: papelNorm, upsert: true });
+    // erro de NEGÓCIO de `gravarVinculo` (ex.: outro perfil da conta já ocupa a
+    // empresa) -> 400 com a mensagem pronta, nunca 500.
+    if (error?.codigo) throw ApiError.badRequest(error.message, { codigo: error.codigo });
     if (error) throw ApiError.internal(error.message);
 
     return {
@@ -186,6 +230,7 @@ export async function criarUsuario({ organizacaoId, nome, email, senha, papel })
   if (e3) {
     // Sem vínculo a conta nasce inútil — desfaz tudo em vez de deixar sobra.
     await supabase.auth.admin.deleteUser(uid).catch(() => {});
+    if (e3.codigo) throw ApiError.badRequest(e3.message, { codigo: e3.codigo });
     throw ApiError.internal("Usuário criado, mas o acesso à empresa falhou. Nada foi mantido.");
   }
 
@@ -208,7 +253,12 @@ export async function criarUsuario({ organizacaoId, nome, email, senha, papel })
  * @param {string} params.solicitanteId          conta que fez a chamada (req.user.id)
  * @param {string} [params.solicitantePerfilId]  PERFIL de quem fez a chamada (req.perfil.id) — Fase E
  */
-export async function atualizarUsuario({ organizacaoId, id, papel, ativo, solicitanteId, solicitantePerfilId }) {
+export async function atualizarUsuario(
+  { organizacaoId, id, papel, ativo, solicitanteId, solicitantePerfilId },
+  deps = {},
+) {
+  const db = deps.supabase ?? supabase;
+  const revogar = deps.revogar ?? revogarSessoes;
   const usuarioId = v.uuid(id, "Usuário");
   const patch = {};
   if (papel !== undefined) patch.papel = v.umDe(papel, "Cargo", PAPEIS_VINCULO);
@@ -225,16 +275,21 @@ export async function atualizarUsuario({ organizacaoId, id, papel, ativo, solici
     throw ApiError.badRequest("Você não pode alterar o próprio acesso. Peça a outro administrador.");
   }
 
-  const { data, error } = await supabase.from("usuarios_organizacoes")
-    .update(patch)
-    .eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId)
-    .select("papel, ativo, perfil_id").single();
+  // L2 / H1 — resolve O vínculo (recusa se a conta tiver 2+ perfis nesta
+  // empresa) e faz o UPDATE pela PK da linha, nunca por (usuario_id, org).
+  const alvo = await resolverVinculoUnicoDaEmpresa(db, usuarioId, organizacaoId);
+
+  const aplicar = (cols) => db.from("usuarios_organizacoes").update(patch).eq("id", alvo.id).select(cols).single();
+  let { data, error } = await aplicar("papel, ativo, perfil_id");
+  if (error && RE_PERFIL_ID_AUSENTE.test(error.message || "")) {
+    ({ data, error } = await aplicar("papel, ativo")); // pré-060: sem a coluna
+  }
   if (error || !data) throw ApiError.notFound("Usuário não encontrado nesta empresa.");
 
   // MODEL Y: revoga só as sessões DAQUELE PERFIL naquela empresa — nunca as de
   // um perfil irmão da mesma conta, nem as da conta em outra empresa.
-  const sessoesRevogadas = await revogarSessoes({
-    perfilId: data.perfil_id ?? usuarioId, organizacaoId,
+  const sessoesRevogadas = await revogar({
+    perfilId: data.perfil_id ?? alvo.perfil_id ?? usuarioId, organizacaoId,
     motivo: patch.ativo === false ? "acesso_bloqueado" : "papel_alterado",
   });
 
@@ -254,42 +309,49 @@ export async function atualizarUsuario({ organizacaoId, id, papel, ativo, solici
  * @param {string} params.solicitanteId          conta (req.user.id)
  * @param {string} [params.solicitantePerfilId]  PERFIL (req.perfil.id) — Fase E
  */
-export async function excluirUsuario({ organizacaoId, id, solicitanteId, solicitantePerfilId }) {
+export async function excluirUsuario({ organizacaoId, id, solicitanteId, solicitantePerfilId }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const revogar = deps.revogar ?? revogarSessoes;
   const usuarioId = v.uuid(id, "Usuário");
   if (usuarioId === (solicitantePerfilId ?? solicitanteId)) {
     throw ApiError.badRequest("Você não pode remover o próprio acesso.");
   }
 
-  const { data: vinculo } = await supabase.from("usuarios_organizacoes")
-    .select("id, perfil_id").eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId).maybeSingle();
-  if (!vinculo) throw ApiError.notFound("Usuário não encontrado nesta empresa.");
-  const perfilId = vinculo.perfil_id ?? usuarioId;
+  // L2 / H1 — recusa se a conta tiver 2+ perfis nesta empresa (a tela tenant
+  // não distingue); senão devolve a linha única, e o DELETE vai pela PK dela.
+  const alvo = await resolverVinculoUnicoDaEmpresa(db, usuarioId, organizacaoId);
+  const perfilId = alvo.perfil_id ?? usuarioId;
 
   // Último administrador não sai: a empresa ficaria sem quem gerencia acessos,
   // e a saída seria depender do SuperAdmin para uma operação de rotina.
-  const { data: admins } = await supabase.from("usuarios_organizacoes")
+  const { data: admins } = await db.from("usuarios_organizacoes")
     .select("usuario_id").eq("organizacao_id", organizacaoId)
     .eq("papel", "organization_admin").eq("ativo", true);
   if ((admins ?? []).length === 1 && admins[0].usuario_id === usuarioId) {
     throw ApiError.badRequest("Este é o único administrador da empresa. Promova outro antes de removê-lo.");
   }
 
-  const { error } = await supabase.from("usuarios_organizacoes")
-    .delete().eq("usuario_id", usuarioId).eq("organizacao_id", organizacaoId);
+  const { error } = await db.from("usuarios_organizacoes").delete().eq("id", alvo.id);
   if (error) throw ApiError.internal(error.message);
 
   // Vínculos de unidade desta empresa também saem — sozinhos, eles ainda
-  // autorizariam a seleção de contexto.
-  const { data: unidades } = await supabase.from("unidades")
+  // autorizariam a seleção de contexto. Só as unidades DESTE perfil (H1 —
+  // escopa por perfil_id, com fallback pré-060).
+  const { data: unidades } = await db.from("unidades")
     .select("id").eq("organizacao_id", organizacaoId);
   if (unidades?.length) {
-    await supabase.from("usuarios_unidades").delete()
-      .eq("usuario_id", usuarioId).in("unidade_id", unidades.map((u) => u.id));
+    const alvoUnidades = unidades.map((u) => u.id);
+    const ru = await db.from("usuarios_unidades").delete()
+      .eq("usuario_id", usuarioId).in("unidade_id", alvoUnidades).eq("perfil_id", perfilId);
+    if (ru?.error && RE_PERFIL_ID_AUSENTE.test(ru.error.message || "")) {
+      await db.from("usuarios_unidades").delete()
+        .eq("usuario_id", usuarioId).in("unidade_id", alvoUnidades); // pré-060
+    }
   }
 
   // MODEL Y: só as sessões desse PERFIL naquela empresa (não a conta inteira,
   // não os perfis irmãos).
-  const sessoesRevogadas = await revogarSessoes({ perfilId, organizacaoId, motivo: "acesso_removido" });
+  const sessoesRevogadas = await revogar({ perfilId, organizacaoId, motivo: "acesso_removido" });
   return { id: usuarioId, acessoRemovido: true, contaPreservada: true, sessoesRevogadas };
 }
 

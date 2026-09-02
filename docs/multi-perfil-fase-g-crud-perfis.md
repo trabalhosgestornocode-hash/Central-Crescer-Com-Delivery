@@ -83,8 +83,9 @@ Não há transação SQL entre chamadas PostgREST; a compensação é o equivale
 ## E. Vínculos
 
 - Criados/lidos por `perfil_id` (canônico). `inserirVinculoOrgComPerfil` / `inserirVinculoUnidadeComPerfil` gravam `usuario_id` (= conta, LEGACY) **+** `perfil_id` (= o perfil).
-- **`onConflict` do upsert** passou a mirar a UNIQUE canônica `(perfil_id, X)` (constraint da 063), degradando para `(usuario_id, X)` (015) se a 063 não rodou.
-- **Edição de vínculo de um perfil específico:** `atualizarVinculo`, `removerVinculo`, `associarEmpresa`, `associarUnidade`, `atualizarVinculoUnidade`, `removerVinculoUnidade` aceitam um `perfilId` opcional (`body.perfilId` / `opts.perfilId`) — resolvido por `resolverPerfilAlvo(contaId, perfilId)` (valida posse; ausente → perfil inicial). Quando o alvo não é o perfil inicial, a query ganha `.eq("perfil_id", perfilAlvo)` — sem isso, editar o cargo na Empresa A mexeria nos DOIS perfis que estivessem lá.
+- **`onConflict` do upsert** mira a UNIQUE canônica `(perfil_id, X)` (constraint da 063). Pré-063 **não** degrada para `upsert(usuario_id, X)` (sobrescreveria o perfil irmão): busca a linha exata `(perfil_id, X)` e faz UPDATE; senão INSERT (a UNIQUE legada `(usuario_id, X)` recusa 2 perfis no mesmo alvo → erro de negócio `VINCULO_PERFIL_IRMAO_MESMO_ALVO`, mensagem sensível a empresa/unidade, sem citar migration ao usuário).
+- **Edição de vínculo por perfil (H1 — corrigido):** `atualizarVinculo`, `removerVinculo`, `associarEmpresa`, `associarUnidade`, `atualizarVinculoUnidade`, `removerVinculoUnidade` aceitam `perfilId` (`body.perfilId` / `opts.perfilId` / `:perfilId` da rota) — resolvido por `resolverPerfilAlvo(contaId, perfilId, db)` (valida posse; ausente → perfil inicial, cujo `perfil_id == conta_id`). A query é **SEMPRE** escopada por `.eq("perfil_id", perfilAlvo)` via `rodarEscopadoPorPerfil` — **inclusive o perfil inicial**. Só o schema pré-060 (sem a coluna) cai no caminho legado. Não existe mais a sentinela `perfilAlvo !== usuarioId` — pós-063, ela deixava um UPDATE/DELETE do perfil inicial atingir os perfis irmãos da conta.
+- **Perfil INATIVO (M4 — decisão de negócio):** `resolverPerfilAlvo` **aceita** perfil desativado. O SuperAdmin pode montar empresa/unidade/cargo/permissões **antes** de ativar o perfil; configurar um vínculo **não** ativa o perfil (só `alternarAtivoPerfil` faz isso).
 - **Cargos diferentes na mesma empresa** (Fulana 1 = Operação, Fulana 2 = Gerência na Empresa A) e **empresas diferentes** e **múltiplas empresas por perfil** — todos suportados (pontos 19/20/21).
 
 ---
@@ -102,7 +103,7 @@ Não há transação SQL entre chamadas PostgREST; a compensação é o equivale
 
 **Por que 063 é BLOCKER do 2º perfil real** (pontos 12/35): sem ela, Fulana 1 e Fulana 2 na **mesma empresa** teriam `(usuario_id, organizacao_id) = (contaId, A)` idêntico → a UNIQUE legada recusa o segundo INSERT. Com a 063, a chave é `(perfil_id, A)` → `(contaId, A)` vs `(uuidNovo, A)`, distintas.
 
-O backend degrada (onConflict `perfil_id,X` → `usuario_id,X`; insert `perfil_id` → sem) para não quebrar pré-063, mas **a criação de um 2º perfil na mesma empresa que outro perfil da conta só é confiável pós-063**. `criarPerfilNaConta` recusa explicitamente com mensagem clara quando `perfis_operacionais` não existe (pré-060).
+Pré-063, criar/associar um 2º perfil **na mesma empresa/unidade que outro perfil da conta** é recusado com erro de negócio (`VINCULO_PERFIL_IRMAO_MESMO_ALVO`) — **nunca** sobrescreve o irmão nem responde 500 (inclusive por `criarPerfilNaConta`, que faz INSERT puro: um duplicate-key vira erro de negócio, distinguindo "este perfil já está no alvo" — `VINCULO_JA_EXISTE` — de "um perfil irmão ocupa"). Empresas/unidades **diferentes** para cada perfil já funcionam pré-063. `criarPerfilNaConta` recusa com mensagem clara quando `perfis_operacionais` não existe (pré-060).
 
 RLS: `perfis_operacionais` policy = `conta_id = auth.uid() or is_platform_superadmin()` — a conta lê os próprios perfis; a escrita é service_role. Nada muda na Fase G.
 
@@ -158,9 +159,10 @@ Vínculo (Fase E, agora perfil-aware): `POST/PATCH/DELETE /usuarios/:id/empresas
 ## J. Arquivos alterados
 
 **Backend:**
-* `src/modules/sessao/perfil.service.js` — `criarPerfilOperacional` (UUID novo), `definirAtivoDoPerfil` (nunca DELETE, revoga só o perfil, gate de PIN na reativação); `inserirVinculoOrg/UnidadeComPerfil` — `onConflict` canônico `(perfil_id, X)` com degrade.
-* `src/modules/plataforma/plataforma.usuarios.service.js` — `resolverPerfilAlvo`, `perfisDaConta`, `criarPerfilNaConta` (transacional + compensação), `renomearPerfil`, `alternarAtivoPerfil`; `perfilId` opcional em `associarEmpresa` / `atualizarVinculo` / `removerVinculo` / `associarUnidade` / `atualizarVinculoUnidade` / `removerVinculoUnidade`.
-* `src/modules/plataforma/plataforma.controller.js` + `.routes.js` — 4 endpoints novos.
+* `src/modules/sessao/perfil.service.js` — `criarPerfilOperacional` (UUID novo), `definirAtivoDoPerfil` (nunca DELETE, revoga só o perfil, gate de PIN na reativação); `gravarVinculo` (compartilhado) — `onConflict` canônico `(perfil_id, X)`; pré-063 UPDATE/INSERT da linha exata do perfil (nunca sobrescreve irmão); INSERT puro que colide → erro de negócio (`VINCULO_JA_EXISTE` / `VINCULO_PERFIL_IRMAO_MESMO_ALVO`), nunca 500.
+* `src/modules/plataforma/plataforma.usuarios.service.js` — `resolverPerfilAlvo` (sempre devolve o `perfil_id` real; aceita perfil inativo — M4), `rodarEscopadoPorPerfil` (helper H1), `perfisDaConta`, `criarPerfilNaConta` (transacional + compensação), `renomearPerfil`, `alternarAtivoPerfil`; `atualizarVinculo` / `removerVinculo` / `associarUnidade` / `atualizarVinculoUnidade` / `removerVinculoUnidade` **sempre** escopados por `perfil_id` (inclusive o perfil inicial) + DI (`deps`).
+* `src/modules/usuarios/usuarios.service.js` (tenant) — `criarUsuario`: erro de negócio de `gravarVinculo` → 400, nunca 500; **`atualizarUsuario`/`excluirUsuario`**: `resolverVinculoUnicoDaEmpresa` (L2) — opera pela PK da linha única ou recusa (`VINCULO_AMBIGUO_MULTIPERFIL`) se a conta tiver 2+ perfis na empresa; cleanup de unidades escopado por `perfil_id` + DI.
+* `src/modules/plataforma/plataforma.controller.js` + `.routes.js` — endpoints por perfil (`/usuarios/:id/perfis/:perfilId/{empresas,unidades}`).
 * `src/shared/auditoria.js` — `ACOES.PERFIL_CRIADO/EDITADO/ATIVADO/DESATIVADO`.
 
 **Frontend:**
@@ -207,12 +209,38 @@ Sem ambiente com 060/063. **Antes de liberar a Fase G (e a F) em produção:**
 
 ## M. Blockers
 
-**Para a Fase G:** nenhum — o service, os endpoints e a UI estão prontos e testados por unidade/scan.
+**Para a Fase G:** nenhum — o service, os endpoints e a UI estão prontos; H1 corrigido e coberto por testes comportamentais (`perfis-vinculo-isolamento.test.js`).
 
 **Para produção (registrado):**
-* **063 é obrigatória** antes de qualquer 2º perfil na mesma empresa que outro perfil da conta. O backend degrada, mas a UNIQUE legada `(usuario_id, org)` recusaria o INSERT.
+* **063 é obrigatória** antes de qualquer 2º perfil na mesma empresa/unidade que outro perfil da conta. Pré-063 o backend recusa com erro de negócio — nunca sobrescreve nem 500.
 * **060** antes de tudo (senão `criarPerfilNaConta` responde 400 explicativo).
 * Integração ponta-a-ponta do caso real (teste 34 completo) só é verificável em staging.
+
+---
+
+## M.1 Correções pós-auditoria (H1 / M2 / M3 / M4 / colNula)
+
+| Item | Antes | Depois |
+|---|---|---|
+| **H1** | `atualizarVinculo`/`removerVinculo`/`*Unidade` só escopavam por `perfil_id` quando `perfilAlvo !== usuarioId`. Pós-063, com o perfil inicial **e** um irmão na mesma empresa/unidade, um UPDATE atingia os dois e um DELETE apagava o do irmão (viola CASOS 1 e 4). | `resolverPerfilAlvo` sempre devolve o `perfil_id` real (`== conta_id` p/ o inicial). As 5 funções rodam via `rodarEscopadoPorPerfil` → **sempre** `.eq("perfil_id", perfilAlvo)`. Fallback pré-060 (sem a coluna) apenas. Coberto por `perfis-vinculo-isolamento.test.js` (cenários A–E + sessões). |
+| **M2** | `criarPerfilNaConta` (INSERT puro) numa empresa já ocupada por um irmão, pré-063 → duplicate-key não traduzido → **500**. | `gravarVinculo` traduz o duplicate-key do INSERT puro para erro de negócio (`VINCULO_PERFIL_IRMAO_MESMO_ALVO` / `VINCULO_JA_EXISTE`). |
+| **M3** | Código/mensagem `VINCULO_PERFIL_IRMAO_MESMA_EMPRESA` dizia "empresa" mesmo p/ unidade, e citava "aplique a migration 063" ao usuário. | Código genérico `VINCULO_PERFIL_IRMAO_MESMO_ALVO`; mensagem sensível ao alvo ("...a esta empresa." / "...a esta unidade."); migration nunca aparece na mensagem de usuário. |
+| **M4** | `resolverPerfilAlvo` não checava `ativo` — comportamento indefinido p/ perfil inativo. | **Decisão:** SuperAdmin **pode** configurar vínculos de perfil inativo (montar acesso antes de ativar). Configurar vínculo **não** ativa o perfil. Documentado no JSDoc + teste. |
+| **colNula** | `gravarVinculo` tinha um `if (colNula) {…} else {…}` com os dois ramos idênticos. | Parâmetro e ramo removidos; passo pré-060 é uma linha. Zero mudança de comportamento. |
+
+**Testes:** `perfis-vinculo-isolamento.test.js` + `tenant-usuarios-isolamento.test.js` (novos, comportamentais com fake DB) + scans atualizados em `perfis-crud-multi.test.js` e `autorizacao-perfil.test.js`.
+
+### L2 — fluxo tenant (`usuarios/usuarios.service.js`)
+
+`atualizarUsuario` / `excluirUsuario` (tela "Equipe desta empresa") também escopavam só por `(usuario_id, organizacao_id)` — mesmo padrão do H1. **`:id` ali é a CONTA**, não um perfil, e a UI tenant (`configuracoes.js`) **não distingue** perfis irmãos (`listarUsuarios` mostra 1 linha por `usuario_id`). Não há `perfilId` confiável.
+
+**Correção (proteção, não escolha):**
+- `resolverVinculoUnicoDaEmpresa(db, usuarioId, organizacaoId)`:
+  - **1 vínculo** → devolve a linha; o `UPDATE`/`DELETE` vai pela **PK (`id`)** — nunca por `(usuario_id, org)` — e o cleanup de `usuarios_unidades` é escopado por `perfil_id` (com fallback pré-060);
+  - **2+ vínculos** (possível pós-063) → `ApiError.badRequest` **`VINCULO_AMBIGUO_MULTIPERFIL`** (nenhuma escrita) — aponta o Painel Administrativo, que edita por perfil;
+  - **0** → 404.
+- Sessões: `revogarSessoes({ perfilId: <linha resolvida>, organizacaoId })`.
+- **UI tenant multi-perfil continua sendo Fase I.** Até lá, contas de 2 perfis na mesma empresa são geridas só pelo Painel Administrativo — a tela tenant recusa em vez de agir às cegas.
 
 ---
 

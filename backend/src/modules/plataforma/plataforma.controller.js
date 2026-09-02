@@ -195,6 +195,8 @@ export const listarUsuariosPainelAdministrativo = asyncHandler(async (req, res) 
   ok(res, await usuarios.listarUsuariosPainelAdministrativo({ status: req.query.status })));
 
 // --------------------------------------------------- Associações (vínculos)
+// LEGADO (conta = 1 perfil): sem `perfilId` -> o perfil inicial da conta.
+// `?perfilId=` / `body.perfilId` continua aceito para chamadas de transição.
 export const associarEmpresa = asyncHandler(async (req, res) =>
   ok(res, await usuarios.associarEmpresa(req, req.params.id, v.corpo(req.body)), 201));
 
@@ -202,19 +204,39 @@ export const associarEmpresasLote = asyncHandler(async (req, res) =>
   ok(res, await usuarios.associarEmpresasLote(req, req.params.id, v.corpo(req.body)), 201));
 
 export const atualizarVinculo = asyncHandler(async (req, res) =>
-  ok(res, await usuarios.atualizarVinculo(req, req.params.id, req.params.organizacaoId, v.corpo(req.body))));
+  ok(res, await usuarios.atualizarVinculo(req, req.params.id, req.params.organizacaoId, comPerfilId(req))));
 
 export const removerVinculo = asyncHandler(async (req, res) =>
-  ok(res, await usuarios.removerVinculo(req, req.params.id, req.params.organizacaoId)));
+  ok(res, await usuarios.removerVinculo(req, req.params.id, req.params.organizacaoId, { perfilId: perfilIdDe(req) })));
 
 export const associarUnidade = asyncHandler(async (req, res) =>
   ok(res, await usuarios.associarUnidade(req, req.params.id, v.corpo(req.body)), 201));
 
 export const atualizarVinculoUnidade = asyncHandler(async (req, res) =>
-  ok(res, await usuarios.atualizarVinculoUnidade(req, req.params.id, req.params.unidadeId, v.corpo(req.body))));
+  ok(res, await usuarios.atualizarVinculoUnidade(req, req.params.id, req.params.unidadeId, comPerfilId(req))));
 
 export const removerVinculoUnidade = asyncHandler(async (req, res) =>
-  ok(res, await usuarios.removerVinculoUnidade(req, req.params.id, req.params.unidadeId)));
+  ok(res, await usuarios.removerVinculoUnidade(req, req.params.id, req.params.unidadeId, { perfilId: perfilIdDe(req) })));
+
+// --------------------------------------------------- Vínculos POR PERFIL (Fase G — corrigido)
+// `:perfilId` é ESTRUTURAL — nunca "usuário inicial" implícito. `resolverPerfilAlvo`
+// no service valida `perfil.conta_id === :id` (404 genérico se não for da conta).
+const daRota = (req) => ({ ...(req.body ?? {}), perfilId: req.params.perfilId });
+export const associarEmpresaPerfil = asyncHandler(async (req, res) =>
+  ok(res, await usuarios.associarEmpresa(req, req.params.id, daRota(req)), 201));
+export const atualizarVinculoPerfil = asyncHandler(async (req, res) =>
+  ok(res, await usuarios.atualizarVinculo(req, req.params.id, req.params.organizacaoId, daRota(req))));
+export const removerVinculoPerfil = asyncHandler(async (req, res) =>
+  ok(res, await usuarios.removerVinculo(req, req.params.id, req.params.organizacaoId, { perfilId: req.params.perfilId })));
+export const associarUnidadePerfil = asyncHandler(async (req, res) =>
+  ok(res, await usuarios.associarUnidade(req, req.params.id, daRota(req)), 201));
+export const atualizarVinculoUnidadePerfil = asyncHandler(async (req, res) =>
+  ok(res, await usuarios.atualizarVinculoUnidade(req, req.params.id, req.params.unidadeId, daRota(req))));
+export const removerVinculoUnidadePerfil = asyncHandler(async (req, res) =>
+  ok(res, await usuarios.removerVinculoUnidade(req, req.params.id, req.params.unidadeId, { perfilId: req.params.perfilId })));
+
+function perfilIdDe(req) { return req.query?.perfilId ?? (req.body ?? {}).perfilId ?? null; }
+function comPerfilId(req) { const b = v.corpo(req.body); return b.perfilId ? b : { ...b, perfilId: perfilIdDe(req) }; }
 
 export const papeis = asyncHandler(async (_req, res) => ok(res, usuarios.detalharPapeis()));
 

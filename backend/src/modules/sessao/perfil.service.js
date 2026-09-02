@@ -153,44 +153,96 @@ export async function definirAtivoDoPerfil({ contaId, perfilId, ativo }, deps = 
   return { perfilId: pId, ativo: alvoAtivo, sessoesRevogadas };
 }
 
-/**
- * Grava um vínculo `usuarios_organizacoes` chaveado pela IDENTIDADE OPERACIONAL
- * (`perfil_id`), mantendo `usuario_id` (LEGACY). Degrada sem `perfil_id` se a
- * 060 ainda não rodou. Compartilhado por `usuarios/usuarios.service.js` e
- * `plataforma/plataforma.usuarios.service.js`.
- * @param {{usuarioId: string, perfilId: string, organizacaoId: string, papel: string, upsert?: boolean}} p
- * @returns {Promise<any>} o erro do Supabase, ou null
- */
 // A UNIQUE canônica é `(perfil_id, X)` (constraint da migration 063). Pré-063
-// só existe a UNIQUE legada `(usuario_id, X)` da 015. O upsert tenta a
-// canônica e degrada para a legada se o Postgres não achar a constraint.
+// só existe a UNIQUE legada `(usuario_id, X)` da 015.
 const RE_ONCONFLICT_AUSENTE = /no unique or exclusion constraint|ON CONFLICT/i;
+const RE_DUPLICATA = /duplicate key|unique|already exists|23505/i;
+
+// Mensagens de NEGÓCIO para conflito de vínculo — sensíveis ao ALVO (M3). NÃO
+// mencionam migration nenhuma: a nota técnica ("resolvido pela 063") fica só
+// aqui no código / na doc, nunca chega ao usuário final.
+const msgIrmaoMesmoAlvo = (tabela) => (tabela === "usuarios_unidades"
+  ? "Esta conta já possui outro perfil associado a esta unidade."
+  : "Esta conta já possui outro perfil associado a esta empresa.");
+const msgVinculoJaExiste = (tabela) => (tabela === "usuarios_unidades"
+  ? "Este perfil já está associado a esta unidade."
+  : "Este perfil já está associado a esta empresa.");
+
+/**
+ * Grava um vínculo (`usuarios_organizacoes` ou `usuarios_unidades`) chaveado
+ * pela IDENTIDADE OPERACIONAL (`perfil_id`), mantendo `usuario_id` (LEGACY).
+ * Compartilhado por `usuarios/usuarios.service.js` e
+ * `plataforma/plataforma.usuarios.service.js`.
+ *
+ * `upsert: true` = "criar ou reativar/trocar cargo DESTE perfil neste alvo".
+ *   * Pós-063: upsert nativo em `(perfil_id, X)`.
+ *   * Pré-063 (sem essa UNIQUE): NÃO degrada para `upsert(usuario_id, X)` —
+ *     isso sobrescreveria o vínculo de um PERFIL IRMÃO. Busca a linha exata
+ *     `(perfil_id, X)` e faz UPDATE; senão INSERT (a UNIQUE legada
+ *     `(usuario_id, X)` recusa 2 perfis no mesmo alvo → erro de negócio).
+ *
+ * `upsert: false` (INSERT puro, usado ao criar um perfil novo): um duplicate-key
+ * é traduzido para erro de NEGÓCIO em vez de vazar cru (evita 500 — M2/B8),
+ * distinguindo "este mesmo perfil já está no alvo" de "um perfil irmão ocupa".
+ *
+ * Degrada sem `perfil_id` (pré-060 — inalcançável no plano de deploy).
+ * @param {{tabela: string, alvoCol: string, alvoId: string, usuarioId: string, perfilId: string, papel: string|null, upsert?: boolean}} p
+ * @returns {Promise<any>} erro do Supabase, `{ codigo, message }` de negócio, ou null
+ */
+async function gravarVinculo({ tabela, alvoCol, alvoId, usuarioId, perfilId, papel, upsert }) {
+  const base = { usuario_id: usuarioId, [alvoCol]: alvoId, papel, ativo: true };
+  const T = () => supabase.from(tabela);
+  const linhaDestePerfil = async () => {
+    const { data } = await T().select("id").eq("perfil_id", perfilId).eq(alvoCol, alvoId).maybeSingle();
+    return data?.id ?? null;
+  };
+
+  // 1. caminho canônico (pós-063): (perfil_id, alvo) é a UNIQUE.
+  const onConflict = `perfil_id,${alvoCol}`;
+  let { error } = upsert
+    ? await T().upsert({ ...base, perfil_id: perfilId }, { onConflict })
+    : await T().insert({ ...base, perfil_id: perfilId });
+  if (!error) return null;
+
+  // 1b. INSERT puro que bateu numa UNIQUE → erro de negócio (nunca 500).
+  if (!upsert && RE_DUPLICATA.test(error.message || "")) {
+    return (await linhaDestePerfil())
+      ? { codigo: "VINCULO_JA_EXISTE", message: msgVinculoJaExiste(tabela) }
+      : { codigo: "VINCULO_PERFIL_IRMAO_MESMO_ALVO", message: msgIrmaoMesmoAlvo(tabela) };
+  }
+
+  // 2. pré-063: sem a UNIQUE (perfil_id, alvo). Nunca degrada para
+  //    upsert(usuario_id, X) — sobrescreveria o irmão.
+  if (upsert && RE_ONCONFLICT_AUSENTE.test(error.message || "")) {
+    const idExistente = await linhaDestePerfil();
+    if (idExistente) {
+      ({ error } = await T().update({ papel, ativo: true }).eq("id", idExistente));
+    } else {
+      ({ error } = await T().insert({ ...base, perfil_id: perfilId }));
+      if (error && RE_DUPLICATA.test(error.message || "")) {
+        // colisão na UNIQUE legada (usuario_id, X): um perfil IRMÃO da conta já
+        // ocupa este alvo. Resolvido pela migration 063 (não citar ao usuário).
+        return { codigo: "VINCULO_PERFIL_IRMAO_MESMO_ALVO", message: msgIrmaoMesmoAlvo(tabela) };
+      }
+    }
+    if (!error) return null;
+  }
+
+  // 3. pré-060: sem a coluna perfil_id (inalcançável no plano de deploy — a
+  //    060 entra antes do backend; mantido como rede de segurança defensiva).
+  if (RE_COLUNA_AUSENTE.test(error.message || "")) {
+    ({ error } = await T().upsert(base, { onConflict: `usuario_id,${alvoCol}` }));
+  }
+  return error ?? null;
+}
 
 export async function inserirVinculoOrgComPerfil({ usuarioId, perfilId, organizacaoId, papel, upsert = false }) {
-  const base = { usuario_id: usuarioId, organizacao_id: organizacaoId, papel, ativo: true };
-  const chamar = (l, onConflict) => (upsert
-    ? supabase.from("usuarios_organizacoes").upsert(l, { onConflict })
-    : supabase.from("usuarios_organizacoes").insert(l));
-  let { error } = await chamar({ ...base, perfil_id: perfilId }, "perfil_id,organizacao_id");
-  if (error && RE_ONCONFLICT_AUSENTE.test(error.message || "")) {
-    ({ error } = await chamar({ ...base, perfil_id: perfilId }, "usuario_id,organizacao_id")); // pré-063
-  }
-  if (error && RE_COLUNA_AUSENTE.test(error.message || "")) ({ error } = await chamar(base, "usuario_id,organizacao_id")); // pré-060
-  return error ?? null;
+  return gravarVinculo({ tabela: "usuarios_organizacoes", alvoCol: "organizacao_id", alvoId: organizacaoId, usuarioId, perfilId, papel, upsert });
 }
 
 /** Idem para `usuarios_unidades`. `papel` pode ser null (herda da empresa). */
 export async function inserirVinculoUnidadeComPerfil({ usuarioId, perfilId, unidadeId, papel = null, upsert = false }) {
-  const base = { usuario_id: usuarioId, unidade_id: unidadeId, papel, ativo: true };
-  const chamar = (l, onConflict) => (upsert
-    ? supabase.from("usuarios_unidades").upsert(l, { onConflict })
-    : supabase.from("usuarios_unidades").insert(l));
-  let { error } = await chamar({ ...base, perfil_id: perfilId }, "perfil_id,unidade_id");
-  if (error && RE_ONCONFLICT_AUSENTE.test(error.message || "")) {
-    ({ error } = await chamar({ ...base, perfil_id: perfilId }, "usuario_id,unidade_id")); // pré-063
-  }
-  if (error && RE_COLUNA_AUSENTE.test(error.message || "")) ({ error } = await chamar(base, "usuario_id,unidade_id")); // pré-060
-  return error ?? null;
+  return gravarVinculo({ tabela: "usuarios_unidades", alvoCol: "unidade_id", alvoId: unidadeId, usuarioId, perfilId, papel, upsert });
 }
 
 /** Perfis operacionais ATIVOS de uma conta. Traz pin_hash só para derivar `temPin`. */

@@ -1,175 +1,203 @@
-# Multi-perfil — validação em produção (deploy controlado)
+# Multi-perfil — validação em produção (deploy controlado — Caminho B)
 
-**Data:** 2026-09-02 05:30–05:40 UTC
-**Status:** ⏸️ **PARADO ANTES DA MIGRATION** — 3 dos 4 pré-requisitos confirmados; o 4º (**git limpo**, Regra 4) é um **BLOCKER** que exige decisão do revisor. **Nenhuma migration aplicada. Nenhum deploy. Nenhuma escrita em produção** (só `SELECT` e `pg_dump`).
+**Data:** 2026-09-02 05:30–06:00 UTC
+**Status:** ⏸️ **PRONTO PARA A PRIMEIRA ESCRITA — aguardando o "go".** Os 4 gates obrigatórios estão **✅ confirmados**. Nenhuma migration aplicada, nenhum deploy, nenhuma escrita em produção (só `SELECT` e `pg_dump`).
 
-> Conforme a instrução: *"COMECE PELO INVENTÁRIO + GIT + BACKUP + PRÉ-CHECK. NÃO APLIQUE MIGRATION ANTES DESSES QUATRO PONTOS ESTAREM CONFIRMADOS."*
+> Caminho B aprovado (deploy do lote: multi-perfil + iFood + Inteligência + Painel Administrativo). Instrução: *"NÃO FAÇA A PRIMEIRA ESCRITA ANTES DE ME MOSTRAR QUE OS TRÊS [pré-checks 056/059/061] PASSARAM."*
 
 ---
 
-## A. Backup / checkpoint
+## GATE 1 — Inventário ✅
+
+Produção `uqybgauuxcrqzquultfu` — Postgres **17.6**. Conexão direta via `psql` **confirmada** (`postgres@db.uqybgauuxcrqzquultfu.supabase.co:5432`).
+
+### Estado REAL das migrations em produção (verificado no banco)
+
+| Migration | Feature | Aplicada? | Evidência |
+|---|---|---|---|
+| `001`–`055` | base | ✅ SIM | — |
+| **`056` iFood** | iFood | ✅ **JÁ APLICADA** | `ifood_conexoes`, `ifood_credenciais`, `ifood_oauth_sessoes` **existem** |
+| `057` unidade dados contato | base | ✅ SIM | `unidades.responsavel`, `unidades.email` existem |
+| `058` unidade_config | base | ✅ SIM | tabela `unidade_config` existe |
+| **`059` Inteligência** | Inteligência | ❌ **NÃO** | `modulos` sem `id='inteligencia'` |
+| **`060` perfis_operacionais** | multi-perfil | ❌ **NÃO** | sem tabela `perfis_operacionais`, sem coluna `perfil_id` |
+| **`061` Painel Administrativo** | Painel Adm | ❌ **NÃO** | sem tabela `painel_administrativo_usuarios` |
+| **`062` CHECK XOR** | multi-perfil | ❌ NÃO | (depende de 060) |
+| **`063` perfil_id NOT NULL + UNIQUE** | multi-perfil | ❌ NÃO | UNIQUE atual ainda é `(usuario_id, X)` |
+| **`064` PIN nonce + RPCs** | multi-perfil | ❌ NÃO | (depende de 060) |
+
+**Sequência real a executar: `059`, `060`, `061` → deploy → `062`, `063`, `064`.** (`056` já está aplicada — **NÃO reaplicar** — embora seja idempotente.)
+
+---
+
+## GATE 2 — Git limpo ✅
+
+`main`, HEAD anterior = `95b3858` (= `origin/main`, deployado hoje). **4 commits novos**, working tree **LIMPA**:
+
+| Commit | Escopo | Arquivos |
+|---|---|---|
+| `495c112` `feat(ifood)` | módulo `ifood/`, `shared/cripto.js`, `frontend/src/ifood*.js`, migration `056`, 7 testes | 25 |
+| `4423e5a` `feat(inteligencia)` | módulo `inteligencia/`, `frontend/src/{config,router,views,api,agentePainel,dashboardExecutivo}.js`, migration `059`, 2 testes | 12 |
+| `24509fc` `feat(painel-administrativo)` | módulo `administrativo/`, `frontend/src/painelAdm*.js`, `encaminhamento.js`, migration `061`, 4 testes | 15 |
+| `c904cb7` `feat(multi-perfil)` | `sessao/*`, `usuarios/*`, `shared/{pin,profileSelectionToken,identidade,contextToken,ApiError,auditoria,modulos}.js`, `agente/*`, controllers Fase I, `frontend/src/{app,sessao,state,selecaoPerfil,adminApi,adminViews,styles.css,index.html}`, migrations `060`/`062`/`063`/`064`, 8 testes, 12 docs. **Carrega os pontos de integração compartilhados** (`auth.js`, `routes.js`, `plataforma.*`) das 4 features. | 68 |
+
+`node --check src/app.js` ✅ · `import('./src/app.js')` carrega ✅. **Nada pushado** — `origin/main` segue em `95b3858`.
+
+> Nota: os arquivos de entrypoint (`auth.js`, `routes.js`, `plataforma.{routes,controller,usuarios.service,repo}.js`, `auditoria.js`, `modulos.js`) têm hunks das 4 features misturados sem fronteira — ficaram no commit `c904cb7`. Split cirúrgico foi descartado (Caminho B). A árvore é **internamente consistente** (testes abaixo).
+
+---
+
+## GATE 3 — Backup ✅
+
+`pg_dump` de produção (**READ-ONLY**), local em `scratchpad/backup-prod-20260902T053712Z/`:
+
+| Arquivo | Tamanho | Timestamp | Conteúdo |
+|---|---|---|---|
+| `schema-public.sql` | 252 KB | 2026-09-02T05:37:37Z | DDL completo do schema `public` |
+| `data-afetadas.sql` | 1,18 MB | 2026-09-02T05:37:54Z | dados de `perfis`, `usuarios_organizacoes`, `usuarios_unidades`, `agente_conversas`, `sessoes_contexto` |
+| `constraints-antes.txt` | 869 B | 2026-09-02T05:37:56Z | definições exatas das constraints (rollback preciso da `063`) |
+
+**Rollback SQL** documentado no rodapé de cada migration (`056`/`059`/`060`/`061`/`062`/`063`/`064`) — todos `drop … if exists`, transacionais.
+
+⚠️ **Recomendação:** antes do "go", criar também um **backup/PITR pelo painel Supabase** (Database → Backups). O dump local é rede de segurança; o PITR é a restauração de verdade.
+
+---
+
+## GATE 4 — Pré-checks ✅ TODOS PASSAM
+
+### 056 (iFood) — **JÁ APLICADA** (análise só para o registro)
 
 | Item | Resultado |
 |---|---|
-| Projeto Supabase de produção | `uqybgauuxcrqzquultfu` (`db.uqybgauuxcrqzquultfu.supabase.co:5432`, Postgres **17.6**) |
-| Acesso Postgres | ✅ **CONECTA** — `postgres@db.uqybgauuxcrqzquultfu.supabase.co:5432` (senha do `DATABASE_URL` do `.env`, que estava truncado — host reconstruído). Conexão direta IPv6. |
-| SQL Editor (painel) | ❌ não acessível a partir daqui — só a conexão Postgres direta via `psql` |
-| Backup criado | ✅ **local** (scratchpad da sessão), `2026-09-02T053712Z`: <br>• `schema-public.sql` (252 KB) — DDL completo do schema `public` <br>• `data-afetadas.sql` (1,18 MB) — dados de `perfis`, `usuarios_organizacoes`, `usuarios_unidades`, `agente_conversas`, `sessoes_contexto` <br>• `constraints-antes.txt` — definição exata das constraints de `usuarios_organizacoes`/`usuarios_unidades` (para rollback preciso da 063) |
-| Horário do backup | 2026-09-02 05:37 UTC |
-| ⚠️ Recomendação | Antes de aplicar migrations, criar também um **backup no painel do Supabase** (Database → Backups → *Restore* mostra os pontos disponíveis; o plano free mantém 7 dias). O dump local é uma rede de segurança, não substitui o PITR. |
+| 1. Tabelas criadas | `ifood_conexoes`, `ifood_credenciais`, `ifood_oauth_sessoes` (3 novas) |
+| 2. Tabelas alteradas | **nenhuma** |
+| 3. Funções/triggers/policies | `ifood_touch_atualizado_em()` + 3 triggers + 1 RLS policy condicional |
+| 4. Inserts/seeds | **nenhum** |
+| 5. Constraints | só nas 3 tabelas novas (FK, CHECK de status, UNIQUE `(conexao_id, app_type)`) |
+| 6. Dependências | `organizacoes`/`unidades`/`perfis` ✅; helpers `auth_organizacao_ids`/`auth_unidade_ids`/`is_platform_superadmin` ✅ (presentes → policy criada) |
+| 7. Risco em dados existentes | **ZERO** — "Nenhum dado existente é tocado" |
+| 8. Compat backend atual | ✅ transparente |
+| 9. Rollback | `drop table … cascade` (×3) + `drop function` |
+| 10. Aditiva ou destrutiva | **100 % ADITIVA** |
 
-### Rollback salvo (rodapé de cada migration + medido no banco real)
+### 059 (Inteligência) — pendente, **SEGURA** ✅
 
-| Migration | Rollback | Impacto do rollback |
-|---|---|---|
-| `060` | `drop constraint sessoes_perfil_id_fk; drop table perfis_operacionais cascade; alter table … drop column perfil_id` (×4) | perde só os 37 perfis backfillados (reconstruíveis); as 6 sessões revogadas não voltam (inofensivo) |
-| `062` | `alter table sessoes_contexto drop constraint sessoes_contexto_perfil_xor_impersonacao` | nenhum |
-| `063` | `drop constraint uo_perfil_org_unico, uu_perfil_uni_unico; add … usuarios_organizacoes_usuario_id_organizacao_id_key unique(usuario_id, organizacao_id)` etc.; `alter … alter column perfil_id drop not null` | volta o `UNIQUE(usuario_id, X)` — só seguro se **não houver 2º perfil real** (não haverá antes da Fase G ir a produção) |
-| `064` | `drop function perfil_pin_registrar_*; drop index uq_sessoes_selecao_nonce; alter … drop column selecao_nonce, pin_atualizado_em` | nenhum |
-
----
-
-## B. Branch / commit — 🔴 BLOCKER
-
-| Item | Valor |
+| Item | Resultado |
 |---|---|
-| Branch | `main` |
-| HEAD (deployado hoje em produção) | `95b3858c7adf9847d500c14421bb32e11241fbf9` — *"feat(dashboard-executivo): Plano de Ação…"* (2026-09-01) |
-| Hash da árvore de trabalho | `07dcd5c940828bb04d0b752ad48609ca62d7f649` |
-| Commits pendentes | **NENHUM** — nada commitado |
-| Árvore de trabalho | **100 arquivos** (43 modificados + 57 novos), com **3 features de terceiros entrelaçadas** com o multi-perfil |
+| 1. Tabelas criadas | **nenhuma** |
+| 2. Tabelas alteradas | **nenhuma** |
+| 3. Funções/triggers/policies | **nenhum** |
+| 4. Inserts/seeds | **1 linha** em `modulos`: `('inteligencia','Inteligência (seção)','operacao',16)` `ON CONFLICT DO UPDATE`. **Zero concessões** (`organizacao_modulos`/`unidade_modulos` intactos) — módulo entra FECHADO para todos |
+| 5. Constraints | **nenhuma** (não toca o CHECK de `modulos.categoria`) |
+| 6. Dependências | `modulos` ✅, `organizacao_modulos` ✅, `unidade_modulos` ✅; CHECK `categoria` aceita `'operacao'` ✅; **sem colisão** — nenhum módulo com `ordem=16`, `id='inteligencia'` ainda não existe |
+| 7. Risco em dados existentes | **ZERO** — 1 linha de catálogo, concedida a ninguém |
+| 8. Compat backend atual | ✅ um módulo que ninguém tem = invisível |
+| 9. Rollback | `delete from unidade_modulos/organizacao_modulos/modulos where … = 'inteligencia'` |
+| 10. Aditiva ou destrutiva | **ADITIVA** (1 INSERT) |
 
-### Classificação dos 100 arquivos
+### 061 (Painel Administrativo) — pendente, **SEGURA** ✅
 
-**PURO multi-perfil (~29 arquivos)** — commitáveis sem risco:
-`sessao/{service,controller,routes}.js` · `sessao/perfil.service.js` *(novo)* · `usuarios/{service,controller}.js` · `shared/{pin,profileSelectionToken,identidade,contextToken}.js` · `agente/*` · controllers `dashboard-executivo`/`bonificacao-mensal`/`parser-food-delivery`/`produtos`/`insumos` · `unidade/unidade.service.js` · `plataforma/plataforma.empresas.service.js` · `frontend/src/{selecaoPerfil,sessao,state}.js` (partes) · migrations `060`/`062`/`063`/`064` · `frontend/test/selecaoPerfil.test.js` + 6 testes backend · 11 docs.
+| Item | Resultado |
+|---|---|
+| 1. Tabelas criadas | `painel_administrativo_usuarios` (PK `usuario_id → auth.users`, `ativo`, `criado_por`, `observacao`, timestamps) |
+| 2. Tabelas alteradas | **nenhuma** |
+| 3. Funções/triggers/policies | 1 trigger (`trg_padmadm_upd` → reusa `set_updated_at()` ✅) + 1 RLS policy (`rls_padmadm_self`) |
+| 4. Inserts/seeds | **nenhum** (concessão do 1º acesso está comentada) |
+| 5. Constraints | PK + 2 FKs → `auth.users`, só na tabela nova |
+| 6. Dependências | `auth.users` ✅, `set_updated_at()` ✅, `is_platform_superadmin()` ✅ |
+| 7. Risco em dados existentes | **ZERO** — "esta migration não toca superadmin nem vínculos" |
+| 8. Compat backend atual | ✅ o backend `95b3858` não consulta essa tabela. **O backend NOVO consulta em `requireAuth`** → **`061` DEVE ser aplicada ANTES do deploy** (está na sequência) |
+| 9. Rollback | `drop table if exists painel_administrativo_usuarios` |
+| 10. Aditiva ou destrutiva | **100 % ADITIVA** |
 
-**PURO terceiros (~22 arquivos)** — não são meus, não devem entrar sem aprovação:
-`modules/{ifood,inteligencia,administrativo}/*` · `frontend/src/{ifood,ifoodEstado,painelAdm,painelAdmApi,painelAdmViews,encaminhamento}.js` · migrations `056`/`059`/`061` · testes `ifood-*`, `inteligencia-*`, `painelAdm*`, `plataforma-painel-administrativo` · 2 docs.
+**Regra atendida:** `059` e `061` são aditivas, backward-compatible, sem perda de dados, com rollback conhecido, compatíveis com o lote. `056` já está aplicada. → **prossegue.**
 
-**COMPARTILHADOS (~22 arquivos)** — multi-perfil **E** terceiros editaram o MESMO arquivo, sem fronteira de commit:
-`middlewares/auth.js` · `routes.js` · `shared/auditoria.js` · `shared/modulos.js` · `plataforma/{routes,controller,usuarios.service,repo}.js` · frontend `{app,adminApi,adminViews,api,config,router,views,dashboardExecutivo,agentePainel,styles.css,index.html}` .
+### 060 (multi-perfil) — revalidado imediatamente antes (05:46 UTC)
 
-### Por que a separação NÃO é segura para eu fazer sozinho
-
-O ponto mais crítico: **`middlewares/auth.js#requireAuth`** (o middleware por onde passa **toda** requisição autenticada) contém a mudança de terceiros do **Painel Administrativo**:
-
-```js
-const [perfilRes, superRes, painelAdmRes] = await Promise.all([
-  ...
-  supabase.from("painel_administrativo_usuarios").select("usuario_id")...  // ← tabela da migration 061
-]);
-```
-
-A tabela `painel_administrativo_usuarios` **não existe em produção** (migration `061` não aplicada). Se eu deployar `auth.js` como está — e eu **preciso** dele para o `requireContexto` multi-perfil — **toda requisição autenticada retorna 500**.
-
-Reverter só esse hunk cascateia para `routes.js` (mount do `administrativoRouter` + `inteligenciaRouter`), `modulos.js` (`MODULOS.INTELIGENCIA` usado num `requireModulo` de `routes.js`), `plataforma.{routes,controller}.js` (rotas do painel-adm intercaladas com as minhas de perfil), `auditoria.js` (`ACOES.PAINEL_ADM_*`). São ~6 arquivos com `git checkout -p` cirúrgico contra produção — **exatamente o que a Regra 25 proíbe** ("NÃO CORRIGIR ÀS PRESSAS EM PRODUÇÃO") — e deixaria o trabalho do colega num estado meio-quebrado para ele re-mesclar.
-
-### Caminhos (precisa da sua decisão)
-
-| # | Caminho | Prós | Contras |
-|---|---|---|---|
-| **A** | O colega **commita/branча primeiro** o dele (Painel Adm + iFood + Inteligência). Depois eu faço rebase do multi-perfil limpo. Deploy do conjunto, migrations `056→064` em ordem. | separação real; cada feature auditável | depende do colega; migrations de 3 features de uma vez |
-| **B** | **Aprovar o deploy do lote inteiro** (multi-perfil + Painel Adm + iFood + Inteligência) como uma entrega. Working tree é **internamente consistente** — 455 testes backend + 215 frontend passam **juntos**. Migrations `056`, `059`, `060`, `061`, `062`, `063`, `064` na ordem. | 1 deploy, código já testado em conjunto | envia 3 features de terceiros que eu não revisei; precisa das aprovações delas; pré-check só rodei para a `060` |
-| **C** | Eu produzo um build **só-multi-perfil** revertendo os hunks de terceiros de ~6 arquivos compartilhados. | deploy isolado | alto risco de erro num split contra produção; cria dor de merge para o colega; contra a Regra 25 |
-
-**Recomendação:** **A** (mais seguro) se o colega puder commitar hoje; senão **B** com aprovação explícita das 3 features e um pré-check das migrations `056`/`059`/`061` antes.
-
----
-
-## C. Migrations aplicadas
-
-**Nenhuma.** Bloqueado no ponto B.
-
-### Ordem real e dependências (auditado — Regra 6)
-
-| Migration | Feature | Aplicada em prod? | 060 depende dela? |
-|---|---|---|---|
-| `001`–`055` | base | ✅ SIM | — |
-| `056_ifood_integracao` | **iFood** (terceiros) | ❌ não | **NÃO** |
-| `057_unidade_dados_contato` | base | ✅ SIM (`unidades.telefone` existe) | não |
-| `058_unidade_config` | base | ✅ SIM (`unidade_config` existe) | não |
-| `059_inteligencia_modulo_secao` | **Inteligência** (terceiros) | ❌ não | **NÃO** |
-| **`060_perfis_operacionais`** | **multi-perfil** | ❌ não | — |
-| `061_painel_administrativo` | **Painel Adm** (terceiros) | ❌ não | **NÃO** |
-| **`062_sessoes_contexto_perfil_check`** | multi-perfil | ❌ não | precisa de `060` |
-| **`063_vinculos_perfil_id_not_null`** | multi-perfil | ❌ não | precisa de `060` + backend C/D/E deployado |
-| **`064_pin_selecao_perfil`** | multi-perfil | ❌ não | precisa de `060` |
-
-**Confirmado: a cadeia multi-perfil `060 → 062 → 063 → 064` é auto-contida.** Não depende de `056`/`059`/`061`. Verificado no banco real: `set_updated_at()`, `is_platform_superadmin()`, `gen_random_uuid()`, `sessoes_contexto.modulos` — **todos existem**. Os nomes de constraint que a `063` derruba (`usuarios_organizacoes_usuario_id_organizacao_id_key`, `usuarios_unidades_usuario_id_unidade_id_key`) **batem exatamente** com o que está em produção.
-
-**Ordem de aplicação recomendada:** `060` → deploy backend multi-perfil → verificar → `062` → `063` → `064`.
-
----
-
-## D. Pré-check (produção, READ-ONLY) — ✅ TODOS PASSAM
-
-`psql … -tAc` em `db.uqybgauuxcrqzquultfu.supabase.co`, 2026-09-02 05:35 UTC:
-
-| # | Check | Valor | Esperado | OK? |
+| # | Check | 05:35 | 05:46 | Esperado |
 |---|---|---|---|---|
-| 1 | `perfis` (contas) | **37** | — | — |
-| 2 | `perfis_operacionais` esperados após backfill | 37 | == item 1 | ✅ |
-| 3 | perfis sem nome | **0** | 0 | ✅ |
-| 4 | `usuarios_organizacoes` órfãos (usuario_id sem perfil) | **0** | **0** | ✅ |
-| 5 | `usuarios_unidades` órfãos | **0** | **0** | ✅ |
-| 6 | `agente_conversas` órfãs (usuario_id inexistente) | **0** | **0** | ✅ |
-| 7 | `sessoes_contexto` órfãs | **0** | **0** | ✅ |
-| 8 | sessões vivas a revogar pela `060` | **6** | (informativo) | ✅ baixo |
-| 9 | contas inativas | **0** | (informativo) | ✅ |
-| 10 | `agente_conversas` sem dono (`usuario_id NULL`) | **0** | (informativo) | ✅ |
-| 11 | sessões de impersonação (histórico — `perfil_id` fica NULL) | **32** | (informativo) | ✅ |
-| — | `usuarios_organizacoes` total | 200 | — | — |
-| — | `usuarios_unidades` total | 10 | — | — |
-| — | duplicatas `(usuario_id, organizacao_id)` → violariam `UNIQUE(perfil_id, org)` da `063` | **0** | **0** | ✅ |
-| — | duplicatas `(usuario_id, unidade_id)` | **0** | **0** | ✅ |
+| 1 | `perfis` (contas) | 37 | **37** | — |
+| 3 | perfis sem nome | 0 | (est.) | 0 |
+| 4 | `usuarios_organizacoes` órfãos | 0 | **0** | **0** |
+| 5 | `usuarios_unidades` órfãos | 0 | **0** | **0** |
+| 6 | `agente_conversas` órfãs | 0 | (est.) | **0** |
+| 7 | `sessoes_contexto` órfãs | 0 | **0** | **0** |
+| 8 | sessões vivas a revogar | 6 | **6** | (informativo) |
+| — | duplicatas `(usuario_id, org)` / `(usuario_id, unidade)` | 0 / 0 | (est.) | **0 / 0** |
+| 11 | sessões de impersonação (perfil_id fica NULL) | 32 | — | (informativo) |
 
-**Nenhum valor inesperado. Nenhum órfão. A `060` está segura para aplicar** (assim que o ponto B for resolvido). A `060` exclui corretamente as 32 linhas de impersonação do backfill (`… and impersonado_por is null`), então a CHECK XOR da `062` não será violada.
+**Sem alteração. Nenhum órfão. `060` segura.** O backfill de `sessoes_contexto.perfil_id` exclui as 32 impersonações (`… and impersonado_por is null`) → a CHECK XOR da `062` fica coerente para 100 % das linhas.
 
 ---
 
-## E–P. Deploy / fixtures / E2E / smoke / auditoria / rollback ensaiado
+## TESTES (na HEAD commitada `c904cb7`) ✅
 
-**Não executados** — bloqueados no ponto B (git). Ficam pendentes:
-* E. pós-check `060` (contar `perfis_operacionais`, `id == conta_id`, backfill de `perfil_id`);
-* F. deploy backend + smoke de `/me`, `/sessao/perfis`, `/sessao/acessos`, conta legada;
-* G. deploy frontend;
-* H. criar `Operacional Teste MultiPerfil` + `Fulana Teste 1`/`Fulana Teste 2` (org/unidade de teste — **verificar se já existem antes de criar fixture**);
-* I–P. E2E 2 perfis / sessões simultâneas / logout isolado / bypass de PIN / lockout mínimo / isolamento via API / auditoria / legado / superadmin / rollback ensaiado.
+| Suite | Total | Pass | Fail | Skip |
+|---|---|---|---|---|
+| Backend | 1457 | **1402** | 52 | 3 |
+| Frontend | 215 | **215** | 0 | — |
+
+**As 52 falhas são as MESMAS pré-existentes** (baseline da Fase J = 52). Categorias: testes de integração iFood (`concluirAutorizacao`, `trocarAuthorizationCodePorToken`, `refresh falha…` — precisam de merchant/API de teste) + fixtures de bonificação/parser ("unidade de teste tem os 11 indicadores", "réplica da Subway Saci"). **Zero falha em multi-perfil / PIN / seleção / Context Token / sessão / autorização / identidade.** `node --test` grep por termos multi-perfil → só bate em `authorizationCode` do iFood.
+
+---
+
+## PLANO DE EXECUÇÃO (Render = 1 serviço; deploy de backend+frontend é atômico no `git push`)
+
+| Passo | Ação | Escrita? | Reversível |
+|---|---|---|---|
+| **1** | Backup PITR no painel Supabase | não (é backup) | — |
+| **2** | `psql -f 059` → pós-check (`select … from modulos where id='inteligencia'` = 1; grants = 0) | **1ª ESCRITA** | `delete … 'inteligencia'` |
+| **3** | `psql -f 060` → pós-check (`perfis_operacionais` = 37; `id==conta_id` em todos; `usuarios_organizacoes.perfil_id`/`usuarios_unidades.perfil_id`/`agente_conversas.perfil_id` preenchidos; `sessoes_contexto` — 0 vivas, 6 revogadas com motivo `migracao_060_multi_perfil`; nenhum vínculo/conversa perdido) | sim | rodapé da `060` |
+| **4** | `psql -f 061` → pós-check (`painel_administrativo_usuarios` existe; superadmins e vínculos inalterados) | sim | `drop table` |
+| **5** | `git push origin main` → Render builda e deploya backend+frontend (~2–5 min, plano free) | — | reverter commit + push |
+| **6** | **Smoke backend** (conta real de 1 perfil — só leitura): `GET /me` 200 · `GET /sessao/perfis` (1 perfil, sem 500) · `GET /sessao/acessos` · login legado sem tela/PIN · `GET /administrativo/ping` (403 esperado p/ não-autorizado, não 500) · rotas iFood/inteligência sem 500 · painel SuperAdmin abre | não | — |
+| **7** | `psql`: `delete from sessoes_contexto where perfil_id is null and impersonado_por is null;` (limpa sessões-gap criadas pelo backend antigo entre o passo 3 e o 5 — dead rows) | sim (só linhas mortas) | — |
+| **8** | `psql -f 062` → pós-check (constraint `sessoes_contexto_perfil_xor_impersonacao` existe; insert malformado falha) | sim | `drop constraint` |
+| **9** | `psql -f 063` → pós-check (`uo_perfil_org_unico`/`uu_perfil_uni_unico` existem; `perfil_id` NOT NULL nas 2 tabelas) | sim | rodapé da `063` |
+| **10** | `psql -f 064` → pós-check (`sessoes_contexto.selecao_nonce`, `perfis_operacionais.pin_atualizado_em`, funções `perfil_pin_registrar_*`) | sim | rodapé da `064` |
+| **11** | **Fixture de teste** (produção): criar conta `Operacional Teste MultiPerfil` (e-mail de teste), perfil `Fulana Teste 1` (PIN + org/unidade de teste A), adicionar `Fulana Teste 2` (PIN 2 + org/unidade de teste B). **Verificar se já existem org/unidade `eh_teste=true` antes de criar** | sim (só fixture) | desativar/excluir a conta de teste |
+| **12** | **E2E** — 2 navegadores independentes: login X → Fulana 1 → PIN 1 → Empresa A → app; outro navegador → Fulana 2 → PIN 2 → Empresa B → app; voltar ao 1º → Fulana 1 segue logada | leitura + 2 sessões | — |
+| **13** | Logout isolado · bypass de PIN (via API, só fixture) · isolamento empresa (via API, só fixture) · lockout (mínimo de tentativas na fixture) · usuário legado de 1 perfil (só leitura) · superadmin/impersonação (smoke) | fixture apenas | — |
+| **14** | Monitorar ~30 min: 5xx, taxa de 409 (re-seleção — esperada uma vez por usuário), erros em `/sessao/*` | — | — |
+
+**Janela (impacto da 060):** apenas **6 sessões vivas** serão revogadas → 6 usuários (no máximo) re-selecionam empresa/unidade uma vez. JWT/senha/dados/vínculos **intactos**. Momento de baixíssimo uso.
+
+**Critérios de rollback (Regra 24):** 5xx generalizado · auth quebrado · usuário legado não entra · vínculo/conversa perdido · permissão vazando · PIN bypassável · sessões irmãs se derrubando · painel SuperAdmin quebrado · inconsistência de FK.
+
+---
+
+## Seções E–P (pós-check / deploy / smoke / fixture / E2E / …)
+
+**Pendentes — a executar nos passos 2–14 acima, após o "go".**
 
 ---
 
 ## Q. Erros observados
 
-Nenhum — nenhuma mudança feita em produção. Só `SELECT` (pré-checks) e `pg_dump` (backup).
-
----
+Nenhum. Só `SELECT` e `pg_dump`.
 
 ## R. Rollback disponível
 
-* **Backup local:** `schema-public.sql` + `data-afetadas.sql` + `constraints-antes.txt` (2026-09-02T053712Z).
-* **Rollback SQL por migration:** documentado no rodapé de `060`/`062`/`063`/`064` (transacional, `drop … if exists`).
-* **Supabase daily backup:** disponível no painel (a confirmar antes da migration).
-* **Código:** produção segue em `95b3858` — nada foi deployado, rollback de código = não fazer nada.
+* Backup local `20260902T053712Z` + rollback SQL por migration.
+* Código: `git reset` / reverter os 4 commits (nada pushado ainda; `origin/main` = `95b3858`).
+* Supabase PITR (a criar no passo 1).
 
 ---
 
-## S. Veredito
+## S. Veredito parcial
 
-> ## ⏸️ VALIDAÇÃO EM PRODUÇÃO — PARADA NO GATE 2 (GIT)
+> ## ⏸️ 4 GATES CONFIRMADOS — PRONTO PARA A PRIMEIRA ESCRITA
 >
-> **3 de 4 pré-requisitos confirmados:**
-> * ✅ **Inventário** — completo (código, bancos, migrations, deploy).
-> * 🔴 **Git limpo** — **BLOCKER**: o multi-perfil está entrelaçado com Painel Administrativo + iFood + Inteligência (de terceiros) em ~22 arquivos compartilhados, incluindo `middlewares/auth.js#requireAuth` (que passou a consultar `painel_administrativo_usuarios`, tabela da migration `061` não aplicada → 500 em toda requisição se eu deployar só o meu). Separar sozinho, contra produção, viola a Regra 25.
-> * ✅ **Backup** — `pg_dump` de schema + dados das tabelas afetadas, local, mais rollback SQL por migration. (Recomendo somar um backup do painel Supabase.)
-> * ✅ **Pré-check `060`** — **TODOS PASSAM** contra o banco real: 37 contas, 0 órfãos em `usuarios_organizacoes`/`usuarios_unidades`/`agente_conversas`/`sessoes_contexto`, 0 duplicatas, 6 sessões vivas. A cadeia `060→062→063→064` é auto-contida (não precisa de `056`/`059`/`061`).
+> * ✅ **Inventário** — `056`/`057`/`058` já aplicadas; pendentes **`059`, `060`, `061`, `062`, `063`, `064`** nessa ordem lógica.
+> * ✅ **Git** — 4 commits (`feat(ifood)` · `feat(inteligencia)` · `feat(painel-administrativo)` · `feat(multi-perfil)`), working tree limpa, HEAD carrega. Nada pushado.
+> * ✅ **Backup** — `pg_dump` schema + dados afetados (local, 05:37 UTC) + rollback SQL por migration. *(Recomendo somar PITR no painel.)*
+> * ✅ **Pré-checks** — `056` já aplicada; **`059` e `061` são 100 % aditivas, sem risco**; **`060` revalidado — todos os checks 0/limpos, 6 sessões vivas**.
+> * ✅ **Testes** — 1402/1457 backend (52 pré-existentes, **0 multi-perfil**), 215/215 frontend.
 >
-> **Preciso da sua decisão sobre o ponto B** (caminho A, B ou C da tabela acima). Assim que resolvido, sigo direto para: aplicar `060` → pós-check → deploy backend → smoke → `062`/`063`/`064` → deploy frontend → criar fixture de teste → E2E das 2 contas/2 perfis → veredito final.
->
-> **Estimativa após destravar o git:** 1 sessão de trabalho até `✅ MULTI-PERFIL VALIDADO EM PRODUÇÃO`.
+> **Aguardando o "go" para o PASSO 1 (backup PITR) + PASSO 2 (primeira escrita: `psql -f 059`).** A partir daí sigo o plano de execução acima até `✅ LOTE VALIDADO EM PRODUÇÃO` ou `❌ REVERTIDO — MOTIVO`.
 
 ---
 
 ## NÃO FIZ (respeitado)
 
-Nenhuma migration aplicada · nenhum deploy · nenhuma escrita em produção · nenhum `git checkout`/split arriscado · nenhuma feature de terceiros commitada · nenhum teste destrutivo/carga · nenhum dado de cliente tocado.
+Nenhuma migration aplicada · nenhum deploy · nenhum `git push` · nenhuma escrita em produção · nenhum split cirúrgico · nenhum teste destrutivo/carga · nenhum dado de cliente tocado · nenhuma feature reaplicada (`056` fica como está).

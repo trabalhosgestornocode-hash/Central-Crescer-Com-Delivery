@@ -117,13 +117,19 @@ describe("segurança de posse — perfil pertence à conta da URL (teste 15/29)"
     const fn = PLAT_USUARIOS.slice(PLAT_USUARIOS.indexOf("async function resolverPerfilAlvo"), PLAT_USUARIOS.indexOf("async function resolverPerfilAlvo") + 700);
     assert.match(fn, /data\.conta_id !== contaId\) throw ApiError\.notFound/);
   });
-  test("as funções de vínculo escopam por perfil_id quando um perfil específico é alvo", () => {
+  test("H1 — as funções de vínculo escopam SEMPRE por perfil_id (o perfil inicial também)", () => {
     for (const nome of ["atualizarVinculo", "removerVinculo", "associarUnidade", "atualizarVinculoUnidade", "removerVinculoUnidade"]) {
       const i = PLAT_USUARIOS.indexOf(`export async function ${nome}`);
-      const fn = PLAT_USUARIOS.slice(i, i + 1200);
+      const fn = PLAT_USUARIOS.slice(i, i + 1600);
       assert.match(fn, /resolverPerfilAlvo\(/, `${nome} não resolve o perfil-alvo`);
-      assert.match(fn, /perfilAlvo !== usuarioId[\s\S]{0,80}\.eq\("perfil_id", perfilAlvo\)/, `${nome} não escopa por perfil_id`);
+      assert.match(fn, /rodarEscopadoPorPerfil\(perfilAlvo/, `${nome} não roda escopado por perfil`);
+      // a sentinela antiga ("perfil inicial => não escopar") não pode mais existir
+      assert.doesNotMatch(fn, /perfilAlvo !== usuarioId/, `${nome} ainda tem a sentinela perfilAlvo !== usuarioId`);
     }
+    // o helper garante o fallback pré-060 (sem a coluna) e nada mais
+    assert.match(PLAT_USUARIOS, /async function rodarEscopadoPorPerfil\(perfilAlvo, montar\)/);
+    assert.match(PLAT_USUARIOS, /montar\(\(q\) => q\.eq\("perfil_id", perfilAlvo\)\)/);
+    assert.match(PLAT_USUARIOS, /RE_PERFIL_ID_AUSENTE\.test\(r\.error\.message[\s\S]{0,60}montar\(\(q\) => q\)/);
   });
 });
 
@@ -192,10 +198,33 @@ describe("MIGRATION GATE (063) — dois perfis da mesma conta na mesma org (test
   test("063 é pré-requisito declarado da Fase G", () => {
     assert.match(MIG_063, /Pré-requisito para a Fase G/);
   });
-  test("o backend degrada onConflict: perfil_id,X (063) -> usuario_id,X (pré-063)", () => {
+  test("o backend usa a UNIQUE canônica (perfil_id,X) e NÃO sobrescreve perfil irmão pré-063", () => {
     assert.match(PERFIL_SVC, /RE_ONCONFLICT_AUSENTE = /);
-    assert.match(PERFIL_SVC, /"perfil_id,organizacao_id"\)/);
-    assert.match(PERFIL_SVC, /"perfil_id,unidade_id"\)/);
+    assert.match(PERFIL_SVC, /const onConflict = `perfil_id,\$\{alvoCol\}`/); // 063
+    // pré-063: em vez de upsert(usuario_id,X) — que apagaria o vínculo do irmão —
+    // busca (perfil_id,X) e faz UPDATE se existir, senão INSERT (a UNIQUE legada
+    // recusa 2 perfis no mesmo alvo -> erro de negócio, sensível a empresa/unidade).
+    assert.match(PERFIL_SVC, /VINCULO_PERFIL_IRMAO_MESMO_ALVO/);
+    assert.match(PERFIL_SVC, /outro perfil associado a esta unidade/);
+    assert.match(PERFIL_SVC, /outro perfil associado a esta empresa/);
+    assert.doesNotMatch(PERFIL_SVC, /aplique a migration 063/); // nunca em msg de usuário
+    // O fallback pré-060 NUNCA pode fazer upsert de um payload que contém
+    // `perfil_id` chaveado por `onConflict: usuario_id,X` — isso sobrescreveria
+    // o vínculo de um perfil IRMÃO. (Regex ancorada nos DOIS args do upsert —
+    // objeto-payload com perfil_id, depois `{ onConflict: usuario_id... }` —
+    // sem `.*` varrendo o arquivo.) O fallback correto faz `upsert(base, …)`,
+    // e `base` não tem perfil_id.
+    assert.doesNotMatch(PERFIL_SVC, /upsert\(\s*\{[^{}]*perfil_id[^{}]*\}\s*,\s*\{[^{}]*onConflict:\s*`usuario_id/);
+  });
+  test("M2/B8 — INSERT puro que colide vira erro de negócio, nunca 500", () => {
+    const fn = PERFIL_SVC.slice(PERFIL_SVC.indexOf("async function gravarVinculo"), PERFIL_SVC.indexOf("export async function inserirVinculoOrgComPerfil"));
+    assert.match(fn, /!upsert && RE_DUPLICATA\.test/);
+    assert.match(fn, /VINCULO_JA_EXISTE/);            // mesmo perfil já vinculado
+    assert.match(fn, /VINCULO_PERFIL_IRMAO_MESMO_ALVO/); // perfil irmão ocupa o alvo
+  });
+  test("colNula removido — gravarVinculo não tem mais o parâmetro nem o if redundante", () => {
+    assert.doesNotMatch(PERFIL_SVC, /colNula/);
+    assert.doesNotMatch(PERFIL_SVC, /inserirVinculoUnidadeComPerfil[\s\S]{0,220}colNula/);
   });
 });
 

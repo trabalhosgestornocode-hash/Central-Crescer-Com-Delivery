@@ -136,25 +136,34 @@ describe("selecionarContexto — autoriza SÓ por perfil_id (cenários 3-13, 32-
 describe("edição/remoção de vínculo — revogação por { perfilId, org|unidade } (Model Y — cenários 13-15, 17-19, 35)", () => {
   test("plataforma: atualizarVinculo revoga { perfilId, organizacaoId } (não { usuarioId })", () => {
     const f = PLAT_USUARIOS.slice(PLAT_USUARIOS.indexOf("export async function atualizarVinculo"), PLAT_USUARIOS.indexOf("export async function removerVinculo"));
-    assert.match(f, /revogarSessoes\(\{\s*perfilId: data\.perfil_id \?\? usuarioId, organizacaoId/s);
-    assert.doesNotMatch(f, /revogarSessoes\(\{\s*usuarioId, organizacaoId/);
+    assert.match(f, /revogar\(\{\s*perfilId: data\.perfil_id \?\? perfilAlvo, organizacaoId/s);
+    assert.doesNotMatch(f, /revogar\w*\(\{\s*usuarioId, organizacaoId/);
   });
   test("plataforma: removerVinculo pega perfil_id ANTES de apagar e revoga { perfilId, org }", () => {
     const f = PLAT_USUARIOS.slice(PLAT_USUARIOS.indexOf("export async function removerVinculo"), PLAT_USUARIOS.indexOf("export async function associarUnidade"));
-    assert.match(f, /const perfilId = vinculo\?\.perfil_id \?\? perfilAlvo/); // Fase G — perfilAlvo == usuarioId no fluxo de 1 perfil
-    assert.match(f, /revogarSessoes\(\{ perfilId, organizacaoId/);
+    assert.match(f, /const perfilId = vinculo\?\.perfil_id \?\? perfilAlvo/);
+    assert.match(f, /revogar\(\{ perfilId, organizacaoId/);
   });
   test("plataforma: atualizarVinculoUnidade / removerVinculoUnidade -> { perfilId, unidadeId }", () => {
-    assert.match(PLAT_USUARIOS, /revogarSessoes\(\{\s*perfilId: data\.perfil_id \?\? usuarioId, unidadeId/s);
-    assert.match(PLAT_USUARIOS, /revogarSessoes\(\{ perfilId, unidadeId, motivo: "vinculo_unidade_removido"/);
+    assert.match(PLAT_USUARIOS, /revogar\(\{\s*perfilId: data\.perfil_id \?\? perfilAlvo, unidadeId/s);
+    assert.match(PLAT_USUARIOS, /revogar\(\{ perfilId, unidadeId, motivo: "vinculo_unidade_removido"/);
   });
-  test("tenant: atualizarUsuario / excluirUsuario -> { perfilId, organizacaoId }", () => {
-    assert.match(TENANT_USUARIOS, /perfilId: data\.perfil_id \?\? usuarioId, organizacaoId/);
-    assert.match(TENANT_USUARIOS, /revogarSessoes\(\{ perfilId, organizacaoId, motivo: "acesso_removido"/);
+  test("tenant: atualizarUsuario / excluirUsuario -> { perfilId, organizacaoId } (L2/H1)", () => {
+    // UPDATE/DELETE pela PK da linha resolvida, nunca por (usuario_id, org)
+    assert.match(TENANT_USUARIOS, /resolverVinculoUnicoDaEmpresa\(db, usuarioId, organizacaoId\)/);
+    assert.match(TENANT_USUARIOS, /\.update\(patch\)\.eq\("id", alvo\.id\)/);
+    assert.match(TENANT_USUARIOS, /\.delete\(\)\.eq\("id", alvo\.id\)/);
+    assert.doesNotMatch(TENANT_USUARIOS, /\.delete\(\)\.eq\("usuario_id", usuarioId\)\.eq\("organizacao_id"/);
+    // 2+ perfis na mesma empresa -> recusa, nenhuma escrita
+    assert.match(TENANT_USUARIOS, /VINCULO_AMBIGUO_MULTIPERFIL/);
+    assert.match(TENANT_USUARIOS, /linhas\.length > 1/);
+    // sessões: só do perfil da linha resolvida
+    assert.match(TENANT_USUARIOS, /perfilId: data\.perfil_id \?\? alvo\.perfil_id \?\? usuarioId, organizacaoId/);
+    assert.match(TENANT_USUARIOS, /revogar\(\{ perfilId, organizacaoId, motivo: "acesso_removido"/);
   });
   test("NENHUMA revogação de vínculo usa mais o escopo de CONTA { usuarioId } / { contaId }", () => {
     for (const F of [PLAT_USUARIOS, TENANT_USUARIOS]) {
-      const trechos = F.match(/revogarSessoes\(\{[^}]*\}/g) ?? [];
+      const trechos = F.match(/(?:revogarSessoes|revogar)\(\{[^}]*\}/g) ?? [];
       for (const t of trechos) {
         if (/vinculo|acesso_removido|papel_alterado|acesso_bloqueado/.test(t)) {
           assert.ok(!/usuarioId[,\s}]/.test(t) || /perfilId/.test(t), `revogação de vínculo por conta: ${t}`);
@@ -190,9 +199,14 @@ describe("criação de vínculo — grava perfil_id + garante perfis_operacionai
     }
   });
   test("helper de vínculo grava perfil_id e degrada sem ele (pré-060) + onConflict canônico (pré-063)", () => {
-    assert.match(PERFIL_SVC, /perfil_id: perfilId/);
-    assert.match(PERFIL_SVC, /RE_COLUNA_AUSENTE\.test\(error\.message[\s\S]{0,90}chamar\(base, "usuario_id,organizacao_id"\)/);
-    assert.match(PERFIL_SVC, /RE_ONCONFLICT_AUSENTE[\s\S]{0,120}"usuario_id,organizacao_id"\)\); \/\/ pré-063/);
+    const fn = PERFIL_SVC.slice(PERFIL_SVC.indexOf("async function gravarVinculo"), PERFIL_SVC.indexOf("export async function inserirVinculoOrgComPerfil"));
+    assert.match(fn, /\.\.\.base, perfil_id: perfilId/);
+    assert.match(fn, /const onConflict = `perfil_id,\$\{alvoCol\}`/); // canônico (063)
+    // pré-063: NÃO degrada para upsert(usuario_id,X) — busca (perfil_id,X) e UPDATE/INSERT
+    assert.match(fn, /\.eq\("perfil_id", perfilId\)\.eq\(alvoCol, alvoId\)/);
+    assert.match(fn, /VINCULO_PERFIL_IRMAO_MESMO_ALVO/);
+    // pré-060: sem a coluna
+    assert.match(fn, /RE_COLUNA_AUSENTE\.test\(error\.message[\s\S]{0,120}usuario_id,\$\{alvoCol\}/);
   });
   test("garantirPerfilOperacionalInicial: id == conta_id (UUID reaproveitado), idempotente", () => {
     assert.match(PERFIL_SVC, /id: cId, conta_id: cId/);

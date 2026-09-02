@@ -1883,6 +1883,15 @@ body {
 .adm-det-lista li { padding: 9px 12px; background: var(--campo-bg); border-radius: var(--raio-sm); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .adm-det-acoes { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
 
+/* ---------- Card de perfil (usuário) — Fase G ---------- */
+.adm-perfil-card {
+  border: 1.5px solid var(--linha); border-radius: var(--raio); padding: 14px;
+  margin: 10px 0; background: var(--card); display: grid; gap: 12px;
+}
+.adm-perfil-acessos { display: grid; gap: 6px; }
+.adm-perfil-acessos .adm-sub { font-size: 12px; font-weight: 700; color: var(--cinza); text-transform: uppercase; letter-spacing: .3px; margin-top: 4px; }
+.adm-perfil-acessos .adm-det-acoes { margin-top: 6px; }
+
 /* ---------- Vínculos e associação ---------- */
 .adm-vinculos { display: grid; gap: 8px; }
 .adm-vinculo { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; padding: 11px 13px; background: var(--campo-bg); border-radius: var(--raio-sm); }
