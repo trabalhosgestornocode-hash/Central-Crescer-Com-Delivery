@@ -726,22 +726,33 @@ export async function obterLancamentoPorData({ organizacaoId, unidadeIdSessao, u
   return {
     lancamento: row ? paraApi(row) : null,
     disponibilidade,
-    ...financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistente: row?.valor_vendas_ifood ?? null }),
+    ...financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistente: row?.valor_vendas_ifood ?? null, unidadeId }),
   };
 }
+
+// Exceção pontual (fora da regra geral — não é mecanismo reutilizável):
+// Matriz Subway Cajazeiras - Salvador ficou dias sem preencher o Dashboard
+// iFood e pediu pra liberar o Financeiro retroativamente só nessas datas,
+// pra não perder o acesso permanente aos dias que já passaram de "ontem".
+// Remover esta entrada depois que a loja regularizar o preenchimento.
+const EXCECAO_FINANCEIRO_RETROATIVO = {
+  "2d6da04a-821a-438a-8c16-4ab47cff9834": new Set(["2026-09-01", "2026-09-02", "2026-09-03"]),
+};
 
 /**
  * Regra central (item "REGRA" do pedido): a etapa Financeiro só é oferecida
  * quando a data lançada é exatamente ontem — OU quando o registro JÁ tem um
  * snapshot financeiro salvo (nunca esconde/impede acesso a dado histórico
- * já existente, mesmo que hoje a data não seja mais "ontem"). Comparação de
- * CALENDÁRIO via `diaAnterior` (calc.js), nunca diferença de milissegundos.
- * Autoridade única — usada tanto pela leitura (aqui) quanto pela escrita
+ * já existente, mesmo que hoje a data não seja mais "ontem") — OU quando a
+ * unidade/data está na exceção pontual acima. Comparação de CALENDÁRIO via
+ * `diaAnterior` (calc.js), nunca diferença de milissegundos. Autoridade
+ * única — usada tanto pela leitura (aqui) quanto pela escrita
  * (`criarLancamento`/`atualizarLancamento`), nunca recalculada no frontend.
- * @param {{dataIso: string, hojeIso: string, valorVendasIfoodExistente: number|null}} p
+ * @param {{dataIso: string, hojeIso: string, valorVendasIfoodExistente: number|null, unidadeId?: string}} p
  */
-function financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistente }) {
-  const mostrarFinanceiro = valorVendasIfoodExistente != null || dataIso === diaAnterior(hojeIso);
+function financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistente, unidadeId }) {
+  const excecaoPontual = EXCECAO_FINANCEIRO_RETROATIVO[unidadeId]?.has(dataIso) ?? false;
+  const mostrarFinanceiro = valorVendasIfoodExistente != null || dataIso === diaAnterior(hojeIso) || excecaoPontual;
   const [ano, mes] = dataIso.split("-").map(Number);
   return {
     mostrarFinanceiro,
@@ -882,7 +893,7 @@ export async function criarLancamento({ organizacaoId, unidadeIdSessao, acesso, 
   }
 
   // Criação nunca tem snapshot anterior — exigirFinanceiro depende só da data ser ontem.
-  const { mostrarFinanceiro: exigirFinanceiro } = financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistente: null });
+  const { mostrarFinanceiro: exigirFinanceiro } = financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistente: null, unidadeId });
   // `linhas` já veio de carregarCalendarioMes acima — nenhuma consulta extra
   // pra achar o acumulado de Desempenho do dia anterior (usado só se a
   // situação for Sem operação/Zero vendas, ver normalizarDadosLancamento).
@@ -988,7 +999,7 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
   // normal: só exige quando a data ainda é ontem, reavaliada agora.
   const hojeIso = hojeIsoBrasil();
   const { mostrarFinanceiro: exigirFinanceiro } = financeiroDisponivelNaData({
-    dataIso: antes.data_lancamento, hojeIso, valorVendasIfoodExistente: antes.valor_vendas_ifood,
+    dataIso: antes.data_lancamento, hojeIso, valorVendasIfoodExistente: antes.valor_vendas_ifood, unidadeId: antes.unidade_id,
   });
   // Mesmo raciocínio de criarLancamento: só usado se a edição virar Sem
   // operação/Zero vendas (repete o acumulado de Desempenho do dia anterior
