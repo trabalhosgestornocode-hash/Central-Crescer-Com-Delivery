@@ -193,7 +193,9 @@ describe("validarPerfilDaConta / obterPerfilDaConta", () => {
 
 describe("selecionarPerfil (Fase C: só valida + contrato)", () => {
   test("7) perfil da conta -> { perfil, temPin, precisaPin:false, proximoPasso }", async () => {
-    const r = await selecionarPerfil({ contaId: CONTA_A, perfilId: FULANA_1 }, { buscarPerfilDaConta });
+    const r = await selecionarPerfil({ contaId: CONTA_A, perfilId: FULANA_1 }, {
+      buscarPerfilDaConta, buscarPerfisAtivosDaConta: async () => [{ id: FULANA_1 }], emitirProva: () => 'prova-local-teste',
+    });
     assert.deepEqual(r.perfil, { id: FULANA_1, nome: "Fulana 1" });
     assert.equal(r.temPin, false);
     assert.equal(r.precisaPin, false);          // PIN só na Fase H
@@ -210,7 +212,9 @@ describe("selecionarPerfil (Fase C: só valida + contrato)", () => {
   });
 
   test("NÃO emite Context Token nesta fase (resposta não tem contextToken/pid)", async () => {
-    const r = await selecionarPerfil({ contaId: CONTA_A, perfilId: FULANA_2 }, { buscarPerfilDaConta });
+    const r = await selecionarPerfil({ contaId: CONTA_A, perfilId: FULANA_2 }, {
+      buscarPerfilDaConta, buscarPerfisAtivosDaConta: async () => [{ id: FULANA_2 }], emitirProva: () => 'prova-local-teste',
+    });
     assert.ok(!("contextToken" in r) && !("token" in r) && !("pid" in r));
   });
 });
