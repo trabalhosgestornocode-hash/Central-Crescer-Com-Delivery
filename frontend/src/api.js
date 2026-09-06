@@ -350,6 +350,10 @@ export const bonifFechamentoMensalConfirmar = (payload) => postJson(`${BM}/fecha
 // congelando o cálculo ao vivo (snapshot origem 'acompanhamento_diario').
 // Não recebe PDFs — só a competência.
 export const bonifFechamentoMensalConsolidar = ({ ano, mes }) => postJson(`${BM}/fechamento-mensal/consolidar`, { ano, mes });
+// Reabrir um fechamento mensal: volta a competência FECHADA ao cálculo ao vivo
+// (nada é apagado — o snapshot da versão vigente continua no histórico). Motivo
+// obrigatório (backend exige >= 3 caracteres). Permissão: bonificacao_mensal.excluir.
+export const bonifFechamentoMensalReabrir = ({ ano, mes, motivo }) => postJson(`${BM}/fechamento-mensal/reabrir`, { ano, mes, motivo });
 
 // ---------- Parser Food Delivery (importação + conciliação de taxas de entregador) ----------
 const PFD = "/api/v1/parser-food-delivery";

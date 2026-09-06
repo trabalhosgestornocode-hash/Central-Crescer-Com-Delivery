@@ -24,6 +24,7 @@ import { pode } from "./sessao.js";
 import { bonifMes, bonifMetas, bonifHistorico, bonifLancamento, bonifSalvarLancamento, bonifExcluirLancamento, bonifSalvarRevMensal } from "./api.js";
 import { abrirImportarVisioModal } from "./bonificacaoMensalImportModal.js";
 import { abrirEditarMetaModal } from "./bonificacaoMensalMetasModal.js";
+import { abrirReabrirFechamentoModal } from "./bonificacaoMensalReabrirModal.js";
 import { renderIndicadorManualTab } from "./bonificacaoMensalIndicadorManual.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./contextoEscopo.js";
 import { destruirGraficosBonificacao, graficoEvolucaoFaturamento, graficoEvolucaoMix } from "./charts.js";
@@ -377,11 +378,16 @@ function fechamentoMensalHtml(d) {
     ? `<span class="pill ok">Competência fechada</span>`
     : `<span class="pill info">Fechamento mensal pendente</span>`;
   const linha = fechada
-    ? `<p class="bm-vazio-inline">Resultado congelado do fechamento mensal de ${escapeHtml(comp)}.</p>`
+    ? `<p class="bm-vazio-inline">Resultado congelado do fechamento mensal de ${escapeHtml(comp)}${d.versaoSnapshot ? ` · versão ${d.versaoSnapshot}` : ""}.</p>`
     : `<p class="bm-vazio-inline">Os indicadores usam os dados disponíveis da competência. Importe o fechamento mensal para consolidar ${escapeHtml(comp)}.</p>`;
+  // Reabrir só faz sentido numa competência 'fechada' (não em legado) e para
+  // quem tem a permissão de excluir — a mesma da rota do backend.
+  const podeReabrir = fechada && d.fechamentoStatus === "fechado" && podeExcluir();
   const acao = (!fechada && podeLancar())
     ? `<div class="ed-acoes"><button class="btn btn-primary btn-sm" id="bm-fm-importar">📆 Importar fechamento mensal</button></div>`
-    : "";
+    : (podeReabrir
+      ? `<div class="ed-acoes"><button class="btn btn-ghost btn-sm" id="bm-fm-reabrir">♻️ Reabrir fechamento</button></div>`
+      : "");
 
   return `<section class="bm-secao" id="bm-fechamento-mensal">
     <h3 class="bm-secao-titulo">📆 Fechamento mensal — ${escapeHtml(comp)} ${pill}</h3>
@@ -396,6 +402,11 @@ function wireFechamentoMensal(box) {
     onSalvo: carregarConteudo, modo: "mensal",
     competenciaFechada: d?.congelado === true,
     origemFechada: d?.origemResultado ?? null,
+  }));
+  box.querySelector("#bm-fm-reabrir")?.addEventListener("click", () => abrirReabrirFechamentoModal({
+    ano: bm.ano, mes: bm.mes,
+    competenciaLabel: `${MESES[bm.mes - 1]}/${bm.ano}`,
+    onReaberto: carregarConteudo,
   }));
 }
 

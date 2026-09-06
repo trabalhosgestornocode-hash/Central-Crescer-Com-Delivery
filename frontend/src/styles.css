@@ -708,11 +708,12 @@ body {
 .cfg-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .cfg-campo { display: flex; flex-direction: column; gap: 6px; }
 .cfg-campo > span { font-size: 12px; font-weight: 700; color: var(--cinza); text-transform: uppercase; letter-spacing: .3px; }
-.cfg-campo input, .cfg-campo select {
+.cfg-campo input, .cfg-campo select, .cfg-campo textarea {
   padding: 10px 12px; border: 1.5px solid var(--linha); border-radius: 10px; background: var(--campo-bg); color: var(--texto);
   font-size: 14px; font-family: inherit; transition: border-color var(--t), box-shadow var(--t);
 }
-.cfg-campo input:focus, .cfg-campo select:focus { outline: none; border-color: var(--verde-vivo); box-shadow: 0 0 0 3px rgba(216,19,36,.13); }
+.cfg-campo textarea { resize: vertical; min-height: 64px; }
+.cfg-campo input:focus, .cfg-campo select:focus, .cfg-campo textarea:focus { outline: none; border-color: var(--verde-vivo); box-shadow: 0 0 0 3px rgba(216,19,36,.13); }
 .cfg-campo-ajuda { font-size: 11.5px; font-weight: 400; color: var(--cinza); text-transform: none; letter-spacing: 0; line-height: 1.35; margin-top: -1px; }
 
 .cfg-toggle { display: flex; align-items: center; justify-content: space-between; gap: 14px; cursor: pointer; }
