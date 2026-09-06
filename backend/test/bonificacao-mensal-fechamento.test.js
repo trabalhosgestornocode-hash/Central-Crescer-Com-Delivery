@@ -9,7 +9,8 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   montarResultadoCompetencia, montarResultadoFechamentoOficial, validarFechamentoMensal,
-  roteamentoObterMes, fechamentoStatusAoVivo, INDICADORES_META, FONTE_INDICADOR_FECHAMENTO,
+  roteamentoObterMes, fechamentoStatusAoVivo, classificarAcompanhamento,
+  INDICADORES_META, FONTE_INDICADOR_FECHAMENTO,
 } from "../src/modules/bonificacao-mensal/bonificacaoMensal.fechamento.js";
 
 const perto = (a, b, eps = 1e-3) => a != null && Math.abs(a - b) <= eps;
@@ -112,17 +113,17 @@ describe("montarResultadoFechamentoOficial — resultado canônico (NÃO chama o
     assert.equal(r.valoresOficiais.faturamento, 109613.74);
     assert.equal(r.valoresOficiais.ticketMedio, 52.47);
     assert.equal(r.valoresOficiais.quantidadeVendas, 2089);
-    assert.equal(r.indicadores.faturamento.fonte, "fechamento_visio");
-    assert.equal(r.indicadores.ticket_medio.fonte, "fechamento_visio");
+    assert.equal(r.indicadores.faturamento.fonte, "relatorio_mensal");
+    assert.equal(r.indicadores.ticket_medio.fonte, "relatorio_mensal");
   });
 
-  test("bebidas/adicionais/diversos são 'fechamento_visio'; cmv/nota/rev/pesquisas são 'manual'", () => {
+  test("bebidas/adicionais/diversos são 'relatorio_mensal'; cmv/nota/rev/pesquisas são 'manual'", () => {
     const r = montarResultadoFechamentoOficial({
       vendas: VENDAS_REF, produtos: PRODUTOS_REF,
       manuais: { cmv: 31.5, avaliacaoIfood: 4.8, cancelamentos: 0.5, pedidosChamado: 1.2, pesquisas: 70, rev: 88 },
       metasVigentes, contexto: CTX,
     });
-    for (const k of ["bebidas", "adicionais", "diversos"]) assert.equal(r.indicadores[k].fonte, "fechamento_visio");
+    for (const k of ["bebidas", "adicionais", "diversos"]) assert.equal(r.indicadores[k].fonte, "relatorio_mensal");
     for (const k of ["cmv", "avaliacao_ifood", "rev", "pesquisas", "cancelamentos", "pedidos_chamado"]) assert.equal(r.indicadores[k].fonte, "manual");
     // valores manuais preservam a fonte atual (nada migrou de regra)
     assert.equal(r.indicadores.cmv.valorAtual, 31.5);
@@ -147,7 +148,7 @@ describe("montarResultadoFechamentoOficial — resultado canônico (NÃO chama o
     assert.equal(r.escopoBonificacao, "unidade");
     assert.deepEqual(r.unidade, CTX.unidade);
     assert.deepEqual(r.competencia, { ano: 2026, mes: 8 });
-    assert.equal(r.origem, "fechamento_visio");
+    assert.equal(r.origem, "fechamento_mensal_direto"); // origem ÚNICA do snapshot
     assert.equal(r.fonte.produtos.canalConfirmadoPeloUsuario, true);
     assert.equal(r.fonte.periodoConfirmadoPeloUsuario, true);
     assert.equal(r.fonte.vendas.hash, "hv");
@@ -278,5 +279,123 @@ describe("roteamentoObterMes — state machine (v3.1 §4)", () => {
     assert.equal(fechamentoStatusAoVivo({ status: "reaberta" }, true), "reaberto");
     assert.equal(fechamentoStatusAoVivo({ status: "aberta" }, true), "aguardando_fechamento");
     assert.equal(fechamentoStatusAoVivo(null, false), "aberto");
+  });
+});
+
+// ===========================================================================
+// CLASSIFICAÇÃO DE ACOMPANHAMENTO (correção conceitual F4) — determinística
+// ===========================================================================
+describe("classificarAcompanhamento — determinística, sem percentual", () => {
+  const HOJE = "2026-06-30"; // junho já terminou → todos os dias são "esperados"
+  const diaVisio = (d) => ({
+    data: `2026-06-${d}`, semOperacao: false, origem: "visio", manualOverride: {},
+    faturamentoGeral: 5000, faturamentoLoja: 3000,
+    qtdSanduichesLoja: 100, qtdBebidasLoja: 40, qtdAdicionaisLoja: 20, qtdDiversosLoja: 15,
+  });
+  const diaManualIndicador = (d) => ({ // só Nota iFood — NÃO é acompanhamento de mix
+    data: `2026-06-${d}`, semOperacao: false, origem: "manual", manualOverride: {},
+    faturamentoGeral: null, faturamentoLoja: null,
+    qtdSanduichesLoja: null, qtdBebidasLoja: null, qtdAdicionaisLoja: null, qtdDiversosLoja: null,
+  });
+  const diaSemOperacao = (d) => ({ data: `2026-06-${d}`, semOperacao: true, origem: "manual", manualOverride: {} });
+
+  test("1) zero dias acompanhados → SEM_ACOMPANHAMENTO", () => {
+    const r = classificarAcompanhamento({ lancamentos: [], ano: 2026, mes: 6, hojeIso: HOJE });
+    assert.equal(r.tipo, "SEM_ACOMPANHAMENTO");
+    assert.equal(r.diasComAcompanhamento, 0);
+    assert.equal(r.diasEsperados, 30);
+    // só dias manuais de indicador também é SEM_ACOMPANHAMENTO
+    const r2 = classificarAcompanhamento({ lancamentos: [diaManualIndicador("01"), diaManualIndicador("02")], ano: 2026, mes: 6, hojeIso: HOJE });
+    assert.equal(r2.tipo, "SEM_ACOMPANHAMENTO");
+  });
+
+  test("2) alguns dias com mix, cobertura incompleta → ACOMPANHAMENTO_PARCIAL", () => {
+    const lancamentos = ["01", "02", "03", "10", "15"].map(diaVisio);
+    const r = classificarAcompanhamento({ lancamentos, ano: 2026, mes: 6, hojeIso: HOJE });
+    assert.equal(r.tipo, "ACOMPANHAMENTO_PARCIAL");
+    assert.equal(r.diasComAcompanhamento, 5);
+    assert.equal(r.diasPendentes.length, 25);
+    assert.ok(r.diasPendentes.includes("2026-06-04"));
+  });
+
+  test("3) todos os dias esperados cobertos → ACOMPANHAMENTO_DIARIO", () => {
+    const lancamentos = Array.from({ length: 30 }, (_, i) => diaVisio(String(i + 1).padStart(2, "0")));
+    const r = classificarAcompanhamento({ lancamentos, ano: 2026, mes: 6, hojeIso: HOJE });
+    assert.equal(r.tipo, "ACOMPANHAMENTO_DIARIO");
+    assert.equal(r.diasPendentes.length, 0);
+    assert.equal(r.diasCobertos, 30);
+  });
+
+  test("4) dia explicitamente SEM_OPERACAO conta como coberto — não vira pendência", () => {
+    // 29 dias com mix + 1 dia sem operação = cobertura completa
+    const lancamentos = [
+      ...Array.from({ length: 29 }, (_, i) => diaVisio(String(i + 1).padStart(2, "0"))),
+      diaSemOperacao("30"),
+    ];
+    const r = classificarAcompanhamento({ lancamentos, ano: 2026, mes: 6, hojeIso: HOJE });
+    assert.equal(r.tipo, "ACOMPANHAMENTO_DIARIO");
+    assert.equal(r.diasSemOperacao, 1);
+    assert.equal(r.diasPendentes.length, 0);
+    assert.ok(!r.diasPendentes.includes("2026-06-30"));
+  });
+
+  test("mês corrente: dias FUTUROS não são 'esperados'", () => {
+    // hoje = 06/06 → só 6 dias esperados; 2 com mix, 4 pendentes
+    const r = classificarAcompanhamento({
+      lancamentos: [diaVisio("01"), diaVisio("02")], ano: 2026, mes: 6, hojeIso: "2026-06-06",
+    });
+    assert.equal(r.diasEsperados, 6);
+    assert.equal(r.tipo, "ACOMPANHAMENTO_PARCIAL");
+    assert.equal(r.diasPendentes.length, 4);
+  });
+
+  test("dia PARCIAL (só um relatório) NÃO conta como acompanhamento — não bloqueia mês sem mix", () => {
+    const diaSoGeral = (d) => ({
+      data: `2026-06-${d}`, semOperacao: false, origem: "visio", manualOverride: {},
+      faturamentoGeral: 5000, faturamentoLoja: null,
+      qtdSanduichesLoja: null, qtdBebidasLoja: null, qtdAdicionaisLoja: null, qtdDiversosLoja: null,
+    });
+    // mês inteiro só com Geral (sem Loja) → nenhum dia COM ACOMPANHAMENTO
+    const r = classificarAcompanhamento({ lancamentos: ["01", "02", "10"].map(diaSoGeral), ano: 2026, mes: 6, hojeIso: HOJE });
+    assert.equal(r.diasComAcompanhamento, 0);
+    assert.equal(r.tipo, "SEM_ACOMPANHAMENTO"); // fechamento mensal direto NÃO é bloqueado indevidamente
+    // já com 1 dia completo + 1 PARCIAL → parcial (finalize o acompanhamento)
+    const r2 = classificarAcompanhamento({ lancamentos: [diaVisio("01"), diaSoGeral("02")], ano: 2026, mes: 6, hojeIso: HOJE });
+    assert.equal(r2.tipo, "ACOMPANHAMENTO_PARCIAL");
+    assert.ok(r2.diasPendentes.includes("2026-06-02"));
+  });
+
+  test("mês inteiro SEM_OPERACAO → SEM_ACOMPANHAMENTO (loja fechada o mês todo)", () => {
+    const r = classificarAcompanhamento({
+      lancamentos: Array.from({ length: 30 }, (_, i) => diaSemOperacao(String(i + 1).padStart(2, "0"))),
+      ano: 2026, mes: 6, hojeIso: HOJE,
+    });
+    assert.equal(r.diasComAcompanhamento, 0);
+    assert.equal(r.diasSemOperacao, 30);
+    assert.equal(r.diasPendentes.length, 0); // nenhuma pendência indevida
+    assert.equal(r.tipo, "SEM_ACOMPANHAMENTO");
+  });
+});
+
+describe("validarFechamentoMensal — bloqueio por acompanhamento (F4 conceitual)", () => {
+  const base = {
+    vendas: VENDAS_REF, produtos: { ...PRODUTOS_REF, faturamentoLoja: 41000 },
+    unidadeNome: "Subway Saci — Matriz", somaDiaria: null, competenciaExistente: null,
+    produtosCanalConfirmado: true, periodoConfirmadoUsuario: true,
+  };
+  test("SEM_ACOMPANHAMENTO → fechamento mensal direto permitido (sem bloqueio novo)", () => {
+    const r = validarFechamentoMensal({ ...base, acompanhamento: { tipo: "SEM_ACOMPANHAMENTO", diasEsperados: 30, diasComAcompanhamento: 0, diasPendentes: [] } });
+    assert.deepEqual(r.bloqueios, []);
+  });
+  test("ACOMPANHAMENTO_PARCIAL → bloqueado, cita dias cobertos e pendentes", () => {
+    const r = validarFechamentoMensal({ ...base, acompanhamento: { tipo: "ACOMPANHAMENTO_PARCIAL", diasEsperados: 30, diasComAcompanhamento: 5, diasPendentes: ["2026-06-04", "2026-06-05"] } });
+    assert.match(r.bloqueios.join(" "), /parcial/i);
+    assert.match(r.bloqueios.join(" "), /5 de 30/);
+    assert.match(r.bloqueios.join(" "), /2026-06-04/);
+  });
+  test("ACOMPANHAMENTO_DIARIO → bloqueado, manda consolidar", () => {
+    const r = validarFechamentoMensal({ ...base, acompanhamento: { tipo: "ACOMPANHAMENTO_DIARIO", diasEsperados: 30, diasComAcompanhamento: 30, diasPendentes: [] } });
+    assert.match(r.bloqueios.join(" "), /acompanhad[ao] dia a dia/i);
+    assert.match(r.bloqueios.join(" "), /consolidando o acompanhamento diário/i);
   });
 });

@@ -39,6 +39,7 @@ bonificacaoMensalRouter.post("/rev", lancar, controller.salvarRevMensal);
 // (snapshot imutável, competência 'fechada'). Reabertura = permissão de excluir.
 bonificacaoMensalRouter.post("/fechamento-mensal/preview", lancar, limiteImport, controller.fechamentoMensalPreview);
 bonificacaoMensalRouter.post("/fechamento-mensal", lancar, limiteImport, controller.fechamentoMensalConfirmar);
+bonificacaoMensalRouter.post("/fechamento-mensal/consolidar", lancar, controller.fechamentoMensalConsolidar);
 bonificacaoMensalRouter.post("/fechamento-mensal/reabrir", excluir, controller.fechamentoMensalReabrir);
 
 bonificacaoMensalRouter.get("/importacoes", ver, controller.importacoes);

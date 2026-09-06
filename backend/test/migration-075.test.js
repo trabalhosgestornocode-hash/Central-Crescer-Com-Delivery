@@ -219,8 +219,12 @@ describe("075 — RLS preservada / criada com a MESMA expressão", () => {
 describe("075 — fluxo transacional F4 (secção 6: congelar / reabrir)", () => {
   test("bonificacao_congelar_competencia: congela em versão N+1, sem tocar a anterior", () => {
     assert.match(migX, /create or replace function bonificacao_congelar_competencia\(/);
-    // status alvo por origem
-    assert.match(migX, /v_status\s*:=\s*case p_origem when 'fechamento_visio' then 'fechada' else 'legado_sem_fechamento' end/);
+    // status alvo: só legado_pre_refatoracao vira legado; os 2 fechamentos → 'fechada'
+    assert.match(migX, /v_status\s*:=\s*case p_origem when 'legado_pre_refatoracao' then 'legado_sem_fechamento' else 'fechada' end/);
+    // origens aceitas (correção conceitual F4)
+    assert.match(migX, /p_origem not in \('fechamento_mensal_direto','acompanhamento_diario','legado_pre_refatoracao'\)/);
+    assert.match(migX, /origem text not null[\s\S]*?check \(origem in \('fechamento_mensal_direto','acompanhamento_diario','legado_pre_refatoracao'\)\)/);
+    assert.doesNotMatch(migX, /'fechamento_visio'/);
     // nova versão = versao_atual + 1, snapshot é INSERT (append-only)
     assert.match(migX, /v_versao\s*:=\s*v_comp\.versao_atual\s*\+\s*1/);
     assert.match(migX, /insert into bonificacao_competencia_snapshot\s*\(/);
@@ -440,7 +444,7 @@ describe("075 — cenários A/B/C (execução viva)", { skip: PULAR_VIVO }, () =
       insert into bonificacao_competencia(id,organizacao_id,unidade_id,ano,mes,status,versao_atual)
         values ('00000000-0000-0000-0000-0000000000c1','00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b1',2026,8,'fechada',1);
       insert into bonificacao_competencia_snapshot(id,competencia_id,organizacao_id,unidade_id,ano,mes,versao,origem,snapshot)
-        values ('00000000-0000-0000-0000-0000000000d1','00000000-0000-0000-0000-0000000000c1','00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b1',2026,8,1,'fechamento_visio','{"ok":true}'::jsonb);
+        values ('00000000-0000-0000-0000-0000000000d1','00000000-0000-0000-0000-0000000000c1','00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b1',2026,8,1,'fechamento_mensal_direto','{"ok":true}'::jsonb);
     `);
     assert.match(psqlExpectFail(dbUrl, `update bonificacao_competencia_snapshot set versao = versao`), /append-only/i);
     assert.match(psqlExpectFail(dbUrl, `delete from bonificacao_competencia_snapshot`), /append-only/i);
@@ -453,7 +457,7 @@ describe("075 — cenários A/B/C (execução viva)", { skip: PULAR_VIVO }, () =
     psql(dbUrl, `
       update bonificacao_competencia set versao_atual=2 where id='00000000-0000-0000-0000-0000000000c1';
       insert into bonificacao_competencia_snapshot(competencia_id,organizacao_id,unidade_id,ano,mes,versao,origem,snapshot)
-        values ('00000000-0000-0000-0000-0000000000c1','00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b1',2026,8,2,'fechamento_visio','{"v":2}'::jsonb);
+        values ('00000000-0000-0000-0000-0000000000c1','00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000b1',2026,8,2,'fechamento_mensal_direto','{"v":2}'::jsonb);
     `);
     assert.equal(psql(dbUrl, `select count(*) from bonificacao_competencia_snapshot where competencia_id='00000000-0000-0000-0000-0000000000c1'`), "2");
 
@@ -486,8 +490,8 @@ describe("075 — cenários A/B/C (execução viva)", { skip: PULAR_VIVO }, () =
 
     // 1. congela (fechamento_visio) → competência 'fechada' v1 + bfm + snapshot v1
     const r1 = psql(dbUrl, `select bonificacao_congelar_competencia(
-      '${ORG}'::uuid,'${UNI}'::uuid,2026,8,'fechamento_visio',
-      '{"origem":"fechamento_visio","valoresOficiais":{"faturamento":109613.74,"percentuais":{"bebidas":42.87}}}'::jsonb,
+      '${ORG}'::uuid,'${UNI}'::uuid,2026,8,'fechamento_mensal_direto',
+      '{"origem":"fechamento_mensal_direto","valoresOficiais":{"faturamento":109613.74,"percentuais":{"bebidas":42.87}}}'::jsonb,
       '${fech}'::jsonb, null::text, null::uuid, null::text)`);
     assert.match(r1, /"versao"\s*:\s*1/);
     assert.match(r1, /"status"\s*:\s*"fechada"/);
@@ -495,10 +499,10 @@ describe("075 — cenários A/B/C (execução viva)", { skip: PULAR_VIVO }, () =
     assert.equal(psql(dbUrl, `select count(*) from bonificacao_fechamento_mensal where unidade_id='${UNI}' and ano=2026 and mes=8`), "1");
     assert.equal(psql(dbUrl, `select produtos_canal_confirmado and periodo_confirmado_usuario from bonificacao_fechamento_mensal where unidade_id='${UNI}' and ano=2026 and mes=8`), "t");
     assert.equal(psql(dbUrl, `select fechamento_id is not null from bonificacao_competencia where unidade_id='${UNI}' and ano=2026 and mes=8`), "t");
-    assert.equal(psql(dbUrl, `select snapshot->>'origem' from bonificacao_competencia_snapshot where unidade_id='${UNI}' and ano=2026 and mes=8 and versao=1`), "fechamento_visio");
+    assert.equal(psql(dbUrl, `select snapshot->>'origem' from bonificacao_competencia_snapshot where unidade_id='${UNI}' and ano=2026 and mes=8 and versao=1`), "fechamento_mensal_direto");
 
     // 2. refechar sem reabrir → ERRO
-    assert.match(psqlExpectFail(dbUrl, `select bonificacao_congelar_competencia('${ORG}'::uuid,'${UNI}'::uuid,2026,8,'fechamento_visio','{}'::jsonb,'${fech}'::jsonb,null::text,null::uuid,null::text)`), /ABORTADO[\s\S]*?FECHADA/i);
+    assert.match(psqlExpectFail(dbUrl, `select bonificacao_congelar_competencia('${ORG}'::uuid,'${UNI}'::uuid,2026,8,'fechamento_mensal_direto','{}'::jsonb,'${fech}'::jsonb,null::text,null::uuid,null::text)`), /ABORTADO[\s\S]*?FECHADA/i);
 
     // 3. reabrir sem motivo → ERRO; com motivo → 'reaberta'
     assert.match(psqlExpectFail(dbUrl, `select bonificacao_reabrir_competencia('${UNI}'::uuid,2026,8,'x',null::uuid,null::text)`), /motivo/i);
@@ -507,11 +511,11 @@ describe("075 — cenários A/B/C (execução viva)", { skip: PULAR_VIVO }, () =
     assert.equal(psql(dbUrl, `select versao_atual from bonificacao_competencia where unidade_id='${UNI}' and ano=2026 and mes=8`), "1"); // ainda v1 até refechar
 
     // 4. refechar → v2, competência 'fechada' v2, snapshot v1 INTACTO
-    const r2 = psql(dbUrl, `select bonificacao_congelar_competencia('${ORG}'::uuid,'${UNI}'::uuid,2026,8,'fechamento_visio','{"v":2}'::jsonb,'${fech}'::jsonb,'refechado apos correcao',null::uuid,null::text)`);
+    const r2 = psql(dbUrl, `select bonificacao_congelar_competencia('${ORG}'::uuid,'${UNI}'::uuid,2026,8,'fechamento_mensal_direto','{"v":2}'::jsonb,'${fech}'::jsonb,'refechado apos correcao',null::uuid,null::text)`);
     assert.match(r2, /"versao"\s*:\s*2/);
     assert.equal(psql(dbUrl, `select status||' v'||versao_atual from bonificacao_competencia where unidade_id='${UNI}' and ano=2026 and mes=8`), "fechada v2");
     assert.equal(psql(dbUrl, `select count(*) from bonificacao_competencia_snapshot where unidade_id='${UNI}' and ano=2026 and mes=8`), "2");
-    assert.equal(psql(dbUrl, `select snapshot->>'origem' from bonificacao_competencia_snapshot where unidade_id='${UNI}' and ano=2026 and mes=8 and versao=1`), "fechamento_visio");
+    assert.equal(psql(dbUrl, `select snapshot->>'origem' from bonificacao_competencia_snapshot where unidade_id='${UNI}' and ano=2026 and mes=8 and versao=1`), "fechamento_mensal_direto");
     assert.equal(psql(dbUrl, `select reaberta_em is null from bonificacao_competencia where unidade_id='${UNI}' and ano=2026 and mes=8`), "t"); // limpo ao refechar
 
     // 5. legado: outra competência, nunca fechada → captura congela como legado (p_fechamento = null)
@@ -523,6 +527,16 @@ describe("075 — cenários A/B/C (execução viva)", { skip: PULAR_VIVO }, () =
     assert.match(psqlExpectFail(dbUrl, `select bonificacao_congelar_competencia('${ORG}'::uuid,'${UNI}'::uuid,2026,7,'legado_pre_refatoracao','{}'::jsonb,null::jsonb,null::text,null::uuid,null::text)`), /ABORTADO[\s\S]*?LEGADO/i);
     // snapshot legado não referencia bfm
     assert.equal(psql(dbUrl, `select fechamento_id is null from bonificacao_competencia where unidade_id='${UNI}' and ano=2026 and mes=7`), "t");
+
+    // 6. acompanhamento_diario: 3ª competência, p_fechamento = null → status 'fechada', origem 'acompanhamento_diario', sem bfm
+    const ra = psql(dbUrl, `select bonificacao_congelar_competencia('${ORG}'::uuid,'${UNI}'::uuid,2026,6,'acompanhamento_diario','{"origem":"acompanhamento_diario","resumo":{"bonificacaoAtual":500}}'::jsonb,null::jsonb,'consolidacao',null::uuid,null::text)`);
+    assert.match(ra, /"status"\s*:\s*"fechada"/);
+    assert.equal(psql(dbUrl, `select status from bonificacao_competencia where unidade_id='${UNI}' and ano=2026 and mes=6`), "fechada");
+    assert.equal(psql(dbUrl, `select snapshot->>'origem' from bonificacao_competencia_snapshot where unidade_id='${UNI}' and ano=2026 and mes=6 and versao=1`), "acompanhamento_diario");
+    assert.equal(psql(dbUrl, `select fechamento_id is null from bonificacao_competencia where unidade_id='${UNI}' and ano=2026 and mes=6`), "t"); // sem bfm
+    assert.equal(psql(dbUrl, `select fechada_em is not null from bonificacao_competencia where unidade_id='${UNI}' and ano=2026 and mes=6`), "t");
+    // origem inválida → recusada pelo CHECK / pela função
+    assert.match(psqlExpectFail(dbUrl, `select bonificacao_congelar_competencia('${ORG}'::uuid,'${UNI}'::uuid,2026,5,'fechamento_visio','{}'::jsonb,null::jsonb,null::text,null::uuid,null::text)`), /origem inv[áa]lida|check/i);
   });
 
   test("CENÁRIO C — rollback devolve o schema ao estado 074 (e é reexecutável)", () => {

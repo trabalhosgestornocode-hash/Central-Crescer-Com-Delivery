@@ -78,6 +78,13 @@ export const fechamentoMensalReabrir = asyncHandler(async (req, res) => {
   const data = await service.reabrirCompetencia({ ...tenant(req), usuario: identidadeOperacional(req), ano: b.ano, mes: b.mes, motivo: b.motivo });
   res.json({ data });
 });
+// Consolidar acompanhamento diário — fecha um mês acompanhado dia a dia
+// congelando exatamente o cálculo ao vivo (snapshot origem 'acompanhamento_diario').
+export const fechamentoMensalConsolidar = asyncHandler(async (req, res) => {
+  const b = req.body ?? {};
+  const data = await service.consolidarAcompanhamentoDiario({ ...tenant(req), usuario: identidadeOperacional(req), ano: b.ano, mes: b.mes });
+  res.status(201).json({ data });
+});
 
 export const historico = asyncHandler(async (req, res) => {
   const data = await service.listarHistoricoMeses({ ...tenant(req), ano: req.query.ano });

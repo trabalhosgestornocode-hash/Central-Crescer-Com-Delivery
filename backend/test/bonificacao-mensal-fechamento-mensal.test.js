@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  processarImportacaoFechamentoMensal, obterMes, reabrirCompetencia,
+  processarImportacaoFechamentoMensal, obterMes, reabrirCompetencia, consolidarAcompanhamentoDiario,
 } from "../src/modules/bonificacao-mensal/bonificacaoMensal.service.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 
@@ -60,12 +60,22 @@ describe("F3 — prévia do Fechamento Mensal Visio", { skip: PULAR }, () => {
     assert.equal(r.resultadoOficial.indicadores.faturamento.valorAtual, 10655.71);
     assert.equal(r.resultadoOficial.indicadores.ticket_medio.valorAtual, 47.57);
     assert.ok(Math.abs(r.resultadoOficial.indicadores.bebidas.valorAtual - (56 / 132) * 100) < 1e-6);
-    assert.equal(r.resultadoOficial.indicadores.bebidas.fonte, "fechamento_visio");
+    assert.equal(r.resultadoOficial.indicadores.bebidas.fonte, "relatorio_mensal");
     assert.equal(r.resultadoOficial.indicadores.cmv.fonte, "manual");
-    assert.equal(r.resultadoOficial.origem, "fechamento_visio");
+    assert.equal(r.resultadoOficial.origem, "fechamento_mensal_direto");
+    // classificação de acompanhamento — mês de teste vazio → SEM_ACOMPANHAMENTO
+    assert.equal(r.acompanhamento.tipo, "SEM_ACOMPANHAMENTO");
+    assert.equal(r.acompanhamento.diasComAcompanhamento, 0);
     // validação
     assert.ok(Array.isArray(r.validacao.bloqueios));
     assert.ok(Array.isArray(r.validacao.alertas));
+  });
+
+  test("consolidarAcompanhamentoDiario num mês SEM acompanhamento → recusado", async () => {
+    await assert.rejects(
+      () => consolidarAcompanhamentoDiario({ organizacaoId: SACI_ORG_ID, unidadeId: SACI_UNIDADE_ID, usuario: USUARIO, ano: ANO, mes: MES }),
+      (e) => { assert.match(e.message, /não tem acompanhamento diário|migration 075/i); return true; },
+    );
   });
 
   test("faltando um PDF → bloqueio", async () => {
@@ -112,7 +122,7 @@ describe("F3 — prévia do Fechamento Mensal Visio", { skip: PULAR }, () => {
       const mes = await obterMes({ organizacaoId: SACI_ORG_ID, unidadeId: SACI_UNIDADE_ID, ano: ANO, mes: MES });
       assert.equal(mes.congelado, true);
       assert.equal(mes.podeEditarDiario, false);
-      assert.equal(mes.origemResultado, "fechamento_visio");
+      assert.equal(mes.origemResultado, "fechamento_mensal_direto");
       // reabrir volta ao cálculo ao vivo
       await reabrirCompetencia({ organizacaoId: SACI_ORG_ID, unidadeId: SACI_UNIDADE_ID, usuario: USUARIO, ano: ANO, mes: MES, motivo: "teste automatizado" });
       const mes2 = await obterMes({ organizacaoId: SACI_ORG_ID, unidadeId: SACI_UNIDADE_ID, ano: ANO, mes: MES });

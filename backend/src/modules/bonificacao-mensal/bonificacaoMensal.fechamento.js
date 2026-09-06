@@ -13,6 +13,7 @@
 
 import {
   percentualDerivado, mediaDiaria, somaValida, validarPercentualCruzado, mesmaUnidadeVisio,
+  diasDoMes, statusDia, STATUS_DIA_BONIFICACAO,
 } from "./bonificacaoMensal.calc.js";
 import { evaluateBonusMetric, totalBonificacao } from "./bonificacaoMensal.metas.js";
 import { avaliarElegibilidadeBonificacao, avaliarSuperRestaurante } from "./bonificacaoMensal.elegibilidade.js";
@@ -23,7 +24,16 @@ export const INDICADORES_META = [
   "avaliacao_ifood", "cancelamentos", "pedidos_chamado", "rev", "pesquisas",
 ];
 
-/** Qual metade da Visio alimenta cada indicador oficial do fechamento. */
+/**
+ * Procedência REAL de cada indicador no `fechamento_mensal_direto`.
+ *   'vendas'/'produtos' → os 2 relatórios mensais (seguem a `origem` do snapshot).
+ *   'manual'            → CMV, Nota iFood, Cancelamentos, Pedidos com chamado,
+ *                         Pesquisas e REV vêm das MESMAS fontes manuais/mensais
+ *                         de sempre (média/soma dos lançamentos diários + REV
+ *                         da competência), INDEPENDENTE da `origem` do snapshot.
+ *                         A `origem` de topo é só o rótulo do CAMINHO principal
+ *                         (comercial); estes campos não mudam de regra.
+ */
 export const FONTE_INDICADOR_FECHAMENTO = {
   faturamento: "vendas", ticket_medio: "vendas",
   bebidas: "produtos", adicionais: "produtos", diversos: "produtos",
@@ -31,8 +41,61 @@ export const FONTE_INDICADOR_FECHAMENTO = {
   pedidos_chamado: "manual", rev: "manual", pesquisas: "manual",
 };
 
-/** Rótulo de `fonte` no indicador do snapshot: 'fechamento_visio' (vendas/produtos) ou 'manual'. */
-const fonteRotulo = (metade) => (metade === "manual" ? "manual" : "fechamento_visio");
+/** Rótulo de `fonte` no indicador do snapshot: 'relatorio_mensal' (vendas/produtos) ou 'manual'. */
+const fonteRotulo = (metade) => (metade === "manual" ? "manual" : "relatorio_mensal");
+
+// ---------------------------------------------------------------------------
+// CLASSIFICAÇÃO DE ACOMPANHAMENTO (correção conceitual F4) — DETERMINÍSTICA,
+// sem percentual arbitrário. Reaproveita statusDia() (a regra de domínio do
+// calendário da Bonificação) — NÃO cria um segundo calendário.
+//
+//   Dia ESPERADO          = dia da competência que já ocorreu (dataIso <= hoje).
+//   Dia COM ACOMPANHAMENTO = statusDia ∈ { IMPORTADO, MANUAL } — Geral + Loja
+//                            completos (operou e tem o acompanhamento).
+//   Dia JUSTIFICADO        = statusDia = SEM_OPERACAO — registrado como sem
+//                            operação (a regra de domínio que justifica ausência).
+//   Dia PENDENTE           = statusDia ∈ { PENDENTE, PARCIAL }.
+//   Dia COBERTO            = COM ACOMPANHAMENTO ∪ JUSTIFICADO.
+//
+//   SEM_ACOMPANHAMENTO    ⇔ 0 dias COM ACOMPANHAMENTO.
+//   ACOMPANHAMENTO_DIARIO ⇔ ≥1 dia COM ACOMPANHAMENTO E 0 dias PENDENTES.
+//   ACOMPANHAMENTO_PARCIAL⇔ ≥1 dia COM ACOMPANHAMENTO E ≥1 dia PENDENTE.
+// ---------------------------------------------------------------------------
+/**
+ * @param {{ lancamentos: Array<object>, ano:number, mes:number, hojeIso:string }} p
+ *   `lancamentos` no formato de paraApiLancamento (tem .data, .semOperacao,
+ *   .faturamentoGeral, .faturamentoLoja, .qtd*Loja, .origem, .manualOverride).
+ * @returns {{
+ *   tipo: 'SEM_ACOMPANHAMENTO'|'ACOMPANHAMENTO_PARCIAL'|'ACOMPANHAMENTO_DIARIO',
+ *   diasEsperados:number, diasCobertos:number, diasComAcompanhamento:number,
+ *   diasSemOperacao:number, diasPendentes:string[], detalhe:Array<{data:string,status:string}>
+ * }}
+ */
+export function classificarAcompanhamento({ lancamentos, ano, mes, hojeIso }) {
+  const S = STATUS_DIA_BONIFICACAO;
+  const porData = new Map((lancamentos || []).filter((l) => l && l.data).map((l) => [l.data, l]));
+  const detalhe = [];
+  let diasEsperados = 0, diasComAcompanhamento = 0, diasSemOperacao = 0;
+  const diasPendentes = [];
+
+  for (const dataIso of diasDoMes(Number(ano), Number(mes))) {
+    const status = statusDia({ lancamento: porData.get(dataIso) || null, dataIso, hojeIso });
+    if (status === S.FUTURO) continue; // ainda não é um dia "esperado"
+    diasEsperados++;
+    detalhe.push({ data: dataIso, status });
+    if (status === S.IMPORTADO || status === S.MANUAL) diasComAcompanhamento++;
+    else if (status === S.SEM_OPERACAO) diasSemOperacao++;
+    else diasPendentes.push(dataIso); // PENDENTE | PARCIAL
+  }
+
+  const diasCobertos = diasComAcompanhamento + diasSemOperacao;
+  let tipo;
+  if (diasComAcompanhamento === 0) tipo = "SEM_ACOMPANHAMENTO";
+  else if (diasPendentes.length === 0) tipo = "ACOMPANHAMENTO_DIARIO";
+  else tipo = "ACOMPANHAMENTO_PARCIAL";
+
+  return { tipo, diasEsperados, diasCobertos, diasComAcompanhamento, diasSemOperacao, diasPendentes, detalhe };
+}
 
 const FORMULA_INDICADOR = {
   faturamento: "Relatório de Vendas mensal (faturamento)",
@@ -176,7 +239,9 @@ export function montarResultadoFechamentoOficial({ vendas, produtos, manuais, me
     escopoBonificacao: "unidade",
     unidade: contexto.unidade,
     competencia: { ano: contexto.ano, mes: contexto.mes },
-    origem: "fechamento_visio",
+    // Snapshot de competência SEM acompanhamento diário, fechada pelos 2
+    // relatórios mensais da Visio. Origem única e obrigatória.
+    origem: "fechamento_mensal_direto",
     geradoEm: new Date().toISOString(),
     fonte: {
       vendas: { hash: vendas.hash ?? null, estabelecimento: vendas.estabelecimento ?? null, origem: vendas.origem ?? "visio" },
@@ -236,12 +301,13 @@ export function montarResultadoFechamentoOficial({ vendas, produtos, manuais, me
  *   vendas: object|null, produtos: object|null, unidadeNome: string,
  *   somaDiaria: {sanduiches:number, bebidas:number, adicionais:number, diversos:number, faturamentoLoja:number}|null,
  *   competenciaExistente: {status:string}|null,
+ *   acompanhamento: {tipo:string, diasEsperados:number, diasComAcompanhamento:number, diasPendentes:string[]}|null,
  *   produtosCanalConfirmado: boolean, periodoConfirmadoUsuario: boolean,
  * }} p
  * @returns {{bloqueios: string[], alertas: Array<{tipo:'critico'|'alerta', msg:string}>, crossChecks: object}}
  */
 export function validarFechamentoMensal({
-  vendas, produtos, unidadeNome, somaDiaria, competenciaExistente,
+  vendas, produtos, unidadeNome, somaDiaria, competenciaExistente, acompanhamento,
   produtosCanalConfirmado, periodoConfirmadoUsuario,
 }) {
   const bloqueios = [];
@@ -286,6 +352,25 @@ export function validarFechamentoMensal({
   // 8. competência já fechada
   if (competenciaExistente?.status === "fechada") {
     bloqueios.push("Esta competência já está fechada. Reabra o fechamento antes de importar de novo.");
+  }
+
+  // 9 e 10. NÃO sobrescrever acompanhamento diário. O fechamento mensal DIRETO
+  //   (pelos 2 relatórios do mês) só existe para competências SEM acompanhamento
+  //   — meses antigos (junho, julho, agosto…). Quem tem acompanhamento diário
+  //   consolida o que já existe (fluxo consolidarAcompanhamentoDiario).
+  if (acompanhamento?.tipo === "ACOMPANHAMENTO_DIARIO") {
+    bloqueios.push(
+      `Esta competência foi acompanhada dia a dia (${acompanhamento.diasComAcompanhamento} de ${acompanhamento.diasEsperados} dias). `
+      + "O fechamento se faz consolidando o acompanhamento diário — não pelos relatórios mensais.",
+    );
+  } else if (acompanhamento?.tipo === "ACOMPANHAMENTO_PARCIAL") {
+    const p = acompanhamento.diasPendentes || [];
+    bloqueios.push(
+      `Acompanhamento parcial: ${acompanhamento.diasComAcompanhamento} de ${acompanhamento.diasEsperados} dias têm relatório `
+      + `(${p.length} pendente${p.length === 1 ? "" : "s"}: ${p.slice(0, 8).join(", ")}${p.length > 8 ? "…" : ""}). `
+      + "Complete o acompanhamento diário antes de consolidar a competência. "
+      + "O fechamento mensal direto não é permitido para competências parcialmente acompanhadas.",
+    );
   }
 
   // ---- ALERTAS: só CONFERÊNCIA DE IMPORTAÇÃO. Nunca bloqueiam, nunca mudam o

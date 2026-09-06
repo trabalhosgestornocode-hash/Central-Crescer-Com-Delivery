@@ -17,7 +17,7 @@ import { avaliarElegibilidadeBonificacao, avaliarSuperRestaurante } from "./boni
 // Camada de fechamento mensal (arquitetura v3.1). Puro — sem I/O.
 import {
   montarResultadoCompetencia, montarResultadoFechamentoOficial, validarFechamentoMensal,
-  roteamentoObterMes, fechamentoStatusAoVivo,
+  roteamentoObterMes, fechamentoStatusAoVivo, classificarAcompanhamento,
 } from "./bonificacaoMensal.fechamento.js";
 
 const TABELA = "bonificacao_lancamentos_diarios";
@@ -554,7 +554,9 @@ async function montarRespostaCongelada({ competencia, snapshot, unidade, anoNum,
   });
 
   const s = snapshot.snapshot || {};
-  const visio = !!s.valoresOficiais;         // (a) fechamento_visio  (b) legado (obterMes-shaped)
+  // (a) fechamento_mensal_direto → tem valoresOficiais (formato §5.4);
+  // (b) acompanhamento_diario / legado_pre_refatoracao → formato obterMes ao vivo.
+  const visio = !!s.valoresOficiais;
   const vo = s.valoresOficiais || {};
   // `percentuais` é o formato vigente; `percentuaisCalculados` fica só como
   // fallback para snapshots gravados antes da limpeza de forma (nenhum em prod).
@@ -574,7 +576,7 @@ async function montarRespostaCongelada({ competencia, snapshot, unidade, anoNum,
     unidade: { id: unidade.id, nome: unidade.nome },
     ano: anoNum, mes: mesNum, mesFechado: true,
     congelado: true,
-    origemResultado: s.origem || (competencia.status === "legado_sem_fechamento" ? "legado_pre_refatoracao" : "fechamento_visio"),
+    origemResultado: s.origem || (competencia.status === "legado_sem_fechamento" ? "legado_pre_refatoracao" : "fechamento_mensal_direto"),
     fechamentoStatus: competencia.status === "fechada" ? "fechado" : "legado_sem_fechamento",
     podeEditarDiario: false,
     versaoSnapshot: snapshot.versao,
@@ -1078,10 +1080,14 @@ export async function processarImportacaoFechamentoMensal({ organizacaoId, unida
   const somaDiaria = agregarSomaDiaria(rowsMes);
   const revMensal = await obterRevMensal({ organizacaoId, unidadeId, ano: anoNum, mes: mesNum });
 
+  // 3b. CLASSIFICAÇÃO DE ACOMPANHAMENTO (determinística) — o fechamento mensal
+  //   direto só existe para competências SEM acompanhamento diário.
+  const acompanhamento = classificarAcompanhamento({ lancamentos, ano: anoNum, mes: mesNum, hojeIso: hojeIsoBrasil() });
+
   // 4. BLOQUEIOS × ALERTAS (função pura)
   const { bloqueios, alertas, crossChecks } = validarFechamentoMensal({
     vendas: vendasCanon, produtos: produtosCanon, unidadeNome: unidade.nome,
-    somaDiaria, competenciaExistente,
+    somaDiaria, competenciaExistente, acompanhamento,
     produtosCanalConfirmado: !!payload.produtosCanalConfirmado,
     periodoConfirmadoUsuario: !!payload.periodoConfirmadoUsuario,
   });
@@ -1124,6 +1130,9 @@ export async function processarImportacaoFechamentoMensal({ organizacaoId, unida
       percentuais: resultadoOficial.valoresOficiais.percentuais,
     },
     camposCorrigidos: { vendas: camposCorrigidosVendas, produtos: camposCorrigidosProdutos },
+    // Classificação do acompanhamento diário da competência (determinística).
+    // A F7 usa isto para decidir qual botão mostrar.
+    acompanhamento,
     // `conferencia`: TÉCNICO, só para revisar a importação. Não é resultado da
     // Bonificação nem uma segunda versão dos dados da competência.
     validacao: {
@@ -1190,7 +1199,7 @@ export async function processarImportacaoFechamentoMensal({ organizacaoId, unida
     p_unidade_id: unidadeId,
     p_ano: anoNum,
     p_mes: mesNum,
-    p_origem: "fechamento_visio",
+    p_origem: "fechamento_mensal_direto",
     p_snapshot: resultadoOficial,
     p_fechamento: pFechamento,
     p_motivo: null,
@@ -1211,9 +1220,9 @@ export async function processarImportacaoFechamentoMensal({ organizacaoId, unida
     entidade: "bonificacao_competencia", entidadeId: rpcData?.competencia_id ?? null, organizacaoId,
     detalhes: {
       unidadeId, unidadeNome: unidade.nome, competencia: competenciaPath(anoNum, mesNum),
-      versao: rpcData?.versao ?? null, status: rpcData?.status ?? null,
+      versao: rpcData?.versao ?? null, status: rpcData?.status ?? null, origem: "fechamento_mensal_direto",
       alertas: alertas.map((a) => a.msg),
-      resumo: `Fechamento mensal de ${competenciaLabel(anoNum, mesNum)} confirmado (versão ${rpcData?.versao ?? "?"}) — competência ${rpcData?.status ?? "fechada"}.`,
+      resumo: `Fechamento mensal DIRETO de ${competenciaLabel(anoNum, mesNum)} confirmado (versão ${rpcData?.versao ?? "?"}) — competência ${rpcData?.status ?? "fechada"}, sem acompanhamento diário.`,
     },
   });
 
@@ -1221,6 +1230,7 @@ export async function processarImportacaoFechamentoMensal({ organizacaoId, unida
     ...preview,
     persistido: true,
     prontoParaConfirmar: false,
+    origem: "fechamento_mensal_direto",
     competencia: {
       ...preview.competencia,
       id: rpcData?.competencia_id ?? null,
@@ -1273,8 +1283,107 @@ export async function reabrirCompetencia({ organizacaoId, unidadeId, usuario, an
 }
 
 // ---------------------------------------------------------------------------
+// CONGELAR A COMPETÊNCIA A PARTIR DO RESULTADO AO VIVO — helper compartilhado.
+// Usado por:
+//   consolidarAcompanhamentoDiario  → origem 'acompanhamento_diario' (status 'fechada')
+//   capturarLegado                  → origem 'legado_pre_refatoracao' (status 'legado_sem_fechamento')
+// REUTILIZA obterMesAoVivo — ZERO fórmula nova, ZERO segunda implementação do
+// motor. O snapshot congela EXATAMENTE o que o cálculo diário produziu.
+// ---------------------------------------------------------------------------
+async function congelarCompetenciaDoAoVivo({ organizacaoId, unidadeId, usuario, unidade, anoNum, mesNum, competencia, origem, motivo }) {
+  const aoVivo = await obterMesAoVivo({ unidade, anoNum, mesNum, competencia, organizacaoId, unidadeId });
+  const snapshot = {
+    escopoBonificacao: "unidade",
+    unidade: { id: unidade.id, nome: unidade.nome, organizacaoId },
+    competencia: { ano: anoNum, mes: mesNum },
+    origem, // ÚNICA e obrigatória — nunca mistura fontes
+    geradoEm: new Date().toISOString(),
+    indicadores: aoVivo.indicadores,
+    resumo: aoVivo.resumo,
+    faturamento: aoVivo.faturamento,
+    mix: aoVivo.mix,
+    elegibilidade: aoVivo.elegibilidade,
+    superRestaurante: aoVivo.superRestaurante,
+    indicadoresAtencao: aoVivo.indicadoresAtencao,
+    metadados: { congeladoPor: usuario?.nome ?? null, motivo: motivo ?? null },
+  };
+  const { data, error } = await supabase.rpc("bonificacao_congelar_competencia", {
+    p_organizacao_id: organizacaoId, p_unidade_id: unidadeId, p_ano: anoNum, p_mes: mesNum,
+    p_origem: origem, p_snapshot: snapshot, p_fechamento: null,
+    p_motivo: motivo ?? null, p_por_id: usuario?.id ?? null, p_por_nome: usuario?.nome ?? null,
+  });
+  if (error) {
+    if (funcaoAusente(error)) throw ApiError.internal("O fechamento mensal ainda não está disponível neste ambiente (migration 075 não aplicada).");
+    if (/ABORTADO/i.test(error.message || "")) throw ApiError.badRequest(error.message);
+    throw ApiError.internal(error.message);
+  }
+  return { data, aoVivo };
+}
+
+// ---------------------------------------------------------------------------
+// CONSOLIDAR ACOMPANHAMENTO DIÁRIO (correção conceitual F4) — congela a
+// competência a partir dos lançamentos diários. É o fechamento NORMAL de um
+// mês que foi acompanhado dia a dia. Snapshot origem 'acompanhamento_diario'.
+// ---------------------------------------------------------------------------
+export async function consolidarAcompanhamentoDiario({ organizacaoId, unidadeId, usuario, ano, mes }) {
+  const unidade = await resolverUnidade({ organizacaoId, unidadeId });
+  const { anoNum, mesNum } = validarCompetencia(ano, mes);
+
+  const competencia = await obterCompetencia({ unidadeId, ano: anoNum, mes: mesNum });
+  if (competencia && (competencia.status === "fechada" || competencia.status === "legado_sem_fechamento")) {
+    throw new ApiError(409, `A competência ${competenciaLabel(anoNum, mesNum)} já está "${competencia.status}". Reabra antes de reconsolidar.`);
+  }
+
+  const dias = diasDoMes(anoNum, mesNum);
+  const { data: rowsMes } = await supabase.from(TABELA).select("*")
+    .eq("unidade_id", unidadeId).gte("data", dias[0]).lte("data", dias[dias.length - 1]).order("data");
+  const lancamentos = (rowsMes || []).map(paraApiLancamento);
+  const acompanhamento = classificarAcompanhamento({ lancamentos, ano: anoNum, mes: mesNum, hojeIso: hojeIsoBrasil() });
+
+  if (acompanhamento.tipo === "SEM_ACOMPANHAMENTO") {
+    throw ApiError.badRequest(
+      `A competência ${competenciaLabel(anoNum, mesNum)} não tem acompanhamento diário para consolidar. `
+      + "Use o fechamento mensal direto (Relatório Geral de Vendas + Relatório de Produtos do mês inteiro).",
+    );
+  }
+  if (acompanhamento.tipo === "ACOMPANHAMENTO_PARCIAL") {
+    const p = acompanhamento.diasPendentes;
+    throw ApiError.badRequest(
+      `Acompanhamento parcial (${acompanhamento.diasComAcompanhamento} de ${acompanhamento.diasEsperados} dias). `
+      + `Complete os dias pendentes (${p.slice(0, 8).join(", ")}${p.length > 8 ? "…" : ""}) antes de consolidar a competência.`,
+    );
+  }
+
+  const { data, aoVivo } = await congelarCompetenciaDoAoVivo({
+    organizacaoId, unidadeId, usuario, unidade, anoNum, mesNum, competencia,
+    origem: "acompanhamento_diario",
+    motivo: `Consolidação do acompanhamento diário (${acompanhamento.diasEsperados} dias)`,
+  });
+
+  await auditar({
+    atorId: usuario?.id ?? null, atorEmail: usuario?.email ?? null, atorTipo: "usuario",
+    acao: ACOES.BONIFICACAO_FECHAMENTO_MENSAL_ALTERADO,
+    entidade: "bonificacao_competencia", entidadeId: data?.competencia_id ?? null, organizacaoId,
+    detalhes: {
+      unidadeId, unidadeNome: unidade.nome, competencia: competenciaPath(anoNum, mesNum),
+      versao: data?.versao ?? null, status: data?.status ?? "fechada", origem: "acompanhamento_diario",
+      diasEsperados: acompanhamento.diasEsperados, diasCobertos: acompanhamento.diasCobertos,
+      resumo: `Competência ${competenciaLabel(anoNum, mesNum)} CONSOLIDADA a partir do acompanhamento diário (versão ${data?.versao ?? "?"}).`,
+    },
+  });
+
+  return {
+    persistido: true,
+    origem: "acompanhamento_diario",
+    competencia: { ano: anoNum, mes: mesNum, id: data?.competencia_id ?? null, status: data?.status ?? "fechada", versao: data?.versao ?? null },
+    acompanhamento,
+    resultado: { indicadores: aoVivo.indicadores, resumo: aoVivo.resumo, elegibilidade: aoVivo.elegibilidade, superRestaurante: aoVivo.superRestaurante },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // CAPTURA DE LEGADO (F4 — mecanismo; o rollout em massa é a F8).
-// Congela o resultado ATUAL (obterMesAoVivo) de uma competência passada como
+// Congela o resultado ATUAL (obterMesAoVivo) de uma competência antiga como
 // snapshot `legado_pre_refatoracao`. Não exige reimportação; a partir daí a
 // competência não recalcula mais.
 // ---------------------------------------------------------------------------
@@ -1287,42 +1396,19 @@ export async function capturarLegado({ organizacaoId, unidadeId, usuario, ano, m
     throw ApiError.badRequest(`A competência ${competenciaLabel(anoNum, mesNum)} já tem estado "${competencia.status}" — nada a capturar.`);
   }
 
-  // resultado ao vivo, hoje — NÃO passa a fonte oficial da Visio; é histórico.
-  const aoVivo = await obterMesAoVivo({ unidade, anoNum, mesNum, competencia, organizacaoId, unidadeId });
-  const snapshot = {
-    escopoBonificacao: "unidade",
-    unidade: { id: unidade.id, nome: unidade.nome, organizacaoId },
-    competencia: { ano: anoNum, mes: mesNum },
+  const { data } = await congelarCompetenciaDoAoVivo({
+    organizacaoId, unidadeId, usuario, unidade, anoNum, mesNum, competencia,
     origem: "legado_pre_refatoracao",
-    geradoEm: new Date().toISOString(),
-    indicadores: aoVivo.indicadores,
-    resumo: aoVivo.resumo,
-    faturamento: aoVivo.faturamento,
-    mix: aoVivo.mix,
-    elegibilidade: aoVivo.elegibilidade,
-    superRestaurante: aoVivo.superRestaurante,
-    indicadoresAtencao: aoVivo.indicadoresAtencao,
-    metadados: { capturadoPor: usuario?.nome ?? null, motivo: motivo ?? "captura de legado pré-refatoração" },
-  };
-
-  const { data, error } = await supabase.rpc("bonificacao_congelar_competencia", {
-    p_organizacao_id: organizacaoId, p_unidade_id: unidadeId, p_ano: anoNum, p_mes: mesNum,
-    p_origem: "legado_pre_refatoracao", p_snapshot: snapshot, p_fechamento: null,
-    p_motivo: motivo ?? "captura de legado", p_por_id: usuario?.id ?? null, p_por_nome: usuario?.nome ?? null,
+    motivo: motivo ?? "captura de legado pré-refatoração",
   });
-  if (error) {
-    if (funcaoAusente(error)) throw ApiError.internal("O fechamento mensal ainda não está disponível neste ambiente (migration 075 não aplicada).");
-    if (/ABORTADO/i.test(error.message || "")) throw ApiError.badRequest(error.message);
-    throw ApiError.internal(error.message);
-  }
 
   await auditar({
     atorId: usuario?.id ?? null, atorEmail: usuario?.email ?? null, atorTipo: "usuario",
     acao: ACOES.BONIFICACAO_FECHAMENTO_MENSAL_ALTERADO,
     entidade: "bonificacao_competencia", entidadeId: data?.competencia_id ?? null, organizacaoId,
     detalhes: {
-      unidadeId, unidadeNome: unidade.nome, competencia: competenciaPath(anoNum, mesNum),
-      resumo: `Competência ${competenciaLabel(anoNum, mesNum)} congelada como HISTÓRICO LEGADO (não oficial Visio).`,
+      unidadeId, unidadeNome: unidade.nome, competencia: competenciaPath(anoNum, mesNum), origem: "legado_pre_refatoracao",
+      resumo: `Competência ${competenciaLabel(anoNum, mesNum)} congelada como HISTÓRICO LEGADO (pré-refatoração).`,
     },
   });
   return { competencia: competenciaPath(anoNum, mesNum), status: "legado_sem_fechamento", versao: data?.versao ?? 1 };

@@ -255,7 +255,14 @@ create table if not exists bonificacao_competencia_snapshot (
   ano int not null,
   mes int not null,
   versao int not null check (versao >= 1),
-  origem text not null check (origem in ('fechamento_visio','legado_pre_refatoracao')),
+  -- Origem ÚNICA e obrigatória do snapshot (correção conceitual F4):
+  --   fechamento_mensal_direto → mês SEM acompanhamento diário, fechado pelos 2
+  --                              relatórios mensais (Vendas + Produtos).
+  --   acompanhamento_diario    → mês acompanhado dia a dia, consolidado do
+  --                              cálculo ao vivo (obterMes).
+  --   legado_pre_refatoracao   → captura do resultado anterior à refatoração.
+  -- Nunca há duas origens no mesmo snapshot.
+  origem text not null check (origem in ('fechamento_mensal_direto','acompanhamento_diario','legado_pre_refatoracao')),
   snapshot jsonb not null,
   criado_em     timestamptz not null default now(),
   criado_por_id uuid references perfis(id) on delete set null,
@@ -305,10 +312,12 @@ create policy rls_bonificacao_competencia_snapshot_tenant on bonificacao_compete
 -- ---------------------------------------------------------------------
 
 -- 6.1 Congela a competência numa nova versão de snapshot.
---   p_origem = 'fechamento_visio'        -> status vira 'fechada'   (confirmação do fechamento)
---            = 'legado_pre_refatoracao'  -> status vira 'legado_sem_fechamento' (captura do legado)
---   p_fechamento (jsonb|null): quando presente (fechamento_visio), faz UPSERT
---     de bonificacao_fechamento_mensal e liga competencia.fechamento_id.
+--   p_origem = 'fechamento_mensal_direto' -> status 'fechada' (mês SEM acompanhamento, 2 relatórios mensais)
+--            = 'acompanhamento_diario'    -> status 'fechada' (mês acompanhado dia a dia, consolidado do cálculo ao vivo)
+--            = 'legado_pre_refatoracao'   -> status 'legado_sem_fechamento' (captura do resultado pré-refatoração)
+--   p_fechamento (jsonb|null): quando presente (fechamento_mensal_direto), faz
+--     UPSERT de bonificacao_fechamento_mensal e liga competencia.fechamento_id.
+--     Nos outros casos (acompanhamento_diario / legado) é null.
 --   Retorna { competencia_id, versao, status, snapshot_id }.
 create or replace function bonificacao_congelar_competencia(
   p_organizacao_id uuid,
@@ -332,11 +341,11 @@ declare
   v_snap_id  uuid;
   v_now      timestamptz := now();
 begin
-  if p_origem not in ('fechamento_visio','legado_pre_refatoracao') then
-    raise exception 'origem inválida: % (esperado fechamento_visio | legado_pre_refatoracao)', p_origem
+  if p_origem not in ('fechamento_mensal_direto','acompanhamento_diario','legado_pre_refatoracao') then
+    raise exception 'origem inválida: % (esperado fechamento_mensal_direto | acompanhamento_diario | legado_pre_refatoracao)', p_origem
       using errcode = 'check_violation';
   end if;
-  v_status := case p_origem when 'fechamento_visio' then 'fechada' else 'legado_sem_fechamento' end;
+  v_status := case p_origem when 'legado_pre_refatoracao' then 'legado_sem_fechamento' else 'fechada' end;
 
   -- competência: cria se não existe, trava a linha
   select * into v_comp from bonificacao_competencia
@@ -361,7 +370,7 @@ begin
 
   v_versao := v_comp.versao_atual + 1;
 
-  -- fechamento_visio: UPSERT da linha bonificacao_fechamento_mensal
+  -- fechamento_mensal_direto: UPSERT da linha bonificacao_fechamento_mensal
   if p_fechamento is not null then
     insert into bonificacao_fechamento_mensal as bfm (
       organizacao_id, unidade_id, ano, mes,
@@ -450,9 +459,9 @@ begin
     status              = v_status,
     versao_atual        = v_versao,
     fechamento_id       = coalesce(v_fech_id, fechamento_id),
-    fechada_em          = case when p_origem = 'fechamento_visio' then v_now else fechada_em end,
-    fechada_por_id      = case when p_origem = 'fechamento_visio' then p_por_id else fechada_por_id end,
-    fechada_por_nome    = case when p_origem = 'fechamento_visio' then p_por_nome else fechada_por_nome end,
+    fechada_em          = case when v_status = 'fechada' then v_now else fechada_em end,
+    fechada_por_id      = case when v_status = 'fechada' then p_por_id else fechada_por_id end,
+    fechada_por_nome    = case when v_status = 'fechada' then p_por_nome else fechada_por_nome end,
     legado_capturado_em = case when p_origem = 'legado_pre_refatoracao' then v_now else legado_capturado_em end,
     reaberta_em         = null, reaberta_por_id = null, reaberta_por_nome = null, reabertura_motivo = null
   where id = v_comp.id;

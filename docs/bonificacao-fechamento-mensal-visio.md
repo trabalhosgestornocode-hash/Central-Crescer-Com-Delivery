@@ -13,6 +13,25 @@
   competência só vira `fechada` **depois** do `INSERT` do snapshot e do `COMMIT`. Mantém a
   invariante "`obterMes()` nunca lê `bonificacao_fechamento_mensal` para decidir o resultado
   de uma competência". Ver §7.3 e §14.
+- **v3.2 (correção conceitual F4, 2026-09-06)** — o **fechamento mensal direto** (pelos 2
+  relatórios do mês) existe **só para competências SEM acompanhamento diário** (junho, julho,
+  agosto…). **Não** sobrescreve um mês acompanhado dia a dia.
+  - Função pura **`classificarAcompanhamento()`** (determinística, sem percentual arbitrário)
+    reaproveita `statusDia()` — não cria um segundo calendário. Retorna
+    `SEM_ACOMPANHAMENTO | ACOMPANHAMENTO_PARCIAL | ACOMPANHAMENTO_DIARIO` +
+    `diasEsperados / diasCobertos / diasComAcompanhamento / diasSemOperacao / diasPendentes`.
+  - `validarFechamentoMensal` **bloqueia** o fechamento direto quando `ACOMPANHAMENTO_PARCIAL`
+    ou `ACOMPANHAMENTO_DIARIO`.
+  - Novo fluxo **`consolidarAcompanhamentoDiario()`** (rota `POST /fechamento-mensal/consolidar`)
+    — congela EXATAMENTE o resultado do `obterMes()` ao vivo. Reaproveita `obterMesAoVivo` +
+    o RPC `bonificacao_congelar_competencia` (helper `congelarCompetenciaDoAoVivo`). ZERO
+    fórmula nova.
+  - **Origem do snapshot** (única e obrigatória, CHECK da 075):
+    `'fechamento_mensal_direto'` | `'acompanhamento_diario'` | `'legado_pre_refatoracao'`.
+    O nome antigo `'fechamento_visio'` foi removido. O rótulo de `fonte` por indicador
+    (vendas/produtos) virou `'relatorio_mensal'`.
+  - **Fechamento direto exige os 2 PDFs mensais** (Relatório Geral de Vendas + Relatório de
+    Produtos) — o backend já trabalha assim; **não** reduzir para 1 PDF.
 
 ---
 
@@ -102,7 +121,7 @@
         │  origem=legado_pre_…  │        │ confirmar fechamento
         └──────────┬────────────┘        ▼
                    │ importar 1º      ┌──────────┐
-                   │ fechamento real  │  fechada │  ← snapshot vN imut. · origem=fechamento_visio
+                   │ fechamento real  │  fechada │  ← snapshot vN imut. · origem=fechamento_mensal_direto
                    └─────────────────▶│          │     versao_atual = N
                                       └────┬─────┘
                         reabrir (motivo +  │ ▲
@@ -126,7 +145,7 @@ Transições e o que cada uma cria/audita:
 | Transição | Gatilho | Efeito |
 |---|---|---|
 | `(nada)` → `legado_sem_fechamento` | script de rollout (1×, idempotente) | cria `competencia` + `snapshot v1` (origem `legado_pre_refatoracao`) com o resultado que o sistema calculava naquele momento. Auditoria `competencia_legado_capturada`. |
-| `aberta` → `fechada` | confirmar fechamento | persiste `bonificacao_fechamento_mensal` (2 metades) + cria `snapshot v1` (origem `fechamento_visio`) + `status='fechada'`, `versao_atual=1`. Auditoria `fechamento_confirmado`. |
+| `aberta` → `fechada` | confirmar fechamento | persiste `bonificacao_fechamento_mensal` (2 metades) + cria `snapshot v1` (origem `fechamento_mensal_direto`) + `status='fechada'`, `versao_atual=1`. Auditoria `fechamento_confirmado`. |
 | `legado_sem_fechamento` → `fechada` | importar 1º fechamento real | idem, `snapshot v2` (v1 legado preservado). `versao_atual=2`. |
 | `fechada` → `reaberta` | reabrir (motivo 3–500, permissão `BONIFICACAO_MENSAL_EXCLUIR`) | `status='reaberta'`. **Nada apagado.** Auditoria `competencia_reaberta` (usuário, data, motivo, hashes dos PDFs vigentes). |
 | `reaberta` → `fechada` | re-confirmar | novo upsert em `bonificacao_fechamento_mensal` + `snapshot v(N+1)` + `status='fechada'`, `versao_atual=N+1`. Auditoria `competencia_refechada` + diff dos valores oficiais. |
@@ -148,7 +167,7 @@ obterMes(unidade, ano, mes):
      RETURN {
        ...snap.snapshot,                    // indicadores, resumo, elegibilidade, bonificação — tudo pronto
        congelado: true,
-       origemResultado: snap.snapshot.origem, // 'fechamento_visio' | 'legado_pre_refatoracao'
+       origemResultado: snap.snapshot.origem, // 'fechamento_mensal_direto' | 'legado_pre_refatoracao'
        fechamentoStatus: comp.status == 'fechada' ? 'fechado' : 'legado_sem_fechamento',
        podeEditarDiario: false,
      }
@@ -285,7 +304,7 @@ bonificacao_competencia_snapshot      UNIQUE(competencia_id, versao)
 ├─ unidade_id      uuid NOT NULL → unidades(id)      ON DELETE RESTRICT
 ├─ ano, mes        int  NOT NULL
 ├─ versao          int  NOT NULL CHECK (versao >= 1)
-├─ origem          text NOT NULL CHECK IN ('fechamento_visio','legado_pre_refatoracao')
+├─ origem          text NOT NULL CHECK IN ('fechamento_mensal_direto','acompanhamento_diario','legado_pre_refatoracao')
 ├─ snapshot        jsonb NOT NULL      ← §5.4
 ├─ criado_em       timestamptz NOT NULL DEFAULT now()
 ├─ criado_por_id   uuid → perfis(id) ON DELETE SET NULL
@@ -319,7 +338,7 @@ CREATE TRIGGER trg_bcs_no_delete BEFORE DELETE ON bonificacao_competencia_snapsh
   "escopoBonificacao": "unidade",
   "unidade": { "id": "…", "nome": "…", "organizacaoId": "…" },
   "competencia": { "ano": 2026, "mes": 8 },
-  "origem": "fechamento_visio",              // ou "legado_pre_refatoracao"
+  "origem": "fechamento_mensal_direto",  // | "acompanhamento_diario" | "legado_pre_refatoracao" — ÚNICA e obrigatória
   "versao": 1,
   "geradoEm": "2026-09-05T…Z",
 
@@ -344,7 +363,7 @@ CREATE TRIGGER trg_bcs_no_delete BEFORE DELETE ON bonificacao_competencia_snapsh
 
   "indicadores": {
     "bebidas": {
-      "valorAtual": 42.8741, "fonte": "fechamento_visio",
+      "valorAtual": 42.8741, "fonte": "relatorio_mensal",
       "formula": "1086 / 2533 * 100",
       "meta": { "direcao": "higher_is_better",
                 "faixas": [ { "ordem": 1, "tipo": "limite_minimo", "valorMin": 43, "bonus": 25 }, … ] },
@@ -390,6 +409,36 @@ CREATE TRIGGER trg_bcs_no_delete BEFORE DELETE ON bonificacao_competencia_snapsh
   projeção/soma diária produzia, `metadados.confirmadoPor` = usuário/rotina do
   rollout. A UI **nunca** rotula isso como "Oficial Visio" — usa "Resultado
   histórico (pré-Visio mensal)".
+
+### 5.4.1 `origem` do snapshot — o que ela significa (e o que NÃO significa)
+
+`origem` indica o **caminho PRINCIPAL de formação do resultado comercial** da
+competência — faturamento, ticket médio e o mix (Bebidas / Adicionais / Diversos).
+**Não** quer dizer que 100% dos campos vieram fisicamente da mesma fonte.
+
+| `origem` | Caminho principal (faturamento · ticket · mix) | Estado | `bonificacao_fechamento_mensal` |
+|---|---|---|---|
+| `fechamento_mensal_direto` | os **2 relatórios mensais** da Visio: faturamento/ticket ← Relatório Geral de Vendas do mês; Bebidas/Adicionais/Diversos ← Relatório de Produtos do mês (`qtd / qtd_sanduiches × 100`). Competência **sem** acompanhamento diário. | `fechada` | gravado (2 metades) |
+| `acompanhamento_diario` | os **lançamentos diários** — exatamente o resultado do `obterMes()` ao vivo (`obterMesAoVivo`). Competência **com** acompanhamento diário completo, consolidada. | `fechada` | não gravado (`fechamento_id` null) |
+| `legado_pre_refatoracao` | o resultado que o sistema calculava no momento da migração (captura de rollout). | `legado_sem_fechamento` | não gravado |
+
+**Campos que NÃO seguem a `origem`** — continuam vindo das **fontes manuais/mensais
+de sempre**, em qualquer um dos 3 caminhos (a regra funcional desses campos **não
+mudou**):
+
+| Indicador | Fonte (independente da `origem`) |
+|---|---|
+| CMV | média diária do mês (lançamento manual) |
+| Nota iFood (`avaliacao_ifood`) | média diária do mês (lançamento manual) |
+| Cancelamentos | média diária do mês (lançamento manual) |
+| Pedidos com chamado | média diária do mês (lançamento manual) |
+| Pesquisas | soma do mês (lançamento manual) |
+| REV | valor único da competência (`bonificacao_rev_mensal`) |
+
+No snapshot, cada indicador ainda carrega seu próprio `fonte` (`'relatorio_mensal'`
+para vendas/produtos, `'manual'` para os acima) — ver `FONTE_INDICADOR_FECHAMENTO`
+em `bonificacaoMensal.fechamento.js`. A `origem` de topo é o rótulo do **caminho**,
+o `fonte` por indicador é a **procedência real de cada número**.
 
 ### 5.5 Auditoria (`plataforma_auditoria`)
 
@@ -443,10 +492,15 @@ Nenhum dos dois vira regra absoluta de negócio nem fonte de valor.
 ```
 Mês [▾]  Ano [▾]        Unidade: 🏪 <sessão> (fixa)
 
-┌ Relatório de Vendas — mês inteiro (Geral) ┐    [PDF]  *obrigatório*
-┌ Relatório de Produtos — mês inteiro (Loja/Balcão) ┐  [PDF]  *obrigatório*
+┌ Relatório Geral de Vendas — mês inteiro ┐        [PDF]  *obrigatório*
+┌ Relatório de Produtos — mês inteiro ┐            [PDF]  *obrigatório*
 
-[ Analisar relatórios ]   [ Confirmar fechamento ]  (bloqueado até prévia OK + 2 checkboxes)
+[ Analisar relatórios ]
+
+  Após a análise, conforme a classificação de acompanhamento da competência:
+    SEM_ACOMPANHAMENTO    → [ Confirmar fechamento ]  (só com prévia OK + 2 checkboxes)
+    ACOMPANHAMENTO_PARCIAL → mostra os dias pendentes · fechamento direto NÃO permitido
+    ACOMPANHAMENTO_DIARIO  → [ Consolidar acompanhamento diário ]  (fechamento direto NÃO permitido)
 ```
 
 ### 7.2 Prévia consolidada (`POST /fechamento-mensal/preview`, 2 arquivos — não persiste)
@@ -541,7 +595,7 @@ chama a RPC. `reabrir` = `bonificacao_reabrir_competencia`.
    //   avaliarElegibilidadeBonificacao / avaliarSuperRestaurante
    // → produz exatamente o JSONB do §5.4.
 5. INSERT bonificacao_competencia_snapshot { versao: N (= versao_atual+1),
-     origem: 'fechamento_visio', snapshot: resultado, criado_por_* }
+     origem: 'fechamento_mensal_direto', snapshot: resultado, criado_por_* }
 6. UPDATE/UPSERT bonificacao_competencia SET
      status = 'fechada', versao_atual = N, fechamento_id = <id>, fechada_em/por = ...
 7. auditoria fechamento_confirmado (diff dos valoresOficiais se substituiu)
@@ -695,7 +749,7 @@ para cada (unidade_id) ativa:
 | `bonificacaoProjetada` | sempre (melhor fonte disponível hoje) |
 | `bonificacaoDefinitiva` | `comp.status ∈ {'fechada','legado_sem_fechamento'}` **e** elegível → valor do snapshot. Senão `null`. |
 | `fechamentoStatus` | `'aberto'` \| `'aguardando_fechamento'` \| `'fechado'` \| `'reaberto'` \| `'legado_sem_fechamento'` |
-| `origemResultado` | `'ao_vivo'` \| `'fechamento_visio'` \| `'legado_pre_refatoracao'` |
+| `origemResultado` | `'ao_vivo'` \| `'fechamento_mensal_direto'` \| `'acompanhamento_diario'` \| `'legado_pre_refatoracao'` |
 | `liberadoParaPagamento` | `bonificacaoDefinitiva != null` |
 
 - Gate de elegibilidade (Nota iFood + REV + Pesquisas) continua igual, aplicado **sobre** o definitivo.
@@ -744,7 +798,7 @@ Com FKs `ON DELETE RESTRICT` nas 3 tabelas, **F6** precisa (senão `excluir_orga
 |---|---|---|---|---|
 | Mês em andamento | `aberta` (ou linha inexistente) | cálculo ao vivo; `definitiva=null`; edição diária ON | — | `status` default `'aberta'`; `versao_atual` default `0` |
 | Mês encerrado sem fechamento | `aberta` | cálculo ao vivo; `fechamentoStatus='aguardando_fechamento'`; `definitiva=null` | — | idem |
-| Fechamento confirmado | `fechada` | **serve snapshot `versao_atual`**; `definitiva` do snapshot; edição diária OFF | `versao_atual` (origem `fechamento_visio`) | CHECK `status` aceita `'fechada'`; FK `fechamento_id`; `_snapshot` UNIQUE(competencia,versao) |
+| Fechamento confirmado | `fechada` | **serve snapshot `versao_atual`**; `definitiva` do snapshot; edição diária OFF | `versao_atual` (origem `fechamento_mensal_direto`) | CHECK `status` aceita `'fechada'`; FK `fechamento_id`; `_snapshot` UNIQUE(competencia,versao) |
 | Reaberto | `reaberta` | **cálculo ao vivo** (ignora `bonificacao_fechamento_mensal`); provisório; `definitiva=null`; edição diária ON | versões anteriores **preservadas**, nenhuma alterada | trigger imutabilidade; `reaberta_*` colunas |
 | Re-confirmado | `fechada` | serve snapshot `versao_atual` (novo N) | `snapshot vN` novo; `vN-1` intacto (sem `substituido_em`) | INSERT-only em `_snapshot`; `versao_atual` aponta N |
 | Histórico pré-refatoração | `legado_sem_fechamento` | **serve snapshot legado**; `definitiva` do snapshot; rótulo "Histórico"; edição diária OFF | `versao_atual` (origem `legado_pre_refatoracao`) | CHECK aceita `'legado_sem_fechamento'`; `fechamento_id` nullable; `legado_capturado_em` |
