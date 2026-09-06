@@ -290,20 +290,35 @@ function buscarCategoriasPorNome(matriz, de, ate) {
 /**
  * Percentuais que o PRÓPRIO PDF calculou (linhas soltas de 1 célula logo
  * após "Total") — só para a validação cruzada do item 11; o cálculo de
- * negócio NUNCA usa este valor, só as quantidades. Por isso é best-effort:
- * se a ordem das 3 categorias aqui não bater com a das quantidades acima,
- * o pior caso é um aviso de divergência impreciso — nunca um dado errado
- * gravado (ver bonificacaoMensal.service.js#processarImportacaoVisio).
+ * negócio NUNCA usa este valor, só as quantidades.
+ *
+ * A Visio varia a ordem das linhas do mix entre relatórios (ex.: `Diversos`
+ * antes de `Adicionais`), e as linhas soltas de percentual depois de "Total"
+ * seguem EXATAMENTE a ordem das linhas de categoria acima. Por isso cada
+ * percentual é mapeado pelo RÓTULO da categoria correspondente, nunca por
+ * posição fixa (bug histórico: percentualAdicionaisPdf/percentualDiversosPdf
+ * saíam trocados quando o PDF listava Diversos antes de Adicionais — ver
+ * bonificacao-mensal-visio-parser.test.js "ordem Diversos→Adicionais").
  * @param {string[][]} matriz @param {number} de @param {number} ate
  */
 function buscarPercentuaisDoTotal(matriz, de, ate) {
   const fim = Math.min(ate, matriz.length);
+  const inicio = Math.max(de, 0);
   let idxTotal = -1;
-  for (let i = Math.max(de, 0); i < fim; i++) {
+  for (let i = inicio; i < fim; i++) {
     const row = matriz[i] || [];
     if (row.length && ehRotuloDe("total", normCel(row[0]))) { idxTotal = i; break; }
   }
   if (idxTotal < 0) return {};
+
+  // Ordem REAL das categorias nas linhas da seção, antes de "Total".
+  const ordem = [];
+  for (let i = inicio; i < idxTotal; i++) {
+    const cel = normCel((matriz[i] || [])[0] || "");
+    if (!cel) continue;
+    const cat = CATEGORIAS_MIX.find((c) => ehRotuloDe(c, cel));
+    if (cat && !ordem.includes(cat)) ordem.push(cat);
+  }
 
   const pcts = [];
   for (let j = idxTotal + 1; j < Math.min(idxTotal + 6, fim) && pcts.length < 4; j++) {
@@ -311,10 +326,23 @@ function buscarPercentuaisDoTotal(matriz, de, ate) {
     if (r && r.length === 1 && PCT_RE.test(r[0])) pcts.push(parsePct(r[0]));
     else if (pcts.length) break; // sequência já começou e quebrou — para
   }
-  // A 1ª é sempre 100% (Sanduíches/Saladas é a base do mix) — as 3
-  // seguintes, na ordem em que aparecem no PDF, são bebidas/adicionais/diversos.
-  const [, percentualBebidasPdf = null, percentualAdicionaisPdf = null, percentualDiversosPdf = null] = pcts;
-  return { percentualBebidasPdf, percentualAdicionaisPdf, percentualDiversosPdf };
+
+  // Sanduíches/Saladas é a base (100%); tira dos dois lados e zipa o resto
+  // por rótulo. Se a ordem das linhas não pôde ser determinada, cai no
+  // comportamento anterior (posicional) como último recurso.
+  const ordemAcomp = ordem.filter((c) => c !== "sanduiches");
+  const pctsAcomp = pcts.length && Math.round(pcts[0]) === 100 ? pcts.slice(1) : pcts;
+  const porCategoria = {};
+  if (ordemAcomp.length) {
+    for (let k = 0; k < pctsAcomp.length && k < ordemAcomp.length; k++) porCategoria[ordemAcomp[k]] = pctsAcomp[k];
+  } else {
+    [porCategoria.bebidas, porCategoria.adicionais, porCategoria.diversos] = pctsAcomp;
+  }
+  return {
+    percentualBebidasPdf: porCategoria.bebidas ?? null,
+    percentualAdicionaisPdf: porCategoria.adicionais ?? null,
+    percentualDiversosPdf: porCategoria.diversos ?? null,
+  };
 }
 
 /** pt-BR: ["Adicionais"] -> "Adicionais"; ["Adicionais","Diversos"] -> "Adicionais e Diversos". */

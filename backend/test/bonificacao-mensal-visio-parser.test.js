@@ -465,4 +465,69 @@ describe("extrairMixVendas — categoria por NOME, nunca por posição fixa", ()
     assert.equal(r.faltando.length, 1);
     assert.equal(r.faltando[0], "Adicionais");
   });
+
+  // -------------------------------------------------------------------------
+  // percentualBebidasPdf/AdicionaisPdf/DiversosPdf — linhas soltas de % logo
+  // depois de "Total". A Visio varia a ordem das linhas do mix; o percentual
+  // impresso tem que sair PELO RÓTULO da categoria, nunca pela posição.
+  // (bug: 01/09/2026 — PDF listava Diversos antes de Adicionais e os dois
+  //  percentuais impressos saíam trocados; as quantidades sempre certas.)
+  // -------------------------------------------------------------------------
+  test("percentual impresso — ordem Diversos→Adicionais (layout real 01/09/2026)", () => {
+    const matriz = [
+      ANCORA, ["Mix de vendas semanal"],
+      ["Sanduíches/Saladas", "108"],
+      ["Bebidas", "49"],
+      ["Diversos", "21"],
+      ["Adicionais", "20"],
+      ["Total", "198", "183,3%"],
+      ["100,0%"], ["45,4%"], ["19,4%"], ["18,5%"],
+    ];
+    const r = extrairMixVendas(matriz, "Loja");
+    assert.deepEqual(r.faltando, []);
+    // quantidades (inalteradas — sempre por rótulo)
+    assert.equal(r.bebidas, 49);
+    assert.equal(r.adicionais, 20);
+    assert.equal(r.diversos, 21);
+    // percentuais impressos, agora pelo rótulo certo
+    assert.equal(r.percentualBebidasPdf, 45.4);
+    assert.equal(r.percentualAdicionaisPdf, 18.5);   // era 19.4 (transposto) antes da correção
+    assert.equal(r.percentualDiversosPdf, 19.4);     // era 18.5 (transposto) antes da correção
+    // e continua batendo com a quantidade derivada
+    assert.equal(((r.adicionais / r.sanduichesSaladas) * 100).toFixed(1), "18.5");
+    assert.equal(((r.diversos / r.sanduichesSaladas) * 100).toFixed(1), "19.4");
+  });
+
+  test("percentual impresso — ordem normal Adicionais→Diversos (controle, layout 02/09/2026)", () => {
+    const matriz = [
+      ANCORA,
+      ["Sanduíches/Saladas", "120"],
+      ["Bebidas", "49"],
+      ["Adicionais", "24"],
+      ["Diversos", "18"],
+      ["Total", "191", "159,2%"],
+      ["100,0%"], ["40,8%"], ["20,0%"], ["15,0%"],
+    ];
+    const r = extrairMixVendas(matriz, "Loja");
+    assert.deepEqual(r.faltando, []);
+    assert.equal(r.percentualBebidasPdf, 40.8);
+    assert.equal(r.percentualAdicionaisPdf, 20);
+    assert.equal(r.percentualDiversosPdf, 15);
+  });
+
+  test("percentual impresso — sem a linha 100% da base, ainda mapeia por rótulo", () => {
+    const matriz = [
+      ANCORA,
+      ["Sanduíches/Saladas", "100"],
+      ["Bebidas", "40"],
+      ["Diversos", "20"],
+      ["Adicionais", "10"],
+      ["Total", "170", "170,0%"],
+      ["40,0%"], ["20,0%"], ["10,0%"],
+    ];
+    const r = extrairMixVendas(matriz, "Loja");
+    assert.equal(r.percentualBebidasPdf, 40);
+    assert.equal(r.percentualAdicionaisPdf, 10);
+    assert.equal(r.percentualDiversosPdf, 20);
+  });
 });
