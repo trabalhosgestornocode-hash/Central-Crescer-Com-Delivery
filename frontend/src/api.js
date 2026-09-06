@@ -346,6 +346,10 @@ export const bonifSalvarRevMensal = (dados) => postJson(`${BM}/rev`, dados);
 // dois relatórios da Visio, nunca digitado à mão.
 export const bonifFechamentoMensalPreview = (payload) => postJson(`${BM}/fechamento-mensal/preview`, payload);
 export const bonifFechamentoMensalConfirmar = (payload) => postJson(`${BM}/fechamento-mensal`, payload);
+// Consolidar acompanhamento diário: fecha um mês acompanhado dia a dia
+// congelando o cálculo ao vivo (snapshot origem 'acompanhamento_diario').
+// Não recebe PDFs — só a competência.
+export const bonifFechamentoMensalConsolidar = ({ ano, mes }) => postJson(`${BM}/fechamento-mensal/consolidar`, { ano, mes });
 
 // ---------- Parser Food Delivery (importação + conciliação de taxas de entregador) ----------
 const PFD = "/api/v1/parser-food-delivery";

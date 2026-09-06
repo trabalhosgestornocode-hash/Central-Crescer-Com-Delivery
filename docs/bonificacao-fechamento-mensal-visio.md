@@ -32,6 +32,15 @@
     (vendas/produtos) virou `'relatorio_mensal'`.
   - **Fechamento direto exige os 2 PDFs mensais** (Relatório Geral de Vendas + Relatório de
     Produtos) — o backend já trabalha assim; **não** reduzir para 1 PDF.
+- **v3.3 (F7 — camada de interface, 2026-09-06)** — o painel "Fechamento mensal" do modal
+  "Importar Visio" passou a refletir o contrato atual: **2 dropzones** (Relatório Geral de
+  Vendas / Relatório de Produtos, mês inteiro), **2 checkboxes** de conferência, `[Analisar
+  relatórios]` gateado por competência + 2 PDFs. A prévia renderiza a **classificação de
+  acompanhamento** e oferece a ação correspondente — `Confirmar fechamento`
+  (SEM_ACOMPANHAMENTO) ou `Consolidar acompanhamento diário` (ACOMPANHAMENTO_DIARIO);
+  ACOMPANHAMENTO_PARCIAL mostra só os dias pendentes; competência fechada trava o painel.
+  Lógica pura em `frontend/src/bonificacaoMensalFechamento.js`. **Sem** migration, **sem**
+  mudança de fórmula. `api.js` ganhou `bonifFechamentoMensalConsolidar`.
 
 ---
 
@@ -774,10 +783,11 @@ Com FKs `ON DELETE RESTRICT` nas 3 tabelas, **F6** precisa (senão `excluir_orga
 
 | Arquivo | Mudança |
 |---|---|
-| `bonificacaoMensalImportModal.js` | aba "Fechamento mensal" → **2 dropzones obrigatórios** + mês/ano + **2 checkboxes**; prévia consolidada (7.2); remove o modo "1 PDF". |
-| `bonificacaoMensal.js` | `fechamentoMensalHtml` → **sem comparativo**; mostra status da competência + botões (Importar / Reabrir / Ver PDFs / Ver versões). `fonteHtml` → selo único (`Projeção` / `Oficial · Visio` / `Histórico`). Hero → projetada × definitiva + aviso de pagamento. Edição diária bloqueada quando `!podeEditarDiario`. |
-| `api.js` | `bonifFechamentoMensalPreview/Confirmar` (2 arquivos + flags); `bonifReabrirFechamento`; `bonifSnapshots`. |
-| `styles.css` | modal 2 blocos + alertas crítico/normal + selos. |
+| `bonificacaoMensalFechamento.js` | **(F7, novo)** camada PURA do painel de fechamento — `podeAnalisarMensal`, `montarPayloadMensal`, `classificacaoView`, `mensalPaneHtml`, `previewMensalHtml`. Sem DOM; testada em `frontend/test/bonificacaoMensalFechamento.test.js`. |
+| `bonificacaoMensalImportModal.js` | **(F7)** aba "Fechamento mensal" → **2 dropzones** (`bm-mensal-vendas` / `bm-mensal-produtos`, com trocar/remover) + mês/ano + **2 checkboxes**; `[Analisar relatórios]` só habilita com competência + 2 PDFs (`podeAnalisarMensal`); a prévia renderiza a classificação e oferece `Confirmar fechamento` (SEM_ACOMPANHAMENTO) ou `Consolidar acompanhamento diário` (ACOMPANHAMENTO_DIARIO); parcial → só lista de pendentes; competência fechada → painel travado; `ctx.mensal.emAndamento` trava reentrada. Removido o modo "1 PDF". |
+| `bonificacaoMensal.js` | **(F7)** `wireFechamentoMensal` passa `competenciaFechada`/`origemFechada` ao modal. |
+| `api.js` | `bonifFechamentoMensalPreview/Confirmar` (2 arquivos + flags); **(F7)** `bonifFechamentoMensalConsolidar({ano,mes})` → `POST /fechamento-mensal/consolidar`. |
+| `styles.css` | **(F7)** `.bm-mensal-classif` (info/warn/ok), `.bm-mensal-pendentes`, `.bm-mensal-conf`, `.bm-mensal-conferencia`, `.bm-drop-remover`. |
 
 ---
 

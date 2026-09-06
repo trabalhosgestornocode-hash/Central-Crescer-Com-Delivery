@@ -383,9 +383,12 @@ function fechamentoMensalHtml(d) {
 }
 
 function wireFechamentoMensal(box) {
+  const d = bm.dadosMes;
   box.querySelector("#bm-fm-importar")?.addEventListener("click", () => abrirImportarVisioModal({
     unidadeNome: state.sessao?.unidade?.nome, mesAtual: bm.mes, anoAtual: bm.ano,
     onSalvo: carregarConteudo, modo: "mensal",
+    competenciaFechada: d?.congelado === true,
+    origemFechada: d?.origemResultado ?? null,
   }));
 }
 
