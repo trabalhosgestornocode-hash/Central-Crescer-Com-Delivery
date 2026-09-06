@@ -164,11 +164,11 @@ export const LIMITES_CORPO = {
   // falhava com "Arquivo(s) grande(s) demais" em qualquer relatório acima de ~730 KB.
   parserFoodDeliveryImportacao: "30mb",
   martinBrowerImportacao: "8mb", // JSON do loadItens colado pelo admin
-  // Bonificação Mensal manda os DOIS PDFs da Visio (Geral + Loja) no mesmo
-  // corpo — até 15 MB cada (ver MAX_ARQUIVO em visio-parser.js), +33% do
-  // base64 e a duplicidade do preview/confirmar somam bem mais que os 1 MB
-  // padrão. Sem esta exceção, a rota falha com "request entity too large"
-  // mesmo com um único PDF um pouco maior.
+  // Bonificação Mensal (lançamento diário E fechamento mensal) manda os DOIS
+  // PDFs da Visio no mesmo corpo em base64 — até 15 MB cada (MAX_ARQUIVO em
+  // visio-parser.js#decodificarPdfVisio), +33% do base64: pior caso ~40 MB de
+  // corpo. 50 MB dá folga sem chegar perto de estourar a RAM do Render (a
+  // leitura síncrona do PDF é o custo real, idêntico ao fluxo diário).
   bonificacaoMensalImportacao: "50mb",
 };
 

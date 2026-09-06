@@ -218,6 +218,20 @@ describe("F7 · 10 a 12 — sem segunda fonte, sem wording proibido", () => {
   });
 });
 
+describe("F7 · upload — limite de tamanho por arquivo (fail-fast no cliente)", () => {
+  test("wireDropZone recusa PDF acima de 15 MB citando o nome do arquivo", () => {
+    assert.match(MODAL_SRC, /MAX_PDF_BYTES\s*=\s*15\s*\*\s*1024\s*\*\s*1024/);
+    assert.match(MODAL_SRC, /file\.size\s*>\s*MAX_PDF_BYTES/);
+    assert.match(MODAL_SRC, /O arquivo "\$\{file\.name\}" tem \$\{fmtMB\(file\.size\)\} MB/);
+  });
+  test("o limite vale para os dois fluxos (a checagem está no wireDropZone compartilhado)", () => {
+    // wireDropZone é usado tanto pelo pane diário quanto pelo mensal
+    assert.match(MODAL_SRC, /function wireDropZone\(/);
+    assert.match(MODAL_SRC, /wireDropZone\(m, `bm-\$\{tipo\}`/);       // diário
+    assert.match(MODAL_SRC, /wireDropZone\(m, "bm-mensal-vendas"/);    // mensal
+  });
+});
+
 describe("F7 · 13 a 15 — loading, erros e sucesso", () => {
   test("13 — loading trava reentrada (emAndamento)", () => {
     assert.match(MODAL_SRC, /ctx\.mensal\.emAndamento = true;/);

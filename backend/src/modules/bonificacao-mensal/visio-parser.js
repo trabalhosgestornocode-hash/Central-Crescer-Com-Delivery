@@ -715,7 +715,14 @@ export async function parseVisioSalesReport(buf, opts = {}) {
   return { tipo: "vendas", estabelecimento, faturamento, ticketMedio, cuponsValidos, cuponsVendas, metodosPagamento, hash: sha256(buf) };
 }
 
-const MAX_ARQUIVO = 15 * 1024 * 1024; // 15 MB — mesmo limite de vendas/sw-parser.js
+export const MAX_ARQUIVO = 15 * 1024 * 1024; // 15 MB por PDF — mesmo limite de vendas/sw-parser.js
+// Teto COMBINADO dos PDFs de uma mesma operação (fechamento mensal manda 2).
+// Fica abaixo do limite de corpo de 50 MB em base64
+// (LIMITES_CORPO.bonificacaoMensalImportacao): quando os 2 passam
+// individualmente (≤15 MB cada) mas juntos são grandes demais, a mensagem diz
+// exatamente isso em vez de um 413 "Arquivo(s) grande(s)".
+export const MAX_ARQUIVOS_COMBINADO = 25 * 1024 * 1024;
+
 /** Decodifica e valida o PDF em base64 vindo do modal de importação. */
 export function decodificarPdfVisio(arq, rotulo) {
   if (!/\.pdf$/i.test(arq?.nomeArquivo || "")) throw ApiError.badRequest(`O arquivo do Relatório ${rotulo} precisa ser um PDF.`);
@@ -724,4 +731,15 @@ export function decodificarPdfVisio(arq, rotulo) {
   // assinatura mínima de PDF ("%PDF-") — nunca confiar só na extensão do nome.
   if (buf.slice(0, 5).toString("latin1") !== "%PDF-") throw ApiError.badRequest(`O arquivo do Relatório ${rotulo} não parece ser um PDF válido.`);
   return buf;
+}
+
+/** Teto combinado da operação (soma dos PDFs já decodificados). */
+export function exigirLimiteCombinado(...bufs) {
+  const total = bufs.reduce((s, b) => s + (b?.length || 0), 0);
+  if (total > MAX_ARQUIVOS_COMBINADO) {
+    throw ApiError.badRequest(
+      `Os relatórios somam ${(total / (1024 * 1024)).toFixed(1)} MB (máximo 25 MB juntos). `
+      + "Exporte um período menor ou reduza o tamanho de cada PDF.",
+    );
+  }
 }

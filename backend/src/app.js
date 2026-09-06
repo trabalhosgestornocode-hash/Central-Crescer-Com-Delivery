@@ -40,9 +40,17 @@ export function createApp() {
   // amostra pequena (achado real ao testar um relatório de ~3 MB/1578 pedidos).
   app.use("/api/v1/parser-food-delivery", express.json({ limit: LIMITES_CORPO.parserFoodDeliveryImportacao }));
   app.use("/api/v1/integracoes/martin-brower/import-manual", express.json({ limit: LIMITES_CORPO.martinBrowerImportacao }));
-  // Cobre /bonificacao-mensal/importar E /bonificacao-mensal/importar/preview
-  // (prefixo casa os dois) — os 2 PDFs da Visio vão nesse corpo.
-  app.use("/api/v1/bonificacao-mensal/importar", express.json({ limit: LIMITES_CORPO.bonificacaoMensalImportacao }));
+  // Bonificação Mensal — os 2 PDFs da Visio (Geral + Loja / Vendas + Produtos)
+  // vão em base64 no mesmo corpo, tanto no LANÇAMENTO DIÁRIO (/importar,
+  // /importar/preview) quanto no FECHAMENTO MENSAL (/fechamento-mensal,
+  // /fechamento-mensal/preview). Sem o prefixo /fechamento-mensal aqui a F7
+  // caía no limite `padrao` de 1 MB e todo "Analisar relatórios" com os 2 PDFs
+  // devolvia 413 "Arquivo(s) grande(s) demais". /consolidar e /reabrir também
+  // casam o prefixo — não levam PDF, então o teto maior é inofensivo.
+  app.use(
+    ["/api/v1/bonificacao-mensal/importar", "/api/v1/bonificacao-mensal/fechamento-mensal"],
+    express.json({ limit: LIMITES_CORPO.bonificacaoMensalImportacao }),
+  );
   app.use(express.json({ limit: LIMITES_CORPO.padrao }));
 
   app.use(morgan(emProducao ? "combined" : "dev", {

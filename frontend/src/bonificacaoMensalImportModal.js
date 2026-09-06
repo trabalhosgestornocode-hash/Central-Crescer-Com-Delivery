@@ -27,6 +27,12 @@ function overlay(html) {
   return ov.querySelector(".modal");
 }
 
+// Limite POR arquivo — espelha MAX_ARQUIVO do backend (visio-parser.js#decodificarPdfVisio).
+// Checado no cliente só para falhar rápido, com o nome do arquivo, antes de
+// subir o base64. O backend continua sendo a autoridade.
+const MAX_PDF_BYTES = 15 * 1024 * 1024;
+const fmtMB = (bytes) => (bytes / (1024 * 1024)).toFixed(1).replace(".", ",");
+
 // ---------- arquivo -> base64 (mesma técnica de vendas.js) ----------
 async function arquivoPayload(file) {
   if (!file) return null;
@@ -58,6 +64,10 @@ function wireDropZone(m, id, onArquivo, onRemover) {
   const aplicar = (file) => {
     if (!file) return;
     if (!/\.pdf$/i.test(file.name)) { toast("Selecione um arquivo PDF."); return; }
+    if (file.size > MAX_PDF_BYTES) {
+      toast(`O arquivo "${file.name}" tem ${fmtMB(file.size)} MB. O limite é 15 MB por relatório — exporte um período menor.`);
+      return;
+    }
     nomeEl.textContent = file.name;
     zona.classList.add("preenchido");
     if (remover) remover.hidden = false;

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   parseVisioProductReport, parseVisioSalesReport, extrairMixVendas, detectarTipoRelatorio,
   parseNumeroBR, parseQuantidadeBR, parseMoedaBR, parsePercentualBR,
+  decodificarPdfVisio, exigirLimiteCombinado, MAX_ARQUIVO, MAX_ARQUIVOS_COMBINADO,
 } from "../src/modules/bonificacao-mensal/visio-parser.js";
 import { createRequire } from "node:module";
 const pdfParse = createRequire(import.meta.url)("pdf-parse/lib/pdf-parse.js");
@@ -131,6 +132,50 @@ describe("robustez do parser", () => {
   test("rejeita um PDF sem a estrutura esperada", async () => {
     const bufFalso = Buffer.from("%PDF-1.4\n%%EOF");
     await assert.rejects(() => parseVisioProductReport(bufFalso));
+  });
+});
+
+// ===========================================================================
+// Limites de tamanho dos PDFs (fechamento mensal manda 2 no mesmo corpo).
+// ===========================================================================
+describe("decodificarPdfVisio / exigirLimiteCombinado — limites de upload", () => {
+  const b64 = (s) => Buffer.from(s).toString("base64");
+  const pdfDe = (nBytes) => {
+    const head = "%PDF-1.4\n";
+    return { nomeArquivo: "r.pdf", conteudoBase64: b64(head + "x".repeat(Math.max(0, nBytes - head.length))) };
+  };
+
+  test("2 PDFs normais → decodifica os dois e o combinado passa", () => {
+    const v = decodificarPdfVisio(pdfDe(200_000), "de Vendas");
+    const p = decodificarPdfVisio(pdfDe(300_000), "de Produtos");
+    assert.equal(v.length, 200_000);
+    assert.equal(p.length, 300_000);
+    assert.doesNotThrow(() => exigirLimiteCombinado(v, p)); // 0,5 MB << 25 MB
+  });
+
+  test("arquivo individual acima de 15 MB → erro claro citando o relatório", () => {
+    assert.throws(() => decodificarPdfVisio(pdfDe(MAX_ARQUIVO + 1), "de Produtos"),
+      /Relat[óo]rio de Produtos.*15 MB|15 MB/i);
+  });
+
+  test("extensão não-PDF → bloqueado", () => {
+    assert.throws(() => decodificarPdfVisio({ nomeArquivo: "r.xlsx", conteudoBase64: b64("%PDF-1.4\nx") }, "de Vendas"),
+      /precisa ser um PDF/i);
+  });
+
+  test("conteúdo sem assinatura %PDF- → bloqueado", () => {
+    assert.throws(() => decodificarPdfVisio({ nomeArquivo: "r.pdf", conteudoBase64: b64("NAO EH PDF".repeat(50)) }, "de Vendas"),
+      /n[ãa]o parece ser um PDF v[áa]lido/i);
+  });
+
+  test("soma dos dois acima de 25 MB (cada um ≤15 MB) → erro claro de combinado", () => {
+    const a = Buffer.alloc(14 * 1024 * 1024, 1);
+    const b = Buffer.alloc(13 * 1024 * 1024, 1);
+    assert.throws(() => exigirLimiteCombinado(a, b), /somam .* MB \(m[áa]ximo 25 MB juntos\)/i);
+  });
+
+  test("exatamente no limite combinado não estoura", () => {
+    assert.doesNotThrow(() => exigirLimiteCombinado(Buffer.alloc(MAX_ARQUIVOS_COMBINADO, 1)));
   });
 });
 

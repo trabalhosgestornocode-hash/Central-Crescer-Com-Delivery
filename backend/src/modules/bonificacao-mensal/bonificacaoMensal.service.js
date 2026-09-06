@@ -6,7 +6,7 @@ import { prepararImportacaoDiaria, registrarImportacaoDiaria, conferirImportacao
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
-import { parseVisioProductReport, parseVisioSalesReport, decodificarPdfVisio } from "./visio-parser.js";
+import { parseVisioProductReport, parseVisioSalesReport, decodificarPdfVisio, exigirLimiteCombinado } from "./visio-parser.js";
 import {
   hojeIsoBrasil, diasDoMes, STATUS_DIA_BONIFICACAO, statusDia, percentualDerivado, mixDoDia,
   validarPercentualCruzado, detectarInversaoRelatorios, faturamentoAcumulado, mixMensalPonderado,
@@ -1055,8 +1055,9 @@ export async function processarImportacaoFechamentoMensal({ organizacaoId, unida
   if (!payload?.vendas) throw ApiError.badRequest("Falta o Relatório de Vendas mensal.");
   if (!payload?.produtos) throw ApiError.badRequest("Falta o Relatório de Produtos mensal.");
 
-  const bufVendas = decodificarPdfVisio(payload.vendas, "de Vendas");
+  const bufVendas = decodificarPdfVisio(payload.vendas, "de Vendas");       // ≤ 15 MB cada
   const bufProdutos = decodificarPdfVisio(payload.produtos, "de Produtos");
+  exigirLimiteCombinado(bufVendas, bufProdutos);                            // ≤ 25 MB juntos
 
   // 2. parse + validação de TIPO (o parser recusa slot trocado — F2)
   const vendas = await parseVisioSalesReport(bufVendas, { rotulo: "de Vendas" });
