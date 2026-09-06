@@ -95,7 +95,13 @@ const FONTE_INDICADOR = {
   cmv: "Lançamento manual", avaliacao_ifood: "Lançamento manual", cancelamentos: "Lançamento manual",
   pedidos_chamado: "Lançamento manual", rev: "Lançamento manual", pesquisas: "Lançamento manual",
 };
-const fonteHtml = (chave) => FONTE_INDICADOR[chave] ? `<span class="bm-fonte">Fonte: ${escapeHtml(FONTE_INDICADOR[chave])}</span>` : "";
+// Atribuição de origem de cada indicador — uma fonte só. Não existe "valor da
+// Central x valor da Visio": os dados vêm da Visio, a Central só organiza e
+// aplica as regras.
+function fonteDoIndicador(chave) {
+  return FONTE_INDICADOR[chave] || "";
+}
+const fonteHtml = (chave) => { const f = fonteDoIndicador(chave); return f ? `<span class="bm-fonte">Fonte: ${escapeHtml(f)}</span>` : ""; };
 
 const hoje = new Date();
 const bm = { aba: "visao", mes: hoje.getMonth() + 1, ano: hoje.getFullYear(), dadosMes: null, metas: null, historico: null };
@@ -239,6 +245,7 @@ function metaDoIndicador(indicador) {
 // EMPTY STATE (item 20)
 // ---------------------------------------------------------------------------
 function mesTemDados(d) {
+  if (d.congelado) return true; // competência fechada: resultado congelado, sempre tem dado
   return d.calendario.some((dia) => dia.status !== "PENDENTE" && dia.status !== "FUTURO");
 }
 
@@ -326,6 +333,7 @@ function renderVisaoGeral(box) {
     ${superRestauranteVisaoGeralHtml(d)}
     ${evolucaoFaturamentoHtml(d)}
     ${proximasConquistasHtml(d)}
+    ${fechamentoMensalHtml(d)}
     ${grupoHtml(d, GRUPOS[0])}
     ${evolucaoMixHtml(d)}
     ${grupoHtml(d, GRUPOS[1])}
@@ -341,10 +349,44 @@ function renderVisaoGeral(box) {
   requestAnimationFrame(() => { box.querySelector(".bm-hero-barra-fill")?.classList.add("preenchida"); });
 
   box.querySelector("#bm-importar-visio-2")?.addEventListener("click", () => el("#bm-importar-visio")?.click());
+  wireFechamentoMensal(box);
   // Os 3 cards do Super Restaurante (Nota iFood/Cancelamentos/Pedidos com
   // Chamado) não têm mais aba própria — todos abrem o lançamento diário num
   // drawer, sem sair da Visão Geral.
   box.querySelectorAll("[data-criterio]").forEach((elCard) => elCard.addEventListener("click", () => abrirDrawerIndicadorManual(elCard.dataset.criterio)));
+}
+
+// ---------------------------------------------------------------------------
+// ESTADO DO FECHAMENTO MENSAL (arquitetura v3.1). Sem comparação entre fontes:
+// durante o mês os indicadores usam os dados disponíveis da competência;
+// quando os dois relatórios mensais da Visio são importados e o fechamento é
+// confirmado, a competência congela. A importação vive no modal "Importar
+// Visio". Redesenho visual completo desta área = F7.
+// ---------------------------------------------------------------------------
+function fechamentoMensalHtml(d) {
+  const comp = `${MESES[d.mes - 1]}/${d.ano}`;
+  const fechada = d.congelado === true;
+  const pill = fechada
+    ? `<span class="pill ok">Competência fechada</span>`
+    : `<span class="pill info">Fechamento mensal pendente</span>`;
+  const linha = fechada
+    ? `<p class="bm-vazio-inline">Resultado congelado do fechamento mensal de ${escapeHtml(comp)}.</p>`
+    : `<p class="bm-vazio-inline">Os indicadores usam os dados disponíveis da competência. Importe o fechamento mensal para consolidar ${escapeHtml(comp)}.</p>`;
+  const acao = (!fechada && podeLancar())
+    ? `<div class="ed-acoes"><button class="btn btn-primary btn-sm" id="bm-fm-importar">📆 Importar fechamento mensal</button></div>`
+    : "";
+
+  return `<section class="bm-secao" id="bm-fechamento-mensal">
+    <h3 class="bm-secao-titulo">📆 Fechamento mensal — ${escapeHtml(comp)} ${pill}</h3>
+    <div class="bm-card">${linha}${acao}</div>
+  </section>`;
+}
+
+function wireFechamentoMensal(box) {
+  box.querySelector("#bm-fm-importar")?.addEventListener("click", () => abrirImportarVisioModal({
+    unidadeNome: state.sessao?.unidade?.nome, mesAtual: bm.mes, anoAtual: bm.ano,
+    onSalvo: carregarConteudo, modo: "mensal",
+  }));
 }
 
 // ---------- HERO ----------
@@ -451,7 +493,7 @@ function grupoHtml(d, grupo) {
     const meta = metaDoIndicador(chave);
     if (chave === "cmv") return cardCmv(d, res, meta);
     if (chave === "ticket_medio" || chave === "rev") return cardRegua(chave, res, meta);
-    return cardGauge(chave, res, meta);
+    return cardGauge(chave, res, meta, d);
   }).join("");
   return `<section class="bm-secao">
     <h3 class="bm-secao-titulo">${grupo.icon} ${grupo.titulo}</h3>
@@ -472,12 +514,12 @@ function dadosGauge(res) {
   return { min, max, marcos };
 }
 
-function cardGauge(chave, res, meta) {
+function cardGauge(chave, res, meta, d) {
   const info = INDICADOR[chave];
   const cor = corIndicador(res, meta);
   if (res.status === "sem_dados" || res.status === "sem_meta") {
     return `<div class="bm-card bm-gauge-card neutro"><div class="bm-card-topo"><span>${info.icon}</span> ${info.label}</div>
-      <p class="bm-vazio-inline">Dados não informados</p>${fonteHtml(chave)}</div>`;
+      <p class="bm-vazio-inline">Dados não informados</p>${fonteHtml(chave, d)}</div>`;
   }
   const g = dadosGauge(res);
   return `<div class="bm-card bm-gauge-card">
@@ -488,7 +530,7 @@ function cardGauge(chave, res, meta) {
       <span>Faixa atual: <b>${res.bonusAtual == null ? "—" : fmtMoeda(res.bonusAtual)}</b></span>
       ${res.proximaFaixa ? `<span>Próxima: <b>${fmtValor(res.proximaFaixa.valorMin ?? res.proximaFaixa.valorMax, info.tipo)}</b> (+${fmtMoeda(res.bonusProximaFaixa)}) · faltam ${fmtValor(Math.abs(res.faltante), info.tipo)}</span>` : `<span>Faixa máxima atingida 🎉</span>`}
     </div>
-    ${fonteHtml(chave)}
+    ${fonteHtml(chave, d)}
   </div>`;
 }
 

@@ -132,6 +132,8 @@ const ROTULOS = {
   "vinculo.removido": "Acesso removido",
   "config.alterada": "Configuração global alterada",
   "migracao.020_reset_acessos": "Migração: acessos zerados",
+  "bonificacao_mensal.fechamento_mensal_alterado": "Fechamento mensal alterado",
+  "bonificacao_mensal.importacao_diaria_gravada": "Importação diária gravada",
 };
 
 /** @param {string} acao */

@@ -2,6 +2,7 @@
 // dos 2 PDFs da Visio (preview + confirmação, mesmo padrão de
 // vendas/vendas.service.js) e avaliação das metas do mês.
 import { supabase } from "../../config/supabase.js";
+import { prepararImportacaoDiaria, registrarImportacaoDiaria, conferirImportacao } from "./bonificacaoMensal.importacao.js";
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
@@ -13,12 +14,22 @@ import {
 } from "./bonificacaoMensal.calc.js";
 import { evaluateBonusMetric, resolverMetaVigente, totalBonificacao } from "./bonificacaoMensal.metas.js";
 import { avaliarElegibilidadeBonificacao, avaliarSuperRestaurante } from "./bonificacaoMensal.elegibilidade.js";
+// Camada de fechamento mensal (arquitetura v3.1). Puro — sem I/O.
+import {
+  montarResultadoCompetencia, montarResultadoFechamentoOficial, validarFechamentoMensal,
+  roteamentoObterMes, fechamentoStatusAoVivo,
+} from "./bonificacaoMensal.fechamento.js";
 
 const TABELA = "bonificacao_lancamentos_diarios";
 const TABELA_IMPORT = "bonificacao_importacoes";
 const TABELA_METAS = "bonificacao_metas";
 const TABELA_FAIXAS = "bonificacao_metas_faixas";
 const TABELA_REV_MENSAL = "bonificacao_rev_mensal";
+// Fechamento Mensal Visio (migrations 074→075). obterMes() NUNCA lê
+// TABELA_FECHAMENTO para decidir o resultado — quem manda é TABELA_COMPETENCIA.status.
+const TABELA_FECHAMENTO = "bonificacao_fechamento_mensal";
+const TABELA_COMPETENCIA = "bonificacao_competencia";
+const TABELA_SNAPSHOT = "bonificacao_competencia_snapshot";
 const BUCKET = "bonificacao-visio";
 
 // Indicadores sem fonte automática (item 76-B): lançamento manual próprio,
@@ -343,6 +354,7 @@ export async function salvarRevMensal({ organizacaoId, unidadeId, usuario, ano, 
   const valorNum = v.numeroOpcionalNulo(valor, "REV");
   if (valorNum == null) throw ApiError.badRequest("Informe o valor de REV do mês.");
   if (valorNum < 0) throw ApiError.badRequest("REV não pode ser negativo.");
+  await exigirCompetenciaEditavel({ unidadeId, ano: anoNum, mes: mesNum, acao: "alterar o REV" });
 
   const anterior = await obterRevMensal({ organizacaoId, unidadeId, ano: anoNum, mes: mesNum });
 
@@ -367,6 +379,60 @@ export async function salvarRevMensal({ organizacaoId, unidadeId, usuario, ano, 
   });
 
   return { valor: numOuNulo(salvo.valor), usuarioNome: salvo.usuario_nome ?? null, atualizadoEm: salvo.atualizado_em };
+}
+
+// ---------------------------------------------------------------------------
+// ESTADO DA COMPETÊNCIA (arquitetura v3.1) — bonificacao_competencia.status é
+// a ÚNICA fonte da verdade de QUAL resultado vale. obterMes() decide por ele:
+//   fechada / legado_sem_fechamento → serve o snapshot congelado
+//   aberta / reaberta / (sem linha) → cálculo AO VIVO (ignora bonificacao_fechamento_mensal)
+//
+// Resiliente à migration 075 ainda não aplicada: se a tabela não existe,
+// obterCompetencia() devolve null e tudo segue no cálculo ao vivo.
+// ---------------------------------------------------------------------------
+
+/** true quando o erro do supabase-js é "tabela não existe" (migration pendente). */
+function tabelaAusente(error, nome) {
+  if (!error) return false;
+  if (error.code === "42P01" || error.code === "PGRST205") return true;
+  const m = String(error.message || "").toLowerCase();
+  return (m.includes(nome) && (m.includes("exist") || m.includes("schema cache")))
+    || (m.includes("could not find the table") && m.includes(nome));
+}
+
+function paraApiCompetencia(row) {
+  if (!row) return null;
+  return {
+    id: row.id, organizacaoId: row.organizacao_id, unidadeId: row.unidade_id,
+    ano: row.ano, mes: row.mes,
+    status: row.status, versaoAtual: row.versao_atual ?? 0, fechamentoId: row.fechamento_id ?? null,
+    fechadaEm: row.fechada_em ?? null, fechadaPorNome: row.fechada_por_nome ?? null,
+    reabertaEm: row.reaberta_em ?? null, reabertaPorNome: row.reaberta_por_nome ?? null, reaberturaMotivo: row.reabertura_motivo ?? null,
+    legadoCapturadoEm: row.legado_capturado_em ?? null,
+  };
+}
+
+/** Lê a competência (bonificacao_competencia) ou null. Null-safe se a 075 ainda não rodou. */
+async function obterCompetencia({ unidadeId, ano, mes }) {
+  const { data, error } = await supabase.from(TABELA_COMPETENCIA).select("*")
+    .eq("unidade_id", unidadeId).eq("ano", ano).eq("mes", mes).maybeSingle();
+  if (error) {
+    if (tabelaAusente(error, TABELA_COMPETENCIA)) return null;
+    throw ApiError.internal(error.message);
+  }
+  return paraApiCompetencia(data);
+}
+
+/** Snapshot vigente (versao_atual) da competência congelada. Null se ausente. */
+async function obterSnapshotVigente(competencia) {
+  if (!competencia || !competencia.versaoAtual) return null;
+  const { data, error } = await supabase.from(TABELA_SNAPSHOT).select("*")
+    .eq("competencia_id", competencia.id).eq("versao", competencia.versaoAtual).maybeSingle();
+  if (error) {
+    if (tabelaAusente(error, TABELA_SNAPSHOT)) return null;
+    throw ApiError.internal(error.message);
+  }
+  return data || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -421,6 +487,7 @@ export async function salvarValorDiaIndicador({ organizacaoId, unidadeId, usuari
   const unidade = await resolverUnidade({ organizacaoId, unidadeId });
   const dataIso = v.dataOpcional(data, "Data");
   if (!dataIso) throw ApiError.badRequest("Informe a data do lançamento.");
+  await exigirCompetenciaEditavel({ unidadeId, dataIso, acao: `lançar ${LABEL_INDICADOR[indicador] || indicador}` });
   const campo = CAMPO_API_INDICADOR_MANUAL[indicador];
   const label = LABEL_INDICADOR[indicador] || indicador;
 
@@ -457,13 +524,94 @@ export async function obterMes({ organizacaoId, unidadeId, ano, mes }) {
   if (!Number.isInteger(anoNum) || !Number.isInteger(mesNum) || mesNum < 1 || mesNum > 12) {
     throw ApiError.badRequest("Informe ano e mês válidos.");
   }
+
+  // ROTEAMENTO por estado da competência (arquitetura v3.1 §4). O que decide
+  // qual resultado vale é bonificacao_competencia.status — NUNCA a existência
+  // de uma linha em bonificacao_fechamento_mensal.
+  const competencia = await obterCompetencia({ unidadeId, ano: anoNum, mes: mesNum });
+  if (roteamentoObterMes(competencia) === "snapshot") {
+    const snap = await obterSnapshotVigente(competencia);
+    if (snap) return montarRespostaCongelada({ competencia, snapshot: snap, unidade, anoNum, mesNum });
+    console.warn(`[bonificacao-mensal] competência ${unidadeId} ${anoNum}-${String(mesNum).padStart(2, "0")} status=${competencia.status} sem snapshot v${competencia.versaoAtual} — usando cálculo ao vivo.`);
+  }
+  return obterMesAoVivo({ unidade, anoNum, mesNum, competencia, organizacaoId, unidadeId });
+}
+
+/**
+ * Competência FECHADA ou LEGADO → serve o SNAPSHOT congelado. Não recalcula
+ * indicadores nem lê lançamento diário para agregação. O calendário (leitura)
+ * segue vindo dos dias reais, só que travado (podeEditarDiario=false).
+ */
+async function montarRespostaCongelada({ competencia, snapshot, unidade, anoNum, mesNum }) {
+  const dias = diasDoMes(anoNum, mesNum);
+  const hojeIso = hojeIsoBrasil();
+  const { data: rows } = await supabase.from(TABELA).select("*")
+    .eq("unidade_id", unidade.id).gte("data", dias[0]).lte("data", dias[dias.length - 1]).order("data");
+  const porData = new Map((rows || []).map((r) => [r.data, paraApiLancamento(r)]));
+  const calendario = dias.map((d) => {
+    const l = porData.get(d) || null;
+    return { data: d, status: statusDia({ lancamento: l, dataIso: d, hojeIso }), lancamento: l };
+  });
+
+  const s = snapshot.snapshot || {};
+  const visio = !!s.valoresOficiais;         // (a) fechamento_visio  (b) legado (obterMes-shaped)
+  const vo = s.valoresOficiais || {};
+  // `percentuais` é o formato vigente; `percentuaisCalculados` fica só como
+  // fallback para snapshots gravados antes da limpeza de forma (nenhum em prod).
+  const pc = vo.percentuais || vo.percentuaisCalculados || {};
+
+  const resumo = {
+    bonificacaoAtual: s.bonificacao?.definitiva ?? s.resumo?.bonificacaoAtual ?? null,
+    bonificacaoBruta: s.bonificacao?.bruta ?? s.resumo?.bonificacaoBruta ?? null,
+    bonificacaoMaxima: s.bonificacao?.maxima ?? s.resumo?.bonificacaoMaxima ?? null,
+    metasAtingidas: s.bonificacao?.metasAtingidas ?? s.resumo?.metasAtingidas ?? 0,
+    metasComRegra: s.bonificacao?.metasComRegra ?? s.resumo?.metasComRegra ?? 0,
+    progressoPct: null,
+  };
+  resumo.progressoPct = resumo.bonificacaoMaxima > 0 ? ((resumo.bonificacaoAtual ?? 0) / resumo.bonificacaoMaxima) * 100 : null;
+
+  return {
+    unidade: { id: unidade.id, nome: unidade.nome },
+    ano: anoNum, mes: mesNum, mesFechado: true,
+    congelado: true,
+    origemResultado: s.origem || (competencia.status === "legado_sem_fechamento" ? "legado_pre_refatoracao" : "fechamento_visio"),
+    fechamentoStatus: competencia.status === "fechada" ? "fechado" : "legado_sem_fechamento",
+    podeEditarDiario: false,
+    versaoSnapshot: snapshot.versao,
+    calendario,
+    resumo,
+    faturamento: {
+      acumulado: visio ? (vo.faturamento ?? null) : (s.faturamento?.acumulado ?? null),
+      projecao: visio ? (vo.faturamento ?? null) : (s.faturamento?.projecao ?? null),
+      mesFechado: true, diasRestantes: 0, ritmoNecessarioProximaFaixa: null,
+    },
+    mix: {
+      bebidas: pc.bebidas ?? s.mix?.bebidas ?? null,
+      adicionais: pc.adicionais ?? s.mix?.adicionais ?? null,
+      diversos: pc.diversos ?? s.mix?.diversos ?? null,
+      somaSanduiches: vo.sanduichesSaladas ?? s.mix?.somaSanduiches ?? null,
+      diasComDados: null,
+    },
+    valoresOficiais: visio ? vo : null,
+    indicadores: s.indicadores || {},
+    revMensal: null,
+    fechamentoMensal: null,
+    elegibilidade: s.elegibilidade || null,
+    superRestaurante: s.superRestaurante || null,
+    diasPendentes: [],
+    indicadoresAtencao: s.indicadoresAtencao || [],
+  };
+}
+
+/**
+ * Competência ABERTA / REABERTA (ou inexistente) → cálculo AO VIVO.
+ * bonificacao_fechamento_mensal NUNCA é lido aqui como fonte de resultado.
+ */
+async function obterMesAoVivo({ unidade, anoNum, mesNum, competencia, organizacaoId, unidadeId }) {
   const hojeIso = hojeIsoBrasil();
   const dias = diasDoMes(anoNum, mesNum);
   const primeiroDia = dias[0], ultimoDia = dias[dias.length - 1];
-
-  const mesAtualIso = hojeIso.slice(0, 7);
-  const consultaIso = `${anoNum}-${String(mesNum).padStart(2, "0")}`;
-  const mesFechado = consultaIso < mesAtualIso;
+  const mesFechado = `${anoNum}-${String(mesNum).padStart(2, "0")}` < hojeIso.slice(0, 7);
 
   const [{ data: rows, error }, metasRaw, revMensal] = await Promise.all([
     supabase.from(TABELA).select("*").eq("unidade_id", unidadeId).gte("data", primeiroDia).lte("data", ultimoDia).order("data"),
@@ -474,60 +622,25 @@ export async function obterMes({ organizacaoId, unidadeId, ano, mes }) {
 
   const lancamentosPorData = new Map((rows || []).map((r) => [r.data, paraApiLancamento(r)]));
   const calendario = dias.map((d) => {
-    const lancamento = lancamentosPorData.get(d) || null;
-    return { data: d, status: statusDia({ lancamento, dataIso: d, hojeIso }), lancamento };
+    const l = lancamentosPorData.get(d) || null;
+    return { data: d, status: statusDia({ lancamento: l, dataIso: d, hojeIso }), lancamento: l };
   });
-
   const lancamentos = [...lancamentosPorData.values()];
+
   const mix = mixMensalPonderado(lancamentos);
   const projecao = projecaoFaturamento({ lancamentos, ano: anoNum, mes: mesNum, hojeIso });
-
   const metasVigentes = metasVigentesPorIndicador(metasRaw, primeiroDia);
+
+  // valor cru de cada indicador (mesma fonte de sempre para o cálculo ao vivo)
   const valorMensal = { mix, lancamentos, revMensal };
-  const indicadores = {};
-  for (const [indicador, calcular] of Object.entries(CAMPOS_INDICADOR)) {
-    const valor = indicador === "faturamento" ? projecao.acumulado : calcular(valorMensal);
-    indicadores[indicador] = { ...evaluateBonusMetric(valor, metasVigentes[indicador]), valorAtual: valor, indicador };
-  }
-  const bonificacao = totalBonificacao(indicadores);
+  const valores = {};
+  for (const [ind, fn] of Object.entries(CAMPOS_INDICADOR)) valores[ind] = fn(valorMensal);
+  valores.faturamento = projecao.acumulado; // projeção acumulada, não a soma bruta
 
-  // ---- ELEGIBILIDADE DA BONIFICAÇÃO — critérios obrigatórios ------------
-  // Nota iFood, REV e Pesquisas NÃO contribuem R$ parcial (suas faixas em
-  // bonificacao_metas_faixas têm bonus=null desde a migration 052) — são um
-  // portão de tudo-ou-nada sobre a soma dos DEMAIS indicadores. O mínimo de
-  // cada um vem da MESMA fonte de sempre (bonificacao_metas), nunca
-  // hardcoded — se a unidade não tem a meta cadastrada, o critério fica de
-  // fora da decisão (ver bonificacaoMensal.elegibilidade.js).
-  const minimoDe = (indicador) => {
-    const f = metasVigentes[indicador]?.faixas?.[0];
-    return f ? (f.valorMin ?? f.valorMax ?? null) : null;
-  };
-  const elegibilidade = avaliarElegibilidadeBonificacao({
-    notaIfood: { valor: indicadores.avaliacao_ifood.valorAtual, minimo: minimoDe("avaliacao_ifood") },
-    rev: { valor: indicadores.rev.valorAtual, minimo: minimoDe("rev") },
-    pesquisas: { valor: indicadores.pesquisas.valorAtual, minimo: minimoDe("pesquisas") },
-    mesFechado,
-  });
-  // A bonificação BRUTA (soma das faixas dos indicadores comerciais/
-  // operacionais) fica preservada pra transparência — "seria R$X, mas..."
-  // (nunca esconder a consequência, mas também nunca confundir "calculado"
-  // com "pago"). O valor PAGÁVEL é que zera integralmente.
-  const bonificacaoBruta = bonificacao.atual;
-  if (elegibilidade.status === "nao_elegivel") bonificacao.atual = 0;
+  // motor compartilhado — o MESMO usado por montarResultadoFechamentoOficial
+  const core = montarResultadoCompetencia({ valores, metasVigentes, mesFechado });
 
-  // ---- SUPER RESTAURANTE — agrupamento "Ifood: Super Restaurante" da ----
-  // planilha (Avaliação + Cancelamentos + Pedidos com Chamado). É SÓ o
-  // agrupamento visual — não é um portão de elegibilidade (isso é o bloco
-  // acima), não tem pontuação própria: apenas contagem de quantos dos 3
-  // estão dentro da própria meta.
-  const superRestaurante = avaliarSuperRestaurante({
-    avaliacaoIfood: { valor: indicadores.avaliacao_ifood.valorAtual, minimo: minimoDe("avaliacao_ifood") },
-    cancelamentos: { valor: indicadores.cancelamentos.valorAtual, minimo: minimoDe("cancelamentos") },
-    pedidosChamado: { valor: indicadores.pedidos_chamado.valorAtual, minimo: minimoDe("pedidos_chamado") },
-  });
-
-  // próxima faixa de faturamento + ritmo necessário (itens 42-43)
-  const fatIndicador = indicadores.faturamento;
+  const fatIndicador = core.indicadores.faturamento;
   const ritmoFaturamento = fatIndicador?.proximaFaixa
     ? ritmoNecessario(
       fatIndicador.proximaFaixa.valorMin != null ? fatIndicador.proximaFaixa.valorMin - (projecao.projecao ?? projecao.acumulado ?? 0) : null,
@@ -536,28 +649,25 @@ export async function obterMes({ organizacaoId, unidadeId, ano, mes }) {
     : null;
 
   const diasPendentes = calendario.filter((d) => d.status === STATUS_DIA_BONIFICACAO.PENDENTE).map((d) => d.data);
-  const indicadoresAtencao = Object.values(indicadores).filter((i) => i.status === "meta_nao_atingida" && i.temBonusDefinido);
 
   return {
     unidade: { id: unidade.id, nome: unidade.nome },
     ano: anoNum, mes: mesNum, mesFechado,
+    congelado: false,
+    origemResultado: "ao_vivo",
+    fechamentoStatus: fechamentoStatusAoVivo(competencia, mesFechado),
+    podeEditarDiario: true,
     calendario,
-    resumo: {
-      bonificacaoAtual: bonificacao.atual,
-      bonificacaoBruta,
-      bonificacaoMaxima: bonificacao.maximo,
-      metasAtingidas: bonificacao.metasAtingidas,
-      metasComRegra: bonificacao.metasComRegra,
-      progressoPct: bonificacao.maximo > 0 ? (bonificacao.atual / bonificacao.maximo) * 100 : null,
-    },
+    resumo: core.resumo,
     faturamento: { ...projecao, ritmoNecessarioProximaFaixa: ritmoFaturamento },
     mix,
-    indicadores,
+    fechamentoMensal: null, // v3.1: fechamento só vira resultado quando a competência está 'fechada' (serve snapshot)
+    indicadores: core.indicadores,
     revMensal,
-    elegibilidade,
-    superRestaurante,
+    elegibilidade: core.elegibilidade,
+    superRestaurante: core.superRestaurante,
     diasPendentes,
-    indicadoresAtencao: indicadoresAtencao.map((i) => i.indicador),
+    indicadoresAtencao: core.indicadoresAtencao,
   };
 }
 
@@ -600,6 +710,7 @@ export async function upsertLancamentoManual({ organizacaoId, unidadeId, usuario
   await resolverUnidade({ organizacaoId, unidadeId });
   const dataIso = v.dataOpcional(dados?.data, "Data do lançamento");
   if (!dataIso) throw ApiError.badRequest("Informe a data do lançamento.");
+  await exigirCompetenciaEditavel({ unidadeId, dataIso, acao: "editar o lançamento diário" });
   const semOperacao = v.booleano(dados?.semOperacao, false);
   if (semOperacao && !v.textoOpcional(dados?.motivoSemOperacao, "Motivo")) {
     throw ApiError.badRequest("Informe o motivo de a unidade não ter operado neste dia.");
@@ -663,46 +774,6 @@ async function uploadOriginal({ buf, unidadeId, data, tipo, hash, nomeArquivo })
   return path;
 }
 
-async function gravarImportacao({ organizacaoId, unidadeId, tipo, data, parsed, storage, nomeArquivo, usuario, permitirReuso = false }) {
-  const { data: row, error } = await supabase.from(TABELA_IMPORT).insert({
-    organizacao_id: organizacaoId, unidade_id: unidadeId, data_lancamento: data, tipo_relatorio: tipo,
-    nome_arquivo: nomeArquivo || null, hash_arquivo: parsed.hash, arquivo_storage: storage,
-    estabelecimento_detectado: parsed.estabelecimento, status: "concluida",
-    usuario_id: usuario?.id || null, usuario_nome: usuario?.nome || null,
-  }).select("id").single();
-  if (!error) return row.id;
-
-  if (String(error.message).toLowerCase().includes("uq_bimp_hash")) {
-    // Mesmo arquivo (mesmo hash) já registrado para esta unidade+relatório.
-    const { data: existente, error: e2 } = await supabase.from(TABELA_IMPORT)
-      .select("id").eq("unidade_id", unidadeId).eq("tipo_relatorio", tipo).eq("hash_arquivo", parsed.hash)
-      .eq("status", "concluida").order("criado_em", { ascending: false }).limit(1).maybeSingle();
-    if (!e2 && existente) {
-      // Numa SUBSTITUIÇÃO do mesmo dia isso é esperado (o usuário reenviou o
-      // mesmo PDF) — reaproveita o registro de importação já existente em vez
-      // de bloquear (item 20).
-      if (permitirReuso) return existente.id;
-
-      // CORREÇÃO — o par (Geral+Loja) é gravado em 2 inserts separados,
-      // seguidos de UM upsert no lançamento diário; se o processo cair entre
-      // essas etapas (rede, erro transitório), o import registrado aqui fica
-      // "órfão": sem NENHUM lançamento em bonificacao_lancamentos_diarios
-      // apontando pra ele. Sem essa checagem, o usuário ficava travado num
-      // loop permanente reimportando o mesmo dia (bug relatado: "a
-      // bonificação do dia 1º pede pra ser preenchida de novo" — o dia nunca
-      // se salvava porque o 2º insert sempre batia neste mesmo hash órfão).
-      // Só bloqueia de verdade quando o registro está de fato vinculado a
-      // ALGUM lançamento (aí sim pode ser reuso indevido do mesmo arquivo em
-      // outro dia — mantém a proteção original do item 20).
-      const coluna = tipo === "geral" ? "importacao_geral_id" : "importacao_loja_id";
-      const { data: vinculo } = await supabase.from(TABELA).select("id").eq(coluna, existente.id).maybeSingle();
-      if (!vinculo) return existente.id;
-    }
-    throw ApiError.badRequest(`Este arquivo (Relatório ${tipo === "geral" ? "Geral" : "Loja"}) já foi importado anteriormente.`);
-  }
-  throw ApiError.badRequest(error.message);
-}
-
 /**
  * @param {{organizacaoId:string, unidadeId:string, usuario:object, payload:{data:string, geral?:object, loja?:object, substituir?:boolean}, confirmar:boolean}} p
  */
@@ -712,6 +783,7 @@ export async function processarImportacaoVisio({ organizacaoId, unidadeId, usuar
   const dataLancamento = v.dataOpcional(payload?.data, "Data do lançamento");
   if (!dataLancamento) throw ApiError.badRequest("Informe a data do lançamento — a Visio não traz uma data diária confiável no relatório.");
   if (!payload?.geral && !payload?.loja) throw ApiError.badRequest("Envie pelo menos um dos dois relatórios (Geral ou Loja).");
+  if (confirmar) await exigirCompetenciaEditavel({ unidadeId, dataIso: dataLancamento, acao: "importar lançamento diário" });
 
   let bufGeral = null, bufLoja = null, parsedGeral = null, parsedLoja = null;
   // Geral = "Relatório de Vendas" (novo layout — Faturamento + Ticket Médio,
@@ -727,7 +799,7 @@ export async function processarImportacaoVisio({ organizacaoId, unidadeId, usuar
   const camposCorrigidosGeral = [], camposCorrigidosLoja = [];
   if (parsedGeral && payload.correcoes?.geral) {
     for (const [campo, valor] of Object.entries(payload.correcoes.geral)) {
-      if (!(campo in parsedGeral) || valor === undefined || valor === "") continue;
+      if (!["faturamento", "ticketMedio", "cuponsValidos", "cuponsVendas"].includes(campo) || valor === undefined || valor === "") continue;
       const num = Number(valor);
       if (!Number.isFinite(num) || num < 0) continue;
       if (num !== parsedGeral[campo]) { parsedGeral[campo] = num; camposCorrigidosGeral.push(campo); }
@@ -735,7 +807,7 @@ export async function processarImportacaoVisio({ organizacaoId, unidadeId, usuar
   }
   if (parsedLoja && payload.correcoes?.loja) {
     for (const [campo, valor] of Object.entries(payload.correcoes.loja)) {
-      if (!(campo in parsedLoja) || valor === undefined || valor === "") continue;
+      if (!["faturamento", "ppd", "sandwichesSalads", "beverages", "additions", "miscellaneous"].includes(campo) || valor === undefined || valor === "") continue;
       const num = Number(valor);
       if (!Number.isFinite(num) || num < 0) continue;
       if (num !== parsedLoja[campo]) { parsedLoja[campo] = num; camposCorrigidosLoja.push(campo); }
@@ -762,8 +834,22 @@ export async function processarImportacaoVisio({ organizacaoId, unidadeId, usuar
   // item 20 — duplicidade por unidade+data. Continua montando a prévia
   // mesmo assim (não retorna cedo): o frontend precisa mostrar VALORES
   // ATUAIS (existente) e NOVOS (preview) lado a lado antes de substituir.
-  const { data: existente } = await supabase.from(TABELA).select("*").eq("unidade_id", unidadeId).eq("data", dataLancamento).maybeSingle();
-  const duplicado = !!existente && !payload.substituir;
+  const { data: existente, error: erroExistente } = await supabase.from(TABELA).select("*").eq("unidade_id", unidadeId).eq("data", dataLancamento).maybeSingle();
+  if (erroExistente) throw ApiError.internal("Não foi possível verificar o lançamento existente.");
+  const planos = {};
+  for (const [tipo, parsed, buf] of [["geral", parsedGeral, bufGeral], ["loja", parsedLoja, bufLoja]]) {
+    const alvo = { organizacaoId, unidadeId, tipo, data: dataLancamento };
+    if (parsed) {
+      planos[tipo] = await prepararImportacaoDiaria(supabase, { alvo, parsed, buf, arquivo: payload[tipo] });
+    } else if (existente?.[`importacao_${tipo}_id`]) {
+      // Um upload parcial não pode perpetuar um vínculo inválido no outro slot.
+      const { data: imp, error } = await supabase.from(TABELA_IMPORT).select("*").eq("id", existente[`importacao_${tipo}_id`]).maybeSingle();
+      if (error) throw ApiError.internal("Não foi possível verificar a importação preservada.");
+      if (!imp) throw ApiError.badRequest("Importação preservada não encontrada.");
+      await conferirImportacao(supabase, imp, alvo);
+    }
+  }
+  const duplicado = !!existente && payload.substituir !== true;
 
   // mix calculado + validação cruzada (item 11)
   let mixCalculado = null, validacaoCruzada = null, avisos = [];
@@ -779,7 +865,7 @@ export async function processarImportacaoVisio({ organizacaoId, unidadeId, usuar
       diversos: validarPercentualCruzado(parsedLoja.percentualDiversosPdf, mixCalculado.diversos),
     };
     for (const [chave, r] of Object.entries(validacaoCruzada)) {
-      if (r.divergente) avisos.push(`Divergência no percentual de ${chave}: a Visio informou um valor e o sistema calculou outro (diferença de ${r.diferenca.toFixed(1)} p.p.). Confira antes de confirmar.`);
+      if (r.divergente) avisos.push(`No Relatório de Produtos, o percentual impresso de ${chave} não corresponde às quantidades do próprio relatório (diferença de ${r.diferenca.toFixed(1)} p.p.). Confira o arquivo antes de confirmar.`);
     }
   }
 
@@ -796,6 +882,7 @@ export async function processarImportacaoVisio({ organizacaoId, unidadeId, usuar
       sanduichesSaladas: parsedLoja.sandwichesSalads, bebidas: parsedLoja.beverages, adicionais: parsedLoja.additions, diversos: parsedLoja.miscellaneous,
       mixCalculado, percentuaisPdf: { bebidas: parsedLoja.percentualBebidasPdf, adicionais: parsedLoja.percentualAdicionaisPdf, diversos: parsedLoja.percentualDiversosPdf },
     },
+    periodos: Object.fromEntries(Object.entries(planos).map(([tipo, plano]) => [tipo, plano.periodo])),
     validacaoCruzada, avisos,
     camposCorrigidos: { geral: camposCorrigidosGeral, loja: camposCorrigidosLoja },
   };
@@ -805,13 +892,17 @@ export async function processarImportacaoVisio({ organizacaoId, unidadeId, usuar
 
   // ---------- PERSISTE ----------
   const [storageGeral, storageLoja] = await Promise.all([
-    parsedGeral ? uploadOriginal({ buf: bufGeral, unidadeId, data: dataLancamento, tipo: "geral", hash: parsedGeral.hash, nomeArquivo: payload.geral.nomeArquivo }) : null,
-    parsedLoja ? uploadOriginal({ buf: bufLoja, unidadeId, data: dataLancamento, tipo: "loja", hash: parsedLoja.hash, nomeArquivo: payload.loja.nomeArquivo }) : null,
+    parsedGeral && !planos.geral.existente ? uploadOriginal({ buf: bufGeral, unidadeId, data: dataLancamento, tipo: "geral", hash: parsedGeral.hash, nomeArquivo: payload.geral.nomeArquivo }) : null,
+    parsedLoja && !planos.loja.existente ? uploadOriginal({ buf: bufLoja, unidadeId, data: dataLancamento, tipo: "loja", hash: parsedLoja.hash, nomeArquivo: payload.loja.nomeArquivo }) : null,
   ]);
 
-  const permitirReuso = !!payload.substituir;
-  const importacaoGeralId = parsedGeral ? await gravarImportacao({ organizacaoId, unidadeId, tipo: "geral", data: dataLancamento, parsed: parsedGeral, storage: storageGeral, nomeArquivo: payload.geral.nomeArquivo, usuario, permitirReuso }) : null;
-  const importacaoLojaId = parsedLoja ? await gravarImportacao({ organizacaoId, unidadeId, tipo: "loja", data: dataLancamento, parsed: parsedLoja, storage: storageLoja, nomeArquivo: payload.loja.nomeArquivo, usuario, permitirReuso }) : null;
+  const registrar = (tipo, parsed, storage) => registrarImportacaoDiaria(supabase, {
+    alvo: { organizacaoId, unidadeId, tipo, data: dataLancamento }, parsed, storage,
+    nomeArquivo: payload[tipo].nomeArquivo, usuario, periodo: planos[tipo].periodo,
+    anteriorId: existente?.[`importacao_${tipo}_id`],
+  });
+  const importacaoGeralId = parsedGeral ? await registrar("geral", parsedGeral, storageGeral) : null;
+  const importacaoLojaId = parsedLoja ? await registrar("loja", parsedLoja, storageLoja) : null;
 
   const camposVisio = {};
   if (parsedGeral) {
@@ -872,6 +963,394 @@ export async function processarImportacaoVisio({ organizacaoId, unidadeId, usuar
 }
 
 // ---------------------------------------------------------------------------
+// FECHAMENTO MENSAL VISIO — PRÉVIA (F3). Recebe os DOIS relatórios mensais
+// (Vendas + Produtos/Loja), parseia, valida (bloqueios × alertas) e monta o
+// RESULTADO OFICIAL canônico da competência via montarResultadoFechamentoOficial
+// — que NÃO chama obterMes(). NÃO persiste nada e NÃO fecha a competência: a
+// gravação + o snapshot congelado entram na F4 (arquitetura v3.1 §7.3).
+// ---------------------------------------------------------------------------
+const MESES_PT_FECHAMENTO = ["", "janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const competenciaLabel = (ano, mes) => `${MESES_PT_FECHAMENTO[mes] || mes}/${ano}`;
+const competenciaPath = (ano, mes) => `${ano}-${String(mes).padStart(2, "0")}`;
+
+function validarCompetencia(ano, mes) {
+  const anoNum = Number(ano), mesNum = Number(mes);
+  if (!Number.isInteger(anoNum) || !Number.isInteger(mesNum) || mesNum < 1 || mesNum > 12 || anoNum < 2000 || anoNum > 2100) {
+    throw ApiError.badRequest("Informe ano e mês válidos para o fechamento mensal.");
+  }
+  return { anoNum, mesNum };
+}
+
+/** Soma das colunas Loja dos lançamentos diários da competência — só para os cross-checks (alertas). */
+function agregarSomaDiaria(rows) {
+  const acc = { sanduiches: 0, bebidas: 0, adicionais: 0, diversos: 0, faturamentoLoja: 0, dias: 0 };
+  for (const r of rows || []) {
+    if (r.qtd_sanduiches_loja == null && r.faturamento_loja == null) continue;
+    acc.sanduiches += Number(r.qtd_sanduiches_loja ?? 0);
+    acc.bebidas += Number(r.qtd_bebidas_loja ?? 0);
+    acc.adicionais += Number(r.qtd_adicionais_loja ?? 0);
+    acc.diversos += Number(r.qtd_diversos_loja ?? 0);
+    acc.faturamentoLoja += Number(r.faturamento_loja ?? 0);
+    acc.dias++;
+  }
+  return acc.dias ? acc : null;
+}
+
+/** Indicadores manuais mensais (mesmas fórmulas de sempre — nada migrou de regra nesta fase). */
+function manuaisMensais(lancamentos, revMensal) {
+  return {
+    cmv: mediaDiaria(lancamentos.map((l) => l.cmvPct)),
+    avaliacaoIfood: mediaDiaria(lancamentos.map((l) => l.avaliacaoIfood)),
+    cancelamentos: mediaDiaria(lancamentos.map((l) => l.cancelamentosPct)),
+    pedidosChamado: mediaDiaria(lancamentos.map((l) => l.pedidosChamadoPct)),
+    pesquisas: somaValida(lancamentos.map((l) => l.pesquisasQtd)),
+    rev: revMensal?.valor ?? null,
+  };
+}
+
+/** Aplica correções manuais da prévia (item 19) sobre o objeto do parser — nunca silencioso. */
+function aplicarCorrecoes(parsed, correcoes) {
+  const campos = [];
+  if (!correcoes) return campos;
+  for (const [campo, valor] of Object.entries(correcoes)) {
+    if (!(campo in parsed) || valor === undefined || valor === "" || valor === null) continue;
+    const num = Number(valor);
+    if (!Number.isFinite(num) || num < 0) continue;
+    if (num !== parsed[campo]) { parsed[campo] = num; campos.push(campo); }
+  }
+  return campos;
+}
+
+/** Normaliza o retorno do parser de Produtos para o formato canônico esperado por montarResultadoFechamentoOficial. */
+function produtosParaCanonico(p) {
+  return {
+    qtdSanduiches: p.sandwichesSalads, qtdBebidas: p.beverages, qtdAdicionais: p.additions, qtdDiversos: p.miscellaneous,
+    ppd: p.ppd ?? null, torque: p.torque ?? null, perdas: p.perdas ?? null,
+    fatSanduiches: p.fatSanduichesSaladas ?? null, pctFatSanduiches: p.pctFatSanduichesSaladas ?? null,
+    totalItens: p.totalItens ?? null, produtosFuncionais: p.produtosFuncionais ?? null,
+    faturamentoLoja: p.faturamento ?? null, estabelecimento: p.estabelecimento ?? null,
+    percentualBebidasPdf: p.percentualBebidasPdf ?? null,
+    percentualAdicionaisPdf: p.percentualAdicionaisPdf ?? null,
+    percentualDiversosPdf: p.percentualDiversosPdf ?? null,
+    hash: p.hash, origem: "visio",
+  };
+}
+
+/**
+ * PRÉVIA do fechamento mensal. Não persiste. `confirmar: true` é recusado
+ * nesta fase (a gravação + snapshot congelado entram na F4).
+ * @param {{organizacaoId:string, unidadeId:string, usuario:object,
+ *   payload:{ano:unknown, mes:unknown, vendas?:object, produtos?:object,
+ *            produtosCanalConfirmado?:boolean, periodoConfirmadoUsuario?:boolean, correcoes?:object},
+ *   confirmar:boolean}} p
+ */
+export async function processarImportacaoFechamentoMensal({ organizacaoId, unidadeId, usuario, payload, confirmar = false }) {
+  const unidade = await resolverUnidade({ organizacaoId, unidadeId });
+  const { anoNum, mesNum } = validarCompetencia(payload?.ano, payload?.mes);
+
+  // 1. os DOIS PDFs são obrigatórios
+  if (!payload?.vendas && !payload?.produtos) throw ApiError.badRequest("Envie os dois relatórios mensais: Relatório de Vendas e Relatório de Produtos.");
+  if (!payload?.vendas) throw ApiError.badRequest("Falta o Relatório de Vendas mensal.");
+  if (!payload?.produtos) throw ApiError.badRequest("Falta o Relatório de Produtos mensal.");
+
+  const bufVendas = decodificarPdfVisio(payload.vendas, "de Vendas");
+  const bufProdutos = decodificarPdfVisio(payload.produtos, "de Produtos");
+
+  // 2. parse + validação de TIPO (o parser recusa slot trocado — F2)
+  const vendas = await parseVisioSalesReport(bufVendas, { rotulo: "de Vendas" });
+  const produtos = await parseVisioProductReport(bufProdutos, { rotulo: "de Produtos" });
+
+  // correções manuais da prévia
+  const camposCorrigidosVendas = aplicarCorrecoes(vendas, payload.correcoes?.vendas);
+  const camposCorrigidosProdutos = aplicarCorrecoes(produtos, payload.correcoes?.produtos);
+
+  const produtosCanon = produtosParaCanonico(produtos);
+  const vendasCanon = { ...vendas, origem: "visio" };
+
+  // 3. soma diária da competência (cross-checks — alertas)
+  const dias = diasDoMes(anoNum, mesNum);
+  const [{ data: rowsMes }, competenciaExistente, metasRaw] = await Promise.all([
+    supabase.from(TABELA).select("*").eq("unidade_id", unidadeId).gte("data", dias[0]).lte("data", dias[dias.length - 1]).order("data"),
+    obterCompetencia({ unidadeId, ano: anoNum, mes: mesNum }),
+    carregarMetas({ unidadeId }),
+  ]);
+  const lancamentos = (rowsMes || []).map(paraApiLancamento);
+  const somaDiaria = agregarSomaDiaria(rowsMes);
+  const revMensal = await obterRevMensal({ organizacaoId, unidadeId, ano: anoNum, mes: mesNum });
+
+  // 4. BLOQUEIOS × ALERTAS (função pura)
+  const { bloqueios, alertas, crossChecks } = validarFechamentoMensal({
+    vendas: vendasCanon, produtos: produtosCanon, unidadeNome: unidade.nome,
+    somaDiaria, competenciaExistente,
+    produtosCanalConfirmado: !!payload.produtosCanalConfirmado,
+    periodoConfirmadoUsuario: !!payload.periodoConfirmadoUsuario,
+  });
+
+  // 5. RESULTADO OFICIAL canônico — função PURA, NÃO chama obterMes()
+  const metasVigentes = metasVigentesPorIndicador(metasRaw, dias[0]);
+  const resultadoOficial = montarResultadoFechamentoOficial({
+    vendas: vendasCanon,
+    produtos: produtosCanon,
+    manuais: manuaisMensais(lancamentos, revMensal),
+    metasVigentes,
+    contexto: {
+      unidade: { id: unidade.id, nome: unidade.nome, organizacaoId },
+      ano: anoNum, mes: mesNum,
+      canalConfirmado: !!payload.produtosCanalConfirmado,
+      periodoConfirmado: !!payload.periodoConfirmadoUsuario,
+      codigoVersao: process.env.RENDER_GIT_COMMIT || null,
+      confirmadoPor: null, // preenchido só na confirmação (F4)
+      avisosImportacao: alertas.map((a) => a.msg),
+      crossChecks,
+    },
+  });
+
+  const preview = {
+    competencia: { ano: anoNum, mes: mesNum, label: competenciaLabel(anoNum, mesNum) },
+    unidade: { id: unidade.id, nome: unidade.nome },
+    vendas: {
+      faturamento: vendas.faturamento, ticketMedio: vendas.ticketMedio,
+      quantidadeVendas: vendas.cuponsVendas ?? null, cuponsValidos: vendas.cuponsValidos ?? null,
+      estabelecimento: vendas.estabelecimento, metodosPagamento: vendas.metodosPagamento ?? [],
+    },
+    produtos: {
+      sanduichesSaladas: produtosCanon.qtdSanduiches, bebidas: produtosCanon.qtdBebidas,
+      adicionais: produtosCanon.qtdAdicionais, diversos: produtosCanon.qtdDiversos,
+      ppd: produtosCanon.ppd, torque: produtosCanon.torque, perdas: produtosCanon.perdas,
+      fatSanduiches: produtosCanon.fatSanduiches, pctFatSanduiches: produtosCanon.pctFatSanduiches,
+      totalItens: produtosCanon.totalItens, faturamentoLoja: produtosCanon.faturamentoLoja,
+      estabelecimento: produtosCanon.estabelecimento,
+      // único percentual do mix — a regra da Bonificação
+      percentuais: resultadoOficial.valoresOficiais.percentuais,
+    },
+    camposCorrigidos: { vendas: camposCorrigidosVendas, produtos: camposCorrigidosProdutos },
+    // `conferencia`: TÉCNICO, só para revisar a importação. Não é resultado da
+    // Bonificação nem uma segunda versão dos dados da competência.
+    validacao: {
+      bloqueios,
+      alertas,
+      conferencia: {
+        crossChecks,
+        percentuais: {
+          regra: resultadoOficial.valoresOficiais.percentuais,
+          impressosNoPdf: resultadoOficial.metadados.conferenciaImportacao.percentuaisImpressosNoPdf,
+          divergenciaPP: resultadoOficial.metadados.conferenciaImportacao.divergenciaPercentualPP,
+        },
+        registradoNaCompetencia: somaDiaria ? {
+          sanduichesSaladas: somaDiaria.sanduiches, bebidas: somaDiaria.bebidas,
+          adicionais: somaDiaria.adicionais, diversos: somaDiaria.diversos,
+          faturamentoLoja: somaDiaria.faturamentoLoja, dias: somaDiaria.dias,
+        } : null,
+      },
+    },
+    resultadoOficial,
+    prontoParaConfirmar: bloqueios.length === 0,
+    persistido: false,
+  };
+
+  if (!confirmar) return preview;
+
+  // ----- CONFIRMAÇÃO (F4) — congela a competência ATOMICAMENTE (RPC) -----
+  if (bloqueios.length) {
+    throw ApiError.badRequest(`Não dá para confirmar o fechamento: ${bloqueios.join("; ")}`);
+  }
+
+  const pFechamento = {
+    produtos_qtd_sanduiches: produtosCanon.qtdSanduiches,
+    produtos_qtd_bebidas: produtosCanon.qtdBebidas,
+    produtos_qtd_adicionais: produtosCanon.qtdAdicionais,
+    produtos_qtd_diversos: produtosCanon.qtdDiversos,
+    produtos_pct_bebidas_pdf: produtosCanon.percentualBebidasPdf,
+    produtos_pct_adicionais_pdf: produtosCanon.percentualAdicionaisPdf,
+    produtos_pct_diversos_pdf: produtosCanon.percentualDiversosPdf,
+    produtos_faturamento_loja: produtosCanon.faturamentoLoja,
+    produtos_ppd: produtosCanon.ppd,
+    produtos_torque: produtosCanon.torque,
+    produtos_perdas: produtosCanon.perdas,
+    produtos_fat_sanduiches: produtosCanon.fatSanduiches,
+    produtos_pct_fat_sanduiches: produtosCanon.pctFatSanduiches,
+    produtos_total_itens: produtosCanon.totalItens,
+    produtos_estabelecimento: produtosCanon.estabelecimento,
+    produtos_hash_arquivo: produtosCanon.hash ?? null,
+    produtos_arquivo_storage: null, // upload dos PDFs entra na F7
+    produtos_origem: camposCorrigidosProdutos.length ? "misto" : "visio",
+    vendas_faturamento: vendasCanon.faturamento,
+    vendas_ticket_medio: vendasCanon.ticketMedio,
+    vendas_cupons_validos: vendasCanon.cuponsValidos ?? null,
+    vendas_cupons_vendas: vendasCanon.cuponsVendas ?? null,
+    vendas_metodos_pagamento: vendasCanon.metodosPagamento ?? [],
+    vendas_estabelecimento: vendasCanon.estabelecimento ?? null,
+    vendas_hash_arquivo: vendasCanon.hash ?? null,
+    vendas_arquivo_storage: null,
+    vendas_origem: camposCorrigidosVendas.length ? "misto" : "visio",
+  };
+
+  const { data: rpcData, error: rpcErro } = await supabase.rpc("bonificacao_congelar_competencia", {
+    p_organizacao_id: organizacaoId,
+    p_unidade_id: unidadeId,
+    p_ano: anoNum,
+    p_mes: mesNum,
+    p_origem: "fechamento_visio",
+    p_snapshot: resultadoOficial,
+    p_fechamento: pFechamento,
+    p_motivo: null,
+    p_por_id: usuario?.id ?? null,
+    p_por_nome: usuario?.nome ?? null,
+  });
+  if (rpcErro) {
+    if (funcaoAusente(rpcErro) || tabelaAusente(rpcErro, TABELA_COMPETENCIA)) {
+      throw ApiError.internal("O fechamento mensal ainda não está disponível neste ambiente (migration 075 não aplicada).");
+    }
+    if (/ABORTADO/i.test(rpcErro.message || "")) throw ApiError.badRequest(rpcErro.message);
+    throw ApiError.internal(rpcErro.message);
+  }
+
+  await auditar({
+    atorId: usuario?.id ?? null, atorEmail: usuario?.email ?? null, atorTipo: "usuario",
+    acao: ACOES.BONIFICACAO_FECHAMENTO_MENSAL_ALTERADO,
+    entidade: "bonificacao_competencia", entidadeId: rpcData?.competencia_id ?? null, organizacaoId,
+    detalhes: {
+      unidadeId, unidadeNome: unidade.nome, competencia: competenciaPath(anoNum, mesNum),
+      versao: rpcData?.versao ?? null, status: rpcData?.status ?? null,
+      alertas: alertas.map((a) => a.msg),
+      resumo: `Fechamento mensal de ${competenciaLabel(anoNum, mesNum)} confirmado (versão ${rpcData?.versao ?? "?"}) — competência ${rpcData?.status ?? "fechada"}.`,
+    },
+  });
+
+  return {
+    ...preview,
+    persistido: true,
+    prontoParaConfirmar: false,
+    competencia: {
+      ...preview.competencia,
+      id: rpcData?.competencia_id ?? null,
+      status: rpcData?.status ?? "fechada",
+      versao: rpcData?.versao ?? null,
+    },
+  };
+}
+
+/** true quando o erro do supabase-js é "função não existe" (RPC da F4 sem a migration 075). */
+function funcaoAusente(error) {
+  if (!error) return false;
+  if (error.code === "42883" || error.code === "PGRST202") return true;
+  const m = String(error.message || "").toLowerCase();
+  return m.includes("function") && (m.includes("does not exist") || m.includes("não existe") || m.includes("could not find"));
+}
+
+// ---------------------------------------------------------------------------
+// REABERTURA (F4) — volta uma competência FECHADA para cálculo ao vivo.
+// Nada é apagado: o snapshot da versão vigente continua no histórico.
+// ---------------------------------------------------------------------------
+export async function reabrirCompetencia({ organizacaoId, unidadeId, usuario, ano, mes, motivo }) {
+  const unidade = await resolverUnidade({ organizacaoId, unidadeId });
+  const { anoNum, mesNum } = validarCompetencia(ano, mes);
+  const motivoLimpo = String(motivo ?? "").trim();
+  if (motivoLimpo.length < 3) throw ApiError.badRequest("Informe o motivo da reabertura (mínimo 3 caracteres).");
+
+  const { data, error } = await supabase.rpc("bonificacao_reabrir_competencia", {
+    p_unidade_id: unidadeId, p_ano: anoNum, p_mes: mesNum,
+    p_motivo: motivoLimpo, p_por_id: usuario?.id ?? null, p_por_nome: usuario?.nome ?? null,
+  });
+  if (error) {
+    if (funcaoAusente(error)) throw ApiError.internal("O fechamento mensal ainda não está disponível neste ambiente (migration 075 não aplicada).");
+    if (/não existe|no_data_found/i.test(error.message || "")) throw ApiError.notFound(`Não existe fechamento para ${competenciaLabel(anoNum, mesNum)}.`);
+    if (/não está fechada|restrict/i.test(error.message || "")) throw ApiError.badRequest(error.message);
+    throw ApiError.internal(error.message);
+  }
+
+  await auditar({
+    atorId: usuario?.id ?? null, atorEmail: usuario?.email ?? null, atorTipo: "usuario",
+    acao: ACOES.BONIFICACAO_FECHAMENTO_MENSAL_ALTERADO,
+    entidade: "bonificacao_competencia", entidadeId: data?.competencia_id ?? null, organizacaoId,
+    detalhes: {
+      unidadeId, unidadeNome: unidade.nome, competencia: competenciaPath(anoNum, mesNum),
+      motivo: motivoLimpo,
+      resumo: `Fechamento mensal de ${competenciaLabel(anoNum, mesNum)} REABERTO — volta ao cálculo ao vivo até o próximo fechamento. Motivo: ${motivoLimpo}`,
+    },
+  });
+  return { competencia: paraApiCompetencia({ ...data, unidade_id: unidadeId, organizacao_id: organizacaoId, ano: anoNum, mes: mesNum }), reaberta: true };
+}
+
+// ---------------------------------------------------------------------------
+// CAPTURA DE LEGADO (F4 — mecanismo; o rollout em massa é a F8).
+// Congela o resultado ATUAL (obterMesAoVivo) de uma competência passada como
+// snapshot `legado_pre_refatoracao`. Não exige reimportação; a partir daí a
+// competência não recalcula mais.
+// ---------------------------------------------------------------------------
+export async function capturarLegado({ organizacaoId, unidadeId, usuario, ano, mes, motivo }) {
+  const unidade = await resolverUnidade({ organizacaoId, unidadeId });
+  const { anoNum, mesNum } = validarCompetencia(ano, mes);
+
+  const competencia = await obterCompetencia({ unidadeId, ano: anoNum, mes: mesNum });
+  if (competencia && competencia.status !== "aberta") {
+    throw ApiError.badRequest(`A competência ${competenciaLabel(anoNum, mesNum)} já tem estado "${competencia.status}" — nada a capturar.`);
+  }
+
+  // resultado ao vivo, hoje — NÃO passa a fonte oficial da Visio; é histórico.
+  const aoVivo = await obterMesAoVivo({ unidade, anoNum, mesNum, competencia, organizacaoId, unidadeId });
+  const snapshot = {
+    escopoBonificacao: "unidade",
+    unidade: { id: unidade.id, nome: unidade.nome, organizacaoId },
+    competencia: { ano: anoNum, mes: mesNum },
+    origem: "legado_pre_refatoracao",
+    geradoEm: new Date().toISOString(),
+    indicadores: aoVivo.indicadores,
+    resumo: aoVivo.resumo,
+    faturamento: aoVivo.faturamento,
+    mix: aoVivo.mix,
+    elegibilidade: aoVivo.elegibilidade,
+    superRestaurante: aoVivo.superRestaurante,
+    indicadoresAtencao: aoVivo.indicadoresAtencao,
+    metadados: { capturadoPor: usuario?.nome ?? null, motivo: motivo ?? "captura de legado pré-refatoração" },
+  };
+
+  const { data, error } = await supabase.rpc("bonificacao_congelar_competencia", {
+    p_organizacao_id: organizacaoId, p_unidade_id: unidadeId, p_ano: anoNum, p_mes: mesNum,
+    p_origem: "legado_pre_refatoracao", p_snapshot: snapshot, p_fechamento: null,
+    p_motivo: motivo ?? "captura de legado", p_por_id: usuario?.id ?? null, p_por_nome: usuario?.nome ?? null,
+  });
+  if (error) {
+    if (funcaoAusente(error)) throw ApiError.internal("O fechamento mensal ainda não está disponível neste ambiente (migration 075 não aplicada).");
+    if (/ABORTADO/i.test(error.message || "")) throw ApiError.badRequest(error.message);
+    throw ApiError.internal(error.message);
+  }
+
+  await auditar({
+    atorId: usuario?.id ?? null, atorEmail: usuario?.email ?? null, atorTipo: "usuario",
+    acao: ACOES.BONIFICACAO_FECHAMENTO_MENSAL_ALTERADO,
+    entidade: "bonificacao_competencia", entidadeId: data?.competencia_id ?? null, organizacaoId,
+    detalhes: {
+      unidadeId, unidadeNome: unidade.nome, competencia: competenciaPath(anoNum, mesNum),
+      resumo: `Competência ${competenciaLabel(anoNum, mesNum)} congelada como HISTÓRICO LEGADO (não oficial Visio).`,
+    },
+  });
+  return { competencia: competenciaPath(anoNum, mesNum), status: "legado_sem_fechamento", versao: data?.versao ?? 1 };
+}
+
+/**
+ * Guard de edição: uma competência FECHADA ou LEGADO não aceita mais alteração
+ * de lançamento diário / indicador manual / REV. Chame com a data ou (ano,mes).
+ * Lança ApiError.conflict se travada; no-op se aberta/reaberta/inexistente ou
+ * se a tabela de competência ainda não existe (migration 075 pendente).
+ */
+async function exigirCompetenciaEditavel({ unidadeId, dataIso, ano, mes, acao = "editar" }) {
+  let anoNum = Number(ano), mesNum = Number(mes);
+  if (dataIso) { anoNum = Number(dataIso.slice(0, 4)); mesNum = Number(dataIso.slice(5, 7)); }
+  if (!Number.isInteger(anoNum) || !Number.isInteger(mesNum)) return;
+  const competencia = await obterCompetencia({ unidadeId, ano: anoNum, mes: mesNum });
+  if (!competencia) return;
+  // Mesma autoridade do obterMes: 'snapshot' ⇒ resultado congelado ⇒ diário travado.
+  if (roteamentoObterMes(competencia) === "snapshot") {
+    const rotulo = competencia.status === "fechada" ? "está fechada" : "é histórico legado congelado";
+    throw new ApiError(409,
+      `A competência ${String(mesNum).padStart(2, "0")}/${anoNum} ${rotulo} — não é possível ${acao}. `
+      + (competencia.status === "fechada" ? "Reabra o fechamento mensal para voltar a editar." : ""),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // HISTÓRICO DE IMPORTAÇÕES E ARQUIVO ORIGINAL (item 47)
 // ---------------------------------------------------------------------------
 export async function listarImportacoes({ organizacaoId, unidadeId }) {
@@ -909,6 +1388,7 @@ export async function excluirLancamento({ organizacaoId, unidadeId, usuario, dat
   const unidade = await resolverUnidade({ organizacaoId, unidadeId });
   const data = v.dataOpcional(dataRaw, "Data do lançamento");
   if (!data) throw ApiError.badRequest("Informe a data do lançamento a excluir.");
+  await exigirCompetenciaEditavel({ unidadeId, dataIso: data, acao: "excluir o lançamento diário" });
   const motivo = v.texto(motivoRaw, "Motivo da exclusão", { min: 3, max: 500 });
 
   const { data: linha, error } = await supabase.from(TABELA).select("*")
@@ -962,13 +1442,18 @@ export async function listarHistoricoMeses({ organizacaoId, unidadeId, ano }) {
       ano: anoNum, mes, mesFechado: r.mesFechado,
       bonificacaoAtual: r.resumo.bonificacaoAtual, bonificacaoBruta: r.resumo.bonificacaoBruta, bonificacaoMaxima: r.resumo.bonificacaoMaxima,
       metasAtingidas: r.resumo.metasAtingidas, metasComRegra: r.resumo.metasComRegra,
-      faturamentoAcumulado: r.faturamento.acumulado,
+      faturamentoAcumulado: r.faturamento?.acumulado ?? null,
+      // Estado da competência: 'aberto' | 'aguardando_fechamento' | 'fechado' | 'reaberto' | 'legado_sem_fechamento'.
+      fechamentoStatus: r.fechamentoStatus ?? null,
+      origemResultado: r.origemResultado ?? null,
+      congelado: !!r.congelado,
+      bebidas: r.indicadores?.bebidas?.valorAtual ?? null, adicionais: r.indicadores?.adicionais?.valorAtual ?? null, diversos: r.indicadores?.diversos?.valorAtual ?? null,
       // Elegibilidade da bonificação mensal (Nota iFood + REV + Pesquisas).
-      notaIfood: r.indicadores.avaliacao_ifood.valorAtual, rev: r.revMensal?.valor ?? null, pesquisas: r.indicadores.pesquisas.valorAtual,
-      elegibilidade: r.elegibilidade.status,
+      notaIfood: r.indicadores?.avaliacao_ifood?.valorAtual ?? null, rev: r.revMensal?.valor ?? r.indicadores?.rev?.valorAtual ?? null, pesquisas: r.indicadores?.pesquisas?.valorAtual ?? null,
+      elegibilidade: r.elegibilidade?.status ?? null,
       // Super Restaurante = Avaliação + Cancelamentos + Pedidos com Chamado.
-      cancelamentos: r.indicadores.cancelamentos.valorAtual, pedidosChamado: r.indicadores.pedidos_chamado.valorAtual,
-      superRestauranteDentroDaMeta: r.superRestaurante.dentroDaMeta, superRestauranteTotalComMeta: r.superRestaurante.totalComMeta,
+      cancelamentos: r.indicadores?.cancelamentos?.valorAtual ?? null, pedidosChamado: r.indicadores?.pedidos_chamado?.valorAtual ?? null,
+      superRestauranteDentroDaMeta: r.superRestaurante?.dentroDaMeta ?? null, superRestauranteTotalComMeta: r.superRestaurante?.totalComMeta ?? null,
     });
   }
   return meses.reverse();

@@ -8,7 +8,7 @@
     "dev": "node --watch --env-file=.env src/server.js",
     "dev:teste": "node --watch --env-file=.env.test-integracao src/server.js",
     "start": "node src/server.js",
-    "test": "node --env-file-if-exists=.env --test test/",
+    "test": "node --experimental-vm-modules --env-file-if-exists=.env --test test/",
     "test:isolation": "node --env-file-if-exists=.env.test --test test/isolamento-tenant.test.js",
     "test:isolation:mb": "node --env-file-if-exists=.env.test --test test/isolamento-martinbrower.test.js",
     "test:isolation:all": "node --env-file-if-exists=.env.test --test test/isolamento-tenant.test.js test/isolamento-martinbrower.test.js",
@@ -18,7 +18,7 @@
     "audit:technical-sheets": "node --env-file=.env scripts/auditar-fichas.mjs",
     "diagnosticar:chaves": "node --env-file-if-exists=.env.test scripts/diagnosticar-chaves.js",
     "validar:fase-p0": "node --env-file-if-exists=.env scripts/validar-fase-p0.mjs",
-    "test:integracao": "node --env-file=.env.test-integracao --test test/bonificacao-mensal-service.test.js test/bonificacao-mensal-rev-mensal.test.js test/bonificacao-mensal-metas-crud.test.js test/bonificacao-mensal-indicadores.test.js test/parser-food-delivery-paginacao.test.js test/agente-conversas-isolamento.test.js",
+    "test:integracao": "node --env-file=.env.test-integracao --test test/bonificacao-mensal-service.test.js test/bonificacao-mensal-rev-mensal.test.js test/bonificacao-mensal-fechamento-mensal.test.js test/bonificacao-mensal-metas-crud.test.js test/bonificacao-mensal-indicadores.test.js test/parser-food-delivery-paginacao.test.js test/agente-conversas-isolamento.test.js",
     "virada:superadmin": "node --env-file=.env scripts/virada-superadmin.js",
     "modelo:padrao": "node --env-file=.env scripts/criar-modelo-padrao.js"
   },

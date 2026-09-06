@@ -3,8 +3,13 @@
 //
 // Mesmo espírito de vendas/sw-parser.js: o backend é quem interpreta o PDF,
 // nunca o frontend — importação manual e futura automação usam a mesma
-// lógica. Reaproveita daquele módulo o que é genérico (matriz de texto,
-// parseBR, sha256, decodificação do base64); NADA em vendas/ foi alterado.
+// lógica. Reaproveita daquele módulo só o que é genérico (matriz de texto,
+// sha256, decodificação do base64); NADA em vendas/ foi alterado. A
+// normalização numérica pt-BR (parseNumeroBR/parseQuantidadeBR/parseMoedaBR,
+// abaixo) é PRÓPRIA deste parser — sw-parser.js#parseBR usa parseFloat e
+// quebra "3.460" -> 3.46 (separador de milhar tratado como decimal), o que
+// não aparece nos relatórios DIÁRIOS (quantidades < 1000) mas quebra o
+// relatório MENSAL. Não dá pra corrigir lá sem mexer no módulo Vendas.
 //
 // O parser é agnóstico a "Geral" ou "Loja": os dois PDFs têm exatamente a
 // mesma estrutura (só mudam os filtros aplicados na Visio antes de
@@ -14,7 +19,7 @@
 // unidade) acontece na camada de serviço.
 import { ApiError } from "../../shared/ApiError.js";
 import { emProducao } from "../../config/seguranca.js";
-import { sha256, norm, parseBR, textoParaMatriz, decodificarArquivo } from "../vendas/sw-parser.js";
+import { sha256, norm, textoParaMatriz, decodificarArquivo } from "../vendas/sw-parser.js";
 
 // ---------------------------------------------------------------------
 // LOG DE DESENVOLVIMENTO
@@ -57,22 +62,123 @@ async function matrizDePdf(buf) {
   return matriz;
 }
 
+// ---------------------------------------------------------------------
+// NORMALIZAÇÃO NUMÉRICA pt-BR — FONTE ÚNICA para este parser.
+//
+// Nos relatórios da Visio (pt-BR) o "." é SEMPRE separador de MILHAR e a ","
+// é SEMPRE o separador decimal — nunca o contrário. `parseFloat("3.460")`
+// devolve 3.46 (trata "." como decimal e joga fora o "0" final): ERRADO
+// para estes dados. Bug real relatado (relatório MENSAL, quantidades na casa
+// dos milhares): "3.460" virava 3.46 na base e "1.412" chegava como 1.412
+// num campo `integer` do Postgres ("invalid input syntax for type integer").
+// Nos relatórios DIÁRIOS nunca apareceu porque as quantidades do dia são < 1000.
+//
+//   parseNumeroBR("3.460")        -> 3460
+//   parseNumeroBR("R$ 109.613,74") -> 109613.74
+//   parseNumeroBR("180,5")        -> 180.5
+//   parseQuantidadeBR("1.412")    -> 1412   (inteiro — quantidade de itens)
+//   parseQuantidadeBR("3.460,5")  -> null   (quantidade não é fracionária)
+//
+// `null` = "não parece número" — NUNCA se chuta 0 (item 22 do módulo).
+// ---------------------------------------------------------------------
+const NUM_BR_RE = /^-?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d+)?$/;
+
+/** Número pt-BR (aceita R$/$ e separador de milhar). "." = milhar, "," = decimal. → Number|null. */
+export function parseNumeroBR(v) {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const s = String(v ?? "").replace(/[R$\s  ]/gi, "").trim();
+  if (s === "" || !NUM_BR_RE.test(s)) return null;
+  const n = Number(s.replace(/\./g, "").replace(",", "."));
+  return Number.isFinite(n) ? n : null;
+}
+/** Igual a parseNumeroBR, mas o resultado TEM que ser inteiro NÃO-negativo (contagem de itens). "1.412" → 1412; "3.460,5" / "-5" → null. */
+export function parseQuantidadeBR(v) {
+  const n = parseNumeroBR(v);
+  return n != null && Number.isInteger(n) && n >= 0 ? n : null;
+}
+/** Valor monetário pt-BR: "R$ 109.613,74" → 109613.74. Mesma regra de parseNumeroBR (que já tolera R$). */
+export const parseMoedaBR = parseNumeroBR;
+/** Percentual pt-BR: "68,0%" → 68 ; "42,4%" → 42.4. Tira o "%" e cai no número decimal. */
+export function parsePercentualBR(v) {
+  return parseNumeroBR(String(v ?? "").replace(/%/g, ""));
+}
+
+// ---------------------------------------------------------------------
+// REGRA ÚNICA DE NORMALIZAÇÃO, POR TIPO DE CAMPO
+//   quantidade      → parseQuantidadeBR  (inteiro ≥ 0; fracionário/lixo → null)
+//   moeda           → parseMoedaBR       ("R$ 1.234,56" → 1234.56)
+//   percentual      → parsePercentualBR  ("42,4%" → 42.4)
+//   número decimal  → parseNumeroBR      ("180,5" → 180.5 ; "2.089" → 2089)
+// "." é SEMPRE separador de milhar; "," é SEMPRE o decimal. Nunca parseFloat.
+// ---------------------------------------------------------------------
+
 // ---------- reconhecimento de células ----------
 const MONEY_RE = /^(?:r\$|\$)\s?-?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?$/i;
-const INT_RE = /^\d+$/;
+// Inteiro "puro" para DETECÇÃO de layout — aceita separador de milhar
+// ("1.234", relatório MENSAL) E dígitos corridos ("57", "1234"). Rejeita
+// decimal ("1,5", "1.23") — isso é outro tipo de célula.
+const INT_RE = /^\d{1,3}(?:\.\d{3})*$|^\d+$/;
 // PPD ("Torque por estabelecimento") NÃO é sempre inteiro — o relatório
 // Geral (soma de todos os canais) traz PPD fracionário (ex.: "180,5"),
 // enquanto o relatório de uma unidade/canal isolado costuma dar um inteiro
-// (ex.: "57"). INT_RE sozinho rejeitava a linha inteira no Geral e o parser
-// "não encontrava" a tabela — não é que faltasse, era decimal demais pra ele.
-// Reaproveitado também como "número puro" (sem % nem $) na leitura por nome
-// do Mix de Vendas, abaixo — aceita inteiro OU decimal, do mesmo jeito.
-const DECIMAL_RE = /^-?\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?$/;
+// (ex.: "57" ou, no mês, "2.089"). Aceita milhar E decimal (mesma forma de NUM_BR_RE).
+const DECIMAL_RE = /^-?(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{1,2})?$/;
 const PCT_RE = /^-?\d{1,3}(?:[.,]\d+)?%$/;
 
-const parsePct = (s) => (s == null ? null : parseBR(String(s).replace("%", "")));
-/** Número "puro" (sem % — isso é quantidade, nunca percentual de faturamento). */
-const numeroPuro = (s) => (DECIMAL_RE.test(String(s ?? "").trim()) ? parseBR(s) : null);
+const parsePct = (s) => (s == null ? null : parsePercentualBR(s));
+/** Quantidade "pura" do Mix de Vendas (sem % nem $) — SEMPRE inteiro pt-BR. */
+const numeroPuro = (s) => parseQuantidadeBR(s);
+const PCT_CELULA_RE = /^-?\d{1,3}(?:[.,]\d+)?%$/;
+const ehMoeda = (s) => MONEY_RE.test(String(s ?? "").replace(/\s+/g, ""));
+
+// ---------------------------------------------------------------------
+// DETECÇÃO RÍGIDA DO TIPO DE RELATÓRIO — pelo CONTEÚDO, nunca pelo nome do
+// arquivo. Um "Relatório de Vendas" no slot de Produtos (e vice-versa) tem
+// que ser recusado com mensagem clara (F2, item 1).
+//
+//   'produtos' : título "Relatório de Produtos"  E  (tabela "Torque por
+//                estabelecimento"  OU  seção "% de acompanhamentos em
+//                vendas principais")  E  sem título "Relatório de Vendas".
+//   'vendas'   : título "Relatório de Vendas"  E  ("Resumo de vendas"  OU
+//                "Cupons válidos"  OU  "Detalhe de vendas por
+//                estabelecimento")  E  sem título "Relatório de Produtos".
+//   null       : não bate em nenhum dos dois de forma inequívoca.
+//
+// NÃO infere mês/ano/período/canal — isso NÃO está de forma confiável no
+// PDF e pertence ao fluxo de confirmação/cross-check (arquitetura v3.1).
+// ---------------------------------------------------------------------
+const TITULO_PRODUTOS = normCel("Relatório de Produtos");
+const TITULO_VENDAS = normCel("Relatório de Vendas");
+const ANCORAS_PRODUTOS = [normCel("Torque por estabelecimento"), normCel("% de acompanhamentos em vendas principais")];
+const ANCORAS_VENDAS = [normCel("Resumo de vendas"), normCel("Cupons válidos"), normCel("Detalhe de vendas por estabelecimento")];
+
+/** @param {string[][]} matriz @returns {'produtos'|'vendas'|null} */
+export function detectarTipoRelatorio(matriz) {
+  const linhas = (matriz || []).map((r) => normCel((r || []).join(" ")));
+  const tem = (needle) => linhas.some((l) => l.includes(needle));
+
+  const tituloProdutos = tem(TITULO_PRODUTOS);
+  const tituloVendas = tem(TITULO_VENDAS);
+  const ancoraProdutos = ANCORAS_PRODUTOS.some(tem);
+  const ancoraVendas = ANCORAS_VENDAS.some(tem);
+
+  const ehProdutos = tituloProdutos && ancoraProdutos && !tituloVendas;
+  const ehVendas = tituloVendas && ancoraVendas && !tituloProdutos;
+  if (ehProdutos && !ehVendas) return "produtos";
+  if (ehVendas && !ehProdutos) return "vendas";
+  return null;
+}
+
+function exigirTipo(matriz, esperado, alvo) {
+  const tipo = detectarTipoRelatorio(matriz);
+  if (tipo === esperado) return;
+  const nomeEsperado = esperado === "produtos" ? "Relatório de Produtos" : "Relatório de Vendas";
+  const nomeOutro = esperado === "produtos" ? "Relatório de Vendas" : "Relatório de Produtos";
+  if (tipo && tipo !== esperado) {
+    throw ApiError.badRequest(`O arquivo enviado ${alvo} é um "${nomeOutro}", não um "${nomeEsperado}". Envie o relatório correto no campo certo.`);
+  }
+  throw ApiError.badRequest(`Não reconheci o arquivo enviado ${alvo} como um "${nomeEsperado}" exportado da Visio.`);
+}
 
 /**
  * Normaliza uma célula para COMPARAÇÃO semântica (nunca para exibição):
@@ -243,10 +349,59 @@ function extrairTorquePorEstabelecimento(matriz) {
       if (r && r.length === 1 && r[0].trim() && norm(r[0]) !== "total") { estabelecimento = r[0].trim(); break; }
     }
     return {
-      fatBruto: parseBR(row[0]), torqueBruto: parseBR(row[1]), faturamento: parseBR(row[2]),
-      ppd: parseBR(row[3]), torque: parseBR(row[4]), perdas: parseBR(row[5]), produtosFuncionais: parseBR(row[6]),
+      fatBruto: parseMoedaBR(row[0]), torqueBruto: parseMoedaBR(row[1]), faturamento: parseMoedaBR(row[2]),
+      ppd: parseNumeroBR(row[3]), torque: parseMoedaBR(row[4]), perdas: parseMoedaBR(row[5]), produtosFuncionais: parseQuantidadeBR(row[6]),
       estabelecimento,
     };
+  }
+  return null;
+}
+
+/**
+ * "Fat. sanduíches/saladas" (card do topo do Relatório de Produtos) + o
+ * "% do fat. total" que o PDF calcula ao lado. Best-effort: null se o card
+ * não aparecer. NÃO é usado no cálculo do mix — é exibição/auditoria.
+ *   linha i    : ["Fat. sanduíches/saladas"]
+ *   linha i+1  : ["$", "2.648,56"]           (moeda, células podem vir separadas)
+ *   linha i+2  : ["68,0%", "do fat. total"]  (percentual + rótulo)
+ * @param {string[][]} matriz
+ * @returns {{valor: number|null, pct: number|null}}
+ */
+function extrairFatSanduichesSaladas(matriz) {
+  for (let i = 0; i < matriz.length; i++) {
+    const alvo = normCel((matriz[i] || []).join(" "));
+    if (!/fat.{0,4}sanduiches.{0,4}saladas/.test(alvo)) continue;
+    let valor = null, pct = null;
+    for (let j = i + 1; j < Math.min(i + 4, matriz.length); j++) {
+      const cells = (matriz[j] || []).map((c) => String(c));
+      if (valor == null && ehMoeda(cells.join(""))) valor = parseMoedaBR(cells.join(""));
+      if (pct == null) {
+        const pctCell = cells.find((c) => PCT_CELULA_RE.test(c.trim()));
+        if (pctCell && cells.some((c) => /do fat/i.test(c))) pct = parsePercentualBR(pctCell);
+      }
+    }
+    if (valor != null || pct != null) return { valor, pct };
+  }
+  return { valor: null, pct: null };
+}
+
+/**
+ * Total de ITENS da tabela "Indicadores por categoria" (SANDUÍCHES E SALADAS
+ * + BEBIDAS + OUTROS + ADICIONAIS + DIVERSOS). Escopado DEPOIS da âncora
+ * "Indicadores por categoria" e exige a linha "Total <int> <moeda> ...".
+ * Best-effort: null se não achar. Exibição/auditoria — não entra no cálculo.
+ * @param {string[][]} matriz
+ * @returns {number|null}
+ */
+function extrairTotalItensCategoria(matriz) {
+  const idx = matriz.findIndex((r) => normCel((r || [])[0] || "") === "indicadores por categoria");
+  if (idx < 0) return null;
+  for (let j = idx + 1; j < Math.min(idx + 16, matriz.length); j++) {
+    const row = matriz[j] || [];
+    if (row.length >= 3 && ehRotuloDe("total", normCel(row[0]))) {
+      const n = parseQuantidadeBR(row[1]);
+      if (n != null && ehMoeda(row[2])) return n;
+    }
   }
   return null;
 }
@@ -313,12 +468,16 @@ export function extrairMixVendas(matrizOriginal, rotulo) {
 }
 
 /**
- * Parser central do relatório "Relatório de Produtos" da Visio.
+ * Parser central do "Relatório de Produtos" da Visio (Loja/Balcão ou Geral —
+ * o parser é agnóstico ao canal; quem decide o canal é o fluxo posterior).
  * @param {Buffer} buf
  * @param {{rotulo?: string}} [opts] rotulo = "Geral"/"Loja" — só enriquece as
- *   mensagens de erro (qual dos dois relatórios falhou); nunca muda a lógica.
+ *   mensagens de erro; nunca muda a lógica.
  * @returns {Promise<{
+ *   tipo: 'produtos',
  *   estabelecimento: string|null, faturamento: number, ppd: number,
+ *   torque: number|null, perdas: number|null, produtosFuncionais: number|null,
+ *   fatSanduichesSaladas: number|null, pctFatSanduichesSaladas: number|null, totalItens: number|null,
  *   sandwichesSalads: number, beverages: number, additions: number, miscellaneous: number,
  *   percentualBebidasPdf: number|null, percentualAdicionaisPdf: number|null, percentualDiversosPdf: number|null,
  *   hash: string
@@ -326,8 +485,11 @@ export function extrairMixVendas(matrizOriginal, rotulo) {
  */
 export async function parseVisioProductReport(buf, opts = {}) {
   const rotulo = opts.rotulo || null;
-  const alvo = rotulo ? `no Relatório ${rotulo}` : "neste relatório";
+  const alvo = rotulo ? `no campo do Relatório ${rotulo}` : "neste relatório";
   const matriz = await matrizDePdf(buf);
+
+  // F2 item 1 — recusa explícita de um "Relatório de Vendas" neste slot.
+  exigirTipo(matriz, "produtos", alvo);
 
   const torque = extrairTorquePorEstabelecimento(matriz);
   if (!torque) {
@@ -340,11 +502,29 @@ export async function parseVisioProductReport(buf, opts = {}) {
     const plural = mix.faltando.length > 1 ? "as quantidades de" : "a quantidade de";
     throw ApiError.badRequest(`Não foi possível localizar ${plural} ${listarPt(mix.faltando)} ${alvo}.`);
   }
+  // Garantia dura (item 5): as 4 quantidades JÁ são inteiros não-negativos aqui
+  // (parseQuantidadeBR devolve null pra qualquer coisa que não seja — e null
+  // já teria caído em `faltando` acima). Este assert é só a rede de segurança
+  // pra nunca deixar um não-inteiro seguir pro cálculo de percentual ou pro INSERT.
+  for (const [k, val] of [["Sanduíches/Saladas", mix.sanduichesSaladas], ["Bebidas", mix.bebidas], ["Adicionais", mix.adicionais], ["Diversos", mix.diversos]]) {
+    if (!Number.isInteger(val) || val < 0) {
+      throw ApiError.badRequest(`O número de ${k} lido ${alvo} (${val}) não é uma quantidade inteira válida. Confira o relatório.`);
+    }
+  }
+
+  const fatSand = extrairFatSanduichesSaladas(matriz);
 
   return {
+    tipo: "produtos",
     estabelecimento: torque.estabelecimento,
-    faturamento: torque.faturamento,
+    faturamento: torque.faturamento,          // faturamento (Loja) — tabela Torque
     ppd: torque.ppd,
+    torque: torque.torque,                     // NOVO — Torque líquido
+    perdas: torque.perdas,                     // NOVO
+    produtosFuncionais: torque.produtosFuncionais, // NOVO (7ª coluna da tabela Torque)
+    fatSanduichesSaladas: fatSand.valor,       // NOVO — "Fat. sanduíches/saladas"
+    pctFatSanduichesSaladas: fatSand.pct,      // NOVO — "% do fat. total"
+    totalItens: extrairTotalItensCategoria(matriz), // NOVO — Total de "Indicadores por categoria"
     sandwichesSalads: mix.sanduichesSaladas,
     beverages: mix.bebidas,
     additions: mix.adicionais,
@@ -378,12 +558,14 @@ const ROTULOS_TABELA_ESTABELECIMENTO = new Set(["estabelecimento", "total", "ven
 
 /**
  * Testa se `s` (células já concatenadas, sem espaços) é um valor do tipo
- * pedido — devolve o número (parseBR) ou null.
+ * pedido — devolve o número normalizado (pt-BR) ou null. Moeda usa
+ * parseMoedaBR (decimal por vírgula); inteiro usa parseQuantidadeBR
+ * ("2.089" → 2089, nunca 2.089).
  */
 function valorDoTipo(s, tipo) {
   const j = String(s ?? "").replace(/\s+/g, "");
-  if (tipo === "moeda") return MONEY_RE.test(j) ? parseBR(j) : null;
-  return INT_RE.test(j) ? parseBR(j) : null;
+  if (tipo === "moeda") return MONEY_RE.test(j) ? parseMoedaBR(j) : null;
+  return INT_RE.test(j) ? parseQuantidadeBR(j) : null;
 }
 
 /**
@@ -412,6 +594,43 @@ function buscarValorAposRotulo(matriz, aliasesNormalizados, tipo) {
   return null;
 }
 
+/**
+ * "Métodos de pagamento" do Relatório de Vendas — lista canônica
+ * `[{ metodo, qtd, valor }]`. Persistida para conferência futura; NÃO entra
+ * em nenhum cálculo de bonificação (F2 item 3). Best-effort: `[]` se a seção
+ * não aparecer.
+ *
+ * OBS: a Visio pagina esta seção ("Página 1 de N") — o PDF exportado
+ * costuma trazer só a 1ª página. O parser devolve o que estiver no
+ * documento, sem inventar o resto.
+ *   linha  : ["Método", "Quantidade", "Faturamento líquido", "↓"]   (header)
+ *   linhas : ["IFOOD ONLINE", "147", "$ 6.649,45"]                  (uma por método)
+ * @param {string[][]} matriz
+ * @returns {Array<{metodo: string, qtd: number, valor: number}>}
+ */
+function extrairMetodosPagamento(matriz) {
+  const idx = matriz.findIndex((r) => normCel((r || [])[0] || "") === normCel("Métodos de pagamento"));
+  if (idx < 0) return [];
+  let hdr = -1;
+  for (let j = idx; j < Math.min(idx + 6, matriz.length); j++) {
+    const n = (matriz[j] || []).map((c) => normCel(c));
+    if (n.includes("metodo") && n.includes("quantidade")) { hdr = j; break; }
+  }
+  if (hdr < 0) return [];
+
+  const out = [];
+  for (let j = hdr + 1; j < matriz.length; j++) {
+    const cells = (matriz[j] || []).map((c) => String(c).trim()).filter((c) => c && c !== "↓");
+    if (cells.length < 3) break; // fim do bloco (ex.: "Resumo do faturamento")
+    const metodo = cells[0];
+    const qtd = parseQuantidadeBR(cells[1]);
+    const valor = parseMoedaBR(cells[2]);
+    if (!metodo || /^[\d.]/.test(metodo) || qtd == null || valor == null) break;
+    out.push({ metodo, qtd, valor });
+  }
+  return out;
+}
+
 /** Nome do estabelecimento na tabela "Detalhe de vendas por estabelecimento" — mesmo princípio de extrairTorquePorEstabelecimento. */
 function extrairEstabelecimentoVendas(matriz) {
   const idxAncora = matriz.findIndex((r) => r.some((c) => {
@@ -430,24 +649,32 @@ function extrairEstabelecimentoVendas(matriz) {
 }
 
 /**
- * Parser do "Relatório de Vendas" da Visio — novo formato do relatório
- * GERAL (item 3-4 e 12 das instruções). Fonte oficial de Faturamento e
- * Ticket Médio; Cupons válidos/de vendas ficam disponíveis pra auditoria
- * (item 3), sem entrar em nenhum cálculo de bonificação hoje.
+ * Parser do "Relatório de Vendas" da Visio (relatório GERAL / todos os
+ * canais). Fonte oficial de Faturamento, Ticket Médio e Quantidade de
+ * Vendas (= Cupons de vendas). Métodos de pagamento ficam disponíveis para
+ * conferência futura — não entram em cálculo (F2 item 3).
  * @param {Buffer} buf
  * @param {{rotulo?: string}} [opts]
- * @returns {Promise<{estabelecimento: string|null, faturamento: number, ticketMedio: number, cuponsValidos: number|null, cuponsVendas: number|null, hash: string}>}
+ * @returns {Promise<{
+ *   tipo: 'vendas', estabelecimento: string|null, faturamento: number, ticketMedio: number,
+ *   cuponsValidos: number|null, cuponsVendas: number|null,
+ *   metodosPagamento: Array<{metodo:string, qtd:number, valor:number}>, hash: string
+ * }>}
  */
 export async function parseVisioSalesReport(buf, opts = {}) {
   const rotulo = opts.rotulo || null;
-  const alvo = rotulo ? `no Relatório ${rotulo}` : "neste relatório";
+  const alvo = rotulo ? `no campo do Relatório ${rotulo}` : "neste relatório";
   const matriz = await matrizDePdf(buf);
+
+  // F2 item 1 — recusa explícita de um "Relatório de Produtos" neste slot.
+  exigirTipo(matriz, "vendas", alvo);
 
   const faturamento = buscarValorAposRotulo(matriz, ROTULOS_VENDAS.faturamento, "moeda");
   const ticketMedio = buscarValorAposRotulo(matriz, ROTULOS_VENDAS.ticketMedio, "moeda");
   const cuponsValidos = buscarValorAposRotulo(matriz, ROTULOS_VENDAS.cuponsValidos, "inteiro");
   const cuponsVendas = buscarValorAposRotulo(matriz, ROTULOS_VENDAS.cuponsVendas, "inteiro");
   const estabelecimento = extrairEstabelecimentoVendas(matriz);
+  const metodosPagamento = extrairMetodosPagamento(matriz);
 
   const faltando = [];
   if (faturamento == null) faltando.push("o Faturamento");
@@ -457,7 +684,7 @@ export async function parseVisioSalesReport(buf, opts = {}) {
     throw ApiError.badRequest(`Não foi possível localizar ${listarPt(faltando)} ${alvo}. Confira se é um "Relatório de Vendas" exportado da Visio.`);
   }
 
-  return { estabelecimento, faturamento, ticketMedio, cuponsValidos, cuponsVendas, hash: sha256(buf) };
+  return { tipo: "vendas", estabelecimento, faturamento, ticketMedio, cuponsValidos, cuponsVendas, metodosPagamento, hash: sha256(buf) };
 }
 
 const MAX_ARQUIVO = 15 * 1024 * 1024; // 15 MB — mesmo limite de vendas/sw-parser.js

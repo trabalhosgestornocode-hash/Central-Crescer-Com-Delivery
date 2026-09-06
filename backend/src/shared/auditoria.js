@@ -108,6 +108,15 @@ export const ACOES = {
   // Bonificação Mensal
   BONIFICACAO_META_ALTERADA: "bonificacao_mensal.meta_alterada",
   BONIFICACAO_INDICADOR_LANCADO: "bonificacao_mensal.indicador_lancado",
+  // Fechamento mensal Visio (arquitetura v3.1): competência congelada
+  // (confirmação), reaberta, refechada (nova versão de snapshot) ou capturada
+  // como histórico legado. A autoridade do resultado é bonificacao_competencia.
+  BONIFICACAO_FECHAMENTO_MENSAL_ALTERADO: "bonificacao_mensal.fechamento_mensal_alterado",
+  // Importação DIÁRIA gravada (migration 076): linha escrita pelo gatilho
+  // trg_bonificacao_auditar_importacao_diaria na MESMA transação do upsert do
+  // lançamento — detalhes.operacao = INSERT|UPDATE, detalhes.documentos = as
+  // importações vinculadas. Catalogada aqui para o painel de auditoria.
+  BONIFICACAO_IMPORTACAO_DIARIA_GRAVADA: "bonificacao_mensal.importacao_diaria_gravada",
 
   // Agente Crescer (assistente de IA) — uma linha por mensagem processada,
   // sucesso ou erro (ver detalhes.sucesso). Nunca grava o texto da mensagem

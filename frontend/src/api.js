@@ -338,6 +338,14 @@ export const bonifSalvarValorDiaIndicador = (indicador, dados) => postJson(`${BM
 // REV: 1 valor por unidade+mês (migration 052), não mais diário.
 // Leitura vem embutida em bonifMes() (campo revMensal); esta é só a escrita.
 export const bonifSalvarRevMensal = (dados) => postJson(`${BM}/rev`, dados);
+// Fechamento mensal OFICIAL do Mix (migration 074): "Relatório de Produtos"
+// mensal da Visio. Leitura vem embutida em bonifMes() (campo fechamentoMensal).
+// Fechamento mensal Visio (arquitetura v3.1): F3 = só PRÉVIA (2 relatórios
+// mensais). Confirmação/gravação + snapshot entram na F4. As rotas manual/
+// excluir/arquivo foram removidas — o fechamento definitivo é sempre pelos
+// dois relatórios da Visio, nunca digitado à mão.
+export const bonifFechamentoMensalPreview = (payload) => postJson(`${BM}/fechamento-mensal/preview`, payload);
+export const bonifFechamentoMensalConfirmar = (payload) => postJson(`${BM}/fechamento-mensal`, payload);
 
 // ---------- Parser Food Delivery (importação + conciliação de taxas de entregador) ----------
 const PFD = "/api/v1/parser-food-delivery";

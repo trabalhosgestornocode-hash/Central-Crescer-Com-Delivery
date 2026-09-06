@@ -3798,6 +3798,16 @@ tr.dex-linha-na { opacity: .65; }
 .bm-modal { max-width: 640px; }
 .bm-imp-form { display: flex; flex-direction: column; gap: 14px; }
 .bm-imp-data { max-width: 220px; }
+.bm-imp-modos { display: flex; gap: 6px; margin: 6px 0 14px; border-bottom: 1px solid var(--linha); }
+.bm-imp-modo {
+  appearance: none; background: none; border: 0; border-bottom: 2px solid transparent;
+  padding: 8px 12px; font: inherit; font-size: 13px; font-weight: 600; color: var(--cinza);
+  cursor: pointer; transition: color .15s ease, border-color .15s ease;
+}
+.bm-imp-modo:hover { color: var(--texto); }
+.bm-imp-modo.ativo { color: var(--verde-vivo); border-bottom-color: var(--verde-vivo); }
+.bm-imp-competencia { display: flex; gap: 12px; }
+.bm-imp-competencia .cfg-campo { flex: 1; max-width: 200px; }
 .bm-drop-titulo { font-size: 13.5px; font-weight: 700; margin-bottom: 2px; }
 .bm-drop-desc { font-size: 12.5px; color: var(--cinza); margin-bottom: 8px; }
 .bm-drop-area {

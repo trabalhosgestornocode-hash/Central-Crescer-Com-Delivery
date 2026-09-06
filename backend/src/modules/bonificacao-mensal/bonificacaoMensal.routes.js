@@ -34,6 +34,13 @@ bonificacaoMensalRouter.post("/indicadores/:indicador", lancar, controller.salva
 // vem embutida em GET /mes (campo revMensal).
 bonificacaoMensalRouter.post("/rev", lancar, controller.salvarRevMensal);
 
+// FECHAMENTO MENSAL VISIO (arquitetura v3.1). 2 relatórios mensais → prévia
+// (bloqueios/alertas + resultado canônico, sem persistir) e confirmação
+// (snapshot imutável, competência 'fechada'). Reabertura = permissão de excluir.
+bonificacaoMensalRouter.post("/fechamento-mensal/preview", lancar, limiteImport, controller.fechamentoMensalPreview);
+bonificacaoMensalRouter.post("/fechamento-mensal", lancar, limiteImport, controller.fechamentoMensalConfirmar);
+bonificacaoMensalRouter.post("/fechamento-mensal/reabrir", excluir, controller.fechamentoMensalReabrir);
+
 bonificacaoMensalRouter.get("/importacoes", ver, controller.importacoes);
 bonificacaoMensalRouter.get("/importacoes/:id/arquivo", ver, controller.arquivoImportacao);
 

@@ -61,6 +61,24 @@ export const salvarRevMensal = asyncHandler(async (req, res) => {
   res.status(201).json({ data });
 });
 
+// FECHAMENTO MENSAL VISIO (arquitetura v3.1).
+//   preview   — 2 relatórios mensais → bloqueios/alertas + resultado canônico. NÃO persiste.
+//   confirmar — congela a competência (snapshot imutável versão N+1, status 'fechada').
+//   reabrir   — volta a competência FECHADA ao cálculo ao vivo (nada apagado).
+export const fechamentoMensalPreview = asyncHandler(async (req, res) => {
+  const data = await service.processarImportacaoFechamentoMensal({ ...tenant(req), usuario: identidadeOperacional(req), payload: req.body ?? {}, confirmar: false });
+  res.json({ data });
+});
+export const fechamentoMensalConfirmar = asyncHandler(async (req, res) => {
+  const data = await service.processarImportacaoFechamentoMensal({ ...tenant(req), usuario: identidadeOperacional(req), payload: req.body ?? {}, confirmar: true });
+  res.status(201).json({ data });
+});
+export const fechamentoMensalReabrir = asyncHandler(async (req, res) => {
+  const b = req.body ?? {};
+  const data = await service.reabrirCompetencia({ ...tenant(req), usuario: identidadeOperacional(req), ano: b.ano, mes: b.mes, motivo: b.motivo });
+  res.json({ data });
+});
+
 export const historico = asyncHandler(async (req, res) => {
   const data = await service.listarHistoricoMeses({ ...tenant(req), ano: req.query.ano });
   res.json({ data });

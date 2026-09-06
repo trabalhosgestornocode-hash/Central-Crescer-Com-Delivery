@@ -177,6 +177,16 @@ export function mixMensalPonderado(lancamentos) {
   };
 }
 
+// NOTA (arquitetura v3.1): não existe "resolvedor" que escolha entre fontes de
+// mix, e não há duas versões dos números da competência. Quem decide QUAL
+// resultado vale é `bonificacao_competencia.status` (ver obterMes):
+//   competência aberta / reaberta → dados atuais (mixMensalPonderado acima)
+//   competência fechada           → snapshot congelado da versão vigente
+// O mix oficial do mês fechado é montado por `montarResultadoFechamentoOficial`
+// (bonificacaoMensal.fechamento.js), a partir das quantidades do Relatório de
+// Produtos mensal (Loja/Balcão), com a mesma fórmula Σ acompanhamento ÷ Σ
+// principais — não a partir daqui.
+
 /**
  * Ticket Médio mensal PONDERADO (auditoria 15/08/2026, item 9): faturamento
  * acumulado ÷ cupons válidos acumulados — nunca a média simples dos tickets

@@ -176,6 +176,14 @@ describe("Teste K — mix mensal PONDERADO (item 44-45), nunca média simples", 
 });
 
 // ---------------------------------------------------------------------------
+// NOTA (arquitetura v3.1): `mixMensalOficial` e `resolverMixMensal` FORAM
+// REMOVIDOS. Não existe mais "escolher entre oficial e diário" nem duas versões
+// dos números. Quem decide qual resultado vale é bonificacao_competencia.status
+// (obterMes): mês aberto/reaberto usa os dados atuais, mês fechado serve o
+// snapshot. O mix oficial do mês fechado (dataset 2533/1086/613/508 → 42,9 /
+// 24,2 / 20,1) é coberto em bonificacao-mensal-fechamento.test.js.
+
+// ---------------------------------------------------------------------------
 describe("ticketMedioPonderado (auditoria 15/08/2026) — faturamento ÷ cupons acumulados, nunca média simples", () => {
   test("dois dias com volumes bem diferentes: ponderado != média simples dos tickets diários", () => {
     // dia 1: R$1.000 / 50 cupons = R$20 de ticket · dia 2: R$100 / 2 cupons = R$50 de ticket

@@ -1,9 +1,20 @@
-// Modal "Importar Visio" — 2 relatórios (Geral + Loja) da Visio Analytics.
+// Modal "Importar Visio" — dois modos:
+//   📅 Lançamento diário  — 2 relatórios (Geral + Loja) de UM dia.
+//   📆 Fechamento mensal  — os 2 relatórios mensais (Vendas + Produtos
+//      Loja/Balcão) que consolidam a competência. Prévia implementada na F3;
+//      a confirmação (gravação + snapshot congelado) entra na F4. O redesenho
+//      completo desta aba (2 dropzones + checkboxes) é a F7.
+//
 // A leitura/interpretação do PDF acontece sempre no BACKEND
 // (bonificacao-mensal/visio-parser.js); o frontend só embala o arquivo em
 // base64, mostra a prévia e deixa corrigir manualmente antes de confirmar.
 import { el, escapeHtml, toast, fmtMoeda, fmtPct } from "./utils.js";
-import { bonifImportarPreview, bonifImportarConfirmar } from "./api.js";
+import {
+  bonifImportarPreview, bonifImportarConfirmar,
+  bonifFechamentoMensalPreview, bonifFechamentoMensalConfirmar,
+} from "./api.js";
+
+const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 
 let ov = null;
 function fecharOverlay() { ov?.remove(); ov = null; document.removeEventListener("keydown", onEsc); }
@@ -59,50 +70,127 @@ function wireDropZone(m, id, onArquivo) {
   area.addEventListener("drop", (e) => aplicar(e.dataTransfer.files?.[0]));
 }
 
-export function abrirImportarVisioModal({ unidadeNome, mesAtual, anoAtual, onSalvo }) {
-  // `ctx` é o estado do modal, compartilhado por todos os handlers — nunca
-  // recriado por chamada, pra "prévia" e "correções" ficarem sempre em sincronia.
-  const ctx = { arquivos: { geral: null, loja: null }, ultimoPreview: null, onSalvo };
+const fmtDataBr = (iso) => iso?.split("-").reverse().join("/") ?? "—";
+
+/**
+ * @param {{unidadeNome:string, mesAtual:number, anoAtual:number, onSalvo:Function, modo?:"diario"|"mensal"}} p
+ */
+export function abrirImportarVisioModal({ unidadeNome, mesAtual, anoAtual, onSalvo, modo = "diario" }) {
+  // `ctx` é o estado do modal, compartilhado por todos os handlers.
+  const ctx = {
+    modo,
+    arquivos: { geral: null, loja: null, mensal: null },
+    diario: { ultimoPreview: null },
+    mensal: { ultimoPreview: null },
+    onSalvo,
+  };
   const hojeIso = new Date().toISOString().slice(0, 10);
+  const anos = [anoAtual, anoAtual - 1, anoAtual - 2];
 
   const m = overlay(`
     <button class="modal-close" aria-label="Fechar">×</button>
     <div class="modal-head"><h2>⬆️ Importar dados da Visio</h2><div class="modal-tags"><span class="chip">🏪 ${escapeHtml(unidadeNome || "—")}</span></div></div>
-    <div class="bm-imp-form">
-      <label class="cfg-campo bm-imp-data"><span>Data do lançamento *</span><input type="date" id="bm-imp-data" value="${hojeIso}"></label>
-      ${dropZoneHtml("bm-geral", "Relatório Geral", "Relatório com todos os canais. Utilizado principalmente para o faturamento total da loja.")}
-      ${dropZoneHtml("bm-loja", "Relatório Loja", "Relatório filtrado somente para Loja/Balcão. Utilizado para calcular as metas de Bebidas, Adicionais e Diversos.")}
-      <div class="vd-imp-msg" id="bm-imp-msg" hidden></div>
-      <div id="bm-imp-preview"></div>
+    <div class="bm-imp-modos" role="tablist">
+      <button class="bm-imp-modo ${modo === "diario" ? "ativo" : ""}" data-modo="diario" role="tab">📅 Lançamento diário</button>
+      <button class="bm-imp-modo ${modo === "mensal" ? "ativo" : ""}" data-modo="mensal" role="tab">📆 Fechamento mensal (oficial)</button>
     </div>
-    <div class="ed-acoes">
-      <button class="btn btn-ghost" id="bm-imp-cancelar">Cancelar</button>
-      <button class="btn btn-ghost" id="bm-imp-analisar">Analisar relatórios</button>
-      <button class="btn btn-primary" id="bm-imp-confirmar" disabled>Confirmar lançamento</button>
+
+    <div class="bm-imp-pane" data-pane="diario" ${modo === "diario" ? "" : "hidden"}>
+      <div class="bm-imp-form">
+        <label class="cfg-campo bm-imp-data"><span>Data do lançamento *</span><input type="date" id="bm-imp-data" value="${hojeIso}"></label>
+        ${dropZoneHtml("bm-geral", "Relatório Geral", "Relatório com todos os canais. Utilizado principalmente para o faturamento total da loja.")}
+        <label class="cfg-campo"><span>Data de venda do Relatório Geral</span><input type="date" id="bm-geral-periodo"></label>
+        <label><input type="checkbox" id="bm-geral-periodo-confirmado"> Conferi que o Relatório Geral cobre somente essa data.</label>
+        ${dropZoneHtml("bm-loja", "Relatório Loja", "Relatório filtrado somente para Loja/Balcão. Utilizado para calcular as metas de Bebidas, Adicionais e Diversos.")}
+        <label class="cfg-campo"><span>Data de venda do Relatório Loja</span><input type="date" id="bm-loja-periodo"></label>
+        <label><input type="checkbox" id="bm-loja-periodo-confirmado"> Conferi que o Relatório Loja cobre somente essa data.</label>
+        <div class="vd-imp-msg" id="bm-imp-msg" hidden></div>
+        <div id="bm-imp-preview"></div>
+      </div>
+      <div class="ed-acoes">
+        <button class="btn btn-ghost" id="bm-imp-cancelar">Cancelar</button>
+        <button class="btn btn-ghost" id="bm-imp-analisar">Analisar relatórios</button>
+        <button class="btn btn-primary" id="bm-imp-confirmar" disabled>Confirmar lançamento</button>
+      </div>
+    </div>
+
+    <div class="bm-imp-pane" data-pane="mensal" ${modo === "mensal" ? "" : "hidden"}>
+      <div class="bm-imp-form">
+        <p class="dex-diag-vazio">O fechamento mensal consolida a competência a partir dos <b>dois relatórios mensais</b> da Visio (Vendas + Produtos Loja/Balcão). A prévia abaixo valida os arquivos; a confirmação definitiva entra na próxima etapa.</p>
+        <div class="bm-imp-competencia">
+          <label class="cfg-campo"><span>Mês *</span><select id="bm-mensal-mes">${MESES.map((mm, i) => `<option value="${i + 1}" ${i + 1 === mesAtual ? "selected" : ""}>${mm}</option>`).join("")}</select></label>
+          <label class="cfg-campo"><span>Ano *</span><select id="bm-mensal-ano">${anos.map((a) => `<option value="${a}" ${a === anoAtual ? "selected" : ""}>${a}</option>`).join("")}</select></label>
+        </div>
+        ${dropZoneHtml("bm-mensal", "Relatório de Produtos — mês inteiro (Loja)", "Mesmo relatório do lançamento diário, só que com o filtro de data cobrindo todo o mês.")}
+        <div class="vd-imp-msg" id="bm-mensal-msg" hidden></div>
+        <div id="bm-mensal-preview"></div>
+      </div>
+      <div class="ed-acoes">
+        <button class="btn btn-ghost" id="bm-mensal-cancelar">Cancelar</button>
+        <button class="btn btn-ghost" id="bm-mensal-analisar">Analisar relatório</button>
+        <button class="btn btn-primary" id="bm-mensal-confirmar" disabled>Confirmar fechamento</button>
+      </div>
     </div>`);
 
-  ctx.hojeIso = () => m.querySelector("#bm-imp-data").value;
+  ctx.dataDiario = () => m.querySelector("#bm-imp-data").value;
+  ctx.competencia = () => ({ ano: Number(m.querySelector("#bm-mensal-ano").value), mes: Number(m.querySelector("#bm-mensal-mes").value) });
 
   m.querySelector(".modal-close").addEventListener("click", fecharOverlay);
   m.querySelector("#bm-imp-cancelar").addEventListener("click", fecharOverlay);
-  wireDropZone(m, "bm-geral", (f) => { ctx.arquivos.geral = f; invalidar(); });
-  wireDropZone(m, "bm-loja", (f) => { ctx.arquivos.loja = f; invalidar(); });
-  m.querySelector("#bm-imp-data").addEventListener("change", invalidar);
-  m.querySelector("#bm-imp-analisar").addEventListener("click", () => processar(m, ctx, false));
-  m.querySelector("#bm-imp-confirmar").addEventListener("click", () => processar(m, ctx, true));
+  m.querySelector("#bm-mensal-cancelar").addEventListener("click", fecharOverlay);
 
-  function invalidar() {
-    ctx.ultimoPreview = null;
+  m.querySelectorAll(".bm-imp-modo").forEach((b) => b.addEventListener("click", () => {
+    ctx.modo = b.dataset.modo;
+    m.querySelectorAll(".bm-imp-modo").forEach((x) => x.classList.toggle("ativo", x === b));
+    m.querySelectorAll(".bm-imp-pane").forEach((p) => { p.hidden = p.dataset.pane !== ctx.modo; });
+  }));
+
+  // ---- pane diário ----
+  for (const tipo of ["geral", "loja"]) {
+    wireDropZone(m, `bm-${tipo}`, (f) => {
+      ctx.arquivos[tipo] = f;
+      m.querySelector(`#bm-${tipo}-periodo`).value = "";
+      m.querySelector(`#bm-${tipo}-periodo-confirmado`).checked = false;
+      invalidarDiario();
+    });
+    m.querySelector(`#bm-${tipo}-periodo`).addEventListener("change", () => {
+      m.querySelector(`#bm-${tipo}-periodo-confirmado`).checked = false;
+      invalidarDiario();
+    });
+    m.querySelector(`#bm-${tipo}-periodo-confirmado`).addEventListener("change", invalidarDiario);
+  }
+  m.querySelector("#bm-imp-data").addEventListener("change", invalidarDiario);
+  m.querySelector("#bm-imp-analisar").addEventListener("click", () => processarDiario(m, ctx, false));
+  m.querySelector("#bm-imp-confirmar").addEventListener("click", () => processarDiario(m, ctx, true));
+
+  // ---- pane mensal ----
+  wireDropZone(m, "bm-mensal", (f) => { ctx.arquivos.mensal = f; invalidarMensal(); });
+  m.querySelector("#bm-mensal-mes").addEventListener("change", invalidarMensal);
+  m.querySelector("#bm-mensal-ano").addEventListener("change", invalidarMensal);
+  m.querySelector("#bm-mensal-analisar").addEventListener("click", () => processarMensal(m, ctx, false));
+  m.querySelector("#bm-mensal-confirmar").addEventListener("click", () => processarMensal(m, ctx, true));
+
+  function invalidarDiario() {
+    ctx.diario.ultimoPreview = null;
     m.querySelector("#bm-imp-confirmar").disabled = true;
     m.querySelector("#bm-imp-preview").innerHTML = "";
     m.querySelector("#bm-imp-msg").hidden = true;
   }
+  function invalidarMensal() {
+    ctx.mensal.ultimoPreview = null;
+    m.querySelector("#bm-mensal-confirmar").disabled = true;
+    m.querySelector("#bm-mensal-preview").innerHTML = "";
+    m.querySelector("#bm-mensal-msg").hidden = true;
+  }
 }
 
-async function processar(m, ctx, confirmar) {
+// ===========================================================================
+// LANÇAMENTO DIÁRIO (Geral + Loja) — fluxo original, inalterado.
+// ===========================================================================
+async function processarDiario(m, ctx, confirmar) {
   const msg = m.querySelector("#bm-imp-msg");
   const setMsg = (t, cls = "erro") => { msg.hidden = false; msg.className = "vd-imp-msg " + cls; msg.textContent = t; };
-  const dataLancamento = ctx.hojeIso();
+  const dataLancamento = ctx.dataDiario();
   if (!dataLancamento) return setMsg("Informe a data do lançamento.");
   if (!ctx.arquivos.geral && !ctx.arquivos.loja) return setMsg("Envie pelo menos um dos dois relatórios (Geral ou Loja).");
 
@@ -115,14 +203,20 @@ async function processar(m, ctx, confirmar) {
   btn.textContent = etapas[0];
 
   try {
-    let payload = ctx.ultimoPreview?.payload;
+    let payload = ctx.diario.ultimoPreview?.payload;
     if (!confirmar || !payload) {
       const [geral, loja] = await Promise.all([arquivoPayload(ctx.arquivos.geral), arquivoPayload(ctx.arquivos.loja)]);
+      for (const [tipo, arquivo] of [["geral", geral], ["loja", loja]]) {
+        if (!arquivo) continue;
+        const inicio = m.querySelector(`#bm-${tipo}-periodo`).value;
+        const confirmado = m.querySelector(`#bm-${tipo}-periodo-confirmado`).checked;
+        if (inicio) arquivo.periodo = { inicio, fim: inicio, confirmado };
+      }
       payload = { data: dataLancamento, geral, loja };
-      ctx.ultimoPreview = { payload };
+      ctx.diario.ultimoPreview = { payload };
     }
     if (confirmar) {
-      await bonifImportarConfirmar({ ...payload, substituir: ctx.ultimoPreview?.substituir });
+      await bonifImportarConfirmar({ ...payload, substituir: ctx.diario.ultimoPreview?.substituir });
       toast("Relatórios processados. Lançamento salvo ✅");
       fecharOverlay();
       ctx.onSalvo?.();
@@ -164,7 +258,7 @@ function renderDuplicado(m, ctx, data) {
     </div>`;
   const conf = m.querySelector("#bm-imp-confirmar");
   conf.disabled = false; conf.textContent = "Substituir lançamento";
-  ctx.ultimoPreview.substituir = true;
+  ctx.diario.ultimoPreview.substituir = true;
 }
 
 function renderPreview(m, ctx, data) {
@@ -220,8 +314,98 @@ function aplicarCorrecoes(m, ctx) {
       beverages: lerNum("bm-corr-loja-beverages"), additions: lerNum("bm-corr-loja-additions"), miscellaneous: lerNum("bm-corr-loja-miscellaneous"),
     },
   };
-  if (ctx.ultimoPreview?.payload) ctx.ultimoPreview.payload = { ...ctx.ultimoPreview.payload, correcoes };
+  if (ctx.diario.ultimoPreview?.payload) ctx.diario.ultimoPreview.payload = { ...ctx.diario.ultimoPreview.payload, correcoes };
   m.querySelector("#bm-imp-analisar").click();
 }
 
-const fmtDataBr = (iso) => iso?.split("-").reverse().join("/") ?? "—";
+// ===========================================================================
+// FECHAMENTO MENSAL OFICIAL (1 Relatório de Produtos, mês inteiro).
+// ===========================================================================
+async function processarMensal(m, ctx, confirmar) {
+  const msg = m.querySelector("#bm-mensal-msg");
+  const setMsg = (t, cls = "erro") => { msg.hidden = false; msg.className = "vd-imp-msg " + cls; msg.textContent = t; };
+  const { ano, mes } = ctx.competencia();
+  if (!ano || !mes) return setMsg("Escolha o mês e o ano do fechamento.");
+  if (!ctx.arquivos.mensal) return setMsg("Envie o Relatório de Produtos mensal (Loja).");
+
+  const btn = m.querySelector(confirmar ? "#bm-mensal-confirmar" : "#bm-mensal-analisar");
+  const txtOriginal = btn.textContent;
+  const etapas = confirmar ? ["Salvando…"] : ["Enviando arquivo…", "Lendo relatório…", "Validando…"];
+  let i = 0;
+  btn.disabled = true;
+  const timer = etapas.length > 1 ? setInterval(() => { btn.textContent = etapas[Math.min(i++, etapas.length - 1)]; }, 700) : null;
+  btn.textContent = etapas[0];
+
+  try {
+    const produtos = await arquivoPayload(ctx.arquivos.mensal);
+    // F7 acrescenta o dropzone do Relatório de Vendas + os 2 checkboxes. Por
+    // ora só o de Produtos existe — a prévia devolve o bloqueio "falta Vendas".
+    const payload = {
+      ano, mes, produtos,
+      vendas: ctx.arquivos.vendasMensal ? await arquivoPayload(ctx.arquivos.vendasMensal) : undefined,
+      produtosCanalConfirmado: !!ctx.mensal.canalConfirmado,
+      periodoConfirmadoUsuario: !!ctx.mensal.periodoConfirmado,
+      correcoes: ctx.mensal.ultimoPreview?.correcoes,
+    };
+    if (confirmar) {
+      await bonifFechamentoMensalConfirmar(payload);
+      toast("Fechamento mensal salvo ✅");
+      fecharOverlay();
+      ctx.onSalvo?.();
+    } else {
+      const { data } = await bonifFechamentoMensalPreview(payload);
+      ctx.mensal.ultimoPreview = { payload };
+      renderPreviewMensal(m, data);
+    }
+  } catch (e) {
+    setMsg("Erro: " + e.message);
+  } finally {
+    if (timer) clearInterval(timer);
+    btn.disabled = false; btn.textContent = txtOriginal;
+  }
+}
+
+// Prévia F3: `data` é o próprio preview ({ competencia, vendas, produtos,
+// validacao:{bloqueios,alertas}, prontoParaConfirmar }). SEM comparação entre
+// fontes — bloqueios impedem confirmar, alertas são só conferência do arquivo.
+function renderPreviewMensal(m, data) {
+  const box = m.querySelector("#bm-mensal-preview");
+  const item = (lbl, val) => `<div class="vd-pv-item"><span>${lbl}</span><b>${val}</b></div>`;
+  const prod = data.produtos || {};
+  const vend = data.vendas || {};
+  const pct = prod.percentuais || {};
+  const val = data.validacao || { bloqueios: [], alertas: [] };
+
+  const bloqueios = (val.bloqueios || []).length
+    ? `<div class="vd-pv-divs">${val.bloqueios.map((b) => `<div class="vd-pv-div"><span class="pill bad">bloqueio</span> ${escapeHtml(b)}</div>`).join("")}</div>`
+    : "";
+  const alertas = (val.alertas || []).length
+    ? `<div class="vd-pv-divs">${val.alertas.map((a) => `<div class="vd-pv-div"><span class="pill ${a.tipo === "critico" ? "bad" : "warn"}">${a.tipo === "critico" ? "atenção" : "conferir"}</span> ${escapeHtml(a.msg || a)}</div>`).join("")}</div>`
+    : "";
+
+  box.innerHTML = `
+    <div class="vd-preview">
+      <div class="vd-pv-titulo">Fechamento — ${escapeHtml(data.competencia?.label || "")}</div>
+      <div class="bm-pv-bloco"><b>Relatório de Vendas — mês</b><div class="vd-pv-grid">
+        ${item("Faturamento", vend.faturamento != null ? fmtMoeda(vend.faturamento) : "—")}
+        ${item("Ticket médio", vend.ticketMedio != null ? fmtMoeda(vend.ticketMedio) : "—")}
+        ${item("Quantidade de vendas", vend.quantidadeVendas ?? "—")}
+        ${item("Estabelecimento", escapeHtml(vend.estabelecimento || "—"))}
+      </div></div>
+      <div class="bm-pv-bloco"><b>Relatório de Produtos — mês (Loja/Balcão)</b><div class="vd-pv-grid">
+        ${item("Sanduíches/Saladas (base)", prod.sanduichesSaladas ?? "—")}
+        ${item("Bebidas", `${prod.bebidas ?? "—"} → ${fmtPct(pct.bebidas)}`)}
+        ${item("Adicionais", `${prod.adicionais ?? "—"} → ${fmtPct(pct.adicionais)}`)}
+        ${item("Diversos", `${prod.diversos ?? "—"} → ${fmtPct(pct.diversos)}`)}
+        ${item("Faturamento Loja", prod.faturamentoLoja != null ? fmtMoeda(prod.faturamentoLoja) : "—")}
+        ${item("PPD", prod.ppd ?? "—")}
+        ${item("Estabelecimento", escapeHtml(prod.estabelecimento || "—"))}
+      </div></div>
+      ${bloqueios}
+      ${alertas}
+      ${!bloqueios && !alertas ? `<div class="vd-pv-ok">✅ Nenhum bloqueio ou alerta.</div>` : ""}
+    </div>`;
+
+  const conf = m.querySelector("#bm-mensal-confirmar");
+  conf.disabled = !data.prontoParaConfirmar;
+}
