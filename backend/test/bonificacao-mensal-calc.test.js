@@ -7,6 +7,7 @@ import {
   percentualDerivado, mixDoDia, validarPercentualCruzado, detectarInversaoRelatorios,
   faturamentoAcumulado, mixMensalPonderado, ticketMedioPonderado, mediaDiaria, somaValida, projecaoFaturamento,
   ritmoNecessario, participacaoLoja, mesmaUnidadeVisio, statusDia, STATUS_DIA_BONIFICACAO, diasDoMes,
+  resumoAlimentacaoMes,
 } from "../src/modules/bonificacao-mensal/bonificacaoMensal.calc.js";
 
 const perto = (a, b, eps = 1e-6) => Math.abs(a - b) <= eps;
@@ -255,5 +256,59 @@ describe("projeção de faturamento (itens 41-43)", () => {
 describe("participação do balcão (item 54) — só dado disponível, sem regra de meta", () => {
   test("calcula o percentual sem impor nenhuma faixa", () => {
     assert.ok(perto(participacaoLoja(3893.15, 9845.09), 39.54, 0.01));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resumoAlimentacaoMes — "quanto do mês está OFICIALMENTE alimentado".
+// Competência fechada pelo lançamento mensal direto = 100%, sem calendário
+// diário — NÃO interpreta ausência de lançamentos como "31 pendentes".
+// ---------------------------------------------------------------------------
+describe("resumoAlimentacaoMes — competência fechada x aberta", () => {
+  const calPendente = Array.from({ length: 31 }, (_, i) => ({ data: `2026-08-${String(i + 1).padStart(2, "0")}`, status: "PENDENTE" }));
+
+  test("1) aberta sem lançamentos -> dias pendentes normalmente (0% alimentado)", () => {
+    const a = resumoAlimentacaoMes({ calendario: calPendente, congelado: false, origemResultado: "ao_vivo" });
+    assert.equal(a.origem, "ao_vivo");
+    assert.equal(a.mostrarCalendarioDiario, true);
+    assert.equal(a.diasEsperados, 31);
+    assert.equal(a.diasAlimentados, 0);
+    assert.equal(a.pct, 0);
+    assert.equal(a.contagem.PENDENTE, 31);
+  });
+
+  test("2/3) fechada por fechamento_mensal_direto -> 100%, SEM calendário diário", () => {
+    const a = resumoAlimentacaoMes({ calendario: calPendente, congelado: true, origemResultado: "fechamento_mensal_direto" });
+    assert.equal(a.origem, "fechamento_mensal_direto");
+    assert.equal(a.pct, 100);
+    assert.equal(a.mostrarCalendarioDiario, false);
+    assert.match(a.rotulo, /lançamento mensal/i);
+  });
+
+  test("7) fechada por acompanhamento_diario -> 100%, calendário histórico preservado", () => {
+    const cal = calPendente.map((d, i) => ({ ...d, status: i < 31 ? "IMPORTADO" : "PENDENTE" }));
+    const a = resumoAlimentacaoMes({ calendario: cal, congelado: true, origemResultado: "acompanhamento_diario" });
+    assert.equal(a.pct, 100);
+    assert.equal(a.mostrarCalendarioDiario, true);
+    assert.match(a.rotulo, /acompanhamento diário/i);
+  });
+
+  test("legado_pre_refatoracao -> 100%, calendário preservado", () => {
+    const a = resumoAlimentacaoMes({ calendario: calPendente, congelado: true, origemResultado: "legado_pre_refatoracao" });
+    assert.equal(a.pct, 100);
+    assert.equal(a.mostrarCalendarioDiario, true);
+  });
+
+  test("8) aberta parcial -> pct proporcional aos dias reais, ignora FUTURO", () => {
+    const cal = [
+      ...Array.from({ length: 3 }, (_, i) => ({ data: `2026-08-0${i + 1}`, status: "IMPORTADO" })),
+      { data: "2026-08-04", status: "SEM_OPERACAO" },
+      { data: "2026-08-05", status: "PENDENTE" },
+      ...Array.from({ length: 5 }, (_, i) => ({ data: `2026-08-1${i}`, status: "FUTURO" })),
+    ];
+    const a = resumoAlimentacaoMes({ calendario: cal, congelado: false, origemResultado: "ao_vivo" });
+    assert.equal(a.diasEsperados, 5);          // 5 dias passados (FUTURO fora)
+    assert.equal(a.diasAlimentados, 4);        // 3 IMPORTADO + 1 SEM_OPERACAO
+    assert.equal(a.pct, 80);
   });
 });

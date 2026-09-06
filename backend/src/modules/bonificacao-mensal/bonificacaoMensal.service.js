@@ -11,6 +11,7 @@ import {
   hojeIsoBrasil, diasDoMes, STATUS_DIA_BONIFICACAO, statusDia, percentualDerivado, mixDoDia,
   validarPercentualCruzado, detectarInversaoRelatorios, faturamentoAcumulado, mixMensalPonderado,
   mediaDiaria, somaValida, ticketMedioPonderado, projecaoFaturamento, ritmoNecessario, participacaoLoja, mesmaUnidadeVisio,
+  resumoAlimentacaoMes,
 } from "./bonificacaoMensal.calc.js";
 import { evaluateBonusMetric, resolverMetaVigente, totalBonificacao } from "./bonificacaoMensal.metas.js";
 import { avaliarElegibilidadeBonificacao, avaliarSuperRestaurante } from "./bonificacaoMensal.elegibilidade.js";
@@ -581,6 +582,14 @@ async function montarRespostaCongelada({ competencia, snapshot, unidade, anoNum,
     podeEditarDiario: false,
     versaoSnapshot: snapshot.versao,
     calendario,
+    // Quanto do mês está OFICIALMENTE alimentado. Competência fechada pelo
+    // lançamento mensal (origem 'fechamento_mensal_direto') = 100%, sem
+    // calendário diário — o snapshot é o dado oficial do mês.
+    alimentacaoMes: resumoAlimentacaoMes({
+      calendario,
+      congelado: true,
+      origemResultado: s.origem || (competencia.status === "legado_sem_fechamento" ? "legado_pre_refatoracao" : "fechamento_mensal_direto"),
+    }),
     resumo,
     faturamento: {
       acumulado: visio ? (vo.faturamento ?? null) : (s.faturamento?.acumulado ?? null),
@@ -660,6 +669,7 @@ async function obterMesAoVivo({ unidade, anoNum, mesNum, competencia, organizaca
     fechamentoStatus: fechamentoStatusAoVivo(competencia, mesFechado),
     podeEditarDiario: true,
     calendario,
+    alimentacaoMes: resumoAlimentacaoMes({ calendario, congelado: false, origemResultado: "ao_vivo" }),
     resumo: core.resumo,
     faturamento: { ...projecao, ritmoNecessarioProximaFaixa: ritmoFaturamento },
     mix,

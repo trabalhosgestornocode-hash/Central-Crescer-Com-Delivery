@@ -79,6 +79,77 @@ export function statusDia({ lancamento, dataIso, hojeIso }) {
 }
 
 // ---------------------------------------------------------------------------
+// ALIMENTAÇÃO DA COMPETÊNCIA — quanto do mês está OFICIALMENTE preenchido.
+//
+// O calendário diário (statusDia) responde "o mês foi acompanhado dia a dia?".
+// Isso NÃO é a mesma pergunta que "o mês está alimentado?": uma competência
+// fechada pelo LANÇAMENTO MENSAL (2 relatórios da Visio, origem
+// 'fechamento_mensal_direto') está 100% alimentada — o snapshot É o dado
+// oficial do mês — mesmo sem um único lançamento diário. Interpretar a
+// ausência de lançamentos diários como "31 dias pendentes" está errado para
+// esse caso (mesma lógica do lançamento mensal do Dashboard iFood).
+//
+// Regra por origem:
+//   'fechamento_mensal_direto' → 100%, sem calendário diário (não houve).
+//   'acompanhamento_diario' / 'legado_pre_refatoracao' → 100%, calendário
+//      histórico preservado (o mês FOI consolidado a partir dele).
+//   'ao_vivo' (aberta/reaberta/sem competência) → calcula pelos dias reais,
+//      exatamente como antes.
+// ---------------------------------------------------------------------------
+const STATUS_ALIMENTADO = new Set([
+  STATUS_DIA_BONIFICACAO.IMPORTADO, STATUS_DIA_BONIFICACAO.MANUAL,
+  STATUS_DIA_BONIFICACAO.PARCIAL, STATUS_DIA_BONIFICACAO.SEM_OPERACAO,
+]);
+
+const ROTULO_ORIGEM_ALIMENTACAO = {
+  fechamento_mensal_direto: "Fechado pelo lançamento mensal",
+  acompanhamento_diario: "Consolidado pelo acompanhamento diário",
+  legado_pre_refatoracao: "Histórico legado consolidado",
+};
+
+/**
+ * @param {{ calendario: Array<{status:string}>, congelado: boolean, origemResultado: string }} p
+ * @returns {{
+ *   origem: string, pct: number, rotulo: string,
+ *   mostrarCalendarioDiario: boolean,
+ *   diasEsperados: number|null, diasAlimentados: number|null,
+ *   contagem: Record<string, number>
+ * }}
+ */
+export function resumoAlimentacaoMes({ calendario = [], congelado = false, origemResultado = "ao_vivo" }) {
+  const contagem = {};
+  for (const d of calendario) contagem[d.status] = (contagem[d.status] || 0) + 1;
+
+  if (congelado && origemResultado === "fechamento_mensal_direto") {
+    return {
+      origem: origemResultado, pct: 100,
+      rotulo: ROTULO_ORIGEM_ALIMENTACAO[origemResultado],
+      mostrarCalendarioDiario: false,
+      diasEsperados: null, diasAlimentados: null, contagem,
+    };
+  }
+  if (congelado && (origemResultado === "acompanhamento_diario" || origemResultado === "legado_pre_refatoracao")) {
+    return {
+      origem: origemResultado, pct: 100,
+      rotulo: ROTULO_ORIGEM_ALIMENTACAO[origemResultado],
+      mostrarCalendarioDiario: true,
+      diasEsperados: null, diasAlimentados: null, contagem,
+    };
+  }
+
+  // ao vivo — calcula pelos dias reais (mesma conta que a aba fazia no cliente)
+  const esperados = calendario.length - (contagem[STATUS_DIA_BONIFICACAO.FUTURO] || 0);
+  const alimentados = calendario.filter((d) => STATUS_ALIMENTADO.has(d.status)).length;
+  const pct = esperados > 0 ? (alimentados / esperados) * 100 : 0;
+  return {
+    origem: "ao_vivo", pct,
+    rotulo: `${alimentados} de ${esperados} dia${esperados === 1 ? "" : "s"}`,
+    mostrarCalendarioDiario: true,
+    diasEsperados: esperados, diasAlimentados: alimentados, contagem,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // PERCENTUAIS DERIVADOS (item 10) — nunca depender do percentual do PDF.
 // ---------------------------------------------------------------------------
 

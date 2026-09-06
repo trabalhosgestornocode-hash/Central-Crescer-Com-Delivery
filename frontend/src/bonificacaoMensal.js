@@ -327,22 +327,29 @@ function renderVisaoGeral(box) {
     return;
   }
 
+  // Fechamento mensal DIRETO não tem série diária — os gráficos de evolução
+  // (faturamento/mix dia a dia) ficariam vazios e passariam a ideia errada de
+  // "mês sem dados". O resultado do mês vem do snapshot (hero, metas, cards).
+  const semEvolucaoDiaria = d.congelado === true && d.alimentacaoMes?.origem === "fechamento_mensal_direto";
+
   box.innerHTML = `
     ${heroHtml(d)}
     ${elegibilidadeBonificacaoHtml(d)}
     ${superRestauranteVisaoGeralHtml(d)}
-    ${evolucaoFaturamentoHtml(d)}
+    ${semEvolucaoDiaria ? "" : evolucaoFaturamentoHtml(d)}
     ${proximasConquistasHtml(d)}
     ${fechamentoMensalHtml(d)}
     ${grupoHtml(d, GRUPOS[0])}
-    ${evolucaoMixHtml(d)}
+    ${semEvolucaoDiaria ? "" : evolucaoMixHtml(d)}
     ${grupoHtml(d, GRUPOS[1])}
     ${alertasHtml(d)}
   `;
 
-  const faixasFaturamento = metaDoIndicador("faturamento")?.faixas ?? [];
-  graficoEvolucaoFaturamento("bm-chart-faturamento", { calendario: d.calendario, faixas: faixasFaturamento, mediaDiariaValida: d.faturamento.mediaDiariaValida });
-  graficoEvolucaoMix("bm-chart-mix", d.calendario);
+  if (!semEvolucaoDiaria) {
+    const faixasFaturamento = metaDoIndicador("faturamento")?.faixas ?? [];
+    graficoEvolucaoFaturamento("bm-chart-faturamento", { calendario: d.calendario, faixas: faixasFaturamento, mediaDiariaValida: d.faturamento.mediaDiariaValida });
+    graficoEvolucaoMix("bm-chart-mix", d.calendario);
+  }
 
   // count-up dos números do hero (item 18)
   countUp(box.querySelector("#bm-hero-atual"), d.resumo.bonificacaoAtual ?? 0, { formatar: (v) => fmtMoeda(v) });
@@ -612,6 +619,11 @@ const STATUS_ELEGIBILIDADE_TXT = {
   em_acompanhamento: { titulo: "Em acompanhamento", classe: "institucional", desc: "O mês ainda está aberto — os critérios ainda podem ser atingidos até o fechamento da competência." },
 };
 const ELEGIBILIDADE_ROTULO = { elegivel: "Elegível", em_acompanhamento: "Em acompanhamento", nao_elegivel: "Não elegível" };
+const ORIGEM_RESULTADO_ROTULO = {
+  fechamento_mensal_direto: "Fechado · lançamento mensal direto",
+  acompanhamento_diario: "Fechado · acompanhamento diário",
+  legado_pre_refatoracao: "Histórico legado",
+};
 
 function elegibilidadeBonificacaoHtml(d) {
   const el = d.elegibilidade;
@@ -738,26 +750,73 @@ function alertasHtml(d) {
 }
 
 // ---------------------------------------------------------------------------
-// ABA 2 — LANÇAMENTOS (calendário — preservado; topo com resumo, item 16)
+// ABA 2 — LANÇAMENTOS / "Visio" (calendário diário — ou, para competência
+// fechada pelo LANÇAMENTO MENSAL, o resumo mensal oficial).
+//
+// `d.alimentacaoMes` (backend) diz o que a aba deve mostrar:
+//   mostrarCalendarioDiario=false (origem fechamento_mensal_direto) → o mês foi
+//     preenchido pelos 2 relatórios mensais da Visio; NÃO existem "31 dias
+//     pendentes" — o snapshot é o dado oficial. Mostra o card de mês fechado.
+//   mostrarCalendarioDiario=true (aberta / acompanhamento_diario / legado) →
+//     calendário normal; contagem e % vêm do backend (server-authoritative).
 // ---------------------------------------------------------------------------
 function renderLancamentos(box) {
   const d = bm.dadosMes;
-  const contagem = {};
-  for (const dia of d.calendario) contagem[dia.status] = (contagem[dia.status] || 0) + 1;
-  const passados = d.calendario.length - (contagem.FUTURO || 0);
-  const alimentados = (contagem.IMPORTADO || 0) + (contagem.MANUAL || 0) + (contagem.PARCIAL || 0) + (contagem.SEM_OPERACAO || 0);
-  const pctAlimentado = passados > 0 ? (alimentados / passados) * 100 : 0;
+  const a = d.alimentacaoMes || { pct: 0, contagem: {}, mostrarCalendarioDiario: true, origem: "ao_vivo" };
+
+  if (a.mostrarCalendarioDiario === false) {
+    box.innerHTML = fechamentoMensalDiretoHtml(d);
+    return;
+  }
+
+  const contagem = a.contagem || {};
+  const consolidado = d.congelado === true;
 
   box.innerHTML = `
+    ${consolidado ? `<div class="bm-alerta ok"><b>✓ ${escapeHtml(a.rotulo || "Competência consolidada")}</b><span>O mês está 100% consolidado. O calendário abaixo é o histórico do acompanhamento diário.</span></div>` : ""}
     <div class="bm-cal-resumo">
       ${STATUS_DIA_LEGENDA.map((s) => `<div class="bm-cal-resumo-item"><span class="pill ${s.classe}">${contagem[s.chave] || 0}</span><small>${s.label}</small></div>`).join("")}
-      <div class="bm-cal-resumo-pct"><div class="bm-cal-resumo-barra"><div style="width:${pctAlimentado}%"></div></div><small>${fmtPct(pctAlimentado)} do mês alimentado</small></div>
+      <div class="bm-cal-resumo-pct"><div class="bm-cal-resumo-barra"><div style="width:${a.pct}%"></div></div><small>${fmtPct(a.pct)} do mês alimentado</small></div>
     </div>
     <section class="dex-cal-wrap">
       <div class="dex-cal">${d.calendario.map((dia) => diaHtml(dia)).join("")}</div>
     </section>`;
 
   box.querySelectorAll(".dex-cal-dia[data-clicavel]").forEach((elDia) => elDia.addEventListener("click", () => abrirDrawerDia(elDia.dataset.data)));
+}
+
+// Competência FECHADA pelo lançamento mensal direto — o mês está oficialmente
+// alimentado pelos 2 relatórios mensais da Visio, sem calendário diário.
+function fechamentoMensalDiretoHtml(d) {
+  const comp = `${MESES[d.mes - 1]}/${d.ano}`;
+  const vo = d.valoresOficiais || {};
+  const pct = vo.percentuais || d.mix || {};
+  const r = d.resumo || {};
+  const item = (lbl, val) => `<div class="vd-pv-item"><span>${lbl}</span><b>${val}</b></div>`;
+  return `
+    <section class="bm-secao">
+      <div class="bm-fmd-card">
+        <div class="bm-fmd-titulo">✓ ${escapeHtml(comp)} fechado pelo lançamento mensal</div>
+        <p class="bm-vazio-inline">Relatórios mensais da Visio (Relatório Geral de Vendas + Relatório de Produtos). Competência alimentada: <b>100%</b>. Fechamento oficial${d.versaoSnapshot ? ` · versão ${d.versaoSnapshot}` : ""}.</p>
+        <div class="bm-fmd-barra"><div style="width:100%"></div></div>
+      </div>
+      <details class="bm-pv-corrigir" id="bm-fmd-detalhe">
+        <summary>Ver os indicadores congelados</summary>
+        <div class="vd-pv-grid">
+          ${item("Faturamento do mês", vo.faturamento != null ? fmtMoeda(vo.faturamento) : "—")}
+          ${item("Ticket médio", vo.ticketMedio != null ? fmtMoeda(vo.ticketMedio) : "—")}
+          ${item("Bebidas", fmtPct(pct.bebidas))}
+          ${item("Adicionais", fmtPct(pct.adicionais))}
+          ${item("Diversos", fmtPct(pct.diversos))}
+          ${item("Sanduíches/Saladas", vo.sanduichesSaladas ?? "—")}
+          ${item("Quantidade de vendas", vo.quantidadeVendas ?? "—")}
+          ${item("Metas atingidas", `${r.metasAtingidas ?? 0} de ${r.metasComRegra ?? 0}`)}
+          ${item("Bonificação (bruta)", r.bonificacaoBruta != null ? fmtMoeda(r.bonificacaoBruta) : "—")}
+          ${item("Bonificação (definitiva)", r.bonificacaoAtual != null ? fmtMoeda(r.bonificacaoAtual) : "—")}
+        </div>
+        <p class="dex-diag-vazio">Estes são os valores oficiais do mês, congelados no fechamento. A Visão Geral e as demais abas usam exatamente eles.</p>
+      </details>
+    </section>`;
 }
 
 function diaHtml(dia) {
@@ -1078,6 +1137,7 @@ async function renderHistorico(box) {
           <div class="bm-gauge-detalhe">
             <span>de ${fmtMoeda(m.bonificacaoMaxima)} possíveis</span>
             <span>${m.metasAtingidas} de ${m.metasComRegra} metas · faturamento ${fmtMoeda(m.faturamentoAcumulado)}</span>
+            ${m.congelado ? `<span class="bm-hist-origem">${escapeHtml(ORIGEM_RESULTADO_ROTULO[m.origemResultado] ?? "Fechado")}</span>` : ""}
           </div>
         </div>`).join("")}</div>
     </section>

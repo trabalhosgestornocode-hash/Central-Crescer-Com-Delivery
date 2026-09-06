@@ -3698,7 +3698,16 @@ tr.dex-linha-na { opacity: .65; }
 .bm-alerta { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 14px; border-radius: 10px; font-size: 13px; flex-wrap: wrap; }
 .bm-alerta.warn { background: var(--warn-bg); border: 1px solid rgba(196,138,18,.25); }
 .bm-alerta.info { background: var(--info-bg); border: 1px solid rgba(47,119,196,.25); }
+.bm-alerta.ok { background: var(--ok-bg); border: 1px solid rgba(46,160,67,.25); }
 .bm-alerta span { color: var(--cinza); font-size: 12.5px; }
+
+/* Aba Visio — competência fechada pelo LANÇAMENTO MENSAL DIRETO */
+.bm-fmd-card { padding: 18px 20px; border: 1px solid var(--ok); border-left-width: 4px; border-radius: var(--raio); background: var(--ok-bg); margin-bottom: 14px; }
+.bm-fmd-titulo { font-size: 15px; font-weight: 750; margin-bottom: 4px; }
+.bm-fmd-card .bm-vazio-inline { margin: 0; }
+.bm-fmd-barra { height: 8px; border-radius: 999px; background: var(--superficie-2); overflow: hidden; margin-top: 12px; }
+.bm-fmd-barra > div { height: 100%; background: linear-gradient(90deg, var(--info), var(--ok)); border-radius: 999px; }
+.bm-hist-origem { font-size: 11px; font-weight: 650; color: var(--ok); text-transform: uppercase; letter-spacing: .3px; }
 
 /* ---------------------------------------------------------------------
    LANÇAMENTOS — resumo do topo (item 16)
