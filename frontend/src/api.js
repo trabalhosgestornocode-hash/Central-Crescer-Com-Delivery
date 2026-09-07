@@ -357,6 +357,7 @@ export const bonifFechamentoMensalReabrir = ({ ano, mes, motivo }) => postJson(`
 
 // ---------- Parser Food Delivery (importação + conciliação de taxas de entregador) ----------
 const PFD = "/api/v1/parser-food-delivery";
+export const pfdPeriodo = (dataInicio, dataFim) => getJson(`${PFD}/periodo${qs({ dataInicio, dataFim })}`);
 export const pfdImportacoes = () => getJson(`${PFD}/importacoes`);
 export const pfdImportacaoDetalhe = (id) => getJson(`${PFD}/importacoes/${id}`);
 export const pfdArquivoImportacao = (id) => getJson(`${PFD}/importacoes/${id}/arquivo`);

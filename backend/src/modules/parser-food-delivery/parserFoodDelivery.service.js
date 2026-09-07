@@ -7,12 +7,14 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import { lerRelatorio, decodificarArquivo } from "./parserFoodDelivery.parser.js";
 import {
-  classificarPedido, resumoConciliacao, agruparPorEntregador, validarCodigo, temEntregador,
-  ehCancelado, resolverStatusConciliacao, STATUS_CONCILIACAO, somarResumosPeriodo,
+  classificarPedido, resumoConciliacao, agruparPorEntregador, chaveEntregador, validarCodigo, temEntregador,
+  ehCancelado, classificacaoEfetivaCancelamento, resolverStatusConciliacao, STATUS_CONCILIACAO, somarResumosPeriodo,
   limitesDoMes, inicioMesSeguinte, resolverCandidatoPedido, explicarCancelamento,
 } from "./parserFoodDelivery.calc.js";
 import { classificarOperacao, OPERACAO, rotuloOperacao } from "./parserFoodDelivery.operacao.js";
 import { classificarCancelamento, CLASSIFICACAO_CANCELAMENTO } from "./parserFoodDelivery.classificacao.js";
+
+import { normalizarPeriodo, consolidarPedidosPeriodo, horaOperacional } from "./parserFoodDelivery.periodo.js";
 
 const TABELA_IMPORT = "parser_fd_importacoes";
 const TABELA_PEDIDOS = "parser_fd_pedidos";
@@ -46,6 +48,10 @@ const COLUNAS_PEDIDO_LEITURA = [
 
 /** Number(x), mas preserva null/undefined — "não informado" nunca vira 0. */
 const numOuNulo = (x) => (x == null ? null : Number(x));
+
+const entregadoresParaApi = (pedidos) => agruparPorEntregador(pedidos)
+  .map((e) => ({ ...e, chave: chaveEntregador(e.entregador) }))
+  .sort((a, b) => b.taxasValidas - a.taxasValidas);
 
 // Tamanho de página deliberadamente abaixo do limite padrão do PostgREST
 // (`db.max_rows`, 1000 neste projeto) — nunca pedir num único .range() mais
@@ -120,8 +126,9 @@ function paraApiImportacao(row) {
 /** Aceita tanto uma linha do banco (status_conciliacao) quanto um pedido recém-classificado (statusConciliacao). */
 function paraApiPedido(row) {
   return {
-    id: row.id ?? null, numeroPedido: row.numero_pedido ?? row.numeroPedido, dataHora: row.data_hora ?? row.dataHora,
-    situacao: row.situacao, entregador: row.entregador,
+    id: row.id ?? null, importacaoId: row.importacao_id ?? row.importacaoId ?? null, numeroPedido: row.numero_pedido ?? row.numeroPedido, dataHora: horaOperacional(row.data_hora ?? row.dataHora),
+    situacao: row.situacao, cancelado: ehCancelado(row.situacao), entregador: row.entregador,
+    entregadorChave: chaveEntregador(row.entregador),
     taxaEntregador: numOuNulo(row.taxa_entregador ?? row.taxaEntregador),
     valorTotalPedido: numOuNulo(row.valor_total_pedido ?? row.valorTotalPedido),
     formaPagamento: row.forma_pagamento ?? row.formaPagamento,
@@ -135,19 +142,23 @@ function paraApiPedido(row) {
     statusConciliacao: row.statusConciliacao ?? row.status_conciliacao ?? null,
     // Timeline do pedido (item 14 — motor de classificação + timeline visual
     // da aba Cancelamentos). Ausente em relatórios antigos: fica null.
-    dataPronto: row.data_pronto ?? row.dataPronto ?? null,
-    dataDespachado: row.data_despachado ?? row.dataDespachado ?? null,
-    dataAceito: row.data_aceito ?? row.dataAceito ?? null,
-    dataColetado: row.data_coletado ?? row.dataColetado ?? null,
-    dataChegadaEntrega: row.data_chegada_entrega ?? row.dataChegadaEntrega ?? null,
-    dataEntregue: row.data_entregue ?? row.dataEntregue ?? null,
-    dataFinalizado: row.data_finalizado ?? row.dataFinalizado ?? null,
-    dataCancelado: row.data_cancelado ?? row.dataCancelado ?? null,
-    dataRejeitado: row.data_rejeitado ?? row.dataRejeitado ?? null,
+    dataPronto: horaOperacional(row.data_pronto ?? row.dataPronto),
+    dataDespachado: horaOperacional(row.data_despachado ?? row.dataDespachado),
+    dataAceito: horaOperacional(row.data_aceito ?? row.dataAceito),
+    dataColetado: horaOperacional(row.data_coletado ?? row.dataColetado),
+    dataChegadaEntrega: horaOperacional(row.data_chegada_entrega ?? row.dataChegadaEntrega),
+    dataEntregue: horaOperacional(row.data_entregue ?? row.dataEntregue),
+    dataFinalizado: horaOperacional(row.data_finalizado ?? row.dataFinalizado),
+    dataCancelado: horaOperacional(row.data_cancelado ?? row.dataCancelado),
+    dataRejeitado: horaOperacional(row.data_rejeitado ?? row.dataRejeitado),
     razaoRejeicao: row.razao_rejeicao ?? row.razaoRejeicao ?? null,
     justificativaRejeicao: row.justificativa_rejeicao ?? row.justificativaRejeicao ?? null,
     // Classificação automática do cancelamento + override manual (seção 29).
     classificacaoCancelamento: row.classificacao_cancelamento ?? row.classificacaoCancelamento ?? null,
+    classificacaoEfetiva: classificacaoEfetivaCancelamento({ situacao: row.situacao,
+      statusConciliacao: row.statusConciliacao ?? row.status_conciliacao,
+      classificacaoCancelamento: row.classificacao_cancelamento ?? row.classificacaoCancelamento,
+      classificacaoOverrideEm: row.classificacao_override_em ?? row.classificacaoOverrideEm }),
     classificacaoMotivo: row.classificacao_motivo ?? row.classificacaoMotivo ?? null,
     classificacaoNivelConfianca: row.classificacao_nivel_confianca ?? row.classificacaoNivelConfianca ?? null,
     classificacaoRegra: row.classificacao_regra ?? row.classificacaoRegra ?? null,
@@ -317,7 +328,7 @@ export async function conciliarPreview({ organizacaoId, unidadeId, arquivo, codi
   // override de compatibilidade, mas o wizard novo nunca os envia.
   const classificados = pedidosElegiveis.map((p) => classificarComMotor(p, codigosSet));
   const resumo = resumoConciliacao(classificados);
-  const entregadores = agruparPorEntregador(classificados).sort((a, b) => b.taxasValidas - a.taxasValidas);
+  const entregadores = entregadoresParaApi(classificados);
   const avisos = await avisosDuplicidade({ unidadeId, hash: relatorio.hash, periodoInicio, periodoFim });
 
   return {
@@ -374,20 +385,22 @@ async function inserirPedidosEmLotes(linhas) {
   }
 }
 
+const timestampPersistido = (valor) => valor ? `${horaOperacional(valor)}Z` : null;
+
 function paraLinhaPedido(p, { importacaoId, organizacaoId, unidadeId }) {
   return {
     importacao_id: importacaoId, organizacao_id: organizacaoId, unidade_id: unidadeId,
-    numero_pedido: p.numeroPedido, data_hora: p.dataHora, situacao: p.situacao, entregador: p.entregador,
+    numero_pedido: p.numeroPedido, data_hora: timestampPersistido(p.dataHora), situacao: p.situacao, entregador: p.entregador,
     taxa_entregador: p.taxaEntregador, valor_total_pedido: p.valorTotalPedido, forma_pagamento: p.formaPagamento,
     razao_cancelamento: p.razaoCancelamento, justificativa_cancelamento: p.justificativaCancelamento,
-    data_entregue: p.dataEntregue, data_finalizado: p.dataFinalizado, data_cancelado: p.dataCancelado,
+    data_entregue: timestampPersistido(p.dataEntregue), data_finalizado: timestampPersistido(p.dataFinalizado), data_cancelado: timestampPersistido(p.dataCancelado),
     origem: p.origem, sem_taxa_informado: p.semTaxaInformado, status_conciliacao: p.statusConciliacao ?? null,
     operacao: p.operacao, operacao_motivo: p.operacaoMotivo, detalhes_pedido: p.detalhesPedido,
     dados_brutos: p.dadosBrutos,
     // Timeline lida do relatório (motor de classificação de cancelamentos).
-    data_pronto: p.dataPronto ?? null, data_despachado: p.dataDespachado ?? null, data_aceito: p.dataAceito ?? null,
-    data_coletado: p.dataColetado ?? null, data_chegada_entrega: p.dataChegadaEntrega ?? null,
-    data_rejeitado: p.dataRejeitado ?? null, razao_rejeicao: p.razaoRejeicao ?? null, justificativa_rejeicao: p.justificativaRejeicao ?? null,
+    data_pronto: timestampPersistido(p.dataPronto), data_despachado: timestampPersistido(p.dataDespachado), data_aceito: timestampPersistido(p.dataAceito),
+    data_coletado: timestampPersistido(p.dataColetado), data_chegada_entrega: timestampPersistido(p.dataChegadaEntrega),
+    data_rejeitado: timestampPersistido(p.dataRejeitado), razao_rejeicao: p.razaoRejeicao ?? null, justificativa_rejeicao: p.justificativaRejeicao ?? null,
     // Resultado da classificação automática — `classificacao_original` é o
     // snapshot congelado no momento do import, nunca sobrescrito por um
     // override manual posterior (auditoria: sempre dá pra ver o que o motor
@@ -445,7 +458,7 @@ export async function confirmarImportacao({ organizacaoId, unidadeId, usuario, a
     cancelados_com_taxa: resumo.canceladosComTaxa, cancelados_sem_taxa: resumo.canceladosSemTaxa,
     cancelados_recebem_taxa: resumo.canceladosRecebemTaxa, cancelados_nao_recebem_taxa: resumo.canceladosNaoRecebemTaxa, cancelados_revisao: resumo.canceladosRevisao,
     taxas_brutas: resumo.taxasBrutas, taxas_descartadas: resumo.taxasDescartadas, taxas_validas: resumo.taxasValidas,
-    codigos_sem_taxa: [...codigosSet], status: "concluida",
+    codigos_sem_taxa: [...codigosSet], status: "erro",
     usuario_id: usuario?.id || null, usuario_nome: usuario?.nome || null, usuario_email: usuario?.email || null,
   }).select("*").single();
   if (error) {
@@ -461,12 +474,11 @@ export async function confirmarImportacao({ organizacaoId, unidadeId, usuario, a
     codigosDepois: [...codigosSet], taxasValidasDepois: resumo.taxasValidas, usuario,
   });
 
-  const entregadores = agruparPorEntregador(pedidosElegiveis).sort((a, b) => b.taxasValidas - a.taxasValidas);
-  return {
-    importacao: paraApiImportacao(importacao), resumo, entregadores,
-    pedidos: pedidosElegiveis.map(paraApiPedido),
-    pedidosIgnorados: pedidosProcessados.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado),
-  };
+  const { error: erroConclusao } = await supabase.from(TABELA_IMPORT)
+    .update({ status: "concluida" }).eq("id", importacao.id)
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId);
+  if (erroConclusao) throw ApiError.internal(erroConclusao.message);
+  return obterImportacao({ organizacaoId, unidadeId, importacaoId: importacao.id });
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +503,7 @@ export async function obterImportacao({ organizacaoId, unidadeId, importacaoId }
   const pedidos = todosPedidos.filter(ehElegivelConciliacao);
   const pedidosIgnorados = todosPedidos.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado);
   const resumo = resumoConciliacao(pedidos);
-  const entregadores = agruparPorEntregador(pedidos).sort((a, b) => b.taxasValidas - a.taxasValidas);
+  const entregadores = entregadoresParaApi(pedidos);
   return { importacao: paraApiImportacao(importacao), resumo, pedidos, pedidosIgnorados, entregadores };
 }
 
@@ -565,7 +577,7 @@ export async function editarCodigosSemTaxa({ organizacaoId, unidadeId, importaca
   const pedidosApi = classificados.map(paraApiPedido);
   const pedidosElegiveisApi = pedidosApi.filter(ehElegivelConciliacao);
   const pedidosIgnoradosApi = pedidosApi.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado);
-  const entregadores = agruparPorEntregador(pedidosElegiveisApi).sort((a, b) => b.taxasValidas - a.taxasValidas);
+  const entregadores = entregadoresParaApi(pedidosElegiveisApi);
   return { importacao: paraApiImportacao(salvo), resumo, entregadores, pedidos: pedidosElegiveisApi, pedidosIgnorados: pedidosIgnoradosApi };
 }
 
@@ -617,7 +629,7 @@ export async function alterarClassificacaoCancelamento({ organizacaoId, unidadeI
   const pedidosElegiveisApi = pedidosApi.filter(ehElegivelConciliacao);
   const pedidosIgnoradosApi = pedidosApi.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado);
   const resumo = resumoConciliacao(pedidosElegiveisApi);
-  const entregadores = agruparPorEntregador(pedidosElegiveisApi).sort((a, b) => b.taxasValidas - a.taxasValidas);
+  const entregadores = entregadoresParaApi(pedidosElegiveisApi);
 
   const { data: salvo, error: eImp2 } = await supabase.from(TABELA_IMPORT).update({
     entregues: resumo.entregues, cancelados: resumo.cancelados,
@@ -785,4 +797,44 @@ export async function consultarCancelamento({ organizacaoId, unidadeId, numeroPe
     };
   }
   return explicarCancelamento(escolha.candidato);
+}
+
+/** Consulta operacional, independente do Histórico e do limite de 200 arquivos. */
+export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, dataFim }) {
+  const periodo = normalizarPeriodo(dataInicio, dataFim);
+  await resolverUnidade({ organizacaoId, unidadeId });
+  const linhas = [];
+  const fontes = new Map();
+  // Join com importações concluídas evita N+1 e processamento parcial.
+  for (let offset = 0; ; offset += PAGINA_PEDIDOS) {
+    const { data, error } = await supabase.from(TABELA_PEDIDOS)
+      .select(COLUNAS_PEDIDO_LEITURA + ", organizacao_id, unidade_id, fonte:parser_fd_importacoes!inner(id, organizacao_id, unidade_id, status, criado_em, nome_arquivo, periodo_inicio, periodo_fim, usuario_nome, coluna_detalhes_encontrada)")
+      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+      .eq("fonte.organizacao_id", organizacaoId).eq("fonte.unidade_id", unidadeId)
+      .eq("fonte.status", "concluida")
+      .gte("data_hora", periodo.inicio).lt("data_hora", periodo.fimExclusivo)
+      .order("data_hora", { ascending: true }).order("id", { ascending: true })
+      .range(offset, offset + PAGINA_PEDIDOS - 1);
+    if (error) throw ApiError.internal(error.message);
+    for (const row of data || []) {
+      linhas.push(row);
+      fontes.set(row.importacao_id, paraApiImportacao(row.fonte));
+    }
+    if (!data || data.length < PAGINA_PEDIDOS) break;
+  }
+  const todos = consolidarPedidosPeriodo(linhas).map(paraApiPedido);
+  const pedidos = todos.filter(ehElegivelConciliacao);
+  const filtragem = resumoFiltragem(todos);
+  return {
+    periodo: { dataInicio, dataFim }, consolidado: true,
+    importacao: { id: null, periodoInicio: dataInicio, periodoFim: dataFim,
+      totalPedidos: todos.length, pedidosSubway: filtragem.subway,
+      pedidosAcai: filtragem.acaiNoGrau, pedidosRevisao: filtragem.revisaoNecessaria,
+      pedidosSemEntregador: filtragem.semEntregador, codigosSemTaxa: [],
+      colunaDetalhesEncontrada: [...fontes.values()].every((f) => f.colunaDetalhesEncontrada !== false) },
+    resumo: resumoConciliacao(pedidos), pedidos,
+    pedidosIgnorados: todos.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado),
+    entregadores: entregadoresParaApi(pedidos),
+    fontes: [...fontes.values()], duplicadosSobrepostos: linhas.length - todos.length,
+  };
 }

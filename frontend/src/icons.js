@@ -65,6 +65,19 @@ const PATHS = {
   "list-checks": '<path d="m3.5 7 1.7 1.7L9 5"/><path d="M12 6.5h9"/><path d="m3.5 15 1.7 1.7L9 13"/><path d="M12 14.5h9"/>',
   // Agente Crescer (chat)
   send: '<path d="m3 11 18-8-8 18-2.5-7.5L3 11z"/>',
+  // Parser Food Delivery (rebrand visual — famílias de ícones únicas, sem emoji)
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 9l5-5 5 5"/><path d="M12 4v12"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
+  "sliders-horizontal": '<path d="M3 7h11M18 7h3M3 17h3M10 17h11"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>',
+  users: '<path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="3.2"/><path d="M22 20v-2a4 4 0 0 0-3-3.87"/><path d="M16 4.13a4 4 0 0 1 0 7.75"/>',
+  layers: '<path d="m12 2 9 5-9 5-9-5 9-5z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
+  "file-text": '<path d="M14 2H6.5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v5.5h5.5"/><path d="M8.5 13h7M8.5 17h7M8.5 9h2"/>',
+  "arrow-right": '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  "chevron-left": '<path d="m15 6-6 6 6 6"/>',
+  "chevron-right": '<path d="m9 6 6 6-6 6"/>',
+  scale: '<path d="M12 3v18M7 21h10"/><path d="M6.5 6 3 13a3.5 3.5 0 0 0 7 0L6.5 6zM17.5 6 14 13a3.5 3.5 0 0 0 7 0L17.5 6z"/><path d="M6.5 6h11"/>',
+  activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
+  filter: '<path d="M3 4h18l-7 8.5V20l-4-2v-5.5z"/>',
 };
 
 /**
