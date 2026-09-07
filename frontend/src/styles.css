@@ -278,6 +278,13 @@ body {
 }
 .busca input:focus { outline: none; border-color: var(--verde-vivo); box-shadow: 0 0 0 3px rgba(216,19,36,.13); }
 .busca::before { content: "🔍"; position: absolute; left: 11px; top: 50%; transform: translateY(-50%); font-size: 13px; opacity: .55; }
+/* Parser: ícone de busca vetorial (sem emoji) — traço fino, mesma família de icons.js */
+.pfd-page .busca::before {
+  content: ""; width: 15px; height: 15px; opacity: .5;
+  background: currentColor; color: var(--cinza);
+  -webkit-mask: no-repeat center / contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E");
+  mask: no-repeat center / contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m21 21-4.3-4.3'/%3E%3C/svg%3E");
+}
 .result-count { font-size: 13px; color: var(--cinza); margin-left: auto; font-weight: 500; }
 
 /* ===================== TABELA ===================== */
@@ -3864,65 +3871,192 @@ tr.dex-linha-na { opacity: .65; }
 .pfd-chip-aviso { background: var(--warn-bg); border-color: rgba(196,138,18,.3); color: var(--warn); }
 .pfd-chip-erro { background: var(--bad-bg); border-color: rgba(219,59,59,.3); color: var(--bad); }
 
-/* ---------- Parser Food Delivery — reformulação (Central de Conciliação) ---------- */
-/* Navegação de período: chips rápidos + intervalo personalizado + setas ‹ › */
-.pfd-periodo-nav { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
-.pfd-periodo-custom { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--cinza); }
-.pfd-periodo-custom input[type="date"] { padding: 6px 9px; border: 1.5px solid var(--linha); border-radius: 8px; background: var(--campo-bg); color: var(--texto); font-size: 12.5px; }
-.pfd-periodo-setas { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; font-size: 13px; color: var(--texto); white-space: nowrap; }
-.pfd-periodo-setas .btn { padding: 4px 10px; font-size: 15px; line-height: 1; }
+/* ======================================================================
+   PARSER FOOD DELIVERY — UX/UI premium (Central de Conciliação)
+   Escala de espaçamento: 4 / 8 / 12 / 16 / 24 / 32.
+   Raios: cartões 14px (--raio), controles 10px (--raio-sm), pills 999px.
+   Vermelho da marca = ação principal, seleção e o card financeiro; o
+   resto vive em neutros + verde/âmbar sutis.
+   ====================================================================== */
 
-/* "Última importação: ..." discreto + botão de detalhes (item 6 do pedido) */
-.pfd-ultima-import { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 12.5px; color: var(--cinza); margin-bottom: 14px; }
-.pfd-ultima-import b { color: var(--texto); }
+/* Container: largura intencional e centralizada dentro de .content */
+.pfd-page { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; }
+.pfd-page .bm-conteudo { display: flex; flex-direction: column; gap: 24px; }
 
-/* 4 cards principais da Visão Geral — .vd-cards já cai em 3/2/1 colunas
-   via media query própria (620/400px); aqui só fixamos o desktop em 4 e
-   levamos o mesmo degrau intermediário pra não squeezar em telas médias
-   (regra sem media query vence a base ".vd-cards" de 6 colunas por vir
-   depois no arquivo; as media queries abaixo, por sua vez, vencem esta). */
-.pfd-kpis { grid-template-columns: repeat(4, 1fr); }
-@media (max-width: 620px) { .pfd-kpis { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 400px) { .pfd-kpis { grid-template-columns: 1fr; } }
+/* Header */
+.pfd-head { align-items: center; margin-bottom: 24px; }
+.pfd-head .dex-head-txt h2 { font-size: 25px; }
+.pfd-head .dex-head-txt p { font-size: 14px; margin-top: 2px; }
+.pfd-head-acoes { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pfd-head-acoes .bm-unidade-chip { display: inline-flex; align-items: center; gap: 6px; }
+.pfd-head-acoes .btn-primary { height: 40px; padding: 0 18px; display: inline-flex; align-items: center; gap: 8px; box-shadow: var(--sombra-sm); }
+.pfd-head-acoes .btn-primary:hover { box-shadow: var(--glow-verde); }
 
-/* Indicadores secundários compactos (chips, não cards) */
-.pfd-indicadores-sec { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+/* Navegação por abas */
+.pfd-nav { gap: 4px; margin-bottom: 24px; }
+.pfd-nav .dex-tab { padding: 10px 14px; }
+.pfd-nav .dex-tab .icon { opacity: .8; }
+.pfd-nav .dex-tab.ativo .icon { opacity: 1; }
 
-/* Distribuição do relatório — barra proporcional empilhada + legenda */
-.pfd-dist-bar { display: flex; width: 100%; height: 10px; border-radius: 999px; overflow: hidden; background: var(--superficie-2); margin-top: 8px; }
-.pfd-dist-segment { height: 100%; min-width: 2px; transition: width .5s ease; }
+/* Barra de controles analíticos — atalhos + calendário | contador + detalhes */
+.pfd-controls {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio);
+  padding: 12px 16px; margin-bottom: 24px; box-shadow: var(--sombra-sm);
+}
+.pfd-controls-esq, .pfd-controls-dir { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.pfd-controls .vd-chips { gap: 4px; }
+.pfd-controls .vd-chip { background: transparent; border-color: transparent; }
+
+/* Chips de filtro/período do Parser: seleção com tint vermelho suave da
+   marca — nunca um bloco vermelho cheio (rebrand: "evitar excesso de vermelho"). */
+.pfd-page .vd-chip { color: var(--cinza); }
+.pfd-page .vd-chip:hover { background: var(--superficie-2); border-color: var(--linha); color: var(--texto); }
+.pfd-page .vd-chip.ativo {
+  background: var(--vermelho-tint); border-color: var(--vermelho-tint-borda);
+  color: var(--verde-med); box-shadow: none;
+}
+.pfd-cal-btn {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  padding: 7px 12px; border: 1.5px solid var(--linha); border-radius: var(--raio-sm);
+  background: var(--campo-bg); color: var(--texto); font-size: 12.5px; font-weight: 650;
+  transition: border-color var(--t), background var(--t);
+}
+.pfd-cal-btn:hover { border-color: var(--cinza-claro); }
+.pfd-cal[open] .pfd-cal-btn { border-color: var(--verde-vivo); background: var(--vermelho-tint); }
+.pfd-cal-btn .icon { color: var(--cinza); }
+.pfd-relatorios-tag {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650;
+  color: var(--cinza); background: var(--superficie-2); border: 1px solid var(--linha);
+  border-radius: 999px; padding: 5px 12px; white-space: nowrap;
+}
+.pfd-relatorios-tag .icon { color: var(--cinza-claro); }
+.pfd-periodo-setas { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--cinza); white-space: nowrap; }
+.pfd-periodo-setas .btn { padding: 5px 8px; line-height: 0; }
+
+/* Linha discreta "última importação / consolidado" */
+.pfd-meta-linha { font-size: 12.5px; color: var(--cinza); margin: -4px 0 0; }
+.pfd-meta-linha b { color: var(--texto); font-weight: 650; }
+
+/* ---------- KPIs ---------- */
+.pfd-kpis { grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.pfd-kpi {
+  border: 1px solid var(--linha); border-top-width: 1px; border-radius: var(--raio);
+  padding: 16px; gap: 8px; min-height: 116px; box-shadow: var(--sombra-sm);
+  background: var(--card);
+}
+.pfd-kpi:hover { transform: translateY(-2px); box-shadow: var(--sombra); }
+.pfd-kpi .vd-card-ico {
+  width: 28px; height: 28px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--superficie-2); color: var(--cinza);
+}
+.pfd-kpi .vd-card-lbl { font-size: 11.5px; letter-spacing: .3px; }
+.pfd-kpi .vd-card-val { font-size: 28px; font-weight: 800; letter-spacing: -.6px; margin-top: 2px; }
+.pfd-kpi .vd-card-sub { font-size: 12px; color: var(--cinza-claro); }
+.pfd-kpi--pos .vd-card-ico { background: var(--ok-bg); color: var(--ok); }
+.pfd-kpi--neg .vd-card-ico { background: var(--bad-bg); color: var(--bad); }
+.pfd-kpi--destaque {
+  background: linear-gradient(152deg, #3a070c 0%, #1e0508 100%); border: 1px solid #45090f;
+  box-shadow: var(--sombra-md);
+}
+.pfd-kpi--destaque .vd-card-lbl { color: rgba(255,255,255,.72); }
+.pfd-kpi--destaque .vd-card-val { color: #fff; }
+.pfd-kpi--destaque .vd-card-sub { color: rgba(255,255,255,.6); }
+.pfd-kpi--destaque .vd-card-ico { background: rgba(255,255,255,.12); color: #fff; }
+.pfd-kpi--destaque:hover { box-shadow: var(--sombra-lg); }
+@media (max-width: 900px) { .pfd-kpis { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 460px) { .pfd-kpis { grid-template-columns: 1fr; } }
+
+/* ---------- Seção genérica ---------- */
+.pfd-secao {
+  background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio);
+  padding: 20px; box-shadow: var(--sombra-sm);
+}
+.pfd-secao--plano { background: transparent; border: 0; box-shadow: none; padding: 0; }
+.pfd-secao-head { margin-bottom: 16px; }
+.pfd-secao-head h3 {
+  display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 750; letter-spacing: -.2px;
+}
+.pfd-secao-head h3 .icon { color: var(--cinza); }
+.pfd-secao-head p { font-size: 12.5px; color: var(--cinza); margin-top: 4px; }
+.pfd-secao-texto { font-size: 13.5px; color: var(--cinza); }
+.pfd-secao-texto b { color: var(--texto); }
+.pfd-secao-acoes { margin-top: 16px; }
+.pfd-secao-acoes .btn { display: inline-flex; align-items: center; gap: 7px; }
+.pfd-secao-nota { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--cinza); margin-top: 12px; }
+.pfd-secao-nota .icon { flex-shrink: 0; margin-top: 1px; }
+.pfd-secao-nota--warn { color: var(--warn); }
+.pfd-secao-faixa {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin-top: 16px; padding: 12px 14px; background: var(--superficie-2);
+  border: 1px solid var(--linha); border-radius: var(--raio-sm); font-size: 12.5px; color: var(--cinza);
+}
+.pfd-secao-faixa .btn { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---------- Faixa de status da análise ---------- */
+.pfd-status-band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.pfd-status-band--compacto { grid-template-columns: repeat(3, 1fr); }
+.pfd-status-item {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 12px 14px; border-radius: var(--raio-sm); border: 1px solid var(--linha);
+  background: var(--superficie-2); border-left: 3px solid var(--cinza-claro);
+}
+.pfd-status-lbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--cinza); }
+.pfd-status-val { font-size: 19px; font-weight: 800; letter-spacing: -.3px; color: var(--texto); font-variant-numeric: tabular-nums; }
+.pfd-status--pos { border-left-color: var(--ok); }
+.pfd-status--warn { border-left-color: var(--warn); }
+.pfd-status--neg { border-left-color: var(--bad); }
+.pfd-status--neutro { border-left-color: var(--cinza-claro); }
+@media (max-width: 720px) { .pfd-status-band, .pfd-status-band--compacto { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---------- Distribuição dos pedidos ---------- */
+.pfd-dist-bar { display: flex; width: 100%; height: 12px; border-radius: 999px; overflow: hidden; background: var(--superficie-2); gap: 2px; }
+.pfd-dist-segment { height: 100%; min-width: 3px; border-radius: 3px; transition: width .5s ease; }
 .pfd-dist-ok { background: var(--ok); }
 .pfd-dist-info { background: var(--info); }
-.pfd-dist-muted { background: var(--muted); }
+.pfd-dist-muted { background: var(--cinza-claro); }
 .pfd-dist-warn { background: var(--warn); }
 .pfd-dist-bad { background: var(--bad); }
-.pfd-dist-legenda { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: var(--cinza); }
-.pfd-dist-leg-item { display: inline-flex; align-items: center; gap: 5px; }
-.pfd-dist-leg-item b { color: var(--texto); }
-.pfd-dist-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.pfd-dist-legenda { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 14px; font-size: 12.5px; color: var(--cinza); }
+.pfd-dist-leg-item { display: inline-flex; align-items: center; gap: 7px; }
+.pfd-dist-leg-item b { color: var(--texto); font-variant-numeric: tabular-nums; }
+.pfd-dist-dot { width: 8px; height: 8px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
 .pfd-dist-dot.pfd-dist-ok { background: var(--ok); }
 .pfd-dist-dot.pfd-dist-info { background: var(--info); }
-.pfd-dist-dot.pfd-dist-muted { background: var(--muted); }
+.pfd-dist-dot.pfd-dist-muted { background: var(--cinza-claro); }
 .pfd-dist-dot.pfd-dist-warn { background: var(--warn); }
 .pfd-dist-dot.pfd-dist-bad { background: var(--bad); }
 
-/* Conciliação — taxas encontradas / descartadas / valor final */
-.pfd-conciliacao { background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio); padding: 16px 18px; margin-top: 18px; }
-.pfd-conc-linha { display: flex; align-items: center; justify-content: space-between; font-size: 13.5px; color: var(--cinza); padding: 4px 0; }
-.pfd-conc-linha b { color: var(--texto); font-variant-numeric: tabular-nums; }
+/* ---------- Resumo financeiro ---------- */
+.pfd-conciliacao { background: transparent; border: 0; border-radius: 0; padding: 0; margin: 0; }
+.pfd-conc-linha { display: flex; align-items: center; justify-content: space-between; font-size: 13.5px; color: var(--cinza); padding: 7px 0; }
+.pfd-conc-linha b { color: var(--texto); font-variant-numeric: tabular-nums; font-weight: 650; }
 .pfd-conc-linha.pfd-conc-neg b { color: var(--bad); }
 .pfd-conc-divisor { height: 1px; background: var(--linha); margin: 8px 0; }
-.pfd-conc-linha.pfd-conc-final { font-size: 16px; font-weight: 800; }
-.pfd-conc-linha.pfd-conc-final span { color: var(--texto); font-weight: 700; }
-.pfd-conc-linha.pfd-conc-final b { color: var(--verde-med); font-size: 19px; }
+.pfd-conc-linha.pfd-conc-final { padding-top: 12px; }
+.pfd-conc-linha.pfd-conc-final span { color: var(--texto); font-weight: 750; font-size: 14px; }
+.pfd-conc-linha.pfd-conc-final b { color: var(--verde-med); font-size: 22px; font-weight: 800; letter-spacing: -.4px; }
 
-/* Timeline do pedido cancelado (reaproveita .hist-timeline/.hist-evento) */
-.pfd-timeline-dot { background: var(--grad-verde); font-size: 13px; }
-.pfd-timeline-dot-cancelado { background: var(--bad); }
-.pfd-override-textarea { width: 100%; margin-top: 8px; min-height: 70px; padding: 9px 12px; border: 1.5px solid var(--linha); border-radius: 9px; background: var(--campo-bg); color: var(--texto); font: inherit; resize: vertical; }
+/* ---------- Ranking de entregadores ---------- */
+.pfd-entregador-card .vd-card-topo { gap: 8px; }
+.pfd-entregador-pos {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11.5px; font-weight: 800; background: var(--superficie-2); color: var(--cinza);
+}
+.pfd-entregador-pos--top { background: var(--vermelho-tint); color: var(--verde-med); }
 
-@media (max-width: 700px) {
-  .pfd-periodo-setas { margin-left: 0; width: 100%; justify-content: space-between; }
+/* ---------- Timeline do pedido cancelado ---------- */
+.pfd-timeline-dot { background: var(--superficie-2); color: var(--cinza); border: 1px solid var(--linha); }
+.pfd-timeline-dot .icon { color: currentColor; }
+.pfd-timeline-dot-cancelado { background: var(--bad-bg); color: var(--bad); border-color: rgba(219,59,59,.25); }
+.pfd-override-textarea { width: 100%; margin-top: 8px; min-height: 70px; padding: 9px 12px; border: 1.5px solid var(--linha); border-radius: var(--raio-sm); background: var(--campo-bg); color: var(--texto); font: inherit; resize: vertical; }
+.pfd-override-textarea:focus { outline: none; border-color: var(--verde-vivo); box-shadow: 0 0 0 3px rgba(216,19,36,.13); }
+
+@media (max-width: 640px) {
+  .pfd-controls { flex-direction: column; align-items: stretch; }
+  .pfd-controls-esq, .pfd-controls-dir { justify-content: space-between; }
+  .pfd-head { align-items: flex-start; }
 }
 
 /* ===================== AGENTE CRESCER (chat) ===================== */
@@ -4034,3 +4168,35 @@ tr.dex-linha-na { opacity: .65; }
 .mfa-qr { display: flex; justify-content: center; margin: 10px 0; }
 .mfa-qr img { border: 1px solid var(--linha); border-radius: 10px; background: #fff; padding: 8px; }
 .cfg-passos { margin: 4px 0 10px; padding-left: 18px; font-size: 13px; line-height: 1.7; color: var(--txt-2); }
+
+/* Parser Food Delivery: calendário de intervalo, restrito a este módulo. */
+.pfd-cal { position: relative; }
+.pfd-cal summary { cursor: pointer; list-style: none; }
+.pfd-cal-painel { position: absolute; z-index: 25; top: calc(100% + 6px); left: 0; width: 540px; max-width: calc(100vw - 40px); padding: 16px; border: 1px solid var(--linha); border-radius: 12px; background: var(--card); color: var(--texto); box-shadow: 0 8px 28px #0002; }
+.pfd-cal-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pfd-cal-toolbar label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.pfd-cal-meses { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.pfd-cal-mes h4 { text-align: center; margin: 16px 0; text-transform: capitalize; }
+.pfd-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px 0; }
+.pfd-cal-semana { text-align: center; font-size: 11px; opacity: .65; padding: 6px 0; }
+.pfd-cal-dia { border: 0; background: transparent; color: inherit; cursor: pointer; min-height: 34px; font: inherit; font-size: 13px; border-radius: 8px; transition: background var(--t); }
+.pfd-cal-dia:hover { background: var(--superficie-2); }
+.pfd-cal-dia:focus-visible { outline: 2px solid var(--verde-vivo); outline-offset: -2px; }
+.pfd-cal-dia.intervalo { background: var(--vermelho-tint); color: var(--verde-med); border-radius: 0; }
+.pfd-cal-dia.inicio, .pfd-cal-dia.fim, .pfd-cal-dia.unico { background: var(--grad-verde); color: #fff; font-weight: 700; }
+.pfd-cal-dia.inicio { border-radius: 8px 0 0 8px; }
+.pfd-cal-dia.fim { border-radius: 0 8px 8px 0; }
+.pfd-cal-dia.unico { border-radius: 8px; }
+.pfd-cal-instrucao { font-size: 12px; margin: 14px 0 0; color: var(--cinza); }
+.pfd-card-link { text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.pfd-card-link:focus-visible { outline: 2px solid var(--verde-vivo); outline-offset: 3px; }
+@media (min-width: 641px) and (max-width: 1000px) {
+  .pfd-cal { width: 100%; }
+  .pfd-cal-painel { position: relative; top: 8px; width: 100%; box-sizing: border-box; }
+}
+@media (max-width: 640px) {
+  .pfd-cal { width: 100%; }
+  .pfd-cal-painel { position: relative; top: 8px; width: 100%; box-sizing: border-box; }
+  .pfd-cal-meses { grid-template-columns: 1fr; }
+  .pfd-cal-dia { min-height: 40px; }
+}

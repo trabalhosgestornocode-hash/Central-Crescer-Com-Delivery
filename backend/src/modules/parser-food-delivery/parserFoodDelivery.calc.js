@@ -37,6 +37,15 @@ const STATUS_CANCELADOS = new Set([
   "cancelado pelo cliente", "cancelado pelo entregador",
 ]);
 export const ehCancelado = (situacao) => STATUS_CANCELADOS.has(norm(situacao));
+
+/** Mesma decisão exibida nos detalhes: override vence; legado usa o status
+ * financeiro persistido. Não modifica a classificação automática original. */
+export function classificacaoEfetivaCancelamento(p) {
+  if (!ehCancelado(p.situacao)) return null;
+  if (!p.classificacaoOverrideEm && p.classificacaoCancelamento) return p.classificacaoCancelamento;
+  return p.statusConciliacao === STATUS_CONCILIACAO.EXCLUIDO
+    ? CLASSIFICACAO_CANCELAMENTO.NAO_RECEBE_TAXA : CLASSIFICACAO_CANCELAMENTO.RECEBE_TAXA;
+}
 /**
  * Pedido sem nome de entregador não entra em NADA da conciliação (item novo
  * do pedido) — não é o `classificarPedido` que decide isso: é filtrado uma
@@ -81,12 +90,11 @@ export function resumoConciliacao(pedidos) {
       cancelados++;
       if (p.statusConciliacao === STATUS_CONCILIACAO.EXCLUIDO) { canceladosSemTaxa++; taxasDescartadas += taxa; }
       else canceladosComTaxa++;
-      // Contadores da ANÁLISE automática — só contam pedidos que já
-      // passaram pelo motor (importações antigas ficam com o campo nulo e
-      // simplesmente não entram aqui, sem quebrar o resumo).
-      if (p.classificacaoCancelamento === CLASSIFICACAO_CANCELAMENTO.RECEBE_TAXA) canceladosRecebemTaxa++;
-      else if (p.classificacaoCancelamento === CLASSIFICACAO_CANCELAMENTO.NAO_RECEBE_TAXA) canceladosNaoRecebemTaxa++;
-      else if (p.classificacaoCancelamento === CLASSIFICACAO_CANCELAMENTO.REVISAR) canceladosRevisao++;
+      // Contadores usam a decisão efetiva, exatamente como o detalhamento.
+      const efetiva = classificacaoEfetivaCancelamento(p);
+      if (efetiva === CLASSIFICACAO_CANCELAMENTO.RECEBE_TAXA) canceladosRecebemTaxa++;
+      else if (efetiva === CLASSIFICACAO_CANCELAMENTO.NAO_RECEBE_TAXA) canceladosNaoRecebemTaxa++;
+      else if (efetiva === CLASSIFICACAO_CANCELAMENTO.REVISAR) canceladosRevisao++;
     } else {
       entregues++;
     }
@@ -121,7 +129,7 @@ export function agruparPorEntregador(pedidos) {
     if (ehCancelado(p.situacao)) {
       if (p.statusConciliacao === STATUS_CONCILIACAO.EXCLUIDO) g.canceladosSemTaxa++;
       else { g.canceladosComTaxa++; g.taxasValidas += taxa; }
-      if (p.classificacaoCancelamento === CLASSIFICACAO_CANCELAMENTO.REVISAR) g.canceladosRevisao++;
+      if (classificacaoEfetivaCancelamento(p) === CLASSIFICACAO_CANCELAMENTO.REVISAR) g.canceladosRevisao++;
     } else {
       g.entregues++;
       g.taxasValidas += taxa;

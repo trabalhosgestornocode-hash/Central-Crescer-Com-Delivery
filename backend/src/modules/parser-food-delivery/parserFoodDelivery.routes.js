@@ -15,6 +15,7 @@ const importar = requirePermissao(PERMISSOES.PARSER_FD_IMPORTAR);
 const excluir = requirePermissao(PERMISSOES.PARSER_FD_EXCLUIR);
 const classificar = requirePermissao(PERMISSOES.PARSER_FD_CLASSIFICAR);
 
+parserFoodDeliveryRouter.get("/periodo", ver, controller.periodo);
 parserFoodDeliveryRouter.get("/importacoes", ver, controller.importacoes);
 parserFoodDeliveryRouter.get("/importacoes/:id", ver, controller.importacaoDetalhe);
 parserFoodDeliveryRouter.get("/importacoes/:id/arquivo", ver, controller.arquivoImportacao);

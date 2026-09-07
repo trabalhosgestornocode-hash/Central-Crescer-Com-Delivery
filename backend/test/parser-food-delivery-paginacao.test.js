@@ -21,7 +21,7 @@ const PULAR_INTEGRACAO = motivoPularIntegracao();
 import { randomUUID } from "node:crypto";
 import { supabase } from "../src/config/supabase.js";
 import {
-  obterImportacao, listarImportacoes, editarCodigosSemTaxa, alterarClassificacaoCancelamento,
+  obterImportacao, listarImportacoes, editarCodigosSemTaxa, alterarClassificacaoCancelamento, analisarPeriodo,
 } from "../src/modules/parser-food-delivery/parserFoodDelivery.service.js";
 
 const SACI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -176,4 +176,28 @@ describe("alterarClassificacaoCancelamento() em importação >1000 pedidos", { s
     assert.equal(persistido.taxas_brutas, n * TAXA_PADRAO);
     assert.equal(persistido.taxas_validas, n * TAXA_PADRAO - TAXA_PADRAO);
   });
+});
+
+// Exercita o join PostgREST real, limites inclusivos e sobreposição, usando
+// a mesma unidade descartável e cleanup da suíte de regressão existente.
+test("analisarPeriodo: 1387 pedidos, dois arquivos sobrepostos e virada de mês", { skip: PULAR_INTEGRACAO }, async () => {
+  const prefixo = "PER" + Date.now();
+  const a = await criarImportacao(1387, { prefixo });
+  const b = await criarImportacao(1, { prefixo: prefixo + "B", situacaoCanceladaNoIndice: 0 });
+  const conferir = ({ error }) => { if (error) throw new Error(error.message); };
+  conferir(await supabase.from("parser_fd_pedidos").update({ data_hora: "2026-04-30T00:00:00Z" }).eq("importacao_id", a.importacaoId));
+  conferir(await supabase.from("parser_fd_pedidos").update({ data_hora: "2026-05-01T23:59:59.999Z" }).eq("importacao_id", a.importacaoId).eq("numero_pedido", prefixo + "-1386"));
+  conferir(await supabase.from("parser_fd_pedidos").update({ numero_pedido: prefixo + "-0", data_hora: "2026-04-30T00:00:00Z" }).eq("importacao_id", b.importacaoId));
+  const alvo = { organizacaoId: SACI_ORG_ID, unidadeId: UNIDADE_TESTE_ID, dataInicio: "2026-04-30", dataFim: "2026-05-01" };
+  const d = await analisarPeriodo(alvo);
+  assert.equal(d.resumo.totalPedidos, 1387);
+  assert.equal(d.pedidos.length, 1387);
+  assert.equal(d.resumo.cancelados, 1);
+  assert.equal(d.duplicadosSobrepostos, 1);
+  assert.equal(d.pedidos.find((p) => p.numeroPedido === prefixo + "-0").importacaoId, b.importacaoId);
+  assert.equal(d.resumo.taxasValidas, 13870);
+  const dia = await analisarPeriodo({ ...alvo, dataFim: "2026-04-30" });
+  assert.equal(dia.resumo.totalPedidos, 1386);
+  const vazio = await analisarPeriodo({ ...alvo, dataInicio: "2026-05-02", dataFim: "2026-05-02" });
+  assert.equal(vazio.resumo.totalPedidos, 0);
 });

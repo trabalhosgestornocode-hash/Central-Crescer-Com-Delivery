@@ -68,3 +68,8 @@ export const excluirImportacao = asyncHandler(async (req, res) => {
   });
   res.json({ data });
 });
+
+export const periodo = asyncHandler(async (req, res) => {
+  const data = await service.analisarPeriodo({ ...tenant(req), dataInicio: req.query.dataInicio, dataFim: req.query.dataFim });
+  res.json({ data });
+});
