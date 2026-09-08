@@ -337,7 +337,7 @@ function renderVisaoGeral(box) {
   // Evolução diária do Desempenho, do Financeiro acumulado e das deduções
   // agora moram na aba Lançamentos (perto do calendário que elas explicam
   // dia a dia) — ver renderLancamentos.
-  montarSimuladorPreco("dex-sim-container", dex.unidadeId, d.periodo.mes, d.periodo.ano);
+  montarSimuladorPreco("dex-sim-container", dex.unidadeId, d.periodo.mes, d.periodo.ano, d);
   el("#dex-preencher-primeiro")?.addEventListener("click", () => abrirLancamentoModal({
     data: r.primeiroDiaPendente, unidadeId: dex.unidadeId, modeloLogistico: d.modeloLogistico, ehTeste: d.ehTeste, onSalvo: carregarConteudo,
   }));

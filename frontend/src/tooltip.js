@@ -70,12 +70,17 @@ function iniciarChecagem() {
   }, 250);
 }
 
+// Alvo válido: qualquer `.vd-tip` com conteúdo (texto simples OU HTML estruturado).
+const alvoDe = (target) => target?.closest?.(".vd-tip[data-tip], .vd-tip[data-tip-html]") ?? null;
+
 function mostrar(alvo) {
+  const html = alvo.getAttribute("data-tip-html");
   const texto = alvo.getAttribute("data-tip");
-  if (!texto) return;
+  if (!html && !texto) return;
   const tip = garantirTip();
   alvoAtual = alvo;
-  tip.textContent = texto;
+  if (html) { tip.innerHTML = html; tip.classList.add("vd-tip-flutuante--rico"); }
+  else { tip.textContent = texto; tip.classList.remove("vd-tip-flutuante--rico"); }
   tip.hidden = false;
   posicionar(alvo);
   iniciarChecagem();
@@ -93,25 +98,38 @@ function esconder(alvo) {
  * re-render, sem precisar religar nada por tela. */
 export function initTooltips() {
   document.addEventListener("mouseover", (e) => {
-    const alvo = e.target.closest(".vd-tip[data-tip]");
+    const alvo = alvoDe(e.target);
     if (alvo) mostrar(alvo);
   });
   document.addEventListener("mouseout", (e) => {
-    const alvo = e.target.closest(".vd-tip[data-tip]");
+    const alvo = alvoDe(e.target);
     if (alvo && !alvo.contains(e.relatedTarget)) esconder(alvo);
   });
   // Teclado: foco (Tab) mostra, perda de foco esconde — mesmo comportamento
   // de hover, acessível sem mouse.
   document.addEventListener("focusin", (e) => {
-    const alvo = e.target.closest(".vd-tip[data-tip]");
+    const alvo = alvoDe(e.target);
     if (alvo) mostrar(alvo);
   });
   document.addEventListener("focusout", (e) => {
-    const alvo = e.target.closest(".vd-tip[data-tip]");
+    const alvo = alvoDe(e.target);
     if (alvo) esconder(alvo);
   });
+  // Toque/clique: tocar no ícone abre; tocar em qualquer outro lugar fecha.
+  // O balão tem pointer-events:none, então um clique nunca cai nele.
+  document.addEventListener("click", (e) => {
+    const alvo = alvoDe(e.target);
+    if (alvo) mostrar(alvo);
+    else if (alvoAtual) esconder(alvoAtual);
+  });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && alvoAtual) esconder(alvoAtual);
+    if (e.key === "Escape" && alvoAtual) { esconder(alvoAtual); return; }
+    // role="button": Enter/Espaço no ícone com foco abre/fecha.
+    const alvo = alvoDe(e.target);
+    if (alvo && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      alvo === alvoAtual ? esconder(alvo) : mostrar(alvo);
+    }
   });
   // Scroll ou resize invalidam a posição calculada — some em vez de mostrar
   // o balão flutuando longe do ícone (mesmo padrão de tooltips nativos).
