@@ -39,16 +39,23 @@ Trocar a tabela recalcula só as metas dinâmicas; limites e Taxas nunca mudam.
 Proteção ≤ 20,50% → Serviços meta = 0 + flag interna
 `protecaoPrecificacao.protecaoInsuficienteFullService` (não renderizada).
 
-As metas derivadas alimentam **apenas a tabela de Indicadores** (payload
-`indicadoresRentabilidade` + gráfico). Cards da Visão Geral, saldos, Plano de Ação
-e Agente Crescer seguem `metas` original de `metas_indicadores`. **Marketplace não
-passa por aqui** — metas fixas (13-5-12-30 / 13-7-15-35).
+As metas derivadas alimentam a **tabela de Indicadores** (payload
+`indicadoresRentabilidade` + gráfico) **e os 4 cards de rentabilidade da Visão
+Geral** (`cards.taxasComissoes/servicosPromocoes/taxasEntregadores/totalDeducoes`
+— `meta` e `status`). `saldos`/`Disponível`/barras continuam contra o **limite**
+(inalterado). Plano de Ação, Diagnóstico e Agente Crescer seguem `metas` original
+de `metas_indicadores` + `statusIndicador`. **Marketplace não passa pela
+derivação** — metas fixas (13-5-12-30 / 13-7-15-35) —, mas seus cards/tabela usam
+o mesmo `statusIndicadorRentabilidade` (Atenção só acima do limite, sem "Crítico").
 
-#### Status da coluna Status (só desta tabela)
+#### Status — tabela de Indicadores **e** cards da Visão Geral
 
-`dashboardExecutivo.calc.js#statusIndicadorRentabilidade` — classificador **exclusivo**
-desta tabela (não toca `statusIndicador`, usado por Plano de Ação / Diagnóstico /
-Agente / cards):
+`dashboardExecutivo.calc.js#statusIndicadorRentabilidade` — classificador usado
+pela tabela de Indicadores **e pelos 4 cards de rentabilidade da Visão Geral**
+(Taxas e Comissões, Serviços e Promoções, Taxas de Entregadores, Total de
+Deduções), com a **meta derivada** (Full Service). Não toca `statusIndicador`,
+que continua sendo a régua de Plano de Ação / Diagnóstico / Agente (esses lêem
+`metas` estático via `indicadoresParaDiagnostico`, nunca `metasRentabilidade`):
 
 | Situação | Status | Cor |
 |---|---|---|

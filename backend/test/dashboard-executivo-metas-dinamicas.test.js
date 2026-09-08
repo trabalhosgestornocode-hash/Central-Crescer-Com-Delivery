@@ -190,7 +190,10 @@ test('serviço FS: tabela usa metas derivadas + status próprio; cards seguem a 
   // Total 30% (1900+1100+0)/10000 : <= meta 31,43 => dentro_da_meta
   assert.equal(ind.total_deducoes.status.chave, 'dentro_da_meta');
 
-  // Cards da Visão Geral: meta ESTÁTICA e régua histórica (statusIndicador)
-  assert.equal(d.cards.servicosPromocoes.meta.metaIdeal, 9.5);   // não derivada
-  assert.equal(d.cards.servicosPromocoes.status.chave, 'atencao'); // 11% > meta 9,5, <= limite 14,5 (régua antiga)
+  // Cards da Visão Geral: MESMA semântica da tabela — meta derivada +
+  // statusIndicadorRentabilidade (Meta Ideal não gera alerta).
+  assert.equal(d.cards.servicosPromocoes.meta.metaIdeal.toFixed(2), '10.93'); // derivada
+  assert.equal(d.cards.servicosPromocoes.status.chave, 'dentro_do_limite');   // 11% entre meta 10,93 e limite 14,5
+  assert.equal(d.cards.servicosPromocoes.saldo.disponivelPp.toFixed(2), '3.50'); // 14,5 − 11 (contra o LIMITE)
+  assert.equal(d.cards.totalDeducoes.status.chave, 'dentro_da_meta'); // 30% <= meta 31,43
 });

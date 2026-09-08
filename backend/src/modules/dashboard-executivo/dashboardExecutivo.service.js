@@ -12,7 +12,7 @@ import {
   snapshotFinanceiroMaisRecente, listaSnapshotsFinanceiros, listaDesempenhoDiario, novosClientesAcumulados, ultimoDesempenhoConhecido,
   desempenhoParaTicketMedio,
   confiabilidadeProjecao,
-  inconsistencias, STATUS_DIA, indicadorAplicavel, statusIndicador, statusIndicadorRentabilidade,
+  inconsistencias, STATUS_DIA, indicadorAplicavel, statusIndicadorRentabilidade,
   metasComProtecaoFullService, saldoMeta,
   distribuirValorMensal, distribuirQuantidadeMensal, recalcularDistribuicaoMensal,
 } from "./dashboardExecutivo.calc.js";
@@ -394,8 +394,12 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
       periodoFim: snapshot?.data_lancamento ?? null,
       dataAtualizacao: snapshot?.data_lancamento ?? null,
     },
-    taxasComissoes: { valor: cardValores.taxasComissoes, percentual: indicadoresRentabilidade.taxas_comissoes, meta: metas.taxas_comissoes ?? null, saldo: saldos.taxas_comissoes, status: statusIndicador(indicadoresRentabilidade.taxas_comissoes, metas.taxas_comissoes) },
-    servicosPromocoes: { valor: cardValores.servicosPromocoes, percentual: indicadoresRentabilidade.servicos_promocoes, meta: metas.servicos_promocoes ?? null, saldo: saldos.servicos_promocoes, status: statusIndicador(indicadoresRentabilidade.servicos_promocoes, metas.servicos_promocoes) },
+    // Os 4 cards de rentabilidade usam a MESMA semântica visual da tabela de
+    // Indicadores: metaIdeal derivada (Full Service) + statusIndicadorRentabilidade
+    // (Meta Ideal não gera alerta; Atenção só acima do limite). Plano de Ação,
+    // Diagnóstico e Agente seguem `statusIndicador` sobre `metas` (não `metasRentabilidade`).
+    taxasComissoes: { valor: cardValores.taxasComissoes, percentual: indicadoresRentabilidade.taxas_comissoes, meta: metasRentabilidade.taxas_comissoes ?? null, saldo: saldos.taxas_comissoes, status: statusIndicadorRentabilidade(indicadoresRentabilidade.taxas_comissoes, metasRentabilidade.taxas_comissoes) },
+    servicosPromocoes: { valor: cardValores.servicosPromocoes, percentual: indicadoresRentabilidade.servicos_promocoes, meta: metasRentabilidade.servicos_promocoes ?? null, saldo: saldos.servicos_promocoes, status: statusIndicadorRentabilidade(indicadoresRentabilidade.servicos_promocoes, metasRentabilidade.servicos_promocoes) },
     // Faltavam na Visão Geral (só entravam somados dentro de totalDeducoes,
     // sem card próprio) — quem conferia a conta de cabeça via só os 2 cards
     // acima não batia com o Total de Deduções. Taxas de Entregadores só se
@@ -408,10 +412,10 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
     // não entra no Total de Deduções e aumenta a Receita líquida; "Ajustes
     // contra" (débito) entra no Total de Deduções (ver calc.js#totalDeducoes /
     // #receitaLiquida). Nenhum dos dois gera "dentro/fora da meta".
-    taxasEntregadores: { valor: cardValores.taxasEntregadores, percentual: indicadoresRentabilidade.taxas_entregadores, meta: metas.taxas_entregadores ?? null, saldo: saldos.taxas_entregadores, status: statusIndicador(indicadoresRentabilidade.taxas_entregadores, metas.taxas_entregadores), naoAplicavel: !indicadorAplicavel(modelo.modeloLogistico, "taxas_entregadores") },
+    taxasEntregadores: { valor: cardValores.taxasEntregadores, percentual: indicadoresRentabilidade.taxas_entregadores, meta: metasRentabilidade.taxas_entregadores ?? null, saldo: saldos.taxas_entregadores, status: statusIndicadorRentabilidade(indicadoresRentabilidade.taxas_entregadores, metasRentabilidade.taxas_entregadores), naoAplicavel: !indicadorAplicavel(modelo.modeloLogistico, "taxas_entregadores") },
     ajustesFavor: { valor: cardValores.ajustesFavorLoja, percentual: percentual(cardValores.ajustesFavorLoja, base) },
     ajustesContra: { valor: cardValores.ajustesContraLoja, percentual: percentual(cardValores.ajustesContraLoja, base) },
-    totalDeducoes: { valor: totalDed, percentual: indicadoresRentabilidade.total_deducoes, meta: metas.total_deducoes ?? null, saldo: saldos.total_deducoes, status: statusIndicador(indicadoresRentabilidade.total_deducoes, metas.total_deducoes) },
+    totalDeducoes: { valor: totalDed, percentual: indicadoresRentabilidade.total_deducoes, meta: metasRentabilidade.total_deducoes ?? null, saldo: saldos.total_deducoes, status: statusIndicadorRentabilidade(indicadoresRentabilidade.total_deducoes, metasRentabilidade.total_deducoes) },
     receitaLiquida: { valor: receitaLiquidaValor, percentual: percentual(receitaLiquidaValor, base) },
     // Ticket médio (Desempenho) — indicador OPERACIONAL, nunca deriva do
     // Financeiro. Usa o par mais confiável do mês inteiro (diário real
@@ -709,12 +713,14 @@ async function obterMesAgregado({ organizacaoId, mes, ano, hojeIso, metas }) {
         periodoFim: dataAtualizacaoAgregada,
         dataAtualizacao: dataAtualizacaoAgregada,
       },
-      taxasComissoes: { valor: valores.taxasComissoes, percentual: indicadoresRentabilidade.taxas_comissoes, meta: metas.taxas_comissoes ?? null, status: statusIndicador(indicadoresRentabilidade.taxas_comissoes, metas.taxas_comissoes) },
-      servicosPromocoes: { valor: valores.servicosPromocoes, percentual: indicadoresRentabilidade.servicos_promocoes, meta: metas.servicos_promocoes ?? null, status: statusIndicador(indicadoresRentabilidade.servicos_promocoes, metas.servicos_promocoes) },
-      taxasEntregadores: { valor: valores.taxasEntregadores, percentual: indicadoresRentabilidade.taxas_entregadores, meta: metas.taxas_entregadores ?? null, status: statusIndicador(indicadoresRentabilidade.taxas_entregadores, metas.taxas_entregadores), naoAplicavel: taxasEntregadoresNaoAplicavel },
+      // Visão agregada não exibe metas (modelos logísticos diferentes) — status
+      // fica "sem_dados". Mesmo classificador da tabela, por coerência.
+      taxasComissoes: { valor: valores.taxasComissoes, percentual: indicadoresRentabilidade.taxas_comissoes, meta: metas.taxas_comissoes ?? null, status: statusIndicadorRentabilidade(indicadoresRentabilidade.taxas_comissoes, metas.taxas_comissoes) },
+      servicosPromocoes: { valor: valores.servicosPromocoes, percentual: indicadoresRentabilidade.servicos_promocoes, meta: metas.servicos_promocoes ?? null, status: statusIndicadorRentabilidade(indicadoresRentabilidade.servicos_promocoes, metas.servicos_promocoes) },
+      taxasEntregadores: { valor: valores.taxasEntregadores, percentual: indicadoresRentabilidade.taxas_entregadores, meta: metas.taxas_entregadores ?? null, status: statusIndicadorRentabilidade(indicadoresRentabilidade.taxas_entregadores, metas.taxas_entregadores), naoAplicavel: taxasEntregadoresNaoAplicavel },
       ajustesFavor: { valor: valores.ajustesFavorLoja, percentual: percentual(valores.ajustesFavorLoja, base) },
       ajustesContra: { valor: valores.ajustesContraLoja, percentual: percentual(valores.ajustesContraLoja, base) },
-      totalDeducoes: { valor: totalDed, percentual: indicadoresRentabilidade.total_deducoes, meta: metas.total_deducoes ?? null, status: statusIndicador(indicadoresRentabilidade.total_deducoes, metas.total_deducoes) },
+      totalDeducoes: { valor: totalDed, percentual: indicadoresRentabilidade.total_deducoes, meta: metas.total_deducoes ?? null, status: statusIndicadorRentabilidade(indicadoresRentabilidade.total_deducoes, metas.total_deducoes) },
       receitaLiquida: { valor: receitaLiquidaValor, percentual: percentual(receitaLiquidaValor, base) },
       ticketMedio: { valor: ticketMedioAgregado },
       novosClientes: { valor: novosClientesAgregado },
@@ -722,7 +728,7 @@ async function obterMesAgregado({ organizacaoId, mes, ano, hojeIso, metas }) {
     indicadoresRentabilidade: Object.fromEntries(
       Object.entries(indicadoresRentabilidade).map(([k, atual]) => [k, {
         atual, metaIdeal: metas[k]?.metaIdeal ?? null, limite: metas[k]?.limite ?? null,
-        status: statusIndicador(atual, metas[k]),
+        status: statusIndicadorRentabilidade(atual, metas[k]),
       }]),
     ),
     graficos: {
