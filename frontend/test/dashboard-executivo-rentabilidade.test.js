@@ -48,8 +48,15 @@ function fakeContainer() {
 }
 
 test("formatação pt-BR com duas casas", () => {
-  assert.equal(visual.fmtPctRentabilidade(11 / 35 * 100), "31,43%");
-  for (const v of [null, undefined, NaN, Infinity]) assert.equal(visual.fmtPctRentabilidade(v), "—");
+  assert.equal(visual.fmtPctRentabilidade(11 / 35 * 100), "31,43%");   // 31,428571… → 31,43%, nunca 31,4%
+  assert.equal(visual.fmtPctRentabilidade(35), "35,00%");
+  assert.equal(visual.fmtPctRentabilidade(9.8), "9,80%");
+  assert.equal(visual.fmtPpRentabilidade(6.6), "6,60 p.p.");
+  assert.equal(visual.fmtPpRentabilidade(-1.7), "-1,70 p.p.");
+  for (const v of [null, undefined, NaN, Infinity]) {
+    assert.equal(visual.fmtPctRentabilidade(v), "—");
+    assert.equal(visual.fmtPpRentabilidade(v), "—");
+  }
 });
 
 test("resultado da simulação: só precificação, sem meta/limite logístico, sem status", () => {

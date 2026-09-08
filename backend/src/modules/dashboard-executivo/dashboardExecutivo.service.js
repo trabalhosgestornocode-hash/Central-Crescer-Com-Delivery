@@ -12,7 +12,8 @@ import {
   snapshotFinanceiroMaisRecente, listaSnapshotsFinanceiros, listaDesempenhoDiario, novosClientesAcumulados, ultimoDesempenhoConhecido,
   desempenhoParaTicketMedio,
   confiabilidadeProjecao,
-  inconsistencias, STATUS_DIA, indicadorAplicavel, statusIndicador, saldoMeta,
+  inconsistencias, STATUS_DIA, indicadorAplicavel, statusIndicador, statusIndicadorRentabilidade,
+  metasComProtecaoFullService, saldoMeta,
   distribuirValorMensal, distribuirQuantidadeMensal, recalcularDistribuicaoMensal,
 } from "./dashboardExecutivo.calc.js";
 import { gerarDiagnostico, LIMIARES_DIAGNOSTICO } from "./dashboardExecutivo.diagnostico.js";
@@ -366,6 +367,15 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
       servicosPromocoesPct: indicadoresRentabilidade.servicos_promocoes,
     }),
   };
+  // FULL SERVICE: a META IDEAL de Serviços e Total de Deduções acompanha a
+  // Proteção da Precificação. Só a TABELA de Indicadores usa essas metas
+  // derivadas (via metasRentabilidade abaixo); cards da Visão Geral, saldos,
+  // Plano de Ação e Agente seguem `metas` original (metas_indicadores).
+  const metasFS = modelo.modeloLogistico === "full_service"
+    ? metasComProtecaoFullService(metas, protecaoPrecificacao.protecaoPrecificacaoPct)
+    : { metas, protecaoInsuficiente: false };
+  const metasRentabilidade = metasFS.metas;
+  protecaoPrecificacao.protecaoInsuficienteFullService = metasFS.protecaoInsuficiente;
   const saldos = {
     taxas_comissoes: saldoMeta({ valorUtilizado: cardValores.taxasComissoes, percentualUtilizado: indicadoresRentabilidade.taxas_comissoes, limitePct: metas.taxas_comissoes?.limite ?? null, faturamentoBase: base }),
     servicos_promocoes: saldoMeta({ valorUtilizado: cardValores.servicosPromocoes, percentualUtilizado: indicadoresRentabilidade.servicos_promocoes, limitePct: metas.servicos_promocoes?.limite ?? null, faturamentoBase: base }),
@@ -500,16 +510,19 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
     pendenciasMesesAnteriores,
     lancamentoMensal,
     cards,
+    // TABELA de Indicadores de Rentabilidade: metaIdeal derivada (Full Service) +
+    // classificador de status PRÓPRIO desta apresentação (Meta Ideal não gera
+    // alerta; Atenção só acima do limite; sem estado "Crítico" aqui).
     indicadoresRentabilidade: Object.fromEntries(
       Object.entries(indicadoresRentabilidade).map(([k, atualBruto]) => {
         const aplicavel = indicadorAplicavel(modelo.modeloLogistico, k);
         const atual = aplicavel ? atualBruto : null;
         const valorUtilizado = { taxas_comissoes: cardValores.taxasComissoes, servicos_promocoes: cardValores.servicosPromocoes, taxas_entregadores: cardValores.taxasEntregadores, total_deducoes: totalDed }[k] ?? null;
         return [k, {
-          atual, metaIdeal: metas[k]?.metaIdeal ?? null, limite: metas[k]?.limite ?? null,
+          atual, metaIdeal: metasRentabilidade[k]?.metaIdeal ?? null, limite: metasRentabilidade[k]?.limite ?? null,
           naoAplicavel: !aplicavel,
-          status: aplicavel ? statusIndicador(atual, metas[k]) : null,
-          saldo: aplicavel ? saldoMeta({ valorUtilizado, percentualUtilizado: atual, limitePct: metas[k]?.limite ?? null, faturamentoBase: base }) : null,
+          status: aplicavel ? statusIndicadorRentabilidade(atual, metasRentabilidade[k]) : null,
+          saldo: aplicavel ? saldoMeta({ valorUtilizado, percentualUtilizado: atual, limitePct: metasRentabilidade[k]?.limite ?? null, faturamentoBase: base }) : null,
         }];
       }),
     ),
@@ -517,7 +530,7 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
       comparativoPercentuais: Object.entries(indicadoresRentabilidade)
         .filter(([indicador]) => indicadorAplicavel(modelo.modeloLogistico, indicador))
         .map(([indicador, atual]) => ({
-          indicador, atual, metaIdeal: metas[indicador]?.metaIdeal ?? null, limite: metas[indicador]?.limite ?? null,
+          indicador, atual, metaIdeal: metasRentabilidade[indicador]?.metaIdeal ?? null, limite: metasRentabilidade[indicador]?.limite ?? null,
         })),
       composicaoDeducoes: [
         { indicador: "taxas_comissoes", valor: cardValores.taxasComissoes },

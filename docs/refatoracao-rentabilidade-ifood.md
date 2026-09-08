@@ -18,7 +18,49 @@ Marketplace" e um card "Custo operacional total" à tabela de Indicadores.
 
 ## Como ficou
 
-### A) Indicadores logísticos — inalterados
+### A) Indicadores logísticos
+
+#### Full Service — Meta Ideal dinâmica (a partir da Proteção da Precificação)
+
+Só no modelo **Full Service**, a **Meta Ideal** (nunca o limite) de dois indicadores
+acompanha a Proteção da Precificação da combinação de tabelas selecionada
+(`dashboardExecutivo.calc.js#metasComProtecaoFullService`, alimentada pela saída de
+`calcularProtecaoPrecificacao` — sem duplicar a fórmula):
+
+| Indicador | Meta Ideal | Limite |
+|---|---|---|
+| Taxas e Comissões | **20,50%** (fixo, nunca derivado) | 20,50% |
+| Serviços e Promoções | `max(0, protecao − meta(Taxas))` | 14,50% |
+| Total de Deduções | `protecao` | 35,00% |
+
+E × Z4 (proteção 31,43%) → Serviços meta **10,93%**, Total meta **31,43%**.
+D × Z4 (proteção 32,86%) → Serviços meta **12,36%**, Total meta **32,86%**.
+Trocar a tabela recalcula só as metas dinâmicas; limites e Taxas nunca mudam.
+Proteção ≤ 20,50% → Serviços meta = 0 + flag interna
+`protecaoPrecificacao.protecaoInsuficienteFullService` (não renderizada).
+
+As metas derivadas alimentam **apenas a tabela de Indicadores** (payload
+`indicadoresRentabilidade` + gráfico). Cards da Visão Geral, saldos, Plano de Ação
+e Agente Crescer seguem `metas` original de `metas_indicadores`. **Marketplace não
+passa por aqui** — metas fixas (13-5-12-30 / 13-7-15-35).
+
+#### Status da coluna Status (só desta tabela)
+
+`dashboardExecutivo.calc.js#statusIndicadorRentabilidade` — classificador **exclusivo**
+desta tabela (não toca `statusIndicador`, usado por Plano de Ação / Diagnóstico /
+Agente / cards):
+
+| Situação | Status | Cor |
+|---|---|---|
+| `atual ≤ metaIdeal` | Dentro da Meta | verde |
+| `metaIdeal < atual ≤ limite` | Dentro do Limite | verde |
+| `atual > limite` | Atenção | âmbar |
+
+A Meta Ideal **não gera alerta**. Sem estado "Crítico" nesta tabela — mesmo muito
+acima do limite continua "Atenção". `Disponível = limite − atual` (contra o limite,
+não a meta).
+
+### A.1) Indicadores logísticos — inalterados
 
 A aba Indicadores voltou à tabela compacta **de 4 linhas**, com meta e limite
 vindos **exclusivamente** de `resolverMetas(modelo)` sobre `metas_indicadores`:

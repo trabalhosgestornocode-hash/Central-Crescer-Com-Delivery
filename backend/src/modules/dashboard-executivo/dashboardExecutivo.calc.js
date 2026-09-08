@@ -190,6 +190,32 @@ export function statusIndicador(atual, meta) {
 }
 
 /**
+ * Status APENAS da coluna Status da tabela "Indicadores de Rentabilidade".
+ * A Meta Ideal é só referência — não gera alerta; o alerta começa quando o
+ * LIMITE é ultrapassado. Sem estado "Crítico" nesta tabela.
+ *
+ * NÃO usar em Plano de Ação / Diagnóstico / Agente Crescer / cards da Visão
+ * Geral — esses seguem `statusIndicador` (régua histórica, com WARNING/CRITICAL).
+ * A matemática de Meta Ideal e Limite continua vindo da mesma fonte; aqui muda
+ * só a interpretação visual.
+ *
+ *   atual <= metaIdeal          -> dentro_da_meta   "Dentro da Meta"    (verde)
+ *   metaIdeal < atual <= limite -> dentro_do_limite "Dentro do Limite"  (verde)
+ *   atual > limite              -> atencao          "Atenção"           (âmbar)
+ *
+ * @param {number|null} atual @param {{metaIdeal: number|null, limite: number}|null|undefined} meta
+ * @returns {{chave: 'sem_dados'|'dentro_da_meta'|'dentro_do_limite'|'atencao', label: string}}
+ */
+export function statusIndicadorRentabilidade(atual, meta) {
+  if (atual == null || meta == null || meta.limite == null) {
+    return { chave: "sem_dados", label: "Dados insuficientes" };
+  }
+  if (meta.metaIdeal != null && atual <= meta.metaIdeal) return { chave: "dentro_da_meta", label: "Dentro da Meta" };
+  if (atual <= meta.limite) return { chave: "dentro_do_limite", label: "Dentro do Limite" };
+  return { chave: "atencao", label: "Atenção" };
+}
+
+/**
  * Quanto do LIMITE (não da meta ideal) ainda está disponível — em pontos
  * percentuais e, quando dá pra calcular, em reais.
  * limiteEmReais = faturamentoBase × limite%; saldo = limiteEmReais − valorUtilizado.
@@ -743,6 +769,46 @@ export const INDICADORES_POR_MODELO = {
  */
 export function indicadorAplicavel(modelo, indicador) {
   return (INDICADORES_POR_MODELO[modelo] ?? INDICADORES_POR_MODELO.full_service).includes(indicador);
+}
+
+// Referência de Taxas e Comissões do Full Service, usada só como fallback quando
+// a meta não vier de `metas_indicadores` (normalmente vem — 20,50%).
+export const TAXAS_COMISSOES_REFERENCIA_FS = 20.5;
+
+/**
+ * FULL SERVICE — a META IDEAL (nunca o limite!) de Serviços e Promoções e de
+ * Total de Deduções acompanha a PROTEÇÃO DA PRECIFICAÇÃO da combinação de
+ * tabelas selecionada:
+ *
+ *   metaIdeal(total_deducoes)     = protecaoPrecificacao
+ *   metaIdeal(servicos_promocoes) = max(0, protecaoPrecificacao − meta(taxas_comissoes))
+ *
+ * `taxas_comissoes` nunca é derivada. Os LIMITES continuam vindo de
+ * `metas_indicadores` (14,50% / 35,00%). Marketplace não passa por aqui.
+ *
+ * `protecaoPrecificacao` não é recalculada — é a saída de
+ * `calcularProtecaoPrecificacao` (dashboardExecutivo.rentabilidade.js).
+ *
+ * @param {Record<string, {metaIdeal: number|null, limite: number}>} metas
+ * @param {number|null} protecaoPrecificacaoPct  em 0–100
+ * @returns {{ metas: typeof metas, protecaoInsuficiente: boolean }}
+ */
+export function metasComProtecaoFullService(metas, protecaoPrecificacaoPct) {
+  if (!metas || !Number.isFinite(protecaoPrecificacaoPct)) {
+    return { metas, protecaoInsuficiente: false };
+  }
+  const refTaxas = Number.isFinite(metas.taxas_comissoes?.metaIdeal)
+    ? metas.taxas_comissoes.metaIdeal
+    : TAXAS_COMISSOES_REFERENCIA_FS;
+  const servicosDerivada = protecaoPrecificacaoPct - refTaxas;
+  const novo = { ...metas };
+  if (metas.total_deducoes) {
+    novo.total_deducoes = { ...metas.total_deducoes, metaIdeal: protecaoPrecificacaoPct };
+  }
+  if (metas.servicos_promocoes) {
+    novo.servicos_promocoes = { ...metas.servicos_promocoes, metaIdeal: Math.max(0, servicosDerivada) };
+  }
+  return { metas: novo, protecaoInsuficiente: servicosDerivada < 0 };
 }
 
 // ---------------------------------------------------------------------------
