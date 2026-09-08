@@ -20,52 +20,66 @@ Marketplace" e um card "Custo operacional total" à tabela de Indicadores.
 
 ### A) Indicadores logísticos
 
-#### Full Service — Meta Ideal dinâmica (a partir da Proteção da Precificação)
+#### Meta Ideal dinâmica (a partir da Proteção da Precificação) — os dois modelos
 
-Só no modelo **Full Service**, a **Meta Ideal** (nunca o limite) de dois indicadores
-acompanha a Proteção da Precificação da combinação de tabelas selecionada
-(`dashboardExecutivo.calc.js#metasComProtecaoFullService`, alimentada pela saída de
-`calcularProtecaoPrecificacao` — sem duplicar a fórmula):
+A **Meta Ideal** (nunca o limite) de Serviços e Promoções e de Total de Deduções
+acompanha a Proteção da Precificação da combinação de tabelas selecionada.
+`dashboardExecutivo.calc.js#metasComProtecaoPrecificacao(metas, protecaoPct, modelo)`
+— alimentada pela saída de `calcularProtecaoPrecificacao` (fonte única, sem
+duplicar a fórmula):
 
-| Indicador | Meta Ideal | Limite |
-|---|---|---|
-| Taxas e Comissões | **20,50%** (fixo, nunca derivado) | 20,50% |
-| Serviços e Promoções | `max(0, protecao − meta(Taxas))` | 14,50% |
-| Total de Deduções | `protecao` | 35,00% |
+```
+metaIdeal(total_deducoes)     = protecao
+metaIdeal(servicos_promocoes) = min(limiteServicos, max(0, protecao − reserva))
 
-E × Z4 (proteção 31,43%) → Serviços meta **10,93%**, Total meta **31,43%**.
-D × Z4 (proteção 32,86%) → Serviços meta **12,36%**, Total meta **32,86%**.
-Trocar a tabela recalcula só as metas dinâmicas; limites e Taxas nunca mudam.
-Proteção ≤ 20,50% → Serviços meta = 0 + flag interna
-`protecaoPrecificacao.protecaoInsuficienteFullService` (não renderizada).
+reserva = metas FIXAS dos indicadores que não variam:
+  full_service → meta(Taxas e Comissões) = 20,50%                       (não há entregadores)
+  marketplace  → meta(Taxas e Comissões) 13% + meta(Taxas de Entregadores) 12% = 25%
+```
+
+`Taxas e Comissões` e `Taxas de Entregadores` **nunca** são derivadas. Os
+**limites** continuam de `metas_indicadores` (FS 20,50/14,50/35 · MP 13/7/15/35).
+
+| Combinação | Proteção | Serviços meta | Total meta |
+|---|---|---|---|
+| **FS** E × Z4 | 31,43% | 10,93% (`31,43 − 20,50`) | 31,43% |
+| **FS** D × Z4 | 32,86% | 12,36% | 32,86% |
+| **MP** E × Z4 | 31,43% | **6,43%** (`31,43 − 13 − 12`) | 31,43% |
+| **MP** F × Z4 | 30,00% | **5,00%** | 30,00% |
+| **MP** D × Z4 | 32,86% | **7,00%** (clamp: bruto 7,86% > limite 7%) | 32,86% |
+
+Sinais internos (não renderizados, em `protecaoPrecificacao`):
+`protecaoInsuficiente` (proteção < reserva → Serviços meta = 0) e
+`metaServicosAcimaDoLimite` (a proteção permitiria mais do que a política
+logística de Serviços — meta fica travada no limite).
 
 As metas derivadas alimentam a **tabela de Indicadores** (payload
 `indicadoresRentabilidade` + gráfico) **e os 4 cards de rentabilidade da Visão
-Geral** (`cards.taxasComissoes/servicosPromocoes/taxasEntregadores/totalDeducoes`
-— `meta` e `status`). `saldos`/`Disponível`/barras continuam contra o **limite**
-(inalterado). Plano de Ação, Diagnóstico e Agente Crescer seguem `metas` original
-de `metas_indicadores` + `statusIndicador`. **Marketplace não passa pela
-derivação** — metas fixas (13-5-12-30 / 13-7-15-35) —, mas seus cards/tabela usam
-o mesmo `statusIndicadorRentabilidade` (Atenção só acima do limite, sem "Crítico").
+Geral** (`cards.*.meta` e `.status`). `saldos`/`Disponível`/barras continuam
+contra o **limite** (inalterado). Plano de Ação, Diagnóstico e Agente Crescer
+seguem `metas` original de `metas_indicadores` + `statusIndicador`
+(via `indicadoresParaDiagnostico`) — **sem qualquer mudança**.
 
 #### Status — tabela de Indicadores **e** cards da Visão Geral
 
 `dashboardExecutivo.calc.js#statusIndicadorRentabilidade` — classificador usado
-pela tabela de Indicadores **e pelos 4 cards de rentabilidade da Visão Geral**
-(Taxas e Comissões, Serviços e Promoções, Taxas de Entregadores, Total de
-Deduções), com a **meta derivada** (Full Service). Não toca `statusIndicador`,
-que continua sendo a régua de Plano de Ação / Diagnóstico / Agente (esses lêem
-`metas` estático via `indicadoresParaDiagnostico`, nunca `metasRentabilidade`):
+pela tabela de Indicadores **e pelos 4 cards de rentabilidade da Visão Geral**,
+com a **meta derivada**. Não toca `statusIndicador`, que continua sendo a régua
+de Plano de Ação / Diagnóstico / Agente (esses lêem `metas` estático via
+`indicadoresParaDiagnostico`, nunca `metasRentabilidade`):
 
 | Situação | Status | Cor |
 |---|---|---|
+| `atual > limite` | Atenção | âmbar |
 | `atual ≤ metaIdeal` | Dentro da Meta | verde |
 | `metaIdeal < atual ≤ limite` | Dentro do Limite | verde |
-| `atual > limite` | Atenção | âmbar |
 
-A Meta Ideal **não gera alerta**. Sem estado "Crítico" nesta tabela — mesmo muito
-acima do limite continua "Atenção". `Disponível = limite − atual` (contra o limite,
-não a meta).
+O teste de **limite vem primeiro**: se a Meta Ideal dinâmica alguma vez ficar
+acima do limite, "acima do limite" continua sendo "Atenção" (nunca "Dentro da
+Meta"). Para `metaIdeal ≤ limite` (o caso normal, garantido pelo clamp de
+Serviços) a ordem é indiferente. A Meta Ideal **não gera alerta**. Sem "Crítico"
+— mesmo muito acima do limite continua "Atenção". `Disponível = limite − atual`
+(contra o limite).
 
 ### A.1) Indicadores logísticos — inalterados
 

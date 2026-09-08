@@ -41,20 +41,30 @@ test('mês e simulador: proteção da precificação separada das metas logísti
  assert.equal(a.cards.deducoesMarketplace,undefined);
  // Os 4 indicadores logísticos vêm de resolverMetas — nunca da proteção.
  assert.deepEqual(Object.keys(a.indicadoresRentabilidade).sort(),['servicos_promocoes','taxas_comissoes','taxas_entregadores','total_deducoes']);
+ // LIMITES continuam logísticos (metas_indicadores); META IDEAL de Serviços e
+ // Total acompanha a proteção (Marketplace: reserva = Taxas 13 + Entregadores 12).
  assert.equal(a.indicadoresRentabilidade.taxas_comissoes.limite,13);
  assert.equal(a.indicadoresRentabilidade.servicos_promocoes.limite,7);
- assert.equal(a.indicadoresRentabilidade.servicos_promocoes.metaIdeal,5); // marketplace: meta estática
+ assert.equal(a.indicadoresRentabilidade.taxas_comissoes.metaIdeal,13); // fixa
+ assert.equal(a.indicadoresRentabilidade.taxas_entregadores.metaIdeal,12); // fixa
+ assert.equal(a.indicadoresRentabilidade.servicos_promocoes.metaIdeal.toFixed(2),'6.43'); // 31,43 − 13 − 12
+ assert.equal(a.indicadoresRentabilidade.total_deducoes.metaIdeal.toFixed(2),'31.43'); // = protecao
  // Tabela: sem estado "Crítico" — acima do limite é sempre "Atenção".
  assert.equal(a.indicadoresRentabilidade.servicos_promocoes.status.chave,'atencao'); // 12,6% > limite 7%
  assert.equal(a.indicadoresRentabilidade.servicos_promocoes.status.label,'Atenção');
  assert.equal(a.indicadoresRentabilidade.taxas_comissoes.status.chave,'dentro_da_meta'); // 11,5% <= meta 13
- assert.equal(a.protecaoPrecificacao.protecaoInsuficienteFullService,false); // marketplace não deriva
+ assert.equal(a.protecaoPrecificacao.protecaoInsuficiente,false);
+ assert.equal(a.protecaoPrecificacao.metaServicosAcimaDoLimite,false); // 6,43 <= limite 7
 
  // NÃO CONTAMINAÇÃO: trocar a tabela muda a proteção, não as metas logísticas.
  const d=await svc.obterMes({...pedido,tabelaBalcao:'D'});
  assert.equal(d.protecaoPrecificacao.protecaoPrecificacaoPct.toFixed(2),'32.86');
  assert.equal(d.indicadoresRentabilidade.servicos_promocoes.limite,7);
  assert.equal(d.indicadoresRentabilidade.taxas_comissoes.limite,13);
+ // D×Z4: bruto Serviços 7,86 > limite 7 → meta fica em 7,00 + flag interna.
+ assert.equal(d.indicadoresRentabilidade.servicos_promocoes.metaIdeal,7);
+ assert.equal(d.protecaoPrecificacao.metaServicosAcimaDoLimite,true);
+ assert.equal(d.indicadoresRentabilidade.total_deducoes.metaIdeal.toFixed(2),'32.86');
 
  const b=await svc.obterMes({...pedido,unidadeIdSolicitado:'b'});
  assert.equal(b.protecaoPrecificacao.precos.tabelas.balcao,'D');
