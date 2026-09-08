@@ -190,18 +190,22 @@ export function statusIndicador(atual, meta) {
 }
 
 /**
- * Status APENAS da coluna Status da tabela "Indicadores de Rentabilidade".
- * A Meta Ideal é só referência — não gera alerta; o alerta começa quando o
- * LIMITE é ultrapassado. Sem estado "Crítico" nesta tabela.
+ * Status da coluna Status da tabela "Indicadores de Rentabilidade" e dos 4
+ * cards de rentabilidade da Visão Geral. A Meta Ideal é só referência — não
+ * gera alerta; o alerta começa quando o LIMITE é ultrapassado. Sem "Crítico".
  *
- * NÃO usar em Plano de Ação / Diagnóstico / Agente Crescer / cards da Visão
- * Geral — esses seguem `statusIndicador` (régua histórica, com WARNING/CRITICAL).
- * A matemática de Meta Ideal e Limite continua vindo da mesma fonte; aqui muda
+ * NÃO usar em Plano de Ação / Diagnóstico / Agente Crescer — esses seguem
+ * `statusIndicador` (régua histórica, com WARNING/CRITICAL) sobre `metas`
+ * estático. A matemática de Meta Ideal e Limite vem da mesma fonte; aqui muda
  * só a interpretação visual.
  *
+ *   atual > limite              -> atencao          "Atenção"           (âmbar)
  *   atual <= metaIdeal          -> dentro_da_meta   "Dentro da Meta"    (verde)
  *   metaIdeal < atual <= limite -> dentro_do_limite "Dentro do Limite"  (verde)
- *   atual > limite              -> atencao          "Atenção"           (âmbar)
+ *
+ * O teste de limite vem PRIMEIRO: se a Meta Ideal dinâmica alguma vez ficar
+ * acima do Limite, "acima do Limite" continua sendo "Atenção" — nunca "Dentro
+ * da Meta". Para metaIdeal <= limite (o caso normal) a ordem é indiferente.
  *
  * @param {number|null} atual @param {{metaIdeal: number|null, limite: number}|null|undefined} meta
  * @returns {{chave: 'sem_dados'|'dentro_da_meta'|'dentro_do_limite'|'atencao', label: string}}
@@ -210,9 +214,9 @@ export function statusIndicadorRentabilidade(atual, meta) {
   if (atual == null || meta == null || meta.limite == null) {
     return { chave: "sem_dados", label: "Dados insuficientes" };
   }
+  if (atual > meta.limite) return { chave: "atencao", label: "Atenção" };
   if (meta.metaIdeal != null && atual <= meta.metaIdeal) return { chave: "dentro_da_meta", label: "Dentro da Meta" };
-  if (atual <= meta.limite) return { chave: "dentro_do_limite", label: "Dentro do Limite" };
-  return { chave: "atencao", label: "Atenção" };
+  return { chave: "dentro_do_limite", label: "Dentro do Limite" };
 }
 
 /**
@@ -771,44 +775,67 @@ export function indicadorAplicavel(modelo, indicador) {
   return (INDICADORES_POR_MODELO[modelo] ?? INDICADORES_POR_MODELO.full_service).includes(indicador);
 }
 
-// Referência de Taxas e Comissões do Full Service, usada só como fallback quando
-// a meta não vier de `metas_indicadores` (normalmente vem — 20,50%).
-export const TAXAS_COMISSOES_REFERENCIA_FS = 20.5;
+// Meta de Taxas e Comissões usada como fallback quando não vier de
+// `metas_indicadores` (normalmente vem). Full Service 20,50% · Marketplace 13%.
+const REFERENCIA_META_TAXAS_COMISSOES = { full_service: 20.5, marketplace: 13 };
+// Alias legado.
+export const TAXAS_COMISSOES_REFERENCIA_FS = REFERENCIA_META_TAXAS_COMISSOES.full_service;
 
 /**
- * FULL SERVICE — a META IDEAL (nunca o limite!) de Serviços e Promoções e de
- * Total de Deduções acompanha a PROTEÇÃO DA PRECIFICAÇÃO da combinação de
- * tabelas selecionada:
+ * META IDEAL dinâmica (nunca o limite!) a partir da PROTEÇÃO DA PRECIFICAÇÃO
+ * da combinação de tabelas — vale para os DOIS modelos, com a "reserva" própria
+ * de cada um:
  *
  *   metaIdeal(total_deducoes)     = protecaoPrecificacao
- *   metaIdeal(servicos_promocoes) = max(0, protecaoPrecificacao − meta(taxas_comissoes))
+ *   metaIdeal(servicos_promocoes) = min(limiteServicos, max(0, protecaoPrecificacao − reserva))
  *
- * `taxas_comissoes` nunca é derivada. Os LIMITES continuam vindo de
- * `metas_indicadores` (14,50% / 35,00%). Marketplace não passa por aqui.
+ *   reserva = metas FIXAS dos indicadores que NÃO variam com a proteção:
+ *     full_service → meta(taxas_comissoes)                          (não há entregadores)
+ *     marketplace  → meta(taxas_comissoes) + meta(taxas_entregadores)
  *
- * `protecaoPrecificacao` não é recalculada — é a saída de
- * `calcularProtecaoPrecificacao` (dashboardExecutivo.rentabilidade.js).
+ * `taxas_comissoes` e `taxas_entregadores` nunca são derivadas. Os LIMITES
+ * continuam vindo de `metas_indicadores`. `protecaoPrecificacao` NÃO é
+ * recalculada — é a saída de `calcularProtecaoPrecificacao`
+ * (dashboardExecutivo.rentabilidade.js). Fonte única, sem duplicar a fórmula.
+ *
+ * Sinais internos (não renderizados):
+ *   protecaoInsuficiente       → proteção < reserva (Serviços iria a negativo → 0).
+ *   metaServicosAcimaDoLimite  → a proteção sobraria mais do que o Limite
+ *                                logístico de Serviços permite (meta fica no limite).
  *
  * @param {Record<string, {metaIdeal: number|null, limite: number}>} metas
  * @param {number|null} protecaoPrecificacaoPct  em 0–100
- * @returns {{ metas: typeof metas, protecaoInsuficiente: boolean }}
+ * @param {'full_service'|'marketplace'} modeloLogistico
+ * @returns {{ metas: typeof metas, protecaoInsuficiente: boolean, metaServicosAcimaDoLimite: boolean }}
  */
-export function metasComProtecaoFullService(metas, protecaoPrecificacaoPct) {
+export function metasComProtecaoPrecificacao(metas, protecaoPrecificacaoPct, modeloLogistico) {
   if (!metas || !Number.isFinite(protecaoPrecificacaoPct)) {
-    return { metas, protecaoInsuficiente: false };
+    return { metas, protecaoInsuficiente: false, metaServicosAcimaDoLimite: false };
   }
-  const refTaxas = Number.isFinite(metas.taxas_comissoes?.metaIdeal)
+  const metaTaxas = Number.isFinite(metas.taxas_comissoes?.metaIdeal)
     ? metas.taxas_comissoes.metaIdeal
-    : TAXAS_COMISSOES_REFERENCIA_FS;
-  const servicosDerivada = protecaoPrecificacaoPct - refTaxas;
+    : (REFERENCIA_META_TAXAS_COMISSOES[modeloLogistico] ?? REFERENCIA_META_TAXAS_COMISSOES.full_service);
+  // Entregadores só entram na reserva do Marketplace (Full Service não tem).
+  const metaEntregadores = modeloLogistico === "marketplace" && Number.isFinite(metas.taxas_entregadores?.metaIdeal)
+    ? metas.taxas_entregadores.metaIdeal
+    : (modeloLogistico === "marketplace" ? 12 : 0);
+  const reserva = metaTaxas + metaEntregadores;
+  const servicosBruto = protecaoPrecificacaoPct - reserva;
+  const limiteServicos = Number.isFinite(metas.servicos_promocoes?.limite) ? metas.servicos_promocoes.limite : Infinity;
+  const servicosMeta = Math.min(limiteServicos, Math.max(0, servicosBruto));
+
   const novo = { ...metas };
   if (metas.total_deducoes) {
     novo.total_deducoes = { ...metas.total_deducoes, metaIdeal: protecaoPrecificacaoPct };
   }
   if (metas.servicos_promocoes) {
-    novo.servicos_promocoes = { ...metas.servicos_promocoes, metaIdeal: Math.max(0, servicosDerivada) };
+    novo.servicos_promocoes = { ...metas.servicos_promocoes, metaIdeal: servicosMeta };
   }
-  return { metas: novo, protecaoInsuficiente: servicosDerivada < 0 };
+  return {
+    metas: novo,
+    protecaoInsuficiente: servicosBruto < 0,
+    metaServicosAcimaDoLimite: servicosBruto > limiteServicos,
+  };
 }
 
 // ---------------------------------------------------------------------------

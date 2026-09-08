@@ -13,7 +13,7 @@ import {
   desempenhoParaTicketMedio,
   confiabilidadeProjecao,
   inconsistencias, STATUS_DIA, indicadorAplicavel, statusIndicadorRentabilidade,
-  metasComProtecaoFullService, saldoMeta,
+  metasComProtecaoPrecificacao, saldoMeta,
   distribuirValorMensal, distribuirQuantidadeMensal, recalcularDistribuicaoMensal,
 } from "./dashboardExecutivo.calc.js";
 import { gerarDiagnostico, LIMIARES_DIAGNOSTICO } from "./dashboardExecutivo.diagnostico.js";
@@ -367,15 +367,15 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
       servicosPromocoesPct: indicadoresRentabilidade.servicos_promocoes,
     }),
   };
-  // FULL SERVICE: a META IDEAL de Serviços e Total de Deduções acompanha a
-  // Proteção da Precificação. Só a TABELA de Indicadores usa essas metas
-  // derivadas (via metasRentabilidade abaixo); cards da Visão Geral, saldos,
-  // Plano de Ação e Agente seguem `metas` original (metas_indicadores).
-  const metasFS = modelo.modeloLogistico === "full_service"
-    ? metasComProtecaoFullService(metas, protecaoPrecificacao.protecaoPrecificacaoPct)
-    : { metas, protecaoInsuficiente: false };
-  const metasRentabilidade = metasFS.metas;
-  protecaoPrecificacao.protecaoInsuficienteFullService = metasFS.protecaoInsuficiente;
+  // META IDEAL de Serviços e Promoções e de Total de Deduções acompanha a
+  // Proteção da Precificação — Full Service E Marketplace, cada um com sua
+  // reserva (ver metasComProtecaoPrecificacao). `metasRentabilidade` alimenta
+  // a TABELA de Indicadores e os 4 cards de rentabilidade da Visão Geral;
+  // saldos/Disponível/barras, Plano de Ação e Agente seguem `metas` original.
+  const derivada = metasComProtecaoPrecificacao(metas, protecaoPrecificacao.protecaoPrecificacaoPct, modelo.modeloLogistico);
+  const metasRentabilidade = derivada.metas;
+  protecaoPrecificacao.protecaoInsuficiente = derivada.protecaoInsuficiente;
+  protecaoPrecificacao.metaServicosAcimaDoLimite = derivada.metaServicosAcimaDoLimite;
   const saldos = {
     taxas_comissoes: saldoMeta({ valorUtilizado: cardValores.taxasComissoes, percentualUtilizado: indicadoresRentabilidade.taxas_comissoes, limitePct: metas.taxas_comissoes?.limite ?? null, faturamentoBase: base }),
     servicos_promocoes: saldoMeta({ valorUtilizado: cardValores.servicosPromocoes, percentualUtilizado: indicadoresRentabilidade.servicos_promocoes, limitePct: metas.servicos_promocoes?.limite ?? null, faturamentoBase: base }),
