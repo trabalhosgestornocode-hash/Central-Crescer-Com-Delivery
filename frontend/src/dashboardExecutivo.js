@@ -22,6 +22,9 @@ import { montarSimuladorPreco } from "./dashboardExecutivoSimulador.js";
 import { icon } from "./icons.js";
 import { botaoContextualHtml, botaoDiagnosticoHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
 import { planoAcaoHtml, fmtPp } from "./dashboardExecutivoPlano.js";
+// Formatadores de 2 casas — SÓ para a tabela de Indicadores de Rentabilidade
+// (ver renderIndicadores). O resto do Dashboard segue `fmtPct`/`fmtPp` de 1 casa.
+import { fmtPctRentabilidade, fmtPpRentabilidade } from "./dashboardExecutivoRentabilidade.js";
 
 const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 const ABAS = [
@@ -433,10 +436,11 @@ const cardDef = (label, valor, sub, tip, cls = "", extra = "") => `
     ${extra}
   </div>`;
 
-// Status "dentro da meta / atenção / fora da meta / dados insuficientes" vem
-// PRONTO do backend (statusIndicador em dashboardExecutivo.calc.js) — aqui só
-// traduz a chave pra classe de CSS do pill. Fonte única, sem regra duplicada.
-const CLASSE_STATUS = { dentro_da_meta: "ok", atencao: "warn", fora_da_meta: "bad", sem_dados: "muted" };
+// Status vem PRONTO do backend — aqui só traduz a chave pra classe de CSS do
+// pill. Cards da Visão Geral usam `statusIndicador` (dentro_da_meta / atencao /
+// fora_da_meta); a tabela de Indicadores usa `statusIndicadorRentabilidade`
+// (dentro_da_meta / dentro_do_limite / atencao). Ambos mapeados aqui.
+const CLASSE_STATUS = { dentro_da_meta: "ok", dentro_do_limite: "ok", atencao: "warn", fora_da_meta: "bad", sem_dados: "muted" };
 // fmtPp vem de dashboardExecutivoPlano.js (fonte única de "p.p.").
 
 /**
@@ -744,15 +748,16 @@ function renderIndicadores(box) {
     }
     const s = v.status ?? { label: "Dados insuficientes", chave: "sem_dados" };
     const saldo = v.saldo;
+    // 2 casas decimais APENAS nesta tabela (fmtPctRentabilidade / fmtPpRentabilidade).
     let disponivel = "—";
-    if (saldo?.status === "disponivel") disponivel = `${fmtPp(saldo.disponivelPp)}${saldo.disponivelReais != null ? ` (${fmtMoeda(saldo.disponivelReais)})` : ""}`;
+    if (saldo?.status === "disponivel") disponivel = `${fmtPpRentabilidade(saldo.disponivelPp)}${saldo.disponivelReais != null ? ` (${fmtMoeda(saldo.disponivelReais)})` : ""}`;
     else if (saldo?.status === "limite_atingido") disponivel = "Limite atingido";
-    else if (saldo?.status === "acima_do_limite") disponivel = `−${fmtPp(Math.abs(saldo.disponivelPp))}${saldo.disponivelReais != null ? ` (−${fmtMoeda(Math.abs(saldo.disponivelReais))})` : ""}`;
+    else if (saldo?.status === "acima_do_limite") disponivel = `−${fmtPpRentabilidade(Math.abs(saldo.disponivelPp))}${saldo.disponivelReais != null ? ` (−${fmtMoeda(Math.abs(saldo.disponivelReais))})` : ""}`;
     return `<tr>
       <td>${rotuloIndicador(chave)}</td>
-      <td class="num">${fmtPct(v.atual)}</td>
-      <td class="num">${fmtPct(v.metaIdeal)}</td>
-      <td class="num">${fmtPct(v.limite)}</td>
+      <td class="num">${fmtPctRentabilidade(v.atual)}</td>
+      <td class="num">${fmtPctRentabilidade(v.metaIdeal)}</td>
+      <td class="num">${fmtPctRentabilidade(v.limite)}</td>
       <td class="num">${disponivel}</td>
       <td><span class="pill ${CLASSE_STATUS[s.chave] ?? "muted"}">${s.label}</span></td>
     </tr>`;

@@ -43,8 +43,12 @@ test('mês e simulador: proteção da precificação separada das metas logísti
  assert.deepEqual(Object.keys(a.indicadoresRentabilidade).sort(),['servicos_promocoes','taxas_comissoes','taxas_entregadores','total_deducoes']);
  assert.equal(a.indicadoresRentabilidade.taxas_comissoes.limite,13);
  assert.equal(a.indicadoresRentabilidade.servicos_promocoes.limite,7);
- assert.equal(a.indicadoresRentabilidade.servicos_promocoes.metaIdeal,5);
- assert.equal(a.indicadoresRentabilidade.servicos_promocoes.status.chave,'fora_da_meta'); // 12,6% > limite 7%
+ assert.equal(a.indicadoresRentabilidade.servicos_promocoes.metaIdeal,5); // marketplace: meta estática
+ // Tabela: sem estado "Crítico" — acima do limite é sempre "Atenção".
+ assert.equal(a.indicadoresRentabilidade.servicos_promocoes.status.chave,'atencao'); // 12,6% > limite 7%
+ assert.equal(a.indicadoresRentabilidade.servicos_promocoes.status.label,'Atenção');
+ assert.equal(a.indicadoresRentabilidade.taxas_comissoes.status.chave,'dentro_da_meta'); // 11,5% <= meta 13
+ assert.equal(a.protecaoPrecificacao.protecaoInsuficienteFullService,false); // marketplace não deriva
 
  // NÃO CONTAMINAÇÃO: trocar a tabela muda a proteção, não as metas logísticas.
  const d=await svc.obterMes({...pedido,tabelaBalcao:'D'});

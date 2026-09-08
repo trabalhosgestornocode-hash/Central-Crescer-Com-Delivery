@@ -5,7 +5,11 @@ import { escapeHtml, fmtMoeda } from "./utils.js";
 import { infoCalculoTip, moedaLonga, numLongo, NOTA_PRECISAO_SIMULADOR } from "./infoCalculo.js";
 
 const decimal = (v) => v.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Formatadores de 2 casas — usados na área de Rentabilidade (Simulador) e na
+// tabela de Indicadores de Rentabilidade. NÃO substituem o `fmtPct` global de
+// 1 casa (utils.js), usado no resto do Dashboard.
 export const fmtPctRentabilidade = (v) => Number.isFinite(v) ? decimal(v) + "%" : "—";
+export const fmtPpRentabilidade = (v) => Number.isFinite(v) ? decimal(v) + " p.p." : "—";
 const d2 = (v) => Number.isFinite(v) ? decimal(v) : "—";
 
 const tabela = (v) => escapeHtml(v ?? "não configurada");
