@@ -18,6 +18,8 @@ export const mes = asyncHandler(async (req, res) => {
     unidadeIdSolicitado: req.query.unidadeId,
     mes: req.query.mes,
     ano: req.query.ano,
+    tabelaBalcao: req.query.tabelaBalcao,
+    tabelaIfood: req.query.tabelaIfood,
   });
   res.json({ data });
 });
@@ -192,6 +194,8 @@ export const simuladorPreco = asyncHandler(async (req, res) => {
     produto: req.query.produto,
     mes: req.query.mes,
     ano: req.query.ano,
+    tabelaBalcao: req.query.tabelaBalcao,
+    tabelaIfood: req.query.tabelaIfood,
   });
   res.json({ data });
 });

@@ -1,3 +1,5 @@
+import { carregarPrecosRentabilidade } from "./dashboardExecutivo.precos.service.js";
+import { calcularProtecaoPrecificacao, calcularComparacaoProduto } from "./dashboardExecutivo.rentabilidade.js";
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
@@ -273,7 +275,7 @@ async function calcularComparativoEPlanoRecuperacao({ unidadeId, ano, mes, hojeI
 // ---------------------------------------------------------------------------
 // GET /dashboard-executivo/mes — payload agregado da página inteira
 // ---------------------------------------------------------------------------
-export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, mes: mesRaw, ano: anoRaw }) {
+export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, mes: mesRaw, ano: anoRaw, tabelaBalcao, tabelaIfood }) {
   const mes = v.numero(mesRaw, "Mês", { min: 1, max: 12 });
   const ano = v.numero(anoRaw, "Ano", { min: 2000, max: 2100 });
   const unidadeId = await resolverUnidadeAlvo({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, exigirEspecifica: false });
@@ -284,7 +286,8 @@ export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolici
     // modelo tem um conjunto de metas diferente (ver dashboardExecutivo.calc.js).
     const modelo = await obterModeloLogistico({ unidadeId, organizacaoId });
     const metas = await resolverMetas({ organizacaoId, unidadeId, modeloLogistico: modelo.modeloLogistico });
-    return obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIso, metas, modelo });
+    const precos = await carregarPrecosRentabilidade({ organizacaoId, unidadeId, tabelaBalcao, tabelaIfood });
+    return obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIso, metas, modelo, precos });
   }
 
   // Visão agregada ("todas as unidades"): unidades diferentes podem estar em
@@ -295,7 +298,7 @@ export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolici
   return obterMesAgregado({ organizacaoId, mes, ano, hojeIso, metas: {} });
 }
 
-async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIso, metas, modelo }) {
+async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIso, metas, modelo, precos }) {
   const { diasComStatus, linhas } = await carregarCalendarioMes({ unidadeId, ano, mes, hojeIso });
   const resumo = resumoPreenchimento(diasComStatus);
 
@@ -343,6 +346,25 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
     servicos_promocoes: percentual(cardValores.servicosPromocoes, base),
     taxas_entregadores: percentual(cardValores.taxasEntregadores, base),
     total_deducoes: percentual(totalDed, base),
+  };
+  // PROTEÇÃO DA PRECIFICAÇÃO — conceito exclusivo do Simulador de Preço.
+  // Calculada só a partir dos preços das tabelas; NÃO toca `metas` nem os 4
+  // indicadores logísticos abaixo.
+  const protecaoPrecificacao = {
+    ...calcularProtecaoPrecificacao({
+      precoBalcao: precos.balcao.preco, precoIfood: precos.ifood.preco,
+      ticketMedioIfood: ticketMedio(parTicketMedio?.valorVendasBruto ?? null, parTicketMedio?.qtdVendas ?? null),
+    }),
+    precos,
+    // Partes brutas do Ticket Médio (valor de vendas ÷ pedidos) — para a UI
+    // explicar a diferença de arredondamento sem refazer a conta.
+    ticketMedioBase: parTicketMedio
+      ? { valorVendasBruto: parTicketMedio.valorVendasBruto, qtdVendas: parTicketMedio.qtdVendas }
+      : null,
+    comparacao: calcularComparacaoProduto(precos, {
+      taxasComissoesPct: indicadoresRentabilidade.taxas_comissoes,
+      servicosPromocoesPct: indicadoresRentabilidade.servicos_promocoes,
+    }),
   };
   const saldos = {
     taxas_comissoes: saldoMeta({ valorUtilizado: cardValores.taxasComissoes, percentualUtilizado: indicadoresRentabilidade.taxas_comissoes, limitePct: metas.taxas_comissoes?.limite ?? null, faturamentoBase: base }),
@@ -466,6 +488,7 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
   const lancamentoMensal = montarResumoLoteMensal(loteMensal, linhasDoLote);
 
   return {
+    protecaoPrecificacao,
     agregado: false,
     unidadeId,
     ehTeste: modelo.ehTeste,

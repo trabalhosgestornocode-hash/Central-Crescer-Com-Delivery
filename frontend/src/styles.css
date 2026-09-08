@@ -4200,3 +4200,68 @@ tr.dex-linha-na { opacity: .65; }
   .pfd-cal-meses { grid-template-columns: 1fr; }
   .pfd-cal-dia { min-height: 40px; }
 }
+/* Simulador de Preço — bloco RECOLHÍVEL (faixa) + conteúdo (2 cards + resultado).
+   PROTEÇÃO DA PRECIFICAÇÃO só aparece aqui, nunca na aba Indicadores. */
+.dex-rent-eyebrow { display: block; color: var(--cinza); font-size: 10px; font-weight: 750; letter-spacing: 1.1px; text-transform: uppercase; margin-bottom: 4px; }
+.dex-rent-nota { font-size: 11px; line-height: 1.6; color: var(--cinza); margin-top: 10px; }
+.dex-rent-simulador { padding: 0; overflow: hidden; }
+
+/* Faixa: toda a barra é o controle de recolher/expandir. */
+.dex-sim-faixa { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px 20px; background: none; border: 0; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.dex-sim-faixa:hover { background: var(--superficie-2); }
+.dex-sim-faixa:focus-visible { outline: 2px solid var(--azul, #2563eb); outline-offset: -2px; }
+.dex-sim-faixa-info { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.dex-sim-faixa-info > strong { font-size: 13.5px; font-weight: 750; }
+.dex-sim-faixa-meta { font-size: 12px; color: var(--cinza); font-variant-numeric: tabular-nums; }
+.dex-sim-faixa-acao { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--cinza); }
+.dex-sim-faixa-chevron { width: 7px; height: 7px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg); transition: transform .15s ease; margin-bottom: 2px; }
+.dex-sim-faixa[aria-expanded="true"] .dex-sim-faixa-chevron { transform: rotate(-135deg); margin-bottom: -2px; }
+
+.dex-sim-corpo { padding: 4px 20px 20px; border-top: 1px solid var(--linha); }
+.dex-sim-corpo-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin: 14px 0 16px; }
+.dex-sim-corpo-topo p { font-size: 11.5px; color: var(--cinza); line-height: 1.6; max-width: 620px; }
+.dex-sim-corpo-topo button { flex-shrink: 0; }
+.dex-sim-indisp { font-size: 11px; color: var(--cinza); margin-top: 6px; }
+.dex-rent-simulador .dex-sim-lado { padding: 14px 16px; background: var(--card); }
+.dex-rent-simulador .dex-sim-lado h4 { font-size: 13px; }
+.dex-rent-simulador .dex-sim-lado-tabela { font-size: 11px; color: var(--cinza); }
+.dex-rent-simulador .dex-sim-linha:last-of-type { padding-top: 10px; margin-top: 2px; border-top: 1px solid var(--linha); }
+.dex-rent-simulador .dex-sim-aviso { margin-top: 14px; font-size: 10px; line-height: 1.6; }
+
+.dex-rent-simulacao-resultado { margin-top: 16px; padding: 18px; border: 1px solid var(--linha); border-radius: 12px; background: var(--superficie-2); }
+.dex-rent-simulacao-resultado > header { margin-bottom: 14px; }
+.dex-rent-simulacao-resultado h4 { font-size: 14px; }
+.dex-rent-simulacao-resultado > p { font-size: 11px; color: var(--cinza); margin: 4px 0 14px; }
+.dex-rent-simulacao-metricas { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.dex-rent-kpi { min-width: 0; display: flex; flex-direction: column; gap: 5px; padding: 12px; border: 1px solid var(--linha); border-radius: 10px; background: var(--card); }
+.dex-rent-kpi > span { font-size: 11px; color: var(--cinza); font-weight: 600; display: flex; align-items: center; gap: 5px; }
+.dex-rent-kpi > strong { font-size: 18px; font-weight: 760; letter-spacing: -.4px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.dex-rent-kpi > small { font-size: 10px; color: var(--cinza); }
+.dex-rent-kpi .vd-tip { margin-left: 0; width: 14px; height: 14px; font-size: 9px; }
+.dex-sim-linha > span { display: inline-flex; align-items: center; gap: 5px; }
+.dex-sim-linha .vd-tip { margin-left: 0; width: 14px; height: 14px; font-size: 9px; }
+.dex-rent-nota-precisao { margin-top: 4px; font-size: 10px; opacity: .85; }
+
+/* Tooltip de transparência de cálculo — variante "rica" do balão central
+   (tooltip.js). Mesmo fundo/sombra dos tooltips do sistema, só mais largo e
+   com linhas rótulo/valor. */
+.vd-tip-flutuante--rico { max-width: min(300px, calc(100vw - 24px)); text-align: left; padding: 10px 12px; font-weight: 500; }
+.vd-tipc-tit { font-weight: 700; font-size: 11px; margin-bottom: 6px; }
+.vd-tipc-linha { display: flex; justify-content: space-between; gap: 14px; padding: 2px 0; font-size: 10.5px; }
+.vd-tipc-linha > span { color: rgba(238,247,241,.72); }
+.vd-tipc-linha > b { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.vd-tipc-bloco { margin-top: 5px; padding-top: 5px; border-top: 1px solid rgba(238,247,241,.16); }
+.vd-tipc-bloco > span { display: block; color: rgba(238,247,241,.72); font-size: 9.5px; margin-bottom: 2px; }
+.vd-tipc-bloco > code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 10px; color: #eef7f1; white-space: normal; word-break: break-word; }
+.vd-tipc-res { margin-top: 5px; padding-top: 6px; border-top: 1px solid rgba(238,247,241,.16); }
+.vd-tipc-res > b { font-size: 11.5px; }
+.vd-tipc-obs { margin-top: 7px; font-size: 9.5px; color: rgba(238,247,241,.72); line-height: 1.45; }
+
+@media (max-width: 650px) {
+  .dex-sim-faixa, .dex-sim-corpo { padding-left: 16px; padding-right: 16px; }
+  .dex-sim-corpo-topo { flex-direction: column; gap: 10px; }
+  .dex-rent-simulacao-resultado { padding: 14px; }
+  .dex-rent-simulador .dex-sim-lado-topo { flex-wrap: wrap; }
+}
