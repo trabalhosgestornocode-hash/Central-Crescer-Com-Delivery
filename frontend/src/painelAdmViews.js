@@ -17,6 +17,7 @@
 import { el, els, escapeHtml, normalizarBusca } from "./utils.js";
 import { icon } from "./icons.js";
 import { painelAdmApi } from "./painelAdmApi.js";
+import { renderPerformance } from './performance.js';
 import { renderDesenvolvimento, montarCardDesenvolvimento } from './desenvolvimento.js';
 import { SECOES_PDF, secoesPadrao, gerarPdf, previewPdf, nomeArquivoPdf } from "./painelAdmPdf.js";
 import {
@@ -33,6 +34,7 @@ import {
 /** Áreas gerenciais existentes e agenda oficial do desenvolvimento. */
 export const TELAS_PADM = [
   { id: "visao-geral", label: "Visão Geral",          icone: "target" },
+  { id: 'performance', label: 'Central de Performance', icone: 'target' },
   { id: "diario",      label: "Monitoramento Diário", icone: "calendar" },
   { id: "pendencias",  label: "Pendências",           icone: "alert-triangle" },
   { id: "empresas",    label: "Empresas",             icone: "building" },
@@ -92,6 +94,7 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
   const mes = opts.mes || undefined;
   const v = view();
   if (!v) return;
+  if (entrada.id === 'performance') return renderPerformance(v, api, mes, nav.aoAcessoRevogado);
   if (entrada.id === 'desenvolvimento') return renderDesenvolvimento(v, api, nav.aoAcessoRevogado);
 
 

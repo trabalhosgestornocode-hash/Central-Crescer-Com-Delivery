@@ -47,3 +47,7 @@ graphify-out/
 # Executáveis/instaladores — nunca fazem parte do código do projeto
 *.exe
 *.msi
+
+# Central de Performance — dumps de catálogo do pré-flight da 078 (1,4 MB,
+# regeneráveis por backend/scripts/validar-performance-schema-completo.mjs)
+docs/performance-validacao-banco/consolidado-*.json
