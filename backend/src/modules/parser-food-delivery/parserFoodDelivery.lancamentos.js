@@ -112,7 +112,7 @@ async function montarLinha({ organizacaoId, unidadeId, body, usuario }) {
   // Vínculo com pedido.
   let pedidoId = body?.pedidoId ? v.uuid(body.pedidoId, "Pedido") : null;
   if (origem === ORIGEM_LANCAMENTO.AVULSO && pedidoId) {
-    throw ApiError.badRequest("Um lançamento avulso não pode ser vinculado a um pedido do iFood.");
+    throw ApiError.badRequest("Um serviço avulso não pode ser vinculado a um pedido do iFood.");
   }
   const vinculo = await resolverPedidoVinculado({
     organizacaoId, unidadeId, pedidoId,

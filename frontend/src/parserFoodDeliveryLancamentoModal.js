@@ -29,7 +29,7 @@ function overlay(html) {
 
 const hoje = () => new Date(new Date().toLocaleDateString("sv-SE", { timeZone: "America/Fortaleza" }));
 const isoHoje = () => hoje().toISOString().slice(0, 10);
-const TITULO = { taxa_adicional: "Adicionar taxa de entregador", avulso: "Novo lançamento avulso", manual: "Nova entrega" };
+const TITULO = { taxa_adicional: "Adicionar taxa de entregador", avulso: "Novo serviço avulso", manual: "Nova entrega" };
 
 // ---------------------------------------------------------------------------
 // ENTREGADOR — campo com autocomplete a partir do cadastro mestre.
