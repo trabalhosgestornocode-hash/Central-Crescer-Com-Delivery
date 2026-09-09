@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { performanceRouter } from './performance/performance.routes.js';
 import { desenvolvimentoRouter } from '../desenvolvimento/desenvolvimento.routes.js';
 import * as c from "./administrativo.controller.js";
 import { requirePainelAdministrativo, exigirMfaSeExigido } from "../../middlewares/auth.js";
@@ -34,6 +35,7 @@ administrativoRouter.use(limiteDeTaxa({ escopo: "administrativo", ...RATE_LIMIT.
 
 // ---- Fase B: sanidade da cadeia de autorização
 administrativoRouter.get("/ping", c.ping);
+administrativoRouter.use('/performance', performanceRouter);
 
 // ---- Fase F: monitoramento cross-tenant (monitor "Dashboard iFood").
 // Somente leitura. O universo monitorado (unidades elegíveis) e os

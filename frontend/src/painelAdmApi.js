@@ -49,6 +49,10 @@ async function chamar(rota, opcoes = {}) {
 }
 
 export const painelAdmApi = {
+  performance: (params = {}) => chamar('/performance' + qs(params)),
+  performanceUnidades: () => chamar('/performance/unidades'),
+  performanceCompetencia: (unidadeId, competencia) => chamar(`/performance/unidades/${encodeURIComponent(unidadeId)}/competencias/${encodeURIComponent(competencia)}`),
+  performanceSalvar: (unidadeId, competencia, dados) => chamar(`/performance/unidades/${encodeURIComponent(unidadeId)}/competencias/${encodeURIComponent(competencia)}`, { method:'PATCH', json:dados }),
   desenvolvimento: (rota, params = {}) => chamar('/desenvolvimento' + rota + qs(params)),
   salvarDemanda: (id, dados) => chamar('/desenvolvimento/demandas' + (id ? '/' + encodeURIComponent(id) : ''), { method: id ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dados) }),
   excluirDemanda: (id, versao) => chamar('/desenvolvimento/demandas/' + encodeURIComponent(id), { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ versao }) }),

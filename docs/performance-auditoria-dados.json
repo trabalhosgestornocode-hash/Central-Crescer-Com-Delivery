@@ -1,0 +1,474 @@
+{
+  "consultadoEm": "2026-09-09T03:46:48.002Z",
+  "somenteLeitura": true,
+  "catalogo": {
+    "tabelasConsultadas": 88,
+    "candidatasConversao": [],
+    "fontes": {
+      "lancamentos_financeiros_distribuicao_mensal": [
+        "id",
+        "organizacao_id",
+        "unidade_id",
+        "ano",
+        "mes",
+        "valor_total_centavos",
+        "dias_distribuidos",
+        "usuario_id",
+        "usuario_nome",
+        "usuario_email",
+        "created_at",
+        "updated_at",
+        "atualizado_por_id",
+        "atualizado_por_nome",
+        "atualizado_por_email"
+      ],
+      "parser_fd_pedidos": [
+        "id",
+        "importacao_id",
+        "organizacao_id",
+        "unidade_id",
+        "numero_pedido",
+        "data_hora",
+        "situacao",
+        "entregador",
+        "taxa_entregador",
+        "valor_total_pedido",
+        "forma_pagamento",
+        "razao_cancelamento",
+        "justificativa_cancelamento",
+        "data_entregue",
+        "data_finalizado",
+        "data_cancelado",
+        "origem",
+        "sem_taxa_informado",
+        "status_conciliacao",
+        "dados_brutos",
+        "criado_em",
+        "operacao",
+        "operacao_motivo",
+        "detalhes_pedido",
+        "data_pronto",
+        "data_despachado",
+        "data_aceito",
+        "data_coletado",
+        "data_chegada_entrega",
+        "data_rejeitado",
+        "razao_rejeicao",
+        "justificativa_rejeicao",
+        "classificacao_cancelamento",
+        "classificacao_motivo",
+        "classificacao_nivel_confianca",
+        "classificacao_regra",
+        "classificacao_original",
+        "classificacao_override_usuario_id",
+        "classificacao_override_usuario_nome",
+        "classificacao_override_usuario_email",
+        "classificacao_override_motivo",
+        "classificacao_override_em"
+      ],
+      "parser_fd_importacoes": [
+        "id",
+        "organizacao_id",
+        "unidade_id",
+        "periodo_inicio",
+        "periodo_fim",
+        "nome_arquivo",
+        "hash_arquivo",
+        "arquivo_storage",
+        "total_pedidos",
+        "entregues",
+        "cancelados",
+        "cancelados_com_taxa",
+        "cancelados_sem_taxa",
+        "taxas_brutas",
+        "taxas_descartadas",
+        "taxas_validas",
+        "codigos_sem_taxa",
+        "status",
+        "mensagem_erro",
+        "usuario_id",
+        "usuario_nome",
+        "usuario_email",
+        "criado_em",
+        "atualizado_em",
+        "pedidos_subway",
+        "pedidos_acai",
+        "pedidos_revisao",
+        "coluna_detalhes_encontrada",
+        "pedidos_sem_entregador",
+        "cancelados_recebem_taxa",
+        "cancelados_nao_recebem_taxa",
+        "cancelados_revisao"
+      ],
+      "lancamentos_financeiros_diarios": [
+        "id",
+        "organizacao_id",
+        "unidade_id",
+        "data_lancamento",
+        "situacao",
+        "motivo_sem_operacao",
+        "observacao",
+        "qtd_vendas",
+        "valor_vendas_bruto",
+        "novos_clientes",
+        "valor_vendas_ifood",
+        "taxas_comissoes",
+        "servicos_promocoes",
+        "taxas_entregadores",
+        "outras_deducoes",
+        "justificativa_ajuste",
+        "status",
+        "usuario_id",
+        "usuario_nome",
+        "usuario_email",
+        "finalizado_em",
+        "created_at",
+        "updated_at",
+        "origem_lancamento",
+        "distribuicao_mensal_id",
+        "ajustes_favor_loja",
+        "ajustes_contra_loja"
+      ]
+    }
+  },
+  "unidades": [
+    {
+      "unidade": {
+        "id": "1ef5aace-345b-4417-9559-e7c27a230a48",
+        "nome": "Matriz  Subway Centro Montes Claros",
+        "organizacao_id": "074f6ba1-cd42-4970-a983-4647aedd1e91",
+        "ativo": true,
+        "eh_teste": false
+      },
+      "elegivelPainel": true,
+      "registros": 62,
+      "meses": [
+        {
+          "mes": "2026-04",
+          "incompleto": true,
+          "semDados": true,
+          "financeiroAte": null,
+          "status": "incompleto",
+          "completudePct": 0,
+          "faltantes": [
+            "faturamento",
+            "despesasIfood",
+            "pedidos",
+            "novosClientes",
+            "conversao",
+            "entregadores"
+          ],
+          "indicadores": {
+            "faturamento": null,
+            "despesasIfood": null,
+            "entregadores": null,
+            "pedidos": null,
+            "valorBruto": null,
+            "novosClientes": null,
+            "aposDespesas": null,
+            "ticketMedio": null,
+            "retencaoAposIfoodPct": null,
+            "custoIfoodPct": null,
+            "custoEntregadoresPct": null,
+            "custoPorPedido": null,
+            "conversao": null
+          }
+        },
+        {
+          "mes": "2026-05",
+          "incompleto": true,
+          "semDados": true,
+          "financeiroAte": null,
+          "status": "incompleto",
+          "completudePct": 0,
+          "faltantes": [
+            "faturamento",
+            "despesasIfood",
+            "pedidos",
+            "novosClientes",
+            "conversao",
+            "entregadores"
+          ],
+          "indicadores": {
+            "faturamento": null,
+            "despesasIfood": null,
+            "entregadores": null,
+            "pedidos": null,
+            "valorBruto": null,
+            "novosClientes": null,
+            "aposDespesas": null,
+            "ticketMedio": null,
+            "retencaoAposIfoodPct": null,
+            "custoIfoodPct": null,
+            "custoEntregadoresPct": null,
+            "custoPorPedido": null,
+            "conversao": null
+          }
+        },
+        {
+          "mes": "2026-06",
+          "incompleto": true,
+          "semDados": true,
+          "financeiroAte": null,
+          "status": "incompleto",
+          "completudePct": 0,
+          "faltantes": [
+            "faturamento",
+            "despesasIfood",
+            "pedidos",
+            "novosClientes",
+            "conversao",
+            "entregadores"
+          ],
+          "indicadores": {
+            "faturamento": null,
+            "despesasIfood": null,
+            "entregadores": null,
+            "pedidos": null,
+            "valorBruto": null,
+            "novosClientes": null,
+            "aposDespesas": null,
+            "ticketMedio": null,
+            "retencaoAposIfoodPct": null,
+            "custoIfoodPct": null,
+            "custoEntregadoresPct": null,
+            "custoPorPedido": null,
+            "conversao": null
+          }
+        },
+        {
+          "mes": "2026-07",
+          "incompleto": true,
+          "semDados": false,
+          "financeiroAte": "2026-07-31",
+          "status": "incompleto",
+          "completudePct": 50,
+          "faltantes": [
+            "pedidos",
+            "novosClientes",
+            "conversao"
+          ],
+          "indicadores": {
+            "faturamento": 74317.28000000004,
+            "despesasIfood": 30779.88,
+            "entregadores": 10971.5,
+            "pedidos": null,
+            "valorBruto": null,
+            "novosClientes": null,
+            "aposDespesas": 43537.40000000004,
+            "ticketMedio": null,
+            "retencaoAposIfoodPct": 58.58314513125348,
+            "custoIfoodPct": 41.41685486874652,
+            "custoEntregadoresPct": 14.763053760848074,
+            "custoPorPedido": null,
+            "conversao": null
+          }
+        },
+        {
+          "mes": "2026-08",
+          "incompleto": true,
+          "semDados": false,
+          "financeiroAte": "2026-08-29",
+          "status": "incompleto",
+          "completudePct": 83.33333333333334,
+          "faltantes": [
+            "conversao"
+          ],
+          "indicadores": {
+            "faturamento": 49411.54,
+            "despesasIfood": 19291.38,
+            "entregadores": 7340.97,
+            "pedidos": 968,
+            "valorBruto": 49359.21,
+            "novosClientes": 290,
+            "aposDespesas": 30120.16,
+            "ticketMedio": 51.04497933884298,
+            "retencaoAposIfoodPct": 60.95774387926382,
+            "custoIfoodPct": 39.04225612073617,
+            "custoEntregadoresPct": 14.856792563032847,
+            "custoPorPedido": 7.583646694214877,
+            "conversao": null
+          }
+        }
+      ],
+      "distribuicoes": [
+        {
+          "competencia": "2026-07",
+          "camposDisponiveis": [
+            "valor_total_centavos"
+          ]
+        }
+      ],
+      "foodDelivery": []
+    },
+    {
+      "unidade": {
+        "id": "aa1da7d9-794c-43ec-bd7c-8c5e2cf80b6e",
+        "nome": "Matriz Subway Avenida Montes Claros",
+        "organizacao_id": "0c7b9f50-8ebc-41d6-afad-d35f207b8e52",
+        "ativo": true,
+        "eh_teste": false
+      },
+      "elegivelPainel": true,
+      "registros": 62,
+      "meses": [
+        {
+          "mes": "2026-04",
+          "incompleto": true,
+          "semDados": true,
+          "financeiroAte": null,
+          "status": "incompleto",
+          "completudePct": 0,
+          "faltantes": [
+            "faturamento",
+            "despesasIfood",
+            "pedidos",
+            "novosClientes",
+            "conversao",
+            "entregadores"
+          ],
+          "indicadores": {
+            "faturamento": null,
+            "despesasIfood": null,
+            "entregadores": null,
+            "pedidos": null,
+            "valorBruto": null,
+            "novosClientes": null,
+            "aposDespesas": null,
+            "ticketMedio": null,
+            "retencaoAposIfoodPct": null,
+            "custoIfoodPct": null,
+            "custoEntregadoresPct": null,
+            "custoPorPedido": null,
+            "conversao": null
+          }
+        },
+        {
+          "mes": "2026-05",
+          "incompleto": true,
+          "semDados": true,
+          "financeiroAte": null,
+          "status": "incompleto",
+          "completudePct": 0,
+          "faltantes": [
+            "faturamento",
+            "despesasIfood",
+            "pedidos",
+            "novosClientes",
+            "conversao",
+            "entregadores"
+          ],
+          "indicadores": {
+            "faturamento": null,
+            "despesasIfood": null,
+            "entregadores": null,
+            "pedidos": null,
+            "valorBruto": null,
+            "novosClientes": null,
+            "aposDespesas": null,
+            "ticketMedio": null,
+            "retencaoAposIfoodPct": null,
+            "custoIfoodPct": null,
+            "custoEntregadoresPct": null,
+            "custoPorPedido": null,
+            "conversao": null
+          }
+        },
+        {
+          "mes": "2026-06",
+          "incompleto": true,
+          "semDados": true,
+          "financeiroAte": null,
+          "status": "incompleto",
+          "completudePct": 0,
+          "faltantes": [
+            "faturamento",
+            "despesasIfood",
+            "pedidos",
+            "novosClientes",
+            "conversao",
+            "entregadores"
+          ],
+          "indicadores": {
+            "faturamento": null,
+            "despesasIfood": null,
+            "entregadores": null,
+            "pedidos": null,
+            "valorBruto": null,
+            "novosClientes": null,
+            "aposDespesas": null,
+            "ticketMedio": null,
+            "retencaoAposIfoodPct": null,
+            "custoIfoodPct": null,
+            "custoEntregadoresPct": null,
+            "custoPorPedido": null,
+            "conversao": null
+          }
+        },
+        {
+          "mes": "2026-07",
+          "incompleto": true,
+          "semDados": false,
+          "financeiroAte": "2026-07-31",
+          "status": "incompleto",
+          "completudePct": 50,
+          "faltantes": [
+            "pedidos",
+            "novosClientes",
+            "conversao"
+          ],
+          "indicadores": {
+            "faturamento": 69563.40000000004,
+            "despesasIfood": 29888.610000000004,
+            "entregadores": 12950.410000000003,
+            "pedidos": null,
+            "valorBruto": null,
+            "novosClientes": null,
+            "aposDespesas": 39674.79000000004,
+            "ticketMedio": null,
+            "retencaoAposIfoodPct": 57.034000638266704,
+            "custoIfoodPct": 42.96599936173331,
+            "custoEntregadoresPct": 18.616700736306733,
+            "custoPorPedido": null,
+            "conversao": null
+          }
+        },
+        {
+          "mes": "2026-08",
+          "incompleto": true,
+          "semDados": false,
+          "financeiroAte": "2026-08-29",
+          "status": "incompleto",
+          "completudePct": 83.33333333333334,
+          "faltantes": [
+            "conversao"
+          ],
+          "indicadores": {
+            "faturamento": 67548.04,
+            "despesasIfood": 30009.760000000002,
+            "entregadores": 11150.19,
+            "pedidos": 1356,
+            "valorBruto": 64589.52,
+            "novosClientes": 407,
+            "aposDespesas": 37538.27999999999,
+            "ticketMedio": 49.814188790560465,
+            "retencaoAposIfoodPct": 55.572715359320554,
+            "custoIfoodPct": 44.427284640679446,
+            "custoEntregadoresPct": 16.50705187004686,
+            "custoPorPedido": 8.222853982300885,
+            "conversao": null
+          }
+        }
+      ],
+      "distribuicoes": [
+        {
+          "competencia": "2026-07",
+          "camposDisponiveis": [
+            "valor_total_centavos"
+          ]
+        }
+      ],
+      "foodDelivery": []
+    }
+  ]
+}
