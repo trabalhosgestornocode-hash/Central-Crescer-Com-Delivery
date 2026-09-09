@@ -67,7 +67,18 @@ const metasFS = () => ({
 });
 const fs = (m, p) => metasComProtecaoPrecificacao(m, p, 'full_service');
 
-test('FS E × Z4: Serviços = protecao − 20,50; Total = protecao; limites e Taxas fixos', () => {
+// Invariante única desta suíte: o Total é SEMPRE a soma das metas ideais dos
+// componentes aplicáveis ao modelo (FS = Taxas + Serviços; MP = + Entregadores),
+// nunca a Proteção da Precificação crua.
+const invarianteTotal = (metas, modelo) => {
+  const comps = modelo === 'marketplace'
+    ? ['taxas_comissoes', 'servicos_promocoes', 'taxas_entregadores']
+    : ['taxas_comissoes', 'servicos_promocoes'];
+  const soma = comps.reduce((s, c) => s + metas[c].metaIdeal, 0);
+  perto(metas.total_deducoes.metaIdeal, soma);
+};
+
+test('FS E × Z4 (normal, sem clamp): Serviços = protecao − 20,50; Total = Σ componentes (coincide com protecao)', () => {
   const p = protecao(24, 35);
   const { metas, protecaoInsuficiente, metaServicosAcimaDoLimite } = fs(metasFS(), p);
   assert.equal(protecaoInsuficiente, false);
@@ -77,24 +88,56 @@ test('FS E × Z4: Serviços = protecao − 20,50; Total = protecao; limites e Ta
   assert.equal(metas.servicos_promocoes.limite, 14.5);
   assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '31.43');
   assert.equal(metas.total_deducoes.limite, 35);
-  perto(metas.total_deducoes.metaIdeal, p);
+  invarianteTotal(metas, 'full_service');
+  perto(metas.total_deducoes.metaIdeal, p); // sem clamp, a soma coincide com a proteção
 });
 
-test('FS D × Z4: Serviços 12,36; Total 32,86', () => {
-  const { metas } = fs(metasFS(), protecao(23.5, 35));
+test('FS D × Z4 (normal, sem clamp): Serviços 12,36; Total 32,86 = Σ componentes', () => {
+  const p = protecao(23.5, 35);
+  const { metas } = fs(metasFS(), p);
   assert.equal(metas.servicos_promocoes.metaIdeal.toFixed(2), '12.36');
   assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '32.86');
   assert.equal(metas.servicos_promocoes.limite, 14.5);
   assert.equal(metas.total_deducoes.limite, 35);
+  invarianteTotal(metas, 'full_service');
+  perto(metas.total_deducoes.metaIdeal, p);
 });
 
-test('FS proteção insuficiente (< 20,50%): Serviços 0 + flag', () => {
+test('FS proteção insuficiente (< 20,50%): Serviços 0; Total = Σ componentes = 20,50 (NUNCA a proteção)', () => {
   const p = protecao(30, 35); // 14,28% < 20,50%
   assert.ok(p < TAXAS_COMISSOES_REFERENCIA_FS);
   const { metas, protecaoInsuficiente } = fs(metasFS(), p);
   assert.equal(metas.servicos_promocoes.metaIdeal, 0);
   assert.equal(protecaoInsuficiente, true);
-  perto(metas.total_deducoes.metaIdeal, p);
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '20.50'); // 20,50 + 0 — não os ~14,28% da proteção
+  assert.notEqual(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2));
+  invarianteTotal(metas, 'full_service');
+});
+
+test('FS proteção acima da capacidade de Serviços (> 35%): Serviços no limite 14,50; Total 35,00 = Σ componentes', () => {
+  const p = protecao(20, 35); // (35−20)/35 = 42,857% > 20,50 + 14,50
+  const { metas, metaServicosAcimaDoLimite } = fs(metasFS(), p);
+  assert.equal(metaServicosAcimaDoLimite, true);
+  assert.equal(metas.servicos_promocoes.metaIdeal, 14.5);
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '35.00'); // 20,50 + 14,50 — não os ~42,86% da proteção
+  assert.notEqual(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2));
+  invarianteTotal(metas, 'full_service');
+});
+
+test('FS proteção exatamente na reserva (20,50%): Serviços 0; Total 20,50', () => {
+  const { metas, protecaoInsuficiente } = fs(metasFS(), 20.5);
+  assert.equal(metas.servicos_promocoes.metaIdeal, 0);
+  assert.equal(protecaoInsuficiente, false); // servicosBruto === 0, não < 0
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '20.50');
+  invarianteTotal(metas, 'full_service');
+});
+
+test('FS proteção = 0%: Serviços 0; Total = reserva 20,50', () => {
+  const { metas, protecaoInsuficiente } = fs(metasFS(), 0);
+  assert.equal(metas.servicos_promocoes.metaIdeal, 0);
+  assert.equal(protecaoInsuficiente, true);
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '20.50');
+  invarianteTotal(metas, 'full_service');
 });
 
 // ---------------------------------------------------------------------------
@@ -116,7 +159,7 @@ test('MP E × Z4 (protecao 31,43): Serviços 6,43; Total 31,43; Taxas 13 e Entre
   assert.equal(metas.taxas_comissoes.metaIdeal, 13);        // fixo
   assert.equal(metas.taxas_entregadores.metaIdeal, 12);     // fixo
   assert.equal(metas.servicos_promocoes.metaIdeal.toFixed(2), '6.43'); // 31,43 − 13 − 12
-  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '31.43');    // = protecao
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '31.43');    // 13 + 6,43 + 12 (coincide c/ protecao, sem clamp)
 
   assert.equal(metas.taxas_comissoes.limite, 13);
   assert.equal(metas.servicos_promocoes.limite, 7);
@@ -125,36 +168,103 @@ test('MP E × Z4 (protecao 31,43): Serviços 6,43; Total 31,43; Taxas 13 e Entre
 
   assert.equal(protecaoInsuficiente, false);
   assert.equal(metaServicosAcimaDoLimite, false);
+  invarianteTotal(metas, 'marketplace');
 });
 
-test('MP F × Z4 (protecao 30,00): Serviços 5,00; Total 30,00', () => {
+test('MP F × Z4 (protecao 30,00): Serviços 5,00; Total 30,00 = 13 + 5 + 12', () => {
   const p = protecao(24.5, 35);
   assert.equal(p.toFixed(2), '30.00');
   const { metas } = mp(metasMP(), p);
   assert.equal(metas.servicos_promocoes.metaIdeal.toFixed(2), '5.00'); // 30 − 13 − 12
   assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '30.00');
+  invarianteTotal(metas, 'marketplace');
 });
 
-test('MP D × Z4 (protecao 32,86): bruto Serviços 7,86 > limite 7 → meta 7,00 + flag metaServicosAcimaDoLimite', () => {
+test('MP D × Z4 (protecao 32,86): bruto Serviços 7,86 > limite 7 → Serviços 7,00; Total = Σ componentes = 32,00 (NÃO 32,86)', () => {
   const p = protecao(23.5, 35);
   assert.equal(p.toFixed(2), '32.86');
   const { metas, protecaoInsuficiente, metaServicosAcimaDoLimite } = mp(metasMP(), p);
   assert.equal(metas.servicos_promocoes.metaIdeal, 7);      // clamp no limite logístico
-  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '32.86');
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '32.00'); // 13 + 7 + 12 — não os 32,86% da proteção
+  assert.notEqual(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2));
   assert.equal(protecaoInsuficiente, false);
   assert.equal(metaServicosAcimaDoLimite, true);
+  invarianteTotal(metas, 'marketplace');
   // status: Serviços atual 6,9% <= meta 7 => dentro_da_meta; 7,5% > limite 7 => atencao
   assert.equal(statusIndicadorRentabilidade(6.9, metas.servicos_promocoes).chave, 'dentro_da_meta');
   assert.equal(statusIndicadorRentabilidade(7.5, metas.servicos_promocoes).chave, 'atencao');
 });
 
-test('MP proteção insuficiente (< 25%): Serviços 0 + flag', () => {
+test('MP proteção insuficiente (< 25%): Serviços 0; Total = Σ componentes = 25,00 (NUNCA a proteção)', () => {
   const p = protecao(27, 35); // 22,857% < 25
   assert.ok(p < 25);
   const { metas, protecaoInsuficiente } = mp(metasMP(), p);
   assert.equal(metas.servicos_promocoes.metaIdeal, 0);
   assert.equal(protecaoInsuficiente, true);
-  perto(metas.total_deducoes.metaIdeal, p);
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '25.00'); // 13 + 0 + 12
+  assert.notEqual(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2));
+  invarianteTotal(metas, 'marketplace');
+});
+
+test('MP proteção exatamente na reserva (25%): Serviços 0; Total 25,00', () => {
+  const { metas, protecaoInsuficiente } = mp(metasMP(), 25);
+  assert.equal(metas.servicos_promocoes.metaIdeal, 0);
+  assert.equal(protecaoInsuficiente, false); // servicosBruto === 0
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '25.00');
+  invarianteTotal(metas, 'marketplace');
+});
+
+// -------------------------------------------------------------------------
+// CASO REPORTADO — Balcão 22,00 / iFood 24,50 · proteção 10,204082%
+// Marketplace: Serviços clampa em 0 (proteção << reserva 25); o Total NÃO
+// pode ser 10,20% (a proteção) — tem de ser 13 + 0 + 12 = 25,00%.
+// -------------------------------------------------------------------------
+test('CASO REPORTADO — MP · Balcão 22,00 / iFood 24,50 · proteção 10,20% → Total Meta Ideal = 25,00%', () => {
+  const p = protecao(22, 24.5);
+  assert.equal(p.toFixed(6), '10.204082');
+  assert.equal(p.toFixed(2), '10.20');
+
+  const { metas, protecaoInsuficiente } = mp(metasMP(), p);
+
+  assert.equal(metas.taxas_comissoes.metaIdeal.toFixed(2), '13.00');
+  assert.equal(metas.servicos_promocoes.metaIdeal.toFixed(2), '0.00'); // inalterado: min(7, max(0, 10,20 − 25)) = 0
+  assert.equal(metas.taxas_entregadores.metaIdeal.toFixed(2), '12.00');
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '25.00');    // era 10,20 (bug)
+
+  assert.equal(protecaoInsuficiente, true);
+  assert.notEqual(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2)); // proteção !== metaIdeal(total)
+  invarianteTotal(metas, 'marketplace');
+  // 13,00 + 0,00 + 12,00 === 25,00
+  perto(
+    metas.total_deducoes.metaIdeal,
+    metas.taxas_comissoes.metaIdeal + metas.servicos_promocoes.metaIdeal + metas.taxas_entregadores.metaIdeal,
+  );
+});
+
+test('CASO REPORTADO — mesma proteção 10,20% em Full Service → Total 20,50% (Taxas + 0)', () => {
+  const p = protecao(22, 24.5);
+  const { metas, protecaoInsuficiente } = fs(metasFS(), p);
+  assert.equal(metas.servicos_promocoes.metaIdeal.toFixed(2), '0.00');
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '20.50');
+  assert.equal(protecaoInsuficiente, true);
+  assert.notEqual(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2));
+  invarianteTotal(metas, 'full_service');
+});
+
+// Varredura de proteção nos dois modelos — a invariante Total == Σ componentes
+// vale SEMPRE, e a Meta Ideal do Total NUNCA é a proteção crua quando há clamp.
+test('varredura de proteção (0 · abaixo · na reserva · normal · acima da capacidade) — invariante nos 2 modelos', () => {
+  for (const [modelo, mk, aplic] of [['full_service', metasFS, fs], ['marketplace', metasMP, mp]]) {
+    for (const pct of [0, 5, 10.204082, 20.5, 25, 28, 31.43, 34, 45, 80]) {
+      const { metas } = aplic(mk(), pct);
+      invarianteTotal(metas, modelo);
+      // servicos sempre dentro de [0, limite]
+      assert.ok(metas.servicos_promocoes.metaIdeal >= 0);
+      assert.ok(metas.servicos_promocoes.metaIdeal <= metas.servicos_promocoes.limite + 1e-9);
+      // Total nunca ultrapassa o limite logístico do Total
+      assert.ok(metas.total_deducoes.metaIdeal <= metas.total_deducoes.limite + 1e-9);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------

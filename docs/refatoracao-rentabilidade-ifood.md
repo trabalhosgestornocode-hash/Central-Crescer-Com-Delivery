@@ -22,36 +22,49 @@ Marketplace" e um card "Custo operacional total" à tabela de Indicadores.
 
 #### Meta Ideal dinâmica (a partir da Proteção da Precificação) — os dois modelos
 
-A **Meta Ideal** (nunca o limite) de Serviços e Promoções e de Total de Deduções
-acompanha a Proteção da Precificação da combinação de tabelas selecionada.
+A **Meta Ideal** (nunca o limite) de **Serviços e Promoções** acompanha a Proteção
+da Precificação da combinação de tabelas selecionada. A Meta Ideal do **Total de
+Deduções** é a **soma das metas ideais dos componentes aplicáveis ao modelo** —
+**nunca** a Proteção da Precificação crua.
 `dashboardExecutivo.calc.js#metasComProtecaoPrecificacao(metas, protecaoPct, modelo)`
 — alimentada pela saída de `calcularProtecaoPrecificacao` (fonte única, sem
 duplicar a fórmula):
 
 ```
-metaIdeal(total_deducoes)     = protecao
 metaIdeal(servicos_promocoes) = min(limiteServicos, max(0, protecao − reserva))
+metaIdeal(total_deducoes)     = Σ metaIdeal dos componentes aplicáveis ao modelo
+                              = reserva + servicosMeta      (após os clamps de Serviços)
 
 reserva = metas FIXAS dos indicadores que não variam:
   full_service → meta(Taxas e Comissões) = 20,50%                       (não há entregadores)
   marketplace  → meta(Taxas e Comissões) 13% + meta(Taxas de Entregadores) 12% = 25%
 ```
 
+`reserva + servicosMeta` **é**, por construção, a soma das metas dos componentes
+aplicáveis: `reserva` são os componentes fixos aplicáveis e `servicosMeta` o
+componente variável já clampado. No caso normal (sem clamp de Serviços) isso
+coincide com a proteção — `reserva + (protecao − reserva)`; quando um clamp age
+(`max(0, …)` ou `min(limiteServicos, …)`), o Total acompanha a **soma real das
+linhas**, não a proteção. Invariante garantida (e coberta por teste):
+`metaIdeal(total_deducoes) === Σ metaIdeal(componentes aplicáveis ao modelo)`.
+
 `Taxas e Comissões` e `Taxas de Entregadores` **nunca** são derivadas. Os
 **limites** continuam de `metas_indicadores` (FS 20,50/14,50/35 · MP 13/7/15/35).
 
-| Combinação | Proteção | Serviços meta | Total meta |
+| Combinação | Proteção | Serviços meta | Total meta (Σ componentes) |
 |---|---|---|---|
-| **FS** E × Z4 | 31,43% | 10,93% (`31,43 − 20,50`) | 31,43% |
-| **FS** D × Z4 | 32,86% | 12,36% | 32,86% |
-| **MP** E × Z4 | 31,43% | **6,43%** (`31,43 − 13 − 12`) | 31,43% |
-| **MP** F × Z4 | 30,00% | **5,00%** | 30,00% |
-| **MP** D × Z4 | 32,86% | **7,00%** (clamp: bruto 7,86% > limite 7%) | 32,86% |
+| **FS** E × Z4 | 31,43% | 10,93% (`31,43 − 20,50`) | 31,43% (`20,50 + 10,93`) |
+| **FS** D × Z4 | 32,86% | 12,36% | 32,86% (`20,50 + 12,36`) |
+| **MP** E × Z4 | 31,43% | **6,43%** (`31,43 − 13 − 12`) | 31,43% (`13 + 6,43 + 12`) |
+| **MP** F × Z4 | 30,00% | **5,00%** | 30,00% (`13 + 5,00 + 12`) |
+| **MP** D × Z4 | 32,86% | **7,00%** (clamp: bruto 7,86% > limite 7%) | **32,00%** (`13 + 7,00 + 12` — **não** 32,86%) |
+| **MP** A × A (22,00 / 24,50) | 10,20% | **0,00%** (`protecaoInsuficiente`: 10,20 < reserva 25) | **25,00%** (`13 + 0,00 + 12` — **não** 10,20%) |
 
 Sinais internos (não renderizados, em `protecaoPrecificacao`):
 `protecaoInsuficiente` (proteção < reserva → Serviços meta = 0) e
 `metaServicosAcimaDoLimite` (a proteção permitiria mais do que a política
-logística de Serviços — meta fica travada no limite).
+logística de Serviços — meta fica travada no limite). Nos dois casos o Total
+deixa de coincidir com a proteção e passa a ser a soma dos componentes.
 
 As metas derivadas alimentam a **tabela de Indicadores** (payload
 `indicadoresRentabilidade` + gráfico) **e os 4 cards de rentabilidade da Visão
