@@ -199,9 +199,12 @@ persistente ou de produção foi tocado.**
 - **Rollback**: `078_rollback.sql` remove tabela, função, trigger e o índice de
   apoio; reexecutável; a 078 reaplica limpo em seguida.
 
-## Etapa 3 — preparação para produção (validação estendida)
+## Etapa 3 — validação estendida e ida para produção
 
-Só validação e organização; nenhuma funcionalidade nova. Único ajuste de código:
+Validação/organização + aplicação. **Migration 078 aplicada em produção
+(Supabase `uqybgauuxcrqzquultfu`) em 09/09/2026** como `20260909152903`; merge
+`fac2533` em `main`, deploy Render `dep-dagnq89srm7s73fm9sa0` LIVE. Nenhuma
+funcionalidade nova. Único ajuste de código:
 `frontend/src/performance.js` deixou de carregar `{7,10,20}` como fallback local —
 os percentuais das metas vêm de `metas.faturamento.percentualNecessario*` do
 próprio payload (reforço da regra "nenhuma constante de meta no frontend").
@@ -254,6 +257,26 @@ PGlite é o engine PostgreSQL 18; produção é 17.6 — a 078 não usa nada
 específico de versão (FK/unique/check padrão, RLS, `REVOKE`/`GRANT`, plpgsql com
 `SET search_path`, `gen_random_uuid`), estável de PG 13 a 18.
 
+### Resultado da aplicação em produção
+
+`apply_migration` (Supabase MCP) em 09/09/2026 → `{"success":true}`, registrada
+como `20260909152903`. Introspecção pós-aplicação: 20 colunas, 5 FKs (3× perfis,
+organizacoes, composta unidades), PK + `performance_unidade_competencia_uk`, 11
+checks, 3 índices + `unidades_id_organizacao_performance_uidx`, RLS on, **0
+policies**, trigger presente, função `SECURITY INVOKER` com `search_path`, 0
+linhas. Grants: `anon`/`authenticated` **sem nenhum privilégio** (o `REVOKE`
+funcionou); `service_role` fica com ALL — comportamento dos *default privileges*
+do Supabase, idêntico a todas as tabelas do projeto (`bonificacao_*`,
+`metas_indicadores`, `lancamentos_financeiros_diarios`…); o backend só faz
+SELECT/INSERT/UPDATE. `get_advisors` (security): a 078 acrescenta só um INFO
+`rls_enabled_no_policy` — o mesmo padrão de 8 tabelas só-backend já existentes
+(`desenvolvimento_demandas`, `ifood_credenciais`, `unidade_config`…). Nenhum
+WARN/ERROR novo; a função `performance_complemento_versionar` **não** entra na
+lista `function_search_path_mutable` (tem `SET search_path = public`).
+
+`graphify` não está instalado neste ambiente; `graphify update .` não foi
+executado.
+
 ## Limitações atuais
 
 - Conversão consolidada entre meses/unidades permanece indisponível sem
@@ -264,5 +287,6 @@ específico de versão (FK/unique/check padrão, RLS, `REVOKE`/`GRANT`, plpgsql 
   de preparo não são dados do sistema hoje — entram como hipóteses.
 - Abril–junho/2026 continuam sem fonte automática; a análise só ganha força quando
   há ≥ 2 competências com dados.
-- `graphify` não está instalado neste ambiente; `graphify update .` não foi
-  executado.
+- Fluxo autenticado ponta a ponta em produção não foi exercido nesta execução
+  (exige login administrativo). As rotas estão montadas e protegidas (401 sem
+  token); a migration está aplicada e verificada por SQL.
