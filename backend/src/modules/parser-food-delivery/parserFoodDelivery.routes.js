@@ -16,6 +16,23 @@ const excluir = requirePermissao(PERMISSOES.PARSER_FD_EXCLUIR);
 const classificar = requirePermissao(PERMISSOES.PARSER_FD_CLASSIFICAR);
 
 parserFoodDeliveryRouter.get("/periodo", ver, controller.periodo);
+parserFoodDeliveryRouter.get("/catalogos", ver, controller.catalogos);
+
+// Cadastro mestre de entregadores (item 16 — reusa importar p/ gestão operacional).
+parserFoodDeliveryRouter.get("/entregadores", ver, controller.listarEntregadores);
+parserFoodDeliveryRouter.get("/entregadores/sugestoes", importar, controller.sugestoesEntregadores);
+parserFoodDeliveryRouter.post("/entregadores", importar, controller.criarEntregador);
+parserFoodDeliveryRouter.post("/entregadores/reconhecer", importar, controller.reconhecerEntregadores);
+parserFoodDeliveryRouter.patch("/entregadores/:id", importar, controller.editarEntregador);
+
+// Lançamentos operacionais (manual / taxa_adicional / avulso).
+parserFoodDeliveryRouter.get("/lancamentos", ver, controller.listarLancamentos);
+parserFoodDeliveryRouter.post("/lancamentos", importar, controller.criarLancamento);
+parserFoodDeliveryRouter.patch("/lancamentos/:id", importar, controller.editarLancamento);
+parserFoodDeliveryRouter.post("/lancamentos/:id/excluir", excluir, controller.excluirLancamento);
+parserFoodDeliveryRouter.post("/lancamentos/:id/restaurar", excluir, controller.restaurarLancamento);
+parserFoodDeliveryRouter.delete("/lancamentos/:id", excluir, controller.hardDeleteLancamento);
+
 parserFoodDeliveryRouter.get("/importacoes", ver, controller.importacoes);
 parserFoodDeliveryRouter.get("/importacoes/:id", ver, controller.importacaoDetalhe);
 parserFoodDeliveryRouter.get("/importacoes/:id/arquivo", ver, controller.arquivoImportacao);

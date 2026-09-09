@@ -259,6 +259,20 @@ async function postJson(url, body) {
   });
   return tratar(r, g);
 }
+async function patchJson(url, body) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${url}`, {
+    method: "PATCH", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify(body),
+  });
+  return tratar(r, g);
+}
+async function delJson(url, body) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${url}`, {
+    method: "DELETE", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify(body || {}),
+  });
+  return tratar(r, g);
+}
 export const vendasPreview = (payload) => postJson(`/api/v1/vendas/importar/preview`, payload);
 export const vendasImportar = (payload) => postJson(`/api/v1/vendas/importar`, payload);
 export const vendasVincular = (dados) => postJson(`/api/v1/vendas/vincular`, dados);
@@ -368,6 +382,20 @@ export const pfdEditarCodigos = (id, codigosSemTaxa) => postJson(`${PFD}/importa
 export const pfdAlterarClassificacao = (id, pedidoId, { classificacaoFinal, motivo }) =>
   postJson(`${PFD}/importacoes/${id}/pedidos/${pedidoId}/classificacao`, { classificacaoFinal, motivo });
 export const pfdExcluirImportacao = (id, motivo) => postJson(`${PFD}/importacoes/${id}/excluir`, { motivo });
+
+// Camada de ajustes operacionais (migration 079): entregadores mestre + lançamentos.
+export const pfdCatalogos = () => getJson(`${PFD}/catalogos`);
+export const pfdEntregadores = (incluirInativos) => getJson(`${PFD}/entregadores${qs({ incluirInativos: incluirInativos ? "true" : "" })}`);
+export const pfdEntregadorCriar = (nome) => postJson(`${PFD}/entregadores`, { nome });
+export const pfdEntregadorEditar = (id, patch) => patchJson(`${PFD}/entregadores/${id}`, patch);
+export const pfdEntregadoresSugestoes = () => getJson(`${PFD}/entregadores/sugestoes`);
+export const pfdEntregadoresReconhecer = (nomes) => postJson(`${PFD}/entregadores/reconhecer`, { nomes });
+export const pfdLancamentos = (f = {}) => getJson(`${PFD}/lancamentos${qs(f)}`);
+export const pfdLancamentoCriar = (payload) => postJson(`${PFD}/lancamentos`, payload);
+export const pfdLancamentoEditar = (id, payload) => patchJson(`${PFD}/lancamentos/${id}`, payload);
+export const pfdLancamentoExcluir = (id, motivo) => postJson(`${PFD}/lancamentos/${id}/excluir`, { motivo });
+export const pfdLancamentoRestaurar = (id) => postJson(`${PFD}/lancamentos/${id}/restaurar`, {});
+export const pfdLancamentoHardDelete = (id, motivo) => delJson(`${PFD}/lancamentos/${id}`, { motivo });
 
 // ---------- Martin Brower (integração com o portal da distribuidora) ----------
 // Nenhuma credencial trafega aqui na fase atual: a sincronização automatizada

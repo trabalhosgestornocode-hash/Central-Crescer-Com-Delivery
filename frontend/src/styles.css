@@ -4089,6 +4089,27 @@ tr.dex-linha-na { opacity: .65; }
 .pfd-override-textarea { width: 100%; margin-top: 8px; min-height: 70px; padding: 9px 12px; border: 1.5px solid var(--linha); border-radius: var(--raio-sm); background: var(--campo-bg); color: var(--texto); font: inherit; resize: vertical; }
 .pfd-override-textarea:focus { outline: none; border-color: var(--verde-vivo); box-shadow: 0 0 0 3px rgba(216,19,36,.13); }
 
+/* ---------- Lançamentos operacionais + ações por linha (migration 079) ---------- */
+.pfd-mini-tag { display: inline-block; font-size: 11px; font-weight: 600; line-height: 1.4; padding: 1px 6px; border-radius: 999px; background: var(--superficie-2); color: var(--cinza); border: 1px solid var(--linha); }
+.pfd-linha-excluida td { opacity: .55; text-decoration: line-through; }
+.pfd-linha-excluida td:last-child { text-decoration: none; opacity: 1; }
+
+.pfd-menu-acoes { min-width: 200px; background: var(--superficie); border: 1px solid var(--linha); border-radius: var(--raio-sm); box-shadow: var(--sombra-md, 0 8px 24px rgba(0,0,0,.12)); padding: 4px; }
+.pfd-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 0; background: none; color: var(--texto); font: inherit; text-align: left; border-radius: 8px; cursor: pointer; }
+.pfd-menu-item:hover { background: var(--superficie-2); }
+
+.pfd-custos-lista { list-style: none; margin: 8px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.pfd-custos-lista li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.pfd-custos-lista li > span:first-child { font-weight: 600; }
+.pfd-custos-lista li > b { margin-left: auto; }
+.pfd-custos-motivo { flex-basis: 100%; font-size: 12px; color: var(--cinza); }
+
+.pfd-sugestoes { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.pfd-sugestao { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border: 1px solid var(--linha); border-radius: 999px; font-size: 13px; cursor: pointer; }
+.cfg-campo-hint { font-size: 12px; color: var(--warn); margin-top: 4px; }
+.cfg-campo--full { grid-column: 1 / -1; }
+.pfd-modal--wide { max-width: 760px; }
+
 @media (max-width: 640px) {
   .pfd-controls { flex-direction: column; align-items: stretch; }
   .pfd-controls-esq, .pfd-controls-dir { justify-content: space-between; }

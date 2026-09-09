@@ -38,7 +38,8 @@ const linha = (id, extra = {}) => ({ id, numero_pedido: id, importacao_id: "imp-
 // inner join, ordenação e limite PostgREST; não calcula nenhum KPI.
 async function ambiente({ pedidos = [], importacoes = [fonte("imp-a")], relatorio, falharLote = false } = {}) {
   const tabelas = { unidades: [{ id: "un-a", organizacao_id: "org-a" }, { id: "un-b", organizacao_id: "org-b" }],
-    parser_fd_pedidos: pedidos, parser_fd_importacoes: importacoes, parser_fd_auditoria: [] };
+    parser_fd_pedidos: pedidos, parser_fd_importacoes: importacoes, parser_fd_auditoria: [],
+    parser_fd_lancamentos: [], parser_fd_pedido_overrides: [], parser_fd_entregadores: [] };
   const chamadas = [];
   let ids = 0;
   const db = { storage: { from: () => ({ upload: async () => ({ error: null }) }) }, from(tabela) {
@@ -47,8 +48,12 @@ async function ambiente({ pedidos = [], importacoes = [fonte("imp-a")], relatori
     const q = {
       select(c) { colunas = c; return q; },
       eq(k, v) { filtros.push([k, "eq", v]); return q; },
+      neq(k, v) { filtros.push([k, "neq", v]); return q; },
       gte(k, v) { filtros.push([k, "gte", v]); return q; },
+      lte(k, v) { filtros.push([k, "lte", v]); return q; },
       lt(k, v) { filtros.push([k, "lt", v]); return q; },
+      in(k, arr) { filtros.push([k, "in", arr]); return q; },
+      not(k, _op, v) { filtros.push([k, "not_is", v]); return q; },
       order(k, o) { ordens.push([k, o?.ascending !== false]); return q; },
       range(a, b) { offset = a; tamanho = Math.min(1000, b - a + 1); return q; },
       limit(n) { tamanho = Math.min(1000, n); return q; },
@@ -61,8 +66,11 @@ async function ambiente({ pedidos = [], importacoes = [fonte("imp-a")], relatori
         if (colunas?.includes("!inner")) rows = rows.map((r) => ({ ...r, fonte: tabelas.parser_fd_importacoes.find((i) => i.id === r.importacao_id) })).filter((r) => r.fonte);
         rows = rows.filter((r) => filtros.every(([k, op, v]) => {
           let a = campo(r, k), b = v;
+          if (op === "in") return Array.isArray(v) && v.includes(a);
+          if (op === "not_is") return v === null ? a != null : a !== v;
+          if (op === "neq") return a !== b;
           if (k === "data_hora" && op !== "eq") { a = a ? Date.parse(a) : NaN; b = Date.parse(b); }
-          return op === "eq" ? a === b : op === "gte" ? a >= b : a < b;
+          return op === "eq" ? a === b : op === "gte" ? a >= b : op === "lte" ? a <= b : op === "lt" ? a < b : a < b;
         }));
         if (op === "insert") {
           rows = (Array.isArray(valor) ? valor : [valor]).map((r) => ({ id: `persistido-${++ids}`, criado_em: "2026-09-07T12:00:00Z", ...r }));
@@ -77,15 +85,29 @@ async function ambiente({ pedidos = [], importacoes = [fonte("imp-a")], relatori
   } };
   const url = new URL("../src/modules/parser-food-delivery/parserFoodDelivery.service.js", import.meta.url);
   const mod = new SourceTextModule(readFileSync(url, "utf8"), { identifier: url.href });
-  await mod.link(async (spec) => {
-    let ns;
-    if (spec.endsWith("/config/supabase.js")) ns = { supabase: db };
-    else {
-      ns = await import(new URL(spec, url));
-      if (relatorio && spec.endsWith(".parser.js")) ns = { ...ns, lerRelatorio: async () => relatorio, decodificarArquivo: () => Buffer.from("teste") };
+  // Linker recursivo: os módulos locais do Parser Food Delivery que tocam o
+  // banco (service, shared, overrides, lancamentos, entregadores) são
+  // carregados como SourceTextModule para que o STUB de `config/supabase.js`
+  // se propague por toda a árvore — sem isso, um `import()` real de um
+  // submódulo carregaria `config/env.js` (que faz process.exit sem .env).
+  const cache = new Map();
+  const linker = async (spec, referencing) => {
+    if (spec.endsWith("/config/supabase.js")) {
+      return new SyntheticModule(["supabase"], function () { this.setExport("supabase", db); });
     }
+    const alvo = new URL(spec, referencing.identifier);
+    const local = alvo.pathname.includes("/parser-food-delivery/") && alvo.pathname.endsWith(".js") && !alvo.pathname.endsWith(".parser.js");
+    if (local) {
+      if (!cache.has(alvo.href)) {
+        cache.set(alvo.href, new SourceTextModule(readFileSync(alvo, "utf8"), { identifier: alvo.href }));
+      }
+      return cache.get(alvo.href);
+    }
+    let ns = await import(alvo);
+    if (relatorio && spec.endsWith(".parser.js")) ns = { ...ns, lerRelatorio: async () => relatorio, decodificarArquivo: () => Buffer.from("teste") };
     return new SyntheticModule(Object.keys(ns), function () { for (const [k, v] of Object.entries(ns)) this.setExport(k, v); });
-  });
+  };
+  await mod.link(linker);
   await mod.evaluate();
   return { service: mod.namespace, chamadas, tabelas };
 }

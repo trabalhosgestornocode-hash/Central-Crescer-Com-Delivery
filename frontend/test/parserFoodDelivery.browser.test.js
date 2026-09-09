@@ -15,27 +15,38 @@ const skip = !chromium && "Playwright não disponível; configure PFD_PLAYWRIGHT
 let browser, server, origem;
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const pedido = (id, cancelado) => ({ id, importacaoId: "imp", numeroPedido: id, dataHora: "2026-09-01T12:00:00", entregador: "João", situacao: cancelado ? "Cancelado" : "Entregue", statusConciliacao: cancelado ? "cancelado_com_taxa" : "incluido", classificacaoCancelamento: cancelado ? "recebe_taxa" : null, taxaEntregador: 10 });
-function resultado(ini, fim, pedidos) {
+function resultado(ini, fim, pedidos, lancamentos = []) {
   const cancelados = pedidos.filter((p) => p.situacao === "Cancelado").length;
+  const iaf = pedidos.length * 10;
+  const ajustes = lancamentos.reduce((s, l) => s + (l.excluido ? 0 : l.valor), 0);
   return { consolidado: true, periodo: { dataInicio: ini, dataFim: fim },
     importacao: { periodoInicio: ini, periodoFim: fim, totalPedidos: pedidos.length, pedidosSubway: pedidos.length }, fontes: [],
-    pedidos, pedidosIgnorados: [], entregadores: pedidos.length ? [{ entregador: "João", totalPedidos: pedidos.length, entregues: pedidos.length - cancelados, canceladosComTaxa: cancelados, canceladosSemTaxa: 0, taxasValidas: pedidos.length * 10 }] : [],
-    resumo: { totalPedidos: pedidos.length, entregues: pedidos.length - cancelados, cancelados, canceladosRecebemTaxa: cancelados, canceladosNaoRecebemTaxa: 0, canceladosRevisao: 0, taxasValidas: pedidos.length * 10, taxasBrutas: pedidos.length * 10, taxasDescartadas: 0 } };
+    pedidos: pedidos.map((p) => ({ ...p, custosAdicionais: [], custoTotalPedido: p.taxaEntregador })),
+    pedidosIgnorados: [], lancamentos,
+    entregadores: pedidos.length ? [{ entregador: "João", chave: "joao", totalPedidos: pedidos.length, entregues: pedidos.length - cancelados, canceladosComTaxa: cancelados, canceladosSemTaxa: 0, taxasValidas: iaf, custoTotal: iaf }] : [],
+    resumo: { totalPedidos: pedidos.length, entregues: pedidos.length - cancelados, cancelados, canceladosRecebemTaxa: cancelados, canceladosNaoRecebemTaxa: 0, canceladosRevisao: 0, taxasValidas: iaf, taxasBrutas: iaf, taxasDescartadas: 0,
+      custoReal: { ifood: iaf, taxasAdicionais: 0, manuais: 0, avulsos: ajustes, ajustesManuais: ajustes, total: iaf + ajustes, qtdPedidosComTaxaAdicional: 0 } } };
 }
+const lancAvulso = { id: "l1", origem: "avulso", origemRotulo: "Avulso", entregadorNome: "Pedro", data: "2026-09-03", valor: 20, motivoRotulo: "Buscar pães", numeroPedido: null, excluido: false, pedidoDisponivel: null };
 const fixtures = {
-  "2026-09-01:2026-09-05": resultado("2026-09-01", "2026-09-05", [pedido("cancelado-1", true), pedido("entregue", false), pedido("cancelado-2", true)]),
+  "2026-09-01:2026-09-05": resultado("2026-09-01", "2026-09-05", [pedido("cancelado-1", true), pedido("entregue", false), pedido("cancelado-2", true)], [lancAvulso]),
   "2026-09-01:2026-09-01": resultado("2026-09-01", "2026-09-01", [pedido("cancelado-1", true), pedido("entregue", false)]),
   "2026-09-02:2026-09-02": resultado("2026-09-02", "2026-09-02", [pedido("cancelado-2", true)]),
 };
 const api = `
-  const run = (nome, args) => { window.chamadas.push({ nome, args }); return window.api[nome](...args); };
-  ${["pfdPeriodo", "pfdImportacoes", "pfdImportacaoDetalhe", "pfdArquivoImportacao", "pfdAlterarClassificacao", "pfdExcluirImportacao"].map((nome) => `export const ${nome} = (...args) => run("${nome}", args);`).join("\n")}`;
+  const run = (nome, args) => { window.chamadas.push({ nome, args }); return (window.api[nome] || (async () => { throw new Error("sem mock: " + nome); }))(...args); };
+  ${[
+    "pfdPeriodo", "pfdImportacoes", "pfdImportacaoDetalhe", "pfdArquivoImportacao", "pfdAlterarClassificacao", "pfdExcluirImportacao",
+    "pfdCatalogos", "pfdEntregadores", "pfdEntregadorCriar", "pfdEntregadorEditar", "pfdEntregadoresSugestoes", "pfdEntregadoresReconhecer",
+    "pfdLancamentos", "pfdLancamentoCriar", "pfdLancamentoEditar", "pfdLancamentoExcluir", "pfdLancamentoRestaurar", "pfdLancamentoHardDelete",
+  ].map((nome) => `export const ${nome} = (...args) => run("${nome}", args);`).join("\n")}`;
 const mocks = {
   "/src/api.js": api,
   "/src/state.js": `export const state = { sessao: { unidade: { id: 'un-a', nome: 'Unidade de teste' } }, detalheAberto: {} };`,
   "/src/sessao.js": `export const pode = () => true;`,
   "/src/agentePainel.js": `export const botaoContextualHtml = () => ''; export const ligarBotoesContextuais = () => {}; export const sincronizarContextoPainel = () => {};`,
   "/src/parserFoodDeliveryImportModal.js": `export const abrirImportarFoodDeliveryModal = ({ onSalvo }) => { window.confirmarImportacao = onSalvo; };`,
+  "/src/parserFoodDeliveryLancamentoModal.js": `export const abrirLancamentoModal = (o) => { window.ultimoLancamentoModal = o; }; export const abrirEntregadoresModal = (o) => { window.ultimoEntregadoresModal = o; };`,
 };
 before(async () => {
   if (skip) return;
@@ -140,6 +151,21 @@ test("resposta antiga não sobrescreve período novo", { skip }, async (t) => {
   assert.match(await page.locator("#pfd-cal summary").textContent(), /02\/09\/2026 a 02\/09\/2026/);
   await page.locator('[data-card="cancelamentos"]').click();
   assert.match(await page.locator("#pfd-tabela-cancelamentos").textContent(), /cancelado-2/);
+});
+
+test("aba Lançamentos lista avulsos do período e a Visão Geral compõe o custo real", { skip }, async (t) => {
+  const page = await tela(t);
+  await selecionar(page, "2026-09-01", "2026-09-05");
+  // Visão Geral: card de custo total = iFood (30) + avulso (20)
+  assert.match(await page.locator('[data-card="entregadores"] .vd-card-val').textContent(), /50,00/);
+  await page.locator('[data-aba="lancamentos"]').click();
+  assert.equal(await page.locator("#pfd-tabela-lancamentos tbody tr").count(), 1);
+  assert.match(await page.locator("#pfd-tabela-lancamentos").textContent(), /Avulso/);
+  assert.match(await page.locator("#pfd-tabela-lancamentos").textContent(), /Buscar pães/);
+  // Pedidos: coluna Origem com badge iFood + ação por linha
+  await page.locator('[data-aba="pedidos"]').click();
+  assert.match(await page.locator("#pfd-tabela-pedidos thead").textContent(), /Origem/);
+  assert.equal(await page.locator("[data-acao-pedido]").count(), 3);
 });
 
 test("troca de empresa/unidade invalida callback de importação", { skip }, async (t) => {

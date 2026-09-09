@@ -15,6 +15,10 @@ import { classificarOperacao, OPERACAO, rotuloOperacao } from "./parserFoodDeliv
 import { classificarCancelamento, CLASSIFICACAO_CANCELAMENTO } from "./parserFoodDelivery.classificacao.js";
 
 import { normalizarPeriodo, consolidarPedidosPeriodo, horaOperacional } from "./parserFoodDelivery.periodo.js";
+import { resolverUnidade } from "./parserFoodDelivery.shared.js";
+import { carregarOverridesPorUnidade, aplicarOverridesPersistidos, definirOverride } from "./parserFoodDelivery.overrides.js";
+import { lancamentosDoPeriodo, lancamentosDaImportacao } from "./parserFoodDelivery.lancamentos.js";
+import { comporCustoReal, mesclarEntregadores } from "./parserFoodDelivery.lancamentos.calc.js";
 
 const TABELA_IMPORT = "parser_fd_importacoes";
 const TABELA_PEDIDOS = "parser_fd_pedidos";
@@ -87,18 +91,6 @@ async function buscarTodosPedidos({ importacaoId, colunas = COLUNAS_PEDIDO_LEITU
     if (!data || data.length < PAGINA_PEDIDOS) break;
   }
   return todos;
-}
-
-// ---------------------------------------------------------------------------
-// UNIDADE-ALVO — mesmo princípio do Dashboard iFood/Bonificação Mensal:
-// nunca confia em unidadeId vindo do cliente sem checar contra a sessão.
-// ---------------------------------------------------------------------------
-async function resolverUnidade({ organizacaoId, unidadeId }) {
-  if (!unidadeId) throw ApiError.badRequest("Selecione uma unidade para acessar o Parser Food Delivery.");
-  const { data: unidade, error } = await supabase.from("unidades").select("id, nome, organizacao_id").eq("id", unidadeId).maybeSingle();
-  if (error) throw ApiError.internal(error.message);
-  if (!unidade || unidade.organizacao_id !== organizacaoId) throw ApiError.forbidden("Você não tem acesso a esta unidade.");
-  return unidade;
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +466,27 @@ export async function confirmarImportacao({ organizacaoId, unidadeId, usuario, a
     codigosDepois: [...codigosSet], taxasValidasDepois: resumo.taxasValidas, usuario,
   });
 
+  // Reaplica overrides manuais persistidos (item 15 — reimportar um período
+  // não pode apagar a decisão humana). Só reescreve o resumo se algum
+  // override de fato incidiu sobre um pedido desta importação.
+  const overrides = await carregarOverridesPorUnidade({ organizacaoId, unidadeId });
+  let resumoFinal = resumo;
+  if (overrides.size) {
+    const rows = await buscarTodosPedidos({ importacaoId: importacao.id });
+    const comOverride = aplicarOverridesPersistidos(rows.map(paraApiPedido), overrides).filter(ehElegivelConciliacao);
+    const r = resumoConciliacao(comOverride);
+    if (r.taxasValidas !== resumo.taxasValidas || r.canceladosRecebemTaxa !== resumo.canceladosRecebemTaxa) {
+      resumoFinal = r;
+      await supabase.from(TABELA_IMPORT).update({
+        entregues: r.entregues, cancelados: r.cancelados,
+        cancelados_com_taxa: r.canceladosComTaxa, cancelados_sem_taxa: r.canceladosSemTaxa,
+        cancelados_recebem_taxa: r.canceladosRecebemTaxa, cancelados_nao_recebem_taxa: r.canceladosNaoRecebemTaxa, cancelados_revisao: r.canceladosRevisao,
+        taxas_brutas: r.taxasBrutas, taxas_descartadas: r.taxasDescartadas, taxas_validas: r.taxasValidas,
+      }).eq("id", importacao.id).eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId);
+    }
+  }
+  void resumoFinal;
+
   const { error: erroConclusao } = await supabase.from(TABELA_IMPORT)
     .update({ status: "concluida" }).eq("id", importacao.id)
     .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId);
@@ -491,6 +504,40 @@ export async function listarImportacoes({ organizacaoId, unidadeId }) {
   return (data || []).map(paraApiImportacao);
 }
 
+/**
+ * Anexa a camada de AJUSTES OPERACIONAIS ao resultado de uma leitura de
+ * pedidos: custo real com entregadores (composição por origem), lista de
+ * lançamentos, e por-pedido os custos adicionais + custo total.
+ * `resumo.taxasValidas` continua sendo SÓ o iFood — `custoReal` é o número novo.
+ */
+function anexarAjustesOperacionais({ pedidos, entregadores, resumo, lancamentos }) {
+  const custoReal = comporCustoReal({ taxasIfood: resumo.taxasValidas, lancamentos });
+  const porPedido = new Map();
+  for (const l of lancamentos) {
+    if (l.origem === "avulso") continue;
+    const chave = l.pedidoId || l.numeroPedido;
+    if (!chave) continue;
+    if (!porPedido.has(chave)) porPedido.set(chave, []);
+    porPedido.get(chave).push(l);
+  }
+  const pedidosComCustos = pedidos.map((p) => {
+    const extras = porPedido.get(p.id) || porPedido.get(p.numeroPedido) || [];
+    const somaExtras = extras.filter((e) => !(e.origem === "manual" && e.classificacao === "nao_recebe_taxa"))
+      .reduce((s, e) => s + (Number(e.valor) || 0), 0);
+    return {
+      ...p,
+      custosAdicionais: extras,
+      custoTotalPedido: Math.round(((p.taxaEntregador || 0) + somaExtras) * 100) / 100,
+    };
+  });
+  return {
+    pedidos: pedidosComCustos,
+    entregadores: mesclarEntregadores(entregadores, lancamentos),
+    lancamentos,
+    resumo: { ...resumo, custoReal },
+  };
+}
+
 export async function obterImportacao({ organizacaoId, unidadeId, importacaoId }) {
   await resolverUnidade({ organizacaoId, unidadeId });
   const { data: importacao, error } = await supabase.from(TABELA_IMPORT).select("*").eq("unidade_id", unidadeId).eq("id", importacaoId).maybeSingle();
@@ -498,13 +545,24 @@ export async function obterImportacao({ organizacaoId, unidadeId, importacaoId }
   if (!importacao) throw ApiError.notFound("Importação não encontrada.");
 
   const pedidosRows = await buscarTodosPedidos({ importacaoId });
+  const overrides = await carregarOverridesPorUnidade({ organizacaoId, unidadeId });
 
-  const todosPedidos = pedidosRows.map(paraApiPedido);
+  const todosPedidos = aplicarOverridesPersistidos(pedidosRows.map(paraApiPedido), overrides);
   const pedidos = todosPedidos.filter(ehElegivelConciliacao);
   const pedidosIgnorados = todosPedidos.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado);
   const resumo = resumoConciliacao(pedidos);
   const entregadores = entregadoresParaApi(pedidos);
-  return { importacao: paraApiImportacao(importacao), resumo, pedidos, pedidosIgnorados, entregadores };
+  const lancamentos = await lancamentosDaImportacao({
+    organizacaoId, unidadeId, importacaoId,
+    periodoInicio: importacao.periodo_inicio, periodoFim: importacao.periodo_fim,
+  });
+
+  const ajustes = anexarAjustesOperacionais({ pedidos, entregadores, resumo, lancamentos });
+  return {
+    importacao: paraApiImportacao(importacao),
+    resumo: ajustes.resumo, pedidos: ajustes.pedidos, pedidosIgnorados,
+    entregadores: ajustes.entregadores, lancamentos: ajustes.lancamentos,
+  };
 }
 
 export async function arquivoOriginal({ organizacaoId, unidadeId, importacaoId }) {
@@ -617,6 +675,15 @@ export async function alterarClassificacaoCancelamento({ organizacaoId, unidadeI
   }).eq("id", pedidoId);
   if (eUp) throw ApiError.internal(`Falha ao alterar classificação: ${eUp.message}`);
 
+  // Persiste o override por IDENTIDADE ESTÁVEL do pedido (item 15 — sobrevive
+  // a reimportação; o update de colunas acima fica como compatibilidade).
+  await definirOverride({
+    organizacaoId, unidadeId: unidade.id,
+    numeroPedido: pedido.numero_pedido, dataHora: pedido.data_hora,
+    classificacaoFinal, classificacaoOriginal: pedido.classificacao_original ?? pedido.classificacao_cancelamento,
+    motivo, usuario,
+  });
+
   await registrarAuditoria({
     importacaoId, organizacaoId, unidadeId: unidade.id, acao: "classificacao_alterada",
     pedidoId, numeroPedido: pedido.numero_pedido, classificacaoAntes, classificacaoDepois: statusConciliacao,
@@ -625,7 +692,8 @@ export async function alterarClassificacaoCancelamento({ organizacaoId, unidadeI
 
   // Recalcula o resumo da importação inteira (mesma técnica de editarCodigosSemTaxa).
   const pedidosRows = await buscarTodosPedidos({ importacaoId });
-  const pedidosApi = pedidosRows.map(paraApiPedido);
+  const overrides = await carregarOverridesPorUnidade({ organizacaoId, unidadeId: unidade.id });
+  const pedidosApi = aplicarOverridesPersistidos(pedidosRows.map(paraApiPedido), overrides);
   const pedidosElegiveisApi = pedidosApi.filter(ehElegivelConciliacao);
   const pedidosIgnoradosApi = pedidosApi.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado);
   const resumo = resumoConciliacao(pedidosElegiveisApi);
@@ -822,9 +890,15 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
     }
     if (!data || data.length < PAGINA_PEDIDOS) break;
   }
-  const todos = consolidarPedidosPeriodo(linhas).map(paraApiPedido);
+  const overrides = await carregarOverridesPorUnidade({ organizacaoId, unidadeId });
+  const todos = aplicarOverridesPersistidos(consolidarPedidosPeriodo(linhas).map(paraApiPedido), overrides);
   const pedidos = todos.filter(ehElegivelConciliacao);
   const filtragem = resumoFiltragem(todos);
+  const resumo = resumoConciliacao(pedidos);
+  const entregadores = entregadoresParaApi(pedidos);
+  const lancamentos = await lancamentosDoPeriodo({ organizacaoId, unidadeId, inicio: periodo.inicio, fimExclusivo: periodo.fimExclusivo });
+  const ajustes = anexarAjustesOperacionais({ pedidos, entregadores, resumo, lancamentos });
+
   return {
     periodo: { dataInicio, dataFim }, consolidado: true,
     importacao: { id: null, periodoInicio: dataInicio, periodoFim: dataFim,
@@ -832,9 +906,9 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
       pedidosAcai: filtragem.acaiNoGrau, pedidosRevisao: filtragem.revisaoNecessaria,
       pedidosSemEntregador: filtragem.semEntregador, codigosSemTaxa: [],
       colunaDetalhesEncontrada: [...fontes.values()].every((f) => f.colunaDetalhesEncontrada !== false) },
-    resumo: resumoConciliacao(pedidos), pedidos,
+    resumo: ajustes.resumo, pedidos: ajustes.pedidos,
     pedidosIgnorados: todos.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado),
-    entregadores: entregadoresParaApi(pedidos),
+    entregadores: ajustes.entregadores, lancamentos: ajustes.lancamentos,
     fontes: [...fontes.values()], duplicadosSobrepostos: linhas.length - todos.length,
   };
 }

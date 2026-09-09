@@ -11,8 +11,10 @@ import { state } from "./state.js";
 import { pode } from "./sessao.js";
 import {
   pfdPeriodo, pfdImportacoes, pfdImportacaoDetalhe, pfdArquivoImportacao, pfdAlterarClassificacao, pfdExcluirImportacao,
+  pfdCatalogos, pfdLancamentoExcluir, pfdLancamentoRestaurar,
 } from "./api.js";
 import { abrirImportarFoodDeliveryModal } from "./parserFoodDeliveryImportModal.js";
+import { abrirLancamentoModal, abrirEntregadoresModal } from "./parserFoodDeliveryLancamentoModal.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./contextoEscopo.js";
 import { botaoContextualHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
 
@@ -26,9 +28,23 @@ const ABAS = [
   { id: "visao", icon: "bar-chart", label: "Visão Geral" },
   { id: "pedidos", icon: "receipt", label: "Pedidos" },
   { id: "cancelamentos", icon: "ban", label: "Cancelamentos" },
+  { id: "lancamentos", icon: "banknote", label: "Lançamentos" },
   { id: "entregadores", icon: "users", label: "Entregadores" },
   { id: "historico", icon: "archive", label: "Histórico" },
 ];
+
+// Origem de um registro (item 1 do pedido). Badge discreto, sem vermelho de
+// marca, sem emoji. iFood = dado do relatório; os demais = ajuste operacional.
+const ORIGEM_ROTULO = {
+  ifood: { label: "iFood", classe: "muted" },
+  manual: { label: "Manual", classe: "info" },
+  taxa_adicional: { label: "Taxa adicional", classe: "warn" },
+  avulso: { label: "Avulso", classe: "ok" },
+};
+const badgeOrigem = (origem) => {
+  const o = ORIGEM_ROTULO[origem] || { label: origem || "—", classe: "muted" };
+  return `<span class="pill ${o.classe}">${escapeHtml(o.label)}</span>`;
+};
 
 const STATUS_ROTULO = {
   incluido: { label: "Incluído", classe: "ok" },
@@ -68,9 +84,11 @@ const pfd = {
   carregandoHistorico: false,
   filtros: { busca: "", status: "todos", entregador: "todos" },
   filtrosCancelamentos: { busca: "", status: "todos" },
+  filtrosLancamentos: { busca: "", origem: "todos", incluirExcluidos: false },
   periodo: { chave: null, ini: null, fim: null },
   ordEntregadores: "taxas", // taxas | entregas | nome
   verIgnorados: false, // alterna a tabela da aba Pedidos entre Subway e "ignorados"
+  catalogos: null, // { motivosTaxaAdicional, motivosAvulso, rotulosOrigem } — carregado uma vez
 };
 
 registrarResetDeContexto(() => {
@@ -80,10 +98,12 @@ registrarResetDeContexto(() => {
   pfd.historico = null;
   pfd.filtros = { busca: "", status: "todos", entregador: "todos" };
   pfd.filtrosCancelamentos = { busca: "", status: "todos" };
+  pfd.filtrosLancamentos = { busca: "", origem: "todos", incluirExcluidos: false };
   pfd.periodo = { chave: null, ini: null, fim: null };
   pfd.ordEntregadores = "taxas";
   pfd.verIgnorados = false;
   fecharPfdDrawer();
+  fecharMenuAcoes();
 });
 
 const podeImportar = () => pode("parser_food_delivery.importar");
@@ -132,6 +152,7 @@ async function executarRenderParserFoodDelivery() {
     return;
   }
   montarLayout(unidadeNome);
+  carregarCatalogos();
   await carregarHistorico();
   if (contextoMudou(g)) return;
   if (!pfd.atual && !pfd.periodo.chave && pfd.historico?.length) {
@@ -208,6 +229,13 @@ async function aoConfirmarImportacao(resultado) {
   if (!contextoMudou(g)) renderAbaAtual();
 }
 
+async function carregarCatalogos() {
+  if (pfd.catalogos) return;
+  pfd.catalogos = {}; // marca como "tentado" — não refaz a chamada a cada render
+  try { const { data } = await pfdCatalogos(); if (data) pfd.catalogos = data; }
+  catch { /* catálogo é opcional para a tela abrir — os modais lidam com a ausência */ }
+}
+
 async function carregarHistorico() {
   const g = geracaoContexto();
   pfd.carregandoHistorico = true;
@@ -269,7 +297,10 @@ function renderAbaAtual() {
     atualizarPeriodoNav(); return;
   }
   if (pfd.aba === "historico") { box.innerHTML = skeletonTabela(); renderHistorico(box); atualizarPeriodoNav(); return; }
-  if (pfd.atual?.consolidado && pfd.atual.importacao.totalPedidos === 0) {
+  // A aba Lançamentos vive num plano à parte do iFood: renderiza mesmo sem
+  // pedidos importados no período (pode haver avulsos/manuais).
+  if (pfd.aba === "lancamentos" && pfd.atual) { renderLancamentos(box); atualizarPeriodoNav(); return; }
+  if (pfd.atual?.consolidado && pfd.atual.importacao.totalPedidos === 0 && !(pfd.atual.lancamentos?.length)) {
     box.innerHTML = vazio("calendar", "Sem dados no período", "Não existem dados importados para o período selecionado.");
     atualizarPeriodoNav(); return;
   }
@@ -284,6 +315,7 @@ function renderAbaAtual() {
   if (pfd.aba === "visao") renderVisaoGeral(box);
   else if (pfd.aba === "pedidos") renderPedidos(box);
   else if (pfd.aba === "cancelamentos") renderCancelamentos(box);
+  else if (pfd.aba === "lancamentos") renderLancamentos(box);
   else if (pfd.aba === "entregadores") renderEntregadores(box);
   atualizarPeriodoNav();
 }
@@ -493,7 +525,8 @@ function pfdSecao(iconeNome, titulo, sub, conteudo, { plano = false } = {}) {
 function renderVisaoGeral(box) {
   const { importacao, resumo, entregadores } = pfd.atual;
   const consolidado = !!pfd.atual.consolidado;
-  const top = [...entregadores].sort((a, b) => b.taxasValidas - a.taxasValidas).slice(0, 5);
+  const custoReal = resumo.custoReal || { ifood: resumo.taxasValidas, taxasAdicionais: 0, manuais: 0, avulsos: 0, ajustesManuais: 0, total: resumo.taxasValidas, qtdPedidosComTaxaAdicional: 0 };
+  const top = [...entregadores].sort((a, b) => (b.custoTotal ?? b.taxasValidas) - (a.custoTotal ?? a.taxasValidas)).slice(0, 5);
   const temRevisaoPendente = resumo.canceladosRevisao > 0;
   const totalDist = importacao.totalPedidos || 0;
 
@@ -520,8 +553,20 @@ function renderVisaoGeral(box) {
       ${card("receipt", "Pedidos válidos", resumo.totalPedidos, "Pedidos considerados na análise", "neutro", "pedidos", "todos")}
       ${card("check-circle", "Entregues / Finalizados", resumo.entregues, "Concluídos no período", "pos", "pedidos", "entregues")}
       ${card("ban", "Cancelados", resumo.cancelados, "Pedidos cancelados no período", "neg", "cancelamentos", "todos")}
-      ${card("wallet", "Valor devido aos entregadores", fmtMoeda(resumo.taxasValidas), "Total a repassar no período", "destaque", "entregadores", "todos")}
+      ${card("wallet", "Custo total com entregadores", fmtMoeda(custoReal.total), "iFood + ajustes operacionais", "destaque", "entregadores", "todos")}
     </div>
+
+    ${custoReal.ajustesManuais > 0 ? pfdSecao("banknote", "Custo real com entregadores",
+      "Composição por origem — o valor do iFood não é alterado", `
+      <div class="pfd-conciliacao">
+        <div class="pfd-conc-linha"><span>${badgeOrigem("ifood")} Taxas iFood</span><b>${fmtMoeda(custoReal.ifood)}</b></div>
+        ${custoReal.taxasAdicionais ? `<div class="pfd-conc-linha"><span>${badgeOrigem("taxa_adicional")} Taxas adicionais${custoReal.qtdPedidosComTaxaAdicional ? ` (${custoReal.qtdPedidosComTaxaAdicional} ${custoReal.qtdPedidosComTaxaAdicional === 1 ? "pedido" : "pedidos"})` : ""}</span><b>${fmtMoeda(custoReal.taxasAdicionais)}</b></div>` : ""}
+        ${custoReal.manuais ? `<div class="pfd-conc-linha"><span>${badgeOrigem("manual")} Lançamentos manuais</span><b>${fmtMoeda(custoReal.manuais)}</b></div>` : ""}
+        ${custoReal.avulsos ? `<div class="pfd-conc-linha"><span>${badgeOrigem("avulso")} Lançamentos avulsos</span><b>${fmtMoeda(custoReal.avulsos)}</b></div>` : ""}
+        <div class="pfd-conc-divisor"></div>
+        <div class="pfd-conc-linha pfd-conc-final"><span>Custo total com entregadores</span><b>${fmtMoeda(custoReal.total)}</b></div>
+      </div>
+      <div class="pfd-secao-acoes"><button class="btn btn-ghost btn-sm" id="pfd-ver-lancamentos">${icon("arrow-right", { size: 14 })} Ver lançamentos</button></div>`) : ""}
 
     ${pfdSecao("activity", "Status da análise", "Classificação automática dos cancelamentos do período", `
       <div class="pfd-status-band">
@@ -553,8 +598,8 @@ function renderVisaoGeral(box) {
 
     ${pfdSecao("award", "Ranking resumido de entregadores", "", `
       <div class="tabela-wrap"><table class="grid">
-        <thead><tr><th>Entregador</th><th class="num">Entregas</th><th class="num">Cancel. com taxa</th><th class="num">Cancel. sem taxa</th><th class="num">Taxas válidas</th></tr></thead>
-        <tbody>${top.map((e) => `<tr><td>${escapeHtml(e.entregador)}</td><td class="num">${e.entregues}</td><td class="num">${e.canceladosComTaxa}</td><td class="num">${e.canceladosSemTaxa}</td><td class="num">${fmtMoeda(e.taxasValidas)}</td></tr>`).join("")}</tbody>
+        <thead><tr><th>Entregador</th><th class="num">Entregas</th><th class="num">Cancel. com taxa</th><th class="num">Cancel. sem taxa</th><th class="num">Custo total</th></tr></thead>
+        <tbody>${top.map((e) => `<tr><td>${escapeHtml(e.entregador)}</td><td class="num">${e.entregues}</td><td class="num">${e.canceladosComTaxa}</td><td class="num">${e.canceladosSemTaxa}</td><td class="num">${fmtMoeda(e.custoTotal ?? e.taxasValidas)}</td></tr>`).join("")}</tbody>
       </table></div>
       <div class="pfd-secao-acoes"><button class="btn btn-ghost btn-sm" id="pfd-ver-todos-entregadores">${icon("arrow-right", { size: 14 })} Ver todos os entregadores</button></div>`)}`;
 
@@ -567,6 +612,7 @@ function renderVisaoGeral(box) {
   el("#pfd-ver-todos-entregadores")?.addEventListener("click", () => irParaAba("entregadores"));
   el("#pfd-ver-cancelamentos")?.addEventListener("click", () => { pfd.filtrosCancelamentos = { busca: "", status: "todos" }; irParaAba("cancelamentos"); });
   el("#pfd-ver-ignorados-visao")?.addEventListener("click", () => { pfd.verIgnorados = true; irParaAba("pedidos"); });
+  el("#pfd-ver-lancamentos")?.addEventListener("click", () => irParaAba("lancamentos"));
 }
 
 // ---------------------------------------------------------------------------
@@ -633,24 +679,114 @@ function renderTabelaPedidos() {
   const lista = pedidosFiltrados();
   if (!lista.length) { alvo.innerHTML = vazio("search", "Nenhum pedido encontrado", "Ajuste a busca ou os filtros."); return; }
   alvo.innerHTML = `<div class="tabela-wrap"><table class="grid">
-    <thead><tr><th>Código</th><th>Data</th><th>Entregador</th><th>Situação</th><th class="num">Taxa do entregador</th><th>Status</th><th>Classificação</th></tr></thead>
+    <thead><tr><th>Código</th><th>Data</th><th>Entregador</th><th>Origem</th><th>Situação</th><th class="num">Taxa</th><th class="num">Custo total</th><th>Status</th><th>Classificação</th><th></th></tr></thead>
     <tbody>${lista.map((p) => {
       const st = STATUS_ROTULO[p.statusConciliacao] || { label: p.statusConciliacao, classe: "muted" };
       const cancelado = pedidoCancelado(p);
       const efetiva = cancelado ? classificacaoEfetiva(p) : null;
       const cl = efetiva ? (CLASSIFICACAO_ROTULO[efetiva] || { label: efetiva, classe: "muted" }) : null;
+      const nExtras = p.custosAdicionais?.length || 0;
+      const overrideManual = !!p.classificacaoOverrideEm;
       return `<tr>
         <td>${escapeHtml(p.numeroPedido)}</td>
         <td>${fmtDataHora(p.dataHora)}</td>
         <td>${escapeHtml(p.entregador || "—")}</td>
+        <td>${badgeOrigem("ifood")}</td>
         <td>${escapeHtml(p.situacao || "—")}</td>
         <td class="num">${fmtMoeda(p.taxaEntregador)}</td>
+        <td class="num">${nExtras ? `<b>${fmtMoeda(p.custoTotalPedido)}</b> <span class="pfd-mini-tag">+${nExtras}</span>` : fmtMoeda(p.custoTotalPedido ?? p.taxaEntregador)}</td>
         <td><span class="pill ${st.classe}">${st.label}</span></td>
-        <td>${cl ? `<span class="pill ${cl.classe}">${cl.label}</span>` : "—"}</td>
+        <td>${cl ? `<span class="pill ${cl.classe}">${cl.label}</span>${overrideManual ? ` <span class="pfd-mini-tag" title="Classificação alterada manualmente">manual</span>` : ""}` : "—"}</td>
+        <td><button class="btn btn-ghost btn-sm" data-acao-pedido="${p.id}">Ações</button></td>
       </tr>`;
     }).join("")}</tbody>
   </table></div>
   <p class="dex-diag-vazio">${lista.length} de ${pfd.atual.pedidos.length} pedidos.</p>`;
+  alvo.querySelectorAll("[data-acao-pedido]").forEach((b) => b.addEventListener("click", (ev) => abrirMenuAcoesPedido(ev.currentTarget, b.dataset.acaoPedido)));
+}
+
+// ---------------------------------------------------------------------------
+// MENU "Ações" de uma linha de pedido (item 18) — Ver detalhes / Editar
+// classificação / Adicionar taxa de entregador. Pedido do iFood não se
+// exclui isoladamente (só a importação inteira, no Histórico).
+// ---------------------------------------------------------------------------
+let menuAcoesEl = null;
+function fecharMenuAcoes() { menuAcoesEl?.remove(); menuAcoesEl = null; document.removeEventListener("click", fecharMenuAcoesFora, true); }
+function fecharMenuAcoesFora(e) { if (menuAcoesEl && !menuAcoesEl.contains(e.target)) fecharMenuAcoes(); }
+function abrirMenuAcoesPedido(botao, pedidoId) {
+  fecharMenuAcoes();
+  const p = (pfd.atual?.pedidos || []).find((x) => x.id === pedidoId);
+  if (!p) return;
+  const cancelado = pedidoCancelado(p);
+  const itens = [
+    { rot: "Ver detalhes", ic: "eye", fn: () => abrirDrawerDetalhePedido(pedidoId) },
+    ...(cancelado && podeClassificar() ? [{ rot: "Editar classificação", ic: "pencil", fn: () => abrirDrawerCancelamento(pedidoId) }] : []),
+    ...(podeImportar() ? [{ rot: "Adicionar taxa de entregador", ic: "plus", fn: () => abrirModalTaxaAdicional(p) }] : []),
+  ];
+  const r = botao.getBoundingClientRect();
+  menuAcoesEl = document.createElement("div");
+  menuAcoesEl.className = "pfd-menu-acoes";
+  menuAcoesEl.style.cssText = `position:fixed;top:${Math.round(r.bottom + 4)}px;left:${Math.round(r.right - 220)}px;z-index:60`;
+  menuAcoesEl.innerHTML = itens.map((it, i) => `<button class="pfd-menu-item" data-i="${i}">${icon(it.ic, { size: 14 })} ${escapeHtml(it.rot)}</button>`).join("");
+  document.body.appendChild(menuAcoesEl);
+  menuAcoesEl.querySelectorAll("[data-i]").forEach((b) => b.addEventListener("click", () => { const it = itens[Number(b.dataset.i)]; fecharMenuAcoes(); it.fn(); }));
+  setTimeout(() => document.addEventListener("click", fecharMenuAcoesFora, true), 0);
+}
+
+function abrirModalTaxaAdicional(pedido) {
+  abrirLancamentoModal({
+    modo: "taxa_adicional", pedido, catalogos: pfd.catalogos,
+    onSalvo: async () => { await recarregarAtual(); toast("Taxa de entregador adicionada."); },
+  });
+}
+
+/** Recarrega a importação/período atualmente aberto (após um lançamento). */
+async function recarregarAtual() {
+  if (pfd.atual?.importacao?.id && !pfd.atual.consolidado) await abrirImportacao(pfd.atual.importacao.id, { silencioso: true });
+  else await selecionarPeriodo(pfd.periodo.chave || "custom", pfd.periodo);
+  renderAbaAtual();
+}
+
+// ---------------------------------------------------------------------------
+// DRAWER — detalhe completo do pedido (item 19): dados originais + entregador
+// final + taxa original + classificação + custos adicionais + custo total.
+// ---------------------------------------------------------------------------
+function abrirDrawerDetalhePedido(pedidoId) {
+  const p = (pfd.atual?.pedidos || []).find((x) => x.id === pedidoId);
+  if (!p) return;
+  const cancelado = pedidoCancelado(p);
+  const efetiva = cancelado ? classificacaoEfetiva(p) : null;
+  const cl = efetiva ? (CLASSIFICACAO_ROTULO[efetiva] || { label: efetiva, classe: "muted" }) : null;
+  const extras = p.custosAdicionais || [];
+  const item = (lbl, val) => `<div class="vd-pv-item"><span>${lbl}</span><b>${val}</b></div>`;
+  abrirPfdDrawer(`
+    <h3>Pedido #${escapeHtml(p.numeroPedido)}</h3>
+    <div class="bm-drawer-bloco">
+      <div class="vd-pv-titulo">Entrega principal</div>
+      <div class="vd-pv-grid">
+        ${item("Entregador final", escapeHtml(p.entregador || "—"))}
+        ${item("Taxa (iFood)", fmtMoeda(p.taxaEntregador))}
+        ${item("Data / hora", fmtDataHora(p.dataHora))}
+        ${item("Situação", escapeHtml(p.situacao || "—"))}
+        ${item("Origem", badgeOrigem("ifood"))}
+        ${item("Classificação", cl ? `<span class="pill ${cl.classe}">${cl.label}</span>` : "—")}
+      </div>
+      ${p.classificacaoOverrideEm ? `<p class="dex-diag-vazio">Classificação alterada manualmente por <b>${escapeHtml(p.classificacaoOverrideUsuarioNome || "—")}</b> em ${fmtDataHora(p.classificacaoOverrideEm)}${p.classificacaoOverrideMotivo ? `. Motivo: "${escapeHtml(p.classificacaoOverrideMotivo)}"` : ""}.</p>` : ""}
+    </div>
+
+    <div class="bm-drawer-bloco">
+      <div class="vd-pv-titulo">Custos adicionais</div>
+      ${extras.length ? `<ul class="pfd-custos-lista">${extras.map((e) => `
+        <li><span>${escapeHtml(e.entregadorNome || "—")}</span>
+          <b>${fmtMoeda(e.valor)}</b>
+          <span class="pfd-custos-motivo">${badgeOrigem(e.origem)} ${escapeHtml(e.motivoRotulo || "—")}${e.observacao ? ` — ${escapeHtml(e.observacao)}` : ""}</span></li>`).join("")}</ul>`
+        : `<p class="dex-diag-vazio">Nenhum custo adicional lançado para este pedido.</p>`}
+      ${podeImportar() ? `<button class="btn btn-ghost btn-sm" id="pfd-add-taxa-drawer">${icon("plus", { size: 14 })} Adicionar taxa de entregador</button>` : ""}
+    </div>
+
+    <div class="pfd-conc-linha pfd-conc-final"><span>Custo total deste pedido</span><b>${fmtMoeda(p.custoTotalPedido ?? p.taxaEntregador)}</b></div>
+  `);
+  el("#pfd-add-taxa-drawer")?.addEventListener("click", () => { fecharPfdDrawer(); abrirModalTaxaAdicional(p); });
 }
 
 // ---------------------------------------------------------------------------
@@ -866,6 +1002,132 @@ function wireDrawerCancelamento(p) {
 }
 
 // ---------------------------------------------------------------------------
+// LANÇAMENTOS — custos com entregadores fora do relatório do iFood
+// (itens 4, 5, 7, 8 do pedido). Avulsos + entregas manuais + taxas
+// adicionais do período. Origem sempre visível.
+// ---------------------------------------------------------------------------
+const FILTROS_ORIGEM_LANC = [["todos", "Todos"], ["taxa_adicional", "Taxa adicional"], ["manual", "Manual"], ["avulso", "Avulso"]];
+
+function lancamentosFiltrados() {
+  const termo = pfd.filtrosLancamentos.busca.trim().toLowerCase();
+  return (pfd.atual?.lancamentos || []).filter((l) => {
+    if (!pfd.filtrosLancamentos.incluirExcluidos && l.excluido) return false;
+    if (pfd.filtrosLancamentos.origem !== "todos" && l.origem !== pfd.filtrosLancamentos.origem) return false;
+    if (termo && !`${l.entregadorNome || ""} ${l.numeroPedido || ""} ${l.motivoRotulo || ""}`.toLowerCase().includes(termo)) return false;
+    return true;
+  });
+}
+
+function renderLancamentos(box) {
+  const podeMexer = podeImportar();
+  box.innerHTML = `
+    <div class="ed-acoes" style="justify-content:space-between;margin-bottom:12px">
+      <div class="vd-chips">
+        ${FILTROS_ORIGEM_LANC.map(([v, l]) => `<button class="vd-chip ${v === pfd.filtrosLancamentos.origem ? "ativo" : ""}" data-origem-lanc="${v}">${l}</button>`).join("")}
+      </div>
+      ${podeMexer ? `<div class="ed-acoes" style="gap:8px">
+        <button class="btn btn-ghost btn-sm" id="pfd-nova-entrega">${icon("plus", { size: 14 })} Nova entrega</button>
+        <button class="btn btn-primary btn-sm" id="pfd-novo-avulso">${icon("plus", { size: 14 })} Novo lançamento avulso</button>
+      </div>` : ""}
+    </div>
+    <div class="vd-filtros">
+      <div class="busca"><input id="pfd-lanc-busca" type="search" placeholder="Buscar por entregador, pedido ou motivo..." value="${escapeHtml(pfd.filtrosLancamentos.busca)}"></div>
+      <label class="vd-f-bloco" style="flex-direction:row;align-items:center;gap:6px">
+        <input type="checkbox" id="pfd-lanc-excluidos" ${pfd.filtrosLancamentos.incluirExcluidos ? "checked" : ""}> <span class="vd-f-lbl">Mostrar excluídos</span>
+      </label>
+    </div>
+    <div id="pfd-tabela-lancamentos"></div>`;
+  box.querySelectorAll("[data-origem-lanc]").forEach((b) => b.addEventListener("click", () => {
+    pfd.filtrosLancamentos.origem = b.dataset.origemLanc;
+    box.querySelectorAll("[data-origem-lanc]").forEach((x) => x.classList.toggle("ativo", x === b));
+    renderTabelaLancamentos();
+  }));
+  el("#pfd-lanc-busca")?.addEventListener("input", (e) => { pfd.filtrosLancamentos.busca = e.target.value; renderTabelaLancamentos(); });
+  el("#pfd-lanc-excluidos")?.addEventListener("change", (e) => { pfd.filtrosLancamentos.incluirExcluidos = e.target.checked; renderTabelaLancamentos(); });
+  el("#pfd-novo-avulso")?.addEventListener("click", () => abrirLancamentoModal({
+    modo: "avulso", catalogos: pfd.catalogos, dataSugerida: pfd.periodo.fim || pfd.periodo.ini,
+    onSalvo: async () => { await recarregarAtual(); toast("Lançamento avulso registrado."); },
+  }));
+  el("#pfd-nova-entrega")?.addEventListener("click", () => abrirLancamentoModal({
+    modo: "manual", catalogos: pfd.catalogos, dataSugerida: pfd.periodo.fim || pfd.periodo.ini,
+    onSalvo: async () => { await recarregarAtual(); toast("Entrega manual registrada."); },
+  }));
+  renderTabelaLancamentos();
+}
+
+function renderTabelaLancamentos() {
+  const alvo = el("#pfd-tabela-lancamentos");
+  if (!alvo) return;
+  const lista = lancamentosFiltrados();
+  const total = (pfd.atual?.resumo?.custoReal?.ajustesManuais) ?? 0;
+  if (!lista.length) {
+    alvo.innerHTML = vazio("banknote", "Nenhum lançamento no período",
+      podeImportar() ? "Use \"Novo lançamento avulso\" ou \"Nova entrega\" para registrar um custo com entregador." : "Nenhum lançamento operacional registrado para este período.");
+    return;
+  }
+  alvo.innerHTML = `<div class="tabela-wrap"><table class="grid">
+    <thead><tr><th>Data</th><th>Entregador</th><th>Origem</th><th>Pedido</th><th>Motivo</th><th class="num">Valor</th><th>Status</th><th></th></tr></thead>
+    <tbody>${lista.map((l) => `
+      <tr class="${l.excluido ? "pfd-linha-excluida" : ""}">
+        <td>${escapeHtml(fmtDataBr(l.data))}${l.hora ? ` ${escapeHtml(String(l.hora).slice(0, 5))}` : ""}</td>
+        <td>${escapeHtml(l.entregadorNome || "—")}</td>
+        <td>${badgeOrigem(l.origem)}</td>
+        <td>${l.numeroPedido ? `${escapeHtml(l.numeroPedido)}${l.pedidoDisponivel === false ? ` <span class="pfd-mini-tag" title="Pedido original excluído">indisponível</span>` : ""}` : "—"}</td>
+        <td>${escapeHtml(l.motivoRotulo || "—")}${l.motivoDescricao ? ` — ${escapeHtml(l.motivoDescricao)}` : ""}</td>
+        <td class="num">${fmtMoeda(l.valor)}</td>
+        <td>${l.excluido ? `<span class="pill bad">Excluído</span>` : `<span class="pill ok">Ativo</span>`}</td>
+        <td><button class="btn btn-ghost btn-sm" data-acao-lanc="${l.id}">Ações</button></td>
+      </tr>`).join("")}</tbody>
+  </table></div>
+  <p class="dex-diag-vazio">${lista.length} lançamento(s) · total de ajustes no período: <b>${fmtMoeda(total)}</b></p>`;
+  alvo.querySelectorAll("[data-acao-lanc]").forEach((b) => b.addEventListener("click", (ev) => abrirMenuAcoesLancamento(ev.currentTarget, b.dataset.acaoLanc)));
+}
+
+function abrirMenuAcoesLancamento(botao, lancId) {
+  fecharMenuAcoes();
+  const l = (pfd.atual?.lancamentos || []).find((x) => x.id === lancId);
+  if (!l) return;
+  const itens = [];
+  if (!l.excluido && podeImportar()) itens.push({ rot: "Editar", ic: "pencil", fn: () => abrirLancamentoModal({
+    modo: l.origem, lancamento: l, catalogos: pfd.catalogos,
+    onSalvo: async () => { await recarregarAtual(); toast("Lançamento atualizado."); },
+  }) });
+  if (!l.excluido && podeExcluir()) itens.push({ rot: "Excluir", ic: "trash", fn: () => excluirLancamentoUi(l) });
+  if (l.excluido && podeExcluir()) itens.push({ rot: "Restaurar", ic: "undo", fn: () => restaurarLancamentoUi(l) });
+  if (!itens.length) return;
+  const r = botao.getBoundingClientRect();
+  menuAcoesEl = document.createElement("div");
+  menuAcoesEl.className = "pfd-menu-acoes";
+  menuAcoesEl.style.cssText = `position:fixed;top:${Math.round(r.bottom + 4)}px;left:${Math.round(r.right - 180)}px;z-index:60`;
+  menuAcoesEl.innerHTML = itens.map((it, i) => `<button class="pfd-menu-item" data-i="${i}">${icon(it.ic, { size: 14 })} ${escapeHtml(it.rot)}</button>`).join("");
+  document.body.appendChild(menuAcoesEl);
+  menuAcoesEl.querySelectorAll("[data-i]").forEach((b) => b.addEventListener("click", () => { const it = itens[Number(b.dataset.i)]; fecharMenuAcoes(); it.fn(); }));
+  setTimeout(() => document.addEventListener("click", fecharMenuAcoesFora, true), 0);
+}
+
+async function excluirLancamentoUi(l) {
+  const motivo = prompt(`Motivo da exclusão deste lançamento (${l.origemRotulo} — ${fmtMoeda(l.valor)}):`);
+  if (!motivo || motivo.trim().length < 3) { if (motivo !== null) toast("Informe um motivo com ao menos 3 caracteres."); return; }
+  const g = geracaoContexto();
+  try {
+    await pfdLancamentoExcluir(l.id, motivo.trim());
+    if (contextoMudou(g)) return;
+    await recarregarAtual();
+    toast("Lançamento excluído.");
+  } catch (e) { toast("Erro ao excluir: " + e.message); }
+}
+
+async function restaurarLancamentoUi(l) {
+  const g = geracaoContexto();
+  try {
+    await pfdLancamentoRestaurar(l.id);
+    if (contextoMudou(g)) return;
+    await recarregarAtual();
+    toast("Lançamento restaurado.");
+  } catch (e) { toast("Erro ao restaurar: " + e.message); }
+}
+
+// ---------------------------------------------------------------------------
 // ENTREGADORES — ranking
 // ---------------------------------------------------------------------------
 const ORD_ENTREGADORES = [["taxas", "Valor de taxas"], ["entregas", "Quantidade de entregas"], ["nome", "Nome"]];
@@ -874,20 +1136,24 @@ function entregadoresOrdenados() {
   const lista = [...pfd.atual.entregadores];
   if (pfd.ordEntregadores === "entregas") return lista.sort((a, b) => b.totalPedidos - a.totalPedidos);
   if (pfd.ordEntregadores === "nome") return lista.sort((a, b) => a.entregador.localeCompare(b.entregador, "pt-BR"));
-  return lista.sort((a, b) => b.taxasValidas - a.taxasValidas);
+  return lista.sort((a, b) => (b.custoTotal ?? b.taxasValidas) - (a.custoTotal ?? a.taxasValidas));
 }
 
 function renderEntregadores(box) {
   box.innerHTML = `
-    <div class="vd-f-bloco"><span class="vd-f-lbl">Ordenar por</span><div class="vd-chips">
-      ${ORD_ENTREGADORES.map(([v, l]) => `<button class="vd-chip ${v === pfd.ordEntregadores ? "ativo" : ""}" data-ord="${v}">${l}</button>`).join("")}
-    </div></div>
-    <div class="vd-cards-sub" id="pfd-entregadores-lista" style="margin-top:14px"></div>`;
+    <div class="ed-acoes" style="justify-content:space-between;margin-bottom:12px">
+      <div class="vd-f-bloco"><span class="vd-f-lbl">Ordenar por</span><div class="vd-chips">
+        ${ORD_ENTREGADORES.map(([v, l]) => `<button class="vd-chip ${v === pfd.ordEntregadores ? "ativo" : ""}" data-ord="${v}">${l}</button>`).join("")}
+      </div></div>
+      ${podeImportar() ? `<button class="btn btn-ghost btn-sm" id="pfd-gerir-entregadores">${icon("users", { size: 14 })} Gerenciar entregadores</button>` : ""}
+    </div>
+    <div class="vd-cards-sub" id="pfd-entregadores-lista"></div>`;
   box.querySelectorAll(".vd-chip").forEach((b) => b.addEventListener("click", () => {
     pfd.ordEntregadores = b.dataset.ord;
     box.querySelectorAll(".vd-chip").forEach((x) => x.classList.toggle("ativo", x === b));
     renderListaEntregadores();
   }));
+  el("#pfd-gerir-entregadores")?.addEventListener("click", () => abrirEntregadoresModal({ onMudou: () => recarregarAtual() }));
   renderListaEntregadores();
 }
 
@@ -896,16 +1162,20 @@ function renderListaEntregadores() {
   if (!alvo) return;
   const lista = entregadoresOrdenados();
   if (!lista.length) { alvo.innerHTML = vazio("users", "Nenhum entregador", "Este relatório não trouxe pedidos com entregador identificado."); return; }
-  alvo.innerHTML = lista.map((e, i) => `
+  alvo.innerHTML = lista.map((e, i) => {
+    const ajustes = (e.taxasAdicionais || 0) + (e.manuais || 0) + (e.avulsos || 0);
+    return `
     <div class="vd-card pfd-entregador-card">
       <div class="vd-card-topo">
         <span class="pfd-entregador-pos${i < 3 ? " pfd-entregador-pos--top" : ""}">${i + 1}</span>
-        <span class="vd-card-lbl">${escapeHtml(e.entregador)}</span>
+        <span class="vd-card-lbl">${escapeHtml(e.entregador)}${e.somenteLancamentos ? ` ${badgeOrigem("avulso")}` : ""}</span>
       </div>
-      <div class="vd-card-val">${fmtMoeda(e.taxasValidas)}</div>
+      <div class="vd-card-val">${fmtMoeda(e.custoTotal ?? e.taxasValidas)}</div>
       <div class="vd-card-sub">${e.totalPedidos} pedidos · ${e.entregues} entregues · ${e.canceladosComTaxa} cancel. com taxa · ${e.canceladosSemTaxa} cancel. sem taxa${e.canceladosRevisao ? ` · ${e.canceladosRevisao} em revisão` : ""}</div>
+      ${ajustes ? `<div class="vd-card-sub">iFood ${fmtMoeda(e.taxasValidas)} · ajustes ${fmtMoeda(ajustes)}</div>` : ""}
       <button class="btn btn-ghost btn-sm" data-pedidos-entregador="${escapeHtml(e.chave || e.entregador)}">${icon("arrow-right", { size: 13 })} Ver pedidos</button>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   alvo.querySelectorAll("[data-pedidos-entregador]").forEach((b) => b.addEventListener("click", () => {
     pfd.verIgnorados = false;
     pfd.filtros = { busca: "", status: "todos", entregador: b.dataset.pedidosEntregador };
