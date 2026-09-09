@@ -2948,6 +2948,42 @@ body {
 .padm-rank-val small { font-size: 10.5px; color: var(--cinza); }
 .padm-rank-cob { color: var(--cinza-claro) !important; }
 
+/* --- ABAS SEMANAIS: navegador de semana + tabelas ordenáveis ------------- */
+.padm-faixa--semana {
+  align-items: center; gap: 8px; padding: 8px 10px;
+  background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm);
+}
+.padm-faixa--semana .padm-per-seta { color: var(--texto); background: var(--superficie-2); }
+.padm-faixa--semana .padm-per-seta:hover:not(:disabled) { background: var(--linha); }
+.padm-semana-rot { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.padm-semana-rot b { font-size: 13.5px; }
+.padm-semana-rot small { font-size: 10.5px; color: var(--cinza); }
+.padm-faixa--semana .padm-per-atual { color: var(--verde); border-bottom-color: var(--verde); margin-left: auto; }
+
+.padm-tabela-wrap { overflow-x: auto; background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); box-shadow: var(--sombra-sm); }
+.padm-tabela { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.padm-tabela thead th {
+  position: sticky; top: 0; background: var(--superficie-2); text-align: left;
+  font-size: 11px; font-weight: 700; color: var(--cinza); white-space: nowrap;
+  padding: 9px 12px; border-bottom: 1px solid var(--linha); user-select: none;
+}
+.padm-tabela thead th[data-padm-ord] { cursor: pointer; }
+.padm-tabela thead th[data-padm-ord]:hover { color: var(--texto); }
+.padm-tabela th.padm-th-ativo { color: var(--texto); }
+.padm-tabela td { padding: 9px 12px; border-bottom: 1px solid var(--linha); vertical-align: top; }
+.padm-tabela tbody tr:last-child td { border-bottom: 0; }
+.padm-tabela tbody tr[role="button"] { cursor: pointer; }
+.padm-tabela tbody tr:hover { background: var(--superficie-2); }
+.padm-tabela td small { display: block; font-size: 10.5px; color: var(--cinza); }
+.padm-td-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.padm-var { font-weight: 640; font-variant-numeric: tabular-nums; }
+.padm-var--ok { color: var(--ok); }
+.padm-var--critico { color: var(--bad); }
+.padm-var--neutro { color: var(--cinza); }
+.padm-sub-h { font-size: 12px; font-weight: 700; color: var(--cinza); text-transform: uppercase; letter-spacing: .4px; margin: 16px 0 8px; }
+.padm-sub-h:first-child { margin-top: 0; }
+.padm-destaque-rent { margin-bottom: 0; }
+
 /* --- GRÁFICO de evolução (SVG puro, sem biblioteca) ---------------------- */
 .padm-grafico {
   background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm);

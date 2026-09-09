@@ -22,13 +22,19 @@ import {
 } from "./administrativo.monitores.js";
 import {
   listarUnidadesElegiveis, obterOrganizacaoOperacional,
-  carregarLancamentosDaFrota, carregarLancamentosDaUnidade,
+  carregarLancamentosDaFrota, carregarLancamentosDaUnidade, carregarMetasIndicadores,
 } from "./administrativo.repo.js";
 import {
   faturamentoDaUnidade, somarFaturamento, coberturaDe,
   rankingFaturamento, rankingConformidade, evolucaoDiaria,
   variacao, variacaoPP, diaEquivalenteNoMesAnterior,
 } from "./administrativo.financeiro.js";
+import {
+  semanaDe, deslocarSemana, somarDias, primeiroDiaDoMes,
+  lucratividadeDaUnidade, agregarRede, folgaLimite,
+} from "./administrativo.lucratividade.js";
+import { escolherMetas } from "../dashboard-executivo/dashboardExecutivo.metas.service.js";
+import { ROTULO_MODELO, statusIndicadorRentabilidade } from "../dashboard-executivo/dashboardExecutivo.calc.js";
 import {
   carregarDatasLiberadas, listarDesbloqueios, criarDesbloqueio, revogarDesbloqueio,
   obterDesbloqueioAtivoPorId, MOTIVOS_VALIDOS, MOTIVOS_DESBLOQUEIO,
@@ -978,5 +984,233 @@ export async function relatorioExecutivoCompleto({ hojeIso, mes, topN = 10 } = {
       conformidadeEmpresas: rankingConformidade(itensEmp, { limite: 5 }),
       atencaoEmpresas: rankingConformidade(itensEmp, { ordem: "asc", limite: 5 }),
     },
+  };
+}
+
+// ===========================================================================
+// LUCRATIVIDADE / RENTABILIDADE SEMANAL  —  GET /administrativo/relatorios/lucratividade
+// ===========================================================================
+//
+// Análise SEMANAL (segunda a domingo) comparativa da frota iFood monitorada,
+// para as abas Lucratividade (faturamento + eficiência das deduções por modelo)
+// e Rentabilidade (receita líquida após deduções do iFood). Um único payload
+// alimenta as duas abas; o frontend deriva ordenação/filtro/busca sem refetch.
+//
+// Reaproveita as MESMAS fontes/fórmulas do Dashboard iFood: o recorte semanal
+// (administrativo.lucratividade.js) é diferença de snapshot acumulado, nunca
+// rateio. Metas de dedução vêm de `metas_indicadores` pelo MODELO LOGÍSTICO da
+// loja (escolherMetas — fonte única com o Dashboard Executivo).
+
+const R2 = (v) => (v == null ? null : Math.round(Number(v) * 100) / 100);
+
+/** Valida `AAAA-MM-DD` (qualquer dia dentro da semana desejada). */
+function validarDiaSemana(dia) {
+  if (dia === undefined || dia === null || String(dia).trim() === "") return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dia).trim());
+  if (!m) throw ApiError.badRequest("Semana inválida — informe uma data AAAA-MM-DD.", { codigo: "SEMANA_INVALIDA" });
+  return `${m[1]}-${m[2]}-${m[3]}`;
+}
+
+/**
+ * GET /administrativo/relatorios/lucratividade?semana=AAAA-MM-DD
+ *
+ * A UNIDADE é a entidade ranqueada — cada unidade da frota iFood monitorada
+ * disputa posição individualmente. A empresa (`empresaNome`/`organizacaoId`)
+ * viaja em cada linha só como CONTEXTO: uma empresa pode ter várias unidades,
+ * mas nunca soma essas unidades para competir. Somente os indicadores GLOBAIS
+ * DE REDE consolidam todas as unidades.
+ * @param {{ semana?: string, hojeIso?: string }} p
+ */
+export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) {
+  const hoje = hojeIso ?? hojeIsoBrasil();
+  const d1 = diaAnterior(hoje);
+  const diaAlvo = validarDiaSemana(semana) ?? hoje;
+  const { inicio, fim } = semanaDe(diaAlvo);
+
+  if (inicio > d1) {
+    throw ApiError.badRequest("Esta semana ainda não começou — não há faturamento a analisar.", { codigo: "SEMANA_NAO_VENCIDA" });
+  }
+
+  const ateData = fim <= d1 ? fim : d1;
+  const ehSemanaCorrente = inicio <= d1 && d1 <= fim;
+  const antInicio = deslocarSemana(inicio, -1);
+  const antFim = somarDias(antInicio, 6);
+  const podeAvancar = deslocarSemana(inicio, 1) <= d1;
+
+  const frota = await listarUnidadesElegiveis({ moduloId: MONITOR.modulo }, deps);
+  if (!frota.length) {
+    return {
+      monitor: MONITOR.chave,
+      semana: { inicio, fim, ateData, ehSemanaCorrente, anterior: { inicio: antInicio, fim: antFim } },
+      podeAvancar,
+      rede: redeVazia(),
+      unidades: [],
+      destaques: { melhorEficiencia: null, piorEficiencia: null, maiorRentabilidade: null },
+      atencao: { menorFaturamento: [], menorRentabilidade: [] },
+    };
+  }
+
+  const orgIds = [...new Set(frota.map((u) => u.organizacaoId))];
+  const [porUnidade, metasLinhas] = await Promise.all([
+    carregarLancamentosDaFrota({
+      unidadeIds: frota.map((u) => u.unidadeId),
+      desdeIso: primeiroDiaDoMes(somarDias(antInicio, -1)),
+      ateIso: fim,
+    }, deps),
+    carregarMetasIndicadores({ organizacaoIds: orgIds }, deps),
+  ]);
+
+  // ---- UMA linha por UNIDADE: semana atual + semana anterior + meta do modelo.
+  //      A empresa vem junto (empresaNome/organizacaoId) só como contexto. ----
+  const unidades = frota.map((u) => {
+    const linhas = porUnidade.get(u.unidadeId) ?? [];
+    const sem = lucratividadeDaUnidade(linhas, { inicio, fim, ateDataIso: ateData });
+    const ant = lucratividadeDaUnidade(linhas, { inicio: antInicio, fim: antFim, ateDataIso: antFim });
+
+    const modelo = u.modeloLogistico ?? null;
+    const metas = modelo
+      ? escolherMetas(metasLinhas.filter((r) => r.modelo_logistico === modelo), { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId })
+      : {};
+    const metaDed = metas.total_deducoes ?? null;
+
+    return {
+      unidadeId: u.unidadeId,
+      nome: u.unidadeNome,
+      empresaNome: u.empresaNome,
+      organizacaoId: u.organizacaoId,
+      modeloLogistico: modelo,
+      modeloLogisticoRotulo: modelo ? (ROTULO_MODELO[modelo] ?? modelo) : null,
+
+      faturamento: R2(sem.faturamento),
+      faturamentoAnterior: R2(ant.faturamento),
+      variacaoFaturamento: variacao(sem.faturamento, ant.faturamento),
+      confirmado: R2(sem.confirmado),
+      provisorio: R2(sem.provisorio),
+      incluiProvisorio: sem.incluiProvisorio,
+
+      deducoes: R2(sem.deducoes),
+      deducoesPct: R2(sem.deducoesPct),
+      meta: metaDed ? { metaIdeal: R2(metaDed.metaIdeal), limite: R2(metaDed.limite) } : null,
+      folgaLimitePp: R2(folgaLimite(sem.deducoesPct, metaDed)),
+      status: statusIndicadorRentabilidade(sem.deducoesPct, metaDed),
+
+      receitaLiquida: R2(sem.receitaLiquida),
+      receitaLiquidaAnterior: R2(ant.receitaLiquida),
+      variacaoReceitaLiquida: variacao(sem.receitaLiquida, ant.receitaLiquida),
+      rentabilidadeReais: R2(sem.receitaLiquida),
+      rentabilidadePct: R2(sem.rentabilidadePct),
+      rentabilidadePctAnterior: R2(ant.rentabilidadePct),
+      variacaoRentabilidadePp: variacaoPP(sem.rentabilidadePct, ant.rentabilidadePct),
+
+      semDado: sem.semDado,
+      _sem: sem, _ant: ant,   // internos p/ o total de rede
+    };
+  });
+
+  const ctx = (u) => ({ unidadeId: u.unidadeId, nome: u.nome, empresaNome: u.empresaNome, organizacaoId: u.organizacaoId });
+
+  // ---- posição no ranking COMPLETO de UNIDADES (p/ os recortes "menores") ----
+  const posFaturamento = new Map(
+    unidades.filter((u) => u.faturamento != null)
+      .sort((a, b) => b.faturamento - a.faturamento)
+      .map((u, i) => [u.unidadeId, i + 1]));
+  const posRentabilidade = new Map(
+    unidades.filter((u) => u.rentabilidadePct != null)
+      .sort((a, b) => b.rentabilidadePct - a.rentabilidadePct)
+      .map((u, i) => [u.unidadeId, i + 1]));
+
+  const menorFaturamento = unidades
+    .filter((u) => u.faturamento != null)
+    .sort((a, b) => a.faturamento - b.faturamento)
+    .slice(0, 10)
+    .map((u) => ({
+      ...ctx(u),
+      faturamento: u.faturamento, rentabilidadePct: u.rentabilidadePct,
+      variacaoFaturamento: u.variacaoFaturamento,
+      posicaoGeral: posFaturamento.get(u.unidadeId) ?? null,
+    }));
+
+  const menorRentabilidade = unidades
+    .filter((u) => u.rentabilidadePct != null)
+    .sort((a, b) => a.rentabilidadePct - b.rentabilidadePct)
+    .slice(0, 10)
+    .map((u) => ({
+      ...ctx(u),
+      faturamento: u.faturamento, receitaLiquida: u.receitaLiquida,
+      rentabilidadePct: u.rentabilidadePct,
+      posicaoGeral: posRentabilidade.get(u.unidadeId) ?? null,
+    }));
+
+  // ---- destaques — todos por UNIDADE ----
+  const eficientes = unidades.filter((u) => u.status?.chave !== "sem_dados" && u.folgaLimitePp != null);
+  const slimEfic = (u) => u && ({
+    ...ctx(u), modeloLogisticoRotulo: u.modeloLogisticoRotulo,
+    deducoesPct: u.deducoesPct, meta: u.meta, folgaLimitePp: u.folgaLimitePp, status: u.status,
+  });
+  const melhorEficiencia = eficientes.length
+    ? slimEfic(eficientes.reduce((m, u) => (u.folgaLimitePp > m.folgaLimitePp ? u : m)))
+    : null;
+  const piorEficiencia = eficientes.length
+    ? slimEfic(eficientes.reduce((m, u) => (u.folgaLimitePp < m.folgaLimitePp ? u : m)))
+    : null;
+
+  const comRent = unidades.filter((u) => u.rentabilidadePct != null);
+  const maiorRentabilidade = comRent.length
+    ? (() => {
+        const u = comRent.reduce((m, x) => (x.rentabilidadePct > m.rentabilidadePct ? x : m));
+        return {
+          ...ctx(u), modeloLogisticoRotulo: u.modeloLogisticoRotulo,
+          rentabilidadePct: u.rentabilidadePct, rentabilidadeReais: u.rentabilidadeReais,
+          faturamento: u.faturamento,
+        };
+      })()
+    : null;
+
+  // ---- rede: aqui SIM soma TODAS as unidades (indicador global) ----
+  const redeAgg = agregarRede(unidades.map((u) => u._sem));
+  const redeAggAnt = agregarRede(unidades.map((u) => u._ant));
+  const rede = {
+    empresasMonitoradas: orgIds.length,
+    unidadesMonitoradas: unidades.length,
+    faturamento: R2(redeAgg.faturamento),
+    faturamentoAnterior: R2(redeAggAnt.faturamento),
+    variacaoFaturamento: variacao(redeAgg.faturamento, redeAggAnt.faturamento),
+    deducoes: R2(redeAgg.deducoes),
+    deducoesPct: R2(redeAgg.deducoesPct),
+    receitaLiquida: R2(redeAgg.receitaLiquida),
+    receitaLiquidaAnterior: R2(redeAggAnt.receitaLiquida),
+    variacaoReceitaLiquida: variacao(redeAgg.receitaLiquida, redeAggAnt.receitaLiquida),
+    rentabilidadeMediaRede: R2(redeAgg.rentabilidadePct),
+    rentabilidadeMediaRedeAnterior: R2(redeAggAnt.rentabilidadePct),
+    variacaoRentabilidadeMediaPp: variacaoPP(redeAgg.rentabilidadePct, redeAggAnt.rentabilidadePct),
+  };
+
+  for (const u of unidades) { delete u._sem; delete u._ant; }
+  // Ordem de entrega: maior faturamento primeiro; unidade sem dado por último.
+  unidades.sort((a, b) => {
+    if (a.faturamento == null && b.faturamento == null) return String(a.nome ?? "").localeCompare(String(b.nome ?? ""), "pt-BR");
+    if (a.faturamento == null) return 1;
+    if (b.faturamento == null) return -1;
+    return b.faturamento - a.faturamento || String(a.nome ?? "").localeCompare(String(b.nome ?? ""), "pt-BR");
+  });
+
+  return {
+    monitor: MONITOR.chave,
+    semana: { inicio, fim, ateData, ehSemanaCorrente, anterior: { inicio: antInicio, fim: antFim } },
+    podeAvancar,
+    rede,
+    unidades,
+    destaques: { melhorEficiencia, piorEficiencia, maiorRentabilidade },
+    atencao: { menorFaturamento, menorRentabilidade },
+  };
+}
+
+function redeVazia() {
+  return {
+    empresasMonitoradas: 0, unidadesMonitoradas: 0,
+    faturamento: null, faturamentoAnterior: null, variacaoFaturamento: null,
+    deducoes: null, deducoesPct: null,
+    receitaLiquida: null, receitaLiquidaAnterior: null, variacaoReceitaLiquida: null,
+    rentabilidadeMediaRede: null, rentabilidadeMediaRedeAnterior: null, variacaoRentabilidadeMediaPp: null,
   };
 }

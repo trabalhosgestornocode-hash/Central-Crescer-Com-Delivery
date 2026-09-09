@@ -144,4 +144,12 @@ export const painelAdmApi = {
   /** Série diária de faturamento — rede inteira ou uma empresa. */
   relatorioEvolucao: ({ mes, organizacaoId } = {}) =>
     chamar("/relatorios/evolucao" + qs({ mes, organizacaoId })),
+
+  /**
+   * Análise SEMANAL (segunda a domingo) da frota — alimenta as abas
+   * Lucratividade e Rentabilidade. `semana` = qualquer data AAAA-MM-DD dentro
+   * da semana desejada; ausente = semana corrente.
+   */
+  relatorioLucratividade: ({ semana } = {}) =>
+    chamar("/relatorios/lucratividade" + qs({ semana })),
 };

@@ -33,11 +33,30 @@ export async function resolverMetas({ organizacaoId, unidadeId, modeloLogistico 
     .or(`unidade_id.eq.${unidadeId},and(unidade_id.is.null,organizacao_id.eq.${organizacaoId}),and(unidade_id.is.null,organizacao_id.is.null)`);
 
   if (error) throw ApiError.internal(error.message);
+  return escolherMetas(data ?? [], { organizacaoId, unidadeId });
+}
+
+/**
+ * Cascata PURA unidade > organização > global sobre linhas de
+ * `metas_indicadores` já filtradas por modelo logístico. Fonte única da regra:
+ * `resolverMetas` (uma unidade) e o lote do Painel Administrativo
+ * (`administrativo.service.js#lucratividadeSemanal`) chamam esta função.
+ * `meta_ideal`/`limite` são fração no banco (0.2050) e saem em % (0–100).
+ * @param {Array<{organizacao_id: string|null, unidade_id: string|null, indicador: string, meta_ideal: number, limite: number}>} linhas
+ * @param {{organizacaoId: string, unidadeId: string}} alvo
+ * @returns {Record<string, {metaIdeal: number, limite: number}>}
+ */
+export function escolherMetas(linhas, { organizacaoId, unidadeId }) {
+  // Prioridade: unidade (3) > organização (2) > global (1). Mantém a de maior.
+  const prioridade = (l) => (l.unidade_id ? 3 : l.organizacao_id ? 2 : 1);
+  const aplica = (l) =>
+    l.unidade_id === unidadeId
+    || (l.unidade_id == null && l.organizacao_id === organizacaoId)
+    || (l.unidade_id == null && l.organizacao_id == null);
 
   const porIndicador = new Map();
-  // Prioridade: unidade (3) > organização (2) > global (1). Mantém a de maior prioridade.
-  const prioridade = (linha) => (linha.unidade_id ? 3 : linha.organizacao_id ? 2 : 1);
-  for (const linha of data ?? []) {
+  for (const linha of linhas ?? []) {
+    if (!aplica(linha)) continue;
     const atual = porIndicador.get(linha.indicador);
     if (!atual || prioridade(linha) > prioridade(atual)) porIndicador.set(linha.indicador, linha);
   }

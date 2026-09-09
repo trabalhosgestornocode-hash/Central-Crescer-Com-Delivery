@@ -60,8 +60,20 @@ export function resetFiltrosDiario() {
  */
 export const viewEmpresas = { filtro: "todas", termo: "" };
 export const viewPendencias = { agrupar: "empresa", filtro: "todas", termo: "" };
-/** Aba interna da área Relatórios + escopo dos rankings. */
-export const viewRelatorios = { aba: "resumo", escopo: "empresas" };
+/**
+ * Aba interna da área Relatórios + escopo dos rankings.
+ * `semana`: segunda-feira (AAAA-MM-DD) da semana analisada nas abas Lucratividade
+ * e Rentabilidade; `null` = semana corrente (o backend resolve). As demais
+ * chaves são preferência de leitura das abas semanais — nenhuma refaz rede.
+ */
+export const viewRelatorios = {
+  aba: "resumo", escopo: "empresas",
+  semana: null,
+  lucModelo: "todos", lucBusca: "",
+  ordFat: { col: "faturamento", dir: "desc" },   // ranking de faturamento (unidades)
+  ordDed: { col: "folgaLimitePp", dir: "desc" }, // eficiência de deduções (unidades)
+  rentBusca: "", ordRent: { col: "rentabilidadePct", dir: "desc" },
+};
 /** Seções marcadas no modal do PDF — preferência de leitura, não dado. */
 export const secoesPdf = secoesPadrao();
 export function resetSecoesPdf() { Object.assign(secoesPdf, secoesPadrao()); }
@@ -69,6 +81,12 @@ export function resetFiltrosIdentificacao() {
   viewEmpresas.filtro = "todas"; viewEmpresas.termo = "";
   viewPendencias.agrupar = "empresa"; viewPendencias.filtro = "todas"; viewPendencias.termo = "";
   viewRelatorios.aba = "resumo"; viewRelatorios.escopo = "empresas";
+  viewRelatorios.semana = null;
+  viewRelatorios.lucModelo = "todos"; viewRelatorios.lucBusca = "";
+  viewRelatorios.ordFat = { col: "faturamento", dir: "desc" };
+  viewRelatorios.ordDed = { col: "folgaLimitePp", dir: "desc" };
+  viewRelatorios.rentBusca = ""; viewRelatorios.ordRent = { col: "rentabilidadePct", dir: "desc" };
+  ultimoDados.lucratividade = null; ultimoDados.semanaCarregada = null;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,20 +166,121 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
  * busca REPINTA a partir daqui — nenhuma dessas ações é uma pergunta nova ao
  * servidor, e o gestor não deve pagar latência para reordenar o que já viu.
  */
-const ultimoDados = { empresas: null, pendencias: null, relatorio: null, evolucao: null, mesAtivo: null, apiAtual: null };
+const ultimoDados = {
+  empresas: null, pendencias: null, relatorio: null, evolucao: null, mesAtivo: null, apiAtual: null,
+  lucratividade: null, semanaCarregada: null,
+};
+
+/** `true` para as abas semanais (Lucratividade / Rentabilidade). */
+const abaSemanal = (aba) => aba === "lucratividade" || aba === "rentabilidade";
 
 function pintarRelatorios() {
   const v = view();
   if (!v || !ultimoDados.relatorio) return;
-  v.innerHTML = htmlRelatorios(ultimoDados.relatorio, ultimoDados.evolucao, viewRelatorios);
+
+  const semanal = abaSemanal(viewRelatorios.aba);
+  const chaveSemana = viewRelatorios.semana ?? "corrente";
+
+  // Aba semanal e o pacote em cache não é o da semana pedida -> skeleton + fetch.
+  if (semanal && ultimoDados.semanaCarregada !== chaveSemana) {
+    ultimoDados.lucratividade = null;
+    v.innerHTML = htmlRelatorios(ultimoDados.relatorio, ultimoDados.evolucao, viewRelatorios, null);
+    ligarRelatorios();
+    carregarLucratividade();
+    return;
+  }
+
+  v.innerHTML = htmlRelatorios(ultimoDados.relatorio, ultimoDados.evolucao, viewRelatorios, ultimoDados.lucratividade);
+  ligarRelatorios();
+}
+
+/** Busca o pacote semanal e repinta. Sincroniza `viewRelatorios.semana` com a segunda-feira que o backend resolveu. */
+async function carregarLucratividade() {
+  const api = ultimoDados.apiAtual ?? painelAdmApi;
+  try {
+    const pacote = await api.relatorioLucratividade({ semana: viewRelatorios.semana || undefined });
+    // CONTRATO: o ranking é por unidade -> `unidades` é sempre um array. Se vier
+    // outra coisa (ex.: backend desatualizado servindo o contrato antigo
+    // `empresas`/`lojas`), falha ALTO em vez de renderizar tabelas vazias em
+    // silêncio — foi exatamente esse silêncio que escondeu um servidor stale.
+    if (!pacote || !Array.isArray(pacote.unidades)) {
+      const err = new Error("Resposta inesperada do relatório semanal (sem `unidades`). O servidor pode estar desatualizado — recarregue a página ou reinicie o backend.");
+      err.status = pacote ? 200 : 0;
+      throw err;
+    }
+    ultimoDados.lucratividade = pacote;
+    viewRelatorios.semana = pacote?.semana?.inicio ?? viewRelatorios.semana;
+    ultimoDados.semanaCarregada = viewRelatorios.semana ?? "corrente";
+    // se o gestor trocou de aba enquanto carregava, respeita a escolha atual
+    if (abaSemanal(viewRelatorios.aba)) pintarRelatorios();
+  } catch (e) {
+    if (e && e.status === 403) {
+      nav.aoAcessoRevogado?.(e.message || "Seu acesso ao Painel Administrativo não está mais disponível.");
+      return;
+    }
+    const v = view();
+    if (v) v.innerHTML = erro(e);
+  }
+}
+
+function ligarRelatorios() {
   ligarNav();
   els("[data-padm-aba]").forEach((b) =>
     b.addEventListener("click", () => { viewRelatorios.aba = b.dataset.padmAba; pintarRelatorios(); }));
   els("[data-padm-escopo]").forEach((b) =>
     b.addEventListener("click", () => { viewRelatorios.escopo = b.dataset.padmEscopo; pintarRelatorios(); }));
-  el('[data-padm-acao="csv"]')?.addEventListener("click", () =>
-    baixarCsv(ultimoDados.relatorio, viewRelatorios));
+  el('[data-padm-acao="csv"]')?.addEventListener("click", aoExportarCsv);
   el('[data-padm-acao="pdf"]')?.addEventListener("click", () => abrirModalPdf());
+
+  // Navegação semanal — força recarga (a semana muda o pacote inteiro).
+  els("[data-padm-semana]").forEach((b) => b.addEventListener("click", () => {
+    if (b.disabled) return;
+    const base = viewRelatorios.semana ?? semanaDe(hojeIsoLocal()).inicio;
+    const acao = b.dataset.padmSemana;
+    viewRelatorios.semana = acao === "atual" ? null
+      : acao === "anterior" ? deslocarSemana(base, -1)
+      : deslocarSemana(base, 1);
+    pintarRelatorios();
+  }));
+
+  // Filtro de modelo / ordenação por coluna — só repintam do cache.
+  els("[data-padm-luc-modelo]").forEach((b) => b.addEventListener("click", () => {
+    viewRelatorios.lucModelo = b.dataset.padmLucModelo; pintarRelatorios();
+  }));
+  els("[data-padm-ord]").forEach((th) => th.addEventListener("click", () => {
+    const [alvo, col] = th.dataset.padmOrd.split(":");
+    const ord = { fat: viewRelatorios.ordFat, ded: viewRelatorios.ordDed, rent: viewRelatorios.ordRent }[alvo];
+    if (!ord) return;
+    ord.dir = ord.col === col && ord.dir === "desc" ? "asc" : "desc";
+    ord.col = col;
+    pintarRelatorios();
+  }));
+  ligarBuscaCampo("#padm-busca-luc", (val) => { viewRelatorios.lucBusca = val; });
+  ligarBuscaCampo("#padm-busca-rent", (val) => { viewRelatorios.rentBusca = val; });
+}
+
+/** Exporta a aba corrente: as semanais têm CSV próprio; as demais, o relatório mensal. */
+function aoExportarCsv() {
+  if (viewRelatorios.aba === "lucratividade") return baixarCsvSemanal("lucratividade");
+  if (viewRelatorios.aba === "rentabilidade") return baixarCsvSemanal("rentabilidade");
+  return baixarCsv(ultimoDados.relatorio, viewRelatorios);
+}
+
+/** Busca com debounce que devolve o foco ao campo recriado (padrão da área). */
+function ligarBuscaCampo(seletor, aplicar) {
+  const inp = el(seletor);
+  if (!inp) return;
+  let t;
+  inp.addEventListener("input", () => {
+    clearTimeout(t);
+    const valor = inp.value;
+    t = setTimeout(() => {
+      aplicar(valor);
+      pintarRelatorios();
+      const novo = el(seletor);
+      if (novo) { novo.focus(); novo.setSelectionRange?.(valor.length, valor.length); }
+    }, 160);
+  });
 }
 
 function pintarEmpresas() {
@@ -1030,32 +1149,38 @@ export function deslocarMes(mesIso, delta) {
  * @param {object} d saída de /relatorios/resumo
  * @param {object} ev saída de /relatorios/evolucao
  * @param {{aba: string, escopo: string}} estado
+ * @param {object|null} luc saída de /relatorios/lucratividade (abas semanais)
  */
-export function htmlRelatorios(d, ev, estado = viewRelatorios) {
+export function htmlRelatorios(d, ev, estado = viewRelatorios, luc = null) {
   const abas = [
     ["resumo", "Resumo executivo", "clipboard-list"],
     ["faturamento", "Faturamento", "banknote"],
     ["conformidade", "Conformidade", "target"],
     ["evolucao", "Evolução", "trending-up"],
+    ["lucratividade", "Lucratividade", "wallet"],
+    ["rentabilidade", "Rentabilidade", "trending-up"],
   ];
   const nav = `<div class="padm-abas" role="tablist">${abas.map(([id, rot, ic]) => `
     <button class="padm-aba ${id === estado.aba ? "ativo" : ""}" data-padm-aba="${id}" role="tab" aria-selected="${id === estado.aba}">
       ${icon(ic, { size: 14 })}${escapeHtml(rot)}
     </button>`).join("")}</div>`;
 
+  const semanal = abaSemanal(estado.aba);
   const corpo =
     estado.aba === "faturamento" ? abaFaturamento(d, estado)
     : estado.aba === "conformidade" ? abaConformidade(d, estado)
     : estado.aba === "evolucao" ? abaEvolucao(d, ev)
+    : estado.aba === "lucratividade" ? abaLucratividade(luc, estado)
+    : estado.aba === "rentabilidade" ? abaRentabilidade(luc, estado)
     : abaResumo(d);
 
   return `
-    ${faixaPeriodo(d)}
+    ${semanal ? navegadorSemana(luc, estado) : faixaPeriodo(d)}
     <div class="padm-barra-id">
       ${nav}
       <span class="padm-exportar">
         <button class="btn btn-ghost btn-sm" data-padm-acao="csv">${icon("package", { size: 13 })}CSV</button>
-        <button class="btn btn-primary btn-sm" data-padm-acao="pdf">${icon("receipt", { size: 13 })}Gerar relatório PDF</button>
+        ${semanal ? "" : `<button class="btn btn-primary btn-sm" data-padm-acao="pdf">${icon("receipt", { size: 13 })}Gerar relatório PDF</button>`}
       </span>
     </div>
     ${corpo}`;
@@ -1231,6 +1356,319 @@ function abaEvolucao(d, ev) {
     })}`;
 }
 
+// ===========================================================================
+// 7b. RELATÓRIOS — abas SEMANAIS (Lucratividade / Rentabilidade)
+// ===========================================================================
+//
+// Duas perguntas gerenciais diferentes, duas abas:
+//   Lucratividade — faturamento + eficiência das deduções (por modelo).
+//   Rentabilidade — quanto sobra depois das deduções do iFood.
+// As duas leem o MESMO pacote /relatorios/lucratividade e a MESMA semana
+// (segunda a domingo). Filtro/busca/ordenação repintam do cache — sem refetch.
+
+/** Hoje no fuso local (aproximação — o backend é a autoridade da semana). */
+function hojeIsoLocal() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function somarDiasIso(iso, dias) {
+  const [a, m, d] = String(iso).split("-").map(Number);
+  const dt = new Date(Date.UTC(a, m - 1, d + dias));
+  const p = (n) => String(n).padStart(2, "0");
+  return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
+}
+/** Segunda-feira da semana que contém `iso`. */
+export function semanaDe(iso) {
+  const [a, m, d] = String(iso).split("-").map(Number);
+  const off = (new Date(Date.UTC(a, m - 1, d)).getUTCDay() + 6) % 7;
+  const inicio = somarDiasIso(iso, -off);
+  return { inicio, fim: somarDiasIso(inicio, 6) };
+}
+export const deslocarSemana = (inicioIso, n) => somarDiasIso(inicioIso, n * 7);
+
+/** "07/09 – 13/09/2026". */
+function fmtIntervaloSemana(sem) {
+  if (!sem?.inicio || !sem?.fim) return "—";
+  return `${fmtDataCurta(sem.inicio)} – ${fmtData(sem.fim)}`;
+}
+
+/** Percentual JÁ em escala 0–100 (convenção da rentabilidade/metas). */
+function pctReal(v, casas = 1) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return "—";
+  return `${Number(v).toFixed(casas).replace(".", ",")}%`;
+}
+/** Pontos percentuais já em escala 0–100 (folga, delta de rentabilidade). */
+function ppReal(v, { sinal = false } = {}) {
+  if (v === null || v === undefined || !Number.isFinite(Number(v))) return "";
+  const n = Number(v);
+  return `${sinal && n >= 0 ? "+" : ""}${n.toFixed(1).replace(".", ",")} p.p.`;
+}
+
+/** Navegador de semana — substitui a faixa de período mensal nas abas semanais. */
+function navegadorSemana(luc, estado) {
+  // Antes do 1º fetch usamos a semana calculada no cliente só para o rótulo.
+  const local = semanaDe(estado?.semana ?? hojeIsoLocal());
+  const sem = luc?.semana ?? { inicio: local.inicio, fim: local.fim };
+  const corrente = luc ? luc.semana?.ehSemanaCorrente : true;
+  const podeAvancar = luc ? !!luc.podeAvancar : false;
+  return `
+    <div class="padm-faixa padm-faixa--semana" role="group" aria-label="Semana analisada">
+      <button class="padm-per-seta" data-padm-semana="anterior" aria-label="Semana anterior">${icon("chevron-left", { size: 15 })}</button>
+      <span class="padm-faixa-item padm-semana-rot">
+        <b>${escapeHtml(fmtIntervaloSemana(sem))}</b>
+        <small>${corrente ? "semana em curso · dados até D-1" : "semana fechada"}</small>
+      </span>
+      <button class="padm-per-seta" data-padm-semana="proxima" aria-label="Próxima semana" ${podeAvancar ? "" : "disabled"}>${icon("chevron-right", { size: 15 })}</button>
+      <button class="padm-per-atual" data-padm-semana="atual" ${corrente ? "hidden" : ""}>Semana atual</button>
+    </div>`;
+}
+
+const ROTULO_STATUS_DED = {
+  dentro_da_meta: "Dentro do ideal",
+  dentro_do_limite: "Dentro do limite",
+  atencao: "Acima do limite",
+  sem_dados: "Sem meta/modelo",
+};
+const TOM_STATUS_DED = { dentro_da_meta: "ok", dentro_do_limite: "ok", atencao: "critico", sem_dados: "muted" };
+function chipStatusDed(status) {
+  const chave = status?.chave ?? "sem_dados";
+  return `<span class="padm-chip padm-chip--${TOM_STATUS_DED[chave] ?? "muted"}">${escapeHtml(ROTULO_STATUS_DED[chave] ?? "—")}</span>`;
+}
+
+/** Célula de variação (fração) com seta + tom. */
+function celulaVar(frac, { maiorEhMelhor = true } = {}) {
+  const t = tomVariacao(frac, { maiorEhMelhor });
+  const txt = fmtVariacao(frac);
+  return `<span class="padm-var padm-var--${t.classe}">${t.seta} ${escapeHtml(txt || "—")}</span>`;
+}
+
+/**
+ * Tabela do relatório semanal. `cols`: [{ key, rot, cel(row), alinhar?, sortVal? }].
+ * `alvo` = "fat" | "ded" | "rent" liga o cabeçalho ao estado de ordenação
+ * (`viewRelatorios.ord*`); `alvo = "fix"` = recorte com ordem fixa (cabeçalho
+ * não clicável).
+ */
+function tabelaOrd({ alvo, cols, linhas, ord, nav, vazioMsg }) {
+  if (!linhas.length) return vazio(vazioMsg ?? "Sem dados na semana", "", { tom: "muted", icone: "inbox" });
+  const dados = ordenarLinhas(linhas, ord, cols);
+  const fixa = alvo === "fix";
+  const th = cols.map((c) => {
+    const ativo = !fixa && ord?.col === c.key;
+    const seta = ativo ? (ord.dir === "desc" ? " ↓" : " ↑") : "";
+    const attrs = fixa ? "" : ` data-padm-ord="${alvo}:${c.key}" role="button" tabindex="0"`;
+    return `<th class="${c.alinhar === "num" ? "padm-td-num" : ""} ${ativo ? "padm-th-ativo" : ""}"${attrs}>${escapeHtml(c.rot)}${seta}</th>`;
+  }).join("");
+  const linhasHtml = dados.map((row, i) => {
+    const navAttr = nav ? nav(row) : "";
+    const tds = cols.map((c) => `<td class="${c.alinhar === "num" ? "padm-td-num" : ""}">${c.cel(row, i)}</td>`).join("");
+    return `<tr ${navAttr} ${navAttr ? 'tabindex="0" role="button"' : ""}>${tds}</tr>`;
+  }).join("");
+  return `<div class="padm-tabela-wrap"><table class="padm-tabela"><thead><tr>${th}</tr></thead><tbody>${linhasHtml}</tbody></table></div>`;
+}
+
+function ordenarLinhas(linhas, ord, cols) {
+  if (!ord?.col) return linhas;
+  const col = cols.find((c) => c.key === ord.col);
+  if (!col) return linhas;
+  const val = col.sortVal ?? ((r) => r[ord.col]);
+  const sinal = ord.dir === "asc" ? 1 : -1;
+  return [...linhas].sort((a, b) => {
+    const va = val(a), vb = val(b);
+    const na = va == null, nb = vb == null;
+    if (na && nb) return 0;
+    if (na) return 1;           // "sem dado" sempre por último
+    if (nb) return -1;
+    if (typeof va === "string") return sinal * va.localeCompare(vb, "pt-BR");
+    return sinal * (va - vb);
+  });
+}
+
+// Toda linha das abas semanais navega para a UNIDADE (calendário). A empresa é
+// só contexto visual — nunca um alvo de navegação nem de ranking.
+const navLoja = (r) => `data-padm-nav="unidade" data-id="${escapeHtml(r.unidadeId ?? "")}" data-nome="${escapeHtml(r.nome ?? "")}"`;
+
+const casaBusca = (termo, ...campos) =>
+  !termo || normalizarBusca(campos.filter(Boolean).join(" ")).includes(normalizarBusca(termo));
+
+/** Célula "Unidade / Empresa" — a empresa aparece só como contexto. */
+const celUnidade = (r, termo) => `<b>${realce(r.nome, termo)}</b><small>${realce(r.empresaNome, termo)}</small>`;
+
+// ---------------------------------------------------------------------------
+// ABA LUCRATIVIDADE — faturamento + eficiência das deduções (sem rentabilidade)
+// A UNIDADE é a entidade ranqueada; a empresa é só contexto.
+// ---------------------------------------------------------------------------
+function abaLucratividade(luc, estado) {
+  if (!luc) return carregando("painel");
+  const rede = luc.rede ?? {};
+  const unidades = luc.unidades ?? [];
+  const dst = luc.destaques ?? {};
+
+  const cardEficiencia = (rotulo, un, icone) => {
+    if (!un) return card({ label: rotulo, valor: "—", icone, nota: "sem unidade com meta de modelo definida" });
+    return card({
+      label: rotulo, valor: escapeHtml(un.nome), icone,
+      nota: `${escapeHtml(un.empresaNome ?? "")} · ${pctReal(un.deducoesPct)} de deduções · limite ${un.modeloLogisticoRotulo ?? "—"} ${pctReal(un.meta?.limite)} · folga ${ppReal(un.folgaLimitePp, { sinal: true })}`,
+    });
+  };
+
+  const liderFat = [...unidades].filter((u) => u.faturamento != null).sort((a, b) => b.faturamento - a.faturamento)[0];
+  const resumo = cards([
+    card({ label: "Faturamento total da rede", valor: fmtDinheiro(rede.faturamento), icone: "banknote",
+      nota: rede.variacaoFaturamento != null ? `${fmtVariacao(rede.variacaoFaturamento)} vs semana anterior` : "sem base comparável" }),
+    card({ label: "Maior faturamento da semana", valor: liderFat ? escapeHtml(liderFat.nome) : "—", icone: "award",
+      nota: liderFat ? `${escapeHtml(liderFat.empresaNome ?? "")} · ${fmtDinheiro(liderFat.faturamento)}` : "sem faturamento na semana" }),
+    cardEficiencia("Melhor eficiência de deduções", dst.melhorEficiencia, "trending-up"),
+    cardEficiencia("Pior eficiência de deduções", dst.piorEficiencia, "trending-down"),
+  ].join(""));
+
+  // Ranking semanal de faturamento — TODAS as unidades elegíveis (sem Top N).
+  const unidadesBusca = unidades.filter((u) => casaBusca(estado.lucBusca, u.nome, u.empresaNome));
+  const colsFat = [
+    { key: "nome", rot: "Unidade / Empresa", alinhar: "txt", cel: (r) => celUnidade(r, estado.lucBusca) },
+    { key: "modeloLogisticoRotulo", rot: "Modelo", alinhar: "txt", cel: (r) => escapeHtml(r.modeloLogisticoRotulo ?? "—") },
+    { key: "faturamento", rot: "Faturamento da semana", alinhar: "num", cel: (r) => `<b>${fmtDinheiro(r.faturamento)}</b>` },
+    { key: "variacaoFaturamento", rot: "vs semana anterior", alinhar: "num", cel: (r) => celulaVar(r.variacaoFaturamento) },
+  ];
+
+  // Eficiência de deduções — TODAS as unidades, modelo-aware.
+  const dedFiltradas = unidades
+    .filter((u) => estado.lucModelo === "todos" || u.modeloLogistico === estado.lucModelo)
+    .filter((u) => casaBusca(estado.lucBusca, u.nome, u.empresaNome));
+  const colsDed = [
+    { key: "nome", rot: "Unidade / Empresa", alinhar: "txt", cel: (r) => celUnidade(r, estado.lucBusca) },
+    { key: "modeloLogisticoRotulo", rot: "Modelo", alinhar: "txt", cel: (r) => escapeHtml(r.modeloLogisticoRotulo ?? "—") },
+    { key: "deducoesPct", rot: "% real", alinhar: "num", cel: (r) => pctReal(r.deducoesPct) },
+    { key: "limite", rot: "Meta / limite do modelo", alinhar: "num", sortVal: (r) => r.meta?.limite ?? null,
+      cel: (r) => r.meta ? `${pctReal(r.meta.metaIdeal)} / ${pctReal(r.meta.limite)}` : "—" },
+    { key: "folgaLimitePp", rot: "Folga p/ limite", alinhar: "num",
+      cel: (r) => r.folgaLimitePp == null ? "—" : `<span class="padm-var padm-var--${r.folgaLimitePp >= 0 ? "ok" : "critico"}">${ppReal(r.folgaLimitePp, { sinal: true })}</span>` },
+    { key: "status", rot: "Status", alinhar: "txt", sortVal: (r) => r.folgaLimitePp ?? null, cel: (r) => chipStatusDed(r.status) },
+  ];
+
+  const segModelo = `<div class="padm-segm padm-segm--alt">${[["todos", "Todos"], ["marketplace", "Marketplace"], ["full_service", "Full Service"]]
+    .map(([v, r]) => `<button class="padm-segm-btn ${v === estado.lucModelo ? "ativo" : ""}" data-padm-luc-modelo="${v}">${r}</button>`).join("")}</div>`;
+
+  const menor = luc.atencao?.menorFaturamento ?? [];
+  const colsMenor = [
+    { key: "nome", rot: "Unidade / Empresa", alinhar: "txt", cel: (r) => celUnidade(r, "") },
+    { key: "faturamento", rot: "Faturamento", alinhar: "num", cel: (r) => fmtDinheiro(r.faturamento) },
+    { key: "variacaoFaturamento", rot: "vs semana anterior", alinhar: "num", cel: (r) => celulaVar(r.variacaoFaturamento) },
+    { key: "posicaoGeral", rot: "Posição geral", alinhar: "num", cel: (r) => r.posicaoGeral ?? "—" },
+  ];
+
+  return `
+    ${secao({ titulo: "Resumo da semana", icone: "wallet", corpo: resumo })}
+    ${secao({
+      titulo: "Ranking semanal de faturamento",
+      icone: "banknote", sub: "Todas as unidades da frota iFood monitorada disputam individualmente. A empresa aparece só como contexto. Sem recorte de Top N.",
+      acoes: busca("padm-busca-luc", "Buscar unidade ou empresa…", estado.lucBusca),
+      corpo: tabelaOrd({ alvo: "fat", cols: colsFat, linhas: unidadesBusca, ord: estado.ordFat, nav: navLoja, vazioMsg: "Nenhuma unidade com faturamento na semana" }),
+    })}
+    ${secao({
+      titulo: "Eficiência de descontos e deduções",
+      icone: "target",
+      sub: "Todas as unidades, cada uma medida frente ao limite do SEU modelo (Marketplace × Full Service) — nunca pelo percentual bruto.",
+      acoes: segModelo,
+      corpo: tabelaOrd({ alvo: "ded", cols: colsDed, linhas: dedFiltradas, ord: estado.ordDed, nav: navLoja, vazioMsg: "Nenhuma unidade no filtro atual" }),
+    })}
+    ${secao({
+      titulo: "10 menores faturamentos",
+      icone: "trending-down", sub: "Recorte das unidades que exigem atenção pelo faturamento da semana.",
+      corpo: tabelaOrd({ alvo: "fix", cols: colsMenor, linhas: menor, ord: { col: "faturamento", dir: "asc" }, nav: navLoja, vazioMsg: "Sem base para o recorte" }),
+    })}`;
+}
+
+// ---------------------------------------------------------------------------
+// ABA RENTABILIDADE — quanto sobra depois das deduções do iFood
+// A UNIDADE é a entidade ranqueada; a empresa é só contexto.
+// ---------------------------------------------------------------------------
+function abaRentabilidade(luc, estado) {
+  if (!luc) return carregando("painel");
+  const rede = luc.rede ?? {};
+  const unidades = luc.unidades ?? [];
+  const dst = luc.destaques ?? {};
+
+  const liderPct = [...unidades].filter((u) => u.rentabilidadePct != null).sort((a, b) => b.rentabilidadePct - a.rentabilidadePct)[0];
+  const liderRl = [...unidades].filter((u) => u.receitaLiquida != null).sort((a, b) => b.receitaLiquida - a.receitaLiquida)[0];
+
+  const resumo = cards([
+    card({ label: "Receita líquida total da rede", valor: fmtDinheiro(rede.receitaLiquida), icone: "banknote",
+      nota: rede.variacaoReceitaLiquida != null ? `${fmtVariacao(rede.variacaoReceitaLiquida)} vs semana anterior` : "sem base comparável" }),
+    card({ label: "Rentabilidade média da rede", valor: pctReal(rede.rentabilidadeMediaRede), icone: "trending-up",
+      nota: rede.variacaoRentabilidadeMediaPp != null ? `${ppReal(rede.variacaoRentabilidadeMediaPp, { sinal: true })} vs semana anterior` : "média ponderada Σ receita ÷ Σ faturamento" }),
+    card({ label: "Maior rentabilidade %", valor: liderPct ? escapeHtml(liderPct.nome) : "—", icone: "award",
+      nota: liderPct ? `${escapeHtml(liderPct.empresaNome ?? "")} · ${pctReal(liderPct.rentabilidadePct)} · ${fmtDinheiro(liderPct.rentabilidadeReais)}` : "sem base na semana" }),
+    card({ label: "Maior receita líquida R$", valor: liderRl ? escapeHtml(liderRl.nome) : "—", icone: "banknote",
+      nota: liderRl ? `${escapeHtml(liderRl.empresaNome ?? "")} · ${fmtDinheiro(liderRl.receitaLiquida)}` : "sem base na semana" }),
+  ].join(""));
+
+  const dm = dst.maiorRentabilidade;
+  const destaque = dm ? `
+    <div class="padm-fin-destaque padm-destaque-rent">
+      <div class="padm-fin-total">
+        <span class="padm-fin-rot">Maior rentabilidade do período</span>
+        <b class="padm-fin-valor">${escapeHtml(dm.nome)}</b>
+        <span class="padm-fin-linhas">
+          <span>Empresa <b>${escapeHtml(dm.empresaNome ?? "—")}</b></span>
+          <span>Rentabilidade <b>${pctReal(dm.rentabilidadePct)}</b></span>
+          <span>Em reais <b>${fmtDinheiro(dm.rentabilidadeReais)}</b></span>
+          <span>Faturamento <b>${fmtDinheiro(dm.faturamento)}</b></span>
+        </span>
+      </div>
+    </div>` : vazio("Sem rentabilidade calculável na semana", "", { tom: "muted", icone: "inbox" });
+
+  const unidadesBusca = unidades.filter((u) => casaBusca(estado.rentBusca, u.nome, u.empresaNome));
+  const cols = [
+    { key: "nome", rot: "Unidade / Empresa", alinhar: "txt", cel: (r) => celUnidade(r, estado.rentBusca) },
+    { key: "modeloLogisticoRotulo", rot: "Modelo", alinhar: "txt", cel: (r) => escapeHtml(r.modeloLogisticoRotulo ?? "—") },
+    { key: "faturamento", rot: "Faturamento", alinhar: "num", cel: (r) => fmtDinheiro(r.faturamento) },
+    { key: "deducoes", rot: "Deduções R$", alinhar: "num", cel: (r) => fmtDinheiro(r.deducoes) },
+    { key: "deducoesPct", rot: "Deduções %", alinhar: "num", cel: (r) => pctReal(r.deducoesPct) },
+    { key: "receitaLiquida", rot: "Receita líquida R$", alinhar: "num", cel: (r) => `<b>${fmtDinheiro(r.receitaLiquida)}</b>` },
+    { key: "rentabilidadePct", rot: "Rentabilidade %", alinhar: "num", cel: (r) => `<b>${pctReal(r.rentabilidadePct)}</b>` },
+    { key: "variacaoRentabilidadePp", rot: "vs semana anterior", alinhar: "num",
+      cel: (r) => r.variacaoRentabilidadePp == null ? "—" : `<span class="padm-var padm-var--${r.variacaoRentabilidadePp >= 0 ? "ok" : "critico"}">${ppReal(r.variacaoRentabilidadePp, { sinal: true })}</span>` },
+  ];
+
+  const menorFat = luc.atencao?.menorFaturamento ?? [];
+  const menorRent = luc.atencao?.menorRentabilidade ?? [];
+  const colsMenorFat = [
+    { key: "nome", rot: "Unidade / Empresa", alinhar: "txt", cel: (r) => celUnidade(r, "") },
+    { key: "faturamento", rot: "Faturamento", alinhar: "num", cel: (r) => fmtDinheiro(r.faturamento) },
+    { key: "rentabilidadePct", rot: "Rentabilidade %", alinhar: "num", cel: (r) => pctReal(r.rentabilidadePct) },
+    { key: "variacaoFaturamento", rot: "vs semana anterior", alinhar: "num", cel: (r) => celulaVar(r.variacaoFaturamento) },
+    { key: "posicaoGeral", rot: "Posição geral", alinhar: "num", cel: (r) => r.posicaoGeral ?? "—" },
+  ];
+  const colsMenorRent = [
+    { key: "nome", rot: "Unidade / Empresa", alinhar: "txt", cel: (r) => celUnidade(r, "") },
+    { key: "faturamento", rot: "Faturamento", alinhar: "num", cel: (r) => fmtDinheiro(r.faturamento) },
+    { key: "receitaLiquida", rot: "Receita líquida R$", alinhar: "num", cel: (r) => fmtDinheiro(r.receitaLiquida) },
+    { key: "rentabilidadePct", rot: "Rentabilidade %", alinhar: "num", cel: (r) => pctReal(r.rentabilidadePct) },
+    { key: "posicaoGeral", rot: "Posição geral", alinhar: "num", cel: (r) => r.posicaoGeral ?? "—" },
+  ];
+
+  return `
+    ${secao({ titulo: "Resumo da semana", icone: "trending-up", corpo: resumo })}
+    ${secao({ titulo: "Maior rentabilidade do período", icone: "award", corpo: destaque })}
+    ${secao({
+      titulo: "Ranking de Rentabilidade",
+      icone: "trending-up", sub: "Todas as unidades da frota iFood monitorada, da maior para a menor rentabilidade. A empresa aparece só como contexto. Receita líquida = faturamento − deduções do iFood.",
+      acoes: busca("padm-busca-rent", "Buscar unidade ou empresa…", estado.rentBusca),
+      corpo: tabelaOrd({ alvo: "rent", cols, linhas: unidadesBusca, ord: estado.ordRent, nav: navLoja, vazioMsg: "Nenhuma unidade com rentabilidade calculável na semana" }),
+    })}
+    ${secao({
+      titulo: "Operações que exigem atenção",
+      icone: "alert-triangle",
+      sub: "Dois recortes independentes de UNIDADES — uma unidade pode aparecer nos dois.",
+      corpo: `
+        <h3 class="padm-sub-h">10 menores em faturamento</h3>
+        ${tabelaOrd({ alvo: "fix", cols: colsMenorFat, linhas: menorFat, ord: { col: "faturamento", dir: "asc" }, nav: navLoja, vazioMsg: "Sem base para o recorte" })}
+        <h3 class="padm-sub-h">10 menores em rentabilidade</h3>
+        ${tabelaOrd({ alvo: "fix", cols: colsMenorRent, linhas: menorRent, ord: { col: "rentabilidadePct", dir: "asc" }, nav: navLoja, vazioMsg: "Sem base para o recorte" })}`,
+    })}`;
+}
+
 // ---------------------------------------------------------------------------
 // CSV — sem dependência: Blob + createObjectURL
 // ---------------------------------------------------------------------------
@@ -1304,17 +1742,95 @@ export function csvDoRelatorio(d, estado = viewRelatorios) {
 }
 
 /** Dispara o download. `﻿` (BOM) faz o Excel abrir em UTF-8. */
-function baixarCsv(d, estado) {
-  const csv = "﻿" + csvDoRelatorio(d, estado);
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+function baixarArquivoCsv(texto, nome) {
+  const blob = new Blob(["﻿" + texto], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `painel-administrativo-${d?.periodo ?? "periodo"}.csv`;
+  a.download = nome;
   document.body.appendChild(a);
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+}
+
+function baixarCsv(d, estado) {
+  baixarArquivoCsv(csvDoRelatorio(d, estado), `painel-administrativo-${d?.periodo ?? "periodo"}.csv`);
+}
+
+/** Número em escala 0–100 -> "12,34" (sem símbolo, para o Excel calcular). */
+const csvPct = (v) => (v == null || !Number.isFinite(Number(v)) ? "" : Number(v).toFixed(2).replace(".", ","));
+const csvFrac = (v) => (v == null || !Number.isFinite(Number(v)) ? "" : (Number(v) * 100).toFixed(2).replace(".", ","));
+
+/** CSV das abas semanais — a aba corrente, na mesma ordem da tela. Uma linha por UNIDADE. */
+export function csvDaLucratividade(luc) {
+  const L = [];
+  const s = luc?.semana ?? {};
+  const un = luc?.unidades ?? [];
+  L.push(["Painel Administrativo — Lucratividade semanal"]);
+  L.push(["Semana", `${fmtData(s.inicio)} a ${fmtData(s.fim)}`], ["Dados até", fmtData(s.ateData)], []);
+
+  L.push(["RANKING SEMANAL DE FATURAMENTO (UNIDADES)"]);
+  L.push(["Posição", "Unidade", "Empresa", "Modelo", "Faturamento", "Faturamento semana anterior", "Variação %"]);
+  un.forEach((u, i) => L.push([
+    i + 1, u.nome, u.empresaNome, u.modeloLogisticoRotulo ?? "", fmtDinheiroExato(u.faturamento),
+    fmtDinheiroExato(u.faturamentoAnterior), csvFrac(u.variacaoFaturamento),
+  ]));
+  L.push([]);
+
+  L.push(["EFICIÊNCIA DE DESCONTOS E DEDUÇÕES (UNIDADES)"]);
+  L.push(["Unidade", "Empresa", "Modelo", "% real deduções", "Meta ideal %", "Limite %", "Folga p/ limite (p.p.)", "Status"]);
+  un.forEach((u) => L.push([
+    u.nome, u.empresaNome, u.modeloLogisticoRotulo ?? "",
+    csvPct(u.deducoesPct), csvPct(u.meta?.metaIdeal), csvPct(u.meta?.limite),
+    csvPct(u.folgaLimitePp), ROTULO_STATUS_DED[u.status?.chave ?? "sem_dados"],
+  ]));
+  L.push([]);
+
+  L.push(["10 MENORES FATURAMENTOS (UNIDADES)"]);
+  L.push(["Unidade", "Empresa", "Faturamento", "Variação %", "Posição geral"]);
+  (luc?.atencao?.menorFaturamento ?? []).forEach((u) => L.push([
+    u.nome, u.empresaNome, fmtDinheiroExato(u.faturamento), csvFrac(u.variacaoFaturamento), u.posicaoGeral ?? "",
+  ]));
+  return montarCsv(L);
+}
+
+export function csvDaRentabilidade(luc) {
+  const L = [];
+  const s = luc?.semana ?? {};
+  const un = luc?.unidades ?? [];
+  L.push(["Painel Administrativo — Rentabilidade semanal"]);
+  L.push(["Semana", `${fmtData(s.inicio)} a ${fmtData(s.fim)}`], ["Dados até", fmtData(s.ateData)], []);
+
+  L.push(["RANKING DE RENTABILIDADE (UNIDADES)"]);
+  L.push(["Posição", "Unidade", "Empresa", "Modelo", "Faturamento", "Deduções R$", "Deduções %", "Receita líquida R$", "Rentabilidade %", "Variação (p.p.)"]);
+  un.forEach((u, i) => L.push([
+    i + 1, u.nome, u.empresaNome, u.modeloLogisticoRotulo ?? "", fmtDinheiroExato(u.faturamento), fmtDinheiroExato(u.deducoes),
+    csvPct(u.deducoesPct), fmtDinheiroExato(u.receitaLiquida), csvPct(u.rentabilidadePct), csvPct(u.variacaoRentabilidadePp),
+  ]));
+  L.push([]);
+
+  L.push(["OPERAÇÕES QUE EXIGEM ATENÇÃO — 10 MENORES EM FATURAMENTO (UNIDADES)"]);
+  L.push(["Unidade", "Empresa", "Faturamento", "Rentabilidade %", "Variação %", "Posição geral"]);
+  (luc?.atencao?.menorFaturamento ?? []).forEach((u) => L.push([
+    u.nome, u.empresaNome, fmtDinheiroExato(u.faturamento), csvPct(u.rentabilidadePct), csvFrac(u.variacaoFaturamento), u.posicaoGeral ?? "",
+  ]));
+  L.push([]);
+
+  L.push(["OPERAÇÕES QUE EXIGEM ATENÇÃO — 10 MENORES EM RENTABILIDADE (UNIDADES)"]);
+  L.push(["Unidade", "Empresa", "Faturamento", "Receita líquida R$", "Rentabilidade %", "Posição geral"]);
+  (luc?.atencao?.menorRentabilidade ?? []).forEach((u) => L.push([
+    u.nome, u.empresaNome, fmtDinheiroExato(u.faturamento), fmtDinheiroExato(u.receitaLiquida), csvPct(u.rentabilidadePct), u.posicaoGeral ?? "",
+  ]));
+  return montarCsv(L);
+}
+
+function baixarCsvSemanal(qual) {
+  const luc = ultimoDados.lucratividade;
+  if (!luc) return;
+  const sem = luc.semana?.inicio ?? "semana";
+  if (qual === "rentabilidade") return baixarArquivoCsv(csvDaRentabilidade(luc), `rentabilidade-semana-${sem}.csv`);
+  return baixarArquivoCsv(csvDaLucratividade(luc), `lucratividade-semana-${sem}.csv`);
 }
 
 // ---------------------------------------------------------------------------

@@ -72,6 +72,7 @@ administrativoRouter.get("/rankings/conformidade", c.rankingConformidade);
 administrativoRouter.get("/relatorios/resumo", c.relatorioResumo);
 administrativoRouter.get("/relatorios/evolucao", c.relatorioEvolucao);
 administrativoRouter.get("/relatorios/executivo", c.relatorioExecutivo);
+administrativoRouter.get("/relatorios/lucratividade", c.relatorioLucratividade);
 
 // Qualquer outra coisa sob /administrativo é 404 em JSON.
 administrativoRouter.use('/desenvolvimento', desenvolvimentoRouter);

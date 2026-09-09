@@ -110,6 +110,10 @@ export const relatorioEvolucao = asyncHandler(async (req, res) =>
 export const relatorioExecutivo = asyncHandler(async (req, res) =>
   ok(res, await service.relatorioExecutivoCompleto({ mes: req.query.mes, topN: req.query.topN, hojeIso: hoje(req) }, deps(req))));
 
+// GET /administrativo/relatorios/lucratividade?semana=AAAA-MM-DD
+export const relatorioLucratividade = asyncHandler(async (req, res) =>
+  ok(res, await service.lucratividadeSemanal({ semana: req.query.semana, hojeIso: hoje(req) }, deps(req))));
+
 // ------------------------------------- Desbloqueio de dia (migration 068)
 //
 // As únicas rotas de ESCRITA do painel. O ator vem de `identidadeOperacional`

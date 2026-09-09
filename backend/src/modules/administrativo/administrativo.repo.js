@@ -61,7 +61,8 @@ const emLotes = (arr, n = LOTE_IN) => {
  * @param {{ supabase?: any }} [deps]
  * @returns {Promise<Array<{
  *   unidadeId: string, unidadeNome: string, unidadeCriadaEm: string|null, ehTeste: boolean,
- *   organizacaoId: string, empresaNome: string|null, organizacaoStatus: string|null
+ *   organizacaoId: string, empresaNome: string|null, organizacaoStatus: string|null,
+ *   modeloLogistico: string|null
  * }>>}
  */
 export async function listarUnidadesElegiveis({ moduloId, incluirTeste = false }, deps = {}) {
@@ -93,7 +94,7 @@ export async function listarUnidadesElegiveis({ moduloId, incluirTeste = false }
   const unidades = [];
   for (const lote of emLotes(orgIds)) {
     const { data, error } = await db.from("unidades")
-      .select("id, nome, organizacao_id, ativo, created_at, eh_teste")
+      .select("id, nome, organizacao_id, ativo, created_at, eh_teste, modelo_logistico_ifood")
       .in("organizacao_id", lote)
       .eq("ativo", true);
     if (error) throw ApiError.internal(error.message);
@@ -113,6 +114,7 @@ export async function listarUnidadesElegiveis({ moduloId, incluirTeste = false }
         organizacaoId: u.organizacao_id,
         empresaNome: org?.nome ?? null,
         organizacaoStatus: org?.status ?? null,
+        modeloLogistico: u.modelo_logistico_ifood ?? null,
       };
     });
 }
@@ -160,6 +162,26 @@ export async function carregarLancamentosDaFrota({ unidadeIds, desdeIso, ateIso 
     }
   }
   return porUnidade;
+}
+
+/**
+ * Linhas de `metas_indicadores` para uma frota — UMA query. `metas_indicadores`
+ * é uma tabela de CONFIGURAÇÃO (poucas linhas: por org/unidade × modelo × 4
+ * indicadores), então traz tudo e filtra em memória — a cascata
+ * unidade > organização > global é resolvida por
+ * `dashboardExecutivo.metas.service.js#escolherMetas`, a fonte única da regra.
+ * @param {{ organizacaoIds: string[] }} p
+ * @param {{ supabase?: any }} [deps]
+ * @returns {Promise<Array<{organizacao_id: string|null, unidade_id: string|null, modelo_logistico: string, indicador: string, meta_ideal: number, limite: number}>>}
+ */
+export async function carregarMetasIndicadores({ organizacaoIds }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const permitidas = new Set(organizacaoIds ?? []);
+  const { data, error } = await db.from("metas_indicadores")
+    .select("organizacao_id, unidade_id, modelo_logistico, indicador, meta_ideal, limite");
+  if (error) throw ApiError.internal(error.message);
+  // Só as linhas globais (org null) e as das organizações da frota importam.
+  return (data ?? []).filter((r) => r.organizacao_id == null || permitidas.has(r.organizacao_id));
 }
 
 /**
