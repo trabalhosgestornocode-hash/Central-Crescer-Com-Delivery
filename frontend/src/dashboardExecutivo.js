@@ -476,9 +476,10 @@ function cardsPrincipais(cards) {
   // agregada, só some se NENHUMA unidade com dado no mês for Marketplace).
   //
   // "Ajustes a favor" e "Ajustes contra" são PURAMENTE INFORMATIVOS — sem
-  // meta, sem pill "dentro/fora da meta", sem barra. A favor (crédito) NÃO
-  // entra no Total de Deduções e soma de volta na Receita líquida; contra
-  // (débito) entra no Total de Deduções.
+  // meta, sem pill "dentro/fora da meta", sem barra. Nenhum dos dois entra no
+  // indicador "Total de Deduções" (que é só a soma das parcelas de dedução
+  // aplicáveis ao modelo — ver calc.js#totalDeducoesIndicador); os dois
+  // entram na Receita líquida: a favor soma, contra subtrai.
   const s4 = cards.taxasEntregadores?.status ?? { label: "Dados insuficientes", chave: "sem_dados" };
   const s3 = cards.totalDeducoes.status ?? { label: "Dados insuficientes", chave: "sem_dados" };
   return [
@@ -496,8 +497,8 @@ function cardsPrincipais(cards) {
     cards.taxasEntregadores?.naoAplicavel ? "" : cardDef("Taxas de Entregadores", fmtMoeda(cards.taxasEntregadores?.valor), `${fmtPct(cards.taxasEntregadores?.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s4.chave]}">${s4.label}</span>`, "Repasse aos entregadores parceiros — só se aplica ao modelo logístico Marketplace.", "", metaBarraHtml(cards.taxasEntregadores ?? {})),
     cardDef("Ajustes a favor", fmtMoeda(cards.ajustesFavor?.valor), `${fmtPct(cards.ajustesFavor?.percentual)} das vendas`, "Créditos, reembolsos e correções financeiras a favor da loja.", "ajuste-favor"),
     cardDef("Ajustes contra", fmtMoeda(cards.ajustesContra?.valor), `${fmtPct(cards.ajustesContra?.percentual)} das vendas`, "Débitos, descontos e correções financeiras contra a loja."),
-    cardDef("Total de Deduções", fmtMoeda(cards.totalDeducoes.valor), `${fmtPct(cards.totalDeducoes.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s3.chave]}">${s3.label}</span>`, "Taxas e comissões + serviços e promoções + taxas de entregadores + ajustes contra a loja.", "", metaBarraHtml(cards.totalDeducoes)),
-    cardDef("Receita líquida", fmtMoeda(cards.receitaLiquida.valor), `${fmtPct(cards.receitaLiquida.percentual)} das vendas`, "Faturamento menos o total de deduções, mais os ajustes a favor da loja.", "destaque"),
+    cardDef("Total de Deduções", fmtMoeda(cards.totalDeducoes.valor), `${fmtPct(cards.totalDeducoes.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s3.chave]}">${s3.label}</span>`, "Soma das deduções aplicáveis ao modelo: taxas e comissões + serviços e promoções + taxas de entregadores (só no Marketplace). Não inclui ajustes contra a loja.", "", metaBarraHtml(cards.totalDeducoes)),
+    cardDef("Receita líquida", fmtMoeda(cards.receitaLiquida.valor), `${fmtPct(cards.receitaLiquida.percentual)} das vendas`, "Faturamento menos taxas e comissões, serviços e promoções, taxas de entregadores e ajustes contra a loja; mais os ajustes a favor da loja.", "destaque"),
   ].join("");
 }
 

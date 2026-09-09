@@ -775,6 +775,47 @@ export function indicadorAplicavel(modelo, indicador) {
   return (INDICADORES_POR_MODELO[modelo] ?? INDICADORES_POR_MODELO.full_service).includes(indicador);
 }
 
+/**
+ * COMPOSIÇÃO OFICIAL do indicador "Total de Deduções" — fonte ÚNICA da regra.
+ * O Total é SEMPRE, e só, a soma das parcelas de dedução APLICÁVEIS ao modelo:
+ *
+ *   marketplace  → Taxas e Comissões + Serviços e Promoções + Taxas de Entregadores
+ *   full_service → Taxas e Comissões + Serviços e Promoções
+ *                  (quem entrega é o parceiro do iFood — "taxas de entregadores"
+ *                   não se aplica; ver INDICADORES_POR_MODELO)
+ *
+ * NÃO inclui "ajustes contra a loja": ajuste financeiro é lançamento pontual,
+ * fora da tabela de indicadores — entra só na Receita Líquida, via
+ * `totalDeducoes` (o total FINANCEIRO). Assim o número de "Total de Deduções"
+ * bate, à vírgula, com a soma das linhas de indicador exibidas acima dele.
+ * A ordem do array é a ordem de exibição.
+ * @type {string[]}
+ */
+export const COMPONENTES_TOTAL_DEDUCOES = ["taxas_comissoes", "servicos_promocoes", "taxas_entregadores"];
+
+/** @param {string} modelo @returns {string[]} parcelas de dedução aplicáveis ao modelo, na ordem de exibição */
+export function componentesTotalDeducoes(modelo) {
+  return COMPONENTES_TOTAL_DEDUCOES.filter((indicador) => indicadorAplicavel(modelo, indicador));
+}
+
+/**
+ * Total de Deduções do INDICADOR de rentabilidade = soma das parcelas
+ * aplicáveis ao modelo (nunca as não aplicáveis, nunca ajustes, nunca um total
+ * pré-calculado). `valores` mapeia indicador → valor; some reais para obter o
+ * total em reais, ou pontos percentuais para obter o total em p.p. — a função
+ * só soma, a base financeira é responsabilidade de quem chama. `null` quando
+ * NENHUMA parcela aplicável foi informada (mesma semântica de `totalDeducoes`:
+ * "não sei" nunca vira 0, que faria o card parecer "dentro da meta" sem dado).
+ * @param {string} modelo
+ * @param {Record<string, number|null|undefined>} valores
+ * @returns {number|null}
+ */
+export function totalDeducoesIndicador(modelo, valores) {
+  const partes = componentesTotalDeducoes(modelo).map((indicador) => valores?.[indicador]);
+  if (partes.every((p) => p == null)) return null;
+  return partes.reduce((soma, p) => soma + (p == null ? 0 : Number(p)), 0);
+}
+
 // Meta de Taxas e Comissões usada como fallback quando não vier de
 // `metas_indicadores` (normalmente vem). Full Service 20,50% · Marketplace 13%.
 const REFERENCIA_META_TAXAS_COMISSOES = { full_service: 20.5, marketplace: 13 };

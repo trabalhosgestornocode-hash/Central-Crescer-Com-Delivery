@@ -11,6 +11,7 @@ import {
   inconsistencias,
   diasDoMes, mesAnterior, diaAnterior, STATUS_DIA,
   MODELOS_LOGISTICOS, ROTULO_MODELO, INDICADORES_POR_MODELO, indicadorAplicavel,
+  COMPONENTES_TOTAL_DEDUCOES, componentesTotalDeducoes, totalDeducoesIndicador,
   statusIndicador, saldoMeta, distribuirValorMensal, distribuirQuantidadeMensal,
   recalcularDistribuicaoMensal, snapshotFinanceiroMaisRecente, listaSnapshotsFinanceiros,
   listaDesempenhoDiario, ultimoDesempenhoConhecido, desempenhoParaTicketMedio,
@@ -672,6 +673,64 @@ describe("modelo logístico — indicadores aplicáveis por modelo", () => {
 
 // (o respeito ao modelo logístico no diagnóstico agora é testado no motor
 // novo — dashboard-executivo-diagnostico.test.js)
+
+// ---------------------------------------------------------------------------
+// Total de Deduções (INDICADOR) — composição por modelo, fonte única
+// (calc.js#totalDeducoesIndicador). Bug corrigido: o Total vinha de uma soma
+// financeira crua que incluía Taxas de Entregadores mesmo no Full Service
+// (onde "não se aplica") e os ajustes contra a loja — inflando o percentual.
+// ---------------------------------------------------------------------------
+describe("totalDeducoesIndicador — só as parcelas aplicáveis ao modelo", () => {
+  test("componentes: Marketplace tem entregadores; Full Service não", () => {
+    assert.deepEqual(componentesTotalDeducoes("marketplace"), ["taxas_comissoes", "servicos_promocoes", "taxas_entregadores"]);
+    assert.deepEqual(componentesTotalDeducoes("full_service"), ["taxas_comissoes", "servicos_promocoes"]);
+    assert.deepEqual(COMPONENTES_TOTAL_DEDUCOES, ["taxas_comissoes", "servicos_promocoes", "taxas_entregadores"]);
+  });
+
+  test("Marketplace: taxas + serviços + entregadores", () => {
+    const v = { taxas_comissoes: 100, servicos_promocoes: 40, taxas_entregadores: 30 };
+    assert.equal(totalDeducoesIndicador("marketplace", v), 170);
+  });
+
+  test("Full Service: entregadores é IGNORADO mesmo se vier um valor no snapshot", () => {
+    const v = { taxas_comissoes: 2023, servicos_promocoes: 868, taxas_entregadores: 313 };
+    assert.equal(totalDeducoesIndicador("full_service", v), 2891);          // NÃO 3204
+    assert.equal(totalDeducoesIndicador("marketplace", v), 3204);
+  });
+
+  test("caso reportado em p.p.: 20,23 + 8,68 = 28,91 (entregadores 3,13 fora)", () => {
+    const emPp = { taxas_comissoes: 20.23, servicos_promocoes: 8.68, taxas_entregadores: 3.13 };
+    assert.ok(perto(totalDeducoesIndicador("full_service", emPp), 28.91));
+    assert.ok(perto(totalDeducoesIndicador("marketplace", emPp), 32.04));
+  });
+
+  test("nunca soma ajustes contra a loja (não é parcela de indicador)", () => {
+    const v = { taxas_comissoes: 100, servicos_promocoes: 40, taxas_entregadores: 30, ajustes_contra_loja: 999 };
+    assert.equal(totalDeducoesIndicador("marketplace", v), 170);
+    assert.equal(totalDeducoesIndicador("full_service", v), 140);
+  });
+
+  test("uma parcela zero entra normalmente; total reflete só as demais", () => {
+    assert.equal(totalDeducoesIndicador("full_service", { taxas_comissoes: 100, servicos_promocoes: 0 }), 100);
+    assert.equal(totalDeducoesIndicador("marketplace", { taxas_comissoes: 100, servicos_promocoes: 40, taxas_entregadores: 0 }), 140);
+  });
+
+  test("nenhuma parcela aplicável informada -> null (nunca 0, que fingiria 'dentro da meta')", () => {
+    assert.equal(totalDeducoesIndicador("full_service", { taxas_comissoes: null, servicos_promocoes: null, taxas_entregadores: 500 }), null);
+    assert.equal(totalDeducoesIndicador("marketplace", {}), null);
+  });
+
+  test("parcial: soma só as conhecidas (melhor esforço, igual a totalDeducoes)", () => {
+    assert.equal(totalDeducoesIndicador("full_service", { taxas_comissoes: 100, servicos_promocoes: null }), 100);
+  });
+
+  test("alterar Serviços e Promoções reflete direto no Total (recalculado, nunca cacheado)", () => {
+    const base = { taxas_comissoes: 20.23, taxas_entregadores: 3.13 };
+    assert.ok(perto(totalDeducoesIndicador("full_service", { ...base, servicos_promocoes: 8.68 }), 28.91));
+    assert.ok(perto(totalDeducoesIndicador("full_service", { ...base, servicos_promocoes: 10.00 }), 30.23));
+    assert.ok(perto(totalDeducoesIndicador("full_service", { ...base, servicos_promocoes: 0 }), 20.23));
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Desempenho opcional / "não informado" ≠ "zero" (rodada 2 do Dashboard iFood)

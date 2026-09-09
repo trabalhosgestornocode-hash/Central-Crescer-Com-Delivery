@@ -276,3 +276,97 @@ test('serviço MP E×Z4: Serviços meta 6,43 / Total 31,43; Taxas 13 e Entregado
   // Entregadores atual 13% (1300/10000): meta 12 < 13 <= limite 15 => dentro_do_limite
   assert.equal(ind.taxas_entregadores.status.chave, 'dentro_do_limite');
 });
+
+// ---------------------------------------------------------------------------
+// Total de Deduções (INDICADOR) = soma EXATA das parcelas aplicáveis ao modelo
+// Bug reportado: Full Service com Taxas de Entregadores lançadas no snapshot
+// somava os 3,13 p.p. de entregadores (que "não se aplica") no Total.
+// ---------------------------------------------------------------------------
+test('CASO REPORTADO — FS: Total = Taxas + Serviços (20,23 + 8,68 = 28,91), entregadores fora', async () => {
+  // base 10.000 · Taxas 2.023 (20,23%) · Serviços 868 (8,68%) · Entregadores 313 (3,13%)
+  const svc = await servico('full_service', metasFS(), { taxas_comissoes: 2023, servicos_promocoes: 868, taxas_entregadores: 313 });
+  const d = await svc.obterMes(PEDIDO);
+  const td = d.indicadoresRentabilidade.total_deducoes;
+
+  assert.equal(d.indicadoresRentabilidade.taxas_comissoes.atual.toFixed(2), '20.23');
+  assert.equal(d.indicadoresRentabilidade.servicos_promocoes.atual.toFixed(2), '8.68');
+  assert.equal(d.indicadoresRentabilidade.taxas_entregadores.naoAplicavel, true);
+
+  assert.equal(td.atual.toFixed(2), '28.91');            // era 32,04 (bug)
+  assert.equal(td.metaIdeal.toFixed(2), '31.43');
+  assert.equal(td.limite, 35);
+  assert.equal(td.status.chave, 'dentro_da_meta');        // era 'dentro_do_limite'
+  assert.equal(td.status.label, 'Dentro da Meta');
+  assert.equal(td.saldo.disponivelPp.toFixed(2), '6.09'); // 35 − 28,91 (era 2,96)
+  assert.equal(td.saldo.disponivelReais.toFixed(2), '609.00'); // 3.500 − 2.891, base oficial (não % arredondado)
+
+  // O card da Visão Geral usa a MESMA regra.
+  assert.equal(d.cards.totalDeducoes.percentual.toFixed(2), '28.91');
+  assert.equal(d.cards.totalDeducoes.valor, 2891);
+  assert.equal(d.cards.totalDeducoes.status.chave, 'dentro_da_meta');
+
+  // Receita líquida CONTINUA financeira: 10.000 − (2.023+868+313) − 0 ajustes = 6.796.
+  assert.equal(d.cards.receitaLiquida.valor, 6796);
+
+  // Critério de aceite: Total bate à vírgula com a soma das linhas exibidas.
+  assert.equal(
+    (d.indicadoresRentabilidade.taxas_comissoes.atual + d.indicadoresRentabilidade.servicos_promocoes.atual).toFixed(2),
+    td.atual.toFixed(2),
+  );
+});
+
+test('FS — Total no ponto da meta / entre meta e limite / no limite / acima', async () => {
+  const casos = [
+    // metaIdeal ≈ 31,4286 · limite 35 (protecao E×Z4). Serviços = Total − Taxas.
+    { taxas_comissoes: 2000, servicos_promocoes: 1100, esperado: '31.00', status: 'dentro_da_meta' },  // abaixo da meta
+    { taxas_comissoes: 2000, servicos_promocoes: 1142, esperado: '31.42', status: 'dentro_da_meta' },  // a um passo da meta (≤ 31,4286)
+    { taxas_comissoes: 2000, servicos_promocoes: 1300, esperado: '33.00', status: 'dentro_do_limite' }, // entre meta e limite
+    { taxas_comissoes: 2000, servicos_promocoes: 1500, esperado: '35.00', status: 'dentro_do_limite' }, // exatamente no limite
+    { taxas_comissoes: 2000, servicos_promocoes: 1600, esperado: '36.00', status: 'atencao' },          // acima do limite
+  ];
+  for (const c of casos) {
+    const svc = await servico('full_service', metasFS(), { taxas_comissoes: c.taxas_comissoes, servicos_promocoes: c.servicos_promocoes, taxas_entregadores: 500 });
+    const td = (await svc.obterMes(PEDIDO)).indicadoresRentabilidade.total_deducoes;
+    assert.equal(td.atual.toFixed(2), c.esperado, JSON.stringify(c));
+    assert.equal(td.status.chave, c.status, JSON.stringify(c));
+  }
+});
+
+test('FS — uma parcela zero: Total = a outra parcela; entregadores segue ignorado', async () => {
+  const svc = await servico('full_service', metasFS(), { taxas_comissoes: 2000, servicos_promocoes: 0, taxas_entregadores: 400 });
+  const td = (await svc.obterMes(PEDIDO)).indicadoresRentabilidade.total_deducoes;
+  assert.equal(td.atual.toFixed(2), '20.00');
+});
+
+test('MP — SEM REGRESSÃO: Total inclui Taxas de Entregadores (11,52 + 12,63 + 14,90 = 39,05)', async () => {
+  const svc = await servico('marketplace', metasMP(), { taxas_comissoes: 1152, servicos_promocoes: 1263, taxas_entregadores: 1490 });
+  const d = await svc.obterMes(PEDIDO);
+  const td = d.indicadoresRentabilidade.total_deducoes;
+  assert.equal(td.atual.toFixed(2), '39.05');
+  assert.equal(d.indicadoresRentabilidade.taxas_entregadores.naoAplicavel, false);
+  assert.equal(td.status.chave, 'atencao'); // 39,05 > limite 35
+  // Bate com a soma das 3 linhas aplicáveis.
+  const ind = d.indicadoresRentabilidade;
+  assert.equal(
+    (ind.taxas_comissoes.atual + ind.servicos_promocoes.atual + ind.taxas_entregadores.atual).toFixed(2),
+    td.atual.toFixed(2),
+  );
+});
+
+test('MP — alterar Serviços e Promoções reflete no Total (recalculado dos componentes)', async () => {
+  const base = { taxas_comissoes: 1152, taxas_entregadores: 1490 };
+  const totalCom = async (servicos_promocoes) =>
+    (await (await servico('marketplace', metasMP(), { ...base, servicos_promocoes })).obterMes(PEDIDO))
+      .indicadoresRentabilidade.total_deducoes.atual;
+  assert.equal((await totalCom(1263)).toFixed(2), '39.05');
+  assert.equal((await totalCom(500)).toFixed(2), '31.42');  // 11,52 + 5,00 + 14,90
+  assert.equal((await totalCom(0)).toFixed(2), '26.42');
+});
+
+test('MP — Taxas de Entregadores lançada mas modelo trocado p/ FS: entregadores sai do Total', async () => {
+  const row = { taxas_comissoes: 2023, servicos_promocoes: 868, taxas_entregadores: 313 };
+  const mpTd = (await (await servico('marketplace', metasMP(), row)).obterMes(PEDIDO)).indicadoresRentabilidade.total_deducoes.atual;
+  const fsTd = (await (await servico('full_service', metasFS(), row)).obterMes(PEDIDO)).indicadoresRentabilidade.total_deducoes.atual;
+  assert.equal(mpTd.toFixed(2), '32.04'); // MP: soma os 3
+  assert.equal(fsTd.toFixed(2), '28.91'); // FS: ignora entregadores
+});

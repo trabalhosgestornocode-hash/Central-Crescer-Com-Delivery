@@ -13,7 +13,7 @@ import {
   desempenhoParaTicketMedio,
   confiabilidadeProjecao,
   inconsistencias, STATUS_DIA, indicadorAplicavel, statusIndicadorRentabilidade,
-  metasComProtecaoPrecificacao, saldoMeta,
+  totalDeducoesIndicador, metasComProtecaoPrecificacao, saldoMeta,
   distribuirValorMensal, distribuirQuantidadeMensal, recalcularDistribuicaoMensal,
 } from "./dashboardExecutivo.calc.js";
 import { gerarDiagnostico, LIMIARES_DIAGNOSTICO } from "./dashboardExecutivo.diagnostico.js";
@@ -336,12 +336,25 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
     ajustesFavorLoja: snapshot?.ajustes_favor_loja != null ? Number(snapshot.ajustes_favor_loja) : null,
     ajustesContraLoja: snapshot?.ajustes_contra_loja != null ? Number(snapshot.ajustes_contra_loja) : null,
   };
-  const totalDed = totalDeducoes({
+  const base = cardValores.valorVendasIfood;
+  // Total FINANCEIRO — TODAS as saídas de caixa (inclusive entregadores e
+  // ajustes contra a loja). Alimenta SÓ a Receita Líquida, nunca a tabela de
+  // Indicadores. Ver dashboardExecutivo.calc.js#totalDeducoes.
+  const totalDedFinanceiro = totalDeducoes({
     taxasComissoes: cardValores.taxasComissoes, servicosPromocoes: cardValores.servicosPromocoes,
     taxasEntregadores: cardValores.taxasEntregadores, ajustesContraLoja: cardValores.ajustesContraLoja,
   });
-  const base = cardValores.valorVendasIfood;
-  const receitaLiquidaValor = receitaLiquida(base, totalDed, cardValores.ajustesFavorLoja);
+  const receitaLiquidaValor = receitaLiquida(base, totalDedFinanceiro, cardValores.ajustesFavorLoja);
+  // Total do INDICADOR "Total de Deduções" — recalculado SEMPRE pelas parcelas
+  // de dedução APLICÁVEIS ao modelo (Marketplace inclui entregadores; Full
+  // Service não). Fonte única: calc.js#totalDeducoesIndicador. É este o número
+  // da tabela de Indicadores de Rentabilidade, do card e do saldo/Disponível —
+  // nunca o total financeiro acima, nunca um valor legado.
+  const totalDed = totalDeducoesIndicador(modelo.modeloLogistico, {
+    taxas_comissoes: cardValores.taxasComissoes,
+    servicos_promocoes: cardValores.servicosPromocoes,
+    taxas_entregadores: cardValores.taxasEntregadores,
+  });
   const indicadoresRentabilidade = {
     taxas_comissoes: percentual(cardValores.taxasComissoes, base),
     servicos_promocoes: percentual(cardValores.servicosPromocoes, base),
@@ -658,12 +671,22 @@ async function obterMesAgregado({ organizacaoId, mes, ano, hojeIso, metas }) {
     ajustesFavorLoja: somaEntreUnidades("ajustes_favor_loja"),
     ajustesContraLoja: somaEntreUnidades("ajustes_contra_loja"),
   };
-  const totalDed = totalDeducoes({
+  // Total FINANCEIRO (todas as saídas + ajustes) — só pra Receita Líquida.
+  const totalDedFinanceiro = totalDeducoes({
     taxasComissoes: valores.taxasComissoes, servicosPromocoes: valores.servicosPromocoes,
     taxasEntregadores: valores.taxasEntregadores, ajustesContraLoja: valores.ajustesContraLoja,
   });
   const base = valores.valorVendasIfood;
-  const receitaLiquidaValor = base != null ? receitaLiquida(base, totalDed, valores.ajustesFavorLoja) : null;
+  const receitaLiquidaValor = base != null ? receitaLiquida(base, totalDedFinanceiro, valores.ajustesFavorLoja) : null;
+  // Total do INDICADOR — soma das parcelas de dedução aplicáveis. Na visão
+  // agregada as unidades podem estar em modelos diferentes: entregadores só
+  // entra se PELO MENOS UMA unidade com dado no mês for Marketplace (mesma
+  // regra que decide exibir o card, `taxasEntregadoresNaoAplicavel`).
+  const totalDed = totalDeducoesIndicador(taxasEntregadoresNaoAplicavel ? "full_service" : "marketplace", {
+    taxas_comissoes: valores.taxasComissoes,
+    servicos_promocoes: valores.servicosPromocoes,
+    taxas_entregadores: valores.taxasEntregadores,
+  });
   const indicadoresRentabilidade = {
     taxas_comissoes: percentual(valores.taxasComissoes, base),
     servicos_promocoes: percentual(valores.servicosPromocoes, base),
