@@ -63,7 +63,7 @@ function acumulado(unidadeId, mes, ate, fatDia, dedDia) {
 }
 
 /**
- * Frota (semana 07–13/09, 7 dias):
+ * Frota — Semana 2 de setembro/2026 (08–14, 7 dias; fim − véspera do dia 07):
  *   Grupo JV / JV Loja A  (MP)  800/dia -> 5.600 ; deduções  60/dia (7,5%)
  *   Grupo JV / JV Loja B  (MP)  700/dia -> 4.900 ; deduções 210/dia (30%)
  *   Alfa    / Alfa Centro (MP) 1000/dia -> 7.000 ; deduções 100/dia (10%)
@@ -73,6 +73,8 @@ function acumulado(unidadeId, mes, ate, fatDia, dedDia) {
  * A SOMA das duas unidades do Grupo JV (10.500) é maior que a maior unidade
  * isolada (Alfa Centro, 7.000) — de propósito: é o caso "injusto" que a
  * mudança para ranking por unidade resolve.
+ * Agosto tem ritmo próprio (para comparar a Semana 1 de setembro com a Semana 4
+ * de agosto, que tem 10 dias — comparação de valores reais, sem normalizar).
  * Metas globais: MP total_deducoes 12%/15% ; FS 20%/25%.
  */
 function cenario() {
@@ -103,6 +105,7 @@ function cenario() {
   return st;
 }
 
+// Semana 2 de setembro (08–14) — bloco totalmente vencido (D-1 = 15/09).
 const semana = (extra = {}) => lucratividadeSemanal({ hojeIso: HOJE, semana: "2026-09-09", ...extra }, { supabase: fakeDb(cenario()) });
 
 describe("contrato do payload", () => {
@@ -144,24 +147,49 @@ describe("ranking POR UNIDADE (não consolida empresa)", () => {
     assert.deepEqual(jv.map((u) => u.nome).sort(), ["JV Loja A", "JV Loja B"]);
   });
 
-  test("faturamento/receita líquida por unidade = delta do snapshot da semana", async () => {
+  test("faturamento/receita líquida por unidade = delta do snapshot do bloco", async () => {
     const r = await semana();
     const alfa = r.unidades.find((u) => u.nome === "Alfa Centro");
-    // 13*1000 − 6*1000 = 7000 ; deduções 700 ; RL 6300 ; rentab 90%
+    // Semana 2 (08–14): snapshot(14) − snapshot(07) = 14000 − 7000 = 7000
     assert.equal(alfa.faturamento, 7000);
     assert.equal(alfa.deducoes, 700);
     assert.equal(alfa.receitaLiquida, 6300);
     assert.equal(Math.round(alfa.rentabilidadePct), 90);
     assert.equal(alfa.modeloLogisticoRotulo, "Marketplace");
   });
+});
 
-  test("variação vs semana anterior (que cruza a virada de agosto), por unidade", async () => {
+describe("comparação com o BLOCO anterior (mesma régua, valores reais)", () => {
+  test("Semana 2 (08–14) compara com a Semana 1 (01–07) do mesmo mês", async () => {
     const r = await semana();
+    const s = r.semana;
+    assert.equal(s.indice, 2);
+    assert.equal(s.inicio, "2026-09-08");
+    assert.equal(s.fim, "2026-09-14");
+    assert.deepEqual(
+      { indice: s.anterior.indice, inicio: s.anterior.inicio, fim: s.anterior.fim },
+      { indice: 1, inicio: "2026-09-01", fim: "2026-09-07" },
+    );
     const alfa = r.unidades.find((u) => u.nome === "Alfa Centro");
-    // semana anterior 31/08–06/09: ago 900 + set 6000 = 6900 ; atual 7000
-    assert.equal(alfa.faturamentoAnterior, 6900);
-    assert.ok(Math.abs(alfa.variacaoFaturamento - (7000 - 6900) / 6900) < 1e-9);
-    assert.ok(alfa.variacaoRentabilidadePp != null);
+    // Semana 1 de setembro = snapshot(07) − 0 = 7000 ; atual 7000 -> variação 0
+    assert.equal(alfa.faturamentoAnterior, 7000);
+    assert.equal(alfa.variacaoFaturamento, 0);
+  });
+
+  test("Semana 1 (01–07) compara com a Semana 4 (22–31) do mês anterior — 10 dias, sem normalizar", async () => {
+    const r = await lucratividadeSemanal({ hojeIso: HOJE, semana: "2026-09-03" }, { supabase: fakeDb(cenario()) });
+    const s = r.semana;
+    assert.equal(s.indice, 1);
+    assert.deepEqual(
+      { indice: s.anterior.indice, mes: s.anterior.mes, inicio: s.anterior.inicio, fim: s.anterior.fim },
+      { indice: 4, mes: 8, inicio: "2026-08-22", fim: "2026-08-31" },
+    );
+    const alfa = r.unidades.find((u) => u.nome === "Alfa Centro");
+    // atual (Semana 1 set) = 7 × 1000 = 7000
+    assert.equal(alfa.faturamento, 7000);
+    // anterior (Semana 4 ago, 10 dias) = snapshot(31) − snapshot(21) = 31×900 − 21×900 = 9000
+    assert.equal(alfa.faturamentoAnterior, 9000);
+    assert.ok(alfa.variacaoFaturamento < 0, "queda real, sem média diária");
   });
 });
 
@@ -231,25 +259,47 @@ describe("destaque 'maior rentabilidade' e recortes 'menores' — por unidade", 
   });
 });
 
-describe("navegação semanal", () => {
-  test("semana corrente: podeAvancar = false; semana passada: true", async () => {
-    const corrente = await lucratividadeSemanal({ hojeIso: HOJE, semana: "2026-09-15" }, { supabase: fakeDb(cenario()) });
-    assert.equal(corrente.semana.inicio, "2026-09-14");
-    assert.equal(corrente.semana.ehSemanaCorrente, true);
-    assert.equal(corrente.podeAvancar, false);
+describe("navegação por bloco (nunca cruza mês, nunca Semana 5)", () => {
+  test("bloco de D-1: podeAvancar só quando o próximo bloco já começou", async () => {
+    // D-1 = 15/09 -> Semana 3 (15–21)
+    const s3 = await lucratividadeSemanal({ hojeIso: HOJE, semana: "2026-09-15" }, { supabase: fakeDb(cenario()) });
+    assert.equal(s3.semana.indice, 3);
+    assert.equal(s3.semana.inicio, "2026-09-15");
+    assert.equal(s3.semana.ehSemanaCorrente, true);
+    assert.equal(s3.podeAvancar, false, "Semana 4 (22+) ainda não começou");
+    // Semana 2 (08–14) já tem a Semana 3 iniciada em D-1
     assert.equal((await semana()).podeAvancar, true);
   });
 
-  test("semana inteiramente futura -> 400", async () => {
+  test("sem `semana` usa o bloco que contém D-1", async () => {
+    const r = await lucratividadeSemanal({ hojeIso: HOJE }, { supabase: fakeDb(cenario()) });
+    assert.equal(r.semana.indice, 3);
+    assert.equal(r.semana.inicio, "2026-09-15");
+  });
+
+  test("dias 22+ são sempre Semana 4 — nunca Semana 5", async () => {
+    const r = await lucratividadeSemanal({ hojeIso: "2026-10-02", semana: "2026-09-29" }, { supabase: fakeDb(cenario()) });
+    assert.equal(r.semana.indice, 4);
+    assert.equal(r.semana.inicio, "2026-09-22");
+    assert.equal(r.semana.fim, "2026-09-30");
+  });
+
+  test("Semana 4 -> Semana 1 do mês seguinte é o `anterior` na volta", async () => {
+    // Semana 1 de outubro tem como anterior a Semana 4 de setembro
+    const r = await lucratividadeSemanal({ hojeIso: "2026-10-10", semana: "2026-10-03" }, { supabase: fakeDb(cenario()) });
+    assert.equal(r.semana.indice, 1);
+    assert.equal(r.semana.mes, 10);
+    assert.deepEqual(
+      { indice: r.semana.anterior.indice, mes: r.semana.anterior.mes, fim: r.semana.anterior.fim },
+      { indice: 4, mes: 9, fim: "2026-09-30" },
+    );
+  });
+
+  test("bloco inteiramente futuro -> 400", async () => {
     await assert.rejects(
       () => lucratividadeSemanal({ hojeIso: HOJE, semana: "2026-10-05" }, { supabase: fakeDb(cenario()) }),
       /ainda não começou/i,
     );
-  });
-
-  test("sem `semana` usa a semana de hoje", async () => {
-    const r = await lucratividadeSemanal({ hojeIso: HOJE }, { supabase: fakeDb(cenario()) });
-    assert.equal(r.semana.inicio, "2026-09-14");
   });
 });
 

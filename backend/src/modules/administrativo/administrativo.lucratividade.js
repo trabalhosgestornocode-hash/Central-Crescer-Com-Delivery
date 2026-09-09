@@ -1,15 +1,20 @@
 // PAINEL ADMINISTRATIVO — motor de LUCRATIVIDADE SEMANAL (puro, sem I/O).
 //
-// Recorte SEMANAL (segunda a domingo) do financeiro do iFood, para as abas
-// Lucratividade e Rentabilidade da área Relatórios.
+// Recorte por BLOCO SEMANAL FIXO DO MÊS, para as abas Lucratividade e
+// Rentabilidade da área Relatórios:
+//   Semana 1: 01–07 · Semana 2: 08–14 · Semana 3: 15–21 · Semana 4: 22–último dia
+// NUNCA cruza meses; nunca há "Semana 5" (dias 22+ pertencem sempre à Semana 4).
+// A Semana 4 tem 7, 8, 9 ou 10 dias (fevereiro, meses de 30/31) — os valores são
+// SEMPRE os reais do período, sem normalizar nem tirar média diária.
 //
 // NÃO reimplementa nenhuma fórmula de negócio: faturamento, deduções e receita
 // líquida saem das MESMAS funções do Dashboard iFood
 // (`dashboardExecutivo.calc.js`). O que é próprio daqui é só o RECORTE DE
 // PERÍODO: como `valor_vendas_ifood` (e os componentes de dedução) são um
 // snapshot MENSAL acumulado, o valor de uma semana é a diferença entre o
-// acumulado no fim da semana e o acumulado na véspera do primeiro dia — por
-// segmento de mês, porque uma semana seg–dom pode cruzar UMA virada de mês.
+// acumulado no fim do bloco e o acumulado na véspera do primeiro dia (0 na
+// Semana 1, porque o acumulado reinicia no dia 1). Como o bloco não cruza meses,
+// é sempre um único cálculo.
 //
 // Só linhas de origem DIÁRIA entram: `distribuicao_mensal` é uma fatia mensal
 // estimada, sem granularidade de dia — uma unidade que só tem isso fica com a
@@ -30,7 +35,7 @@ export function percentual(parte, base) {
 }
 
 // ---------------------------------------------------------------------------
-// SEMANA (segunda a domingo) — comparação de CALENDÁRIO, sem fuso
+// BLOCO SEMANAL FIXO DO MÊS — comparação de CALENDÁRIO, sem fuso
 // ---------------------------------------------------------------------------
 
 const toUTC = (iso) => {
@@ -49,50 +54,59 @@ export function somarDias(iso, dias) {
 /** Primeiro dia (AAAA-MM-01) do mês de `iso`. */
 export const primeiroDiaDoMes = (iso) => `${String(iso).slice(0, 7)}-01`;
 
+/** Último dia do mês (`mes` 1-based). */
+const ultimoDiaDoMes = (ano, mes) => new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+
+/** Primeiro dia de cada bloco. Semana 4 nunca começa depois do dia 22. */
+const DIA_INICIO_BLOCO = { 1: 1, 2: 8, 3: 15, 4: 22 };
+
+/** Índice do bloco (1..4) a partir do dia do mês. Dias 22+ -> sempre 4. */
+export const indiceBloco = (dia) => (dia <= 7 ? 1 : dia <= 14 ? 2 : dia <= 21 ? 3 : 4);
+
 /**
- * Semana (segunda a domingo) que contém `dataIso`.
+ * Bloco semanal fixo do mês (Semana 1: 01–07 · 2: 08–14 · 3: 15–21 · 4: 22–fim)
+ * que contém `dataIso`.
  * @param {string} dataIso AAAA-MM-DD
- * @returns {{ inicio: string, fim: string }}
+ * @returns {{ ano: number, mes: number, indice: 1|2|3|4, inicio: string, fim: string }}
  */
 export function semanaDe(dataIso) {
-  const dt = toUTC(dataIso);
-  const offset = (dt.getUTCDay() + 6) % 7;       // 0 = segunda
-  const inicio = somarDias(fromUTC(dt), -offset);
-  return { inicio, fim: somarDias(inicio, 6) };
+  const [ano, mes, dia] = String(dataIso).split("-").map(Number);
+  const indice = indiceBloco(dia);
+  const d0 = DIA_INICIO_BLOCO[indice];
+  const df = indice < 4 ? d0 + 6 : ultimoDiaDoMes(ano, mes);
+  return { ano, mes, indice, inicio: `${ano}-${pad(mes)}-${pad(d0)}`, fim: `${ano}-${pad(mes)}-${pad(df)}` };
 }
 
-/** Desloca uma semana `n` semanas (recebe e devolve a segunda-feira). */
-export const deslocarSemana = (inicioIso, n) => somarDias(inicioIso, n * 7);
+/** Ordinal linear do bloco (…, ago/S4, set/S1, set/S2, …) para navegar sem fuso. */
+const ordinalBloco = ({ ano, mes, indice }) => ((ano * 12) + (mes - 1)) * 4 + (indice - 1);
 
 /**
- * Parte [inicio..fim] em segmentos que não cruzam virada de mês. Uma semana
- * seg–dom cruza no máximo um mês → 1 ou 2 segmentos.
- * @returns {Array<{ ym: string, de: string, ate: string }>}
+ * Desloca `n` blocos (±) na régua fixa. Semana 4 -> Semana 1 do mês seguinte;
+ * Semana 1 -> Semana 4 do mês anterior (inclusive virada de ano). Devolve o
+ * `inicio` (AAAA-MM-DD) do bloco alvo.
+ * @param {string} inicioIso qualquer data dentro do bloco de origem
+ * @param {number} n deslocamento em blocos
  */
-export function segmentosPorMes(inicio, fim) {
-  const segs = [];
-  let de = inicio;
-  while (de <= fim) {
-    const [a, m] = de.split("-").map(Number);
-    const ultimoDoMes = fromUTC(new Date(Date.UTC(a, m, 0)));
-    const ate = ultimoDoMes < fim ? ultimoDoMes : fim;
-    segs.push({ ym: `${a}-${pad(m)}`, de, ate });
-    de = somarDias(ate, 1);
-  }
-  return segs;
+export function deslocarSemana(inicioIso, n) {
+  const ord = ordinalBloco(semanaDe(inicioIso)) + Math.trunc(n);
+  const indice = ((ord % 4) + 4) % 4 + 1;
+  const meses = Math.floor(ord / 4);
+  const ano = Math.floor(meses / 12);
+  const mes = (((meses % 12) + 12) % 12) + 1;
+  return semanaDe(`${ano}-${pad(mes)}-${pad(DIA_INICIO_BLOCO[indice])}`).inicio;
 }
 
 // ---------------------------------------------------------------------------
-// VALOR DE UMA SEMANA POR UNIDADE
+// VALOR DE UMA SEMANA (BLOCO) POR UNIDADE
 // ---------------------------------------------------------------------------
 
 /**
- * Diferença entre o acumulado no fim do segmento e o acumulado na véspera do
- * início (0 quando o segmento começa no dia 1 — o acumulado reinicia no mês).
- * `null` quando não há snapshot diário no fim do segmento — nunca 0.
- * @param {Array<object>} linhasDoMes linhas DIÁRIAS da unidade, só do mês do segmento
+ * Diferença entre o acumulado no fim do bloco e o acumulado na véspera do
+ * início (0 quando o bloco começa no dia 1 — o acumulado reinicia no mês).
+ * `null` quando não há snapshot diário no fim do bloco — nunca 0.
+ * @param {Array<object>} linhasDoMes linhas DIÁRIAS da unidade, só do mês do bloco
  */
-function valorDoSegmento(linhasDoMes, de, ate) {
+function valorDoBloco(linhasDoMes, de, ate) {
   const fim = snapshotFinanceiroMaisRecente(linhasDoMes, ate);
   if (!fim || fim.valor_vendas_ifood == null) return null;
   const base = de.slice(8, 10) === "01"
@@ -119,10 +133,10 @@ const SEM_DADO = Object.freeze({
 });
 
 /**
- * Lucratividade de UMA unidade numa semana [inicio..fim], cortada em `ateDataIso`
- * (D-1: a semana em curso mostra só o que já venceu).
+ * Lucratividade de UMA unidade num BLOCO semanal [inicio..fim] (mesmo mês),
+ * cortada em `ateDataIso` (D-1: a semana em curso mostra só o que já venceu).
  *
- * @param {Array<object>} linhas linhas CRUAS da unidade (>= o mês da semana anterior carregado)
+ * @param {Array<object>} linhas linhas CRUAS da unidade (>= o mês do bloco anterior carregado)
  * @param {{ inicio: string, fim: string, ateDataIso?: string|null }} janela
  * @returns {{ faturamento: number|null, confirmado: number|null, provisorio: number|null,
  *   incluiProvisorio: boolean, deducoes: number|null, deducoesPct: number|null,
@@ -135,17 +149,10 @@ export function lucratividadeDaUnidade(linhas, { inicio, fim, ateDataIso = null 
   const diarias = (linhas ?? []).filter((r) => r.origem_lancamento !== "distribuicao_mensal");
   if (!diarias.length) return { ...SEM_DADO };
 
-  const calc = (rows) => {
-    const segs = segmentosPorMes(inicio, fimEfetivo).map(({ ym, de, ate }) =>
-      valorDoSegmento(rows.filter((r) => String(r.data_lancamento).slice(0, 7) === ym), de, ate));
-    if (segs.every((s) => s == null)) return null;
-    const soma = (campo) => segs.reduce((acc, s) => acc + n(s?.[campo]), 0);
-    return {
-      faturamento: soma("faturamento"),
-      deducoes: segs.some((s) => s?.deducoes != null) ? soma("deducoes") : null,
-      receitaLiquida: segs.some((s) => s?.receitaLiquida != null) ? soma("receitaLiquida") : null,
-    };
-  };
+  // O bloco nunca cruza meses -> um único cálculo, só as linhas do mês do bloco.
+  const ym = inicio.slice(0, 7);
+  const calc = (rows) => valorDoBloco(
+    rows.filter((r) => String(r.data_lancamento).slice(0, 7) === ym), inicio, fimEfetivo);
 
   const total = calc(diarias);
   if (!total) return { ...SEM_DADO };

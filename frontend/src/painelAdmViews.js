@@ -62,9 +62,10 @@ export const viewEmpresas = { filtro: "todas", termo: "" };
 export const viewPendencias = { agrupar: "empresa", filtro: "todas", termo: "" };
 /**
  * Aba interna da área Relatórios + escopo dos rankings.
- * `semana`: segunda-feira (AAAA-MM-DD) da semana analisada nas abas Lucratividade
- * e Rentabilidade; `null` = semana corrente (o backend resolve). As demais
- * chaves são preferência de leitura das abas semanais — nenhuma refaz rede.
+ * `semana`: dia de início do BLOCO semanal (AAAA-MM-DD) analisado nas abas
+ * Lucratividade e Rentabilidade — bloco fixo do mês (1: 01–07 · 2: 08–14 ·
+ * 3: 15–21 · 4: 22–fim). `null` = bloco que contém D-1 (o backend resolve). As
+ * demais chaves são preferência de leitura das abas semanais — nenhuma refaz rede.
  */
 export const viewRelatorios = {
   aba: "resumo", escopo: "empresas",
@@ -194,7 +195,7 @@ function pintarRelatorios() {
   ligarRelatorios();
 }
 
-/** Busca o pacote semanal e repinta. Sincroniza `viewRelatorios.semana` com a segunda-feira que o backend resolveu. */
+/** Busca o pacote semanal e repinta. Sincroniza `viewRelatorios.semana` com o início do bloco que o backend resolveu. */
 async function carregarLucratividade() {
   const api = ultimoDados.apiAtual ?? painelAdmApi;
   try {
@@ -1363,8 +1364,10 @@ function abaEvolucao(d, ev) {
 // Duas perguntas gerenciais diferentes, duas abas:
 //   Lucratividade — faturamento + eficiência das deduções (por modelo).
 //   Rentabilidade — quanto sobra depois das deduções do iFood.
-// As duas leem o MESMO pacote /relatorios/lucratividade e a MESMA semana
-// (segunda a domingo). Filtro/busca/ordenação repintam do cache — sem refetch.
+// As duas leem o MESMO pacote /relatorios/lucratividade e o MESMO bloco semanal.
+// A semana é um BLOCO FIXO DO MÊS (1: 01–07 · 2: 08–14 · 3: 15–21 · 4: 22–fim):
+// nunca cruza meses, nunca há Semana 5. Filtro/busca/ordenação repintam do
+// cache — sem refetch.
 
 /** Hoje no fuso local (aproximação — o backend é a autoridade da semana). */
 function hojeIsoLocal() {
@@ -1372,25 +1375,41 @@ function hojeIsoLocal() {
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
-function somarDiasIso(iso, dias) {
-  const [a, m, d] = String(iso).split("-").map(Number);
-  const dt = new Date(Date.UTC(a, m - 1, d + dias));
-  const p = (n) => String(n).padStart(2, "0");
-  return `${dt.getUTCFullYear()}-${p(dt.getUTCMonth() + 1)}-${p(dt.getUTCDate())}`;
-}
-/** Segunda-feira da semana que contém `iso`. */
-export function semanaDe(iso) {
-  const [a, m, d] = String(iso).split("-").map(Number);
-  const off = (new Date(Date.UTC(a, m - 1, d)).getUTCDay() + 6) % 7;
-  const inicio = somarDiasIso(iso, -off);
-  return { inicio, fim: somarDiasIso(inicio, 6) };
-}
-export const deslocarSemana = (inicioIso, n) => somarDiasIso(inicioIso, n * 7);
+const _pad2 = (x) => String(x).padStart(2, "0");
+const _ultimoDiaMes = (ano, mes) => new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+const _DIA_INICIO_BLOCO = { 1: 1, 2: 8, 3: 15, 4: 22 };
 
-/** "07/09 – 13/09/2026". */
+/**
+ * Bloco semanal fixo do mês que contém `iso` (1: 01–07 · 2: 08–14 · 3: 15–21 ·
+ * 4: 22–último dia). Dias 22+ pertencem sempre à Semana 4 — nunca há Semana 5.
+ */
+export function semanaDe(iso) {
+  const [ano, mes, dia] = String(iso).split("-").map(Number);
+  const indice = dia <= 7 ? 1 : dia <= 14 ? 2 : dia <= 21 ? 3 : 4;
+  const d0 = _DIA_INICIO_BLOCO[indice];
+  const df = indice < 4 ? d0 + 6 : _ultimoDiaMes(ano, mes);
+  return { ano, mes, indice, inicio: `${ano}-${_pad2(mes)}-${_pad2(d0)}`, fim: `${ano}-${_pad2(mes)}-${_pad2(df)}` };
+}
+
+/**
+ * Desloca `n` blocos (±). Semana 4 -> Semana 1 do mês seguinte; Semana 1 ->
+ * Semana 4 do mês anterior (inclusive virada de ano). Devolve o `inicio` do bloco alvo.
+ */
+export function deslocarSemana(inicioIso, n) {
+  const b = semanaDe(inicioIso);
+  const ord = ((b.ano * 12) + (b.mes - 1)) * 4 + (b.indice - 1) + Math.trunc(n);
+  const indice = ((ord % 4) + 4) % 4 + 1;
+  const meses = Math.floor(ord / 4);
+  const ano = Math.floor(meses / 12);
+  const mes = (((meses % 12) + 12) % 12) + 1;
+  return semanaDe(`${ano}-${_pad2(mes)}-${_pad2(_DIA_INICIO_BLOCO[indice])}`).inicio;
+}
+
+/** "Semana 2 · 08/09 – 14/09/2026". */
 function fmtIntervaloSemana(sem) {
   if (!sem?.inicio || !sem?.fim) return "—";
-  return `${fmtDataCurta(sem.inicio)} – ${fmtData(sem.fim)}`;
+  const rot = sem.indice ? `Semana ${sem.indice} · ` : "";
+  return `${rot}${fmtDataCurta(sem.inicio)} – ${fmtData(sem.fim)}`;
 }
 
 /** Percentual JÁ em escala 0–100 (convenção da rentabilidade/metas). */
@@ -1405,11 +1424,11 @@ function ppReal(v, { sinal = false } = {}) {
   return `${sinal && n >= 0 ? "+" : ""}${n.toFixed(1).replace(".", ",")} p.p.`;
 }
 
-/** Navegador de semana — substitui a faixa de período mensal nas abas semanais. */
+/** Navegador de bloco semanal — substitui a faixa de período mensal nas abas semanais. */
 function navegadorSemana(luc, estado) {
-  // Antes do 1º fetch usamos a semana calculada no cliente só para o rótulo.
+  // Antes do 1º fetch usamos o bloco calculado no cliente só para o rótulo.
   const local = semanaDe(estado?.semana ?? hojeIsoLocal());
-  const sem = luc?.semana ?? { inicio: local.inicio, fim: local.fim };
+  const sem = luc?.semana ?? local;
   const corrente = luc ? luc.semana?.ehSemanaCorrente : true;
   const podeAvancar = luc ? !!luc.podeAvancar : false;
   return `
@@ -1768,7 +1787,7 @@ export function csvDaLucratividade(luc) {
   const s = luc?.semana ?? {};
   const un = luc?.unidades ?? [];
   L.push(["Painel Administrativo — Lucratividade semanal"]);
-  L.push(["Semana", `${fmtData(s.inicio)} a ${fmtData(s.fim)}`], ["Dados até", fmtData(s.ateData)], []);
+  L.push(["Semana", s.indice ? `Semana ${s.indice} (${fmtData(s.inicio)} a ${fmtData(s.fim)})` : `${fmtData(s.inicio)} a ${fmtData(s.fim)}`], ["Dados até", fmtData(s.ateData)], []);
 
   L.push(["RANKING SEMANAL DE FATURAMENTO (UNIDADES)"]);
   L.push(["Posição", "Unidade", "Empresa", "Modelo", "Faturamento", "Faturamento semana anterior", "Variação %"]);
@@ -1800,7 +1819,7 @@ export function csvDaRentabilidade(luc) {
   const s = luc?.semana ?? {};
   const un = luc?.unidades ?? [];
   L.push(["Painel Administrativo — Rentabilidade semanal"]);
-  L.push(["Semana", `${fmtData(s.inicio)} a ${fmtData(s.fim)}`], ["Dados até", fmtData(s.ateData)], []);
+  L.push(["Semana", s.indice ? `Semana ${s.indice} (${fmtData(s.inicio)} a ${fmtData(s.fim)})` : `${fmtData(s.inicio)} a ${fmtData(s.fim)}`], ["Dados até", fmtData(s.ateData)], []);
 
   L.push(["RANKING DE RENTABILIDADE (UNIDADES)"]);
   L.push(["Posição", "Unidade", "Empresa", "Modelo", "Faturamento", "Deduções R$", "Deduções %", "Receita líquida R$", "Rentabilidade %", "Variação (p.p.)"]);

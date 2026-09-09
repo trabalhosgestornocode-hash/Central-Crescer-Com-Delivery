@@ -146,9 +146,9 @@ export const painelAdmApi = {
     chamar("/relatorios/evolucao" + qs({ mes, organizacaoId })),
 
   /**
-   * Análise SEMANAL (segunda a domingo) da frota — alimenta as abas
-   * Lucratividade e Rentabilidade. `semana` = qualquer data AAAA-MM-DD dentro
-   * da semana desejada; ausente = semana corrente.
+   * Análise por BLOCO SEMANAL FIXO DO MÊS (1: 01–07 · 2: 08–14 · 3: 15–21 ·
+   * 4: 22–fim) da frota — alimenta as abas Lucratividade e Rentabilidade.
+   * `semana` = qualquer data AAAA-MM-DD dentro do bloco; ausente = bloco de D-1.
    */
   relatorioLucratividade: ({ semana } = {}) =>
     chamar("/relatorios/lucratividade" + qs({ semana })),

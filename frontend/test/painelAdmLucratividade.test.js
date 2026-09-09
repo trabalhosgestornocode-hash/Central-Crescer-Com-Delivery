@@ -128,7 +128,7 @@ function LUC() {
   const ctx = (u) => ({ unidadeId: u.unidadeId, nome: u.nome, empresaNome: u.empresaNome, organizacaoId: u.organizacaoId });
   return {
     monitor: "dashboard_ifood",
-    semana: { inicio: "2026-09-07", fim: "2026-09-13", ateData: "2026-09-13", ehSemanaCorrente: false, anterior: { inicio: "2026-08-31", fim: "2026-09-06" } },
+    semana: { ano: 2026, mes: 9, indice: 2, inicio: "2026-09-08", fim: "2026-09-14", ateData: "2026-09-14", ehSemanaCorrente: false, anterior: { ano: 2026, mes: 9, indice: 1, inicio: "2026-09-01", fim: "2026-09-07" } },
     podeAvancar: true,
     rede: { empresasMonitoradas: 10, unidadesMonitoradas: 12, faturamento: 90000, faturamentoAnterior: 85000, variacaoFaturamento: 0.0588, deducoes: 15000, deducoesPct: 16.7, receitaLiquida: 75000, receitaLiquidaAnterior: 70000, variacaoReceitaLiquida: 0.071, rentabilidadeMediaRede: 83.3, rentabilidadeMediaRedeAnterior: 82, variacaoRentabilidadeMediaPp: 1.3 },
     unidades,
@@ -156,11 +156,11 @@ describe("navegação de abas e período", () => {
     assert.ok(iEvo < iLuc && iLuc < iRent, "ordem: Evolução, Lucratividade, Rentabilidade");
   });
 
-  test("o navegador de semana substitui a faixa mensal e mostra o intervalo", () => {
+  test("o navegador de bloco substitui a faixa mensal e mostra Semana N + intervalo", () => {
     const h = V.htmlRelatorios(RELATORIO, EVOLUCAO, estadoLuc(), LUC());
     assert.match(h, /data-padm-semana="anterior"/);
     assert.match(h, /data-padm-semana="proxima"/);
-    assert.match(h, /07\/09\s*–\s*13\/09\/2026/);
+    assert.match(h, /Semana 2 · 08\/09\s*–\s*14\/09\/2026/);
   });
 
   test("nas abas semanais não há botão de PDF (é o relatório mensal)", () => {
@@ -253,12 +253,18 @@ describe("aba Rentabilidade", () => {
   });
 });
 
-describe("helpers de semana", () => {
-  test("semanaDe: segunda a domingo", () => {
-    assert.deepEqual(V.semanaDe("2026-09-09"), { inicio: "2026-09-07", fim: "2026-09-13" });
+describe("helpers de bloco semanal (fixo do mês)", () => {
+  test("semanaDe: 01–07 / 08–14 / 15–21 / 22–fim, nunca Semana 5", () => {
+    assert.deepEqual(V.semanaDe("2026-09-09"), { ano: 2026, mes: 9, indice: 2, inicio: "2026-09-08", fim: "2026-09-14" });
+    assert.equal(V.semanaDe("2026-09-01").indice, 1);
+    assert.equal(V.semanaDe("2026-09-29").indice, 4);
+    assert.equal(V.semanaDe("2026-09-25").fim, "2026-09-30");
+    assert.equal(V.semanaDe("2024-02-25").fim, "2024-02-29");
   });
-  test("deslocarSemana: uma semana para trás cruza o mês", () => {
-    assert.equal(V.deslocarSemana("2026-09-07", -1), "2026-08-31");
+  test("deslocarSemana: Semana 1 -> Semana 4 do mês anterior; Semana 4 -> Semana 1 do seguinte", () => {
+    assert.equal(V.deslocarSemana("2026-09-01", -1), "2026-08-22");
+    assert.equal(V.deslocarSemana("2026-09-22", 1), "2026-10-01");
+    assert.equal(V.deslocarSemana("2026-01-03", -1), "2025-12-22");
   });
 });
 

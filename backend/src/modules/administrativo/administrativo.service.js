@@ -30,7 +30,7 @@ import {
   variacao, variacaoPP, diaEquivalenteNoMesAnterior,
 } from "./administrativo.financeiro.js";
 import {
-  semanaDe, deslocarSemana, somarDias, primeiroDiaDoMes,
+  semanaDe, deslocarSemana, primeiroDiaDoMes,
   lucratividadeDaUnidade, agregarRede, folgaLimite,
 } from "./administrativo.lucratividade.js";
 import { escolherMetas } from "../dashboard-executivo/dashboardExecutivo.metas.service.js";
@@ -1003,7 +1003,7 @@ export async function relatorioExecutivoCompleto({ hojeIso, mes, topN = 10 } = {
 
 const R2 = (v) => (v == null ? null : Math.round(Number(v) * 100) / 100);
 
-/** Valida `AAAA-MM-DD` (qualquer dia dentro da semana desejada). */
+/** Valida `AAAA-MM-DD` (qualquer dia dentro do bloco semanal desejado). */
 function validarDiaSemana(dia) {
   if (dia === undefined || dia === null || String(dia).trim() === "") return null;
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dia).trim());
@@ -1013,6 +1013,13 @@ function validarDiaSemana(dia) {
 
 /**
  * GET /administrativo/relatorios/lucratividade?semana=AAAA-MM-DD
+ *
+ * A semana é um BLOCO FIXO DO MÊS (1: 01–07 · 2: 08–14 · 3: 15–21 · 4: 22–fim) —
+ * nunca cruza meses, nunca há Semana 5. Sem `semana`, usa o bloco que contém
+ * D-1 (o corte D-1 é mantido). A comparação "semana anterior" é o bloco
+ * imediatamente anterior nessa mesma régua (Semana 1 compara com a Semana 4 do
+ * mês anterior); como a Semana 4 varia de 7 a 10 dias, comparam-se os valores
+ * REAIS do período — sem normalizar.
  *
  * A UNIDADE é a entidade ranqueada — cada unidade da frota iFood monitorada
  * disputa posição individualmente. A empresa (`empresaNome`/`organizacaoId`)
@@ -1024,8 +1031,9 @@ function validarDiaSemana(dia) {
 export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) {
   const hoje = hojeIso ?? hojeIsoBrasil();
   const d1 = diaAnterior(hoje);
-  const diaAlvo = validarDiaSemana(semana) ?? hoje;
-  const { inicio, fim } = semanaDe(diaAlvo);
+  const diaAlvo = validarDiaSemana(semana) ?? d1;
+  const alvo = semanaDe(diaAlvo);
+  const { inicio, fim, indice } = alvo;
 
   if (inicio > d1) {
     throw ApiError.badRequest("Esta semana ainda não começou — não há faturamento a analisar.", { codigo: "SEMANA_NAO_VENCIDA" });
@@ -1033,15 +1041,22 @@ export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) 
 
   const ateData = fim <= d1 ? fim : d1;
   const ehSemanaCorrente = inicio <= d1 && d1 <= fim;
-  const antInicio = deslocarSemana(inicio, -1);
-  const antFim = somarDias(antInicio, 6);
+  const anterior = semanaDe(deslocarSemana(inicio, -1));
+  const antInicio = anterior.inicio;
+  const antFim = anterior.fim;
   const podeAvancar = deslocarSemana(inicio, 1) <= d1;
+
+  const semanaOut = {
+    ano: alvo.ano, mes: alvo.mes, indice,
+    inicio, fim, ateData, ehSemanaCorrente,
+    anterior: { ano: anterior.ano, mes: anterior.mes, indice: anterior.indice, inicio: antInicio, fim: antFim },
+  };
 
   const frota = await listarUnidadesElegiveis({ moduloId: MONITOR.modulo }, deps);
   if (!frota.length) {
     return {
       monitor: MONITOR.chave,
-      semana: { inicio, fim, ateData, ehSemanaCorrente, anterior: { inicio: antInicio, fim: antFim } },
+      semana: semanaOut,
       podeAvancar,
       rede: redeVazia(),
       unidades: [],
@@ -1054,7 +1069,8 @@ export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) 
   const [porUnidade, metasLinhas] = await Promise.all([
     carregarLancamentosDaFrota({
       unidadeIds: frota.map((u) => u.unidadeId),
-      desdeIso: primeiroDiaDoMes(somarDias(antInicio, -1)),
+      // do 1º dia do mês do bloco anterior (base do delta) até o fim do bloco atual
+      desdeIso: primeiroDiaDoMes(antInicio),
       ateIso: fim,
     }, deps),
     carregarMetasIndicadores({ organizacaoIds: orgIds }, deps),
@@ -1196,7 +1212,7 @@ export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) 
 
   return {
     monitor: MONITOR.chave,
-    semana: { inicio, fim, ateData, ehSemanaCorrente, anterior: { inicio: antInicio, fim: antFim } },
+    semana: semanaOut,
     podeAvancar,
     rede,
     unidades,
