@@ -4,7 +4,8 @@
 //   - manual        : entrega incluída à mão (deveria ter entrado no iFood)
 //   - taxa_adicional: valor pago a outro entregador de um pedido existente
 //                     (caso Ronaldo/Vitor) — nunca altera o entregador final
-//   - avulso        : serviço sem relação com pedido iFood (buscar pães, etc.)
+//   - avulso        : movimentação operacional sem relação com pedido iFood
+//                     (buscar pães, transferência entre unidades, etc.)
 //
 // NUNCA toca em parser_fd_pedidos (registro bruto do iFood). Soft-delete em
 // tudo; hard delete só via RPC transacional (SuperAdmin). Toda ação passa
@@ -31,7 +32,7 @@ export function paraApiLancamento(row, { entregadorAtual = null, pedidoDisponive
     organizacaoId: row.organizacao_id,
     unidadeId: row.unidade_id,
     origem: row.origem,
-    origemRotulo: { manual: "Manual", taxa_adicional: "Taxa adicional", avulso: "Avulso" }[row.origem] || row.origem,
+    origemRotulo: { manual: "Manual", taxa_adicional: "Taxa adicional", avulso: "Movimentação operacional" }[row.origem] || row.origem,
     pedidoId: row.pedido_id,
     numeroPedido: row.numero_pedido,
     importacaoId: row.importacao_id,
@@ -112,7 +113,7 @@ async function montarLinha({ organizacaoId, unidadeId, body, usuario }) {
   // Vínculo com pedido.
   let pedidoId = body?.pedidoId ? v.uuid(body.pedidoId, "Pedido") : null;
   if (origem === ORIGEM_LANCAMENTO.AVULSO && pedidoId) {
-    throw ApiError.badRequest("Um serviço avulso não pode ser vinculado a um pedido do iFood.");
+    throw ApiError.badRequest("Uma movimentação operacional não pode ser vinculada a um pedido do iFood.");
   }
   const vinculo = await resolverPedidoVinculado({
     organizacaoId, unidadeId, pedidoId,

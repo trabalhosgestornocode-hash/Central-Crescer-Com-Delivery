@@ -39,7 +39,7 @@ const ORIGEM_ROTULO = {
   ifood: { label: "iFood", classe: "muted" },
   manual: { label: "Manual", classe: "info" },
   taxa_adicional: { label: "Taxa adicional", classe: "warn" },
-  avulso: { label: "Avulso", classe: "ok" },
+  avulso: { label: "Movimentação", classe: "ok" },
 };
 const badgeOrigem = (origem) => {
   const o = ORIGEM_ROTULO[origem] || { label: origem || "—", classe: "muted" };
@@ -562,7 +562,7 @@ function renderVisaoGeral(box) {
         <div class="pfd-conc-linha"><span>${badgeOrigem("ifood")} Taxas iFood</span><b>${fmtMoeda(custoReal.ifood)}</b></div>
         ${custoReal.taxasAdicionais ? `<div class="pfd-conc-linha"><span>${badgeOrigem("taxa_adicional")} Taxas adicionais${custoReal.qtdPedidosComTaxaAdicional ? ` (${custoReal.qtdPedidosComTaxaAdicional} ${custoReal.qtdPedidosComTaxaAdicional === 1 ? "pedido" : "pedidos"})` : ""}</span><b>${fmtMoeda(custoReal.taxasAdicionais)}</b></div>` : ""}
         ${custoReal.manuais ? `<div class="pfd-conc-linha"><span>${badgeOrigem("manual")} Lançamentos manuais</span><b>${fmtMoeda(custoReal.manuais)}</b></div>` : ""}
-        ${custoReal.avulsos ? `<div class="pfd-conc-linha"><span>${badgeOrigem("avulso")} Serviços avulsos</span><b>${fmtMoeda(custoReal.avulsos)}</b></div>` : ""}
+        ${custoReal.avulsos ? `<div class="pfd-conc-linha"><span>${badgeOrigem("avulso")} Movimentações operacionais</span><b>${fmtMoeda(custoReal.avulsos)}</b></div>` : ""}
         <div class="pfd-conc-divisor"></div>
         <div class="pfd-conc-linha pfd-conc-final"><span>Custo total com entregadores</span><b>${fmtMoeda(custoReal.total)}</b></div>
       </div>
@@ -1006,7 +1006,7 @@ function wireDrawerCancelamento(p) {
 // (itens 4, 5, 7, 8 do pedido). Avulsos + entregas manuais + taxas
 // adicionais do período. Origem sempre visível.
 // ---------------------------------------------------------------------------
-const FILTROS_ORIGEM_LANC = [["todos", "Todos"], ["taxa_adicional", "Taxa adicional"], ["manual", "Manual"], ["avulso", "Avulso"]];
+const FILTROS_ORIGEM_LANC = [["todos", "Todos"], ["taxa_adicional", "Taxa adicional"], ["manual", "Manual"], ["avulso", "Movimentação operacional"]];
 
 function lancamentosFiltrados() {
   const termo = pfd.filtrosLancamentos.busca.trim().toLowerCase();
@@ -1027,7 +1027,7 @@ function renderLancamentos(box) {
       </div>
       ${podeMexer ? `<div class="ed-acoes" style="gap:8px">
         <button class="btn btn-ghost btn-sm" id="pfd-nova-entrega">${icon("plus", { size: 14 })} Nova entrega</button>
-        <button class="btn btn-primary btn-sm" id="pfd-novo-avulso">${icon("plus", { size: 14 })} Novo serviço avulso</button>
+        <button class="btn btn-primary btn-sm" id="pfd-novo-avulso">${icon("plus", { size: 14 })} Nova movimentação operacional</button>
       </div>` : ""}
     </div>
     <div class="vd-filtros">
@@ -1046,7 +1046,7 @@ function renderLancamentos(box) {
   el("#pfd-lanc-excluidos")?.addEventListener("change", (e) => { pfd.filtrosLancamentos.incluirExcluidos = e.target.checked; renderTabelaLancamentos(); });
   el("#pfd-novo-avulso")?.addEventListener("click", () => abrirLancamentoModal({
     modo: "avulso", catalogos: pfd.catalogos, dataSugerida: pfd.periodo.fim || pfd.periodo.ini,
-    onSalvo: async () => { await recarregarAtual(); toast("Serviço avulso registrado."); },
+    onSalvo: async () => { await recarregarAtual(); toast("Movimentação operacional registrada."); },
   }));
   el("#pfd-nova-entrega")?.addEventListener("click", () => abrirLancamentoModal({
     modo: "manual", catalogos: pfd.catalogos, dataSugerida: pfd.periodo.fim || pfd.periodo.ini,
@@ -1062,7 +1062,7 @@ function renderTabelaLancamentos() {
   const total = (pfd.atual?.resumo?.custoReal?.ajustesManuais) ?? 0;
   if (!lista.length) {
     alvo.innerHTML = vazio("banknote", "Nenhum lançamento no período",
-      podeImportar() ? "Use \"Novo serviço avulso\" ou \"Nova entrega\" para registrar um custo com entregador." : "Nenhum lançamento operacional registrado para este período.");
+      podeImportar() ? "Use \"Nova movimentação operacional\" ou \"Nova entrega\" para registrar um custo com entregador." : "Nenhum lançamento operacional registrado para este período.");
     return;
   }
   alvo.innerHTML = `<div class="tabela-wrap"><table class="grid">

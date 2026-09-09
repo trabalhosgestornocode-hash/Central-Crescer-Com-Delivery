@@ -27,7 +27,7 @@ function resultado(ini, fim, pedidos, lancamentos = []) {
     resumo: { totalPedidos: pedidos.length, entregues: pedidos.length - cancelados, cancelados, canceladosRecebemTaxa: cancelados, canceladosNaoRecebemTaxa: 0, canceladosRevisao: 0, taxasValidas: iaf, taxasBrutas: iaf, taxasDescartadas: 0,
       custoReal: { ifood: iaf, taxasAdicionais: 0, manuais: 0, avulsos: ajustes, ajustesManuais: ajustes, total: iaf + ajustes, qtdPedidosComTaxaAdicional: 0 } } };
 }
-const lancAvulso = { id: "l1", origem: "avulso", origemRotulo: "Avulso", entregadorNome: "Pedro", data: "2026-09-03", valor: 20, motivoRotulo: "Buscar pães", numeroPedido: null, excluido: false, pedidoDisponivel: null };
+const lancAvulso = { id: "l1", origem: "avulso", origemRotulo: "Movimentação operacional", entregadorNome: "Pedro", data: "2026-09-03", valor: 20, motivoRotulo: "Buscar pães", numeroPedido: null, excluido: false, pedidoDisponivel: null };
 const fixtures = {
   "2026-09-01:2026-09-05": resultado("2026-09-01", "2026-09-05", [pedido("cancelado-1", true), pedido("entregue", false), pedido("cancelado-2", true)], [lancAvulso]),
   "2026-09-01:2026-09-01": resultado("2026-09-01", "2026-09-01", [pedido("cancelado-1", true), pedido("entregue", false)]),
@@ -153,14 +153,14 @@ test("resposta antiga não sobrescreve período novo", { skip }, async (t) => {
   assert.match(await page.locator("#pfd-tabela-cancelamentos").textContent(), /cancelado-2/);
 });
 
-test("aba Lançamentos lista avulsos do período e a Visão Geral compõe o custo real", { skip }, async (t) => {
+test("aba Lançamentos lista movimentações do período e a Visão Geral compõe o custo real", { skip }, async (t) => {
   const page = await tela(t);
   await selecionar(page, "2026-09-01", "2026-09-05");
-  // Visão Geral: card de custo total = iFood (30) + avulso (20)
+  // Visão Geral: card de custo total = iFood (30) + movimentação operacional (20)
   assert.match(await page.locator('[data-card="entregadores"] .vd-card-val').textContent(), /50,00/);
   await page.locator('[data-aba="lancamentos"]').click();
   assert.equal(await page.locator("#pfd-tabela-lancamentos tbody tr").count(), 1);
-  assert.match(await page.locator("#pfd-tabela-lancamentos").textContent(), /Avulso/);
+  assert.match(await page.locator("#pfd-tabela-lancamentos").textContent(), /Movimentação/);
   assert.match(await page.locator("#pfd-tabela-lancamentos").textContent(), /Buscar pães/);
   // Pedidos: coluna Origem com badge iFood + ação por linha
   await page.locator('[data-aba="pedidos"]').click();

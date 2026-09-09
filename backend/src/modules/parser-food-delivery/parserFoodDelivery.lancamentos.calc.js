@@ -34,7 +34,7 @@ export const ROTULO_ORIGEM = {
   ifood: "iFood",
   manual: "Manual",
   taxa_adicional: "Taxa adicional",
-  avulso: "Avulso",
+  avulso: "Movimentação operacional",
 };
 
 // Catálogo fechado de motivos — o frontend recebe estes valores por
