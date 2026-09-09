@@ -507,24 +507,20 @@ export function contagensEmpresas(empresas) {
 // FINANCEIRO — dinheiro, cobertura e a sinalização do provisório
 // ---------------------------------------------------------------------------
 
-const BRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
-const BRL_CENTS = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
+// FORMATADOR MONETÁRIO ÚNICO da área Relatórios: sempre 2 casas decimais,
+// padrão pt-BR. `null`/vazio -> "—" (nunca "R$ 0,00" artificial); 0 real -> "R$ 0,00".
+const BRL = new Intl.NumberFormat("pt-BR", {
+  style: "currency", currency: "BRL", minimumFractionDigits: 2, maximumFractionDigits: 2,
+});
 
-/** R$ sem centavos (leitura executiva). `null` -> "—", nunca R$ 0. */
+/** R$ com 2 casas decimais (pt-BR). `null`/vazio/NaN -> "—", nunca "R$ 0,00" artificial. */
 export function fmtDinheiro(v) {
   if (v === null || v === undefined || v === "") return "—";
   const n = Number(v);
   return Number.isFinite(n) ? BRL.format(n) : "—";
 }
 
-/** R$ com centavos — para o relatório e o CSV. */
-export function fmtDinheiroExato(v) {
-  if (v === null || v === undefined || v === "") return "—";
-  const n = Number(v);
-  return Number.isFinite(n) ? BRL_CENTS.format(n) : "—";
-}
-
-/** R$ 4.287.430 -> "R$ 4,3 mi" / "R$ 412,4 mil" — para cartões estreitos. */
+/** R$ 4.287.430 -> "R$ 4,3 mi" / "R$ 412,4 mil" — cartões estreitos da Visão Geral. */
 export function fmtDinheiroCurto(v) {
   if (v === null || v === undefined || v === "") return "—";
   const n = Number(v);
@@ -568,7 +564,7 @@ export function tomVariacao(v, { maiorEhMelhor = true } = {}) {
 export function seloProvisorio(f) {
   if (!f?.incluiProvisorio || !(f.provisorio > 0)) return "";
   return `<span class="padm-provisorio" title="Inclui lançamentos ainda em rascunho. O valor existe, mas pode mudar até ser finalizado.">
-    ${icon("clock", { size: 11 })}${escapeHtml(fmtDinheiroCurto(f.provisorio))} não finalizados
+    ${icon("clock", { size: 11 })}${escapeHtml(fmtDinheiro(f.provisorio))} não finalizados
   </span>`;
 }
 
@@ -640,7 +636,7 @@ export function barrasEvolucao(serie) {
     if (v == null) {
       return `<g><rect x="${(i * L).toFixed(3)}%" y="98" width="${(L * 0.62).toFixed(3)}%" height="2" class="padm-barra padm-barra--vazia"><title>${escapeHtml(fmtData(p.data))} · sem lançamento</title></rect></g>`;
     }
-    return `<g><rect x="${(i * L).toFixed(3)}%" y="${(100 - alt).toFixed(3)}" width="${(L * 0.62).toFixed(3)}%" height="${alt.toFixed(3)}" rx="1" class="padm-barra"><title>${escapeHtml(fmtData(p.data))} · ${escapeHtml(fmtDinheiroExato(v))}</title></rect></g>`;
+    return `<g><rect x="${(i * L).toFixed(3)}%" y="${(100 - alt).toFixed(3)}" width="${(L * 0.62).toFixed(3)}%" height="${alt.toFixed(3)}" rx="1" class="padm-barra"><title>${escapeHtml(fmtData(p.data))} · ${escapeHtml(fmtDinheiro(v))}</title></rect></g>`;
   }).join("");
 
   const rotulos = pontos.map((p, i) => (i % 5 === 0 || i === pontos.length - 1

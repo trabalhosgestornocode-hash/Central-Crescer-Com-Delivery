@@ -15,7 +15,7 @@
 
 import { escapeHtml } from "./utils.js";
 import {
-  fmtPct, fmtNum, fmtData, fmtDataCurta, fmtMesLongo, fmtDinheiro, fmtDinheiroExato,
+  fmtPct, fmtNum, fmtData, fmtDataCurta, fmtMesLongo, fmtDinheiro,
   fmtVariacao, fmtVariacaoPP, fmtDiasPendentes, CATEGORIA_D1, CRITICIDADE, textoCobertura, textoCoberturaCurto,
 } from "./painelAdmUi.js";
 
@@ -327,9 +327,9 @@ export function htmlRelatorioPdf(d, sec = secoesPadrao()) {
       <div class="fin">
         <div class="fin-t">
           <span class="fin-r">Faturamento da rede no período</span>
-          <b class="fin-v">${escapeHtml(fmtDinheiroExato(f.total))}</b>
+          <b class="fin-v">${escapeHtml(fmtDinheiro(f.total))}</b>
           <span class="fin-l">
-            Confirmado <b>${escapeHtml(fmtDinheiroExato(f.confirmado))}</b>
+            Confirmado <b>${escapeHtml(fmtDinheiro(f.confirmado))}</b>
             ${f.provisorio ? ` · ${escapeHtml(textoProvisorio(f))}` : ""}
             ${textoCobertura(f.cobertura) ? ` · Cobertura <b>${escapeHtml(textoCobertura(f.cobertura))}</b>` : ""}
           </span>

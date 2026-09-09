@@ -27,7 +27,7 @@ import {
   CATEGORIA_D1, CRITICIDADE, ORDEM_ACAO, EXPLICACAO_D1, estadoDiaCalendario, rotuloFinanceiroDia,
   realce, seloPendencia, blocoEmpresa, filtroSeveridade, filtrarEmpresas,
   contagensEmpresas, severidadeDe, qtdPendentes, linhaUnidadePendente,
-  fmtDinheiro, fmtDinheiroCurto, fmtDinheiroExato, fmtVariacao, fmtVariacaoPP,
+  fmtDinheiro, fmtDinheiroCurto, fmtVariacao, fmtVariacaoPP,
   tomVariacao, seloProvisorio, textoCobertura, linhaRanking, barrasEvolucao,
 } from "./painelAdmUi.js";
 
@@ -1723,9 +1723,9 @@ export function csvDoRelatorio(d, estado = viewRelatorios) {
   L.push(["D-1", fmtPct(cf.d1)], ["Mês", fmtPct(cf.mes)], ["Dias completos", cf.mesCompleto], ["Dias esperados", cf.mesEsperado], []);
 
   L.push(["FINANCEIRO"]);
-  L.push(["Faturamento total", fmtDinheiroExato(f.total)]);
-  L.push(["Faturamento confirmado", fmtDinheiroExato(f.confirmado)]);
-  L.push(["Faturamento provisório (não finalizado)", fmtDinheiroExato(f.provisorio)]);
+  L.push(["Faturamento total", fmtDinheiro(f.total)]);
+  L.push(["Faturamento confirmado", fmtDinheiro(f.confirmado)]);
+  L.push(["Faturamento provisório (não finalizado)", fmtDinheiro(f.provisorio)]);
   L.push(["Cobertura", textoCobertura(f.cobertura)]);
   if (d?.comparacao?.faturamento) {
     L.push([`Variação vs ${fmtMesLongo(d.comparacao.periodo)} (1–${d.comparacao.diasEquivalentes})`, fmtVariacao(d.comparacao.faturamento.variacao) || "sem base"]);
@@ -1741,17 +1741,17 @@ export function csvDoRelatorio(d, estado = viewRelatorios) {
   };
   bloco("RANKING — FATURAMENTO (EMPRESAS)", r.faturamentoEmpresas,
     ["Posição", "Empresa", "Faturamento", "Confirmado", "Provisório", "Cobertura", "Conformidade"],
-    (i) => [i.posicao, i.nome, fmtDinheiroExato(i.faturamento?.total), fmtDinheiroExato(i.faturamento?.confirmado),
-            fmtDinheiroExato(i.faturamento?.provisorio), textoCobertura(i.cobertura), fmtPct(i.conformidadeMes)]);
+    (i) => [i.posicao, i.nome, fmtDinheiro(i.faturamento?.total), fmtDinheiro(i.faturamento?.confirmado),
+            fmtDinheiro(i.faturamento?.provisorio), textoCobertura(i.cobertura), fmtPct(i.conformidadeMes)]);
   bloco("RANKING — FATURAMENTO (UNIDADES)", r.faturamentoUnidades,
     ["Posição", "Unidade", "Empresa", "Faturamento", "Cobertura", "Conformidade"],
-    (i) => [i.posicao, i.nome, i.empresaNome, fmtDinheiroExato(i.faturamento?.total), textoCobertura(i.cobertura), fmtPct(i.conformidadeMes)]);
+    (i) => [i.posicao, i.nome, i.empresaNome, fmtDinheiro(i.faturamento?.total), textoCobertura(i.cobertura), fmtPct(i.conformidadeMes)]);
   bloco("RANKING — CONFORMIDADE", r.conformidadeEmpresas,
     ["Posição", "Empresa", "Conformidade", "Faturamento"],
-    (i) => [i.posicao, i.nome, fmtPct(i.conformidadeMes), fmtDinheiroExato(i.faturamento?.total)]);
+    (i) => [i.posicao, i.nome, fmtPct(i.conformidadeMes), fmtDinheiro(i.faturamento?.total)]);
   bloco("MAIOR ATENÇÃO NECESSÁRIA", r.atencaoEmpresas,
     ["Posição", "Empresa", "Conformidade", "Faturamento"],
-    (i) => [i.posicao, i.nome, fmtPct(i.conformidadeMes), fmtDinheiroExato(i.faturamento?.total)]);
+    (i) => [i.posicao, i.nome, fmtPct(i.conformidadeMes), fmtDinheiro(i.faturamento?.total)]);
   bloco("PRIORIDADES — EMPRESAS COM PENDÊNCIA", d?.prioridades?.empresas,
     ["Empresa", "Unidades pendentes", "Críticas", "Atenção", "Pendência mais antiga", "Prioridade"],
     (e) => [e.empresaNome, e.unidadesPendentes, e.criticas, e.atencao, fmtData(e.pendenciaMaisAntiga), e.piorUnidade?.unidadeNome ?? ""]);
@@ -1792,8 +1792,8 @@ export function csvDaLucratividade(luc) {
   L.push(["RANKING SEMANAL DE FATURAMENTO (UNIDADES)"]);
   L.push(["Posição", "Unidade", "Empresa", "Modelo", "Faturamento", "Faturamento semana anterior", "Variação %"]);
   un.forEach((u, i) => L.push([
-    i + 1, u.nome, u.empresaNome, u.modeloLogisticoRotulo ?? "", fmtDinheiroExato(u.faturamento),
-    fmtDinheiroExato(u.faturamentoAnterior), csvFrac(u.variacaoFaturamento),
+    i + 1, u.nome, u.empresaNome, u.modeloLogisticoRotulo ?? "", fmtDinheiro(u.faturamento),
+    fmtDinheiro(u.faturamentoAnterior), csvFrac(u.variacaoFaturamento),
   ]));
   L.push([]);
 
@@ -1809,7 +1809,7 @@ export function csvDaLucratividade(luc) {
   L.push(["10 MENORES FATURAMENTOS (UNIDADES)"]);
   L.push(["Unidade", "Empresa", "Faturamento", "Variação %", "Posição geral"]);
   (luc?.atencao?.menorFaturamento ?? []).forEach((u) => L.push([
-    u.nome, u.empresaNome, fmtDinheiroExato(u.faturamento), csvFrac(u.variacaoFaturamento), u.posicaoGeral ?? "",
+    u.nome, u.empresaNome, fmtDinheiro(u.faturamento), csvFrac(u.variacaoFaturamento), u.posicaoGeral ?? "",
   ]));
   return montarCsv(L);
 }
@@ -1824,22 +1824,22 @@ export function csvDaRentabilidade(luc) {
   L.push(["RANKING DE RENTABILIDADE (UNIDADES)"]);
   L.push(["Posição", "Unidade", "Empresa", "Modelo", "Faturamento", "Deduções R$", "Deduções %", "Receita líquida R$", "Rentabilidade %", "Variação (p.p.)"]);
   un.forEach((u, i) => L.push([
-    i + 1, u.nome, u.empresaNome, u.modeloLogisticoRotulo ?? "", fmtDinheiroExato(u.faturamento), fmtDinheiroExato(u.deducoes),
-    csvPct(u.deducoesPct), fmtDinheiroExato(u.receitaLiquida), csvPct(u.rentabilidadePct), csvPct(u.variacaoRentabilidadePp),
+    i + 1, u.nome, u.empresaNome, u.modeloLogisticoRotulo ?? "", fmtDinheiro(u.faturamento), fmtDinheiro(u.deducoes),
+    csvPct(u.deducoesPct), fmtDinheiro(u.receitaLiquida), csvPct(u.rentabilidadePct), csvPct(u.variacaoRentabilidadePp),
   ]));
   L.push([]);
 
   L.push(["OPERAÇÕES QUE EXIGEM ATENÇÃO — 10 MENORES EM FATURAMENTO (UNIDADES)"]);
   L.push(["Unidade", "Empresa", "Faturamento", "Rentabilidade %", "Variação %", "Posição geral"]);
   (luc?.atencao?.menorFaturamento ?? []).forEach((u) => L.push([
-    u.nome, u.empresaNome, fmtDinheiroExato(u.faturamento), csvPct(u.rentabilidadePct), csvFrac(u.variacaoFaturamento), u.posicaoGeral ?? "",
+    u.nome, u.empresaNome, fmtDinheiro(u.faturamento), csvPct(u.rentabilidadePct), csvFrac(u.variacaoFaturamento), u.posicaoGeral ?? "",
   ]));
   L.push([]);
 
   L.push(["OPERAÇÕES QUE EXIGEM ATENÇÃO — 10 MENORES EM RENTABILIDADE (UNIDADES)"]);
   L.push(["Unidade", "Empresa", "Faturamento", "Receita líquida R$", "Rentabilidade %", "Posição geral"]);
   (luc?.atencao?.menorRentabilidade ?? []).forEach((u) => L.push([
-    u.nome, u.empresaNome, fmtDinheiroExato(u.faturamento), fmtDinheiroExato(u.receitaLiquida), csvPct(u.rentabilidadePct), u.posicaoGeral ?? "",
+    u.nome, u.empresaNome, fmtDinheiro(u.faturamento), fmtDinheiro(u.receitaLiquida), csvPct(u.rentabilidadePct), u.posicaoGeral ?? "",
   ]));
   return montarCsv(L);
 }

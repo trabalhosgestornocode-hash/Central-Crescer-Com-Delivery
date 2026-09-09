@@ -144,20 +144,20 @@ const EVOLUCAO = {
 // 1) confirmado x provisório — a decisão do gestor, visível
 // ===========================================================================
 describe("separação confirmado / provisório", () => {
-  test("o resumo mostra total, confirmado e provisório, os três", () => {
+  test("o resumo mostra total, confirmado e provisório, os três — SEMPRE com centavos", () => {
     const h = V.htmlRelatorios(RELATORIO, EVOLUCAO, { aba: "resumo", escopo: "empresas" });
-    assert.match(h, /R\$\s*28\.500/);
+    assert.match(h, /R\$\s*28\.500,00/);
     assert.match(h, /Confirmado/);
-    assert.match(h, /R\$\s*28\.200/);
+    assert.match(h, /R\$\s*28\.200,00/);
     assert.match(h, /Provisório/);
-    assert.match(h, /R\$\s*300/);
+    assert.match(h, /R\$\s*300,00/);
   });
 
-  test("o selo de provisório aparece e explica, sem tom de erro", () => {
+  test("o selo de provisório aparece com valor exato (2 casas), sem tom de erro", () => {
     const h = UI.seloProvisorio({ provisorio: 18200, incluiProvisorio: true });
     assert.match(h, /padm-provisorio/);
     assert.match(h, /não finalizados/i);
-    assert.match(h, /18,2 mil/);
+    assert.match(h, /R\$\s*18\.200,00/);
     assert.ok(!/erro|falha|inválid/i.test(h), "rascunho é estado operacional, não erro");
   });
 
@@ -403,15 +403,28 @@ describe("faixa financeira na Visão Geral", () => {
 // ===========================================================================
 // 8) formatação de dinheiro
 // ===========================================================================
-describe("formatação de dinheiro", () => {
-  test("null vira '—', nunca R$ 0", () => {
-    assert.equal(UI.fmtDinheiro(null), "—");
-    assert.equal(UI.fmtDinheiroCurto(null), "—");
-    assert.equal(UI.fmtDinheiroExato(undefined), "—");
-    assert.match(UI.fmtDinheiro(0), /R\$\s*0/, "zero real continua sendo zero");
+describe("formatação de dinheiro — fmtDinheiro, helper ÚNICO da área Relatórios", () => {
+  test("sempre 2 casas decimais no padrão pt-BR (só apresentação, não arredonda o dado)", () => {
+    assert.equal(UI.fmtDinheiro(153632), "R$ 153.632,00");
+    assert.equal(UI.fmtDinheiro(153632.47), "R$ 153.632,47");
+    assert.equal(UI.fmtDinheiro(228320), "R$ 228.320,00");
+    assert.equal(UI.fmtDinheiro(25584.37), "R$ 25.584,37");
   });
 
-  test("forma curta para cartões estreitos", () => {
+  test("zero real -> R$ 0,00 ; null/vazio/NaN -> '—' (nunca R$ 0,00 artificial)", () => {
+    assert.equal(UI.fmtDinheiro(0), "R$ 0,00");
+    assert.equal(UI.fmtDinheiro(null), "—");
+    assert.equal(UI.fmtDinheiro(undefined), "—");
+    assert.equal(UI.fmtDinheiro(""), "—");
+    assert.equal(UI.fmtDinheiro("abc"), "—");
+  });
+
+  test("fmtDinheiroExato foi consolidado em fmtDinheiro (não existe mais)", () => {
+    assert.equal(UI.fmtDinheiroExato, undefined);
+  });
+
+  test("forma curta (só Visão Geral) continua abreviando", () => {
+    assert.equal(UI.fmtDinheiroCurto(null), "—");
     assert.equal(UI.fmtDinheiroCurto(4287430), "R$ 4,3 mi");
     assert.equal(UI.fmtDinheiroCurto(412350), "R$ 412,4 mil");
   });

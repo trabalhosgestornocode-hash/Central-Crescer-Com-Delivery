@@ -317,9 +317,9 @@ describe("6/7/8) faturamento e rankings", () => {
 // 9) provisório positivo e negativo
 // ===========================================================================
 describe("9) ajuste provisório com sinal", () => {
-  test("positivo -> 'inclui R$ X provisórios'", () => {
+  test("positivo -> 'inclui R$ X provisórios' (com centavos)", () => {
     const h = doc();
-    assert.match(h, /inclui R\$\s*185\.430 provisórios/);
+    assert.match(h, /inclui R\$\s*185\.430,00 provisórios/);
   });
 
   test("negativo -> 'ajuste provisório de -R$ X', nunca 'não finalizado'", () => {
