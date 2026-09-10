@@ -12,7 +12,7 @@ import {
   snapshotFinanceiroMaisRecente, listaSnapshotsFinanceiros, listaDesempenhoDiario, novosClientesAcumulados, ultimoDesempenhoConhecido,
   desempenhoParaTicketMedio,
   confiabilidadeProjecao,
-  inconsistencias, STATUS_DIA, indicadorAplicavel, statusIndicadorRentabilidade,
+  inconsistencias, STATUS_DIA, indicadorAplicavel, classificarCamposExtrasMensal, statusIndicadorRentabilidade,
   totalDeducoesIndicador, metasComProtecaoPrecificacao, saldoMeta,
   distribuirValorMensal, distribuirQuantidadeMensal, recalcularDistribuicaoMensal,
 } from "./dashboardExecutivo.calc.js";
@@ -512,7 +512,7 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
   // extra além de buscar o lote em si.
   const loteMensal = await buscarLoteMensalDoMes({ unidadeId, ano, mes });
   const linhasDoLote = loteMensal ? linhas.filter((r) => r.distribuicao_mensal_id === loteMensal.id) : [];
-  const lancamentoMensal = montarResumoLoteMensal(loteMensal, linhasDoLote);
+  const lancamentoMensal = montarResumoLoteMensal(loteMensal, linhasDoLote, modelo.modeloLogistico);
 
   return {
     protecaoPrecificacao,
@@ -1395,8 +1395,14 @@ async function buscarLoteMensalDoMes({ unidadeId, ano, mes }) {
  * `distribuirQuantidadeMensal` é sempre exatamente igual ao total original
  * (ver dashboardExecutivo.calc.js), então não há uma segunda fonte de
  * verdade para divergir.
+ *
+ * `modeloLogistico` decide a APLICABILIDADE de cada campo extra: um campo que
+ * nem existe no modelo da unidade (ex.: "taxas de entregadores" no Full
+ * Service) nunca entra em `camposPendentes` — é listado à parte em
+ * `camposNaoAplicaveis`. "Não aplicável" ≠ "faltando" ≠ "zero" (ver
+ * dashboardExecutivo.calc.js#campoExtraMensalAplicavel / INDICADORES_POR_MODELO).
  */
-function montarResumoLoteMensal(lote, linhasDoLote) {
+function montarResumoLoteMensal(lote, linhasDoLote, modeloLogistico) {
   if (!lote) return null;
   const somaNulavel = (coluna) => {
     const valores = linhasDoLote.map((r) => r[coluna]).filter((x) => x != null);
@@ -1404,7 +1410,11 @@ function montarResumoLoteMensal(lote, linhasDoLote) {
   };
   const extras = {};
   for (const [campo] of CAMPOS_EXTRAS_MENSAL) extras[campo] = somaNulavel(COLUNA_DIARIA_EXTRA[campo]);
-  const camposPendentes = CAMPOS_EXTRAS_MENSAL.filter(([campo]) => extras[campo] == null).map(([campo]) => campo);
+  // Aplicabilidade + preenchimento: fonte única em calc.js. Um campo que não
+  // existe no modelo logístico da unidade (ex.: entregadores no Full Service)
+  // nunca vira "pendência" — vai para `camposNaoAplicaveis`.
+  const { pendentes: camposPendentes, naoAplicaveis: camposNaoAplicaveis } =
+    classificarCamposExtrasMensal(CAMPOS_EXTRAS_MENSAL, extras, modeloLogistico);
   const valorTotalMensal = lote.valor_total_centavos / 100;
 
   return {
@@ -1425,6 +1435,7 @@ function montarResumoLoteMensal(lote, linhasDoLote) {
     // ("Não informado" no frontend), nunca 0.
     ticketMedio: ticketMedio(extras.valorVendasBrutoTotal, extras.qtdVendasTotal),
     camposPendentes,
+    camposNaoAplicaveis,
     criadoEm: lote.created_at,
     criadoPor: { id: lote.usuario_id ?? null, nome: lote.usuario_nome ?? null, email: lote.usuario_email ?? null },
     atualizadoEm: lote.updated_at ?? lote.created_at,
@@ -1461,7 +1472,15 @@ export async function obterLancamentoMensal({ organizacaoId, unidadeIdSessao, un
     .from(TABELA).select("*").eq("distribuicao_mensal_id", lote.id).order("data_lancamento");
   if (error) throw ApiError.internal(error.message);
 
-  return { existe: true, ...montarResumoLoteMensal(lote, linhasDoLote ?? []) };
+  // Modelo logístico da unidade (fonte canônica: unidades.modelo_logistico_ifood)
+  // — decide quais campos extras são "não aplicáveis" e não devem virar pendência.
+  const modelo = await obterModeloLogistico({ unidadeId, organizacaoId });
+  return {
+    existe: true,
+    modeloLogistico: modelo.modeloLogistico,
+    modeloLogisticoRotulo: modelo.modeloLogisticoRotulo,
+    ...montarResumoLoteMensal(lote, linhasDoLote ?? [], modelo.modeloLogistico),
+  };
 }
 
 export async function lancamentoMensal({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, usuario, dados: body, confirmar }) {
@@ -1588,6 +1607,17 @@ export async function atualizarLancamentoMensal({ organizacaoId, unidadeIdSessao
   const unidadeId = await resolverUnidadeAlvo({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado: unidadeIdSolicitado ?? lote.unidade_id, exigirEspecifica: true });
   if (lote.unidade_id !== unidadeId) throw ApiError.forbidden("Você não tem acesso a este lançamento.");
 
+  // Modelo logístico da unidade (fonte canônica: unidades.modelo_logistico_ifood)
+  // — decide a aplicabilidade dos campos extras no resumo devolvido (um campo
+  // que não existe no modelo nunca vira "pendência"; ver montarResumoLoteMensal).
+  const modelo = await obterModeloLogistico({ unidadeId, organizacaoId });
+  const resumo = (loteArg, linhasArg) => ({
+    existe: true,
+    modeloLogistico: modelo.modeloLogistico,
+    modeloLogisticoRotulo: modelo.modeloLogisticoRotulo,
+    ...montarResumoLoteMensal(loteArg, linhasArg, modelo.modeloLogistico),
+  });
+
   const { data: linhas, error: eLinhas } = await supabase
     .from(TABELA).select("*").eq("distribuicao_mensal_id", loteId).order("data_lancamento");
   if (eLinhas) throw ApiError.internal(eLinhas.message);
@@ -1616,7 +1646,7 @@ export async function atualizarLancamentoMensal({ organizacaoId, unidadeIdSessao
 
   // Nada foi de fato enviado (PUT vazio) — devolve o estado atual sem tocar no banco.
   if (!campoInformado(b, "valorTotalMensal") && !Object.keys(patchExtras).length) {
-    return { existe: true, ...montarResumoLoteMensal(lote, linhas) };
+    return resumo(lote, linhas);
   }
 
   const { valorTotalMensal: valorNovo, extras: extrasNovos, fatiasPorCampo } =
@@ -1630,7 +1660,7 @@ export async function atualizarLancamentoMensal({ organizacaoId, unidadeIdSessao
   }
   if (!Object.keys(camposAlterados).length) {
     // Reenviou os mesmos valores já salvos — nada mudou de fato.
-    return { existe: true, ...montarResumoLoteMensal(lote, linhas) };
+    return resumo(lote, linhas);
   }
 
   const resultados = await Promise.all(linhas.map((linha, i) => {
@@ -1668,7 +1698,7 @@ export async function atualizarLancamentoMensal({ organizacaoId, unidadeIdSessao
     .from(TABELA).select("*").eq("distribuicao_mensal_id", loteId).order("data_lancamento");
   if (eFinal) throw ApiError.internal(eFinal.message);
 
-  return { existe: true, ...montarResumoLoteMensal(loteAtualizado, linhasFinal ?? []) };
+  return resumo(loteAtualizado, linhasFinal ?? []);
 }
 
 // ---------------------------------------------------------------------------

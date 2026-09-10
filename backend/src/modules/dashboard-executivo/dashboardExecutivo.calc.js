@@ -621,16 +621,34 @@ export function listaDesempenhoDiario(dias, linhas) {
 }
 
 /**
- * Último acumulado mensal conhecido de novos clientes. É a leitura canônica
- * usada por Desempenho, cards e histórico; toda a seleção de linhas continua
- * delegada a `listaDesempenhoDiario` (inclusive a exclusão de distribuições
- * mensais estimadas).
+ * Novos clientes do mês — leitura canônica usada por Desempenho, cards e
+ * histórico. Mesma prioridade de fontes que `snapshotFinanceiroMaisRecente`
+ * (Financeiro) e `desempenhoParaTicketMedio` (Ticket Médio):
+ *
+ * 1) Lançamento diário REAL: o último acumulado mensal conhecido da série
+ *    (`listaDesempenhoDiario` já ignora as fatias de "Lançamento Mensal").
+ * 2) Sem NENHUM lançamento diário real com novos clientes no recorte: soma de
+ *    volta as fatias do Lançamento Mensal (`origem_lancamento ===
+ *    'distribuicao_mensal'`). A distribuição foi desenhada pra somar
+ *    exatamente o total que o franqueado informou (ver
+ *    `distribuirQuantidadeMensal`), então isto reconstrói o valor mensal
+ *    oficial — nunca "856 × dias" nem qualquer duplicação da grade diária.
+ *
+ * Nunca mistura as duas fontes: real sempre vence o distribuído, mesmo que o
+ * distribuído seja mais recente. Distingue ausência de dado (`null`) de
+ * "0 novos clientes" (fatias todas 0 somam 0, não `null`).
  * @returns {number|null}
  */
 export function novosClientesAcumulados(dias, linhas) {
   const ultimo = [...listaDesempenhoDiario(dias, linhas)]
     .reverse().find((p) => p.novosClientes != null);
-  return ultimo?.novosClientes ?? null;
+  if (ultimo?.novosClientes != null) return ultimo.novosClientes;
+
+  const fatias = (linhas ?? [])
+    .filter((r) => r.origem_lancamento === "distribuicao_mensal")
+    .map((r) => r.novos_clientes)
+    .filter((valor) => valor != null);
+  return fatias.length ? fatias.reduce((soma, valor) => soma + Number(valor), 0) : null;
 }
 
 /**
@@ -773,6 +791,59 @@ export const INDICADORES_POR_MODELO = {
  */
 export function indicadorAplicavel(modelo, indicador) {
   return (INDICADORES_POR_MODELO[modelo] ?? INDICADORES_POR_MODELO.full_service).includes(indicador);
+}
+
+/**
+ * Campos "extra" do lançamento mensal cuja EXISTÊNCIA depende do modelo
+ * logístico — mapeados para o indicador de rentabilidade que os governa. Um
+ * campo ausente deste mapa vale para todos os modelos (faturamento, pedidos,
+ * novos clientes, ajustes…). Só "taxas de entregadores" é condicional: quem
+ * entrega no Full Service é o parceiro do iFood, então esse campo NÃO EXISTE
+ * nesse modelo (mesma regra canônica de `INDICADORES_POR_MODELO`).
+ * @type {Record<string, string>}
+ */
+export const INDICADOR_DO_CAMPO_EXTRA_MENSAL = {
+  taxasEntregadoresTotal: "taxas_entregadores",
+};
+
+/**
+ * Um campo "extra" do lançamento mensal se aplica à unidade? `true` se o
+ * campo não é governado por modelo, ou se o indicador que o governa é
+ * aplicável ao modelo logístico da unidade. Usado para NÃO listar como
+ * "dado complementar pendente" um campo que sequer existe nesse modelo
+ * (ex.: taxas de entregadores no Full Service — é "não aplicável", nunca
+ * "faltando").
+ * @param {string} campo — chave camelCase (ex.: "taxasEntregadoresTotal")
+ * @param {string} modeloLogistico
+ * @returns {boolean}
+ */
+export function campoExtraMensalAplicavel(campo, modeloLogistico) {
+  const indicador = INDICADOR_DO_CAMPO_EXTRA_MENSAL[campo];
+  return indicador == null || indicadorAplicavel(modeloLogistico, indicador);
+}
+
+/**
+ * Classifica os campos "extra" de um lançamento mensal, para o aviso "Dados
+ * complementares pendentes". Fonte ÚNICA da regra (backend chama, testes
+ * cobrem aqui):
+ *  - `pendentes`: o campo SE APLICA ao modelo logístico E não foi informado
+ *    (`null`/`undefined`). `0` é um valor real informado — nunca é pendência.
+ *  - `naoAplicaveis`: o campo não existe nesse modelo (ex.: taxas de
+ *    entregadores no Full Service) — "não aplicável", nunca "faltando".
+ * Campo aplicável e informado (inclusive com 0) não entra em nenhuma lista.
+ * @param {Array<[string, ...unknown[]]>} camposExtras — pares cujo 1º item é a chave do campo, na ordem de exibição
+ * @param {Record<string, number|null|undefined>} extras — total por campo (soma das fatias diárias; `null` = não informado)
+ * @param {string} modeloLogistico
+ * @returns {{pendentes: string[], naoAplicaveis: string[]}}
+ */
+export function classificarCamposExtrasMensal(camposExtras, extras, modeloLogistico) {
+  const pendentes = [];
+  const naoAplicaveis = [];
+  for (const [campo] of camposExtras ?? []) {
+    if (!campoExtraMensalAplicavel(campo, modeloLogistico)) { naoAplicaveis.push(campo); continue; }
+    if (extras?.[campo] == null) pendentes.push(campo);
+  }
+  return { pendentes, naoAplicaveis };
 }
 
 /**
