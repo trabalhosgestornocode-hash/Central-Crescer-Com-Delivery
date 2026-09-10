@@ -38,6 +38,7 @@ export const TELAS_PADM = [
   { id: "diario",      label: "Monitoramento Diário", icone: "calendar" },
   { id: "pendencias",  label: "Pendências",           icone: "alert-triangle" },
   { id: "empresas",    label: "Empresas",             icone: "building" },
+  { id: "mentorados",  label: "Rede de Associados",   icone: "users" },
   { id: "relatorios",  label: "Relatórios",           icone: "archive" },
   { id: 'desenvolvimento', label: 'Agenda de Demandas', icone: 'calendar' },
 ];
@@ -60,6 +61,9 @@ export function resetFiltrosDiario() {
  */
 export const viewEmpresas = { filtro: "todas", termo: "" };
 export const viewPendencias = { agrupar: "empresa", filtro: "todas", termo: "" };
+/** Busca (nome/e-mail) da tela "Rede de Associados" — preferência de leitura, não refaz rede.
+ *  (nomes internos seguem `mentorados`: id da aba, rota /mentorados, funções.) */
+export const viewMentorados = { termo: "" };
 /**
  * Aba interna da área Relatórios + escopo dos rankings.
  * `semana`: dia de início do BLOCO semanal (AAAA-MM-DD) analisado nas abas
@@ -81,6 +85,7 @@ export function resetSecoesPdf() { Object.assign(secoesPdf, secoesPadrao()); }
 export function resetFiltrosIdentificacao() {
   viewEmpresas.filtro = "todas"; viewEmpresas.termo = "";
   viewPendencias.agrupar = "empresa"; viewPendencias.filtro = "todas"; viewPendencias.termo = "";
+  viewMentorados.termo = "";
   viewRelatorios.aba = "resumo"; viewRelatorios.escopo = "empresas";
   viewRelatorios.semana = null;
   viewRelatorios.lucModelo = "todos"; viewRelatorios.lucBusca = "";
@@ -99,7 +104,7 @@ let nav = { abrirEmpresa() {}, abrirUnidade() {}, irParaTela() {}, voltar() {}, 
 export function ligarNavegacao(ganchos) { nav = { ...nav, ...ganchos }; }
 
 /** Silhueta de carregamento por tipo de tela. */
-const FORMA_SK = { calendario: "calendario", pendencias: "lista", empresas: "lista", diario: "lista" };
+const FORMA_SK = { calendario: "calendario", pendencias: "lista", empresas: "lista", diario: "lista", mentorados: "lista" };
 const formaDe = (entrada) =>
   entrada.tipo === "calendario" ? "calendario" : (FORMA_SK[entrada.id] ?? "painel");
 
@@ -148,6 +153,9 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
     } else if (entrada.id === "empresas") {
       ultimoDados.empresas = await api.empresas({ mes });
       pintarEmpresas();
+    } else if (entrada.id === "mentorados") {
+      ultimoDados.mentorados = await api.mentorados();
+      pintarMentorados();
     } else {
       v.innerHTML = htmlVisaoGeral(await api.visaoGeral({ mes }));
       ligarLista();
@@ -169,7 +177,7 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
  */
 const ultimoDados = {
   empresas: null, pendencias: null, relatorio: null, evolucao: null, mesAtivo: null, apiAtual: null,
-  lucratividade: null, semanaCarregada: null,
+  lucratividade: null, semanaCarregada: null, mentorados: null,
 };
 
 /** `true` para as abas semanais (Lucratividade / Rentabilidade). */
@@ -981,6 +989,199 @@ function cabecalhoDetalhe({ voltar, titulo, selo = "", sub = "" }) {
       <div class="padm-detalhe-titulo"><h2>${escapeHtml(titulo)}</h2>${selo}</div>
       ${sub ? `<p class="padm-detalhe-sub">${escapeHtml(sub)}</p>` : ""}
     </div>`;
+}
+
+// ===========================================================================
+// 5b. REDE DE ASSOCIADOS — contas da plataforma + vínculos (somente leitura)
+//     (nome interno: "mentorados" — id da aba, rota, funções e classes CSS)
+// ===========================================================================
+//
+// Consome GET /administrativo/mentorados (mesma leitura do Painel SuperAdmin,
+// exposta ao Painel Administrativo). NENHUMA ação administrativa aqui: só
+// consulta. A busca (nome/e-mail) é client-side — são poucas contas e o gestor
+// não deve pagar latência por filtrar o que já veio.
+
+const contadorVinculos = (n) => `${fmtNum(n)} vínculo${Number(n) === 1 ? "" : "s"}`;
+const plural = (n, singular, plur) => `${fmtNum(n)} ${Number(n) === 1 ? singular : plur}`;
+
+function linhaMentorado(m, termo) {
+  const n = m?.totalVinculos ?? 0;
+  return `
+    <li class="padm-ment-linha${m?.contaAtiva === false ? " padm-ment-linha--inativa" : ""}">
+      <span class="padm-ment-id">
+        <b>${realce(m?.nome ?? "—", termo)}</b>
+        <small>${realce(m?.email ?? "—", termo)}</small>
+        ${m?.multiPerfil ? `<span class="padm-ment-multi">${escapeHtml(String(m.perfis?.length ?? 0))} perfis nesta conta</span>` : ""}
+      </span>
+      <span class="padm-ment-vinc">
+        <span class="padm-ment-contagem">${contadorVinculos(n)}</span>
+        <small>${plural(m?.totalEmpresas ?? 0, "empresa", "empresas")}${(m?.totalUnidades ?? 0) > 0 ? ` · ${plural(m.totalUnidades, "unidade", "unidades")}` : ""}</small>
+      </span>
+      <span class="padm-ment-acao">
+        <button type="button" class="btn btn-ghost btn-sm" data-padm-ment-ver="${escapeHtml(m?.id ?? "")}"
+          ${n > 0 ? "" : "disabled"}>Ver vínculos</button>
+      </span>
+    </li>`;
+}
+
+/** @param {{mentorados: Array<object>, total: number}} d */
+export function htmlMentorados(d, estado = viewMentorados) {
+  const todos = d?.mentorados ?? [];
+  const termoBruto = (estado.termo ?? "").trim();
+  const termo = normalizarBusca(termoBruto);
+  const visiveis = termo
+    ? todos.filter((m) => normalizarBusca(`${m.nome ?? ""} ${m.email ?? ""}`).includes(termo))
+    : todos;
+
+  const cabecalho = `
+    <header class="padm-ment-head">
+      <div>
+        <h2>Rede de Associados</h2>
+        <p>Acompanhe os associados vinculados às empresas e unidades da Crescer com Delivery.</p>
+      </div>
+      <span class="padm-selo padm-selo--ok padm-ment-total">${fmtNum(todos.length)} ${todos.length === 1 ? "associado" : "associados"}</span>
+    </header>`;
+
+  if (!todos.length) {
+    return `${cabecalho}${vazio(
+      "Nenhum associado vinculado",
+      "Assim que uma conta for associada a uma empresa ou unidade, ela aparece aqui.",
+      { tom: "muted", icone: "users" },
+    )}`;
+  }
+
+  const corpo = visiveis.length
+    ? `<ul class="padm-ment-lista">${visiveis.map((m) => linhaMentorado(m, termo)).join("")}</ul>`
+    : vazio(
+        `Nada encontrado para "${escapeHtml(termoBruto)}"`,
+        "A busca cobre nome e e-mail.",
+        { tom: "muted", icone: "inbox" },
+      );
+
+  return `
+    ${cabecalho}
+    <div class="padm-barra-id">
+      ${busca("padm-busca-mentorados", "Buscar por nome ou e-mail", estado.termo)}
+      <span class="padm-ment-visiveis">${fmtNum(visiveis.length)} de ${fmtNum(todos.length)}</span>
+    </div>
+    ${secao({
+      titulo: "Contas vinculadas",
+      icone: "users",
+      sub: "Toque em “Ver vínculos” para as empresas e unidades de cada conta",
+      corpo,
+    })}`;
+}
+
+function pintarMentorados() {
+  const v = view();
+  if (!v || !ultimoDados.mentorados) return;
+  v.innerHTML = htmlMentorados(ultimoDados.mentorados, viewMentorados);
+  ligarMentorados();
+}
+
+function ligarMentorados() {
+  const inp = el("#padm-busca-mentorados");
+  if (inp) {
+    let t;
+    inp.addEventListener("input", () => {
+      clearTimeout(t);
+      const valor = inp.value;
+      t = setTimeout(() => {
+        viewMentorados.termo = valor;
+        pintarMentorados();
+        const novo = el("#padm-busca-mentorados");
+        if (novo) { novo.focus(); novo.setSelectionRange?.(valor.length, valor.length); }
+      }, 160);
+    });
+  }
+  els("[data-padm-ment-ver]").forEach((b) =>
+    b.addEventListener("click", () => abrirDrawerVinculos(b.dataset.padmMentVer)));
+}
+
+// ---- Drawer lateral: "Vínculos de <nome>" ---------------------------------
+
+/** Grupo de uma empresa dentro do drawer. */
+function blocoVinculoEmpresa(g, multiPerfil) {
+  const statusChip = g.empresaStatus && g.empresaStatus !== "ativa"
+    ? chip({ classe: "muted", rotulo: rotuloStatusOrg(g.empresaStatus) })
+    : "";
+  const tags = multiPerfil && g.perfilNomes?.length
+    ? `<span class="padm-vinc-perfis">${g.perfilNomes.map((p) => `<span class="padm-chip padm-chip--muted">perfil ${escapeHtml(p)}</span>`).join("")}</span>`
+    : "";
+  const papel = g.associacaoDireta
+    ? `<span class="padm-vinc-papel">Acesso à empresa${g.papelRotulo ? ` · ${escapeHtml(g.papelRotulo)}` : ""}</span>`
+    : `<span class="padm-vinc-papel padm-vinc-papel--indireta">Acesso apenas a unidades</span>`;
+  const unidades = g.unidades?.length
+    ? `<ul class="padm-vinc-unidades">${g.unidades.map((u) => `
+        <li>
+          <span>${escapeHtml(u.unidadeNome ?? "—")}</span>
+          ${u.papelRotulo ? `<small>${escapeHtml(u.papelRotulo)}</small>` : ""}
+          ${multiPerfil && u.perfilNome ? `<small class="padm-vinc-uperfil">perfil ${escapeHtml(u.perfilNome)}</small>` : ""}
+        </li>`).join("")}</ul>`
+    : `<p class="padm-vinc-semuni">Sem unidade específica — acesso no nível da empresa.</p>`;
+
+  return `
+    <section class="padm-vinc-grupo">
+      <header>
+        <span class="padm-vinc-emp">${icon("building", { size: 14 })}<b>${escapeHtml(g.empresaNome ?? "—")}</b>${statusChip}</span>
+        ${papel}
+      </header>
+      ${tags}
+      ${unidades}
+    </section>`;
+}
+
+/** @param {object} m um item de `mentorados` */
+export function htmlDrawerVinculos(m) {
+  if (!m) return "";
+  const multi = !!m.multiPerfil;
+  const perfis = multi
+    ? `<div class="padm-vinc-contaperfis">
+         <span class="padm-vinc-rot">Perfis nesta conta</span>
+         <span>${m.perfis.map((p) => `<span class="padm-chip padm-chip--${p.ativo === false ? "muted" : "ok"}">${escapeHtml(p.nome)}</span>`).join("")}</span>
+       </div>`
+    : "";
+  const grupos = (m.vinculos ?? []).map((g) => blocoVinculoEmpresa(g, multi)).join("");
+
+  return `
+    <div class="padm-modal-fundo" data-padm-acao="fechar-vinculos"></div>
+    <aside class="padm-drawer" role="dialog" aria-modal="true" aria-labelledby="padm-vinc-tit">
+      <header class="padm-modal-head">
+        <div>
+          <h2 id="padm-vinc-tit">Vínculos de ${escapeHtml(m.nome ?? "—")}</h2>
+          <p>${escapeHtml(m.email ?? "—")} · ${contadorVinculos(m.totalVinculos ?? 0)}</p>
+        </div>
+        <button class="padm-modal-x" data-padm-acao="fechar-vinculos" aria-label="Fechar">✕</button>
+      </header>
+      <div class="padm-drawer-corpo">
+        ${perfis}
+        ${grupos || vazio("Sem vínculos", "Esta conta não está associada a nenhuma empresa ou unidade.", { tom: "muted", icone: "inbox" })}
+      </div>
+    </aside>`;
+}
+
+let onEscVinculos = null;
+
+export function abrirDrawerVinculos(id) {
+  const m = (ultimoDados.mentorados?.mentorados ?? []).find((x) => x.id === id);
+  if (!m) return;
+  const cx = caixaModal();
+  if (!cx) return;
+  cx.hidden = false;
+  cx.classList.add("padm-modal-wrap--drawer");
+  cx.innerHTML = htmlDrawerVinculos(m);
+  els('[data-padm-acao="fechar-vinculos"]').forEach((b) => b.addEventListener("click", fecharDrawerVinculos));
+  onEscVinculos = (e) => { if (e.key === "Escape") fecharDrawerVinculos(); };
+  try { document.addEventListener("keydown", onEscVinculos); } catch { /* fake DOM */ }
+}
+
+export function fecharDrawerVinculos() {
+  const cx = caixaModal();
+  if (!cx) return;
+  cx.hidden = true;
+  cx.classList.remove("padm-modal-wrap--drawer");
+  cx.innerHTML = "";
+  if (onEscVinculos) { try { document.removeEventListener("keydown", onEscVinculos); } catch { /* fake DOM */ } onEscVinculos = null; }
 }
 
 // ===========================================================================

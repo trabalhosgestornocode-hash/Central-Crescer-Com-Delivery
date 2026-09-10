@@ -270,7 +270,8 @@ function tituloDoTopo() {
 
 function renderPadmAtual() {
   const seletor = el('#padm-cabecalho .padm-periodo');
-  if (seletor) seletor.hidden = topo().id === 'desenvolvimento';
+  // Telas sem recorte de período (não olham "um mês por vez").
+  if (seletor) seletor.hidden = ['desenvolvimento', 'mentorados'].includes(topo().id);
   const titulo = el("#padm-titulo");
   if (titulo) titulo.textContent = tituloDoTopo();
   return renderViewPadm(topo(), { api: apiAtual, mes: periodo().ym });

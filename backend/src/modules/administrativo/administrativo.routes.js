@@ -51,6 +51,11 @@ administrativoRouter.get("/empresas", c.empresas);            // antes de /empre
 administrativoRouter.get("/empresas/:organizacaoId", c.detalheEmpresa);
 administrativoRouter.get("/unidades/:unidadeId/calendario", c.calendarioUnidade);
 
+// ---- Mentorados: contas da plataforma + vínculos empresa/unidade, só leitura.
+// Mesma autorização do módulo (`requirePainelAdministrativo`); nenhuma ação
+// administrativa do SuperAdmin é exposta. Ver administrativo.mentorados.js.
+administrativoRouter.get("/mentorados", c.mentorados);
+
 // ---- Desbloqueio administrativo de um dia do Dashboard iFood (migration 068).
 //
 // PRIMEIRA e ÚNICA escrita deste router — o resto continua somente leitura. A

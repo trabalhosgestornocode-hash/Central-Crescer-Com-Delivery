@@ -20,6 +20,7 @@
 import { asyncHandler } from "../../shared/asyncHandler.js";
 import { identidadeOperacional } from "../../shared/identidade.js";
 import * as service from "./administrativo.service.js";
+import { listarMentorados } from "./administrativo.mentorados.js";
 
 const ok = (res, data, status = 200) => res.status(status).json({ data });
 
@@ -83,6 +84,16 @@ export const detalheEmpresa = asyncHandler(async (req, res) =>
 // GET /administrativo/unidades/:unidadeId/calendario?mes=YYYY-MM
 export const calendarioUnidade = asyncHandler(async (req, res) =>
   ok(res, await service.calendarioUnidade({ unidadeId: req.params.unidadeId, mes: req.query.mes, hojeIso: hoje(req) }, deps(req))));
+
+// --------------------------------------------------------------- Mentorados
+//
+// Somente leitura. Consolida contas + vínculos empresa/unidade — a mesma
+// leitura do Painel SuperAdmin, exposta ao Painel Administrativo. Nenhuma ação
+// administrativa é alcançável por aqui.
+
+// GET /administrativo/mentorados
+export const mentorados = asyncHandler(async (req, res) =>
+  ok(res, await listarMentorados({}, deps(req))));
 
 // ------------------------------------------------- Financeiro / Relatorios
 

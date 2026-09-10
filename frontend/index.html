@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Crescer com Delivery — Plataforma de Gestão</title>
-  <link rel="icon" type="image/png" href="/assets/logo-crescercomdeliverylogin.png" />
+  <link rel="icon" type="image/jpeg" href="/assets/logo-crescer-central.jpeg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <!-- ?v= força o navegador a baixar o CSS novo após um deploy (evita tela antiga em cache).
        Incremente este número sempre que mudar o styles.css. -->
-  <link rel="stylesheet" href="/src/styles.css?v=28" />
+  <link rel="stylesheet" href="/src/styles.css?v=30" />
   <link rel="stylesheet" href="/src/desenvolvimento.css?v=1" />
   <link rel="stylesheet" href="/src/performance.css?v=2" />
   <!-- Tema individual (por dispositivo): aplica antes da pintura p/ evitar flash.
@@ -157,7 +157,7 @@
   <div id="selecao-screen" class="sel-screen" hidden>
     <div class="sel-wrap sel-wrap--largo">
       <header class="sel-head">
-        <img class="sel-brand-logo" src="/assets/logo-crescercomdeliverylogin.png" alt="Crescer com Delivery" />
+        <img class="sel-brand-logo" src="/assets/logo-crescer-central.jpeg" alt="Crescer com Delivery" />
         <h1 class="sel-titulo">Escolha um ambiente para continuar</h1>
         <p class="sel-sub">Olá, <b id="sel-nome">—</b>.</p>
         <p id="sel-contagem" class="sel-contagem" hidden></p>
@@ -167,8 +167,11 @@
            efetivo (associação explícita ou SuperAdmin por bypass). É outro
            ambiente, não um card de empresa: visual destacado, texto próprio. -->
       <button id="sel-painel-adm" class="btn sel-btn-ambiente" hidden>
-        <span class="sel-btn-ambiente-ic" aria-hidden="true">📊</span>
-        <span>Acessar Painel Administrativo</span>
+        <span class="sel-btn-ambiente-txt">Acessar Painel Administrativo</span>
+        <svg class="sel-btn-ambiente-seta" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true">
+          <path d="M5 12h14M13 6l6 6-6 6" />
+        </svg>
       </button>
 
       <div id="sel-busca-wrap" class="sel-busca-wrap" hidden>
@@ -196,7 +199,7 @@
   <div id="selecao-perfil-screen" class="sel-screen" hidden>
     <div class="sel-wrap sel-wrap--estreito">
       <header class="sel-head">
-        <img class="sel-brand-logo" src="/assets/logo-crescercomdeliverylogin.png" alt="Crescer com Delivery" />
+        <img class="sel-brand-logo" src="/assets/logo-crescer-central.jpeg" alt="Crescer com Delivery" />
         <h1 class="sel-titulo">Selecione seu usuário</h1>
         <p class="sel-sub">Conta <b id="selp-conta">—</b></p>
       </header>
@@ -479,7 +482,7 @@
 
     <aside class="padm-sidebar">
       <div class="padm-brand">
-        <img class="padm-brand-mark" src="/assets/logo-crescercomdeliverylogin.png" alt="Crescer com Delivery" />
+        <img class="padm-brand-mark" src="/assets/logo-crescer-central.jpeg" alt="Crescer com Delivery" />
         <span class="padm-brand-txt">
           <b>Painel Administrativo</b>
           <small>Crescer com Delivery</small>

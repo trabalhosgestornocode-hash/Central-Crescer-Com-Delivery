@@ -50,7 +50,7 @@ export const nomeArquivoPdf = (periodo) =>
  * domínio real, nunca localhost.
  */
 export const LOGO_URL = (typeof location !== "undefined" && location.origin ? location.origin : "")
-  + "/assets/logo-crescercomdeliverylogin.png";
+  + "/assets/logo-crescer-central.jpeg";
 
 const dataHoraBR = (iso) => {
   const d = iso ? new Date(iso) : new Date();

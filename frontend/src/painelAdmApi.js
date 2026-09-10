@@ -84,6 +84,13 @@ export const painelAdmApi = {
   /** Só unidades não-em-dia. Ordem (CRÍTICO → mais antigo → ATENÇÃO) vem pronta. */
   pendencias: ({ mes } = {}) => chamar("/pendencias" + qs({ mes })),
 
+  /**
+   * Mentorados: contas da plataforma + vínculos empresa/unidade já
+   * consolidados. Somente leitura. Não usa `mes` — não é um dado do período.
+   * A busca por nome/e-mail é client-side (poucas contas).
+   */
+  mentorados: () => chamar("/mentorados"),
+
   /** Rollup por organização (conformidade = Σ/Σ). */
   empresas: ({ mes } = {}) => chamar("/empresas" + qs({ mes })),
 

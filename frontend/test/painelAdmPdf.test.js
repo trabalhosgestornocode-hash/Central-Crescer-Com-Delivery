@@ -184,7 +184,7 @@ describe("1) o relatório usa o período selecionado", () => {
 
   test("a capa usa a LOGO OFICIAL, o mesmo asset do favicon", () => {
     const h = doc();
-    assert.match(h, /assets\/logo-crescercomdeliverylogin\.png/);
+    assert.match(h, /assets\/logo-crescer-central\.jpeg/);
     assert.match(h, /class="capa-logo"/);
     // object-fit: contain -> nunca deforma
     assert.match(PDF.cssRelatorioPdf(), /\.capa-logo\s*\{[^}]*object-fit:\s*contain/s);
@@ -192,7 +192,7 @@ describe("1) o relatório usa o período selecionado", () => {
 
   test("a URL da logo sai pela ORIGEM — nunca um localhost fixo", () => {
     assert.ok(!/localhost|127\.0\.0\.1|:5599/.test(PDF.LOGO_URL), "nada de host fixo");
-    assert.match(PDF.LOGO_URL, /\/assets\/logo-crescercomdeliverylogin\.png$/);
+    assert.match(PDF.LOGO_URL, /\/assets\/logo-crescer-central\.jpeg$/);
   });
 
   test("a impressão espera as imagens carregarem", () => {
