@@ -88,6 +88,8 @@ function fakeDb(estado) {
       lte(c, v) { ctx.lte = { col: c, v }; return b; },
       insert(payload) { pendente = { tipo: "insert", payload }; return b; },
       update(payload) { pendente = { tipo: "update", payload }; return b; },
+      order() { return b; },
+      range(de, ate) { const r = aplicar(); return Promise.resolve(Array.isArray(r.data) ? { ...r, data: r.data.slice(de, ate + 1) } : r); },
       single() { const r = aplicar(); return Promise.resolve(Array.isArray(r.data) ? { data: r.data[0] ?? null, error: r.error } : r); },
       maybeSingle() { const r = aplicar(); return Promise.resolve(Array.isArray(r.data) ? { data: r.data[0] ?? null, error: r.error } : r); },
       then(res, rej) { return Promise.resolve(aplicar()).then(res, rej); },

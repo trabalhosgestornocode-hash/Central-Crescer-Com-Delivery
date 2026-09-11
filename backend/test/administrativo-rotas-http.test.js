@@ -42,6 +42,7 @@ function fakeDb(estado) {
     const b = {
       select: () => b, eq: (c, v) => (ctx.eq.push([c, v]), b), in: (c, vals) => (ctx.inF = { col: c, vals }, b),
       gte: (c, v) => (ctx.gte = { col: c, v }, b), lte: (c, v) => (ctx.lte = { col: c, v }, b),
+      order: () => b, range: (de, ate) => run(false).then((r) => ({ ...r, data: (r.data ?? []).slice(de, ate + 1) })),
       maybeSingle: () => run(true), then: (res, rej) => run(false).then(res, rej),
     };
     return b;

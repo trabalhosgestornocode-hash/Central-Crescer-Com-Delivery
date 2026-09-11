@@ -47,6 +47,23 @@ const emLotes = (arr, n = LOTE_IN) => {
   return out;
 };
 
+// PostgREST também tem um limite de LINHAS por resposta (1000 por padrão) —
+// silencioso: passar do limite não dá erro, só devolve uma página truncada.
+// Um lote de unidades × 2 meses de lançamentos passa fácil de 1000 linhas
+// (era o bug: unidades com o dia preenchido apareciam como "sequência
+// bloqueada" porque a linha do lançamento tinha sido cortada da resposta).
+// Mesmo padrão de `performance.repo.js#paginar` — pagina com `.range()` até a
+// página vir menor que 1000.
+async function paginar(factory) {
+  const linhas = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await factory().range(offset, offset + 999);
+    if (error) throw ApiError.internal(error.message);
+    linhas.push(...(data ?? []));
+    if ((data ?? []).length < 1000) return linhas;
+  }
+}
+
 /**
  * Universo MONITORADO de um monitor: unidades que
  *   * estão ATIVAS (`unidades.ativo = true`),
@@ -137,9 +154,11 @@ export async function obterOrganizacaoOperacional(organizacaoId, deps = {}) {
 }
 
 /**
- * Lançamentos de VÁRIAS unidades num intervalo — UMA query por lote de
- * unidades (nunca por unidade). Devolve só as colunas que `statusMes`/a
- * projeção usam.
+ * Lançamentos de VÁRIAS unidades num intervalo — em lote por unidades (nunca
+ * `for unidade: SELECT`), com PAGINAÇÃO por lote (`paginar`) porque um lote de
+ * até 200 unidades × 2 meses passa fácil das 1000 linhas do PostgREST — sem
+ * paginar, a resposta vem truncada em silêncio e some lançamento real da
+ * conta. Devolve só as colunas que `statusMes`/a projeção usam.
  * @param {{ unidadeIds: string[], desdeIso: string, ateIso: string }} p
  * @param {{ supabase?: any }} [deps]
  * @returns {Promise<Map<string, Array<{data_lancamento: string, status: string, situacao: string, valor_vendas_ifood: number|null}>>>}
@@ -150,13 +169,13 @@ export async function carregarLancamentosDaFrota({ unidadeIds, desdeIso, ateIso 
   if (!unidadeIds.length) return porUnidade;
 
   for (const lote of emLotes(unidadeIds)) {
-    const { data, error } = await db.from(TABELA_LANC)
+    const data = await paginar(() => db.from(TABELA_LANC)
       .select(COLUNAS_LANC)
       .in("unidade_id", lote)
       .gte("data_lancamento", desdeIso)
-      .lte("data_lancamento", ateIso);
-    if (error) throw ApiError.internal(error.message);
-    for (const row of data ?? []) {
+      .lte("data_lancamento", ateIso)
+      .order("unidade_id").order("data_lancamento"));
+    for (const row of data) {
       const lista = porUnidade.get(row.unidade_id);
       if (lista) lista.push(row);
     }

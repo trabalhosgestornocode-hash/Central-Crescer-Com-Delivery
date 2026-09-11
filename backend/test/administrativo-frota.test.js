@@ -62,6 +62,8 @@ function fakeDb(estado) {
       in(c, vals) { ctx.inFiltro = { col: c, vals }; return b; },
       gte(c, v) { ctx.gte = { col: c, v }; return b; },
       lte(c, v) { ctx.lte = { col: c, v }; return b; },
+      order() { return b; },
+      range(de, ate) { return run(false).then((r) => ({ ...r, data: (r.data ?? []).slice(de, ate + 1) })); },
       maybeSingle() { return run(true); },
       then(res, rej) { return run(false).then(res, rej); },
     };
@@ -348,6 +350,10 @@ describe("I) conformidade da EMPRESA = Σcompletos / Σesperados (nunca média d
 
 describe("N+1 / performance", () => {
   test("nº de queries NÃO cresce com o nº de unidades (10 vs 60 unidades -> mesma contagem)", async () => {
+    // Só setembro (14 dias/unidade) — fica bem abaixo das 1000 linhas do
+    // PostgREST nos dois casos, então a paginação (`paginar`, ver repo) não
+    // entra em jogo e a comparação prova só o que ela deve provar: nº de
+    // queries não escala com o nº de UNIDADES (nunca `for unidade: SELECT`).
     const mk = (nOrgs, nUniPorOrg) => {
       const st = { organizacoes: [], unidades: [], organizacao_modulos: [], unidade_modulos: [], lancamentos_financeiros_diarios: [] };
       for (let o = 0; o < nOrgs; o++) {
@@ -358,20 +364,20 @@ describe("N+1 / performance", () => {
           const uid = `${oid}u${u}`;
           st.unidades.push(uni(uid, oid, `U ${o}.${u}`));
           st.unidade_modulos.push({ unidade_id: uid, modulo_id: MOD });
-          st.lancamentos_financeiros_diarios.push(...preenche(uid, "2026-08-01", "2026-08-31"), ...preenche(uid, "2026-09-01", D1));
+          st.lancamentos_financeiros_diarios.push(...preenche(uid, "2026-09-01", D1));
         }
       }
       return st;
     };
-    const db1 = fakeDb(mk(2, 5));   // 10 unidades
-    const db2 = fakeDb(mk(6, 10));  // 60 unidades
+    const db1 = fakeDb(mk(2, 5));   // 10 unidades -> 140 linhas
+    const db2 = fakeDb(mk(6, 10));  // 60 unidades -> 840 linhas
     await visaoGeral({ hojeIso: HOJE }, { supabase: db1 });
     await visaoGeral({ hojeIso: HOJE }, { supabase: db2 });
     assert.equal(db1.__contador.queries, db2.__contador.queries, "N+1: contagem de queries mudou com o nº de unidades");
     assert.ok(db1.__contador.queries <= 6, `esperado <= 6 queries, veio ${db1.__contador.queries}`);
   });
 
-  test("100 unidades × ~31 dias — consolida a Visão Geral em tempo linear", async () => {
+  test("100 unidades × ~31 dias — consolida a Visão Geral em tempo linear e pagina os lançamentos", async () => {
     const st = { organizacoes: [], unidades: [], organizacao_modulos: [], unidade_modulos: [], lancamentos_financeiros_diarios: [] };
     for (let o = 0; o < 20; o++) {
       const oid = `o${o}`;
@@ -392,10 +398,37 @@ describe("N+1 / performance", () => {
     const ms = performance.now() - t0;
     assert.equal(r.resumo.unidadesMonitoradas, 100);
     assert.equal(r.resumo.empresasMonitoradas, 20);
-    assert.ok(db.__contador.queries <= 6, `queries: ${db.__contador.queries}`);
+    // ~4500 lançamentos — passa das 1000 linhas por página do PostgREST, então
+    // `carregarLancamentosDaFrota` PAGINA (`paginar`, ver administrativo.repo.js)
+    // em vez de arriscar devolver uma resposta truncada (era exatamente o bug:
+    // uma unidade com o dia preenchido sumia da resposta e o painel a marcava
+    // como "sequência bloqueada" para sempre). 4 queries fixas (catálogos de
+    // módulo + organizações + unidades) + 1 página de 1000 linhas por lote.
+    const paginas = Math.ceil(st.lancamentos_financeiros_diarios.length / 1000);
+    assert.equal(db.__contador.queries, 4 + paginas, `queries: ${db.__contador.queries}`);
     assert.ok(ms < 500, `consolidação levou ${ms.toFixed(0)}ms (esperado < 500ms para 100×~45 dias)`);
-    // ~2600 lançamentos carregados numa query; ~14 não realizados no D-1
     assert.ok(r.resumo.naoRealizadasD1 > 0 && r.resumo.naoRealizadasD1 < 30);
+  });
+
+  test("lote de unidades cujos lançamentos passam de 1000 linhas -> NENHUM lançamento real fica de fora", async () => {
+    // Regressão do bug relatado: uma unidade com o dia preenchido aparecia
+    // como "sequência bloqueada" porque a resposta em lote vinha truncada em
+    // 1000 linhas (limite padrão do PostgREST) e a unidade caía depois do
+    // corte. 30 unidades × 45 dias = 1350 linhas > 1000 numa única `.in(...)`.
+    const st = { organizacoes: [org("o1", "Org 1")], unidades: [], organizacao_modulos: [{ organizacao_id: "o1", modulo_id: MOD }], unidade_modulos: [], lancamentos_financeiros_diarios: [] };
+    for (let u = 0; u < 30; u++) {
+      const uid = `u${u}`;
+      st.unidades.push(uni(uid, "o1", `Unidade ${u}`));
+      st.unidade_modulos.push({ unidade_id: uid, modulo_id: MOD });
+      st.lancamentos_financeiros_diarios.push(...preenche(uid, "2026-08-01", "2026-08-31"), ...preenche(uid, "2026-09-01", D1));
+    }
+    assert.ok(st.lancamentos_financeiros_diarios.length > 1000, "fixture precisa passar de 1000 linhas para provar a paginação");
+    const r = await visaoGeral({ hojeIso: HOJE }, { supabase: fakeDb(st) });
+    assert.equal(r.resumo.unidadesMonitoradas, 30);
+    // Todas as 30 unidades preencheram até o D-1 -> nenhuma pode aparecer como
+    // crítica/bloqueada por causa de uma linha perdida na truncagem.
+    assert.equal(r.resumo.criticas, 0, "nenhuma unidade deveria estar crítica — todo o período foi preenchido");
+    assert.equal(r.resumo.concluidasD1, 30);
   });
 });
 
