@@ -18,6 +18,7 @@ import { parserFoodDeliveryRouter } from "./modules/parser-food-delivery/parserF
 import { agenteRouter } from "./modules/agente/agente.routes.js";
 import { inteligenciaRouter } from "./modules/inteligencia/inteligencia.routes.js";
 import { unidadeRouter } from "./modules/unidade/unidade.routes.js";
+import { realtimeRouter } from "./modules/realtime/realtime.routes.js";
 
 // Todas as rotas daqui já passaram por `requireAuth` (aplicado em app.js).
 // O que este arquivo decide é a SEGUNDA camada, e ela divide a API em mundos
@@ -74,6 +75,7 @@ tenant.use("/dashboard-executivo", requireModulo(MODULOS.IFOOD_DASHBOARD), dashb
 tenant.use("/bonificacao-mensal", requireModulo(MODULOS.MONTHLY_BONUS), bonificacaoMensalRouter);
 tenant.use("/usuarios", usuariosRouter);   // infraestrutura do tenant, não um módulo contratável
 tenant.use("/unidade", unidadeRouter);     // idem — config real da unidade (tabelas comerciais)
+tenant.use("/realtime", realtimeRouter);   // idem — credencial de canal Realtime do contexto atual
 tenant.use("/vendas", requireModulo(MODULOS.SALES), vendasRouter);
 tenant.use("/integracoes/martin-brower", requireModulo(MODULOS.MARTIN_BROWER), martinBrowerRouter);
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);

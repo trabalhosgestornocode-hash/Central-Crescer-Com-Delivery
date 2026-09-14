@@ -12,6 +12,7 @@ import { renderBonificacaoMensal } from "./bonificacaoMensal.js";
 import { renderParserFoodDelivery } from "./parserFoodDelivery.js";
 import { renderAgente } from "./agente.js";
 import { sincronizarContextoPainel } from "./agentePainel.js";
+import { resetScrollLock } from "./scrollLock.js";
 
 /**
  * Um item da sidebar está liberado para a empresa do contexto atual?
@@ -49,6 +50,11 @@ export function irPara(rotaId) {
 
 // Renderiza a view da rota atual (chamado também após (re)carregar dados)
 export function renderRotaAtual() {
+  // Rede de segurança global: toda troca de rota do app do tenant zera
+  // qualquer trava de scroll pendente (ver scrollLock.js) — mesmo que a tela
+  // que travou não tenha passado pelo próprio fechar(). Sem isso, um overlay
+  // esquecido travado deixava a rolagem presa até o F5.
+  resetScrollLock();
   const item = MENU.find((m) => m.id === state.rota) || MENU[0];
 
   // Defesa em profundidade: o menu já esconde o que a empresa não contratou

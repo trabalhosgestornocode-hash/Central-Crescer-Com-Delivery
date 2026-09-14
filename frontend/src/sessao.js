@@ -176,6 +176,11 @@ export async function restaurarSessao() {
 }
 
 export async function logout() {
+  // Avisa quem precisa desligar por causa do logout (hoje: o RealtimeManager
+  // — ver realtime/realtimeManager.js) ANTES de qualquer coisa: nenhum outro
+  // módulo aqui precisa conhecer Realtime, só reagir ao mesmo padrão de
+  // evento DOM já usado por app:sessao-expirada/app:contexto-invalido.
+  document.dispatchEvent(new CustomEvent("app:logout"));
   // Revoga o contexto no servidor ANTES de derrubar o login: depois do signOut
   // não haveria mais Access Token para autenticar a chamada, e a sessão de
   // contexto ficaria viva até expirar.

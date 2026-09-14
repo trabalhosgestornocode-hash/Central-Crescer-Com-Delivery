@@ -16,7 +16,9 @@ import {
   linhaEvolucao, linhaFinanceiroAcumulado, linhaDeducoesAcumuladas, barraComparativoMensal, visaoAnual,
 } from "./charts.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./contextoEscopo.js";
-import { abrirLancamentoModal } from "./dashboardExecutivoForm.js";
+import { abrirLancamentoModal, avisarAlteracaoExterna } from "./dashboardExecutivoForm.js";
+import { registrarInteresse } from "./realtime/realtimeBus.js";
+import { EVENTOS_DASHBOARD_IFOOD, RESINCRONIZACAO } from "./realtime/realtimeEvents.js";
 import { abrirLancamentoMensalModal } from "./dashboardExecutivoMensal.js";
 import { montarSimuladorPreco } from "./dashboardExecutivoSimulador.js";
 import { icon } from "./icons.js";
@@ -91,6 +93,113 @@ registrarResetDeContexto(() => {
   dex.dadosMes = null;
   dex.historico = null;
   destruirGraficosDashboardExecutivo();
+});
+
+// ---------------------------------------------------------------------------
+// REALTIME (Etapa 2 — piloto) — Dashboard iFood como primeiro módulo
+// funcional a usar a infraestrutura da Etapa 1.
+//
+// NÃO reconstrói nada: um evento relevante só chama `carregarConteudo()`/
+// `renderHistorico()`, os MESMOS caminhos que "salvar" já usa via `onSalvo`
+// — cálculo, cards, gráficos, calendário e indicadores continuam vindo de
+// lá, sem duplicação nenhuma aqui.
+//
+// Nunca chama `.channel()`/fala com o Realtime diretamente — só
+// `realtimeBus.registrarInteresse`, o padrão central da Etapa 1.
+// ---------------------------------------------------------------------------
+
+/** Janela de coalescing: qualquer atualização (local OU remota) suprime a
+ * próxima atualização remota que chegar pouco depois. Resolve dois casos com
+ * o mesmo mecanismo simples: (1) o dispositivo que salvou não refaz o fetch
+ * de novo só porque recebeu o eco do próprio Broadcast; (2) uma rajada de
+ * eventos (lançamento mensal, duas edições quase juntas) não gera uma
+ * cascata de GETs — só o primeiro dispara, o resto cai dentro da janela.
+ * Contrapartida aceita: uma mudança GENUÍNA de outro dispositivo dentro dessa
+ * janela pode demorar até `JANELA_SUPRIMIR_REFRESH_MS` pra aparecer aqui —
+ * nunca fica permanentemente desatualizado, só atrasado por poucos segundos. */
+const JANELA_SUPRIMIR_REFRESH_MS = 3000;
+let ultimaAtualizacaoEm = 0;
+const marcarAtualizacaoAgora = () => { ultimaAtualizacaoEm = Date.now(); };
+const atualizacaoRecente = () => Date.now() - ultimaAtualizacaoEm < JANELA_SUPRIMIR_REFRESH_MS;
+
+/** Só para teste: zera a janela de coalescing, para que testes de relevância
+ * em sequência (cada um bem abaixo de 3s) não sejam suprimidos pelo refresh
+ * do teste anterior — mesmo padrão de `realtimeBus.js#_resetParaTeste`. */
+export function _resetCoalescingParaTeste() { ultimaAtualizacaoEm = 0; }
+
+/** Eventos que podem descrever a MESMA entidade que um formulário tem aberto
+ * — só edição/exclusão; criação sempre é uma entidade NOVA (nunca colide
+ * com o id de um lançamento que já estava aberto). */
+const EVENTOS_QUE_PODEM_CONFLITAR_COM_FORMULARIO = new Set([
+  EVENTOS_DASHBOARD_IFOOD.LANCAMENTO_ATUALIZADO,
+  EVENTOS_DASHBOARD_IFOOD.LANCAMENTO_EXCLUIDO,
+]);
+
+/** O contexto (empresa/unidade) do evento é o que esta tela está mostrando
+ * agora? Fase O: em "Todas as unidades" (dex.unidadeId nulo), qualquer
+ * unidade da MESMA empresa é relevante para o agregado — o canal
+ * `empresa:X` já garante que só chega evento da empresa certa, mas a
+ * checagem aqui é defensiva (nunca confia só no canal). */
+function escopoBate(evento) {
+  const minhaEmpresa = state.sessao.empresa?.id;
+  if (minhaEmpresa && evento.organizacaoId && evento.organizacaoId !== minhaEmpresa) return false;
+  if (dex.unidadeId) return evento.unidadeId === dex.unidadeId;
+  return true;
+}
+
+/** A competência do evento é a que esta ABA está mostrando agora? "Histórico"
+ * mostra o ANO inteiro (dashExecHistorico), não um mês — basta o ano bater.
+ * As demais abas (Visão/Lançamentos/Indicadores) compartilham dex.dadosMes,
+ * de um mês específico. Sem `competencia` no payload (defensivo), nunca
+ * ignora por falta de dado. */
+function competenciaBate(competencia) {
+  if (!competencia) return true;
+  const [anoEvento, mesEvento] = competencia.split("-").map(Number);
+  if (dex.aba === "historico") return anoEvento === dex.ano;
+  return anoEvento === dex.ano && mesEvento === dex.mes;
+}
+
+/** Modelo logístico não tem "competência": ele decide, ao vivo, como
+ * QUALQUER mês é calculado (resolverMetas lê o modelo atual da unidade no
+ * momento do fetch, nunca um snapshot por mês) — por isso é relevante para
+ * o mês/aba que estiver aberto agora, sem checar competência. */
+function eventoRelevanteParaTelaAtual(evento) {
+  if (!escopoBate(evento)) return false;
+  if (evento.tipo === EVENTOS_DASHBOARD_IFOOD.MODELO_LOGISTICO_ATUALIZADO) return true;
+  return competenciaBate(evento.competencia);
+}
+
+/** Recarrega o que a ABA ATUAL de fato usa — nunca sempre `carregarConteudo`:
+ * "Histórico" busca por conta própria (ano inteiro), fora de `dex.dadosMes`. */
+function atualizarConteudoAtual(opts) {
+  if (dex.aba === "historico") return renderHistorico(el("#dex-conteudo"), opts);
+  return carregarConteudo(opts);
+}
+
+registrarInteresse({
+  eventos: [...Object.values(EVENTOS_DASHBOARD_IFOOD), RESINCRONIZACAO],
+  // Checagem barata: só continua se a tela estiver mesmo montada agora —
+  // Fase J ("módulo não aberto? não faz nada; o próximo fetch normal já
+  // vem atualizado"). O resto da lógica de relevância mora em aoReceber.
+  relevante: () => state.rota === "dashboard-executivo",
+  aoReceber: (evento) => {
+    // Conflito com formulário aberto — SEMPRE, independente de mês/aba: o
+    // usuário pode estar editando um lançamento de um mês diferente do que
+    // a tela de fundo mostra no momento (ex.: reabriu de outra aba). Nunca
+    // sobrescreve o que ele está digitando — só sinaliza (ver
+    // dashboardExecutivoForm.js#avisarAlteracaoExterna).
+    if (EVENTOS_QUE_PODEM_CONFLITAR_COM_FORMULARIO.has(evento.tipo)) avisarAlteracaoExterna(evento.entidadeId);
+
+    if (evento.tipo === RESINCRONIZACAO) {
+      // Reconectou depois de uma queda — Fase S/T: nunca tenta reproduzir os
+      // eventos perdidos, só busca o estado ATUAL do banco pela tela aberta.
+      if (!escopoBate(evento)) return;
+    } else if (!eventoRelevanteParaTelaAtual(evento)) {
+      return;
+    }
+    if (atualizacaoRecente()) return; // já atualizamos há pouco (local ou remoto) — evita refetch duplicado/rajada
+    atualizarConteudoAtual({ silencioso: true });
+  },
 });
 
 const podeLancar = () => pode("dashboard_executivo.lancar");
@@ -185,10 +294,19 @@ function anosDisponiveis() {
 // um contador simples: só a chamada mais recente pode gravar o resultado.
 let geracaoConteudo = 0;
 
-async function carregarConteudo() {
+/**
+ * Caminho oficial de recarregar o mês — usado por "salvar" (via `onSalvo`)
+ * e agora também pelo Realtime (ver o registro acima). `silencioso` evita o
+ * "pisca e recarrega tudo" (skeleton cheio) num refresh disparado por
+ * evento — mantém o conteúdo atual na tela até a resposta nova chegar,
+ * porque "tempo real" não deve parecer "a página recarregou sozinha".
+ * @param {{silencioso?: boolean}} [opts]
+ */
+async function carregarConteudo({ silencioso = false } = {}) {
   const box = el("#dex-conteudo");
   if (!box) return;
-  box.innerHTML = carregando();
+  marcarAtualizacaoAgora();
+  if (!silencioso) box.innerHTML = carregando();
   destruirGraficosDashboardExecutivo();
   // Espelho pro Agente Crescer montar o Page Context (agentePageContext.js)
   // — nunca lido de volta aqui, só escrito; state.js é a única ponte entre
@@ -786,8 +904,9 @@ function rotuloIndicador(chave) {
 // ---------------------------------------------------------------------------
 // ABA 4 — HISTÓRICO
 // ---------------------------------------------------------------------------
-async function renderHistorico(box) {
-  box.innerHTML = carregando();
+async function renderHistorico(box, { silencioso = false } = {}) {
+  marcarAtualizacaoAgora();
+  if (!silencioso) box.innerHTML = carregando();
   try {
     const { data } = await dashExecHistorico({ unidadeId: dex.unidadeId || undefined, ano: dex.ano });
     dex.historico = data;

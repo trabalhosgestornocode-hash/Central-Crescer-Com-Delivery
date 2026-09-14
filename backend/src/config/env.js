@@ -42,6 +42,16 @@ export const config = {
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY, // pública — enviada ao frontend p/ Supabase Auth
   contextTokenSecret,
   profileSelectionSecret,
+  // Validade do GRANT Realtime (public.realtime_channel_grants), em segundos
+  // — curta de propósito (ver realtime.grants.service.js): o Context Token
+  // dura 8h porque `requireContexto` relê `sessoes_contexto` a CADA
+  // requisição REST, tornando revogação instantânea; uma conexão Realtime
+  // não faz uma requisição por evento, então é a validade curta + renovação
+  // periódica que limita por quanto tempo um contexto revogado ainda pode
+  // ouvir eventos. Não precisa de segredo nenhum — a linha do grant é
+  // validada pela RLS de `realtime.messages` contra o JWT normal do Supabase
+  // Auth (auth.uid()), nunca um token que o Crescer assina.
+  realtimeCredentialTtlS: Number(process.env.REALTIME_CREDENTIAL_TTL_S) || 5 * 60,
   // Janela que define "usuário online" no Dashboard Global (minutos).
   janelaOnlineMin: Number(process.env.JANELA_ONLINE_MIN) || 15,
   // Credenciais dos apps iFood (Portal do Desenvolvedor). Opcionais: vazio =

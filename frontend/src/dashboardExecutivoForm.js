@@ -75,6 +75,10 @@ export async function abrirLancamentoModal({ data, unidadeId, modeloLogistico, e
   fm = {
     data, unidadeId, modeloLogistico, ehTeste: !!ehTeste, onSalvo, passo: 1,
     modoCorrecao: false, lancamentoId: null, statusOriginal: null, atualizadoEm: null,
+    // Etapa 2 (Realtime) — true quando ESTE MESMO lançamento foi alterado em
+    // outro dispositivo/sessão enquanto o formulário estava aberto aqui
+    // (ver avisarAlteracaoExterna, chamado pelo registro em dashboardExecutivo.js).
+    conflitoExterno: false,
     motivoCorrecao: "", campos: camposPadrao(), avisos: [], confirmarAvisos: false, salvando: false,
     // Autoridade é sempre o servidor (ver obterLancamentoPorData/financeiroDisponivelNaData
     // no backend) — valores por omissão aqui só cobrem o instante antes da
@@ -82,28 +86,41 @@ export async function abrirLancamentoModal({ data, unidadeId, modeloLogistico, e
     mostrarFinanceiro: true, periodoFinanceiroInicio: data, periodoFinanceiroFim: data,
   };
   try {
-    const { data: resp } = await dashExecLancamento(data, { unidadeId: unidadeId || undefined });
-    fm.mostrarFinanceiro = resp.mostrarFinanceiro;
-    fm.periodoFinanceiroInicio = resp.periodoFinanceiroInicio;
-    fm.periodoFinanceiroFim = resp.periodoFinanceiroFim;
-    if (resp.lancamento) {
-      fm.lancamentoId = resp.lancamento.id;
-      fm.statusOriginal = resp.lancamento.status;
-      fm.atualizadoEm = resp.lancamento.updatedAt ?? null;
-      fm.modoCorrecao = resp.lancamento.status === "finalizado";
-      fm.campos = camposDoLancamento(resp.lancamento);
-      // Reabrir um rascunho (item novo): pula direto pra primeira etapa que
-      // ainda falta algo obrigatório, sem obrigar reconferir o que já foi
-      // preenchido — mas o usuário sempre pode "Voltar" pra revisar antes.
-      if (fm.statusOriginal === "rascunho") fm.passo = primeiroPassoIncompletoIndex();
-    } else if (!resp.disponibilidade.disponivel) {
+    const resp = await carregarLancamentoNoFormulario();
+    if (!resp.lancamento && !resp.disponibilidade.disponivel) {
       renderIndisponivel(m, resp.disponibilidade.motivo);
       return;
     }
+    // Reabrir um rascunho (item novo): pula direto pra primeira etapa que
+    // ainda falta algo obrigatório, sem obrigar reconferir o que já foi
+    // preenchido — mas o usuário sempre pode "Voltar" pra revisar antes.
+    if (fm.statusOriginal === "rascunho") fm.passo = primeiroPassoIncompletoIndex();
     renderPasso(m);
   } catch (e) {
     renderIndisponivel(m, e.message);
   }
+}
+
+/**
+ * Busca o lançamento (ou a disponibilidade do dia) e aplica em `fm` — usado
+ * na abertura do formulário e, de novo, quando o usuário pede pra recarregar
+ * depois de um conflito (dados alterados em outro dispositivo/sessão, ver
+ * avisoConflitoExterno/recarregarDadosDoServidor). Nunca decide layout aqui
+ * (isso fica com quem chamou) — só aplica o que o servidor respondeu.
+ */
+async function carregarLancamentoNoFormulario() {
+  const { data: resp } = await dashExecLancamento(fm.data, { unidadeId: fm.unidadeId || undefined });
+  fm.mostrarFinanceiro = resp.mostrarFinanceiro;
+  fm.periodoFinanceiroInicio = resp.periodoFinanceiroInicio;
+  fm.periodoFinanceiroFim = resp.periodoFinanceiroFim;
+  if (resp.lancamento) {
+    fm.lancamentoId = resp.lancamento.id;
+    fm.statusOriginal = resp.lancamento.status;
+    fm.atualizadoEm = resp.lancamento.updatedAt ?? null;
+    fm.modoCorrecao = resp.lancamento.status === "finalizado";
+    fm.campos = camposDoLancamento(resp.lancamento);
+  }
+  return resp;
 }
 
 /**
@@ -227,6 +244,7 @@ function renderPasso(m) {
       ${fm.ehTeste && fm.lancamentoId ? `<button class="btn btn-ghost btn-sm dex-btn-reset-teste" id="dex-abrir-reset-teste" type="button">${icon("flask", { size: 13 })} Resetar dia para teste</button>` : ""}
       ${podeExcluir() && fm.lancamentoId ? `<button class="btn btn-ghost btn-sm dex-btn-excluir" id="dex-abrir-exclusao" type="button">${icon("trash", { size: 13 })} Excluir lançamento</button>` : ""}
     </div>
+    ${avisoConflitoExterno()}
     ${fm.statusOriginal === "rascunho" ? avisoRascunhoAnterior() : ""}
     <div class="dex-stepper">${passos.map((_, i) => `<span class="dex-step ${i + 1 === fm.passo ? "ativo" : i + 1 < fm.passo ? "feito" : ""}">${i + 1}</span>`).join("")}</div>
     <div class="dex-form-corpo">${corpo()}</div>
@@ -242,6 +260,7 @@ function renderPasso(m) {
   m.querySelector("#dex-f-avancar")?.addEventListener("click", () => { if (validarPassoAtual(m)) { fm.passo++; renderPasso(m); } });
   m.querySelector("#dex-abrir-reset-teste")?.addEventListener("click", () => renderResetPreview(m));
   m.querySelector("#dex-abrir-exclusao")?.addEventListener("click", () => renderExclusaoConfirmacao(m));
+  m.querySelector("#dex-recarregar-conflito")?.addEventListener("click", () => recarregarDadosDoServidor(m));
   wirePasso(m, chave);
   // Sempre wireia (não só na Conferência): "Salvar como rascunho" agora
   // aparece em toda etapa (item novo do pedido) — os handlers usam `?.`,
@@ -253,6 +272,52 @@ function renderPasso(m) {
 function avisoRascunhoAnterior() {
   const quando = fm.atualizadoEm ? fmtDataHoraBr(fm.atualizadoEm) : null;
   return `<p class="dex-form-info dex-rascunho-aviso">${icon("pencil", { size: 13 })} Rascunho salvo anteriormente.${quando ? ` Última atualização: ${quando}.` : ""}</p>`;
+}
+
+// ---------------------------------------------------------------------------
+// CONFLITO EXTERNO (Etapa 2 — Realtime) — este MESMO lançamento foi alterado
+// em outro dispositivo/sessão enquanto o formulário estava aberto aqui.
+// Nunca sobrescreve o que o usuário está digitando: só avisa, com uma ação
+// explícita pra recarregar antes de continuar.
+// ---------------------------------------------------------------------------
+
+/**
+ * Chamado pelo registro Realtime do Dashboard (dashboardExecutivo.js) —
+ * nunca por conta própria. Não faz nada se não há formulário aberto para
+ * ESTA entidade (a maioria das chamadas: outro lançamento, outra unidade).
+ * @param {string|undefined} entidadeId — o `entidadeId` do evento recebido.
+ */
+export function avisarAlteracaoExterna(entidadeId) {
+  if (!fm || !entidadeId || fm.lancamentoId !== entidadeId || fm.conflitoExterno) return;
+  fm.conflitoExterno = true;
+  const m = ov?.querySelector(".modal");
+  // Re-render normal: usa fm.campos (os valores que o usuário já digitou),
+  // só acrescenta o aviso — nada do que ele estava preenchendo se perde.
+  if (m) renderPasso(m);
+}
+
+function avisoConflitoExterno() {
+  if (!fm.conflitoExterno) return "";
+  return `<div class="dex-form-conflito" role="alert">
+    ${icon("alert-triangle", { size: 14 })}
+    <span>Este lançamento foi atualizado em outro dispositivo ou sessão. Os dados exibidos podem estar desatualizados. Atualize o lançamento antes de salvar novamente.</span>
+    <button class="btn btn-ghost btn-sm" id="dex-recarregar-conflito" type="button">Atualizar dados</button>
+  </div>`;
+}
+
+/** Ação do botão do aviso acima — descarta o que estava no formulário e
+ * recarrega do servidor (mesmo caminho de abrir o formulário). Item do
+ * pedido: "ofereça uma ação para atualizar/recarregar os dados". */
+async function recarregarDadosDoServidor(m) {
+  try {
+    await carregarLancamentoNoFormulario();
+    fm.conflitoExterno = false;
+    if (fm.statusOriginal === "rascunho") fm.passo = primeiroPassoIncompletoIndex();
+    toast("Dados atualizados.");
+    renderPasso(m);
+  } catch (e) {
+    toast("Erro ao atualizar: " + e.message);
+  }
 }
 
 const podeExcluir = () => pode("dashboard_executivo.excluir");
@@ -625,6 +690,11 @@ function payloadBase(status) {
   const base = {
     unidadeId: fm.unidadeId || undefined, data: fm.data, situacao: c.situacao,
     observacao: c.observacao || undefined, status,
+    // Concorrência otimista (Etapa 2): a versão que LEMOS quando o formulário
+    // abriu (ou na última recarga) — o backend recusa com 409 se a linha já
+    // mudou desde então. Só existe pra edição (lançamento já tinha id);
+    // criação nunca tem versão anterior pra conferir.
+    seVersao: fm.lancamentoId ? fm.atualizadoEm || undefined : undefined,
   };
   if (c.situacao === "sem_operacao") return { ...base, motivoSemOperacao: c.motivoSemOperacao };
   if (c.situacao === "zero_vendas") return { ...base, novosClientes: numOuIndefinido(c.novosClientes) };
@@ -672,9 +742,19 @@ async function salvar(m, status) {
     fecharOverlay();
     onSalvo?.();
   } catch (e) {
-    toast("Erro: " + e.message);
     btn.disabled = false; btn.textContent = txt;
     fm.salvando = false;
+    // Concorrência otimista (Etapa 2): outro dispositivo/sessão salvou este
+    // MESMO lançamento primeiro. Nunca sobrescreve em silêncio — mostra o
+    // mesmo aviso de conflito externo, com a ação de recarregar, em vez de
+    // deixar o usuário tentar salvar de novo por cima de dado velho.
+    if (e.codigo === "LANCAMENTO_DESATUALIZADO") {
+      fm.conflitoExterno = true;
+      toast(e.message);
+      renderPasso(m);
+      return;
+    }
+    toast("Erro: " + e.message);
   }
 }
 

@@ -18,6 +18,8 @@ import {
 } from "./dashboardExecutivo.calc.js";
 import { gerarDiagnostico, LIMIARES_DIAGNOSTICO } from "./dashboardExecutivo.diagnostico.js";
 import { carregarDatasLiberadas } from "../../shared/desbloqueiosIfood.js";
+import { emitirEventoRealtime } from "../realtime/emitirEvento.js";
+import { EVENTOS_DASHBOARD_IFOOD, competenciaDe } from "./dashboardExecutivo.eventos.js";
 
 const TABELA = "lancamentos_financeiros_diarios";
 const TABELA_AUDITORIA = "lancamentos_financeiros_auditoria";
@@ -136,9 +138,19 @@ export async function obterModeloLogisticoUnidade({ organizacaoId, unidadeIdSess
 export async function atualizarModeloLogisticoUnidade({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, usuario, dados: body }) {
   const unidadeId = await resolverUnidadeAlvo({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, exigirEspecifica: true });
   const b = v.corpo(body);
-  return definirModeloLogistico({
+  const resultado = await definirModeloLogistico({
     unidadeId, organizacaoId, modeloNovo: b.modeloLogistico, usuario, motivo: b.motivo, observacao: b.observacao,
   });
+  // O modelo logístico decide, ao vivo, como QUALQUER mês é calculado
+  // (resolverMetas lê unidades.modelo_logistico_ifood no momento do fetch —
+  // nunca um snapshot por mês). Por isso este evento não carrega
+  // `competencia`: é relevante pro mês que estiver aberto agora, seja
+  // qual for (ver a checagem de relevância no frontend).
+  await emitirEventoRealtime({
+    tipo: EVENTOS_DASHBOARD_IFOOD.MODELO_LOGISTICO_ATUALIZADO,
+    organizacaoId, unidadeId, entidadeId: unidadeId, versao: new Date().toISOString(),
+  });
+  return resultado;
 }
 
 export async function historicoModeloLogisticoUnidade({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado }) {
@@ -1021,6 +1033,18 @@ export async function criarLancamento({ organizacaoId, unidadeIdSessao, acesso, 
     motivo: dados.statusAlvo === "finalizado" ? "Lançamento criado já finalizado" : "Rascunho criado",
   });
 
+  // Emitido DEPOIS da escrita confirmada (insert + auditoria já persistidos) —
+  // nunca antes. Falha de Broadcast nunca vira falha desta operação (ver
+  // emitirEventoRealtime). Payload mínimo: nenhum valor financeiro, nenhum
+  // nome — só o suficiente pra quem estiver ouvindo saber "isto ficou
+  // obsoleto" e refazer o fetch oficial.
+  await emitirEventoRealtime({
+    tipo: EVENTOS_DASHBOARD_IFOOD.LANCAMENTO_CRIADO,
+    organizacaoId, unidadeId,
+    data: dataIso, competencia: competenciaDe(ano, mes),
+    entidadeId: row.id, versao: row.updated_at,
+  });
+
   return { lancamento: paraApi(row), avisos: dados.avisos };
 }
 
@@ -1065,6 +1089,21 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
 
   if (unidadeIdSessao && antes.unidade_id !== unidadeIdSessao) {
     throw ApiError.forbidden("Você não tem acesso a este lançamento.");
+  }
+
+  // Concorrência otimista (Etapa 2): o cliente manda de volta o `updatedAt`
+  // que leu quando abriu o formulário (`seVersao`). Se a linha mudou desde
+  // então — outro dispositivo/sessão salvou primeiro —, recusa em vez de
+  // sobrescrever em silêncio (last-write-wins). Campo OPCIONAL de propósito:
+  // sem `seVersao` no corpo, nenhuma checagem é feita (compatível com
+  // qualquer chamador que ainda não a envie). Nunca bloqueia locking
+  // pessimista nem avisa "quem está editando" — é só "isto mudou, recarregue".
+  if (body?.seVersao && antes.updated_at
+      && new Date(antes.updated_at).getTime() !== new Date(body.seVersao).getTime()) {
+    const conflito = new ApiError(409,
+      "Este lançamento foi atualizado em outro dispositivo ou sessão. Os dados exibidos podem estar desatualizados. Atualize o lançamento antes de salvar novamente.");
+    conflito.codigo = "LANCAMENTO_DESATUALIZADO";
+    throw conflito;
   }
 
   const eraFinalizado = antes.status === "finalizado";
@@ -1154,6 +1193,13 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
     });
   }
 
+  await emitirEventoRealtime({
+    tipo: EVENTOS_DASHBOARD_IFOOD.LANCAMENTO_ATUALIZADO,
+    organizacaoId, unidadeId: antes.unidade_id,
+    data: antes.data_lancamento, competencia: competenciaDe(anoAntes, mesAntes),
+    entidadeId: lancamentoId, versao: depois.updated_at,
+  });
+
   return { lancamento: paraApi(depois), avisos: dados.avisos };
 }
 
@@ -1206,6 +1252,16 @@ export async function excluirLancamento({ organizacaoId, unidadeIdSessao, unidad
 
   const { error: eDel } = await supabase.from(TABELA).delete().eq("id", lancamentoId);
   if (eDel) throw ApiError.badRequest(eDel.message);
+
+  const [anoExc, mesExc] = linha.data_lancamento.split("-").map(Number);
+  await emitirEventoRealtime({
+    tipo: EVENTOS_DASHBOARD_IFOOD.LANCAMENTO_EXCLUIDO,
+    organizacaoId, unidadeId: linha.unidade_id,
+    data: linha.data_lancamento, competencia: competenciaDe(anoExc, mesExc),
+    // A linha já não existe pra ter um updated_at próprio — a versão aqui é
+    // só "quando a exclusão aconteceu", suficiente pra dedup/ordenação.
+    entidadeId: lancamentoId, versao: new Date().toISOString(),
+  });
 
   return { excluido: true, data: linha.data_lancamento, unidadeId: linha.unidade_id };
 }
@@ -1585,6 +1641,14 @@ export async function lancamentoMensal({ organizacaoId, unidadeIdSessao, unidade
     usuario,
   });
 
+  // Um evento só, mesmo distribuindo N dias — o front refaz o mês inteiro
+  // (carregarConteudo) de qualquer forma; emitir por linha seria ruído.
+  await emitirEventoRealtime({
+    tipo: EVENTOS_DASHBOARD_IFOOD.LANCAMENTO_MENSAL_ATUALIZADO,
+    organizacaoId, unidadeId, competencia: competenciaDe(ano, mes),
+    entidadeId: lote.id, versao: new Date().toISOString(),
+  });
+
   return { ...preview, confirmado: true, distribuicaoId: lote.id, diasCriados: diasElegiveisParaDistribuir };
 }
 
@@ -1698,6 +1762,12 @@ export async function atualizarLancamentoMensal({ organizacaoId, unidadeIdSessao
     .from(TABELA).select("*").eq("distribuicao_mensal_id", loteId).order("data_lancamento");
   if (eFinal) throw ApiError.internal(eFinal.message);
 
+  await emitirEventoRealtime({
+    tipo: EVENTOS_DASHBOARD_IFOOD.LANCAMENTO_MENSAL_ATUALIZADO,
+    organizacaoId, unidadeId, competencia: competenciaDe(lote.ano, lote.mes),
+    entidadeId: loteId, versao: loteAtualizado.updated_at,
+  });
+
   return resumo(loteAtualizado, linhasFinal ?? []);
 }
 
@@ -1749,6 +1819,12 @@ export async function excluirLancamentoMensal({ organizacaoId, unidadeIdSessao, 
   }
   const { error: eDelLote } = await supabase.from(TABELA_MENSAL).delete().eq("id", loteId);
   if (eDelLote) throw ApiError.badRequest(eDelLote.message);
+
+  await emitirEventoRealtime({
+    tipo: EVENTOS_DASHBOARD_IFOOD.LANCAMENTO_MENSAL_ATUALIZADO,
+    organizacaoId, unidadeId, competencia: competenciaDe(lote.ano, lote.mes),
+    entidadeId: loteId, versao: new Date().toISOString(),
+  });
 
   return { excluido: true, mes: lote.mes, ano: lote.ano, diasRemovidos: linhas?.length ?? 0 };
 }

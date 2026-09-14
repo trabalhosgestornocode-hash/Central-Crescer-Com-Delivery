@@ -21,6 +21,7 @@ import {
   resetFiltrosDiario, resetFiltrosIdentificacao, deslocarMes,
 } from "./painelAdmViews.js";
 import { MESES } from "./painelAdmUi.js";
+import { resetScrollLock } from "./scrollLock.js";
 
 /** @type {{mostrarTela: Function, aoTrocarAmbiente: Function, aoAcessoRevogado: Function, usuario: object}|null} */
 let ganchos = null;
@@ -140,6 +141,10 @@ export function sairDoPainelAdministrativo() {
   el("#painel-adm-screen")?.classList.remove("menu-aberto");
   state.telaPainelAdm = null;
   pilha = [];
+  // Sair do painel não passa por renderViewPadm (o shell some inteiro) — zera
+  // aqui a trava de scroll pra não deixar o app do tenant travado se o gestor
+  // saiu com o painel deslizante de cards ainda aberto. Ver scrollLock.js.
+  resetScrollLock();
   ganchos?.aoTrocarAmbiente?.();
 }
 

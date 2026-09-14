@@ -47,6 +47,7 @@ import { modulosDaEmpresa, modulosEfetivosDaUnidade } from "../../shared/modulos
 import { auditar, ACOES } from "../../shared/auditoria.js";
 import { resolverPerfilParaContexto } from "./perfil.service.js";
 import * as v from "../../shared/validar.js";
+import { removerGrantsDeSessoes } from "../realtime/realtime.grants.service.js";
 
 /** Status de empresa que impedem o tenant de entrar. */
 const STATUS_BLOQUEANTES = { bloqueada: "Empresa bloqueada.", suspensa: "Empresa suspensa.", cancelada: "Empresa cancelada." };
@@ -763,7 +764,18 @@ export async function revogarSessoes({
   // Pré-060: `perfil_id` não existe -> escopa por `usuario_id` (== perfilId legado).
   if (colunaPerfilAusente(error) && filtros.some(([c]) => c === "perfil_id")) ({ data, error } = await rodar(true));
   if (error) throw ApiError.internal(error.message);
-  return (data ?? []).length;
+
+  // Realtime (Etapa 1): revogar a sessão de contexto tem que derrubar na hora
+  // qualquer grant de canal que ela tinha — sem isto, o Realtime daquele
+  // contexto só cairia quando o grant expirasse por TTL (minutos depois).
+  // Nunca falha a revogação da sessão por isto: pior caso, o grant expira
+  // pelo TTL normal (ver removerGrantsDeSessoes).
+  const idsRevogados = (data ?? []).map((r) => r.id);
+  if (idsRevogados.length) {
+    try { await removerGrantsDeSessoes(idsRevogados); } catch (e) { console.error("[realtime] falha ao limpar grants de sessão revogada:", e.message); }
+  }
+
+  return idsRevogados.length;
 }
 
 /**

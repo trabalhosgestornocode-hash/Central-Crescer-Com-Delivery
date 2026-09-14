@@ -17,6 +17,7 @@
 import { el, els, escapeHtml, normalizarBusca } from "./utils.js";
 import { icon } from "./icons.js";
 import { painelAdmApi } from "./painelAdmApi.js";
+import { travarScroll, destravarScroll, resetScrollLock } from "./scrollLock.js";
 import { renderPerformance } from './performance.js';
 import { renderDesenvolvimento, montarCardDesenvolvimento } from './desenvolvimento.js';
 import { SECOES_PDF, secoesPadrao, gerarPdf, previewPdf, nomeArquivoPdf } from "./painelAdmPdf.js";
@@ -118,6 +119,11 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
   const mes = opts.mes || undefined;
   const v = view();
   if (!v) return;
+  // Toda troca de tela do painel passa por aqui — zera qualquer trava de
+  // scroll deixada por um painel/sheet da tela anterior que não foi fechado
+  // pelo próprio botão de fechar (ex.: o gestor clicou num item de dentro do
+  // painel de cards pra ir direto pra empresa/unidade). Ver scrollLock.js.
+  resetScrollLock();
   if (entrada.id === 'performance') return renderPerformance(v, api, mes, nav.aoAcessoRevogado);
   if (entrada.id === 'desenvolvimento') return renderDesenvolvimento(v, api, nav.aoAcessoRevogado);
 
@@ -2070,8 +2076,12 @@ function ligarCardsResumo() {
   const paineis = els("[data-padm-card-painel]");
   const caixa = el(".padm-cards-detalhes");
   // No mobile a lista abre como painel deslizante sobre a tela (CSS via :has);
-  // travar o scroll do fundo mantém a leitura organizada.
-  const travar = (on) => { try { document.body?.classList?.toggle("padm-sheet-lock", on); } catch { /* fake DOM */ } };
+  // travar o scroll do fundo mantém a leitura organizada. A trava é
+  // centralizada em scrollLock.js: se o gestor navegar para outra tela por um
+  // dos links de dentro do próprio painel (ir para a empresa/unidade) sem
+  // passar por fecharTodos(), `renderViewPadm` zera a trava na próxima
+  // renderização — nunca fica presa esperando um F5.
+  const travar = (on) => { if (on) travarScroll(); else destravarScroll(); };
 
   const fecharTodos = () => {
     botoes.forEach((b) => { b.setAttribute("aria-expanded", "false"); b.classList.remove("padm-card--ativo"); });

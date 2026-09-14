@@ -48,6 +48,7 @@ import { icon } from "./icons.js";
 import { montarPainelGlobal, alternarPainel } from "./agentePainel.js";
 import { montarSelecao, registrarAcessoRecente } from "./selecaoAmbiente.js";
 import { montarSeletorUnidade } from "./seletorUnidade.js";
+import { iniciar as iniciarRealtime } from "./realtime/realtimeManager.js";
 
 // ---------- Ações de navegação do Agente Crescer (Etapa F.1) ----------
 // Registradas UMA vez, aqui — app.js é o topo do grafo de imports (nada o
@@ -918,6 +919,10 @@ async function boot() {
   aplicarTemaSalvo();
   wireEventos();
   initTooltips();
+  // Só liga os gatilhos (troca de contexto/logout) — a conexão de verdade só
+  // acontece quando resetarEscopoDeContexto() disparar pela 1ª vez (dentro de
+  // mostrarApp/encaminhar, mais abaixo). Ver realtime/realtimeManager.js.
+  iniciarRealtime();
   try {
     if (await restaurarSessao()) await encaminhar();
     else mostrarLogin();
