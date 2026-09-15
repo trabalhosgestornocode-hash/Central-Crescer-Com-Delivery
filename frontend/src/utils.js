@@ -8,6 +8,61 @@ export const els = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const temValor = (v) => v !== null && v !== undefined && v !== "" && !Number.isNaN(v);
 
 export const fmtMoeda = (v) => (temValor(v) && !Number.isNaN(Number(v)) ? brlFmt.format(Number(v)) : "—");
+
+/**
+ * Decompõe um valor em BRL nas partes visuais (sinal/cifrão/inteiro/
+ * centavos) usando `Intl.NumberFormat.formatToParts` — nunca reconstrói o
+ * número por conta própria (mesma fonte de verdade de fmtMoeda). `digitos`
+ * é só a contagem de dígitos da parte inteira (sem separador de milhar),
+ * usada pra decidir a camada de tamanho em fmtMoedaHtml().
+ * @param {number|string|null|undefined} v
+ */
+export function fmtMoedaPartes(v) {
+  if (!temValor(v) || Number.isNaN(Number(v))) return null;
+  let sinal = "", moeda = "", inteiro = "", centavos = "";
+  for (const p of brlFmt.formatToParts(Number(v))) {
+    if (p.type === "minusSign") sinal = p.value;
+    else if (p.type === "currency") moeda = p.value;
+    else if (p.type === "integer" || p.type === "group") inteiro += p.value;
+    else if (p.type === "decimal" || p.type === "fraction") centavos += p.value;
+  }
+  return { sinal, moeda, inteiro, centavos, digitos: inteiro.replace(/\D/g, "").length };
+}
+
+/** "15,3 mil" / "1,52 mi" / "12,5 mi" — 2 casas quando o número cabe abaixo de 10, 1 caso contrário (mesmo padrão nos 3 patamares). */
+function fmtMoedaCompacta(v) {
+  const abs = Math.abs(Number(v));
+  const sinal = Number(v) < 0 ? "-" : "";
+  let n, sufixo;
+  if (abs >= 1_000_000_000) { n = abs / 1_000_000_000; sufixo = "bi"; }
+  else if (abs >= 1_000_000) { n = abs / 1_000_000; sufixo = "mi"; }
+  else { n = abs / 1_000; sufixo = "mil"; }
+  const casas = n < 10 ? 2 : 1;
+  return `${sinal}${n.toFixed(casas).replace(".", ",")} ${sufixo}`;
+}
+
+/**
+ * HTML de um valor monetário em camadas (cifrão menor · inteiro em destaque
+ * · centavos discretos) pra cards financeiros — nunca quebra no meio do
+ * número (o valor inteiro fica num único `<span>` com `white-space:nowrap`,
+ * ver `.valor-money` em styles.css) e reduz de tamanho suavemente conforme a
+ * quantidade de dígitos da parte inteira via `.valor-money--t1..t4`.
+ * Só vira formato compacto ("R$ 12,5 mi") a partir de 10 dígitos inteiros
+ * (>= R$ 1 bilhão) — nunca abrevia um valor que ainda cabe com fonte
+ * reduzida. O valor por extenso sempre fica disponível no `title` (tooltip).
+ * Reutilizável em qualquer card financeiro que hoje só chama `fmtMoeda()`.
+ * @param {number|string|null|undefined} v
+ */
+export function fmtMoedaHtml(v) {
+  const partes = fmtMoedaPartes(v);
+  if (!partes) return `<span class="valor-money valor-money--t1"><span class="valor-money-inteiro">—</span></span>`;
+  const completo = escapeHtml(fmtMoeda(v));
+  if (partes.digitos >= 10) {
+    return `<span class="valor-money valor-money--compacto" title="${completo}"><span class="valor-money-cifrao">${partes.moeda}</span> <span class="valor-money-inteiro">${escapeHtml(fmtMoedaCompacta(v))}</span></span>`;
+  }
+  const tier = partes.digitos <= 3 ? "t1" : partes.digitos <= 5 ? "t2" : partes.digitos <= 7 ? "t3" : "t4";
+  return `<span class="valor-money valor-money--${tier}" title="${completo}"><span class="valor-money-cifrao">${partes.moeda}</span> <span class="valor-money-inteiro">${partes.sinal}${partes.inteiro}</span><span class="valor-money-centavos">${partes.centavos}</span></span>`;
+}
 export const fmtPct = (v) => (temValor(v) && !Number.isNaN(Number(v)) ? Number(v).toFixed(1) + "%" : "—");
 export const fmtTexto = (v) => (temValor(v) ? String(v) : "—");
 export const fmtHora = (ts) => (ts ? new Date(ts).toLocaleTimeString("pt-BR") : "—");
