@@ -4125,6 +4125,46 @@ tr.dex-linha-na { opacity: .65; }
 @media (max-width: 900px) { .pfd-kpis { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 460px) { .pfd-kpis { grid-template-columns: 1fr; } }
 
+/* ===== Valor monetário em camadas (cifrão · inteiro em destaque · centavos
+   discretos) — gerado por fmtMoedaHtml() (utils.js). Nunca quebra no meio do
+   número (white-space:nowrap dentro do próprio valor) e reduz de tamanho em
+   4 patamares conforme a quantidade de dígitos (.valor-money--t1..t4); só
+   compacta ("R$ 12,5 mi") como último recurso, a partir de 10 dígitos.
+   Componente genérico — hoje usado no card "Taxas de entregador" do
+   Dashboard Operacional (Parser Food Delivery); reutilizável em qualquer
+   outro card financeiro que só chame fmtMoeda() hoje. */
+.valor-money {
+  display: inline-flex; align-items: baseline; gap: 2px; line-height: 1;
+  white-space: nowrap; max-width: 100%; min-width: 0;
+}
+.valor-money-cifrao { font-weight: 700; opacity: .82; }
+.valor-money-inteiro { font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.valor-money-centavos { font-weight: 700; opacity: .62; }
+
+.valor-money--t1 .valor-money-inteiro { font-size: clamp(20px, 2.3vw, 27px); }
+.valor-money--t1 .valor-money-cifrao { font-size: clamp(14px, 1.5vw, 18px); }
+.valor-money--t1 .valor-money-centavos { font-size: clamp(12px, 1.3vw, 16px); }
+
+.valor-money--t2 .valor-money-inteiro { font-size: clamp(18px, 2vw, 23px); }
+.valor-money--t2 .valor-money-cifrao { font-size: clamp(13px, 1.3vw, 16px); }
+.valor-money--t2 .valor-money-centavos { font-size: clamp(11px, 1.1vw, 14px); }
+
+.valor-money--t3 .valor-money-inteiro { font-size: clamp(16px, 1.7vw, 20px); }
+.valor-money--t3 .valor-money-cifrao { font-size: clamp(12px, 1.1vw, 14px); }
+.valor-money--t3 .valor-money-centavos { font-size: clamp(10px, 1vw, 12px); }
+
+.valor-money--t4 .valor-money-inteiro { font-size: clamp(14px, 1.4vw, 17px); }
+.valor-money--t4 .valor-money-cifrao { font-size: clamp(11px, 1vw, 12px); }
+.valor-money--t4 .valor-money-centavos { font-size: clamp(9px, .9vw, 11px); }
+
+.valor-money--compacto .valor-money-inteiro { font-size: clamp(17px, 1.9vw, 22px); }
+.valor-money--compacto .valor-money-cifrao { font-size: clamp(13px, 1.2vw, 15px); }
+
+/* Título de card em 2 linhas ("TAXAS DE\nENTREGADOR") precisa de mais
+   respiro até o valor — sem aumentar a altura mínima do card. */
+.pfd-kpi .vd-card-topo { line-height: 1.3; margin-bottom: 2px; }
+.pfd-kpi .vd-card-val { margin-top: 3px; }
+
 /* ---------- Seção genérica ---------- */
 .pfd-secao {
   background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio);
