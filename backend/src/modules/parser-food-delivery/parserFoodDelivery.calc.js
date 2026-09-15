@@ -121,7 +121,7 @@ export function agruparPorEntregador(pedidos) {
     if (!temEntregador(p.entregador)) continue;
     const chave = chaveEntregador(p.entregador);
     if (!porNome.has(chave)) {
-      porNome.set(chave, { entregador: nomeExibicaoEntregador(p.entregador), totalPedidos: 0, entregues: 0, canceladosComTaxa: 0, canceladosSemTaxa: 0, canceladosRevisao: 0, taxasValidas: 0 });
+      porNome.set(chave, { entregador: nomeExibicaoEntregador(p.entregador), chave, totalPedidos: 0, entregues: 0, canceladosComTaxa: 0, canceladosSemTaxa: 0, canceladosRevisao: 0, taxasValidas: 0 });
     }
     const g = porNome.get(chave);
     g.totalPedidos++;

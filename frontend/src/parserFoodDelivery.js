@@ -804,7 +804,7 @@ function abrirDrawerEntregadorDashboard(chave) {
   abrirPfdDrawer(`
     <h3>${icon("users", { size: 17 })} ${escapeHtml(nome)}</h3>
     <div class="vd-pv-grid">
-      ${item("Entregas concluídas", entregas?.quantidade)}
+      ${item("Entregas concluídas", conciliacao?.entregues)}
       ${item("Taxas acumuladas", taxas ? fmtMoeda(taxas.taxas) : null)}
       ${item("Tempo médio de entrega", tempo ? fmtMin(tempo.mediaMin) : null)}
       ${item("Mediana do tempo", tempo ? fmtMin(tempo.medianaMin) : null)}
