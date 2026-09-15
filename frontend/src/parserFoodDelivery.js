@@ -5,7 +5,7 @@
 // o pagamento de cada entregador e mantém histórico auditável por período.
 // Mesmo esqueleto de bonificacaoMensal.js: abas + estado de módulo próprio,
 // reset ao trocar de unidade (nunca mistura dados entre unidades).
-import { el, escapeHtml, toast, fmtMoeda, fmtDataHora, fmtPct } from "./utils.js";
+import { el, escapeHtml, toast, fmtMoeda, fmtMoedaHtml, fmtDataHora, fmtPct } from "./utils.js";
 import { icon } from "./icons.js";
 import { state } from "./state.js";
 import { pode } from "./sessao.js";
@@ -718,7 +718,7 @@ function renderDashboardOperacional(box) {
   box.innerHTML = `
     <div class="vd-cards pfd-kpis pfd-kpis--dash">
       ${card("receipt", "Entregas", resumo.totalEntregas, "Concluídas no período")}
-      ${card("banknote", "Taxas de entregador", fmtMoeda(resumo.taxasTotal), "Total pago no período")}
+      ${card("banknote", "Taxas de entregador", fmtMoedaHtml(resumo.taxasTotal), "Total pago no período")}
       ${card("truck", "Distância estimada", `${d.distanciaEstimada.totalKm.toFixed(1).replace(".", ",")} km`, "Soma das distâncias em raio informadas pelo relatório — não é o percurso real")}
       ${card("clock", "Tempo médio de entrega", resumo.tempoMedioEntregaMin != null ? fmtMin(resumo.tempoMedioEntregaMin) : "—", "Coleta até a entrega")}
       ${card("target", "Entregas no prazo", d.pontualidade.classificaveis > 0 ? fmtPctBr(d.pontualidade.percentualNoPrazo) : "—",
@@ -773,7 +773,7 @@ function renderDashboardOperacional(box) {
         · Pedidos considerados: <b>${d.distanciaEstimada.pedidosConsiderados} de ${d.distanciaEstimada.pedidosElegiveis}</b>
       </p>`)}
 
-    ${pfdSecao("list-checks", "Análise operacional", "Leitura determinística dos indicadores acima — sem geração por IA", analiseOperacionalHtml(d.analiseOperacional))}
+    ${pfdSecao("list-checks", "Análise operacional", "Leitura determinística dos indicadores acima", analiseOperacionalHtml(d.analiseOperacional))}
   `;
 
   pfdBarraHRanking("pfd-dash-chart-entregas", d.entregadoresPorEntregas.slice(0, 10).map((e) => e.entregador), d.entregadoresPorEntregas.slice(0, 10).map((e) => e.quantidade));
