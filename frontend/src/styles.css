@@ -848,12 +848,13 @@ body {
 
 /* cards principais */
 .vd-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 13px; }
-.vd-card { position: relative; background: var(--card); border: 1px solid var(--linha); border-top: 3px solid var(--verde); border-radius: var(--raio); padding: 14px 15px; box-shadow: var(--sombra-sm); display: flex; flex-direction: column; gap: 5px; min-height: 104px; animation: fadeInUp .3s ease both; transition: transform var(--t), box-shadow var(--t); }
+.vd-card { position: relative; background: var(--card); border: 1px solid var(--linha); border-top: 3px solid var(--verde); border-radius: var(--raio); padding: 14px 15px; box-shadow: var(--sombra-sm); display: flex; flex-direction: column; gap: 5px; min-height: 104px; min-width: 0; animation: fadeInUp .3s ease both; transition: transform var(--t), box-shadow var(--t); }
 .vd-card:hover { transform: translateY(-2px); box-shadow: var(--sombra-md); }
 .vd-card-topo { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .vd-card-ico { font-size: 14px; }
 .vd-card-lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--cinza); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vd-card-val { font-size: 21px; font-weight: 800; letter-spacing: -.5px; color: var(--texto); }
+/* Valores muito grandes (ex.: R$ 16.478,00) quebram em vez de vazar pra fora do card. */
+.vd-card-val { font-size: 21px; font-weight: 800; letter-spacing: -.5px; color: var(--texto); overflow-wrap: break-word; }
 .vd-card-sub { font-size: 11.5px; color: var(--cinza-claro); }
 .vd-card.destaque { background: var(--grad-verde); border-color: transparent; box-shadow: var(--glow-verde); }
 .vd-card.destaque .vd-card-lbl, .vd-card.destaque .vd-card-sub { color: rgba(255,255,255,.85); }
