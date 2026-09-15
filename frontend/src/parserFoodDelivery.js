@@ -5,7 +5,7 @@
 // o pagamento de cada entregador e mantém histórico auditável por período.
 // Mesmo esqueleto de bonificacaoMensal.js: abas + estado de módulo próprio,
 // reset ao trocar de unidade (nunca mistura dados entre unidades).
-import { el, escapeHtml, toast, fmtMoeda, fmtDataHora } from "./utils.js";
+import { el, escapeHtml, toast, fmtMoeda, fmtDataHora, fmtPct } from "./utils.js";
 import { icon } from "./icons.js";
 import { state } from "./state.js";
 import { pode } from "./sessao.js";
@@ -19,6 +19,9 @@ import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./cont
 import { botaoContextualHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
 
 import { montarCalendario } from "./parserFoodDeliveryCalendario.js";
+import {
+  destruirGraficosPfdDashboard, pfdBarraHRanking, pfdBarraTempoPorSituacao, pfdLinhaTempoPorDia, pfdLinhaVidaPedido, pfdRoscaPontualidade,
+} from "./charts.js";
 
 let consultaAtual = 0;
 let consultando = false;
@@ -26,6 +29,7 @@ let erroConsulta = null;
 
 const ABAS = [
   { id: "visao", icon: "bar-chart", label: "Visão Geral" },
+  { id: "dashboard", icon: "target", label: "Dashboard" },
   { id: "pedidos", icon: "receipt", label: "Pedidos" },
   { id: "cancelamentos", icon: "ban", label: "Cancelamentos" },
   { id: "lancamentos", icon: "banknote", label: "Lançamentos" },
@@ -313,6 +317,7 @@ function renderAbaAtual() {
     return;
   }
   if (pfd.aba === "visao") renderVisaoGeral(box);
+  else if (pfd.aba === "dashboard") renderDashboardOperacional(box);
   else if (pfd.aba === "pedidos") renderPedidos(box);
   else if (pfd.aba === "cancelamentos") renderCancelamentos(box);
   else if (pfd.aba === "lancamentos") renderLancamentos(box);
@@ -613,6 +618,213 @@ function renderVisaoGeral(box) {
   el("#pfd-ver-cancelamentos")?.addEventListener("click", () => { pfd.filtrosCancelamentos = { busca: "", status: "todos" }; irParaAba("cancelamentos"); });
   el("#pfd-ver-ignorados-visao")?.addEventListener("click", () => { pfd.verIgnorados = true; irParaAba("pedidos"); });
   el("#pfd-ver-lancamentos")?.addEventListener("click", () => irParaAba("lancamentos"));
+}
+
+// ---------------------------------------------------------------------------
+// DASHBOARD OPERACIONAL — indicadores logísticos calculados no backend
+// (parserFoodDelivery.dashboard.js) a partir dos mesmos pedidos elegíveis do
+// período selecionado. Nada é calculado aqui: esta camada só formata/exibe.
+// ---------------------------------------------------------------------------
+const RANKING_LIMITE = 8;
+const fmtMin = (min) => (min == null ? "—" : `${min.toFixed(1).replace(".", ",")} min`);
+// fmtPct (utils.js) usa ponto decimal — no Dashboard todo número já usa vírgula
+// (km, min), então aqui também, pra não misturar "79.2%" com "9,6 min" na mesma tela.
+const fmtPctBr = (v) => (v == null ? "—" : `${fmtPct(v).replace(".", ",")}`);
+
+/** Tabela com as N primeiras linhas visíveis e o resto num <tbody> oculto, revelado por um botão — nunca scrollbar interna. */
+function tabelaRankingHtml({ id, cabecalho, itens, linhaFn }) {
+  if (!itens.length) return vazio("inbox", "Sem dados", "Não há dados suficientes neste período para este indicador.");
+  const visiveis = itens.slice(0, RANKING_LIMITE);
+  const resto = itens.slice(RANKING_LIMITE);
+  return `
+    <div class="tabela-wrap"><table class="grid" id="${id}">
+      <thead><tr>${cabecalho.map((h) => `<th${h.num ? ' class="num"' : ""}>${h.label}</th>`).join("")}</tr></thead>
+      <tbody>${visiveis.map((it, i) => linhaFn(it, i)).join("")}</tbody>
+      ${resto.length ? `<tbody id="${id}-resto" hidden>${resto.map((it, i) => linhaFn(it, i + RANKING_LIMITE)).join("")}</tbody>` : ""}
+    </table></div>
+    ${resto.length ? `<button type="button" class="btn btn-ghost btn-sm pfd-rank-toggle" data-alvo="${id}-resto" data-total="${itens.length}">${icon("chevron-right", { size: 13 })} Ver ranking completo (${itens.length})</button>` : ""}`;
+}
+function ligarRankingToggles(box) {
+  box.querySelectorAll(".pfd-rank-toggle").forEach((b) => b.addEventListener("click", () => {
+    const alvo = el("#" + b.dataset.alvo);
+    if (!alvo) return;
+    const vaiAbrir = alvo.hidden;
+    alvo.hidden = !vaiAbrir;
+    b.innerHTML = vaiAbrir ? `${icon("chevron-left", { size: 13 })} Ver menos` : `${icon("chevron-right", { size: 13 })} Ver ranking completo (${b.dataset.total})`;
+  }));
+}
+function ligarLinhasEntregador(box, onClique) {
+  box.querySelectorAll("[data-entregador-chave]").forEach((tr) => tr.addEventListener("click", () => onClique(tr.dataset.entregadorChave)));
+}
+
+function analiseOperacionalHtml(a) {
+  if (!a) return "";
+  const linhas = [];
+  if (a.entregadorMaiorVolume) linhas.push(`<b>${escapeHtml(a.entregadorMaiorVolume.entregador)}</b> teve o maior volume de entregas (${a.entregadorMaiorVolume.quantidade}).`);
+  if (a.entregadorMaiorTaxas) linhas.push(`<b>${escapeHtml(a.entregadorMaiorTaxas.entregador)}</b> recebeu o maior valor em taxas (${fmtMoeda(a.entregadorMaiorTaxas.taxas)}).`);
+  if (a.entregadorMenorTempoMedio) linhas.push(`<b>${escapeHtml(a.entregadorMenorTempoMedio.entregador)}</b> teve o menor tempo médio de entrega (${fmtMin(a.entregadorMenorTempoMedio.mediaMin)}).`);
+  if (a.entregadorMaiorTempoMedio) linhas.push(`<b>${escapeHtml(a.entregadorMaiorTempoMedio.entregador)}</b> teve o maior tempo médio de entrega (${fmtMin(a.entregadorMaiorTempoMedio.mediaMin)}).`);
+  if (a.diaMenorTempoMedio) linhas.push(`O dia com menor tempo médio de entrega foi <b>${fmtDataBr(a.diaMenorTempoMedio.data)}</b> (${fmtMin(a.diaMenorTempoMedio.mediaMin)}).`);
+  if (a.diaMaiorTempoMedio) linhas.push(`O dia com maior tempo médio de entrega foi <b>${fmtDataBr(a.diaMaiorTempoMedio.data)}</b> (${fmtMin(a.diaMaiorTempoMedio.mediaMin)}).`);
+  if (a.entregadorMaiorDistanciaEstimada) linhas.push(`<b>${escapeHtml(a.entregadorMaiorDistanciaEstimada.entregador)}</b> teve a maior distância estimada (${a.entregadorMaiorDistanciaEstimada.distanciaKm.toFixed(1).replace(".", ",")} km).`);
+  if (a.pontualidadeGeral) linhas.push(`A pontualidade geral do período foi de <b>${fmtPctBr(a.pontualidadeGeral.percentualNoPrazo)}</b> (${a.pontualidadeGeral.classificaveis} entregas classificáveis).`);
+  if (a.atrasoMedio) linhas.push(`O atraso médio das entregas fora do prazo foi de <b>${fmtMin(a.atrasoMedio.medioMin)}</b> (${a.atrasoMedio.quantidade} ${a.atrasoMedio.quantidade === 1 ? "entrega" : "entregas"}).`);
+  if (a.maiorAtraso) linhas.push(`O maior atraso registrado foi de <b>${fmtMin(a.maiorAtraso.maiorMin)}</b>.`);
+  if (a.diaMaiorPercentualAtraso) linhas.push(`O dia com maior percentual de atraso foi <b>${fmtDataBr(a.diaMaiorPercentualAtraso.data)}</b> (${fmtPctBr(a.diaMaiorPercentualAtraso.percentualForaDoPrazo)} fora do prazo).`);
+  if (a.entregadorMaiorPontualidade) linhas.push(`<b>${escapeHtml(a.entregadorMaiorPontualidade.entregador)}</b> teve a maior pontualidade (${fmtPctBr(a.entregadorMaiorPontualidade.percentualNoPrazo)}, ${a.entregadorMaiorPontualidade.classificaveis} entregas classificáveis).`);
+  if (a.entregadorMenorPontualidade && a.entregadorMenorPontualidade.entregador !== a.entregadorMaiorPontualidade?.entregador) linhas.push(`<b>${escapeHtml(a.entregadorMenorPontualidade.entregador)}</b> teve a menor pontualidade (${fmtPctBr(a.entregadorMenorPontualidade.percentualNoPrazo)}, ${a.entregadorMenorPontualidade.classificaveis} entregas classificáveis).`);
+  if (!linhas.length) return vazio("inbox", "Sem dados suficientes", "Não há dados suficientes no período para gerar a análise operacional.");
+  return `<ul class="pfd-analise-lista">${linhas.map((l) => `<li>${l}</li>`).join("")}</ul>`;
+}
+
+/** Etapa 7 — Entregas no prazo. "Sem prazo"/"sem data de entrega" nunca entram no % (denominador é só classificáveis). */
+function pontualidadeHtml(p) {
+  if (p.classificaveis === 0) {
+    const motivo = p.totalConcluidos === 0 ? "Não há entregas concluídas no período selecionado."
+      : "Nenhuma entrega do período tem prazo de entrega e horário de entrega registrados simultaneamente — comum em importações feitas antes da coluna \"Prazo de entrega\" existir no relatório.";
+    return vazio("target", "Dados de prazo não disponíveis", motivo);
+  }
+  const item = (lbl, qtd, pct, classe) => `
+    <div class="pfd-status-item pfd-status--${classe}">
+      <span class="pfd-status-lbl">${lbl}</span>
+      <span class="pfd-status-val">${qtd}${pct != null ? ` · ${fmtPctBr(pct)}` : ""}</span>
+    </div>`;
+  return `
+    <div class="dex-chart-wrap" style="max-width:280px;margin:0 auto"><canvas id="pfd-dash-chart-pontualidade"></canvas></div>
+    <div class="pfd-status-band" style="margin-top:16px">
+      ${item("No prazo", p.noPrazo, p.percentualNoPrazo, "pos")}
+      ${item("Fora do prazo", p.foraDoPrazo, p.percentualForaDoPrazo, "neg")}
+      ${p.semPrazo > 0 ? item("Sem prazo disponível", p.semPrazo, null, "neutro") : ""}
+      ${p.semDataEntrega > 0 ? item("Sem data de entrega", p.semDataEntrega, null, "neutro") : ""}
+    </div>
+    <p class="pfd-secao-texto" style="margin-top:12px">
+      <b>${p.classificaveis}</b> entregas classificáveis de <b>${p.totalConcluidos}</b> entregas concluídas.
+      ${p.atraso.quantidade ? ` Atraso médio: <b>${fmtMin(p.atraso.medioMin)}</b> · Mediana: <b>${fmtMin(p.atraso.medianaMin)}</b> · Maior atraso: <b>${fmtMin(p.atraso.maiorMin)}</b>.` : ""}
+    </p>`;
+}
+
+function renderDashboardOperacional(box) {
+  destruirGraficosPfdDashboard();
+  const d = pfd.atual?.dashboardOperacional;
+  if (!d) { box.innerHTML = vazio("bar-chart", "Sem dados", "Não há indicadores calculados para este período."); return; }
+  const { resumo } = d;
+
+  const card = (iconeNome, lbl, val, sub) => `
+    <div class="vd-card pfd-kpi">
+      <div class="vd-card-topo"><span class="vd-card-ico">${icon(iconeNome, { size: 16 })}</span><span class="vd-card-lbl" title="${escapeHtml(lbl)}">${lbl}</span></div>
+      <div class="vd-card-val">${val}</div>${sub ? `<div class="vd-card-sub">${sub}</div>` : ""}
+    </div>`;
+
+  box.innerHTML = `
+    <div class="vd-cards pfd-kpis pfd-kpis--dash">
+      ${card("receipt", "Entregas", resumo.totalEntregas, "Concluídas no período")}
+      ${card("banknote", "Taxas de entregador", fmtMoeda(resumo.taxasTotal), "Total pago no período")}
+      ${card("truck", "Distância estimada", `${d.distanciaEstimada.totalKm.toFixed(1).replace(".", ",")} km`, "Soma das distâncias em raio informadas pelo relatório — não é o percurso real")}
+      ${card("clock", "Tempo médio de entrega", resumo.tempoMedioEntregaMin != null ? fmtMin(resumo.tempoMedioEntregaMin) : "—", "Coleta até a entrega")}
+      ${card("target", "Entregas no prazo", d.pontualidade.classificaveis > 0 ? fmtPctBr(d.pontualidade.percentualNoPrazo) : "—",
+        d.pontualidade.classificaveis > 0 ? `${d.pontualidade.noPrazo} de ${d.pontualidade.classificaveis} entregas classificáveis` : "Dados de prazo não disponíveis")}
+      ${card("users", "Entregadores ativos", resumo.entregadoresAtivos, "Com entregas no período")}
+    </div>
+
+    ${pfdSecao("award", "Entregadores por quantidade de entregas", "Entregadores com mais entregas no período selecionado", `
+      <div class="dex-chart-wrap"><canvas id="pfd-dash-chart-entregas"></canvas></div>
+      ${tabelaRankingHtml({
+        id: "pfd-dash-tab-entregas", cabecalho: [{ label: "Entregador" }, { label: "Entregas", num: true }], itens: d.entregadoresPorEntregas,
+        linhaFn: (e, i) => `<tr data-entregador-chave="${escapeHtml(e.chave)}" style="cursor:pointer"><td>${i < 3 ? `${icon("award", { size: 13 })} ` : ""}${escapeHtml(e.entregador)}</td><td class="num">${e.quantidade}</td></tr>`,
+      })}`)}
+
+    ${pfdSecao("wallet", "Entregadores por taxas de entregador", "Entregadores com maior valor de taxas no período selecionado", `
+      <div class="dex-chart-wrap"><canvas id="pfd-dash-chart-taxas"></canvas></div>
+      ${tabelaRankingHtml({
+        id: "pfd-dash-tab-taxas", cabecalho: [{ label: "Entregador" }, { label: "Taxas", num: true }], itens: d.entregadoresPorTaxas,
+        linhaFn: (e) => `<tr data-entregador-chave="${escapeHtml(e.chave)}" style="cursor:pointer"><td>${escapeHtml(e.entregador)}</td><td class="num">${fmtMoeda(e.taxas)}</td></tr>`,
+      })}`)}
+
+    ${pfdSecao("activity", "Tempo médio por situação", "Duração média entre os marcos operacionais registrados no relatório", `
+      ${d.tempoPorSituacao.length ? `<div class="dex-chart-wrap"><canvas id="pfd-dash-chart-situacao"></canvas></div>`
+        : vazio("clock", "Sem dados suficientes", "O relatório do período não trouxe marcos de tempo suficientes para este indicador.")}`)}
+
+    ${pfdSecao("target", "Entregas no prazo", "Comparação entre o horário de entrega e o prazo prometido no período selecionado", pontualidadeHtml(d.pontualidade))}
+
+    ${pfdSecao("clock", "Tempo médio de entrega por entregador", "Tempo entre coleta e entrega", `
+      <div class="dex-chart-wrap"><canvas id="pfd-dash-chart-tempo-entregador"></canvas></div>
+      ${tabelaRankingHtml({
+        id: "pfd-dash-tab-tempo-entregador", cabecalho: [{ label: "Entregador" }, { label: "Tempo médio", num: true }, { label: "Entregas", num: true }], itens: d.tempoPorEntregador,
+        linhaFn: (e) => `<tr data-entregador-chave="${escapeHtml(e.chave)}" style="cursor:pointer"><td>${escapeHtml(e.entregador)}</td><td class="num">${fmtMin(e.mediaMin)}</td><td class="num">${e.quantidade}</td></tr>`,
+      })}`)}
+
+    ${pfdSecao("trending-up", "Tempo médio de entrega por dia", "Coleta até a entrega, por dia do período", `
+      ${d.tempoPorDia.length ? `<div class="dex-chart-wrap"><canvas id="pfd-dash-chart-tempo-dia"></canvas></div>`
+        : vazio("clock", "Sem dados suficientes", "Não há pares de coleta/entrega válidos neste período.")}`)}
+
+    ${pfdSecao("layers", "Tempo médio de vida do pedido", "Da abertura até a finalização — concluídos e cancelados em séries separadas", `
+      ${(d.vidaPedidoPorDia.concluidos.length || d.vidaPedidoPorDia.cancelados.length) ? `<div class="dex-chart-wrap"><canvas id="pfd-dash-chart-vida-pedido"></canvas></div>`
+        : vazio("clock", "Sem dados suficientes", "Não há timestamps de abertura/finalização válidos neste período.")}`)}
+
+    ${pfdSecao("truck", "Distância estimada por entregador", "Soma das distâncias em raio informadas pelo relatório no período selecionado", `
+      <p class="pfd-secao-nota">${icon("alert-triangle", { size: 14 })} ${escapeHtml(d.distanciaEstimada.avisoFonte)}</p>
+      <div class="dex-chart-wrap"><canvas id="pfd-dash-chart-distancia"></canvas></div>
+      ${tabelaRankingHtml({
+        id: "pfd-dash-tab-distancia", cabecalho: [{ label: "Entregador" }, { label: "Distância estimada", num: true }, { label: "Taxa/km estimado", num: true }], itens: d.distanciaEstimada.porEntregador,
+        linhaFn: (e) => `<tr data-entregador-chave="${escapeHtml(e.chave)}" style="cursor:pointer"><td>${escapeHtml(e.entregador)}</td><td class="num">${e.distanciaKm.toFixed(1).replace(".", ",")} km</td><td class="num">${e.taxaPorKmEstimado != null ? `${fmtMoeda(e.taxaPorKmEstimado)}/km` : "—"}</td></tr>`,
+      })}
+      <p class="pfd-secao-texto" style="margin-top:12px">
+        Taxa por km estimado (geral): <b>${d.distanciaEstimada.taxaPorKmEstimadoGeral != null ? `${fmtMoeda(d.distanciaEstimada.taxaPorKmEstimadoGeral)}/km` : "—"}</b>
+        · Pedidos considerados: <b>${d.distanciaEstimada.pedidosConsiderados} de ${d.distanciaEstimada.pedidosElegiveis}</b>
+      </p>`)}
+
+    ${pfdSecao("list-checks", "Análise operacional", "Leitura determinística dos indicadores acima — sem geração por IA", analiseOperacionalHtml(d.analiseOperacional))}
+  `;
+
+  pfdBarraHRanking("pfd-dash-chart-entregas", d.entregadoresPorEntregas.slice(0, 10).map((e) => e.entregador), d.entregadoresPorEntregas.slice(0, 10).map((e) => e.quantidade));
+  pfdBarraHRanking("pfd-dash-chart-taxas", d.entregadoresPorTaxas.slice(0, 10).map((e) => e.entregador), d.entregadoresPorTaxas.slice(0, 10).map((e) => e.taxas), { cor: "#3B82C4", sufixo: "", casasDecimais: 2 });
+  pfdBarraTempoPorSituacao("pfd-dash-chart-situacao", d.tempoPorSituacao);
+  pfdBarraHRanking("pfd-dash-chart-tempo-entregador", d.tempoPorEntregador.slice(0, 10).map((e) => e.entregador), d.tempoPorEntregador.slice(0, 10).map((e) => e.mediaMin), { cor: "#7C5CD0", sufixo: " min", casasDecimais: 1 });
+  pfdLinhaTempoPorDia("pfd-dash-chart-tempo-dia", d.tempoPorDia);
+  pfdLinhaVidaPedido("pfd-dash-chart-vida-pedido", d.vidaPedidoPorDia.concluidos, d.vidaPedidoPorDia.cancelados);
+  pfdBarraHRanking("pfd-dash-chart-distancia", d.distanciaEstimada.porEntregador.slice(0, 10).map((e) => e.entregador), d.distanciaEstimada.porEntregador.slice(0, 10).map((e) => e.distanciaKm), { cor: "#FFC72C", sufixo: " km", casasDecimais: 1 });
+  pfdRoscaPontualidade("pfd-dash-chart-pontualidade", d.pontualidade.noPrazo, d.pontualidade.foraDoPrazo);
+
+  ligarRankingToggles(box);
+  ligarLinhasEntregador(box, abrirDrawerEntregadorDashboard);
+}
+
+function abrirDrawerEntregadorDashboard(chave) {
+  const d = pfd.atual?.dashboardOperacional;
+  if (!d) return;
+  const entregas = d.entregadoresPorEntregas.find((e) => e.chave === chave);
+  const taxas = d.entregadoresPorTaxas.find((e) => e.chave === chave);
+  const tempo = d.tempoPorEntregador.find((e) => e.chave === chave);
+  const distancia = d.distanciaEstimada.porEntregador.find((e) => e.chave === chave);
+  const pontualidadeE = d.pontualidade.porEntregador.find((e) => e.chave === chave);
+  const conciliacao = (pfd.atual.entregadores || []).find((e) => e.chave === chave);
+  const nome = entregas?.entregador || taxas?.entregador || tempo?.entregador || distancia?.entregador || pontualidadeE?.entregador || conciliacao?.entregador || "—";
+
+  const item = (lbl, val) => (val == null ? "" : `<div class="vd-pv-item"><span>${lbl}</span><b>${val}</b></div>`);
+  abrirPfdDrawer(`
+    <h3>${icon("users", { size: 17 })} ${escapeHtml(nome)}</h3>
+    <div class="vd-pv-grid">
+      ${item("Entregas concluídas", entregas?.quantidade)}
+      ${item("Taxas acumuladas", taxas ? fmtMoeda(taxas.taxas) : null)}
+      ${item("Tempo médio de entrega", tempo ? fmtMin(tempo.mediaMin) : null)}
+      ${item("Mediana do tempo", tempo ? fmtMin(tempo.medianaMin) : null)}
+      ${item("Menor tempo", tempo ? fmtMin(tempo.minMin) : null)}
+      ${item("Maior tempo", tempo ? fmtMin(tempo.maxMin) : null)}
+      ${item("Distância estimada em raio", distancia && distancia.entregasComDistancia ? `${distancia.distanciaKm.toFixed(1).replace(".", ",")} km` : null)}
+      ${item("Entregas com distância disponível", distancia?.entregasComDistancia)}
+      ${item("Taxa por km estimado", distancia?.taxaPorKmEstimado != null ? `${fmtMoeda(distancia.taxaPorKmEstimado)}/km` : null)}
+      ${item("Entregas classificáveis (prazo)", pontualidadeE && pontualidadeE.classificaveis > 0 ? pontualidadeE.classificaveis : null)}
+      ${item("No prazo", pontualidadeE && pontualidadeE.classificaveis > 0 ? pontualidadeE.noPrazo : null)}
+      ${item("Fora do prazo", pontualidadeE && pontualidadeE.classificaveis > 0 ? pontualidadeE.foraDoPrazo : null)}
+      ${item("Pontualidade", pontualidadeE && pontualidadeE.classificaveis > 0 ? fmtPctBr(pontualidadeE.percentualNoPrazo) : null)}
+      ${item("Atraso médio", pontualidadeE?.atraso.quantidade ? fmtMin(pontualidadeE.atraso.medioMin) : null)}
+      ${item("Maior atraso", pontualidadeE?.atraso.quantidade ? fmtMin(pontualidadeE.atraso.maiorMin) : null)}
+      ${item("Cancelamentos com taxa", conciliacao?.canceladosComTaxa)}
+      ${item("Cancelamentos sem taxa", conciliacao?.canceladosSemTaxa)}
+      ${item("Cancelamentos em revisão", conciliacao?.canceladosRevisao || null)}
+    </div>
+    <p class="dex-diag-vazio">A distância acima é uma estimativa em raio, não o percurso real percorrido. Pontualidade só aparece quando há entregas com prazo e horário de entrega registrados.</p>
+  `);
 }
 
 // ---------------------------------------------------------------------------

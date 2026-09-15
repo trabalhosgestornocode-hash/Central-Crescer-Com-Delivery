@@ -46,6 +46,18 @@ const ALIASES = {
   razaoRejeicao: ["razao da rejeicao"],
   justificativaRejeicao: ["justificativa da rejeicao"],
   origem: ["origem"],
+  // Distância — auditoria confirmou (relatório real, set/2026) que "Distância
+  // em rota (km)" existe no cabeçalho mas vem SEMPRE vazia; só "Distância em
+  // raio (km)" tem valor real. Guardamos as duas (rota fica pronta pra uma
+  // troca de fonte futura, se o relatório passar a preenchê-la), mas só a de
+  // raio alimenta o Dashboard Operacional — nunca chamar isso de "km
+  // rodados"/"percurso real": raio é estimativa, não trajeto percorrido.
+  distanciaRaioKm: ["distancia em raio km", "distancia em raio"],
+  distanciaRotaKm: ["distancia em rota km", "distancia em rota"],
+  // Prazo de entrega prometido (datetime absoluto, ex. "07/09/2026 00:36:19")
+  // — comparado contra `dataEntregue` na Etapa 7 (Entregas no prazo). NUNCA
+  // contra `dataFinalizado` (ver parserFoodDelivery.dashboard.js).
+  prazoEntrega: ["prazo de entrega", "prazo entrega"],
   // Campo de composição/produtos do pedido — fonte principal da identificação
   // de operação (Subway x Açaí no Grau x outras), ver parserFoodDelivery.operacao.js.
   detalhesPedido: ["detalhes do pedido", "detalhes pedido", "itens do pedido", "produtos do pedido"],
@@ -61,6 +73,8 @@ const ROTULO = {
   dataAceito: "Data e horario (aceito)", dataColetado: "Data e horario (coletado)",
   dataChegadaEntrega: "Data da chegada para entrega", dataRejeitado: "Data e horario (rejeitado)",
   razaoRejeicao: "Razão da rejeição", justificativaRejeicao: "Justificativa da rejeição",
+  distanciaRaioKm: "Distância em raio (km)", distanciaRotaKm: "Distância em rota (km)",
+  prazoEntrega: "Prazo de entrega",
 };
 // Colunas sem as quais o parser recusa o arquivo (a conciliação depende delas).
 const OBRIGATORIOS = ["numeroPedido", "dataHora", "situacao", "entregador", "taxaEntregador"];
@@ -196,6 +210,9 @@ export async function lerRelatorio(buf, nomeArquivo) {
       justificativaRejeicao: indicePorCampo.justificativaRejeicao != null && linha[indicePorCampo.justificativaRejeicao] != null ? String(linha[indicePorCampo.justificativaRejeicao]).trim() : null,
       origem: indicePorCampo.origem != null && linha[indicePorCampo.origem] != null ? String(linha[indicePorCampo.origem]).trim() : null,
       detalhesPedido: indicePorCampo.detalhesPedido != null && linha[indicePorCampo.detalhesPedido] != null ? String(linha[indicePorCampo.detalhesPedido]) : null,
+      distanciaRaioKm: indicePorCampo.distanciaRaioKm != null ? parseNumero(linha[indicePorCampo.distanciaRaioKm]) : null,
+      distanciaRotaKm: indicePorCampo.distanciaRotaKm != null ? parseNumero(linha[indicePorCampo.distanciaRotaKm]) : null,
+      prazoEntrega: indicePorCampo.prazoEntrega != null ? parseDataHoraBr(linha[indicePorCampo.prazoEntrega]) : null,
       dadosBrutos,
     });
   }

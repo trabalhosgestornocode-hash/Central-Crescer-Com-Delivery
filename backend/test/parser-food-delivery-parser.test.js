@@ -64,6 +64,43 @@ test("lerRelatorio tolera cabeçalho com acentuação/maiúsculas diferentes", a
   assert.equal(r.pedidos[0].entregador, "Carla");
 });
 
+test("lerRelatorio reconhece a coluna real 'Prazo de entrega' e normaliza para prazoEntrega", async () => {
+  const buf = await bufferDeMatriz([
+    [...CABECALHO, "Prazo de entrega"],
+    ["1001", "01/08/2026 10:00:00", "Finalizado", "Ana", 10, 45.9, "Cartão", "", "1x Sub Frango 15cm", "01/08/2026 10:36:19"],
+  ]);
+  const r = await lerRelatorio(buf, "teste.xlsx");
+  assert.equal(r.pedidos[0].prazoEntrega, "2026-08-01T10:36:19");
+  assert.ok(r.colunasEncontradas.includes("Prazo de entrega"));
+});
+
+test("lerRelatorio: prazoEntrega vazio/ausente vem null, nunca zero/data artificial", async () => {
+  const buf = await bufferDeMatriz([
+    [...CABECALHO, "Prazo de entrega"],
+    ["1001", "01/08/2026 10:00:00", "Finalizado", "Ana", 10, 45.9, "Cartão", "", "1x Sub Frango 15cm", ""],
+  ]);
+  const r = await lerRelatorio(buf, "teste.xlsx");
+  assert.equal(r.pedidos[0].prazoEntrega, null);
+});
+
+test("lerRelatorio: sem a coluna 'Prazo de entrega' no relatório, prazoEntrega vem null (relatório antigo continua funcionando)", async () => {
+  const buf = await bufferDeMatriz([
+    CABECALHO,
+    ["1001", "01/08/2026 10:00:00", "Finalizado", "Ana", 10, 45.9, "Cartão", "", "1x Sub Frango 15cm"],
+  ]);
+  const r = await lerRelatorio(buf, "teste.xlsx");
+  assert.equal(r.pedidos[0].prazoEntrega, null);
+});
+
+test("lerRelatorio: prazoEntrega com texto inválido vem null, nunca lança nem inventa data", async () => {
+  const buf = await bufferDeMatriz([
+    [...CABECALHO, "Prazo de entrega"],
+    ["1001", "01/08/2026 10:00:00", "Finalizado", "Ana", 10, 45.9, "Cartão", "", "1x Sub Frango 15cm", "não informado"],
+  ]);
+  const r = await lerRelatorio(buf, "teste.xlsx");
+  assert.equal(r.pedidos[0].prazoEntrega, null);
+});
+
 test("lerRelatorio converte datas seriais nativas do Excel em todos os timestamps", async () => {
   const cabecalho = [
     "N Pedido", "Data e hora", "Situação", "Entregador", "Taxa do entregador",

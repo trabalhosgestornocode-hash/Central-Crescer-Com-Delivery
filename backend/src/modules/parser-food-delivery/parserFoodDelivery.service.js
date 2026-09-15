@@ -13,6 +13,7 @@ import {
 } from "./parserFoodDelivery.calc.js";
 import { classificarOperacao, OPERACAO, rotuloOperacao } from "./parserFoodDelivery.operacao.js";
 import { classificarCancelamento, CLASSIFICACAO_CANCELAMENTO } from "./parserFoodDelivery.classificacao.js";
+import { calcularDashboardOperacional } from "./parserFoodDelivery.dashboard.js";
 
 import { normalizarPeriodo, consolidarPedidosPeriodo, horaOperacional } from "./parserFoodDelivery.periodo.js";
 import { resolverUnidade } from "./parserFoodDelivery.shared.js";
@@ -48,6 +49,12 @@ const COLUNAS_PEDIDO_LEITURA = [
   "data_rejeitado", "razao_rejeicao", "justificativa_rejeicao",
   "classificacao_cancelamento", "classificacao_motivo", "classificacao_nivel_confianca", "classificacao_regra",
   "classificacao_original", "classificacao_override_usuario_nome", "classificacao_override_motivo", "classificacao_override_em",
+  // Distância (migration 081) — só "raio" alimenta indicadores; "rota" fica
+  // gravada por compatibilidade futura (ver parserFoodDelivery.parser.js).
+  "distancia_raio_km", "distancia_rota_km",
+  // Prazo de entrega prometido (migration 081) — comparado contra
+  // data_entregue na Etapa 7 (Entregas no prazo).
+  "prazo_entrega",
 ].join(", ");
 
 /** Number(x), mas preserva null/undefined — "não informado" nunca vira 0. */
@@ -145,6 +152,11 @@ function paraApiPedido(row) {
     dataRejeitado: horaOperacional(row.data_rejeitado ?? row.dataRejeitado),
     razaoRejeicao: row.razao_rejeicao ?? row.razaoRejeicao ?? null,
     justificativaRejeicao: row.justificativa_rejeicao ?? row.justificativaRejeicao ?? null,
+    // Distância (migration 081) — só "raio" tem valor real hoje (auditoria);
+    // "rota" é lida/persistida mas nenhum indicador a usa ainda.
+    distanciaRaioKm: numOuNulo(row.distancia_raio_km ?? row.distanciaRaioKm),
+    distanciaRotaKm: numOuNulo(row.distancia_rota_km ?? row.distanciaRotaKm),
+    prazoEntrega: horaOperacional(row.prazo_entrega ?? row.prazoEntrega),
     // Classificação automática do cancelamento + override manual (seção 29).
     classificacaoCancelamento: row.classificacao_cancelamento ?? row.classificacaoCancelamento ?? null,
     classificacaoEfetiva: classificacaoEfetivaCancelamento({ situacao: row.situacao,
@@ -393,6 +405,8 @@ function paraLinhaPedido(p, { importacaoId, organizacaoId, unidadeId }) {
     data_pronto: timestampPersistido(p.dataPronto), data_despachado: timestampPersistido(p.dataDespachado), data_aceito: timestampPersistido(p.dataAceito),
     data_coletado: timestampPersistido(p.dataColetado), data_chegada_entrega: timestampPersistido(p.dataChegadaEntrega),
     data_rejeitado: timestampPersistido(p.dataRejeitado), razao_rejeicao: p.razaoRejeicao ?? null, justificativa_rejeicao: p.justificativaRejeicao ?? null,
+    distancia_raio_km: p.distanciaRaioKm ?? null, distancia_rota_km: p.distanciaRotaKm ?? null,
+    prazo_entrega: timestampPersistido(p.prazoEntrega),
     // Resultado da classificação automática — `classificacao_original` é o
     // snapshot congelado no momento do import, nunca sobrescrito por um
     // override manual posterior (auditoria: sempre dá pra ver o que o motor
@@ -562,6 +576,10 @@ export async function obterImportacao({ organizacaoId, unidadeId, importacaoId }
     importacao: paraApiImportacao(importacao),
     resumo: ajustes.resumo, pedidos: ajustes.pedidos, pedidosIgnorados,
     entregadores: ajustes.entregadores, lancamentos: ajustes.lancamentos,
+    // Aba Dashboard — sempre a partir dos pedidos elegíveis PRÉ-ajustes (taxa
+    // do entregador real do iFood, nunca custo com lançamentos manuais
+    // misturado — mesma fonte que resumo.taxasValidas/agruparPorEntregador).
+    dashboardOperacional: calcularDashboardOperacional(pedidos),
   };
 }
 
@@ -910,5 +928,6 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
     pedidosIgnorados: todos.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado),
     entregadores: ajustes.entregadores, lancamentos: ajustes.lancamentos,
     fontes: [...fontes.values()], duplicadosSobrepostos: linhas.length - todos.length,
+    dashboardOperacional: calcularDashboardOperacional(pedidos),
   };
 }

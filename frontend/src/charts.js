@@ -380,6 +380,117 @@ export function graficoEvolucaoMix(id, calendario) {
   }));
 }
 
+// ===========================================================================
+// GRÁFICOS DO DASHBOARD OPERACIONAL (Parser Food Delivery) — registro
+// próprio (ciclo de vida independente). Paleta neutra: verde institucional
+// para o indicador principal de cada gráfico, sem usar o vermelho de marca
+// (reservado a erro/alerta real, nunca a um valor operacional normal).
+// ===========================================================================
+let instanciasPfdDash = [];
+export function destruirGraficosPfdDashboard() { instanciasPfdDash.forEach((c) => c.destroy()); instanciasPfdDash = []; }
+
+/** Ranking horizontal genérico (entregas por entregador, taxas por entregador, tempo médio por entregador). */
+export function pfdBarraHRanking(id, labels, data, { cor = C.verde, sufixo = "", casasDecimais = 0 } = {}) {
+  const el = document.getElementById(id);
+  if (!el || !window.Chart || !labels?.length) return;
+  instanciasPfdDash.push(new Chart(el, {
+    type: "bar",
+    data: { labels: labels.map((l) => corta(l, 22)), datasets: [{ data, backgroundColor: cor, borderRadius: 6, maxBarThickness: 20 }] },
+    options: {
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { title: (c) => labels[c[0].dataIndex], label: (c) => `${Number(c.raw).toFixed(casasDecimais)}${sufixo}` } },
+      },
+      scales: { x: { ticks: { callback: (v) => v + sufixo }, grid: { color: "#eef1f0" } }, y: { grid: { display: false } } },
+      animation: { duration: 550 },
+    },
+  }));
+}
+
+/** Duração média por etapa da timeline (Aberto -> Pronto -> Despachado -> Aceito -> Coletado -> Chegada), em minutos. */
+export function pfdBarraTempoPorSituacao(id, etapas) {
+  const el = document.getElementById(id);
+  if (!el || !window.Chart || !etapas?.length) return;
+  instanciasPfdDash.push(new Chart(el, {
+    type: "bar",
+    data: { labels: etapas.map((e) => e.rotulo), datasets: [{ data: etapas.map((e) => e.mediaMin), backgroundColor: C.azul, borderRadius: 6, maxBarThickness: 36 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (c) => `${Number(c.raw).toFixed(1)} min (${etapas[c.dataIndex].amostras} pedidos)` } },
+      },
+      scales: { y: { ticks: { callback: (v) => v + " min" }, grid: { color: "#eef1f0" } }, x: { grid: { display: false } } },
+      animation: { duration: 550 },
+    },
+  }));
+}
+
+/** Tempo médio de entrega (coleta -> entrega) por dia, em minutos — cronológico. */
+export function pfdLinhaTempoPorDia(id, pontos) {
+  const el = document.getElementById(id);
+  if (!el || !window.Chart || !pontos?.length) return;
+  instanciasPfdDash.push(new Chart(el, {
+    type: "line",
+    data: {
+      labels: pontos.map((p) => p.data.split("-").reverse().join("/").slice(0, 5)),
+      datasets: [{ label: "Tempo médio", data: pontos.map((p) => p.mediaMin), borderColor: C.verde, backgroundColor: "rgba(0,150,64,0.12)", fill: true, tension: 0.25, pointRadius: 3 }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (c) => `${Number(c.raw).toFixed(1)} min (${pontos[c.dataIndex].quantidade} entregas)` } },
+      },
+      scales: { y: { ticks: { callback: (v) => v + " min" }, grid: { color: "#eef1f0" } }, x: { grid: { display: false } } },
+      animation: { duration: 550 },
+    },
+  }));
+}
+
+/** Pontualidade (Etapa 7) — rosca só com no_prazo/fora_do_prazo. "Sem prazo"/"sem data de entrega" NUNCA entram aqui (distorceriam o %). */
+export function pfdRoscaPontualidade(id, noPrazo, foraDoPrazo) {
+  const el = document.getElementById(id);
+  if (!el || !window.Chart || (noPrazo || 0) + (foraDoPrazo || 0) === 0) return;
+  instanciasPfdDash.push(new Chart(el, {
+    type: "doughnut",
+    data: { labels: ["No prazo", "Fora do prazo"], datasets: [{ data: [noPrazo, foraDoPrazo], backgroundColor: [C.verde, C.verm], borderWidth: 2, borderColor: "#fff" }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, cutout: "62%",
+      plugins: {
+        legend: { position: "bottom", labels: { boxWidth: 12, padding: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: (c) => { const total = noPrazo + foraDoPrazo; return `${c.label}: ${c.raw} (${((c.raw / total) * 100).toFixed(1)}%)`; } } },
+      },
+      animation: { duration: 550 },
+    },
+  }));
+}
+
+/** Tempo médio de vida do pedido por dia — duas séries (concluídos x cancelados), nunca somadas. */
+export function pfdLinhaVidaPedido(id, concluidos, cancelados) {
+  const el = document.getElementById(id);
+  if (!el || !window.Chart || (!concluidos?.length && !cancelados?.length)) return;
+  const datas = [...new Set([...(concluidos || []), ...(cancelados || [])].map((p) => p.data))].sort();
+  const serie = (lista) => datas.map((d) => lista.find((p) => p.data === d)?.mediaMin ?? null);
+  instanciasPfdDash.push(new Chart(el, {
+    type: "line",
+    data: {
+      labels: datas.map((d) => d.split("-").reverse().join("/").slice(0, 5)),
+      datasets: [
+        { label: "Concluídos", data: serie(concluidos || []), borderColor: C.verde, backgroundColor: "rgba(0,150,64,0.1)", tension: 0.2, spanGaps: false, pointRadius: 3 },
+        { label: "Cancelados", data: serie(cancelados || []), borderColor: C.verm, backgroundColor: "rgba(219,59,59,0.08)", tension: 0.2, spanGaps: false, pointRadius: 3 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: "bottom" }, tooltip: { callbacks: { label: (c) => c.raw == null ? undefined : `${c.dataset.label}: ${Number(c.raw).toFixed(1)} min` } } },
+      scales: { y: { ticks: { callback: (v) => v + " min" }, grid: { color: "#eef1f0" } }, x: { grid: { display: false } } },
+      animation: { duration: 550 },
+    },
+  }));
+}
+
 /** Gráfico 6 — visão anual (12 meses: faturamento, deduções, receita, % deduções). */
 export function visaoAnual(id, meses) {
   const el = document.getElementById(id);

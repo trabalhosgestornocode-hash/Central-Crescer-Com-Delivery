@@ -4089,6 +4089,14 @@ tr.dex-linha-na { opacity: .65; }
 
 /* ---------- KPIs ---------- */
 .pfd-kpis { grid-template-columns: repeat(4, 1fr); gap: 16px; }
+/* Aba Dashboard tem 5 cards (Entregas/Taxas/Distância/Tempo/Entregadores) — largura flexível em vez do grid fixo de 4. */
+.pfd-kpis--dash { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+/* Rótulos mais longos que o padrão do resto do app ("Taxas de entregador",
+   "Tempo médio de entrega") — quebra em 2 linhas em vez de cortar com "...",
+   só nestes cards (escopo local, não mexe no .vd-card-lbl compartilhado). */
+.pfd-kpis--dash .vd-card-lbl { white-space: normal; overflow: visible; text-overflow: clip; line-height: 1.25; }
+.pfd-kpis--dash .vd-card-topo { align-items: flex-start; }
+.pfd-kpis--dash .vd-card-ico { flex-shrink: 0; margin-top: 1px; }
 .pfd-kpi {
   border: 1px solid var(--linha); border-top-width: 1px; border-radius: var(--raio);
   padding: 16px; gap: 8px; min-height: 116px; box-shadow: var(--sombra-sm);
@@ -4135,6 +4143,18 @@ tr.dex-linha-na { opacity: .65; }
 .pfd-secao-nota { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; color: var(--cinza); margin-top: 12px; }
 .pfd-secao-nota .icon { flex-shrink: 0; margin-top: 1px; }
 .pfd-secao-nota--warn { color: var(--warn); }
+/* Dashboard Operacional — rankings expansíveis (nunca scrollbar interna) e análise determinística. */
+.grid tr[data-entregador-chave] { cursor: pointer; }
+.grid tr[data-entregador-chave]:hover { background: var(--superficie-2); }
+.pfd-rank-toggle { margin-top: 10px; display: inline-flex; align-items: center; gap: 6px; }
+.pfd-analise-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.pfd-analise-lista li {
+  position: relative; padding-left: 16px; font-size: 13.5px; color: var(--cinza); line-height: 1.5;
+}
+.pfd-analise-lista li::before {
+  content: ""; position: absolute; left: 0; top: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--ok);
+}
+.pfd-analise-lista b { color: var(--texto); }
 .pfd-secao-faixa {
   display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
   margin-top: 16px; padding: 12px 14px; background: var(--superficie-2);
