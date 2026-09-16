@@ -38,6 +38,7 @@ import { abrirProdutoModal, abrirProdutoPorNome } from "./produtoModal.js";
 import { abrirInsumoPorNome } from "./insumoModal.js";
 import { abrirParserCancelamentos, abrirParserPedidoPorNumero, aguardarCarregamentoParser } from "./parserFoodDelivery.js";
 import { registrarResolverAcao } from "./agenteAcoesResolvedores.js";
+import { iniciarEfeitosLogin, marcarCamposInvalidos, limparCamposInvalidos, bloquearCamposLogin } from "./loginFx.js";
 import { aplicarTemaSalvo } from "./configuracoes.js";
 import { precisaDesafioMfa, abrirDesafioMfa } from "./mfa.js";
 import { abrirPainelAdmin, fecharPainelAdmin } from "./admin.js";
@@ -444,6 +445,7 @@ async function entrarNoContexto(opcao, botao) {
 function mostrarLogin() {
   mostrarTela("login");
   el("#login-pass").value = "";
+  iniciarEfeitosLogin();
 }
 
 // ---------- tela: definir senha (primeiro acesso) ----------
@@ -723,8 +725,10 @@ function wireEventos() {
     const btn = e.currentTarget.querySelector('button[type="submit"]');
     try {
       erroBox.hidden = true;
+      limparCamposInvalidos();
       btn?.classList.add("carregando");
       if (btn) btn.disabled = true;
+      bloquearCamposLogin(true);
       await login(el("#login-user").value, el("#login-pass").value);
       // 2º fator: se a conta tem autenticador cadastrado, a sessão está em
       // AAL1 e precisa subir para AAL2 antes de seguir. O backend é a
@@ -737,9 +741,11 @@ function wireEventos() {
     } catch (err) {
       erroBox.textContent = err.message;
       erroBox.hidden = false;
+      marcarCamposInvalidos();
     } finally {
       btn?.classList.remove("carregando");
       if (btn) btn.disabled = false;
+      bloquearCamposLogin(false);
     }
   });
 

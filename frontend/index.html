@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <!-- ?v= força o navegador a baixar o CSS novo após um deploy (evita tela antiga em cache).
        Incremente este número sempre que mudar o styles.css. -->
-  <link rel="stylesheet" href="/src/styles.css?v=30" />
+  <link rel="stylesheet" href="/src/styles.css?v=33" />
   <link rel="stylesheet" href="/src/desenvolvimento.css?v=1" />
   <link rel="stylesheet" href="/src/performance.css?v=2" />
   <!-- Tema individual (por dispositivo): aplica antes da pintura p/ evitar flash.
@@ -31,15 +31,23 @@
     <div class="lg-split">
       <!-- ---------- ESQUERDA: vitrine ---------- -->
       <aside class="lg-vitrine">
+        <!-- Camadas decorativas (glow que segue o cursor + partículas muito
+             discretas). Puramente visuais: aria-hidden, sem qualquer papel
+             interativo ou de conteúdo. -->
+        <div class="lg-spotlight-vitrine" aria-hidden="true"></div>
+        <div class="lg-particulas" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span><span></span>
+        </div>
         <div class="lg-vitrine-int">
           <div class="lg-lockup">
+            <span class="lg-logo-halo" aria-hidden="true"></span>
             <span class="cd-marca" role="img" aria-label="Crescer com Delivery">
               <span class="cd-l1">Crescer<em>com</em></span>
               <span class="cd-l2">Delivery</span>
             </span>
           </div>
 
-          <h1 class="lg-titulo">Sua operação.<br />Seus dados.<br /><span class="lg-red">Seu crescimento.</span></h1>
+          <h1 class="lg-titulo">Sua operação.<br />Seus dados.<br /><span class="lg-red lg-titulo-glow">Seu crescimento.</span></h1>
           <p class="lg-desc">A plataforma completa para gestão, estratégia e performance de operações de delivery. Centralize empresas, unidades e indicadores em um só lugar.</p>
 
           <div class="lg-cards">
@@ -61,7 +69,7 @@
               </span>
               <div><h3>Gestão centralizada</h3><p>CMV, estoque, vendas, compras e integrações em um só lugar.</p></div>
             </div>
-            <div class="lg-card">
+            <div class="lg-card lg-card--destaque">
               <span class="lg-card-ic">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>
               </span>
@@ -69,34 +77,63 @@
             </div>
           </div>
 
-          <div class="lg-fluxo">
-            <div class="lg-fx">
-              <span class="lg-fx-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/></svg></span>
-              <small>Crescer com Delivery</small>
+          <!-- Ecossistema operacional: a plataforma como origem, com Empresas
+               e Unidades funcionando como CHECKPOINTS embutidos na própria
+               curva (a linha entra e sai de cada cartão, não passa perto) até
+               chegar em Resultados. Um pulso percorre a curva a cada ciclo
+               (~10s) e acende cada checkpoint de passagem; cartões de dado
+               institucionais flutuam por cima. Tudo decorativo. -->
+          <div class="lg-ecossistema" aria-hidden="true">
+            <svg class="lg-eco-curva" viewBox="0 0 460 150" preserveAspectRatio="none" focusable="false">
+              <path class="lg-eco-curva-base" d="M28,118 C75,118 100,78 150,78 C195,78 225,42 300,42 C350,42 375,18 438,18" />
+              <path id="lgEcoCurvaPulso" class="lg-eco-curva-pulso" d="M28,118 C75,118 100,78 150,78 C195,78 225,42 300,42 C350,42 375,18 438,18" />
+              <circle class="lg-eco-pulso-ponto" r="3.4">
+                <animateMotion dur="10s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.08;0.82;1" calcMode="linear">
+                  <mpath href="#lgEcoCurvaPulso"></mpath>
+                </animateMotion>
+              </circle>
+            </svg>
+
+            <div class="lg-eco-node lg-eco-node--nucleo" style="--ex:6%; --ey:79%;">
+              <span class="lg-eco-node-ic lg-eco-node-ic--nucleo" aria-hidden="true">
+                <span class="lg-eco-node-anel" aria-hidden="true"></span>
+              </span>
+              <small>Plataforma</small>
             </div>
-            <span class="lg-fx-seta"><svg viewBox="0 0 40 8" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M0 4h34"/><path d="M30 1l4 3-4 3"/></svg></span>
-            <div class="lg-fx">
-              <span class="lg-fx-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V5h9v16"/><path d="M14 10h5v11"/><path d="M8 8h2M8 12h2M8 16h2"/></svg></span>
-              <small>Empresas</small>
+
+            <!-- checkpoints: a curva passa exatamente pelo ponto central de
+                 cada cartão (mesma coordenada do path acima) — o cartão cobre
+                 o trecho que "entra" nele, e a linha some sob o vidro para
+                 reaparecer do outro lado; os traços junto às bordas (CSS)
+                 reforçam essa costura em qualquer largura de tela. -->
+            <div class="lg-eco-node lg-eco-checkpoint lg-eco-checkpoint--empresas" style="--ex:32.6%; --ey:52%;">
+              <span class="lg-eco-node-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V5h9v16"/><path d="M14 10h5v11"/><path d="M8 8h2M8 12h2M8 16h2"/></svg></span>
+              <span class="lg-eco-checkpoint-txt"><b>Empresas</b><small>Gestão centralizada</small></span>
             </div>
-            <span class="lg-fx-seta"><svg viewBox="0 0 40 8" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M0 4h34"/><path d="M30 1l4 3-4 3"/></svg></span>
-            <div class="lg-fx">
-              <span class="lg-fx-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-1.5-5h-15L3 9z"/><path d="M5 9v11h14V9"/></svg></span>
-              <small>Unidades</small>
+            <div class="lg-eco-node lg-eco-checkpoint lg-eco-checkpoint--unidades" style="--ex:65.2%; --ey:28%;">
+              <span class="lg-eco-node-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9h18l-1.5-5h-15L3 9z"/><path d="M5 9v11h14V9"/></svg></span>
+              <span class="lg-eco-checkpoint-txt"><b>Unidades</b><small>3 online</small></span>
             </div>
-            <span class="lg-fx-seta"><svg viewBox="0 0 40 8" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M0 4h34"/><path d="M30 1l4 3-4 3"/></svg></span>
-            <div class="lg-fx">
-              <span class="lg-fx-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg></span>
+
+            <div class="lg-eco-node lg-eco-node--resultados" style="--ex:95.2%; --ey:12%;">
+              <span class="lg-eco-node-ic lg-eco-node-ic--resultados" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
               <small>Resultados</small>
             </div>
+
+            <div class="lg-eco-chip lg-eco-chip--a" style="--cx:12%; --cy:2%;"><b>Pedidos</b><span>+18%</span></div>
+            <div class="lg-eco-chip lg-eco-chip--c" style="--cx:44%; --cy:86%;"><b>Performance</b><span>+12,4%</span></div>
           </div>
         </div>
       </aside>
 
       <!-- ---------- DIREITA: formulário ---------- -->
       <div class="lg-form-col">
+        <div class="lg-spotlight-form" aria-hidden="true"></div>
         <form id="login-form" class="lg-form" autocomplete="on">
-          <span class="lg-app-ic" role="img" aria-label="Crescer com Delivery"></span>
+          <div class="lg-logo-wrap">
+            <span class="lg-logo-halo lg-logo-halo--form" aria-hidden="true"></span>
+            <span class="lg-app-ic" role="img" aria-label="Crescer com Delivery"></span>
+          </div>
           <h2 class="lg-bemvindo">Bem-vindo à<br />Crescer com <span class="lg-red">Delivery</span></h2>
           <p class="lg-sub">Acesse seu ambiente de gestão.</p>
 

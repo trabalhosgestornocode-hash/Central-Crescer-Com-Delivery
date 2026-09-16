@@ -424,6 +424,104 @@ body {
 .ifood-vazio .emoji { font-size: 34px; display: block; margin-bottom: 8px; }
 .ifood-vazio code { background: #eef1f0; padding: 2px 6px; border-radius: 5px; font-size: 12px; }
 
+/* ===================== INTEGRAÇÃO IFOOD (real, frontend/src/ifood.js) =====
+   Bloco acima ("JANELA LOJA iFOOD") é do widget de iframe legado — não é
+   mais usado pela página real. `.ifood-vazio` é a única classe reaproveitada
+   dos dois mundos. Tokens de cor vêm de :root (ver topo do arquivo) — dark
+   mode funciona automaticamente por herdar var(--card)/var(--linha)/etc. */
+.ifood-page { display: flex; flex-direction: column; gap: 16px; max-width: 920px; animation: fadeInUp .35s ease both; }
+.ifood-head-id { display: flex; align-items: center; gap: 12px; }
+.ifood-head-logo { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; box-shadow: var(--sombra-sm); }
+.ifood-passo { font-size: 12px; font-weight: 700; color: var(--cinza); margin-left: 8px; vertical-align: middle; }
+
+.ifood-card {
+  background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio);
+  padding: 18px 20px; box-shadow: var(--sombra); display: flex; flex-direction: column; gap: 12px;
+}
+
+.ifood-secao-rotulo { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; font-weight: 700; color: var(--cinza); margin-top: 4px; }
+
+.ifood-apps { display: flex; flex-direction: column; gap: 8px; }
+.ifood-app-linha { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--linha); }
+.ifood-app-linha:last-child { border-bottom: none; }
+.ifood-app-nome { font-weight: 600; font-size: 14px; }
+
+.ifood-merchant { display: flex; flex-direction: column; gap: 2px; }
+.ifood-merchant-nome { font-weight: 700; font-size: 15px; }
+.ifood-merchant-meta { font-size: 12.5px; color: var(--cinza); }
+.ifood-merchant-lista { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; }
+.ifood-merchant-opcao {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border: 1.5px solid var(--linha); border-radius: 10px; cursor: pointer;
+  background: var(--campo-bg); transition: border-color var(--t), background var(--t);
+}
+.ifood-merchant-opcao:hover { border-color: var(--verde-vivo); }
+.ifood-merchant-opcao.selecionada { border-color: var(--verde-vivo); background: var(--vermelho-tint); }
+
+.ifood-info-linha { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13.5px; padding: 6px 0; }
+.ifood-info-linha span { color: var(--cinza); }
+
+.ifood-aviso { border-radius: 10px; padding: 10px 13px; font-size: 13.5px; }
+.ifood-aviso.bad { background: var(--bad-bg); color: var(--bad); }
+.ifood-aviso.ok { background: var(--ok-bg); color: var(--ok); }
+.ifood-aviso.warn { background: var(--warn-bg); color: var(--warn); }
+
+.ifood-msg { font-size: 13px; min-height: 0; }
+.ifood-msg.bad { color: var(--bad); }
+.ifood-msg.ok { color: var(--ok); }
+
+.ifood-acoes { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.ifood-tudo-ok { font-size: 13.5px; color: var(--ok); }
+.ifood-instrucao { font-size: 13px; color: var(--cinza); }
+
+.ifood-codigo-box { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px; background: var(--campo-bg); border-radius: 12px; border: 1.5px dashed var(--linha); }
+.ifood-codigo-rotulo { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--cinza); }
+.ifood-codigo { font-size: 28px; font-weight: 800; letter-spacing: 3px; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+.ifood-codigo-exp { font-size: 12.5px; color: var(--cinza); }
+.ifood-codigo-exp .ifood-expirado { color: var(--bad); font-weight: 700; }
+
+.ifood-label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 700; color: var(--cinza); text-transform: uppercase; letter-spacing: .3px; }
+.ifood-input {
+  padding: 10px 12px; border: 1.5px solid var(--linha); border-radius: 10px; font-size: 14px;
+  background: var(--card); color: var(--texto); font-family: inherit;
+}
+.ifood-input:focus { outline: none; border-color: var(--verde-vivo); box-shadow: 0 0 0 3px rgba(216,19,36,.13); }
+
+/* --------------------- Homologação Financeira (Fase 2) ------------------- */
+.ifin-filtro { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+.ifin-paginacao { display: flex; align-items: center; justify-content: center; gap: 14px; font-size: 13px; color: var(--cinza); padding-top: 4px; }
+.ifin-json {
+  background: var(--campo-bg); border: 1px solid var(--linha); border-radius: 10px; padding: 14px;
+  font-size: 12px; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; overflow: auto;
+  max-height: 420px; white-space: pre; color: var(--texto);
+}
+.ifin-credito { color: var(--ok); font-weight: 700; }
+.ifin-debito { color: var(--bad); font-weight: 700; }
+
+/* --------------------- Bloco H — Conciliação consolidada ----------------- */
+.ifcon-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 8px 0; }
+.ifcon-fonte { background: var(--campo-bg); border: 1px solid var(--linha); border-radius: 10px; padding: 12px 14px; }
+.ifcon-fonte-ausente { opacity: .6; }
+
+/* --------------------- Evidências de Homologação -------------------------- */
+.ifev-exemplo { margin-top: 8px; border-top: 1px dashed var(--linha); padding-top: 8px; }
+.ifev-exemplo summary { cursor: pointer; font-size: 12.5px; color: var(--cinza); user-select: none; }
+.ifev-exemplo summary:hover { color: var(--texto); }
+.ifev-exemplo .ifin-json { margin-top: 8px; max-height: 280px; }
+
+.iftr-lista { display: flex; flex-direction: column; gap: 14px; }
+.iftr-item { display: flex; flex-direction: column; align-items: stretch; }
+.iftr-no { border: 1px solid var(--linha); border-radius: 10px; padding: 10px 14px; background: var(--campo-bg); }
+.iftr-no > div:first-child { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.iftr-venda { border-left: 3px solid var(--verde-vivo); }
+.iftr-eventos { border-left: 3px solid var(--info); display: flex; flex-direction: column; gap: 6px; }
+.iftr-seta { text-align: center; color: var(--cinza-claro); font-size: 15px; padding: 2px 0; }
+.iftr-evento { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--linha); }
+.iftr-evento:last-child { border-bottom: none; }
+.iftr-evento.iftr-sem-impacto { opacity: .6; }
+.iftr-evento .iftr-tag { font-size: 10.5px; color: var(--cinza); background: var(--muted-bg); padding: 1px 6px; border-radius: 20px; }
+.iftr-evento.iftr-vazio { color: var(--cinza); font-style: italic; }
+
 /* ===================== EM CONSTRUÇÃO ===================== */
 .construcao {
   background: linear-gradient(180deg, #fbfbfc, #fff); border: 1.5px dashed #d8d9de; border-radius: var(--raio); padding: 46px;
@@ -467,6 +565,8 @@ body {
   transition: background var(--t), transform var(--t), color var(--t);
 }
 .modal-close:hover { background: var(--bad-bg); color: var(--bad); transform: rotate(90deg); }
+.modal-lg { max-width: 920px; }
+.mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 12.5px; }
 .modal-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; padding-right: 44px; }
 .modal-head h2 { font-size: 22px; letter-spacing: -.4px; }
 .modal-tags { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -1222,7 +1322,13 @@ body {
    #toggle-senha + classes login-btn / login-btn-txt / login-btn-spin.
    ========================================================================= */
 .login-screen { background: #08080a; padding: 0; }
-.login-screen::before, .login-screen::after { display: none; }
+/* Grão muito sutil sobre a tela inteira — textura, não ruído perceptível.
+   Estático (sem animação): custo de composição é zero depois do 1º paint. */
+.login-screen::before {
+  content: ""; position: fixed; inset: 0; z-index: 2; pointer-events: none; opacity: .022; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+.login-screen::after { display: none; }
 
 /* TELA CHEIA: o split ocupa 100% da viewport, sem card/margens. */
 .lg-split {
@@ -1266,6 +1372,36 @@ body {
   50%  { transform: translate(22%, 26%)  scale(1.14); opacity: .55; }
   100% { transform: translate(-6%, -8%)  scale(1);    opacity: .35; }
 }
+/* Spotlight que segue o cursor (posição via --mx/--my, escritas por
+   loginFx.js). Sem JS, cai no valor padrão — continua discreto e estático. */
+.lg-spotlight-vitrine {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: radial-gradient(420px circle at var(--mx, 22%) var(--my, 32%), rgba(224,16,32,.11), transparent 70%);
+}
+/* Partículas — pontos muito discretos, sobem e desaparecem devagar (11s),
+   nunca ao mesmo tempo (delays escalonados). Decoração pura. */
+.lg-particulas {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden;
+  translate: calc(var(--px, 0) * 2px) calc(var(--py, 0) * 2px);
+}
+.lg-particulas span {
+  position: absolute; width: 3px; height: 3px; border-radius: 50%;
+  background: rgba(244,36,51,.55); box-shadow: 0 0 6px rgba(244,36,51,.45);
+  opacity: 0; animation: lgParticula 11s ease-in-out infinite;
+}
+.lg-particulas span:nth-child(1) { top: 18%; left: 11%; animation-delay: 0s; }
+.lg-particulas span:nth-child(2) { top: 64%; left: 21%; animation-delay: 1.7s; background: rgba(255,255,255,.4); box-shadow: 0 0 5px rgba(255,255,255,.3); }
+.lg-particulas span:nth-child(3) { top: 30%; left: 69%; animation-delay: 3.3s; }
+.lg-particulas span:nth-child(4) { top: 79%; left: 57%; animation-delay: 4.9s; background: rgba(255,255,255,.35); box-shadow: 0 0 5px rgba(255,255,255,.28); }
+.lg-particulas span:nth-child(5) { top: 9%;  left: 83%; animation-delay: 6.5s; }
+.lg-particulas span:nth-child(6) { top: 50%; left: 40%; animation-delay: 8.2s; }
+@keyframes lgParticula {
+  0%   { opacity: 0; transform: translateY(0); }
+  14%  { opacity: .75; }
+  55%  { opacity: .45; transform: translateY(-16px); }
+  90%  { opacity: 0; transform: translateY(-26px); }
+  100% { opacity: 0; transform: translateY(-26px); }
+}
 .lg-vitrine-int {
   position: relative; z-index: 2; height: 100%;
   display: flex; flex-direction: column; justify-content: center; gap: clamp(20px, 2.2vh, 30px);
@@ -1290,105 +1426,312 @@ body {
 .cd-l1 em { font-style: normal; font-size: .54em; font-weight: 800; margin-left: .22em; letter-spacing: -.01em; }
 .cd-l2 { margin-top: .06em; }
 
-.lg-lockup { display: flex; align-items: center; }
+.lg-lockup { position: relative; display: flex; align-items: center; }
 .lg-lockup .cd-marca { --cd-tam: clamp(36px, 3.8vw, 56px); }
 
-.lg-titulo { font-size: clamp(25px, 2.5vw, 35px); font-weight: 800; line-height: 1.16; letter-spacing: -.8px; color: #fff; }
+/* Halo que "respira" atrás das duas marcas (wordmark da vitrine e logo do
+   formulário) — glow radial muito baixo, nunca gira nem chama atenção. */
+.lg-logo-halo {
+  position: absolute; top: 50%; left: 50%; z-index: -1; pointer-events: none;
+  width: 135%; height: 230%; transform: translate(-50%, -50%) scale(.94);
+  border-radius: 50%; opacity: .32;
+  background: radial-gradient(closest-side, rgba(224,16,32,.30), transparent 72%);
+  animation: lgHalo 7s ease-in-out infinite;
+}
+@keyframes lgHalo {
+  0%, 100% { opacity: .3;  transform: translate(-50%, -50%) scale(.94); }
+  50%      { opacity: .55; transform: translate(-50%, -50%) scale(1.05); }
+}
+
+/* Display face à parte para as headlines (Archivo Black, já carregada pelo
+   projeto e sem uso até aqui) — dá personalidade tipográfica ao título sem
+   tocar na wordmark oficial "Crescer com Delivery" (essa continua em Inter,
+   intocada, pois É a arte da marca). */
+.lg-titulo {
+  font-family: "Archivo Black", "Inter", sans-serif;
+  font-size: clamp(22px, 2.15vw, 31px); font-weight: 400; line-height: 1.24; letter-spacing: -.01em; color: #fff;
+}
 .lg-red { color: var(--verde-vivo); }
+/* "Seu crescimento." acende sozinho no fechamento do ciclo do ecossistema
+   (~80% de 10s) — o mesmo instante em que o pulso chega a Resultados. Uma
+   única vez por volta, nunca piscando. */
+.lg-titulo-glow { display: inline-block; animation: lgTituloGlow 10s ease-in-out infinite; }
+@keyframes lgTituloGlow {
+  0%, 76%, 92%, 100% { text-shadow: none; }
+  83% { text-shadow: 0 0 16px rgba(244,36,51,.5); }
+}
 .lg-desc { font-size: 14.5px; line-height: 1.6; color: #9d9da6; max-width: 48ch; }
 
-/* cards de recursos (2x2) */
+/* cards de recursos (2x2) — vidro discreto com luz direcional (topo-esquerda),
+   friso interno sutil e hierarquia: só "Dados e performance" fica com um
+   traço mais presente em repouso (--destaque); os demais só reagem no hover. */
 .lg-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .lg-card {
-  display: flex; gap: 12px; align-items: flex-start; padding: 14px 15px; border-radius: 12px;
-  background: rgba(255,255,255,.028); border: 1px solid rgba(255,255,255,.07);
+  position: relative; display: flex; gap: 12px; align-items: flex-start; padding: 14px 15px; border-radius: 12px;
+  background: linear-gradient(160deg, rgba(255,255,255,.05), rgba(255,255,255,0) 45%), rgba(255,255,255,.024);
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
   transition: transform .22s cubic-bezier(.4,0,.2,1), border-color .22s ease, box-shadow .22s ease, background .22s ease;
 }
+.lg-card--destaque { border-color: rgba(240,32,47,.26); background: linear-gradient(160deg, rgba(255,255,255,.06), rgba(224,16,32,.035) 55%), rgba(255,255,255,.03); }
+.lg-card--destaque .lg-card-ic { background: rgba(224,16,32,.15); border-color: rgba(224,16,32,.34); }
 /* Hover discreto: sobe 3px, borda mais vermelha, sombra vermelha suave. Sem 3D/rotação. */
 .lg-card:hover {
   transform: translateY(-3px);
-  border-color: rgba(240,32,47,.5);
-  background: rgba(255,255,255,.045);
-  box-shadow: 0 8px 22px rgba(224,16,32,.16);
+  border-color: rgba(240,32,47,.48);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 10px 24px rgba(224,16,32,.15);
 }
 .lg-card-ic {
   width: 38px; height: 38px; flex-shrink: 0; border-radius: 10px; display: grid; place-items: center;
   background: rgba(224,16,32,.10); border: 1px solid rgba(224,16,32,.26); color: var(--verde-vivo);
-  transition: box-shadow .22s ease, color .22s ease;
+  transition: box-shadow .22s ease, color .22s ease, transform .22s cubic-bezier(.4,0,.2,1);
 }
-.lg-card:hover .lg-card-ic { box-shadow: 0 0 14px rgba(244,36,51,.45); color: #ff5964; }
+.lg-card:hover .lg-card-ic { box-shadow: 0 0 14px rgba(244,36,51,.45); color: #ff5964; transform: scale(1.08) rotate(-4deg); }
 .lg-card-ic svg { width: 19px; height: 19px; }
 .lg-card h3 { font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 3px; }
 .lg-card p { font-size: 12.5px; line-height: 1.45; color: #8e8e98; }
 
-/* fluxo: Crescer -> Empresas -> Unidades -> Resultados */
-.lg-fluxo { display: flex; align-items: center; gap: 6px; }
-.lg-fx { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 76px; }
-.lg-fx-ic {
-  width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center;
-  background: rgba(224,16,32,.08); border: 1px solid rgba(224,16,32,.22); color: var(--verde-vivo);
+/* =========================================================================
+   ECOSSISTEMA OPERACIONAL — substitui o fluxo linear por uma composição
+   orgânica: a plataforma como núcleo, Empresas/Unidades/Resultados como nós
+   conectados por UMA curva de crescimento (nunca uma linha reta), um pulso
+   que percorre essa curva e acende cada nó de passagem, e cartões de dado
+   que flutuam e desaparecem. Tudo no mesmo relógio de 10s — não é uma
+   coleção de animações soltas, é UM ciclo narrativo coordenado:
+   núcleo acende → pulso sai → Empresas reage → Unidades reage →
+   curva se ilumina → Resultados recebe destaque (+ o título "Seu
+   crescimento." glowa junto) → composição relaxa → reinicia.
+   ========================================================================= */
+.lg-ecossistema {
+  position: relative; height: clamp(126px, 15.5vh, 172px); margin-top: 2px;
+  translate: calc(var(--px, 0) * 1px) calc(var(--py, 0) * 1px);
 }
-.lg-fx-ic svg { width: 20px; height: 20px; }
-.lg-fx small { font-size: 11px; color: #9a9aa3; text-align: center; line-height: 1.3; }
-.lg-fx-seta { flex: 1; min-width: 20px; max-width: 54px; color: rgba(240,32,47,.55); margin-bottom: 18px; position: relative; overflow: hidden; }
-.lg-fx-seta svg { width: 100%; height: 8px; }
-/* Pequena luz vermelha que percorre cada conexão. Não pisca: aparece, desliza
-   uma vez e some; o ciclo de 9s repete a passagem (~a cada 8-10s). As 3 setas
-   são escalonadas para dar a sensação de a luz "andar" pelo fluxo. */
-.lg-fx-seta::after {
-  content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 22px; pointer-events: none;
-  background: linear-gradient(90deg, transparent, rgba(244,36,51,.95), transparent);
-  transform: translateX(-26px); opacity: 0; will-change: transform, opacity;
-  animation: lgFluxo 9s ease-in-out infinite;
+.lg-eco-curva { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
+.lg-eco-curva-base { fill: none; stroke: rgba(255,255,255,.075); stroke-width: 1.2; stroke-linecap: round; }
+/* traçado que "acende" atrás do pulso — mesma geometria da base, só o
+   trecho já percorrido fica visível (stroke-dasharray/offset). */
+.lg-eco-curva-pulso {
+  fill: none; stroke: rgba(244,36,51,.85); stroke-width: 1.6; stroke-linecap: round;
+  filter: drop-shadow(0 0 3px rgba(244,36,51,.45));
+  stroke-dasharray: 640; stroke-dashoffset: 640;
+  animation: lgEcoCurvaAcende 10s ease-in-out infinite;
 }
-.lg-fx-seta:nth-of-type(1)::after { animation-delay: 0s; }
-.lg-fx-seta:nth-of-type(2)::after { animation-delay: .5s; }
-.lg-fx-seta:nth-of-type(3)::after { animation-delay: 1s; }
-@keyframes lgFluxo {
-  0%   { transform: translateX(-26px); opacity: 0; }
-  6%   { opacity: 1; }
-  14%  { opacity: 1; }
-  20%  { transform: translateX(64px); opacity: 0; }
-  100% { transform: translateX(64px); opacity: 0; }
+@keyframes lgEcoCurvaAcende {
+  0%, 8%   { stroke-dashoffset: 640; opacity: .85; }
+  82%      { stroke-dashoffset: 0;   opacity: .85; }
+  94%, 100% { stroke-dashoffset: 0;  opacity: 0; }
+}
+.lg-eco-pulso-ponto {
+  fill: #fff; filter: drop-shadow(0 0 5px rgba(244,36,51,.9));
+  animation: lgEcoPulsoOpacidade 10s ease-in-out infinite;
+}
+@keyframes lgEcoPulsoOpacidade {
+  0%, 6%, 86%, 100% { opacity: 0; }
+  11% { opacity: 1; }
+  80% { opacity: 1; }
+}
+
+.lg-eco-node {
+  position: absolute; left: var(--ex); top: var(--ey); transform: translate(-50%, -50%);
+  z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 6px;
+}
+.lg-eco-node-ic {
+  position: relative; width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+  background: rgba(18,9,11,.55); border: 1px solid rgba(224,16,32,.22); color: var(--verde-vivo);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  transition: color .2s ease;
+}
+.lg-eco-node-ic svg { width: 16px; height: 16px; }
+.lg-eco-node small { font-size: 10.5px; color: #9a9aa3; white-space: nowrap; }
+
+/* núcleo: emblema da própria plataforma — orbe com gradiente + anel único
+   que expande e some (não é "radar" contínuo, é um único pulso por ciclo). */
+.lg-eco-node--nucleo .lg-eco-node-ic {
+  background: radial-gradient(circle at 34% 30%, rgba(255,110,118,.95), rgba(174,13,26,.55) 55%, rgba(18,9,11,.7) 100%);
+  border-color: rgba(244,36,51,.45);
+  animation: lgEcoNucleo 10s ease-in-out infinite;
+}
+.lg-eco-node-anel {
+  position: absolute; inset: -7px; border-radius: 50%; border: 1.4px solid rgba(244,36,51,.55); pointer-events: none;
+  animation: lgEcoAnel 10s ease-out infinite;
+}
+@keyframes lgEcoNucleo {
+  0%, 8%, 20%, 100% { box-shadow: 0 0 0 0 rgba(224,16,32,0); transform: scale(1); }
+  13% { box-shadow: 0 0 16px 3px rgba(224,16,32,.4); transform: scale(1.08); }
+}
+@keyframes lgEcoAnel {
+  0%, 9%, 100% { transform: scale(.82); opacity: 0; }
+  10% { opacity: .5; }
+  23% { transform: scale(2.1); opacity: 0; }
+}
+
+/* =========================================================================
+   CHECKPOINTS (Empresas/Unidades) — a curva passa exatamente pelo centro de
+   cada cartão (mesma coordenada do <path> em index.html); o cartão cobre o
+   trecho que "entra" nele e dois traços junto às bordas (::before/::after)
+   soldam visualmente o cartão à linha nos dois lados, garantindo a costura
+   em qualquer largura — não dependem do SVG bater pixel a pixel. Layout
+   horizontal (ícone + texto), não mais um ícone solto perto da linha.
+   ========================================================================= */
+.lg-eco-checkpoint {
+  flex-direction: row; align-items: center; gap: 9px;
+  padding: 7px 13px 7px 7px; border-radius: 13px;
+  background: rgba(17,8,10,.64); border: 1px solid rgba(224,16,32,.2);
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+  box-shadow: 0 8px 18px rgba(0,0,0,.3);
+  transition: transform .2s cubic-bezier(.4,0,.2,1), border-color .2s ease, box-shadow .2s ease;
+}
+.lg-eco-checkpoint::before, .lg-eco-checkpoint::after {
+  content: ""; position: absolute; top: 50%; width: 16px; height: 1.4px; transform: translateY(-50%);
+  opacity: .75; transition: opacity .2s ease, width .2s ease; pointer-events: none;
+}
+.lg-eco-checkpoint::before { right: 100%; background: linear-gradient(90deg, rgba(244,36,51,0), rgba(244,36,51,.6)); }
+.lg-eco-checkpoint::after  { left: 100%;  background: linear-gradient(90deg, rgba(244,36,51,.6), rgba(244,36,51,0)); }
+.lg-eco-checkpoint:hover {
+  transform: translate(-50%, calc(-50% - 2px));
+  border-color: rgba(240,32,47,.55);
+  box-shadow: 0 12px 24px rgba(224,16,32,.2), 0 6px 14px rgba(0,0,0,.3);
+}
+.lg-eco-checkpoint:hover::before, .lg-eco-checkpoint:hover::after { opacity: 1; width: 20px; }
+.lg-eco-checkpoint:hover .lg-eco-node-ic { color: #ff5964; }
+.lg-eco-checkpoint-txt { display: flex; flex-direction: column; gap: 1px; white-space: nowrap; }
+.lg-eco-checkpoint-txt b { font-size: 11.5px; font-weight: 700; color: #fff; line-height: 1.15; }
+.lg-eco-checkpoint-txt small { font-size: 9.5px; color: #9a9aa3; line-height: 1.2; }
+
+.lg-eco-checkpoint--empresas .lg-eco-node-ic { animation: lgEcoEmpresas 10s ease-in-out infinite; }
+@keyframes lgEcoEmpresas {
+  0%, 24%, 36%, 100% { box-shadow: 0 0 0 0 rgba(224,16,32,0); transform: scale(1); border-color: rgba(224,16,32,.22); }
+  30% { box-shadow: 0 0 14px 2px rgba(224,16,32,.4); transform: scale(1.07); border-color: rgba(240,32,47,.6); }
+}
+.lg-eco-checkpoint--unidades .lg-eco-node-ic { animation: lgEcoUnidades 10s ease-in-out infinite; }
+@keyframes lgEcoUnidades {
+  0%, 51%, 63%, 100% { box-shadow: 0 0 0 0 rgba(224,16,32,0); transform: scale(1); border-color: rgba(224,16,32,.22); }
+  57% { box-shadow: 0 0 14px 2px rgba(224,16,32,.4); transform: scale(1.07); border-color: rgba(240,32,47,.6); }
+}
+.lg-eco-node--resultados .lg-eco-node-ic {
+  width: 38px; height: 38px; border-color: rgba(224,16,32,.3);
+  animation: lgEcoResultados 10s ease-in-out infinite;
+}
+@keyframes lgEcoResultados {
+  0%, 74%, 91%, 100% { box-shadow: 0 0 0 0 rgba(224,16,32,0); transform: scale(1); border-color: rgba(224,16,32,.3); }
+  81% { box-shadow: 0 0 20px 4px rgba(224,16,32,.5); transform: scale(1.1); border-color: rgba(240,32,47,.8); }
+}
+/* Resultados: mini-gráfico de barras (não um dashboard) — as barras crescem
+   um pouco no exato momento em que o pulso chega, com leve defasagem entre
+   elas (delay negativo) para não subir tudo em bloco perfeito. */
+.lg-eco-node-ic--resultados { display: flex; align-items: flex-end; justify-content: center; gap: 2px; }
+.lg-eco-node-ic--resultados i { display: block; width: 3px; border-radius: 1px; background: var(--verde-vivo); transform-origin: bottom; animation: lgEcoBarra 10s ease-in-out infinite; }
+.lg-eco-node-ic--resultados i:nth-child(1) { height: 7px;  animation-delay: -.18s; }
+.lg-eco-node-ic--resultados i:nth-child(2) { height: 12px; animation-delay: -.12s; }
+.lg-eco-node-ic--resultados i:nth-child(3) { height: 17px; animation-delay: -.06s; }
+.lg-eco-node-ic--resultados i:nth-child(4) { height: 22px; }
+@keyframes lgEcoBarra { 0%, 74%, 91%, 100% { transform: scaleY(1); } 81% { transform: scaleY(1.3); } }
+
+/* cartões de dado flutuantes — puramente institucionais, no máx. 2 visíveis
+   por vez (as 3 janelas de vida não se sobrepõem). */
+.lg-eco-chip {
+  position: absolute; left: var(--cx); top: var(--cy); z-index: 3;
+  display: flex; flex-direction: column; gap: 1px; padding: 7px 11px; border-radius: 10px;
+  background: rgba(16,8,10,.6); border: 1px solid rgba(255,255,255,.09);
+  box-shadow: 0 10px 22px rgba(0,0,0,.35); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  opacity: 0; transform: translateY(6px) scale(.96);
+  animation: lgEcoChip 10s ease-in-out infinite;
+}
+.lg-eco-chip b { font-size: 10px; font-weight: 600; color: #b6b6bf; letter-spacing: .01em; }
+.lg-eco-chip span { font-size: 13px; font-weight: 800; color: var(--verde-vivo); }
+.lg-eco-chip--a { animation-delay: 0s; }
+.lg-eco-chip--c { animation-delay: -5s; }
+@keyframes lgEcoChip {
+  0%, 8%, 100% { opacity: 0; transform: translateY(6px) scale(.96); }
+  16% { opacity: 1; transform: translateY(0) scale(1); }
+  34% { opacity: 1; transform: translateY(-2px) scale(1); }
+  42% { opacity: 0; transform: translateY(-6px) scale(.98); }
 }
 
 /* ---------- formulário (direita) ---------- */
-.lg-form-col { background: #121214; display: flex; align-items: center; justify-content: center; padding: clamp(34px, 3.5vw, 60px); }
-.lg-form { width: 100%; max-width: 396px; }
+.lg-form-col {
+  position: relative; overflow: hidden; background: #121214;
+  display: flex; align-items: center; justify-content: center; padding: clamp(34px, 3.5vw, 60px);
+  /* profundidade: painel levemente recuado junto à divisória com a vitrine */
+  box-shadow: inset 14px 0 26px -22px rgba(0,0,0,.55);
+}
+/* Profundidade estática: glow vermelho ancorado no canto + grade tecnológica
+   quase imperceptível. Sem animação — é textura, não movimento. */
+.lg-form-col::before {
+  content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(560px 420px at 88% 100%, rgba(224,16,32,.13), transparent 62%),
+    repeating-linear-gradient(0deg, rgba(255,255,255,.025) 0 1px, transparent 1px 42px),
+    repeating-linear-gradient(90deg, rgba(255,255,255,.025) 0 1px, transparent 1px 42px);
+}
+/* Reflexo discreto no topo do painel — like uma borda de vidro pegando luz. */
+.lg-form-col::after {
+  content: ""; position: absolute; top: 0; left: 10%; right: 10%; height: 1px; z-index: 1; pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.16), transparent);
+}
+/* Spotlight que segue o cursor no painel de login (posição via --mx/--my,
+   escritas por loginFx.js; sem JS, cai no centro-alto e fica parado). */
+.lg-spotlight-form {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 28%), rgba(224,16,32,.09), transparent 68%);
+}
+.lg-form { position: relative; z-index: 1; width: 100%; max-width: 396px; }
 /* Lockup oficial (wordmark "Crescer com Delivery") já vem pronto na arte,
    sobre fundo preto. Exibido GRANDE e SEM moldura/anel: a máscara radial dissolve
    as bordas do quadrado preto no fundo escuro do formulário — fica igual à arte,
    sem "caixinha". contain preserva a proporção (arte quadrada, sem corte). */
+.lg-logo-wrap { position: relative; width: 210px; height: 210px; margin: 0 auto 6px; }
 .lg-app-ic {
-  width: 210px; height: 210px; border-radius: 0; display: block; margin: 0 auto 6px;
+  position: relative; z-index: 1; width: 210px; height: 210px; border-radius: 0; display: block;
   background-image: url("/assets/logo-crescer-central.jpeg");
   background-size: contain; background-position: center; background-repeat: no-repeat;
   -webkit-mask-image: radial-gradient(closest-side, #000 82%, transparent 100%);
   mask-image: radial-gradient(closest-side, #000 82%, transparent 100%);
-  animation: logoIn .6s cubic-bezier(.2,.8,.2,1) both;
 }
-.lg-bemvindo { font-size: 25px; font-weight: 800; line-height: 1.25; letter-spacing: -.5px; text-align: center; color: #fff; }
+.lg-logo-halo--form { width: 150%; height: 150%; animation-delay: .3s; }
+.lg-bemvindo { font-family: "Archivo Black", "Inter", sans-serif; font-size: 22px; font-weight: 400; line-height: 1.3; letter-spacing: -.01em; text-align: center; color: #fff; }
 .lg-sub { font-size: 13.5px; color: #8e8e98; text-align: center; margin: 8px 0 26px; }
 
 .lg-campo { display: block; margin-bottom: 16px; }
-.lg-label { display: block; font-size: 12.5px; font-weight: 600; color: #c9c9d1; margin-bottom: 7px; }
+.lg-label { display: block; font-size: 12.5px; font-weight: 600; color: #c9c9d1; margin-bottom: 7px; transition: color var(--t); }
+.lg-campo:focus-within .lg-label { color: #fff; }
 .lg-input { position: relative; display: flex; align-items: center; }
 .lg-input-ic { position: absolute; left: 15px; width: 19px; height: 19px; color: #6d6d77; pointer-events: none; transition: color var(--t); }
 .lg-input input {
   width: 100%; height: 52px; padding: 0 46px; border-radius: 11px;
   background: #17171b; border: 1px solid rgba(255,255,255,.09); color: #fff;
-  font-size: 14.5px; font-family: inherit; transition: border-color var(--t), box-shadow var(--t);
+  font-size: 14.5px; font-family: inherit; transition: border-color var(--t), box-shadow var(--t), opacity var(--t);
 }
 .lg-input input::placeholder { color: #5e5e68; }
+/* hover: só quando não está focado — a borda de foco tem prioridade visual */
+.lg-input input:hover:not(:focus):not(:disabled) { border-color: rgba(255,255,255,.17); }
+/* preenchido (com valor, sem foco): traço um pouco mais claro que o default */
+.lg-input input:not(:placeholder-shown):not(:focus) { border-color: rgba(255,255,255,.15); }
 .lg-input input:focus { outline: none; border-color: rgba(240,30,45,.6); box-shadow: 0 0 0 3px rgba(224,16,32,.14); }
 .lg-input:focus-within .lg-input-ic { color: var(--verde-vivo); }
+.lg-input:has(input:not(:placeholder-shown)) .lg-input-ic { color: #9d9da6; }
+.lg-input input:disabled { opacity: .5; cursor: not-allowed; }
+.lg-input:has(input:disabled) .lg-input-ic { opacity: .5; }
 .lg-olho {
   position: absolute; right: 10px; width: 34px; height: 34px; border: 0; background: none;
-  color: #6d6d77; cursor: pointer; display: grid; place-items: center; border-radius: 8px; transition: color var(--t), background var(--t);
+  color: #6d6d77; cursor: pointer; display: grid; place-items: center; border-radius: 8px; transition: color var(--t), background var(--t), transform .12s ease;
 }
 .lg-olho:hover { color: #c9c9d1; background: rgba(255,255,255,.05); }
+.lg-olho:active { transform: scale(.88); }
 .lg-olho.ativo { color: var(--verde-vivo); }
 .lg-olho svg { width: 19px; height: 19px; }
+
+/* Campo marcado como inválido depois de um erro de login: leve chacoalhada +
+   traço vermelho. Some sozinho assim que a pessoa volta a digitar. */
+.lg-campo--invalido .lg-input input { border-color: rgba(240,30,45,.55); }
+.lg-campo--invalido .lg-input-ic { color: var(--verde-vivo); }
+.lg-campo--invalido .lg-input { animation: lgCampoInvalido .4s cubic-bezier(.4,0,.2,1); }
+@keyframes lgCampoInvalido {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-3px); }
+  40%, 60% { transform: translateX(3px); }
+}
 
 .lg-erro {
   background: rgba(224,16,32,.12); border: 1px solid rgba(224,16,32,.34); color: #ff9aa2;
@@ -1409,6 +1752,7 @@ body {
   overflow: hidden;   /* recorta o brilho horizontal (sheen); não afeta a sombra externa */
 }
 .lg-btn:hover { transform: translateY(-2px); box-shadow: 0 12px 26px rgba(224,16,32,.32); filter: brightness(1.06); }
+.lg-btn:active:not(.carregando) { transform: translateY(0) scale(.985); box-shadow: 0 5px 14px rgba(224,16,32,.26); filter: brightness(1); }
 /* Brilho horizontal muito leve que cruza o botão no hover (uma passada, não pisca).
    pointer-events:none p/ não interferir no clique; não altera a largura/altura. */
 .lg-btn::after {
@@ -1434,11 +1778,47 @@ body {
 .lg-aviso svg { width: 19px; height: 19px; flex-shrink: 0; color: var(--verde-vivo); margin-top: 1px; }
 .lg-aviso p { font-size: 12px; line-height: 1.5; color: #8e8e98; }
 
+/* =========================================================================
+   ENTRADA CINEMATOGRÁFICA — sequência curta e única no carregamento:
+   fundo/marca primeiro, headline, descrição, cards em stagger, fluxo,
+   e no formulário logo → boas-vindas → campos → botão → avisos.
+   Escopada em .login-screen para nunca vazar para outras telas que
+   reaproveitam as mesmas classes (definir senha, seleção de perfil).
+   ========================================================================= */
+@keyframes lgEntrada {
+  from { opacity: 0; transform: translateY(16px) scale(.985); filter: blur(6px); }
+  to   { opacity: 1; transform: none; filter: blur(0); }
+}
+.login-screen .lg-lockup  { animation: lgEntrada .7s cubic-bezier(.2,.8,.2,1) .05s both; }
+.login-screen .lg-titulo  { animation: lgEntrada .7s cubic-bezier(.2,.8,.2,1) .17s both; }
+.login-screen .lg-desc    { animation: lgEntrada .7s cubic-bezier(.2,.8,.2,1) .27s both; }
+.login-screen .lg-card    { animation: lgEntrada .6s cubic-bezier(.2,.8,.2,1) both; }
+.login-screen .lg-card:nth-child(1) { animation-delay: .37s; }
+.login-screen .lg-card:nth-child(2) { animation-delay: .43s; }
+.login-screen .lg-card:nth-child(3) { animation-delay: .49s; }
+.login-screen .lg-card:nth-child(4) { animation-delay: .55s; }
+.login-screen .lg-ecossistema { animation: lgEntrada .7s cubic-bezier(.2,.8,.2,1) .63s both; }
+
+.login-screen .lg-logo-wrap { animation: lgEntrada .65s cubic-bezier(.2,.8,.2,1) .1s both; }
+.login-screen .lg-bemvindo  { animation: lgEntrada .65s cubic-bezier(.2,.8,.2,1) .22s both; }
+.login-screen .lg-sub       { animation: lgEntrada .6s cubic-bezier(.2,.8,.2,1) .3s both; }
+.login-screen .lg-campo     { animation: lgEntrada .55s cubic-bezier(.2,.8,.2,1) both; }
+.login-screen .lg-campo:nth-of-type(1) { animation-delay: .38s; }
+.login-screen .lg-campo:nth-of-type(2) { animation-delay: .46s; }
+.login-screen .lg-btn       { animation: lgEntrada .6s cubic-bezier(.2,.8,.2,1) .54s both; }
+.login-screen .lg-seguro    { animation: lgEntrada .55s cubic-bezier(.2,.8,.2,1) .62s both; }
+.login-screen .lg-aviso     { animation: lgEntrada .55s cubic-bezier(.2,.8,.2,1) .68s both; }
+
 /* responsivo: abaixo de 1000px some a vitrine e fica só o formulário */
 @media (max-width: 1000px) {
   .lg-split { grid-template-columns: 1fr; }
   .lg-vitrine { display: none; }
   .lg-form-col { padding: 38px 26px; }
+  /* Mobile: prioriza o login. Sem grade/glow estático extra no fundo do
+     formulário e sem spotlight de cursor (não faz sentido em touch). */
+  .lg-form-col::before { background: radial-gradient(420px 320px at 85% 100%, rgba(224,16,32,.10), transparent 62%); }
+  .lg-spotlight-form { display: none; }
+  .login-screen::before { opacity: .015; }
 }
 @media (max-width: 1180px) and (min-width: 1001px) {
   .lg-vitrine { padding: 32px 30px; }
@@ -1459,13 +1839,19 @@ body {
   .lg-card-ic svg { width: 17px; height: 17px; }
   .lg-card h3 { font-size: 13px; }
   .lg-card p { font-size: 11.5px; line-height: 1.4; }
-  .lg-fx-ic { width: 34px; height: 34px; }
-  .lg-fx-ic svg { width: 17px; height: 17px; }
-  .lg-fx small { font-size: 10px; }
-  .lg-fx-seta { margin-bottom: 15px; }
+  .lg-ecossistema { height: clamp(100px, 13vh, 132px); }
+  .lg-eco-node-ic { width: 29px; height: 29px; }
+  .lg-eco-node-ic svg { width: 14px; height: 14px; }
+  .lg-eco-node small { font-size: 9.5px; }
+  .lg-eco-checkpoint { padding: 5px 10px 5px 5px; gap: 7px; }
+  .lg-eco-checkpoint-txt b { font-size: 10.5px; }
+  .lg-eco-checkpoint-txt small { font-size: 9px; }
+  /* sem espaço vertical sobrando pros cartões flutuantes nessa altura */
+  .lg-eco-chip { display: none; }
   /* formulário também encolhe um pouco */
-  .lg-app-ic { width: 158px; height: 158px; margin-bottom: 6px; }
-  .lg-bemvindo { font-size: 22px; }
+  .lg-logo-wrap { width: 158px; height: 158px; margin-bottom: 6px; }
+  .lg-app-ic { width: 158px; height: 158px; }
+  .lg-bemvindo { font-size: 20px; }
   .lg-sub { margin-bottom: 18px; }
   .lg-campo { margin-bottom: 13px; }
   .lg-input input { height: 47px; }
@@ -1474,15 +1860,35 @@ body {
 }
 
 /* Acessibilidade/performance: quem prefere menos movimento vê tudo imediatamente,
-   sem animações contínuas nem transições longas. */
+   sem animações contínuas nem transições longas — a composição fica parada,
+   porém completa (núcleo, nós e curva continuam visíveis, só não se movem). */
 @media (prefers-reduced-motion: reduce) {
   .lg-split,
-  .lg-app-ic,
   .lg-vitrine::after,
-  .lg-fx-seta::after,
   .lg-erro,
-  .lg-btn:hover::after { animation: none !important; }
+  .lg-btn:hover::after,
+  .lg-logo-halo,
+  .lg-particulas span,
+  .lg-campo--invalido .lg-input,
+  .lg-titulo-glow,
+  .lg-eco-curva-pulso, .lg-eco-pulso-ponto, .lg-eco-node-anel,
+  .lg-eco-node--nucleo .lg-eco-node-ic, .lg-eco-checkpoint--empresas .lg-eco-node-ic,
+  .lg-eco-checkpoint--unidades .lg-eco-node-ic, .lg-eco-node--resultados .lg-eco-node-ic,
+  .lg-eco-node-ic--resultados i, .lg-eco-chip,
+  .login-screen .lg-lockup, .login-screen .lg-titulo, .login-screen .lg-desc,
+  .login-screen .lg-card, .login-screen .lg-ecossistema, .login-screen .lg-logo-wrap,
+  .login-screen .lg-bemvindo, .login-screen .lg-sub, .login-screen .lg-campo,
+  .login-screen .lg-btn, .login-screen .lg-seguro, .login-screen .lg-aviso { animation: none !important; }
   .lg-vitrine::after { opacity: .4; }
+  .lg-logo-halo { opacity: .22; }
+  .lg-particulas { display: none; }
+  .lg-ecossistema, .lg-particulas { translate: none; }
+  /* curva e pulso ficam desenhados por completo, parados — nada de "sumir" */
+  .lg-eco-curva-pulso { stroke-dashoffset: 0; opacity: .5; }
+  .lg-eco-pulso-ponto { display: none; }
+  /* sem o ciclo de destaque, os cartões flutuantes viram ruído — removidos */
+  .lg-eco-chip { display: none; }
+  .lg-spotlight-vitrine, .lg-spotlight-form { display: none; }
   .lg-card, .lg-card-ic, .lg-btn, .lg-input input { transition: none !important; }
 }
 
