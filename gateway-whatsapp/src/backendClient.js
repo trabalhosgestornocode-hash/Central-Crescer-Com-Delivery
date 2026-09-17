@@ -47,7 +47,14 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
             status: resp.status, assinatura: prefixoAssinatura(headers["X-Gateway-Signature"]),
           });
         }
-        throw erro(CODIGOS.INDISPONIVEL, { status: resp.status, corpo: json });
+        const e = erro(CODIGOS.INDISPONIVEL, { status: resp.status, corpo: json });
+        // Sinal explícito (Checkpoint C3.5) — distingue "não sou mais dono
+        // da lease" de qualquer outro erro de rede/backend. Quem chama
+        // (authState.js, baileysSession.js) usa isto para entrar em
+        // fail-safe (fechar socket, parar gravações) em vez de tratar como
+        // uma falha transitória qualquer.
+        e.leaseStale = resp.status === 409 && json?.error === "WHATSAPP_GATEWAY_LEASE_STALE";
+        throw e;
       }
       return json;
     } catch (e) {
@@ -85,6 +92,18 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
     /** Bootstrap/reconexão: recupera o auth state cifrado salvo. */
     async carregarAuthState() {
       return chamar("GET", `${R}/auth-state`);
+    },
+    // ---- lease/fencing (Checkpoint C3.5) ----
+    /** @returns {Promise<{acquired: boolean, leaseEpoch: number, expiresAt: string|null}>} */
+    async adquirirLease(payload) {
+      return chamar("POST", `${R}/lease/acquire`, payload);
+    },
+    /** Lança (com `.leaseStale`) se não renovar — nunca devolve {renewed:false} silenciosamente. */
+    async renovarLease(payload) {
+      return chamar("POST", `${R}/lease/renew`, payload);
+    },
+    async liberarLease(payload) {
+      return chamar("POST", `${R}/lease/release`, payload);
     },
   };
 }

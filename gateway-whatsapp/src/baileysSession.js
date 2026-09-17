@@ -115,8 +115,13 @@ export function deJid(jid) {
  * @param {(opts: object) => object} deps.fabricaSocket    equivalente a makeWASocket
  * @param {number} deps.DisconnectReasonLoggedOut           DisconnectReason.loggedOut do Baileys
  * @param {(ms: number, fn: () => void) => any} [deps.agendar] injeção de setTimeout, p/ teste sem tempo real
+ * @param {ReturnType<import('./leaseManager.js').criarLeaseManager>} [deps.leaseManager]
+ *   Checkpoint C3.5 — sem isto injetado, a sessão funciona sem exclusão
+ *   mútua (usado pelos testes de lifecycle que não envolvem lease). Em
+ *   produção, server.js SEMPRE injeta: `conectar()` recusa rodar sem
+ *   `souLeader()`, e `heartbeat()` nunca manda nada sem `contexto()` válido.
  */
-export function criarSessaoBaileys({ authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout }) {
+export function criarSessaoBaileys({ authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout, leaseManager }) {
   let socket = null;
   let status = STATUS_CONEXAO.DISCONNECTED;
   let telefone = null;
@@ -142,6 +147,16 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   }
 
   async function heartbeat(extra = {}) {
+    // Checkpoint C3.5, item 10: um processo que não é (mais) leader NUNCA
+    // grava heartbeat de conexão — é exatamente isto que teria impedido a
+    // instância ociosa `j4jv6` de sobrescrever `disconnected_at` no shutdown
+    // ao vivo. Sem `leaseManager` injetado (testes sem lease), segue sem
+    // fencing, igual ao comportamento anterior a este checkpoint.
+    const contextoLease = leaseManager?.contexto();
+    if (leaseManager && !contextoLease) {
+      log("info", "heartbeat.pulado_sem_lease", {});
+      return;
+    }
     try {
       await backendClient.notificarHeartbeat({
         providerInstanceId: config.providerInstanceId,
@@ -149,9 +164,14 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
         telefone,
         atualizadoEm: new Date().toISOString(),
         gatewayVersion: config.gatewayVersion,
+        ...contextoLease,
         ...extra,
       });
     } catch (e) {
+      // Checkpoint C3.5, item 12: uma rejeição 409 (fencing) significa que
+      // perdemos a lease — nunca tratar como "heartbeat falho comum" (que
+      // só loga e segue). Avisa quem coordena a lease para fechar o socket.
+      if (e?.leaseStale) leaseManager?.notificarPerdaExterna("heartbeat_stale");
       // Heartbeat falho não pode derrubar a sessão — só fica no log.
       log("warn", "heartbeat.falhou", { erro: e?.message });
     }
@@ -286,6 +306,10 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
    *   descartá-los. Nunca usado por uma chamada externa via /connect.
    */
   async function conectar({ preservarCredsNaoRegistrados = false } = {}) {
+    // Checkpoint C3.5, item 14: só o dono atual da lease pode abrir socket
+    // — protege tanto o /connect manual quanto a reconexão automática
+    // pós-515 (que também passa por aqui). Nunca cria uma segunda sessão.
+    if (leaseManager && !leaseManager.souLeader()) throw erro(CODIGOS.SEM_LEASE);
     if (status === STATUS_CONEXAO.CONNECTED) throw erro(CODIGOS.JA_CONECTADO);
     if (status === STATUS_CONEXAO.LOGGED_OUT) {
       // Só um NOVO pareamento (novo QR) sai de LOGGED_OUT — reset explícito,
@@ -371,9 +395,31 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     await heartbeat();
   }
 
+  /**
+   * Checkpoint C3.5, item 12 — chamado pelo `leaseManager` quando este
+   * processo PERDE a lease enquanto ainda tinha socket aberto (renew
+   * rejeitado/expirado, ou um 409 fenced numa gravação). Fecha o socket e
+   * para tudo, mas — diferente de `desconectar()` — NUNCA manda um
+   * heartbeat final: a essa altura `leaseManager.contexto()` já é `null`
+   * (a lease já foi dada como perdida antes deste callback rodar), então
+   * qualquer heartbeat seria recusado pelo backend mesmo, e `heartbeat()`
+   * já pula sozinho sem `contexto()` — não tenta reaver ownership
+   * silenciosamente mantendo o socket vivo.
+   */
+  async function _forcarFailSafe() {
+    encerradoManualmente = true; // um close subsequente do socket não pode agendar reconexão
+    pararHeartbeatPeriodico();
+    if (socket) {
+      await socket.end?.(undefined).catch(() => {});
+      socket = null;
+    }
+    status = STATUS_CONEXAO.DISCONNECTED;
+  }
+
   return {
     conectar,
     desconectar,
+    _forcarFailSafe,
     /** QR atual (string) ou null — só em memória, nunca persistido/logado. Ver routes.js#/whatsapp/qr. */
     obterQrAtual: () => qrAtual,
     async getStatus() {

@@ -69,6 +69,24 @@ describe("segurança — arquivos do Checkpoint C1 (Gateway WhatsApp) nunca toca
     const { criarRepoSupabase } = await import("../src/modules/comunicacao/gateway/whatsappGateway.repo.js");
     assert.doesNotThrow(() => criarRepoSupabase());
   });
+
+  // Checkpoint C3.5 (auditoria de autoridade de relógio) — prova ESTRUTURAL,
+  // não comportamental: dentro de criarRepoSupabase(), nenhuma decisão de
+  // lease pode depender do relógio do processo Node. Como as 5 operações
+  // fenced (acquire/renew/release/heartbeat/auth-state) viraram chamadas
+  // .rpc() para funções SQL que computam tudo com now() do Postgres, o
+  // jeito mais direto de garantir que ninguém reintroduza um `Date.now()`/
+  // `new Date()` como autoridade é verificar que ELE NÃO EXISTE NO CÓDIGO
+  // dentro de criarRepoSupabase() — nem um clock skew do Gateway nem do
+  // backend pode influenciar uma decisão que nunca é calculada ali.
+  test("criarRepoSupabase() nunca calcula Date.now()/new Date() — toda autoridade de tempo é now() do Postgres, dentro das funções SQL da migration 084", () => {
+    const conteudo = readFileSync(path.join(SRC, "modules", "comunicacao", "gateway", "whatsappGateway.repo.js"), "utf8");
+    const inicioSupabase = conteudo.indexOf("export function criarRepoSupabase()");
+    assert.ok(inicioSupabase > 0, "criarRepoSupabase() não encontrada");
+    const corpoSupabase = removerComentarios(conteudo.slice(inicioSupabase));
+    assert.ok(!/Date\.now\(\)/.test(corpoSupabase), "Date.now() não pode aparecer dentro de criarRepoSupabase() — autoridade de tempo é sempre do Postgres");
+    assert.ok(!/new Date\(/.test(corpoSupabase), "new Date(...) não pode aparecer dentro de criarRepoSupabase() — nenhum timestamp calculado no Node pode virar argumento de RPC");
+  });
 });
 
 describe("boot — o backend nunca falha ao subir por causa do Gateway WhatsApp ainda inativo", () => {

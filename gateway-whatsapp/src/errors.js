@@ -12,6 +12,10 @@ export const CODIGOS = {
   MENSAGEM_INVALIDA: "WHATSAPP_GATEWAY_INVALID_MESSAGE",
   AUTH_STATE_INDISPONIVEL: "WHATSAPP_GATEWAY_AUTH_STATE_UNAVAILABLE",
   INDISPONIVEL: "WHATSAPP_GATEWAY_UNAVAILABLE",
+  // Checkpoint C3.5 — este processo não é (ou deixou de ser) o dono da
+  // lease da sessão. 423 (Locked): o recurso existe, mas está travado por
+  // outro dono — nunca abre um segundo socket concorrente.
+  SEM_LEASE: "WHATSAPP_GATEWAY_NOT_LEADER",
 };
 
 const STATUS = {
@@ -22,6 +26,7 @@ const STATUS = {
   [CODIGOS.MENSAGEM_INVALIDA]: 400,
   [CODIGOS.AUTH_STATE_INDISPONIVEL]: 503,
   [CODIGOS.INDISPONIVEL]: 503,
+  [CODIGOS.SEM_LEASE]: 423,
 };
 
 export class GatewayError extends Error {

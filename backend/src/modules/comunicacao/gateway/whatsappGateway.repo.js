@@ -26,6 +26,42 @@ import { ApiError } from "../../../shared/ApiError.js";
 
 const INSTANCIA_PADRAO = "default";
 
+// FENCING (Checkpoint C3.5) — lançado por salvarAuthState/registrarHeartbeat
+// quando o (gatewayProcessId, leaseEpoch) apresentado não bate com o dono
+// atual da lease. Nunca sobrescreve nada quando isto acontece: a rota HTTP
+// (whatsappGateway.routes.js) traduz isto em 409, nunca em 500 — é o
+// comportamento ESPERADO de um processo stale, não uma falha de infra.
+export class LeaseStaleError extends Error {
+  constructor(detalhe) {
+    super("lease stale — gatewayProcessId/leaseEpoch não é mais o dono atual");
+    this.name = "LeaseStaleError";
+    this.code = "WHATSAPP_GATEWAY_LEASE_STALE";
+    this.detalhe = detalhe;
+  }
+}
+
+/**
+ * Checkpoint C3.5, itens 1/4 (auditoria) — fencing de uma gravação sensível
+ * (heartbeat/auth-state) exige as TRÊS condições, não só owner+epoch:
+ *   lease_owner_id = gatewayProcessId
+ *   AND lease_epoch = leaseEpoch
+ *   AND lease_expires_at > agora
+ * Sem a terceira condição, um dono cujo TTL já venceu — mas que ainda
+ * ninguém tomou (nenhum outro processo chegou a chamar acquire) — continuaria
+ * escrevendo livremente, com a garantia dependendo só do auto-fencing por
+ * relógio do lado do Gateway (não é aceitável: o BANCO precisa recusar
+ * sozinho, mesmo que o Gateway nunca percebesse que passou do prazo).
+ */
+function fencingValido(atual, { gatewayProcessId, leaseEpoch }, agora = Date.now()) {
+  // Fencing ausente/malformado nunca pode "por acaso" bater (ex.: nenhuma
+  // lease foi adquirida ainda e o caller também não mandou nada — os dois
+  // lados `undefined` não podem contar como owner válido).
+  if (!gatewayProcessId || typeof leaseEpoch !== "number") return false;
+  if (!atual?.leaseOwnerId || atual.leaseOwnerId !== gatewayProcessId || atual.leaseEpoch !== leaseEpoch) return false;
+  if (!atual.leaseExpiresAt || new Date(atual.leaseExpiresAt).getTime() <= agora) return false;
+  return true;
+}
+
 /** Repositório em memória — usado por padrão em C1 (tabela real não existe ainda). */
 export function criarRepoEmMemoria() {
   const porOrganizacao = new Map(); // organizacaoId -> registro
@@ -34,16 +70,70 @@ export function criarRepoEmMemoria() {
     async obterAuthState(organizacaoId) {
       return porOrganizacao.get(organizacaoId)?.authStateEncrypted ?? null;
     },
-    async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion }) {
+    async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, gatewayProcessId, leaseEpoch }) {
       const atual = porOrganizacao.get(organizacaoId) ?? {};
+      if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
       porOrganizacao.set(organizacaoId, { ...atual, authStateEncrypted, authStateVersion, updatedAt: new Date().toISOString() });
     },
-    async registrarHeartbeat(organizacaoId, { status, telefone, gatewayVersion, providerInstanceId }) {
+    async registrarHeartbeat(organizacaoId, { status, telefone, gatewayVersion, providerInstanceId, gatewayProcessId, leaseEpoch }) {
       const atual = porOrganizacao.get(organizacaoId) ?? {};
+      if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
       porOrganizacao.set(organizacaoId, {
         ...atual, status, telefone: telefone ?? atual.telefone ?? null, gatewayVersion, providerInstanceId,
         lastSeenAt: new Date().toISOString(),
       });
+    },
+    // ---- lease/fencing (Checkpoint C3.5) ----
+    // Single-process, Map síncrono: cada bloco abaixo é atômico por
+    // construção (nenhum `await` entre a leitura e a escrita do Map), o
+    // equivalente em memória do UPDATE...WHERE atômico do repo Supabase.
+    async adquirirLease(organizacaoId, { gatewayProcessId, ttlMs }) {
+      const atual = porOrganizacao.get(organizacaoId) ?? {};
+      const agora = Date.now();
+      // <= (não só <): uma lease cujo expires_at é exatamente "agora" já
+      // conta como vencida — evita depender de o relógio ter avançado pelo
+      // menos 1ms entre duas chamadas síncronas (Date.now() tem resolução
+      // de ~1ms; um TTL curtíssimo pode cair no mesmo tick).
+      const expirada = !atual.leaseExpiresAt || new Date(atual.leaseExpiresAt).getTime() <= agora;
+
+      // Checkpoint C3.5, item 3 (auditoria) — RE-ACQUIRE pelo MESMO dono,
+      // ainda dentro do TTL, é uma RENOVAÇÃO, nunca uma posse nova: NÃO pode
+      // incrementar o epoch. Um acquire duplicado do mesmo processo (retry,
+      // bug) jamais pode invalidar silenciosamente escritas/heartbeats já em
+      // voo assinados com o epoch atual — só uma troca REAL de dono (owner
+      // null, expirado, ou outro processo) justifica epoch novo.
+      if (atual.leaseOwnerId === gatewayProcessId && !expirada) {
+        const expiresAt = new Date(agora + ttlMs).toISOString();
+        porOrganizacao.set(organizacaoId, { ...atual, leaseExpiresAt: expiresAt });
+        return { acquired: true, leaseEpoch: atual.leaseEpoch, expiresAt };
+      }
+
+      const elegivel = !atual.leaseOwnerId || expirada;
+      if (!elegivel) {
+        return { acquired: false, leaseEpoch: atual.leaseEpoch ?? 0, expiresAt: atual.leaseExpiresAt ?? null };
+      }
+      const leaseEpoch = (atual.leaseEpoch ?? 0) + 1;
+      const expiresAt = new Date(agora + ttlMs).toISOString();
+      porOrganizacao.set(organizacaoId, { ...atual, leaseOwnerId: gatewayProcessId, leaseEpoch, leaseExpiresAt: expiresAt });
+      return { acquired: true, leaseEpoch, expiresAt };
+    },
+    async renovarLease(organizacaoId, { gatewayProcessId, leaseEpoch, ttlMs }) {
+      const atual = porOrganizacao.get(organizacaoId) ?? {};
+      // Checkpoint C3.5, item 4 (auditoria) — renovar uma lease JÁ EXPIRADA
+      // (mesmo com owner/epoch ainda batendo) é recusado: uma renovação
+      // atrasada que chega depois do prazo não pode "ressuscitar" uma posse
+      // que já podia ter sido tomada por outro processo. `fencingValido` já
+      // checa expiração — reaproveitado aqui de propósito (mesma regra).
+      if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) return { renewed: false, leaseEpoch: null, expiresAt: null };
+      const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+      porOrganizacao.set(organizacaoId, { ...atual, leaseExpiresAt: expiresAt });
+      return { renewed: true, leaseEpoch, expiresAt };
+    },
+    async liberarLease(organizacaoId, { gatewayProcessId, leaseEpoch }) {
+      const atual = porOrganizacao.get(organizacaoId) ?? {};
+      if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) return { released: false };
+      porOrganizacao.set(organizacaoId, { ...atual, leaseOwnerId: null, leaseExpiresAt: null });
+      return { released: true };
     },
     async registrarStatusProvider(_organizacaoId, { providerMessageId, status }) {
       // Checkpoint C2: escrever em comunicacao_mensagens/comunicacao_tentativas
@@ -91,6 +181,39 @@ export function criarRepoSupabase() {
     return ins.data;
   }
 
+  /**
+   * Checkpoint C3.5 (auditoria de autoridade de relógio) — toda decisão de
+   * validade de lease e todo `lease_expires_at` novo são calculados DENTRO
+   * do Postgres (`now()`), nunca no Node. PostgREST não permite expressar
+   * `now()`/`now()+interval` num `.update()`/`.gt()` comum (são só
+   * comparação/atribuição de valores literais, nunca expressões avaliadas
+   * no banco) — por isso as 5 operações fenced (acquire/renew/release/
+   * heartbeat/auth-state) são funções SQL (migration 084), chamadas via
+   * `.rpc()`. O relógio do Gateway (`leaseManager.js`) continua existindo,
+   * mas só para self-fencing PREVENTIVO — a autoridade que efetivamente
+   * autoriza uma escrita é sempre o `now()` do banco, dentro da função.
+   */
+  async function chamarRpc(db, nome, args) {
+    const { data, error } = await db.rpc(nome, args);
+    if (error) throw ApiError.internal(error.message);
+    // Toda função retorna `table(...)` — supabase-js devolve um array com
+    // exatamente 1 linha (as funções sempre fazem `return query select ...`
+    // uma única vez).
+    return data?.[0] ?? null;
+  }
+
+  /** UPDATE fenced (owner+epoch+lease_expires_at>now(), tudo do banco) — usado por heartbeat e auth-state. 0 linhas afetadas = LeaseStaleError. */
+  async function atualizarComFencing(db, organizacaoId, providerInstanceId, funcaoRpc, argsExtras, { gatewayProcessId, leaseEpoch }) {
+    if (!gatewayProcessId || typeof leaseEpoch !== "number") {
+      throw new LeaseStaleError({ organizacaoId, providerInstanceId, motivo: "fencing ausente" });
+    }
+    const r = await chamarRpc(db, funcaoRpc, {
+      p_organizacao_id: organizacaoId, p_provider_instance_id: providerInstanceId,
+      p_process_id: gatewayProcessId, p_epoch: leaseEpoch, ...argsExtras,
+    });
+    if (!r?.ok) throw new LeaseStaleError({ organizacaoId, providerInstanceId });
+  }
+
   return {
     async obterAuthState(organizacaoId, deps = {}) {
       const db = await obterCliente(deps);
@@ -103,32 +226,27 @@ export function criarRepoSupabase() {
       return data?.auth_state_encrypted ?? null;
     },
 
-    async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, providerInstanceId = INSTANCIA_PADRAO } = {}, deps = {}) {
+    async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, providerInstanceId = INSTANCIA_PADRAO, gatewayProcessId, leaseEpoch } = {}, deps = {}) {
       const db = await obterCliente(deps);
       await obterOuCriarConexao(db, organizacaoId, providerInstanceId);
-      const { error } = await db.from("whatsapp_conexoes")
-        .update({ auth_state_encrypted: authStateEncrypted, auth_state_version: authStateVersion })
-        .eq("organizacao_id", organizacaoId).eq("provider_instance_id", providerInstanceId);
-      if (error) throw ApiError.internal(error.message);
+      await atualizarComFencing(db, organizacaoId, providerInstanceId, "whatsapp_auth_state_fenced",
+        { p_auth_state_encrypted: authStateEncrypted, p_auth_state_version: authStateVersion },
+        { gatewayProcessId, leaseEpoch });
     },
 
-    async registrarHeartbeat(organizacaoId, { status, telefone, gatewayVersion, providerInstanceId = INSTANCIA_PADRAO, lastErrorClass } = {}, deps = {}) {
+    async registrarHeartbeat(organizacaoId, { status, telefone, gatewayVersion, providerInstanceId = INSTANCIA_PADRAO, lastErrorClass, gatewayProcessId, leaseEpoch } = {}, deps = {}) {
       const db = await obterCliente(deps);
       await obterOuCriarConexao(db, organizacaoId, providerInstanceId);
-
-      const agora = new Date().toISOString();
-      const patch = { last_seen_at: agora };
-      if (status !== undefined) patch.status = status;
-      if (telefone !== undefined && telefone !== null) patch.telefone_e164 = telefone;
-      if (gatewayVersion !== undefined) patch.gateway_version = gatewayVersion;
-      if (lastErrorClass !== undefined) patch.last_error_class = lastErrorClass;
-      if (status === "CONNECTED") patch.connected_at = agora;
-      if (status === "DISCONNECTED" || status === "LOGGED_OUT") patch.disconnected_at = agora;
-
-      const { error } = await db.from("whatsapp_conexoes")
-        .update(patch)
-        .eq("organizacao_id", organizacaoId).eq("provider_instance_id", providerInstanceId);
-      if (error) throw ApiError.internal(error.message);
+      // `connected_at`/`disconnected_at`/`last_seen_at` são calculados DENTRO
+      // da função SQL com `now()` do banco — nunca aqui. `p_status`/
+      // `p_telefone`/etc. em NULL significam "não mudar" (COALESCE na
+      // função); undefined vira null naturalmente no payload JSON do RPC.
+      await atualizarComFencing(db, organizacaoId, providerInstanceId, "whatsapp_heartbeat_fenced", {
+        p_status: status ?? null,
+        p_telefone: telefone ?? null,
+        p_gateway_version: gatewayVersion ?? null,
+        p_last_error_class: lastErrorClass ?? null,
+      }, { gatewayProcessId, leaseEpoch });
     },
 
     async registrarStatusProvider(_organizacaoId, { providerMessageId, status }) {
@@ -140,6 +258,41 @@ export function criarRepoSupabase() {
     async registrarMensagemRecebida(_organizacaoId, payload) {
       // Checkpoint F: resolução de contato/perfil + comunicacao_conversas.
       return payload;
+    },
+
+    // ---- lease/fencing (Checkpoint C3.5) ----
+    // As três operações abaixo são chamadas RPC para funções SQL (migration
+    // 084) — nenhuma delas calcula "agora" nem "novo prazo" no Node; tudo
+    // é `now()` do Postgres, dentro da função, na MESMA instrução atômica
+    // que decide elegibilidade e grava. Ver comentário de `chamarRpc` acima
+    // e o cabeçalho da migration 084 para a justificativa completa (por que
+    // não dá para expressar isso num `.update()`/`.gt()` comum do PostgREST).
+    async adquirirLease(organizacaoId, { gatewayProcessId, ttlMs, providerInstanceId = INSTANCIA_PADRAO } = {}, deps = {}) {
+      const db = await obterCliente(deps);
+      const r = await chamarRpc(db, "whatsapp_lease_acquire", {
+        p_organizacao_id: organizacaoId, p_provider_instance_id: providerInstanceId,
+        p_process_id: gatewayProcessId, p_ttl_ms: ttlMs,
+      });
+      return { acquired: !!r?.acquired, leaseEpoch: r?.lease_epoch ?? 0, expiresAt: r?.lease_expires_at ?? null };
+    },
+
+    async renovarLease(organizacaoId, { gatewayProcessId, leaseEpoch, ttlMs, providerInstanceId = INSTANCIA_PADRAO } = {}, deps = {}) {
+      const db = await obterCliente(deps);
+      const r = await chamarRpc(db, "whatsapp_lease_renew", {
+        p_organizacao_id: organizacaoId, p_provider_instance_id: providerInstanceId,
+        p_process_id: gatewayProcessId, p_epoch: leaseEpoch, p_ttl_ms: ttlMs,
+      });
+      if (!r?.renewed) return { renewed: false, leaseEpoch: null, expiresAt: null };
+      return { renewed: true, leaseEpoch: r.lease_epoch, expiresAt: r.lease_expires_at };
+    },
+
+    async liberarLease(organizacaoId, { gatewayProcessId, leaseEpoch, providerInstanceId = INSTANCIA_PADRAO } = {}, deps = {}) {
+      const db = await obterCliente(deps);
+      const r = await chamarRpc(db, "whatsapp_lease_release", {
+        p_organizacao_id: organizacaoId, p_provider_instance_id: providerInstanceId,
+        p_process_id: gatewayProcessId, p_epoch: leaseEpoch,
+      });
+      return { released: !!r?.released };
     },
 
     // ---- só para teste/instrumentação ----

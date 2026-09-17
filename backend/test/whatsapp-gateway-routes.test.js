@@ -5,6 +5,7 @@
 // receptor de "mensagem recebida".
 import { test, describe, after, before } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import express from "express";
 import { createServer } from "node:http";
 import { exigirHmac, assinarRequisicao, _resetarNonces } from "../src/modules/comunicacao/gateway/whatsappGateway.hmac.js";
@@ -35,24 +36,126 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
     return fetch(`${baseUrl}${caminho}`, { method: metodo, headers, body: corpo || undefined });
   }
 
+  // Este describe compartilha UM `repo`/servidor entre todos os testes (ao
+  // contrário de whatsapp-gateway-lease.test.js, que isola um repo por
+  // teste) — então cada `adquirirLeaseDeTeste()` libera antes o que o
+  // teste anterior deixou preso, senão o mecanismo de exclusão mútua
+  // (correto, por desenho) bloquearia o setup dos testes seguintes.
+  let leaseAtual = null;
+
+  /** Adquire uma lease com um gatewayProcessId novo e devolve {gatewayProcessId, leaseEpoch} pronto para spread nas gravações fenced. */
+  async function adquirirLeaseDeTeste() {
+    if (leaseAtual) await liberarLeaseDeTeste(leaseAtual);
+    const gatewayProcessId = randomUUID();
+    _resetarNonces();
+    const r = await chamarAssinado("POST", "/internal/comunicacao/lease/acquire", { gatewayProcessId, ttlMs: 45_000 });
+    const corpo = await r.json();
+    if (!corpo.acquired) throw new Error("adquirirLeaseDeTeste: falha ao adquirir lease no setup do teste");
+    leaseAtual = { gatewayProcessId, leaseEpoch: corpo.leaseEpoch };
+    return leaseAtual;
+  }
+
+  /** Libera uma lease adquirida por adquirirLeaseDeTeste — deixa o recurso livre para o próximo acquire. */
+  async function liberarLeaseDeTeste(lease) {
+    _resetarNonces();
+    await chamarAssinado("POST", "/internal/comunicacao/lease/release", lease);
+    if (leaseAtual?.gatewayProcessId === lease.gatewayProcessId) leaseAtual = null;
+  }
+
   test("sem HMAC, tudo recusado com 401 (rota não vira API pública)", async () => {
     const r = await fetch(`${baseUrl}/internal/comunicacao/eventos/heartbeat`, { method: "POST" });
     assert.equal(r.status, 401);
   });
 
+  test("lease/acquire com ttlMs fora da faixa permitida (Checkpoint C3.5-A) é rejeitado com 400 — nunca chega a chamar o repo", async () => {
+    const casosInvalidos = [0, -1, 300_001, 999_999_999, Number.NaN, Number.POSITIVE_INFINITY];
+    for (const ttlMs of casosInvalidos) {
+      _resetarNonces();
+      const r = await chamarAssinado("POST", "/internal/comunicacao/lease/acquire", { gatewayProcessId: "11111111-1111-1111-1111-111111111111", ttlMs });
+      assert.equal(r.status, 400, `ttlMs=${ttlMs} deveria ter sido rejeitado`);
+    }
+  });
+
+  test("lease/acquire com ttlMs nos limites da faixa (1 e 300000) é aceito", async () => {
+    _resetarNonces();
+    const r1 = await chamarAssinado("POST", "/internal/comunicacao/lease/acquire", { gatewayProcessId: "22222222-2222-2222-2222-222222222222", ttlMs: 1 });
+    assert.equal(r1.status, 200);
+    const corpo1 = await r1.json();
+    assert.equal(corpo1.acquired, true);
+    leaseAtual = { gatewayProcessId: "22222222-2222-2222-2222-222222222222", leaseEpoch: corpo1.leaseEpoch };
+
+    _resetarNonces();
+    const r2 = await chamarAssinado("POST", "/internal/comunicacao/lease/acquire", { gatewayProcessId: "33333333-3333-3333-3333-333333333333", ttlMs: 300_000 });
+    assert.equal(r2.status, 200);
+    const corpo2 = await r2.json();
+    assert.equal(corpo2.acquired, true);
+    leaseAtual = { gatewayProcessId: "33333333-3333-3333-3333-333333333333", leaseEpoch: corpo2.leaseEpoch };
+  });
+
+  test("lease/renew com ttlMs fora da faixa é rejeitado com 400", async () => {
+    _resetarNonces();
+    const lease = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    const r = await chamarAssinado("POST", "/internal/comunicacao/lease/renew", { ...lease, ttlMs: 300_001 });
+    assert.equal(r.status, 400);
+  });
+
   test("heartbeat assinado é registrado no repo (last_seen_at observável)", async () => {
     _resetarNonces();
-    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/heartbeat", { status: "CONNECTED", telefone: "+5511999990000", gatewayVersion: "0.1.0" });
+    const lease = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/heartbeat", {
+      status: "CONNECTED", telefone: "+5511999990000", gatewayVersion: "0.1.0", ...lease,
+    });
     assert.equal(r.status, 200);
     const snap = repo._snapshot(ORG_ID);
     assert.equal(snap.status, "CONNECTED");
     assert.ok(snap.lastSeenAt);
   });
 
+  test("heartbeat sem gatewayProcessId/leaseEpoch é rejeitado com 400 (fencing obrigatório, Checkpoint C3.5)", async () => {
+    _resetarNonces();
+    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/heartbeat", { status: "CONNECTED" });
+    assert.equal(r.status, 400);
+  });
+
+  test("heartbeat com leaseEpoch stale é rejeitado com 409, sem sobrescrever o estado atual (Checkpoint C3.5)", async () => {
+    _resetarNonces();
+    const leaseA = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    // A grava CONNECTED com o epoch válido.
+    await chamarAssinado("POST", "/internal/comunicacao/eventos/heartbeat", { status: "CONNECTED", gatewayVersion: "vA", ...leaseA });
+
+    // A libera (shutdown gracioso) — só assim B consegue assumir uma lease
+    // ainda dentro do TTL; enquanto válida e de outro dono, ninguém mais
+    // pode adquiri-la (é exatamente essa exclusão mútua que este checkpoint
+    // constrói).
+    _resetarNonces();
+    await liberarLeaseDeTeste(leaseA);
+
+    // B assume a lease (epoch mais novo) e também grava.
+    _resetarNonces();
+    const leaseB = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    await chamarAssinado("POST", "/internal/comunicacao/eventos/heartbeat", { status: "CONNECTED", gatewayVersion: "vB", ...leaseB });
+
+    // A (epoch velho) tenta escrever DISCONNECTED — precisa ser rejeitado.
+    _resetarNonces();
+    const rStale = await chamarAssinado("POST", "/internal/comunicacao/eventos/heartbeat", { status: "DISCONNECTED", ...leaseA });
+    assert.equal(rStale.status, 409);
+    assert.deepEqual(await rStale.json(), { error: "WHATSAPP_GATEWAY_LEASE_STALE" });
+
+    const snap = repo._snapshot(ORG_ID);
+    assert.equal(snap.status, "CONNECTED", "o estado de B não pode ter sido sobrescrito pelo A stale");
+    assert.equal(snap.gatewayVersion, "vB");
+  });
+
   test("auth-state: POST grava só o ciphertext, GET devolve exatamente o que foi salvo", async () => {
     _resetarNonces();
+    const lease = await adquirirLeaseDeTeste();
     const blob = "v1:aWY=:YWJj:ZGVm";
-    const rPost = await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateEncrypted: blob, authStateVersion: "v1" });
+    _resetarNonces();
+    const rPost = await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateEncrypted: blob, authStateVersion: "v1", ...lease });
     assert.equal(rPost.status, 200);
 
     _resetarNonces();
@@ -63,8 +166,32 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
 
   test("auth-state: POST sem authStateEncrypted é rejeitado com 400 (nunca grava lixo)", async () => {
     _resetarNonces();
-    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateVersion: "v1" });
+    const lease = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateVersion: "v1", ...lease });
     assert.equal(r.status, 400);
+  });
+
+  test("auth-state: POST com fencing stale é rejeitado com 409, sem sobrescrever o auth state atual (Checkpoint C3.5)", async () => {
+    _resetarNonces();
+    const leaseA = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateEncrypted: "v1:de-A", authStateVersion: "v1", ...leaseA });
+
+    _resetarNonces();
+    await liberarLeaseDeTeste(leaseA);
+    _resetarNonces();
+    const leaseB = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateEncrypted: "v1:de-B", authStateVersion: "v1", ...leaseB });
+
+    _resetarNonces();
+    const rStale = await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateEncrypted: "v1:de-A-atrasado", authStateVersion: "v1", ...leaseA });
+    assert.equal(rStale.status, 409);
+
+    _resetarNonces();
+    const rGet = await chamarAssinado("GET", "/internal/comunicacao/auth-state");
+    assert.deepEqual(await rGet.json(), { authStateEncrypted: "v1:de-B" });
   });
 
   test("GET auth-state sem nada salvo ainda devolve objeto vazio, não erro", async () => {

@@ -59,3 +59,9 @@ export async function migracao083Aplicada() {
   const probe = await supabase.from("whatsapp_conexoes").select("id").limit(0);
   return !probe.error;
 }
+
+/** Migration 084 (lease/fencing em whatsapp_conexoes) está aplicada neste Supabase? */
+export async function migracao084Aplicada() {
+  const probe = await supabase.from("whatsapp_conexoes").select("lease_epoch").limit(0);
+  return !probe.error;
+}

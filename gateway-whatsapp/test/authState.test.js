@@ -579,3 +579,67 @@ describe("authState — fila de persistência (serialização, Checkpoint C3 —
     assert.deepEqual(backendClient._ordemChamadas(), [0, 1]);
   });
 });
+
+describe("authState — fencing de lease (Checkpoint C3.5)", () => {
+  function backendClientCapturaFencing({ rejeitarComLeaseStale = false } = {}) {
+    let salvo = null;
+    const chamadas = [];
+    return {
+      async salvarAuthState(payload) {
+        chamadas.push(payload);
+        if (rejeitarComLeaseStale) {
+          const e = new Error("stale (simulado)");
+          e.leaseStale = true;
+          throw e;
+        }
+        salvo = payload;
+      },
+      async carregarAuthState() { return salvo ? { authStateEncrypted: salvo.authStateEncrypted } : {}; },
+      _chamadas: () => chamadas,
+    };
+  }
+
+  test("toda gravação inclui gatewayProcessId/leaseEpoch vindos de obterContextoLease()", async () => {
+    const backendClient = backendClientCapturaFencing();
+    const obterContextoLease = () => ({ gatewayProcessId: "proc-x", leaseEpoch: 7 });
+    const adapter = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV, obterContextoLease });
+    adapter.inicializarCreds(initAuthCreds());
+
+    await adapter.aoAtualizarCreds({ nextPreKeyId: 1 });
+
+    const [chamada] = backendClient._chamadas();
+    assert.equal(chamada.gatewayProcessId, "proc-x");
+    assert.equal(chamada.leaseEpoch, 7);
+  });
+
+  test("sem lease (obterContextoLease() devolve null), persistir() recusa LOCALMENTE — nunca chega a chamar o backend", async () => {
+    const backendClient = backendClientCapturaFencing();
+    const obterContextoLease = () => null;
+    const adapter = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV, obterContextoLease });
+    adapter.inicializarCreds(initAuthCreds());
+
+    await assert.rejects(adapter.aoAtualizarCreds({ nextPreKeyId: 1 }));
+    assert.equal(backendClient._chamadas().length, 0, "nunca deveria ter tentado a rede sem lease");
+  });
+
+  test("rejeição 409 (leaseStale) do backend dispara aoLeaseStale, e o erro ainda propaga para quem chamou aoAtualizarCreds", async () => {
+    const backendClient = backendClientCapturaFencing({ rejeitarComLeaseStale: true });
+    const obterContextoLease = () => ({ gatewayProcessId: "proc-x", leaseEpoch: 3 });
+    const aoLeaseStale = mock.fn();
+    const adapter = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV, obterContextoLease, aoLeaseStale });
+    adapter.inicializarCreds(initAuthCreds());
+
+    await assert.rejects(adapter.aoAtualizarCreds({ nextPreKeyId: 1 }));
+    assert.equal(aoLeaseStale.mock.calls.length, 1);
+    assert.equal(aoLeaseStale.mock.calls[0].arguments[0], "auth_state_stale");
+  });
+
+  test("sem obterContextoLease injetado (uso sem lease), continua funcionando como antes deste checkpoint — retrocompatível", async () => {
+    const backendClient = backendClientCapturaFencing();
+    const adapter = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV });
+    adapter.inicializarCreds(initAuthCreds());
+
+    await adapter.aoAtualizarCreds({ nextPreKeyId: 1 }); // não pode lançar
+    assert.equal(backendClient._chamadas().length, 1);
+  });
+});

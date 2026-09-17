@@ -16,6 +16,31 @@
 // futuro explícito, não um atalho silencioso.
 
 import { Router } from "express";
+import { LeaseStaleError } from "./whatsappGateway.repo.js";
+
+// UUID v4-ish — o Gateway gera gatewayProcessId com crypto.randomUUID() a
+// cada boot (Checkpoint C3.5, item 2). Validado aqui (fronteira HTTP) antes
+// de qualquer coisa tocar o repo — nunca deixamos um valor malformado virar
+// parte de uma query (mesmo já sendo parametrizada pelo supabase-js, é
+// defesa em profundidade e um 400 é mais claro que um "stale" genérico).
+const GATEWAY_PROCESS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function processIdValido(v) {
+  return typeof v === "string" && GATEWAY_PROCESS_ID_RE.test(v);
+}
+// Checkpoint C3.5-A (auditoria) — mesma faixa validada dentro das funções
+// SQL da migration 084 (defesa em profundidade: a autoridade final é o
+// banco, mas rejeitar aqui dá um 400 claro em vez de deixar a RPC lançar).
+// Justificativa dos limites no cabeçalho da migration 084.
+const TTL_MIN_MS = 1;
+const TTL_MAX_MS = 300_000; // 5 minutos — >6x o WHATSAPP_LEASE_TTL_MS configurado (45s)
+
+function ttlValido(v) {
+  return typeof v === "number" && Number.isFinite(v) && v >= TTL_MIN_MS && v <= TTL_MAX_MS;
+}
+function epochValido(v) {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0;
+}
 
 /**
  * @param {object} deps
@@ -45,30 +70,99 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
     } catch (e) { next(e); }
   });
 
+  // FENCING (Checkpoint C3.5) — heartbeat e auth-state são as duas gravações
+  // sensíveis de estado da sessão (item 5 do checklist). As duas exigem
+  // gatewayProcessId + leaseEpoch e devolvem 409 WHATSAPP_GATEWAY_LEASE_STALE
+  // (nunca 500, nunca sucesso silencioso) quando o processo não é mais o
+  // dono atual — é assim que se evita exatamente o que a instância ociosa
+  // `j4jv6` fez ao vivo (escrever DISCONNECTED por cima de um estado mais
+  // novo só porque chegou depois).
+  function corpoFencingValido(corpo) {
+    return processIdValido(corpo?.gatewayProcessId) && epochValido(corpo?.leaseEpoch);
+  }
+
   router.post("/eventos/heartbeat", async (req, res, next) => {
     try {
-      await repo.registrarHeartbeat(organizacaoId, req.corpoJson ?? {});
+      const corpo = req.corpoJson ?? {};
+      if (!corpoFencingValido(corpo)) {
+        return res.status(400).json({ error: "gatewayProcessId/leaseEpoch ausente ou inválido" });
+      }
+      await repo.registrarHeartbeat(organizacaoId, corpo);
       res.json({ ok: true });
-    } catch (e) { next(e); }
+    } catch (e) {
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
   });
 
   router.post("/eventos/auth-state", async (req, res, next) => {
     try {
-      const { authStateEncrypted, authStateVersion } = req.corpoJson ?? {};
+      const corpo = req.corpoJson ?? {};
+      const { authStateEncrypted, authStateVersion } = corpo;
       if (typeof authStateEncrypted !== "string" || !authStateEncrypted) {
         return res.status(400).json({ error: "authStateEncrypted ausente" });
       }
+      if (!corpoFencingValido(corpo)) {
+        return res.status(400).json({ error: "gatewayProcessId/leaseEpoch ausente ou inválido" });
+      }
       // O backend armazena SÓ o ciphertext — nunca decifra (não tem a
       // chave). Ver Checkpoint C0, item 8/11.
-      await repo.salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion });
+      await repo.salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, gatewayProcessId: corpo.gatewayProcessId, leaseEpoch: corpo.leaseEpoch });
       res.json({ ok: true });
-    } catch (e) { next(e); }
+    } catch (e) {
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
   });
 
   router.get("/auth-state", async (req, res, next) => {
     try {
       const authStateEncrypted = await repo.obterAuthState(organizacaoId);
       res.json(authStateEncrypted ? { authStateEncrypted } : {});
+    } catch (e) { next(e); }
+  });
+
+  // ---- lease/fencing (Checkpoint C3.5, item 6) ----
+  // Mesma fronteira HMAC das demais rotas /internal/comunicacao — nunca
+  // expostas publicamente (ver server.js do Gateway e app.js do backend,
+  // que montam isto ANTES de requireAuth e só atrás de exigirHmac).
+  router.post("/lease/acquire", async (req, res, next) => {
+    try {
+      const { gatewayProcessId, ttlMs } = req.corpoJson ?? {};
+      if (!processIdValido(gatewayProcessId)) {
+        return res.status(400).json({ error: "gatewayProcessId ausente ou inválido" });
+      }
+      if (!ttlValido(ttlMs)) {
+        return res.status(400).json({ error: `ttlMs precisa estar entre ${TTL_MIN_MS} e ${TTL_MAX_MS} ms` });
+      }
+      const r = await repo.adquirirLease(organizacaoId, { gatewayProcessId, ttlMs });
+      res.json({ acquired: r.acquired, leaseEpoch: r.leaseEpoch, expiresAt: r.expiresAt });
+    } catch (e) { next(e); }
+  });
+
+  router.post("/lease/renew", async (req, res, next) => {
+    try {
+      const { gatewayProcessId, leaseEpoch, ttlMs } = req.corpoJson ?? {};
+      if (!processIdValido(gatewayProcessId) || !epochValido(leaseEpoch)) {
+        return res.status(400).json({ error: "gatewayProcessId/leaseEpoch ausente ou inválido" });
+      }
+      if (!ttlValido(ttlMs)) {
+        return res.status(400).json({ error: `ttlMs precisa estar entre ${TTL_MIN_MS} e ${TTL_MAX_MS} ms` });
+      }
+      const r = await repo.renovarLease(organizacaoId, { gatewayProcessId, leaseEpoch, ttlMs });
+      if (!r.renewed) return res.status(409).json({ error: "WHATSAPP_GATEWAY_LEASE_STALE" });
+      res.json({ renewed: true, leaseEpoch: r.leaseEpoch, expiresAt: r.expiresAt });
+    } catch (e) { next(e); }
+  });
+
+  router.post("/lease/release", async (req, res, next) => {
+    try {
+      const { gatewayProcessId, leaseEpoch } = req.corpoJson ?? {};
+      if (!processIdValido(gatewayProcessId) || !epochValido(leaseEpoch)) {
+        return res.status(400).json({ error: "gatewayProcessId/leaseEpoch ausente ou inválido" });
+      }
+      const r = await repo.liberarLease(organizacaoId, { gatewayProcessId, leaseEpoch });
+      res.json({ released: r.released });
     } catch (e) { next(e); }
   });
 

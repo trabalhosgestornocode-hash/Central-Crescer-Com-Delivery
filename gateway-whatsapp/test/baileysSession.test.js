@@ -6,6 +6,7 @@ import { test, describe, mock } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { criarSessaoBaileys, STATUS_CONEXAO, paraJid, deJid } from "../src/baileysSession.js";
+import { criarLeaseManager } from "../src/leaseManager.js";
 
 const DISCONNECT_REASON_LOGGED_OUT = 401; // mesmo valor real do Baileys (DisconnectReason.loggedOut)
 const DISCONNECT_REASON_CONNECTION_LOST = 408;
@@ -836,5 +837,151 @@ describe("baileysSession — creds.update persiste via authAdapter", () => {
     await sessao.conectar();
     fabricaSocket.criados[0].ev.emit("creds.update", { fake: "creds" });
     assert.equal(authAdapter.aoAtualizarCreds.mock.calls.length, 1);
+  });
+});
+
+describe("baileysSession — lease/fencing (Checkpoint C3.5)", () => {
+  test("conectar() sem lease (leaseManager.souLeader()===false) recusa com WHATSAPP_GATEWAY_NOT_LEADER/423 — nunca abre socket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const leaseManagerStandby = { souLeader: () => false, contexto: () => null };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerStandby,
+    });
+
+    try {
+      await sessao.conectar();
+      assert.fail("conectar() deveria ter recusado sem lease");
+    } catch (e) {
+      assert.equal(e.codigo, "WHATSAPP_GATEWAY_NOT_LEADER");
+      assert.equal(e.status, 423);
+    }
+    assert.equal(fabricaSocket.criados.length, 0, "nenhum socket pode ter sido criado");
+  });
+
+  test("heartbeat nunca é enviado sem lease válida — standby não grava status/DISCONNECTED nenhum (reproduz o caso real de j4jv6)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    // Começa como leader (conectar() precisa passar), mas o contexto vira
+    // null a partir daí — simula perder a lease bem no meio da sessão.
+    const leaseManagerQuePerdeu = { souLeader: () => true, contexto: () => null };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerQuePerdeu,
+    });
+
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+
+    assert.equal(backendClient.notificarHeartbeat.mock.calls.length, 0, "sem contexto() válido, heartbeat() precisa pular o envio inteiramente");
+  });
+
+  test("STANDBY recebe SIGTERM (nunca teve lease/socket): reproduz EXATAMENTE a ordem de server.js#encerrar() — zero chamadas ao backend, banco não muda (caso real de j4jv6)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const semTimers = { agendarIntervalo: () => null, cancelarIntervalo: () => {} };
+    // Nunca ganha o acquire — fica standby a sessão inteira.
+    const backendClientLease = { adquirirLease: async () => ({ acquired: false, leaseEpoch: 0, expiresAt: null }) };
+    const leaseManager = criarLeaseManager({ backendClient: backendClientLease, gatewayProcessId: "proc-standby", ttlMs: 5000, renewMs: 1000, ...semTimers });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    assert.equal(await leaseManager.iniciar(), false);
+    assert.equal(leaseManager.souLeader(), false);
+
+    // server.js#encerrar(), exatamente na mesma ordem:
+    leaseManager.pararTemporizadores();
+    if (leaseManager.souLeader()) {
+      await sessao.desconectar(); // nunca deveria rodar aqui
+    }
+
+    assert.equal(fabricaSocket.criados.length, 0, "standby nunca teve socket — nada para fechar");
+    assert.equal(backendClient.notificarHeartbeat.mock.calls.length, 0, "SIGTERM num standby não pode gerar NENHUM heartbeat — nem DISCONNECTED, nem qualquer outro");
+  });
+
+  test("rolling deploy real: A conectado (leader) -> B sobe e NÃO consegue conectar (standby) -> A faz shutdown gracioso (para timers -> fecha socket -> libera lease) -> só então B adquire e conecta — nunca coexistem dois sockets", async () => {
+    // Fake mínimo do backend, com a MESMA semântica atômica de owner+epoch
+    // do repo real (whatsappGateway.repo.js) — o suficiente para provar a
+    // exclusão mútua fim a fim, sem depender de rede nem de Supabase.
+    function backendClientComLeaseCompartilhada() {
+      let owner = null, epoch = 0, expiresAt = null;
+      return {
+        async adquirirLease({ gatewayProcessId, ttlMs }) {
+          const agora = Date.now();
+          const expirada = !expiresAt || expiresAt <= agora;
+          const elegivel = !owner || owner === gatewayProcessId || expirada;
+          if (!elegivel) return { acquired: false, leaseEpoch: epoch, expiresAt };
+          owner = gatewayProcessId; epoch += 1; expiresAt = agora + ttlMs;
+          return { acquired: true, leaseEpoch: epoch, expiresAt };
+        },
+        async renovarLease({ gatewayProcessId, leaseEpoch, ttlMs }) {
+          if (owner !== gatewayProcessId || epoch !== leaseEpoch) return { renewed: false };
+          expiresAt = Date.now() + ttlMs;
+          return { renewed: true, leaseEpoch: epoch, expiresAt };
+        },
+        async liberarLease({ gatewayProcessId, leaseEpoch }) {
+          if (owner !== gatewayProcessId || epoch !== leaseEpoch) return { released: false };
+          owner = null; expiresAt = null;
+          return { released: true };
+        },
+        notificarHeartbeat: mock.fn(async () => {}),
+        notificarMensagemRecebida: mock.fn(async () => {}),
+        notificarStatusProvider: mock.fn(async () => {}),
+      };
+    }
+    // Timers no-op: este teste dirige toda transição explicitamente
+    // (iniciar()/pararTemporizadores()/liberar()), nunca depende de um
+    // timer de verdade disparar sozinho.
+    const semTimers = { agendarIntervalo: () => null, cancelarIntervalo: () => {} };
+
+    const backendClient = backendClientComLeaseCompartilhada();
+    const fabricaSocketA = socketFalsoFabrica();
+    const fabricaSocketB = socketFalsoFabrica();
+    const leaseA = criarLeaseManager({ backendClient, gatewayProcessId: "proc-A", ttlMs: 5000, renewMs: 1000, ...semTimers });
+    const leaseB = criarLeaseManager({ backendClient, gatewayProcessId: "proc-B", ttlMs: 5000, renewMs: 1000, ...semTimers });
+    const sessaoA = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket: fabricaSocketA, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseA,
+    });
+    const sessaoB = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket: fabricaSocketB, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseB,
+    });
+
+    // A sobe primeiro, ganha a lease, conecta.
+    assert.equal(await leaseA.iniciar(), true);
+    await sessaoA.conectar();
+    assert.equal(fabricaSocketA.criados.length, 1, "A é leader — precisa ter aberto socket");
+
+    // B sobe depois — a lease de A ainda é válida, B fica STANDBY.
+    assert.equal(await leaseB.iniciar(), false);
+    try {
+      await sessaoB.conectar();
+      assert.fail("B não pode conseguir conectar enquanto A ainda detém a lease");
+    } catch (e) {
+      assert.equal(e.codigo, "WHATSAPP_GATEWAY_NOT_LEADER");
+    }
+    assert.equal(fabricaSocketB.criados.length, 0, "B não pode ter aberto socket nenhum ainda");
+
+    // A recebe SIGTERM — reproduz EXATAMENTE a ordem de server.js#encerrar()
+    // para quem é leader: para timers -> fecha socket -> só DEPOIS libera.
+    leaseA.pararTemporizadores();
+    assert.equal(leaseA.souLeader(), true, "ainda é leader — só os timers pararam, a lease continua com A até o release explícito");
+    await sessaoA.desconectar();
+    assert.equal(fabricaSocketA.criados[0].end.mock.calls.length, 1, "o socket de A precisa ter sido fechado ANTES do release");
+    assert.equal(fabricaSocketB.criados.length, 0, "no instante em que A fechou o socket, B AINDA não tinha aberto nada — sem overlap");
+    await leaseA.liberar();
+    assert.equal(leaseA.souLeader(), false);
+
+    // Só agora, com a lease livre, B consegue adquirir e conectar de fato.
+    assert.equal(await leaseB.iniciar(), true);
+    await sessaoB.conectar();
+    assert.equal(fabricaSocketB.criados.length, 1, "só depois do release de A é que B consegue abrir socket");
+
+    // Em nenhum instante os dois tiveram socket simultaneamente ativo: o
+    // socket de A já estava fechado (end() chamado, verificado acima) antes
+    // de B sequer tentar de novo.
   });
 });

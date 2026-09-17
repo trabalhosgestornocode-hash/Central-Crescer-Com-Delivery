@@ -77,8 +77,16 @@ function reviverBuffers(_chave, valor) {
  * @param {object} deps
  * @param {import('./backendClient.js').ReturnType} deps.backendClient
  * @param {string} deps.chaveEncriptacaoEnv variável de ambiente crua
+ * @param {() => ({gatewayProcessId: string, leaseEpoch: number}|null)} [deps.obterContextoLease]
+ *   Checkpoint C3.5 — devolve o fencing atual (null se este processo não é
+ *   leader agora). Sem isto injetado, o adapter funciona sem fencing (usado
+ *   pelos testes que não envolvem lease) — mas em produção `server.js`
+ *   SEMPRE injeta, e toda gravação passa a exigir contexto válido.
+ * @param {(motivo: string) => void} [deps.aoLeaseStale]
+ *   Chamado quando o backend rejeita uma gravação com 409
+ *   WHATSAPP_GATEWAY_LEASE_STALE — plugado ao `leaseManager.notificarPerdaExterna`.
  */
-export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv }) {
+export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obterContextoLease, aoLeaseStale }) {
   const chave = normalizarChave(chaveEncriptacaoEnv);
 
   // Cache em memória do processo — o Baileys lê/escreve chaves o tempo todo
@@ -119,9 +127,22 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv }) {
     return JSON.stringify({ creds, keys: keysPorTipo }, replacerBuffers);
   }
 
-  async function salvarSnapshot(plaintext) {
+  async function salvarSnapshot(plaintext, contextoLease) {
     const cifrado = encriptar(plaintext, chave);
-    await backendClient.salvarAuthState({ authStateEncrypted: cifrado, authStateVersion: `v${versao}` });
+    try {
+      await backendClient.salvarAuthState({
+        authStateEncrypted: cifrado, authStateVersion: `v${versao}`,
+        gatewayProcessId: contextoLease?.gatewayProcessId, leaseEpoch: contextoLease?.leaseEpoch,
+      });
+    } catch (e) {
+      // Checkpoint C3.5, item 15: um processo stale NUNCA pode achar que
+      // sobrescreveu o auth state de um epoch mais novo — o backend já
+      // recusou (409); aqui só propagamos o aviso para quem coordena a
+      // lease (fecha o socket, para de tentar escrever) e deixamos o erro
+      // seguir para quem estava esperando este `persistir()`.
+      if (e?.leaseStale) aoLeaseStale?.("auth_state_stale");
+      throw e;
+    }
     // Nunca logar o plaintext nem o cifrado — só o tamanho, útil para
     // dimensionar o crescimento do blob ao longo do tempo.
     log("info", "auth_state.persistido", { bytesPlaintext: plaintext.length });
@@ -136,8 +157,8 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv }) {
    * então a próxima gravação começa normalmente mesmo que a anterior tenha
    * falhado.
    */
-  function enfileirarPersistencia(plaintext) {
-    const tarefa = filaPersistencia.then(() => salvarSnapshot(plaintext));
+  function enfileirarPersistencia(plaintext, contextoLease) {
+    const tarefa = filaPersistencia.then(() => salvarSnapshot(plaintext, contextoLease));
     filaPersistencia = tarefa.catch(() => {});
     ultimaPersistencia = tarefa;
     return tarefa;
@@ -151,7 +172,17 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv }) {
     // mutado o mesmo objeto `creds` (merge in-place) e o snapshot de A sairia
     // errado — na verdade seria o de A+B.
     const plaintext = serializarTudo();
-    return enfileirarPersistencia(plaintext);
+    // Fencing capturado no MESMO instante do snapshot — corresponde
+    // exatamente a "sob qual epoch este estado foi produzido". Sem
+    // `obterContextoLease` injetado (testes sem lease), segue sem fencing.
+    const contextoLease = obterContextoLease?.();
+    if (obterContextoLease && !contextoLease) {
+      // Só falha fechado quando a função FOI injetada e disse "não sou
+      // leader agora" — nunca tenta mandar isto para o backend (que
+      // rejeitaria mesmo assim, mas sem gastar uma chamada de rede).
+      throw new Error("authState.persistir: processo não é o dono atual da lease — gravação recusada localmente");
+    }
+    return enfileirarPersistencia(plaintext, contextoLease);
   }
 
   /**

@@ -4,6 +4,7 @@
 // (Checkpoint C0 — não provisionado neste checkpoint). Não há CORS, não há
 // arquivo estático, não há rota pública além do /health.
 
+import { randomUUID } from "node:crypto";
 import express from "express";
 import makeWASocket, { DisconnectReason } from "baileys";
 import { config, validarConfig } from "./config.js";
@@ -12,23 +13,54 @@ import { criarRotas, health } from "./routes.js";
 import { criarBackendClient } from "./backendClient.js";
 import { criarAuthStateAdapter } from "./authState.js";
 import { criarSessaoBaileys } from "./baileysSession.js";
+import { criarLeaseManager } from "./leaseManager.js";
 import { log } from "./logsafe.js";
 
 // Falhar no boot é melhor que subir sem autenticação ou sem cifra.
 validarConfig();
+
+// Checkpoint C3.5, item 2 — identificador efêmero DESTE processo, gerado
+// uma única vez no boot. NUNCA reutilizado entre reinícios (nem em restart,
+// nem em redeploy) — é o que dá ao fencing token (lease_epoch) um dono
+// claramente distinguível a cada boot. Não confundir com
+// `config.providerInstanceId` ("default"), que identifica a SESSÃO lógica,
+// não o processo físico.
+const gatewayProcessId = randomUUID();
 
 const backendClient = criarBackendClient({
   backendUrl: config.backendUrl,
   segredoHmac: config.segredoHmac,
   timeoutMs: config.timeoutBackendMs,
 });
-const authAdapter = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: config.chaveEncriptacaoAuthState });
+
+// leaseManager construído ANTES de authAdapter/sessao — os dois recebem
+// `leaseManager` (ou getters sobre ele) como dependência, nunca o
+// contrário, para não haver referência circular na montagem.
+const leaseManager = criarLeaseManager({
+  backendClient,
+  gatewayProcessId,
+  ttlMs: config.lease.ttlMs,
+  renewMs: config.lease.renewMs,
+  margemSegurancaMs: config.lease.margemSegurancaMs,
+  pollingStandbyMs: config.lease.pollingStandbyMs,
+  // Checkpoint C3.5, item 12 — perda de lease com socket aberto: fecha e
+  // para tudo, nunca tenta reaver ownership silenciosamente.
+  aoPerderLease: () => sessao._forcarFailSafe(),
+});
+
+const authAdapter = criarAuthStateAdapter({
+  backendClient,
+  chaveEncriptacaoEnv: config.chaveEncriptacaoAuthState,
+  obterContextoLease: () => leaseManager.contexto(),
+  aoLeaseStale: (motivo) => leaseManager.notificarPerdaExterna(motivo),
+});
 const sessao = criarSessaoBaileys({
   authAdapter,
   backendClient,
   config,
   fabricaSocket: makeWASocket,
   DisconnectReasonLoggedOut: DisconnectReason.loggedOut,
+  leaseManager,
 });
 
 const app = express();
@@ -56,19 +88,42 @@ app.use((err, req, res, _next) => {
 });
 
 const servidor = app.listen(config.porta, () => {
-  log("info", "gateway.iniciado", { porta: config.porta, gatewayVersion: config.gatewayVersion });
+  log("info", "gateway.iniciado", { porta: config.porta, gatewayVersion: config.gatewayVersion, gatewayProcessId });
 });
 
 servidor.headersTimeout = 65_000;
 
-// --- shutdown gracioso ------------------------------------------------
+// Checkpoint C3.5, item 8 — tenta virar LEADER assim que sobe; se não
+// ganhar, já entra sozinho em polling STANDBY (nunca abre socket, nunca
+// chama conectar()). Roda em paralelo ao `listen()` acima — /health
+// responde independente de já ter resolvido a lease.
+leaseManager.iniciar().catch((e) => log("error", "lease.iniciar_falhou", { erro: e?.message }));
+
+// --- shutdown gracioso --------------------------------------------------
+// Checkpoint C3.5, itens 9/10 — a ORDEM decide se isto é seguro:
+//   LEADER:  para timers -> fecha socket (via desconectar(), que também
+//            manda o heartbeat FINAL, ainda com o epoch válido) -> só
+//            DEPOIS libera a lease. Nunca libera antes de fechar o socket
+//            (senão um processo novo poderia adquirir e abrir socket novo
+//            enquanto este ainda está conectado — overlap).
+//   STANDBY: para o polling e pronto. NUNCA chama `sessao.desconectar()` —
+//            não tem lease, não tem socket, não pode gravar heartbeat
+//            nenhum. É exatamente isto que teria impedido o que a
+//            instância ociosa `j4jv6` fez ao vivo (escrever DISCONNECTED
+//            sem nunca ter tido conexão real).
 let encerrando = false;
 async function encerrar(sinal) {
   if (encerrando) return;
   encerrando = true;
   log("warn", "gateway.encerrando", { sinal });
   servidor.close();
-  await sessao.desconectar().catch(() => {});
+
+  leaseManager.pararTemporizadores();
+  if (leaseManager.souLeader()) {
+    await sessao.desconectar().catch(() => {});
+    await leaseManager.liberar().catch(() => {});
+  }
+
   log("info", "gateway.encerrado", { sinal });
   process.exit(0);
 }
@@ -76,7 +131,10 @@ for (const sinal of ["SIGTERM", "SIGINT"]) process.on(sinal, () => encerrar(sina
 
 process.on("uncaughtException", async (e) => {
   log("error", "excecao_nao_capturada", { mensagem: e.message });
-  await sessao.desconectar().catch(() => {});
+  leaseManager.pararTemporizadores();
+  // Mesma regra do shutdown gracioso (item 9/10): só quem é leader manda o
+  // heartbeat final — um standby nunca grava nada aqui.
+  if (leaseManager.souLeader()) await sessao.desconectar().catch(() => {});
   process.exit(1);
 });
 process.on("unhandledRejection", (motivo) => {

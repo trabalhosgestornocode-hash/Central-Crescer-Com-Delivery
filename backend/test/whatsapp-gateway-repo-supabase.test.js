@@ -21,7 +21,7 @@ import { createServer } from "node:http";
 
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
-import { criarOrganizacao, apagarOrganizacao, migracao083Aplicada } from "./helpers/comunicacao-fixtures.js";
+import { criarOrganizacao, apagarOrganizacao, migracao083Aplicada, migracao084Aplicada } from "./helpers/comunicacao-fixtures.js";
 import { criarRepoSupabase } from "../src/modules/comunicacao/gateway/whatsappGateway.repo.js";
 import { exigirHmac, assinarRequisicao, _resetarNonces } from "../src/modules/comunicacao/gateway/whatsappGateway.hmac.js";
 import { criarWhatsappGatewayRouter } from "../src/modules/comunicacao/gateway/whatsappGateway.routes.js";
@@ -34,6 +34,7 @@ import { encriptar, decriptar, normalizarChave } from "../../gateway-whatsapp/sr
 
 const PULAR_INTEGRACAO = motivoPularIntegracao();
 let migracaoOk = true;
+let migracao084Ok = true;
 let orgA = null;
 let orgB = null;
 
@@ -41,6 +42,7 @@ before(async () => {
   if (PULAR_INTEGRACAO) return;
   migracaoOk = await migracao083Aplicada();
   if (!migracaoOk) return;
+  migracao084Ok = await migracao084Aplicada();
   orgA = await criarOrganizacao("TESTE whatsapp-gateway-repo — descartável A");
   orgB = await criarOrganizacao("TESTE whatsapp-gateway-repo — descartável B");
 });
@@ -296,5 +298,132 @@ describe("heartbeat fake via HTTP com HMAC real (Gateway -> Backend -> banco) �
 
     const depois = await supabase.from("whatsapp_conexoes").select("gateway_version").eq("organizacao_id", orgA).single();
     assert.equal(depois.data.gateway_version, antes.data.gateway_version, "assinatura inválida não pode ter alterado o banco");
+  });
+});
+
+// Checkpoint C3.5 — as MESMAS propriedades de lease/fencing verificadas em
+// whatsapp-gateway-lease.test.js (repo em memória), agora contra o Postgres
+// de teste real: aqui é onde a concorrência genuína entre duas conexões/
+// processos distintos de fato acontece (o repo em memória só prova o
+// contrato observável — ver comentário no outro arquivo). PULA se a
+// migration 084 ainda não estiver aplicada no Supabase de teste configurado.
+describe("whatsappGateway.repo — lease/fencing contra o Supabase de teste real (Checkpoint C3.5)", { skip: PULAR_INTEGRACAO }, () => {
+  test("acquire simultâneo via DUAS conexões reais: exatamente um ganha, banco termina com um único owner e lease_epoch = epoch_lido+1", async (t) => {
+    if (!migracaoOk) return t.skip("migration 083 ainda não aplicada — pulando.");
+    if (!migracao084Ok) return t.skip("migration 084 (lease/fencing) ainda não aplicada neste Supabase — pulando.");
+    const repoA = criarRepoSupabase();
+    const repoB = criarRepoSupabase();
+    const a = randomBytes(16).toString("hex");
+    const b = randomBytes(16).toString("hex");
+
+    const [rA, rB] = await Promise.all([
+      repoA.adquirirLease(orgA, { gatewayProcessId: a, ttlMs: 5000 }),
+      repoB.adquirirLease(orgA, { gatewayProcessId: b, ttlMs: 5000 }),
+    ]);
+
+    const ganhadores = [rA, rB].filter((r) => r.acquired);
+    assert.equal(ganhadores.length, 1, "exatamente um dos dois precisa ganhar, mesmo com duas conexões reais competindo no Postgres");
+
+    const conexao = await repoA._obterConexao(orgA);
+    assert.ok(conexao.lease_owner_id === a || conexao.lease_owner_id === b);
+    assert.equal(conexao.lease_epoch, ganhadores[0].leaseEpoch);
+  });
+
+  test("relógio do processo Node artificialmente adiantado/atrasado NÃO muda a decisão — autoridade é sempre now() do Postgres", async (t) => {
+    if (!migracaoOk) return t.skip("migration 083 ainda não aplicada — pulando.");
+    if (!migracao084Ok) return t.skip("migration 084 (lease/fencing) ainda não aplicada neste Supabase — pulando.");
+    const OriginalDate = Date;
+    try {
+      const repo = criarRepoSupabase();
+      const a = randomBytes(16).toString("hex");
+
+      // Relógio do processo ATRASADO em 1 ano — se alguma decisão dependesse
+      // de Date.now()/new Date() do lado do Node, o acquire abaixo
+      // "pensaria" que qualquer expiração é muito no futuro. Como
+      // criarRepoSupabase() nunca calcula timestamp nenhum (prova estrutural
+      // em whatsapp-gateway-seguranca.test.js), isto não pode ter efeito
+      // algum — só o now() do Postgres decide.
+      global.Date = class extends OriginalDate {
+        constructor(...args) { super(...(args.length ? args : [OriginalDate.now() - 365 * 24 * 60 * 60 * 1000])); }
+        static now() { return OriginalDate.now() - 365 * 24 * 60 * 60 * 1000; }
+      };
+
+      const { leaseEpoch, acquired } = await repo.adquirirLease(orgA, { gatewayProcessId: a, ttlMs: 200 });
+      assert.ok(acquired);
+
+      global.Date = OriginalDate; // restaura para o setTimeout real esperar de verdade
+      await new Promise((r) => setTimeout(r, 500)); // TTL vence de verdade (tempo real do Postgres)
+
+      // Relógio do processo agora ADIANTADO em 1 ano — se a decisão de
+      // "ainda válida?" dependesse do Node, isto faria a lease parecer
+      // vencida há muito tempo (o que até bateria com a realidade aqui,
+      // mas por acidente) — o ponto é que o resultado tem que ser o MESMO
+      // independente de qual ddessas distorções o relógio local sofre.
+      global.Date = class extends OriginalDate {
+        constructor(...args) { super(...(args.length ? args : [OriginalDate.now() + 365 * 24 * 60 * 60 * 1000])); }
+        static now() { return OriginalDate.now() + 365 * 24 * 60 * 60 * 1000; }
+      };
+
+      await assert.rejects(
+        repo.registrarHeartbeat(orgA, { status: "CONNECTED", gatewayProcessId: a, leaseEpoch }),
+        "a lease já venceu de verdade (tempo real do Postgres) — precisa rejeitar, com o relógio do Node dizendo qualquer coisa",
+      );
+    } finally {
+      global.Date = OriginalDate;
+    }
+  });
+
+  test("acquire pelo MESMO owner, ainda válido, é idempotente contra o Postgres real — não incrementa lease_epoch", async (t) => {
+    if (!migracaoOk) return t.skip("migration 083 ainda não aplicada — pulando.");
+    if (!migracao084Ok) return t.skip("migration 084 (lease/fencing) ainda não aplicada neste Supabase — pulando.");
+    const repo = criarRepoSupabase();
+    const a = randomBytes(16).toString("hex");
+    const primeiro = await repo.adquirirLease(orgB, { gatewayProcessId: a, ttlMs: 5000 });
+    assert.ok(primeiro.acquired);
+    const segundo = await repo.adquirirLease(orgB, { gatewayProcessId: a, ttlMs: 5000 });
+    assert.equal(segundo.leaseEpoch, primeiro.leaseEpoch, "reacquire pelo mesmo dono não pode gerar epoch novo no Postgres real");
+  });
+
+  test("lease expirada mas ninguém tomou: heartbeat/auth-state são rejeitados pelo BANCO mesmo com owner_id/epoch batendo (não depende do relógio do Gateway)", async (t) => {
+    if (!migracaoOk) return t.skip("migration 083 ainda não aplicada — pulando.");
+    if (!migracao084Ok) return t.skip("migration 084 (lease/fencing) ainda não aplicada neste Supabase — pulando.");
+    const repo = criarRepoSupabase();
+    const a = randomBytes(16).toString("hex");
+    const { leaseEpoch, acquired } = await repo.adquirirLease(orgB, { gatewayProcessId: a, ttlMs: 200 });
+    assert.ok(acquired);
+
+    await new Promise((r) => setTimeout(r, 500)); // TTL vence de verdade no Postgres; ninguém mais adquiriu
+
+    await assert.rejects(repo.registrarHeartbeat(orgB, { status: "DISCONNECTED", gatewayProcessId: a, leaseEpoch }));
+    await assert.rejects(repo.salvarAuthState(orgB, { authStateEncrypted: "v1:atrasado", authStateVersion: "v1", gatewayProcessId: a, leaseEpoch }));
+
+    const conexao = await repo._obterConexao(orgB);
+    assert.notEqual(conexao.status, "DISCONNECTED", "a rejeição precisa ter impedido a escrita — status não pode ter mudado");
+  });
+
+  test("stale owner: B assume depois que a lease de A expira — A não consegue mais heartbeat, DISCONNECTED, auth-state nem release; dados de B intactos", async (t) => {
+    if (!migracaoOk) return t.skip("migration 083 ainda não aplicada — pulando.");
+    if (!migracao084Ok) return t.skip("migration 084 (lease/fencing) ainda não aplicada neste Supabase — pulando.");
+    const repo = criarRepoSupabase();
+    const a = randomBytes(16).toString("hex");
+    const b = randomBytes(16).toString("hex");
+
+    const leaseA = await repo.adquirirLease(orgA, { gatewayProcessId: a, ttlMs: 200 });
+    await repo.registrarHeartbeat(orgA, { status: "CONNECTED", gatewayVersion: "vA", gatewayProcessId: a, leaseEpoch: leaseA.leaseEpoch });
+
+    await new Promise((r) => setTimeout(r, 500)); // TTL de A vence
+    const leaseB = await repo.adquirirLease(orgA, { gatewayProcessId: b, ttlMs: 5000 });
+    assert.ok(leaseB.acquired);
+    assert.ok(leaseB.leaseEpoch > leaseA.leaseEpoch);
+    await repo.registrarHeartbeat(orgA, { status: "CONNECTED", gatewayVersion: "vB", gatewayProcessId: b, leaseEpoch: leaseB.leaseEpoch });
+
+    await assert.rejects(repo.registrarHeartbeat(orgA, { status: "DISCONNECTED", gatewayProcessId: a, leaseEpoch: leaseA.leaseEpoch }));
+    await assert.rejects(repo.salvarAuthState(orgA, { authStateEncrypted: "v1:de-A-atrasado", authStateVersion: "v1", gatewayProcessId: a, leaseEpoch: leaseA.leaseEpoch }));
+    const releaseStale = await repo.liberarLease(orgA, { gatewayProcessId: a, leaseEpoch: leaseA.leaseEpoch });
+    assert.equal(releaseStale.released, false);
+
+    const conexao = await repo._obterConexao(orgA);
+    assert.equal(conexao.gateway_version, "vB", "dados de B precisam continuar intactos, intocados pelas tentativas de A");
+    assert.equal(conexao.lease_owner_id, b);
   });
 });
