@@ -29,12 +29,19 @@ import { log } from "./logsafe.js";
  * @param {number} [deps.margemSegurancaMs]
  * @param {number} [deps.pollingStandbyMs]
  * @param {() => Promise<void>} deps.aoPerderLease chamado quando este processo deixa de ser leader — quem injeta decide o que fazer (fechar socket, etc.); erros aqui nunca travam o leaseManager.
+ * @param {() => Promise<void>} [deps.aoTornarSeLeader] Checkpoint C3.5-B —
+ *   chamado sempre que `leader` passa de `false` para `true` (acquire
+ *   inicial bem-sucedido OU standby que conseguiu assumir depois de
+ *   polling). NUNCA chamado em renew (mesmo epoch, já era leader) — é
+ *   assim que se evita "renew -> restore, renew -> restore" (item 9 do
+ *   Checkpoint C3.5-B). Quem injeta decide o que fazer (avaliar restore
+ *   automático); erros aqui nunca travam o leaseManager.
  * @param {(fn: () => void, ms: number) => any} [deps.agendarIntervalo] injeção de setInterval, para teste sem tempo real.
  * @param {(id: any) => void} [deps.cancelarIntervalo] injeção de clearInterval.
  */
 export function criarLeaseManager({
   backendClient, gatewayProcessId, ttlMs, renewMs, margemSegurancaMs = 2_000, pollingStandbyMs,
-  aoPerderLease, agendarIntervalo = setInterval, cancelarIntervalo = clearInterval,
+  aoPerderLease, aoTornarSeLeader, agendarIntervalo = setInterval, cancelarIntervalo = clearInterval,
 }) {
   const pollingMs = pollingStandbyMs ?? renewMs;
 
@@ -72,6 +79,11 @@ export function criarLeaseManager({
         limparTimer();
         iniciarRenovacaoPeriodica();
         log("info", "lease.adquirida", { leaseEpoch: epochAtual });
+        // tentarAdquirir() só é chamado enquanto standby (o timer que o
+        // aciona é sempre trocado por iniciarRenovacaoPeriodica() no sucesso
+        // — nunca chamado de novo enquanto já é leader), então todo sucesso
+        // aqui É uma transição real false->true.
+        try { await aoTornarSeLeader?.(); } catch (e) { log("error", "lease.callback_tornar_leader_falhou", { erro: e?.message }); }
         return true;
       }
       return false;

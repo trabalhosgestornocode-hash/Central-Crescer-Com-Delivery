@@ -117,9 +117,57 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
 
   router.get("/auth-state", async (req, res, next) => {
     try {
-      const authStateEncrypted = await repo.obterAuthState(organizacaoId);
+      // Fencing OPCIONAL via querystring (Checkpoint C3.5-B, item 11) —
+      // GET não tem corpo; `req.query` já vem parseado pelo Express a
+      // partir de `req.originalUrl` (que é o que o HMAC assina). Malformado
+      // é tratado como "ausente" (cai no comportamento antigo), nunca como
+      // erro — retrocompatível de propósito durante rolling deploy.
+      const gatewayProcessId = processIdValido(req.query.gatewayProcessId) ? req.query.gatewayProcessId : undefined;
+      const leaseEpochNum = Number(req.query.leaseEpoch);
+      const leaseEpoch = epochValido(leaseEpochNum) ? leaseEpochNum : undefined;
+      const authStateEncrypted = await repo.obterAuthState(organizacaoId, { gatewayProcessId, leaseEpoch });
       res.json(authStateEncrypted ? { authStateEncrypted } : {});
     } catch (e) { next(e); }
+  });
+
+  // ---- intenção do operador (Checkpoint C3.5-B) ----
+  router.post("/eventos/desired-state", async (req, res, next) => {
+    try {
+      const corpo = req.corpoJson ?? {};
+      if (corpo.desiredConnectionState !== "CONNECTED" && corpo.desiredConnectionState !== "DISCONNECTED") {
+        return res.status(400).json({ error: "desiredConnectionState precisa ser CONNECTED ou DISCONNECTED" });
+      }
+      if (!corpoFencingValido(corpo)) {
+        return res.status(400).json({ error: "gatewayProcessId/leaseEpoch ausente ou inválido" });
+      }
+      await repo.definirEstadoDesejado(organizacaoId, {
+        desiredConnectionState: corpo.desiredConnectionState, gatewayProcessId: corpo.gatewayProcessId, leaseEpoch: corpo.leaseEpoch,
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
+  });
+
+  // Leitura fenced de status + intenção — usada pelo restore automático
+  // (Checkpoint C3.5-B) para decidir se pode restaurar. REQUER fencing
+  // (diferente de /auth-state, que o mantém opcional por retrocompatibilidade
+  // — esta rota é nova, nasce junto com o código que a usa, sem janela de
+  // deploy a proteger).
+  router.get("/estado-conexao", async (req, res, next) => {
+    try {
+      const gatewayProcessId = req.query.gatewayProcessId;
+      const leaseEpoch = Number(req.query.leaseEpoch);
+      if (!processIdValido(gatewayProcessId) || !epochValido(leaseEpoch)) {
+        return res.status(400).json({ error: "gatewayProcessId/leaseEpoch ausente ou inválido" });
+      }
+      const estado = await repo.obterEstadoSessao(organizacaoId, { gatewayProcessId, leaseEpoch });
+      res.json(estado);
+    } catch (e) {
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
   });
 
   // ---- lease/fencing (Checkpoint C3.5, item 6) ----

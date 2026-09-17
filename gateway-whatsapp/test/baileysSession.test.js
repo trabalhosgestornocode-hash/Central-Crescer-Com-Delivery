@@ -46,6 +46,24 @@ function backendClientFalso() {
     notificarHeartbeat: mock.fn(async () => {}),
     notificarMensagemRecebida: mock.fn(async () => {}),
     notificarStatusProvider: mock.fn(async () => {}),
+    // Checkpoint C3.5-B — defaults inofensivos; testes que precisam de um
+    // comportamento específico (falha, resposta customizada) sobrescrevem.
+    definirEstadoDesejado: mock.fn(async () => ({ ok: true })),
+    obterEstadoSessao: mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "DISCONNECTED" })),
+  };
+}
+
+// Checkpoint C3.5-B — fake mínimo de leaseManager com contexto mutável, para
+// testar conectar()/desconectar()/restaurarSessaoSePossivel() isolados da
+// máquina de estados real de leaseManager.js (essa já tem sua própria
+// bateria em test/leaseManager.test.js).
+function leaseManagerFalso({ leader = true, leaseEpoch = 1, gatewayProcessId = "proc-fake" } = {}) {
+  let atual = leader ? { gatewayProcessId, leaseEpoch } : null;
+  return {
+    souLeader: () => atual != null,
+    contexto: () => atual,
+    notificarPerdaExterna: mock.fn(async () => { atual = null; }),
+    _definirContexto(c) { atual = c; }, // só para o teste simular perda/mudança de epoch
   };
 }
 
@@ -983,5 +1001,670 @@ describe("baileysSession — lease/fencing (Checkpoint C3.5)", () => {
     // Em nenhum instante os dois tiveram socket simultaneamente ativo: o
     // socket de A já estava fechado (end() chamado, verificado acima) antes
     // de B sequer tentar de novo.
+  });
+});
+
+describe("baileysSession — intenção do operador (Checkpoint C3.5-B, item 3)", () => {
+  test("POST /connect (persistirIntencaoConectada:true) grava CONNECTED ANTES de abrir o socket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const leaseManager = leaseManagerFalso({ leaseEpoch: 7 });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao.conectar({ persistirIntencaoConectada: true });
+
+    assert.equal(backendClient.definirEstadoDesejado.mock.calls.length, 1);
+    const arg = backendClient.definirEstadoDesejado.mock.calls[0].arguments[0];
+    assert.equal(arg.desiredConnectionState, "CONNECTED");
+    assert.equal(arg.leaseEpoch, 7);
+    assert.equal(fabricaSocket.criados.length, 1, "só abre o socket DEPOIS de persistir a intenção");
+  });
+
+  test("falha ao persistir CONNECTED aborta conectar() SEM abrir socket nenhum", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.definirEstadoDesejado = mock.fn(async () => { throw new Error("backend fora do ar"); });
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await assert.rejects(() => sessao.conectar({ persistirIntencaoConectada: true }));
+    assert.equal(fabricaSocket.criados.length, 0, "nenhum socket 'órfão' de uma intenção não gravada");
+  });
+
+  test("conectar() SEM persistirIntencaoConectada (reconexão automática pós-515/restore) nunca toca desired_connection_state", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao.conectar(); // como a reconexão automática chama internamente
+    assert.equal(backendClient.definirEstadoDesejado.mock.calls.length, 0);
+  });
+
+  test("POST /disconnect (persistirIntencao:true) grava DISCONNECTED ANTES de fechar o socket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const leaseManager = leaseManagerFalso({ leaseEpoch: 3 });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+
+    await sessao.desconectar({ persistirIntencao: true });
+
+    assert.equal(backendClient.definirEstadoDesejado.mock.calls.length, 1);
+    const arg = backendClient.definirEstadoDesejado.mock.calls[0].arguments[0];
+    assert.equal(arg.desiredConnectionState, "DISCONNECTED");
+    assert.equal(arg.leaseEpoch, 3);
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1);
+  });
+
+  test("falha ao persistir DISCONNECTED (não relacionada a lease) é fail-safe: NÃO fecha o socket, desconectar() lança", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.definirEstadoDesejado = mock.fn(async () => { throw new Error("backend fora do ar"); });
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+
+    await assert.rejects(() => sessao.desconectar({ persistirIntencao: true }));
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 0, "socket precisa continuar aberto — intenção não foi gravada");
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "status não pode ter mudado — desconectar() abortou antes de tocar nele");
+  });
+
+  test("desconectar() SEM persistirIntencao (shutdown técnico via SIGTERM, server.js#encerrar) NUNCA grava desired_connection_state", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+
+    await sessao.desconectar(); // exatamente como server.js#encerrar() chama
+
+    assert.equal(backendClient.definirEstadoDesejado.mock.calls.length, 0, "shutdown técnico não é uma decisão do operador — não pode alterar a intenção persistida");
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1, "mesmo sem persistir intenção, o socket precisa fechar normalmente");
+  });
+
+  test("LOGGED_OUT grava desired_connection_state=DISCONNECTED (fenced), fire-and-forget", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const leaseManager = leaseManagerFalso({ leaseEpoch: 9 });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar: () => {},
+    });
+    await sessao.conectar();
+
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_LOGGED_OUT } } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0)); // deixa o fire-and-forget resolver
+
+    assert.equal(backendClient.definirEstadoDesejado.mock.calls.length, 1);
+    const arg = backendClient.definirEstadoDesejado.mock.calls[0].arguments[0];
+    assert.equal(arg.desiredConnectionState, "DISCONNECTED");
+    assert.equal(arg.leaseEpoch, 9);
+  });
+
+  test("LOGGED_OUT sem leaseManager (testes de lifecycle puro) não lança e não tenta gravar nada", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_LOGGED_OUT } } },
+    });
+    assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT);
+  });
+});
+
+describe("baileysSession — restore automático (Checkpoint C3.5-B)", () => {
+  function authAdapterRestoreOk() {
+    return {
+      async carregar() { return true; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: { registered: true }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+  }
+  function authAdapterRestoreSemRegistro() {
+    return {
+      async carregar() { return true; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+  }
+  function authAdapterRestoreSemNada() {
+    return {
+      async carregar() { return false; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+  }
+  function authAdapterRestoreCorrompido() {
+    return {
+      async carregar() { throw new Error("falha ao decifrar auth_state_encrypted — chave errada ou payload corrompido"); },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+  }
+
+  test("STANDBY (sem contexto de lease) nunca avalia restore — nenhuma leitura de estado/auth, nenhum socket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const authAdapter = authAdapterRestoreOk();
+    authAdapter.carregar = mock.fn(authAdapter.carregar);
+    const leaseManager = leaseManagerFalso({ leader: false });
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(backendClient.obterEstadoSessao.mock.calls.length, 0);
+    assert.equal(authAdapter.carregar.mock.calls.length, 0);
+    assert.equal(fabricaSocket.criados.length, 0);
+  });
+
+  test("owner + desired=CONNECTED + creds.registered=true -> restaura, abre socket com origem 'restore'", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "CONNECTED" }));
+    const leaseManager = leaseManagerFalso({ leaseEpoch: 5 });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreOk(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(fabricaSocket.criados.length, 1, "precisa ter aberto socket");
+    assert.equal(sessao._origemSocket(), "restore");
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING);
+    assert.equal(sessao.obterQrAtual(), null, "restore nunca expõe QR");
+    assert.equal(sessao._epochRestoreAvaliado(), 5);
+
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+  });
+
+  test("desired=DISCONNECTED -> NOOP: não carrega auth state, não abre socket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "DISCONNECTED" }));
+    const authAdapter = authAdapterRestoreOk();
+    authAdapter.carregar = mock.fn(authAdapter.carregar);
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(authAdapter.carregar.mock.calls.length, 0, "sem desired=CONNECTED, nem chega a olhar o auth state");
+    assert.equal(fabricaSocket.criados.length, 0);
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+  });
+
+  test("status lido é LOGGED_OUT -> NOOP, mesmo com desired=CONNECTED (linha legada nunca restaura sozinha)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "LOGGED_OUT", desiredConnectionState: "CONNECTED" }));
+    const authAdapter = authAdapterRestoreOk();
+    authAdapter.carregar = mock.fn(authAdapter.carregar);
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(authAdapter.carregar.mock.calls.length, 0);
+    assert.equal(fabricaSocket.criados.length, 0);
+  });
+
+  test("sem auth state nenhum salvo (carregar()=false) -> NOOP, nunca gera QR", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "CONNECTED" }));
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreSemNada(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(fabricaSocket.criados.length, 0);
+    assert.equal(sessao.obterQrAtual(), null);
+  });
+
+  test("auth state existe mas creds.registered=false (pareamento nunca completou) -> NOOP", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "CONNECTED" }));
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreSemRegistro(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(fabricaSocket.criados.length, 0);
+  });
+
+  test("auth state corrompido/indecifrável (carregar() lança) -> FAIL-SAFE: NOOP, nunca lança, nunca abre socket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "CONNECTED" }));
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreCorrompido(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await assert.doesNotReject(() => sessao._restaurarSessaoSePossivel());
+    assert.equal(fabricaSocket.criados.length, 0);
+  });
+
+  test("já CONNECTED/CONNECTING (socket manual em andamento) -> restore é NOOP, nunca abre um segundo socket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreOk(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar(); // manual — já em CONNECTING
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(backendClient.obterEstadoSessao.mock.calls.length, 0, "nem chega a consultar — já há socket em andamento");
+    assert.equal(fabricaSocket.criados.length, 1, "nenhum segundo socket");
+  });
+
+  test("restore uma vez por epoch: uma 2ª chamada NOOP não reconsulta o backend", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "DISCONNECTED" }));
+    const leaseManager = leaseManagerFalso({ leaseEpoch: 2 });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreOk(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(backendClient.obterEstadoSessao.mock.calls.length, 1, "epoch 2 já foi avaliado — a 2ª chamada precisa ser NOOP puro");
+  });
+
+  test("QR durante restore é ANOMALIA: aborta, fecha o socket, nunca expõe/loga o QR, nunca reconecta sozinho por aqui", async (t) => {
+    const linhas = [];
+    t.mock.method(console, "log", (s) => linhas.push(s));
+    t.mock.method(console, "error", (s) => linhas.push(s));
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "CONNECTED" }));
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreOk(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar: () => {},
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+    assert.equal(sessao._origemSocket(), "restore");
+
+    fabricaSocket.criados[0].ev.emit("connection.update", { qr: "QR-ANOMALO-NUNCA-DEVERIA-EXISTIR" });
+
+    assert.equal(sessao.obterQrAtual(), null, "QR de uma anomalia de restore nunca pode ficar exposto");
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(sessao._origemSocket(), null);
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1, "o socket anômalo precisa ser fechado");
+    for (const s of linhas) assert.ok(!s.includes("QR-ANOMALO-NUNCA-DEVERIA-EXISTIR"));
+  });
+
+  test("falha TRANSITÓRIA ao consultar /estado-conexao: retry com backoff, sucesso na 2ª tentativa restaura normalmente", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    let chamadas = 0;
+    backendClient.obterEstadoSessao = mock.fn(async () => {
+      chamadas += 1;
+      if (chamadas === 1) throw new Error("timeout ao chamar o backend");
+      return { status: "DISCONNECTED", desiredConnectionState: "CONNECTED" };
+    });
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreOk(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(chamadasAgendar.length, 1, "1 retry agendado depois da falha transitória");
+    assert.equal(backendClient.obterEstadoSessao.mock.calls.length, 2);
+    assert.equal(fabricaSocket.criados.length, 1, "a 2ª tentativa restaurou de verdade");
+  });
+
+  test("perder a lease durante o retry cancela: não reconsulta, não abre socket, sem lançar", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => { throw new Error("backend indisponível"); });
+    let fnAgendada = null;
+    const agendar = (fn) => { fnAgendada = fn; }; // NÃO executa sozinho — o teste dispara manualmente
+    const leaseManager = leaseManagerFalso({ leaseEpoch: 4 });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreOk(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+    assert.ok(fnAgendada, "esperava um retry agendado");
+    const chamadasAntes = backendClient.obterEstadoSessao.mock.calls.length;
+
+    leaseManager._definirContexto(null); // perdemos a lease enquanto o retry esperava
+
+    assert.doesNotThrow(() => fnAgendada());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(backendClient.obterEstadoSessao.mock.calls.length, chamadasAntes, "não pode ter tentado de novo depois de perder a lease");
+    assert.equal(fabricaSocket.criados.length, 0);
+  });
+
+  test("epoch mudou durante o retry (nova lease própria, epoch novo) cancela o retry do epoch antigo", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => { throw new Error("backend indisponível"); });
+    let fnAgendada = null;
+    const agendar = (fn) => { fnAgendada = fn; };
+    const leaseManager = leaseManagerFalso({ leaseEpoch: 4 });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreOk(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+    const chamadasAntes = backendClient.obterEstadoSessao.mock.calls.length;
+    leaseManager._definirContexto({ gatewayProcessId: "proc-fake", leaseEpoch: 5 }); // reacquire com epoch novo
+
+    await fnAgendada();
+    assert.equal(backendClient.obterEstadoSessao.mock.calls.length, chamadasAntes, "retry do epoch 4 não pode agir em nome do epoch 5");
+    assert.equal(fabricaSocket.criados.length, 0);
+  });
+});
+
+describe("baileysSession — LOGGED_OUT é terminal (reforço pós-auditoria, Checkpoint C3.5-B)", () => {
+  // Erro no MESMO formato do que backendClient.js#chamar() de fato lança —
+  // .message é sempre só o código sanitizado (GatewayError), nunca o
+  // detalhe interno (status HTTP/corpo). Simulado aqui com um
+  // `detalheInterno` propositalmente "sensível" para provar que ele nunca
+  // vaza no log, mesmo quando o código só loga `e?.message`.
+  function erroDeBackendFalso() {
+    const e = new Error("WHATSAPP_GATEWAY_UNAVAILABLE");
+    e.codigo = "WHATSAPP_GATEWAY_UNAVAILABLE";
+    e.detalheInterno = { host: "NUNCA-PODE-VAZAR-ISTO-NO-LOG", token: "TAMBEM-NUNCA-PODE-VAZAR" };
+    return e;
+  }
+
+  // Fake de "banco compartilhado" — duas instâncias de backendClient
+  // (uma por sessão/processo) lendo/escrevendo o MESMO estado persistido,
+  // exatamente como dois processos reais do Gateway falando com o mesmo
+  // Supabase. É o que permite provar fim-a-fim que o que o processo A
+  // persiste é o que o processo B (novo owner) de fato lê.
+  function bancoCompartilhadoFalso({ desiredInicial = "DISCONNECTED", statusInicial = "DISCONNECTED" } = {}) {
+    let statusPersistido = statusInicial;
+    let desiredPersistido = desiredInicial;
+    let falharProximaPersistenciaDesired = false;
+    return {
+      statusPersistido: () => statusPersistido,
+      desiredPersistido: () => desiredPersistido,
+      falharProximaPersistenciaDesired() { falharProximaPersistenciaDesired = true; },
+      criarClient() {
+        return {
+          notificarHeartbeat: mock.fn(async (payload) => { statusPersistido = payload.status; }),
+          notificarMensagemRecebida: mock.fn(async () => {}),
+          notificarStatusProvider: mock.fn(async () => {}),
+          definirEstadoDesejado: mock.fn(async (payload) => {
+            if (falharProximaPersistenciaDesired) {
+              falharProximaPersistenciaDesired = false;
+              throw erroDeBackendFalso();
+            }
+            desiredPersistido = payload.desiredConnectionState;
+            return { ok: true };
+          }),
+          obterEstadoSessao: mock.fn(async () => ({ status: statusPersistido, desiredConnectionState: desiredPersistido })),
+        };
+      },
+    };
+  }
+
+  test("CENÁRIO EXATO DA AUDITORIA — CONNECTED -> loggedOut -> falha ao persistir desired=DISCONNECTED -> SIGTERM -> novo owner NÃO restaura, sem QR, sem socket, erro sanitizado", async (t) => {
+    const linhas = [];
+    t.mock.method(console, "log", (s) => linhas.push(s));
+    t.mock.method(console, "error", (s) => linhas.push(s));
+
+    const banco = bancoCompartilhadoFalso({ desiredInicial: "CONNECTED", statusInicial: "DISCONNECTED" });
+
+    // --- processo A: leader, conecta, autentica de verdade (1/2) ---
+    const fabricaSocketA = socketFalsoFabrica();
+    const leaseManagerA = leaseManagerFalso({ leaseEpoch: 11, gatewayProcessId: "proc-A" });
+    const sessaoA = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: banco.criarClient(), config: configFalso(),
+      fabricaSocket: fabricaSocketA, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerA, agendar: () => {},
+    });
+    await sessaoA.conectar();
+    fabricaSocketA.criados[0].ev.emit("connection.update", { connection: "open" });
+    assert.equal(sessaoA._status(), STATUS_CONEXAO.CONNECTED);
+
+    // 5 — a PRÓXIMA gravação de desired (a do close LOGGED_OUT logo abaixo) vai falhar
+    banco.falharProximaPersistenciaDesired();
+
+    // 3/4 — WhatsApp produz loggedOut
+    fabricaSocketA.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_LOGGED_OUT } } },
+    });
+    assert.equal(sessaoA._status(), STATUS_CONEXAO.LOGGED_OUT);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // deixa heartbeat + persistência (que vai falhar) assentarem
+
+    assert.equal(banco.statusPersistido(), STATUS_CONEXAO.LOGGED_OUT, "o heartbeat do close já persistiu LOGGED_OUT, independente da tentativa de desired ter falhado");
+    assert.equal(banco.desiredPersistido(), "CONNECTED", "a gravação de desired=DISCONNECTED falhou de propósito — continua CONNECTED no banco");
+
+    // 6 — SIGTERM: exatamente como server.js#encerrar() chama (sem persistirIntencao)
+    await sessaoA.desconectar();
+
+    assert.equal(sessaoA._status(), STATUS_CONEXAO.LOGGED_OUT, "SIGTERM NUNCA pode rebaixar LOGGED_OUT para DISCONNECTED");
+    assert.equal(banco.statusPersistido(), STATUS_CONEXAO.LOGGED_OUT, "o heartbeat final do SIGTERM precisa ter mandado status=LOGGED_OUT, não DISCONNECTED");
+    assert.equal(fabricaSocketA.criados[0].end.mock.calls.length, 1, "o socket precisa ter sido fechado normalmente");
+
+    for (const s of linhas) {
+      assert.ok(!s.includes("NUNCA-PODE-VAZAR-ISTO-NO-LOG") && !s.includes("TAMBEM-NUNCA-PODE-VAZAR"), "detalheInterno do erro de backend nunca pode vazar no log — só o código sanitizado (e?.message)");
+    }
+
+    // 7 — novo processo B assume a lease (epoch novo) e avalia restore
+    const fabricaSocketB = socketFalsoFabrica();
+    const authAdapterB = authAdapterFalso();
+    authAdapterB.carregar = mock.fn(authAdapterB.carregar);
+    const leaseManagerB = leaseManagerFalso({ leaseEpoch: 12, gatewayProcessId: "proc-B" });
+    const sessaoB = criarSessaoBaileys({
+      authAdapter: authAdapterB, backendClient: banco.criarClient(), config: configFalso(),
+      fabricaSocket: fabricaSocketB, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerB,
+    });
+
+    await sessaoB._restaurarSessaoSePossivel();
+
+    assert.equal(fabricaSocketB.criados.length, 0, "novo owner NÃO pode abrir socket — status persistido continua LOGGED_OUT");
+    assert.equal(sessaoB.obterQrAtual(), null, "nenhum QR");
+    assert.equal(authAdapterB.carregar.mock.calls.length, 0, "auth state nem é lido — a checagem de status barra antes disso (não é apagado, não é tocado)");
+  });
+
+  test("A) LOGGED_OUT + desired=CONNECTED -> restore NOOP (já coberto por 'status lido é LOGGED_OUT -> NOOP, mesmo com desired=CONNECTED', acima) — reafirmado aqui de forma isolada", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "LOGGED_OUT", desiredConnectionState: "CONNECTED" }));
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+    assert.equal(fabricaSocket.criados.length, 0);
+  });
+
+  test("B) LOGGED_OUT + falha ao persistir desired=DISCONNECTED (desired continua CONNECTED no banco) -> restore ainda assim NOOP, porque status sozinho já barra", async () => {
+    // Do ponto de vista de restaurarSessaoSePossivel(), B é indistinguível
+    // de A: o que chega da rede é sempre {status, desiredConnectionState}
+    // já persistidos — o restore nunca sabe (nem precisa saber) SE a
+    // gravação de desired chegou a ser tentada ou por que falhou. É
+    // exatamente por isso que status=LOGGED_OUT sozinho é suficiente como
+    // trava, sem depender de desired ter sido corrigido.
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "LOGGED_OUT", desiredConnectionState: "CONNECTED" }));
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+    assert.equal(fabricaSocket.criados.length, 0);
+  });
+
+  test("C) LOGGED_OUT -> SIGTERM (desconectar() sem persistirIntencao): status local E o heartbeat final permanecem LOGGED_OUT", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const banco = bancoCompartilhadoFalso({ desiredInicial: "CONNECTED", statusInicial: "DISCONNECTED" });
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: banco.criarClient(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_LOGGED_OUT } } },
+    });
+    assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await sessao.desconectar(); // SIGTERM técnico
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT);
+    assert.equal(banco.statusPersistido(), STATUS_CONEXAO.LOGGED_OUT);
+  });
+
+  test("C-bis) LOGGED_OUT -> perda de lease (_forcarFailSafe): status local também permanece LOGGED_OUT, nunca DISCONNECTED", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_LOGGED_OUT } } },
+    });
+    assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT);
+
+    await sessao._forcarFailSafe();
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT, "perda de lease também não pode rebaixar LOGGED_OUT");
+  });
+
+  test("D) shutdown técnico de sessão NÃO-LOGGED_OUT: status vai para DISCONNECTED, desired continua intocado, restore futuro PERMITIDO", async () => {
+    const banco = bancoCompartilhadoFalso({ desiredInicial: "CONNECTED", statusInicial: "DISCONNECTED" });
+
+    const fabricaSocketA = socketFalsoFabrica();
+    const leaseManagerA = leaseManagerFalso({ leaseEpoch: 20, gatewayProcessId: "proc-A" });
+    const sessaoA = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: banco.criarClient(), config: configFalso(),
+      fabricaSocket: fabricaSocketA, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerA,
+    });
+    await sessaoA.conectar();
+    fabricaSocketA.criados[0].ev.emit("connection.update", { connection: "open" });
+
+    await sessaoA.desconectar(); // técnico — SEM persistirIntencao
+
+    assert.equal(sessaoA._status(), STATUS_CONEXAO.DISCONNECTED, "sessão nunca foi LOGGED_OUT — shutdown técnico pode (e deve) marcar DISCONNECTED normalmente");
+    assert.equal(banco.statusPersistido(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(banco.desiredPersistido(), "CONNECTED", "shutdown técnico NUNCA mexe em desired_connection_state — continua a intenção original do operador");
+
+    // novo owner: desired continua CONNECTED, status DISCONNECTED (não LOGGED_OUT), auth registrado -> restaura
+    const fabricaSocketB = socketFalsoFabrica();
+    const authAdapterOk = {
+      async carregar() { return true; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: { registered: true }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+    const leaseManagerB = leaseManagerFalso({ leaseEpoch: 21, gatewayProcessId: "proc-B" });
+    const sessaoB = criarSessaoBaileys({
+      authAdapter: authAdapterOk, backendClient: banco.criarClient(), config: configFalso(),
+      fabricaSocket: fabricaSocketB, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerB,
+    });
+
+    await sessaoB._restaurarSessaoSePossivel();
+    assert.equal(fabricaSocketB.criados.length, 1, "restore futuro PERMITIDO — shutdown técnico normal nunca é uma trava");
+    assert.equal(sessaoB._origemSocket(), "restore");
+  });
+
+  test("E) manual disconnect (/disconnect): desired E status vão para DISCONNECTED, restore futuro PROIBIDO", async () => {
+    const banco = bancoCompartilhadoFalso({ desiredInicial: "CONNECTED", statusInicial: "DISCONNECTED" });
+
+    const fabricaSocketA = socketFalsoFabrica();
+    const leaseManagerA = leaseManagerFalso({ leaseEpoch: 30, gatewayProcessId: "proc-A" });
+    const sessaoA = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: banco.criarClient(), config: configFalso(),
+      fabricaSocket: fabricaSocketA, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerA,
+    });
+    await sessaoA.conectar();
+    fabricaSocketA.criados[0].ev.emit("connection.update", { connection: "open" });
+
+    await sessaoA.desconectar({ persistirIntencao: true }); // exatamente como a rota /disconnect chama
+
+    assert.equal(banco.desiredPersistido(), "DISCONNECTED");
+    assert.equal(banco.statusPersistido(), STATUS_CONEXAO.DISCONNECTED);
+
+    // novo owner: desired=DISCONNECTED -> NOOP, mesmo com auth registrado válido
+    const fabricaSocketB = socketFalsoFabrica();
+    const authAdapterOk = {
+      async carregar() { return true; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: { registered: true }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+    const leaseManagerB = leaseManagerFalso({ leaseEpoch: 31, gatewayProcessId: "proc-B" });
+    const sessaoB = criarSessaoBaileys({
+      authAdapter: authAdapterOk, backendClient: banco.criarClient(), config: configFalso(),
+      fabricaSocket: fabricaSocketB, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerB,
+    });
+
+    await sessaoB._restaurarSessaoSePossivel();
+    assert.equal(fabricaSocketB.criados.length, 0, "desconexão manual proíbe restore futuro até um novo /connect explícito");
   });
 });

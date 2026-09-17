@@ -89,9 +89,23 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
     async salvarAuthState(payload) {
       return chamar("POST", `${R}/eventos/auth-state`, payload);
     },
-    /** Bootstrap/reconexão: recupera o auth state cifrado salvo. */
-    async carregarAuthState() {
-      return chamar("GET", `${R}/auth-state`);
+    /**
+     * Bootstrap/reconexão: recupera o auth state cifrado salvo. `contextoLease`
+     * é OPCIONAL (Checkpoint C3.5-B, item 11) — quando informado, vai na
+     * querystring (parte do que o HMAC assina) para o backend só devolver o
+     * ciphertext ao dono atual. Sem ele, comportamento anterior a este
+     * checkpoint.
+     */
+    async carregarAuthState(contextoLease) {
+      let caminho = `${R}/auth-state`;
+      if (contextoLease?.gatewayProcessId && typeof contextoLease?.leaseEpoch === "number") {
+        const qs = new URLSearchParams({
+          gatewayProcessId: contextoLease.gatewayProcessId,
+          leaseEpoch: String(contextoLease.leaseEpoch),
+        });
+        caminho += `?${qs.toString()}`;
+      }
+      return chamar("GET", caminho);
     },
     // ---- lease/fencing (Checkpoint C3.5) ----
     /** @returns {Promise<{acquired: boolean, leaseEpoch: number, expiresAt: string|null}>} */
@@ -104,6 +118,15 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
     },
     async liberarLease(payload) {
       return chamar("POST", `${R}/lease/release`, payload);
+    },
+    // ---- intenção do operador / estado de sessão (Checkpoint C3.5-B) ----
+    async definirEstadoDesejado(payload) {
+      return chamar("POST", `${R}/eventos/desired-state`, payload);
+    },
+    /** Leitura FENCED (owner+epoch obrigatórios) — usada só pelo restore automático para decidir se pode restaurar. */
+    async obterEstadoSessao({ gatewayProcessId, leaseEpoch }) {
+      const qs = new URLSearchParams({ gatewayProcessId, leaseEpoch: String(leaseEpoch) });
+      return chamar("GET", `${R}/estado-conexao?${qs.toString()}`);
     },
   };
 }

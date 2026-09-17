@@ -65,3 +65,9 @@ export async function migracao084Aplicada() {
   const probe = await supabase.from("whatsapp_conexoes").select("lease_epoch").limit(0);
   return !probe.error;
 }
+
+/** Migration 085 (desired_connection_state em whatsapp_conexoes, Checkpoint C3.5-B) está aplicada neste Supabase? */
+export async function migracao085Aplicada() {
+  const probe = await supabase.from("whatsapp_conexoes").select("desired_connection_state").limit(0);
+  return !probe.error;
+}

@@ -67,8 +67,18 @@ export function criarRepoEmMemoria() {
   const porOrganizacao = new Map(); // organizacaoId -> registro
 
   return {
-    async obterAuthState(organizacaoId) {
-      return porOrganizacao.get(organizacaoId)?.authStateEncrypted ?? null;
+    async obterAuthState(organizacaoId, { gatewayProcessId, leaseEpoch } = {}) {
+      const atual = porOrganizacao.get(organizacaoId);
+      // Fencing OPCIONAL (Checkpoint C3.5-B, item 11 — defesa em profundidade,
+      // retrocompatível): se o caller apresentar owner+epoch, só devolve o
+      // ciphertext se baterem com o dono ATUAL. Sem eles, comportamento
+      // antigo (qualquer chamador autenticado por HMAC recebe). Não checa
+      // expiração aqui de propósito — é só "você não é claramente outro
+      // processo/epoch"; a autoridade real de tempo continua nas escritas.
+      if (gatewayProcessId && typeof leaseEpoch === "number") {
+        if (atual?.leaseOwnerId !== gatewayProcessId || atual?.leaseEpoch !== leaseEpoch) return null;
+      }
+      return atual?.authStateEncrypted ?? null;
     },
     async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, gatewayProcessId, leaseEpoch }) {
       const atual = porOrganizacao.get(organizacaoId) ?? {};
@@ -82,6 +92,26 @@ export function criarRepoEmMemoria() {
         ...atual, status, telefone: telefone ?? atual.telefone ?? null, gatewayVersion, providerInstanceId,
         lastSeenAt: new Date().toISOString(),
       });
+    },
+    // ---- intenção do operador (Checkpoint C3.5-B) ----
+    // Campo SEPARADO de `status`: nunca escrito por registrarHeartbeat, nem
+    // por qualquer caminho técnico (SIGTERM/perda de lease) — só por
+    // chamada explícita a esta função (que corresponde a /connect ou
+    // /disconnect manuais, ou a um LOGGED_OUT real detectado). Default
+    // 'DISCONNECTED' para linha nova, igual à migration 085.
+    async definirEstadoDesejado(organizacaoId, { desiredConnectionState, gatewayProcessId, leaseEpoch }) {
+      const atual = porOrganizacao.get(organizacaoId) ?? { desiredConnectionState: "DISCONNECTED" };
+      if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
+      if (desiredConnectionState !== "CONNECTED" && desiredConnectionState !== "DISCONNECTED") {
+        throw new Error(`desiredConnectionState inválido: ${desiredConnectionState}`);
+      }
+      porOrganizacao.set(organizacaoId, { ...atual, desiredConnectionState });
+    },
+    /** Leitura fenced (owner+epoch, sem checar expiração — mesma justificativa de obterAuthState) usada pelo restore para decidir se pode restaurar. */
+    async obterEstadoSessao(organizacaoId, { gatewayProcessId, leaseEpoch } = {}) {
+      const atual = porOrganizacao.get(organizacaoId) ?? { desiredConnectionState: "DISCONNECTED" };
+      if (atual.leaseOwnerId !== gatewayProcessId || atual.leaseEpoch !== leaseEpoch) throw new LeaseStaleError({ organizacaoId });
+      return { status: atual.status ?? null, desiredConnectionState: atual.desiredConnectionState ?? "DISCONNECTED" };
     },
     // ---- lease/fencing (Checkpoint C3.5) ----
     // Single-process, Map síncrono: cada bloco abaixo é atômico por
@@ -217,11 +247,21 @@ export function criarRepoSupabase() {
   return {
     async obterAuthState(organizacaoId, deps = {}) {
       const db = await obterCliente(deps);
-      const { data, error } = await db.from("whatsapp_conexoes")
+      let query = db.from("whatsapp_conexoes")
         .select("auth_state_encrypted")
         .eq("organizacao_id", organizacaoId)
-        .eq("provider_instance_id", deps.providerInstanceId ?? INSTANCIA_PADRAO)
-        .maybeSingle();
+        .eq("provider_instance_id", deps.providerInstanceId ?? INSTANCIA_PADRAO);
+      // Fencing OPCIONAL (Checkpoint C3.5-B, item 11 — defesa em profundidade,
+      // retrocompatível durante rolling deploy): só filtra por owner+epoch se
+      // o caller apresentar os dois; sem eles, comportamento anterior a este
+      // checkpoint (qualquer chamador autenticado por HMAC recebe). De
+      // propósito SEM checar `lease_expires_at > now()` aqui — faria esta
+      // função precisar de now() do Postgres (RPC) só para uma leitura; a
+      // autoridade real de tempo continua inteira nas escritas (084/085).
+      if (deps.gatewayProcessId && typeof deps.leaseEpoch === "number") {
+        query = query.eq("lease_owner_id", deps.gatewayProcessId).eq("lease_epoch", deps.leaseEpoch);
+      }
+      const { data, error } = await query.maybeSingle();
       if (error) throw ApiError.internal(error.message);
       return data?.auth_state_encrypted ?? null;
     },
@@ -247,6 +287,33 @@ export function criarRepoSupabase() {
         p_gateway_version: gatewayVersion ?? null,
         p_last_error_class: lastErrorClass ?? null,
       }, { gatewayProcessId, leaseEpoch });
+    },
+
+    // ---- intenção do operador (Checkpoint C3.5-B) ----
+    // Campo SEPARADO de `status` — nunca escrito por registrarHeartbeat, nem
+    // por qualquer caminho técnico (SIGTERM/perda de lease). Via RPC dedicada
+    // (whatsapp_desired_state_fenced, migration 085) — nunca via
+    // whatsapp_heartbeat_fenced, de propósito (preserva a assinatura dela
+    // intacta para compatibilidade de rolling deploy).
+    async definirEstadoDesejado(organizacaoId, { desiredConnectionState, providerInstanceId = INSTANCIA_PADRAO, gatewayProcessId, leaseEpoch } = {}, deps = {}) {
+      const db = await obterCliente(deps);
+      await obterOuCriarConexao(db, organizacaoId, providerInstanceId);
+      await atualizarComFencing(db, organizacaoId, providerInstanceId, "whatsapp_desired_state_fenced",
+        { p_desired_connection_state: desiredConnectionState },
+        { gatewayProcessId, leaseEpoch });
+    },
+
+    /** Leitura fenced (owner+epoch, sem checar expiração — mesma justificativa de obterAuthState) usada pelo restore para decidir se pode restaurar. */
+    async obterEstadoSessao(organizacaoId, { providerInstanceId = INSTANCIA_PADRAO, gatewayProcessId, leaseEpoch } = {}, deps = {}) {
+      const db = await obterCliente(deps);
+      const { data, error } = await db.from("whatsapp_conexoes")
+        .select("status, desired_connection_state")
+        .eq("organizacao_id", organizacaoId).eq("provider_instance_id", providerInstanceId)
+        .eq("lease_owner_id", gatewayProcessId ?? "").eq("lease_epoch", leaseEpoch ?? -1)
+        .maybeSingle();
+      if (error) throw ApiError.internal(error.message);
+      if (!data) throw new LeaseStaleError({ organizacaoId, providerInstanceId });
+      return { status: data.status, desiredConnectionState: data.desired_connection_state };
     },
 
     async registrarStatusProvider(_organizacaoId, { providerMessageId, status }) {

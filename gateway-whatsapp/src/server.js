@@ -46,6 +46,14 @@ const leaseManager = criarLeaseManager({
   // Checkpoint C3.5, item 12 — perda de lease com socket aberto: fecha e
   // para tudo, nunca tenta reaver ownership silenciosamente.
   aoPerderLease: () => sessao._forcarFailSafe(),
+  // Checkpoint C3.5-B — vira leader (boot como leader, ou standby que
+  // assumiu depois de polling): avalia restore automático. NUNCA dispara em
+  // renew (a fábrica do leaseManager já garante isso — só chama isto numa
+  // transição real false->true). `sessao` só é atribuída abaixo, mas esta
+  // arrow function só executa quando o leaseManager de fato chamar o
+  // callback (depois de `iniciar()`), quando `sessao` já existe — mesmo
+  // padrão já usado em `aoPerderLease` acima.
+  aoTornarSeLeader: () => sessao._restaurarSessaoSePossivel(),
 });
 
 const authAdapter = criarAuthStateAdapter({

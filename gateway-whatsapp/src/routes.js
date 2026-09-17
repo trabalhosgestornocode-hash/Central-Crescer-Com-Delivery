@@ -20,14 +20,23 @@ export function criarRotas(sessao) {
 
   router.post("/whatsapp/connect", async (req, res, next) => {
     try {
-      await sessao.conectar();
+      // Checkpoint C3.5-B, item 3 — só ESTA rota representa uma decisão real
+      // do operador de querer estar conectado; grava desired_connection_
+      // state=CONNECTED antes do socket (dentro de conectar()). Reconexão
+      // automática pós-515 e o restore automático nunca passam por aqui.
+      await sessao.conectar({ persistirIntencaoConectada: true });
       res.json({ ok: true, status: sessao._status() });
     } catch (e) { next(e); }
   });
 
   router.post("/whatsapp/disconnect", async (req, res, next) => {
     try {
-      await sessao.desconectar();
+      // Checkpoint C3.5-B, item 3 — só ESTA rota representa a decisão real
+      // do operador de querer estar desconectado; grava desired_connection_
+      // state=DISCONNECTED antes de fechar o socket. O shutdown técnico
+      // (SIGTERM, em server.js#encerrar) chama sessao.desconectar() SEM este
+      // parâmetro — de propósito, para nunca alterar a intenção do operador.
+      await sessao.desconectar({ persistirIntencao: true });
       res.json({ ok: true });
     } catch (e) { next(e); }
   });

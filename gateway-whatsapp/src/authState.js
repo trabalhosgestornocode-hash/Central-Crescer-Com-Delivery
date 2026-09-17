@@ -212,9 +212,15 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
     }
   }
 
-  /** Carrega do backend no boot/reconexão. Retorna false se não havia nada salvo ainda. */
+  /**
+   * Carrega do backend no boot/reconexão. Retorna false se não havia nada
+   * salvo ainda. Passa o fencing atual (se `obterContextoLease` estiver
+   * injetado) para `carregarAuthState` — Checkpoint C3.5-B, item 11: o
+   * backend só devolve o ciphertext ao dono atual quando isto é informado
+   * (opcional/retrocompatível do lado dele).
+   */
   async function carregar() {
-    const r = await backendClient.carregarAuthState();
+    const r = await backendClient.carregarAuthState(obterContextoLease?.());
     if (!r?.authStateEncrypted) return false;
     const plaintext = decriptar(r.authStateEncrypted, chave);
     const dados = JSON.parse(plaintext, reviverBuffers);
