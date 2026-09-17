@@ -211,23 +211,73 @@ describe("baileysSession — lifecycle", () => {
     assert.equal(fabricaSocket.criados.length, 2);
   });
 
-  test("SESSÃO RESTAURADA (authAdapter.carregar() devolve auth state válido): queda transitória também reconecta, mesmo sem 'open' nesta execução", async () => {
+  test("SESSÃO RESTAURADA (authAdapter.carregar() devolve creds.registered=true): queda transitória também reconecta, mesmo sem 'open' nesta execução", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const chamadasAgendar = [];
     const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
-    const authAdapterComSessaoSalva = { ...authAdapterFalso(), carregar: async () => true };
+    const authAdapterComSessaoSalva = {
+      async carregar() { return true; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: { registered: true }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
     const sessao = criarSessaoBaileys({
       authAdapter: authAdapterComSessaoSalva, backendClient: backendClientFalso(), config: configFalso(),
       fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
     });
 
     await sessao.conectar();
-    assert.equal(sessao._autenticadaAlgumaVez(), true, "carregar() com sucesso já conta como sessão real preexistente");
+    assert.equal(sessao._autenticadaAlgumaVez(), true, "creds.registered:true carregado do backend já conta como sessão real preexistente");
 
     fabricaSocket.criados[0].ev.emit("connection.update", {
       connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
     });
-    assert.equal(chamadasAgendar.length, 1, "restaurar uma sessão salva e cair depois é transitório, não pareamento inicial");
+    assert.equal(chamadasAgendar.length, 1, "restaurar uma sessão registrada e cair depois é transitório, não pareamento inicial");
+  });
+
+  test("BUG ENCONTRADO AO VIVO NO CHECKPOINT C3 — CORRIGIDO: carregar() devolve true mas creds.registered é false (creds PARCIAIS de um pareamento interrompido, salvas via creds.update antes do QR completar) -> NÃO conta como autenticada, close subsequente NÃO reconecta sozinho", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const authAdapterComCredsParciais = {
+      async carregar() { return true; }, // existe auth_state_encrypted no backend...
+      inicializarCreds() {},
+      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; }, // ...mas o pareamento nunca completou
+      async aoAtualizarCreds() {},
+    };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComCredsParciais, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+
+    await sessao.conectar();
+    assert.equal(sessao._autenticadaAlgumaVez(), false, "creds parciais (registered:false) NUNCA contam como autenticação real, mesmo com carregar()=true");
+
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+    assert.equal(chamadasAgendar.length, 0, "não pode reconectar sozinho — o pareamento nunca completou de verdade, mesmo havendo auth state parcial salvo");
+  });
+
+  test("pareamento inicial interrompido também PARA o heartbeat periódico (não fica reportando DISCONNECTED para sempre)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient, config: { ...configFalso(), heartbeatMs: 5 },
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+
+    const chamadasLogoApos = backendClient.notificarHeartbeat.mock.calls.length;
+    // heartbeatMs=5: se o timer não tivesse sido parado, várias batidas caberiam aqui.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const chamadasDepoisDeEsperar = backendClient.notificarHeartbeat.mock.calls.length;
+
+    assert.equal(chamadasDepoisDeEsperar, chamadasLogoApos, "heartbeat periódico deveria ter parado — nenhuma chamada nova após o pareamento inicial ser interrompido");
   });
 
   test("backoff cresce exponencialmente e respeita o teto configurado (sessão já autenticada)", async () => {

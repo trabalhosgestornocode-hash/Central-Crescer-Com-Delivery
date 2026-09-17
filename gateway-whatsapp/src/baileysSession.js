@@ -153,6 +153,11 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
         agendarReconexao();
       } else {
         // Pareamento inicial nunca reconecta sozinho — exige novo /connect.
+        // Para também o heartbeat periódico: sem isto, ele continuaria
+        // reportando DISCONNECTED a cada WHATSAPP_HEARTBEAT_MS para sempre,
+        // avançando disconnected_at/last_seen_at repetidamente sem nenhuma
+        // queda nova ter acontecido — ruído confirmado ao vivo.
+        pararHeartbeatPeriodico();
         log("warn", "pareamento_inicial.interrompido_sem_reconexao_automatica", {});
       }
     }
@@ -204,10 +209,19 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
 
     const carregouAlgo = await authAdapter.carregar().catch(() => false);
     if (carregouAlgo) {
-      // Restaurando uma sessão que já foi autenticada de verdade em algum
-      // momento (auth state válido salvo no backend) — uma queda depois
-      // disto é transitória, não pareamento inicial.
-      autenticadaAlgumaVez = true;
+      // "carregou algo" só prova que existe ALGUM auth state salvo — o
+      // Baileys grava creds PARCIAIS via creds.update durante o próprio
+      // handshake, antes até do QR ser escaneado (confirmado ao vivo no
+      // Checkpoint C3: um pareamento que nunca chegou a CONNECTED já deixou
+      // um auth_state_encrypted real no banco). O sinal correto de "isto já
+      // foi um pareamento COMPLETO alguma vez" é o próprio campo do Baileys
+      // `creds.registered` (node_modules/baileys/lib/Types/Auth.d.ts) — só
+      // vira true quando o registro termina de verdade, nunca por creds
+      // parciais de uma tentativa interrompida.
+      const credsCarregados = authAdapter.comoAuthState().creds;
+      if (credsCarregados?.registered) {
+        autenticadaAlgumaVez = true;
+      }
     } else {
       const { initAuthCreds } = await import("baileys");
       authAdapter.inicializarCreds(initAuthCreds());
