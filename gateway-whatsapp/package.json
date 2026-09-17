@@ -7,13 +7,15 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test test/"
+    "test": "node --test test/",
+    "mostrar-qr": "node scripts/mostrar-qr.mjs"
   },
   "engines": {
     "node": ">=20.6.0"
   },
   "dependencies": {
     "baileys": "6.7.24",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "qrcode": "1.5.4"
   }
 }

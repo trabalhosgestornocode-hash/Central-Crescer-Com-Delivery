@@ -20,6 +20,7 @@ function sessaoFalsa() {
     enviar: mock.fn(async () => ({ providerMessageId: "wa-1", enviadoEm: "now" })),
     markAsRead: mock.fn(async () => {}),
     getMessageStatus: mock.fn(async () => ({ status: "SENT" })),
+    obterQrAtual: mock.fn(() => null),
     _status: () => "CONNECTED",
   };
 }
@@ -81,6 +82,58 @@ describe("routes — Backend -> Gateway", () => {
     assert.equal(r.status, 200);
     const json = await r.json();
     assert.equal(json.conectado, true);
+  });
+
+  test("GET /internal/whatsapp/qr sem HMAC é recusado com 401", async () => {
+    const r = await fetch(`${baseUrl}/internal/whatsapp/qr`);
+    assert.equal(r.status, 401);
+  });
+
+  test("GET /internal/whatsapp/qr com assinatura inválida é recusado com 401", async () => {
+    _resetarNonces();
+    const r = await fetch(`${baseUrl}/internal/whatsapp/qr`, {
+      headers: { "X-Gateway-Timestamp": String(Date.now()), "X-Gateway-Nonce": "b".repeat(20), "X-Gateway-Signature": "0".repeat(64) },
+    });
+    assert.equal(r.status, 401);
+  });
+
+  test("GET /internal/whatsapp/qr autenticado, sem QR atual, devolve {qr:null} e Cache-Control: no-store", async () => {
+    _resetarNonces();
+    const r = await chamarAssinado("GET", "/internal/whatsapp/qr");
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { qr: null });
+    assert.equal(r.headers.get("cache-control"), "no-store");
+  });
+
+  test("GET /internal/whatsapp/qr autenticado, com QR atual, devolve a string — só para requisição autenticada", async () => {
+    sessao.obterQrAtual = () => "2@abc123fakeqrstring==,def456==";
+    try {
+      // Sem HMAC continua recusado mesmo havendo QR disponível — nunca vaza por falta de auth.
+      const semAuth = await fetch(`${baseUrl}/internal/whatsapp/qr`);
+      assert.equal(semAuth.status, 401);
+
+      _resetarNonces();
+      const comAuth = await chamarAssinado("GET", "/internal/whatsapp/qr");
+      assert.equal(comAuth.status, 200);
+      assert.deepEqual(await comAuth.json(), { qr: "2@abc123fakeqrstring==,def456==" });
+    } finally {
+      sessao.obterQrAtual = () => null;
+    }
+  });
+
+  test("a string do QR nunca aparece em nenhum log gerado pela rota", async (t) => {
+    const qrFalso = "2@nao-pode-vazar-isto-no-log==";
+    sessao.obterQrAtual = () => qrFalso;
+    const logsCapturados = [];
+    t.mock.method(console, "log", (...args) => logsCapturados.push(args.join(" ")));
+    t.mock.method(console, "error", (...args) => logsCapturados.push(args.join(" ")));
+    try {
+      _resetarNonces();
+      await chamarAssinado("GET", "/internal/whatsapp/qr");
+    } finally {
+      sessao.obterQrAtual = () => null;
+    }
+    assert.ok(!logsCapturados.some((l) => l.includes(qrFalso)), "a string do QR não pode aparecer em log nenhum");
   });
 
   test("POST /internal/whatsapp/messages (text) chama sessao.enviar() com o conteúdo mapeado", async () => {

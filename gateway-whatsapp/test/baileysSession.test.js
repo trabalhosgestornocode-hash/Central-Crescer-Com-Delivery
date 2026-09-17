@@ -79,6 +79,41 @@ describe("baileysSession — lifecycle", () => {
     assert.equal((await sessao.getStatus()).telefone, "+5511999990000");
   });
 
+  test("obterQrAtual(): null antes de qualquer QR, string após o evento, null de novo após 'open'", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+
+    assert.equal(sessao.obterQrAtual(), null);
+
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { qr: "2@qr-de-teste-fake==" });
+    assert.equal(sessao.obterQrAtual(), "2@qr-de-teste-fake==");
+
+    fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    assert.equal(sessao.obterQrAtual(), null, "QR precisa sumir assim que conecta — nunca reaproveitável");
+  });
+
+  test("obterQrAtual(): some também quando o socket fecha antes de conectar (expira, não fica preso em memória)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { qr: "2@qr-que-vai-expirar==" });
+    assert.equal(sessao.obterQrAtual(), "2@qr-que-vai-expirar==");
+
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+    assert.equal(sessao.obterQrAtual(), null);
+  });
+
   test("desconexão transitória agenda reconexão com backoff (nunca em LOGGED_OUT)", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const chamadasAgendar = [];

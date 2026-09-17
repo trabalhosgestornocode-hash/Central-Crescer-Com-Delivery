@@ -114,6 +114,9 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     }
 
     if (connection === "close") {
+      // QR expira com o fechamento do socket que o gerou — um novo QR (se
+      // houver reconexão) vem num evento `qr` futuro, nunca reaproveita este.
+      qrAtual = null;
       const codigo = lastDisconnect?.error?.output?.statusCode;
       if (codigo === DisconnectReasonLoggedOut) {
         // TERMINAL — nunca reconecta sozinho. Exige novo QR humano.
@@ -205,6 +208,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   return {
     conectar,
     desconectar,
+    /** QR atual (string) ou null — só em memória, nunca persistido/logado. Ver routes.js#/whatsapp/qr. */
+    obterQrAtual: () => qrAtual,
     async getStatus() {
       return { conectado: status === STATUS_CONEXAO.CONNECTED, provider: "baileys", telefone, atualizadoEm: new Date().toISOString(), status };
     },

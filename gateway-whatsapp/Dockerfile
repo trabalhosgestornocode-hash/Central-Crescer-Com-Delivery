@@ -18,6 +18,7 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
 COPY src ./src
+COPY scripts ./scripts
 
 # Usuário sem privilégio — a imagem base já provê "node".
 USER node

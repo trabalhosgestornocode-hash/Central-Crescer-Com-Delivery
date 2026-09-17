@@ -38,6 +38,16 @@ export function criarRotas(sessao) {
     } catch (e) { next(e); }
   });
 
+  // QR de pareamento — só em memória (sessao.obterQrAtual()), nunca
+  // persistido/logado/auditado. `no-store` porque é segredo transitório de
+  // pareamento: nenhum cache (proxy, navegador) pode reter isto. Continua
+  // atrás do MESMO exigirHmac() das demais rotas /internal — não é endpoint
+  // público, não tem tela própria neste checkpoint (Checkpoint C3, seção 6).
+  router.get("/whatsapp/qr", (req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ qr: sessao.obterQrAtual() });
+  });
+
   router.post("/whatsapp/messages", async (req, res, next) => {
     try {
       const { telefoneE164, tipo, idempotencyKey, texto, urlImagem, legenda, urlDocumento, nomeArquivo } = req.corpoJson ?? {};
