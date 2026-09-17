@@ -294,6 +294,31 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     }
     encerradoManualmente = false;
 
+    // Drena qualquer persistência de auth state ainda em voo (ex.: o
+    // `creds.update` do pair-success, disparado pouco antes do
+    // 515/restartRequired) ANTES de recarregar — senão `carregar()` poderia
+    // ler do backend um estado mais antigo que este mesmo processo já
+    // produziu, mas ainda não terminou de gravar. `?.()` porque nem todo
+    // fake de teste implementa este método (comportamento opcional/aditivo).
+    //
+    // Se essa gravação pendente FALHOU, o backend ainda está com um estado
+    // mais antigo do que este processo já produziu em memória — recarregar
+    // aqui devolveria auth state obsoleto para um socket novo. Aborta a
+    // reconexão de forma segura (DISCONNECTED, sem socket novo, sem
+    // `carregar()`) em vez de seguir como se a gravação tivesse dado certo.
+    // Nunca um retry cego aqui — só a próxima queda/backoff normal decide
+    // se vale tentar de novo.
+    try {
+      await authAdapter.aguardarPersistenciasPendentes?.();
+    } catch (e) {
+      status = STATUS_CONEXAO.DISCONNECTED;
+      log("error", "reconexao.abortada_persistencia_pendente_falhou", {
+        // Só o NOME do erro (classe sanitizada) — nunca `message`/`stack`,
+        // que podem conter detalhes do payload/HTTP (ver diagnosticarErroFechamento acima).
+        erroTipo: e?.name ?? e?.constructor?.name ?? null,
+      });
+      return;
+    }
     const carregouAlgo = await authAdapter.carregar().catch(() => false);
     // "carregou algo" só prova que existe ALGUM auth state salvo — o
     // Baileys grava creds PARCIAIS via creds.update durante o próprio
