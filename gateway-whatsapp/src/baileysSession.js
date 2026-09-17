@@ -13,12 +13,22 @@
 // heartbeat sem nunca abrir um socket real nem escanear QR — ver
 // test/baileysSession.test.js.
 //
-// LIFECYCLE (Checkpoint C0, item 15):
-//   CONNECTING -> CONNECTED -> DISCONNECTED (transitório, reconecta)
+// LIFECYCLE (Checkpoint C0, item 15; refinado no Checkpoint C3):
+//   CONNECTING -> CONNECTED -> DISCONNECTED -> reconecta sozinho (backoff)
+//                                              SÓ SE já autenticou alguma vez
 //               -> LOGGED_OUT (terminal — NUNCA reconecta sozinho)
+//
+// PAREAMENTO INICIAL NUNCA RECONECTA SOZINHO (ajuste Checkpoint C3): antes da
+// primeira vez que a sessão chega a `CONNECTED` (ou de recuperar um auth
+// state já válido do backend), um QR expirado ou um `close` qualquer só pode
+// levar a DISCONNECTED e PARAR — nunca gerar um novo QR sem um novo
+// `/connect` explícito. Só depois de autenticada de verdade (uma vez que
+// existe sessão real a preservar) uma queda transitória justifica
+// reconexão automática. Ver `autenticadaAlgumaVez` abaixo.
 
 import { log, mascararTelefone } from "./logsafe.js";
 import { erro, CODIGOS } from "./errors.js";
+import { criarLoggerBaileysSilencioso } from "./logger-baileys-silencioso.js";
 
 export const STATUS_CONEXAO = Object.freeze({
   CONNECTING: "CONNECTING",
@@ -54,6 +64,11 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   let tentativasReconexao = 0;
   let heartbeatTimer = null;
   let encerradoManualmente = false;
+  // true assim que a sessão chega a CONNECTED pela primeira vez, OU quando
+  // `conectar()` recupera um auth state já válido do backend (restart de
+  // sessão já pareada). Enquanto for false, estamos num PAREAMENTO INICIAL —
+  // QR expirado ou close não reconectam sozinhos.
+  let autenticadaAlgumaVez = false;
   const handlersMensagem = [];
   const statusPorMensagemId = new Map(); // providerMessageId -> {status}
 
@@ -107,6 +122,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       status = STATUS_CONEXAO.CONNECTED;
       qrAtual = null;
       tentativasReconexao = 0;
+      autenticadaAlgumaVez = true;
       telefone = socket?.user?.id ? deJid(socket.user.id) : telefone;
       log("info", "conexao.aberta", { telefone: mascararTelefone(telefone) });
       heartbeat().catch(() => {});
@@ -128,9 +144,17 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       }
 
       status = STATUS_CONEXAO.DISCONNECTED;
-      log("warn", "conexao.fechada_transitoria", { codigo: codigo ?? null, tentativa: tentativasReconexao });
+      log("warn", "conexao.fechada_transitoria", { codigo: codigo ?? null, tentativa: tentativasReconexao, autenticadaAlgumaVez });
       heartbeat().catch(() => {});
-      if (!encerradoManualmente) agendarReconexao();
+
+      if (encerradoManualmente) return;
+      if (autenticadaAlgumaVez) {
+        // Sessão já tinha uma autenticação real — vale reconectar sozinho.
+        agendarReconexao();
+      } else {
+        // Pareamento inicial nunca reconecta sozinho — exige novo /connect.
+        log("warn", "pareamento_inicial.interrompido_sem_reconexao_automatica", {});
+      }
     }
   }
 
@@ -179,12 +203,17 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     encerradoManualmente = false;
 
     const carregouAlgo = await authAdapter.carregar().catch(() => false);
-    if (!carregouAlgo) {
+    if (carregouAlgo) {
+      // Restaurando uma sessão que já foi autenticada de verdade em algum
+      // momento (auth state válido salvo no backend) — uma queda depois
+      // disto é transitória, não pareamento inicial.
+      autenticadaAlgumaVez = true;
+    } else {
       const { initAuthCreds } = await import("baileys");
       authAdapter.inicializarCreds(initAuthCreds());
     }
 
-    socket = fabricaSocket({ auth: authAdapter.comoAuthState(), printQRInTerminal: false });
+    socket = fabricaSocket({ auth: authAdapter.comoAuthState(), logger: criarLoggerBaileysSilencioso(), printQRInTerminal: false });
     socket.ev.on("connection.update", aoConnectionUpdate);
     socket.ev.on("creds.update", (c) => authAdapter.aoAtualizarCreds(c).catch((e) => log("error", "auth_state.persistir_falhou", { erro: e?.message })));
     socket.ev.on("messages.upsert", aoMessagesUpsert);
@@ -236,5 +265,6 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     _status: () => status,
     _tentativasReconexao: () => tentativasReconexao,
     _qrAtual: () => qrAtual,
+    _autenticadaAlgumaVez: () => autenticadaAlgumaVez,
   };
 }

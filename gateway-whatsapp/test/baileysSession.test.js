@@ -12,7 +12,9 @@ const DISCONNECT_REASON_CONNECTION_LOST = 408;
 
 function socketFalsoFabrica() {
   const criados = [];
-  function fabrica() {
+  const opcoesRecebidas = [];
+  function fabrica(opcoes) {
+    opcoesRecebidas.push(opcoes);
     const ev = new EventEmitter();
     const socket = {
       ev,
@@ -25,6 +27,7 @@ function socketFalsoFabrica() {
     return socket;
   }
   fabrica.criados = criados;
+  fabrica.opcoesRecebidas = opcoesRecebidas;
   return fabrica;
 }
 
@@ -58,6 +61,28 @@ describe("baileysSession — helpers de JID", () => {
   test("paraJid/deJid são inversas para um E.164 simples", () => {
     assert.equal(paraJid("+5511999990000"), "5511999990000@s.whatsapp.net");
     assert.equal(deJid("5511999990000@s.whatsapp.net"), "+5511999990000");
+  });
+});
+
+describe("baileysSession — logger do Baileys é sempre silenciado", () => {
+  test("conectar() passa um logger com o contrato ILogger (level/child/trace/debug/info/warn/error) para fabricaSocket", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+
+    const opcoes = fabricaSocket.opcoesRecebidas[0];
+    assert.ok(opcoes.logger, "esperava um logger explícito — nunca o default do Baileys");
+    assert.equal(typeof opcoes.logger.level, "string");
+    assert.equal(typeof opcoes.logger.child, "function");
+    for (const nivel of ["trace", "debug", "info", "warn", "error"]) {
+      assert.equal(typeof opcoes.logger[nivel], "function");
+    }
+    // encadeável, como o Baileys faz internamente (logger.child({class:'baileys'}))
+    const filho = opcoes.logger.child({ class: "baileys" });
+    assert.equal(typeof filho.info, "function");
   });
 });
 
@@ -114,7 +139,50 @@ describe("baileysSession — lifecycle", () => {
     assert.equal(sessao.obterQrAtual(), null);
   });
 
-  test("desconexão transitória agenda reconexão com backoff (nunca em LOGGED_OUT)", async () => {
+  test("PAREAMENTO INICIAL: QR expira sem nunca ter autenticado -> DISCONNECTED e PARA (sem reconectar sozinho)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { qr: "2@qr-do-pareamento-inicial==" });
+    assert.equal(sessao._autenticadaAlgumaVez(), false);
+
+    // QR expira (Baileys fecha o socket) — nunca chegou a CONNECTED nesta sessão.
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(chamadasAgendar.length, 0, "pareamento inicial nunca reconecta sozinho");
+    assert.equal(fabricaSocket.criados.length, 1, "nenhum novo socket deveria ter sido criado");
+  });
+
+  test("PAREAMENTO INICIAL: close antes de qualquer QR/CONNECTED -> também não reconecta sozinho", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+
+    await sessao.conectar();
+    // close direto, sem QR nenhum ter sido emitido ainda.
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(chamadasAgendar.length, 0);
+    assert.equal(fabricaSocket.criados.length, 1);
+  });
+
+  test("SESSÃO JÁ AUTENTICADA (chegou a CONNECTED): queda transitória agenda reconexão com backoff", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const chamadasAgendar = [];
     const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); }; // executa na hora, só registra o atraso pedido
@@ -124,6 +192,11 @@ describe("baileysSession — lifecycle", () => {
     });
 
     await sessao.conectar();
+    fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    assert.equal(sessao._autenticadaAlgumaVez(), true);
+
+    // AGORA sim uma queda é transitória — a sessão já foi autenticada de verdade.
     fabricaSocket.criados[0].ev.emit("connection.update", {
       connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
     });
@@ -138,7 +211,26 @@ describe("baileysSession — lifecycle", () => {
     assert.equal(fabricaSocket.criados.length, 2);
   });
 
-  test("backoff cresce exponencialmente e respeita o teto configurado", async () => {
+  test("SESSÃO RESTAURADA (authAdapter.carregar() devolve auth state válido): queda transitória também reconecta, mesmo sem 'open' nesta execução", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const authAdapterComSessaoSalva = { ...authAdapterFalso(), carregar: async () => true };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComSessaoSalva, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+
+    await sessao.conectar();
+    assert.equal(sessao._autenticadaAlgumaVez(), true, "carregar() com sucesso já conta como sessão real preexistente");
+
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+    assert.equal(chamadasAgendar.length, 1, "restaurar uma sessão salva e cair depois é transitório, não pareamento inicial");
+  });
+
+  test("backoff cresce exponencialmente e respeita o teto configurado (sessão já autenticada)", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const chamadasAgendar = [];
     const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
@@ -149,6 +241,8 @@ describe("baileysSession — lifecycle", () => {
     });
 
     await sessao.conectar();
+    fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" }); // autentica antes de testar backoff
     const fechar = () => fabricaSocket.criados.at(-1).ev.emit("connection.update", {
       connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
     });
