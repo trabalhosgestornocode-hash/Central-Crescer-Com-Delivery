@@ -162,6 +162,90 @@ describe("baileysSession — diagnóstico do close (Checkpoint C3, investigaçã
   });
 });
 
+describe("baileysSession — 515/restartRequired: reconecta reaproveitando creds (achado ao vivo, Checkpoint C3)", () => {
+  const CODIGO_RESTART_REQUIRED = 515;
+
+  test("close com 515 reconecta AUTOMATICAMENTE reaproveitando os creds parciais recém-recebidos, mesmo sem autenticadaAlgumaVez", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const inicializarCreds = mock.fn();
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const authAdapterComCredsParciais = {
+      async carregar() { return true; }, // creds parciais salvas pelo creds.update que acabou de rodar
+      inicializarCreds,
+      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComCredsParciais, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+
+    await sessao.conectar();
+    const chamadasInicializarAntesDoClose = inicializarCreds.mock.calls.length;
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: CODIGO_RESTART_REQUIRED } } },
+    });
+
+    assert.equal(chamadasAgendar.length, 1, "515 precisa reconectar sozinho — é o passo esperado do handshake, não uma falha");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(fabricaSocket.criados.length, 2, "reconectou de fato — um segundo socket foi criado");
+    assert.equal(
+      inicializarCreds.mock.calls.length, chamadasInicializarAntesDoClose,
+      "a RECONEXÃO pós-515 não pode descartar os creds de novo — precisa reaproveitar os mesmos, sem QR novo",
+    );
+  });
+
+  test("depois da reconexão pós-515, autenticadaAlgumaVez continua false (ainda não é sessão estabelecida) até 'open' de verdade ou registered:true", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const authAdapterComCredsParciais = {
+      async carregar() { return true; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComCredsParciais, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: (fn) => fn(),
+    });
+
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: CODIGO_RESTART_REQUIRED } } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(sessao._autenticadaAlgumaVez(), false);
+  });
+
+  test("close com 515 mas sem NENHUM creds salvo ainda (carregar()=false) não tenta reaproveitar nada — comportamento normal de pareamento do zero", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const inicializarCreds = mock.fn();
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const authAdapterSemNada = {
+      async carregar() { return false; },
+      inicializarCreds,
+      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterSemNada, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+
+    await sessao.conectar();
+    assert.equal(inicializarCreds.mock.calls.length, 1);
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: CODIGO_RESTART_REQUIRED } } },
+    });
+
+    assert.equal(chamadasAgendar.length, 1, "515 sempre reconecta, mesmo neste caso raro");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(inicializarCreds.mock.calls.length, 2, "sem creds nenhum salvo, a reconexão gera identidade nova de novo (não tem o que reaproveitar)");
+  });
+});
+
 describe("baileysSession — lifecycle", () => {
   test("conectar() sem QR/rede real: vai para CONNECTING, depois 'open' vira CONNECTED", async () => {
     const fabricaSocket = socketFalsoFabrica();

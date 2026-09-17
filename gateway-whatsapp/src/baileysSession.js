@@ -49,6 +49,14 @@ const NOMES_DISCONNECT_REASON = {
   515: "restartRequired",
 };
 
+// ACHADO AO VIVO (Checkpoint C3): 515/restartRequired NÃO é falha — é o
+// próprio WhatsApp pedindo, de propósito, uma reconexão com os MESMOS creds
+// recém-recebidos (ainda `registered:false` nesse instante) para concluir o
+// handshake de um pareamento novo, sem QR novo. Comportamento documentado do
+// próprio Baileys. Tratado à parte da regra geral "pareamento inicial nunca
+// reconecta sozinho" — aqui o reconnect É o próximo passo esperado.
+const CODIGO_RESTART_REQUIRED = 515;
+
 export const STATUS_CONEXAO = Object.freeze({
   CONNECTING: "CONNECTING",
   CONNECTED: "CONNECTED",
@@ -177,6 +185,12 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       heartbeat().catch(() => {});
 
       if (encerradoManualmente) return;
+      if (codigo === CODIGO_RESTART_REQUIRED) {
+        // Passo ESPERADO do handshake — reconecta com os MESMOS creds
+        // (ainda não registrados), nunca gera QR novo.
+        agendarReconexao({ preservarCredsNaoRegistrados: true });
+        return;
+      }
       if (autenticadaAlgumaVez) {
         // Sessão já tinha uma autenticação real — vale reconectar sozinho.
         agendarReconexao();
@@ -192,10 +206,10 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     }
   }
 
-  function agendarReconexao() {
+  function agendarReconexao(opcoes = {}) {
     const espera = backoffMs();
     tentativasReconexao += 1;
-    agendar(() => { conectar().catch((e) => log("error", "reconexao.falhou", { erro: e?.message })); }, espera);
+    agendar(() => { conectar(opcoes).catch((e) => log("error", "reconexao.falhou", { erro: e?.message })); }, espera);
   }
 
   function aoMessagesUpsert({ messages }) {
@@ -227,7 +241,14 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     }
   }
 
-  async function conectar() {
+  /**
+   * @param {object} [opcoes]
+   * @param {boolean} [opcoes.preservarCredsNaoRegistrados] só usado pela
+   *   reconexão automática após 515/restartRequired — reaproveita os creds
+   *   parciais recém-recebidos (ainda `registered:false`) em vez de
+   *   descartá-los. Nunca usado por uma chamada externa via /connect.
+   */
+  async function conectar({ preservarCredsNaoRegistrados = false } = {}) {
     if (status === STATUS_CONEXAO.CONNECTED) throw erro(CODIGOS.JA_CONECTADO);
     if (status === STATUS_CONEXAO.LOGGED_OUT) {
       // Só um NOVO pareamento (novo QR) sai de LOGGED_OUT — reset explícito,
@@ -245,16 +266,19 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     // (node_modules/baileys/lib/Types/Auth.d.ts) só vira true quando o
     // registro termina de verdade.
     const credsRegistrados = carregouAlgo && authAdapter.comoAuthState().creds?.registered;
-    if (credsRegistrados) {
-      autenticadaAlgumaVez = true;
+    const podeReaproveitar = carregouAlgo && (credsRegistrados || preservarCredsNaoRegistrados);
+    if (podeReaproveitar) {
+      if (credsRegistrados) autenticadaAlgumaVez = true;
+      // senão: reconexão pós-restartRequired com creds ainda não registrados
+      // — reaproveita SEM marcar autenticadaAlgumaVez (ainda não é sessão
+      // estabelecida de verdade; só o próprio "open" ou um registered:true
+      // futuro decide isso).
     } else {
-      // SEGUNDO BUG encontrado ao vivo: sem isto, um pareamento interrompido
-      // deixava creds PARCIAIS salvas, e o próximo /connect tentava RETOMAR
-      // essas creds incompletas em vez de começar do zero — o Baileys
-      // fechava a conexão quase instantaneamente, sem nunca gerar um QR
-      // novo (o usuário via o script de visualização esperando para
-      // sempre). Creds sem `registered:true` são inconsistentes para
-      // retomar sessão — sempre começar um pareamento novo do zero.
+      // Descarta creds parciais de um pareamento ABANDONADO (não é o caso do
+      // restartRequired, que reaproveita explicitamente acima). Sem isto, um
+      // pareamento interrompido deixava creds PARCIAIS salvas, e o próximo
+      // /connect tentava RETOMÁ-las em vez de começar do zero — o Baileys
+      // fechava a conexão quase instantaneamente, sem nunca gerar QR novo.
       const { initAuthCreds } = await import("baileys");
       authAdapter.inicializarCreds(initAuthCreds());
     }
