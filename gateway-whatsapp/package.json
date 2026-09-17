@@ -1,0 +1,19 @@
+{
+  "name": "gateway-whatsapp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Gateway Baileys/WhatsApp — roda SEPARADO do backend principal, sem service_role, sem acesso a Supabase",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "dependencies": {
+    "baileys": "6.7.24",
+    "express": "^4.19.2"
+  }
+}

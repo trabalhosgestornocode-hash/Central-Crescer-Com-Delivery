@@ -12,6 +12,7 @@ import { router } from "./routes.js";
 import { corsOptions, helmetOptions, headersComplementares, LIMITES_CORPO, emProducao, cspEmModoBloqueio } from "./config/seguranca.js";
 import { limiteDeTaxa } from "./shared/rateLimit.js";
 import { RATE_LIMIT } from "./config/limites.js";
+import { montarWhatsappGatewayRouter } from "./modules/comunicacao/gateway/whatsappGateway.bootstrap.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const frontendDir = path.resolve(__dirname, "../../frontend");
@@ -29,6 +30,19 @@ export function createApp() {
   app.use(headersComplementares);
   // CORS restrito por allowlist. Sem CORS_ORIGINS = só mesma origem.
   app.use(cors(corsOptions));
+
+  // Gateway WhatsApp (Checkpoint C1) — mundo à parte, como /internal/martin-
+  // brower é para worker-martinbrower: servidor-servidor, autenticado só por
+  // HMAC (nunca JWT de usuário), NUNCA sob /api/v1 (que exige requireAuth,
+  // que o Gateway não tem nem deveria ter). Precisa vir ANTES do
+  // express.json() global abaixo — o HMAC assina os BYTES crus do corpo, e
+  // express.raw() só reivindica o corpo se rodar primeiro (mesmo princípio
+  // já usado nos blocos de limite por rota logo abaixo). Só é montado se
+  // WHATSAPP_GATEWAY_SECRET + WHATSAPP_GATEWAY_ORGANIZACAO_ID existirem —
+  // hoje NÃO existem em produção, então isto ainda não expõe rota nenhuma
+  // (ver whatsappGateway.bootstrap.js).
+  const whatsappGateway = montarWhatsappGatewayRouter();
+  if (whatsappGateway) app.use(whatsappGateway.path, whatsappGateway.router);
 
   // Limites de corpo POR ROTA. O teto de 30 MB existe apenas onde é
   // necessário (relatórios do SW em base64) em vez de valer para a API toda.

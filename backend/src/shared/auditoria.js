@@ -122,6 +122,17 @@ export const ACOES = {
   // sucesso ou erro (ver detalhes.sucesso). Nunca grava o texto da mensagem
   // nem da resposta, só metadados de uso (ver agente/agente.service.js).
   AGENTE_MENSAGEM_ENVIADA: "agente.mensagem_enviada",
+
+  // Comunicação (WhatsApp) — Checkpoint B. Nunca grava telefone completo
+  // (mascarado em `detalhes`) nem o conteúdo integral da mensagem além do
+  // necessário para auditoria. Ver comunicacao/*.
+  COMUNICACAO_ALERTA_CRIADO: "comunicacao.alerta_criado",
+  COMUNICACAO_ALERTA_RESOLVIDO: "comunicacao.alerta_resolvido",
+  COMUNICACAO_ALERTA_CANCELADO: "comunicacao.alerta_cancelado",
+  COMUNICACAO_ENVIO_PERMITIDO: "comunicacao.envio_permitido",
+  COMUNICACAO_ENVIO_BLOQUEADO: "comunicacao.envio_bloqueado",
+  COMUNICACAO_ENVIO_FALHOU: "comunicacao.envio_falhou",
+  COMUNICACAO_OPT_OUT_REGISTRADO: "comunicacao.opt_out_registrado",
 };
 
 /**
