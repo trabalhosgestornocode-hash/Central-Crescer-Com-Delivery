@@ -162,6 +162,95 @@ describe("baileysSession — diagnóstico do close (Checkpoint C3, investigaçã
   });
 });
 
+describe("baileysSession — diagnóstico do 2º close (codigoDesconexao null, Checkpoint C3, autorizado)", () => {
+  function capturarLogs(t) {
+    const linhas = [];
+    t.mock.method(console, "log", (s) => linhas.push(s));
+    t.mock.method(console, "error", (s) => linhas.push(s));
+    return linhas;
+  }
+
+  async function fecharComErro(t, erro) {
+    const linhas = capturarLogs(t);
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "close", lastDisconnect: { error: erro } });
+    const linha = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "conexao.fechada_transitoria");
+    return { linha, linhas };
+  }
+
+  test("Boom tradicional com output.statusCode: codigoDesconexao normal, SEM os campos de diagnóstico extra (só é para o 2º close)", async (t) => {
+    const { linha } = await fecharComErro(t, { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } });
+    assert.equal(linha.codigoDesconexao, DISCONNECT_REASON_CONNECTION_LOST);
+    assert.equal(linha.razaoDesconexao, "connectionLost_ou_timedOut");
+    for (const campo of ["erroTipo", "erroCodigoRede", "erroErrno", "erroSyscall", "isBoom", "temOutput", "temData", "erroCampos", "outputCampos", "dataCampos"]) {
+      assert.equal(linha[campo], undefined, `${campo} não deveria aparecer quando o close já tem um statusCode conhecido`);
+    }
+  });
+
+  test("Error simples com code=ECONNRESET (sem output.statusCode): erroCodigoRede/erroTipo classificados, codigoDesconexao null", async (t) => {
+    const erro = new Error("connect ECONNRESET");
+    erro.code = "ECONNRESET";
+    const { linha } = await fecharComErro(t, erro);
+    assert.equal(linha.codigoDesconexao, null);
+    assert.equal(linha.razaoDesconexao, "desconhecido");
+    assert.equal(linha.erroTipo, "Error");
+    assert.equal(linha.erroCodigoRede, "ECONNRESET");
+    assert.equal(linha.isBoom, false);
+    assert.equal(linha.temOutput, false);
+    assert.equal(linha.temData, false);
+  });
+
+  test("erro com errno/syscall: os dois classificados como primitivos seguros", async (t) => {
+    const erro = new Error("read ETIMEDOUT");
+    erro.errno = -110;
+    erro.syscall = "read";
+    const { linha } = await fecharComErro(t, erro);
+    assert.equal(linha.erroErrno, -110);
+    assert.equal(linha.erroSyscall, "read");
+  });
+
+  test("erro não-Boom com propriedades customizadas: erroCampos lista só os NOMES, erroTipo é o name customizado", async (t) => {
+    const erro = new Error("mensagem interna qualquer");
+    erro.name = "MeuErroCustom";
+    erro.campoCustom1 = "abc";
+    erro.campoCustom2 = 123;
+    const { linha } = await fecharComErro(t, erro);
+    assert.equal(linha.erroTipo, "MeuErroCustom");
+    assert.equal(linha.isBoom, false);
+    assert.ok(linha.erroCampos.includes("campoCustom1"));
+    assert.ok(linha.erroCampos.includes("campoCustom2"));
+  });
+
+  test("valores sensíveis dentro de data/output/message/stack NUNCA aparecem no log — só os nomes das propriedades", async (t) => {
+    const segredo1 = "SEGREDO-CHAVE-PRIVADA-XYZ";
+    const segredo2 = "OUTRO-VALOR-SENSIVEL-987";
+    const erro = new Error(`mensagem com ${segredo1} dentro`);
+    erro.data = { chavePrivada: segredo1, outraColuna: "valor-irrelevante" };
+    erro.output = { algumCampo: segredo2, payload: "mais-um-valor" };
+    const { linha, linhas } = await fecharComErro(t, erro);
+
+    assert.equal(linha.temData, true);
+    assert.equal(linha.temOutput, true);
+    assert.deepEqual([...linha.dataCampos].sort(), ["chavePrivada", "outraColuna"]);
+    assert.deepEqual([...linha.outputCampos].sort(), ["algumCampo", "payload"]);
+    assert.equal(linha.message, undefined, "message nunca deve ser logada");
+    assert.equal(linha.stack, undefined, "stack nunca deve ser logada");
+    assert.equal(linha.data, undefined, "objeto data inteiro nunca deve ser logado");
+    assert.equal(linha.output, undefined, "objeto output inteiro nunca deve ser logado");
+
+    for (const s of linhas) {
+      assert.ok(!s.includes(segredo1), "segredo1 (de message/data) não pode vazar em NENHUMA linha de log");
+      assert.ok(!s.includes(segredo2), "segredo2 (de output) não pode vazar em NENHUMA linha de log");
+      assert.ok(!s.includes("valor-irrelevante") && !s.includes("mais-um-valor"), "valores de propriedades não podem vazar, só os nomes");
+    }
+  });
+});
+
 describe("baileysSession — 515/restartRequired: reconecta reaproveitando creds (achado ao vivo, Checkpoint C3)", () => {
   const CODIGO_RESTART_REQUIRED = 515;
 

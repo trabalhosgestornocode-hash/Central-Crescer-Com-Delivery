@@ -49,6 +49,39 @@ const NOMES_DISCONNECT_REASON = {
   515: "restartRequired",
 };
 
+// Diagnóstico do 2º close (Checkpoint C3, autorizado — só observabilidade,
+// nenhuma mudança de lifecycle): quando `codigoDesconexao` vem `null`,
+// `lastDisconnect.error` não é um erro Boom padrão do Baileys e o motivo
+// real fica invisível. Classifica com segurança — só tipos/nomes/booleans,
+// NUNCA `message`/`stack`/valores de `data`/`output` (podem conter dados
+// sensíveis do handshake). `erroCampos`/`outputCampos`/`dataCampos` são só
+// os NOMES das propriedades (Object.keys), nunca o conteúdo.
+function diagnosticarErroFechamento(error) {
+  if (error == null || typeof error !== "object") {
+    return {
+      erroTipo: null, erroCodigoRede: null, erroErrno: null, erroSyscall: null,
+      isBoom: false, temOutput: false, temData: false,
+      erroCampos: [], outputCampos: [], dataCampos: [],
+    };
+  }
+  const primitivoOuNull = (v) => (typeof v === "string" || typeof v === "number") ? v : null;
+  const syscallSeguro = (v) => (typeof v === "string" && v.length <= 20) ? v : null;
+  const camposDe = (obj) => (obj != null && typeof obj === "object") ? Object.keys(obj) : [];
+
+  return {
+    erroTipo: error.name ?? error.constructor?.name ?? null,
+    erroCodigoRede: primitivoOuNull(error.code),
+    erroErrno: primitivoOuNull(error.errno),
+    erroSyscall: syscallSeguro(error.syscall),
+    isBoom: error.isBoom === true,
+    temOutput: error.output != null,
+    temData: error.data != null,
+    erroCampos: camposDe(error),
+    outputCampos: camposDe(error.output),
+    dataCampos: camposDe(error.data),
+  };
+}
+
 // ACHADO AO VIVO (Checkpoint C3): 515/restartRequired NÃO é falha — é o
 // próprio WhatsApp pedindo, de propósito, uma reconexão com os MESMOS creds
 // recém-recebidos (ainda `registered:false` nesse instante) para concluir o
@@ -164,6 +197,9 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       // Lido NO INSTANTE do close — nunca o valor de antes de conectar(). Só
       // um booleano derivado; nunca loga o objeto `creds` inteiro.
       const registradoNoFechamento = !!authAdapter.comoAuthState().creds?.registered;
+      // Só entra no log quando o close NÃO é um Boom padrão (`codigo` null)
+      // — ver diagnosticarErroFechamento acima.
+      const diagnosticoErro = codigo == null ? diagnosticarErroFechamento(lastDisconnect?.error) : null;
 
       if (codigo === DisconnectReasonLoggedOut) {
         // TERMINAL — nunca reconecta sozinho. Exige novo QR humano.
@@ -181,6 +217,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
         registradoNoFechamento,
         tentativa: tentativasReconexao,
         autenticadaAlgumaVez,
+        ...(diagnosticoErro ?? {}),
       });
       heartbeat().catch(() => {});
 
