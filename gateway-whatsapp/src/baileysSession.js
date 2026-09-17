@@ -208,21 +208,24 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     encerradoManualmente = false;
 
     const carregouAlgo = await authAdapter.carregar().catch(() => false);
-    if (carregouAlgo) {
-      // "carregou algo" só prova que existe ALGUM auth state salvo — o
-      // Baileys grava creds PARCIAIS via creds.update durante o próprio
-      // handshake, antes até do QR ser escaneado (confirmado ao vivo no
-      // Checkpoint C3: um pareamento que nunca chegou a CONNECTED já deixou
-      // um auth_state_encrypted real no banco). O sinal correto de "isto já
-      // foi um pareamento COMPLETO alguma vez" é o próprio campo do Baileys
-      // `creds.registered` (node_modules/baileys/lib/Types/Auth.d.ts) — só
-      // vira true quando o registro termina de verdade, nunca por creds
-      // parciais de uma tentativa interrompida.
-      const credsCarregados = authAdapter.comoAuthState().creds;
-      if (credsCarregados?.registered) {
-        autenticadaAlgumaVez = true;
-      }
+    // "carregou algo" só prova que existe ALGUM auth state salvo — o
+    // Baileys grava creds PARCIAIS via creds.update durante o próprio
+    // handshake, antes até do QR ser escaneado (confirmado ao vivo no
+    // Checkpoint C3: um pareamento que nunca chegou a CONNECTED já deixou um
+    // auth_state_encrypted real no banco). `creds.registered`
+    // (node_modules/baileys/lib/Types/Auth.d.ts) só vira true quando o
+    // registro termina de verdade.
+    const credsRegistrados = carregouAlgo && authAdapter.comoAuthState().creds?.registered;
+    if (credsRegistrados) {
+      autenticadaAlgumaVez = true;
     } else {
+      // SEGUNDO BUG encontrado ao vivo: sem isto, um pareamento interrompido
+      // deixava creds PARCIAIS salvas, e o próximo /connect tentava RETOMAR
+      // essas creds incompletas em vez de começar do zero — o Baileys
+      // fechava a conexão quase instantaneamente, sem nunca gerar um QR
+      // novo (o usuário via o script de visualização esperando para
+      // sempre). Creds sem `registered:true` são inconsistentes para
+      // retomar sessão — sempre começar um pareamento novo do zero.
       const { initAuthCreds } = await import("baileys");
       authAdapter.inicializarCreds(initAuthCreds());
     }

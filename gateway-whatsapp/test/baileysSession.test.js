@@ -235,13 +235,13 @@ describe("baileysSession — lifecycle", () => {
     assert.equal(chamadasAgendar.length, 1, "restaurar uma sessão registrada e cair depois é transitório, não pareamento inicial");
   });
 
-  test("BUG ENCONTRADO AO VIVO NO CHECKPOINT C3 — CORRIGIDO: carregar() devolve true mas creds.registered é false (creds PARCIAIS de um pareamento interrompido, salvas via creds.update antes do QR completar) -> NÃO conta como autenticada, close subsequente NÃO reconecta sozinho", async () => {
+  test("BUG #1 ENCONTRADO AO VIVO NO CHECKPOINT C3 — CORRIGIDO: carregar() devolve true mas creds.registered é false (creds PARCIAIS de um pareamento interrompido, salvas via creds.update antes do QR completar) -> NÃO conta como autenticada, close subsequente NÃO reconecta sozinho", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const chamadasAgendar = [];
     const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
     const authAdapterComCredsParciais = {
       async carregar() { return true; }, // existe auth_state_encrypted no backend...
-      inicializarCreds() {},
+      inicializarCreds: mock.fn(),
       comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; }, // ...mas o pareamento nunca completou
       async aoAtualizarCreds() {},
     };
@@ -257,6 +257,30 @@ describe("baileysSession — lifecycle", () => {
       connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
     });
     assert.equal(chamadasAgendar.length, 0, "não pode reconectar sozinho — o pareamento nunca completou de verdade, mesmo havendo auth state parcial salvo");
+  });
+
+  test("BUG #2 ENCONTRADO AO VIVO NO CHECKPOINT C3 — CORRIGIDO: creds parciais (registered:false) são DESCARTADAS, não reaproveitadas — conectar() gera creds novas via initAuthCreds()", async () => {
+    // Reprodução do sintoma real: com o BUG #2, o Gateway tentava RETOMAR
+    // creds parciais/inconsistentes e o socket fechava quase instantaneamente
+    // sem nunca emitir um QR — o script de visualização ficava esperando
+    // para sempre. A correção: creds sem registered:true nunca são passadas
+    // ao Baileys — sempre um initAuthCreds() novo, que sim gera QR.
+    const fabricaSocket = socketFalsoFabrica();
+    const inicializarCreds = mock.fn();
+    const authAdapterComCredsParciais = {
+      async carregar() { return true; },
+      inicializarCreds,
+      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComCredsParciais, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+
+    await sessao.conectar();
+
+    assert.equal(inicializarCreds.mock.calls.length, 1, "creds parciais precisam ser descartadas — um initAuthCreds() novo tinha que ter sido chamado");
   });
 
   test("pareamento inicial interrompido também PARA o heartbeat periódico (não fica reportando DISCONNECTED para sempre)", async () => {
