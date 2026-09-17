@@ -86,6 +86,82 @@ describe("baileysSession — logger do Baileys é sempre silenciado", () => {
   });
 });
 
+describe("baileysSession — diagnóstico do close (Checkpoint C3, investigação read-only)", () => {
+  function capturarLogs(t) {
+    const linhas = [];
+    t.mock.method(console, "log", (s) => linhas.push(s));
+    t.mock.method(console, "error", (s) => linhas.push(s));
+    return linhas;
+  }
+
+  test("close loga codigoDesconexao SEM mascarar (não usa a chave ambígua 'codigo') e razaoDesconexao com o nome certo do DisconnectReason", async (t) => {
+    const linhas = capturarLogs(t);
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+
+    const linha = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "conexao.fechada_transitoria");
+    assert.ok(linha, "esperava o evento conexao.fechada_transitoria");
+    assert.equal(linha.codigoDesconexao, DISCONNECT_REASON_CONNECTION_LOST, "código não pode vir mascarado");
+    assert.equal(linha.razaoDesconexao, "connectionLost_ou_timedOut");
+  });
+
+  test("close loga registradoNoFechamento refletindo creds.registered NO INSTANTE do close (não o valor de antes de conectar())", async (t) => {
+    const linhas = capturarLogs(t);
+    const fabricaSocket = socketFalsoFabrica();
+    let registradoAgora = false;
+    const authAdapterDinamico = {
+      async carregar() { return false; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: { registered: registradoAgora }, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+    };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterDinamico, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+
+    await sessao.conectar();
+    registradoAgora = true; // simula o Baileys tendo confirmado o registro entre o connect() e o close
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+
+    const linha = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "conexao.fechada_transitoria");
+    assert.equal(linha.registradoNoFechamento, true, "deveria refletir o valor NO MOMENTO do close, não o de antes de conectar()");
+  });
+
+  test("creds.update loga só um booleano ('registrado') — NUNCA o objeto de creds real, mesmo com campos no formato de segredos", async (t) => {
+    const linhas = capturarLogs(t);
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+
+    await sessao.conectar();
+    const credsFalsosComSegredos = {
+      registered: true,
+      noiseKey: { private: "NUNCA-PODE-VAZAR-ISTO" },
+      signedIdentityKey: { private: "NEM-ISTO" },
+    };
+    fabricaSocket.criados[0].ev.emit("creds.update", credsFalsosComSegredos);
+
+    const linha = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "creds_update.recebido");
+    assert.ok(linha);
+    assert.equal(linha.registrado, true);
+    assert.equal(Object.keys(linha).filter((k) => k !== "severity" && k !== "servico" && k !== "evento").length, 1, "só o campo 'registrado' além dos padrões");
+    for (const s of linhas) assert.ok(!s.includes("NUNCA-PODE-VAZAR-ISTO") && !s.includes("NEM-ISTO"));
+  });
+});
+
 describe("baileysSession — lifecycle", () => {
   test("conectar() sem QR/rede real: vai para CONNECTING, depois 'open' vira CONNECTED", async () => {
     const fabricaSocket = socketFalsoFabrica();

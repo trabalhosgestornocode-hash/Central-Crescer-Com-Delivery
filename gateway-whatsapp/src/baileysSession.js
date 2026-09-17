@@ -30,6 +30,25 @@ import { log, mascararTelefone } from "./logsafe.js";
 import { erro, CODIGOS } from "./errors.js";
 import { criarLoggerBaileysSilencioso } from "./logger-baileys-silencioso.js";
 
+// Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
+// numéricos de DisconnectReason do Baileys (node_modules/baileys/lib/Types/
+// index.js) — só para log, nunca afeta lógica. IMPORTANTE: o campo do log
+// correspondente NÃO PODE se chamar `codigo` — essa chave é mascarada como
+// ambígua por logsafe.js#CHAVES_EXATAS (pensada para código de verificação/
+// OTP), o que escondia justamente o dado que faltava para diagnosticar closes
+// anteriores. `codigoDesconexao`/`razaoDesconexao` não colidem com nada.
+const NOMES_DISCONNECT_REASON = {
+  401: "loggedOut",
+  403: "forbidden",
+  408: "connectionLost_ou_timedOut", // Baileys usa o mesmo código 408 para os dois
+  411: "multideviceMismatch",
+  428: "connectionClosed",
+  440: "connectionReplaced",
+  500: "badSession",
+  503: "unavailableService",
+  515: "restartRequired",
+};
+
 export const STATUS_CONEXAO = Object.freeze({
   CONNECTING: "CONNECTING",
   CONNECTED: "CONNECTED",
@@ -134,17 +153,27 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       // houver reconexão) vem num evento `qr` futuro, nunca reaproveita este.
       qrAtual = null;
       const codigo = lastDisconnect?.error?.output?.statusCode;
+      // Lido NO INSTANTE do close — nunca o valor de antes de conectar(). Só
+      // um booleano derivado; nunca loga o objeto `creds` inteiro.
+      const registradoNoFechamento = !!authAdapter.comoAuthState().creds?.registered;
+
       if (codigo === DisconnectReasonLoggedOut) {
         // TERMINAL — nunca reconecta sozinho. Exige novo QR humano.
         status = STATUS_CONEXAO.LOGGED_OUT;
         pararHeartbeatPeriodico();
-        log("warn", "conexao.logged_out", {});
+        log("warn", "conexao.logged_out", { codigoDesconexao: codigo, razaoDesconexao: NOMES_DISCONNECT_REASON[codigo] ?? "desconhecido", registradoNoFechamento });
         heartbeat().catch(() => {});
         return;
       }
 
       status = STATUS_CONEXAO.DISCONNECTED;
-      log("warn", "conexao.fechada_transitoria", { codigo: codigo ?? null, tentativa: tentativasReconexao, autenticadaAlgumaVez });
+      log("warn", "conexao.fechada_transitoria", {
+        codigoDesconexao: codigo ?? null,
+        razaoDesconexao: NOMES_DISCONNECT_REASON[codigo] ?? "desconhecido",
+        registradoNoFechamento,
+        tentativa: tentativasReconexao,
+        autenticadaAlgumaVez,
+      });
       heartbeat().catch(() => {});
 
       if (encerradoManualmente) return;
@@ -232,7 +261,12 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
 
     socket = fabricaSocket({ auth: authAdapter.comoAuthState(), logger: criarLoggerBaileysSilencioso(), printQRInTerminal: false });
     socket.ev.on("connection.update", aoConnectionUpdate);
-    socket.ev.on("creds.update", (c) => authAdapter.aoAtualizarCreds(c).catch((e) => log("error", "auth_state.persistir_falhou", { erro: e?.message })));
+    socket.ev.on("creds.update", (c) => {
+      // Só um booleano derivado, nunca o objeto `c` (creds reais) inteiro —
+      // diagnóstico de quando o registro realmente completa (Checkpoint C3).
+      log("info", "creds_update.recebido", { registrado: !!c?.registered });
+      authAdapter.aoAtualizarCreds(c).catch((e) => log("error", "auth_state.persistir_falhou", { erro: e?.message }));
+    });
     socket.ev.on("messages.upsert", aoMessagesUpsert);
     socket.ev.on("messages.update", aoMessagesUpdate);
 
