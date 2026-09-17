@@ -38,7 +38,7 @@ export function criarVisualizadorQr({
   intervaloMs = 2000,
   timeoutMs = 180_000,
   buscar = fetch,
-  renderizarTerminal = (qr) => QRCode.toString(qr, { type: "terminal", small: true }),
+  renderizarTerminal = (qr) => QRCode.toString(qr, { type: "terminal", small: true, margin: 1 }),
   escrever = (texto) => console.log(texto),
   limparTela = () => console.clear(),
   esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
