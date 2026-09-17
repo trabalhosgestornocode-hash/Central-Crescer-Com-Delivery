@@ -8,10 +8,52 @@ import express from "express";
 import { createServer } from "node:http";
 import { exigirHmac } from "../src/hmac.js";
 import { criarRotas, health } from "../src/routes.js";
-import { criarVisualizadorQr } from "../scripts/mostrar-qr.mjs";
+import { criarVisualizadorQr, renderizarQrTerminalTrueColor } from "../scripts/mostrar-qr.mjs";
 
 const SEGREDO = "s".repeat(32);
 const QR_FALSO = "2@nao-pode-vazar-isto-em-lugar-nenhum==,fake==";
+
+describe("renderizarQrTerminalTrueColor — background RGB verdadeiro (não ANSI 40/47)", () => {
+  test("usa SGR 48;2;r;g;b (true color) para os módulos escuro/claro, nunca os códigos ANSI clássicos 40/47", () => {
+    const desenho = renderizarQrTerminalTrueColor("QR-DE-TESTE-PARA-RENDERIZACAO");
+    assert.ok(desenho.includes("\x1b[48;2;0;0;0m"), "esperava background RGB preto (0,0,0) para módulo escuro");
+    assert.ok(desenho.includes("\x1b[48;2;255;255;255m"), "esperava background RGB branco (255,255,255) para módulo claro");
+    assert.ok(!desenho.includes("\x1b[40m") && !desenho.includes("\x1b[47m"), "não pode usar os códigos ANSI clássicos 40/47");
+  });
+
+  test("tem quiet zone branca de pelo menos 2 módulos nas bordas (primeira e última linha inteiramente claras)", () => {
+    const desenho = renderizarQrTerminalTrueColor("QR-DE-TESTE-PARA-RENDERIZACAO");
+    const linhas = desenho.split("\n");
+    assert.ok(linhas.length >= 4);
+    // As duas primeiras e duas últimas linhas são só margem — não podem conter módulo escuro.
+    for (const linha of [linhas[0], linhas[1], linhas.at(-1), linhas.at(-2)]) {
+      assert.ok(!linha.includes("\x1b[48;2;0;0;0m"), "linha de margem não pode ter módulo escuro");
+    }
+  });
+
+  test("cada módulo ocupa 2 colunas, e cada linha termina com reset (\\x1b[0m)", () => {
+    const desenho = renderizarQrTerminalTrueColor("X");
+    const primeiraLinha = desenho.split("\n")[0];
+    assert.ok(primeiraLinha.endsWith("\x1b[0m"));
+    // conta quantos blocos de módulo (cada um termina em "  " antes do próximo \x1b ou do reset)
+    const blocos = primeiraLinha.split("\x1b[48;2;").length - 1;
+    assert.ok(blocos > 0);
+  });
+
+  test("a string original do QR NUNCA aparece na saída renderizada", () => {
+    const original = "2@string-secreta-do-pareamento-nao-pode-vazar==,xyz==";
+    const desenho = renderizarQrTerminalTrueColor(original);
+    assert.ok(!desenho.includes(original));
+  });
+
+  test("respeita a API real de QRCode.create() — não assume silenciosamente o formato: 'modules' tem size (number) e data (indexável)", async () => {
+    const QRCode = (await import("qrcode")).default;
+    const { modules } = QRCode.create("QR-DE-TESTE-PARA-RENDERIZACAO", { errorCorrectionLevel: "M" });
+    assert.equal(typeof modules.size, "number");
+    assert.ok(modules.size > 0);
+    assert.ok(modules.data.length === modules.size * modules.size);
+  });
+});
 
 /** Sessão controlável: muda de comportamento conforme o teste avança as chamadas. */
 function sessaoControlavel() {

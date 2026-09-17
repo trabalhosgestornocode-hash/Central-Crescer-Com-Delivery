@@ -19,6 +19,46 @@
 import QRCode from "qrcode";
 import { assinarRequisicao } from "../src/hmac.js";
 
+// RENDERIZAÇÃO (Checkpoint C3, 2º ajuste): `QRCode.toString(qr, {type:
+// "terminal"})` usa os 8 cores ANSI clássicos (SGR 40/47) — no Shell do
+// Render, "preto" ANSI clássico é renderizado como cinza escuro e o
+// contraste fica insuficiente para escanear. Correção: usar `QRCode.create()`
+// (a matriz real de módulos, API confirmada em
+// node_modules/qrcode/lib/core/qrcode.js#createSymbol — devolve
+// `{ modules: { size, data } }`, onde `data` é um Uint8Array linha-a-linha,
+// índice `y*size+x`, 1 = módulo escuro) e desenhar cada módulo manualmente
+// com background RGB verdadeiro (SGR 48;2;r;g;b, 24-bit) — cor exata,
+// independente de como o terminal remapeia os 8 cores clássicos.
+const MODULO_ESCURO = "\x1b[48;2;0;0;0m  ";
+const MODULO_CLARO = "\x1b[48;2;255;255;255m  ";
+const RESET_LINHA = "\x1b[0m";
+const MARGEM_MODULOS = 2; // quiet zone mínima ao redor, exigida para leitura confiável
+
+/**
+ * Desenha o QR usando a matriz real de módulos (não a saída pronta do
+ * `qrcode` para terminal) — cada módulo em 2 colunas (proporção quase
+ * quadrada em fontes de terminal), quiet zone branca de `MARGEM_MODULOS`
+ * módulos nos 4 lados.
+ * @param {string} qr string crua do QR (nunca logada por esta função)
+ * @param {{errorCorrectionLevel?: string}} [opts]
+ * @returns {string} ASCII/ANSI pronto para console.log — nunca contém `qr`
+ */
+export function renderizarQrTerminalTrueColor(qr, { errorCorrectionLevel = "M" } = {}) {
+  const { modules } = QRCode.create(qr, { errorCorrectionLevel });
+  const { size, data } = modules;
+  const linhas = [];
+  for (let y = -MARGEM_MODULOS; y < size + MARGEM_MODULOS; y++) {
+    let linha = "";
+    for (let x = -MARGEM_MODULOS; x < size + MARGEM_MODULOS; x++) {
+      const dentroDaMatriz = x >= 0 && y >= 0 && x < size && y < size;
+      const escuro = dentroDaMatriz && data[y * size + x];
+      linha += escuro ? MODULO_ESCURO : MODULO_CLARO;
+    }
+    linhas.push(linha + RESET_LINHA);
+  }
+  return linhas.join("\n");
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.segredo WHATSAPP_GATEWAY_SECRET
@@ -26,7 +66,7 @@ import { assinarRequisicao } from "../src/hmac.js";
  * @param {number} [opts.intervaloMs]
  * @param {number} [opts.timeoutMs]
  * @param {typeof fetch} [opts.buscar] injeção para teste
- * @param {(qr: string) => Promise<string>} [opts.renderizarTerminal] injeção para teste
+ * @param {(qr: string) => Promise<string>|string} [opts.renderizarTerminal] injeção para teste
  * @param {(texto: string) => void} [opts.escrever] injeção para teste
  * @param {() => void} [opts.limparTela] injeção para teste
  * @param {(ms: number) => Promise<void>} [opts.esperar] injeção para teste (sem tempo real)
@@ -38,7 +78,7 @@ export function criarVisualizadorQr({
   intervaloMs = 2000,
   timeoutMs = 180_000,
   buscar = fetch,
-  renderizarTerminal = (qr) => QRCode.toString(qr, { type: "terminal", small: true, margin: 1 }),
+  renderizarTerminal = (qr) => renderizarQrTerminalTrueColor(qr),
   escrever = (texto) => console.log(texto),
   limparTela = () => console.clear(),
   esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
