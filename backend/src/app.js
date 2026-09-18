@@ -13,6 +13,11 @@ import { corsOptions, helmetOptions, headersComplementares, LIMITES_CORPO, emPro
 import { limiteDeTaxa } from "./shared/rateLimit.js";
 import { RATE_LIMIT } from "./config/limites.js";
 import { montarWhatsappGatewayRouter } from "./modules/comunicacao/gateway/whatsappGateway.bootstrap.js";
+// Checkpoint C3.5-D, Fase 1 — rota TEMPORÁRIA de envio manual controlado
+// (candidata a remoção após o teste; ver whatsapp.teste-envio.routes.js).
+// Montada aqui (não em routes.js) para não se misturar com outro trabalho
+// já em andamento nesse arquivo compartilhado.
+import { whatsappTesteEnvioRouter } from "./modules/comunicacao/whatsapp.teste-envio.routes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const frontendDir = path.resolve(__dirname, "../../frontend");
@@ -106,6 +111,9 @@ export function createApp() {
   // para decidir entre o Painel SuperAdmin e a tela de seleção de empresa.
   // Não traz empresa alguma: isso é papel de /api/v1/sessao.
   app.get("/api/v1/me", (req, res) => res.json({ data: req.user }));
+  // Checkpoint C3.5-D, Fase 1 — TEMPORÁRIO: POST /api/v1/_teste-envio-whatsapp/teste-envio
+  // (o próprio router exige superadmin + MFA condicional).
+  app.use("/api/v1/_teste-envio-whatsapp", whatsappTesteEnvioRouter);
   app.use("/api/v1", router);
 
   app.use(notFound);
