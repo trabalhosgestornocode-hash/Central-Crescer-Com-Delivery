@@ -406,6 +406,37 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     if (persistindoLogoutDesiredState) await persistindoLogoutDesiredState;
   }
 
+  /**
+   * Checkpoint C3.5-B.1 — rollback best-effort, mas AGUARDADO, de
+   * desired_connection_state=CONNECTED->DISCONNECTED quando `conectar()`
+   * (chamada com `persistirIntencaoConectada:true`, ou seja, só o /connect
+   * manual) já persistiu a intenção mas falha de forma TERMINAL antes de
+   * qualquer socket (auth ausente NÃO cai aqui — só falta explícita de
+   * chamar isto nesse caso, porque pareamento novo é o fluxo normal).
+   * Nunca chamado pela reconexão automática pós-515 nem pelo restore
+   * automático (nenhum dos dois passa `persistirIntencaoConectada`) — os
+   * dois nunca escreveram CONNECTED para começo de conversa, então nunca há
+   * nada para desfazer; é assim que se evita aplicar isto a uma queda
+   * transitória de uma sessão já autenticada.
+   */
+  async function reverterDesiredParaDisconnected(motivo) {
+    const contextoLease = leaseManager?.contexto();
+    if (!contextoLease) return; // perdemos a lease nesse meio-tempo — nada nosso a reverter
+    try {
+      await backendClient.definirEstadoDesejado({ desiredConnectionState: "DISCONNECTED", ...contextoLease });
+      log("warn", "connect.desired_rollback", { motivo });
+    } catch (e) {
+      if (e?.leaseStale) leaseManager?.notificarPerdaExterna("desired_rollback_stale");
+      // NUNCA mascara o erro original — quem chamou já decidiu o resultado
+      // (fail-closed) antes de tentar este rollback; uma falha aqui só
+      // significa que `desired_connection_state` fica com CONNECTED
+      // desatualizado até o próximo /disconnect manual ou LOGGED_OUT real.
+      log("error", "connect.desired_rollback_falhou", {
+        motivoOriginal: motivo, erroTipo: e?.name ?? e?.constructor?.name ?? null,
+      });
+    }
+  }
+
   function agendarReconexao(opcoes = {}) {
     const espera = backoffMs();
     tentativasReconexao += 1;
@@ -527,32 +558,62 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
         // que podem conter detalhes do payload/HTTP (ver diagnosticarErroFechamento acima).
         erroTipo: e?.name ?? e?.constructor?.name ?? null,
       });
+      if (persistirIntencaoConectada) await reverterDesiredParaDisconnected("persistencia_pendente_falhou");
       return;
     }
-    const carregouAlgo = await authAdapter.carregar().catch(() => false);
-    // "carregou algo" só prova que existe ALGUM auth state salvo — o
-    // Baileys grava creds PARCIAIS via creds.update durante o próprio
-    // handshake, antes até do QR ser escaneado (confirmado ao vivo no
-    // Checkpoint C3: um pareamento que nunca chegou a CONNECTED já deixou um
-    // auth_state_encrypted real no banco). `creds.registered`
-    // (node_modules/baileys/lib/Types/Auth.d.ts) só vira true quando o
-    // registro termina de verdade.
-    const credsRegistrados = carregouAlgo && authAdapter.comoAuthState().creds?.registered;
-    const podeReaproveitar = carregouAlgo && (credsRegistrados || preservarCredsNaoRegistrados);
-    if (podeReaproveitar) {
-      if (credsRegistrados) autenticadaAlgumaVez = true;
-      // senão: reconexão pós-restartRequired com creds ainda não registrados
-      // — reaproveita SEM marcar autenticadaAlgumaVez (ainda não é sessão
-      // estabelecida de verdade; só o próprio "open" ou um registered:true
-      // futuro decide isso).
-    } else {
-      // Descarta creds parciais de um pareamento ABANDONADO (não é o caso do
-      // restartRequired, que reaproveita explicitamente acima). Sem isto, um
-      // pareamento interrompido deixava creds PARCIAIS salvas, e o próximo
-      // /connect tentava RETOMÁ-las em vez de começar do zero — o Baileys
-      // fechava a conexão quase instantaneamente, sem nunca gerar QR novo.
+
+    // Checkpoint C3.5-B.1 (correção da causa raiz de um QR gerado ao vivo em
+    // produção por cima de uma sessão real já pareada) — `authAdapter.
+    // carregar()` NUNCA mais devolve um boolean puro nem é envolvido num
+    // `.catch(() => false)` cru. `{status:'absent'}` é a ÚNICA forma
+    // legítima de "sem sessão para restaurar" (só ela permite pareamento
+    // novo/QR); QUALQUER outra falha (fencing stale, erro HTTP, decrypt
+    // AES-GCM, JSON malformado, estrutura inesperada) lança
+    // `AuthStateLoadError` e cai no `catch` abaixo — fail-closed, nunca mais
+    // tratado como "nunca pareado".
+    let resultadoAuth;
+    try {
+      resultadoAuth = await authAdapter.carregar();
+    } catch (e) {
+      status = STATUS_CONEXAO.DISCONNECTED;
+      const categoria = e?.categoria ?? "unknown";
+      log("error", "connect.auth_load_fail_closed", { categoria });
+      // Se a própria leitura de auth state veio stale (owner/epoch não
+      // batem), isto quase sempre significa que já perdemos a lease — avisa
+      // quem coordena, mesma disciplina já aplicada em heartbeat/desired-
+      // state/restore (nunca um "silêncio" só porque esta chamada específica
+      // não tinha esse tratamento ainda).
+      if (categoria === "lease_stale") leaseManager?.notificarPerdaExterna("connect_auth_load_stale");
+      if (persistirIntencaoConectada) await reverterDesiredParaDisconnected(`auth_load_${categoria}`);
+      return;
+    }
+
+    if (resultadoAuth.status === "absent") {
+      // Única situação em que dá para iniciar um pareamento novo (QR) com
+      // segurança — não existe ciphertext nenhum salvo para esta
+      // organização/instância.
+      log("info", "connect.auth_absent_pairing_permitido", {});
       const { initAuthCreds } = await import("baileys");
       authAdapter.inicializarCreds(initAuthCreds());
+    } else if (resultadoAuth.registered || preservarCredsNaoRegistrados) {
+      // AUTH_PRESENT — restaura a sessão existente. `preservarCredsNaoRegistrados`
+      // só é true na reconexão automática pós-515/restartRequired (creds
+      // PARCIAIS que este MESMO processo acabou de receber segundos atrás,
+      // ainda não registradas — nunca é o caso de uma chamada externa via
+      // /connect, que sempre chega com esta flag false).
+      if (resultadoAuth.registered) autenticadaAlgumaVez = true;
+      log("info", "connect.auth_loaded_restore", { registered: resultadoAuth.registered });
+    } else {
+      // AUTH_PRESENT mas registered !== true, e NÃO é o caso especial
+      // pós-515 — existe um ciphertext real salvo de um pareamento que nunca
+      // completou. FAIL CLOSED: diferente do comportamento antigo (que
+      // descartava silenciosamente e gerava QR novo), agora isto SEMPRE
+      // aborta sem nunca tocar em initAuthCreds()/socket — um auth state
+      // parcial real exige decisão explícita (não mais automática aqui).
+      status = STATUS_CONEXAO.DISCONNECTED;
+      log("error", "connect.auth_persistido_nao_registrado_fail_closed", {});
+      if (persistirIntencaoConectada) await reverterDesiredParaDisconnected("auth_persistido_nao_registrado");
+      return;
     }
 
     abrirSocketEEscutarEventos("manual");
@@ -695,19 +756,26 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       return;
     }
 
-    let carregouAlgo;
+    // Checkpoint C3.5-B.1 — mesmo contrato explícito de conectar(): nunca
+    // mais um boolean puro. Uma falha real (fencing stale, decrypt, parse,
+    // HTTP) lança `AuthStateLoadError`; só `{status:'absent'}` ou
+    // `{status:'loaded', registered:false}` são NOOPs normais (nunca abrem
+    // socket, nunca geram QR — o restore automático já nunca gerava QR por
+    // desenho, isto só reforça a distinção de causa no log).
+    let resultadoAuth;
     try {
-      carregouAlgo = await authAdapter.carregar();
+      resultadoAuth = await authAdapter.carregar();
     } catch (e) {
-      // Auth state corrompido/indecifrável — FAIL-SAFE: nunca deleta, nunca
-      // gera QR, nunca tenta de novo em loop. NOOP definitivo para este
-      // epoch; só um /connect manual (que descarta creds inválidos) resolve.
+      const categoria = e?.categoria ?? "unknown";
+      if (categoria === "lease_stale") { leaseManager?.notificarPerdaExterna("restore_auth_stale"); return; }
+      // Auth state corrompido/indecifrável (ou qualquer outra falha real) —
+      // FAIL-SAFE: nunca deleta, nunca gera QR, nunca tenta de novo em loop.
+      // NOOP definitivo para este epoch; só um /connect manual resolve.
       epochRestoreAvaliado = contextoOriginal.leaseEpoch;
-      log("error", "restore.auth_state_corrompido_fail_safe", { erroTipo: e?.name ?? e?.constructor?.name ?? null });
+      log("error", "restore.auth_state_corrompido_fail_safe", { categoria });
       return;
     }
-    const credsRegistrados = carregouAlgo && authAdapter.comoAuthState().creds?.registered;
-    if (!credsRegistrados) {
+    if (resultadoAuth.status !== "loaded" || !resultadoAuth.registered) {
       epochRestoreAvaliado = contextoOriginal.leaseEpoch;
       log("info", "restore.noop_sem_auth_registrado", {});
       return;

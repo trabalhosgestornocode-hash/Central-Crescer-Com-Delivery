@@ -67,18 +67,31 @@ export function criarRepoEmMemoria() {
   const porOrganizacao = new Map(); // organizacaoId -> registro
 
   return {
+    /**
+     * Checkpoint C3.5-B.1 — contrato explícito de 3 resultados, nunca mais
+     * um `string|null` ambíguo (achado ao vivo: um `null` por "nunca
+     * pareado" e um `null` por "fencing não bateu" eram indistinguíveis,
+     * e o Gateway tratava os dois como "sem sessão" — gerando QR por cima
+     * de uma sessão real já pareada).
+     *   { status: "absent" }                       — nenhum ciphertext salvo
+     *   { status: "present", authStateEncrypted }   — ciphertext existe
+     *   throws LeaseStaleError                      — owner+epoch informados
+     *     e não batem com o dono atual (nunca confundido com "absent")
+     * Fencing continua OPCIONAL (retrocompat de rolling deploy — item 11):
+     * só é aplicado quando o caller manda owner+epoch. Sem checagem de
+     * expiração aqui de propósito, mesma justificativa de sempre — a
+     * autoridade de tempo continua só nas escritas.
+     */
     async obterAuthState(organizacaoId, { gatewayProcessId, leaseEpoch } = {}) {
       const atual = porOrganizacao.get(organizacaoId);
-      // Fencing OPCIONAL (Checkpoint C3.5-B, item 11 — defesa em profundidade,
-      // retrocompatível): se o caller apresentar owner+epoch, só devolve o
-      // ciphertext se baterem com o dono ATUAL. Sem eles, comportamento
-      // antigo (qualquer chamador autenticado por HMAC recebe). Não checa
-      // expiração aqui de propósito — é só "você não é claramente outro
-      // processo/epoch"; a autoridade real de tempo continua nas escritas.
+      if (!atual) return { status: "absent" };
       if (gatewayProcessId && typeof leaseEpoch === "number") {
-        if (atual?.leaseOwnerId !== gatewayProcessId || atual?.leaseEpoch !== leaseEpoch) return null;
+        if (atual.leaseOwnerId !== gatewayProcessId || atual.leaseEpoch !== leaseEpoch) {
+          throw new LeaseStaleError({ organizacaoId });
+        }
       }
-      return atual?.authStateEncrypted ?? null;
+      if (!atual.authStateEncrypted) return { status: "absent" };
+      return { status: "present", authStateEncrypted: atual.authStateEncrypted };
     },
     async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, gatewayProcessId, leaseEpoch }) {
       const atual = porOrganizacao.get(organizacaoId) ?? {};
@@ -245,25 +258,38 @@ export function criarRepoSupabase() {
   }
 
   return {
+    /**
+     * Checkpoint C3.5-B.1 — mesmo contrato explícito de 3 resultados do repo
+     * em memória (ver comentário lá): `{status:"absent"}`,
+     * `{status:"present", authStateEncrypted}`, ou lança `LeaseStaleError`.
+     * NUNCA mais um `null` ambíguo que sirva tanto para "nunca pareado"
+     * quanto para "fencing não bateu" — essa ambiguidade foi a causa raiz
+     * comprovada de um QR gerado por cima de uma sessão real já pareada em
+     * produção (auditoria C3.5-B.1). Fencing continua OPCIONAL (retrocompat
+     * de rolling deploy, item 11): só é verificado quando o caller manda
+     * owner+epoch. Busca owner/epoch da linha na MESMA query (sem 2º round-
+     * trip) para poder distinguir "linha não existe" de "linha existe mas
+     * outro é o dono" numa única leitura.
+     */
     async obterAuthState(organizacaoId, deps = {}) {
       const db = await obterCliente(deps);
-      let query = db.from("whatsapp_conexoes")
-        .select("auth_state_encrypted")
+      const providerInstanceId = deps.providerInstanceId ?? INSTANCIA_PADRAO;
+      const { data, error } = await db.from("whatsapp_conexoes")
+        .select("auth_state_encrypted, lease_owner_id, lease_epoch")
         .eq("organizacao_id", organizacaoId)
-        .eq("provider_instance_id", deps.providerInstanceId ?? INSTANCIA_PADRAO);
-      // Fencing OPCIONAL (Checkpoint C3.5-B, item 11 — defesa em profundidade,
-      // retrocompatível durante rolling deploy): só filtra por owner+epoch se
-      // o caller apresentar os dois; sem eles, comportamento anterior a este
-      // checkpoint (qualquer chamador autenticado por HMAC recebe). De
-      // propósito SEM checar `lease_expires_at > now()` aqui — faria esta
-      // função precisar de now() do Postgres (RPC) só para uma leitura; a
-      // autoridade real de tempo continua inteira nas escritas (084/085).
-      if (deps.gatewayProcessId && typeof deps.leaseEpoch === "number") {
-        query = query.eq("lease_owner_id", deps.gatewayProcessId).eq("lease_epoch", deps.leaseEpoch);
-      }
-      const { data, error } = await query.maybeSingle();
+        .eq("provider_instance_id", providerInstanceId)
+        .maybeSingle();
       if (error) throw ApiError.internal(error.message);
-      return data?.auth_state_encrypted ?? null;
+      if (!data) return { status: "absent" };
+      // De propósito SEM checar `lease_expires_at > now()` aqui — mesma
+      // justificativa de sempre (autoridade de tempo só nas escritas).
+      if (deps.gatewayProcessId && typeof deps.leaseEpoch === "number") {
+        if (data.lease_owner_id !== deps.gatewayProcessId || data.lease_epoch !== deps.leaseEpoch) {
+          throw new LeaseStaleError({ organizacaoId, providerInstanceId });
+        }
+      }
+      if (!data.auth_state_encrypted) return { status: "absent" };
+      return { status: "present", authStateEncrypted: data.auth_state_encrypted };
     },
 
     async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, providerInstanceId = INSTANCIA_PADRAO, gatewayProcessId, leaseEpoch } = {}, deps = {}) {

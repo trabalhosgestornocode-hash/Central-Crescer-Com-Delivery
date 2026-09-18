@@ -125,9 +125,21 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
       const gatewayProcessId = processIdValido(req.query.gatewayProcessId) ? req.query.gatewayProcessId : undefined;
       const leaseEpochNum = Number(req.query.leaseEpoch);
       const leaseEpoch = epochValido(leaseEpochNum) ? leaseEpochNum : undefined;
-      const authStateEncrypted = await repo.obterAuthState(organizacaoId, { gatewayProcessId, leaseEpoch });
-      res.json(authStateEncrypted ? { authStateEncrypted } : {});
-    } catch (e) { next(e); }
+      const resultado = await repo.obterAuthState(organizacaoId, { gatewayProcessId, leaseEpoch });
+      // Checkpoint C3.5-B.1 — `status` explícito é o contrato NOVO (Gateway
+      // atualizado passa a ler isto). `authStateEncrypted` no nível raiz é
+      // mantido de propósito quando presente — é o que um Gateway ANTERIOR
+      // a este checkpoint (retrocompat de rolling deploy) continua lendo
+      // (`!r?.authStateEncrypted` → comportamento antigo, inalterado).
+      if (resultado.status === "present") {
+        res.json({ status: "present", authStateEncrypted: resultado.authStateEncrypted });
+      } else {
+        res.json({ status: "absent" });
+      }
+    } catch (e) {
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
   });
 
   // ---- intenção do operador (Checkpoint C3.5-B) ----

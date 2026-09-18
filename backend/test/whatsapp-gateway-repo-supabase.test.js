@@ -112,8 +112,8 @@ describe("whatsappGateway.repo — criarRepoSupabase() contra o banco de teste r
     const deA = await repo.obterAuthState(orgA);
     const deB = await repo.obterAuthState(orgB);
 
-    assert.equal(deB, "v1:aaaa:bbbb:cccc");
-    assert.notEqual(deA, "v1:aaaa:bbbb:cccc");
+    assert.deepEqual(deB, { status: "present", authStateEncrypted: "v1:aaaa:bbbb:cccc" });
+    assert.notDeepEqual(deA, { status: "present", authStateEncrypted: "v1:aaaa:bbbb:cccc" });
   });
 
   test("atualização de status: DISCONNECTED seta disconnected_at; LOGGED_OUT também", async (t) => {
@@ -171,7 +171,7 @@ describe("whatsappGateway.repo — criarRepoSupabase() contra o banco de teste r
 
     await repo.salvarAuthState(orgA, { authStateEncrypted: blob, authStateVersion: "v7", ...leaseA });
     const lido = await repo.obterAuthState(orgA);
-    assert.equal(lido, blob);
+    assert.deepEqual(lido, { status: "present", authStateEncrypted: blob });
 
     const direto = await supabase.from("whatsapp_conexoes").select("auth_state_encrypted, auth_state_version").eq("organizacao_id", orgA).single();
     assert.equal(direto.data.auth_state_encrypted, blob);
@@ -265,9 +265,9 @@ describe("round-trip do auth state fake — Gateway cifra -> Backend/Repo grava 
       assert.ok(!direto.data.auth_state_encrypted.includes("noise-key"), "o banco não pode conter nenhum fragmento do plaintext");
 
       // Repository lê; Backend devolve o ciphertext; Gateway decifra.
-      const lidoDoBanco = await repo.obterAuthState(orgA);
-      assert.equal(lidoDoBanco, ciphertext);
-      const plaintextDecifrado = decriptar(lidoDoBanco, chave);
+      const resultadoLeitura = await repo.obterAuthState(orgA);
+      assert.deepEqual(resultadoLeitura, { status: "present", authStateEncrypted: ciphertext });
+      const plaintextDecifrado = decriptar(resultadoLeitura.authStateEncrypted, chave);
 
       // Comparação byte a byte com a origem.
       assert.ok(Buffer.from(plaintextDecifrado, "utf8").equals(Buffer.from(plaintextOriginal, "utf8")));

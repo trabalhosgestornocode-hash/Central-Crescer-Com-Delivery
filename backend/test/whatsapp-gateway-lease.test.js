@@ -215,7 +215,7 @@ describe("whatsappGateway.repo — lease/fencing (Checkpoint C3.5)", () => {
       LeaseStaleError,
     );
 
-    assert.equal(await repo.obterAuthState(ORG_ID), "v1:de-B");
+    assert.deepEqual(await repo.obterAuthState(ORG_ID), { status: "present", authStateEncrypted: "v1:de-B" });
   });
 
   test("gravação sem fencing nenhum (gatewayProcessId/leaseEpoch ausentes) é sempre rejeitada, mesmo sem nenhuma lease jamais adquirida", async () => {
@@ -225,5 +225,55 @@ describe("whatsappGateway.repo — lease/fencing (Checkpoint C3.5)", () => {
       LeaseStaleError,
       "undefined/undefined não pode 'por acaso' bater com uma linha que nunca teve lease",
     );
+  });
+
+  // L (Checkpoint C3.5-B.1) — contrato explícito de obterAuthState(): ausência
+  // real (nunca pareado) NUNCA pode ser confundida com fencing stale (owner/
+  // epoch não batem). Achado ao vivo: os dois casos costumavam devolver o
+  // MESMO `null`, e o Gateway tratava os dois como "nunca pareado" — gerando
+  // QR por cima de uma sessão real já pareada quando na verdade era só o
+  // fencing que não bateu.
+  test("L) obterAuthState: ausência real (linha nunca existiu) -> {status:'absent'}, NUNCA LeaseStaleError", async () => {
+    const repo = criarRepoEmMemoria();
+    const resultado = await repo.obterAuthState(ORG_ID, { gatewayProcessId: randomUUID(), leaseEpoch: 1 });
+    assert.deepEqual(resultado, { status: "absent" }, "org sem NENHUMA linha ainda é ausência legítima, não fencing stale");
+  });
+
+  test("L) obterAuthState: linha existe com ciphertext, mas owner/epoch não batem -> LeaseStaleError, NUNCA {status:'absent'}", async () => {
+    const repo = criarRepoEmMemoria();
+    const dono = randomUUID();
+    const outroProcesso = randomUUID();
+    const lease = await repo.adquirirLease(ORG_ID, { gatewayProcessId: dono, ttlMs: TTL_MS });
+    await repo.salvarAuthState(ORG_ID, { authStateEncrypted: "v1:real", authStateVersion: "v1", gatewayProcessId: dono, leaseEpoch: lease.leaseEpoch });
+
+    await assert.rejects(
+      repo.obterAuthState(ORG_ID, { gatewayProcessId: outroProcesso, leaseEpoch: lease.leaseEpoch }),
+      LeaseStaleError,
+      "existe ciphertext real — a resposta tem que ser stale, NUNCA absent (senão o chamador descartaria uma sessão real)",
+    );
+    await assert.rejects(
+      repo.obterAuthState(ORG_ID, { gatewayProcessId: dono, leaseEpoch: lease.leaseEpoch + 999 }),
+      LeaseStaleError,
+      "mesmo owner, epoch errado, também precisa ser stale",
+    );
+  });
+
+  test("L) obterAuthState: linha existe, owner/epoch batem, mas nunca houve auth_state salvo -> {status:'absent'}", async () => {
+    const repo = criarRepoEmMemoria();
+    const dono = randomUUID();
+    const lease = await repo.adquirirLease(ORG_ID, { gatewayProcessId: dono, ttlMs: TTL_MS });
+
+    const resultado = await repo.obterAuthState(ORG_ID, { gatewayProcessId: dono, leaseEpoch: lease.leaseEpoch });
+    assert.deepEqual(resultado, { status: "absent" }, "lease existe e bate, mas nenhum auth_state foi salvo ainda — absence legítima");
+  });
+
+  test("L) obterAuthState: sem fencing nenhum informado (retrocompat), devolve o ciphertext se existir — nunca lança", async () => {
+    const repo = criarRepoEmMemoria();
+    const dono = randomUUID();
+    const lease = await repo.adquirirLease(ORG_ID, { gatewayProcessId: dono, ttlMs: TTL_MS });
+    await repo.salvarAuthState(ORG_ID, { authStateEncrypted: "v1:retrocompat", authStateVersion: "v1", gatewayProcessId: dono, leaseEpoch: lease.leaseEpoch });
+
+    const resultado = await repo.obterAuthState(ORG_ID);
+    assert.deepEqual(resultado, { status: "present", authStateEncrypted: "v1:retrocompat" });
   });
 });

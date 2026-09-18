@@ -47,6 +47,25 @@
 import { log } from "./logsafe.js";
 import { encriptar, decriptar, normalizarChave } from "./crypto.js";
 
+// Checkpoint C3.5-B.1 — categoria sanitizada de falha ao carregar auth
+// state. NUNCA carrega chave, plaintext, ciphertext, creds ou QR — só o
+// NOME da categoria. Achado ao vivo: `carregar()` costumava devolver um
+// `false` puro para TUDO (não encontrado, fencing stale, decrypt AES-GCM
+// falho, JSON malformado, erro HTTP) e `conectar()` tratava esse `false`
+// como "nunca pareado", descartando creds reais e gerando um QR por cima de
+// uma sessão já pareada. `carregar()` agora NUNCA devolve boolean: ausência
+// legítima é `{status:'absent'}` (retorno normal); qualquer outra falha
+// SEMPRE lança `AuthStateLoadError` com uma categoria — nunca mais um
+// `false` silencioso escondendo qual dos dois realmente aconteceu.
+export class AuthStateLoadError extends Error {
+  /** @param {'lease_stale'|'http_error'|'decrypt_error'|'parse_error'|'invalid_structure'|'unknown'} categoria */
+  constructor(categoria) {
+    super(`auth_state.carregar falhou: ${categoria}`);
+    this.name = "AuthStateLoadError";
+    this.categoria = categoria;
+  }
+}
+
 // Serializa Buffer/Uint8Array como {__buffer: base64} — precisa de um par
 // replacer/reviver simétrico porque JSON.stringify não sabe lidar com eles.
 //
@@ -213,20 +232,65 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
   }
 
   /**
-   * Carrega do backend no boot/reconexão. Retorna false se não havia nada
-   * salvo ainda. Passa o fencing atual (se `obterContextoLease` estiver
-   * injetado) para `carregarAuthState` — Checkpoint C3.5-B, item 11: o
-   * backend só devolve o ciphertext ao dono atual quando isto é informado
-   * (opcional/retrocompatível do lado dele).
+   * Carrega do backend no boot/reconexão/restore. Passa o fencing atual (se
+   * `obterContextoLease` estiver injetado) para `carregarAuthState` —
+   * Checkpoint C3.5-B, item 11: o backend só devolve o ciphertext ao dono
+   * atual quando isto é informado (opcional/retrocompatível do lado dele).
+   *
+   * Checkpoint C3.5-B.1 — contrato explícito, NUNCA um boolean puro:
+   *   { status: 'absent' }                    — nenhuma sessão persistida
+   *                                              (única situação em que um
+   *                                              pareamento novo é seguro)
+   *   { status: 'loaded', registered: bool }  — encontrado, decifrado,
+   *                                              parseado com sucesso
+   *   lança AuthStateLoadError                — QUALQUER outra falha
+   *                                              (fencing stale, erro HTTP,
+   *                                              decrypt AES-GCM, JSON
+   *                                              malformado, estrutura
+   *                                              inesperada) — nunca
+   *                                              colapsado em "absent".
+   * @returns {Promise<{status: 'absent'} | {status: 'loaded', registered: boolean}>}
    */
   async function carregar() {
-    const r = await backendClient.carregarAuthState(obterContextoLease?.());
-    if (!r?.authStateEncrypted) return false;
-    const plaintext = decriptar(r.authStateEncrypted, chave);
-    const dados = JSON.parse(plaintext, reviverBuffers);
-    creds = dados.creds ?? null;
-    keysPorTipo = dados.keys ?? {};
-    return !!creds;
+    try {
+      let r;
+      try {
+        r = await backendClient.carregarAuthState(obterContextoLease?.());
+      } catch (e) {
+        throw new AuthStateLoadError(e?.leaseStale ? "lease_stale" : "http_error");
+      }
+      if (!r || r.status === "absent" || !r.authStateEncrypted) {
+        return { status: "absent" };
+      }
+
+      let plaintext;
+      try {
+        plaintext = decriptar(r.authStateEncrypted, chave);
+      } catch {
+        throw new AuthStateLoadError("decrypt_error");
+      }
+
+      let dados;
+      try {
+        dados = JSON.parse(plaintext, reviverBuffers);
+      } catch {
+        throw new AuthStateLoadError("parse_error");
+      }
+
+      if (!dados || typeof dados !== "object" || !dados.creds || typeof dados.creds !== "object") {
+        throw new AuthStateLoadError("invalid_structure");
+      }
+
+      creds = dados.creds;
+      keysPorTipo = (dados.keys && typeof dados.keys === "object") ? dados.keys : {};
+      return { status: "loaded", registered: !!creds.registered };
+    } catch (e) {
+      if (e instanceof AuthStateLoadError) throw e;
+      // Rede de segurança — qualquer exceção inesperada aqui também precisa
+      // lançar tipado (nunca um `false`/`undefined` silencioso), mesmo sem
+      // categoria específica conhecida.
+      throw new AuthStateLoadError("unknown");
+    }
   }
 
   function inicializarCreds(credsIniciais) {

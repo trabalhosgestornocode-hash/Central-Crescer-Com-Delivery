@@ -49,8 +49,8 @@ describe("authState — adaptador sobre creds reais do Baileys", () => {
     // Um segundo adaptador, simulando o Gateway reiniciando e recarregando
     // do backend (boot/reconexão).
     const leitor = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV });
-    const carregou = await leitor.carregar();
-    assert.equal(carregou, true);
+    const resultado = await leitor.carregar();
+    assert.deepEqual(resultado, { status: "loaded", registered: false });
 
     const { creds: credsRecarregados } = leitor._snapshot();
     // noiseKey.private é um Buffer real em initAuthCreds() — a armadilha
@@ -67,11 +67,11 @@ describe("authState — adaptador sobre creds reais do Baileys", () => {
     assert.equal(credsRecarregados.registrationId, credsOriginais.registrationId);
   });
 
-  test("carregar devolve false quando não há nada salvo ainda", async () => {
+  test("carregar devolve {status:'absent'} quando não há nada salvo ainda", async () => {
     const backendClient = backendClientFalso();
     const adapter = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV });
-    const carregou = await adapter.carregar();
-    assert.equal(carregou, false);
+    const resultado = await adapter.carregar();
+    assert.deepEqual(resultado, { status: "absent" });
   });
 
   test("keys.set persiste no backend (chamada set(data) do SignalKeyStore)", async () => {

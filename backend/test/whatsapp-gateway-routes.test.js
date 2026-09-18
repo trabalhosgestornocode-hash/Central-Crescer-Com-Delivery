@@ -161,7 +161,7 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
     _resetarNonces();
     const rGet = await chamarAssinado("GET", "/internal/comunicacao/auth-state");
     assert.equal(rGet.status, 200);
-    assert.deepEqual(await rGet.json(), { authStateEncrypted: blob });
+    assert.deepEqual(await rGet.json(), { status: "present", authStateEncrypted: blob });
   });
 
   test("auth-state: POST sem authStateEncrypted é rejeitado com 400 (nunca grava lixo)", async () => {
@@ -191,20 +191,27 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
 
     _resetarNonces();
     const rGet = await chamarAssinado("GET", "/internal/comunicacao/auth-state");
-    assert.deepEqual(await rGet.json(), { authStateEncrypted: "v1:de-B" });
+    assert.deepEqual(await rGet.json(), { status: "present", authStateEncrypted: "v1:de-B" });
   });
 
-  test("GET auth-state sem nada salvo ainda devolve objeto vazio, não erro", async () => {
+  test("GET auth-state sem nada salvo ainda devolve status absent, não erro", async () => {
     const repoVazio = criarRepoEmMemoria();
     const app = express();
     app.use("/internal/comunicacao", express.raw({ type: "*/*", limit: 256 * 1024 }), exigirHmac(SEGREDO), criarWhatsappGatewayRouter({ repo: repoVazio, organizacaoId: "outra-org" }));
     const srv = await new Promise((resolve) => { const s = createServer(app).listen(0, () => resolve(s)); });
-    const url = `http://127.0.0.1:${srv.address().port}`;
-    const headers = assinarRequisicao({ segredo: SEGREDO, metodo: "GET", caminho: "/internal/comunicacao/auth-state", corpo: "" });
-    const r = await fetch(`${url}/internal/comunicacao/auth-state`, { headers });
-    assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), {});
-    srv.close();
+    // try/finally (correção de qualidade, mesmo padrão do resto da suíte
+    // deste checkpoint) — sem isto, uma falha de assertion deixava o
+    // servidor local aberto e travava o processo inteiro (achado ao vivo
+    // rodando esta correção: exit 124 por timeout, não uma falha normal).
+    try {
+      const url = `http://127.0.0.1:${srv.address().port}`;
+      const headers = assinarRequisicao({ segredo: SEGREDO, metodo: "GET", caminho: "/internal/comunicacao/auth-state", corpo: "" });
+      const r = await fetch(`${url}/internal/comunicacao/auth-state`, { headers });
+      assert.equal(r.status, 200);
+      assert.deepEqual(await r.json(), { status: "absent" });
+    } finally {
+      srv.close();
+    }
   });
 
   test("mensagem-recebida assinada repassa o evento para o provider (onMessage)", async () => {
