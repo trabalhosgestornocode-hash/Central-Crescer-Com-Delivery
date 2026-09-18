@@ -30,11 +30,19 @@ import * as contatosRepo from "./comunicacao.contatos.repo.js";
 import * as tentativasRepo from "./comunicacao.tentativas.repo.js";
 import { obterConfig, modoAtual } from "./comunicacao.config.js";
 import { avaliarEnvio } from "./comunicacao.policy.js";
-import { classificarErroEnvio, permiteRetryAutomatico } from "./comunicacao.entrega.js";
+import { classificarErroEnvio, backoffRetrySegundos } from "./comunicacao.entrega.js";
 import { dentroDaJanela, distribuirHorarios } from "./comunicacao.scheduler.js";
-import { TIPOS_ALERTA, STATUS_ALERTA, STATUS_MENSAGEM, SEVERIDADE, CLASSIFICACAO_ERRO } from "./comunicacao.constants.js";
+import { resolverHabilitacaoEmpresa } from "./comunicacao.habilitacao.js";
+import {
+  TIPOS_ALERTA, STATUS_ALERTA, STATUS_MENSAGEM, SEVERIDADE, CLASSIFICACAO_ERRO, MODOS,
+  RESULTADO_FINAL_ENVIO, DESTINO_SEM_ENVIO, bloqueioEhTransitorio,
+} from "./comunicacao.constants.js";
 
 const MIN = 60_000;
+/** Adiamento padrão de um bloqueio TRANSITÓRIO (o D.3-D calcula o próximo horário real: janela/timezone). */
+const ADIAMENTO_PADRAO_MS = 15 * MIN;
+/** Lease da fase SENDING — bem acima do timeout do provider (15s), para o worker vivo sempre finalizar antes de a varredura agir. */
+const LEASE_ENVIO_SEGUNDOS = 90;
 
 function formatarMensagemPendencia({ unidadeNome, empresaNome, diasPendentes, pendenciaMaisAntiga }) {
   const dias = diasPendentes === 1 ? "1 dia" : `${diasPendentes} dias`;
@@ -150,6 +158,7 @@ export async function agendarEnviosPendentes({ organizacaoId = null, tipoAlerta 
   return { agendados, semDestinatario };
 }
 
+
 /** A pendência que originou este alerta ainda existe, agora mesmo? Revalidação de última hora (teste 6). */
 async function pendenciaAindaExiste(alerta, deps) {
   const resultado = await pendencias({}, deps);
@@ -157,38 +166,91 @@ async function pendenciaAindaExiste(alerta, deps) {
     && (u.criticidade === SEVERIDADE.ATENCAO || u.criticidade === SEVERIDADE.CRITICO));
 }
 
+/** Diagnóstico/auditoria nunca pode derrubar nem reclassificar um envio já decidido. */
+async function melhorEsforco(fn) {
+  try { return await fn(); } catch (e) { console.error("[comunicacao] registro auxiliar falhou:", String(e?.message ?? e).slice(0, 200)); return null; }
+}
+const sanitizarErro = (e) => String(e?.message ?? e).slice(0, 300);
+
 /**
  * A FRONTEIRA (ajuste aprovado): claim atômico + Policy Engine +
  * WhatsAppService. Não é chamada em loop por este processo — quem chama
- * em intervalo é o worker persistente do Checkpoint C. Segura para
+ * em intervalo é o worker persistente (ainda não existe). Segura para
  * chamar manualmente/via teste quantas vezes quiser.
  *
- * `verificarPendenciaAindaExiste` é injetável (mesmo espírito do `deps`
- * usado em todo o módulo) — em produção é `pendenciaAindaExiste` (chama o
- * motor real do Painel Administrativo); os testes do Checkpoint B injetam
- * uma versão controlada para provar a revalidação pós-claim (teste 6) sem
- * precisar montar uma frota real inteira.
- * @param {{limite?: number, worker?: string, whatsAppService: import('./whatsapp.service.js').ReturnType, agora?: Date, verificarPendenciaAindaExiste?: (alerta: object, deps: object) => Promise<boolean>}} params
+ * PORTÃO DE MODO (D.3-C): só processa com modo === NORMAL. Em DISABLED,
+ * REACTIVE_ONLY ou qualquer valor desconhecido NÃO reivindica nada — as
+ * mensagens ficam SCHEDULED, intactas, esperando o operador religar. (O
+ * Policy Engine ainda bloqueia por modo dentro de cada job, como defesa em
+ * profundidade contra o modo mudar entre o portão e a avaliação.)
+ *
+ * `verificarPendenciaAindaExiste` e `resolverHabilitacao` são injetáveis
+ * (mesmo espírito do `deps` usado em todo o módulo) — em produção são o
+ * motor real do Painel Administrativo e a habilitação FECHADA por padrão
+ * (comunicacao.habilitacao.js); os testes injetam versões controladas.
+ * @param {{limite?: number, worker?: string, whatsAppService: import('./whatsapp.service.js').ReturnType, agora?: Date, adiamentoMs?: number, verificarPendenciaAindaExiste?: (alerta: object, deps: object) => Promise<boolean>, resolverHabilitacao?: (params: {organizacaoId: string, tipoAlerta: string}, deps: object) => Promise<import('./comunicacao.habilitacao.js').Habilitacao>}} params
  */
-export async function processarProximoLote({ limite = 10, worker = "manual", whatsAppService, agora = new Date(), verificarPendenciaAindaExiste = pendenciaAindaExiste }, deps = {}) {
+export async function processarProximoLote({
+  limite = 10, worker = "manual", whatsAppService, agora = new Date(), adiamentoMs = ADIAMENTO_PADRAO_MS,
+  verificarPendenciaAindaExiste = pendenciaAindaExiste, resolverHabilitacao = resolverHabilitacaoEmpresa,
+}, deps = {}) {
+  if ((await modoAtual(deps)) !== MODOS.NORMAL) return [];
+
   const jobs = await filaRepo.claimJobs({ limite, worker }, deps);
   const resultados = [];
-
   for (const job of jobs) {
-    resultados.push(await processarUmJob(job, { whatsAppService, agora, verificarPendenciaAindaExiste }, deps));
+    try {
+      resultados.push(await processarJobReivindicado(job, { whatsAppService, agora, adiamentoMs, verificarPendenciaAindaExiste, resolverHabilitacao }, deps));
+    } catch (e) {
+      // Um job com erro interno NÃO derruba o lote nem é reenviado às cegas:
+      // se estava antes de SENDING, o lease expira e ele é reivindicado de
+      // novo com segurança; se já estava em SENDING, a varredura o move para
+      // DELIVERY_UNKNOWN. Nos dois casos, nunca um retry automático de envio.
+      resultados.push({ id: job.id, resultado: "ERRO_INTERNO", erro: sanitizarErro(e) });
+    }
   }
   return resultados;
 }
 
-async function processarUmJob(job, { whatsAppService, agora, verificarPendenciaAindaExiste }, deps) {
+const POSSE_PERDIDA = (job) => ({ id: job.id, resultado: "POSSE_PERDIDA" });
+
+/**
+ * Processa UM job já reivindicado. Exportado para os testes de concorrência
+ * (worker antigo que "acorda" com um job que já não é dele); produção só o
+ * alcança via `processarProximoLote`.
+ *
+ * CLAIM × ATTEMPT (migration 087):
+ *   - O job chega com o token do CLAIM (`claimed_by` + `claim_geracao`). Tudo
+ *     que acontece em PROCESSING (revalidação, política, adiamento, bloqueio,
+ *     cancelamento) é CAS com esse token e NÃO consome tentativa: um
+ *     adiamento gera um claim e ZERO attempts.
+ *   - O ATTEMPT só nasce em `iniciarEnvio` (PROCESSING -> SENDING,
+ *     `tentativas`+1). O provider só é chamado DEPOIS de `iniciarEnvio` devolver
+ *     a linha; `null` de qualquer CAS = este worker perdeu a posse => ABORTA sem
+ *     efeito externo (nunca chama o provider, nunca sobrescreve outro attempt).
+ */
+export async function processarJobReivindicado(job, { whatsAppService, agora, adiamentoMs, verificarPendenciaAindaExiste, resolverHabilitacao }, deps = {}) {
+  const claim = { id: job.id, worker: job.claimed_by, claimGeracao: job.claim_geracao };
+
+  // 0) attempts reais já esgotados (política de retries de falha PRÉ-ENVIO):
+  //    não há mais o que tentar -> FAILED. (BLOCKED é só veto de política.)
+  if (job.tentativas >= job.max_tentativas) {
+    const r = await filaRepo.encerrarProcessamento({ ...claim, destino: DESTINO_SEM_ENVIO.FAILED, motivo: "TENTATIVAS_ESGOTADAS" }, deps);
+    if (!r) return POSSE_PERDIDA(job);
+    if (job.alerta_id) await melhorEsforco(() => alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.FAILED, deps));
+    return { id: job.id, resultado: "FALHOU_TENTATIVAS_ESGOTADAS" };
+  }
+
   // 1) revalida a pendência (teste 6) — se o alerta já não existe mais como
-  //    problema real, cancela o job em vez de mandar um aviso obsoleto.
+  //    problema real, cancela ESTE job (com o token do claim) em vez de mandar um aviso obsoleto.
   if (job.alerta_id) {
     const alerta = await alertasRepo.obterAlerta(job.alerta_id, deps);
     if (alerta && alerta.status !== STATUS_ALERTA.CANCELLED && alerta.status !== STATUS_ALERTA.RESOLVED) {
       const aindaExiste = await verificarPendenciaAindaExiste(alerta, deps);
       if (!aindaExiste) {
-        await filaRepo.cancelarPendentesPorAlerta(alerta.id, deps); // cancela este e qualquer outro pendente do mesmo alerta
+        const r = await filaRepo.encerrarProcessamento({ ...claim, destino: DESTINO_SEM_ENVIO.CANCELLED, motivo: "PENDENCIA_RESOLVIDA" }, deps);
+        if (!r) return POSSE_PERDIDA(job);
+        await filaRepo.cancelarPendentesPorAlerta(alerta.id, deps); // qualquer OUTRO pendente (SCHEDULED) do mesmo alerta
         await alertasRepo.resolverAlerta(alerta.id, deps);
         return { id: job.id, resultado: "CANCELADO_PENDENCIA_RESOLVIDA" };
       }
@@ -196,12 +258,14 @@ async function processarUmJob(job, { whatsAppService, agora, verificarPendenciaA
   }
 
   // 2) monta o snapshot do Policy Engine (100% dados já resolvidos — nada de I/O dentro de avaliarEnvio).
-  const [modo, janelas, cooldowns, limites, contato, perfil, statusProvider] = await Promise.all([
+  const [modo, janelas, cooldowns, limites, contato, perfil, statusProvider, habilitacao] = await Promise.all([
     modoAtual(deps), obterConfig("janelas", deps), obterConfig("cooldowns_horas", deps),
     obterConfig("limites", deps),
     job.contato_id ? contatosRepo.obterContato(job.contato_id, deps) : null,
     job.destinatario_perfil_id ? contatosRepo.obterPerfilOperacional(job.destinatario_perfil_id, deps) : null,
-    whatsAppService.getStatus(),
+    // Gateway fora do ar NÃO é erro do job: é "provider offline" (bloqueio transitório).
+    Promise.resolve().then(() => whatsAppService.getStatus()).catch(() => ({ conectado: false })),
+    resolverHabilitacao({ organizacaoId: job.organizacao_id, tipoAlerta: job.tipo }, deps),
   ]);
 
   const vinculoValido = job.destinatario_perfil_id
@@ -218,81 +282,128 @@ async function processarUmJob(job, { whatsAppService, agora, verificarPendenciaA
   const snapshot = {
     modo, ehProativo: true,
     contatoExiste: !!contato,
-    telefoneVerificado: contato?.verificado ?? false,
-    optOut: contato?.opt_out ?? false,
+    telefoneVerificado: contato?.verificado,
+    optOut: contato?.opt_out,
+    consentimento: contato?.consentimento,
     destinatarioAtivo: perfil?.ativo === true,
     vinculoValido,
+    empresaHabilitada: habilitacao?.empresaHabilitada,
+    tipoPermitido: habilitacao?.tipoPermitido,
     pendenciaAindaExiste: true, // já revalidado no passo 1 — chega aqui só se ainda existe (ou não é alerta)
     duplicado,
     cooldownAtivo: enviosRecentes > 0,
     dentroDaJanela: dentroDaJanela(agora, janelas),
     rateLimitExcedido: enviosHoje >= (limites.max_por_contato_por_dia ?? Infinity) || proativosUltimoMinuto >= (limites.max_proativas_por_minuto ?? Infinity),
-    providerConectado: !!statusProvider?.conectado,
+    providerConectado: statusProvider?.conectado === true,
   };
 
   const decisao = avaliarEnvio(snapshot);
 
-  await auditar({
-    acao: decisao.allowed ? ACOES.COMUNICACAO_ENVIO_PERMITIDO : ACOES.COMUNICACAO_ENVIO_BLOQUEADO,
-    atorTipo: "sistema", organizacaoId: job.organizacao_id,
-    entidade: "comunicacao_mensagens", entidadeId: job.id,
-    detalhes: { motivo: decisao.reason, tipo: job.tipo },
-  });
-
-  // Fecha qualquer tentativa órfã (worker anterior morreu com o lease
-  // expirado — só chegamos aqui se isso já expirou, ver claim) e abre a
-  // tentativa DESTA vez. `job.tentativas` já vem incrementado pela RPC de
-  // claim — é o número exato desta tentativa.
-  await tentativasRepo.abandonarTentativasEmAberto(job.id, deps);
-  await tentativasRepo.registrarTentativaIniciada({
-    mensagemId: job.id, tentativaNumero: job.tentativas, workerId: job.claimed_by ?? "manual", iniciadoEm: job.claimed_at ?? new Date().toISOString(),
-  }, deps);
-
   if (!decisao.allowed) {
-    await filaRepo.marcarBloqueado(job.id, { motivo: decisao.reason }, deps);
-    if (job.alerta_id) await alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.BLOCKED, deps);
-    await tentativasRepo.registrarTentativaFinalizada({ mensagemId: job.id, tentativaNumero: job.tentativas, resultado: STATUS_MENSAGEM.BLOCKED }, deps);
+    // Condição TRANSITÓRIA (janela, cooldown, rate limit, provider offline,
+    // modo desligado): ADIA — volta a SCHEDULED com `disponivel_em` futuro, SEM
+    // consumir attempt e SEM linha em comunicacao_tentativas (nada foi tentado).
+    // Veto PERMANENTE (sem consentimento, opt-out, sem vínculo, empresa/tipo
+    // não habilitados...): BLOCKED terminal — só uma ação humana muda.
+    const transitorio = bloqueioEhTransitorio(decisao.reason);
+    const r = await filaRepo.encerrarProcessamento({
+      ...claim,
+      destino: transitorio ? DESTINO_SEM_ENVIO.SCHEDULED : DESTINO_SEM_ENVIO.BLOCKED,
+      motivo: decisao.reason,
+      disponivelEm: transitorio ? new Date(agora.getTime() + adiamentoMs) : null,
+    }, deps);
+    if (!r) return POSSE_PERDIDA(job);
+
+    await auditar({
+      acao: ACOES.COMUNICACAO_ENVIO_BLOQUEADO, atorTipo: "sistema", organizacaoId: job.organizacao_id,
+      entidade: "comunicacao_mensagens", entidadeId: job.id,
+      detalhes: { motivo: decisao.reason, tipo: job.tipo, transitorio, statusResultante: r.status },
+    });
+    if (transitorio) return { id: job.id, resultado: "ADIADO", motivo: decisao.reason };
+    if (job.alerta_id) await melhorEsforco(() => alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.BLOCKED, deps));
     return { id: job.id, resultado: "BLOQUEADO", motivo: decisao.reason };
   }
 
-  // PROCESSING -> SENDING ANTES da chamada externa: é o rastro durável que
-  // permite distinguir, depois de um crash, "nunca tentei" (PROCESSING) de
-  // "estava tentando quando morri" (SENDING) — ver comunicacao.entrega.js.
-  await filaRepo.marcarEnviando(job.id, deps);
+  // PROCESSING -> SENDING ANTES da chamada externa, com CAS: aqui NASCE o
+  // attempt. É o rastro durável que distingue "nunca tentei" (PROCESSING) de
+  // "estava tentando quando morri" (SENDING) — e a PROVA de que este worker
+  // ainda é o dono do claim. Sem a linha de volta, o provider NÃO é chamado.
+  const emEnvio = await filaRepo.iniciarEnvio({ ...claim, leaseSegundos: LEASE_ENVIO_SEGUNDOS }, deps);
+  if (!emEnvio) return POSSE_PERDIDA(job);
 
+  // Token do ATTEMPT: (claim_geracao, tentativas da linha devolvida).
+  const attempt = { ...claim, tentativa: emEnvio.tentativas };
+  await melhorEsforco(() => tentativasRepo.registrarTentativaIniciada({
+    mensagemId: job.id, tentativaNumero: emEnvio.tentativas, workerId: job.claimed_by ?? "manual", iniciadoEm: new Date().toISOString(),
+  }, deps));
+  await auditar({
+    acao: ACOES.COMUNICACAO_ENVIO_PERMITIDO, atorTipo: "sistema", organizacaoId: job.organizacao_id,
+    entidade: "comunicacao_mensagens", entidadeId: job.id, detalhes: { motivo: null, tipo: job.tipo, tentativa: emEnvio.tentativas },
+  });
+
+  let envio;
   try {
-    const envio = await whatsAppService.enviarTexto({
+    envio = await whatsAppService.enviarTexto({
       telefoneE164: contato.telefone_e164, texto: job.conteudo, idempotencyKey: job.idempotency_key,
     });
-    await filaRepo.marcarEnviado(job.id, { providerMessageId: envio.providerMessageId }, deps);
-    if (job.alerta_id) await alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.SENT, deps);
-    await tentativasRepo.registrarTentativaFinalizada({ mensagemId: job.id, tentativaNumero: job.tentativas, resultado: STATUS_MENSAGEM.SENT, providerMessageId: envio.providerMessageId }, deps);
-    return { id: job.id, resultado: "ENVIADO" };
   } catch (e) {
-    const classificacao = classificarErroEnvio(e);
-    const erroSanitizado = e?.message ?? String(e); // provider/FakeProvider nunca deveria colocar segredo aqui — ver comunicacao_tentativas.erro_sanitizado
-
-    // INCERTO (ajuste 6): NUNCA reenvio automático — nem SCHEDULED, nem
-    // FAILED (que também poderia ser mal-lido como "definitivamente não
-    // chegou"). Vai para DELIVERY_UNKNOWN e para por aqui até reconciliação
-    // (fora do escopo do B.1).
-    if (!permiteRetryAutomatico(classificacao) && classificacao === CLASSIFICACAO_ERRO.INCERTO) {
-      await filaRepo.marcarEntregaIncerta(job.id, { erro: erroSanitizado }, deps);
-      await tentativasRepo.registrarTentativaFinalizada({ mensagemId: job.id, tentativaNumero: job.tentativas, resultado: STATUS_MENSAGEM.DELIVERY_UNKNOWN, erroClassificacao: classificacao, erroSanitizado }, deps);
-      await auditar({ acao: ACOES.COMUNICACAO_ENVIO_FALHOU, atorTipo: "sistema", organizacaoId: job.organizacao_id, entidade: "comunicacao_mensagens", entidadeId: job.id, detalhes: { erro: erroSanitizado, classificacao, statusResultante: STATUS_MENSAGEM.DELIVERY_UNKNOWN } });
-      return { id: job.id, resultado: "ENTREGA_INCERTA" };
-    }
-
-    const permanente = classificacao === CLASSIFICACAO_ERRO.PERMANENTE;
-    const r = await filaRepo.marcarFalha(job.id, { erro: erroSanitizado, permanente }, deps);
-    // resultado da TENTATIVA é sempre FAILED aqui (ela falhou) — se o JOB
-    // como um todo volta para SCHEDULED (retry) ou termina em FAILED é
-    // decisão separada, já aplicada por marcarFalha acima (`r.status`).
-    await tentativasRepo.registrarTentativaFinalizada({ mensagemId: job.id, tentativaNumero: job.tentativas, resultado: STATUS_MENSAGEM.FAILED, erroClassificacao: classificacao, erroSanitizado }, deps);
-    await auditar({ acao: ACOES.COMUNICACAO_ENVIO_FALHOU, atorTipo: "sistema", organizacaoId: job.organizacao_id, entidade: "comunicacao_mensagens", entidadeId: job.id, detalhes: { erro: erroSanitizado, classificacao, statusResultante: r.status } });
-    if (job.alerta_id && r.status === STATUS_MENSAGEM.FAILED) await alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.FAILED, deps);
-    return { id: job.id, resultado: r.status === STATUS_MENSAGEM.FAILED ? "FALHOU_DEFINITIVO" : "FALHOU_RETRY" };
+    return resolverFalhaDeEnvio(job, attempt, e, deps);
   }
+
+  // O provider CONFIRMOU o envio. Daqui em diante NENHUMA falha de
+  // registro pode reclassificar o resultado nem provocar retry: o pior caso
+  // é a linha ficar em SENDING e a varredura movê-la para DELIVERY_UNKNOWN —
+  // nunca um segundo envio.
+  const providerMessageId = envio?.providerMessageId ?? null;
+  let finalizada = null;
+  try {
+    finalizada = await filaRepo.finalizarEnvio({ ...attempt, resultado: RESULTADO_FINAL_ENVIO.SENT, providerMessageId }, deps);
+  } catch (e) {
+    console.error("[comunicacao] envio confirmado mas o registro SENT falhou (fica SENDING; a varredura o marca DELIVERY_UNKNOWN):", sanitizarErro(e));
+  }
+  await melhorEsforco(() => tentativasRepo.registrarTentativaFinalizada({ mensagemId: job.id, tentativaNumero: attempt.tentativa, resultado: STATUS_MENSAGEM.SENT, providerMessageId }, deps));
+  if (job.alerta_id) await melhorEsforco(() => alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.SENT, deps));
+  return { id: job.id, resultado: "ENVIADO", registrado: !!finalizada };
+}
+
+/** Falha do provider: classifica e grava com CAS do ATTEMPT. NUNCA faz retry a partir de INCERTO. */
+async function resolverFalhaDeEnvio(job, attempt, e, deps) {
+  const classificacao = classificarErroEnvio(e);
+  const erroSanitizado = sanitizarErro(e);
+
+  // INCERTO (na dúvida, INCERTO): NUNCA reenvio automático — nem SCHEDULED,
+  // nem FAILED (que também poderia ser mal-lido como "definitivamente não
+  // chegou"). Vai para DELIVERY_UNKNOWN e para por aqui até reconciliação.
+  const resultado = classificacao === CLASSIFICACAO_ERRO.INCERTO ? RESULTADO_FINAL_ENVIO.DELIVERY_UNKNOWN
+    : classificacao === CLASSIFICACAO_ERRO.PERMANENTE ? RESULTADO_FINAL_ENVIO.FAILED
+      : RESULTADO_FINAL_ENVIO.RETRY; // RETRYAVEL: falha PRÉ-ENVIO comprovada
+
+  let r = null;
+  try {
+    r = await filaRepo.finalizarEnvio({
+      ...attempt, resultado, erro: erroSanitizado,
+      retryAposSegundos: resultado === RESULTADO_FINAL_ENVIO.RETRY ? backoffRetrySegundos(attempt.tentativa) : null,
+    }, deps);
+  } catch (err) {
+    // Sem conseguir gravar, a linha fica SENDING -> a varredura a move para
+    // DELIVERY_UNKNOWN (conservador, mesmo para uma falha pré-envio).
+    console.error("[comunicacao] falha ao gravar o resultado do envio:", sanitizarErro(err));
+  }
+
+  const statusFinal = r?.status ?? null;
+  const tentativaResultado = classificacao === CLASSIFICACAO_ERRO.INCERTO ? STATUS_MENSAGEM.DELIVERY_UNKNOWN : STATUS_MENSAGEM.FAILED;
+  await melhorEsforco(() => tentativasRepo.registrarTentativaFinalizada({ mensagemId: job.id, tentativaNumero: attempt.tentativa, resultado: tentativaResultado, erroClassificacao: classificacao, erroSanitizado }, deps));
+  await auditar({
+    acao: ACOES.COMUNICACAO_ENVIO_FALHOU, atorTipo: "sistema", organizacaoId: job.organizacao_id,
+    entidade: "comunicacao_mensagens", entidadeId: job.id,
+    detalhes: { erro: erroSanitizado, classificacao, statusResultante: statusFinal },
+  });
+
+  if (classificacao === CLASSIFICACAO_ERRO.INCERTO) return { id: job.id, resultado: "ENTREGA_INCERTA" };
+  if (statusFinal === STATUS_MENSAGEM.FAILED && job.alerta_id) {
+    await melhorEsforco(() => alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.FAILED, deps));
+  }
+  return { id: job.id, resultado: statusFinal === STATUS_MENSAGEM.SCHEDULED ? "FALHOU_RETRY" : "FALHOU_DEFINITIVO" };
 }
 
 /**

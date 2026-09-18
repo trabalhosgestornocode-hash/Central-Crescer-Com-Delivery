@@ -80,9 +80,11 @@ describe("comunicacao.fila — claim atômico e idempotência", { skip: PULAR_IN
     if (!migracaoOk) return t.skip("migration 082 ainda não aplicada — pulando.");
     const chave = `falha-permanente-${Date.now()}`;
     const job = await filaRepo.agendarMensagem({ organizacaoId: orgId, contatoId: null, tipo: "teste_falha", conteudo: "x", idempotencyKey: chave, disponivelEm: new Date(Date.now() - 60_000) });
-    await filaRepo.claimJobs({ limite: 1, worker: "w" }); // marca PROCESSING
-    const r = await filaRepo.marcarFalha(job.id, { erro: "erro definitivo", permanente: true });
+    const [c] = await filaRepo.claimJobs({ limite: 1, worker: "w" }); // marca PROCESSING
+    const e = await filaRepo.iniciarEnvio({ id: job.id, worker: "w", claimGeracao: c.claim_geracao });
+    const r = await filaRepo.finalizarEnvio({ id: job.id, worker: "w", claimGeracao: c.claim_geracao, tentativa: e.tentativas, resultado: "FAILED", erro: "erro definitivo" });
     assert.equal(r.status, STATUS_MENSAGEM.FAILED);
+    assert.equal(r.erro_permanente, true);
 
     const reivindicado = await filaRepo.claimJobs({ limite: 10, worker: "w2" });
     assert.ok(!reivindicado.some((j) => j.id === job.id), "job FAILED foi reivindicado de novo — loop infinito");
@@ -94,10 +96,11 @@ describe("comunicacao.fila — claim atômico e idempotência", { skip: PULAR_IN
     if (!migracaoOk) return t.skip("migration 082 ainda não aplicada — pulando.");
     const chave = `falha-transitoria-${Date.now()}`;
     const job = await filaRepo.agendarMensagem({ organizacaoId: orgId, contatoId: null, tipo: "teste_falha", conteudo: "x", idempotencyKey: chave, disponivelEm: new Date(Date.now() - 60_000) });
-    await filaRepo.claimJobs({ limite: 1, worker: "w" });
-    const r = await filaRepo.marcarFalha(job.id, { erro: "timeout" });
+    const [c] = await filaRepo.claimJobs({ limite: 1, worker: "w" });
+    const e = await filaRepo.iniciarEnvio({ id: job.id, worker: "w", claimGeracao: c.claim_geracao });
+    const r = await filaRepo.finalizarEnvio({ id: job.id, worker: "w", claimGeracao: c.claim_geracao, tentativa: e.tentativas, resultado: "RETRY", erro: "pre-envio", retryAposSegundos: 30 });
     assert.equal(r.status, STATUS_MENSAGEM.SCHEDULED);
-    assert.ok(r.disponivelEmMs > 0);
+    assert.ok(new Date(r.disponivel_em).getTime() > Date.now(), "o retry precisa ficar no FUTURO (backoff)");
 
     // não reivindicável IMEDIATAMENTE (claim só pega disponivel_em <= now()).
     const reivindicadoAgora = await filaRepo.claimJobs({ limite: 10, worker: "w2" });

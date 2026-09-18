@@ -133,8 +133,14 @@ describe("BaileysGatewayProvider — contrato e classificação de erro", () => 
     atrasoMs = 0;
   });
 
-  test("erro de rede (gateway inalcançável) -> preEnvio=true -> RETRYAVEL", async () => {
-    const provider = criarBaileysGatewayProvider({ gatewayUrl: "http://127.0.0.1:1", segredoHmac: SEGREDO, timeoutMs: 2000 });
+  test("erro de rede (gateway inalcançável: conexão recusada de verdade) -> preEnvio=true -> RETRYAVEL", async () => {
+    // Porta livre que foi FECHADA: gera ECONNREFUSED real. (A porta 1 não serve:
+    // o fetch a proíbe antes de conectar — "bad port" — o que mascarava este caso.)
+    const tmp = createServer();
+    await new Promise((resolve) => tmp.listen(0, "127.0.0.1", resolve));
+    const portaFechada = tmp.address().port;
+    await new Promise((resolve) => tmp.close(resolve));
+    const provider = criarBaileysGatewayProvider({ gatewayUrl: `http://127.0.0.1:${portaFechada}`, segredoHmac: SEGREDO, timeoutMs: 2000 });
     await assert.rejects(
       () => provider.sendText({ telefoneE164: "+5511999990000", texto: "oi", idempotencyKey: "k1" }),
       (e) => { assert.equal(e.preEnvio, true); assert.equal(classificarErroEnvio(e), CLASSIFICACAO_ERRO.RETRYAVEL); return true; },

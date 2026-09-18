@@ -199,11 +199,18 @@ export async function resolverContatosDaUnidade({ organizacaoId, unidadeId }, de
   const perfilIds = [...new Set((uu.data ?? []).map((r) => r.perfil_id).filter(Boolean))];
   if (!perfilIds.length) return [];
 
+  // FAIL-CLOSED (D.3-C): só é candidato a mensagem PROATIVA quem tem
+  // consentimento EXPLÍCITO e telefone verificado e não pediu para parar.
+  // Ter o telefone cadastrado não basta. (A decisão final continua sendo do
+  // Policy Engine no momento do envio — isto só evita AGENDAR para quem já
+  // se sabe que não pode receber.)
   const { data, error } = await db.from("contatos_whatsapp_perfis")
-    .select("contato_id, perfil_operacional_id, principal, created_at, contatos_whatsapp!inner(telefone_e164, opt_out)")
+    .select("contato_id, perfil_operacional_id, principal, created_at, contatos_whatsapp!inner(telefone_e164, opt_out, consentimento, verificado)")
     .in("perfil_operacional_id", perfilIds)
     .eq("ativo", true)
     .eq("contatos_whatsapp.opt_out", false)
+    .eq("contatos_whatsapp.consentimento", true)
+    .eq("contatos_whatsapp.verificado", true)
     .order("principal", { ascending: false })
     .order("created_at", { ascending: true });
   if (error) throw ApiError.internal(error.message);

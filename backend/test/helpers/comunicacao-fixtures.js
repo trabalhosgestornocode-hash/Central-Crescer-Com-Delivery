@@ -38,12 +38,19 @@ export async function criarUnidade(organizacaoId, nome = "Unidade Teste") {
 }
 
 export async function vincularUsuarioUnidade({ perfilId, organizacaoId, unidadeId, papel = "viewer" }) {
+  // `usuario_id` referencia auth.users (a CONTA); `perfil_id` referencia
+  // perfis_operacionais. Os dois nunca são o mesmo id — a conta vem do perfil.
+  const { data: perfil, error: ePerfil } = await supabase.from("perfis_operacionais")
+    .select("conta_id").eq("id", perfilId).single();
+  if (ePerfil) throw new Error(`Falha ao ler perfis_operacionais: ${ePerfil.message}`);
+  const contaId = perfil.conta_id;
+
   const { error: eOrg } = await supabase.from("usuarios_organizacoes")
-    .insert({ usuario_id: perfilId, organizacao_id: organizacaoId, papel, perfil_id: perfilId, ativo: true });
+    .insert({ usuario_id: contaId, organizacao_id: organizacaoId, papel, perfil_id: perfilId, ativo: true });
   if (eOrg) throw new Error(`Falha ao vincular usuarios_organizacoes: ${eOrg.message}`);
   if (unidadeId) {
     const { error: eUni } = await supabase.from("usuarios_unidades")
-      .insert({ usuario_id: perfilId, unidade_id: unidadeId, perfil_id: perfilId, ativo: true });
+      .insert({ usuario_id: contaId, unidade_id: unidadeId, perfil_id: perfilId, ativo: true });
     if (eUni) throw new Error(`Falha ao vincular usuarios_unidades: ${eUni.message}`);
   }
 }

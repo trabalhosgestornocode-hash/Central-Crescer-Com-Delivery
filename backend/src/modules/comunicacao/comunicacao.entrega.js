@@ -55,3 +55,15 @@ export function classificarErroEnvio(erro) {
 export function permiteRetryAutomatico(classificacao) {
   return classificacao === CLASSIFICACAO_ERRO.RETRYAVEL;
 }
+
+/**
+ * Backoff exponencial (em segundos) para um retry de falha PRÉ-ENVIO
+ * comprovada — `tentativas` é o número da tentativa que acabou de falhar
+ * (1 = primeira). Função pura; o teto evita esperas absurdas.
+ * @param {number} tentativas
+ * @param {{baseSegundos?: number, maxSegundos?: number}} [opts]
+ */
+export function backoffRetrySegundos(tentativas, { baseSegundos = 30, maxSegundos = 1800 } = {}) {
+  const n = Math.max(1, Number.isFinite(tentativas) ? Math.floor(tentativas) : 1);
+  return Math.min(maxSegundos, baseSegundos * 2 ** (n - 1));
+}

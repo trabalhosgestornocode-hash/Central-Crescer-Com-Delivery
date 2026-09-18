@@ -52,9 +52,23 @@ export async function obterConfig(chave, deps = {}) {
   return data.valor;
 }
 
+const MODOS_VALIDOS = new Set(Object.values(MODOS));
+
+/**
+ * Normaliza o valor lido de `modo`: qualquer coisa fora de MODOS (null,
+ * número, string com aspas embutidas de uma dupla codificação JSON, valor
+ * digitado à mão...) vira DISABLED. FAIL-CLOSED — nunca "provavelmente
+ * NORMAL". A mesma allowlist existe em comunicacao.policy.js (defesa em
+ * profundidade).
+ * @param {unknown} valor
+ */
+export function normalizarModo(valor) {
+  return MODOS_VALIDOS.has(/** @type {any} */ (valor)) ? /** @type {string} */ (valor) : MODOS.DISABLED;
+}
+
 /** @param {{supabase?: any}} [deps] */
 export async function modoAtual(deps = {}) {
-  return obterConfig("modo", deps);
+  return normalizarModo(await obterConfig("modo", deps));
 }
 
 /**
@@ -69,9 +83,14 @@ export async function definirModo(novoModo, { atorPerfilId = null, atorId = null
     throw ApiError.badRequest(`Modo inválido: ${novoModo}`, { codigo: "MODO_INVALIDO" });
   }
   const db = deps.supabase ?? supabase;
-  const anterior = await modoAtual(deps);
+  const anterior = await obterConfig("modo", deps); // valor BRUTO — a auditoria mostra até um valor corrompido
+  // `valor` é jsonb: o supabase-js já serializa a string para um jsonb
+  // string. NÃO usar JSON.stringify aqui — isso gravava `"\"NORMAL\""`
+  // (aspas embutidas), e como a política só comparava com DISABLED/
+  // REACTIVE_ONLY, definirModo(DISABLED) NÃO desligava o envio (provado
+  // contra banco real no D.3).
   const { error } = await db.from("comunicacao_configuracoes")
-    .upsert({ chave: "modo", valor: JSON.stringify(novoModo), atualizado_em: new Date().toISOString(), atualizado_por: atorPerfilId }, { onConflict: "chave" });
+    .upsert({ chave: "modo", valor: novoModo, atualizado_em: new Date().toISOString(), atualizado_por: atorPerfilId }, { onConflict: "chave" });
   if (error) throw ApiError.internal(error.message);
 
   await auditar({

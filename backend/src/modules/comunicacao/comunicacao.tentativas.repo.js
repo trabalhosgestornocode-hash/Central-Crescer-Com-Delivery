@@ -67,3 +67,18 @@ export async function listarTentativas(mensagemId, deps = {}) {
   if (error) throw ApiError.internal(error.message);
   return data ?? [];
 }
+
+/**
+ * Fecha como DELIVERY_UNKNOWN o attempt que ficou aberto quando a varredura
+ * (comunicacao_expirar_entregas_incertas) move a mensagem para
+ * DELIVERY_UNKNOWN. Só toca uma linha AINDA aberta do attempt indicado —
+ * nunca sobrescreve um resultado já gravado. Trilha de auditoria.
+ * @param {{mensagemId: string, tentativaNumero: number, erroSanitizado?: string|null}} params
+ */
+export async function fecharComoIncerta({ mensagemId, tentativaNumero, erroSanitizado = null }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { error } = await db.from("comunicacao_tentativas")
+    .update({ finalizado_em: new Date().toISOString(), resultado: "DELIVERY_UNKNOWN", erro_classificacao: "INCERTO", erro_sanitizado: erroSanitizado })
+    .eq("mensagem_id", mensagemId).eq("tentativa_numero", tentativaNumero).is("finalizado_em", null);
+  if (error) throw ApiError.internal(error.message);
+}

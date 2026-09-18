@@ -72,7 +72,8 @@ describe("comunicacao.fila — lease e recuperação de worker abandonado", { sk
     assert.ok(b, "job abandonado (PROCESSING, lease expirado) deveria ter sido recuperado");
     assert.equal(b.id, job.id);
     assert.equal(b.claimed_by, "worker-vivo");
-    assert.equal(b.tentativas, 2, "cada claim (inclusive o de recuperação) conta como uma tentativa");
+    assert.equal(b.claim_geracao, 2, "cada claim (inclusive o de recuperação) gera um token de claim novo");
+    assert.equal(b.tentativas, 0, "o claim NÃO consome tentativa: nenhum envio foi tentado");
 
     await supabase.from("comunicacao_mensagens").delete().eq("id", job.id);
   });
@@ -80,9 +81,10 @@ describe("comunicacao.fila — lease e recuperação de worker abandonado", { sk
   test("teste G — job SENDING com lease expirado NUNCA é reivindicado pelo claim normal (vira DELIVERY_UNKNOWN só pela varredura dedicada)", async (t) => {
     if (!migracaoOk) return t.skip("migration 082 ainda não aplicada — pulando.");
     const job = await novoJob(`lease-g-${Date.now()}`);
-    await filaRepo.claimJobs({ limite: 1, worker: "worker-x", leaseSegundos: 1 });
-    // simula "estava chamando o provider quando morreu": PROCESSING -> SENDING.
-    await filaRepo.marcarEnviando(job.id);
+    const [x] = await filaRepo.claimJobs({ limite: 1, worker: "worker-x", leaseSegundos: 30 });
+    // simula "estava chamando o provider quando morreu": PROCESSING -> SENDING (CAS com token).
+    const emEnvio = await filaRepo.iniciarEnvio({ id: job.id, worker: "worker-x", claimGeracao: x.claim_geracao, leaseSegundos: 1 });
+    assert.equal(emEnvio?.status, STATUS_MENSAGEM.SENDING);
     await new Promise((r) => setTimeout(r, 1200)); // lease expira
 
     const reivindicado = await filaRepo.claimJobs({ limite: 10, worker: "worker-y", leaseSegundos: 60 });
@@ -111,20 +113,27 @@ describe("comunicacao.fila — lease e recuperação de worker abandonado", { sk
     t.skip("requer um client Supabase autenticado como anon/authenticated (TEST_SUPABASE_ANON_KEY) — não implementado ainda; ver nota no código.");
   });
 
-  test("tentativas: uma linha ABANDONADA é registrada quando um job é recuperado de um worker morto", async (t) => {
+  test("tentativas: o attempt que ficou aberto quando o lease vence em SENDING é fechado como DELIVERY_UNKNOWN pela varredura", async (t) => {
     if (!migracaoOk) return t.skip("migration 082 ainda não aplicada — pulando.");
     const job = await novoJob(`lease-tentativas-${Date.now()}`);
-    const [a] = await filaRepo.claimJobs({ limite: 1, worker: "worker-morto-2", leaseSegundos: 1 });
-    await tentativasRepo.registrarTentativaIniciada({ mensagemId: a.id, tentativaNumero: a.tentativas, workerId: "worker-morto-2", iniciadoEm: a.claimed_at });
+    const [a] = await filaRepo.claimJobs({ limite: 1, worker: "worker-morto-2", leaseSegundos: 30 });
+    assert.equal(a.tentativas, 0, "no claim ainda não há attempt");
+    const emEnvio = await filaRepo.iniciarEnvio({ id: job.id, worker: "worker-morto-2", claimGeracao: a.claim_geracao, leaseSegundos: 1 });
+    assert.equal(emEnvio.tentativas, 1);
+    // o attempt nasce em iniciar_envio: só então existe linha em comunicacao_tentativas
+    await tentativasRepo.registrarTentativaIniciada({ mensagemId: job.id, tentativaNumero: emEnvio.tentativas, workerId: "worker-morto-2", iniciadoEm: new Date().toISOString() });
 
-    await new Promise((r) => setTimeout(r, 1200));
-    const [b] = await filaRepo.claimJobs({ limite: 1, worker: "worker-vivo-2", leaseSegundos: 60 });
-    assert.equal(b.id, job.id);
+    await new Promise((r) => setTimeout(r, 1200)); // o worker morreu com o provider em andamento
+    const lote = await filaRepo.claimJobs({ limite: 10, worker: "worker-vivo-2", leaseSegundos: 60 });
+    assert.ok(!lote.some((j) => j.id === job.id), "um SENDING nunca é reivindicado");
+    const varridas = await filaRepo.expirarEntregasIncertas({ worker: "varredura" });
+    assert.ok(varridas.some((j) => j.id === job.id));
 
-    const abandonadas = await tentativasRepo.abandonarTentativasEmAberto(job.id);
-    assert.equal(abandonadas.length, 1);
     const historico = await tentativasRepo.listarTentativas(job.id);
-    assert.equal(historico.find((h) => h.tentativa_numero === a.tentativas)?.resultado, "ABANDONADA");
+    assert.equal(historico.length, 1);
+    assert.equal(historico[0].resultado, "DELIVERY_UNKNOWN");
+    assert.equal(historico[0].erro_classificacao, "INCERTO");
+    assert.ok(historico[0].finalizado_em);
 
     await supabase.from("comunicacao_mensagens").delete().eq("id", job.id);
   });

@@ -64,6 +64,27 @@ export const STATUS_MENSAGEM = Object.freeze({
 });
 
 /**
+ * Resultado que o dono do token de fencing grava ao FINALIZAR um envio
+ * (comunicacao_finalizar_envio, migration 087). `RETRY` = falha PRÉ-ENVIO
+ * comprovada -> SCHEDULED com backoff (ou FAILED se esgotou as tentativas).
+ */
+export const RESULTADO_FINAL_ENVIO = Object.freeze({
+  SENT: "SENT",
+  DELIVERY_UNKNOWN: "DELIVERY_UNKNOWN",
+  FAILED: "FAILED",
+  RETRY: "RETRY",
+});
+
+/** Destinos permitidos ao sair de PROCESSING sem enviar (comunicacao_encerrar_processamento). */
+export const DESTINO_SEM_ENVIO = Object.freeze({
+  BLOCKED: "BLOCKED",
+  CANCELLED: "CANCELLED",
+  FAILED: "FAILED",
+  /** Adiamento de motivo transitório. */
+  SCHEDULED: "SCHEDULED",
+});
+
+/**
  * Classificação de um erro de envio — decide se é seguro fazer retry
  * automático. Ver comunicacao.entrega.js#classificarErroEnvio.
  */
@@ -82,13 +103,21 @@ export const CLASSIFICACAO_ERRO = Object.freeze({
  */
 export const MOTIVOS_BLOQUEIO = Object.freeze({
   DISABLED: "DISABLED",
+  /** `modo` ausente/desconhecido/corrompido — fail-closed, nunca "provavelmente NORMAL". */
+  MODO_INVALIDO: "MODO_INVALIDO",
   REACTIVE_ONLY_BLOQUEIA_PROATIVO: "REACTIVE_ONLY_BLOQUEIA_PROATIVO",
   OPT_OUT: "OPT_OUT",
+  /** Sem consentimento EXPLÍCITO (`consentimento === true`). Distinto de OPT_OUT: opt_out=false não é consentimento. */
+  NO_CONSENT: "NO_CONSENT",
   NO_PHONE: "NO_PHONE",
   PHONE_NOT_VERIFIED: "PHONE_NOT_VERIFIED",
   USER_INACTIVE: "USER_INACTIVE",
   SEM_VINCULO: "SEM_VINCULO",
   CONTATO_AMBIGUO: "CONTATO_AMBIGUO",
+  /** A empresa (organização) não está habilitada para WhatsApp proativo. */
+  EMPRESA_DESABILITADA: "EMPRESA_DESABILITADA",
+  /** O tipo deste alerta não está entre os permitidos para a empresa. */
+  TIPO_NAO_PERMITIDO: "TIPO_NAO_PERMITIDO",
   PENDING_RESOLVED: "PENDING_RESOLVED",
   DUPLICATE: "DUPLICATE",
   COOLDOWN: "COOLDOWN",
@@ -97,6 +126,28 @@ export const MOTIVOS_BLOQUEIO = Object.freeze({
   SAFE_MODE: "SAFE_MODE",
   PROVIDER_OFFLINE: "PROVIDER_OFFLINE",
 });
+
+/**
+ * Motivos que podem DEIXAR de valer sozinhos (a janela abre, o cooldown
+ * acaba, o Gateway reconecta, o operador religa o modo). Uma mensagem
+ * bloqueada por eles NÃO pode virar BLOCKED terminal — é ADIADA (volta a
+ * SCHEDULED com `disponivel_em` futuro). Todo o resto é decisão sobre o
+ * DESTINATÁRIO/EMPRESA (opt-out, sem consentimento, sem vínculo, tipo não
+ * autorizado...) que só uma ação humana muda -> BLOCKED terminal.
+ */
+export const MOTIVOS_BLOQUEIO_TRANSITORIOS = Object.freeze(new Set([
+  MOTIVOS_BLOQUEIO.DISABLED,
+  MOTIVOS_BLOQUEIO.MODO_INVALIDO,
+  MOTIVOS_BLOQUEIO.REACTIVE_ONLY_BLOQUEIA_PROATIVO,
+  MOTIVOS_BLOQUEIO.COOLDOWN,
+  MOTIVOS_BLOQUEIO.OUTSIDE_ALLOWED_WINDOW,
+  MOTIVOS_BLOQUEIO.RATE_LIMIT,
+  MOTIVOS_BLOQUEIO.SAFE_MODE,
+  MOTIVOS_BLOQUEIO.PROVIDER_OFFLINE,
+]));
+
+/** Bloqueio que pode passar sozinho? Motivo desconhecido -> `false` (terminal, o mais conservador). */
+export const bloqueioEhTransitorio = (motivo) => MOTIVOS_BLOQUEIO_TRANSITORIOS.has(motivo);
 
 /** Fase 1: único monitor ligado (ajuste aprovado — não generalizar ainda). */
 export const TIPOS_ALERTA = Object.freeze({
