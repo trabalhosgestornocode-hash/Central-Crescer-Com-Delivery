@@ -16,6 +16,7 @@ function sessaoFalsa() {
   return {
     conectar: mock.fn(async () => {}),
     desconectar: mock.fn(async () => {}),
+    resetarSessao: mock.fn(async () => {}),
     getStatus: mock.fn(async () => ({ conectado: true, provider: "baileys", telefone: "+5511999990000", atualizadoEm: "now" })),
     enviar: mock.fn(async () => ({ providerMessageId: "wa-1", enviadoEm: "now" })),
     markAsRead: mock.fn(async () => {}),
@@ -74,6 +75,34 @@ describe("routes — Backend -> Gateway", () => {
     const r = await chamarAssinado("POST", "/internal/whatsapp/disconnect", {});
     assert.equal(r.status, 200);
     assert.equal(sessao.desconectar.mock.calls.length, 1);
+  });
+
+  test("POST /internal/whatsapp/reset assinado chama sessao.resetarSessao() e devolve o status resultante", async () => {
+    _resetarNonces();
+    const r = await chamarAssinado("POST", "/internal/whatsapp/reset", {});
+    assert.equal(r.status, 200);
+    assert.equal(sessao.resetarSessao.mock.calls.length, 1);
+    const json = await r.json();
+    assert.equal(json.ok, true);
+    assert.equal(json.status, "CONNECTED"); // sessaoFalsa()._status() é fixo, só prova que a rota lê o status pós-reset
+  });
+
+  test("POST /internal/whatsapp/reset sem HMAC é recusado com 401, sem chamar resetarSessao()", async () => {
+    const antes = sessao.resetarSessao.mock.calls.length;
+    const r = await fetch(`${baseUrl}/internal/whatsapp/reset`, { method: "POST" });
+    assert.equal(r.status, 401);
+    assert.equal(sessao.resetarSessao.mock.calls.length, antes);
+  });
+
+  test("POST /internal/whatsapp/reset propaga erro de sessao.resetarSessao() (ex.: SEM_LEASE) via next(e), nunca engole silenciosamente", async () => {
+    _resetarNonces();
+    sessao.resetarSessao = mock.fn(async () => { const e = new Error("WHATSAPP_GATEWAY_NOT_LEADER"); e.status = 423; e.codigo = "WHATSAPP_GATEWAY_NOT_LEADER"; throw e; });
+    try {
+      const r = await chamarAssinado("POST", "/internal/whatsapp/reset", {});
+      assert.notEqual(r.status, 200);
+    } finally {
+      sessao.resetarSessao = mock.fn(async () => {});
+    }
   });
 
   test("GET /internal/whatsapp/status assinado devolve o status", async () => {

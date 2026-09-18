@@ -165,6 +165,20 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   // (sucesso, ou um NOOP definitivo — não conta falha transitória de rede).
   let restaurandoSessao = false;
   let epochRestoreAvaliado = null;
+  // Checkpoint C3.5-B.2 — os DOIS fatos independentes que juntos (e só
+  // juntos) autorizam status=CONNECTED. `socketOpen`: o evento
+  // `connection.update({connection:"open"})` do Baileys já disparou nesta
+  // conexão. `registroPersistido`: OU o auth carregado já veio
+  // `registered:true` de uma sessão anterior (restore — a persistência já
+  // aconteceu num boot passado), OU (pareamento novo/pós-515) o snapshot
+  // com `creds.registered===true` já foi confirmadamente persistido no
+  // backend NESTA conexão. Nenhum dos dois, isolado, pode marcar CONNECTED
+  // — `connection.open` sozinho não prova que o backend tem o registro
+  // durável; o registro persistido sozinho não prova que o socket está de
+  // fato vivo. Ambos resetados a cada novo socket, em
+  // `abrirSocketEEscutarEventos()` e no fechamento (`connection:"close"`).
+  let socketOpen = false;
+  let registroPersistido = false;
   // Checkpoint C3.5-B (reforço) — Promise em voo da persistência de
   // desired_connection_state=DISCONNECTED disparada pelo branch LOGGED_OUT
   // de `aoConnectionUpdate`. Guardada (não um fire-and-forget cru) para que
@@ -225,6 +239,26 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     clearInterval(heartbeatTimer);
   }
 
+  /**
+   * Checkpoint C3.5-B.2, itens 3/5 — ÚNICO ponto de todo o módulo que pode
+   * promover `status` para CONNECTED. Só promove quando os DOIS fatos
+   * independentes (`socketOpen` e `registroPersistido`) já são verdadeiros
+   * — chamado tanto pelo handler de `connection:"open"` quanto pelo
+   * handler de `creds.update` (depois de confirmar a persistência do
+   * registro), e nenhum dos dois toca `status` diretamente. Idempotente:
+   * chamar de novo depois de já CONNECTED é NOOP silencioso (evita heartbeat/
+   * log duplicado se os dois eventos chegarem fora de ordem ou se
+   * creds.update repetir).
+   */
+  function tentarConfirmarConexao() {
+    if (status === STATUS_CONEXAO.CONNECTED) return;
+    if (!socketOpen || !registroPersistido) return;
+    status = STATUS_CONEXAO.CONNECTED;
+    autenticadaAlgumaVez = true;
+    log("info", "pareamento.concluido", {});
+    heartbeat().catch(() => {});
+  }
+
   function aoConnectionUpdate(update) {
     const { connection, lastDisconnect, qr } = update ?? {};
 
@@ -254,13 +288,17 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     }
 
     if (connection === "open") {
-      status = STATUS_CONEXAO.CONNECTED;
+      // Checkpoint C3.5-B.2, item 3 — `connection.open` sozinho NUNCA
+      // autoriza CONNECTED/autenticadaAlgumaVez/pareamento concluído: é só
+      // UM dos dois fatos independentes exigidos. `tentarConfirmarConexao()`
+      // é o ÚNICO ponto que decide a promoção — evita dois handlers
+      // diferentes conseguindo marcar CONNECTED (item 5).
       qrAtual = null;
       tentativasReconexao = 0;
-      autenticadaAlgumaVez = true;
+      socketOpen = true;
       telefone = socket?.user?.id ? deJid(socket.user.id) : telefone;
-      log("info", "conexao.aberta", { telefone: mascararTelefone(telefone) });
-      heartbeat().catch(() => {});
+      log("info", "conexao.socket_aberto", { telefone: mascararTelefone(telefone) });
+      tentarConfirmarConexao();
       return;
     }
 
@@ -269,6 +307,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       // houver reconexão) vem num evento `qr` futuro, nunca reaproveita este.
       qrAtual = null;
       origemSocket = null; // este socket morreu — qualquer socket futuro define sua própria origem
+      socketOpen = false;
+      registroPersistido = false;
       const codigo = lastDisconnect?.error?.output?.statusCode;
       // Lido NO INSTANTE do close — nunca o valor de antes de conectar(). Só
       // um booleano derivado; nunca loga o objeto `creds` inteiro.
@@ -396,6 +436,32 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   }
 
   /**
+   * Checkpoint C3.5-B.2, item 6 — chamado quando o snapshot que confirmaria
+   * `creds.registered===true` NÃO conseguiu ser persistido no backend.
+   * NUNCA pode resultar em CONNECTED (o socket é fechado antes de qualquer
+   * chance de `tentarConfirmarConexao()` promover) e NUNCA gera um novo QR
+   * automaticamente (`shutdownLocalSolicitado=true` impede o handler de
+   * `close` de agendar reconexão). Best-effort: manda um heartbeat final
+   * (se a lease ainda for nossa — se já foi perdida por fencing, `heartbeat()`
+   * já pula sozinho sem contexto()), preservando LOGGED_OUT se por acaso já
+   * fosse o caso (mesma invariante de sempre, via `marcarDesconectado()`).
+   */
+  async function falharSeguroPorRegistroNaoPersistido(categoria) {
+    shutdownLocalSolicitado = true;
+    origemSocket = null;
+    socketOpen = false;
+    registroPersistido = false;
+    pararHeartbeatPeriodico();
+    if (socket) {
+      await socket.end?.(undefined).catch(() => {});
+      socket = null;
+    }
+    marcarDesconectado();
+    await heartbeat().catch(() => {});
+    log("error", "pareamento.registrado_persistir_falhou_fail_safe", { categoria });
+  }
+
+  /**
    * Se um LOGGED_OUT acabou de disparar a persistência (assíncrona) de
    * desired_connection_state=DISCONNECTED, espera ela assentar (sucesso OU
    * falha já tratada dentro dela mesma) antes de prosseguir — nunca deixa
@@ -479,16 +545,53 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
    * Quem chama já deve ter deixado `authAdapter.comoAuthState()` no estado
    * correto (creds carregados/decididos) ANTES de invocar isto.
    * @param {'manual'|'restore'} origem
+   * @param {object} [opcoes]
+   * @param {boolean} [opcoes.registradoPreviamente] Checkpoint C3.5-B.2 —
+   *   true quando o auth JÁ carregado para este socket tem
+   *   `creds.registered===true` confirmado por uma persistência de um boot
+   *   ANTERIOR (todo caminho de restore; e o /connect manual quando
+   *   `resultadoAuth.registered===true`). Inicializa `registroPersistido`
+   *   já como verdadeiro nesse caso — não existe uma NOVA confirmação para
+   *   esperar, o fato B já é verdade desde antes do socket abrir. Só fica
+   *   `false` (exigindo que ESTE socket confirme e persista um
+   *   creds.update com registered:true antes de poder virar CONNECTED)
+   *   para pareamento novo (AUTH_ABSENT) ou reconexão pós-515 com creds
+   *   ainda não registrados.
    */
-  function abrirSocketEEscutarEventos(origem) {
+  function abrirSocketEEscutarEventos(origem, { registradoPreviamente = false } = {}) {
     origemSocket = origem;
+    socketOpen = false;
+    registroPersistido = registradoPreviamente;
     socket = fabricaSocket({ auth: authAdapter.comoAuthState(), logger: criarLoggerBaileysSilencioso(), printQRInTerminal: false });
     socket.ev.on("connection.update", aoConnectionUpdate);
     socket.ev.on("creds.update", (c) => {
       // Só um booleano derivado, nunca o objeto `c` (creds reais) inteiro —
       // diagnóstico de quando o registro realmente completa (Checkpoint C3).
       log("info", "creds_update.recebido", { registrado: !!c?.registered });
-      authAdapter.aoAtualizarCreds(c).catch((e) => log("error", "auth_state.persistir_falhou", { erro: e?.message }));
+      const persistPromise = authAdapter.aoAtualizarCreds(c);
+      // Checkpoint C3.5-B.2, item 4 — ESTADO RESULTANTE pós-merge (o
+      // Object.assign já rodou de forma síncrona dentro de
+      // aoAtualizarCreds, antes do `await` interno de persistir()), NUNCA
+      // o fragmento cru `c` (Partial<AuthenticationCreds> — um update
+      // posterior pode não trazer `registered` de volta, mesmo já sendo
+      // true desde um update anterior; ler o objeto mesclado evita perder
+      // esse fato por ausência do campo no delta seguinte).
+      const registradoAgora = authAdapter.comoAuthState().creds?.registered === true;
+      if (registradoAgora && !registroPersistido) {
+        persistPromise.then(
+          () => {
+            registroPersistido = true;
+            log("info", "pareamento.registrado_persistido", {});
+            tentarConfirmarConexao();
+          },
+          (e) => {
+            const categoria = e?.leaseStale ? "lease_stale" : (e?.name ?? e?.constructor?.name ?? "unknown");
+            falharSeguroPorRegistroNaoPersistido(categoria).catch(() => {});
+          },
+        );
+      } else {
+        persistPromise.catch((e) => log("error", "auth_state.persistir_falhou", { erro: e?.message }));
+      }
     });
     socket.ev.on("messages.upsert", aoMessagesUpsert);
     socket.ev.on("messages.update", aoMessagesUpdate);
@@ -616,7 +719,15 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       return;
     }
 
-    abrirSocketEEscutarEventos("manual");
+    // Checkpoint C3.5-B.2 — `registradoPreviamente` é exatamente
+    // `resultadoAuth.registered===true`: se o auth recarregado JÁ vinha
+    // registrado (restore, inclusive um pós-515 que descobre no reload que
+    // o registro já tinha sido concluído e persistido antes do 515
+    // acontecer), o fato B já é verdade e este socket pode virar CONNECTED
+    // só com `connection.open`. Senão (pareamento novo, ou pós-515 comum
+    // com creds ainda `registered:false`), este socket PRECISA da sua
+    // própria confirmação+persistência antes de poder promover.
+    abrirSocketEEscutarEventos("manual", { registradoPreviamente: resultadoAuth.registered === true });
   }
 
   /**
@@ -673,6 +784,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     shutdownLocalSolicitado = true; // um close subsequente do socket não pode agendar reconexão
     await aguardarPersistenciaLogoutPendente();
     origemSocket = null;
+    socketOpen = false;
+    registroPersistido = false;
     pararHeartbeatPeriodico();
     if (socket) {
       await socket.end?.(undefined).catch(() => {});
@@ -681,6 +794,110 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     // Mesma trava de marcarDesconectado() — perda de lease não pode
     // rebaixar LOGGED_OUT para DISCONNECTED localmente.
     marcarDesconectado();
+  }
+
+  /**
+   * Checkpoint C3.5-B.2 — RESET/RE-PAIR explícito do OPERADOR (nunca
+   * chamado automaticamente por nenhum outro caminho — shutdown técnico,
+   * reconexão pós-515 e restore automático NUNCA fazem isto). Único jeito
+   * de invalidar de forma controlada um auth state antigo (ex.: revogado
+   * fora de banda, pelo celular) e preparar a sessão para um pareamento
+   * novo, e a ÚNICA via permitida para sair de LOGGED_OUT sem um /connect
+   * que já teria auth ausente (item 8 — reset é deliberado; nenhum outro
+   * caminho tem essa permissão).
+   *
+   * ORDEM OBRIGATÓRIA (auditoria) — cada passo só avança se o anterior
+   * confirmou sucesso; uma falha no meio NUNCA deixa um estado pior que o
+   * inicial:
+   *   1-2. exige leader; captura contexto owner/epoch.
+   *   3. persiste desired=DISCONNECTED (fenced) PRIMEIRO — antes de tocar
+   *      em qualquer socket ou auth. Falha aqui (stale ou erro) ABORTA
+   *      imediatamente: nenhum socket é fechado por esta função (só como
+   *      efeito colateral de perda de lease, se for o caso — mesmo
+   *      comportamento já existente de notificarPerdaExterna/aoPerderLease),
+   *      nenhum auth é tocado, erro sanitizado devolvido.
+   *   4. SÓ SE o passo 3 confirmou: fecha o socket técnico existente
+   *      (nunca manda mensagem, por construção de fecharSocketTecnico()).
+   *   5. executa o reset fenced do auth (NULL/NULL, mesma RPC de sempre).
+   *      Falha aqui: desired JÁ ficou DISCONNECTED (estado seguro e
+   *      recuperável) e o auth ANTIGO continua preservado — NUNCA chama
+   *      invalidarLocal() como se o reset tivesse concluído; erro
+   *      explícito de "reset incompleto".
+   *   6. SÓ SE o passo 5 confirmou: authAdapter.invalidarLocal(). Se isto
+   *      falhar (teoricamente, é só memória local), trata como fail-safe
+   *      grave — nunca tenta reconstruir o auth antigo no banco (o backend
+   *      já está correto; o problema é só local).
+   *   7. limpa marcadores de sessão/pareamento anterior.
+   *   8. status=DISCONNECTED DIRETO (não via marcarDesconectado() — reset
+   *      é a via explícita que PODE sair de LOGGED_OUT).
+   *   9. heartbeat fenced final.
+   *   10. log sanitizado de conclusão.
+   */
+  async function resetarSessao() {
+    // 1-2.
+    if (leaseManager && !leaseManager.souLeader()) throw erro(CODIGOS.SEM_LEASE);
+    const contexto = leaseManager?.contexto();
+    if (!contexto) throw erro(CODIGOS.SEM_LEASE);
+    log("info", "reset.iniciado", {});
+
+    // 3.
+    try {
+      await backendClient.definirEstadoDesejado({ desiredConnectionState: "DISCONNECTED", ...contexto });
+    } catch (e) {
+      if (e?.leaseStale) leaseManager?.notificarPerdaExterna("reset_desired_stale");
+      log("error", "reset.desired_falhou", { erroTipo: e?.name ?? e?.constructor?.name ?? null });
+      throw erro(CODIGOS.INDISPONIVEL, "reset abortado: falha ao persistir desired=DISCONNECTED — nada foi alterado");
+    }
+    log("info", "reset.desired_confirmado", {});
+
+    // 4.
+    await fecharSocketTecnico();
+    log("info", "reset.socket_fechado", {});
+
+    // 5.
+    try {
+      await backendClient.resetarAuthState(contexto);
+    } catch (e) {
+      if (e?.leaseStale) leaseManager?.notificarPerdaExterna("reset_auth_stale");
+      log("error", "reset.auth_state_falhou", { erroTipo: e?.name ?? e?.constructor?.name ?? null });
+      status = STATUS_CONEXAO.DISCONNECTED; // já é o caso (fecharSocketTecnico não altera status), explícito por clareza
+      throw erro(CODIGOS.INDISPONIVEL, "reset incompleto: desired=DISCONNECTED confirmado, mas o auth state antigo NÃO foi limpo — permanece preservado");
+    }
+    log("info", "reset.auth_state_invalidado", {});
+
+    // 6.
+    try {
+      authAdapter.invalidarLocal();
+    } catch (e) {
+      log("error", "reset.invalidar_local_falhou", { erroTipo: e?.name ?? e?.constructor?.name ?? null });
+      autenticadaAlgumaVez = false;
+      epochRestoreAvaliado = null;
+      origemSocket = null;
+      socketOpen = false;
+      registroPersistido = false;
+      status = STATUS_CONEXAO.DISCONNECTED;
+      // O backend já confirmou o reset do auth — nunca tentamos desfazer
+      // isso; é um problema LOCAL grave, não um motivo para reconstruir o
+      // auth antigo no banco.
+      throw erro(CODIGOS.INDISPONIVEL, "reset do backend concluído, mas falha local grave ao invalidar a memória do processo");
+    }
+
+    // 7.
+    autenticadaAlgumaVez = false;
+    epochRestoreAvaliado = null;
+    origemSocket = null;
+    socketOpen = false;
+    registroPersistido = false;
+
+    // 8.
+    status = STATUS_CONEXAO.DISCONNECTED;
+    shutdownLocalSolicitado = false;
+
+    // 9.
+    await heartbeat();
+
+    // 10.
+    log("info", "reset.concluido", {});
   }
 
   /**
@@ -791,12 +1008,16 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     autenticadaAlgumaVez = true; // sessão já pareada de verdade — queda futura pode reconectar sozinha
     shutdownLocalSolicitado = false;
     log("info", "restore.abrindo_socket", {});
-    abrirSocketEEscutarEventos("restore");
+    // Restore só chega até aqui quando resultadoAuth.registered===true (já
+    // checado acima) — o fato B já é verdade desde antes deste socket
+    // existir; só falta o fato A (connection.open).
+    abrirSocketEEscutarEventos("restore", { registradoPreviamente: true });
   }
 
   return {
     conectar,
     desconectar,
+    resetarSessao,
     _forcarFailSafe,
     /** Checkpoint C3.5-B — só chamado por server.js via leaseManager({aoTornarSeLeader}). */
     _restaurarSessaoSePossivel: restaurarSessaoSePossivel,
@@ -831,5 +1052,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     _autenticadaAlgumaVez: () => autenticadaAlgumaVez,
     _origemSocket: () => origemSocket,
     _epochRestoreAvaliado: () => epochRestoreAvaliado,
+    _socketOpen: () => socketOpen,
+    _registroPersistido: () => registroPersistido,
   };
 }

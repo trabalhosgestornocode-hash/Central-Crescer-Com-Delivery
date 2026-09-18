@@ -42,6 +42,28 @@ function authAdapterFalso() {
   };
 }
 
+// Checkpoint C3.5-B.2 — diferente de authAdapterFalso() (cujo comoAuthState()
+// devolve um `creds` NOVO e sempre vazio a cada chamada — aoAtualizarCreds()
+// é um no-op), este fake MANTÉM e faz MERGE real em `creds`, exatamente como
+// authState.js#aoAtualizarCreds faz (Object.assign in-place). Necessário
+// para qualquer teste que precise emitir creds.update({registered:true}) e
+// depois observar tentarConfirmarConexao() promovendo para CONNECTED — sem
+// isto, `comoAuthState().creds?.registered` nunca refletiria o que foi
+// emitido.
+function authAdapterComRegistroFalso(resultadoCarregar = { status: "absent" }) {
+  let creds = null;
+  return {
+    async carregar() { return resultadoCarregar; },
+    inicializarCreds(c) { creds = c; },
+    invalidarLocal() { creds = null; },
+    comoAuthState() { return { creds, keys: { get: async () => ({}), set: async () => {} } }; },
+    async aoAtualizarCreds(delta) {
+      if (creds) Object.assign(creds, delta);
+      else creds = delta;
+    },
+  };
+}
+
 function backendClientFalso() {
   return {
     notificarHeartbeat: mock.fn(async () => {}),
@@ -51,6 +73,9 @@ function backendClientFalso() {
     // comportamento específico (falha, resposta customizada) sobrescrevem.
     definirEstadoDesejado: mock.fn(async () => ({ ok: true })),
     obterEstadoSessao: mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "DISCONNECTED" })),
+    // Checkpoint C3.5-B.2 — reset explícito do operador; default inofensivo
+    // (sucesso), sobrescrito pelos testes de falha parcial.
+    resetarAuthState: mock.fn(async () => ({ ok: true })),
   };
 }
 
@@ -466,10 +491,10 @@ describe("baileysSession — 515/restartRequired: reconecta reaproveitando creds
 });
 
 describe("baileysSession — lifecycle", () => {
-  test("conectar() sem QR/rede real: vai para CONNECTING, depois 'open' vira CONNECTED", async () => {
+  test("conectar() sem QR/rede real: vai para CONNECTING, 'open' sozinho NÃO conecta, só com registered persistido também vira CONNECTED", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
       fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
     });
 
@@ -478,6 +503,11 @@ describe("baileysSession — lifecycle", () => {
 
     fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
     fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    // Checkpoint C3.5-B.2, item 3 — 'open' sozinho NUNCA autoriza CONNECTED.
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "socket aberto sem o registro persistido não pode promover");
+
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve)); // deixa a persistência (fire-and-forget) resolver
 
     assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
     assert.equal((await sessao.getStatus()).telefone, "+5511999990000");
@@ -566,13 +596,16 @@ describe("baileysSession — lifecycle", () => {
     const chamadasAgendar = [];
     const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); }; // executa na hora, só registra o atraso pedido
     const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
       fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
     });
 
     await sessao.conectar();
     fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
     fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
     assert.equal(sessao._autenticadaAlgumaVez(), true);
 
     // AGORA sim uma queda é transitória — a sessão já foi autenticada de verdade.
@@ -671,14 +704,17 @@ describe("baileysSession — lifecycle", () => {
     const chamadasAgendar = [];
     const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
     const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(),
+      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(),
       config: { ...configFalso(), reconnect: { baseMs: 10, tetoMs: 25 } },
       fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
     });
 
     await sessao.conectar();
     fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
-    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" }); // autentica antes de testar backoff
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true }); // autentica antes de testar backoff
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sessao._autenticadaAlgumaVez(), true);
     const fechar = () => fabricaSocket.criados.at(-1).ev.emit("connection.update", {
       connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
     });
@@ -730,11 +766,13 @@ describe("baileysSession — envio", () => {
   async function sessaoConectada() {
     const fabricaSocket = socketFalsoFabrica();
     const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
       fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
     });
     await sessao.conectar();
     fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
     return { sessao, socket: fabricaSocket.criados[0] };
   }
 
@@ -1471,11 +1509,13 @@ describe("baileysSession — LOGGED_OUT é terminal (reforço pós-auditoria, Ch
     const fabricaSocketA = socketFalsoFabrica();
     const leaseManagerA = leaseManagerFalso({ leaseEpoch: 11, gatewayProcessId: "proc-A" });
     const sessaoA = criarSessaoBaileys({
-      authAdapter: authAdapterFalso(), backendClient: banco.criarClient(), config: configFalso(),
+      authAdapter: authAdapterComRegistroFalso(), backendClient: banco.criarClient(), config: configFalso(),
       fabricaSocket: fabricaSocketA, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager: leaseManagerA, agendar: () => {},
     });
     await sessaoA.conectar();
     fabricaSocketA.criados[0].ev.emit("connection.update", { connection: "open" });
+    fabricaSocketA.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(sessaoA._status(), STATUS_CONEXAO.CONNECTED);
 
     // 5 — a PRÓXIMA gravação de desired (a do close LOGGED_OUT logo abaixo) vai falhar
@@ -1856,5 +1896,341 @@ describe("baileysSession — conectar() manual: contrato explícito de auth stat
     await sessao.conectar(); // sem persistirIntencaoConectada — como a reconexão automática chama
 
     assert.equal(backendClient.definirEstadoDesejado.mock.calls.length, 0, "nunca escreveu CONNECTED, então nunca tenta reverter nada");
+  });
+});
+
+describe("baileysSession — reset explícito do operador (Checkpoint C3.5-B.2)", () => {
+  test("1) reset sem lease (não sou leader) -> SEM_LEASE, nada tocado (nem desired, nem auth, nem heartbeat)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const leaseManager = leaseManagerFalso({ leader: false });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await assert.rejects(sessao.resetarSessao(), (e) => e.codigo === "WHATSAPP_GATEWAY_NOT_LEADER");
+    assert.equal(backendClient.definirEstadoDesejado.mock.calls.length, 0);
+    assert.equal(backendClient.resetarAuthState.mock.calls.length, 0);
+    assert.equal(backendClient.notificarHeartbeat.mock.calls.length, 0);
+  });
+
+  test("2) desired=DISCONNECTED falha -> aborta imediatamente: socket não é fechado, auth backend intacto, invalidarLocal NUNCA chamado", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.definirEstadoDesejado = mock.fn(async () => { throw new Error("backend indisponível"); });
+    const authAdapter = authAdapterComRegistroFalso();
+    authAdapter.invalidarLocal = mock.fn(authAdapter.invalidarLocal);
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+    const totalSocketsAntes = fabricaSocket.criados.length;
+
+    await assert.rejects(sessao.resetarSessao(), (e) => e.codigo === "WHATSAPP_GATEWAY_UNAVAILABLE");
+
+    assert.equal(backendClient.resetarAuthState.mock.calls.length, 0, "auth backend nunca deveria ser tocado");
+    assert.equal(authAdapter.invalidarLocal.mock.calls.length, 0);
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 0, "socket técnico não pode ter sido fechado — passo 3 falhou antes do passo 4");
+    assert.equal(fabricaSocket.criados.length, totalSocketsAntes, "nenhum socket novo");
+  });
+
+  test("3) desired funciona, mas o reset do auth no backend falha -> socket técnico já fechado, auth ANTIGO preservado, invalidarLocal NUNCA chamado", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.resetarAuthState = mock.fn(async () => { throw new Error("falha ao limpar auth no backend"); });
+    const authAdapter = authAdapterComRegistroFalso();
+    authAdapter.invalidarLocal = mock.fn(authAdapter.invalidarLocal);
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+    const socket = fabricaSocket.criados[0];
+
+    await assert.rejects(sessao.resetarSessao(), (e) => e.codigo === "WHATSAPP_GATEWAY_UNAVAILABLE");
+
+    assert.equal(backendClient.definirEstadoDesejado.mock.calls[0].arguments[0].desiredConnectionState, "DISCONNECTED");
+    assert.equal(socket.end.mock.calls.length, 1, "passo 4: socket técnico precisa ter sido fechado, já que o passo 3 confirmou");
+    assert.equal(backendClient.resetarAuthState.mock.calls.length, 1, "tentou resetar o auth");
+    assert.equal(authAdapter.invalidarLocal.mock.calls.length, 0, "NUNCA invalida localmente se o backend não confirmou o reset");
+  });
+
+  test("4) reset completo: desired=DISCONNECTED confirmado, auth resetado (NULL/NULL fenced), local invalidado, status=DISCONNECTED, heartbeat final", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const authAdapter = authAdapterComRegistroFalso({ status: "loaded", registered: true });
+    const leaseManager = leaseManagerFalso({ gatewayProcessId: "proc-reset", leaseEpoch: 7 });
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+    const socket = fabricaSocket.criados[0];
+    assert.equal(sessao._autenticadaAlgumaVez(), true, "pré-condição: sessão restaurada como já pareada");
+
+    await sessao.resetarSessao();
+
+    const chamadaDesired = backendClient.definirEstadoDesejado.mock.calls[0].arguments[0];
+    assert.equal(chamadaDesired.desiredConnectionState, "DISCONNECTED");
+    assert.deepEqual(
+      { gatewayProcessId: chamadaDesired.gatewayProcessId, leaseEpoch: chamadaDesired.leaseEpoch },
+      { gatewayProcessId: "proc-reset", leaseEpoch: 7 },
+    );
+    assert.equal(socket.end.mock.calls.length, 1);
+    assert.deepEqual(backendClient.resetarAuthState.mock.calls[0].arguments[0], { gatewayProcessId: "proc-reset", leaseEpoch: 7 });
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(sessao._autenticadaAlgumaVez(), false, "marcador de pareamento anterior precisa ter sido limpo");
+    assert.ok(backendClient.notificarHeartbeat.mock.calls.length > 0, "heartbeat final precisa ter sido mandado");
+  });
+
+  test("5) fencing stale ao persistir desired=DISCONNECTED -> erro sanitizado, leaseManager avisado, nenhum auth tocado", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const erroStale = new Error("stale");
+    erroStale.leaseStale = true;
+    backendClient.definirEstadoDesejado = mock.fn(async () => { throw erroStale; });
+    const authAdapter = authAdapterComRegistroFalso();
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+
+    await assert.rejects(sessao.resetarSessao(), (e) => e.codigo === "WHATSAPP_GATEWAY_UNAVAILABLE");
+
+    assert.equal(leaseManager.notificarPerdaExterna.mock.calls.length, 1, "leaseManager precisa ser avisado da perda externa");
+    assert.equal(backendClient.resetarAuthState.mock.calls.length, 0, "nada de auth pode ter sido tocado");
+  });
+
+  test("6) backend confirma o reset do auth, mas invalidarLocal() falha localmente -> fail-safe grave: estado local limpo mesmo assim, NUNCA tenta reconstruir o auth antigo no banco", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const authAdapter = authAdapterComRegistroFalso({ status: "loaded", registered: true });
+    authAdapter.invalidarLocal = mock.fn(() => { throw new Error("falha local ao limpar creds"); });
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+
+    await assert.rejects(sessao.resetarSessao(), (e) => e.codigo === "WHATSAPP_GATEWAY_UNAVAILABLE");
+
+    assert.equal(backendClient.resetarAuthState.mock.calls.length, 1, "o reset do backend já tinha sido confirmado");
+    assert.equal(backendClient.definirEstadoDesejado.mock.calls.length, 1, "não tenta desfazer o reset do backend nem regravar CONNECTED");
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(sessao._autenticadaAlgumaVez(), false, "estado local precisa ser tratado como limpo, mesmo com a falha de invalidarLocal");
+  });
+});
+
+describe("baileysSession — confirmação dupla de pareamento (Checkpoint C3.5-B.2)", () => {
+  test("9) creds.update com registered=false persiste normalmente, mas NUNCA promove — falta o fato B", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: false });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(sessao._registroPersistido(), false);
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING);
+  });
+
+  test("9b) creds.update PARCIAL sem o campo 'registered' NÃO apaga um registered=true já confirmado (Object.assign, nunca substituição)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const authAdapter = authAdapterComRegistroFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sessao._registroPersistido(), true);
+
+    fabricaSocket.criados[0].ev.emit("creds.update", { account: { fake: "delta-parcial-sem-registered" } });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(authAdapter.comoAuthState().creds.registered, true, "Object.assign precisa ter preservado registered=true — delta parcial não pode apagar o campo");
+    assert.equal(sessao._registroPersistido(), true);
+  });
+
+  test("10) registered=true persistido ANTES do connection.open -> ainda NÃO CONNECTED; só o 'open' promove", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sessao._registroPersistido(), true);
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "registro persistido sozinho não pode promover sem 'open'");
+
+    fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+  });
+
+  test("12) open + registered persistido promove para CONNECTED exatamente UMA vez — eventos repetidos/fora de ordem não duplicam a promoção", async (t) => {
+    const fabricaSocket = socketFalsoFabrica();
+    const linhas = [];
+    t.mock.method(console, "log", (s) => linhas.push(s));
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+
+    // Repete os dois eventos fora de ordem — NOOP idempotente, nunca reloga/repromove.
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const promocoes = linhas.map((s) => JSON.parse(s)).filter((l) => l.evento === "pareamento.concluido");
+    assert.equal(promocoes.length, 1, "pareamento.concluido só pode ter sido logado uma vez");
+  });
+
+  test("13) persistência do snapshot com registered=true FALHA -> fail-safe: socket fechado, NUNCA CONNECTED, sem QR automático", async (t) => {
+    const fabricaSocket = socketFalsoFabrica();
+    const authAdapter = authAdapterComRegistroFalso();
+    authAdapter.aoAtualizarCreds = async (delta) => {
+      const estado = authAdapter.comoAuthState();
+      if (estado.creds) Object.assign(estado.creds, delta);
+      throw new Error("falha ao persistir no backend");
+    };
+    const linhas = [];
+    t.mock.method(console, "error", (s) => linhas.push(s));
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED, "nunca pode ter promovido para CONNECTED");
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1, "o socket precisa ter sido fechado (fail-safe)");
+    assert.equal(sessao._autenticadaAlgumaVez(), false);
+    const linhaFailSafe = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "pareamento.registrado_persistir_falhou_fail_safe");
+    assert.ok(linhaFailSafe, "precisa existir o log do fail-safe");
+  });
+
+  test("14) 515 DEPOIS do registered já persistido: reconecta reaproveitando creds, recarrega do backend (já registered), e o próximo 'open' promove para CONNECTED", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    let credsPersistidos = null; // simula o que o backend "real" teria gravado
+    const authAdapter = {
+      async carregar() {
+        if (credsPersistidos === null) return { status: "absent" };
+        return { status: "loaded", registered: !!credsPersistidos.registered };
+      },
+      inicializarCreds(c) { credsPersistidos = c; },
+      comoAuthState() { return { creds: credsPersistidos, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds(delta) {
+        if (credsPersistidos) Object.assign(credsPersistidos, delta);
+        else credsPersistidos = delta;
+      },
+      async aguardarPersistenciasPendentes() {},
+    };
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: (fn) => fn(),
+    });
+
+    await sessao.conectar(); // AUTH_ABSENT -> initAuthCreds real
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true }); // pair-success confirmado e persistido
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(sessao._registroPersistido(), true, "pré-condição: registro já persistido antes do 515");
+
+    // 515/restartRequired chega ANTES de qualquer 'open'.
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: 515 } } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(fabricaSocket.criados.length, 2, "reconectou com um socket novo");
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "reload viu registered=true, mas falta o 'open' deste socket novo");
+
+    fabricaSocket.criados[1].user = { id: "5511999990000:1@s.whatsapp.net" };
+    fabricaSocket.criados[1].ev.emit("connection.update", { connection: "open" });
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED, "registradoPreviamente=true (do reload) + open -> CONNECTED");
+  });
+
+  test("16) ANTI-REGRESSÃO ponta-a-ponta: RESET -> AUTH_ABSENT -> QR -> creds parciais -> registered=true persistido -> 515 -> reload -> open -> CONNECTED", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    let credsPersistidos = { registered: true }; // sessão antiga, já pareada antes do reset
+    const authAdapter = {
+      async carregar() {
+        if (credsPersistidos === null) return { status: "absent" };
+        return { status: "loaded", registered: !!credsPersistidos.registered };
+      },
+      inicializarCreds(c) { credsPersistidos = c; },
+      invalidarLocal() { credsPersistidos = null; },
+      comoAuthState() { return { creds: credsPersistidos, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds(delta) {
+        if (credsPersistidos) Object.assign(credsPersistidos, delta);
+        else credsPersistidos = delta;
+      },
+      async aguardarPersistenciasPendentes() {},
+    };
+    const backendClient = backendClientFalso();
+    backendClient.resetarAuthState = mock.fn(async () => { credsPersistidos = null; return { ok: true }; });
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar: (fn) => fn(),
+    });
+
+    // RESET explícito.
+    await sessao.resetarSessao();
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(credsPersistidos, null, "backend real (simulado) precisa ter sido limpo pelo reset");
+
+    // Novo /connect -> AUTH_ABSENT -> QR permitido.
+    await sessao.conectar({ persistirIntencaoConectada: true });
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING);
+    fabricaSocket.criados[0].ev.emit("connection.update", { qr: "2@novo-pareamento-fake==" });
+    assert.equal(sessao.obterQrAtual(), "2@novo-pareamento-fake==");
+
+    // Handshake: creds parciais chegam primeiro (ainda sem registered).
+    fabricaSocket.criados[0].ev.emit("creds.update", { account: { fake: "parcial" } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(sessao._registroPersistido(), false);
+
+    // pair-success: registered=true confirmado e persistido.
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(sessao._registroPersistido(), true);
+
+    // 515/restartRequired antes de qualquer 'open'.
+    fabricaSocket.criados[0].ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: 515 } } },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(fabricaSocket.criados.length, 2, "reconectou pós-515");
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "falta o 'open' deste socket novo");
+
+    // reload do socket novo já viu registered=true -> só falta o 'open'.
+    fabricaSocket.criados[1].user = { id: "5511999990000:1@s.whatsapp.net" };
+    fabricaSocket.criados[1].ev.emit("connection.update", { connection: "open" });
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+    assert.equal(sessao._autenticadaAlgumaVez(), true);
   });
 });

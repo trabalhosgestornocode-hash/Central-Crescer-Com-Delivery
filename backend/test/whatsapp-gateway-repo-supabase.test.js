@@ -178,6 +178,37 @@ describe("whatsappGateway.repo — criarRepoSupabase() contra o banco de teste r
     assert.equal(direto.data.auth_state_version, "v7");
   });
 
+  test("Checkpoint C3.5-B.2 — resetarAuthState() limpa auth_state_encrypted/version (NULL/NULL) via a MESMA RPC fenced, sem migration nova", async (t) => {
+    if (!migracaoOk) return t.skip("migration 083 ainda não aplicada — pulando.");
+    if (!migracao084Ok) return t.skip("migration 084 (fencing) ainda não aplicada neste Supabase — pulando.");
+    const repo = criarRepoSupabase();
+
+    await repo.salvarAuthState(orgA, { authStateEncrypted: "v1:antes-do-reset-real", authStateVersion: "v9", ...leaseA });
+    assert.deepEqual(await repo.obterAuthState(orgA), { status: "present", authStateEncrypted: "v1:antes-do-reset-real" });
+
+    await repo.resetarAuthState(orgA, leaseA);
+
+    assert.deepEqual(await repo.obterAuthState(orgA), { status: "absent" }, "depois do reset, obterAuthState precisa devolver absent — nunca o ciphertext antigo");
+    const direto = await supabase.from("whatsapp_conexoes").select("auth_state_encrypted, auth_state_version").eq("organizacao_id", orgA).single();
+    assert.equal(direto.data.auth_state_encrypted, null);
+    assert.equal(direto.data.auth_state_version, null);
+  });
+
+  test("Checkpoint C3.5-B.2 — resetarAuthState() com fencing stale (epoch errado) é rejeitado, ciphertext atual permanece intacto", async (t) => {
+    if (!migracaoOk) return t.skip("migration 083 ainda não aplicada — pulando.");
+    if (!migracao084Ok) return t.skip("migration 084 (fencing) ainda não aplicada neste Supabase — pulando.");
+    const repo = criarRepoSupabase();
+
+    await repo.salvarAuthState(orgB, { authStateEncrypted: "v1:nao-pode-ser-apagado", authStateVersion: "v1", ...leaseB });
+
+    await assert.rejects(
+      repo.resetarAuthState(orgB, { gatewayProcessId: leaseB.gatewayProcessId, leaseEpoch: leaseB.leaseEpoch + 999 }),
+      (e) => e instanceof LeaseStaleError,
+    );
+
+    assert.deepEqual(await repo.obterAuthState(orgB), { status: "present", authStateEncrypted: "v1:nao-pode-ser-apagado" }, "epoch stale não pode ter apagado o auth state real");
+  });
+
   test("UNIQUE (organizacao_id, provider_instance_id): segunda linha manual para o mesmo par é recusada", async (t) => {
     if (!migracaoOk) return t.skip("migration 083 ainda não aplicada — pulando.");
     // orgA já tem uma linha 'default' das chamadas anteriores.

@@ -98,6 +98,16 @@ export function criarRepoEmMemoria() {
       if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
       porOrganizacao.set(organizacaoId, { ...atual, authStateEncrypted, authStateVersion, updatedAt: new Date().toISOString() });
     },
+    // ---- reset explícito do operador (Checkpoint C3.5-B.2) ----
+    // Mesmo mecanismo de fencing de salvarAuthState, só que grava NULL nos
+    // dois campos — nunca uma operação nova/RPC nova: é literalmente
+    // salvarAuthState com ciphertext ausente, fenced do mesmo jeito. Stale
+    // -> LeaseStaleError, ciphertext antigo intocado.
+    async resetarAuthState(organizacaoId, { gatewayProcessId, leaseEpoch } = {}) {
+      const atual = porOrganizacao.get(organizacaoId) ?? {};
+      if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
+      porOrganizacao.set(organizacaoId, { ...atual, authStateEncrypted: null, authStateVersion: null, updatedAt: new Date().toISOString() });
+    },
     async registrarHeartbeat(organizacaoId, { status, telefone, gatewayVersion, providerInstanceId, gatewayProcessId, leaseEpoch }) {
       const atual = porOrganizacao.get(organizacaoId) ?? {};
       if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
@@ -297,6 +307,19 @@ export function criarRepoSupabase() {
       await obterOuCriarConexao(db, organizacaoId, providerInstanceId);
       await atualizarComFencing(db, organizacaoId, providerInstanceId, "whatsapp_auth_state_fenced",
         { p_auth_state_encrypted: authStateEncrypted, p_auth_state_version: authStateVersion },
+        { gatewayProcessId, leaseEpoch });
+    },
+
+    // ---- reset explícito do operador (Checkpoint C3.5-B.2) ----
+    // Reaproveita a MESMA RPC `whatsapp_auth_state_fenced` (migration 084) —
+    // nenhuma migration nova. O corpo da função faz `SET auth_state_encrypted
+    // = p_auth_state_encrypted, auth_state_version = p_auth_state_version`
+    // (atribuição direta, sem COALESCE) — passar NULL/NULL realmente limpa
+    // as duas colunas, com o mesmo fencing owner+epoch+validade de sempre.
+    async resetarAuthState(organizacaoId, { providerInstanceId = INSTANCIA_PADRAO, gatewayProcessId, leaseEpoch } = {}, deps = {}) {
+      const db = await obterCliente(deps);
+      await atualizarComFencing(db, organizacaoId, providerInstanceId, "whatsapp_auth_state_fenced",
+        { p_auth_state_encrypted: null, p_auth_state_version: null },
         { gatewayProcessId, leaseEpoch });
     },
 

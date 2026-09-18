@@ -297,6 +297,21 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
     creds = credsIniciais;
   }
 
+  /**
+   * Checkpoint C3.5-B.2 — limpa a memória DESTE processo (creds + todas as
+   * chaves conhecidas). Só deve ser chamado DEPOIS que o backend já
+   * confirmou o reset do ciphertext (nunca antes — ver
+   * baileysSession.js#resetarSessao) — defesa em profundidade: mesmo que
+   * `conectar()` já reescrevesse `creds` via `inicializarCreds(initAuthCreds())`
+   * no próximo pareamento, isto garante que nenhuma referência ao auth
+   * antigo sobrevive na memória do processo entre o reset e esse próximo
+   * `/connect`. Não persiste nada — só estado local.
+   */
+  function invalidarLocal() {
+    creds = null;
+    keysPorTipo = {};
+  }
+
   /** Forma exigida pelo Baileys: `{ creds, keys: { get, set } }`. */
   function comoAuthState() {
     return {
@@ -329,6 +344,7 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
   return {
     carregar,
     inicializarCreds,
+    invalidarLocal,
     comoAuthState,
     aguardarPersistenciasPendentes,
     /**

@@ -115,6 +115,25 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
     }
   });
 
+  // Reset explícito do operador (Checkpoint C3.5-B.2) — invalida o
+  // ciphertext antigo de forma controlada (ex.: sessão revogada fora de
+  // banda, pelo celular) para permitir um pareamento novo. Rota NOVA, sem
+  // preocupação de retrocompat de rolling deploy: fencing SEMPRE
+  // obrigatório aqui (nunca opcional como em GET /auth-state).
+  router.post("/eventos/auth-state/reset", async (req, res, next) => {
+    try {
+      const corpo = req.corpoJson ?? {};
+      if (!corpoFencingValido(corpo)) {
+        return res.status(400).json({ error: "gatewayProcessId/leaseEpoch ausente ou inválido" });
+      }
+      await repo.resetarAuthState(organizacaoId, { gatewayProcessId: corpo.gatewayProcessId, leaseEpoch: corpo.leaseEpoch });
+      res.json({ ok: true });
+    } catch (e) {
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
+  });
+
   router.get("/auth-state", async (req, res, next) => {
     try {
       // Fencing OPCIONAL via querystring (Checkpoint C3.5-B, item 11) —

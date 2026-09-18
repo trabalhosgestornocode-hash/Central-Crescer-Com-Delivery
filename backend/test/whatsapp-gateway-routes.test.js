@@ -194,6 +194,50 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
     assert.deepEqual(await rGet.json(), { status: "present", authStateEncrypted: "v1:de-B" });
   });
 
+  test("auth-state/reset: fenced, limpa o ciphertext (GET auth-state volta a absent), heartbeat/lease intocados", async () => {
+    _resetarNonces();
+    const lease = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateEncrypted: "v1:antes-do-reset", authStateVersion: "v1", ...lease });
+
+    _resetarNonces();
+    const rReset = await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state/reset", lease);
+    assert.equal(rReset.status, 200);
+
+    _resetarNonces();
+    const rGet = await chamarAssinado("GET", "/internal/comunicacao/auth-state");
+    assert.deepEqual(await rGet.json(), { status: "absent" }, "depois do reset, GET precisa voltar a absent — nunca o ciphertext antigo");
+  });
+
+  test("auth-state/reset: sem gatewayProcessId/leaseEpoch é rejeitado com 400 (fencing sempre obrigatório aqui, nunca opcional)", async () => {
+    _resetarNonces();
+    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state/reset", {});
+    assert.equal(r.status, 400);
+  });
+
+  test("auth-state/reset: fencing stale é rejeitado com 409, e o ciphertext atual (de um owner mais novo) NÃO é apagado", async () => {
+    _resetarNonces();
+    const leaseA = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateEncrypted: "v1:de-A-para-reset-stale", authStateVersion: "v1", ...leaseA });
+
+    _resetarNonces();
+    await liberarLeaseDeTeste(leaseA);
+    _resetarNonces();
+    const leaseB = await adquirirLeaseDeTeste();
+    _resetarNonces();
+    await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state", { authStateEncrypted: "v1:de-B-para-reset-stale", authStateVersion: "v1", ...leaseB });
+
+    _resetarNonces();
+    const rStaleReset = await chamarAssinado("POST", "/internal/comunicacao/eventos/auth-state/reset", leaseA);
+    assert.equal(rStaleReset.status, 409);
+    assert.deepEqual(await rStaleReset.json(), { error: "WHATSAPP_GATEWAY_LEASE_STALE" });
+
+    _resetarNonces();
+    const rGet = await chamarAssinado("GET", "/internal/comunicacao/auth-state");
+    assert.deepEqual(await rGet.json(), { status: "present", authStateEncrypted: "v1:de-B-para-reset-stale" }, "o reset stale (A) não pode ter apagado o ciphertext atual, gravado por B");
+  });
+
   test("GET auth-state sem nada salvo ainda devolve status absent, não erro", async () => {
     const repoVazio = criarRepoEmMemoria();
     const app = express();

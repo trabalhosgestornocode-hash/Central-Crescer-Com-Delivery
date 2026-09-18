@@ -90,6 +90,14 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
       return chamar("POST", `${R}/eventos/auth-state`, payload);
     },
     /**
+     * Checkpoint C3.5-B.2 — RESET explícito do operador: limpa o ciphertext
+     * antigo no backend (fenced, owner+epoch obrigatórios). Rota dedicada,
+     * nunca reaproveita `salvarAuthState` (que exige uma string não-vazia).
+     */
+    async resetarAuthState({ gatewayProcessId, leaseEpoch }) {
+      return chamar("POST", `${R}/eventos/auth-state/reset`, { gatewayProcessId, leaseEpoch });
+    },
+    /**
      * Bootstrap/reconexão: recupera o auth state cifrado salvo. `contextoLease`
      * é OPCIONAL (Checkpoint C3.5-B, item 11) — quando informado, vai na
      * querystring (parte do que o HMAC assina) para o backend só devolver o

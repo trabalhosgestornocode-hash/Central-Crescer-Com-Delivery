@@ -109,6 +109,15 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
     async connect() { await chamar("POST", "/internal/whatsapp/connect", {}); },
     async disconnect() { await chamar("POST", "/internal/whatsapp/disconnect", {}); },
     async getStatus() { return chamar("GET", "/internal/whatsapp/status"); },
+    // ---- fora do contrato WhatsAppProvider (Checkpoint C3.5-B.2) — RESET
+    // explícito do operador: invalida o auth state antigo (revogado/
+    // reparado fora de banda, ex.: o usuário removeu o dispositivo pelo
+    // celular) para permitir um pareamento novo controlado. Deliberadamente
+    // NÃO faz parte do contrato genérico (METODOS_OBRIGATORIOS em
+    // whatsapp.provider.js) — é uma capacidade específica de auth
+    // state cifrado do Gateway Baileys, sem equivalente natural numa API
+    // oficial (Meta/Z-API não tem "ciphertext de sessão" para resetar).
+    async reset() { await chamar("POST", "/internal/whatsapp/reset", {}); },
 
     async sendText({ telefoneE164, texto, idempotencyKey }) {
       return chamar("POST", "/internal/whatsapp/messages", { telefoneE164, tipo: "text", texto, idempotencyKey });

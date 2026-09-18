@@ -41,6 +41,15 @@ export function criarRotas(sessao) {
     } catch (e) { next(e); }
   });
 
+  // Reset/re-pair explícito do operador (Checkpoint C3.5-B.2) — nunca
+  // chamado automaticamente por nenhum outro caminho do Gateway.
+  router.post("/whatsapp/reset", async (req, res, next) => {
+    try {
+      await sessao.resetarSessao();
+      res.json({ ok: true, status: sessao._status() });
+    } catch (e) { next(e); }
+  });
+
   router.get("/whatsapp/status", async (req, res, next) => {
     try {
       res.json(await sessao.getStatus());
