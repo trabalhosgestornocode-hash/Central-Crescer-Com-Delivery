@@ -33,23 +33,36 @@ function socketFalsoFabrica() {
   return fabrica;
 }
 
+// Checkpoint C3.5-C.2/C.3 — UUID fixo devolvido por padrão por
+// obterAuthSessionIdAtual() nos fakes abaixo. A máquina de estados real só
+// exige um valor NÃO-NULO para prosseguir com a confirmação (a igualdade
+// exata com o que o backend espera é responsabilidade do backend/RPC, testada
+// em whatsapp-gateway-*.test.js e nas migrations — aqui só precisamos de um
+// valor "presente" para exercitar o dance open->drain->confirmar->CONNECTED).
+// Testes que precisam exercitar a AUSÊNCIA de geração (ou uma geração
+// diferente) sobrescrevem isto explicitamente.
+const AUTH_SESSION_ID_FAKE = "11111111-1111-4111-8111-111111111111";
+
 function authAdapterFalso() {
   return {
     async carregar() { return { status: "absent" }; },
     inicializarCreds() {},
     comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
     async aoAtualizarCreds() {},
+    async aguardarPersistenciasPendentes() {},
+    obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
   };
 }
 
 // Checkpoint C3.5-B.2 — diferente de authAdapterFalso() (cujo comoAuthState()
 // devolve um `creds` NOVO e sempre vazio a cada chamada — aoAtualizarCreds()
 // é um no-op), este fake MANTÉM e faz MERGE real em `creds`, exatamente como
-// authState.js#aoAtualizarCreds faz (Object.assign in-place). Necessário
-// para qualquer teste que precise emitir creds.update({registered:true}) e
-// depois observar tentarConfirmarConexao() promovendo para CONNECTED — sem
-// isto, `comoAuthState().creds?.registered` nunca refletiria o que foi
-// emitido.
+// authState.js#aoAtualizarCreds faz (Object.assign in-place). Útil para
+// qualquer teste que precise emitir creds.update() e depois observar o valor
+// mesclado via comoAuthState() (ex.: diagnóstico de `registered` em log —
+// Checkpoint C3.5-C.1: NUNCA mais controla se a sessão promove a CONNECTED,
+// isso agora é `socketOpen && authConfirmado`, ver
+// confirmarGeracaoAposOpen()/obterAuthSessionIdAtual() abaixo).
 function authAdapterComRegistroFalso(resultadoCarregar = { status: "absent" }) {
   let creds = null;
   return {
@@ -61,6 +74,8 @@ function authAdapterComRegistroFalso(resultadoCarregar = { status: "absent" }) {
       if (creds) Object.assign(creds, delta);
       else creds = delta;
     },
+    async aguardarPersistenciasPendentes() {},
+    obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
   };
 }
 
@@ -76,6 +91,10 @@ function backendClientFalso() {
     // Checkpoint C3.5-B.2 — reset explícito do operador; default inofensivo
     // (sucesso), sobrescrito pelos testes de falha parcial.
     resetarAuthState: mock.fn(async () => ({ ok: true })),
+    // Checkpoint C3.5-C.2/C.3 — confirmação durável; default inofensivo
+    // (sucesso), sobrescrito pelos testes de LEASE_STALE/AUTH_SESSION_STALE/
+    // capacidade ausente/falha genérica.
+    confirmarAuthState: mock.fn(async () => ({})),
   };
 }
 
@@ -491,7 +510,7 @@ describe("baileysSession — 515/restartRequired: reconecta reaproveitando creds
 });
 
 describe("baileysSession — lifecycle", () => {
-  test("conectar() sem QR/rede real: vai para CONNECTING, 'open' sozinho NÃO conecta, só com registered persistido também vira CONNECTED", async () => {
+  test("conectar() sem QR/rede real: vai para CONNECTING; 'open' sozinho ainda NÃO promove SINCRONAMENTE (a confirmação é assíncrona); só depois do dance de confirmação concluir é que vira CONNECTED", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const sessao = criarSessaoBaileys({
       authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
@@ -503,12 +522,21 @@ describe("baileysSession — lifecycle", () => {
 
     fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
     fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
-    // Checkpoint C3.5-B.2, item 3 — 'open' sozinho NUNCA autoriza CONNECTED.
-    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "socket aberto sem o registro persistido não pode promover");
+    // Checkpoint C3.5-C.2/C.3 — `connection.update` é um handler SÍNCRONO;
+    // `confirmarGeracaoAposOpen()` é disparado mas suspende no primeiro
+    // `await` (drenar persistências pendentes) — a checagem IMEDIATAMENTE
+    // após o emit (ainda no mesmo tick) precisa continuar vendo CONNECTING,
+    // mesmo que a confirmação vá ter sucesso um instante depois.
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "a confirmação durável é assíncrona — não pode promover no mesmo tick síncrono do 'open'");
+    assert.equal(sessao._authConfirmado(), false, "authConfirmado ainda não pode ter sido setado — o dance nem chamou o backend ainda");
 
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
-    await new Promise((resolve) => setImmediate(resolve)); // deixa a persistência (fire-and-forget) resolver
+    // `registered` (Baileys) é só diagnóstico agora — NUNCA decide nada (ver
+    // Checkpoint C3.5-C.1). O que promove para CONNECTED é o dance
+    // open->drain->confirmarAuthState(RPC)->authConfirmado, disparado pelo
+    // próprio 'open' acima — sem precisar de nenhum creds.update adicional.
+    await new Promise((resolve) => setImmediate(resolve)); // deixa o dance de confirmação (assíncrono) concluir
 
+    assert.equal(sessao._authConfirmado(), true);
     assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
     assert.equal((await sessao.getStatus()).telefone, "+5511999990000");
   });
@@ -623,15 +651,20 @@ describe("baileysSession — lifecycle", () => {
     assert.equal(fabricaSocket.criados.length, 2);
   });
 
-  test("SESSÃO RESTAURADA (authAdapter.carregar() devolve creds.registered=true): queda transitória também reconecta, mesmo sem 'open' nesta execução", async () => {
+  test("SESSÃO RESTAURADA (authAdapter.carregar() devolve authConfirmado=true): queda transitória também reconecta, mesmo sem 'open' nesta execução", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const chamadasAgendar = [];
     const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
     const authAdapterComSessaoSalva = {
-      async carregar() { return { status: "loaded", registered: true }; },
+      // Checkpoint C3.5-C.1/C.2/C.3 — `registered` nunca decide mais nada;
+      // quem decide se esta geração já é uma sessão real preexistente é o
+      // marcador DURÁVEL `authConfirmado` (backend).
+      async carregar() { return { status: "loaded", authConfirmado: true, authSessionId: AUTH_SESSION_ID_FAKE }; },
       inicializarCreds() {},
-      comoAuthState() { return { creds: { registered: true }, keys: { get: async () => ({}), set: async () => {} } }; },
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
     };
     const sessao = criarSessaoBaileys({
       authAdapter: authAdapterComSessaoSalva, backendClient: backendClientFalso(), config: configFalso(),
@@ -639,7 +672,7 @@ describe("baileysSession — lifecycle", () => {
     });
 
     await sessao.conectar();
-    assert.equal(sessao._autenticadaAlgumaVez(), true, "creds.registered:true carregado do backend já conta como sessão real preexistente");
+    assert.equal(sessao._autenticadaAlgumaVez(), true, "authConfirmado:true carregado do backend já conta como sessão real preexistente");
 
     fabricaSocket.criados[0].ev.emit("connection.update", {
       connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
@@ -647,35 +680,43 @@ describe("baileysSession — lifecycle", () => {
     assert.equal(chamadasAgendar.length, 1, "restaurar uma sessão registrada e cair depois é transitório, não pareamento inicial");
   });
 
-  test("BUG #1 ENCONTRADO AO VIVO NO CHECKPOINT C3 (histórico) — SUPERSEDIDO no Checkpoint C3.5-B.1: auth presente com registered=false agora FAIL-CLOSED (nunca mais autodescarta e reconecta)", async () => {
+  test("BUG #1 (histórico, C3) + FAIL-CLOSED (histórico, C3.5-B.1) — SUPERSEDIDOS no Checkpoint C3.5-C.1/C.3: auth presente com registered=false é o caso NORMAL do fluxo QR, não uma anomalia — sempre abre socket, nunca fail-closed", async () => {
     // Comportamento ORIGINAL (C3): descartava as creds parciais e seguia
-    // para um QR novo — nunca contava como autenticada, mas TAMBÉM nunca
-    // travava. Comportamento ATUAL (C3.5-B.1, pós-auditoria de um QR
-    // indevido ao vivo em produção): um auth state PRESENTE com
-    // registered!==true agora é FAIL-CLOSED — não abre socket nenhum, não
-    // gera QR, não silenciosamente reinicia o pareamento. Ver describe
-    // "conectar() manual — contrato explícito de auth state" abaixo para a
-    // bateria completa (cenários A-G do Checkpoint C3.5-B.1).
+    // para um QR novo. Comportamento INTERMEDIÁRIO (C3.5-B.1, pós-auditoria
+    // de um QR indevido ao vivo em produção): passou a ser FAIL-CLOSED —
+    // premissa de que `registered!==true` com auth presente era sempre uma
+    // anomalia. Comportamento ATUAL (C3.5-C.1, investigação read-only contra
+    // o Baileys 6.7.24 REALMENTE instalado — ver
+    // test/baileys-contrato-real.test.js): `creds.registered` NUNCA vira
+    // `true` no fluxo de QR real (só no pairing code numérico) — logo
+    // "auth presente + registered=false" é o estado NORMAL de QUALQUER
+    // sessão QR real, inclusive uma totalmente autenticada e funcional. O
+    // fail-closed baseado nessa premissa travava TODA sessão QR real para
+    // sempre (achado ao vivo em produção: sessão autenticada presa em
+    // CONNECTING). `conectar()` agora SEMPRE tenta retomar um AUTH_PRESENT,
+    // e quem decide se a promoção a CONNECTED é imediata (`authConfirmado`
+    // já true) ou exige confirmação nova é o marcador DURÁVEL do backend —
+    // nunca `registered`. Ver describe "conectar() manual — contrato
+    // explícito de auth state" abaixo para a bateria completa.
     const fabricaSocket = socketFalsoFabrica();
-    const chamadasAgendar = [];
-    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
     const authAdapterComCredsParciais = {
-      async carregar() { return { status: "loaded", registered: false }; }, // existe auth_state_encrypted no backend...
+      async carregar() { return { status: "loaded", authConfirmado: false, authSessionId: AUTH_SESSION_ID_FAKE }; }, // existe auth_state_encrypted no backend, geração nunca confirmada — normal em QR
       inicializarCreds: mock.fn(),
-      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; }, // ...mas o pareamento nunca completou
+      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
     };
     const sessao = criarSessaoBaileys({
       authAdapter: authAdapterComCredsParciais, backendClient: backendClientFalso(), config: configFalso(),
-      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
     });
 
     await sessao.conectar();
 
-    assert.equal(sessao._autenticadaAlgumaVez(), false, "creds parciais (registered:false) NUNCA contam como autenticação real");
-    assert.equal(fabricaSocket.criados.length, 0, "fail-closed: nenhum socket é aberto para um auth presente não registrado");
-    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
-    assert.equal(chamadasAgendar.length, 0, "nem chega a agendar nada — conectar() retornou antes de qualquer socket");
+    assert.equal(sessao._autenticadaAlgumaVez(), false, "authConfirmado:false carregado do backend NÃO conta (ainda) como sessão confirmada");
+    assert.equal(fabricaSocket.criados.length, 1, "AUTH_PRESENT sempre abre socket agora, mesmo com registered:false/authConfirmado:false — nunca mais fail-closed por causa disso");
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING);
   });
 
   test("pareamento inicial interrompido também PARA o heartbeat periódico (não fica reportando DISCONNECTED para sempre)", async () => {
@@ -1171,20 +1212,44 @@ describe("baileysSession — intenção do operador (Checkpoint C3.5-B, item 3)"
 });
 
 describe("baileysSession — restore automático (Checkpoint C3.5-B)", () => {
+  // RESTORE NORMAL (Checkpoint C3.5-C.2/C.3, seção 13) — geração já
+  // confirmada durável antes; connection:"open" sozinho basta.
   function authAdapterRestoreOk() {
     return {
-      async carregar() { return { status: "loaded", registered: true }; },
+      async carregar() { return { status: "loaded", authConfirmado: true, authSessionId: AUTH_SESSION_ID_FAKE }; },
       inicializarCreds() {},
-      comoAuthState() { return { creds: { registered: true }, keys: { get: async () => ({}), set: async () => {} } }; },
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
     };
   }
-  function authAdapterRestoreSemRegistro() {
+  // RECOVERY LEGADO (Checkpoint C3.5-C.2/C.3, seção 14) — auth presente,
+  // authSessionId presente, mas NUNCA confirmado durável (sessão real
+  // anterior a este checkpoint, ou backfill da migration 086). Abre socket
+  // (origem 'restore', nunca gera QR) e depende do dance de confirmação
+  // completo depois do 'open'.
+  function authAdapterRestoreLegado() {
     return {
-      async carregar() { return { status: "loaded", registered: false }; },
+      async carregar() { return { status: "loaded", authConfirmado: false, authSessionId: AUTH_SESSION_ID_FAKE }; },
       inicializarCreds() {},
-      comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; },
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
+    };
+  }
+  // Defesa em profundidade (seção 14) — auth presente mas SEM authSessionId
+  // nenhum (nunca deveria acontecer dado o backfill da migration 086, mas o
+  // restore precisa fail-safe mesmo assim: nunca restaura às cegas).
+  function authAdapterRestoreSemAuthSessionId() {
+    return {
+      async carregar() { return { status: "loaded", authConfirmado: false, authSessionId: null }; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return null; },
     };
   }
   function authAdapterRestoreSemNada() {
@@ -1193,6 +1258,8 @@ describe("baileysSession — restore automático (Checkpoint C3.5-B)", () => {
       inicializarCreds() {},
       comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return null; },
     };
   }
   function authAdapterRestoreCorrompido() {
@@ -1201,6 +1268,8 @@ describe("baileysSession — restore automático (Checkpoint C3.5-B)", () => {
       inicializarCreds() {},
       comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return null; },
     };
   }
 
@@ -1222,7 +1291,7 @@ describe("baileysSession — restore automático (Checkpoint C3.5-B)", () => {
     assert.equal(fabricaSocket.criados.length, 0);
   });
 
-  test("owner + desired=CONNECTED + creds.registered=true -> restaura, abre socket com origem 'restore'", async () => {
+  test("owner + desired=CONNECTED + authConfirmado=true (RESTORE NORMAL) -> restaura, abre socket com origem 'restore'", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const backendClient = backendClientFalso();
     backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "CONNECTED" }));
@@ -1297,13 +1366,39 @@ describe("baileysSession — restore automático (Checkpoint C3.5-B)", () => {
     assert.equal(sessao.obterQrAtual(), null);
   });
 
-  test("auth state existe mas creds.registered=false (pareamento nunca completou) -> NOOP", async () => {
+  test("RECOVERY LEGADO (Checkpoint C3.5-C.2/C.3, seção 14) — auth presente com authConfirmado=false mas authSessionId presente: abre socket (origem 'restore'), UMA tentativa por epoch, nunca gera QR; 'open' + confirmação dão CONNECTED", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "CONNECTED" }));
+    const leaseManager = leaseManagerFalso({ leaseEpoch: 6 });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterRestoreLegado(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+
+    await sessao._restaurarSessaoSePossivel();
+
+    assert.equal(fabricaSocket.criados.length, 1, "sessão real anterior a este checkpoint (ou backfill) precisa poder ser recuperada, não travar em NOOP");
+    assert.equal(sessao._origemSocket(), "restore");
+    assert.equal(sessao._authConfirmado(), false, "ainda não confirmado — falta o dance completo depois do 'open'");
+    assert.equal(sessao._autenticadaAlgumaVez(), false, "recovery legado só marca autenticadaAlgumaVez depois de confirmar de verdade, não antes");
+    assert.equal(sessao._epochRestoreAvaliado(), 6, "UMA tentativa por epoch — já marcado mesmo antes do resultado do 'open' ser conhecido");
+
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setImmediate(resolve)); // dance de confirmação assíncrono
+
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 1);
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+    assert.equal(sessao._autenticadaAlgumaVez(), true);
+  });
+
+  test("defesa em profundidade: auth presente mas SEM authSessionId (nunca deveria acontecer dado o backfill da migration 086) -> NOOP fail-safe, nunca restaura às cegas", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const backendClient = backendClientFalso();
     backendClient.obterEstadoSessao = mock.fn(async () => ({ status: "DISCONNECTED", desiredConnectionState: "CONNECTED" }));
     const leaseManager = leaseManagerFalso();
     const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterRestoreSemRegistro(), backendClient, config: configFalso(),
+      authAdapter: authAdapterRestoreSemAuthSessionId(), backendClient, config: configFalso(),
       fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
     });
 
@@ -1493,6 +1588,11 @@ describe("baileysSession — LOGGED_OUT é terminal (reforço pós-auditoria, Ch
             return { ok: true };
           }),
           obterEstadoSessao: mock.fn(async () => ({ status: statusPersistido, desiredConnectionState: desiredPersistido })),
+          // Checkpoint C3.5-C.2/C.3 — sucesso inofensivo por padrão; nenhum
+          // teste deste describe exercita o dance de confirmação em si (isso
+          // é coberto no describe "confirmação durável de auth"), só precisa
+          // que 'open' consiga promover normalmente.
+          confirmarAuthState: mock.fn(async () => ({})),
         };
       },
     };
@@ -1650,13 +1750,15 @@ describe("baileysSession — LOGGED_OUT é terminal (reforço pós-auditoria, Ch
     assert.equal(banco.statusPersistido(), STATUS_CONEXAO.DISCONNECTED);
     assert.equal(banco.desiredPersistido(), "CONNECTED", "shutdown técnico NUNCA mexe em desired_connection_state — continua a intenção original do operador");
 
-    // novo owner: desired continua CONNECTED, status DISCONNECTED (não LOGGED_OUT), auth registrado -> restaura
+    // novo owner: desired continua CONNECTED, status DISCONNECTED (não LOGGED_OUT), auth confirmado -> restaura
     const fabricaSocketB = socketFalsoFabrica();
     const authAdapterOk = {
-      async carregar() { return { status: "loaded", registered: true }; },
+      async carregar() { return { status: "loaded", authConfirmado: true, authSessionId: AUTH_SESSION_ID_FAKE }; },
       inicializarCreds() {},
-      comoAuthState() { return { creds: { registered: true }, keys: { get: async () => ({}), set: async () => {} } }; },
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
     };
     const leaseManagerB = leaseManagerFalso({ leaseEpoch: 21, gatewayProcessId: "proc-B" });
     const sessaoB = criarSessaoBaileys({
@@ -1722,6 +1824,8 @@ describe("baileysSession — conectar() manual: contrato explícito de auth stat
       inicializarCreds: mock.fn(),
       comoAuthState() { return { creds: registered !== undefined ? { registered } : {}, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
+      async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return resultadoOuErro?.authSessionId ?? AUTH_SESSION_ID_FAKE; },
     };
   }
 
@@ -1742,9 +1846,9 @@ describe("baileysSession — conectar() manual: contrato explícito de auth stat
     assert.equal(sessao.obterQrAtual(), "2@qr-novo-pareamento==", "QR precisa ser permitido neste único caminho");
   });
 
-  test("B) auth válida + registered=true -> restore: initAuthCreds NÃO chamado, sessão marcada como já autenticada", async () => {
+  test("B) auth válida + authConfirmado=true -> restore: initAuthCreds NÃO chamado, sessão marcada como já autenticada (registered do Baileys é só diagnóstico — NUNCA decide isto, Checkpoint C3.5-C.1)", async () => {
     const fabricaSocket = socketFalsoFabrica();
-    const authAdapter = authAdapterComResultado({ status: "loaded", registered: true });
+    const authAdapter = authAdapterComResultado({ status: "loaded", registered: false, authConfirmado: true });
     const leaseManager = leaseManagerFalso();
     const sessao = criarSessaoBaileys({
       authAdapter, backendClient: backendClientFalso(), config: configFalso(),
@@ -1753,7 +1857,7 @@ describe("baileysSession — conectar() manual: contrato explícito de auth stat
 
     await sessao.conectar({ persistirIntencaoConectada: true });
 
-    assert.equal(authAdapter.inicializarCreds.mock.calls.length, 0, "creds existentes nunca podem ser descartadas quando registered:true");
+    assert.equal(authAdapter.inicializarCreds.mock.calls.length, 0, "creds existentes nunca podem ser descartadas quando authConfirmado:true");
     assert.equal(fabricaSocket.criados.length, 1);
     assert.equal(sessao._autenticadaAlgumaVez(), true);
     assert.equal(sessao.obterQrAtual(), null);
@@ -1809,9 +1913,9 @@ describe("baileysSession — conectar() manual: contrato explícito de auth stat
     assert.equal(leaseManager.notificarPerdaExterna.mock.calls.length, 1, "precisa avisar o leaseManager, mesma disciplina de heartbeat/desired-state/restore");
   });
 
-  test("F) auth persistida + registered=false -> FAIL CLOSED (coberto também pelo teste histórico 'BUG #1' acima)", async () => {
+  test("F) auth persistida + registered=false/authConfirmado=false -> NÃO É MAIS FAIL CLOSED (Checkpoint C3.5-C.1/C.3 — este é o estado NORMAL de qualquer sessão QR ainda não confirmada; ver teste histórico 'BUG #1' acima)", async () => {
     const fabricaSocket = socketFalsoFabrica();
-    const authAdapter = authAdapterComResultado({ status: "loaded", registered: false });
+    const authAdapter = authAdapterComResultado({ status: "loaded", registered: false, authConfirmado: false });
     const leaseManager = leaseManagerFalso();
     const sessao = criarSessaoBaileys({
       authAdapter, backendClient: backendClientFalso(), config: configFalso(),
@@ -1821,7 +1925,8 @@ describe("baileysSession — conectar() manual: contrato explícito de auth stat
     await sessao.conectar({ persistirIntencaoConectada: true });
 
     assert.equal(authAdapter.inicializarCreds.mock.calls.length, 0, "auth PRESENTE nunca é descartado silenciosamente");
-    assert.equal(fabricaSocket.criados.length, 0);
+    assert.equal(fabricaSocket.criados.length, 1, "AUTH_PRESENT sempre abre socket agora — fail-closed baseado em registered foi removido");
+    assert.equal(sessao._autenticadaAlgumaVez(), false, "authConfirmado:false ainda não conta como sessão confirmada");
     assert.equal(sessao.obterQrAtual(), null);
   });
 
@@ -1962,7 +2067,7 @@ describe("baileysSession — reset explícito do operador (Checkpoint C3.5-B.2)"
   test("4) reset completo: desired=DISCONNECTED confirmado, auth resetado (NULL/NULL fenced), local invalidado, status=DISCONNECTED, heartbeat final", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const backendClient = backendClientFalso();
-    const authAdapter = authAdapterComRegistroFalso({ status: "loaded", registered: true });
+    const authAdapter = authAdapterComRegistroFalso({ status: "loaded", authConfirmado: true, authSessionId: AUTH_SESSION_ID_FAKE });
     const leaseManager = leaseManagerFalso({ gatewayProcessId: "proc-reset", leaseEpoch: 7 });
     const sessao = criarSessaoBaileys({
       authAdapter, backendClient, config: configFalso(),
@@ -2028,169 +2133,356 @@ describe("baileysSession — reset explícito do operador (Checkpoint C3.5-B.2)"
   });
 });
 
-describe("baileysSession — confirmação dupla de pareamento (Checkpoint C3.5-B.2)", () => {
-  test("9) creds.update com registered=false persiste normalmente, mas NUNCA promove — falta o fato B", async () => {
-    const fabricaSocket = socketFalsoFabrica();
-    const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
-      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
-    });
-    await sessao.conectar();
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: false });
-    await new Promise((resolve) => setImmediate(resolve));
-
-    assert.equal(sessao._registroPersistido(), false);
-    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING);
-  });
-
-  test("9b) creds.update PARCIAL sem o campo 'registered' NÃO apaga um registered=true já confirmado (Object.assign, nunca substituição)", async () => {
-    const fabricaSocket = socketFalsoFabrica();
-    const authAdapter = authAdapterComRegistroFalso();
-    const sessao = criarSessaoBaileys({
-      authAdapter, backendClient: backendClientFalso(), config: configFalso(),
-      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
-    });
-    await sessao.conectar();
-
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(sessao._registroPersistido(), true);
-
-    fabricaSocket.criados[0].ev.emit("creds.update", { account: { fake: "delta-parcial-sem-registered" } });
-    await new Promise((resolve) => setImmediate(resolve));
-
-    assert.equal(authAdapter.comoAuthState().creds.registered, true, "Object.assign precisa ter preservado registered=true — delta parcial não pode apagar o campo");
-    assert.equal(sessao._registroPersistido(), true);
-  });
-
-  test("10) registered=true persistido ANTES do connection.open -> ainda NÃO CONNECTED; só o 'open' promove", async () => {
-    const fabricaSocket = socketFalsoFabrica();
-    const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
-      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
-    });
-    await sessao.conectar();
-
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(sessao._registroPersistido(), true);
-    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "registro persistido sozinho não pode promover sem 'open'");
-
-    fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
-    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
-    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
-  });
-
-  test("12) open + registered persistido promove para CONNECTED exatamente UMA vez — eventos repetidos/fora de ordem não duplicam a promoção", async (t) => {
-    const fabricaSocket = socketFalsoFabrica();
-    const linhas = [];
-    t.mock.method(console, "log", (s) => linhas.push(s));
-    const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterComRegistroFalso(), backendClient: backendClientFalso(), config: configFalso(),
-      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
-    });
-    await sessao.conectar();
-    fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
-    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
-
-    // Repete os dois eventos fora de ordem — NOOP idempotente, nunca reloga/repromove.
-    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
-    await new Promise((resolve) => setImmediate(resolve));
-
-    const promocoes = linhas.map((s) => JSON.parse(s)).filter((l) => l.evento === "pareamento.concluido");
-    assert.equal(promocoes.length, 1, "pareamento.concluido só pode ter sido logado uma vez");
-  });
-
-  test("13) persistência do snapshot com registered=true FALHA -> fail-safe: socket fechado, NUNCA CONNECTED, sem QR automático", async (t) => {
-    const fabricaSocket = socketFalsoFabrica();
-    const authAdapter = authAdapterComRegistroFalso();
-    authAdapter.aoAtualizarCreds = async (delta) => {
-      const estado = authAdapter.comoAuthState();
-      if (estado.creds) Object.assign(estado.creds, delta);
-      throw new Error("falha ao persistir no backend");
+describe("baileysSession — confirmação durável de auth (Checkpoint C3.5-C.2/C.3)", () => {
+  // Fake com drenagem controlável POR NÚMERO de chamada — usado pelos testes
+  // que precisam observar o estado exatamente ANTES do drain terminar (o
+  // dance de confirmação suspende exatamente aí, no primeiro `await`).
+  // `chamadasParaBloquear` identifica quais invocações de
+  // aguardarPersistenciasPendentes() devem travar (contadas globalmente,
+  // 1-based) — necessário porque conectar() TAMBÉM chama este método (antes
+  // de recarregar), então um socket NOVO aberto enquanto o dance de um
+  // socket ANTIGO ainda está preso não pode travar também.
+  function authAdapterComDrainControlavel({ authSessionId = AUTH_SESSION_ID_FAKE, chamadasParaBloquear = new Set() } = {}) {
+    let creds = null;
+    let chamadas = 0;
+    const liberadores = new Map();
+    return {
+      async carregar() { return { status: "absent" }; },
+      inicializarCreds(c) { creds = c; },
+      comoAuthState() { return { creds, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds(delta) { if (creds) Object.assign(creds, delta); else creds = delta; },
+      async aguardarPersistenciasPendentes() {
+        chamadas += 1;
+        const numero = chamadas;
+        if (chamadasParaBloquear.has(numero)) {
+          await new Promise((resolve) => { liberadores.set(numero, resolve); });
+        }
+      },
+      obterAuthSessionIdAtual() { return authSessionId; },
+      liberarChamada(numero) { liberadores.get(numero)?.(); },
     };
-    const linhas = [];
-    t.mock.method(console, "error", (s) => linhas.push(s));
+  }
+
+  test("1) fluxo QR real completo: 'registered' PERMANECE false o tempo todo (Checkpoint C3.5-C.1) — open->drain->confirmarAuthState(RPC)->authConfirmado->CONNECTED", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const authAdapter = authAdapterComRegistroFalso(); // AUTH_ABSENT -> pairing novo
     const sessao = criarSessaoBaileys({
-      authAdapter, backendClient: backendClientFalso(), config: configFalso(),
+      authAdapter, backendClient, config: configFalso(),
       fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
     });
     await sessao.conectar();
+
+    // Handshake normal — creds parciais chegam, 'registered' nunca aparece
+    // (comprovado contra o Baileys 6.7.24 real — ver
+    // test/baileys-contrato-real.test.js).
+    fabricaSocket.criados[0].ev.emit("creds.update", { account: { fake: "parcial" } });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(authAdapter.comoAuthState().creds?.registered, false, "registered começa (e continua) false — initAuthCreds() real nunca o altera neste fluxo");
+
     fabricaSocket.criados[0].user = { id: "5511999990000:1@s.whatsapp.net" };
     fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "confirmação é assíncrona — não promove no mesmo tick síncrono do 'open'");
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 1);
+    assert.equal(backendClient.confirmarAuthState.mock.calls[0].arguments[0].authSessionId, AUTH_SESSION_ID_FAKE);
+    assert.equal(sessao._authConfirmado(), true);
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+    assert.equal(authAdapter.comoAuthState().creds?.registered, false, "CONNECTED foi alcançado com registered CONTINUANDO false — a prova central do Checkpoint C3.5-C.3");
+  });
+
+  test("2) 'open' antes do drain terminar -> ainda NÃO CONNECTED; só depois do drain resolver é que confirma e promove", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const authAdapter = authAdapterComDrainControlavel({ chamadasParaBloquear: new Set([2]) });
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar(); // chamada #1 do drain — resolve na hora
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" }); // chamada #2 — travada
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "drain ainda não liberou — não pode ter confirmado nada");
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 0, "confirmarAuthState só é chamado DEPOIS do drain");
+
+    authAdapter.liberarChamada(2);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 1);
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+  });
+
+  test("3) drain falha -> fail-safe: socket fechado, NUNCA CONNECTED, sem QR automático, confirmarAuthState nem chega a ser chamado", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    let chamadasDrain = 0;
+    const authAdapter = {
+      async carregar() { return { status: "absent" }; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+      // Chamada #1 (dentro do próprio conectar(), antes do reload) resolve
+      // normalmente; só a #2 (do dance de confirmação, depois do 'open') falha.
+      async aguardarPersistenciasPendentes() {
+        chamadasDrain += 1;
+        if (chamadasDrain >= 2) throw new Error("detalhe interno sensível — nunca pode vazar no log");
+      },
+      obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
+    };
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED, "nunca pode ter promovido para CONNECTED");
-    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1, "o socket precisa ter sido fechado (fail-safe)");
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1);
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 0);
     assert.equal(sessao._autenticadaAlgumaVez(), false);
-    const linhaFailSafe = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "pareamento.registrado_persistir_falhou_fail_safe");
-    assert.ok(linhaFailSafe, "precisa existir o log do fail-safe");
+    assert.equal(sessao.obterQrAtual(), null, "nunca gera QR automaticamente");
   });
 
-  test("14) 515 DEPOIS do registered já persistido: reconecta reaproveitando creds, recarrega do backend (já registered), e o próximo 'open' promove para CONNECTED", async () => {
+  test("4) confirmarAuthState falha com erro genérico -> fail-safe: socket fechado, NUNCA CONNECTED", async () => {
     const fabricaSocket = socketFalsoFabrica();
-    let credsPersistidos = null; // simula o que o backend "real" teria gravado
-    const authAdapter = {
-      async carregar() {
-        if (credsPersistidos === null) return { status: "absent" };
-        return { status: "loaded", registered: !!credsPersistidos.registered };
-      },
-      inicializarCreds(c) { credsPersistidos = c; },
-      comoAuthState() { return { creds: credsPersistidos, keys: { get: async () => ({}), set: async () => {} } }; },
-      async aoAtualizarCreds(delta) {
-        if (credsPersistidos) Object.assign(credsPersistidos, delta);
-        else credsPersistidos = delta;
-      },
-      async aguardarPersistenciasPendentes() {},
-    };
+    const backendClient = backendClientFalso();
+    backendClient.confirmarAuthState = mock.fn(async () => { throw new Error("backend indisponível"); });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1);
+    assert.equal(sessao._authConfirmado(), false);
+  });
+
+  test("5) LEASE_STALE ao confirmar -> nunca CONNECTED, leaseManager avisado, fail-safe", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const erroStale = new Error("stale"); erroStale.leaseStale = true;
+    backendClient.confirmarAuthState = mock.fn(async () => { throw erroStale; });
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(leaseManager.notificarPerdaExterna.mock.calls.length, 1);
+    assert.equal(sessao._authConfirmado(), false);
+  });
+
+  test("6) AUTH_SESSION_STALE ao confirmar (geração mudou por baixo) -> NUNCA tratado como transitório: fail-safe IMEDIATO, sem retry, nunca CONNECTED", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const erroStale = new Error("geração obsoleta"); erroStale.authSessionStale = true;
+    backendClient.confirmarAuthState = mock.fn(async () => { throw erroStale; });
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 1, "AUTH_SESSION_STALE nunca é retry — diferente do 404 de capacidade ausente");
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(sessao._authConfirmado(), false);
+  });
+
+  test("7) 'registered'=true (Baileys) SEM 'open' -> nunca CONNECTED — creds.update sozinho não decide mais nada, nem no fluxo QR nem no pairing code numérico (o ÚNICO lugar real onde o Baileys de fato seta registered=true — ver test/baileys-contrato-real.test.js)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "registered:true sem 'open' nunca promove");
+    assert.equal(sessao._authConfirmado(), false);
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 0, "creds.update nunca dispara o dance de confirmação — só 'open' dispara");
+  });
+
+  test("8) authSessionId ausente no instante do 'open' -> fail-safe imediato, confirmarAuthState nem chega a ser chamado (defesa em profundidade)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const authAdapter = authAdapterComRegistroFalso();
+    authAdapter.obterAuthSessionIdAtual = () => null;
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 0);
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1);
+  });
+
+  test("9) 404 (capacidade ausente, rolling deploy) -> retry com backoff -> sucesso na 2ª tentativa -> CONNECTED", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    let chamadas = 0;
+    backendClient.confirmarAuthState = mock.fn(async () => {
+      chamadas += 1;
+      if (chamadas === 1) { const e = new Error("404"); e.capacidadeAusente = true; throw e; }
+      return {};
+    });
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(chamadasAgendar.length, 1, "1 retry agendado depois do 404");
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 2);
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+  });
+
+  test("9b) 404 persistente -> retry LIMITADO, nunca loop infinito, acaba em fail-safe", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.confirmarAuthState = mock.fn(async () => { const e = new Error("404"); e.capacidadeAusente = true; throw e; });
+    const chamadasAgendar = [];
+    const agendar = (fn, ms) => { chamadasAgendar.push(ms); fn(); };
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.ok(chamadasAgendar.length > 0 && chamadasAgendar.length < 10, "retry precisa ter um teto — nunca loop infinito");
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED, "esgotou as tentativas -> fail-safe");
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1);
+  });
+
+  test("10) callback de socket antigo (obsoleto) NUNCA confirma a geração de um socket mais novo — reconexão antes do drain terminar", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const authAdapter = authAdapterComDrainControlavel({ chamadasParaBloquear: new Set([2]) });
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+    });
+    await sessao.conectar(); // chamada #1 do drain (dentro de conectar()) — resolve na hora
+    const socketAntigo = fabricaSocket.criados[0];
+    socketAntigo.ev.emit("connection.update", { connection: "open" }); // chamada #2 (dance) — travada
+
+    // O socket antigo cai ANTES do drain resolver — pareamento inicial não
+    // reconecta sozinho (autenticadaAlgumaVez ainda false), então um novo
+    // /connect explícito é o que abre o segundo socket (chamada #3 do drain,
+    // NÃO travada — só a #2 está no conjunto bloqueado).
+    socketAntigo.ev.emit("connection.update", {
+      connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_CONNECTION_LOST } } },
+    });
+    await sessao.conectar();
+    assert.equal(fabricaSocket.criados.length, 2, "segundo socket precisa ter sido criado normalmente, sem esperar o dance obsoleto");
+
+    authAdapter.liberarChamada(2); // o dance do socket ANTIGO finalmente resolve
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 0, "o callback obsoleto detecta que o socket mudou (comparação de referência) e nunca chega a chamar confirmarAuthState");
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "o socket NOVO continua CONNECTING — o dance antigo não pode tê-lo promovido nem derrubado");
+  });
+
+  test("11) reset limpa authConfirmado local (a geração some junto com o authSessionId)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const leaseManager = leaseManagerFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager,
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sessao._authConfirmado(), true, "pré-condição: geração confirmada antes do reset");
+
+    await sessao.resetarSessao();
+
+    assert.equal(sessao._authConfirmado(), false);
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+  });
+
+  test("12) idempotência: 'open' repetido não chama confirmarAuthState de novo depois de já confirmado", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 1, "authConfirmado já era true — 'open' repetido não deveria disparar o dance de novo");
+    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
+  });
+
+  test("13) nenhuma mensagem é enviada enquanto o dance de confirmação ainda está em voo (enviar() exige CONNECTED)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const authAdapter = authAdapterComDrainControlavel({ chamadasParaBloquear: new Set([2]) });
     const sessao = criarSessaoBaileys({
       authAdapter, backendClient: backendClientFalso(), config: configFalso(),
-      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: (fn) => fn(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
     });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" }); // preso no drain, ainda CONNECTING
 
-    await sessao.conectar(); // AUTH_ABSENT -> initAuthCreds real
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true }); // pair-success confirmado e persistido
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(sessao._registroPersistido(), true, "pré-condição: registro já persistido antes do 515");
-
-    // 515/restartRequired chega ANTES de qualquer 'open'.
-    fabricaSocket.criados[0].ev.emit("connection.update", {
-      connection: "close", lastDisconnect: { error: { output: { statusCode: 515 } } },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    assert.equal(fabricaSocket.criados.length, 2, "reconectou com um socket novo");
-    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "reload viu registered=true, mas falta o 'open' deste socket novo");
-
-    fabricaSocket.criados[1].user = { id: "5511999990000:1@s.whatsapp.net" };
-    fabricaSocket.criados[1].ev.emit("connection.update", { connection: "open" });
-    assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED, "registradoPreviamente=true (do reload) + open -> CONNECTED");
+    await assert.rejects(
+      () => sessao.enviar({ tipo: "text", telefoneE164: "+5511999990000", conteudo: { text: "oi" } }),
+      (e) => { assert.equal(e.preEnvio, true); return true; },
+    );
+    assert.equal(fabricaSocket.criados[0].sendMessage.mock.calls.length, 0);
   });
 
-  test("16) ANTI-REGRESSÃO ponta-a-ponta: RESET -> AUTH_ABSENT -> QR -> creds parciais -> registered=true persistido -> 515 -> reload -> open -> CONNECTED", async () => {
+  test("14) ANTI-REGRESSÃO ponta-a-ponta: RESET -> AUTH_ABSENT -> QR -> creds parciais (registered nunca aparece) -> 515 -> reload -> open -> drain -> confirmar -> CONNECTED", async () => {
     const fabricaSocket = socketFalsoFabrica();
-    let credsPersistidos = { registered: true }; // sessão antiga, já pareada antes do reset
+    let credsPersistidos = { registered: true }; // sessão antiga (legado pré-checkpoint) — nunca deveria sobreviver ao reset
+    let authSessionIdPersistido = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const authAdapter = {
       async carregar() {
         if (credsPersistidos === null) return { status: "absent" };
-        return { status: "loaded", registered: !!credsPersistidos.registered };
+        return { status: "loaded", authConfirmado: false, authSessionId: authSessionIdPersistido };
       },
       inicializarCreds(c) { credsPersistidos = c; },
-      invalidarLocal() { credsPersistidos = null; },
+      invalidarLocal() { credsPersistidos = null; authSessionIdPersistido = null; },
       comoAuthState() { return { creds: credsPersistidos, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds(delta) {
         if (credsPersistidos) Object.assign(credsPersistidos, delta);
         else credsPersistidos = delta;
       },
       async aguardarPersistenciasPendentes() {},
+      obterAuthSessionIdAtual() { return authSessionIdPersistido; },
     };
     const backendClient = backendClientFalso();
-    backendClient.resetarAuthState = mock.fn(async () => { credsPersistidos = null; return { ok: true }; });
+    backendClient.resetarAuthState = mock.fn(async () => { credsPersistidos = null; authSessionIdPersistido = null; return { ok: true }; });
     const leaseManager = leaseManagerFalso();
     const sessao = criarSessaoBaileys({
       authAdapter, backendClient, config: configFalso(),
@@ -2208,17 +2500,15 @@ describe("baileysSession — confirmação dupla de pareamento (Checkpoint C3.5-
     fabricaSocket.criados[0].ev.emit("connection.update", { qr: "2@novo-pareamento-fake==" });
     assert.equal(sessao.obterQrAtual(), "2@novo-pareamento-fake==");
 
-    // Handshake: creds parciais chegam primeiro (ainda sem registered).
+    // Handshake real: creds parciais chegam — 'registered' NUNCA aparece
+    // (Checkpoint C3.5-C.1). A 1ª persistência minta a geração nova.
+    authSessionIdPersistido = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     fabricaSocket.criados[0].ev.emit("creds.update", { account: { fake: "parcial" } });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(sessao._registroPersistido(), false);
+    assert.equal(sessao._authConfirmado(), false);
+    assert.equal(credsPersistidos?.registered, false, "registered continua false — igual ao boot real via initAuthCreds()");
 
-    // pair-success: registered=true confirmado e persistido.
-    fabricaSocket.criados[0].ev.emit("creds.update", { registered: true });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(sessao._registroPersistido(), true);
-
-    // 515/restartRequired antes de qualquer 'open'.
+    // 515/restartRequired antes de qualquer 'open' — achado ao vivo (Checkpoint C3). O novo fluxo funciona mesmo com registered=false o tempo todo.
     fabricaSocket.criados[0].ev.emit("connection.update", {
       connection: "close", lastDisconnect: { error: { output: { statusCode: 515 } } },
     });
@@ -2226,11 +2516,15 @@ describe("baileysSession — confirmação dupla de pareamento (Checkpoint C3.5-
     assert.equal(fabricaSocket.criados.length, 2, "reconectou pós-515");
     assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING, "falta o 'open' deste socket novo");
 
-    // reload do socket novo já viu registered=true -> só falta o 'open'.
+    // reload do socket novo: authConfirmado ainda false (nunca confirmado) -> falta o dance completo, disparado pelo 'open' abaixo.
     fabricaSocket.criados[1].user = { id: "5511999990000:1@s.whatsapp.net" };
     fabricaSocket.criados[1].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 1);
+    assert.equal(backendClient.confirmarAuthState.mock.calls[0].arguments[0].authSessionId, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
     assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
     assert.equal(sessao._autenticadaAlgumaVez(), true);
+    assert.equal(credsPersistidos?.registered, false, "registered NUNCA precisou virar true em NENHUM momento deste fluxo ponta-a-ponta — a prova final do Checkpoint C3.5-C.3");
   });
 });

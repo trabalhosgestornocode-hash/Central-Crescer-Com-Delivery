@@ -16,7 +16,7 @@
 // futuro explícito, não um atalho silencioso.
 
 import { Router } from "express";
-import { LeaseStaleError } from "./whatsappGateway.repo.js";
+import { LeaseStaleError, AuthSessionStaleError, AuthConfirmacaoRecusadaError } from "./whatsappGateway.repo.js";
 
 // UUID v4-ish — o Gateway gera gatewayProcessId com crypto.randomUUID() a
 // cada boot (Checkpoint C3.5, item 2). Validado aqui (fronteira HTTP) antes
@@ -24,9 +24,17 @@ import { LeaseStaleError } from "./whatsappGateway.repo.js";
 // parte de uma query (mesmo já sendo parametrizada pelo supabase-js, é
 // defesa em profundidade e um 400 é mais claro que um "stale" genérico).
 const GATEWAY_PROCESS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Checkpoint C3.5-C.2/C.3 — mesma forma de UUID, reaproveitada para validar
+// authSessionId (gerado pelo Postgres via gen_random_uuid()) na fronteira
+// HTTP, antes de chegar ao repo/RPC — defesa em profundidade, mesmo padrão
+// já usado para gatewayProcessId.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function processIdValido(v) {
   return typeof v === "string" && GATEWAY_PROCESS_ID_RE.test(v);
+}
+function authSessionIdValido(v) {
+  return typeof v === "string" && UUID_RE.test(v);
 }
 // Checkpoint C3.5-A (auditoria) — mesma faixa validada dentro das funções
 // SQL da migration 084 (defesa em profundidade: a autoridade final é o
@@ -134,6 +142,39 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
     }
   });
 
+  // Confirmação durável da geração de auth (Checkpoint C3.5-C.2/C.3) — só
+  // pode ser chamada pelo Gateway depois de connection:"open" observado E
+  // toda persistência pendente concluída (ver baileysSession.js). Fencing
+  // SEMPRE obrigatório (rota nova, sem janela de rolling deploy a
+  // proteger, mesmo raciocínio de /eventos/auth-state/reset).
+  router.post("/eventos/auth-state/confirmar", async (req, res, next) => {
+    try {
+      const corpo = req.corpoJson ?? {};
+      if (!corpoFencingValido(corpo)) {
+        return res.status(400).json({ error: "gatewayProcessId/leaseEpoch ausente ou inválido" });
+      }
+      if (!authSessionIdValido(corpo.authSessionId)) {
+        return res.status(400).json({ error: "authSessionId ausente ou inválido" });
+      }
+      await repo.confirmarAuthState(organizacaoId, {
+        gatewayProcessId: corpo.gatewayProcessId, leaseEpoch: corpo.leaseEpoch,
+        authSessionIdEsperado: corpo.authSessionId,
+      });
+      res.json({ ok: true });
+    } catch (e) {
+      // Checkpoint C3.5-C.2/C.3 — três motivos de rejeição, três status
+      // sanitizados distintos no corpo (nunca a mensagem interna do erro):
+      // LEASE_STALE é o mesmo 409 de sempre; AUTH_SESSION_STALE é um 409
+      // com código PRÓPRIO (diagnosticável em log/telemetria como "geração
+      // errada", nunca confundido com "dono errado"); AUTH_ABSENT/NOT_FOUND
+      // (anomalias) caem no mesmo 409 genérico de confirmação recusada.
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      if (e instanceof AuthSessionStaleError) return res.status(409).json({ error: e.code });
+      if (e instanceof AuthConfirmacaoRecusadaError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
+  });
+
   router.get("/auth-state", async (req, res, next) => {
     try {
       // Fencing OPCIONAL via querystring (Checkpoint C3.5-B, item 11) —
@@ -150,8 +191,16 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
       // mantido de propósito quando presente — é o que um Gateway ANTERIOR
       // a este checkpoint (retrocompat de rolling deploy) continua lendo
       // (`!r?.authStateEncrypted` → comportamento antigo, inalterado).
+      // Checkpoint C3.5-C.2/C.3 — authConfirmado/authSessionId são campos
+      // NOVOS e ADITIVOS: um Gateway anterior a este checkpoint simplesmente
+      // os ignora (nunca os lê), sem quebrar nada.
       if (resultado.status === "present") {
-        res.json({ status: "present", authStateEncrypted: resultado.authStateEncrypted });
+        res.json({
+          status: "present",
+          authStateEncrypted: resultado.authStateEncrypted,
+          authConfirmado: resultado.authConfirmado === true,
+          authSessionId: resultado.authSessionId ?? null,
+        });
       } else {
         res.json({ status: "absent" });
       }

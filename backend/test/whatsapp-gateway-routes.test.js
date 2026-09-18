@@ -161,7 +161,11 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
     _resetarNonces();
     const rGet = await chamarAssinado("GET", "/internal/comunicacao/auth-state");
     assert.equal(rGet.status, 200);
-    assert.deepEqual(await rGet.json(), { status: "present", authStateEncrypted: blob });
+    const corpo = await rGet.json();
+    assert.equal(corpo.status, "present");
+    assert.equal(corpo.authStateEncrypted, blob);
+    assert.equal(corpo.authConfirmado, false);
+    assert.equal(typeof corpo.authSessionId, "string");
   });
 
   test("auth-state: POST sem authStateEncrypted é rejeitado com 400 (nunca grava lixo)", async () => {
@@ -191,7 +195,9 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
 
     _resetarNonces();
     const rGet = await chamarAssinado("GET", "/internal/comunicacao/auth-state");
-    assert.deepEqual(await rGet.json(), { status: "present", authStateEncrypted: "v1:de-B" });
+    const corpo = await rGet.json();
+    assert.equal(corpo.status, "present");
+    assert.equal(corpo.authStateEncrypted, "v1:de-B");
   });
 
   test("auth-state/reset: fenced, limpa o ciphertext (GET auth-state volta a absent), heartbeat/lease intocados", async () => {
@@ -235,7 +241,9 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
 
     _resetarNonces();
     const rGet = await chamarAssinado("GET", "/internal/comunicacao/auth-state");
-    assert.deepEqual(await rGet.json(), { status: "present", authStateEncrypted: "v1:de-B-para-reset-stale" }, "o reset stale (A) não pode ter apagado o ciphertext atual, gravado por B");
+    const corpo = await rGet.json();
+    assert.equal(corpo.status, "present", "o reset stale (A) não pode ter apagado o ciphertext atual, gravado por B");
+    assert.equal(corpo.authStateEncrypted, "v1:de-B-para-reset-stale");
   });
 
   test("GET auth-state sem nada salvo ainda devolve status absent, não erro", async () => {

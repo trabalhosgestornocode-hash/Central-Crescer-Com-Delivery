@@ -54,6 +54,19 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
         // fail-safe (fechar socket, parar gravações) em vez de tratar como
         // uma falha transitória qualquer.
         e.leaseStale = resp.status === 409 && json?.error === "WHATSAPP_GATEWAY_LEASE_STALE";
+        // Checkpoint C3.5-C.2/C.3 — distingue "geração de auth errada" (a
+        // confirmação nunca pode ser tratada como transitória: um socket
+        // antigo confirmando por engano seria exatamente o bug que esta
+        // checagem existe para impedir) de qualquer outro 409.
+        e.authSessionStale = resp.status === 409 && json?.error === "WHATSAPP_GATEWAY_AUTH_SESSION_STALE";
+        // Checkpoint C3.5-C.2/C.3 — 404 numa rota NOVA (ex.: /eventos/auth-state/confirmar)
+        // durante uma janela de rolling deploy (Gateway já atualizado,
+        // backend ainda não) é tratado como CAPACIDADE AUSENTE — transitório
+        // por natureza (resolve sozinho assim que o backend também subir),
+        // nunca uma rejeição definitiva. Nunca confundido com um 404
+        // genuíno de URL errada: só quem chama uma rota que sabe ser NOVA
+        // (recém-adicionada) interpreta este sinal.
+        e.capacidadeAusente = resp.status === 404;
         throw e;
       }
       return json;
@@ -96,6 +109,17 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
      */
     async resetarAuthState({ gatewayProcessId, leaseEpoch }) {
       return chamar("POST", `${R}/eventos/auth-state/reset`, { gatewayProcessId, leaseEpoch });
+    },
+    /**
+     * Checkpoint C3.5-C.2/C.3 — confirmação durável: só deve ser chamada
+     * depois de connection:"open" observado e toda persistência pendente
+     * concluída (ver baileysSession.js). `authSessionId` é a geração
+     * capturada SINCRONAMENTE no instante do "open" — nunca um valor lido
+     * de novo depois, para que um callback de socket antigo nunca consiga
+     * confirmar uma geração mais nova.
+     */
+    async confirmarAuthState({ gatewayProcessId, leaseEpoch, authSessionId }) {
+      return chamar("POST", `${R}/eventos/auth-state/confirmar`, { gatewayProcessId, leaseEpoch, authSessionId });
     },
     /**
      * Bootstrap/reconexão: recupera o auth state cifrado salvo. `contextoLease`

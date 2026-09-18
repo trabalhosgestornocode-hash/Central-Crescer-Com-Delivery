@@ -112,7 +112,10 @@ describe("whatsappGateway.repo — criarRepoSupabase() contra o banco de teste r
     const deA = await repo.obterAuthState(orgA);
     const deB = await repo.obterAuthState(orgB);
 
-    assert.deepEqual(deB, { status: "present", authStateEncrypted: "v1:aaaa:bbbb:cccc" });
+    assert.equal(deB.status, "present");
+    assert.equal(deB.authStateEncrypted, "v1:aaaa:bbbb:cccc");
+    assert.equal(deB.authConfirmado, false);
+    assert.equal(typeof deB.authSessionId, "string");
     assert.notDeepEqual(deA, { status: "present", authStateEncrypted: "v1:aaaa:bbbb:cccc" });
   });
 
@@ -171,7 +174,8 @@ describe("whatsappGateway.repo — criarRepoSupabase() contra o banco de teste r
 
     await repo.salvarAuthState(orgA, { authStateEncrypted: blob, authStateVersion: "v7", ...leaseA });
     const lido = await repo.obterAuthState(orgA);
-    assert.deepEqual(lido, { status: "present", authStateEncrypted: blob });
+    assert.equal(lido.status, "present");
+    assert.equal(lido.authStateEncrypted, blob);
 
     const direto = await supabase.from("whatsapp_conexoes").select("auth_state_encrypted, auth_state_version").eq("organizacao_id", orgA).single();
     assert.equal(direto.data.auth_state_encrypted, blob);
@@ -184,7 +188,9 @@ describe("whatsappGateway.repo — criarRepoSupabase() contra o banco de teste r
     const repo = criarRepoSupabase();
 
     await repo.salvarAuthState(orgA, { authStateEncrypted: "v1:antes-do-reset-real", authStateVersion: "v9", ...leaseA });
-    assert.deepEqual(await repo.obterAuthState(orgA), { status: "present", authStateEncrypted: "v1:antes-do-reset-real" });
+    const antesDoReset = await repo.obterAuthState(orgA);
+    assert.equal(antesDoReset.status, "present");
+    assert.equal(antesDoReset.authStateEncrypted, "v1:antes-do-reset-real");
 
     await repo.resetarAuthState(orgA, leaseA);
 
@@ -206,7 +212,9 @@ describe("whatsappGateway.repo — criarRepoSupabase() contra o banco de teste r
       (e) => e instanceof LeaseStaleError,
     );
 
-    assert.deepEqual(await repo.obterAuthState(orgB), { status: "present", authStateEncrypted: "v1:nao-pode-ser-apagado" }, "epoch stale não pode ter apagado o auth state real");
+    const posStale = await repo.obterAuthState(orgB);
+    assert.equal(posStale.status, "present", "epoch stale não pode ter apagado o auth state real");
+    assert.equal(posStale.authStateEncrypted, "v1:nao-pode-ser-apagado");
   });
 
   test("UNIQUE (organizacao_id, provider_instance_id): segunda linha manual para o mesmo par é recusada", async (t) => {
@@ -297,7 +305,8 @@ describe("round-trip do auth state fake — Gateway cifra -> Backend/Repo grava 
 
       // Repository lê; Backend devolve o ciphertext; Gateway decifra.
       const resultadoLeitura = await repo.obterAuthState(orgA);
-      assert.deepEqual(resultadoLeitura, { status: "present", authStateEncrypted: ciphertext });
+      assert.equal(resultadoLeitura.status, "present");
+      assert.equal(resultadoLeitura.authStateEncrypted, ciphertext);
       const plaintextDecifrado = decriptar(resultadoLeitura.authStateEncrypted, chave);
 
       // Comparação byte a byte com a origem.

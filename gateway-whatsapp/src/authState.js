@@ -115,6 +115,11 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
   /** @type {Record<string, Record<string, any>>} */
   let keysPorTipo = {};
   let versao = 1;
+  // Checkpoint C3.5-C.2/C.3 — identidade da GERAÇÃO atual de auth, sempre
+  // capturada do backend (carregar() ou toda persistência bem-sucedida),
+  // NUNCA gerada aqui. `null` enquanto não houver nenhuma geração conhecida
+  // (ABSENT, ou ainda não persistiu nada nesta sessão do processo).
+  let authSessionIdAtual = null;
 
   // FILA DE PERSISTÊNCIA (single-instance) — `creds.update` e `keys.set` do
   // Baileys podem disparar em sequência rápida, e cada um chama `persistir()`
@@ -149,10 +154,16 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
   async function salvarSnapshot(plaintext, contextoLease) {
     const cifrado = encriptar(plaintext, chave);
     try {
-      await backendClient.salvarAuthState({
+      const r = await backendClient.salvarAuthState({
         authStateEncrypted: cifrado, authStateVersion: `v${versao}`,
         gatewayProcessId: contextoLease?.gatewayProcessId, leaseEpoch: contextoLease?.leaseEpoch,
       });
+      // Checkpoint C3.5-C.2/C.3 — captura a geração (mintada ou preservada
+      // pela RPC) depois de TODA persistência bem-sucedida — nunca gerado
+      // aqui. Nunca logado (é só um UUID interno de correlação, mas mesmo
+      // assim segue a mesma disciplina de nunca logar identificadores sem
+      // necessidade).
+      if (r?.authSessionId) authSessionIdAtual = r.authSessionId;
     } catch (e) {
       // Checkpoint C3.5, item 15: um processo stale NUNCA pode achar que
       // sobrescreveu o auth state de um epoch mais novo — o backend já
@@ -260,6 +271,9 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
         throw new AuthStateLoadError(e?.leaseStale ? "lease_stale" : "http_error");
       }
       if (!r || r.status === "absent" || !r.authStateEncrypted) {
+        // Checkpoint C3.5-C.2/C.3 — ABSENT nunca deixa uma geração antiga
+        // "pendurada" localmente (ex.: depois de um reset).
+        authSessionIdAtual = null;
         return { status: "absent" };
       }
 
@@ -283,7 +297,14 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
 
       creds = dados.creds;
       keysPorTipo = (dados.keys && typeof dados.keys === "object") ? dados.keys : {};
-      return { status: "loaded", registered: !!creds.registered };
+      // Checkpoint C3.5-C.2/C.3 — captura a geração e o marcador durável do
+      // backend, só depois do blob ter sido decifrado/parseado com sucesso
+      // (nunca adota uma geração associada a um blob em que não confiamos).
+      // `registered` (Baileys) segue devolvido só para diagnóstico/log — ver
+      // Checkpoint C3.5-C.1: nunca controla fluxo, nunca é usado por quem
+      // chama para decidir nada.
+      authSessionIdAtual = r.authSessionId ?? null;
+      return { status: "loaded", registered: !!creds.registered, authConfirmado: r.authConfirmado === true };
     } catch (e) {
       if (e instanceof AuthStateLoadError) throw e;
       // Rede de segurança — qualquer exceção inesperada aqui também precisa
@@ -310,6 +331,10 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
   function invalidarLocal() {
     creds = null;
     keysPorTipo = {};
+    // Checkpoint C3.5-C.2/C.3 — a geração antiga nunca pode sobreviver a um
+    // reset na memória do processo; o próximo pareamento nasce sem ID
+    // conhecido, igual a um boot novo em ABSENT.
+    authSessionIdAtual = null;
   }
 
   /** Forma exigida pelo Baileys: `{ creds, keys: { get, set } }`. */
@@ -371,7 +396,13 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
       else creds = credsAtualizados;
       await persistir();
     },
+    // Checkpoint C3.5-C.2/C.3 — leitura síncrona, usada por
+    // baileysSession.js para capturar `authSessionIdEsperado` no INSTANTE
+    // do connection:"open" (antes de qualquer await) — é essa captura
+    // síncrona que garante que um callback de socket/geração antiga nunca
+    // consiga confirmar uma geração mais nova.
+    obterAuthSessionIdAtual: () => authSessionIdAtual,
     // ---- só para teste/instrumentação ----
-    _snapshot: () => ({ creds, keysPorTipo, versao }),
+    _snapshot: () => ({ creds, keysPorTipo, versao, authSessionIdAtual }),
   };
 }

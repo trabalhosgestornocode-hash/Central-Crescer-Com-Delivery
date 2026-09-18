@@ -215,7 +215,11 @@ describe("whatsappGateway.repo — lease/fencing (Checkpoint C3.5)", () => {
       LeaseStaleError,
     );
 
-    assert.deepEqual(await repo.obterAuthState(ORG_ID), { status: "present", authStateEncrypted: "v1:de-B" });
+    const estado = await repo.obterAuthState(ORG_ID);
+    assert.equal(estado.status, "present");
+    assert.equal(estado.authStateEncrypted, "v1:de-B");
+    assert.equal(estado.authConfirmado, false);
+    assert.equal(typeof estado.authSessionId, "string", "geração precisa ter sido mintada por B — a gravação atrasada de A nunca chegou a acontecer (rejeitada por LeaseStaleError)");
   });
 
   test("gravação sem fencing nenhum (gatewayProcessId/leaseEpoch ausentes) é sempre rejeitada, mesmo sem nenhuma lease jamais adquirida", async () => {
@@ -274,6 +278,9 @@ describe("whatsappGateway.repo — lease/fencing (Checkpoint C3.5)", () => {
     await repo.salvarAuthState(ORG_ID, { authStateEncrypted: "v1:retrocompat", authStateVersion: "v1", gatewayProcessId: dono, leaseEpoch: lease.leaseEpoch });
 
     const resultado = await repo.obterAuthState(ORG_ID);
-    assert.deepEqual(resultado, { status: "present", authStateEncrypted: "v1:retrocompat" });
+    assert.equal(resultado.status, "present");
+    assert.equal(resultado.authStateEncrypted, "v1:retrocompat");
+    assert.equal(resultado.authConfirmado, false);
+    assert.equal(typeof resultado.authSessionId, "string");
   });
 });

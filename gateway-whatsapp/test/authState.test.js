@@ -50,7 +50,7 @@ describe("authState — adaptador sobre creds reais do Baileys", () => {
     // do backend (boot/reconexão).
     const leitor = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV });
     const resultado = await leitor.carregar();
-    assert.deepEqual(resultado, { status: "loaded", registered: false });
+    assert.deepEqual(resultado, { status: "loaded", registered: false, authConfirmado: false });
 
     const { creds: credsRecarregados } = leitor._snapshot();
     // noiseKey.private é um Buffer real em initAuthCreds() — a armadilha

@@ -22,6 +22,7 @@
 // BACKEND) fala com Supabase. O processo gateway-whatsapp nunca importa
 // nada daqui — ele só vê o backend via HTTP+HMAC (backendClient.js).
 
+import { randomUUID } from "node:crypto";
 import { ApiError } from "../../../shared/ApiError.js";
 
 const INSTANCIA_PADRAO = "default";
@@ -36,6 +37,36 @@ export class LeaseStaleError extends Error {
     super("lease stale — gatewayProcessId/leaseEpoch não é mais o dono atual");
     this.name = "LeaseStaleError";
     this.code = "WHATSAPP_GATEWAY_LEASE_STALE";
+    this.detalhe = detalhe;
+  }
+}
+
+// Checkpoint C3.5-C.2/C.3 — distinto de LeaseStaleError de propósito: owner
+// e epoch podem estar corretos (mesmo processo, mesmo epoch) e ainda assim
+// a confirmação ser recusada porque a GERAÇÃO de auth mudou por baixo (um
+// reset + novo pareamento dentro do MESMO epoch de lease — fencing de lease
+// sozinho não pega isso). Ver whatsapp_auth_confirmado_fenced (migration
+// 086) — motivo='AUTH_SESSION_STALE'.
+export class AuthSessionStaleError extends Error {
+  constructor(detalhe) {
+    super("auth_session_id não corresponde à geração atual de auth — confirmação recusada");
+    this.name = "AuthSessionStaleError";
+    this.code = "WHATSAPP_GATEWAY_AUTH_SESSION_STALE";
+    this.detalhe = detalhe;
+  }
+}
+
+// Checkpoint C3.5-C.2/C.3 — cobre os motivos 'AUTH_ABSENT'/'NOT_FOUND' da
+// mesma RPC: anomalias que não deveriam ocorrer dado como o código sempre
+// chama confirmarAuthState() logo após persistir com sucesso (nunca antes).
+// Não valem uma classe própria cada, mas o `motivo` sanitizado (nunca
+// ciphertext/UUID de outra organização) precisa sobreviver para log/diagnóstico.
+export class AuthConfirmacaoRecusadaError extends Error {
+  constructor(motivo, detalhe) {
+    super(`confirmação de auth state recusada: ${motivo}`);
+    this.name = "AuthConfirmacaoRecusadaError";
+    this.code = "WHATSAPP_GATEWAY_AUTH_CONFIRMACAO_RECUSADA";
+    this.motivo = motivo;
     this.detalhe = detalhe;
   }
 }
@@ -91,22 +122,54 @@ export function criarRepoEmMemoria() {
         }
       }
       if (!atual.authStateEncrypted) return { status: "absent" };
-      return { status: "present", authStateEncrypted: atual.authStateEncrypted };
+      return {
+        status: "present",
+        authStateEncrypted: atual.authStateEncrypted,
+        // Checkpoint C3.5-C.2/C.3 — expostos junto do ciphertext para que o
+        // Gateway capture localmente a geração atual (authSessionId) e o
+        // marcador durável (authConfirmado), sem nunca precisar decifrar
+        // nada além do que já fazia.
+        authConfirmado: atual.authConfirmado === true,
+        authSessionId: atual.authSessionId ?? null,
+      };
     },
     async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, gatewayProcessId, leaseEpoch }) {
       const atual = porOrganizacao.get(organizacaoId) ?? {};
       if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
-      porOrganizacao.set(organizacaoId, { ...atual, authStateEncrypted, authStateVersion, updatedAt: new Date().toISOString() });
+      // Checkpoint C3.5-C.2/C.3 — mesma semântica da RPC real: preserva a
+      // geração (authSessionId) já existente; só minta uma nova na transição
+      // ausente->presente. NUNCA toca authConfirmado aqui — sync normal de
+      // creds/keys não confirma nem desconfirma.
+      const authSessionId = atual.authSessionId ?? randomUUID();
+      porOrganizacao.set(organizacaoId, { ...atual, authStateEncrypted, authStateVersion, authSessionId, updatedAt: new Date().toISOString() });
+      return { authSessionId };
     },
     // ---- reset explícito do operador (Checkpoint C3.5-B.2) ----
     // Mesmo mecanismo de fencing de salvarAuthState, só que grava NULL nos
     // dois campos — nunca uma operação nova/RPC nova: é literalmente
     // salvarAuthState com ciphertext ausente, fenced do mesmo jeito. Stale
-    // -> LeaseStaleError, ciphertext antigo intocado.
+    // -> LeaseStaleError, ciphertext antigo intocado. Checkpoint C3.5-C.2/C.3
+    // — junto com o ciphertext, zera authSessionId/authConfirmado: a próxima
+    // geração nasce do zero, nunca herda confirmação/identidade da anterior.
     async resetarAuthState(organizacaoId, { gatewayProcessId, leaseEpoch } = {}) {
       const atual = porOrganizacao.get(organizacaoId) ?? {};
       if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
-      porOrganizacao.set(organizacaoId, { ...atual, authStateEncrypted: null, authStateVersion: null, updatedAt: new Date().toISOString() });
+      porOrganizacao.set(organizacaoId, {
+        ...atual, authStateEncrypted: null, authStateVersion: null,
+        authSessionId: null, authConfirmado: false, updatedAt: new Date().toISOString(),
+      });
+    },
+    // ---- confirmação durável (Checkpoint C3.5-C.2/C.3) ----
+    // Espelha whatsapp_auth_confirmado_fenced (migration 086): mesma ordem
+    // de classificação (linha existe -> fencing -> auth presente -> geração
+    // bate exatamente), nunca uma segunda consulta depois de decidir.
+    async confirmarAuthState(organizacaoId, { gatewayProcessId, leaseEpoch, authSessionIdEsperado } = {}) {
+      const atual = porOrganizacao.get(organizacaoId);
+      if (!atual) throw new AuthConfirmacaoRecusadaError("NOT_FOUND", { organizacaoId });
+      if (!fencingValido(atual, { gatewayProcessId, leaseEpoch })) throw new LeaseStaleError({ organizacaoId });
+      if (!atual.authStateEncrypted) throw new AuthConfirmacaoRecusadaError("AUTH_ABSENT", { organizacaoId });
+      if (atual.authSessionId !== authSessionIdEsperado) throw new AuthSessionStaleError({ organizacaoId });
+      porOrganizacao.set(organizacaoId, { ...atual, authConfirmado: true });
     },
     async registrarHeartbeat(organizacaoId, { status, telefone, gatewayVersion, providerInstanceId, gatewayProcessId, leaseEpoch }) {
       const atual = porOrganizacao.get(organizacaoId) ?? {};
@@ -114,6 +177,9 @@ export function criarRepoEmMemoria() {
       porOrganizacao.set(organizacaoId, {
         ...atual, status, telefone: telefone ?? atual.telefone ?? null, gatewayVersion, providerInstanceId,
         lastSeenAt: new Date().toISOString(),
+        // Checkpoint C3.5-C.2/C.3 — LOGGED_OUT zera o marcador durável, mesma
+        // regra da RPC real; authSessionId permanece enquanto o blob existir.
+        authConfirmado: status === "LOGGED_OUT" ? false : atual.authConfirmado,
       });
     },
     // ---- intenção do operador (Checkpoint C3.5-B) ----
@@ -265,6 +331,11 @@ export function criarRepoSupabase() {
       p_process_id: gatewayProcessId, p_epoch: leaseEpoch, ...argsExtras,
     });
     if (!r?.ok) throw new LeaseStaleError({ organizacaoId, providerInstanceId });
+    // Checkpoint C3.5-C.2/C.3 — devolve a linha inteira (não só um boolean):
+    // salvarAuthState() precisa do auth_session_id que a RPC gera/preserva.
+    // Chamadores que não precisam de nada além de "não lançou" (heartbeat,
+    // desired-state) simplesmente ignoram o retorno, como já faziam.
+    return r;
   }
 
   return {
@@ -285,7 +356,7 @@ export function criarRepoSupabase() {
       const db = await obterCliente(deps);
       const providerInstanceId = deps.providerInstanceId ?? INSTANCIA_PADRAO;
       const { data, error } = await db.from("whatsapp_conexoes")
-        .select("auth_state_encrypted, lease_owner_id, lease_epoch")
+        .select("auth_state_encrypted, lease_owner_id, lease_epoch, auth_session_id, auth_confirmado")
         .eq("organizacao_id", organizacaoId)
         .eq("provider_instance_id", providerInstanceId)
         .maybeSingle();
@@ -299,15 +370,56 @@ export function criarRepoSupabase() {
         }
       }
       if (!data.auth_state_encrypted) return { status: "absent" };
-      return { status: "present", authStateEncrypted: data.auth_state_encrypted };
+      // Checkpoint C3.5-C.2/C.3 — authSessionId/authConfirmado expostos
+      // junto do ciphertext, para o Gateway capturar a geração atual e o
+      // marcador durável sem decifrar nada a mais.
+      return {
+        status: "present",
+        authStateEncrypted: data.auth_state_encrypted,
+        authConfirmado: data.auth_confirmado === true,
+        authSessionId: data.auth_session_id ?? null,
+      };
     },
 
     async salvarAuthState(organizacaoId, { authStateEncrypted, authStateVersion, providerInstanceId = INSTANCIA_PADRAO, gatewayProcessId, leaseEpoch } = {}, deps = {}) {
       const db = await obterCliente(deps);
       await obterOuCriarConexao(db, organizacaoId, providerInstanceId);
-      await atualizarComFencing(db, organizacaoId, providerInstanceId, "whatsapp_auth_state_fenced",
+      const r = await atualizarComFencing(db, organizacaoId, providerInstanceId, "whatsapp_auth_state_fenced",
         { p_auth_state_encrypted: authStateEncrypted, p_auth_state_version: authStateVersion },
         { gatewayProcessId, leaseEpoch });
+      // Checkpoint C3.5-C.2/C.3 — a RPC gera (transição ausente->presente)
+      // ou preserva (persistência normal da mesma geração) auth_session_id;
+      // o Gateway precisa capturar esse valor para usar depois em
+      // confirmarAuthState().
+      return { authSessionId: r?.auth_session_id ?? null };
+    },
+
+    // ---- confirmação durável (Checkpoint C3.5-C.2/C.3) ----
+    // Chama whatsapp_auth_confirmado_fenced (migration 086), que classifica
+    // o motivo de rejeição ATOMICAMENTE (SELECT...FOR UPDATE dentro da
+    // própria função — nunca uma segunda consulta daqui para descobrir por
+    // quê). Mapeia o `motivo` textual para o erro certo: LEASE_STALE vira o
+    // MESMO LeaseStaleError de sempre (owner/epoch errados, semântica
+    // idêntica a qualquer outra gravação fenced); AUTH_SESSION_STALE é um
+    // erro DISTINTO de propósito (owner/epoch podem estar certos, mas a
+    // GERAÇÃO de auth mudou por baixo — reset+novo pareamento no mesmo
+    // epoch); AUTH_ABSENT/NOT_FOUND são anomalias que não deveriam
+    // acontecer dado como o código sempre confirma logo após persistir.
+    async confirmarAuthState(organizacaoId, { providerInstanceId = INSTANCIA_PADRAO, gatewayProcessId, leaseEpoch, authSessionIdEsperado } = {}, deps = {}) {
+      const db = await obterCliente(deps);
+      if (!gatewayProcessId || typeof leaseEpoch !== "number") {
+        throw new LeaseStaleError({ organizacaoId, providerInstanceId, motivo: "fencing ausente" });
+      }
+      const r = await chamarRpc(db, "whatsapp_auth_confirmado_fenced", {
+        p_organizacao_id: organizacaoId, p_provider_instance_id: providerInstanceId,
+        p_process_id: gatewayProcessId, p_epoch: leaseEpoch,
+        p_auth_session_id_esperado: authSessionIdEsperado,
+      });
+      if (r?.ok) return;
+      const motivo = r?.motivo ?? "unknown";
+      if (motivo === "LEASE_STALE") throw new LeaseStaleError({ organizacaoId, providerInstanceId });
+      if (motivo === "AUTH_SESSION_STALE") throw new AuthSessionStaleError({ organizacaoId, providerInstanceId });
+      throw new AuthConfirmacaoRecusadaError(motivo, { organizacaoId, providerInstanceId });
     },
 
     // ---- reset explícito do operador (Checkpoint C3.5-B.2) ----
