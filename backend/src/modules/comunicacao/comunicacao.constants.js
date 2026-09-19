@@ -31,6 +31,8 @@ export const STATUS_ALERTA = Object.freeze({
   CANCELLED: "CANCELLED",
   BLOCKED: "BLOCKED",
   FAILED: "FAILED",
+  // NÃO existe DELIVERY_UNKNOWN aqui (088): o ALERTA é a condição de NEGÓCIO (a pendência); a incerteza de
+  // TRANSPORTE vive na MENSAGEM. O alerta continua podendo ser RESOLVED mesmo com uma entrega ainda por reconciliar.
 });
 
 /** Alertas nestes status não geram um novo alerta duplicado — ainda "ativos". */
@@ -75,6 +77,27 @@ export const RESULTADO_FINAL_ENVIO = Object.freeze({
   RETRY: "RETRY",
 });
 
+/**
+ * Resultado de comunicacao_reservar_envio (migration 088): a reserva ATÔMICA de
+ * capacidade + PROCESSING -> SENDING. O provider só pode ser chamado após INICIADO.
+ */
+export const RESULTADO_RESERVA = Object.freeze({
+  INICIADO: "INICIADO",
+  /** Outro claim, lease vencido, estado diferente ou attempts esgotados — ABORTA sem efeito externo. */
+  POSSE_PERDIDA: "POSSE_PERDIDA",
+  /** `expira_em` venceu (relógio do banco): a MENSAGEM NUNCA é enviada — o banco já a cancelou (CANCELLED/EXPIRADA); a PENDÊNCIA (alerta) NÃO é cancelada. */
+  EXPIRADA: "EXPIRADA",
+  COOLDOWN: "COOLDOWN",
+  RATE_LIMIT_DIA: "RATE_LIMIT_DIA",
+  /** Camada GLOBAL: o único número remetente / a sessão Baileys. */
+  RATE_LIMIT_MINUTO: "RATE_LIMIT_MINUTO",
+  /** Camada por ORGANIZAÇÃO: fairness multi-tenant (uma empresa não consome a capacidade das outras). */
+  RATE_LIMIT_MINUTO_ORGANIZACAO: "RATE_LIMIT_MINUTO_ORGANIZACAO",
+});
+
+/** Motivo gravado em `erro` ao cancelar uma mensagem cujo TTL venceu (CANCELLED + motivo — sem novo status). */
+export const MOTIVO_EXPIRADA = "EXPIRADA";
+
 /** Destinos permitidos ao sair de PROCESSING sem enviar (comunicacao_encerrar_processamento). */
 export const DESTINO_SEM_ENVIO = Object.freeze({
   BLOCKED: "BLOCKED",
@@ -118,6 +141,10 @@ export const MOTIVOS_BLOQUEIO = Object.freeze({
   EMPRESA_DESABILITADA: "EMPRESA_DESABILITADA",
   /** O tipo deste alerta não está entre os permitidos para a empresa. */
   TIPO_NAO_PERMITIDO: "TIPO_NAO_PERMITIDO",
+  /** timezone/janelas da organização inválidos: fail-closed — nunca assume UTC. Corrigir a configuração destrava (por isso é ADIADO, não BLOCKED). */
+  CONFIG_INVALIDA: "CONFIG_INVALIDA",
+  /** `pausado_ate` da organização está no futuro: adia até o fim da pausa (não é BLOCKED permanente). */
+  EMPRESA_PAUSADA: "EMPRESA_PAUSADA",
   PENDING_RESOLVED: "PENDING_RESOLVED",
   DUPLICATE: "DUPLICATE",
   COOLDOWN: "COOLDOWN",
@@ -144,6 +171,8 @@ export const MOTIVOS_BLOQUEIO_TRANSITORIOS = Object.freeze(new Set([
   MOTIVOS_BLOQUEIO.RATE_LIMIT,
   MOTIVOS_BLOQUEIO.SAFE_MODE,
   MOTIVOS_BLOQUEIO.PROVIDER_OFFLINE,
+  MOTIVOS_BLOQUEIO.EMPRESA_PAUSADA,
+  MOTIVOS_BLOQUEIO.CONFIG_INVALIDA,
 ]));
 
 /** Bloqueio que pode passar sozinho? Motivo desconhecido -> `false` (terminal, o mais conservador). */

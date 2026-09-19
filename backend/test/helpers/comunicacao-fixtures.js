@@ -78,3 +78,61 @@ export async function migracao085Aplicada() {
   const probe = await supabase.from("whatsapp_conexoes").select("desired_connection_state").limit(0);
   return !probe.error;
 }
+
+/** Migration 088 (habilitação por organização, TTL, RPCs de agendamento/reserva/reconciliação) está aplicada neste Supabase? */
+export async function migracao088Aplicada() {
+  const tabela = await supabase.from("comunicacao_habilitacoes").select("organizacao_id").limit(0);
+  const coluna = await supabase.from("comunicacao_mensagens").select("expira_em").limit(0);
+  if (tabela.error || coluna.error) return false;
+  // sonda SEM efeito colateral: id inexistente -> POSSE_PERDIDA
+  const sonda = await supabase.rpc("comunicacao_reservar_envio", {
+    p_id: "00000000-0000-0000-0000-000000000000", p_worker: "probe", p_claim_geracao: 1, p_lease_segundos: 1,
+    p_cooldown_horas: null, p_max_por_contato_dia: null, p_max_por_minuto: null, p_max_por_minuto_org: null, p_inicio_dia: new Date().toISOString(),
+  });
+  return !sonda.error;
+}
+
+// ---------------------------------------------------------------------------
+// D.3-D-R — DESTINATÁRIO EXPLÍCITO. O banco lê o destinatário da habilitação da organização
+// (nunca do chamador): estes helpers montam o par (contato, perfil) elegível e a habilitação.
+// ---------------------------------------------------------------------------
+let seqTelefone = 0;
+
+/**
+ * Destinatário operacional ELEGÍVEL: conta+perfil com vínculo ATIVO na organização (usuarios_organizacoes;
+ * `unidadeId` opcional acrescenta o vínculo de unidade), contato verificado + consentido + sem opt-out, e
+ * o par contato<->perfil ativo. `verificado`/`consentimento`/`optOut` permitem montar os casos INELEGÍVEIS.
+ */
+export async function criarDestinatario({ organizacaoId, unidadeId = null, tag, sufixo = "dest", verificado = true, consentimento = true, optOut = false }) {
+  const { contaId, perfilId } = await criarContaComPerfil(tag, sufixo);
+  await vincularUsuarioUnidade({ perfilId, organizacaoId, unidadeId });
+  const telefone = `+551197${String(Date.now() * 13 + ++seqTelefone * 7919).slice(-7)}`;
+  const { data: contato, error } = await supabase.from("contatos_whatsapp")
+    .insert({ telefone_e164: telefone, verificado, consentimento, opt_out: optOut }).select("id").single();
+  if (error) throw new Error(`Falha ao criar contato de teste: ${error.message}`);
+  const { error: eLink } = await supabase.from("contatos_whatsapp_perfis")
+    .insert({ contato_id: contato.id, perfil_operacional_id: perfilId, ativo: true, principal: true });
+  if (eLink) throw new Error(`Falha ao vincular contato<->perfil: ${eLink.message}`);
+  return { contaId, perfilId, contatoId: contato.id };
+}
+
+/** Remove o destinatário criado por `criarDestinatario` (mensagens do contato, contato, conta). */
+export async function apagarDestinatario(d) {
+  if (!d) return;
+  await supabase.from("comunicacao_mensagens").delete().eq("contato_id", d.contatoId);
+  await supabase.from("contatos_whatsapp").delete().eq("id", d.contatoId);
+  await apagarConta(d.contaId);
+}
+
+/**
+ * Habilita a organização com o destinatário EXPLÍCITO (upsert em comunicacao_habilitacoes). Lança se o
+ * banco recusar (trigger/CHECK/FK) — os testes que esperam recusa usam o supabase direto.
+ */
+export async function habilitarOrganizacao(organizacaoId, dest, extra = {}) {
+  const linha = {
+    organizacao_id: organizacaoId, habilitado: true, tipos_permitidos: ["dashboard_ifood_d1"], timezone: "America/Fortaleza",
+    destinatario_contato_id: dest.contatoId, destinatario_perfil_id: dest.perfilId, ...extra,
+  };
+  const { error } = await supabase.from("comunicacao_habilitacoes").upsert(linha, { onConflict: "organizacao_id" });
+  if (error) throw new Error(`Falha ao habilitar a organização de teste: ${error.message}`);
+}

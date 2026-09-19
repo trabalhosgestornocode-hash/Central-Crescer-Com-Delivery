@@ -70,8 +70,11 @@ export const monitoramentoDiario = asyncHandler(async (req, res) =>
   }, deps(req))));
 
 // GET /administrativo/pendencias?mes=AAAA-MM
-export const pendencias = asyncHandler(async (req, res) =>
-  ok(res, await service.pendencias({ hojeIso: hoje(req), mes: req.query.mes }, deps(req))));
+export const pendencias = asyncHandler(async (req, res) => {
+  // `organizacoesMonitoradas` é insumo INTERNO do módulo de Comunicação (snapshot do ciclo) — não faz parte do contrato HTTP.
+  const { organizacoesMonitoradas: _interno, ...publico } = await service.pendencias({ hojeIso: hoje(req), mes: req.query.mes }, deps(req));
+  return ok(res, publico);
+});
 
 // GET /administrativo/empresas?mes=AAAA-MM
 export const empresas = asyncHandler(async (req, res) =>

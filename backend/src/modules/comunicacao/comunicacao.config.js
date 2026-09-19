@@ -32,9 +32,17 @@ const PADRAO = Object.freeze({
     critico: intEnv("WHATSAPP_COOLDOWN_CRITICO_HORAS", 4),
   }),
   limites: Object.freeze({
+    // DUAS camadas, ambas precisam ter vaga: global (o único número/sessão) e por organização (fairness).
+    // Por organização: 3/min (aprovado). Se a linha de configuração não trouxer a chave, vale este default.
+    // Nenhum default deste arquivo liga comunicação: `modo` nasce DISABLED e a habilitação é fail-closed.
     max_proativas_por_minuto: intEnv("WHATSAPP_MAX_PROACTIVE_PER_MINUTE", 5),
+    max_proativas_por_minuto_por_organizacao: intEnv("WHATSAPP_MAX_PROACTIVE_PER_MINUTE_PER_ORG", 3),
     max_por_contato_por_dia: intEnv("WHATSAPP_MAX_PER_CONTACT_PER_DAY", 3),
   }),
+  // TTL da mensagem: expira_em = disponivel_em + ttl_horas (aviso velho nunca sai).
+  ttl_horas: 24,
+  // Teto do jitter determinístico (espalha os envios na abertura da janela; nunca passa do fechamento).
+  jitter_max_minutos: 30,
 });
 
 /**
@@ -42,7 +50,7 @@ const PADRAO = Object.freeze({
  * tabela/linha não existir — nunca lança por isso (config ausente não pode
  * derrubar o pipeline; ver REGRA DE OURO de shared/auditoria.js#auditar,
  * mesmo espírito aqui).
- * @param {'modo'|'janelas'|'cooldowns_horas'|'limites'} chave
+ * @param {'modo'|'janelas'|'cooldowns_horas'|'limites'|'ttl_horas'|'jitter_max_minutos'} chave
  * @param {{supabase?: any}} [deps]
  */
 export async function obterConfig(chave, deps = {}) {
@@ -50,6 +58,19 @@ export async function obterConfig(chave, deps = {}) {
   const { data, error } = await db.from("comunicacao_configuracoes").select("valor").eq("chave", chave).maybeSingle();
   if (error || !data) return PADRAO[chave];
   return data.valor;
+}
+
+/** Número finito > 0, senão o padrão: um TTL/jitter corrompido nunca vira "sem expiração" nem espalhamento infinito. */
+const positivoOuPadrao = (valor, padrao) => (typeof valor === "number" && Number.isFinite(valor) && valor > 0 ? valor : padrao);
+
+/** TTL das mensagens (horas), já normalizado. @param {{supabase?: any}} [deps] */
+export async function obterTtlHoras(deps = {}) {
+  return positivoOuPadrao(await obterConfig("ttl_horas", deps), PADRAO.ttl_horas);
+}
+
+/** Teto do jitter determinístico em ms, já normalizado. @param {{supabase?: any}} [deps] */
+export async function obterJitterMaxMs(deps = {}) {
+  return positivoOuPadrao(await obterConfig("jitter_max_minutos", deps), PADRAO.jitter_max_minutos) * 60_000;
 }
 
 const MODOS_VALIDOS = new Set(Object.values(MODOS));

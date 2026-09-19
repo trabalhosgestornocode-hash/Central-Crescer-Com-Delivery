@@ -18,6 +18,8 @@ const BASE = () => ({
   vinculoValido: true,
   empresaHabilitada: true,
   tipoPermitido: true,
+  configHorarioValida: true,
+  empresaPausada: false,
   pendenciaAindaExiste: true,
   duplicado: false,
   cooldownAtivo: false,
@@ -201,6 +203,40 @@ describe("comunicacao.policy — habilitação por empresa e tipo (D.3-C)", () =
   });
 });
 
+describe("comunicacao.policy — configuração de horário e pausa da empresa (D.3-D)", () => {
+  for (const [nome, valor] of [["false", false], ["undefined", undefined], ["null", null], ["string 'true'", "true"]]) {
+    test(`configHorarioValida=${nome} -> CONFIG_INVALIDA (timezone inválido nunca vira UTC por omissão)`, () => {
+      assert.deepEqual(avaliarEnvio({ ...BASE(), configHorarioValida: valor }), { allowed: false, reason: MOTIVOS_BLOQUEIO.CONFIG_INVALIDA });
+    });
+  }
+  for (const [nome, valor] of [["true", true], ["undefined", undefined], ["null", null], ["string 'false'", "false"]]) {
+    test(`empresaPausada=${nome} -> EMPRESA_PAUSADA (só o literal false libera)`, () => {
+      assert.deepEqual(avaliarEnvio({ ...BASE(), empresaPausada: valor }), { allowed: false, reason: MOTIVOS_BLOQUEIO.EMPRESA_PAUSADA });
+    });
+  }
+  test("CONFIG_INVALIDA e EMPRESA_PAUSADA são ADIAMENTO (transitórios): corrigir a config / fim da pausa destrava sozinho", () => {
+    assert.equal(bloqueioEhTransitorio(MOTIVOS_BLOQUEIO.CONFIG_INVALIDA), true);
+    assert.equal(bloqueioEhTransitorio(MOTIVOS_BLOQUEIO.EMPRESA_PAUSADA), true);
+  });
+  test("prioridade: empresa desabilitada / tipo não permitido (permanentes) vêm ANTES de config inválida e pausa", () => {
+    assert.equal(avaliarEnvio({ ...BASE(), empresaHabilitada: false, configHorarioValida: false, empresaPausada: true }).reason, MOTIVOS_BLOQUEIO.EMPRESA_DESABILITADA);
+    assert.equal(avaliarEnvio({ ...BASE(), tipoPermitido: false, configHorarioValida: false, empresaPausada: true }).reason, MOTIVOS_BLOQUEIO.TIPO_NAO_PERMITIDO);
+  });
+  test("prioridade: EMPRESA_PAUSADA vem antes de cooldown/janela/rate limit; CONFIG_INVALIDA vem antes de OUTSIDE_ALLOWED_WINDOW", () => {
+    assert.equal(avaliarEnvio({ ...BASE(), empresaPausada: true, dentroDaJanela: false, cooldownAtivo: true, rateLimitExcedido: true }).reason, MOTIVOS_BLOQUEIO.EMPRESA_PAUSADA);
+    assert.equal(avaliarEnvio({ ...BASE(), configHorarioValida: false, dentroDaJanela: false }).reason, MOTIVOS_BLOQUEIO.CONFIG_INVALIDA);
+    assert.equal(avaliarEnvio({ ...BASE(), configHorarioValida: false, empresaPausada: true }).reason, MOTIVOS_BLOQUEIO.EMPRESA_PAUSADA);
+  });
+  test("pausa vencida (empresaPausada=false) + config válida + habilitada + tipo permitido segue para as demais regras", () => {
+    assert.deepEqual(avaliarEnvio(BASE()), { allowed: true, reason: null });
+    assert.equal(avaliarEnvio({ ...BASE(), dentroDaJanela: false }).reason, MOTIVOS_BLOQUEIO.OUTSIDE_ALLOWED_WINDOW);
+  });
+  test("resposta NÃO proativa: a pausa (de alertas proativos) não a afeta, mas horário inválido bloqueia (janela não confiável)", () => {
+    assert.equal(avaliarEnvio({ ...BASE(), ehProativo: false, empresaPausada: true }).allowed, true);
+    assert.equal(avaliarEnvio({ ...BASE(), ehProativo: false, configHorarioValida: false }).reason, MOTIVOS_BLOQUEIO.CONFIG_INVALIDA);
+  });
+});
+
 describe("comunicacao.policy — modo fail-closed (D.3-C)", () => {
   for (const modo of ["ACTIVE", "normal", "Normal", "\"NORMAL\"", "PROACTIVE", "", null, undefined, 1, {}, ["NORMAL"]]) {
     test(`modo desconhecido/corrompido (${JSON.stringify(modo)}) -> MODO_INVALIDO, nunca fail-open`, () => {
@@ -216,7 +252,7 @@ describe("comunicacao.policy — modo fail-closed (D.3-C)", () => {
 
 describe("comunicacao.policy — CADA condição obrigatória ausente bloqueia (D.3-C)", () => {
   const OBRIGATORIOS = ["modo", "contatoExiste", "telefoneVerificado", "optOut", "consentimento", "destinatarioAtivo", "vinculoValido",
-    "empresaHabilitada", "tipoPermitido", "pendenciaAindaExiste", "duplicado", "cooldownAtivo", "dentroDaJanela", "rateLimitExcedido", "providerConectado"];
+    "empresaHabilitada", "tipoPermitido", "configHorarioValida", "empresaPausada", "pendenciaAindaExiste", "duplicado", "cooldownAtivo", "dentroDaJanela", "rateLimitExcedido", "providerConectado"];
   for (const campo of OBRIGATORIOS) {
     test(`sem \`${campo}\` -> bloqueado (nunca "provavelmente ok")`, () => {
       const s = BASE(); delete s[campo];
@@ -234,7 +270,7 @@ describe("comunicacao.policy — CADA condição obrigatória ausente bloqueia (
 
 describe("comunicacao — bloqueio PERMANENTE × TRANSITÓRIO (D.3, item 14)", () => {
   const PERMANENTES = ["OPT_OUT", "NO_CONSENT", "NO_PHONE", "PHONE_NOT_VERIFIED", "USER_INACTIVE", "SEM_VINCULO", "CONTATO_AMBIGUO", "EMPRESA_DESABILITADA", "TIPO_NAO_PERMITIDO", "PENDING_RESOLVED", "DUPLICATE"];
-  const TRANSITORIOS = ["DISABLED", "MODO_INVALIDO", "REACTIVE_ONLY_BLOQUEIA_PROATIVO", "COOLDOWN", "OUTSIDE_ALLOWED_WINDOW", "RATE_LIMIT", "SAFE_MODE", "PROVIDER_OFFLINE"];
+  const TRANSITORIOS = ["DISABLED", "MODO_INVALIDO", "REACTIVE_ONLY_BLOQUEIA_PROATIVO", "COOLDOWN", "OUTSIDE_ALLOWED_WINDOW", "RATE_LIMIT", "SAFE_MODE", "PROVIDER_OFFLINE", "EMPRESA_PAUSADA", "CONFIG_INVALIDA"];
 
   test("todo motivo do vocabulário está classificado (nenhum esquecido)", () => {
     assert.deepEqual([...PERMANENTES, ...TRANSITORIOS].sort(), Object.values(MOTIVOS_BLOQUEIO).sort());
