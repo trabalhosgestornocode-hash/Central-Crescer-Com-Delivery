@@ -23,12 +23,32 @@ import { exigirHmac } from "./whatsappGateway.hmac.js";
 import { criarWhatsappGatewayRouter } from "./whatsappGateway.routes.js";
 import { criarRepoSupabase } from "./whatsappGateway.repo.js";
 
+// LIMITES DE CORPO (finitos, sempre) ------------------------------------------------------------
+// GENÉRICO — heartbeat, lease, reset, confirmar...: bodies de poucas centenas de bytes; 256 KiB já é folgado.
+export const LIMITE_CORPO_PADRAO_BYTES = 256 * 1024;
+// AUTH-STATE — `POST /eventos/auth-state` carrega o blob de auth do Baileys (creds + TODAS as chaves Signal)
+// cifrado e em base64. NÃO é pequeno: em 2026-09-19 chegou a ~253 KB de body (189,6 KB em claro) e CRESCEU a cada
+// reconexão; o teto único de 256 KiB fez o backend responder 413, a persistência falhou e o Gateway ficou preso em
+// DISCONNECTED (Checkpoint C3.5-C.8). 1 MiB ≈ 4x o body observado; NÃO é uma cura do crescimento (que segue em
+// investigação), só a margem para o blob deixar de ser rejeitado enquanto isso.
+export const LIMITE_AUTH_STATE_PADRAO_BYTES = 1024 * 1024;
+// Teto ABSOLUTO do que a env pode pedir para o auth-state: nunca "ilimitado", nem por engano de configuração.
+export const LIMITE_AUTH_STATE_TETO_BYTES = 4 * 1024 * 1024;
+const ROTA_AUTH_STATE = /^\/eventos\/auth-state\/?$/i; // só ESTA rota (não /reset nem /confirmar)
+
+/** Inteiro positivo finito, senão `padrao` (uma env corrompida — "abc", 0, -1, Infinity, "" — nunca vira NaN/ilimitado). */
+export function lerLimiteBytes(valorEnv, padrao) {
+  if (valorEnv === undefined || valorEnv === null || String(valorEnv).trim() === "") return padrao;
+  const n = Number(valorEnv);
+  return Number.isSafeInteger(n) && n > 0 ? n : padrao;
+}
+
 /**
  * @param {object} [opts]
  * @param {ReturnType<import('../providers/baileysGateway.provider.js').criarBaileysGatewayProvider>} [opts.provider]
  * @param {object} [opts.repo] Injeção explícita — só para testes. Sem isto,
  *   produção usa `criarRepoSupabase()`.
- * @returns {{ path: string, router: import('express').Router, limiteCorpoBytes: number, repo: object } | null}
+ * @returns {{ path: string, router: import('express').Router, limiteCorpoBytes: number, limiteAuthStateBytes: number, repo: object } | null}
  *   `repo` vem junto só para introspecção/teste (qual repositório foi
  *   efetivamente escolhido) — app.js usa só `path`/`router`.
  */
@@ -38,12 +58,31 @@ export function montarWhatsappGatewayRouter({ provider, repo } = {}) {
   if (!segredo || !organizacaoId) return null; // feature inativa — nada montado
 
   const repoEfetivo = repo ?? criarRepoSupabase();
-  const limiteCorpoBytes = Number(process.env.WHATSAPP_GATEWAY_MAX_BODY_BYTES ?? 256 * 1024);
+  const limiteCorpoBytes = lerLimiteBytes(process.env.WHATSAPP_GATEWAY_MAX_BODY_BYTES, LIMITE_CORPO_PADRAO_BYTES);
+  // Nunca menor que o genérico (senão a rota "grande" ficaria mais restrita) e nunca acima do teto absoluto.
+  const limiteAuthStateBytes = Math.min(
+    LIMITE_AUTH_STATE_TETO_BYTES,
+    Math.max(limiteCorpoBytes, lerLimiteBytes(process.env.WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES, LIMITE_AUTH_STATE_PADRAO_BYTES)),
+  );
 
   const router = express.Router();
+  // ORDEM IMPORTA (a mesma lógica de app.js: "a primeira que casar vence" — body-parser marca `req._body` e o
+  // parser seguinte não reprocessa). O parser DEDICADO precisa vir ANTES do genérico: se viesse depois, o genérico
+  // (256 KiB) já teria rejeitado com 413 e o dedicado nunca seria atingido. Só POST /eventos/auth-state entra nele.
+  const rawAuthState = express.raw({ type: "*/*", limit: limiteAuthStateBytes });
+  router.use((req, res, next) => {
+    if (req.method !== "POST" || !ROTA_AUTH_STATE.test(req.path)) return next();
+    // O HMAC assina o corpo, então só dá para verificá-lo DEPOIS de ler. Antes de aceitar ler até `limiteAuthStateBytes`,
+    // exige ao menos a PRESENÇA dos 3 headers de assinatura — barra o tráfego anônimo sem custo. (Autenticidade
+    // continua sendo decidida só por `exigirHmac`, logo abaixo.)
+    if (!req.get("X-Gateway-Timestamp") || !req.get("X-Gateway-Nonce") || !req.get("X-Gateway-Signature")) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+    return rawAuthState(req, res, next);
+  });
   router.use(express.raw({ type: "*/*", limit: limiteCorpoBytes }));
   router.use(exigirHmac(segredo));
   router.use(criarWhatsappGatewayRouter({ repo: repoEfetivo, organizacaoId, provider }));
 
-  return { path: "/internal/comunicacao", router, limiteCorpoBytes, repo: repoEfetivo };
+  return { path: "/internal/comunicacao", router, limiteCorpoBytes, limiteAuthStateBytes, repo: repoEfetivo };
 }
