@@ -18,14 +18,8 @@
 
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
-import { STATUS_MENSAGEM, CANAIS, DIRECAO, RESULTADO_FINAL_ENVIO, DESTINO_SEM_ENVIO } from "./comunicacao.constants.js";
+import { STATUS_MENSAGEM, CANAIS, DIRECAO, RESULTADO_FINAL_ENVIO, DESTINO_SEM_ENVIO, RESULTADO_RESERVA } from "./comunicacao.constants.js";
 import * as tentativasRepo from "./comunicacao.tentativas.repo.js";
-
-/** Estados que CONSOMEM cooldown/capacidade: já saiu, pode ter saído (UNKNOWN) ou está saindo (SENDING). */
-const STATUS_CONSUMO = [
-  STATUS_MENSAGEM.SENDING, STATUS_MENSAGEM.SENT, STATUS_MENSAGEM.DELIVERED,
-  STATUS_MENSAGEM.READ, STATUS_MENSAGEM.DELIVERY_UNKNOWN,
-];
 
 /** Chama uma RPC `setof comunicacao_mensagens` e devolve a 1ª linha, ou `null` (= 0 linhas = perdeu a posse). */
 async function rpcFenced(db, nome, args) {
@@ -42,7 +36,7 @@ async function rpcFenced(db, nome, args) {
  *   alertaId?: string|null, organizacaoId: string, unidadeId?: string|null,
  *   contatoId: string, destinatarioPerfilId?: string|null,
  *   tipo: string, conteudo: string, idempotencyKey: string,
- *   disponivelEm: Date, maxTentativas?: number,
+ *   disponivelEm: Date, expiraEm?: Date|null, maxTentativas?: number,
  * }} params
  */
 export async function agendarMensagem(params, deps = {}) {
@@ -65,6 +59,7 @@ export async function agendarMensagem(params, deps = {}) {
     idempotency_key: params.idempotencyKey,
     status: STATUS_MENSAGEM.SCHEDULED,
     disponivel_em: params.disponivelEm.toISOString(),
+    expira_em: params.expiraEm ? params.expiraEm.toISOString() : null,
     max_tentativas: params.maxTentativas ?? 5,
   };
   const { data, error } = await db.from("comunicacao_mensagens").insert(linha).select("*").single();
@@ -76,6 +71,39 @@ export async function agendarMensagem(params, deps = {}) {
     }
     throw ApiError.internal(error.message);
   }
+  return data;
+}
+
+/**
+ * ATOMICIDADE alerta -> mensagem (migration 088): cria a mensagem (idempotente pela
+ * `idempotencyKey`) E move o alerta DETECTED -> SCHEDULED na MESMA transação do
+ * banco — ou os dois, ou nada. Uma falha no meio não deixa alerta órfão (SCHEDULED
+ * sem mensagem) nem mensagem sem alerta atualizado. Repetir a chamada N vezes gera
+ * no máximo UMA mensagem por chave.
+ *
+ * O DESTINATÁRIO NÃO É PARÂMETRO: o banco o lê da habilitação da organização do alerta
+ * (`comunicacao_habilitacoes.destinatario_*`, configurado explicitamente) e recusa se
+ * ausente/inelegível. Ninguém aqui escolhe "o primeiro contato".
+ *
+ * Resultado (`acao`): CRIADA | JA_EXISTIA | ALERTA_NAO_DETECTED | ENTREGA_DESCONHECIDA
+ * (já existe SENDING/DELIVERY_UNKNOWN do alerta: nada novo até reconciliar) |
+ * MENSAGEM_EXPIRADA (a mensagem deste evento já expirou: NÃO recria — lembrete/nova
+ * versão exige regra explícita) | NAO_HABILITADA | TIPO_NAO_PERMITIDO | SEM_DESTINATARIO |
+ * DESTINATARIO_INELEGIVEL | CHAVE_EM_USO | ALERTA_INEXISTENTE.
+ * @param {{alertaId: string, tipo: string, conteudo: string, idempotencyKey: string, disponivelEm: Date, expiraEm?: Date|null, maxTentativas?: number}} params
+ * @returns {Promise<{acao: string, mensagem_id?: string, status?: string, status_alerta?: string}>}
+ */
+export async function agendarMensagemDoAlerta(params, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_agendar_mensagem_alerta", {
+    p_alerta_id: params.alertaId,
+    p_tipo: params.tipo, p_conteudo: params.conteudo, p_idempotency_key: params.idempotencyKey,
+    p_disponivel_em: params.disponivelEm.toISOString(),
+    p_expira_em: params.expiraEm ? params.expiraEm.toISOString() : null,
+    p_max_tentativas: params.maxTentativas ?? 5,
+  });
+  if (error) throw ApiError.internal(error.message);
+  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_agendar_mensagem_alerta: resposta inválida");
   return data;
 }
 
@@ -113,6 +141,64 @@ export async function iniciarEnvio({ id, worker, claimGeracao, leaseSegundos = 9
   return rpcFenced(db, "comunicacao_iniciar_envio", {
     p_id: id, p_worker: worker, p_claim_geracao: claimGeracao, p_lease_segundos: leaseSegundos,
   });
+}
+
+/**
+ * FRONTEIRA ANTES DO PROVIDER, com RESERVA ATÔMICA de capacidade (migration 088):
+ * sob um advisory lock, no MESMO banco/transação, verifica posse (token do claim),
+ * TTL (`expira_em`, relógio do BANCO), cooldown (organização+unidade+tipo), cota
+ * diária do contato e DUAS camadas de taxa por minuto — por ORGANIZAÇÃO (fairness) e GLOBAL
+ * (o único número/sessão) — e, só se TODAS passam, faz PROCESSING -> SENDING (o ATTEMPT
+ * nasce aqui). Dois workers nunca avaliam a capacidade sobre o mesmo estado: o segundo
+ * enxerga o SENDING do primeiro.
+ *
+ * Resultado: INICIADO (+ `mensagem` = linha em SENDING; seu `tentativas` é o attempt) |
+ * POSSE_PERDIDA | EXPIRADA | COOLDOWN | RATE_LIMIT_DIA | RATE_LIMIT_MINUTO_ORGANIZACAO |
+ * RATE_LIMIT_MINUTO (global). Fora de INICIADO o provider NÃO pode ser chamado.
+ * CONSOME capacidade: SENDING, SENT, DELIVERED, READ e DELIVERY_UNKNOWN. NÃO consome:
+ * SCHEDULED, PROCESSING, CANCELLED, BLOCKED e FAILED (rejeição definitiva/comprovadamente
+ * não enviada: nenhuma mensagem saiu do número).
+ * Substitui `iniciarEnvio` no pipeline (que continua existindo, sem a reserva).
+ * @param {{id: string, worker: string, claimGeracao: number, leaseSegundos?: number, cooldownHoras: number, maxPorContatoDia: number, maxPorMinuto: number, maxPorMinutoOrganizacao: number, inicioDia: Date}} params
+ * @returns {Promise<{resultado: keyof typeof RESULTADO_RESERVA, mensagem?: object}>}
+ */
+export async function reservarEnvio({ id, worker, claimGeracao, leaseSegundos = 90, cooldownHoras, maxPorContatoDia, maxPorMinuto, maxPorMinutoOrganizacao, inicioDia }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_reservar_envio", {
+    p_id: id, p_worker: worker, p_claim_geracao: claimGeracao, p_lease_segundos: leaseSegundos,
+    p_cooldown_horas: cooldownHoras, p_max_por_contato_dia: maxPorContatoDia, p_max_por_minuto: maxPorMinuto,
+    p_max_por_minuto_org: maxPorMinutoOrganizacao,
+    p_inicio_dia: inicioDia.toISOString(),
+  });
+  if (error) throw ApiError.internal(error.message);
+  // resposta desconhecida = NÃO iniciado (fail-closed): nunca "provavelmente ok".
+  if (!data || !Object.values(RESULTADO_RESERVA).includes(data.resultado)) {
+    throw ApiError.internal("comunicacao_reservar_envio: resposta inválida");
+  }
+  if (data.resultado === RESULTADO_RESERVA.INICIADO && !data.mensagem) {
+    throw ApiError.internal("comunicacao_reservar_envio: INICIADO sem a linha da mensagem");
+  }
+  return data;
+}
+
+/**
+ * RECONCILIAÇÃO HUMANA (contrato backend; sem UI ainda): tira UMA mensagem de
+ * DELIVERY_UNKNOWN por decisão explícita de um operador, com motivo.
+ *   ENVIADA      -> SENT   (o operador confirmou que chegou)
+ *   NAO_ENVIADA  -> FAILED (o operador confirmou que NÃO chegou)
+ * NUNCA reenvia: "não enviada" não recoloca a mesma mensagem na fila. Gerar outra
+ * é um NOVO evento/versão explícito. O operador e o motivo ficam gravados em
+ * `metadados.reconciliacao` (e na auditoria).
+ * @param {{id: string, operadorPerfilId: string, resultado: 'ENVIADA'|'NAO_ENVIADA', motivo: string}} params
+ * @returns {Promise<{acao: string, status?: string}>}
+ */
+export async function reconciliarEntrega({ id, operadorPerfilId, resultado, motivo }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_reconciliar_entrega", {
+    p_id: id, p_operador: operadorPerfilId, p_resultado: resultado, p_motivo: motivo,
+  });
+  if (error) throw ApiError.badRequest(error.message, { codigo: "RECONCILIACAO_INVALIDA" });
+  return data;
 }
 
 /**
@@ -178,6 +264,21 @@ export async function expirarEntregasIncertas({ worker }, deps = {}) {
 }
 
 /**
+ * TTL (migration 088): cancela o que EXPIROU sem ter saído — SCHEDULED, ou PROCESSING
+ * cujo lease venceu — como CANCELLED + erro 'EXPIRADA' (sem status novo), no relógio do
+ * BANCO. SENDING e DELIVERY_UNKNOWN nunca são tocados. A MENSAGEM expira; a PENDÊNCIA não:
+ * o trigger do banco devolve o alerta a DETECTED (nada é cancelado/resolvido aqui) e NENHUMA
+ * mensagem nova é criada. `worker` é só rótulo de auditoria.
+ * @param {{worker: string}} params
+ */
+export async function cancelarExpiradas({ worker }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_cancelar_expiradas", { p_worker: worker });
+  if (error) throw ApiError.internal(error.message);
+  return data ?? [];
+}
+
+/**
  * Cancela as mensagens AINDA NÃO REIVINDICADAS (SCHEDULED) de um alerta
  * (ex.: pendência resolvida). Já é guardado por estado (`status =
  * SCHEDULED`): nunca toca uma linha que um worker segura. A linha que o
@@ -194,68 +295,6 @@ export async function cancelarPendentesPorAlerta(alertaId, deps = {}) {
 }
 
 /**
- * Conta mensagens de SAÍDA que CONSOMEM capacidade desde `desdeIso`: as que
- * já saíram (SENT/DELIVERED/READ), as que estão saindo (SENDING) e as que
- * PODEM ter saído (DELIVERY_UNKNOWN — até serem reconciliadas, tratá-las
- * como "não enviadas" permitiria mandar de novo algo que talvez já chegou).
- * PROCESSING NÃO conta: nenhum efeito externo foi decidido ainda (e o job em
- * avaliação é o próprio PROCESSING). Limitação conhecida — dois workers em
- * paralelo avaliando contatos iguais antes de qualquer um chegar a SENDING;
- * mitigada por worker único (concorrência 1) e endereçada no D.3-D.
- */
-function consumoDesde(query, desdeIso) {
-  return query
-    .eq("direcao", DIRECAO.SAIDA)
-    .in("status", STATUS_CONSUMO)
-    .or(`enviado_em.gte.${desdeIso},entrega_incerta_em.gte.${desdeIso},and(status.eq.${STATUS_MENSAGEM.SENDING},claimed_at.gte.${desdeIso})`);
-}
-
-/**
- * COOLDOWN: quantas mensagens de SAÍDA deste tipo para este contato impedem
- * uma nova agora. Conta por `tipo` (não por `alertaId`) porque o cooldown é
- * "não repita este TIPO de aviso para este contato tão cedo".
- *   - SENT/DELIVERED/READ: só dentro das últimas `janelaHoras`;
- *   - SENDING e DELIVERY_UNKNOWN: SEM limite de tempo enquanto não
- *     reconciliadas — "pode ter saído" não expira com o relógio; liberar o
- *     cooldown por passagem de tempo permitiria repetir algo que talvez já chegou.
- * @param {{contatoId: string, tipo: string, janelaHoras: number}} params
- */
-export async function contarEnviosRecentes({ contatoId, tipo, janelaHoras }, deps = {}) {
-  const db = deps.supabase ?? supabase;
-  const desde = new Date(Date.now() - janelaHoras * 3600_000).toISOString();
-  const { count, error } = await db.from("comunicacao_mensagens")
-    .select("id", { count: "exact", head: true })
-    .eq("contato_id", contatoId).eq("tipo", tipo).eq("direcao", DIRECAO.SAIDA)
-    .or(`status.in.(${STATUS_MENSAGEM.SENDING},${STATUS_MENSAGEM.DELIVERY_UNKNOWN}),and(status.in.(${STATUS_MENSAGEM.SENT},${STATUS_MENSAGEM.DELIVERED},${STATUS_MENSAGEM.READ}),enviado_em.gte.${desde})`);
-  if (error) throw ApiError.internal(error.message);
-  return count ?? 0;
-}
-
-/** Quantas mensagens SAÍDA consumiram capacidade para este contato hoje (para o limite `max_por_contato_por_dia`). */
-export async function contarEnviosHoje({ contatoId }, deps = {}) {
-  const db = deps.supabase ?? supabase;
-  const inicioDoDia = new Date(); inicioDoDia.setHours(0, 0, 0, 0);
-  const { count, error } = await consumoDesde(
-    db.from("comunicacao_mensagens").select("id", { count: "exact", head: true }).eq("contato_id", contatoId),
-    inicioDoDia.toISOString(),
-  );
-  if (error) throw ApiError.internal(error.message);
-  return count ?? 0;
-}
-
-/** Quantas mensagens proativas consumiram capacidade no último minuto (para o limite `max_proativas_por_minuto`). */
-export async function contarEnviosProativosUltimoMinuto(deps = {}) {
-  const db = deps.supabase ?? supabase;
-  const desde = new Date(Date.now() - 60_000).toISOString();
-  const { count, error } = await consumoDesde(
-    db.from("comunicacao_mensagens").select("id", { count: "exact", head: true }),
-    desde,
-  );
-  if (error) throw ApiError.internal(error.message);
-  return count ?? 0;
-}
-
-/**
  * Existe alguma mensagem ATIVA equivalente (mesmo alerta)? Base da checagem
  * de duplicidade. "Ativa" inclui SENDING e DELIVERY_UNKNOWN: uma mensagem
  * que pode já ter saído (ou está saindo) NÃO libera criar outra igual.
@@ -267,6 +306,26 @@ export async function existeEnvioAtivoParaAlerta(alertaId, deps = {}) {
     .in("status", [
       STATUS_MENSAGEM.SCHEDULED, STATUS_MENSAGEM.PROCESSING, STATUS_MENSAGEM.SENDING,
       STATUS_MENSAGEM.SENT, STATUS_MENSAGEM.DELIVERY_UNKNOWN,
+    ])
+    .limit(1);
+  if (error) throw ApiError.internal(error.message);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Existe OUTRA mensagem deste alerta (que não `exceptId`) que já saiu, está saindo
+ * ou PODE ter saído (SENDING/SENT/DELIVERED/READ/DELIVERY_UNKNOWN)? Base real da
+ * checagem de duplicidade: enquanto houver uma entrega desconhecida do mesmo evento
+ * lógico, nenhuma outra mensagem pode ser enviada para ele.
+ * @param {{alertaId: string, exceptId: string}} params
+ */
+export async function existeOutraEntregaDoAlerta({ alertaId, exceptId }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("comunicacao_mensagens")
+    .select("id").eq("alerta_id", alertaId).neq("id", exceptId)
+    .in("status", [
+      STATUS_MENSAGEM.SENDING, STATUS_MENSAGEM.SENT, STATUS_MENSAGEM.DELIVERED,
+      STATUS_MENSAGEM.READ, STATUS_MENSAGEM.DELIVERY_UNKNOWN,
     ])
     .limit(1);
   if (error) throw ApiError.internal(error.message);

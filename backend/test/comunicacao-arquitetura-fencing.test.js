@@ -68,9 +68,9 @@ describe("arquitetura — fencing de comunicacao_mensagens", () => {
     assert.deepEqual(achados, [], `transição sem fencing reintroduzida:\n${achados.join("\n")}`);
   });
 
-  test("a fila.repo expõe as 3 transições fenced e cada uma chama a RPC correspondente", () => {
+  test("a fila.repo expõe as transições fenced (+ a reserva da 088) e cada uma chama a RPC correspondente", () => {
     const codigo = ler(FILA_REPO);
-    for (const [fn, rpc] of [["iniciarEnvio", "comunicacao_iniciar_envio"], ["finalizarEnvio", "comunicacao_finalizar_envio"], ["encerrarProcessamento", "comunicacao_encerrar_processamento"]]) {
+    for (const [fn, rpc] of [["iniciarEnvio", "comunicacao_iniciar_envio"], ["finalizarEnvio", "comunicacao_finalizar_envio"], ["encerrarProcessamento", "comunicacao_encerrar_processamento"], ["reservarEnvio", "comunicacao_reservar_envio"]]) {
       assert.match(codigo, new RegExp(`export async function ${fn}\\b`), `falta ${fn}`);
       assert.ok(codigo.includes(`"${rpc}"`), `${fn} não chama ${rpc}`);
     }
@@ -78,20 +78,32 @@ describe("arquitetura — fencing de comunicacao_mensagens", () => {
 });
 
 describe("arquitetura — o pipeline de envio", () => {
-  test("processarJobReivindicado só chama o provider DEPOIS de iniciarEnvio (ordem estática no código)", () => {
+  test("processarJobReivindicado só chama o provider DEPOIS de reservarEnvio devolver INICIADO (ordem estática no código)", () => {
     const codigo = ler(SERVICE);
-    const inicio = codigo.indexOf("filaRepo.iniciarEnvio(");
+    const inicio = codigo.indexOf("filaRepo.reservarEnvio(");
     const envio = codigo.indexOf("whatsAppService.enviarTexto(");
     assert.ok(inicio > 0 && envio > 0, "não achei as duas chamadas");
-    assert.ok(inicio < envio, "enviarTexto aparece ANTES de iniciarEnvio");
+    assert.ok(inicio < envio, "enviarTexto aparece ANTES de reservarEnvio");
     assert.equal(codigo.split("whatsAppService.enviarTexto(").length - 1, 1, "só pode existir UM ponto de envio no pipeline");
-    // e o retorno de iniciarEnvio precisa ser checado antes do envio
-    assert.match(codigo.slice(inicio, envio), /if\s*\(\s*!emEnvio\s*\)\s*return/);
+    // qualquer resultado diferente de INICIADO sai da função ANTES do envio (POSSE_PERDIDA/EXPIRADA/adiamento)
+    assert.match(codigo.slice(inicio, envio), /reserva\.resultado\s*!==\s*RESULTADO_RESERVA\.INICIADO\s*\)\s*\{?\s*return/);
+    assert.match(codigo.slice(inicio, envio), /reserva\.resultado\s*===\s*RESULTADO_RESERVA\.POSSE_PERDIDA\s*\)\s*return\s+POSSE_PERDIDA/);
+  });
+
+  test("o pipeline NÃO usa mais iniciarEnvio (sem reserva de capacidade): reservarEnvio é o único caminho PROCESSING -> SENDING", () => {
+    assert.doesNotMatch(ler(SERVICE), /filaRepo\.iniciarEnvio\(/, "iniciarEnvio contornaria a reserva atômica de cooldown/cota/taxa");
+  });
+
+  test("a reserva recebe TODOS os limites (nunca null/ausente = sem limite) e o início do dia LOCAL da organização", () => {
+    const codigo = ler(SERVICE);
+    const chamada = codigo.slice(codigo.indexOf("filaRepo.reservarEnvio("), codigo.indexOf("filaRepo.reservarEnvio(") + 900);
+    for (const campo of ["cooldownHoras", "maxPorContatoDia", "maxPorMinuto", "maxPorMinutoOrganizacao", "inicioDia"]) assert.match(chamada, new RegExp(`\\b${campo}\\s*:`), `reservarEnvio sem ${campo}`);
+    assert.match(chamada, /inicioDoDiaLocal\(/, "a cota diária precisa usar o dia LOCAL da organização, não o do servidor");
   });
 
   test("toda transição do pipeline usa o token de CLAIM (…claim) ou de ATTEMPT (…attempt) — nenhuma chamada de transição sem ele", () => {
     const codigo = ler(SERVICE);
-    for (const fn of ["encerrarProcessamento", "finalizarEnvio", "iniciarEnvio"]) {
+    for (const fn of ["encerrarProcessamento", "finalizarEnvio", "reservarEnvio"]) {
       const chamadas = [...codigo.matchAll(new RegExp(`filaRepo\\.${fn}\\(\\s*\\{([^}]*)\\}`, "g"))];
       assert.ok(chamadas.length > 0, `${fn} nunca é chamado`);
       for (const c of chamadas) assert.match(c[1], /\.\.\.(claim|attempt)\b/, `${fn}(...) sem o token de fencing: ${c[0].slice(0, 80)}`);
@@ -198,9 +210,9 @@ describe("arquitetura — invariantes SQL do modelo CLAIM × ATTEMPT (migration 
     assert.match(sql, /create trigger trg_comunicacao_mensagens_tokens_monotonicos\s+before update/);
   });
 
-  test("a fila.repo passa p_claim_geracao nas 3 transições e não usa mais o número de tentativa para fenciar PROCESSING", () => {
+  test("a fila.repo passa p_claim_geracao nas transições fenced (iniciar/finalizar/encerrar + a reserva da 088) e não usa mais o número de tentativa para fenciar PROCESSING", () => {
     const codigo = ler(FILA_REPO);
-    assert.equal((codigo.match(/p_claim_geracao/g) ?? []).length, 3);
+    assert.equal((codigo.match(/p_claim_geracao/g) ?? []).length, 4);
     assert.doesNotMatch(codigo, /p_tentativa:\s*tentativa,\s*p_lease/);
   });
 });

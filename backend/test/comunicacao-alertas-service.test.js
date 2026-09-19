@@ -12,7 +12,7 @@ import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
   criarOrganizacao, apagarOrganizacao, criarUnidade, criarContaComPerfil, apagarConta,
-  vincularUsuarioUnidade, migracao082Aplicada,
+  vincularUsuarioUnidade, migracao082Aplicada, habilitarOrganizacao,
 } from "./helpers/comunicacao-fixtures.js";
 import * as alertasRepo from "../src/modules/comunicacao/comunicacao.alertas.repo.js";
 import * as filaRepo from "../src/modules/comunicacao/comunicacao.fila.repo.js";
@@ -33,11 +33,21 @@ const tag = `comalertas${Date.now()}`;
 let orgA = null, orgB = null, unidadeA = null;
 let contaId = null, perfilId = null, contatoId = null;
 
-// Quarta-feira 10:00 (horário local) — dentro da janela comercial SEMPRE, independente de quando o CI roda.
-const AGORA_UTIL = new Date(2026, 8, 16, 10, 0, 0);
-// Domingo — sem expediente.
-const AGORA_DOMINGO = new Date(2026, 8, 20, 10, 0, 0);
-const HABILITADA = async () => ({ empresaHabilitada: true, tipoPermitido: true, fonte: "TESTE" });
+// Instantes UTC EXPLÍCITOS (nunca `new Date(y, m, d, h)`, que depende do fuso da máquina que roda o teste).
+// Timezone da organização de teste: America/Fortaleza (UTC-3, sem DST).
+// Quarta-feira 16/09/2026 10:00 em Fortaleza — dentro da janela comercial (seg–sex 08–18) SEMPRE.
+const AGORA_UTIL = new Date("2026-09-16T13:00:00Z");
+// Domingo 20/09/2026 10:00 em Fortaleza — sem expediente.
+const AGORA_DOMINGO = new Date("2026-09-20T13:00:00Z");
+const HABILITADA = async () => ({
+  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+  destinatarioContatoId: "contato-de-teste", destinatarioPerfilId: "perfil-de-teste",
+  timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE",
+});
+// Limites da suíte: a camada por ORGANIZAÇÃO (padrão 3/min) não pode mascarar os cenários que enviam várias mensagens
+// da mesma org; a global e a cota diária ficam nos padrões antigos. Restaurados ao valor original no fim.
+const LIMITES_TESTE = { max_proativas_por_minuto: 5, max_proativas_por_minuto_por_organizacao: 1000, max_por_contato_por_dia: 3 };
+let limitesOriginais = null;
 
 before(async () => {
   if (PULAR_INTEGRACAO) return;
@@ -48,6 +58,8 @@ before(async () => {
   if (col.error || probe.error) { migracaoOk = false; return; } // migration 087 (claim × attempt) ausente
 
   modoOriginal = await modoAtual();
+  limitesOriginais = (await supabase.from("comunicacao_configuracoes").select("valor").eq("chave", "limites").maybeSingle()).data?.valor ?? null;
+  await supabase.from("comunicacao_configuracoes").upsert({ chave: "limites", valor: LIMITES_TESTE }, { onConflict: "chave" });
   orgA = await criarOrganizacao("TESTE comunicacao-alertas A — descartável");
   orgB = await criarOrganizacao("TESTE comunicacao-alertas B — descartável");
   unidadeA = await criarUnidade(orgA, "Unidade A1");
@@ -64,6 +76,7 @@ before(async () => {
 
 after(async () => {
   if (modoOriginal) await definirModo(modoOriginal, {}).catch(() => {});
+  if (limitesOriginais) await supabase.from("comunicacao_configuracoes").upsert({ chave: "limites", valor: limitesOriginais }, { onConflict: "chave" });
   if (contatoId) {
     await supabase.from("comunicacao_mensagens").delete().eq("contato_id", contatoId);
     await supabase.from("contatos_whatsapp").delete().eq("id", contatoId);
@@ -352,14 +365,6 @@ describe("D.3-C — consentimento e habilitação fail-closed (nenhum destes env
     await limpar(par);
   });
 
-  test("resolverContatosDaUnidade só devolve contato com consentimento=true E verificado=true E opt_out=false", async (t) => {
-    if (!migracaoOk) return t.skip("migrations 082/087 ainda não aplicadas — pulando.");
-    const busca = async () => (await contatosRepo.resolverContatosDaUnidade({ organizacaoId: orgA, unidadeId: unidadeA })).some((c) => c.contatoId === contatoId);
-    assert.equal(await busca(), true, "elegível: consentido + verificado");
-    await definirContato({ consentimento: false }); assert.equal(await busca(), false, "sem consentimento");
-    await definirContato({ consentimento: true, verificado: false }); assert.equal(await busca(), false, "não verificado");
-    await definirContato({ verificado: true, opt_out: true }); assert.equal(await busca(), false, "opt-out");
-  });
 });
 
 describe("D.3 — bloqueio TRANSITÓRIO adia (não vira BLOCKED terminal)", { skip: PULAR_INTEGRACAO }, () => {
@@ -582,7 +587,7 @@ describe("D.3-B — dois workers no PIPELINE completo (a mesma mensagem nunca sa
     const { chamadas, whatsAppService } = criarProviderComSpy();
 
     // O envio de B ao mesmo contato acionaria cooldown/rate limit na política de A e A seria adiada por
-    // OUTRO caminho (também fenced) — o teste só prova o CAS de `iniciarEnvio` se a política de A LIBERAR.
+    // OUTRO caminho (também fenced) — o teste só prova o CAS de `reservarEnvio` se a política de A LIBERAR.
     // Por isso o envio de B é "envelhecido" no banco (independe de diferença de relógio app x banco).
     // A reivindica (mesmo nome "manual" que B usará) e "trava" antes de processar.
     const lotesA = await filaRepo.claimJobs({ limite: 50, worker: "manual", leaseSegundos: 120 });
@@ -596,7 +601,7 @@ describe("D.3-B — dois workers no PIPELINE completo (a mesma mensagem nunca sa
     await supabase.from("comunicacao_mensagens").update({ enviado_em: new Date(Date.now() - 2 * 86_400_000).toISOString() }).eq("id", par.job.id);
 
     // A acorda e tenta processar o job que carrega na mão (geração 1). A política dela LIBERA;
-    // só o CAS de `iniciarEnvio` pode impedir o segundo envio.
+    // só o CAS de `reservarEnvio` pode impedir o segundo envio.
     const rA = await processarJobReivindicado(jobA, ctx(whatsAppService));
     assert.equal(rA.resultado, "POSSE_PERDIDA", JSON.stringify(rA));
     assert.equal(chamadas.length, 1, "o provider foi chamado por A E por B — duplicidade");
@@ -639,7 +644,7 @@ describe("D.3-B — dois workers no PIPELINE completo (a mesma mensagem nunca sa
   test("dois workers competindo pelo MESMO lote (Promise.all): cada mensagem chama o provider no máximo UMA vez", async (t) => {
     if (!migracaoOk) return t.skip("migrations 082/087 ainda não aplicadas — pulando.");
     await definirModo(MODOS.NORMAL, {});
-    // Um contato POR mensagem: com um contato só, o cooldown/rate limit (por contato) mascararia a corrida.
+    // Um contato POR mensagem: com um contato só, a cota diária (por contato) mascararia a corrida.
     const N = 4;
     const extras = [];
     const pares = [];
@@ -651,7 +656,8 @@ describe("D.3-B — dois workers no PIPELINE completo (a mesma mensagem nunca sa
       const { alerta } = await novoAlertaDetected(orgA, unidadeA, `2026-11-0${i + 1}`);
       const job = await filaRepo.agendarMensagem({
         alertaId: alerta.id, organizacaoId: orgA, unidadeId: unidadeA, contatoId: c.id, destinatarioPerfilId: perfilId,
-        tipo: alerta.tipo_alerta, conteudo: "aviso de pendência", idempotencyKey: `wa:alerta:${alerta.id}:v1`,
+        // cooldown é por organização+unidade+tipo: um tipo por mensagem para o cooldown não mascarar a corrida
+        tipo: `${alerta.tipo_alerta}_corrida_${i}`, conteudo: "aviso de pendência", idempotencyKey: `wa:alerta:${alerta.id}:v1`,
         disponivelEm: new Date(Date.now() - 60_000),
       });
       pares.push({ alerta, job });
@@ -659,14 +665,14 @@ describe("D.3-B — dois workers no PIPELINE completo (a mesma mensagem nunca sa
     const a = criarProviderComSpy();
     const b = criarProviderComSpy();
     const limites = { adiamentoMs: 900_000 };
-    await supabase.from("comunicacao_configuracoes").upsert({ chave: "limites", valor: { max_proativas_por_minuto: 100, max_por_contato_por_dia: 100 } }, { onConflict: "chave" });
+    await supabase.from("comunicacao_configuracoes").upsert({ chave: "limites", valor: { max_proativas_por_minuto: 100, max_proativas_por_minuto_por_organizacao: 100, max_por_contato_por_dia: 100 } }, { onConflict: "chave" });
     try {
       await Promise.all([
         lote(a.whatsAppService, { worker: "corrida-A", limite: 50, ...limites }),
         lote(b.whatsAppService, { worker: "corrida-B", limite: 50, ...limites }),
       ]);
     } finally {
-      await supabase.from("comunicacao_configuracoes").upsert({ chave: "limites", valor: { max_proativas_por_minuto: 5, max_por_contato_por_dia: 3 } }, { onConflict: "chave" });
+      await supabase.from("comunicacao_configuracoes").upsert({ chave: "limites", valor: LIMITES_TESTE }, { onConflict: "chave" });
     }
     const todas = [...a.chamadas, ...b.chamadas].map((c) => c.idempotencyKey);
     assert.equal(todas.length, N, `esperava ${N} envios (um por mensagem), houve ${todas.length}`);
@@ -741,13 +747,15 @@ describe("D.3-R — modo, habilitação e DELIVERY_UNKNOWN (revisão final)", { 
     await limpar(par);
   });
 
-  test("resolverHabilitacaoEmpresa (gate temporário até a futura migration): SEMPRE {habilitada:false, tipoPermitido:false}, para qualquer organização/tipo", async () => {
+  test("resolverHabilitacaoEmpresa (persistida, migration 088): organização SEM registro, ausente ou desconhecida -> SEMPRE fechada, para qualquer tipo", async (t) => {
+    if (!migracaoOk) return t.skip("migrations 082/087 ainda não aplicadas — pulando.");
     for (const org of [orgA, orgB, "00000000-0000-0000-0000-000000000000", null, undefined]) {
       for (const tipo of [TIPOS_ALERTA.DASHBOARD_IFOOD_D1, "qualquer", null]) {
         const h = await resolverHabilitacaoEmpresa({ organizacaoId: org, tipoAlerta: tipo });
         assert.equal(h.empresaHabilitada, false);
         assert.equal(h.tipoPermitido, false);
-        assert.equal(h.fonte, "SEM_ESTRUTURA_DE_HABILITACAO");
+        assert.equal(h.configHorarioValida, false);
+        assert.ok(["SEM_REGISTRO", "SEM_ORGANIZACAO"].includes(h.fonte), h.fonte);
       }
     }
   });
@@ -795,16 +803,18 @@ describe("D.3-R — modo, habilitação e DELIVERY_UNKNOWN (revisão final)", { 
     await lote(whatsAppService);
     assert.equal((await linha(par.job.id)).status, STATUS_MENSAGEM.DELIVERY_UNKNOWN);
 
-    // "scheduler". O alerta do helper ainda está DETECTED (o agendador real o marcaria SCHEDULED antes de criar a
-    // mensagem; e resolverFalhaDeEnvio não muda o status do alerta em UNKNOWN) — é o PIOR CASO: o agendador
-    // re-executa para este alerta. A UNIQUE(idempotency_key) tem de devolver a MESMA linha, sem criar outra
-    // e sem mexer no estado.
+    // NEGÓCIO × TRANSPORTE: a incerteza é da MENSAGEM; o alerta NÃO ganha status de transporte (continua DETECTED aqui,
+    // pois o helper cria a mensagem sem passar pelo agendador atômico) — é o PIOR CASO: o agendador re-executa para este
+    // alerta. A UNIQUE(idempotency_key) tem de devolver a MESMA linha, sem criar outra e sem mexer no estado.
+    assert.equal(await statusAlerta(par.alerta.id), STATUS_ALERTA.DETECTED, "o alerta não pode assumir o estado de transporte");
+    await habilitarOrganizacao(orgA, { contatoId, perfilId }); // habilitação REAL (o banco a lê)
     await agendarEnviosPendentes({ organizacaoId: orgA, agora: AGORA_UTIL });
     const { count: totalDoAlerta } = await supabase.from("comunicacao_mensagens").select("id", { count: "exact", head: true }).eq("alerta_id", par.alerta.id);
     assert.equal(totalDoAlerta, 1, "o agendador criou uma SEGUNDA mensagem para o mesmo alerta");
     assert.equal((await linha(par.job.id)).status, STATUS_MENSAGEM.DELIVERY_UNKNOWN, "o agendador mexeu numa mensagem DELIVERY_UNKNOWN");
     // e um segundo ciclo do agendador já não encontra nada DETECTED para este alerta
     assert.equal((await agendarEnviosPendentes({ organizacaoId: orgA, agora: AGORA_UTIL })).agendados, 0);
+    await supabase.from("comunicacao_habilitacoes").delete().eq("organizacao_id", orgA);
     // idempotência: reagendar o MESMO alerta devolve a linha existente, sem mexer no estado
     const mesma = await filaRepo.agendarMensagem({ alertaId: par.alerta.id, organizacaoId: orgA, unidadeId: unidadeA, contatoId, tipo: par.alerta.tipo_alerta, conteudo: "x", idempotencyKey: `wa:alerta:${par.alerta.id}:v1`, disponivelEm: new Date() });
     assert.equal(mesma.id, par.job.id);

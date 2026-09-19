@@ -176,49 +176,13 @@ export async function perfilTemVinculo({ perfilId, organizacaoId, unidadeId = nu
     if (error) throw ApiError.internal(error.message);
     return !!data;
   }
-  const { data, error } = await db.from("usuarios_organizacoes").select("perfil_id").eq("perfil_id", perfilId).eq("organizacao_id", organizacaoId).maybeSingle();
+  const { data, error } = await db.from("usuarios_organizacoes").select("perfil_id").eq("perfil_id", perfilId).eq("organizacao_id", organizacaoId).eq("ativo", true).maybeSingle();
   if (error) throw ApiError.internal(error.message);
   return !!data;
 }
 
-/**
- * Caminho INVERSO de `resolverPerfilDoContato`: dada uma unidade com
- * pendência, quais contatos de WhatsApp já vinculados a um perfil daquela
- * unidade existem? É a base (simples, de propósito) para
- * `comunicacao.alertas.service.js#agendarEnviosPendentes` escolher um
- * destinatário. Sem UI de "quem recebe" ainda (Checkpoint D/E) isto só
- * encontra algo se um contato já foi vinculado manualmente (ex.: fixture
- * de teste) — em produção, greenfield, devolve lista vazia até então.
- * @param {{organizacaoId: string, unidadeId: string}} params
- * @returns {Promise<Array<{contatoId: string, perfilId: string, telefoneE164: string, principal: boolean}>>}
- */
-export async function resolverContatosDaUnidade({ organizacaoId, unidadeId }, deps = {}) {
-  const db = deps.supabase ?? supabase;
-  const uu = await db.from("usuarios_unidades").select("perfil_id").eq("unidade_id", unidadeId);
-  if (uu.error) throw ApiError.internal(uu.error.message);
-  const perfilIds = [...new Set((uu.data ?? []).map((r) => r.perfil_id).filter(Boolean))];
-  if (!perfilIds.length) return [];
-
-  // FAIL-CLOSED (D.3-C): só é candidato a mensagem PROATIVA quem tem
-  // consentimento EXPLÍCITO e telefone verificado e não pediu para parar.
-  // Ter o telefone cadastrado não basta. (A decisão final continua sendo do
-  // Policy Engine no momento do envio — isto só evita AGENDAR para quem já
-  // se sabe que não pode receber.)
-  const { data, error } = await db.from("contatos_whatsapp_perfis")
-    .select("contato_id, perfil_operacional_id, principal, created_at, contatos_whatsapp!inner(telefone_e164, opt_out, consentimento, verificado)")
-    .in("perfil_operacional_id", perfilIds)
-    .eq("ativo", true)
-    .eq("contatos_whatsapp.opt_out", false)
-    .eq("contatos_whatsapp.consentimento", true)
-    .eq("contatos_whatsapp.verificado", true)
-    .order("principal", { ascending: false })
-    .order("created_at", { ascending: true });
-  if (error) throw ApiError.internal(error.message);
-
-  return (data ?? []).map((r) => ({
-    contatoId: r.contato_id,
-    perfilId: r.perfil_operacional_id,
-    telefoneE164: r.contatos_whatsapp?.telefone_e164 ?? null,
-    principal: r.principal,
-  }));
-}
+// (Removido no D.3-D-R: `resolverContatosDaUnidade` — "o primeiro contato elegível da
+// unidade". A ORDEM física/da query nunca pode decidir quem recebe uma mensagem
+// proativa. O destinatário agora é configurado EXPLICITAMENTE por organização em
+// `comunicacao_habilitacoes.destinatario_*` e lido pelo banco em
+// `comunicacao_agendar_mensagem_alerta`.)

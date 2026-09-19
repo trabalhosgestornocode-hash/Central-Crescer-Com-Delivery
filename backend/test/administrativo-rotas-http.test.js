@@ -20,6 +20,7 @@ import http from "node:http";
 import express from "express";
 
 import { administrativoRouter } from "../src/modules/administrativo/administrativo.routes.js";
+import { pendencias as pendenciasService } from "../src/modules/administrativo/administrativo.service.js";
 import { errorHandler } from "../src/middlewares/errorHandler.js";
 
 const HOJE = "2026-09-15";
@@ -151,6 +152,22 @@ describe("autorização das rotas /administrativo (Express real)", () => {
     }
     assert.equal((await GET(app, `/administrativo/empresas/${uuid("o2")}`)).status, 200);
     assert.equal((await GET(app, `/administrativo/unidades/${uuid("ub")}/calendario?mes=2026-09`)).status, 200);
+  });
+
+  test("CONTRATO: `organizacoesMonitoradas` é insumo INTERNO da Comunicação — o service o devolve, a rota HTTP NÃO", async () => {
+    const deps = { supabase: fakeDb(estadoComFrota()) };
+    // service (retorno interno): o snapshot inclui as organizações monitoradas (mesmo as sem pendência)
+    const interno = await pendenciasService({ hojeIso: HOJE }, deps);
+    assert.deepEqual([...interno.organizacoesMonitoradas].sort(), [uuid("o1"), uuid("o2"), uuid("o3")].sort());
+    // HTTP (resposta pública): o mesmo dado NÃO vaza; o restante do contrato continua igual
+    const app = makeApp({ user: usuarioPainel, deps });
+    const r = await GET(app, "/administrativo/pendencias");
+    assert.equal(r.status, 200);
+    assert.equal("organizacoesMonitoradas" in r.json.data, false, "campo interno vazou pela rota");
+    assert.ok(!JSON.stringify(r.json).includes("organizacoesMonitoradas"));
+    for (const chave of ["d1", "total", "criticas", "atencao", "unidades"]) assert.ok(chave in r.json.data, `contrato público perdeu "${chave}"`);
+    // e o retorno interno NÃO foi mutado pela rota (cada chamada é independente)
+    assert.ok(Array.isArray((await pendenciasService({ hojeIso: HOJE }, deps)).organizacoesMonitoradas));
   });
 
   test("monitoramento-diario?data=<hoje> -> 400 (nunca cobra o dia de hoje)", async () => {

@@ -35,11 +35,13 @@ const MODOS_VALIDOS = new Set(Object.values(MODOS));
  * @property {boolean} vinculoValido         o destinatário pertence à organização/unidade deste envio?
  * @property {boolean} empresaHabilitada     a organização está habilitada para WhatsApp proativo? (PROATIVO exige === true)
  * @property {boolean} tipoPermitido         o tipo deste alerta é permitido para a organização? (PROATIVO exige === true)
+ * @property {boolean} empresaPausada        a organização está em pausa (`pausado_ate` no futuro)? (PROATIVO exige === false)
+ * @property {boolean} configHorarioValida   timezone IANA e janelas da organização válidos? (exige === true, proativo ou não; inválido = CONFIG_INVALIDA)
  * @property {boolean} pendenciaAindaExiste  a pendência que originou o alerta ainda é real (revalidada)?
  * @property {boolean} duplicado             já existe um envio ativo equivalente?
- * @property {boolean} cooldownAtivo         dentro do período de cooldown do tipo de alerta?
+ * @property {boolean} cooldownAtivo         dentro do período de cooldown do tipo de alerta? (o service pode passar false: a decisão AUTORITATIVA é atômica em comunicacao_reservar_envio -> COOLDOWN)
  * @property {boolean} dentroDaJanela        agora está dentro do horário comercial permitido?
- * @property {boolean} rateLimitExcedido     estourou algum limite de taxa (por minuto/por contato/dia)?
+ * @property {boolean} rateLimitExcedido     estourou algum limite de taxa (por minuto/por contato/dia)? (idem: o consumo de capacidade é decidido atomicamente em comunicacao_reservar_envio -> RATE_LIMIT_*)
  * @property {boolean} providerConectado     o WhatsAppService reporta conexão ativa?
  * @property {boolean} [modoSeguro]          circuito de segurança ativo (opcional: só `true` bloqueia — o circuito ainda não existe)
  */
@@ -70,12 +72,18 @@ export function avaliarEnvio(s) {
   // --- empresa/tipo: ter o telefone cadastrado não habilita ninguém ---
   if (proativo && s.empresaHabilitada !== true) return bloqueado(MOTIVOS_BLOQUEIO.EMPRESA_DESABILITADA);
   if (proativo && s.tipoPermitido !== true) return bloqueado(MOTIVOS_BLOQUEIO.TIPO_NAO_PERMITIDO);
+  // habilitado=true não basta: a empresa não pode estar em pausa (`pausado_ate` no futuro -> ADIAMENTO,
+  // nunca BLOCKED permanente; a pausa vencida volta sozinha à elegibilidade).
+  if (proativo && s.empresaPausada !== false) return bloqueado(MOTIVOS_BLOQUEIO.EMPRESA_PAUSADA);
 
   // Proativo (alerta) só faz sentido se a pendência que o originou ainda existir.
   if (proativo && s.pendenciaAindaExiste !== true) return bloqueado(MOTIVOS_BLOQUEIO.PENDING_RESOLVED);
 
   if (s.duplicado !== false) return bloqueado(MOTIVOS_BLOQUEIO.DUPLICATE);
   if (s.cooldownAtivo !== false) return bloqueado(MOTIVOS_BLOQUEIO.COOLDOWN);
+  // timezone/janelas inválidos: fail-closed (nunca UTC por omissão). Vale para proativo E reativo, pois
+  // `dentroDaJanela` só é confiável se o horário da organização foi resolvido. Transitório: corrigir a config destrava.
+  if (s.configHorarioValida !== true) return bloqueado(MOTIVOS_BLOQUEIO.CONFIG_INVALIDA);
   if (s.dentroDaJanela !== true) return bloqueado(MOTIVOS_BLOQUEIO.OUTSIDE_ALLOWED_WINDOW);
   if (s.rateLimitExcedido !== false) return bloqueado(MOTIVOS_BLOQUEIO.RATE_LIMIT);
   if (s.modoSeguro === true) return bloqueado(MOTIVOS_BLOQUEIO.SAFE_MODE);

@@ -296,6 +296,10 @@ export async function pendencias({ hojeIso, mes } = {}, deps = {}) {
     criticas: lista.filter((u) => u.criticidade === ROLLUP.CRITICO).length,
     atencao: lista.filter((u) => u.criticidade === ROLLUP.ATENCAO).length,
     unidades: lista,
+    // Organizações que ESTE snapshot monitorou (têm ou não pendência). `unidades` só lista quem
+    // tem problema — sem isto, uma organização que zerou as pendências some do snapshot e o
+    // módulo de Comunicação nunca resolveria os alertas dela.
+    organizacoesMonitoradas: [...new Set(frota.unidades.map((u) => u.organizacaoId))],
   };
 }
 

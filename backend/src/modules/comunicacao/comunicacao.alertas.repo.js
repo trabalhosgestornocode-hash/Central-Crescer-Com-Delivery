@@ -29,12 +29,34 @@ export async function buscarAlertaAtivo(chave, deps = {}) {
 }
 
 /**
+ * Busca o alerta desta chave lógica em QUALQUER status. A UNIQUE da migration 082
+ * não inclui `status`: um alerta RESOLVED/CANCELLED de mesma chave continua
+ * ocupando a chave — este é o único jeito de saber que ele existe.
+ * @param {{organizacaoId: string, unidadeId: string|null, tipoAlerta: string, dataReferencia: string, destinatarioPerfilId: string|null}} chave
+ */
+export async function buscarAlertaPorChave(chave, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  let q = db.from("comunicacao_alertas").select("*")
+    .eq("organizacao_id", chave.organizacaoId)
+    .eq("tipo_alerta", chave.tipoAlerta)
+    .eq("data_referencia", chave.dataReferencia);
+  q = chave.unidadeId ? q.eq("unidade_id", chave.unidadeId) : q.is("unidade_id", null);
+  q = chave.destinatarioPerfilId ? q.eq("destinatario_perfil_id", chave.destinatarioPerfilId) : q.is("destinatario_perfil_id", null);
+  const { data, error } = await q.maybeSingle();
+  if (error) throw ApiError.internal(error.message);
+  return data;
+}
+
+/**
  * Cria o alerta se a chave lógica ainda não tem um ATIVO; se já existe e a
  * severidade mudou, escalona (atualiza severidade + guarda histórico em
  * `metadados`) SEM criar uma segunda linha — "mesma pendência processada
  * duas vezes gera um único alerta" (teste 4), com escalonamento permitido.
- * @param {{organizacaoId, unidadeId, tipoAlerta, dataReferencia, destinatarioPerfilId, severidade, motivo}} params
- * @returns {Promise<{alerta: object, criado: boolean, escalonado: boolean}>}
+ * @param {{organizacaoId, unidadeId, tipoAlerta, dataReferencia, destinatarioPerfilId, severidade, motivo, metadados?}} params
+ * Se a chave já pertence a um alerta TERMINAL (RESOLVED/CANCELLED), NÃO cria outro
+ * nem lança: devolve `{alerta, terminal: true}` — a mesma pendência que continua
+ * (ou reaparece) não gera evento novo sozinha; novo envio exige regra explícita.
+ * @returns {Promise<{alerta: object, criado: boolean, escalonado: boolean, terminal?: boolean}>}
  */
 export async function criarOuEscalonarAlerta(params, deps = {}) {
   const db = deps.supabase ?? supabase;
@@ -51,6 +73,7 @@ export async function criarOuEscalonarAlerta(params, deps = {}) {
       tipo_alerta: chave.tipoAlerta, data_referencia: chave.dataReferencia,
       destinatario_perfil_id: chave.destinatarioPerfilId,
       severidade: params.severidade, motivo: params.motivo ?? null,
+      metadados: params.metadados ?? {}, // ex.: {unidade_nome, empresa_nome} — o texto da mensagem os usa
       status: STATUS_ALERTA.DETECTED,
     }).select("*").single();
     if (error) {
@@ -59,6 +82,8 @@ export async function criarOuEscalonarAlerta(params, deps = {}) {
       if (String(error.code) === "23505") {
         const jaExiste = await buscarAlertaAtivo(chave, deps);
         if (jaExiste) return { alerta: jaExiste, criado: false, escalonado: false };
+        const terminal = await buscarAlertaPorChave(chave, deps);
+        if (terminal) return { alerta: terminal, criado: false, escalonado: false, terminal: true };
       }
       throw ApiError.internal(error.message);
     }
@@ -82,31 +107,46 @@ export async function criarOuEscalonarAlerta(params, deps = {}) {
   return { alerta: existente, criado: false, escalonado: false };
 }
 
-/** Marca um alerta como RESOLVIDO — a pendência que o originou deixou de existir. */
+/** Status de alerta que NENHUMA transição automática sobrescreve. */
+const ALERTA_TERMINAL = [STATUS_ALERTA.RESOLVED, STATUS_ALERTA.CANCELLED];
+const listaIn = (status) => `(${status.join(",")})`;
+
+/**
+ * Marca um alerta como RESOLVIDO — a pendência de NEGÓCIO que o originou deixou de existir.
+ * Vale em QUALQUER status ativo, inclusive com uma mensagem ainda em DELIVERY_UNKNOWN: a
+ * incerteza de transporte vive na MENSAGEM (continua exigindo reconciliação) e não pode
+ * impedir o sistema de reconhecer que a pendência real foi resolvida.
+ * GUARDADO: nunca sobrescreve um alerta já terminal (RESOLVED/CANCELLED).
+ * @returns {Promise<boolean>} `true` se este chamado resolveu o alerta
+ */
 export async function resolverAlerta(alertaId, deps = {}) {
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.from("comunicacao_alertas")
     .update({ status: STATUS_ALERTA.RESOLVED, resolvido_em: new Date().toISOString() })
-    .eq("id", alertaId).select("organizacao_id").single();
+    .eq("id", alertaId)
+    .not("status", "in", listaIn(ALERTA_TERMINAL))
+    .select("organizacao_id").maybeSingle();
   if (error) throw ApiError.internal(error.message);
-  await auditar({ acao: ACOES.COMUNICACAO_ALERTA_RESOLVIDO, atorTipo: "sistema", organizacaoId: data?.organizacao_id ?? null, entidade: "comunicacao_alertas", entidadeId: alertaId });
+  if (!data) return false;
+  await auditar({ acao: ACOES.COMUNICACAO_ALERTA_RESOLVIDO, atorTipo: "sistema", organizacaoId: data.organizacao_id ?? null, entidade: "comunicacao_alertas", entidadeId: alertaId });
+  return true;
 }
 
-/** @param {string} alertaId @param {string} motivo */
-export async function cancelarAlerta(alertaId, motivo, deps = {}) {
-  const db = deps.supabase ?? supabase;
-  const { data, error } = await db.from("comunicacao_alertas")
-    .update({ status: STATUS_ALERTA.CANCELLED, cancelado_em: new Date().toISOString(), motivo_cancelamento: motivo })
-    .eq("id", alertaId).select("organizacao_id").single();
-  if (error) throw ApiError.internal(error.message);
-  await auditar({ acao: ACOES.COMUNICACAO_ALERTA_CANCELADO, atorTipo: "sistema", organizacaoId: data?.organizacao_id ?? null, entidade: "comunicacao_alertas", entidadeId: alertaId, detalhes: { motivo } });
-}
-
-/** @param {string} alertaId @param {string} status */
+/**
+ * Atualiza o status de um alerta refletindo a condição de NEGÓCIO (ex.: BLOCKED por veto
+ * permanente da política, FAILED por retries esgotados). GUARDADO: nunca sobrescreve
+ * RESOLVED/CANCELLED (um callback tardio não "ressuscita" o alerta). O que acontece com a
+ * MENSAGEM em SENT/DELIVERED/READ/FAILED e a expiração por TTL já é refletido no alerta pelo
+ * trigger do banco (088); DELIVERY_UNKNOWN da mensagem NUNCA vira status do alerta.
+ * @param {string} alertaId @param {string} status
+ * @returns {Promise<boolean>} `true` se a linha foi atualizada
+ */
 export async function atualizarStatusAlerta(alertaId, status, deps = {}) {
   const db = deps.supabase ?? supabase;
-  const { error } = await db.from("comunicacao_alertas").update({ status }).eq("id", alertaId);
+  const { data, error } = await db.from("comunicacao_alertas").update({ status })
+    .eq("id", alertaId).not("status", "in", listaIn(ALERTA_TERMINAL)).select("id").maybeSingle();
   if (error) throw ApiError.internal(error.message);
+  return !!data;
 }
 
 /**
