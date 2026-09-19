@@ -540,22 +540,28 @@ describe("authState — fila de persistência (serialização, Checkpoint C3 —
     assert.equal(drenou, true, "depois que B termina, o drain finalmente resolve");
   });
 
-  test("aguardarPersistenciasPendentes() REJEITA se a ÚLTIMA gravação enfileirada até aqui falhou (ex.: SAVE do pair-success caiu) — não pode mascarar a falha como se tivesse dado certo", async () => {
+  // Checkpoint C3.5-C.8.2 — SUBSTITUI o teste antigo "aguardarPersistenciasPendentes() REJEITA se a ÚLTIMA
+  // gravação falhou". Aquela semântica ERA o beco sem saída do incidente de 2026-09-19: a Promise rejeitada
+  // ficava guardada como estado e o drain a relançava para sempre, travando toda reconexão. O drain agora
+  // responde só "há gravação pendente AGORA?" e nunca rejeita; a informação "o estado mais novo NÃO está
+  // no backend" continua existindo — e NÃO é mascarada — em estadoPersistencia()/garantirPersistido().
+  test("aguardarPersistenciasPendentes() NUNCA rejeita por uma falha PASSADA — mas a falha não some: o estado segue 'sujo' e garantirPersistido() a informa", async () => {
     const backendClient = backendClientControlavel();
-    const adapter = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV });
+    const adapter = criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv: CHAVE_ENV, agendar: () => 1 });
     const completos = initAuthCreds();
     adapter.inicializarCreds(completos);
 
     const promiseA = adapter.aoAtualizarCreds(completos); // simula o creds.update do pair-success
     await backendClient.aguardarChamadas(1);
     backendClient.rejeitar(0, new Error("timeout ao chamar o backend (simulado)"));
-    await assert.rejects(promiseA, /timeout ao chamar o backend/);
+    await assert.rejects(promiseA, /timeout ao chamar o backend/, "quem enfileirou continua recebendo o erro original");
 
-    await assert.rejects(
-      adapter.aguardarPersistenciasPendentes(),
-      /timeout ao chamar o backend/,
-      "quem espera a fila (ex.: o reconnect antes de carregar()) precisa saber que a última gravação falhou",
-    );
+    await adapter.aguardarPersistenciasPendentes(); // não pode rejeitar — fila vazia AGORA
+    await adapter.aguardarPersistenciasPendentes(); // nem na 2ª vez (uma Promise rejeitada NÃO é estado)
+
+    const estado = adapter.estadoPersistencia();
+    assert.equal(estado.sujo, true, "a falha NÃO foi mascarada: a memória tem algo que o backend não confirmou");
+    assert.equal(estado.ultimaFalha.classe, "transitoria");
   });
 
   test("depois de uma falha, uma gravação SEGUINTE bem-sucedida volta a fazer aguardarPersistenciasPendentes() resolver normalmente — a fila continua utilizável", async () => {

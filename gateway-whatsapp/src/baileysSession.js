@@ -29,6 +29,7 @@
 import { log, mascararTelefone } from "./logsafe.js";
 import { erro, CODIGOS } from "./errors.js";
 import { criarLoggerBaileysSilencioso } from "./logger-baileys-silencioso.js";
+import { classificarFalhaBackend } from "./classificacaoFalhas.js";
 
 // Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
 // numéricos de DisconnectReason do Baileys (node_modules/baileys/lib/Types/
@@ -110,6 +111,21 @@ const CONFIRMAR_AUTH_BASE_MS = 1_000;
 const CONFIRMAR_AUTH_TETO_MS = 15_000;
 const CONFIRMAR_AUTH_MAX_TENTATIVAS = 5;
 
+// Checkpoint C3.5-C.8.2 — reconexão automática. Falhas TRANSITÓRIAS antes de
+// abrir o socket (backend fora, persistência pendente) reagendam SEM limite de
+// tentativas — mas nunca agressivamente: o atraso é o backoff exponencial
+// existente com TETO (`config.reconnect.tetoMs`) e o timer é ÚNICO e
+// cancelável. Isso é intencional: o oposto (desistir depois de N tentativas)
+// recriaria exatamente o beco sem saída do incidente de 2026-09-19 (processo
+// vivo, lease saudável, desired=CONNECTED e nada mais tentando reconectar).
+// Já uma EXCEÇÃO INESPERADA (não classificada como transitória de backend) é
+// LIMITADA: um bug determinístico não pode ficar logando para sempre.
+const MAX_FALHAS_INESPERADAS_RECONEXAO = 10;
+
+// Flush FINAL do auth state no shutdown (`desconectar()`), com teto de tempo:
+// o encerramento nunca pode ficar preso esperando um backend fora do ar.
+const FLUSH_FINAL_AUTH_TIMEOUT_MS = 8_000;
+
 export const STATUS_CONEXAO = Object.freeze({
   CONNECTING: "CONNECTING",
   CONNECTED: "CONNECTED",
@@ -141,7 +157,7 @@ export function deJid(jid) {
  *   produção, server.js SEMPRE injeta: `conectar()` recusa rodar sem
  *   `souLeader()`, e `heartbeat()` nunca manda nada sem `contexto()` válido.
  */
-export function criarSessaoBaileys({ authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout, leaseManager }) {
+export function criarSessaoBaileys({ authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout, cancelar = clearTimeout, leaseManager }) {
   let socket = null;
   let status = STATUS_CONEXAO.DISCONNECTED;
   let telefone = null;
@@ -203,6 +219,18 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   // essa gravação assentar (sucesso OU falha tratada) antes de prosseguir,
   // em vez de deixá-la correndo solta atravessando um `process.exit()`.
   let persistindoLogoutDesiredState = null;
+  // Checkpoint C3.5-C.8.2 — agendador de reconexão. UM timer no máximo
+  // (`reconexaoPendente`); `cancelamentos` é incrementado por TODA condição que
+  // invalida uma reconexão (desconectar/perda de lease/LOGGED_OUT/reset/
+  // fail-safe) e é comparado por quem já estava a caminho — o timer ao disparar
+  // e o `conectar()` em voo, antes de abrir o socket — de modo que nada
+  // "atravessa" um cancelamento. `conectandoAgora` impede dois `conectar()`
+  // concorrentes (dois sockets).
+  let reconexaoPendente = false;
+  let handleReconexao = null;
+  let cancelamentos = 0;
+  let conectandoAgora = false;
+  let falhasInesperadasReconexao = 0;
   const handlersMensagem = [];
   const statusPorMensagemId = new Map(); // providerMessageId -> {status}
 
@@ -319,6 +347,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       // socket/geração antiga nunca confirme uma geração mais nova.
       qrAtual = null;
       tentativasReconexao = 0;
+      falhasInesperadasReconexao = 0;
       socketOpen = true;
       telefone = socket?.user?.id ? deJid(socket.user.id) : telefone;
       log("info", "conexao.socket_aberto", {
@@ -373,6 +402,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
         // de LOGGED_OUT.
         status = STATUS_CONEXAO.LOGGED_OUT;
         pararHeartbeatPeriodico();
+        // Terminal: nenhuma reconexão pendente pode sobreviver a um LOGGED_OUT.
+        cancelarReconexao("logged_out");
         log("warn", "conexao.logged_out", { codigoDesconexao: codigo, razaoDesconexao: NOMES_DISCONNECT_REASON[codigo] ?? "desconhecido", registradoNoFechamento });
         // Este heartbeat é o que PERSISTE status=LOGGED_OUT no backend — a
         // trava de que restaurarSessaoSePossivel() depende (verifica
@@ -491,6 +522,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   async function falharSeguroConfirmacao(socketCapturado, categoria) {
     if (socket !== socketCapturado) return; // outro socket já assumiu — nunca mexe nele
     shutdownLocalSolicitado = true;
+    cancelarReconexao("confirmacao_fail_safe");
     origemSocket = null;
     socketOpen = false;
     authConfirmado = false;
@@ -502,6 +534,30 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     marcarDesconectado();
     await heartbeat().catch(() => {});
     log("error", "auth_confirmar.fail_safe", { categoria });
+  }
+
+  /**
+   * Checkpoint C3.5-C.8.2 — falha TRANSITÓRIA da confirmação (backend fora do
+   * ar/5xx/timeout ao persistir ou ao confirmar). Mesma garantia do
+   * fail-safe — o socket é fechado e NUNCA vira CONNECTED sem a confirmação
+   * durável — mas SEM o beco sem saída: não marca `shutdownLocalSolicitado`,
+   * não para o heartbeat (o processo segue reportando o estado real) e reagenda
+   * a reconexão com backoff, que refaz `conectar()` -> flush -> `open` ->
+   * confirmação. Erro PERMANENTE continua indo para `falharSeguroConfirmacao`.
+   */
+  async function falharTransitorioConfirmacao(socketCapturado, categoria) {
+    if (socket !== socketCapturado) return; // outro socket já assumiu — nunca mexe nele
+    origemSocket = null;
+    socketOpen = false;
+    authConfirmado = false;
+    if (socket) {
+      await socket.end?.(undefined).catch(() => {});
+      socket = null;
+    }
+    marcarDesconectado();
+    await heartbeat().catch(() => {});
+    log("warn", "auth_confirmar.falha_transitoria_reagendando", { categoria });
+    agendarReconexao();
   }
 
   /**
@@ -530,15 +586,19 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
    * CONNECTED, nunca reconexão/QR automáticos.
    */
   async function confirmarGeracaoAposOpen(socketCapturado, authSessionIdEsperado, tentativa = 0) {
-    // 2.
+    // 2. — o snapshot MAIS NOVO precisa estar no backend (não basta a fila
+    // ter esvaziado): confirmar uma geração cujo estado mais recente só existe
+    // em memória seria confirmar algo que um restart perderia.
     try {
-      await authAdapter.aguardarPersistenciasPendentes?.();
+      await authAdapter.garantirPersistido?.();
     } catch (e) {
       if (socket !== socketCapturado) return; // callback obsoleto — outro socket já assumiu, nada a fazer
+      const { classe, causa } = classificarFalhaBackend(e);
       log("error", "auth_confirmar.persistencia_pendente_falhou", {
-        erroTipo: e?.name ?? e?.constructor?.name ?? null,
+        erroTipo: e?.name ?? e?.constructor?.name ?? null, classe, causa,
       });
-      await falharSeguroConfirmacao(socketCapturado, "persistencia_pendente_falhou");
+      if (classe === "transitoria") await falharTransitorioConfirmacao(socketCapturado, "persistencia_pendente_falhou");
+      else await falharSeguroConfirmacao(socketCapturado, "persistencia_pendente_falhou");
       return;
     }
 
@@ -562,6 +622,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
 
     // 5.
     let categoriaFalha = null;
+    let transitorioConfirmar = false;
     try {
       await backendClient.confirmarAuthState({ ...contextoLease, authSessionId: authSessionIdEsperado });
     } catch (e) {
@@ -587,6 +648,10 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
         }
       } else {
         categoriaFalha = e?.name ?? e?.constructor?.name ?? "unknown";
+        // Erro de rede/5xx/timeout ao confirmar não é um veredito do backend:
+        // reagenda em vez de fail-safe terminal. 401/403/4xx (o backend
+        // RECUSOU) seguem fail-safe.
+        transitorioConfirmar = classificarFalhaBackend(e).classe === "transitoria";
       }
     }
 
@@ -594,8 +659,9 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     if (socket !== socketCapturado) return;
 
     if (categoriaFalha) {
-      log("error", "auth_confirmar.recusado", { categoria: categoriaFalha });
-      await falharSeguroConfirmacao(socketCapturado, categoriaFalha);
+      log("error", "auth_confirmar.recusado", { categoria: categoriaFalha, transitoria: transitorioConfirmar });
+      if (transitorioConfirmar) await falharTransitorioConfirmacao(socketCapturado, categoriaFalha);
+      else await falharSeguroConfirmacao(socketCapturado, categoriaFalha);
       return;
     }
 
@@ -604,6 +670,36 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     log("info", "auth_confirmar.confirmado", {});
     // 9.
     tentarConfirmarConexao();
+  }
+
+  /**
+   * Checkpoint C3.5-C.8.2 — flush FINAL do auth state no shutdown, best-effort e
+   * com TETO de tempo: nunca lança e nunca deixa o encerramento preso esperando
+   * um backend fora do ar. Só roda enquanto ainda somos leader (sem lease, a
+   * gravação seria recusada pelo fencing) e nunca sobre um LOGGED_OUT (o auth
+   * já foi invalidado pelo WhatsApp).
+   */
+  async function flushFinalAuthBestEffort() {
+    if (!authAdapter.garantirPersistido) return;
+    if (status === STATUS_CONEXAO.LOGGED_OUT) return;
+    if (leaseManager && !leaseManager.contexto()) return;
+    let timer;
+    try {
+      const r = await Promise.race([
+        authAdapter.garantirPersistido(),
+        new Promise((_, rejeitar) => {
+          // SEM unref: é este timer que LIMITA o encerramento — se ele não segurasse o
+          // event loop, um backend pendurado deixaria o shutdown esperando para sempre.
+          timer = setTimeout(() => rejeitar(Object.assign(new Error("timeout"), { flushTimeout: true })), config.flushFinalAuthTimeoutMs ?? FLUSH_FINAL_AUTH_TIMEOUT_MS);
+        }),
+      ]);
+      if (r?.status && r.status !== "limpo") log("info", "shutdown.auth_flush", { resultado: r.status });
+    } catch (e) {
+      const { classe, causa } = classificarFalhaBackend(e);
+      log("warn", "shutdown.auth_flush_falhou", { classe, causa: e?.flushTimeout ? "timeout_flush" : causa });
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -648,10 +744,79 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     }
   }
 
+  /**
+   * Agenda UMA reconexão automática com backoff. No máximo um timer pendente
+   * por vez (vários `close`/falhas em sequência não geram tempestade nem dois
+   * `conectar()`), e nunca enquanto o processo está encerrando.
+   */
   function agendarReconexao(opcoes = {}) {
+    if (shutdownLocalSolicitado) return;
+    if (reconexaoPendente) return;
     const espera = backoffMs();
     tentativasReconexao += 1;
-    agendar(() => { conectar(opcoes).catch((e) => log("error", "reconexao.falhou", { erro: e?.message })); }, espera);
+    const epoca = cancelamentos;
+    reconexaoPendente = true;
+    log("info", "reconexao.agendada", { tentativa: tentativasReconexao, esperaMs: Math.round(espera) });
+    const handle = agendar(() => { executarReconexaoAgendada(epoca, opcoes).catch(() => {}); }, espera);
+    // O `agendar` de teste pode disparar na hora (e devolver undefined): só
+    // guarda o handle se este mesmo agendamento ainda é o pendente.
+    if (reconexaoPendente && epoca === cancelamentos) handleReconexao = handle;
+  }
+
+  /**
+   * Invalida QUALQUER reconexão automática pendente ou em voo. Chamado por tudo
+   * que torna uma reconexão indevida: desconexão pedida (desired=DISCONNECTED),
+   * perda de lease, LOGGED_OUT, reset, fail-safe terminal, shutdown. Idempotente.
+   */
+  function cancelarReconexao(causa) {
+    cancelamentos += 1;
+    if (reconexaoPendente) {
+      try { if (handleReconexao != null) cancelar(handleReconexao); } catch { /* best-effort */ }
+      log("info", "reconexao.cancelada", { causa });
+    }
+    reconexaoPendente = false;
+    handleReconexao = null;
+  }
+
+  /**
+   * Corpo do timer de reconexão — reconfere TODAS as condições no instante do disparo.
+   *
+   * INVARIANTE DE `desired_connection_state` (auditado em C3.5-C.8.2-R): este timer NÃO
+   * consulta o backend para saber se o operador ainda quer estar CONECTADO — usa só
+   * estado local (`shutdownLocalSolicitado`, lease, status, cancelamentos). Isso é
+   * seguro PORQUE toda alteração operacional de `desired` passa por ESTE processo: os
+   * únicos escritores são `conectar({persistirIntencaoConectada})` (POST /whatsapp/connect),
+   * `desconectar({persistirIntencao})` (/disconnect), `resetarSessao()` (/reset), o branch
+   * LOGGED_OUT e o rollback de um /connect terminal — todos chamam `desconectar`/
+   * `cancelarReconexao` (ou o fazem eles mesmos) e, no backend, só a RPC fenced
+   * `whatsapp_desired_state_fenced` (owner+epoch da lease) escreve a coluna. Se algum dia
+   * existir um caminho que altere `desired` SEM passar por este processo (ex.: um painel
+   * escrevendo direto no banco), este desenho deixa de ser suficiente e é preciso um
+   * mecanismo de sincronização — NÃO tapar isso com um GET a cada retry.
+   */
+  async function executarReconexaoAgendada(epoca, opcoes) {
+    if (epoca !== cancelamentos) return; // cancelado enquanto esperava
+    reconexaoPendente = false;
+    handleReconexao = null;
+    if (shutdownLocalSolicitado) return;
+    if (leaseManager && !leaseManager.souLeader()) {
+      // Sem lease não se abre socket. Não reagenda: quando (e se) voltarmos a
+      // ser leader de um epoch novo, `restaurarSessaoSePossivel()` decide.
+      log("info", "reconexao.cancelada", { causa: "sem_lease" });
+      return;
+    }
+    if (status === STATUS_CONEXAO.CONNECTED || status === STATUS_CONEXAO.LOGGED_OUT) return;
+    if (status === STATUS_CONEXAO.CONNECTING && socket) return; // já existe um socket em curso
+    if (conectandoAgora) return; // um conectar() já está em voo — ele mesmo reagenda se falhar
+    try {
+      await conectar({ ...opcoes, automatica: true });
+    } catch (e) {
+      if (e?.codigo === CODIGOS.SEM_LEASE || e?.codigo === CODIGOS.JA_CONECTADO) return;
+      falhasInesperadasReconexao += 1;
+      log("error", "reconexao.falhou", { erro: e?.message, tentativa: falhasInesperadasReconexao });
+      if (falhasInesperadasReconexao < MAX_FALHAS_INESPERADAS_RECONEXAO) agendarReconexao(opcoes);
+      else log("error", "reconexao.esgotada_falhas_inesperadas", { tentativa: falhasInesperadasReconexao });
+    }
   }
 
   function aoMessagesUpsert({ messages }) {
@@ -710,7 +875,17 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     socketOpen = false;
     authConfirmado = authConfirmadoPreviamente;
     socket = fabricaSocket({ auth: authAdapter.comoAuthState(), logger: criarLoggerBaileysSilencioso(), printQRInTerminal: false });
-    socket.ev.on("connection.update", aoConnectionUpdate);
+    const socketDesteListener = socket;
+    socket.ev.on("connection.update", (update) => {
+      // Guarda de GERAÇÃO de socket (Checkpoint C3.5-C.8.2): um evento tardio
+      // (ex.: `close`) de um socket que JÁ foi substituído por outro não pode
+      // alterar `status`/`socketOpen`/`authConfirmado` do socket novo nem
+      // agendar uma reconexão por cima dele (dois sockets). Só se ignora quando
+      // há um socket ATUAL diferente — com `socket === null` (fechado de
+      // propósito) o evento segue o caminho de sempre.
+      if (socket !== null && socket !== socketDesteListener) return;
+      aoConnectionUpdate(update);
+    });
     socket.ev.on("creds.update", (c) => {
       // Só um booleano derivado, nunca o objeto `c` (creds reais) inteiro —
       // diagnóstico apenas (Checkpoint C3.5-C.1: `registered` NUNCA decide
@@ -738,18 +913,55 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
    *   ANTES de tocar no socket; se a gravação falhar, aborta sem abrir
    *   socket nenhum — nunca um socket "órfão" de uma intenção não registrada.
    */
-  async function conectar({ persistirIntencaoConectada = false } = {}) {
+  async function conectar({ persistirIntencaoConectada = false, automatica = false } = {}) {
     // Checkpoint C3.5, item 14: só o dono atual da lease pode abrir socket
     // — protege tanto o /connect manual quanto a reconexão automática
     // pós-515 (que também passa por aqui). Nunca cria uma segunda sessão.
     if (leaseManager && !leaseManager.souLeader()) throw erro(CODIGOS.SEM_LEASE);
     if (status === STATUS_CONEXAO.CONNECTED) throw erro(CODIGOS.JA_CONECTADO);
+    // Checkpoint C3.5-C.8.2 — nunca dois `conectar()` concorrentes (dois
+    // sockets): a reconexão automática só desiste em silêncio (o `conectar()`
+    // em voo reagenda sozinho se falhar); o /connect manual recebe erro claro.
+    if (conectandoAgora) {
+      if (automatica) return;
+      throw erro(CODIGOS.JA_CONECTADO, "conexão já em andamento");
+    }
+    if (automatica && shutdownLocalSolicitado) return; // processo encerrando — nunca reabre
     if (status === STATUS_CONEXAO.LOGGED_OUT) {
       // Só um NOVO pareamento (novo QR) sai de LOGGED_OUT — reset explícito,
       // nunca automático.
       status = STATUS_CONEXAO.DISCONNECTED;
     }
+    // A decisão do operador (/connect) substitui qualquer reconexão automática
+    // que estivesse pendente.
+    if (!automatica) cancelarReconexao("connect_manual");
+    const epoca = cancelamentos;
     shutdownLocalSolicitado = false;
+
+    conectandoAgora = true;
+    try {
+      await conectarInterno({ persistirIntencaoConectada, automatica, epoca });
+    } finally {
+      conectandoAgora = false;
+    }
+  }
+
+  async function conectarInterno({ persistirIntencaoConectada, automatica, epoca }) {
+    // Esta tentativa ainda vale? Reconferido depois de cada `await` que toca a
+    // rede: desconectar()/perda de lease/LOGGED_OUT/reset/shutdown incrementam
+    // `cancelamentos` ou levantam `shutdownLocalSolicitado`, e um `conectar()`
+    // que já estava a caminho NUNCA pode abrir um socket depois disso. A
+    // reconexão AUTOMÁTICA também desiste se outro caminho (restore) já abriu
+    // um socket nesse meio-tempo.
+    const invalidada = () => epoca !== cancelamentos
+      || shutdownLocalSolicitado
+      || (leaseManager != null && !leaseManager.souLeader())
+      || (automatica && socket != null && (status === STATUS_CONEXAO.CONNECTING || status === STATUS_CONEXAO.CONNECTED));
+    const canceladaEmVoo = (etapa) => {
+      if (!invalidada()) return false;
+      log("info", "reconexao.cancelada_em_voo", { etapa });
+      return true;
+    };
 
     if (persistirIntencaoConectada) {
       const contextoLeaseConnect = leaseManager?.contexto();
@@ -763,32 +975,41 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       }
     }
 
-    // Drena qualquer persistência de auth state ainda em voo (ex.: o
-    // `creds.update` do pair-success, disparado pouco antes do
-    // 515/restartRequired) ANTES de recarregar — senão `carregar()` poderia
-    // ler do backend um estado mais antigo que este mesmo processo já
-    // produziu, mas ainda não terminou de gravar. `?.()` porque nem todo
-    // fake de teste implementa este método (comportamento opcional/aditivo).
+    // O snapshot MAIS NOVO do auth state precisa estar no backend ANTES de
+    // recarregar — senão `carregar()` devolveria um estado mais velho que o
+    // que este mesmo processo já produziu (ex.: o `creds.update` do
+    // pair-success, disparado pouco antes do 515/restartRequired), e o que só
+    // existia em memória se perderia.
     //
-    // Se essa gravação pendente FALHOU, o backend ainda está com um estado
-    // mais antigo do que este processo já produziu em memória — recarregar
-    // aqui devolveria auth state obsoleto para um socket novo. Aborta a
-    // reconexão de forma segura (DISCONNECTED, sem socket novo, sem
-    // `carregar()`) em vez de seguir como se a gravação tivesse dado certo.
-    // Nunca um retry cego aqui — só a próxima queda/backoff normal decide
-    // se vale tentar de novo.
+    // Checkpoint C3.5-C.8.2 — COMPORTAMENTO DEFINIDO quando isso não é possível
+    // (antes: abortava e NUNCA mais tentava — o beco sem saída do incidente de
+    // 2026-09-19, em que um HTTP 413 antigo travou a reconexão para sempre):
+    //   * falha TRANSITÓRIA (backend fora/5xx/timeout): DISCONNECTED, sem socket
+    //     novo e sem `carregar()` (nunca sobrescreve a memória mais nova), e a
+    //     reconexão é REAGENDADA com backoff — o próximo `conectar()` refaz o
+    //     flush. A intenção do operador (desired=CONNECTED) NÃO é tocada.
+    //   * falha PERMANENTE (HMAC recusado, payload acima do teto, lease/geração
+    //     obsoletas): DISCONNECTED e PARA (repetir não ajuda; fica logado). Só o
+    //     /connect manual reverte o desired, como todo fail-closed terminal.
     try {
-      await authAdapter.aguardarPersistenciasPendentes?.();
+      await authAdapter.garantirPersistido?.();
     } catch (e) {
       status = STATUS_CONEXAO.DISCONNECTED;
-      log("error", "reconexao.abortada_persistencia_pendente_falhou", {
-        // Só o NOME do erro (classe sanitizada) — nunca `message`/`stack`,
-        // que podem conter detalhes do payload/HTTP (ver diagnosticarErroFechamento acima).
-        erroTipo: e?.name ?? e?.constructor?.name ?? null,
+      const { classe, causa, status: statusHttp } = classificarFalhaBackend(e);
+      log("error", "reconexao.persistencia_pendente_falhou", {
+        // Só o NOME do erro (classe sanitizada) e o vocabulário fechado da
+        // classificação — nunca `message`/`stack`, que podem conter detalhes
+        // do payload/HTTP (ver diagnosticarErroFechamento acima).
+        erroTipo: e?.name ?? e?.constructor?.name ?? null, classe, causa, statusHttp,
       });
-      if (persistirIntencaoConectada) await reverterDesiredParaDisconnected("persistencia_pendente_falhou");
+      if (classe === "transitoria") {
+        if (!canceladaEmVoo("persistencia") && (automatica || autenticadaAlgumaVez)) agendarReconexao();
+        return;
+      }
+      if (persistirIntencaoConectada) await reverterDesiredParaDisconnected("persistencia_permanente_falhou");
       return;
     }
+    if (canceladaEmVoo("apos_persistencia")) return;
 
     // Checkpoint C3.5-B.1 (correção da causa raiz de um QR gerado ao vivo em
     // produção por cima de uma sessão real já pareada) — `authAdapter.
@@ -812,9 +1033,20 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       // state/restore (nunca um "silêncio" só porque esta chamada específica
       // não tinha esse tratamento ainda).
       if (categoria === "lease_stale") leaseManager?.notificarPerdaExterna("connect_auth_load_stale");
+      // Checkpoint C3.5-C.8.2 — `http_error` (backend fora do ar ao ler o auth)
+      // e `pendente_nao_persistido` (memória mais nova que o backend) são
+      // TRANSITÓRIOS: fail-closed (nunca QR, nunca socket) mas com nova
+      // tentativa, e SEM destruir a intenção desired=CONNECTED. Decrypt/parse/
+      // estrutura/lease_stale continuam terminais (rollback só no /connect).
+      const transitoria = categoria === "http_error" || categoria === "pendente_nao_persistido";
+      if (transitoria) {
+        if (!canceladaEmVoo("carregar") && (automatica || autenticadaAlgumaVez)) agendarReconexao();
+        return;
+      }
       if (persistirIntencaoConectada) await reverterDesiredParaDisconnected(`auth_load_${categoria}`);
       return;
     }
+    if (canceladaEmVoo("apos_carregar")) return;
 
     if (resultadoAuth.status === "absent") {
       // Única situação em que dá para iniciar um pareamento novo (QR) com
@@ -844,6 +1076,11 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
         registradoNoBaileys: resultadoAuth.registered === true,
       });
     }
+
+    // Última reconferência: nenhum socket pode nascer de uma tentativa que foi
+    // cancelada/invalidada enquanto o auth era carregado (o import dinâmico
+    // acima também é um `await`).
+    if (canceladaEmVoo("antes_do_socket")) return;
 
     // Checkpoint C3.5-C.2/C.3 — `authConfirmadoPreviamente` é exatamente
     // `resultadoAuth.authConfirmado===true`: se a geração recarregada JÁ foi
@@ -879,12 +1116,24 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       }
     }
     shutdownLocalSolicitado = true;
+    // Checkpoint C3.5-C.8.2 — nenhuma reconexão pendente ou em voo (nem retry
+    // de persistência em segundo plano) pode sobreviver a uma desconexão.
+    cancelarReconexao("desconectar");
+    authAdapter.cancelarRetries?.();
     // Reforço pós-auditoria — se um LOGGED_OUT acabou de disparar a
     // gravação de desired=DISCONNECTED, espera ela assentar antes de seguir
     // (nunca deixa essa Promise correndo solta atravessando o resto deste
     // shutdown, que nos casos técnicos costuma terminar num process.exit()).
     await aguardarPersistenciaLogoutPendente();
     await fecharSocketTecnico();
+    // Sem socket não há mais evento novo: última chance (limitada no tempo) de
+    // o estado mais novo do auth chegar ao backend ANTES de a memória sumir —
+    // um restart/deploy descarta o que só existe em memória.
+    await flushFinalAuthBestEffort();
+    // O flush pode ter FALHADO (backend fora) e, ao falhar, o adapter REARMA o
+    // retry em segundo plano — cancela DE NOVO, depois dele, para que nenhum
+    // timer sobreviva ao shutdown (achado pela mutação: sem isto sobrava um).
+    authAdapter.cancelarRetries?.();
     // NUNCA `status = DISCONNECTED` direto aqui — ver marcarDesconectado():
     // se a sessão já é LOGGED_OUT (terminal), este shutdown (manual ou
     // técnico) precisa preservar isso, tanto localmente quanto no heartbeat
@@ -906,6 +1155,15 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
    */
   async function _forcarFailSafe() {
     shutdownLocalSolicitado = true; // um close subsequente do socket não pode agendar reconexão
+    // Checkpoint C3.5-C.8.2 — perdemos a lease: nenhuma reconexão pendente/em
+    // voo pode abrir socket em nome dela, e o que só existe em memória NÃO
+    // pode mais ser gravado (fencing) — é descartado e a memória inteira passa a
+    // ser OBSOLETA (mesmo que estivesse limpa: outro dono pode ter escrito), de
+    // modo que um futuro `carregar()` (novo epoch) é a única fonte do estado e
+    // nada gravado a partir da memória antiga jamais sai deste processo.
+    cancelarReconexao("perda_lease");
+    authAdapter.cancelarRetries?.();
+    authAdapter.marcarMemoriaObsoleta?.("lease_perdida");
     await aguardarPersistenciaLogoutPendente();
     origemSocket = null;
     socketOpen = false;
@@ -963,6 +1221,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     const contexto = leaseManager?.contexto();
     if (!contexto) throw erro(CODIGOS.SEM_LEASE);
     log("info", "reset.iniciado", {});
+    // Nenhuma reconexão automática pode reabrir um socket por cima do reset.
+    cancelarReconexao("reset");
 
     // 3.
     try {
@@ -1057,6 +1317,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     // o caso comum: um NOVO owner lendo o status persistido), mas não custa
     // nada e fecha qualquer brecha de reentrância dentro do MESMO processo.
     if (status === STATUS_CONEXAO.CONNECTED || status === STATUS_CONEXAO.CONNECTING || status === STATUS_CONEXAO.LOGGED_OUT) return;
+    if (conectandoAgora) return; // um conectar() em voo já vai abrir o socket — nunca dois
 
     restaurandoSessao = true;
     try {
@@ -1066,13 +1327,36 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     }
   }
 
-  async function tentarRestaurarComRetry(contextoOriginal, tentativa = 0) {
+  /**
+   * Reagenda a avaliação do restore depois de uma falha TRANSITÓRIA do backend.
+   * Checkpoint C3.5-C.8.2 — antes desistia (marcava o epoch como "avaliado") após
+   * ~1 min de falhas, deixando o processo, com lease e desired=CONNECTED, sem
+   * NENHUMA tentativa futura. Agora segue tentando com atraso limitado pelo
+   * teto (RESTORE_TETO_MS), e só para pelas condições que já cancelavam antes:
+   * lease perdida/epoch diferente, socket já aberto, desconexão/reset. A cada
+   * tentativa reconfere tudo isso — nunca insiste em nome de um epoch alheio.
+   */
+  function reagendarRestore(contextoOriginal, tentativa, epocaCancelamento, evento, dados) {
+    if (tentativa === RESTORE_MAX_TENTATIVAS - 1) {
+      // Uma vez, em ERROR, para o operador ver que já passou de ~1 min fora.
+      log("error", "restore.falhas_transitorias_persistentes", { tentativa: tentativa + 1 });
+    }
+    const espera = Math.min(RESTORE_BASE_MS * (2 ** Math.min(tentativa, 20)), RESTORE_TETO_MS);
+    log("warn", evento, { tentativa, esperaMs: espera, ...dados });
+    agendar(() => { tentarRestaurarComRetry(contextoOriginal, tentativa + 1, epocaCancelamento).catch(() => {}); }, espera);
+  }
+
+  async function tentarRestaurarComRetry(contextoOriginal, tentativa = 0, epocaCancelamento = cancelamentos) {
+    // desconectar()/reset/perda de lease invalidam esta avaliação mesmo que o
+    // timer já estivesse armado.
+    if (epocaCancelamento !== cancelamentos) return;
     const contextoLease = leaseManager?.contexto();
     // Perdemos a lease, ou ela renovou para um epoch diferente, entre
     // agendamentos de retry — cancela; nunca restaura em nome de um epoch
     // que não é mais (ou ainda não é de novo) o nosso.
     if (!contextoLease || contextoLease.leaseEpoch !== contextoOriginal.leaseEpoch) return;
     if (status === STATUS_CONEXAO.CONNECTED || status === STATUS_CONEXAO.CONNECTING || status === STATUS_CONEXAO.LOGGED_OUT) return;
+    if (conectandoAgora) return;
 
     let estado;
     try {
@@ -1080,15 +1364,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     } catch (e) {
       if (e?.leaseStale) { leaseManager?.notificarPerdaExterna("restore_estado_stale"); return; }
       // Falha TRANSITÓRIA (rede/backend indisponível) — retry com backoff
-      // limitado, só enquanto ainda formos leader deste mesmo epoch.
-      if (tentativa >= RESTORE_MAX_TENTATIVAS - 1) {
-        epochRestoreAvaliado = contextoOriginal.leaseEpoch;
-        log("error", "restore.desistiu_apos_falhas_transitorias", { tentativas: tentativa + 1 });
-        return;
-      }
-      const espera = Math.min(RESTORE_BASE_MS * (2 ** tentativa), RESTORE_TETO_MS);
-      log("warn", "restore.estado_sessao_falhou_tentando_de_novo", { tentativa, erro: e?.message });
-      agendar(() => { tentarRestaurarComRetry(contextoOriginal, tentativa + 1); }, espera);
+      // (atraso com teto), só enquanto ainda formos leader deste mesmo epoch.
+      reagendarRestore(contextoOriginal, tentativa, epocaCancelamento, "restore.estado_sessao_falhou_tentando_de_novo", { erro: e?.message });
       return;
     }
 
@@ -1116,6 +1393,14 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     } catch (e) {
       const categoria = e?.categoria ?? "unknown";
       if (categoria === "lease_stale") { leaseManager?.notificarPerdaExterna("restore_auth_stale"); return; }
+      // Checkpoint C3.5-C.8.2 — `http_error` é o backend fora do ar ao LER o
+      // auth (ex.: um deploy do backend no instante do restore) — TRANSITÓRIO,
+      // não "auth corrompido". Marcá-lo como NOOP definitivo do epoch deixava
+      // o processo sem restore para sempre; agora tenta de novo com backoff.
+      if (categoria === "http_error") {
+        reagendarRestore(contextoOriginal, tentativa, epocaCancelamento, "restore.auth_state_indisponivel_tentando_de_novo", { categoria });
+        return;
+      }
       // Auth state corrompido/indecifrável (ou qualquer outra falha real) —
       // FAIL-SAFE: nunca deleta, nunca gera QR, nunca tenta de novo em loop.
       // NOOP definitivo para este epoch; só um /connect manual resolve.
@@ -1150,6 +1435,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     const contextoFinal = leaseManager?.contexto();
     if (!contextoFinal || contextoFinal.leaseEpoch !== contextoOriginal.leaseEpoch) return;
     if (status === STATUS_CONEXAO.CONNECTED || status === STATUS_CONEXAO.CONNECTING || status === STATUS_CONEXAO.LOGGED_OUT) return;
+    if (conectandoAgora || epocaCancelamento !== cancelamentos) return;
 
     epochRestoreAvaliado = contextoOriginal.leaseEpoch;
     shutdownLocalSolicitado = false;
@@ -1212,5 +1498,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     _epochRestoreAvaliado: () => epochRestoreAvaliado,
     _socketOpen: () => socketOpen,
     _authConfirmado: () => authConfirmado,
+    _reconexaoPendente: () => reconexaoPendente,
+    _conectandoAgora: () => conectandoAgora,
   };
 }

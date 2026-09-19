@@ -46,6 +46,14 @@
 
 import { log } from "./logsafe.js";
 import { encriptar, decriptar, normalizarChave } from "./crypto.js";
+import { AuthPersistenciaError, classificarFalhaBackend } from "./classificacaoFalhas.js";
+
+// Backoff do RETRY em segundo plano do snapshot mais novo ainda não persistido
+// (Checkpoint C3.5-C.8.2). LIMITADO de propósito: 5 tentativas em ~48 s. Depois
+// disso o estado segue marcado como "sujo" e quem o resolve é o próximo evento
+// do Baileys (que grava o estado COMPLETO de novo) ou o flush do reconnect
+// (`garantirPersistido()`) — nunca um loop infinito silencioso.
+export const BACKOFF_RETRY_PERSISTENCIA_MS = Object.freeze([1_000, 2_000, 5_000, 10_000, 30_000]);
 
 // Checkpoint C3.5-B.1 — categoria sanitizada de falha ao carregar auth
 // state. NUNCA carrega chave, plaintext, ciphertext, creds ou QR — só o
@@ -58,7 +66,12 @@ import { encriptar, decriptar, normalizarChave } from "./crypto.js";
 // SEMPRE lança `AuthStateLoadError` com uma categoria — nunca mais um
 // `false` silencioso escondendo qual dos dois realmente aconteceu.
 export class AuthStateLoadError extends Error {
-  /** @param {'lease_stale'|'http_error'|'decrypt_error'|'parse_error'|'invalid_structure'|'unknown'} categoria */
+  /**
+   * `pendente_nao_persistido` (Checkpoint C3.5-C.8.2): a memória deste processo
+   * tem mutações que o backend ainda NÃO confirmou. Recarregar do backend agora
+   * sobrescreveria o estado mais novo com o mais velho — recusado, sempre.
+   * @param {'lease_stale'|'http_error'|'decrypt_error'|'parse_error'|'invalid_structure'|'pendente_nao_persistido'|'unknown'} categoria
+   */
   constructor(categoria) {
     super(`auth_state.carregar falhou: ${categoria}`);
     this.name = "AuthStateLoadError";
@@ -104,8 +117,16 @@ function reviverBuffers(_chave, valor) {
  * @param {(motivo: string) => void} [deps.aoLeaseStale]
  *   Chamado quando o backend rejeita uma gravação com 409
  *   WHATSAPP_GATEWAY_LEASE_STALE — plugado ao `leaseManager.notificarPerdaExterna`.
+ * @param {(fn: () => void, ms: number) => any} [deps.agendar] injeção de
+ *   setTimeout para o retry em segundo plano (teste sem tempo real).
+ * @param {(handle: any) => void} [deps.cancelar] injeção de clearTimeout.
+ * @param {readonly number[]} [deps.backoffRetryMs] backoff do retry em segundo
+ *   plano — o TAMANHO da lista é o número máximo de retries (limitado).
  */
-export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obterContextoLease, aoLeaseStale }) {
+export function criarAuthStateAdapter({
+  backendClient, chaveEncriptacaoEnv, obterContextoLease, aoLeaseStale,
+  agendar = setTimeout, cancelar = clearTimeout, backoffRetryMs = BACKOFF_RETRY_PERSISTENCIA_MS,
+}) {
   const chave = normalizarChave(chaveEncriptacaoEnv);
 
   // Cache em memória do processo — o Baileys lê/escreve chaves o tempo todo
@@ -130,33 +151,156 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
   // novo, ela sobrescreve o mais novo no backend (auth state perdido/revertido
   // silenciosamente). Um único `Promise` encadeado por instância do adapter
   // garante que as gravações cheguem ao backend na MESMA ordem em que os
-  // snapshots foram produzidos aqui, e que uma falha isolada não trava as
-  // gravações seguintes (ver `enfileirarPersistencia`).
+  // snapshots foram produzidos aqui.
+  //
+  // `filaPersistencia` é SEMPRE uma cauda RESOLVIDA (cada tarefa termina em
+  // `.catch(() => {})`): é só a "vez" da próxima gravação, nunca um veredito.
+  //
+  // MODELO DE ESTADO (Checkpoint C3.5-C.8.2 — o incidente de 2026-09-19).
+  // Antes existia `ultimaPersistencia`, a Promise CRUA da última gravação, que
+  // podia estar REJEITADA — e `aguardarPersistenciasPendentes()` a relançava
+  // para sempre: uma única falha antiga (HTTP 413) impedia toda reconexão
+  // enquanto o processo vivesse, porque nada mais enfileirava uma gravação
+  // nova para substituí-la (o socket estava morto). Uma Promise rejeitada NÃO
+  // pode ser estado. O estado agora é explícito e monotônico:
+  //
+  //   geracaoProduzida  — contador local: cada snapshot capturado recebe a
+  //                       próxima geração (NÃO é o `auth_session_id`, que é a
+  //                       identidade da sessão no backend; são conceitos
+  //                       distintos).
+  //   geracaoPersistida — maior geração que o backend CONFIRMOU. Só sobe.
+  //   geracaoDescartada — maior geração abandonada de propósito (lease
+  //                       perdida/mudou, reset): não pode mais ser gravada,
+  //                       nem faz a memória contar como "suja".
+  //   sujo              — geracaoProduzida > max(persistida, descartada): a
+  //                       memória tem algo que o backend não confirmou.
+  //   snapshotMaisNovo  — o snapshot da geração mais nova. Cada snapshot é o
+  //                       estado COMPLETO, então o retry SEMPRE regrava o mais
+  //                       novo ("latest wins") e nunca um antigo.
+  let geracaoProduzida = 0;
+  let geracaoPersistida = 0;
+  let geracaoDescartada = 0;
+  /** @type {{geracao: number, plaintext: string, contexto: ({gatewayProcessId: string, leaseEpoch: number}|null|undefined)}|null} */
+  let snapshotMaisNovo = null;
+  /** @type {{geracao: number, classe: string, causa: string, status: number|null}|null} */
+  let ultimaFalha = null;
+  // true depois de uma perda/mudança de lease: a memória não é mais confiável (ver
+  // `marcarMemoriaObsoleta`). Só `carregar()` bem-sucedido, um novo pareamento
+  // (`inicializarCreds`) ou um reset (`invalidarLocal`) o limpam.
+  let memoriaObsoleta = false;
   let filaPersistencia = Promise.resolve();
-  // Resultado CRU (não sanitizado) da última tarefa enfileirada — ao
-  // contrário de `filaPersistencia`, ESTE pode rejeitar. Existem dois
-  // consumidores com necessidades diferentes da mesma fila:
-  //   * a PRÓPRIA fila, que precisa de uma cauda sempre resolvida para poder
-  //     encadear a próxima gravação mesmo depois de uma falha (senão uma
-  //     falha isolada travaria toda gravação futura — ver `filaPersistencia`);
-  //   * quem espera a fila (`aguardarPersistenciasPendentes`, usado antes de
-  //     `carregar()` numa reconexão), que precisa SABER se a última gravação
-  //     enfileirada até aquele momento realmente deu certo — se essa espera
-  //     também absorvesse o erro, uma falha real do SAVE do pair-success
-  //     ficaria invisível, e o reconnect recarregaria do backend um estado
-  //     mais antigo do que o que este processo já tinha produzido.
-  let ultimaPersistencia = Promise.resolve();
+  // Retry em segundo plano do snapshot mais novo (único timer; LIMITADO).
+  // `epocaRetry` invalida callbacks de timers já cancelados.
+  const retry = { timer: null, pendente: false, tentativas: 0, esgotado: false, epoca: 0 };
+
+  const geracaoResolvida = () => Math.max(geracaoPersistida, geracaoDescartada);
+  const estaSujo = () => geracaoProduzida > geracaoResolvida();
 
   function serializarTudo() {
     return JSON.stringify({ creds, keys: keysPorTipo }, replacerBuffers);
   }
 
-  async function salvarSnapshot(plaintext, contextoLease) {
-    const cifrado = encriptar(plaintext, chave);
+  function cancelarRetry() {
+    retry.epoca += 1;
+    if (retry.pendente) {
+      try { cancelar(retry.timer); } catch { /* best-effort */ }
+    }
+    retry.timer = null;
+    retry.pendente = false;
+  }
+
+  /**
+   * Abandona de propósito o que ainda não foi persistido (lease perdida/mudou,
+   * reset). Nunca grava; só deixa de contar a memória como "suja" — o próximo
+   * `carregar()` passa a ser a fonte da verdade.
+   */
+  function descartarPendente(causa) {
+    const estavaSujo = estaSujo();
+    geracaoDescartada = geracaoProduzida;
+    cancelarRetry();
+    if (estavaSujo) log("warn", "auth_state.snapshot_descartado", { causa, geracao: geracaoProduzida });
+    return estavaSujo;
+  }
+
+  /**
+   * INVARIANTE DE PERDA DE LEASE (Checkpoint C3.5-C.8.2): quando este processo
+   * deixa de ser o dono da lease (perdida, mudou de epoch, 409 do backend), TUDO
+   * que existe em memória foi produzido sob um epoch que já não é o nosso — outro
+   * dono pode ter escrito no backend nesse meio-tempo. Então: (1) o pendente é
+   * descartado e os retries cancelados; (2) a memória inteira passa a ser
+   * OBSOLETA — nenhuma gravação nova sai dela, nem sob o epoch antigo nem sob um
+   * epoch novo que este mesmo processo venha a adquirir, até que `carregar()`
+   * traga o estado autorizado pelo backend. Nunca reutiliza em silêncio a
+   * memória descartada.
+   */
+  function marcarMemoriaObsoleta(causa) {
+    const estavaSujo = descartarPendente(causa);
+    if (!memoriaObsoleta) log("warn", "auth_state.memoria_obsoleta", { causa, estavaSujo });
+    memoriaObsoleta = true;
+    return estavaSujo;
+  }
+
+  function agendarRetry() {
+    if (retry.pendente) return; // no máximo UM timer
+    if (retry.tentativas >= backoffRetryMs.length) {
+      if (!retry.esgotado) {
+        retry.esgotado = true;
+        // ERROR e visível: o estado segue sujo e nada mais o retenta sozinho.
+        log("error", "auth_state.retry_esgotado", { geracao: geracaoProduzida, tentativa: retry.tentativas });
+      }
+      return;
+    }
+    const esperaMs = backoffRetryMs[retry.tentativas];
+    retry.tentativas += 1;
+    const epoca = retry.epoca;
+    retry.pendente = true;
+    log("warn", "auth_state.retry_agendado", { geracao: geracaoProduzida, tentativa: retry.tentativas, esperaMs });
+    const handle = agendar(() => { executarRetry(epoca).catch(() => {}); }, esperaMs);
+    handle?.unref?.(); // um retry pendente nunca deve segurar o processo vivo
+    if (epoca === retry.epoca && retry.pendente) retry.timer = handle;
+  }
+
+  async function executarRetry(epoca) {
+    if (epoca !== retry.epoca) return; // cancelado/obsoleto
+    retry.pendente = false;
+    retry.timer = null;
+    if (!estaSujo()) return; // outra gravação já limpou o estado
+    const snap = snapshotMaisNovo;
+    if (!snap) return;
+    if (contextoMudou(snap)) { marcarMemoriaObsoleta("lease_mudou"); return; }
+    try {
+      await enfileirar(snap, "retry");
+    } catch {
+      // enfileirar() já classificou, logou e reagendou (se transitória).
+    }
+  }
+
+  /**
+   * Fencing: um snapshot é do epoch sob o qual foi produzido. Se este processo
+   * não é mais o dono desse epoch, o snapshot está OBSOLETO — regravá-lo sob
+   * um epoch novo poderia sobrescrever o que outro dono escreveu nesse meio
+   * tempo. Sem `obterContextoLease` injetado (testes sem lease), nunca muda.
+   */
+  function contextoMudou(snap) {
+    if (!obterContextoLease) return false;
+    const atual = obterContextoLease();
+    return !atual
+      || atual.leaseEpoch !== snap.contexto?.leaseEpoch
+      || atual.gatewayProcessId !== snap.contexto?.gatewayProcessId;
+  }
+
+  async function salvarSnapshot(snap) {
+    let cifrado;
+    try {
+      cifrado = encriptar(snap.plaintext, chave);
+    } catch {
+      // Falha local de cifra (chave inválida etc.) — repetir não ajuda.
+      throw new AuthPersistenciaError("permanente", "cripto");
+    }
     try {
       const r = await backendClient.salvarAuthState({
         authStateEncrypted: cifrado, authStateVersion: `v${versao}`,
-        gatewayProcessId: contextoLease?.gatewayProcessId, leaseEpoch: contextoLease?.leaseEpoch,
+        gatewayProcessId: snap.contexto?.gatewayProcessId, leaseEpoch: snap.contexto?.leaseEpoch,
       });
       // Checkpoint C3.5-C.2/C.3 — captura a geração (mintada ou preservada
       // pela RPC) depois de TODA persistência bem-sucedida — nunca gerado
@@ -173,24 +317,54 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
       if (e?.leaseStale) aoLeaseStale?.("auth_state_stale");
       throw e;
     }
-    // Nunca logar o plaintext nem o cifrado — só o tamanho, útil para
-    // dimensionar o crescimento do blob ao longo do tempo.
-    log("info", "auth_state.persistido", { bytesPlaintext: plaintext.length });
   }
 
   /**
-   * Encadeia `tarefa` no fim da fila desta instância. O erro de uma tarefa
-   * SEMPRE chega a quem a enfileirou (o `await persistir()` original) E a
-   * quem chamar `aguardarPersistenciasPendentes()` logo em seguida — mas
-   * nunca envenena a fila em si: `filaPersistencia` (a cauda usada para
-   * sequenciar a PRÓXIMA gravação) é sempre resolvida (`.catch(() => {})`),
-   * então a próxima gravação começa normalmente mesmo que a anterior tenha
-   * falhado.
+   * Uma tentativa de gravar `snap` (SEMPRE executada dentro da fila serial —
+   * nunca duas em voo). Guarda anti-stale: NUNCA grava uma geração que não
+   * seja mais nova que a já persistida (isso é o que impede um retry de A de
+   * sobrescrever B). Classifica e loga toda falha; só reagenda retry quando a
+   * falha é transitória. O erro ORIGINAL segue para quem enfileirou.
    */
-  function enfileirarPersistencia(plaintext, contextoLease) {
-    const tarefa = filaPersistencia.then(() => salvarSnapshot(plaintext, contextoLease));
+  async function gravar(snap, origem) {
+    if (snap.geracao <= geracaoPersistida) {
+      // Já coberta por uma gravação igual/mais nova — nada a fazer (sucesso).
+      log("info", "auth_state.gravacao_dispensada", { geracao: snap.geracao, origem, causa: "ja_persistida" });
+      return;
+    }
+    if (snap.geracao <= geracaoDescartada) {
+      // Abandonada de propósito (lease perdida/mudou, reset) — regravar poderia
+      // sobrescrever o que outro dono escreveu. NUNCA finge que deu certo.
+      log("warn", "auth_state.gravacao_dispensada", { geracao: snap.geracao, origem, causa: "descartada" });
+      throw new AuthPersistenciaError("permanente", "snapshot_descartado");
+    }
+    try {
+      await salvarSnapshot(snap);
+    } catch (e) {
+      const c = classificarFalhaBackend(e);
+      ultimaFalha = { geracao: snap.geracao, classe: c.classe, causa: c.causa, status: c.status };
+      // Nunca a mensagem do erro (pode conter detalhe do backend/payload) —
+      // só o vocabulário fechado da classificação.
+      log("error", "auth_state.persistencia_falhou", { geracao: snap.geracao, origem, classe: c.classe, causa: c.causa, statusHttp: c.status });
+      if (e?.leaseStale) marcarMemoriaObsoleta("lease_stale");
+      else if (c.classe === "transitoria") agendarRetry();
+      else cancelarRetry(); // permanente: nunca em loop — o retry daquele snapshot para aqui
+      throw e;
+    }
+    geracaoPersistida = Math.max(geracaoPersistida, snap.geracao);
+    if (ultimaFalha && ultimaFalha.geracao <= geracaoPersistida) ultimaFalha = null;
+    retry.tentativas = 0;
+    retry.esgotado = false;
+    if (!estaSujo()) cancelarRetry();
+    // Nunca logar o plaintext nem o cifrado — só o tamanho, útil para
+    // dimensionar o crescimento do blob ao longo do tempo.
+    log("info", "auth_state.persistido", { bytesPlaintext: snap.plaintext.length, geracao: snap.geracao, origem });
+  }
+
+  /** Encadeia a gravação de `snap` no fim da fila serial desta instância. */
+  function enfileirar(snap, origem) {
+    const tarefa = filaPersistencia.then(() => gravar(snap, origem));
     filaPersistencia = tarefa.catch(() => {});
-    ultimaPersistencia = tarefa;
     return tarefa;
   }
 
@@ -201,45 +375,106 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
     // quando a tarefa chegasse a vez de rodar, uma atualização B já teria
     // mutado o mesmo objeto `creds` (merge in-place) e o snapshot de A sairia
     // errado — na verdade seria o de A+B.
+    if (memoriaObsoleta) {
+      // Memória de uma lease que já não é nossa: nunca vira snapshot. A geração
+      // conta como descartada (não deixa o estado "sujo") e o erro é permanente
+      // para ESTA gravação — some quando `carregar()` trouxer o estado do backend.
+      const geracaoObsoleta = ++geracaoProduzida;
+      geracaoDescartada = Math.max(geracaoDescartada, geracaoObsoleta);
+      log("warn", "auth_state.gravacao_recusada_memoria_obsoleta", { geracao: geracaoObsoleta });
+      throw new AuthPersistenciaError("permanente", "memoria_obsoleta");
+    }
     const plaintext = serializarTudo();
     // Fencing capturado no MESMO instante do snapshot — corresponde
     // exatamente a "sob qual epoch este estado foi produzido". Sem
     // `obterContextoLease` injetado (testes sem lease), segue sem fencing.
     const contextoLease = obterContextoLease?.();
+    const geracao = ++geracaoProduzida;
     if (obterContextoLease && !contextoLease) {
       // Só falha fechado quando a função FOI injetada e disse "não sou
       // leader agora" — nunca tenta mandar isto para o backend (que
-      // rejeitaria mesmo assim, mas sem gastar uma chamada de rede).
-      throw new Error("authState.persistir: processo não é o dono atual da lease — gravação recusada localmente");
+      // rejeitaria mesmo assim, mas sem gastar uma chamada de rede). Sem
+      // lease esta memória já não é a fonte da verdade: a geração conta como
+      // descartada (não deixa o estado "sujo" para sempre).
+      geracaoDescartada = Math.max(geracaoDescartada, geracao);
+      log("warn", "auth_state.snapshot_descartado", { causa: "sem_lease_local", geracao });
+      memoriaObsoleta = true; // mutou-se memória sem ser dono: ela não é fonte da verdade
+      throw new AuthPersistenciaError("permanente", "sem_lease_local");
     }
-    return enfileirarPersistencia(plaintext, contextoLease);
+    const snap = { geracao, plaintext, contexto: contextoLease };
+    snapshotMaisNovo = snap;
+    return enfileirar(snap, "evento");
   }
 
   /**
-   * Drain de verdade da fila — não só "a última tarefa que eu já conhecia".
-   * `ultimaPersistencia` pode MUDAR enquanto este `await` está pendente (uma
-   * nova gravação, ex.: `keys.set` do próprio handshake, pode entrar na fila
-   * nesse meio-tempo). Sem o loop, aguardaríamos só a cauda vista no INSTANTE
-   * da chamada e retornaríamos antes dessa gravação nova terminar — quem
-   * depende do drain (ex.: `carregar()` na reconexão pós-515) poderia rodar
-   * com uma gravação ainda em voo. Por isso recaptura `ultimaPersistencia`
-   * e só sai quando ela ficar ESTÁVEL entre o início e o fim do `await`.
+   * DRAIN da fila: resolve quando NÃO há mais nenhuma gravação em voo ou
+   * enfileirada — e SÓ isso. Responde "há uma persistência ATUALMENTE
+   * pendente?", nunca "alguma persistência falhou em algum momento da história
+   * deste processo?" (era esta segunda pergunta que travava o reconnect para
+   * sempre — ver o comentário do MODELO DE ESTADO acima). NUNCA rejeita.
    *
-   * Ao contrário de `filaPersistencia`, REJEITA se a gravação aguardada
-   * tiver falhado — propaga IMEDIATAMENTE, sem continuar o loop (não faz
-   * sentido esperar as próximas se a que falhou é a que motivou a espera).
-   * Usado antes de `carregar()` numa reconexão (ex.: pós-515/restartRequired):
-   * se a gravação do pair-success falhou, o backend ainda tem um estado mais
-   * antigo do que este processo já produziu em memória — recarregar nessas
-   * condições devolveria auth state obsoleto. Quem chama isto precisa tratar
-   * a rejeição (nunca deixar sem `catch`).
+   * Recaptura a cauda em loop: uma gravação nova pode entrar na fila enquanto
+   * este `await` está pendente (ex.: `keys.set` do próprio handshake) e o
+   * drain só termina quando a cauda fica ESTÁVEL entre o início e o fim do
+   * `await`.
+   *
+   * Para saber se o estado mais novo REALMENTE está no backend (e tentar
+   * regravá-lo se não estiver), use `garantirPersistido()`.
    */
   async function aguardarPersistenciasPendentes() {
     for (;;) {
-      const alvo = ultimaPersistencia;
+      const alvo = filaPersistencia;
       await alvo;
-      if (alvo === ultimaPersistencia) return;
+      if (alvo === filaPersistencia) return;
     }
+  }
+
+  /**
+   * Garante que o snapshot MAIS NOVO desta memória está persistido no backend
+   * — o que quem vai RECARREGAR do backend (reconnect) ou CONFIRMAR uma geração
+   * precisa saber. Passos: (1) drena a fila; (2) se nada está sujo, pronto;
+   * (3) se está, faz UMA tentativa de gravar o snapshot mais novo pela mesma
+   * fila serial (uma falha anterior — até uma permanente, como o 413 de antes
+   * do hotfix — não impede esta nova tentativa: o backend pode ter mudado).
+   *
+   * Resolve `{status}`:
+   *   'limpo'      — nada pendente.
+   *   'persistido' — o snapshot mais novo foi gravado agora.
+   *   'descartado' — o snapshot era de um epoch de lease que não é mais o nosso
+   *                  (memória obsoleta; NÃO foi gravado). O backend é a verdade.
+   * Rejeita com `AuthPersistenciaError` ({classe, causa, status}) — só o
+   * vocabulário fechado; quem chama decide retry (transitória) ou fail-safe
+   * (permanente). NUNCA vaza a mensagem do erro original.
+   */
+  async function garantirPersistido() {
+    await aguardarPersistenciasPendentes();
+    if (!estaSujo()) return { status: "limpo" };
+    const snap = snapshotMaisNovo;
+    if (!snap) return { status: "limpo" };
+    if (contextoMudou(snap)) {
+      marcarMemoriaObsoleta("lease_mudou");
+      return { status: "descartado" };
+    }
+    try {
+      await enfileirar(snap, "flush");
+    } catch (e) {
+      const c = classificarFalhaBackend(e);
+      throw new AuthPersistenciaError(c.classe, c.causa, { status: c.status });
+    }
+    return { status: "persistido" };
+  }
+
+  /** Observabilidade sanitizada — só números/vocabulário fechado, nunca o auth. */
+  function estadoPersistencia() {
+    return {
+      geracaoProduzida, geracaoPersistida, geracaoDescartada,
+      sujo: estaSujo(),
+      memoriaObsoleta,
+      ultimaFalha: ultimaFalha ? { ...ultimaFalha } : null,
+      retryAgendado: retry.pendente,
+      retryTentativas: retry.tentativas,
+      retryEsgotado: retry.esgotado,
+    };
   }
 
   /**
@@ -263,6 +498,16 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
    * @returns {Promise<{status: 'absent'} | {status: 'loaded', registered: boolean}>}
    */
   async function carregar() {
+    // Checkpoint C3.5-C.8.2 — NUNCA sobrescrever a memória com o backend
+    // enquanto ela tem mutações que o backend não confirmou: `creds`/
+    // `keysPorTipo` abaixo seriam substituídos por um estado mais VELHO e o
+    // que só existia aqui se perderia em silêncio. Quem recarrega (reconnect)
+    // deve chamar `garantirPersistido()` antes; se ainda estiver sujo, é
+    // transitório (tenta-se de novo depois) — nunca destrutivo.
+    if (estaSujo()) {
+      log("warn", "auth_state.carregar_recusado_estado_sujo", { geracaoProduzida, geracaoPersistida });
+      throw new AuthStateLoadError("pendente_nao_persistido");
+    }
     try {
       let r;
       try {
@@ -304,6 +549,8 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
       // Checkpoint C3.5-C.1: nunca controla fluxo, nunca é usado por quem
       // chama para decidir nada.
       authSessionIdAtual = r.authSessionId ?? null;
+      // A memória agora É o estado autorizado pelo backend: deixa de ser obsoleta.
+      memoriaObsoleta = false;
       return { status: "loaded", registered: !!creds.registered, authConfirmado: r.authConfirmado === true };
     } catch (e) {
       if (e instanceof AuthStateLoadError) throw e;
@@ -316,6 +563,8 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
 
   function inicializarCreds(credsIniciais) {
     creds = credsIniciais;
+    // Creds novos (pareamento do zero): nada da memória antiga sobrevive.
+    memoriaObsoleta = false;
   }
 
   /**
@@ -331,6 +580,13 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
   function invalidarLocal() {
     creds = null;
     keysPorTipo = {};
+    // Reset: nada da memória antiga pode ser regravado nem contar como "sujo".
+    descartarPendente("reset");
+    memoriaObsoleta = false; // a memória foi zerada — não há mais nada obsoleto nela
+    snapshotMaisNovo = null;
+    ultimaFalha = null;
+    retry.tentativas = 0;
+    retry.esgotado = false;
     // Checkpoint C3.5-C.2/C.3 — a geração antiga nunca pode sobreviver a um
     // reset na memória do processo; o próximo pareamento nasce sem ID
     // conhecido, igual a um boot novo em ABSENT.
@@ -372,6 +628,13 @@ export function criarAuthStateAdapter({ backendClient, chaveEncriptacaoEnv, obte
     invalidarLocal,
     comoAuthState,
     aguardarPersistenciasPendentes,
+    // Checkpoint C3.5-C.8.2 — ver os comentários de cada função acima.
+    garantirPersistido,
+    estadoPersistencia,
+    descartarPendente,
+    marcarMemoriaObsoleta,
+    /** Cancela o retry em segundo plano (shutdown/perda de lease) — nunca deixa timer órfão. */
+    cancelarRetries: cancelarRetry,
     /**
      * Chamado pelo handler de `creds.update` do Baileys. O payload é
      * `Partial<AuthenticationCreds>` (node_modules/baileys/lib/Types/

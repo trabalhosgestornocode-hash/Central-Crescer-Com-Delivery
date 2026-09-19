@@ -9,8 +9,17 @@
 // (mesmo motivo documentado lá).
 
 // Ambíguas: só mascaram quando a chave é EXATAMENTE isto.
+//
+// `iv` (vetor de inicialização do AES-GCM) só é segredo-de-log quando a chave
+// é EXATAMENTE `iv`. Como substring ele mascarava campos inocentes e essenciais
+// ao diagnóstico — `tentativa`, `motivo`, `ativo` (visto ao vivo em 2026-09-19:
+// `"tentativa":"[REDACTED]"` nos logs de reconexão) — porque "tentativa" contém
+// "iv". `authtag` e `ciphertext` continuam parciais (nenhum campo legítimo os contém).
+// As grafias comuns do MESMO vetor (`ivBase64`, `iv_hex`, `initVector`...) entram como
+// exatas também — o antigo "substring" as cobria sem querer e não pode haver regressão.
 const CHAVES_EXATAS = [
   "codigo", "code", "senha", "pass", "pwd", "token", "auth", "secret", "qr",
+  "iv", "ivbase64", "ivb64", "ivhex", "initvector", "initializationvector",
 ];
 
 // Inequívocas: qualquer chave que CONTENHA isto é segredo.
@@ -19,7 +28,7 @@ const CHAVES_PARCIAIS = [
   "cookie", "setcookie", "signature",
   "authstate", "creds", "credenciais", "credentials",
   "signalkey", "prekey", "senderkey", "appstatesyncrey", "appstatesynckey",
-  "encryptionkey", "ciphertext", "iv", "authtag",
+  "encryptionkey", "ciphertext", "authtag",
   "conteudo", "texto", "caption", "legenda", // corpo de mensagem — nunca no log
 ];
 

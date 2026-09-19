@@ -8,6 +8,8 @@ import { EventEmitter } from "node:events";
 import { criarSessaoBaileys, STATUS_CONEXAO, paraJid, deJid } from "../src/baileysSession.js";
 import { criarLeaseManager } from "../src/leaseManager.js";
 import { AuthStateLoadError } from "../src/authState.js";
+import { AuthPersistenciaError } from "../src/classificacaoFalhas.js";
+import { erro, CODIGOS } from "../src/errors.js";
 
 const DISCONNECT_REASON_LOGGED_OUT = 401; // mesmo valor real do Baileys (DisconnectReason.loggedOut)
 const DISCONNECT_REASON_CONNECTION_LOST = 408;
@@ -409,14 +411,17 @@ describe("baileysSession — 515/restartRequired: reconecta reaproveitando creds
     assert.equal(inicializarCreds.mock.calls.length, 2, "sem creds nenhum salvo, a reconexão gera identidade nova de novo (não tem o que reaproveitar)");
   });
 
-  test("reconexão pós-515 aguarda authAdapter.aguardarPersistenciasPendentes() ANTES de chamar carregar() de novo — nunca recarrega com uma gravação (ex.: pair-success) ainda em voo", async () => {
+  test("reconexão pós-515 aguarda authAdapter.garantirPersistido() ANTES de chamar carregar() de novo — nunca recarrega com uma gravação (ex.: pair-success) ainda em voo", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const ordem = [];
     let chamadasDrain = 0;
     let liberarSegundoDrain;
     const segundoDrainBloqueado = new Promise((resolve) => { liberarSegundoDrain = resolve; });
     const authAdapterComDrainControlavel = {
-      async aguardarPersistenciasPendentes() {
+      // Checkpoint C3.5-C.8.2 — a sessão passou a usar `garantirPersistido()` (drena a fila E
+      // regrava o snapshot mais novo se ainda estiver sujo); a ordem "persistência -> carregar"
+      // é exatamente a mesma que este teste sempre garantiu.
+      async garantirPersistido() {
         chamadasDrain += 1;
         const numero = chamadasDrain;
         ordem.push(`drain-inicio-${numero}`);
@@ -447,7 +452,7 @@ describe("baileysSession — 515/restartRequired: reconecta reaproveitando creds
     // A reconexão pós-515 já deve ter começado a drenar, mas carregar() NÃO
     // pode ter rodado ainda — o drain (2ª chamada) está bloqueado de propósito.
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.ok(ordem.includes("drain-inicio-2"), "reconexão pós-515 precisa chamar aguardarPersistenciasPendentes()");
+    assert.ok(ordem.includes("drain-inicio-2"), "reconexão pós-515 precisa chamar garantirPersistido()");
     assert.ok(!ordem.includes("carregar-2"), "carregar() não pode rodar enquanto o drain ainda está pendente");
     assert.equal(fabricaSocket.criados.length, 1, "novo socket ainda não pode ter sido criado — a reconexão está presa no drain");
 
@@ -461,51 +466,104 @@ describe("baileysSession — 515/restartRequired: reconecta reaproveitando creds
     assert.equal(fabricaSocket.criados.length, 2, "só depois do drain terminar é que a reconexão de fato cria o novo socket");
   });
 
-  test("se a persistência pendente (ex.: SAVE do pair-success) FALHOU, a reconexão pós-515 aborta com segurança: nunca chama carregar(), nunca cria socket novo, fica DISCONNECTED, loga só a classe do erro", async (t) => {
+  // Checkpoint C3.5-C.8.2 — SUBSTITUI o teste antigo "se a persistência pendente FALHOU, a reconexão
+  // pós-515 aborta com segurança ... fica DISCONNECTED" (que só afirmava o aborto, sem nunca
+  // reconectar): esse aborto ERA o beco sem saída do incidente de 2026-09-19. As garantias de
+  // segurança continuam (nunca carregar(), nunca socket novo, sempre DISCONNECTED, log só com a classe
+  // sanitizada); o que muda é que uma falha TRANSITÓRIA agora reagenda e se recupera sozinha, e uma
+  // PERMANENTE para em vez de repetir.
+  function montarSessao515({ garantirPersistido, carregar }) {
     const fabricaSocket = socketFalsoFabrica();
-    const carregar = mock.fn(async () => ({ status: "absent" }));
-    const erroSensivel = new Error("detalhe interno do backend, NUNCA deveria aparecer no log (token/host/etc.)");
-    let chamadasDrain = 0;
-    const authAdapterComFalhaDePersistencia = {
-      async aguardarPersistenciasPendentes() {
-        chamadasDrain += 1;
-        // 1ª chamada (conexão inicial): nada pendente, resolve normalmente.
-        // 2ª chamada (reconexão pós-515): a gravação do pair-success falhou.
-        if (chamadasDrain === 2) throw erroSensivel;
-      },
+    const agendadas = [];
+    const agendar = (fn, ms) => { agendadas.push({ fn, ms }); return agendadas.length; };
+    const authAdapter = {
+      garantirPersistido,
       carregar,
       inicializarCreds() {},
       comoAuthState() { return { creds: { registered: false }, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds() {},
     };
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient: backendClientFalso(), config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar,
+    });
+    return { sessao, fabricaSocket, agendadas };
+  }
+  const assentar = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const fechar515 = (socket) => socket.ev.emit("connection.update", {
+    connection: "close", lastDisconnect: { error: { output: { statusCode: CODIGO_RESTART_REQUIRED } } },
+  });
+
+  test("falha TRANSITÓRIA da persistência pendente NÃO é mais beco sem saída: a reconexão pós-515 fica DISCONNECTED sem carregar()/socket novo, loga só a classe, REAGENDA com backoff — e quando o backend volta, reconecta sozinha", async (t) => {
+    const erroSensivel = new Error("detalhe interno do backend, NUNCA deveria aparecer no log (token/host/etc.)");
+    let chamadas = 0;
+    let backendVoltou = false;
+    const carregar = mock.fn(async () => ({ status: "absent" }));
+    const { sessao, fabricaSocket, agendadas } = montarSessao515({
+      carregar,
+      async garantirPersistido() {
+        chamadas += 1;
+        if (chamadas >= 2 && !backendVoltou) throw erroSensivel; // 1ª chamada (conexão inicial): nada pendente
+      },
+    });
     const linhas = [];
     t.mock.method(console, "log", (s) => linhas.push(s));
     t.mock.method(console, "error", (s) => linhas.push(s));
 
-    const sessao = criarSessaoBaileys({
-      authAdapter: authAdapterComFalhaDePersistencia, backendClient: backendClientFalso(), config: configFalso(),
-      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: (fn) => fn(),
+    await sessao.conectar();
+    fechar515(fabricaSocket.criados[0]);
+    assert.equal(agendadas.length, 1, "o close 515 agenda a reconexão");
+
+    agendadas[0].fn();
+    await assentar();
+
+    assert.equal(carregar.mock.calls.length, 1, "carregar() NÃO pode rodar de novo — nunca sobrescreve a memória mais nova");
+    assert.equal(fabricaSocket.criados.length, 1, "nenhum socket novo com auth state potencialmente obsoleto");
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(agendadas.length, 2, "NOVA tentativa agendada — antes abortava e nunca mais tentava");
+    assert.equal(sessao._reconexaoPendente(), true);
+    assert.ok(agendadas[1].ms > 0, "com backoff");
+
+    for (const s of linhas) assert.ok(!s.includes(erroSensivel.message), "a mensagem do erro (potencialmente sensível) nunca vai para o log");
+    const falha = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "reconexao.persistencia_pendente_falhou");
+    assert.ok(falha, "log explícito da falha, para operação/observabilidade");
+    assert.equal(falha.erroTipo, "Error", "só o NOME/classe do erro, nunca message/stack");
+    assert.equal(falha.classe, "transitoria");
+    assert.ok(!linhas.map((s) => JSON.parse(s)).some((l) => l.evento === "reconexao.abortada_persistencia_pendente_falhou"), "o evento do aborto terminal não existe mais");
+
+    backendVoltou = true; // o backend voltou
+    agendadas[1].fn();
+    await assentar();
+    assert.equal(carregar.mock.calls.length, 2, "agora o carregar() roda");
+    assert.equal(fabricaSocket.criados.length, 2, "e a sessão reconectou SOZINHA");
+  });
+
+  test("falha PERMANENTE da persistência (HTTP 413 estrutural) PARA: DISCONNECTED, nunca carregar()/socket, SEM reagendar (sem loop)", async (t) => {
+    const erro413 = erro(CODIGOS.INDISPONIVEL, { status: 413, corpo: {} });
+    let chamadas = 0;
+    const carregar = mock.fn(async () => ({ status: "absent" }));
+    const { sessao, fabricaSocket, agendadas } = montarSessao515({
+      carregar,
+      async garantirPersistido() { chamadas += 1; if (chamadas >= 2) throw erro413; },
     });
+    const linhas = [];
+    t.mock.method(console, "log", (s) => linhas.push(s));
+    t.mock.method(console, "error", (s) => linhas.push(s));
 
     await sessao.conectar();
-    assert.equal(carregar.mock.calls.length, 1, "1ª conexão: nada pendente, carregar() roda normalmente");
+    fechar515(fabricaSocket.criados[0]);
+    agendadas[0].fn();
+    await assentar();
+
+    assert.equal(carregar.mock.calls.length, 1);
     assert.equal(fabricaSocket.criados.length, 1);
-
-    fabricaSocket.criados[0].ev.emit("connection.update", {
-      connection: "close", lastDisconnect: { error: { output: { statusCode: CODIGO_RESTART_REQUIRED } } },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-
-    assert.equal(carregar.mock.calls.length, 1, "carregar() NÃO pode ter sido chamado de novo — a reconexão abortou antes disso");
-    assert.equal(fabricaSocket.criados.length, 1, "nenhum socket novo pode ter sido criado com auth state potencialmente obsoleto");
-    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED, "a sessão precisa terminar de forma segura, DISCONNECTED — nunca CONNECTED/CONNECTING com estado obsoleto");
-
-    for (const s of linhas) {
-      assert.ok(!s.includes(erroSensivel.message), "a mensagem do erro (potencialmente sensível) nunca pode ir para o log — só a classe sanitizada");
-    }
-    const linhaAborto = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "reconexao.abortada_persistencia_pendente_falhou");
-    assert.ok(linhaAborto, "precisa existir um log explícito do abort, para operação/observabilidade");
-    assert.equal(linhaAborto.erroTipo, "Error", "só o NOME/classe do erro, nunca message/stack");
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(agendadas.length, 1, "erro permanente: NENHUMA nova tentativa agendada");
+    assert.equal(sessao._reconexaoPendente(), false);
+    const falha = linhas.map((s) => JSON.parse(s)).find((l) => l.evento === "reconexao.persistencia_pendente_falhou");
+    assert.equal(falha.classe, "permanente");
+    assert.equal(falha.causa, "payload_grande_demais");
+    assert.equal(falha.statusHttp, 413);
   });
 });
 
@@ -2151,7 +2209,8 @@ describe("baileysSession — confirmação durável de auth (Checkpoint C3.5-C.2
       inicializarCreds(c) { creds = c; },
       comoAuthState() { return { creds, keys: { get: async () => ({}), set: async () => {} } }; },
       async aoAtualizarCreds(delta) { if (creds) Object.assign(creds, delta); else creds = delta; },
-      async aguardarPersistenciasPendentes() {
+      // Checkpoint C3.5-C.8.2 — a sessão chama `garantirPersistido()` (não mais o drain puro).
+      async garantirPersistido() {
         chamadas += 1;
         const numero = chamadas;
         if (chamadasParaBloquear.has(numero)) {
@@ -2215,7 +2274,7 @@ describe("baileysSession — confirmação durável de auth (Checkpoint C3.5-C.2
     assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTED);
   });
 
-  test("3) drain falha -> fail-safe: socket fechado, NUNCA CONNECTED, sem QR automático, confirmarAuthState nem chega a ser chamado", async () => {
+  test("3) persistência pendente falha (transitória) -> socket fechado, NUNCA CONNECTED, sem QR automático, confirmarAuthState nem chega a ser chamado (C3.5-C.8.2: e a reconexão é REAGENDADA em vez de terminal)", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const backendClient = backendClientFalso();
     let chamadasDrain = 0;
@@ -2226,15 +2285,16 @@ describe("baileysSession — confirmação durável de auth (Checkpoint C3.5-C.2
       async aoAtualizarCreds() {},
       // Chamada #1 (dentro do próprio conectar(), antes do reload) resolve
       // normalmente; só a #2 (do dance de confirmação, depois do 'open') falha.
-      async aguardarPersistenciasPendentes() {
+      async garantirPersistido() {
         chamadasDrain += 1;
         if (chamadasDrain >= 2) throw new Error("detalhe interno sensível — nunca pode vazar no log");
       },
       obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
     };
+    const agendadas = [];
     const sessao = criarSessaoBaileys({
       authAdapter, backendClient, config: configFalso(),
-      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: () => {},
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: (fn, ms) => { agendadas.push(ms); },
     });
     await sessao.conectar();
     fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
@@ -2245,6 +2305,39 @@ describe("baileysSession — confirmação durável de auth (Checkpoint C3.5-C.2
     assert.equal(backendClient.confirmarAuthState.mock.calls.length, 0);
     assert.equal(sessao._autenticadaAlgumaVez(), false);
     assert.equal(sessao.obterQrAtual(), null, "nunca gera QR automaticamente");
+    assert.equal(agendadas.length, 1, "falha TRANSITÓRIA: fecha o socket mas REAGENDA a reconexão (antes: fail-safe terminal, sem nova tentativa)");
+    assert.equal(sessao._reconexaoPendente(), true);
+  });
+
+  test("3b) persistência pendente falha de forma PERMANENTE (ex.: payload acima do teto) -> fail-safe TERMINAL: socket fechado, NUNCA CONNECTED, SEM reagendar", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    let chamadasDrain = 0;
+    const authAdapter = {
+      async carregar() { return { status: "absent" }; },
+      inicializarCreds() {},
+      comoAuthState() { return { creds: {}, keys: { get: async () => ({}), set: async () => {} } }; },
+      async aoAtualizarCreds() {},
+      async garantirPersistido() {
+        chamadasDrain += 1;
+        if (chamadasDrain >= 2) throw new AuthPersistenciaError("permanente", "payload_grande_demais", { status: 413 });
+      },
+      obterAuthSessionIdAtual() { return AUTH_SESSION_ID_FAKE; },
+    };
+    const agendadas = [];
+    const sessao = criarSessaoBaileys({
+      authAdapter, backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, agendar: (fn, ms) => { agendadas.push(ms); },
+    });
+    await sessao.conectar();
+    fabricaSocket.criados[0].ev.emit("connection.update", { connection: "open" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    assert.equal(fabricaSocket.criados[0].end.mock.calls.length, 1);
+    assert.equal(backendClient.confirmarAuthState.mock.calls.length, 0);
+    assert.equal(agendadas.length, 0, "erro permanente: NENHUMA reconexão agendada (sem loop)");
+    assert.equal(sessao._reconexaoPendente(), false);
   });
 
   test("4) confirmarAuthState falha com erro genérico -> fail-safe: socket fechado, NUNCA CONNECTED", async () => {
