@@ -46,7 +46,7 @@ async function rodar(escopo) {
     await gw.aguardarQuiescencia({ estavelMs: 350, maxMs: 6000 });
 
     const novos = gw.upserts.slice(base.upserts);
-    for (const m of novos) contadores.aoMensagem(m);
+    for (const m of novos) contadores.aoMensagemEmitida(m, undefined, false);
     const linhas = cap.linhas.slice(base.linhas);
     const env = gw.enviados.slice(base.enviados);
     const fim = gw.medir();

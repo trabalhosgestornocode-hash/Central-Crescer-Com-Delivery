@@ -826,6 +826,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     try { inbound?.aoMensagens?.(messages); } catch { /* diagnóstico de inbound nunca interfere no encaminhamento */ }
     for (const m of messages ?? []) {
       if (m.key?.fromMe) continue; // eco da própria mensagem enviada — ignorar
+      try { inbound?.aoEncaminhada?.(m); } catch { /* diagnóstico nunca interfere */ }
       handlersMensagem.forEach((h) => h({
         providerMessageId: m.key?.id,
         telefoneE164: m.key?.remoteJid ? deJid(m.key.remoteJid) : null,

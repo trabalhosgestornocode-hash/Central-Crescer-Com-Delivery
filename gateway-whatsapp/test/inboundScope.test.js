@@ -20,8 +20,8 @@ describe("classificarJid — helpers oficiais do Baileys 6.7.24", () => {
   const tabela = [
     ["5511888880001@s.whatsapp.net", "direct_pn"],
     ["5511888880001:12@s.whatsapp.net", "direct_pn"],      // dispositivo
-    ["100000000000001@lid", "direct_lid"],                  // identidade LID (chat direto)
-    ["100000000000001:3@lid", "direct_lid"],
+    ["100000000000001@lid", "direct_lid_other"],            // LID (chat direto) sem identidade conhecida ⇒ other
+    ["100000000000001:3@lid", "direct_lid_other"],
     ["120363000000000001@g.us", "group"],
     ["status@broadcast", "status"],                         // antes de @broadcast genérico
     ["5511999990000@broadcast", "broadcast"],
@@ -39,7 +39,7 @@ describe("classificarJid — helpers oficiais do Baileys 6.7.24", () => {
   }
   test("todo tipo devolvido pertence ao vocabulário fechado", () => {
     for (const [jid] of tabela) assert.ok(TIPOS_JID.includes(classificarJid(jid)));
-    assert.deepEqual([...TIPOS_JID], ["direct_pn", "direct_lid", "group", "status", "broadcast", "newsletter", "meta_ai", "technical", "unknown"]);
+    assert.deepEqual([...TIPOS_JID], ["direct_pn", "direct_lid_self", "direct_lid_other", "group", "status", "broadcast", "newsletter", "meta_ai", "technical", "unknown"]);
   });
 });
 
@@ -103,32 +103,33 @@ describe("contadores sanitizados", () => {
     assert.equal(classificarMotivoFalha(undefined), "outro");
   });
 
-  test("mensagens por tipo: recebidas, decryptOk, decryptFalha e motivo; nada de JID/ID/texto no resultado", () => {
+  test("mensagens por tipo: decryptTentado/Ok/Falha, motivo, enfileirada/direto; nada de JID/ID/texto no resultado", () => {
     const c = criarContadoresInbound();
     const msg = (jid, falha, txt) => ({ key: { remoteJid: jid, id: "ID-SECRETO-1" }, ...(falha ? { messageStubType: CIPHERTEXT, messageStubParameters: [txt] } : {}) });
-    c.aoMensagem(msg("5511888880001@s.whatsapp.net", false));
-    c.aoMensagem(msg("5511888880001@s.whatsapp.net", true, "No matching sessions found for message"));
-    c.aoMensagem(msg("100000000000001@lid", false));
-    c.aoMensagem(msg("120363000000000001@g.us", true, "algo com 5511999990000@s.whatsapp.net"));
-    c.aoMensagem(msg("status@broadcast", false));
+    c.aoMensagemEmitida(msg("5511888880001@s.whatsapp.net", false), undefined, true);
+    c.aoMensagemEmitida(msg("5511888880001@s.whatsapp.net", true, "No matching sessions found for message"), undefined, true);
+    c.aoMensagemEmitida(msg("100000000000001@lid", false), undefined, false);
+    c.aoMensagemEmitida(msg("120363000000000001@g.us", true, "algo com 5511999990000@s.whatsapp.net"), undefined, true);
+    c.aoMensagemEmitida(msg("status@broadcast", false), undefined, false);
     const { mensagens } = c.snapshot();
-    assert.deepEqual(mensagens.direct_pn, { recebidas: 2, decryptOk: 1, decryptFalha: 1, motivos: { sem_sessao_compativel: 1 } });
-    assert.deepEqual(mensagens.direct_lid, { recebidas: 1, decryptOk: 1, decryptFalha: 0, motivos: {} });
-    assert.deepEqual(mensagens.group, { recebidas: 1, decryptOk: 0, decryptFalha: 1, motivos: { outro: 1 } });
-    assert.deepEqual(mensagens.status, { recebidas: 1, decryptOk: 1, decryptFalha: 0, motivos: {} });
+    const base = { entregues: 0, encaminhadas: 0 };
+    assert.deepEqual(mensagens.direct_pn, { decryptTentado: 2, decryptOk: 1, decryptFalha: 1, motivos: { sem_sessao_compativel: 1 }, enfileiradas: 2, emitidasDireto: 0, ...base });
+    assert.deepEqual(mensagens.direct_lid_other, { decryptTentado: 1, decryptOk: 1, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 1, ...base });
+    assert.deepEqual(mensagens.group, { decryptTentado: 1, decryptOk: 0, decryptFalha: 1, motivos: { outro: 1 }, enfileiradas: 1, emitidasDireto: 0, ...base });
+    assert.deepEqual(mensagens.status, { decryptTentado: 1, decryptOk: 1, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 1, ...base });
     assert.ok(!VAZAMENTO.test(sem(c.snapshot())), sem(c.snapshot()));
   });
 
-  test("retries: total e com chave (retryCount > 1) por tipo; o JID só serve para classificar", () => {
+  test("retries: total, comPreChave e semPreChave por tipo (recebem só o TIPO, nunca o JID)", () => {
     const c = criarContadoresInbound();
-    c.aoRetry("5511888880001@s.whatsapp.net", 1);
-    c.aoRetry("5511888880001@s.whatsapp.net", 2);
-    c.aoRetry("120363000000000001@g.us", 3);
-    c.aoRetry(undefined, 2);
+    c.aoRetry("direct_pn", false);
+    c.aoRetry("direct_pn", true);
+    c.aoRetry("group", true);
+    c.aoRetry("unknown", true);
     const { retries } = c.snapshot();
-    assert.deepEqual(retries.direct_pn, { total: 2, comChave: 1 });
-    assert.deepEqual(retries.group, { total: 1, comChave: 1 });
-    assert.deepEqual(retries.unknown, { total: 1, comChave: 1 });
+    assert.deepEqual(retries.direct_pn, { total: 2, comPreChave: 1, semPreChave: 1 });
+    assert.deepEqual(retries.group, { total: 1, comPreChave: 1, semPreChave: 0 });
+    assert.deepEqual(retries.unknown, { total: 1, comPreChave: 1, semPreChave: 0 });
     assert.ok(!VAZAMENTO.test(sem(c.snapshot())));
   });
 
@@ -193,7 +194,7 @@ describe("criarInboundGateway — cola de produção", () => {
     ws.emit("CB:message", null);                                // lixo ⇒ não lança
     assert.equal(baileysViu, 4, "as 4 emissões de CB:message chegaram ao handler do Baileys");
     const st = g.snapshot().stanzas;
-    assert.equal(st.direct_pn.message, 1); assert.equal(st.group.message, 1); assert.equal(st.direct_lid.receipt, 1);
+    assert.equal(st.direct_pn.message, 1); assert.equal(st.group.message, 1); assert.equal(st.direct_lid_other.receipt, 1);
     assert.equal(st.technical.notification, 1); assert.equal(st.unknown.message, 2);
     assert.ok(!VAZAMENTO.test(sem(g.snapshot())));
   });
@@ -211,8 +212,8 @@ describe("criarInboundGateway — cola de produção", () => {
     l.error({ err: 1 }, "erro");
     assert.equal(chamadas.length, 4, "as 4 chamadas chegaram ao logger original (pai e child)");
     const r = g.snapshot().retries;
-    assert.deepEqual(r.direct_pn, { total: 1, comChave: 0 });
-    assert.deepEqual(r.group, { total: 1, comChave: 1 });
+    assert.deepEqual(r.direct_pn, { total: 1, comPreChave: 0, semPreChave: 1 });
+    assert.deepEqual(r.group, { total: 1, comPreChave: 1, semPreChave: 0 });
     assert.ok(!VAZAMENTO.test(sem(g.snapshot())));
   });
 
@@ -235,27 +236,29 @@ describe("criarInboundGateway — cola de produção", () => {
     const eventos = []; let tick;
     const g = criarInboundGateway({ diagHabilitado: true, emitir: (n, e, d) => eventos.push({ n, e, d }), agendar: (fn) => { tick = fn; return { unref() {} }; }, consoleAlvo: { error() {} } });
     tick(); assert.equal(eventos.length, 0, "sem mudança: sem ruído");
-    const ws = new EventEmitter(); g.observarSocket({ ws });
+    const ws = new EventEmitter(); const ev = new EventEmitter(); g.observarSocket({ ws, ev });
     ws.emit("CB:message", { attrs: { from: "5511888880001@s.whatsapp.net" } });
     ws.emit("CB:message", { attrs: { from: "120363000000000001@g.us" } });
-    g.aoMensagens([
+    const msgs = [
       { key: { remoteJid: "5511888880001@s.whatsapp.net", id: "TESTMSG1" } },
       { key: { remoteJid: "5511888880001@s.whatsapp.net" }, messageStubType: CIPHERTEXT, messageStubParameters: ["No matching sessions found for message"] },
       { key: { remoteJid: "120363000000000001@g.us" }, messageStubType: CIPHERTEXT, messageStubParameters: ["No matching sessions found for message"] },
-    ]);
+    ];
+    ev.emit("messages.upsert", { messages: msgs, type: "append" });   // decrypt + emitido (buffer inativo)
+    g.aoMensagens(msgs);                                               // entregue ao listener do Gateway
     g.envolverLogger({ level: "x", child() { return this; }, info() {} }).info({ msgAttrs: { from: "120363000000000001@g.us" }, retryCount: 2 }, "sent retry receipt");
     tick();
-    assert.equal(eventos.length, 1);
-    const { e, d } = eventos[0];
+    assert.deepEqual(eventos.map((x) => x.e).sort(), ["inbound.contadores", "inbound.fila_offline"], "o ciclo da fila também mudou (2 nós vistos)");
+    const { e, d } = eventos.find((x) => x.e === "inbound.contadores");
     assert.equal(e, "inbound.contadores");
     assert.equal(d.escopo, ESCOPO_ALL_SUPPORTED); assert.equal(d.filtroAtivo, false);
     assert.deepEqual(d.tipos.map((t) => t.tipo), ["direct_pn", "group"]);
     const dir = d.tipos.find((t) => t.tipo === "direct_pn"); const grp = d.tipos.find((t) => t.tipo === "group");
-    assert.deepEqual({ ...dir, motivos: undefined }, { tipo: "direct_pn", stanzasMensagem: 1, stanzasReceipt: 0, stanzasNotificacao: 0, ignoradas: 0, recebidas: 2, decryptTentado: 2, decryptOk: 1, decryptFalha: 1, motivos: undefined, retries: 0, retriesComChave: 0 });
+    assert.deepEqual({ ...dir, motivos: undefined }, { tipo: "direct_pn", stanzasMensagem: 1, stanzasReceipt: 0, stanzasNotificacao: 0, ignoradas: 0, decryptTentado: 2, decryptOk: 1, decryptFalha: 1, motivos: undefined, enfileiradas: 0, emitidasDireto: 2, entregues: 2, encaminhadas: 0, retryTotal: 0, retryComPreChave: 0, retrySemPreChave: 0 });
     assert.deepEqual(dir.motivos, [{ motivo: "sem_sessao_compativel", n: 1 }]);
-    assert.equal(grp.decryptFalha, 1); assert.equal(grp.retriesComChave, 1); assert.equal(grp.ignoradas, 0);
+    assert.equal(grp.decryptFalha, 1); assert.equal(grp.retryComPreChave, 1); assert.equal(grp.retrySemPreChave, 0); assert.equal(grp.retryTotal, 1); assert.equal(grp.ignoradas, 0);
     assert.ok(!VAZAMENTO.test(sem(d)), sem(d));
-    tick(); assert.equal(eventos.length, 1, "sem novas mudanças: não repete");
+    tick(); assert.equal(eventos.length, 2, "sem novas mudanças: não repete");
   });
 
   test("falha no emissor/contador/ganchos nunca propaga", () => {

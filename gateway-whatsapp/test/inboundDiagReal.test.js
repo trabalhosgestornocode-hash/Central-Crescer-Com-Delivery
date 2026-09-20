@@ -5,7 +5,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { criarGatewayFalso, capturarConsole } from "../test-support/inboundHarness.js";
-import { criarInboundGateway } from "../src/inboundScope.js";
+import { criarInboundGateway, TIPOS_JID } from "../src/inboundScope.js";
 
 const G1 = "120363000000000001@g.us";
 const D = (n) => `55118888${String(n).padStart(5, "0")}@s.whatsapp.net`;
@@ -72,8 +72,8 @@ describe("diagnóstico de inbound com o Baileys real", { timeout: 120_000 }, () 
     assert.equal(m.group.decryptOk, 2);
     assert.equal(m.group.decryptFalha, 1);
     assert.equal(m.status.decryptOk, 1);
-    assert.equal(r.direct_pn.comChave, 1);
-    assert.equal(r.group.comChave, 1);
+    assert.equal(r.direct_pn.comPreChave, 1);
+    assert.equal(r.group.comPreChave, 1);
     assert.deepEqual([s.direct_pn.message, s.group.message, s.status.message], [3, 3, 1], JSON.stringify(s));   // setup + rajada, uma stanza por mensagem
     for (const t of Object.keys(s)) assert.equal(s[t].ignoradas, 0, "ALL_SUPPORTED nunca ignora");
   });
@@ -84,11 +84,11 @@ describe("diagnóstico de inbound com o Baileys real", { timeout: 120_000 }, () 
   });
 
   test("o evento inbound.contadores tem só categorias reais e números — nenhum identificador", () => {
-    assert.equal(on.eventos.length, 1);
-    const { e, d } = on.eventos[0];
+    assert.equal(on.eventos.filter((x) => x.e === "inbound.contadores").length, 1);
+    const { e, d } = on.eventos.find((x) => x.e === "inbound.contadores");
     assert.equal(e, "inbound.contadores");
     assert.equal(d.escopo, "ALL_SUPPORTED"); assert.equal(d.filtroAtivo, false);
-    for (const t of d.tipos) assert.ok(["direct_pn", "direct_lid", "group", "status", "broadcast", "newsletter", "meta_ai", "technical", "unknown"].includes(t.tipo), t.tipo);
+    for (const t of d.tipos) assert.ok(TIPOS_JID.includes(t.tipo), t.tipo);
     const s = JSON.stringify(d);
     assert.ok(!/5511|1000000000|whatsapp\.net|120363|@lid|@g\.us|TESTMSG|@broadcast/.test(s), s);
   });

@@ -103,7 +103,7 @@ describe("messages.upsert — encaminhamento ao backend e contadores", () => {
     tick();
     assert.equal(eventos.length, 1);
     const d = eventos[0].d.tipos.find((x) => x.tipo === "direct_pn");
-    assert.equal(d.recebidas, 2); assert.equal(d.decryptFalha, 1);
+    assert.equal(d.decryptTentado, 2); assert.equal(d.decryptFalha, 1); assert.equal(d.entregues, 2); assert.equal(d.emitidasDireto, 2);
     assert.deepEqual(d.motivos, [{ motivo: "sem_sessao_compativel", n: 1 }]);
     assert.ok(!/5511|whatsapp\.net/.test(JSON.stringify(eventos[0].d)));
   });
@@ -119,5 +119,42 @@ describe("messages.upsert — encaminhamento ao backend e contadores", () => {
     const { socket, backendClient } = await abrir(criarInboundGateway({ emitir() {} }));
     socket.ev.emit("messages.upsert", { messages: [{ key: { remoteJid: "5511888880001@s.whatsapp.net", id: "E", fromMe: true }, message: {} }], type: "notify" });
     assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 0);
+  });
+});
+
+describe("C.9.4 — pipeline: encaminhada ao backend e a DÍVIDA do Checkpoint F (caracterização)", () => {
+  const msg = (jid, extra = {}) => ({ key: { remoteJid: jid, id: "ID1", fromMe: false }, message: { conversation: "oi" }, ...extra });
+
+  test("`encaminhadas` conta só o que realmente vai ao backend (fromMe não vai) e é por TIPO; `entregues` conta todas as que chegaram ao listener", async () => {
+    const inbound = criarInboundGateway({ diagHabilitado: true, emitir() {}, agendar: () => ({ unref() {} }), consoleAlvo: { error() {} } });
+    const { socket, backendClient } = await abrir(inbound);
+    socket.ev.emit("messages.upsert", { messages: [
+      msg("5511888880001@s.whatsapp.net"), msg("100000000000002@lid"), msg("120363000000000001@g.us"),
+      { key: { remoteJid: "5511888880001@s.whatsapp.net", id: "E", fromMe: true }, message: {} },
+    ], type: "notify" });
+    const m = inbound.snapshot().mensagens;
+    assert.equal(m.direct_pn.entregues, 2); assert.equal(m.direct_pn.encaminhadas, 1, "a fromMe não é encaminhada");
+    assert.equal(m.direct_lid_other.encaminhadas, 1); assert.equal(m.group.encaminhadas, 1);
+    assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 3, "encaminhadas conta == chamadas reais ao backend");
+  });
+
+  test("DÍVIDA (Checkpoint F): deJid(remoteJid) vira 'telefone' também para LID, grupo e status — INVÁLIDO; este teste documenta o comportamento ATUAL", async () => {
+    const { socket, backendClient } = await abrir(criarInboundGateway({ emitir() {} }));
+    socket.ev.emit("messages.upsert", { messages: [
+      msg("5511888880001@s.whatsapp.net"), msg("100000000000002@lid"), msg("120363000000000001@g.us"), msg("status@broadcast"),
+    ], type: "notify" });
+    const enviados = backendClient.notificarMensagemRecebida.mock.calls.map((c) => c.arguments[0].telefoneE164);
+    assert.equal(enviados[0], "+5511888880001", "PN: telefone de verdade");
+    assert.equal(enviados[1], "+100000000000002", "LID NÃO é telefone");
+    assert.equal(enviados[2], "+120363000000000001", "id de GRUPO NÃO é telefone");
+    assert.equal(enviados[3], "+status", "status@broadcast NÃO é telefone");
+    // O payload atual não carrega o TIPO de origem nem o conteúdo: o Checkpoint F precisa de origemTipo/origemJidTipo.
+    for (const c of backendClient.notificarMensagemRecebida.mock.calls) assert.deepEqual(Object.keys(c.arguments[0]).sort(), ["providerMessageId", "recebidoEm", "telefoneE164"]);
+  });
+
+  test("um stub de falha de decrypt (CIPHERTEXT, sem conteúdo) que for liberado do buffer também seria encaminhado como 'mensagem recebida' — risco ao consertar a retenção", async () => {
+    const { socket, backendClient } = await abrir(criarInboundGateway({ emitir() {} }));
+    socket.ev.emit("messages.upsert", { messages: [msg("120363000000000001@g.us", { messageStubType: CIPHERTEXT, messageStubParameters: ["Bad MAC"], message: undefined })], type: "append" });
+    assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 1);
   });
 });

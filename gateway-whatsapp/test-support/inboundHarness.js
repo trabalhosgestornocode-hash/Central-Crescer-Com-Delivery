@@ -54,7 +54,7 @@ export function criarLoggerGravador() {
   const l = mk(); l.eventos = eventos; return l;
 }
 
-export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerBaileysSilencioso(), inbound } = {}) {
+export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerBaileysSilencioso(), inbound, opcoesBaileys = {}, meLid = MEU_LID, latenciaKeysMs = 0 } = {}) {
   const servidor = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(servidor, "listening");
   const quadros = [];
@@ -64,13 +64,14 @@ export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerB
   const backend = { async salvarAuthState() { return { authSessionId: "s" }; }, async carregarAuthState() { return { status: "absent" }; } };
   const adapter = criarAuthStateAdapter({ backendClient: backend, chaveEncriptacaoEnv: randomBytes(32).toString("base64") });
   const creds = initAuthCreds();
-  creds.me = { id: MEU_JID, lid: MEU_LID, name: "GW" };
+  creds.me = { id: MEU_JID, lid: meLid, name: "GW" };
   creds.registered = true;
   adapter.inicializarCreds(creds);
   const state = adapter.comoAuthState();
   const leituras = { session: 0, "sender-key": 0, "pre-key": 0 };   // keys.get por categoria — só o pipeline de decrypt lê 'session'/'sender-key'
   const getOriginal = state.keys.get;
-  state.keys.get = async (tipo, ids) => { if (tipo in leituras) leituras[tipo] += 1; return getOriginal(tipo, ids); };
+  // `latenciaKeysMs` imita o I/O real do adapter de auth em produção (POST ao backend): cede o event loop entre as etapas do decrypt.
+  state.keys.get = async (tipo, ids) => { if (tipo in leituras) leituras[tipo] += 1; if (latenciaKeysMs) await espera(latenciaKeysMs); return getOriginal(tipo, ids); };
   const { update } = await getNextPreKeys({ creds, keys: state.keys }, 60);   // pré-chaves "já enviadas ao servidor"
   await adapter.aoAtualizarCreds(update);
 
@@ -88,6 +89,7 @@ export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerB
     printQRInTerminal: false,
     ...(shouldIgnoreJid ? { shouldIgnoreJid } : {}),
     ...(inbound?.opcoesSocket?.() ?? {}),   // NUNCA passar undefined: o merge de defaults do Baileys o sobrescreveria
+    ...opcoesBaileys,                       // ex.: shouldSyncHistoryMessage, placeholderResendCache (só testes)
     connectTimeoutMs: CONNECT_TIMEOUT_TESTE_MS, defaultQueryTimeoutMs: 40, keepAliveIntervalMs: 600_000,
     retryRequestDelayMs: 0, fireInitQueries: false, markOnlineOnConnect: false, syncFullHistory: false,
   });
@@ -130,6 +132,18 @@ export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerB
     await espera(40);              // deixa o retry receipt / persistência em segundo plano assentarem
     await drenarEnviados();
   }
+  /**
+   * Entrega uma stanza SEM emitir nenhum sinal de fim de fila offline (nem nada que flush o buffer): é o que ocorre em
+   * produção enquanto `CB:ib,,offline` não chega. Espera o pipeline assentar (decrypt, retry, persistência).
+   */
+  async function entregarSemFimOffline(node, { estavelMs = 300 } = {}) {
+    sock.ws.emit("CB:message", node);
+    await aguardarQuiescencia({ estavelMs, maxMs: 8000 });
+  }
+  /** o servidor avisa que a fila offline acabou (o Baileys faz flush do buffer inicial e emite receivedPendingNotifications). */
+  function emitirOfflineFim(count = 0) { sock.ws.emit("CB:ib,,offline", { tag: "ib", attrs: {}, content: [{ tag: "offline", attrs: { count: String(count) } }] }); }
+  function emitirOfflinePreview() { sock.ws.emit("CB:ib,,offline_preview", { tag: "ib", attrs: {}, content: [{ tag: "offline_preview", attrs: { count: "3" } }] }); }
+  const bufferando = () => sock.ev.isBuffering();
   /** espera o pipeline em segundo plano (retry receipts, persistência) parar de produzir tráfego. */
   async function aguardarQuiescencia({ estavelMs = 500, maxMs = 25_000 } = {}) {
     const ini = Date.now(); let ultimo = -1; let desde = Date.now();
@@ -208,7 +222,7 @@ export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerB
     await new Promise((r) => servidor.close(() => r()));
   }
 
-  return { marcarSegundaEntrega, sock, adapter, upserts, enviados, leituras, aguardarQuiescencia, acks, retryReceipts, retryComChaves, medir, criarPar, stanzaEnc, mensagemDireta, mensagemGrupo, responderAoPar, receberStanza, encerrar, espera, drenarEnviados };
+  return { entregarSemFimOffline, emitirOfflineFim, emitirOfflinePreview, bufferando, marcarSegundaEntrega, sock, adapter, upserts, enviados, leituras, aguardarQuiescencia, acks, retryReceipts, retryComChaves, medir, criarPar, stanzaEnc, mensagemDireta, mensagemGrupo, responderAoPar, receberStanza, encerrar, espera, drenarEnviados };
 }
 
 export { proto };

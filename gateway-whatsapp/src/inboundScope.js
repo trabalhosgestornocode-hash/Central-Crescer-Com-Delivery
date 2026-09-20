@@ -1,32 +1,39 @@
-// Escopo de INBOUND do Gateway (Checkpoints C3.5-C.9.3 / C.9.3-R).
+// Escopo de INBOUND do Gateway (Checkpoints C3.5-C.9.3 / C.9.3-R / C.9.4).
 //
-// CONTEXTO (provado em produção com a telemetria do C.9.2): a cada reconexão o servidor reentrega as
-// mensagens offline e o Baileys tenta decifrar TODAS — dezenas de "Bad MAC", com criação de sessões (1:1 e
-// as de participantes de grupo, que carregam a SenderKeyDistribution), sender-keys e pré-chaves de retry.
-// O produto NÃO é somente outbound: chats DIRETOS de clientes (respostas a alertas, consentimento/opt-out,
-// futuro Agente Crescer) precisam continuar chegando.
+// CONTEXTO (provado em produção com a telemetria do C.9.2/C.9.3): a cada reconexão o servidor reentrega as
+// mensagens offline e o Baileys tenta decifrar TODAS — dezenas de "Bad MAC" — e o `messages.upsert` NUNCA foi
+// emitido em produção (zero chamadas `mensagem-recebida` ao backend). O produto NÃO é somente outbound: chats
+// DIRETOS de clientes (respostas a alertas, consentimento/opt-out, futuro Agente Crescer) precisam chegar.
 //
-// MECANISMO (Baileys 6.7.24, código instalado): `config.shouldIgnoreJid(jid)` é consultado no PRIMEIRO passo
-// de handleMessage (messages-recv.js, antes de decryptMessageNode), de handleReceipt, handleNotification e das
-// presenças. Ignorar = só ACK e return: nenhum decrypt, sessão, sender-key, retry ou Bad MAC. O Baileys nunca
-// ignora o JID técnico `@s.whatsapp.net` (o servidor), e nós também não.
+// MECANISMO DO FILTRO (Baileys 6.7.24, código instalado): `config.shouldIgnoreJid(jid)` é consultado no PRIMEIRO
+// passo de handleMessage (antes de decryptMessageNode), de handleReceipt, handleNotification e das presenças.
+// Ignorar = só ACK e return. O Baileys nunca ignora o JID técnico `@s.whatsapp.net`, e nós também não.
 //
 // POLÍTICA (explícita, sem booleano obscuro):
 //   ALL_SUPPORTED  (padrão) — NADA é ignorado e NADA é injetado: as opções do socket são as de antes.
-//   DIRECT_ONLY             — ignora SOMENTE categorias que o produto v1 não suporta: group, status, broadcast e
-//                             newsletter. Direct (PN e LID), meta_ai, technical e UNKNOWN passam (FAIL-SAFE).
+//   DIRECT_ONLY             — ignora SOMENTE group, status, broadcast e newsletter. Direct (PN e LID), meta_ai,
+//                             technical e UNKNOWN passam (FAIL-SAFE). NÃO DECIDIDO para produção (C.9.4).
 //
-// DIAGNÓSTICO (WHATSAPP_INBOUND_DIAG_ENABLED, padrão desligado) — só OBSERVA, nunca filtra: contadores
-// agregados por TIPO de JID (stanzas por espécie, mensagens recebidas, decrypt ok/falha e motivo em vocabulário
-// fechado, retries com/sem chave) + um total global de linhas "Bad MAC" da libsignal. Fontes, todas sem
-// injetar nada no Baileys: listeners `ws.on('CB:*')` (stanzas), `messages.upsert` (resultado do decrypt), um
-// wrapper do LOGGER do Baileys ("sent retry receipt") e a linha de console da libsignal.
+// DIAGNÓSTICO (WHATSAPP_INBOUND_DIAG_ENABLED, padrão desligado) — só OBSERVA, nunca filtra, nunca injeta. Segue a
+// mensagem pelo pipeline REAL do Baileys por TIPO de JID (sem identificadores):
 //
-// NUNCA registra JID, telefone, participant, author, remoteJid, ID de mensagem, conteúdo, hash ou chave: o que
-// sai é o NOME do tipo e números.
+//   stanza (ws CB:message)  → decrypt ok/falha (na emissão de `messages.upsert`, ANTES do buffer)
+//        → enfileirada (emitida com o buffer de eventos ATIVO) | emitida direto (buffer inativo)
+//        → entregue (listener de messages.upsert do Gateway, i.e. o buffer foi LIBERADO)
+//        → encaminhada ao backend (mensagem-recebida)
+//   e o ciclo da fila offline/buffer: CB:ib,,offline_preview, CB:ib,,offline, receivedPendingNotifications,
+//   buffer()/flush(), mensagens retidas — para distinguir "decrypt falhou" de "evento retido no buffer".
+//
+// Fontes (nada é injetado no Baileys): listeners `ws.on('CB:*')`, wrappers TRANSPARENTES de `ev.emit/buffer/flush`
+// (mesmos argumentos e retorno, nunca lançam), um wrapper do LOGGER ("sent retry receipt") e a linha de console da
+// libsignal. A identidade autenticada é lida SÓ em memória para separar direct_lid_self de direct_lid_other (uma
+// comparação booleana); nunca é guardada, logada nem hasheada.
+//
+// NUNCA registra JID, LID, telefone, participant, author, remoteJid, ID de mensagem, conteúdo, hash ou chave: o que
+// sai é o NOME do tipo, números, booleanos e segundos.
 
 import {
-  isJidUser, isLidUser, isJidGroup, isJidBroadcast, isJidStatusBroadcast, isJidNewsletter, isJidMetaIa, isJidBot, META_AI_JID, proto,
+  isJidUser, isLidUser, isJidGroup, isJidBroadcast, isJidStatusBroadcast, isJidNewsletter, isJidMetaIa, isJidBot, META_AI_JID, jidDecode, proto,
 } from "baileys";
 
 export const ESCOPO_ALL_SUPPORTED = "ALL_SUPPORTED";
@@ -42,17 +49,33 @@ export function interpretarEscopo(valor) {
   return { escopo: ESCOPO_PADRAO, valido: false };
 }
 
-export const TIPOS_JID = Object.freeze(["direct_pn", "direct_lid", "group", "status", "broadcast", "newsletter", "meta_ai", "technical", "unknown"]);
+export const TIPOS_JID = Object.freeze(["direct_pn", "direct_lid_self", "direct_lid_other", "group", "status", "broadcast", "newsletter", "meta_ai", "technical", "unknown"]);
 
 /** Categorias que o produto v1 explicitamente NÃO suporta (nenhum uso no código: verificado no C.9.3). */
 export const TIPOS_NAO_SUPORTADOS_V1 = Object.freeze(new Set(["group", "status", "broadcast", "newsletter"]));
 
 /**
- * Classificação pelos helpers OFICIAIS do Baileys 6.7.24 (WABinary/jid-utils.js). A ordem importa:
- * `status@broadcast` também termina em `@broadcast`.
- * @returns {'direct_pn'|'direct_lid'|'group'|'status'|'broadcast'|'newsletter'|'meta_ai'|'technical'|'unknown'}
+ * Deriva, SÓ EM MEMÓRIA, as partes de usuário da identidade autenticada (`creds.me`: {id, lid}) para comparar.
+ * O resultado nunca é logado nem exposto; existe apenas dentro do closure que classifica.
  */
-export function classificarJid(jid) {
+export function identidadeDe(me) {
+  try {
+    const user = (j) => (typeof j === "string" && j ? jidDecode(j)?.user ?? null : null);
+    return { pnUser: user(me?.id), lidUser: user(me?.lid) };
+  } catch {
+    return { pnUser: null, lidUser: null };
+  }
+}
+
+/**
+ * Classificação pelos helpers OFICIAIS do Baileys 6.7.24 (WABinary/jid-utils.js). A ordem importa:
+ * `status@broadcast` também termina em `@broadcast`. LID: `direct_lid_self` só se o usuário do LID é o da identidade
+ * autenticada (eventos do próprio aparelho/sessão); sem identidade ⇒ `direct_lid_other`.
+ * @param {any} jid
+ * @param {{lidUser?: string|null}} [identidade]
+ * @returns {'direct_pn'|'direct_lid_self'|'direct_lid_other'|'group'|'status'|'broadcast'|'newsletter'|'meta_ai'|'technical'|'unknown'}
+ */
+export function classificarJid(jid, identidade) {
   try {
     if (typeof jid !== "string" || jid === "") return "unknown";
     if (isJidStatusBroadcast(jid)) return "status";
@@ -62,7 +85,10 @@ export function classificarJid(jid) {
     if (isJidMetaIa(jid) || isJidBot(jid) || jid === META_AI_JID) return "meta_ai";
     if (jid === "@s.whatsapp.net") return "technical";         // o servidor
     if (isJidUser(jid)) return "direct_pn";
-    if (isLidUser(jid)) return "direct_lid";
+    if (isLidUser(jid)) {
+      const meu = identidade?.lidUser;
+      return meu && jidDecode(jid)?.user === meu ? "direct_lid_self" : "direct_lid_other";
+    }
     if (jid.endsWith("@c.us")) return "technical";              // server@c.us, 0@c.us, OFFICIAL_BIZ_JID, ...
     return "unknown";
   } catch {
@@ -90,9 +116,10 @@ const ESPECIES_STANZA = Object.freeze(["message", "receipt", "notification"]);
 
 /**
  * Contadores estruturais por TIPO de JID. Só números e nomes de vocabulário fechado.
- *   stanzas   — vistas por espécie (message/receipt/notification) + `ignoradas` (só o filtro DIRECT_ONLY preenche)
- *   mensagens — recebidas (chegaram ao messages.upsert, ou seja, passaram pelo decrypt), decryptOk, decryptFalha, motivos
- *   retries   — retry receipts enviados: total e os que carregam pré-chave nova (retryCount > 1)
+ *   stanzas   — vistas por espécie + `ignoradas` (só o filtro DIRECT_ONLY preenche)
+ *   mensagens — decryptTentado/Ok/Falha (+motivo), enfileiradas (emitidas com o buffer ativo), emitidasDireto,
+ *               entregues (chegaram ao listener = buffer liberado), encaminhadas (enviadas ao backend)
+ *   retries   — retry receipts: total, comPreChave (pré-chave nova anexada) e semPreChave
  *   badMacLinhas — total GLOBAL de linhas "Session error: … Bad MAC" da libsignal (sem tipo: a linha não traz JID)
  */
 export function criarContadoresInbound() {
@@ -100,6 +127,7 @@ export function criarContadoresInbound() {
   let badMacLinhas = 0;
   let sujo = false;
   const slot = (o, tipo, ini) => (o[tipo] ??= ini());
+  const novaMsg = () => ({ decryptTentado: 0, decryptOk: 0, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 0, entregues: 0, encaminhadas: 0 });
   return {
     /** @param {string} tipo @param {boolean} ignorada @param {'message'|'receipt'|'notification'} [especie] */
     aoStanza(tipo, ignorada, especie) {
@@ -108,10 +136,10 @@ export function criarContadoresInbound() {
       if (ignorada) s.ignoradas++;
       sujo = true;
     },
-    aoMensagem(m) {
-      const tipo = classificarJid(m?.key?.remoteJid);
-      const c = slot(mensagens, tipo, () => ({ recebidas: 0, decryptOk: 0, decryptFalha: 0, motivos: {} }));
-      c.recebidas++;
+    /** mensagem que passou pelo decrypt e foi EMITIDA como messages.upsert (antes do buffer). */
+    aoMensagemEmitida(m, identidade, bufferando) {
+      const c = slot(mensagens, classificarJid(m?.key?.remoteJid, identidade), novaMsg);
+      c.decryptTentado++;
       if (m?.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT) {
         c.decryptFalha++;
         const mot = classificarMotivoFalha(m.messageStubParameters?.[0]);
@@ -119,14 +147,16 @@ export function criarContadoresInbound() {
       } else {
         c.decryptOk++;
       }
+      if (bufferando) c.enfileiradas++; else c.emitidasDireto++;
       sujo = true;
     },
-    /** @param {any} jid @param {any} retryCount */
-    aoRetry(jid, retryCount) {
-      const tipo = classificarJid(jid);
-      const r = slot(retries, tipo, () => ({ total: 0, comChave: 0 }));
+    aoMensagemEntregue(m, identidade) { slot(mensagens, classificarJid(m?.key?.remoteJid, identidade), novaMsg).entregues++; sujo = true; },
+    aoMensagemEncaminhada(m, identidade) { slot(mensagens, classificarJid(m?.key?.remoteJid, identidade), novaMsg).encaminhadas++; sujo = true; },
+    /** @param {string} tipo @param {boolean} comPreChave */
+    aoRetry(tipo, comPreChave) {
+      const r = slot(retries, tipo, () => ({ total: 0, comPreChave: 0, semPreChave: 0 }));
       r.total++;
-      if (Number(retryCount) > 1) r.comChave++;   // Baileys só anexa pré-chave nova a partir do 2º retry
+      if (comPreChave) r.comPreChave++; else r.semPreChave++;
       sujo = true;
     },
     aoBadMacLinha() { badMacLinhas++; sujo = true; },
@@ -134,6 +164,48 @@ export function criarContadoresInbound() {
     snapshot: () => JSON.parse(JSON.stringify({ stanzas, mensagens, retries, badMacLinhas })),
     haMudancas: () => sujo,
     marcarEmitido() { sujo = false; },
+  };
+}
+
+/**
+ * Estado do ciclo da fila offline / buffer de eventos do Baileys. Só booleanos, contagens e instantes (que viram
+ * "segundos desde" na emissão).
+ */
+export function criarCicloFilaOffline({ agora = () => Date.now() } = {}) {
+  const s = {
+    buffersIniciados: 0, flushes: 0, flushesEfetivos: 0, offlinePreview: 0, offlineFim: 0, offlineFimContagem: null,
+    pendentesNotificados: 0, conexoesAbertas: 0, retidas: 0, ultimoFlushEm: null, ultimaEnfileiradaEm: null, bufferAtivo: false,
+    nosOffline: 0, nosVivos: 0, offlineFimEm: null,
+  };
+  const assinatura = () => JSON.stringify([s.buffersIniciados, s.flushes, s.flushesEfetivos, s.offlinePreview, s.offlineFim, s.offlineFimContagem, s.pendentesNotificados, s.conexoesAbertas, s.retidas, s.bufferAtivo, s.nosOffline, s.nosVivos]);
+  let assinaturaEmitida = assinatura();   // estado inicial = "nada novo": só emite quando algo muda
+  const seg = (t) => (t == null ? null : Math.max(0, Math.round((agora() - t) / 1000)));
+  return {
+    estado: s,
+    aoBuffer(jaEstavaAtivo) { if (!jaEstavaAtivo) s.buffersIniciados++; s.bufferAtivo = true; },
+    aoFlush(efetivo) { s.flushes++; if (efetivo) { s.flushesEfetivos++; s.retidas = 0; s.ultimoFlushEm = agora(); } s.bufferAtivo = false; },
+    aoEnfileirada() { s.retidas++; s.ultimaEnfileiradaEm = agora(); },
+    aoOfflinePreview() { s.offlinePreview++; },
+    aoOfflineFim(contagem) { s.offlineFim++; s.offlineFimEm = agora(); s.offlineFimContagem = Number.isFinite(contagem) ? contagem : null; },
+    /** um nó message/receipt/notification chegou: OFFLINE (attrs.offline) ou VIVO (é o vivo que faz flush no Baileys) */
+    aoNo(offline) { if (offline) s.nosOffline++; else s.nosVivos++; },
+    aoPendentesNotificados() { s.pendentesNotificados++; },
+    aoConexaoAberta() { s.conexoesAbertas++; },
+    definirBufferAtivo(v) { s.bufferAtivo = Boolean(v); },
+    mudou: () => assinatura() !== assinaturaEmitida,
+    marcarEmitido() { assinaturaEmitida = assinatura(); },
+    /** @param {boolean|null} myAppStateKeyIdPresente @param {boolean|null} [bufferAtivoVivo] ev.isBuffering() lido na hora */
+    payload(myAppStateKeyIdPresente, bufferAtivoVivo) {
+      return {
+        bufferAtivo: typeof bufferAtivoVivo === "boolean" ? bufferAtivoVivo : s.bufferAtivo, mensagensRetidas: s.retidas,
+        bufferChamadasExternas: s.buffersIniciados, flushes: s.flushes, flushesEfetivos: s.flushesEfetivos,
+        offlinePreviewRecebido: s.offlinePreview, offlineFimRecebido: s.offlineFim, offlineFimContagem: s.offlineFimContagem,
+        receivedPendingNotifications: s.pendentesNotificados, conexoesAbertas: s.conexoesAbertas,
+        myAppStateKeyIdPresente: myAppStateKeyIdPresente == null ? null : Boolean(myAppStateKeyIdPresente),
+        nosOfflineVistos: s.nosOffline, nosVivosVistos: s.nosVivos,
+        segundosDesdeOfflineFim: seg(s.offlineFimEm), segundosDesdeUltimoFlush: seg(s.ultimoFlushEm), segundosDesdeUltimaEnfileirada: seg(s.ultimaEnfileiradaEm),
+      };
+    },
   };
 }
 
@@ -164,14 +236,15 @@ export function criarPoliticaInbound({ escopo = ESCOPO_PADRAO, contadores } = {}
   };
 }
 
+const LIMITE_IDS_EM_MEMORIA = 5000;
+
 /**
  * Cola de produção: escopo + diagnóstico opcional, prontos para o server.js.
  *
  * Regras de compatibilidade (o padrão NÃO muda nada):
  *   - `opcoesSocket()` só devolve `shouldIgnoreJid` em DIRECT_ONLY. Em ALL_SUPPORTED — com ou sem diagnóstico —
  *     devolve `{}`: o Baileys usa o próprio default `() => false`.
- *   - NUNCA devolve `shouldIgnoreJid: undefined`: o merge de defaults do Baileys o sobrescreveria e
- *     `shouldIgnoreJid is not a function` derrubaria todo o recebimento (provado no harness).
+ *   - NUNCA devolve `shouldIgnoreJid: undefined`: o merge de defaults do Baileys o sobrescreveria.
  *   - Diagnóstico desligado: todos os ganchos são no-op (nenhum listener, wrapper, timer ou contador).
  *
  * @param {object} deps
@@ -182,37 +255,60 @@ export function criarPoliticaInbound({ escopo = ESCOPO_PADRAO, contadores } = {}
  * @param {(fn: () => void, ms: number) => any} [deps.agendar] setInterval injetável
  * @param {(h: any) => void} [deps.cancelar] clearInterval injetável
  * @param {Console} [deps.consoleAlvo] onde observar a linha "Bad MAC" da libsignal (padrão: console global)
+ * @param {() => number} [deps.agora] relógio injetável
  */
-export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emitir, intervaloMs = 30_000, agendar = setInterval, cancelar = clearInterval, consoleAlvo = console } = {}) {
+export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emitir, intervaloMs = 30_000, agendar = setInterval, cancelar = clearInterval, consoleAlvo = console, agora = () => Date.now() } = {}) {
   const { escopo, valido } = interpretarEscopo(escopoBruto);
   const contadores = diagHabilitado ? criarContadoresInbound() : undefined;
+  const ciclo = diagHabilitado ? criarCicloFilaOffline({ agora }) : undefined;
   const politica = criarPoliticaInbound({ escopo, contadores });
   const filtrar = escopo === ESCOPO_DIRECT_ONLY;
 
   let timer = null;
   let consoleOriginal = null;
   let consoleEnvolvido = null;
+  /** @type {null | (() => {lidUser?: string|null, pnUser?: string|null})} */
+  let obterIdentidade = null;
+  /** @type {null | (() => boolean|null)} */
+  let obterAppStateKey = null;
+  /** @type {null | (() => boolean|null)} */
+  let obterBufferAtivo = null;
+  // id da stanza → tinha <enc>? SÓ em memória (limitada); serve para reproduzir a regra de pré-chave do retry.
+  const encPorId = new Map();
+
+  const identidade = () => { try { return obterIdentidade?.() ?? undefined; } catch { return undefined; } };
 
   const emitirResumo = () => {
-    if (!contadores || !contadores.haMudancas()) return;
+    if (!contadores) return;
     try {
-      const { stanzas, mensagens, retries, badMacLinhas } = contadores.snapshot();
-      const tipos = TIPOS_JID.filter((t) => stanzas[t] || mensagens[t] || retries[t]).map((tipo) => {
-        const s = stanzas[tipo] ?? { message: 0, receipt: 0, notification: 0, ignoradas: 0 };
-        const m = mensagens[tipo] ?? { recebidas: 0, decryptOk: 0, decryptFalha: 0, motivos: {} };
-        const r = retries[tipo] ?? { total: 0, comChave: 0 };
-        return {
-          tipo,
-          stanzasMensagem: s.message, stanzasReceipt: s.receipt, stanzasNotificacao: s.notification, ignoradas: s.ignoradas,
-          recebidas: m.recebidas, decryptTentado: m.decryptOk + m.decryptFalha, decryptOk: m.decryptOk, decryptFalha: m.decryptFalha,
-          motivos: Object.entries(m.motivos).map(([motivo, n]) => ({ motivo, n })),
-          retries: r.total, retriesComChave: r.comChave,
-        };
-      });
-      // valores CUMULATIVOS desde o boot do processo (a leitura de uma reconexão é a diferença entre dois resumos)
-      emitir("info", "inbound.contadores", { escopo, filtroAtivo: filtrar, tipos, badMacLinhas });
-      contadores.marcarEmitido();
+      if (contadores.haMudancas()) {
+        const { stanzas, mensagens, retries, badMacLinhas } = contadores.snapshot();
+        const tipos = TIPOS_JID.filter((t) => stanzas[t] || mensagens[t] || retries[t]).map((tipo) => {
+          const s = stanzas[tipo] ?? { message: 0, receipt: 0, notification: 0, ignoradas: 0 };
+          const m = mensagens[tipo] ?? { decryptTentado: 0, decryptOk: 0, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 0, entregues: 0, encaminhadas: 0 };
+          const r = retries[tipo] ?? { total: 0, comPreChave: 0, semPreChave: 0 };
+          return {
+            tipo,
+            stanzasMensagem: s.message, stanzasReceipt: s.receipt, stanzasNotificacao: s.notification, ignoradas: s.ignoradas,
+            decryptTentado: m.decryptTentado, decryptOk: m.decryptOk, decryptFalha: m.decryptFalha,
+            motivos: Object.entries(m.motivos).map(([motivo, n]) => ({ motivo, n })),
+            enfileiradas: m.enfileiradas, emitidasDireto: m.emitidasDireto, entregues: m.entregues, encaminhadas: m.encaminhadas,
+            retryTotal: r.total, retryComPreChave: r.comPreChave, retrySemPreChave: r.semPreChave,
+          };
+        });
+        // valores CUMULATIVOS desde o boot do processo (a leitura de uma reconexão é a diferença entre dois resumos)
+        emitir("info", "inbound.contadores", { escopo, filtroAtivo: filtrar, tipos, badMacLinhas });
+        contadores.marcarEmitido();
+      }
     } catch { /* diagnóstico nunca interfere */ }
+    try {
+      if (ciclo?.mudou()) {
+        let appState = null; try { appState = obterAppStateKey?.() ?? null; } catch { appState = null; }
+        let buf = null; try { buf = obterBufferAtivo?.() ?? null; } catch { buf = null; }
+        emitir("info", "inbound.fila_offline", ciclo.payload(appState, buf));
+        ciclo.marcarEmitido();
+      }
+    } catch { /* idem */ }
   };
 
   if (contadores) {
@@ -241,23 +337,84 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
     opcoesSocket: () => (filtrar ? { shouldIgnoreJid: politica.shouldIgnoreJid } : {}),
     /** true se o filtro real está ativo (só DIRECT_ONLY) */
     filtroAtivo: filtrar,
-    /** chamado com as mensagens de messages.upsert (só as NÃO ignoradas chegam aqui) */
+    /** mensagens ENTREGUES ao listener de messages.upsert do Gateway (o buffer de eventos foi liberado). */
     aoMensagens(messages) {
       if (!contadores) return;
-      try { for (const m of messages ?? []) contadores.aoMensagem(m); } catch { /* idem */ }
+      try { const id = identidade(); for (const m of messages ?? []) contadores.aoMensagemEntregue(m, id); } catch { /* idem */ }
     },
-    /** Observa (sem interferir) as stanzas message/receipt/notification por tipo de JID de origem. */
+    /** mensagem ENCAMINHADA ao backend (mensagem-recebida). */
+    aoEncaminhada(m) {
+      if (!contadores) return;
+      try { contadores.aoMensagemEncaminhada(m, identidade()); } catch { /* idem */ }
+    },
+    /**
+     * Observa (sem interferir) o socket: stanzas por tipo, ciclo da fila offline e o pipeline decrypt→buffer→entrega.
+     * Todos os wrappers repassam argumentos e retorno idênticos e nunca lançam.
+     */
     observarSocket(socket) {
       if (!contadores) return;
+      obterIdentidade = () => identidadeDe(socket?.user ?? socket?.authState?.creds?.me);
+      obterAppStateKey = () => Boolean(socket?.authState?.creds?.myAppStateKeyId);
+      obterBufferAtivo = () => (typeof socket?.ev?.isBuffering === "function" ? socket.ev.isBuffering() === true : null);
       const ws = socket?.ws;
-      if (typeof ws?.on !== "function") return;
-      for (const [evento, especie] of [["CB:message", "message"], ["CB:receipt", "receipt"], ["CB:notification", "notification"]]) {
-        try { ws.on(evento, (node) => { try { contadores.aoStanza(classificarJid(node?.attrs?.from), false, especie); } catch { /* idem */ } }); } catch { /* idem */ }
+      if (typeof ws?.on === "function") {
+        const obs = (evento, fn) => { try { ws.on(evento, (node) => { try { fn(node); } catch { /* idem */ } }); } catch { /* idem */ } };
+        for (const [evento, especie] of [["CB:message", "message"], ["CB:receipt", "receipt"], ["CB:notification", "notification"]]) {
+          obs(evento, (node) => {
+            contadores.aoStanza(classificarJid(node?.attrs?.from, identidade()), false, especie);
+            ciclo.aoNo(Boolean(node?.attrs?.offline));   // mesma regra do Baileys: `!!node.attrs.offline`
+            if (especie === "message" && node?.attrs?.id != null) {
+              const tinhaEnc = Array.isArray(node.content) && node.content.some((c) => c?.tag === "enc");
+              encPorId.set(node.attrs.id, tinhaEnc);
+              if (encPorId.size > LIMITE_IDS_EM_MEMORIA) encPorId.delete(encPorId.keys().next().value);
+            }
+          });
+        }
+        obs("CB:ib,,offline_preview", () => ciclo.aoOfflinePreview());
+        obs("CB:ib,,offline", (node) => {
+          const filho = Array.isArray(node?.content) ? node.content.find((c) => c?.tag === "offline") : null;
+          ciclo.aoOfflineFim(Number(filho?.attrs?.count));
+        });
+      }
+      const ev = socket?.ev;
+      if (ev && typeof ev.emit === "function") {
+        const bufferando = () => { try { return typeof ev.isBuffering === "function" ? ev.isBuffering() === true : false; } catch { return false; } };
+        const emitOriginal = ev.emit;
+        ev.emit = function emitObservado(evento, dados, ...resto) {
+          try {
+            if (evento === "messages.upsert") {
+              const buf = bufferando(); const id = identidade();
+              for (const m of dados?.messages ?? []) { contadores.aoMensagemEmitida(m, id, buf); if (buf) ciclo.aoEnfileirada(); }
+            } else if (evento === "connection.update") {
+              if (dados?.receivedPendingNotifications) ciclo.aoPendentesNotificados();
+              if (dados?.connection === "open") ciclo.aoConexaoAberta();
+            }
+          } catch { /* idem */ }
+          return emitOriginal.call(this, evento, dados, ...resto);
+        };
+        if (typeof ev.buffer === "function") {
+          const bufOriginal = ev.buffer;
+          ev.buffer = function bufferObservado(...args) {
+            let ja = false; try { ja = bufferando(); } catch { /* idem */ }
+            const r = bufOriginal.apply(this, args);
+            try { ciclo.aoBuffer(ja); } catch { /* idem */ }
+            return r;
+          };
+        }
+        if (typeof ev.flush === "function") {
+          const flushOriginal = ev.flush;
+          ev.flush = function flushObservado(...args) {
+            const r = flushOriginal.apply(this, args);
+            try { ciclo.aoFlush(r === true); } catch { /* idem */ }
+            return r;
+          };
+        }
       }
     },
     /**
-     * Envolve o logger do Baileys para contar os "sent retry receipt" por tipo. Diagnóstico desligado devolve o
-     * MESMO logger (nenhum wrapper). O wrapper só lê `msgAttrs.from` para classificar e `retryCount`; nada é guardado.
+     * Envolve o logger do Baileys para contar os "sent retry receipt" por tipo, com a regra REAL de pré-chave do
+     * Baileys (`retryCount > 1 || forceIncludeKeys`, onde forceIncludeKeys = a stanza NÃO tinha `<enc>`).
+     * Diagnóstico desligado devolve o MESMO logger (nenhum wrapper).
      */
     envolverLogger(base) {
       if (!contadores || !base) return base;
@@ -268,7 +425,14 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
         };
         for (const n of ["trace", "debug", "info", "warn", "error", "fatal"]) {
           l[n] = (...args) => {
-            if (n === "info" && args[1] === "sent retry receipt") { try { contadores.aoRetry(args[0]?.msgAttrs?.from, args[0]?.retryCount); } catch { /* idem */ } }
+            if (n === "info" && args[1] === "sent retry receipt") {
+              try {
+                const attrs = args[0]?.msgAttrs;
+                const tinhaEnc = encPorId.get(attrs?.id);
+                const comPreChave = Number(args[0]?.retryCount) > 1 || tinhaEnc === false;
+                contadores.aoRetry(classificarJid(attrs?.from, identidade()), comPreChave);
+              } catch { /* idem */ }
+            }
             return b[n]?.(...args);
           };
         }
@@ -278,6 +442,8 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
     },
     /** cópia dos contadores (só números) ou undefined se o diagnóstico está desligado */
     snapshot: () => contadores?.snapshot(),
+    /** estado do ciclo da fila offline (só números/booleanos) ou undefined se desligado */
+    estadoFila: () => ciclo?.payload(obterAppStateKey?.() ?? null, obterBufferAtivo?.() ?? null),
     emitirResumo,
     parar() {
       if (timer) { cancelar(timer); timer = null; }
