@@ -48,6 +48,9 @@ export const config = {
   inboundEscopoBruto: process.env.WHATSAPP_INBOUND_SCOPE,
   // Contadores SANITIZADOS por tipo de JID (evento `inbound.contadores`). Desligado por padrão.
   inboundDiagHabilitado: /^(1|true|yes|on)$/i.test(String(process.env.WHATSAPP_INBOUND_DIAG_ENABLED ?? "").trim()),
+  // Checkpoint C3.5-C.9.6 — observador da fila offline (máquina de estados DIAGNÓSTICA + watchdog em modo OBSERVE: nunca faz flush, nunca
+  // altera mensagens). Só age com o diagnóstico acima LIGADO; ligado por padrão nesse caso. Kill-switch explícito: 0/false/no/off.
+  offlineObserveHabilitado: !/^(0|false|no|off)$/i.test(String(process.env.WHATSAPP_OFFLINE_OBSERVE_ENABLED ?? "").trim()),
 
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",

@@ -22,8 +22,8 @@ const PROIBIDOS = [
 const SO_NUMEROS_LONGOS = /\d{8,}/;
 
 const CHAVES_TOP = ["badMacLinhas", "escopo", "filtroAtivo", "tipos"];
-const CHAVES_TIPO = ["decryptFalha", "decryptOk", "decryptTentado", "emitidasDireto", "encaminhadas", "enfileiradas", "entregues", "ignoradas", "motivos", "retryComPreChave", "retrySemPreChave", "retryTotal", "stanzasMensagem", "stanzasNotificacao", "stanzasReceipt", "tipo"];
-const CHAVES_FILA = ["bufferAtivo", "bufferChamadasExternas", "conexoesAbertas", "flushes", "flushesEfetivos", "mensagensRetidas", "myAppStateKeyIdPresente", "nosOfflineVistos", "nosVivosVistos", "offlineFimContagem", "offlineFimRecebido", "offlinePreviewRecebido", "receivedPendingNotifications", "segundosDesdeOfflineFim", "segundosDesdeUltimaEnfileirada", "segundosDesdeUltimoFlush"];
+const CHAVES_TIPO = ["decryptFalha", "decryptOk", "decryptTentado", "emitidasDireto", "encaminhadas", "enfileiradas", "entregues", "fromMe", "ignoradas", "motivos", "retryComPreChave", "retrySemPreChave", "retryTotal", "stanzasMensagem", "stanzasNotificacao", "stanzasReceipt", "tipo"];
+const CHAVES_FILA = ["bufferAtivo", "bufferChamadasExternas", "conexoesAbertas", "flushes", "flushesEfetivos", "mensagensRetidas", "myAppStateKeyIdPresente", "nosOfflineVistos", "nosVivosVistos", "offlineFimContagem", "offlineFimRecebido", "offlinePreviewRecebido", "receivedPendingNotifications", "retidasPerdidasNoFechamento", "segundosDesdeOfflineFim", "segundosDesdeUltimaEnfileirada", "segundosDesdeUltimoFlush"];
 const MOTIVOS_FECHADOS = ["bad_mac", "sem_sessao_compativel", "sem_sessao", "sem_conteudo", "chave_ja_usada", "prekey_invalida", "sender_key", "outro"];
 
 /** percorre o objeto devolvendo [caminho, chave/valor] para auditar TODAS as chaves e valores. */
@@ -104,6 +104,7 @@ describe("telemetria de inbound — nada que identifique alguém/algo (pipeline 
         if (chave === "tipo") assert.ok(TIPOS_JID.includes(valor), `${caminho}=${valor}`);
         else if (chave === "motivo") assert.ok(MOTIVOS_FECHADOS.includes(valor), `${caminho}=${valor}`);
         else if (chave === "escopo") assert.ok(["ALL_SUPPORTED", "DIRECT_ONLY"].includes(valor));
+        else if (chave === "v") assert.ok(["sim", "nao", "desconhecido"].includes(valor), `${caminho}=${valor}`);
         else assert.fail(`string inesperada em ${e} ${caminho}: ${valor}`);
       }
     }

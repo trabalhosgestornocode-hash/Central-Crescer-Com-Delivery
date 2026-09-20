@@ -58,7 +58,12 @@ export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerB
   const servidor = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(servidor, "listening");
   const quadros = [];
-  servidor.on("connection", (c) => c.on("message", (d) => quadros.push(Buffer.from(d))));
+  // (C.9.5) ouvintes do que o CLIENTE envia, decodificado na hora: é assim que um servidor falso reage aos `offline_batch` REAIS do Baileys.
+  const ouvintesCliente = [];
+  servidor.on("connection", (c) => c.on("message", (d) => {
+    const buf = Buffer.from(d); quadros.push(buf);
+    if (ouvintesCliente.length) decodeBinaryNode(buf.subarray(3)).then((no) => { for (const f of ouvintesCliente) { try { f(no); } catch { /* ouvinte de teste */ } } }).catch(() => { /* quadro não-nó (hello do Noise) */ });
+  }));
   const porta = servidor.address().port;
 
   const backend = { async salvarAuthState() { return { authSessionId: "s" }; }, async carregarAuthState() { return { status: "absent" }; } };
@@ -98,7 +103,8 @@ export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerB
 
   inbound?.observarSocket?.(sock);
   const upserts = [];       // mensagens que CHEGARAM ao ev (não ignoradas)
-  sock.ev.on("messages.upsert", ({ messages }) => { upserts.push(...messages); try { inbound?.aoMensagens?.(messages); } catch { /* idem sessão */ } });
+  const upsertsTipos = [];  // (C.9.5) o `type` (append|notify) de CADA evento entregue ao listener, e quantas mensagens ele trouxe
+  sock.ev.on("messages.upsert", ({ messages, type }) => { upserts.push(...messages); upsertsTipos.push({ tipo: type, n: messages.length }); try { inbound?.aoMensagens?.(messages); } catch { /* idem sessão */ } });
   const enviados = [];      // nós decodificados que o cliente enviou (acks, receipts)
   let lidos = 1;            // o quadro 0 é o ClientHello do Noise
   async function drenarEnviados() {
@@ -222,7 +228,7 @@ export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerB
     await new Promise((r) => servidor.close(() => r()));
   }
 
-  return { entregarSemFimOffline, emitirOfflineFim, emitirOfflinePreview, bufferando, marcarSegundaEntrega, sock, adapter, upserts, enviados, leituras, aguardarQuiescencia, acks, retryReceipts, retryComChaves, medir, criarPar, stanzaEnc, mensagemDireta, mensagemGrupo, responderAoPar, receberStanza, encerrar, espera, drenarEnviados };
+  return { aoNoDoCliente: (f) => { ouvintesCliente.push(f); }, upsertsTipos, entregarSemFimOffline, emitirOfflineFim, emitirOfflinePreview, bufferando, marcarSegundaEntrega, sock, adapter, upserts, enviados, leituras, aguardarQuiescencia, acks, retryReceipts, retryComChaves, medir, criarPar, stanzaEnc, mensagemDireta, mensagemGrupo, responderAoPar, receberStanza, encerrar, espera, drenarEnviados };
 }
 
 export { proto };

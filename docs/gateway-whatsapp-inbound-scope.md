@@ -147,3 +147,49 @@ backend como "mensagem recebida" com um "telefone" inválido. Antes de qualquer 
 `origemTipo` (`direct|group|status|broadcast|newsletter|unknown`), `origemJidTipo` (`pn|lid_self|lid_other|…`), `telefoneE164` somente
 quando o JID for realmente `@s.whatsapp.net` de usuário (senão `null`), `falhaDecrypt: boolean` (stub `CIPHERTEXT` não é conteúdo) e
 descarte explícito do que o produto v1 não suporta.
+
+## C3.5-C.9.6 — instrumentação da fila offline + watchdog em modo OBSERVE (só diagnóstico)
+
+**Pergunta que este código responde (e só ela):** "se o failsafe futuro estivesse ativo, ele teria disparado aqui?". Nada aqui faz flush, libera
+buffer, encaminha mensagem, pede `offline_batch`, pagina ou aciona Agente/automação.
+
+### Garantia estrutural de não interferência
+`src/offlineObserve.js` **não importa o Baileys e não recebe `ev`/`ws`/socket**. Recebe só: eventos como dados, dois LEITORES por geração de socket
+(`lerBufferAtivo` → `ev.isBuffering()`, `lerSocketAberto` → `ws.isOpen`), `emitir` (log), `agendar/cancelar` (timer) e `obterEpoch`. Testes estáticos proíbem
+`flush`/`.buffer(`/`.emit(`/`sendNode`/`end`/`close`/`offline_batch` no módulo e restringem o wiring em `inboundScope.js` à lista fechada de métodos de registro.
+Teste dinâmico com o Baileys real compara NENHUMA instrumentação × diagnóstico sem observador × OBSERVE com a mesma sequência de nós: frames enviados
+(receipts/retries/acks), decrypts, retries, upserts, buffer, flushes e auth são idênticos; a única diferença são os eventos.
+
+### Ligar/desligar
+`WHATSAPP_INBOUND_DIAG_ENABLED=true` (já ligado em produção) + `WHATSAPP_OFFLINE_OBSERVE_ENABLED` (padrão LIGADO quando o diagnóstico está ligado; `0/false/no/off` é o
+kill-switch). O boot loga `inbound.escopo.offlineObserve`.
+
+### Máquina de estados (por geração de socket; `socketGeneration` é um inteiro incremental interno, ≈ `cargaSeq`)
+`CONNECTING → OFFLINE_LOADING` (1º preview OU 1º nó offline; registra o gatilho) → `LIVE` (só pelo marcador `CB:ib,,offline`; o marcador observado ANTES do handler do Baileys via
+`prependListener`, para registrar `retidasAntesDoFlush`) ; `OFFLINE_LOADING → OFFLINE_STALLED_OBSERVED` (o failsafe teria disparado) ; `OFFLINE_STALLED_OBSERVED → OFFLINE_LOADING`
+(retomada: houve progresso) ; qualquer → `CLOSED` (fechamento do socket daquela geração ou surgimento de uma geração nova; timer cancelado; eventos tardios ignorados).
+Um flush do Baileys SEM marcador (nó vivo) é só registrado (`flushesSemMarcador`); não é fim do offline.
+
+### Regra do watchdog (só avalia com todas as condições)
+`fase=OFFLINE_LOADING` E `bufferAtivo` E `!offlineFimRecebido` E `mensagensRetidas>0` (do buffer do socket ATUAL) E `socketHealthy` (`ws.isOpen` E algum frame/nó nos últimos 35 s) E
+(`sem progresso ≥ stallDetectionMs` OU `desde o início ≥ absoluteMaxOfflineMs`). Progresso = preview, nó offline, mensagem enfileirada, batch (inferido: 1 por preview), flush efetivo, marcador.
+Valores iniciais (experimentais, injetáveis): `stallDetectionMs=30 s` (a rajada de ~100 nós terminou em T+6,3 s nas 2 amostras de produção; 30 s ≈ 5× isso, > 20 s do sync do
+Baileys e < 35 s do keep-alive), `absoluteMaxOfflineMs=180 s`, tick 1 s, heartbeat 60 s. Se o padrão de produção se repetir, `stalled_observed` deve sair em ≈ T+36 s de CADA conexão.
+
+### Eventos (todos sem identificadores: só inteiros, booleanos, buckets e vocabulário fechado)
+* `inbound.offline_preview` — por preview: `atributos:[{nome,classe,valor?}]` sanitizados (nome só se `^[a-z][a-z0-9_-]{0,23}$`; inteiro ≤ 7 dígitos ⇒ `numerico`; `true/false` ⇒ `booleano`; vocabulário fechado ⇒ `enum`;
+  parece id/telefone/timestamp/token ⇒ `sensivel` SEM valor; resto ⇒ `desconhecido` só com o tamanho), `atributosIgnorados`, `filhos`, `atributosNoIb`, `sinceSocketMs`. O Baileys não interpreta esses atributos
+  (só faz log do nó), então os nomes reais são desconhecidos até a 1ª amostra.
+* `inbound.offline_node_progress` — nos marcos 1 e 100 (configurável): `sinceSocketMs`, `sincePreviewMs`, `offlineNodes`, agregados por espécie/tipo, distribuição de `attrs.offline` e idade. Não existe evento "último nó"
+  (não há como saber em tempo real): use `offlineLastProgressAt`/`segundosDesdeProgresso`.
+* `inbound.offline_stalled_observed` — UM por ENTRADA em OFFLINE_STALLED_OBSERVED (teto de 5 por geração): `stallReason` (`no_progress`|`absolute_max`), `secondsSinceProgress`, `secondsSinceOfflineStart`,
+  retidas, nós offline/vivos, preview/fim, `socketHealthy`, `RECOVERY_PATH_USED=false`, `observeOnly=true`.
+* `inbound.offline_state` — `gatilho`: `heartbeat` (a cada 60 s, só em LOADING/STALLED_OBSERVED; enxuto), `marcador`, `fechamento` (com `retidasPerdidas`), `retomada`, `flush_sem_marcador` (1× por geração).
+  Campos: fase, tempos, retidas, nós offline/vivos, preview/fim, `bufferAtivo`, `socketHealthy`, `observeWouldRecover`, flushes.
+* `inbound.fila_offline` — ganhou `retidasPerdidasNoFechamento` (+ `socketGeneration`, `fase` com o observador). **Semântica corrigida:** `mensagensRetidas` agora é do buffer do socket ATUAL (zera em cada socket
+  novo; o buffer velho morreu com ele) — antes era cumulativo por processo (por isso 80 → 170 nas amostras).
+* `inbound.contadores` — cada tipo ganhou `fromMe:[{v:'sim'|'nao'|'desconhecido', tentado, falha}]`, que explica o `direct_lid_other` (mensagens de OUTRO aparelho da própria conta = `fromMe=sim`), sem reinterpretar o JID.
+
+### Distribuição de `attrs.offline` e idade (métricas, nunca decisão)
+`attrOffline` por espécie (message/receipt/notification): `missing|empty|zero|one|other`, classificada sobre o valor BRUTO antes da coerção truthy do Baileys (`"0"` conta como offline no Baileys; aqui só medimos).
+`idade`: buckets `lt1m|m1a5|m5a30|m30a120|h2a24|gt24h|ausente|invalido` do `t` da stanza, por origem (offline × vivo), só mensagens. O timestamp original nunca é registrado.

@@ -81,9 +81,12 @@ const inbound = criarInboundGateway({
   escopoBruto: config.inboundEscopoBruto,
   diagHabilitado: config.inboundDiagHabilitado,
   emitir: (nivel, evento, dados) => log(nivel, evento, dados),
+  // C.9.6 — só OBSERVA a fila offline (nunca faz flush); o epoch é só um rótulo técnico nos eventos
+  offlineObserve: config.offlineObserveHabilitado,
+  obterEpoch: () => leaseManager.contexto()?.leaseEpoch ?? null,
 });
 log(inbound.valido ? "info" : "warn", inbound.valido ? "inbound.escopo" : "inbound.escopo_invalido_usando_padrao", {
-  escopo: inbound.escopo, diagnostico: inbound.diagnostico,
+  escopo: inbound.escopo, diagnostico: inbound.diagnostico, offlineObserve: inbound.offlineObserve,
   // prova operacional: só DIRECT_ONLY injeta um shouldIgnoreJid no socket; ALL_SUPPORTED (com ou sem diagnóstico) não injeta nada
   shouldIgnoreJidInjetado: "shouldIgnoreJid" in inbound.opcoesSocket(),
 });

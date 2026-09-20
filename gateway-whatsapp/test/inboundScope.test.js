@@ -112,11 +112,12 @@ describe("contadores sanitizados", () => {
     c.aoMensagemEmitida(msg("120363000000000001@g.us", true, "algo com 5511999990000@s.whatsapp.net"), undefined, true);
     c.aoMensagemEmitida(msg("status@broadcast", false), undefined, false);
     const { mensagens } = c.snapshot();
+    const fm = (tentado, falha) => ({ fromMe: { sim: { tentado: 0, falha: 0 }, nao: { tentado: 0, falha: 0 }, desconhecido: { tentado, falha } } });   // as mensagens do teste não trazem key.fromMe
     const base = { entregues: 0, encaminhadas: 0 };
-    assert.deepEqual(mensagens.direct_pn, { decryptTentado: 2, decryptOk: 1, decryptFalha: 1, motivos: { sem_sessao_compativel: 1 }, enfileiradas: 2, emitidasDireto: 0, ...base });
-    assert.deepEqual(mensagens.direct_lid_other, { decryptTentado: 1, decryptOk: 1, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 1, ...base });
-    assert.deepEqual(mensagens.group, { decryptTentado: 1, decryptOk: 0, decryptFalha: 1, motivos: { outro: 1 }, enfileiradas: 1, emitidasDireto: 0, ...base });
-    assert.deepEqual(mensagens.status, { decryptTentado: 1, decryptOk: 1, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 1, ...base });
+    assert.deepEqual(mensagens.direct_pn, { decryptTentado: 2, decryptOk: 1, decryptFalha: 1, motivos: { sem_sessao_compativel: 1 }, enfileiradas: 2, emitidasDireto: 0, ...base, ...fm(2, 1) });
+    assert.deepEqual(mensagens.direct_lid_other, { decryptTentado: 1, decryptOk: 1, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 1, ...base, ...fm(1, 0) });
+    assert.deepEqual(mensagens.group, { decryptTentado: 1, decryptOk: 0, decryptFalha: 1, motivos: { outro: 1 }, enfileiradas: 1, emitidasDireto: 0, ...base, ...fm(1, 1) });
+    assert.deepEqual(mensagens.status, { decryptTentado: 1, decryptOk: 1, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 1, ...base, ...fm(1, 0) });
     assert.ok(!VAZAMENTO.test(sem(c.snapshot())), sem(c.snapshot()));
   });
 
@@ -254,7 +255,7 @@ describe("criarInboundGateway — cola de produção", () => {
     assert.equal(d.escopo, ESCOPO_ALL_SUPPORTED); assert.equal(d.filtroAtivo, false);
     assert.deepEqual(d.tipos.map((t) => t.tipo), ["direct_pn", "group"]);
     const dir = d.tipos.find((t) => t.tipo === "direct_pn"); const grp = d.tipos.find((t) => t.tipo === "group");
-    assert.deepEqual({ ...dir, motivos: undefined }, { tipo: "direct_pn", stanzasMensagem: 1, stanzasReceipt: 0, stanzasNotificacao: 0, ignoradas: 0, decryptTentado: 2, decryptOk: 1, decryptFalha: 1, motivos: undefined, enfileiradas: 0, emitidasDireto: 2, entregues: 2, encaminhadas: 0, retryTotal: 0, retryComPreChave: 0, retrySemPreChave: 0 });
+    assert.deepEqual({ ...dir, motivos: undefined }, { tipo: "direct_pn", stanzasMensagem: 1, stanzasReceipt: 0, stanzasNotificacao: 0, ignoradas: 0, decryptTentado: 2, decryptOk: 1, decryptFalha: 1, motivos: undefined, enfileiradas: 0, emitidasDireto: 2, entregues: 2, encaminhadas: 0, fromMe: [{ v: "sim", tentado: 0, falha: 0 }, { v: "nao", tentado: 0, falha: 0 }, { v: "desconhecido", tentado: 2, falha: 1 }], retryTotal: 0, retryComPreChave: 0, retrySemPreChave: 0 });
     assert.deepEqual(dir.motivos, [{ motivo: "sem_sessao_compativel", n: 1 }]);
     assert.equal(grp.decryptFalha, 1); assert.equal(grp.retryComPreChave, 1); assert.equal(grp.retrySemPreChave, 0); assert.equal(grp.retryTotal, 1); assert.equal(grp.ignoradas, 0);
     assert.ok(!VAZAMENTO.test(sem(d)), sem(d));

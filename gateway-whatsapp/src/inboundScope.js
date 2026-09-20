@@ -35,6 +35,7 @@
 import {
   isJidUser, isLidUser, isJidGroup, isJidBroadcast, isJidStatusBroadcast, isJidNewsletter, isJidMetaIa, isJidBot, META_AI_JID, jidDecode, proto,
 } from "baileys";
+import { criarObservadorOffline } from "./offlineObserve.js";
 
 export const ESCOPO_ALL_SUPPORTED = "ALL_SUPPORTED";
 export const ESCOPO_DIRECT_ONLY = "DIRECT_ONLY";
@@ -127,7 +128,8 @@ export function criarContadoresInbound() {
   let badMacLinhas = 0;
   let sujo = false;
   const slot = (o, tipo, ini) => (o[tipo] ??= ini());
-  const novaMsg = () => ({ decryptTentado: 0, decryptOk: 0, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 0, entregues: 0, encaminhadas: 0 });
+  const novaFm = () => ({ tentado: 0, falha: 0 });
+  const novaMsg = () => ({ decryptTentado: 0, decryptOk: 0, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 0, entregues: 0, encaminhadas: 0, fromMe: { sim: novaFm(), nao: novaFm(), desconhecido: novaFm() } });
   return {
     /** @param {string} tipo @param {boolean} ignorada @param {'message'|'receipt'|'notification'} [especie] */
     aoStanza(tipo, ignorada, especie) {
@@ -140,8 +142,13 @@ export function criarContadoresInbound() {
     aoMensagemEmitida(m, identidade, bufferando) {
       const c = slot(mensagens, classificarJid(m?.key?.remoteJid, identidade), novaMsg);
       c.decryptTentado++;
+      // (C.9.6) dimensão fromMe: a stanza é classificada pelo remetente (from) e o decrypt pelo chat (remoteJid); mensagens enviadas por OUTRO
+      // aparelho da própria conta chegam com remoteJid = o destinatário. Só observação: a categoria acima não muda.
+      const fm = m?.key?.fromMe === true ? "sim" : m?.key?.fromMe === false ? "nao" : "desconhecido";
+      c.fromMe[fm].tentado++;
       if (m?.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT) {
         c.decryptFalha++;
+        c.fromMe[fm].falha++;
         const mot = classificarMotivoFalha(m.messageStubParameters?.[0]);
         c.motivos[mot] = (c.motivos[mot] ?? 0) + 1;
       } else {
@@ -175,9 +182,9 @@ export function criarCicloFilaOffline({ agora = () => Date.now() } = {}) {
   const s = {
     buffersIniciados: 0, flushes: 0, flushesEfetivos: 0, offlinePreview: 0, offlineFim: 0, offlineFimContagem: null,
     pendentesNotificados: 0, conexoesAbertas: 0, retidas: 0, ultimoFlushEm: null, ultimaEnfileiradaEm: null, bufferAtivo: false,
-    nosOffline: 0, nosVivos: 0, offlineFimEm: null,
+    nosOffline: 0, nosVivos: 0, offlineFimEm: null, retidasPerdidas: 0, socketsObservados: 0,
   };
-  const assinatura = () => JSON.stringify([s.buffersIniciados, s.flushes, s.flushesEfetivos, s.offlinePreview, s.offlineFim, s.offlineFimContagem, s.pendentesNotificados, s.conexoesAbertas, s.retidas, s.bufferAtivo, s.nosOffline, s.nosVivos]);
+  const assinatura = () => JSON.stringify([s.buffersIniciados, s.flushes, s.flushesEfetivos, s.offlinePreview, s.offlineFim, s.offlineFimContagem, s.pendentesNotificados, s.conexoesAbertas, s.retidas, s.bufferAtivo, s.nosOffline, s.nosVivos, s.retidasPerdidas]);
   let assinaturaEmitida = assinatura();   // estado inicial = "nada novo": só emite quando algo muda
   const seg = (t) => (t == null ? null : Math.max(0, Math.round((agora() - t) / 1000)));
   return {
@@ -191,10 +198,17 @@ export function criarCicloFilaOffline({ agora = () => Date.now() } = {}) {
     aoNo(offline) { if (offline) s.nosOffline++; else s.nosVivos++; },
     aoPendentesNotificados() { s.pendentesNotificados++; },
     aoConexaoAberta() { s.conexoesAbertas++; },
+    /** (C.9.6) um socket NOVO passou a ser observado: o buffer do anterior morreu com ele — as retidas dele deixam de contar e viram "perdidas". */
+    aoNovoSocket() { s.socketsObservados++; s.retidasPerdidas += s.retidas; s.retidas = 0; s.bufferAtivo = false; },
     definirBufferAtivo(v) { s.bufferAtivo = Boolean(v); },
     mudou: () => assinatura() !== assinaturaEmitida,
     marcarEmitido() { assinaturaEmitida = assinatura(); },
-    /** @param {boolean|null} myAppStateKeyIdPresente @param {boolean|null} [bufferAtivoVivo] ev.isBuffering() lido na hora */
+    /**
+     * @param {boolean|null} myAppStateKeyIdPresente @param {boolean|null} [bufferAtivoVivo] ev.isBuffering() lido na hora
+     * SEMÂNTICA (C.9.6): `mensagensRetidas` = mensagens emitidas com o buffer ativo do socket ATUAL (zera a cada socket novo: o buffer velho
+     * morreu com ele e vira `retidasPerdidasNoFechamento`). NÃO é cumulativo por processo (antes do C.9.6 era: 80 → 170 nas 2 primeiras
+     * amostras) e é só TELEMETRIA — não altera o buffer real do Baileys.
+     */
     payload(myAppStateKeyIdPresente, bufferAtivoVivo) {
       return {
         bufferAtivo: typeof bufferAtivoVivo === "boolean" ? bufferAtivoVivo : s.bufferAtivo, mensagensRetidas: s.retidas,
@@ -202,7 +216,7 @@ export function criarCicloFilaOffline({ agora = () => Date.now() } = {}) {
         offlinePreviewRecebido: s.offlinePreview, offlineFimRecebido: s.offlineFim, offlineFimContagem: s.offlineFimContagem,
         receivedPendingNotifications: s.pendentesNotificados, conexoesAbertas: s.conexoesAbertas,
         myAppStateKeyIdPresente: myAppStateKeyIdPresente == null ? null : Boolean(myAppStateKeyIdPresente),
-        nosOfflineVistos: s.nosOffline, nosVivosVistos: s.nosVivos,
+        nosOfflineVistos: s.nosOffline, nosVivosVistos: s.nosVivos, retidasPerdidasNoFechamento: s.retidasPerdidas,
         segundosDesdeOfflineFim: seg(s.offlineFimEm), segundosDesdeUltimoFlush: seg(s.ultimoFlushEm), segundosDesdeUltimaEnfileirada: seg(s.ultimaEnfileiradaEm),
       };
     },
@@ -256,13 +270,20 @@ const LIMITE_IDS_EM_MEMORIA = 5000;
  * @param {(h: any) => void} [deps.cancelar] clearInterval injetável
  * @param {Console} [deps.consoleAlvo] onde observar a linha "Bad MAC" da libsignal (padrão: console global)
  * @param {() => number} [deps.agora] relógio injetável
+ * @param {boolean|object} [deps.offlineObserve] (C.9.6) liga o observador da fila offline (máquina de estados diagnóstica + watchdog em modo
+ *   OBSERVE). Só vale com o diagnóstico ligado. `true` usa os PADRÕES; um objeto sobrescreve limites (testes).
+ * @param {() => (number|null)} [deps.obterEpoch] epoch técnico da lease (só para rotular os eventos do observador)
  */
-export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emitir, intervaloMs = 30_000, agendar = setInterval, cancelar = clearInterval, consoleAlvo = console, agora = () => Date.now() } = {}) {
+export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emitir, intervaloMs = 30_000, agendar = setInterval, cancelar = clearInterval, consoleAlvo = console, agora = () => Date.now(), offlineObserve = false, obterEpoch = () => null } = {}) {
   const { escopo, valido } = interpretarEscopo(escopoBruto);
   const contadores = diagHabilitado ? criarContadoresInbound() : undefined;
   const ciclo = diagHabilitado ? criarCicloFilaOffline({ agora }) : undefined;
   const politica = criarPoliticaInbound({ escopo, contadores });
   const filtrar = escopo === ESCOPO_DIRECT_ONLY;
+  // (C.9.6) O observador NÃO recebe ev/ws/socket: só dados, leitores por geração, emitir e timer. Ver src/offlineObserve.js.
+  const observador = diagHabilitado && offlineObserve
+    ? criarObservadorOffline({ agora, emitir, obterEpoch, agendar, cancelar, ...(typeof offlineObserve === "object" ? offlineObserve : {}) })
+    : undefined;
 
   let timer = null;
   let consoleOriginal = null;
@@ -285,7 +306,7 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
         const { stanzas, mensagens, retries, badMacLinhas } = contadores.snapshot();
         const tipos = TIPOS_JID.filter((t) => stanzas[t] || mensagens[t] || retries[t]).map((tipo) => {
           const s = stanzas[tipo] ?? { message: 0, receipt: 0, notification: 0, ignoradas: 0 };
-          const m = mensagens[tipo] ?? { decryptTentado: 0, decryptOk: 0, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 0, entregues: 0, encaminhadas: 0 };
+          const m = mensagens[tipo] ?? { decryptTentado: 0, decryptOk: 0, decryptFalha: 0, motivos: {}, enfileiradas: 0, emitidasDireto: 0, entregues: 0, encaminhadas: 0, fromMe: { sim: { tentado: 0, falha: 0 }, nao: { tentado: 0, falha: 0 }, desconhecido: { tentado: 0, falha: 0 } } };
           const r = retries[tipo] ?? { total: 0, comPreChave: 0, semPreChave: 0 };
           return {
             tipo,
@@ -293,6 +314,7 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
             decryptTentado: m.decryptTentado, decryptOk: m.decryptOk, decryptFalha: m.decryptFalha,
             motivos: Object.entries(m.motivos).map(([motivo, n]) => ({ motivo, n })),
             enfileiradas: m.enfileiradas, emitidasDireto: m.emitidasDireto, entregues: m.entregues, encaminhadas: m.encaminhadas,
+            fromMe: ["sim", "nao", "desconhecido"].map((v) => ({ v, tentado: m.fromMe[v].tentado, falha: m.fromMe[v].falha })),
             retryTotal: r.total, retryComPreChave: r.comPreChave, retrySemPreChave: r.semPreChave,
           };
         });
@@ -305,7 +327,10 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
       if (ciclo?.mudou()) {
         let appState = null; try { appState = obterAppStateKey?.() ?? null; } catch { appState = null; }
         let buf = null; try { buf = obterBufferAtivo?.() ?? null; } catch { buf = null; }
-        emitir("info", "inbound.fila_offline", ciclo.payload(appState, buf));
+        const p = ciclo.payload(appState, buf);
+        const est = observador?.estado?.();
+        if (est) { p.socketGeneration = est.socketGeneration; p.fase = est.fase; }
+        emitir("info", "inbound.fila_offline", p);
         ciclo.marcarEmitido();
       }
     } catch { /* idem */ }
@@ -333,6 +358,8 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
     valido,
     escopoBruto,
     diagnostico: Boolean(contadores),
+    /** (C.9.6) true se o observador da fila offline (máquina de estados + watchdog OBSERVE) está ligado */
+    offlineObserve: Boolean(observador),
     /** Opções a MESCLAR nas do socket. Vazio em ALL_SUPPORTED (com ou sem diagnóstico). */
     opcoesSocket: () => (filtrar ? { shouldIgnoreJid: politica.shouldIgnoreJid } : {}),
     /** true se o filtro real está ativo (só DIRECT_ONLY) */
@@ -353,16 +380,28 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
      */
     observarSocket(socket) {
       if (!contadores) return;
+      ciclo.aoNovoSocket();   // (C.9.6) o buffer do socket anterior morreu com ele
+      const ev = socket?.ev;
+      const ws = socket?.ws;
+      let g;
+      try {
+        g = observador?.novaGeracao({
+          lerBufferAtivo: () => (typeof ev?.isBuffering === "function" ? ev.isBuffering() === true : false),
+          lerSocketAberto: () => ws?.isOpen === true,
+        });
+      } catch { g = undefined; }
       obterIdentidade = () => identidadeDe(socket?.user ?? socket?.authState?.creds?.me);
       obterAppStateKey = () => Boolean(socket?.authState?.creds?.myAppStateKeyId);
       obterBufferAtivo = () => (typeof socket?.ev?.isBuffering === "function" ? socket.ev.isBuffering() === true : null);
-      const ws = socket?.ws;
       if (typeof ws?.on === "function") {
         const obs = (evento, fn) => { try { ws.on(evento, (node) => { try { fn(node); } catch { /* idem */ } }); } catch { /* idem */ } };
         for (const [evento, especie] of [["CB:message", "message"], ["CB:receipt", "receipt"], ["CB:notification", "notification"]]) {
           obs(evento, (node) => {
-            contadores.aoStanza(classificarJid(node?.attrs?.from, identidade()), false, especie);
+            const tipoStanza = classificarJid(node?.attrs?.from, identidade());
+            contadores.aoStanza(tipoStanza, false, especie);
             ciclo.aoNo(Boolean(node?.attrs?.offline));   // mesma regra do Baileys: `!!node.attrs.offline`
+            // (C.9.6) valor BRUTO de attrs.offline e o `t` (só para bucket de idade): o observador classifica antes de qualquer coerção
+            observador?.aoNo(g, { especie, tipo: tipoStanza, offlineAttr: node?.attrs?.offline, t: node?.attrs?.t });
             if (especie === "message" && node?.attrs?.id != null) {
               const tinhaEnc = Array.isArray(node.content) && node.content.some((c) => c?.tag === "enc");
               encPorId.set(node.attrs.id, tinhaEnc);
@@ -370,13 +409,25 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
             }
           });
         }
-        obs("CB:ib,,offline_preview", () => ciclo.aoOfflinePreview());
+        obs("CB:ib,,offline_preview", (node) => { ciclo.aoOfflinePreview(); observador?.aoPreview(g, node); });
         obs("CB:ib,,offline", (node) => {
           const filho = Array.isArray(node?.content) ? node.content.find((c) => c?.tag === "offline") : null;
           ciclo.aoOfflineFim(Number(filho?.attrs?.count));
         });
+        if (observador) {
+          // qualquer frame recebido prova que o socket está vivo (não é progresso da fila offline)
+          obs("frame", () => observador.aoAtividade(g));
+          // o marcador é observado ANTES do handler do Baileys (prependListener): assim sabemos quantas retidas o flush oficial vai liberar.
+          // O listener só LÊ: não altera nada e o handler do Baileys roda em seguida, como sempre.
+          const antesDoMarcador = (node) => {
+            try {
+              const filho = Array.isArray(node?.content) ? node.content.find((c) => c?.tag === "offline") : null;
+              observador.aoMarcador(g, Number(filho?.attrs?.count));
+            } catch { /* idem */ }
+          };
+          try { if (typeof ws.prependListener === "function") ws.prependListener("CB:ib,,offline", antesDoMarcador); else ws.on("CB:ib,,offline", antesDoMarcador); } catch { /* idem */ }
+        }
       }
-      const ev = socket?.ev;
       if (ev && typeof ev.emit === "function") {
         const bufferando = () => { try { return typeof ev.isBuffering === "function" ? ev.isBuffering() === true : false; } catch { return false; } };
         const emitOriginal = ev.emit;
@@ -384,10 +435,11 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
           try {
             if (evento === "messages.upsert") {
               const buf = bufferando(); const id = identidade();
-              for (const m of dados?.messages ?? []) { contadores.aoMensagemEmitida(m, id, buf); if (buf) ciclo.aoEnfileirada(); }
+              for (const m of dados?.messages ?? []) { contadores.aoMensagemEmitida(m, id, buf); if (buf) ciclo.aoEnfileirada(); observador?.aoUpsert(g, buf); }
             } else if (evento === "connection.update") {
               if (dados?.receivedPendingNotifications) ciclo.aoPendentesNotificados();
               if (dados?.connection === "open") ciclo.aoConexaoAberta();
+              if (dados?.connection === "close") observador?.aoFechado(g);
             }
           } catch { /* idem */ }
           return emitOriginal.call(this, evento, dados, ...resto);
@@ -405,7 +457,7 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
           const flushOriginal = ev.flush;
           ev.flush = function flushObservado(...args) {
             const r = flushOriginal.apply(this, args);
-            try { ciclo.aoFlush(r === true); } catch { /* idem */ }
+            try { ciclo.aoFlush(r === true); observador?.aoFlush(g, r === true); } catch { /* idem */ }
             return r;
           };
         }
@@ -444,8 +496,12 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
     snapshot: () => contadores?.snapshot(),
     /** estado do ciclo da fila offline (só números/booleanos) ou undefined se desligado */
     estadoFila: () => ciclo?.payload(obterAppStateKey?.() ?? null, obterBufferAtivo?.() ?? null),
+    /** (C.9.6) estado do observador da fila offline (geração atual; só números/booleanos/vocabulário fechado) ou undefined se desligado */
+    estadoObserve: () => observador?.estado(),
+    metricasObserve: () => observador?.metricas(),
     emitirResumo,
     parar() {
+      observador?.parar();
       if (timer) { cancelar(timer); timer = null; }
       if (consoleOriginal && consoleAlvo?.error === consoleEnvolvido) consoleAlvo.error = consoleOriginal;
       consoleOriginal = null; consoleEnvolvido = null;
