@@ -158,7 +158,7 @@ export function deJid(jid) {
  *   produção, server.js SEMPRE injeta: `conectar()` recusa rodar sem
  *   `souLeader()`, e `heartbeat()` nunca manda nada sem `contexto()` válido.
  */
-export function criarSessaoBaileys({ authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout, cancelar = clearTimeout, leaseManager }) {
+export function criarSessaoBaileys({ authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout, cancelar = clearTimeout, leaseManager, inbound }) {
   let socket = null;
   let status = STATUS_CONEXAO.DISCONNECTED;
   let telefone = null;
@@ -823,6 +823,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   }
 
   function aoMessagesUpsert({ messages }) {
+    try { inbound?.aoMensagens?.(messages); } catch { /* diagnóstico de inbound nunca interfere no encaminhamento */ }
     for (const m of messages ?? []) {
       if (m.key?.fromMe) continue; // eco da própria mensagem enviada — ignorar
       handlersMensagem.forEach((h) => h({
@@ -877,7 +878,11 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     origemSocket = origem;
     socketOpen = false;
     authConfirmado = authConfirmadoPreviamente;
-    socket = fabricaSocket({ auth: authAdapter.comoAuthState(), logger: criarLoggerBaileysSilencioso(), printQRInTerminal: false });
+    // C.9.3 — `inbound.opcoesSocket()` é `{}` em ALL_SUPPORTED (com ou sem diagnóstico): nada muda no socket.
+    // O diagnóstico só OBSERVA (logger com contagem de retry + listeners ws de leitura); desligado, é o mesmo logger.
+    const loggerBaileys = criarLoggerBaileysSilencioso();
+    socket = fabricaSocket({ auth: authAdapter.comoAuthState(), logger: inbound?.envolverLogger?.(loggerBaileys) ?? loggerBaileys, printQRInTerminal: false, ...(inbound?.opcoesSocket?.() ?? {}) });
+    try { inbound?.observarSocket?.(socket); } catch { /* diagnóstico nunca interfere */ }
     const socketDesteListener = socket;
     socket.ev.on("connection.update", (update) => {
       // Guarda de GERAÇÃO de socket (Checkpoint C3.5-C.8.2): um evento tardio

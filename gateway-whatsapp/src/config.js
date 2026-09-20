@@ -42,6 +42,13 @@ export const config = {
   // explícito. NÃO controla a guarda de log da libsignal (essa é segurança e sempre ativa).
   metricasAuthHabilitadas: /^(1|true|yes|on)$/i.test(String(process.env.WHATSAPP_AUTH_METRICS_ENABLED ?? "").trim()),
 
+  // Checkpoint C3.5-C.9.3 — escopo de INBOUND. ALL_SUPPORTED (padrão) = comportamento anterior; DIRECT_ONLY ignora
+  // grupos/status/broadcast/newsletter ANTES de decifrar (chat direto sempre passa). Valor inválido cai no padrão e é
+  // avisado no boot (server.js). Ver src/inboundScope.js.
+  inboundEscopoBruto: process.env.WHATSAPP_INBOUND_SCOPE,
+  // Contadores SANITIZADOS por tipo de JID (evento `inbound.contadores`). Desligado por padrão.
+  inboundDiagHabilitado: /^(1|true|yes|on)$/i.test(String(process.env.WHATSAPP_INBOUND_DIAG_ENABLED ?? "").trim()),
+
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",
 

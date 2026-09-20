@@ -17,6 +17,7 @@ import { criarSessaoBaileys } from "./baileysSession.js";
 import { criarLeaseManager } from "./leaseManager.js";
 import { log } from "./logsafe.js";
 import { instalarGuardaLibsignal } from "./libsignalLogGuard.js";
+import { criarInboundGateway } from "./inboundScope.js";
 
 // Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
 // console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
@@ -75,11 +76,24 @@ const authAdapter = criarAuthStateAdapter({
     emitir: (dados) => log("info", "auth_state.metricas", dados),
   }),
 });
+// C.9.3 — escopo de inbound (padrão ALL_SUPPORTED = sem mudança) + contadores sanitizados opcionais.
+const inbound = criarInboundGateway({
+  escopoBruto: config.inboundEscopoBruto,
+  diagHabilitado: config.inboundDiagHabilitado,
+  emitir: (nivel, evento, dados) => log(nivel, evento, dados),
+});
+log(inbound.valido ? "info" : "warn", inbound.valido ? "inbound.escopo" : "inbound.escopo_invalido_usando_padrao", {
+  escopo: inbound.escopo, diagnostico: inbound.diagnostico,
+  // prova operacional: só DIRECT_ONLY injeta um shouldIgnoreJid no socket; ALL_SUPPORTED (com ou sem diagnóstico) não injeta nada
+  shouldIgnoreJidInjetado: "shouldIgnoreJid" in inbound.opcoesSocket(),
+});
+
 const sessao = criarSessaoBaileys({
   authAdapter,
   backendClient,
   config,
   fabricaSocket: makeWASocket,
+  inbound,
   DisconnectReasonLoggedOut: DisconnectReason.loggedOut,
   leaseManager,
 });
