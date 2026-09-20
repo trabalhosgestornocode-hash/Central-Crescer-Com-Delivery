@@ -30,6 +30,7 @@ import { log, mascararTelefone } from "./logsafe.js";
 import { erro, CODIGOS } from "./errors.js";
 import { criarLoggerBaileysSilencioso } from "./logger-baileys-silencioso.js";
 import { classificarFalhaBackend } from "./classificacaoFalhas.js";
+import { motivoFechamento } from "./motivoFechamento.js";
 
 // Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
 // numéricos de DisconnectReason do Baileys (node_modules/baileys/lib/Types/
@@ -447,6 +448,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
         tentativa: tentativasReconexao,
         autenticadaAlgumaVez,
         ...(diagnosticoErro ?? {}),
+        // C.9.1 — só a ORIGEM estrutural (stream:error vs failure + tag do protocolo); nunca conteúdo.
+        ...motivoFechamento(lastDisconnect?.error),
       });
       heartbeat().catch(() => {});
 

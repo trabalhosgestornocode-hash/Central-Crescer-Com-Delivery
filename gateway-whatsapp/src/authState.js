@@ -98,6 +98,13 @@ function replacerBuffers(_chave, valor) {
   }
   return valor;
 }
+/**
+ * Mesmo serializador do blob persistido, exposto para a telemetria estrutural
+ * (src/authMetrics.js) medir os MESMOS bytes que são cifrados/enviados.
+ */
+export function serializarAuth(valor) {
+  return JSON.stringify(valor, replacerBuffers);
+}
 function reviverBuffers(_chave, valor) {
   if (valor && typeof valor === "object" && typeof valor.__buffer === "string") {
     return Buffer.from(valor.__buffer, "base64");
@@ -122,10 +129,14 @@ function reviverBuffers(_chave, valor) {
  * @param {(handle: any) => void} [deps.cancelar] injeção de clearTimeout.
  * @param {readonly number[]} [deps.backoffRetryMs] backoff do retry em segundo
  *   plano — o TAMANHO da lista é o número máximo de retries (limitado).
+ * @param {ReturnType<typeof import('./authMetrics.js').criarTelemetriaAuth>} [deps.telemetriaAuth]
+ *   Checkpoint C3.5-C.9.1 — telemetria ESTRUTURAL opcional (default: ausente/inerte). Só OBSERVA:
+ *   nunca altera geração, fila, fencing, retry nem o que é enviado; qualquer falha dela é engolida.
  */
 export function criarAuthStateAdapter({
   backendClient, chaveEncriptacaoEnv, obterContextoLease, aoLeaseStale,
   agendar = setTimeout, cancelar = clearTimeout, backoffRetryMs = BACKOFF_RETRY_PERSISTENCIA_MS,
+  telemetriaAuth,
 }) {
   const chave = normalizarChave(chaveEncriptacaoEnv);
 
@@ -297,6 +308,15 @@ export function criarAuthStateAdapter({
       // Falha local de cifra (chave inválida etc.) — repetir não ajuda.
       throw new AuthPersistenciaError("permanente", "cripto");
     }
+    if (telemetriaAuth?.habilitada) {
+      // Só para a telemetria: tamanho do cifrado e do corpo HTTP EXATO (mesma serialização do
+      // backendClient.chamar = JSON.stringify do payload; o cifrado é base64 ASCII, sem escapes).
+      snap.cifradoChars = cifrado.length;
+      snap.corpoBytes = Buffer.byteLength(JSON.stringify({
+        authStateEncrypted: "", authStateVersion: `v${versao}`,
+        gatewayProcessId: snap.contexto?.gatewayProcessId, leaseEpoch: snap.contexto?.leaseEpoch,
+      })) + cifrado.length;
+    }
     try {
       const r = await backendClient.salvarAuthState({
         authStateEncrypted: cifrado, authStateVersion: `v${versao}`,
@@ -359,6 +379,12 @@ export function criarAuthStateAdapter({
     // Nunca logar o plaintext nem o cifrado — só o tamanho, útil para
     // dimensionar o crescimento do blob ao longo do tempo.
     log("info", "auth_state.persistido", { bytesPlaintext: snap.plaintext.length, geracao: snap.geracao, origem });
+    if (telemetriaAuth?.habilitada) {
+      telemetriaAuth.aoConfirmar(snap, {
+        cifradoChars: snap.cifradoChars, corpoBytes: snap.corpoBytes,
+        geracao: snap.geracao, epoch: snap.contexto?.leaseEpoch,
+      });
+    }
   }
 
   /** Encadeia a gravação de `snap` no fim da fila serial desta instância. */
@@ -402,6 +428,9 @@ export function criarAuthStateAdapter({
       throw new AuthPersistenciaError("permanente", "sem_lease_local");
     }
     const snap = { geracao, plaintext, contexto: contextoLease };
+    // Telemetria estrutural (C.9.1): capturada AQUI, no mesmo instante síncrono do snapshot, mas
+    // só quando habilitada; `capturar` nunca lança e o resultado só é lido depois da confirmação.
+    if (telemetriaAuth?.habilitada) snap.metricas = telemetriaAuth.capturar({ creds, keys: keysPorTipo }, plaintext);
     snapshotMaisNovo = snap;
     return enfileirar(snap, "evento");
   }
@@ -551,6 +580,7 @@ export function criarAuthStateAdapter({
       authSessionIdAtual = r.authSessionId ?? null;
       // A memória agora É o estado autorizado pelo backend: deixa de ser obsoleta.
       memoriaObsoleta = false;
+      if (telemetriaAuth?.habilitada) telemetriaAuth.aoCarregar(); // nova "geração de conexão" (marca de reconexão)
       return { status: "loaded", registered: !!creds.registered, authConfirmado: r.authConfirmado === true };
     } catch (e) {
       if (e instanceof AuthStateLoadError) throw e;

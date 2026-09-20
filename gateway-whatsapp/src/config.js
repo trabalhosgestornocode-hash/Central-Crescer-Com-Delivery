@@ -37,6 +37,11 @@ export const config = {
     tetoMs: Number(process.env.WHATSAPP_RECONNECT_TETO_MS ?? 60_000),
   },
 
+  // Checkpoint C3.5-C.9.1 — telemetria ESTRUTURAL do auth state (evento `auth_state.metricas`:
+  // só nomes de categoria, contagens e bytes). DESLIGADA por padrão; só liga com valor
+  // explícito. NÃO controla a guarda de log da libsignal (essa é segurança e sempre ativa).
+  metricasAuthHabilitadas: /^(1|true|yes|on)$/i.test(String(process.env.WHATSAPP_AUTH_METRICS_ENABLED ?? "").trim()),
+
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",
 

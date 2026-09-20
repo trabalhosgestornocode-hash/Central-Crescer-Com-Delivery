@@ -11,10 +11,17 @@ import { config, validarConfig } from "./config.js";
 import { exigirHmac } from "./hmac.js";
 import { criarRotas, health } from "./routes.js";
 import { criarBackendClient } from "./backendClient.js";
-import { criarAuthStateAdapter } from "./authState.js";
+import { criarAuthStateAdapter, serializarAuth } from "./authState.js";
+import { criarTelemetriaAuth } from "./authMetrics.js";
 import { criarSessaoBaileys } from "./baileysSession.js";
 import { criarLeaseManager } from "./leaseManager.js";
 import { log } from "./logsafe.js";
+import { instalarGuardaLibsignal } from "./libsignalLogGuard.js";
+
+// Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
+// console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
+// é correção de segurança de log, não telemetria. Ver src/libsignalLogGuard.js.
+instalarGuardaLibsignal();
 
 // Falhar no boot é melhor que subir sem autenticação ou sem cifra.
 validarConfig();
@@ -61,6 +68,12 @@ const authAdapter = criarAuthStateAdapter({
   chaveEncriptacaoEnv: config.chaveEncriptacaoAuthState,
   obterContextoLease: () => leaseManager.contexto(),
   aoLeaseStale: (motivo) => leaseManager.notificarPerdaExterna(motivo),
+  // C.9.1 — inerte (`{habilitada:false}`) enquanto WHATSAPP_AUTH_METRICS_ENABLED não for ligada.
+  telemetriaAuth: criarTelemetriaAuth({
+    habilitada: config.metricasAuthHabilitadas,
+    serializar: serializarAuth,
+    emitir: (dados) => log("info", "auth_state.metricas", dados),
+  }),
 });
 const sessao = criarSessaoBaileys({
   authAdapter,
