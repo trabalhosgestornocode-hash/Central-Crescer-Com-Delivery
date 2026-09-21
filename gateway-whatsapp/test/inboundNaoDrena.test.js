@@ -39,8 +39,8 @@ describe("a instrumentação não chama flush/buffer nem emite eventos (análise
     const s = semComentarios(fonte("baileysSession.js"));
     assert.ok(!/\.flush\s*\(/.test(s));
     assert.ok(/inbound\?\.aoEncaminhada\?\.\(m\)/.test(s));
-    // o payload enviado ao backend continua exatamente {providerMessageId, telefoneE164, recebidoEm}
-    assert.ok(/notificarMensagemRecebida\(\{\s*providerMessageId: m\.key\?\.id,\s*telefoneE164: m\.key\?\.remoteJid \? deJid\(m\.key\.remoteJid\) : null,\s*recebidoEm: new Date\(\)\.toISOString\(\),\s*\}\)/.test(s));
+    // Checkpoint F: o payload vem do CONTRATO (inboundContrato.montarEventoInbound) — nunca mais deJid(remoteJid) → telefone
+    assert.ok(/notificarMensagemRecebida\(evento\)/.test(s) && /montarEventoInbound\(m,/.test(s) && !/deJid\(m\.key/.test(s));
   });
 
   test("em ALL_SUPPORTED (com diagnóstico) nenhum shouldIgnoreJid é injetado", () => {

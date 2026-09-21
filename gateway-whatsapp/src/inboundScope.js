@@ -107,6 +107,8 @@ const MOTIVOS = [
   [/invalid prekey|missing signedprekey|prekey/i, "prekey_invalida"],
   [/sender.?key/i, "sender_key"],
 ];
+/** (Checkpoint F) vocabulário FECHADO dos motivos de falha de decrypt — o mesmo de `classificarMotivoFalha` (+ "outro"). */
+export const MOTIVOS_FALHA_DECRYPT = Object.freeze([...MOTIVOS.map(([, nome]) => nome), "outro"]);
 /** Vocabulário FECHADO: nunca devolve texto do erro. */
 export function classificarMotivoFalha(texto) {
   const t = typeof texto === "string" ? texto : "";

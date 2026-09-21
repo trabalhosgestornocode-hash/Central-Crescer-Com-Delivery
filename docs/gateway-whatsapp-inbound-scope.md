@@ -226,3 +226,25 @@ logado, persistido ou devolvido. As impressões ficam só em memória e **nunca 
 | igual | baixo | qualquer | o servidor pode escolher subconjuntos diferentes (**não** concluir paginação) |
 | diminui | alto | qualquer | investigar antes de concluir (contagem sem consumo real?) |
 Limitações: estrita 0% + frouxa alta ⇒ mesmo item, outro endereço; o teto de 500/geração trunca a comparação (sinalizado); um item reenviado com outro `id` não é reconhecido.
+
+## Checkpoint F — contrato inbound seguro (Gateway → backend `POST /eventos/mensagem-recebida`)
+
+Pré-requisito do futuro `OFFLINE_RECOVERY`. **Nada aqui faz flush, paginação, segundo `offline_batch`, recovery, envio ou liga o Agente.**
+
+### O que era perigoso (auditado no código real)
+`aoMessagesUpsert` derivava o "telefone" com `deJid(remoteJid)` = `"+" + jid.split("@")[0].split(":")[0]` para QUALQUER JID: um LID de 15 dígitos (`100000000000001@lid`), o id de um grupo, `status@broadcast` ou um newsletter viravam um
+"telefone" que passa no formato E.164; stubs de falha de decrypt seguiam como mensagem normal; e nada dizia se a mensagem veio ao vivo ou da fila offline. No backend a rota aceitava qualquer JSON (sem validação) e o repo era um stub.
+A constraint `contatos_whatsapp.telefone_e164 ~ '^\+[1-9][0-9]{7,14}$'` ACEITA um LID de 15 dígitos como telefone.
+
+### Contrato (`gateway-whatsapp/src/inboundContrato.js` ⇄ `backend/.../inbound/inbound.contrato.js`, paridade travada por teste)
+`contratoInbound` (=1), `providerMessageId`, `origemTipo` (`LIVE | OFFLINE_NORMAL | OFFLINE_RECOVERY`), `origemJidTipo` (vocabulário de `classificarJid`: `direct_pn | direct_lid_self | direct_lid_other | group | status | broadcast | newsletter | meta_ai | technical | unknown`),
+`fromMe`, `telefoneE164`, `telefoneOrigem` (`JID_PN | SENDER_PN`), `falhaDecrypt`, `motivoFalhaDecrypt` (vocabulário fechado), `stubSistema`, `recebidoEm`. Sem conteúdo. Chaves fechadas (desconhecida ⇒ 400).
+* **Telefone só com PN real** (`extrairTelefoneReal`): `direct_pn` + `fromMe=false` ⇒ do JID de telefone (device removido); LID de OUTRA pessoa ⇒ SÓ se o Baileys entregou `key.senderPn` (JID `@s.whatsapp.net` válido); o próprio número, LID próprio, grupo, status, broadcast, newsletter, meta_ai, técnico, desconhecido e `fromMe` ⇒ `null`. `deJid` não é mais fonte de telefone.
+* **Origem por mensagem** (`criarRastreadorOrigem`): mapa em memória (≤5.000, FIFO, limpo a cada socket) id da stanza → origem, alimentado por `ws.prependListener("CB:message")` com a regra do Baileys (`!!attrs.offline`). NUNCA pelo `type` consolidado do upsert. Origem desconhecida ⇒ `OFFLINE_NORMAL` (fail-safe). `OFFLINE_RECOVERY` existe no contrato/validação/estado, mas nada o produz ainda.
+* **Falha de decrypt**: stub `CIPHERTEXT` ⇒ `falhaDecrypt=true` + motivo do vocabulário fechado (nunca o texto do erro). Outro stub de protocolo ⇒ `stubSistema=true`.
+
+### Backend
+* Validação estrita + cross-field (`validarEventoInbound`): telefone ⇔ origem; `direct_pn`⇒`JID_PN`, `direct_lid_other`⇒`SENDER_PN`, qualquer outro tipo/`fromMe` ⇒ sem telefone; `falhaDecrypt ⇔ motivo`; falha e stub exclusivos. O erro é um CÓDIGO fechado.
+* Estado (`decidirEstadoInbound`): `fromMe`/stub/chat que não é cliente direto ⇒ `IGNORED`; `OFFLINE_RECOVERY` ⇒ `QUARANTINED`; falha de decrypt ⇒ `QUARANTINED`; `LIVE` ⇒ `RECEIVED`; `OFFLINE_NORMAL` ⇒ `HISTORICO`. `PROCESSED` é reservado.
+* Persistência PRÓPRIA (migration **090**, `whatsapp_inbound_mensagens`; nunca `comunicacao_mensagens`, cujo claim de outbox não filtra `direcao`): idempotente por `(organizacao_id, provider_message_id)` via `whatsapp_inbound_registrar` (insert atômico `on conflict do nothing`); `organizacao_id` só da config do backend; CHECKs espelham as regras (LID nunca vira telefone, recovery/fromMe/falha nunca `RECEIVED`); RLS + revoke de anon/authenticated. A 090 NÃO foi aplicada em nenhum banco Supabase (foi validada num Postgres 17 descartável).
+* Automação (fail-closed, `motivoBloqueioAutomacao`): só `LIVE` + cliente direto + sem `fromMe`/falha/stub + `RECEIVED`. Checado na ROTA (só chama o provider se elegível e não-duplicata), no PROVIDER (`_receberEventoMensagem`) e no SERVICE (`onMensagemRecebida`).

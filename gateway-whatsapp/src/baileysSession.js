@@ -31,6 +31,8 @@ import { erro, CODIGOS } from "./errors.js";
 import { criarLoggerBaileysSilencioso } from "./logger-baileys-silencioso.js";
 import { classificarFalhaBackend } from "./classificacaoFalhas.js";
 import { motivoFechamento } from "./motivoFechamento.js";
+import { identidadeDe } from "./inboundScope.js";
+import { criarRastreadorOrigem, observarOrigem, montarEventoInbound } from "./inboundContrato.js";
 
 // Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
 // numéricos de DisconnectReason do Baileys (node_modules/baileys/lib/Types/
@@ -233,6 +235,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   let conectandoAgora = false;
   let falhasInesperadasReconexao = 0;
   const handlersMensagem = [];
+  // Checkpoint F — origem POR MENSAGEM (LIVE | OFFLINE_NORMAL) alimentada pelo CB:message; nunca pelo type consolidado do upsert.
+  const rastreadorOrigem = criarRastreadorOrigem();
   const statusPorMensagemId = new Map(); // providerMessageId -> {status}
 
   function backoffMs() {
@@ -827,17 +831,19 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     for (const m of messages ?? []) {
       if (m.key?.fromMe) continue; // eco da própria mensagem enviada — ignorar
       try { inbound?.aoEncaminhada?.(m); } catch { /* diagnóstico nunca interfere */ }
-      handlersMensagem.forEach((h) => h({
-        providerMessageId: m.key?.id,
-        telefoneE164: m.key?.remoteJid ? deJid(m.key.remoteJid) : null,
-        conteudo: m.message ?? null,
-        recebidoEm: new Date().toISOString(),
-      }));
-      backendClient.notificarMensagemRecebida({
-        providerMessageId: m.key?.id,
-        telefoneE164: m.key?.remoteJid ? deJid(m.key.remoteJid) : null,
-        recebidoEm: new Date().toISOString(),
-      }).catch((e) => log("warn", "notificar_mensagem_recebida.falhou", { erro: e?.message }));
+      // Checkpoint F — contrato inbound (inboundContrato.js): atribuição correta, origem por mensagem, falha de decrypt explícita.
+      // O telefone NUNCA vem de deJid(): só de um PN real (ver extrairTelefoneReal). Sem id não há como deduplicar ⇒ não encaminha.
+      let evento = null;
+      try {
+        evento = montarEventoInbound(m, {
+          origemTipo: rastreadorOrigem.consumir(m.key?.id),
+          identidade: identidadeDe(socket?.user ?? socket?.authState?.creds?.me),
+        });
+      } catch { evento = null; }
+      if (!evento) { log("warn", "inbound.evento_descartado", { motivo: "sem_id_ou_erro_de_atribuicao" }); continue; }
+      handlersMensagem.forEach((h) => h({ ...evento, conteudo: m.message ?? null }));
+      backendClient.notificarMensagemRecebida(evento)
+        .catch((e) => log("warn", "notificar_mensagem_recebida.falhou", { erro: e?.message }));
     }
   }
 
@@ -884,6 +890,8 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     const loggerBaileys = criarLoggerBaileysSilencioso();
     socket = fabricaSocket({ auth: authAdapter.comoAuthState(), logger: inbound?.envolverLogger?.(loggerBaileys) ?? loggerBaileys, printQRInTerminal: false, ...(inbound?.opcoesSocket?.() ?? {}) });
     try { inbound?.observarSocket?.(socket); } catch { /* diagnóstico nunca interfere */ }
+    // Checkpoint F: passivo (só LÊ o stanza); independe do diagnóstico estar ligado.
+    try { observarOrigem(socket, rastreadorOrigem); } catch { /* nunca interfere */ }
     const socketDesteListener = socket;
     socket.ev.on("connection.update", (update) => {
       // Guarda de GERAÇÃO de socket (Checkpoint C3.5-C.8.2): um evento tardio

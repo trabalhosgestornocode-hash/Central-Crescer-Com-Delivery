@@ -3,6 +3,7 @@
 // determinístico injetado (mesmo mecanismo de dependência que server.js usa
 // para injetar o `makeWASocket` real em produção).
 import { test, describe, mock } from "node:test";
+import { proto } from "baileys";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { criarSessaoBaileys, STATUS_CONEXAO, paraJid, deJid } from "../src/baileysSession.js";
@@ -22,6 +23,7 @@ function socketFalsoFabrica() {
     const ev = new EventEmitter();
     const socket = {
       ev,
+      ws: new EventEmitter(),   // Checkpoint F: o CB:message alimenta a origem (LIVE/OFFLINE) por mensagem
       user: null,
       sendMessage: mock.fn(async (_jid, _conteudo) => ({ key: { id: `wa-${criados.length}-${Date.now()}` } })),
       readMessages: mock.fn(async () => {}),
@@ -950,6 +952,94 @@ describe("baileysSession — eventos de mensagem", () => {
       messages: [{ key: { fromMe: false, id: "m1", remoteJid: "5511999990000@s.whatsapp.net" } }],
     });
     assert.equal(handler.mock.calls.length, 1);
+  });
+
+  describe("Checkpoint F — contrato do evento inbound (origem por mensagem, telefone só com PN real, falha de decrypt explícita)", () => {
+    async function sessaoComSocket() {
+      const fabricaSocket = socketFalsoFabrica(); const backendClient = backendClientFalso();
+      const sessao = criarSessaoBaileys({ authAdapter: authAdapterFalso(), backendClient, config: configFalso(), fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT });
+      await sessao.conectar();
+      const sock = fabricaSocket.criados[0]; const handler = mock.fn(); sessao.onMessage(handler);
+      const enviados = () => backendClient.notificarMensagemRecebida.mock.calls.map((c) => c.arguments[0]);
+      return { sock, handler, enviados, sessao };
+    }
+    const PN = "5511999990000@s.whatsapp.net";
+
+    test("o evento enviado ao backend tem EXATAMENTE as chaves do contrato; handlers recebem o mesmo evento + conteudo", async () => {
+      const { sock, handler, enviados } = await sessaoComSocket();
+      sock.ws.emit("CB:message", { attrs: { id: "m1", from: PN } });
+      sock.ev.emit("messages.upsert", { messages: [{ key: { fromMe: false, id: "m1", remoteJid: PN }, message: { conversation: "oi" } }], type: "notify" });
+      assert.equal(enviados().length, 1);
+      const e = enviados()[0];
+      assert.deepEqual(Object.keys(e).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem"]);
+      assert.deepEqual([e.contratoInbound, e.providerMessageId, e.origemTipo, e.origemJidTipo, e.fromMe, e.telefoneE164, e.telefoneOrigem, e.falhaDecrypt, e.motivoFalhaDecrypt, e.stubSistema], [1, "m1", "LIVE", "direct_pn", false, "+5511999990000", "JID_PN", false, null, false]);
+      assert.ok(!JSON.stringify(e).includes("oi"), "conteúdo nunca vai ao backend");
+      assert.equal(handler.mock.calls.length, 1);
+      const h = handler.mock.calls[0].arguments[0];
+      assert.deepEqual({ ...h, conteudo: undefined }, { ...e, conteudo: undefined }); assert.deepEqual(h.conteudo, { conversation: "oi" });
+    });
+
+    test("origem POR MENSAGEM num mesmo messages.upsert (type 'notify' para todas): vivo=LIVE, offline '0'/'1'=OFFLINE_NORMAL, sem stanza=OFFLINE_NORMAL", async () => {
+      const { sock, enviados } = await sessaoComSocket();
+      sock.ws.emit("CB:message", { attrs: { id: "viva", from: PN } });
+      sock.ws.emit("CB:message", { attrs: { id: "off0", from: PN, offline: "0" } });
+      sock.ws.emit("CB:message", { attrs: { id: "off1", from: PN, offline: "1" } });
+      const m = (id) => ({ key: { fromMe: false, id, remoteJid: PN }, message: {} });
+      sock.ev.emit("messages.upsert", { messages: [m("off0"), m("viva"), m("off1"), m("sem-stanza")], type: "notify" });
+      assert.deepEqual(enviados().map((e) => [e.providerMessageId, e.origemTipo]), [["off0", "OFFLINE_NORMAL"], ["viva", "LIVE"], ["off1", "OFFLINE_NORMAL"], ["sem-stanza", "OFFLINE_NORMAL"]]);
+    });
+
+    test("LID de 15 dígitos NUNCA vira telefone; com senderPn válido o telefone vem SÓ dele; grupo, status, newsletter e broadcast ⇒ null", async () => {
+      const { sock, enviados } = await sessaoComSocket();
+      const m = (id, remoteJid, extra = {}) => ({ key: { fromMe: false, id, remoteJid, ...extra }, message: {} });
+      sock.ev.emit("messages.upsert", { messages: [
+        m("a", "100000000000001@lid"), m("b", "100000000000001@lid", { senderPn: "5511999990001@s.whatsapp.net" }), m("c", "120363000000000001@g.us", { participant: "100000000000001@lid" }),
+        m("d", "status@broadcast"), m("e", "120363000000000002@newsletter"), m("f", "1726876800@broadcast"),
+      ] });
+      const por = Object.fromEntries(enviados().map((e) => [e.providerMessageId, e]));
+      assert.deepEqual([por.a.origemJidTipo, por.a.telefoneE164, por.a.telefoneOrigem], ["direct_lid_other", null, null]);
+      assert.deepEqual([por.b.telefoneE164, por.b.telefoneOrigem], ["+5511999990001", "SENDER_PN"]);
+      assert.deepEqual(["c", "d", "e", "f"].map((k) => [por[k].origemJidTipo, por[k].telefoneE164]), [["group", null], ["status", null], ["newsletter", null], ["broadcast", null]]);
+    });
+
+    test("LID PRÓPRIO e PN próprio (identidade autenticada) nunca viram telefone de cliente", async () => {
+      const { sock, enviados } = await sessaoComSocket();
+      sock.user = { id: "5511999990009:7@s.whatsapp.net", lid: "100000000000009:7@lid" };
+      const m = (id, remoteJid) => ({ key: { fromMe: false, id, remoteJid }, message: {} });
+      sock.ev.emit("messages.upsert", { messages: [m("a", "100000000000009@lid"), m("b", "5511999990009@s.whatsapp.net")] });
+      assert.deepEqual(enviados().map((e) => [e.origemJidTipo, e.telefoneE164]), [["direct_lid_self", null], ["direct_pn", null]]);
+    });
+
+    test("stub de falha de decrypt ⇒ falhaDecrypt=true + motivo fechado (nunca o texto do erro); outro stub ⇒ stubSistema", async () => {
+      const { sock, enviados } = await sessaoComSocket();
+      sock.ev.emit("messages.upsert", { messages: [
+        { key: { fromMe: false, id: "f1", remoteJid: PN }, messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT, messageStubParameters: ["Bad MAC Error: Bad MAC SEGREDO-XYZ"] },
+        { key: { fromMe: false, id: "s1", remoteJid: "120363000000000001@g.us" }, messageStubType: proto.WebMessageInfo.StubType.GROUP_PARTICIPANT_ADD },
+      ] });
+      const [f, s] = enviados();
+      assert.deepEqual([f.falhaDecrypt, f.motivoFalhaDecrypt, f.stubSistema], [true, "bad_mac", false]);
+      assert.ok(!JSON.stringify(f).includes("SEGREDO-XYZ"));
+      assert.deepEqual([s.falhaDecrypt, s.motivoFalhaDecrypt, s.stubSistema], [false, null, true]);
+    });
+
+    test("sem id ⇒ não encaminha (nem ao backend nem aos handlers); fromMe continua sem ser encaminhado; um item ruim não derruba os outros", async () => {
+      const { sock, handler, enviados } = await sessaoComSocket();
+      sock.ev.emit("messages.upsert", { messages: [
+        { key: { fromMe: false, remoteJid: PN } }, { key: { fromMe: false, id: "", remoteJid: PN } }, { key: { fromMe: true, id: "meu", remoteJid: PN } },
+        { key: { fromMe: false, id: "ok", remoteJid: PN } },
+      ] });
+      assert.deepEqual(enviados().map((e) => e.providerMessageId), ["ok"]); assert.equal(handler.mock.calls.length, 1);
+    });
+
+    test("a origem é limpa a cada socket novo (o buffer do socket anterior morreu com ele) e não vaza entre sockets", async () => {
+      const fabricaSocket = socketFalsoFabrica(); const backendClient = backendClientFalso();
+      const sessao = criarSessaoBaileys({ authAdapter: authAdapterFalso(), backendClient, config: configFalso(), fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT });
+      await sessao.conectar();
+      fabricaSocket.criados[0].ws.emit("CB:message", { attrs: { id: "velha", from: PN } });         // LIVE no socket 1, nunca consumida
+      await sessao.desconectar(); await sessao.conectar();
+      fabricaSocket.criados[1].ev.emit("messages.upsert", { messages: [{ key: { fromMe: false, id: "velha", remoteJid: PN }, message: {} }] });
+      assert.equal(backendClient.notificarMensagemRecebida.mock.calls.at(-1).arguments[0].origemTipo, "OFFLINE_NORMAL", "sem a stanza deste socket ⇒ fail-safe");
+    });
   });
 
   test("messages.update alimenta getMessageStatus e notifica o backend", async () => {

@@ -76,7 +76,7 @@ describe("fiação do escopo de inbound", () => {
     assert.equal(ligado.snapshot().stanzas.direct_pn.receipt, 1);
     const desligado = criarInboundGateway({ emitir() {} });
     const b = await abrir(desligado);
-    assert.equal(b.socket.ws.eventNames().length, 0, "diagnóstico desligado: nenhum listener no ws");
+    assert.deepEqual(b.socket.ws.eventNames(), ["CB:message"], "diagnóstico desligado: só o rastreador de ORIGEM do Checkpoint F (passivo, prependListener) está no ws");
   });
 
   test("valor inválido de escopo: opções de antes (nunca DIRECT_ONLY por acidente)", async () => {
@@ -138,23 +138,25 @@ describe("C.9.4 — pipeline: encaminhada ao backend e a DÍVIDA do Checkpoint F
     assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 3, "encaminhadas conta == chamadas reais ao backend");
   });
 
-  test("DÍVIDA (Checkpoint F): deJid(remoteJid) vira 'telefone' também para LID, grupo e status — INVÁLIDO; este teste documenta o comportamento ATUAL", async () => {
+  test("DÍVIDA do Checkpoint F QUITADA: LID, grupo e status NUNCA viram 'telefone' (antes deJid(remoteJid) os transformava em '+1000…', '+1203…', '+status')", async () => {
     const { socket, backendClient } = await abrir(criarInboundGateway({ emitir() {} }));
     socket.ev.emit("messages.upsert", { messages: [
       msg("5511888880001@s.whatsapp.net"), msg("100000000000002@lid"), msg("120363000000000001@g.us"), msg("status@broadcast"),
     ], type: "notify" });
     const enviados = backendClient.notificarMensagemRecebida.mock.calls.map((c) => c.arguments[0].telefoneE164);
     assert.equal(enviados[0], "+5511888880001", "PN: telefone de verdade");
-    assert.equal(enviados[1], "+100000000000002", "LID NÃO é telefone");
-    assert.equal(enviados[2], "+120363000000000001", "id de GRUPO NÃO é telefone");
-    assert.equal(enviados[3], "+status", "status@broadcast NÃO é telefone");
-    // O payload atual não carrega o TIPO de origem nem o conteúdo: o Checkpoint F precisa de origemTipo/origemJidTipo.
-    for (const c of backendClient.notificarMensagemRecebida.mock.calls) assert.deepEqual(Object.keys(c.arguments[0]).sort(), ["providerMessageId", "recebidoEm", "telefoneE164"]);
+    assert.equal(enviados[1], null, "LID NÃO é telefone");
+    assert.equal(enviados[2], null, "id de GRUPO NÃO é telefone");
+    assert.equal(enviados[3], null, "status@broadcast NÃO é telefone");
+    // O payload agora é o CONTRATO (origemTipo, origemJidTipo, fromMe, falhaDecrypt...): ver test/inboundContrato.test.js.
+    for (const c of backendClient.notificarMensagemRecebida.mock.calls) assert.deepEqual(Object.keys(c.arguments[0]).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem"]);
   });
 
-  test("um stub de falha de decrypt (CIPHERTEXT, sem conteúdo) que for liberado do buffer também seria encaminhado como 'mensagem recebida' — risco ao consertar a retenção", async () => {
+  test("um stub de falha de decrypt (CIPHERTEXT, sem conteúdo) liberado do buffer é encaminhado, mas AGORA marcado como falhaDecrypt (o backend o põe em quarentena, nunca como mensagem normal)", async () => {
     const { socket, backendClient } = await abrir(criarInboundGateway({ emitir() {} }));
     socket.ev.emit("messages.upsert", { messages: [msg("120363000000000001@g.us", { messageStubType: CIPHERTEXT, messageStubParameters: ["Bad MAC"], message: undefined })], type: "append" });
     assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 1);
+    const e = backendClient.notificarMensagemRecebida.mock.calls[0].arguments[0];
+    assert.deepEqual([e.falhaDecrypt, e.motivoFalhaDecrypt, e.origemJidTipo, e.telefoneE164, e.origemTipo], [true, "bad_mac", "group", null, "OFFLINE_NORMAL"]);
   });
 });
