@@ -193,3 +193,97 @@ describe("config — caps do motor de OFFLINE_RECOVERY por env (Checkpoint G.2.0
     assert.deepEqual(chavesConfig, chavesMotorSemTick);
   });
 });
+
+describe("config — capacidade de auth-state por env (Checkpoint G.3.3: WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES)", () => {
+  const ENV = "WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES";
+  const MIB = 1024 * 1024;
+
+  test("ausente: authStateCapacidadeBytes fica undefined, sem erro — authHeadroom.js usa seu próprio default de 1 MiB", async () => {
+    const { config, erro } = await carregarConfigCom({});
+    assert.equal(erro, null);
+    assert.equal(config.authStateCapacidadeBytes, undefined);
+  });
+
+  test("2 MiB (2097152): aceito exatamente, sem erro", async () => {
+    const { config, erro } = await carregarConfigCom({ [ENV]: "2097152" });
+    assert.equal(erro, null);
+    assert.equal(config.authStateCapacidadeBytes, 2 * MIB);
+  });
+
+  test("exatamente no teto de 4 MiB (4194304): aceito", async () => {
+    const { config, erro } = await carregarConfigCom({ [ENV]: "4194304" });
+    assert.equal(erro, null);
+    assert.equal(config.authStateCapacidadeBytes, 4 * MIB);
+  });
+
+  test("acima do teto de 4 MiB (4194305): falha no boot citando o nome da env e o teto", async () => {
+    const { erro } = await carregarConfigCom({ [ENV]: "4194305" });
+    assert.ok(erro, "esperava que validarConfig() lançasse");
+    assert.match(erro.message, new RegExp(ENV));
+    assert.match(erro.message, /4194304/);
+  });
+
+  test("0 falha (zero inválido — mesma regra fail-closed dos caps de recovery)", async () => {
+    const { erro } = await carregarConfigCom({ [ENV]: "0" });
+    assert.ok(erro);
+    assert.match(erro.message, new RegExp(ENV));
+  });
+
+  test("-1 falha", async () => {
+    const { erro } = await carregarConfigCom({ [ENV]: "-1" });
+    assert.ok(erro);
+  });
+
+  test("texto (abc) falha", async () => {
+    const { erro } = await carregarConfigCom({ [ENV]: "abc" });
+    assert.ok(erro);
+  });
+
+  test("decimal (1.5) falha", async () => {
+    const { erro } = await carregarConfigCom({ [ENV]: "1.5" });
+    assert.ok(erro);
+  });
+
+  test("string vazia é tratada como ausente — não é erro (mesmo padrão do resto do arquivo)", async () => {
+    const { config, erro } = await carregarConfigCom({ [ENV]: "" });
+    assert.equal(erro, null);
+    assert.equal(config.authStateCapacidadeBytes, undefined);
+  });
+
+  test("equivalência com o backend: o teto que este arquivo aplica é EXATAMENTE o mesmo valor de "
+    + "backend/src/modules/comunicacao/gateway/whatsappGateway.bootstrap.js#LIMITE_AUTH_STATE_TETO_BYTES "
+    + "(duplicado de propósito — sem chamada de rede nova entre os processos; se um dia divergirem, este teste "
+    + "precisa ser atualizado JUNTO com o valor do backend, nunca sozinho)", async () => {
+    const LIMITE_AUTH_STATE_TETO_BYTES_BACKEND = 4 * 1024 * 1024; // valor lido de whatsappGateway.bootstrap.js
+    const { erro: noTeto } = await carregarConfigCom({ [ENV]: String(LIMITE_AUTH_STATE_TETO_BYTES_BACKEND) });
+    const { erro: acimaDoTeto } = await carregarConfigCom({ [ENV]: String(LIMITE_AUTH_STATE_TETO_BYTES_BACKEND + 1) });
+    assert.equal(noTeto, null, "o Gateway aceita exatamente o que o backend aceitaria no seu próprio teto");
+    assert.ok(acimaDoTeto, "o Gateway recusa 1 byte acima do que o backend jamais aceitaria");
+  });
+
+  test("wiring: criarGuardaAuthHeadroom com limiteBytes vindo de config.authStateCapacidadeBytes calcula 85% corretamente para 1 MiB e para 2 MiB — o percentual nunca muda, só a referência", async () => {
+    const { criarGuardaAuthHeadroom } = await import("../src/authHeadroom.js");
+
+    const semEnv = await carregarConfigCom({});
+    const guarda1MiB = criarGuardaAuthHeadroom({
+      obterUltimoTamanho: () => ({ corpoBytes: 900_000 }),
+      maxUsagePct: semEnv.config.offlineRecoveryAuthMaxUsagePct,
+      limiteBytes: semEnv.config.authStateCapacidadeBytes,
+    });
+    // 900_000 / 1_048_576 ≈ 85,8% > 85% ⇒ guard bloqueia com a referência de 1 MiB (comportamento de sempre)
+    assert.equal(guarda1MiB.ok(), false);
+    assert.equal(guarda1MiB.estado().limiteBytes, 1024 * 1024);
+    assert.equal(guarda1MiB.estado().maxUsagePct, 85);
+
+    const com2MiB = await carregarConfigCom({ [ENV]: "2097152" });
+    const guarda2MiB = criarGuardaAuthHeadroom({
+      obterUltimoTamanho: () => ({ corpoBytes: 900_000 }),
+      maxUsagePct: com2MiB.config.offlineRecoveryAuthMaxUsagePct,
+      limiteBytes: com2MiB.config.authStateCapacidadeBytes,
+    });
+    // os MESMOS 900_000 bytes agora são só ~42,9% de 2 MiB ⇒ guard libera — só a referência mudou, não os 85%
+    assert.equal(guarda2MiB.ok(), true);
+    assert.equal(guarda2MiB.estado().limiteBytes, 2 * MIB);
+    assert.equal(guarda2MiB.estado().maxUsagePct, 85, "85% continua 85% — nunca vira 90/95 silenciosamente");
+  });
+});

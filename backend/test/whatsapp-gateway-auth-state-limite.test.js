@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
-  montarWhatsappGatewayRouter, lerLimiteBytes,
+  montarWhatsappGatewayRouter, lerLimiteBytes, lerLimiteAuthStateBytes,
   LIMITE_CORPO_PADRAO_BYTES, LIMITE_AUTH_STATE_PADRAO_BYTES, LIMITE_AUTH_STATE_TETO_BYTES,
 } from "../src/modules/comunicacao/gateway/whatsappGateway.bootstrap.js";
 import { assinarRequisicao, _resetarNonces } from "../src/modules/comunicacao/gateway/whatsappGateway.hmac.js";
@@ -135,7 +135,20 @@ describe("limites de corpo — leitura robusta e SEMPRE finita", () => {
     } finally { restaurarEnv(); }
   });
 
-  test("limite do auth-state: padrão 1 MiB; env lixo -> padrão; env grande é CAPADA no teto; nunca menor que o genérico", () => {
+  test("Checkpoint G.3.3-B: lerLimiteAuthStateBytes — ausente/vazia -> 1 MiB (sem erro); 1048576/2097152/4194304 -> eles mesmos; 0/-1/abc/1.5/4194305 -> lança", () => {
+    for (const ausente of [undefined, null, "", "   "]) assert.equal(lerLimiteAuthStateBytes(ausente), LIMITE_AUTH_STATE_PADRAO_BYTES, JSON.stringify(ausente));
+    assert.equal(lerLimiteAuthStateBytes("1048576"), 1 * MiB);
+    assert.equal(lerLimiteAuthStateBytes("2097152"), 2 * MiB);
+    assert.equal(lerLimiteAuthStateBytes("4194304"), 4 * MiB);
+    assert.equal(lerLimiteAuthStateBytes(2097152), 2 * MiB, "número, não só string");
+    for (const invalido of ["0", "-1", "abc", "1.5", "4194305", "2097152x", "Infinity", "1e6"]) {
+      assert.throws(() => lerLimiteAuthStateBytes(invalido), /WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES/, JSON.stringify(invalido));
+    }
+    // " 2097152 " tem espaços nas bordas mas é só dígitos depois do trim — isso É válido (mesmo padrão do resto do projeto)
+    assert.equal(lerLimiteAuthStateBytes(" 2097152 "), 2 * MiB);
+  });
+
+  test("limite do auth-state: padrão 1 MiB; env válida usa exatamente o valor pedido; nunca menor que o genérico", () => {
     process.env.WHATSAPP_GATEWAY_SECRET = SEGREDO; process.env.WHATSAPP_GATEWAY_ORGANIZACAO_ID = ORG;
     const montar = (envs) => {
       delete process.env.WHATSAPP_GATEWAY_MAX_BODY_BYTES; delete process.env.WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES;
@@ -145,11 +158,21 @@ describe("limites de corpo — leitura robusta e SEMPRE finita", () => {
     try {
       assert.equal(montar({}).limiteAuthStateBytes, 1 * MiB);
       assert.equal(montar({}).limiteCorpoBytes, 256 * KiB);
-      for (const ruim of ["abc", "0", "-3", "Infinity", "", "1.5"]) assert.equal(montar({ WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES: ruim }).limiteAuthStateBytes, 1 * MiB, ruim);
       assert.equal(montar({ WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES: String(2 * MiB) }).limiteAuthStateBytes, 2 * MiB);
-      assert.equal(montar({ WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES: "1000000000000" }).limiteAuthStateBytes, 4 * MiB, "env enorme precisa ser capada — nunca 'ilimitado'");
-      assert.equal(montar({ WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES: "1000" }).limiteAuthStateBytes, 256 * KiB, "nunca menor que o genérico");
+      assert.equal(montar({ WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES: String(4 * MiB) }).limiteAuthStateBytes, 4 * MiB);
       assert.equal(montar({ WHATSAPP_GATEWAY_MAX_BODY_BYTES: String(2 * MiB) }).limiteAuthStateBytes, 2 * MiB, "genérico maior que o padrão do auth-state -> auth-state acompanha");
+    } finally { restaurarEnv(); }
+  });
+
+  test("Checkpoint G.3.3-B: env do auth-state EXPLICITAMENTE inválida NUNCA cai num default/teto silencioso — a rota Gateway simplesmente não é montada (null), mesmo padrão de segredo/organizacao_id ausentes", () => {
+    process.env.WHATSAPP_GATEWAY_SECRET = SEGREDO; process.env.WHATSAPP_GATEWAY_ORGANIZACAO_ID = ORG;
+    try {
+      for (const ruim of ["abc", "0", "-3", "Infinity", "1.5", "1000000000000", String(4 * MiB + 1), "2097152x"]) {
+        delete process.env.WHATSAPP_GATEWAY_MAX_BODY_BYTES;
+        process.env.WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES = ruim;
+        const gw = montarWhatsappGatewayRouter({ repo: criarRepoEmMemoria() });
+        assert.equal(gw, null, `${JSON.stringify(ruim)} deveria recusar montar a rota, nunca usar um default/teto silencioso`);
+      }
     } finally { restaurarEnv(); }
   });
 
@@ -315,14 +338,22 @@ describe("env: o limite do auth-state é configurável, mas FINITO", () => {
     } finally { await srv.fechar(); }
   });
 
-  test("env absurda é capada no teto de 4 MiB: 4 MiB passa, 4 MiB + 1 -> 413", async () => {
-    const srv = await subir({ env: { WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES: "9007199254740991" } });
+  test("exatamente no teto de 4 MiB: aceito e montado normalmente — 4 MiB passa, 4 MiB + 1 -> 413", async () => {
+    const srv = await subir({ env: { WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES: String(4 * MiB) } });
     try {
       assert.equal(srv.gw.limiteAuthStateBytes, 4 * MiB);
       const lease = await adquirirLease(srv);
       assert.equal((await assinado(srv, "POST", AUTH, corpoAuth(4 * MiB, lease))).status, 200);
       assert.equal((await assinado(srv, "POST", AUTH, corpoAuth(4 * MiB + 1, lease))).status, 413);
     } finally { await srv.fechar(); }
+  });
+
+  test("Checkpoint G.3.3-B: env ABSURDA (acima do teto de 4 MiB) NUNCA é mais capada silenciosamente — a rota Gateway não é montada", () => {
+    process.env.WHATSAPP_GATEWAY_SECRET = SEGREDO; process.env.WHATSAPP_GATEWAY_ORGANIZACAO_ID = ORG;
+    process.env.WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES = "9007199254740991";
+    try {
+      assert.equal(montarWhatsappGatewayRouter({ repo: criarRepoEmMemoria() }), null);
+    } finally { restaurarEnv(); }
   });
 });
 

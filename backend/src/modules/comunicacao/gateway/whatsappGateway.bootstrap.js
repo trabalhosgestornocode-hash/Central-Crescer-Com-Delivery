@@ -44,6 +44,34 @@ export function lerLimiteBytes(valorEnv, padrao) {
 }
 
 /**
+ * Checkpoint G.3.3-B — parser FAIL-CLOSED, só para WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES (o genérico
+ * WHATSAPP_GATEWAY_MAX_BODY_BYTES continua em `lerLimiteBytes` acima, com o comportamento de sempre — fora de
+ * escopo deste checkpoint). Ausente/vazia ⇒ `LIMITE_AUTH_STATE_PADRAO_BYTES` (1 MiB), sem erro — mesmo
+ * comportamento de antes quando a env nunca existiu. Um valor EXPLICITAMENTE fornecido (dígitos, sem sinal, sem
+ * ponto, sem lixo à direita) e válido (>0, <= teto) é usado exatamente como está — nunca ajustado por
+ * `Math.min`/`Math.max` silencioso. Um valor fornecido e INVÁLIDO (zero, negativo, decimal, texto, "2097152x",
+ * acima do teto) LANÇA: Gateway e backend precisam interpretar a mesma env da mesma forma, e um valor errado aqui
+ * nunca pode virar silenciosamente "1 MiB" ou "4 MiB" — o Gateway calcularia headroom contra um número que a rota
+ * na verdade não aceita. Quem chama decide o que fazer com o erro (ver montarWhatsappGatewayRouter: a feature
+ * simplesmente não é montada — nunca derruba o resto do backend).
+ */
+export function lerLimiteAuthStateBytes(valorEnv) {
+  if (valorEnv === undefined || valorEnv === null || String(valorEnv).trim() === "") return LIMITE_AUTH_STATE_PADRAO_BYTES;
+  const texto = String(valorEnv).trim();
+  if (!/^\d+$/.test(texto)) {
+    throw new Error(`WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES precisa ser um inteiro positivo em bytes, sem sinal e sem casas decimais (recebido: "${valorEnv}")`);
+  }
+  const n = Number(texto);
+  if (!(n > 0)) {
+    throw new Error(`WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES precisa ser > 0 (recebido: ${n})`);
+  }
+  if (n > LIMITE_AUTH_STATE_TETO_BYTES) {
+    throw new Error(`WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES (${n}) não pode passar de ${LIMITE_AUTH_STATE_TETO_BYTES} bytes (4 MiB)`);
+  }
+  return n;
+}
+
+/**
  * @param {object} [opts]
  * @param {ReturnType<import('../providers/baileysGateway.provider.js').criarBaileysGatewayProvider>} [opts.provider]
  * @param {object} [opts.repo] Injeção explícita — só para testes. Sem isto,
@@ -59,11 +87,24 @@ export function montarWhatsappGatewayRouter({ provider, repo } = {}) {
 
   const repoEfetivo = repo ?? criarRepoSupabase();
   const limiteCorpoBytes = lerLimiteBytes(process.env.WHATSAPP_GATEWAY_MAX_BODY_BYTES, LIMITE_CORPO_PADRAO_BYTES);
-  // Nunca menor que o genérico (senão a rota "grande" ficaria mais restrita) e nunca acima do teto absoluto.
-  const limiteAuthStateBytes = Math.min(
-    LIMITE_AUTH_STATE_TETO_BYTES,
-    Math.max(limiteCorpoBytes, lerLimiteBytes(process.env.WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES, LIMITE_AUTH_STATE_PADRAO_BYTES)),
-  );
+  // Checkpoint G.3.3-B — fail-closed: uma env EXPLICITAMENTE inválida para o auth-state nunca mais cai num
+  // Math.min/Math.max silencioso (podia virar 1 MiB ou 4 MiB sem avisar). Erro aqui = a feature Gateway não é
+  // montada (mesmo padrão de "sem segredo/organizacao_id, rota não sobe" acima) — nunca derruba o resto do
+  // backend, que serve dezenas de features não relacionadas. Nunca menor que o limite genérico (Math.max
+  // preservado: senão a rota "grande" ficaria mais restrita que as pequenas).
+  let limiteAuthStateBytes;
+  try {
+    limiteAuthStateBytes = Math.max(limiteCorpoBytes, lerLimiteAuthStateBytes(process.env.WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES));
+  } catch (e) {
+    console.error(JSON.stringify({ evento: "whatsapp_gateway.configuracao_invalida", motivo: e.message }));
+    return null;
+  }
+  // Telemetria SEGURA de boot (Checkpoint G.3.3-B, item 6) — só o limite efetivo, nada de segredo/env bruta/auth-state.
+  console.log(JSON.stringify({
+    evento: "whatsapp_gateway.montado",
+    authStateMaxBodyBytes: limiteAuthStateBytes,
+    authStateMaxBodyMiB: Math.round((limiteAuthStateBytes / (1024 * 1024)) * 100) / 100,
+  }));
 
   const router = express.Router();
   // ORDEM IMPORTA (a mesma lógica de app.js: "a primeira que casar vence" — body-parser marca `req._body` e o

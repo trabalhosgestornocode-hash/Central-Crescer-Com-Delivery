@@ -81,10 +81,24 @@ const authAdapter = criarAuthStateAdapter({
 // Checkpoint G.0.1 (Partes K-R) — fonte REAL do auth headroom: reaproveita authAdapter.obterUltimoTamanho()
 // (o mesmo corpoBytes que auth_state.metricas já calcula), nunca uma segunda serialização do auth state. Fail-closed
 // por construção (src/authHeadroom.js): sem medição ainda ⇒ ok()=false ⇒ o recovery simplesmente não inicia.
+// Checkpoint G.3.3 — `limiteBytes: config.authStateCapacidadeBytes` (undefined por padrão ⇒ authHeadroom.js usa seu
+// próprio default de 1 MiB, comportamento idêntico a antes deste checkpoint). O percentual de 85% (maxUsagePct)
+// continua o mesmo — este checkpoint só alinha a REFERÊNCIA, nunca a margem sobre ela.
 const guardaAuthHeadroom = criarGuardaAuthHeadroom({
   obterUltimoTamanho: () => authAdapter.obterUltimoTamanho(),
   maxUsagePct: config.offlineRecoveryAuthMaxUsagePct,
+  limiteBytes: config.authStateCapacidadeBytes,
 });
+// Checkpoint G.3.3-B, item 6 — telemetria SEGURA de boot (só números, nunca auth-state/segredo/env bruta): prova
+// depois do deploy, sem precisar ler env do Render, que a capacidade efetiva do Gateway bate com a do backend.
+{
+  const { limiteBytes, maxUsagePct } = guardaAuthHeadroom.estado();
+  log("info", "auth_state.capacidade", {
+    authStateCapacityBytes: limiteBytes,
+    authStateCapacityMiB: Math.round((limiteBytes / (1024 * 1024)) * 100) / 100,
+    authRecoveryMaxUsagePct: maxUsagePct,
+  });
+}
 
 // C.9.3 — escopo de inbound (padrão ALL_SUPPORTED = sem mudança) + contadores sanitizados opcionais.
 const inbound = criarInboundGateway({

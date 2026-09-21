@@ -20,6 +20,14 @@ function numeroInteiroEnvOuIndefinido(bruto) {
   return /^\d+$/.test(texto) ? Number(texto) : NaN;
 }
 
+// Checkpoint G.3.3 — teto ABSOLUTO que o backend aceita para a mesma env (mesmo valor, mesmo nome, de propósito —
+// ver item 8 do checkpoint), replicado aqui SÓ como constante de validação (não há chamada de rede nova entre os
+// processos). Fonte: backend/src/modules/comunicacao/gateway/whatsappGateway.bootstrap.js#LIMITE_AUTH_STATE_TETO_BYTES
+// (4 MiB, `Math.min` sobre o valor configurado). Duplicado de propósito, mesmo padrão já usado pelo teto de lease
+// (LEASE_TTL_MAX_MS, migration 084): o Gateway falha no boot com a MESMA regra que o backend aplicaria de qualquer
+// forma, em vez de deixar o recovery acreditar ter mais espaço do que a rota `/eventos/auth-state` jamais aceitaria.
+const AUTH_STATE_CAPACIDADE_TETO_BYTES = 4 * 1024 * 1024;
+
 export const config = {
   // O Render injeta PORT; 8080 é o padrão de qualquer serviço aqui.
   porta: Number(process.env.PORT) || 8080,
@@ -75,6 +83,14 @@ export const config = {
   // conhecida (~72-73%) fica com margem para o crescimento observado entre reconexões sem tornar o recovery
   // impraticável; ver o racional completo no relatório do checkpoint.
   offlineRecoveryAuthMaxUsagePct: Number(process.env.WHATSAPP_OFFLINE_RECOVERY_AUTH_MAX_USAGE_PCT ?? 85),
+  // Checkpoint G.3.3 — capacidade lógica de auth-state que o Gateway usa como referência para o headroom do
+  // recovery (src/authHeadroom.js). MESMO NOME de env do backend (WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES —
+  // whatsappGateway.bootstrap.js), de propósito: não há chamada nova entre os processos, então as duas envs
+  // precisam ser configuradas ATOMICAMENTE para o mesmo valor (documentado; ver o relatório do checkpoint). Ausente
+  // ⇒ `undefined` ⇒ authHeadroom.js usa seu próprio default de 1 MiB (LIMITE_BYTES_1MIB), idêntico ao
+  // comportamento de antes deste checkpoint. NÃO é uma "cura" do crescimento do auth-state — só alinha a
+  // referência do Gateway à capacidade real que o backend já aceitar.
+  authStateCapacidadeBytes: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES),
   // Checkpoint G.0.1 (Partes C-J) — nº máximo de chamadas a notificarMensagemRecebida em voo ao mesmo tempo (fila
   // local, src/filaConcorrenciaLimitada.js). Default 4: testado com backend falso rápido/lento/intermitente em
   // 1/2/4/8 (ver test/filaConcorrenciaLimitada.test.js) — nunca validado contra o backend REAL sob carga; ajustar
@@ -181,6 +197,24 @@ export function validarConfig() {
     if (valor === undefined) continue;
     if (!Number.isInteger(valor) || valor < 1) {
       throw new Error(`${nomeEnv} precisa ser um inteiro >= 1 (recebido: "${process.env[nomeEnv]}")`);
+    }
+  }
+
+  // Checkpoint G.3.3 — mesma regra fail-closed dos caps de recovery acima: ausente = ok (fica no default de 1 MiB
+  // de authHeadroom.js); um valor EXPLICITAMENTE fornecido e inválido (zero, negativo, decimal, texto) FALHA NO
+  // BOOT, nunca cai silenciosamente num default menor que o pretendido. Teto de 4 MiB replicado do backend (ver a
+  // constante acima) — nunca deixa o Gateway achar que tem mais espaço do que a rota `/eventos/auth-state`
+  // jamais aceitaria, mesmo sem nenhuma chamada de rede nova entre os processos para confirmar isso em runtime.
+  if (config.authStateCapacidadeBytes !== undefined) {
+    const v = config.authStateCapacidadeBytes;
+    if (!Number.isInteger(v) || v < 1) {
+      throw new Error(`WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES precisa ser um inteiro >= 1 (recebido: "${process.env.WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES}")`);
+    }
+    if (v > AUTH_STATE_CAPACIDADE_TETO_BYTES) {
+      throw new Error(
+        `WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES (${v}) não pode passar de ${AUTH_STATE_CAPACIDADE_TETO_BYTES} `
+        + `(4 MiB) — mesmo teto que o backend aplica (whatsappGateway.bootstrap.js#LIMITE_AUTH_STATE_TETO_BYTES).`,
+      );
     }
   }
 }
