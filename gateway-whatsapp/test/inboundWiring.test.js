@@ -31,6 +31,10 @@ const backendFalso = () => ({
   resetarAuthState: mock.fn(async () => ({ ok: true })), confirmarAuthState: mock.fn(async () => ({})),
 });
 const configFalso = () => ({ reconnect: { baseMs: 10, tetoMs: 40 }, heartbeatMs: 1_000_000, providerInstanceId: "teste", gatewayVersion: "0.0.0-test" });
+// Checkpoint G.0.1 — notificarMensagemRecebida passa pela fila de concorrência limitada (src/filaConcorrenciaLimitada.js):
+// a chamada real acontece alguns microtasks depois do messages.upsert. `drenar()` espera esses microtasks assentarem
+// (as mocks aqui resolvem na hora, sem I/O real). Nome distinto de `tick` (já usado nesta suíte para o timer injetado).
+async function drenar() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
 
 async function abrir(inbound) {
   const fabricaSocket = fabricaFalsa(); const backendClient = backendFalso();
@@ -91,6 +95,7 @@ describe("messages.upsert — encaminhamento ao backend e contadores", () => {
   test("o encaminhamento ao backend é o de sempre (independe do escopo/diagnóstico)", async () => {
     const { socket, backendClient } = await abrir(criarInboundGateway({ diagHabilitado: true, emitir() {}, agendar: () => ({ unref() {} }) }));
     socket.ev.emit("messages.upsert", { messages: [msg("5511888880001@s.whatsapp.net")], type: "notify" });
+    await drenar();
     assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 1);
     assert.equal(backendClient.notificarMensagemRecebida.mock.calls[0].arguments[0].telefoneE164, "+5511888880001");
   });
@@ -112,12 +117,14 @@ describe("messages.upsert — encaminhamento ao backend e contadores", () => {
     const quebrado = { opcoesSocket: () => ({}), aoMensagens() { throw new Error("contador quebrado"); } };
     const { socket, backendClient } = await abrir(quebrado);
     assert.doesNotThrow(() => socket.ev.emit("messages.upsert", { messages: [msg("5511888880001@s.whatsapp.net")], type: "notify" }));
+    await drenar();
     assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 1);
   });
 
   test("fromMe continua ignorado como antes", async () => {
     const { socket, backendClient } = await abrir(criarInboundGateway({ emitir() {} }));
     socket.ev.emit("messages.upsert", { messages: [{ key: { remoteJid: "5511888880001@s.whatsapp.net", id: "E", fromMe: true }, message: {} }], type: "notify" });
+    await drenar();
     assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 0);
   });
 });
@@ -132,6 +139,7 @@ describe("C.9.4 — pipeline: encaminhada ao backend e a DÍVIDA do Checkpoint F
       msg("5511888880001@s.whatsapp.net"), msg("100000000000002@lid"), msg("120363000000000001@g.us"),
       { key: { remoteJid: "5511888880001@s.whatsapp.net", id: "E", fromMe: true }, message: {} },
     ], type: "notify" });
+    await drenar();
     const m = inbound.snapshot().mensagens;
     assert.equal(m.direct_pn.entregues, 2); assert.equal(m.direct_pn.encaminhadas, 1, "a fromMe não é encaminhada");
     assert.equal(m.direct_lid_other.encaminhadas, 1); assert.equal(m.group.encaminhadas, 1);
@@ -143,6 +151,7 @@ describe("C.9.4 — pipeline: encaminhada ao backend e a DÍVIDA do Checkpoint F
     socket.ev.emit("messages.upsert", { messages: [
       msg("5511888880001@s.whatsapp.net"), msg("100000000000002@lid"), msg("120363000000000001@g.us"), msg("status@broadcast"),
     ], type: "notify" });
+    await drenar();
     const enviados = backendClient.notificarMensagemRecebida.mock.calls.map((c) => c.arguments[0].telefoneE164);
     assert.equal(enviados[0], "+5511888880001", "PN: telefone de verdade");
     assert.equal(enviados[1], null, "LID NÃO é telefone");
@@ -155,6 +164,7 @@ describe("C.9.4 — pipeline: encaminhada ao backend e a DÍVIDA do Checkpoint F
   test("um stub de falha de decrypt (CIPHERTEXT, sem conteúdo) liberado do buffer é encaminhado, mas AGORA marcado como falhaDecrypt (o backend o põe em quarentena, nunca como mensagem normal)", async () => {
     const { socket, backendClient } = await abrir(criarInboundGateway({ emitir() {} }));
     socket.ev.emit("messages.upsert", { messages: [msg("120363000000000001@g.us", { messageStubType: CIPHERTEXT, messageStubParameters: ["Bad MAC"], message: undefined })], type: "append" });
+    await drenar();
     assert.equal(backendClient.notificarMensagemRecebida.mock.callCount(), 1);
     const e = backendClient.notificarMensagemRecebida.mock.calls[0].arguments[0];
     assert.deepEqual([e.falhaDecrypt, e.motivoFalhaDecrypt, e.origemJidTipo, e.telefoneE164, e.origemTipo], [true, "bad_mac", "group", null, "OFFLINE_NORMAL"]);

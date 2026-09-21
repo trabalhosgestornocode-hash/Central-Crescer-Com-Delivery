@@ -67,8 +67,13 @@ export function extrairTelefoneReal(p) {
  * Mapa em memória (LIMITADO) id da stanza → origem. Alimentado pelo `CB:message` (mesma regra do Baileys: `!!attrs.offline`).
  * `consumir` devolve a origem e libera a entrada; id ausente/desconhecido ⇒ ORIGEM_PADRAO (fail-safe, nunca LIVE por omissão).
  * Nunca loga nem expõe ids. `novoSocket` limpa (o buffer do socket anterior morreu com ele).
+ *
+ * Checkpoint G — `rotularOffline` (injetável) decide o rótulo de um nó offline NO MOMENTO em que ele é registrado:
+ * "OFFLINE_NORMAL" (padrão, comportamento de sempre) ou "OFFLINE_RECOVERY" enquanto o motor de recovery estiver
+ * ativo. `promoverPendentesParaRecovery()` (seção 31 do checkpoint) promove as entradas AINDA pendentes (chegaram
+ * antes do recovery começar, ainda não consumidas) de OFFLINE_NORMAL para OFFLINE_RECOVERY — sem nunca logar id.
  */
-export function criarRastreadorOrigem({ max = 5000 } = {}) {
+export function criarRastreadorOrigem({ max = 5000, rotularOffline = () => "OFFLINE_NORMAL" } = {}) {
   if (!Number.isInteger(max) || max < 1) throw new RangeError("max deve ser inteiro >= 1");
   const mapa = new Map();
   return {
@@ -76,7 +81,9 @@ export function criarRastreadorOrigem({ max = 5000 } = {}) {
       const id = node?.attrs?.id;
       if (typeof id !== "string" || id === "") return;
       mapa.delete(id);                                              // reinsere no fim (ordem de chegada)
-      mapa.set(id, node.attrs.offline ? "OFFLINE_NORMAL" : "LIVE");
+      let rotulo = "LIVE";
+      if (node.attrs.offline) { try { rotulo = rotularOffline() === "OFFLINE_RECOVERY" ? "OFFLINE_RECOVERY" : "OFFLINE_NORMAL"; } catch { rotulo = "OFFLINE_NORMAL"; } }
+      mapa.set(id, rotulo);
       if (mapa.size > max) mapa.delete(mapa.keys().next().value);   // descarta a MAIS ANTIGA
     },
     consumir(id) {
@@ -85,6 +92,10 @@ export function criarRastreadorOrigem({ max = 5000 } = {}) {
       return origem;
     },
     novoSocket() { mapa.clear(); },
+    /** promove as entradas PENDENTES de OFFLINE_NORMAL para OFFLINE_RECOVERY (nunca toca LIVE nem loga ids) */
+    promoverPendentesParaRecovery() {
+      for (const [id, origem] of mapa) if (origem === "OFFLINE_NORMAL") mapa.set(id, "OFFLINE_RECOVERY");
+    },
     tamanho: () => mapa.size,
   };
 }

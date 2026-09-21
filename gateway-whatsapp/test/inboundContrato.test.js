@@ -170,6 +170,54 @@ describe("rastreador de origem (por mensagem, limitado, sem expor ids)", () => {
   });
 });
 
+describe("Checkpoint G — rotularOffline / promoverPendentesParaRecovery (rastreador de origem)", () => {
+  test("sem rotularOffline (padrão): comportamento IDÊNTICO a antes do Checkpoint G — sempre OFFLINE_NORMAL", () => {
+    const r = criarRastreadorOrigem();
+    r.registrar({ attrs: { id: "a", offline: "1" } });
+    assert.equal(r.consumir("a"), "OFFLINE_NORMAL");
+  });
+
+  test("rotularOffline() === 'OFFLINE_RECOVERY' rotula os nós offline registrados DALI EM DIANTE; LIVE nunca é afetado", () => {
+    let ativo = false;
+    const r = criarRastreadorOrigem({ rotularOffline: () => (ativo ? "OFFLINE_RECOVERY" : "OFFLINE_NORMAL") });
+    r.registrar({ attrs: { id: "antes", offline: "1" } });
+    r.registrar({ attrs: { id: "vivo-antes" } });
+    ativo = true;
+    r.registrar({ attrs: { id: "depois", offline: "1" } });
+    r.registrar({ attrs: { id: "vivo-depois" } });
+    assert.deepEqual(
+      ["antes", "vivo-antes", "depois", "vivo-depois"].map((i) => r.consumir(i)),
+      ["OFFLINE_NORMAL", "LIVE", "OFFLINE_RECOVERY", "LIVE"],
+    );
+  });
+
+  test("promoverPendentesParaRecovery: promove as PENDENTES (ainda não consumidas) de OFFLINE_NORMAL para OFFLINE_RECOVERY; nunca toca LIVE nem as já consumidas", () => {
+    const r = criarRastreadorOrigem();
+    r.registrar({ attrs: { id: "pendente1", offline: "1" } });
+    r.registrar({ attrs: { id: "pendente2", offline: "1" } });
+    r.registrar({ attrs: { id: "vivo" } });
+    r.registrar({ attrs: { id: "ja-consumida", offline: "1" } });
+    assert.equal(r.consumir("ja-consumida"), "OFFLINE_NORMAL");
+    r.promoverPendentesParaRecovery();
+    assert.deepEqual(
+      ["pendente1", "pendente2", "vivo", "ja-consumida"].map((i) => r.consumir(i)),
+      ["OFFLINE_RECOVERY", "OFFLINE_RECOVERY", "LIVE", "OFFLINE_NORMAL"],
+    );
+  });
+
+  test("rotularOffline que lança nunca derruba o registro (fail-safe: cai em OFFLINE_NORMAL)", () => {
+    const r = criarRastreadorOrigem({ rotularOffline: () => { throw new Error("x"); } });
+    assert.doesNotThrow(() => r.registrar({ attrs: { id: "a", offline: "1" } }));
+    assert.equal(r.consumir("a"), "OFFLINE_NORMAL");
+  });
+
+  test("promoverPendentesParaRecovery nunca loga nem expõe ids (só mexe no Map interno)", () => {
+    const fonte = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "inboundContrato.js"), "utf8");
+    const bloco = fonte.slice(fonte.indexOf("promoverPendentesParaRecovery"), fonte.indexOf("tamanho: () => mapa.size"));
+    assert.ok(!/console\.|emitir\(|log\(/.test(bloco), "promoverPendentesParaRecovery não loga");
+  });
+});
+
 describe("GUARDA ESTRUTURAL do contrato", () => {
   const tira = (s) => s.replace(/\r\n/g, "\n").replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
   const contrato = tira(readFileSync(join(aqui, "..", "src", "inboundContrato.js"), "utf8"));

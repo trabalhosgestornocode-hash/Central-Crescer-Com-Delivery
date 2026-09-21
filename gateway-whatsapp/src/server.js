@@ -18,6 +18,8 @@ import { criarLeaseManager } from "./leaseManager.js";
 import { log } from "./logsafe.js";
 import { instalarGuardaLibsignal } from "./libsignalLogGuard.js";
 import { criarInboundGateway } from "./inboundScope.js";
+import { criarRastreadorOrigem } from "./inboundContrato.js";
+import { criarGuardaAuthHeadroom } from "./authHeadroom.js";
 
 // Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
 // console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
@@ -76,6 +78,14 @@ const authAdapter = criarAuthStateAdapter({
     emitir: (dados) => log("info", "auth_state.metricas", dados),
   }),
 });
+// Checkpoint G.0.1 (Partes K-R) — fonte REAL do auth headroom: reaproveita authAdapter.obterUltimoTamanho()
+// (o mesmo corpoBytes que auth_state.metricas já calcula), nunca uma segunda serialização do auth state. Fail-closed
+// por construção (src/authHeadroom.js): sem medição ainda ⇒ ok()=false ⇒ o recovery simplesmente não inicia.
+const guardaAuthHeadroom = criarGuardaAuthHeadroom({
+  obterUltimoTamanho: () => authAdapter.obterUltimoTamanho(),
+  maxUsagePct: config.offlineRecoveryAuthMaxUsagePct,
+});
+
 // C.9.3 — escopo de inbound (padrão ALL_SUPPORTED = sem mudança) + contadores sanitizados opcionais.
 const inbound = criarInboundGateway({
   escopoBruto: config.inboundEscopoBruto,
@@ -84,12 +94,25 @@ const inbound = criarInboundGateway({
   // C.9.6 — só OBSERVA a fila offline (nunca faz flush); o epoch é só um rótulo técnico nos eventos
   offlineObserve: config.offlineObserveHabilitado,
   obterEpoch: () => leaseManager.contexto()?.leaseEpoch ?? null,
+  // Checkpoint G — kill-switch (WHATSAPP_OFFLINE_RECOVERY_ENABLED, nasce OFF). `aoIniciar` é a ÚNICA ponte para o
+  // rastreador de origem do Checkpoint F (abaixo): promove as entradas pendentes de OFFLINE_NORMAL para
+  // OFFLINE_RECOVERY no instante exato em que o motor entra em RECOVERING — nunca loga id. `lerAuthHeadroomOk`
+  // (Checkpoint G.0.1) é a MESMA guarda checada na entrada e antes de CADA batch adicional (src/offlineRecovery.js).
+  offlineRecovery: config.offlineRecoveryHabilitado
+    ? { aoIniciar: () => rastreadorOrigem.promoverPendentesParaRecovery(), lerAuthHeadroomOk: () => guardaAuthHeadroom.ok() }
+    : false,
 });
 log(inbound.valido ? "info" : "warn", inbound.valido ? "inbound.escopo" : "inbound.escopo_invalido_usando_padrao", {
   escopo: inbound.escopo, diagnostico: inbound.diagnostico, offlineObserve: inbound.offlineObserve, offlineIdentidade: inbound.estadoIdentidade() !== undefined,
+  offlineRecovery: config.offlineRecoveryHabilitado, offlineRecoveryAtivoAgora: inbound.estadoRecovery() !== undefined,
   // prova operacional: só DIRECT_ONLY injeta um shouldIgnoreJid no socket; ALL_SUPPORTED (com ou sem diagnóstico) não injeta nada
   shouldIgnoreJidInjetado: "shouldIgnoreJid" in inbound.opcoesSocket(),
 });
+
+// Checkpoint F/G — origem POR MENSAGEM (LIVE | OFFLINE_NORMAL | OFFLINE_RECOVERY). Criado aqui (não dentro de
+// baileysSession.js) só para que `rotularOffline` possa consultar `inbound.recoveryAtivo()` — a ÚNICA razão de
+// injetar isto em vez de deixar baileysSession.js criar o seu próprio, como antes do Checkpoint G.
+const rastreadorOrigem = criarRastreadorOrigem({ rotularOffline: () => (inbound.recoveryAtivo() ? "OFFLINE_RECOVERY" : "OFFLINE_NORMAL") });
 
 const sessao = criarSessaoBaileys({
   authAdapter,
@@ -97,6 +120,7 @@ const sessao = criarSessaoBaileys({
   config,
   fabricaSocket: makeWASocket,
   inbound,
+  rastreadorOrigem,
   DisconnectReasonLoggedOut: DisconnectReason.loggedOut,
   leaseManager,
 });

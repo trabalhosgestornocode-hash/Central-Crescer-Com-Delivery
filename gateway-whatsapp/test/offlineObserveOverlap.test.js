@@ -288,7 +288,9 @@ describe("GUARDA ESTRUTURAL do wiring de identidade (nenhum material bruto no ob
     assert.deepEqual([...usados].sort(), ["estado", "registrar"]);
     const chamadas = [...wiring.matchAll(/identidadeOffline\.registrar\(([^;]*)\);/g)];
     assert.equal(chamadas.length, 1);
-    assert.ok(/if \(identidadeOffline && node\?\.attrs\?\.offline\) identidadeOffline\.registrar\(g, especie, \{ type: node\.attrs\.type, id: node\.attrs\.id, from: node\.attrs\.from, participant: node\.attrs\.participant \}\)/.test(wiring), "gate offline + material fechado (type/id/from/participant)");
+    // Checkpoint G: o resultado (classificação "novo"/"duplicado"/...) agora também alimenta o motor de recovery
+    // (progresso útil), mas o GATE (só nó offline) e o MATERIAL (type/id/from/participant, nunca mais) são os mesmos.
+    assert.ok(/if \(identidadeOffline && node\?\.attrs\?\.offline\) \{\s*const classificacaoIdentidade = identidadeOffline\.registrar\(g, especie, \{ type: node\.attrs\.type, id: node\.attrs\.id, from: node\.attrs\.from, participant: node\.attrs\.participant \}\);/.test(wiring), "gate offline + material fechado (type/id/from/participant)");
     for (const proibido of [/\.content\b[^;]*registrar|registrar\([^)]*\.content/, /registrar\([^)]*(message|conversation|caption|text)\b/i]) assert.ok(!proibido.test(wiring), `material proibido: ${proibido}`);
   });
 

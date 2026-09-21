@@ -33,6 +33,7 @@ import { classificarFalhaBackend } from "./classificacaoFalhas.js";
 import { motivoFechamento } from "./motivoFechamento.js";
 import { identidadeDe } from "./inboundScope.js";
 import { criarRastreadorOrigem, observarOrigem, montarEventoInbound } from "./inboundContrato.js";
+import { criarFilaConcorrenciaLimitada } from "./filaConcorrenciaLimitada.js";
 
 // Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
 // numéricos de DisconnectReason do Baileys (node_modules/baileys/lib/Types/
@@ -160,7 +161,13 @@ export function deJid(jid) {
  *   produção, server.js SEMPRE injeta: `conectar()` recusa rodar sem
  *   `souLeader()`, e `heartbeat()` nunca manda nada sem `contexto()` válido.
  */
-export function criarSessaoBaileys({ authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout, cancelar = clearTimeout, leaseManager, inbound }) {
+export function criarSessaoBaileys({
+  authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout, cancelar = clearTimeout,
+  leaseManager, inbound, rastreadorOrigem = criarRastreadorOrigem(),
+  // Checkpoint G.0.1 (Partes C-J) — concorrência limitada + prioridade LIVE > OFFLINE_* para
+  // backendClient.notificarMensagemRecebida(): ver aoMessagesUpsert abaixo e src/filaConcorrenciaLimitada.js.
+  filaNotificacaoBackend = criarFilaConcorrenciaLimitada({ concorrencia: config?.backendNotifyConcurrency ?? 4 }),
+}) {
   let socket = null;
   let status = STATUS_CONEXAO.DISCONNECTED;
   let telefone = null;
@@ -235,8 +242,9 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
   let conectandoAgora = false;
   let falhasInesperadasReconexao = 0;
   const handlersMensagem = [];
-  // Checkpoint F — origem POR MENSAGEM (LIVE | OFFLINE_NORMAL) alimentada pelo CB:message; nunca pelo type consolidado do upsert.
-  const rastreadorOrigem = criarRastreadorOrigem();
+  // Checkpoint F — origem POR MENSAGEM (LIVE | OFFLINE_NORMAL | Checkpoint G: OFFLINE_RECOVERY) alimentada pelo
+  // CB:message; nunca pelo type consolidado do upsert. Injetado (default de teste acima) para que server.js possa
+  // ligar `rotularOffline` ao motor de recovery do Checkpoint G sem este módulo conhecer offlineRecovery.js.
   const statusPorMensagemId = new Map(); // providerMessageId -> {status}
 
   function backoffMs() {
@@ -842,7 +850,12 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
       } catch { evento = null; }
       if (!evento) { log("warn", "inbound.evento_descartado", { motivo: "sem_id_ou_erro_de_atribuicao" }); continue; }
       handlersMensagem.forEach((h) => h({ ...evento, conteudo: m.message ?? null }));
-      backendClient.notificarMensagemRecebida(evento)
+      // Checkpoint G.0.1 (Partes C-J) — CONCORRÊNCIA LIMITADA (nunca Promise.all irrestrito sobre o lote) e
+      // PRIORIDADE: uma LIVE enfileirada depois de um backlog OFFLINE_NORMAL/OFFLINE_RECOVERY ainda entra pela
+      // frente da fila assim que um worker vagar (nunca preempta uma chamada JÁ em voo — não dá para pausar um
+      // fetch()). Best-effort: uma falha aqui só é logada (nunca reclassifica origem, nunca retry novo — o
+      // dedupe persistente do backend, migration 090, é a garantia final).
+      filaNotificacaoBackend.enfileirar(() => backendClient.notificarMensagemRecebida(evento), { prioridade: evento.origemTipo === "LIVE" ? "alta" : "normal" })
         .catch((e) => log("warn", "notificar_mensagem_recebida.falhou", { erro: e?.message }));
     }
   }
@@ -1517,5 +1530,7 @@ export function criarSessaoBaileys({ authAdapter, backendClient, config, fabrica
     _authConfirmado: () => authConfirmado,
     _reconexaoPendente: () => reconexaoPendente,
     _conectandoAgora: () => conectandoAgora,
+    /** Checkpoint G.0.1 — só números (Parte I/W): prova que a concorrência para o backend nunca passa do limite. */
+    metricasNotificacaoBackend: () => filaNotificacaoBackend.metricas(),
   };
 }

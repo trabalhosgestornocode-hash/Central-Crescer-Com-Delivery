@@ -37,6 +37,7 @@ import {
 } from "baileys";
 import { criarObservadorOffline } from "./offlineObserve.js";
 import { criarIdentidadeOffline } from "./offlineIdentidade.js";
+import { criarMotorRecovery } from "./offlineRecovery.js";
 
 export const ESCOPO_ALL_SUPPORTED = "ALL_SUPPORTED";
 export const ESCOPO_DIRECT_ONLY = "DIRECT_ONLY";
@@ -277,8 +278,13 @@ const LIMITE_IDS_EM_MEMORIA = 5000;
  *   OBSERVE). Só vale com o diagnóstico ligado. `true` usa os PADRÕES; um objeto sobrescreve limites (testes).
  * @param {() => (number|null)} [deps.obterEpoch] epoch técnico da lease (só para rotular os eventos do observador)
  *   (C.9.7) `offlineObserve` objeto também aceita `identidade: false` (desliga a identidade efêmera) e `identidadeOpcoes` (testes); o resto são limites do observador.
+ * @param {boolean|object} [deps.offlineRecovery] Checkpoint G — kill-switch (nasce OFF). Só vale com `offlineObserve` E a
+ *   identidade LIGADOS (sem fingerprint não há como medir "progresso útil" — fail-closed, nunca inicia). `true` usa os
+ *   PADRÕES de src/offlineRecovery.js; um objeto sobrescreve limites (testes). Aceita `lerAuthHeadroomOk` (função) e
+ *   `aoIniciar` (callback chamado UMA vez, ao entrar em RECOVERING — usado pelo wiring para promover o rastreador de
+ *   origem do Checkpoint F de OFFLINE_NORMAL para OFFLINE_RECOVERY, sem nunca logar id).
  */
-export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emitir, intervaloMs = 30_000, agendar = setInterval, cancelar = clearInterval, consoleAlvo = console, agora = () => Date.now(), offlineObserve = false, obterEpoch = () => null } = {}) {
+export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emitir, intervaloMs = 30_000, agendar = setInterval, cancelar = clearInterval, consoleAlvo = console, agora = () => Date.now(), offlineObserve = false, obterEpoch = () => null, offlineRecovery = false } = {}) {
   const { escopo, valido } = interpretarEscopo(escopoBruto);
   const contadores = diagHabilitado ? criarContadoresInbound() : undefined;
   const ciclo = diagHabilitado ? criarCicloFilaOffline({ agora }) : undefined;
@@ -290,6 +296,14 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
   const identidadeOffline = diagHabilitado && offlineObserve && identidadeLigada !== false ? criarIdentidadeOffline(identidadeOpcoes) : undefined;
   const observador = diagHabilitado && offlineObserve
     ? criarObservadorOffline({ agora, emitir, obterEpoch, agendar, cancelar, identidade: identidadeOffline, ...limitesObserve })
+    : undefined;
+  // Checkpoint G — só existe com observador E identidade ligados (ver o parágrafo acima). O motor em si nunca vê
+  // ev/ws/socket: só os leitores por geração montados abaixo, em observarSocket(). `habilitado`/`lerAuthHeadroomOk`
+  // são funções (não um booleano capturado uma vez) para permitir um kill-switch/guarda dinâmicos em produção.
+  const { habilitado: recoveryHabilitadoBruto = true, lerAuthHeadroomOk = () => true, aoIniciar: aoIniciarRecoveryExterno, ...limitesRecovery } = typeof offlineRecovery === "object" && offlineRecovery ? offlineRecovery : {};
+  const recoveryHabilitado = typeof recoveryHabilitadoBruto === "function" ? recoveryHabilitadoBruto : () => Boolean(recoveryHabilitadoBruto);
+  const motorRecovery = diagHabilitado && observador && identidadeOffline && offlineRecovery
+    ? criarMotorRecovery({ agora, emitir, obterEpoch, agendar, cancelar, habilitado: recoveryHabilitado, ...limitesRecovery })
     : undefined;
 
   let timer = null;
@@ -397,6 +411,25 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
           lerSocketAberto: () => ws?.isOpen === true,
         });
       } catch { g = undefined; }
+      // Checkpoint G — geração PRÓPRIA do motor de recovery (nunca reaproveita `g` do observador: são módulos
+      // independentes por desenho). `pedirBatch` é a ÚNICA ação que este wiring concede ao motor: reenviar
+      // EXATAMENTE o mesmo frame que o Baileys manda sozinho no 1º preview (auditado em node_modules/baileys).
+      // O motor em si nunca vê `socket`/`ws`/`sendNode` — só este closure, que o wiring já tinha de qualquer forma.
+      let gr;
+      try {
+        gr = motorRecovery?.novaGeracao({
+          lerBufferAtivo: () => (typeof ev?.isBuffering === "function" ? ev.isBuffering() === true : false),
+          lerSocketAberto: () => ws?.isOpen === true,
+          lerOfflineFimRecebido: () => ciclo.estado.offlineFim > 0,
+          lerMensagensRetidas: () => ciclo.estado.retidas,
+          lerFaseObservador: () => observador?.estado()?.fase ?? null,
+          lerAuthHeadroomOk,
+          lerIdentidadeDisponivel: () => Boolean(identidadeOffline),
+          // Sem try/catch aqui de propósito: uma exceção deve chegar ao motor, que a trata como internal_error.
+          pedirBatch: () => socket.sendNode({ tag: "ib", attrs: {}, content: [{ tag: "offline_batch", attrs: { count: "100" } }] }),
+          aoIniciar: () => { try { aoIniciarRecoveryExterno?.(); } catch { /* nunca derruba o motor */ } },
+        });
+      } catch { gr = undefined; }
       obterIdentidade = () => identidadeDe(socket?.user ?? socket?.authState?.creds?.me);
       obterAppStateKey = () => Boolean(socket?.authState?.creds?.myAppStateKeyId);
       obterBufferAtivo = () => (typeof socket?.ev?.isBuffering === "function" ? socket.ev.isBuffering() === true : null);
@@ -411,7 +444,13 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
             observador?.aoNo(g, { especie, tipo: tipoStanza, offlineAttr: node?.attrs?.offline, t: node?.attrs?.t });
             // (C.9.7) identidade efêmera: SÓ nós offline (mesma regra do Baileys). O material bruto entra direto no módulo de identidade
             // (que só devolve contagens) e não vai para o observador, para log nem para nenhuma outra estrutura.
-            if (identidadeOffline && node?.attrs?.offline) identidadeOffline.registrar(g, especie, { type: node.attrs.type, id: node.attrs.id, from: node.attrs.from, participant: node.attrs.participant });
+            if (identidadeOffline && node?.attrs?.offline) {
+              const classificacaoIdentidade = identidadeOffline.registrar(g, especie, { type: node.attrs.type, id: node.attrs.id, from: node.attrs.from, participant: node.attrs.participant });
+              // Checkpoint G — "progresso útil" (seções 26-27 do checkpoint): só um fingerprint NUNCA visto nesta geração conta.
+              motorRecovery?.aoNo(gr, { progressoUtil: classificacaoIdentidade === "novo" });
+            } else if (!node?.attrs?.offline) {
+              motorRecovery?.aoNoVivo(gr);
+            }
             if (especie === "message" && node?.attrs?.id != null) {
               const tinhaEnc = Array.isArray(node.content) && node.content.some((c) => c?.tag === "enc");
               encPorId.set(node.attrs.id, tinhaEnc);
@@ -433,6 +472,10 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
             try {
               const filho = Array.isArray(node?.content) ? node.content.find((c) => c?.tag === "offline") : null;
               observador.aoMarcador(g, Number(filho?.attrs?.count));
+              // Checkpoint G, seção 33 — o marcador durante RECOVERING é SUCESSO: o motor apenas registra o
+              // desfecho (marker_received) e sai do caminho; o flush que acontece a seguir é o OFICIAL do
+              // Baileys (este listener é `prependListener`: roda ANTES do handler nativo que chama `ev.flush()`).
+              motorRecovery?.aoMarcador(gr);
             } catch { /* idem */ }
           };
           try { if (typeof ws.prependListener === "function") ws.prependListener("CB:ib,,offline", antesDoMarcador); else ws.on("CB:ib,,offline", antesDoMarcador); } catch { /* idem */ }
@@ -449,7 +492,7 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
             } else if (evento === "connection.update") {
               if (dados?.receivedPendingNotifications) ciclo.aoPendentesNotificados();
               if (dados?.connection === "open") ciclo.aoConexaoAberta();
-              if (dados?.connection === "close") observador?.aoFechado(g);
+              if (dados?.connection === "close") { observador?.aoFechado(g); motorRecovery?.aoFechado(gr); }
             }
           } catch { /* idem */ }
           return emitOriginal.call(this, evento, dados, ...resto);
@@ -511,9 +554,15 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
     /** (C.9.7) só TAMANHOS da identidade efêmera (nunca impressões) ou undefined se desligada */
     estadoIdentidade: () => identidadeOffline?.estado(),
     metricasObserve: () => observador?.metricas(),
+    /** Checkpoint G — true SÓ enquanto a geração atual está de fato paginando (usado para rotular OFFLINE_RECOVERY). */
+    recoveryAtivo: () => Boolean(motorRecovery?.ativo()),
+    /** estado do motor de recovery (geração atual; só números/booleanos/vocabulário fechado) ou undefined se desligado */
+    estadoRecovery: () => motorRecovery?.estado(),
+    metricasRecovery: () => motorRecovery?.metricas(),
     emitirResumo,
     parar() {
       observador?.parar();
+      motorRecovery?.parar();
       if (timer) { cancelar(timer); timer = null; }
       if (consoleOriginal && consoleAlvo?.error === consoleEnvolvido) consoleAlvo.error = consoleOriginal;
       consoleOriginal = null; consoleEnvolvido = null;

@@ -152,6 +152,12 @@ export function criarAuthStateAdapter({
   // NUNCA gerada aqui. `null` enquanto não houver nenhuma geração conhecida
   // (ABSENT, ou ainda não persistiu nada nesta sessão do processo).
   let authSessionIdAtual = null;
+  // Checkpoint G.0.1 — último tamanho de CORPO conhecido (bytes que iriam no POST /eventos/auth-state), atualizado
+  // em TODA gravação bem-sucedida (não só quando WHATSAPP_AUTH_METRICS_ENABLED está ligado — ver salvarSnapshot()).
+  // É a MESMA fonte que auth_state.metricas usa (o `cifrado.length` já calculado para cifrar, nunca uma segunda
+  // serialização): reaproveitada pela guarda de auth headroom do Checkpoint G (src/authHeadroom.js). `null` até a
+  // primeira gravação bem-sucedida desta sessão do processo — trate como DESCONHECIDO, nunca como "seguro".
+  let ultimoTamanhoConhecido = null;
 
   // FILA DE PERSISTÊNCIA (single-instance) — `creds.update` e `keys.set` do
   // Baileys podem disparar em sequência rápida, e cada um chama `persistir()`
@@ -308,15 +314,16 @@ export function criarAuthStateAdapter({
       // Falha local de cifra (chave inválida etc.) — repetir não ajuda.
       throw new AuthPersistenciaError("permanente", "cripto");
     }
-    if (telemetriaAuth?.habilitada) {
-      // Só para a telemetria: tamanho do cifrado e do corpo HTTP EXATO (mesma serialização do
-      // backendClient.chamar = JSON.stringify do payload; o cifrado é base64 ASCII, sem escapes).
-      snap.cifradoChars = cifrado.length;
-      snap.corpoBytes = Buffer.byteLength(JSON.stringify({
-        authStateEncrypted: "", authStateVersion: `v${versao}`,
-        gatewayProcessId: snap.contexto?.gatewayProcessId, leaseEpoch: snap.contexto?.leaseEpoch,
-      })) + cifrado.length;
-    }
+    // Checkpoint G.0.1 — tamanho do CORPO HTTP exato (mesma serialização do backendClient.chamar =
+    // JSON.stringify do payload; o cifrado é base64 ASCII, sem escapes) SEMPRE calculado: é aritmética sobre
+    // `cifrado.length`, já produzido acima por `encriptar()` para a gravação em si — nada aqui serializa o auth
+    // state uma segunda vez. Continua BARATO com a telemetria de log desligada; só a EMISSÃO (auth_state.metricas)
+    // permanece condicionada a `telemetriaAuth?.habilitada`.
+    snap.cifradoChars = cifrado.length;
+    snap.corpoBytes = Buffer.byteLength(JSON.stringify({
+      authStateEncrypted: "", authStateVersion: `v${versao}`,
+      gatewayProcessId: snap.contexto?.gatewayProcessId, leaseEpoch: snap.contexto?.leaseEpoch,
+    })) + cifrado.length;
     try {
       const r = await backendClient.salvarAuthState({
         authStateEncrypted: cifrado, authStateVersion: `v${versao}`,
@@ -376,6 +383,9 @@ export function criarAuthStateAdapter({
     retry.tentativas = 0;
     retry.esgotado = false;
     if (!estaSujo()) cancelarRetry();
+    // Checkpoint G.0.1 — SEMPRE atualizado (independente da telemetria de log), na MESMA gravação bem-sucedida:
+    // é o que obterUltimoTamanho() devolve para a guarda de auth headroom do recovery.
+    ultimoTamanhoConhecido = { corpoBytes: snap.corpoBytes, medidoEm: Date.now() };
     // Nunca logar o plaintext nem o cifrado — só o tamanho, útil para
     // dimensionar o crescimento do blob ao longo do tempo.
     log("info", "auth_state.persistido", { bytesPlaintext: snap.plaintext.length, geracao: snap.geracao, origem });
@@ -665,6 +675,12 @@ export function criarAuthStateAdapter({
     marcarMemoriaObsoleta,
     /** Cancela o retry em segundo plano (shutdown/perda de lease) — nunca deixa timer órfão. */
     cancelarRetries: cancelarRetry,
+    /**
+     * Checkpoint G.0.1 — `{ corpoBytes, medidoEm } | null` (null = ainda nenhuma gravação bem-sucedida nesta sessão
+     * do processo: DESCONHECIDO, nunca "seguro"). Fonte ÚNICA para a guarda de auth headroom (src/authHeadroom.js)
+     * — nunca uma segunda serialização do auth state só para isto.
+     */
+    obterUltimoTamanho: () => ultimoTamanhoConhecido,
     /**
      * Chamado pelo handler de `creds.update` do Baileys. O payload é
      * `Partial<AuthenticationCreds>` (node_modules/baileys/lib/Types/

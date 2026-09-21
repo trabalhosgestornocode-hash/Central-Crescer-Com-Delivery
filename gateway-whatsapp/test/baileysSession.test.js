@@ -14,6 +14,11 @@ import { erro, CODIGOS } from "../src/errors.js";
 
 const DISCONNECT_REASON_LOGGED_OUT = 401; // mesmo valor real do Baileys (DisconnectReason.loggedOut)
 const DISCONNECT_REASON_CONNECTION_LOST = 408;
+// Checkpoint G.0.1 — notificarMensagemRecebida agora passa pela fila de concorrência limitada
+// (src/filaConcorrenciaLimitada.js): a chamada real acontece alguns microtasks DEPOIS do messages.upsert (antes
+// era síncrona) — e mais ainda quando o lote excede a concorrência (o resto só dispara quando um worker libera).
+// `tick()` drena vários microtasks — suficiente para as mocks deste arquivo, que resolvem na hora (sem I/O real).
+const tick = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
 function socketFalsoFabrica() {
   const criados = [];
@@ -934,6 +939,7 @@ describe("baileysSession — eventos de mensagem", () => {
     fabricaSocket.criados[0].ev.emit("messages.upsert", {
       messages: [{ key: { fromMe: false, id: "m1", remoteJid: "5511999990000@s.whatsapp.net" } }],
     });
+    await tick();
     assert.equal(backendClient.notificarMensagemRecebida.mock.calls.length, 1);
     assert.equal(backendClient.notificarMensagemRecebida.mock.calls[0].arguments[0].telefoneE164, "+5511999990000");
   });
@@ -969,6 +975,7 @@ describe("baileysSession — eventos de mensagem", () => {
       const { sock, handler, enviados } = await sessaoComSocket();
       sock.ws.emit("CB:message", { attrs: { id: "m1", from: PN } });
       sock.ev.emit("messages.upsert", { messages: [{ key: { fromMe: false, id: "m1", remoteJid: PN }, message: { conversation: "oi" } }], type: "notify" });
+      await tick();
       assert.equal(enviados().length, 1);
       const e = enviados()[0];
       assert.deepEqual(Object.keys(e).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem"]);
@@ -986,6 +993,7 @@ describe("baileysSession — eventos de mensagem", () => {
       sock.ws.emit("CB:message", { attrs: { id: "off1", from: PN, offline: "1" } });
       const m = (id) => ({ key: { fromMe: false, id, remoteJid: PN }, message: {} });
       sock.ev.emit("messages.upsert", { messages: [m("off0"), m("viva"), m("off1"), m("sem-stanza")], type: "notify" });
+      await tick();
       assert.deepEqual(enviados().map((e) => [e.providerMessageId, e.origemTipo]), [["off0", "OFFLINE_NORMAL"], ["viva", "LIVE"], ["off1", "OFFLINE_NORMAL"], ["sem-stanza", "OFFLINE_NORMAL"]]);
     });
 
@@ -996,6 +1004,7 @@ describe("baileysSession — eventos de mensagem", () => {
         m("a", "100000000000001@lid"), m("b", "100000000000001@lid", { senderPn: "5511999990001@s.whatsapp.net" }), m("c", "120363000000000001@g.us", { participant: "100000000000001@lid" }),
         m("d", "status@broadcast"), m("e", "120363000000000002@newsletter"), m("f", "1726876800@broadcast"),
       ] });
+      await tick();
       const por = Object.fromEntries(enviados().map((e) => [e.providerMessageId, e]));
       assert.deepEqual([por.a.origemJidTipo, por.a.telefoneE164, por.a.telefoneOrigem], ["direct_lid_other", null, null]);
       assert.deepEqual([por.b.telefoneE164, por.b.telefoneOrigem], ["+5511999990001", "SENDER_PN"]);
@@ -1007,6 +1016,7 @@ describe("baileysSession — eventos de mensagem", () => {
       sock.user = { id: "5511999990009:7@s.whatsapp.net", lid: "100000000000009:7@lid" };
       const m = (id, remoteJid) => ({ key: { fromMe: false, id, remoteJid }, message: {} });
       sock.ev.emit("messages.upsert", { messages: [m("a", "100000000000009@lid"), m("b", "5511999990009@s.whatsapp.net")] });
+      await tick();
       assert.deepEqual(enviados().map((e) => [e.origemJidTipo, e.telefoneE164]), [["direct_lid_self", null], ["direct_pn", null]]);
     });
 
@@ -1016,6 +1026,7 @@ describe("baileysSession — eventos de mensagem", () => {
         { key: { fromMe: false, id: "f1", remoteJid: PN }, messageStubType: proto.WebMessageInfo.StubType.CIPHERTEXT, messageStubParameters: ["Bad MAC Error: Bad MAC SEGREDO-XYZ"] },
         { key: { fromMe: false, id: "s1", remoteJid: "120363000000000001@g.us" }, messageStubType: proto.WebMessageInfo.StubType.GROUP_PARTICIPANT_ADD },
       ] });
+      await tick();
       const [f, s] = enviados();
       assert.deepEqual([f.falhaDecrypt, f.motivoFalhaDecrypt, f.stubSistema], [true, "bad_mac", false]);
       assert.ok(!JSON.stringify(f).includes("SEGREDO-XYZ"));
@@ -1028,6 +1039,7 @@ describe("baileysSession — eventos de mensagem", () => {
         { key: { fromMe: false, remoteJid: PN } }, { key: { fromMe: false, id: "", remoteJid: PN } }, { key: { fromMe: true, id: "meu", remoteJid: PN } },
         { key: { fromMe: false, id: "ok", remoteJid: PN } },
       ] });
+      await tick();
       assert.deepEqual(enviados().map((e) => e.providerMessageId), ["ok"]); assert.equal(handler.mock.calls.length, 1);
     });
 
@@ -1038,6 +1050,7 @@ describe("baileysSession — eventos de mensagem", () => {
       fabricaSocket.criados[0].ws.emit("CB:message", { attrs: { id: "velha", from: PN } });         // LIVE no socket 1, nunca consumida
       await sessao.desconectar(); await sessao.conectar();
       fabricaSocket.criados[1].ev.emit("messages.upsert", { messages: [{ key: { fromMe: false, id: "velha", remoteJid: PN }, message: {} }] });
+      await tick();
       assert.equal(backendClient.notificarMensagemRecebida.mock.calls.at(-1).arguments[0].origemTipo, "OFFLINE_NORMAL", "sem a stanza deste socket ⇒ fail-safe");
     });
   });

@@ -649,3 +649,44 @@ describe("authState — fencing de lease (Checkpoint C3.5)", () => {
     assert.equal(backendClient._chamadas().length, 1);
   });
 });
+
+describe("Checkpoint G.0.1 — obterUltimoTamanho() (fonte real do auth headroom)", () => {
+  test("null antes de qualquer gravação bem-sucedida (DESCONHECIDO, nunca 'seguro')", () => {
+    const adapter = criarAuthStateAdapter({ backendClient: backendClientFalso(), chaveEncriptacaoEnv: CHAVE_ENV });
+    assert.equal(adapter.obterUltimoTamanho(), null);
+  });
+
+  test("populado após a 1ª gravação bem-sucedida — INDEPENDENTE de telemetriaAuth (nenhuma métrica de log ligada)", async () => {
+    const adapter = criarAuthStateAdapter({ backendClient: backendClientFalso(), chaveEncriptacaoEnv: CHAVE_ENV });
+    adapter.inicializarCreds(initAuthCreds());
+    await adapter.aoAtualizarCreds({ nextPreKeyId: 1 });
+    const t = adapter.obterUltimoTamanho();
+    assert.ok(t && Number.isFinite(t.corpoBytes) && t.corpoBytes > 0, "corpoBytes real, positivo");
+    assert.ok(Number.isFinite(t.medidoEm) && t.medidoEm > 0);
+  });
+
+  test("cresce com o tamanho real do auth state (mais uma pre-key ⇒ corpoBytes maior)", async () => {
+    const adapter = criarAuthStateAdapter({ backendClient: backendClientFalso(), chaveEncriptacaoEnv: CHAVE_ENV });
+    adapter.inicializarCreds(initAuthCreds());
+    await adapter.aoAtualizarCreds({ nextPreKeyId: 1 });
+    const antes = adapter.obterUltimoTamanho().corpoBytes;
+    await adapter.comoAuthState().keys.set({ "pre-key": { "1": { keyPair: { public: randomBytes(32), private: randomBytes(32) }, keyId: 1 } } });
+    await adapter.garantirPersistido();
+    const depois = adapter.obterUltimoTamanho().corpoBytes;
+    assert.ok(depois > antes, `esperado crescer: ${antes} -> ${depois}`);
+  });
+
+  test("nunca é o mesmo valor de uma 2ª serialização: é aritmética sobre o MESMO cifrado.length já produzido para a gravação (comparado com medirAuthState via a telemetria ligada)", async () => {
+    const eventos = [];
+    const { criarTelemetriaAuth } = await import("../src/authMetrics.js");
+    const { serializarAuth } = await import("../src/authState.js");
+    const adapter = criarAuthStateAdapter({
+      backendClient: backendClientFalso(), chaveEncriptacaoEnv: CHAVE_ENV,
+      telemetriaAuth: criarTelemetriaAuth({ habilitada: true, serializar: serializarAuth, emitir: (d) => eventos.push(d) }),
+    });
+    adapter.inicializarCreds(initAuthCreds());
+    await adapter.aoAtualizarCreds({ nextPreKeyId: 1 });
+    assert.equal(eventos.length, 1);
+    assert.equal(adapter.obterUltimoTamanho().corpoBytes, eventos[0].corpoBytes, "MESMA fonte — nunca diverge da telemetria de log");
+  });
+});

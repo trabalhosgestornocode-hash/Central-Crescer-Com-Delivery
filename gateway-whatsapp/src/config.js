@@ -51,6 +51,22 @@ export const config = {
   // Checkpoint C3.5-C.9.6 — observador da fila offline (máquina de estados DIAGNÓSTICA + watchdog em modo OBSERVE: nunca faz flush, nunca
   // altera mensagens). Só age com o diagnóstico acima LIGADO; ligado por padrão nesse caso. Kill-switch explícito: 0/false/no/off.
   offlineObserveHabilitado: !/^(0|false|no|off)$/i.test(String(process.env.WHATSAPP_OFFLINE_OBSERVE_ENABLED ?? "").trim()),
+  // Checkpoint G — motor de OFFLINE_RECOVERY (src/offlineRecovery.js). NASCE DESLIGADO (o oposto do observador
+  // acima): só age com um valor explícito ligando. Enquanto desligado, o comportamento é idêntico ao de f4720cb
+  // (Checkpoint F) — ver a suíte de não-interferência em test/offlineRecoveryIntegracao.test.js. Só tem efeito
+  // com offlineObserveHabilitado E o diagnóstico LIGADOS (ver src/inboundScope.js).
+  offlineRecoveryHabilitado: /^(1|true|yes|on)$/i.test(String(process.env.WHATSAPP_OFFLINE_RECOVERY_ENABLED ?? "").trim()),
+  // Checkpoint G.0.1 — Partes M-O: percentual do limite local de 1 MiB que o recovery aceita usar do auth-state
+  // (src/authHeadroom.js). O Gateway NUNCA lê o limite real do backend (WHATSAPP_GATEWAY_AUTH_STATE_MAX_BODY_BYTES
+  // é config/segredo do OUTRO processo) — só uma referência conservadora própria. Default 85%: a baseline
+  // conhecida (~72-73%) fica com margem para o crescimento observado entre reconexões sem tornar o recovery
+  // impraticável; ver o racional completo no relatório do checkpoint.
+  offlineRecoveryAuthMaxUsagePct: Number(process.env.WHATSAPP_OFFLINE_RECOVERY_AUTH_MAX_USAGE_PCT ?? 85),
+  // Checkpoint G.0.1 (Partes C-J) — nº máximo de chamadas a notificarMensagemRecebida em voo ao mesmo tempo (fila
+  // local, src/filaConcorrenciaLimitada.js). Default 4: testado com backend falso rápido/lento/intermitente em
+  // 1/2/4/8 (ver test/filaConcorrenciaLimitada.test.js) — nunca validado contra o backend REAL sob carga; ajustar
+  // aqui sem precisar de deploy de código caso a telemetria de produção (`backend.chamada`, `notificar_mensagem_recebida.falhou`) peça.
+  backendNotifyConcurrency: Number(process.env.WHATSAPP_BACKEND_NOTIFY_CONCURRENCY ?? 4),
 
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",
