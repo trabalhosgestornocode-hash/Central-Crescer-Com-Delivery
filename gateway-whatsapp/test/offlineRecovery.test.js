@@ -177,13 +177,92 @@ describe("cenário 8/52 (limite de nós): aborta ao atingir maxRecoveryNodes mes
   });
 });
 
-describe("cenário 9/53 (limite de tempo): aborta por duração mesmo com progresso constante", () => {
-  test("progresso a cada tick nunca deixa a quietude vencer, mas maxRecoveryDurationMs aborta mesmo assim", () => {
-    const a = abrir({ maxRecoveryDurationMs: 1000, batchQuietMs: 5000 });
-    a.avancar(100);
-    for (let i = 0; i < 20; i++) { a.loteDeNos(1, 1); a.avancar(100); }
-    assert.equal(a.motor.estado().status, FASE_RECOVERY.DONE);
+describe("cenário 9/53 (limite de tempo): nunca deixa a sessão rodar para sempre, mas protege um BATCH EM VOO (Checkpoint G.3.1)", () => {
+  test("A) SEM nada em voo no instante exato em que o prazo expira: aborta na hora, sem grace nenhuma (comportamento de sempre)", () => {
+    // o motor fica pedindo lotes vazios em ciclo (batchQuietMs=100) até o prazo expirar; no tick exato da expiração,
+    // o último lote pedido já estava quieto havia batchQuietMs — nada "em voo" para proteger.
+    const a = abrir({
+      maxRecoveryDurationMs: 1000, batchQuietMs: 100,
+      maxConsecutiveNoProgressBatches: 1000, maxRecoveryNodes: 100_000, maxRecoveryBatches: 1000,
+    });
+    a.avancar(1100);
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.DONE, "sem batch em voo, o prazo aborta imediatamente");
     assert.equal(a.motor.estado().motivoFinal, "max_duration");
+  });
+
+  test("B) progresso constante (nunca fica quieto) NÃO impede o prazo de eventualmente abortar — só adia por, no máximo, mais um batchQuietMs (grace FIXA, nunca reiniciada por atividade nova)", () => {
+    const a = abrir({ maxRecoveryDurationMs: 1000, batchQuietMs: 300 });
+    a.avancar(100); // entra em RECOVERING, pede o batch #1 em t=100
+    for (let i = 0; i < 10; i++) { a.loteDeNos(1, 1); a.avancar(100); } // t~1100: o prazo (1000) já expirou
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.RECOVERING, "batch em voo (nó a cada 100ms < batchQuietMs=300): o prazo NÃO corta no meio");
+    const nodesAntes = a.motor.estado().nodesRecebidos;
+    a.loteDeNos(1, 1); a.avancar(100); // mais um nó DEPOIS do prazo expirado — tem que ser contado, não descartado
+    assert.equal(a.motor.estado().nodesRecebidos, nodesAntes + 1, "nós que chegam durante a grace continuam sendo contados (Checkpoint G.2.2: antes eram descartados em silêncio)");
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.RECOVERING, "ainda dentro da grace");
+    a.avancar(400); // para de alimentar: a grace (batchQuietMs=300, fixa desde a 1ª detecção da expiração) esgota
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.DONE, "a grace tem teto: progresso constante não estende para sempre");
+    assert.equal(a.motor.estado().motivoFinal, "max_duration");
+  });
+
+  test("C) marker chega DURANTE a grace (batch em voo após o prazo expirar): marker vence, motivo final é marker_received, nunca max_duration", () => {
+    // caps de no_progress/batches/nodes bem largos: sem alimentar nós depois do 1º, o motor ficaria pedindo lotes
+    // vazios em ciclo (mesma mecânica do teste A) e bateria o teto de no_progress ANTES do prazo — o que este teste
+    // quer isolar é só "há um lote em voo (dentro de batchQuietMs) no instante em que o prazo expira", não o ciclo.
+    const a = abrir({ maxRecoveryDurationMs: 1000, batchQuietMs: 300, maxConsecutiveNoProgressBatches: 1000, maxRecoveryNodes: 100_000, maxRecoveryBatches: 1000 });
+    a.avancar(100);
+    a.loteDeNos(1, 1); a.avancar(1000); // entra na grace (mesma mecânica do teste B), sem esperar ela esgotar
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.RECOVERING, "ainda na grace");
+    a.motor.aoMarcador(a.g); // o marcador oficial chega agora
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.DONE);
+    assert.equal(a.motor.estado().motivoFinal, "marker_received", "o marcador preempta a grace — nunca max_duration");
+  });
+
+  test("D) socket fecha DURANTE a grace: socket_closed vence, nunca max_duration", () => {
+    const a = abrir({ maxRecoveryDurationMs: 1000, batchQuietMs: 300, maxConsecutiveNoProgressBatches: 1000, maxRecoveryNodes: 100_000, maxRecoveryBatches: 1000 });
+    a.avancar(100);
+    a.loteDeNos(1, 1); a.avancar(1000); // entra na grace
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.RECOVERING, "ainda na grace");
+    a.motor.aoFechado(a.g); // o socket fecha agora
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.DONE);
+    assert.equal(a.motor.estado().motivoFinal, "socket_closed", "o fechamento do socket preempta a grace — nunca max_duration");
+  });
+});
+
+describe("Checkpoint G.3.1 — auditoria de maxRecoveryNodes no meio de um batch: NÃO tem o mesmo problema do max_duration", () => {
+  test("E) o cap de nodes é alcançado DURANTE um batch (nós ainda chegando): o motor NÃO pede um batch novo, mas continua contando os nós do lote atual até ele terminar — nenhum nó é descartado", () => {
+    // maxRecoveryNodes=5: o lote #1 sozinho já entrega 8 nós (chegam TODOS antes de qualquer checagem de cap —
+    // aoNo() nunca gate por maxRecoveryNodes, só decidirProximoPasso() checa o total DEPOIS do lote ficar quieto).
+    const a = abrir({ maxRecoveryNodes: 5, maxRecoveryDurationMs: 60_000, batchQuietMs: 1000 });
+    a.avancar(100); // pede o batch #1
+    a.loteDeNos(8, 8); // todos os 8 chegam enquanto o lote está em voo — nenhum é descartado por já passar de 5
+    assert.equal(a.motor.estado().nodesRecebidos, 8, "os 8 nós do lote em voo foram TODOS contados, mesmo passando do cap de 5");
+    a.avancar(1000); // o lote fica quieto: só AGORA o cap é avaliado
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.DONE);
+    assert.equal(a.motor.estado().motivoFinal, "max_nodes");
+    assert.equal(a.motor.estado().batchesSolicitados, 1, "nenhum 2º batch foi pedido — o cap não vira autorização para mais nada");
+  });
+
+  test("F) auth_headroom=false: nenhum batch novo é pedido, mesmo com o cap de nodes longe de ser atingido", () => {
+    const a = abrir({ maxRecoveryNodes: 100_000 });
+    a.avancar(100);
+    a.loteDeNos(3, 3);
+    a.est.authOk = false; // headroom piora antes do próximo lote ficar quieto
+    a.avancar(1100);
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.DONE);
+    assert.equal(a.motor.estado().motivoFinal, "auth_headroom");
+    assert.equal(a.motor.estado().batchesSolicitados, 1, "nenhum batch novo depois que o headroom negou");
+  });
+});
+
+describe("Checkpoint G.3.1 — regressão: os 5 caps do canário (1/120/15000/1/5000) continuam funcionando exatamente como antes", () => {
+  test("com os caps EXATOS do canário G.2.2, o motor ainda para em max_batches após 1 lote — a proteção de batch em voo não muda esse caminho quando não há expiração de duração envolvida", () => {
+    const a = abrir({ maxRecoveryBatches: 1, maxRecoveryNodes: 120, maxRecoveryDurationMs: 15_000, maxConsecutiveNoProgressBatches: 1, batchQuietMs: 5000 });
+    a.avancar(50);
+    a.loteDeNos(50, 50);
+    a.avancar(5000);
+    assert.equal(a.motor.estado().status, FASE_RECOVERY.DONE);
+    assert.equal(a.motor.estado().motivoFinal, "max_batches");
+    assert.equal(a.pedidos.length, 1, "continua exatamente 1 batch adicional, nunca um 2º");
   });
 });
 

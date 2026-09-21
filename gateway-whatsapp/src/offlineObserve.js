@@ -193,6 +193,14 @@ const lista = (obj) => Object.entries(obj).map(([nome, n]) => ({ nome, n }));
  * @param {() => (number|null)} [deps.obterEpoch] epoch da lease (técnico); null se desconhecido
  * @param {(fn: () => void, ms: number) => any} [deps.agendar] setInterval injetável
  * @param {(h: any) => void} [deps.cancelar] clearInterval injetável
+ * @param {() => boolean} [deps.lerRecoveryUsado] Checkpoint G.3.0 — leitor OPCIONAL e só-leitura do motor de recovery
+ *   (nunca uma referência ao motor em si: preserva a garantia estrutural de não-interferência do cabeçalho acima).
+ *   Sem ele (padrão), `RECOVERY_PATH_USED` continua `false` sempre — o comportamento de antes deste checkpoint,
+ *   correto quando não há motor de recovery nenhum. Quando injetado (só pelo wiring, com o motor já construído),
+ *   deve refletir `estado().status !== "IDLE"` da GERAÇÃO ATUAL do motor — ou seja, só vira `true` depois que o
+ *   motor de fato pediu o 1º batch adicional (nunca antes: nem por estar habilitado, nem pelo stall sozinho, nem
+ *   se o auth headroom bloqueou a entrada), e volta a `false` sozinho numa geração nova (o motor também reseta
+ *   `estado()` em `novaGeracao()` — nenhum estado global aqui, só a leitura de outro objeto por geração).
  */
 export function criarObservadorOffline({
   agora = () => Date.now(),
@@ -208,6 +216,7 @@ export function criarObservadorOffline({
   marcos = PADROES.marcos,
   maxEventosStallPorGeracao = PADROES.maxEventosStallPorGeracao,
   identidade = undefined,
+  lerRecoveryUsado = () => false,
 } = {}) {
   if (!(stallDetectionMs > 0)) throw new RangeError("stallDetectionMs deve ser > 0");
   if (!(absoluteMaxOfflineMs > stallDetectionMs)) throw new RangeError("absoluteMaxOfflineMs deve ser > stallDetectionMs");
@@ -334,7 +343,7 @@ export function criarObservadorOffline({
       previewAtual: previewLista(atual), previewAnterior: previewLista(anterior),
       previewCountDelta: Number.isFinite(atual?.count) && Number.isFinite(anterior?.count) ? atual.count - anterior.count : null,
       idadeOffline: lista(x.idade.offline), idadeOfflineAnterior: ant ? lista(ant.idadeOffline) : null,
-      RECOVERY_PATH_USED: false, observeOnly: true,
+      RECOVERY_PATH_USED: lerBool(lerRecoveryUsado), observeOnly: true,
     });
   }
 
@@ -351,7 +360,7 @@ export function criarObservadorOffline({
       offlinePreviewRecebido: x.previews, offlineFimRecebido: x.fim, bufferAtivo: lerBool(x.lerBufferAtivo), socketHealthy: socketSaudavel(x, t),
       observeWouldRecover, stallEntradas: x.stallEntradas, retomadas: x.retomadas,
       flushes: x.flushes, flushesEfetivos: x.flushesEfetivos, flushesSemMarcador: x.flushesSemMarcador,
-      RECOVERY_PATH_USED: false, observeOnly: true,
+      RECOVERY_PATH_USED: lerBool(lerRecoveryUsado), observeOnly: true,
       ...extra,
     };
     if (gatilho !== "heartbeat") Object.assign(dados, agregados(x));
@@ -371,7 +380,7 @@ export function criarObservadorOffline({
         nosOfflineVistos: x.nosOffline, nosVivosVistos: x.nosVivos,
         socketHealthy: a.saudavel, entrada: x.stallEntradas,
         limiteSemProgressoSegundos: seg(stallDetectionMs), limiteAbsolutoSegundos: seg(absoluteMaxOfflineMs),
-        RECOVERY_PATH_USED: false, observeOnly: true,
+        RECOVERY_PATH_USED: lerBool(lerRecoveryUsado), observeOnly: true,
         ...agregados(x),
       });
     }

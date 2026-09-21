@@ -110,6 +110,8 @@ export function criarMotorRecovery({
       iniciadoEm: null, ultimoEventoEm: null,
       batchesSolicitados: 0, nodesRecebidos: 0, nodesUnicos: 0, duplicados: 0,
       loteUnicos: 0, loteNodes: 0, consecutiveNoProgressBatches: 0,
+      // Checkpoint G.3.1 — proteção de BATCH EM VOO contra maxRecoveryDurationMs. Ver tick().
+      aguardandoLoteEmVooAposDuracao: false, duracaoExpiradaEm: null,
       timer: null,
       lerBufferAtivo: leitores.lerBufferAtivo ?? (() => false),
       lerSocketAberto: leitores.lerSocketAberto ?? (() => false),
@@ -201,13 +203,39 @@ export function criarMotorRecovery({
     try { x.pedirBatch(); } catch { encerrar(x, "internal_error"); }
   }
 
+  /**
+   * Checkpoint G.3.1 — BATCH EM VOO: `maxRecoveryDurationMs` é o orçamento de tempo da SESSÃO inteira (soma de todos
+   * os batches), checado a cada tick, independente de `batchQuietMs`. Antes deste checkpoint, se o prazo expirava
+   * enquanto um batch pedido ainda estava recebendo nós (`t - ultimoEventoEm < batchQuietMs`, ou seja "em voo"), o
+   * motor encerrava NA HORA (`encerrar` seta `status = DONE`) — e `aoNo()` descarta silenciosamente qualquer nó que
+   * chegasse depois (checa só `status === RECOVERING`), sem log, sem erro. Achado no G.3.0.
+   *
+   * Correção mínima: expirar o prazo NUNCA pede um batch novo (0 batches após o deadline — item 6 do checkpoint),
+   * mas se o ÚLTIMO batch pedido ainda está em voo, o motor entra em `aguardandoLoteEmVooAposDuracao` — continua em
+   * RECOVERING (então `aoNo()` continua contando normalmente) só até o lote atual ficar quieto (mesmo critério de
+   * sempre, `batchQuietMs`) OU até uma grace window pequena e FIXA (também `batchQuietMs`, ancorada no instante em
+   * que o prazo expirou — nunca reiniciada por atividade nova, então nunca estende indefinidamente) esgotar. Nesse
+   * meio-tempo, marcador (`aoMarcador`) e fechamento de socket (`aoFechado`) continuam tendo prioridade — eles só
+   * checam `status === RECOVERING`, inalterado por este checkpoint, e por isso preemptam normalmente.
+   */
   function tick(g) {
     const x = ativo(g); if (!x) return;
     const t = agora();
     if (x.status === FASE_RECOVERY.IDLE) { tentarIniciar(x, t); return; }
     if (x.status !== FASE_RECOVERY.RECOVERING) return;
     if (!habilitado()) { encerrar(x, "disabled"); return; }
-    if (t - x.iniciadoEm >= maxRecoveryDurationMs) { encerrar(x, "max_duration"); return; }
+
+    if (t - x.iniciadoEm >= maxRecoveryDurationMs && !x.aguardandoLoteEmVooAposDuracao) {
+      x.aguardandoLoteEmVooAposDuracao = true;
+      x.duracaoExpiradaEm = t;
+    }
+    if (x.aguardandoLoteEmVooAposDuracao) {
+      const loteQuieto = t - x.ultimoEventoEm >= batchQuietMs;
+      const graceEsgotada = t - x.duracaoExpiradaEm >= batchQuietMs;
+      if (loteQuieto || graceEsgotada) encerrar(x, "max_duration");
+      return; // nunca chega a decidirProximoPasso() daqui em diante nesta geração — zero batches novos após o prazo
+    }
+
     if (t - x.ultimoEventoEm >= batchQuietMs) decidirProximoPasso(x, t);
   }
 

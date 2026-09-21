@@ -503,6 +503,22 @@ export function criarSessaoBaileys({
   }
 
   /**
+   * Checkpoint G.3.0 — fecha `sock` (best-effort) sem NUNCA deixar uma falha de `end()` interromper a limpeza que
+   * os 4 chamadores fazem logo em seguida (zerar a referência, marcar status, heartbeat final). Bug encontrado no
+   * G.2.2: `socket.end?.(undefined).catch(() => {})` lança `TypeError` sempre que `end()` NÃO devolve uma Promise
+   * (era o caso presumido nos 4 pontos — `.catch` chamado sobre `undefined`/valor não-Promise), interrompendo a
+   * função no meio: `socket` nunca era zerado, `marcarDesconectado()` nunca rodava. Cobre os 5 formatos possíveis
+   * de retorno: Promise resolvida, Promise rejeitada, `undefined`, lança SINCRONAMENTE, ou um valor que não é
+   * Promise — em nenhum deles esta função lança. Quem chama nunca precisa do próprio try/catch em volta disto.
+   */
+  async function fecharSocketBestEffort(sock) {
+    try {
+      const resultado = sock?.end?.(undefined);
+      if (resultado && typeof resultado.then === "function") await resultado.catch(() => {});
+    } catch { /* fechar o socket nunca pode impedir o resto da limpeza (referência/status/heartbeat) */ }
+  }
+
+  /**
    * Checkpoint C3.5-B (reforço) — separado de `marcarDesconectado()` de
    * propósito (pedido explícito): só fecha o socket e para os timers, NUNCA
    * decide o `status` resultante. Quem chama decide status depois, via
@@ -513,7 +529,7 @@ export function criarSessaoBaileys({
     origemSocket = null;
     pararHeartbeatPeriodico();
     if (socket) {
-      await socket.end?.(undefined);
+      await fecharSocketBestEffort(socket);
       socket = null;
     }
   }
@@ -543,7 +559,7 @@ export function criarSessaoBaileys({
     authConfirmado = false;
     pararHeartbeatPeriodico();
     if (socket) {
-      await socket.end?.(undefined).catch(() => {});
+      await fecharSocketBestEffort(socket);
       socket = null;
     }
     marcarDesconectado();
@@ -566,7 +582,7 @@ export function criarSessaoBaileys({
     socketOpen = false;
     authConfirmado = false;
     if (socket) {
-      await socket.end?.(undefined).catch(() => {});
+      await fecharSocketBestEffort(socket);
       socket = null;
     }
     marcarDesconectado();
@@ -1200,7 +1216,7 @@ export function criarSessaoBaileys({
     authConfirmado = false;
     pararHeartbeatPeriodico();
     if (socket) {
-      await socket.end?.(undefined).catch(() => {});
+      await fecharSocketBestEffort(socket);
       socket = null;
     }
     // Mesma trava de marcarDesconectado() — perda de lease não pode

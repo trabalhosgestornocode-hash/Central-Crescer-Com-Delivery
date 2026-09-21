@@ -508,3 +508,59 @@ describe("GUARDA ESTRUTURAL: o observador é incapaz de fazer flush / mexer no b
     });
   });
 });
+
+describe("Checkpoint G.3.0 — RECOVERY_PATH_USED reflete um leitor injetado (lerRecoveryUsado), nunca mais uma constante", () => {
+  test("sem lerRecoveryUsado (padrão): continua SEMPRE false — comportamento idêntico a antes deste checkpoint", () => {
+    const a = criar();
+    a.preview(); for (let i = 0; i < 5; i++) a.noOffline(); a.upsert(5);
+    a.passar(31 * S);
+    const stall = a.porNome("inbound.offline_stalled_observed")[0];
+    assert.equal(stall.d.RECOVERY_PATH_USED, false);
+    a.passar(60 * S);
+    const hb = a.porNome("inbound.offline_state").find((x) => x.d.gatilho === "heartbeat");
+    assert.equal(hb.d.RECOVERY_PATH_USED, false);
+  });
+
+  test("lerRecoveryUsado() => true: aparece como true em offline_stalled_observed E no heartbeat seguinte", () => {
+    let usado = false;
+    const a = criar({ lerRecoveryUsado: () => usado });
+    a.preview(); for (let i = 0; i < 5; i++) a.noOffline(); a.upsert(5);
+    a.passar(31 * S);
+    assert.equal(a.porNome("inbound.offline_stalled_observed")[0].d.RECOVERY_PATH_USED, false, "ainda não tinha virado true no instante do stall");
+    usado = true;   // o motor (externo) pediu o 1º batch adicional agora
+    a.passar(60 * S);
+    const hb = a.porNome("inbound.offline_state").find((x) => x.d.gatilho === "heartbeat");
+    assert.equal(hb.d.RECOVERY_PATH_USED, true);
+  });
+
+  test("leitor que lança nunca derruba o observador — tratado como false (mesmo padrão fail-safe de lerBufferAtivo/lerSocketAberto)", () => {
+    const a = criar({ lerRecoveryUsado: () => { throw new Error("motor indisponível"); } });
+    a.preview(); a.noOffline(); a.upsert(1);
+    assert.doesNotThrow(() => a.passar(31 * S));
+    assert.equal(a.porNome("inbound.offline_stalled_observed")[0].d.RECOVERY_PATH_USED, false);
+  });
+
+  test("nova geração reseta a leitura: o leitor é o mesmo objeto de config, mas cada geração começa sem qualquer contaminação — quem decide é o leitor injetado, não o observador", () => {
+    // este teste documenta que a responsabilidade de resetar por geração é do LEITOR (o motor reseta seu próprio
+    // `estado().status` em novaGeracao() — ver inboundScope.js); o observador só repassa o que o leitor disser.
+    let usado = true;
+    const a = criar({ lerRecoveryUsado: () => usado });
+    a.preview(); a.upsert(1); a.passar(31 * S);
+    assert.equal(a.porNome("inbound.offline_stalled_observed")[0].d.RECOVERY_PATH_USED, true);
+    usado = false;   // simula o motor reiniciado numa geração nova
+    const g2 = a.obs.novaGeracao({ lerBufferAtivo: () => true, lerSocketAberto: () => true });
+    a.obs.aoPreview(g2); a.obs.aoUpsert(g2, true);
+    a.avancar(31 * S); a.obs.tick(g2);
+    const st2 = a.porNome("inbound.offline_stalled_observed")[1];
+    assert.equal(st2.d.socketGeneration, g2);
+    assert.equal(st2.d.RECOVERY_PATH_USED, false);
+  });
+
+  test("inbound.offline_overlap também usa o leitor injetado, não mais a constante false", () => {
+    const identidade = { novaGeracao() {}, comparar: () => ({ currentGeneration: 1, currentCount: 5, comparavel: false, motivo: "sem_geracao_anterior" }) };
+    const a = criar({ identidade, lerRecoveryUsado: () => true });
+    a.preview(); a.noOffline(); a.upsert(1); a.passar(31 * S);
+    const overlap = a.porNome("inbound.offline_overlap")[0];
+    assert.equal(overlap.d.RECOVERY_PATH_USED, true);
+  });
+});

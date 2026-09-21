@@ -37,7 +37,7 @@ import {
 } from "baileys";
 import { criarObservadorOffline } from "./offlineObserve.js";
 import { criarIdentidadeOffline } from "./offlineIdentidade.js";
-import { criarMotorRecovery } from "./offlineRecovery.js";
+import { criarMotorRecovery, FASE_RECOVERY } from "./offlineRecovery.js";
 
 export const ESCOPO_ALL_SUPPORTED = "ALL_SUPPORTED";
 export const ESCOPO_DIRECT_ONLY = "DIRECT_ONLY";
@@ -294,8 +294,17 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
   // (C.9.7) identidade EFÊMERA dos nós offline (HMAC com segredo aleatório só em memória): só nasce com o observador; só contagens saem.
   const { identidade: identidadeLigada = true, identidadeOpcoes = {}, ...limitesObserve } = typeof offlineObserve === "object" && offlineObserve ? offlineObserve : {};
   const identidadeOffline = diagHabilitado && offlineObserve && identidadeLigada !== false ? criarIdentidadeOffline(identidadeOpcoes) : undefined;
+  // Checkpoint G.3.0 — só-LEITURA do motor (`motorRecovery` só é declarado ABAIXO do observador; a closure só é
+  // CHAMADA depois de `motorRecovery` já estar atribuída — nunca na construção, então a ordem de declaração não
+  // importa). `!== IDLE` cobre RECOVERING e DONE: uma vez que o motor pediu o 1º batch adicional nesta geração, o
+  // rótulo fica `true` pelo resto dela — nunca antes disso (habilitado, stall observado e auth_headroom bloqueado
+  // continuam `false`, exatamente a tabela do checkpoint). Sem motor nenhum (recovery desligado) ⇒ sempre `false`.
+  const lerRecoveryUsado = () => {
+    const status = motorRecovery?.estado()?.status;
+    return status !== undefined && status !== FASE_RECOVERY.IDLE;
+  };
   const observador = diagHabilitado && offlineObserve
-    ? criarObservadorOffline({ agora, emitir, obterEpoch, agendar, cancelar, identidade: identidadeOffline, ...limitesObserve })
+    ? criarObservadorOffline({ agora, emitir, obterEpoch, agendar, cancelar, identidade: identidadeOffline, lerRecoveryUsado, ...limitesObserve })
     : undefined;
   // Checkpoint G — só existe com observador E identidade ligados (ver o parágrafo acima). O motor em si nunca vê
   // ev/ws/socket: só os leitores por geração montados abaixo, em observarSocket(). `habilitado`/`lerAuthHeadroomOk`

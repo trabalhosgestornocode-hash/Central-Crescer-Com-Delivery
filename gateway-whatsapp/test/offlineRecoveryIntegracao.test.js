@@ -171,6 +171,47 @@ describe("cenário 67 — NÃO INTERFERÊNCIA: recovery desligado (kill-switch) 
   });
 });
 
+describe("Checkpoint G.3.0 — RECOVERY_PATH_USED (src/offlineObserve.js) reflete o motor REAL via o wiring de src/inboundScope.js", { timeout: 60_000 }, () => {
+  test("false enquanto IDLE, false no instante do stall (recovery ainda não teve seu próprio tick), true depois que o motor pede o 1º batch — nunca antes", async () => {
+    const t = await abrir({ recovery: true });
+    try {
+      const nos = await gerarMensagensOffline(t.gw, 250, { pares: 30 });
+      const srv = criarServidorOfflineFalso({ gw: t.gw, nos, politica: "fim_ao_esgotar" });
+      srv.iniciar();
+      assert.equal(await srv.aguardarBatches(1, 3000), true);
+
+      // no instante em que OBSERVE detecta o stall, o motor de recovery ainda não teve seu próprio tick (timers
+      // independentes) — RECOVERY_PATH_USED tem que estar false NESTE evento especificamente.
+      assert.equal(await esperar(() => t.porNome("inbound.offline_stalled_observed").length >= 1, 4000), true);
+      assert.equal(t.porNome("inbound.offline_stalled_observed")[0].d.RECOVERY_PATH_USED, false, "no instante do stall, o motor ainda não pediu nada");
+
+      assert.equal(await esperar(() => t.porNome("inbound.offline_recovery_started").length >= 1, 4000), true, "o motor iniciou");
+      assert.equal(await esperar(() => t.gw.upserts.length === 250, 6000), true, "recovery completou pelo marcador");
+
+      // o marcador chegou (marker_received): a fase vira LIVE e o observador para de emitir heartbeat (só existe em
+      // LOADING/STALLED_OBSERVED) — o próximo (e último) offline_state desta geração É o evento "marcador", que
+      // continua sendo emitido sempre. Nesse instante o motor já pediu o 1º batch há tempos (RECOVERING/DONE).
+      assert.equal(await esperar(() => t.porNome("inbound.offline_state").some((x) => x.d.gatilho === "marcador"), 5000), true, "esperando o evento do marcador");
+      const marc = t.porNome("inbound.offline_state").find((x) => x.d.gatilho === "marcador");
+      assert.equal(marc.d.RECOVERY_PATH_USED, true, "depois do 1º batch adicional pedido, fica true pelo resto da geração (mesmo já em DONE)");
+    } finally { await t.fim(); }
+  });
+
+  test("recovery NUNCA chega a pedir batch (marcador chega antes do watchdog): RECOVERY_PATH_USED permanece false no evento do marcador", async () => {
+    const t = await abrir({ recovery: true });
+    try {
+      const nos = await gerarMensagensOffline(t.gw, 60);
+      const srv = criarServidorOfflineFalso({ gw: t.gw, nos, politica: "fim_ao_esgotar" });
+      srv.iniciar(); await srv.aguardarBatches(1, 3000);
+      assert.equal(await esperar(() => t.gw.upserts.length === 60, 5000), true);
+      assert.equal(t.inbound.estadoRecovery().status, FASE_RECOVERY.IDLE, "nunca tentou — o marcador natural venceu");
+      assert.equal(await esperar(() => t.porNome("inbound.offline_state").some((x) => x.d.gatilho === "marcador"), 5000), true);
+      const marc = t.porNome("inbound.offline_state").find((x) => x.d.gatilho === "marcador");
+      assert.equal(marc.d.RECOVERY_PATH_USED, false);
+    } finally { await t.fim(); }
+  });
+});
+
 describe("Checkpoint G.0.1 (Partes K-T) — auth headroom REAL (src/authHeadroom.js) integrado ao motor via Baileys real", { timeout: 90_000 }, () => {
   /** guarda real, com uma fonte CONTROLÁVEL pelo teste (nunca a real authState.js — isso já é coberto em authState.test.js) */
   function guardaControlavel(corpoBytesInicial) {

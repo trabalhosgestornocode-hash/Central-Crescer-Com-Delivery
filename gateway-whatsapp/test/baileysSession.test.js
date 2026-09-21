@@ -1893,6 +1893,64 @@ describe("baileysSession — LOGGED_OUT é terminal (reforço pós-auditoria, Ch
     assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT, "perda de lease também não pode rebaixar LOGGED_OUT");
   });
 
+  describe("Checkpoint G.3.0 — fecharSocketBestEffort(): socket.end() pode devolver 5 formatos diferentes, nenhum pode interromper o fail-safe", () => {
+    async function sessaoComEndCustomizado(devolverDeEnd) {
+      const fabricaSocket = socketFalsoFabrica();
+      const leaseManager = leaseManagerFalso();
+      const sessao = criarSessaoBaileys({
+        authAdapter: authAdapterFalso(), backendClient: backendClientFalso(), config: configFalso(),
+        fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT, leaseManager, agendar: () => {},
+      });
+      await sessao.conectar();
+      const socketFalso = fabricaSocket.criados[0];
+      socketFalso.end = mock.fn(devolverDeEnd);
+      return { sessao, socketFalso };
+    }
+
+    test("A) end() devolve Promise RESOLVIDA: sem exceção, cleanup completo (status vira DISCONNECTED)", async () => {
+      const { sessao } = await sessaoComEndCustomizado(() => Promise.resolve());
+      await assert.doesNotReject(() => sessao._forcarFailSafe());
+      assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    });
+
+    test("B) end() devolve Promise REJEITADA: sem exceção secundária (já coberto antes, continua coberto), cleanup completo", async () => {
+      const { sessao } = await sessaoComEndCustomizado(() => Promise.reject(new Error("falha ao fechar o socket")));
+      await assert.doesNotReject(() => sessao._forcarFailSafe());
+      assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    });
+
+    test("C) end() devolve undefined (o bug original do G.2.2 — `.catch` sobre undefined): sem TypeError, cleanup completo", async () => {
+      const { sessao, socketFalso } = await sessaoComEndCustomizado(() => undefined);
+      await assert.doesNotReject(() => sessao._forcarFailSafe());
+      assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+      // prova de que `socket` foi mesmo zerado (não só que não lançou): uma 2ª chamada não tenta fechar de novo.
+      await assert.doesNotReject(() => sessao._forcarFailSafe());
+      assert.equal(socketFalso.end.mock.calls.length, 1, "socket já era null na 2ª chamada — end() não é chamado de novo");
+    });
+
+    test("D) end() LANÇA sincronamente: sem exceção propagada, cleanup completo", async () => {
+      const { sessao } = await sessaoComEndCustomizado(() => { throw new Error("end() quebrou de forma síncrona"); });
+      await assert.doesNotReject(() => sessao._forcarFailSafe());
+      assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    });
+
+    test("E) end() devolve um valor que NÃO é Promise (ex.: true): sem TypeError, cleanup completo", async () => {
+      const { sessao } = await sessaoComEndCustomizado(() => true);
+      await assert.doesNotReject(() => sessao._forcarFailSafe());
+      assert.equal(sessao._status(), STATUS_CONEXAO.DISCONNECTED);
+    });
+
+    test("LOGGED_OUT continua soberano em qualquer um dos 5 formatos (aqui: caso C, o mais frágil)", async () => {
+      const { sessao, socketFalso } = await sessaoComEndCustomizado(() => undefined);
+      socketFalso.ev.emit("connection.update", {
+        connection: "close", lastDisconnect: { error: { output: { statusCode: DISCONNECT_REASON_LOGGED_OUT } } },
+      });
+      assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT);
+      await assert.doesNotReject(() => sessao._forcarFailSafe());
+      assert.equal(sessao._status(), STATUS_CONEXAO.LOGGED_OUT, "mesmo com o formato mais frágil de end(), LOGGED_OUT nunca é rebaixado");
+    });
+  });
+
   test("D) shutdown técnico de sessão NÃO-LOGGED_OUT: status vai para DISCONNECTED, desired continua intocado, restore futuro PERMITIDO", async () => {
     const banco = bancoCompartilhadoFalso({ desiredInicial: "CONNECTED", statusInicial: "DISCONNECTED" });
 
