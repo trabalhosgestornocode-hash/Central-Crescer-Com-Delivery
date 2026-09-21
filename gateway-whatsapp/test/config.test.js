@@ -89,3 +89,107 @@ describe("config — validarConfig() (Checkpoint C3.5-A: TTL/renew/margem do lea
     assert.ok(!/leaseManager|backendClient|adquirirLease/.test(conteudo), "config.js precisa ser puro — só lê env e valida, nunca chama rede");
   });
 });
+
+describe("config — caps do motor de OFFLINE_RECOVERY por env (Checkpoint G.2.0)", () => {
+  const NOMES_ENV = {
+    maxRecoveryBatches: "WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES",
+    maxRecoveryNodes: "WHATSAPP_OFFLINE_RECOVERY_MAX_NODES",
+    maxRecoveryDurationMs: "WHATSAPP_OFFLINE_RECOVERY_MAX_DURATION_MS",
+    maxConsecutiveNoProgressBatches: "WHATSAPP_OFFLINE_RECOVERY_MAX_NO_PROGRESS_BATCHES",
+    batchQuietMs: "WHATSAPP_OFFLINE_RECOVERY_BATCH_QUIET_MS",
+  };
+
+  test("nenhuma das 5 envs definida: todos os campos de offlineRecoveryLimites são undefined (equivalente a 963ffd4, onde elas nem existiam) e não há erro", async () => {
+    const { config, erro } = await carregarConfigCom({});
+    assert.equal(erro, null);
+    for (const chave of Object.keys(NOMES_ENV)) assert.equal(config.offlineRecoveryLimites[chave], undefined, chave);
+  });
+
+  test("envs do canário (1/120/15000/1/5000): offlineRecoveryLimites reflete exatamente esses valores, sem erro", async () => {
+    const { config, erro } = await carregarConfigCom({
+      WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES: "1",
+      WHATSAPP_OFFLINE_RECOVERY_MAX_NODES: "120",
+      WHATSAPP_OFFLINE_RECOVERY_MAX_DURATION_MS: "15000",
+      WHATSAPP_OFFLINE_RECOVERY_MAX_NO_PROGRESS_BATCHES: "1",
+      WHATSAPP_OFFLINE_RECOVERY_BATCH_QUIET_MS: "5000",
+    });
+    assert.equal(erro, null);
+    assert.deepEqual(config.offlineRecoveryLimites, {
+      maxRecoveryBatches: 1, maxRecoveryNodes: 120, maxRecoveryDurationMs: 15000,
+      maxConsecutiveNoProgressBatches: 1, batchQuietMs: 5000,
+    });
+  });
+
+  test("string vazia é tratada como AUSENTE (mesmo padrão dos flags booleanos deste arquivo) — não é erro", async () => {
+    const { config, erro } = await carregarConfigCom({ WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES: "" });
+    assert.equal(erro, null);
+    assert.equal(config.offlineRecoveryLimites.maxRecoveryBatches, undefined);
+  });
+
+  test("espaços em volta de um valor válido são aceitos (trim), igual ao resto do arquivo", async () => {
+    const { config, erro } = await carregarConfigCom({ WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES: "  3  " });
+    assert.equal(erro, null);
+    assert.equal(config.offlineRecoveryLimites.maxRecoveryBatches, 3);
+  });
+
+  test("MAX_BATCHES=0 falha no boot com o NOME da env (não pode virar silenciosamente o default de 5 — é o canário)", async () => {
+    const { erro } = await carregarConfigCom({ WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES: "0" });
+    assert.ok(erro, "esperava que validarConfig() lançasse");
+    assert.match(erro.message, /WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES/);
+  });
+
+  test("MAX_BATCHES=-1 falha", async () => {
+    const { erro } = await carregarConfigCom({ WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES: "-1" });
+    assert.ok(erro);
+    assert.match(erro.message, /WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES/);
+  });
+
+  test("MAX_BATCHES=abc (texto) falha", async () => {
+    const { erro } = await carregarConfigCom({ WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES: "abc" });
+    assert.ok(erro);
+    assert.match(erro.message, /WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES/);
+  });
+
+  test("MAX_BATCHES=1.5 (decimal) falha", async () => {
+    const { erro } = await carregarConfigCom({ WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES: "1.5" });
+    assert.ok(erro);
+    assert.match(erro.message, /WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES/);
+  });
+
+  test("MAX_BATCHES=1e3 (notação científica) falha — só dígitos puros são aceitos", async () => {
+    const { erro } = await carregarConfigCom({ WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES: "1e3" });
+    assert.ok(erro);
+  });
+
+  for (const [campo, nomeEnv] of Object.entries(NOMES_ENV)) {
+    test(`${nomeEnv}=0 falha (zero inválido)`, async () => {
+      const { erro } = await carregarConfigCom({ [nomeEnv]: "0" });
+      assert.ok(erro, `esperava erro para ${nomeEnv}=0`);
+      assert.match(erro.message, new RegExp(nomeEnv));
+    });
+
+    test(`${nomeEnv}=-1 falha (negativo)`, async () => {
+      const { erro } = await carregarConfigCom({ [nomeEnv]: "-1" });
+      assert.ok(erro, `esperava erro para ${nomeEnv}=-1`);
+    });
+
+    test(`${nomeEnv}=xyz falha (texto/NaN)`, async () => {
+      const { erro } = await carregarConfigCom({ [nomeEnv]: "xyz" });
+      assert.ok(erro, `esperava erro para ${nomeEnv}=xyz`);
+    });
+
+    test(`${nomeEnv} ausente não afeta os outros 4 caps nem gera erro`, async () => {
+      const { config, erro } = await carregarConfigCom({});
+      assert.equal(erro, null);
+      assert.equal(config.offlineRecoveryLimites[campo], undefined);
+    });
+  }
+
+  test("as chaves de offlineRecoveryLimites são EXATAMENTE os caps do motor, exceto tickMs (fora de escopo deste checkpoint)", async () => {
+    const { config } = await carregarConfigCom({});
+    const { PADROES_RECOVERY } = await import("../src/offlineRecovery.js");
+    const chavesConfig = Object.keys(config.offlineRecoveryLimites).sort();
+    const chavesMotorSemTick = Object.keys(PADROES_RECOVERY).filter((k) => k !== "tickMs").sort();
+    assert.deepEqual(chavesConfig, chavesMotorSemTick);
+  });
+});

@@ -98,8 +98,17 @@ const inbound = criarInboundGateway({
   // rastreador de origem do Checkpoint F (abaixo): promove as entradas pendentes de OFFLINE_NORMAL para
   // OFFLINE_RECOVERY no instante exato em que o motor entra em RECOVERING — nunca loga id. `lerAuthHeadroomOk`
   // (Checkpoint G.0.1) é a MESMA guarda checada na entrada e antes de CADA batch adicional (src/offlineRecovery.js).
+  // Checkpoint G.2.0 — `...config.offlineRecoveryLimites` repassa os 5 caps (já parseados/validados em config.js/
+  // validarConfig(), undefined quando a env não foi definida) direto para criarMotorRecovery via
+  // criarInboundGateway (inboundScope.js espalha estas chaves sem alteração — ver seu cabeçalho). Sem nenhuma
+  // destas envs, os 5 campos são `undefined` e o motor usa PADROES_RECOVERY, idêntico ao comportamento antes desta
+  // mudança.
   offlineRecovery: config.offlineRecoveryHabilitado
-    ? { aoIniciar: () => rastreadorOrigem.promoverPendentesParaRecovery(), lerAuthHeadroomOk: () => guardaAuthHeadroom.ok() }
+    ? {
+        aoIniciar: () => rastreadorOrigem.promoverPendentesParaRecovery(),
+        lerAuthHeadroomOk: () => guardaAuthHeadroom.ok(),
+        ...config.offlineRecoveryLimites,
+      }
     : false,
 });
 log(inbound.valido ? "info" : "warn", inbound.valido ? "inbound.escopo" : "inbound.escopo_invalido_usando_padrao", {

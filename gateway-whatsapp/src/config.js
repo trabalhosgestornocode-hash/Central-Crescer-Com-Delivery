@@ -7,6 +7,19 @@
 // Ver test/config-sem-service-role.test.js e
 // test/seguranca-sem-supabase.test.js para a verificação executável disso.
 
+// Checkpoint G.2.0 — parse NÃO permissivo (nunca `Number(env) || default`) para os caps do motor de
+// OFFLINE_RECOVERY abaixo. Ausente ou vazio (após trim) ⇒ `undefined` — mesmo tratamento que os outros flags deste
+// arquivo já dão a env vazia (ver offlineRecoveryHabilitado/offlineObserveHabilitado acima: string vazia cai no
+// padrão, nunca é tratada como valor explícito). Qualquer OUTRO texto que não seja uma sequência de dígitos
+// (negativo, decimal, texto, notação científica) vira `NaN`, que validarConfig() abaixo rejeita com o NOME da env
+// errada — nunca cai silenciosamente num default quando o valor foi fornecido só que está errado.
+function numeroInteiroEnvOuIndefinido(bruto) {
+  if (bruto === undefined) return undefined;
+  const texto = String(bruto).trim();
+  if (texto === "") return undefined;
+  return /^\d+$/.test(texto) ? Number(texto) : NaN;
+}
+
 export const config = {
   // O Render injeta PORT; 8080 é o padrão de qualquer serviço aqui.
   porta: Number(process.env.PORT) || 8080,
@@ -67,6 +80,21 @@ export const config = {
   // 1/2/4/8 (ver test/filaConcorrenciaLimitada.test.js) — nunca validado contra o backend REAL sob carga; ajustar
   // aqui sem precisar de deploy de código caso a telemetria de produção (`backend.chamada`, `notificar_mensagem_recebida.falhou`) peça.
   backendNotifyConcurrency: Number(process.env.WHATSAPP_BACKEND_NOTIFY_CONCURRENCY ?? 4),
+
+  // Checkpoint G.2.0 — caps do motor de OFFLINE_RECOVERY (src/offlineRecovery.js, INALTERADO por este checkpoint),
+  // agora OPCIONALMENTE configuráveis por env. Cada campo ausente/vazio fica `undefined`: server.js espalha este
+  // objeto sobre o `offlineRecovery` passado a criarInboundGateway, e um valor `undefined` num destructuring com
+  // default (a assinatura de criarMotorRecovery) se comporta EXATAMENTE como a chave nem existir — ou seja, sem
+  // nenhuma destas 5 envs, o comportamento é idêntico ao de 963ffd4 (quando elas nem existiam). Ver
+  // test/config.test.js e test/offlineRecoveryCapsWiring.test.js para a prova de equivalência. `tickMs` NÃO é
+  // exposto por env neste checkpoint (fora de escopo) — continua só o default interno do motor.
+  offlineRecoveryLimites: {
+    maxRecoveryBatches: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES),
+    maxRecoveryNodes: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_OFFLINE_RECOVERY_MAX_NODES),
+    maxRecoveryDurationMs: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_OFFLINE_RECOVERY_MAX_DURATION_MS),
+    maxConsecutiveNoProgressBatches: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_OFFLINE_RECOVERY_MAX_NO_PROGRESS_BATCHES),
+    batchQuietMs: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_OFFLINE_RECOVERY_BATCH_QUIET_MS),
+  },
 
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",
@@ -134,5 +162,25 @@ export function validarConfig() {
       + `(${renewMs} + ${margemSegurancaMs} = ${renewMs + margemSegurancaMs}) — senão nunca sobra tempo real entre uma `
       + `renovação e o self-fencing preventivo antes do prazo vencer de verdade.`,
     );
+  }
+
+  // Checkpoint G.2.0 — cada cap do motor de recovery, só quando a env foi EXPLICITAMENTE fornecida (`undefined` =
+  // ausente/vazia = ok, fica por conta do PADRÕES_RECOVERY de offlineRecovery.js). min=1 para todos, replicando aqui
+  // de propósito a MESMA regra que criarMotorRecovery() já aplicaria internamente (mesmo padrão do
+  // LEASE_TTL_MAX_MS acima: falhar CEDO, no boot, com o NOME da env errada — nunca um RangeError genérico vindo de
+  // dentro do motor). Isto é o que impede, por exemplo, um WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES=0 ou "5x" de
+  // silenciosamente virar o default de 5 batches: aqui ele FALHA, em vez de continuar.
+  const CAPS_RECOVERY = [
+    ["WHATSAPP_OFFLINE_RECOVERY_MAX_BATCHES", config.offlineRecoveryLimites.maxRecoveryBatches],
+    ["WHATSAPP_OFFLINE_RECOVERY_MAX_NODES", config.offlineRecoveryLimites.maxRecoveryNodes],
+    ["WHATSAPP_OFFLINE_RECOVERY_MAX_DURATION_MS", config.offlineRecoveryLimites.maxRecoveryDurationMs],
+    ["WHATSAPP_OFFLINE_RECOVERY_MAX_NO_PROGRESS_BATCHES", config.offlineRecoveryLimites.maxConsecutiveNoProgressBatches],
+    ["WHATSAPP_OFFLINE_RECOVERY_BATCH_QUIET_MS", config.offlineRecoveryLimites.batchQuietMs],
+  ];
+  for (const [nomeEnv, valor] of CAPS_RECOVERY) {
+    if (valor === undefined) continue;
+    if (!Number.isInteger(valor) || valor < 1) {
+      throw new Error(`${nomeEnv} precisa ser um inteiro >= 1 (recebido: "${process.env[nomeEnv]}")`);
+    }
   }
 }
