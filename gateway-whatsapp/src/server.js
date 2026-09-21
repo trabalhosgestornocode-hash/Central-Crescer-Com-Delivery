@@ -91,11 +91,14 @@ const guardaAuthHeadroom = criarGuardaAuthHeadroom({
 });
 // Checkpoint G.3.3-B, item 6 — telemetria SEGURA de boot (só números, nunca auth-state/segredo/env bruta): prova
 // depois do deploy, sem precisar ler env do Render, que a capacidade efetiva do Gateway bate com a do backend.
+// NOMES: "authCapacity*", não "authState*" — src/logsafe.js mascara qualquer chave que CONTENHA "authstate" (pega
+// authStateEncrypted de propósito); "authStateCapacityBytes" caía nesse bloqueio e virava "[REDACTED]" nos logs,
+// exatamente o oposto do que este item pede. Confirma o sanitizador funcionando; a correção é não colidir com ele.
 {
   const { limiteBytes, maxUsagePct } = guardaAuthHeadroom.estado();
   log("info", "auth_state.capacidade", {
-    authStateCapacityBytes: limiteBytes,
-    authStateCapacityMiB: Math.round((limiteBytes / (1024 * 1024)) * 100) / 100,
+    authCapacityBytes: limiteBytes,
+    authCapacityMiB: Math.round((limiteBytes / (1024 * 1024)) * 100) / 100,
     authRecoveryMaxUsagePct: maxUsagePct,
   });
 }
