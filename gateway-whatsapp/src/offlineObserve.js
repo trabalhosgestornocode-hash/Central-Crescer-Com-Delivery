@@ -29,6 +29,14 @@
 //
 // NUNCA registra JID, LID, telefone, participant, author, remoteJid, ID de mensagem, conteúdo, timestamp original ou payload:
 // só inteiros, booleanos, buckets e vocabulário fechado.
+//
+// C.9.7 (ainda só diagnóstico)
+//   - histograma SEGURO do valor bruto de attrs.offline (classificarValorOffline): inteiros de 0 a 99 saem exatos (por construção nenhum
+//     identificador/timestamp/telefone/token cabe em 1-2 dígitos); qualquer outra coisa sai só como CLASSE fechada (nº de dígitos, texto
+//     curto/longo...), nunca o valor. Cruzado com a idade da mensagem, por espécie.
+//   - `identidade` (opcional, INJETADA — este arquivo continua sem imports): só recebe `novaGeracao(g)` e `comparar(g)` e devolve CONTAGENS.
+//     O material bruto das stanzas NUNCA passa por aqui: o wiring o entrega direto ao módulo de identidade. Evento
+//     `inbound.offline_overlap` (1 por geração; reemite no fechamento só se a contagem mudou; teto de 3 por geração).
 
 export const FASE = Object.freeze({
   CONNECTING: "CONNECTING",
@@ -92,6 +100,39 @@ export function bucketIdade(tBruto, agoraMs) {
   if (min < 1440) return "h2a24";
   return "gt24h";
 }
+
+/** classes FECHADAS do valor bruto de attrs.offline quando ele NÃO é um inteiro canônico de 0 a 99 (o valor nunca sai) */
+export const CLASSES_VALOR_OFFLINE = Object.freeze(["ausente", "vazio", "tipo_nao_string", "int_nao_canonico", "int_3dig", "int_4dig", "int_5_6dig", "int_7_9dig", "int_10mais_dig", "negativo", "decimal", "texto_curto", "texto_longo"]);
+
+/**
+ * Classificação SEGURA do valor BRUTO de `attrs.offline` para o histograma. Devolve `{tipo:"int", valor:0..99}` ou `{tipo:"classe", nome}`.
+ * Por que 0-99 é seguro POR CONSTRUÇÃO (sem depender da semântica do protocolo, que o Baileys 6.7.24 não interpreta): o valor só é
+ * emitido se for um inteiro canônico de 1-2 dígitos; um identificador, telefone, timestamp, ID ou token tem muito mais informação que isso,
+ * e mesmo se o servidor usasse esse campo como identificador, <= 100 valores possíveis, agregados em CONTAGEM (nunca por nó), não
+ * identificam nada. Todo o resto vira uma classe pela ESTRUTURA (nº de dígitos, sinal, decimal, comprimento de texto), sem nenhum caractere do valor.
+ */
+export function classificarValorOffline(valor) {
+  if (valor === undefined || valor === null) return { tipo: "classe", nome: "ausente" };
+  const s = typeof valor === "string" ? valor : (typeof valor === "number" || typeof valor === "boolean") ? String(valor) : null;
+  if (s === null) return { tipo: "classe", nome: "tipo_nao_string" };
+  if (s === "") return { tipo: "classe", nome: "vazio" };
+  if (/^(0|[1-9][0-9]?)$/.test(s)) return { tipo: "int", valor: Number(s) };
+  if (/^[0-9]+$/.test(s)) {
+    const n = s.length;
+    return { tipo: "classe", nome: n <= 2 ? "int_nao_canonico" : n === 3 ? "int_3dig" : n === 4 ? "int_4dig" : n <= 6 ? "int_5_6dig" : n <= 9 ? "int_7_9dig" : "int_10mais_dig" };
+  }
+  if (/^-[0-9]+$/.test(s)) return { tipo: "classe", nome: "negativo" };
+  if (/^-?[0-9]*\.[0-9]+$/.test(s)) return { tipo: "classe", nome: "decimal" };
+  return { tipo: "classe", nome: s.length <= 8 ? "texto_curto" : "texto_longo" };
+}
+
+const MAX_BINS_VALOR = 24;            // bins distintos por espécie e por geração; o excedente só é CONTADO (binsOmitidos)
+const MAX_EMISSOES_OVERLAP = 3;       // inbound.offline_overlap por geração
+const MAX_GERACOES_HISTORICO = 6;     // resumos de gerações anteriores (preview + idade) para o evento de sobreposição
+const PREVIEW_NOMES = Object.freeze(["count", "message", "receipt", "notification", "call", "status", "appdata"]);
+const rotuloBin = (b) => (b.tipo === "int" ? `i:${b.valor}` : `c:${b.nome}`);
+/** grupo grosso de idade para o cruzamento valor × idade (só mensagens) */
+const grupoIdade = (bucket) => (bucket === "h2a24" ? "h2a24" : bucket === "gt24h" ? "gt24h" : bucket === "ausente" || bucket === "invalido" ? "sem" : "lt2h");
 
 const NOME_ATRIBUTO = /^[a-z][a-z0-9_-]{0,23}$/;
 const MAX_ATRIBUTOS_PREVIEW = 12;
@@ -166,6 +207,7 @@ export function criarObservadorOffline({
   keepAliveLimiteMs = PADROES.keepAliveLimiteMs,
   marcos = PADROES.marcos,
   maxEventosStallPorGeracao = PADROES.maxEventosStallPorGeracao,
+  identidade = undefined,
 } = {}) {
   if (!(stallDetectionMs > 0)) throw new RangeError("stallDetectionMs deve ser > 0");
   if (!(absoluteMaxOfflineMs > stallDetectionMs)) throw new RangeError("absoluteMaxOfflineMs deve ser > stallDetectionMs");
@@ -175,7 +217,9 @@ export function criarObservadorOffline({
   let geracao = 0;
   /** @type {any} */
   let s = null;
-  const totais = { geracoes: 0, stallEventos: 0, retidasPerdidas: 0, heartbeats: 0 };
+  const totais = { geracoes: 0, stallEventos: 0, retidasPerdidas: 0, heartbeats: 0, overlapEventos: 0 };
+  /** resumo (preview numérico + idade offline) das últimas gerações FECHADAS, só para rotular o evento de sobreposição */
+  const historicoGeracoes = [];
 
   const logar = (evento, dados) => { try { emitir("info", evento, dados); } catch { /* observabilidade nunca interfere */ } };
   const epoch = () => { try { const e = obterEpoch(); return Number.isFinite(e) ? e : null; } catch { return null; } };
@@ -194,6 +238,8 @@ export function criarObservadorOffline({
       porEspecie: { message: 0, receipt: 0, notification: 0 }, porTipo: {},
       attrOffline: { message: contadoresZerados(), receipt: contadoresZerados(), notification: contadoresZerados() },
       idade: { offline: bucketsZerados(), vivo: bucketsZerados() },
+      valores: { message: new Map(), receipt: new Map(), notification: new Map() }, valoresOmitidos: { message: 0, receipt: 0, notification: 0 },
+      previewNumerico: null, overlapEmitidos: 0, ultimoOverlapCount: null,
       timer: null, lerBufferAtivo: leitores.lerBufferAtivo ?? (() => false), lerSocketAberto: leitores.lerSocketAberto ?? (() => false),
     };
   }
@@ -205,6 +251,20 @@ export function criarObservadorOffline({
   function iniciarTimer(x) {
     if (x.timer) return;
     try { x.timer = agendar(() => { try { tick(x.g); } catch { /* idem */ } }, tickMs); x.timer?.unref?.(); } catch { x.timer = null; }
+  }
+
+  /** histograma do valor BRUTO de attrs.offline (só inteiros 0-99 ou CLASSES fechadas), por espécie; message também cruza com a idade */
+  function registrarValor(x, esp, valorBruto, bIdade) {
+    const c = classificarValorOffline(valorBruto);
+    const mapa = x.valores[esp]; const rot = rotuloBin(c);
+    let b = mapa.get(rot);
+    if (!b) {
+      if (mapa.size >= MAX_BINS_VALOR) { x.valoresOmitidos[esp] += 1; return; }
+      b = { ...c, n: 0, ...(esp === "message" ? { idade: { lt2h: 0, h2a24: 0, gt24h: 0, sem: 0 } } : {}) };
+      mapa.set(rot, b);
+    }
+    b.n += 1;
+    if (b.idade && bIdade !== null) b.idade[grupoIdade(bIdade)] += 1;
   }
 
   function entrarCarregando(x, gatilho) {
@@ -240,13 +300,42 @@ export function criarObservadorOffline({
 
   function baseEvento(x) { return { socketGeneration: x.g, epoch: epoch() }; }
 
+  /** bins do histograma de valores de attrs.offline de uma espécie: só inteiros 0-99 (exatos) ou CLASSES fechadas, com n (e a idade, p/ message) */
+  const binsDe = (mapa) => [...mapa.values()]
+    .sort((a, b) => b.n - a.n || (rotuloBin(a) < rotuloBin(b) ? -1 : 1))
+    .map((b) => ({ ...(b.tipo === "int" ? { tipo: "int", valor: b.valor } : { tipo: "classe", nome: b.nome }), n: b.n, ...(b.idade ? { idade: lista(b.idade) } : {}) }));
+
   function agregados(x) {
     return {
       especies: lista(x.porEspecie),
       tiposAgregados: lista(x.porTipo).sort((a, b) => (a.nome < b.nome ? -1 : 1)),
       attrOffline: ESPECIES.map((e) => ({ especie: e, ...x.attrOffline[e] })),
+      attrOfflineValores: ESPECIES.map((e) => ({ especie: e, bins: binsDe(x.valores[e]), binsOmitidos: x.valoresOmitidos[e] })),
       idade: ["offline", "vivo"].map((o) => ({ origem: o, buckets: lista(x.idade[o]) })),
     };
+  }
+
+  const previewLista = (p) => (p ? PREVIEW_NOMES.filter((k) => Object.hasOwn(p, k)).map((k) => ({ nome: k, valor: p[k] })) : null);
+
+  /**
+   * (C.9.7) Sobreposição desta geração com a anterior — SÓ contagens. O módulo de identidade é injetado e devolve apenas números.
+   * 1 evento por geração no 1º gatilho (stall | marcador | fechamento); reemite só se a contagem mudou, até o teto.
+   */
+  function emitirSobreposicao(x, gatilho) {
+    if (!identidade || x.overlapEmitidos >= MAX_EMISSOES_OVERLAP) return;
+    let r = null; try { r = identidade.comparar(x.g); } catch { r = null; }
+    if (!r || !(r.currentCount > 0)) return;
+    if (x.overlapEmitidos > 0 && x.ultimoOverlapCount === r.currentCount) return;
+    x.overlapEmitidos += 1; x.ultimoOverlapCount = r.currentCount; totais.overlapEventos += 1;
+    const ant = r.previousGeneration == null ? null : (historicoGeracoes.find((h) => h.g === r.previousGeneration) ?? null);
+    const atual = x.previewNumerico; const anterior = ant?.previewNumerico ?? null;
+    logar("inbound.offline_overlap", {
+      ...baseEvento(x), gatilho, ...r,
+      previewAtual: previewLista(atual), previewAnterior: previewLista(anterior),
+      previewCountDelta: Number.isFinite(atual?.count) && Number.isFinite(anterior?.count) ? atual.count - anterior.count : null,
+      idadeOffline: lista(x.idade.offline), idadeOfflineAnterior: ant ? lista(ant.idadeOffline) : null,
+      RECOVERY_PATH_USED: false, observeOnly: true,
+    });
   }
 
   function emitirEstado(x, gatilho, extra = {}) {
@@ -271,20 +360,22 @@ export function criarObservadorOffline({
 
   function entrarStall(x, t, a) {
     x.fase = FASE.OFFLINE_STALLED_OBSERVED; x.stallEntradas += 1; x.stallDesdeEm = t;
-    if (x.stallEventos >= maxEventosStallPorGeracao) return;
-    x.stallEventos += 1; totais.stallEventos += 1;
-    logar("inbound.offline_stalled_observed", {
-      ...baseEvento(x),
-      stallReason: a.motivo,
-      secondsSinceProgress: seg(a.semProgressoMs), secondsSinceOfflineStart: seg(a.desdeInicioMs),
-      bufferAtivo: a.bufferAtivo, mensagensRetidas: x.retidas,
-      offlinePreviewRecebido: x.previews, offlineFimRecebido: x.fim,
-      nosOfflineVistos: x.nosOffline, nosVivosVistos: x.nosVivos,
-      socketHealthy: a.saudavel, entrada: x.stallEntradas,
-      limiteSemProgressoSegundos: seg(stallDetectionMs), limiteAbsolutoSegundos: seg(absoluteMaxOfflineMs),
-      RECOVERY_PATH_USED: false, observeOnly: true,
-      ...agregados(x),
-    });
+    if (x.stallEventos < maxEventosStallPorGeracao) {
+      x.stallEventos += 1; totais.stallEventos += 1;
+      logar("inbound.offline_stalled_observed", {
+        ...baseEvento(x),
+        stallReason: a.motivo,
+        secondsSinceProgress: seg(a.semProgressoMs), secondsSinceOfflineStart: seg(a.desdeInicioMs),
+        bufferAtivo: a.bufferAtivo, mensagensRetidas: x.retidas,
+        offlinePreviewRecebido: x.previews, offlineFimRecebido: x.fim,
+        nosOfflineVistos: x.nosOffline, nosVivosVistos: x.nosVivos,
+        socketHealthy: a.saudavel, entrada: x.stallEntradas,
+        limiteSemProgressoSegundos: seg(stallDetectionMs), limiteAbsolutoSegundos: seg(absoluteMaxOfflineMs),
+        RECOVERY_PATH_USED: false, observeOnly: true,
+        ...agregados(x),
+      });
+    }
+    emitirSobreposicao(x, "stall");
   }
 
   /** fecha a geração `g` (idempotente): se estava presa, conta e emite as retidas que morrem com o buffer dela */
@@ -296,6 +387,9 @@ export function criarObservadorOffline({
       totais.retidasPerdidas += x.retidas;
       emitirEstado(x, "fechamento", { retidasPerdidas: x.retidas });
     }
+    emitirSobreposicao(x, "fechamento");
+    historicoGeracoes.push({ g: x.g, previewNumerico: x.previewNumerico, idadeOffline: { ...x.idade.offline } });
+    while (historicoGeracoes.length > MAX_GERACOES_HISTORICO) historicoGeracoes.shift();
     x.fase = FASE.CLOSED; pararTimer(x);
   }
 
@@ -323,6 +417,7 @@ export function criarObservadorOffline({
       if (s) fechar(s.g);
       geracao += 1; totais.geracoes += 1;
       s = novoEstado(geracao, agora(), leitores);
+      try { identidade?.novaGeracao(geracao); } catch { /* identidade nunca interfere */ }   // DEPOIS de fechar a anterior (o fechamento ainda compara)
       return geracao;
     },
     /** qualquer frame/nó recebido: prova de que o socket está vivo (não é progresso da fila offline) */
@@ -335,6 +430,10 @@ export function criarObservadorOffline({
       x.previews += 1; x.batchesInferidos += 1;              // o Baileys 6.7.24 responde a CADA preview com UM offline_batch count=100 (canário)
       if (x.previewEm == null) x.previewEm = agora();
       const san = sanitizarAtributosPreview(no);
+      if (x.previewNumerico == null) {                        // só o 1º preview da geração: os números (count/message/...) para comparar entre conexões
+        x.previewNumerico = {};
+        for (const a of san.atributos) if (a.classe === "numerico" && PREVIEW_NOMES.includes(a.nome)) x.previewNumerico[a.nome] = a.valor;
+      }
       if (x.fase !== FASE.CLOSED) progresso(x);
       logar("inbound.offline_preview", { ...baseEvento(x), sinceSocketMs: agora() - x.aberturaEm, ordem: x.previews, fase: x.fase, ...san });
     },
@@ -355,7 +454,9 @@ export function criarObservadorOffline({
       if (!(tipoSeg in x.porTipo) && Object.keys(x.porTipo).length >= MAX_TIPOS_DISTINTOS) tipoSeg = "unknown";
       x.porTipo[tipoSeg] = (x.porTipo[tipoSeg] ?? 0) + 1;
       const offline = Boolean(offlineAttr);                   // MESMA regra do Baileys (`!!node.attrs.offline`): só para contar, nunca para decidir
-      if (esp === "message") x.idade[offline ? "offline" : "vivo"][bucketIdade(t, agoraMs)] += 1;
+      const bIdade = esp === "message" ? bucketIdade(t, agoraMs) : null;
+      if (bIdade !== null) x.idade[offline ? "offline" : "vivo"][bIdade] += 1;
+      registrarValor(x, esp, offlineAttr, bIdade);
       if (!offline) { x.nosVivos += 1; return; }
       entrarCarregando(x, "no_offline");
       x.nosOffline += 1;
@@ -402,6 +503,7 @@ export function criarObservadorOffline({
       x.fim = true; x.fimEm = t; x.fimContagem = Number.isFinite(contagem) ? contagem : null; x.ultimoProgressoEm = t;
       x.fase = FASE.LIVE; pararTimer(x);
       emitirEstado(x, "marcador", { marcadorTardio: tardio, retidasAntesDoFlush: retidasAntes, offlineFimContagem: x.fimContagem });
+      emitirSobreposicao(x, "marcador");
     },
 
     /** o socket dessa geração fechou */
@@ -423,7 +525,8 @@ export function criarObservadorOffline({
         segundosDesdeProgresso: s.ultimoProgressoEm == null ? null : seg(t - s.ultimoProgressoEm),
         offlineLastProgressAt: s.ultimoProgressoEm,
         socketHealthy: a.saudavel, observeWouldRecover: s.fase === FASE.OFFLINE_STALLED_OBSERVED || Boolean(a.base && a.motivo),
-        attrOffline: JSON.parse(JSON.stringify(s.attrOffline)), idade: JSON.parse(JSON.stringify(s.idade)),
+        attrOffline: JSON.parse(JSON.stringify(s.attrOffline)), attrOfflineValores: agregados(s).attrOfflineValores, idade: JSON.parse(JSON.stringify(s.idade)),
+        overlapEmitidos: s.overlapEmitidos, previewNumerico: s.previewNumerico ? { ...s.previewNumerico } : null,
         porEspecie: { ...s.porEspecie }, porTipo: { ...s.porTipo },
       };
     },

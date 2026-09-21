@@ -36,6 +36,7 @@ import {
   isJidUser, isLidUser, isJidGroup, isJidBroadcast, isJidStatusBroadcast, isJidNewsletter, isJidMetaIa, isJidBot, META_AI_JID, jidDecode, proto,
 } from "baileys";
 import { criarObservadorOffline } from "./offlineObserve.js";
+import { criarIdentidadeOffline } from "./offlineIdentidade.js";
 
 export const ESCOPO_ALL_SUPPORTED = "ALL_SUPPORTED";
 export const ESCOPO_DIRECT_ONLY = "DIRECT_ONLY";
@@ -273,6 +274,7 @@ const LIMITE_IDS_EM_MEMORIA = 5000;
  * @param {boolean|object} [deps.offlineObserve] (C.9.6) liga o observador da fila offline (máquina de estados diagnóstica + watchdog em modo
  *   OBSERVE). Só vale com o diagnóstico ligado. `true` usa os PADRÕES; um objeto sobrescreve limites (testes).
  * @param {() => (number|null)} [deps.obterEpoch] epoch técnico da lease (só para rotular os eventos do observador)
+ *   (C.9.7) `offlineObserve` objeto também aceita `identidade: false` (desliga a identidade efêmera) e `identidadeOpcoes` (testes); o resto são limites do observador.
  */
 export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emitir, intervaloMs = 30_000, agendar = setInterval, cancelar = clearInterval, consoleAlvo = console, agora = () => Date.now(), offlineObserve = false, obterEpoch = () => null } = {}) {
   const { escopo, valido } = interpretarEscopo(escopoBruto);
@@ -281,8 +283,11 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
   const politica = criarPoliticaInbound({ escopo, contadores });
   const filtrar = escopo === ESCOPO_DIRECT_ONLY;
   // (C.9.6) O observador NÃO recebe ev/ws/socket: só dados, leitores por geração, emitir e timer. Ver src/offlineObserve.js.
+  // (C.9.7) identidade EFÊMERA dos nós offline (HMAC com segredo aleatório só em memória): só nasce com o observador; só contagens saem.
+  const { identidade: identidadeLigada = true, identidadeOpcoes = {}, ...limitesObserve } = typeof offlineObserve === "object" && offlineObserve ? offlineObserve : {};
+  const identidadeOffline = diagHabilitado && offlineObserve && identidadeLigada !== false ? criarIdentidadeOffline(identidadeOpcoes) : undefined;
   const observador = diagHabilitado && offlineObserve
-    ? criarObservadorOffline({ agora, emitir, obterEpoch, agendar, cancelar, ...(typeof offlineObserve === "object" ? offlineObserve : {}) })
+    ? criarObservadorOffline({ agora, emitir, obterEpoch, agendar, cancelar, identidade: identidadeOffline, ...limitesObserve })
     : undefined;
 
   let timer = null;
@@ -402,6 +407,9 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
             ciclo.aoNo(Boolean(node?.attrs?.offline));   // mesma regra do Baileys: `!!node.attrs.offline`
             // (C.9.6) valor BRUTO de attrs.offline e o `t` (só para bucket de idade): o observador classifica antes de qualquer coerção
             observador?.aoNo(g, { especie, tipo: tipoStanza, offlineAttr: node?.attrs?.offline, t: node?.attrs?.t });
+            // (C.9.7) identidade efêmera: SÓ nós offline (mesma regra do Baileys). O material bruto entra direto no módulo de identidade
+            // (que só devolve contagens) e não vai para o observador, para log nem para nenhuma outra estrutura.
+            if (identidadeOffline && node?.attrs?.offline) identidadeOffline.registrar(g, especie, { type: node.attrs.type, id: node.attrs.id, from: node.attrs.from, participant: node.attrs.participant });
             if (especie === "message" && node?.attrs?.id != null) {
               const tinhaEnc = Array.isArray(node.content) && node.content.some((c) => c?.tag === "enc");
               encPorId.set(node.attrs.id, tinhaEnc);
@@ -498,6 +506,8 @@ export function criarInboundGateway({ escopoBruto, diagHabilitado = false, emiti
     estadoFila: () => ciclo?.payload(obterAppStateKey?.() ?? null, obterBufferAtivo?.() ?? null),
     /** (C.9.6) estado do observador da fila offline (geração atual; só números/booleanos/vocabulário fechado) ou undefined se desligado */
     estadoObserve: () => observador?.estado(),
+    /** (C.9.7) só TAMANHOS da identidade efêmera (nunca impressões) ou undefined se desligada */
+    estadoIdentidade: () => identidadeOffline?.estado(),
     metricasObserve: () => observador?.metricas(),
     emitirResumo,
     parar() {

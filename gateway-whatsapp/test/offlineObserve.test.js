@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  criarObservadorOffline, classificarAtributoOffline, bucketIdade, sanitizarAtributosPreview, FASE, PADROES, BUCKETS_IDADE, ENUM_SEGURO,
+  criarObservadorOffline, classificarAtributoOffline, bucketIdade, sanitizarAtributosPreview, FASE, PADROES, BUCKETS_IDADE, ENUM_SEGURO, CLASSES_VALOR_OFFLINE,
 } from "../src/offlineObserve.js";
 import { sanitizar } from "../src/logsafe.js";
 
@@ -391,7 +391,9 @@ describe("eventos: segurança (logsafe real) e esquema fechado", () => {
     const a = cenarioCompleto();
     const fechado = new Set([...Object.values(FASE), "heartbeat", "marcador", "fechamento", "retomada", "flush_sem_marcador", "no_progress", "absolute_max", "preview",
       "numerico", "booleano", "enum", "sensivel", "desconhecido", "message", "receipt", "notification", "offline", "vivo", ...BUCKETS_IDADE,
-      "missing", "empty", "zero", "one", "other", "count", "message", "jid", "fone", "tok", "direct_pn", "direct_lid_other", "group", "inbound.offline_state"]);
+      "missing", "empty", "zero", "one", "other", "count", "message", "jid", "fone", "tok", "direct_pn", "direct_lid_other", "group", "inbound.offline_state",
+      // C.9.7: histograma de valores (tipo int|classe; classes fechadas; grupos grossos de idade)
+      "int", "classe", ...CLASSES_VALOR_OFFLINE, "lt2h", "sem"]);
     const visitar = (v, caminho) => {
       if (v === null || typeof v === "number" || typeof v === "boolean") return;
       if (typeof v === "string") { assert.ok(fechado.has(v), `string fora do vocabulário em ${caminho}: ${v}`); return; }
@@ -405,8 +407,8 @@ describe("eventos: segurança (logsafe real) e esquema fechado", () => {
     const a = cenarioCompleto();
     const chaves = (e) => Object.keys(a.porNome(e)[0].d).sort();
     assert.deepEqual(chaves("inbound.offline_preview"), ["atributos", "atributosIgnorados", "atributosNoIb", "epoch", "fase", "filhos", "ordem", "sinceSocketMs", "socketGeneration"]);
-    assert.deepEqual(chaves("inbound.offline_node_progress"), ["attrOffline", "epoch", "especies", "fase", "idade", "milestone", "offlineNodes", "sincePreviewMs", "sinceSocketMs", "socketGeneration", "tiposAgregados"]);
-    assert.deepEqual(chaves("inbound.offline_stalled_observed"), ["RECOVERY_PATH_USED", "attrOffline", "bufferAtivo", "entrada", "epoch", "especies", "idade", "limiteAbsolutoSegundos", "limiteSemProgressoSegundos", "mensagensRetidas", "nosOfflineVistos", "nosVivosVistos", "observeOnly", "offlineFimRecebido", "offlinePreviewRecebido", "secondsSinceOfflineStart", "secondsSinceProgress", "socketGeneration", "socketHealthy", "stallReason", "tiposAgregados"]);
+    assert.deepEqual(chaves("inbound.offline_node_progress"), ["attrOffline", "attrOfflineValores", "epoch", "especies", "fase", "idade", "milestone", "offlineNodes", "sincePreviewMs", "sinceSocketMs", "socketGeneration", "tiposAgregados"]);
+    assert.deepEqual(chaves("inbound.offline_stalled_observed"), ["RECOVERY_PATH_USED", "attrOffline", "attrOfflineValores", "bufferAtivo", "entrada", "epoch", "especies", "idade", "limiteAbsolutoSegundos", "limiteSemProgressoSegundos", "mensagensRetidas", "nosOfflineVistos", "nosVivosVistos", "observeOnly", "offlineFimRecebido", "offlinePreviewRecebido", "secondsSinceOfflineStart", "secondsSinceProgress", "socketGeneration", "socketHealthy", "stallReason", "tiposAgregados"]);
     const hb = a.porNome("inbound.offline_state").find((x) => x.d.gatilho === "heartbeat").d;
     assert.deepEqual(Object.keys(hb).sort(), ["RECOVERY_PATH_USED", "bufferAtivo", "epoch", "fase", "flushes", "flushesEfetivos", "flushesSemMarcador", "gatilho", "mensagensRetidas", "nosOfflineVistos", "nosVivosVistos", "observeOnly", "observeWouldRecover", "offlineFimRecebido", "offlinePreviewRecebido", "retomadas", "segundosDesdeAbertura", "segundosDesdeInicioOffline", "segundosDesdeProgresso", "socketGeneration", "socketHealthy", "stallEntradas"]);
   });

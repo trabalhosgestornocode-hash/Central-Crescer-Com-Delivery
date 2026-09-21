@@ -86,7 +86,7 @@ const inbound = criarInboundGateway({
   obterEpoch: () => leaseManager.contexto()?.leaseEpoch ?? null,
 });
 log(inbound.valido ? "info" : "warn", inbound.valido ? "inbound.escopo" : "inbound.escopo_invalido_usando_padrao", {
-  escopo: inbound.escopo, diagnostico: inbound.diagnostico, offlineObserve: inbound.offlineObserve,
+  escopo: inbound.escopo, diagnostico: inbound.diagnostico, offlineObserve: inbound.offlineObserve, offlineIdentidade: inbound.estadoIdentidade() !== undefined,
   // prova operacional: só DIRECT_ONLY injeta um shouldIgnoreJid no socket; ALL_SUPPORTED (com ou sem diagnóstico) não injeta nada
   shouldIgnoreJidInjetado: "shouldIgnoreJid" in inbound.opcoesSocket(),
 });

@@ -193,3 +193,36 @@ Baileys e < 35 s do keep-alive), `absoluteMaxOfflineMs=180 s`, tick 1 s, heartbe
 ### Distribuição de `attrs.offline` e idade (métricas, nunca decisão)
 `attrOffline` por espécie (message/receipt/notification): `missing|empty|zero|one|other`, classificada sobre o valor BRUTO antes da coerção truthy do Baileys (`"0"` conta como offline no Baileys; aqui só medimos).
 `idade`: buckets `lt1m|m1a5|m5a30|m30a120|h2a24|gt24h|ausente|invalido` do `t` da stanza, por origem (offline × vivo), só mensagens. O timestamp original nunca é registrado.
+
+## C3.5-C.9.7 — identidade efêmera da fila offline + histograma seguro de `attrs.offline` (só diagnóstico)
+
+Pergunta: a cada reconexão o servidor entrega os **mesmos** ~100 primeiros itens dos milhares pendentes, ou cada conexão avança pela fila? Nada aqui corrige a fila: sem flush, recovery,
+paginação, segundo `offline_batch` ou envio. Continua valendo o kill-switch `WHATSAPP_OFFLINE_OBSERVE_ENABLED=0` (desliga o observador **e** a identidade); não há env novo. O log de boot `inbound.escopo` traz `offlineObserve` e `offlineIdentidade` (prova operacional de que ambos estão ligados).
+
+### Histograma de `attrs.offline` (substitui o "other" cego)
+`attrOfflineValores` (nos marcos, no stall e nos estados não-heartbeat): por espécie, `bins:[{tipo:"int",valor,n}|{tipo:"classe",nome,n}]`, `binsOmitidos` (teto de 24 bins distintos) e, para `message`, o cruzamento
+com a idade (`idade:[lt2h,h2a24,gt24h,sem]`). Regra segura **por construção** (não depende da semântica do protocolo, que o Baileys 6.7.24 não interpreta): só inteiro canônico de **1 a 2 dígitos (0–99)** sai com o valor;
+qualquer outra coisa vira uma **classe** pela estrutura (`int_3dig`, `int_4dig`, `int_5_6dig`, `int_7_9dig`, `int_10mais_dig`, `int_nao_canonico`, `negativo`, `decimal`, `texto_curto`, `texto_longo`, `vazio`, `ausente`, `tipo_nao_string`),
+sem nenhum caractere do valor. Telefone, JID, LID, timestamp, UUID, token, base64 e hex longos nunca aparecem. `attrOffline` (missing/empty/zero/one/other) continua igual.
+
+### Identidade efêmera (`src/offlineIdentidade.js`)
+Cada nó **offline** (mesma regra do Baileys: `!!attrs.offline`) vira uma impressão `HMAC-SHA256(segredo, material)` de 128 bits. O segredo nasce aleatório no processo (`randomBytes(32)`), vive só na closure, nunca é
+logado, persistido ou devolvido. As impressões ficam só em memória e **nunca saem**: a saída são **contagens/percentuais**.
+* Material **estrito** `[espécie, type, id, from, participant]`; **frouxo** `[espécie, id]` (controle: mesmo item endereçado de outro jeito — PN numa conexão, LID na outra). Sem conteúdo, texto, legenda, nome, payload nem `t`.
+* Memória limitada: ≤ 500 impressões por geração (o excedente só é contado) e ≤ 3 gerações anteriores retidas; gerações sem nós offline não deslocam a anterior útil. Restart/deploy = segredo novo + histórico vazio ⇒ `sem_geracao_anterior`.
+* O material bruto entra **direto** no módulo de identidade pelo wiring (`identidadeOffline.registrar`, só para nós offline); o observador só chama `identidade.novaGeracao(g)` e `identidade.comparar(g)` e recebe números.
+
+### `inbound.offline_overlap` (1 por geração; reemite só se a contagem mudou; teto 3)
+`gatilho` (`stall`|`marcador`|`fechamento`), `comparavel`/`motivo` (`sem_geracao_anterior`|`sem_nos_offline_no_socket`), `previousGeneration`/`currentGeneration`/`geracoesEntre`, `previousCount`/`currentCount`,
+`overlapCount`/`newCount`/`missingCount`, `overlapPct`/`newPct`/`missingPct`, e o conjunto FROUXO completo (`currentIdOnlyCount`, `previousIdOnlyCount`, `overlapIdOnlyCount`/`Pct`, `newIdOnlyCount`/`Pct`, `missingIdOnlyCount`/`Pct`), `seenInRetainedCount`/`unseenInRetainedCount` (contra as gerações retidas), `duplicadosNoSocket`,
+`semIdentidade`, `descartadosPorLimite`, `currentTruncado`/`previousTruncado`, `porEspecie`, `previewAtual`/`previewAnterior` (só números: count/message/receipt/notification/call/status/appdata), `previewCountDelta`,
+`idadeOffline`/`idadeOfflineAnterior`, `RECOVERY_PATH_USED=false`, `observeOnly=true`.
+
+### Como ler (matriz de interpretação — a conclusão é do analista, não do código)
+| preview.count | overlap | idade | leitura |
+|---|---|---|---|
+| igual | ~100% | igual | replay do mesmo lote (evidência forte) |
+| diminui | baixo | fica mais recente | compatível com avanço da fila |
+| igual | baixo | qualquer | o servidor pode escolher subconjuntos diferentes (**não** concluir paginação) |
+| diminui | alto | qualquer | investigar antes de concluir (contagem sem consumo real?) |
+Limitações: estrita 0% + frouxa alta ⇒ mesmo item, outro endereço; o teto de 500/geração trunca a comparação (sinalizado); um item reenviado com outro `id` não é reconhecido.
