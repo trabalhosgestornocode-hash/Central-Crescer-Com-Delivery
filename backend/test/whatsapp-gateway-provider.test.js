@@ -159,7 +159,12 @@ describe("BaileysGatewayProvider — contrato e classificação de erro", () => 
     const provider = providerComResposta(() => ({ status: 200, corpo: {} }));
     const recebidos = [];
     provider.onMessage((m) => recebidos.push(m));
-    provider._receberEventoMensagem({ providerMessageId: "m1" });
+    // Checkpoint F: só o evento do CONTRATO e elegível (LIVE, cliente direto, sem fromMe/falha/stub) chega aos handlers.
+    provider._receberEventoMensagem({
+      contratoInbound: 1, providerMessageId: "m1", origemTipo: "LIVE", origemJidTipo: "direct_pn", fromMe: false, telefoneE164: "+5511999990000", telefoneOrigem: "JID_PN",
+      falhaDecrypt: false, motivoFalhaDecrypt: null, stubSistema: false, recebidoEm: new Date().toISOString(),
+    });
+    provider._receberEventoMensagem({ providerMessageId: "legado" });                      // formato antigo: bloqueado
     assert.equal(recebidos.length, 1);
     assert.equal(recebidos[0].providerMessageId, "m1");
   });

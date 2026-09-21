@@ -17,6 +17,7 @@
 
 import { Router } from "express";
 import { LeaseStaleError, AuthSessionStaleError, AuthConfirmacaoRecusadaError } from "./whatsappGateway.repo.js";
+import { validarEventoInbound, motivoBloqueioAutomacao } from "../inbound/inbound.contrato.js";
 
 // UUID v4-ish — o Gateway gera gatewayProcessId com crypto.randomUUID() a
 // cada boot (Checkpoint C3.5, item 2). Validado aqui (fronteira HTTP) antes
@@ -62,12 +63,16 @@ function epochValido(v) {
 export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
   const router = Router();
 
+  // Checkpoint F — contrato inbound ESTRITO. 400 com um CÓDIGO fechado (nunca ecoa o valor). O organizacaoId vem da CONFIG do backend, nunca do
+  // corpo (chave desconhecida ⇒ 400). Persiste em tabela PRÓPRIA (idempotente). Só um evento novo E elegível (LIVE, cliente direto, sem
+  // fromMe/falha/stub, estado RECEIVED) chega ao provider: recovery, offline, fromMe, falha de decrypt e duplicata NUNCA disparam nada.
   router.post("/eventos/mensagem-recebida", async (req, res, next) => {
     try {
-      const payload = req.corpoJson ?? {};
-      await repo.registrarMensagemRecebida(organizacaoId, payload);
-      provider?._receberEventoMensagem?.(payload);
-      res.json({ ok: true });
+      const v = validarEventoInbound(req.corpoJson);
+      if (!v.ok) return res.status(400).json({ error: "mensagem_recebida_invalida", campo: v.erro });
+      const r = await repo.registrarMensagemRecebida(organizacaoId, v.evento);
+      if (!r.duplicada && motivoBloqueioAutomacao({ ...v.evento, estado: r.estado }) === null) provider?._receberEventoMensagem?.(v.evento);
+      res.json({ ok: true, duplicada: r.duplicada, estado: r.estado });
     } catch (e) { next(e); }
   });
 

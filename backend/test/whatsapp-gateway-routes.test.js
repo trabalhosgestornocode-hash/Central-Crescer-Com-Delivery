@@ -266,14 +266,23 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
     }
   });
 
-  test("mensagem-recebida assinada repassa o evento para o provider (onMessage)", async () => {
+  test("mensagem-recebida assinada (contrato do Checkpoint F, LIVE de cliente direto) repassa o evento para o provider (onMessage)", async () => {
     _resetarNonces();
     const recebidos = [];
     provider.onMessage((m) => recebidos.push(m));
-    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/mensagem-recebida", { providerMessageId: "m1", telefoneE164: "+5511999990000" });
+    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/mensagem-recebida", {
+      contratoInbound: 1, providerMessageId: "m1", origemTipo: "LIVE", origemJidTipo: "direct_pn", fromMe: false, telefoneE164: "+5511999990000", telefoneOrigem: "JID_PN",
+      falhaDecrypt: false, motivoFalhaDecrypt: null, stubSistema: false, recebidoEm: new Date().toISOString(),
+    });
     assert.equal(r.status, 200);
     assert.equal(recebidos.length, 1);
     assert.equal(recebidos[0].providerMessageId, "m1");
+  });
+
+  test("mensagem-recebida no formato ANTIGO (só providerMessageId + telefone) é recusada com 400: o contrato é obrigatório", async () => {
+    _resetarNonces();
+    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/mensagem-recebida", { providerMessageId: "m2", telefoneE164: "+5511999990000" });
+    assert.equal(r.status, 400);
   });
 
   test("status-provider assinado é aceito", async () => {

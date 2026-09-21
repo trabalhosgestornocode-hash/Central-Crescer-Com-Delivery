@@ -11,6 +11,7 @@
 // aparecer em qualquer arquivo além deste.
 
 import { validarProvider } from "./whatsapp.provider.js";
+import { motivoBloqueioAutomacao } from "./inbound/inbound.contrato.js";
 
 /**
  * @param {{provider: import('./whatsapp.provider.js').WhatsAppProvider}} params
@@ -44,7 +45,8 @@ export function criarWhatsAppService({ provider }) {
 
     /** @param {(mensagem: object) => void} handler */
     onMensagemRecebida(handler) {
-      provider.onMessage(handler);
+      // Checkpoint F — 3ª camada: o handler (futuro Agente/automação) só vê evento elegível (LIVE, cliente direto, sem fromMe/falha/stub).
+      provider.onMessage((mensagem) => { if (motivoBloqueioAutomacao(mensagem) === null) handler(mensagem); });
     },
   };
 }

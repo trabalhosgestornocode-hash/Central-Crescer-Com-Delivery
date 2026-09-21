@@ -43,6 +43,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { validarProvider } from "../whatsapp.provider.js";
 import { assinarRequisicao } from "../gateway/whatsappGateway.hmac.js";
+import { motivoBloqueioAutomacao } from "../inbound/inbound.contrato.js";
 
 /**
  * Tabela definitiva código-de-contrato-do-Gateway -> marcas do erro. Só o que
@@ -235,7 +236,11 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
     // por HTTP (ele não pode ser "puxado" — mensagem recebida é sempre
     // push); este é o único jeito de conectar aquele POST a este provider
     // sem quebrar "só whatsapp.service.js chama o provider de envio".
-    _receberEventoMensagem(mensagem) { handlersMensagem.forEach((h) => h(mensagem)); },
+    // Checkpoint F — defesa em profundidade: mesmo chamado direto, nada fora do contrato/elegível (LIVE, cliente direto, sem fromMe/falha/stub) chega aos handlers.
+    _receberEventoMensagem(mensagem) {
+      if (motivoBloqueioAutomacao(mensagem) !== null) return;
+      handlersMensagem.forEach((h) => h(mensagem));
+    },
   };
 
   return validarProvider(provider);

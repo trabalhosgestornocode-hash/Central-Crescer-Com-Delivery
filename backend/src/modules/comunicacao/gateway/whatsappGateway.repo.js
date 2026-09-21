@@ -24,6 +24,7 @@
 
 import { randomUUID } from "node:crypto";
 import { ApiError } from "../../../shared/ApiError.js";
+import { decidirEstadoInbound } from "../inbound/inbound.contrato.js";
 
 const INSTANCIA_PADRAO = "default";
 
@@ -96,6 +97,8 @@ function fencingValido(atual, { gatewayProcessId, leaseEpoch }, agora = Date.now
 /** Repositório em memória — usado por padrão em C1 (tabela real não existe ainda). */
 export function criarRepoEmMemoria() {
   const porOrganizacao = new Map(); // organizacaoId -> registro
+  // Checkpoint F — inbound PRÓPRIO (nunca comunicacao_mensagens). Chave: organizacaoId + providerMessageId (mesma unicidade da tabela).
+  const inbound = new Map();
 
   return {
     /**
@@ -259,13 +262,23 @@ export function criarRepoEmMemoria() {
       // (não em whatsapp_conexoes — isto é sobre a CONEXÃO, não a mensagem).
       return { providerMessageId, status };
     },
-    async registrarMensagemRecebida(_organizacaoId, payload) {
-      // Checkpoint F: resolução de contato/perfil + comunicacao_conversas.
-      // Por ora, só repassa o evento (log fica a cargo do handler da rota).
-      return payload;
+    /**
+     * Checkpoint F — persiste o evento inbound JÁ VALIDADO (inbound.contrato.js). Idempotente por (organizacaoId, providerMessageId):
+     * a repetição devolve {duplicada:true} e NÃO altera o registro. O estado é decidido por decidirEstadoInbound (única fonte).
+     * @returns {Promise<{duplicada: boolean, estado: string}>}
+     */
+    async registrarMensagemRecebida(organizacaoId, evento) {
+      if (typeof organizacaoId !== "string" || organizacaoId === "") throw new Error("organizacaoId obrigatório");
+      const chave = `${organizacaoId}\u0000${evento.providerMessageId}`;
+      const existente = inbound.get(chave);
+      if (existente) return { duplicada: true, estado: existente.estado };
+      const estado = decidirEstadoInbound(evento);
+      inbound.set(chave, { id: randomUUID(), organizacaoId, ...evento, estado, criadoEm: new Date().toISOString() });
+      return { duplicada: false, estado };
     },
     // ---- só para teste ----
     _snapshot: (organizacaoId) => porOrganizacao.get(organizacaoId) ?? null,
+    _inbound: (organizacaoId) => [...inbound.values()].filter((r) => r.organizacaoId === organizacaoId),
   };
 }
 
@@ -483,9 +496,31 @@ export function criarRepoSupabase() {
       // (whatsapp_conexoes) — fora do escopo deste checkpoint.
       return { providerMessageId, status };
     },
-    async registrarMensagemRecebida(_organizacaoId, payload) {
-      // Checkpoint F: resolução de contato/perfil + comunicacao_conversas.
-      return payload;
+    /**
+     * Checkpoint F — persistência PRÓPRIA do inbound (migration 090, tabela whatsapp_inbound_mensagens; NUNCA comunicacao_mensagens, cujo claim
+     * de outbox não filtra direção). Insert idempotente e atômico no banco (on conflict do nothing) por (organizacao_id, provider_message_id);
+     * o organizacao_id vem SEMPRE do parâmetro (config do backend), nunca do payload. A tabela ainda NÃO existe em nenhum banco até a 090 ser aplicada.
+     * @returns {Promise<{duplicada: boolean, estado: string}>}
+     */
+    async registrarMensagemRecebida(organizacaoId, evento, deps = {}) {
+      if (typeof organizacaoId !== "string" || organizacaoId === "") throw ApiError.internal("organizacaoId obrigatório");
+      const db = await obterCliente(deps);
+      const r = await chamarRpc(db, "whatsapp_inbound_registrar", {
+        p_organizacao_id: organizacaoId,
+        p_provider_message_id: evento.providerMessageId,
+        p_origem_tipo: evento.origemTipo,
+        p_origem_jid_tipo: evento.origemJidTipo,
+        p_telefone_e164: evento.telefoneE164,
+        p_telefone_origem: evento.telefoneOrigem,
+        p_from_me: evento.fromMe,
+        p_falha_decrypt: evento.falhaDecrypt,
+        p_motivo_falha_decrypt: evento.motivoFalhaDecrypt,
+        p_stub_sistema: evento.stubSistema,
+        p_estado: decidirEstadoInbound(evento),
+        p_recebido_em: evento.recebidoEm,
+      });
+      if (!r || typeof r.inserido !== "boolean" || typeof r.estado_atual !== "string") throw ApiError.internal("resposta inesperada de whatsapp_inbound_registrar");
+      return { duplicada: !r.inserido, estado: r.estado_atual };
     },
 
     // ---- lease/fencing (Checkpoint C3.5) ----
