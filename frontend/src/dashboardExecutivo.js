@@ -20,6 +20,8 @@ import { abrirLancamentoModal, avisarAlteracaoExterna } from "./dashboardExecuti
 import { registrarInteresse } from "./realtime/realtimeBus.js";
 import { EVENTOS_DASHBOARD_IFOOD, RESINCRONIZACAO } from "./realtime/realtimeEvents.js";
 import { abrirLancamentoMensalModal } from "./dashboardExecutivoMensal.js";
+import { abrirTrocaModeloModal } from "./dashboardExecutivoModeloModal.js";
+import { linhasSegmentos, avisoDivisaoIndisponivel, modeloDaData, avisoLancamentoMensalBloqueado } from "./dashboardExecutivoModelo.js";
 import { montarSimuladorPreco } from "./dashboardExecutivoSimulador.js";
 import { icon } from "./icons.js";
 import { botaoContextualHtml, botaoDiagnosticoHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
@@ -269,9 +271,15 @@ function montarLayout() {
   el("#dex-unidade")?.addEventListener("change", (e) => { dex.unidadeId = e.target.value || null; carregarConteudo(); });
   el("#dex-mes").addEventListener("change", (e) => { dex.mes = Number(e.target.value); carregarConteudo(); });
   el("#dex-ano").addEventListener("change", (e) => { dex.ano = Number(e.target.value); carregarConteudo(); });
-  el("#dex-lancamento-mensal")?.addEventListener("click", () => abrirLancamentoMensalModal({
-    unidadeId: dex.unidadeId, mes: dex.mes, ano: dex.ano, modeloLogistico: dex.dadosMes?.modeloLogistico, onSalvo: carregarConteudo,
-  }));
+  el("#dex-lancamento-mensal")?.addEventListener("click", () => {
+    // Bloqueio preventivo (UX): o backend segue sendo a proteção real (409 em
+    // período misto sem lote ainda) — isto só evita abrir o formulário para nada.
+    const aviso = avisoLancamentoMensalBloqueado(dex.dadosMes?.modeloPeriodo, !!dex.dadosMes?.lancamentoMensal);
+    if (aviso) { toast(aviso); return; }
+    abrirLancamentoMensalModal({
+      unidadeId: dex.unidadeId, mes: dex.mes, ano: dex.ano, modeloLogistico: dex.dadosMes?.modeloLogistico, onSalvo: carregarConteudo,
+    });
+  });
   ligarBotoesContextuais(view);
   view.querySelectorAll(".dex-tab").forEach((b) => b.addEventListener("click", () => irParaAba(b.dataset.aba)));
 }
@@ -350,33 +358,60 @@ function renderModeloBox() {
     return;
   }
 
+  // O <select> mostra o modelo de HOJE (`modeloAtual`); o modelo do PERÍODO
+  // exibido pode ser outro (mês passado) ou "misto" — ver notaPeriodoModelo.
+  const atual = d.modeloAtual?.modeloLogistico ?? d.modeloLogistico;
+  const nota = notaPeriodoModelo(d);
   if (pode("dashboard_executivo.configurar")) {
     caixa.innerHTML = `<label class="dex-modelo-campo"><span>Modelo logístico</span>
       <select id="dex-modelo-select">
-        <option value="marketplace" ${d.modeloLogistico === "marketplace" ? "selected" : ""}>Marketplace</option>
-        <option value="full_service" ${d.modeloLogistico === "full_service" ? "selected" : ""}>Full Service</option>
-      </select></label>`;
-    el("#dex-modelo-select").addEventListener("change", (e) => trocarModeloLogistico(e.target.value));
+        <option value="marketplace" ${atual === "marketplace" ? "selected" : ""}>Marketplace</option>
+        <option value="full_service" ${atual === "full_service" ? "selected" : ""}>Full Service</option>
+      </select></label>${nota}`;
+    el("#dex-modelo-select").addEventListener("change", (e) => trocarModeloLogistico(e.target.value, atual));
+    // Unidade que já trocou no passado SEM data registrada (ex.: começou Marketplace, hoje é
+    // Full Service): informa desde quando o modelo atual vale — é isso que separa os dias.
+    if (!d.modeloAtual?.possuiTrocaDatada) {
+      caixa.insertAdjacentHTML("beforeend", `<button class="btn btn-ghost btn-sm" id="dex-modelo-declarar" type="button" title="Informe desde quando o modelo atual vale; antes disso a unidade é lida como o outro modelo.">Informar quando o modelo atual começou</button>`);
+      el("#dex-modelo-declarar").addEventListener("click", () => abrirTrocaModeloModal({
+        unidadeId: dex.unidadeId, modeloAtual: atual, declararInicio: true, onSalvo: carregarConteudo,
+      }));
+    }
   } else {
-    caixa.innerHTML = `<span class="dex-modelo-nota">${icon("tag", { size: 13 })} Modelo logístico: <b>${escapeHtml(d.modeloLogisticoRotulo ?? ROTULO_MODELO[d.modeloLogistico] ?? "—")}</b></span>`;
+    caixa.innerHTML = `<span class="dex-modelo-nota">${icon("tag", { size: 13 })} Modelo logístico: <b>${escapeHtml(d.modeloAtual?.modeloLogisticoRotulo ?? d.modeloLogisticoRotulo ?? ROTULO_MODELO[d.modeloLogistico] ?? "—")}</b></span>${nota}`;
   }
 }
 
-async function trocarModeloLogistico(modeloNovo) {
-  const rotulo = ROTULO_MODELO[modeloNovo] ?? modeloNovo;
-  if (!confirm(`Trocar o modelo logístico desta unidade para ${rotulo}? Isso atualiza imediatamente as metas, os indicadores e o diagnóstico do mês.`)) {
-    renderModeloBox(); // desfaz a seleção visual do <select>
-    return;
+/**
+ * Nota discreta sob o seletor: "Operação mista no período" (com os intervalos de
+ * cada modelo e, se for o caso, por que os indicadores não puderam ser separados)
+ * ou, para um mês de outro modelo que não o de hoje, "Neste período: Marketplace".
+ */
+function notaPeriodoModelo(d) {
+  const mp = d.modeloPeriodo;
+  if (mp?.misto) {
+    const aviso = avisoDivisaoIndisponivel(mp);
+    return `<div class="dex-modelo-misto" role="status">
+      <span class="dex-modelo-nota">${icon("tag", { size: 13 })} Operação mista no período</span>
+      <small>${linhasSegmentos(mp).map(escapeHtml).join(" · ")}</small>
+      ${aviso ? `<small class="dex-modelo-aviso">${escapeHtml(aviso)}</small>` : ""}
+    </div>`;
   }
-  const motivo = prompt("Motivo da troca (opcional):") || undefined;
-  try {
-    await dashExecAtualizarModeloLogistico(dex.unidadeId, { modeloLogistico: modeloNovo, motivo });
-    toast(`Modelo logístico atualizado para ${rotulo}.`);
-    await carregarConteudo();
-  } catch (e) {
-    toast("Erro: " + e.message);
-    renderModeloBox();
+  if (d.modeloAtual && d.modeloLogistico !== d.modeloAtual.modeloLogistico) {
+    return `<div class="dex-modelo-misto" role="status"><small>Neste período: <b>${escapeHtml(d.modeloLogisticoRotulo ?? "—")}</b></small></div>`;
   }
+  return "";
+}
+
+// A troca exige uma DATA de vigência explícita (nada de troca retroativa
+// silenciosa) — ver dashboardExecutivoModeloModal.js.
+function trocarModeloLogistico(modeloNovo, modeloAtual) {
+  if (modeloNovo === modeloAtual) return;
+  abrirTrocaModeloModal({
+    unidadeId: dex.unidadeId, modeloAtual, modeloSugerido: modeloNovo,
+    onSalvo: carregarConteudo,
+    onCancelar: renderModeloBox, // desfaz a seleção visual do <select>
+  });
 }
 
 function renderAbaAtual() {
@@ -398,7 +433,7 @@ function renderVisaoGeral(box) {
   if (d.agregado) {
     box.innerHTML = `
       <div class="dex-aviso">${icon("building", { size: 15 })} ${escapeHtml(d.aviso)}</div>
-      <div class="dex-cards">${cardsPrincipais(d.cards)}</div>
+      <div class="dex-cards">${cardsPrincipais(d.cards, d.modeloPeriodo)}</div>
       <div class="dex-graficos">
         ${graficoBox("comparativo", `${icon("trending-up", { size: 15 })} Comparativo de percentuais`, "dex-chart-comp")}
         ${graficoBox("composicao", `${icon("pie-chart", { size: 15 })} Composição das deduções (R$)`, "dex-chart-comp2")}
@@ -421,7 +456,7 @@ function renderVisaoGeral(box) {
       <p class="dex-resumo-sub">Última atualização: ${r.ultimoLancamento ? fmtDataBr(r.ultimoLancamento) : "—"}</p>
       ${r.primeiroDiaPendente && podeLancar() ? `<button class="btn btn-primary btn-sm" id="dex-preencher-primeiro">Preencher primeiro dia pendente (${fmtDataBr(r.primeiroDiaPendente)})</button>` : ""}
     </section>
-    <div class="dex-cards">${cardsPrincipais(d.cards)}</div>
+    <div class="dex-cards">${cardsPrincipais(d.cards, d.modeloPeriodo)}</div>
     <div class="dex-graficos">
       ${graficoBox("comparativo", `${icon("trending-up", { size: 15 })} Comparativo de percentuais`, "dex-chart-comp")}
       ${graficoBox("composicao", `${icon("pie-chart", { size: 15 })} Composição das deduções (R$)`, "dex-chart-comp2")}
@@ -460,7 +495,7 @@ function renderVisaoGeral(box) {
   // dia a dia) — ver renderLancamentos.
   montarSimuladorPreco("dex-sim-container", dex.unidadeId, d.periodo.mes, d.periodo.ano, d);
   el("#dex-preencher-primeiro")?.addEventListener("click", () => abrirLancamentoModal({
-    data: r.primeiroDiaPendente, unidadeId: dex.unidadeId, modeloLogistico: d.modeloLogistico, ehTeste: d.ehTeste, onSalvo: carregarConteudo,
+    data: r.primeiroDiaPendente, unidadeId: dex.unidadeId, modeloLogistico: modeloDaData(d.modeloPeriodo, r.primeiroDiaPendente, d.modeloLogistico), ehTeste: d.ehTeste, onSalvo: carregarConteudo,
   }));
   wirePlanoAcao();
 }
@@ -585,7 +620,10 @@ function metaBarraHtml(cardIndicador) {
     <span class="dex-card-saldo${saldo.status === "acima_do_limite" ? " acima" : ""}">${linhaSaldo}</span>`;
 }
 
-function cardsPrincipais(cards) {
+// `modeloPeriodo` (opcional): em período misto o card de Taxas de Entregadores
+// continua visível (existiu Marketplace no período) e diz que a base é só a dos
+// dias de Marketplace.
+function cardsPrincipais(cards, modeloPeriodo = null) {
   const s1 = cards.taxasComissoes.status ?? { label: "Dados insuficientes", chave: "sem_dados" };
   const s2 = cards.servicosPromocoes.status ?? { label: "Dados insuficientes", chave: "sem_dados" };
   // Taxas de Entregadores some do TODO (não só "dados insuficientes") quando
@@ -612,7 +650,7 @@ function cardsPrincipais(cards) {
       "Quantidade acumulada de novos clientes identificados no período selecionado (Desempenho — indicador operacional)."),
     cardDef("Taxas e Comissões", fmtMoeda(cards.taxasComissoes.valor), `${fmtPct(cards.taxasComissoes.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s1.chave]}">${s1.label}</span>`, "Comissão iFood + taxa de transação de pagamento online.", "", metaBarraHtml(cards.taxasComissoes)),
     cardDef("Serviços e Promoções", fmtMoeda(cards.servicosPromocoes.valor), `${fmtPct(cards.servicosPromocoes.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s2.chave]}">${s2.label}</span>`, "Custo de campanhas e promoções ativas no iFood.", "", metaBarraHtml(cards.servicosPromocoes)),
-    cards.taxasEntregadores?.naoAplicavel ? "" : cardDef("Taxas de Entregadores", fmtMoeda(cards.taxasEntregadores?.valor), `${fmtPct(cards.taxasEntregadores?.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s4.chave]}">${s4.label}</span>`, "Repasse aos entregadores parceiros — só se aplica ao modelo logístico Marketplace.", "", metaBarraHtml(cards.taxasEntregadores ?? {})),
+    cards.taxasEntregadores?.naoAplicavel ? "" : cardDef("Taxas de Entregadores", fmtMoeda(cards.taxasEntregadores?.valor), `${fmtPct(cards.taxasEntregadores?.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s4.chave]}">${s4.label}</span>`, (modeloPeriodo?.misto ? "Repasse aos entregadores parceiros — apurado só nos dias de Marketplace do período (o % é sobre o faturamento desses dias)." : "Repasse aos entregadores parceiros — só se aplica ao modelo logístico Marketplace."), "", metaBarraHtml(cards.taxasEntregadores ?? {})),
     cardDef("Ajustes a favor", fmtMoeda(cards.ajustesFavor?.valor), `${fmtPct(cards.ajustesFavor?.percentual)} das vendas`, "Créditos, reembolsos e correções financeiras a favor da loja.", "ajuste-favor"),
     cardDef("Ajustes contra", fmtMoeda(cards.ajustesContra?.valor), `${fmtPct(cards.ajustesContra?.percentual)} das vendas`, "Débitos, descontos e correções financeiras contra a loja."),
     cardDef("Total de Deduções", fmtMoeda(cards.totalDeducoes.valor), `${fmtPct(cards.totalDeducoes.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s3.chave]}">${s3.label}</span>`, "Soma das deduções aplicáveis ao modelo: taxas e comissões + serviços e promoções + taxas de entregadores (só no Marketplace). Não inclui ajustes contra a loja.", "", metaBarraHtml(cards.totalDeducoes)),
@@ -684,7 +722,7 @@ function renderLancamentos(box) {
       abrirLancamentoMensalModal({ unidadeId: dex.unidadeId, mes: dex.mes, ano: dex.ano, modeloLogistico: d.modeloLogistico, onSalvo: carregarConteudo, modoInicial: "ver" });
       return;
     }
-    abrirLancamentoModal({ data: elDia.dataset.data, unidadeId: dex.unidadeId, modeloLogistico: d.modeloLogistico, ehTeste: d.ehTeste, onSalvo: carregarConteudo });
+    abrirLancamentoModal({ data: elDia.dataset.data, unidadeId: dex.unidadeId, modeloLogistico: modeloDaData(d.modeloPeriodo, elDia.dataset.data, d.modeloLogistico), ehTeste: d.ehTeste, onSalvo: carregarConteudo });
   }));
 }
 

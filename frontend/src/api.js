@@ -305,7 +305,8 @@ export async function dashExecAtualizarLancamento(id, dados) {
 }
 
 // ---------- Modelo logístico do iFood (Marketplace x Full Service) ----------
-export const dashExecModeloLogistico = (unidadeId) => getJson(`${DEX}/unidades/${unidadeId}/modelo-logistico`);
+// `data` (AAAA-MM-DD, opcional): o modelo VIGENTE naquele dia, não o atual.
+export const dashExecModeloLogistico = (unidadeId, data) => getJson(`${DEX}/unidades/${unidadeId}/modelo-logistico${data ? `?data=${encodeURIComponent(data)}` : ""}`);
 export const dashExecHistoricoModelo = (unidadeId) => getJson(`${DEX}/unidades/${unidadeId}/modelo-logistico/historico`);
 export async function dashExecAtualizarModeloLogistico(unidadeId, dados) {
   const g = geracaoContexto();

@@ -813,13 +813,16 @@ export const INDICADOR_DO_CAMPO_EXTRA_MENSAL = {
  * "dado complementar pendente" um campo que sequer existe nesse modelo
  * (ex.: taxas de entregadores no Full Service — é "não aplicável", nunca
  * "faltando").
+ * Aceita UM modelo ou uma LISTA (lote que cobre dias de mais de um modelo: o
+ * campo se aplica se se aplicar a ALGUM deles — existe nos dias em que o modelo
+ * o usa e nunca vira "pendência" nos dias em que não usa).
  * @param {string} campo — chave camelCase (ex.: "taxasEntregadoresTotal")
- * @param {string} modeloLogistico
+ * @param {string|string[]} modeloLogistico
  * @returns {boolean}
  */
 export function campoExtraMensalAplicavel(campo, modeloLogistico) {
   const indicador = INDICADOR_DO_CAMPO_EXTRA_MENSAL[campo];
-  return indicador == null || indicadorAplicavel(modeloLogistico, indicador);
+  return indicador == null || [].concat(modeloLogistico).some((m) => indicadorAplicavel(m, indicador));
 }
 
 /**
@@ -833,7 +836,7 @@ export function campoExtraMensalAplicavel(campo, modeloLogistico) {
  * Campo aplicável e informado (inclusive com 0) não entra em nenhuma lista.
  * @param {Array<[string, ...unknown[]]>} camposExtras — pares cujo 1º item é a chave do campo, na ordem de exibição
  * @param {Record<string, number|null|undefined>} extras — total por campo (soma das fatias diárias; `null` = não informado)
- * @param {string} modeloLogistico
+ * @param {string|string[]} modeloLogistico
  * @returns {{pendentes: string[], naoAplicaveis: string[]}}
  */
 export function classificarCamposExtrasMensal(camposExtras, extras, modeloLogistico) {

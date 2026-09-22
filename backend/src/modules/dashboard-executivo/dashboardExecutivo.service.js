@@ -16,6 +16,10 @@ import {
   totalDeducoesIndicador, metasComProtecaoPrecificacao, saldoMeta,
   distribuirValorMensal, distribuirQuantidadeMensal, recalcularDistribuicaoMensal,
 } from "./dashboardExecutivo.calc.js";
+import {
+  montarLinhaDoTempo, modeloNaData, segmentosDoPeriodo, estadoDoPeriodo, rotuloDoModelo, modelosDasDatas, descreverPeriodo, trocasDeLinhas,
+} from "./dashboardExecutivo.modeloTemporal.js";
+import { dividirFinanceiroPorSegmento, consolidarSegmentos, comporMetas } from "./dashboardExecutivo.periodoMisto.js";
 import { gerarDiagnostico, LIMIARES_DIAGNOSTICO } from "./dashboardExecutivo.diagnostico.js";
 import { carregarDatasLiberadas } from "../../shared/desbloqueiosIfood.js";
 import { emitirEventoRealtime } from "../realtime/emitirEvento.js";
@@ -130,22 +134,29 @@ export async function listarUnidades({ organizacaoId, unidadeIdSessao }) {
 // Sempre exige uma unidade específica — "todas as unidades" não é um
 // conceito válido pra este recurso (cada unidade tem o seu próprio modelo).
 // ---------------------------------------------------------------------------
-export async function obterModeloLogisticoUnidade({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado }) {
+export async function obterModeloLogisticoUnidade({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, data }) {
   const unidadeId = await resolverUnidadeAlvo({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, exigirEspecifica: true });
-  return obterModeloLogistico({ unidadeId, organizacaoId });
+  const modelo = await obterModeloLogistico({ unidadeId, organizacaoId });
+  if (!data) return modelo;
+  // Com `data`: o modelo VIGENTE NAQUELE DIA (não o atual) — mesma regra de
+  // metas.service#obterModeloLogisticoNaData, sobre a linha do tempo já carregada.
+  const dia = v.dataOpcional(data, "Data");
+  const vigente = modeloNaData(modelo.linhaDoTempo ?? montarLinhaDoTempo({ modeloAtual: modelo.modeloLogistico }), dia);
+  return { unidadeId, data: dia, modeloLogistico: vigente, modeloLogisticoRotulo: rotuloDoModelo(vigente) };
 }
 
 export async function atualizarModeloLogisticoUnidade({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, usuario, dados: body }) {
   const unidadeId = await resolverUnidadeAlvo({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, exigirEspecifica: true });
   const b = v.corpo(body);
   const resultado = await definirModeloLogistico({
-    unidadeId, organizacaoId, modeloNovo: b.modeloLogistico, usuario, motivo: b.motivo, observacao: b.observacao,
+    unidadeId, organizacaoId, modeloNovo: b.modeloLogistico, modeloAnterior: b.modeloAnterior, vigenciaInicio: b.vigenciaInicio,
+    usuario, motivo: b.motivo, observacao: b.observacao,
   });
-  // O modelo logístico decide, ao vivo, como QUALQUER mês é calculado
-  // (resolverMetas lê unidades.modelo_logistico_ifood no momento do fetch —
-  // nunca um snapshot por mês). Por isso este evento não carrega
-  // `competencia`: é relevante pro mês que estiver aberto agora, seja
-  // qual for (ver a checagem de relevância no frontend).
+  // O modelo logístico decide, ao vivo, como cada mês é calculado — mas agora
+  // POR DATA (linha do tempo de vigências, nunca só o valor atual): uma troca
+  // retroativa pode mudar qualquer mês a partir da vigência. Por isso este
+  // evento não carrega `competencia`: é relevante pro mês que estiver aberto
+  // agora, seja qual for (ver a checagem de relevância no frontend).
   await emitirEventoRealtime({
     tipo: EVENTOS_DASHBOARD_IFOOD.MODELO_LOGISTICO_ATUALIZADO,
     organizacaoId, unidadeId, entidadeId: unidadeId, versao: new Date().toISOString(),
@@ -295,12 +306,28 @@ export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolici
   const hojeIso = hojeIsoBrasil();
 
   if (unidadeId) {
-    // O modelo logístico é DA UNIDADE — resolve antes das metas, porque cada
-    // modelo tem um conjunto de metas diferente (ver dashboardExecutivo.calc.js).
-    const modelo = await obterModeloLogistico({ unidadeId, organizacaoId });
-    const metas = await resolverMetas({ organizacaoId, unidadeId, modeloLogistico: modelo.modeloLogistico });
+    // O modelo logístico é TEMPORAL: o mês é lido pelo(s) modelo(s) VIGENTE(S)
+    // NAS DATAS dele (linha do tempo), nunca pelo modelo atual da unidade — um
+    // mês passado em Marketplace continua Marketplace depois da troca para Full
+    // Service. Resolve antes das metas, porque cada modelo tem metas diferentes
+    // (ver dashboardExecutivo.calc.js). Sem troca datada há um único segmento e
+    // tudo se comporta exatamente como antes.
+    const modeloAtual = await obterModeloLogistico({ unidadeId, organizacaoId });
+    const linhaDoTempo = modeloAtual.linhaDoTempo ?? montarLinhaDoTempo({ modeloAtual: modeloAtual.modeloLogistico });
+    const diasDoPeriodo = diasDoMes(ano, mes);
+    const segmentos = segmentosDoPeriodo(linhaDoTempo, diasDoPeriodo[0], diasDoPeriodo[diasDoPeriodo.length - 1]);
+    const estado = estadoDoPeriodo(segmentos);
+    // "misto" é só o estado derivado do período; as regras de aplicabilidade
+    // seguem cada segmento (ver obterMesDeUmaUnidade).
+    const modelo = { ...modeloAtual, modeloLogistico: estado.tipo, modeloLogisticoRotulo: rotuloDoModelo(estado.tipo) };
+    const metasPorSegmento = await Promise.all(segmentos.map(async (s) => ({
+      modelo: s.modelo, metas: await resolverMetas({ organizacaoId, unidadeId, modeloLogistico: s.modelo }),
+    })));
     const precos = await carregarPrecosRentabilidade({ organizacaoId, unidadeId, tabelaBalcao, tabelaIfood });
-    return obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIso, metas, modelo, precos });
+    return obterMesDeUmaUnidade({
+      organizacaoId, unidadeId, mes, ano, hojeIso, modelo, modeloAtual, precos,
+      metas: estado.misto ? {} : metasPorSegmento[0].metas, metasPorSegmento, segmentos, estado, linhaDoTempo,
+    });
   }
 
   // Visão agregada ("todas as unidades"): unidades diferentes podem estar em
@@ -311,9 +338,25 @@ export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolici
   return obterMesAgregado({ organizacaoId, mes, ano, hojeIso, metas: {} });
 }
 
-async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIso, metas, modelo, precos }) {
+async function obterMesDeUmaUnidade({
+  organizacaoId, unidadeId, mes, ano, hojeIso, metas: metasUnicas, metasPorSegmento, modelo, modeloAtual, precos,
+  segmentos, estado, linhaDoTempo,
+}) {
   const { diasComStatus, linhas } = await carregarCalendarioMes({ unidadeId, ano, mes, hojeIso });
   const resumo = resumoPreenchimento(diasComStatus);
+
+  // PERÍODO MISTO (Marketplace + Full Service no mesmo mês): o Financeiro é
+  // acumulado, então cada regime é a DIFERENÇA entre snapshots (ver
+  // dashboardExecutivo.periodoMisto.js). `divisao.disponivel === false` quando
+  // falta o snapshot da véspera da troca (ou o lote mensal atravessa a troca):
+  // nesse caso NADA é atribuído a um regime por palpite — os indicadores que
+  // dependem do modelo ficam sem dado e o motivo vai para o payload.
+  const misto = estado.misto;
+  const divisao = misto ? dividirFinanceiroPorSegmento(linhas, segmentos) : null;
+  const consolidado = divisao?.disponivel ? consolidarSegmentos(divisao) : null;
+  // Um indicador se aplica ao período se se aplica a ALGUM regime dele
+  // (Taxas de Entregadores: existe se houve Marketplace no período).
+  const aplicavel = (indicador) => segmentos.some((s) => indicadorAplicavel(s.modelo, indicador));
 
   // "Dias com dados" = dias com valor financeiro real (PREENCHIDO ou ZERO_VENDAS).
   // SEM_OPERACAO não entra na média (loja fechada não é "um dia de vendas").
@@ -340,7 +383,7 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
   const parTicketMedio = desempenhoParaTicketMedio(linhas);
   const serieDesempenho = listaDesempenhoDiario(diasComStatus.map((d) => d.data), linhas);
   const novosClientes = novosClientesAcumulados(diasComStatus.map((d) => d.data), linhas);
-  const cardValores = {
+  const valoresDoSnapshot = {
     valorVendasIfood: snapshot ? Number(snapshot.valor_vendas_ifood) : null,
     taxasComissoes: snapshot?.taxas_comissoes != null ? Number(snapshot.taxas_comissoes) : null,
     servicosPromocoes: snapshot?.servicos_promocoes != null ? Number(snapshot.servicos_promocoes) : null,
@@ -348,29 +391,44 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
     ajustesFavorLoja: snapshot?.ajustes_favor_loja != null ? Number(snapshot.ajustes_favor_loja) : null,
     ajustesContraLoja: snapshot?.ajustes_contra_loja != null ? Number(snapshot.ajustes_contra_loja) : null,
   };
+  // Mês simples: os valores do snapshot, como sempre. Período misto: faturamento,
+  // Taxas e Serviços são o acumulado do período; Entregadores só o do(s)
+  // regime(s) onde existe. Sem divisão disponível, Entregadores não pode ser
+  // atribuído a um regime -> null (nunca um palpite).
+  const cardValores = !misto ? valoresDoSnapshot
+    : consolidado ? consolidado.cardValores
+      : { ...valoresDoSnapshot, taxasEntregadores: null };
   const base = cardValores.valorVendasIfood;
+  // Denominador do % de Entregadores: faturamento dos regimes onde ele existe
+  // (no mês simples é o próprio faturamento — nada muda).
+  const baseEntregadores = consolidado ? consolidado.baseEntregadores : base;
   // Total FINANCEIRO — TODAS as saídas de caixa (inclusive entregadores e
   // ajustes contra a loja). Alimenta SÓ a Receita Líquida, nunca a tabela de
-  // Indicadores. Ver dashboardExecutivo.calc.js#totalDeducoes.
+  // Indicadores. Ver dashboardExecutivo.calc.js#totalDeducoes. É o caixa real:
+  // usa os valores do snapshot, independente do regime a que cada parcela pertence.
   const totalDedFinanceiro = totalDeducoes({
-    taxasComissoes: cardValores.taxasComissoes, servicosPromocoes: cardValores.servicosPromocoes,
-    taxasEntregadores: cardValores.taxasEntregadores, ajustesContraLoja: cardValores.ajustesContraLoja,
+    taxasComissoes: valoresDoSnapshot.taxasComissoes, servicosPromocoes: valoresDoSnapshot.servicosPromocoes,
+    taxasEntregadores: valoresDoSnapshot.taxasEntregadores, ajustesContraLoja: valoresDoSnapshot.ajustesContraLoja,
   });
-  const receitaLiquidaValor = receitaLiquida(base, totalDedFinanceiro, cardValores.ajustesFavorLoja);
+  const receitaLiquidaValor = receitaLiquida(base, totalDedFinanceiro, valoresDoSnapshot.ajustesFavorLoja);
   // Total do INDICADOR "Total de Deduções" — recalculado SEMPRE pelas parcelas
   // de dedução APLICÁVEIS ao modelo (Marketplace inclui entregadores; Full
   // Service não). Fonte única: calc.js#totalDeducoesIndicador. É este o número
   // da tabela de Indicadores de Rentabilidade, do card e do saldo/Disponível —
-  // nunca o total financeiro acima, nunca um valor legado.
-  const totalDed = totalDeducoesIndicador(modelo.modeloLogistico, {
-    taxas_comissoes: cardValores.taxasComissoes,
-    servicos_promocoes: cardValores.servicosPromocoes,
-    taxas_entregadores: cardValores.taxasEntregadores,
-  });
+  // nunca o total financeiro acima, nunca um valor legado. Em período misto é
+  // a SOMA em reais dos segmentos, cada um com as parcelas do SEU modelo
+  // (consolidarSegmentos); sem divisão disponível, não há como apurar -> null.
+  const totalDed = !misto
+    ? totalDeducoesIndicador(modelo.modeloLogistico, {
+      taxas_comissoes: cardValores.taxasComissoes,
+      servicos_promocoes: cardValores.servicosPromocoes,
+      taxas_entregadores: cardValores.taxasEntregadores,
+    })
+    : (consolidado ? consolidado.totalDeducoes : null);
   const indicadoresRentabilidade = {
     taxas_comissoes: percentual(cardValores.taxasComissoes, base),
     servicos_promocoes: percentual(cardValores.servicosPromocoes, base),
-    taxas_entregadores: percentual(cardValores.taxasEntregadores, base),
+    taxas_entregadores: percentual(cardValores.taxasEntregadores, baseEntregadores),
     total_deducoes: percentual(totalDed, base),
   };
   // PROTEÇÃO DA PRECIFICAÇÃO — conceito exclusivo do Simulador de Preço.
@@ -397,14 +455,37 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
   // reserva (ver metasComProtecaoPrecificacao). `metasRentabilidade` alimenta
   // a TABELA de Indicadores e os 4 cards de rentabilidade da Visão Geral;
   // saldos/Disponível/barras, Plano de Ação e Agente seguem `metas` original.
-  const derivada = metasComProtecaoPrecificacao(metas, protecaoPrecificacao.protecaoPrecificacaoPct, modelo.modeloLogistico);
+  const pctProtecao = protecaoPrecificacao.protecaoPrecificacaoPct;
+  const nomesIndicadores = Object.keys(indicadoresRentabilidade);
+  let metas = metasUnicas;
+  let derivada;
+  if (!misto) {
+    derivada = metasComProtecaoPrecificacao(metas, pctProtecao, modelo.modeloLogistico);
+  } else if (consolidado) {
+    // Meta composta do período misto: cada regime com a SUA meta, ponderada pelo
+    // faturamento do regime (dashboardExecutivo.periodoMisto.js#comporMetas) —
+    // nunca a meta de um regime só aplicada ao mês inteiro.
+    const pesos = divisao.segmentos.map((s) => (s.semDado ? 0 : (s.valores.valorVendasIfood ?? 0)));
+    metas = comporMetas(metasPorSegmento.map((m, i) => ({ modelo: m.modelo, peso: pesos[i], metas: m.metas })), nomesIndicadores);
+    const porSegmento = metasPorSegmento.map((m) => metasComProtecaoPrecificacao(m.metas, pctProtecao, m.modelo));
+    derivada = {
+      metas: comporMetas(porSegmento.map((d, i) => ({ modelo: metasPorSegmento[i].modelo, peso: pesos[i], metas: d.metas })), nomesIndicadores),
+      protecaoInsuficiente: porSegmento.some((d) => d.protecaoInsuficiente),
+      metaServicosAcimaDoLimite: porSegmento.some((d) => d.metaServicosAcimaDoLimite),
+    };
+  } else {
+    // Sem divisão por regime: uma meta única seria enganosa — comparativo com meta indisponível
+    // (mesmo tratamento da visão agregada "todas as unidades").
+    metas = {};
+    derivada = { metas: {}, protecaoInsuficiente: false, metaServicosAcimaDoLimite: false };
+  }
   const metasRentabilidade = derivada.metas;
   protecaoPrecificacao.protecaoInsuficiente = derivada.protecaoInsuficiente;
   protecaoPrecificacao.metaServicosAcimaDoLimite = derivada.metaServicosAcimaDoLimite;
   const saldos = {
     taxas_comissoes: saldoMeta({ valorUtilizado: cardValores.taxasComissoes, percentualUtilizado: indicadoresRentabilidade.taxas_comissoes, limitePct: metas.taxas_comissoes?.limite ?? null, faturamentoBase: base }),
     servicos_promocoes: saldoMeta({ valorUtilizado: cardValores.servicosPromocoes, percentualUtilizado: indicadoresRentabilidade.servicos_promocoes, limitePct: metas.servicos_promocoes?.limite ?? null, faturamentoBase: base }),
-    taxas_entregadores: saldoMeta({ valorUtilizado: cardValores.taxasEntregadores, percentualUtilizado: indicadoresRentabilidade.taxas_entregadores, limitePct: metas.taxas_entregadores?.limite ?? null, faturamentoBase: base }),
+    taxas_entregadores: saldoMeta({ valorUtilizado: cardValores.taxasEntregadores, percentualUtilizado: indicadoresRentabilidade.taxas_entregadores, limitePct: metas.taxas_entregadores?.limite ?? null, faturamentoBase: baseEntregadores }),
     total_deducoes: saldoMeta({ valorUtilizado: totalDed, percentualUtilizado: indicadoresRentabilidade.total_deducoes, limitePct: metas.total_deducoes?.limite ?? null, faturamentoBase: base }),
   };
 
@@ -437,7 +518,7 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
     // não entra no Total de Deduções e aumenta a Receita líquida; "Ajustes
     // contra" (débito) entra no Total de Deduções (ver calc.js#totalDeducoes /
     // #receitaLiquida). Nenhum dos dois gera "dentro/fora da meta".
-    taxasEntregadores: { valor: cardValores.taxasEntregadores, percentual: indicadoresRentabilidade.taxas_entregadores, meta: metasRentabilidade.taxas_entregadores ?? null, saldo: saldos.taxas_entregadores, status: statusIndicadorRentabilidade(indicadoresRentabilidade.taxas_entregadores, metasRentabilidade.taxas_entregadores), naoAplicavel: !indicadorAplicavel(modelo.modeloLogistico, "taxas_entregadores") },
+    taxasEntregadores: { valor: cardValores.taxasEntregadores, percentual: indicadoresRentabilidade.taxas_entregadores, meta: metasRentabilidade.taxas_entregadores ?? null, saldo: saldos.taxas_entregadores, status: statusIndicadorRentabilidade(indicadoresRentabilidade.taxas_entregadores, metasRentabilidade.taxas_entregadores), naoAplicavel: !aplicavel("taxas_entregadores") },
     ajustesFavor: { valor: cardValores.ajustesFavorLoja, percentual: percentual(cardValores.ajustesFavorLoja, base) },
     ajustesContra: { valor: cardValores.ajustesContraLoja, percentual: percentual(cardValores.ajustesContraLoja, base) },
     totalDeducoes: { valor: totalDed, percentual: indicadoresRentabilidade.total_deducoes, meta: metasRentabilidade.total_deducoes ?? null, saldo: saldos.total_deducoes, status: statusIndicadorRentabilidade(indicadoresRentabilidade.total_deducoes, metasRentabilidade.total_deducoes) },
@@ -493,10 +574,10 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
     .map((d) => d.data);
 
   const indicadoresParaDiagnostico = {
-    taxas_comissoes: { atual: null, valor: cardValores.taxasComissoes, meta: metas.taxas_comissoes ?? null, saldo: saldos.taxas_comissoes, naoAplicavel: !indicadorAplicavel(modelo.modeloLogistico, "taxas_comissoes") },
-    servicos_promocoes: { atual: null, valor: cardValores.servicosPromocoes, meta: metas.servicos_promocoes ?? null, saldo: saldos.servicos_promocoes, naoAplicavel: !indicadorAplicavel(modelo.modeloLogistico, "servicos_promocoes") },
-    taxas_entregadores: { atual: null, valor: cardValores.taxasEntregadores, meta: metas.taxas_entregadores ?? null, saldo: saldos.taxas_entregadores, naoAplicavel: !indicadorAplicavel(modelo.modeloLogistico, "taxas_entregadores") },
-    total_deducoes: { atual: null, valor: totalDed, meta: metas.total_deducoes ?? null, saldo: saldos.total_deducoes, naoAplicavel: !indicadorAplicavel(modelo.modeloLogistico, "total_deducoes") },
+    taxas_comissoes: { atual: null, valor: cardValores.taxasComissoes, meta: metas.taxas_comissoes ?? null, saldo: saldos.taxas_comissoes, naoAplicavel: !aplicavel("taxas_comissoes") },
+    servicos_promocoes: { atual: null, valor: cardValores.servicosPromocoes, meta: metas.servicos_promocoes ?? null, saldo: saldos.servicos_promocoes, naoAplicavel: !aplicavel("servicos_promocoes") },
+    taxas_entregadores: { atual: null, valor: cardValores.taxasEntregadores, meta: metas.taxas_entregadores ?? null, saldo: saldos.taxas_entregadores, naoAplicavel: !aplicavel("taxas_entregadores") },
+    total_deducoes: { atual: null, valor: totalDed, meta: metas.total_deducoes ?? null, saldo: saldos.total_deducoes, naoAplicavel: !aplicavel("total_deducoes") },
   };
   for (const [k, v] of Object.entries(indicadoresRentabilidade)) {
     indicadoresParaDiagnostico[k].atual = indicadoresParaDiagnostico[k].naoAplicavel ? null : v;
@@ -524,15 +605,27 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
   // extra além de buscar o lote em si.
   const loteMensal = await buscarLoteMensalDoMes({ unidadeId, ano, mes });
   const linhasDoLote = loteMensal ? linhas.filter((r) => r.distribuicao_mensal_id === loteMensal.id) : [];
-  const lancamentoMensal = montarResumoLoteMensal(loteMensal, linhasDoLote, modelo.modeloLogistico);
+  // Aplicabilidade dos campos do lote pelos modelos vigentes nos DIAS que ele cobre.
+  const lancamentoMensal = montarResumoLoteMensal(
+    loteMensal, linhasDoLote,
+    modelosDasDatas(linhaDoTempo, linhasDoLote.map((r) => r.data_lancamento), estado.modelos),
+  );
 
   return {
     protecaoPrecificacao,
     agregado: false,
     unidadeId,
     ehTeste: modelo.ehTeste,
+    // Modelo do PERÍODO consultado ('marketplace' | 'full_service', ou 'misto' —
+    // estado derivado, nunca persistido). O modelo de HOJE vai em `modeloAtual`.
     modeloLogistico: modelo.modeloLogistico,
     modeloLogisticoRotulo: modelo.modeloLogisticoRotulo,
+    modeloAtual: {
+      modeloLogistico: modeloAtual.modeloLogistico, modeloLogisticoRotulo: modeloAtual.modeloLogisticoRotulo,
+      // já existe alguma troca datada? (define se ainda dá para declarar "desde quando o modelo atual vale")
+      possuiTrocaDatada: linhaDoTempo.length > 1,
+    },
+    modeloPeriodo: descreverPeriodo({ estado, segmentos, linhaDoTempo, divisao }),
     periodo: { mes, ano },
     resumoPreenchimento: resumo,
     calendario: diasComStatus,
@@ -544,20 +637,20 @@ async function obterMesDeUmaUnidade({ organizacaoId, unidadeId, mes, ano, hojeIs
     // alerta; Atenção só acima do limite; sem estado "Crítico" aqui).
     indicadoresRentabilidade: Object.fromEntries(
       Object.entries(indicadoresRentabilidade).map(([k, atualBruto]) => {
-        const aplicavel = indicadorAplicavel(modelo.modeloLogistico, k);
-        const atual = aplicavel ? atualBruto : null;
+        const ehAplicavel = aplicavel(k);
+        const atual = ehAplicavel ? atualBruto : null;
         const valorUtilizado = { taxas_comissoes: cardValores.taxasComissoes, servicos_promocoes: cardValores.servicosPromocoes, taxas_entregadores: cardValores.taxasEntregadores, total_deducoes: totalDed }[k] ?? null;
         return [k, {
           atual, metaIdeal: metasRentabilidade[k]?.metaIdeal ?? null, limite: metasRentabilidade[k]?.limite ?? null,
-          naoAplicavel: !aplicavel,
-          status: aplicavel ? statusIndicadorRentabilidade(atual, metasRentabilidade[k]) : null,
-          saldo: aplicavel ? saldoMeta({ valorUtilizado, percentualUtilizado: atual, limitePct: metasRentabilidade[k]?.limite ?? null, faturamentoBase: base }) : null,
+          naoAplicavel: !ehAplicavel,
+          status: ehAplicavel ? statusIndicadorRentabilidade(atual, metasRentabilidade[k]) : null,
+          saldo: ehAplicavel ? saldoMeta({ valorUtilizado, percentualUtilizado: atual, limitePct: metasRentabilidade[k]?.limite ?? null, faturamentoBase: k === "taxas_entregadores" ? baseEntregadores : base }) : null,
         }];
       }),
     ),
     graficos: {
       comparativoPercentuais: Object.entries(indicadoresRentabilidade)
-        .filter(([indicador]) => indicadorAplicavel(modelo.modeloLogistico, indicador))
+        .filter(([indicador]) => aplicavel(indicador))
         .map(([indicador, atual]) => ({
           indicador, atual, metaIdeal: metasRentabilidade[indicador]?.metaIdeal ?? null, limite: metasRentabilidade[indicador]?.limite ?? null,
         })),
@@ -650,8 +743,29 @@ async function obterMesAgregado({ organizacaoId, mes, ano, hojeIso, metas }) {
     ? await supabase.from("unidades").select("id, modelo_logistico_ifood").in("id", idsUnidadesComDado)
     : { data: [], error: null };
   if (erroUnidades) throw ApiError.internal(erroUnidades.message);
+  // O modelo é lido NO MÊS consultado (linha do tempo de vigências), não o atual:
+  // uma unidade que era Marketplace naquele mês continua contando como
+  // Marketplace mesmo depois de virar Full Service. Sem a migration 089 (ou sem
+  // troca datada) cai no modelo atual — comportamento anterior.
+  const trocasPorUnidade = new Map();
+  if (idsUnidadesComDado.length) {
+    const { data: trocasRows, error: erroTrocas } = await supabase
+      .from("unidade_modelo_logistico_historico")
+      .select("unidade_id, vigencia_inicio, modelo_anterior, modelo_novo")
+      .in("unidade_id", idsUnidadesComDado).not("vigencia_inicio", "is", null);
+    if (!erroTrocas) {
+      for (const r of trocasRows ?? []) {
+        if (!trocasPorUnidade.has(r.unidade_id)) trocasPorUnidade.set(r.unidade_id, []);
+        trocasPorUnidade.get(r.unidade_id).push(r);
+      }
+    }
+  }
+  const temMarketplaceNoMes = (u) => segmentosDoPeriodo(
+    montarLinhaDoTempo({ modeloAtual: u.modelo_logistico_ifood, trocas: trocasDeLinhas(trocasPorUnidade.get(u.id)) }),
+    dias[0], dias[dias.length - 1],
+  ).some((s) => indicadorAplicavel(s.modelo, "taxas_entregadores"));
   const taxasEntregadoresNaoAplicavel = idsUnidadesComDado.length > 0
-    && !(unidadesComDado ?? []).some((u) => indicadorAplicavel(u.modelo_logistico_ifood, "taxas_entregadores"));
+    && !(unidadesComDado ?? []).some(temMarketplaceNoMes);
   // Ticket médio agregado = soma dos totais (valor bruto e pedidos) do par
   // mais confiável DE CADA UNIDADE, dividida no fim — nunca a média dos
   // tickets médios de cada unidade (mesmo raciocínio de "soma dos totais,
@@ -1427,6 +1541,12 @@ const COLUNA_DIARIA_EXTRA = {
   ajustesContraLojaTotal: "ajustes_contra_loja",
 };
 
+/** Modelos vigentes (na linha do tempo da unidade) nos dias que o lote cobre. */
+function modelosDoLoteMensal(modelo, linhasDoLote) {
+  const linhaDoTempo = modelo.linhaDoTempo ?? montarLinhaDoTempo({ modeloAtual: modelo.modeloLogistico });
+  return modelosDasDatas(linhaDoTempo, (linhasDoLote ?? []).map((r) => r.data_lancamento), [modelo.modeloLogistico]);
+}
+
 /** `true` só quando a chave está de fato presente no corpo (distingue "não editou" de "editou para vazio/null"). */
 function campoInformado(body, chave) {
   return Object.prototype.hasOwnProperty.call(body, chave);
@@ -1528,14 +1648,18 @@ export async function obterLancamentoMensal({ organizacaoId, unidadeIdSessao, un
     .from(TABELA).select("*").eq("distribuicao_mensal_id", lote.id).order("data_lancamento");
   if (error) throw ApiError.internal(error.message);
 
-  // Modelo logístico da unidade (fonte canônica: unidades.modelo_logistico_ifood)
-  // — decide quais campos extras são "não aplicáveis" e não devem virar pendência.
+  // Modelo(s) vigente(s) NOS DIAS que o lote cobre (linha do tempo da unidade) —
+  // decide quais campos extras são "não aplicáveis" e não devem virar pendência.
+  // Um lote de dias Full Service não cobra Entregadores; um de dias Marketplace cobra.
   const modelo = await obterModeloLogistico({ unidadeId, organizacaoId });
+  const modelosDoLote = modelosDoLoteMensal(modelo, linhasDoLote);
   return {
     existe: true,
     modeloLogistico: modelo.modeloLogistico,
     modeloLogisticoRotulo: modelo.modeloLogisticoRotulo,
-    ...montarResumoLoteMensal(lote, linhasDoLote ?? [], modelo.modeloLogistico),
+    modelosDoLote,
+    atravessaTrocaDeModelo: modelosDoLote.length > 1,
+    ...montarResumoLoteMensal(lote, linhasDoLote ?? [], modelosDoLote),
   };
 }
 
@@ -1567,6 +1691,22 @@ export async function lancamentoMensal({ organizacaoId, unidadeIdSessao, unidade
         ? "Todos os dias já decorridos deste mês já têm lançamento individual — não há dia disponível para a distribuição."
         : "Este mês ainda não tem nenhum dia decorrido para receber a distribuição.",
     );
+  }
+
+  // O lote é UM total do mês espalhado em fatias UNIFORMES por dia. Se os dias a
+  // distribuir atravessam uma troca de modelo (Marketplace -> Full Service), as
+  // fatias de cada regime seriam um artefato da divisão uniforme — não dá para
+  // atribuir com segurança as parcelas (ex.: Entregadores, que só existem no
+  // Marketplace) a cada regime. Em vez de uma gambiarra, bloqueia e orienta.
+  const modeloDaUnidade = await obterModeloLogistico({ unidadeId, organizacaoId });
+  const linhaDoTempoLote = modeloDaUnidade.linhaDoTempo ?? montarLinhaDoTempo({ modeloAtual: modeloDaUnidade.modeloLogistico });
+  const modelosDosDias = modelosDasDatas(linhaDoTempoLote, diasElegiveisParaDistribuir);
+  if (modelosDosDias.length > 1) {
+    throw new ApiError(409,
+      "Os dias a distribuir atravessam a troca de modelo logístico (Marketplace e Full Service no mesmo período). "
+      + "Um lançamento mensal não pode ser dividido entre modelos com segurança: lance os dias individualmente "
+      + "(acumulado diário), incluindo o dia da véspera da troca.",
+      { atravessaTrocaDeModelo: true, modelos: modelosDosDias });
   }
 
   const preview = {
@@ -1675,12 +1815,17 @@ export async function atualizarLancamentoMensal({ organizacaoId, unidadeIdSessao
   // — decide a aplicabilidade dos campos extras no resumo devolvido (um campo
   // que não existe no modelo nunca vira "pendência"; ver montarResumoLoteMensal).
   const modelo = await obterModeloLogistico({ unidadeId, organizacaoId });
-  const resumo = (loteArg, linhasArg) => ({
-    existe: true,
-    modeloLogistico: modelo.modeloLogistico,
-    modeloLogisticoRotulo: modelo.modeloLogisticoRotulo,
-    ...montarResumoLoteMensal(loteArg, linhasArg, modelo.modeloLogistico),
-  });
+  const resumo = (loteArg, linhasArg) => {
+    const modelosDoLote = modelosDoLoteMensal(modelo, linhasArg);
+    return {
+      existe: true,
+      modeloLogistico: modelo.modeloLogistico,
+      modeloLogisticoRotulo: modelo.modeloLogisticoRotulo,
+      modelosDoLote,
+      atravessaTrocaDeModelo: modelosDoLote.length > 1,
+      ...montarResumoLoteMensal(loteArg, linhasArg, modelosDoLote),
+    };
+  };
 
   const { data: linhas, error: eLinhas } = await supabase
     .from(TABELA).select("*").eq("distribuicao_mensal_id", loteId).order("data_lancamento");

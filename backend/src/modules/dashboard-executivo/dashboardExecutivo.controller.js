@@ -77,6 +77,7 @@ export const modeloLogistico = asyncHandler(async (req, res) => {
     organizacaoId: req.tenant.organizacaoId,
     unidadeIdSessao: req.tenant.unidadeId,
     unidadeIdSolicitado: req.params.unidadeId,
+    data: req.query.data,
   });
   res.json({ data });
 });

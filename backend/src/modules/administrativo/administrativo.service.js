@@ -22,7 +22,7 @@ import {
 } from "./administrativo.monitores.js";
 import {
   listarUnidadesElegiveis, obterOrganizacaoOperacional,
-  carregarLancamentosDaFrota, carregarLancamentosDaUnidade, carregarMetasIndicadores,
+  carregarLancamentosDaFrota, carregarLancamentosDaUnidade, carregarMetasIndicadores, carregarTrocasModeloDaFrota,
 } from "./administrativo.repo.js";
 import {
   faturamentoDaUnidade, somarFaturamento, coberturaDe,
@@ -34,7 +34,11 @@ import {
   lucratividadeDaUnidade, agregarRede, folgaLimite,
 } from "./administrativo.lucratividade.js";
 import { escolherMetas } from "../dashboard-executivo/dashboardExecutivo.metas.service.js";
-import { ROTULO_MODELO, statusIndicadorRentabilidade } from "../dashboard-executivo/dashboardExecutivo.calc.js";
+import { statusIndicadorRentabilidade } from "../dashboard-executivo/dashboardExecutivo.calc.js";
+import {
+  montarLinhaDoTempo, segmentosDoPeriodo, estadoDoPeriodo, rotuloDoModelo, trocasDeLinhas,
+} from "../dashboard-executivo/dashboardExecutivo.modeloTemporal.js";
+import { comporMetas } from "../dashboard-executivo/dashboardExecutivo.periodoMisto.js";
 import {
   carregarDatasLiberadas, listarDesbloqueios, criarDesbloqueio, revogarDesbloqueio,
   obterDesbloqueioAtivoPorId, MOTIVOS_VALIDOS, MOTIVOS_DESBLOQUEIO,
@@ -1070,7 +1074,7 @@ export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) 
   }
 
   const orgIds = [...new Set(frota.map((u) => u.organizacaoId))];
-  const [porUnidade, metasLinhas] = await Promise.all([
+  const [porUnidade, metasLinhas, trocasPorUnidade] = await Promise.all([
     carregarLancamentosDaFrota({
       unidadeIds: frota.map((u) => u.unidadeId),
       // do 1º dia do mês do bloco anterior (base do delta) até o fim do bloco atual
@@ -1078,6 +1082,7 @@ export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) 
       ateIso: fim,
     }, deps),
     carregarMetasIndicadores({ organizacaoIds: orgIds }, deps),
+    carregarTrocasModeloDaFrota({ unidadeIds: frota.map((u) => u.unidadeId) }, deps),
   ]);
 
   // ---- UMA linha por UNIDADE: semana atual + semana anterior + meta do modelo.
@@ -1087,11 +1092,31 @@ export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) 
     const sem = lucratividadeDaUnidade(linhas, { inicio, fim, ateDataIso: ateData });
     const ant = lucratividadeDaUnidade(linhas, { inicio: antInicio, fim: antFim, ateDataIso: antFim });
 
-    const modelo = u.modeloLogistico ?? null;
-    const metas = modelo
-      ? escolherMetas(metasLinhas.filter((r) => r.modelo_logistico === modelo), { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId })
-      : {};
-    const metaDed = metas.total_deducoes ?? null;
+    // O modelo é o VIGENTE NA SEMANA (linha do tempo de vigências), não o atual da
+    // unidade: uma semana passada em Marketplace continua avaliada como Marketplace
+    // depois da troca. Semana que atravessa a troca = "misto": meta composta,
+    // ponderada pelo faturamento de cada regime (comporMetas) — nunca a meta de um só.
+    // Sem troca datada há um único segmento e nada muda.
+    const linhaDoTempo = u.modeloLogistico
+      ? montarLinhaDoTempo({ modeloAtual: u.modeloLogistico, trocas: trocasDeLinhas(trocasPorUnidade.get(u.unidadeId)) })
+      : null;
+    const segmentos = linhaDoTempo && ateData >= inicio ? segmentosDoPeriodo(linhaDoTempo, inicio, ateData) : [];
+    const estado = segmentos.length ? estadoDoPeriodo(segmentos) : { tipo: u.modeloLogistico ?? null, misto: false };
+    const metasDoModelo = (m) => escolherMetas(
+      metasLinhas.filter((r) => r.modelo_logistico === m), { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId },
+    );
+    const modelo = estado.tipo ?? null;
+    let metaDed;
+    if (estado.misto) {
+      const partes = segmentos.map((s) => ({
+        modelo: s.modelo,
+        peso: lucratividadeDaUnidade(linhas, { inicio: s.inicio, fim: s.fim, ateDataIso: ateData }).faturamento ?? 0,
+        metas: metasDoModelo(s.modelo),
+      }));
+      metaDed = comporMetas(partes, ["total_deducoes"]).total_deducoes ?? null;
+    } else {
+      metaDed = modelo ? (metasDoModelo(modelo).total_deducoes ?? null) : null;
+    }
 
     return {
       unidadeId: u.unidadeId,
@@ -1099,7 +1124,7 @@ export async function lucratividadeSemanal({ semana, hojeIso } = {}, deps = {}) 
       empresaNome: u.empresaNome,
       organizacaoId: u.organizacaoId,
       modeloLogistico: modelo,
-      modeloLogisticoRotulo: modelo ? (ROTULO_MODELO[modelo] ?? modelo) : null,
+      modeloLogisticoRotulo: modelo ? rotuloDoModelo(modelo) : null,
 
       faturamento: R2(sem.faturamento),
       faturamentoAnterior: R2(ant.faturamento),

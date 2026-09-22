@@ -224,3 +224,29 @@ export async function obterUnidadeElegivel({ unidadeId, moduloId, incluirTeste =
   const todas = await listarUnidadesElegiveis({ moduloId, incluirTeste }, deps);
   return todas.find((u) => u.unidadeId === unidadeId) ?? null;
 }
+
+/**
+ * Pontos de troca de modelo logístico (migration 089) de uma frota — UMA query,
+ * agrupados por unidade (`vigencia_inicio` nulo = só auditoria; é descartado em
+ * `trocasDeLinhas`). Sem a migration (coluna ausente) ou sem trocas datadas,
+ * devolve mapa vazio: cada unidade segue com um único modelo, o atual —
+ * comportamento anterior.
+ * @param {{ unidadeIds: string[] }} p
+ * @param {{ supabase?: any }} [deps]
+ * @returns {Promise<Map<string, Array<object>>>} linhas cruas por unidade
+ */
+export async function carregarTrocasModeloDaFrota({ unidadeIds }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const porUnidade = new Map();
+  if (!unidadeIds?.length) return porUnidade;
+  const { data, error } = await db.from("unidade_modelo_logistico_historico")
+    .select("unidade_id, vigencia_inicio, modelo_anterior, modelo_novo")
+    .in("unidade_id", unidadeIds);
+  if (error) return porUnidade;
+  for (const r of data ?? []) {
+    if (r.vigencia_inicio == null) continue;
+    if (!porUnidade.has(r.unidade_id)) porUnidade.set(r.unidade_id, []);
+    porUnidade.get(r.unidade_id).push(r);
+  }
+  return porUnidade;
+}
