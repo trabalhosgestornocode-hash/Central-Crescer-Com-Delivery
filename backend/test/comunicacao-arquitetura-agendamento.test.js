@@ -368,8 +368,9 @@ describe("habilitação por empresa — sem o gate temporário fixo", () => {
   });
 });
 
-describe("NENHUMA automação no boot (D.3-D constrói a infraestrutura, não a liga)", () => {
+describe("NENHUMA automação indevida no boot (H.2-A: só o worker dedicado pode chamar o pipeline)", () => {
   const ORQUESTRACAO = ["comunicacao.alertas.service.js", "comunicacao.fila.repo.js", "comunicacao.habilitacao.js", "comunicacao.horario.js", "comunicacao.policy.js"];
+  const WORKER_COMUNICACAO = path.join(SRC, "worker-comunicacao");
 
   test("o pipeline de alertas não tem setInterval/setTimeout/cron/loop de fundo", () => {
     const violacoes = [];
@@ -388,16 +389,25 @@ describe("NENHUMA automação no boot (D.3-D constrói a infraestrutura, não a 
     }
   });
 
-  test("ninguém no src (fora do próprio módulo e de testes) importa o pipeline de alertas", () => {
+  test("fora do módulo, só o worker de comunicação dedicado (worker-comunicacao/) importa o pipeline de alertas", () => {
     const violacoes = [];
     const varrer = (dir) => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, e.name);
-        if (e.isDirectory()) { if (full !== COM) varrer(full); continue; }
+        if (e.isDirectory()) { if (full !== COM && full !== WORKER_COMUNICACAO) varrer(full); continue; }
         if (e.name.endsWith(".js") && /comunicacao\.alertas\.service/.test(readFileSync(full, "utf8"))) violacoes.push(path.relative(SRC, full));
       }
     };
     varrer(SRC);
-    assert.deepEqual(violacoes, [], "algo fora do módulo importa o pipeline de alertas (worker/scheduler ainda NÃO existe)");
+    assert.deepEqual(violacoes, [], "algo fora do módulo e fora do worker dedicado importa o pipeline de alertas");
+  });
+
+  // Checkpoint H.2-A: o worker existe, mas fica atrás do gate de modo (comunicacao.config.js#modoAtual)
+  // ANTES de chamar executarCiclo — ver loop.js. Ele é a ÚNICA exceção sancionada acima.
+  test("o worker de comunicação dedicado existe e é o único ponto fora do módulo que chama executarCiclo", () => {
+    const idx = path.join(WORKER_COMUNICACAO, "index.js");
+    assert.ok(existsSync(idx), "esperava backend/src/worker-comunicacao/index.js (Checkpoint H.2-A)");
+    assert.match(lerJs(idx), /comunicacao\.alertas\.service/);
+    assert.match(lerJs(path.join(WORKER_COMUNICACAO, "loop.js")), /modoAtual/, "o worker precisa consultar o modo global antes de chamar executarCiclo");
   });
 });
