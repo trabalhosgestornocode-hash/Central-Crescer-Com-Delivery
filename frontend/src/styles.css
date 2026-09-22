@@ -3402,6 +3402,18 @@ body {
 .padm-tabela tbody tr:last-child td { border-bottom: 0; }
 .padm-tabela tbody tr[role="button"] { cursor: pointer; }
 .padm-tabela tbody tr:hover { background: var(--superficie-2); }
+
+/* Comunicação (Checkpoint H.3-A) — só o que não existia: paginação e o
+   formulário de configuração do drawer. Tudo o mais (cards/chips/tabela/
+   abas/drawer/estados vazios) reaproveita as classes acima. */
+.padm-paginacao { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px 12px; font-size: 12px; color: var(--cinza); }
+.padm-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--linha); }
+.padm-drawer-head h2 { font-size: 15px; margin: 0; }
+.padm-form { display: flex; flex-direction: column; gap: 10px; padding: 2px 0; }
+.padm-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--cinza); font-weight: 600; }
+.padm-form input[type="text"], .padm-form select { font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); }
+.padm-form label.padm-check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; color: var(--texto); }
+.padm-form-nota { font-size: 11px; color: var(--cinza); margin: 2px 0 0; }
 .padm-tabela td small { display: block; font-size: 10.5px; color: var(--cinza); }
 .padm-td-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .padm-var { font-weight: 640; font-variant-numeric: tabular-nums; }

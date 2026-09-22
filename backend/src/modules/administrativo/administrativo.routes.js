@@ -2,6 +2,7 @@ import { Router } from "express";
 import { performanceRouter } from './performance/performance.routes.js';
 import { desenvolvimentoRouter } from '../desenvolvimento/desenvolvimento.routes.js';
 import * as c from "./administrativo.controller.js";
+import * as cc from "./administrativo.comunicacao.controller.js";
 import { requirePainelAdministrativo, exigirMfaSeExigido } from "../../middlewares/auth.js";
 import { limiteDeTaxa } from "../../shared/rateLimit.js";
 import { RATE_LIMIT } from "../../config/limites.js";
@@ -50,6 +51,19 @@ administrativoRouter.get("/pendencias", c.pendencias);
 administrativoRouter.get("/empresas", c.empresas);            // antes de /empresas/:id
 administrativoRouter.get("/empresas/:organizacaoId", c.detalheEmpresa);
 administrativoRouter.get("/unidades/:unidadeId/calendario", c.calendarioUnidade);
+
+// ---- Comunicação/WhatsApp (Checkpoint H.3-A) — visualização + configuração
+// segura. A ÚNICA escrita (`PUT .../configuracao`) NUNCA habilita envio: o
+// service recusa qualquer `habilitado != false` com 400 antes de tocar o
+// banco (defesa em profundidade — o repo também nunca aceita esse parâmetro).
+// Nenhuma rota chama `definirModo`, `whatsapp.service.js`, provider ou Gateway.
+administrativoRouter.get("/comunicacao/resumo", cc.resumo);
+administrativoRouter.get("/comunicacao/organizacoes", cc.organizacoes);
+administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId", cc.detalheOrganizacao);
+administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/perfis-elegiveis", cc.perfisElegiveis);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/configuracao", cc.atualizarConfiguracao);
+administrativoRouter.get("/comunicacao/fila", cc.fila);
+administrativoRouter.get("/comunicacao/historico", cc.historico);
 
 // ---- Mentorados: contas da plataforma + vínculos empresa/unidade, só leitura.
 // Mesma autorização do módulo (`requirePainelAdministrativo`); nenhuma ação

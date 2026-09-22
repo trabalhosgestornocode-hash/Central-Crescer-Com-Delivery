@@ -133,6 +133,13 @@ export const ACOES = {
   COMUNICACAO_ENVIO_BLOQUEADO: "comunicacao.envio_bloqueado",
   COMUNICACAO_ENVIO_FALHOU: "comunicacao.envio_falhou",
   COMUNICACAO_OPT_OUT_REGISTRADO: "comunicacao.opt_out_registrado",
+
+  // Painel Administrativo / Comunicação (Checkpoint H.3-A) — configuração de
+  // contato/timezone/destinatário/pausa por organização. NUNCA grava telefone
+  // completo (mascarado em `detalhes`) — `habilitado` é sempre `false` aqui,
+  // nenhuma rota deste checkpoint pode gravar `true` (ver
+  // administrativo.comunicacao.repo.js).
+  COMUNICACAO_HABILITACAO_ALTERADA: "comunicacao.habilitacao_alterada_painel_admin",
 };
 
 /**

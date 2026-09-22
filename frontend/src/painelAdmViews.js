@@ -39,6 +39,7 @@ export const TELAS_PADM = [
   { id: "diario",      label: "Monitoramento Diário", icone: "calendar" },
   { id: "pendencias",  label: "Pendências",           icone: "alert-triangle" },
   { id: "empresas",    label: "Empresas",             icone: "building" },
+  { id: "comunicacao", label: "Comunicação",          icone: "message-circle" },
   { id: "mentorados",  label: "Rede de Associados",   icone: "users" },
   { id: "relatorios",  label: "Relatórios",           icone: "archive" },
   { id: 'desenvolvimento', label: 'Agenda de Demandas', icone: 'calendar' },
@@ -65,6 +66,11 @@ export const viewPendencias = { agrupar: "empresa", filtro: "todas", termo: "" }
 /** Busca (nome/e-mail) da tela "Rede de Associados" — preferência de leitura, não refaz rede.
  *  (nomes internos seguem `mentorados`: id da aba, rota /mentorados, funções.) */
 export const viewMentorados = { termo: "" };
+/** Estado interno da área Comunicação: aba ativa e busca/filtros de cada sub-lista. */
+export const viewComunicacao = {
+  aba: "visao-geral", termo: "",
+  filaPagina: 1, historicoPagina: 1, historicoStatus: "",
+};
 /**
  * Aba interna da área Relatórios + escopo dos rankings.
  * `semana`: dia de início do BLOCO semanal (AAAA-MM-DD) analisado nas abas
@@ -162,6 +168,12 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
     } else if (entrada.id === "mentorados") {
       ultimoDados.mentorados = await api.mentorados();
       pintarMentorados();
+    } else if (entrada.id === "comunicacao") {
+      ultimoDados.comunicacaoApi = api;
+      const [resumoC, orgsC] = await Promise.all([api.comunicacaoResumo(), api.comunicacaoOrganizacoes({})]);
+      ultimoDados.comunicacaoResumo = resumoC;
+      ultimoDados.comunicacaoOrgs = orgsC;
+      pintarComunicacao();
     } else {
       v.innerHTML = htmlVisaoGeral(await api.visaoGeral({ mes }));
       ligarLista();
@@ -184,6 +196,7 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
 const ultimoDados = {
   empresas: null, pendencias: null, relatorio: null, evolucao: null, mesAtivo: null, apiAtual: null,
   lucratividade: null, semanaCarregada: null, mentorados: null,
+  comunicacaoApi: null, comunicacaoResumo: null, comunicacaoOrgs: null, comunicacaoFila: null, comunicacaoHistorico: null,
 };
 
 /** `true` para as abas semanais (Lucratividade / Rentabilidade). */
@@ -1188,6 +1201,333 @@ export function fecharDrawerVinculos() {
   cx.classList.remove("padm-modal-wrap--drawer");
   cx.innerHTML = "";
   if (onEscVinculos) { try { document.removeEventListener("keydown", onEscVinculos); } catch { /* fake DOM */ } onEscVinculos = null; }
+}
+
+// ===========================================================================
+// 5B. COMUNICAÇÃO / WHATSAPP  (Checkpoint H.3-A)
+//
+// Vocabulário de NEGÓCIO, nunca de engenharia — o gestor nunca vê
+// offline_batch/marker/auth-state/lease/socketGeneration. Reaproveita 100%
+// dos átomos visuais existentes (card/cards/chip/secao/busca/vazio/erro) —
+// nenhuma classe CSS nova além de 2-3 utilitárias específicas da tabela de
+// fila/histórico (ver styles.css, bloco "Comunicação").
+//
+// ESTE CHECKPOINT NÃO ENVIA WHATSAPP: não existe nenhum botão de envio, e o
+// único formulário de escrita (drawer da empresa) nunca manda `habilitado`
+// no corpo — o backend recusaria de qualquer forma.
+// ===========================================================================
+
+const ROTULO_STATUS_CONFIG = {
+  NAO_CONFIGURADA: { classe: "muted", rotulo: "Não configurada" },
+  CONFIGURACAO_INCOMPLETA: { classe: "atencao", rotulo: "Configuração incompleta" },
+  PRONTA_PARA_PILOTO: { classe: "ok", rotulo: "Pronta para piloto" },
+  PAUSADA: { classe: "muted", rotulo: "Pausada" },
+  HABILITADA: { classe: "ok", rotulo: "Habilitada" },
+};
+const chipStatusConfig = (s) => chip(ROTULO_STATUS_CONFIG[s] ?? { classe: "muted", rotulo: s ?? "—" });
+
+const ROTULO_GATEWAY = { conectado: "Conectado", desconectado: "Desconectado", instavel: "Instável", desconhecido: "Desconhecido" };
+const ROTULO_WORKER = { habilitado: "Habilitado", desabilitado: "Desabilitado" };
+const ROTULO_MODO = { NORMAL: "Ativa", REACTIVE_ONLY: "Somente reativa", DISABLED: "Pausada" };
+const ROTULO_STATUS_MSG = {
+  SCHEDULED: "Agendada", PROCESSING: "Processando", SENDING: "Enviando", DELIVERY_UNKNOWN: "Entrega incerta",
+  FAILED: "Falhou", SENT: "Enviada", DELIVERED: "Entregue", READ: "Lida", CANCELLED: "Cancelada", BLOCKED: "Bloqueada",
+};
+
+export function htmlComunicacaoCards(r) {
+  if (!r) return "";
+  return cards([
+    card({ label: "WhatsApp", valor: ROTULO_GATEWAY[r.gateway?.estado] ?? "—", icone: "smartphone", tom: r.gateway?.estado === "conectado" ? "ok" : r.gateway?.estado === "instavel" ? "atencao" : "" }),
+    card({ label: "Automação", valor: ROTULO_MODO[r.comunicacao?.modo] ?? "—", icone: "bell", tom: r.comunicacao?.modo === "NORMAL" ? "ok" : "" }),
+    card({
+      label: "Worker", valor: ROTULO_WORKER[r.worker?.estado] ?? "—", icone: "send",
+      nota: "Estado baseado na configuração do serviço, não é uma confirmação de saúde em tempo real — pode haver mais de uma instância durante um deploy.",
+    }),
+    card({ label: "Empresas configuradas", valor: `${r.empresas?.configuradas ?? 0} / ${r.empresas?.total ?? 0}`, icone: "building" }),
+    card({ label: "Na fila", valor: String((r.fila?.scheduled ?? 0) + (r.fila?.processing ?? 0) + (r.fila?.sending ?? 0)), icone: "clock" }),
+    card({ label: "Falhas nas últimas 24h", valor: String(r.ultimas24h?.falhas ?? 0), icone: "alert-triangle", tom: (r.ultimas24h?.falhas ?? 0) > 0 ? "atencao" : "" }),
+  ].map((c) => c).join(""));
+}
+
+function htmlComunicacaoAbas() {
+  const ABAS = [["empresas", "Empresas"], ["fila", "Fila"], ["historico", "Histórico"]];
+  return `<div class="padm-abas" role="tablist">${ABAS.map(([id, label]) =>
+    `<button type="button" class="padm-aba ${viewComunicacao.aba === id ? "ativo" : ""}" data-padm-com-aba="${id}" role="tab" aria-selected="${viewComunicacao.aba === id}">${escapeHtml(label)}</button>`).join("")}</div>`;
+}
+
+function linhaEmpresaComunicacao(o, termo) {
+  const ultimo = o.ultimoEnvioEm ? fmtDataCurta(o.ultimoEnvioEm) : "—";
+  const proximo = o.proximoEnvioEm ? fmtDataCurta(o.proximoEnvioEm) : "—";
+  return `
+    <tr data-padm-com-org="${escapeHtml(o.organizacaoId)}" tabindex="0" role="button">
+      <td>${realce(o.nome, termo)}</td>
+      <td>${chipStatusConfig(o.status)}</td>
+      <td>${o.pendenciasAtuais > 0 ? seloPendencia({ criticas: o.pendenciasAtuais, unidadesPendentes: o.pendenciasAtuais }) : `<span class="padm-selo padm-selo--ok">${icon("check-circle", { size: 12 })}Sem pendência</span>`}</td>
+      <td>${o.destinatarioConfigurado ? `${icon("check-circle", { size: 13 })} Configurado` : `<span class="padm-vazio">Não definido</span>`}</td>
+      <td>${o.pausada ? chip({ classe: "muted", rotulo: "Pausada" }) : "—"}</td>
+      <td>${escapeHtml(ultimo)}</td>
+      <td>${escapeHtml(proximo)}</td>
+    </tr>`;
+}
+
+export function htmlComunicacaoEmpresas(orgs, termo) {
+  const t = normalizarBusca(termo);
+  const filtradas = t ? orgs.filter((o) => normalizarBusca(o.nome).includes(t)) : orgs;
+  if (!orgs.length) return vazio("Nenhuma empresa configurada para comunicação.", "Abra uma empresa para preparar timezone e destinatário — nenhum envio é feito nesta fase.", { tom: "neutro", icone: "message-circle" });
+  return `
+    ${busca("padm-com-busca", "Buscar empresa…", termo)}
+    <div class="padm-tabela-wrap">
+      <table class="padm-tabela">
+        <thead><tr><th>Empresa</th><th>Situação</th><th>Pendências</th><th>Destinatário</th><th>Pausa</th><th>Último envio</th><th>Próximo envio</th></tr></thead>
+        <tbody>${filtradas.length ? filtradas.map((o) => linhaEmpresaComunicacao(o, t)).join("") : `<tr><td colspan="7"><em>Nenhuma empresa encontrada para "${escapeHtml(termo)}".</em></td></tr>`}</tbody>
+      </table>
+    </div>`;
+}
+
+function linhaFila(m, nomePorOrg) {
+  return `<tr>
+    <td>${escapeHtml(nomePorOrg.get(m.organizacao_id) ?? m.organizacao_id.slice(0, 8))}</td>
+    <td>${escapeHtml(ROTULO_STATUS_MSG[m.status] ?? m.status)}</td>
+    <td>${escapeHtml(fmtData(m.disponivel_em))}</td>
+    <td>${m.tentativas}/${m.max_tentativas}</td>
+  </tr>`;
+}
+
+function htmlPaginacao(pacote, prefixo) {
+  if (!pacote || pacote.total <= pacote.porPagina) return "";
+  const totalPaginas = Math.ceil(pacote.total / pacote.porPagina);
+  return `<div class="padm-paginacao">
+    <button type="button" class="btn btn-ghost btn-sm" data-padm-com-pag="${prefixo}:anterior" ${pacote.pagina <= 1 ? "disabled" : ""}>‹ Anterior</button>
+    <span>Página ${pacote.pagina} de ${totalPaginas} · ${pacote.total} no total</span>
+    <button type="button" class="btn btn-ghost btn-sm" data-padm-com-pag="${prefixo}:proximo" ${pacote.pagina >= totalPaginas ? "disabled" : ""}>Próxima ›</button>
+  </div>`;
+}
+
+export function htmlComunicacaoFila(pacote, orgs) {
+  if (!pacote) return carregando("lista");
+  if (!pacote.itens.length) return vazio("Não há mensagens na fila.", "Nenhuma mensagem agendada, em processamento ou com entrega incerta no momento.", { tom: "ok" });
+  const nomePorOrg = new Map((orgs ?? []).map((o) => [o.organizacaoId, o.nome]));
+  return `
+    <div class="padm-tabela-wrap">
+      <table class="padm-tabela">
+        <thead><tr><th>Empresa</th><th>Situação</th><th>Agendado para</th><th>Tentativas</th></tr></thead>
+        <tbody>${pacote.itens.map((m) => linhaFila(m, nomePorOrg)).join("")}</tbody>
+      </table>
+    </div>
+    ${htmlPaginacao(pacote, "fila")}`;
+}
+
+function linhaHistorico(m, nomePorOrg) {
+  const quando = m.enviado_em || m.falhou_em || m.created_at;
+  return `<tr>
+    <td>${escapeHtml(nomePorOrg.get(m.organizacao_id) ?? m.organizacao_id.slice(0, 8))}</td>
+    <td>${escapeHtml(ROTULO_STATUS_MSG[m.status] ?? m.status)}</td>
+    <td>${escapeHtml(fmtData(quando))}</td>
+  </tr>`;
+}
+
+export function htmlComunicacaoHistorico(pacote, orgs) {
+  if (!pacote) return carregando("lista");
+  if (!pacote.itens.length) return vazio("Nenhum envio registrado.", "O histórico aparece aqui assim que a automação for ativada num piloto.", { tom: "neutro" });
+  const nomePorOrg = new Map((orgs ?? []).map((o) => [o.organizacaoId, o.nome]));
+  return `
+    <div class="padm-tabela-wrap">
+      <table class="padm-tabela">
+        <thead><tr><th>Empresa</th><th>Resultado</th><th>Quando</th></tr></thead>
+        <tbody>${pacote.itens.map((m) => linhaHistorico(m, nomePorOrg)).join("")}</tbody>
+      </table>
+    </div>
+    ${htmlPaginacao(pacote, "historico")}`;
+}
+
+function htmlComunicacao() {
+  const r = ultimoDados.comunicacaoResumo;
+  const orgs = ultimoDados.comunicacaoOrgs ?? [];
+  const corpo = viewComunicacao.aba === "fila" ? htmlComunicacaoFila(ultimoDados.comunicacaoFila, orgs)
+    : viewComunicacao.aba === "historico" ? htmlComunicacaoHistorico(ultimoDados.comunicacaoHistorico, orgs)
+      : htmlComunicacaoEmpresas(orgs, viewComunicacao.termo);
+  return `
+    ${htmlComunicacaoCards(r)}
+    ${secao({
+      titulo: "Empresas, fila e histórico", icone: "message-circle",
+      sub: "Nenhum envio é feito nesta fase — apenas configuração e acompanhamento.",
+      acoes: htmlComunicacaoAbas(),
+      corpo,
+    })}`;
+}
+
+function pintarComunicacao() {
+  const v = view();
+  if (!v) return;
+  v.innerHTML = htmlComunicacao();
+  ligarComunicacao();
+}
+
+async function carregarSubAbaComunicacao() {
+  const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
+  const v = view();
+  if (v) v.innerHTML = htmlComunicacao(); // mantém os cards, troca só o corpo pro skeleton na próxima pintura
+  try {
+    if (viewComunicacao.aba === "fila") {
+      ultimoDados.comunicacaoFila = await api.comunicacaoFila({ pagina: viewComunicacao.filaPagina });
+    } else if (viewComunicacao.aba === "historico") {
+      ultimoDados.comunicacaoHistorico = await api.comunicacaoHistorico({ pagina: viewComunicacao.historicoPagina, status: viewComunicacao.historicoStatus || undefined });
+    }
+    pintarComunicacao();
+  } catch (e) {
+    if (v) v.innerHTML = erro(e);
+  }
+}
+
+function ligarComunicacao() {
+  els("[data-padm-com-aba]").forEach((b) => b.addEventListener("click", () => {
+    viewComunicacao.aba = b.dataset.padmComAba;
+    carregarSubAbaComunicacao();
+  }));
+  const inp = el("#padm-com-busca");
+  if (inp) {
+    let t;
+    inp.addEventListener("input", () => {
+      clearTimeout(t);
+      const valor = inp.value;
+      t = setTimeout(() => {
+        viewComunicacao.termo = valor;
+        pintarComunicacao();
+        const novo = el("#padm-com-busca");
+        if (novo) { novo.focus(); novo.setSelectionRange?.(valor.length, valor.length); }
+      }, 160);
+    });
+  }
+  els("[data-padm-com-org]").forEach((tr) =>
+    tr.addEventListener("click", () => abrirDrawerComunicacao(tr.dataset.padmComOrg)));
+  els("[data-padm-com-pag]").forEach((b) => b.addEventListener("click", () => {
+    const [alvo, dir] = b.dataset.padmComPag.split(":");
+    const campo = alvo === "fila" ? "filaPagina" : "historicoPagina";
+    viewComunicacao[campo] = Math.max(1, viewComunicacao[campo] + (dir === "proximo" ? 1 : -1));
+    carregarSubAbaComunicacao();
+  }));
+}
+
+// ---- Drawer: detalhe da empresa + configuração segura (nunca habilita envio) ----
+
+let onEscComunicacao = null;
+
+export function htmlSeletorPerfil(perfis, perfilSelecionadoId) {
+  if (!perfis?.length) {
+    return `<p class="padm-vazio">Nenhum perfil disponível para associação.</p>`;
+  }
+  return `
+    <select name="perfilOperacionalId">
+      <option value="">Selecione…</option>
+      ${perfis.map((p) => `<option value="${escapeHtml(p.perfilOperacionalId)}" ${p.perfilOperacionalId === perfilSelecionadoId ? "selected" : ""}>${escapeHtml(p.nome ?? "—")}${p.email ? ` (${escapeHtml(p.email)})` : ""}</option>`).join("")}
+    </select>`;
+}
+
+export function htmlDrawerComunicacao(d, perfis) {
+  const cfg = d.configuracao;
+  const dest = cfg.destinatario;
+  return `
+    <div class="padm-drawer">
+      <header class="padm-drawer-head">
+        <h2>${escapeHtml(d.organizacao.nome)}</h2>
+        <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="fechar-comunicacao">Fechar</button>
+      </header>
+      <div class="padm-drawer-corpo">
+        ${secao({ titulo: "Situação", corpo: `<p>${chipStatusConfig(cfg.status)}</p>` })}
+        ${secao({
+          titulo: "Unidades pendentes", corpo: d.unidades?.length
+            ? `<ul class="padm-vinc-unidades">${d.unidades.map((u) => `<li>${escapeHtml(u.unidadeNome ?? u.unidadeId)} — ${escapeHtml(u.criticidade)} (${u.diasPendentes} dia(s))</li>`).join("")}</ul>`
+            : `<p class="padm-vazio">Nenhuma pendência atual.</p>`,
+        })}
+        ${secao({
+          titulo: "Destinatário atual", corpo: dest
+            ? `<p>Telefone ${escapeHtml(dest.telefoneMascarado ?? "—")} · ${dest.verificado ? "verificado" : "não verificado"} · consentimento ${dest.consentimento ? "sim" : "não"}${dest.optOut ? " · OPT-OUT ATIVO" : ""}</p>`
+            : `<p class="padm-vazio">Nenhum destinatário configurado.</p>`,
+        })}
+        ${secao({
+          titulo: "Configurar (não envia nada)", icone: "settings",
+          sub: "Preparar timezone e destinatário para um futuro piloto. Habilitar o envio é uma etapa separada, futura.",
+          corpo: `
+            <form id="padm-com-form" class="padm-form">
+              <label>Telefone do destinatário (E.164)
+                <input type="text" name="telefoneE164" placeholder="+55 11 99999-8888" />
+              </label>
+              <label>Destinatário (perfil desta empresa)
+                ${htmlSeletorPerfil(perfis, dest?.perfilOperacionalId ?? null)}
+              </label>
+              <label>Timezone (IANA)
+                <input type="text" name="timezone" value="${escapeHtml(cfg.timezone ?? "")}" placeholder="America/Sao_Paulo" />
+              </label>
+              <label class="padm-check">
+                <input type="checkbox" name="tipoDashboardIfoodD1" ${cfg.tiposPermitidos?.includes("dashboard_ifood_d1") ? "checked" : ""} />
+                Lançamento iFood D-1 pendente
+              </label>
+              <label class="padm-check">
+                <input type="checkbox" name="pausar" ${cfg.pausadoAte ? "checked" : ""} />
+                Pausar comunicação desta empresa
+              </label>
+              <button type="submit" class="btn btn-primary btn-sm">Salvar configuração</button>
+              <p class="padm-form-nota">Esta ação nunca habilita o envio de mensagens — isso é feito em outra etapa, futura.</p>
+            </form>`,
+        })}
+      </div>
+    </div>`;
+}
+
+export async function abrirDrawerComunicacao(organizacaoId) {
+  const cx = caixaModal();
+  if (!cx) return;
+  const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
+  cx.hidden = false;
+  cx.classList.add("padm-modal-wrap--drawer");
+  cx.innerHTML = `<div class="padm-drawer">${carregando("lista")}</div>`;
+  try {
+    const [detalhe, perfis] = await Promise.all([
+      api.comunicacaoDetalheOrganizacao(organizacaoId),
+      api.comunicacaoPerfisElegiveis(organizacaoId),
+    ]);
+    cx.innerHTML = htmlDrawerComunicacao(detalhe, perfis);
+    ligarDrawerComunicacao(organizacaoId, api);
+  } catch (e) {
+    cx.innerHTML = `<div class="padm-drawer">${erro(e)}</div>`;
+  }
+  onEscComunicacao = (e) => { if (e.key === "Escape") fecharDrawerComunicacao(); };
+  try { document.addEventListener("keydown", onEscComunicacao); } catch { /* fake DOM */ }
+}
+
+export function fecharDrawerComunicacao() {
+  const cx = caixaModal();
+  if (!cx) return;
+  cx.hidden = true;
+  cx.classList.remove("padm-modal-wrap--drawer");
+  cx.innerHTML = "";
+  if (onEscComunicacao) { try { document.removeEventListener("keydown", onEscComunicacao); } catch { /* fake DOM */ } onEscComunicacao = null; }
+}
+
+function ligarDrawerComunicacao(organizacaoId, api) {
+  el('[data-padm-acao="fechar-comunicacao"]')?.addEventListener("click", fecharDrawerComunicacao);
+  el("#padm-com-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const telefone = String(f.get("telefoneE164") ?? "").trim();
+    const perfil = String(f.get("perfilOperacionalId") ?? "").trim();
+    const timezone = String(f.get("timezone") ?? "").trim();
+    const dados = {
+      timezone: timezone || undefined,
+      telefoneE164: telefone || undefined,
+      perfilOperacionalId: perfil || undefined,
+      tiposPermitidos: f.get("tipoDashboardIfoodD1") ? ["dashboard_ifood_d1"] : [],
+      pausadoAte: f.get("pausar") ? new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000).toISOString() : null,
+    };
+    try {
+      await api.comunicacaoAtualizarConfiguracao(organizacaoId, dados);
+      fecharDrawerComunicacao();
+      ultimoDados.comunicacaoOrgs = await api.comunicacaoOrganizacoes({});
+      pintarComunicacao();
+    } catch (err) {
+      alert(err.message || "Não foi possível salvar a configuração.");
+    }
+  });
 }
 
 // ===========================================================================

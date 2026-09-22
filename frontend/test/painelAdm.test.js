@@ -221,7 +221,10 @@ describe("sairDoPainelAdministrativo (Trocar ambiente)", () => {
 
 describe("TELAS_PADM", () => {
   test("áreas existentes preservadas, seguidas da agenda de desenvolvimento", () => {
-    assert.deepEqual(TELAS_PADM.map((t) => t.id), ["visao-geral", "performance", "diario", "pendencias", "empresas", "mentorados", "relatorios", "desenvolvimento"]);
+    // Checkpoint H.3-A: nova aba "comunicacao" logo após "empresas" — mesmo
+    // espírito (empresas cross-tenant), sem seletor de período (ver §"comunicacao"
+    // na lista de telas sem recorte de período, em painelAdm.js).
+    assert.deepEqual(TELAS_PADM.map((t) => t.id), ["visao-geral", "performance", "diario", "pendencias", "empresas", "comunicacao", "mentorados", "relatorios", "desenvolvimento"]);
   });
 
   test("irParaPadm abre Relatórios com o período ativo", async () => {

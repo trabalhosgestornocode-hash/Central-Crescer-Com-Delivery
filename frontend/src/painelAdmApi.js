@@ -145,6 +145,41 @@ export const painelAdmApi = {
   /** Relatório executivo do período (operação + conformidade + financeiro). */
   relatorioResumo: ({ mes, topN } = {}) => chamar("/relatorios/resumo" + qs({ mes, topN })),
 
+  // -- Comunicação / WhatsApp (Checkpoint H.3-A) --
+  //
+  // Não usa `mes` — a área não olha "um mês por vez" (mesmo espírito de
+  // mentorados/desenvolvimento). A ÚNICA escrita é `comunicacaoAtualizarConfiguracao`,
+  // e mesmo ela NUNCA habilita envio (o backend recusa `habilitado != false`).
+
+  /** Cards da visão geral: Gateway, worker, modo global, empresas, fila, hoje. */
+  comunicacaoResumo: () => chamar("/comunicacao/resumo"),
+
+  /** Lista de empresas com status de configuração da comunicação. */
+  comunicacaoOrganizacoes: ({ busca } = {}) => chamar("/comunicacao/organizacoes" + qs({ busca })),
+
+  /** Detalhe de uma empresa: configuração, destinatário (mascarado), unidades pendentes. */
+  comunicacaoDetalheOrganizacao: (organizacaoId) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}`),
+
+  /** Perfis ELEGÍVEIS desta organização (vínculo ativo) — para o combobox de destinatário. Nunca de outra organização. */
+  comunicacaoPerfisElegiveis: (organizacaoId) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/perfis-elegiveis`),
+
+  /**
+   * Prepara a configuração de uma empresa — NUNCA habilita envio.
+   * @param {string} organizacaoId
+   * @param {{telefoneE164?: string, perfilOperacionalId?: string, timezone?: string,
+   *   tiposPermitidos?: string[], pausadoAte?: string|null, pausadoMotivo?: string|null}} dados
+   */
+  comunicacaoAtualizarConfiguracao: (organizacaoId, dados) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/configuracao`, { method: "PUT", json: dados }),
+
+  /** Fila (mensagens ainda em jogo). `status`, `organizacaoId`, `pagina`, `porPagina`. */
+  comunicacaoFila: (filtros = {}) => chamar("/comunicacao/fila" + qs(filtros)),
+
+  /** Histórico (mensagens em estado terminal). Mesmos filtros + `tipoAlerta`/`desde`/`ate`. */
+  comunicacaoHistorico: (filtros = {}) => chamar("/comunicacao/historico" + qs(filtros)),
+
   /** Pacote COMPLETO do relatório executivo — a fonte única do PDF. */
   relatorioExecutivo: ({ mes, topN } = {}) => chamar("/relatorios/executivo" + qs({ mes, topN })),
 
