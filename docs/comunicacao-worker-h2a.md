@@ -1,10 +1,38 @@
-# Worker de comunicação — Checkpoint H.2-A
+# Worker de comunicação — Checkpoints H.2-A → H.2-B
 
 Invólucro operacional mínimo para chamar `executarCiclo()`
 (`backend/src/modules/comunicacao/comunicacao.alertas.service.js`) em
-intervalos controlados, como processo separado do backend HTTP principal.
-**Este checkpoint é só o worker local — nenhum serviço foi criado no Render,
-nenhuma habilitação foi criada, `modo` continua `DISABLED`.**
+intervalos controlados.
+
+## Decisão de arquitetura final (H.2-B): embutido, sem novo serviço Render
+
+```
+crescercomdelivery (Render web service já existente)
+├── servidor HTTP (server.js, app.js, rotas)
+└── worker-comunicacao (opcional, mesmo processo — lifecycle.js)
+
+gateway-whatsapp (Render private service já existente)
+└── transporte WhatsApp/Baileys — sessão, auth-state, lease, protocolo.
+    NUNCA ganha lógica de agendamento/policy/claim.
+```
+
+Um Private Service dedicado (documentado como plano em §11, versão anterior
+deste arquivo) foi **avaliado e descartado por enquanto** — custo recorrente
+adicional sem necessidade hoje, já que o worker roda embutido no processo já
+pago do `crescercomdelivery` sem tocar a responsabilidade do Gateway. Continua
+sendo uma opção **futura** se volume ou isolamento de recursos justificarem
+(ver §13).
+
+Dois gates INDEPENDENTES controlam o envio, e é importante não confundi-los:
+
+| Gate | Onde | O que controla |
+|---|---|---|
+| `COMUNICACAO_WORKER_ENABLED` | env do processo `crescercomdelivery` | Se o LAÇO existe neste processo. `false`/ausente = nem o import do worker acontece. |
+| `comunicacao_configuracoes.modo` | banco (`comunicacao.config.js#modoAtual`) | Se o laço, já rodando, tem permissão de chamar `executarCiclo()`. `DISABLED`/qualquer coisa != `NORMAL` = laço vivo, mas 0 chamadas. |
+
+`ENABLED=true` + `modo=DISABLED` é o estado do primeiro rollout: o
+scheduler existe e roda, mas continua estruturalmente incapaz de enviar
+qualquer coisa até uma decisão explícita e futura de `definirModo(NORMAL)`.
 
 ## 1. Por que dentro de `backend/`, não um pacote `worker-comunicacao/` à parte
 
@@ -17,12 +45,16 @@ isso num pacote irmão exigiria reimplementar ou importar por caminho relativo
 cruzando `rootDir`s — frágil e exatamente o tipo de duplicação de motor de
 negócio que o checkpoint proibiu.
 
-**Escolha**: `backend/src/worker-comunicacao/` — um entrypoint dedicado
-dentro do MESMO pacote (`subway-saci-backend`), com script próprio
-(`npm run worker:comunicacao`). Reaproveita `node_modules`, env e todo o
-bootstrap do backend sem duplicar nada. Continua sendo um **processo Render
-separado** (rootDir `backend`, mas `startCommand` diferente) — nunca é
-iniciado pelo `server.js` HTTP.
+**Escolha**: `backend/src/worker-comunicacao/` — dentro do MESMO pacote
+(`subway-saci-backend`). Reaproveita `node_modules`, env e todo o bootstrap
+do backend sem duplicar nada. Dois modos de execução, mesmo motor:
+
+- **Standalone** (`npm run worker:comunicacao`, `index.js`) — processo Render
+  separado, se um dia for criado; nunca iniciado pelo `server.js` HTTP.
+- **Embutido** (H.2-B, `lifecycle.js`) — roda DENTRO do processo
+  `crescercomdelivery` já existente, atrás do kill-switch
+  `COMUNICACAO_WORKER_ENABLED` (ver seção nova abaixo). **É o modo em
+  produção hoje.**
 
 ## 2. Arquivos
 
@@ -37,9 +69,16 @@ iniciado pelo `server.js` HTTP.
 - `backend/src/worker-comunicacao/worker-comunicacao.logsafe.js` — logger
   estruturado com bloqueio de campos sensíveis (telefone, JID, conteúdo,
   providerMessageId, nome, segredos).
-- `backend/src/worker-comunicacao/index.js` — entrypoint: monta
+- `backend/src/worker-comunicacao/index.js` — entrypoint STANDALONE: monta
   `whatsAppService` (`criarBaileysGatewayProvider` + `criarWhatsAppService`),
-  monta o laço, sobe `/health`, liga SIGTERM/SIGINT/uncaughtException.
+  monta o laço, sobe `/health`, liga SIGTERM/SIGINT/uncaughtException. Config
+  inválida aqui **derruba o processo** (não há mais nada rodando nele, então
+  crashar é o correto).
+- `backend/src/worker-comunicacao/lifecycle.js` — ponte para o modo
+  EMBUTIDO (H.2-B): `iniciarWorkerComunicacaoEmbutido()`/
+  `pararWorkerComunicacaoEmbutido()`, chamadas por `server.js`. Config
+  inválida aqui **nunca derruba o backend** — só o worker não sobe (ver
+  seção "Kill-switch" abaixo).
 
 ## 3. Gate de modo — mais forte que o já existente
 
@@ -115,7 +154,41 @@ agendados, claimed, sent, blocked, failed, unknown — nunca conteúdo/telefone)
 INTEIRA num lote só (decisão já existente em `agendarEnviosPendentes`). O
 worker nunca precisa enumerar organizações.
 
-## 11. Plano futuro de Render (documentação — nada foi criado)
+## Kill-switch do processo embutido — `COMUNICACAO_WORKER_ENABLED` (H.2-B)
+
+Mesmo padrão exato de `MB_PLAYWRIGHT_ENABLED` (`martinbrower.worker.contract.js`):
+`process.env.COMUNICACAO_WORKER_ENABLED === "true"` — só a string exata
+`"true"` habilita; qualquer outra coisa (ausente, `"false"`, `"TRUE"`, `"1"`,
+`"yes"`) é desabilitado. Nenhuma semântica nova.
+
+`server.js` chama `iniciarWorkerComunicacaoEmbutido({log}).then(...)` no
+mesmo ponto e estilo do Martin Brower — depois da config principal, sem
+`await` no caminho crítico do boot. `pararWorkerComunicacaoEmbutido(sinal)`
+é chamada dentro do MESMO laço de `SIGTERM`/`SIGINT` que já existia (nunca um
+segundo `process.on`), e é idempotente/no-op se o worker nunca iniciou. Grace
+period do worker embutido: **8s** — deliberadamente menor que o fallback de
+10s que já existia em `server.js`, para os dois nunca competirem pelo mesmo
+encerramento.
+
+Três estados operacionais distintos (nunca confundidos entre si nos logs):
+
+| Situação | Evento | `workerState` |
+|---|---|---|
+| `ENABLED != "true"` | `comunicacao.worker_not_started` (`reason: worker_disabled`) | `DISABLED` |
+| `ENABLED == "true"` + config inválida (URL/segredo ausente ou malformado) | `comunicacao.worker_start_failed` (`reason: config_invalida`) | `ERROR` |
+| `ENABLED == "true"` + config válida | `comunicacao.worker_boot` → `worker_ready` | laço normal (`IDLE`/`RUNNING`/`DISABLED` pelo `modo`) |
+
+O segundo caso (config inválida com a flag ligada) é um ERRO DE CONFIGURAÇÃO
+real — nunca é reportado como "desabilitado por decisão", e o backend HTTP
+continua de pé de qualquer forma (mesma filosofia de G.3.3: o backend serve
+dezenas de features e não pode cair pela configuração de uma só delas). A
+mensagem de erro nomeia a variável ofendida, nunca ecoa um valor de
+URL/segredo.
+
+## 11. Plano de Render — SUPERADO pela decisão de embutir (histórico, H.2-A)
+
+**Mantido só como registro histórico do que foi avaliado. Não é o plano
+atual — ver a decisão de arquitetura no topo deste arquivo.**
 
 ```yaml
 name: crescercomdelivery-comunicacao-worker
@@ -147,3 +220,13 @@ deste worker — a única porta de entrada é `executarCiclo()`/
 (`comunicacao-arquitetura-agendamento.test.js`): fora do próprio módulo
 `comunicacao/`, só `worker-comunicacao/` pode importar
 `comunicacao.alertas.service.js`.
+
+## 13. Quando reconsiderar um Private Service dedicado
+
+A opção documentada em §11 continua válida como evolução futura — não como
+correção de um problema atual. Sinais de que valeria a pena reabrir essa
+decisão: o ciclo (`executarCiclo`) começar a demorar perto do intervalo
+configurado (contenção com o tráfego HTTP do backend), o backend precisar
+escalar horizontalmente por motivos alheios à comunicação (replicando o
+scheduler sem necessidade), ou uma necessidade de isolar o blast radius de
+uma falha do worker do resto da API. Nenhum desses sinais existe hoje.

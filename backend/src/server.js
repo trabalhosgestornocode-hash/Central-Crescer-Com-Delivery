@@ -2,6 +2,8 @@ import { createApp } from "./app.js";
 import { config } from "./config/env.js";
 import { TIMEOUTS } from "./config/seguranca.js";
 import { inicializarWorkerRemoto } from "./modules/martinbrower/martinbrower.worker.contract.js";
+import { iniciarWorkerComunicacaoEmbutido, pararWorkerComunicacaoEmbutido } from "./worker-comunicacao/lifecycle.js";
+import { workerLog } from "./worker-comunicacao/worker-comunicacao.logsafe.js";
 
 // Worker Martin Brower: só é carregado com MB_PLAYWRIGHT_ENABLED=true. Com a
 // flag desligada (padrão), o adapter nem é importado — nenhum código de
@@ -11,6 +13,16 @@ inicializarWorkerRemoto().then((r) => {
   console.log(r.habilitado
     ? `   Martin Brower: worker remoto ATIVO (${r.url})`
     : `   Martin Brower: worker DESABILITADO (${r.motivo})`);
+});
+
+// Worker de comunicação (H.2-B.1): mesmo espírito — só roda com
+// COMUNICACAO_WORKER_ENABLED=true (padrão: desligado). Com a flag desligada,
+// nem WHATSAPP_GATEWAY_URL/SECRET precisam existir neste ambiente. Nunca
+// derruba a subida do backend, mesmo com a flag ligada e config inválida.
+iniciarWorkerComunicacaoEmbutido({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados) }).then((r) => {
+  console.log(r.habilitado
+    ? "   Comunicação: worker embutido ATIVO"
+    : `   Comunicação: worker embutido DESABILITADO (${r.motivo})`);
 });
 
 const servidor = createApp().listen(config.port, () => {
@@ -26,10 +38,16 @@ servidor.headersTimeout = TIMEOUTS.headersTimeoutMs;
 servidor.keepAliveTimeout = TIMEOUTS.keepAliveTimeoutMs;
 
 // Encerramento gracioso: o Render manda SIGTERM antes de derrubar a instância.
+// pararWorkerComunicacaoEmbutido() é idempotente/no-op se o worker nunca
+// iniciou (flag desligada) — por isso entra aqui sem precisar de um segundo
+// handler de sinal. O grace period do worker embutido (8s) é sempre menor
+// que o fallback de 10s abaixo, então nunca competem pelo mesmo encerramento.
 for (const sinal of ["SIGTERM", "SIGINT"]) {
   process.on(sinal, () => {
     console.log(`[${sinal}] encerrando servidor…`);
-    servidor.close(() => process.exit(0));
+    pararWorkerComunicacaoEmbutido(sinal).finally(() => {
+      servidor.close(() => process.exit(0));
+    });
     // Rede de segurança caso alguma conexão não feche sozinha.
     setTimeout(() => process.exit(0), 10_000).unref();
   });
