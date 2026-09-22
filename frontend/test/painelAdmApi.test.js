@@ -194,3 +194,24 @@ describe("painelAdmApi — período ativo (mes=AAAA-MM)", () => {
     globalThis.sessionStorage.getItem = () => null;
   });
 });
+
+describe("painelAdmApi.comunicacaoConfirmarConsentimento — Checkpoint H.4-A.3.2", () => {
+  const rotaDe = (u) => new URL(u, "http://x").pathname;
+
+  test("POST .../consentimento, Bearer, mesmo mecanismo de autenticação do resto do Painel", async () => {
+    stubFetch();
+    await painelAdmApi.comunicacaoConfirmarConsentimento("org-piloto");
+    assert.equal(rotaDe(capturado.url), "/api/v1/administrativo/comunicacao/organizacoes/org-piloto/consentimento");
+    assert.equal(capturado.opcoes.method, "POST");
+    const h = capturado.opcoes.headers ?? {};
+    assert.equal(h.Authorization, "Bearer jwt-identidade-fake");
+    assert.ok(!Object.keys(h).some((k) => k.toLowerCase() === "x-context-token"));
+  });
+
+  test("o corpo enviado contém SOMENTE confirmacaoExplicita:true — nunca telefone/perfil/habilitado/modo/opt_out", async () => {
+    stubFetch();
+    await painelAdmApi.comunicacaoConfirmarConsentimento("org-piloto");
+    const corpo = JSON.parse(capturado.opcoes.body);
+    assert.deepEqual(corpo, { confirmacaoExplicita: true });
+  });
+});

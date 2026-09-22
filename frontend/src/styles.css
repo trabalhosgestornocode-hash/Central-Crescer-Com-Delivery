@@ -3421,6 +3421,11 @@ body {
 .padm-check-estado { font-size: 10.5px; color: var(--cinza); margin-left: 2px; }
 .padm-preview-mensagem { margin-top: 8px; }
 .padm-preview-texto { background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); padding: 10px 12px; font-size: 13px; white-space: pre-wrap; }
+.padm-consentimento-ok { display: flex; align-items: center; gap: 6px; color: var(--ok); font-size: 13px; margin-top: 6px; }
+.padm-consentimento-acao { margin-top: 8px; }
+.padm-consentimento-confirmar { margin-top: 8px; padding: 10px 12px; background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); display: flex; flex-direction: column; gap: 8px; }
+.padm-consentimento-confirmar p { margin: 0; font-size: 12.5px; color: var(--texto); }
+.padm-consentimento-confirmar div { display: flex; gap: 8px; }
 .padm-tabela td small { display: block; font-size: 10.5px; color: var(--cinza); }
 .padm-td-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .padm-var { font-weight: 640; font-variant-numeric: tabular-nums; }

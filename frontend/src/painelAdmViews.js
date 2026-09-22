@@ -1442,6 +1442,31 @@ export function htmlChecklistPiloto(c) {
     `<li class="${c[chave] ? "padm-check-ok" : "padm-check-pendente"}">${icon(c[chave] ? "check-circle" : "minus-circle", { size: 13 })} ${escapeHtml(rotulo)} <span class="padm-check-estado">${c[chave] ? "(pronto)" : "(pendente)"}</span></li>`).join("")}</ul>`;
 }
 
+/**
+ * Ação de consentimento/verificação — Checkpoint H.4-A.3.2. Só aparece
+ * quando há contato+perfil configurados (telefone válido) E falta
+ * consentimento ou verificação. NUNCA envia WhatsApp, NUNCA habilita a
+ * organização — isso é responsabilidade exclusiva do backend (o endpoint
+ * só aceita `confirmacaoExplicita`, nada mais).
+ */
+function htmlAcaoConsentimento(dest) {
+  if (!dest || !dest.perfilOperacionalId) return "";
+  if (dest.consentimento && dest.verificado) {
+    return `<p class="padm-consentimento-ok">${icon("check-circle", { size: 14 })} Consentimento confirmado</p>`;
+  }
+  return `
+    <div class="padm-consentimento-acao">
+      <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="pedir-confirmacao-consentimento">Confirmar consentimento e verificação</button>
+      <div class="padm-consentimento-confirmar" hidden>
+        <p>Confirme somente se o destinatário autorizou o recebimento de alertas operacionais do Crescer com Delivery por WhatsApp e se este número foi validado administrativamente.</p>
+        <div>
+          <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="cancelar-confirmacao-consentimento">Cancelar</button>
+          <button type="button" class="btn btn-primary btn-sm" data-padm-acao="confirmar-consentimento">Confirmar consentimento e verificação</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 export function htmlDrawerComunicacao(d, perfis) {
   const cfg = d.configuracao;
   const dest = cfg.destinatario;
@@ -1465,7 +1490,8 @@ export function htmlDrawerComunicacao(d, perfis) {
         })}
         ${secao({
           titulo: "Destinatário atual", corpo: dest
-            ? `<p>Telefone ${escapeHtml(dest.telefoneMascarado ?? "—")} · ${dest.verificado ? "verificado" : "não verificado"} · consentimento ${dest.consentimento ? "sim" : "não"}${dest.optOut ? " · OPT-OUT ATIVO" : ""}</p>`
+            ? `<p>Telefone ${escapeHtml(dest.telefoneMascarado ?? "—")} · ${dest.verificado ? "verificado" : "não verificado"} · consentimento ${dest.consentimento ? "sim" : "não"}${dest.optOut ? " · OPT-OUT ATIVO" : ""}</p>
+               ${htmlAcaoConsentimento(dest)}`
             : `<p class="padm-vazio">Nenhum destinatário configurado.</p>`,
         })}
         ${secao({
@@ -1551,6 +1577,29 @@ function ligarDrawerComunicacao(organizacaoId, api) {
       alvo.innerHTML = erro(err);
     } finally {
       e.target.disabled = false;
+    }
+  });
+  el('[data-padm-acao="pedir-confirmacao-consentimento"]')?.addEventListener("click", (e) => {
+    e.target.hidden = true;
+    const painel = e.target.parentElement?.querySelector(".padm-consentimento-confirmar");
+    if (painel) painel.hidden = false;
+  });
+  el('[data-padm-acao="cancelar-confirmacao-consentimento"]')?.addEventListener("click", (e) => {
+    const raiz = e.target.closest(".padm-consentimento-acao");
+    raiz?.querySelector(".padm-consentimento-confirmar")?.setAttribute("hidden", "");
+    const botao = raiz?.querySelector('[data-padm-acao="pedir-confirmacao-consentimento"]');
+    if (botao) botao.hidden = false;
+  });
+  el('[data-padm-acao="confirmar-consentimento"]')?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      await api.comunicacaoConfirmarConsentimento(organizacaoId);
+      await abrirDrawerComunicacao(organizacaoId); // drawer atualiza com o checklist/destinatário reais
+      ultimoDados.comunicacaoOrgs = await api.comunicacaoOrganizacoes({});
+      pintarComunicacao();
+    } catch (err) {
+      e.target.disabled = false;
+      alert(err.message || "Não foi possível confirmar consentimento/verificação.");
     }
   });
   el("#padm-com-form")?.addEventListener("submit", async (e) => {

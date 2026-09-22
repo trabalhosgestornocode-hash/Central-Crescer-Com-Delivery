@@ -75,13 +75,20 @@ Agente Crescer já podia continuar a conversa, etapa ainda não habilitada;
 o nome da empresa também saiu do texto, mantido só no nome da unidade):
 ```
 Olá! Identificamos que a unidade {unidadeNome} possui um lançamento
-pendente no Crescer com Delivery há {N dia(s)}, desde DD/MM/AAAA. Por
+pendente no Crescer com Delivery referente ao dia DD/MM/AAAA. Por
 favor, acesse o sistema para verificar e regularizar a pendência. —
 Crescer com Delivery
 ```
-Sem `pendenciaMaisAntiga`, a cláusula "desde ..." é omitida inteira (nunca
-uma vírgula solta) — mesmo comportamento defensivo de antes, só com a
-pontuação atualizada.
+Sem `pendenciaMaisAntiga`, a cláusula "referente ao dia ..." é omitida
+inteira. **Checkpoint H.4-A.3.2, itens 7-8**: a versão anterior citava "há
+{N} dia(s)" — mas `diasPendentes` (de `administrativo.monitores.js`) conta
+o BACKLOG ANTES do D-1, não o próprio D-1 (regra de negócio correta,
+intocada), então um gap de um único dia (o caso mais comum de um primeiro
+alerta) rendia "há 0 dias". Em vez de forçar a regra de negócio para
+consertar a redação, o texto passou a citar só a data de referência —
+sempre verdadeira, nunca depende dessa contagem. `diasPendentes` continua
+aceito no parâmetro só para não quebrar os chamadores existentes, nunca
+usado no texto.
 Tipo único liberado nesta fase: `dashboard_ifood_d1` (pendência de
 lançamento iFood D-1) — já é o único tipo existente no enum `TIPOS_ALERTA`
 (fase 1 do módulo), então "escolher só um tipo" já está satisfeito pela

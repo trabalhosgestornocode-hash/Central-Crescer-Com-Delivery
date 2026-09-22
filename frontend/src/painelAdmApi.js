@@ -178,6 +178,15 @@ export const painelAdmApi = {
   comunicacaoAtualizarConfiguracao: (organizacaoId, dados) =>
     chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/configuracao`, { method: "PUT", json: dados }),
 
+  /**
+   * Confirma consentimento + verificação do contato já configurado —
+   * Checkpoint H.4-A.3.2. NUNCA envia WhatsApp, NUNCA habilita a organização.
+   * Só chame depois de confirmação humana explícita e inequívoca (fora
+   * deste código) — o único payload aceito é `confirmacaoExplicita:true`.
+   */
+  comunicacaoConfirmarConsentimento: (organizacaoId) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/consentimento`, { method: "POST", json: { confirmacaoExplicita: true } }),
+
   /** Fila (mensagens ainda em jogo). `status`, `organizacaoId`, `pagina`, `porPagina`. */
   comunicacaoFila: (filtros = {}) => chamar("/comunicacao/fila" + qs(filtros)),
 

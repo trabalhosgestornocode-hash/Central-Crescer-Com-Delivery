@@ -182,3 +182,70 @@ test("H.4-A itens 15-18: o drawer traz o botão de pré-visualização (nunca 'E
   assert.ok(html.includes("Pré-visualizar mensagem"));
   assert.doesNotMatch(html, /Enviar agora|Testar mensagem|Disparar|Reenviar|Enviar mensagem/i);
 });
+
+function detalheComDestinatario(destinatario) {
+  return {
+    organizacao: { organizacaoId: "org-1", nome: "Grupo Jailton e Vanessa" },
+    configuracao: { status: "CONFIGURACAO_INCOMPLETA", timezone: "America/Sao_Paulo", tiposPermitidos: ["dashboard_ifood_d1"], pausadoAte: null, destinatario },
+    checklistPiloto: {
+      perfilAssociado: true, telefoneValido: true, consentimento: destinatario?.consentimento ?? false, telefoneVerificado: destinatario?.verificado ?? false,
+      timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+    },
+    unidades: [],
+  };
+}
+
+// Checkpoint H.4-A.3.2, item 11 (A, B, C, F) — cobertura da ação de consentimento
+// no drawer. D, E, G, H, I (comportamento de clique/chamada de API) não são
+// testáveis neste arquivo: painelAdmComunicacao.test.js só testa construtores
+// HTML->string (sem DOM/jsdom neste projeto, mesmo padrão dos testes acima) —
+// esse comportamento foi validado por QA manual em produção (H.4-A.3.2, item 16).
+
+test("A. consentimento=false -> botão de confirmação aparece", () => {
+  const html = htmlDrawerComunicacao(detalheComDestinatario({
+    telefoneMascarado: "+558********88", verificado: true, consentimento: false, optOut: false, perfilOperacionalId: "p1",
+  }), []);
+  assert.ok(html.includes('data-padm-acao="pedir-confirmacao-consentimento"'));
+  assert.ok(html.includes("Confirmar consentimento e verificação"));
+});
+
+test("B. verificado=false -> botão de confirmação aparece", () => {
+  const html = htmlDrawerComunicacao(detalheComDestinatario({
+    telefoneMascarado: "+558********88", verificado: false, consentimento: true, optOut: false, perfilOperacionalId: "p1",
+  }), []);
+  assert.ok(html.includes('data-padm-acao="pedir-confirmacao-consentimento"'));
+});
+
+test("C. consentimento=true e verificado=true -> mostra 'Consentimento confirmado', sem botão", () => {
+  const html = htmlDrawerComunicacao(detalheComDestinatario({
+    telefoneMascarado: "+558********88", verificado: true, consentimento: true, optOut: false, perfilOperacionalId: "p1",
+  }), []);
+  assert.ok(html.includes("Consentimento confirmado"));
+  assert.doesNotMatch(html, /pedir-confirmacao-consentimento/);
+});
+
+test("sem perfil associado -> nenhum botão/estado de consentimento aparece (contato incompleto)", () => {
+  const html = htmlDrawerComunicacao(detalheComDestinatario({
+    telefoneMascarado: "+558********88", verificado: false, consentimento: false, optOut: false, perfilOperacionalId: null,
+  }), []);
+  assert.doesNotMatch(html, /pedir-confirmacao-consentimento|Consentimento confirmado/);
+});
+
+test("F. o painel de confirmação traz o texto exato, nenhum checkbox, e nunca é exibido pré-aberto", () => {
+  const html = htmlDrawerComunicacao(detalheComDestinatario({
+    telefoneMascarado: "+558********88", verificado: false, consentimento: false, optOut: false, perfilOperacionalId: "p1",
+  }), []);
+  assert.match(html, /class="padm-consentimento-confirmar" hidden/);
+  assert.ok(html.includes("Confirme somente se o destinatário autorizou o recebimento de alertas operacionais do Crescer com Delivery por WhatsApp e se este número foi validado administrativamente."));
+  assert.ok(html.includes('data-padm-acao="cancelar-confirmacao-consentimento"'));
+  assert.ok(html.includes("Cancelar"));
+  const blocoConfirmar = html.slice(html.indexOf("padm-consentimento-confirmar"));
+  assert.doesNotMatch(blocoConfirmar.slice(0, blocoConfirmar.indexOf("</div>")), /type="checkbox"/);
+});
+
+test("a ação de consentimento nunca é confundida com envio/habilitação (vocabulário)", () => {
+  const html = htmlDrawerComunicacao(detalheComDestinatario({
+    telefoneMascarado: "+558********88", verificado: false, consentimento: false, optOut: false, perfilOperacionalId: "p1",
+  }), []);
+  assert.doesNotMatch(html, /Enviar|Habilitar organização|Ativar comunicação|Agente Crescer/i);
+});
