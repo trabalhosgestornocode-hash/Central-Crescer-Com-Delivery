@@ -152,6 +152,8 @@ export const MOTIVOS_BLOQUEIO = Object.freeze({
   RATE_LIMIT: "RATE_LIMIT",
   SAFE_MODE: "SAFE_MODE",
   PROVIDER_OFFLINE: "PROVIDER_OFFLINE",
+  /** Checkpoint H.4-A: telefone fora da allowlist do piloto (comunicacao.piloto.js) — defesa em profundidade, nunca substitui os gates acima. */
+  FORA_DA_ALLOWLIST_PILOTO: "FORA_DA_ALLOWLIST_PILOTO",
 });
 
 /**

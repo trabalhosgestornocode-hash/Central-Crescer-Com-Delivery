@@ -397,14 +397,13 @@ describe("agendarEnviosPendentes — habilitação PERSISTIDA, horário real e T
     assert.equal(await statusAlerta(alerta.id), STATUS_ALERTA.DETECTED);
   });
 
-  test("o texto da mensagem usa o nome da unidade/empresa gravado no alerta (metadados)", async (t) => {
+  test("o texto da mensagem usa o nome da unidade gravado no alerta (metadados)", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     await habilitar(orgA);
     const alerta = await novoAlerta("2026-08-15", { metadados: { unidade_nome: "Loja Centro", empresa_nome: "Rede Exemplo" } });
     await agendarEnviosPendentes({ organizacaoId: orgA, agora: new Date("2026-09-16T13:00:00Z") });
     const [m] = await msgsDoAlerta(alerta.id);
     assert.match(m.conteudo, /Loja Centro/);
-    assert.match(m.conteudo, /Rede Exemplo/);
   });
 
   test("CROSS-ORG: o agendamento de A não toca alertas de B (escopo por organizacaoId)", async (t) => {

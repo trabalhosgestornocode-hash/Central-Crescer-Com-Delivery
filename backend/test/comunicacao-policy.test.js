@@ -268,8 +268,26 @@ describe("comunicacao.policy — CADA condição obrigatória ausente bloqueia (
   });
 });
 
+describe("Checkpoint H.4-A — allowlist do piloto (comunicacao.piloto.js), defesa em profundidade", () => {
+  test("telefoneNaAllowlistPiloto AUSENTE não bloqueia (retrocompatível com todo snapshot que não conhece o piloto)", () => {
+    assert.equal(avaliarEnvio(BASE()).allowed, true);
+  });
+  test("telefoneNaAllowlistPiloto: true não bloqueia", () => {
+    assert.equal(avaliarEnvio({ ...BASE(), telefoneNaAllowlistPiloto: true }).allowed, true);
+  });
+  test("telefoneNaAllowlistPiloto: false BLOQUEIA com FORA_DA_ALLOWLIST_PILOTO — mesmo com tudo o mais aprovado", () => {
+    const r = avaliarEnvio({ ...BASE(), telefoneNaAllowlistPiloto: false });
+    assert.equal(r.allowed, false);
+    assert.equal(r.reason, MOTIVOS_BLOQUEIO.FORA_DA_ALLOWLIST_PILOTO);
+  });
+  test("a allowlist é o ÚLTIMO gate — nunca disfarça outro bloqueio já presente (ex.: opt-out continua vencendo)", () => {
+    const r = avaliarEnvio({ ...BASE(), optOut: true, telefoneNaAllowlistPiloto: false });
+    assert.equal(r.reason, MOTIVOS_BLOQUEIO.OPT_OUT, "um bloqueio anterior no pipeline deve vencer, não a allowlist");
+  });
+});
+
 describe("comunicacao — bloqueio PERMANENTE × TRANSITÓRIO (D.3, item 14)", () => {
-  const PERMANENTES = ["OPT_OUT", "NO_CONSENT", "NO_PHONE", "PHONE_NOT_VERIFIED", "USER_INACTIVE", "SEM_VINCULO", "CONTATO_AMBIGUO", "EMPRESA_DESABILITADA", "TIPO_NAO_PERMITIDO", "PENDING_RESOLVED", "DUPLICATE"];
+  const PERMANENTES = ["OPT_OUT", "NO_CONSENT", "NO_PHONE", "PHONE_NOT_VERIFIED", "USER_INACTIVE", "SEM_VINCULO", "CONTATO_AMBIGUO", "EMPRESA_DESABILITADA", "TIPO_NAO_PERMITIDO", "PENDING_RESOLVED", "DUPLICATE", "FORA_DA_ALLOWLIST_PILOTO"];
   const TRANSITORIOS = ["DISABLED", "MODO_INVALIDO", "REACTIVE_ONLY_BLOQUEIA_PROATIVO", "COOLDOWN", "OUTSIDE_ALLOWED_WINDOW", "RATE_LIMIT", "SAFE_MODE", "PROVIDER_OFFLINE", "EMPRESA_PAUSADA", "CONFIG_INVALIDA"];
 
   test("todo motivo do vocabulário está classificado (nenhum esquecido)", () => {

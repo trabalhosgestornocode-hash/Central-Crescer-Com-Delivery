@@ -10,10 +10,11 @@
 // resto do Painel Administrativo e do próprio motor de alertas (o mesmo
 // detectarESincronizarAlertas de comunicacao/). Nunca recalculada aqui.
 //
-// (Este arquivo NÃO importa o pipeline de alertas — só a fonte de pendência
-// já compartilhada. Ver teste arquitetural em
-// comunicacao-arquitetura-agendamento.test.js, que barra qualquer import do
-// módulo de alertas do pipeline de comunicação fora do worker dedicado.)
+// (Este arquivo NÃO importa o pipeline de orquestração de alertas — só a
+// fonte de pendência já compartilhada, o template de texto puro (sem
+// orquestração) e a allowlist do piloto (H.4-A). Ver o teste arquitetural
+// em comunicacao-arquitetura-agendamento.test.js, que barra qualquer import
+// desse pipeline fora do worker dedicado — nenhum import deste arquivo o viola.)
 
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
@@ -22,6 +23,8 @@ import { pendencias as lerPendencias } from "./administrativo.service.js";
 import { modoAtual } from "../comunicacao/comunicacao.config.js";
 import { TIPOS_ALERTA } from "../comunicacao/comunicacao.constants.js";
 import { timezoneValido } from "../comunicacao/comunicacao.horario.js";
+import { formatarMensagemPendencia } from "../comunicacao/comunicacao.template.js";
+import { telefoneAutorizadoNoPiloto } from "../comunicacao/comunicacao.piloto.js";
 
 const TIPOS_ALERTA_VALIDOS = Object.values(TIPOS_ALERTA);
 
@@ -124,9 +127,10 @@ export async function organizacoes({ busca } = {}, deps = {}) {
 /** GET /administrativo/comunicacao/organizacoes/:organizacaoId */
 export async function detalheOrganizacao({ organizacaoId } = {}, deps = {}) {
   const orgId = v.uuid(organizacaoId, "Empresa");
-  const [org, snapshot] = await Promise.all([
+  const [org, snapshot, modo] = await Promise.all([
     repo.obterOrganizacaoComConfiguracao(orgId, deps),
     lerPendencias({}, deps),
+    modoAtual(deps),
   ]);
   if (!org) throw ApiError.notFound("Empresa não encontrada.");
 
@@ -154,10 +158,65 @@ export async function detalheOrganizacao({ organizacaoId } = {}, deps = {}) {
       } : null,
       atualizadoEm: hab?.updated_at ?? null,
     },
+    // Checklist de prontidão para piloto (H.4-A, itens 34-36) — 100% DERIVADO
+    // dos dados reais acima, nenhuma coluna nova de banco. `allowlistPiloto`
+    // é só o booleano (nunca a lista crua — comunicacao.piloto.js já não
+    // expõe o valor bruto do telefone em nenhum log; aqui é a mesma
+    // disciplina). `organizacaoHabilitada`/`comunicacaoGlobalAtiva` são
+    // sempre `false` hoje (habilitado=false hard-coded, modo=DISABLED) —
+    // nunca hardcoded no código, sempre lidos dos valores reais.
+    checklistPiloto: {
+      perfilAssociado: !!(hab?.destinatario_contato_id && hab?.destinatario_perfil_id),
+      telefoneValido: !!contato?.telefone_e164,
+      consentimento: contato?.consentimento === true,
+      telefoneVerificado: contato?.verificado === true,
+      timezone: !!hab?.timezone,
+      tipoAlerta: !!(hab?.tipos_permitidos?.length),
+      allowlistPiloto: telefoneAutorizadoNoPiloto(contato?.telefone_e164 ?? null),
+      organizacaoHabilitada: hab?.habilitado === true,
+      comunicacaoGlobalAtiva: modo === "NORMAL",
+    },
     unidades: unidadesDaOrg.map((u) => ({
       unidadeId: u.unidadeId, unidadeNome: u.unidadeNome, criticidade: u.criticidade, diasPendentes: u.diasPendentes ?? 0,
     })),
     tiposAlertaDisponiveis: TIPOS_ALERTA_VALIDOS,
+  };
+}
+
+/**
+ * GET /administrativo/comunicacao/organizacoes/:organizacaoId/preview-mensagem
+ *
+ * Checkpoint H.4-A, itens 15-18: SOMENTE LEITURA — monta o texto EXATO que
+ * seria enviado, usando a MESMA função de template do pipeline real
+ * (comunicacao.template.js#formatarMensagemPendencia, nunca duplicada) sobre
+ * uma pendência REAL de `pendencias()` (nunca inventada). Não cria
+ * `comunicacao_mensagens`, não cria `comunicacao_tentativas`, não chama o
+ * provider, não altera fila/status, não audita como envio — é leitura pura.
+ * Sem pendência real disponível: `disponivel: false` (nunca inventa dado).
+ */
+export async function preverMensagem({ organizacaoId, unidadeId } = {}, deps = {}) {
+  const orgId = v.uuid(organizacaoId, "Empresa");
+  const [org, snapshot] = await Promise.all([
+    repo.obterOrganizacaoComConfiguracao(orgId, deps),
+    lerPendencias({}, deps),
+  ]);
+  if (!org) throw ApiError.notFound("Empresa não encontrada.");
+
+  const pendentes = (snapshot.unidades ?? []).filter((u) => u.organizacaoId === orgId
+    && (u.criticidade === "critico" || u.criticidade === "atencao")
+    && (!unidadeId || u.unidadeId === unidadeId));
+  if (!pendentes.length) return { disponivel: false, motivo: "Nenhuma pendência real disponível para esta empresa agora." };
+
+  // Mais crítica primeiro, depois a mais antiga — mesma ordem de prioridade que um operador escolheria.
+  const alvo = pendentes.sort((a, b) => (a.criticidade === b.criticidade ? 0 : a.criticidade === "critico" ? -1 : 1))[0];
+  const texto = formatarMensagemPendencia({
+    unidadeNome: alvo.unidadeNome ?? null,
+    diasPendentes: alvo.diasPendentes ?? 1, pendenciaMaisAntiga: alvo.pendenciaMaisAntiga ?? null,
+  });
+  return {
+    disponivel: true, texto,
+    unidadeId: alvo.unidadeId, unidadeNome: alvo.unidadeNome ?? null,
+    criticidade: alvo.criticidade, diasPendentes: alvo.diasPendentes ?? 0,
   };
 }
 

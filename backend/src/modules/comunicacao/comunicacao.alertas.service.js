@@ -41,6 +41,8 @@ import { avaliarEnvio } from "./comunicacao.policy.js";
 import { classificarErroEnvio, backoffRetrySegundos } from "./comunicacao.entrega.js";
 import { dentroDaJanelaLocal, proximoHorarioDeEnvio, inicioDoDiaLocal, ConfiguracaoHorarioInvalida } from "./comunicacao.horario.js";
 import { resolverHabilitacaoEmpresa, janelasEfetivas } from "./comunicacao.habilitacao.js";
+import { telefoneAutorizadoNoPiloto } from "./comunicacao.piloto.js";
+import { formatarMensagemPendencia } from "./comunicacao.template.js";
 import { calcularDisponivelEm, chaveDeJitter, MOTIVO_DA_RESERVA } from "./comunicacao.adiamento.js";
 import {
   TIPOS_ALERTA, STATUS_ALERTA, STATUS_MENSAGEM, SEVERIDADE, CLASSIFICACAO_ERRO, MODOS,
@@ -61,11 +63,11 @@ const LIMITE_DIA_PADRAO = 3;
 
 const numeroOuPadrao = (v, padrao) => (v !== null && v !== "" && v !== undefined && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : padrao);
 
-function formatarMensagemPendencia({ unidadeNome, empresaNome, diasPendentes, pendenciaMaisAntiga }) {
-  const dias = diasPendentes === 1 ? "1 dia" : `${diasPendentes} dias`;
-  const desde = pendenciaMaisAntiga ? ` (desde ${pendenciaMaisAntiga.split("-").reverse().join("/")})` : "";
-  return `Olá! Identificamos que a unidade ${unidadeNome ?? "—"}${empresaNome ? ` (${empresaNome})` : ""} está com um lançamento pendente no Crescer com Delivery há ${dias}${desde}. Se quiser, posso te mostrar exatamente o que falta concluir.`;
-}
+// Movida para comunicacao.template.js (Checkpoint H.4-A) — reaproveitada aqui
+// E pela pré-visualização somente-leitura do Painel Administrativo
+// (administrativo.comunicacao.service.js#preverMensagem) sem violar o teste
+// arquitetural que só permite worker-comunicacao/ importar ESTE arquivo: o
+// template é puro texto, não é o pipeline de orquestração.
 
 /**
  * A pendência que originou este alerta existe NESTE snapshot? Função pura — o
@@ -203,7 +205,6 @@ export async function agendarEnviosPendentes({
 
     const conteudo = formatarMensagemPendencia({
       unidadeNome: alerta.metadados?.unidade_nome ?? null,
-      empresaNome: alerta.metadados?.empresa_nome ?? null,
       diasPendentes: Number(alerta.motivo?.match(/^(\d+)/)?.[1] ?? 1),
       pendenciaMaisAntiga: alerta.data_referencia,
     });
@@ -444,6 +445,9 @@ export async function processarJobReivindicado(job, {
     rateLimitExcedido: false,
     dentroDaJanela,
     providerConectado: statusProvider?.conectado === true,
+    // Checkpoint H.4-A: defesa em profundidade, opt-in via COMUNICACAO_PILOTO_ENABLED
+    // (ver comunicacao.piloto.js). Com o piloto desligado, sempre `true` (não interfere).
+    telefoneNaAllowlistPiloto: telefoneAutorizadoNoPiloto(contato?.telefone_e164),
   };
 
   /**

@@ -165,6 +165,10 @@ export const painelAdmApi = {
   comunicacaoPerfisElegiveis: (organizacaoId) =>
     chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/perfis-elegiveis`),
 
+  /** Pré-visualização SOMENTE LEITURA do texto que seria enviado (Checkpoint H.4-A) — nunca envia nada. */
+  comunicacaoPreverMensagem: (organizacaoId, { unidadeId } = {}) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/preview-mensagem` + qs({ unidadeId })),
+
   /**
    * Prepara a configuração de uma empresa — NUNCA habilita envio.
    * @param {string} organizacaoId

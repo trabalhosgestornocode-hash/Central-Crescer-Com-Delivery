@@ -32,6 +32,11 @@ export const detalheOrganizacao = asyncHandler(async (req, res) =>
 export const perfisElegiveis = asyncHandler(async (req, res) =>
   ok(res, await service.perfisElegiveis({ organizacaoId: req.params.organizacaoId }, deps(req))));
 
+// GET /administrativo/comunicacao/organizacoes/:organizacaoId/preview-mensagem?unidadeId=
+// Checkpoint H.4-A — somente leitura, nunca cria mensagem/tentativa, nunca chama o provider.
+export const preverMensagem = asyncHandler(async (req, res) =>
+  ok(res, await service.preverMensagem({ organizacaoId: req.params.organizacaoId, unidadeId: req.query.unidadeId }, deps(req))));
+
 // PUT /administrativo/comunicacao/organizacoes/:organizacaoId/configuracao
 export const atualizarConfiguracao = asyncHandler(async (req, res) =>
   ok(res, await service.atualizarConfiguracao({

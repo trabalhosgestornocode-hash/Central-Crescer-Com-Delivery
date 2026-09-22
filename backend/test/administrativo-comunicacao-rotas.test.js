@@ -433,6 +433,7 @@ describe("Checkpoint H.3-A — zero outbound (item 35, obrigatório)", () => {
       await GET(app, "/administrativo/comunicacao/organizacoes");
       await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}`);
       await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/perfis-elegiveis`);
+      await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/preview-mensagem`);
       await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, { timezone: "America/Sao_Paulo" });
       await GET(app, "/administrativo/comunicacao/fila");
       await GET(app, "/administrativo/comunicacao/historico");
@@ -454,5 +455,65 @@ describe("Checkpoint H.3-A — empty states honestos (item 30)", () => {
     assert.equal(r.status, 200);
     assert.deepEqual(r.json.data.itens, []);
     assert.equal(r.json.data.total, 0);
+  });
+});
+
+describe("Checkpoint H.4-A — checklistPiloto (itens 34-36): 100% derivado, nunca hardcoded", () => {
+  test("organização sem NENHUMA configuração -> todo o checklist false", async () => {
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
+    const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}`);
+    assert.equal(r.status, 200);
+    const c = r.json.data.checklistPiloto;
+    assert.deepEqual(c, {
+      perfilAssociado: false, telefoneValido: false, consentimento: false, telefoneVerificado: false,
+      timezone: false, tipoAlerta: false, allowlistPiloto: true /* piloto desligado = gate não aplicável, ver comunicacao.piloto.js */,
+      organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+    });
+  });
+
+  test("organizacaoHabilitada e comunicacaoGlobalAtiva continuam false mesmo com telefone/timezone/tipo já configurados", async () => {
+    const estado = estadoBase();
+    const contatoId = uuid("contato1");
+    estado.contatos_whatsapp = [{ id: contatoId, telefone_e164: "+5586988846788", verificado: false, consentimento: false, opt_out: false }];
+    estado.comunicacao_habilitacoes = [{
+      organizacao_id: ORG_A, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"],
+      destinatario_contato_id: contatoId, destinatario_perfil_id: uuid("perfil1"), pausado_ate: null,
+    }];
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}`);
+    const c = r.json.data.checklistPiloto;
+    assert.equal(c.perfilAssociado, true);
+    assert.equal(c.telefoneValido, true);
+    assert.equal(c.timezone, true);
+    assert.equal(c.tipoAlerta, true);
+    assert.equal(c.consentimento, false, "consentimento continua false — não pode ser marcado automaticamente só por existir telefone");
+    assert.equal(c.organizacaoHabilitada, false, "H.4-A nunca habilita de verdade");
+    assert.equal(c.comunicacaoGlobalAtiva, false, "modo continua DISABLED");
+  });
+});
+
+describe("Checkpoint H.4-A — preview-mensagem (itens 15-18): somente leitura, zero efeito colateral", () => {
+  test("sem pendência real disponível -> disponivel:false, nunca inventa texto", async () => {
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
+    const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/preview-mensagem`);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.data.disponivel, false);
+    assert.ok(!("texto" in r.json.data));
+  });
+
+  test("organização inexistente -> 404 (nunca vaza existência de pendência de outra)", async () => {
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
+    const r = await GET(app, `/administrativo/comunicacao/organizacoes/${uuid("nao-existe")}/preview-mensagem`);
+    assert.equal(r.status, 404);
+  });
+
+  test("preview nunca cria comunicacao_mensagens, comunicacao_tentativas nem evento de auditoria de envio", async () => {
+    const estado = estadoBase();
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/preview-mensagem`);
+    await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/preview-mensagem?unidadeId=qualquer`);
+    assert.deepEqual(estado.comunicacao_mensagens, []);
+    assert.deepEqual(estado.comunicacao_tentativas ?? [], []);
+    assert.deepEqual((estado.plataforma_auditoria ?? []).filter((a) => String(a.acao ?? "").includes("envio")), []);
   });
 });

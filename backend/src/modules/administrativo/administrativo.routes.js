@@ -61,6 +61,7 @@ administrativoRouter.get("/comunicacao/resumo", cc.resumo);
 administrativoRouter.get("/comunicacao/organizacoes", cc.organizacoes);
 administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId", cc.detalheOrganizacao);
 administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/perfis-elegiveis", cc.perfisElegiveis);
+administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/preview-mensagem", cc.preverMensagem);
 administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/configuracao", cc.atualizarConfiguracao);
 administrativoRouter.get("/comunicacao/fila", cc.fila);
 administrativoRouter.get("/comunicacao/historico", cc.historico);

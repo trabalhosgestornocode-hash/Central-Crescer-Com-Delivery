@@ -3414,6 +3414,13 @@ body {
 .padm-form input[type="text"], .padm-form select { font: inherit; font-size: 13px; padding: 7px 10px; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); }
 .padm-form label.padm-check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; color: var(--texto); }
 .padm-form-nota { font-size: 11px; color: var(--cinza); margin: 2px 0 0; }
+.padm-checklist-piloto { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.padm-checklist-piloto li { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.padm-check-ok { color: var(--ok); }
+.padm-check-pendente { color: var(--cinza); }
+.padm-check-estado { font-size: 10.5px; color: var(--cinza); margin-left: 2px; }
+.padm-preview-mensagem { margin-top: 8px; }
+.padm-preview-texto { background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); padding: 10px 12px; font-size: 13px; white-space: pre-wrap; }
 .padm-tabela td small { display: block; font-size: 10.5px; color: var(--cinza); }
 .padm-td-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .padm-var { font-weight: 640; font-variant-numeric: tabular-nums; }

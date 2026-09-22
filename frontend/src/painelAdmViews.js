@@ -1423,6 +1423,25 @@ export function htmlSeletorPerfil(perfis, perfilSelecionadoId) {
     </select>`;
 }
 
+const ITENS_CHECKLIST_PILOTO = [
+  ["perfilAssociado", "Perfil associado"],
+  ["telefoneValido", "Telefone válido"],
+  ["consentimento", "Consentimento"],
+  ["telefoneVerificado", "Telefone verificado"],
+  ["timezone", "Timezone"],
+  ["tipoAlerta", "Tipo de alerta"],
+  ["allowlistPiloto", "Allowlist do piloto"],
+  ["organizacaoHabilitada", "Organização habilitada"],
+  ["comunicacaoGlobalAtiva", "Comunicação global ativa"],
+];
+
+/** Checklist de prontidão para piloto (H.4-A, itens 34-36) — 100% a partir do que o backend já devolveu, nunca calculado de novo aqui. */
+export function htmlChecklistPiloto(c) {
+  if (!c) return "";
+  return `<ul class="padm-checklist-piloto">${ITENS_CHECKLIST_PILOTO.map(([chave, rotulo]) =>
+    `<li class="${c[chave] ? "padm-check-ok" : "padm-check-pendente"}">${icon(c[chave] ? "check-circle" : "minus-circle", { size: 13 })} ${escapeHtml(rotulo)} <span class="padm-check-estado">${c[chave] ? "(pronto)" : "(pendente)"}</span></li>`).join("")}</ul>`;
+}
+
 export function htmlDrawerComunicacao(d, perfis) {
   const cfg = d.configuracao;
   const dest = cfg.destinatario;
@@ -1435,6 +1454,11 @@ export function htmlDrawerComunicacao(d, perfis) {
       <div class="padm-drawer-corpo">
         ${secao({ titulo: "Situação", corpo: `<p>${chipStatusConfig(cfg.status)}</p>` })}
         ${secao({
+          titulo: "Configuração para piloto", icone: "list-checks",
+          sub: "Estado atual — os dois últimos itens permanecem pendentes nesta fase por decisão de produto.",
+          corpo: htmlChecklistPiloto(d.checklistPiloto),
+        })}
+        ${secao({
           titulo: "Unidades pendentes", corpo: d.unidades?.length
             ? `<ul class="padm-vinc-unidades">${d.unidades.map((u) => `<li>${escapeHtml(u.unidadeNome ?? u.unidadeId)} — ${escapeHtml(u.criticidade)} (${u.diasPendentes} dia(s))</li>`).join("")}</ul>`
             : `<p class="padm-vazio">Nenhuma pendência atual.</p>`,
@@ -1443,6 +1467,13 @@ export function htmlDrawerComunicacao(d, perfis) {
           titulo: "Destinatário atual", corpo: dest
             ? `<p>Telefone ${escapeHtml(dest.telefoneMascarado ?? "—")} · ${dest.verificado ? "verificado" : "não verificado"} · consentimento ${dest.consentimento ? "sim" : "não"}${dest.optOut ? " · OPT-OUT ATIVO" : ""}</p>`
             : `<p class="padm-vazio">Nenhum destinatário configurado.</p>`,
+        })}
+        ${secao({
+          titulo: "Pré-visualizar mensagem", icone: "eye",
+          sub: "Monta o texto exato com dados reais — nunca envia nada.",
+          corpo: `
+            <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="preview-comunicacao">Pré-visualizar mensagem</button>
+            <div id="padm-com-preview" class="padm-preview-mensagem"></div>`,
         })}
         ${secao({
           titulo: "Configurar (não envia nada)", icone: "settings",
@@ -1506,6 +1537,22 @@ export function fecharDrawerComunicacao() {
 
 function ligarDrawerComunicacao(organizacaoId, api) {
   el('[data-padm-acao="fechar-comunicacao"]')?.addEventListener("click", fecharDrawerComunicacao);
+  el('[data-padm-acao="preview-comunicacao"]')?.addEventListener("click", async (e) => {
+    const alvo = el("#padm-com-preview");
+    if (!alvo) return;
+    e.target.disabled = true;
+    alvo.innerHTML = `<p class="padm-vazio" aria-busy="true">Carregando…</p>`;
+    try {
+      const r = await api.comunicacaoPreverMensagem(organizacaoId);
+      alvo.innerHTML = r.disponivel
+        ? `<p class="padm-preview-texto">${escapeHtml(r.texto)}</p>`
+        : `<p class="padm-vazio">${escapeHtml(r.motivo ?? "Nenhuma pendência real disponível para pré-visualizar.")}</p>`;
+    } catch (err) {
+      alvo.innerHTML = erro(err);
+    } finally {
+      e.target.disabled = false;
+    }
+  });
   el("#padm-com-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);

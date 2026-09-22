@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   htmlComunicacaoCards, htmlComunicacaoEmpresas, htmlComunicacaoFila, htmlComunicacaoHistorico,
-  htmlSeletorPerfil, htmlDrawerComunicacao, TELAS_PADM,
+  htmlSeletorPerfil, htmlDrawerComunicacao, htmlChecklistPiloto, TELAS_PADM,
 } from "../src/painelAdmViews.js";
 
 test("a aba Comunicação existe na navegação do Painel Administrativo", () => {
@@ -135,4 +135,50 @@ test("paginação aparece só quando há mais de uma página", () => {
   const comPaginacao = htmlComunicacaoFila({ itens: [{ id: "m1", organizacao_id: "o", status: "SCHEDULED", disponivel_em: "2026-01-01T00:00:00Z", tentativas: 0, max_tentativas: 5 }], total: 50, pagina: 2, porPagina: 20 }, []);
   assert.ok(comPaginacao.includes("padm-paginacao"));
   assert.ok(comPaginacao.includes("Página 2 de 3"));
+});
+
+test("H.4-A itens 34-36: checklist do piloto mostra os 9 itens, com estado textual além de ícone/cor", () => {
+  const tudoPendente = htmlChecklistPiloto({
+    perfilAssociado: false, telefoneValido: false, consentimento: false, telefoneVerificado: false,
+    timezone: false, tipoAlerta: false, allowlistPiloto: false, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+  });
+  for (const rotulo of ["Perfil associado", "Telefone válido", "Consentimento", "Telefone verificado", "Timezone", "Tipo de alerta", "Allowlist do piloto", "Organização habilitada", "Comunicação global ativa"]) {
+    assert.ok(tudoPendente.includes(rotulo), `esperava "${rotulo}" no checklist`);
+  }
+  assert.equal((tudoPendente.match(/\(pendente\)/g) ?? []).length, 9);
+  assert.ok(!tudoPendente.includes("(pronto)"));
+
+  const parcial = htmlChecklistPiloto({
+    perfilAssociado: true, telefoneValido: true, consentimento: false, telefoneVerificado: false,
+    timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+  });
+  assert.equal((parcial.match(/\(pronto\)/g) ?? []).length, 5);
+  assert.equal((parcial.match(/\(pendente\)/g) ?? []).length, 4);
+});
+
+test("H.4-A itens 34-36: organização/comunicação global SEMPRE aparecem pendentes nesta fase", () => {
+  const c = htmlChecklistPiloto({
+    perfilAssociado: true, telefoneValido: true, consentimento: true, telefoneVerificado: true,
+    timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+  });
+  const linhaOrg = c.split("<li").find((l) => l.includes("Organização habilitada"));
+  const linhaModo = c.split("<li").find((l) => l.includes("Comunicação global ativa"));
+  assert.ok(linhaOrg.includes("padm-check-pendente"));
+  assert.ok(linhaModo.includes("padm-check-pendente"));
+});
+
+test("H.4-A itens 15-18: o drawer traz o botão de pré-visualização (nunca 'Enviar agora'/'Testar mensagem')", () => {
+  const detalhe = {
+    organizacao: { organizacaoId: "org-1", nome: "Grupo Jailton e Vanessa" },
+    configuracao: { status: "CONFIGURACAO_INCOMPLETA", timezone: null, tiposPermitidos: [], pausadoAte: null, destinatario: null },
+    checklistPiloto: {
+      perfilAssociado: false, telefoneValido: false, consentimento: false, telefoneVerificado: false,
+      timezone: false, tipoAlerta: false, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+    },
+    unidades: [],
+  };
+  const html = htmlDrawerComunicacao(detalhe, []);
+  assert.ok(html.includes('data-padm-acao="preview-comunicacao"'));
+  assert.ok(html.includes("Pré-visualizar mensagem"));
+  assert.doesNotMatch(html, /Enviar agora|Testar mensagem|Disparar|Reenviar|Enviar mensagem/i);
 });

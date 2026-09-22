@@ -44,6 +44,7 @@ const MODOS_VALIDOS = new Set(Object.values(MODOS));
  * @property {boolean} rateLimitExcedido     estourou algum limite de taxa (por minuto/por contato/dia)? (idem: o consumo de capacidade é decidido atomicamente em comunicacao_reservar_envio -> RATE_LIMIT_*)
  * @property {boolean} providerConectado     o WhatsAppService reporta conexão ativa?
  * @property {boolean} [modoSeguro]          circuito de segurança ativo (opcional: só `true` bloqueia — o circuito ainda não existe)
+ * @property {boolean} telefoneNaAllowlistPiloto  Checkpoint H.4-A: defesa em profundidade — `comunicacao.piloto.js#telefoneAutorizadoNoPiloto` já resolvido pelo chamador (exige === true; nunca lida aqui, `avaliarEnvio` continua sem I/O)
  */
 
 /**
@@ -88,6 +89,15 @@ export function avaliarEnvio(s) {
   if (s.rateLimitExcedido !== false) return bloqueado(MOTIVOS_BLOQUEIO.RATE_LIMIT);
   if (s.modoSeguro === true) return bloqueado(MOTIVOS_BLOQUEIO.SAFE_MODE);
   if (s.providerConectado !== true) return bloqueado(MOTIVOS_BLOQUEIO.PROVIDER_OFFLINE);
+  // ÚLTIMO check de propósito (Checkpoint H.4-A) — o mais próximo da fronteira de envio:
+  // camada A MAIS, nunca substitui nada acima. Campo AUSENTE (undefined) = gate não
+  // aplicável — DIFERENTE do padrão "ausente bloqueia" do resto deste arquivo, de
+  // propósito: comunicacao.piloto.js#telefoneAutorizadoNoPiloto nunca devolve
+  // `undefined` em produção (sempre true/false explícito, já considerando
+  // COMUNICACAO_PILOTO_ENABLED) — só um snapshot montado à mão (testes antigos, que
+  // não conhecem o piloto) omite o campo, e esses continuam passando como antes.
+  // Só um `false` EXPLÍCITO bloqueia.
+  if (s.telefoneNaAllowlistPiloto === false) return bloqueado(MOTIVOS_BLOQUEIO.FORA_DA_ALLOWLIST_PILOTO);
 
   return { allowed: true, reason: null };
 }
