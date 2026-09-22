@@ -104,6 +104,43 @@ export async function registrarOptOut({ contatoId, origem }, deps = {}) {
 }
 
 /**
+ * Confirma consentimento + verificação administrativa de um contato —
+ * Checkpoint H.4-A.2/H.4-A.3. SÓ deve ser chamada depois de uma confirmação
+ * EXPLÍCITA e inequívoca do operador fora de banda (nunca inferida de
+ * telefone existente, vínculo de perfil, configuração administrativa ou uso
+ * anterior do WhatsApp — essa decisão é de quem chama, não desta função).
+ * Nunca toca `opt_out` (flags independentes: consentir não reverte um
+ * opt-out prévio). ATÔMICA: os dois campos são gravados numa única operação
+ * de UPDATE — nunca existe um instante com `consentimento=true` e
+ * `verificado` ainda `false` por falha parcial. IDEMPOTENTE: chamar de novo
+ * sobre um contato já confirmado apenas reafirma `true`/`true` (nenhuma
+ * segunda escrita distinta, nenhum efeito de negócio duplicado) — cada
+ * chamada explícita gera seu próprio evento de auditoria, de propósito: cada
+ * confirmação é um ato operacional registrável, não só uma transição de
+ * estado. Sempre auditado, telefone sempre mascarado.
+ * @param {{contatoId: string, organizacaoId?: string|null, atorId?: string|null, perfilId?: string|null, perfilNome?: string|null, atorEmail?: string|null, origem: string}} params
+ */
+export async function confirmarConsentimentoEVerificacao({
+  contatoId, organizacaoId = null, atorId = null, perfilId = null, perfilNome = null, atorEmail = null, origem,
+}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("contatos_whatsapp")
+    .update({ consentimento: true, verificado: true }).eq("id", contatoId).select("telefone_e164").single();
+  if (error) throw ApiError.internal(error.message);
+
+  await auditar({
+    acao: ACOES.COMUNICACAO_CONSENTIMENTO_CONFIRMADO,
+    atorTipo: "usuario",
+    atorId, perfilId, perfilNome, atorEmail,
+    organizacaoId,
+    entidade: "contatos_whatsapp",
+    entidadeId: contatoId,
+    detalhes: { telefone_mascarado: mascararTelefone(data?.telefone_e164), origem },
+  });
+  return true;
+}
+
+/**
  * Resolve QUAL perfil este contato representa DENTRO do escopo de uma
  * organização/unidade específica — nunca "o perfil principal", sempre
  * revalidado contra o vínculo real (usuarios_organizacoes/usuarios_unidades).

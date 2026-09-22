@@ -140,6 +140,13 @@ export const ACOES = {
   // nenhuma rota deste checkpoint pode gravar `true` (ver
   // administrativo.comunicacao.repo.js).
   COMUNICACAO_HABILITACAO_ALTERADA: "comunicacao.habilitacao_alterada_painel_admin",
+
+  // Painel Administrativo / Comunicação (Checkpoint H.4-A.2) — confirmação
+  // EXPLÍCITA de consentimento/verificação de um contato. Só chamado quando o
+  // operador forneceu confirmação inequívoca fora de banda (nunca inferido de
+  // telefone existente, vínculo de perfil ou uso anterior). Nunca grava
+  // telefone completo. Nunca toca `opt_out`.
+  COMUNICACAO_CONSENTIMENTO_CONFIRMADO: "comunicacao.consentimento_confirmado_painel_admin",
 };
 
 /**

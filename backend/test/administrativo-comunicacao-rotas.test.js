@@ -137,6 +137,7 @@ function chamar(app, metodo, path, corpo) {
 }
 const GET = (app, path) => chamar(app, "GET", path);
 const PUT = (app, path, corpo) => chamar(app, "PUT", path, corpo);
+const POST = (app, path, corpo) => chamar(app, "POST", path, corpo);
 
 const USUARIO_COMUM = { id: uuid("u1"), email: "comum@teste.com", nome: "Comum", painelAdministrativo: false };
 const USUARIO_PAINEL = { id: uuid("u2"), email: "painel@teste.com", nome: "Painel", painelAdministrativo: true };
@@ -428,6 +429,12 @@ describe("Checkpoint H.3-A — zero outbound (item 35, obrigatório)", () => {
     global.fetch = (...args) => { chamadasFetch += 1; return chamadasFetchOriginais(...args); };
     try {
       const estado = estadoBase();
+      const contatoId = uuid("contato-outbound");
+      estado.contatos_whatsapp = [{ id: contatoId, telefone_e164: "+5586988846788", verificado: false, consentimento: false, opt_out: false }];
+      estado.comunicacao_habilitacoes = [{
+        organizacao_id: ORG_A, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"],
+        destinatario_contato_id: contatoId, destinatario_perfil_id: uuid("perfil1"), pausado_ate: null,
+      }];
       const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
       await GET(app, "/administrativo/comunicacao/resumo");
       await GET(app, "/administrativo/comunicacao/organizacoes");
@@ -435,6 +442,7 @@ describe("Checkpoint H.3-A — zero outbound (item 35, obrigatório)", () => {
       await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/perfis-elegiveis`);
       await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/preview-mensagem`);
       await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, { timezone: "America/Sao_Paulo" });
+      await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
       await GET(app, "/administrativo/comunicacao/fila");
       await GET(app, "/administrativo/comunicacao/historico");
       // A ÚNICA rede esperada é a tentativa (fadada a falhar) de `auditar()` contra
@@ -489,6 +497,153 @@ describe("Checkpoint H.4-A — checklistPiloto (itens 34-36): 100% derivado, nun
     assert.equal(c.consentimento, false, "consentimento continua false — não pode ser marcado automaticamente só por existir telefone");
     assert.equal(c.organizacaoHabilitada, false, "H.4-A nunca habilita de verdade");
     assert.equal(c.comunicacaoGlobalAtiva, false, "modo continua DISABLED");
+  });
+});
+
+describe("Checkpoint H.4-A.2/H.4-A.3 — POST .../consentimento: confirmação explícita, nunca inferida", () => {
+  function estadoComContato({ opt_out = false } = {}) {
+    const estado = estadoBase();
+    const contatoId = uuid("contato-consent");
+    estado.contatos_whatsapp = [{ id: contatoId, telefone_e164: "+5586988846788", verificado: false, consentimento: false, opt_out }];
+    estado.comunicacao_habilitacoes = [{
+      organizacao_id: ORG_A, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"],
+      destinatario_contato_id: contatoId, destinatario_perfil_id: uuid("perfil1"), pausado_ate: null,
+    }];
+    return { estado, contatoId };
+  }
+
+  test("sem confirmacaoExplicita=true -> 400 CONFIRMACAO_OBRIGATORIA, nada é escrito", async () => {
+    const { estado, contatoId } = estadoComContato();
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    const r = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, {});
+    assert.equal(r.status, 400);
+    assert.equal(r.json.details?.codigo, "CONFIRMACAO_OBRIGATORIA");
+    const contato = estado.contatos_whatsapp.find((c) => c.id === contatoId);
+    assert.equal(contato.consentimento, false);
+    assert.equal(contato.verificado, false);
+  });
+
+  test("confirmacaoExplicita=false (ou qualquer valor não-true) também é recusado", async () => {
+    const { estado } = estadoComContato();
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    const r = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: "sim" });
+    assert.equal(r.status, 400);
+  });
+
+  test("organização sem telefone configurado -> 400 SEM_CONTATO", async () => {
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
+    const r = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
+    assert.equal(r.status, 400);
+    assert.equal(r.json.details?.codigo, "SEM_CONTATO");
+  });
+
+  test("confirmacaoExplicita=true com contato configurado -> consentimento=true e verificado=true, opt_out preservado", async () => {
+    const { estado, contatoId } = estadoComContato({ opt_out: false });
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    const r = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
+    assert.equal(r.status, 200);
+    assert.equal(r.json.data.consentimento, true);
+    assert.equal(r.json.data.verificado, true);
+    assert.ok(!("telefoneE164" in r.json.data), "resposta nunca traz o telefone cru, só mascarado");
+    const contato = estado.contatos_whatsapp.find((c) => c.id === contatoId);
+    assert.equal(contato.consentimento, true);
+    assert.equal(contato.verificado, true);
+    assert.equal(contato.opt_out, false, "consentir nunca reverte opt_out (são flags independentes)");
+  });
+
+  test("habilitado continua false depois de confirmar consentimento", async () => {
+    const { estado } = estadoComContato();
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
+    const hab = estado.comunicacao_habilitacoes.find((h) => h.organizacao_id === ORG_A);
+    assert.equal(hab.habilitado, false);
+  });
+
+  test("organização inexistente -> 404", async () => {
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
+    const r = await POST(app, `/administrativo/comunicacao/organizacoes/${uuid("nao-existe")}/consentimento`, { confirmacaoExplicita: true });
+    assert.equal(r.status, 404);
+  });
+
+  // Checkpoint H.4-A.3, item 8:
+
+  test("A. sem requirePainelAdministrativo (usuário comum) -> 403", async () => {
+    const { estado } = estadoComContato();
+    const app = makeApp({ user: USUARIO_COMUM, deps: { supabase: fakeDb(estado) } });
+    const r = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
+    assert.equal(r.status, 403);
+  });
+
+  test("E. confirmar a organização A nunca toca o contato/perfil configurado para a organização B (isolamento)", async () => {
+    const estado = estadoBase();
+    const contatoA = uuid("contato-A");
+    const contatoB = uuid("contato-B");
+    estado.contatos_whatsapp = [
+      { id: contatoA, telefone_e164: "+5586988846788", verificado: false, consentimento: false, opt_out: false },
+      { id: contatoB, telefone_e164: "+5511999990000", verificado: false, consentimento: false, opt_out: false },
+    ];
+    estado.comunicacao_habilitacoes = [
+      { organizacao_id: ORG_A, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"], destinatario_contato_id: contatoA, destinatario_perfil_id: uuid("perfil1"), pausado_ate: null },
+      { organizacao_id: ORG_B, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"], destinatario_contato_id: contatoB, destinatario_perfil_id: uuid("perfilB"), pausado_ate: null },
+    ];
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    const r = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
+    assert.equal(r.status, 200);
+    const cA = estado.contatos_whatsapp.find((c) => c.id === contatoA);
+    const cB = estado.contatos_whatsapp.find((c) => c.id === contatoB);
+    assert.equal(cA.consentimento, true);
+    assert.equal(cB.consentimento, false, "confirmar A nunca pode afetar o contato de B");
+    assert.equal(cB.verificado, false);
+  });
+
+  test("I. modo global permanece DISABLED depois de confirmar consentimento", async () => {
+    const { estado } = estadoComContato();
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
+    const modo = estado.comunicacao_configuracoes.find((c) => c.chave === "modo");
+    assert.equal(modo.valor, "DISABLED");
+  });
+
+  test("M. segunda chamada é segura/idempotente: true/true permanece true/true, sem erro, sem efeito duplicado no contato", async () => {
+    const { estado, contatoId } = estadoComContato();
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    const r1 = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
+    assert.equal(r1.status, 200);
+    const r2 = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
+    assert.equal(r2.status, 200);
+    assert.equal(r2.json.data.consentimento, true);
+    assert.equal(r2.json.data.verificado, true);
+    const contato = estado.contatos_whatsapp.find((c) => c.id === contatoId);
+    assert.equal(contato.consentimento, true);
+    assert.equal(contato.verificado, true);
+    assert.equal(contato.opt_out, false);
+  });
+
+  test("atomicidade: a atualização grava consentimento e verificado numa ÚNICA chamada de update (revisão estática)", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const codigo = fs.readFileSync(path.join(__dirname, "..", "src", "modules", "comunicacao", "comunicacao.contatos.repo.js"), "utf8");
+    const inicioFn = codigo.indexOf("export async function confirmarConsentimentoEVerificacao");
+    const fn = codigo.slice(inicioFn, codigo.indexOf("return true;", inicioFn));
+    const updates = fn.match(/\.update\(/g) ?? [];
+    assert.equal(updates.length, 1, "deve haver exatamente UMA chamada .update() — consentimento e verificado no mesmo objeto");
+    assert.match(fn, /\.update\(\{\s*consentimento:\s*true,\s*verificado:\s*true\s*\}\)/);
+  });
+
+  test("código de auditoria: usa ACOES.COMUNICACAO_CONSENTIMENTO_CONFIRMADO e nunca referencia o telefone bruto (revisão estática)", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const codigo = fs.readFileSync(path.join(__dirname, "..", "src", "modules", "comunicacao", "comunicacao.contatos.repo.js"), "utf8");
+    assert.match(codigo, /acao:\s*ACOES\.COMUNICACAO_CONSENTIMENTO_CONFIRMADO/);
+    const bloco = codigo.slice(codigo.indexOf("export async function confirmarConsentimentoEVerificacao"));
+    const blocoDetalhes = bloco.slice(bloco.indexOf("detalhes: {"), bloco.indexOf("});", bloco.indexOf("detalhes: {")));
+    // o telefone só pode aparecer DENTRO de mascararTelefone(...) — nunca como campo cru (`telefone_e164:`/`telefoneE164:`)
+    assert.doesNotMatch(blocoDetalhes, /telefone(_e164)?\s*:/i);
+    assert.match(blocoDetalhes, /mascararTelefone/);
   });
 });
 

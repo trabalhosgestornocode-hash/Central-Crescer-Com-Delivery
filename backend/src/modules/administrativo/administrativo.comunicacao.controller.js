@@ -50,6 +50,13 @@ export const atualizarConfiguracao = asyncHandler(async (req, res) =>
     pausadoMotivo: req.body?.pausadoMotivo,
   }, autor(req), deps(req))));
 
+// POST /administrativo/comunicacao/organizacoes/:organizacaoId/consentimento
+export const confirmarConsentimento = asyncHandler(async (req, res) =>
+  ok(res, await service.confirmarConsentimento({
+    organizacaoId: req.params.organizacaoId,
+    confirmacaoExplicita: req.body?.confirmacaoExplicita,
+  }, autor(req), deps(req))));
+
 // GET /administrativo/comunicacao/fila?organizacaoId=&status=&pagina=&porPagina=
 export const fila = asyncHandler(async (req, res) =>
   ok(res, await service.fila({

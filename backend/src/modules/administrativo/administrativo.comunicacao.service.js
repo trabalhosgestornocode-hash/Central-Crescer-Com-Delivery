@@ -272,6 +272,26 @@ export async function atualizarConfiguracao({
   return { organizacaoId: orgId, status: statusConfiguracao(atualizado), atualizadoEm: atualizado.updated_at };
 }
 
+/**
+ * POST /administrativo/comunicacao/organizacoes/:organizacaoId/consentimento
+ *
+ * Checkpoint H.4-A.2 — confirma consentimento + verificação administrativa do
+ * contato JÁ configurado para esta organização. `confirmacaoExplicita: true`
+ * no corpo é OBRIGATÓRIO: existe só para que este endpoint nunca seja
+ * acionado por engano por um formulário genérico — a autorização real (que o
+ * destinatário de fato consentiu, que o número foi validado) é uma decisão
+ * humana tomada FORA deste endpoint, nunca inferida de telefone existente,
+ * vínculo de perfil ou configuração administrativa. `habilitado` continua
+ * inalterado (sempre `false` neste checkpoint).
+ */
+export async function confirmarConsentimento({ organizacaoId, confirmacaoExplicita } = {}, autor, deps = {}) {
+  const orgId = v.uuid(organizacaoId, "Empresa");
+  if (confirmacaoExplicita !== true) {
+    throw ApiError.badRequest("Confirmação explícita obrigatória — envie confirmacaoExplicita=true só depois de autorização inequívoca do operador.", { codigo: "CONFIRMACAO_OBRIGATORIA" });
+  }
+  return repo.confirmarConsentimentoOrganizacao({ organizacaoId: orgId }, autor, deps);
+}
+
 /** GET /administrativo/comunicacao/fila */
 export async function fila({ organizacaoId, status, pagina, porPagina } = {}, deps = {}) {
   if (organizacaoId) v.uuid(organizacaoId, "Empresa");

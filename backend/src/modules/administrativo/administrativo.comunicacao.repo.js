@@ -15,6 +15,7 @@ import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import {
   criarOuObterContato, vincularPerfil, perfilTemVinculo, mascararTelefone, obterContato, obterPerfilOperacional,
+  confirmarConsentimentoEVerificacao,
 } from "../comunicacao/comunicacao.contatos.repo.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
 
@@ -295,6 +296,29 @@ export async function atualizarConfiguracaoOrganizacao({
   });
 
   return data;
+}
+
+/**
+ * Confirma consentimento + verificação do contato JÁ configurado para esta
+ * organização — Checkpoint H.4-A.2. Exige que um telefone já esteja
+ * associado (`destinatario_contato_id`); a decisão de que a confirmação do
+ * operador é real e explícita é do CHAMADOR (service), nunca inferida aqui.
+ * @param {{organizacaoId: string}} params
+ */
+export async function confirmarConsentimentoOrganizacao({ organizacaoId }, autor, deps = {}) {
+  const atual = await obterOrganizacaoComConfiguracao(organizacaoId, deps);
+  if (!atual) throw ApiError.notFound("Empresa não encontrada.");
+  const contatoId = atual.comunicacao_habilitacoes?.destinatario_contato_id ?? null;
+  if (!contatoId) throw ApiError.badRequest("Configure um telefone para esta organização antes de confirmar consentimento.", { codigo: "SEM_CONTATO" });
+
+  await confirmarConsentimentoEVerificacao({
+    contatoId, organizacaoId,
+    atorId: autor?.contaId ?? null, perfilId: autor?.perfilId ?? null, perfilNome: autor?.nome ?? null, atorEmail: autor?.email ?? null,
+    origem: "confirmacao_explicita_operador_painel_admin",
+  }, deps);
+
+  const contato = await obterContato(contatoId, deps);
+  return { organizacaoId, consentimento: true, verificado: true, telefoneMascarado: mascararTelefone(contato?.telefone_e164) };
 }
 
 export { obterContato, obterPerfilOperacional, mascararTelefone };

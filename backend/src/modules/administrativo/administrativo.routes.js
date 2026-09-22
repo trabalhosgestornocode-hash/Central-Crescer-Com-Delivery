@@ -63,6 +63,9 @@ administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId", cc.detalheO
 administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/perfis-elegiveis", cc.perfisElegiveis);
 administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/preview-mensagem", cc.preverMensagem);
 administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/configuracao", cc.atualizarConfiguracao);
+// Checkpoint H.4-A.2 — segunda escrita permitida, só consentimento/verificação
+// (nunca habilitado). Exige confirmacaoExplicita=true; ver service para a regra.
+administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/consentimento", cc.confirmarConsentimento);
 administrativoRouter.get("/comunicacao/fila", cc.fila);
 administrativoRouter.get("/comunicacao/historico", cc.historico);
 
