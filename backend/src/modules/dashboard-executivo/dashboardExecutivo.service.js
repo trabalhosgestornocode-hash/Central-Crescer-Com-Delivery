@@ -19,7 +19,11 @@ import {
 import {
   montarLinhaDoTempo, modeloNaData, segmentosDoPeriodo, estadoDoPeriodo, rotuloDoModelo, modelosDasDatas, descreverPeriodo, trocasDeLinhas,
 } from "./dashboardExecutivo.modeloTemporal.js";
-import { dividirFinanceiroPorSegmento, consolidarSegmentos, comporMetas } from "./dashboardExecutivo.periodoMisto.js";
+import { dividirFinanceiroPorSegmento, consolidarSegmentos, comporMetas, resumirConciliacao } from "./dashboardExecutivo.periodoMisto.js";
+import {
+  STATUS_CONCILIACAO, piorStatus, avaliarQuedaAcumulado, avisoIgualdadeSuspeitaComBruto, ultimoValorConciliadoAntesDe,
+  caminharSequenciaAcumulada, detectarDivergenciaTransicao,
+} from "./dashboardExecutivo.confiabilidade.js";
 import { gerarDiagnostico, LIMIARES_DIAGNOSTICO } from "./dashboardExecutivo.diagnostico.js";
 import { carregarDatasLiberadas } from "../../shared/desbloqueiosIfood.js";
 import { emitirEventoRealtime } from "../realtime/emitirEvento.js";
@@ -30,6 +34,36 @@ const TABELA_AUDITORIA = "lancamentos_financeiros_auditoria";
 const TABELA_MENSAL = "lancamentos_financeiros_distribuicao_mensal";
 const TABELA_MENSAL_AUDITORIA = "lancamentos_financeiros_distribuicao_mensal_auditoria";
 const RESOLVIDOS_COM_DADOS = new Set([STATUS_DIA.PREENCHIDO, STATUS_DIA.ZERO_VENDAS]);
+
+/**
+ * Desempenho OPERACIONAL (valor bruto, pedidos, novos clientes, ticket médio)
+ * por SEGMENTO de modelo — alimenta o comparativo Marketplace × Full Service
+ * e a amostra (dias com dado) por regime. NUNCA passa pela reconciliação
+ * financeira (é operacional, não Financeiro Oficial) — soma os DELTAS diários
+ * já calculados por `listaDesempenhoDiario` (nunca soma acumulado sobre
+ * acumulado), dentro do intervalo [inicio, fim] de cada segmento.
+ * @param {Array<{data:string, deltaValorVendasBruto:number|null, deltaQtdVendas:number|null, deltaNovosClientes:number|null}>} serieDesempenho
+ * @param {Array<{modelo:string, inicio:string, fim:string}>} segmentos
+ * @param {Array<object>} linhasComDados linhas CRUAS com dado financeiro real (mesmo critério de `linhasComDados` acima)
+ */
+function operacionalPorSegmento(serieDesempenho, segmentos, linhasComDados) {
+  return segmentos.map((seg) => {
+    const dias = serieDesempenho.filter((p) => p.data >= seg.inicio && p.data <= seg.fim);
+    const somar = (campo) => {
+      const vals = dias.map((p) => p[campo]).filter((v) => v != null);
+      return vals.length ? vals.reduce((a, b) => a + b, 0) : null;
+    };
+    const valorVendasBruto = somar("deltaValorVendasBruto");
+    const qtdVendas = somar("deltaQtdVendas");
+    const diasComDados = linhasComDados.filter((r) => r.data_lancamento >= seg.inicio && r.data_lancamento <= seg.fim).length;
+    return {
+      modelo: seg.modelo, inicio: seg.inicio, fim: seg.fim,
+      valorVendasBruto, qtdVendas, novosClientes: somar("deltaNovosClientes"),
+      ticketMedio: ticketMedio(valorVendasBruto, qtdVendas),
+      diasComDados,
+    };
+  });
+}
 
 // ---------------------------------------------------------------------------
 // UNIDADE-ALVO — resolve e valida a unidade da ação a partir da sessão.
@@ -347,13 +381,19 @@ async function obterMesDeUmaUnidade({
 
   // PERÍODO MISTO (Marketplace + Full Service no mesmo mês): o Financeiro é
   // acumulado, então cada regime é a DIFERENÇA entre snapshots (ver
-  // dashboardExecutivo.periodoMisto.js). `divisao.disponivel === false` quando
-  // falta o snapshot da véspera da troca (ou o lote mensal atravessa a troca):
-  // nesse caso NADA é atribuído a um regime por palpite — os indicadores que
-  // dependem do modelo ficam sem dado e o motivo vai para o payload.
+  // dashboardExecutivo.periodoMisto.js). RECONCILIAÇÃO GRANULAR (2026-09-22,
+  // investigação real Subway Feiraguay — ver dashboardExecutivo.confiabilidade.js):
+  // cada CAMPO de cada SEGMENTO tem seu próprio status de conciliação
+  // ('conciliado'|'suspeito'|'nao_conciliavel'|'nao_aplicavel'|'sem_dado').
+  // Um campo ruim (ex.: queda inesperada no acumulado de valor_vendas_ifood)
+  // NUNCA apaga os outros — a indisponibilidade só se propaga pelas
+  // dependências matemáticas REAIS (um percentual depende do SEU valor E do
+  // faturamento do MESMO recorte; Total de Deduções em R$ não depende do
+  // faturamento). `consolidado` está SEMPRE presente quando `misto` — a
+  // granularidade está nos campos, não mais num "disponível" de tudo ou nada.
   const misto = estado.misto;
   const divisao = misto ? dividirFinanceiroPorSegmento(linhas, segmentos) : null;
-  const consolidado = divisao?.disponivel ? consolidarSegmentos(divisao) : null;
+  const consolidado = misto ? consolidarSegmentos(divisao) : null;
   // Um indicador se aplica ao período se se aplica a ALGUM regime dele
   // (Taxas de Entregadores: existe se houve Marketplace no período).
   const aplicavel = (indicador) => segmentos.some((s) => indicadorAplicavel(s.modelo, indicador));
@@ -383,6 +423,31 @@ async function obterMesDeUmaUnidade({
   const parTicketMedio = desempenhoParaTicketMedio(linhas);
   const serieDesempenho = listaDesempenhoDiario(diasComStatus.map((d) => d.data), linhas);
   const novosClientes = novosClientesAcumulados(diasComStatus.map((d) => d.data), linhas);
+  // Comparativo Marketplace × Full Service (Visão Geral + Diagnóstico): combina
+  // o financeiro reconciliado por segmento (`consolidado.porSegmento`) com o
+  // operacional por segmento (nunca passa pela reconciliação — Ticket Médio,
+  // Novos Clientes e Pedidos são conceitos operacionais, sempre calculáveis
+  // independente do status do Financeiro Oficial).
+  const comparativoSegmentos = misto
+    ? operacionalPorSegmento(serieDesempenho, segmentos, linhasComDados).map((op, i) => {
+      const fin = consolidado.porSegmento[i];
+      const faturamentoSeg = fin.campos.valorVendasIfood;
+      // Percentual do SEU regime (nunca a base do período inteiro) — cada
+      // segmento é lido contra o próprio faturamento, igual a um mês simples.
+      const pct = (registro) => {
+        if (registro.status === STATUS_CONCILIACAO.NAO_APLICAVEL) return { valor: null, status: STATUS_CONCILIACAO.NAO_APLICAVEL };
+        const status = piorStatus(registro.status, faturamentoSeg.status);
+        return { valor: status === STATUS_CONCILIACAO.CONCILIADO ? percentual(registro.valor, faturamentoSeg.valor) : null, status };
+      };
+      return {
+        ...op, financeiro: fin,
+        percentuais: {
+          taxasComissoes: pct(fin.campos.taxasComissoes), servicosPromocoes: pct(fin.campos.servicosPromocoes),
+          taxasEntregadores: pct(fin.campos.taxasEntregadores), totalDeducoes: pct(fin.totalDeducoes), receitaLiquida: pct(fin.receitaLiquida),
+        },
+      };
+    })
+    : null;
   const valoresDoSnapshot = {
     valorVendasIfood: snapshot ? Number(snapshot.valor_vendas_ifood) : null,
     taxasComissoes: snapshot?.taxas_comissoes != null ? Number(snapshot.taxas_comissoes) : null,
@@ -391,45 +456,73 @@ async function obterMesDeUmaUnidade({
     ajustesFavorLoja: snapshot?.ajustes_favor_loja != null ? Number(snapshot.ajustes_favor_loja) : null,
     ajustesContraLoja: snapshot?.ajustes_contra_loja != null ? Number(snapshot.ajustes_contra_loja) : null,
   };
-  // Mês simples: os valores do snapshot, como sempre. Período misto: faturamento,
-  // Taxas e Serviços são o acumulado do período; Entregadores só o do(s)
-  // regime(s) onde existe. Sem divisão disponível, Entregadores não pode ser
-  // atribuído a um regime -> null (nunca um palpite).
-  const cardValores = !misto ? valoresDoSnapshot
-    : consolidado ? consolidado.cardValores
-      : { ...valoresDoSnapshot, taxasEntregadores: null };
+  // RECONCILIAÇÃO GRANULAR — um registro {valor, status, ultimoValorValido}
+  // por campo financeiro. Fora do período misto, o snapshot é tratado como
+  // fato (comportamento idêntico ao anterior — regressão zero); só falta
+  // status quando o campo nunca foi informado ('sem_dado').
+  const registroSimples = (valor) => ({
+    valor, status: valor == null ? STATUS_CONCILIACAO.SEM_DADO : STATUS_CONCILIACAO.CONCILIADO, ultimoValorValido: null,
+  });
+  const campoFinanceiro = (campoCamel) => (misto ? consolidado.campos[campoCamel] : registroSimples(valoresDoSnapshot[campoCamel]));
+
+  const cardValores = {
+    valorVendasIfood: campoFinanceiro("valorVendasIfood").valor,
+    taxasComissoes: campoFinanceiro("taxasComissoes").valor,
+    servicosPromocoes: campoFinanceiro("servicosPromocoes").valor,
+    taxasEntregadores: campoFinanceiro("taxasEntregadores").valor,
+    ajustesFavorLoja: campoFinanceiro("ajustesFavorLoja").valor,
+    ajustesContraLoja: campoFinanceiro("ajustesContraLoja").valor,
+  };
   const base = cardValores.valorVendasIfood;
   // Denominador do % de Entregadores: faturamento dos regimes onde ele existe
   // (no mês simples é o próprio faturamento — nada muda).
-  const baseEntregadores = consolidado ? consolidado.baseEntregadores : base;
-  // Total FINANCEIRO — TODAS as saídas de caixa (inclusive entregadores e
-  // ajustes contra a loja). Alimenta SÓ a Receita Líquida, nunca a tabela de
-  // Indicadores. Ver dashboardExecutivo.calc.js#totalDeducoes. É o caixa real:
-  // usa os valores do snapshot, independente do regime a que cada parcela pertence.
-  const totalDedFinanceiro = totalDeducoes({
-    taxasComissoes: valoresDoSnapshot.taxasComissoes, servicosPromocoes: valoresDoSnapshot.servicosPromocoes,
-    taxasEntregadores: valoresDoSnapshot.taxasEntregadores, ajustesContraLoja: valoresDoSnapshot.ajustesContraLoja,
-  });
-  const receitaLiquidaValor = receitaLiquida(base, totalDedFinanceiro, valoresDoSnapshot.ajustesFavorLoja);
+  const baseEntregadores = misto ? consolidado.baseEntregadores.valor : base;
+  const statusBaseEntregadores = misto ? consolidado.baseEntregadores.status : campoFinanceiro("valorVendasIfood").status;
+
+  // Total FINANCEIRO ("caixa real": inclusive entregadores e ajustes contra a
+  // loja) e Receita Líquida — no mês simples, igual a sempre (raw snapshot);
+  // em período misto já vêm reconciliados de `consolidarSegmentos` (nunca
+  // soma um regime não confiável por baixo — ver periodoMisto.js).
+  const receitaLiquidaValor = !misto
+    ? receitaLiquida(base, totalDeducoes({
+      taxasComissoes: valoresDoSnapshot.taxasComissoes, servicosPromocoes: valoresDoSnapshot.servicosPromocoes,
+      taxasEntregadores: valoresDoSnapshot.taxasEntregadores, ajustesContraLoja: valoresDoSnapshot.ajustesContraLoja,
+    }), valoresDoSnapshot.ajustesFavorLoja)
+    : consolidado.receitaLiquida.valor;
   // Total do INDICADOR "Total de Deduções" — recalculado SEMPRE pelas parcelas
   // de dedução APLICÁVEIS ao modelo (Marketplace inclui entregadores; Full
   // Service não). Fonte única: calc.js#totalDeducoesIndicador. É este o número
   // da tabela de Indicadores de Rentabilidade, do card e do saldo/Disponível —
   // nunca o total financeiro acima, nunca um valor legado. Em período misto é
   // a SOMA em reais dos segmentos, cada um com as parcelas do SEU modelo
-  // (consolidarSegmentos); sem divisão disponível, não há como apurar -> null.
+  // (consolidarSegmentos) — granular: um componente suspeito num segmento
+  // não apaga o total do outro segmento nem os demais indicadores.
   const totalDed = !misto
     ? totalDeducoesIndicador(modelo.modeloLogistico, {
       taxas_comissoes: cardValores.taxasComissoes,
       servicos_promocoes: cardValores.servicosPromocoes,
       taxas_entregadores: cardValores.taxasEntregadores,
     })
-    : (consolidado ? consolidado.totalDeducoes : null);
+    : consolidado.totalDeducoes.valor;
+  const statusTotalDed = misto ? consolidado.totalDeducoes.status : registroSimples(totalDed).status;
+
+  // Um PERCENTUAL só existe quando o SEU campo E a base/faturamento do MESMO
+  // recorte estão conciliados — a única propagação de indisponibilidade é
+  // essa dependência matemática real (nunca "o mês tem 2 modelos, então
+  // nada"). `percentual()` já devolve null se faltar valor/base; o `status`
+  // aqui só GARANTE que um valor "de contexto" (ultimoValorValido, nunca
+  // oficial) não vaze pra dentro de uma meta/diagnóstico.
+  const statusPercentual = (campoCamel, statusBaseIndicador) => piorStatus(campoFinanceiro(campoCamel).status, statusBaseIndicador);
+  const percentualConciliado = (campoCamel, statusBaseIndicador) =>
+    (statusPercentual(campoCamel, statusBaseIndicador) === STATUS_CONCILIACAO.CONCILIADO ? percentual(cardValores[campoCamel], base) : null);
+
   const indicadoresRentabilidade = {
-    taxas_comissoes: percentual(cardValores.taxasComissoes, base),
-    servicos_promocoes: percentual(cardValores.servicosPromocoes, base),
-    taxas_entregadores: percentual(cardValores.taxasEntregadores, baseEntregadores),
-    total_deducoes: percentual(totalDed, base),
+    taxas_comissoes: percentualConciliado("taxasComissoes", campoFinanceiro("valorVendasIfood").status),
+    servicos_promocoes: percentualConciliado("servicosPromocoes", campoFinanceiro("valorVendasIfood").status),
+    taxas_entregadores: piorStatus(campoFinanceiro("taxasEntregadores").status, statusBaseEntregadores) === STATUS_CONCILIACAO.CONCILIADO
+      ? percentual(cardValores.taxasEntregadores, baseEntregadores) : null,
+    total_deducoes: piorStatus(statusTotalDed, campoFinanceiro("valorVendasIfood").status) === STATUS_CONCILIACAO.CONCILIADO
+      ? percentual(totalDed, base) : null,
   };
   // PROTEÇÃO DA PRECIFICAÇÃO — conceito exclusivo do Simulador de Preço.
   // Calculada só a partir dos preços das tabelas; NÃO toca `metas` nem os 4
@@ -459,25 +552,31 @@ async function obterMesDeUmaUnidade({
   const nomesIndicadores = Object.keys(indicadoresRentabilidade);
   let metas = metasUnicas;
   let derivada;
+  // Metas DERIVADAS por segmento (proteção da precificação já aplicada) —
+  // hoisted pra fora do `else` porque o Diagnóstico por regime (Plano de Ação
+  // segmentado, ver `indicadoresPorSegmento` abaixo) reusa exatamente estas,
+  // nunca recalcula.
+  let metasDerivadasPorSegmento = null;
   if (!misto) {
     derivada = metasComProtecaoPrecificacao(metas, pctProtecao, modelo.modeloLogistico);
-  } else if (consolidado) {
+  } else {
     // Meta composta do período misto: cada regime com a SUA meta, ponderada pelo
     // faturamento do regime (dashboardExecutivo.periodoMisto.js#comporMetas) —
-    // nunca a meta de um regime só aplicada ao mês inteiro.
-    const pesos = divisao.segmentos.map((s) => (s.semDado ? 0 : (s.valores.valorVendasIfood ?? 0)));
-    metas = comporMetas(metasPorSegmento.map((m, i) => ({ modelo: m.modelo, peso: pesos[i], metas: m.metas })), nomesIndicadores);
-    const porSegmento = metasPorSegmento.map((m) => metasComProtecaoPrecificacao(m.metas, pctProtecao, m.modelo));
+    // só quando o faturamento (peso) de TODOS os regimes elegíveis está
+    // CONCILIADO (nunca um peso inventado a partir de um valor suspeito). Um
+    // indicador cujo peso falhou fica sem meta composta — mas isso NÃO afeta
+    // os demais indicadores nem os outros campos do período (granular).
+    const pesos = divisao.segmentos.map((s) => s.campos.valorVendasIfood);
+    const parte = (m, i, metasDoRegime) => ({
+      modelo: m.modelo, peso: pesos[i].valorOficial, pesoConciliado: pesos[i].status === STATUS_CONCILIACAO.CONCILIADO, metas: metasDoRegime,
+    });
+    metas = comporMetas(metasPorSegmento.map((m, i) => parte(m, i, m.metas)), nomesIndicadores);
+    metasDerivadasPorSegmento = metasPorSegmento.map((m) => metasComProtecaoPrecificacao(m.metas, pctProtecao, m.modelo));
     derivada = {
-      metas: comporMetas(porSegmento.map((d, i) => ({ modelo: metasPorSegmento[i].modelo, peso: pesos[i], metas: d.metas })), nomesIndicadores),
-      protecaoInsuficiente: porSegmento.some((d) => d.protecaoInsuficiente),
-      metaServicosAcimaDoLimite: porSegmento.some((d) => d.metaServicosAcimaDoLimite),
+      metas: comporMetas(metasDerivadasPorSegmento.map((d, i) => parte(metasPorSegmento[i], i, d.metas)), nomesIndicadores),
+      protecaoInsuficiente: metasDerivadasPorSegmento.some((d) => d.protecaoInsuficiente),
+      metaServicosAcimaDoLimite: metasDerivadasPorSegmento.some((d) => d.metaServicosAcimaDoLimite),
     };
-  } else {
-    // Sem divisão por regime: uma meta única seria enganosa — comparativo com meta indisponível
-    // (mesmo tratamento da visão agregada "todas as unidades").
-    metas = {};
-    derivada = { metas: {}, protecaoInsuficiente: false, metaServicosAcimaDoLimite: false };
   }
   const metasRentabilidade = derivada.metas;
   protecaoPrecificacao.protecaoInsuficiente = derivada.protecaoInsuficiente;
@@ -583,6 +682,47 @@ async function obterMesDeUmaUnidade({
     indicadoresParaDiagnostico[k].atual = indicadoresParaDiagnostico[k].naoAplicavel ? null : v;
   }
 
+  // INDICADORES POR SEGMENTO (Plano de Ação segmentado — item do pedido: um
+  // problema que existe SÓ no Full Service não pode virar uma recomendação
+  // genérica do mês inteiro). Reusa `comparativoSegmentos` (percentuais já
+  // reconciliados por regime) e `metasDerivadasPorSegmento` (proteção da
+  // precificação já aplicada por regime, calculada acima) — nenhuma fórmula
+  // nova, só reempacota pro formato que `gerarDiagnostico` já entende.
+  const CAMPO_DO_INDICADOR = { taxas_comissoes: "taxasComissoes", servicos_promocoes: "servicosPromocoes", taxas_entregadores: "taxasEntregadores", total_deducoes: "totalDeducoes" };
+  const indicadoresPorSegmento = misto && comparativoSegmentos ? comparativoSegmentos.map((seg, i) => {
+    const metasSeg = metasDerivadasPorSegmento?.[i]?.metas ?? {};
+    const faturamentoSeg = seg.financeiro.campos.valorVendasIfood.valor;
+    const indicadores = {};
+    for (const [chave, campoCamel] of Object.entries(CAMPO_DO_INDICADOR)) {
+      const pct = seg.percentuais[campoCamel];
+      const valorAbs = campoCamel === "totalDeducoes" ? seg.financeiro.totalDeducoes.valor : seg.financeiro.campos[campoCamel].valor;
+      const naoAplicavel = pct.status === STATUS_CONCILIACAO.NAO_APLICAVEL;
+      const meta = metasSeg[chave] ?? null;
+      indicadores[chave] = {
+        atual: naoAplicavel ? null : pct.valor, valor: valorAbs, meta, naoAplicavel,
+        saldo: naoAplicavel ? null : saldoMeta({ valorUtilizado: valorAbs, percentualUtilizado: pct.valor, limitePct: meta?.limite ?? null, faturamentoBase: faturamentoSeg }),
+      };
+    }
+    return {
+      modelo: seg.modelo, rotulo: rotuloDoModelo(seg.modelo), inicio: seg.inicio, fim: seg.fim, diasComDados: seg.diasComDados,
+      faturamentoBase: faturamentoSeg, indicadores,
+    };
+  }) : null;
+
+  // DIVERGÊNCIA DE TRANSIÇÃO (item do pedido, investigação real Subway
+  // Feiraguay): compara quando um componente exclusivo de um modelo (Taxas
+  // de Entregadores, só Marketplace) parou de acumular contra a data
+  // ADMINISTRATIVA da troca — só no caso comum de UMA troca no período (2
+  // segmentos); NUNCA altera a vigência sozinho, só sinaliza (ver
+  // dashboardExecutivo.confiabilidade.js#detectarDivergenciaTransicao).
+  const divergenciaTransicao = misto && divisao.fonte === "snapshot" && segmentos.length === 2
+    ? (() => {
+      const seqEntregadores = caminharSequenciaAcumulada(linhas, "taxas_entregadores");
+      const d = detectarDivergenciaTransicao(seqEntregadores, segmentos[1].inicio, segmentos[0].fim);
+      return d.divergente ? { ...d, vigenciaInicio: segmentos[1].inicio } : null;
+    })()
+    : null;
+
   const diagnosticoNovo = gerarDiagnostico({
     indicadores: indicadoresParaDiagnostico,
     faturamentoBase: base,
@@ -595,6 +735,9 @@ async function obterMesDeUmaUnidade({
     diasEstimados,
     comparativo,
     recuperacao,
+    divergenciaTransicao,
+    indicadoresPorSegmento,
+    comparativoSegmentos,
   });
 
   const pendenciasMesesAnteriores = await calcularPendenciasMesAnterior({ unidadeId, ano, mes, hojeIso });
@@ -625,7 +768,21 @@ async function obterMesDeUmaUnidade({
       // já existe alguma troca datada? (define se ainda dá para declarar "desde quando o modelo atual vale")
       possuiTrocaDatada: linhaDoTempo.length > 1,
     },
-    modeloPeriodo: descreverPeriodo({ estado, segmentos, linhaDoTempo, divisao }),
+    modeloPeriodo: descreverPeriodo({
+      estado, segmentos, linhaDoTempo,
+      resumoConciliacao: misto ? resumirConciliacao(consolidado) : null,
+      fonteConciliacao: misto ? divisao.fonte : null,
+      conciliacao: misto ? { segmentos: divisao.segmentos, consolidado } : null,
+    }),
+    // Comparativo Marketplace × Full Service — financeiro reconciliado +
+    // operacional, por segmento (`null` fora do período misto). Ver
+    // `operacionalPorSegmento` acima e `dashboardExecutivo.periodoMisto.js#porSegmento`.
+    comparativoSegmentos,
+    // Indicadores (atual/meta/limite/saldo) POR SEGMENTO — mesma forma de
+    // `indicadoresRentabilidade`, um objeto por regime. Alimenta o
+    // detalhamento por regime na aba Indicadores (drawer/expansão) — nunca
+    // recalculado no frontend, é exatamente o que o Plano de Ação segmentado usa.
+    indicadoresPorSegmento,
     periodo: { mes, ano },
     resumoPreenchimento: resumo,
     calendario: diasComStatus,
@@ -967,9 +1124,37 @@ function financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistent
 // ---------------------------------------------------------------------------
 // NORMALIZAÇÃO DOS DADOS DE ENTRADA DO FORMULÁRIO (etapas 1-3)
 // ---------------------------------------------------------------------------
+const COLUNAS_ACUMULADAS = {
+  valorVendasIfood: "valor_vendas_ifood", taxasComissoes: "taxas_comissoes",
+  servicosPromocoes: "servicos_promocoes", taxasEntregadores: "taxas_entregadores",
+};
+
+/** Contexto pra validação preventiva (item E) — ver `normalizarDadosLancamento`. */
+function montarFinanceiroAnterior(linhas, dataIso) {
+  const porCampo = Object.fromEntries(
+    Object.entries(COLUNAS_ACUMULADAS).map(([campo, coluna]) => [campo, ultimoValorConciliadoAntesDe(linhas, coluna, dataIso)]),
+  );
+  return { porCampo, linhasDoMes: linhas, dataIso };
+}
+
 // Exportada só pra teste unitário direto (função pura, sem I/O) — o resto
 // do módulo continua chamando-a internamente do mesmo jeito.
-export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior }) {
+//
+// `financeiroAnterior` (opcional, calculado por quem chama):
+// `{ porCampo: Record<campo, {valor,data}|null>, linhasDoMes: object[], dataIso: string }` —
+// `porCampo` é o último ponto CONCILIADO conhecido de cada campo acumulado
+// antes desta data (ver `ultimoValorConciliadoAntesDe`); `linhasDoMes`/`dataIso`
+// alimentam a checagem cruzada com `valor_vendas_bruto` (ver
+// `avisoIgualdadeSuspeitaComBruto`). Alimenta a VALIDAÇÃO PREVENTIVA (item E
+// da investigação 2026-09-22): se o valor novo for MENOR que o último
+// conhecido, o usuário é avisado ANTES de salvar — nunca depois. Uma queda
+// leve vira um aviso comum (mesmo mecanismo de `inconsistencias()` acima);
+// uma queda MATERIAL exige confirmação reforçada (`confirmarQuedaMaterial`)
+// E uma justificativa por escrito (`justificativaQuedaAcumulado`) — nunca só
+// um checkbox genérico. Casos legítimos de correção continuam possíveis,
+// só passam a deixar rastro explícito (ver `criarLancamento`/`atualizarLancamento`,
+// que gravam a justificativa na auditoria).
+export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior = null }) {
   const b = v.corpo(body);
   const situacao = v.umDe(b.situacao, "Situação", ["normal", "parcial", "sem_operacao", "zero_vendas"]);
   const statusAlvo = v.umDeOpcional(b.status, "Status", ["rascunho", "finalizado"], "rascunho");
@@ -995,7 +1180,7 @@ export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAn
       situacao, statusAlvo, motivoSemOperacao: motivo, observacao: v.textoOpcional(b.observacao, "Observação", { max: 1000 }),
       qtdVendas: anterior.qtdVendas, valorVendasBruto: anterior.valorVendasBruto, novosClientes: anterior.novosClientes, valorVendasIfood: 0,
       taxasComissoes: 0, servicosPromocoes: 0, taxasEntregadores: 0, ajustesFavorLoja: 0, ajustesContraLoja: 0, justificativaAjuste: null,
-      avisos: [],
+      avisos: [], sinaisQuedaMaterialConfirmados: [],
     };
   }
 
@@ -1004,7 +1189,7 @@ export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAn
       situacao, statusAlvo, motivoSemOperacao: null, observacao: v.textoOpcional(b.observacao, "Observação", { max: 1000 }),
       qtdVendas: anterior.qtdVendas, valorVendasBruto: anterior.valorVendasBruto, novosClientes: anterior.novosClientes,
       valorVendasIfood: 0, taxasComissoes: 0, servicosPromocoes: 0, taxasEntregadores: 0, ajustesFavorLoja: 0, ajustesContraLoja: 0, justificativaAjuste: null,
-      avisos: [],
+      avisos: [], sinaisQuedaMaterialConfirmados: [],
     };
   }
 
@@ -1053,8 +1238,43 @@ export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAn
   const totalDed = totalDeducoes({ taxasComissoes, servicosPromocoes, taxasEntregadores, ajustesContraLoja });
   const avisos = inconsistencias({ qtdVendas, valorVendasBruto, valorVendasIfood, totalDed });
 
+  // VALIDAÇÃO PREVENTIVA (item E, investigação 2026-09-22): campos acumulados
+  // com valor NOVO menor que o último ponto conciliado conhecido. Nunca
+  // bloqueia por si só um valor igual/maior — "não sei" (financeiroAnterior
+  // ausente) também não bloqueia.
+  const CAMPOS_ACUMULADOS = [
+    ["valorVendasIfood", "Valor das vendas (iFood)", valorVendasIfood],
+    ["taxasComissoes", "Taxas e Comissões", taxasComissoes],
+    ["servicosPromocoes", "Serviços e Promoções", servicosPromocoes],
+    ["taxasEntregadores", "Taxas de Entregadores", taxasEntregadores],
+  ];
+  const sinaisQueda = CAMPOS_ACUMULADOS
+    .map(([campo, rotulo, valorNovo]) => avaliarQuedaAcumulado({ campo, rotulo, valorNovo, ultimoConhecido: financeiroAnterior?.porCampo?.[campo] ?? null }))
+    .filter(Boolean);
+  for (const sinal of sinaisQueda) if (sinal.nivel === "leve") avisos.push(sinal.mensagem);
+
+  const avisoIgualdade = avisoIgualdadeSuspeitaComBruto({
+    valorVendasIfood, valorVendasBruto, linhasDoMes: financeiroAnterior?.linhasDoMes ?? [], dataAtualIso: financeiroAnterior?.dataIso ?? null,
+  });
+  if (avisoIgualdade) avisos.push(avisoIgualdade);
+
   if (statusAlvo === "finalizado" && avisos.length > 0 && !v.booleano(b.confirmarAvisos, false)) {
     throw ApiError.badRequest(`Existem inconsistências que precisam de confirmação antes de finalizar: ${avisos.join(" ")}`, { avisos, confirmacaoNecessaria: true });
+  }
+
+  // Quedas MATERIAIS exigem confirmação reforçada E justificativa por escrito
+  // — nunca só o checkbox genérico acima (`confirmarAvisos`). O texto vira
+  // rastro de auditoria (ver `criarLancamento`/`atualizarLancamento`).
+  const sinaisMateriais = sinaisQueda.filter((s) => s.nivel === "material");
+  let justificativaQuedaAcumulado = null;
+  if (statusAlvo === "finalizado" && sinaisMateriais.length > 0) {
+    if (!v.booleano(b.confirmarQuedaMaterial, false)) {
+      throw ApiError.badRequest(
+        `Uma ou mais quedas de acumulado precisam de confirmação reforçada e justificativa antes de finalizar: ${sinaisMateriais.map((s) => s.mensagem).join(" ")}`,
+        { sinaisQuedaMaterial: sinaisMateriais, confirmacaoReforcadaNecessaria: true },
+      );
+    }
+    justificativaQuedaAcumulado = v.texto(b.justificativaQuedaAcumulado, "Justificativa da queda de acumulado", { min: 10, max: 500 });
   }
 
   // Invariante: um dia "normal"/"parcial" só é FINALIZADO sem financeiro quando o
@@ -1072,6 +1292,10 @@ export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAn
     qtdVendas, valorVendasBruto, novosClientes, valorVendasIfood,
     taxasComissoes, servicosPromocoes, taxasEntregadores, ajustesFavorLoja, ajustesContraLoja, justificativaAjuste,
     avisos,
+    // Rastro de auditoria de quedas MATERIAIS confirmadas (vazio no caso comum) —
+    // quem chama grava uma linha por campo em `lancamentos_financeiros_auditoria`
+    // mesmo numa criação (não só correção de um lançamento já finalizado).
+    sinaisQuedaMaterialConfirmados: sinaisMateriais.length ? sinaisMateriais.map((s) => ({ ...s, justificativa: justificativaQuedaAcumulado })) : [],
   };
 }
 
@@ -1102,7 +1326,7 @@ export async function criarLancamento({ organizacaoId, unidadeIdSessao, acesso, 
   // pra achar o acumulado de Desempenho do dia anterior (usado só se a
   // situação for Sem operação/Zero vendas, ver normalizarDadosLancamento).
   const desempenhoAnterior = ultimoDesempenhoConhecido(linhas, dataIso);
-  const dados = normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior });
+  const dados = normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhas, dataIso) });
 
   const linha = {
     organizacao_id: organizacaoId,
@@ -1146,6 +1370,15 @@ export async function criarLancamento({ organizacaoId, unidadeIdSessao, acesso, 
     valorAnterior: null, valorNovo: dados.statusAlvo, usuario,
     motivo: dados.statusAlvo === "finalizado" ? "Lançamento criado já finalizado" : "Rascunho criado",
   });
+
+  // Rastro de queda MATERIAL de acumulado confirmada (item E) — uma linha por
+  // campo, com a justificativa que o usuário foi obrigado a escrever.
+  for (const s of dados.sinaisQuedaMaterialConfirmados) {
+    await registrarAuditoria({
+      lancamentoId: row.id, organizacaoId, unidadeId, campo: `${s.campo}_queda_confirmada`,
+      valorAnterior: String(s.valorAnterior), valorNovo: String(s.valorNovo), usuario, motivo: s.justificativa,
+    });
+  }
 
   // Emitido DEPOIS da escrita confirmada (insert + auditoria já persistidos) —
   // nunca antes. Falha de Broadcast nunca vira falha desta operação (ver
@@ -1239,7 +1472,9 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
     dataIso: antes.data_lancamento, hojeIso, valorVendasIfoodExistente: antes.valor_vendas_ifood, desbloqueios,
   });
   const desempenhoAnterior = ultimoDesempenhoConhecido(linhasDoMes, antes.data_lancamento);
-  const dados = normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior });
+  const dados = normalizarDadosLancamento(body, {
+    exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhasDoMes, antes.data_lancamento),
+  });
 
   const patch = {
     situacao: dados.situacao,
@@ -1304,6 +1539,17 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
       lancamentoId, organizacaoId, unidadeId: antes.unidade_id, campo: "status",
       valorAnterior: "rascunho", valorNovo: patch.status,
       usuario, motivo: patch.status === "finalizado" ? "Lançamento finalizado" : "Rascunho atualizado",
+    });
+  }
+
+  // Rastro de queda MATERIAL de acumulado confirmada (item E) — além da
+  // auditoria por campo acima (que já grava o motivo genérico da correção),
+  // uma linha específica com a justificativa que o usuário foi obrigado a
+  // escrever para ESSA queda em particular.
+  for (const s of dados.sinaisQuedaMaterialConfirmados) {
+    await registrarAuditoria({
+      lancamentoId, organizacaoId, unidadeId: antes.unidade_id, campo: `${s.campo}_queda_confirmada`,
+      valorAnterior: String(s.valorAnterior), valorNovo: String(s.valorNovo), usuario, motivo: s.justificativa,
     });
   }
 

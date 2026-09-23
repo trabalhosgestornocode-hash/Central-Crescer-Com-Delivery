@@ -32,21 +32,30 @@ export function linhasSegmentos(modeloPeriodo) {
 }
 
 /**
- * Por que os indicadores não puderam ser separados por modelo (ou `null` se puderam / mês simples).
+ * Por que Taxas de Entregadores / Total de Deduções / Receita Líquida / metas
+ * não puderam ser conciliados neste período misto (ou `null` se puderam / mês
+ * simples). NUNCA é "o mês inteiro sem dados" — os campos que NÃO dependem
+ * da fronteira entre os modelos (Faturamento, Taxas e Comissões, Serviços e
+ * Promoções, Ticket Médio, Novos Clientes) continuam disponíveis mesmo
+ * quando este aviso aparece — ver dashboardExecutivo.confiabilidade.js.
  * @returns {string|null}
  */
 export function avisoDivisaoIndisponivel(modeloPeriodo) {
   if (!modeloPeriodo?.misto || modeloPeriodo.divisaoDisponivel !== false) return null;
-  const detalhe = modeloPeriodo.divisaoDetalhe ?? {};
+  const uvv = modeloPeriodo.divisaoDetalhe?.ultimoValorValido;
+  const contexto = uvv != null
+    ? ` Último valor confiável: R$ ${Number(uvv.valor).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} em ${fmtDataCompleta(uvv.data)}.`
+    : "";
+  const base = "Taxas de Entregadores, Total de Deduções, Receita Líquida e as metas deste período ainda não foram conciliados entre Marketplace e Full Service; os demais indicadores continuam disponíveis normalmente.";
   switch (modeloPeriodo.divisaoMotivo) {
-    case "snapshot_de_virada_ausente":
-      return `Para separar Marketplace e Full Service, lance o acumulado financeiro do dia ${fmtDataCompleta(detalhe.dataNecessaria)} (último dia do modelo anterior). Enquanto isso, Taxas de Entregadores, Total de Deduções e as metas não são apurados neste período.`;
-    case "lancamento_mensal_atravessa_troca":
-      return "Há um lançamento mensal que atravessa a troca de modelo e não pode ser dividido com segurança. Taxas de Entregadores, Total de Deduções e as metas não são apurados neste período; lance os dias individualmente.";
-    case "acumulado_inconsistente":
-      return `O acumulado financeiro diminuiu em ${fmtDataCompleta(detalhe.data)}; não foi possível separar os modelos. Revise os lançamentos desse período.`;
+    case "suspeito":
+      return `Foi detectado um valor suspeito no acumulado financeiro deste período (parece ter zerado ou caído de forma inesperada).${contexto} ${base}`;
+    case "nao_conciliavel":
+      return `O acumulado financeiro deste período apresentou uma queda que não pôde ser conciliada automaticamente — verifique o lançamento correspondente.${contexto} ${base}`;
+    case "sem_dado":
+      return `Ainda não há dados suficientes para separar Marketplace e Full Service neste período.${contexto} ${base}`;
     default:
-      return "Não foi possível separar os indicadores por modelo neste período.";
+      return base;
   }
 }
 

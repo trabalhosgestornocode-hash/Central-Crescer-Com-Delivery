@@ -1,9 +1,190 @@
-// PERÍODO MISTO (Marketplace + Full Service no mesmo mês) — Dashboard iFood.
-//
-// Parte 1 (pura): dashboardExecutivo.periodoMisto.js — divisão do Financeiro
-// acumulado por delta de snapshots, consolidação em REAIS (nunca média de
-// percentuais), composição de metas ponderada pelo faturamento.
-// Parte 2 (service): obterMes / lançamento mensal, com banco e metas FAKE.
+// dashboardExecutivo.periodoMisto.js — reconciliação GRANULAR (2026-09-22).
+// Casos A/B (puro) + misto limpo + o caso REAL Subway Feiraguay (setembro/2026)
+// ponta a ponta: valida que a arquitetura granular resolve exatamente o
+// sintoma reportado em produção ("Dados insuficientes" no mês inteiro) sem
+// inventar nenhum valor financeiro oficial.
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { SourceTextModule, SyntheticModule } from "node:vm";
+import { dividirFinanceiroPorSegmento, consolidarSegmentos, comporMetas, MOTIVOS_INDISPONIVEL } from "../src/modules/dashboard-executivo/dashboardExecutivo.periodoMisto.js";
+import { STATUS_CONCILIACAO } from "../src/modules/dashboard-executivo/dashboardExecutivo.confiabilidade.js";
+import { montarLinhaDoTempo, segmentosDoPeriodo } from "../src/modules/dashboard-executivo/dashboardExecutivo.modeloTemporal.js";
+import { metasComProtecaoPrecificacao } from "../src/modules/dashboard-executivo/dashboardExecutivo.calc.js";
+
+const row = (dia, valor, extra = {}) => ({
+  data_lancamento: `2026-09-${dia}`, situacao: "normal", origem_lancamento: "diario",
+  valor_vendas_ifood: valor, taxas_comissoes: valor * 0.13, servicos_promocoes: valor * 0.05,
+  taxas_entregadores: valor * 0.12, ajustes_favor_loja: 0, ajustes_contra_loja: 0, ...extra,
+});
+const SEG_MP_FS = [
+  { modelo: "marketplace", inicio: "2026-09-01", fim: "2026-09-12" },
+  { modelo: "full_service", inicio: "2026-09-13", fim: "2026-09-30" },
+];
+const SEG_UNICO = (modelo) => [{ modelo, inicio: "2026-09-01", fim: "2026-09-30" }];
+
+describe("Caso A — 100% Marketplace: tudo conciliado, comportamento equivalente ao mês simples", () => {
+  const linhas = [row("30", 20000)];
+  test("faturamento e componentes conciliados", () => {
+    const d = dividirFinanceiroPorSegmento(linhas, SEG_UNICO("marketplace"));
+    assert.equal(d.fonte, "snapshot");
+    assert.equal(d.segmentos[0].campos.valorVendasIfood.status, STATUS_CONCILIACAO.CONCILIADO);
+    assert.equal(d.segmentos[0].campos.valorVendasIfood.valorOficial, 20000);
+    const c = consolidarSegmentos(d);
+    assert.equal(c.campos.valorVendasIfood.valor, 20000);
+    assert.equal(c.totalDeducoes.status, STATUS_CONCILIACAO.CONCILIADO);
+    assert.equal(c.receitaLiquida.status, STATUS_CONCILIACAO.CONCILIADO);
+  });
+});
+
+describe("Caso B — 100% Full Service: entregadores não aplicável, resto conciliado", () => {
+  const linhas = [row("30", 20000)];
+  test("taxasEntregadores é NÃO APLICÁVEL (nunca 'dados insuficientes')", () => {
+    const d = dividirFinanceiroPorSegmento(linhas, SEG_UNICO("full_service"));
+    assert.equal(d.segmentos[0].campos.taxasEntregadores.status, STATUS_CONCILIACAO.NAO_APLICAVEL);
+    const c = consolidarSegmentos(d);
+    assert.equal(c.campos.taxasEntregadores.status, STATUS_CONCILIACAO.NAO_APLICAVEL);
+    assert.equal(c.baseEntregadores.status, STATUS_CONCILIACAO.NAO_APLICAVEL);
+    assert.equal(c.totalDeducoes.status, STATUS_CONCILIACAO.CONCILIADO); // só taxas+serviços, ambos ok
+  });
+});
+
+describe("Caso misto LIMPO (01–12 MP, 13–30 FS, sem nenhuma anomalia)", () => {
+  const linhas = [row("12", 20000), row("30", 80000)];
+  test("todos os campos conciliados nos dois segmentos e no consolidado", () => {
+    const d = dividirFinanceiroPorSegmento(linhas, SEG_MP_FS);
+    for (const seg of d.segmentos) {
+      assert.equal(seg.campos.valorVendasIfood.status, STATUS_CONCILIACAO.CONCILIADO);
+    }
+    const c = consolidarSegmentos(d);
+    assert.equal(c.campos.valorVendasIfood.valor, 80000); // MP 20000 (ponto absoluto) + FS 60000 (delta)
+    assert.equal(c.totalDeducoes.status, STATUS_CONCILIACAO.CONCILIADO);
+    assert.equal(c.receitaLiquida.status, STATUS_CONCILIACAO.CONCILIADO);
+  });
+  test("comporMetas pondera pelo faturamento de cada regime quando o peso é conciliado", () => {
+    const metasMP = { total_deducoes: { metaIdeal: 30, limite: 32 } };
+    const metasFS = { total_deducoes: { metaIdeal: 20.5, limite: 20.5 } };
+    const r = comporMetas([
+      { modelo: "marketplace", peso: 20000, pesoConciliado: true, metas: metasMP },
+      { modelo: "full_service", peso: 60000, pesoConciliado: true, metas: metasFS },
+    ], ["total_deducoes"]);
+    // (30*20000 + 20.5*60000) / 80000 = 22.875
+    assert.equal(r.total_deducoes.metaIdeal, 22.875);
+  });
+  test("comporMetas NUNCA inventa peso: se algum regime tem faturamento não conciliado, a meta composta fica indisponível", () => {
+    const r = comporMetas([
+      { modelo: "marketplace", peso: 20000, pesoConciliado: true, metas: { total_deducoes: { metaIdeal: 30, limite: 32 } } },
+      { modelo: "full_service", peso: null, pesoConciliado: false, metas: { total_deducoes: { metaIdeal: 20.5, limite: 20.5 } } },
+    ], ["total_deducoes"]);
+    assert.equal(r.total_deducoes, undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CASO REAL — Subway Feiraguay, setembro/2026 (investigação de 2026-09-22).
+// Marketplace até 19/09, Full Service desde 20/09. valor_vendas_ifood de 21/09
+// foi preenchido igual ao valor bruto (erro de digitação comprovado via
+// auditoria) — queda de R$84.736,88 para R$76.910,32. taxas_entregadores
+// zerou em 18/09 (2 dias antes da vigência registrada, 20/09).
+// ---------------------------------------------------------------------------
+const LINHAS_FEIRAGUAY = [
+  { data_lancamento: "2026-09-17", situacao: "normal", origem_lancamento: "diario", valor_vendas_ifood: 73300.67, taxas_comissoes: 8274.08, servicos_promocoes: 11556.48, taxas_entregadores: 9253.00, ajustes_favor_loja: 306.52, ajustes_contra_loja: null },
+  { data_lancamento: "2026-09-18", situacao: "normal", origem_lancamento: "diario", valor_vendas_ifood: 78924.58, taxas_comissoes: 9242.01, servicos_promocoes: 13212.65, taxas_entregadores: 0.00, ajustes_favor_loja: 306.52, ajustes_contra_loja: null },
+  { data_lancamento: "2026-09-19", situacao: "normal", origem_lancamento: "diario", valor_vendas_ifood: 82760.95, taxas_comissoes: 10016.61, servicos_promocoes: 14000.02, taxas_entregadores: 0.00, ajustes_favor_loja: 358.53, ajustes_contra_loja: null },
+  { data_lancamento: "2026-09-20", situacao: "normal", origem_lancamento: "diario", valor_vendas_ifood: 84736.88, taxas_comissoes: 10429.15, servicos_promocoes: 14106.45, taxas_entregadores: 0.00, ajustes_favor_loja: 373.55, ajustes_contra_loja: null },
+  { data_lancamento: "2026-09-21", situacao: "normal", origem_lancamento: "diario", valor_vendas_ifood: 76910.32, taxas_comissoes: 10735.94, servicos_promocoes: 14299.39, taxas_entregadores: 0.00, ajustes_favor_loja: 373.55, ajustes_contra_loja: null },
+];
+const SEG_FEIRAGUAY = [
+  { modelo: "marketplace", inicio: "2026-09-01", fim: "2026-09-19" },
+  { modelo: "full_service", inicio: "2026-09-20", fim: "2026-09-21" },
+];
+
+describe("CASO REAL — Subway Feiraguay: granularidade em vez de 'Dados insuficientes' no mês inteiro", () => {
+  const divisao = dividirFinanceiroPorSegmento(LINHAS_FEIRAGUAY, SEG_FEIRAGUAY);
+  const consolidado = consolidarSegmentos(divisao);
+
+  test("Marketplace: taxas e serviços conciliados; entregadores SUSPEITO com último valor válido 9.253,00 em 17/09 (nunca 0,00 nem 9.253,00 como oficial)", () => {
+    const mp = divisao.segmentos[0].campos;
+    assert.equal(mp.taxasComissoes.status, STATUS_CONCILIACAO.CONCILIADO);
+    assert.equal(mp.taxasComissoes.valorOficial, 10016.61);
+    assert.equal(mp.taxasEntregadores.status, STATUS_CONCILIACAO.SUSPEITO);
+    assert.equal(mp.taxasEntregadores.valorOficial, null);
+    assert.equal(mp.taxasEntregadores.ultimoValorValido.valor, 9253.00);
+    assert.equal(mp.taxasEntregadores.ultimoValorValido.data, "2026-09-17");
+  });
+
+  test("Full Service: faturamento NÃO CONCILIÁVEL (queda real); taxas e serviços continuam conciliados (campos independentes)", () => {
+    const fs = divisao.segmentos[1].campos;
+    assert.equal(fs.valorVendasIfood.status, STATUS_CONCILIACAO.NAO_CONCILIAVEL);
+    assert.equal(fs.taxasComissoes.status, STATUS_CONCILIACAO.CONCILIADO);
+    assert.ok(Math.abs(fs.taxasComissoes.valorOficial - 719.33) < 0.01); // 10735.94 - 10016.61
+    assert.equal(fs.servicosPromocoes.status, STATUS_CONCILIACAO.CONCILIADO);
+    assert.ok(Math.abs(fs.servicosPromocoes.valorOficial - 299.37) < 0.01);
+    assert.equal(fs.taxasEntregadores.status, STATUS_CONCILIACAO.NAO_APLICAVEL); // regra C, nunca "dados insuficientes"
+  });
+
+  test("CONSOLIDADO — Taxas e Comissões e Serviços e Promoções continuam calculáveis (R$) mesmo com o faturamento quebrado", () => {
+    assert.equal(consolidado.campos.taxasComissoes.status, STATUS_CONCILIACAO.CONCILIADO);
+    assert.ok(Math.abs(consolidado.campos.taxasComissoes.valor - 10735.94) < 0.01); // = valor do último dia, cadeia intacta
+    assert.equal(consolidado.campos.servicosPromocoes.status, STATUS_CONCILIACAO.CONCILIADO);
+  });
+
+  test("CONSOLIDADO — faturamento e receita líquida ficam não conciliáveis (dependem do campo quebrado) — mas com contexto, nunca silêncio total", () => {
+    assert.equal(consolidado.campos.valorVendasIfood.status, STATUS_CONCILIACAO.NAO_CONCILIAVEL);
+    assert.equal(consolidado.campos.valorVendasIfood.valor, null);
+    assert.equal(consolidado.receitaLiquida.status, STATUS_CONCILIACAO.NAO_CONCILIAVEL);
+  });
+
+  test("CONSOLIDADO — Total de Deduções: suspeito (herda do Marketplace/entregadores), mas com estimativa de contexto, nunca 'zero' nem oculto", () => {
+    assert.equal(consolidado.totalDeducoes.status, STATUS_CONCILIACAO.SUSPEITO);
+    assert.equal(consolidado.totalDeducoes.valor, null); // nunca um valor OFICIAL sem confirmação
+    assert.ok(consolidado.totalDeducoes.ultimoValorValido.valor > 30000); // contexto: soma de melhor esforço, não zero
+  });
+
+  test("POR SEGMENTO — Full Service tem Total de Deduções e Receita Líquida do SEU regime, mesmo com o Marketplace suspeito", () => {
+    const fs = consolidado.porSegmento[1];
+    assert.equal(fs.modelo, "full_service");
+    assert.equal(fs.totalDeducoes.status, STATUS_CONCILIACAO.CONCILIADO);
+    assert.ok(Math.abs(fs.totalDeducoes.valor - 1018.70) < 0.01); // 719,33 + 299,37 — nunca entregadores (não aplicável)
+  });
+
+  test("POR SEGMENTO — Marketplace: Total de Deduções e Receita Líquida ficam suspeitos (dependem de Entregadores), com contexto", () => {
+    const mp = consolidado.porSegmento[0];
+    assert.equal(mp.modelo, "marketplace");
+    assert.equal(mp.totalDeducoes.status, STATUS_CONCILIACAO.SUSPEITO);
+    assert.equal(mp.totalDeducoes.valor, null);
+    assert.equal(mp.receitaLiquida.status, STATUS_CONCILIACAO.SUSPEITO);
+  });
+
+  test("POR SEGMENTO — Full Service: Receita Líquida fica não conciliável (herda do PRÓPRIO faturamento quebrado, não do Marketplace)", () => {
+    const fs = consolidado.porSegmento[1];
+    assert.equal(fs.receitaLiquida.status, STATUS_CONCILIACAO.NAO_CONCILIAVEL);
+  });
+});
+
+describe("Lote mensal que atravessa a troca — granular: campos ficam nao_conciliavel, mas não é um novo apagão global escondido", () => {
+  const lote = [
+    { data_lancamento: "2026-09-05", situacao: "normal", origem_lancamento: "distribuicao_mensal", valor_vendas_ifood: 1000, taxas_comissoes: 100 },
+    { data_lancamento: "2026-09-20", situacao: "normal", origem_lancamento: "distribuicao_mensal", valor_vendas_ifood: 1000, taxas_comissoes: 100 },
+  ];
+  test("todos os campos aplicáveis marcados nao_conciliavel com o motivo correto", () => {
+    const d = dividirFinanceiroPorSegmento(lote, SEG_FEIRAGUAY);
+    assert.equal(d.fonte, "lancamento_mensal");
+    assert.equal(d.segmentos[0].campos.valorVendasIfood.status, STATUS_CONCILIACAO.NAO_CONCILIAVEL);
+    assert.equal(d.segmentos[0].campos.valorVendasIfood.motivo, MOTIVOS_INDISPONIVEL.LOTE_MENSAL_ATRAVESSA_TROCA);
+  });
+});
+
+describe("Sem nenhum dado no mês: tudo 'sem_dado' (nunca 'não conciliável' — não há nem base pra suspeitar)", () => {
+  test("segmentos vazios", () => {
+    const d = dividirFinanceiroPorSegmento([], SEG_MP_FS);
+    assert.equal(d.fonte, "sem_dado");
+    assert.equal(d.segmentos[0].campos.valorVendasIfood.status, STATUS_CONCILIACAO.SEM_DADO);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PARTE 2 — service (obterMes / lançamento mensal), com banco e metas FAKE.
 //
 // Cenário-base (Unidade X, setembro/2026): Marketplace 01–12, Full Service 13–30.
 //   Snapshot acumulado em 12/09 (fim do Marketplace):
@@ -11,208 +192,13 @@
 //   Snapshot acumulado em 18/09 (mais recente):
 //     faturamento 16.000 · taxas 2.530 · serviços 1.100 · entregadores 1.500
 //   => Marketplace (01–12): 10.000 | taxas 1.300 | serv 500 | entreg 1.200 -> deduções 3.000 (30,00%)
-//      Full Service (13–18): 6.000  | taxas 1.230 | serv 600 | entreg 300 (não se aplica) -> deduções 1.830 (30,50%)
+//      Full Service (13–18): 6.000  | taxas 1.230 | serv 600 | entreg N/A  -> deduções 1.830 (30,50%)
 //      Período: deduções 3.000 + 1.830 = 4.830 sobre 16.000 = 30,1875%   (média simples de % daria 30,25%)
-//
-// Rodar: node --experimental-vm-modules --test test/dashboard-executivo-periodo-misto.test.js
-import { test, describe } from "node:test";
-import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { SourceTextModule, SyntheticModule } from "node:vm";
-
-import {
-  dividirFinanceiroPorSegmento, consolidarSegmentos, comporMetas, MOTIVOS_DIVISAO_INDISPONIVEL,
-} from "../src/modules/dashboard-executivo/dashboardExecutivo.periodoMisto.js";
-import { montarLinhaDoTempo, segmentosDoPeriodo } from "../src/modules/dashboard-executivo/dashboardExecutivo.modeloTemporal.js";
-import { metasComProtecaoPrecificacao, percentual } from "../src/modules/dashboard-executivo/dashboardExecutivo.calc.js";
-
-const TROCA_X = { vigenciaInicio: "2026-09-13", modeloAnterior: "marketplace", modeloNovo: "full_service" };
-const LINHA_MISTA = montarLinhaDoTempo({ modeloAtual: "full_service", trocas: [TROCA_X] });
-const SEGS = segmentosDoPeriodo(LINHA_MISTA, "2026-09-01", "2026-09-30");
-
-const snap = (data, fat, tc, sp, te, extra = {}) => ({
-  id: `l-${data}`, unidade_id: "u1", data_lancamento: data, situacao: "normal", status: "finalizado", origem_lancamento: "diario",
-  valor_vendas_ifood: fat, taxas_comissoes: tc, servicos_promocoes: sp, taxas_entregadores: te,
-  ajustes_favor_loja: 0, ajustes_contra_loja: 0, ...extra,
-});
-const LINHAS_BASE = [snap("2026-09-12", 10000, 1300, 500, 1200), snap("2026-09-18", 16000, 2530, 1100, 1500)];
-
-const METAS = {
-  marketplace: {
-    taxas_comissoes: { metaIdeal: 13, limite: 13 }, servicos_promocoes: { metaIdeal: 5, limite: 7 },
-    taxas_entregadores: { metaIdeal: 12, limite: 15 }, total_deducoes: { metaIdeal: 30, limite: 32 },
-  },
-  full_service: {
-    taxas_comissoes: { metaIdeal: 20.5, limite: 20.5 }, servicos_promocoes: { metaIdeal: 10, limite: 14.5 },
-    taxas_entregadores: { metaIdeal: 15, limite: 15 }, // linha existe no banco, mas NÃO se aplica ao Full Service
-    total_deducoes: { metaIdeal: 30.5, limite: 32 },
-  },
-};
-
-const perto = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `esperado ${b}, veio ${a}`);
-
-describe("dividirFinanceiroPorSegmento — delta de snapshots acumulados", () => {
-  test("Caso C: Marketplace = acumulado em 12/09; Full Service = acumulado em 18/09 − acumulado em 12/09", () => {
-    const d = dividirFinanceiroPorSegmento(LINHAS_BASE, SEGS);
-    assert.equal(d.disponivel, true);
-    assert.equal(d.fonte, "snapshot");
-    const [mp, fs] = d.segmentos;
-    assert.deepEqual([mp.modelo, mp.inicio, mp.fim], ["marketplace", "2026-09-01", "2026-09-12"]);
-    assert.deepEqual(mp.valores, { valorVendasIfood: 10000, taxasComissoes: 1300, servicosPromocoes: 500, taxasEntregadores: 1200, ajustesFavorLoja: 0, ajustesContraLoja: 0 });
-    assert.deepEqual([fs.modelo, fs.inicio, fs.fim], ["full_service", "2026-09-13", "2026-09-30"]);
-    assert.deepEqual(fs.valores, { valorVendasIfood: 6000, taxasComissoes: 1230, servicosPromocoes: 600, taxasEntregadores: 300, ajustesFavorLoja: 0, ajustesContraLoja: 0 });
-    // O acumulado do período é o snapshot mais recente (MP + FS, sem dupla contagem).
-    assert.equal(d.acumulado.valorVendasIfood, 16000);
-    assert.equal(mp.valores.valorVendasIfood + fs.valores.valorVendasIfood, d.acumulado.valorVendasIfood);
-  });
-
-  test("Marketplace usa SÓ os dados até 12/09: um snapshot posterior não vaza para o regime anterior", () => {
-    const d = dividirFinanceiroPorSegmento(LINHAS_BASE, SEGS);
-    assert.equal(d.segmentos[0].valores.valorVendasIfood, 10000);
-  });
-
-  test("virada SEM snapshot em 12/09 => indisponível, com a data necessária (nunca um palpite)", () => {
-    const d = dividirFinanceiroPorSegmento([snap("2026-09-18", 16000, 2530, 1100, 1500)], SEGS);
-    assert.equal(d.disponivel, false);
-    assert.equal(d.motivo, MOTIVOS_DIVISAO_INDISPONIVEL.SNAPSHOT_DE_VIRADA_AUSENTE);
-    assert.deepEqual(d.detalhe, { dataNecessaria: "2026-09-12", modelo: "marketplace" });
-  });
-
-  test("snapshot mais antigo que a virada só vale se os dias entre ele e a virada foram SEM OPERAÇÃO", () => {
-    const semOp = (data) => snap(data, 0, 0, 0, 0, { situacao: "sem_operacao" });
-    const ok = dividirFinanceiroPorSegmento(
-      [snap("2026-09-10", 8000, 1040, 400, 960), semOp("2026-09-11"), semOp("2026-09-12"), snap("2026-09-18", 14000, 2270, 1000, 1260)], SEGS);
-    assert.equal(ok.disponivel, true);
-    assert.equal(ok.segmentos[0].valores.valorVendasIfood, 8000);
-    assert.equal(ok.segmentos[1].valores.valorVendasIfood, 6000);
-
-    // Dia 11 sem lançamento nenhum (pendente): não dá para saber se vendeu -> indisponível.
-    const pendente = dividirFinanceiroPorSegmento(
-      [snap("2026-09-10", 8000, 1040, 400, 960), semOp("2026-09-12"), snap("2026-09-18", 14000, 2270, 1000, 1260)], SEGS);
-    assert.equal(pendente.disponivel, false);
-  });
-
-  test("acumulado que DIMINUI entre a virada e o fim é inconsistência declarada, não um número negativo", () => {
-    const d = dividirFinanceiroPorSegmento([snap("2026-09-12", 10000, 1300, 500, 1200), snap("2026-09-18", 9000, 1200, 500, 1200)], SEGS);
-    assert.equal(d.disponivel, false);
-    assert.equal(d.motivo, MOTIVOS_DIVISAO_INDISPONIVEL.ACUMULADO_INCONSISTENTE);
-  });
-
-  test("sem snapshot no último regime: ele fica 'sem dado' e o período = só o Marketplace", () => {
-    const d = dividirFinanceiroPorSegmento([snap("2026-09-12", 10000, 1300, 500, 1200)], SEGS);
-    assert.equal(d.disponivel, true);
-    assert.equal(d.segmentos[1].semDado, true);
-    assert.equal(d.acumulado.valorVendasIfood, 10000);
-  });
-
-  test("sem nenhum dado no mês: todos os segmentos 'sem dado'", () => {
-    const d = dividirFinanceiroPorSegmento([], SEGS);
-    assert.equal(d.fonte, "sem_dado");
-    assert.ok(d.segmentos.every((s) => s.semDado));
-  });
-
-  test("Caso G: Lançamento Mensal (fatias uniformes) que ATRAVESSA a troca é indisponível — sem quebra artificial", () => {
-    const fatia = (data) => ({ data_lancamento: data, situacao: "normal", origem_lancamento: "distribuicao_mensal", valor_vendas_ifood: 500, taxas_comissoes: 60, servicos_promocoes: 20, taxas_entregadores: 50 });
-    const dias = Array.from({ length: 18 }, (_, i) => `2026-09-${String(i + 1).padStart(2, "0")}`);
-    const d = dividirFinanceiroPorSegmento(dias.map(fatia), SEGS);
-    assert.equal(d.disponivel, false);
-    assert.equal(d.motivo, MOTIVOS_DIVISAO_INDISPONIVEL.LANCAMENTO_MENSAL_ATRAVESSA_TROCA);
-  });
-
-  test("Caso G: Lançamento Mensal que cai só num regime é atribuído inteiro a ele (as fatias são aditivas)", () => {
-    const fatia = (data) => ({ data_lancamento: data, situacao: "normal", origem_lancamento: "distribuicao_mensal", valor_vendas_ifood: 500, taxas_comissoes: 60, servicos_promocoes: 20, taxas_entregadores: null });
-    const dias = ["2026-09-13", "2026-09-14", "2026-09-15"];
-    const d = dividirFinanceiroPorSegmento(dias.map(fatia), SEGS);
-    assert.equal(d.disponivel, true);
-    assert.equal(d.fonte, "lancamento_mensal");
-    assert.equal(d.segmentos[0].semDado, true);
-    assert.equal(d.segmentos[1].valores.valorVendasIfood, 1500);
-  });
-});
-
-describe("consolidarSegmentos — valores em reais, nunca média de percentuais", () => {
-  const d = dividirFinanceiroPorSegmento(LINHAS_BASE, SEGS);
-  const c = consolidarSegmentos(d);
-
-  test("Taxa dos Entregadores só onde aplicável: soma apenas o Marketplace (os 300 do Full Service não entram)", () => {
-    assert.equal(c.cardValores.taxasEntregadores, 1200);
-    assert.equal(c.baseEntregadores, 10000);
-    perto(percentual(c.cardValores.taxasEntregadores, c.baseEntregadores), 12);
-  });
-
-  test("Total de Deduções = deduções Marketplace (com entregadores) + deduções Full Service (sem entregadores)", () => {
-    assert.equal(c.totalDeducoes, 3000 + 1830);
-    const pct = percentual(c.totalDeducoes, c.cardValores.valorVendasIfood);
-    perto(pct, 30.1875);
-  });
-
-  test("NÃO é a média simples dos percentuais (30,00 e 30,50 -> 30,25)", () => {
-    const pctMp = percentual(3000, 10000);
-    const pctFs = percentual(1830, 6000);
-    const mediaSimples = (pctMp + pctFs) / 2;
-    perto(mediaSimples, 30.25);
-    const pct = percentual(c.totalDeducoes, c.cardValores.valorVendasIfood);
-    assert.notEqual(pct, mediaSimples);
-  });
-
-  test("NÃO é 'tudo Full Service' (3.630) nem 'tudo Marketplace' (5.130 — contaria os 300 de entregadores do FS)", () => {
-    assert.notEqual(c.totalDeducoes, 2530 + 1100);
-    assert.notEqual(c.totalDeducoes, 2530 + 1100 + 1500);
-  });
-
-  test("taxas e comissões e serviços e promoções = acumulado do período (ambos os modelos usam)", () => {
-    assert.equal(c.cardValores.taxasComissoes, 2530);
-    assert.equal(c.cardValores.servicosPromocoes, 1100);
-    assert.equal(c.cardValores.valorVendasIfood, 16000);
-  });
-
-  test("período sem nenhum regime com entregadores (só Full Service): componente não aplicável e Total sem entregadores", () => {
-    const fsPuro = segmentosDoPeriodo(montarLinhaDoTempo({ modeloAtual: "full_service" }), "2026-09-13", "2026-09-30");
-    const dd = dividirFinanceiroPorSegmento([snap("2026-09-18", 6000, 1230, 600, 300)], fsPuro);
-    const cc = consolidarSegmentos(dd);
-    assert.equal(cc.cardValores.taxasEntregadores, null);
-    assert.equal(cc.baseEntregadores, 0);
-    assert.equal(cc.totalDeducoes, 1830);
-  });
-});
-
-describe("comporMetas — média ponderada pelo faturamento de cada regime", () => {
-  const partes = [
-    { modelo: "marketplace", peso: 10000, metas: METAS.marketplace },
-    { modelo: "full_service", peso: 6000, metas: METAS.full_service },
-  ];
-  const ind = ["taxas_comissoes", "servicos_promocoes", "taxas_entregadores", "total_deducoes"];
-  const m = comporMetas(partes, ind);
-
-  test("fórmula: meta = Σ(metaᵢ × faturamentoᵢ) / Σ faturamentoᵢ  (equivale a somar a meta em R$ e dividir pela base)", () => {
-    perto(m.taxas_comissoes.metaIdeal, (13 * 10000 + 20.5 * 6000) / 16000); // 15,8125
-    perto(m.servicos_promocoes.metaIdeal, (5 * 10000 + 10 * 6000) / 16000); // 6,875
-    perto(m.servicos_promocoes.limite, (7 * 10000 + 14.5 * 6000) / 16000); // 9,8125
-    perto(m.total_deducoes.metaIdeal, (30 * 10000 + 30.5 * 6000) / 16000); // 30,1875
-    // Meta em R$ do período = soma das metas em R$ de cada regime.
-    perto(m.total_deducoes.metaIdeal / 100 * 16000, 0.30 * 10000 + 0.305 * 6000);
-  });
-
-  test("Taxas de Entregadores: meta só do Marketplace (o Full Service não tem o componente, mesmo com a linha no banco)", () => {
-    assert.deepEqual(m.taxas_entregadores, METAS.marketplace.taxas_entregadores);
-  });
-
-  test("não aplica a meta de um regime só ao mês inteiro", () => {
-    assert.notEqual(m.total_deducoes.metaIdeal, METAS.marketplace.total_deducoes.metaIdeal);
-    assert.notEqual(m.total_deducoes.metaIdeal, METAS.full_service.total_deducoes.metaIdeal);
-    assert.notEqual(m.taxas_comissoes.metaIdeal, 13);
-    assert.notEqual(m.taxas_comissoes.metaIdeal, 20.5);
-  });
-
-  test("sem faturamento em nenhum regime elegível: usa o último regime aplicável (não há resultado a avaliar)", () => {
-    const vazio = comporMetas(partes.map((p) => ({ ...p, peso: 0 })), ind);
-    assert.deepEqual(vazio.taxas_comissoes, METAS.full_service.taxas_comissoes);
-    assert.deepEqual(vazio.taxas_entregadores, METAS.marketplace.taxas_entregadores);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// PARTE 2 — service (obterMes / lançamento mensal) com banco e metas FAKE
+//   Receita Líquida: os 1.500 de entregadores acumulados em 18/09 já incluem
+//   os 1.200 do Marketplace — o excedente (300) NÃO é atribuído ao Full
+//   Service (regra C: não aplicável) porque não há evidência de que
+//   pertença de fato a esse regime — a Receita Líquida usa só a parte
+//   RECONCILIADA (1.200), nunca o resíduo bruto do snapshot sem checagem.
 // ---------------------------------------------------------------------------
 const dirSrc = new URL("../src/modules/dashboard-executivo/", import.meta.url);
 
@@ -260,6 +246,31 @@ const PRECOS = {
   oficiais: { tabelaBalcao: "E", tabelaIfood: "Z4" }, tabelas: { balcao: "E", ifood: "Z4" },
   produto: { id: "p1", nome: "Churrasco 15cm" }, balcao: { preco: 24, custo: 6 }, ifood: { preco: 35, custo: 6 },
 };
+
+const TROCA_X = { vigenciaInicio: "2026-09-13", modeloAnterior: "marketplace", modeloNovo: "full_service" };
+const LINHA_MISTA = montarLinhaDoTempo({ modeloAtual: "full_service", trocas: [TROCA_X] });
+const SEGS = segmentosDoPeriodo(LINHA_MISTA, "2026-09-01", "2026-09-30");
+
+const snap = (data, fat, tc, sp, te, extra = {}) => ({
+  id: `l-${data}`, unidade_id: "u1", data_lancamento: data, situacao: "normal", status: "finalizado", origem_lancamento: "diario",
+  valor_vendas_ifood: fat, taxas_comissoes: tc, servicos_promocoes: sp, taxas_entregadores: te,
+  ajustes_favor_loja: 0, ajustes_contra_loja: 0, ...extra,
+});
+const LINHAS_BASE = [snap("2026-09-12", 10000, 1300, 500, 1200), snap("2026-09-18", 16000, 2530, 1100, 1500)];
+
+const METAS = {
+  marketplace: {
+    taxas_comissoes: { metaIdeal: 13, limite: 13 }, servicos_promocoes: { metaIdeal: 5, limite: 7 },
+    taxas_entregadores: { metaIdeal: 12, limite: 15 }, total_deducoes: { metaIdeal: 30, limite: 32 },
+  },
+  full_service: {
+    taxas_comissoes: { metaIdeal: 20.5, limite: 20.5 }, servicos_promocoes: { metaIdeal: 10, limite: 14.5 },
+    taxas_entregadores: { metaIdeal: 15, limite: 15 }, // linha existe no banco, mas NÃO se aplica ao Full Service
+    total_deducoes: { metaIdeal: 30.5, limite: 32 },
+  },
+};
+
+const perto = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `esperado ${b}, veio ${a}`);
 
 /** Service com a unidade `u1` numa linha do tempo e metas por modelo (resolverMetas respeita o modelo pedido). */
 async function servico({ lancamentos = [], lote = null, trocas = [], modeloAtual }) {
@@ -354,10 +365,14 @@ describe("Caso C — 01–12 Marketplace, 13–30 Full Service (setembro inteiro
     perto(d.cards.servicosPromocoes.percentual, 6.875);
   });
 
-  test("Receita líquida usa o caixa REAL (inclui os 300 de entregadores lançados, mesmo em dia Full Service)", async () => {
+  test("Receita líquida usa o total RECONCILIADO (nunca o resíduo bruto do snapshot sem checagem)", async () => {
     const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: LINHAS_BASE });
     const d = await svc.obterMes(PEDIDO_SET);
-    assert.equal(d.cards.receitaLiquida.valor, 16000 - (2530 + 1100 + 1500));
+    // Os 1.500 de entregadores acumulados em 18/09 incluem 1.200 confirmados
+    // do Marketplace + 300 de origem não comprovada (Full Service não usa
+    // entregadores próprios — não há evidência de que os 300 pertençam
+    // mesmo a esse regime). A Receita Líquida usa só a parte reconciliada.
+    assert.equal(d.cards.receitaLiquida.valor, 16000 - (2530 + 1100 + 1200));
   });
 
   test("metas: composição ponderada, nunca a meta de um regime aplicada ao mês inteiro", async () => {
@@ -379,22 +394,25 @@ describe("Caso C — 01–12 Marketplace, 13–30 Full Service (setembro inteiro
     assert.equal(ind.total_deducoes.status.chave, "dentro_da_meta"); // 30,19% <= ~31,43%
   });
 
-  test("sem o snapshot da véspera da troca: aviso com a data necessária; indicadores dependentes do modelo ficam SEM dado", async () => {
+  test("sem o snapshot da véspera da troca: faturamento/taxas/serviços continuam calculáveis (período direto); só o que DEPENDE da fronteira (Entregadores/Total/Receita) fica sem dado", async () => {
     const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: [snap("2026-09-18", 16000, 2530, 1100, 1500)] });
     const d = await svc.obterMes(PEDIDO_SET);
     assert.equal(d.modeloPeriodo.misto, true);
     assert.equal(d.modeloPeriodo.divisaoDisponivel, false);
-    assert.equal(d.modeloPeriodo.divisaoMotivo, "snapshot_de_virada_ausente");
-    assert.deepEqual(d.modeloPeriodo.divisaoDetalhe, { dataNecessaria: "2026-09-12", modelo: "marketplace" });
-    // Nada é atribuído a um regime por palpite.
-    assert.equal(d.cards.totalDeducoes.valor, null);
-    assert.equal(d.cards.totalDeducoes.status.chave, "sem_dados");
-    assert.equal(d.cards.taxasEntregadores.valor, null);
-    assert.equal(d.cards.totalDeducoes.meta, null);
-    // O que independe do modelo continua válido.
+    assert.equal(d.modeloPeriodo.divisaoMotivo, STATUS_CONCILIACAO.SEM_DADO);
+    // Granular: faturamento, taxas e serviços NÃO dependem de fronteira de
+    // segmento (aplicam-se aos dois modelos) — continuam calculáveis mesmo
+    // sem o snapshot exato de 12/09 (era isto que "SNAPSHOT_DE_VIRADA_AUSENTE"
+    // apagava por inteiro antes).
     assert.equal(d.cards.faturamento.valor, 16000);
     perto(d.cards.taxasComissoes.percentual, 15.8125);
-    assert.equal(d.cards.taxasComissoes.meta, null, "sem meta única enganosa");
+    assert.equal(d.cards.taxasComissoes.meta, null, "sem meta única enganosa (peso do Marketplace não conciliado)");
+    // O que REALMENTE depende da fronteira (Entregadores só existe no
+    // Marketplace; Total de Deduções e Receita Líquida dependem dele) fica sem dado.
+    assert.equal(d.cards.taxasEntregadores.valor, null);
+    assert.equal(d.cards.totalDeducoes.valor, null);
+    assert.equal(d.cards.totalDeducoes.status.chave, "sem_dados");
+    assert.equal(d.cards.totalDeducoes.meta, null);
   });
 
   test("dashboard só 01–12 = Marketplace puro; só 13–30 = Full Service puro (não misto)", async () => {
@@ -469,12 +487,12 @@ describe("Caso G — lançamento mensal atravessando a mudança de regime", () =
     assert.ok(r.camposPendentes.includes("taxasEntregadoresTotal"), "existe nos dias Marketplace: não some");
   });
 
-  test("Dashboard do mês com lote que atravessa a troca: divisão indisponível, motivo declarado", async () => {
+  test("Dashboard do mês com lote que atravessa a troca: campos que dependem da fronteira ficam sem dado; faturamento (período direto) continua calculável", async () => {
     const dias = Array.from({ length: 18 }, (_, i) => fatia(`2026-09-${String(i + 1).padStart(2, "0")}`));
     const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lote: loteRow, lancamentos: dias });
     const d = await svc.obterMes(PEDIDO_SET);
     assert.equal(d.modeloPeriodo.divisaoDisponivel, false);
-    assert.equal(d.modeloPeriodo.divisaoMotivo, "lancamento_mensal_atravessa_troca");
+    assert.equal(d.modeloPeriodo.divisaoMotivo, STATUS_CONCILIACAO.NAO_CONCILIAVEL);
     assert.equal(d.cards.totalDeducoes.valor, null);
   });
 });
@@ -491,5 +509,110 @@ describe("Preservação do histórico — a troca não altera dados já lançado
     assert.equal(dDepois.cards.taxasEntregadores.valor, dAntes.cards.taxasEntregadores.valor);
     assert.equal(dDepois.cards.totalDeducoes.valor, dAntes.cards.totalDeducoes.valor);
     perto(dDepois.cards.totalDeducoes.percentual, dAntes.cards.totalDeducoes.percentual);
+  });
+});
+
+describe("Divergência de transição operacional — caso real Subway Feiraguay (Entregadores para antes da vigência registrada)", () => {
+  // Vigência registrada: 13/09 (TROCA_X). Taxas de Entregadores para de
+  // acumular em 11/09 — 2 dias ANTES da data administrativa.
+  const LINHAS_DIVERGENTES = [
+    snap("2026-09-10", 9000, 900, 300, 1000),
+    snap("2026-09-11", 9500, 950, 320, 0), // reset — 2 dias antes da vigência
+    snap("2026-09-12", 10000, 1000, 340, 0), // véspera da troca (MP)
+    snap("2026-09-18", 16000, 1600, 500, 0), // dado dentro do Full Service
+  ];
+
+  test("gera achado de atenção 'divergência na data de transição', sem alterar a vigência", async () => {
+    const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: LINHAS_DIVERGENTES });
+    const d = await svc.obterMes(PEDIDO_SET);
+    const achado = [...d.diagnostico.pontosAtencao, ...d.diagnostico.alertas].find((a) => a.id === "divergencia_transicao_modelo");
+    assert.ok(achado, "esperava o achado de divergência de transição");
+    assert.match(achado.descricao, /11\/09/);
+    assert.match(achado.descricao, /13\/09/);
+    assert.match(achado.descricao, /Verifique/);
+    const acao = d.diagnostico.acoes.find((a) => a.diagnosticoId === "divergencia_transicao_modelo");
+    assert.ok(acao, "esperava a ação correspondente no Plano de Ação");
+    assert.equal(acao.tipo, "DATA_PENDING");
+    // A vigência (TROCA_X = 13/09) continua intacta — o segmento Marketplace ainda vai até 12/09.
+    assert.equal(d.modeloPeriodo.segmentos[0].fim, "2026-09-12");
+  });
+
+  test("sem divergência real (dados limpos, TROCA_X): o achado NÃO aparece", async () => {
+    const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: LINHAS_BASE });
+    const d = await svc.obterMes(PEDIDO_SET);
+    const achado = [...d.diagnostico.pontosAtencao, ...d.diagnostico.alertas].find((a) => a.id === "divergencia_transicao_modelo");
+    assert.equal(achado, undefined);
+  });
+});
+
+describe("comparativoSegmentos — operacional (Ticket Médio/Pedidos/Novos Clientes) por regime, nunca passa pela reconciliação financeira", () => {
+  const LINHAS_COM_OPERACIONAL = [
+    snap("2026-09-01", 1000, 130, 50, 120, { valor_vendas_bruto: 1000, qtd_vendas: 20, novos_clientes: 10 }),
+    snap("2026-09-12", 10000, 1300, 500, 1200, { valor_vendas_bruto: 10000, qtd_vendas: 200, novos_clientes: 100 }),
+    snap("2026-09-18", 16000, 2530, 1100, 1500, { valor_vendas_bruto: 16000, qtd_vendas: 300, novos_clientes: 160 }),
+  ];
+
+  test("Marketplace: 10.000/200 pedidos (ticket 50); Full Service: 6.000/100 pedidos (ticket 60) — nunca dia isolado, sempre soma de deltas", async () => {
+    const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: LINHAS_COM_OPERACIONAL });
+    const d = await svc.obterMes(PEDIDO_SET);
+    const [mp, fs] = d.comparativoSegmentos;
+    assert.equal(mp.modelo, "marketplace");
+    assert.equal(mp.valorVendasBruto, 10000);
+    assert.equal(mp.qtdVendas, 200);
+    assert.equal(mp.novosClientes, 100);
+    assert.equal(mp.ticketMedio, 50);
+    assert.equal(fs.modelo, "full_service");
+    assert.equal(fs.valorVendasBruto, 6000);
+    assert.equal(fs.qtdVendas, 100);
+    assert.equal(fs.ticketMedio, 60);
+  });
+
+  test("financeiro reconciliado por segmento vem junto (mesma forma de consolidado.porSegmento)", async () => {
+    const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: LINHAS_COM_OPERACIONAL });
+    const d = await svc.obterMes(PEDIDO_SET);
+    const [mp, fs] = d.comparativoSegmentos;
+    assert.equal(mp.financeiro.campos.valorVendasIfood.valor, 10000);
+    assert.equal(fs.financeiro.campos.valorVendasIfood.valor, 6000);
+    assert.equal(fs.financeiro.campos.taxasEntregadores.status, "nao_aplicavel");
+  });
+
+  test("percentuais por segmento — cada regime sobre o SEU faturamento (nunca a base do período inteiro)", async () => {
+    const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: LINHAS_COM_OPERACIONAL });
+    const d = await svc.obterMes(PEDIDO_SET);
+    const [mp, fs] = d.comparativoSegmentos;
+    perto(mp.percentuais.taxasComissoes.valor, 13);
+    perto(mp.percentuais.taxasEntregadores.valor, 12);
+    perto(mp.percentuais.totalDeducoes.valor, 30);
+    perto(mp.percentuais.receitaLiquida.valor, 70);
+    perto(fs.percentuais.taxasComissoes.valor, 20.5);
+    assert.equal(fs.percentuais.taxasEntregadores.status, "nao_aplicavel");
+    perto(fs.percentuais.totalDeducoes.valor, 30.5);
+    perto(fs.percentuais.receitaLiquida.valor, 69.5);
+  });
+
+  test("dias com dado financeiro por segmento (amostra) — 3 dias no total, cada um no segmento correto", async () => {
+    const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: LINHAS_COM_OPERACIONAL });
+    const d = await svc.obterMes(PEDIDO_SET);
+    const [mp, fs] = d.comparativoSegmentos;
+    assert.equal(mp.diasComDados, 2); // 01/09 e 12/09
+    assert.equal(fs.diasComDados, 1); // 18/09
+  });
+
+  test("mês simples (não misto): comparativoSegmentos é null", async () => {
+    const svc = await servico({ modeloAtual: "marketplace", lancamentos: [snap("2026-09-18", 16000, 2530, 1100, 1500)] });
+    const d = await svc.obterMes(PEDIDO_SET);
+    assert.equal(d.comparativoSegmentos, null);
+  });
+
+  test("indicadoresPorSegmento exposto no topo do payload (drawer de composição da aba Indicadores)", async () => {
+    const svc = await servico({ modeloAtual: "full_service", trocas: [TROCA_X], lancamentos: LINHAS_COM_OPERACIONAL });
+    const d = await svc.obterMes(PEDIDO_SET);
+    assert.equal(d.indicadoresPorSegmento.length, 2);
+    const [mp, fs] = d.indicadoresPorSegmento;
+    assert.equal(mp.modelo, "marketplace");
+    assert.equal(mp.indicadores.taxas_comissoes.atual, 13);
+    assert.equal(mp.indicadores.taxas_comissoes.meta.metaIdeal, 13);
+    assert.equal(fs.modelo, "full_service");
+    assert.equal(fs.indicadores.taxas_entregadores.naoAplicavel, true);
   });
 });

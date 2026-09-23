@@ -9,23 +9,31 @@
 //     Full Service = acumulado em 30/09 − acumulado em 12/09
 //     Mês          = acumulado em 30/09                (= MP + FS, sem dupla contagem)
 //
-// Isso só é exato se existir um snapshot NA VÉSPERA da troca (12/09). Sem ele a
-// divisão é indisponível — e devolvemos o motivo, nunca um palpite: atribuir
-// tudo a um regime reinterpretaria dados de outro.
+// RECONCILIAÇÃO GRANULAR (2026-09-22, investigação real Subway Feiraguay — ver
+// dashboardExecutivo.confiabilidade.js para a causa raiz e os princípios).
+// Cada um dos 6 campos financeiros, em CADA segmento, tem seu PRÓPRIO status:
+//   conciliado | suspeito | nao_conciliavel | nao_aplicavel | sem_dado
+// Um campo ruim NUNCA derruba os outros, nem o segmento inteiro, nem o mês —
+// a Visão Geral/Indicadores/Diagnóstico propagam indisponibilidade só pelas
+// dependências matemáticas REAIS (ex.: um percentual depende do faturamento
+// do MESMO recorte; Total de Deduções em R$ não depende do faturamento).
 //
 // O Lançamento Mensal (`distribuicao_mensal`) é um total do mês espalhado em
-// fatias UNIFORMES por dia (calc.js#distribuirValorMensal). A quebra por regime
-// dessas fatias seria um artefato da divisão uniforme, não um fato — por isso um
-// lote que atravessa a troca também é "indisponível", e a criação de um lote
-// assim é bloqueada no service.
+// fatias UNIFORMES por dia (calc.js#distribuirValorMensal) — não é um
+// acumulado, então não passa pela reconciliação de queda/reset. Um lote que
+// atravessa a troca (não deveria acontecer — bloqueado na criação, ver
+// service.js) não tem como ser dividido com segurança: todos os campos dos
+// segmentos envolvidos ficam 'nao_conciliavel'.
 //
-// Consolidação (NUNCA média de percentuais): parte dos VALORES em reais e divide
-// pela base elegível no fim. Metas compostas por média PONDERADA PELO
-// FATURAMENTO de cada regime (ver `comporMetas`).
+// Consolidação (NUNCA média de percentuais): parte dos VALORES em reais e
+// divide pela base elegível no fim. Metas compostas por média PONDERADA PELO
+// FATURAMENTO de cada regime (ver `comporMetas`) — só quando o faturamento de
+// TODOS os regimes elegíveis está conciliado (senão o peso seria inventado).
 
+import { totalDeducoesIndicador, indicadorAplicavel, componentesTotalDeducoes } from "./dashboardExecutivo.calc.js";
 import {
-  situacaoOperou, diaAnterior, totalDeducoesIndicador, indicadorAplicavel,
-} from "./dashboardExecutivo.calc.js";
+  caminharSequenciaAcumulada, reconciliarCampoSegmento, piorStatus, STATUS_CONCILIACAO,
+} from "./dashboardExecutivo.confiabilidade.js";
 
 /** camelCase (API) -> coluna (banco) dos 6 campos financeiros acumulados. */
 export const CAMPOS_FINANCEIROS = {
@@ -37,183 +45,302 @@ export const CAMPOS_FINANCEIROS = {
   ajustesContraLoja: "ajustes_contra_loja",
 };
 
-export const MOTIVOS_DIVISAO_INDISPONIVEL = {
-  SNAPSHOT_DE_VIRADA_AUSENTE: "snapshot_de_virada_ausente",
-  ACUMULADO_INCONSISTENTE: "acumulado_inconsistente",
-  LANCAMENTO_MENSAL_ATRAVESSA_TROCA: "lancamento_mensal_atravessa_troca",
+/** Indicador de rentabilidade que cada campo financeiro alimenta (governa aplicabilidade por modelo). `null` = sempre aplicável. */
+const INDICADOR_DO_CAMPO = {
+  taxasComissoes: "taxas_comissoes", servicosPromocoes: "servicos_promocoes", taxasEntregadores: "taxas_entregadores",
 };
 
-const TOLERANCIA = 0.005;
 const num = (v) => (v == null ? null : Number(v));
-const vazio = () => Object.fromEntries(Object.keys(CAMPOS_FINANCEIROS).map((k) => [k, null]));
+const somaOuNull = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) : null);
 
-function valoresDe(linha) {
-  return Object.fromEntries(Object.entries(CAMPOS_FINANCEIROS).map(([k, col]) => [k, num(linha?.[col])]));
-}
-
-function datasEntre(deExclusivo, ateInclusivo) {
-  const datas = [];
-  let d = deExclusivo;
-  for (let i = 0; i < 40 && d < ateInclusivo; i += 1) {
-    const [a, m, dia] = d.split("-").map(Number);
-    const prox = new Date(Date.UTC(a, m - 1, dia + 1));
-    d = `${prox.getUTCFullYear()}-${String(prox.getUTCMonth() + 1).padStart(2, "0")}-${String(prox.getUTCDate()).padStart(2, "0")}`;
-    if (d <= ateInclusivo) datas.push(d);
-  }
-  return datas;
-}
+/** @typedef {{valor: number|null, status: string, ultimoValorValido: {valor:number,data:string}|null}} RegistroConsolidado */
 
 /**
- * Divide o Financeiro do mês pelos segmentos de modelo (já recortados no mês e
- * cobrindo-o por inteiro, em ordem).
+ * Reconcilia os 6 campos financeiros de cada segmento — fonte SNAPSHOT
+ * (dia a dia real, ver `caminharSequenciaAcumulada`) ou LOTE MENSAL (fatias
+ * uniformes, sem reconciliação de acumulado). Sem nenhuma das duas, todos os
+ * campos de todos os segmentos ficam 'sem_dado'.
  *
  * @param {Array<object>} linhas linhas CRUAS do mês da unidade
- * @param {Array<{modelo: string, inicio: string, fim: string}>} segmentos
- * @returns {{disponivel: true, fonte: 'snapshot'|'lancamento_mensal'|'sem_dado',
- *            segmentos: Array<{modelo,inicio,fim,semDado:boolean,valores:Record<string,number|null>}>,
- *            acumulado: Record<string,number|null>}
- *         | {disponivel: false, motivo: string, detalhe: object}}
+ * @param {Array<{modelo: string, inicio: string, fim: string}>} segmentos já recortados no mês e cobrindo-o por inteiro, em ordem
+ * @returns {{
+ *   fonte: 'snapshot'|'lancamento_mensal'|'sem_dado',
+ *   segmentos: Array<{modelo:string, inicio:string, fim:string,
+ *     campos: Record<keyof CAMPOS_FINANCEIROS, {valorOficial:number|null, status:string, motivo:string|null, ultimoValorValido:{valor:number,data:string}|null, detalhe:object|null}>}>,
+ * }}
  */
 export function dividirFinanceiroPorSegmento(linhas, segmentos) {
   const todas = linhas ?? [];
-  const reais = todas.filter((r) =>
-    situacaoOperou(r.situacao) && r.origem_lancamento !== "distribuicao_mensal" && r.valor_vendas_ifood != null);
+  const temSnapshotReal = todas.some((r) => r.origem_lancamento !== "distribuicao_mensal" && r.valor_vendas_ifood != null);
+  if (temSnapshotReal) return dividirPorSnapshot(todas, segmentos);
 
-  if (reais.length) return dividirPorSnapshot(todas, reais, segmentos);
-
-  const lote = todas.filter((r) =>
-    situacaoOperou(r.situacao) && r.origem_lancamento === "distribuicao_mensal" && r.valor_vendas_ifood != null);
+  const lote = todas.filter((r) => r.origem_lancamento === "distribuicao_mensal" && r.valor_vendas_ifood != null);
   if (lote.length) return dividirPorLoteMensal(lote, segmentos);
 
+  const semDado = { valorOficial: null, status: STATUS_CONCILIACAO.SEM_DADO, motivo: null, ultimoValorValido: null, detalhe: null };
   return {
-    disponivel: true, fonte: "sem_dado",
-    segmentos: segmentos.map((s) => ({ ...s, semDado: true, valores: vazio() })),
-    acumulado: vazio(),
+    fonte: "sem_dado",
+    segmentos: segmentos.map((s) => ({
+      ...s, campos: Object.fromEntries(Object.keys(CAMPOS_FINANCEIROS).map((k) => [k, { ...semDado }])),
+    })),
+    periodoDireto: Object.fromEntries(Object.keys(CAMPOS_FINANCEIROS).map((k) => [k, { ...semDado }])),
   };
 }
 
-function dividirPorSnapshot(todas, reais, segmentos) {
-  const ultimoAte = (dataIso) => reais
-    .filter((r) => r.data_lancamento <= dataIso)
-    .reduce((mais, r) => (!mais || r.data_lancamento > mais.data_lancamento ? r : mais), null);
-  const diasNaoOperados = new Set(todas.filter((r) => !situacaoOperou(r.situacao)).map((r) => r.data_lancamento));
-
-  const pontos = []; // acumulado no fim de cada segmento (null = nada apurado até ali)
-  const n = segmentos.length;
-  for (let i = 0; i < n; i += 1) {
-    const seg = segmentos[i];
-    const snap = ultimoAte(seg.fim);
-    if (i < n - 1) {
-      // Virada: o snapshot precisa cobrir até o ÚLTIMO dia deste regime. Aceita um snapshot mais
-      // antigo só se TODOS os dias entre ele e a virada foram dias sem operação (nada a acumular).
-      const de = snap ? snap.data_lancamento : diaAnterior(segmentos[0].inicio);
-      const lacuna = datasEntre(de, seg.fim);
-      if (lacuna.some((d) => !diasNaoOperados.has(d))) {
-        return {
-          disponivel: false, motivo: MOTIVOS_DIVISAO_INDISPONIVEL.SNAPSHOT_DE_VIRADA_AUSENTE,
-          detalhe: { dataNecessaria: seg.fim, modelo: seg.modelo },
-        };
+function dividirPorSnapshot(todas, segmentos) {
+  const resultado = segmentos.map((s) => ({ ...s, campos: {} }));
+  const periodoDireto = {};
+  const fimPeriodo = segmentos[segmentos.length - 1].fim;
+  for (const [campoCamel, coluna] of Object.entries(CAMPOS_FINANCEIROS)) {
+    const sequencia = caminharSequenciaAcumulada(todas, coluna);
+    // PERÍODO DIRETO — o total do período INTEIRO não precisa do recorte por
+    // segmento quando o campo se aplica aos DOIS modelos (faturamento, taxas,
+    // serviços, ajustes): é sempre "o último ponto confiável", igual a ler o
+    // snapshot mais recente direto — não fica refém de UM ponto de corte
+    // faltando no meio do mês enquanto o total geral é perfeitamente
+    // conhecido (reaproveita `reconciliarCampoSegmento` com
+    // `ehPrimeiroSegmento=true`: é exatamente essa semântica de "sem
+    // subtração, o valor do fim já é o total").
+    periodoDireto[campoCamel] = reconciliarCampoSegmento(sequencia, null, fimPeriodo, true);
+    segmentos.forEach((seg, i) => {
+      const indicador = INDICADOR_DO_CAMPO[campoCamel];
+      if (indicador && !indicadorAplicavel(seg.modelo, indicador)) {
+        resultado[i].campos[campoCamel] = { valorOficial: null, status: STATUS_CONCILIACAO.NAO_APLICAVEL, motivo: null, ultimoValorValido: null, detalhe: null };
+        return;
       }
-    }
-    pontos.push(snap);
+      resultado[i].campos[campoCamel] = reconciliarCampoSegmento(sequencia, seg.inicio, seg.fim, i === 0);
+    });
   }
-
-  const resultado = [];
-  for (let i = 0; i < n; i += 1) {
-    const cur = pontos[i];
-    const prev = i === 0 ? null : pontos[i - 1];
-    const semNovoSnapshot = !cur || (prev && cur.data_lancamento === prev.data_lancamento);
-    if (semNovoSnapshot) { resultado.push({ ...segmentos[i], semDado: true, valores: vazio() }); continue; }
-
-    const vc = valoresDe(cur);
-    const vp = prev ? valoresDe(prev) : null;
-    const valores = {};
-    for (const k of Object.keys(CAMPOS_FINANCEIROS)) {
-      if (vc[k] == null) valores[k] = null;
-      else if (!vp) valores[k] = vc[k];
-      else valores[k] = vp[k] == null ? null : vc[k] - vp[k];
-      if (valores[k] != null && valores[k] < -TOLERANCIA) {
-        return {
-          disponivel: false, motivo: MOTIVOS_DIVISAO_INDISPONIVEL.ACUMULADO_INCONSISTENTE,
-          detalhe: { campo: k, data: cur.data_lancamento },
-        };
-      }
-    }
-    resultado.push({ ...segmentos[i], semDado: false, valores });
-  }
-
-  const ultimo = pontos.reduce((mais, p) => (p && (!mais || p.data_lancamento > mais.data_lancamento) ? p : mais), null);
-  return { disponivel: true, fonte: "snapshot", segmentos: resultado, acumulado: valoresDe(ultimo) };
+  return { fonte: "snapshot", segmentos: resultado, periodoDireto };
 }
+
+/**
+ * Lote mensal: fatias UNIFORMES por dia, não um acumulado — soma direto, sem
+ * caminhada de reconciliação (não existe "queda de acumulado" numa fatia).
+ * Um lote que atravessa a troca não tem como ser dividido com segurança —
+ * granular mesmo assim: todos os campos dos segmentos envolvidos ficam
+ * 'nao_conciliavel' (não é "o mês inteiro", é "os campos que dependem desta
+ * fonte"; ver `MOTIVOS_INDISPONIVEL.LOTE_MENSAL_ATRAVESSA_TROCA`).
+ */
+export const MOTIVOS_INDISPONIVEL = {
+  LOTE_MENSAL_ATRAVESSA_TROCA: "lote_mensal_atravessa_troca",
+};
 
 function dividirPorLoteMensal(lote, segmentos) {
   const daFatia = (seg) => lote.filter((r) => r.data_lancamento >= seg.inicio && r.data_lancamento <= seg.fim);
   const comFatia = segmentos.filter((s) => daFatia(s).length > 0);
-  if (comFatia.length > 1) {
-    return {
-      disponivel: false, motivo: MOTIVOS_DIVISAO_INDISPONIVEL.LANCAMENTO_MENSAL_ATRAVESSA_TROCA,
-      detalhe: { modelos: comFatia.map((s) => s.modelo) },
-    };
-  }
+  const atravessaTroca = comFatia.length > 1;
+
   const somar = (rows, col) => {
-    const xs = rows.map((r) => r[col]).filter((x) => x != null);
-    return xs.length ? xs.reduce((s, x) => s + Number(x), 0) : null;
+    const xs = rows.map((r) => r[col]).filter((x) => x != null).map(Number);
+    return somaOuNull(xs);
   };
   const resultado = segmentos.map((seg) => {
+    const indicadorAplicavelCampo = (campoCamel) => {
+      const indicador = INDICADOR_DO_CAMPO[campoCamel];
+      return !indicador || indicadorAplicavel(seg.modelo, indicador);
+    };
+    if (atravessaTroca) {
+      return {
+        ...seg,
+        campos: Object.fromEntries(Object.keys(CAMPOS_FINANCEIROS).map((k) => [k, indicadorAplicavelCampo(k)
+          ? { valorOficial: null, status: STATUS_CONCILIACAO.NAO_CONCILIAVEL, motivo: MOTIVOS_INDISPONIVEL.LOTE_MENSAL_ATRAVESSA_TROCA, ultimoValorValido: null, detalhe: { modelos: comFatia.map((s) => s.modelo) } }
+          : { valorOficial: null, status: STATUS_CONCILIACAO.NAO_APLICAVEL, motivo: null, ultimoValorValido: null, detalhe: null }])),
+      };
+    }
     const rows = daFatia(seg);
-    if (!rows.length) return { ...seg, semDado: true, valores: vazio() };
     return {
-      ...seg, semDado: false,
-      valores: Object.fromEntries(Object.entries(CAMPOS_FINANCEIROS).map(([k, col]) => [k, somar(rows, col)])),
+      ...seg,
+      campos: Object.fromEntries(Object.entries(CAMPOS_FINANCEIROS).map(([campoCamel, coluna]) => {
+        if (!indicadorAplicavelCampo(campoCamel)) return [campoCamel, { valorOficial: null, status: STATUS_CONCILIACAO.NAO_APLICAVEL, motivo: null, ultimoValorValido: null, detalhe: null }];
+        const valor = rows.length ? somar(rows, coluna) : null;
+        return [campoCamel, valor == null
+          ? { valorOficial: null, status: STATUS_CONCILIACAO.SEM_DADO, motivo: null, ultimoValorValido: null, detalhe: null }
+          : { valorOficial: valor, status: STATUS_CONCILIACAO.CONCILIADO, motivo: null, ultimoValorValido: { valor, data: seg.fim }, detalhe: null }];
+      })),
     };
   });
-  const dado = resultado.find((s) => !s.semDado);
-  return { disponivel: true, fonte: "lancamento_mensal", segmentos: resultado, acumulado: dado ? { ...dado.valores } : vazio() };
+  // Período direto (lote mensal): soma de TODAS as fatias do mês, sem
+  // depender de fronteira de segmento — fatias não são acumulado, então o
+  // total do período nunca fica refém de um ponto de corte ausente.
+  const periodoDireto = Object.fromEntries(Object.entries(CAMPOS_FINANCEIROS).map(([campoCamel, coluna]) => {
+    const valor = somar(lote, coluna);
+    return [campoCamel, valor == null
+      ? { valorOficial: null, status: STATUS_CONCILIACAO.SEM_DADO, motivo: null, ultimoValorValido: null, detalhe: null }
+      : { valorOficial: valor, status: STATUS_CONCILIACAO.CONCILIADO, motivo: null, ultimoValorValido: null, detalhe: null }];
+  }));
+  return { fonte: "lancamento_mensal", segmentos: resultado, periodoDireto };
+}
+
+/** Soma os valores oficiais dos segmentos elegíveis; status = pior entre eles; `ultimoValorValido` = melhor esforço (contexto, nunca oficial). */
+function consolidarCampo(segmentosCampo) {
+  const elegiveis = segmentosCampo.filter((c) => c.status !== STATUS_CONCILIACAO.NAO_APLICAVEL);
+  if (!elegiveis.length) return { valor: null, status: STATUS_CONCILIACAO.NAO_APLICAVEL, ultimoValorValido: null };
+  const status = piorStatus(...elegiveis.map((c) => c.status));
+  if (status === STATUS_CONCILIACAO.CONCILIADO) {
+    return { valor: somaOuNull(elegiveis.map((c) => num(c.valorOficial))), status, ultimoValorValido: null };
+  }
+  // Não-conciliado: soma de melhor esforço só como CONTEXTO (nunca alimenta % / meta / diagnóstico).
+  const partes = elegiveis.map((c) => (c.status === STATUS_CONCILIACAO.CONCILIADO ? c.valorOficial : c.ultimoValorValido?.valor) ?? 0);
+  const dataMaisRecente = elegiveis.map((c) => c.ultimoValorValido?.data ?? null).filter(Boolean).sort().pop() ?? null;
+  return { valor: null, status, ultimoValorValido: dataMaisRecente ? { valor: partes.reduce((a, b) => a + b, 0), data: dataMaisRecente } : null };
 }
 
 /**
- * Consolida os segmentos em valores do período. Só usa VALORES em reais.
- *  - faturamento, taxas e comissões, serviços e promoções, ajustes: o acumulado do período
- *    (= soma dos segmentos; componentes aplicáveis a ambos os modelos);
- *  - taxas de entregadores: SÓ dos segmentos onde o componente existe (Marketplace);
- *  - Total de Deduções: Σ por segmento de `totalDeducoesIndicador(modeloDoSegmento, …)` — cada dia
- *    entra com as parcelas do SEU regime;
- *  - `baseEntregadores`: faturamento só dos segmentos onde entregadores se aplica (denominador do %).
- * @param {Extract<ReturnType<typeof dividirFinanceiroPorSegmento>, {disponivel: true}>} divisao
+ * Consolida os segmentos reconciliados (`dividirFinanceiroPorSegmento`) em
+ * valores do PERÍODO — granular: cada indicador carrega seu PRÓPRIO status,
+ * nunca um apagão conjunto.
+ *  - taxas de entregadores / sua base: só dos segmentos onde o componente se aplica (Marketplace);
+ *  - Total de Deduções: por segmento, soma dos componentes APLICÁVEIS ao modelo
+ *    daquele segmento (mesma regra de `totalDeducoesIndicador`), status = pior
+ *    componente aplicável daquele segmento; depois soma os segmentos;
+ *  - Receita Líquida: depende de faturamento + Total de Deduções (financeiro,
+ *    inclui ajustes contra) + ajustes a favor — herda o pior dos três.
+ * `porSegmento`: o MESMO cálculo (campos + Total de Deduções + Receita
+ * Líquida), mas por REGIME — alimenta a "Conciliação do Período" e o
+ * comparativo Marketplace × Full Service (nunca duplica a fórmula: reusa
+ * `receitaLiquidaDoRecorte`/`totalDeducoesDoSegmento` com o recorte de um
+ * segmento só).
+ * @param {ReturnType<typeof dividirFinanceiroPorSegmento>} divisao
+ * @returns {{
+ *   campos: Record<keyof CAMPOS_FINANCEIROS, RegistroConsolidado>,
+ *   totalDeducoes: RegistroConsolidado,
+ *   receitaLiquida: RegistroConsolidado,
+ *   baseEntregadores: RegistroConsolidado,
+ *   porSegmento: Array<{modelo:string, inicio:string, fim:string, campos: Record<keyof CAMPOS_FINANCEIROS, RegistroConsolidado>, totalDeducoes: RegistroConsolidado, receitaLiquida: RegistroConsolidado}>,
+ * }}
  */
 export function consolidarSegmentos(divisao) {
   const segs = divisao.segmentos;
-  const comEntregadores = segs.filter((s) => indicadorAplicavel(s.modelo, "taxas_entregadores"));
+  const campos = {};
+  for (const campoCamel of Object.keys(CAMPOS_FINANCEIROS)) {
+    if (campoCamel === "taxasEntregadores") {
+      // Único campo que genuinamente precisa de fronteira de segmento: o
+      // total do período TEM que excluir a parte Full Service (não aplicável).
+      campos[campoCamel] = consolidarCampo(segs.map((s) => s.campos[campoCamel]));
+      continue;
+    }
+    // Demais campos (faturamento, taxas, serviços, ajustes) se aplicam aos
+    // DOIS modelos — o total do PERÍODO não depende de nenhuma fronteira de
+    // segmento, é sempre o último ponto confiável (ver `dividirPorSnapshot`
+    // #periodoDireto). Um segmento sem ponto de corte no meio do mês não
+    // pode derrubar um total que, pela via direta, é perfeitamente conhecido.
+    const d = divisao.periodoDireto[campoCamel];
+    campos[campoCamel] = { valor: d.valorOficial, status: d.status, ultimoValorValido: d.ultimoValorValido };
+  }
 
-  let taxasEntregadores = null;
-  const parciais = comEntregadores.filter((s) => !s.semDado).map((s) => s.valores.taxasEntregadores);
-  if (parciais.length && parciais.every((p) => p != null)) taxasEntregadores = parciais.reduce((a, b) => a + b, 0);
-
-  const totaisPorSegmento = segs.filter((s) => !s.semDado).map((s) => totalDeducoesIndicador(s.modelo, {
-    taxas_comissoes: s.valores.taxasComissoes,
-    servicos_promocoes: s.valores.servicosPromocoes,
-    taxas_entregadores: s.valores.taxasEntregadores,
-  })).filter((t) => t != null);
-  const totalDeducoes = totaisPorSegmento.length ? totaisPorSegmento.reduce((a, b) => a + b, 0) : null;
-
-  const baseEntregadores = comEntregadores.reduce((s, x) => s + (x.valores.valorVendasIfood ?? 0), 0);
-
-  return {
-    cardValores: { ...divisao.acumulado, taxasEntregadores },
-    totalDeducoes,
-    baseEntregadores,
+  // Total de Deduções: cada SEGMENTO primeiro (só componentes aplicáveis ao
+  // seu modelo), depois soma os segmentos — nunca aplica componentes de um
+  // modelo aos dias do outro. Exposto TAMBÉM por segmento (não só o
+  // consolidado) — a Conciliação do Período mostra o total de CADA regime.
+  const totalDeducoesDoSegmento = (s) => {
+    const aplicaveis = componentesTotalDeducoes(s.modelo).map((ind) => {
+      const campoCamel = Object.keys(INDICADOR_DO_CAMPO).find((k) => INDICADOR_DO_CAMPO[k] === ind);
+      return s.campos[campoCamel];
+    });
+    if (!aplicaveis.length) return { valor: null, status: STATUS_CONCILIACAO.NAO_APLICAVEL, ultimoValorValido: null };
+    const status = piorStatus(...aplicaveis.map((c) => c.status));
+    if (status === STATUS_CONCILIACAO.CONCILIADO) {
+      return { valor: totalDeducoesIndicador(s.modelo, {
+        taxas_comissoes: s.campos.taxasComissoes.valorOficial,
+        servicos_promocoes: s.campos.servicosPromocoes.valorOficial,
+        taxas_entregadores: s.campos.taxasEntregadores?.valorOficial,
+      }), status, ultimoValorValido: null };
+    }
+    const partes = aplicaveis.map((c) => (c.status === STATUS_CONCILIACAO.CONCILIADO ? c.valorOficial : c.ultimoValorValido?.valor) ?? 0);
+    return { valor: null, status, ultimoValorValido: { valor: partes.reduce((a, b) => a + b, 0), data: s.fim } };
   };
+  const totalPorSegmento = segs.map(totalDeducoesDoSegmento);
+  const totalDeducoes = consolidarCampo(totalPorSegmento.map((t) => ({ status: t.status, valorOficial: t.valor, ultimoValorValido: t.ultimoValorValido })));
+
+  // Receita Líquida usa o total FINANCEIRO ("caixa real": taxas + serviços +
+  // entregadores + ajustes CONTRA — nunca o total do INDICADOR acima, que
+  // não inclui ajustes; mesma distinção de calc.js#totalDeducoes vs
+  // #totalDeducoesIndicador). Mesma fórmula aplicada a QUALQUER "recorte" com
+  // forma de `campos` (um segmento OU o consolidado) — não duplica a regra.
+  //
+  // Ajustes (favor/contra) são OPCIONAIS por natureza — a maioria dos meses
+  // não tem nenhum. "Nunca informado" (sem_dado) não pode degradar o total
+  // financeiro nem a Receita Líquida (mesma leniência de calc.js#totalDeducoes:
+  // some só o que existe); só degrada quando EXISTE um ajuste e ELE PRÓPRIO é
+  // suspeito/não-conciliável — aí é uma inconsistência real, não ausência.
+  const ehAjusteDuvidoso = (c) => c.status === STATUS_CONCILIACAO.SUSPEITO || c.status === STATUS_CONCILIACAO.NAO_CONCILIAVEL;
+  const valorOuZero = (c) => (c.status === STATUS_CONCILIACAO.CONCILIADO ? (c.valor ?? 0) : 0);
+
+  function receitaLiquidaDoRecorte(camposDoRecorte) {
+    const obrigatoriosFinanceiro = [camposDoRecorte.taxasComissoes, camposDoRecorte.servicosPromocoes, camposDoRecorte.taxasEntregadores]
+      .filter((c) => c.status !== STATUS_CONCILIACAO.NAO_APLICAVEL);
+    const statusFinanceiro = piorStatus(
+      ...obrigatoriosFinanceiro.map((c) => c.status),
+      ehAjusteDuvidoso(camposDoRecorte.ajustesContraLoja) ? camposDoRecorte.ajustesContraLoja.status : STATUS_CONCILIACAO.CONCILIADO,
+    );
+    const totalFinanceiro = statusFinanceiro === STATUS_CONCILIACAO.CONCILIADO
+      ? obrigatoriosFinanceiro.reduce((s, c) => s + valorOuZero(c), 0) + valorOuZero(camposDoRecorte.ajustesContraLoja)
+      : null;
+    const statusReceita = piorStatus(
+      camposDoRecorte.valorVendasIfood.status, statusFinanceiro,
+      ehAjusteDuvidoso(camposDoRecorte.ajustesFavorLoja) ? camposDoRecorte.ajustesFavorLoja.status : STATUS_CONCILIACAO.CONCILIADO,
+    );
+    return statusReceita === STATUS_CONCILIACAO.CONCILIADO
+      ? { valor: (camposDoRecorte.valorVendasIfood.valor ?? 0) - (totalFinanceiro ?? 0) + valorOuZero(camposDoRecorte.ajustesFavorLoja), status: statusReceita, ultimoValorValido: null }
+      : { valor: null, status: statusReceita, ultimoValorValido: null };
+  }
+
+  // `campos` de um segmento tem a mesma forma de `campos` consolidado
+  // (RegistroCampo com `.valorOficial`) — normaliza pra `.valor` só pra reusar `receitaLiquidaDoRecorte`.
+  const comoCamposConsolidado = (s) => Object.fromEntries(
+    Object.entries(s.campos).map(([k, c]) => [k, { valor: c.valorOficial, status: c.status, ultimoValorValido: c.ultimoValorValido }]),
+  );
+  const porSegmento = segs.map((s, i) => {
+    const camposNormalizados = comoCamposConsolidado(s);
+    return {
+      modelo: s.modelo, inicio: s.inicio, fim: s.fim,
+      campos: camposNormalizados,
+      totalDeducoes: totalPorSegmento[i],
+      receitaLiquida: receitaLiquidaDoRecorte(camposNormalizados),
+    };
+  });
+
+  const receitaLiquida = receitaLiquidaDoRecorte(campos);
+
+  const comEntregadores = segs.filter((s) => indicadorAplicavel(s.modelo, "taxas_entregadores"));
+  const baseEntregadores = consolidarCampo(comEntregadores.map((s) => s.campos.valorVendasIfood));
+
+  return { campos, totalDeducoes, receitaLiquida, baseEntregadores, porSegmento };
+}
+
+/**
+ * Resumo de UM motivo (compat com o aviso discreto de sempre na UI) a partir
+ * do consolidado granular — o PIOR problema entre faturamento, Total de
+ * Deduções e Receita Líquida (os três que alimentam Meta/Indicadores/
+ * Diagnóstico). NÃO substitui a granularidade: é só o resumo de mais alto
+ * nível; o detalhe campo a campo continua disponível em `divisao`/`consolidado`
+ * pra quem precisar (painéis de Conciliação/Comparativo).
+ * @param {ReturnType<typeof consolidarSegmentos>} consolidado
+ * @returns {{disponivel: boolean, motivo: string|null, detalhe: object|null}}
+ */
+export function resumirConciliacao(consolidado) {
+  const relevantes = [consolidado.campos.valorVendasIfood, consolidado.totalDeducoes, consolidado.receitaLiquida];
+  // Qualquer status != conciliado é "indisponível" pro resumo — inclusive
+  // 'sem_dado' (ainda não há dado suficiente pra separar os regimes, não é
+  // um problema de qualidade, mas o aviso continua sendo útil: orienta a
+  // lançar o dia que falta). O `motivo` distingue os dois casos pra UI.
+  const problematico = relevantes.find((c) => c.status !== STATUS_CONCILIACAO.CONCILIADO);
+  if (!problematico) return { disponivel: true, motivo: null, detalhe: null };
+  return { disponivel: false, motivo: problematico.status, detalhe: { ultimoValorValido: problematico.ultimoValorValido } };
 }
 
 /**
  * Meta composta de um período misto: média das metas de cada regime PONDERADA
  * PELO FATURAMENTO do regime, considerando só os regimes onde o indicador se
- * aplica. Equivale a somar a meta em R$ de cada regime e dividir pela base
- * elegível total:  meta = Σ(metaᵢ × faturamentoᵢ) / Σ faturamentoᵢ.
- * (Vale para `metaIdeal` e `limite`.) Sem faturamento algum nos regimes
- * elegíveis, usa o último regime aplicável — não há resultado a avaliar.
+ * aplica E cujo faturamento (peso) está CONCILIADO — um peso não confiável
+ * não entra na ponderação silenciosamente (a meta composta fica indisponível
+ * para esse indicador, nunca com um peso inventado).
+ * Equivale a somar a meta em R$ de cada regime e dividir pela base elegível
+ * total: meta = Σ(metaᵢ × faturamentoᵢ) / Σ faturamentoᵢ. (Vale para
+ * `metaIdeal` e `limite`.)
  *
- * @param {Array<{modelo: string, peso: number, metas: Record<string, {metaIdeal: number|null, limite: number}>}>} partes
+ * @param {Array<{modelo: string, peso: number|null, pesoConciliado: boolean, metas: Record<string, {metaIdeal: number|null, limite: number}>}>} partes
  * @param {string[]} indicadores
  * @returns {Record<string, {metaIdeal: number|null, limite: number}>}
  */
@@ -222,6 +349,7 @@ export function comporMetas(partes, indicadores) {
   for (const ind of indicadores) {
     const elegiveis = partes.filter((p) => indicadorAplicavel(p.modelo, ind) && p.metas?.[ind]);
     if (!elegiveis.length) continue;
+    if (elegiveis.some((p) => !p.pesoConciliado)) continue; // peso não confiável -> sem meta composta (nunca inventa)
     const pesoTotal = elegiveis.reduce((s, p) => s + Math.max(0, p.peso ?? 0), 0);
     if (pesoTotal <= 0) { resultado[ind] = { ...elegiveis[elegiveis.length - 1].metas[ind] }; continue; }
     const pond = (campo) => {

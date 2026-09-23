@@ -48,15 +48,24 @@ describe("avisoDivisaoIndisponivel", () => {
     assert.equal(avisoDivisaoIndisponivel({ misto: false }), null);
     assert.equal(avisoDivisaoIndisponivel(undefined), null);
   });
-  test("falta o acumulado da véspera da troca: diz QUAL data lançar", () => {
-    const a = avisoDivisaoIndisponivel({ ...misto, divisaoDisponivel: false, divisaoMotivo: "snapshot_de_virada_ausente", divisaoDetalhe: { dataNecessaria: "2026-09-12" } });
-    assert.match(a, /12\/09\/2026/);
+  test("sem dado ainda: mensagem própria, sem alarme de inconsistência", () => {
+    const a = avisoDivisaoIndisponivel({ ...misto, divisaoDisponivel: false, divisaoMotivo: "sem_dado", divisaoDetalhe: { ultimoValorValido: null } });
+    assert.match(a, /Ainda não há dados suficientes/);
     assert.match(a, /Taxas de Entregadores/);
   });
-  test("lote mensal que atravessa a troca e acumulado inconsistente têm mensagens próprias", () => {
-    assert.match(avisoDivisaoIndisponivel({ ...misto, divisaoDisponivel: false, divisaoMotivo: "lancamento_mensal_atravessa_troca" }), /lançamento mensal/);
-    assert.match(avisoDivisaoIndisponivel({ ...misto, divisaoDisponivel: false, divisaoMotivo: "acumulado_inconsistente", divisaoDetalhe: { data: "2026-09-18" } }), /18\/09\/2026/);
-    assert.match(avisoDivisaoIndisponivel({ ...misto, divisaoDisponivel: false, divisaoMotivo: "outro" }), /Não foi possível separar/);
+  test("suspeito e não conciliável têm mensagens próprias, com contexto do último valor confiável quando houver", () => {
+    const suspeito = avisoDivisaoIndisponivel({
+      ...misto, divisaoDisponivel: false, divisaoMotivo: "suspeito",
+      divisaoDetalhe: { ultimoValorValido: { valor: 9253, data: "2026-09-17" } },
+    });
+    assert.match(suspeito, /valor suspeito/);
+    assert.match(suspeito, /9\.253,00/);
+    assert.match(suspeito, /17\/09\/2026/);
+    assert.match(avisoDivisaoIndisponivel({ ...misto, divisaoDisponivel: false, divisaoMotivo: "nao_conciliavel" }), /não pôde ser conciliada/);
+  });
+  test("os demais indicadores continuam disponíveis — a mensagem nunca diz 'mês inteiro'", () => {
+    const a = avisoDivisaoIndisponivel({ ...misto, divisaoDisponivel: false, divisaoMotivo: "suspeito", divisaoDetalhe: {} });
+    assert.match(a, /demais indicadores continuam disponíveis/);
   });
 });
 

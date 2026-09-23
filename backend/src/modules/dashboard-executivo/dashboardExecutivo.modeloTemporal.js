@@ -176,11 +176,16 @@ export function modelosDasDatas(linhaDoTempo, datas, fallback = []) {
 
 /**
  * Descrição do período consultado para a API/UI: o estado derivado (nunca
- * persistido), os segmentos por modelo e se a divisão dos indicadores por
- * regime foi possível (`divisao` = saída de `dividirFinanceiroPorSegmento`).
- * @param {{estado: ReturnType<typeof estadoDoPeriodo>, segmentos: Array<{modelo: string, inicio: string, fim: string}>, linhaDoTempo: PeriodoModelo[], divisao: any}} p
+ * persistido), os segmentos por modelo e a reconciliação financeira granular
+ * (ver dashboardExecutivo.confiabilidade.js / periodoMisto.js — cada campo de
+ * cada segmento tem seu próprio status; isto aqui não decide nada disso, só
+ * empacota o que `dashboardExecutivo.service.js` já calculou).
+ * `resumoConciliacao`/`fonteConciliacao`: resumo de UM motivo (o pior
+ * problema, se houver) para o aviso discreto da UI — ver periodoMisto.js#resumirConciliacao.
+ * `conciliacao`: detalhe campo a campo, para os painéis de Conciliação/Comparativo.
+ * @param {{estado: ReturnType<typeof estadoDoPeriodo>, segmentos: Array<{modelo: string, inicio: string, fim: string}>, linhaDoTempo: PeriodoModelo[], resumoConciliacao: {disponivel:boolean,motivo:string|null,detalhe:object|null}|null, fonteConciliacao: string|null, conciliacao: object|null}} p
  */
-export function descreverPeriodo({ estado, segmentos, linhaDoTempo, divisao }) {
+export function descreverPeriodo({ estado, segmentos, linhaDoTempo, resumoConciliacao, fonteConciliacao, conciliacao }) {
   const aberto = linhaDoTempo[linhaDoTempo.length - 1];
   return {
     tipo: estado.tipo,
@@ -190,9 +195,10 @@ export function descreverPeriodo({ estado, segmentos, linhaDoTempo, divisao }) {
       modelo: s.modelo, rotulo: ROTULO_MODELO[s.modelo] ?? s.modelo, inicio: s.inicio, fim: s.fim,
       emAberto: i === segmentos.length - 1 && aberto.fim == null && aberto.modelo === s.modelo,
     })),
-    divisaoDisponivel: divisao ? divisao.disponivel : true,
-    divisaoMotivo: divisao && !divisao.disponivel ? divisao.motivo : null,
-    divisaoDetalhe: divisao && !divisao.disponivel ? divisao.detalhe : null,
-    fonteDivisao: divisao?.disponivel ? divisao.fonte : null,
+    divisaoDisponivel: resumoConciliacao ? resumoConciliacao.disponivel : true,
+    divisaoMotivo: resumoConciliacao && !resumoConciliacao.disponivel ? resumoConciliacao.motivo : null,
+    divisaoDetalhe: resumoConciliacao && !resumoConciliacao.disponivel ? resumoConciliacao.detalhe : null,
+    fonteDivisao: fonteConciliacao,
+    conciliacao,
   };
 }

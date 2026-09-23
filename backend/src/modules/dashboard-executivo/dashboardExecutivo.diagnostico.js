@@ -60,6 +60,12 @@ export const LIMIARES_DIAGNOSTICO = {
   cenarioParcialPct: 10, // "recuperação parcial" = média atual + 10%
   cenarioForcaPct: 20,   // "recuperação forte"   = média atual + 20%
   diasParaAmostraPendentes: 5, // quantas datas listar antes de "+N dias"
+  // Comparativo Marketplace × Full Service (período misto): um regime com
+  // menos dias que isto no período consultado é "amostra inicial" — os
+  // números aparecem, mas a comparação não sustenta uma conclusão de
+  // tendência. MESMO limiar de `diasPendentesParaBaixa` (5) — não é um
+  // número novo, é a mesma régua de "poucos dias" já usada pra confiabilidade.
+  diasSegmentoParaAmostraPequena: 5,
 };
 
 const fmtPct1 = (v) => `${Number(v).toFixed(1)}%`;
@@ -78,6 +84,7 @@ const ROTULO_ACHADO = {
   ...ROTULO_INDICADOR,
   total_deducoes: "Total de Deduções",
   faturamento: "Faturamento",
+  receita_liquida: "Receita Líquida",
 };
 
 // Orientação por indicador — sempre "o que ANALISAR/fazer", nunca uma causa
@@ -144,10 +151,18 @@ export function confiabilidadeDados({ diasComDados, diasPendentes, diasEstimados
  * Taxas e Comissões / Serviços e Promoções / Taxas de Entregadores —
  * meta ideal x limite, em % e R$. Dentro da meta -> item de MANUTENÇÃO
  * (HEALTHY); acima -> ação corretiva (WARNING/CRITICAL).
+ *
+ * `contexto` (opcional, período misto — item do pedido: um problema que
+ * existe SÓ num regime não pode virar recomendação genérica do mês inteiro):
+ * `{sufixoId, rotuloPrefixo}` — reusa esta MESMA função por segmento (chamada
+ * uma vez por regime em `gerarDiagnostico`), só prefixando id/título pra não
+ * colidir com o achado consolidado.
  */
-function analisarIndicadorPercentual(chave, dado, faturamentoBase) {
+function analisarIndicadorPercentual(chave, dado, faturamentoBase, contexto = null) {
   if (!dado || dado.naoAplicavel || dado.atual == null || !dado.meta) return null;
-  const rotulo = ROTULO_INDICADOR[chave];
+  const rotuloBase = ROTULO_INDICADOR[chave];
+  const rotulo = contexto ? `${rotuloBase} — ${contexto.rotuloPrefixo}` : rotuloBase;
+  const idBase = contexto ? `${chave}_${contexto.sufixoId}` : chave;
   const metaIdeal = dado.meta.metaIdeal;
   const limite = dado.meta.limite;
   const st = statusIndicador(dado.atual, dado.meta);
@@ -157,14 +172,14 @@ function analisarIndicadorPercentual(chave, dado, faturamentoBase) {
     const margemPp = metaIdeal - dado.atual;
     return {
       achado: {
-        id: `${chave}_dentro_da_meta`, categoria: chave, severidade: "forte",
+        id: `${idBase}_dentro_da_meta`, categoria: chave, severidade: "forte",
         titulo: `${rotulo} dentro da meta ideal`,
         descricao: `${rotulo} está em ${fmtPct1(dado.atual)}, dentro da meta ideal de ${fmtPct1(metaIdeal)}.`,
         metricas: { percentualAtual: dado.atual, percentualIdeal: metaIdeal, percentualLimite: limite, valorAtual: dado.valor },
       },
       acao: null,
       manutencao: {
-        diagnosticoId: `${chave}_dentro_da_meta`,
+        diagnosticoId: `${idBase}_dentro_da_meta`,
         tipo: "HEALTHY",
         categoria: chave,
         titulo: `Manter ${rotulo} sob controle`,
@@ -222,7 +237,7 @@ function analisarIndicadorPercentual(chave, dado, faturamentoBase) {
 
   return {
     achado: {
-      id: `${chave}_${st.chave}`, categoria: chave, severidade, titulo,
+      id: `${idBase}_${st.chave}`, categoria: chave, severidade, titulo,
       descricao: `${rotulo} está em ${fmtPct1(dado.atual)} — meta ideal ${fmtPct1(metaIdeal)}, limite ${fmtPct1(limite)}.`,
       metricas: {
         percentualAtual: dado.atual, percentualIdeal: metaIdeal, percentualLimite: limite,
@@ -231,7 +246,7 @@ function analisarIndicadorPercentual(chave, dado, faturamentoBase) {
       },
     },
     acao: {
-      diagnosticoId: `${chave}_${st.chave}`,
+      diagnosticoId: `${idBase}_${st.chave}`,
       tipo,
       categoria: chave,
       titulo,
@@ -257,9 +272,15 @@ function analisarIndicadorPercentual(chave, dado, faturamentoBase) {
   };
 }
 
-/** Total de Deduções — meta ideal x limite + qual componente mais contribui (sem inferir causa). */
-function analisarTotalDeducoes(dado, componentes, faturamentoBase) {
+/**
+ * Total de Deduções — meta ideal x limite + qual componente mais contribui
+ * (sem inferir causa). `contexto` (opcional): mesmo espírito de
+ * `analisarIndicadorPercentual` — chamada uma vez por segmento no período misto.
+ */
+function analisarTotalDeducoes(dado, componentes, faturamentoBase, contexto = null) {
   if (!dado || dado.atual == null || !dado.meta) return null;
+  const rotuloTd = contexto ? `Total de Deduções — ${contexto.rotuloPrefixo}` : "Total de Deduções";
+  const idBase = contexto ? `total_deducoes_${contexto.sufixoId}` : "total_deducoes";
   const metaIdeal = dado.meta.metaIdeal;
   const limite = dado.meta.limite;
   const st = statusIndicador(dado.atual, dado.meta);
@@ -268,22 +289,22 @@ function analisarTotalDeducoes(dado, componentes, faturamentoBase) {
     const margemPp = metaIdeal - dado.atual;
     return {
       achado: {
-        id: "total_deducoes_dentro_da_meta", categoria: "total_deducoes", severidade: "forte",
-        titulo: "Total de Deduções dentro da meta ideal",
-        descricao: `Total de deduções em ${fmtPct1(dado.atual)}, dentro da meta ideal de ${fmtPct1(metaIdeal)}.`,
+        id: `${idBase}_dentro_da_meta`, categoria: "total_deducoes", severidade: "forte",
+        titulo: `${rotuloTd} dentro da meta ideal`,
+        descricao: `${rotuloTd} em ${fmtPct1(dado.atual)}, dentro da meta ideal de ${fmtPct1(metaIdeal)}.`,
         metricas: { percentualAtual: dado.atual, percentualIdeal: metaIdeal, percentualLimite: limite },
       },
       acao: null,
       manutencao: {
-        diagnosticoId: "total_deducoes_dentro_da_meta",
+        diagnosticoId: `${idBase}_dentro_da_meta`,
         tipo: "HEALTHY",
         categoria: "total_deducoes",
-        titulo: "Manter o total de deduções sob controle",
+        titulo: `Manter ${rotuloTd.toLowerCase()} sob controle`,
         situacao: `${fmtPct1(dado.atual)} do faturamento`,
         status: "Dentro da meta",
         meta: { ideal: metaIdeal, limite },
         diferenca: margemPp > 0.05 ? { pp: margemPp } : null,
-        explicacao: `O total de deduções está em ${fmtPct1(dado.atual)}, dentro da faixa saudável (meta ideal ${fmtPct1(metaIdeal)}), e atualmente não exige correção.`,
+        explicacao: `${rotuloTd} está em ${fmtPct1(dado.atual)}, dentro da faixa saudável (meta ideal ${fmtPct1(metaIdeal)}), e atualmente não exige correção.`,
         comoPreservar: COMO_PRESERVAR.total_deducoes,
         objetivo: { proximo: null, ideal: `permanecer ≤ ${fmtPct1(metaIdeal)}` },
         cta: { label: "Ver Indicadores", aba: "indicadores" },
@@ -299,11 +320,11 @@ function analisarTotalDeducoes(dado, componentes, faturamentoBase) {
   const excesso = faturamentoBase != null && dado.valor != null ? dado.valor - (faturamentoBase * metaIdeal) / 100 : null;
   const limiteReais = faturamentoBase != null ? (faturamentoBase * limite) / 100 : null;
   const excessoSobreLimite = limiteReais != null && dado.valor != null ? dado.valor - limiteReais : null;
-  const titulo = tipo === "WARNING" ? "Total de Deduções acima da faixa ideal" : "Total de Deduções acima do limite";
+  const titulo = tipo === "WARNING" ? `${rotuloTd} acima da faixa ideal` : `${rotuloTd} acima do limite`;
 
   const explicacao = tipo === "WARNING"
-    ? `O total de deduções está em ${fmtPct1(dado.atual)} do faturamento — acima da meta ideal de ${fmtPct1(metaIdeal)}, mas ainda dentro do limite de ${fmtPct1(limite)}.${composicaoTexto}`
-    : `O total de deduções está em ${fmtPct1(dado.atual)} do faturamento e ultrapassou o limite máximo de ${fmtPct1(limite)}.${composicaoTexto}`;
+    ? `${rotuloTd} está em ${fmtPct1(dado.atual)} do faturamento — acima da meta ideal de ${fmtPct1(metaIdeal)}, mas ainda dentro do limite de ${fmtPct1(limite)}.${composicaoTexto}`
+    : `${rotuloTd} está em ${fmtPct1(dado.atual)} do faturamento e ultrapassou o limite máximo de ${fmtPct1(limite)}.${composicaoTexto}`;
   const impacto = tipo === "CRITICAL" && excessoSobreLimite != null
     ? `Para retornar ao limite de ${fmtPct1(limite)}, é necessário reduzir aproximadamente ${fmtR(excessoSobreLimite)} no total de deduções.`
     : excesso != null
@@ -315,15 +336,17 @@ function analisarTotalDeducoes(dado, componentes, faturamentoBase) {
 
   return {
     achado: {
-      id: `total_deducoes_${st.chave}`, categoria: "total_deducoes", severidade, titulo,
-      descricao: `Total de deduções em ${fmtPct1(dado.atual)} — meta ideal ${fmtPct1(metaIdeal)}, limite ${fmtPct1(limite)}.${composicaoTexto}`,
+      id: `${idBase}_${st.chave}`, categoria: "total_deducoes", severidade, titulo,
+      descricao: `${rotuloTd} em ${fmtPct1(dado.atual)} — meta ideal ${fmtPct1(metaIdeal)}, limite ${fmtPct1(limite)}.${composicaoTexto}`,
       metricas: { percentualAtual: dado.atual, percentualIdeal: metaIdeal, percentualLimite: limite, excesso, excessoSobreLimite, composicao: conhecidos },
     },
     acao: {
-      diagnosticoId: `total_deducoes_${st.chave}`,
+      diagnosticoId: `${idBase}_${st.chave}`,
       tipo,
       categoria: "total_deducoes",
-      titulo: tipo === "WARNING" ? "Revisar a composição das deduções" : "Reduzir o total de deduções",
+      titulo: tipo === "WARNING"
+        ? (contexto ? `Revisar a composição das deduções — ${contexto.rotuloPrefixo}` : "Revisar a composição das deduções")
+        : (contexto ? `Reduzir o total de deduções — ${contexto.rotuloPrefixo}` : "Reduzir o total de deduções"),
       situacao: `${fmtPct1(dado.atual)} do faturamento`,
       meta: { ideal: metaIdeal, limite },
       diferenca: { pp: dado.atual - metaIdeal, reais: tipo === "CRITICAL" ? (excessoSobreLimite ?? excesso) : excesso },
@@ -488,6 +511,129 @@ function analisarDetalhamentoAusente(indicadores) {
   };
 }
 
+/**
+ * Divergência entre a data ADMINISTRATIVA da troca de modelo logístico e o
+ * comportamento dos próprios dados financeiros (ver
+ * dashboardExecutivo.confiabilidade.js#detectarDivergenciaTransicao — caso
+ * real Subway Feiraguay, 2026-09-22: Taxas de Entregadores parou de acumular
+ * em 18/09, mas a troca só foi registrada a partir de 20/09).
+ *
+ * REGRA DE OURO reforçada aqui: NUNCA sugere corrigir a vigência sozinho —
+ * só descreve o desvio encontrado, sempre como ATENÇÃO (nunca crítico: é uma
+ * possibilidade a verificar, não um problema financeiro confirmado).
+ * @param {{divergente:boolean, dataMudancaOperacional:string|null, diasDeDivergencia:number|null, vigenciaInicio:string}|null} divergencia
+ */
+function analisarDivergenciaTransicao(divergencia) {
+  if (!divergencia?.divergente) return null;
+  const dataOp = fmtDataBrCurta(divergencia.dataMudancaOperacional);
+  const dataAdm = fmtDataBrCurta(divergencia.vigenciaInicio);
+  const explicacao = `Os dados financeiros apresentam mudança de comportamento a partir de ${dataOp}, `
+    + `${divergencia.diasDeDivergencia} dia(s) antes da data registrada para a alteração do modelo logístico (${dataAdm}). `
+    + "Verifique se a operação no novo modelo começou efetivamente antes da data cadastrada.";
+  return {
+    achado: {
+      id: "divergencia_transicao_modelo", categoria: "dados", severidade: "atencao",
+      titulo: "Possível divergência na data de transição operacional",
+      descricao: explicacao,
+      metricas: { dataMudancaOperacional: divergencia.dataMudancaOperacional, vigenciaRegistrada: divergencia.vigenciaInicio, diasDeDivergencia: divergencia.diasDeDivergencia },
+    },
+    acao: {
+      diagnosticoId: "divergencia_transicao_modelo",
+      tipo: "DATA_PENDING",
+      categoria: "dados",
+      titulo: "Confirmar a data efetiva da mudança de modelo",
+      situacao: `Comportamento mudou em ${dataOp}, vigência registrada em ${dataAdm}`,
+      meta: null,
+      diferenca: null,
+      impacto: null,
+      explicacao,
+      acaoRecomendada: "Se a mudança para o novo modelo realmente começou antes, registre a vigência correta em Modelo Logístico (\"Informar quando o modelo atual começou\"). A vigência atual NÃO é alterada automaticamente.",
+      objetivo: { proximo: "confirmar a data efetiva da transição", ideal: null },
+      descricao: explicacao,
+      cta: { label: "Ver Modelo Logístico", aba: "visao-geral" },
+      ordenacao: { temImpacto: false, excessoReais: null, distanciaLimitePp: null },
+    },
+    manutencao: null,
+  };
+}
+
+const ROTULO_MODELO_DIAG = { marketplace: "Marketplace", full_service: "Full Service" };
+
+// Indicadores comparáveis entre regimes e se "maior é pior" (dedução) ou
+// "maior é melhor" (receita) — decide se a diferença é ponto forte ou atenção.
+const COMPARATIVO_INDICADORES = [
+  { chave: "taxas_comissoes", campo: "taxasComissoes", rotulo: "Taxas e Comissões", maiorEhPior: true },
+  { chave: "servicos_promocoes", campo: "servicosPromocoes", rotulo: "Serviços e Promoções", maiorEhPior: true },
+  { chave: "taxas_entregadores", campo: "taxasEntregadores", rotulo: "Taxas de Entregadores", maiorEhPior: true },
+  { chave: "total_deducoes", campo: "totalDeducoes", rotulo: "Total de Deduções", maiorEhPior: true },
+  { chave: "receita_liquida", campo: "receitaLiquida", rotulo: "Receita Líquida", maiorEhPior: false },
+];
+
+/**
+ * Comparativo Marketplace × Full Service — compara o PRIMEIRO e o ÚLTIMO
+ * segmento do período (o caso comum: uma troca, dois regimes). Cada
+ * indicador só é comparado quando os DOIS lados estão conciliados (percentual
+ * sobre o faturamento do PRÓPRIO regime) — nunca compara um lado suspeito, e
+ * nunca gera "alerta de ausência" para um componente 'nao_aplicavel' (regra
+ * C: Entregadores em Full Service simplesmente não entra na comparação).
+ *
+ * REGRA DE OURO (reforçada): "após a transição" / "no período X", NUNCA
+ * "X causou Y" — o texto descreve o desvio, não afirma causalidade.
+ *
+ * AMOSTRA PEQUENA: reusa o limiar de `LIMIARES_DIAGNOSTICO` (mesma régua de
+ * "poucos dias" da confiabilidade, nunca um motor paralelo) — um regime com
+ * menos de `diasSegmentoParaAmostraPequena` dias no período ainda mostra os
+ * números, mas o achado avisa que a base é inicial.
+ * @param {Array<{modelo:string, diasComDados:number, percentuais:Record<string,{valor:number|null,status:string}>}>|null} comparativoSegmentos
+ * @returns {Array<{achado:object, acao:null, manutencao:null}>}
+ */
+function analisarComparativoSegmentos(comparativoSegmentos) {
+  if (!comparativoSegmentos || comparativoSegmentos.length < 2) return [];
+  const primeiro = comparativoSegmentos[0];
+  const ultimo = comparativoSegmentos[comparativoSegmentos.length - 1];
+  if (primeiro.modelo === ultimo.modelo) return [];
+  const L = LIMIARES_DIAGNOSTICO;
+  const amostraPequena = (seg) => seg.diasComDados > 0 && seg.diasComDados < L.diasSegmentoParaAmostraPequena;
+  const rotuloA = ROTULO_MODELO_DIAG[primeiro.modelo] ?? primeiro.modelo;
+  const rotuloB = ROTULO_MODELO_DIAG[ultimo.modelo] ?? ultimo.modelo;
+
+  const resultados = [];
+  for (const { chave, campo, rotulo, maiorEhPior } of COMPARATIVO_INDICADORES) {
+    const pA = primeiro.percentuais?.[campo];
+    const pB = ultimo.percentuais?.[campo];
+    if (!pA || !pB || pA.status !== "conciliado" || pB.status !== "conciliado" || pA.valor == null || pB.valor == null) continue;
+    const diffPp = pB.valor - pA.valor;
+    if (Math.abs(diffPp) < 0.05) continue; // praticamente igual — não vira achado
+
+    const pioroou = maiorEhPior ? diffPp > 0 : diffPp < 0;
+    const amostraTexto = (() => {
+      const partes = [];
+      if (amostraPequena(primeiro)) partes.push(`${rotuloA} tem ${primeiro.diasComDados} dia(s)`);
+      if (amostraPequena(ultimo)) partes.push(`${rotuloB} tem ${ultimo.diasComDados} dia(s)`);
+      if (!partes.length) return "";
+      return ` Amostra inicial: ${partes.join(" e ")} no período — os números já podem ser acompanhados, mas ainda não há base suficiente para concluir uma tendência.`;
+    })();
+    const descricao = `Após a transição de ${rotuloA} para ${rotuloB}, ${rotulo} passou de ${fmtPct1(pA.valor)} para ${fmtPct1(pB.valor)} `
+      + `(${diffPp > 0 ? "+" : ""}${fmtPp1(diffPp)}).${amostraTexto}`;
+
+    resultados.push({
+      achado: {
+        id: `comparativo_${chave}`, categoria: chave, severidade: pioroou ? "atencao" : "forte",
+        titulo: `${rotulo}: ${rotuloA} × ${rotuloB}`,
+        descricao,
+        metricas: {
+          modeloAnterior: primeiro.modelo, modeloAtual: ultimo.modelo,
+          percentualAnterior: pA.valor, percentualAtual: pB.valor, diferencaPp: diffPp,
+          amostraPequenaAnterior: amostraPequena(primeiro), amostraPequenaAtual: amostraPequena(ultimo),
+        },
+      },
+      acao: null,
+      manutencao: null,
+    });
+  }
+  return resultados;
+}
+
 // ---------------------------------------------------------------------------
 // PRIORIDADE DO PLANO DE AÇÃO — única regra de ordenação, nunca duplicada.
 //   1. CRITICAL  (financeiro acima do limite / queda forte)
@@ -590,10 +736,16 @@ function montarResumo({ alertas, pontosAtencao, manutencao, confiabilidade }) {
  *   diasEstimados: number,
  *   comparativo: object|null,
  *   recuperacao: object|null,
+ *   divergenciaTransicao: {divergente:boolean, dataMudancaOperacional:string|null, diasDeDivergencia:number|null, vigenciaInicio:string}|null,
+ *   indicadoresPorSegmento: Array<{modelo:string, rotulo:string, diasComDados:number, faturamentoBase:number|null, indicadores: Record<string, {atual:number|null,valor:number|null,meta:object|null,saldo:object|null,naoAplicavel:boolean}>}>|null,
+ *   comparativoSegmentos: Array<{modelo:string, diasComDados:number, percentuais:Record<string,{valor:number|null,status:string}>}>|null,
  * }} input
  */
 export function gerarDiagnostico(input) {
-  const { indicadores, faturamentoBase, diasComDados, diasPendentes, diasPendentesDatas, diasEstimados, comparativo, recuperacao } = input;
+  const {
+    indicadores, faturamentoBase, diasComDados, diasPendentes, diasPendentesDatas, diasEstimados, comparativo, recuperacao,
+    divergenciaTransicao = null, indicadoresPorSegmento = null, comparativoSegmentos = null,
+  } = input;
 
   if (!diasComDados) {
     return {
@@ -625,7 +777,33 @@ export function gerarDiagnostico(input) {
     () => analisarFaturamento(comparativo, recuperacao),
     () => analisarDiasPendentes(diasPendentes, diasPendentesDatas),
     () => analisarDetalhamentoAusente(indicadores),
+    () => analisarDivergenciaTransicao(divergenciaTransicao),
   ];
+
+  // PERÍODO MISTO: Plano de Ação SEGMENTADO (item do pedido — um problema que
+  // existe SÓ num regime não pode virar recomendação genérica do mês
+  // inteiro). Reusa OS MESMOS analisadores, uma vez por segmento, com
+  // `contexto` só pra não colidir id/título com o achado consolidado — nenhuma
+  // fórmula nova. Também o comparativo Marketplace × Full Service (achados
+  // "forte"/"atenção", sem ação própria — as ações vêm dos itens acima).
+  if (indicadoresPorSegmento) {
+    for (const seg of indicadoresPorSegmento) {
+      const contexto = { sufixoId: seg.modelo, rotuloPrefixo: seg.rotulo };
+      const faturamentoSeg = seg.faturamentoBase ?? null;
+      const componentesDeducaoSeg = [
+        { chave: "taxas_comissoes", rotulo: `Taxas e Comissões — ${seg.rotulo}`, percentual: seg.indicadores.taxas_comissoes?.atual ?? null },
+        { chave: "servicos_promocoes", rotulo: `Serviços e Promoções — ${seg.rotulo}`, percentual: seg.indicadores.servicos_promocoes?.atual ?? null },
+        { chave: "taxas_entregadores", rotulo: `Taxas de Entregadores — ${seg.rotulo}`, percentual: seg.indicadores.taxas_entregadores?.atual ?? null },
+      ];
+      ANALISADORES.push(
+        () => analisarIndicadorPercentual("taxas_comissoes", seg.indicadores.taxas_comissoes, faturamentoSeg, contexto),
+        () => analisarIndicadorPercentual("servicos_promocoes", seg.indicadores.servicos_promocoes, faturamentoSeg, contexto),
+        () => analisarIndicadorPercentual("taxas_entregadores", seg.indicadores.taxas_entregadores, faturamentoSeg, contexto),
+        () => analisarTotalDeducoes(seg.indicadores.total_deducoes, componentesDeducaoSeg, faturamentoSeg, contexto),
+      );
+    }
+  }
+  for (const resultado of analisarComparativoSegmentos(comparativoSegmentos)) ANALISADORES.push(() => resultado);
 
   const pontosFortes = [], pontosAtencao = [], alertas = [], acoes = [], manutencao = [];
   for (const analisar of ANALISADORES) {

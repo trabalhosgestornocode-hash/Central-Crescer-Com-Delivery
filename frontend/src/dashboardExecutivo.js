@@ -3,7 +3,7 @@
 // diagnóstico e recomendações. O franqueado preenche só os dados brutos;
 // tudo o mais é calculado no backend (dashboardExecutivo.calc.js) e só
 // exibido aqui.
-import { el, escapeHtml, toast, fmtMoeda, fmtPct, fmtDataHora } from "./utils.js";
+import { el, els, escapeHtml, toast, fmtMoeda, fmtPct, fmtDataHora } from "./utils.js";
 import { state } from "./state.js";
 import { pode } from "./sessao.js";
 import {
@@ -22,6 +22,9 @@ import { EVENTOS_DASHBOARD_IFOOD, RESINCRONIZACAO } from "./realtime/realtimeEve
 import { abrirLancamentoMensalModal } from "./dashboardExecutivoMensal.js";
 import { abrirTrocaModeloModal } from "./dashboardExecutivoModeloModal.js";
 import { linhasSegmentos, avisoDivisaoIndisponivel, modeloDaData, avisoLancamentoMensalBloqueado } from "./dashboardExecutivoModelo.js";
+import {
+  montarConciliacao, linhasComparativoIndicadores, linhasComparativoOperacional, notaAmostraPequena,
+} from "./dashboardExecutivoConciliacao.js";
 import { montarSimuladorPreco } from "./dashboardExecutivoSimulador.js";
 import { icon } from "./icons.js";
 import { botaoContextualHtml, botaoDiagnosticoHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
@@ -457,8 +460,10 @@ function renderVisaoGeral(box) {
       ${r.primeiroDiaPendente && podeLancar() ? `<button class="btn btn-primary btn-sm" id="dex-preencher-primeiro">Preencher primeiro dia pendente (${fmtDataBr(r.primeiroDiaPendente)})</button>` : ""}
     </section>
     <div class="dex-cards">${cardsPrincipais(d.cards, d.modeloPeriodo)}</div>
+    ${conciliacaoPeriodoHtml(d)}
+    ${comparativoRegimesHtml(d)}
     <div class="dex-graficos">
-      ${graficoBox("comparativo", `${icon("trending-up", { size: 15 })} Comparativo de percentuais`, "dex-chart-comp")}
+      ${graficoComparativoHtml(d)}
       ${graficoBox("composicao", `${icon("pie-chart", { size: 15 })} Composição das deduções (R$)`, "dex-chart-comp2")}
     </div>
     <section class="dex-projecao">
@@ -558,6 +563,101 @@ function rotuloConfiabilidade(nivel) {
 
 function graficoBox(chave, titulo, canvasId) {
   return `<section class="dex-painel"><h3>${titulo}</h3><div class="dex-chart-wrap"><canvas id="${canvasId}"></canvas></div></section>`;
+}
+
+// Mesmo limiar do backend (LIMIARES_DIAGNOSTICO.diasSegmentoParaAmostraPequena
+// — dashboardExecutivo.diagnostico.js). O NARRATIVE de amostra pequena mora
+// no Diagnóstico (backend, fonte única do critério); aqui é só o rótulo
+// discreto ao lado de cada regime na Conciliação/Comparativo.
+const DIAS_AMOSTRA_PEQUENA = 5;
+
+/** Badge + contexto (nunca "valor oficial") de um registro {texto,contexto,badge}. */
+function campoConciliacaoHtml(label, campo, comPercentual = null) {
+  const badge = campo.badge ? `<span class="pill ${campo.badge.classe}">${escapeHtml(campo.badge.label)}</span>` : "";
+  const pct = comPercentual && comPercentual.texto !== "—" ? ` <span class="dex-conc-pct">${comPercentual.texto === "Não aplicável" ? "" : comPercentual.texto}</span>` : "";
+  return `<div class="dex-conc-linha">
+    <span class="dex-conc-label">${label}</span>
+    <span class="dex-conc-valor">${campo.texto}${pct}</span>
+    ${badge}
+    ${campo.contexto ? `<small class="dex-conc-contexto">${icon("info", { size: 11 })} ${escapeHtml(campo.contexto)}</small>` : ""}
+  </div>`;
+}
+
+/**
+ * CONCILIAÇÃO DO PERÍODO — Marketplace / Full Service / Consolidado, só em
+ * período misto (item do pedido). Reaproveita `montarConciliacao` (pura,
+ * testada) — aqui só monta o HTML. Cards compactos, nunca uma tabela pesada.
+ */
+function conciliacaoPeriodoHtml(d) {
+  if (!d.modeloPeriodo?.misto) return "";
+  const c = montarConciliacao(d.comparativoSegmentos, d.modeloPeriodo.conciliacao?.consolidado);
+  if (!c) return "";
+  const blocoRegime = (seg, dias) => `
+    <div class="dex-conc-bloco">
+      <h4>${escapeHtml(seg.rotulo)}<span class="dex-conc-intervalo">${seg.intervalo}${dias != null && dias > 0 && dias < DIAS_AMOSTRA_PEQUENA ? ` · ${dias} dia(s)` : ""}</span></h4>
+      ${campoConciliacaoHtml("Faturamento", seg.faturamento)}
+      ${campoConciliacaoHtml("Taxas e Comissões", seg.taxasComissoes.valor, seg.taxasComissoes.percentual)}
+      ${campoConciliacaoHtml("Serviços e Promoções", seg.servicosPromocoes.valor, seg.servicosPromocoes.percentual)}
+      ${campoConciliacaoHtml("Taxas de Entregadores", seg.taxasEntregadores.valor, seg.taxasEntregadores.percentual)}
+      ${campoConciliacaoHtml("Total de Deduções", seg.totalDeducoes.valor, seg.totalDeducoes.percentual)}
+      ${campoConciliacaoHtml("Receita Líquida", seg.receitaLiquida.valor, seg.receitaLiquida.percentual)}
+    </div>`;
+  const nota = notaAmostraPequena(d.comparativoSegmentos, DIAS_AMOSTRA_PEQUENA);
+  return `
+    <section class="dex-painel dex-conciliacao">
+      <h3>${icon("git-merge", { size: 15 })} Conciliação do Período
+        <span class="vd-tip" data-tip="Marketplace e Full Service calculados separadamente, cada um com suas próprias regras, e depois consolidados. Campos com status diferente de conciliado mostram o último valor confiável como contexto, nunca como valor oficial." tabindex="0">i</span>
+      </h3>
+      <div class="dex-conc-grid">
+        ${d.comparativoSegmentos.map((seg, i) => blocoRegime(c.segmentos[i], seg.diasComDados)).join("")}
+        <div class="dex-conc-bloco dex-conc-consolidado">
+          <h4>Consolidado do Mês</h4>
+          ${campoConciliacaoHtml("Faturamento", c.consolidado.faturamento)}
+          ${campoConciliacaoHtml("Deduções", c.consolidado.deducoes, c.consolidado.deducoesPercentual)}
+          ${campoConciliacaoHtml("Receita Líquida", c.consolidado.receitaLiquida)}
+        </div>
+      </div>
+      ${nota ? `<p class="dex-conc-aviso">${icon("info", { size: 13 })} ${escapeHtml(nota)}</p>` : ""}
+    </section>`;
+}
+
+/**
+ * COMPARATIVO Marketplace × Full Service — tabela compacta com variação
+ * (p.p. para percentuais, % relativa pra valores/médias — nunca confundir
+ * as duas). Só em período misto; só linhas onde a comparação é sustentada.
+ */
+function comparativoRegimesHtml(d) {
+  if (!d.modeloPeriodo?.misto || !d.comparativoSegmentos?.length) return "";
+  const linhasPct = linhasComparativoIndicadores(d.comparativoSegmentos);
+  const linhasOp = linhasComparativoOperacional(d.comparativoSegmentos);
+  const linhas = [...linhasPct, ...linhasOp];
+  if (!linhas.length) return "";
+  const [rotuloA, rotuloB] = [d.comparativoSegmentos[0], d.comparativoSegmentos[d.comparativoSegmentos.length - 1]]
+    .map((s) => ROTULO_MODELO_COMPARATIVO[s.modelo] ?? s.modelo);
+  const linha = (l) => `<tr><td>${escapeHtml(l.rotulo)}</td><td class="num">${l.a}</td><td class="num">${l.b}</td><td class="num">${l.variacaoTexto}</td></tr>`;
+  return `
+    <section class="dex-painel">
+      <h3>${icon("trending-up", { size: 15 })} Comparativo — ${escapeHtml(rotuloA)} × ${escapeHtml(rotuloB)}</h3>
+      <div class="tabela-wrap"><table class="grid">
+        <thead><tr><th>Indicador</th><th class="num">${escapeHtml(rotuloA)}</th><th class="num">${escapeHtml(rotuloB)}</th><th class="num">Variação</th></tr></thead>
+        <tbody>${linhas.map(linha).join("")}</tbody>
+      </table></div>
+    </section>`;
+}
+const ROTULO_MODELO_COMPARATIVO = { marketplace: "Marketplace", full_service: "Full Service" };
+
+/**
+ * Gráfico comparativo de percentuais — Atual/Meta/Limite CONSOLIDADOS quando
+ * há referência válida. Em período misto sem referência consolidável
+ * (nenhum indicador com meta composta disponível), nunca inventa uma barra —
+ * mostra uma nota e mantém só o gráfico com o que existir.
+ */
+function graficoComparativoHtml(d) {
+  const semReferencia = d.modeloPeriodo?.misto && !(d.graficos?.comparativoPercentuais ?? []).some((g) => g.metaIdeal != null || g.limite != null);
+  const nota = semReferencia
+    ? `<p class="dex-grafico-nota">${icon("info", { size: 12 })} Meta/Limite consolidados indisponíveis neste período — veja Marketplace e Full Service separadamente na Conciliação do Período, acima.</p>`
+    : "";
+  return `<section class="dex-painel"><h3>${icon("trending-up", { size: 15 })} Comparativo de percentuais</h3>${nota}<div class="dex-chart-wrap"><canvas id="dex-chart-comp"></canvas></div></section>`;
 }
 
 // Desempenho também é acumulado do mês agora (mesma lógica do Financeiro),
@@ -895,13 +995,16 @@ function renderIndicadores(box) {
     box.innerHTML = vazio("building", "Visão consolidada", "Os indicadores de rentabilidade dependem do modelo logístico (Marketplace/Full Service) de cada unidade e não são exibidos nesta visão. Selecione uma unidade específica no filtro acima.");
     return;
   }
+  const misto = d.modeloPeriodo?.misto && d.indicadoresPorSegmento?.length;
   const linhas = Object.entries(d.indicadoresRentabilidade).map(([chave, v]) => {
+    const composicao = misto ? composicaoIndicadorHtml(chave, d.indicadoresPorSegmento) : "";
+    const podeExpandir = misto && composicao;
     if (v.naoAplicavel) {
       return `<tr class="dex-linha-na">
-        <td>${rotuloIndicador(chave)}</td>
+        <td>${rotuloIndicador(chave)}${podeExpandir ? botaoExpandirIndicador(chave) : ""}</td>
         <td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>
         <td><span class="pill muted">Não se aplica a este modelo</span></td>
-      </tr>`;
+      </tr>${podeExpandir ? linhaComposicaoHtml(chave, composicao) : ""}`;
     }
     const s = v.status ?? { label: "Dados insuficientes", chave: "sem_dados" };
     const saldo = v.saldo;
@@ -911,25 +1014,58 @@ function renderIndicadores(box) {
     else if (saldo?.status === "limite_atingido") disponivel = "Limite atingido";
     else if (saldo?.status === "acima_do_limite") disponivel = `−${fmtPpRentabilidade(Math.abs(saldo.disponivelPp))}${saldo.disponivelReais != null ? ` (−${fmtMoeda(Math.abs(saldo.disponivelReais))})` : ""}`;
     return `<tr>
-      <td>${rotuloIndicador(chave)}</td>
+      <td>${rotuloIndicador(chave)}${podeExpandir ? botaoExpandirIndicador(chave) : ""}</td>
       <td class="num">${fmtPctRentabilidade(v.atual)}</td>
       <td class="num">${fmtPctRentabilidade(v.metaIdeal)}</td>
       <td class="num">${fmtPctRentabilidade(v.limite)}</td>
       <td class="num">${disponivel}</td>
       <td><span class="pill ${CLASSE_STATUS[s.chave] ?? "muted"}">${s.label}</span></td>
-    </tr>`;
+    </tr>${podeExpandir ? linhaComposicaoHtml(chave, composicao) : ""}`;
   }).join("");
 
   box.innerHTML = `
     <section class="dex-painel">
       <h3>${icon("target", { size: 15 })} Indicadores de Rentabilidade</h3>
+      ${misto ? `<p class="dex-resumo-sub">${icon("info", { size: 12 })} "Atual" é o valor CONSOLIDADO do período. Clique em <b>Composição</b> pra ver Marketplace e Full Service separadamente.</p>` : ""}
       <div class="tabela-wrap"><table class="grid">
         <thead><tr><th>Indicador</th><th class="num">Atual</th><th class="num">Meta ideal</th><th class="num">Limite</th><th class="num">Disponível</th><th>Status</th></tr></thead>
         <tbody>${linhas}</tbody>
       </table></div>
     </section>
-    <div class="dex-graficos">${graficoBox("comparativo", `${icon("trending-up", { size: 15 })} Comparativo de percentuais`, "dex-chart-ind")}</div>`;
+    <div class="dex-graficos">${graficoComparativoIndicadoresHtml(d)}</div>`;
   barraComparativaMeta("dex-chart-ind", d.graficos.comparativoPercentuais);
+  els(".dex-ind-expandir").forEach((btn) => btn.addEventListener("click", () => {
+    const linha = document.getElementById(`dex-ind-comp-${btn.dataset.chave}`);
+    if (linha) linha.hidden = !linha.hidden;
+  }));
+}
+
+const botaoExpandirIndicador = (chave) => ` <button type="button" class="btn btn-ghost btn-xs dex-ind-expandir" data-chave="${chave}">Composição</button>`;
+
+/** Marketplace/Full Service lado a lado pra UM indicador — nunca uma 3ª tabela gigante, só uma linha expansível. */
+function composicaoIndicadorHtml(chave, indicadoresPorSegmento) {
+  const partes = indicadoresPorSegmento
+    .map((seg) => ({ rotulo: seg.rotulo, ind: seg.indicadores[chave] }))
+    .filter((p) => p.ind && !p.ind.naoAplicavel && p.ind.atual != null);
+  if (!partes.length) return "";
+  return partes.map((p) => `<div class="dex-ind-comp-item">
+    <span class="dex-ind-comp-rotulo">${escapeHtml(p.rotulo)}</span>
+    <span>${fmtPctRentabilidade(p.ind.atual)}</span>
+    <span class="dex-conc-pct">Meta ${fmtPctRentabilidade(p.ind.meta?.metaIdeal ?? null)} · Limite ${fmtPctRentabilidade(p.ind.meta?.limite ?? null)}</span>
+  </div>`).join("");
+}
+
+function linhaComposicaoHtml(chave, conteudo) {
+  return `<tr class="dex-ind-comp-linha" id="dex-ind-comp-${chave}" hidden><td colspan="6"><div class="dex-ind-comp">${conteudo}</div></td></tr>`;
+}
+
+/** Mesmo tratamento de `graficoComparativoHtml` (Visão Geral), pro canvas próprio da aba Indicadores. */
+function graficoComparativoIndicadoresHtml(d) {
+  const semReferencia = d.modeloPeriodo?.misto && !(d.graficos?.comparativoPercentuais ?? []).some((g) => g.metaIdeal != null || g.limite != null);
+  const nota = semReferencia
+    ? `<p class="dex-grafico-nota">${icon("info", { size: 12 })} Meta/Limite consolidados indisponíveis neste período — veja a composição de cada indicador na tabela acima.</p>`
+    : "";
+  return `<section class="dex-painel"><h3>${icon("trending-up", { size: 15 })} Comparativo de percentuais</h3>${nota}<div class="dex-chart-wrap"><canvas id="dex-chart-ind"></canvas></div></section>`;
 }
 
 function rotuloIndicador(chave) {
