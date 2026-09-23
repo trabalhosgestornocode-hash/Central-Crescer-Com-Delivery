@@ -173,6 +173,7 @@ describe("routes — Backend -> Gateway", () => {
     assert.equal(r.status, 200);
     const chamada = sessao.enviar.mock.calls[0].arguments[0];
     assert.deepEqual(chamada.conteudo, { text: "oi" });
+    assert.equal(chamada.correlationId, "k1", "H.4-B.4: a idempotencyKey vira o correlationId dos logs de envio");
   });
 
   test("POST /internal/whatsapp/messages com tipo desconhecido devolve 400 sem chamar enviar()", async () => {

@@ -16,6 +16,11 @@ export const CODIGOS = {
   // lease da sessão. 423 (Locked): o recurso existe, mas está travado por
   // outro dono — nunca abre um segundo socket concorrente.
   SEM_LEASE: "WHATSAPP_GATEWAY_NOT_LEADER",
+  // H.4-B.4 — pré-validação do destinatário (consulta ao próprio WhatsApp ANTES do sendMessage; src/destinatario.js).
+  // Nos três, NADA foi enviado (o backend os marca como pré-envio; ver providers/baileysGateway.provider.js).
+  DESTINATARIO_INEXISTENTE: "WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP",
+  DESTINATARIO_NAO_VERIFICADO: "WHATSAPP_GATEWAY_RECIPIENT_UNVERIFIED",
+  CONSULTA_DESTINATARIO_FALHOU: "WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED",
 };
 
 const STATUS = {
@@ -27,6 +32,9 @@ const STATUS = {
   [CODIGOS.AUTH_STATE_INDISPONIVEL]: 503,
   [CODIGOS.INDISPONIVEL]: 503,
   [CODIGOS.SEM_LEASE]: 423,
+  [CODIGOS.DESTINATARIO_INEXISTENTE]: 422,
+  [CODIGOS.DESTINATARIO_NAO_VERIFICADO]: 422,
+  [CODIGOS.CONSULTA_DESTINATARIO_FALHOU]: 503,
 };
 
 export class GatewayError extends Error {

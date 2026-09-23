@@ -26,6 +26,7 @@
 // existe sessão real a preservar) uma queda transitória justifica
 // reconexão automática. Ver `autenticadaAlgumaVez` abaixo.
 
+import { generateMessageIDV2 } from "baileys";
 import { log, mascararTelefone } from "./logsafe.js";
 import { erro, CODIGOS } from "./errors.js";
 import { criarLoggerBaileysSilencioso } from "./logger-baileys-silencioso.js";
@@ -34,6 +35,8 @@ import { motivoFechamento } from "./motivoFechamento.js";
 import { identidadeDe } from "./inboundScope.js";
 import { criarRastreadorOrigem, observarOrigem, montarEventoInbound } from "./inboundContrato.js";
 import { criarFilaConcorrenciaLimitada } from "./filaConcorrenciaLimitada.js";
+import { criarObservadorEntrega } from "./entregaProvider.js";
+import { resolverJidCanonico } from "./destinatario.js";
 
 // Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
 // numéricos de DisconnectReason do Baileys (node_modules/baileys/lib/Types/
@@ -169,6 +172,8 @@ export function criarSessaoBaileys({
   filaNotificacaoBackend = criarFilaConcorrenciaLimitada({ concorrencia: config?.backendNotifyConcurrency ?? 4 }),
 }) {
   let socket = null;
+  // H.4-B.4 — contador de gerações de socket deste processo (sobe a cada socket criado): só correlação nos logs de envio/receipt.
+  let geracaoSocket = 0;
   let status = STATUS_CONEXAO.DISCONNECTED;
   let telefone = null;
   let qrAtual = null;
@@ -876,16 +881,21 @@ export function criarSessaoBaileys({
     }
   }
 
+  // H.4-B.4 — confirmações de entrega (SERVER_ACK/DELIVERED/READ/PROVIDER_ERROR) das mensagens que ESTE processo enviou; ver src/entregaProvider.js.
+  const observadorEntrega = criarObservadorEntrega({
+    notificar: (payload) => backendClient.notificarStatusProvider(payload),
+    emitir: (nivel, evento, dados) => log(nivel, evento, dados),
+    contexto: () => ({ socketGeneration: geracaoSocket, leaseEpoch: leaseManager?.contexto()?.leaseEpoch ?? null }),
+  });
+
   function aoMessagesUpdate(updates) {
     for (const u of updates ?? []) {
       const id = u.key?.id;
       const novoStatus = u.update?.status ?? null;
       if (!id || novoStatus == null) continue;
       statusPorMensagemId.set(id, { status: novoStatus });
-      backendClient.notificarStatusProvider({ providerMessageId: id, status: novoStatus }).catch(
-        (e) => log("warn", "notificar_status_provider.falhou", { erro: e?.message }),
-      );
     }
+    observadorEntrega.aoMessagesUpdate(updates);
   }
 
   /**
@@ -945,6 +955,14 @@ export function criarSessaoBaileys({
     });
     socket.ev.on("messages.upsert", aoMessagesUpsert);
     socket.ev.on("messages.update", aoMessagesUpdate);
+    socket.ev.on("message-receipt.update", (updates) => observadorEntrega.aoMessageReceiptUpdate(updates));
+    // H.4-B.4 — leitura PURA dos nós crus (ack do servidor e recibos das mensagens que enviamos), independente do buffer de eventos do Baileys.
+    // Nunca ack/flush/nada que altere o processamento do Baileys; só ids rastreados por `enviar()` viram evento.
+    geracaoSocket += 1;
+    try {
+      socket.ws?.on?.("CB:ack,class:message", (no) => observadorEntrega.aoAckWs(no));
+      socket.ws?.on?.("CB:receipt", (no) => observadorEntrega.aoReceiptWs(no));
+    } catch { /* observador nunca interfere */ }
 
     status = STATUS_CONEXAO.CONNECTING;
     iniciarHeartbeatPeriodico();
@@ -1516,16 +1534,48 @@ export function criarSessaoBaileys({
     async getStatus() {
       return { conectado: status === STATUS_CONEXAO.CONNECTED, provider: "baileys", telefone, atualizadoEm: new Date().toISOString(), status };
     },
-    async enviar({ tipo, telefoneE164, conteudo }) {
-      if (status !== STATUS_CONEXAO.CONNECTED) {
+    /**
+     * H.4-B.4 — 1) consulta o PRÓPRIO WhatsApp (`onWhatsApp`) e usa o JID CANÔNICO devolvido (fail-closed: sem confirmação, NÃO envia — nada saiu, `preEnvio`);
+     * 2) gera o providerMessageId ANTES do sendMessage (mesma função do Baileys) e o rastreia, para que um recibo/ack rápido nunca ganhe do registro;
+     * 3) loga send_start/send_resolved sanitizados (JID mascarado, sem conteúdo). `correlationId` = idempotencyKey (o Gateway não conhece o id interno).
+     */
+    async enviar({ tipo, telefoneE164, conteudo, correlationId = null }) {
+      const naoConectado = () => {
         // preEnvio: true — sabemos com certeza que nada saiu (nem tentamos).
         const e = erro(CODIGOS.NAO_CONECTADO);
         e.preEnvio = true;
+        return e;
+      };
+      if (status !== STATUS_CONEXAO.CONNECTED) throw naoConectado();
+      const sockEnvio = socket;
+      const contextoLog = () => ({ correlationId, socketGeneration: geracaoSocket, leaseEpoch: leaseManager?.contexto()?.leaseEpoch ?? null });
+      const t0 = Date.now();
+      let destino;
+      try {
+        destino = await resolverJidCanonico({ socket: sockEnvio, telefoneE164, timeoutMs: config?.destinatarioTimeoutMs });
+      } catch (e) {
+        log("warn", "send_bloqueado_destinatario", { ...contextoLog(), motivo: e?.codigo ?? "erro", detalhe: e?.detalheInterno, telefone: mascararTelefone(telefoneE164), durationMs: Date.now() - t0 });
         throw e;
       }
-      const jid = paraJid(telefoneE164);
-      const resultado = await socket.sendMessage(jid, conteudo);
-      return { providerMessageId: resultado?.key?.id, enviadoEm: new Date().toISOString() };
+      // a sessão pode ter caído/trocado de socket durante a consulta — ainda é PRÉ-envio.
+      if (status !== STATUS_CONEXAO.CONNECTED || socket !== sockEnvio) throw naoConectado();
+      const lookupMs = Date.now() - t0;
+      const jidMascarado = mascararTelefone(destino.jid);
+      const providerIdGerado = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
+      observadorEntrega.rastrear({ providerMessageId: providerIdGerado, correlationId, jidMascarado });
+      log("info", "send_start", { ...contextoLog(), tipo, providerMessageId: providerIdGerado, jid: jidMascarado, jidDifereDoPedido: destino.jidDifereDoPedido, lookupMs });
+      const t1 = Date.now();
+      let resultado;
+      try {
+        resultado = await sockEnvio.sendMessage(destino.jid, conteudo, { messageId: providerIdGerado });
+      } catch (e) {
+        log("error", "send_falhou", { ...contextoLog(), providerMessageId: providerIdGerado, jid: jidMascarado, durationMs: Date.now() - t1, erro: e?.name ?? "erro" });
+        throw e;
+      }
+      const providerMessageId = resultado?.key?.id;
+      if (providerMessageId && providerMessageId !== providerIdGerado) observadorEntrega.rastrear({ providerMessageId, correlationId, jidMascarado });
+      log("info", "send_resolved", { ...contextoLog(), providerMessageId, jid: jidMascarado, durationMs: Date.now() - t1, idPreGeradoConfere: providerMessageId === providerIdGerado });
+      return { providerMessageId, enviadoEm: new Date().toISOString() };
     },
     onMessage(handler) { handlersMensagem.push(handler); },
     async markAsRead({ providerMessageId, telefoneE164 }) {

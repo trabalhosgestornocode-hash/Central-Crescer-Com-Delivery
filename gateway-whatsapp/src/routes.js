@@ -77,7 +77,7 @@ export function criarRotas(sessao) {
       else if (tipo === "document") conteudo = { document: { url: urlDocumento }, fileName: nomeArquivo };
       else return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_MESSAGE", detalhe: "tipo desconhecido" });
 
-      const resultado = await sessao.enviar({ tipo, telefoneE164, conteudo });
+      const resultado = await sessao.enviar({ tipo, telefoneE164, conteudo, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null });
       res.json(resultado);
     } catch (e) { next(e); }
   });

@@ -30,7 +30,9 @@ function socketFalsoFabrica() {
       ev,
       ws: new EventEmitter(),   // Checkpoint F: o CB:message alimenta a origem (LIVE/OFFLINE) por mensagem
       user: null,
-      sendMessage: mock.fn(async (_jid, _conteudo) => ({ key: { id: `wa-${criados.length}-${Date.now()}` } })),
+      // H.4-B.4 — sendMessage recebe {messageId} (id pré-gerado) e ecoa o id, como o Baileys real; onWhatsApp devolve o JID canônico do número pedido.
+      sendMessage: mock.fn(async (_jid, _conteudo, opcoes) => ({ key: { id: opcoes?.messageId ?? `wa-${criados.length}-${Date.now()}` } })),
+      onWhatsApp: mock.fn(async (digitos) => [{ jid: `${digitos}@s.whatsapp.net`, exists: true }]),
       readMessages: mock.fn(async () => {}),
       end: mock.fn(async () => {}),
     };
@@ -1066,7 +1068,32 @@ describe("baileysSession — eventos de mensagem", () => {
 
     fabricaSocket.criados[0].ev.emit("messages.update", [{ key: { id: "m1" }, update: { status: 3 } }]);
     assert.deepEqual(await sessao.getMessageStatus("m1"), { status: 3 });
-    assert.equal(backendClient.notificarStatusProvider.mock.calls.length, 1);
+    // H.4-B.4 — só mensagens que ESTE processo enviou (rastreadas por enviar()) chegam ao backend: "m1" nunca foi enviada aqui.
+    assert.equal(backendClient.notificarStatusProvider.mock.calls.length, 0);
+  });
+
+  test("H.4-B.4 — recibo de uma mensagem enviada por enviar() chega ao backend no contrato (sem duplicar entre os observadores)", async () => {
+    const fabricaSocket = socketFalsoFabrica();
+    const backendClient = backendClientFalso();
+    backendClient.notificarStatusProvider = mock.fn(async () => ({ ok: true, resultado: "APLICADO" }));
+    const sessao = criarSessaoBaileys({
+      authAdapter: authAdapterComRegistroFalso(), backendClient, config: configFalso(),
+      fabricaSocket, DisconnectReasonLoggedOut: DISCONNECT_REASON_LOGGED_OUT,
+    });
+    await sessao.conectar();
+    const socket = fabricaSocket.criados[0];
+    socket.ev.emit("connection.update", { connection: "open" });
+    socket.ev.emit("creds.update", { registered: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    const { providerMessageId } = await sessao.enviar({ tipo: "text", telefoneE164: "+5511999990000", conteudo: { text: "oi" }, correlationId: "wa:alerta:x:v1" });
+    socket.ws.emit("CB:receipt", { attrs: { id: providerMessageId, from: "5511999990000@s.whatsapp.net", t: "1700000000" } });   // nó cru (sem type = entrega)
+    socket.ev.emit("messages.update", [{ key: { id: providerMessageId, fromMe: true, remoteJid: "5511999990000@s.whatsapp.net" }, update: { status: 3 } }]);   // o MESMO evento pelo ev
+    await tick();
+    const chamadas = backendClient.notificarStatusProvider.mock.calls.map((c) => c.arguments[0]);
+    assert.equal(chamadas.length, 1, "dedupe entre ws e ev");
+    assert.equal(chamadas[0].providerMessageId, providerMessageId);
+    assert.equal(chamadas[0].status, "DELIVERED");
+    assert.equal(chamadas[0].contratoStatus, 1);
   });
 
   test("getMessageStatus para id desconhecido devolve UNKNOWN", async () => {

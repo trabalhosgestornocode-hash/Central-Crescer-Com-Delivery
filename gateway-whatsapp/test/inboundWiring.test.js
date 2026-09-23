@@ -80,7 +80,7 @@ describe("fiação do escopo de inbound", () => {
     assert.equal(ligado.snapshot().stanzas.direct_pn.receipt, 1);
     const desligado = criarInboundGateway({ emitir() {} });
     const b = await abrir(desligado);
-    assert.deepEqual(b.socket.ws.eventNames(), ["CB:message"], "diagnóstico desligado: só o rastreador de ORIGEM do Checkpoint F (passivo, prependListener) está no ws");
+    assert.deepEqual(b.socket.ws.eventNames(), ["CB:message", "CB:ack,class:message", "CB:receipt"], "diagnóstico desligado: só o rastreador de ORIGEM do Checkpoint F (CB:message, passivo) e os 2 leitores PUROS de entrega da H.4-B.4 (ack/recibo das mensagens que enviamos) estão no ws");
   });
 
   test("valor inválido de escopo: opções de antes (nunca DIRECT_ONLY por acidente)", async () => {

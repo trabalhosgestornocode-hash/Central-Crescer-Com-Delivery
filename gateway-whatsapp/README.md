@@ -105,6 +105,13 @@ sem rede) que embasou o formato de `src/authState.js` e a decisão de schema
 da migration 083 (`whatsapp_conexoes`, blob monolítico — não uma tabela por
 chave).
 
+## Entrega confirmável (H.4-B.4)
+
+`enviar()` consulta o próprio WhatsApp (`onWhatsApp`) e envia ao **JID canônico** devolvido (fail-closed: sem confirmação, não envia —
+`src/destinatario.js`), pré-gera o `providerMessageId` e o rastreia; `src/entregaProvider.js` transforma ack/recibos do Baileys em
+`SERVER_ACK|DELIVERED|READ|PROVIDER_ERROR` e os entrega ao backend em `POST /internal/comunicacao/eventos/status-provider` (mesmo canal HMAC).
+`SENT` no banco significa apenas "`sendMessage()` resolveu". Detalhes, tabela de eventos e limites: `docs/comunicacao-entrega-confirmavel-h4b4.md`.
+
 ## Deploy (Render Private Service) — proposta, não provisionada
 
 Não criado neste checkpoint. Antes de provisionar, revisar: custo, plano,
