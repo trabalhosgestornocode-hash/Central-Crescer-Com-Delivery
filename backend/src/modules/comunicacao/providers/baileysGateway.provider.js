@@ -12,11 +12,15 @@
 //   RETRYAVEL  (só o que PROVA que socket.sendMessage() não pôde ter rodado)
 //     * Gateway respondeu WHATSAPP_GATEWAY_NOT_CONNECTED (baileysSession.js#enviar
 //       lança isto ANTES de qualquer envio, quando status !== CONNECTED);
+//     * H.4-B.4 — WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED: a consulta do destinatário falhou/expirou ANTES do sendMessage
+//       (nada foi enviado); fail-closed, mas transitório;
 //     * a conexão TCP NUNCA foi estabelecida: ECONNREFUSED, ENOTFOUND, EAI_AGAIN,
 //       EHOSTUNREACH, ENETUNREACH, timeout de connect, "bad port", URL inválida;
 //     * configuração ausente (gatewayUrl/segredo) — nenhuma rede é tocada.
 //   PERMANENTE (determinístico; nunca retry, mesmo que nada tenha saído)
 //     * WHATSAPP_GATEWAY_LOGGED_OUT, WHATSAPP_GATEWAY_INVALID_MESSAGE;
+//     * H.4-B.4 — WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP / _RECIPIENT_UNVERIFIED: o Gateway consulta o WhatsApp
+//       (onWhatsApp) ANTES do sendMessage e recusa o envio — comprovadamente pré-envio E determinístico.
 //     * pedido inválido barrado AQUI (telefone fora de E.164, texto vazio/longo,
 //       idempotencyKey ausente, url não-https) — sem rede.
 //     (consentimento/opt-out/empresa/tipo NÃO chegam aqui: são vetos de política,
@@ -56,6 +60,10 @@ export const MARCAS_POR_CODIGO_GATEWAY = Object.freeze({
   WHATSAPP_GATEWAY_NOT_CONNECTED: Object.freeze({ preEnvio: true }),
   WHATSAPP_GATEWAY_LOGGED_OUT: Object.freeze({ permanente: true }),
   WHATSAPP_GATEWAY_INVALID_MESSAGE: Object.freeze({ permanente: true }),
+  // H.4-B.4 — pré-validação do destinatário no Gateway (consulta ao próprio WhatsApp ANTES do sendMessage): nada saiu em nenhum dos 3.
+  WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP: Object.freeze({ preEnvio: true, permanente: true }),
+  WHATSAPP_GATEWAY_RECIPIENT_UNVERIFIED: Object.freeze({ preEnvio: true, permanente: true }),
+  WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED: Object.freeze({ preEnvio: true }),
 });
 
 /**

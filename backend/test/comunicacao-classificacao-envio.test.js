@@ -376,6 +376,10 @@ describe("D.3-R — TABELA DEFINITIVA de classificação (RETRYAVEL × PERMANENT
       WHATSAPP_GATEWAY_AUTH_STATE_UNAVAILABLE: [503, I],
       WHATSAPP_GATEWAY_UNAVAILABLE: [503, I],
       WHATSAPP_GATEWAY_NOT_LEADER: [423, I],
+      // H.4-B.4 — pré-validação do destinatário no Gateway (onWhatsApp ANTES do sendMessage): em todos, nada saiu.
+      WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP: [422, P],
+      WHATSAPP_GATEWAY_RECIPIENT_UNVERIFIED: [422, P],
+      WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED: [503, R],
     };
     for (const codigo of Object.values(CODIGOS_GATEWAY)) {
       assert.ok(ESPERADO[codigo], `o Gateway ganhou o código ${codigo}: decida sua classificação (RETRYAVEL só com prova de pré-envio)`);
@@ -384,8 +388,14 @@ describe("D.3-R — TABELA DEFINITIVA de classificação (RETRYAVEL × PERMANENT
     }
   });
 
-  test("MARCAS_POR_CODIGO_GATEWAY: exatamente NOT_CONNECTED -> preEnvio e LOGGED_OUT/INVALID_MESSAGE -> permanente (mais nada)", () => {
-    assert.deepEqual(Object.keys(MARCAS_POR_CODIGO_GATEWAY).sort(), ["WHATSAPP_GATEWAY_INVALID_MESSAGE", "WHATSAPP_GATEWAY_LOGGED_OUT", "WHATSAPP_GATEWAY_NOT_CONNECTED"]);
+  test("MARCAS_POR_CODIGO_GATEWAY: exatamente NOT_CONNECTED -> preEnvio, LOGGED_OUT/INVALID_MESSAGE -> permanente e os 3 códigos de destinatário da H.4-B.4 (mais nada)", () => {
+    assert.deepEqual(Object.keys(MARCAS_POR_CODIGO_GATEWAY).sort(), [
+      "WHATSAPP_GATEWAY_INVALID_MESSAGE", "WHATSAPP_GATEWAY_LOGGED_OUT", "WHATSAPP_GATEWAY_NOT_CONNECTED",
+      "WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED", "WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP", "WHATSAPP_GATEWAY_RECIPIENT_UNVERIFIED",
+    ]);
+    assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP, { preEnvio: true, permanente: true });
+    assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_RECIPIENT_UNVERIFIED, { preEnvio: true, permanente: true });
+    assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED, { preEnvio: true });
     assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_NOT_CONNECTED, { preEnvio: true });
     assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_LOGGED_OUT, { permanente: true });
     assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_INVALID_MESSAGE, { permanente: true });

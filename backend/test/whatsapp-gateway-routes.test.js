@@ -285,9 +285,91 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
     assert.equal(r.status, 400);
   });
 
-  test("status-provider assinado é aceito", async () => {
+  // ---- H.4-B.4 — confirmações de entrega do provider (mesmo canal HMAC; nenhuma rota pública) ----
+  const STATUS_URL = "/internal/comunicacao/eventos/status-provider";
+  const evento = (extra = {}) => ({ contratoStatus: 1, providerMessageId: "WAID1", status: "DELIVERED", ...extra });
+
+  test("status-provider: sem assinatura => 401; replay do MESMO pedido assinado => recusado (anti-replay do padrão do projeto)", async () => {
+    const sem = await fetch(`${baseUrl}${STATUS_URL}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(evento()) });
+    assert.equal(sem.status, 401);
     _resetarNonces();
-    const r = await chamarAssinado("POST", "/internal/comunicacao/eventos/status-provider", { providerMessageId: "m1", status: "DELIVERED" });
+    const corpo = JSON.stringify(evento());
+    const headers = { ...assinarRequisicao({ segredo: SEGREDO, metodo: "POST", caminho: STATUS_URL, corpo }), "Content-Type": "application/json" };
+    const a = await fetch(`${baseUrl}${STATUS_URL}`, { method: "POST", headers, body: corpo });
+    const b = await fetch(`${baseUrl}${STATUS_URL}`, { method: "POST", headers, body: corpo });
+    assert.equal(a.status, 200);
+    assert.ok([401, 409].includes(b.status), `replay deveria ser recusado, veio ${b.status}`);
+  });
+
+  test("status-provider: id desconhecido => 200 com resultado NAO_ENCONTRADA (não é erro: o receipt pode ganhar da finalização do envio)", async () => {
+    _resetarNonces();
+    const r = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: "NUNCAEXISTIU" }));
     assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { ok: true, resultado: "NAO_ENCONTRADA" });
+  });
+
+  test("status-provider: SENT -> DELIVERED -> READ, duplicado idempotente, atrasado não regride, id de outra mensagem não é tocado", async () => {
+    repo._semearMensagem(ORG_ID, { providerMessageId: "WAID1", status: "SENT" });
+    repo._semearMensagem(ORG_ID, { providerMessageId: "WAOUTRA", status: "SENT" });
+    const enviar = async (extra) => { _resetarNonces(); const r = await chamarAssinado("POST", STATUS_URL, evento(extra)); assert.equal(r.status, 200); return (await r.json()).resultado; };
+    assert.equal(await enviar({ status: "DELIVERED" }), "APLICADO");
+    assert.equal(repo._mensagem(ORG_ID, "WAID1").status, "DELIVERED");
+    assert.equal(await enviar({ status: "DELIVERED" }), "DUPLICADO");
+    assert.equal(await enviar({ status: "READ" }), "APLICADO");
+    assert.equal(await enviar({ status: "DELIVERED" }), "DUPLICADO", "DELIVERED atrasado depois de READ");
+    assert.equal(await enviar({ status: "READ" }), "DUPLICADO");
+    assert.equal(repo._mensagem(ORG_ID, "WAID1").status, "READ");
+    assert.equal(repo._mensagem(ORG_ID, "WAOUTRA").status, "SENT", "receipt de um id nunca altera outra mensagem");
+  });
+
+  test("status-provider: SENT -> READ direto (READ implica entrega); SERVER_ACK e PROVIDER_ERROR não mudam o status", async () => {
+    repo._semearMensagem(ORG_ID, { providerMessageId: "WAID2", status: "SENT" });
+    const enviar = async (extra) => { _resetarNonces(); const r = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: "WAID2", ...extra })); return (await r.json()).resultado; };
+    assert.equal(await enviar({ status: "SERVER_ACK" }), "ACK_REGISTRADO");
+    assert.equal(await enviar({ status: "SERVER_ACK" }), "DUPLICADO");
+    assert.equal(await enviar({ status: "PROVIDER_ERROR", erroCodigo: "479" }), "ERRO_REGISTRADO");
+    assert.equal(repo._mensagem(ORG_ID, "WAID2").status, "SENT");
+    assert.equal(await enviar({ status: "READ" }), "APLICADO");
+    const m = repo._mensagem(ORG_ID, "WAID2");
+    assert.equal(m.status, "READ"); assert.ok(m.entregueEm && m.lidoEm);
+  });
+
+  test("status-provider: estado que um receipt nunca toca (SENDING/FAILED/CANCELLED/DELIVERY_UNKNOWN...) => ESTADO_NAO_ELEGIVEL, inalterado", async () => {
+    for (const st of ["SENDING", "FAILED", "CANCELLED", "DELIVERY_UNKNOWN", "SCHEDULED"]) {
+      repo._semearMensagem(ORG_ID, { providerMessageId: `WA-${st}`, status: st });
+      _resetarNonces();
+      const r = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: `WA-${st}`, status: "READ" }));
+      assert.equal((await r.json()).resultado, "ESTADO_NAO_ELEGIVEL", st);
+      assert.equal(repo._mensagem(ORG_ID, `WA-${st}`).status, st);
+    }
+  });
+
+  test("status-provider: contrato estrito — 400 com código fechado (formato antigo/numérico, chave desconhecida, organizacao_id injetado, status inválido)", async () => {
+    const invalidos = [
+      [{ providerMessageId: "m1", status: "DELIVERED" }, "contratoStatus_ausente"],
+      [{ providerMessageId: "m1", status: 3 }, "contratoStatus_ausente"],
+      [evento({ status: 3 }), "status"],
+      [evento({ status: "SENT" }), "status"],
+      [evento({ organizacao_id: "outra-org" }), "campo_desconhecido"],
+      [evento({ providerMessageId: "id com espaço" }), "providerMessageId"],
+      [evento({ status: "PROVIDER_ERROR" }), "erroCodigo_ausente"],
+      [evento({ erroCodigo: "479" }), "erroCodigo_incoerente"],
+      [evento({ ocorridoEm: "ontem" }), "ocorridoEm"],
+      [evento({ contratoStatus: 2 }), "contratoStatus"],
+    ];
+    for (const [corpo, campo] of invalidos) {
+      _resetarNonces();
+      const r = await chamarAssinado("POST", STATUS_URL, corpo);
+      assert.equal(r.status, 400, campo);
+      assert.deepEqual(await r.json(), { error: "status_provider_invalido", campo });
+    }
+  });
+
+  test("status-provider: o organizacaoId vem SEMPRE da config do backend — uma mensagem de OUTRA organização não é alcançada", async () => {
+    repo._semearMensagem("outra-organizacao", { providerMessageId: "WAALHEIA", status: "SENT" });
+    _resetarNonces();
+    const r = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: "WAALHEIA" }));
+    assert.equal((await r.json()).resultado, "NAO_ENCONTRADA");
+    assert.equal(repo._mensagem("outra-organizacao", "WAALHEIA").status, "SENT");
   });
 });

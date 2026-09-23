@@ -18,6 +18,7 @@
 import { Router } from "express";
 import { LeaseStaleError, AuthSessionStaleError, AuthConfirmacaoRecusadaError } from "./whatsappGateway.repo.js";
 import { validarEventoInbound, motivoBloqueioAutomacao } from "../inbound/inbound.contrato.js";
+import { validarEventoStatusProvider } from "../comunicacao.statusProvider.js";
 
 // UUID v4-ish — o Gateway gera gatewayProcessId com crypto.randomUUID() a
 // cada boot (Checkpoint C3.5, item 2). Validado aqui (fronteira HTTP) antes
@@ -76,10 +77,16 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
     } catch (e) { next(e); }
   });
 
+  // H.4-B.4 — confirmações de entrega do provider (SERVER_ACK/DELIVERED/READ/PROVIDER_ERROR). MESMO canal autenticado do Gateway (HMAC + anti-replay
+  // do middleware `exigirHmac`, montado antes de requireAuth): nenhuma rota pública nova. Contrato estrito (400 com CÓDIGO fechado, nunca ecoa o valor);
+  // o organizacaoId vem da CONFIG do backend. 200 mesmo com `NAO_ENCONTRADA` (o receipt pode chegar antes do backend gravar o providerMessageId): o
+  // Gateway lê `resultado` e faz retry limitado. Quem propaga ao alerta é o trigger do banco (088/092), nunca esta rota.
   router.post("/eventos/status-provider", async (req, res, next) => {
     try {
-      await repo.registrarStatusProvider(organizacaoId, req.corpoJson ?? {});
-      res.json({ ok: true });
+      const v = validarEventoStatusProvider(req.corpoJson);
+      if (!v.ok) return res.status(400).json({ error: "status_provider_invalido", campo: v.erro });
+      const r = await repo.registrarStatusProvider(organizacaoId, v.evento);
+      res.json({ ok: true, resultado: r?.resultado ?? null });
     } catch (e) { next(e); }
   });
 
