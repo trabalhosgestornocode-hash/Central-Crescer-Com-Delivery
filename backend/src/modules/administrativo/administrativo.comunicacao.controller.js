@@ -57,6 +57,24 @@ export const confirmarConsentimento = asyncHandler(async (req, res) =>
     confirmacaoExplicita: req.body?.confirmacaoExplicita,
   }, autor(req), deps(req))));
 
+// PUT /administrativo/comunicacao/organizacoes/:organizacaoId/habilitacao   { habilitado, confirmacaoExplicita }
+export const habilitacao = asyncHandler(async (req, res) =>
+  ok(res, await service.definirHabilitacao({
+    organizacaoId: req.params.organizacaoId,
+    habilitado: req.body?.habilitado,
+    confirmacaoExplicita: req.body?.confirmacaoExplicita,
+  }, autor(req), deps(req))));
+
+// PUT /administrativo/comunicacao/modo   { modo: "DISABLED"|"NORMAL", confirmacaoExplicita }
+export const modo = asyncHandler(async (req, res) =>
+  ok(res, await service.alterarModoGlobal({
+    modo: req.body?.modo,
+    confirmacaoExplicita: req.body?.confirmacaoExplicita,
+  }, autor(req), deps(req))));
+
+// GET /administrativo/comunicacao/ativacao
+export const ativacao = asyncHandler(async (req, res) => ok(res, await service.ativacao(deps(req))));
+
 // GET /administrativo/comunicacao/fila?organizacaoId=&status=&pagina=&porPagina=
 export const fila = asyncHandler(async (req, res) =>
   ok(res, await service.fila({

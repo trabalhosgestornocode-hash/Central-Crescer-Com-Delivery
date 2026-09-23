@@ -3426,6 +3426,12 @@ body {
 .padm-consentimento-confirmar { margin-top: 8px; padding: 10px 12px; background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); display: flex; flex-direction: column; gap: 8px; }
 .padm-consentimento-confirmar p { margin: 0; font-size: 12.5px; color: var(--texto); }
 .padm-consentimento-confirmar div { display: flex; gap: 8px; }
+/* H.4-B.1 — alavancas de envio (ativação do piloto / habilitação da empresa) */
+.padm-ativacao-lista { margin: 8px 0; padding-left: 18px; font-size: 12.5px; color: var(--texto); }
+.padm-ativacao-acao, .padm-habilitacao-acao { margin-top: 8px; }
+.padm-ativacao-confirmar, .padm-habilitacao-confirmar { margin-top: 8px; padding: 10px 12px; background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); display: flex; flex-direction: column; gap: 8px; }
+.padm-ativacao-confirmar p, .padm-habilitacao-confirmar p { margin: 0; font-size: 12.5px; color: var(--texto); }
+.padm-ativacao-confirmar div, .padm-habilitacao-confirmar div { display: flex; gap: 8px; }
 .padm-tabela td small { display: block; font-size: 10.5px; color: var(--cinza); }
 .padm-td-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .padm-var { font-weight: 640; font-variant-numeric: tabular-nums; }

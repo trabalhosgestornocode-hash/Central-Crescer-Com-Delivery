@@ -20,11 +20,12 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import * as repo from "./administrativo.comunicacao.repo.js";
 import { pendencias as lerPendencias } from "./administrativo.service.js";
-import { modoAtual } from "../comunicacao/comunicacao.config.js";
-import { TIPOS_ALERTA } from "../comunicacao/comunicacao.constants.js";
+import { modoAtual, definirModo } from "../comunicacao/comunicacao.config.js";
+import { TIPOS_ALERTA, MODOS } from "../comunicacao/comunicacao.constants.js";
 import { timezoneValido } from "../comunicacao/comunicacao.horario.js";
 import { formatarMensagemPendencia } from "../comunicacao/comunicacao.template.js";
-import { telefoneAutorizadoNoPiloto } from "../comunicacao/comunicacao.piloto.js";
+import { telefoneAutorizadoNoPiloto, pilotoHabilitado, lerAllowlistPiloto } from "../comunicacao/comunicacao.piloto.js";
+import { auditar, ACOES } from "../../shared/auditoria.js";
 
 const TIPOS_ALERTA_VALIDOS = Object.values(TIPOS_ALERTA);
 
@@ -290,6 +291,133 @@ export async function confirmarConsentimento({ organizacaoId, confirmacaoExplici
     throw ApiError.badRequest("Confirmação explícita obrigatória — envie confirmacaoExplicita=true só depois de autorização inequívoca do operador.", { codigo: "CONFIRMACAO_OBRIGATORIA" });
   }
   return repo.confirmarConsentimentoOrganizacao({ organizacaoId: orgId }, autor, deps);
+}
+
+// ---------------------------------------------------------------------------
+// CHECKPOINT H.4-B.1 — AS ALAVANCAS DE ENVIO (habilitação da organização + modo global)
+// ---------------------------------------------------------------------------
+// Sempre com ator humano autenticado (o `autor` vem da sessão do Painel, nunca service_role como ator),
+// confirmação explícita para LIGAR, e os gates do piloto lidos do process.env REAL do backend
+// (`deps.env` só existe para os testes). DESLIGAR (organização e modo) é sempre permitido.
+
+const conflito = (msg, codigo) => new ApiError(409, msg, { codigo });
+
+/** Estado do piloto no runtime REAL: só booleanos/contagens — nunca telefone, nunca a lista, nunca segredo. */
+function estadoPilotoRuntime(telefoneDestinatario, env = process.env) {
+  const lista = lerAllowlistPiloto(env);
+  return {
+    pilotoAtivo: pilotoHabilitado(env),
+    quantidadeDestinos: lista.length,
+    destinatarioPermitido: !!telefoneDestinatario && lista.includes(telefoneDestinatario),
+  };
+}
+
+/**
+ * GET /administrativo/comunicacao/ativacao — o que a UI mostra antes de ligar: modo, prova do piloto no runtime
+ * real, organizações habilitadas, pendências elegíveis das habilitadas e Gateway. Somente leitura, sem telefone.
+ */
+export async function ativacao(deps = {}) {
+  const env = deps.env ?? process.env;
+  const [modo, habilitadas, gateway, snapshot] = await Promise.all([
+    modoAtual(deps), repo.listarOrganizacoesHabilitadas(deps), repo.obterEstadoGateway(deps), lerPendencias({}, deps),
+  ]);
+  const idsHabilitadas = new Set(habilitadas.map((h) => h.organizacao_id));
+  const pendenciasElegiveis = (snapshot.unidades ?? []).filter((u) => idsHabilitadas.has(u.organizacaoId)).length;
+  let destinatariosPermitidos = habilitadas.length > 0;
+  for (const h of habilitadas) {
+    const contato = h.destinatario_contato_id ? await repo.obterContato(h.destinatario_contato_id, deps) : null;
+    if (!estadoPilotoRuntime(contato?.telefone_e164 ?? null, env).destinatarioPermitido) destinatariosPermitidos = false;
+  }
+  const piloto = estadoPilotoRuntime(null, env);
+  return {
+    modo,
+    piloto: { ativo: piloto.pilotoAtivo, quantidadeDestinos: piloto.quantidadeDestinos },
+    organizacoesHabilitadas: habilitadas.length,
+    destinatariosPermitidos,
+    pendenciasElegiveis,
+    gateway: gateway.estado,
+  };
+}
+
+/**
+ * PUT /administrativo/comunicacao/organizacoes/:organizacaoId/habilitacao   { habilitado, confirmacaoExplicita }
+ * false: sempre permitido. true: confirmação explícita + piloto ativo + exatamente 1 destino na allowlist +
+ * destinatário da organização nela + (no banco, atômico) modo DISABLED, nenhuma outra organização habilitada,
+ * timezone/tipo/destinatário configurados e destinatário consentido/verificado/sem opt-out.
+ */
+export async function definirHabilitacao({ organizacaoId, habilitado, confirmacaoExplicita } = {}, autor, deps = {}) {
+  const orgId = v.uuid(organizacaoId, "Empresa");
+  if (typeof habilitado !== "boolean") throw ApiError.badRequest("`habilitado` deve ser true ou false.", { codigo: "HABILITADO_INVALIDO" });
+  const org = await repo.obterOrganizacaoComConfiguracao(orgId, deps);
+  if (!org) throw ApiError.notFound("Empresa não encontrada.");
+  const ator = { atorId: autor?.contaId ?? null, perfilId: autor?.perfilId ?? null, perfilNome: autor?.nome ?? null, atorEmail: autor?.email ?? null };
+
+  if (habilitado === false) {
+    const r = await repo.desabilitarOrganizacao({ organizacaoId: orgId, atorPerfilId: autor?.perfilId ?? null }, deps);
+    if (r.alterou) {
+      await auditar({ ...ator, acao: ACOES.COMUNICACAO_ORGANIZACAO_DESABILITADA, entidade: "comunicacao_habilitacoes", entidadeId: orgId, organizacaoId: orgId, detalhes: { de: true, para: false } });
+    }
+    return { organizacaoId: orgId, habilitado: false, alterou: r.alterou };
+  }
+
+  if (confirmacaoExplicita !== true) {
+    throw ApiError.badRequest("Confirmação explícita obrigatória para habilitar a comunicação desta empresa.", { codigo: "CONFIRMACAO_OBRIGATORIA" });
+  }
+  const hab = org.comunicacao_habilitacoes ?? null;
+  const contato = hab?.destinatario_contato_id ? await repo.obterContato(hab.destinatario_contato_id, deps) : null;
+  const piloto = estadoPilotoRuntime(contato?.telefone_e164 ?? null, deps.env ?? process.env);
+  if (!piloto.pilotoAtivo) throw conflito("O piloto não está ativo no servidor (COMUNICACAO_PILOTO_ENABLED).", "PILOTO_INATIVO");
+  if (piloto.quantidadeDestinos !== 1) throw conflito("A allowlist do piloto precisa ter exatamente 1 destino.", "ALLOWLIST_INVALIDA");
+  if (!piloto.destinatarioPermitido) throw conflito("O destinatário desta empresa não está na allowlist do piloto.", "DESTINATARIO_FORA_DA_ALLOWLIST");
+
+  const r = await repo.habilitarOrganizacaoPiloto({ organizacaoId: orgId, atorPerfilId: autor?.perfilId ?? null }, deps);
+  if (r.acao === "JA_HABILITADA") return { organizacaoId: orgId, habilitado: true, alterou: false };
+  if (r.acao !== "HABILITADA") throw conflito(`Não foi possível habilitar: ${r.acao}.`, r.acao);
+  await auditar({
+    ...ator, acao: ACOES.COMUNICACAO_ORGANIZACAO_HABILITADA, entidade: "comunicacao_habilitacoes", entidadeId: orgId, organizacaoId: orgId,
+    detalhes: { de: false, para: true, piloto: { quantidadeDestinos: piloto.quantidadeDestinos }, modo: MODOS.DISABLED },
+  });
+  return { organizacaoId: orgId, habilitado: true, alterou: true };
+}
+
+/**
+ * PUT /administrativo/comunicacao/modo   { modo: "DISABLED"|"NORMAL", confirmacaoExplicita }
+ * Este é o ÚNICO chamador de `definirModo` fora do módulo comunicacao (guarda estática em teste).
+ * DISABLED: sempre permitido. NORMAL: confirmação explícita + piloto ativo + 1 destino + exatamente 1 organização
+ * habilitada + destinatário dela na allowlist + Gateway conectado.
+ */
+export async function alterarModoGlobal({ modo, confirmacaoExplicita } = {}, autor, deps = {}) {
+  if (modo !== MODOS.DISABLED && modo !== MODOS.NORMAL) {
+    throw ApiError.badRequest("Modo inválido: só DISABLED ou NORMAL são aceitos pelo Painel.", { codigo: "MODO_INVALIDO" });
+  }
+  const ator = { atorId: autor?.contaId ?? null, perfilId: autor?.perfilId ?? null, perfilNome: autor?.nome ?? null, atorEmail: autor?.email ?? null };
+  const anterior = await modoAtual(deps);
+
+  if (modo === MODOS.DISABLED) {
+    await definirModo(MODOS.DISABLED, { atorPerfilId: autor?.perfilId ?? null, atorId: autor?.contaId ?? null, motivo: "painel_admin_desativar_comunicacao" }, deps);
+    if (anterior !== MODOS.DISABLED) {
+      await auditar({ ...ator, acao: ACOES.COMUNICACAO_MODO_DESATIVADO, entidade: "comunicacao_configuracoes", entidadeId: "modo", detalhes: { de: anterior, para: MODOS.DISABLED } });
+    }
+    return { modo: MODOS.DISABLED, anterior, alterou: anterior !== MODOS.DISABLED };
+  }
+
+  if (confirmacaoExplicita !== true) {
+    throw ApiError.badRequest("Confirmação explícita obrigatória para ativar a comunicação automática.", { codigo: "CONFIRMACAO_OBRIGATORIA" });
+  }
+  const a = await ativacao(deps);
+  if (!a.piloto.ativo) throw conflito("O piloto não está ativo no servidor (COMUNICACAO_PILOTO_ENABLED).", "PILOTO_INATIVO");
+  if (a.piloto.quantidadeDestinos !== 1) throw conflito("A allowlist do piloto precisa ter exatamente 1 destino.", "ALLOWLIST_INVALIDA");
+  if (a.organizacoesHabilitadas !== 1) throw conflito("É preciso haver exatamente 1 organização habilitada.", "EXATAMENTE_UMA_ORGANIZACAO");
+  if (!a.destinatariosPermitidos) throw conflito("O destinatário da organização habilitada não está na allowlist do piloto.", "DESTINATARIO_FORA_DA_ALLOWLIST");
+  if (a.gateway !== "conectado") throw conflito("O Gateway do WhatsApp não está conectado.", "GATEWAY_INDISPONIVEL");
+  if (anterior === MODOS.NORMAL) return { modo: MODOS.NORMAL, anterior, alterou: false };
+
+  await definirModo(MODOS.NORMAL, { atorPerfilId: autor?.perfilId ?? null, atorId: autor?.contaId ?? null, motivo: "painel_admin_ativar_piloto" }, deps);
+  await auditar({
+    ...ator, acao: ACOES.COMUNICACAO_MODO_ATIVADO, entidade: "comunicacao_configuracoes", entidadeId: "modo",
+    detalhes: { de: anterior, para: MODOS.NORMAL, organizacoesHabilitadas: a.organizacoesHabilitadas, pendenciasElegiveis: a.pendenciasElegiveis, quantidadeDestinos: a.piloto.quantidadeDestinos },
+  });
+  return { modo: MODOS.NORMAL, anterior, alterou: true };
 }
 
 /** GET /administrativo/comunicacao/fila */

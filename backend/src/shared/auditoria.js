@@ -147,6 +147,14 @@ export const ACOES = {
   // telefone existente, vínculo de perfil ou uso anterior). Nunca grava
   // telefone completo. Nunca toca `opt_out`.
   COMUNICACAO_CONSENTIMENTO_CONFIRMADO: "comunicacao.consentimento_confirmado_painel_admin",
+
+  // Painel Administrativo / Comunicação (Checkpoint H.4-B.1) — as ÚNICAS alavancas que ligam/desligam o
+  // envio: habilitação da ORGANIZAÇÃO e modo GLOBAL. Sempre com ator humano autenticado (nunca service_role
+  // como ator). Nunca gravam telefone.
+  COMUNICACAO_ORGANIZACAO_HABILITADA: "comunicacao.organizacao_habilitada_painel_admin",
+  COMUNICACAO_ORGANIZACAO_DESABILITADA: "comunicacao.organizacao_desabilitada_painel_admin",
+  COMUNICACAO_MODO_ATIVADO: "comunicacao.modo_ativado_painel_admin",
+  COMUNICACAO_MODO_DESATIVADO: "comunicacao.modo_desativado_painel_admin",
 };
 
 /**

@@ -187,6 +187,22 @@ export const painelAdmApi = {
   comunicacaoConfirmarConsentimento: (organizacaoId) =>
     chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/consentimento`, { method: "POST", json: { confirmacaoExplicita: true } }),
 
+  /**
+   * Checkpoint H.4-B.1 — as ÚNICAS alavancas de envio (ator humano autenticado; o backend valida tudo).
+   * `comunicacaoAtivacao`: modo + prova do piloto no runtime do servidor (contagens, nunca telefone).
+   */
+  comunicacaoAtivacao: () => chamar("/comunicacao/ativacao"),
+
+  /** Habilita/desabilita a comunicação de UMA empresa. Habilitar exige confirmação explícita (enviada aqui; a UI só chama depois do modal). */
+  comunicacaoDefinirHabilitacao: (organizacaoId, habilitado) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/habilitacao`, {
+      method: "PUT", json: habilitado === true ? { habilitado: true, confirmacaoExplicita: true } : { habilitado: false },
+    }),
+
+  /** Liga (NORMAL) ou desliga (DISABLED) a comunicação automática global. Ligar exige confirmação explícita. */
+  comunicacaoDefinirModo: (modo) =>
+    chamar("/comunicacao/modo", { method: "PUT", json: modo === "NORMAL" ? { modo: "NORMAL", confirmacaoExplicita: true } : { modo: "DISABLED" } }),
+
   /** Fila (mensagens ainda em jogo). `status`, `organizacaoId`, `pagina`, `porPagina`. */
   comunicacaoFila: (filtros = {}) => chamar("/comunicacao/fila" + qs(filtros)),
 

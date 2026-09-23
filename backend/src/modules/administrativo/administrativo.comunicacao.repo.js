@@ -321,4 +321,39 @@ export async function confirmarConsentimentoOrganizacao({ organizacaoId }, autor
   return { organizacaoId, consentimento: true, verificado: true, telefoneMascarado: mascararTelefone(contato?.telefone_e164) };
 }
 
+/**
+ * Habilita ATOMICAMENTE a organização piloto (RPC da migration 093: advisory lock + modo DISABLED + nenhuma outra
+ * habilitada + destinatário consentido/verificado). Só o Painel Administrativo chama isto (ator humano no service).
+ * @returns {Promise<{acao: string, modo?: string}>}
+ */
+export async function habilitarOrganizacaoPiloto({ organizacaoId, atorPerfilId = null }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_habilitar_organizacao_piloto", {
+    p_organizacao_id: organizacaoId, p_ator_perfil_id: atorPerfilId,
+  });
+  if (error) throw ApiError.internal(error.message);
+  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_habilitar_organizacao_piloto: resposta inválida");
+  return data;
+}
+
+/** Desabilita (habilitado=false). SEMPRE permitido (kill switch da organização) — sem gates de ativação. */
+export async function desabilitarOrganizacao({ organizacaoId, atorPerfilId = null }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data: antes, error: e1 } = await db.from("comunicacao_habilitacoes").select("habilitado").eq("organizacao_id", organizacaoId).maybeSingle();
+  if (e1) throw ApiError.internal(e1.message);
+  if (!antes) return { estavaHabilitada: false, alterou: false };
+  const { error } = await db.from("comunicacao_habilitacoes")
+    .update({ habilitado: false, atualizado_por: atorPerfilId, updated_at: new Date().toISOString() }).eq("organizacao_id", organizacaoId);
+  if (error) throw ApiError.internal(error.message);
+  return { estavaHabilitada: antes.habilitado === true, alterou: antes.habilitado === true };
+}
+
+/** Organizações habilitadas hoje: id + contato destinatário (para provar allowlist/contagem). */
+export async function listarOrganizacoesHabilitadas(deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("comunicacao_habilitacoes").select("organizacao_id, destinatario_contato_id").eq("habilitado", true);
+  if (error) throw ApiError.internal(error.message);
+  return data ?? [];
+}
+
 export { obterContato, obterPerfilOperacional, mascararTelefone };

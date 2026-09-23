@@ -170,9 +170,13 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
       pintarMentorados();
     } else if (entrada.id === "comunicacao") {
       ultimoDados.comunicacaoApi = api;
-      const [resumoC, orgsC] = await Promise.all([api.comunicacaoResumo(), api.comunicacaoOrganizacoes({})]);
+      const [resumoC, orgsC, ativC] = await Promise.all([
+        api.comunicacaoResumo(), api.comunicacaoOrganizacoes({}),
+        Promise.resolve().then(() => api.comunicacaoAtivacao?.()).catch(() => null), // painel de ativação é acessório: nunca derruba a tela
+      ]);
       ultimoDados.comunicacaoResumo = resumoC;
       ultimoDados.comunicacaoOrgs = orgsC;
+      ultimoDados.comunicacaoAtivacao = ativC ?? null;
       pintarComunicacao();
     } else {
       v.innerHTML = htmlVisaoGeral(await api.visaoGeral({ mes }));
@@ -196,7 +200,7 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
 const ultimoDados = {
   empresas: null, pendencias: null, relatorio: null, evolucao: null, mesAtivo: null, apiAtual: null,
   lucratividade: null, semanaCarregada: null, mentorados: null,
-  comunicacaoApi: null, comunicacaoResumo: null, comunicacaoOrgs: null, comunicacaoFila: null, comunicacaoHistorico: null,
+  comunicacaoApi: null, comunicacaoAtivacao: null, comunicacaoResumo: null, comunicacaoOrgs: null, comunicacaoFila: null, comunicacaoHistorico: null,
 };
 
 /** `true` para as abas semanais (Lucratividade / Rentabilidade). */
@@ -1348,6 +1352,7 @@ function htmlComunicacao() {
       : htmlComunicacaoEmpresas(orgs, viewComunicacao.termo);
   return `
     ${htmlComunicacaoCards(r)}
+    ${htmlAtivacaoPiloto(ultimoDados.comunicacaoAtivacao)}
     ${secao({
       titulo: "Empresas, fila e histórico", icone: "message-circle",
       sub: "Nenhum envio é feito nesta fase — apenas configuração e acompanhamento.",
@@ -1379,7 +1384,51 @@ async function carregarSubAbaComunicacao() {
   }
 }
 
+/** Recarrega resumo + empresas + ativação depois de uma alavanca (habilitar/desabilitar/modo) e repinta. */
+async function recarregarComunicacaoAposAcao(api) {
+  const [resumoC, orgsC, ativC] = await Promise.all([
+    api.comunicacaoResumo(), api.comunicacaoOrganizacoes({}),
+    Promise.resolve().then(() => api.comunicacaoAtivacao?.()).catch(() => null),
+  ]);
+  ultimoDados.comunicacaoResumo = resumoC;
+  ultimoDados.comunicacaoOrgs = orgsC;
+  ultimoDados.comunicacaoAtivacao = ativC ?? null;
+  pintarComunicacao();
+}
+
 function ligarComunicacao() {
+  const apiAtiv = ultimoDados.comunicacaoApi ?? painelAdmApi;
+  el('[data-padm-acao="pedir-ativar-piloto"]')?.addEventListener("click", (e) => {
+    e.target.hidden = true;
+    const painel = e.target.parentElement?.querySelector(".padm-ativacao-confirmar");
+    if (painel) painel.hidden = false;
+  });
+  el('[data-padm-acao="cancelar-ativar-piloto"]')?.addEventListener("click", (e) => {
+    const raiz = e.target.closest(".padm-ativacao-acao");
+    raiz?.querySelector(".padm-ativacao-confirmar")?.setAttribute("hidden", "");
+    const botao = raiz?.querySelector('[data-padm-acao="pedir-ativar-piloto"]');
+    if (botao) botao.hidden = false;
+  });
+  el('[data-padm-acao="confirmar-ativar-piloto"]')?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      await apiAtiv.comunicacaoDefinirModo("NORMAL");
+      await recarregarComunicacaoAposAcao(apiAtiv);
+    } catch (err) {
+      e.target.disabled = false;
+      alert(err.message || "Não foi possível ativar o piloto.");
+    }
+  });
+  el('[data-padm-acao="desativar-comunicacao"]')?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      await apiAtiv.comunicacaoDefinirModo("DISABLED");
+      await recarregarComunicacaoAposAcao(apiAtiv);
+    } catch (err) {
+      e.target.disabled = false;
+      alert(err.message || "Não foi possível desativar a comunicação.");
+    }
+  });
   els("[data-padm-com-aba]").forEach((b) => b.addEventListener("click", () => {
     viewComunicacao.aba = b.dataset.padmComAba;
     carregarSubAbaComunicacao();
@@ -1467,6 +1516,65 @@ function htmlAcaoConsentimento(dest) {
     </div>`;
 }
 
+/**
+ * Painel de ATIVAÇÃO do piloto — Checkpoint H.4-B.1. Mostra o que o SERVIDOR prova (piloto ativo, nº de destinos,
+ * empresas habilitadas, pendências elegíveis, WhatsApp) e as duas ações globais: "Ativar piloto" (com confirmação
+ * forte) e "Desativar comunicação" (kill switch, sem fricção). Nunca recebe/mostra telefone.
+ */
+export function htmlAtivacaoPiloto(a) {
+  if (!a) return "";
+  const ativa = a.modo === "NORMAL";
+  const pronto = a.piloto?.ativo === true && a.piloto?.quantidadeDestinos === 1 && a.organizacoesHabilitadas === 1
+    && a.destinatariosPermitidos === true && a.gateway === "conectado";
+  const lista = `<ul class="padm-ativacao-lista">
+      <li>Piloto no servidor: <strong>${a.piloto?.ativo ? "ativo" : "inativo"}</strong> · destinos autorizados: <strong>${Number(a.piloto?.quantidadeDestinos ?? 0)}</strong></li>
+      <li>Empresas habilitadas: <strong>${Number(a.organizacoesHabilitadas ?? 0)}</strong> · pendências D-1 elegíveis: <strong>${Number(a.pendenciasElegiveis ?? 0)}</strong></li>
+      <li>WhatsApp: <strong>${escapeHtml(ROTULO_GATEWAY[a.gateway] ?? "—")}</strong></li>
+    </ul>`;
+  const corpo = ativa
+    ? `<p>${chip({ classe: "ok", rotulo: "Comunicação automática ativa" })}</p>${lista}
+       <button type="button" class="btn btn-perigo btn-sm" data-padm-acao="desativar-comunicacao">Desativar comunicação</button>`
+    : `<p>${chip({ classe: "muted", rotulo: "Comunicação automática pausada" })}</p>${lista}
+       <div class="padm-ativacao-acao">
+         <button type="button" class="btn btn-primary btn-sm" data-padm-acao="pedir-ativar-piloto" ${pronto ? "" : "disabled"} ${pronto ? "" : 'title="Habilite exatamente 1 empresa e confirme piloto, destino e WhatsApp conectado."'}>Ativar piloto</button>
+         <div class="padm-ativacao-confirmar" hidden>
+           <p>Você está prestes a ativar a comunicação automática do piloto. Existe ${Number(a.organizacoesHabilitadas ?? 0)} organização habilitada e ${Number(a.pendenciasElegiveis ?? 0)} pendência D-1 elegível. Ao confirmar, o worker poderá criar e enviar a mensagem conforme as regras de horário, jitter, rate-limit, JIT e allowlist.</p>
+           <div>
+             <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="cancelar-ativar-piloto">Cancelar</button>
+             <button type="button" class="btn btn-primary btn-sm" data-padm-acao="confirmar-ativar-piloto">Ativar piloto</button>
+           </div>
+         </div>
+       </div>`;
+  return secao({ titulo: "Ativação do piloto", icone: "bell", sub: "Alavanca global de envio — sempre com confirmação e auditoria do operador.", corpo });
+}
+
+/**
+ * Ação de HABILITAÇÃO da empresa — Checkpoint H.4-B.1. Só oferece habilitar quando a configuração, o consentimento e
+ * a verificação estão prontos; desabilitar é sempre oferecido (sem fricção). O backend revalida TODOS os gates.
+ */
+export function htmlAcaoHabilitacao(d) {
+  const c = d?.checklistPiloto;
+  if (!c) return "";
+  const nome = escapeHtml(d.organizacao?.nome ?? "esta empresa");
+  if (c.organizacaoHabilitada) {
+    return `<p>${chip({ classe: "ok", rotulo: "Comunicação habilitada" })}</p>
+      <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="desabilitar-comunicacao-org">Desabilitar comunicação</button>`;
+  }
+  const pronto = c.perfilAssociado && c.telefoneValido && c.consentimento && c.telefoneVerificado && c.timezone && c.tipoAlerta;
+  if (!pronto) return `<p class="padm-vazio">Conclua a configuração, o consentimento e a verificação para poder habilitar a comunicação.</p>`;
+  return `
+    <div class="padm-habilitacao-acao">
+      <button type="button" class="btn btn-primary btn-sm" data-padm-acao="pedir-habilitar-comunicacao">Habilitar comunicação</button>
+      <div class="padm-habilitacao-confirmar" hidden>
+        <p>Você está prestes a habilitar a comunicação automática para <strong>${nome}</strong>. A comunicação global continua pausada até a ativação do piloto, que é uma confirmação separada.</p>
+        <div>
+          <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="cancelar-habilitar-comunicacao">Cancelar</button>
+          <button type="button" class="btn btn-primary btn-sm" data-padm-acao="confirmar-habilitar-comunicacao">Habilitar comunicação</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 export function htmlDrawerComunicacao(d, perfis) {
   const cfg = d.configuracao;
   const dest = cfg.destinatario;
@@ -1482,6 +1590,11 @@ export function htmlDrawerComunicacao(d, perfis) {
           titulo: "Configuração para piloto", icone: "list-checks",
           sub: "Estado atual — os dois últimos itens permanecem pendentes nesta fase por decisão de produto.",
           corpo: htmlChecklistPiloto(d.checklistPiloto),
+        })}
+        ${secao({
+          titulo: "Comunicação da empresa", icone: "bell",
+          sub: "Habilitar é uma ação do operador, registrada na auditoria. Desabilitar é sempre permitido.",
+          corpo: htmlAcaoHabilitacao(d),
         })}
         ${secao({
           titulo: "Unidades pendentes", corpo: d.unidades?.length
@@ -1600,6 +1713,39 @@ function ligarDrawerComunicacao(organizacaoId, api) {
     } catch (err) {
       e.target.disabled = false;
       alert(err.message || "Não foi possível confirmar consentimento/verificação.");
+    }
+  });
+  el('[data-padm-acao="pedir-habilitar-comunicacao"]')?.addEventListener("click", (e) => {
+    e.target.hidden = true;
+    const painel = e.target.parentElement?.querySelector(".padm-habilitacao-confirmar");
+    if (painel) painel.hidden = false;
+  });
+  el('[data-padm-acao="cancelar-habilitar-comunicacao"]')?.addEventListener("click", (e) => {
+    const raiz = e.target.closest(".padm-habilitacao-acao");
+    raiz?.querySelector(".padm-habilitacao-confirmar")?.setAttribute("hidden", "");
+    const botao = raiz?.querySelector('[data-padm-acao="pedir-habilitar-comunicacao"]');
+    if (botao) botao.hidden = false;
+  });
+  el('[data-padm-acao="confirmar-habilitar-comunicacao"]')?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      await api.comunicacaoDefinirHabilitacao(organizacaoId, true);
+      await abrirDrawerComunicacao(organizacaoId);
+      await recarregarComunicacaoAposAcao(api);
+    } catch (err) {
+      e.target.disabled = false;
+      alert(err.message || "Não foi possível habilitar a comunicação desta empresa.");
+    }
+  });
+  el('[data-padm-acao="desabilitar-comunicacao-org"]')?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      await api.comunicacaoDefinirHabilitacao(organizacaoId, false);
+      await abrirDrawerComunicacao(organizacaoId);
+      await recarregarComunicacaoAposAcao(api);
+    } catch (err) {
+      e.target.disabled = false;
+      alert(err.message || "Não foi possível desabilitar a comunicação desta empresa.");
     }
   });
   el("#padm-com-form")?.addEventListener("submit", async (e) => {

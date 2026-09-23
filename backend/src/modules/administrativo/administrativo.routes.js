@@ -56,7 +56,8 @@ administrativoRouter.get("/unidades/:unidadeId/calendario", c.calendarioUnidade)
 // segura. A ÚNICA escrita (`PUT .../configuracao`) NUNCA habilita envio: o
 // service recusa qualquer `habilitado != false` com 400 antes de tocar o
 // banco (defesa em profundidade — o repo também nunca aceita esse parâmetro).
-// Nenhuma rota chama `definirModo`, `whatsapp.service.js`, provider ou Gateway.
+// Nenhuma rota chama `whatsapp.service.js`, provider ou Gateway. `definirModo` só é chamado pelo
+// service dedicado (H.4-B.1: PUT /comunicacao/modo) — ver a guarda estática em administrativo-comunicacao-rotas.test.js.
 administrativoRouter.get("/comunicacao/resumo", cc.resumo);
 administrativoRouter.get("/comunicacao/organizacoes", cc.organizacoes);
 administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId", cc.detalheOrganizacao);
@@ -66,6 +67,12 @@ administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/configuracao"
 // Checkpoint H.4-A.2 — segunda escrita permitida, só consentimento/verificação
 // (nunca habilitado). Exige confirmacaoExplicita=true; ver service para a regra.
 administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/consentimento", cc.confirmarConsentimento);
+// Checkpoint H.4-B.1 — as ÚNICAS alavancas de envio: habilitar/desabilitar a ORGANIZAÇÃO e ligar/desligar o
+// MODO global (DISABLED|NORMAL). Ator humano autenticado (requirePainelAdministrativo), confirmação explícita,
+// gates do piloto lidos do process.env real. Desligar é sempre permitido. Ver o service.
+administrativoRouter.get("/comunicacao/ativacao", cc.ativacao);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/habilitacao", cc.habilitacao);
+administrativoRouter.put("/comunicacao/modo", cc.modo);
 administrativoRouter.get("/comunicacao/fila", cc.fila);
 administrativoRouter.get("/comunicacao/historico", cc.historico);
 

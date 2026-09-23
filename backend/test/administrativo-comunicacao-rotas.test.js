@@ -381,14 +381,16 @@ describe("Checkpoint H.3-A — proteção contra habilitado=true (item 21)", () 
   });
 });
 
-describe("Checkpoint H.3-A — nenhuma rota nova referencia definirModo", () => {
-  test("grep estático: administrativo.comunicacao.* nunca importa/chama definirModo", async () => {
+describe("Checkpoint H.3-A (revisado no H.4-B.1) — repo/controller nunca referenciam definirModo", () => {
+  // H.4-B.1: o SERVICE dedicado (PUT /comunicacao/modo) passou a ser o ÚNICO chamador — guarda estática em
+  // administrativo-comunicacao-ativacao.test.js. Repo e controller continuam proibidos.
+  test("grep estático: administrativo.comunicacao.{repo,controller} nunca importa/chama definirModo", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
     const { fileURLToPath } = await import("node:url");
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
     const dir = path.join(__dirname, "..", "src", "modules", "administrativo");
-    for (const arquivo of ["administrativo.comunicacao.repo.js", "administrativo.comunicacao.service.js", "administrativo.comunicacao.controller.js"]) {
+    for (const arquivo of ["administrativo.comunicacao.repo.js", "administrativo.comunicacao.controller.js"]) {
       const codigo = fs.readFileSync(path.join(dir, arquivo), "utf8");
       assert.doesNotMatch(codigo, /definirModo/, `${arquivo} não pode referenciar definirModo neste checkpoint`);
     }
@@ -417,7 +419,7 @@ describe("Checkpoint H.3-A — zero outbound (item 35, obrigatório)", () => {
     const { fileURLToPath } = await import("node:url");
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
     const dir = path.join(__dirname, "..", "src", "modules", "administrativo");
-    for (const arquivo of ["administrativo.comunicacao.repo.js", "administrativo.comunicacao.service.js", "administrativo.comunicacao.controller.js"]) {
+    for (const arquivo of ["administrativo.comunicacao.repo.js", "administrativo.comunicacao.controller.js"]) {
       const codigo = fs.readFileSync(path.join(dir, arquivo), "utf8");
       assert.doesNotMatch(codigo, /whatsapp\.service|providers\/baileysGateway|criarWhatsAppService|enviarTexto/, `${arquivo} não pode chamar o provider/Gateway`);
     }
