@@ -31,3 +31,34 @@ export function formatarMensagemPendencia({ unidadeNome, pendenciaMaisAntiga }) 
   const dataClausula = pendenciaMaisAntiga ? ` referente ao dia ${pendenciaMaisAntiga.split("-").reverse().join("/")}` : "";
   return `Olá! Identificamos que a unidade ${unidadeNome ?? "—"} possui um lançamento pendente no Crescer com Delivery${dataClausula}. Por favor, acesse o sistema para verificar e regularizar a pendência. — Crescer com Delivery`;
 }
+
+const dataPtBr = (iso) => (iso ? iso.split("-").reverse().join("/") : null);
+
+/**
+ * Checkpoint H.4-A.4, item 11 — ESTÁGIO 1 da janela crítica D-1 (prazo
+ * encerra HOJE, ver administrativo.status.js#prazoFinalHoje). Semanticamente
+ * separado do lembrete normal (formatarMensagemPendencia): tom de urgência
+ * real, sem prometer nada que o sistema não garante — nunca menciona Agente
+ * Crescer, nunca insinua resposta automática. Função PURA, mesma disciplina
+ * das demais (nunca inventa data ausente).
+ * @param {{unidadeNome?: string|null, pendenciaMaisAntiga?: string|null}} params
+ */
+export function formatarMensagemCriticaD1({ unidadeNome, pendenciaMaisAntiga }) {
+  const data = dataPtBr(pendenciaMaisAntiga);
+  const dataClausula = data ? ` referente ao dia ${data}` : "";
+  return `Olá! Atenção: a unidade ${unidadeNome ?? "—"} ainda possui o lançamento${dataClausula} pendente no Crescer com Delivery. Esse lançamento precisa ser regularizado hoje para evitar a perda da possibilidade de preenchimento desse período. Por favor, acesse o sistema e conclua o lançamento o quanto antes. — Crescer com Delivery`;
+}
+
+/**
+ * Checkpoint H.4-A.4, item 12 — ESTÁGIO FINAL (último estágio do dia).
+ * Nunca diz "última chance" (o sistema não pode garantir tecnicamente que
+ * não haverá outra oportunidade) — diz apenas que é o último lembrete DESTE
+ * dia, o que é sempre verdadeiro por construção (V1 nunca agenda um
+ * terceiro estágio). Mesma disciplina de dado real das demais.
+ * @param {{unidadeNome?: string|null, pendenciaMaisAntiga?: string|null}} params
+ */
+export function formatarMensagemUltimoLembreteD1({ unidadeNome, pendenciaMaisAntiga }) {
+  const data = dataPtBr(pendenciaMaisAntiga);
+  const dataClausula = data ? ` referente ao dia ${data}` : "";
+  return `Último lembrete de hoje: o lançamento da unidade ${unidadeNome ?? "—"}${dataClausula} continua pendente. Regularize antes do encerramento do dia para evitar perder a possibilidade de preenchimento desse período. — Crescer com Delivery`;
+}

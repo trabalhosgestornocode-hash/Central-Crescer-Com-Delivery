@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { formatarMensagemPendencia } from "../src/modules/comunicacao/comunicacao.template.js";
+import { formatarMensagemPendencia, formatarMensagemCriticaD1, formatarMensagemUltimoLembreteD1 } from "../src/modules/comunicacao/comunicacao.template.js";
 
 // Checkpoint H.4-A.1, item 3 — cobertura do template revisado para o
 // primeiro piloto (sem insinuar que o Agente Crescer já responde).
@@ -64,5 +64,56 @@ describe("formatarMensagemPendencia — Checkpoint H.4-A.3.2 (texto sem 'há N d
     const textoPipeline = formatarMensagemPendencia(entrada);
     const textoPreview = formatarMensagemPendencia({ ...entrada });
     assert.equal(textoPreview, textoPipeline);
+  });
+});
+
+describe("formatarMensagemCriticaD1 — Checkpoint H.4-A.4, item 11 (ESTÁGIO 1)", () => {
+  test("texto traz nome da unidade, data e tom de urgência real", () => {
+    const texto = formatarMensagemCriticaD1({ unidadeNome: "Subway Saci — Matriz", pendenciaMaisAntiga: "2026-09-21" });
+    assert.match(texto, /unidade Subway Saci — Matriz ainda possui o lançamento referente ao dia 21\/09\/2026 pendente/);
+    assert.match(texto, /precisa ser regularizado hoje para evitar a perda da possibilidade de preenchimento desse período/);
+  });
+
+  test("nunca menciona Agente Crescer / resposta automática / 'posso te ajudar'", () => {
+    const texto = formatarMensagemCriticaD1({ unidadeNome: "Loja X", pendenciaMaisAntiga: "2026-09-21" });
+    assert.doesNotMatch(texto, /agente crescer|posso te (ajudar|mostrar)|responder automaticamente/i);
+  });
+
+  test("é semanticamente distinto do lembrete normal (texto diferente, não é o mesmo template reaproveitado por engano)", () => {
+    const normal = formatarMensagemPendencia({ unidadeNome: "Loja X", pendenciaMaisAntiga: "2026-09-21" });
+    const critico = formatarMensagemCriticaD1({ unidadeNome: "Loja X", pendenciaMaisAntiga: "2026-09-21" });
+    assert.notEqual(normal, critico);
+  });
+
+  test("sem data: omite a cláusula, nunca 'undefined'/'null', unidade ausente usa travessão", () => {
+    const texto = formatarMensagemCriticaD1({ unidadeNome: null, pendenciaMaisAntiga: null });
+    assert.doesNotMatch(texto, /undefined|null/);
+    assert.match(texto, /unidade — ainda possui o lançamento pendente/);
+  });
+});
+
+describe("formatarMensagemUltimoLembreteD1 — Checkpoint H.4-A.4, item 12 (ESTÁGIO FINAL)", () => {
+  test("texto traz nome da unidade e data, nunca diz 'última chance'", () => {
+    const texto = formatarMensagemUltimoLembreteD1({ unidadeNome: "Subway Saci — Matriz", pendenciaMaisAntiga: "2026-09-21" });
+    assert.match(texto, /Último lembrete de hoje: o lançamento da unidade Subway Saci — Matriz referente ao dia 21\/09\/2026 continua pendente/);
+    assert.doesNotMatch(texto, /última chance/i);
+  });
+
+  test("nunca menciona Agente Crescer / resposta automática", () => {
+    const texto = formatarMensagemUltimoLembreteD1({ unidadeNome: "Loja X", pendenciaMaisAntiga: "2026-09-21" });
+    assert.doesNotMatch(texto, /agente crescer|posso te (ajudar|mostrar)|responder automaticamente/i);
+  });
+
+  test("distinto do template normal e do crítico estágio 1", () => {
+    const normal = formatarMensagemPendencia({ unidadeNome: "Loja X", pendenciaMaisAntiga: "2026-09-21" });
+    const critico1 = formatarMensagemCriticaD1({ unidadeNome: "Loja X", pendenciaMaisAntiga: "2026-09-21" });
+    const final = formatarMensagemUltimoLembreteD1({ unidadeNome: "Loja X", pendenciaMaisAntiga: "2026-09-21" });
+    assert.notEqual(final, normal);
+    assert.notEqual(final, critico1);
+  });
+
+  test("sem data: omite a cláusula graciosamente, nunca 'undefined'/'null'", () => {
+    const texto = formatarMensagemUltimoLembreteD1({ unidadeNome: "Loja X", pendenciaMaisAntiga: null });
+    assert.doesNotMatch(texto, /undefined|null/);
   });
 });

@@ -150,6 +150,29 @@ export async function atualizarStatusAlerta(alertaId, status, deps = {}) {
 }
 
 /**
+ * Checkpoint H.4-A.6, itens 23-24 — mesma intenção de `atualizarStatusAlerta`
+ * (refletir uma condição de NEGÓCIO causada por UMA MENSAGEM, ex.: BLOCKED
+ * por veto de política), mas ESTÁGIO-CIENTE: só grava se a mensagem
+ * informada ainda for o estágio de MAIOR prioridade já criado para o
+ * alerta (NORMAL < critico_1 < critico_final — migration 091). A regra de
+ * prioridade vive SÓ no banco (`comunicacao_estagio_prioridade`), nunca
+ * duplicada aqui — este helper só chama a RPC e traduz o resultado.
+ * NUNCA use `atualizarStatusAlerta(alertaId, ...)` para algo disparado por
+ * uma mensagem específica: sem o id da mensagem não há como saber se ela
+ * ainda é o estágio que manda no alerta.
+ * @param {string} mensagemId @param {string} status
+ * @returns {Promise<boolean>} `true` se o alerta foi de fato atualizado
+ */
+export async function atualizarStatusAlertaPorMensagem(mensagemId, status, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_atualizar_status_alerta_por_mensagem", {
+    p_mensagem_id: mensagemId, p_status: status,
+  });
+  if (error) throw ApiError.internal(error.message);
+  return data?.acao === "ATUALIZADO";
+}
+
+/**
  * Alertas ATIVOS. `organizacaoId` omitido/null = TODAS as organizações —
  * usado por `agendarEnviosPendentes` (a distribuição de horários é
  * GLOBAL, entre toda a frota, não por empresa — evita rajada na conexão

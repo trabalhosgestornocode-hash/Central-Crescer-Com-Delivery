@@ -39,10 +39,12 @@ import * as tentativasRepo from "./comunicacao.tentativas.repo.js";
 import { obterConfig, modoAtual, obterTtlHoras, obterJitterMaxMs } from "./comunicacao.config.js";
 import { avaliarEnvio } from "./comunicacao.policy.js";
 import { classificarErroEnvio, backoffRetrySegundos } from "./comunicacao.entrega.js";
-import { dentroDaJanelaLocal, proximoHorarioDeEnvio, inicioDoDiaLocal, ConfiguracaoHorarioInvalida } from "./comunicacao.horario.js";
+import { dentroDaJanelaLocal, proximoHorarioDeEnvio, inicioDoDiaLocal, partesLocais, instanteDeLocal, ConfiguracaoHorarioInvalida } from "./comunicacao.horario.js";
+import { estagioCriticoAtual, proximoInstanteCritico, ESTAGIO_CRITICO, CUTOFF_CRITICO } from "./comunicacao.horarioCritico.js";
+import { prazoFinalHoje } from "../administrativo/administrativo.status.js";
 import { resolverHabilitacaoEmpresa, janelasEfetivas } from "./comunicacao.habilitacao.js";
 import { telefoneAutorizadoNoPiloto } from "./comunicacao.piloto.js";
-import { formatarMensagemPendencia } from "./comunicacao.template.js";
+import { formatarMensagemPendencia, formatarMensagemCriticaD1, formatarMensagemUltimoLembreteD1 } from "./comunicacao.template.js";
 import { calcularDisponivelEm, chaveDeJitter, MOTIVO_DA_RESERVA } from "./comunicacao.adiamento.js";
 import {
   TIPOS_ALERTA, STATUS_ALERTA, STATUS_MENSAGEM, SEVERIDADE, CLASSIFICACAO_ERRO, MODOS,
@@ -226,6 +228,95 @@ export async function agendarEnviosPendentes({
   return r;
 }
 
+const isoLocal = (instante, tz) => { const p = partesLocais(instante, tz); return `${p.ano}-${String(p.mes).padStart(2, "0")}-${String(p.dia).padStart(2, "0")}`; };
+const TEMPLATE_POR_ESTAGIO_CRITICO = {
+  [ESTAGIO_CRITICO.CRITICO_1]: formatarMensagemCriticaD1,
+  [ESTAGIO_CRITICO.CRITICO_FINAL]: formatarMensagemUltimoLembreteD1,
+};
+const SUFIXO_ESTAGIO = { [ESTAGIO_CRITICO.CRITICO_1]: "critico1", [ESTAGIO_CRITICO.CRITICO_FINAL]: "criticofinal" };
+
+/**
+ * Checkpoint H.4-B — escalona CRITICO_1/CRITICO_FINAL para alertas cujo D-1 vence
+ * HOJE (`administrativo.status.js#prazoFinalHoje` — NUNCA por `diasPendentes > 0`,
+ * H.4-A.4 item 4) e cuja organização já passou por `agendarEnviosPendentes` (por
+ * isso só olha alertas que NÃO estão mais DETECTED — o NORMAL já existe em algum
+ * estágio). O ESTÁGIO em si (qual dos dois, ou nenhum) é decidido pelo relógio real
+ * de CADA organização (`comunicacao.horarioCritico.js`, timezone próprio da
+ * habilitação) — nunca escolhido manualmente pelo chamador (H.4-B, item 26).
+ *
+ * Reaproveita INTEGRALMENTE a infraestrutura do NORMAL: mesma leitura de
+ * habilitação, mesmo `chaveDeJitter` determinístico, e a RPC dedicada
+ * (`comunicacao_agendar_mensagem_critica`, migration 091) que já reaplica as
+ * MESMAS checagens de habilitação/destinatário/rate-limit-por-dia da função
+ * normal, mais os gates específicos de estágio (supersede, entrega em curso,
+ * fora de ordem). ZERO transporte paralelo: a mensagem criada aqui entra na
+ * MESMA fila (`comunicacao_mensagens`, status SCHEDULED) que `processarProximoLote`
+ * já sabe reivindicar/processar — claim, policy, reserva, JIT e provider
+ * continuam sendo os de sempre, sem nenhum caminho novo.
+ *
+ * `expiraEm` = o hard cutoff (23:30 local, H.4-A.4 item 8): depois disso a
+ * mensagem nunca sai (vira CANCELLED/EXPIRADA pelo TTL de sempre).
+ * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function}} [params]
+ */
+export async function agendarEscalonamentosCriticos({
+  organizacaoId = null, tipoAlerta = TIPOS_ALERTA.DASHBOARD_IFOOD_D1, agora = new Date(), resolverHabilitacao = resolverHabilitacaoEmpresa,
+} = {}, deps = {}) {
+  const r = {
+    agendados: 0, semDestinatario: 0, destinatarioInelegivel: 0, semHabilitacao: 0, configInvalida: 0,
+    jaExistiam: 0, foraDoPrazoDeHoje: 0, estagioNaoElegivelAgora: 0, entregaEmCurso: 0, estagioJaSuperado: 0, ignorados: 0,
+  };
+  const ativos = await alertasRepo.listarAlertasAtivos({ organizacaoId, tipoAlerta }, deps);
+  // Só alertas que JÁ saíram de DETECTED (o NORMAL de hoje já foi tentado/agendado
+  // por agendarEnviosPendentes) — nunca cria um estágio crítico "adiantado" sem o
+  // normal ter existido primeiro.
+  const candidatos = ativos.filter((a) => a.status !== STATUS_ALERTA.DETECTED);
+  if (!candidatos.length) return r;
+
+  const habilitacoes = new Map();
+  const habilitacaoDa = async (orgId) => {
+    if (!habilitacoes.has(orgId)) habilitacoes.set(orgId, await resolverHabilitacao({ organizacaoId: orgId, tipoAlerta, agora }, deps));
+    return habilitacoes.get(orgId);
+  };
+
+  for (const alerta of candidatos) {
+    const hab = await habilitacaoDa(alerta.organizacao_id);
+    if (hab?.empresaHabilitada !== true || hab?.tipoPermitido !== true) { r.semHabilitacao += 1; continue; }
+    if (!hab.timezone) { r.configInvalida += 1; continue; }
+    if (!hab.destinatarioContatoId || !hab.destinatarioPerfilId) { r.semDestinatario += 1; continue; }
+
+    // H.4-A.4, item 4: prazoFinalHoje compara DATA, nunca infere por diasPendentes>0
+    // (backlog antigo nunca reacende escalonamento crítico).
+    if (!prazoFinalHoje(alerta.data_referencia, isoLocal(agora, hab.timezone))) { r.foraDoPrazoDeHoje += 1; continue; }
+
+    const estagio = estagioCriticoAtual(agora, hab.timezone);
+    if (!estagio) { r.estagioNaoElegivelAgora += 1; continue; }
+
+    const idempotencyKey = `wa:alerta:${alerta.id}:${SUFIXO_ESTAGIO[estagio]}:v1`;
+    const chave = chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id });
+    const instante = proximoInstanteCritico(agora, hab.timezone, estagio, chave);
+    if (!instante) { r.estagioNaoElegivelAgora += 1; continue; } // faixa de hoje já fechou
+
+    const p = partesLocais(instante, hab.timezone);
+    const expiraEm = instanteDeLocal(hab.timezone, p.ano, p.mes, p.dia, CUTOFF_CRITICO.hora, CUTOFF_CRITICO.minuto);
+    const conteudo = TEMPLATE_POR_ESTAGIO_CRITICO[estagio]({
+      unidadeNome: alerta.metadados?.unidade_nome ?? null, pendenciaMaisAntiga: alerta.data_referencia,
+    });
+
+    const res = await filaRepo.agendarMensagemCritica({
+      alertaId: alerta.id, estagio, conteudo, idempotencyKey, disponivelEm: instante, expiraEm,
+    }, deps);
+    if (res.acao === "CRIADA") r.agendados += 1;
+    else if (res.acao === "JA_EXISTIA") r.jaExistiam += 1;
+    else if (res.acao === "ENTREGA_EM_CURSO") r.entregaEmCurso += 1;
+    else if (res.acao === "ESTAGIO_JA_SUPERADO") r.estagioJaSuperado += 1;
+    else if (res.acao === "NAO_HABILITADA" || res.acao === "TIPO_NAO_PERMITIDO") r.semHabilitacao += 1;
+    else if (res.acao === "SEM_DESTINATARIO") r.semDestinatario += 1;
+    else if (res.acao === "DESTINATARIO_INELEGIVEL") r.destinatarioInelegivel += 1;
+    else r.ignorados += 1; // ESTAGIO_INVALIDO | TIPO_NAO_SUPORTADO | ALERTA_INEXISTENTE | CHAVE_EM_USO
+  }
+  return r;
+}
+
 /** Revalidação AO VIVO (uma leitura de `pendencias()` por chamada) — só o fallback de quem chama `processarJobReivindicado` sem snapshot. */
 async function pendenciaAindaExisteAoVivo(alerta, deps) {
   return pendenciaExisteNoSnapshot(await pendencias({}, deps), alerta);
@@ -310,10 +401,11 @@ export async function executarCiclo({ whatsAppService, agora = new Date(), hojeI
   const snapshot = await lerPendencias({ hojeIso }, deps); // a ÚNICA leitura da frota neste ciclo
   const deteccao = await detectarESincronizarAlertas({ pendenciasSnapshot: snapshot }, deps);
   const agendamento = await agendarEnviosPendentes({ organizacaoId, agora, resolverHabilitacao }, deps);
+  const escalonamento = await agendarEscalonamentosCriticos({ organizacaoId, agora, resolverHabilitacao }, deps);
   const lote = await processarProximoLote({ limite, worker, whatsAppService, agora, adiamentoMs, pendenciasSnapshot: snapshot, resolverHabilitacao }, deps);
   return {
     snapshot: { dataReferencia: snapshot.dataReferencia, d1: snapshot.d1, unidadesComPendencia: snapshot.total },
-    deteccao, agendamento, lote,
+    deteccao, agendamento, escalonamento, lote,
   };
 }
 
@@ -478,7 +570,7 @@ export async function processarJobReivindicado(job, {
     if (transitorio) return { id: job.id, resultado: "ADIADO", motivo, disponivelEm: r.disponivel_em ?? null };
     // DUPLICATE = OUTRA mensagem do mesmo evento já saiu/pode ter saído (SENT ou DELIVERY_UNKNOWN): o evento NÃO está
     // "bloqueado", só esta segunda linha — o alerta não pode mudar de estado por causa dela.
-    if (job.alerta_id && motivo !== MOTIVOS_BLOQUEIO.DUPLICATE) await melhorEsforco(() => alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.BLOCKED, deps));
+    if (job.alerta_id && motivo !== MOTIVOS_BLOQUEIO.DUPLICATE) await melhorEsforco(() => alertasRepo.atualizarStatusAlertaPorMensagem(job.id, STATUS_ALERTA.BLOCKED, deps));
     return { id: job.id, resultado: "BLOQUEADO", motivo };
   };
 

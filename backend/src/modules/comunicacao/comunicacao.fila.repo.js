@@ -108,6 +108,33 @@ export async function agendarMensagemDoAlerta(params, deps = {}) {
 }
 
 /**
+ * Checkpoint H.4-A.6/H.4-B — agenda um ESTÁGIO CRÍTICO (critico_1|critico_final)
+ * para um alerta dashboard_ifood_d1 já existente. Espelha `agendarMensagemDoAlerta`
+ * (mesma atomicidade, mesmo padrão), chamando a RPC dedicada da migration 091 —
+ * NUNCA reimplementa as checagens de habilitação/destinatário/estágio, que vivem
+ * só no banco (comunicacao_agendar_mensagem_critica).
+ *
+ * Resultado (`acao`): CRIADA | JA_EXISTIA | ESTAGIO_INVALIDO | TIPO_NAO_SUPORTADO |
+ * ENTREGA_EM_CURSO | ESTAGIO_JA_SUPERADO | ALERTA_INEXISTENTE | CHAVE_EM_USO |
+ * NAO_HABILITADA | TIPO_NAO_PERMITIDO | SEM_DESTINATARIO | DESTINATARIO_INELEGIVEL.
+ * @param {{alertaId: string, estagio: string, conteudo: string, idempotencyKey: string, disponivelEm: Date, expiraEm?: Date|null, maxTentativas?: number}} params
+ * @returns {Promise<{acao: string, mensagem_id?: string, status?: string, supersedeu?: boolean}>}
+ */
+export async function agendarMensagemCritica(params, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_agendar_mensagem_critica", {
+    p_alerta_id: params.alertaId, p_estagio: params.estagio, p_conteudo: params.conteudo,
+    p_idempotency_key: params.idempotencyKey,
+    p_disponivel_em: params.disponivelEm.toISOString(),
+    p_expira_em: params.expiraEm ? params.expiraEm.toISOString() : null,
+    p_max_tentativas: params.maxTentativas ?? 5,
+  });
+  if (error) throw ApiError.internal(error.message);
+  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_agendar_mensagem_critica: resposta inválida");
+  return data;
+}
+
+/**
  * Reivindica até `limite` mensagens elegíveis, ATOMICAMENTE (ver migration
  * 082 — FOR UPDATE SKIP LOCKED numa função só). Duas chamadas concorrentes
  * NUNCA reivindicam a mesma linha. Também recupera jobs PROCESSING cujo

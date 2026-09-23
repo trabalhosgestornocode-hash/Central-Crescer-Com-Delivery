@@ -12,7 +12,7 @@ import { STATUS_DIA, statusMes } from "../src/modules/dashboard-executivo/dashbo
 import {
   STATUS_PAINEL, D1_CATEGORIA, ROLLUP,
   projetarDia, projetarMes, avaliarD1, conformidadeMes, pendenciasAcumuladas,
-  rollupUnidade, avaliarUnidade, diasDoMes,
+  rollupUnidade, avaliarUnidade, diasDoMes, prazoFinalHoje,
 } from "../src/modules/administrativo/administrativo.status.js";
 import {
   listarMonitores, acaoNecessariaHoje, conformidadeD1, consolidarOperacao, agruparPorEmpresa,
@@ -381,5 +381,30 @@ describe("projeção == statusMes (fonte única)", () => {
       assert.equal(proj[i].data, domMes[i].data);
       assert.equal(proj[i].statusDia, domMes[i].status, `dia ${domMes[i].data}`);
     }
+  });
+});
+
+describe("prazoFinalHoje — Checkpoint H.4-A.4, item 3-4", () => {
+  test("data_referencia === diaAnterior(hojeIso) -> true (o D-1 vivo de hoje)", () => {
+    assert.equal(prazoFinalHoje("2026-09-21", "2026-09-22"), true);
+  });
+
+  test("data_referencia de uma semana atrás -> false (backlog antigo, não 'vence hoje')", () => {
+    assert.equal(prazoFinalHoje("2026-09-15", "2026-09-22"), false);
+  });
+
+  test("data_referencia no futuro (nunca deveria acontecer, mas não é 'hoje') -> false", () => {
+    assert.equal(prazoFinalHoje("2026-09-23", "2026-09-22"), false);
+  });
+
+  test("data_referencia ausente/null -> false, nunca lança", () => {
+    assert.equal(prazoFinalHoje(null, "2026-09-22"), false);
+    assert.equal(prazoFinalHoje(undefined, "2026-09-22"), false);
+  });
+
+  test("nunca infere só por diasPendentes > 0 — a função nem recebe esse parâmetro (item 4)", () => {
+    // Prova estrutural: a assinatura só aceita (dataReferencia, hojeIso) — a
+    // regra fica impossível de reimplementar acidentalmente via contagem.
+    assert.equal(prazoFinalHoje.length, 2);
   });
 });

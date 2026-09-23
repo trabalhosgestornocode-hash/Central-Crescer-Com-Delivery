@@ -92,6 +92,16 @@ export async function migracao088Aplicada() {
   return !sonda.error;
 }
 
+/** Migration 091 (multi-estágio crítico D-1, Checkpoint H.4-A.6) está aplicada neste Supabase? */
+export async function migracao091Aplicada() {
+  // sonda SEM efeito colateral: alerta inexistente -> ALERTA_INEXISTENTE, nunca escreve nada
+  const sonda = await supabase.rpc("comunicacao_agendar_mensagem_critica", {
+    p_alerta_id: "00000000-0000-0000-0000-000000000000", p_estagio: "critico_1", p_conteudo: "probe",
+    p_idempotency_key: `probe:${Date.now()}`, p_disponivel_em: new Date().toISOString(), p_expira_em: null, p_max_tentativas: 1,
+  });
+  return !sonda.error;
+}
+
 // ---------------------------------------------------------------------------
 // D.3-D-R — DESTINATÁRIO EXPLÍCITO. O banco lê o destinatário da habilitação da organização
 // (nunca do chamador): estes helpers montam o par (contato, perfil) elegível e a habilitação.

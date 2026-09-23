@@ -167,6 +167,22 @@ export function avaliarD1(diasProjetados, hojeIso) {
 }
 
 /**
+ * Checkpoint H.4-A.4, item 3 — esta pendência é O D-1 VIVO de hoje (prazo
+ * operacional encerra hoje), não backlog antigo já acumulado? Compara
+ * `dataReferencia` com `diaAnterior(hojeIso)` — NUNCA infere pela contagem
+ * `diasPendentes > 0` (item 4: uma pendência de uma semana atrás teria
+ * diasPendentes > 0 para sempre, e não pode reacender alerta crítico todo
+ * dia). Função pura, sem I/O, sem hardcode de data.
+ * @param {string|null|undefined} dataReferencia  AAAA-MM-DD (ex.: alerta.data_referencia)
+ * @param {string} hojeIso  AAAA-MM-DD
+ * @returns {boolean}
+ */
+export function prazoFinalHoje(dataReferencia, hojeIso) {
+  if (!dataReferencia) return false;
+  return dataReferencia === diaAnterior(hojeIso);
+}
+
+/**
  * Conformidade de um conjunto de dias (tipicamente o MÊS corrente).
  * dias esperados = os que NÃO são NÃO APLICÁVEL (exclui futuro, hoje, pré-criação).
  * @param {Array<ReturnType<typeof projetarDia>>} diasProjetados
