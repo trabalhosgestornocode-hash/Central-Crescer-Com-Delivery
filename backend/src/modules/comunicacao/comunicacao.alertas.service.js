@@ -42,7 +42,11 @@ import { classificarErroEnvio, backoffRetrySegundos } from "./comunicacao.entreg
 import { dentroDaJanelaLocal, proximoHorarioDeEnvio, inicioDoDiaLocal, ConfiguracaoHorarioInvalida } from "./comunicacao.horario.js";
 import { resolverHabilitacaoEmpresa, janelasEfetivas } from "./comunicacao.habilitacao.js";
 import { telefoneAutorizadoNoPiloto } from "./comunicacao.piloto.js";
-import { formatarMensagemPendencia } from "./comunicacao.template.js";
+import { formatarMensagemPendencia, formatarMensagemReforcoDia } from "./comunicacao.template.js";
+import {
+  janelaDeReforcoAgora, instanteDoReforco, espacamentoCumprido, mesmoDiaLocal, prazoD1VenceHoje, propositoDaMensagem,
+  chaveIdempotenciaReforco, PROPOSITO, MOTIVO_REFORCO,
+} from "./comunicacao.reforco.js";
 import { calcularDisponivelEm, chaveDeJitter, MOTIVO_DA_RESERVA } from "./comunicacao.adiamento.js";
 import {
   TIPOS_ALERTA, STATUS_ALERTA, STATUS_MENSAGEM, SEVERIDADE, CLASSIFICACAO_ERRO, MODOS,
@@ -57,6 +61,8 @@ const ADIAMENTO_PADRAO_MS = 15 * MIN;
 const LEASE_ENVIO_SEGUNDOS = 90;
 /** Só usados se a configuração vier corrompida (linha existe mas sem a chave): nunca "sem limite". */
 const COOLDOWN_PADRAO_HORAS = 8;
+/** Alertas cujo 1º aviso já saiu — os únicos candidatos ao reforço. */
+const STATUS_JA_ENVIADOS = [STATUS_ALERTA.SENT, STATUS_ALERTA.DELIVERED, STATUS_ALERTA.READ];
 const LIMITE_MINUTO_PADRAO = 5;
 const LIMITE_MINUTO_ORGANIZACAO_PADRAO = 3;
 const LIMITE_DIA_PADRAO = 3;
@@ -226,6 +232,94 @@ export async function agendarEnviosPendentes({
   return r;
 }
 
+/**
+ * REFORÇO DE PRAZO FINAL D-1 — a 2ª e ÚLTIMA mensagem de um alerta dashboard_ifood_d1 cujo prazo
+ * vence HOJE (dataReferencia === diaAnterior(hoje local); backlog antigo nunca) e cuja 1ª mensagem
+ * (`wa:alerta:{id}:v1`) já saiu HOJE. Só AGENDA: a mensagem entra na MESMA fila do primeiro aviso e
+ * passa pelo MESMO claim -> JIT (revalidação definitiva, com as regras do reforço) -> policy ->
+ * reserva (rate-limit) -> gateway -> provider. Nenhum transporte paralelo.
+ *
+ * Só cria quando TODOS valem: alerta em SENT/DELIVERED/READ; empresa habilitada e não pausada;
+ * hoje é segunda a sábado e agora está em 20:00–22:00 locais (comunicacao.reforco.js); a 1ª mensagem
+ * saiu hoje há >= 2h (espaçamento PRÓPRIO — o cooldown normal de 8h/4h não controla o reforço);
+ * destinatário explícito. `expiraEm` = 22:30 locais (hard cutoff): nunca vira cobrança de amanhã.
+ * Idempotência: `wa:alerta:{id}:reforco:v1`, única no banco (RPC 092).
+ * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function}} [params]
+ */
+export async function agendarReforcosPendentes({
+  organizacaoId = null, tipoAlerta = TIPOS_ALERTA.DASHBOARD_IFOOD_D1, agora = new Date(), resolverHabilitacao = resolverHabilitacaoEmpresa,
+} = {}, deps = {}) {
+  const r = {
+    agendados: 0, jaExistiam: 0, semHabilitacao: 0, empresaPausada: 0, semDestinatario: 0, destinatarioInelegivel: 0, configInvalida: 0,
+    foraDaJanelaReforco: 0, foraDoPrazoD1: 0, primeiraNaoEnviada: 0, primeiraDeOutroDia: 0, espacamentoPendente: 0, entregaEmCurso: 0, ignorados: 0,
+  };
+  const ativos = await alertasRepo.listarAlertasAtivos({ organizacaoId, tipoAlerta }, deps);
+  const candidatos = ativos.filter((a) => a.tipo_alerta === TIPOS_ALERTA.DASHBOARD_IFOOD_D1 && STATUS_JA_ENVIADOS.includes(a.status));
+  if (!candidatos.length) return r;
+
+  const habilitacoes = new Map(); // uma leitura por organização por ciclo
+  const habilitacaoDa = async (orgId) => {
+    if (!habilitacoes.has(orgId)) habilitacoes.set(orgId, await resolverHabilitacao({ organizacaoId: orgId, tipoAlerta, agora }, deps));
+    return habilitacoes.get(orgId);
+  };
+
+  for (const alerta of candidatos) {
+    const hab = await habilitacaoDa(alerta.organizacao_id);
+    if (hab?.empresaHabilitada !== true || hab?.tipoPermitido !== true) { r.semHabilitacao += 1; continue; }
+    if (hab.empresaPausada === true) { r.empresaPausada += 1; continue; }
+    if (hab.configHorarioValida !== true || !hab.timezone) { r.configInvalida += 1; continue; }
+    if (!hab.destinatarioContatoId || !hab.destinatarioPerfilId) { r.semDestinatario += 1; continue; }
+
+    let janela;
+    try { janela = janelaDeReforcoAgora(agora, hab.timezone); }
+    catch (e) {
+      if (e instanceof ConfiguracaoHorarioInvalida) { r.configInvalida += 1; continue; }
+      throw e;
+    }
+    if (!janela) { r.foraDaJanelaReforco += 1; continue; }
+    // H.4-A.8: SÓ o D-1 que vence hoje; comparação de DATA, nunca contagem de dias pendentes.
+    if (!prazoD1VenceHoje(alerta.data_referencia, agora, hab.timezone)) { r.foraDoPrazoD1 += 1; continue; }
+
+    const inicial = await filaRepo.obterMensagemInicialDoAlerta(alerta.id, deps);
+    if (!inicial || !STATUS_JA_ENVIADOS.includes(inicial.status) || !inicial.enviado_em) { r.primeiraNaoEnviada += 1; continue; }
+    if (!mesmoDiaLocal(inicial.enviado_em, agora, hab.timezone)) { r.primeiraDeOutroDia += 1; continue; }
+    if (!espacamentoCumprido(inicial.enviado_em, agora)) { r.espacamentoPendente += 1; continue; }
+
+    const idempotencyKey = chaveIdempotenciaReforco(alerta.id);
+    const instante = instanteDoReforco(agora, janela, chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }));
+    const conteudo = formatarMensagemReforcoDia({
+      unidadeNome: alerta.metadados?.unidade_nome ?? null, pendenciaMaisAntiga: alerta.data_referencia,
+    });
+    const res = await filaRepo.agendarReforcoDoAlerta({ alertaId: alerta.id, conteudo, disponivelEm: instante, expiraEm: janela.cutoff }, deps);
+    if (res.acao === "CRIADA") r.agendados += 1;
+    else if (res.acao === "JA_EXISTIA") r.jaExistiam += 1;
+    else if (res.acao === "ENTREGA_EM_CURSO") r.entregaEmCurso += 1;
+    else if (res.acao === "NAO_HABILITADA" || res.acao === "TIPO_NAO_PERMITIDO") r.semHabilitacao += 1;
+    else if (res.acao === "SEM_DESTINATARIO") r.semDestinatario += 1;
+    else if (res.acao === "DESTINATARIO_INELEGIVEL") r.destinatarioInelegivel += 1;
+    else if (res.acao === "ALERTA_SEM_PRIMEIRO_ENVIO" || res.acao === "PRIMEIRA_MENSAGEM_NAO_ENVIADA") r.primeiraNaoEnviada += 1;
+    else r.ignorados += 1; // ALERTA_INEXISTENTE | CHAVE_INVALIDA | CHAVE_EM_USO
+  }
+  return r;
+}
+
+/**
+ * JIT ESPECÍFICO DO REFORÇO (H.4-A.8): as condições que só valem para `proposito=reforco` — a janela
+ * comercial normal NÃO se aplica a ele. Devolve `null` se tudo vale, senão o MOTIVO do cancelamento
+ * TERMINAL (o reforço nunca é reagendado para outro dia; provider = 0). Consentimento/verificação/
+ * opt-out/habilitação/piloto/rate-limit continuam na policy e na reserva, iguais às da mensagem inicial.
+ * A existência da pendência é revalidada antes, no passo 1 do JIT (`verificarPendenciaAindaExiste`).
+ */
+async function motivoDeCancelamentoDoReforco({ job, alerta, timezone, agora }, deps) {
+  if (!alerta || alerta.tipo_alerta !== TIPOS_ALERTA.DASHBOARD_IFOOD_D1 || job.tipo !== TIPOS_ALERTA.DASHBOARD_IFOOD_D1) return MOTIVO_REFORCO.TIPO_NAO_SUPORTADO;
+  if (!prazoD1VenceHoje(alerta.data_referencia, agora, timezone)) return MOTIVO_REFORCO.PRAZO_NAO_E_HOJE;
+  if (!janelaDeReforcoAgora(agora, timezone)) return MOTIVO_REFORCO.FORA_DA_JANELA; // domingo, antes das 20:00, a partir das 22:00 ou do cutoff 22:30
+  const inicial = await filaRepo.obterMensagemInicialDoAlerta(alerta.id, deps);
+  if (!inicial || !STATUS_JA_ENVIADOS.includes(inicial.status) || !inicial.enviado_em || !mesmoDiaLocal(inicial.enviado_em, agora, timezone)) return MOTIVO_REFORCO.PRIMEIRA_NAO_ENVIADA;
+  if (!espacamentoCumprido(inicial.enviado_em, agora)) return MOTIVO_REFORCO.ESPACAMENTO_INSUFICIENTE;
+  return null;
+}
+
 /** Revalidação AO VIVO (uma leitura de `pendencias()` por chamada) — só o fallback de quem chama `processarJobReivindicado` sem snapshot. */
 async function pendenciaAindaExisteAoVivo(alerta, deps) {
   return pendenciaExisteNoSnapshot(await pendencias({}, deps), alerta);
@@ -310,10 +404,11 @@ export async function executarCiclo({ whatsAppService, agora = new Date(), hojeI
   const snapshot = await lerPendencias({ hojeIso }, deps); // a ÚNICA leitura da frota neste ciclo
   const deteccao = await detectarESincronizarAlertas({ pendenciasSnapshot: snapshot }, deps);
   const agendamento = await agendarEnviosPendentes({ organizacaoId, agora, resolverHabilitacao }, deps);
+  const reforco = await agendarReforcosPendentes({ organizacaoId, agora, resolverHabilitacao }, deps);
   const lote = await processarProximoLote({ limite, worker, whatsAppService, agora, adiamentoMs, pendenciasSnapshot: snapshot, resolverHabilitacao }, deps);
   return {
     snapshot: { dataReferencia: snapshot.dataReferencia, d1: snapshot.d1, unidadesComPendencia: snapshot.total },
-    deteccao, agendamento, lote,
+    deteccao, agendamento, reforco, lote,
   };
 }
 
@@ -413,7 +508,7 @@ export async function processarJobReivindicado(job, {
     : false;
 
   // Duplicidade REAL: outra mensagem do mesmo evento que já saiu/pode ter saído (inclui DELIVERY_UNKNOWN).
-  const duplicado = job.alerta_id ? await filaRepo.existeOutraEntregaDoAlerta({ alertaId: job.alerta_id, exceptId: job.id }, deps) : false;
+  const duplicado = job.alerta_id ? await filaRepo.existeOutraEntregaDoAlerta({ alertaId: job.alerta_id, exceptId: job.id, proposito: propositoDaMensagem(job) }, deps) : false;
 
   // HORÁRIO: sempre no timezone IANA da organização — nunca a hora do servidor, nunca UTC assumido.
   const janelas = janelasEfetivas(habilitacao, janelasGlobais);
@@ -422,6 +517,25 @@ export async function processarJobReivindicado(job, {
   if (janelas) {
     try { dentroDaJanela = dentroDaJanelaLocal(agora, habilitacao.timezone, janelas); }
     catch (e) { if (!(e instanceof ConfiguracaoHorarioInvalida)) throw e; configHorarioValida = false; }
+  }
+
+  // H.4-A.8 — JIT do REFORÇO: regras próprias (20:00-22:00, D-1 de hoje, dom fora, cutoff 22:30, 1ª enviada hoje há >= 2h).
+  // Falhou qualquer uma -> cancelamento TERMINAL, provider = 0 (config de horário inválida cai na policy: CONFIG_INVALIDA).
+  const ehReforco = propositoDaMensagem(job) === PROPOSITO.REFORCO;
+  if (ehReforco && configHorarioValida) {
+    let motivoReforco;
+    try { motivoReforco = await motivoDeCancelamentoDoReforco({ job, alerta, timezone: habilitacao.timezone, agora }, deps); }
+    catch (e) { if (!(e instanceof ConfiguracaoHorarioInvalida)) throw e; motivoReforco = null; configHorarioValida = false; }
+    if (motivoReforco) {
+      const r = await filaRepo.encerrarProcessamento({ ...claim, destino: DESTINO_SEM_ENVIO.CANCELLED, motivo: motivoReforco }, deps);
+      if (!r) return POSSE_PERDIDA(job);
+      await auditar({
+        acao: ACOES.COMUNICACAO_ENVIO_BLOQUEADO, atorTipo: "sistema", organizacaoId: job.organizacao_id,
+        entidade: "comunicacao_mensagens", entidadeId: job.id,
+        detalhes: { motivo: motivoReforco, tipo: job.tipo, proposito: PROPOSITO.REFORCO, transitorio: false, statusResultante: r.status },
+      });
+      return { id: job.id, resultado: "CANCELADO_REFORCO_FORA_DE_CONDICAO", motivo: motivoReforco };
+    }
   }
 
   const snapshot = {
@@ -443,7 +557,8 @@ export async function processarJobReivindicado(job, {
     // como COOLDOWN/RATE_LIMIT no mesmo vocabulário de bloqueio da política.
     cooldownAtivo: false,
     rateLimitExcedido: false,
-    dentroDaJanela,
+    // reforço: a janela comercial normal não se aplica — o gate acima já provou 20:00-22:00 (ou config inválida, que a policy barra antes).
+    dentroDaJanela: ehReforco ? true : dentroDaJanela,
     providerConectado: statusProvider?.conectado === true,
     // Checkpoint H.4-A: defesa em profundidade, opt-in via COMUNICACAO_PILOTO_ENABLED
     // (ver comunicacao.piloto.js). Com o piloto desligado, sempre `true` (não interfere).
@@ -465,8 +580,12 @@ export async function processarJobReivindicado(job, {
         jitterMaxMs: await obterJitterMaxMs(deps),
       });
     }
+    // REFORÇO: um adiamento nunca o empurra para depois do cutoff (expira_em = 22:30 locais) nem para outro dia:
+    // se o novo horário estouraria, ele EXPIRA (CANCELLED/EXPIRADA) em vez de virar cobrança velha.
+    const expiraReforco = transitorio && ehReforco && (!disponivelEm || (job.expira_em && disponivelEm.getTime() >= new Date(job.expira_em).getTime()));
     const r = await filaRepo.encerrarProcessamento({
-      ...claim, destino: transitorio ? DESTINO_SEM_ENVIO.SCHEDULED : DESTINO_SEM_ENVIO.BLOCKED, motivo, disponivelEm,
+      ...claim, destino: expiraReforco ? DESTINO_SEM_ENVIO.CANCELLED : (transitorio ? DESTINO_SEM_ENVIO.SCHEDULED : DESTINO_SEM_ENVIO.BLOCKED),
+      motivo: expiraReforco ? MOTIVO_EXPIRADA : motivo, disponivelEm: expiraReforco ? null : disponivelEm,
     }, deps);
     if (!r) return POSSE_PERDIDA(job);
 
@@ -475,10 +594,12 @@ export async function processarJobReivindicado(job, {
       entidade: "comunicacao_mensagens", entidadeId: job.id,
       detalhes: { motivo, tipo: job.tipo, transitorio, statusResultante: r.status, disponivelEm: r.disponivel_em ?? null },
     });
+    if (expiraReforco) return { id: job.id, resultado: "CANCELADO_REFORCO_EXPIRADO", motivo };
     if (transitorio) return { id: job.id, resultado: "ADIADO", motivo, disponivelEm: r.disponivel_em ?? null };
     // DUPLICATE = OUTRA mensagem do mesmo evento já saiu/pode ter saído (SENT ou DELIVERY_UNKNOWN): o evento NÃO está
     // "bloqueado", só esta segunda linha — o alerta não pode mudar de estado por causa dela.
-    if (job.alerta_id && motivo !== MOTIVOS_BLOQUEIO.DUPLICATE) await melhorEsforco(() => alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.BLOCKED, deps));
+    // O reforço é só a 2ª mensagem de um alerta cujo 1º aviso já saiu: o veto dele não muda o estado do alerta.
+    if (job.alerta_id && motivo !== MOTIVOS_BLOQUEIO.DUPLICATE && propositoDaMensagem(job) !== PROPOSITO.REFORCO) await melhorEsforco(() => alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.BLOCKED, deps));
     return { id: job.id, resultado: "BLOQUEADO", motivo };
   };
 
@@ -492,7 +613,8 @@ export async function processarJobReivindicado(job, {
   // o provider NÃO é chamado.
   const reserva = await filaRepo.reservarEnvio({
     ...claim, leaseSegundos: LEASE_ENVIO_SEGUNDOS,
-    cooldownHoras: numeroOuPadrao(alerta ? cooldowns?.[alerta.severidade] ?? cooldowns?.atencao : cooldowns?.atencao, COOLDOWN_PADRAO_HORAS),
+    // reforço: cooldown normal (8h/4h) NÃO vale — o espaçamento próprio (>= 2h) já foi provado no JIT acima; cota diária e por minuto seguem valendo.
+    cooldownHoras: ehReforco ? null : numeroOuPadrao(alerta ? cooldowns?.[alerta.severidade] ?? cooldowns?.atencao : cooldowns?.atencao, COOLDOWN_PADRAO_HORAS),
     maxPorContatoDia: numeroOuPadrao(limites?.max_por_contato_por_dia, LIMITE_DIA_PADRAO),
     // DUAS camadas, ambas precisam ter vaga (atômico no banco): global (o único número) e por organização.
     maxPorMinuto: numeroOuPadrao(limites?.max_proativas_por_minuto, LIMITE_MINUTO_PADRAO),

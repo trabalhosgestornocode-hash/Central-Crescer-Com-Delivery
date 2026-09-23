@@ -31,3 +31,16 @@ export function formatarMensagemPendencia({ unidadeNome, pendenciaMaisAntiga }) 
   const dataClausula = pendenciaMaisAntiga ? ` referente ao dia ${pendenciaMaisAntiga.split("-").reverse().join("/")}` : "";
   return `Olá! Identificamos que a unidade ${unidadeNome ?? "—"} possui um lançamento pendente no Crescer com Delivery${dataClausula}. Por favor, acesse o sistema para verificar e regularizar a pendência. — Crescer com Delivery`;
 }
+
+/**
+ * Reforço de PRAZO FINAL D-1 (2ª e última mensagem do alerta, 20:00-22:00). Deixa claro que o
+ * lançamento precisa ser regularizado HOJE para evitar a perda da possibilidade de preenchimento
+ * do período, sem prometer o que o sistema não garante ("última chance" NUNCA), sem ameaça, sem
+ * "quando possível", sem citar o Agente Crescer e permitindo desconsiderar se já regularizado.
+ * Mesma disciplina de dado real das demais: nunca inventa data ausente.
+ * @param {{unidadeNome?: string|null, pendenciaMaisAntiga?: string|null}} params
+ */
+export function formatarMensagemReforcoDia({ unidadeNome, pendenciaMaisAntiga }) {
+  const dataClausula = pendenciaMaisAntiga ? ` referente ao dia ${pendenciaMaisAntiga.split("-").reverse().join("/")}` : "";
+  return `Último lembrete de hoje — Crescer com Delivery. O lançamento da unidade ${unidadeNome ?? "—"}${dataClausula} ainda consta pendente. É preciso regularizá-lo hoje para evitar a perda da possibilidade de preenchimento desse período. Caso já tenha realizado o preenchimento, desconsidere esta mensagem. — Crescer com Delivery`;
+}
