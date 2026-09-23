@@ -131,6 +131,28 @@ export async function agendarReforcoDoAlerta(params, deps = {}) {
 }
 
 /**
+ * Agenda o PRIMEIRO aviso tardio D-1 (migration 094): a 1ª mensagem do alerta (chave `wa:alerta:{id}:v1`,
+ * `proposito=inicial`, `origem=prazo_final_d1`). As checagens (tipo, DETECTED, nenhuma inicial, habilitação,
+ * destinatário) vivem só no banco. Resultado (`acao`): CRIADA | JA_EXISTIA | MENSAGEM_EXPIRADA | INICIAL_JA_EXISTE |
+ * ENTREGA_EM_CURSO | ALERTA_NAO_DETECTED | NAO_HABILITADA | TIPO_NAO_PERMITIDO | SEM_DESTINATARIO |
+ * DESTINATARIO_INELEGIVEL | TIPO_NAO_SUPORTADO | CHAVE_INVALIDA | CHAVE_EM_USO | ALERTA_INEXISTENTE.
+ * @param {{alertaId: string, conteudo: string, disponivelEm: Date, expiraEm?: Date|null, maxTentativas?: number}} params
+ */
+export async function agendarAvisoTardioD1(params, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_agendar_aviso_tardio_d1", {
+    p_alerta_id: params.alertaId, p_conteudo: params.conteudo,
+    p_idempotency_key: chaveIdempotenciaInicial(params.alertaId),
+    p_disponivel_em: params.disponivelEm.toISOString(),
+    p_expira_em: params.expiraEm ? params.expiraEm.toISOString() : null,
+    p_max_tentativas: params.maxTentativas ?? 5,
+  });
+  if (error) throw ApiError.internal(error.message);
+  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_agendar_aviso_tardio_d1: resposta inválida");
+  return data;
+}
+
+/**
  * Reivindica até `limite` mensagens elegíveis, ATOMICAMENTE (ver migration
  * 082 — FOR UPDATE SKIP LOCKED numa função só). Duas chamadas concorrentes
  * NUNCA reivindicam a mesma linha. Também recupera jobs PROCESSING cujo

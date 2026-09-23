@@ -42,11 +42,12 @@ import { classificarErroEnvio, backoffRetrySegundos } from "./comunicacao.entreg
 import { dentroDaJanelaLocal, proximoHorarioDeEnvio, inicioDoDiaLocal, ConfiguracaoHorarioInvalida } from "./comunicacao.horario.js";
 import { resolverHabilitacaoEmpresa, janelasEfetivas } from "./comunicacao.habilitacao.js";
 import { telefoneAutorizadoNoPiloto } from "./comunicacao.piloto.js";
-import { formatarMensagemPendencia, formatarMensagemReforcoDia } from "./comunicacao.template.js";
+import { formatarMensagemPendencia, formatarMensagemReforcoDia, formatarMensagemAvisoTardioD1 } from "./comunicacao.template.js";
 import {
   janelaDeReforcoAgora, instanteDoReforco, espacamentoCumprido, mesmoDiaLocal, prazoD1VenceHoje, propositoDaMensagem,
-  chaveIdempotenciaReforco, PROPOSITO, MOTIVO_REFORCO,
+  chaveIdempotenciaReforco, chaveIdempotenciaInicial, PROPOSITO, MOTIVO_REFORCO, MOTIVO_TARDIO, ehAvisoTardio, dataLocalIso,
 } from "./comunicacao.reforco.js";
+import { partesLocais } from "./comunicacao.horario.js";
 import { calcularDisponivelEm, chaveDeJitter, MOTIVO_DA_RESERVA } from "./comunicacao.adiamento.js";
 import {
   TIPOS_ALERTA, STATUS_ALERTA, STATUS_MENSAGEM, SEVERIDADE, CLASSIFICACAO_ERRO, MODOS,
@@ -172,7 +173,7 @@ export async function agendarEnviosPendentes({
 } = {}, deps = {}) {
   const r = {
     agendados: 0, semDestinatario: 0, destinatarioInelegivel: 0, semHabilitacao: 0, configInvalida: 0,
-    jaExistiam: 0, mensagensExpiradas: 0, entregaDesconhecida: 0, ignorados: 0,
+    jaExistiam: 0, mensagensExpiradas: 0, entregaDesconhecida: 0, ignorados: 0, aguardaJanelaTardia: 0,
   };
   const ativos = await alertasRepo.listarAlertasAtivos({ organizacaoId, tipoAlerta }, deps);
   const detectados = ativos.filter((a) => a.status === STATUS_ALERTA.DETECTED);
@@ -209,6 +210,12 @@ export async function agendarEnviosPendentes({
       throw e;
     }
 
+    // H.4-B.2: um D-1 que vence HOJE e que só caberia na PRÓXIMA janela comercial (já passou o expediente de hoje) NÃO é
+    // agendado para amanhã — o aviso tardio (20:00-22:00, agendarAvisosTardiosD1) é o único que pode criar a 1ª mensagem hoje.
+    // Domingo não tem janela tardia: segue o fluxo normal (próximo dia útil).
+    if (prazoD1VenceHoje(alerta.data_referencia, agora, hab.timezone) && partesLocais(agora, hab.timezone).diaSemana !== 0
+        && dataLocalIso(instante, hab.timezone) !== dataLocalIso(agora, hab.timezone)) { r.aguardaJanelaTardia += 1; continue; }
+
     const conteudo = formatarMensagemPendencia({
       unidadeNome: alerta.metadados?.unidade_nome ?? null,
       diasPendentes: Number(alerta.motivo?.match(/^(\d+)/)?.[1] ?? 1),
@@ -230,6 +237,84 @@ export async function agendarEnviosPendentes({
     else r.ignorados += 1; // ALERTA_NAO_DETECTED | CHAVE_EM_USO | ALERTA_INEXISTENTE
   }
   return r;
+}
+
+/**
+ * PRIMEIRO AVISO TARDIO D-1 (H.4-B.2) — a 1ª mensagem de um alerta dashboard_ifood_d1 cujo prazo vence HOJE, que ainda
+ * está DETECTED (nenhuma inicial existe) depois da janela comercial. NÃO é reforço nem retry: é a PRIMEIRA mensagem
+ * (`wa:alerta:{id}:v1`, `proposito=inicial`, `origem=prazo_final_d1`) e continua dona de `comunicacao_alertas.status`.
+ * Só AGENDA; a mensagem entra na MESMA fila e passa pelo MESMO claim -> JIT (com as regras do aviso tardio) -> policy ->
+ * reserva (rate-limit) -> gateway -> provider.
+ *
+ * Só cria quando TODOS valem: alerta D1 DETECTED; empresa habilitada e não pausada; destinatário explícito; segunda a
+ * sábado e agora em 20:00–22:00 locais (mesma janela do reforço); D-1 de hoje (backlog nunca). `expiraEm` = 22:30 locais:
+ * nunca vira cobrança de amanhã. Corrida com o agendamento NORMAL: as duas usam a MESMA chave `…:v1` (única no banco) e o
+ * banco serializa por alerta — exatamente UMA primeira mensagem, seja qual for o vencedor.
+ * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function}} [params]
+ */
+export async function agendarAvisosTardiosD1({
+  organizacaoId = null, tipoAlerta = TIPOS_ALERTA.DASHBOARD_IFOOD_D1, agora = new Date(), resolverHabilitacao = resolverHabilitacaoEmpresa,
+} = {}, deps = {}) {
+  const r = {
+    agendados: 0, jaExistiam: 0, mensagensExpiradas: 0, semHabilitacao: 0, empresaPausada: 0, semDestinatario: 0, destinatarioInelegivel: 0,
+    configInvalida: 0, foraDaJanelaTardia: 0, foraDoPrazoD1: 0, inicialJaExiste: 0, entregaEmCurso: 0, ignorados: 0,
+  };
+  const ativos = await alertasRepo.listarAlertasAtivos({ organizacaoId, tipoAlerta }, deps);
+  const candidatos = ativos.filter((a) => a.tipo_alerta === TIPOS_ALERTA.DASHBOARD_IFOOD_D1 && a.status === STATUS_ALERTA.DETECTED);
+  if (!candidatos.length) return r;
+
+  const habilitacoes = new Map(); // uma leitura por organização por ciclo
+  const habilitacaoDa = async (orgId) => {
+    if (!habilitacoes.has(orgId)) habilitacoes.set(orgId, await resolverHabilitacao({ organizacaoId: orgId, tipoAlerta, agora }, deps));
+    return habilitacoes.get(orgId);
+  };
+
+  for (const alerta of candidatos) {
+    const hab = await habilitacaoDa(alerta.organizacao_id);
+    if (hab?.empresaHabilitada !== true || hab?.tipoPermitido !== true) { r.semHabilitacao += 1; continue; }
+    if (hab.empresaPausada === true) { r.empresaPausada += 1; continue; }
+    if (hab.configHorarioValida !== true || !hab.timezone) { r.configInvalida += 1; continue; }
+    if (!hab.destinatarioContatoId || !hab.destinatarioPerfilId) { r.semDestinatario += 1; continue; }
+
+    let janela;
+    try { janela = janelaDeReforcoAgora(agora, hab.timezone); }
+    catch (e) {
+      if (e instanceof ConfiguracaoHorarioInvalida) { r.configInvalida += 1; continue; }
+      throw e;
+    }
+    if (!janela) { r.foraDaJanelaTardia += 1; continue; }
+    // SÓ o D-1 que vence hoje; comparação de DATA, nunca contagem de dias pendentes.
+    if (!prazoD1VenceHoje(alerta.data_referencia, agora, hab.timezone)) { r.foraDoPrazoD1 += 1; continue; }
+
+    const idempotencyKey = chaveIdempotenciaInicial(alerta.id); // a MESMA identidade da 1ª mensagem — nunca uma "…:tardio:v1"
+    const instante = instanteDoReforco(agora, janela, chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }));
+    const conteudo = formatarMensagemAvisoTardioD1({
+      unidadeNome: alerta.metadados?.unidade_nome ?? null, pendenciaMaisAntiga: alerta.data_referencia,
+    });
+    const res = await filaRepo.agendarAvisoTardioD1({ alertaId: alerta.id, conteudo, disponivelEm: instante, expiraEm: janela.cutoff }, deps);
+    if (res.acao === "CRIADA") r.agendados += 1;
+    else if (res.acao === "JA_EXISTIA") r.jaExistiam += 1;
+    else if (res.acao === "MENSAGEM_EXPIRADA") r.mensagensExpiradas += 1;
+    else if (res.acao === "INICIAL_JA_EXISTE") r.inicialJaExiste += 1;
+    else if (res.acao === "ENTREGA_EM_CURSO") r.entregaEmCurso += 1;
+    else if (res.acao === "NAO_HABILITADA" || res.acao === "TIPO_NAO_PERMITIDO") r.semHabilitacao += 1;
+    else if (res.acao === "SEM_DESTINATARIO") r.semDestinatario += 1;
+    else if (res.acao === "DESTINATARIO_INELEGIVEL") r.destinatarioInelegivel += 1;
+    else r.ignorados += 1; // ALERTA_NAO_DETECTED | TIPO_NAO_SUPORTADO | CHAVE_INVALIDA | CHAVE_EM_USO | ALERTA_INEXISTENTE
+  }
+  return r;
+}
+
+/**
+ * JIT ESPECÍFICO DO AVISO TARDIO (H.4-B.2), sem I/O: devolve `null` se as condições próprias valem, senão o MOTIVO (só para
+ * auditoria — o cancelamento é CANCELLED/EXPIRADA, nunca amanhã). A pendência ainda existir é revalidada antes (passo 1 do
+ * JIT); consentimento/opt-out/habilitação/piloto/rate-limit seguem na policy e na reserva, iguais às da inicial normal.
+ */
+function motivoDeCancelamentoDoAvisoTardio({ job, alerta, timezone, agora }) {
+  if (!alerta || alerta.tipo_alerta !== TIPOS_ALERTA.DASHBOARD_IFOOD_D1 || job.tipo !== TIPOS_ALERTA.DASHBOARD_IFOOD_D1) return MOTIVO_TARDIO.TIPO_NAO_SUPORTADO;
+  if (!prazoD1VenceHoje(alerta.data_referencia, agora, timezone)) return MOTIVO_TARDIO.PRAZO_NAO_E_HOJE;
+  if (!janelaDeReforcoAgora(agora, timezone)) return MOTIVO_TARDIO.FORA_DA_JANELA; // domingo, antes das 20:00, a partir das 22:00 ou do cutoff 22:30
+  return null;
 }
 
 /**
@@ -404,11 +489,12 @@ export async function executarCiclo({ whatsAppService, agora = new Date(), hojeI
   const snapshot = await lerPendencias({ hojeIso }, deps); // a ÚNICA leitura da frota neste ciclo
   const deteccao = await detectarESincronizarAlertas({ pendenciasSnapshot: snapshot }, deps);
   const agendamento = await agendarEnviosPendentes({ organizacaoId, agora, resolverHabilitacao }, deps);
+  const avisosTardios = await agendarAvisosTardiosD1({ organizacaoId, agora, resolverHabilitacao }, deps);
   const reforco = await agendarReforcosPendentes({ organizacaoId, agora, resolverHabilitacao }, deps);
   const lote = await processarProximoLote({ limite, worker, whatsAppService, agora, adiamentoMs, pendenciasSnapshot: snapshot, resolverHabilitacao }, deps);
   return {
     snapshot: { dataReferencia: snapshot.dataReferencia, d1: snapshot.d1, unidadesComPendencia: snapshot.total },
-    deteccao, agendamento, reforco, lote,
+    deteccao, agendamento, avisosTardios, reforco, lote,
   };
 }
 
@@ -538,6 +624,25 @@ export async function processarJobReivindicado(job, {
     }
   }
 
+  // H.4-B.2 — JIT do PRIMEIRO AVISO TARDIO (inicial + origem prazo_final_d1): a janela comercial normal não se aplica;
+  // vale a janela 20:00-22:00 (cutoff 22:30), D-1 de hoje, não domingo. Falhou -> CANCELLED/EXPIRADA (nunca amanhã), provider = 0.
+  const ehTardio = ehAvisoTardio(job);
+  if (ehTardio && configHorarioValida) {
+    let motivoTardio;
+    try { motivoTardio = motivoDeCancelamentoDoAvisoTardio({ job, alerta, timezone: habilitacao.timezone, agora }); }
+    catch (e) { if (!(e instanceof ConfiguracaoHorarioInvalida)) throw e; motivoTardio = null; configHorarioValida = false; }
+    if (motivoTardio) {
+      const r = await filaRepo.encerrarProcessamento({ ...claim, destino: DESTINO_SEM_ENVIO.CANCELLED, motivo: MOTIVO_EXPIRADA }, deps);
+      if (!r) return POSSE_PERDIDA(job);
+      await auditar({
+        acao: ACOES.COMUNICACAO_ENVIO_BLOQUEADO, atorTipo: "sistema", organizacaoId: job.organizacao_id,
+        entidade: "comunicacao_mensagens", entidadeId: job.id,
+        detalhes: { motivo: motivoTardio, tipo: job.tipo, origem: "prazo_final_d1", transitorio: false, statusResultante: r.status },
+      });
+      return { id: job.id, resultado: "CANCELADO_AVISO_TARDIO_FORA_DE_CONDICAO", motivo: motivoTardio };
+    }
+  }
+
   const snapshot = {
     modo, ehProativo: true,
     contatoExiste: !!contato,
@@ -558,7 +663,7 @@ export async function processarJobReivindicado(job, {
     cooldownAtivo: false,
     rateLimitExcedido: false,
     // reforço: a janela comercial normal não se aplica — o gate acima já provou 20:00-22:00 (ou config inválida, que a policy barra antes).
-    dentroDaJanela: ehReforco ? true : dentroDaJanela,
+    dentroDaJanela: (ehReforco || ehTardio) ? true : dentroDaJanela,
     providerConectado: statusProvider?.conectado === true,
     // Checkpoint H.4-A: defesa em profundidade, opt-in via COMUNICACAO_PILOTO_ENABLED
     // (ver comunicacao.piloto.js). Com o piloto desligado, sempre `true` (não interfere).
@@ -582,7 +687,7 @@ export async function processarJobReivindicado(job, {
     }
     // REFORÇO: um adiamento nunca o empurra para depois do cutoff (expira_em = 22:30 locais) nem para outro dia:
     // se o novo horário estouraria, ele EXPIRA (CANCELLED/EXPIRADA) em vez de virar cobrança velha.
-    const expiraReforco = transitorio && ehReforco && (!disponivelEm || (job.expira_em && disponivelEm.getTime() >= new Date(job.expira_em).getTime()));
+    const expiraReforco = transitorio && (ehReforco || ehTardio) && (!disponivelEm || (job.expira_em && disponivelEm.getTime() >= new Date(job.expira_em).getTime()));
     const r = await filaRepo.encerrarProcessamento({
       ...claim, destino: expiraReforco ? DESTINO_SEM_ENVIO.CANCELLED : (transitorio ? DESTINO_SEM_ENVIO.SCHEDULED : DESTINO_SEM_ENVIO.BLOCKED),
       motivo: expiraReforco ? MOTIVO_EXPIRADA : motivo, disponivelEm: expiraReforco ? null : disponivelEm,

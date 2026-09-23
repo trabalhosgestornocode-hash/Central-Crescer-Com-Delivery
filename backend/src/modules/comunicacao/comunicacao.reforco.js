@@ -33,6 +33,20 @@ export const SPREAD_REFORCO_MS = 30 * MIN;
 /** Propósito gravado em `comunicacao_mensagens.metadados.proposito` (ausente = mensagem inicial). */
 export const PROPOSITO = Object.freeze({ INICIAL: "inicial", REFORCO: "reforco" });
 
+/**
+ * ORIGEM da mensagem INICIAL (H.4-B.2): `prazo_final_d1` = PRIMEIRO aviso tardio (D-1 que vence hoje, pendente depois
+ * da janela comercial, enviado na janela 20:00-22:00). É a 1ª mensagem do alerta (`proposito=inicial`, chave `…:v1`),
+ * NÃO um reforço. Ausente = inicial normal.
+ */
+export const ORIGEM = Object.freeze({ PRAZO_FINAL_D1: "prazo_final_d1" });
+
+/** Motivos (só para auditoria) de cancelamento do aviso tardio no JIT — o cancelamento em si é CANCELLED/EXPIRADA. */
+export const MOTIVO_TARDIO = Object.freeze({
+  FORA_DA_JANELA: "TARDIO_FORA_DA_JANELA",
+  PRAZO_NAO_E_HOJE: "TARDIO_PRAZO_NAO_E_HOJE",
+  TIPO_NAO_SUPORTADO: "TARDIO_TIPO_NAO_SUPORTADO",
+});
+
 /** Motivos de cancelamento terminal do reforço no JIT (nunca há retry para outro dia). */
 export const MOTIVO_REFORCO = Object.freeze({
   FORA_DA_JANELA: "REFORCO_FORA_DA_JANELA",
@@ -47,6 +61,10 @@ export const chaveIdempotenciaReforco = (alertaId) => `wa:alerta:${alertaId}:ref
 
 /** Propósito de uma linha de `comunicacao_mensagens` (sem metadados = inicial, compatibilidade histórica). */
 export const propositoDaMensagem = (mensagem) => (mensagem?.metadados?.proposito === PROPOSITO.REFORCO ? PROPOSITO.REFORCO : PROPOSITO.INICIAL);
+
+/** É o PRIMEIRO aviso tardio D-1 (inicial + origem prazo_final_d1)? Só o valor exato conta. */
+export const ehAvisoTardio = (mensagem) =>
+  propositoDaMensagem(mensagem) === PROPOSITO.INICIAL && mensagem?.metadados?.origem === ORIGEM.PRAZO_FINAL_D1;
 
 /** AAAA-MM-DD do instante no calendário LOCAL da organização. */
 export function dataLocalIso(instante, tz) {

@@ -44,3 +44,15 @@ export function formatarMensagemReforcoDia({ unidadeNome, pendenciaMaisAntiga })
   const dataClausula = pendenciaMaisAntiga ? ` referente ao dia ${pendenciaMaisAntiga.split("-").reverse().join("/")}` : "";
   return `Último lembrete de hoje — Crescer com Delivery. O lançamento da unidade ${unidadeNome ?? "—"}${dataClausula} ainda consta pendente. É preciso regularizá-lo hoje para evitar a perda da possibilidade de preenchimento desse período. Caso já tenha realizado o preenchimento, desconsidere esta mensagem. — Crescer com Delivery`;
 }
+
+/**
+ * PRIMEIRO aviso tardio D-1 (H.4-B.2): nenhuma mensagem anterior saiu, então NUNCA diz "último lembrete". Deixa claro
+ * que o lançamento precisa ser regularizado HOJE para evitar a perda da possibilidade de preenchimento do período,
+ * sem "última chance", sem "quando possível", sem citar o Agente Crescer, permitindo desconsiderar se já regularizado.
+ * Nunca inventa data ausente.
+ * @param {{unidadeNome?: string|null, pendenciaMaisAntiga?: string|null}} params
+ */
+export function formatarMensagemAvisoTardioD1({ unidadeNome, pendenciaMaisAntiga }) {
+  const dataClausula = pendenciaMaisAntiga ? ` referente ao dia ${pendenciaMaisAntiga.split("-").reverse().join("/")}` : "";
+  return `Olá! Atenção: o lançamento da unidade ${unidadeNome ?? "—"}${dataClausula} ainda consta pendente no Crescer com Delivery. É preciso regularizá-lo hoje para evitar a perda da possibilidade de preenchimento desse período. Caso já tenha realizado o preenchimento, desconsidere esta mensagem. — Crescer com Delivery`;
+}

@@ -54,8 +54,8 @@ describe("migration 088 — existência, rollback e numeração", () => {
     assert.ok(existsSync(M088), "falta 088_comunicacao_agendamento_seguro.sql");
     assert.ok(existsSync(R088), "falta 088_rollback.sql");
     // Checkpoint F (inbound do WhatsApp) trouxe a 090 — outro checkpoint, não o D.3-D. O guarda continua valendo para o D.3-D: nada MAIS que a 088.
-    // 089 = modelo logístico (outra frente); 092 = reforço do dia (comunicacao_agendar_reforco_alerta, RPC nova e independente).
-    const POSTERIORES_CONHECIDAS = ["089_modelo_logistico_vigencia.sql", "089_rollback.sql", "090_whatsapp_inbound_mensagens.sql", "090_rollback.sql", "092_comunicacao_reforco_alerta.sql", "092_rollback.sql"];
+    // 089 = modelo logístico (outra frente); 092 = reforço do dia; 093 = habilitação atômica do piloto; 094 = primeiro aviso tardio D-1 (RPCs novas e independentes).
+    const POSTERIORES_CONHECIDAS = ["089_modelo_logistico_vigencia.sql", "089_rollback.sql", "090_whatsapp_inbound_mensagens.sql", "090_rollback.sql", "092_comunicacao_reforco_alerta.sql", "092_rollback.sql", "093_comunicacao_habilitar_piloto.sql", "093_rollback.sql", "094_comunicacao_aviso_tardio_d1.sql", "094_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });
