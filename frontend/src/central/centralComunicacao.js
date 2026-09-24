@@ -8,6 +8,7 @@
 // PRIVACIDADE: quem aparece é decidido pelo backend (roster). Este arquivo nunca monta telefone e nunca pesquisa por telefone.
 
 import * as ui from "./centralUi.js";
+import { htmlVisaoGeral } from "./centralVisao.js";
 import * as M from "./centralModelo.js";
 import { executarEnvio, criarTrava } from "./centralEnvio.js";
 import { criarControleConexao } from "./centralConexao.js";
@@ -50,7 +51,7 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
   const timers = new Set();
   // Aba Conexão (sub-controlador): mantém o estado da conta, o assistente e os modais; o topo da Central reflete o que ele descobre.
   const conexao = criarControleConexao({
-    api, host, doc, janela, ganchos, toast: (t) => toast(t), vivo: () => vivo(),
+    api, host, doc, janela, toast: (t) => toast(t), vivo: () => vivo(),
     aoEstado: (topo) => { if (!topo) return; S.estado = { ...(S.estado ?? {}), gateway: topo.gateway, identidade: topo.identidade }; S.visao = null; S.auto = null; pintarTopo(); },
     aoAcessoRevogado: (msg) => ganchos.aoAcessoRevogado?.(msg),
     ganchos: { aoConectar: () => { S.thread = S.thread ? { ...S.thread } : S.thread; }, aoDesconectar: () => {} },
@@ -94,7 +95,11 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
 
   function marcarAba() {
     const nav = q(".cc-abas"); const ativa = q(`[data-cc-aba="${S.aba}"]`);
-    if (nav && ativa) { nav.style.setProperty("--x", `${ativa.offsetLeft}px`); nav.style.setProperty("--w", `${ativa.offsetWidth}px`); }
+    if (nav && ativa) {
+      nav.style.setProperty("--x", `${ativa.offsetLeft}px`); nav.style.setProperty("--w", `${ativa.offsetWidth}px`);
+      if (ativa.offsetLeft < nav.scrollLeft) nav.scrollLeft = ativa.offsetLeft;
+      else if (ativa.offsetLeft + ativa.offsetWidth > nav.scrollLeft + nav.clientWidth) nav.scrollLeft = ativa.offsetLeft + ativa.offsetWidth - nav.clientWidth;
+    }
   }
 
   function pintarTopo() {
@@ -132,7 +137,7 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
         break;
       }
       case "visao-geral": {
-        if (!S.visao) { c.innerHTML = ui.skeletonPainel(); carregarVisao(); } else c.innerHTML = ui.htmlVisaoGeral(S.visao, { agora: agoraD });
+        if (!S.visao) { c.innerHTML = ui.skeletonPainel(); carregarVisao(); } else c.innerHTML = htmlVisaoGeral(S.visao, { agora: agoraD });
         break;
       }
       case "automacoes": {
@@ -179,7 +184,14 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
   }
 
   async function carregarVisao() {
-    const res = await guardado("aba", () => api.centralVisaoGeral()); if (!res) return;
+    // A Visão Geral mostra a conta conectada: pede também o estado da aba Conexão (contrato existente). Falhou/inexistente ⇒ o cartão usa só os cards.
+    const res = await guardado("aba", async () => {
+      const [visao, estadoConexao] = await Promise.all([
+        api.centralVisaoGeral(), Promise.resolve().then(() => api.conexaoEstado?.()).catch(() => null),
+      ]);
+      return { ...visao, conexao: estadoConexao ?? null };
+    });
+    if (!res) return;
     S.visao = res.r; S.cursor = res.r.cursor ?? S.cursor;
     S.estado = { gateway: res.r.cards.whatsapp.estado, modo: res.r.cards.automacao.modo }; S.naoLidas = res.r.cards.conversasNaoLidas;
     pintarTopo(); if (S.aba === "visao-geral") pintarCorpo();

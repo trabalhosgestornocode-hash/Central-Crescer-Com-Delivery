@@ -10,7 +10,7 @@
 // enquanto a aba Conexão está ativa. (O Realtime do projeto é por tenant; ver a decisão registrada nas Conversas.)
 
 import * as ui from "./centralConexaoUi.js";
-import { proximaFase, progressoQr, novoEnvioId } from "./centralModelo.js";
+import { proximaFase, progressoQr, novoEnvioId, etapaDaFase } from "./centralModelo.js";
 
 const POLL_QR_MS = 2000;
 const POLL_ESTADO_MS = 10000;
@@ -75,14 +75,25 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
   // ---------------------------------------------------------------------
   function montarModal(html) {
     const havia = !!q("[data-cc-modal-raiz]");   // repintar um modal aberto NÃO repete a animação de entrada
-    fecharModalEl();
+    if (!havia) K.focoAnterior = doc.activeElement;
+    fecharModalEl(false);
     const wrap = doc.createElement("div"); wrap.innerHTML = html;
     const el = wrap.firstElementChild; el.dataset.ccModalRaiz = "1"; if (havia) el.classList.add("is-reposto");
     host.appendChild(el);
     janela.setTimeout(() => (q("[data-cc-modal-wrap] input, [data-cc-modal-wrap] .btn-primary, [data-cc-modal-wrap] .btn") ?? el).focus?.(), 30);
     return el;
   }
-  function fecharModalEl() { host.querySelector("[data-cc-modal-raiz]")?.remove(); }
+  function fecharModalEl(restaurar = true) {
+    host.querySelector("[data-cc-modal-raiz]")?.remove();
+    if (restaurar) { if (K.focoAnterior?.isConnected) K.focoAnterior.focus?.(); K.focoAnterior = null; }
+  }
+
+  function restaurarFocoAssistente(anterior) {
+    const campos = ["data-cc-conexao", "data-cc-valor", "data-cc-agente"];
+    const candidatos = [...host.querySelectorAll('[data-cc-modal-wrap] button:not(:disabled), [data-cc-modal-wrap] input:not(:disabled)')];
+    const equivalente = anterior && candidatos.find((el) => campos.some((a) => anterior.hasAttribute(a)) && campos.every((a) => el.getAttribute(a) === anterior.getAttribute(a)));
+    (equivalente ?? candidatos.find((el) => el.classList.contains("btn-primary")) ?? candidatos[0])?.focus?.({ preventScroll: true });
+  }
 
   function pintarModalSimples() {
     const m = K.modal; if (!m) return;
@@ -124,8 +135,16 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
     if (!forcar && sig === K.assinatura && q("[data-cc-modal-wrap]")) { pintarTempo(); return; }
     K.assinatura = sig;
     const antes = q("[data-cc-modal-raiz]");
+    if (!antes) K.progAnterior = null;                                                                       // assistente novo: o trilho parte do zero
+    w.progDe = K.progAnterior ?? ui.progressoDoAssistente(w); K.progAnterior = ui.progressoDoAssistente(w);   // ...e nas trocas de fase anima do ponto anterior até o atual
     const html = ui.htmlAssistente(w, agora());
-    if (antes) { const t = doc.createElement("div"); t.innerHTML = html; const novo = t.firstElementChild; novo.dataset.ccModalRaiz = "1"; novo.classList.add("is-reposto"); antes.replaceWith(novo); }
+    if (antes) {
+      const ativo = antes.contains(doc.activeElement) ? doc.activeElement : null;
+      const scroll = q(".cc-modal", antes)?.scrollTop ?? 0;
+      const t = doc.createElement("div"); t.innerHTML = html; const novo = t.firstElementChild; novo.dataset.ccModalRaiz = "1"; novo.classList.add("is-reposto"); antes.replaceWith(novo);
+      restaurarFocoAssistente(ativo);
+      const modal = q(".cc-modal", novo); if (modal) modal.scrollTop = scroll;
+    }
     else montarModal(html);
     pintarTempo();
   }
@@ -146,7 +165,7 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
   function erroFase(err, padrao) {
     const w = K.wiz; if (!w) return;
     pararCiclos();
-    const indice = ["iniciando", "gerando"].includes(w.fase) ? 0 : 2;
+    const indice = etapaDaFase(w.fase);
     w.fase = "erro"; w.falhouEm = indice; w.erro = mensagem(err, padrao); w.resp = null;
     pintarAssistente({ forcar: true });
   }
@@ -292,6 +311,22 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
 
   /** Escape: fecha modais simples; no assistente cancela (exceto quando a conta já foi identificada — aí só os botões decidem). @returns {boolean} tratado */
   function aoTecla(ev) {
+    const modal = q("[data-cc-modal-wrap]");
+    if (modal && ev.key === "Tab") {
+      const itens = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex="0"]')];
+      const i = itens.indexOf(doc.activeElement);
+      if (itens.length && (i < 0 || (ev.shiftKey ? i === 0 : i === itens.length - 1))) {
+        ev.preventDefault(); itens[ev.shiftKey ? itens.length - 1 : 0].focus();
+      }
+      return true;
+    }
+    const radio = ev.target?.closest?.('[role="radio"]');
+    if (radio && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(ev.key)) {
+      const opcoes = [...radio.closest('[role="radiogroup"]').querySelectorAll('[role="radio"]')];
+      ev.preventDefault();
+      opcoes[(opcoes.indexOf(radio) + (["ArrowLeft", "ArrowUp"].includes(ev.key) ? -1 : 1) + opcoes.length) % opcoes.length]?.click();
+      return true;
+    }
     if (ev.key !== "Escape") return false;
     if (K.modal) { fecharModalSimples(); return true; }
     if (K.wiz) { if (!["identificado", "concluida"].includes(K.wiz.fase)) fecharAssistente({ cancelar: true }); else if (K.wiz.fase === "concluida") fecharAssistente({}); return true; }

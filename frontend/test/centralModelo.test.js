@@ -122,8 +122,8 @@ describe("apoio de tela", () => {
 });
 
 describe("assistente de conexão: fases, etapas e QR", () => {
-  test("6 etapas com os nomes pedidos", () => {
-    assert.deepEqual(PASSOS_ASSISTENTE.map(([, r]) => r), ["Preparando sessão", "Gerando QR Code", "Aguardando leitura", "Validando conta", "Obtendo perfil", "Conexão concluída"]);
+  test("5 etapas com os nomes pedidos", () => {
+    assert.deepEqual(PASSOS_ASSISTENTE.map(([, r]) => r), ["Iniciar conexão", "Escanear QR Code", "Conta identificada", "Confirmar identidade", "Conexão concluída"]);
   });
   test("estados da sessão em linguagem amigável", () => {
     assert.deepEqual(ROTULO_ESTADO_CONEXAO, { CONNECTED: "Conectado", DISCONNECTED: "Desconectado", CONNECTING: "Conectando", WAITING_QR: "Aguardando leitura do QR Code", RECONNECTING: "Reconectando", AUTH_ERROR: "Sessão inválida" });
@@ -131,13 +131,13 @@ describe("assistente de conexão: fases, etapas e QR", () => {
   });
   test("passosDoAssistente: feito/ativo/pendente, erro e concluída", () => {
     const e = (f, o) => passosDoAssistente(f, o).map((p) => p.estado).join(",");
-    assert.equal(e("iniciando"), "ativo,pendente,pendente,pendente,pendente,pendente");
-    assert.equal(e("aguardando"), "feito,feito,ativo,pendente,pendente,pendente");
-    assert.equal(e("expirado"), "feito,feito,ativo,pendente,pendente,pendente");
-    assert.equal(e("validando"), "feito,feito,feito,ativo,pendente,pendente");
-    assert.equal(e("identificado"), "feito,feito,feito,feito,feito,ativo");
-    assert.equal(e("concluida"), "feito,feito,feito,feito,feito,feito");
-    assert.equal(e("erro", { falhouEm: 2 }), "feito,feito,erro,pendente,pendente,pendente");
+    assert.equal(e("iniciando"), "ativo,pendente,pendente,pendente,pendente");
+    assert.equal(e("aguardando"), "feito,ativo,pendente,pendente,pendente");
+    assert.equal(e("expirado"), "feito,ativo,pendente,pendente,pendente");
+    assert.equal(e("validando"), "feito,feito,ativo,pendente,pendente");
+    assert.equal(e("identificado"), "feito,feito,feito,ativo,pendente");
+    assert.equal(e("concluida"), "feito,feito,feito,feito,feito");
+    assert.equal(e("erro", { falhouEm: 2 }), "feito,feito,erro,pendente,pendente");
   });
   test("proximaFase: gerando → aguardando (QR) → validando (conectou); expira sem QR; nunca volta de identificado/concluída/erro", () => {
     const t0 = 1_000_000;

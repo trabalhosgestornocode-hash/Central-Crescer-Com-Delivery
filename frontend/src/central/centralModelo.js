@@ -51,13 +51,16 @@ export const ROTULO_ESTADO_CONEXAO = Object.freeze({
 /** Tom visual de cada estado (a cor nunca é a única pista: sempre há o texto). */
 export const TOM_ESTADO_CONEXAO = Object.freeze({ CONNECTED: "ok", DISCONNECTED: "neutro", CONNECTING: "atencao", WAITING_QR: "atencao", RECONNECTING: "atencao", AUTH_ERROR: "critico" });
 
-/** As 6 etapas do assistente de conexão. */
+/** As 5 etapas VISÍVEIS do assistente (as fases internas — preparando, gerando, validando, perfil — ficam dentro da etapa a que pertencem). */
 export const PASSOS_ASSISTENTE = Object.freeze([
-  ["preparando", "Preparando sessão"], ["gerando", "Gerando QR Code"], ["aguardando", "Aguardando leitura"], ["validando", "Validando conta"], ["perfil", "Obtendo perfil"], ["concluida", "Conexão concluída"],
+  ["iniciar", "Iniciar conexão"], ["escanear", "Escanear QR Code"], ["identificada", "Conta identificada"], ["confirmar", "Confirmar identidade"], ["concluida", "Conexão concluída"],
 ]);
-/** Fase do assistente → índice (0..5) da etapa em andamento. `identificado` (aguardando a confirmação do operador) tem as 5 primeiras etapas concluídas. */
-const INDICE_FASE = Object.freeze({ iniciando: 0, gerando: 1, aguardando: 2, expirado: 2, validando: 3, perfil: 4, identificado: 5, concluida: 6, erro: -1 });
+/** Fase interna → índice (0..4) da etapa visível em andamento. `identificado` = aguardando a confirmação do operador (4ª etapa). `concluida` marca todas como feitas. */
+const INDICE_FASE = Object.freeze({ iniciando: 0, gerando: 0, aguardando: 1, expirado: 1, validando: 2, perfil: 2, identificado: 3, concluida: 5, erro: -1 });
 export const FASES_EM_ANDAMENTO = Object.freeze(["iniciando", "gerando", "aguardando", "expirado", "validando", "perfil"]);
+
+/** Etapa visível (0..4) em que uma fase interna falha/está — usado para marcar o erro na etapa certa. */
+export const etapaDaFase = (fase) => ({ iniciando: 0, gerando: 0, aguardando: 1, expirado: 1, validando: 2, perfil: 2, identificado: 3, concluida: 4 })[fase] ?? 0;
 
 /** @returns {Array<{id: string, rotulo: string, estado: 'feito'|'ativo'|'pendente'|'erro'}>} */
 export function passosDoAssistente(fase, { falhouEm = null } = {}) {
@@ -69,6 +72,25 @@ export function passosDoAssistente(fase, { falhouEm = null } = {}) {
   });
 }
 
+/** "há poucos segundos", "há 3 min", "há 2 h", "ontem"… — para indicadores de última comunicação. Vazio/inválido ⇒ "". */
+export function haQuanto(iso, agora = new Date()) {
+  const d = dt(iso); if (!d) return "";
+  const seg = Math.max(0, Math.round(((agora instanceof Date ? agora.getTime() : Number(agora)) - d.getTime()) / 1000));
+  if (seg < 45) return "há poucos segundos";
+  if (seg < 90) return "há 1 min";
+  if (seg < 3600) return `há ${Math.round(seg / 60)} min`;
+  if (seg < 86_400) return `há ${Math.round(seg / 3600)} h`;
+  return dataHoraCurta(iso, agora);
+}
+
+/** Saúde da conexão em linguagem humana, a partir de `c.saude` (só o que o backend informa). */
+export function saudeDaConexao(c, agora = new Date()) {
+  const s = c?.saude ?? {};
+  if (c?.estado !== "CONNECTED") return { id: "sem_sinal", tom: "neutro", texto: "Sem conexão ativa", detalhe: s.ultimoSinalEm ? `Último sinal ${haQuanto(s.ultimoSinalEm, agora)}` : "" };
+  if (s.id === "saudavel") return { id: "estavel", tom: "ok", texto: "Conexão estável", detalhe: s.ultimoSinalEm ? `Última comunicação ${haQuanto(s.ultimoSinalEm, agora)}` : "" };
+  if (s.id === "atencao") return { id: "atrasada", tom: "atencao", texto: "Sinal atrasado", detalhe: s.ultimoSinalEm ? `Última comunicação ${haQuanto(s.ultimoSinalEm, agora)}` : "O Gateway demorou a responder." };
+  return { id: "sem_sinal", tom: "neutro", texto: "Sem sinal recente", detalhe: "" };
+}
 const ESPERA_GERANDO_MS = 12_000;   // sem QR e sem conexão por mais que isto: o pareamento não abriu — tratamos como expirado/falha
 
 /**

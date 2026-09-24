@@ -1,5 +1,5 @@
 // Aba CONEXÃO — construtores de HTML: os 6 estados em linguagem amigável, cartão da conta conectada (nada inventado), QR SÓ como imagem (nunca a string crua), assistente com
-// 6 etapas, confirmação obrigatória da conta, modais de alto impacto (desconectar/trocar), permissão específica e sigilo (nenhuma credencial em lugar nenhum).
+// 5 etapas, confirmação obrigatória da conta, modais de alto impacto (desconectar/trocar), permissão específica e sigilo (nenhuma credencial em lugar nenhum).
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { htmlConexao, htmlCartaoConexao, htmlContaConectada, htmlIdentidade, htmlDetalhesTecnicos, htmlAssistente, htmlQuadroQr, htmlModalDesconectar, htmlModalTrocar, assistenteEmAndamento } from "../src/central/centralConexaoUi.js";
@@ -41,20 +41,20 @@ describe("cartão principal por estado", () => {
     const h = htmlCartaoConexao(conectado());
     for (const t of ["Crescer Teste", "********21", "Tipo não identificado", "Ambiente de teste", "Trocar número conectado", "Desconectar WhatsApp"]) assert.ok(h.includes(t), t);
     assert.ok(!/Agente Crescer/.test(h));
-    assert.match(htmlCartaoConexao(conectado({ identidade: { ...conectado().identidade, agenteCrescer: true, nomeOperacional: "Agente Crescer" } })), /cc-tag--marca">Agente Crescer/);
+    assert.match(htmlCartaoConexao(conectado({ identidade: { ...conectado().identidade, agenteCrescer: true, nomeOperacional: "Agente Crescer" } })), /cc-tag--agente[\s\S]*Agente Crescer/);
     assert.match(htmlCartaoConexao(conectado({ conta: conta({ fotoUrl: "https://pps.whatsapp.net/x.jpg" }) })), /<img class="cc-avatar-img"/);
     assert.ok(!/<img/.test(h), "sem foto ⇒ só as iniciais");
   });
   test("SEM a permissão: nenhum botão de ação e a explicação; o estado continua visível", () => {
     for (const e of [est({ permissoes: { gerenciar: false } }), conectado({ permissoes: { gerenciar: false } })]) {
-      const h = htmlCartaoConexao(e);
-      assert.ok(!/data-cc-conexao=/.test(h)); assert.match(h, /exige a permissão de gerenciar a conexão/);
+      const h = htmlConexao(e);
+      assert.ok(!/data-cc-conexao=/.test(h)); assert.match(h, /Apenas administradores autorizados/);
     }
     assert.match(htmlCartaoConexao(conectado({ permissoes: { gerenciar: false } })), /Crescer Teste/);
   });
   test("conta conectada mas NÃO confirmada: destaca 'Revisar e confirmar conta' e avisa que o envio está bloqueado", () => {
     const e = conectado({ identidade: { ...conectado().identidade, status: "PENDENTE_CONFIRMACAO" } });
-    assert.match(htmlCartaoConexao(e), /data-cc-conexao="revisar"/); assert.match(htmlConexao(e, { agora: AGORA }), /Esta conta ainda não foi confirmada[\s\S]*envio de mensagens pelo painel fica bloqueado/);
+    assert.match(htmlCartaoConexao(e), /data-cc-conexao="revisar"/); assert.match(htmlConexao(e, { agora: AGORA }), /Falta só a confirmação do operador[\s\S]*Envios protegidos até a confirmação/);
     assert.ok(!/ainda não foi confirmada/.test(htmlConexao(conectado(), { agora: AGORA })));
   });
   test("Gateway sem resposta: avisa que mostra o último estado conhecido", () => {
@@ -64,8 +64,8 @@ describe("cartão principal por estado", () => {
 
 describe("conta conectada, identidade e detalhes técnicos", () => {
   test("mostra o que o WhatsApp informa; recado só se existir; saúde; gateway; último sinal; conectado desde", () => {
-    const h = htmlContaConectada(conectado(), { agora: AGORA });
-    for (const t of ["Nome do perfil", "Número", "Tipo da conta", "Recado", "Automação de delivery", "Conectado desde", "Último sinal", "Saúde da sessão", "Saudável", "Gateway", "Respondendo"]) assert.ok(h.includes(t), t);
+    const h = htmlConexao(conectado(), { agora: AGORA });
+    for (const t of ["Nome do perfil", "Número", "Tipo da conta", "Recado", "Automação de delivery", "Conectada desde", "Última comunicação", "Conexão estável", "Gateway", "Respondendo"]) assert.ok(h.includes(t), t);
     const sem = htmlContaConectada(conectado({ conta: conta({ descricao: null, nome: null }) }), { agora: AGORA });
     assert.ok(!/Recado/.test(sem), "sem descrição ⇒ a linha não existe (nada inventado)"); assert.match(sem, /O WhatsApp não informou/);
     assert.equal(htmlContaConectada(est(), { agora: AGORA }), "");
@@ -110,10 +110,10 @@ describe("QR: só como imagem, com contagem e expiração", () => {
 
 describe("assistente de conexão", () => {
   const base = { modo: "conectar", resp: null, conta: null, agente: false, ambiente: "TESTE", erro: null, enviando: false, falhouEm: null };
-  test("cabeçalho por modo e stepper com as 6 etapas; a etapa atual marcada", () => {
+  test("cabeçalho por modo e stepper com as 5 etapas; a etapa atual marcada", () => {
     const h = htmlAssistente({ ...base, fase: "aguardando", resp: { disponivel: true, svg: SVG, expiraEm: iso(-1), ordem: 1 } }, AGORA.getTime());
-    assert.match(h, /Conectar WhatsApp/); assert.match(h, /role="dialog" aria-modal="true"/); assert.equal((h.match(/class="cc-step /g) ?? []).length, 6);
-    for (const r of ["Preparando sessão", "Gerando QR Code", "Aguardando leitura", "Validando conta", "Obtendo perfil", "Conexão concluída"]) assert.ok(h.includes(r), r);
+    assert.match(h, /Conectar WhatsApp/); assert.match(h, /role="dialog" aria-modal="true"/); assert.equal((h.match(/class="cc-step /g) ?? []).length, 5);
+    for (const r of ["Iniciar conexão", "Escanear QR Code", "Conta identificada", "Confirmar identidade", "Conexão concluída"]) assert.ok(h.includes(r), r);
     assert.match(h, /aria-current="step"/);
     assert.match(htmlAssistente({ ...base, modo: "trocar", fase: "gerando" }, AGORA.getTime()), /Trocar número conectado/);
     assert.match(htmlAssistente({ ...base, modo: "revisar", fase: "identificado", conta: conta() }, AGORA.getTime()), /Confirmar conta do WhatsApp/);
@@ -125,16 +125,16 @@ describe("assistente de conexão", () => {
   test("identificado: NÃO conclui em silêncio — mostra foto/nome/número/tipo, faz a pergunta e exige 'Confirmar conexão'", () => {
     const h = htmlAssistente({ ...base, fase: "identificado", conta: conta() }, AGORA.getTime());
     assert.match(h, /WhatsApp identificado/); assert.match(h, /Crescer Teste/); assert.match(h, /\*{8}21/); assert.match(h, /Tipo não identificado/);
-    assert.match(h, /Deseja utilizar esta conta no Crescer com Delivery\?/); assert.match(h, /data-cc-conexao="assistente-cancelar"[\s\S]*Cancelar/); assert.match(h, /data-cc-conexao="assistente-confirmar"[^>]*>Confirmar conexão/);
-    assert.match(h, /Utilizar como <strong>Agente Crescer<\/strong>/); assert.match(h, /data-cc-agente/); assert.ok(!/data-cc-agente checked/.test(h));
+    assert.match(h, /Esta é a conta que o Crescer com Delivery deve usar\?/); assert.match(h, /data-cc-conexao="assistente-cancelar"[\s\S]*Cancelar/); assert.match(h, /data-cc-conexao="assistente-confirmar"[^>]*>Confirmar conexão/);
+    assert.match(h, /Vincular ao Agente Crescer/); assert.match(h, /data-cc-agente/); assert.ok(!/data-cc-agente checked/.test(h));
     assert.match(htmlAssistente({ ...base, fase: "identificado", conta: conta(), agente: true, ambiente: "PRODUCAO" }, 0), /data-cc-agente checked[\s\S]*aria-checked="true"[^>]*data-cc-valor="PRODUCAO"|data-cc-agente checked/);
     assert.match(htmlAssistente({ ...base, fase: "identificado", conta: conta(), enviando: true }, 0), /Confirmando…[\s\S]*disabled|disabled[\s\S]*Confirmando/);
     assert.match(htmlAssistente({ ...base, fase: "identificado", conta: conta(), erro: "Não foi possível confirmar" }, 0), /role="alert">Não foi possível confirmar/);
   });
   test("validando, perfil, concluída e erro têm corpo e rodapé próprios; concluída mostra Agente Crescer quando marcado", () => {
-    assert.match(htmlAssistente({ ...base, fase: "validando" }, 0), /Validando a conta/); assert.match(htmlAssistente({ ...base, fase: "perfil" }, 0), /Obtendo o perfil/);
+    assert.match(htmlAssistente({ ...base, fase: "validando" }, 0), /Validando a sessão/); assert.match(htmlAssistente({ ...base, fase: "perfil" }, 0), /Identificando a conta/);
     const ok = htmlAssistente({ ...base, fase: "concluida", conta: conta(), agente: true }, 0);
-    assert.match(ok, /Conexão concluída/); assert.match(ok, /identificada como Agente Crescer/); assert.match(ok, /data-cc-conexao="assistente-fechar"[^>]*>Concluir/);
+    assert.match(ok, /Conexão concluída/); assert.match(ok, /vinculada ao Agente Crescer/); assert.match(ok, /data-cc-conexao="assistente-fechar"[^>]*>Concluir/);
     const erro = htmlAssistente({ ...base, fase: "erro", erro: "Sem resposta", falhouEm: 1 }, 0);
     assert.match(erro, /Não foi possível concluir/); assert.match(erro, /Sem resposta/); assert.match(erro, /assistente-tentar/); assert.match(erro, /cc-step--erro/);
   });

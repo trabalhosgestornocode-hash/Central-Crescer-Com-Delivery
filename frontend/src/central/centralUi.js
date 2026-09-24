@@ -5,6 +5,8 @@
 
 import { escapeHtml as e } from "../utils.js";
 import { icon } from "../icons.js";
+import { badge } from "./centralStatus.js";
+import { htmlEmpresasUnidades } from "./centralAtividade.js";
 import {
   ABAS, FILTROS_CONVERSA, ROTULO_CATEGORIA, ROTULO_ORIGEM, ROTULO_STATUS, trilhaDe, rotuloStatus, dicaStatus,
   horaLocal, horarioCurto, dataHoraCurta, blocosDaConversa, matizDe, resumirLista, situacaoDoContato, caracteres, TEXTO_MAX,
@@ -61,13 +63,12 @@ export const erroCentral = (msg) => `<div class="cc-erro" role="alert">${icon("a
 export function htmlPillsEstado(estado) {
   if (!estado) return `<span class="cc-pill cc-pill--carregando"><i class="cc-dot"></i>Verificando…</span>`;
   const gw = estado.gateway;
-  const tomGw = gw === "conectado" ? "ok" : gw === "instavel" ? "atencao" : gw === "desconhecido" ? "neutro" : "critico";
-  const rotGw = { conectado: "WhatsApp conectado", desconectado: "WhatsApp desconectado", instavel: "WhatsApp instável", desconhecido: "WhatsApp sem sinal" }[gw] ?? "WhatsApp sem sinal";
-  const auto = estado.modo === "NORMAL" ? pill("ok", "Automação ativa") : pill("neutro", estado.modo === "REACTIVE_ONLY" ? "Automação somente reativa" : "Automação desativada");
+  const zap = { conectado: badge("conectado", { texto: "WhatsApp conectado" }), desconectado: badge("desconectado", { texto: "WhatsApp desconectado" }), instavel: badge("atencao", { texto: "WhatsApp instável" }) }[gw] ?? badge("desconectado", { texto: "WhatsApp sem sinal" });
+  const auto = estado.modo === "NORMAL" ? badge("ativo", { texto: "Automação ativa" }) : badge("pausado", { texto: estado.modo === "REACTIVE_ONLY" ? "Automação somente reativa" : "Automação desativada" });
   // identidade INTERNA da conta conectada (nome operacional / ambiente): só aparece quando há conta e o backend a informou
   const id = estado.identidade;
-  const ident = gw === "conectado" && id ? (id.status === "PENDENTE_CONFIRMACAO" ? pill("atencao", "Conta a confirmar") : id.nomeOperacional ? pill("neutro", id.nomeOperacional) : id.ambiente === "TESTE" ? pill("neutro", "Ambiente de teste") : "") : "";
-  return `${pill(tomGw, rotGw)}${ident}${estado.modo ? auto : ""}`;
+  const ident = gw === "conectado" && id ? (id.status === "PENDENTE_CONFIRMACAO" ? badge("pendente", { texto: "Conta a confirmar" }) : id.nomeOperacional ? badge("confirmado", { texto: id.nomeOperacional }) : id.ambiente === "TESTE" ? pill("neutro", "Ambiente de teste") : "") : "";
+  return `${zap}${ident}${estado.modo ? auto : ""}`;
 }
 
 export function htmlTopo({ aba, estado, naoLidas = 0 }) {
@@ -260,55 +261,6 @@ export function htmlMenu(itens) {
 }
 
 // ---------------------------------------------------------------------------
-// Visão geral
-// ---------------------------------------------------------------------------
-
-/** Identidade INTERNA da conta (nome operacional ou ambiente) para a nota do card do WhatsApp. Nada é inventado: sem conta informada, sem nota. */
-function notaConta(w) {
-  const conta = w?.conta; if (!conta || w.estado !== "conectado") return "";
-  if (conta.status === "PENDENTE_CONFIRMACAO") return "Conta a confirmar";
-  return conta.nomeOperacional ?? (conta.ambiente === "PRODUCAO" ? "Produção" : "Ambiente de teste");
-}
-
-function medida({ rotulo, valor, nota = "", tom = "", alvo = "" }) {
-  const conteudo = `<span class="cc-medida-rot">${e(rotulo)}</span><strong class="cc-medida-val">${valor}</strong>${nota ? `<span class="cc-medida-nota">${e(nota)}</span>` : ""}`;
-  return alvo ? `<button type="button" class="cc-medida cc-medida--${tom || "neutro"}" data-cc-ir="${e(alvo)}">${conteudo}</button>` : `<div class="cc-medida cc-medida--${tom || "neutro"}">${conteudo}</div>`;
-}
-
-export function htmlVisaoGeral(d, { agora = new Date() } = {}) {
-  const c = d.cards;
-  const gwTom = c.whatsapp.estado === "conectado" ? "ok" : c.whatsapp.estado === "instavel" ? "atencao" : "critico";
-  const painel = `<div class="cc-painel" role="group" aria-label="Situação da comunicação">
-    ${medida({ rotulo: "WhatsApp", valor: `<span class="cc-estado cc-estado--${gwTom}"><i class="cc-dot"></i>${e(c.whatsapp.rotulo)}</span>`, tom: gwTom, nota: notaConta(c.whatsapp), alvo: "conexao" })}
-    ${medida({ rotulo: "Automação", valor: `<span class="cc-estado cc-estado--${c.automacao.ativa ? "ok" : "neutro"}"><i class="cc-dot"></i>${e(c.automacao.rotulo)}</span>`, alvo: "automacoes" })}
-    ${medida({ rotulo: "Conversas não lidas", valor: `<span class="cc-num">${c.conversasNaoLidas}</span>`, tom: c.conversasNaoLidas ? "marca" : "", alvo: "conversas:nao_lidas" })}
-    ${medida({ rotulo: "Mensagens hoje", valor: `<span class="cc-num">${c.mensagensHoje.total}</span>`, nota: `${c.mensagensHoje.recebidas} recebidas, ${c.mensagensHoje.enviadas} enviadas`, alvo: "historico" })}
-    ${medida({ rotulo: "Entregues hoje", valor: `<span class="cc-num">${c.entreguesHojePct == null ? "—" : `${c.entreguesHojePct}%`}</span>`, nota: c.entreguesHojePct == null ? "Nada enviado hoje" : "das enviadas" })}
-    ${medida({ rotulo: "Falhas", valor: `<span class="cc-num">${c.falhasHoje}</span>`, tom: c.falhasHoje ? "critico" : "", nota: c.falhasHoje ? "Hoje" : "Nenhuma hoje", alvo: c.falhasHoje ? "historico:FAILED" : "" })}
-  </div>`;
-
-  const recentes = d.conversasRecentes?.length
-    ? `<div class="cc-itens cc-itens--compacto" role="list">${d.conversasRecentes.map((x) => htmlItemConversa(x, { agora, compacto: true })).join("")}</div>`
-    : vazio({ titulo: "Nenhuma conversa ainda", texto: "Quando um responsável escrever ou você enviar uma mensagem, ela aparece aqui.", icone: "message-circle" });
-
-  const alertas = d.alertas?.length
-    ? `<ul class="cc-alertas">${d.alertas.map((a) => `<li class="cc-alerta cc-alerta--${e(a.severidade)}"><i class="cc-alerta-marca" aria-hidden="true"></i><div><strong>${e(a.titulo)}</strong><p>${e(a.texto)}</p></div>${a.destino ? `<button type="button" class="cc-link" data-cc-ir="${e([a.destino.aba, a.destino.filtro ?? a.destino.status].filter(Boolean).join(":"))}">Ver</button>` : ""}</li>`).join("")}</ul>`
-    : vazio({ titulo: "Tudo em ordem", texto: "Nenhum alerta importante agora.", icone: "check-circle" });
-
-  const proximos = d.proximosEnvios?.length
-    ? `<ul class="cc-proximos">${d.proximosEnvios.map((p) => `<li><time>${e(dataHoraCurta(p.em, agora))}</time><span>${e(p.empresa ?? "Empresa")}</span><em>${e(ROTULO_ORIGEM[p.origem] ?? "Automática")}</em></li>`).join("")}</ul>`
-    : vazio({ titulo: "Nenhum envio automático agendado", texto: "Os avisos aparecem aqui quando uma pendência é detectada.", icone: "clock" });
-
-  return `${painel}<div class="cc-grade">
-    <section class="cc-bloco"><header class="cc-bloco-cab"><h2>Conversas recentes</h2><button type="button" class="cc-link" data-cc-ir="conversas">Abrir conversas</button></header>${recentes}</section>
-    <div class="cc-coluna">
-      <section class="cc-bloco"><header class="cc-bloco-cab"><h2>Alertas importantes</h2></header>${alertas}</section>
-      <section class="cc-bloco"><header class="cc-bloco-cab"><h2>Próximos envios automáticos</h2><button type="button" class="cc-link" data-cc-ir="automacoes">Ver automações</button></header>${proximos}</section>
-    </div>
-  </div>`;
-}
-
-// ---------------------------------------------------------------------------
 // Automações
 // ---------------------------------------------------------------------------
 
@@ -319,7 +271,7 @@ export function htmlAutomacoes(d, { ativacaoHtml = "", agora = new Date() } = {}
       <div class="cc-passo-corpo"><strong>${e(p.titulo)}</strong><p>${e(p.texto)}</p></div></li>`).join("");
   const fato = (rot, val) => `<div><dt>${e(rot)}</dt><dd>${e(val)}</dd></div>`;
   const empresas = d.empresasHabilitadas.itens.length
-    ? `<ul class="cc-lista-simples">${d.empresasHabilitadas.itens.map((o) => `<li><div><strong>${e(o.nome)}</strong><span class="cc-nota">${e(o.proximaAcao ?? "")}</span></div><div class="cc-lista-dir">${o.pausada ? `<span class="cc-tag cc-tag--neutro">Pausada</span>` : ""}${o.pendenciasAtuais ? `<span class="cc-tag cc-tag--atencao">${e(plural(o.pendenciasAtuais, "pendência", "pendências"))}</span>` : ""}<button type="button" class="cc-link" data-cc-acao="configurar-empresa" data-cc-org="${e(o.organizacaoId)}">Configurar</button></div></li>`).join("")}</ul>`
+    ? htmlEmpresasUnidades(d.empresasHabilitadas.itens.map((o) => ({ organizacaoId: o.organizacaoId, nome: o.nome, pendencias: o.pendenciasAtuais ?? 0, unidades: o.unidades, situacao: o.pausada ? "pausado" : (o.pendenciasAtuais ?? 0) > 0 ? "atencao" : "ativo" })), { limite: 12 })
     : vazio({ titulo: "Nenhuma empresa habilitada", texto: "Habilite a comunicação de uma empresa em Configurações para que os avisos automáticos possam sair.", icone: "building" });
   const proximos = d.proximosEnvios.length
     ? `<ul class="cc-proximos">${d.proximosEnvios.map((p) => `<li><time>${e(dataHoraCurta(p.em, agora))}</time><span>${e(p.empresa ?? "Empresa")}</span><em>${e(ROTULO_ORIGEM[p.origem] ?? "Automática")}</em></li>`).join("")}</ul>`
@@ -328,7 +280,7 @@ export function htmlAutomacoes(d, { ativacaoHtml = "", agora = new Date() } = {}
     ? `<div class="cc-bloqueio cc-bloqueio--destaque" role="status">${icon("alert-triangle", { size: 16 })}<div><strong>WhatsApp desconectado</strong><p>Nenhuma automação consegue enviar enquanto não houver uma sessão válida. As regras e o histórico continuam preservados.</p><button type="button" class="cc-link" data-cc-ir="conexao">Abrir Conexão</button></div></div>` : "";
   return `${semWhatsapp}<section class="cc-bloco cc-auto-cab">
       <div><h2>${e(t.titulo)}</h2><p class="cc-auto-resumo">${e(t.resumo)}</p></div>
-      <div class="cc-auto-estado">${d.ativa ? pill("ok", "Automação ativa") : pill("neutro", d.rotuloModo === "Somente reativa" ? "Somente reativa" : "Automação desativada")}</div>
+      <div class="cc-auto-estado">${d.ativa ? badge("ativo", { texto: "Automação ativa" }) : badge("pausado", { texto: d.rotuloModo === "Somente reativa" ? "Somente reativa" : "Automação desativada" })}</div>
     </section>
     <div class="cc-grade cc-grade--auto">
       <section class="cc-bloco"><header class="cc-bloco-cab"><h2>Como funciona, passo a passo</h2></header><ol class="cc-linha-tempo">${passos}</ol></section>

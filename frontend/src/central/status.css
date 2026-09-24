@@ -1,0 +1,35 @@
+/* =====================================================================
+   LINGUAGEM DE STATUS DA CENTRAL — badges (.cc-st) e selo de identidade (.cc-selo).
+   O significado nunca depende só da cor: cada status tem ÍCONE próprio + TEXTO + forma de selo + contraste AA.
+   Contrastes (texto sobre fundo): ok #0a6b3c/#e2f7ec ≈ 5.6:1 · atenção #7a5606/#fdf3d9 ≈ 6.1:1 · crítico #9c2222/#fce3e3 ≈ 6.4:1 · info #1f5fa3/#e8f1fb ≈ 5.5:1.
+   ===================================================================== */
+.cc-st { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px 5px 8px; border-radius: 999px; border: 1px solid transparent; font-size: 12.5px; font-weight: 650; line-height: 1; white-space: nowrap; }
+.cc-st--p { padding: 3px 9px 3px 7px; font-size: 11.5px; gap: 5px; }
+.cc-st .icon { flex: none; }
+.cc-st--ok { background: var(--cc-ok-bg); color: #0a6b3c; border-color: rgba(14,157,87,.24); }
+.cc-st--atencao { background: var(--cc-warn-bg); color: #7a5606; border-color: rgba(196,138,18,.32); }
+.cc-st--critico { background: var(--cc-bad-bg); color: #9c2222; border-color: rgba(219,59,59,.3); }
+.cc-st--info { background: #e8f1fb; color: #1f5fa3; border-color: rgba(47,119,196,.26); }
+.cc-st--neutro { background: var(--cc-surface); color: #4a4f57; border-color: var(--cc-line); }
+
+/* ---------- selo de identidade: avatar + anel que muda de forma + marca no canto ---------- */
+.cc-selo { --selo: var(--cc-faint); position: relative; display: grid; place-items: center; flex: none; }
+.cc-selo--x { width: 148px; height: 148px; --marca: 38px; }
+.cc-selo--g { width: 100px; height: 100px; --marca: 30px; }
+.cc-selo--m { width: 64px; height: 64px; --marca: 24px; }
+.cc-selo-anel { position: absolute; inset: 0; border-radius: 50%; border: 3px solid var(--selo); }
+.cc-selo-miolo { position: relative; display: grid; place-items: center; width: calc(100% - 24px); height: calc(100% - 24px); border-radius: 50%; overflow: hidden; }
+.cc-selo-miolo .cc-avatar { width: 100%; height: 100%; font-size: 36px; }
+.cc-selo--g .cc-selo-miolo .cc-avatar { font-size: 28px; }
+.cc-selo-marca { position: absolute; right: 2px; bottom: 6px; display: grid; place-items: center; width: var(--marca); height: var(--marca); border-radius: 50%; background: var(--selo); color: #fff; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(20,24,32,.18); }
+
+.cc-selo--confirmada { --selo: var(--cc-ok); }
+.cc-selo--confirmada .cc-selo-anel { box-shadow: 0 0 0 7px var(--cc-ok-bg); }
+.cc-selo--pendente { --selo: var(--cc-warn); }
+.cc-selo--pendente .cc-selo-anel { border-style: dashed; animation: cc-gira 24s linear infinite; }
+.cc-selo--sem_conta { --selo: #a3a8b1; }
+.cc-selo--sem_conta .cc-selo-anel { border-style: dashed; }
+.cc-selo--erro { --selo: var(--cc-bad); }
+.cc-selo--erro .cc-selo-anel { box-shadow: 0 0 0 7px var(--cc-bad-bg); }
+
+@media (prefers-reduced-motion: reduce) { .cc-selo--pendente .cc-selo-anel { animation: none; } }

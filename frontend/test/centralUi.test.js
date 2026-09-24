@@ -4,9 +4,11 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
   avatar, trilha, htmlPillsEstado, htmlTopo, htmlItemConversa, htmlListaConversas, htmlFiltros, htmlChatCabecalho, htmlMensagem, htmlFluxo, htmlComposer, htmlChatVazio,
-  htmlContexto, htmlMenu, htmlVisaoGeral, htmlAutomacoes, htmlHistorico, htmlDestinatarios, htmlConfiguracoes, htmlDiagnostico, htmlEspacoConversas, htmlCasca, vazio, erroCentral,
+  htmlContexto, htmlMenu, htmlAutomacoes, htmlHistorico, htmlDestinatarios, htmlConfiguracoes, htmlDiagnostico, htmlEspacoConversas, htmlCasca, vazio, erroCentral,
   skeletonLista, skeletonChat, skeletonPainel, chipsUnidades,
 } from "../src/central/centralUi.js";
+
+import { htmlVisaoGeral } from "../src/central/centralVisao.js";
 
 const AGORA = new Date(2026, 8, 24, 15, 0, 0);
 const iso = (min) => new Date(AGORA.getTime() - min * 60_000).toISOString();
@@ -189,17 +191,17 @@ describe("visão geral, automações, histórico, destinatários e configuraçõ
     cards: { whatsapp: { estado: "conectado", rotulo: "Conectado", conta: { status: "CONFIRMADA", confirmada: true, ambiente: "TESTE", nomeOperacional: null } }, automacao: { modo: "NORMAL", rotulo: "Ativa", ativa: true }, conversasNaoLidas: 2, mensagensHoje: { total: 10, enviadas: 6, recebidas: 4 }, entreguesHojePct: 80, falhasHoje: 0 },
     conversasRecentes: [], alertas: [], proximosEnvios: [], ...o,
   });
-  test("painel de instrumentos: 6 medidas com os números do servidor; sem % vira '—'; WhatsApp leva à Conexão com a identidade", () => {
+  test("indicadores com números do servidor; sem percentual usa recebidas; WhatsApp leva à Conexão", () => {
     const h = htmlVisaoGeral(visao({ cards: { ...visao().cards, entreguesHojePct: null } }), { agora: AGORA });
-    assert.equal((h.match(/class="cc-medida /g) ?? []).length, 6);
-    for (const r of ["WhatsApp", "Automação", "Conversas não lidas", "Mensagens hoje", "Entregues hoje", "Falhas"]) assert.ok(h.includes(r), r);
-    assert.match(h, /6 recebidas|4 recebidas, 6 enviadas/); assert.match(h, /cc-num">—</); assert.match(h, /data-cc-ir="conexao"[\s\S]*Ambiente de teste/); assert.match(h, /Nenhuma falha hoje|Nenhuma hoje/);
+    assert.equal((h.match(/class="cc-kpi /g) ?? []).length, 5);
+    for (const r of ["WhatsApp", "Automação", "Conversas não lidas", "Enviadas hoje", "Próximos envios", "Falhas"]) assert.ok(h.includes(r), r);
+    assert.match(h, /4 recebidas/); assert.doesNotMatch(h, /% entregues/); assert.match(h, /Ambiente de teste/); assert.match(h, /data-cc-ir="conexao"/); assert.match(h, /Nenhuma/);
   });
   test("vazios: sem conversas, sem alertas ('Tudo em ordem') e sem envios agendados; alertas com destino", () => {
     const v = htmlVisaoGeral(visao(), { agora: AGORA });
-    assert.match(v, /Nenhuma conversa ainda/); assert.match(v, /Tudo em ordem/); assert.match(v, /Nenhum envio automático agendado/);
+    assert.match(v, /Nenhuma conversa ainda/); assert.match(v, /Tudo em ordem/); assert.match(v, /Nenhum envio programado/);
     const a = htmlVisaoGeral(visao({ alertas: [{ id: "g", severidade: "critico", titulo: "WhatsApp fora do ar", texto: "t", destino: { aba: "conexao" } }, { id: "f", severidade: "atencao", titulo: "1 falha", texto: "t", destino: { aba: "historico", status: "FAILED" } }] }), { agora: AGORA });
-    assert.match(a, /cc-alerta--critico/); assert.match(a, /data-cc-ir="conexao"/); assert.match(a, /data-cc-ir="historico:FAILED"/);
+    assert.match(a, /cc-alerta-v2--critico/); assert.match(a, /data-cc-ir="conexao"/); assert.match(a, /data-cc-ir="historico:FAILED"/);
   });
   const auto = (o = {}) => ({ modo: "NORMAL", rotuloModo: "Ativa", ativa: true, whatsapp: { conectado: true }, dashboardIfoodD1: { titulo: "Dashboard iFood D-1", resumo: "r", quandoDetecta: "d", quandoEnvia: "e", quandoReforca: "f", horarioLimite: "22:30", linhaDoTempo: [{ id: "janela", titulo: "Janela", horario: "08:00", texto: "t" }, { id: "reforco", titulo: "Reforço", horario: "20:00", texto: "t" }, { id: "limite", titulo: "Limite", horario: "22:30", texto: "t" }] }, empresasHabilitadas: { total: 0, itens: [] }, proximosEnvios: [], ...o });
   test("automações: linha do tempo com os horários reais, regras e vazios explicativos", () => {
