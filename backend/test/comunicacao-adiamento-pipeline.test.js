@@ -83,7 +83,7 @@ function provider() {
   const chamadas = [];
   const original = p.sendText.bind(p);
   p.sendText = async (a) => { chamadas.push(a); return original(a); };
-  return { p, chamadas, whatsAppService: criarWhatsAppService({ provider: p }) };
+  return { p, chamadas, whatsAppService: criarWhatsAppService({ provider: p, semGateIdentidade: true }) };
 }
 const rodar = (whatsAppService, agora, resolverHabilitacao, extra = {}) => processarProximoLote({
   limite: 20, worker: `adp-${tag}`, whatsAppService, agora, adiamentoMs: 15 * MIN,

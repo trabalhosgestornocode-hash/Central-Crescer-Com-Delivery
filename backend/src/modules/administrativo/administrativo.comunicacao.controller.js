@@ -9,6 +9,8 @@ import { identidadeOperacional } from "../../shared/identidade.js";
 import * as service from "./administrativo.comunicacao.service.js";
 import * as central from "./administrativo.comunicacao.central.js";
 import * as teste from "./administrativo.comunicacao.teste.js";
+import * as conversas from "./administrativo.comunicacao.conversas.js";
+import * as conexao from "./administrativo.comunicacao.conexao.js";
 
 const ok = (res, data, status = 200) => res.status(status).json({ data });
 // Mesma seam de teste de administrativo.controller.js: `app.locals.adminDeps`.
@@ -16,7 +18,8 @@ const deps = (req) => req.app?.locals?.adminDeps ?? undefined;
 
 const autor = (req) => {
   const id = identidadeOperacional(req);
-  return { contaId: id.contaId, perfilId: id.perfilId, nome: id.nome, email: id.email };
+  // `superadmin` só serve ao bypass da permissão de conexão (comunicacao:gerenciar_conexao); nunca sai daqui.
+  return { contaId: id.contaId, perfilId: id.perfilId, nome: id.nome, email: id.email, superadmin: req.user?.superadmin === true };
 };
 
 // GET /administrativo/comunicacao/resumo
@@ -119,3 +122,56 @@ export const enviarTeste = asyncHandler(async (req, res) =>
 // GET /administrativo/comunicacao/teste/:mensagemId
 export const statusTeste = asyncHandler(async (req, res) =>
   ok(res, await teste.statusTeste({ mensagemId: req.params.mensagemId }, autor(req), deps(req))));
+
+// ---- Central de Comunicação: conversas com responsáveis autorizados ----
+
+// GET /administrativo/comunicacao/central/visao-geral | automacoes | destinatarios?busca= | historico?... | diagnostico | atualizacoes?cursor=
+export const centralVisaoGeral = asyncHandler(async (req, res) => ok(res, await conversas.visaoGeral(deps(req))));
+export const centralAutomacoes = asyncHandler(async (req, res) => ok(res, await conversas.automacoes(deps(req))));
+export const centralDestinatarios = asyncHandler(async (req, res) => ok(res, await conversas.destinatarios({ busca: req.query.busca }, deps(req))));
+export const centralHistorico = asyncHandler(async (req, res) =>
+  ok(res, await conversas.historicoGeral({
+    organizacaoId: req.query.organizacaoId, unidadeId: req.query.unidadeId, status: req.query.status, origem: req.query.origem, desde: req.query.desde,
+    ate: req.query.ate, busca: req.query.busca, operador: req.query.operador, pagina: req.query.pagina, porPagina: req.query.porPagina,
+  }, deps(req))));
+export const centralDiagnostico = asyncHandler(async (req, res) => ok(res, await conversas.diagnosticoTecnico(deps(req))));
+export const centralAtualizacoes = asyncHandler(async (req, res) => ok(res, await conversas.atualizacoes({ cursor: req.query.cursor }, deps(req))));
+
+// GET /administrativo/comunicacao/conversas?filtro=&busca=
+export const listarConversas = asyncHandler(async (req, res) => ok(res, await conversas.listarConversas({ filtro: req.query.filtro, busca: req.query.busca }, deps(req))));
+// GET /administrativo/comunicacao/conversas/:contatoId?horas=
+export const obterConversa = asyncHandler(async (req, res) =>
+  ok(res, await conversas.obterConversa({ contatoId: req.params.contatoId, horas: req.query.horas }, autor(req), deps(req))));
+// POST /administrativo/comunicacao/conversas/:contatoId/lida   { ate? }
+export const marcarConversaLida = asyncHandler(async (req, res) =>
+  ok(res, await conversas.marcarLida({ contatoId: req.params.contatoId, ate: req.body?.ate }, autor(req), deps(req))));
+// POST /administrativo/comunicacao/conversas/:contatoId/mensagens   { envioId, texto, organizacaoId?, unidadeId? }
+export const enviarMensagemConversa = asyncHandler(async (req, res) =>
+  ok(res, await conversas.enviarMensagem({
+    contatoId: req.params.contatoId, envioId: req.body?.envioId, texto: req.body?.texto, organizacaoId: req.body?.organizacaoId, unidadeId: req.body?.unidadeId,
+  }, autor(req), deps(req))));
+
+// ---- Aba Conexão: identidade e sessão do WhatsApp (permissão específica: comunicacao:gerenciar_conexao) ----
+
+// GET /administrativo/comunicacao/conexao — estado (qualquer usuário do painel; sem QR e sem ações).
+export const conexaoEstado = asyncHandler(async (req, res) => ok(res, await conexao.estado(autor(req), deps(req))));
+// POST /administrativo/comunicacao/conexao/iniciar
+export const conexaoIniciar = asyncHandler(async (req, res) => ok(res, await conexao.iniciar(autor(req), deps(req))));
+// GET /administrativo/comunicacao/conexao/qr?operacaoId=  — o QR é segredo transitório: nenhum cache (navegador/proxy) pode retê-lo.
+export const conexaoQr = asyncHandler(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  ok(res, await conexao.qr({ operacaoId: req.query.operacaoId }, autor(req), deps(req)));
+});
+// POST /administrativo/comunicacao/conexao/novo-qr     { operacaoId }
+export const conexaoNovoQr = asyncHandler(async (req, res) => ok(res, await conexao.novoQr({ operacaoId: req.body?.operacaoId }, autor(req), deps(req))));
+// POST /administrativo/comunicacao/conexao/confirmar   { operacaoId, utilizarComoAgente?, ambiente? }
+export const conexaoConfirmar = asyncHandler(async (req, res) =>
+  ok(res, await conexao.confirmar({ operacaoId: req.body?.operacaoId, utilizarComoAgente: req.body?.utilizarComoAgente, ambiente: req.body?.ambiente }, autor(req), deps(req))));
+// POST /administrativo/comunicacao/conexao/cancelar    { operacaoId }
+export const conexaoCancelar = asyncHandler(async (req, res) => ok(res, await conexao.cancelar({ operacaoId: req.body?.operacaoId }, autor(req), deps(req))));
+// POST /administrativo/comunicacao/conexao/desconectar { confirmacaoExplicita }
+export const conexaoDesconectar = asyncHandler(async (req, res) => ok(res, await conexao.desconectar({ confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));
+// POST /administrativo/comunicacao/conexao/trocar      { confirmacaoExplicita }
+export const conexaoTrocar = asyncHandler(async (req, res) => ok(res, await conexao.trocar({ confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));
+// PUT /administrativo/comunicacao/conexao/identidade   { ambiente?, agenteCrescer? }
+export const conexaoIdentidade = asyncHandler(async (req, res) => ok(res, await conexao.definirIdentidade({ ambiente: req.body?.ambiente, agenteCrescer: req.body?.agenteCrescer }, autor(req), deps(req))));

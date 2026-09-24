@@ -665,6 +665,8 @@ export async function processarJobReivindicado(job, {
     // reforço: a janela comercial normal não se aplica — o gate acima já provou 20:00-22:00 (ou config inválida, que a policy barra antes).
     dentroDaJanela: (ehReforco || ehTardio) ? true : dentroDaJanela,
     providerConectado: statusProvider?.conectado === true,
+    // Conta conectada = conta CONFIRMADA (aba Conexão). Serviço sem o gate (ou erro) ⇒ false ⇒ ADIADO com provider = 0, sem consumir tentativa.
+    identidadeConfirmada: await Promise.resolve().then(() => whatsAppService.identidadeConfirmada?.()).then((r) => r === true).catch(() => false),
     // Checkpoint H.4-A: defesa em profundidade, opt-in via COMUNICACAO_PILOTO_ENABLED
     // (ver comunicacao.piloto.js). Com o piloto desligado, sempre `true` (não interfere).
     telefoneNaAllowlistPiloto: telefoneAutorizadoNoPiloto(contato?.telefone_e164),

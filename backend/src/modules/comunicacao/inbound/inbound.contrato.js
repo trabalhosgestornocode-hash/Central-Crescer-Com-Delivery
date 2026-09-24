@@ -20,6 +20,12 @@ export const ESTADOS_INBOUND = Object.freeze(["RECEIVED", "HISTORICO", "QUARANTI
 /** chats de CLIENTE direto: os únicos que um fluxo futuro pode tratar (grupo/status/newsletter/broadcast/meta_ai/técnico/desconhecido/LID próprio não). */
 export const JID_TIPOS_CLIENTE = Object.freeze(["direct_pn", "direct_lid_other"]);
 
+/** Central de Comunicação — TIPO do conteúdo (vocabulário do Gateway) e limite do texto. */
+export const TIPOS_CONTEUDO = Object.freeze(["texto", "midia", "outro"]);
+export const TEXTO_MAX = 4096;
+/** Chaves ADITIVAS e OPCIONAIS (um Gateway antigo não as envia): ausentes = sem conteúdo. Aceitas juntas ou nenhuma. */
+const CHAVES_CONTEUDO = Object.freeze(["tipoConteudo", "texto"]);
+
 const CHAVES = Object.freeze(["contratoInbound", "providerMessageId", "origemTipo", "origemJidTipo", "fromMe", "telefoneE164", "telefoneOrigem", "falhaDecrypt", "motivoFalhaDecrypt", "stubSistema", "recebidoEm"]);
 const E164 = /^\+[1-9][0-9]{7,14}$/;
 const ID_PROVIDER = /^[A-Za-z0-9_.:-]{1,128}$/;
@@ -35,7 +41,7 @@ const ehObjeto = (v) => v !== null && typeof v === "object" && !Array.isArray(v)
  */
 export function validarEventoInbound(corpo, { agora = () => Date.now() } = {}) {
   if (!ehObjeto(corpo)) return { ok: false, erro: "corpo_invalido" };
-  for (const k of Object.keys(corpo)) if (!CHAVES.includes(k)) return { ok: false, erro: "campo_desconhecido" };   // inclui organizacao_id/estado injetados
+  for (const k of Object.keys(corpo)) if (!CHAVES.includes(k) && !CHAVES_CONTEUDO.includes(k)) return { ok: false, erro: "campo_desconhecido" };   // inclui organizacao_id/estado injetados
   for (const k of CHAVES) if (!(k in corpo)) return { ok: false, erro: `${k}_ausente` };
   const c = corpo;
   if (c.contratoInbound !== CONTRATO_INBOUND_VERSAO) return { ok: false, erro: "contratoInbound" };
@@ -52,6 +58,15 @@ export function validarEventoInbound(corpo, { agora = () => Date.now() } = {}) {
   const t = Date.parse(c.recebidoEm);
   if (!Number.isFinite(t) || t > agora() + FUTURO_MAX_MS) return { ok: false, erro: "recebidoEm" };
 
+  // ---- CONTEÚDO (opcional; se um vier, os dois vêm) ----
+  if (("tipoConteudo" in c) !== ("texto" in c)) return { ok: false, erro: "conteudo_incompleto" };
+  if ("tipoConteudo" in c) {
+    if (!TIPOS_CONTEUDO.includes(c.tipoConteudo)) return { ok: false, erro: "tipoConteudo" };
+    if (c.tipoConteudo === "texto") {
+      if (typeof c.texto !== "string" || c.texto === "" || Array.from(c.texto).length > TEXTO_MAX || c.texto.includes("\u0000")) return { ok: false, erro: "texto" };
+    } else if (c.texto !== null) return { ok: false, erro: "texto_incoerente" };
+  }
+
   // ---- CROSS-FIELD ----
   if ((c.telefoneE164 === null) !== (c.telefoneOrigem === null)) return { ok: false, erro: "telefone_origem_incoerente" };
   if (c.telefoneE164 !== null) {
@@ -62,6 +77,8 @@ export function validarEventoInbound(corpo, { agora = () => Date.now() } = {}) {
   if (c.falhaDecrypt && c.motivoFalhaDecrypt === null) return { ok: false, erro: "falha_sem_motivo" };
   if (!c.falhaDecrypt && c.motivoFalhaDecrypt !== null) return { ok: false, erro: "motivo_sem_falha" };
   if (c.falhaDecrypt && c.stubSistema) return { ok: false, erro: "falha_e_stub_sistema" };
+  // Privacidade: texto/mídia só de chat direto de cliente COM telefone real, sem fromMe/falha/stub (o Gateway já filtra; o backend não confia).
+  if ("tipoConteudo" in c && c.tipoConteudo !== "outro" && (c.telefoneE164 === null || c.fromMe || c.falhaDecrypt || c.stubSistema)) return { ok: false, erro: "conteudo_nao_elegivel" };
 
   return { ok: true, evento: { ...c } };
 }

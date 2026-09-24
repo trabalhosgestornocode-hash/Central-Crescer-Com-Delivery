@@ -22,6 +22,7 @@ import express from "express";
 import { exigirHmac } from "./whatsappGateway.hmac.js";
 import { criarWhatsappGatewayRouter } from "./whatsappGateway.routes.js";
 import { criarRepoSupabase } from "./whatsappGateway.repo.js";
+import { processarInbound } from "../comunicacao.inbox.service.js";
 
 // LIMITES DE CORPO (finitos, sempre) ------------------------------------------------------------
 // GENÉRICO — heartbeat, lease, reset, confirmar...: bodies de poucas centenas de bytes; 256 KiB já é folgado.
@@ -80,12 +81,14 @@ export function lerLimiteAuthStateBytes(valorEnv) {
  *   `repo` vem junto só para introspecção/teste (qual repositório foi
  *   efetivamente escolhido) — app.js usa só `path`/`router`.
  */
-export function montarWhatsappGatewayRouter({ provider, repo } = {}) {
+export function montarWhatsappGatewayRouter({ provider, repo, inbox } = {}) {
   const segredo = process.env.WHATSAPP_GATEWAY_SECRET;
   const organizacaoId = process.env.WHATSAPP_GATEWAY_ORGANIZACAO_ID;
   if (!segredo || !organizacaoId) return null; // feature inativa — nada montado
 
   const repoEfetivo = repo ?? criarRepoSupabase();
+  // Central de Comunicação: em produção (repo real) o inbox real decide quem é conversa; com `repo` injetado (testes) só entra por injeção explícita.
+  const inboxEfetivo = inbox ?? (repo ? undefined : { processarInbound });
   const limiteCorpoBytes = lerLimiteBytes(process.env.WHATSAPP_GATEWAY_MAX_BODY_BYTES, LIMITE_CORPO_PADRAO_BYTES);
   // Checkpoint G.3.3-B — fail-closed: uma env EXPLICITAMENTE inválida para o auth-state nunca mais cai num
   // Math.min/Math.max silencioso (podia virar 1 MiB ou 4 MiB sem avisar). Erro aqui = a feature Gateway não é
@@ -123,7 +126,7 @@ export function montarWhatsappGatewayRouter({ provider, repo } = {}) {
   });
   router.use(express.raw({ type: "*/*", limit: limiteCorpoBytes }));
   router.use(exigirHmac(segredo));
-  router.use(criarWhatsappGatewayRouter({ repo: repoEfetivo, organizacaoId, provider }));
+  router.use(criarWhatsappGatewayRouter({ repo: repoEfetivo, organizacaoId, provider, inbox: inboxEfetivo }));
 
   return { path: "/internal/comunicacao", router, limiteCorpoBytes, limiteAuthStateBytes, repo: repoEfetivo };
 }

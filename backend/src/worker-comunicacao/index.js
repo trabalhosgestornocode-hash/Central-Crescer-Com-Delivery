@@ -17,6 +17,7 @@ import { workerLog } from "./worker-comunicacao.logsafe.js";
 import { modoAtual } from "../modules/comunicacao/comunicacao.config.js";
 import { executarCiclo } from "../modules/comunicacao/comunicacao.alertas.service.js";
 import { criarWhatsAppService } from "../modules/comunicacao/whatsapp.service.js";
+import { criarGateIdentidade } from "../modules/comunicacao/comunicacao.identidade.js";
 import { criarBaileysGatewayProvider } from "../modules/comunicacao/providers/baileysGateway.provider.js";
 
 // Falhar no boot é melhor que subir com config incompleta/inválida
@@ -25,6 +26,8 @@ const config = carregarConfig();
 
 const whatsAppService = criarWhatsAppService({
   provider: criarBaileysGatewayProvider({ gatewayUrl: config.gatewayUrl, segredoHmac: config.segredoHmac }),
+  // O worker/automação só envia com a conta CONFIRMADA na aba Conexão (mesma regra do envio manual). Sem confirmação: provider = 0.
+  identidadeConfirmada: criarGateIdentidade({ env: process.env }),
 });
 
 const loop = criarLoopWorker({

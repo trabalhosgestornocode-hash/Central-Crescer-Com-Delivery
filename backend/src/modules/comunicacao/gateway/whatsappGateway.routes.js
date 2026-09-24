@@ -60,8 +60,11 @@ function epochValido(v) {
  *   opcional — quando presente, repassa o evento de mensagem recebida para
  *   os handlers registrados via `provider.onMessage()` (Checkpoint F).
  *   Sem isso, mensagem recebida só fica registrada pelo repo.
+ * @param {{processarInbound: (p: {organizacaoId: string, evento: object}) => Promise<{destino: string}>}} [deps.inbox]
+ *   Central de Comunicação — decide se o evento vira mensagem de conversa (SÓ responsável autorizado). Sem isto (testes antigos), o comportamento de
+ *   sempre: só o razão técnico.
  */
-export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
+export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider, inbox }) {
   const router = Router();
 
   // Checkpoint F — contrato inbound ESTRITO. 400 com um CÓDIGO fechado (nunca ecoa o valor). O organizacaoId vem da CONFIG do backend, nunca do
@@ -71,8 +74,20 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider }) {
     try {
       const v = validarEventoInbound(req.corpoJson);
       if (!v.ok) return res.status(400).json({ error: "mensagem_recebida_invalida", campo: v.erro });
-      const r = await repo.registrarMensagemRecebida(organizacaoId, v.evento);
-      if (!r.duplicada && motivoBloqueioAutomacao({ ...v.evento, estado: r.estado }) === null) provider?._receberEventoMensagem?.(v.evento);
+      // Central de Comunicação — o CONTEÚDO (texto/tipo) só serve à conversa: nunca vai ao razão técnico (090) nem ao provider/automação.
+      const { tipoConteudo: _t, texto: _x, ...tecnico } = v.evento;
+      // PRIVACIDADE: resolve o contato ANTES de gravar. Autorizado ⇒ conversa. Desconhecido ⇒ ignorado, e o razão técnico NÃO guarda o telefone dele.
+      // Uma falha do inbox (ex.: migration 096 ainda não aplicada) NUNCA derruba o razão técnico: degrada para IGNORADO (fail-closed) e loga SEM dados.
+      let decisao = null;
+      if (inbox) {
+        try { decisao = await inbox.processarInbound({ organizacaoId, evento: v.evento }); } catch (e) {
+          console.error(JSON.stringify({ evento: "central.inbox_falhou", erro: String(e?.name ?? "erro").slice(0, 60) }));
+          decisao = { destino: "IGNORADO", motivo: "falha_interna" };
+        }
+      }
+      const paraRazao = decisao && decisao.destino !== "INBOX" ? { ...tecnico, telefoneE164: null, telefoneOrigem: null } : tecnico;
+      const r = await repo.registrarMensagemRecebida(organizacaoId, paraRazao);
+      if (!r.duplicada && motivoBloqueioAutomacao({ ...tecnico, estado: r.estado }) === null) provider?._receberEventoMensagem?.(tecnico);
       res.json({ ok: true, duplicada: r.duplicada, estado: r.estado });
     } catch (e) { next(e); }
   });

@@ -853,7 +853,7 @@ describe("baileysSession — lifecycle", () => {
     assert.equal(fabricaSocket.criados.length, 1); // nenhum novo socket foi criado
   });
 
-  test("QR recebido não muda o status para CONNECTED e dispara heartbeat com o qr", async () => {
+  test("QR recebido não muda o status para CONNECTED e dispara heartbeat SEM o qr (o QR nunca vai ao backend)", async () => {
     const fabricaSocket = socketFalsoFabrica();
     const backendClient = backendClientFalso();
     const sessao = criarSessaoBaileys({
@@ -866,7 +866,11 @@ describe("baileysSession — lifecycle", () => {
 
     assert.equal(sessao._status(), STATUS_CONEXAO.CONNECTING);
     assert.equal(backendClient.notificarHeartbeat.mock.calls.length, 1);
-    assert.equal(backendClient.notificarHeartbeat.mock.calls[0].arguments[0].qr, "QR-STRING-FAKE-DE-TESTE");
+    // O QR é segredo de pareamento: fica só em memória e é pedido por GET /whatsapp/qr. Nenhum campo do heartbeat pode conter o valor.
+    const payload = backendClient.notificarHeartbeat.mock.calls[0].arguments[0];
+    assert.equal(payload.qr, undefined);
+    assert.ok(!JSON.stringify(payload).includes("QR-STRING-FAKE-DE-TESTE"));
+    assert.equal(sessao.obterQrAtual(), "QR-STRING-FAKE-DE-TESTE", "continua disponível para a rota /qr");
   });
 });
 
@@ -980,9 +984,9 @@ describe("baileysSession — eventos de mensagem", () => {
       await tick();
       assert.equal(enviados().length, 1);
       const e = enviados()[0];
-      assert.deepEqual(Object.keys(e).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem"]);
+      assert.deepEqual(Object.keys(e).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem", "texto", "tipoConteudo"]);
       assert.deepEqual([e.contratoInbound, e.providerMessageId, e.origemTipo, e.origemJidTipo, e.fromMe, e.telefoneE164, e.telefoneOrigem, e.falhaDecrypt, e.motivoFalhaDecrypt, e.stubSistema], [1, "m1", "LIVE", "direct_pn", false, "+5511999990000", "JID_PN", false, null, false]);
-      assert.ok(!JSON.stringify(e).includes("oi"), "conteúdo nunca vai ao backend");
+      assert.deepEqual([e.tipoConteudo, e.texto], ["texto", "oi"], "Central: o TEXTO de um chat direto de cliente com telefone real vai ao backend (que só o persiste se o contato for autorizado)");
       assert.equal(handler.mock.calls.length, 1);
       const h = handler.mock.calls[0].arguments[0];
       assert.deepEqual({ ...h, conteudo: undefined }, { ...e, conteudo: undefined }); assert.deepEqual(h.conteudo, { conversation: "oi" });

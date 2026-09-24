@@ -109,7 +109,7 @@ function providerComSpy() {
   const chamadas = [];
   const original = provider.sendText.bind(provider);
   provider.sendText = async (a) => { chamadas.push(a); return original(a); };
-  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider }) };
+  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }) };
 }
 const lote = (whatsAppService, extra = {}) => processarProximoLote({
   limite: 20, worker: `ttl-${tag}`, whatsAppService, agora: new Date(), verificarPendenciaAindaExiste: async () => true, resolverHabilitacao: HABILITADA, ...extra,

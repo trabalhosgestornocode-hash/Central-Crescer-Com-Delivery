@@ -26,7 +26,7 @@
 // existe sessão real a preservar) uma queda transitória justifica
 // reconexão automática. Ver `autenticadaAlgumaVez` abaixo.
 
-import { generateMessageIDV2 } from "baileys";
+import { generateMessageIDV2, jidNormalizedUser } from "baileys";
 import { log, mascararTelefone } from "./logsafe.js";
 import { erro, CODIGOS } from "./errors.js";
 import { criarLoggerBaileysSilencioso } from "./logger-baileys-silencioso.js";
@@ -177,6 +177,11 @@ export function criarSessaoBaileys({
   let status = STATUS_CONEXAO.DISCONNECTED;
   let telefone = null;
   let qrAtual = null;
+  // Aba Conexão — metadados do QR (NUNCA o valor): quando foi gerado e qual é (1º vive ~60 s, os seguintes ~20 s no Baileys). Só em memória.
+  let qrGeradoEm = null;
+  let qrOrdem = 0;
+  // Último fechamento do socket (vocabulário fechado, sem valores do erro) — alimenta "motivo da última desconexão".
+  let ultimoFechamento = null;
   let tentativasReconexao = 0;
   let heartbeatTimer = null;
   // Checkpoint C3.5-B, item 4 — CONCEITO LOCAL, nunca persistido: só impede
@@ -345,9 +350,12 @@ export function criarSessaoBaileys({
         return;
       }
       qrAtual = qr;
+      qrGeradoEm = new Date().toISOString();
+      qrOrdem += 1;
       status = STATUS_CONEXAO.CONNECTING;
-      log("info", "conexao.qr_gerado", {}); // NUNCA loga o valor do QR
-      heartbeat({ qr }).catch(() => {});
+      log("info", "conexao.qr_gerado", { ordem: qrOrdem }); // NUNCA loga o valor do QR
+      // O QR NUNCA vai ao backend: nem no heartbeat. Quem precisa dele (aba Conexão) o pede por GET /whatsapp/qr (HMAC, no-store).
+      heartbeat().catch(() => {});
       return;
     }
 
@@ -363,7 +371,7 @@ export function criarSessaoBaileys({
       // e o `authSessionId` esperado SINCRONAMENTE, antes de qualquer
       // `await` — é essa captura síncrona que garante que um callback de
       // socket/geração antiga nunca confirme uma geração mais nova.
-      qrAtual = null;
+      qrAtual = null; qrGeradoEm = null; qrOrdem = 0;   // conectou: o QR desaparece na hora
       tentativasReconexao = 0;
       falhasInesperadasReconexao = 0;
       socketOpen = true;
@@ -386,7 +394,7 @@ export function criarSessaoBaileys({
     if (connection === "close") {
       // QR expira com o fechamento do socket que o gerou — um novo QR (se
       // houver reconexão) vem num evento `qr` futuro, nunca reaproveita este.
-      qrAtual = null;
+      qrAtual = null; qrGeradoEm = null;
       origemSocket = null; // este socket morreu — qualquer socket futuro define sua própria origem
       socketOpen = false;
       authConfirmado = false;
@@ -398,6 +406,7 @@ export function criarSessaoBaileys({
       // — ver diagnosticarErroFechamento acima.
       const diagnosticoErro = codigo == null ? diagnosticarErroFechamento(lastDisconnect?.error) : null;
 
+      ultimoFechamento = { em: new Date().toISOString(), razao: NOMES_DISCONNECT_REASON[codigo] ?? "desconhecido", codigo: codigo ?? null };
       if (codigo === DisconnectReasonLoggedOut) {
         // TERMINAL — nunca reconecta sozinho. Exige novo QR humano.
         //
@@ -1532,7 +1541,12 @@ export function criarSessaoBaileys({
     /** QR atual (string) ou null — só em memória, nunca persistido/logado. Ver routes.js#/whatsapp/qr. */
     obterQrAtual: () => qrAtual,
     async getStatus() {
-      return { conectado: status === STATUS_CONEXAO.CONNECTED, provider: "baileys", telefone, atualizadoEm: new Date().toISOString(), status };
+      return {
+        conectado: status === STATUS_CONEXAO.CONNECTED, provider: "baileys", telefone, atualizadoEm: new Date().toISOString(), status,
+        // Aba Conexão: fatos derivados do estado real (nunca o QR): há QR esperando leitura? está reconectando? por que fechou da última vez?
+        qrDisponivel: qrAtual !== null, reconectando: reconexaoPendente || (status === STATUS_CONEXAO.CONNECTING && tentativasReconexao > 0 && qrAtual === null),
+        tentativasReconexao, conectando: conectandoAgora, ultimoFechamento,
+      };
     },
     /**
      * H.4-B.4 — 1) consulta o PRÓPRIO WhatsApp (`onWhatsApp`) e usa o JID CANÔNICO devolvido (fail-closed: sem confirmação, NÃO envia — nada saiu, `preEnvio`);
@@ -1577,6 +1591,12 @@ export function criarSessaoBaileys({
       log("info", "send_resolved", { ...contextoLog(), providerMessageId, jid: jidMascarado, durationMs: Date.now() - t1, idPreGeradoConfere: providerMessageId === providerIdGerado });
       return { providerMessageId, enviadoEm: new Date().toISOString() };
     },
+    /** Metadados do QR atual (nunca persistido/logado). `expiraEm` = estimativa do Baileys: 60 s para o 1º QR do socket, 20 s para os seguintes. */
+    infoQr() {
+      if (qrAtual === null || !qrGeradoEm) return { geradoEm: null, expiraEm: null, ordem: 0 };
+      const vida = qrOrdem <= 1 ? 60_000 : 20_000;
+      return { geradoEm: qrGeradoEm, expiraEm: new Date(Date.parse(qrGeradoEm) + vida).toISOString(), ordem: qrOrdem };
+    },
     onMessage(handler) { handlersMensagem.push(handler); },
     async markAsRead({ providerMessageId, telefoneE164 }) {
       if (!socket) throw erro(CODIGOS.NAO_CONECTADO);
@@ -1598,5 +1618,75 @@ export function criarSessaoBaileys({
     _conectandoAgora: () => conectandoAgora,
     /** Checkpoint G.0.1 — só números (Parte I/W): prova que a concorrência para o backend nunca passa do limite. */
     metricasNotificacaoBackend: () => filaNotificacaoBackend.metricas(),
+    /**
+     * Aba Conexão — perfil da PRÓPRIA conta conectada. Nada inventado: campo que a API instalada não entrega de forma confiável sai `null`.
+     * nome = `socket.user.name` (nome do perfil); foto = `profilePictureUrl`; descrição = `fetchStatus` (recado); tipo = BUSINESS só com evidência
+     * (`verifiedName` ou perfil comercial devolvido) — senão DESCONHECIDO (nunca afirma "pessoal"). Nunca lança; nunca devolve credencial.
+     * @returns {Promise<{disponivel: boolean, motivo?: string, nome?: string|null, telefoneE164?: string|null, fotoUrl?: string|null, descricao?: string|null, tipoConta?: 'BUSINESS'|'DESCONHECIDO'}>}
+     */
+    async perfilConta() {
+      if (status !== STATUS_CONEXAO.CONNECTED || !socket) return { disponivel: false, motivo: "nao_conectado" };
+      const sock = socket;
+      const eu = sock.user ?? sock.authState?.creds?.me ?? null;
+      if (!eu?.id) return { disponivel: false, motivo: "sem_identidade" };
+      let jid; try { jid = jidNormalizedUser(eu.id); } catch { return { disponivel: false, motivo: "sem_identidade" }; }
+      const digitos = String(jid).split("@")[0].replace(/D/g, "");
+      const limite = (p, ms = config?.perfilTimeoutMs ?? 8000) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
+      const seguro = async (fn) => { try { return await limite(fn()); } catch { return null; } };
+      const foto = typeof sock.profilePictureUrl === "function" ? await seguro(() => sock.profilePictureUrl(jid, "preview")) : null;
+      const recado = typeof sock.fetchStatus === "function" ? await seguro(() => sock.fetchStatus(jid)) : null;
+      const comercial = typeof sock.getBusinessProfile === "function" ? await seguro(() => sock.getBusinessProfile(jid)) : null;
+      const textoRecado = Array.isArray(recado) ? recado[0]?.status?.status : recado?.status?.status ?? recado?.status;
+      return {
+        disponivel: true,
+        nome: typeof eu.name === "string" && eu.name.trim() ? eu.name.trim().slice(0, 80) : (typeof eu.verifiedName === "string" ? eu.verifiedName.slice(0, 80) : null),
+        telefoneE164: /^[1-9][0-9]{7,14}$/.test(digitos) ? `+${digitos}` : null,
+        fotoUrl: typeof foto === "string" && foto.startsWith("https://") ? foto : null,
+        descricao: typeof textoRecado === "string" && textoRecado.trim() ? textoRecado.trim().slice(0, 200) : (typeof comercial?.description === "string" && comercial.description.trim() ? comercial.description.trim().slice(0, 200) : null),
+        tipoConta: eu.verifiedName || (comercial && typeof comercial === "object") ? "BUSINESS" : "DESCONHECIDO",
+      };
+    },
+    /**
+     * Aba Conexão — DESCONECTA A CONTA: (1) desvincula o aparelho no WhatsApp (`logout()`, melhor esforço e com teto de tempo — falhar não impede) e
+     * (2) faz o RESET já existente (`resetarSessao`: desired=DISCONNECTED, fecha o socket, apaga SÓ o auth do Gateway). NÃO cria um segundo mecanismo de sessão
+     * e NÃO toca no histórico do Crescer (mensagens vivem no backend).
+     * @returns {Promise<{ok: true, desvinculado: boolean}>}
+     */
+    async desconectarConta({ desvincular = true } = {}) {
+      let desvinculado = false;
+      if (desvincular && socket && status === STATUS_CONEXAO.CONNECTED && typeof socket.logout === "function") {
+        try {
+          await Promise.race([socket.logout(), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), config?.logoutTimeoutMs ?? 8000))]);
+          desvinculado = true;
+        } catch { log("warn", "desconectar_conta.logout_falhou", {}); }
+        // o close 401 gerado pelo logout assenta o LOGGED_OUT antes do reset (que é a via permitida para sair dele)
+        for (let i = 0; i < 40 && status === STATUS_CONEXAO.CONNECTED; i += 1) await new Promise((r) => setTimeout(r, 50));
+      }
+      await resetarSessao();
+      return { ok: true, desvinculado };
+    },
+
+    /**
+     * Central de Comunicação — URL da foto de perfil (`preview`) de um número, no JID CANÔNICO (mesma resolução do envio). NUNCA lança por ausência de foto:
+     * sem foto / privacidade do contato / número fora do WhatsApp / sessão fora do ar ⇒ `{url: null, motivo}` (a interface cai no avatar de iniciais).
+     * Não envia nada, não loga o número nem a URL. Só o backend (HMAC) chama.
+     * @returns {Promise<{url: string|null, motivo: 'ok'|'sem_foto'|'nao_conectado'|'destinatario'|'erro'}>}
+     */
+    async fotoPerfil({ telefoneE164 }) {
+      if (status !== STATUS_CONEXAO.CONNECTED || !socket || typeof socket.profilePictureUrl !== "function") return { url: null, motivo: "nao_conectado" };
+      const sock = socket;
+      let jid;
+      try {
+        jid = (await resolverJidCanonico({ socket: sock, telefoneE164, timeoutMs: config?.destinatarioTimeoutMs })).jid;
+      } catch { return { url: null, motivo: "destinatario" }; }
+      try {
+        const url = await sock.profilePictureUrl(jid, "preview", config?.fotoPerfilTimeoutMs ?? 8000);
+        return typeof url === "string" && url.startsWith("https://") ? { url, motivo: "ok" } : { url: null, motivo: "sem_foto" };
+      } catch (e) {
+        // 401 (privacidade) e 404 (sem foto) são o caso NORMAL — não são erro do Gateway.
+        const code = e?.data ?? e?.output?.statusCode;
+        return { url: null, motivo: code === 401 || code === 404 ? "sem_foto" : "erro" };
+      }
+    },
   };
 }

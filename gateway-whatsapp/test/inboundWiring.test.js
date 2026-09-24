@@ -158,7 +158,7 @@ describe("C.9.4 — pipeline: encaminhada ao backend e a DÍVIDA do Checkpoint F
     assert.equal(enviados[2], null, "id de GRUPO NÃO é telefone");
     assert.equal(enviados[3], null, "status@broadcast NÃO é telefone");
     // O payload agora é o CONTRATO (origemTipo, origemJidTipo, fromMe, falhaDecrypt...): ver test/inboundContrato.test.js.
-    for (const c of backendClient.notificarMensagemRecebida.mock.calls) assert.deepEqual(Object.keys(c.arguments[0]).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem"]);
+    for (const c of backendClient.notificarMensagemRecebida.mock.calls) assert.deepEqual(Object.keys(c.arguments[0]).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem", "texto", "tipoConteudo"]);
   });
 
   test("um stub de falha de decrypt (CIPHERTEXT, sem conteúdo) liberado do buffer é encaminhado, mas AGORA marcado como falhaDecrypt (o backend o põe em quarentena, nunca como mensagem normal)", async () => {

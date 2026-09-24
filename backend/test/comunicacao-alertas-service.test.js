@@ -128,7 +128,7 @@ function criarProviderComSpy() {
   const chamadas = [];
   const original = provider.sendText.bind(provider);
   provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider }) };
+  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }) };
 }
 
 const lote = (whatsAppService, extra = {}) => processarProximoLote({
@@ -402,6 +402,28 @@ describe("D.3 — bloqueio TRANSITÓRIO adia (não vira BLOCKED terminal)", { sk
     const p2 = criarProviderComSpy();
     p2.provider.getStatus = async () => { throw new Error("gateway fora do ar"); };
     await esperarAdiado(par, "PROVIDER_OFFLINE", {}, p2);
+    await limpar(par);
+  });
+
+  test("CONNECTED sozinho NÃO basta: conta não confirmada (gate false, sem gate ou gate que lança) -> ADIADO IDENTIDADE_NAO_CONFIRMADA, provider = 0, sem consumir tentativa", async (t) => {
+    if (!migracaoOk) return t.skip("migrations 082/087 ainda não aplicadas — pulando.");
+    await definirModo(MODOS.NORMAL, {});
+    const par = await alertaComMensagem("2026-09-18");
+    for (const gate of [async () => false, null, async () => { throw new Error("banco fora"); }]) {
+      const provider = criarFakeProvider(); const chamadas = [];
+      provider.sendText = async (a) => { chamadas.push(a); return { providerMessageId: "X" }; };
+      const whatsAppService = criarWhatsAppService({ provider, identidadeConfirmada: gate });
+      const msg = await esperarAdiado(par, "IDENTIDADE_NAO_CONFIRMADA", {}, { chamadas, whatsAppService });
+      assert.equal(msg.tentativas, 0, "adiar não consome tentativa");
+      await supabase.from("comunicacao_mensagens").update({ disponivel_em: new Date(Date.now() - 1000).toISOString() }).eq("id", par.job.id);
+    }
+    // com a conta CONFIRMADA o mesmo job segue e o provider é chamado UMA vez
+    const provider = criarFakeProvider(); const chamadas = [];
+    const original = provider.sendText.bind(provider);
+    provider.sendText = async (a) => { chamadas.push(a); return original(a); };
+    const resultados = await lote(criarWhatsAppService({ provider, identidadeConfirmada: async () => true }));
+    assert.equal(resultados.find((r) => r.id === par.job.id)?.resultado, "ENVIADO");
+    assert.equal(chamadas.length, 1);
     await limpar(par);
   });
 

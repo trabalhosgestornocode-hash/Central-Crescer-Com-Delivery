@@ -124,7 +124,7 @@ function criarProviderComSpy() {
   const chamadas = [];
   const original = provider.sendText.bind(provider);
   provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider }) };
+  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }) };
 }
 const lote = (whatsAppService, extra = {}) => processarProximoLote({
   limite: 20, worker: "teste-tardio", whatsAppService, agora: AGORA,

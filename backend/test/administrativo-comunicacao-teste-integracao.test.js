@@ -32,11 +32,11 @@ const TEXTO_ESPERADO = (nome) => `Mensagem de teste — Crescer com Delivery.\n\
 
 function servicoFalso(impl) {
   const enviarTexto = mock.fn(impl ?? (async () => ({ providerMessageId: `3EB0TESTE${Date.now()}${++seq}`, enviadoEm: new Date().toISOString() })));
-  return { enviarTexto };
+  return { enviarTexto, identidadeConfirmada: async () => true };
 }
 const envOk = () => ({ COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: telefone, WHATSAPP_GATEWAY_URL: "http://gateway.invalid", WHATSAPP_GATEWAY_SECRET: "x" });
 const depsBase = (extra = {}) => ({
-  env: envOk(), estadoGateway: { estado: "conectado" }, lerModo: async () => "DISABLED", whatsAppService: servicoFalso(), ...extra,
+  env: envOk(), estadoGateway: { estado: "conectado" }, identidadeConfirmada: true, lerModo: async () => "DISABLED", whatsAppService: servicoFalso(), ...extra,
 });
 const req = (extra = {}) => ({ organizacaoId: orgA, unidadeId: uniA, testeId: uuid(), confirmacaoExplicita: true, ...extra });
 const linha = async (id) => (await supabase.from("comunicacao_mensagens").select("*").eq("id", id).single()).data;

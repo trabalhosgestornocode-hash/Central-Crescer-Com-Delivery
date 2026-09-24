@@ -20,6 +20,7 @@ import { painelAdmApi } from "./painelAdmApi.js";
 import { travarScroll, destravarScroll, resetScrollLock } from "./scrollLock.js";
 import { renderPerformance } from './performance.js';
 import { renderDesenvolvimento, montarCardDesenvolvimento } from './desenvolvimento.js';
+import { renderCentral, pararCentral } from './central/centralComunicacao.js';
 import { SECOES_PDF, secoesPadrao, gerarPdf, previewPdf, nomeArquivoPdf } from "./painelAdmPdf.js";
 import {
   card, cards, secao, carregando, erro, vazio, busca, metrica, barraSaude,
@@ -136,6 +137,8 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
   // pelo próprio botão de fechar (ex.: o gestor clicou num item de dentro do
   // painel de cards pra ir direto pra empresa/unidade). Ver scrollLock.js.
   resetScrollLock();
+  pararCentral();   // toda troca de tela encerra a Central (timers, assistente de conexão, listeners)
+  if (entrada.id === 'comunicacao') return renderCentralComunicacao(v, api);
   if (entrada.id === 'performance') return renderPerformance(v, api, mes, nav.aoAcessoRevogado);
   if (entrada.id === 'desenvolvimento') return renderDesenvolvimento(v, api, nav.aoAcessoRevogado);
 
@@ -174,16 +177,6 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
     } else if (entrada.id === "mentorados") {
       ultimoDados.mentorados = await api.mentorados();
       pintarMentorados();
-    } else if (entrada.id === "comunicacao") {
-      ultimoDados.comunicacaoApi = api;
-      const [resumoC, orgsC, ativC] = await Promise.all([
-        api.comunicacaoResumo(), api.comunicacaoOrganizacoes({}),
-        Promise.resolve().then(() => api.comunicacaoAtivacao?.()).catch(() => null), // painel de ativação é acessório: nunca derruba a tela
-      ]);
-      ultimoDados.comunicacaoResumo = resumoC;
-      ultimoDados.comunicacaoOrgs = orgsC;
-      ultimoDados.comunicacaoAtivacao = ativC ?? null;
-      pintarComunicacao();
     } else {
       v.innerHTML = htmlVisaoGeral(await api.visaoGeral({ mes }));
       ligarLista();
@@ -1399,7 +1392,7 @@ function fecharModalTeste() {
   pararAcompanhamentoTeste();
   const houveEnvio = !!estadoTeste.mensagemId;
   fecharDrawerComunicacao();
-  if (houveEnvio) carregarSubAbaComunicacao();
+  if (houveEnvio) aoAtualizarCentral?.();
 }
 
 function ligarModalTeste() {
@@ -1461,6 +1454,55 @@ async function abrirModalTeste() {
     estadoTeste.preparo = await api.comunicacaoTestePreparo({ organizacaoId });
   } catch (err) { estadoTeste.fase = "erro"; estadoTeste.erro = err.message; estadoTeste.preparo = estadoTeste.preparo ?? { organizacao: {}, unidade: {}, contato: null }; }
   pintarModalTeste();
+}
+
+// ---- CENTRAL DE COMUNICAÇÃO (redesenho): a tela é montada por central/centralComunicacao.js; o que ficou aqui são as costuras com o que já existia ----
+// (ativação global do piloto, drawer de configuração da empresa, detalhe de mensagem e teste controlado), reaproveitados sem duplicar regra.
+
+/** Repinta a aba que estiver aberta na Central depois de uma ação legada (ativação/teste). Definido por `ligarLegadoCentral`. */
+let aoAtualizarCentral = null;
+
+/** Liga os botões de ATIVAÇÃO e de TESTE que o HTML legado (htmlAtivacaoPiloto/htmlAbaTeste) desenha dentro da Central. Escopo: só dentro de `host`. */
+function ligarLegadoCentral(host, { aoAtualizar } = {}) {
+  aoAtualizarCentral = aoAtualizar ?? null;
+  const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
+  const q = (sel) => host.querySelector(sel);
+  q('[data-padm-acao="pedir-ativar-piloto"]')?.addEventListener("click", (e) => {
+    e.currentTarget.hidden = true;
+    const painel = e.currentTarget.parentElement?.querySelector(".padm-ativacao-confirmar");
+    if (painel) painel.hidden = false;
+  });
+  q('[data-padm-acao="cancelar-ativar-piloto"]')?.addEventListener("click", (e) => {
+    const raiz = e.currentTarget.closest(".padm-ativacao-acao");
+    raiz?.querySelector(".padm-ativacao-confirmar")?.setAttribute("hidden", "");
+    const botao = raiz?.querySelector('[data-padm-acao="pedir-ativar-piloto"]');
+    if (botao) botao.hidden = false;
+  });
+  q('[data-padm-acao="confirmar-ativar-piloto"]')?.addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true;
+    try { await api.comunicacaoDefinirModo("NORMAL"); aoAtualizarCentral?.(); } catch (err) { b.disabled = false; alert(err.message || "Não foi possível ativar o piloto."); }
+  });
+  q('[data-padm-acao="desativar-comunicacao"]')?.addEventListener("click", async (e) => {
+    const b = e.currentTarget; b.disabled = true;
+    try { await api.comunicacaoDefinirModo("DISABLED"); aoAtualizarCentral?.(); } catch (err) { b.disabled = false; alert(err.message || "Não foi possível desativar a comunicação."); }
+  });
+  host.querySelectorAll("[data-padm-com-msg]").forEach((b) => b.addEventListener("click", () => abrirDetalheMensagem(b.dataset.padmComMsg)));
+  q('[data-padm-acao="abrir-teste"]')?.addEventListener("click", () => abrirModalTeste());
+}
+
+/** Monta a Central de Comunicação na tela (a costura entre o painel legado e o módulo novo). */
+function renderCentralComunicacao(v, api) {
+  ultimoDados.comunicacaoApi = api;
+  return renderCentral(v, api, {
+    abrirEmpresa: (organizacaoId) => abrirDrawerComunicacao(organizacaoId),
+    abrirDetalheMensagem: (id) => abrirDetalheMensagem(id),
+    irParaTela: (id) => nav.irParaTela(id),
+    aoAcessoRevogado: nav.aoAcessoRevogado,
+    operadorNome: () => (typeof document !== "undefined" ? document.getElementById("padm-nome")?.textContent?.trim() || null : null),
+    htmlAtivacao: (a) => htmlAtivacaoPiloto(a),
+    htmlTeste: (dados) => htmlAbaTeste(dados),
+    ligarLegado: (host, opcoes) => ligarLegadoCentral(host, opcoes),
+  });
 }
 
 function ligarComunicacao() {

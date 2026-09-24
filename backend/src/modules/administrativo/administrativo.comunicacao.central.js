@@ -8,10 +8,10 @@ import * as repo from "./administrativo.comunicacao.repo.js";
 import { obterConfig, obterTtlHoras, obterJitterMaxMs } from "../comunicacao/comunicacao.config.js";
 import { STATUS_MENSAGEM, TIPOS_ALERTA } from "../comunicacao/comunicacao.constants.js";
 import { ehAvisoTardio, PROPOSITO, JANELA_REFORCO, CUTOFF_REFORCO, ESPACAMENTO_MINIMO_HORAS } from "../comunicacao/comunicacao.reforco.js";
-import { PROPOSITO_TESTE, TIPO_MENSAGEM_TESTE } from "../comunicacao/comunicacao.fila.repo.js";
+import { PROPOSITO_TESTE, TIPO_MENSAGEM_TESTE, PROPOSITO_MANUAL, TIPO_MENSAGEM_MANUAL } from "../comunicacao/comunicacao.fila.repo.js";
 import * as tentativasRepo from "../comunicacao/comunicacao.tentativas.repo.js";
 
-export const ORIGENS_MENSAGEM = Object.freeze(["automacao", "reforco", "aviso_tardio", "teste_controlado"]);
+export const ORIGENS_MENSAGEM = Object.freeze(["automacao", "reforco", "aviso_tardio", "teste_controlado", "manual_painel"]);
 const STATUS_VALIDOS = Object.values(STATUS_MENSAGEM);
 
 /** Telefone para a UI: só os 2 últimos dígitos (`********88`). Nunca o número completo, nunca o DDI/DDD. */
@@ -25,6 +25,7 @@ export const abreviarId = (id) => (id ? `${String(id).slice(0, 8)}…` : null);
 
 /** Origem AMIGÁVEL de uma mensagem (derivada; nunca um campo novo no banco). */
 export function origemDaMensagem(m) {
+  if (m?.metadados?.proposito === PROPOSITO_MANUAL || m?.tipo === TIPO_MENSAGEM_MANUAL) return "manual_painel";
   if (m?.metadados?.proposito === PROPOSITO_TESTE || m?.tipo === TIPO_MENSAGEM_TESTE) return "teste_controlado";
   if (m?.metadados?.proposito === PROPOSITO.REFORCO) return "reforco";
   if (ehAvisoTardio(m)) return "aviso_tardio";
@@ -55,6 +56,7 @@ function projetarMensagem(m, { orgPorId, unidadePorId, contatoPorId }) {
     criadoEm: m.created_at, agendadoPara: m.disponivel_em ?? null, enviadoEm: m.enviado_em ?? null,
     entregueEm: m.entregue_em ?? null, lidoEm: m.lido_em ?? null, falhouEm: m.falhou_em ?? null,
     erro: erroCurto(m.erro),
+    operador: m.metadados?.ator_nome ? String(m.metadados.ator_nome).slice(0, 80) : null,
   };
 }
 

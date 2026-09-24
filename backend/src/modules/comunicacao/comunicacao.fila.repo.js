@@ -433,6 +433,49 @@ export async function criarMensagemTeste({ testeId, organizacaoId, unidadeId, co
   return { criada: false, mensagem: existente.data, worker };
 }
 
+// ---------------------------------------------------------------------------
+// ENVIO MANUAL (Central de Comunicação) — mensagem escrita por um OPERADOR HUMANO na conversa. MESMO outbox, MESMAS RPCs fenced e MESMOS recibos
+// (095) do resto: nenhum segundo pipeline. Sem alerta, fora do scheduler/worker.
+// ---------------------------------------------------------------------------
+export const TIPO_MENSAGEM_MANUAL = "mensagem_manual";
+export const PROPOSITO_MANUAL = "manual";
+export const ORIGEM_MANUAL_PAINEL = "manual_painel";
+export const chaveIdempotenciaManual = (envioId) => `wa:manual:${envioId}:v1`;
+const LEASE_MANUAL_SEGUNDOS = 120;
+/**
+ * `expira_em` DEPOIS do fim do lease NUNCA pode existir: o claim (088) só pega PROCESSING de lease vencido se `expira_em > now()`. Com `expira_em` <= fim do
+ * lease, uma requisição que morra entre criar e iniciar o envio deixa uma linha que o worker de automação JAMAIS reivindica (a varredura de TTL a cancela).
+ */
+const TTL_MANUAL_SEGUNDOS = 60;
+
+/**
+ * Cria a mensagem manual JÁ REIVINDICADA por quem a criou (PROCESSING, claim_geracao=1, max_tentativas=1). IDEMPOTENTE por `wa:manual:{envioId}:v1`
+ * (UNIQUE do banco): só QUEM CRIA (`criada: true`) pode chamar o provider — duplo clique/reenvio da tela ⇒ 1 criadora, 1 envio.
+ * O ator humano fica em `metadados` (id do perfil e nome), para auditoria e para a bolha mostrar "quem enviou".
+ * @returns {Promise<{criada: boolean, mensagem: object, worker: string}>}
+ */
+export async function criarMensagemManual({ envioId, organizacaoId, unidadeId = null, contatoId, destinatarioPerfilId = null, conteudo, atorPerfilId = null, atorNome = null }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const agora = new Date();
+  const worker = `manual_painel:${envioId}`;
+  const linha = {
+    alerta_id: null, organizacao_id: organizacaoId, unidade_id: unidadeId, contato_id: contatoId, destinatario_perfil_id: destinatarioPerfilId,
+    canal: CANAIS.WHATSAPP, direcao: DIRECAO.SAIDA, tipo: TIPO_MENSAGEM_MANUAL, conteudo, idempotency_key: chaveIdempotenciaManual(envioId),
+    status: STATUS_MENSAGEM.PROCESSING, disponivel_em: agora.toISOString(), expira_em: new Date(agora.getTime() + TTL_MANUAL_SEGUNDOS * 1000).toISOString(),
+    max_tentativas: 1, claimed_by: worker, claimed_at: agora.toISOString(), claim_geracao: 1,
+    claim_expira_em: new Date(agora.getTime() + LEASE_MANUAL_SEGUNDOS * 1000).toISOString(),
+    metadados: { proposito: PROPOSITO_MANUAL, origem: ORIGEM_MANUAL_PAINEL, envio_id: envioId, ator_perfil_id: atorPerfilId, ator_nome: atorNome },
+  };
+  const { data, error } = await db.from("comunicacao_mensagens").insert(linha).select("*").single();
+  // 23505 = a UNIQUE(idempotency_key) do banco: OUTRO chamador criou o mesmo envio primeiro — este NÃO é o criador.
+  if (error && String(error.code) !== "23505") throw ApiError.internal(error.message);
+  if (!error && data) return { criada: true, mensagem: data, worker };
+  const existente = await db.from("comunicacao_mensagens").select("*").eq("idempotency_key", chaveIdempotenciaManual(envioId)).maybeSingle();
+  if (existente.error) throw ApiError.internal(existente.error.message);
+  if (!existente.data) throw ApiError.internal("mensagem manual: nem criada nem encontrada");
+  return { criada: false, mensagem: existente.data, worker };
+}
+
 /** Mensagens de teste que contam para o LIMITE (todas menos as canceladas/bloqueadas antes de qualquer envio), da mais antiga para a mais nova. */
 export async function listarMensagensTesteContabilizadas(deps = {}) {
   const db = deps.supabase ?? supabase;

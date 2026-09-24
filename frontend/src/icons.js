@@ -78,6 +78,18 @@ const PATHS = {
   scale: '<path d="M12 3v18M7 21h10"/><path d="M6.5 6 3 13a3.5 3.5 0 0 0 7 0L6.5 6zM17.5 6 14 13a3.5 3.5 0 0 0 7 0L17.5 6z"/><path d="M6.5 6h11"/>',
   activity: '<path d="M3 12h4l3 8 4-16 3 8h4"/>',
   filter: '<path d="M3 4h18l-7 8.5V20l-4-2v-5.5z"/>',
+  // Central de Comunicação
+  x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  "arrow-left": '<path d="M19 12H5M11 6l-6 6 6 6"/>',
+  "panel-right": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>',
+  more: '<circle cx="5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.3" fill="currentColor" stroke="none"/>',
+  user: '<circle cx="12" cy="8" r="3.6"/><path d="M4.5 20.5a7.5 7.5 0 0 1 15 0"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/><path d="M12 7.6h.01"/>',
+  history: '<path d="M3 12a9 9 0 1 0 2.9-6.6L3 8"/><path d="M3 3.5V8h4.5"/><path d="M12 7.5V12l3 2"/>',
+  zap: '<path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12z"/>',
+  copy: '<rect x="8.5" y="8.5" width="12" height="12" rx="2"/><path d="M15.5 8.5v-3a2 2 0 0 0-2-2h-8a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"/>',
+  "mail-open": '<path d="M3 9.5 12 3l9 6.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m3 9.5 9 6.5 9-6.5"/>',
+  wifi: '<path d="M2.5 9.2a14 14 0 0 1 19 0"/><path d="M5.6 12.6a9.6 9.6 0 0 1 12.8 0"/><path d="M8.7 16a5.2 5.2 0 0 1 6.6 0"/><path d="M12 19.4h.01"/>',
 };
 
 /**

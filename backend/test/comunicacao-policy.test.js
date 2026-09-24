@@ -25,7 +25,7 @@ const BASE = () => ({
   cooldownAtivo: false,
   dentroDaJanela: true,
   rateLimitExcedido: false,
-  providerConectado: true,
+  providerConectado: true, identidadeConfirmada: true,
 });
 
 describe("comunicacao.policy — avaliarEnvio", () => {
@@ -252,7 +252,7 @@ describe("comunicacao.policy — modo fail-closed (D.3-C)", () => {
 
 describe("comunicacao.policy — CADA condição obrigatória ausente bloqueia (D.3-C)", () => {
   const OBRIGATORIOS = ["modo", "contatoExiste", "telefoneVerificado", "optOut", "consentimento", "destinatarioAtivo", "vinculoValido",
-    "empresaHabilitada", "tipoPermitido", "configHorarioValida", "empresaPausada", "pendenciaAindaExiste", "duplicado", "cooldownAtivo", "dentroDaJanela", "rateLimitExcedido", "providerConectado"];
+    "empresaHabilitada", "tipoPermitido", "configHorarioValida", "empresaPausada", "pendenciaAindaExiste", "duplicado", "cooldownAtivo", "dentroDaJanela", "rateLimitExcedido", "providerConectado", "identidadeConfirmada"];
   for (const campo of OBRIGATORIOS) {
     test(`sem \`${campo}\` -> bloqueado (nunca "provavelmente ok")`, () => {
       const s = BASE(); delete s[campo];
@@ -288,7 +288,7 @@ describe("Checkpoint H.4-A — allowlist do piloto (comunicacao.piloto.js), defe
 
 describe("comunicacao — bloqueio PERMANENTE × TRANSITÓRIO (D.3, item 14)", () => {
   const PERMANENTES = ["OPT_OUT", "NO_CONSENT", "NO_PHONE", "PHONE_NOT_VERIFIED", "USER_INACTIVE", "SEM_VINCULO", "CONTATO_AMBIGUO", "EMPRESA_DESABILITADA", "TIPO_NAO_PERMITIDO", "PENDING_RESOLVED", "DUPLICATE", "FORA_DA_ALLOWLIST_PILOTO"];
-  const TRANSITORIOS = ["DISABLED", "MODO_INVALIDO", "REACTIVE_ONLY_BLOQUEIA_PROATIVO", "COOLDOWN", "OUTSIDE_ALLOWED_WINDOW", "RATE_LIMIT", "SAFE_MODE", "PROVIDER_OFFLINE", "EMPRESA_PAUSADA", "CONFIG_INVALIDA"];
+  const TRANSITORIOS = ["DISABLED", "MODO_INVALIDO", "REACTIVE_ONLY_BLOQUEIA_PROATIVO", "COOLDOWN", "OUTSIDE_ALLOWED_WINDOW", "RATE_LIMIT", "SAFE_MODE", "PROVIDER_OFFLINE", "IDENTIDADE_NAO_CONFIRMADA", "EMPRESA_PAUSADA", "CONFIG_INVALIDA"];
 
   test("todo motivo do vocabulário está classificado (nenhum esquecido)", () => {
     assert.deepEqual([...PERMANENTES, ...TRANSITORIOS].sort(), Object.values(MOTIVOS_BLOQUEIO).sort());

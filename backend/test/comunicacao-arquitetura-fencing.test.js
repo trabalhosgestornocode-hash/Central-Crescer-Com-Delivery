@@ -52,7 +52,8 @@ describe("arquitetura — fencing de comunicacao_mensagens", () => {
     const codigo = ler(FILA_REPO);
     const escritas = [...codigo.matchAll(/from\(\s*["'`]comunicacao_mensagens["'`]\s*\)\s*\.\s*(update|insert|delete|upsert)\s*\(/g)].map((m) => m[1]);
     // H.4-B.5: + criarMensagemTeste (INSERT de uma linha NOVA, sem alerta, já reivindicada por quem a cria) e marcarAuditoriaTeste (UPDATE só de metadados).
-    assert.deepEqual(escritas.sort(), ["insert", "insert", "update", "update"], `escritas diretas inesperadas: ${escritas.join(",")}`);
+    // Central de Comunicação: + criarMensagemManual (INSERT de uma linha NOVA, sem alerta, já reivindicada por quem a cria — mesmo padrão do teste).
+    assert.deepEqual(escritas.sort(), ["insert", "insert", "insert", "update", "update"], `escritas diretas inesperadas: ${escritas.join(",")}`);
     const marcar = codigo.slice(codigo.indexOf("export async function marcarAuditoriaTeste"));
     assert.match(marcar.slice(0, 1800), /\.update\(\{\s*metadados:\s*novo\s*\}\)/, "marcarAuditoriaTeste só pode atualizar metadados");
     assert.doesNotMatch(marcar.slice(0, 1800), /status\s*:/, "marcarAuditoriaTeste nunca toca status");

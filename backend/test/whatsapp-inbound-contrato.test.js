@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import {
-  CONTRATO_INBOUND_VERSAO, ORIGENS_TIPO, ORIGENS_JID_TIPO, ORIGENS_TELEFONE, MOTIVOS_FALHA_DECRYPT, ESTADOS_INBOUND, JID_TIPOS_CLIENTE,
+  CONTRATO_INBOUND_VERSAO, ORIGENS_TIPO, ORIGENS_JID_TIPO, ORIGENS_TELEFONE, MOTIVOS_FALHA_DECRYPT, ESTADOS_INBOUND, JID_TIPOS_CLIENTE, TIPOS_CONTEUDO, TEXTO_MAX,
   validarEventoInbound, decidirEstadoInbound, motivoBloqueioAutomacao,
 } from "../src/modules/comunicacao/inbound/inbound.contrato.js";
 
@@ -186,6 +186,11 @@ describe("paridade com o Gateway (vocabulários idênticos dos dois lados)", () 
   });
   test("as chaves do evento do Gateway são exatamente as do schema do backend", () => {
     const chaves = [...gwContrato.slice(gwContrato.indexOf("return {\n    contratoInbound")).matchAll(/^\s{4}(\w+)(?::|,)/gm)].map((m) => m[1]).sort();
-    assert.deepEqual(chaves, Object.keys(base()).sort());
+    // + as duas chaves ADITIVAS e opcionais da Central (tipoConteudo/texto): o Gateway novo as envia sempre; o backend aceita a ausência.
+    assert.deepEqual(chaves, [...Object.keys(base()), "tipoConteudo", "texto"].sort());
+  });
+  test("Central: vocabulário de tipoConteudo e limite do texto idênticos nos dois lados", () => {
+    assert.deepEqual(lista(gwContrato, "TIPOS_CONTEUDO"), [...TIPOS_CONTEUDO]);
+    assert.match(gwContrato, new RegExp(`TEXTO_MAX = ${TEXTO_MAX};`));
   });
 });

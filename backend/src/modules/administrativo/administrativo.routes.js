@@ -83,6 +83,32 @@ administrativoRouter.get("/comunicacao/teste/preparo", cc.preparoTeste);
 administrativoRouter.post("/comunicacao/teste", cc.enviarTeste);
 administrativoRouter.get("/comunicacao/teste/:mensagemId", cc.statusTeste);
 
+// Central de Comunicação — conversas com responsáveis AUTORIZADOS (roster). Mesmo router (requirePainelAdministrativo): nenhuma rota pública.
+// A autorização de contatos é do BACKEND (roster); o envio manual exige ator humano e passa pelos mesmos gates do teste (consentimento, verificação,
+// opt-out, piloto, Gateway) — e por um limite de taxa próprio, por conta.
+administrativoRouter.get("/comunicacao/central/visao-geral", cc.centralVisaoGeral);
+administrativoRouter.get("/comunicacao/central/automacoes", cc.centralAutomacoes);
+administrativoRouter.get("/comunicacao/central/destinatarios", cc.centralDestinatarios);
+administrativoRouter.get("/comunicacao/central/historico", cc.centralHistorico);
+administrativoRouter.get("/comunicacao/central/diagnostico", cc.centralDiagnostico);
+administrativoRouter.get("/comunicacao/central/atualizacoes", cc.centralAtualizacoes);
+administrativoRouter.get("/comunicacao/conversas", cc.listarConversas);
+administrativoRouter.get("/comunicacao/conversas/:contatoId", cc.obterConversa);
+administrativoRouter.post("/comunicacao/conversas/:contatoId/lida", cc.marcarConversaLida);
+// Aba Conexão — identidade e sessão do WhatsApp. LER o estado é permitido a quem vê a Central; o QR e toda ação exigem a permissão ESPECÍFICA
+// comunicacao:gerenciar_conexao (checada no service, fail-closed) e passam por um limite de taxa próprio.
+const limiteConexao = limiteDeTaxa({ escopo: "comunicacao_conexao", ...RATE_LIMIT.comunicacaoConexao });
+administrativoRouter.get("/comunicacao/conexao", cc.conexaoEstado);
+administrativoRouter.get("/comunicacao/conexao/qr", cc.conexaoQr);
+administrativoRouter.post("/comunicacao/conexao/iniciar", limiteConexao, cc.conexaoIniciar);
+administrativoRouter.post("/comunicacao/conexao/novo-qr", limiteConexao, cc.conexaoNovoQr);
+administrativoRouter.post("/comunicacao/conexao/confirmar", limiteConexao, cc.conexaoConfirmar);
+administrativoRouter.post("/comunicacao/conexao/cancelar", limiteConexao, cc.conexaoCancelar);
+administrativoRouter.post("/comunicacao/conexao/desconectar", limiteConexao, cc.conexaoDesconectar);
+administrativoRouter.post("/comunicacao/conexao/trocar", limiteConexao, cc.conexaoTrocar);
+administrativoRouter.put("/comunicacao/conexao/identidade", limiteConexao, cc.conexaoIdentidade);
+administrativoRouter.post("/comunicacao/conversas/:contatoId/mensagens", limiteDeTaxa({ escopo: "comunicacao_manual", ...RATE_LIMIT.comunicacaoManual }), cc.enviarMensagemConversa);
+
 // ---- Mentorados: contas da plataforma + vínculos empresa/unidade, só leitura.
 // Mesma autorização do módulo (`requirePainelAdministrativo`); nenhuma ação
 // administrativa do SuperAdmin é exposta. Ver administrativo.mentorados.js.
