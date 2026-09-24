@@ -124,9 +124,12 @@ describe("htmlAcaoHabilitacao — ação da empresa", () => {
   test("sem checklist -> vazio", () => {
     assert.equal(htmlAcaoHabilitacao({ organizacao: {} }), "");
   });
-  test("o drawer inclui a seção 'Comunicação da empresa' e o vocabulário antigo proibido (enviar/Agente Crescer) continua fora", () => {
+  test("o drawer separa 'Ativação da comunicação' de 'Configuração operacional' e o vocabulário antigo proibido (enviar/Agente Crescer) continua fora", () => {
     const html = htmlDrawerComunicacao(detalhe(), []);
-    assert.ok(html.includes("Comunicação da empresa"));
+    assert.ok(html.includes("Ativação da comunicação"));
+    assert.ok(html.includes("Configuração operacional"));
+    assert.ok(html.indexOf("Ativação da comunicação") < html.indexOf("Configuração operacional"), "ativação e configuração são seções distintas");
+    assert.match(html, /Salvar a configuração nunca habilita nem desabilita a comunicação/);
     assert.ok(html.includes("Habilitar comunicação"));
     assert.doesNotMatch(html, /Enviar|Habilitar organização|Ativar comunicação|Agente Crescer/i);
   });

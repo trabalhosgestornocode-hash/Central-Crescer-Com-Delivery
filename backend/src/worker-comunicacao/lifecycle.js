@@ -22,6 +22,7 @@
 // sem env/rede) — importar o enum não viola "config do worker não é exigida
 // com a flag desligada".
 import { ESTADOS } from "./loop.js";
+import { registrarEstadoDoWorker } from "./estado.js";
 
 const GRACE_PERIOD_EMBUTIDO_MS = 8_000; // < que o fallback de 10s do próprio server.js — nunca corre com ele
 
@@ -87,7 +88,8 @@ export async function iniciarWorkerComunicacaoEmbutido({
   // processo por ela.
   // loop.iniciar() já loga comunicacao.worker_boot/worker_ready — não duplicar aqui.
   loop.iniciar().catch((e) => log("error", "comunicacao.worker_loop_quebrou", { erro: String(e?.message ?? e).slice(0, 300) }));
-  pararAtual = (sinal) => loop.encerrar(sinal);
+  registrarEstadoDoWorker(loop.obterEstado);   // só leitura, para o Painel (H.4-B.5)
+  pararAtual = (sinal) => { registrarEstadoDoWorker(null); return loop.encerrar(sinal); };
 
   return { habilitado: true, obterEstado: loop.obterEstado };
 }

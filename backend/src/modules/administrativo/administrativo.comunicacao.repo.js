@@ -35,15 +35,17 @@ const JANELA_INSTAVEL_MS = 2 * 60_000; // sem heartbeat há mais de 2min com sta
 export async function obterEstadoGateway(deps = {}) {
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.from("whatsapp_conexoes")
-    .select("status, last_seen_at, updated_at")
+    .select("status, last_seen_at, updated_at, lease_expires_at")
     .order("updated_at", { ascending: false }).limit(1).maybeSingle();
   if (error) throw ApiError.internal(error.message);
-  if (!data) return { estado: "desconhecido", ultimoContatoEm: null };
+  if (!data) return { estado: "desconhecido", ultimoContatoEm: null, leaseValida: null };
 
   const heartbeat = data.last_seen_at ? new Date(data.last_seen_at) : null;
   const stale = !heartbeat || Number.isNaN(heartbeat.getTime()) || (Date.now() - heartbeat.getTime()) > JANELA_INSTAVEL_MS;
   const estado = GATEWAY_CONECTADO.has(data.status) ? (stale ? "instavel" : "conectado") : "desconectado";
-  return { estado, ultimoContatoEm: data.last_seen_at ?? null };
+  // H.4-B.5 — só um booleano derivado (nunca owner/epoch/auth-state): a lease vigente no relógio do backend.
+  const expira = data.lease_expires_at ? new Date(data.lease_expires_at).getTime() : null;
+  return { estado, ultimoContatoEm: data.last_seen_at ?? null, leaseValida: expira != null && Number.isFinite(expira) ? expira > Date.now() : null };
 }
 
 /** @returns {Promise<number>} total de organizações (universo do painel, não só as monitoradas por um alerta). */
@@ -219,11 +221,10 @@ export async function listarHistorico({ organizacaoId, status, tipoAlerta, desde
 }
 
 /**
- * ÚNICA escrita deste módulo. `habilitado` é SEMPRE `false` — HARD-CODED, não
- * é um parâmetro aceito por esta função (defesa em profundidade #1; a #2 é a
- * checagem explícita no service antes de chegar aqui — ver
- * administrativo.comunicacao.service.js#atualizarConfiguracao). Nenhum
- * caminho deste arquivo pode gravar `habilitado: true`.
+ * Salva a CONFIGURAÇÃO operacional da organização (timezone, tipos, destinatário, pausa). NUNCA toca `habilitado`: a coluna nem entra no
+ * payload do upsert (o UPDATE do PostgREST só altera as colunas enviadas; num INSERT novo vale o DEFAULT false da 088). A habilitação só muda
+ * por `habilitarOrganizacaoPiloto`/`desabilitarOrganizacao` (botões próprios, com confirmação e auditoria). Bug do piloto (H.4-B.5): antes, salvar
+ * a configuração regravava `habilitado: false` e desligava uma empresa habilitada sem ninguém pedir.
  *
  * @param {{organizacaoId: string, telefoneE164?: string, perfilOperacionalId?: string,
  *   timezone?: string, tiposPermitidos?: string[], pausadoAte?: string|null, pausadoMotivo?: string|null}} params
@@ -263,7 +264,7 @@ export async function atualizarConfiguracaoOrganizacao({
 
   const linha = {
     organizacao_id: organizacaoId,
-    habilitado: false, // NUNCA outro valor — ver comentário da função.
+    // `habilitado` DELIBERADAMENTE AUSENTE — ver o comentário da função.
     timezone: timezone ?? habAtual?.timezone ?? null,
     tipos_permitidos: tiposPermitidos ?? habAtual?.tipos_permitidos ?? [],
     destinatario_contato_id: destinatarioContatoId,
@@ -272,6 +273,10 @@ export async function atualizarConfiguracaoOrganizacao({
     pausado_motivo: pausadoMotivo !== undefined ? pausadoMotivo : (habAtual?.pausado_motivo ?? null),
     atualizado_por: autor?.perfilId ?? null,
   };
+  // Uma empresa HABILITADA não pode ficar com a configuração incompleta (a 088 recusa no banco; aqui vira um 400 claro, sem tocar em nada).
+  if (habAtual?.habilitado === true && (!linha.timezone || !linha.destinatario_contato_id || !linha.destinatario_perfil_id || !linha.tipos_permitidos?.length)) {
+    throw ApiError.badRequest("Esta empresa está com a comunicação habilitada: a configuração precisa continuar completa (timezone, destinatário e tipo de alerta). Desabilite a comunicação antes de esvaziar estes campos.", { codigo: "CONFIG_INCOMPLETA_HABILITADA" });
+  }
   const { data, error } = await db.from("comunicacao_habilitacoes")
     .upsert(linha, { onConflict: "organizacao_id" }).select(COLUNAS_HABILITACAO).single();
   if (error) throw ApiError.internal(error.message);
@@ -291,7 +296,7 @@ export async function atualizarConfiguracaoOrganizacao({
       pausado_ate: linha.pausado_ate,
       telefone_mascarado: telefoneMascaradoParaAuditoria, // null quando o telefone não mudou nesta chamada
       destinatario_alterado: destinatarioContatoId !== (habAtual?.destinatario_contato_id ?? null) || destinatarioPerfilId !== (habAtual?.destinatario_perfil_id ?? null),
-      habilitado: false,
+      habilitado_inalterado: true,
     },
   });
 
@@ -357,3 +362,88 @@ export async function listarOrganizacoesHabilitadas(deps = {}) {
 }
 
 export { obterContato, obterPerfilOperacional, mascararTelefone };
+
+// ---------------------------------------------------------------------------
+// CENTRAL DE COMUNICAÇÃO (H.4-B.5) — leituras adicionais (nunca `conteudo`, nunca telefone completo).
+// ---------------------------------------------------------------------------
+
+/** Unidades (todas, ou de uma organização) — id, organização, nome, ativo. */
+export async function listarUnidades({ organizacaoId } = {}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  let q = db.from("unidades").select("id, organizacao_id, nome, ativo").order("nome", { ascending: true });
+  if (organizacaoId) q = q.eq("organizacao_id", organizacaoId);
+  const { data, error } = await q;
+  if (error) throw ApiError.internal(error.message);
+  return data ?? [];
+}
+
+export async function obterUnidade(unidadeId, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("unidades").select("id, organizacao_id, nome, ativo").eq("id", unidadeId).maybeSingle();
+  if (error) throw ApiError.internal(error.message);
+  return data ?? null;
+}
+
+/** Contatos por id (em LOTE) — o service só devolve o telefone MASCARADO. */
+export async function listarContatosPorIds(ids, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const lista = [...new Set((ids ?? []).filter(Boolean))];
+  if (!lista.length) return [];
+  const { data, error } = await db.from("contatos_whatsapp").select("id, telefone_e164, verificado, consentimento, opt_out").in("id", lista);
+  if (error) throw ApiError.internal(error.message);
+  return data ?? [];
+}
+
+const COLUNAS_MENSAGEM_CENTRAL = "id, alerta_id, organizacao_id, unidade_id, contato_id, tipo, status, tentativas, max_tentativas, disponivel_em, enviado_em, entregue_em, lido_em, falhou_em, entrega_incerta_em, erro, erro_permanente, provider_message_id, metadados, created_at, expira_em";
+
+/**
+ * Mensagens (TODOS os status) mais recentes, com filtros exatos no banco. `organizacaoIdsBusca`/`unidadeIdsBusca` vêm da busca por nome (resolvida no
+ * service); basta casar UM dos dois. Limite duro de 500 linhas (a origem é derivada no service, sobre este recorte). Nunca inclui `conteudo`.
+ */
+export async function listarMensagensCentral({ organizacaoId, unidadeId, status, desde, ate, organizacaoIdsBusca, unidadeIdsBusca, limite = 500 } = {}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  let q = db.from("comunicacao_mensagens").select(COLUNAS_MENSAGEM_CENTRAL).eq("direcao", "saida");
+  if (organizacaoId) q = q.eq("organizacao_id", organizacaoId);
+  if (unidadeId) q = q.eq("unidade_id", unidadeId);
+  if (status) q = q.eq("status", status);
+  if (desde) q = q.gte("created_at", desde);
+  if (ate) q = q.lte("created_at", ate);
+  if (organizacaoIdsBusca || unidadeIdsBusca) {
+    const oi = (organizacaoIdsBusca ?? []).filter(Boolean);
+    const ui = (unidadeIdsBusca ?? []).filter(Boolean);
+    const partes = [];
+    if (oi.length) partes.push(`organizacao_id.in.(${oi.join(",")})`);
+    if (ui.length) partes.push(`unidade_id.in.(${ui.join(",")})`);
+    if (!partes.length) return [];
+    q = q.or(partes.join(","));
+  }
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(Math.min(500, Math.max(1, Number(limite) || 500)));
+  if (error) throw ApiError.internal(error.message);
+  return data ?? [];
+}
+
+export async function obterMensagemCentral(id, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("comunicacao_mensagens").select(COLUNAS_MENSAGEM_CENTRAL).eq("id", id).eq("direcao", "saida").maybeSingle();
+  if (error) throw ApiError.internal(error.message);
+  return data ?? null;
+}
+
+/** Última mensagem (status + instante) por organização — para a coluna "Último status" das empresas. */
+export async function obterUltimaMensagemPorOrganizacao(deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("comunicacao_mensagens").select("organizacao_id, status, created_at, enviado_em, metadados")
+    .eq("direcao", "saida").order("created_at", { ascending: false }).limit(500);
+  if (error) throw ApiError.internal(error.message);
+  const porOrg = new Map();
+  for (const m of data ?? []) if (!porOrg.has(m.organizacao_id)) porOrg.set(m.organizacao_id, { status: m.status, em: m.enviado_em ?? m.created_at, proposito: m.metadados?.proposito ?? null });
+  return porOrg;
+}
+
+/** Mensagem (sem conteúdo) pela chave de idempotência — usada para reconhecer o MESMO teste repetido. */
+export async function obterMensagemPorChave(chave, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("comunicacao_mensagens").select("id, status, metadados").eq("idempotency_key", chave).maybeSingle();
+  if (error) throw ApiError.internal(error.message);
+  return data ?? null;
+}

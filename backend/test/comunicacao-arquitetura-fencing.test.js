@@ -48,10 +48,14 @@ describe("arquitetura — fencing de comunicacao_mensagens", () => {
     assert.deepEqual(violacoes, [], `escrita direta em comunicacao_mensagens fora do repositório:\n${violacoes.join("\n")}`);
   });
 
-  test("dentro da fila.repo, só agendarMensagem (insert) e cancelarPendentesPorAlerta (update guardado por estado SCHEDULED) escrevem direto", () => {
+  test("dentro da fila.repo, só agendarMensagem/criarMensagemTeste (insert), cancelarPendentesPorAlerta (update guardado por SCHEDULED) e marcarAuditoriaTeste (update SÓ de metadados) escrevem direto", () => {
     const codigo = ler(FILA_REPO);
     const escritas = [...codigo.matchAll(/from\(\s*["'`]comunicacao_mensagens["'`]\s*\)\s*\.\s*(update|insert|delete|upsert)\s*\(/g)].map((m) => m[1]);
-    assert.deepEqual(escritas.sort(), ["insert", "update"], `escritas diretas inesperadas: ${escritas.join(",")}`);
+    // H.4-B.5: + criarMensagemTeste (INSERT de uma linha NOVA, sem alerta, já reivindicada por quem a cria) e marcarAuditoriaTeste (UPDATE só de metadados).
+    assert.deepEqual(escritas.sort(), ["insert", "insert", "update", "update"], `escritas diretas inesperadas: ${escritas.join(",")}`);
+    const marcar = codigo.slice(codigo.indexOf("export async function marcarAuditoriaTeste"));
+    assert.match(marcar.slice(0, 1800), /\.update\(\{\s*metadados:\s*novo\s*\}\)/, "marcarAuditoriaTeste só pode atualizar metadados");
+    assert.doesNotMatch(marcar.slice(0, 1800), /status\s*:/, "marcarAuditoriaTeste nunca toca status");
 
     // o único update direto precisa estar preso ao estado SCHEDULED (nunca toca linha que um worker segura)
     const bloco = codigo.slice(codigo.indexOf("export async function cancelarPendentesPorAlerta"));

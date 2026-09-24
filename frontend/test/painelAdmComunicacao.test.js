@@ -14,39 +14,28 @@ test("a aba Comunicação existe na navegação do Painel Administrativo", () =>
   assert.equal(tela.label, "Comunicação");
 });
 
-test("cards da visão geral mostram os 3 estados distintos (item 5) sem confundir Gateway/worker/comunicação", () => {
+test("Central: os 5 cards de saúde (Automação, Gateway WhatsApp, Worker, Piloto, Organizações) sem vocabulário de engenharia", () => {
   const html = htmlComunicacaoCards({
-    gateway: { estado: "conectado" }, worker: { estado: "habilitado" }, comunicacao: { modo: "DISABLED" },
-    empresas: { total: 48, configuradas: 0, habilitadas: 0, pausadas: 0 },
-    fila: { scheduled: 0, processing: 0, sending: 0 }, ultimas24h: { enviadas: 0, falhas: 0 },
+    gateway: { estado: "conectado" }, worker: { estado: "habilitado", rodandoNestaInstancia: true, ultimoCicloEm: "2026-09-23T20:00:00Z", resultadoUltimoCiclo: "skipped" }, comunicacao: { modo: "DISABLED" },
+    piloto: { ativo: true, quantidadeDestinos: 1 }, empresas: { total: 48, configuradas: 0, habilitadas: 0, pausadas: 0 },
   });
-  assert.ok(html.includes("Conectado"));
-  assert.ok(html.includes("Habilitado"));
-  assert.ok(html.includes("Pausada")); // rótulo de negócio do modo DISABLED — nunca a palavra "DISABLED" pra o gestor
-  assert.ok(html.includes("0 / 48"));
-  assert.ok(html.includes("últimas 24h"), "o KPI de falhas precisa deixar claro que é janela móvel, não 'hoje'/UTC");
-  assert.ok(!/DISABLED|CONNECTED|offline_batch|marker|auth-state/i.test(html), "vocabulário de engenharia nunca pode vazar pra UI");
+  for (const rotulo of ["Automação", "Desativada", "Gateway WhatsApp", "Conectado", "Worker", "Saudável", "Piloto", "Ativo — 1 destino autorizado", "Organizações", "0 habilitadas"]) {
+    assert.ok(html.includes(rotulo), rotulo);
+  }
+  assert.ok(!/DISABLED|CONNECTED|offline_batch|marker|auth-state|lease|HMAC|token/i.test(html), "vocabulário de engenharia nunca pode vazar pra UI");
 });
 
-test("H.3-A.1 item 1/2: card do worker nunca afirma saúde em tempo real (nunca 'Ativo', 'online', 'saudável', 'rodando')", () => {
-  const habilitado = htmlComunicacaoCards({
-    gateway: { estado: "conectado" }, worker: { estado: "habilitado" }, comunicacao: { modo: "DISABLED" },
-    empresas: { total: 1, configuradas: 0, habilitadas: 0, pausadas: 0 },
-    fila: { scheduled: 0, processing: 0, sending: 0 }, ultimas24h: { enviadas: 0, falhas: 0 },
-  });
-  const desabilitado = htmlComunicacaoCards({
-    gateway: { estado: "conectado" }, worker: { estado: "desabilitado" }, comunicacao: { modo: "DISABLED" },
-    empresas: { total: 1, configuradas: 0, habilitadas: 0, pausadas: 0 },
-    fila: { scheduled: 0, processing: 0, sending: 0 }, ultimas24h: { enviadas: 0, falhas: 0 },
-  });
-  for (const html of [habilitado, desabilitado]) {
-    assert.doesNotMatch(html, /\bAtivo\b|\bonline\b|saud[aá]vel|\brodando\b/i);
-  }
-  assert.ok(habilitado.includes("Habilitado"));
-  assert.ok(desabilitado.includes("Desabilitado"));
-  // Gateway/Comunicação continuam com fonte própria — não são afetados por esta regra (item 2 do checkpoint).
-  assert.ok(habilitado.includes("Conectado"));
-  assert.ok(habilitado.includes("Pausada"));
+test("Central: o card do Worker só diz 'Saudável' com EVIDÊNCIA do último ciclo (rodando nesta instância + ciclo registrado); sem evidência = Atenção; falha = Atenção; flag desligada = Desativado", () => {
+  const base = { gateway: { estado: "conectado" }, comunicacao: { modo: "DISABLED" }, piloto: { ativo: false, quantidadeDestinos: 0 }, empresas: { total: 1, habilitadas: 0 } };
+  const semEvidencia = htmlComunicacaoCards({ ...base, worker: { estado: "habilitado" } });
+  const comEvidencia = htmlComunicacaoCards({ ...base, worker: { estado: "habilitado", rodandoNestaInstancia: true, ultimoCicloEm: "2026-09-23T20:00:00Z", resultadoUltimoCiclo: "completed" } });
+  const falhou = htmlComunicacaoCards({ ...base, worker: { estado: "habilitado", rodandoNestaInstancia: true, ultimoCicloEm: "2026-09-23T20:00:00Z", resultadoUltimoCiclo: "failed" } });
+  const desligado = htmlComunicacaoCards({ ...base, worker: { estado: "desabilitado" } });
+  assert.doesNotMatch(semEvidencia, /Saudável/); assert.match(semEvidencia, /Atenção/);
+  assert.match(comEvidencia, /Saudável/);
+  assert.doesNotMatch(falhou, /Saudável/); assert.match(falhou, /Atenção/);
+  assert.match(desligado, /Desativado/); assert.doesNotMatch(desligado, /Saudável/);
+  assert.match(semEvidencia, /Piloto/); assert.match(semEvidencia, /Inativo/);
 });
 
 test("H.3-A.1 itens 3/6: seletor de perfil é combobox controlado — nunca input de texto livre", () => {
@@ -84,29 +73,36 @@ test("H.3-A.1: o drawer usa o seletor controlado (não o input de UUID livre) e 
   assert.ok(html.includes("Fulano da Silva"));
 });
 
-test("empty state: nenhuma organização configurada não parece um erro (item 30)", () => {
+test("empty state: nenhuma organização não parece um erro (item 30)", () => {
   const html = htmlComunicacaoEmpresas([], "");
-  assert.ok(html.includes("Nenhuma empresa configurada"));
+  assert.ok(html.includes("Nenhuma empresa encontrada"));
   assert.ok(!/erro|falha|exception/i.test(html));
 });
 
 test("lista de empresas nunca imprime telefone completo (item 14) — só o que a service já manda mascarado", () => {
   const html = htmlComunicacaoEmpresas([
-    { organizacaoId: "org-1", nome: "Grupo Saci", status: "PRONTA_PARA_PILOTO", destinatarioConfigurado: true, timezoneConfigurado: true, pausada: false, pendenciasAtuais: 2, ultimoEnvioEm: null, proximoEnvioEm: null },
+    { organizacaoId: "org-1", nome: "Grupo Saci", status: "PRONTA_PARA_PILOTO", habilitada: false, unidadesMonitoradas: 6, unidades: [{ unidadeId: "u1", nome: "Subway Saci — Matriz" }],
+      contato: { telefoneMascarado: "********88", consentimento: true, verificado: true, optOut: false }, pendenciasAtuais: 2,
+      ultimaMensagem: { status: "SENT", em: "2026-09-23T19:22:46Z" }, proximaAcao: "Habilitar a comunicação desta empresa" },
   ], "");
   assert.ok(html.includes("Grupo Saci"));
-  assert.ok(html.includes("Pronta para piloto"));
+  assert.ok(html.includes("Desabilitada"));
+  assert.ok(html.includes("********88"));
+  for (const rotulo of ["Confirmado", "Verificado", "Enviado ao provedor", "Habilitar a comunicação desta empresa", "Ver detalhes", "6 unidades monitoradas"]) assert.ok(html.includes(rotulo), rotulo);
   assert.doesNotMatch(html, /\+55\d+/, "a linha da tabela nunca deve montar um telefone E.164 completo");
+  assert.doesNotMatch(html, />Entregue</, "SENT nunca aparece como Entregue");
 });
 
-test("busca filtra por nome (item 29) e realça o termo", () => {
+test("busca filtra por nome de empresa OU de unidade, sem acento/caixa, e nunca por telefone (item 29)", () => {
   const orgs = [
-    { organizacaoId: "1", nome: "Grupo Saci", status: "NAO_CONFIGURADA", destinatarioConfigurado: false, pendenciasAtuais: 0 },
-    { organizacaoId: "2", nome: "Outra Empresa", status: "NAO_CONFIGURADA", destinatarioConfigurado: false, pendenciasAtuais: 0 },
+    { organizacaoId: "1", nome: "Grupo Saci", habilitada: false, contato: { telefoneMascarado: "********88", consentimento: true, verificado: true, optOut: false }, unidades: [{ unidadeId: "u1", nome: "Subway Saci — Matriz" }], pendenciasAtuais: 0 },
+    { organizacaoId: "2", nome: "Outra Empresa", habilitada: false, contato: null, unidades: [{ unidadeId: "u2", nome: "Filial Centro" }], pendenciasAtuais: 0 },
   ];
-  const html = htmlComunicacaoEmpresas(orgs, "saci");
-  assert.ok(html.includes("<mark"));
-  assert.ok(!html.includes("Outra Empresa") || html.indexOf("Grupo Saci") < html.indexOf("Nenhuma empresa encontrada"));
+  const porNome = htmlComunicacaoEmpresas(orgs, "SACI");
+  assert.ok(porNome.includes("Grupo Saci")); assert.ok(!porNome.includes("Outra Empresa"));
+  const porUnidade = htmlComunicacaoEmpresas(orgs, "filial");
+  assert.ok(porUnidade.includes("Outra Empresa")); assert.ok(!porUnidade.includes("Grupo Saci"));
+  assert.ok(htmlComunicacaoEmpresas(orgs, "88").includes("Nenhuma empresa encontrada para"), "telefone não é chave de busca");
 });
 
 test("fila vazia mostra estado positivo, não erro (item 30)", () => {
@@ -124,9 +120,10 @@ test("fila com itens nunca mostra o corpo da mensagem (item 26) — só empresa/
   assert.ok(!html.includes("conteudo"));
 });
 
-test("histórico vazio explica que aparece só depois de um piloto (item 30)", () => {
+test("histórico vazio explica o que fazer, sem parecer erro (item 30)", () => {
   const html = htmlComunicacaoHistorico({ itens: [], total: 0, pagina: 1, porPagina: 20 }, []);
-  assert.ok(html.includes("Nenhum envio registrado"));
+  assert.ok(html.includes("Nenhuma mensagem encontrada"));
+  assert.ok(!/erro|falha|exception/i.test(html));
 });
 
 test("paginação aparece só quando há mais de uma página", () => {

@@ -393,3 +393,70 @@ export async function obterMensagemInicialDoAlerta(alertaId, deps = {}) {
   if (error) throw ApiError.internal(error.message);
   return data ?? null;
 }
+
+// ---------------------------------------------------------------------------
+// TESTE CONTROLADO (H.4-B.5) — mensagem de teste do Painel: SEM alerta, fora do scheduler/worker.
+// ---------------------------------------------------------------------------
+export const TIPO_MENSAGEM_TESTE = "teste_comunicacao";
+export const PROPOSITO_TESTE = "teste";
+export const ORIGEM_TESTE_PAINEL = "teste_painel";
+export const chaveIdempotenciaTeste = (testeId) => `wa:teste:${testeId}:v1`;
+const LEASE_TESTE_SEGUNDOS = 120;
+const TTL_TESTE_MINUTOS = 10;
+
+/**
+ * Cria a mensagem do teste JÁ REIVINDICADA por quem a criou (PROCESSING, claim_geracao=1, lease de 2 min, max_tentativas=1) — assim ela nunca
+ * fica disponível ao claim do worker (que só pega SCHEDULED ou PROCESSING com lease vencido; e `expira_em` de 10 min a exclui do claim e a deixa
+ * para a varredura de TTL). SEM alerta: NUNCA cria/altera alerta D-1. IDEMPOTENTE por `wa:teste:{testeId}:v1` (UNIQUE do banco): só QUEM CRIA
+ * (`criada: true`) pode chamar o provider — N chamadas simultâneas do mesmo teste ⇒ 1 criadora.
+ * @returns {Promise<{criada: boolean, mensagem: object}>}
+ */
+export async function criarMensagemTeste({ testeId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId = null, conteudo, atorPerfilId = null }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const agora = new Date();
+  const worker = `teste_painel:${testeId}`;
+  const linha = {
+    alerta_id: null, organizacao_id: organizacaoId, unidade_id: unidadeId ?? null, contato_id: contatoId, destinatario_perfil_id: destinatarioPerfilId,
+    canal: CANAIS.WHATSAPP, direcao: DIRECAO.SAIDA, tipo: TIPO_MENSAGEM_TESTE, conteudo, idempotency_key: chaveIdempotenciaTeste(testeId),
+    status: STATUS_MENSAGEM.PROCESSING, disponivel_em: agora.toISOString(), expira_em: new Date(agora.getTime() + TTL_TESTE_MINUTOS * 60_000).toISOString(),
+    max_tentativas: 1, claimed_by: worker, claimed_at: agora.toISOString(), claim_geracao: 1,
+    claim_expira_em: new Date(agora.getTime() + LEASE_TESTE_SEGUNDOS * 1000).toISOString(),
+    metadados: { proposito: PROPOSITO_TESTE, origem: ORIGEM_TESTE_PAINEL, teste_id: testeId, ator_perfil_id: atorPerfilId },
+  };
+  const { data, error } = await db.from("comunicacao_mensagens").insert(linha).select("*").single();
+  // 23505 = a UNIQUE(idempotency_key) do banco: OUTRO chamador criou o mesmo teste primeiro — este NÃO é o criador.
+  if (error && String(error.code) !== "23505") throw ApiError.internal(error.message);
+  if (!error && data) return { criada: true, mensagem: data, worker };
+  const existente = await db.from("comunicacao_mensagens").select("*").eq("idempotency_key", chaveIdempotenciaTeste(testeId)).maybeSingle();
+  if (existente.error) throw ApiError.internal(existente.error.message);
+  if (!existente.data) throw ApiError.internal("mensagem de teste: nem criada nem encontrada");
+  return { criada: false, mensagem: existente.data, worker };
+}
+
+/** Mensagens de teste que contam para o LIMITE (todas menos as canceladas/bloqueadas antes de qualquer envio), da mais antiga para a mais nova. */
+export async function listarMensagensTesteContabilizadas(deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("comunicacao_mensagens").select("id, status, created_at, tentativas")
+    .eq("tipo", TIPO_MENSAGEM_TESTE).not("status", "in", "(CANCELLED,BLOCKED)").order("created_at", { ascending: true }).order("id", { ascending: true });
+  if (error) throw ApiError.internal(error.message);
+  return data ?? [];
+}
+
+/** Marca (uma vez) que a auditoria de um marco do teste (ENTREGUE/LIDO) já foi gravada — evita duplicar no polling da tela. */
+export async function marcarAuditoriaTeste({ id, marco }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  // Concorrência otimista: a RPC de receipts (095) também escreve em metadados e sempre move updated_at — se ele mudou entre a leitura e a escrita,
+  // NADA é gravado e relemos (nunca sobrescreve provider_ack/provider_erro).
+  for (let tentativa = 0; tentativa < 4; tentativa += 1) {
+    const { data: atual, error: e1 } = await db.from("comunicacao_mensagens").select("metadados, updated_at").eq("id", id).maybeSingle();
+    if (e1) throw ApiError.internal(e1.message);
+    if (!atual) return false;
+    const meta = atual.metadados ?? {};
+    if (meta.auditoria_teste?.[marco]) return false;
+    const novo = { ...meta, auditoria_teste: { ...(meta.auditoria_teste ?? {}), [marco]: true } };
+    const { data, error } = await db.from("comunicacao_mensagens").update({ metadados: novo }).eq("id", id).eq("updated_at", atual.updated_at).select("id");
+    if (error) throw ApiError.internal(error.message);
+    if ((data ?? []).length === 1) return true;
+  }
+  return false;
+}

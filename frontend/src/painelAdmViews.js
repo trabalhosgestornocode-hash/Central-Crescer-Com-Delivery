@@ -31,6 +31,10 @@ import {
   fmtDinheiro, fmtDinheiroCurto, fmtVariacao, fmtVariacaoPP,
   tomVariacao, seloProvisorio, textoCobertura, linhaRanking, barrasEvolucao,
 } from "./painelAdmUi.js";
+import {
+  htmlCabecalhoCentral, htmlCardsSaude, htmlSaudeComunicacao, htmlFluxoComunicacao, htmlEmpresasCentral, htmlHistoricoCentral, htmlDetalheMensagem,
+  htmlConfiguracoesCentral, htmlAbaTeste, htmlModalTeste, htmlAbasCentral, testeTerminou,
+} from "./painelAdmCentral.js";
 
 /** Áreas gerenciais existentes e agenda oficial do desenvolvimento. */
 export const TELAS_PADM = [
@@ -70,6 +74,8 @@ export const viewMentorados = { termo: "" };
 export const viewComunicacao = {
   aba: "visao-geral", termo: "",
   filaPagina: 1, historicoPagina: 1, historicoStatus: "",
+  /** Filtros do Histórico de Mensagens (Central, H.4-B.5). */
+  hist: { organizacaoId: "", unidadeId: "", status: "", origem: "", desde: "", ate: "", busca: "" },
 };
 /**
  * Aba interna da área Relatórios + escopo dos rankings.
@@ -200,7 +206,7 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
 const ultimoDados = {
   empresas: null, pendencias: null, relatorio: null, evolucao: null, mesAtivo: null, apiAtual: null,
   lucratividade: null, semanaCarregada: null, mentorados: null,
-  comunicacaoApi: null, comunicacaoAtivacao: null, comunicacaoResumo: null, comunicacaoOrgs: null, comunicacaoFila: null, comunicacaoHistorico: null,
+  comunicacaoApi: null, comunicacaoAtivacao: null, comunicacaoResumo: null, comunicacaoOrgs: null, comunicacaoFila: null, comunicacaoHistorico: null, comunicacaoMensagens: null, comunicacaoConfig: null, comunicacaoTestes: null,
 };
 
 /** `true` para as abas semanais (Lucratividade / Rentabilidade). */
@@ -1238,55 +1244,11 @@ const ROTULO_STATUS_MSG = {
   FAILED: "Falhou", SENT: "Enviada", DELIVERED: "Entregue", READ: "Lida", CANCELLED: "Cancelada", BLOCKED: "Bloqueada",
 };
 
-export function htmlComunicacaoCards(r) {
-  if (!r) return "";
-  return cards([
-    card({ label: "WhatsApp", valor: ROTULO_GATEWAY[r.gateway?.estado] ?? "—", icone: "smartphone", tom: r.gateway?.estado === "conectado" ? "ok" : r.gateway?.estado === "instavel" ? "atencao" : "" }),
-    card({ label: "Automação", valor: ROTULO_MODO[r.comunicacao?.modo] ?? "—", icone: "bell", tom: r.comunicacao?.modo === "NORMAL" ? "ok" : "" }),
-    card({
-      label: "Worker", valor: ROTULO_WORKER[r.worker?.estado] ?? "—", icone: "send",
-      nota: "Estado baseado na configuração do serviço, não é uma confirmação de saúde em tempo real — pode haver mais de uma instância durante um deploy.",
-    }),
-    card({ label: "Empresas configuradas", valor: `${r.empresas?.configuradas ?? 0} / ${r.empresas?.total ?? 0}`, icone: "building" }),
-    card({ label: "Na fila", valor: String((r.fila?.scheduled ?? 0) + (r.fila?.processing ?? 0) + (r.fila?.sending ?? 0)), icone: "clock" }),
-    card({ label: "Falhas nas últimas 24h", valor: String(r.ultimas24h?.falhas ?? 0), icone: "alert-triangle", tom: (r.ultimas24h?.falhas ?? 0) > 0 ? "atencao" : "" }),
-  ].map((c) => c).join(""));
-}
+/** Cards de saúde da Central (H.4-B.5): Automação, Gateway WhatsApp, Worker, Piloto, Organizações. */
+export const htmlComunicacaoCards = htmlCardsSaude;
 
-function htmlComunicacaoAbas() {
-  const ABAS = [["empresas", "Empresas"], ["fila", "Fila"], ["historico", "Histórico"]];
-  return `<div class="padm-abas" role="tablist">${ABAS.map(([id, label]) =>
-    `<button type="button" class="padm-aba ${viewComunicacao.aba === id ? "ativo" : ""}" data-padm-com-aba="${id}" role="tab" aria-selected="${viewComunicacao.aba === id}">${escapeHtml(label)}</button>`).join("")}</div>`;
-}
-
-function linhaEmpresaComunicacao(o, termo) {
-  const ultimo = o.ultimoEnvioEm ? fmtDataCurta(o.ultimoEnvioEm) : "—";
-  const proximo = o.proximoEnvioEm ? fmtDataCurta(o.proximoEnvioEm) : "—";
-  return `
-    <tr data-padm-com-org="${escapeHtml(o.organizacaoId)}" tabindex="0" role="button">
-      <td>${realce(o.nome, termo)}</td>
-      <td>${chipStatusConfig(o.status)}</td>
-      <td>${o.pendenciasAtuais > 0 ? seloPendencia({ criticas: o.pendenciasAtuais, unidadesPendentes: o.pendenciasAtuais }) : `<span class="padm-selo padm-selo--ok">${icon("check-circle", { size: 12 })}Sem pendência</span>`}</td>
-      <td>${o.destinatarioConfigurado ? `${icon("check-circle", { size: 13 })} Configurado` : `<span class="padm-vazio">Não definido</span>`}</td>
-      <td>${o.pausada ? chip({ classe: "muted", rotulo: "Pausada" }) : "—"}</td>
-      <td>${escapeHtml(ultimo)}</td>
-      <td>${escapeHtml(proximo)}</td>
-    </tr>`;
-}
-
-export function htmlComunicacaoEmpresas(orgs, termo) {
-  const t = normalizarBusca(termo);
-  const filtradas = t ? orgs.filter((o) => normalizarBusca(o.nome).includes(t)) : orgs;
-  if (!orgs.length) return vazio("Nenhuma empresa configurada para comunicação.", "Abra uma empresa para preparar timezone e destinatário — nenhum envio é feito nesta fase.", { tom: "neutro", icone: "message-circle" });
-  return `
-    ${busca("padm-com-busca", "Buscar empresa…", termo)}
-    <div class="padm-tabela-wrap">
-      <table class="padm-tabela">
-        <thead><tr><th>Empresa</th><th>Situação</th><th>Pendências</th><th>Destinatário</th><th>Pausa</th><th>Último envio</th><th>Próximo envio</th></tr></thead>
-        <tbody>${filtradas.length ? filtradas.map((o) => linhaEmpresaComunicacao(o, t)).join("") : `<tr><td colspan="7"><em>Nenhuma empresa encontrada para "${escapeHtml(termo)}".</em></td></tr>`}</tbody>
-      </table>
-    </div>`;
-}
+/** Lista de empresas da Central (contato mascarado, consentimento, número, opt-out, última mensagem, próxima ação). */
+export const htmlComunicacaoEmpresas = htmlEmpresasCentral;
 
 function linhaFila(m, nomePorOrg) {
   return `<tr>
@@ -1321,44 +1283,30 @@ export function htmlComunicacaoFila(pacote, orgs) {
     ${htmlPaginacao(pacote, "fila")}`;
 }
 
-function linhaHistorico(m, nomePorOrg) {
-  const quando = m.enviado_em || m.falhou_em || m.created_at;
-  return `<tr>
-    <td>${escapeHtml(nomePorOrg.get(m.organizacao_id) ?? m.organizacao_id.slice(0, 8))}</td>
-    <td>${escapeHtml(ROTULO_STATUS_MSG[m.status] ?? m.status)}</td>
-    <td>${escapeHtml(fmtData(quando))}</td>
-  </tr>`;
-}
-
-export function htmlComunicacaoHistorico(pacote, orgs) {
-  if (!pacote) return carregando("lista");
-  if (!pacote.itens.length) return vazio("Nenhum envio registrado.", "O histórico aparece aqui assim que a automação for ativada num piloto.", { tom: "neutro" });
-  const nomePorOrg = new Map((orgs ?? []).map((o) => [o.organizacaoId, o.nome]));
-  return `
-    <div class="padm-tabela-wrap">
-      <table class="padm-tabela">
-        <thead><tr><th>Empresa</th><th>Resultado</th><th>Quando</th></tr></thead>
-        <tbody>${pacote.itens.map((m) => linhaHistorico(m, nomePorOrg)).join("")}</tbody>
-      </table>
-    </div>
-    ${htmlPaginacao(pacote, "historico")}`;
+/** Histórico COMPLETO de mensagens da Central (todas as origens e status). */
+export function htmlComunicacaoHistorico(pacote, orgs, filtros = viewComunicacao.hist) {
+  return htmlHistoricoCentral(pacote, filtros, orgs ?? []);
 }
 
 function htmlComunicacao() {
   const r = ultimoDados.comunicacaoResumo;
   const orgs = ultimoDados.comunicacaoOrgs ?? [];
-  const corpo = viewComunicacao.aba === "fila" ? htmlComunicacaoFila(ultimoDados.comunicacaoFila, orgs)
-    : viewComunicacao.aba === "historico" ? htmlComunicacaoHistorico(ultimoDados.comunicacaoHistorico, orgs)
-      : htmlComunicacaoEmpresas(orgs, viewComunicacao.termo);
-  return `
-    ${htmlComunicacaoCards(r)}
-    ${htmlAtivacaoPiloto(ultimoDados.comunicacaoAtivacao)}
-    ${secao({
-      titulo: "Empresas, fila e histórico", icone: "message-circle",
-      sub: "Nenhum envio é feito nesta fase — apenas configuração e acompanhamento.",
-      acoes: htmlComunicacaoAbas(),
-      corpo,
-    })}`;
+  const aba = viewComunicacao.aba;
+  let corpo;
+  if (aba === "empresas") {
+    corpo = secao({ titulo: "Empresas e destinatários", icone: "building", sub: "Quem pode receber, por que uma empresa pode ou não receber e o próximo passo de cada uma.", corpo: htmlEmpresasCentral(orgs, viewComunicacao.termo) });
+  } else if (aba === "historico") {
+    corpo = secao({ titulo: "Histórico de Mensagens", icone: "message-circle", sub: "Todas as mensagens — automação, reforço, aviso tardio e testes. Telefones sempre mascarados.", corpo: htmlComunicacaoHistorico(ultimoDados.comunicacaoMensagens, orgs) });
+  } else if (aba === "fila") {
+    corpo = secao({ titulo: "Fila", icone: "clock", sub: "Mensagens agendadas ou em processamento.", corpo: htmlComunicacaoFila(ultimoDados.comunicacaoFila, orgs) });
+  } else if (aba === "configuracoes") {
+    corpo = htmlConfiguracoesCentral(ultimoDados.comunicacaoConfig);
+  } else if (aba === "teste") {
+    corpo = htmlAbaTeste({ resumo: r, orgs, testes: ultimoDados.comunicacaoTestes });
+  } else {
+    corpo = `${htmlSaudeComunicacao(r)}${htmlFluxoComunicacao()}${htmlAtivacaoPiloto(ultimoDados.comunicacaoAtivacao)}`;
+  }
+  return `${htmlCabecalhoCentral()}${htmlCardsSaude(r)}${htmlAbasCentral(aba)}${corpo}`;
 }
 
 function pintarComunicacao() {
@@ -1366,6 +1314,14 @@ function pintarComunicacao() {
   if (!v) return;
   v.innerHTML = htmlComunicacao();
   ligarComunicacao();
+}
+
+/** Filtros da tela (datas locais AAAA-MM-DD) -> parâmetros da API (ISO). */
+function filtrosHistoricoParaApi() {
+  const h = viewComunicacao.hist;
+  const desde = h.desde ? new Date(`${h.desde}T00:00:00`).toISOString() : "";
+  const ate = h.ate ? new Date(`${h.ate}T23:59:59.999`).toISOString() : "";
+  return { organizacaoId: h.organizacaoId, unidadeId: h.unidadeId, status: h.status, origem: h.origem, busca: h.busca, desde, ate, pagina: viewComunicacao.historicoPagina };
 }
 
 async function carregarSubAbaComunicacao() {
@@ -1376,7 +1332,11 @@ async function carregarSubAbaComunicacao() {
     if (viewComunicacao.aba === "fila") {
       ultimoDados.comunicacaoFila = await api.comunicacaoFila({ pagina: viewComunicacao.filaPagina });
     } else if (viewComunicacao.aba === "historico") {
-      ultimoDados.comunicacaoHistorico = await api.comunicacaoHistorico({ pagina: viewComunicacao.historicoPagina, status: viewComunicacao.historicoStatus || undefined });
+      ultimoDados.comunicacaoMensagens = await api.comunicacaoMensagens(filtrosHistoricoParaApi());
+    } else if (viewComunicacao.aba === "configuracoes") {
+      ultimoDados.comunicacaoConfig = await api.comunicacaoConfiguracaoOperacional();
+    } else if (viewComunicacao.aba === "teste") {
+      ultimoDados.comunicacaoTestes = await api.comunicacaoMensagens({ origem: "teste_controlado", porPagina: 10 });
     }
     pintarComunicacao();
   } catch (e) {
@@ -1394,6 +1354,113 @@ async function recarregarComunicacaoAposAcao(api) {
   ultimoDados.comunicacaoOrgs = orgsC;
   ultimoDados.comunicacaoAtivacao = ativC ?? null;
   pintarComunicacao();
+}
+
+// ---- Detalhe de UMA mensagem (modal lateral) ----
+
+async function abrirDetalheMensagem(id) {
+  const cx = caixaModal();
+  if (!cx) return;
+  const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
+  cx.hidden = false;
+  cx.classList.add("padm-modal-wrap--drawer");
+  cx.innerHTML = `<div class="padm-drawer">${carregando("lista")}</div>`;
+  try {
+    cx.innerHTML = htmlDetalheMensagem(await api.comunicacaoMensagem(id));
+    el('[data-padm-acao="fechar-detalhe-mensagem"]')?.addEventListener("click", fecharDrawerComunicacao);
+  } catch (e) {
+    cx.innerHTML = `<div class="padm-drawer">${erro(e)}</div>`;
+  }
+  onEscComunicacao = (ev) => { if (ev.key === "Escape") fecharDrawerComunicacao(); };
+  try { document.addEventListener("keydown", onEscComunicacao); } catch { /* fake DOM */ }
+}
+
+// ---- TESTE CONTROLADO (modal + acompanhamento) ----
+// Nunca faz retry: o POST usa o MESMO testeId enquanto o modal está aberto (duplo clique = uma mensagem). O acompanhamento só LÊ o status.
+
+const TESTE_INTERVALO_MS = 4000;
+const TESTE_LIMITE_ACOMPANHAMENTO_MS = 10 * 60_000;
+const estadoTeste = { timer: null, testeId: null, organizacaoId: null, mensagemId: null, preparo: null, status: null, iniciadoEm: 0, fase: "confirmar", erro: null };
+
+function pararAcompanhamentoTeste() {
+  if (estadoTeste.timer) { clearInterval(estadoTeste.timer); estadoTeste.timer = null; }
+}
+
+function pintarModalTeste() {
+  const cx = caixaModal();
+  if (!cx) return;
+  cx.innerHTML = htmlModalTeste(estadoTeste.preparo, {
+    fase: estadoTeste.fase, status: estadoTeste.status, erro: estadoTeste.erro, segundosAguardando: estadoTeste.status?.segundosDesdeEnvio ?? 0,
+  });
+  ligarModalTeste();
+}
+
+function fecharModalTeste() {
+  pararAcompanhamentoTeste();
+  const houveEnvio = !!estadoTeste.mensagemId;
+  fecharDrawerComunicacao();
+  if (houveEnvio) carregarSubAbaComunicacao();
+}
+
+function ligarModalTeste() {
+  const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
+  els('[data-padm-acao="fechar-teste"]').forEach((b) => b.addEventListener("click", fecharModalTeste));
+  els("[data-padm-com-msg]").forEach((b) => b.addEventListener("click", () => abrirDetalheMensagem(b.dataset.padmComMsg)));
+  const marca = el("#padm-teste-confirma");
+  const botao = el('[data-padm-acao="confirmar-teste"]');
+  if (marca && botao) marca.addEventListener("change", () => { botao.disabled = !marca.checked; });
+  el("#padm-teste-unidade")?.addEventListener("change", async (e) => {
+    try {
+      estadoTeste.preparo = await api.comunicacaoTestePreparo({ organizacaoId: estadoTeste.organizacaoId, unidadeId: e.target.value });
+      pintarModalTeste();
+    } catch (err) { estadoTeste.fase = "erro"; estadoTeste.erro = err.message; pintarModalTeste(); }
+  });
+  botao?.addEventListener("click", async (e) => {
+    if (!marca?.checked) return;
+    e.target.disabled = true; // duplo clique: o botão some do fluxo e o testeId é o mesmo
+    estadoTeste.fase = "enviando";
+    pintarModalTeste();
+    try {
+      const r = await api.comunicacaoTesteEnviar({ organizacaoId: estadoTeste.organizacaoId, unidadeId: estadoTeste.preparo.unidade.unidadeId, testeId: estadoTeste.testeId });
+      estadoTeste.mensagemId = r.mensagemId;
+      estadoTeste.fase = "acompanhando";
+      estadoTeste.iniciadoEm = Date.now();
+      await atualizarStatusTeste(api);
+      estadoTeste.timer = setInterval(() => { atualizarStatusTeste(api); }, TESTE_INTERVALO_MS);
+    } catch (err) {
+      estadoTeste.fase = "erro";
+      estadoTeste.erro = err?.status ? err.message : "Não foi possível confirmar o envio. Verifique o histórico antes de tentar novamente — nada será reenviado automaticamente.";
+      pintarModalTeste();
+    }
+  });
+}
+
+async function atualizarStatusTeste(api) {
+  if (!estadoTeste.mensagemId) return;
+  try {
+    estadoTeste.status = await api.comunicacaoTesteStatus(estadoTeste.mensagemId);
+    pintarModalTeste();
+    if (testeTerminou(estadoTeste.status) || Date.now() - estadoTeste.iniciadoEm > TESTE_LIMITE_ACOMPANHAMENTO_MS) pararAcompanhamentoTeste();
+  } catch { /* uma falha de leitura nunca vira falha do teste: tenta de novo no próximo intervalo */ }
+}
+
+async function abrirModalTeste() {
+  const cx = caixaModal();
+  const organizacaoId = el("#padm-teste-org")?.value;
+  if (!cx || !organizacaoId) return;
+  const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
+  pararAcompanhamentoTeste();
+  Object.assign(estadoTeste, { testeId: globalThis.crypto?.randomUUID?.() ?? null, organizacaoId, mensagemId: null, preparo: null, status: null, iniciadoEm: 0, fase: "confirmar", erro: null });
+  if (!estadoTeste.testeId) { alert("Este navegador não suporta o envio de teste."); return; }
+  cx.hidden = false;
+  cx.classList.add("padm-modal-wrap--drawer");
+  cx.innerHTML = htmlModalTeste(null);
+  onEscComunicacao = (ev) => { if (ev.key === "Escape") fecharModalTeste(); };
+  try { document.addEventListener("keydown", onEscComunicacao); } catch { /* fake DOM */ }
+  try {
+    estadoTeste.preparo = await api.comunicacaoTestePreparo({ organizacaoId });
+  } catch (err) { estadoTeste.fase = "erro"; estadoTeste.erro = err.message; estadoTeste.preparo = estadoTeste.preparo ?? { organizacao: {}, unidade: {}, contato: null }; }
+  pintarModalTeste();
 }
 
 function ligarComunicacao() {
@@ -1447,14 +1514,37 @@ function ligarComunicacao() {
       }, 160);
     });
   }
-  els("[data-padm-com-org]").forEach((tr) =>
-    tr.addEventListener("click", () => abrirDrawerComunicacao(tr.dataset.padmComOrg)));
+  els("[data-padm-com-org]").forEach((b) =>
+    b.addEventListener("click", () => abrirDrawerComunicacao(b.dataset.padmComOrg)));
+  els("[data-padm-com-msg]").forEach((b) =>
+    b.addEventListener("click", () => abrirDetalheMensagem(b.dataset.padmComMsg)));
   els("[data-padm-com-pag]").forEach((b) => b.addEventListener("click", () => {
     const [alvo, dir] = b.dataset.padmComPag.split(":");
     const campo = alvo === "fila" ? "filaPagina" : "historicoPagina";
     viewComunicacao[campo] = Math.max(1, viewComunicacao[campo] + (dir === "proximo" ? 1 : -1));
     carregarSubAbaComunicacao();
   }));
+  // Histórico: filtros (empresa/unidade/status/origem/período/busca por nome)
+  el("#padm-com-filtros")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    for (const k of Object.keys(viewComunicacao.hist)) viewComunicacao.hist[k] = String(f.get(k) ?? "").trim();
+    viewComunicacao.historicoPagina = 1;
+    carregarSubAbaComunicacao();
+  });
+  el("#padm-com-filtros select[name=organizacaoId]")?.addEventListener("change", (e) => {
+    // trocar a empresa zera a unidade (as opções mudam) e repinta sem consultar a rede
+    const f = new FormData(e.target.form);
+    for (const k of Object.keys(viewComunicacao.hist)) viewComunicacao.hist[k] = String(f.get(k) ?? "").trim();
+    viewComunicacao.hist.unidadeId = "";
+    pintarComunicacao();
+  });
+  el('[data-padm-acao="limpar-filtros-historico"]')?.addEventListener("click", () => {
+    for (const k of Object.keys(viewComunicacao.hist)) viewComunicacao.hist[k] = "";
+    viewComunicacao.historicoPagina = 1;
+    carregarSubAbaComunicacao();
+  });
+  el('[data-padm-acao="abrir-teste"]')?.addEventListener("click", () => abrirModalTeste());
 }
 
 // ---- Drawer: detalhe da empresa + configuração segura (nunca habilita envio) ----
@@ -1588,12 +1678,12 @@ export function htmlDrawerComunicacao(d, perfis) {
         ${secao({ titulo: "Situação", corpo: `<p>${chipStatusConfig(cfg.status)}</p>` })}
         ${secao({
           titulo: "Configuração para piloto", icone: "list-checks",
-          sub: "Estado atual — os dois últimos itens permanecem pendentes nesta fase por decisão de produto.",
+          sub: "Situação atual desta empresa para receber comunicações.",
           corpo: htmlChecklistPiloto(d.checklistPiloto),
         })}
         ${secao({
-          titulo: "Comunicação da empresa", icone: "bell",
-          sub: "Habilitar é uma ação do operador, registrada na auditoria. Desabilitar é sempre permitido.",
+          titulo: "Ativação da comunicação", icone: "bell",
+          sub: "Habilitar é uma ação do operador, registrada na auditoria. Desabilitar é sempre permitido. Salvar a configuração nunca altera esta ativação.",
           corpo: htmlAcaoHabilitacao(d),
         })}
         ${secao({
@@ -1615,8 +1705,8 @@ export function htmlDrawerComunicacao(d, perfis) {
             <div id="padm-com-preview" class="padm-preview-mensagem"></div>`,
         })}
         ${secao({
-          titulo: "Configurar (não envia nada)", icone: "settings",
-          sub: "Preparar timezone e destinatário para um futuro piloto. Habilitar o envio é uma etapa separada, futura.",
+          titulo: "Configuração operacional", icone: "settings",
+          sub: "Timezone, destinatário, tipo de alerta e pausa. Independe da ativação da comunicação.",
           corpo: `
             <form id="padm-com-form" class="padm-form">
               <label>Telefone do destinatário (E.164)
@@ -1637,7 +1727,7 @@ export function htmlDrawerComunicacao(d, perfis) {
                 Pausar comunicação desta empresa
               </label>
               <button type="submit" class="btn btn-primary btn-sm">Salvar configuração</button>
-              <p class="padm-form-nota">Esta ação nunca habilita o envio de mensagens — isso é feito em outra etapa, futura.</p>
+              <p class="padm-form-nota">Salvar a configuração nunca habilita nem desabilita a comunicação — a ativação é uma ação separada, na seção acima.</p>
             </form>`,
         })}
       </div>

@@ -215,3 +215,27 @@ describe("painelAdmApi.comunicacaoConfirmarConsentimento — Checkpoint H.4-A.3.
     assert.deepEqual(corpo, { confirmacaoExplicita: true });
   });
 });
+
+describe("painelAdmApi — Central de Comunicação e TESTE CONTROLADO (H.4-B.5)", () => {
+  test("POST /comunicacao/teste leva a confirmação explícita e o testeId da tela; preparo/status/mensagens por GET; Bearer sim, x-context-token nunca", async () => {
+    const chamadas = [];
+    globalThis.fetch = async (url, opcoes) => { chamadas.push({ url: String(url), opcoes }); return { ok: true, status: 200, statusText: "200", json: async () => ({ data: {} }) }; };
+    await painelAdmApi.comunicacaoTesteEnviar({ organizacaoId: "o1", unidadeId: "u1", testeId: "t-1" });
+    await painelAdmApi.comunicacaoTesteStatus("m 1");
+    await painelAdmApi.comunicacaoTestePreparo({ organizacaoId: "o1" });
+    await painelAdmApi.comunicacaoMensagens({ status: "SENT", busca: "" });
+    await painelAdmApi.comunicacaoMensagem("m1");
+    await painelAdmApi.comunicacaoConfiguracaoOperacional();
+    assert.match(chamadas[0].url, /\/api\/v1\/administrativo\/comunicacao\/teste$/); assert.equal(chamadas[0].opcoes.method, "POST");
+    assert.deepEqual(JSON.parse(chamadas[0].opcoes.body), { organizacaoId: "o1", unidadeId: "u1", testeId: "t-1", confirmacaoExplicita: true });
+    assert.match(chamadas[1].url, /\/comunicacao\/teste\/m%201$/);
+    assert.match(chamadas[2].url, /\/comunicacao\/teste\/preparo\?organizacaoId=o1$/);
+    assert.match(chamadas[3].url, /\/comunicacao\/mensagens\?status=SENT$/);
+    assert.match(chamadas[4].url, /\/comunicacao\/mensagens\/m1$/);
+    assert.match(chamadas[5].url, /\/comunicacao\/configuracao-operacional$/);
+    for (const c of chamadas) {
+      assert.match(c.opcoes.headers.Authorization, /^Bearer /);
+      assert.equal(Object.keys(c.opcoes.headers).some((h) => h.toLowerCase() === "x-context-token"), false);
+    }
+  });
+});

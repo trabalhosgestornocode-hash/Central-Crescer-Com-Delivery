@@ -75,6 +75,13 @@ administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/habilitacao",
 administrativoRouter.put("/comunicacao/modo", cc.modo);
 administrativoRouter.get("/comunicacao/fila", cc.fila);
 administrativoRouter.get("/comunicacao/historico", cc.historico);
+// H.4-B.5 — Central de Comunicação. Mesmo router (requirePainelAdministrativo): nenhuma rota pública. O envio de teste exige ator humano + confirmação.
+administrativoRouter.get("/comunicacao/mensagens", cc.mensagens);
+administrativoRouter.get("/comunicacao/mensagens/:id", cc.detalheMensagem);
+administrativoRouter.get("/comunicacao/configuracao-operacional", cc.configuracaoOperacional);
+administrativoRouter.get("/comunicacao/teste/preparo", cc.preparoTeste);
+administrativoRouter.post("/comunicacao/teste", cc.enviarTeste);
+administrativoRouter.get("/comunicacao/teste/:mensagemId", cc.statusTeste);
 
 // ---- Mentorados: contas da plataforma + vínculos empresa/unidade, só leitura.
 // Mesma autorização do módulo (`requirePainelAdministrativo`); nenhuma ação

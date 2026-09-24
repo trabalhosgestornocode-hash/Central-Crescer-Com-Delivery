@@ -4965,3 +4965,53 @@ tr.dex-linha-na { opacity: .65; }
   .dex-rent-simulacao-resultado { padding: 14px; }
   .dex-rent-simulador .dex-sim-lado-topo { flex-wrap: wrap; }
 }
+
+/* ===== Central de Comunicação (H.4-B.5) — só o que não existia; cards/chips/tabelas/abas/drawer reaproveitam as classes acima. Sem cores novas: tokens do tema. ===== */
+.padm-central-cab { margin: 0 0 14px; }
+.padm-central-cab h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -.01em; }
+.padm-central-cab p { margin: 0; font-size: 13px; color: var(--cinza); max-width: 70ch; }
+.padm-saude-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.padm-saude-lista li { display: grid; grid-template-columns: 200px auto 1fr; align-items: center; gap: 4px 12px; padding: 9px 0; border-bottom: 1px solid var(--linha); font-size: 12.5px; }
+.padm-saude-lista li:last-child { border-bottom: 0; }
+.padm-saude-rot { font-weight: 640; color: var(--texto); }
+.padm-saude-val { display: inline-flex; align-items: center; gap: 6px; }
+.padm-saude-lista small { color: var(--cinza); font-size: 11.5px; }
+.padm-fluxo { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; counter-reset: fluxo; }
+.padm-fluxo-passo { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 12px; background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); }
+.padm-fluxo-passo:not(:last-child)::after { content: ""; position: absolute; right: -11px; top: 22px; width: 10px; height: 1px; background: var(--linha); }
+.padm-fluxo-num { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: 50%; background: var(--vermelho-tint); border: 1px solid var(--vermelho-tint-borda); color: var(--texto); font-size: 11px; font-weight: 700; }
+.padm-fluxo-passo strong { font-size: 12.5px; }
+.padm-fluxo-passo small { font-size: 11px; color: var(--cinza); line-height: 1.35; }
+.padm-tabela--larga { min-width: 1080px; }
+.padm-mono { font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+.padm-filtros { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; margin-bottom: 12px; }
+.padm-filtros label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--cinza); font-weight: 600; }
+.padm-filtros select, .padm-filtros input { font: inherit; font-size: 12.5px; padding: 7px 9px; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); min-width: 0; }
+.padm-filtros-acoes { display: flex; gap: 8px; }
+.padm-detalhe { display: grid; grid-template-columns: 1fr; gap: 0; margin: 0 0 12px; }
+.padm-detalhe > div { display: grid; grid-template-columns: 150px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--linha); font-size: 12.5px; }
+.padm-detalhe dt { color: var(--cinza); font-weight: 600; }
+.padm-detalhe dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.padm-detalhe-sub { font-size: 12.5px; margin: 14px 0 6px; }
+.padm-etapas { list-style: none; margin: 4px 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.padm-etapa { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--cinza); }
+.padm-etapa--ok { color: var(--ok); }
+.padm-etapa--andamento { color: var(--texto); font-weight: 640; }
+.padm-etapa--atencao { color: var(--warn); font-weight: 640; }
+.padm-etapa--erro { color: var(--bad); font-weight: 640; }
+.padm-teste-aviso { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--card); font-size: 12.5px; }
+.padm-teste-aviso--erro { border-color: rgba(219,59,59,.3); background: var(--bad-bg); color: var(--bad); }
+.padm-teste-aviso--ok { border-color: rgba(14,157,87,.3); background: var(--ok-bg); color: var(--ok); }
+.padm-teste-aviso ul { margin: 6px 0 0; padding-left: 18px; }
+.padm-teste-tempos { list-style: none; margin: 8px 0; padding: 0; font-size: 12px; color: var(--cinza); display: flex; flex-direction: column; gap: 2px; }
+.padm-teste-alvo { font-size: 13px; font-weight: 640; margin: 0 0 8px; }
+.padm-teste-acoes { display: flex; gap: 8px; margin-top: 12px; }
+.padm-teste-confirma { margin-top: 12px; font-size: 12.5px; }
+.padm-teste-empresa { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--cinza); font-weight: 600; max-width: 380px; margin: 8px 0; }
+@media (max-width: 1100px) { .padm-fluxo { grid-template-columns: repeat(2, minmax(0, 1fr)); } .padm-fluxo-passo::after { display: none; } }
+@media (max-width: 700px) {
+  .padm-saude-lista li { grid-template-columns: 1fr; }
+  .padm-fluxo { grid-template-columns: 1fr; }
+  .padm-detalhe > div { grid-template-columns: 1fr; gap: 2px; }
+  .padm-filtros { grid-template-columns: 1fr 1fr; }
+}

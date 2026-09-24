@@ -7,6 +7,8 @@
 import { asyncHandler } from "../../shared/asyncHandler.js";
 import { identidadeOperacional } from "../../shared/identidade.js";
 import * as service from "./administrativo.comunicacao.service.js";
+import * as central from "./administrativo.comunicacao.central.js";
+import * as teste from "./administrativo.comunicacao.teste.js";
 
 const ok = (res, data, status = 200) => res.status(status).json({ data });
 // Mesma seam de teste de administrativo.controller.js: `app.locals.adminDeps`.
@@ -88,3 +90,32 @@ export const historico = asyncHandler(async (req, res) =>
     organizacaoId: req.query.organizacaoId, status: req.query.status, tipoAlerta: req.query.tipoAlerta,
     desde: req.query.desde, ate: req.query.ate, pagina: req.query.pagina, porPagina: req.query.porPagina,
   }, deps(req))));
+
+// ---- Central de Comunicação (H.4-B.5) ----
+
+// GET /administrativo/comunicacao/mensagens?organizacaoId=&unidadeId=&status=&origem=&desde=&ate=&busca=&pagina=&porPagina=
+export const mensagens = asyncHandler(async (req, res) =>
+  ok(res, await central.mensagens({
+    organizacaoId: req.query.organizacaoId, unidadeId: req.query.unidadeId, status: req.query.status, origem: req.query.origem,
+    desde: req.query.desde, ate: req.query.ate, busca: req.query.busca, pagina: req.query.pagina, porPagina: req.query.porPagina,
+  }, deps(req))));
+
+// GET /administrativo/comunicacao/mensagens/:id
+export const detalheMensagem = asyncHandler(async (req, res) => ok(res, await central.detalheMensagem({ id: req.params.id }, deps(req))));
+
+// GET /administrativo/comunicacao/configuracao-operacional (somente leitura)
+export const configuracaoOperacional = asyncHandler(async (req, res) => ok(res, await central.configuracaoOperacional(deps(req))));
+
+// GET /administrativo/comunicacao/teste/preparo?organizacaoId=&unidadeId=
+export const preparoTeste = asyncHandler(async (req, res) =>
+  ok(res, await teste.preparoTeste({ organizacaoId: req.query.organizacaoId, unidadeId: req.query.unidadeId }, deps(req))));
+
+// POST /administrativo/comunicacao/teste   { organizacaoId, unidadeId, testeId, confirmacaoExplicita }
+export const enviarTeste = asyncHandler(async (req, res) =>
+  ok(res, await teste.enviarTeste({
+    organizacaoId: req.body?.organizacaoId, unidadeId: req.body?.unidadeId, testeId: req.body?.testeId, confirmacaoExplicita: req.body?.confirmacaoExplicita,
+  }, autor(req), deps(req))));
+
+// GET /administrativo/comunicacao/teste/:mensagemId
+export const statusTeste = asyncHandler(async (req, res) =>
+  ok(res, await teste.statusTeste({ mensagemId: req.params.mensagemId }, autor(req), deps(req))));

@@ -207,7 +207,8 @@ describe("Checkpoint H.3-A.1 — item 1/2: status do worker é CONFIGURAÇÃO, n
     const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
     const r = await GET(app, "/administrativo/comunicacao/resumo");
     const chaves = Object.keys(r.json.data.worker);
-    assert.deepEqual(chaves.sort(), ["estado", "fonte"]);
+    // H.4-B.5: + o último ciclo do worker EMBUTIDO (em memória, desta instância) — ainda nenhum campo de heartbeat/saúde/online.
+    assert.deepEqual(chaves.sort(), ["estado", "fonte", "resultadoUltimoCiclo", "rodandoNestaInstancia", "ultimoCicloEm"]);
     assert.doesNotMatch(JSON.stringify(r.json.data.worker), /heartbeat|saude|online|health/i);
   });
 });
@@ -332,13 +333,13 @@ describe("Checkpoint H.3-A — proteção contra habilitado=true (item 21)", () 
     assert.equal(r.status, 400);
   });
 
-  test("configuração válida (sem habilitado) é aceita e a linha gravada tem habilitado=false", async () => {
+  test("configuração válida (sem habilitado) é aceita e a linha gravada NUNCA fica habilitada (a coluna nem é enviada; o default do banco é false)", async () => {
     const estado = estadoBase();
     const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
     const r = await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, { timezone: "America/Sao_Paulo" });
     assert.equal(r.status, 200);
     const linha = estado.comunicacao_habilitacoes.find((h) => h.organizacao_id === ORG_A);
-    assert.equal(linha.habilitado, false);
+    assert.notEqual(linha.habilitado, true);
     assert.equal(linha.timezone, "America/Sao_Paulo");
   });
 
@@ -364,7 +365,7 @@ describe("Checkpoint H.3-A — proteção contra habilitado=true (item 21)", () 
     const r = await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, { telefoneE164: "+5511999998888", timezone: "America/Sao_Paulo" });
     assert.equal(r.status, 200, "a operação principal deve ter sucesso mesmo com a auditoria falhando por rede no teste");
     const linha = estado.comunicacao_habilitacoes.find((h) => h.organizacao_id === ORG_A);
-    assert.equal(linha.habilitado, false);
+    assert.notEqual(linha.habilitado, true);
   });
 
   test("código de auditoria: a chamada usa ACOES.COMUNICACAO_HABILITACAO_ALTERADA e nunca inclui o telefone completo no objeto `detalhes` (revisão estática do call-site)", async () => {

@@ -26,6 +26,8 @@ import { timezoneValido } from "../comunicacao/comunicacao.horario.js";
 import { formatarMensagemPendencia } from "../comunicacao/comunicacao.template.js";
 import { telefoneAutorizadoNoPiloto, pilotoHabilitado, lerAllowlistPiloto } from "../comunicacao/comunicacao.piloto.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
+import { lerEstadoDoWorker } from "../../worker-comunicacao/estado.js";
+import { mascararTelefoneUi } from "./administrativo.comunicacao.central.js";
 
 const TIPOS_ALERTA_VALIDOS = Object.values(TIPOS_ALERTA);
 
@@ -46,7 +48,12 @@ function estadoWorkerLocal() {
   // não uma confirmação de que o laço está de fato rodando/saudável — ver
   // Checkpoint H.3-A.1, item 1. Health distribuído real fica como evolução
   // futura (exigiria tocar worker-comunicacao/**, fora de escopo aqui).
-  return { estado: habilitadoPorFlag ? "habilitado" : "desabilitado", fonte: "configuracao_processo_local" };
+  // H.4-B.5 — o worker é EMBUTIDO (mesmo processo da API): quando roda nesta instância, o último ciclo é real (em memória). Nunca um segredo.
+  const vivo = lerEstadoDoWorker();
+  return {
+    estado: habilitadoPorFlag ? "habilitado" : "desabilitado", fonte: "configuracao_processo_local",
+    rodandoNestaInstancia: !!vivo, ultimoCicloEm: vivo?.lastCycleAt ?? null, resultadoUltimoCiclo: vivo?.lastCycleStatus ?? null,
+  };
 }
 
 const rotuloModo = (modo) => (modo === "NORMAL" ? "ATIVA" : modo === "REACTIVE_ONLY" ? "SOMENTE_REATIVA" : "PAUSADA");
@@ -73,11 +80,21 @@ export async function resumo(deps = {}) {
   // itens 7/8). Antes disto, "falhas hoje" na verdade lia o total histórico
   // de FAILED (nunca esteve de fato recortado por tempo) — corrigido aqui.
   const ultimas24h = await repo.contarUltimas24h(deps);
+  const piloto = estadoPilotoRuntime(null, deps.env ?? process.env);
+  const fila = { deliveryUnknown: porStatus.DELIVERY_UNKNOWN ?? 0 };
 
   return {
     gateway,
     worker: estadoWorkerLocal(),
     comunicacao: { modo, rotulo: rotuloModo(modo) },
+    // H.4-B.5 — saúde da Central. Só booleanos/contagens/rótulos: nunca telefone, segredo, HMAC nem auth-state.
+    piloto: { ativo: piloto.pilotoAtivo, quantidadeDestinos: piloto.quantidadeDestinos },
+    backend: { online: true, versao: String(process.env.RENDER_GIT_COMMIT ?? "").slice(0, 7) || null },
+    recovery: { estado: "desativado", fonte: "politica_do_projeto" }, // política registrada (G.4.1); o Painel não lê o runtime do Gateway
+    entrega: {
+      estado: gateway?.estado === "conectado" && fila.deliveryUnknown === 0 ? "operacional" : "atencao",
+      motivo: gateway?.estado !== "conectado" ? "WhatsApp desconectado" : fila.deliveryUnknown > 0 ? "Há mensagens com entrega não confirmada" : null,
+    },
     empresas: { total: totalOrgs, configuradas, habilitadas: orgsHabilitadas, pausadas },
     fila: {
       scheduled: porStatus.SCHEDULED ?? 0, processing: porStatus.PROCESSING ?? 0, sending: porStatus.SENDING ?? 0,
@@ -85,6 +102,18 @@ export async function resumo(deps = {}) {
     },
     ultimas24h: { enviadas: ultimas24h.enviadas, falhas: ultimas24h.falhas },
   };
+}
+
+/** Próximo passo da empresa na Central — texto de negócio derivado dos dados reais (nunca inventado). */
+export function proximaAcaoOrganizacao({ hab, contato, habilitada, modo, temAgendada }) {
+  if (!hab || !hab.destinatario_contato_id) return "Configurar o destinatário";
+  if (!contato) return "Configurar o destinatário";
+  if (contato.opt_out === true) return "Destinatário em opt-out — não enviar";
+  if (contato.consentimento !== true || contato.verificado !== true) return "Confirmar consentimento e verificação";
+  if (!hab.timezone || !hab.tipos_permitidos?.length) return "Concluir a configuração (timezone e tipo de alerta)";
+  if (!habilitada) return "Habilitar a comunicação desta empresa";
+  if (modo !== "NORMAL") return "Aguardando a ativação da automação";
+  return temAgendada ? "Envio agendado" : "Monitorando pendências";
 }
 
 function statusConfiguracao(hab) {
@@ -98,11 +127,23 @@ function statusConfiguracao(hab) {
 
 /** GET /administrativo/comunicacao/organizacoes?busca= */
 export async function organizacoes({ busca } = {}, deps = {}) {
-  const [linhas, snapshot, atividade] = await Promise.all([
+  const [linhas, snapshot, atividade, unidadesTodas, ultimaMsg, modo] = await Promise.all([
     repo.listarOrganizacoesComConfiguracao({ busca }, deps),
     lerPendencias({}, deps),
     repo.obterAtividadeRecentePorOrganizacao(deps),
+    repo.listarUnidades({}, deps),
+    repo.obterUltimaMensagemPorOrganizacao(deps),
+    modoAtual(deps),
   ]);
+  // contatos dos destinatários configurados — UMA consulta em lote; só o telefone MASCARADO sai daqui.
+  const contatos = await repo.listarContatosPorIds(linhas.map((o) => o.comunicacao_habilitacoes?.destinatario_contato_id), deps);
+  const contatoPorId = new Map(contatos.map((c) => [c.id, c]));
+  const unidadesPorOrg = new Map();
+  for (const u of unidadesTodas) {
+    if (u.ativo === false) continue;
+    if (!unidadesPorOrg.has(u.organizacao_id)) unidadesPorOrg.set(u.organizacao_id, []);
+    unidadesPorOrg.get(u.organizacao_id).push({ unidadeId: u.id, nome: u.nome });
+  }
   const pendenciasPorOrg = new Map();
   for (const u of snapshot.unidades ?? []) {
     if (u.criticidade !== "critico" && u.criticidade !== "atencao") continue;
@@ -111,9 +152,21 @@ export async function organizacoes({ busca } = {}, deps = {}) {
 
   return linhas.map((o) => {
     const hab = o.comunicacao_habilitacoes ?? null;
+    const contato = hab?.destinatario_contato_id ? (contatoPorId.get(hab.destinatario_contato_id) ?? null) : null;
+    const habilitada = hab?.habilitado === true;
+    const unidades = unidadesPorOrg.get(o.id) ?? [];
     return {
       organizacaoId: o.id,
       nome: o.nome,
+      // H.4-B.5 — Central: por que esta empresa pode ou não receber, e qual é o próximo passo (tudo derivado dos dados reais).
+      habilitada,
+      unidadesMonitoradas: unidades.length, unidades: unidades.slice(0, 20),
+      contato: contato ? {
+        telefoneMascarado: mascararTelefoneUi(contato.telefone_e164), consentimento: contato.consentimento === true,
+        verificado: contato.verificado === true, optOut: contato.opt_out === true,
+      } : null,
+      ultimaMensagem: ultimaMsg.get(o.id) ?? null,
+      proximaAcao: proximaAcaoOrganizacao({ hab, contato, habilitada, modo, temAgendada: !!atividade.proximoPorOrg.get(o.id) }),
       status: statusConfiguracao(hab),
       destinatarioConfigurado: !!(hab?.destinatario_contato_id && hab?.destinatario_perfil_id),
       timezoneConfigurado: !!hab?.timezone,

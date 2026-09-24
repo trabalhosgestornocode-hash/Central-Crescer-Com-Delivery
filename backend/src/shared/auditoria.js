@@ -155,6 +155,14 @@ export const ACOES = {
   COMUNICACAO_ORGANIZACAO_DESABILITADA: "comunicacao.organizacao_desabilitada_painel_admin",
   COMUNICACAO_MODO_ATIVADO: "comunicacao.modo_ativado_painel_admin",
   COMUNICACAO_MODO_DESATIVADO: "comunicacao.modo_desativado_painel_admin",
+
+  // Painel Administrativo / Comunicação (H.4-B.5) — TESTE CONTROLADO da infraestrutura (sem alerta, sem worker). Sempre com ator humano
+  // (id, e-mail, perfil). Nunca grava telefone completo (só mascarado) nem o conteúdo da mensagem.
+  COMUNICACAO_TESTE_INICIADO: "COMUNICACAO_TESTE_INICIADO",
+  COMUNICACAO_TESTE_ENVIADO: "COMUNICACAO_TESTE_ENVIADO",
+  COMUNICACAO_TESTE_ENTREGUE: "COMUNICACAO_TESTE_ENTREGUE",
+  COMUNICACAO_TESTE_LIDO: "COMUNICACAO_TESTE_LIDO",
+  COMUNICACAO_TESTE_FALHOU: "COMUNICACAO_TESTE_FALHOU",
 };
 
 /**

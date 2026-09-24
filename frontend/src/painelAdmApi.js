@@ -209,6 +209,30 @@ export const painelAdmApi = {
   /** Histórico (mensagens em estado terminal). Mesmos filtros + `tipoAlerta`/`desde`/`ate`. */
   comunicacaoHistorico: (filtros = {}) => chamar("/comunicacao/historico" + qs(filtros)),
 
+  // -- Central de Comunicação (H.4-B.5) --
+
+  /** Histórico COMPLETO de mensagens (todas as origens/status): empresa, unidade, status, origem, desde/ate (ISO), busca (nome), pagina, porPagina. */
+  comunicacaoMensagens: (filtros = {}) => chamar("/comunicacao/mensagens" + qs(filtros)),
+
+  /** Detalhe de uma mensagem (ids abreviados, timestamps, tentativas) — sem conteúdo, sem telefone completo. */
+  comunicacaoMensagem: (id) => chamar(`/comunicacao/mensagens/${encodeURIComponent(id)}`),
+
+  /** Configuração operacional GLOBAL — somente leitura. */
+  comunicacaoConfiguracaoOperacional: () => chamar("/comunicacao/configuracao-operacional"),
+
+  /** O que o modal do teste mostra: empresa, unidade, contato mascarado, WhatsApp, consentimento, verificação, preview e bloqueios. */
+  comunicacaoTestePreparo: ({ organizacaoId, unidadeId } = {}) => chamar("/comunicacao/teste/preparo" + qs({ organizacaoId, unidadeId })),
+
+  /**
+   * ENVIA UMA mensagem de teste (ator humano + confirmação explícita; o backend valida todos os gates). `testeId` é gerado pela TELA ao abrir o modal:
+   * duplo clique = mesmo testeId = uma única mensagem.
+   */
+  comunicacaoTesteEnviar: ({ organizacaoId, unidadeId, testeId }) =>
+    chamar("/comunicacao/teste", { method: "POST", json: { organizacaoId, unidadeId, testeId, confirmacaoExplicita: true } }),
+
+  /** Acompanhamento do teste (a tela consulta a cada poucos segundos). */
+  comunicacaoTesteStatus: (mensagemId) => chamar(`/comunicacao/teste/${encodeURIComponent(mensagemId)}`),
+
   /** Pacote COMPLETO do relatório executivo — a fonte única do PDF. */
   relatorioExecutivo: ({ mes, topN } = {}) => chamar("/relatorios/executivo" + qs({ mes, topN })),
 
