@@ -109,6 +109,9 @@ export function criarObservadorEntrega({
     timers.add(h);
   }
 
+  /** Chave de dedupe de um receipt: mesmo id + mesmo status (+ código de erro). */
+  const chaveDe = (evt) => `${evt.providerMessageId}|${evt.status}|${evt.erroCodigo ?? ""}`;
+
   async function entregar(evt, tentativa) {
     const payload = { contratoStatus: CONTRATO_STATUS_VERSAO, providerMessageId: evt.providerMessageId, status: evt.status, ocorridoEm: evt.ocorridoEm, ackTipo: evt.ackTipo };
     if (evt.status === "PROVIDER_ERROR") payload.erroCodigo = evt.erroCodigo;
@@ -135,6 +138,10 @@ export function criarObservadorEntrega({
     // retry LIMITADO (em memória; se o processo reiniciar, o registro histórico continua sendo SENT).
     if (tentativa < atrasosRetryMs.length) { agendarRetry(() => { entregar(evt, tentativa + 1).catch(() => {}); }, atrasosRetryMs[tentativa]); return; }
     cont.esgotados += 1;
+    // Esgotou SEM o backend conhecer o id (ou com falha de transporte): libera a chave de dedupe — um reenvio legítimo do MESMO recibo (mesmo id+status),
+    // quando o backend já souber o id, deve tentar de novo e não ser engolido como "duplicado" até o processo reiniciar. (400 de contrato e estados
+    // não elegíveis/ambíguos são determinísticos: a chave continua presa de propósito.)
+    vistos.delete(chaveDe(evt));
     emitir("warn", "provider_receipt_entrega_esgotada", { providerMessageId: evt.providerMessageId, status: evt.status, ultimoResultado: resultado ?? "falha_de_transporte", tentativas: tentativa + 1 });
   }
 
@@ -144,7 +151,7 @@ export function criarObservadorEntrega({
     const r = rastreio(providerMessageId);
     if (!r) { contarNaoRastreado(); return false; }
     const erroCod = status === "PROVIDER_ERROR" ? codigoErro(erro) : null;
-    const chave = `${providerMessageId}|${status}|${erroCod ?? ""}`;
+    const chave = chaveDe({ providerMessageId, status, erroCodigo: erroCod });
     if (vistos.has(chave)) { cont.duplicados += 1; return false; }
     vistos.add(chave);
     while (vistos.size > maxDedupe) vistos.delete(vistos.values().next().value);

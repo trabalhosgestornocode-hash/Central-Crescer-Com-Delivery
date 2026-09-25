@@ -153,6 +153,22 @@ export function trilhaDe(status) {
 }
 
 export const rotuloStatus = (status) => ROTULO_STATUS[status] ?? String(status ?? "");
+
+/**
+ * Rótulo VISÍVEL (texto, não só cor/tooltip) do último estado COMPROVADO de uma mensagem enviada: "Enviada", "Entregue 10:32", "Lida 10:35".
+ * Regras: o estado vem só do `status` (que o banco só avança com receipt real do provider); a hora vem só do carimbo do PRÓPRIO estado
+ * (entregueEm / lidoEm) e é omitida quando não existe — nunca se inventa hora nem se infere "Lida". Outros estados não têm rótulo aqui ("").
+ * @param {{status?: string, entregueEm?: string|null, lidoEm?: string|null}} m
+ */
+export function rotuloEntrega(m) {
+  const com = (base, iso) => { const h = horaLocal(iso); return h ? `${base} ${h}` : base; };
+  switch (m?.status) {
+    case "READ": return com("Lida", m.lidoEm);
+    case "DELIVERED": return com("Entregue", m.entregueEm);
+    case "SENT": return "Enviada";
+    default: return "";
+  }
+}
 export const dicaStatus = (status) => DICA_STATUS[status] ?? "";
 /** Estados em que a mensagem ainda pode mudar (a tela mantém o acompanhamento). */
 export const statusEmAndamento = (status) => ["SCHEDULED", "PROCESSING", "SENDING", "SENT", "DELIVERED"].includes(status);

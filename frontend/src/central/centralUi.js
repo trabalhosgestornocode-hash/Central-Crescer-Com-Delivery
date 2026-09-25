@@ -9,7 +9,7 @@ import { badge } from "./centralStatus.js";
 import { htmlEmpresasUnidades } from "./centralAtividade.js";
 import {
   ABAS, FILTROS_CONVERSA, ROTULO_CATEGORIA, ROTULO_ORIGEM, ROTULO_STATUS, trilhaDe, rotuloStatus, dicaStatus,
-  horaLocal, horarioCurto, dataHoraCurta, blocosDaConversa, matizDe, resumirLista, resumoAssociacoes, situacaoDoContato, caracteres, TEXTO_MAX,
+  horaLocal, horarioCurto, dataHoraCurta, blocosDaConversa, matizDe, resumirLista, resumoAssociacoes, rotuloEntrega, situacaoDoContato, caracteres, TEXTO_MAX,
 } from "./centralModelo.js";
 
 const https = (u) => (typeof u === "string" && /^https:\/\//i.test(u) ? u : null);
@@ -30,13 +30,13 @@ export function avatar({ contatoId, nome, iniciais, fotoUrl, tamanho = "m" }) {
 /**
  * Trilha de entrega: 3 marcas (enviada, entregue, lida). Cada marca só acende com o próprio fato. Tooltip por foco/hover (`data-dica`) e rótulo acessível.
  * @param {string} status
- * @param {{texto?: boolean}} [o] `texto`: mostra o rótulo ao lado (usado nos estados que pedem atenção)
+ * @param {{texto?: boolean, rotulo?: string}} [o] `texto`: mostra o rótulo ao lado (estados que pedem atenção); `rotulo`: texto já pronto do último estado comprovado ("Entregue 10:32")
  */
-export function trilha(status, { texto = false } = {}) {
+export function trilha(status, { texto = false, rotulo = "" } = {}) {
   const marcas = trilhaDe(status);
   const resumo = `${rotuloStatus(status)}. ${dicaStatus(status)}`.trim();
   const ponto = marcas.map((m) => `<i class="cc-marca cc-marca--${m.estado}" data-dica="${e(`${m.rotulo}: ${m.dica}`)}"></i>`).join("");
-  return `<span class="cc-trilha" role="img" tabindex="0" aria-label="${e(resumo)}" data-dica="${e(resumo)}">${ponto}</span>${texto ? `<span class="cc-status-txt cc-status-txt--${e(String(status).toLowerCase())}">${e(rotuloStatus(status))}</span>` : ""}`;
+  return `<span class="cc-trilha" role="img" tabindex="0" aria-label="${e(resumo)}" data-dica="${e(resumo)}">${ponto}</span>${texto ? `<span class="cc-status-txt cc-status-txt--${e(String(status).toLowerCase())}">${e(rotuloStatus(status))}</span>` : rotulo ? `<span class="cc-status-txt cc-status-txt--${e(String(status).toLowerCase())}">${e(rotulo)}</span>` : ""}`;
 }
 
 /** Estados que merecem o rótulo por extenso ao lado da trilha (o resto a trilha já conta). */
@@ -168,7 +168,7 @@ export function htmlChatCabecalho(contato, envio, { detalhesAberto = false } = {
 export function htmlMensagem(m) {
   const falhou = m.status === "FAILED" && m.direcao === "saida";
   const rodape = m.direcao === "saida"
-    ? `<span class="cc-msg-rodape"><time datetime="${e(m.em)}">${e(horaLocal(m.em))}</time>${trilha(m.status, { texto: COM_TEXTO.has(m.status) })}</span>`
+    ? `<span class="cc-msg-rodape"><time datetime="${e(m.em)}">${e(horaLocal(m.em))}</time>${trilha(m.status, { texto: COM_TEXTO.has(m.status), rotulo: rotuloEntrega(m) })}</span>`
     : `<span class="cc-msg-rodape"><time datetime="${e(m.em)}">${e(horaLocal(m.em))}</time></span>`;
   const corpo = m.tipo === "midia" ? `<p class="cc-msg-texto cc-msg-texto--midia">${icon("paperclip", { size: 14 })} Mídia recebida. Ainda não é exibida aqui.</p>` : `<p class="cc-msg-texto">${e(m.texto ?? "")}</p>`;
   const reenviar = falhou && m.falhaLocal ? `<button type="button" class="cc-reenviar" data-cc-reenviar="${e(m.envioId ?? "")}">Tentar de novo</button>` : "";

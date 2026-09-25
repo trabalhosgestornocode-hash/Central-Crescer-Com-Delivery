@@ -61,7 +61,7 @@
 .cc-marca--andamento { background: var(--c1); animation: cc-pulso 1s ease-in-out infinite; }
 .cc-marca--falha { background: var(--cc-bad) !important; } .cc-marca--atencao { background: var(--cc-warn) !important; } .cc-marca--cancelado { background: #b3b7be !important; }
 .cc-status-txt { font-size: 11.5px; font-weight: 600; color: var(--cc-mute); margin-left: 4px; }
-.cc-status-txt--failed { color: var(--cc-bad); } .cc-status-txt--delivery_unknown { color: #8a6208; }
+.cc-status-txt--read { color: var(--cc-brand); } .cc-status-txt--failed { color: var(--cc-bad); } .cc-status-txt--delivery_unknown { color: #8a6208; }
 /* tooltips (hover na marca; foco por teclado na trilha inteira) */
 [data-dica] { --dx: 0; }
 .cc-marca[data-dica]:hover::after, .cc-trilha[data-dica]:focus-visible::after {
@@ -206,7 +206,7 @@ button.cc-medida { cursor: pointer; transition: background .15s; } button.cc-med
 .cc-msg--manual { background: var(--cc-graphite); color: #f3f4f7; }
 .cc-msg--manual .cc-msg-rodape { color: rgba(255,255,255,.55); }
 .cc-msg--manual .cc-trilha { --off: rgba(255,255,255,.26); --c1: #c9ced6; --c2: #5fd39a; --c3: #7db7ff; }
-.cc-msg--manual .cc-status-txt { color: rgba(255,255,255,.7); } .cc-msg--manual .cc-status-txt--failed { color: #ff9a9a; }
+.cc-msg--manual .cc-status-txt { color: rgba(255,255,255,.7); } .cc-msg--manual .cc-status-txt--failed { color: #ff9a9a; } .cc-msg--manual .cc-status-txt--read { color: #fff; }
 .cc-msg--manual .cc-msg-mais { background: rgba(255,255,255,.14); color: #fff; }
 /* voz automática: claro, tracejado */
 .cc-msg--automatica { background: var(--cc-paper); border: 1.5px dashed rgba(216,19,36,.38); padding: 6.5px 10.5px 3.5px; }

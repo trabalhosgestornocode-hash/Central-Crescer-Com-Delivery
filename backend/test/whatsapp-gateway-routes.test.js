@@ -365,11 +365,26 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
     }
   });
 
-  test("status-provider: o organizacaoId vem SEMPRE da config do backend — uma mensagem de OUTRA organização não é alcançada", async () => {
+  // CONTRATO (incidente 25/09/2026): a org do receipt é a do REGISTRO que carrega o providerMessageId — resolvida no servidor, nunca do payload. O envio
+  // manual do Central fica na empresa do responsável (≠ org da conexão do Gateway); antes disso o receipt era NAO_ENCONTRADA para sempre.
+  test("status-provider: a org vem do REGISTRO da saída (não do payload nem só da conexão): a mensagem de OUTRA org com aquele id É atualizada — e só ela", async () => {
     repo._semearMensagem("outra-organizacao", { providerMessageId: "WAALHEIA", status: "SENT" });
+    repo._semearMensagem(ORG_ID, { providerMessageId: "WAINTACTA", status: "SENT" });
     _resetarNonces();
     const r = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: "WAALHEIA" }));
+    assert.equal((await r.json()).resultado, "APLICADO");
+    assert.equal(repo._mensagem("outra-organizacao", "WAALHEIA").status, "DELIVERED");
+    assert.equal(repo._mensagem(ORG_ID, "WAINTACTA").status, "SENT", "nenhuma outra mensagem (de nenhuma org) é tocada");
+  });
+
+  test("status-provider: cross-tenant impossível — organizacao_id no payload é 400; o mesmo id em duas orgs (sem a da conexão) é ambíguo => NAO_ENCONTRADA e nenhuma muda", async () => {
+    _resetarNonces();
+    const injetado = await chamarAssinado("POST", STATUS_URL, evento({ organizacao_id: "outra-organizacao" }));
+    assert.equal(injetado.status, 400); assert.deepEqual(await injetado.json(), { error: "status_provider_invalido", campo: "campo_desconhecido" });
+    repo._semearMensagem("org-a", { providerMessageId: "WADUPLO", status: "SENT" }); repo._semearMensagem("org-b", { providerMessageId: "WADUPLO", status: "SENT" });
+    _resetarNonces();
+    const r = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: "WADUPLO" }));
     assert.equal((await r.json()).resultado, "NAO_ENCONTRADA");
-    assert.equal(repo._mensagem("outra-organizacao", "WAALHEIA").status, "SENT");
+    assert.equal(repo._mensagem("org-a", "WADUPLO").status, "SENT"); assert.equal(repo._mensagem("org-b", "WADUPLO").status, "SENT");
   });
 });
