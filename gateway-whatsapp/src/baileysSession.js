@@ -895,6 +895,7 @@ export function criarSessaoBaileys({
     notificar: (payload) => backendClient.notificarStatusProvider(payload),
     emitir: (nivel, evento, dados) => log(nivel, evento, dados),
     contexto: () => ({ socketGeneration: geracaoSocket, leaseEpoch: leaseManager?.contexto()?.leaseEpoch ?? null }),
+    providerInstanceId: config.providerInstanceId,
   });
 
   function aoMessagesUpdate(updates) {

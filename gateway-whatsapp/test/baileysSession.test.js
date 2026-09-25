@@ -1097,7 +1097,10 @@ describe("baileysSession — eventos de mensagem", () => {
     assert.equal(chamadas.length, 1, "dedupe entre ws e ev");
     assert.equal(chamadas[0].providerMessageId, providerMessageId);
     assert.equal(chamadas[0].status, "DELIVERED");
-    assert.equal(chamadas[0].contratoStatus, 1);
+    // envio COM correlationId (a idempotencyKey do pedido) + instância configurada => receipt VINCULADO (contrato v2): prova de origem do envio.
+    assert.equal(chamadas[0].contratoStatus, 2);
+    assert.equal(chamadas[0].providerInstanceId, "teste");
+    assert.equal(chamadas[0].correlationId, "wa:alerta:x:v1");
   });
 
   test("getMessageStatus para id desconhecido devolve UNKNOWN", async () => {
