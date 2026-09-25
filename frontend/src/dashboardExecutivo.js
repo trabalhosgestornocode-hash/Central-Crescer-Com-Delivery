@@ -634,7 +634,9 @@ function comparativoRegimesHtml(d) {
   if (!linhas.length) return "";
   const [rotuloA, rotuloB] = [d.comparativoSegmentos[0], d.comparativoSegmentos[d.comparativoSegmentos.length - 1]]
     .map((s) => ROTULO_MODELO_COMPARATIVO[s.modelo] ?? s.modelo);
-  const linha = (l) => `<tr><td>${escapeHtml(l.rotulo)}</td><td class="num">${l.a}</td><td class="num">${l.b}</td><td class="num">${l.variacaoTexto}</td></tr>`;
+  // Linhas percentuais trazem `{texto, contexto, badge}` (valorDoRegistro); as operacionais, string.
+  const celula = (v) => escapeHtml(v != null && typeof v === "object" ? v.texto : v);
+  const linha = (l) => `<tr><td>${escapeHtml(l.rotulo)}</td><td class="num">${celula(l.a)}</td><td class="num">${celula(l.b)}</td><td class="num">${escapeHtml(l.variacaoTexto)}</td></tr>`;
   return `
     <section class="dex-painel">
       <h3>${icon("trending-up", { size: 15 })} Comparativo — ${escapeHtml(rotuloA)} × ${escapeHtml(rotuloB)}</h3>
