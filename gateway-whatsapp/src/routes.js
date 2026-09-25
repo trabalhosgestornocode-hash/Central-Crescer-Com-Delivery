@@ -11,12 +11,19 @@
 
 import { Router } from "express";
 import { log } from "./logsafe.js";
+import { qrParaSvg } from "./qrSvg.js";
 
 /**
  * @param {ReturnType<import('./baileysSession.js').criarSessaoBaileys>} sessao
  */
-export function criarRotas(sessao) {
+export function criarRotas(sessao, { executarOperacao } = {}) {
   const router = Router();
+  router.post("/whatsapp/operacao", async (req, res, next) => {
+    try {
+      if (!executarOperacao) return res.status(503).json({ error: "OPERACAO_NAO_SUPORTADA" });
+      res.json(await executarOperacao(req.corpoJson));
+    } catch (e) { next(e); }
+  });
 
   router.post("/whatsapp/connect", async (req, res, next) => {
     try {
@@ -63,7 +70,26 @@ export function criarRotas(sessao) {
   // público, não tem tela própria neste checkpoint (Checkpoint C3, seção 6).
   router.get("/whatsapp/qr", (req, res) => {
     res.set("Cache-Control", "no-store");
-    res.json({ qr: sessao.obterQrAtual() });
+    // `qr` como sempre (compatível) + metadados do QR (quando nasce, quando expira, qual é) — nunca persistido nem logado.
+    // `svg` = o mesmo QR já desenhado (a aba Conexão o mostra em <img>, sem biblioteca de terceiros no navegador).
+    const qr = sessao.obterQrAtual();
+    res.json({ qr, svg: qrParaSvg(qr), ...(sessao.infoQr?.() ?? {}) });
+  });
+
+  // Aba Conexão — perfil da PRÓPRIA conta conectada (nome, foto, recado, tipo). Só leitura; nunca devolve credencial.
+  router.get("/whatsapp/perfil", async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(await sessao.perfilConta());
+    } catch (e) { next(e); }
+  });
+
+  // Aba Conexão — desconecta a CONTA: desvincula o aparelho (melhor esforço) e faz o reset já existente. Nunca apaga histórico (vive no backend).
+  router.post("/whatsapp/desconectar-conta", async (req, res, next) => {
+    try {
+      const { desvincular } = req.corpoJson ?? {};
+      res.json(await sessao.desconectarConta({ desvincular: desvincular !== false }));
+    } catch (e) { next(e); }
   });
 
   router.post("/whatsapp/messages", async (req, res, next) => {
@@ -87,6 +113,16 @@ export function criarRotas(sessao) {
       const { telefoneE164 } = req.corpoJson ?? {};
       await sessao.markAsRead({ providerMessageId: req.params.id, telefoneE164 });
       res.json({ ok: true });
+    } catch (e) { next(e); }
+  });
+
+  // Central de Comunicação — foto de perfil de UM número (o backend só pergunta por contatos autorizados e faz o cache). Não envia nada.
+  router.post("/whatsapp/perfil-foto", async (req, res, next) => {
+    try {
+      const { telefoneE164 } = req.corpoJson ?? {};
+      if (typeof telefoneE164 !== "string" || !/^\+[1-9][0-9]{7,14}$/.test(telefoneE164)) return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_PHONE" });
+      res.set("Cache-Control", "no-store");
+      res.json(await sessao.fotoPerfil({ telefoneE164 }));
     } catch (e) { next(e); }
   });
 

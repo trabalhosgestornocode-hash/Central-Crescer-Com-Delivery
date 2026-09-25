@@ -137,7 +137,7 @@ describe("habilitado=true SOZINHO não basta — a política ainda exige o resto
     modo: MODOS.NORMAL, ehProativo: true, contatoExiste: true, telefoneVerificado: true, optOut: false, consentimento: true,
     destinatarioAtivo: true, vinculoValido: true, empresaHabilitada: h.empresaHabilitada, tipoPermitido: h.tipoPermitido,
     empresaPausada: h.empresaPausada, configHorarioValida: h.configHorarioValida, pendenciaAindaExiste: true,
-    duplicado: false, cooldownAtivo: false, rateLimitExcedido: false, dentroDaJanela: true, providerConectado: true, ...extra,
+    duplicado: false, cooldownAtivo: false, rateLimitExcedido: false, dentroDaJanela: true, providerConectado: true, identidadeConfirmada: true, ...extra,
   });
 
   test("tudo liberado -> allowed; cada gate removido bloqueia com o motivo certo", () => {

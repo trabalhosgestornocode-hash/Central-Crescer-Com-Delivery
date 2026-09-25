@@ -233,6 +233,36 @@ export const painelAdmApi = {
   /** Acompanhamento do teste (a tela consulta a cada poucos segundos). */
   comunicacaoTesteStatus: (mensagemId) => chamar(`/comunicacao/teste/${encodeURIComponent(mensagemId)}`),
 
+  // -- Central de Comunicação: conversas com responsáveis autorizados --
+  // A autorização de quem aparece é do BACKEND (roster); nenhum telefone completo trafega. O envio manual leva um `envioId` gerado pela tela
+  // (duplo clique/reenvio = mesmo envioId = uma única mensagem).
+
+  centralVisaoGeral: () => chamar("/comunicacao/central/visao-geral"),
+  centralAutomacoes: () => chamar("/comunicacao/central/automacoes"),
+  centralDestinatarios: ({ busca } = {}) => chamar("/comunicacao/central/destinatarios" + qs({ busca })),
+  centralHistorico: (filtros = {}) => chamar("/comunicacao/central/historico" + qs(filtros)),
+  centralDiagnostico: () => chamar("/comunicacao/central/diagnostico"),
+  /** Cursor barato de mudanças (só ids e totais). Sem `cursor` devolve o atual. */
+  centralAtualizacoes: ({ cursor } = {}) => chamar("/comunicacao/central/atualizacoes" + qs({ cursor })),
+  conversas: ({ filtro, busca } = {}) => chamar("/comunicacao/conversas" + qs({ filtro, busca })),
+  conversa: (contatoId, { horas, antes } = {}) => chamar(`/comunicacao/conversas/${encodeURIComponent(contatoId)}` + qs({ horas, antes })),
+  conversaMarcarLida: (contatoId, { ate } = {}) => chamar(`/comunicacao/conversas/${encodeURIComponent(contatoId)}/lida`, { method: "POST", json: ate ? { ate } : {} }),
+  conversaEnviar: (contatoId, { envioId, texto, organizacaoId, unidadeId }) =>
+    chamar(`/comunicacao/conversas/${encodeURIComponent(contatoId)}/mensagens`, { method: "POST", json: { envioId, texto, organizacaoId, unidadeId } }),
+
+  // -- Aba Conexão (identidade do WhatsApp). O QR chega SÓ como imagem (SVG desenhado no Gateway) e nunca é guardado no navegador além da tela aberta.
+  //    Ler o estado é livre para quem vê a Central; o QR e as ações exigem a permissão específica (o backend decide; 403 se não houver).
+  conexaoEstado: () => chamar("/comunicacao/conexao"),
+  conexaoIniciar: ({ revisar = false } = {}) => chamar("/comunicacao/conexao/iniciar", { method: "POST", json: { revisar } }),
+  conexaoQr: (operacaoId) => chamar("/comunicacao/conexao/qr" + qs({ operacaoId }), { headers: { "Cache-Control": "no-store" }, cache: "no-store" }),
+  conexaoNovoQr: (operacaoId) => chamar("/comunicacao/conexao/novo-qr", { method: "POST", json: { operacaoId } }),
+  conexaoConfirmar: ({ operacaoId, utilizarComoAgente, ambiente }) => chamar("/comunicacao/conexao/confirmar", { method: "POST", json: { operacaoId, utilizarComoAgente: utilizarComoAgente === true, ambiente } }),
+  conexaoCancelar: (operacaoId) => chamar("/comunicacao/conexao/cancelar", { method: "POST", json: { operacaoId } }),
+  conexaoDesconectar: () => chamar("/comunicacao/conexao/desconectar", { method: "POST", json: { confirmacaoExplicita: true } }),
+  conexaoReconciliar: () => chamar("/comunicacao/conexao/reconciliar", { method: "POST", json: {} }),
+  conexaoTrocar: () => chamar("/comunicacao/conexao/trocar", { method: "POST", json: { confirmacaoExplicita: true } }),
+  conexaoIdentidade: ({ ambiente, agenteCrescer }) => chamar("/comunicacao/conexao/identidade", { method: "PUT", json: { ambiente, agenteCrescer } }),
+
   /** Pacote COMPLETO do relatório executivo — a fonte única do PDF. */
   relatorioExecutivo: ({ mes, topN } = {}) => chamar("/relatorios/executivo" + qs({ mes, topN })),
 

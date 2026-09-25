@@ -13,6 +13,7 @@ import { modoAtual } from "../comunicacao/comunicacao.config.js";
 import { MODOS, STATUS_MENSAGEM } from "../comunicacao/comunicacao.constants.js";
 import { pilotoHabilitado, lerAllowlistPiloto } from "../comunicacao/comunicacao.piloto.js";
 import * as filaRepo from "../comunicacao/comunicacao.fila.repo.js";
+import { identidadeConfirmada as lerIdentidadeConfirmada } from "../comunicacao/comunicacao.identidade.js";
 import {
   enviarMensagemTeste, textoDoTeste, limiteTestesReais, criarWhatsAppServiceDoAmbiente, chaveIdempotenciaTeste, PROPOSITO_TESTE, TIPO_MENSAGEM_TESTE,
 } from "../comunicacao/comunicacao.teste.js";
@@ -27,6 +28,7 @@ const lerGateway = (deps) => (deps.estadoGateway !== undefined ? deps.estadoGate
 const MENSAGENS = Object.freeze({
   MODO_NAO_DISABLED: "O teste só pode ser feito com a automação desativada. Desative a comunicação automática antes de testar.",
   GATEWAY_INDISPONIVEL: "O WhatsApp não está conectado no momento.",
+  CONEXAO_NAO_CONFIRMADA: "A conta do WhatsApp conectada ainda não foi confirmada. Confirme a conta na aba Conexão antes de testar.",
   WHATSAPP_NAO_CONFIGURADO: "A conexão do backend com o WhatsApp não está configurada.",
   UNIDADE_INVALIDA: "Selecione uma unidade ativa desta empresa.",
   SEM_DESTINATARIO: "Esta empresa não tem um destinatário configurado.",
@@ -73,6 +75,9 @@ async function avaliarGates({ organizacaoId, unidadeId }, deps = {}) {
   const bloqueios = [];
   if (modo !== MODOS.DISABLED) bloqueios.push("MODO_NAO_DISABLED");
   if (gateway.estado !== "conectado") bloqueios.push("GATEWAY_INDISPONIVEL");
+  // CONNECTED sozinho não basta: a conta conectada precisa ser a CONFIRMADA na aba Conexão (só banco; fail-closed). Vale para o teste real também.
+  const confirmada = deps.identidadeConfirmada !== undefined ? deps.identidadeConfirmada : await lerIdentidadeConfirmada(deps);
+  if (confirmada !== true) bloqueios.push("CONEXAO_NAO_CONFIRMADA");
   if (!whatsappConfigurado) bloqueios.push("WHATSAPP_NAO_CONFIGURADO");
   if (!unidade) bloqueios.push("UNIDADE_INVALIDA");
   if (!contato) bloqueios.push("SEM_DESTINATARIO");
@@ -135,6 +140,8 @@ export async function enviarTeste({ organizacaoId, unidadeId, testeId, confirmac
 
   const whatsAppService = deps.whatsAppService !== undefined ? deps.whatsAppService : await criarWhatsAppServiceDoAmbiente(deps.env ?? process.env);
   if (!whatsAppService) throw conflito(MENSAGENS.WHATSAPP_NAO_CONFIGURADO, "WHATSAPP_NAO_CONFIGURADO");
+  // Defesa em profundidade: o próprio serviço (único chamador do provider) também recusa sem conta confirmada; aqui evitamos até criar a linha do teste.
+  if (typeof whatsAppService.identidadeConfirmada !== "function" || (await whatsAppService.identidadeConfirmada().catch(() => false)) !== true) throw conflito(MENSAGENS.CONEXAO_NAO_CONFIRMADA, "CONEXAO_NAO_CONFIRMADA");
 
   const base = ator(autor);
   const detalhesBase = { unidade_id: uniId, unidade: g.unidade.nome, telefone_mascarado: mascararTelefoneUi(g.contato.telefone_e164), teste_id: tid, origem: "teste_painel" };

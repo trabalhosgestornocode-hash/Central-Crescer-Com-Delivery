@@ -44,7 +44,9 @@ export async function criarWhatsAppServiceDoAmbiente(env = process.env) {
   if (!gatewayUrl || !segredoHmac.trim()) return null;
   const { criarWhatsAppService } = await import("./whatsapp.service.js");
   const { criarBaileysGatewayProvider } = await import("./providers/baileysGateway.provider.js");
-  return criarWhatsAppService({ provider: criarBaileysGatewayProvider({ gatewayUrl, segredoHmac }) });
+  const { criarGateIdentidade } = await import("./comunicacao.identidade.js");
+  // O gate de identidade vai junto: o serviço do ambiente NUNCA envia se a conta conectada não for a confirmada na aba Conexão.
+  return criarWhatsAppService({ provider: criarBaileysGatewayProvider({ gatewayUrl, segredoHmac }), identidadeConfirmada: criarGateIdentidade({ env }) });
 }
 
 /**

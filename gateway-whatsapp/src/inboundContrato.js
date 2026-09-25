@@ -20,10 +20,14 @@
 //
 // NADA aqui loga, persiste, faz flush, mexe no buffer, envia ou decide automação. O mapa de origem é limitado e nunca expõe ids.
 
-import { isJidUser, jidDecode, proto } from "baileys";
+import { isJidUser, jidDecode, proto, normalizeMessageContent, getContentType } from "baileys";
 import { classificarJid, classificarMotivoFalha, TIPOS_JID, MOTIVOS_FALHA_DECRYPT } from "./inboundScope.js";
 
 export const CONTRATO_INBOUND_VERSAO = 1;
+/** Central de Comunicação — campos ADITIVOS e opcionais do contrato (o backend aceita a ausência): tipo do conteúdo e, só para texto, o texto. */
+export const TIPOS_CONTEUDO = Object.freeze(["texto", "midia", "outro"]);
+export const TEXTO_MAX = 4096;
+const TIPOS_MIDIA = new Set(["imageMessage", "videoMessage", "audioMessage", "documentMessage", "stickerMessage", "documentWithCaptionMessage", "ptvMessage"]);
 export const ORIGENS_INBOUND = Object.freeze(["LIVE", "OFFLINE_NORMAL", "OFFLINE_RECOVERY"]);
 export const ORIGENS_DE_TELEFONE = Object.freeze(["JID_PN", "SENDER_PN"]);
 export const ORIGEM_PADRAO = "OFFLINE_NORMAL";
@@ -115,6 +119,34 @@ export function observarOrigem(socket, rastreador) {
   }
 }
 
+const SEM_CONTEUDO = Object.freeze({ tipoConteudo: "outro", texto: null });
+
+/**
+ * Tipo e texto da mensagem, para a Central de Comunicação. PRIVACIDADE: só um chat DIRETO de cliente, com telefone real, sem fromMe/falha/stub, leva
+ * texto — grupo, status, broadcast, newsletter, LID sem telefone e o resto saem sempre como `outro`/null (o backend ainda decide quem é autorizado).
+ * Mídia sai só como `midia` (sem binário, sem legenda). Sem texto (NUL removido, aparado, truncado em TEXTO_MAX) ⇒ `outro`.
+ * @param {any} message `m.message` do Baileys
+ * @param {{elegivel: boolean}} o
+ * @returns {{tipoConteudo: 'texto'|'midia'|'outro', texto: string|null}}
+ */
+export function extrairConteudo(message, { elegivel } = {}) {
+  if (elegivel !== true) return SEM_CONTEUDO;
+  try {
+    const normal = normalizeMessageContent(message);
+    if (!normal) return SEM_CONTEUDO;
+    const tipo = getContentType(normal);
+    if (tipo && TIPOS_MIDIA.has(tipo)) return { tipoConteudo: "midia", texto: null };
+    const bruto = tipo === "conversation" ? normal.conversation : tipo === "extendedTextMessage" ? normal.extendedTextMessage?.text : null;
+    if (typeof bruto !== "string") return SEM_CONTEUDO;
+    const limpo = bruto.replace(/\u0000/g, "").trim();
+    if (limpo === "") return SEM_CONTEUDO;
+    const chars = Array.from(limpo);
+    return { tipoConteudo: "texto", texto: chars.length > TEXTO_MAX ? chars.slice(0, TEXTO_MAX).join("") : limpo };
+  } catch {
+    return SEM_CONTEUDO;
+  }
+}
+
 /**
  * Monta o evento inbound do contrato a partir de um item de `messages.upsert`. Devolve `null` se não há id (sem id não há como deduplicar).
  * @param {any} m item de messages.upsert
@@ -128,6 +160,8 @@ export function montarEventoInbound(m, { origemTipo, identidade, agora = () => n
   const fromMe = key.fromMe === true;
   const falhaDecrypt = m?.messageStubType === proto.WebMessageInfo.StubType.CIPHERTEXT;
   const { telefoneE164, telefoneOrigem } = extrairTelefoneReal({ origemJidTipo, fromMe, remoteJid: key.remoteJid, senderPn: key.senderPn, identidade });
+  const stubSistema = m?.messageStubType != null && !falhaDecrypt;
+  const { tipoConteudo, texto } = extrairConteudo(m?.message, { elegivel: telefoneE164 !== null && !fromMe && !falhaDecrypt && !stubSistema });
   return {
     contratoInbound: CONTRATO_INBOUND_VERSAO,
     providerMessageId,
@@ -138,7 +172,9 @@ export function montarEventoInbound(m, { origemTipo, identidade, agora = () => n
     telefoneOrigem,
     falhaDecrypt,
     motivoFalhaDecrypt: falhaDecrypt ? classificarMotivoFalha(m?.messageStubParameters?.[0]) : null,
-    stubSistema: m?.messageStubType != null && !falhaDecrypt,
+    stubSistema,
     recebidoEm: agora().toISOString(),
+    tipoConteudo,
+    texto,
   };
 }

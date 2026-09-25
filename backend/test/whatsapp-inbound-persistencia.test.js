@@ -33,7 +33,7 @@ describe("POST /eventos/mensagem-recebida — contrato, persistência idempotent
   before(async () => {
     repo = criarRepoEmMemoria();
     provider = criarBaileysGatewayProvider({ gatewayUrl: "http://unused.invalid", segredoHmac: SEGREDO });
-    servico = criarWhatsAppService({ provider });
+    servico = criarWhatsAppService({ provider, semGateIdentidade: true });
     recebidosProvider = []; recebidosServico = [];
     provider.onMessage((m) => recebidosProvider.push(m));                    // handler DIRETO no provider (o caminho mais fraco)
     servico.onMensagemRecebida((m) => recebidosServico.push(m));             // handler via service (o caminho do futuro Agente)
@@ -209,7 +209,10 @@ describe("inbound NUNCA toca a outbox (comunicacao_mensagens / claim / SCHEDULED
 
   test("o inbound só sai da rota para o provider pelo caminho elegível (motivoBloqueioAutomacao === null) e o provider/service repetem a checagem", () => {
     const rota = corpoDe(semComentarios(src(["gateway", "whatsappGateway.routes.js"])), 'router.post("/eventos/mensagem-recebida"', 'router.post("/eventos/status-provider"');
-    assert.ok(/motivoBloqueioAutomacao\(\{ \.\.\.v\.evento, estado: r\.estado \}\) === null/.test(rota) && /!r\.duplicada/.test(rota));
+    assert.ok(/motivoBloqueioAutomacao\(\{ \.\.\.tecnico, estado: r\.estado \}\) === null/.test(rota) && /!r\.duplicada/.test(rota));
+    // Central: o provider/automação só recebe o evento TÉCNICO — o conteúdo (texto/tipoConteudo) é separado antes e nunca chega lá.
+    assert.ok(/const \{ tipoConteudo: _t, texto: _x, \.\.\.tecnico \} = v\.evento;/.test(rota), "o conteúdo é separado do evento técnico");
+    assert.ok(/_receberEventoMensagem\?\.\(tecnico\)/.test(rota) && !/_receberEventoMensagem\?\.\(v\.evento\)/.test(rota), "o provider recebe `tecnico`, nunca `v.evento`");
     assert.ok(/motivoBloqueioAutomacao\(mensagem\) !== null\) return;/.test(semComentarios(src(["providers", "baileysGateway.provider.js"]))));
     assert.ok(/motivoBloqueioAutomacao\(mensagem\) === null\) handler\(mensagem\)/.test(semComentarios(src(["whatsapp.service.js"]))));
   });

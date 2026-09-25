@@ -43,6 +43,7 @@ const MODOS_VALIDOS = new Set(Object.values(MODOS));
  * @property {boolean} dentroDaJanela        agora está dentro do horário comercial permitido?
  * @property {boolean} rateLimitExcedido     estourou algum limite de taxa (por minuto/por contato/dia)? (idem: o consumo de capacidade é decidido atomicamente em comunicacao_reservar_envio -> RATE_LIMIT_*)
  * @property {boolean} providerConectado     o WhatsAppService reporta conexão ativa?
+ * @property {boolean} identidadeConfirmada  a conta conectada é EXATAMENTE a que o operador confirmou na aba Conexão? (exige === true, proativo ou não; CONNECTED sozinho não basta)
  * @property {boolean} [modoSeguro]          circuito de segurança ativo (opcional: só `true` bloqueia — o circuito ainda não existe)
  * @property {boolean} telefoneNaAllowlistPiloto  Checkpoint H.4-A: defesa em profundidade — `comunicacao.piloto.js#telefoneAutorizadoNoPiloto` já resolvido pelo chamador (exige === true; nunca lida aqui, `avaliarEnvio` continua sem I/O)
  */
@@ -89,6 +90,7 @@ export function avaliarEnvio(s) {
   if (s.rateLimitExcedido !== false) return bloqueado(MOTIVOS_BLOQUEIO.RATE_LIMIT);
   if (s.modoSeguro === true) return bloqueado(MOTIVOS_BLOQUEIO.SAFE_MODE);
   if (s.providerConectado !== true) return bloqueado(MOTIVOS_BLOQUEIO.PROVIDER_OFFLINE);
+  if (s.identidadeConfirmada !== true) return bloqueado(MOTIVOS_BLOQUEIO.IDENTIDADE_NAO_CONFIRMADA);
   // ÚLTIMO check de propósito (Checkpoint H.4-A) — o mais próximo da fronteira de envio:
   // camada A MAIS, nunca substitui nada acima. Campo AUSENTE (undefined) = gate não
   // aplicável — DIFERENTE do padrão "ausente bloqueia" do resto deste arquivo, de

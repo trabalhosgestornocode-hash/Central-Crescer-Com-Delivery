@@ -83,7 +83,7 @@ function provider() {
   const chamadas = [];
   const original = p.sendText.bind(p);
   p.sendText = async (a) => { chamadas.push(a); return original(a); };
-  return { p, chamadas, whatsAppService: criarWhatsAppService({ provider: p }) };
+  return { p, chamadas, whatsAppService: criarWhatsAppService({ provider: p, semGateIdentidade: true }) };
 }
 const rodar = (whatsAppService, agora, resolverHabilitacao, extra = {}) => processarProximoLote({
   limite: 20, worker: `adp-${tag}`, whatsAppService, agora, adiamentoMs: 15 * MIN,
@@ -93,6 +93,42 @@ const naFaixa = (iso, inicioIso, spread = 30 * MIN) => { const t = new Date(iso)
 const liberar = (id) => supabase.from("comunicacao_mensagens").update({ disponivel_em: new Date(Date.now() - 1000).toISOString() }).eq("id", id);
 
 describe("adiamento com HORÁRIO REAL no pipeline", { skip: PULAR_INTEGRACAO }, () => {
+  test("gate tardio preserva tentativa reservada, não chama provider e não duplica retry", async (t) => {
+    if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
+    const m = await mensagemDevida();
+    const { p, chamadas } = provider();
+    let consultas = 0;
+    const svc = criarWhatsAppService({ provider: p, identidadeConfirmada: async () => ++consultas === 1 });
+    const r = (await rodar(svc, QUARTA_10H_FIXA, hab())).find((x) => x.id === m.id);
+    assert.equal(r?.resultado, "FALHOU_RETRY");
+    const l = await linha(m.id);
+    assert.equal(l.status, SM.SCHEDULED);
+    assert.equal(l.tentativas, 1, "reserva é um fato persistido; não decrementar sob concorrência");
+    assert.equal(chamadas.length, 0);
+    const repetido = await rodar(svc, QUARTA_10H_FIXA, hab());
+    assert.ok(!repetido.some((x) => x.id === m.id), "retry não é reivindicado antes de ficar devido");
+    assert.equal((await linha(m.id)).tentativas, 1);
+  });
+  test("identidade pendente adia SCHEDULED sem tentativa; confirmação permite um único envio", async (t) => {
+    if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
+    const m = await mensagemDevida();
+    const { p, chamadas } = provider();
+    let confirmada = false;
+    const svc = criarWhatsAppService({ provider: p, identidadeConfirmada: async () => confirmada });
+    const r = (await rodar(svc, QUARTA_10H_FIXA, hab())).find((x) => x.id === m.id);
+    assert.equal(r?.motivo, "IDENTIDADE_NAO_CONFIRMADA");
+    const adiada = await linha(m.id);
+    assert.equal(adiada.status, SM.SCHEDULED);
+    assert.equal(adiada.tentativas, 0);
+    assert.equal(new Date(adiada.disponivel_em).toISOString(), "2035-09-19T13:15:00.000Z");
+    assert.equal(chamadas.length, 0);
+    confirmada = true;
+    await liberar(m.id);
+    await rodar(svc, QUARTA_10H_FIXA, hab());
+    assert.equal((await linha(m.id)).status, SM.SENT);
+    await rodar(svc, QUARTA_10H_FIXA, hab());
+    assert.equal(chamadas.length, 1);
+  });
   test("sexta 18:30 locais, janela GLOBAL (sáb 08–13): ADIADO OUTSIDE_ALLOWED_WINDOW para sábado 08:00 LOCAL + jitter — não +15 minutos", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const m = await mensagemDevida();

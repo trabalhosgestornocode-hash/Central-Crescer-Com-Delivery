@@ -92,8 +92,8 @@ describe("telefone só com evidência REAL de PN (tabela completa de JIDs)", () 
 describe("evento do contrato: campos, falha de decrypt e stubs", () => {
   test("forma EXATA do evento (chaves fechadas) e versão do contrato", () => {
     const e = evento({ remoteJid: "5511999990000@s.whatsapp.net", fromMe: false });
-    assert.deepEqual(Object.keys(e).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem"]);
-    assert.deepEqual(e, { contratoInbound: CONTRATO_INBOUND_VERSAO, providerMessageId: "ID-1", origemTipo: "LIVE", origemJidTipo: "direct_pn", fromMe: false, telefoneE164: "+5511999990000", telefoneOrigem: "JID_PN", falhaDecrypt: false, motivoFalhaDecrypt: null, stubSistema: false, recebidoEm: "2026-09-21T12:00:00.000Z" });
+    assert.deepEqual(Object.keys(e).sort(), ["contratoInbound", "falhaDecrypt", "fromMe", "motivoFalhaDecrypt", "origemJidTipo", "origemTipo", "providerMessageId", "recebidoEm", "stubSistema", "telefoneE164", "telefoneOrigem", "texto", "tipoConteudo"]);
+    assert.deepEqual(e, { contratoInbound: CONTRATO_INBOUND_VERSAO, providerMessageId: "ID-1", origemTipo: "LIVE", origemJidTipo: "direct_pn", fromMe: false, telefoneE164: "+5511999990000", telefoneOrigem: "JID_PN", falhaDecrypt: false, motivoFalhaDecrypt: null, stubSistema: false, recebidoEm: "2026-09-21T12:00:00.000Z", tipoConteudo: "outro", texto: null });
   });
 
   test("falha de decrypt: stub CIPHERTEXT ⇒ falhaDecrypt=true + motivo do vocabulário FECHADO; o texto do erro nunca sai", () => {

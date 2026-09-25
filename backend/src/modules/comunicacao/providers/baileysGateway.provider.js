@@ -200,6 +200,7 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
   }
 
   const provider = {
+    async executarOperacao(payload) { return chamar("POST", "/internal/whatsapp/operacao", payload); },
     async connect() { await chamar("POST", "/internal/whatsapp/connect", {}); },
     async disconnect() { await chamar("POST", "/internal/whatsapp/disconnect", {}); },
     async getStatus() { return chamar("GET", "/internal/whatsapp/status"); },
@@ -236,6 +237,23 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
     },
     async getMessageStatus(providerMessageId) {
       return chamar("GET", `/internal/whatsapp/messages/${encodeURIComponent(providerMessageId)}/status`);
+    },
+
+    // ---- fora do contrato WhatsAppProvider (aba Conexão): identidade e sessão da conta. NÃO enviam mensagem. Os erros PROPAGAM (com a marca do Gateway) —
+    // quem gerencia a conexão precisa saber por que falhou. O QR só passa por aqui em memória: nunca é logado nem persistido.
+    async statusConexao() { return chamar("GET", "/internal/whatsapp/status"); },
+    async qrAtual() { return chamar("GET", "/internal/whatsapp/qr"); },
+    async perfilConta() { return chamar("GET", "/internal/whatsapp/perfil"); },
+    async desconectarConta({ desvincular = true } = {}) { return chamar("POST", "/internal/whatsapp/desconectar-conta", { desvincular }); },
+
+    // ---- fora do contrato WhatsAppProvider (Central de Comunicação): URL da foto de perfil de UM número. NÃO envia nada. Nunca lança por falta de
+    // foto: qualquer falha (Gateway fora do ar, sem foto, privacidade) vira `{url: null}` — a interface cai no avatar de iniciais. Só https.
+    async fotoPerfil({ telefoneE164 }) {
+      if (typeof telefoneE164 !== "string" || !REGEX_E164.test(telefoneE164)) return { url: null, motivo: "telefone_invalido" };
+      try {
+        const r = await chamar("POST", "/internal/whatsapp/perfil-foto", { telefoneE164 });
+        return typeof r?.url === "string" && /^https:\/\//i.test(r.url) ? { url: r.url, motivo: "ok" } : { url: null, motivo: typeof r?.motivo === "string" ? r.motivo.slice(0, 30) : "sem_foto" };
+      } catch { return { url: null, motivo: "indisponivel" }; }
     },
 
     // ---- fora do contrato WhatsAppProvider: ponto de entrada usado por

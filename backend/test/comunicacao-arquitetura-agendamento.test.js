@@ -55,7 +55,15 @@ describe("migration 088 — existência, rollback e numeração", () => {
     assert.ok(existsSync(R088), "falta 088_rollback.sql");
     // Checkpoint F (inbound do WhatsApp) trouxe a 090 — outro checkpoint, não o D.3-D. O guarda continua valendo para o D.3-D: nada MAIS que a 088.
     // 089 = modelo logístico (outra frente); 092 = reforço do dia; 093 = habilitação atômica do piloto; 094 = primeiro aviso tardio D-1 (RPCs novas e independentes).
-    const POSTERIORES_CONHECIDAS = ["089_modelo_logistico_vigencia.sql", "089_rollback.sql", "090_whatsapp_inbound_mensagens.sql", "090_rollback.sql", "092_comunicacao_reforco_alerta.sql", "092_rollback.sql", "093_comunicacao_habilitar_piloto.sql", "093_rollback.sql", "094_comunicacao_aviso_tardio_d1.sql", "094_rollback.sql", "095_comunicacao_status_provider.sql", "095_rollback.sql"];
+    const POSTERIORES_CONHECIDAS = ["089_modelo_logistico_vigencia.sql", "089_rollback.sql", "090_whatsapp_inbound_mensagens.sql", "090_rollback.sql", "092_comunicacao_reforco_alerta.sql", "092_rollback.sql", "093_comunicacao_habilitar_piloto.sql", "093_rollback.sql", "094_comunicacao_aviso_tardio_d1.sql", "094_rollback.sql", "095_comunicacao_status_provider.sql", "095_rollback.sql",
+      // 096 = Central de Comunicação (conversas): view + tabelas novas, sem tocar o outbox, o claim nem os recibos.
+      "096_comunicacao_central_conversas.sql", "096_rollback.sql",
+      // 097 = aba Conexão (identidade do WhatsApp, permissão específica e trava de operação): tabelas novas, sem tocar whatsapp_conexoes/outbox/claim.
+      "097_whatsapp_conexao_identidade.sql", "097_rollback.sql",
+      // 098 = evolução da 097: confirmação atômica, fencing de efeitos externos e paginação da conversa (sem tocar o outbox/claim).
+      "098_whatsapp_operacoes_atomicas.sql", "098_rollback.sql",
+      // 099 = reconciliação oficial de efeitos externos incertos (colunas de metadados + RPC); sem tocar o outbox/claim.
+      "099_whatsapp_reconciliacao_efeitos.sql", "099_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

@@ -130,7 +130,8 @@ describe("routes — Backend -> Gateway", () => {
     _resetarNonces();
     const r = await chamarAssinado("GET", "/internal/whatsapp/qr");
     assert.equal(r.status, 200);
-    assert.deepEqual(await r.json(), { qr: null });
+    // além de `qr`, a rota devolve metadados e o QR já desenhado (`svg`): sem QR, tudo nulo/vazio.
+    assert.deepEqual(await r.json(), { qr: null, svg: null });
     assert.equal(r.headers.get("cache-control"), "no-store");
   });
 
@@ -144,7 +145,9 @@ describe("routes — Backend -> Gateway", () => {
       _resetarNonces();
       const comAuth = await chamarAssinado("GET", "/internal/whatsapp/qr");
       assert.equal(comAuth.status, 200);
-      assert.deepEqual(await comAuth.json(), { qr: "2@abc123fakeqrstring==,def456==" });
+      const corpo = await comAuth.json();
+      assert.equal(corpo.qr, "2@abc123fakeqrstring==,def456==");
+      assert.match(corpo.svg, /^<svg /);
     } finally {
       sessao.obterQrAtual = () => null;
     }

@@ -4,6 +4,7 @@ import { TIMEOUTS } from "./config/seguranca.js";
 import { inicializarWorkerRemoto } from "./modules/martinbrower/martinbrower.worker.contract.js";
 import { iniciarWorkerComunicacaoEmbutido, pararWorkerComunicacaoEmbutido } from "./worker-comunicacao/lifecycle.js";
 import { workerLog } from "./worker-comunicacao/worker-comunicacao.logsafe.js";
+import { iniciarPurgaPeriodica } from "./modules/comunicacao/comunicacao.inbox.retencao.js";
 
 // Worker Martin Brower: só é carregado com MB_PLAYWRIGHT_ENABLED=true. Com a
 // flag desligada (padrão), o adapter nem é importado — nenhum código de
@@ -25,6 +26,10 @@ iniciarWorkerComunicacaoEmbutido({ log: (nivel, evento, dados) => workerLog(nive
     : `   Comunicação: worker embutido DESABILITADO (${r.motivo})`);
 });
 
+// Retenção REAL do texto recebido na Central (30 dias): purga periódica, independente do worker de automação. Falha nunca derruba a subida.
+const purgaInbox = iniciarPurgaPeriodica({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados) });
+console.log(purgaInbox.ativa ? "   Comunicação: purga da caixa de entrada ATIVA" : "   Comunicação: purga da caixa de entrada DESLIGADA");
+
 const servidor = createApp().listen(config.port, () => {
   console.log(`🥪 Subway Saci API rodando em http://localhost:${config.port}`);
   console.log(`   Health:   http://localhost:${config.port}/health`);
@@ -45,6 +50,7 @@ servidor.keepAliveTimeout = TIMEOUTS.keepAliveTimeoutMs;
 for (const sinal of ["SIGTERM", "SIGINT"]) {
   process.on(sinal, () => {
     console.log(`[${sinal}] encerrando servidor…`);
+    purgaInbox.parar();
     pararWorkerComunicacaoEmbutido(sinal).finally(() => {
       servidor.close(() => process.exit(0));
     });

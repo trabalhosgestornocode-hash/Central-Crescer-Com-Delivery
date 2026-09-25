@@ -84,6 +84,19 @@ export const RATE_LIMIT = {
     max: intEnv("RATE_LIMIT_ADMINISTRATIVO_MAX", 400),
     janelaMs: intEnv("RATE_LIMIT_ADMINISTRATIVO_JANELA_MS", 5 * MIN),
   },
+
+  // Aba Conexão — ações que mexem na sessão do WhatsApp (iniciar, confirmar, cancelar, desconectar, trocar, identidade). Poucas por natureza.
+  comunicacaoConexao: {
+    max: intEnv("RATE_LIMIT_COMUNICACAO_CONEXAO_MAX", 20),
+    janelaMs: intEnv("RATE_LIMIT_COMUNICACAO_CONEXAO_JANELA_MS", 10 * MIN),
+  },
+
+  // Central de Comunicação — mensagens MANUAIS enviadas por um operador. Protege o número do WhatsApp (ban por volume) e barra script: por CONTA,
+  // bem abaixo do teto geral. Só POST .../conversas/:id/mensagens passa por aqui.
+  comunicacaoManual: {
+    max: intEnv("RATE_LIMIT_COMUNICACAO_MANUAL_MAX", 30),
+    janelaMs: intEnv("RATE_LIMIT_COMUNICACAO_MANUAL_JANELA_MS", 10 * MIN),
+  },
 };
 
 /**

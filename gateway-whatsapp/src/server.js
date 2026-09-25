@@ -10,6 +10,7 @@ import makeWASocket, { DisconnectReason } from "baileys";
 import { config, validarConfig } from "./config.js";
 import { exigirHmac } from "./hmac.js";
 import { criarRotas, health } from "./routes.js";
+import { criarExecutorOperacao } from "./operacaoConexao.js";
 import { criarBackendClient } from "./backendClient.js";
 import { criarAuthStateAdapter, serializarAuth } from "./authState.js";
 import { criarTelemetriaAuth } from "./authMetrics.js";
@@ -164,7 +165,13 @@ app.use(
   "/internal",
   express.raw({ type: "*/*", limit: config.limiteCorpoBytes }),
   exigirHmac(config.segredoHmac),
-  criarRotas(sessao),
+  (req, res, next) => {
+    // Controle legado sem fencing não pode concorrer com operações persistentes.
+    if (req.method === "POST" && /^\/whatsapp\/(connect|disconnect|reset|desconectar-conta)\/?$/.test(req.path))
+      return res.status(409).json({ error: "OPERACAO_OBRIGATORIA" });
+    next();
+  },
+  criarRotas(sessao, { executarOperacao: criarExecutorOperacao(sessao, backendClient) }),
 );
 
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));

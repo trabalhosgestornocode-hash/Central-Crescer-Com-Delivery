@@ -75,8 +75,11 @@ export async function iniciarWorkerComunicacaoEmbutido({
   const criarWhatsAppService = criarWhatsAppServiceInjetado ?? (await import("../modules/comunicacao/whatsapp.service.js")).criarWhatsAppService;
   const criarBaileysGatewayProvider = criarProviderInjetado ?? (await import("../modules/comunicacao/providers/baileysGateway.provider.js")).criarBaileysGatewayProvider;
 
+  const { criarGateIdentidade: criarGate } = await import("../modules/comunicacao/comunicacao.identidade.js");
   const whatsAppService = criarWhatsAppService({
     provider: criarBaileysGatewayProvider({ gatewayUrl: config.gatewayUrl, segredoHmac: config.segredoHmac }),
+    // O worker/automação só envia com a conta CONFIRMADA na aba Conexão (mesma regra do envio manual). Sem confirmação: provider = 0.
+    identidadeConfirmada: criarGate({ env }),
   });
   const loop = criarLoopWorker({ executarCiclo, modoAtual, whatsAppService, intervalMs: config.intervalMs, log, gracePeriodMs });
 

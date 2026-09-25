@@ -168,7 +168,7 @@ describe("cota diária por contato — DOIS workers, uma única vaga", { skip: P
       const chamadas = [];
       const original = provider.sendText.bind(provider);
       provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-      const whatsAppService = criarWhatsAppService({ provider });
+      const whatsAppService = criarWhatsAppService({ provider, semGateIdentidade: true });
       const ctx = { whatsAppService, agora: new Date(), adiamentoMs: 900_000, verificarPendenciaAindaExiste: async () => true, resolverHabilitacao: HABILITADA_SEMPRE };
       const rs = await Promise.all([processarJobReivindicado(a, ctx), processarJobReivindicado(b, ctx)]);
       assert.equal(chamadas.length, 1, `o provider foi chamado ${chamadas.length}x — a 5ª vaga foi vendida duas vezes`);
@@ -263,7 +263,7 @@ describe("DUAS camadas de taxa por minuto — global E organização (ambas prec
       const chamadas = [];
       const original = provider.sendText.bind(provider);
       provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-      const r = await processarJobReivindicado(b, { whatsAppService: criarWhatsAppService({ provider }), agora: new Date(), adiamentoMs: 900_000, verificarPendenciaAindaExiste: async () => true, resolverHabilitacao: HABILITADA_SEMPRE });
+      const r = await processarJobReivindicado(b, { whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }), agora: new Date(), adiamentoMs: 900_000, verificarPendenciaAindaExiste: async () => true, resolverHabilitacao: HABILITADA_SEMPRE });
       assert.equal(chamadas.length, 0, "o provider foi chamado apesar da organização esgotada");
       assert.equal(r.resultado, "ADIADO");
       assert.equal(r.motivo, "RATE_LIMIT");
