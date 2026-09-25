@@ -147,6 +147,9 @@ const erroCurto = (e) => String(e?.message ?? e).replace(/BAILEYS_GATEWAY_HTTP_\
 // Estado
 // ---------------------------------------------------------------------------
 
+/** Operação para quem NÃO gerencia: mesmo estado (tipo, validade, efeito, reconciliação), SEM o id e sem indicar que há ação executável. */
+function operacaoSemId({ id: _id, ...visivel }) { return { ...visivel, podeReconciliar: false }; }
+
 /** GET /comunicacao/conexao — quem vê a Central vê o estado; o QR e as ações exigem permissão. */
 export async function estado(autor, deps = {}) {
   const agora = agoraDe(deps);
@@ -162,7 +165,7 @@ export async function estado(autor, deps = {}) {
   const ultimoSinal = dbCon?.last_seen_at ?? null;
   const fresco = !!ultimoSinal && agora.getTime() - ms(ultimoSinal) <= HEARTBEAT_FRESCO_MS;
   const saude = conectado ? (fresco ? { id: "saudavel", rotulo: "Saudável" } : { id: "atencao", rotulo: "Atenção" }) : estadoUi === "RECONNECTING" ? { id: "atencao", rotulo: "Atenção" } : { id: "sem_sinal", rotulo: "Sem sinal" };
-  // O id da operação só sai para quem GERENCIA (é o que permite retomar/cancelar o assistente); os demais nem veem que há uma operação.
+  // Quem vê a Central VÊ a operação em andamento e o estado de reconciliação; o ID da operação (que permite retomar/cancelar o assistente) só sai para quem GERENCIA.
   // INCERTO, ou EXECUTANDO parado além da janela de estabilização (a mesma da RPC): nunca uma operação normal em curso.
   const precisaReconciliar = identidade?.efeito_estado === "INCERTO" || (identidade?.efeito_estado === "EXECUTANDO" && agora.getTime() - ms(identidade.efeito_atualizado_em) >= JANELA_RECONCILIACAO_MS);
   const ativa = identidade?.operacao_id && (identidade.efeito_token || ms(identidade.operacao_expira_em) > agora.getTime()) ? {
@@ -192,7 +195,7 @@ export async function estado(autor, deps = {}) {
       versao: dbCon?.gateway_version ?? null, tentativasReconexao: live?.tentativasReconexao ?? 0,
     },
     permissoes: { gerenciar },
-    operacao: gerenciar ? ativa : null,
+    operacao: ativa && (gerenciar ? ativa : operacaoSemId(ativa)),
     // Estado da reconciliação para QUALQUER usuário do painel (sem id de operação, sem token): quem só lê vê o aviso, mas não a ação.
     reconciliacao: precisaReconciliar ? { reconciliacaoNecessaria: true, acao: identidade.efeito_acao ?? null, incertoDesde: identidade.efeito_incerto_desde ?? identidade.efeito_atualizado_em ?? null, ultimaVerificacaoEm: identidade.efeito_verificado_em ?? null, ultimoResultado: identidade.efeito_ultimo_resultado ?? null, verificacoes: identidade.efeito_verificacoes ?? 0 } : null,
   };

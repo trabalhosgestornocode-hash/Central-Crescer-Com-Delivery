@@ -407,7 +407,7 @@ describe("CONEXÃO — permissão, trava, QR, confirmação, desconexão e troca
     assert.equal(await conexao.temPermissaoConexao(SUPER(), depsCon(g)), true);
     const st = await conexao.estado(OP_SEM(), depsCon(g));
     assert.equal(st.permissoes.gerenciar, false);
-    assert.equal(st.operacao, null, "quem não gerencia não vê a operação");
+    assert.ok(!st.operacao || !("id" in st.operacao), "quem não gerencia nunca recebe o id da operação");
   });
 
   test("UMA operação de conexão por vez: duas tentativas simultâneas ⇒ 1 vence, a outra 409 OPERACAO_EM_ANDAMENTO", async () => {
@@ -544,10 +544,10 @@ describe("CONEXÃO — permissão, trava, QR, confirmação, desconexão e troca
       await rejeita(conexao.desconectar({ confirmacaoExplicita: true }, OP_COM(), depsCon(g)), 409);
     });
 
-    test("quem só lê o painel vê a pendência (sem operação, sem id e sem token) e não recebe ação", async () => {
+    test("quem só lê o painel vê a pendência e a operação (sem id e sem token) e não recebe ação", async () => {
       const g = await desconexaoIncerta({ executou: true });
       const st = await conexao.estado(OP_SEM(), depsCon(g));
-      assert.equal(st.operacao, null);
+      assert.equal(st.operacao.reconciliacaoNecessaria, true); assert.equal(st.operacao.podeReconciliar, false); assert.equal("id" in st.operacao, false);
       assert.equal(st.reconciliacao?.reconciliacaoNecessaria, true); assert.equal(st.reconciliacao.acao, "DESCONECTAR");
       const ident = await identLinha(conA);
       const txt = JSON.stringify(st);

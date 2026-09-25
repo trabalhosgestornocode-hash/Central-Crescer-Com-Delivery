@@ -55,9 +55,24 @@ function textoDoEstado(c) {
   }
 }
 
-/** Ações do hero. Sem permissão: NENHUM botão morto (o aviso de permissão explica, sem esconder o estado). */
+const NOTA_SEM_PERMISSAO = "Esta ação exige permissão de gerenciamento da conexão.";
+const ROT_OPERACAO = { CONECTAR: "conexão do WhatsApp", TROCAR: "troca do número conectado", DESCONECTAR: "desconexão do WhatsApp" };
+
+/** Ações do hero. Sem permissão: NENHUM botão morto — só uma nota discreta onde haveria ação (o estado continua inteiro na tela). */
 function acoesDoEstado(c) {
-  if (!podeGerenciar(c)) return "";
+  const botoes = botoesDoEstado(c);
+  if (podeGerenciar(c)) return botoes;
+  return botoes ? `<p class="cc-nota" data-cc-sem-permissao>${e(NOTA_SEM_PERMISSAO)}</p>` : "";
+}
+
+/** Quem só lê VÊ a operação em andamento (o backend não manda o id dela); a reconciliação tem bloco próprio. */
+function notaOperacaoLeitura(c) {
+  if (podeGerenciar(c) || !c.operacao || precisaReconciliar(c)) return "";
+  const t = ROT_OPERACAO[c.operacao.tipo];
+  return t ? `<p class="cc-nota" data-cc-operacao-andamento>Operação em andamento: ${e(t)}.</p>` : "";
+}
+
+function botoesDoEstado(c) {
   const b = (acao, rotulo, cls, ic) => `<button type="button" class="btn ${cls} btn-sm" data-cc-conexao="${acao}">${ic ? icon(ic, { size: 14 }) : ""} ${e(rotulo)}</button>`;
   if (c.estado === "CONNECTED") {
     const revisar = pendente(c) ? b("revisar", "Revisar e confirmar conta", "btn-primary cc-btn-grande", "shield-check") : "";
@@ -115,7 +130,7 @@ export function htmlCartaoConexao(c) {
     <div class="cc-id-corpo">
       <p class="cc-id-estado">${distintivos(c)}${c.semSinal ? `<span class="cc-nota">Sem resposta do Gateway. Mostrando o último estado conhecido.</span>` : ""}</p>
       <h2 class="cc-id-titulo">${e(t.titulo)}</h2>
-      <p class="cc-id-texto">${e(t.texto)}</p>${chipsDaConta(c)}
+      <p class="cc-id-texto">${e(t.texto)}</p>${notaOperacaoLeitura(c)}${chipsDaConta(c)}
       ${acoes ? `<div class="cc-id-acoes">${acoes}</div>` : ""}
     </div>
   </section>`;

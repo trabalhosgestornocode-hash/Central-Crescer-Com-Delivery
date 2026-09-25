@@ -72,11 +72,13 @@ describe("Conexão — autorização das rotas", () => {
     });
   }
 
-  test("GET /conexao: quem está no painel MAS não tem a permissão lê o estado — sem operação e com permissoes.gerenciar=false", async () => {
+  test("GET /conexao: quem está no painel MAS não tem a permissão lê o estado — vê a operação (sem id) e permissoes.gerenciar=false", async () => {
     const { deps } = depsFalsas();
     const r = await chamar({ user: PAINEL, path: B, adminDeps: deps });
     assert.equal(r.status, 200);
-    assert.deepEqual([r.json.data.permissoes.gerenciar, r.json.data.operacao, r.json.data.estado], [false, null, "WAITING_QR"]);
+    assert.deepEqual([r.json.data.permissoes.gerenciar, r.json.data.estado], [false, "WAITING_QR"]);
+    assert.equal(r.json.data.operacao.tipo, "CONECTAR", "a operação em andamento é visível a quem só lê");
+    assert.equal("id" in r.json.data.operacao, false); assert.ok(!r.texto.includes(OPERACAO), "o id da operação não chega a quem não gerencia");
     assert.ok(!r.texto.includes("SEGREDO"), "o estado nunca traz o QR");
   });
 

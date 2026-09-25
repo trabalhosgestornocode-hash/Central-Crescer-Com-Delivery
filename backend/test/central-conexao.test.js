@@ -268,12 +268,16 @@ describe("estado (GET)", () => {
     assert.deepEqual([outro.identidade.status, outro.identidade.nomeOperacional, outro.identidade.agenteCrescer], ["PENDENTE_CONFIRMACAO", null, false], "outro número: o nome NÃO acompanha");
   });
 
-  test("quem só vê a Central (sem a permissão) lê o estado, mas não vê a operação em andamento", async () => {
+  test("quem só vê a Central (sem a permissão) lê o estado e VÊ a operação em andamento, mas sem o id que permitiria agir", async () => {
     const ident = [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "TESTE", status: "SEM_CONTA", operacao_id: uuid(50), operacao_tipo: "CONECTAR", operacao_expira_em: seg(200) }];
     const { deps } = montar({ identidade: ident, permitidos: [OP.contaId] });
     assert.equal((await estado(OP, deps)).operacao.tipo, "CONECTAR");
     const sem = await estado(SEM_PERMISSAO, deps);
-    assert.deepEqual([sem.permissoes.gerenciar, sem.operacao], [false, null]);
+    assert.equal(sem.permissoes.gerenciar, false);
+    assert.equal(sem.operacao.tipo, "CONECTAR"); assert.equal(sem.operacao.podeReconciliar, false);
+    assert.equal("id" in sem.operacao, false, "o id da operação só sai para quem gerencia");
+    assert.equal(JSON.stringify(sem).includes(uuid(50)), false);
+    assert.equal((await estado(OP, deps)).operacao.id, uuid(50), "quem gerencia continua recebendo o id");
   });
 });
 
