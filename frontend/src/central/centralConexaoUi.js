@@ -232,11 +232,59 @@ export function htmlDetalhesTecnicos(c, { agora = new Date() } = {}) {
 }
 
 /** Corpo completo da aba. `c` null ⇒ skeleton do perfil. */
-export function htmlConexao(c, { agora = new Date() } = {}) {
+// ---------------------------------------------------------------------------
+// Reconciliação: a última operação externa não teve o resultado confirmado. O operador só DISPARA a verificação; quem decide é o backend.
+// ---------------------------------------------------------------------------
+const ROT_ACAO_EFEITO = { DESCONECTAR: "Desconectar a conta", RESET: "Reiniciar a sessão", CONECTAR: "Conectar o WhatsApp", ENCERRAR: "Encerrar a conexão" };
+const ROT_RESULTADO = {
+  janela_de_estabilizacao: "Operação muito recente: aguardando estabilizar", gateway_indisponivel: "Gateway sem resposta", evidencia_contraditoria: "Evidências contraditórias",
+  estado_gateway_indeterminado: "Estado do Gateway indeterminado", aguardando_consumo: "Aguardando o Gateway", sessao_original_ativa: "Sessão original ainda ativa", sessao_encerrada: "Sessão encerrada",
+  sessao_substituida: "Sessão substituída", sessao_diferente: "Sessão diferente da original", pareamento_ativo: "Pareamento ativo", gateway_desconectado: "Gateway desconectado", gateway_ainda_ativo: "Gateway ainda ativo",
+  token_nunca_consumido: "Operação nunca chegou a executar",
+};
+const ROT_DECISAO = { AINDA_INCERTO: "Ainda incerto", CONCLUIDO: "Confirmada como executada", ABORTADO: "Confirmada como não executada", JA_RESOLVIDO: "Já resolvida" };
+/** "DECISAO:motivo" -> texto amigável (só valores conhecidos; qualquer outra coisa é ignorada, nunca renderizada crua). */
+function rotuloResultado(txt) {
+  const [d, m] = String(txt ?? "").split(":");
+  if (!ROT_DECISAO[d]) return "";
+  return m && ROT_RESULTADO[m] ? `${ROT_DECISAO[d]} · ${ROT_RESULTADO[m]}` : ROT_DECISAO[d];
+}
+const MSG_VERIFICACAO = {
+  CONCLUIDO: ["ok", "Verificação concluída", "A última operação foi confirmada como executada. O estado da conexão foi atualizado."],
+  ABORTADO: ["ok", "Verificação concluída", "A última operação foi confirmada como não executada. A conexão continua como estava."],
+  JA_RESOLVIDO: ["ok", "Nada pendente", "Esta situação já foi resolvida."],
+  AINDA_INCERTO: ["neutro", "Ainda não há evidência suficiente", "Ainda não foi possível confirmar o resultado. Você poderá verificar novamente mais tarde."],
+  erro: ["erro", "Não foi possível verificar agora", "Tente novamente em instantes."],
+};
+export const precisaReconciliar = (c) => c?.reconciliacao?.reconciliacaoNecessaria === true || c?.operacao?.reconciliacaoNecessaria === true;
+
+/** Bloco de atenção. `verificacao`: { fase: "verificando" | "resultado" | "erro", decisao? } (estado local do controlador; nunca vem do servidor). */
+export function htmlBlocoReconciliacao(c, { agora = new Date(), verificacao = null } = {}) {
+  const necessaria = precisaReconciliar(c);
+  const resultado = verificacao?.fase === "resultado" ? (MSG_VERIFICACAO[verificacao.decisao] ?? null) : verificacao?.fase === "erro" ? MSG_VERIFICACAO.erro : null;
+  if (!necessaria && !resultado) return "";
+  const r = c.reconciliacao ?? c.operacao ?? {};
+  const verificando = verificacao?.fase === "verificando";
+  const acao = ROT_ACAO_EFEITO[r.acao ?? r.efeitoAcao];
+  const desde = r.incertoDesde ? `${dataHoraCurta(r.incertoDesde, agora)} (${haQuanto(r.incertoDesde, agora)})` : "";
+  const ultimo = rotuloResultado(r.ultimoResultado);
+  const verif = r.ultimaVerificacaoEm ? `${dataHoraCurta(r.ultimaVerificacaoEm, agora)} (${haQuanto(r.ultimaVerificacaoEm, agora)})` : "";
+  const detalhes = necessaria ? `<dl class="cc-cfg">${acao ? linha("Operação", e(acao)) : ""}${desde ? linha("Sem confirmação desde", e(desde)) : ""}${ultimo ? linha("Último resultado", e(ultimo)) : ""}${verif ? linha("Última verificação", e(verif)) : ""}</dl>` : "";
+  const nota = resultado ? `<p class="cc-recon-resultado cc-recon-resultado--${resultado[0]}" role="status" data-cc-recon-resultado="${e(verificacao.decisao ?? "erro")}"><strong>${e(resultado[1])}.</strong> ${e(resultado[2])}</p>` : "";
+  const acaoHtml = !necessaria ? "" : podeGerenciar(c)
+    ? `<div class="cc-id-acoes"><button type="button" class="btn btn-primary btn-sm" data-cc-conexao="reconciliar" ${verificando ? 'disabled aria-busy="true"' : ""}>${verificando ? "Verificando…" : "Verificar estado da conexão"}</button></div>`
+    : `<p class="cc-nota">Um administrador autorizado precisa verificar o estado da conexão.</p>`;
+  return `<section class="cc-atencao" role="status" data-cc-reconciliacao>
+    <header><span class="cc-atencao-selo">${icon("hourglass", { size: 20 })}</span><div><h2>${necessaria ? "Resultado da última operação não confirmado" : e(resultado[1])}</h2>${necessaria ? "<p>Não foi possível confirmar automaticamente o resultado da última operação. Por segurança, novas operações de conexão ficam bloqueadas até a verificação.</p>" : ""}</div></header>
+    ${detalhes}${nota}${acaoHtml}
+  </section>`;
+}
+
+export function htmlConexao(c, { agora = new Date(), verificacao = null } = {}) {
   if (!c) return `<div class="cc-conexao">${skeletonPainel()}</div>`;
   const conectado = c.estado === "CONNECTED";
   return `<div class="cc-conexao">
-    ${htmlAvisoPermissao(c)}${htmlCartaoConexao(c)}${htmlCartaoPendente(c)}
+    ${htmlAvisoPermissao(c)}${htmlCartaoConexao(c)}${htmlBlocoReconciliacao(c, { agora, verificacao })}${htmlCartaoPendente(c)}
     ${conectado ? `${htmlIndicadores(c, { agora })}<div class="cc-conexao-grade">${htmlContaConectada(c)}${htmlIdentidade(c)}</div>` : `<div class="cc-conexao-grade">${htmlComoConectar(c)}${htmlUltimoRegistro(c, { agora })}</div>`}
     ${htmlDetalhesTecnicos(c, { agora })}
   </div>`;

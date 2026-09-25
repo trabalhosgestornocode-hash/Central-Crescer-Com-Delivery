@@ -130,6 +130,17 @@ describe("QR: metadados, expiração e sigilo", () => {
 });
 
 describe("perfilConta() — a própria conta, sem inventar", () => {
+  test("mudança de geração durante a consulta descarta o perfil antigo", async () => {
+    const r = await sessao();
+    let geracao = "geracao-a";
+    r.auth.obterAuthSessionIdAtual = () => geracao;
+    r.socket.profilePictureUrl = async () => { geracao = "geracao-b"; return null; };
+    assert.deepEqual(await r.s.perfilConta(), { disponivel: false, motivo: "sessao_alterada" });
+  });
+  test("identificador LID numérico nunca é apresentado como telefone", async () => {
+    const { s } = await sessao({ user: { id: "123456789012:1@lid", name: "Conta de teste" } });
+    assert.equal((await s.perfilConta()).telefoneE164, null);
+  });
   test("conectado: nome, número (sem o sufixo de dispositivo), foto https, recado; tipo DESCONHECIDO sem evidência de Business", async () => {
     const { s } = await sessao();
     const p = await s.perfilConta();
@@ -181,13 +192,13 @@ describe("desconectarConta()", () => {
     assert.equal((await s.getStatus()).status, STATUS_CONEXAO.DISCONNECTED);
   });
 
-  test("logout falhando ou lento NÃO impede o reset (desvinculado=false)", async () => {
+  test("logout rejeitado já assentado permite reset; logout pendente NÃO permite avançar a sessão", async () => {
     const falha = await sessao({ logout: mock.fn(async () => { throw new Error("rede"); }) });
     assert.deepEqual(await falha.s.desconectarConta(), { ok: true, desvinculado: false });
     assert.equal(falha.backendClient.resetarAuthState.mock.callCount(), 1);
     const lento = await sessao({ logout: mock.fn(() => new Promise(() => {})) });
-    assert.deepEqual(await lento.s.desconectarConta(), { ok: true, desvinculado: false });
-    assert.equal(lento.backendClient.resetarAuthState.mock.callCount(), 1);
+    await assert.rejects(() => lento.s.desconectarConta(), (e) => e.logoutPendente === true);
+    assert.equal(lento.backendClient.resetarAuthState.mock.callCount(), 0);
   });
 
   test("desvincular:false apenas reseta (não chama logout); sem conexão também não chama logout", async () => {

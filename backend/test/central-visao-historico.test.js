@@ -41,6 +41,35 @@ function montar({ saidas = [], entradas = [], modo = "NORMAL", gateway = "conect
 }
 
 describe("visão geral", () => {
+  test("enviadas hoje usa evento enviado_em, não criação nem agendamento", async () => {
+    const { deps } = montar({ saidas: [
+      saida({ status: "SENT", created_at: min(20), enviado_em: min(10) }),
+      saida({ status: "SENT", created_at: hora(30), enviado_em: min(15) }),
+      saida({ status: "SCHEDULED", enviado_em: null }),
+      saida({ status: "FAILED", enviado_em: null }),
+      saida({ status: "DELIVERY_UNKNOWN", enviado_em: null }),
+      saida({ status: "SENT", created_at: hora(30), enviado_em: hora(30) }),
+    ] });
+    assert.equal((await visaoGeral(deps)).cards.mensagensHoje.enviadas, 2);
+  });
+  test("contrato real dos services renderiza o frontend aprovado com dados vazios e opcionais ausentes", async () => {
+    const { htmlVisaoGeral } = await import("../../frontend/src/central/centralVisao.js");
+    const ui = await import("../../frontend/src/central/centralUi.js");
+    const { deps } = montar({ roster: [], orgsLista: [] });
+    const visao = await visaoGeral(deps);
+    assert.equal(visao.atividade, undefined, "atividade é opcional no contrato atual");
+    const paginas = [
+      htmlVisaoGeral(visao, { agora: AGORA }),
+      ui.htmlAutomacoes(await automacoes(deps), { agora: AGORA }),
+      ui.htmlDestinatarios(await destinatarios({}, deps)),
+      ui.htmlHistorico(await historicoGeral({}, deps), {}, {}),
+      ui.htmlDiagnostico(await diagnosticoTecnico(deps)),
+    ];
+    for (const html of paginas) {
+      assert.ok(html.length > 0);
+      assert.doesNotMatch(html, /\b(?:undefined|NaN)\b/);
+    }
+  });
   test("cards: WhatsApp, automação, não lidas, mensagens hoje, entregues % e falhas — só do roster", async () => {
     const { deps } = montar({
       entradas: [entrada({ recebido_em: min(20) }), entrada({ contato_id: DESCONHECIDO }), entrada({ recebido_em: hora(20) })],
@@ -54,7 +83,7 @@ describe("visão geral", () => {
     const { cards } = await visaoGeral(deps);
     assert.deepEqual([cards.whatsapp.estado, cards.whatsapp.rotulo, cards.automacao.ativa, cards.automacao.rotulo], ["conectado", "Conectado", true, "Ativa"]);
     assert.equal(cards.conversasNaoLidas, 1);
-    assert.deepEqual([cards.mensagensHoje.recebidas, cards.mensagensHoje.enviadas, cards.mensagensHoje.total], [1, 5, 6], "desconhecido e 'ontem' ficam de fora");
+    assert.deepEqual([cards.mensagensHoje.recebidas, cards.mensagensHoje.enviadas, cards.mensagensHoje.total], [1, 4, 6], "enviadas exclui FAILED; total preserva todos os registros do dia");
     assert.equal(cards.entreguesHojePct, 50, "2 entregues (DELIVERED+READ) de 4 enviadas (SENT+DELIVERED+READ)");
     assert.equal(cards.falhasHoje, 1, "a falha do DESCONHECIDO não conta");
   });

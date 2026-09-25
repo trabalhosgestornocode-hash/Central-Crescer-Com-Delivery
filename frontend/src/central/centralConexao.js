@@ -10,7 +10,7 @@
 // enquanto a aba Conexão está ativa. (O Realtime do projeto é por tenant; ver a decisão registrada nas Conversas.)
 
 import * as ui from "./centralConexaoUi.js";
-import { proximaFase, progressoQr, novoEnvioId, etapaDaFase } from "./centralModelo.js";
+import { proximaFase, progressoQr, etapaDaFase } from "./centralModelo.js";
 
 const POLL_QR_MS = 2000;
 const POLL_ESTADO_MS = 10000;
@@ -27,7 +27,7 @@ export function resumoParaTopo(c) {
 }
 
 export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toast = () => {}, agora = () => Date.now(), vivo = () => true, aoEstado = () => {}, aoAcessoRevogado = () => {} }) {
-  const K = { estado: null, wiz: null, modal: null, timerEstado: null, timerQr: null, timerTempo: null, timeouts: new Set(), ativo: false, container: null, assinatura: "" };
+  const K = { recon: null, estado: null, wiz: null, modal: null, timerEstado: null, timerQr: null, timerTempo: null, timeouts: new Set(), ativo: false, container: null, assinatura: "" };
   const q = (sel, ctx = host) => ctx.querySelector(sel);
 
   function tratar(err) {
@@ -44,7 +44,7 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
     K.container = container ?? K.container; K.ativo = true;
     if (!K.container) return;
     const aberto = q("[data-cc-tecnico-conexao]", K.container)?.open === true;
-    K.container.innerHTML = ui.htmlConexao(K.estado, { agora: new Date(agora()) });
+    K.container.innerHTML = ui.htmlConexao(K.estado, { agora: new Date(agora()), verificacao: K.recon });
     if (aberto) { const d = q("[data-cc-tecnico-conexao]", K.container); if (d) d.open = true; }
     if (!K.estado) carregar();
     agendarEstado();
@@ -55,6 +55,8 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
       const e = await api.conexaoEstado();
       if (!vivo()) return;
       K.estado = e; aoEstado(resumoParaTopo(e), e);
+      // Resultado de verificação é transitório: some depois de alguns segundos (nunca há polling de reconciliação).
+      if (K.recon && K.recon.fase !== "verificando" && agora() - K.recon.em > 15_000) K.recon = null;
       if (K.ativo && !K.wiz) pintar();
     } catch (err) {
       if (!tratar(err) && K.container && !K.estado) K.container.innerHTML = `<div class="cc-erro" role="alert"><div><strong>Não foi possível carregar a conexão.</strong><p>${mensagem(err, "Tente novamente em instantes.")}</p></div><button type="button" class="btn btn-ghost btn-sm" data-cc-acao="recarregar">Tentar de novo</button></div>`;
@@ -175,8 +177,14 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
     const est = K.estado;
     const w = K.wiz = { modo, fase: modo === "revisar" ? "identificado" : "iniciando", operacaoId, resp: null, conta: modo === "revisar" ? est?.conta ?? null : null, agente: false, ambiente: est?.identidade?.ambiente ?? "TESTE", erro: null, enviando: false, desde: agora(), falhouEm: null, svgIndisponivel: false };
     pintarAssistente({ forcar: true });
-    if (modo === "revisar") { w.operacaoId = est?.operacao?.id ?? novoEnvioId(); return; }
     try {
+      if (modo === "revisar") {
+        w.enviando = true; pintarAssistente({ forcar: true });
+        w.operacaoId = est?.operacao?.id ?? (await api.conexaoIniciar({ revisar: true })).operacaoId;
+        if (K.wiz !== w) return;
+        w.enviando = false; pintarAssistente({ forcar: true });
+        return;
+      }
       if (modo === "conectar") { const r = await api.conexaoIniciar(); if (K.wiz !== w) return; w.operacaoId = r.operacaoId; }
       else if (modo === "retomar") w.operacaoId = operacaoId ?? est?.operacao?.id;
       if (!w.operacaoId) throw Object.assign(new Error("Não há uma conexão em andamento para continuar."), { status: 409 });
@@ -253,6 +261,21 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
     if (K.ativo) { pintar(); carregar(); }
   }
 
+  /** "Verificar estado da conexão": dispara a verificação no backend, que é a única autoridade da decisão. Um clique = uma requisição. */
+  async function reconciliar() {
+    if (K.recon?.fase === "verificando" || K.estado?.permissoes?.gerenciar !== true) return;
+    K.recon = { fase: "verificando", em: agora() }; if (K.ativo) pintar();
+    try {
+      const r = await api.conexaoReconciliar();
+      if (r?.estado) { K.estado = r.estado; aoEstado(resumoParaTopo(r.estado), r.estado); }
+      K.recon = { fase: "resultado", decisao: r?.decisao, em: agora() };
+    } catch (err) {
+      if (tratar(err)) return;
+      K.recon = { fase: "erro", em: agora() };
+    }
+    if (K.ativo) pintar();
+  }
+
   async function cancelarOperacao() {
     const op = K.estado?.operacao?.id; if (!op) return;
     try { const e = await api.conexaoCancelar(op); K.estado = e; aoEstado(resumoParaTopo(e), e); toast("Conexão cancelada"); } catch (err) { if (!tratar(err)) toast(mensagem(err, "Não foi possível cancelar agora.")); }
@@ -285,6 +308,7 @@ export function criarControleConexao({ api, host, doc, janela, ganchos = {}, toa
       case "trocar": abrirModalSimples("trocar"); break;
       case "desconectar": abrirModalSimples("desconectar"); break;
       case "cancelar-operacao": cancelarOperacao(); break;
+      case "reconciliar": reconciliar(); break;
       case "agente": alterarIdentidade({ agenteCrescer: !(K.estado?.identidade?.agenteCrescer === true) }); break;
       case "ambiente": alterarIdentidade({ ambiente: v }); break;
       case "ambiente-assistente": if (K.wiz) { K.wiz.ambiente = v; pintarAssistente(); } break;

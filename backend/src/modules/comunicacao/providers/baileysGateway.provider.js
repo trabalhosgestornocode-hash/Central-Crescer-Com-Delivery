@@ -200,6 +200,7 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
   }
 
   const provider = {
+    async executarOperacao(payload) { return chamar("POST", "/internal/whatsapp/operacao", payload); },
     async connect() { await chamar("POST", "/internal/whatsapp/connect", {}); },
     async disconnect() { await chamar("POST", "/internal/whatsapp/disconnect", {}); },
     async getStatus() { return chamar("GET", "/internal/whatsapp/status"); },

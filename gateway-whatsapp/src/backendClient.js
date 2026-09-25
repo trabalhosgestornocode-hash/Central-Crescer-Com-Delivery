@@ -86,6 +86,7 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
   const R = "/internal/comunicacao";
 
   return {
+    async operacaoEfeito(payload) { return chamar("POST", `${R}/operacao/efeito`, payload); },
     /** Mensagem recebida do WhatsApp (Baileys `messages.upsert`, fromMe=false). */
     async notificarMensagemRecebida(payload) {
       return chamar("POST", `${R}/eventos/mensagem-recebida`, payload);

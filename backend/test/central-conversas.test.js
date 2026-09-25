@@ -40,6 +40,25 @@ function montar({ saidas = [], entradas = [], leituras = [], roster = ROSTER, co
 const nomes = (r) => r.itens.map((c) => c.nome);
 
 describe("lista de conversas — só o roster", () => {
+  test("1202 mensagens, timestamps empatados: recentes primeiro e páginas sem perdas ou duplicatas", async () => {
+    const entradas = Array.from({ length: 601 }, (_, i) => entrada({ id: uuid(1000 + i), recebido_em: min(1), created_at: min(1) }));
+    const saidas = Array.from({ length: 601 }, (_, i) => saida({ id: uuid(2000 + i), enviado_em: min(1), created_at: min(1) }));
+    const { deps } = montar({ entradas, saidas });
+    let antes; const vistos = new Set(); let paginas = 0;
+    do {
+      const r = await obterConversa({ contatoId: C1, antes }, { contaId: "operador" }, deps);
+      assert.ok(r.mensagens.length <= 200);
+      if (!paginas) assert.ok(r.mensagens.some((m) => m.id === uuid(2600)), "última saída aparece na primeira página");
+      for (const m of r.mensagens) {
+        const chave = `${m.direcao}:${m.id}`;
+        assert.ok(!vistos.has(chave), "nenhuma duplicata entre páginas"); vistos.add(chave);
+      }
+      assert.equal(r.temMaisAntigas, !!r.proximaPagina);
+      antes = r.proximaPagina;
+      assert.ok(++paginas < 10);
+    } while (antes);
+    assert.equal(vistos.size, 1202);
+  });
   test("responsável autorizado com mensagem aparece; quem não tem atividade não aparece na caixa de entrada", async () => {
     const { deps } = montar({ entradas: [entrada()] });
     const r = await listarConversas({}, deps);
@@ -250,6 +269,21 @@ describe("foto de perfil", () => {
 });
 
 describe("atualizações (cursor)", () => {
+  test("primeira entrada depois de cursor vazio invalida a conversa aberta", async () => {
+    const { deps, db } = montar();
+    const a = await atualizacoes({}, deps);
+    db.tabelas.comunicacao_inbox_mensagens.push(entrada());
+    assert.deepEqual((await atualizacoes({ cursor: a.cursor }, deps)).contatosAlterados, [C1]);
+  });
+
+  test("lote maior que o limite invalida todo o roster, sem perder o último contato", async () => {
+    const { deps, db } = montar({ entradas: [entrada()] });
+    const a = await atualizacoes({}, deps);
+    db.tabelas.comunicacao_inbox_mensagens.push(...Array.from({ length: 201 }, () => entrada({ created_at: AGORA.toISOString() })), entrada({ contato_id: C2, created_at: AGORA.toISOString() }));
+    const r = await atualizacoes({ cursor: a.cursor }, deps);
+    assert.ok(r.contatosAlterados.includes(C2));
+    assert.deepEqual(new Set(r.contatosAlterados), new Set([C1, C2, C3]));
+  });
   test("sem cursor devolve o atual; sem mudança ⇒ mudou=false; nova entrada ⇒ só o id da conversa alterada", async () => {
     const { deps, db } = montar({ entradas: [entrada()] });
     const a = await atualizacoes({}, deps);
@@ -287,7 +321,7 @@ describe("atualizações (cursor)", () => {
     db.tabelas.comunicacao_inbox_mensagens.push(entrada({ contato_id: uuid(999), created_at: new Date(AGORA.getTime() + 1000).toISOString() }));
     const r = await atualizacoes({ cursor: a.cursor }, deps);
     assert.ok(!r.contatosAlterados.includes(uuid(999)), "id fora do roster nunca vaza");
-    for (const c of ["lixo", "a|b", "2026-01-01|", "'; drop table x; --"]) await assert.rejects(() => atualizacoes({ cursor: c }, deps), (e) => e.statusCode === 400, c);
+    for (const c of ["lixo", "a|b", "2026-01-01|", "2026-99-99T99:99:99Z|", "'; drop table x; --"]) await assert.rejects(() => atualizacoes({ cursor: c }, deps), (e) => e.statusCode === 400, c);
   });
 });
 

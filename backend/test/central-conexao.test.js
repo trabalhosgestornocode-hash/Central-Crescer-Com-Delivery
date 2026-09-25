@@ -7,6 +7,7 @@ import {
   identidadeConfirmada, resumoIdentidade, _zerarCachePerfil, _zerarQrAuditados, NOME_AGENTE, ESTADOS, ROTULO_ESTADO,
 } from "../src/modules/administrativo/administrativo.comunicacao.conexao.js";
 import { criarFakeDb } from "./helpers/central-fake-db.js";
+import { instalarExecutorTeste } from "./helpers/gateway-operacao.js";
 
 const ORG = "00000000-0000-4000-8000-0000000000a1";
 const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -45,15 +46,130 @@ function montar({ conexoes, identidade, permitidos = [], g = gatewayFalso() } = 
     whatsapp_conexoes: conexoes ?? [{ organizacao_id: ORG, provider_instance_id: "default", status: "DISCONNECTED", telefone_e164: null, connected_at: null, disconnected_at: null, last_seen_at: seg(-20), lease_expires_at: seg(30), gateway_version: "1.2.3", last_error_class: null, desired_connection_state: "DISCONNECTED" }],
     whatsapp_identidade: identidade ?? [], painel_adm_permissoes: permitidos.map((u) => ({ usuario_id: u, permissao: "comunicacao:gerenciar_conexao" })),
     comunicacao_mensagens: [{ id: "m1" }], comunicacao_inbox_mensagens: [{ id: "i1" }], contatos_whatsapp: [{ id: "c1" }],
-  });
+  }, { agora: () => AGORA.getTime() });
   const auditorias = [];
   const deps = { supabase: db, env: {}, agora: () => AGORA, organizacaoConexaoId: ORG, whatsAppService: g.svc, auditar: async (e) => auditorias.push(e) };
+  instalarExecutorTeste(g.svc, deps);
+  const conectou = g.conectou;
+  g.conectou = () => {
+    conectou(); g.perfil.authSessionId = uuid(700);
+    Object.assign(db.tabelas.whatsapp_conexoes[0], { status: "CONNECTED", telefone_e164: g.perfil.telefoneE164, auth_session_id: g.perfil.authSessionId, auth_confirmado: true, connected_at: seg(-1), last_seen_at: seg(0) });
+  };
   return { db, deps, g, auditorias };
 }
 const rejeita = (fn, status, codigo) => assert.rejects(fn, (e) => e.statusCode === status && (codigo === undefined || e.details?.codigo === codigo), `esperava ${status} ${codigo ?? ""}`);
 const acoes = (a) => a.map((x) => x.acao);
 
 beforeEach(() => { _zerarCachePerfil(); _zerarQrAuditados(); });
+
+describe("confirmação persistente e operação obsoleta", () => {
+  const preparar = async () => {
+    const m = montar({ permitidos: [OP.contaId] });
+    const { operacaoId } = await iniciar(OP, m.deps);
+    m.g.conectou();
+    return { ...m, operacaoId };
+  };
+  test("operação expirada e retomada por QR são recusadas sem gravação", async () => {
+    const m = await preparar();
+    m.db.tabelas.whatsapp_identidade[0].operacao_expira_em = seg(-1);
+    await rejeita(() => confirmar({ operacaoId: m.operacaoId }, OP, m.deps), 409);
+    await rejeita(() => qr({ operacaoId: m.operacaoId }, OP, m.deps), 409);
+    assert.notEqual(m.db.tabelas.whatsapp_identidade[0].status, "CONFIRMADA");
+  });
+  test("confirmação depois do cancelamento é recusada", async () => {
+    const m = await preparar();
+    await cancelar({ operacaoId: m.operacaoId }, OP, m.deps);
+    await rejeita(() => confirmar({ operacaoId: m.operacaoId }, OP, m.deps), 409);
+    assert.equal(m.db.tabelas.whatsapp_identidade[0].status, "SEM_CONTA");
+  });
+  test("B assume durante consulta do perfil: A não grava identidade e não encerra B", async () => {
+    const m = await preparar();
+    const linha = m.db.tabelas.whatsapp_identidade[0];
+    linha.telefone_hash = hashTelefone("+12025550100");
+    const hashAnterior = linha.telefone_hash;
+    let liberar, entrou;
+    const barreira = new Promise((r) => { liberar = r; });
+    const consulta = new Promise((r) => { entrou = r; });
+    m.g.svc.conexaoPerfil = async () => { entrou(); await barreira; return m.g.perfil; };
+    const pendente = confirmar({ operacaoId: m.operacaoId }, OP, m.deps);
+    const rejeitada = rejeita(() => pendente, 409, "OPERACAO_INVALIDA");
+    await consulta;
+    linha.operacao_expira_em = seg(-1);
+    const { data } = await m.db.rpc("whatsapp_operacao_iniciar", { p_organizacao_id: ORG, p_provider_instance_id: "default", p_tipo: "TROCAR", p_por: OP.perfilId });
+    const b = data[0].operacao_id;
+    assert.notEqual(b, m.operacaoId);
+    liberar(); await rejeitada;
+    assert.equal(linha.operacao_id, b);
+    assert.equal(linha.operacao_tipo, "TROCAR");
+    assert.equal(linha.telefone_hash, hashAnterior);
+    const antes = m.g.chamadas.length;
+    await rejeita(() => cancelar({ operacaoId: m.operacaoId }, OP, m.deps), 409);
+    assert.equal(m.g.chamadas.length, antes);
+  });
+  test("confirmações simultâneas têm uma única decisão válida", async () => {
+    const m = await preparar();
+    const r = await Promise.allSettled([confirmar({ operacaoId: m.operacaoId }, OP, m.deps), confirmar({ operacaoId: m.operacaoId }, OP, m.deps)]);
+    assert.equal(r.filter((x) => x.status === "fulfilled").length, 1);
+    assert.equal(m.auditorias.filter((x) => x.acao === "WHATSAPP_CONECTADO").length, 1);
+  });
+  test("erro do perfil vivo não confirma identidade", async () => {
+    const m = await preparar();
+    m.g.svc.conexaoPerfil = async () => { throw new Error("gateway indisponível"); };
+    await rejeita(() => confirmar({ operacaoId: m.operacaoId }, OP, m.deps), 409, "SEM_IDENTIDADE");
+    assert.notEqual(m.db.tabelas.whatsapp_identidade[0].status, "CONFIRMADA");
+  });
+  test("geração da conexão mudou durante perfil: rejeita mesmo telefone", async () => {
+    const m = await preparar();
+    m.g.svc.conexaoPerfil = async () => { m.db.tabelas.whatsapp_conexoes[0].auth_session_id = uuid(701); return m.g.perfil; };
+    await rejeita(() => confirmar({ operacaoId: m.operacaoId }, OP, m.deps), 409, "OPERACAO_INVALIDA");
+  });
+});
+
+test("cancelamento atrasado não desconecta uma conta já confirmada", async () => {
+  const m = montar({ permitidos: [OP.contaId] });
+  const { operacaoId } = await iniciar(OP, m.deps);
+  m.g.conectou();
+  await confirmar({ operacaoId }, OP, m.deps);
+  const chamadasAntes = m.g.chamadas.length;
+  await rejeita(() => cancelar({ operacaoId }, OP, m.deps), 409, "OPERACAO_INVALIDA");
+  assert.equal(m.g.chamadas.length, chamadasAntes);
+  assert.equal(m.db.tabelas.whatsapp_identidade[0].status, "CONFIRMADA");
+});
+
+test("QR de operação expirada é recusado antes de consultar o Gateway", async () => {
+  const m = montar({ permitidos: [OP.contaId] });
+  const { operacaoId } = await iniciar(OP, m.deps);
+  m.db.tabelas.whatsapp_identidade[0].operacao_expira_em = seg(-1);
+  const chamadasAntes = m.g.chamadas.length;
+  await rejeita(() => qr({ operacaoId }, OP, m.deps), 409, "OPERACAO_INVALIDA");
+  assert.equal(m.g.chamadas.length, chamadasAntes);
+});
+
+test("confirmar sem telefone vivo não reutiliza telefone antigo do heartbeat", async () => {
+  const m = montar({ permitidos: [OP.contaId] });
+  const { operacaoId } = await iniciar(OP, m.deps);
+  m.g.conectou();
+  m.g.perfil.telefoneE164 = null;
+  m.db.tabelas.whatsapp_conexoes[0].telefone_e164 = TEL;
+  await rejeita(() => confirmar({ operacaoId }, OP, m.deps), 409, "SEM_IDENTIDADE");
+  assert.notEqual(m.db.tabelas.whatsapp_identidade[0].status, "CONFIRMADA");
+});
+
+test("cache de perfil não mistura organizações nem reutiliza conta anterior após troca", async () => {
+  const a = montar(); a.g.conectou();
+  const b = montar(); b.g.conectou();
+  b.deps.organizacaoConexaoId = uuid(200);
+  b.g.perfil = { ...b.g.perfil, nome: "Outra conta", telefoneE164: "+5511900000002" };
+  assert.equal((await estado(SUPER, a.deps)).conta.nome, "Crescer Teste");
+  assert.equal((await estado(SUPER, b.deps)).conta.nome, "Outra conta");
+  a.db.tabelas.whatsapp_conexoes[0].telefone_e164 = TEL;
+  a.db.tabelas.whatsapp_conexoes[0].connected_at = seg(-60);
+  await estado(SUPER, a.deps);
+  a.db.tabelas.whatsapp_conexoes[0].telefone_e164 = "+5511900000003";
+  a.db.tabelas.whatsapp_conexoes[0].connected_at = seg(-1);
+  a.g.perfil = { ...a.g.perfil, nome: "Conta substituída", telefoneE164: "+5511900000003" };
+  assert.equal((await estado(SUPER, a.deps)).conta.nome, "Conta substituída");
+});
 
 describe("estados (derivarEstado)", () => {
   const db = (o = {}) => ({ status: "CONNECTED", last_seen_at: seg(-30), ...o });
@@ -217,12 +333,13 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
     assert.equal(auditorias.length, 0);
   });
 
-  test("Gateway recusa ao iniciar ⇒ 409 amigável, auditoria CONEXAO_FALHOU (sem segredo) e a trava é liberada", async () => {
+  test("erro após consumo do token ⇒ 409, auditoria e trava INCERTA preservada", async () => {
     const g = gatewayFalso(); g.falhar.conectar = new Error("BAILEYS_GATEWAY_UNREACHABLE: ECONNREFUSED");
     const { deps, auditorias, db } = montar({ g, permitidos: [OP.contaId] });
     await rejeita(() => iniciar(OP, deps), 409, "CONEXAO_INDISPONIVEL");
     assert.deepEqual(acoes(auditorias), ["WHATSAPP_CONEXAO_INICIADA", "WHATSAPP_CONEXAO_FALHOU"]);
-    assert.equal(db.tabelas.whatsapp_identidade[0].operacao_id, null, "a trava não fica presa depois de uma falha");
+    assert.equal(db.tabelas.whatsapp_identidade[0].efeito_estado, "INCERTO");
+    await assert.rejects(() => iniciar(OP, deps));
   });
 
   test("gerar QR: o valor chega ao operador com permissão; audita QR_GERADO UMA vez por QR (só a ORDEM, nunca o valor)", async () => {
@@ -402,11 +519,11 @@ describe("desconectar", () => {
     assert.equal(m.db.tabelas.comunicacao_inbox_mensagens.length, 1);
   });
 
-  test("Gateway falha ao desconectar ⇒ 409, a conta continua como estava (identidade intacta), audita CONEXAO_FALHOU e libera a trava", async () => {
+  test("Gateway falha ao desconectar ⇒ identidade preservada, resultado INCERTO e trava mantida", async () => {
     const m = conectada(); m.g.falhar.desconectarConta = new Error("BAILEYS_GATEWAY_HTTP_500");
     await rejeita(() => desconectar({ confirmacaoExplicita: true }, OP, m.deps), 409, "DESCONECTAR_FALHOU");
     const linha = m.db.tabelas.whatsapp_identidade[0];
-    assert.deepEqual([linha.status, linha.nome_operacional, linha.operacao_id], ["CONFIRMADA", NOME_AGENTE, null]);
+    assert.deepEqual([linha.status, linha.nome_operacional, linha.efeito_estado], ["CONFIRMADA", NOME_AGENTE, "INCERTO"]);
     assert.equal(m.auditorias.at(-1).acao, "WHATSAPP_CONEXAO_FALHOU");
   });
 });
@@ -436,12 +553,12 @@ describe("trocar número", () => {
     assert.equal(g.chamadas.filter((c) => c === "desconectarConta").length, 1, "as tentativas concorrentes não chegaram ao Gateway");
   });
 
-  test("falha ao gerar o QR depois de desconectar ⇒ 409 explicando o estado, auditoria e trava liberada", async () => {
+  test("falha ao gerar QR depois de desconectar ⇒ 409, auditoria e reconciliação pendente", async () => {
     const g = gatewayFalso(); g.conectou(); g.falhar.conectar = new Error("BAILEYS_GATEWAY_UNREACHABLE");
     const m = montar({ g, permitidos: [OP.contaId] });
     await rejeita(() => trocar({ confirmacaoExplicita: true }, OP, m.deps), 409, "TROCAR_FALHOU");
     assert.equal(m.auditorias.at(-1).acao, "WHATSAPP_CONEXAO_FALHOU");
-    assert.equal(m.db.tabelas.whatsapp_identidade[0].operacao_id, null);
+    assert.equal(m.db.tabelas.whatsapp_identidade[0].efeito_estado, "INCERTO");
   });
 
   test("trocar para OUTRO número: a confirmação e o nome operacional antigos não valem para ele", async () => {
@@ -478,7 +595,7 @@ describe("duas tentativas concorrentes", () => {
   });
 
   test("uma trava EXPIRADA não bloqueia para sempre (o banco a libera pelo relógio)", async () => {
-    const m = montar({ permitidos: [OP.contaId], identidade: [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "TESTE", status: "SEM_CONTA", operacao_id: uuid(90), operacao_tipo: "CONECTAR", operacao_expira_em: new Date(Date.now() - 1000).toISOString() }] });
+    const m = montar({ permitidos: [OP.contaId], identidade: [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "TESTE", status: "SEM_CONTA", operacao_id: uuid(90), operacao_tipo: "CONECTAR", operacao_expira_em: seg(-1) }] });
     await assert.doesNotReject(() => iniciar(OP, m.deps));
   });
 });

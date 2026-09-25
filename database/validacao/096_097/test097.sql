@@ -1,4 +1,4 @@
-\set ON_ERROR_STOP off
+\set ON_ERROR_STOP on
 begin;
 create temp table r (n serial, nome text, ok boolean, detalhe text);
 grant all on r to public;
@@ -122,4 +122,7 @@ reset role;
 
 select n, case when ok then 'PASS' else 'FAIL' end res, nome, case when ok then '' else detalhe end det from r order by n;
 select count(*) filter (where ok) pass, count(*) filter (where not ok) fail from r;
+do $$ begin
+  if exists (select 1 from r where not ok) then raise exception 'Validação 097 falhou'; end if;
+end $$;
 rollback;

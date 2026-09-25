@@ -15,7 +15,7 @@ import { motivoBloqueioAutomacao } from "./inbound/inbound.contrato.js";
 
 /** Recusa de envio porque a conta do WhatsApp conectada NÃO é a que o operador confirmou (ou nada está confirmado). O provider NÃO foi chamado. */
 export class IdentidadeNaoConfirmadaError extends Error {
-  constructor() { super("A conta do WhatsApp conectada ainda não foi confirmada. Confirme a conta na aba Conexão."); this.name = "IdentidadeNaoConfirmadaError"; this.code = "CONEXAO_NAO_CONFIRMADA"; }
+  constructor() { super("A conta do WhatsApp conectada ainda não foi confirmada. Confirme a conta na aba Conexão."); this.name = "IdentidadeNaoConfirmadaError"; this.code = "CONEXAO_NAO_CONFIRMADA"; this.preEnvio = true; }
 }
 
 /**
@@ -79,6 +79,10 @@ export function criarWhatsAppService({ provider, identidadeConfirmada = null, se
     /** Perfil da conta conectada (nome, foto, recado, tipo, telefone). */
     async conexaoPerfil() { if (!provider.perfilConta) return { disponivel: false, motivo: "nao_suportado" }; return provider.perfilConta(); },
     /** Inicia o pareamento/conexão (a MESMA rota /connect do Gateway). */
+    async conexaoExecutarOperacao(payload) {
+      if (!provider.executarOperacao) throw new Error("Gateway sem suporte a operações protegidas");
+      return provider.executarOperacao(payload);
+    },
     async conexaoConectar() { return provider.connect(); },
     /** Desconecta a conta: desvincula o aparelho (melhor esforço) e reseta o auth do Gateway. Nunca toca no histórico. */
     async conexaoDesconectarConta({ desvincular = true } = {}) { if (!provider.desconectarConta) throw new Error("provider sem desconectarConta"); return provider.desconectarConta({ desvincular }); },

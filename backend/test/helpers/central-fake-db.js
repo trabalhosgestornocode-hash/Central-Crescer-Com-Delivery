@@ -2,7 +2,7 @@
 //   from(t).select().eq/neq/in/is/gt/gte/lt/lte/not/order/limit/range/maybeSingle/single, insert/update/upsert/delete, e rpc().
 // A semântica das funções SQL da migration 096 (registrar idempotente + purga, marcar lida com greatest, resumo) é reproduzida aqui para que os testes
 // de comportamento não dependam de banco. A migration em si só é validada num banco real (ver o relatório): estes testes provam a LÓGICA do backend.
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 
 const ehIso = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v);
 const cmp = (a, b) => {
@@ -11,7 +11,7 @@ const cmp = (a, b) => {
   return a < b ? -1 : 1;
 };
 
-export function criarFakeDb(inicial = {}, { rpc = {} } = {}) {
+export function criarFakeDb(inicial = {}, { rpc = {}, agora = Date.now } = {}) {
   const tabelas = {};
   for (const [nome, linhas] of Object.entries(inicial)) tabelas[nome] = linhas.map((l) => ({ ...l }));
   const chamadasRpc = [];
@@ -161,20 +161,62 @@ export function criarFakeDb(inicial = {}, { rpc = {} } = {}) {
 
   // ---- semântica das funções da 097 (trava de operação da conexão do WhatsApp) ----
   Object.assign(funcoes, {
+    comunicacao_conversa_pagina: (a) => {
+      if (!linhasDe("comunicacao_roster_autorizado").some((r) => r.contato_id === a.p_contato_id)) return { data: [], error: null };
+      const linhas = [
+        ...linhasDe("comunicacao_inbox_mensagens").filter((m) => m.contato_id === a.p_contato_id && m.organizacao_id === a.p_organizacao_id)
+          .map((m) => ({ direcao: "entrada", em: m.recebido_em, id: m.id, registro: m })),
+        ...linhasDe("comunicacao_mensagens").filter((m) => m.contato_id === a.p_contato_id && m.direcao === "saida")
+          .map((m) => ({ direcao: "saida", em: m.status === "SCHEDULED" ? m.disponivel_em : m.enviado_em ?? m.created_at, id: m.id, registro: m })),
+      ];
+      const comparar = (x, y) => cmp(x.em, y.em) || cmp(x.direcao, y.direcao) || cmp(x.id, y.id);
+      return { data: linhas.filter((m) => Date.parse(m.em) >= Date.parse(a.p_desde) && (!a.p_antes_em || comparar(m, { em: a.p_antes_em, direcao: a.p_antes_direcao, id: a.p_antes_id }) < 0))
+        .sort((x, y) => comparar(y, x)).slice(0, a.p_limite), error: null };
+    },
     whatsapp_operacao_iniciar: (a) => {
       const t = linhasDe("whatsapp_identidade");
       let r = t.find((x) => x.organizacao_id === a.p_organizacao_id && x.provider_instance_id === a.p_provider_instance_id);
       if (!r) { r = { organizacao_id: a.p_organizacao_id, provider_instance_id: a.p_provider_instance_id, ambiente: "TESTE", status: "SEM_CONTA", operacao_id: null, operacao_tipo: null, operacao_por: null, operacao_expira_em: null }; t.push(r); }
-      if (r.operacao_id == null || Date.parse(r.operacao_expira_em) < Date.now()) {
-        Object.assign(r, { operacao_id: randomUUID(), operacao_tipo: a.p_tipo, operacao_por: a.p_por, operacao_expira_em: new Date(Date.now() + Math.max(a.p_ttl_segundos ?? 300, 30) * 1000).toISOString() });
+      if (!r.efeito_token && (r.operacao_id == null || Date.parse(r.operacao_expira_em) < agora())) {
+        Object.assign(r, { operacao_id: randomUUID(), operacao_tipo: a.p_tipo, operacao_por: a.p_por, operacao_expira_em: new Date(agora() + Math.max(a.p_ttl_segundos ?? 300, 30) * 1000).toISOString() });
         return { data: [{ iniciada: true, operacao_id: r.operacao_id, operacao_tipo: r.operacao_tipo }], error: null };
       }
       return { data: [{ iniciada: false, operacao_id: r.operacao_id, operacao_tipo: r.operacao_tipo }], error: null };
     },
     whatsapp_operacao_encerrar: (a) => {
       const r = linhasDe("whatsapp_identidade").find((x) => x.organizacao_id === a.p_organizacao_id && x.provider_instance_id === a.p_provider_instance_id && x.operacao_id === a.p_operacao_id);
-      if (!r) return { data: false, error: null };
+      if (!r || r.efeito_token) return { data: false, error: null };
       Object.assign(r, { operacao_id: null, operacao_tipo: null, operacao_por: null, operacao_expira_em: null });
+      return { data: true, error: null };
+    },
+  });
+
+  Object.assign(funcoes, {
+    whatsapp_operacao_efeito: (a) => {
+      const r = linhasDe("whatsapp_identidade").find((x) => x.organizacao_id === a.p_organizacao_id && x.provider_instance_id === a.p_provider_instance_id && x.operacao_id === a.p_operacao_id);
+      const res = (ok) => ({ data: ok, error: null });
+      if (!r || !a.p_token) return res(false);
+      if (a.p_fase === "PREPARAR") {
+        if (r.efeito_token || Date.parse(r.operacao_expira_em) <= agora()) return res(false);
+        Object.assign(r, { efeito_token: a.p_token, efeito_acao: a.p_acao, efeito_estado: "PENDENTE" });
+      } else {
+        if (r.efeito_token !== a.p_token || r.efeito_acao !== a.p_acao) return res(false);
+        if (a.p_fase === "CONSUMIR" && r.efeito_estado === "PENDENTE" && Date.parse(r.operacao_expira_em) > agora()) r.efeito_estado = "EXECUTANDO";
+        else if ((a.p_fase === "ABORTAR" && r.efeito_estado === "PENDENTE") || (a.p_fase === "CONCLUIR" && ["EXECUTANDO", "INCERTO"].includes(r.efeito_estado)) || (a.p_fase === "FALHA_DETERMINISTICA" && r.efeito_estado === "EXECUTANDO")) Object.assign(r, { efeito_token: null, efeito_acao: null, efeito_estado: null });
+        else if (a.p_fase === "INCERTO" && r.efeito_estado === "EXECUTANDO") r.efeito_estado = "INCERTO";
+        else return res(false);
+      }
+      return res(true);
+    },
+    whatsapp_confirmar_identidade_operacao: (a) => {
+      const r = linhasDe("whatsapp_identidade").find((x) => x.organizacao_id === a.p_organizacao_id && x.provider_instance_id === a.p_provider_instance_id);
+      const c = linhasDe("whatsapp_conexoes").find((x) => x.organizacao_id === a.p_organizacao_id && x.provider_instance_id === a.p_provider_instance_id);
+      if (!r || !c || r.operacao_id !== a.p_operacao_id || !a.p_operacao_id || r.efeito_token ||
+          Date.parse(r.operacao_expira_em) <= agora() || !["CONECTAR", "TROCAR"].includes(r.operacao_tipo) || c.status !== "CONNECTED" ||
+          !a.p_auth_session_id || c.auth_session_id !== a.p_auth_session_id || !c.auth_confirmado || !c.last_seen_at || Date.parse(c.last_seen_at) < agora() - 120000 ||
+          createHash("sha256").update(c.telefone_e164 ?? "").digest("hex") !== a.p_telefone_hash) return { data: false, error: null };
+      Object.assign(r, { status: "CONFIRMADA", telefone_hash: a.p_telefone_hash, ambiente: a.p_ambiente, nome_operacional: a.p_nome_operacional,
+        confirmado_em: new Date(agora()).toISOString(), confirmado_por: a.p_por, operacao_id: null, operacao_tipo: null, operacao_por: null, operacao_expira_em: null });
       return { data: true, error: null };
     },
   });

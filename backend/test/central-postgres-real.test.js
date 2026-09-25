@@ -14,6 +14,7 @@ import { criarGateIdentidade, hashTelefone, identidadeConfirmada } from "../src/
 import * as conversas from "../src/modules/administrativo/administrativo.comunicacao.conversas.js";
 import * as conexao from "../src/modules/administrativo/administrativo.comunicacao.conexao.js";
 import * as teste from "../src/modules/administrativo/administrativo.comunicacao.teste.js";
+import { instalarExecutorTeste } from "./helpers/gateway-operacao.js";
 
 const PULAR = motivoPularIntegracao();
 const tag = `cpr${Date.now()}`;
@@ -40,9 +41,10 @@ const identLinha = async (org) => (await supabase.from("whatsapp_identidade").se
 const rejeita = (p, status, codigo) => assert.rejects(p, (e) => { assert.equal(e.statusCode ?? e.status, status, e.message); if (codigo) assert.equal(e.details?.codigo ?? e.detalhes?.codigo, codigo); return true; });
 
 async function conectarNoBanco(org, { telefone = TEL_CONECTADO, status = "CONNECTED", idade = 5 } = {}) {
-  const linha = { organizacao_id: org, provider_instance_id: "default", status, telefone_e164: telefone, last_seen_at: new Date(Date.now() - idade * 1000).toISOString(), connected_at: new Date().toISOString(), desired_connection_state: "CONNECTED" };
+  const linha = { organizacao_id: org, provider_instance_id: "default", status, telefone_e164: telefone, last_seen_at: new Date(Date.now() - idade * 1000).toISOString(), connected_at: new Date().toISOString(), desired_connection_state: "CONNECTED", auth_session_id: uuid(), auth_state_encrypted: "fixture-teste-sem-credencial", auth_confirmado: true };
   const { error } = await supabase.from("whatsapp_conexoes").upsert(linha, { onConflict: "organizacao_id,provider_instance_id" });
   assert.equal(error, null, error?.message);
+  return linha.auth_session_id;
 }
 async function confirmarNoBanco(org, telefone = TEL_CONECTADO, extra = {}) {
   const { error } = await supabase.from("whatsapp_identidade").upsert({ organizacao_id: org, provider_instance_id: "default", status: "CONFIRMADA", telefone_hash: hashTelefone(telefone), confirmado_em: new Date().toISOString(), ambiente: "TESTE", ...extra }, { onConflict: "organizacao_id,provider_instance_id" });
@@ -66,7 +68,7 @@ function gatewayFalso() {
     conexaoEncerrar: async () => { g.chamadas.push("encerrar"); g.live = { status: "DISCONNECTED", qrDisponivel: false, reconectando: false }; return { ok: true }; },
   };
   g.mostrarQr = (ordem = 1) => { g.live = { status: "CONNECTING", qrDisponivel: true, reconectando: false }; g.qr = { qr: QR_SEGREDO, ordem }; };
-  g.conectou = async (org, telefone = TEL_CONECTADO) => { g.live = { status: "CONNECTED", qrDisponivel: false, reconectando: false }; g.qr = { qr: null, ordem: 0 }; g.perfil = { ...g.perfil, telefoneE164: telefone }; await conectarNoBanco(org, { telefone }); };
+  g.conectou = async (org, telefone = TEL_CONECTADO) => { g.live = { status: "CONNECTED", qrDisponivel: false, reconectando: false }; g.qr = { qr: null, ordem: 0 }; g.perfil = { ...g.perfil, telefoneE164: telefone, authSessionId: await conectarNoBanco(org, { telefone }) }; };
   return g;
 }
 
@@ -74,7 +76,7 @@ before(async () => {
   if (PULAR) return;
   const probes = await Promise.all([supabase.from("comunicacao_inbox_mensagens").select("id").limit(0), supabase.from("whatsapp_identidade").select("organizacao_id").limit(0), supabase.from("comunicacao_roster_autorizado").select("contato_id").limit(0)]);
   migracaoOk = (await migracao082Aplicada()) && probes.every((p) => !p.error);
-  if (!migracaoOk) return;
+  assert.ok(migracaoOk, `Pré-requisitos indisponíveis no banco de teste: ${probes.filter((p) => p.error).map((p) => p.error.message).join("; ") || "migration 082"}. Aplique 096/097 e aguarde o catálogo PostgREST antes da integração.`);
   conA = await criarOrganizacao(`TESTE ${tag} A (conexão + clientes)`); conB = await criarOrganizacao(`TESTE ${tag} B (conexão + clientes)`);
   uA1 = await criarUnidade(conA, "A Loja 1"); uA2 = await criarUnidade(conA, "A Loja 2"); uB1 = await criarUnidade(conB, "B Loja 1");
   destA = await criarDestinatario({ organizacaoId: conA, unidadeId: uA1, tag, sufixo: "a" });
@@ -202,7 +204,8 @@ describe("CONVERSAS (banco real)", pular({}), () => {
   });
 
   test("conversa de um contato que NÃO é do roster ⇒ 404 (indistinguível de inexistente)", async () => {
-    const { data: c } = await supabase.from("contatos_whatsapp").insert({ telefone_e164: "+5511955550111" }).select("id").single();
+    const { data: c, error } = await supabase.from("contatos_whatsapp").insert({ telefone_e164: `+55119${String(Date.now()).slice(-8)}` }).select("id").single();
+    assert.equal(error, null, error?.message);
     extras.contatos.push(c.id);
     await rejeita(conversas.obterConversa({ contatoId: c.id }, { contaId: uuid() }, dep(conA)), 404);
   });
@@ -381,7 +384,11 @@ describe("CONEXÃO — permissão, trava, QR, confirmação, desconexão e troca
   const OP_SEM = () => ({ contaId: destB.contaId, perfilId: destB.perfilId, nome: "Sem Permissão", email: `${tag}-sem@example.com`, superadmin: false });
   const OP_COM = () => ({ contaId: destA.contaId, perfilId: destA.perfilId, nome: "Com Permissão", email: `${tag}-com@example.com`, superadmin: false });
   const SUPER = () => ({ contaId: uuid(), perfilId: null, nome: "Super", email: `${tag}-super@example.com`, superadmin: true });
-  const depsCon = (g, org = conA, extra = {}) => dep(org, { whatsAppService: g.svc, ...extra });
+  const depsCon = (g, org = conA, extra = {}) => {
+    const deps = dep(org, { whatsAppService: g.svc, ...extra });
+    instalarExecutorTeste(g.svc, deps);
+    return deps;
+  };
   const auditorias = async (org) => (await supabase.from("plataforma_auditoria").select("acao, detalhes, ator_email").eq("organizacao_id", org)).data ?? [];
   const varrer = async (org) => JSON.stringify({
     ident: await identLinha(org), conex: (await supabase.from("whatsapp_conexoes").select("*").eq("organizacao_id", org)).data,
@@ -496,6 +503,149 @@ describe("CONEXÃO — permissão, trava, QR, confirmação, desconexão e troca
     assert.ok(falhou, "WHATSAPP_CONEXAO_FALHOU auditado");
     assert.equal(falhou.ator_email, `${tag}-com@example.com`);
     assert.equal(JSON.stringify(aud).includes(QR_SEGREDO), false);
-    assert.equal((await identLinha(conA))?.operacao_id ?? null, null, "a falha liberou a trava");
+    // Efeito consumido no gateway e resultado não confirmado: NÃO libera concorrência; fica INCERTO para reconciliação (fail-safe).
+    const ident = await identLinha(conA);
+    assert.ok(ident?.operacao_id, "a trava permanece: resultado externo incerto não libera outra operação");
+    assert.equal(ident.efeito_estado, "INCERTO");
+  });
+  // ---------------------------------------------------------------------------------------------------------------------------------------
+  // Reconciliação de efeitos INCERTOS (migration 099) — banco real, gateway simulado com o protocolo de fencing real.
+  // ---------------------------------------------------------------------------------------------------------------------------------------
+  describe("reconciliação de efeito INCERTO", () => {
+    const envelhecer = () => supabase.from("whatsapp_identidade").update({ efeito_atualizado_em: new Date(Date.now() - 600_000).toISOString() }).eq("organizacao_id", conA);
+    const recs = async () => (await auditorias(conA)).filter((a) => a.acao === "WHATSAPP_CONEXAO_RECONCILIADA");
+    const desconectado = () => ({ status: "DISCONNECTED", qrDisponivel: false, reconectando: false });
+    /** Desconexão cujo resultado NÃO chega ao backend (timeout). `executou`: o efeito de fato aconteceu no gateway. */
+    async function desconexaoIncerta({ executou }) {
+      const g = gatewayFalso();
+      await g.conectou(conA); await confirmarNoBanco(conA);
+      g.svc.conexaoDesconectarConta = async () => { if (executou) g.live = desconectado(); throw new Error("timeout aguardando o gateway"); };
+      await rejeita(conexao.desconectar({ confirmacaoExplicita: true }, OP_COM(), depsCon(g)), 409, "DESCONECTAR_FALHOU");
+      const ident = await identLinha(conA);
+      assert.equal(ident.efeito_estado, "INCERTO"); assert.ok(ident.efeito_incerto_desde);
+      return g;
+    }
+
+    test("erro determinístico ANTES do efeito não deixa INCERTO: libera e fecha a operação", async () => {
+      const g = gatewayFalso();
+      g.svc.conexaoConectar = async () => { throw Object.assign(new Error("WHATSAPP_GATEWAY_NOT_LEADER"), { codigo: "WHATSAPP_GATEWAY_NOT_LEADER" }); };
+      await assert.rejects(() => conexao.iniciar(OP_COM(), depsCon(g)));
+      const ident = await identLinha(conA);
+      assert.equal(ident?.efeito_token ?? null, null, "sem efeito pendente");
+      assert.equal(ident?.operacao_id ?? null, null, "operação encerrada normalmente");
+    });
+
+    test("timeout DEPOIS de chamar o provider fica INCERTO e a nova operação não assume", async () => {
+      const g = await desconexaoIncerta({ executou: true });
+      const st = await conexao.estado(OP_COM(), depsCon(g));
+      assert.equal(st.operacao.reconciliacaoNecessaria, true); assert.equal(st.operacao.efeitoAcao, "DESCONECTAR"); assert.equal(st.operacao.podeReconciliar, true);
+      assert.equal(JSON.stringify(st).includes("efeito_token"), false);
+      await rejeita(conexao.iniciar(OP_COM(), depsCon(g)), 409, "OPERACAO_EM_ANDAMENTO");
+      await rejeita(conexao.desconectar({ confirmacaoExplicita: true }, OP_COM(), depsCon(g)), 409);
+    });
+
+    test("quem só lê o painel vê a pendência (sem operação, sem id e sem token) e não recebe ação", async () => {
+      const g = await desconexaoIncerta({ executou: true });
+      const st = await conexao.estado(OP_SEM(), depsCon(g));
+      assert.equal(st.operacao, null);
+      assert.equal(st.reconciliacao?.reconciliacaoNecessaria, true); assert.equal(st.reconciliacao.acao, "DESCONECTAR");
+      const ident = await identLinha(conA);
+      const txt = JSON.stringify(st);
+      assert.equal(txt.includes(ident.efeito_token), false); assert.equal(txt.includes(ident.operacao_id), false); assert.doesNotMatch(txt, /efeito_token|efeitoToken/);
+      assert.equal(st.permissoes.gerenciar, false);
+    });
+
+    test("EXECUTANDO recente é operação normal (sem alarme); só vira pendência depois da janela", async () => {
+      const g = gatewayFalso(); await g.conectou(conA); await confirmarNoBanco(conA);
+      await supabase.from("whatsapp_identidade").update({ operacao_id: uuid(), operacao_tipo: "DESCONECTAR", operacao_expira_em: new Date(Date.now() + 300_000).toISOString(), efeito_token: uuid(), efeito_acao: "DESCONECTAR", efeito_estado: "EXECUTANDO", efeito_atualizado_em: new Date().toISOString() }).eq("organizacao_id", conA);
+      assert.equal((await conexao.estado(OP_COM(), depsCon(g))).reconciliacao, null);
+      await envelhecer();
+      assert.equal((await conexao.estado(OP_COM(), depsCon(g))).reconciliacao?.reconciliacaoNecessaria, true);
+    });
+
+    test("reconciliação confirma efeito executado: CONCLUIDO, identidade limpa, auditado; repetição é idempotente", async () => {
+      const g = await desconexaoIncerta({ executou: true });
+      const antes = await conexao.reconciliar(OP_COM(), depsCon(g));
+      assert.equal(antes.decisao, "AINDA_INCERTO"); assert.equal(antes.motivo, "janela_de_estabilizacao");
+      await envelhecer();
+      const r = await conexao.reconciliar(OP_COM(), depsCon(g));
+      assert.equal(r.decisao, "CONCLUIDO");
+      const ident = await identLinha(conA);
+      assert.equal(ident.efeito_token, null); assert.equal(ident.status, "SEM_CONTA"); assert.equal(ident.operacao_id, null);
+      const a = await recs();
+      assert.ok(a.some((x) => x.detalhes?.decisao === "CONCLUIDO" && x.detalhes?.acao === "DESCONECTAR"));
+      assert.equal(JSON.stringify(a).includes(QR_SEGREDO), false);
+      const n = a.length;
+      assert.equal((await conexao.reconciliar(OP_COM(), depsCon(g))).decisao, "JA_RESOLVIDO");
+      assert.equal((await recs()).length, n, "repetição não audita nem decide de novo");
+      await conexao.iniciar(OP_COM(), depsCon(g));   // a regra normal volta
+    });
+
+    test("reconciliação confirma efeito NÃO executado: ABORTADO, conta preservada, nova operação volta a valer", async () => {
+      const g = await desconexaoIncerta({ executou: false });
+      await envelhecer();
+      const r = await conexao.reconciliar(OP_COM(), depsCon(g));
+      assert.deepEqual([r.decisao, r.motivo], ["ABORTADO", "sessao_original_ativa"]);
+      const ident = await identLinha(conA);
+      assert.equal(ident.efeito_token, null); assert.equal(ident.status, "CONFIRMADA", "conta preservada");
+      g.svc.conexaoDesconectarConta = async () => { g.live = desconectado(); return { ok: true }; };
+      await conexao.desconectar({ confirmacaoExplicita: true }, OP_COM(), depsCon(g));
+      assert.equal((await identLinha(conA)).status, "SEM_CONTA");
+    });
+
+    test("gateway indisponível ou sem perfil: continua INCERTO (nunca libera por vontade do operador)", async () => {
+      const g = await desconexaoIncerta({ executou: false });
+      await envelhecer();
+      const indisponivel = { svc: { ...g.svc, conexaoStatus: async () => { throw new Error("ECONNREFUSED"); } } };
+      let r = await conexao.reconciliar(OP_COM(), depsCon(indisponivel));
+      assert.deepEqual([r.decisao, r.motivo], ["AINDA_INCERTO", "gateway_indisponivel"]);
+      const semPerfil = { svc: { ...g.svc, conexaoPerfil: async () => ({ disponivel: false, motivo: "sem_identidade" }) } };
+      r = await conexao.reconciliar(OP_COM(), depsCon(semPerfil));
+      assert.equal(r.decisao, "AINDA_INCERTO");
+      const ident = await identLinha(conA);
+      assert.equal(ident.efeito_estado, "INCERTO"); assert.ok(ident.efeito_verificacoes >= 2); assert.ok(ident.efeito_verificado_em);
+      const st = await conexao.estado(OP_COM(), depsCon(indisponivel));
+      assert.ok(st.operacao.ultimaVerificacaoEm); assert.match(st.operacao.ultimoResultado, /^AINDA_INCERTO:/); assert.ok(st.operacao.incertoDesde);
+    });
+
+    test("sessão divergente: decisão segura por ação (DESCONECTAR: sessão original não existe mais => CONCLUIDO)", async () => {
+      const g = await desconexaoIncerta({ executou: true });
+      g.live = { status: "CONNECTED", qrDisponivel: false, reconectando: false };
+      g.perfil = { ...g.perfil, authSessionId: uuid() };
+      await envelhecer();
+      const r = await conexao.reconciliar(OP_COM(), depsCon(g));
+      assert.deepEqual([r.decisao, r.motivo], ["CONCLUIDO", "sessao_substituida"]);
+    });
+
+    test("token/operação errados são recusados no banco", async () => {
+      await desconexaoIncerta({ executou: true });
+      const ident = await identLinha(conA);
+      const efeito = (o) => supabase.rpc("whatsapp_operacao_efeito", { p_organizacao_id: conA, p_provider_instance_id: "default", p_operacao_id: ident.operacao_id, p_token: ident.efeito_token, p_acao: "DESCONECTAR", p_fase: "CONSUMIR", ...o });
+      assert.equal((await efeito({ p_token: uuid() })).data, false);
+      assert.equal((await efeito({ p_operacao_id: uuid() })).data, false);
+      assert.equal((await efeito({ p_acao: "RESET" })).data, false);
+      assert.equal((await efeito({})).data, false, "token já consumido");
+      const rec = await supabase.rpc("whatsapp_operacao_reconciliar", { p_organizacao_id: conA, p_provider_instance_id: "default", p_operacao_id: uuid(), p_gateway_ok: true, p_gateway_estado: "DISCONNECTED", p_gateway_auth_session_id: null, p_por: null });
+      assert.equal(rec.data[0].decisao, "RECUSADO");
+      assert.equal((await identLinha(conA)).efeito_estado, "INCERTO");
+    });
+
+    test("sem permissão: 403 e nada é decidido", async () => {
+      const g = await desconexaoIncerta({ executou: true });
+      await envelhecer();
+      const base = (await recs()).length;
+      await rejeita(conexao.reconciliar(OP_SEM(), depsCon(g)), 403);
+      assert.equal((await identLinha(conA)).efeito_estado, "INCERTO");
+      assert.equal((await recs()).length, base);
+    });
+
+    test("duas reconciliações simultâneas: uma única decisão válida", async () => {
+      const g = await desconexaoIncerta({ executou: false });
+      await envelhecer();
+      const base = (await recs()).length;
+      const r = await Promise.all([conexao.reconciliar(OP_COM(), depsCon(g)), conexao.reconciliar(SUPER(), depsCon(g))]);
+      assert.deepEqual(r.map((x) => x.decisao).sort(), ["ABORTADO", "JA_RESOLVIDO"]);
+      assert.equal((await recs()).length, base + 1, "somente a decisão real é auditada");
+    });
   });
 });

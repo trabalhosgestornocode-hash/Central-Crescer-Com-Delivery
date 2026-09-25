@@ -141,7 +141,7 @@ export const centralAtualizacoes = asyncHandler(async (req, res) => ok(res, awai
 export const listarConversas = asyncHandler(async (req, res) => ok(res, await conversas.listarConversas({ filtro: req.query.filtro, busca: req.query.busca }, deps(req))));
 // GET /administrativo/comunicacao/conversas/:contatoId?horas=
 export const obterConversa = asyncHandler(async (req, res) =>
-  ok(res, await conversas.obterConversa({ contatoId: req.params.contatoId, horas: req.query.horas }, autor(req), deps(req))));
+  ok(res, await conversas.obterConversa({ contatoId: req.params.contatoId, horas: req.query.horas, antes: req.query.antes }, autor(req), deps(req))));
 // POST /administrativo/comunicacao/conversas/:contatoId/lida   { ate? }
 export const marcarConversaLida = asyncHandler(async (req, res) =>
   ok(res, await conversas.marcarLida({ contatoId: req.params.contatoId, ate: req.body?.ate }, autor(req), deps(req))));
@@ -156,7 +156,7 @@ export const enviarMensagemConversa = asyncHandler(async (req, res) =>
 // GET /administrativo/comunicacao/conexao — estado (qualquer usuário do painel; sem QR e sem ações).
 export const conexaoEstado = asyncHandler(async (req, res) => ok(res, await conexao.estado(autor(req), deps(req))));
 // POST /administrativo/comunicacao/conexao/iniciar
-export const conexaoIniciar = asyncHandler(async (req, res) => ok(res, await conexao.iniciar(autor(req), deps(req))));
+export const conexaoIniciar = asyncHandler(async (req, res) => ok(res, await conexao.iniciar(autor(req), deps(req), { revisar: req.body?.revisar === true })));
 // GET /administrativo/comunicacao/conexao/qr?operacaoId=  — o QR é segredo transitório: nenhum cache (navegador/proxy) pode retê-lo.
 export const conexaoQr = asyncHandler(async (req, res) => {
   res.set("Cache-Control", "no-store");
@@ -172,6 +172,7 @@ export const conexaoCancelar = asyncHandler(async (req, res) => ok(res, await co
 // POST /administrativo/comunicacao/conexao/desconectar { confirmacaoExplicita }
 export const conexaoDesconectar = asyncHandler(async (req, res) => ok(res, await conexao.desconectar({ confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));
 // POST /administrativo/comunicacao/conexao/trocar      { confirmacaoExplicita }
+export const conexaoReconciliar = asyncHandler(async (req, res) => ok(res, await conexao.reconciliar(autor(req), deps(req))));
 export const conexaoTrocar = asyncHandler(async (req, res) => ok(res, await conexao.trocar({ confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));
 // PUT /administrativo/comunicacao/conexao/identidade   { ambiente?, agenteCrescer? }
 export const conexaoIdentidade = asyncHandler(async (req, res) => ok(res, await conexao.definirIdentidade({ ambiente: req.body?.ambiente, agenteCrescer: req.body?.agenteCrescer }, autor(req), deps(req))));

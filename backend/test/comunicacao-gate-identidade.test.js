@@ -10,6 +10,7 @@ import { MODOS, MOTIVOS_BLOQUEIO, bloqueioEhTransitorio } from "../src/modules/c
 import { criarWhatsAppService, IdentidadeNaoConfirmadaError } from "../src/modules/comunicacao/whatsapp.service.js";
 import { identidadeConfirmada, resumoIdentidade, hashTelefone, criarGateIdentidade } from "../src/modules/comunicacao/comunicacao.identidade.js";
 import { criarFakeDb } from "./helpers/central-fake-db.js";
+import { classificarErroEnvio } from "../src/modules/comunicacao/comunicacao.entrega.js";
 
 const ORG = "00000000-0000-4000-8000-0000000000a1";
 const AGORA = new Date("2026-09-24T15:00:00.000Z");
@@ -61,6 +62,16 @@ describe("política: identidadeConfirmada é obrigatória (fail-closed, proativo
 });
 
 describe("WhatsAppService: nenhum envio chega ao provider sem conta confirmada (provider = 0)", () => {
+  test("recusa no último gate é pré-envio comprovado, nunca entrega incerta", async () => {
+    const { p, chamadas } = providerFalso();
+    const s = criarWhatsAppService({ provider: p, identidadeConfirmada: async () => false });
+    await assert.rejects(() => s.enviarTexto(envio), (e) => {
+      assert.equal(e.preEnvio, true);
+      assert.equal(classificarErroEnvio(e), "RETRYAVEL");
+      return true;
+    });
+    assert.equal(chamadas.length, 0);
+  });
   test("sem gate injetado ⇒ FAIL-CLOSED: texto, imagem e documento são recusados", async () => {
     const { p, chamadas } = providerFalso();
     const s = criarWhatsAppService({ provider: p });

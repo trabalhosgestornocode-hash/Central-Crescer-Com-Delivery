@@ -1627,18 +1627,28 @@ export function criarSessaoBaileys({
     async perfilConta() {
       if (status !== STATUS_CONEXAO.CONNECTED || !socket) return { disponivel: false, motivo: "nao_conectado" };
       const sock = socket;
+      const authSessionId = authAdapter.obterAuthSessionIdAtual?.() ?? null;
       const eu = sock.user ?? sock.authState?.creds?.me ?? null;
       if (!eu?.id) return { disponivel: false, motivo: "sem_identidade" };
       let jid; try { jid = jidNormalizedUser(eu.id); } catch { return { disponivel: false, motivo: "sem_identidade" }; }
-      const digitos = String(jid).split("@")[0].replace(/D/g, "");
-      const limite = (p, ms = config?.perfilTimeoutMs ?? 8000) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), ms))]);
-      const seguro = async (fn) => { try { return await limite(fn()); } catch { return null; } };
-      const foto = typeof sock.profilePictureUrl === "function" ? await seguro(() => sock.profilePictureUrl(jid, "preview")) : null;
-      const recado = typeof sock.fetchStatus === "function" ? await seguro(() => sock.fetchStatus(jid)) : null;
-      const comercial = typeof sock.getBusinessProfile === "function" ? await seguro(() => sock.getBusinessProfile(jid)) : null;
+      // Um LID numérico não é um telefone e não pode identificar a conta confirmada.
+      const digitos = String(jid).endsWith("@s.whatsapp.net") ? String(jid).split("@")[0] : "";
+      const seguro = async (fn) => {
+        let timer;
+        try { return await Promise.race([Promise.resolve().then(fn), new Promise((_, rejeitar) => { timer = setTimeout(() => rejeitar(new Error("timeout")), config?.perfilTimeoutMs ?? 8000); })]); }
+        catch { return null; } finally { clearTimeout(timer); }
+      };
+      const [foto, recado, comercial] = await Promise.all([
+        typeof sock.profilePictureUrl === "function" ? seguro(() => sock.profilePictureUrl(jid, "preview")) : null,
+        typeof sock.fetchStatus === "function" ? seguro(() => sock.fetchStatus(jid)) : null,
+        typeof sock.getBusinessProfile === "function" ? seguro(() => sock.getBusinessProfile(jid)) : null,
+      ]);
       const textoRecado = Array.isArray(recado) ? recado[0]?.status?.status : recado?.status?.status ?? recado?.status;
+      if (socket !== sock || status !== STATUS_CONEXAO.CONNECTED || (authAdapter.obterAuthSessionIdAtual?.() ?? null) !== authSessionId)
+        return { disponivel: false, motivo: "sessao_alterada" };
       return {
         disponivel: true,
+        authSessionId,
         nome: typeof eu.name === "string" && eu.name.trim() ? eu.name.trim().slice(0, 80) : (typeof eu.verifiedName === "string" ? eu.verifiedName.slice(0, 80) : null),
         telefoneE164: /^[1-9][0-9]{7,14}$/.test(digitos) ? `+${digitos}` : null,
         fotoUrl: typeof foto === "string" && foto.startsWith("https://") ? foto : null,
@@ -1655,10 +1665,14 @@ export function criarSessaoBaileys({
     async desconectarConta({ desvincular = true } = {}) {
       let desvinculado = false;
       if (desvincular && socket && status === STATUS_CONEXAO.CONNECTED && typeof socket.logout === "function") {
+        let timer;
         try {
-          await Promise.race([socket.logout(), new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), config?.logoutTimeoutMs ?? 8000))]);
+          await Promise.race([socket.logout(), new Promise((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error("Logout sem resultado confirmado; reconciliação necessária."), { logoutPendente: true, status: 409, codigo: "OPERACAO_RESULTADO_INCERTO" })), config?.logoutTimeoutMs ?? 8000); })]);
           desvinculado = true;
-        } catch { log("warn", "desconectar_conta.logout_falhou", {}); }
+        } catch (e) {
+          if (e?.logoutPendente) throw e;
+          log("warn", "desconectar_conta.logout_falhou", {});
+        } finally { clearTimeout(timer); }
         // o close 401 gerado pelo logout assenta o LOGGED_OUT antes do reset (que é a via permitida para sair dele)
         for (let i = 0; i < 40 && status === STATUS_CONEXAO.CONNECTED; i += 1) await new Promise((r) => setTimeout(r, 50));
       }

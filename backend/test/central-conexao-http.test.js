@@ -10,6 +10,7 @@ import express from "express";
 import { administrativoRouter } from "../src/modules/administrativo/administrativo.routes.js";
 import { errorHandler } from "../src/middlewares/errorHandler.js";
 import { criarFakeDb } from "./helpers/central-fake-db.js";
+import { instalarExecutorTeste } from "./helpers/gateway-operacao.js";
 import { _zerarCachePerfil } from "../src/modules/administrativo/administrativo.comunicacao.conexao.js";
 
 const aqui = dirname(fileURLToPath(import.meta.url));
@@ -43,7 +44,7 @@ function chamar({ user, metodo = "GET", path, corpo, adminDeps }) {
 const B = "/administrativo/comunicacao/conexao";
 const ROTAS = [
   ["GET", B], ["GET", `${B}/qr?operacaoId=${OPERACAO}`], ["POST", `${B}/iniciar`, {}], ["POST", `${B}/novo-qr`, { operacaoId: OPERACAO }], ["POST", `${B}/confirmar`, { operacaoId: OPERACAO }], ["POST", `${B}/cancelar`, { operacaoId: OPERACAO }],
-  ["POST", `${B}/desconectar`, { confirmacaoExplicita: true }], ["POST", `${B}/trocar`, { confirmacaoExplicita: true }], ["PUT", `${B}/identidade`, { ambiente: "TESTE" }],
+  ["POST", `${B}/desconectar`, { confirmacaoExplicita: true }], ["POST", `${B}/trocar`, { confirmacaoExplicita: true }], ["POST", `${B}/reconciliar`, {}], ["PUT", `${B}/identidade`, { ambiente: "TESTE" }],
 ];
 
 function depsFalsas({ permitidos = [], qr = QR } = {}) {
@@ -58,7 +59,9 @@ function depsFalsas({ permitidos = [], qr = QR } = {}) {
     conexaoQr: async () => ({ qr, svg: qr ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"></svg>' : null, geradoEm: new Date().toISOString(), expiraEm: new Date(Date.now() + 50_000).toISOString(), ordem: 1 }),
     conexaoPerfil: async () => ({ disponivel: false }), conexaoConectar: async () => { chamadas.push("conectar"); }, conexaoDesconectarConta: async () => { chamadas.push("desconectar"); }, conexaoEncerrar: async () => {},
   };
-  return { deps: { supabase: db, env: {}, organizacaoConexaoId: ORG, whatsAppService: svc, auditar: async () => {}, agora: () => new Date() }, chamadas };
+  const deps = { supabase: db, env: {}, organizacaoConexaoId: ORG, whatsAppService: svc, auditar: async () => {}, agora: () => new Date() };
+  instalarExecutorTeste(svc, deps);
+  return { deps, chamadas };
 }
 
 describe("Conexão — autorização das rotas", () => {
@@ -125,7 +128,7 @@ describe("Conexão — guardas estáticos", () => {
 
   test("toda rota da Conexão nasce no administrativoRouter e toda escrita passa pelo limite de taxa próprio", () => {
     const linhas = src("modules", "administrativo", "administrativo.routes.js").split("\n").filter((l) => /comunicacao\/conexao/.test(l) && !l.trim().startsWith("//"));
-    assert.equal(linhas.length, 9);
+    assert.equal(linhas.length, 10);   // + POST /reconciliar (099)
     assert.ok(linhas.every((l) => l.startsWith("administrativoRouter.")));
     for (const l of linhas.filter((x) => /\.(post|put)\(/.test(x))) assert.match(l, /limiteConexao/, l);
   });

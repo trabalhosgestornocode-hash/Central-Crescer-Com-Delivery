@@ -343,16 +343,17 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     if (foco && !ehMobile()) q("#cc-texto")?.focus();
   }
 
-  async function carregarThread({ silencioso = true, rolar = "manter" } = {}) {
+  async function carregarThread({ silencioso = true, rolar = "manter", antes = null } = {}) {
     const id = S.sel; if (!id) return;
-    const res = await guardado("thread", () => api.conversa(id, { horas: S.horas }));
+    const res = await guardado("thread", () => api.conversa(id, { horas: S.horas, ...(antes ? { antes } : {}) }));
     if (!res || id !== S.sel) return;
     const novo = res.r;
     const cursor = novo.cursor ?? S.cursor; S.cursor = cursor;
     const jaTinha = !!S.thread;
     const gatingMudou = jaTinha && JSON.stringify(S.thread.envio?.bloqueios ?? []) !== JSON.stringify(novo.envio?.bloqueios ?? []);
     const antigas = S.thread?.mensagens ?? [];
-    S.thread = { ...novo, mensagens: jaTinha ? M.mesclarMensagens(antigas, novo.mensagens) : novo.mensagens };
+    const paginacao = jaTinha && !antes ? { proximaPagina: S.thread.proximaPagina, temMaisAntigas: S.thread.temMaisAntigas } : {};
+    S.thread = { ...novo, ...paginacao, mensagens: jaTinha ? M.mesclarMensagens(antigas, novo.mensagens) : novo.mensagens };
     S.threadCarregando = false;
     if (!jaTinha) pintarChat({ rolar }); else { pintarFluxo({ rolar }); if (gatingMudou) pintarComposer(); const cab = q("[data-cc-chat-cab]"); if (cab) cab.innerHTML = ui.htmlChatCabecalho(S.thread.contato, S.thread.envio, { detalhesAberto: S.detalhes }); }
     pintarContexto();
@@ -566,7 +567,11 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     const acao = t.closest("[data-cc-acao]");
     if (!acao) return;
     const a = acao.dataset.ccAcao; const org = acao.dataset.ccOrg; const id = acao.dataset.ccId;
-    if (a === "mais-antigas") { S.horas = S.horas < 168 ? 168 : 720; carregarThread({ silencioso: true, rolar: "manter" }); }
+    if (a === "mais-antigas") {
+      const antes = S.thread?.proximaPagina;
+      if (!antes) S.horas = S.horas < 168 ? 168 : 720;
+      carregarThread({ silencioso: true, rolar: "manter", antes });
+    }
     else if (a === "ver-empresa") ganchos.abrirEmpresa?.(org);
     else if (a === "configurar-empresa") ganchos.abrirEmpresa?.(org);
     else if (a === "ver-pendencias") ganchos.irParaTela?.("pendencias");

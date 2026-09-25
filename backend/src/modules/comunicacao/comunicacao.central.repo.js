@@ -11,6 +11,24 @@ const LOTE_IDS = 100;   // limite prático do tamanho da URL do PostgREST em fil
 const emLotes = (ids) => { const l = [...new Set((ids ?? []).filter(Boolean))]; const out = []; for (let i = 0; i < l.length; i += LOTE_IDS) out.push(l.slice(i, i + LOTE_IDS)); return out; };
 const falha = (error) => { throw ApiError.internal(error.message); };
 
+export async function paginaConversa({ organizacaoId, contatoId, desde, antes }, deps = {}) {
+  const { data, error } = await (deps.supabase ?? supabase).rpc("comunicacao_conversa_pagina", {
+    p_organizacao_id: organizacaoId, p_contato_id: contatoId, p_desde: desde,
+    p_antes_em: antes?.em ?? null, p_antes_direcao: antes?.direcao ?? null, p_antes_id: antes?.id ?? null, p_limite: 201,
+  });
+  if (error) falha(error);
+  return data ?? [];
+}
+
+/** Evento de envio, separado da consulta por criação utilizada nos demais cards. */
+export async function listarEnviadasDesde({ desde }, deps = {}) {
+  const { data, error } = await (deps.supabase ?? supabase).from("comunicacao_mensagens")
+    .select("id,contato_id,status,enviado_em,entregue_em,lido_em").eq("direcao", "saida")
+    .in("status", ["SENT", "DELIVERED", "READ"]).gte("enviado_em", desde).order("enviado_em", { ascending: false }).limit(5000);
+  if (error) falha(error);
+  return data ?? [];
+}
+
 /** Saídas (todas as origens) dos contatos dados, desde `desde` — da mais nova para a mais antiga. */
 export async function listarSaidasRecentes({ contatoIds, desde, limite = 3000 }, deps = {}) {
   const db = deps.supabase ?? supabase;
@@ -111,15 +129,21 @@ const recuar = (iso) => new Date(Math.max(0, Date.parse(iso) - SOBREPOSICAO_CURS
 export async function contatosAlteradosDesde({ inbox, saida, limite = 200 }, deps = {}) {
   const db = deps.supabase ?? supabase;
   const ids = new Set();
+  // Uma direção antes vazia precisa incluir seu primeiro item. Lote saturado
+  // retorna null para invalidar todo o roster, sem perder a conversa aberta.
+  inbox ??= "1970-01-01T00:00:00.000Z";
+  saida ??= "1970-01-01T00:00:00.000Z";
   if (inbox) {
     // SOBREPOSIÇÃO de 5 s: um insert que começou antes (created_at menor) mas commitou depois do cursor não pode ser perdido. O resultado é um conjunto de ids (dedup).
-    const { data, error } = await db.from("comunicacao_inbox_mensagens").select("contato_id").gt("created_at", recuar(inbox)).limit(limite);
+    const { data, error } = await db.from("comunicacao_inbox_mensagens").select("contato_id").gt("created_at", recuar(inbox)).limit(limite + 1);
     if (error) falha(error);
+    if (data?.length > limite) return null;
     for (const r of data ?? []) ids.add(r.contato_id);
   }
   if (saida) {
-    const { data, error } = await db.from("comunicacao_mensagens").select("contato_id").eq("direcao", "saida").gt("updated_at", recuar(saida)).limit(limite);
+    const { data, error } = await db.from("comunicacao_mensagens").select("contato_id").eq("direcao", "saida").gt("updated_at", recuar(saida)).limit(limite + 1);
     if (error) falha(error);
+    if (data?.length > limite) return null;
     for (const r of data ?? []) if (r.contato_id) ids.add(r.contato_id);
   }
   return [...ids];

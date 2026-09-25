@@ -57,6 +57,11 @@
 .cc-atencao { display: grid; gap: 14px; padding: 20px 24px; border-radius: 16px; border: 1px solid rgba(196,138,18,.32); background: linear-gradient(180deg, #fffaf0 0%, #fff8e8 100%); }
 .cc-atencao > header { display: flex; gap: 14px; align-items: center; }
 .cc-atencao-selo { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: var(--cc-warn); color: #fff; flex: none; box-shadow: 0 0 0 6px rgba(196,138,18,.14); }
+.cc-atencao .cc-cfg-linha { padding: 6px 0; gap: 2px 16px; border-top-color: rgba(196,138,18,.18); }
+.cc-atencao .cc-cfg-linha dt { color: #66543a; }
+.cc-recon-resultado { font-size: 13.5px; line-height: 1.45; padding: 10px 12px; border-radius: 10px; background: rgba(0,0,0,.04); }
+.cc-recon-resultado--ok { background: rgba(31,138,76,.10); }
+.cc-recon-resultado--erro { background: rgba(196,52,42,.10); }
 .cc-atencao h2 { font-size: 17px; font-weight: 750; letter-spacing: -.2px; }
 .cc-atencao p { font-size: 13.5px; color: #66543a; line-height: 1.45; }
 .cc-checklist { list-style: none; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 20px; }

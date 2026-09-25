@@ -263,7 +263,7 @@ function contextoDaConversa(c, ctx) {
  * GET /comunicacao/conversas/:contatoId?horas=24 — a conversa (entradas + saídas manuais/automáticas/teste em ordem cronológica) e o contexto.
  * `horas` limitado a 1..720 (a retenção do texto). Não depende de sincronizar histórico do WhatsApp nem reativa recovery.
  */
-export async function obterConversa({ contatoId, horas = JANELA_PADRAO_HORAS } = {}, autor, deps = {}) {
+export async function obterConversa({ contatoId, horas = JANELA_PADRAO_HORAS, antes } = {}, autor, deps = {}) {
   const id = v.uuid(contatoId, "Conversa");
   const janelaHoras = Math.min(JANELA_MAX_HORAS, Math.max(1, Math.trunc(Number(horas)) || JANELA_PADRAO_HORAS));
   const contato = await (deps.roster ?? rosterRepo).buscarAutorizadoPorId(id, deps);
@@ -272,16 +272,28 @@ export async function obterConversa({ contatoId, horas = JANELA_PADRAO_HORAS } =
   const agora = agoraDe(deps);
   const desde = new Date(agora.getTime() - janelaHoras * HORA).toISOString();
   const desde30 = new Date(agora.getTime() - JANELA_MAX_HORAS * HORA).toISOString();
-  const [entradasBrutas, saidasBrutas, fotos, pend, gates] = await Promise.all([
-    inboxRepo.listarMensagensDoContato({ organizacaoId: conexaoOrgId(deps), contatoId: id, desde: desde30 }, deps),
-    centralRepo.listarSaidasDoContato({ contatoId: id, desde: desde30 }, deps),
+  let cursorPagina = null;
+  if (antes) {
+    try {
+      cursorPagina = JSON.parse(Buffer.from(String(antes), "base64url").toString("utf8"));
+      if (String(antes).length > 600 || cursorPagina.contatoId !== id || !["entrada", "saida"].includes(cursorPagina.direcao) || !Number.isFinite(Date.parse(cursorPagina.em))) throw new Error();
+      v.uuid(cursorPagina.id, "Cursor");
+    } catch { throw ApiError.badRequest("Cursor de histórico inválido.", { codigo: "CURSOR_INVALIDO" }); }
+  }
+  const [linhas, fotos, pend, gates] = await Promise.all([
+    centralRepo.paginaConversa({ organizacaoId: conexaoOrgId(deps), contatoId: id, desde: desde30, antes: cursorPagina }, deps),
     centralRepo.obterFotos([id], deps),
     (deps.lerPendencias ?? lerPendenciasReal)({}, deps).catch(() => ({ unidades: [] })),
     avaliarGatesManual(contato, deps),
   ]);
-  const entradas = entradasBrutas.map(projetarEntrada);
-  const saidas = saidasBrutas.map(projetarSaida);
-  const todas = [...entradas, ...saidas].sort(porEm);
+  const visiveis = linhas.filter((m) => cursorPagina || ms(m.em) >= ms(desde) || m.registro.status === STATUS_MENSAGEM.SCHEDULED);
+  const pagina = visiveis.slice(0, 200);
+  const temMaisAntigas = linhas.length > pagina.length;
+  const ultimo = pagina.at(-1) ?? { em: desde, direcao: "saida", id: "ffffffff-ffff-4fff-bfff-ffffffffffff" };
+  const proximaPagina = temMaisAntigas ? Buffer.from(JSON.stringify({ em: ultimo.em, direcao: ultimo.direcao, id: ultimo.id, contatoId: id })).toString("base64url") : null;
+  const todas = pagina.map((m) => m.direcao === "entrada" ? projetarEntrada(m.registro) : projetarSaida(m.registro)).reverse();
+  const entradas = todas.filter((m) => m.direcao === "entrada");
+  const saidas = todas.filter((m) => m.direcao === "saida");
   const cache = fotos.get(id);
   agendarAtualizacaoFoto(contato, cache, deps);
 
@@ -294,8 +306,8 @@ export async function obterConversa({ contatoId, horas = JANELA_PADRAO_HORAS } =
 
   return {
     contato: { ...contextoDaConversa(contato, { fotoUrl: fotoVigente(cache, agora), pendPorOrg: pendenciasPorOrg(pend), saidas, entradas }), whatsappConfirmado: entradas.length > 0 || saidas.some((m) => !!m.entregueEm) },
-    mensagens: todas.filter((m) => ms(m.em) >= ms(desde) || m.status === STATUS_MENSAGEM.SCHEDULED),
-    janelaHoras, temMaisAntigas: janelaHoras < JANELA_MAX_HORAS && todas.some((m) => ms(m.em) < ms(desde)),
+    mensagens: todas,
+    janelaHoras, temMaisAntigas, proximaPagina,
     envio: { podeEnviar: gates.bloqueios.length === 0, bloqueios: gates.bloqueios, maxCaracteres: 4096 },
     cursor: formatarCursor(await centralRepo.lerCursoresAtuais(deps)),
   };
@@ -394,6 +406,7 @@ const formatarCursor = ({ inbox, saida }) => `${inbox ?? ""}|${saida ?? ""}`;
 function lerCursor(texto) {
   if (typeof texto !== "string" || !RE_CURSOR.test(texto)) return null;
   const [inbox, saida] = texto.split("|");
+  if ([inbox, saida].some((valor) => valor && !Number.isFinite(Date.parse(valor)))) return null;
   return { inbox: inbox || null, saida: saida || null };
 }
 
@@ -417,7 +430,7 @@ export async function atualizacoes({ cursor } = {}, deps = {}) {
   // Só conversas autorizadas: um id que o roster não reconhece nunca vaza para a tela.
   const roster = await (deps.roster ?? rosterRepo).listarRoster(deps);
   const autorizados = new Set(roster.map((c) => c.contatoId));
-  return { cursor: novo, mudou: true, contatosAlterados: alterados.filter((id) => autorizados.has(id)), naoLidas, gateway: gateway.estado, modo };
+  return { cursor: novo, mudou: true, contatosAlterados: alterados === null ? [...autorizados] : alterados.filter((id) => autorizados.has(id)), naoLidas, gateway: gateway.estado, modo };
 }
 
 // ---------------------------------------------------------------------------
@@ -431,7 +444,7 @@ const ROTULO_MODO = Object.freeze({ NORMAL: "Ativa", REACTIVE_ONLY: "Somente rea
 export async function visaoGeral(deps = {}) {
   const agora = agoraDe(deps);
   const inicioDia = inicioDoDiaBrasil(agora);
-  const [conversas, saidasHoje, entradasHoje, proximos, resumoSaude, orgs, modo, identidade] = await Promise.all([
+  const [conversas, saidasHoje, entradasHoje, proximos, resumoSaude, orgs, modo, identidade, enviadasHoje] = await Promise.all([
     montarConversas(deps),
     centralRepo.listarSaidasDesde({ desde: inicioDia }, deps),
     inboxRepo.listarMensagensDesde({ organizacaoId: conexaoOrgId(deps), desde: inicioDia }, deps),
@@ -440,11 +453,12 @@ export async function visaoGeral(deps = {}) {
     (deps.organizacoes ?? service.organizacoes)({}, deps),
     (deps.modoAtual ?? modoAtual)(deps),
     (deps.resumoIdentidade ?? conexao.resumoIdentidade)(deps),
+    centralRepo.listarEnviadasDesde({ desde: inicioDia }, deps),
   ]);
   const roster = new Set(conversas.itens.map((c) => c.contatoId));
   const saidas = saidasHoje.filter((m) => m.contato_id && roster.has(m.contato_id));
   const entradas = entradasHoje.filter((m) => roster.has(m.contato_id));
-  const enviadas = saidas.filter((m) => ["SENT", "DELIVERED", "READ"].includes(m.status));
+  const enviadas = enviadasHoje.filter((m) => m.contato_id && roster.has(m.contato_id));
   const entregues = enviadas.filter((m) => m.status === "DELIVERED" || m.status === "READ");
   const falhas = saidas.filter((m) => m.status === "FAILED").length;
   const incertas = saidas.filter((m) => m.status === "DELIVERY_UNKNOWN").length;
@@ -469,7 +483,7 @@ export async function visaoGeral(deps = {}) {
       whatsapp: { estado: gw, rotulo: ROTULO_GATEWAY[gw] ?? "Desconhecido", conta: identidade ? { status: identidade.status, confirmada: identidade.confirmada, ambiente: identidade.ambiente, nomeOperacional: identidade.nomeOperacional } : null },
       automacao: { modo, rotulo: ROTULO_MODO[modo] ?? "—", ativa: modo === "NORMAL" },
       conversasNaoLidas: naoLidasConversas.length,
-      mensagensHoje: { total: saidas.length + entradas.length, enviadas: saidas.length, recebidas: entradas.length },
+      mensagensHoje: { total: saidas.length + entradas.length, enviadas: enviadas.length, recebidas: entradas.length },
       entreguesHojePct: enviadas.length ? Math.round((entregues.length / enviadas.length) * 100) : null,
       falhasHoje: falhas,
     },

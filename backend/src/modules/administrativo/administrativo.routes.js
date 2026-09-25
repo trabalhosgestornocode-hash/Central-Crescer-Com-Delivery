@@ -106,6 +106,7 @@ administrativoRouter.post("/comunicacao/conexao/confirmar", limiteConexao, cc.co
 administrativoRouter.post("/comunicacao/conexao/cancelar", limiteConexao, cc.conexaoCancelar);
 administrativoRouter.post("/comunicacao/conexao/desconectar", limiteConexao, cc.conexaoDesconectar);
 administrativoRouter.post("/comunicacao/conexao/trocar", limiteConexao, cc.conexaoTrocar);
+administrativoRouter.post("/comunicacao/conexao/reconciliar", limiteConexao, cc.conexaoReconciliar);
 administrativoRouter.put("/comunicacao/conexao/identidade", limiteConexao, cc.conexaoIdentidade);
 administrativoRouter.post("/comunicacao/conversas/:contatoId/mensagens", limiteDeTaxa({ escopo: "comunicacao_manual", ...RATE_LIMIT.comunicacaoManual }), cc.enviarMensagemConversa);
 

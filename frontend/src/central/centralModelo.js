@@ -230,7 +230,12 @@ export function blocosDaConversa(mensagens, agora = new Date()) {
   return blocos;
 }
 
-const tempo = (m) => { const d = dt(m.em); return d ? d.getTime() : 0; };
+const tempo = (m) => {
+  const d = dt(m.em);
+  const fracao = /\.(\d+)(?:Z|[+-])/.exec(String(m.em))?.[1] ?? "";
+  return d ? d.getTime() * 1000 + Number(fracao.slice(3, 6).padEnd(3, "0")) : 0;
+};
+const compararTexto = (a, b) => a === b ? 0 : a < b ? -1 : 1;
 
 /**
  * Mescla mensagens novas na lista atual por `id` (a nova substitui a antiga — é assim que SENT vira DELIVERED sem duplicar) e reordena por horário.
@@ -243,7 +248,7 @@ export function mesclarMensagens(atuais, novas) {
     if (m.envioId) for (const [id, x] of porId) if (x.envioId === m.envioId && id !== m.id) porId.delete(id);
     porId.set(m.id, m);
   }
-  return [...porId.values()].sort((a, b) => tempo(a) - tempo(b));
+  return [...porId.values()].sort((a, b) => tempo(a) - tempo(b) || compararTexto(a.direcao ?? "", b.direcao ?? "") || compararTexto(a.id, b.id));
 }
 
 /** Bolha "enviando…" mostrada no instante do clique, antes de o servidor responder. */

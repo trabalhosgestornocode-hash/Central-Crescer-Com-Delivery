@@ -40,6 +40,7 @@ export function derivarEstado({ live = null, db = null, agora = new Date() } = {
 /** Situação da identidade: só CONFIRMADA quando o número conectado é EXATAMENTE o que o operador confirmou. */
 export function statusIdentidade({ conectado, identidade, telefoneAtual }) {
   if (!conectado) return "SEM_CONTA";
+  if (identidade?.efeito_token || ["TROCAR", "DESCONECTAR"].includes(identidade?.operacao_tipo)) return "PENDENTE_CONFIRMACAO";
   if (identidade?.status === "CONFIRMADA" && telefoneAtual && identidade.telefone_hash === hashTelefone(telefoneAtual)) return "CONFIRMADA";
   return "PENDENTE_CONFIRMACAO";
 }
@@ -48,7 +49,7 @@ export async function lerConexaoDb(deps) {
   const org = orgId(deps); if (!org) return null;
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.from("whatsapp_conexoes")
-    .select("status, telefone_e164, connected_at, disconnected_at, last_seen_at, lease_expires_at, gateway_version, last_error_class, desired_connection_state")
+    .select("status, telefone_e164, auth_session_id, connected_at, disconnected_at, last_seen_at, lease_expires_at, gateway_version, last_error_class, desired_connection_state")
     .eq("organizacao_id", org).eq("provider_instance_id", INSTANCIA).maybeSingle();
   if (error) throw new Error(error.message);
   return data ?? null;

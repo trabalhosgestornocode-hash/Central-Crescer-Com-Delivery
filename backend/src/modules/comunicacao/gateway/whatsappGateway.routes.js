@@ -16,6 +16,7 @@
 // futuro explícito, não um atalho silencioso.
 
 import { Router } from "express";
+import { transicaoEfeito } from "../comunicacao.operacoes.js";
 import { LeaseStaleError, AuthSessionStaleError, AuthConfirmacaoRecusadaError } from "./whatsappGateway.repo.js";
 import { validarEventoInbound, motivoBloqueioAutomacao } from "../inbound/inbound.contrato.js";
 import { validarEventoStatusProvider } from "../comunicacao.statusProvider.js";
@@ -64,8 +65,18 @@ function epochValido(v) {
  *   Central de Comunicação — decide se o evento vira mensagem de conversa (SÓ responsável autorizado). Sem isto (testes antigos), o comportamento de
  *   sempre: só o razão técnico.
  */
-export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider, inbox }) {
+export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider, inbox, efeito = transicaoEfeito }) {
   const router = Router();
+  router.post("/operacao/efeito", async (req, res, next) => {
+    try {
+      const { operacaoId, token, acao, fase } = req.corpoJson ?? {};
+      if (!UUID_RE.test(operacaoId ?? "") || !UUID_RE.test(token ?? "") ||
+          !["CONECTAR", "ENCERRAR", "DESCONECTAR", "RESET"].includes(acao) ||
+          !["CONSUMIR", "CONCLUIR", "INCERTO", "FALHA_DETERMINISTICA"].includes(fase)) return res.status(400).json({ error: "OPERACAO_INVALIDA" });
+      const ok = await efeito({ organizacaoId, operacaoId, token, acao, fase });
+      res.status(ok ? 200 : 409).json({ ok, ...(ok ? {} : { error: "OPERACAO_INVALIDA" }) });
+    } catch (e) { next(e); }
+  });
 
   // Checkpoint F — contrato inbound ESTRITO. 400 com um CÓDIGO fechado (nunca ecoa o valor). O organizacaoId vem da CONFIG do backend, nunca do
   // corpo (chave desconhecida ⇒ 400). Persiste em tabela PRÓPRIA (idempotente). Só um evento novo E elegível (LIVE, cliente direto, sem

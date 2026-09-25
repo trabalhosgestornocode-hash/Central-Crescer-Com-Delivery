@@ -16,8 +16,14 @@ import { qrParaSvg } from "./qrSvg.js";
 /**
  * @param {ReturnType<import('./baileysSession.js').criarSessaoBaileys>} sessao
  */
-export function criarRotas(sessao) {
+export function criarRotas(sessao, { executarOperacao } = {}) {
   const router = Router();
+  router.post("/whatsapp/operacao", async (req, res, next) => {
+    try {
+      if (!executarOperacao) return res.status(503).json({ error: "OPERACAO_NAO_SUPORTADA" });
+      res.json(await executarOperacao(req.corpoJson));
+    } catch (e) { next(e); }
+  });
 
   router.post("/whatsapp/connect", async (req, res, next) => {
     try {

@@ -16,6 +16,7 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
 import { supabase } from "../../config/supabase.js";
+import { executarEfeito } from "../comunicacao/comunicacao.operacoes.js";
 import { criarWhatsAppServiceDoAmbiente } from "../comunicacao/comunicacao.teste.js";
 import { mascararTelefoneUi } from "./administrativo.comunicacao.central.js";
 import { iniciais } from "../comunicacao/comunicacao.roster.js";
@@ -41,6 +42,7 @@ const MOTIVO_FECHAMENTO = Object.freeze({
   timedOut: "A conexão expirou", badSession: "A sessão ficou inválida", restartRequired: "O WhatsApp pediu para reiniciar a conexão", multideviceMismatch: "Incompatibilidade de dispositivo",
 });
 const TTL_OPERACAO_S = 300;
+const JANELA_RECONCILIACAO_MS = 30_000;
 const PERFIL_TTL_MS = 60_000;
 
 const conflito = (msg, codigo) => new ApiError(409, msg, { codigo });
@@ -73,13 +75,14 @@ async function statusVivo(svc) {
 // Perfil da conta: 3 consultas ao WhatsApp — cache curto em memória (nunca persistido).
 let cachePerfil = { em: 0, chave: null, dados: null };
 export function _zerarCachePerfil() { cachePerfil = { em: 0, chave: null, dados: null }; }
-async function perfilVivo(svc, deps) {
+async function perfilVivo(svc, deps, dbCon = null) {
   if (!svc?.conexaoPerfil) return null;
   const agora = agoraDe(deps).getTime();
-  if (cachePerfil.dados && agora - cachePerfil.em < PERFIL_TTL_MS) return cachePerfil.dados;
+  const chave = `${orgId(deps)}:${INSTANCIA}:${dbCon?.telefone_e164 ?? ""}:${dbCon?.connected_at ?? ""}`;
+  if (cachePerfil.chave === chave && cachePerfil.dados && agora - cachePerfil.em < PERFIL_TTL_MS) return cachePerfil.dados;
   try {
     const p = await svc.conexaoPerfil();
-    if (p?.disponivel) { cachePerfil = { em: agora, chave: p.telefoneE164 ?? null, dados: p }; return p; }
+    if (p?.disponivel) { cachePerfil = { em: agora, chave, dados: p }; return p; }
   } catch { /* o perfil é acessório: a conexão continua valendo */ }
   return null;
 }
@@ -122,12 +125,11 @@ async function encerrarOperacao(operacaoId, deps) {
   try { const db = deps.supabase ?? supabase; await db.rpc("whatsapp_operacao_encerrar", { p_organizacao_id: orgId(deps), p_provider_instance_id: INSTANCIA, p_operacao_id: operacaoId }); } catch { /* expira sozinha */ }
 }
 
-/** A operação informada é a vigente? `tolerarSemTrava`: confirmar/cancelar ainda valem se a trava expirou e ninguém pegou outra. */
-async function verificarOperacao(operacaoId, deps, { tolerarSemTrava = false } = {}) {
+/** A operação informada é a vigente? Confirmar/cancelar toleram expiração sem substituição; sem trava, apenas uma conta ainda não confirmada. */
+async function verificarOperacao(operacaoId, deps) {
   const id = v.uuid(operacaoId, "Operação");
   const ident = await lerIdentidade(deps);
-  if (ident?.operacao_id === id) return ident;
-  if (tolerarSemTrava && !ident?.operacao_id) return ident;
+  if (ident?.operacao_id === id && ms(ident.operacao_expira_em) > agoraDe(deps).getTime() && !ident.efeito_token) return ident;
   throw conflito("Esta operação de conexão não está mais ativa. Comece de novo.", "OPERACAO_INVALIDA");
 }
 
@@ -152,7 +154,8 @@ export async function estado(autor, deps = {}) {
   const [dbCon, identidade, live, gerenciar] = await Promise.all([lerConexaoDb(deps).catch(() => null), lerIdentidade(deps).catch(() => null), statusVivo(svc), temPermissaoConexao(autor, deps)]);
   const estadoUi = derivarEstado({ live, db: dbCon, agora });
   const conectado = estadoUi === "CONNECTED";
-  const perfil = conectado ? await perfilVivo(svc, deps) : null;
+  if (!conectado) _zerarCachePerfil();
+  const perfil = conectado ? await perfilVivo(svc, deps, dbCon) : null;
   const telefoneAtual = perfil?.telefoneE164 ?? dbCon?.telefone_e164 ?? null;
   const stIdent = statusIdentidade({ conectado, identidade, telefoneAtual });
   const agente = stIdent === "CONFIRMADA" && identidade?.nome_operacional === NOME_AGENTE;
@@ -160,7 +163,15 @@ export async function estado(autor, deps = {}) {
   const fresco = !!ultimoSinal && agora.getTime() - ms(ultimoSinal) <= HEARTBEAT_FRESCO_MS;
   const saude = conectado ? (fresco ? { id: "saudavel", rotulo: "Saudável" } : { id: "atencao", rotulo: "Atenção" }) : estadoUi === "RECONNECTING" ? { id: "atencao", rotulo: "Atenção" } : { id: "sem_sinal", rotulo: "Sem sinal" };
   // O id da operação só sai para quem GERENCIA (é o que permite retomar/cancelar o assistente); os demais nem veem que há uma operação.
-  const ativa = identidade?.operacao_id && ms(identidade.operacao_expira_em) > agora.getTime() ? { id: identidade.operacao_id, tipo: identidade.operacao_tipo, expiraEm: identidade.operacao_expira_em } : null;
+  // INCERTO, ou EXECUTANDO parado além da janela de estabilização (a mesma da RPC): nunca uma operação normal em curso.
+  const precisaReconciliar = identidade?.efeito_estado === "INCERTO" || (identidade?.efeito_estado === "EXECUTANDO" && agora.getTime() - ms(identidade.efeito_atualizado_em) >= JANELA_RECONCILIACAO_MS);
+  const ativa = identidade?.operacao_id && (identidade.efeito_token || ms(identidade.operacao_expira_em) > agora.getTime()) ? {
+    id: identidade.operacao_id, tipo: identidade.operacao_tipo, expiraEm: identidade.operacao_expira_em,
+    efeitoEstado: identidade.efeito_estado ?? null, reconciliacaoNecessaria: precisaReconciliar,
+    efeitoAcao: identidade.efeito_acao ?? null, incertoDesde: identidade.efeito_incerto_desde ?? null,
+    ultimaVerificacaoEm: identidade.efeito_verificado_em ?? null, verificacoes: identidade.efeito_verificacoes ?? 0,
+    ultimoResultado: identidade.efeito_ultimo_resultado ?? null, podeReconciliar: !!identidade.efeito_token,
+  } : null;
   const motivo = live?.ultimoFechamento?.razao ? (MOTIVO_FECHAMENTO[live.ultimoFechamento.razao] ?? "Motivo não identificado") : null;
 
   return {
@@ -182,6 +193,8 @@ export async function estado(autor, deps = {}) {
     },
     permissoes: { gerenciar },
     operacao: gerenciar ? ativa : null,
+    // Estado da reconciliação para QUALQUER usuário do painel (sem id de operação, sem token): quem só lê vê o aviso, mas não a ação.
+    reconciliacao: precisaReconciliar ? { reconciliacaoNecessaria: true, acao: identidade.efeito_acao ?? null, incertoDesde: identidade.efeito_incerto_desde ?? identidade.efeito_atualizado_em ?? null, ultimaVerificacaoEm: identidade.efeito_verificado_em ?? null, ultimoResultado: identidade.efeito_ultimo_resultado ?? null, verificacoes: identidade.efeito_verificacoes ?? 0 } : null,
   };
 }
 
@@ -197,15 +210,45 @@ async function gatewayOuErro(deps) {
 
 const jaEmAndamentoNoGateway = (e) => /already|em andamento|JA_CONECTADO|409/i.test(String(e?.message ?? ""));
 
+/**
+ * POST /comunicacao/conexao/reconciliar — "Rever estado da conexão". O operador só DISPARA a verificação: a decisão (CONCLUIDO / ABORTADO /
+ * AINDA_INCERTO) é do banco, sob lock, a partir do snapshot da sessão gravado no PREPARAR e do estado vivo do Gateway consultado agora.
+ * Não existe parâmetro que force sucesso. Idempotente: sem efeito pendente devolve JA_RESOLVIDO.
+ */
+export async function reconciliar(autor, deps = {}) {
+  await exigirPermissao(autor, deps);
+  const ident = await lerIdentidade(deps);
+  if (!ident?.efeito_token) return { decisao: "JA_RESOLVIDO", motivo: "sem_efeito_pendente", estado: await estado(autor, deps) };
+  const svc = deps.whatsAppService !== undefined ? deps.whatsAppService : await servico(deps).catch(() => null);
+  const live = await statusVivo(svc);
+  const estadoGw = live ? derivarEstado({ live, db: null, agora: agoraDe(deps) }) : null;
+  let authGw = null;
+  if (estadoGw === "CONNECTED") { try { const p = await svc.conexaoPerfil(); authGw = p?.disponivel ? p.authSessionId ?? null : null; } catch { authGw = null; } }
+  const gatewayOk = !!live && (estadoGw !== "CONNECTED" || !!authGw);
+  const { data, error } = await (deps.supabase ?? supabase).rpc("whatsapp_operacao_reconciliar", {
+    p_organizacao_id: orgId(deps), p_provider_instance_id: INSTANCIA, p_operacao_id: ident.operacao_id, p_gateway_ok: gatewayOk,
+    p_gateway_estado: gatewayOk ? estadoGw : null, p_gateway_auth_session_id: authGw, p_por: autor.perfilId ?? null,
+  });
+  if (error) throw ApiError.internal(error.message);
+  const r = Array.isArray(data) ? data[0] : data;
+  if (!r) throw ApiError.internal("Reconciliação sem resposta.");
+  if (r.decisao === "RECUSADO") throw conflito("A operação mudou. Atualize a conexão.", "OPERACAO_INVALIDA");
+  if (r.decisao !== "JA_RESOLVIDO") {
+    await auditarConexao(ACOES.WHATSAPP_CONEXAO_RECONCILIADA, autor, { operacao_id: ident.operacao_id, acao: r.acao, decisao: r.decisao, motivo: r.motivo, gateway_estado: estadoGw }, deps);
+    if (r.decisao !== "AINDA_INCERTO") _zerarCachePerfil();
+  }
+  return { decisao: r.decisao, motivo: r.motivo, estado: await estado(autor, deps) };
+}
+
 /** POST /comunicacao/conexao/iniciar — abre o pareamento (mesma rota /connect do Gateway) e devolve a operação para o assistente. */
-export async function iniciar(autor, deps = {}) {
+export async function iniciar(autor, deps = {}, { revisar = false } = {}) {
   await exigirPermissao(autor, deps);
   const svc = await gatewayOuErro(deps);
   const atual = derivarEstado({ live: await statusVivo(svc), db: await lerConexaoDb(deps).catch(() => null), agora: agoraDe(deps) });
-  if (atual === "CONNECTED") throw conflito("O WhatsApp já está conectado. Para usar outro número, escolha Trocar número.", "JA_CONECTADO");
+  if (atual === "CONNECTED" && !revisar) throw conflito("O WhatsApp já está conectado. Para usar outro número, escolha Trocar número.", "JA_CONECTADO");
   const operacaoId = await iniciarOperacao("CONECTAR", autor, deps);
   await auditarConexao(ACOES.WHATSAPP_CONEXAO_INICIADA, autor, { operacao_id: operacaoId, tipo: "conectar" }, deps);
-  try { await svc.conexaoConectar(); } catch (e) {
+  try { if (atual !== "CONNECTED") await executarEfeito(svc, operacaoId, "CONECTAR", deps); } catch (e) {
     if (!jaEmAndamentoNoGateway(e)) {
       await auditarConexao(ACOES.WHATSAPP_CONEXAO_FALHOU, autor, { operacao_id: operacaoId, etapa: "iniciar", erro: erroCurto(e) }, deps);
       await encerrarOperacao(operacaoId, deps);
@@ -230,8 +273,8 @@ export async function novoQr({ operacaoId } = {}, autor, deps = {}) {
   const atual = derivarEstado({ live: await statusVivo(svc), db: null, agora: agoraDe(deps) });
   if (atual === "CONNECTED") throw conflito("O WhatsApp já está conectado. Confirme ou cancele a conta identificada.", "JA_CONECTADO");
   try {
-    if (atual !== "DISCONNECTED") await svc.conexaoEncerrar().catch(() => {});     // um pareamento preso é fechado antes de abrir outro (nunca dois sockets)
-    await svc.conexaoConectar();
+    if (atual !== "DISCONNECTED") await executarEfeito(svc, operacaoId, "ENCERRAR", deps);
+    await executarEfeito(svc, operacaoId, "CONECTAR", deps);
   } catch (e) {
     if (!jaEmAndamentoNoGateway(e)) {
       await auditarConexao(ACOES.WHATSAPP_CONEXAO_FALHOU, autor, { operacao_id: operacaoId, etapa: "novo_qr", erro: erroCurto(e) }, deps);
@@ -277,45 +320,54 @@ function contaVisivel(perfil) {
 /** POST /comunicacao/conexao/confirmar { operacaoId, utilizarComoAgente?, ambiente? } — o operador confirma a conta identificada. */
 export async function confirmar({ operacaoId, utilizarComoAgente, ambiente } = {}, autor, deps = {}) {
   await exigirPermissao(autor, deps);
-  const ident = await verificarOperacao(operacaoId, deps, { tolerarSemTrava: true });
+  const ident = await verificarOperacao(operacaoId, deps);
   if (ambiente !== undefined && !AMBIENTES.includes(ambiente)) throw ApiError.badRequest("Ambiente inválido.", { codigo: "AMBIENTE_INVALIDO" });
   const svc = await gatewayOuErro(deps);
+  const conexaoEsperada = await lerConexaoDb(deps);
   const live = await statusVivo(svc);
   if (derivarEstado({ live, db: null, agora: agoraDe(deps) }) !== "CONNECTED") throw conflito("O WhatsApp ainda não está conectado. Escaneie o QR Code primeiro.", "NAO_CONECTADO");
   _zerarCachePerfil();
   const perfil = await perfilVivo(svc, deps);
-  const dbCon = await lerConexaoDb(deps).catch(() => null);
-  const telefone = perfil?.telefoneE164 ?? dbCon?.telefone_e164 ?? null;
+  // Confirmar exige a identidade lida agora do Gateway; heartbeat antigo não prova a conta atual.
+  const telefone = perfil?.telefoneE164 ?? null;
   if (!telefone) throw conflito("Não foi possível identificar a conta conectada. Tente novamente.", "SEM_IDENTIDADE");
+  if (!perfil.authSessionId || perfil.authSessionId !== conexaoEsperada?.auth_session_id)
+    throw conflito("A sessão mudou durante a identificação. Atualize a conexão.", "OPERACAO_INVALIDA");
   const agente = utilizarComoAgente === true;
   const amb = ambiente ?? ident?.ambiente ?? "TESTE";
-  await salvarIdentidade({
-    status: "CONFIRMADA", telefone_hash: hashTelefone(telefone), identificado_em: agoraDe(deps).toISOString(), confirmado_em: agoraDe(deps).toISOString(), confirmado_por: autor.perfilId ?? null,
-    ambiente: amb, nome_operacional: agente ? NOME_AGENTE : null,
-  }, deps);
+  const { data: confirmou, error } = await (deps.supabase ?? supabase).rpc("whatsapp_confirmar_identidade_operacao", {
+    p_organizacao_id: orgId(deps), p_provider_instance_id: INSTANCIA, p_operacao_id: operacaoId,
+    p_telefone_hash: hashTelefone(telefone), p_auth_session_id: perfil.authSessionId,
+    p_ambiente: amb, p_nome_operacional: agente ? NOME_AGENTE : null, p_por: autor.perfilId ?? null,
+  });
+  if (error) throw ApiError.internal(error.message);
+  if (confirmou !== true) throw conflito("A operação ou a conta mudou. Atualize a conexão antes de confirmar.", "OPERACAO_INVALIDA");
   await auditarConexao(ACOES.WHATSAPP_CONECTADO, autor, { operacao_id: operacaoId, telefone_mascarado: mascararTelefoneUi(telefone), ambiente: amb, agente_crescer: agente, tipo_conta: perfil?.tipoConta ?? "DESCONHECIDO" }, deps);
-  await encerrarOperacao(operacaoId, deps);
   return estado(autor, deps);
 }
 
-async function limparIdentidade(deps) {
-  await salvarIdentidade({ status: "SEM_CONTA", telefone_hash: null, nome_operacional: null, confirmado_em: null, confirmado_por: null, identificado_em: null }, deps);
+async function limparIdentidade(deps, operacaoId) {
+  const { data, error } = await (deps.supabase ?? supabase).from("whatsapp_identidade")
+    .update({ status: "SEM_CONTA", telefone_hash: null, nome_operacional: null, confirmado_em: null, confirmado_por: null, identificado_em: null })
+    .eq("organizacao_id", orgId(deps)).eq("provider_instance_id", INSTANCIA).eq("operacao_id", operacaoId).select("organizacao_id").maybeSingle();
+  if (error) throw ApiError.internal(error.message);
+  if (!data) throw conflito("Operação substituída.", "OPERACAO_INVALIDA");
 }
 
 /** POST /comunicacao/conexao/cancelar { operacaoId } — cancela o pareamento OU a confirmação (desfaz a sessão criada pelo QR). */
 export async function cancelar({ operacaoId } = {}, autor, deps = {}) {
   await exigirPermissao(autor, deps);
-  await verificarOperacao(operacaoId, deps, { tolerarSemTrava: true });
+  await verificarOperacao(operacaoId, deps);
   const svc = await gatewayOuErro(deps);
   const live = await statusVivo(svc);
   const estadoUi = derivarEstado({ live, db: null, agora: agoraDe(deps) });
   try {
     if (estadoUi === "CONNECTED") {
-      await svc.conexaoDesconectarConta({ desvincular: true });
-      await limparIdentidade(deps);
+      await executarEfeito(svc, operacaoId, "DESCONECTAR", deps);
+      await limparIdentidade(deps, operacaoId);
       await auditarConexao(ACOES.WHATSAPP_DESCONECTADO, autor, { operacao_id: operacaoId, motivo: "confirmacao_cancelada" }, deps);
     } else {
-      if (estadoUi !== "DISCONNECTED") await svc.conexaoEncerrar().catch(() => {});
+      if (estadoUi !== "DISCONNECTED") await executarEfeito(svc, operacaoId, "ENCERRAR", deps);
       await auditarConexao(ACOES.WHATSAPP_CONEXAO_FALHOU, autor, { operacao_id: operacaoId, etapa: "assistente", motivo: "cancelada_pelo_operador" }, deps);
     }
   } catch (e) {
@@ -333,12 +385,12 @@ export async function desconectar({ confirmacaoExplicita } = {}, autor, deps = {
   const operacaoId = await iniciarOperacao("DESCONECTAR", autor, deps);
   const dbCon = await lerConexaoDb(deps).catch(() => null);
   try {
-    await svc.conexaoDesconectarConta({ desvincular: true });
-    await limparIdentidade(deps);
+    await executarEfeito(svc, operacaoId, "DESCONECTAR", deps);
+    await limparIdentidade(deps, operacaoId);
     await auditarConexao(ACOES.WHATSAPP_DESCONECTADO, autor, { operacao_id: operacaoId, motivo: "operador", telefone_mascarado: mascararTelefoneUi(dbCon?.telefone_e164) }, deps);
   } catch (e) {
     await auditarConexao(ACOES.WHATSAPP_CONEXAO_FALHOU, autor, { operacao_id: operacaoId, etapa: "desconectar", erro: erroCurto(e) }, deps);
-    throw conflito("Não foi possível desconectar agora. A conta continua como estava.", "DESCONECTAR_FALHOU");
+    throw conflito("Resultado da desconexão não confirmado. A operação permanece protegida; verifique a sessão e reconcilie antes de tentar novamente.", "DESCONECTAR_FALHOU");
   } finally { await encerrarOperacao(operacaoId, deps); _zerarCachePerfil(); }
   return estado(autor, deps);
 }
@@ -355,15 +407,15 @@ export async function trocar({ confirmacaoExplicita } = {}, autor, deps = {}) {
   const dbCon = await lerConexaoDb(deps).catch(() => null);
   await auditarConexao(ACOES.WHATSAPP_CONEXAO_INICIADA, autor, { operacao_id: operacaoId, tipo: "trocar" }, deps);
   try {
-    await svc.conexaoDesconectarConta({ desvincular: true });
-    await limparIdentidade(deps);
+    await executarEfeito(svc, operacaoId, "DESCONECTAR", deps);
+    await limparIdentidade(deps, operacaoId);
     await auditarConexao(ACOES.WHATSAPP_DESCONECTADO, autor, { operacao_id: operacaoId, motivo: "troca_de_numero", telefone_mascarado: mascararTelefoneUi(dbCon?.telefone_e164) }, deps);
     _zerarCachePerfil();
-    await svc.conexaoConectar();
+    await executarEfeito(svc, operacaoId, "CONECTAR", deps);
   } catch (e) {
     await auditarConexao(ACOES.WHATSAPP_CONEXAO_FALHOU, autor, { operacao_id: operacaoId, etapa: "trocar", erro: erroCurto(e) }, deps);
     await encerrarOperacao(operacaoId, deps);
-    throw conflito("Não foi possível trocar o número agora. O número anterior foi desconectado; use Conectar WhatsApp para continuar.", "TROCAR_FALHOU");
+    throw conflito("Resultado da troca não confirmado. Verifique a sessão e reconcilie a operação antes de continuar.", "TROCAR_FALHOU");
   }
   return { operacaoId, expiraEm: new Date(agoraDe(deps).getTime() + TTL_OPERACAO_S * 1000).toISOString() };
 }

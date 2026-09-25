@@ -85,6 +85,14 @@ describe("agrupamento da conversa por voz", () => {
 });
 
 describe("mesclagem e envio otimista", () => {
+  test("mescla páginas empatadas por direção/ID e preserva microssegundos do PostgreSQL", () => {
+    const em = "2026-09-24T15:00:00.000001Z";
+    const r = mesclarMensagens([{ id: "z", direcao: "saida", em }], [
+      { id: "b", direcao: "entrada", em }, { id: "a", direcao: "entrada", em },
+      { id: "0", direcao: "entrada", em: "2026-09-24T15:00:00.000002Z" },
+    ]);
+    assert.deepEqual(r.map((m) => m.id), ["a", "b", "z", "0"]);
+  });
   test("mesclar por id: o status avança sem duplicar e a ordem é cronológica", () => {
     const antes = [{ id: "1", em: local(0, 9), status: "SENT" }, { id: "2", em: local(0, 10), status: "SENT" }];
     const r = mesclarMensagens(antes, [{ id: "1", em: local(0, 9), status: "READ" }, { id: "0", em: local(0, 8), status: "READ" }]);
