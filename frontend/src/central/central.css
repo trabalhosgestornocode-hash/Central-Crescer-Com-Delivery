@@ -121,7 +121,7 @@ button.cc-medida { cursor: pointer; transition: background .15s; } button.cc-med
 .cc-skel-tabela { display: grid; gap: 8px; padding: 6px 0; } .cc-skel--linha { height: 40px; }
 
 /* ---------- conversas: espaço de 3 colunas ---------- */
-.cc-espaco { position: relative; display: grid; grid-template-columns: 344px minmax(0, 1fr) 320px; height: var(--cc-alt); background: var(--cc-paper); border: 1px solid var(--cc-line); border-radius: var(--cc-r); overflow: hidden; }
+.cc-espaco { position: relative; display: grid; grid-template-columns: 344px minmax(0, 1fr) 320px; grid-template-rows: minmax(0, 1fr); height: var(--cc-alt); background: var(--cc-paper); border: 1px solid var(--cc-line); border-radius: var(--cc-r); overflow: hidden; }
 .cc-espaco[data-cc-detalhes-aberto="false"] { grid-template-columns: 344px minmax(0, 1fr) 0; }
 .cc-lista { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--cc-line); background: var(--cc-paper); }
 .cc-lista-cab { padding: 16px 16px 4px; display: grid; gap: 10px; border-bottom: 1px solid var(--cc-line-2); }
@@ -160,18 +160,31 @@ button.cc-medida { cursor: pointer; transition: background .15s; } button.cc-med
 .cc-item.is-nova { animation: cc-entra .35s ease both; }
 
 /* ---------- chat ---------- */
-.cc-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--cc-canvas); }
-.cc-chat-cab { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--cc-paper); border-bottom: 1px solid var(--cc-line); }
-.cc-chat-id { flex: 1; min-width: 0; }
-.cc-chat-nome { font-size: 15.5px; font-weight: 700; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cc-chat-empresa { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; color: var(--cc-mute); margin-top: 3px; }
+/* Coluna da conversa = composição vertical: cabeçalho (altura própria) + mensagens (todo o resto, rolam sozinhas) + composer (sempre visível). Nada depende de altura presumida. */
+.cc-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--cc-canvas); }
+.cc-chat > [data-cc-chat-cab], .cc-chat > [data-cc-composer-area] { flex: 0 0 auto; min-width: 0; }
+.cc-chat > [data-cc-composer-area] { max-height: 46%; overflow-y: auto; }   /* rede de segurança: avisos de bloqueio longos nunca engolem as mensagens */
+/* Cabeçalho = grade de 2 linhas com altura própria (nunca cresce com o nº de empresas): [nome · telefone · status] / [associações]; avatar e "detalhes" ocupam as duas. */
+.cc-chat-cab { flex-shrink: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "av topo btn" "av emp btn"; column-gap: 12px; row-gap: 3px; align-items: center; padding: 12px 16px; max-height: 104px; overflow: hidden; background: var(--cc-paper); border-bottom: 1px solid var(--cc-line); }
+.cc-chat-cab > .cc-avatar { grid-area: av; }
+.cc-chat-topo { grid-area: topo; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.cc-chat-cab > .cc-btn-detalhes { grid-area: btn; }
+.cc-chat-nome { flex: 1 1 auto; min-width: 0; font-size: 15.5px; font-weight: 700; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-chat-empresa { grid-area: emp; display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; min-width: 0; overflow: hidden; font-size: 12.5px; color: var(--cc-mute); margin: 0; }
+.cc-chat-assoc { flex: 0 0 auto; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--cc-ink); }
+.cc-chat-empresa.tem-mais .cc-chat-assoc { max-width: calc(100% - 56px); }   /* reserva o lugar do "+N" */
+.cc-chat-empresa .cc-chips--cab { flex: 0 1 auto; min-width: 0; overflow: hidden; display: flex; flex-wrap: nowrap; gap: 4px; }   /* só os chips encolhem: o rótulo ("47 unidades associadas") não perde nem 1 px até o limite reservado ao "+N" */
+.cc-chat-empresa .cc-chips--cab .cc-chip { display: block; flex: 0 1 auto; min-width: 0; max-width: 168px; overflow: hidden; text-overflow: ellipsis; }
+.cc-chat-empresa .cc-chip--mais { display: inline-flex; flex: none; max-width: none; }   /* o "+N" é irmão do grupo (fora do overflow): nunca é cortado nem encolhido */
+.cc-mais-todas { display: none; }
+.cc-chip--acao { font: inherit; font-size: 12px; cursor: pointer; transition: background .15s, color .15s; } .cc-chip--acao:hover { background: var(--cc-line-2); color: var(--cc-ink); } .cc-chip--acao:focus-visible { outline: 2px solid var(--cc-brand); outline-offset: -2px; }   /* dentro da caixa: o overflow do resumo cortaria um anel externo */
 .cc-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; } .cc-chip { display: inline-flex; padding: 1px 8px; border-radius: 6px; background: var(--cc-surface); border: 1px solid var(--cc-line); font-size: 12px; color: var(--cc-mute); white-space: nowrap; } .cc-chip--mais { color: var(--cc-faint); }
-.cc-chat-meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.cc-chat-meta { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; justify-content: flex-end; white-space: nowrap; }
 .cc-icone-btn { width: 36px; height: 36px; display: grid; place-items: center; border: 0; border-radius: 10px; background: transparent; color: var(--cc-mute); cursor: pointer; transition: background .15s, color .15s; }
 .cc-icone-btn:hover, .cc-icone-btn.is-ativo { background: var(--cc-surface); color: var(--cc-ink); }
 .cc-voltar { display: none; }
 
-.cc-fluxo { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 22px 10px; display: flex; flex-direction: column; scroll-behavior: auto; }
+.cc-fluxo { flex: 1 1 0; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 22px 10px; display: flex; flex-direction: column; scroll-behavior: auto; }
 .cc-fluxo-vazio, .cc-chat-vazio { flex: 1; display: grid; place-content: center; justify-items: center; gap: 10px; }
 .cc-janela, .cc-mais-antigas { text-align: center; font-size: 12px; color: var(--cc-faint); margin-bottom: 8px; } .cc-mais-antigas { margin-bottom: 12px; }
 .cc-dia { display: flex; justify-content: center; margin: 14px 0 10px; } .cc-dia span { font-size: 12px; font-weight: 600; color: var(--cc-mute); background: rgba(255,255,255,.75); border: 1px solid var(--cc-line); padding: 3px 12px; border-radius: 999px; }
@@ -205,7 +218,7 @@ button.cc-medida { cursor: pointer; transition: background .15s; } button.cc-med
 .cc-operador::before { content: ""; display: inline-block; width: 3px; height: 3px; border-radius: 50%; background: var(--cc-faint); margin-right: 5px; vertical-align: middle; }
 
 /* composer */
-.cc-composer { background: var(--cc-paper); border-top: 1px solid var(--cc-line); padding: 10px 14px 8px; }
+.cc-composer { flex-shrink: 0; background: var(--cc-paper); border-top: 1px solid var(--cc-line); padding: 10px 14px 8px; }
 .cc-composer-linha { display: flex; align-items: flex-end; gap: 10px; }
 .cc-input { flex: 1; min-height: 42px; max-height: 132px; resize: none; padding: 10px 16px; border-radius: 21px; border: 1.5px solid transparent; background: var(--cc-surface); font: inherit; font-size: 14px; line-height: 1.4; color: var(--cc-ink); outline: none; transition: border-color .15s, background .15s; overflow-y: auto; }
 .cc-input:focus { background: #fff; border-color: var(--cc-brand); box-shadow: 0 0 0 3px rgba(216,19,36,.12); }
@@ -292,6 +305,9 @@ button.cc-medida { cursor: pointer; transition: background .15s; } button.cc-med
 @keyframes cc-entra { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 /* ---------- responsivo ---------- */
+@media (min-width: 821px) and (max-width: 1000px) {
+  .cc-chat-meta { flex-direction: column; align-items: flex-end; gap: 2px; }   /* coluna do chat estreita (gaveta de detalhes): telefone e status empilham para o nome não virar "Ma…" */
+}
 @media (max-width: 1279px) {
   .cc-espaco, .cc-espaco[data-cc-detalhes-aberto="false"] { grid-template-columns: 320px minmax(0, 1fr); }
   .cc-contexto { position: absolute; top: 0; right: 0; bottom: 0; width: min(360px, 92%); z-index: 20; transform: translateX(102%); transition: transform .28s cubic-bezier(.4,0,.2,1); box-shadow: -14px 0 34px rgba(20,24,32,.16); visibility: visible !important; border-left: 1px solid var(--cc-line); }
@@ -311,7 +327,9 @@ button.cc-medida { cursor: pointer; transition: background .15s; } button.cc-med
   .cc-lista { border-right: 0; }
   .cc-contexto { position: static; width: auto; transform: none; box-shadow: none; border-left: 0; display: block; }
   .cc-espaco[data-cc-tela="detalhes"] .cc-contexto { display: block; } .cc-veu { display: none; }
-  .cc-voltar { display: grid; } .cc-chat-meta .cc-pill { display: none; } .cc-chat-cab { padding: 10px 10px; gap: 8px; } .cc-chat-empresa .cc-chips { display: none; }
+  .cc-voltar { display: grid; grid-area: vol; } .cc-chat-meta .cc-pill { display: none; }
+  .cc-chat-cab { grid-template-columns: auto auto minmax(0, 1fr) auto; grid-template-areas: "vol av topo btn" "vol av emp emp"; padding: 10px; column-gap: 8px; }   /* celular: a 2ª linha passa por baixo do botão de detalhes (mais largura para o resumo) */
+  .cc-chat-empresa .cc-chips--cab { display: none; } .cc-chat-empresa.tem-mais .cc-chat-assoc { max-width: calc(100% - 84px); } .cc-chip--mais .cc-mais-n { display: none; } .cc-chip--mais .cc-mais-todas { display: inline; }   /* celular: só o resumo + "Ver todas" (o toque abre os detalhes) */
   .cc-fluxo { padding: 12px 12px 6px; } .cc-msg { max-width: 86%; }
   .cc-item-mais { display: none; }   /* no celular o menu da conversa abre no toque longo (evento contextmenu) e o botão sobreporia o horário */
   .cc-msg-mais { opacity: 1; }
