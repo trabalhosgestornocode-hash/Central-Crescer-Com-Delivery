@@ -1129,6 +1129,12 @@ const COLUNAS_ACUMULADAS = {
   servicosPromocoes: "servicos_promocoes", taxasEntregadores: "taxas_entregadores",
 };
 
+/** Modelo logístico vigente NA DATA do lançamento (linha do tempo, nunca o modelo atual da unidade). */
+async function modeloVigenteNaData({ unidadeId, organizacaoId, dataIso }) {
+  const modelo = await obterModeloLogistico({ unidadeId, organizacaoId });
+  return modeloNaData(modelo.linhaDoTempo ?? montarLinhaDoTempo({ modeloAtual: modelo.modeloLogistico }), dataIso);
+}
+
 /** Contexto pra validação preventiva (item E) — ver `normalizarDadosLancamento`. */
 function montarFinanceiroAnterior(linhas, dataIso) {
   const porCampo = Object.fromEntries(
@@ -1154,7 +1160,7 @@ function montarFinanceiroAnterior(linhas, dataIso) {
 // um checkbox genérico. Casos legítimos de correção continuam possíveis,
 // só passam a deixar rastro explícito (ver `criarLancamento`/`atualizarLancamento`,
 // que gravam a justificativa na auditoria).
-export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior = null }) {
+export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior = null, modeloNaDataLancamento = null }) {
   const b = v.corpo(body);
   const situacao = v.umDe(b.situacao, "Situação", ["normal", "parcial", "sem_operacao", "zero_vendas"]);
   const statusAlvo = v.umDeOpcional(b.status, "Status", ["rascunho", "finalizado"], "rascunho");
@@ -1226,7 +1232,11 @@ export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAn
   const valorVendasIfood = numFinanceiro(b.valorVendasIfood, "Valor das vendas (iFood)");
   const taxasComissoes = numFinanceiro(b.taxasComissoes, "Taxas e comissões");
   const servicosPromocoes = numFinanceiro(b.servicosPromocoes, "Serviços e promoções");
-  const taxasEntregadores = numFinanceiro(b.taxasEntregadores, "Taxas de entregadores");
+  // No Full Service o campo não existe (o formulário nem o exibe): opcional, nunca exigido.
+  const taxasEntregadoresAplicavel = !modeloNaDataLancamento || indicadorAplicavel(modeloNaDataLancamento, "taxas_entregadores");
+  const taxasEntregadores = taxasEntregadoresAplicavel
+    ? numFinanceiro(b.taxasEntregadores, "Taxas de entregadores")
+    : v.numeroOpcionalNulo(b.taxasEntregadores, "Taxas de entregadores", { min: 0 });
   // Ajustes a favor / contra da loja: SEMPRE positivos e SEMPRE opcionais —
   // um ajuste financeiro é a exceção, não a regra, e não deve travar a
   // finalização de um dia. `null` = "não houve ajuste" (tratado como 0 nas
@@ -1248,7 +1258,10 @@ export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAn
     ["servicosPromocoes", "Serviços e Promoções", servicosPromocoes],
     ["taxasEntregadores", "Taxas de Entregadores", taxasEntregadores],
   ];
+  // Taxas de Entregadores não existe no Full Service: o último ponto conciliado
+  // é de outro modelo (Marketplace) e o 0 informado é o valor correto — não é queda.
   const sinaisQueda = CAMPOS_ACUMULADOS
+    .filter(([campo]) => campo !== "taxasEntregadores" || !modeloNaDataLancamento || indicadorAplicavel(modeloNaDataLancamento, "taxas_entregadores"))
     .map(([campo, rotulo, valorNovo]) => avaliarQuedaAcumulado({ campo, rotulo, valorNovo, ultimoConhecido: financeiroAnterior?.porCampo?.[campo] ?? null }))
     .filter(Boolean);
   for (const sinal of sinaisQueda) if (sinal.nivel === "leve") avisos.push(sinal.mensagem);
@@ -1326,7 +1339,8 @@ export async function criarLancamento({ organizacaoId, unidadeIdSessao, acesso, 
   // pra achar o acumulado de Desempenho do dia anterior (usado só se a
   // situação for Sem operação/Zero vendas, ver normalizarDadosLancamento).
   const desempenhoAnterior = ultimoDesempenhoConhecido(linhas, dataIso);
-  const dados = normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhas, dataIso) });
+  const modeloNaDataLancamento = await modeloVigenteNaData({ unidadeId, organizacaoId, dataIso });
+  const dados = normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhas, dataIso), modeloNaDataLancamento });
 
   const linha = {
     organizacao_id: organizacaoId,
@@ -1472,8 +1486,9 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
     dataIso: antes.data_lancamento, hojeIso, valorVendasIfoodExistente: antes.valor_vendas_ifood, desbloqueios,
   });
   const desempenhoAnterior = ultimoDesempenhoConhecido(linhasDoMes, antes.data_lancamento);
+  const modeloNaDataLancamento = await modeloVigenteNaData({ unidadeId: antes.unidade_id, organizacaoId: antes.organizacao_id, dataIso: antes.data_lancamento });
   const dados = normalizarDadosLancamento(body, {
-    exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhasDoMes, antes.data_lancamento),
+    exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhasDoMes, antes.data_lancamento), modeloNaDataLancamento,
   });
 
   const patch = {
