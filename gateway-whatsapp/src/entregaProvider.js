@@ -21,6 +21,8 @@
 // LOGS: só ids técnicos, tipos e contagens — nunca telefone completo, conteúdo, segredo ou auth state (o JID vai MASCARADO por quem loga).
 
 export const CONTRATO_STATUS_VERSAO = 1;
+/** v2 — receipt VINCULADO à origem do envio: leva a instância emissora e a chave de correlação (idempotencyKey do pedido de envio). Espelha o backend. */
+export const CONTRATO_STATUS_VERSAO_VINCULADO = 2;
 export const STATUS_EVENTO = Object.freeze(["SERVER_ACK", "DELIVERED", "READ", "PROVIDER_ERROR"]);
 /** WAMessageStatus do Baileys 6.7.24 (Types/Message.js): ERROR 0, PENDING 1, SERVER_ACK 2, DELIVERY_ACK 3, READ 4, PLAYED 5. */
 export const STATUS_BAILEYS = Object.freeze({ ERROR: 0, PENDING: 1, SERVER_ACK: 2, DELIVERY_ACK: 3, READ: 4, PLAYED: 5 });
@@ -67,15 +69,16 @@ const iso = (ms) => new Date(ms).toISOString();
  * @param {(payload: object) => Promise<{resultado?: string}>} deps.notificar   backendClient.notificarStatusProvider
  * @param {(nivel: string, evento: string, dados: object) => void} deps.emitir  log estruturado sanitizado
  * @param {() => {socketGeneration?: number|null, leaseEpoch?: number|null}} [deps.contexto]
+ * @param {string|null} [deps.providerInstanceId]  instância emissora (config); com `correlationId` do envio o receipt sai no contrato v2 (vinculado)
  */
 export function criarObservadorEntrega({
-  notificar, emitir, contexto = () => ({}), agora = () => Date.now(), agendar = setTimeout, cancelar = clearTimeout,
+  notificar, emitir, contexto = () => ({}), providerInstanceId = null, agora = () => Date.now(), agendar = setTimeout, cancelar = clearTimeout,
   maxRastreados = 500, ttlRastreioMs = 48 * 3600_000, maxDedupe = 4000, atrasosRetryMs = ATRASOS_RETRY_MS, intervaloLogNaoRastreadoMs = 60_000,
 } = {}) {
   const rastreados = new Map();   // providerMessageId -> {correlationId, jidMascarado, enviadoEmMs}
   const vistos = new Set();       // `${id}|${status}|${erro}` — dedupe entre os 2 observadores e entre repetições do servidor
   const timers = new Set();
-  const cont = { recebidos: 0, duplicados: 0, naoRastreados: 0, persistidos: 0, esgotados: 0, rejeitados: 0 };
+  const cont = { recebidos: 0, duplicados: 0, naoRastreados: 0, persistidos: 0, esgotados: 0, rejeitados: 0, legados: 0 };
   let naoRastreadosDesdeLog = 0;
   let ultimoLogNaoRastreado = 0;
 
@@ -109,8 +112,15 @@ export function criarObservadorEntrega({
     timers.add(h);
   }
 
+  /** Chave de dedupe de um receipt: mesmo id + mesmo status (+ código de erro). */
+  const chaveDe = (evt) => `${evt.providerMessageId}|${evt.status}|${evt.erroCodigo ?? ""}`;
+
   async function entregar(evt, tentativa) {
     const payload = { contratoStatus: CONTRATO_STATUS_VERSAO, providerMessageId: evt.providerMessageId, status: evt.status, ocorridoEm: evt.ocorridoEm, ackTipo: evt.ackTipo };
+    // v2 só quando as DUAS provas existem (instância configurada + chave de correlação rastreada no envio); senão o v1 legado (org da conexão), como antes.
+    const vinculado = Boolean(providerInstanceId && evt.correlationId);
+    if (vinculado) Object.assign(payload, { contratoStatus: CONTRATO_STATUS_VERSAO_VINCULADO, providerInstanceId, correlationId: evt.correlationId });
+    else cont.legados += 1;
     if (evt.status === "PROVIDER_ERROR") payload.erroCodigo = evt.erroCodigo;
     let resultado = null;
     let rejeitadoPorContrato = false;
@@ -120,6 +130,11 @@ export function criarObservadorEntrega({
     } catch (e) {
       rejeitadoPorContrato = e?.detalheInterno?.status === 400;
       emitir("warn", "notificar_status_provider.falhou", { providerMessageId: evt.providerMessageId, status: evt.status, tentativa, erro: e?.message });
+    }
+    if (rejeitadoPorContrato && vinculado) {
+      // O backend recusou o v2 (backend ainda antigo ou contrato divergente): NÃO perde o receipt — reenvia UMA vez como v1 (só alcança a org da conexão: fail-closed).
+      emitir("warn", "provider_receipt_v2_recusado_reenviando_v1", { providerMessageId: evt.providerMessageId, status: evt.status });
+      return entregar({ ...evt, correlationId: null }, tentativa);
     }
     if (rejeitadoPorContrato) { cont.rejeitados += 1; emitir("warn", "provider_receipt_rejeitado_contrato", { providerMessageId: evt.providerMessageId, status: evt.status }); return; }
     if (resultado !== null && RESULTADOS_CONCLUIDOS.has(resultado)) {
@@ -135,6 +150,10 @@ export function criarObservadorEntrega({
     // retry LIMITADO (em memória; se o processo reiniciar, o registro histórico continua sendo SENT).
     if (tentativa < atrasosRetryMs.length) { agendarRetry(() => { entregar(evt, tentativa + 1).catch(() => {}); }, atrasosRetryMs[tentativa]); return; }
     cont.esgotados += 1;
+    // Esgotou SEM o backend conhecer o id (ou com falha de transporte): libera a chave de dedupe — um reenvio legítimo do MESMO recibo (mesmo id+status),
+    // quando o backend já souber o id, deve tentar de novo e não ser engolido como "duplicado" até o processo reiniciar. (400 de contrato e estados
+    // não elegíveis/ambíguos são determinísticos: a chave continua presa de propósito.)
+    vistos.delete(chaveDe(evt));
     emitir("warn", "provider_receipt_entrega_esgotada", { providerMessageId: evt.providerMessageId, status: evt.status, ultimoResultado: resultado ?? "falha_de_transporte", tentativas: tentativa + 1 });
   }
 
@@ -144,13 +163,13 @@ export function criarObservadorEntrega({
     const r = rastreio(providerMessageId);
     if (!r) { contarNaoRastreado(); return false; }
     const erroCod = status === "PROVIDER_ERROR" ? codigoErro(erro) : null;
-    const chave = `${providerMessageId}|${status}|${erroCod ?? ""}`;
+    const chave = chaveDe({ providerMessageId, status, erroCodigo: erroCod });
     if (vistos.has(chave)) { cont.duplicados += 1; return false; }
     vistos.add(chave);
     while (vistos.size > maxDedupe) vistos.delete(vistos.values().next().value);
     const t = agora();
     const ocorridoMs = Number.isFinite(ocorridoEmMs) && ocorridoEmMs > 0 && ocorridoEmMs <= t + 60_000 ? ocorridoEmMs : t;
-    const evt = { providerMessageId, status, ackTipo, erroCodigo: erroCod, ocorridoEm: iso(ocorridoMs) };
+    const evt = { providerMessageId, status, ackTipo, erroCodigo: erroCod, ocorridoEm: iso(ocorridoMs), correlationId: typeof r.correlationId === "string" && r.correlationId !== "" ? r.correlationId : null };
     emitir(status === "PROVIDER_ERROR" ? "warn" : "info", "provider_receipt_received", {
       providerMessageId, fonte, ackTipo, statusInterno: status, erroCodigo: erroCod, ocorridoEm: evt.ocorridoEm,
       remoteJidTipo: tipoDeJid(remoteJid), correlationId: r.correlationId, latenciaDesdeEnvioMs: Math.max(0, t - r.enviadoEmMs), ...ctx(),

@@ -355,7 +355,12 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
       [evento({ status: "PROVIDER_ERROR" }), "erroCodigo_ausente"],
       [evento({ erroCodigo: "479" }), "erroCodigo_incoerente"],
       [evento({ ocorridoEm: "ontem" }), "ocorridoEm"],
-      [evento({ contratoStatus: 2 }), "contratoStatus"],
+      [evento({ contratoStatus: 3 }), "contratoStatus"],
+      [evento({ providerInstanceId: "default" }), "campo_desconhecido"],                                        // v1 nunca carrega os campos do v2
+      [evento({ contratoStatus: 2 }), "providerInstanceId_ausente"],
+      [evento({ contratoStatus: 2, providerInstanceId: "default" }), "correlationId_ausente"],
+      [evento({ contratoStatus: 2, providerInstanceId: "com espaço", correlationId: "wa:x:v1" }), "providerInstanceId"],
+      [evento({ contratoStatus: 2, providerInstanceId: "default", correlationId: "chave inválida" }), "correlationId"],
     ];
     for (const [corpo, campo] of invalidos) {
       _resetarNonces();
@@ -365,11 +370,92 @@ describe("whatsappGateway.routes — eventos Gateway -> Backend", () => {
     }
   });
 
-  test("status-provider: o organizacaoId vem SEMPRE da config do backend — uma mensagem de OUTRA organização não é alcançada", async () => {
-    repo._semearMensagem("outra-organizacao", { providerMessageId: "WAALHEIA", status: "SENT" });
+  // ---- CONTRATO v2 (VINCULADO) — endurecimento de tenant, 25/09/2026 ------------------------------------------------------------------------------
+  // O envio manual do Central fica na empresa do responsável (≠ org da conexão). O receipt v2 prova a origem do envio: instância emissora (conferida contra
+  // a configurada) + correlationId (a idempotencyKey do pedido de envio, guardada só pelo Gateway que enviou) + providerMessageId — os TRÊS têm de apontar
+  // para o MESMO registro. A org sai desse registro (servidor), nunca do payload. v1 (Gateway antigo) continua só na org da conexão.
+  const ORG_EMPRESA = "b1448c7b-empresa-do-responsavel";
+  const CHAVE_MANUAL = "wa:manual:11111111-1111-4111-8111-111111111111:v1";
+  const CHAVE_AUTO = "wa:alerta:22222222-2222-4222-8222-222222222222:v1";
+  const ev2 = (extra = {}) => ({ contratoStatus: 2, providerMessageId: "WAM1", status: "DELIVERED", providerInstanceId: "default", correlationId: CHAVE_MANUAL, ...extra });
+  const enviar2 = async (extra) => { _resetarNonces(); const r = await chamarAssinado("POST", STATUS_URL, ev2(extra)); assert.equal(r.status, 200); return (await r.json()).resultado; };
+  const semear2 = () => {
+    repo._semearMensagem(ORG_EMPRESA, { providerMessageId: "WAM1", status: "SENT", idempotencyKey: CHAVE_MANUAL });   // manual do Central: org ≠ conexão
+    repo._semearMensagem(ORG_ID, { providerMessageId: "WAA1", status: "SENT", idempotencyKey: CHAVE_AUTO });          // automático: org = conexão
+  };
+
+  test("v2: receipt correto + instância correta => ATUALIZA a mensagem manual da OUTRA org (e só ela); manual e automático funcionam", async () => {
+    semear2();
+    assert.equal(await enviar2({}), "APLICADO");
+    assert.equal(repo._mensagem(ORG_EMPRESA, "WAM1").status, "DELIVERED");
+    assert.equal(repo._mensagem(ORG_ID, "WAA1").status, "SENT", "receipt de uma mensagem não altera a outra");
+    assert.equal(await enviar2({ providerMessageId: "WAA1", correlationId: CHAVE_AUTO, status: "READ" }), "APLICADO");
+    assert.equal(repo._mensagem(ORG_ID, "WAA1").status, "READ");
+    assert.equal(repo._mensagem(ORG_EMPRESA, "WAM1").status, "DELIVERED", "DELIVERED do manual não é tocado pelo READ do automático");
+  });
+
+  test("v2: receipt correto + INSTÂNCIA ERRADA => rejeitado (NAO_ENCONTRADA, indistinguível de 'não existe'), nada muda", async () => {
+    semear2();
+    assert.equal(await enviar2({ providerInstanceId: "outra-instancia" }), "NAO_ENCONTRADA");
+    assert.equal(repo._mensagem(ORG_EMPRESA, "WAM1").status, "SENT");
+    assert.equal(await enviar2({ providerInstanceId: "DEFAULT" }), "NAO_ENCONTRADA", "comparação exata (sem normalizar caixa)");
+    assert.equal(repo._mensagem(ORG_EMPRESA, "WAM1").status, "SENT");
+  });
+
+  test("v2: id de OUTRA org + instância errada => rejeitado; instância certa mas correlationId de outra mensagem => rejeitado", async () => {
+    semear2();
+    assert.equal(await enviar2({ providerMessageId: "WAA1", correlationId: CHAVE_AUTO, providerInstanceId: "x" }), "NAO_ENCONTRADA");
+    assert.equal(await enviar2({ providerMessageId: "WAM1", correlationId: CHAVE_AUTO }), "NAO_ENCONTRADA", "id do manual + chave do automático: pares que não são do mesmo registro");
+    assert.equal(await enviar2({ providerMessageId: "WAA1", correlationId: CHAVE_MANUAL }), "NAO_ENCONTRADA");
+    assert.equal(repo._mensagem(ORG_EMPRESA, "WAM1").status, "SENT"); assert.equal(repo._mensagem(ORG_ID, "WAA1").status, "SENT");
+  });
+
+  test("v2: id desconhecido => NAO_ENCONTRADA; correlationId errado para um id existente => NAO_ENCONTRADA; registro sem idempotencyKey nunca casa", async () => {
+    semear2();
+    repo._semearMensagem("org-sem-chave", { providerMessageId: "WASEMCHAVE", status: "SENT" });
+    assert.equal(await enviar2({ providerMessageId: "NUNCAEXISTIU" }), "NAO_ENCONTRADA");
+    assert.equal(await enviar2({ correlationId: "wa:manual:99999999-9999-4999-8999-999999999999:v1" }), "NAO_ENCONTRADA");
+    assert.equal(await enviar2({ providerMessageId: "WASEMCHAVE", correlationId: "wa:x:v1" }), "NAO_ENCONTRADA");
+    assert.equal(repo._mensagem("org-sem-chave", "WASEMCHAVE").status, "SENT");
+  });
+
+  test("v2: duplicado é idempotente; READ nunca regride para DELIVERED; SENT->READ direto preenche entrega e leitura", async () => {
+    semear2();
+    assert.equal(await enviar2({ status: "DELIVERED" }), "APLICADO");
+    assert.equal(await enviar2({ status: "DELIVERED" }), "DUPLICADO");
+    assert.equal(await enviar2({ status: "READ" }), "APLICADO");
+    assert.equal(await enviar2({ status: "DELIVERED" }), "DUPLICADO", "DELIVERED atrasado depois de READ");
+    assert.equal(await enviar2({ status: "READ" }), "DUPLICADO");
+    assert.equal(repo._mensagem(ORG_EMPRESA, "WAM1").status, "READ");
+    assert.equal(repo._mensagem(ORG_ID, "WAA1").status, "SENT");
+    assert.equal(await enviar2({ providerMessageId: "WAA1", correlationId: CHAVE_AUTO, status: "READ" }), "APLICADO");
+    const a = repo._mensagem(ORG_ID, "WAA1"); assert.ok(a.entregueEm && a.lidoEm);
+  });
+
+  test("v2: DELIVERED não cruza tenant — o MESMO id em duas orgs só é alcançado pelo par (id + correlationId) do registro certo", async () => {
+    repo._semearMensagem("org-a", { providerMessageId: "WADUPLO", status: "SENT", idempotencyKey: "wa:manual:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:v1" });
+    repo._semearMensagem("org-b", { providerMessageId: "WADUPLO", status: "SENT", idempotencyKey: "wa:manual:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:v1" });
+    assert.equal(await enviar2({ providerMessageId: "WADUPLO", correlationId: "wa:manual:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:v1" }), "APLICADO");
+    assert.equal(repo._mensagem("org-b", "WADUPLO").status, "DELIVERED");
+    assert.equal(repo._mensagem("org-a", "WADUPLO").status, "SENT", "a mensagem de outra org com o MESMO id do provider não é tocada");
+    assert.equal(await enviar2({ providerMessageId: "WADUPLO", correlationId: "wa:manual:cccccccc-cccc-4ccc-8ccc-cccccccccccc:v1" }), "NAO_ENCONTRADA");
+  });
+
+  test("v2: organizacao_id/mensagem_id no payload continuam 400 (a org nunca vem do corpo)", async () => {
+    for (const extra of [{ organizacao_id: "outra" }, { organizacaoId: "outra" }, { mensagem_id: "x" }, { providerInstanceId2: "x" }]) {
+      _resetarNonces(); const r = await chamarAssinado("POST", STATUS_URL, ev2(extra));
+      assert.equal(r.status, 400); assert.deepEqual(await r.json(), { error: "status_provider_invalido", campo: "campo_desconhecido" });
+    }
+  });
+
+  test("v1 (Gateway antigo): continua SÓ na org da conexão — a mensagem manual de outra org NÃO é alcançada (precisa do Gateway v2)", async () => {
+    semear2();
     _resetarNonces();
-    const r = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: "WAALHEIA" }));
+    const r = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: "WAM1" }));
     assert.equal((await r.json()).resultado, "NAO_ENCONTRADA");
-    assert.equal(repo._mensagem("outra-organizacao", "WAALHEIA").status, "SENT");
+    assert.equal(repo._mensagem(ORG_EMPRESA, "WAM1").status, "SENT");
+    _resetarNonces();
+    const auto = await chamarAssinado("POST", STATUS_URL, evento({ providerMessageId: "WAA1" }));
+    assert.equal((await auto.json()).resultado, "APLICADO", "automático (org = conexão) segue funcionando em v1");
   });
 });

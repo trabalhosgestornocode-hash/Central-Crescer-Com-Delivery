@@ -19,7 +19,7 @@ import { Router } from "express";
 import { transicaoEfeito } from "../comunicacao.operacoes.js";
 import { LeaseStaleError, AuthSessionStaleError, AuthConfirmacaoRecusadaError } from "./whatsappGateway.repo.js";
 import { validarEventoInbound, motivoBloqueioAutomacao } from "../inbound/inbound.contrato.js";
-import { validarEventoStatusProvider } from "../comunicacao.statusProvider.js";
+import { validarEventoStatusProvider, CONTRATO_STATUS_VERSAO_VINCULADO } from "../comunicacao.statusProvider.js";
 
 // UUID v4-ish — o Gateway gera gatewayProcessId com crypto.randomUUID() a
 // cada boot (Checkpoint C3.5, item 2). Validado aqui (fronteira HTTP) antes
@@ -65,7 +65,7 @@ function epochValido(v) {
  *   Central de Comunicação — decide se o evento vira mensagem de conversa (SÓ responsável autorizado). Sem isto (testes antigos), o comportamento de
  *   sempre: só o razão técnico.
  */
-export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider, inbox, efeito = transicaoEfeito }) {
+export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider, inbox, efeito = transicaoEfeito, providerInstanceId = process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default" }) {
   const router = Router();
   router.post("/operacao/efeito", async (req, res, next) => {
     try {
@@ -111,6 +111,11 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider, inbo
     try {
       const v = validarEventoStatusProvider(req.corpoJson);
       if (!v.ok) return res.status(400).json({ error: "status_provider_invalido", campo: v.erro });
+      // v2 (vinculado): a instância emissora tem de ser a configurada. Divergência => resposta idêntica a "não encontrada" (sem oráculo) + contador sem dados.
+      if (v.evento.contrato === CONTRATO_STATUS_VERSAO_VINCULADO && v.evento.providerInstanceId !== providerInstanceId) {
+        console.warn(JSON.stringify({ evento: "status_provider.instancia_divergente" }));
+        return res.json({ ok: true, resultado: "NAO_ENCONTRADA" });
+      }
       const r = await repo.registrarStatusProvider(organizacaoId, v.evento);
       res.json({ ok: true, resultado: r?.resultado ?? null });
     } catch (e) { next(e); }
