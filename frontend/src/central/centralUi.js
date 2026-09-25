@@ -9,7 +9,7 @@ import { badge } from "./centralStatus.js";
 import { htmlEmpresasUnidades } from "./centralAtividade.js";
 import {
   ABAS, FILTROS_CONVERSA, ROTULO_CATEGORIA, ROTULO_ORIGEM, ROTULO_STATUS, trilhaDe, rotuloStatus, dicaStatus,
-  horaLocal, horarioCurto, dataHoraCurta, blocosDaConversa, matizDe, resumirLista, situacaoDoContato, caracteres, TEXTO_MAX,
+  horaLocal, horarioCurto, dataHoraCurta, blocosDaConversa, matizDe, resumirLista, resumoAssociacoes, situacaoDoContato, caracteres, TEXTO_MAX,
 } from "./centralModelo.js";
 
 const https = (u) => (typeof u === "string" && /^https:\/\//i.test(u) ? u : null);
@@ -146,17 +146,20 @@ export function chipsUnidades(unidades, max = 4) {
 }
 
 export function htmlChatCabecalho(contato, envio, { detalhesAberto = false } = {}) {
-  const empresas = (contato.empresas ?? []).map((x) => x.nome).join(", ");
+  // Altura CONTROLADA: só a quantidade e até 3 unidades; o resto é "+N" e abre a lista completa no painel de detalhes.
+  const assoc = resumoAssociacoes(contato, { max: 3 });
+  const chips = assoc.unidades.map((u) => `<span class="cc-chip" title="${e(u.nome)}">${e(u.nome)}</span>`).join("");
+  const mais = `${assoc.resto ? `<button type="button" class="cc-chip cc-chip--mais cc-chip--acao" data-cc-ver-associacoes aria-label="${e(`+${assoc.resto} · Ver todas as ${assoc.total} associações nos detalhes`)}" title="Ver todas nos detalhes"><span class="cc-mais-n">+${assoc.resto}</span><span class="cc-mais-todas">Ver todas</span></button>` : ""}`;
   const apto = envio?.podeEnviar !== false;
   const status = apto ? pill("ok", "Pode receber mensagens") : pill("atencao", "Envio indisponível", ` title="${e((envio?.bloqueios ?? []).map((b) => b.mensagem).join(" "))}"`);
   return `<header class="cc-chat-cab">
     <button type="button" class="cc-icone-btn cc-voltar" data-cc-voltar aria-label="Voltar para as conversas">${icon("arrow-left", { size: 18 })}</button>
     ${avatar({ contatoId: contato.contatoId, nome: contato.nome, iniciais: contato.iniciais, fotoUrl: contato.fotoUrl })}
-    <div class="cc-chat-id">
+    <div class="cc-chat-topo">
       <h2 class="cc-chat-nome">${e(contato.nome)}</h2>
-      <p class="cc-chat-empresa"><span>${e(empresas)}</span><span class="cc-chips">${chipsUnidades(contato.unidades, 3)}</span></p>
+      <div class="cc-chat-meta"><span class="cc-tel" title="Telefone (parcialmente oculto)">${e(contato.telefoneMascarado ?? "")}</span>${status}</div>
     </div>
-    <div class="cc-chat-meta"><span class="cc-tel" title="Telefone (parcialmente oculto)">${e(contato.telefoneMascarado ?? "")}</span>${status}</div>
+    <p class="cc-chat-empresa${assoc.resto ? " tem-mais" : ""}"><span class="cc-chat-assoc" title="${e(assoc.rotulo)}">${e(assoc.rotulo)}</span>${chips ? `<span class="cc-chips cc-chips--cab">${chips}</span>` : ""}${mais}</p>
     <button type="button" class="cc-icone-btn cc-btn-detalhes${detalhesAberto ? " is-ativo" : ""}" data-cc-detalhes aria-label="Detalhes do responsável" aria-pressed="${detalhesAberto}">${icon("panel-right", { size: 18 })}</button>
   </header>`;
 }
@@ -244,7 +247,7 @@ export function htmlContexto(c) {
       ${c.cargo ? `<p class="cc-ctx-cargo">${e(c.cargo)}</p>` : ""}
       <p class="cc-tel">${e(c.telefoneMascarado ?? "")}</p>
     </div>
-    <section class="cc-ctx-sec"><h4>Empresas e unidades</h4><ul class="cc-ctx-empresas">${porEmpresa || `<li class="cc-ctx-vazio">Sem empresa vinculada.</li>`}</ul></section>
+    <section class="cc-ctx-sec" data-cc-ctx-associacoes><h4 tabindex="-1">Empresas e unidades${(c.empresas?.length ?? 0) > 1 ? ` (${c.empresas.length})` : ""}</h4><ul class="cc-ctx-empresas">${porEmpresa || `<li class="cc-ctx-vazio">Sem empresa vinculada.</li>`}</ul></section>
     <section class="cc-ctx-sec"><h4>Situação do contato</h4><ul class="cc-ctx-situacao">${sit.map((s) => `<li class="${s.ok ? "is-ok" : "is-pend"}"><span>${e(s.rotulo)}</span><strong>${icon(s.ok ? "check-circle" : "minus-circle", { size: 14 })}${e(s.texto)}</strong></li>`).join("")}</ul></section>
     <section class="cc-ctx-sec"><h4>Pendências atuais</h4><p class="cc-ctx-pend ${pend ? "is-atencao" : ""}">${pend ? e(`${plural(pend, "unidade com pendência", "unidades com pendência")} nas empresas deste responsável.`) : "Nenhuma pendência agora."}</p></section>
     <section class="cc-ctx-sec">${blocoMensagemResumo("Última mensagem automática", c.ultimaAutomatica, "Nenhuma mensagem automática ainda.")}${blocoMensagemResumo("Última mensagem humana", c.ultimaHumana, "Nenhuma mensagem humana ainda.")}</section>

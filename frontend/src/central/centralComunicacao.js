@@ -295,16 +295,39 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
   function pintarChat({ rolar = "manter" } = {}) {
     const cab = q("[data-cc-chat-cab]"); const fluxo = q("[data-cc-fluxo]"); const area = q("[data-cc-composer-area]");
     if (!cab || !fluxo || !area) return;
-    if (!S.sel) { cab.innerHTML = ""; fluxo.innerHTML = ui.htmlChatVazio(); area.innerHTML = ""; return; }
-    if (S.threadCarregando || !S.thread) { cab.innerHTML = ""; fluxo.innerHTML = ui.skeletonChat(); area.innerHTML = ""; return; }
-    cab.innerHTML = ui.htmlChatCabecalho(S.thread.contato, S.thread.envio, { detalhesAberto: S.detalhes });
-    pintarFluxo({ rolar });
+    if (!S.sel) { pintarSe(cab, ""); fluxo.innerHTML = ui.htmlChatVazio(); area.innerHTML = ""; return; }
+    if (S.threadCarregando || !S.thread) { pintarSe(cab, ""); fluxo.innerHTML = ui.skeletonChat(); area.innerHTML = ""; return; }
+    pintarSe(cab, ui.htmlChatCabecalho(S.thread.contato, S.thread.envio, { detalhesAberto: S.detalhes }));
+    // Composer ANTES do fluxo: o scroll ao fim é medido com a altura FINAL do composer (senão as últimas mensagens ficam abaixo da dobra).
     pintarComposer();
+    pintarFluxo({ rolar });
+  }
+
+  /** Repintar HTML idêntico só destruiria o foco do teclado (o "+N", o título dos detalhes): escreve apenas se o conteúdo mudou desde a última escrita neste elemento. */
+  const ultimoHtml = new WeakMap();
+  function pintarSe(el, html) { if (ultimoHtml.get(el) === html) return false; el.innerHTML = html; ultimoHtml.set(el, html); return true; }
+
+  /** Executa `fn` (que pode mudar a altura do composer/cabeçalho) e, se o fluxo estava no fim, o mantém no fim: a última bolha nunca fica escondida. */
+  function preservarFim(fn) {
+    const f = q("[data-cc-fluxo]");
+    const noFim = M.estaNoFim(f, ROLAGEM_FIM_PX);
+    fn();
+    if (f && noFim) f.scrollTop = f.scrollHeight;
+  }
+
+  /** "+N" do cabeçalho: abre o painel de detalhes (coluna, gaveta ou tela) já na lista completa de empresas e unidades. */
+  function verAssociacoes() {
+    if (!S.detalhes) alternarDetalhes(true);
+    // Síncrono: pintarContexto já rodou e getBoundingClientRect força o layout (só o eixo X da gaveta anima). Rola SÓ o painel (scrollIntoView moveria a página
+    // inteira) e leva o foco ao título da lista, para teclado e leitor de tela.
+    const sec = q("[data-cc-ctx-associacoes]"); if (!sec) return;
+    const cont = sec.closest(".cc-contexto"); if (cont) cont.scrollTop += sec.getBoundingClientRect().top - cont.getBoundingClientRect().top;
+    sec.querySelector("h4")?.focus?.({ preventScroll: true });
   }
 
   function pintarFluxo({ rolar = "manter" } = {}) {
     const fluxo = q("[data-cc-fluxo]"); if (!fluxo || !S.thread) return;
-    const noFim = fluxo.scrollHeight - fluxo.scrollTop - fluxo.clientHeight < ROLAGEM_FIM_PX;
+    const noFim = M.estaNoFim(fluxo, ROLAGEM_FIM_PX);
     const antes = fluxo.scrollHeight - fluxo.scrollTop;
     fluxo.innerHTML = ui.htmlFluxo({ mensagens: S.thread.mensagens, janelaHoras: S.thread.janelaHoras, temMaisAntigas: S.thread.temMaisAntigas, agora: agora() });
     const primeira = S.idsVistos.size === 0;
@@ -317,15 +340,19 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     const area = q("[data-cc-composer-area]"); if (!area || !S.thread || !S.sel) return;
     const r = rasc(S.sel);
     const env = S.thread.envio ?? { podeEnviar: true, bloqueios: [] };
-    area.innerHTML = ui.htmlComposer({ podeEnviar: env.podeEnviar, bloqueios: env.bloqueios, texto: r.texto, enviando: trava(S.sel).ativa(), erro: r.erro });
-    ajustarAltura(q("#cc-texto"));
+    preservarFim(() => {
+      area.innerHTML = ui.htmlComposer({ podeEnviar: env.podeEnviar, bloqueios: env.bloqueios, texto: r.texto, enviando: trava(S.sel).ativa(), erro: r.erro });
+      ajustarAltura(q("#cc-texto"));
+    });
   }
 
   function pintarContexto() {
     const el = q("[data-cc-contexto]"); if (!el) return;
-    el.innerHTML = S.thread?.contato ? ui.htmlContexto(S.thread.contato) : "";
+    pintarSe(el, S.thread?.contato ? ui.htmlContexto(S.thread.contato) : "");
     const esp = q("[data-cc-espaco]"); if (esp) { esp.dataset.ccTela = S.tela; esp.dataset.ccDetalhesAberto = String(S.detalhes); }
     const veu = q("[data-cc-veu]"); if (veu) veu.hidden = !(S.detalhes && ehNotebook() && !ehMobile());
+    // O botão de detalhes vive no cabeçalho (memoizado por pintarSe): todo caminho que muda S.detalhes (alternar, voltar) passa por aqui e o mantém em sincronia.
+    const b = q("[data-cc-detalhes].cc-btn-detalhes"); if (b) { b.classList.toggle("is-ativo", S.detalhes); b.setAttribute("aria-pressed", String(S.detalhes)); }
   }
 
   function definirTela(tela) {
@@ -355,7 +382,7 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     const paginacao = jaTinha && !antes ? { proximaPagina: S.thread.proximaPagina, temMaisAntigas: S.thread.temMaisAntigas } : {};
     S.thread = { ...novo, ...paginacao, mensagens: jaTinha ? M.mesclarMensagens(antigas, novo.mensagens) : novo.mensagens };
     S.threadCarregando = false;
-    if (!jaTinha) pintarChat({ rolar }); else { pintarFluxo({ rolar }); if (gatingMudou) pintarComposer(); const cab = q("[data-cc-chat-cab]"); if (cab) cab.innerHTML = ui.htmlChatCabecalho(S.thread.contato, S.thread.envio, { detalhesAberto: S.detalhes }); }
+    if (!jaTinha) pintarChat({ rolar }); else { pintarFluxo({ rolar }); if (gatingMudou) pintarComposer(); const cab = q("[data-cc-chat-cab]"); if (cab) preservarFim(() => { pintarSe(cab, ui.htmlChatCabecalho(S.thread.contato, S.thread.envio, { detalhesAberto: S.detalhes })); }); }
     pintarContexto();
     marcarComoLida();
   }
@@ -387,7 +414,6 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     S.detalhes = typeof forcar === "boolean" ? forcar : !S.detalhes;
     if (ehMobile()) { definirTela(S.detalhes ? "detalhes" : "chat"); if (S.detalhes) empurrarHistorico("detalhes"); }
     pintarContexto();
-    const b = q("[data-cc-detalhes].cc-btn-detalhes"); if (b) { b.classList.toggle("is-ativo", S.detalhes); b.setAttribute("aria-pressed", String(S.detalhes)); }
   }
 
   // ---------------------------------------------------------------------
@@ -558,6 +584,7 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     if (filtro) { S.conv.filtro = filtro.dataset.ccFiltro; carregarConversas({ silencioso: false }); return; }
     const conv = t.closest("[data-cc-conversa]"); if (conv) { abrirConversa(conv.dataset.ccConversa); return; }
     if (t.closest("[data-cc-voltar]")) { voltarUI(); return; }
+    if (t.closest("[data-cc-ver-associacoes]")) { verAssociacoes(); return; }
     if (t.closest("[data-cc-detalhes]")) { alternarDetalhes(); return; }
     if (t.closest("[data-cc-veu]")) { alternarDetalhes(false); return; }
     const re = t.closest("[data-cc-reenviar]"); if (re) { reenviar(re.dataset.ccReenviar); return; }
@@ -588,7 +615,7 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     if (t.id === "cc-dest-busca") { S.destBusca = t.value; janela.clearTimeout(debounceBusca); debounceBusca = janela.setTimeout(() => { S.dest = null; carregarDestinatarios({}); }, 250); timers.add(debounceBusca); return; }
     if (t.id === "cc-texto") {
       if (S.sel) { const r = rasc(S.sel); r.texto = t.value; if (r.erro) { r.erro = ""; q(".cc-composer-erro")?.remove(); } }
-      ajustarAltura(t); atualizarBotaoEnviar();
+      preservarFim(() => ajustarAltura(t)); atualizarBotaoEnviar();
     }
   }
 

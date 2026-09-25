@@ -297,6 +297,33 @@ export function resumirLista(itens, max = 3) {
   return { visiveis: lista.slice(0, max), resto: Math.max(0, lista.length - max) };
 }
 
+const pluralAssoc = (n, s, p) => `${n} ${n === 1 ? s : p}`;
+
+/**
+ * Resumo das empresas/unidades do responsável para o CABEÇALHO da conversa. O cabeçalho tem altura controlada: NUNCA lista tudo.
+ * Devolve o rótulo com a QUANTIDADE, até `max` unidades para chips e `resto` (o "+N"); a lista completa vive no painel de detalhes.
+ * `resto` = unidades que NÃO viraram chip (o "+N"); sem unidades não há chips, logo não há "+N" (o rótulo já traz a contagem de empresas). `total` = maior das duas contagens.
+ * @returns {{rotulo: string, nEmpresas: number, nUnidades: number, total: number, unidades: Array<{nome: string}>, resto: number}}
+ */
+export function resumoAssociacoes(contato, { max = 3 } = {}) {
+  const empresas = contato?.empresas ?? [];
+  const unidades = contato?.unidades ?? [];
+  const nEmpresas = empresas.length; const nUnidades = unidades.length;
+  const { visiveis } = resumirLista(unidades, max);
+  let rotulo;
+  if (!nEmpresas && !nUnidades) rotulo = "Sem empresa vinculada";
+  else if (nEmpresas <= 1) rotulo = `${empresas[0]?.nome ?? "Empresa"}${nUnidades > max ? ` · ${pluralAssoc(nUnidades, "unidade", "unidades")}` : ""}`;
+  else if (!nUnidades) rotulo = pluralAssoc(nEmpresas, "empresa associada", "empresas associadas");
+  else if (nEmpresas === nUnidades) rotulo = pluralAssoc(nUnidades, "unidade associada", "unidades associadas");
+  else rotulo = `${pluralAssoc(nEmpresas, "empresa", "empresas")} · ${pluralAssoc(nUnidades, "unidade associada", "unidades associadas")}`;
+  return { rotulo, nEmpresas, nUnidades, total: Math.max(nEmpresas, nUnidades), unidades: visiveis, resto: nUnidades ? Math.max(0, nUnidades - visiveis.length) : 0 };
+}
+
+/** O fluxo de mensagens está encostado no fim (a menos de `limite` px)? Aceita qualquer objeto com scrollHeight/scrollTop/clientHeight. */
+export function estaNoFim(el, limite = 90) {
+  return !el || el.scrollHeight - el.scrollTop - el.clientHeight < limite;
+}
+
 /** Situação do contato para a coluna de contexto: cada item é um FATO do cadastro, nunca inventado. */
 export function situacaoDoContato(c) {
   return [
