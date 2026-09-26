@@ -390,6 +390,7 @@ export function htmlConfigFuncional(c) {
   const linha = (rot, val, nota = "") => `<div class="cc-cfg-linha"><dt>${e(rot)}</dt><dd>${e(val)}${nota ? `<span class="cc-nota">${e(nota)}</span>` : ""}</dd></div>`;
   return `<dl class="cc-cfg">
     ${linha("Horários de envio", fmtJanela(c.janelaComercial))}
+    ${c.disponibilidadeIfood ? linha("Lembretes do D-1 do iFood", `A partir das ${c.disponibilidadeIfood.enviosPermitidosApos}`, `Os dados do iFood ficam disponíveis a partir das ${c.disponibilidadeIfood.dadosDisponiveisApos}; antes disso a empresa não é cobrada pelo dia anterior. Vale dentro dos horários de envio acima.`) : ""}
     ${linha("Reforço do prazo final", `Entre ${c.reforcoD1?.janela ?? "—"}, limite às ${c.reforcoD1?.cutoff ?? "—"}`, `${c.reforcoD1?.diasUteis ?? ""}. Mínimo de ${Number(c.reforcoD1?.espacamentoMinimoHoras ?? 0)} h depois do primeiro aviso.`)}
     ${linha("Tipos de alerta", (c.tiposDeAlerta ?? []).join(", ") || "Não informado", "Definido por empresa.")}
     ${linha("Intervalo entre avisos", fmtMapa(c.cooldownsHoras, " h"))}

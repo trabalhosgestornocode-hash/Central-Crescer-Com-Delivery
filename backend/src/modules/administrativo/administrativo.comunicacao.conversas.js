@@ -508,6 +508,7 @@ export async function automacoes(deps = {}) {
     deps.estadoGateway !== undefined ? deps.estadoGateway : repo.obterEstadoGateway(deps).catch(() => ({ estado: "desconhecido" })),
   ]);
   const janela = config?.janelaComercial?.seg_sex ?? null;
+  const disp = config?.disponibilidadeIfood ?? null;
   const nomeOrg = new Map(orgs.map((o) => [o.organizacaoId, o.nome]));
   const habilitadas = orgs.filter((o) => o.habilitada);
   return {
@@ -518,11 +519,11 @@ export async function automacoes(deps = {}) {
       titulo: "Dashboard iFood D-1",
       resumo: "Avisa o responsável quando o lançamento do dia anterior ainda não foi feito.",
       quandoDetecta: "Continuamente, para cada unidade monitorada.",
-      quandoEnvia: janela ? `Dentro da janela comercial (${janela.inicio}–${janela.fim}, segunda a sexta).` : "Dentro da janela comercial configurada.",
+      quandoEnvia: (janela ? `Dentro da janela comercial (${janela.inicio}–${janela.fim}, segunda a sexta).` : "Dentro da janela comercial configurada.") + (disp ? ` O aviso do dia anterior só sai a partir das ${disp.enviosPermitidosApos} (os dados do iFood ficam disponíveis às ${disp.dadosDisponiveisApos}).` : ""),
       quandoReforca: `Uma vez, entre ${hhmm(JANELA_REFORCO.inicio)} e ${hhmm(JANELA_REFORCO.fim)}, só se o prazo vence hoje e a pendência continua (mínimo de ${ESPACAMENTO_MINIMO_HORAS} h depois do primeiro aviso).`,
       horarioLimite: hhmm(CUTOFF_REFORCO),
       linhaDoTempo: [
-        { id: "janela", titulo: "Janela comercial começa", horario: janela?.inicio ?? null, texto: "A partir daqui os avisos normais podem sair." },
+        { id: "janela", titulo: disp ? "Avisos do D-1 começam" : "Janela comercial começa", horario: disp && janela ? (disp.enviosPermitidosApos > janela.inicio ? disp.enviosPermitidosApos : janela.inicio) : (janela?.inicio ?? null), texto: disp ? `Antes das ${disp.dadosDisponiveisApos} os dados do iFood não estão disponíveis; os avisos saem a partir das ${disp.enviosPermitidosApos}.` : "A partir daqui os avisos normais podem sair." },
         { id: "deteccao", titulo: "Pendência detectada", horario: null, texto: "O monitoramento identifica o lançamento atrasado." },
         { id: "agendada", titulo: "Mensagem agendada", horario: null, texto: "Programada para o horário permitido, com pequeno espalhamento." },
         { id: "enviada", titulo: "Mensagem enviada", horario: null, texto: "Enviada ao WhatsApp. A entrega é confirmada depois." },

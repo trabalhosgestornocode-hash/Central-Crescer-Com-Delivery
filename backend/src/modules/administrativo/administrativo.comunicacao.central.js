@@ -5,7 +5,7 @@
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import * as repo from "./administrativo.comunicacao.repo.js";
-import { obterConfig, obterTtlHoras, obterJitterMaxMs } from "../comunicacao/comunicacao.config.js";
+import { obterConfig, obterTtlHoras, obterJitterMaxMs, obterDisponibilidadeIfood } from "../comunicacao/comunicacao.config.js";
 import { STATUS_MENSAGEM, TIPOS_ALERTA } from "../comunicacao/comunicacao.constants.js";
 import { ehAvisoTardio, PROPOSITO, JANELA_REFORCO, CUTOFF_REFORCO, ESPACAMENTO_MINIMO_HORAS } from "../comunicacao/comunicacao.reforco.js";
 import { PROPOSITO_TESTE, TIPO_MENSAGEM_TESTE, PROPOSITO_MANUAL, TIPO_MENSAGEM_MANUAL } from "../comunicacao/comunicacao.fila.repo.js";
@@ -125,14 +125,16 @@ export async function detalheMensagem({ id } = {}, deps = {}) {
  * verdade: valores de comunicacao_configuracoes (com os padrões do código) e as constantes do reforço D-1. Nada inventado.
  */
 export async function configuracaoOperacional(deps = {}) {
-  const [janelas, cooldowns, limites, ttlHoras, jitterMaxMs] = await Promise.all([
-    obterConfig("janelas", deps), obterConfig("cooldowns_horas", deps), obterConfig("limites", deps), obterTtlHoras(deps), obterJitterMaxMs(deps),
+  const [janelas, cooldowns, limites, ttlHoras, jitterMaxMs, disponibilidade] = await Promise.all([
+    obterConfig("janelas", deps), obterConfig("cooldowns_horas", deps), obterConfig("limites", deps), obterTtlHoras(deps), obterJitterMaxMs(deps), obterDisponibilidadeIfood(deps),
   ]);
   const hhmm = (h) => `${String(h.hora).padStart(2, "0")}:${String(h.minuto).padStart(2, "0")}`;
   return {
     somenteLeitura: true,
     tiposDeAlerta: Object.values(TIPOS_ALERTA),
     janelaComercial: janelas ?? null,
+    // regra do D-1 do iFood: antes de `dadosDisponiveisApos` a empresa não é cobrada; os lembretes só saem a partir de `enviosPermitidosApos`
+    disponibilidadeIfood: { dadosDisponiveisApos: disponibilidade.dados_disponiveis_apos, enviosPermitidosApos: disponibilidade.envios_permitidos_apos },
     reforcoD1: { janela: `${hhmm(JANELA_REFORCO.inicio)}–${hhmm(JANELA_REFORCO.fim)}`, cutoff: hhmm(CUTOFF_REFORCO), espacamentoMinimoHoras: ESPACAMENTO_MINIMO_HORAS, diasUteis: "segunda a sábado" },
     cooldownsHoras: cooldowns ?? null,
     limites: limites ?? null,
