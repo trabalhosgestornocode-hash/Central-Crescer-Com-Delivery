@@ -74,7 +74,7 @@ function fakeDb({ alertas = [], mensagens = [], configs = {}, rpcs = {} } = {}) 
 }
 const HAB_OK = async () => ({
   empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null,
-  destinatarioContatoId: "c1", destinatarioPerfilId: "p1", timezone: TZ, janelas: null, configHorarioValida: true,
+  destinatarioContatoId: "c1", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "p1", timezone: TZ, janelas: null, configHorarioValida: true,
 });
 const alerta = (extra = {}) => ({
   id: "a1", organizacao_id: "o1", tipo_alerta: "dashboard_ifood_d1", status: "DETECTED", severidade: "atencao",
@@ -147,7 +147,7 @@ describe("agendarAvisosTardiosD1 — scheduler", () => {
     const base = await HAB_OK();
     for (const [hab, campo] of [
       [{ empresaHabilitada: false }, "semHabilitacao"], [{ tipoPermitido: false }, "semHabilitacao"], [{ empresaPausada: true }, "empresaPausada"],
-      [{ destinatarioContatoId: null }, "semDestinatario"], [{ destinatarioPerfilId: null }, "semDestinatario"], [{ configHorarioValida: false }, "configInvalida"],
+      [{ destinatarioContatoId: null }, "semDestinatario"], [{ destinatarioContatoEmpresaId: null }, "semDestinatario"], [{ configHorarioValida: false }, "configInvalida"],
     ]) {
       const db = fakeDb({ alertas: [alerta()], rpcs: rpcCriaUmaVez() });
       const r = await tardio(db, QUA("20:30"), { resolverHabilitacao: async () => ({ ...base, ...hab }) });
@@ -190,18 +190,27 @@ describe("scheduler NORMAL — D-1 que vence hoje não é agendado para AMANHÃ"
     assert.equal(r.agendados, 0);
     assert.equal(db.chamadas.length, 0);
   });
-  test("D-1 de hoje às 10:00 (dentro do expediente) -> o fluxo NORMAL continua sendo a autoridade", async () => {
+  test("D-1 de hoje às 11:00 (dentro do expediente e depois da disponibilidade do iFood) -> o fluxo NORMAL continua sendo a autoridade", async () => {
     const db = fakeDb({ alertas: [alerta()], rpcs: rpcNormal() });
-    const r = await normal(db, QUA("10:00"));
+    const r = await normal(db, QUA("11:00"));
     assert.equal(r.agendados, 1, JSON.stringify(r));
     assert.equal(db.chamadas[0].args.p_idempotency_key, "wa:alerta:a1:v1");
   });
-  test("D-1 de hoje antes da abertura (06:00) -> normal agenda para HOJE 08:00 (nada a esperar pela janela tardia)", async () => {
+  test("D-1 de hoje ANTES da disponibilidade do iFood (06:00, 08:30, 10:15) -> NÃO agenda (a empresa não está atrasada); a janela tardia também não se aplica", async () => {
+    for (const hhmm of ["06:00", "08:30", "10:15"]) {
+      const db = fakeDb({ alertas: [alerta()], rpcs: rpcNormal() });
+      const r = await normal(db, QUA(hhmm));
+      assert.equal(r.agendados, 0, hhmm);
+      assert.equal(r.aguardandoDisponibilidadeIfood, 1, hhmm);
+      assert.equal(r.aguardaJanelaTardia, 0, hhmm);
+      assert.equal(db.chamadas.length, 0, hhmm);
+    }
+  });
+  test("D-1 de hoje às 10:30 -> normal agenda (dados do iFood disponíveis e horário mínimo de envio atingido)", async () => {
     const db = fakeDb({ alertas: [alerta()], rpcs: rpcNormal() });
-    const r = await normal(db, QUA("06:00"));
-    assert.equal(r.agendados, 1);
-    assert.equal(r.aguardaJanelaTardia, 0);
-    assert.ok(new Date(db.chamadas[0].args.p_disponivel_em) >= QUA("08:00") && new Date(db.chamadas[0].args.p_disponivel_em) < QUA("18:00"));
+    const r = await normal(db, QUA("10:30"));
+    assert.equal(r.agendados, 1, JSON.stringify(r));
+    assert.ok(new Date(db.chamadas[0].args.p_disponivel_em) >= QUA("10:30") && new Date(db.chamadas[0].args.p_disponivel_em) < QUA("18:00"));
   });
   test("BACKLOG antigo às 19:00 -> comportamento normal INALTERADO (agenda para o próximo expediente)", async () => {
     const db = fakeDb({ alertas: [alerta({ data_referencia: "2026-09-10" })], rpcs: rpcNormal() });

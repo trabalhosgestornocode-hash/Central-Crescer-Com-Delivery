@@ -105,7 +105,7 @@ const chamarNormal = (alertaId) => supabase.rpc("comunicacao_agendar_mensagem_al
 async function inserirMensagem({ alertaId, status, idempotencyKey, proposito = null, enviadoEm = null, extra = {} }) {
   const { data, error } = await supabase.from("comunicacao_mensagens").insert({
     alerta_id: alertaId, organizacao_id: orgA, unidade_id: unidadeA, contato_id: dest.contatoId,
-    destinatario_perfil_id: dest.perfilId, canal: "whatsapp", direcao: "saida", tipo: TIPO,
+    destinatario_perfil_id: dest.perfilId, contato_empresa_id: dest.contatoEmpresaId ?? null, canal: "whatsapp", direcao: "saida", tipo: TIPO,
     conteudo: "msg de teste", idempotency_key: idempotencyKey, status,
     metadados: proposito ? { proposito } : {}, disponivel_em: new Date(Date.now() - 60_000).toISOString(),
     ...(enviadoEm ? { enviado_em: enviadoEm } : {}), ...extra,
@@ -116,7 +116,7 @@ async function inserirMensagem({ alertaId, status, idempotencyKey, proposito = n
 
 const HAB = (extra = {}) => async () => ({
   empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
-  destinatarioContatoId: dest.contatoId, destinatarioPerfilId: dest.perfilId,
+  destinatarioContatoId: dest.contatoId, destinatarioPerfilId: dest.perfilId, destinatarioContatoEmpresaId: dest.contatoEmpresaId ?? null,
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE", ...extra,
 });
 function criarProviderComSpy() {

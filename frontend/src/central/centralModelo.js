@@ -37,7 +37,7 @@ export const FILTROS_CONVERSA = Object.freeze([
 ]);
 
 export const ABAS = Object.freeze([
-  ["visao-geral", "Visão geral"], ["conversas", "Conversas"], ["automacoes", "Automações"], ["historico", "Histórico"], ["destinatarios", "Destinatários"], ["conexao", "Conexão"], ["configuracoes", "Configurações"],
+  ["visao-geral", "Visão geral"], ["conversas", "Conversas"], ["empresas", "Empresas"], ["automacoes", "Automações"], ["historico", "Histórico"], ["destinatarios", "Destinatários"], ["conexao", "Conexão"], ["configuracoes", "Configurações"],
 ]);
 
 // ---------------------------------------------------------------------------

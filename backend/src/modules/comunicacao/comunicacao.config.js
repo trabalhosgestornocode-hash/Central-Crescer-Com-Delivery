@@ -13,6 +13,7 @@ import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
 import { MODOS } from "./comunicacao.constants.js";
+import { DISPONIBILIDADE_IFOOD_PADRAO, disponibilidadeValida, normalizarDisponibilidade } from "./comunicacao.disponibilidade.js";
 
 function intEnv(chave, padrao) {
   const v = Number(process.env[chave]);
@@ -41,6 +42,8 @@ const PADRAO = Object.freeze({
   }),
   // TTL da mensagem: expira_em = disponivel_em + ttl_horas (aviso velho nunca sai).
   ttl_horas: 24,
+  // Disponibilidade dos dados do iFood (D-1) — ver comunicacao.disponibilidade.js. Configurável no Painel.
+  disponibilidade_ifood: DISPONIBILIDADE_IFOOD_PADRAO,
   // Teto do jitter determinístico (espalha os envios na abertura da janela; nunca passa do fechamento).
   jitter_max_minutos: 30,
 });
@@ -50,7 +53,7 @@ const PADRAO = Object.freeze({
  * tabela/linha não existir — nunca lança por isso (config ausente não pode
  * derrubar o pipeline; ver REGRA DE OURO de shared/auditoria.js#auditar,
  * mesmo espírito aqui).
- * @param {'modo'|'janelas'|'cooldowns_horas'|'limites'|'ttl_horas'|'jitter_max_minutos'} chave
+ * @param {'modo'|'janelas'|'cooldowns_horas'|'limites'|'ttl_horas'|'jitter_max_minutos'|'disponibilidade_ifood'} chave
  * @param {{supabase?: any}} [deps]
  */
 export async function obterConfig(chave, deps = {}) {
@@ -71,6 +74,29 @@ export async function obterTtlHoras(deps = {}) {
 /** Teto do jitter determinístico em ms, já normalizado. @param {{supabase?: any}} [deps] */
 export async function obterJitterMaxMs(deps = {}) {
   return positivoOuPadrao(await obterConfig("jitter_max_minutos", deps), PADRAO.jitter_max_minutos) * 60_000;
+}
+
+/** Horários de disponibilidade do iFood (D-1), normalizados: ausente/corrompido cai no PADRÃO (a espera nunca é desligada). */
+export async function obterDisponibilidadeIfood(deps = {}) {
+  return normalizarDisponibilidade(await obterConfig("disponibilidade_ifood", deps));
+}
+
+/** Altera os horários de disponibilidade do iFood — SEMPRE auditado; `envios_permitidos_apos` não pode ser anterior a `dados_disponiveis_apos`. */
+export async function definirDisponibilidadeIfood({ dadosDisponiveisApos, enviosPermitidosApos }, { atorPerfilId = null, atorId = null } = {}, deps = {}) {
+  const valor = { dados_disponiveis_apos: dadosDisponiveisApos, envios_permitidos_apos: enviosPermitidosApos };
+  if (!disponibilidadeValida(valor)) {
+    throw ApiError.badRequest("Horários inválidos: use HH:MM e mantenha o horário de envio igual ou posterior ao de disponibilidade dos dados.", { codigo: "DISPONIBILIDADE_INVALIDA" });
+  }
+  const db = deps.supabase ?? supabase;
+  const anterior = await obterConfig("disponibilidade_ifood", deps);
+  const { error } = await db.from("comunicacao_configuracoes")
+    .upsert({ chave: "disponibilidade_ifood", valor, atualizado_em: new Date().toISOString(), atualizado_por: atorPerfilId }, { onConflict: "chave" });
+  if (error) throw ApiError.internal(error.message);
+  await auditar({
+    acao: ACOES.CONFIG_ALTERADA, atorId, perfilId: atorPerfilId, entidade: "comunicacao_configuracoes", entidadeId: "disponibilidade_ifood",
+    detalhes: { chave: "disponibilidade_ifood", de: anterior, para: valor },
+  });
+  return valor;
 }
 
 const MODOS_VALIDOS = new Set(Object.values(MODOS));

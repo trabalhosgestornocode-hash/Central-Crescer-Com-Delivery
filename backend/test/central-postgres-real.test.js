@@ -6,7 +6,7 @@ import { test, describe, before, after, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
-import { criarOrganizacao, apagarOrganizacao, criarUnidade, criarDestinatario, apagarDestinatario, criarContaComPerfil, apagarConta, migracao082Aplicada } from "./helpers/comunicacao-fixtures.js";
+import { criarOrganizacao, apagarOrganizacao, criarUnidade, criarDestinatario, responsavelDoContato, apagarDestinatario, criarContaComPerfil, apagarConta, migracao082Aplicada } from "./helpers/comunicacao-fixtures.js";
 import { processarInbound, DESTINO, _zerarMetricas } from "../src/modules/comunicacao/comunicacao.inbox.service.js";
 import { purgarVencidas } from "../src/modules/comunicacao/comunicacao.inbox.repo.js";
 import { criarWhatsAppService, IdentidadeNaoConfirmadaError } from "../src/modules/comunicacao/whatsapp.service.js";
@@ -81,6 +81,8 @@ before(async () => {
   uA1 = await criarUnidade(conA, "A Loja 1"); uA2 = await criarUnidade(conA, "A Loja 2"); uB1 = await criarUnidade(conB, "B Loja 1");
   destA = await criarDestinatario({ organizacaoId: conA, unidadeId: uA1, tag, sufixo: "a" });
   destB = await criarDestinatario({ organizacaoId: conB, unidadeId: uB1, tag, sufixo: "b" });
+  await responsavelDoContato({ organizacaoId: conA, contatoId: destA.contatoId, perfilId: destA.perfilId });
+  await responsavelDoContato({ organizacaoId: conB, contatoId: destB.contatoId, perfilId: destB.perfilId });
   // um SEGUNDO vínculo de unidade para o mesmo responsável A (um telefone, duas unidades)
   const { data: perfil } = await supabase.from("perfis_operacionais").select("conta_id").eq("id", destA.perfilId).single();
   await supabase.from("usuarios_unidades").insert({ usuario_id: perfil.conta_id, unidade_id: uA2, perfil_id: destA.perfilId, ativo: true });
@@ -166,11 +168,20 @@ describe("INBOUND autorizado (banco real)", pular({}), () => {
     assert.deepEqual([l.tipo_conteudo, l.texto], ["midia", null]);
   });
 
-  test("perfil INATIVO ⇒ deixa de ser autorizado no MESMO instante (sem cache): a mensagem seguinte é ignorada", async () => {
+  test("responsável INATIVO ⇒ deixa de ser autorizado no MESMO instante (sem cache): a mensagem seguinte é ignorada", async () => {
+    // Migration 100: quem autoriza é o RESPONSÁVEL da empresa (ativo + WhatsApp VALIDADO), não o perfil/usuário.
+    await supabase.from("comunicacao_contatos_empresa").update({ ativo: false }).eq("organizacao_id", conB).eq("contato_whatsapp_id", destB.contatoId);
+    try {
+      const r = await processarInbound({ organizacaoId: conB, evento: ev({ providerMessageId: "WA-INAT", telefoneE164: telB }) }, dep(conB));
+      assert.equal(r.destino, DESTINO.IGNORADO);
+    } finally { await supabase.from("comunicacao_contatos_empresa").update({ ativo: true }).eq("organizacao_id", conB).eq("contato_whatsapp_id", destB.contatoId); }
+  });
+
+  test("perfil INATIVO NÃO retira a autorização: o responsável da empresa independe de usuário/perfil", async () => {
     await supabase.from("perfis_operacionais").update({ ativo: false }).eq("id", destB.perfilId);
     try {
-      const r = await processarInbound({ organizacaoId: conA, evento: ev({ providerMessageId: "WA-INAT", telefoneE164: telB }) }, dep(conA));
-      assert.equal(r.destino, DESTINO.IGNORADO);
+      const r = await processarInbound({ organizacaoId: conB, evento: ev({ providerMessageId: "WA-PERFIL-INAT", telefoneE164: telB }) }, dep(conB));
+      assert.equal(r.destino, DESTINO.INBOX);
     } finally { await supabase.from("perfis_operacionais").update({ ativo: true }).eq("id", destB.perfilId); }
   });
 });

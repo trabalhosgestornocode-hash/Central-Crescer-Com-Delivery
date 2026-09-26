@@ -5,6 +5,7 @@
 //   node --env-file=.env --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-agendamento-atomico.test.js
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
+import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import { motivoIndisponivel as motivoSemPsql, executarSqlNoBancoDeTeste } from "./helpers/psql-teste.js";
@@ -30,7 +31,7 @@ let destA = null, destA2 = null, destB = null; // destinatários EXPLÍCITOS (A 
 
 const HABILITADA = async () => ({
   empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
-  destinatarioContatoId: "contato-de-teste", destinatarioPerfilId: "perfil-de-teste",
+  destinatarioContatoId: "contato-de-teste", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "perfil-de-teste",
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE",
 });
 
@@ -207,7 +208,7 @@ describe("agendamento ATÔMICO alerta -> mensagem (RPC comunicacao_agendar_mensa
     // 1) o fluxo antigo, reproduzido: dois passos independentes
     const antigo = await novoAlerta("2026-08-20");
     await alertasRepo.atualizarStatusAlerta(antigo.id, STATUS_ALERTA.SCHEDULED);
-    await assert.rejects(() => filaRepo.agendarMensagem({ ...paramsAgendar(antigo), organizacaoId: orgA, unidadeId: unidadeA, contatoId: CONTATO_INEXISTENTE }));
+    await assert.rejects(() => agendarMensagemT({ ...paramsAgendar(antigo), organizacaoId: orgA, unidadeId: unidadeA, contatoId: CONTATO_INEXISTENTE }));
     assert.equal(await statusAlerta(antigo.id), STATUS_ALERTA.SCHEDULED, "pré-condição do contraste: o fluxo antigo deixa o alerta SCHEDULED");
     assert.equal((await msgsDoAlerta(antigo.id)).length, 0, "...sem NENHUMA mensagem (órfão)");
 
@@ -222,7 +223,7 @@ describe("agendamento ATÔMICO alerta -> mensagem (RPC comunicacao_agendar_mensa
   test("REPARO: alerta ainda DETECTED com a mensagem JÁ existente (resíduo do fluxo antigo, não atômico) é reparado para SCHEDULED sem duplicar", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const alerta = await novoAlerta("2026-08-09");
-    const antiga = await filaRepo.agendarMensagem({ ...paramsAgendar(alerta), organizacaoId: orgA, unidadeId: unidadeA, contatoId: destA.contatoId, destinatarioPerfilId: destA.perfilId });
+    const antiga = await agendarMensagemT({ ...paramsAgendar(alerta), organizacaoId: orgA, unidadeId: unidadeA, contatoId: destA.contatoId, destinatarioPerfilId: destA.perfilId });
     assert.equal(await statusAlerta(alerta.id), STATUS_ALERTA.DETECTED, "pré-condição: o insert cru não move o alerta");
     const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
     assert.equal(r.acao, "JA_EXISTIA");
@@ -268,8 +269,9 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
     ["SEM consentimento", (d) => supabase.from("contatos_whatsapp").update({ consentimento: false }).eq("id", d.contatoId), null],
     ["NÃO verificado", (d) => supabase.from("contatos_whatsapp").update({ verificado: false }).eq("id", d.contatoId), null],
     ["em OPT-OUT", (d) => supabase.from("contatos_whatsapp").update({ opt_out: true }).eq("id", d.contatoId), null],
-    ["com perfil INATIVO", (d) => supabase.from("perfis_operacionais").update({ ativo: false }).eq("id", d.perfilId), (d) => supabase.from("perfis_operacionais").update({ ativo: true }).eq("id", d.perfilId)],
-    ["com vínculo da organização DESATIVADO", (d) => supabase.from("usuarios_organizacoes").update({ ativo: false }).eq("perfil_id", d.perfilId), (d) => supabase.from("usuarios_organizacoes").update({ ativo: true }).eq("perfil_id", d.perfilId)],
+    // migration 091: o responsável é da EMPRESA — desativá-lo ou não validar o WhatsApp veta; o PERFIL/acesso do usuário não decide nada
+    ["com o RESPONSÁVEL da empresa INATIVO", (d) => supabase.from("comunicacao_contatos_empresa").update({ ativo: false }).eq("id", d.contatoEmpresaId), (d) => supabase.from("comunicacao_contatos_empresa").update({ ativo: true }).eq("id", d.contatoEmpresaId)],
+    ["com o WhatsApp do responsável NÃO VALIDADO", (d) => supabase.from("comunicacao_contatos_empresa").update({ whatsapp_status: "AGUARDANDO_VALIDACAO" }).eq("id", d.contatoEmpresaId), (d) => supabase.from("comunicacao_contatos_empresa").update({ whatsapp_status: "VALIDADO" }).eq("id", d.contatoEmpresaId)],
   ]) {
     test(`destinatário configurado ${nome} -> DESTINATARIO_INELEGIVEL: nenhuma mensagem e o alerta segue DETECTED`, async (t) => {
       if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
@@ -287,6 +289,25 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
       } finally {
         if (restaurar) await restaurar(destA);
       }
+    });
+  }
+
+  for (const [nome, preparar, restaurar] of [
+    ["perfil (usuário) INATIVO", (d) => supabase.from("perfis_operacionais").update({ ativo: false }).eq("id", d.perfilId), (d) => supabase.from("perfis_operacionais").update({ ativo: true }).eq("id", d.perfilId)],
+    ["acesso do usuário à organização DESATIVADO", (d) => supabase.from("usuarios_organizacoes").update({ ativo: false }).eq("perfil_id", d.perfilId), (d) => supabase.from("usuarios_organizacoes").update({ ativo: true }).eq("perfil_id", d.perfilId)],
+  ]) {
+    test(`(091) ${nome}: NÃO altera o responsável — o agendamento continua indo ao responsável da empresa`, async (t) => {
+      if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
+      await habilitarOrganizacao(orgA, destA);
+      const alerta = await novoAlerta("2026-09-02");
+      await preparar(destA);
+      try {
+        const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
+        assert.equal(r.acao, "CRIADA", JSON.stringify(r));
+        const [m] = await msgsDoAlerta(alerta.id);
+        assert.equal(m.contato_id, destA.contatoId);
+        assert.equal(m.contato_empresa_id, destA.contatoEmpresaId);
+      } finally { await restaurar(destA); }
     });
   }
 

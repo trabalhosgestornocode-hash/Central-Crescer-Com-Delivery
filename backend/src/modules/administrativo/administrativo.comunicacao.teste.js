@@ -148,7 +148,7 @@ export async function enviarTeste({ organizacaoId, unidadeId, testeId, confirmac
   let r;
   try {
     r = await enviarMensagemTeste({
-      testeId: tid, organizacaoId: orgId, unidadeId: uniId, contatoId: g.contato.id, destinatarioPerfilId: g.hab?.destinatario_perfil_id ?? null,
+      testeId: tid, organizacaoId: orgId, unidadeId: uniId, contatoId: g.contato.id, destinatarioPerfilId: g.hab?.destinatario_perfil_id ?? null, contatoEmpresaId: g.hab?.destinatario_contato_empresa_id ?? null,
       telefoneE164: g.contato.telefone_e164, texto: textoDoTeste(g.unidade.nome), atorPerfilId: autor.perfilId ?? null,
       limite: g.limite, whatsAppService, modoAtual: () => lerModo(deps),
       aoIniciar: (mensagemId) => auditar({ ...base, acao: ACOES.COMUNICACAO_TESTE_INICIADO, entidade: "comunicacao_mensagens", entidadeId: mensagemId, organizacaoId: orgId, detalhes: detalhesBase }),

@@ -94,7 +94,7 @@ describe("htmlAtivacaoPiloto — painel global", () => {
 const detalhe = (checklist = {}, extra = {}) => ({
   organizacao: { organizacaoId: "o1", nome: "Grupo Jailton e Vanessa", status: "ativa" },
   configuracao: { status: "PRONTA_PARA_PILOTO", timezone: "America/Sao_Paulo", tiposPermitidos: ["dashboard_ifood_d1"], destinatario: { telefoneMascarado: "+558********88", verificado: true, consentimento: true, optOut: false, perfilOperacionalId: "p1" } },
-  checklistPiloto: { perfilAssociado: true, telefoneValido: true, consentimento: true, telefoneVerificado: true, timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false, ...checklist },
+  checklistPiloto: { responsavelDefinido: true, telefoneValido: true, consentimento: true, telefoneVerificado: true, timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false, ...checklist },
   unidades: [], tiposAlertaDisponiveis: ["dashboard_ifood_d1"], ...extra,
 });
 
@@ -109,7 +109,7 @@ describe("htmlAcaoHabilitacao — ação da empresa", () => {
     assert.doesNotMatch(html, /desabilitar-comunicacao-org/);
   });
   test("faltando consentimento/verificação/perfil/timezone/tipo -> sem botão de habilitar, com orientação", () => {
-    for (const f of [{ consentimento: false }, { telefoneVerificado: false }, { perfilAssociado: false }, { telefoneValido: false }, { timezone: false }, { tipoAlerta: false }]) {
+    for (const f of [{ consentimento: false }, { telefoneVerificado: false }, { responsavelDefinido: false }, { telefoneValido: false }, { timezone: false }, { tipoAlerta: false }]) {
       const html = htmlAcaoHabilitacao(detalhe(f));
       assert.doesNotMatch(html, /pedir-habilitar-comunicacao/, JSON.stringify(f));
       assert.ok(html.includes("Conclua a configuração"));

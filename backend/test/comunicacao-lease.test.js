@@ -10,6 +10,7 @@
 // Rodar: node --env-file=.env.test-integracao --test test/comunicacao-lease.test.js
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import { criarOrganizacao, apagarOrganizacao, migracao082Aplicada } from "./helpers/comunicacao-fixtures.js";
@@ -31,7 +32,7 @@ before(async () => {
 after(async () => { await apagarOrganizacao(orgId); });
 
 async function novoJob(chave) {
-  return filaRepo.agendarMensagem({
+  return agendarMensagemT({
     organizacaoId: orgId, contatoId: null, tipo: "teste_lease",
     conteudo: "x", idempotencyKey: chave, disponivelEm: new Date(Date.now() - 60_000),
   });

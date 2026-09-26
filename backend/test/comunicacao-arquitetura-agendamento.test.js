@@ -63,7 +63,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 098 = evolução da 097: confirmação atômica, fencing de efeitos externos e paginação da conversa (sem tocar o outbox/claim).
       "098_whatsapp_operacoes_atomicas.sql", "098_rollback.sql",
       // 099 = reconciliação oficial de efeitos externos incertos (colunas de metadados + RPC); sem tocar o outbox/claim.
-      "099_whatsapp_reconciliacao_efeitos.sql", "099_rollback.sql"];
+      "099_whatsapp_reconciliacao_efeitos.sql", "099_rollback.sql",
+      // 100 = responsável de comunicação POR EMPRESA (substitui o destinatário por perfil nas RPCs 088/092/093/094 e no roster 096).
+      "100_comunicacao_responsavel_empresa.sql", "100_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

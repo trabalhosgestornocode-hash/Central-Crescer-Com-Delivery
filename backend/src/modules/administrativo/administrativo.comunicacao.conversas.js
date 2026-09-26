@@ -379,7 +379,7 @@ export async function enviarMensagem({ contatoId, envioId, texto, organizacaoId,
   let r;
   try {
     r = await enviarMensagemManual({
-      envioId: eid, organizacaoId: org.organizacaoId, unidadeId: unidade?.unidadeId ?? null, contatoId: id, destinatarioPerfilId: contato.perfis[0]?.perfilId ?? null,
+      envioId: eid, organizacaoId: org.organizacaoId, unidadeId: unidade?.unidadeId ?? null, contatoId: id, destinatarioPerfilId: null, contatoEmpresaId: contato.responsaveis?.find((x) => x.organizacaoId === org.organizacaoId)?.id ?? null,
       telefoneE164: contato.telefoneE164, texto: limpo, atorPerfilId: autor.perfilId ?? null, atorNome: autor.nome ?? null, whatsAppService,
       aoIniciar: (mensagemId) => audit({ ...base, acao: ACOES.COMUNICACAO_MANUAL_INICIADO, entidadeId: mensagemId, detalhes }),
     }, deps);

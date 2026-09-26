@@ -4,6 +4,7 @@
 // Rodar: node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-ttl-unknown-reconciliacao.test.js
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
+import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
@@ -36,7 +37,7 @@ const extras = [];
 const SEMPRE = { seg_sex: { inicio: "00:00", fim: "23:59" }, sab: { inicio: "00:00", fim: "23:59" }, dom: { inicio: "00:00", fim: "23:59" } };
 const HABILITADA = async () => ({
   empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
-  destinatarioContatoId: "contato-de-teste", destinatarioPerfilId: "perfil-de-teste",
+  destinatarioContatoId: "contato-de-teste", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "perfil-de-teste",
   timezone: "America/Fortaleza", janelas: SEMPRE, configHorarioValida: true, fonte: "TESTE",
 });
 
@@ -92,7 +93,7 @@ async function alertaComMensagem({ campos = {}, contato, tipo } = {}) {
   const alerta = await novoAlerta();
   const c = contato ?? await novoContato();
   const { data, error } = await supabase.from("comunicacao_mensagens").insert({
-    alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: c, destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
+    alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: c, contato_empresa_id: await responsavelDoContato({ organizacaoId: orgA, contatoId: c, perfilId }), destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
     tipo: tipo ?? `tipo_${tag}_${++seq}`, conteudo: "aviso", idempotency_key: `wa:alerta:${alerta.id}:v1`, status: SM.SCHEDULED,
     disponivel_em: new Date(Date.now() - 60_000).toISOString(), ...campos,
   }).select("*").single();
@@ -333,7 +334,7 @@ describe("DELIVERY_UNKNOWN — TRANSPORTE fica na mensagem; o ALERTA segue sendo
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const { alerta, job, chamadas, whatsAppService } = await gerarUnknown();
     const { data: v2, error } = await supabase.from("comunicacao_mensagens").insert({
-      alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: await novoContato(), destinatario_perfil_id: perfilId,
+      alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, ...(await (async () => { const cv = await novoContato(); return { contato_id: cv, contato_empresa_id: await responsavelDoContato({ organizacaoId: orgA, contatoId: cv, perfilId }) }; })()), destinatario_perfil_id: perfilId,
       canal: "whatsapp", direcao: "saida", tipo: `tipo_v2_${tag}`, conteudo: "lembrete", idempotency_key: `wa:alerta:${alerta.id}:v2`,
       status: SM.SCHEDULED, disponivel_em: new Date(Date.now() - 60_000).toISOString(),
     }).select("*").single();

@@ -4,6 +4,7 @@
 // Rodar: node --env-file=.env --test test/comunicacao-claim-concorrencia.test.js
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import { criarOrganizacao, apagarOrganizacao, migracao082Aplicada } from "./helpers/comunicacao-fixtures.js";
@@ -27,7 +28,7 @@ async function agendarJobsDePasse(qtd, prefixo) {
   const passado = new Date(Date.now() - 60_000);
   const jobs = [];
   for (let i = 0; i < qtd; i++) {
-    jobs.push(await filaRepo.agendarMensagem({
+    jobs.push(await agendarMensagemT({
       organizacaoId: orgId, contatoId: null, tipo: "teste_claim",
       conteudo: "conteúdo de teste", idempotencyKey: `${prefixo}-${i}`, disponivelEm: passado,
     }));
@@ -65,9 +66,9 @@ describe("comunicacao.fila — claim atômico e idempotência", { skip: PULAR_IN
     const chave = `retry-${Date.now()}`;
     const disponivelEm = new Date(Date.now() - 60_000);
 
-    const primeiro = await filaRepo.agendarMensagem({ organizacaoId: orgId, contatoId: null, tipo: "teste_retry", conteudo: "x", idempotencyKey: chave, disponivelEm });
+    const primeiro = await agendarMensagemT({ organizacaoId: orgId, contatoId: null, tipo: "teste_retry", conteudo: "x", idempotencyKey: chave, disponivelEm });
     // simula um "retry" do mesmo agendamento — MESMA chave.
-    const segundo = await filaRepo.agendarMensagem({ organizacaoId: orgId, contatoId: null, tipo: "teste_retry", conteudo: "x (retry)", idempotencyKey: chave, disponivelEm });
+    const segundo = await agendarMensagemT({ organizacaoId: orgId, contatoId: null, tipo: "teste_retry", conteudo: "x (retry)", idempotencyKey: chave, disponivelEm });
 
     assert.equal(primeiro.id, segundo.id, "um retry com a mesma idempotency_key criou uma SEGUNDA linha");
     const { count } = await supabase.from("comunicacao_mensagens").select("id", { count: "exact", head: true }).eq("idempotency_key", chave);
@@ -79,7 +80,7 @@ describe("comunicacao.fila — claim atômico e idempotência", { skip: PULAR_IN
   test("teste 15 — falha permanente termina em FAILED e não volta a ser reivindicável", async (t) => {
     if (!migracaoOk) return t.skip("migration 082 ainda não aplicada — pulando.");
     const chave = `falha-permanente-${Date.now()}`;
-    const job = await filaRepo.agendarMensagem({ organizacaoId: orgId, contatoId: null, tipo: "teste_falha", conteudo: "x", idempotencyKey: chave, disponivelEm: new Date(Date.now() - 60_000) });
+    const job = await agendarMensagemT({ organizacaoId: orgId, contatoId: null, tipo: "teste_falha", conteudo: "x", idempotencyKey: chave, disponivelEm: new Date(Date.now() - 60_000) });
     const [c] = await filaRepo.claimJobs({ limite: 1, worker: "w" }); // marca PROCESSING
     const e = await filaRepo.iniciarEnvio({ id: job.id, worker: "w", claimGeracao: c.claim_geracao });
     const r = await filaRepo.finalizarEnvio({ id: job.id, worker: "w", claimGeracao: c.claim_geracao, tentativa: e.tentativas, resultado: "FAILED", erro: "erro definitivo" });
@@ -95,7 +96,7 @@ describe("comunicacao.fila — claim atômico e idempotência", { skip: PULAR_IN
   test("teste 14 — falha transitória volta para SCHEDULED com disponivel_em no futuro (backoff), não imediato", async (t) => {
     if (!migracaoOk) return t.skip("migration 082 ainda não aplicada — pulando.");
     const chave = `falha-transitoria-${Date.now()}`;
-    const job = await filaRepo.agendarMensagem({ organizacaoId: orgId, contatoId: null, tipo: "teste_falha", conteudo: "x", idempotencyKey: chave, disponivelEm: new Date(Date.now() - 60_000) });
+    const job = await agendarMensagemT({ organizacaoId: orgId, contatoId: null, tipo: "teste_falha", conteudo: "x", idempotencyKey: chave, disponivelEm: new Date(Date.now() - 60_000) });
     const [c] = await filaRepo.claimJobs({ limite: 1, worker: "w" });
     const e = await filaRepo.iniciarEnvio({ id: job.id, worker: "w", claimGeracao: c.claim_geracao });
     const r = await filaRepo.finalizarEnvio({ id: job.id, worker: "w", claimGeracao: c.claim_geracao, tentativa: e.tentativas, resultado: "RETRY", erro: "pre-envio", retryAposSegundos: 30 });

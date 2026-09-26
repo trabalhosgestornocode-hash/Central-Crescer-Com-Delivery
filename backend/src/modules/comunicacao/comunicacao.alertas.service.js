@@ -36,8 +36,11 @@ import * as filaRepo from "./comunicacao.fila.repo.js";
 import * as contatosRepo from "./comunicacao.contatos.repo.js";
 // (contatosRepo não escolhe mais destinatário: só carrega o contato/perfil JÁ configurado para a política.)
 import * as tentativasRepo from "./comunicacao.tentativas.repo.js";
-import { obterConfig, modoAtual, obterTtlHoras, obterJitterMaxMs } from "./comunicacao.config.js";
+import { obterConfig, modoAtual, obterTtlHoras, obterJitterMaxMs, obterDisponibilidadeIfood } from "./comunicacao.config.js";
 import { avaliarEnvio } from "./comunicacao.policy.js";
+import * as contatosEmpresaRepo from "./comunicacao.contatosEmpresa.repo.js";
+import { avaliarResponsavelDaMensagem } from "./comunicacao.contatosEmpresa.repo.js";
+import { avaliarDisponibilidadeD1, janelasParaReferencia } from "./comunicacao.disponibilidade.js";
 import { classificarErroEnvio, backoffRetrySegundos } from "./comunicacao.entrega.js";
 import { dentroDaJanelaLocal, proximoHorarioDeEnvio, inicioDoDiaLocal, ConfiguracaoHorarioInvalida } from "./comunicacao.horario.js";
 import { resolverHabilitacaoEmpresa, janelasEfetivas } from "./comunicacao.habilitacao.js";
@@ -149,6 +152,20 @@ export async function detectarESincronizarAlertas({ hojeIso, pendenciasSnapshot 
 }
 
 /**
+ * Primeiro instante de envio de um alerta ORDINÁRIO, respeitando a DISPONIBILIDADE do D-1: se o candidato cair num horário em que a
+ * referência ainda é D-1 e cedo demais (< horário mínimo de envio), recalcula com as janelas ajustadas. A referência é reavaliada NO
+ * instante candidato (à noite o D-1 de hoje já é D-2 amanhã de manhã). Pura. Lança ConfiguracaoHorarioInvalida se não houver janela útil.
+ */
+export function calcularInstanteDeEnvio({ base, timezone, janelas, dataReferencia, disponibilidade, chave, spreadMaxMs }) {
+  let { instante } = proximoHorarioDeEnvio(base, timezone, janelas, chave, { spreadMaxMs });
+  if (!avaliarDisponibilidadeD1({ dataReferencia, agora: instante, timezone, config: disponibilidade }).disponivel) {
+    const ajustadas = janelasParaReferencia({ janelas, dataReferencia, agora: instante, timezone, config: disponibilidade });
+    ({ instante } = proximoHorarioDeEnvio(instante, timezone, ajustadas, chave, { spreadMaxMs }));
+  }
+  return instante;
+}
+
+/**
  * Para alertas DETECTED com organização HABILITADA e um contato resolvível, agenda o
  * envio — IDEMPOTENTE (mesma idempotencyKey por alerta: chamar 100 vezes gera no
  * máximo UMA mensagem) e ATÔMICO (mensagem + alerta SCHEDULED na mesma transação).
@@ -174,12 +191,14 @@ export async function agendarEnviosPendentes({
   const r = {
     agendados: 0, semDestinatario: 0, destinatarioInelegivel: 0, semHabilitacao: 0, configInvalida: 0,
     jaExistiam: 0, mensagensExpiradas: 0, entregaDesconhecida: 0, ignorados: 0, aguardaJanelaTardia: 0,
+    // D-1 ainda sem dados do iFood (antes do horário configurado): a empresa NÃO está atrasada, nada é agendado.
+    aguardandoDisponibilidadeIfood: 0,
   };
   const ativos = await alertasRepo.listarAlertasAtivos({ organizacaoId, tipoAlerta }, deps);
   const detectados = ativos.filter((a) => a.status === STATUS_ALERTA.DETECTED);
   if (!detectados.length) return r;
 
-  const [janelasGlobais, ttlHoras, jitterMaxMs] = await Promise.all([obterConfig("janelas", deps), obterTtlHoras(deps), obterJitterMaxMs(deps)]);
+  const [janelasGlobais, ttlHoras, jitterMaxMs, disponibilidade] = await Promise.all([obterConfig("janelas", deps), obterTtlHoras(deps), obterJitterMaxMs(deps), obterDisponibilidadeIfood(deps)]);
   const habilitacoes = new Map(); // uma leitura por organização por ciclo
   const habilitacaoDa = async (orgId) => {
     if (!habilitacoes.has(orgId)) habilitacoes.set(orgId, await resolverHabilitacao({ organizacaoId: orgId, tipoAlerta, agora }, deps));
@@ -193,18 +212,27 @@ export async function agendarEnviosPendentes({
     // pausa ativa sem um fim legível: não há horário confiável -> não agenda
     if (!janelas || (hab.empresaPausada === true && !hab.pausadoAte)) { r.configInvalida += 1; continue; }
 
-    // DESTINATÁRIO EXPLÍCITO: sem ele não há para quem enviar (fail-closed). O par contato/perfil
-    // NÃO é escolhido aqui nem passado ao banco — `comunicacao_agendar_mensagem_alerta` o lê da
-    // habilitação da organização e ainda revalida consentimento/verificação/opt-out/vínculo.
-    if (!hab.destinatarioContatoId || !hab.destinatarioPerfilId) { r.semDestinatario += 1; continue; }
+    // RESPONSÁVEL EXPLÍCITO DA EMPRESA: sem ele não há para quem enviar (fail-closed). NÃO é escolhido aqui nem passado ao banco —
+    // `comunicacao_agendar_mensagem_alerta` o lê da habilitação da organização e revalida (mesma empresa, ativo, WhatsApp validado,
+    // consentimento/verificação/opt-out). Nunca perfil/usuário/unidade.
+    if (!hab.destinatarioContatoId || !hab.destinatarioContatoEmpresaId) { r.semDestinatario += 1; continue; }
+
+    // DISPONIBILIDADE DO iFOOD (D-1): antes do horário configurado (hora LOCAL da empresa) o dado do dia anterior ainda está incompleto ->
+    // a empresa não está atrasada, NADA entra na fila.
+    let disp;
+    try { disp = avaliarDisponibilidadeD1({ dataReferencia: alerta.data_referencia, agora, timezone: hab.timezone, config: disponibilidade }); }
+    catch (e) { if (e instanceof ConfiguracaoHorarioInvalida) { r.configInvalida += 1; continue; } throw e; }
+    if (!disp.disponivel) { r.aguardandoDisponibilidadeIfood += 1; continue; }
 
     const idempotencyKey = `wa:alerta:${alerta.id}:v1`;
     const base = hab.empresaPausada === true && hab.pausadoAte && hab.pausadoAte.getTime() > agora.getTime() ? hab.pausadoAte : agora;
     let instante;
     try {
-      ({ instante } = proximoHorarioDeEnvio(base, hab.timezone, janelas,
-        chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }),
-        { spreadMaxMs: jitterMaxMs }));
+      instante = calcularInstanteDeEnvio({
+        base, timezone: hab.timezone, janelas, dataReferencia: alerta.data_referencia, disponibilidade,
+        chave: chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }),
+        spreadMaxMs: jitterMaxMs,
+      });
     } catch (e) {
       if (e instanceof ConfiguracaoHorarioInvalida) { r.configInvalida += 1; continue; }
       throw e;
@@ -274,7 +302,7 @@ export async function agendarAvisosTardiosD1({
     if (hab?.empresaHabilitada !== true || hab?.tipoPermitido !== true) { r.semHabilitacao += 1; continue; }
     if (hab.empresaPausada === true) { r.empresaPausada += 1; continue; }
     if (hab.configHorarioValida !== true || !hab.timezone) { r.configInvalida += 1; continue; }
-    if (!hab.destinatarioContatoId || !hab.destinatarioPerfilId) { r.semDestinatario += 1; continue; }
+    if (!hab.destinatarioContatoId || !hab.destinatarioContatoEmpresaId) { r.semDestinatario += 1; continue; }
 
     let janela;
     try { janela = janelaDeReforcoAgora(agora, hab.timezone); }
@@ -353,7 +381,7 @@ export async function agendarReforcosPendentes({
     if (hab?.empresaHabilitada !== true || hab?.tipoPermitido !== true) { r.semHabilitacao += 1; continue; }
     if (hab.empresaPausada === true) { r.empresaPausada += 1; continue; }
     if (hab.configHorarioValida !== true || !hab.timezone) { r.configInvalida += 1; continue; }
-    if (!hab.destinatarioContatoId || !hab.destinatarioPerfilId) { r.semDestinatario += 1; continue; }
+    if (!hab.destinatarioContatoId || !hab.destinatarioContatoEmpresaId) { r.semDestinatario += 1; continue; }
 
     let janela;
     try { janela = janelaDeReforcoAgora(agora, hab.timezone); }
@@ -577,32 +605,39 @@ export async function processarJobReivindicado(job, {
   }
 
   // 2) monta o snapshot do Policy Engine (100% dados já resolvidos — nada de I/O dentro de avaliarEnvio).
-  const [modo, janelasGlobais, cooldowns, limites, contato, perfil, statusProvider, habilitacao] = await Promise.all([
+  const [modo, janelasGlobais, cooldowns, limites, contato, contatoEmpresa, statusProvider, habilitacao, disponibilidade] = await Promise.all([
     modoAtual(deps), obterConfig("janelas", deps), obterConfig("cooldowns_horas", deps),
     obterConfig("limites", deps),
     job.contato_id ? contatosRepo.obterContato(job.contato_id, deps) : null,
-    job.destinatario_perfil_id ? contatosRepo.obterPerfilOperacional(job.destinatario_perfil_id, deps) : null,
+    // O RESPONSÁVEL DA EMPRESA DA MENSAGEM — só se pertencer à MESMA empresa (obterDaEmpresa devolve null para outra).
+    job.contato_empresa_id ? contatosEmpresaRepo.obterDaEmpresa({ organizacaoId: job.organizacao_id, contatoEmpresaId: job.contato_empresa_id }, deps) : null,
     // Gateway fora do ar NÃO é erro do job: é "provider offline" (bloqueio transitório).
     Promise.resolve().then(() => whatsAppService.getStatus()).catch(() => ({ conectado: false })),
     resolverHabilitacao({ organizacaoId: job.organizacao_id, tipoAlerta: job.tipo, agora }, deps),
+    obterDisponibilidadeIfood(deps),
   ]);
 
-  // O destinatário é configurado por ORGANIZAÇÃO (habilitação): o vínculo exigido é o da organização
-  // (usuarios_organizacoes ativo) — não o de uma unidade específica do alerta.
-  const vinculoValido = job.destinatario_perfil_id
-    ? await contatosRepo.perfilTemVinculo({ perfilId: job.destinatario_perfil_id, organizacaoId: job.organizacao_id, unidadeId: null }, deps)
-    : false;
+  // O destinatário é o RESPONSÁVEL DE COMUNICAÇÃO DA EMPRESA da mensagem — nunca um perfil/usuário/unidade. Vínculo válido = o responsável existe, é
+  // DESTA empresa, aponta para o mesmo registro de telefone da mensagem e o telefone não mudou desde o agendamento. (Inativo / WhatsApp não validado
+  // são vetados pelos portões próprios da política.)
+  const vinculoValido = !["SEM_RESPONSAVEL", "TELEFONE_DIVERGENTE"].includes(avaliarResponsavelDaMensagem({ job, contato, contatoEmpresa }).motivo);
 
   // Duplicidade REAL: outra mensagem do mesmo evento que já saiu/pode ter saído (inclui DELIVERY_UNKNOWN).
   const duplicado = job.alerta_id ? await filaRepo.existeOutraEntregaDoAlerta({ alertaId: job.alerta_id, exceptId: job.id, proposito: propositoDaMensagem(job) }, deps) : false;
 
   // HORÁRIO: sempre no timezone IANA da organização — nunca a hora do servidor, nunca UTC assumido.
-  const janelas = janelasEfetivas(habilitacao, janelasGlobais);
+  // D-1 ORDINÁRIO: antes de `envios_permitidos_apos` (hora local) a janela efetiva ainda está FECHADA para esta referência. Reforço e aviso tardio
+  // (20:00-22:00) têm janela própria e ficam de fora.
+  let janelas = janelasEfetivas(habilitacao, janelasGlobais);
   let configHorarioValida = janelas !== null;
   let dentroDaJanela = false;
   if (janelas) {
-    try { dentroDaJanela = dentroDaJanelaLocal(agora, habilitacao.timezone, janelas); }
-    catch (e) { if (!(e instanceof ConfiguracaoHorarioInvalida)) throw e; configHorarioValida = false; }
+    try {
+      if (propositoDaMensagem(job) !== PROPOSITO.REFORCO && !ehAvisoTardio(job)) {
+        janelas = janelasParaReferencia({ janelas, dataReferencia: job.data_referencia ?? null, agora, timezone: habilitacao.timezone, config: disponibilidade });
+      }
+      dentroDaJanela = dentroDaJanelaLocal(agora, habilitacao.timezone, janelas);
+    } catch (e) { if (!(e instanceof ConfiguracaoHorarioInvalida)) throw e; configHorarioValida = false; }
   }
 
   // H.4-A.8 — JIT do REFORÇO: regras próprias (20:00-22:00, D-1 de hoje, dom fora, cutoff 22:30, 1ª enviada hoje há >= 2h).
@@ -646,10 +681,11 @@ export async function processarJobReivindicado(job, {
   const snapshot = {
     modo, ehProativo: true,
     contatoExiste: !!contato,
-    telefoneVerificado: contato?.verificado,
+    // WhatsApp do responsável precisa estar VALIDADO nesta empresa (e o registro do telefone verificado).
+    telefoneVerificado: contato?.verificado === true && contatoEmpresa?.whatsapp_status === "VALIDADO",
     optOut: contato?.opt_out,
     consentimento: contato?.consentimento,
-    destinatarioAtivo: perfil?.ativo === true,
+    destinatarioAtivo: contatoEmpresa?.ativo === true,
     vinculoValido,
     empresaHabilitada: habilitacao?.empresaHabilitada,
     tipoPermitido: habilitacao?.tipoPermitido,

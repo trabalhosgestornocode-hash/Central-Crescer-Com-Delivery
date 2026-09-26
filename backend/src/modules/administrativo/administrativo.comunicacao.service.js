@@ -20,7 +20,8 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import * as repo from "./administrativo.comunicacao.repo.js";
 import { pendencias as lerPendencias } from "./administrativo.service.js";
-import { modoAtual, definirModo } from "../comunicacao/comunicacao.config.js";
+import { modoAtual, definirModo, obterDisponibilidadeIfood, definirDisponibilidadeIfood } from "../comunicacao/comunicacao.config.js";
+import * as contatosEmpresa from "../comunicacao/comunicacao.contatosEmpresa.repo.js";
 import { TIPOS_ALERTA, MODOS } from "../comunicacao/comunicacao.constants.js";
 import { timezoneValido } from "../comunicacao/comunicacao.horario.js";
 import { formatarMensagemPendencia } from "../comunicacao/comunicacao.template.js";
@@ -68,7 +69,11 @@ export async function resumo(deps = {}) {
     repo.contarMensagensPorStatus(deps),
   ]);
   const linhas = await repo.listarOrganizacoesComConfiguracao({}, deps);
-  const configuradas = linhas.filter((o) => !!o.comunicacao_habilitacoes).length;
+  const porEmpresa = await contatosEmpresa.listarDasEmpresas(linhas.map((o) => o.id), deps);
+  const principais = linhas.map((o) => contatosEmpresa.escolherPrincipal(porEmpresa.get(o.id)));
+  const configuradas = principais.filter(Boolean).length; // empresas COM responsável de comunicação
+  const validados = principais.filter((c) => c?.ativo && c.whatsapp_status === "VALIDADO").length;
+  const semResponsavel = principais.filter((c) => !c).length;
   const pausadas = linhas.filter((o) => {
     const ate = o.comunicacao_habilitacoes?.pausado_ate;
     return ate && new Date(ate).getTime() > Date.now();
@@ -95,7 +100,7 @@ export async function resumo(deps = {}) {
       estado: gateway?.estado === "conectado" && fila.deliveryUnknown === 0 ? "operacional" : "atencao",
       motivo: gateway?.estado !== "conectado" ? "WhatsApp desconectado" : fila.deliveryUnknown > 0 ? "Há mensagens com entrega não confirmada" : null,
     },
-    empresas: { total: totalOrgs, configuradas, habilitadas: orgsHabilitadas, pausadas },
+    empresas: { total: linhas.length || totalOrgs, configuradas, validados, semResponsavel, habilitadas: orgsHabilitadas, pausadas },
     fila: {
       scheduled: porStatus.SCHEDULED ?? 0, processing: porStatus.PROCESSING ?? 0, sending: porStatus.SENDING ?? 0,
       deliveryUnknown: porStatus.DELIVERY_UNKNOWN ?? 0, failed: porStatus.FAILED ?? 0,
@@ -105,38 +110,67 @@ export async function resumo(deps = {}) {
 }
 
 /** Próximo passo da empresa na Central — texto de negócio derivado dos dados reais (nunca inventado). */
-export function proximaAcaoOrganizacao({ hab, contato, habilitada, modo, temAgendada }) {
+export function proximaAcaoOrganizacao({ hab, contato, responsavel, habilitada, modo, temAgendada }) {
+  // migration 100: o destinatário é o RESPONSÁVEL DA EMPRESA. `responsavel` omitido = chamada antiga (só o contato).
+  if (responsavel !== undefined) {
+    if (!responsavel) return "Cadastrar o responsável pelas comunicações";
+    if (responsavel.ativo !== true) return "Responsável com avisos desativados";
+  }
   if (!hab || !hab.destinatario_contato_id) return "Configurar o destinatário";
   if (!contato) return "Configurar o destinatário";
   if (contato.opt_out === true) return "Destinatário em opt-out — não enviar";
-  if (contato.consentimento !== true || contato.verificado !== true) return "Confirmar consentimento e verificação";
+  if (contato.consentimento !== true || contato.verificado !== true || (responsavel && responsavel.whatsapp_status !== "VALIDADO")) return "Confirmar consentimento e verificação";
   if (!hab.timezone || !hab.tipos_permitidos?.length) return "Concluir a configuração (timezone e tipo de alerta)";
   if (!habilitada) return "Habilitar a comunicação desta empresa";
   if (modo !== "NORMAL") return "Aguardando a ativação da automação";
   return temAgendada ? "Envio agendado" : "Monitorando pendências";
 }
 
-function statusConfiguracao(hab) {
-  if (!hab) return "NAO_CONFIGURADA";
-  const pausada = hab.pausado_ate && new Date(hab.pausado_ate).getTime() > Date.now();
-  const completo = !!(hab.timezone && hab.destinatario_contato_id && hab.destinatario_perfil_id && hab.tipos_permitidos?.length);
+function statusConfiguracao(hab, responsavel = null) {
+  if (!hab && !responsavel) return "NAO_CONFIGURADA";
+  const pausada = hab?.pausado_ate && new Date(hab.pausado_ate).getTime() > Date.now();
+  const completo = !!(hab?.timezone && hab?.destinatario_contato_id && hab?.destinatario_contato_empresa_id && hab?.tipos_permitidos?.length);
+  if (responsavel && responsavel.ativo !== true) return "DESATIVADA";
   if (pausada) return "PAUSADA";
-  if (hab.habilitado === true) return "HABILITADA"; // nunca deve ocorrer nesta fase — mantido só como projeção honesta do dado real
+  if (hab?.habilitado === true) return "HABILITADA";
   return completo ? "PRONTA_PARA_PILOTO" : "CONFIGURACAO_INCOMPLETA";
 }
 
-/** GET /administrativo/comunicacao/organizacoes?busca= */
-export async function organizacoes({ busca } = {}, deps = {}) {
+const ROTULO_WA = { NAO_CADASTRADO: "NAO_CADASTRADO", AGUARDANDO_VALIDACAO: "AGUARDANDO_VALIDACAO", VALIDADO: "VALIDADO", ERRO: "ERRO", DESATIVADO: "DESATIVADO" };
+/** Status do WhatsApp do responsável, para exibição. Só usa dados do vínculo EXPLÍCITO da empresa. */
+function statusWhatsapp(responsavel, optOut = false) {
+  if (!responsavel) return ROTULO_WA.NAO_CADASTRADO;
+  if (responsavel.ativo !== true) return ROTULO_WA.DESATIVADO;
+  if (optOut || responsavel.whatsapp_status === "ERRO") return ROTULO_WA.ERRO;
+  if (responsavel.whatsapp_status === "VALIDADO") return ROTULO_WA.VALIDADO;
+  return ROTULO_WA.AGUARDANDO_VALIDACAO;
+}
+const semAcento = (t) => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+const FILTROS_EMPRESA = ["todos", "configurados", "sem_responsavel", "aguardando_validacao", "validados", "desativada"];
+
+/**
+ * GET /administrativo/comunicacao/organizacoes?busca=&filtro=
+ *
+ * UMA linha por EMPRESA (nunca por unidade). O responsável vem EXCLUSIVAMENTE de comunicacao_contatos_empresa (empresa -> responsável -> telefone ->
+ * validação): nunca de usuários, perfis, acesso (usuarios_organizacoes/usuarios_unidades), unidade selecionada ou matriz. Telefone sempre mascarado
+ * na saída; a BUSCA por telefone é feita aqui, no servidor, sobre o número completo, que nunca sai.
+ */
+export async function organizacoes({ busca, filtro } = {}, deps = {}) {
+  if (filtro !== undefined && filtro !== null && filtro !== "" && !FILTROS_EMPRESA.includes(filtro)) {
+    throw ApiError.badRequest(`filtro inválido. Aceito: ${FILTROS_EMPRESA.join(", ")}.`, { codigo: "FILTRO_INVALIDO" });
+  }
   const [linhas, snapshot, atividade, unidadesTodas, ultimaMsg, modo] = await Promise.all([
-    repo.listarOrganizacoesComConfiguracao({ busca }, deps),
+    repo.listarOrganizacoesComConfiguracao({}, deps),
     lerPendencias({}, deps),
     repo.obterAtividadeRecentePorOrganizacao(deps),
     repo.listarUnidades({}, deps),
     repo.obterUltimaMensagemPorOrganizacao(deps),
     modoAtual(deps),
   ]);
-  // contatos dos destinatários configurados — UMA consulta em lote; só o telefone MASCARADO sai daqui.
-  const contatos = await repo.listarContatosPorIds(linhas.map((o) => o.comunicacao_habilitacoes?.destinatario_contato_id), deps);
+  const porEmpresa = await contatosEmpresa.listarDasEmpresas(linhas.map((o) => o.id), deps);
+  const principais = new Map(linhas.map((o) => [o.id, contatosEmpresa.escolherPrincipal(porEmpresa.get(o.id))]));
+  // registros de telefone dos responsáveis (consentimento/verificação/opt-out) — UMA consulta em lote; só o telefone MASCARADO sai daqui.
+  const contatos = await repo.listarContatosPorIds([...principais.values()].map((c) => c?.contato_whatsapp_id).filter(Boolean), deps);
   const contatoPorId = new Map(contatos.map((c) => [c.id, c]));
   const unidadesPorOrg = new Map();
   for (const u of unidadesTodas) {
@@ -150,66 +184,89 @@ export async function organizacoes({ busca } = {}, deps = {}) {
     pendenciasPorOrg.set(u.organizacaoId, (pendenciasPorOrg.get(u.organizacaoId) ?? 0) + 1);
   }
 
-  return linhas.map((o) => {
+  let itens = linhas.map((o) => {
     const hab = o.comunicacao_habilitacoes ?? null;
-    const contato = hab?.destinatario_contato_id ? (contatoPorId.get(hab.destinatario_contato_id) ?? null) : null;
+    const resp = principais.get(o.id) ?? null;
+    const contato = resp?.contato_whatsapp_id ? (contatoPorId.get(resp.contato_whatsapp_id) ?? null) : null;
     const habilitada = hab?.habilitado === true;
     const unidades = unidadesPorOrg.get(o.id) ?? [];
+    const whatsapp = statusWhatsapp(resp, contato?.opt_out === true);
+    const pausada = !!(hab?.pausado_ate && new Date(hab.pausado_ate).getTime() > Date.now());
     return {
       organizacaoId: o.id,
       nome: o.nome,
       // H.4-B.5 — Central: por que esta empresa pode ou não receber, e qual é o próximo passo (tudo derivado dos dados reais).
       habilitada,
       unidadesMonitoradas: unidades.length, unidades: unidades.slice(0, 20),
+      responsavel: resp ? { id: resp.id, nome: resp.nome, tipo: resp.tipo, ativo: resp.ativo, telefoneMascarado: mascararTelefoneUi(resp.telefone_e164), whatsappValidadoEm: resp.whatsapp_validado_em ?? null } : null,
+      whatsappStatus: whatsapp,
       contato: contato ? {
         telefoneMascarado: mascararTelefoneUi(contato.telefone_e164), consentimento: contato.consentimento === true,
         verificado: contato.verificado === true, optOut: contato.opt_out === true,
       } : null,
       ultimaMensagem: ultimaMsg.get(o.id) ?? null,
-      proximaAcao: proximaAcaoOrganizacao({ hab, contato, habilitada, modo, temAgendada: !!atividade.proximoPorOrg.get(o.id) }),
-      status: statusConfiguracao(hab),
-      destinatarioConfigurado: !!(hab?.destinatario_contato_id && hab?.destinatario_perfil_id),
+      proximaAcao: proximaAcaoOrganizacao({ hab, contato, responsavel: resp, habilitada, modo, temAgendada: !!atividade.proximoPorOrg.get(o.id) }),
+      status: statusConfiguracao(hab, resp),
+      destinatarioConfigurado: !!(resp && hab?.destinatario_contato_empresa_id === resp.id),
       timezoneConfigurado: !!hab?.timezone,
-      pausada: !!(hab?.pausado_ate && new Date(hab.pausado_ate).getTime() > Date.now()),
+      pausada,
       pendenciasAtuais: pendenciasPorOrg.get(o.id) ?? 0,
       ultimoEnvioEm: atividade.ultimoPorOrg.get(o.id) ?? null,
       proximoEnvioEm: atividade.proximoPorOrg.get(o.id) ?? null,
+      _busca: semAcento(`${o.nome} ${resp?.nome ?? ""}`) + " " + String(resp?.telefone_e164 ?? "").replace(/\D/g, ""),
     };
   });
+
+  if (busca && String(busca).trim()) {
+    const termo = semAcento(String(busca).trim());
+    const digitos = termo.replace(/\D/g, "");
+    itens = itens.filter((i) => i._busca.includes(termo) || (digitos.length >= 3 && i._busca.includes(digitos)));
+  }
+  const predicados = {
+    configurados: (i) => !!i.responsavel,
+    sem_responsavel: (i) => !i.responsavel,
+    aguardando_validacao: (i) => i.whatsappStatus === ROTULO_WA.AGUARDANDO_VALIDACAO,
+    validados: (i) => i.whatsappStatus === ROTULO_WA.VALIDADO,
+    desativada: (i) => i.status === "DESATIVADA" || i.pausada,
+  };
+  if (filtro && predicados[filtro]) itens = itens.filter(predicados[filtro]);
+  return itens.map(({ _busca, ...resto }) => resto);
 }
 
 /** GET /administrativo/comunicacao/organizacoes/:organizacaoId */
 export async function detalheOrganizacao({ organizacaoId } = {}, deps = {}) {
   const orgId = v.uuid(organizacaoId, "Empresa");
-  const [org, snapshot, modo] = await Promise.all([
+  const [org, snapshot, modo, responsaveis] = await Promise.all([
     repo.obterOrganizacaoComConfiguracao(orgId, deps),
     lerPendencias({}, deps),
     modoAtual(deps),
+    contatosEmpresa.listarDaEmpresa(orgId, deps),
   ]);
   if (!org) throw ApiError.notFound("Empresa não encontrada.");
 
   const hab = org.comunicacao_habilitacoes ?? null;
-  const [contato, perfil] = await Promise.all([
-    hab?.destinatario_contato_id ? repo.obterContato(hab.destinatario_contato_id, deps) : null,
-    hab?.destinatario_perfil_id ? repo.obterPerfilOperacional(hab.destinatario_perfil_id, deps) : null,
-  ]);
+  const principal = contatosEmpresa.escolherPrincipal(responsaveis);
+  // O registro de telefone (consentimento/verificação/opt-out) do RESPONSÁVEL da empresa — nunca de outra fonte.
+  const contato = principal?.contato_whatsapp_id ? await repo.obterContato(principal.contato_whatsapp_id, deps) : null;
 
   const unidadesDaOrg = (snapshot.unidades ?? []).filter((u) => u.organizacaoId === orgId);
 
   return {
     organizacao: { organizacaoId: org.id, nome: org.nome, status: org.status },
     configuracao: {
-      status: statusConfiguracao(hab),
+      status: statusConfiguracao(hab, principal),
+      habilitado: hab?.habilitado === true,
       timezone: hab?.timezone ?? null,
       tiposPermitidos: hab?.tipos_permitidos ?? [],
       pausadoAte: hab?.pausado_ate ?? null,
       pausadoMotivo: hab?.pausado_motivo ?? null,
-      destinatario: contato ? {
-        telefoneMascarado: repo.mascararTelefone(contato.telefone_e164),
-        verificado: contato.verificado, consentimento: contato.consentimento, optOut: contato.opt_out,
-        perfilOperacionalId: hab?.destinatario_perfil_id ?? null, // para pré-selecionar no combobox do frontend
-        perfilAtivo: perfil?.ativo ?? null,
+      destinatario: principal ? {
+        contatoEmpresaId: principal.id, nome: principal.nome, tipo: principal.tipo, ativo: principal.ativo, observacoes: principal.observacoes ?? null,
+        telefoneMascarado: repo.mascararTelefone(principal.telefone_e164),
+        whatsappStatus: statusWhatsapp(principal, contato?.opt_out === true), whatsappValidadoEm: principal.whatsapp_validado_em ?? null,
+        verificado: contato?.verificado === true, consentimento: contato?.consentimento === true, optOut: contato?.opt_out === true,
       } : null,
+      responsaveis: responsaveis.map((r) => ({ id: r.id, nome: r.nome, tipo: r.tipo, ativo: r.ativo, telefoneMascarado: repo.mascararTelefone(r.telefone_e164), whatsappStatus: statusWhatsapp(r) })),
       atualizadoEm: hab?.updated_at ?? null,
     },
     // Checklist de prontidão para piloto (H.4-A, itens 34-36) — 100% DERIVADO
@@ -220,13 +277,13 @@ export async function detalheOrganizacao({ organizacaoId } = {}, deps = {}) {
     // sempre `false` hoje (habilitado=false hard-coded, modo=DISABLED) —
     // nunca hardcoded no código, sempre lidos dos valores reais.
     checklistPiloto: {
-      perfilAssociado: !!(hab?.destinatario_contato_id && hab?.destinatario_perfil_id),
-      telefoneValido: !!contato?.telefone_e164,
+      responsavelDefinido: !!(principal && hab?.destinatario_contato_empresa_id === principal.id),
+      telefoneValido: !!principal?.telefone_e164,
       consentimento: contato?.consentimento === true,
-      telefoneVerificado: contato?.verificado === true,
+      telefoneVerificado: contato?.verificado === true && principal?.whatsapp_status === "VALIDADO",
       timezone: !!hab?.timezone,
       tipoAlerta: !!(hab?.tipos_permitidos?.length),
-      allowlistPiloto: telefoneAutorizadoNoPiloto(contato?.telefone_e164 ?? null),
+      allowlistPiloto: telefoneAutorizadoNoPiloto(principal?.telefone_e164 ?? null),
       organizacaoHabilitada: hab?.habilitado === true,
       comunicacaoGlobalAtiva: modo === "NORMAL",
     },
@@ -274,23 +331,7 @@ export async function preverMensagem({ organizacaoId, unidadeId } = {}, deps = {
   };
 }
 
-/**
- * GET /administrativo/comunicacao/organizacoes/:organizacaoId/perfis-elegiveis
- *
- * Checkpoint H.3-A.1, itens 3-6: o drawer não pode mais pedir um UUID de
- * perfil em texto livre. Só perfis com vínculo ATIVO nesta organização
- * (mesmo critério de elegibilidade que `comunicacao_agendar_mensagem_alerta`
- * e `perfilTemVinculo` já exigem no banco) aparecem aqui — o frontend nunca
- * vê perfis de outra organização, e mesmo que um ID de outra organização
- * seja enviado manualmente na escrita, o backend/banco continuam recusando
- * (ver `atualizarConfiguracao`/constraint de vínculo — nenhuma mudança ali).
- */
-export async function perfisElegiveis({ organizacaoId } = {}, deps = {}) {
-  const orgId = v.uuid(organizacaoId, "Empresa");
-  const org = await repo.obterOrganizacaoComConfiguracao(orgId, deps);
-  if (!org) throw ApiError.notFound("Empresa não encontrada.");
-  return repo.listarPerfisElegiveis(orgId, deps);
-}
+// (Removido na migration 100: `perfisElegiveis` — ver a nota em administrativo.comunicacao.repo.js.)
 
 /**
  * PUT /administrativo/comunicacao/organizacoes/:organizacaoId/configuracao
@@ -304,6 +345,10 @@ export async function perfisElegiveis({ organizacaoId } = {}, deps = {}) {
 export async function atualizarConfiguracao({
   organizacaoId, habilitado, telefoneE164, perfilOperacionalId, timezone, tiposPermitidos, pausadoAte, pausadoMotivo,
 } = {}, autor, deps = {}) {
+  // O responsável NÃO é configurado aqui (nem por telefone solto, nem por perfil): use o cadastro de responsável.
+  if (telefoneE164 !== undefined || perfilOperacionalId !== undefined) {
+    throw ApiError.badRequest("O responsável pelas comunicações é cadastrado em PUT .../responsavel (empresa -> responsável -> telefone).", { codigo: "USE_CADASTRO_DE_RESPONSAVEL" });
+  }
   const orgId = v.uuid(organizacaoId, "Empresa");
   if (habilitado !== undefined && habilitado !== false) {
     throw ApiError.badRequest("Habilitação de envio não é permitida neste checkpoint (H.3-A é somente configuração).", { codigo: "HABILITACAO_NAO_PERMITIDA" });
@@ -316,14 +361,11 @@ export async function atualizarConfiguracao({
       throw ApiError.badRequest(`tiposPermitidos inválido. Aceito: ${TIPOS_ALERTA_VALIDOS.join(", ")}.`, { codigo: "TIPO_ALERTA_INVALIDO" });
     }
   }
-  if (perfilOperacionalId !== undefined && perfilOperacionalId !== null) v.uuid(perfilOperacionalId, "Perfil");
 
-  const atualizado = await repo.atualizarConfiguracaoOrganizacao({
-    organizacaoId: orgId, telefoneE164, perfilOperacionalId: perfilOperacionalId ?? undefined,
-    timezone, tiposPermitidos, pausadoAte, pausadoMotivo,
-  }, autor, deps);
+  const atualizado = await repo.atualizarConfiguracaoOrganizacao({ organizacaoId: orgId, timezone, tiposPermitidos, pausadoAte, pausadoMotivo }, autor, deps);
 
-  return { organizacaoId: orgId, status: statusConfiguracao(atualizado), atualizadoEm: atualizado.updated_at };
+  const principal = contatosEmpresa.escolherPrincipal(await contatosEmpresa.listarDaEmpresa(orgId, deps));
+  return { organizacaoId: orgId, status: statusConfiguracao(atualizado, principal), atualizadoEm: atualizado.updated_at };
 }
 
 /**
@@ -418,6 +460,11 @@ export async function definirHabilitacao({ organizacaoId, habilitado, confirmaca
   }
   const hab = org.comunicacao_habilitacoes ?? null;
   const contato = hab?.destinatario_contato_id ? await repo.obterContato(hab.destinatario_contato_id, deps) : null;
+  const responsavel = hab?.destinatario_contato_empresa_id
+    ? await contatosEmpresa.obterDaEmpresa({ organizacaoId: orgId, contatoEmpresaId: hab.destinatario_contato_empresa_id }, deps) : null;
+  if (!responsavel) throw conflito("Cadastre o responsável pelas comunicações desta empresa antes de habilitar.", "SEM_DESTINATARIO");
+  if (responsavel.ativo !== true) throw conflito("O responsável desta empresa está com os avisos desativados.", "DESTINATARIO_INELEGIVEL");
+  if (responsavel.whatsapp_status !== "VALIDADO") throw conflito("Valide o WhatsApp do responsável antes de habilitar.", "DESTINATARIO_INELEGIVEL");
   const piloto = estadoPilotoRuntime(contato?.telefone_e164 ?? null, deps.env ?? process.env);
   if (!piloto.pilotoAtivo) throw conflito("O piloto não está ativo no servidor (COMUNICACAO_PILOTO_ENABLED).", "PILOTO_INATIVO");
   if (piloto.quantidadeDestinos !== 1) throw conflito("A allowlist do piloto precisa ter exatamente 1 destino.", "ALLOWLIST_INVALIDA");
@@ -471,6 +518,50 @@ export async function alterarModoGlobal({ modo, confirmacaoExplicita } = {}, aut
     detalhes: { de: anterior, para: MODOS.NORMAL, organizacoesHabilitadas: a.organizacoesHabilitadas, pendenciasElegiveis: a.pendenciasElegiveis, quantidadeDestinos: a.piloto.quantidadeDestinos },
   });
   return { modo: MODOS.NORMAL, anterior, alterou: true };
+}
+
+/**
+ * PUT /administrativo/comunicacao/organizacoes/:organizacaoId/responsavel
+ * Cadastra/edita o RESPONSÁVEL PRINCIPAL pelas comunicações desta empresa (nome + telefone + observações + ativo). Trocar o telefone invalida a
+ * validação do WhatsApp. NÃO exige nem consulta usuário/perfil/unidade. Nunca altera `habilitado`.
+ */
+export async function salvarResponsavel({ organizacaoId, nome, telefoneE164, observacoes, ativo } = {}, autor, deps = {}) {
+  const orgId = v.uuid(organizacaoId, "Empresa");
+  if (ativo !== undefined && typeof ativo !== "boolean") throw ApiError.badRequest("ativo deve ser booleano.", { codigo: "ATIVO_INVALIDO" });
+  const salvo = await contatosEmpresa.salvarResponsavelPrincipal({ organizacaoId: orgId, nome, telefoneE164, observacoes, ativo }, autor, deps);
+  return { organizacaoId: orgId, contatoEmpresaId: salvo.id, whatsappStatus: statusWhatsapp(salvo) };
+}
+
+/** PUT /administrativo/comunicacao/organizacoes/:organizacaoId/responsaveis/:contatoId/ativo — ativar/desativar os avisos. */
+export async function definirAtivoResponsavel({ organizacaoId, contatoEmpresaId, ativo } = {}, autor, deps = {}) {
+  const orgId = v.uuid(organizacaoId, "Empresa");
+  const cid = v.uuid(contatoEmpresaId, "Responsável");
+  if (typeof ativo !== "boolean") throw ApiError.badRequest("ativo deve ser booleano.", { codigo: "ATIVO_INVALIDO" });
+  const r = await contatosEmpresa.definirAtivo({ organizacaoId: orgId, contatoEmpresaId: cid, ativo }, autor, deps);
+  return { organizacaoId: orgId, contatoEmpresaId: r.id, ativo: r.ativo, whatsappStatus: statusWhatsapp(r) };
+}
+
+/** POST /administrativo/comunicacao/organizacoes/:organizacaoId/responsaveis/:contatoId/validar — confirmação humana explícita. */
+export async function validarResponsavel({ organizacaoId, contatoEmpresaId, confirmacaoExplicita } = {}, autor, deps = {}) {
+  const orgId = v.uuid(organizacaoId, "Empresa");
+  const cid = v.uuid(contatoEmpresaId, "Responsável");
+  if (confirmacaoExplicita !== true) {
+    throw ApiError.badRequest("Confirmação explícita obrigatória — envie confirmacaoExplicita=true só depois de autorização inequívoca do operador.", { codigo: "CONFIRMACAO_OBRIGATORIA" });
+  }
+  const r = await contatosEmpresa.validarWhatsApp({ organizacaoId: orgId, contatoEmpresaId: cid }, autor, deps);
+  return { organizacaoId: orgId, contatoEmpresaId: r.id, whatsappStatus: statusWhatsapp(r), whatsappValidadoEm: r.whatsapp_validado_em };
+}
+
+/** GET /administrativo/comunicacao/disponibilidade — horários de disponibilidade dos dados do iFood (D-1). */
+export async function disponibilidade(deps = {}) {
+  const d = await obterDisponibilidadeIfood(deps);
+  return { dadosDisponiveisApos: d.dados_disponiveis_apos, enviosPermitidosApos: d.envios_permitidos_apos };
+}
+
+/** PUT /administrativo/comunicacao/disponibilidade */
+export async function atualizarDisponibilidade({ dadosDisponiveisApos, enviosPermitidosApos } = {}, autor, deps = {}) {
+  const r = await definirDisponibilidadeIfood({ dadosDisponiveisApos, enviosPermitidosApos }, { atorPerfilId: autor?.perfilId ?? null, atorId: autor?.contaId ?? null }, deps);
+  return { dadosDisponiveisApos: r.dados_disponiveis_apos, enviosPermitidosApos: r.envios_permitidos_apos };
 }
 
 /** GET /administrativo/comunicacao/fila */

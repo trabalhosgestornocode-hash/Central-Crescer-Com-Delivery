@@ -129,14 +129,37 @@ export function htmlFluxoComunicacao() {
 
 const simNao = (v, sim, nao, classeNao = "muted") => (v ? badge("ok", sim) : badge(classeNao, nao));
 
+const ROTULO_WHATSAPP = {
+  NAO_CADASTRADO: ["muted", "Não cadastrado"], AGUARDANDO_VALIDACAO: ["atencao", "Aguardando validação"], VALIDADO: ["ok", "Validado"],
+  ERRO: ["critico", "Erro"], DESATIVADO: ["muted", "Desativado"],
+};
+export const chipWhatsappEmpresa = (s) => { const [classe, rotulo] = ROTULO_WHATSAPP[s] ?? ["muted", s ?? "—"]; return badge(classe, rotulo); };
+
+/** Ações por empresa — todas por ID de empresa/responsável (nada por unidade/usuário). */
+function botoesEmpresa(o) {
+  const id = escapeHtml(o.organizacaoId);
+  const acao = (a, rotulo) => `<button type="button" class="btn btn-ghost btn-sm" data-padm-com-acao="${a}" data-padm-com-org="${id}">${rotulo}</button>`;
+  const r = o.responsavel;
+  return `<div class="padm-com-acoes">
+    ${acao("gerenciar", "Gerenciar")}
+    ${acao("editar", r ? "Editar responsável" : "Cadastrar responsável")}
+    ${r && o.whatsappStatus !== "VALIDADO" ? acao("validar", "Validar número") : ""}
+    ${r ? `<button type="button" class="btn btn-ghost btn-sm" data-padm-com-acao="alternar-ativo" data-padm-com-org="${id}" data-padm-com-contato="${escapeHtml(r.id)}" data-padm-com-ativo="${r.ativo ? "1" : "0"}">${r.ativo ? "Desativar avisos" : "Ativar avisos"}</button>` : ""}
+    ${acao("historico", "Ver histórico")}
+  </div>`;
+}
+
 function linhaEmpresa(o) {
   const c = o.contato;
+  const r = o.responsavel;
   const un = (o.unidades ?? []).map((u) => u.nome).filter(Boolean);
   const ultima = o.ultimaMensagem;
-  return `<tr>
+  return `<tr data-padm-com-linha="${escapeHtml(o.organizacaoId)}">
     <td><strong>${escapeHtml(o.nome)}</strong><small>${o.unidadesMonitoradas ?? un.length} unidade${(o.unidadesMonitoradas ?? un.length) === 1 ? "" : "s"} monitorada${(o.unidadesMonitoradas ?? un.length) === 1 ? "" : "s"}${un.length ? ` — ${escapeHtml(un.slice(0, 2).join(", "))}${un.length > 2 ? "…" : ""}` : ""}</small></td>
     <td>${o.habilitada ? badge("ok", "Habilitada") : badge("muted", "Desabilitada")}</td>
-    <td>${c ? `<span class="padm-mono">${escapeHtml(c.telefoneMascarado ?? "—")}</span>` : `<span class="padm-vazio">Não definido</span>`}</td>
+    <td>${r ? escapeHtml(r.nome) : `<span class="padm-vazio">Sem responsável</span>`}</td>
+    <td>${chipWhatsappEmpresa(o.whatsappStatus)}</td>
+    <td>${c ? `<span class="padm-mono">${escapeHtml(c.telefoneMascarado ?? "—")}</span>` : (r ? `<span class="padm-mono">${escapeHtml(r.telefoneMascarado ?? "—")}</span>` : "—")}</td>
     <td>${c ? simNao(c.consentimento, "Confirmado", "Pendente", "atencao") : "—"}</td>
     <td>${c ? simNao(c.verificado, "Verificado", "Não verificado", "atencao") : "—"}</td>
     <td>${c ? (c.optOut ? badge("critico", "Sim") : "Não") : "—"}</td>
@@ -144,23 +167,51 @@ function linhaEmpresa(o) {
     <td>${ultima?.em ? escapeHtml(fmtDataCurta(ultima.em)) : "—"}</td>
     <td>${ultima?.status ? chipStatusMensagem(ultima.status) : "—"}</td>
     <td>${escapeHtml(o.proximaAcao ?? "—")}</td>
-    <td><button type="button" class="btn btn-ghost btn-sm" data-padm-com-org="${escapeHtml(o.organizacaoId)}">Ver detalhes</button></td>
+    <td>${botoesEmpresa(o)}</td>
   </tr>`;
 }
 
-export function htmlEmpresasCentral(orgs, termo = "") {
-  const t = String(termo ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
-  const norm = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-  const filtradas = t ? orgs.filter((o) => norm(o.nome).includes(t) || (o.unidades ?? []).some((u) => norm(u.nome).includes(t))) : orgs;
-  if (!orgs.length) return vazio("Nenhuma empresa encontrada.", "Cadastre empresas para acompanhar a comunicação.", { tom: "neutro", icone: "message-circle" });
-  return `
-    ${busca("padm-com-busca", "Buscar empresa ou unidade…", termo)}
-    <div class="padm-tabela-wrap">
+const FILTROS_EMPRESAS = [
+  ["todos", "Todos"], ["configurados", "Configurados"], ["sem_responsavel", "Sem responsável"],
+  ["aguardando_validacao", "Aguardando validação"], ["validados", "Validados"], ["desativada", "Comunicação desativada"],
+];
+
+/** Resumo do topo da aba Empresas — números do backend (camada de comunicação), nunca de usuários/unidades. */
+export function htmlResumoEmpresas(r) {
+  if (!r?.empresas) return "";
+  const e = r.empresas;
+  return cards([
+    card({ label: "Empresas cadastradas", valor: String(e.total ?? 0), icone: "building" }),
+    card({ label: "Responsáveis configurados", valor: String(e.configuradas ?? 0), icone: "check-circle" }),
+    card({ label: "WhatsApps validados", valor: String(e.validados ?? 0), icone: "check-circle", tom: (e.validados ?? 0) > 0 ? "ok" : "" }),
+    card({ label: "Empresas sem responsável", valor: String(e.semResponsavel ?? 0), icone: "alert-triangle", tom: (e.semResponsavel ?? 0) > 0 ? "atencao" : "" }),
+  ].join(""));
+}
+
+/**
+ * Aba EMPRESAS — UMA linha por EMPRESA (nunca por unidade). O responsável vem só do vínculo explícito empresa -> responsável de comunicação;
+ * nada aqui olha usuário, unidade ou perfil. Busca (empresa/responsável/telefone) e filtro são resolvidos no SERVIDOR (o telefone completo
+ * nunca chega ao navegador); a lista recebida já vem filtrada.
+ */
+export function htmlEmpresasCentral(orgs, termo = "", filtro = "todos", resumo = null) {
+  const semFiltro = !termo && (!filtro || filtro === "todos");
+  const filtros = `<div class="padm-segm" role="tablist">${FILTROS_EMPRESAS.map(([v, r]) => `
+    <button type="button" class="padm-segm-btn ${v === filtro ? "ativo" : ""}" data-padm-com-filtro="${v}" role="tab" aria-selected="${v === filtro}">${escapeHtml(r)}</button>`).join("")}</div>`;
+  const tabela = !orgs.length
+    ? (semFiltro
+      ? vazio("Nenhuma empresa encontrada.", "Cadastre empresas para acompanhar a comunicação.", { tom: "neutro", icone: "message-circle" })
+      : `<p class="padm-vazio"><em>Nenhuma empresa encontrada para este filtro/busca.</em></p>`)
+    : `<div class="padm-tabela-wrap">
       <table class="padm-tabela padm-tabela--larga">
-        <thead><tr><th>Empresa</th><th>Comunicação</th><th>Contato</th><th>Consentimento</th><th>Número</th><th>Opt-out</th><th>Pendências</th><th>Última mensagem</th><th>Último status</th><th>Próxima ação</th><th></th></tr></thead>
-        <tbody>${filtradas.length ? filtradas.map(linhaEmpresa).join("") : `<tr><td colspan="11"><em>Nenhuma empresa encontrada para "${escapeHtml(termo)}".</em></td></tr>`}</tbody>
+        <thead><tr><th>Empresa</th><th>Comunicação</th><th>Responsável pelos avisos</th><th>Status do número</th><th>WhatsApp</th><th>Consentimento</th><th>Número</th><th>Opt-out</th><th>Pendências</th><th>Última mensagem</th><th>Último status</th><th>Próxima ação</th><th>Ações</th></tr></thead>
+        <tbody>${orgs.map(linhaEmpresa).join("")}</tbody>
       </table>
     </div>`;
+  return `
+    ${htmlResumoEmpresas(resumo)}
+    ${busca("padm-com-busca", "Buscar por empresa, responsável ou telefone…", termo)}
+    ${filtros}
+    ${tabela}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +308,26 @@ export function htmlDetalheMensagem(d) {
 const fmtJanela = (j) => (j && typeof j === "object" ? Object.entries(j).map(([k, v]) => `${k.replace("seg_sex", "Segunda a sexta").replace("sab", "Sábado").replace("dom", "Domingo")}: ${v ? `${v.inicio}–${v.fim}` : "sem envio"}`).join(" · ") : "—");
 const fmtMapa = (m, un) => (m && typeof m === "object" ? Object.entries(m).map(([k, v]) => `${k}: ${v}${un}`).join(" · ") : "—");
 
-export function htmlConfiguracoesCentral(c) {
+/** Horários de disponibilidade dos dados do iFood (D-1) — editáveis; nada de 10:00 fixo no código. */
+export function htmlDisponibilidadeIfood(d) {
+  if (!d) return "";
+  return secao({
+    titulo: "Disponibilidade dos dados do iFood", icone: "clock",
+    sub: "Antes deste horário, empresas não serão cobradas pelo preenchimento dos dados referentes ao dia anterior.",
+    corpo: `<form id="padm-com-disp-form" class="padm-form">
+      <label>Dados do iFood disponíveis a partir de
+        <input type="time" name="dadosDisponiveisApos" value="${escapeHtml(d.dadosDisponiveisApos ?? "")}" required />
+      </label>
+      <label>Início permitido para lembretes
+        <input type="time" name="enviosPermitidosApos" value="${escapeHtml(d.enviosPermitidosApos ?? "")}" required />
+      </label>
+      <p class="padm-form-nota">O horário dos lembretes não pode ser anterior ao de disponibilidade dos dados. Vale para o horário local de cada empresa; o fim das comunicações segue a janela comercial.</p>
+      <button type="submit" class="btn btn-primary btn-sm">Salvar horários</button>
+    </form>`,
+  });
+}
+
+export function htmlConfiguracoesCentral(c, disponibilidade = null) {
   if (!c) return carregando("lista");
   const linha = (rot, val, nota = "") => `<li><span class="padm-saude-rot">${escapeHtml(rot)}</span><span class="padm-saude-val">${val}</span>${nota ? `<small>${escapeHtml(nota)}</small>` : ""}</li>`;
   const ativacao = secao({
@@ -278,7 +348,7 @@ export function htmlConfiguracoesCentral(c) {
     </ul>
     <p class="padm-form-nota">${escapeHtml(c.observacao ?? "")}</p>`,
   });
-  return `${ativacao}${operacional}`;
+  return `${ativacao}${htmlDisponibilidadeIfood(disponibilidade)}${operacional}`;
 }
 
 // ---------------------------------------------------------------------------

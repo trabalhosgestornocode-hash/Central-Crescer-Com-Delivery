@@ -165,6 +165,8 @@ export const ACOES = {
   COMUNICACAO_TESTE_FALHOU: "COMUNICACAO_TESTE_FALHOU",
 
   // Central de Comunicação — conversas com responsáveis. Sempre com ator humano. Nunca grava telefone completo (só mascarado) nem o TEXTO da mensagem.
+  // Responsável de COMUNICAÇÃO da EMPRESA (migration 100): criado/editado/ativado/desativado/validado. Telefone sempre mascarado.
+  COMUNICACAO_RESPONSAVEL_ALTERADO: "comunicacao.responsavel_alterado_painel_admin",
   COMUNICACAO_MANUAL_INICIADO: "COMUNICACAO_MANUAL_INICIADO",
   COMUNICACAO_MANUAL_ENVIADO: "COMUNICACAO_MANUAL_ENVIADO",
   COMUNICACAO_MANUAL_FALHOU: "COMUNICACAO_MANUAL_FALHOU",

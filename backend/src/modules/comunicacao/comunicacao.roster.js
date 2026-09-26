@@ -1,7 +1,8 @@
 // ROSTER AUTORIZADO da Central de Comunicação — a fonte ÚNICA de "quem a Central reconhece".
 //
-// Um contato só existe para a Central se for um RESPONSÁVEL CADASTRADO: contato ↔ perfil operacional ativo ↔ vínculo ativo com uma empresa
-// (e, quando houver, unidades). A regra vive UMA vez, no banco (view `comunicacao_roster_autorizado`, migration 096); inbound, lista de conversas,
+// Um contato só existe para a Central se for um RESPONSÁVEL DE COMUNICAÇÃO CADASTRADO de uma empresa: EMPRESA → RESPONSÁVEL (ativo) → TELEFONE
+// (WhatsApp validado). Nunca "perfil com acesso à empresa" (migration 100: o perfil administrador com acesso a 47 empresas aparecia em todas). As
+// unidades da empresa entram só para EXIBIÇÃO. A regra vive UMA vez, no banco (view `comunicacao_roster_autorizado`, 096, redefinida na 100); inbound, lista de conversas,
 // destinatários e envio manual leem daqui — nenhum deles decide "quem é autorizado" por conta própria, e o frontend nunca decide.
 //
 // Este módulo é: (1) leitura da view (paginada — a view tem 1 linha por contato × empresa × unidade) e (2) agregação PURA em UM contato por telefone.
@@ -16,8 +17,10 @@ const PAGINA = 1000;
 /** Rótulos de negócio dos papéis (cargo/função) que existem no banco — nada inventado. */
 export const ROTULO_PAPEL = Object.freeze({
   organization_admin: "Administrador da empresa", unit_manager: "Gestor de unidade", finance: "Financeiro", operations: "Operação", viewer: "Consulta",
+  // tipos do RESPONSÁVEL DE COMUNICAÇÃO (migration 100)
+  principal: "Responsável principal", secundario: "Responsável secundário", financeiro: "Financeiro", operacional: "Operação",
 });
-const PRIORIDADE_PAPEL = ["organization_admin", "unit_manager", "operations", "finance", "viewer"];
+const PRIORIDADE_PAPEL = ["principal", "secundario", "financeiro", "operacional", "organization_admin", "unit_manager", "operations", "finance", "viewer"];
 
 /** Minúsculo, sem acento, sem espaços nas pontas — a mesma normalização de busca do resto da Central. */
 export const normalizarBusca = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
@@ -48,11 +51,16 @@ export function agruparRoster(linhas) {
     if (!c) {
       c = {
         contatoId: l.contato_id, telefoneE164: l.telefone_e164, consentimento: l.consentimento === true, verificado: l.verificado === true, optOut: l.opt_out === true,
-        _perfis: new Map(), _orgs: new Map(), _unidades: new Map(), _papeis: new Set(),
+        _perfis: new Map(), _orgs: new Map(), _unidades: new Map(), _papeis: new Set(), _responsaveis: new Map(),
       };
       mapa.set(l.contato_id, c);
     }
-    if (l.perfil_id) c._perfis.set(l.perfil_id, { perfilId: l.perfil_id, nome: l.perfil_nome ?? "" });
+    // "perfis" = os RESPONSÁVEIS de comunicação (id do responsável, nunca de perfil/usuário) — mantém o formato que a Central já consome.
+    const rid = l.responsavel_id ?? l.perfil_id; // (compatível com linhas antigas do roster: sem responsavel_id, o perfil_id fazia esse papel)
+    if (rid) {
+      c._perfis.set(rid, { perfilId: rid, nome: l.responsavel_nome ?? l.perfil_nome ?? "" });
+      if (l.responsavel_id) c._responsaveis.set(l.responsavel_id, { id: l.responsavel_id, organizacaoId: l.organizacao_id, nome: l.responsavel_nome ?? "" });
+    }
     if (l.organizacao_id) c._orgs.set(l.organizacao_id, { organizacaoId: l.organizacao_id, nome: l.organizacao_nome ?? "" });
     if (l.unidade_id) c._unidades.set(l.unidade_id, { unidadeId: l.unidade_id, nome: l.unidade_nome ?? "", organizacaoId: l.organizacao_id });
     if (l.papel) c._papeis.add(l.papel);
@@ -62,7 +70,7 @@ export function agruparRoster(linhas) {
     const papeis = PRIORIDADE_PAPEL.filter((p) => c._papeis.has(p));
     return {
       contatoId: c.contatoId, telefoneE164: c.telefoneE164, consentimento: c.consentimento, verificado: c.verificado, optOut: c.optOut,
-      nome: perfis[0]?.nome || "Responsável", perfis,
+      nome: perfis[0]?.nome || "Responsável", perfis, responsaveis: [...c._responsaveis.values()],
       organizacoes: [...c._orgs.values()].sort(porNome), unidades: [...c._unidades.values()].sort(porNome),
       papeis, cargo: papeis.length ? ROTULO_PAPEL[papeis[0]] ?? null : null,
     };

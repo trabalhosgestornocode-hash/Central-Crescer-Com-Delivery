@@ -155,15 +155,23 @@ export const painelAdmApi = {
   comunicacaoResumo: () => chamar("/comunicacao/resumo"),
 
   /** Lista de empresas com status de configuração da comunicação. */
-  comunicacaoOrganizacoes: ({ busca } = {}) => chamar("/comunicacao/organizacoes" + qs({ busca })),
+  comunicacaoOrganizacoes: ({ busca, filtro } = {}) => chamar("/comunicacao/organizacoes" + qs({ busca, filtro })),
 
   /** Detalhe de uma empresa: configuração, destinatário (mascarado), unidades pendentes. */
   comunicacaoDetalheOrganizacao: (organizacaoId) =>
     chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}`),
 
-  /** Perfis ELEGÍVEIS desta organização (vínculo ativo) — para o combobox de destinatário. Nunca de outra organização. */
-  comunicacaoPerfisElegiveis: (organizacaoId) =>
-    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/perfis-elegiveis`),
+  /** Cadastra/edita o RESPONSÁVEL PRINCIPAL pelas comunicações da empresa (nome, telefone E.164, ativo, observações). Nunca envia nada, nunca habilita. */
+  comunicacaoSalvarResponsavel: (organizacaoId, dados) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/responsavel`, { method: "PUT", json: dados }),
+
+  /** Ativa/desativa o recebimento de avisos de um responsável desta empresa. */
+  comunicacaoDefinirAtivoResponsavel: (organizacaoId, contatoId, ativo) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/responsaveis/${encodeURIComponent(contatoId)}/ativo`, { method: "PUT", json: { ativo } }),
+
+  /** Horários de disponibilidade dos dados do iFood (D-1). */
+  comunicacaoDisponibilidade: () => chamar("/comunicacao/disponibilidade"),
+  comunicacaoAtualizarDisponibilidade: (dados) => chamar("/comunicacao/disponibilidade", { method: "PUT", json: dados }),
 
   /** Pré-visualização SOMENTE LEITURA do texto que seria enviado (Checkpoint H.4-A) — nunca envia nada. */
   comunicacaoPreverMensagem: (organizacaoId, { unidadeId } = {}) =>
@@ -172,7 +180,7 @@ export const painelAdmApi = {
   /**
    * Prepara a configuração de uma empresa — NUNCA habilita envio.
    * @param {string} organizacaoId
-   * @param {{telefoneE164?: string, perfilOperacionalId?: string, timezone?: string,
+   * @param {{timezone?: string,
    *   tiposPermitidos?: string[], pausadoAte?: string|null, pausadoMotivo?: string|null}} dados
    */
   comunicacaoAtualizarConfiguracao: (organizacaoId, dados) =>

@@ -43,7 +43,8 @@ import { timezoneValido, janelasValidas } from "./comunicacao.horario.js";
  * @property {Date|null} pausadoAte         fim da pausa (só se ativa)
  * @property {string|null} pausadoMotivo    auditoria/UX apenas — nunca decide nada
  * @property {string|null} destinatarioContatoId  contato do destinatário EXPLICITAMENTE configurado (null = nenhum)
- * @property {string|null} destinatarioPerfilId   perfil operacional do destinatário configurado
+ * @property {string|null} destinatarioContatoEmpresaId  RESPONSÁVEL DE COMUNICAÇÃO da empresa (comunicacao_contatos_empresa, migration 100) — o destinatário
+ * @property {string|null} destinatarioPerfilId   (legado/informativo — NUNCA requisito)   perfil operacional do destinatário configurado
  * @property {string|null} timezone         IANA da organização (null se ausente)
  * @property {object|null} janelas          janelas PRÓPRIAS da organização (null = usa a config global)
  * @property {boolean} configHorarioValida  timezone IANA reconhecido e janelas próprias (se houver) válidas
@@ -54,7 +55,7 @@ import { timezoneValido, janelasValidas } from "./comunicacao.horario.js";
 function fechada(fonte, extra = {}) {
   return {
     empresaHabilitada: false, tipoPermitido: false, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
-    destinatarioContatoId: null, destinatarioPerfilId: null,
+    destinatarioContatoId: null, destinatarioContatoEmpresaId: null, destinatarioPerfilId: null,
     timezone: null, janelas: null, configHorarioValida: false, fonte, ...extra,
   };
 }
@@ -74,8 +75,9 @@ export function interpretarHabilitacao(linha, tipoAlerta, agora = new Date()) {
   if (!tz) return fechada("REGISTRO_INCOMPLETO_SEM_TIMEZONE");
   // sem destinatário EXPLÍCITO não há para quem enviar: fail-closed (o banco também barra: CHECK).
   const contatoId = typeof linha.destinatario_contato_id === "string" && linha.destinatario_contato_id ? linha.destinatario_contato_id : null;
+  const contatoEmpresaId = typeof linha.destinatario_contato_empresa_id === "string" && linha.destinatario_contato_empresa_id ? linha.destinatario_contato_empresa_id : null;
   const perfilId = typeof linha.destinatario_perfil_id === "string" && linha.destinatario_perfil_id ? linha.destinatario_perfil_id : null;
-  if (!contatoId || !perfilId) return fechada("REGISTRO_INCOMPLETO_SEM_DESTINATARIO");
+  if (!contatoId || !contatoEmpresaId) return fechada("REGISTRO_INCOMPLETO_SEM_DESTINATARIO");
 
   const tipos = Array.isArray(linha.tipos_permitidos) ? linha.tipos_permitidos : [];
   const janelasProprias = linha.janelas ?? null;
@@ -93,6 +95,7 @@ export function interpretarHabilitacao(linha, tipoAlerta, agora = new Date()) {
     pausadoAte: pausaAtiva && !pausaIlegivel ? ate : null,
     pausadoMotivo: linha.pausado_motivo ?? null,
     destinatarioContatoId: contatoId,
+    destinatarioContatoEmpresaId: contatoEmpresaId,
     destinatarioPerfilId: perfilId,
     timezone: tz,
     janelas: janelasOk ? janelasProprias : null,
@@ -123,7 +126,7 @@ export async function resolverHabilitacaoEmpresa({ organizacaoId, tipoAlerta, ag
   if (!organizacaoId || typeof organizacaoId !== "string") return fechada("SEM_ORGANIZACAO");
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.from("comunicacao_habilitacoes")
-    .select("organizacao_id, habilitado, tipos_permitidos, timezone, janelas, pausado_ate, pausado_motivo, destinatario_contato_id, destinatario_perfil_id")
+    .select("organizacao_id, habilitado, tipos_permitidos, timezone, janelas, pausado_ate, pausado_motivo, destinatario_contato_id, destinatario_contato_empresa_id, destinatario_perfil_id")
     .eq("organizacao_id", organizacaoId) // SEMPRE escopado à organização: sem fallback global
     .maybeSingle();
   // Falha de LEITURA (rede/PostgREST) NÃO é "empresa desabilitada": fechar aqui viraria um

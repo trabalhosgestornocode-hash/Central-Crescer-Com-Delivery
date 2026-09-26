@@ -8,6 +8,7 @@
 // Rodar: node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-alertas-service.test.js
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
+import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
@@ -41,7 +42,7 @@ const AGORA_UTIL = new Date("2026-09-16T13:00:00Z");
 const AGORA_DOMINGO = new Date("2026-09-20T13:00:00Z");
 const HABILITADA = async () => ({
   empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
-  destinatarioContatoId: "contato-de-teste", destinatarioPerfilId: "perfil-de-teste",
+  destinatarioContatoId: "contato-de-teste", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "perfil-de-teste",
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE",
 });
 // Limites da suíte: a camada por ORGANIZAÇÃO (padrão 3/min) não pode mascarar os cenários que enviam várias mensagens
@@ -108,7 +109,7 @@ async function novoAlertaDetected(organizacaoId, unidadeId, dataReferencia, over
 /** Alerta + mensagem SCHEDULED já elegível para claim. */
 async function alertaComMensagem(dataReferencia, extra = {}) {
   const { alerta } = await novoAlertaDetected(orgA, unidadeA, dataReferencia);
-  const job = await filaRepo.agendarMensagem({
+  const job = await agendarMensagemT({
     alertaId: alerta.id, organizacaoId: orgA, unidadeId: unidadeA, contatoId, destinatarioPerfilId: perfilId,
     tipo: alerta.tipo_alerta, conteudo: "aviso de pendência", idempotencyKey: `wa:alerta:${alerta.id}:v1`,
     disponivelEm: new Date(Date.now() - 60_000), ...extra,
@@ -167,7 +168,7 @@ describe("comunicacao — orquestração (alertas + fila + policy + provider)", 
   test("teste 5 — pendência resolvida ANTES do processamento cancela a mensagem agendada", async (t) => {
     if (!migracaoOk) return t.skip("migrations 082/087 ainda não aplicadas — pulando.");
     const { alerta } = await novoAlertaDetected(orgA, unidadeA, "2026-09-03");
-    const job = await filaRepo.agendarMensagem({
+    const job = await agendarMensagemT({
       alertaId: alerta.id, organizacaoId: orgA, unidadeId: unidadeA, contatoId, destinatarioPerfilId: perfilId,
       tipo: alerta.tipo_alerta, conteudo: "aviso de pendência", idempotencyKey: `wa:alerta:${alerta.id}:v1`,
       disponivelEm: new Date(Date.now() + 3600_000), // ainda não é hora — como no exemplo do pedido (09:12)
@@ -459,7 +460,7 @@ describe("D.3 — bloqueio TRANSITÓRIO adia (não vira BLOCKED terminal)", { sk
     // 3 = max_por_contato_por_dia padrão; tipos DIFERENTES para não acionar o cooldown antes
     const resid = [];
     for (let i = 0; i < 3; i++) {
-      resid.push(await filaRepo.agendarMensagem({ organizacaoId: orgA, unidadeId: unidadeA, contatoId, tipo: `outro_tipo_${i}`, conteudo: "x", idempotencyKey: `rl-${Date.now()}-${i}`, disponivelEm: new Date(Date.now() + 3600_000) }));
+      resid.push(await agendarMensagemT({ organizacaoId: orgA, unidadeId: unidadeA, contatoId, tipo: `outro_tipo_${i}`, conteudo: "x", idempotencyKey: `rl-${Date.now()}-${i}`, disponivelEm: new Date(Date.now() + 3600_000) }));
     }
     await supabase.from("comunicacao_mensagens").update({ status: "DELIVERY_UNKNOWN", entrega_incerta_em: new Date().toISOString() }).in("id", resid.map((r) => r.id));
     await esperarAdiado(par, "RATE_LIMIT");
@@ -676,7 +677,7 @@ describe("D.3-B — dois workers no PIPELINE completo (a mesma mensagem nunca sa
       await contatosRepo.vincularPerfil({ contatoId: c.id, perfilOperacionalId: perfilId, principal: false });
       extras.push(c.id);
       const { alerta } = await novoAlertaDetected(orgA, unidadeA, `2026-11-0${i + 1}`);
-      const job = await filaRepo.agendarMensagem({
+      const job = await agendarMensagemT({
         alertaId: alerta.id, organizacaoId: orgA, unidadeId: unidadeA, contatoId: c.id, destinatarioPerfilId: perfilId,
         // cooldown é por organização+unidade+tipo: um tipo por mensagem para o cooldown não mascarar a corrida
         tipo: `${alerta.tipo_alerta}_corrida_${i}`, conteudo: "aviso de pendência", idempotencyKey: `wa:alerta:${alerta.id}:v1`,
@@ -838,7 +839,7 @@ describe("D.3-R — modo, habilitação e DELIVERY_UNKNOWN (revisão final)", { 
     assert.equal((await agendarEnviosPendentes({ organizacaoId: orgA, agora: AGORA_UTIL })).agendados, 0);
     await supabase.from("comunicacao_habilitacoes").delete().eq("organizacao_id", orgA);
     // idempotência: reagendar o MESMO alerta devolve a linha existente, sem mexer no estado
-    const mesma = await filaRepo.agendarMensagem({ alertaId: par.alerta.id, organizacaoId: orgA, unidadeId: unidadeA, contatoId, tipo: par.alerta.tipo_alerta, conteudo: "x", idempotencyKey: `wa:alerta:${par.alerta.id}:v1`, disponivelEm: new Date() });
+    const mesma = await agendarMensagemT({ alertaId: par.alerta.id, organizacaoId: orgA, unidadeId: unidadeA, contatoId, tipo: par.alerta.tipo_alerta, conteudo: "x", idempotencyKey: `wa:alerta:${par.alerta.id}:v1`, disponivelEm: new Date() });
     assert.equal(mesma.id, par.job.id);
     assert.equal(mesma.status, STATUS_MENSAGEM.DELIVERY_UNKNOWN);
     // "pendência resolvida": cancelamento só atinge SCHEDULED

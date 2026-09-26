@@ -6,6 +6,7 @@
 // Rodar: node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-reserva-capacidade.test.js
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
+import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
@@ -85,7 +86,7 @@ let seq = 0;
 /** Insere uma mensagem crua (fixture) e devolve a linha. `campos` sobrescreve estado/colunas. */
 async function inserir({ org = orgA, unidade = unidadeA, contato = contatoP, tipo = `tipo_${tag}_${++seq}`, campos = {} } = {}) {
   const { data, error } = await supabase.from("comunicacao_mensagens").insert({
-    organizacao_id: org, unidade_id: unidade, contato_id: contato, destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
+    organizacao_id: org, unidade_id: unidade, contato_id: contato, contato_empresa_id: await responsavelDoContato({ organizacaoId: org, contatoId: contato, perfilId }), destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
     tipo, conteudo: "aviso", idempotency_key: `cap-${tag}-${++seq}`, status: S.SCHEDULED, disponivel_em: new Date(Date.now() - 60_000).toISOString(),
     ...campos,
   }).select("*").single();

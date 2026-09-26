@@ -143,6 +143,60 @@ export async function habilitarOrganizacao(organizacaoId, dest, extra = {}) {
     organizacao_id: organizacaoId, habilitado: true, tipos_permitidos: ["dashboard_ifood_d1"], timezone: "America/Fortaleza",
     destinatario_contato_id: dest.contatoId, destinatario_perfil_id: dest.perfilId, ...extra,
   };
+  // Migration 091: o destinatário passa a ser o RESPONSÁVEL DE COMUNICAÇÃO da empresa. Se a tabela existe, cria o
+  // responsável (WhatsApp VALIDADO, coerente com as flags do contato) e aponta a habilitação para ele; sem a
+  // tabela (banco pré-091) mantém o comportamento antigo.
+  if (!("destinatario_contato_empresa_id" in extra)) {
+    const { data: c } = await supabase.from("contatos_whatsapp").select("telefone_e164, verificado, consentimento").eq("id", dest.contatoId).maybeSingle();
+    if (c) {
+      const validado = c.verificado === true && c.consentimento === true;
+      const corpo = {
+        organizacao_id: organizacaoId, nome: "Responsável de teste", telefone_e164: c.telefone_e164, tipo: "principal",
+        contato_whatsapp_id: dest.contatoId, perfil_operacional_id: dest.perfilId ?? null,
+        whatsapp_status: validado ? "VALIDADO" : "AGUARDANDO_VALIDACAO", whatsapp_validado_em: validado ? new Date().toISOString() : null, ativo: true,
+      };
+      let { data: ce, error: eCe } = await supabase.from("comunicacao_contatos_empresa").insert(corpo).select("id").single();
+      if (eCe) { // já existe um principal ativo desta empresa (re-habilitação no mesmo teste): reaproveita e atualiza
+        const { data: ex } = await supabase.from("comunicacao_contatos_empresa").select("id").eq("organizacao_id", organizacaoId).eq("tipo", "principal").eq("ativo", true).maybeSingle();
+        if (ex) { await supabase.from("comunicacao_contatos_empresa").update(corpo).eq("id", ex.id); ce = ex; eCe = null; }
+      }
+      if (!eCe && ce) { linha.destinatario_contato_empresa_id = ce.id; dest.contatoEmpresaId = ce.id; }
+    }
+  }
   const { error } = await supabase.from("comunicacao_habilitacoes").upsert(linha, { onConflict: "organizacao_id" });
   if (error) throw new Error(`Falha ao habilitar a organização de teste: ${error.message}`);
+}
+
+// ---------------------------------------------------------------------------
+// Migration 100 — RESPONSÁVEL DE COMUNICAÇÃO nos testes legados. As suítes antigas montavam mensagens à mão
+// (contato + perfil). Agora o envio exige o responsável DA EMPRESA: estes helpers o criam para o par
+// (empresa, contato) — WhatsApp VALIDADO (os portões de consentimento/verificação continuam sendo os flags do contato).
+// ---------------------------------------------------------------------------
+import * as filaRepoT from "../../src/modules/comunicacao/comunicacao.fila.repo.js";
+
+/** Garante um responsável ATIVO da empresa para este contato (reaproveita o existente). Devolve o id ou null. */
+export async function responsavelDoContato({ organizacaoId, contatoId, perfilId = null }) {
+  if (!organizacaoId || !contatoId) return null;
+  const { data: existente } = await supabase.from("comunicacao_contatos_empresa").select("id, ativo")
+    .eq("organizacao_id", organizacaoId).eq("contato_whatsapp_id", contatoId).eq("ativo", true).maybeSingle();
+  if (existente) return existente.id;
+  const { data: c } = await supabase.from("contatos_whatsapp").select("telefone_e164").eq("id", contatoId).maybeSingle();
+  if (!c) return null;
+  const { data: principal } = await supabase.from("comunicacao_contatos_empresa").select("id")
+    .eq("organizacao_id", organizacaoId).eq("tipo", "principal").eq("ativo", true).maybeSingle();
+  const { data: novo, error } = await supabase.from("comunicacao_contatos_empresa").insert({
+    organizacao_id: organizacaoId, nome: "Responsável de teste", telefone_e164: c.telefone_e164, tipo: principal ? "operacional" : "principal",
+    contato_whatsapp_id: contatoId, perfil_operacional_id: perfilId, whatsapp_status: "VALIDADO", whatsapp_validado_em: new Date().toISOString(), ativo: true,
+  }).select("id").single();
+  if (error) throw new Error(`Falha ao criar responsável de teste: ${error.message}`);
+  return novo.id;
+}
+
+/** `filaRepo.agendarMensagem` + o responsável da empresa (quando a chamada não informa `contatoEmpresaId`). */
+export async function agendarMensagemT(params, deps) {
+  let p = params;
+  if (p.contatoId && p.organizacaoId && p.contatoEmpresaId === undefined) {
+    p = { ...p, contatoEmpresaId: await responsavelDoContato({ organizacaoId: p.organizacaoId, contatoId: p.contatoId, perfilId: p.destinatarioPerfilId ?? null }) };
+  }
+  return filaRepoT.agendarMensagem(p, deps);
 }

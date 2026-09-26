@@ -6,20 +6,18 @@
 // por bypass dos middlewares multi-tenant.
 //
 // NÃO duplica nenhuma regra de negócio do módulo `comunicacao/`: reaproveita
-// `criarOuObterContato`/`vincularPerfil`/`perfilTemVinculo`/`mascararTelefone`
-// de `comunicacao.contatos.repo.js` tal como estão. Este arquivo só sabe
+// `mascararTelefone`/`obterContato` de `comunicacao.contatos.repo.js` e o cadastro de responsável por EMPRESA de
+// `comunicacao.contatosEmpresa.repo.js` tal como estão. Este arquivo só sabe
 // LISTAR/PROJETAR para o painel — nunca decide política, claim, rate-limit,
 // cooldown, horário ou envio.
 
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
-import {
-  criarOuObterContato, vincularPerfil, perfilTemVinculo, mascararTelefone, obterContato, obterPerfilOperacional,
-  confirmarConsentimentoEVerificacao,
-} from "../comunicacao/comunicacao.contatos.repo.js";
+import { mascararTelefone, obterContato, obterPerfilOperacional } from "../comunicacao/comunicacao.contatos.repo.js";
+import { listarDaEmpresa as listarContatosDaEmpresa, escolherPrincipal, validarWhatsApp } from "../comunicacao/comunicacao.contatosEmpresa.repo.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
 
-const COLUNAS_HABILITACAO = "organizacao_id, habilitado, tipos_permitidos, timezone, janelas, pausado_ate, pausado_motivo, destinatario_contato_id, destinatario_perfil_id, atualizado_por, created_at, updated_at";
+const COLUNAS_HABILITACAO = "organizacao_id, habilitado, tipos_permitidos, timezone, janelas, pausado_ate, pausado_motivo, destinatario_contato_id, destinatario_contato_empresa_id, destinatario_perfil_id, atualizado_por, created_at, updated_at";
 
 // Estados possíveis de `whatsapp_conexoes.status` (migration 083) — vocabulário fechado, nunca inventado aqui.
 const GATEWAY_CONECTADO = new Set(["CONNECTED"]);
@@ -137,42 +135,9 @@ export async function contarUltimas24h(deps = {}) {
   return { enviadas: enviadasQ.count ?? 0, falhas: falhasQ.count ?? 0 };
 }
 
-/**
- * Perfis ELEGÍVEIS desta organização para virar destinatário — Checkpoint
- * H.3-A.1, itens 3-6. "Elegível" = mesmo critério que o banco já exige em
- * `comunicacao_agendar_mensagem_alerta`/`perfilTemVinculo`: vínculo ATIVO em
- * `usuarios_organizacoes` para ESTA organização. Não existia endpoint/consulta
- * pronta com esse recorte (auditado: `administrativo.mentorados.js` carrega
- * TODOS os mentorados da plataforma inteira, sem filtro por organização — uso
- * pesado demais para um combobox de uma tela); três consultas em LOTE (nunca
- * `for perfil: SELECT`), mesmo espírito do resto do módulo.
- * @returns {Promise<Array<{perfilOperacionalId: string, nome: string, email: string|null}>>}
- */
-export async function listarPerfisElegiveis(organizacaoId, deps = {}) {
-  const db = deps.supabase ?? supabase;
-
-  const { data: vinc, error: e1 } = await db.from("usuarios_organizacoes")
-    .select("perfil_id").eq("organizacao_id", organizacaoId).eq("ativo", true);
-  if (e1) throw ApiError.internal(e1.message);
-  const perfilIds = [...new Set((vinc ?? []).map((v) => v.perfil_id).filter(Boolean))];
-  if (!perfilIds.length) return [];
-
-  const { data: perfis, error: e2 } = await db.from("perfis_operacionais")
-    .select("id, conta_id, nome, ativo").in("id", perfilIds).eq("ativo", true);
-  if (e2) throw ApiError.internal(e2.message);
-  if (!perfis?.length) return [];
-
-  const contaIds = [...new Set(perfis.map((p) => p.conta_id).filter(Boolean))];
-  const { data: contas, error: e3 } = contaIds.length
-    ? await db.from("perfis").select("id, email").in("id", contaIds)
-    : { data: [], error: null };
-  if (e3) throw ApiError.internal(e3.message);
-  const emailPorConta = new Map((contas ?? []).map((c) => [c.id, c.email]));
-
-  return perfis
-    .map((p) => ({ perfilOperacionalId: p.id, nome: p.nome, email: emailPorConta.get(p.conta_id) ?? null }))
-    .sort((a, b) => String(a.nome ?? "").localeCompare(String(b.nome ?? ""), "pt-BR"));
-}
+// (Removido na migration 100: `listarPerfisElegiveis` listava perfis com ACESSO ativo à empresa (usuarios_organizacoes) como candidatos a
+// destinatário. Acesso NÃO é responsável de comunicação — um perfil administrador com acesso a 47 empresas aparecia em todas. O responsável agora é
+// cadastrado EXPLICITAMENTE por empresa (comunicacao.contatosEmpresa.repo.js).)
 
 /** @returns {Promise<number>} organizações com `comunicacao_habilitacoes.habilitado = true`. Hoje deve ser sempre 0. */
 export async function contarOrganizacoesHabilitadas(deps = {}) {
@@ -221,17 +186,18 @@ export async function listarHistorico({ organizacaoId, status, tipoAlerta, desde
 }
 
 /**
- * Salva a CONFIGURAÇÃO operacional da organização (timezone, tipos, destinatário, pausa). NUNCA toca `habilitado`: a coluna nem entra no
- * payload do upsert (o UPDATE do PostgREST só altera as colunas enviadas; num INSERT novo vale o DEFAULT false da 088). A habilitação só muda
- * por `habilitarOrganizacaoPiloto`/`desabilitarOrganizacao` (botões próprios, com confirmação e auditoria). Bug do piloto (H.4-B.5): antes, salvar
- * a configuração regravava `habilitado: false` e desligava uma empresa habilitada sem ninguém pedir.
+ * Salva a CONFIGURAÇÃO operacional da organização (timezone, tipos, pausa). NUNCA toca `habilitado`: a coluna nem entra no payload do upsert (o UPDATE
+ * do PostgREST só altera as colunas enviadas; num INSERT novo vale o DEFAULT false da 088). A habilitação só muda por
+ * `habilitarOrganizacaoPiloto`/`desabilitarOrganizacao` (botões próprios, com confirmação e auditoria).
  *
- * @param {{organizacaoId: string, telefoneE164?: string, perfilOperacionalId?: string,
- *   timezone?: string, tiposPermitidos?: string[], pausadoAte?: string|null, pausadoMotivo?: string|null}} params
+ * O RESPONSÁVEL (nome/telefone) NÃO é gravado aqui: vive em comunicacao_contatos_empresa (comunicacao.contatosEmpresa.repo.js). Esta função só
+ * PRESERVA o ponteiro atual da habilitação para ele — nunca o infere de perfil/usuário/unidade.
+ *
+ * @param {{organizacaoId: string, timezone?: string, tiposPermitidos?: string[], pausadoAte?: string|null, pausadoMotivo?: string|null}} params
  * @param {{contaId?: string, perfilId?: string, nome?: string}} autor
  */
 export async function atualizarConfiguracaoOrganizacao({
-  organizacaoId, telefoneE164, perfilOperacionalId, timezone, tiposPermitidos, pausadoAte, pausadoMotivo,
+  organizacaoId, timezone, tiposPermitidos, pausadoAte, pausadoMotivo,
 }, autor, deps = {}) {
   const db = deps.supabase ?? supabase;
 
@@ -239,43 +205,21 @@ export async function atualizarConfiguracaoOrganizacao({
   if (!atual) throw ApiError.notFound("Empresa não encontrada.");
   const habAtual = atual.comunicacao_habilitacoes ?? null;
 
-  let destinatarioContatoId = habAtual?.destinatario_contato_id ?? null;
-  let destinatarioPerfilId = habAtual?.destinatario_perfil_id ?? null;
-  let telefoneMascaradoParaAuditoria = null;
-
-  if (telefoneE164) {
-    const contato = await criarOuObterContato({ telefoneE164 }, deps);
-    destinatarioContatoId = contato.id;
-    telefoneMascaradoParaAuditoria = mascararTelefone(contato.telefone_e164);
-    if (perfilOperacionalId) {
-      const vinculo = await perfilTemVinculo({ perfilId: perfilOperacionalId, organizacaoId }, deps);
-      if (!vinculo) throw ApiError.badRequest("Este perfil não tem vínculo ativo com esta organização.", { codigo: "PERFIL_SEM_VINCULO" });
-      await vincularPerfil({ contatoId: contato.id, perfilOperacionalId }, deps);
-      destinatarioPerfilId = perfilOperacionalId;
-    }
-  } else if (perfilOperacionalId) {
-    // trocar só o perfil, mantendo o contato já configurado.
-    if (!destinatarioContatoId) throw ApiError.badRequest("Defina um telefone antes de associar um perfil.", { codigo: "SEM_CONTATO" });
-    const vinculo = await perfilTemVinculo({ perfilId: perfilOperacionalId, organizacaoId }, deps);
-    if (!vinculo) throw ApiError.badRequest("Este perfil não tem vínculo ativo com esta organização.", { codigo: "PERFIL_SEM_VINCULO" });
-    await vincularPerfil({ contatoId: destinatarioContatoId, perfilOperacionalId }, deps);
-    destinatarioPerfilId = perfilOperacionalId;
-  }
-
   const linha = {
     organizacao_id: organizacaoId,
     // `habilitado` DELIBERADAMENTE AUSENTE — ver o comentário da função.
     timezone: timezone ?? habAtual?.timezone ?? null,
     tipos_permitidos: tiposPermitidos ?? habAtual?.tipos_permitidos ?? [],
-    destinatario_contato_id: destinatarioContatoId,
-    destinatario_perfil_id: destinatarioPerfilId,
+    destinatario_contato_id: habAtual?.destinatario_contato_id ?? null,
+    destinatario_contato_empresa_id: habAtual?.destinatario_contato_empresa_id ?? null,
+    destinatario_perfil_id: habAtual?.destinatario_perfil_id ?? null,
     pausado_ate: pausadoAte !== undefined ? pausadoAte : (habAtual?.pausado_ate ?? null),
     pausado_motivo: pausadoMotivo !== undefined ? pausadoMotivo : (habAtual?.pausado_motivo ?? null),
     atualizado_por: autor?.perfilId ?? null,
   };
   // Uma empresa HABILITADA não pode ficar com a configuração incompleta (a 088 recusa no banco; aqui vira um 400 claro, sem tocar em nada).
-  if (habAtual?.habilitado === true && (!linha.timezone || !linha.destinatario_contato_id || !linha.destinatario_perfil_id || !linha.tipos_permitidos?.length)) {
-    throw ApiError.badRequest("Esta empresa está com a comunicação habilitada: a configuração precisa continuar completa (timezone, destinatário e tipo de alerta). Desabilite a comunicação antes de esvaziar estes campos.", { codigo: "CONFIG_INCOMPLETA_HABILITADA" });
+  if (habAtual?.habilitado === true && (!linha.timezone || !linha.destinatario_contato_id || !linha.destinatario_contato_empresa_id || !linha.tipos_permitidos?.length)) {
+    throw ApiError.badRequest("Esta empresa está com a comunicação habilitada: a configuração precisa continuar completa (timezone, responsável e tipo de alerta). Desabilite a comunicação antes de esvaziar estes campos.", { codigo: "CONFIG_INCOMPLETA_HABILITADA" });
   }
   const { data, error } = await db.from("comunicacao_habilitacoes")
     .upsert(linha, { onConflict: "organizacao_id" }).select(COLUNAS_HABILITACAO).single();
@@ -290,14 +234,7 @@ export async function atualizarConfiguracaoOrganizacao({
     entidade: "comunicacao_habilitacoes",
     entidadeId: organizacaoId,
     organizacaoId,
-    detalhes: {
-      timezone: linha.timezone,
-      tipos_permitidos: linha.tipos_permitidos,
-      pausado_ate: linha.pausado_ate,
-      telefone_mascarado: telefoneMascaradoParaAuditoria, // null quando o telefone não mudou nesta chamada
-      destinatario_alterado: destinatarioContatoId !== (habAtual?.destinatario_contato_id ?? null) || destinatarioPerfilId !== (habAtual?.destinatario_perfil_id ?? null),
-      habilitado_inalterado: true,
-    },
+    detalhes: { timezone: linha.timezone, tipos_permitidos: linha.tipos_permitidos, pausado_ate: linha.pausado_ate, habilitado_inalterado: true },
   });
 
   return data;
@@ -313,17 +250,11 @@ export async function atualizarConfiguracaoOrganizacao({
 export async function confirmarConsentimentoOrganizacao({ organizacaoId }, autor, deps = {}) {
   const atual = await obterOrganizacaoComConfiguracao(organizacaoId, deps);
   if (!atual) throw ApiError.notFound("Empresa não encontrada.");
-  const contatoId = atual.comunicacao_habilitacoes?.destinatario_contato_id ?? null;
-  if (!contatoId) throw ApiError.badRequest("Configure um telefone para esta organização antes de confirmar consentimento.", { codigo: "SEM_CONTATO" });
+  const principal = escolherPrincipal(await listarContatosDaEmpresa(organizacaoId, deps));
+  if (!principal) throw ApiError.badRequest("Cadastre o responsável pelas comunicações desta empresa antes de confirmar o WhatsApp.", { codigo: "SEM_CONTATO" });
 
-  await confirmarConsentimentoEVerificacao({
-    contatoId, organizacaoId,
-    atorId: autor?.contaId ?? null, perfilId: autor?.perfilId ?? null, perfilNome: autor?.nome ?? null, atorEmail: autor?.email ?? null,
-    origem: "confirmacao_explicita_operador_painel_admin",
-  }, deps);
-
-  const contato = await obterContato(contatoId, deps);
-  return { organizacaoId, consentimento: true, verificado: true, telefoneMascarado: mascararTelefone(contato?.telefone_e164) };
+  const validado = await validarWhatsApp({ organizacaoId, contatoEmpresaId: principal.id }, autor, deps);
+  return { organizacaoId, contatoEmpresaId: validado.id, consentimento: true, verificado: true, telefoneMascarado: mascararTelefone(validado.telefone_e164) };
 }
 
 /**

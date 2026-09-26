@@ -20,7 +20,7 @@ import { painelAdmApi } from "./painelAdmApi.js";
 import { travarScroll, destravarScroll, resetScrollLock } from "./scrollLock.js";
 import { renderPerformance } from './performance.js';
 import { renderDesenvolvimento, montarCardDesenvolvimento } from './desenvolvimento.js';
-import { renderCentral, pararCentral } from './central/centralComunicacao.js';
+import { renderCentral, pararCentral, recarregarCentral } from './central/centralComunicacao.js';
 import { SECOES_PDF, secoesPadrao, gerarPdf, previewPdf, nomeArquivoPdf } from "./painelAdmPdf.js";
 import {
   card, cards, secao, carregando, erro, vazio, busca, metrica, barraSaude,
@@ -34,7 +34,7 @@ import {
 } from "./painelAdmUi.js";
 import {
   htmlCabecalhoCentral, htmlCardsSaude, htmlSaudeComunicacao, htmlFluxoComunicacao, htmlEmpresasCentral, htmlHistoricoCentral, htmlDetalheMensagem,
-  htmlConfiguracoesCentral, htmlAbaTeste, htmlModalTeste, htmlAbasCentral, testeTerminou,
+  htmlConfiguracoesCentral, htmlDisponibilidadeIfood, htmlResumoEmpresas, chipWhatsappEmpresa, htmlAbaTeste, htmlModalTeste, htmlAbasCentral, testeTerminou,
 } from "./painelAdmCentral.js";
 
 /** Áreas gerenciais existentes e agenda oficial do desenvolvimento. */
@@ -73,6 +73,7 @@ export const viewPendencias = { agrupar: "empresa", filtro: "todas", termo: "" }
 export const viewMentorados = { termo: "" };
 /** Estado interno da área Comunicação: aba ativa e busca/filtros de cada sub-lista. */
 export const viewComunicacao = {
+  filtro: "todos", // filtro da aba Empresas (resolvido no servidor)
   aba: "visao-geral", termo: "",
   filaPagina: 1, historicoPagina: 1, historicoStatus: "",
   /** Filtros do Histórico de Mensagens (Central, H.4-B.5). */
@@ -199,7 +200,7 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
 const ultimoDados = {
   empresas: null, pendencias: null, relatorio: null, evolucao: null, mesAtivo: null, apiAtual: null,
   lucratividade: null, semanaCarregada: null, mentorados: null,
-  comunicacaoApi: null, comunicacaoAtivacao: null, comunicacaoResumo: null, comunicacaoOrgs: null, comunicacaoFila: null, comunicacaoHistorico: null, comunicacaoMensagens: null, comunicacaoConfig: null, comunicacaoTestes: null,
+  comunicacaoApi: null, comunicacaoEmpresas: null, comunicacaoDisponibilidade: null, comunicacaoAtivacao: null, comunicacaoResumo: null, comunicacaoOrgs: null, comunicacaoFila: null, comunicacaoHistorico: null, comunicacaoMensagens: null, comunicacaoConfig: null, comunicacaoTestes: null,
 };
 
 /** `true` para as abas semanais (Lucratividade / Rentabilidade). */
@@ -1242,6 +1243,8 @@ export const htmlComunicacaoCards = htmlCardsSaude;
 
 /** Lista de empresas da Central (contato mascarado, consentimento, número, opt-out, última mensagem, próxima ação). */
 export const htmlComunicacaoEmpresas = htmlEmpresasCentral;
+export const htmlComunicacaoConfiguracoes = htmlConfiguracoesCentral;
+export { htmlResumoEmpresas };
 
 function linhaFila(m, nomePorOrg) {
   return `<tr>
@@ -1287,13 +1290,13 @@ function htmlComunicacao() {
   const aba = viewComunicacao.aba;
   let corpo;
   if (aba === "empresas") {
-    corpo = secao({ titulo: "Empresas e destinatários", icone: "building", sub: "Quem pode receber, por que uma empresa pode ou não receber e o próximo passo de cada uma.", corpo: htmlEmpresasCentral(orgs, viewComunicacao.termo) });
+    corpo = secao({ titulo: "Empresas e responsáveis", icone: "building", sub: "Uma linha por empresa: quem recebe os avisos, o status do WhatsApp e o próximo passo. O responsável é cadastrado por empresa — nunca inferido de usuário ou unidade.", corpo: htmlEmpresasCentral(ultimoDados.comunicacaoEmpresas ?? orgs, viewComunicacao.termo, viewComunicacao.filtro, r) });
   } else if (aba === "historico") {
     corpo = secao({ titulo: "Histórico de Mensagens", icone: "message-circle", sub: "Todas as mensagens — automação, reforço, aviso tardio e testes. Telefones sempre mascarados.", corpo: htmlComunicacaoHistorico(ultimoDados.comunicacaoMensagens, orgs) });
   } else if (aba === "fila") {
     corpo = secao({ titulo: "Fila", icone: "clock", sub: "Mensagens agendadas ou em processamento.", corpo: htmlComunicacaoFila(ultimoDados.comunicacaoFila, orgs) });
   } else if (aba === "configuracoes") {
-    corpo = htmlConfiguracoesCentral(ultimoDados.comunicacaoConfig);
+    corpo = htmlConfiguracoesCentral(ultimoDados.comunicacaoConfig, ultimoDados.comunicacaoDisponibilidade);
   } else if (aba === "teste") {
     corpo = htmlAbaTeste({ resumo: r, orgs, testes: ultimoDados.comunicacaoTestes });
   } else {
@@ -1326,8 +1329,10 @@ async function carregarSubAbaComunicacao() {
       ultimoDados.comunicacaoFila = await api.comunicacaoFila({ pagina: viewComunicacao.filaPagina });
     } else if (viewComunicacao.aba === "historico") {
       ultimoDados.comunicacaoMensagens = await api.comunicacaoMensagens(filtrosHistoricoParaApi());
+    } else if (viewComunicacao.aba === "empresas") {
+      await recarregarEmpresasComunicacao(api);
     } else if (viewComunicacao.aba === "configuracoes") {
-      ultimoDados.comunicacaoConfig = await api.comunicacaoConfiguracaoOperacional();
+      [ultimoDados.comunicacaoConfig, ultimoDados.comunicacaoDisponibilidade] = await Promise.all([api.comunicacaoConfiguracaoOperacional(), api.comunicacaoDisponibilidade()]);
     } else if (viewComunicacao.aba === "teste") {
       ultimoDados.comunicacaoTestes = await api.comunicacaoMensagens({ origem: "teste_controlado", porPagina: 10 });
     }
@@ -1338,6 +1343,42 @@ async function carregarSubAbaComunicacao() {
 }
 
 /** Recarrega resumo + empresas + ativação depois de uma alavanca (habilitar/desabilitar/modo) e repinta. */
+/** Busca/filtro da aba Empresas são resolvidos no SERVIDOR (o telefone completo nunca chega ao navegador). */
+async function recarregarEmpresasComunicacao(api) {
+  ultimoDados.comunicacaoEmpresas = await api.comunicacaoOrganizacoes({
+    busca: viewComunicacao.termo || undefined, filtro: viewComunicacao.filtro === "todos" ? undefined : viewComunicacao.filtro,
+  });
+}
+
+async function acaoEmpresaComunicacao(b) {
+  const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
+  const org = b.dataset.padmComOrg;
+  const acao = b.dataset.padmComAcao;
+  if (acao === "gerenciar" || acao === "editar" || acao === "validar") {
+    await abrirDrawerComunicacao(org, { foco: acao === "gerenciar" ? null : "responsavel" });
+  } else if (acao === "historico") {
+    viewComunicacao.aba = "historico"; viewComunicacao.hist.organizacaoId = org; viewComunicacao.historicoPagina = 1;
+    carregarSubAbaComunicacao();
+  } else if (acao === "alternar-ativo") {
+    const ativar = b.dataset.padmComAtivo !== "1";
+    if (!confirm(ativar ? "Reativar o recebimento de avisos deste responsável?" : "Desativar o recebimento de avisos deste responsável? Nenhuma mensagem será enviada a ele.")) return;
+    b.disabled = true;
+    try {
+      await api.comunicacaoDefinirAtivoResponsavel(org, b.dataset.padmComContato, ativar);
+      await recarregarComunicacaoAposAcao(api);
+    } catch (err) {
+      b.disabled = false;
+      alert(err.message || "Não foi possível alterar o recebimento de avisos.");
+    }
+  }
+}
+
+/** Depois de uma ação no drawer da empresa: com a Central montada, recarrega SÓ a Central (nunca repinta a tela legada por cima dela). */
+async function aposAcaoNaEmpresa(api) {
+  if (recarregarCentral()) return;
+  await recarregarComunicacaoAposAcao(api);
+}
+
 async function recarregarComunicacaoAposAcao(api) {
   const [resumoC, orgsC, ativC] = await Promise.all([
     api.comunicacaoResumo(), api.comunicacaoOrganizacoes({}),
@@ -1345,6 +1386,7 @@ async function recarregarComunicacaoAposAcao(api) {
   ]);
   ultimoDados.comunicacaoResumo = resumoC;
   ultimoDados.comunicacaoOrgs = orgsC;
+  await recarregarEmpresasComunicacao(api);
   ultimoDados.comunicacaoAtivacao = ativC ?? null;
   pintarComunicacao();
 }
@@ -1494,7 +1536,7 @@ function ligarLegadoCentral(host, { aoAtualizar } = {}) {
 function renderCentralComunicacao(v, api) {
   ultimoDados.comunicacaoApi = api;
   return renderCentral(v, api, {
-    abrirEmpresa: (organizacaoId) => abrirDrawerComunicacao(organizacaoId),
+    abrirEmpresa: (organizacaoId, opcoes) => abrirDrawerComunicacao(organizacaoId, opcoes),
     abrirDetalheMensagem: (id) => abrirDetalheMensagem(id),
     irParaTela: (id) => nav.irParaTela(id),
     aoAcessoRevogado: nav.aoAcessoRevogado,
@@ -1548,16 +1590,37 @@ function ligarComunicacao() {
     inp.addEventListener("input", () => {
       clearTimeout(t);
       const valor = inp.value;
-      t = setTimeout(() => {
+      t = setTimeout(async () => {
         viewComunicacao.termo = valor;
+        if (viewComunicacao.aba === "empresas") {
+          try { await recarregarEmpresasComunicacao(ultimoDados.comunicacaoApi ?? painelAdmApi); } catch { /* mantém a lista anterior */ }
+        }
         pintarComunicacao();
         const novo = el("#padm-com-busca");
         if (novo) { novo.focus(); novo.setSelectionRange?.(valor.length, valor.length); }
-      }, 160);
+      }, 260);
     });
   }
-  els("[data-padm-com-org]").forEach((b) =>
+  els("[data-padm-com-org]:not([data-padm-com-acao])").forEach((b) =>
     b.addEventListener("click", () => abrirDrawerComunicacao(b.dataset.padmComOrg)));
+  els("[data-padm-com-acao]").forEach((b) => b.addEventListener("click", (ev) => { ev.stopPropagation(); acaoEmpresaComunicacao(b); }));
+  els("[data-padm-com-filtro]").forEach((b) => b.addEventListener("click", () => {
+    viewComunicacao.filtro = b.dataset.padmComFiltro;
+    carregarSubAbaComunicacao();
+  }));
+  el("#padm-com-disp-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
+    try {
+      ultimoDados.comunicacaoDisponibilidade = await api.comunicacaoAtualizarDisponibilidade({
+        dadosDisponiveisApos: String(fd.get("dadosDisponiveisApos") ?? ""), enviosPermitidosApos: String(fd.get("enviosPermitidosApos") ?? ""),
+      });
+      pintarComunicacao();
+    } catch (err) {
+      alert(err.message || "Não foi possível salvar os horários.");
+    }
+  });
   els("[data-padm-com-msg]").forEach((b) =>
     b.addEventListener("click", () => abrirDetalheMensagem(b.dataset.padmComMsg)));
   els("[data-padm-com-pag]").forEach((b) => b.addEventListener("click", () => {
@@ -1593,22 +1656,13 @@ function ligarComunicacao() {
 
 let onEscComunicacao = null;
 
-export function htmlSeletorPerfil(perfis, perfilSelecionadoId) {
-  if (!perfis?.length) {
-    return `<p class="padm-vazio">Nenhum perfil disponível para associação.</p>`;
-  }
-  return `
-    <select name="perfilOperacionalId">
-      <option value="">Selecione…</option>
-      ${perfis.map((p) => `<option value="${escapeHtml(p.perfilOperacionalId)}" ${p.perfilOperacionalId === perfilSelecionadoId ? "selected" : ""}>${escapeHtml(p.nome ?? "—")}${p.email ? ` (${escapeHtml(p.email)})` : ""}</option>`).join("")}
-    </select>`;
-}
+// (Removido na migration 100: o seletor de PERFIL listava perfis com ACESSO à empresa como candidatos a destinatário. O responsável é cadastrado por nome + telefone.)
 
 const ITENS_CHECKLIST_PILOTO = [
-  ["perfilAssociado", "Perfil associado"],
+  ["responsavelDefinido", "Responsável definido"],
   ["telefoneValido", "Telefone válido"],
   ["consentimento", "Consentimento"],
-  ["telefoneVerificado", "Telefone verificado"],
+  ["telefoneVerificado", "WhatsApp validado"],
   ["timezone", "Timezone"],
   ["tipoAlerta", "Tipo de alerta"],
   ["allowlistPiloto", "Allowlist do piloto"],
@@ -1631,8 +1685,8 @@ export function htmlChecklistPiloto(c) {
  * só aceita `confirmacaoExplicita`, nada mais).
  */
 function htmlAcaoConsentimento(dest) {
-  if (!dest || !dest.perfilOperacionalId) return "";
-  if (dest.consentimento && dest.verificado) {
+  if (!dest || !dest.contatoEmpresaId) return "";
+  if (dest.whatsappStatus === "VALIDADO" && dest.consentimento && dest.verificado) {
     return `<p class="padm-consentimento-ok">${icon("check-circle", { size: 14 })} Consentimento confirmado</p>`;
   }
   return `
@@ -1692,7 +1746,7 @@ export function htmlAcaoHabilitacao(d) {
     return `<p>${chip({ classe: "ok", rotulo: "Comunicação habilitada" })}</p>
       <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="desabilitar-comunicacao-org">Desabilitar comunicação</button>`;
   }
-  const pronto = c.perfilAssociado && c.telefoneValido && c.consentimento && c.telefoneVerificado && c.timezone && c.tipoAlerta;
+  const pronto = c.responsavelDefinido && c.telefoneValido && c.consentimento && c.telefoneVerificado && c.timezone && c.tipoAlerta;
   if (!pronto) return `<p class="padm-vazio">Conclua a configuração, o consentimento e a verificação para poder habilitar a comunicação.</p>`;
   return `
     <div class="padm-habilitacao-acao">
@@ -1707,7 +1761,41 @@ export function htmlAcaoHabilitacao(d) {
     </div>`;
 }
 
-export function htmlDrawerComunicacao(d, perfis) {
+/** Seção RESPONSÁVEL PELAS COMUNICAÇÕES — nome, telefone (país + número), ativo, observações. Não pede login nem perfil. */
+function htmlSecaoResponsavel(dest) {
+  const validadoEm = dest?.whatsappValidadoEm ? fmtData(dest.whatsappValidadoEm) : null;
+  return secao({
+    titulo: "Responsável pelas comunicações", icone: "message-circle",
+    sub: "Quem recebe os avisos desta empresa. Não precisa ter login no sistema e não depende de unidade nem de usuário.",
+    corpo: `
+      ${dest
+        ? `<p>${escapeHtml(dest.nome ?? "—")} · ${escapeHtml(dest.telefoneMascarado ?? "—")} · ${chipWhatsappEmpresa(dest.whatsappStatus)}${validadoEm ? ` · validado em ${escapeHtml(validadoEm)}` : ""}${dest.optOut ? " · OPT-OUT ATIVO" : ""}</p>
+           ${htmlAcaoConsentimento(dest)}`
+        : `<p class="padm-vazio">Nenhum responsável cadastrado.</p>`}
+      <form id="padm-com-resp-form" class="padm-form">
+        <label>Nome do responsável
+          <input type="text" name="nome" value="${escapeHtml(dest?.nome ?? "")}" required />
+        </label>
+        <label>Código do país
+          <input type="text" name="ddi" value="55" inputmode="numeric" pattern="[0-9]{1,3}" />
+        </label>
+        <label>Telefone (DDD + número)${dest ? " — informe para trocar o número (a validação será refeita)" : ""}
+          <input type="text" name="telefone" inputmode="tel" placeholder="11 99999-8888" ${dest ? "" : "required"} />
+        </label>
+        <label class="padm-check">
+          <input type="checkbox" name="ativo" ${!dest || dest.ativo ? "checked" : ""} />
+          Ativo para receber avisos
+        </label>
+        <label>Observações
+          <input type="text" name="observacoes" value="${escapeHtml(dest?.observacoes ?? "")}" />
+        </label>
+        <button type="submit" class="btn btn-primary btn-sm">Salvar responsável</button>
+        <p class="padm-form-nota">Salvar não envia nada e não altera a habilitação da empresa. Trocar o número desfaz a validação do WhatsApp.</p>
+      </form>`,
+  });
+}
+
+export function htmlDrawerComunicacao(d) {
   const cfg = d.configuracao;
   const dest = cfg.destinatario;
   return `
@@ -1733,12 +1821,7 @@ export function htmlDrawerComunicacao(d, perfis) {
             ? `<ul class="padm-vinc-unidades">${d.unidades.map((u) => `<li>${escapeHtml(u.unidadeNome ?? u.unidadeId)} — ${escapeHtml(u.criticidade)} (${u.diasPendentes} dia(s))</li>`).join("")}</ul>`
             : `<p class="padm-vazio">Nenhuma pendência atual.</p>`,
         })}
-        ${secao({
-          titulo: "Destinatário atual", corpo: dest
-            ? `<p>Telefone ${escapeHtml(dest.telefoneMascarado ?? "—")} · ${dest.verificado ? "verificado" : "não verificado"} · consentimento ${dest.consentimento ? "sim" : "não"}${dest.optOut ? " · OPT-OUT ATIVO" : ""}</p>
-               ${htmlAcaoConsentimento(dest)}`
-            : `<p class="padm-vazio">Nenhum destinatário configurado.</p>`,
-        })}
+        ${htmlSecaoResponsavel(dest)}
         ${secao({
           titulo: "Pré-visualizar mensagem", icone: "eye",
           sub: "Monta o texto exato com dados reais — nunca envia nada.",
@@ -1748,15 +1831,9 @@ export function htmlDrawerComunicacao(d, perfis) {
         })}
         ${secao({
           titulo: "Configuração operacional", icone: "settings",
-          sub: "Timezone, destinatário, tipo de alerta e pausa. Independe da ativação da comunicação.",
+          sub: "Timezone, tipo de alerta e pausa. O responsável pelos avisos é cadastrado acima. Independe da ativação da comunicação.",
           corpo: `
             <form id="padm-com-form" class="padm-form">
-              <label>Telefone do destinatário (E.164)
-                <input type="text" name="telefoneE164" placeholder="+55 11 99999-8888" />
-              </label>
-              <label>Destinatário (perfil desta empresa)
-                ${htmlSeletorPerfil(perfis, dest?.perfilOperacionalId ?? null)}
-              </label>
               <label>Timezone (IANA)
                 <input type="text" name="timezone" value="${escapeHtml(cfg.timezone ?? "")}" placeholder="America/Sao_Paulo" />
               </label>
@@ -1776,7 +1853,7 @@ export function htmlDrawerComunicacao(d, perfis) {
     </div>`;
 }
 
-export async function abrirDrawerComunicacao(organizacaoId) {
+export async function abrirDrawerComunicacao(organizacaoId, { foco = null } = {}) {
   const cx = caixaModal();
   if (!cx) return;
   const api = ultimoDados.comunicacaoApi ?? painelAdmApi;
@@ -1784,12 +1861,10 @@ export async function abrirDrawerComunicacao(organizacaoId) {
   cx.classList.add("padm-modal-wrap--drawer");
   cx.innerHTML = `<div class="padm-drawer">${carregando("lista")}</div>`;
   try {
-    const [detalhe, perfis] = await Promise.all([
-      api.comunicacaoDetalheOrganizacao(organizacaoId),
-      api.comunicacaoPerfisElegiveis(organizacaoId),
-    ]);
-    cx.innerHTML = htmlDrawerComunicacao(detalhe, perfis);
+    const detalhe = await api.comunicacaoDetalheOrganizacao(organizacaoId);
+    cx.innerHTML = htmlDrawerComunicacao(detalhe);
     ligarDrawerComunicacao(organizacaoId, api);
+    if (foco === "responsavel") el("#padm-com-resp-form")?.scrollIntoView?.({ block: "center" });
   } catch (e) {
     cx.innerHTML = `<div class="padm-drawer">${erro(e)}</div>`;
   }
@@ -1840,8 +1915,7 @@ function ligarDrawerComunicacao(organizacaoId, api) {
     try {
       await api.comunicacaoConfirmarConsentimento(organizacaoId);
       await abrirDrawerComunicacao(organizacaoId); // drawer atualiza com o checklist/destinatário reais
-      ultimoDados.comunicacaoOrgs = await api.comunicacaoOrganizacoes({});
-      pintarComunicacao();
+      await aposAcaoNaEmpresa(api);
     } catch (err) {
       e.target.disabled = false;
       alert(err.message || "Não foi possível confirmar consentimento/verificação.");
@@ -1863,7 +1937,7 @@ function ligarDrawerComunicacao(organizacaoId, api) {
     try {
       await api.comunicacaoDefinirHabilitacao(organizacaoId, true);
       await abrirDrawerComunicacao(organizacaoId);
-      await recarregarComunicacaoAposAcao(api);
+      await aposAcaoNaEmpresa(api);
     } catch (err) {
       e.target.disabled = false;
       alert(err.message || "Não foi possível habilitar a comunicação desta empresa.");
@@ -1874,30 +1948,45 @@ function ligarDrawerComunicacao(organizacaoId, api) {
     try {
       await api.comunicacaoDefinirHabilitacao(organizacaoId, false);
       await abrirDrawerComunicacao(organizacaoId);
-      await recarregarComunicacaoAposAcao(api);
+      await aposAcaoNaEmpresa(api);
     } catch (err) {
       e.target.disabled = false;
       alert(err.message || "Não foi possível desabilitar a comunicação desta empresa.");
     }
   });
+  el("#padm-com-resp-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const ddi = String(f.get("ddi") ?? "").replace(/\D/g, "") || "55";
+    const digitos = String(f.get("telefone") ?? "").replace(/\D/g, "");
+    const dados = {
+      nome: String(f.get("nome") ?? "").trim(),
+      ativo: !!f.get("ativo"),
+      observacoes: String(f.get("observacoes") ?? "").trim() || null,
+    };
+    // sem número novo digitado: o backend mantém o telefone atual (e a validação) — só nome/ativo/observações mudam
+    if (digitos) dados.telefoneE164 = `+${ddi}${digitos}`;
+    try {
+      await api.comunicacaoSalvarResponsavel(organizacaoId, dados);
+      await abrirDrawerComunicacao(organizacaoId);
+      await aposAcaoNaEmpresa(api);
+    } catch (err) {
+      alert(err.message || "Não foi possível salvar o responsável.");
+    }
+  });
   el("#padm-com-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    const telefone = String(f.get("telefoneE164") ?? "").trim();
-    const perfil = String(f.get("perfilOperacionalId") ?? "").trim();
     const timezone = String(f.get("timezone") ?? "").trim();
     const dados = {
       timezone: timezone || undefined,
-      telefoneE164: telefone || undefined,
-      perfilOperacionalId: perfil || undefined,
       tiposPermitidos: f.get("tipoDashboardIfoodD1") ? ["dashboard_ifood_d1"] : [],
       pausadoAte: f.get("pausar") ? new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000).toISOString() : null,
     };
     try {
       await api.comunicacaoAtualizarConfiguracao(organizacaoId, dados);
       fecharDrawerComunicacao();
-      ultimoDados.comunicacaoOrgs = await api.comunicacaoOrganizacoes({});
-      pintarComunicacao();
+      await aposAcaoNaEmpresa(api);
     } catch (err) {
       alert(err.message || "Não foi possível salvar a configuração.");
     }

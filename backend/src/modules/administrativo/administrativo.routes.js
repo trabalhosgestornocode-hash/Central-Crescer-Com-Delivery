@@ -61,7 +61,11 @@ administrativoRouter.get("/unidades/:unidadeId/calendario", c.calendarioUnidade)
 administrativoRouter.get("/comunicacao/resumo", cc.resumo);
 administrativoRouter.get("/comunicacao/organizacoes", cc.organizacoes);
 administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId", cc.detalheOrganizacao);
-administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/perfis-elegiveis", cc.perfisElegiveis);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/responsavel", cc.salvarResponsavel);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/responsaveis/:contatoId/ativo", cc.definirAtivoResponsavel);
+administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/responsaveis/:contatoId/validar", cc.validarResponsavel);
+administrativoRouter.get("/comunicacao/disponibilidade", cc.disponibilidade);
+administrativoRouter.put("/comunicacao/disponibilidade", cc.atualizarDisponibilidade);
 administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/preview-mensagem", cc.preverMensagem);
 administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/configuracao", cc.atualizarConfiguracao);
 // Checkpoint H.4-A.2 — segunda escrita permitida, só consentimento/verificação

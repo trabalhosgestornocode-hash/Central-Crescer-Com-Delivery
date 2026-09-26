@@ -6,6 +6,7 @@
 // Rodar: node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-adiamento-pipeline.test.js
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
+import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
@@ -70,7 +71,7 @@ beforeEach(async () => {
 let seq = 0;
 async function mensagemDevida() {
   const { data, error } = await supabase.from("comunicacao_mensagens").insert({
-    organizacao_id: orgA, unidade_id: unidadeA, contato_id: contatoId, destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
+    organizacao_id: orgA, unidade_id: unidadeA, contato_id: contatoId, contato_empresa_id: await responsavelDoContato({ organizacaoId: orgA, contatoId, perfilId }), destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
     tipo: `tipo_${tag}_${++seq}`, conteudo: "aviso", idempotency_key: `adp-${tag}-${++seq}`, status: SM.SCHEDULED,
     disponivel_em: new Date(Date.now() - 60_000).toISOString(),
   }).select("*").single();

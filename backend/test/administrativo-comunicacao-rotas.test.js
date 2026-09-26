@@ -103,6 +103,8 @@ function estadoBase() {
     ],
     contatos_whatsapp: [],
     contatos_whatsapp_perfis: [],
+    comunicacao_contatos_empresa: [],
+    unidades: [],
     whatsapp_conexoes: [],
     plataforma_auditoria: [],
     comunicacao_configuracoes: [{ chave: "modo", valor: "DISABLED" }],
@@ -213,47 +215,20 @@ describe("Checkpoint H.3-A.1 — item 1/2: status do worker é CONFIGURAÇÃO, n
   });
 });
 
-describe("Checkpoint H.3-A.1 — itens 3-6: perfis elegíveis (seletor controlado, nunca UUID livre)", () => {
-  test("D. lista só perfis com vínculo ATIVO NESTA organização, com nome/e-mail humanos", async () => {
+describe("Migration 091 — perfis por ACESSO não são mais fonte de destinatário", () => {
+  test("a rota perfis-elegiveis não existe mais (acesso a uma empresa NÃO é responsável de comunicação)", async () => {
     const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
     const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/perfis-elegiveis`);
-    assert.equal(r.status, 200);
-    assert.equal(r.json.data.length, 1);
-    assert.equal(r.json.data[0].nome, "Fulano da Silva");
-    assert.equal(r.json.data[0].email, "fulano@teste.com");
-    assert.ok(r.json.data[0].perfilOperacionalId);
-  });
-
-  test("E. perfil vinculado só à ORG_B nunca aparece na lista da ORG_A", async () => {
-    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
-    const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/perfis-elegiveis`);
-    assert.ok(!r.json.data.some((p) => p.nome === "Perfil de Outra Empresa"));
-  });
-
-  test("F. mesmo enviando o UUID de um perfil de OUTRA organização manualmente, o backend recusa (PERFIL_SEM_VINCULO)", async () => {
-    const estado = estadoBase();
-    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
-    const r = await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, {
-      telefoneE164: "+5511999998888", perfilOperacionalId: uuid("perfilB"),
-    });
-    assert.equal(r.status, 400);
-    assert.match(JSON.stringify(r.json), /PERFIL_SEM_VINCULO/);
-    assert.equal((estado.comunicacao_habilitacoes[0] ?? {}).destinatario_perfil_id, undefined);
-  });
-
-  test("G. organização sem nenhum perfil elegível -> lista vazia (nunca erro)", async () => {
-    const estado = estadoBase();
-    estado.usuarios_organizacoes = estado.usuarios_organizacoes.filter((v) => v.organizacao_id !== ORG_A);
-    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
-    const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/perfis-elegiveis`);
-    assert.equal(r.status, 200);
-    assert.deepEqual(r.json.data, []);
-  });
-
-  test("organização inexistente -> 404 (não vaza a existência de perfis)", async () => {
-    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
-    const r = await GET(app, `/administrativo/comunicacao/organizacoes/${uuid("nao-existe")}/perfis-elegiveis`);
     assert.equal(r.status, 404);
+  });
+
+  test("PUT configuracao recusa telefone/perfil: o responsável só é cadastrado em .../responsavel", async () => {
+    const estado = estadoBase();
+    const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
+    const r = await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, { telefoneE164: "+5511999998888", perfilOperacionalId: uuid("perfilB") });
+    assert.equal(r.status, 400);
+    assert.match(JSON.stringify(r.json), /USE_CADASTRO_DE_RESPONSAVEL/);
+    assert.equal(estado.comunicacao_habilitacoes.length, 0);
   });
 });
 
@@ -362,7 +337,7 @@ describe("Checkpoint H.3-A — proteção contra habilitado=true (item 21)", () 
   test("a chamada de auditoria nunca derruba o endpoint, mesmo falhando (REGRA DE OURO de shared/auditoria.js)", async () => {
     const estado = estadoBase();
     const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
-    const r = await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, { telefoneE164: "+5511999998888", timezone: "America/Sao_Paulo" });
+    const r = await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, { timezone: "America/Sao_Paulo" });
     assert.equal(r.status, 200, "a operação principal deve ter sucesso mesmo com a auditoria falhando por rede no teste");
     const linha = estado.comunicacao_habilitacoes.find((h) => h.organizacao_id === ORG_A);
     assert.notEqual(linha.habilitado, true);
@@ -378,7 +353,6 @@ describe("Checkpoint H.3-A — proteção contra habilitado=true (item 21)", () 
     // o bloco `detalhes` só pode usar telefone MASCARADO — nunca a variável bruta `telefoneE164`
     const blocoDetalhes = codigo.slice(codigo.indexOf("detalhes: {"), codigo.indexOf("});", codigo.indexOf("detalhes: {")));
     assert.doesNotMatch(blocoDetalhes, /\btelefoneE164\b/, "detalhes de auditoria não pode referenciar o telefone bruto");
-    assert.match(blocoDetalhes, /telefoneMascaradoParaAuditoria|mascararTelefone/);
   });
 });
 
@@ -442,7 +416,6 @@ describe("Checkpoint H.3-A — zero outbound (item 35, obrigatório)", () => {
       await GET(app, "/administrativo/comunicacao/resumo");
       await GET(app, "/administrativo/comunicacao/organizacoes");
       await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}`);
-      await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/perfis-elegiveis`);
       await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/preview-mensagem`);
       await PUT(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/configuracao`, { timezone: "America/Sao_Paulo" });
       await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });
@@ -476,7 +449,7 @@ describe("Checkpoint H.4-A — checklistPiloto (itens 34-36): 100% derivado, nun
     assert.equal(r.status, 200);
     const c = r.json.data.checklistPiloto;
     assert.deepEqual(c, {
-      perfilAssociado: false, telefoneValido: false, consentimento: false, telefoneVerificado: false,
+      responsavelDefinido: false, telefoneValido: false, consentimento: false, telefoneVerificado: false,
       timezone: false, tipoAlerta: false, allowlistPiloto: true /* piloto desligado = gate não aplicável, ver comunicacao.piloto.js */,
       organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
     });
@@ -486,14 +459,15 @@ describe("Checkpoint H.4-A — checklistPiloto (itens 34-36): 100% derivado, nun
     const estado = estadoBase();
     const contatoId = uuid("contato1");
     estado.contatos_whatsapp = [{ id: contatoId, telefone_e164: "+5586988846788", verificado: false, consentimento: false, opt_out: false }];
+    estado.comunicacao_contatos_empresa = [{ id: uuid("ce1"), organizacao_id: ORG_A, nome: "Responsável", telefone_e164: "+5586988846788", tipo: "principal", ativo: true, contato_whatsapp_id: contatoId, whatsapp_status: "AGUARDANDO_VALIDACAO" }];
     estado.comunicacao_habilitacoes = [{
       organizacao_id: ORG_A, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"],
-      destinatario_contato_id: contatoId, destinatario_perfil_id: uuid("perfil1"), pausado_ate: null,
+      destinatario_contato_id: contatoId, destinatario_contato_empresa_id: uuid("ce1"), destinatario_perfil_id: null, pausado_ate: null,
     }];
     const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
     const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}`);
     const c = r.json.data.checklistPiloto;
-    assert.equal(c.perfilAssociado, true);
+    assert.equal(c.responsavelDefinido, true);
     assert.equal(c.telefoneValido, true);
     assert.equal(c.timezone, true);
     assert.equal(c.tipoAlerta, true);
@@ -508,9 +482,10 @@ describe("Checkpoint H.4-A.2/H.4-A.3 — POST .../consentimento: confirmação e
     const estado = estadoBase();
     const contatoId = uuid("contato-consent");
     estado.contatos_whatsapp = [{ id: contatoId, telefone_e164: "+5586988846788", verificado: false, consentimento: false, opt_out }];
+    estado.comunicacao_contatos_empresa = [{ id: uuid("ce-consent"), organizacao_id: ORG_A, nome: "Responsável", telefone_e164: "+5586988846788", tipo: "principal", ativo: true, contato_whatsapp_id: contatoId, whatsapp_status: "AGUARDANDO_VALIDACAO" }];
     estado.comunicacao_habilitacoes = [{
       organizacao_id: ORG_A, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"],
-      destinatario_contato_id: contatoId, destinatario_perfil_id: uuid("perfil1"), pausado_ate: null,
+      destinatario_contato_id: contatoId, destinatario_contato_empresa_id: uuid("ce-consent"), destinatario_perfil_id: null, pausado_ate: null,
     }];
     return { estado, contatoId };
   }
@@ -585,9 +560,13 @@ describe("Checkpoint H.4-A.2/H.4-A.3 — POST .../consentimento: confirmação e
       { id: contatoA, telefone_e164: "+5586988846788", verificado: false, consentimento: false, opt_out: false },
       { id: contatoB, telefone_e164: "+5511999990000", verificado: false, consentimento: false, opt_out: false },
     ];
+    estado.comunicacao_contatos_empresa = [
+      { id: uuid("ceA"), organizacao_id: ORG_A, nome: "Resp A", telefone_e164: "+5586988846788", tipo: "principal", ativo: true, contato_whatsapp_id: contatoA, whatsapp_status: "AGUARDANDO_VALIDACAO" },
+      { id: uuid("ceB"), organizacao_id: ORG_B, nome: "Resp B", telefone_e164: "+5511999990000", tipo: "principal", ativo: true, contato_whatsapp_id: contatoB, whatsapp_status: "AGUARDANDO_VALIDACAO" },
+    ];
     estado.comunicacao_habilitacoes = [
-      { organizacao_id: ORG_A, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"], destinatario_contato_id: contatoA, destinatario_perfil_id: uuid("perfil1"), pausado_ate: null },
-      { organizacao_id: ORG_B, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"], destinatario_contato_id: contatoB, destinatario_perfil_id: uuid("perfilB"), pausado_ate: null },
+      { organizacao_id: ORG_A, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"], destinatario_contato_id: contatoA, destinatario_contato_empresa_id: uuid("ceA"), destinatario_perfil_id: null, pausado_ate: null },
+      { organizacao_id: ORG_B, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"], destinatario_contato_id: contatoB, destinatario_contato_empresa_id: uuid("ceB"), destinatario_perfil_id: null, pausado_ate: null },
     ];
     const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
     const r = await POST(app, `/administrativo/comunicacao/organizacoes/${ORG_A}/consentimento`, { confirmacaoExplicita: true });

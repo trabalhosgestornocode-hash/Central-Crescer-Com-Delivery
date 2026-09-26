@@ -12,6 +12,7 @@ import { htmlVisaoGeral } from "./centralVisao.js";
 import * as M from "./centralModelo.js";
 import { executarEnvio, criarTrava } from "./centralEnvio.js";
 import { criarControleConexao } from "./centralConexao.js";
+import { htmlEmpresasCentral, htmlDisponibilidadeIfood } from "../painelAdmCentral.js";
 
 const POLL_ATIVO_MS = 8000;
 const POLL_LENTO_MS = 30000;
@@ -21,6 +22,9 @@ let instancia = null;
 
 /** Encerra a Central montada (timers, listeners). Chamado por quem troca de tela e no logout. */
 export function pararCentral() { instancia?.destruir(); instancia = null; }
+
+/** Recarrega os dados da Central montada (depois de uma ação no drawer da empresa). `false` = não há Central montada. */
+export function recarregarCentral() { if (!instancia) return false; instancia.recarregar(); return true; }
 
 /**
  * @param {HTMLElement} raiz  container da tela (#padm-view)
@@ -46,6 +50,7 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     rascunhos: new Map(), travas: new Map(), idsVistos: new Set(), ultimaLidaEm: new Map(),
     visao: null, auto: null, ativ: null, dest: null, destBusca: "", hist: { pacote: null, filtros: { organizacaoId: "", unidadeId: "", origem: "", status: "", desde: "", ate: "", operador: "", busca: "" }, pagina: 1 },
     config: null, diag: null, erros: [], cfgExtras: null,
+    emp: { itens: null, resumo: null, busca: "", filtro: "todos" },
     seq: { lista: 0, thread: 0, aba: 0, dest: 0 }, empurrados: 0, timer: null, pollando: false, vivo: true, menu: null,
   };
   const timers = new Set();
@@ -150,6 +155,12 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
         if (!S.dest) carregarDestinatarios({ paraOpcoes: true });
         break;
       }
+      case "empresas": {
+        // UMA linha por EMPRESA; o responsável vem do vínculo explícito empresa -> responsável (nunca de usuário/unidade). Busca/filtro no SERVIDOR.
+        c.innerHTML = S.emp.itens ? htmlEmpresasCentral(S.emp.itens, S.emp.busca, S.emp.filtro, S.emp.resumo) : ui.skeletonTabela();
+        if (!S.emp.itens) carregarEmpresas();
+        break;
+      }
       case "destinatarios": {
         c.innerHTML = ui.htmlDestinatarios(S.dest, { busca: S.destBusca, agora: agoraD });
         if (!S.dest) carregarDestinatarios({});
@@ -216,6 +227,34 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     S.hist.pacote = res.r; if (S.aba === "historico") pintarCorpo();
   }
 
+  async function carregarEmpresas({ manterFoco = false } = {}) {
+    const res = await guardado("aba", async () => {
+      const [itens, resumo] = await Promise.all([
+        api.comunicacaoOrganizacoes({ busca: S.emp.busca || undefined, filtro: S.emp.filtro === "todos" ? undefined : S.emp.filtro }),
+        api.comunicacaoResumo(),
+      ]);
+      return { itens, resumo };
+    });
+    if (!res) return;
+    S.emp.itens = res.r.itens; S.emp.resumo = res.r.resumo;
+    if (S.aba !== "empresas") return;
+    pintarCorpo();
+    if (manterFoco) { const b = q("#padm-com-busca"); if (b) { b.focus(); b.setSelectionRange?.(b.value.length, b.value.length); } }
+  }
+
+  async function acaoEmpresa(botao) {
+    const org = botao.dataset.padmComOrg; const acao = botao.dataset.padmComAcao;
+    if (acao === "gerenciar" || acao === "editar" || acao === "validar") { ganchos.abrirEmpresa?.(org, { foco: acao === "gerenciar" ? null : "responsavel" }); return; }
+    if (acao === "historico") { S.hist.filtros.organizacaoId = org; S.hist.filtros.unidadeId = ""; S.hist.pagina = 1; S.hist.pacote = null; trocarAba("historico"); return; }
+    if (acao === "alternar-ativo") {
+      const ativar = botao.dataset.padmComAtivo !== "1";
+      if (!janela.confirm?.(ativar ? "Reativar o recebimento de avisos deste responsável?" : "Desativar o recebimento de avisos deste responsável? Nenhuma mensagem será enviada a ele.")) return;
+      botao.disabled = true;
+      try { await api.comunicacaoDefinirAtivoResponsavel(org, botao.dataset.padmComContato, ativar); S.emp.itens = null; S.visao = S.dest = null; pintarCorpo(); toast(ativar ? "Avisos reativados." : "Avisos desativados."); }
+      catch (err) { botao.disabled = false; if (!falhou(err)) toast(err?.message || "Não foi possível alterar o recebimento de avisos."); }
+    }
+  }
+
   async function carregarDestinatarios({ paraOpcoes = false }) {
     const res = await guardado(paraOpcoes ? "dest" : "aba", () => api.centralDestinatarios({ busca: S.destBusca }));
     if (!res) return;
@@ -227,11 +266,12 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
   async function carregarConfiguracoes() {
     const res = await guardado("aba", async () => {
       const sem = (p) => Promise.resolve().then(p).catch(() => null);
-      const [config, auto, ativ, resumo, orgs, testes] = await Promise.all([
+      const [config, auto, ativ, resumo, orgs, testes, disp] = await Promise.all([
         api.comunicacaoConfiguracaoOperacional(), sem(() => api.centralAutomacoes()), sem(() => api.comunicacaoAtivacao?.()),
         sem(() => api.comunicacaoResumo()), sem(() => api.comunicacaoOrganizacoes({})), sem(() => api.comunicacaoMensagens({ origem: "teste_controlado", porPagina: 10 })),
+        sem(() => api.comunicacaoDisponibilidade?.()),
       ]);
-      return { config, auto, ativ, resumo, orgs, testes };
+      return { config, auto, ativ, resumo, orgs, testes, disp };
     });
     if (!res) return;
     S.config = res.r.config; S.ativ = res.r.ativ; S.cfgExtras = res.r;
@@ -247,6 +287,8 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
       ativacaoHtml: ganchos.htmlAtivacao?.(S.ativ) ?? "", testeHtml: ganchos.htmlTeste?.({ resumo: x.resumo, orgs: x.orgs ?? [], testes: x.testes }) ?? "",
       empresasHabilitadas: x.auto?.empresasHabilitadas?.itens ?? [],
     });
+    // horários de disponibilidade dos dados do iFood (D-1) — editáveis; o texto explica a regra
+    if (x.disp) c.insertAdjacentHTML("afterbegin", htmlDisponibilidadeIfood(x.disp));
     if (aberto) { const d = q("[data-cc-tecnico]"); if (d) d.open = true; }
     ligarLegado();
   }
@@ -591,6 +633,11 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     const pag = t.closest("[data-cc-pag]");
     if (pag) { const [, dir] = pag.dataset.ccPag.split(":"); S.hist.pagina = Math.max(1, S.hist.pagina + (dir === "proximo" ? 1 : -1)); S.hist.pacote = null; pintarCorpo(); return; }
 
+    const filtroEmp = t.closest("[data-padm-com-filtro]");
+    if (filtroEmp) { S.emp.filtro = filtroEmp.dataset.padmComFiltro; S.emp.itens = null; pintarCorpo(); return; }
+    const acaoEmp = t.closest("[data-padm-com-acao]");
+    if (acaoEmp) { acaoEmpresa(acaoEmp); return; }
+
     const acao = t.closest("[data-cc-acao]");
     if (!acao) return;
     const a = acao.dataset.ccAcao; const org = acao.dataset.ccOrg; const id = acao.dataset.ccId;
@@ -612,6 +659,7 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
   function aoInput(ev) {
     const t = ev.target;
     if (t.id === "cc-busca") { aoBuscar(t.value); return; }
+    if (t.id === "padm-com-busca") { S.emp.busca = t.value; janela.clearTimeout(debounceBusca); debounceBusca = janela.setTimeout(() => carregarEmpresas({ manterFoco: true }), 260); timers.add(debounceBusca); return; }
     if (t.id === "cc-dest-busca") { S.destBusca = t.value; janela.clearTimeout(debounceBusca); debounceBusca = janela.setTimeout(() => { S.dest = null; carregarDestinatarios({}); }, 250); timers.add(debounceBusca); return; }
     if (t.id === "cc-texto") {
       if (S.sel) { const r = rasc(S.sel); r.texto = t.value; if (r.erro) { r.erro = ""; q(".cc-composer-erro")?.remove(); } }
@@ -649,6 +697,14 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
   function aoEnviarForm(ev) {
     const f = ev.target;
     if (f.matches?.("[data-cc-composer]")) { ev.preventDefault(); enviar(); return; }
+    if (f.id === "padm-com-disp-form") {
+      ev.preventDefault();
+      const dados = new FormData(f);
+      api.comunicacaoAtualizarDisponibilidade({ dadosDisponiveisApos: String(dados.get("dadosDisponiveisApos") ?? ""), enviosPermitidosApos: String(dados.get("enviosPermitidosApos") ?? "") })
+        .then((r) => { S.cfgExtras = { ...(S.cfgExtras ?? {}), disp: r }; if (vivo() && S.aba === "configuracoes") pintarConfiguracoes(); toast("Horários salvos."); })
+        .catch((err) => { if (!falhou(err)) toast(err?.message || "Não foi possível salvar os horários."); });
+      return;
+    }
     if (f.id === "cc-hist-filtros") {
       ev.preventDefault();
       const dados = new FormData(f);
@@ -710,5 +766,7 @@ export function criarCentral(raiz, api, ganchos = {}, { abaInicial = "visao-gera
     host.remove();
   }
 
-  return { iniciar, destruir, _estado: S, _abrirConversa: abrirConversa, _trocarAba: trocarAba, _poll: poll, _enviar: enviar };
+  function recarregar() { S.visao = S.auto = S.config = null; S.hist.pacote = null; S.dest = null; S.emp.itens = null; if (S.aba === "conversas") carregarConversas({ silencioso: true }); pintarCorpo(); }
+
+  return { iniciar, destruir, recarregar, _estado: S, _abrirConversa: abrirConversa, _trocarAba: trocarAba, _poll: poll, _enviar: enviar };
 }

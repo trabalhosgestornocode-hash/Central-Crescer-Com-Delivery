@@ -125,7 +125,7 @@ describe("apoio de tela", () => {
     assert.deepEqual(s.map((x) => [x.id, x.ok]), [["consentimento", true], ["verificado", false], ["optout", false]]);
   });
   test("abas: as 7 seções, com Conexão antes de Configurações", () => {
-    assert.deepEqual(ABAS.map(([id]) => id), ["visao-geral", "conversas", "automacoes", "historico", "destinatarios", "conexao", "configuracoes"]);
+    assert.deepEqual(ABAS.map(([id]) => id), ["visao-geral", "conversas", "empresas", "automacoes", "historico", "destinatarios", "conexao", "configuracoes"]);
   });
 });
 

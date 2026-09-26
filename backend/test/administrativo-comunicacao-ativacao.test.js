@@ -64,8 +64,13 @@ function estadoBase({ habilitadaA = false, contatoTel = TEL_A, gateway = "CONNEC
   return {
     organizacoes: [{ id: ORG_A, nome: "Grupo Jailton e Vanessa", status: "ativa" }, { id: ORG_B, nome: "Outra", status: "ativa" }],
     comunicacao_habilitacoes: [
-      { organizacao_id: ORG_A, habilitado: habilitadaA, tipos_permitidos: ["dashboard_ifood_d1"], timezone: "America/Sao_Paulo", destinatario_contato_id: CONTATO_A, destinatario_perfil_id: PERFIL_A },
-      ...(orgBHabilitada ? [{ organizacao_id: ORG_B, habilitado: true, tipos_permitidos: ["dashboard_ifood_d1"], timezone: "America/Sao_Paulo", destinatario_contato_id: uuid("contatoB"), destinatario_perfil_id: uuid("perfilB") }] : []),
+      { organizacao_id: ORG_A, habilitado: habilitadaA, tipos_permitidos: ["dashboard_ifood_d1"], timezone: "America/Sao_Paulo", destinatario_contato_id: CONTATO_A, destinatario_contato_empresa_id: uuid("ceA"), destinatario_perfil_id: PERFIL_A },
+      ...(orgBHabilitada ? [{ organizacao_id: ORG_B, habilitado: true, tipos_permitidos: ["dashboard_ifood_d1"], timezone: "America/Sao_Paulo", destinatario_contato_id: uuid("contatoB"), destinatario_contato_empresa_id: uuid("ceB"), destinatario_perfil_id: uuid("perfilB") }] : []),
+    ],
+    // migration 100: o destinatário é o RESPONSÁVEL DA EMPRESA (WhatsApp validado)
+    comunicacao_contatos_empresa: [
+      { id: uuid("ceA"), organizacao_id: ORG_A, nome: "Jailton Matos", telefone_e164: contatoTel, tipo: "principal", ativo: true, contato_whatsapp_id: CONTATO_A, whatsapp_status: "VALIDADO", whatsapp_validado_em: AGORA_ISO() },
+      ...(orgBHabilitada ? [{ id: uuid("ceB"), organizacao_id: ORG_B, nome: "Resp B", telefone_e164: TEL_B, tipo: "principal", ativo: true, contato_whatsapp_id: uuid("contatoB"), whatsapp_status: "VALIDADO", whatsapp_validado_em: AGORA_ISO() }] : []),
     ],
     contatos_whatsapp: [
       { id: CONTATO_A, telefone_e164: contatoTel, verificado: true, consentimento: true, opt_out: false },

@@ -368,13 +368,13 @@ export function htmlDestinatarios(d, { busca = "", agora = new Date() } = {}) {
     <td><span class="cc-tel">${e(x.telefoneMascarado ?? "")}</span></td>
     <td>${marcaSimNao(x.consentimento, "Confirmado", "Pendente", "atencao")}</td>
     <td>${marcaSimNao(x.verificado, "Verificado", "Não verificado", "atencao")}</td>
-    <td>${x.optOut ? `<span class="cc-tag cc-tag--critico">Pediu para parar</span>` : marcaSimNao(x.whatsappConfirmado, "Confirmado", "Ainda não confirmado")}</td>
+    <td>${x.optOut ? `<span class="cc-tag cc-tag--critico">Pediu para parar</span>` : marcaSimNao(x.whatsappConfirmado, "Registrada", "Ainda não registrada")}</td>
     <td>${marcaSimNao(x.comunicacaoHabilitada, "Habilitada", "Desabilitada")}</td>
     <td>${x.ultimaInteracaoEm ? `<time>${e(dataHoraCurta(x.ultimaInteracaoEm, agora))}</time>` : `<span class="cc-nota">Sem interação</span>`}</td>
     <td class="cc-td-acoes"><button type="button" class="btn btn-ghost btn-sm" data-cc-acao="abrir-conversa" data-cc-id="${e(x.contatoId)}">${icon("message-circle", { size: 14 })} Abrir conversa</button></td>
   </tr>`).join("");
   return `${cab}<div class="cc-tabela-wrap"><table class="cc-tabela cc-tabela--dest"><thead><tr>
-      <th>Responsável</th><th>Empresa</th><th>Unidade</th><th>Contato</th><th>Consentimento</th><th>Verificado</th><th>WhatsApp</th><th>Comunicação</th><th>Última interação</th><th><span class="cc-sr">Ações</span></th>
+      <th>Responsável</th><th>Empresa</th><th>Unidade</th><th>Contato</th><th>Consentimento</th><th>Verificado</th><th>Interação</th><th>Comunicação</th><th>Última interação</th><th><span class="cc-sr">Ações</span></th>
     </tr></thead><tbody>${linhas}</tbody></table></div>`;
 }
 

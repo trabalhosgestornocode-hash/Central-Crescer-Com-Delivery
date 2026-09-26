@@ -13,6 +13,7 @@
 //   node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-fila-fencing.test.js
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import { criarOrganizacao, apagarOrganizacao, migracao082Aplicada } from "./helpers/comunicacao-fixtures.js";
@@ -42,7 +43,7 @@ after(async () => {
 
 let seq = 0;
 async function novoJob(extra = {}) {
-  const job = await filaRepo.agendarMensagem({
+  const job = await agendarMensagemT({
     organizacaoId: orgId, contatoId: null, tipo: "teste_fencing", conteudo: "x",
     idempotencyKey: `fencing-${Date.now()}-${++seq}`, disponivelEm: new Date(Date.now() - 60_000), ...extra,
   });

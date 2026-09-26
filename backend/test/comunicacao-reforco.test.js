@@ -152,7 +152,7 @@ function fakeDb({ alertas = [], mensagens = [], configs = {}, rpcs = {} } = {}) 
 
 const HAB_OK = async () => ({
   empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null,
-  destinatarioContatoId: "c1", destinatarioPerfilId: "p1", timezone: TZ, janelas: null, configHorarioValida: true,
+  destinatarioContatoId: "c1", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "p1", timezone: TZ, janelas: null, configHorarioValida: true,
 });
 const alerta = (extra = {}) => ({
   id: "a1", organizacao_id: "o1", tipo_alerta: "dashboard_ifood_d1", status: "SENT", severidade: "atencao",
@@ -265,7 +265,7 @@ describe("agendarReforcosPendentes — scheduler (Política B)", () => {
     for (const [hab, campo] of [
       [{ empresaHabilitada: false }, "semHabilitacao"], [{ tipoPermitido: false }, "semHabilitacao"],
       [{ empresaPausada: true }, "empresaPausada"], [{ destinatarioContatoId: null }, "semDestinatario"],
-      [{ destinatarioPerfilId: null }, "semDestinatario"],
+      [{ destinatarioContatoEmpresaId: null }, "semDestinatario"],
     ]) {
       const db = fakeDb({ alertas: [alerta()], mensagens: [inicial()], rpcs: rpcCriaUmaVez() });
       const r = await rodar(db, QUA("20:30"), { resolverHabilitacao: async () => ({ ...base, ...hab }) });

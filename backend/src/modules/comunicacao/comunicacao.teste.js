@@ -57,10 +57,10 @@ export async function criarWhatsAppServiceDoAmbiente(env = process.env) {
  * @returns {Promise<{resultado: 'JA_EXISTIA'|'ENVIADO'|'FALHOU'|'ENTREGA_INCERTA'|'LIMITE_ATINGIDO'|'MODO_NAO_PERMITIDO'|'POSSE_PERDIDA', mensagemId: string|null, status?: string, classificacao?: string, erro?: string|null}>}
  */
 export async function enviarMensagemTeste({
-  testeId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId = null, telefoneE164, texto, atorPerfilId = null,
+  testeId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId = null, contatoEmpresaId = null, telefoneE164, texto, atorPerfilId = null,
   limite = limiteTestesReais(), whatsAppService, modoAtual, aoIniciar = null,
 }, deps = {}) {
-  const { criada, mensagem, worker } = await filaRepo.criarMensagemTeste({ testeId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId, conteudo: texto, atorPerfilId }, deps);
+  const { criada, mensagem, worker } = await filaRepo.criarMensagemTeste({ testeId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId, contatoEmpresaId, conteudo: texto, atorPerfilId }, deps);
   // Quem NÃO criou nunca chama o provider (duplo clique, corrida, reenvio da tela): só devolve o que já existe.
   if (!criada) return { resultado: "JA_EXISTIA", mensagemId: mensagem.id, status: mensagem.status };
 

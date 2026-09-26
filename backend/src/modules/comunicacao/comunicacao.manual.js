@@ -44,9 +44,9 @@ export function normalizarTextoManual(bruto) {
  * @returns {Promise<{resultado: 'JA_EXISTIA'|'ENVIADO'|'FALHOU'|'ENTREGA_INCERTA'|'POSSE_PERDIDA', mensagemId: string, status?: string|null, classificacao?: string, erro?: string|null}>}
  */
 export async function enviarMensagemManual({
-  envioId, organizacaoId, unidadeId = null, contatoId, destinatarioPerfilId = null, telefoneE164, texto, atorPerfilId = null, atorNome = null, whatsAppService, aoIniciar = null,
+  envioId, organizacaoId, unidadeId = null, contatoId, destinatarioPerfilId = null, contatoEmpresaId = null, telefoneE164, texto, atorPerfilId = null, atorNome = null, whatsAppService, aoIniciar = null,
 }, deps = {}) {
-  const { criada, mensagem, worker } = await filaRepo.criarMensagemManual({ envioId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId, conteudo: texto, atorPerfilId, atorNome }, deps);
+  const { criada, mensagem, worker } = await filaRepo.criarMensagemManual({ envioId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId, contatoEmpresaId, conteudo: texto, atorPerfilId, atorNome }, deps);
   // Quem NÃO criou nunca chama o provider (duplo clique, corrida, reenvio da tela): só devolve o que já existe.
   if (!criada) return { resultado: "JA_EXISTIA", mensagemId: mensagem.id, status: mensagem.status };
 

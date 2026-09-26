@@ -220,12 +220,13 @@ describe("visão geral, automações, histórico, destinatários e configuraçõ
     assert.match(h, /data-cc-acao="detalhe-mensagem" data-cc-id="h1"/); assert.ok(!/data-cc-id="h2"[^>]*detalhe/.test(h.replace(/abrir-conversa/g, "")), "recebida não tem 'detalhes de envio'");
     assert.match(htmlHistorico(null, {}, {}), /cc-skel-tabela/); assert.match(htmlHistorico({ itens: [], total: 0, pagina: 1, porPagina: 25 }, {}, {}), /Nenhuma mensagem encontrada/);
   });
-  test("destinatários: colunas, marcas de consentimento/verificação, 'WhatsApp confirmado', opt-out e abrir conversa", () => {
+  test("destinatários: colunas, marcas de consentimento/verificação, interação registrada (entrada ou entrega), opt-out e abrir conversa", () => {
     const d = { total: 2, itens: [
       { contatoId: "c1", nome: "Maria", iniciais: "M", fotoUrl: null, cargo: "Gestor de unidade", telefoneMascarado: "********01", empresas: [{ organizacaoId: "o", nome: "Rede", habilitada: true }], unidades: [{ unidadeId: "u", nome: "Centro" }], consentimento: true, verificado: true, optOut: false, whatsappConfirmado: true, comunicacaoHabilitada: true, ultimaInteracaoEm: iso(5), naoLidas: 0 },
       { contatoId: "c2", nome: "João", iniciais: "J", fotoUrl: null, cargo: null, telefoneMascarado: "********02", empresas: [{ organizacaoId: "o", nome: "Rede", habilitada: false }], unidades: [], consentimento: false, verificado: false, optOut: true, whatsappConfirmado: false, comunicacaoHabilitada: false, ultimaInteracaoEm: null, naoLidas: 0 }] };
     const h = htmlDestinatarios(d, { agora: AGORA });
-    for (const t of ["Consentimento", "Verificado", "WhatsApp", "Comunicação", "Última interação", "Confirmado", "Pendente", "Não verificado", "Pediu para parar", "Sem interação", "Habilitada", "Desabilitada"]) assert.ok(h.includes(t), t);
+    for (const t of ["Consentimento", "Verificado", "<th>Interação</th>", "Registrada", "Comunicação", "Última interação", "Confirmado", "Pendente", "Não verificado", "Pediu para parar", "Sem interação", "Habilitada", "Desabilitada"]) assert.ok(h.includes(t), t);
+    assert.match(htmlDestinatarios({ total: 1, itens: [{ ...d.itens[1], optOut: false }] }, { agora: AGORA }), /Ainda não registrada/);
     assert.equal((h.match(/data-cc-acao="abrir-conversa"/g) ?? []).length, 2);
     assert.match(htmlDestinatarios({ total: 0, itens: [] }, { busca: "zzz" }), /O telefone não é pesquisável/); assert.match(htmlDestinatarios(null), /cc-skel-tabela/);
   });

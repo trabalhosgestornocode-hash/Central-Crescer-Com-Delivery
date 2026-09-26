@@ -36,6 +36,7 @@ async function rpcFenced(db, nome, args) {
  * @param {{
  *   alertaId?: string|null, organizacaoId: string, unidadeId?: string|null,
  *   contatoId: string, destinatarioPerfilId?: string|null,
+ *   contatoEmpresaId?: string|null, empresaNomeSnapshot?: string|null, contatoNomeSnapshot?: string|null, telefoneSnapshot?: string|null, dataReferencia?: string|null,
  *   tipo: string, conteudo: string, idempotencyKey: string,
  *   disponivelEm: Date, expiraEm?: Date|null, maxTentativas?: number,
  * }} params
@@ -53,6 +54,12 @@ export async function agendarMensagem(params, deps = {}) {
     unidade_id: params.unidadeId ?? null,
     contato_id: params.contatoId,
     destinatario_perfil_id: params.destinatarioPerfilId ?? null,
+    // responsável DA EMPRESA + snapshot (migration 100). Sem contato_empresa_id o envio é bloqueado (SEM_VINCULO).
+    contato_empresa_id: params.contatoEmpresaId ?? null,
+    empresa_nome_snapshot: params.empresaNomeSnapshot ?? null,
+    contato_nome_snapshot: params.contatoNomeSnapshot ?? null,
+    telefone_snapshot: params.telefoneSnapshot ?? null,
+    data_referencia: params.dataReferencia ?? null,
     canal: CANAIS.WHATSAPP,
     direcao: DIRECAO.SAIDA,
     tipo: params.tipo,
@@ -411,12 +418,12 @@ const TTL_TESTE_MINUTOS = 10;
  * (`criada: true`) pode chamar o provider — N chamadas simultâneas do mesmo teste ⇒ 1 criadora.
  * @returns {Promise<{criada: boolean, mensagem: object}>}
  */
-export async function criarMensagemTeste({ testeId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId = null, conteudo, atorPerfilId = null }, deps = {}) {
+export async function criarMensagemTeste({ testeId, organizacaoId, unidadeId, contatoId, destinatarioPerfilId = null, contatoEmpresaId = null, conteudo, atorPerfilId = null }, deps = {}) {
   const db = deps.supabase ?? supabase;
   const agora = new Date();
   const worker = `teste_painel:${testeId}`;
   const linha = {
-    alerta_id: null, organizacao_id: organizacaoId, unidade_id: unidadeId ?? null, contato_id: contatoId, destinatario_perfil_id: destinatarioPerfilId,
+    alerta_id: null, organizacao_id: organizacaoId, unidade_id: unidadeId ?? null, contato_id: contatoId, destinatario_perfil_id: destinatarioPerfilId, contato_empresa_id: contatoEmpresaId,
     canal: CANAIS.WHATSAPP, direcao: DIRECAO.SAIDA, tipo: TIPO_MENSAGEM_TESTE, conteudo, idempotency_key: chaveIdempotenciaTeste(testeId),
     status: STATUS_MENSAGEM.PROCESSING, disponivel_em: agora.toISOString(), expira_em: new Date(agora.getTime() + TTL_TESTE_MINUTOS * 60_000).toISOString(),
     max_tentativas: 1, claimed_by: worker, claimed_at: agora.toISOString(), claim_geracao: 1,
@@ -454,12 +461,12 @@ const TTL_MANUAL_SEGUNDOS = 60;
  * O ator humano fica em `metadados` (id do perfil e nome), para auditoria e para a bolha mostrar "quem enviou".
  * @returns {Promise<{criada: boolean, mensagem: object, worker: string}>}
  */
-export async function criarMensagemManual({ envioId, organizacaoId, unidadeId = null, contatoId, destinatarioPerfilId = null, conteudo, atorPerfilId = null, atorNome = null }, deps = {}) {
+export async function criarMensagemManual({ envioId, organizacaoId, unidadeId = null, contatoId, destinatarioPerfilId = null, contatoEmpresaId = null, conteudo, atorPerfilId = null, atorNome = null }, deps = {}) {
   const db = deps.supabase ?? supabase;
   const agora = new Date();
   const worker = `manual_painel:${envioId}`;
   const linha = {
-    alerta_id: null, organizacao_id: organizacaoId, unidade_id: unidadeId, contato_id: contatoId, destinatario_perfil_id: destinatarioPerfilId,
+    alerta_id: null, organizacao_id: organizacaoId, unidade_id: unidadeId, contato_id: contatoId, destinatario_perfil_id: destinatarioPerfilId, contato_empresa_id: contatoEmpresaId,
     canal: CANAIS.WHATSAPP, direcao: DIRECAO.SAIDA, tipo: TIPO_MENSAGEM_MANUAL, conteudo, idempotency_key: chaveIdempotenciaManual(envioId),
     status: STATUS_MENSAGEM.PROCESSING, disponivel_em: agora.toISOString(), expira_em: new Date(agora.getTime() + TTL_MANUAL_SEGUNDOS * 1000).toISOString(),
     max_tentativas: 1, claimed_by: worker, claimed_at: agora.toISOString(), claim_geracao: 1,

@@ -27,15 +27,39 @@ export const resumo = asyncHandler(async (req, res) => ok(res, await service.res
 
 // GET /administrativo/comunicacao/organizacoes?busca=
 export const organizacoes = asyncHandler(async (req, res) =>
-  ok(res, await service.organizacoes({ busca: req.query.busca }, deps(req))));
+  ok(res, await service.organizacoes({ busca: req.query.busca, filtro: req.query.filtro }, deps(req))));
 
 // GET /administrativo/comunicacao/organizacoes/:organizacaoId
 export const detalheOrganizacao = asyncHandler(async (req, res) =>
   ok(res, await service.detalheOrganizacao({ organizacaoId: req.params.organizacaoId }, deps(req))));
 
-// GET /administrativo/comunicacao/organizacoes/:organizacaoId/perfis-elegiveis
-export const perfisElegiveis = asyncHandler(async (req, res) =>
-  ok(res, await service.perfisElegiveis({ organizacaoId: req.params.organizacaoId }, deps(req))));
+// (perfis-elegiveis removido na migration 100 — ver administrativo.comunicacao.repo.js)
+
+// PUT /administrativo/comunicacao/organizacoes/:organizacaoId/responsavel
+export const salvarResponsavel = asyncHandler(async (req, res) =>
+  ok(res, await service.salvarResponsavel({
+    organizacaoId: req.params.organizacaoId, nome: req.body?.nome, telefoneE164: req.body?.telefoneE164,
+    observacoes: req.body?.observacoes, ativo: req.body?.ativo,
+  }, autor(req), deps(req))));
+
+// PUT /administrativo/comunicacao/organizacoes/:organizacaoId/responsaveis/:contatoId/ativo
+export const definirAtivoResponsavel = asyncHandler(async (req, res) =>
+  ok(res, await service.definirAtivoResponsavel({
+    organizacaoId: req.params.organizacaoId, contatoEmpresaId: req.params.contatoId, ativo: req.body?.ativo,
+  }, autor(req), deps(req))));
+
+// POST /administrativo/comunicacao/organizacoes/:organizacaoId/responsaveis/:contatoId/validar
+export const validarResponsavel = asyncHandler(async (req, res) =>
+  ok(res, await service.validarResponsavel({
+    organizacaoId: req.params.organizacaoId, contatoEmpresaId: req.params.contatoId, confirmacaoExplicita: req.body?.confirmacaoExplicita,
+  }, autor(req), deps(req))));
+
+// GET/PUT /administrativo/comunicacao/disponibilidade  (horários do iFood D-1)
+export const disponibilidade = asyncHandler(async (req, res) => ok(res, await service.disponibilidade(deps(req))));
+export const atualizarDisponibilidade = asyncHandler(async (req, res) =>
+  ok(res, await service.atualizarDisponibilidade({
+    dadosDisponiveisApos: req.body?.dadosDisponiveisApos, enviosPermitidosApos: req.body?.enviosPermitidosApos,
+  }, autor(req), deps(req))));
 
 // GET /administrativo/comunicacao/organizacoes/:organizacaoId/preview-mensagem?unidadeId=
 // Checkpoint H.4-A — somente leitura, nunca cria mensagem/tentativa, nunca chama o provider.
