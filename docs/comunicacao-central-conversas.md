@@ -41,14 +41,10 @@ Estados: Conectado / Desconectado / Conectando / Aguardando leitura do QR Code /
 - Identidade interna (nome operacional "Agente Crescer", ambiente Teste/Produção) separada da identidade do WhatsApp; guarda-se apenas o **hash** do número confirmado. Outro número ⇒ confirmação e nome deixam de valer.
 - Desconectar: modal de alto impacto + confirmação explícita; `logout()` best-effort + `resetarSessao` existente; histórico preservado. Trocar número: sequência segura sem sessões concorrentes.
 - Trava de operação (RPC `whatsapp_operacao_iniciar/encerrar`, TTL 300 s): uma operação por vez.
-- Permissão `comunicacao:gerenciar_conexao` (tabela `painel_adm_permissoes`; SuperAdmin passa por bypass; fail-closed). Sem ela a aba é somente leitura; 403 de permissão **não** derruba o acesso ao painel.
+- Permissão: a mesma de toda a Comunicação — SuperAdmin **ou** acesso ao Painel Administrativo (`requirePainelAdministrativo`, reforçada no service por `temPermissaoConexao`, fail-closed). Não há permissão extra para a Conexão; a antiga `comunicacao:gerenciar_conexao` / `painel_adm_permissoes` deixou de ser consultada (2026-09-26).
 - Auditoria: WHATSAPP_CONEXAO_INICIADA, WHATSAPP_QR_GERADO, WHATSAPP_CONECTADO, WHATSAPP_DESCONECTADO, WHATSAPP_CONEXAO_FALHOU (sem QR/segredos).
 
-Conceder a permissão (SQL, uma vez):
-```sql
-insert into painel_adm_permissoes (usuario_id, permissao)
-values ('<auth.users.id>', 'comunicacao:gerenciar_conexao');
-```
+Para operar a Conexão basta conceder acesso ao Painel Administrativo (Painel SuperAdmin → usuário → "Conceder acesso ao Painel Administrativo").
 
 ## Variáveis de ambiente novas
 `COMUNICACAO_INBOX_RETENCAO_DIAS` (30), `COMUNICACAO_INBOX_PURGA_INTERVALO_MIN` (360; 0 = desliga a purga periódica).
@@ -60,7 +56,7 @@ values ('<auth.users.id>', 'comunicacao:gerenciar_conexao');
 1. Migration 096, depois 097 (aditivas; rollbacks `096_rollback.sql`, `097_rollback.sql`). O backend tolera 096 ausente (degrada sem inbox).
 2. Gateway (contrato de evento v2 + endpoints de conexão).
 3. Backend, depois frontend.
-4. Conceder `comunicacao:gerenciar_conexao` ao(s) operador(es); confirmar a conta na aba Conexão antes de qualquer envio manual.
+4. Garantir acesso ao Painel Administrativo ao(s) operador(es); confirmar a conta na aba Conexão antes de qualquer envio manual.
 
 ## Limitações e dívida conhecida
 - Migrations validadas só contra o fake em memória e por análise estática, **não** contra Postgres real.

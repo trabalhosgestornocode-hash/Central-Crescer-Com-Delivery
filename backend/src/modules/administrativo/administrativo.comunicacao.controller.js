@@ -18,8 +18,11 @@ const deps = (req) => req.app?.locals?.adminDeps ?? undefined;
 
 const autor = (req) => {
   const id = identidadeOperacional(req);
-  // `superadmin` só serve ao bypass da permissão de conexão (comunicacao:gerenciar_conexao); nunca sai daqui.
-  return { contaId: id.contaId, perfilId: id.perfilId, nome: id.nome, email: id.email, superadmin: req.user?.superadmin === true };
+  // `superadmin`/`painelAdministrativo` só servem à checagem da Conexão (mesma regra de requirePainelAdministrativo); nunca saem daqui.
+  return {
+    contaId: id.contaId, perfilId: id.perfilId, nome: id.nome, email: id.email,
+    superadmin: req.user?.superadmin === true, painelAdministrativo: req.user?.painelAdministrativo === true,
+  };
 };
 
 // GET /administrativo/comunicacao/resumo
@@ -175,7 +178,7 @@ export const enviarMensagemConversa = asyncHandler(async (req, res) =>
     contatoId: req.params.contatoId, envioId: req.body?.envioId, texto: req.body?.texto, organizacaoId: req.body?.organizacaoId, unidadeId: req.body?.unidadeId,
   }, autor(req), deps(req))));
 
-// ---- Aba Conexão: identidade e sessão do WhatsApp (permissão específica: comunicacao:gerenciar_conexao) ----
+// ---- Aba Conexão: identidade e sessão do WhatsApp (mesma autorização da Comunicação: SuperAdmin OU Painel Administrativo) ----
 
 // GET /administrativo/comunicacao/conexao — estado (qualquer usuário do painel; sem QR e sem ações).
 export const conexaoEstado = asyncHandler(async (req, res) => ok(res, await conexao.estado(autor(req), deps(req))));

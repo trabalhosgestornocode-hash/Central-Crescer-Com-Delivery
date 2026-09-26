@@ -15,9 +15,10 @@ const AGORA = new Date("2026-09-24T15:00:00.000Z");
 const seg = (n) => new Date(AGORA.getTime() + n * 1000).toISOString();
 const TEL = "+5511987654321";
 const QR_SEGREDO = "2@SEGREDO-DO-QR-NAO-PODE-VAZAR,aaa,bbb";
-const OP = { contaId: uuid(7), perfilId: uuid(8), nome: "Camila Operadora", email: "camila@crescer.com", superadmin: false };
-const SUPER = { ...OP, contaId: uuid(9), superadmin: true };
-const SEM_PERMISSAO = { ...OP, contaId: uuid(10) };
+const OP = { contaId: uuid(7), perfilId: uuid(8), nome: "Camila Operadora", email: "camila@crescer.com", superadmin: false, painelAdministrativo: true };
+const SUPER = { ...OP, contaId: uuid(9), superadmin: true, painelAdministrativo: false };
+// Ator SEM SuperAdmin e SEM Painel Administrativo — o router já barra antes (403); aqui prova a defesa em profundidade do service.
+const SEM_PERMISSAO = { ...OP, contaId: uuid(10), painelAdministrativo: false };
 
 /** Gateway falso, mutável: cada teste move o estado como o Baileys faria. */
 function gatewayFalso() {
@@ -41,10 +42,10 @@ function gatewayFalso() {
   return g;
 }
 
-function montar({ conexoes, identidade, permitidos = [], g = gatewayFalso() } = {}) {
+function montar({ conexoes, identidade, g = gatewayFalso() } = {}) {
   const db = criarFakeDb({
     whatsapp_conexoes: conexoes ?? [{ organizacao_id: ORG, provider_instance_id: "default", status: "DISCONNECTED", telefone_e164: null, connected_at: null, disconnected_at: null, last_seen_at: seg(-20), lease_expires_at: seg(30), gateway_version: "1.2.3", last_error_class: null, desired_connection_state: "DISCONNECTED" }],
-    whatsapp_identidade: identidade ?? [], painel_adm_permissoes: permitidos.map((u) => ({ usuario_id: u, permissao: "comunicacao:gerenciar_conexao" })),
+    whatsapp_identidade: identidade ?? [],
     comunicacao_mensagens: [{ id: "m1" }], comunicacao_inbox_mensagens: [{ id: "i1" }], contatos_whatsapp: [{ id: "c1" }],
   }, { agora: () => AGORA.getTime() });
   const auditorias = [];
@@ -64,7 +65,7 @@ beforeEach(() => { _zerarCachePerfil(); _zerarQrAuditados(); });
 
 describe("confirmação persistente e operação obsoleta", () => {
   const preparar = async () => {
-    const m = montar({ permitidos: [OP.contaId] });
+    const m = montar();
     const { operacaoId } = await iniciar(OP, m.deps);
     m.g.conectou();
     return { ...m, operacaoId };
@@ -126,7 +127,7 @@ describe("confirmação persistente e operação obsoleta", () => {
 });
 
 test("cancelamento atrasado não desconecta uma conta já confirmada", async () => {
-  const m = montar({ permitidos: [OP.contaId] });
+  const m = montar();
   const { operacaoId } = await iniciar(OP, m.deps);
   m.g.conectou();
   await confirmar({ operacaoId }, OP, m.deps);
@@ -137,7 +138,7 @@ test("cancelamento atrasado não desconecta uma conta já confirmada", async () 
 });
 
 test("QR de operação expirada é recusado antes de consultar o Gateway", async () => {
-  const m = montar({ permitidos: [OP.contaId] });
+  const m = montar();
   const { operacaoId } = await iniciar(OP, m.deps);
   m.db.tabelas.whatsapp_identidade[0].operacao_expira_em = seg(-1);
   const chamadasAntes = m.g.chamadas.length;
@@ -146,7 +147,7 @@ test("QR de operação expirada é recusado antes de consultar o Gateway", async
 });
 
 test("confirmar sem telefone vivo não reutiliza telefone antigo do heartbeat", async () => {
-  const m = montar({ permitidos: [OP.contaId] });
+  const m = montar();
   const { operacaoId } = await iniciar(OP, m.deps);
   m.g.conectou();
   m.g.perfil.telefoneE164 = null;
@@ -209,14 +210,14 @@ describe("estados (derivarEstado)", () => {
 
 describe("estado (GET)", () => {
   test("desconectado: sem conta, sem foto, sem número; a permissão aparece; nada de segredo", async () => {
-    const { deps } = montar({ permitidos: [OP.contaId] });
+    const { deps } = montar();
     const e = await estado(OP, deps);
     assert.deepEqual([e.estado, e.rotulo, e.conectado, e.conta, e.permissoes.gerenciar, e.identidade.status], ["DISCONNECTED", "Desconectado", false, null, true, "SEM_CONTA"]);
   });
 
   test("conectado: foto, nome, número MASCARADO, tipo, descrição, gateway, heartbeat, conexão e saúde", async () => {
     const g = gatewayFalso(); g.conectou();
-    const { deps } = montar({ g, permitidos: [OP.contaId], conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "CONNECTED", telefone_e164: TEL, connected_at: seg(-3600), disconnected_at: seg(-7200), last_seen_at: seg(-20), lease_expires_at: seg(30), gateway_version: "1.2.3" }] });
+    const { deps } = montar({ g, conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "CONNECTED", telefone_e164: TEL, connected_at: seg(-3600), disconnected_at: seg(-7200), last_seen_at: seg(-20), lease_expires_at: seg(30), gateway_version: "1.2.3" }] });
     const e = await estado(OP, deps);
     assert.deepEqual([e.estado, e.conectado, e.conta.nome, e.conta.fotoUrl, e.conta.telefoneMascarado, e.conta.tipoContaRotulo, e.conta.descricao, e.conta.iniciais],
       ["CONNECTED", true, "Crescer Teste", "https://pps.whatsapp.net/v/x.jpg", "********21", "Tipo não identificado", "Automação de delivery", "CT"]);
@@ -268,9 +269,9 @@ describe("estado (GET)", () => {
     assert.deepEqual([outro.identidade.status, outro.identidade.nomeOperacional, outro.identidade.agenteCrescer], ["PENDENTE_CONFIRMACAO", null, false], "outro número: o nome NÃO acompanha");
   });
 
-  test("quem só vê a Central (sem a permissão) lê o estado e VÊ a operação em andamento, mas sem o id que permitiria agir", async () => {
+  test("ator sem SuperAdmin e sem Painel (defesa em profundidade) lê o estado e VÊ a operação em andamento, mas sem o id que permitiria agir", async () => {
     const ident = [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "TESTE", status: "SEM_CONTA", operacao_id: uuid(50), operacao_tipo: "CONECTAR", operacao_expira_em: seg(200) }];
-    const { deps } = montar({ identidade: ident, permitidos: [OP.contaId] });
+    const { deps } = montar({ identidade: ident });
     assert.equal((await estado(OP, deps)).operacao.tipo, "CONECTAR");
     const sem = await estado(SEM_PERMISSAO, deps);
     assert.equal(sem.permissoes.gerenciar, false);
@@ -281,24 +282,24 @@ describe("estado (GET)", () => {
   });
 });
 
-describe("permissão específica", () => {
-  test("SuperAdmin passa; usuário com a permissão na tabela passa; o resto NÃO (mesmo com acesso às conversas)", async () => {
-    const { deps } = montar({ permitidos: [OP.contaId] });
-    assert.equal(await temPermissaoConexao(SUPER, deps), true);
-    assert.equal(await temPermissaoConexao(OP, deps), true);
-    assert.equal(await temPermissaoConexao(SEM_PERMISSAO, deps), false);
-    assert.equal(await temPermissaoConexao({}, deps), false);
-    assert.equal(await temPermissaoConexao(null, deps), false);
+describe("permissão da Conexão = mesma regra da Comunicação (SuperAdmin OU Painel Administrativo)", () => {
+  test("SuperAdmin passa; usuário do Painel Administrativo passa SEM permissão extra; o resto NÃO", async () => {
+    assert.equal(await temPermissaoConexao(SUPER), true);
+    assert.equal(await temPermissaoConexao(OP), true);
+    assert.equal(await temPermissaoConexao(SEM_PERMISSAO), false);
+    assert.equal(await temPermissaoConexao({}), false);
+    assert.equal(await temPermissaoConexao(null), false);
   });
 
-  test("FAIL-CLOSED: erro ao consultar as permissões ⇒ sem permissão", async () => {
-    const { deps } = montar();
-    deps.supabase = { from: () => { throw new Error("banco fora do ar"); } };
-    assert.equal(await temPermissaoConexao(OP, deps), false);
+  test("FAIL-CLOSED: só o booleano `true` explícito concede (valores truthy não passam) e o banco nunca é consultado", async () => {
+    for (const valor of ["true", 1, "sim", {}, []]) {
+      assert.equal(await temPermissaoConexao({ ...SEM_PERMISSAO, painelAdministrativo: valor }), false, `painelAdministrativo=${JSON.stringify(valor)}`);
+      assert.equal(await temPermissaoConexao({ ...SEM_PERMISSAO, superadmin: valor }), false, `superadmin=${JSON.stringify(valor)}`);
+    }
   });
 
   test("TODA ação e o QR recusam quem não tem a permissão (403) — sem chamar o Gateway, sem auditar, sem trava", async () => {
-    const { deps, g, auditorias, db } = montar({ permitidos: [OP.contaId] });
+    const { deps, g, auditorias, db } = montar();
     const chamadasIniciais = g.chamadas.length;
     const ident = uuid(60);
     await rejeita(() => iniciar(SEM_PERMISSAO, deps), 403);
@@ -322,7 +323,7 @@ describe("permissão específica", () => {
 
 describe("conectar: iniciar → QR → escanear → identificar → confirmar", () => {
   test("iniciar: cria a operação, chama o /connect do Gateway UMA vez e audita CONEXAO_INICIADA", async () => {
-    const { deps, g, auditorias } = montar({ permitidos: [OP.contaId] });
+    const { deps, g, auditorias } = montar();
     const r = await iniciar(OP, deps);
     assert.match(r.operacaoId, /^[0-9a-f-]{36}$/);
     assert.equal(g.chamadas.filter((c) => c === "conectar").length, 1);
@@ -332,14 +333,14 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
 
   test("já conectado ⇒ 409 JA_CONECTADO (o caminho é Trocar número); nada é criado", async () => {
     const g = gatewayFalso(); g.conectou();
-    const { deps, auditorias } = montar({ g, permitidos: [OP.contaId] });
+    const { deps, auditorias } = montar({ g });
     await rejeita(() => iniciar(OP, deps), 409, "JA_CONECTADO");
     assert.equal(auditorias.length, 0);
   });
 
   test("erro após consumo do token ⇒ 409, auditoria e trava INCERTA preservada", async () => {
     const g = gatewayFalso(); g.falhar.conectar = new Error("BAILEYS_GATEWAY_UNREACHABLE: ECONNREFUSED");
-    const { deps, auditorias, db } = montar({ g, permitidos: [OP.contaId] });
+    const { deps, auditorias, db } = montar({ g });
     await rejeita(() => iniciar(OP, deps), 409, "CONEXAO_INDISPONIVEL");
     assert.deepEqual(acoes(auditorias), ["WHATSAPP_CONEXAO_INICIADA", "WHATSAPP_CONEXAO_FALHOU"]);
     assert.equal(db.tabelas.whatsapp_identidade[0].efeito_estado, "INCERTO");
@@ -347,7 +348,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
   });
 
   test("gerar QR: o valor chega ao operador com permissão; audita QR_GERADO UMA vez por QR (só a ORDEM, nunca o valor)", async () => {
-    const { deps, g, auditorias } = montar({ permitidos: [OP.contaId] });
+    const { deps, g, auditorias } = montar();
     const { operacaoId } = await iniciar(OP, deps);
     g.mostrarQr(QR_SEGREDO, 1);
     const a = await qr({ operacaoId }, OP, deps);
@@ -361,7 +362,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
   });
 
   test("QR expirado: sem QR e segundosRestantes=0 (o operador vê 'Gerar novo QR Code'); novo QR ⇒ nova ordem e nova auditoria", async () => {
-    const { deps, g, auditorias } = montar({ permitidos: [OP.contaId] });
+    const { deps, g, auditorias } = montar();
     const { operacaoId } = await iniciar(OP, deps);
     g.mostrarQr(QR_SEGREDO, 1); await qr({ operacaoId }, OP, deps);
     g.live = { ...g.live, qrDisponivel: false }; g.qr = { qr: null, geradoEm: null, expiraEm: null, ordem: 0 };   // expirou/fechou
@@ -378,7 +379,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
     console.log = (l) => linhas.push(String(l)); console.error = (l) => linhas.push(String(l)); console.warn = (l) => linhas.push(String(l));
     let auditorias;
     try {
-      const { deps, g, auditorias: a } = montar({ permitidos: [OP.contaId] }); auditorias = a;
+      const { deps, g, auditorias: a } = montar(); auditorias = a;
       const { operacaoId } = await iniciar(OP, deps);
       g.mostrarQr(QR_SEGREDO, 1); await qr({ operacaoId }, OP, deps);
       g.conectou(); await qr({ operacaoId }, OP, deps);
@@ -389,14 +390,14 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
   });
 
   test("a operação errada (ou expirada/de outro operador) não vê o QR (409)", async () => {
-    const { deps, g } = montar({ permitidos: [OP.contaId] });
+    const { deps, g } = montar();
     await iniciar(OP, deps); g.mostrarQr(QR_SEGREDO, 1);
     await rejeita(() => qr({ operacaoId: uuid(77) }, OP, deps), 409, "OPERACAO_INVALIDA");
     await rejeita(() => qr({ operacaoId: "nao-uuid" }, OP, deps), 400);
   });
 
   test("QR escaneado: o QR DESAPARECE da resposta na hora e a conta é IDENTIFICADA (foto, nome, número mascarado) — sem concluir em silêncio", async () => {
-    const { deps, g } = montar({ permitidos: [OP.contaId] });
+    const { deps, g } = montar();
     const { operacaoId } = await iniciar(OP, deps);
     g.mostrarQr(QR_SEGREDO, 1); g.conectou();
     const r = await qr({ operacaoId }, OP, deps);
@@ -407,7 +408,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
   });
 
   test("confirmar: grava a identidade (hash do número, quem confirmou, ambiente), audita CONECTADO, libera a trava e o envio passa a valer", async () => {
-    const g2 = gatewayFalso(); const m = montar({ g: g2, permitidos: [OP.contaId], conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "DISCONNECTED", telefone_e164: null, last_seen_at: seg(-5) }] });
+    const g2 = gatewayFalso(); const m = montar({ g: g2, conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "DISCONNECTED", telefone_e164: null, last_seen_at: seg(-5) }] });
     const op = await iniciar(OP, m.deps);
     g2.mostrarQr(QR_SEGREDO, 1); g2.conectou();
     m.db.tabelas.whatsapp_conexoes[0].status = "CONNECTED"; m.db.tabelas.whatsapp_conexoes[0].telefone_e164 = TEL;
@@ -422,7 +423,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
   });
 
   test("'Utilizar como Agente Crescer' marca o nome operacional — e só nessa confirmação", async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     const { operacaoId } = await iniciar(OP, m.deps);
     g.conectou(); m.db.tabelas.whatsapp_conexoes[0].status = "CONNECTED"; m.db.tabelas.whatsapp_conexoes[0].telefone_e164 = TEL;
     const e = await confirmar({ operacaoId, utilizarComoAgente: true, ambiente: "PRODUCAO" }, OP, m.deps);
@@ -432,7 +433,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
   });
 
   test("confirmar sem estar conectado ⇒ 409 NAO_CONECTADO; ambiente inválido ⇒ 400; nada é gravado", async () => {
-    const m = montar({ permitidos: [OP.contaId] });
+    const m = montar();
     const { operacaoId } = await iniciar(OP, m.deps);
     await rejeita(() => confirmar({ operacaoId }, OP, m.deps), 409, "NAO_CONECTADO");
     await rejeita(() => confirmar({ operacaoId, ambiente: "HOMOLOG" }, OP, m.deps), 400, "AMBIENTE_INVALIDO");
@@ -440,7 +441,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
   });
 
   test("cancelar depois de escanear DESFAZ a sessão (reset no Gateway), limpa a identidade e audita DESCONECTADO", async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     const { operacaoId } = await iniciar(OP, m.deps); g.conectou();
     const e = await cancelar({ operacaoId }, OP, m.deps);
     assert.equal(g.chamadas.filter((c) => c === "desconectarConta").length, 1);
@@ -449,7 +450,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
   });
 
   test("cancelar o assistente ANTES de escanear encerra o pareamento e audita CONEXAO_FALHOU (cancelada_pelo_operador)", async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     const { operacaoId } = await iniciar(OP, m.deps); g.mostrarQr(QR_SEGREDO, 1);
     await cancelar({ operacaoId }, OP, m.deps);
     assert.equal(g.chamadas.filter((c) => c === "encerrar").length, 1);
@@ -461,7 +462,7 @@ describe("conectar: iniciar → QR → escanear → identificar → confirmar", 
 
 describe("novo QR (o QR expirou)", () => {
   test("reabre o pareamento na MESMA operação: fecha o que estava preso e chama o /connect UMA vez; nunca uma segunda sessão", async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     const { operacaoId } = await iniciar(OP, m.deps);
     g.live = { ...g.live, status: "CONNECTING", qrDisponivel: false };           // pareamento preso sem QR
     g.chamadas.length = 0;
@@ -470,7 +471,7 @@ describe("novo QR (o QR expirou)", () => {
     assert.equal(m.db.tabelas.whatsapp_identidade[0].operacao_id, operacaoId, "mesma trava");
   });
   test("socket já fechado (DISCONNECTED): só reconecta; já CONNECTED ⇒ 409; operação errada ⇒ 409; sem permissão ⇒ 403", async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     const { operacaoId } = await iniciar(OP, m.deps);
     g.live = { ...g.live, status: "DISCONNECTED" }; g.chamadas.length = 0;
     await novoQr({ operacaoId }, OP, m.deps);
@@ -481,7 +482,7 @@ describe("novo QR (o QR expirou)", () => {
     await rejeita(() => novoQr({ operacaoId }, SEM_PERMISSAO, m.deps), 403);
   });
   test("Gateway recusa ⇒ 409 amigável e auditoria CONEXAO_FALHOU (sem segredo)", async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     const { operacaoId } = await iniciar(OP, m.deps);
     g.live = { ...g.live, status: "DISCONNECTED" }; g.falhar.conectar = new Error("BAILEYS_GATEWAY_UNREACHABLE");
     await rejeita(() => novoQr({ operacaoId }, OP, m.deps), 409, "CONEXAO_INDISPONIVEL");
@@ -492,7 +493,7 @@ describe("novo QR (o QR expirou)", () => {
 describe("desconectar", () => {
   const conectada = () => {
     const g = gatewayFalso(); g.conectou();
-    return montar({ g, permitidos: [OP.contaId], conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "CONNECTED", telefone_e164: TEL, last_seen_at: seg(-5) }],
+    return montar({ g, conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "CONNECTED", telefone_e164: TEL, last_seen_at: seg(-5) }],
       identidade: [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "PRODUCAO", nome_operacional: NOME_AGENTE, status: "CONFIRMADA", telefone_hash: hashTelefone(TEL), confirmado_em: seg(-100) }] });
   };
 
@@ -535,7 +536,7 @@ describe("desconectar", () => {
 describe("trocar número", () => {
   test("sequência segura: desconecta a conta atual ANTES de gerar o QR; nunca há duas sessões ao mesmo tempo", async () => {
     const g = gatewayFalso(); g.conectou();
-    const m = montar({ g, permitidos: [OP.contaId], conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "CONNECTED", telefone_e164: TEL, last_seen_at: seg(-5) }],
+    const m = montar({ g, conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "CONNECTED", telefone_e164: TEL, last_seen_at: seg(-5) }],
       identidade: [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "TESTE", nome_operacional: NOME_AGENTE, status: "CONFIRMADA", telefone_hash: hashTelefone(TEL), confirmado_em: seg(-9) }] });
     const r = await trocar({ confirmacaoExplicita: true }, OP, m.deps);
     assert.deepEqual(g.chamadas.filter((c) => ["desconectarConta", "conectar"].includes(c)), ["desconectarConta", "conectar"], "ordem: desconectar → conectar");
@@ -548,7 +549,7 @@ describe("trocar número", () => {
 
   test("exige confirmação explícita; e enquanto a troca está em andamento, iniciar/desconectar/trocar de novo ⇒ 409", async () => {
     const g = gatewayFalso(); g.conectou();
-    const m = montar({ g, permitidos: [OP.contaId] });
+    const m = montar({ g });
     await rejeita(() => trocar({}, OP, m.deps), 400, "CONFIRMACAO_OBRIGATORIA");
     await trocar({ confirmacaoExplicita: true }, OP, m.deps);
     await rejeita(() => trocar({ confirmacaoExplicita: true }, OP, m.deps), 409, "OPERACAO_EM_ANDAMENTO");
@@ -559,14 +560,14 @@ describe("trocar número", () => {
 
   test("falha ao gerar QR depois de desconectar ⇒ 409, auditoria e reconciliação pendente", async () => {
     const g = gatewayFalso(); g.conectou(); g.falhar.conectar = new Error("BAILEYS_GATEWAY_UNREACHABLE");
-    const m = montar({ g, permitidos: [OP.contaId] });
+    const m = montar({ g });
     await rejeita(() => trocar({ confirmacaoExplicita: true }, OP, m.deps), 409, "TROCAR_FALHOU");
     assert.equal(m.auditorias.at(-1).acao, "WHATSAPP_CONEXAO_FALHOU");
     assert.equal(m.db.tabelas.whatsapp_identidade[0].efeito_estado, "INCERTO");
   });
 
   test("trocar para OUTRO número: a confirmação e o nome operacional antigos não valem para ele", async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     let { operacaoId } = await iniciar(OP, m.deps); g.conectou();
     m.db.tabelas.whatsapp_conexoes[0].status = "CONNECTED"; m.db.tabelas.whatsapp_conexoes[0].telefone_e164 = TEL;
     await confirmar({ operacaoId, utilizarComoAgente: true }, OP, m.deps);
@@ -582,7 +583,7 @@ describe("trocar número", () => {
 
 describe("duas tentativas concorrentes", () => {
   test("dois iniciar em PARALELO ⇒ um vence, o outro 409; o Gateway recebe UM /connect", async () => {
-    const m = montar({ permitidos: [OP.contaId] });
+    const m = montar();
     const rs = await Promise.allSettled([iniciar(OP, m.deps), iniciar(OP, m.deps), iniciar(OP, m.deps)]);
     assert.equal(rs.filter((r) => r.status === "fulfilled").length, 1);
     assert.equal(rs.filter((r) => r.status === "rejected" && r.reason.statusCode === 409 && r.reason.details.codigo === "OPERACAO_EM_ANDAMENTO").length, 2);
@@ -591,7 +592,7 @@ describe("duas tentativas concorrentes", () => {
 
   test("dois operadores diferentes: o segundo é recusado enquanto a operação do primeiro está ativa; ao encerrar, pode começar", async () => {
     const outro = { ...OP, contaId: uuid(11), perfilId: uuid(12) };
-    const m = montar({ permitidos: [OP.contaId, outro.contaId] });
+    const m = montar();
     const { operacaoId } = await iniciar(OP, m.deps);
     await rejeita(() => iniciar(outro, m.deps), 409, "OPERACAO_EM_ANDAMENTO");
     await cancelar({ operacaoId }, OP, m.deps);
@@ -599,14 +600,14 @@ describe("duas tentativas concorrentes", () => {
   });
 
   test("uma trava EXPIRADA não bloqueia para sempre (o banco a libera pelo relógio)", async () => {
-    const m = montar({ permitidos: [OP.contaId], identidade: [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "TESTE", status: "SEM_CONTA", operacao_id: uuid(90), operacao_tipo: "CONECTAR", operacao_expira_em: seg(-1) }] });
+    const m = montar({ identidade: [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "TESTE", status: "SEM_CONTA", operacao_id: uuid(90), operacao_tipo: "CONECTAR", operacao_expira_em: seg(-1) }] });
     await assert.doesNotReject(() => iniciar(OP, m.deps));
   });
 });
 
 describe("identidade interna", () => {
   const confirmada = async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     const { operacaoId } = await iniciar(OP, m.deps); g.conectou();
     m.db.tabelas.whatsapp_conexoes[0].status = "CONNECTED"; m.db.tabelas.whatsapp_conexoes[0].telefone_e164 = TEL;
     await confirmar({ operacaoId, utilizarComoAgente: false }, OP, m.deps);
@@ -623,7 +624,7 @@ describe("identidade interna", () => {
   });
 
   test("conta NÃO confirmada não pode ser marcada como Agente Crescer (409); valores inválidos ⇒ 400", async () => {
-    const m = montar({ permitidos: [OP.contaId] });
+    const m = montar();
     await rejeita(() => definirIdentidade({ agenteCrescer: true }, OP, m.deps), 409, "CONTA_NAO_CONFIRMADA");
     await rejeita(() => definirIdentidade({ ambiente: "X" }, OP, m.deps), 400, "AMBIENTE_INVALIDO");
     await rejeita(() => definirIdentidade({ agenteCrescer: "sim" }, OP, m.deps), 400, "VALOR_INVALIDO");
@@ -632,7 +633,7 @@ describe("identidade interna", () => {
 
 describe("auditoria e sigilo", () => {
   test("uma jornada completa gera exatamente os eventos esperados, todos com ator humano, e NENHUM com QR/segredo/telefone completo", async () => {
-    const g = gatewayFalso(); const m = montar({ g, permitidos: [OP.contaId] });
+    const g = gatewayFalso(); const m = montar({ g });
     const { operacaoId } = await iniciar(OP, m.deps);
     g.mostrarQr(QR_SEGREDO, 1); await qr({ operacaoId }, OP, m.deps);
     g.conectou(); m.db.tabelas.whatsapp_conexoes[0].status = "CONNECTED"; m.db.tabelas.whatsapp_conexoes[0].telefone_e164 = TEL;

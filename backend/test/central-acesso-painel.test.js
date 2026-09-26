@@ -1,8 +1,8 @@
 // REGRA DE ACESSO DA CENTRAL DE COMUNICAÇÃO (HTTP, router REAL, sem banco/rede):
-//   * quem tem acesso ao Painel Administrativo VÊ toda a Central (leitura), sem permissão adicional;
-//   * VER não é AGIR: conectar/QR/confirmar/cancelar/desconectar/trocar/reconciliar exigem `comunicacao:gerenciar_conexao` (ou superadmin);
+//   * quem tem acesso ao Painel Administrativo tem, na Comunicação, a MESMA visão e as MESMAS ações do SuperAdmin — inclusive
+//     conectar/QR/confirmar/cancelar/desconectar/trocar/reconciliar da Conexão — sem permissão adicional (única fonte: requirePainelAdministrativo);
 //   * quem não é do Painel não entra em nada; leitura nunca recebe token, QR, id de operação, efeito_token nem telefone completo;
-//   * as OUTRAS ações da Central (envio manual, teste, habilitação, modo, configuração, consentimento) NÃO passam a depender da permissão de conexão.
+//   * nenhuma ação da Central depende de permissão extra (a antiga `comunicacao:gerenciar_conexao` deixou de existir).
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -24,8 +24,7 @@ const QR = "2@SEGREDO-ACESSO-QR,abc";
 const AGORA = new Date("2026-09-24T15:00:00.000Z");
 
 const COMUM = { id: uuid(11), email: "comum@t.com", nome: "Comum", painelAdministrativo: false, superadmin: false };
-const LEITOR = { id: uuid(12), email: "leitor@t.com", nome: "Leitor", painelAdministrativo: true, superadmin: false };
-const GERENTE = { id: uuid(13), email: "gerente@t.com", nome: "Gerente", painelAdministrativo: true, superadmin: false };
+const PAINEL = { id: uuid(12), email: "painel@t.com", nome: "Painel", painelAdministrativo: true, superadmin: false };
 const SUPER = { id: uuid(14), email: "super@t.com", nome: "Super", painelAdministrativo: false, superadmin: true };   // bypass: nem precisa do flag do Painel
 
 function chamar({ user, metodo = "GET", path, corpo, adminDeps }) {
@@ -49,7 +48,7 @@ function chamar({ user, metodo = "GET", path, corpo, adminDeps }) {
 }
 
 /** Central inteira sobre o fake DB: conexão CONECTADA com operação e efeito INCERTO em curso (o pior caso para vazamento). */
-function montar({ gerentes = [] } = {}) {
+function montar() {
   const agoraIso = AGORA.toISOString();
   const db = criarFakeDb({
     comunicacao_roster_autorizado: [linhaRoster({ contato_id: C1, telefone_e164: "+5511999990001", perfil_nome: "Maria Souza", organizacao_id: uuid(2), organizacao_nome: "Rede Sabor", unidade_id: uuid(3), unidade_nome: "Centro" })],
@@ -60,7 +59,6 @@ function montar({ gerentes = [] } = {}) {
       efeito_token: TOKEN, efeito_acao: "DESCONECTAR", efeito_estado: "INCERTO", efeito_auth_session_id: AUTH, efeito_atualizado_em: new Date(AGORA.getTime() - 600_000).toISOString(),
       efeito_incerto_desde: new Date(AGORA.getTime() - 600_000).toISOString(), efeito_verificado_em: null, efeito_verificacoes: 0, efeito_ultimo_resultado: null,
     }],
-    painel_adm_permissoes: gerentes.map((u) => ({ usuario_id: u, permissao: "comunicacao:gerenciar_conexao" })),
   });
   // A decisão da reconciliação é do RPC (banco): aqui só registramos o que o backend enviou.
   const rpcs = [];
@@ -94,13 +92,13 @@ const LEITURAS_DA_CENTRAL = [
   ["Visão Geral", `${A}/central/visao-geral`], ["Automações", `${A}/central/automacoes`], ["Destinatários", `${A}/central/destinatarios`], ["Histórico", `${A}/central/historico`],
   ["Diagnóstico/status", `${A}/central/diagnostico`], ["Atualizações", `${A}/central/atualizacoes`], ["Conversas (lista)", `${A}/conversas`], ["Conversa", `${A}/conversas/${C1}`], ["Conexão", `${A}/conexao`],
 ];
-/** Ações SENSÍVEIS de conexão: exigem comunicacao:gerenciar_conexao (ou superadmin). */
+/** Ações SENSÍVEIS de conexão: mesma autorização do resto da Comunicação (Painel Administrativo OU SuperAdmin). */
 const ACOES_DE_CONEXAO = [
   ["GET", `${A}/conexao/qr?operacaoId=${OPERACAO}`], ["POST", `${A}/conexao/iniciar`, {}], ["POST", `${A}/conexao/novo-qr`, { operacaoId: OPERACAO }], ["POST", `${A}/conexao/confirmar`, { operacaoId: OPERACAO }],
   ["POST", `${A}/conexao/cancelar`, { operacaoId: OPERACAO }], ["POST", `${A}/conexao/desconectar`, { confirmacaoExplicita: true }], ["POST", `${A}/conexao/trocar`, { confirmacaoExplicita: true }],
   ["POST", `${A}/conexao/reconciliar`, {}], ["PUT", `${A}/conexao/identidade`, { ambiente: "TESTE" }],
 ];
-/** Outras leituras e AÇÕES da Central: a regra de autorização delas NÃO é a permissão de conexão (preservada). */
+/** Outras leituras e AÇÕES da Central. */
 const OUTRAS_LEITURAS = [`${A}/resumo`, `${A}/organizacoes`, `${A}/fila`, `${A}/historico`, `${A}/mensagens`, `${A}/configuracao-operacional`, `${A}/ativacao`, `${A}/teste/preparo`];
 const OUTRAS_ACOES = [
   ["PUT", `${A}/organizacoes/${uuid(2)}/habilitacao`, { habilitar: false, confirmacaoExplicita: true }], ["PUT", `${A}/modo`, { modo: "DISABLED", confirmacaoExplicita: true }],
@@ -125,81 +123,63 @@ describe("Central — quem NÃO é do Painel Administrativo: tudo bloqueado", ()
   });
 });
 
-describe("Central — usuário do Painel SEM comunicacao:gerenciar_conexao: VÊ tudo, não AGE", () => {
+describe("Central — usuário do Painel Administrativo (não-SA): VÊ e AGE exatamente como o SuperAdmin", () => {
   for (const [nome, path] of LEITURAS_DA_CENTRAL) {
     test(`GET ${nome}: 200 sem permissão adicional`, async () => {
       const { deps } = montar();
       _zerarCachePerfil();
-      const r = await chamar({ user: LEITOR, path, adminDeps: deps });
+      const r = await chamar({ user: PAINEL, path, adminDeps: deps });
       assert.equal(r.status, 200, r.texto.slice(0, 300));
       assert.ok(r.json?.data !== undefined);
     });
   }
 
-  test("as demais leituras da Central autorizam o Painel (nenhuma exige a permissão de conexão)", async () => {
+  test("as demais leituras da Central autorizam o Painel", async () => {
     const { deps } = montar();
     for (const path of OUTRAS_LEITURAS) {
-      const r = await chamar({ user: LEITOR, path, adminDeps: deps });
+      const r = await chamar({ user: PAINEL, path, adminDeps: deps });
       assert.ok(![401, 403].includes(r.status), `${path} => ${r.status}`);
-      assert.doesNotMatch(r.texto, MSG_PERMISSAO_CONEXAO, path);
     }
   });
 
-  test("Conexão: vê estado, conta MASCARADA, operação e reconciliação — sem id, token, QR, telefone completo nem session id", async () => {
+  test("Conexão: gerencia (permissoes.gerenciar=true, id da operação, podeReconciliar) — ainda sem token, QR, telefone completo nem session id", async () => {
     const { deps } = montar();
     _zerarCachePerfil();
-    const r = await chamar({ user: LEITOR, path: `${A}/conexao`, adminDeps: deps });
+    const r = await chamar({ user: PAINEL, path: `${A}/conexao`, adminDeps: deps });
     assert.equal(r.status, 200);
     const d = r.json.data;
-    assert.equal(d.permissoes.gerenciar, false);
+    assert.equal(d.permissoes.gerenciar, true);
     assert.equal(d.estado, "CONNECTED");
     assert.match(d.conta.telefoneMascarado, /\*+40$/);
-    assert.equal(d.operacao.tipo, "DESCONECTAR"); assert.equal(d.operacao.reconciliacaoNecessaria, true); assert.equal(d.operacao.podeReconciliar, false);
+    assert.equal(d.operacao.id, OPERACAO); assert.equal(d.operacao.tipo, "DESCONECTAR"); assert.equal(d.operacao.podeReconciliar, true);
     assert.equal(d.reconciliacao.reconciliacaoNecessaria, true); assert.equal(d.reconciliacao.acao, "DESCONECTAR");
-    assert.ok(d.reconciliacao.incertoDesde); assert.ok("ultimoResultado" in d.reconciliacao); assert.ok("ultimaVerificacaoEm" in d.reconciliacao);
-    for (const segredo of [TOKEN, OPERACAO, AUTH, TEL_COMPLETO, TEL_COMPLETO.slice(1), "SEGREDO", "efeito_token", "efeitoToken", "auth_state", "authSession"]) assert.equal(r.texto.includes(segredo), false, `vazou: ${segredo}`);
-    assert.equal("id" in d.operacao, false);
+    for (const segredo of [TOKEN, AUTH, TEL_COMPLETO, TEL_COMPLETO.slice(1), "SEGREDO", "efeito_token", "efeitoToken", "auth_state", "authSession"]) assert.equal(r.texto.includes(segredo), false, `vazou: ${segredo}`);
   });
 
-  test("Conexão: NENHUMA ação sensível ⇒ 403 (o Gateway e o banco não são tocados)", async () => {
-    const { deps, chamadas, db, rpcs } = montar();
-    _zerarCachePerfil();
-    const antes = JSON.stringify(db.tabelas.whatsapp_identidade);
+  test("Conexão: NENHUMA ação sensível é negada por permissão (nunca 401/403)", async () => {
     for (const [metodo, path, corpo] of ACOES_DE_CONEXAO) {
-      const r = await chamar({ user: LEITOR, metodo, path, corpo, adminDeps: deps });
-      assert.equal(r.status, 403, `${metodo} ${path}`);
-      assert.match(r.texto, MSG_PERMISSAO_CONEXAO, path);
+      const { deps } = montar();
+      _zerarCachePerfil();
+      const r = await chamar({ user: PAINEL, metodo, path, corpo, adminDeps: deps });
+      assert.ok(![401, 403].includes(r.status), `${metodo} ${path} => ${r.status} ${r.texto.slice(0, 200)}`);
+      assert.doesNotMatch(r.texto, MSG_PERMISSAO_CONEXAO, path);
       assert.ok(!r.texto.includes("SEGREDO") && !r.texto.includes(TOKEN));
     }
-    assert.deepEqual(chamadas, []); assert.deepEqual(rpcs, []);
-    assert.equal(JSON.stringify(db.tabelas.whatsapp_identidade), antes, "nada mudou no banco");
   });
-});
 
-describe("Central — Painel + comunicacao:gerenciar_conexao: mesma leitura e AÇÕES permitidas", () => {
-  test("lê tudo (200) e recebe o id da operação e a permissão", async () => {
-    const { deps } = montar({ gerentes: [GERENTE.id] });
+  test("QR: nunca 403; sai com no-store e sem o valor cru", async () => {
+    const { deps } = montar();
     _zerarCachePerfil();
-    for (const [nome, path] of LEITURAS_DA_CENTRAL) assert.equal((await chamar({ user: GERENTE, path, adminDeps: deps })).status, 200, nome);
-    const r = await chamar({ user: GERENTE, path: `${A}/conexao`, adminDeps: deps });
-    assert.equal(r.json.data.permissoes.gerenciar, true); assert.equal(r.json.data.operacao.id, OPERACAO); assert.equal(r.json.data.operacao.podeReconciliar, true);
-    assert.equal(r.texto.includes(TOKEN), false, "nem o gerente recebe o efeito_token");
-  });
-  test("ações sensíveis passam pela permissão: QR 200 (no-store), cancelar é executado no Gateway", async () => {
-    const { deps, chamadas } = montar({ gerentes: [GERENTE.id] });
-    _zerarCachePerfil();
-    const qr = await chamar({ user: GERENTE, path: `${A}/conexao/qr?operacaoId=${OPERACAO}`, adminDeps: deps });
+    const qr = await chamar({ user: PAINEL, path: `${A}/conexao/qr?operacaoId=${OPERACAO}`, adminDeps: deps });
     assert.ok([200, 409].includes(qr.status), `qr => ${qr.status}`);   // 409 = operação com efeito pendente (regra da 098); jamais 403
     assert.equal(qr.headers["cache-control"] ?? "no-store", "no-store");
-    assert.ok(!qr.texto.includes("SEGREDO"), "nem o gerente recebe o QR cru");
-    const d = await chamar({ user: GERENTE, metodo: "POST", path: `${A}/conexao/desconectar`, corpo: { confirmacaoExplicita: true }, adminDeps: deps });
-    assert.notEqual(d.status, 403);
-    void chamadas;
+    assert.ok(!qr.texto.includes("SEGREDO"));
   });
-  test("reconciliar: o gerente dispara; a DECISÃO vem do RPC — o corpo do usuário é ignorado (não escolhe CONCLUIDO/ABORTADO)", async () => {
-    const { deps, rpcs } = montar({ gerentes: [GERENTE.id] });
+
+  test("reconciliar: o Painel dispara; a DECISÃO vem do RPC — o corpo do usuário é ignorado (não escolhe CONCLUIDO/ABORTADO)", async () => {
+    const { deps, rpcs } = montar();
     _zerarCachePerfil();
-    const r = await chamar({ user: GERENTE, metodo: "POST", path: `${A}/conexao/reconciliar`, corpo: { decisao: "CONCLUIDO", resultado: "CONCLUIDO" }, adminDeps: deps });
+    const r = await chamar({ user: PAINEL, metodo: "POST", path: `${A}/conexao/reconciliar`, corpo: { decisao: "CONCLUIDO", resultado: "CONCLUIDO" }, adminDeps: deps });
     assert.equal(r.status, 200, r.texto.slice(0, 300));
     assert.equal(r.json.data.decisao, "AINDA_INCERTO");
     assert.equal(rpcs.length, 1);
@@ -208,9 +188,9 @@ describe("Central — Painel + comunicacao:gerenciar_conexao: mesma leitura e A�
   });
 });
 
-describe("Central — SuperAdmin: mesma regra (bypass já existente, sem regra paralela)", () => {
-  test("lê tudo mesmo sem o flag do Painel, recebe permissoes.gerenciar=true e age como o gerente", async () => {
-    const { deps, rpcs } = montar();     // nenhuma linha em painel_adm_permissoes
+describe("Central — SuperAdmin e Painel Administrativo: visão e permissões IDÊNTICAS", () => {
+  test("SuperAdmin lê tudo mesmo sem o flag do Painel, gerencia a conexão e reconcilia", async () => {
+    const { deps, rpcs } = montar();
     _zerarCachePerfil();
     for (const [nome, path] of LEITURAS_DA_CENTRAL) assert.equal((await chamar({ user: SUPER, path, adminDeps: deps })).status, 200, nome);
     const e = await chamar({ user: SUPER, path: `${A}/conexao`, adminDeps: deps });
@@ -218,25 +198,45 @@ describe("Central — SuperAdmin: mesma regra (bypass já existente, sem regra p
     const r = await chamar({ user: SUPER, metodo: "POST", path: `${A}/conexao/reconciliar`, corpo: {}, adminDeps: deps });
     assert.equal(r.status, 200); assert.equal(rpcs.length, 1);
   });
+
+  test("mesmo status HTTP em TODAS as rotas (leituras e ações) e o mesmo estado de Conexão", async () => {
+    const rotas = [...LEITURAS_DA_CENTRAL.map(([, p]) => ["GET", p]), ...OUTRAS_LEITURAS.map((p) => ["GET", p]), ...ACOES_DE_CONEXAO, ...OUTRAS_ACOES];
+    for (const [metodo, path, corpo] of rotas) {
+      const status = [];
+      for (const user of [SUPER, PAINEL]) {
+        const { deps } = montar();
+        _zerarCachePerfil();
+        status.push((await chamar({ user, metodo, path, corpo, adminDeps: deps })).status);
+      }
+      assert.equal(status[1], status[0], `${metodo} ${path}: SuperAdmin=${status[0]} Painel=${status[1]}`);
+    }
+    const estados = [];
+    for (const user of [SUPER, PAINEL]) { const { deps } = montar(); _zerarCachePerfil(); estados.push((await chamar({ user, path: `${A}/conexao`, adminDeps: deps })).json.data); }
+    assert.deepEqual(estados[1].permissoes, estados[0].permissoes);
+    assert.deepEqual(estados[1].operacao, estados[0].operacao);
+  });
 });
 
-describe("Central — outras ações: autorização PRESERVADA (a permissão de conexão não vira regra delas)", () => {
-  test("o Painel comum chega às outras ações sem 403 de permissão de conexão; o usuário comum não chega", async () => {
+describe("Central — outras ações e guardas de fonte única de autorização", () => {
+  test("o Painel chega às outras ações sem 401/403 de permissão", async () => {
     const { deps } = montar();
     for (const [metodo, path, corpo] of OUTRAS_ACOES) {
-      const r = await chamar({ user: LEITOR, metodo, path, corpo, adminDeps: deps });
+      const r = await chamar({ user: PAINEL, metodo, path, corpo, adminDeps: deps });
+      assert.notEqual(r.status, 403, `${metodo} ${path}`);
       assert.doesNotMatch(r.texto, MSG_PERMISSAO_CONEXAO, `${metodo} ${path}`);
       assert.notEqual(r.status, 401);
     }
   });
-  test("guarda estática: só o módulo da Conexão conhece comunicacao:gerenciar_conexao (nenhuma outra ação foi amarrada a ela)", () => {
+  test("guarda estática: nenhuma permissão paralela — ninguém no src consulta painel_adm_permissoes/gerenciar_conexao; só a Conexão usa temPermissaoConexao", () => {
     const raiz = join(aqui, "..", "src");
     const arquivos = []; const varrer = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) varrer(p); else if (p.endsWith(".js")) arquivos.push(p); } };
     varrer(raiz);
     const semComentarios = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-    const usam = arquivos.filter((p) => /gerenciar_conexao|PERMISSAO_CONEXAO|temPermissaoConexao|exigirPermissao/.test(semComentarios(readFileSync(p, "utf8"))))
-      .map((p) => p.slice(raiz.length + 1).replace(/\\/g, "/"));
+    const rel = (p) => p.slice(raiz.length + 1).replace(/\\/g, "/");
+    const usam = arquivos.filter((p) => /temPermissaoConexao|exigirPermissao/.test(semComentarios(readFileSync(p, "utf8")))).map(rel);
     assert.deepEqual(usam, ["modules/administrativo/administrativo.comunicacao.conexao.js"]);
+    const paralela = arquivos.filter((p) => /painel_adm_permissoes|gerenciar_conexao|PERMISSAO_CONEXAO/.test(semComentarios(readFileSync(p, "utf8")))).map(rel);
+    assert.deepEqual(paralela, [], "a Conexão não pode voltar a depender de uma segunda fonte de permissão");
   });
   test("guarda estática: TODA rota de comunicação nasce atrás do requirePainelAdministrativo (router inteiro)", () => {
     const src = readFileSync(join(aqui, "..", "src", "modules", "administrativo", "administrativo.routes.js"), "utf8");

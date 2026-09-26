@@ -1,5 +1,5 @@
-// ABA CONEXÃO — rotas HTTP: só existem atrás de `requirePainelAdministrativo`; ler o estado é permitido a quem vê a Central, mas o QR e toda ação exigem a permissão
-// ESPECÍFICA (comunicacao:gerenciar_conexao). O QR sai com `Cache-Control: no-store` e nunca aparece em erro. Sem banco real, sem rede.
+// ABA CONEXÃO — rotas HTTP: só existem atrás de `requirePainelAdministrativo`; quem tem acesso ao Painel (ou é SuperAdmin) lê o estado, recebe o QR e executa
+// toda ação — mesma regra do resto da Comunicação, sem permissão extra. O QR sai com `Cache-Control: no-store` e nunca aparece em erro. Sem banco real, sem rede.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -47,11 +47,10 @@ const ROTAS = [
   ["POST", `${B}/desconectar`, { confirmacaoExplicita: true }], ["POST", `${B}/trocar`, { confirmacaoExplicita: true }], ["POST", `${B}/reconciliar`, {}], ["PUT", `${B}/identidade`, { ambiente: "TESTE" }],
 ];
 
-function depsFalsas({ permitidos = [], qr = QR } = {}) {
+function depsFalsas({ qr = QR } = {}) {
   const db = criarFakeDb({
     whatsapp_conexoes: [{ organizacao_id: ORG, provider_instance_id: "default", status: "CONNECTING", telefone_e164: null, last_seen_at: new Date().toISOString() }],
     whatsapp_identidade: [{ organizacao_id: ORG, provider_instance_id: "default", ambiente: "TESTE", status: "SEM_CONTA", operacao_id: OPERACAO, operacao_tipo: "CONECTAR", operacao_expira_em: new Date(Date.now() + 200_000).toISOString() }],
-    painel_adm_permissoes: permitidos.map((u) => ({ usuario_id: u, permissao: "comunicacao:gerenciar_conexao" })),
   });
   const chamadas = [];
   const svc = {
@@ -72,26 +71,20 @@ describe("Conexão — autorização das rotas", () => {
     });
   }
 
-  test("GET /conexao: quem está no painel MAS não tem a permissão lê o estado — vê a operação (sem id) e permissoes.gerenciar=false", async () => {
-    const { deps } = depsFalsas();
-    const r = await chamar({ user: PAINEL, path: B, adminDeps: deps });
-    assert.equal(r.status, 200);
-    assert.deepEqual([r.json.data.permissoes.gerenciar, r.json.data.estado], [false, "WAITING_QR"]);
-    assert.equal(r.json.data.operacao.tipo, "CONECTAR", "a operação em andamento é visível a quem só lê");
-    assert.equal("id" in r.json.data.operacao, false); assert.ok(!r.texto.includes(OPERACAO), "o id da operação não chega a quem não gerencia");
-    assert.ok(!r.texto.includes("SEGREDO"), "o estado nunca traz o QR");
+  test("GET /conexao: usuário do Painel (não-SA) e SuperAdmin recebem o MESMO estado — gerenciar=true e o id da operação", async () => {
+    for (const user of [PAINEL, SUPER]) {
+      const { deps } = depsFalsas();
+      const r = await chamar({ user, path: B, adminDeps: deps });
+      assert.equal(r.status, 200);
+      assert.deepEqual([r.json.data.permissoes.gerenciar, r.json.data.estado], [true, "WAITING_QR"]);
+      assert.equal(r.json.data.operacao.id, OPERACAO, "quem gerencia recebe o id para retomar/cancelar");
+      assert.ok(!r.texto.includes("SEGREDO"), "o estado nunca traz o QR");
+    }
   });
 
-  test("o QR é recusado (403) a quem só vê o painel: o valor NUNCA chega", async () => {
-    const { deps } = depsFalsas();
-    const r = await chamar({ user: PAINEL, path: `${B}/qr?operacaoId=${OPERACAO}`, adminDeps: deps });
-    assert.equal(r.status, 403);
-    assert.ok(!r.texto.includes("SEGREDO"));
-  });
-
-  test("com a permissão (tabela) ou SuperAdmin o QR sai com Cache-Control: no-store", async () => {
-    for (const [user, permitidos] of [[PAINEL, [PAINEL.id]], [SUPER, []]]) {
-      const { deps } = depsFalsas({ permitidos });
+  test("usuário do Painel (não-SA) ou SuperAdmin: o QR sai com Cache-Control: no-store — sem nenhuma permissão extra", async () => {
+    for (const user of [PAINEL, SUPER]) {
+      const { deps } = depsFalsas();
       const r = await chamar({ user, path: `${B}/qr?operacaoId=${OPERACAO}`, adminDeps: deps });
       assert.equal(r.status, 200);
       assert.equal(r.headers["cache-control"], "no-store");
@@ -101,24 +94,24 @@ describe("Conexão — autorização das rotas", () => {
   });
 
   test("um erro nunca carrega o QR: operação inválida ⇒ 409 sem o valor", async () => {
-    const { deps } = depsFalsas({ permitidos: [PAINEL.id] });
+    const { deps } = depsFalsas();
     const r = await chamar({ user: PAINEL, path: `${B}/qr?operacaoId=55555555-5555-4555-8555-555555555555`, adminDeps: deps });
     assert.equal(r.status, 409);
     assert.ok(!r.texto.includes("SEGREDO"));
   });
 
   test("desconectar sem confirmação explícita ⇒ 400 ANTES de tocar o Gateway", async () => {
-    const { deps, chamadas } = depsFalsas({ permitidos: [PAINEL.id] });
+    const { deps, chamadas } = depsFalsas();
     const r = await chamar({ user: PAINEL, metodo: "POST", path: `${B}/desconectar`, corpo: {}, adminDeps: deps });
     assert.equal(r.status, 400);
     assert.deepEqual(chamadas, []);
   });
 
-  test("sem permissão nenhuma ação chega ao Gateway (POST iniciar/trocar/desconectar ⇒ 403)", async () => {
+  test("usuário sem Painel Administrativo: nenhuma ação chega ao Gateway (POST iniciar/trocar/desconectar ⇒ 403), mesmo chamando a API direto", async () => {
     const { deps, chamadas } = depsFalsas();
     _zerarCachePerfil();
     for (const [path, corpo] of [[`${B}/iniciar`, {}], [`${B}/trocar`, { confirmacaoExplicita: true }], [`${B}/desconectar`, { confirmacaoExplicita: true }]]) {
-      assert.equal((await chamar({ user: PAINEL, metodo: "POST", path, corpo, adminDeps: deps })).status, 403, path);
+      assert.equal((await chamar({ user: COMUM, metodo: "POST", path, corpo, adminDeps: deps })).status, 403, path);
     }
     assert.deepEqual(chamadas, []);
   });

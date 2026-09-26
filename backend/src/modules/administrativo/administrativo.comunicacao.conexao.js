@@ -2,8 +2,8 @@
 //
 // PRINCÍPIOS
 //   * REUTILIZA a sessão Baileys do Gateway (connect / qr / status / reset já existentes). Nenhum segundo mecanismo de sessão, nenhuma cópia de credencial aqui.
-//   * PERMISSÃO ESPECÍFICA `comunicacao:gerenciar_conexao`: ter acesso às Conversas NÃO permite conectar/desconectar. Ler o estado (sem QR) é permitido a quem vê a Central.
-//     O QR só é entregue a quem tem a permissão. SuperAdmin passa por bypass.
+//   * PERMISSÃO: a mesma de toda a Comunicação — SuperAdmin OU acesso ao Painel Administrativo (ver `temPermissaoConexao`). Quem vê a Central
+//     também conecta/desconecta e recebe o QR; não existe permissão extra só para a Conexão.
 //   * O QR passa SÓ EM MEMÓRIA: nunca é gravado, logado nem auditado (a auditoria guarda a ORDEM do QR, nunca o valor).
 //   * Depois de escanear, a conta NÃO é aceita em silêncio: fica PENDENTE_CONFIRMACAO até o operador confirmar; cancelar desfaz (reset). Enquanto pendente/não confirmada,
 //     o envio manual da Central fica bloqueado (gate CONEXAO_NAO_CONFIRMADA).
@@ -27,7 +27,6 @@ import {
 // A regra de "conta confirmada" mora num módulo NEUTRO (comunicacao.identidade.js) para que worker/teste/provider usem exatamente a mesma — reexportada aqui por compatibilidade.
 export { INSTANCIA, hashTelefone, derivarEstado, statusIdentidade, resumoIdentidade, identidadeConfirmada };
 
-export const PERMISSAO_CONEXAO = "comunicacao:gerenciar_conexao";
 export const NOME_AGENTE = "Agente Crescer";
 export const AMBIENTES = Object.freeze(["TESTE", "PRODUCAO"]);
 export const ESTADOS = Object.freeze(["CONNECTED", "DISCONNECTED", "CONNECTING", "WAITING_QR", "RECONNECTING", "AUTH_ERROR"]);
@@ -91,15 +90,13 @@ async function perfilVivo(svc, deps, dbCon = null) {
 // Permissão
 // ---------------------------------------------------------------------------
 
-/** SuperAdmin passa; os demais precisam da permissão específica. FAIL-CLOSED em qualquer erro. */
-export async function temPermissaoConexao(autor, deps = {}) {
-  if (autor?.superadmin === true) return true;
-  if (!autor?.contaId) return false;
-  try {
-    const db = deps.supabase ?? supabase;
-    const { data, error } = await db.from("painel_adm_permissoes").select("usuario_id").eq("usuario_id", autor.contaId).eq("permissao", PERMISSAO_CONEXAO).maybeSingle();
-    return !error && !!data;
-  } catch { return false; }
+/**
+ * Mesma regra de TODA a Comunicação: SuperAdmin OU acesso ao Painel Administrativo (os mesmos flags que
+ * `requirePainelAdministrativo` lê de `req.user`). Não há permissão extra para a Conexão — uma única fonte
+ * de verdade. FAIL-CLOSED: sem flag explícito `=== true`, nega (o ator identificado é exigido em `exigirPermissao`).
+ */
+export async function temPermissaoConexao(autor) {
+  return autor?.superadmin === true || autor?.painelAdministrativo === true;
 }
 
 async function exigirPermissao(autor, deps) {

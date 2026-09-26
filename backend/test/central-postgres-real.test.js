@@ -392,8 +392,8 @@ describe("RETENÇÃO de 30 dias — purga REAL (banco real)", pular({}), () => {
 });
 
 describe("CONEXÃO — permissão, trava, QR, confirmação, desconexão e troca (banco real)", pular({}), () => {
-  const OP_SEM = () => ({ contaId: destB.contaId, perfilId: destB.perfilId, nome: "Sem Permissão", email: `${tag}-sem@example.com`, superadmin: false });
-  const OP_COM = () => ({ contaId: destA.contaId, perfilId: destA.perfilId, nome: "Com Permissão", email: `${tag}-com@example.com`, superadmin: false });
+  const OP_SEM = () => ({ contaId: destB.contaId, perfilId: destB.perfilId, nome: "Sem Painel", email: `${tag}-sem@example.com`, superadmin: false, painelAdministrativo: false });
+  const OP_COM = () => ({ contaId: destA.contaId, perfilId: destA.perfilId, nome: "Painel", email: `${tag}-com@example.com`, superadmin: false, painelAdministrativo: true });
   const SUPER = () => ({ contaId: uuid(), perfilId: null, nome: "Super", email: `${tag}-super@example.com`, superadmin: true });
   const depsCon = (g, org = conA, extra = {}) => {
     const deps = dep(org, { whatsAppService: g.svc, ...extra });
@@ -406,16 +406,13 @@ describe("CONEXÃO — permissão, trava, QR, confirmação, desconexão e troca
     aud: await auditorias(org), inbox: await inbox(org), msgs: (await supabase.from("comunicacao_mensagens").select("*").eq("organizacao_id", org)).data,
   });
 
-  before(async () => { if (!PULAR && migracaoOk) await supabase.from("painel_adm_permissoes").upsert({ usuario_id: destA.contaId, permissao: conexao.PERMISSAO_CONEXAO }, { onConflict: "usuario_id,permissao" }); });
-  after(async () => { if (!PULAR && migracaoOk) await supabase.from("painel_adm_permissoes").delete().eq("usuario_id", destA.contaId); });
-
-  test("permissão ESPECÍFICA (tabela real): sem ela 403 (mesmo com acesso à Central); com ela ou SuperAdmin, ok", async () => {
+  test("permissão = Painel Administrativo OU SuperAdmin (sem tabela extra): ator sem Painel ⇒ 403 (defesa em profundidade); Painel ou SuperAdmin, ok", async () => {
     const g = gatewayFalso();
     await rejeita(conexao.iniciar(OP_SEM(), depsCon(g)), 403);
     assert.deepEqual(g.chamadas, [], "nenhuma ação chegou ao Gateway");
-    assert.equal(await conexao.temPermissaoConexao(OP_SEM(), depsCon(g)), false);
-    assert.equal(await conexao.temPermissaoConexao(OP_COM(), depsCon(g)), true);
-    assert.equal(await conexao.temPermissaoConexao(SUPER(), depsCon(g)), true);
+    assert.equal(await conexao.temPermissaoConexao(OP_SEM()), false);
+    assert.equal(await conexao.temPermissaoConexao(OP_COM()), true);
+    assert.equal(await conexao.temPermissaoConexao(SUPER()), true);
     const st = await conexao.estado(OP_SEM(), depsCon(g));
     assert.equal(st.permissoes.gerenciar, false);
     assert.ok(!st.operacao || !("id" in st.operacao), "quem não gerencia nunca recebe o id da operação");

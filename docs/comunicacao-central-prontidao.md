@@ -28,7 +28,7 @@ Legenda das implementações:
 - **CR**: `comunicacao.central.repo.js`, consultas ao inbox/outbox/cache de foto.
 - **IR**: `comunicacao.inbox.repo.js`, RPCs da 096.
 - **I**: `comunicacao.identidade.js`, tabelas `whatsapp_identidade`/`whatsapp_conexoes`.
-- **P**: acesso ao painel. **G**: P e superadmin ou `comunicacao:gerenciar_conexao`.
+- **P**: acesso ao painel. **G**: igual a P (superadmin ou acesso ao painel) — sem permissão extra desde 2026-09-26.
 
 | Endpoint | Autorização e service | Repository/RPC ou gateway | Contrato consumido e erros específicos |
 |---|---|---|---|
@@ -115,9 +115,8 @@ QR fica transitório em memória; resposta à UI contém SVG, não a string crua
 | Usuário | Ler Central/conversas | Envio manual | QR/confirmar/conectar/trocar/desconectar |
 |---|---|---|---|
 | Comum sem acesso ao painel | Não | Não | Não |
-| Acesso ao painel, sem permissão de conexão | Sim | Sim, sujeito aos gates e roster | Não; Conexão somente leitura |
-| Painel + `comunicacao:gerenciar_conexao` | Sim | Sujeito aos mesmos gates | Sim, mediante operação e confirmações exigidas |
-| Superadmin autenticado | Sim | Sujeito aos gates | Bypass da permissão específica |
+| Acesso ao painel | Sim | Sim, sujeito aos gates e roster | Sim, mediante operação e confirmações exigidas |
+| Superadmin autenticado | Sim | Sujeito aos gates | Sim — idêntico ao acesso ao painel |
 
 “Somente leitura” é o estado da **aba Conexão**, não um papel global que proíba envio manual. Permissão específica isolada não concede entrada no painel. Nenhum usuário foi habilitado ou promovido. `ambiente:TESTE` é metadado visual, **não sandbox de envio**.
 
@@ -184,7 +183,7 @@ Esta seção substitui as afirmações desatualizadas das seções 9–11 sobre 
 - **098** (confirmação atômica, token de efeito, paginação) e **099** (reconciliação) são migrations novas sobre a 097; nenhuma altera outbox, claim, modo ou habilitações. Ordem: 096 → 097 → 098 → 099. Rollback na ordem inversa; ambos recusam rodar com efeito externo pendente.
 - **Estados do efeito:** PENDENTE (token gerado, nunca consumido) → EXECUTANDO (gateway consumiu, ação em curso) → CONCLUIDO (token liberado) | INCERTO (resultado não confirmado).
 - **Falha determinística × incerteza real (gateway `operacaoConexao.js`):** guardas do gateway anteriores a qualquer efeito (`SEM_LEASE`, `JA_CONECTADO`, `NAO_CONECTADO`) chamam `FALHA_DETERMINISTICA` (EXECUTANDO → livre). Qualquer outro erro após o CONSUMIR (timeout, queda, resposta perdida) marca INCERTO. Se o gateway nem consegue registrar a falha determinística, degrada para INCERTO (fail-safe).
-- **Reconciliação oficial:** `POST /administrativo/comunicacao/conexao/reconciliar` ("Rever estado da conexão"). Exige `comunicacao:gerenciar_conexao` ou superadmin. O backend consulta o estado vivo do gateway (status e `authSessionId`) e chama a RPC `whatsapp_operacao_reconciliar`; **a decisão é do banco**, sob `FOR UPDATE`, comparando com o snapshot da sessão (`efeito_auth_session_id`) gravado no PREPARAR. Não existe parâmetro para forçar sucesso.
+- **Reconciliação oficial:** `POST /administrativo/comunicacao/conexao/reconciliar` ("Rever estado da conexão"). Exige acesso ao painel ou superadmin. O backend consulta o estado vivo do gateway (status e `authSessionId`) e chama a RPC `whatsapp_operacao_reconciliar`; **a decisão é do banco**, sob `FOR UPDATE`, comparando com o snapshot da sessão (`efeito_auth_session_id`) gravado no PREPARAR. Não existe parâmetro para forçar sucesso.
 - **Decisões:** janela de estabilização de 30 s desde a última transição (logout em voo) → `AINDA_INCERTO`. Gateway indisponível, sem perfil ou contraditório → `AINDA_INCERTO`. DESCONECTAR: gateway não conectado ou sessão diferente → CONCLUIDO (limpa a identidade e fecha a operação); mesma sessão ativa com heartbeat fresco → ABORTADO (identidade preservada). RESET: sessão diferente → CONCLUIDO; mesma sessão ativa → ABORTADO; sem snapshot → INCERTO. CONECTAR: pareamento/conexão ativos → CONCLUIDO; gateway desconectado → ABORTADO. ENCERRAR: gateway desconectado → CONCLUIDO; ainda ativo → ABORTADO. PENDENTE antigo → ABORTADO (token revogado; um CONSUMIR tardio é recusado). EXECUTANDO parado é promovido a INCERTO.
 - **Idempotência/concorrência:** repetir a reconciliação devolve `JA_RESOLVIDO` (sem nova auditoria); duas simultâneas produzem uma decisão real e uma `JA_RESOLVIDO`. Enquanto o efeito estiver realmente INCERTO, nenhuma operação nova (iniciar/cancelar/confirmar) assume.
 - **Auditoria:** ação `WHATSAPP_CONEXAO_RECONCILIADA` com operação, ação, decisão, motivo e estado do gateway (sem token, QR ou telefone).

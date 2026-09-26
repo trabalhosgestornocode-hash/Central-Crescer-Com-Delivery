@@ -99,8 +99,8 @@ administrativoRouter.get("/comunicacao/central/atualizacoes", cc.centralAtualiza
 administrativoRouter.get("/comunicacao/conversas", cc.listarConversas);
 administrativoRouter.get("/comunicacao/conversas/:contatoId", cc.obterConversa);
 administrativoRouter.post("/comunicacao/conversas/:contatoId/lida", cc.marcarConversaLida);
-// Aba Conexão — identidade e sessão do WhatsApp. LER o estado é permitido a quem vê a Central; o QR e toda ação exigem a permissão ESPECÍFICA
-// comunicacao:gerenciar_conexao (checada no service, fail-closed) e passam por um limite de taxa próprio.
+// Aba Conexão — identidade e sessão do WhatsApp. Mesma autorização do router (SuperAdmin OU Painel Administrativo), reforçada no
+// service (fail-closed); as ações passam por um limite de taxa próprio.
 const limiteConexao = limiteDeTaxa({ escopo: "comunicacao_conexao", ...RATE_LIMIT.comunicacaoConexao });
 administrativoRouter.get("/comunicacao/conexao", cc.conexaoEstado);
 administrativoRouter.get("/comunicacao/conexao/qr", cc.conexaoQr);

@@ -1,21 +1,21 @@
 // PAINEL ADMINISTRATIVO — Comunicação: matriz de autorização de TODAS as rotas.
 //
-// Regra (já em vigor via `requirePainelAdministrativo` no router inteiro):
-//   Comunicação = superadmin OU acesso ao Painel Administrativo.
+// Regra: Comunicação = superadmin OU acesso ao Painel Administrativo — `requirePainelAdministrativo`
+// no router inteiro, e a mesma regra reforçada no service da Conexão (`temPermissaoConexao`).
 //
-// Este arquivo trava a regra rota a rota, para que uma rota nova de Comunicação
-// não nasça com uma checagem exclusiva de SuperAdmin nem sem proteção:
-//   1. SuperAdmin                          -> passa (nunca 403)
-//   2. Painel Administrativo (não-SA)      -> passa (nunca 403) — mesma visão do SA
-//   3. usuário comum                       -> 403, sem tocar no banco
-//   4. chamada direta sem autorização      -> 403 em TODAS as rotas/métodos
+// As rotas NÃO são listadas à mão: saem do próprio `administrativoRouter` (todo path que começa com
+// /comunicacao). Uma rota nova de Comunicação nasce coberta por esta matriz automaticamente.
+//   1. SuperAdmin                          -> nunca 401/403
+//   2. Painel Administrativo (não-SA)      -> nunca 401/403, e o MESMO status que o SuperAdmin
+//   3. usuário comum                       -> 403, sem tocar no banco, no Gateway nem na rede
+//   4. chamada direta sem usuário          -> 403 em TODAS as rotas/métodos
 //   5. regressão: o acesso à Comunicação NÃO abre o Painel SuperAdmin (/plataforma)
 //
-// Sobe os routers REAIS num app mínimo. NÃO usa banco real, NÃO usa rede.
+// Sobe os routers REAIS num app mínimo. NÃO usa banco real, NÃO usa rede (fetch global bloqueado).
 //
 // Rodar: node --test test/administrativo-comunicacao-autorizacao-matriz.test.js
 
-import { test, describe } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import express from "express";
@@ -24,39 +24,39 @@ import { administrativoRouter } from "../src/modules/administrativo/administrati
 import { plataformaRouter } from "../src/modules/plataforma/plataforma.routes.js";
 import { errorHandler } from "../src/middlewares/errorHandler.js";
 
-const ORG = "11111111-1111-4111-8111-111111111111";
-const CONTATO = "22222222-2222-4222-8222-222222222222";
+const ID = "11111111-1111-4111-8111-111111111111";
 
-// Todas as rotas de Comunicação expostas por administrativo.routes.js.
-const ROTAS_COMUNICACAO = [
-  ["GET", "/administrativo/comunicacao/resumo"],
-  ["GET", "/administrativo/comunicacao/organizacoes"],
-  ["GET", `/administrativo/comunicacao/organizacoes/${ORG}`],
-  ["PUT", `/administrativo/comunicacao/organizacoes/${ORG}/responsavel`, { nome: "X", telefoneE164: "+5586999990000" }],
-  ["PUT", `/administrativo/comunicacao/organizacoes/${ORG}/responsaveis/${CONTATO}/ativo`, { ativo: true }],
-  ["POST", `/administrativo/comunicacao/organizacoes/${ORG}/responsaveis/${CONTATO}/validar`, { confirmacaoExplicita: true }],
-  ["POST", `/administrativo/comunicacao/organizacoes/${ORG}/habilitacao`, { habilitado: false, confirmacaoExplicita: true }],
-  ["GET", "/administrativo/comunicacao/configuracoes"],
-  ["PUT", "/administrativo/comunicacao/configuracoes", {}],
-  ["GET", `/administrativo/comunicacao/organizacoes/${ORG}/preview-mensagem`],
-  ["PUT", `/administrativo/comunicacao/organizacoes/${ORG}/configuracao`, { habilitado: false }],
-  ["POST", `/administrativo/comunicacao/organizacoes/${ORG}/consentimento`, { confirmacaoExplicita: true }],
-  ["GET", "/administrativo/comunicacao/fila"],
-  ["GET", "/administrativo/comunicacao/historico"],
-];
+/** Todas as rotas /comunicacao do router real: [[METODO, "/administrativo/comunicacao/..."]] com params preenchidos. */
+function rotasDeComunicacao() {
+  const rotas = [];
+  for (const layer of administrativoRouter.stack) {
+    const r = layer.route;
+    if (!r || typeof r.path !== "string" || !r.path.startsWith("/comunicacao")) continue;
+    for (const metodo of Object.keys(r.methods).filter((m) => r.methods[m] && m !== "_all")) {
+      rotas.push([metodo.toUpperCase(), "/administrativo" + r.path.replace(/:[A-Za-z]+/g, ID)]);
+    }
+  }
+  return rotas;
+}
+const ROTAS_COMUNICACAO = rotasDeComunicacao();
+// Corpo genérico: confirmações explícitas e flags seguras — o que importa aqui é a AUTORIZAÇÃO.
+const CORPO = { confirmacaoExplicita: true, habilitado: false, ativo: true, operacaoId: ID, ambiente: "TESTE", modo: "DISABLED", texto: "teste" };
 
 const SUPERADMIN = { id: "u-sa", email: "root@teste.com", nome: "Root", superadmin: true, painelAdministrativo: false };
 const PAINEL = { id: "u-padm", email: "padm@teste.com", nome: "Painel", superadmin: false, painelAdministrativo: true };
 const COMUM = { id: "u-comum", email: "comum@teste.com", nome: "Comum", superadmin: false, painelAdministrativo: false };
 
-// Supabase que registra acesso e falha — prova que o 403 acontece ANTES de
-// qualquer leitura/escrita. Para usuários autorizados o erro resultante (5xx)
-// só confirma que a autorização deixou a requisição chegar ao handler.
-function dbSentinela() {
-  const s = { tocado: 0 };
-  s.from = () => { s.tocado++; throw new Error("db-sentinela"); };
-  s.rpc = () => { s.tocado++; throw new Error("db-sentinela"); };
-  return s;
+/**
+ * Dependências sentinela: banco e Gateway registram acesso e falham. Para quem NÃO é autorizado, prova que
+ * o 403 acontece antes de qualquer I/O. Para quem é autorizado, o erro resultante (4xx/5xx de negócio) só
+ * confirma que a autorização deixou a requisição chegar ao handler.
+ */
+function depsSentinela() {
+  const toques = { db: 0, gateway: 0 };
+  const falha = (tipo) => () => { toques[tipo]++; throw new Error(`${tipo}-sentinela`); };
+  const supabase = { from: falha("db"), rpc: falha("db") };
+  const whatsAppService = new Proxy({}, { get: (_t, prop) => (prop === "then" ? undefined : falha("gateway")) });
+  return { deps: { supabase, whatsAppService, env: {}, auditar: falha("db") }, toques };
 }
 
 function makeApp(user, deps) {
@@ -86,27 +86,45 @@ function chamar(app, metodo, path, corpo) {
     });
   });
 }
+const corpoDe = (metodo) => (metodo === "GET" || metodo === "DELETE" ? undefined : CORPO);
+
+// Rede bloqueada durante toda a suíte: nenhum handler pode falar com o Gateway real configurado no .env.
+const fetchOriginal = globalThis.fetch;
+let chamadasDeRede = 0;
+before(() => { globalThis.fetch = async () => { chamadasDeRede++; throw new Error("rede bloqueada no teste"); }; });
+after(() => { globalThis.fetch = fetchOriginal; assert.equal(chamadasDeRede, 0, "nenhuma rota pode tentar sair para a rede"); });
+
+describe("Comunicação — inventário", () => {
+  test("o router expõe as rotas de Comunicação (sanidade da derivação automática)", () => {
+    assert.ok(ROTAS_COMUNICACAO.length >= 40, `só ${ROTAS_COMUNICACAO.length} rotas encontradas`);
+    for (const essencial of ["GET /administrativo/comunicacao/resumo", `POST /administrativo/comunicacao/conexao/iniciar`, `PUT /administrativo/comunicacao/modo`, `POST /administrativo/comunicacao/teste`]) {
+      assert.ok(ROTAS_COMUNICACAO.some(([m, p]) => `${m} ${p}` === essencial), `faltou ${essencial}`);
+    }
+  });
+});
 
 describe("Comunicação — superadmin OU Painel Administrativo têm o MESMO acesso em todas as rotas", () => {
-  for (const [nome, user] of [["SuperAdmin", SUPERADMIN], ["Painel Administrativo (não-SA)", PAINEL]]) {
-    for (const [metodo, path, corpo] of ROTAS_COMUNICACAO) {
-      test(`${nome}: ${metodo} ${path} -> não é 403`, async () => {
-        const r = await chamar(makeApp(user, { supabase: dbSentinela() }), metodo, path, corpo);
-        assert.notEqual(r.status, 403, `autorizado recebeu 403: ${r.body}`);
-        assert.notEqual(r.status, 401);
-      });
-    }
+  for (const [metodo, path] of ROTAS_COMUNICACAO) {
+    test(`${metodo} ${path}: SuperAdmin e Painel passam, com o mesmo status`, async () => {
+      const status = [];
+      for (const user of [SUPERADMIN, PAINEL]) {
+        const r = await chamar(makeApp(user, depsSentinela().deps), metodo, path, corpoDe(metodo));
+        assert.ok(![401, 403].includes(r.status), `${user.nome} recebeu ${r.status}: ${r.body.slice(0, 200)}`);
+        status.push(r.status);
+      }
+      assert.equal(status[1], status[0], `SuperAdmin=${status[0]} Painel=${status[1]}`);
+    });
   }
 });
 
 describe("Comunicação — usuário sem Painel Administrativo é negado no servidor (chamada direta)", () => {
   for (const [rotulo, user] of [["usuário comum", COMUM], ["sem req.user", null]]) {
-    for (const [metodo, path, corpo] of ROTAS_COMUNICACAO) {
-      test(`${rotulo}: ${metodo} ${path} -> 403 sem tocar no banco`, async () => {
-        const db = dbSentinela();
-        const r = await chamar(makeApp(user, { supabase: db }), metodo, path, corpo);
+    for (const [metodo, path] of ROTAS_COMUNICACAO) {
+      test(`${rotulo}: ${metodo} ${path} -> 403 sem tocar em banco/Gateway`, async () => {
+        const { deps, toques } = depsSentinela();
+        const r = await chamar(makeApp(user, deps), metodo, path, corpoDe(metodo));
         assert.equal(r.status, 403);
-        assert.equal(db.tocado, 0, "o banco não pode ser tocado antes da autorização");
+        assert.deepEqual(toques, { db: 0, gateway: 0 }, "nenhum I/O antes da autorização");
       });
     }
   }
@@ -123,8 +141,10 @@ describe("Regressão — acesso à Comunicação NÃO concede poderes de SuperAd
   ];
   for (const [metodo, path, corpo] of ROTAS_SUPERADMIN) {
     test(`Painel Administrativo (não-SA): ${metodo} ${path} -> 403`, async () => {
-      const r = await chamar(makeApp(PAINEL, { supabase: dbSentinela() }), metodo, path, corpo);
+      const { deps, toques } = depsSentinela();
+      const r = await chamar(makeApp(PAINEL, deps), metodo, path, corpo);
       assert.equal(r.status, 403);
+      assert.deepEqual(toques, { db: 0, gateway: 0 });
     });
   }
 });
