@@ -54,6 +54,40 @@ const CATALOGO = {
   IFOOD_VINCULO_DUPLICADO: [409,
     "Esta loja do iFood já está vinculada a outra unidade."],
 
+  // --- Financial (Fase 2 — Homologação) ---
+  IFOOD_FINANCIAL_PERIODO_INVALIDO: [400,
+    "Período inválido. Confira as datas informadas e o limite máximo permitido para esta consulta."],
+  IFOOD_FINANCIAL_SEM_MERCHANT: [409,
+    "Vincule uma loja do iFood a esta unidade antes de consultar dados financeiros."],
+  IFOOD_RECONCILIATION_INVALIDA: [400,
+    "Não foi possível processar essa solicitação de conciliação. Confira a competência informada."],
+
+  // --- modo CENTRALIZED_TEST (temporário, só ambiente técnico) ---
+  IFOOD_CENTRALIZADO_BLOQUEADO: [403,
+    "O modo centralizado de teste do iFood só funciona no ambiente de desenvolvimento com o banco de teste."],
+  IFOOD_CENTRALIZADO_FALHOU: [502,
+    "Não foi possível autenticar no aplicativo centralizado de teste do iFood."],
+
+  // --- Order (Checkpoint C) ---
+  IFOOD_PEDIDO_NAO_ENCONTRADO: [404,
+    "O iFood não encontrou este pedido (ainda indisponível, expirado ou inválido)."],
+  IFOOD_ACAO_PEDIDO_RECUSADA: [409,
+    "O iFood recusou a ação neste pedido."],
+  IFOOD_PEDIDO_LOCAL_NAO_ENCONTRADO: [404,
+    "Pedido não encontrado nesta unidade."],
+  IFOOD_PEDIDO_ESTADO_INVALIDO: [409,
+    "Esta ação não é permitida no estado atual do pedido."],
+  IFOOD_ACAO_NAO_ELEGIVEL: [409,
+    "Esta ação não está disponível para este tipo de pedido."],
+  IFOOD_MOTIVO_CANCELAMENTO_INVALIDO: [400,
+    "Motivo de cancelamento inválido para este pedido. Escolha um dos motivos oferecidos pelo iFood."],
+  IFOOD_DISPUTA_NAO_ENCONTRADA: [404,
+    "Negociação não encontrada nesta unidade."],
+  IFOOD_DISPUTA_ENCERRADA: [409,
+    "Esta negociação já foi respondida ou expirou."],
+  IFOOD_RESPOSTA_DISPUTA_INVALIDA: [400,
+    "Resposta inválida para esta negociação."],
+
   // --- transporte ---
   IFOOD_REQUISICAO_INVALIDA: [400,
     "O iFood recusou a requisição. Tente novamente; se persistir, fale com o suporte."],
@@ -79,13 +113,46 @@ export const IFOOD_ERROS = Object.freeze(
 // Traduz um status HTTP do iFood para o erro de domínio correspondente.
 // 400/401/403 NUNCA viram retry — quem chama usa isto para decidir.
 export function erroPorStatusHttp(status, { contexto } = {}) {
+  // Order: 404 = pedido inexistente/indisponível; 400/409/422 = ação recusada (status HTTP nos detalhes).
+  if (contexto === "order") {
+    if (status === 404) return ifoodErro(IFOOD_ERROS.IFOOD_PEDIDO_NAO_ENCONTRADO);
+    if (status === 400 || status === 409 || status === 422) return ifoodErro(IFOOD_ERROS.IFOOD_ACAO_PEDIDO_RECUSADA, { detalhes: { status } });
+  }
   if (status === 400) {
     // No fluxo OAuth, 400 quase sempre é "authorizationCode/verifier inválido".
     return ifoodErro(contexto === "oauth" ? IFOOD_ERROS.IFOOD_OAUTH_CODIGO_INVALIDO : IFOOD_ERROS.IFOOD_REQUISICAO_INVALIDA);
   }
   if (status === 401) return ifoodErro(IFOOD_ERROS.IFOOD_TOKEN_EXPIRADO);
-  if (status === 403) return ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_SEM_PERMISSAO);
-  if (status === 404) return ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_NAO_ENCONTRADO);
+  if (status === 403) {
+    // Mesmo código (o frontend decide pelo `codigo`, nunca pela mensagem) —
+    // só a mensagem muda para fazer sentido fora do fluxo de vínculo.
+    if (contexto === "financial") {
+      return ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_SEM_PERMISSAO, {
+        mensagem: "Você não tem permissão para consultar os dados financeiros desta loja no iFood.",
+      });
+    }
+    return ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_SEM_PERMISSAO);
+  }
+  if (status === 404) {
+    // Reconciliation On Demand: requestId não encontrado OU expirado (TTL
+    // documentado de 24h) — mensagem bem diferente de "loja não encontrada".
+    if (contexto === "reconciliation") {
+      return ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, {
+        mensagem: "Não encontramos essa solicitação de conciliação. Ela pode ter expirado (validade de 24 horas) — gere uma nova.",
+      });
+    }
+    return ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_NAO_ENCONTRADO);
+  }
+  if (status === 409) {
+    // POST .../reconciliation/on-demand: "There is already a recent and
+    // valid request. Please try again later." (confirmado no Swagger).
+    if (contexto === "reconciliation") {
+      return ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, {
+        mensagem: "Já existe uma solicitação de conciliação em andamento para esta competência. Aguarde alguns instantes e tente novamente.",
+      });
+    }
+    return ifoodErro(IFOOD_ERROS.IFOOD_RESPOSTA_INVALIDA, { detalhes: { status } });
+  }
   if (status === 429) return ifoodErro(IFOOD_ERROS.IFOOD_RATE_LIMITED);
   if (status >= 500) return ifoodErro(IFOOD_ERROS.IFOOD_INDISPONIVEL);
   return ifoodErro(IFOOD_ERROS.IFOOD_RESPOSTA_INVALIDA, { detalhes: { status } });

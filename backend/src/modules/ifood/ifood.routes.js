@@ -42,6 +42,18 @@ ifoodRouter.get("/merchants", gerenciar, limitarMerchants, controller.descobrirM
 ifoodRouter.post("/merchants/link", gerenciar, limitarMerchants, controller.vincularMerchant);
 ifoodRouter.get("/merchants/:merchantId", gerenciar, limitarMerchants, controller.detalharMerchant);
 
+// --- Financial (Fase 2 — Homologação, READ-ONLY) — chama a API externa ---
+const limitarFinancial = limitarPorUsuario({ escopo: "ifood:financial", max: IFOOD_RATE_LIMIT.maxFinancial });
+
+ifoodRouter.get("/financial/sales", gerenciar, limitarFinancial, controller.financialSales);
+ifoodRouter.get("/financial/events", gerenciar, limitarFinancial, controller.financialEvents);
+ifoodRouter.get("/financial/settlements", gerenciar, limitarFinancial, controller.financialSettlements);
+ifoodRouter.get("/financial/reconciliation", gerenciar, limitarFinancial, controller.financialReconciliation);
+ifoodRouter.post("/financial/reconciliation/on-demand", gerenciar, limitarFinancial, controller.financialReconciliationOnDemandSolicitar);
+ifoodRouter.get("/financial/reconciliation/on-demand/:requestId", gerenciar, limitarFinancial, controller.financialReconciliationOnDemandStatus);
+ifoodRouter.get("/financial/anticipations", gerenciar, limitarFinancial, controller.financialAnticipations);
+ifoodRouter.get("/financial/conciliation", gerenciar, limitarFinancial, controller.financialConciliation);
+
 // --- Status da integração (leitura — não chama a API do iFood) -----------
 ifoodRouter.get("/status", requirePermissao(PERMISSOES.INTEGRACOES_VER), controller.status);
 

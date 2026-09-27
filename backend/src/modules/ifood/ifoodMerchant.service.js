@@ -53,6 +53,18 @@ async function resolverConexao({ organizacaoId, unidadeId, repo }) {
   return conexao;
 }
 
+/**
+ * Só resolve a conexão da unidade quando o TOKEN pertence a ela (modo
+ * distribuído). Se o token é do app inteiro (modo temporário centralizado de
+ * teste), não há credencial por unidade — não exige nem cria conexão. O Merchant
+ * NÃO sabe qual é o modo: só pergunta a capacidade `escopoDoToken()`.
+ * (Fakes de teste sem `escopoDoToken` seguem o comportamento distribuído.)
+ */
+async function conexaoSeOTokenForDela({ organizacaoId, unidadeId, repo, token }) {
+  if ((token.escopoDoToken?.() ?? "conexao") === "app") return null;
+  return resolverConexao({ organizacaoId, unidadeId, repo });
+}
+
 /** Percorre TODAS as páginas de GET /merchants com um accessToken já válido. */
 async function paginarMerchants({ accessToken, http, sinal }) {
   const size = IFOOD_HTTP.pageSizePadrao;
@@ -93,10 +105,10 @@ export async function listarMerchantsAutorizados({ organizacaoId, unidadeId, dep
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
 
-  const conexao = await resolverConexao({ organizacaoId, unidadeId, repo });
+  const conexao = await conexaoSeOTokenForDela({ organizacaoId, unidadeId, repo, token });
 
   const { merchants, truncado } = await token.comAccessTokenValido({
-    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    conexaoId: conexao?.id ?? null, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => paginarMerchants({ accessToken, http }),
   });
 
@@ -125,10 +137,10 @@ export async function validarMerchant({ organizacaoId, unidadeId, merchantId, de
   const id = String(merchantId ?? "").trim();
   if (!id) throw ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_NAO_ENCONTRADO);
 
-  const conexao = await resolverConexao({ organizacaoId, unidadeId, repo });
+  const conexao = await conexaoSeOTokenForDela({ organizacaoId, unidadeId, repo, token });
 
   const detalhe = await token.comAccessTokenValido({
-    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    conexaoId: conexao?.id ?? null, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(IFOOD_ROTAS.merchant(id), { accessToken, rotulo: "merchants.detail" }),
   });
 

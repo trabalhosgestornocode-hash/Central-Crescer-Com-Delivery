@@ -13,6 +13,7 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as authService from "./ifoodAuth.service.js";
 import * as merchantService from "./ifoodMerchant.service.js";
 import * as connectionService from "./ifoodConnection.service.js";
+import * as financialService from "./ifoodFinancial.service.js";
 import * as val from "./ifood.validators.js";
 
 function tenant(req) {
@@ -88,5 +89,76 @@ export const status = asyncHandler(async (req, res) => {
 export const desconectar = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
   const data = await connectionService.desconectar({ organizacaoId, unidadeId, usuarioId: req.user.id });
+  res.json({ data });
+});
+
+// --- Financial (Fase 2 — Homologação, só leitura) ------------------------
+
+// API Sales. merchantId SEMPRE da conexão da unidade — nunca do query string.
+export const financialSales = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { inicio, fim, page } = req.query;
+  const data = await financialService.listarSales({ organizacaoId, unidadeId, inicio, fim, page });
+  res.json({ data });
+});
+
+// API Financial Events. inicio/fim opcionais (default: hoje — ver service).
+export const financialEvents = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { inicio, fim, page, size } = req.query;
+  const data = await financialService.listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, page, size });
+  res.json({ data });
+});
+
+// API Settlements. inicio/fim obrigatórios; `modo` escolhe qual par de data
+// a API usa (calculo = período de liquidação [padrão] | pagamento).
+export const financialSettlements = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { modo, inicio, fim } = req.query;
+  const data = await financialService.listarSettlements({ organizacaoId, unidadeId, modo, inicio, fim });
+  res.json({ data });
+});
+
+// API Reconciliation (mês fechado, síncrona — já devolve os dados parseados).
+export const financialReconciliation = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { competencia } = req.query;
+  const data = await financialService.obterReconciliation({ organizacaoId, unidadeId, competencia });
+  res.json({ data });
+});
+
+// API Reconciliation On Demand — etapa 1: solicita a geração (assíncrona).
+export const financialReconciliationOnDemandSolicitar = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { competencia } = req.body ?? {};
+  const data = await financialService.solicitarReconciliationOnDemand({ organizacaoId, unidadeId, competencia });
+  res.status(201).json({ data });
+});
+
+// API Reconciliation On Demand — etapa 2: consulta status (e baixa/parseia
+// o arquivo automaticamente quando pronto). Chamada manual pelo frontend —
+// nunca em polling automático de background (Bloco Q).
+export const financialReconciliationOnDemandStatus = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { requestId } = req.params;
+  const data = await financialService.consultarReconciliationOnDemand({ organizacaoId, unidadeId, requestId });
+  res.json({ data });
+});
+
+// API Anticipation. SOMENTE LEITURA — nenhuma ação de solicitar antecipação
+// existe aqui (Bloco Q desta fase).
+export const financialAnticipations = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { modo, inicio, fim } = req.query;
+  const data = await financialService.listarAnticipations({ organizacaoId, unidadeId, modo, inicio, fim });
+  res.json({ data });
+});
+
+// Bloco H — Conciliação Financeira consolidada (Sales/Events/Settlements/
+// Reconciliation/Anticipation). `competencia` opcional (deriva de `inicio`).
+export const financialConciliation = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { inicio, fim, competencia } = req.query;
+  const data = await financialService.obterConciliacaoFinanceira({ organizacaoId, unidadeId, inicio, fim, competencia });
   res.json({ data });
 });

@@ -21,6 +21,7 @@ import { ifoodLog, mascararId } from "./ifood.logsafe.js";
 import { IFOOD_APPS, IFOOD_APP_TYPES } from "./ifood.constants.js";
 import * as repositorio from "./ifood.repository.js";
 import * as merchantService from "./ifoodMerchant.service.js";
+import { estaEmHomologacaoIfood } from "./ifoodToken.service.js";
 
 /**
  * Vincula um merchant do iFood à unidade do contexto.
@@ -85,6 +86,7 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
       conectadaEm: null,
       ultimaSincronizacao: null,
       ultimoErro: null,
+      homologacao: estaEmHomologacaoIfood(),
     };
   }
 
@@ -112,6 +114,9 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
     conectadaEm: conexao.conectada_em ?? null,
     ultimaSincronizacao: conexao.ultima_sincronizacao_em ?? null,   // sempre null nesta fase
     ultimoErro: conexao.ultimo_erro ?? null,
+    // Só um booleano — nunca clientId/clientSecret/token. Alimenta a badge
+    // discreta "Ambiente de homologação iFood" no frontend.
+    homologacao: estaEmHomologacaoIfood(),
   };
 }
 
