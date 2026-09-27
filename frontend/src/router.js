@@ -6,6 +6,7 @@ import * as views from "./views.js";
 import { renderConfiguracoes } from "./configuracoes.js";
 import { renderVendas } from "./vendas.js";
 import { renderMartinBrower } from "./martinbrower.js";
+import { renderIfood } from "./ifood.js";
 import { renderInsumos } from "./insumos.js";
 import { renderDashboardExecutivo } from "./dashboardExecutivo.js";
 import { renderBonificacaoMensal } from "./bonificacaoMensal.js";
@@ -102,6 +103,9 @@ export function renderRotaAtual() {
       break;
     case "martinbrower":
       renderMartinBrower();
+      break;
+    case "ifood":
+      renderIfood();
       break;
     case "construcao":
       views.renderConstrucao(item.id, item.label);

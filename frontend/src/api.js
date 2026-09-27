@@ -432,6 +432,56 @@ export const mbIniciarSincronizacao = (credenciais) => postJson(`${MB}/start`, c
 export const mbInformarCodigo = (sessionId, codigo) => postJson(`${MB}/${sessionId}/code`, { codigo });
 export const mbCancelarSincronizacao = (sessionId) => postJson(`${MB}/${sessionId}/cancel`, {});
 
+// ---------- iFood (integração oficial — OAuth distribuído + Merchant read-only) ----------
+// Nenhum token/secret/verifier trafega aqui: o backend só devolve userCode +
+// URLs + prazo (oauth/start), status sanitizado (status) e merchants
+// sanitizados (merchants) — ver backend/src/modules/ifood/ifood.controller.js.
+const IFOOD = "/api/v1/integracoes/ifood";
+
+export const ifoodStatus = () => getJson(`${IFOOD}/status`);
+export const ifoodOauthStart = (appType) => postJson(`${IFOOD}/oauth/start`, { appType });
+export const ifoodOauthComplete = (appType, sessionId, authorizationCode) =>
+  postJson(`${IFOOD}/oauth/complete`, { appType, sessionId, authorizationCode });
+export const ifoodMerchants = () => getJson(`${IFOOD}/merchants`);
+export const ifoodMerchantDetalhe = (merchantId) => getJson(`${IFOOD}/merchants/${encodeURIComponent(merchantId)}`);
+export const ifoodVincularMerchant = (merchantId) => postJson(`${IFOOD}/merchants/link`, { merchantId });
+export const ifoodDesconectar = () => delJson(`${IFOOD}/`);
+
+// Financial (Fase 2 — Homologação, só leitura). merchantId NUNCA é enviado
+// daqui — o backend resolve sempre da conexão da unidade.
+export const ifoodFinancialSales = (inicio, fim, page = 1) =>
+  getJson(`${IFOOD}/financial/sales${qs({ inicio, fim, page })}`);
+// inicio/fim são opcionais aqui (o backend usa "hoje" se nenhum for informado).
+export const ifoodFinancialEvents = (inicio, fim, page = 1, size = 100) =>
+  getJson(`${IFOOD}/financial/events${qs({ inicio, fim, page, size })}`);
+// inicio/fim são SEMPRE obrigatórios aqui (sem default). `modo`: "calculo"
+// (período de liquidação, padrão) ou "pagamento" (data de pagamento).
+export const ifoodFinancialSettlements = (modo, inicio, fim) =>
+  getJson(`${IFOOD}/financial/settlements${qs({ modo, inicio, fim })}`);
+
+// Reconciliation (mês fechado, síncrona) x Reconciliation On Demand
+// (assíncrona: solicita -> guarda requestId -> consulta status manualmente,
+// sem polling automático). Contratos DIFERENTES — nunca misture as chamadas.
+export const ifoodFinancialReconciliation = (competencia) =>
+  getJson(`${IFOOD}/financial/reconciliation${qs({ competencia })}`);
+export const ifoodFinancialReconciliationOnDemandSolicitar = (competencia) =>
+  postJson(`${IFOOD}/financial/reconciliation/on-demand`, { competencia });
+export const ifoodFinancialReconciliationOnDemandStatus = (requestId) =>
+  getJson(`${IFOOD}/financial/reconciliation/on-demand/${encodeURIComponent(requestId)}`);
+
+// Anticipation — SOMENTE LEITURA (nenhuma função de solicitar antecipação
+// existe aqui). `modo`: "calculo" (período de cálculo, padrão) ou
+// "pagamento" (data do pagamento antecipado) — mesmo par mutuamente
+// exclusivo de Settlements.
+export const ifoodFinancialAnticipations = (modo, inicio, fim) =>
+  getJson(`${IFOOD}/financial/anticipations${qs({ modo, inicio, fim })}`);
+
+// Bloco H — Conciliação Financeira consolidada (Sales/Events/Settlements/
+// Reconciliation/Anticipation). `competencia` opcional (o backend deriva de
+// `inicio` quando ausente).
+export const ifoodFinancialConciliation = (inicio, fim, competencia) =>
+  getJson(`${IFOOD}/financial/conciliation${qs({ inicio, fim, competencia })}`);
+
 // ---------- Agente Crescer (assistente de IA — Fase 1.5+, só consulta/análise) ----------
 // Histórico curto DESTA conversa (ver agente.service.js) — conversationId
 // null/ausente = inicia uma conversa nova; o servidor sempre devolve o id
