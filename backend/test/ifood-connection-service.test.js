@@ -186,6 +186,7 @@ test("status sem conexão: não conectado, ambos apps desligados", async () => {
     conectado: false, status: "nao_conectado", merchant: null,
     apps: { analytics: { conectado: false, status: null, expiraEm: null }, financial: { conectado: false, status: null, expiraEm: null } },
     conectadaEm: null, ultimaSincronizacao: null, ultimoErro: null,
+    homologacao: false,
   });
 });
 

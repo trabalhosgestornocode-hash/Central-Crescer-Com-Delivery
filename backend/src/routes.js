@@ -14,6 +14,7 @@ import { sessaoRouter } from "./modules/sessao/sessao.routes.js";
 import { plataformaRouter } from "./modules/plataforma/plataforma.routes.js";
 import { administrativoRouter } from "./modules/administrativo/administrativo.routes.js";
 import { martinBrowerRouter } from "./modules/martinbrower/martinbrower.routes.js";
+import { ifoodRouter } from "./modules/ifood/ifood.routes.js";
 import { parserFoodDeliveryRouter } from "./modules/parser-food-delivery/parserFoodDelivery.routes.js";
 import { agenteRouter } from "./modules/agente/agente.routes.js";
 import { inteligenciaRouter } from "./modules/inteligencia/inteligencia.routes.js";
@@ -78,6 +79,7 @@ tenant.use("/unidade", unidadeRouter);     // idem — config real da unidade (t
 tenant.use("/realtime", realtimeRouter);   // idem — credencial de canal Realtime do contexto atual
 tenant.use("/vendas", requireModulo(MODULOS.SALES), vendasRouter);
 tenant.use("/integracoes/martin-brower", requireModulo(MODULOS.MARTIN_BROWER), martinBrowerRouter);
+tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);
 // Seção "INTELIGÊNCIA" do menu (Agente Crescer · Relatórios · Integrações).
 // `inteligencia` é o gate-pai: sem ele, NADA da área responde. O catálogo de

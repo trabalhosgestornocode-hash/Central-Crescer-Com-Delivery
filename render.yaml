@@ -26,3 +26,21 @@ services:
         value: "00000000-0000-0000-0000-000000000001"
       - key: DEFAULT_UNIDADE_ID
         value: "00000000-0000-0000-0000-0000000000a1"
+      # --- Integração iFood (nomes apenas; valores no painel do Render) ------
+      # IFOOD_TOKEN_SECRET cifra os tokens do iFood em repouso (AES-256-GCM).
+      # Gere com: openssl rand -base64 48. Trocar o valor invalida os tokens
+      # já gravados (basta reconectar).
+      - key: IFOOD_TOKEN_SECRET
+        sync: false
+      - key: IFOOD_API_BASE_URL
+        value: "https://merchant-api.ifood.com.br"
+      - key: IFOOD_ANALYTICS_CLIENT_ID
+        sync: false
+      - key: IFOOD_ANALYTICS_CLIENT_SECRET
+        sync: false
+      - key: IFOOD_FINANCIAL_CLIENT_ID
+        sync: false
+      - key: IFOOD_FINANCIAL_CLIENT_SECRET
+        sync: false
+      # IFOOD_HOMOLOGATION_MODE / IFOOD_TEST_CLIENT_* NÃO entram aqui: são só
+      # para desenvolvimento local (ver backend/.env.example).

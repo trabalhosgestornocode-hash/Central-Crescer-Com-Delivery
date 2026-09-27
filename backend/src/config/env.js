@@ -58,7 +58,16 @@ export const config = {
   // o fluxo OAuth responde IFOOD_APP_SEM_CREDENCIAL de forma controlada.
   // Lido só aqui; `credenciaisDoApp()` (ifoodToken.service.js) consome
   // `config.ifood[appType].{clientId,clientSecret}` — appType ∈ analytics|financial.
+  //
+  // `homologacao` (IFOOD_HOMOLOGATION_MODE=true) e `test` (IFOOD_TEST_CLIENT_*)
+  // dão suporte ao aplicativo distribuído de teste do iFood (laboratório de
+  // homologação, antes da homologação dos apps reais). Quando ligado,
+  // `credenciaisDoApp()` devolve SEMPRE `ifood.test` — para analytics E
+  // financial — mas o `app_type` continua sendo gravado como analytics ou
+  // financial no banco (nada muda no fluxo OAuth nem no schema). Ver
+  // `estaEmHomologacaoIfood()` em ifoodToken.service.js.
   ifood: {
+    homologacao: process.env.IFOOD_HOMOLOGATION_MODE === "true",
     analytics: {
       clientId: process.env.IFOOD_ANALYTICS_CLIENT_ID || null,
       clientSecret: process.env.IFOOD_ANALYTICS_CLIENT_SECRET || null,
@@ -66,6 +75,22 @@ export const config = {
     financial: {
       clientId: process.env.IFOOD_FINANCIAL_CLIENT_ID || null,
       clientSecret: process.env.IFOOD_FINANCIAL_CLIENT_SECRET || null,
+    },
+    // Aplicativo distribuído de teste — só usado quando `homologacao` é true.
+    test: {
+      clientId: process.env.IFOOD_TEST_CLIENT_ID || null,
+      clientSecret: process.env.IFOOD_TEST_CLIENT_SECRET || null,
+    },
+    // MODO TEMPORÁRIO DE DESENVOLVIMENTO — app CENTRALIZADO de teste ("Teste (C)").
+    // NÃO é o modelo do produto (o produto é DISTRIBUÍDO) e NÃO reaproveita
+    // IFOOD_TEST_CLIENT_* (esses identificam o Teste (D), distribuído). Serve só
+    // para desenvolver/validar Events, Order etc. enquanto o Teste (D) está
+    // bloqueado. Só funciona com o banco de teste e fora do Render (ver
+    // ifood.ambienteTeste.js). Token vem de client_credentials e fica em memória.
+    centralizedTest: {
+      modo: process.env.IFOOD_CENTRALIZED_TEST_MODE === "true",
+      clientId: process.env.IFOOD_CENTRALIZED_TEST_CLIENT_ID || null,
+      clientSecret: process.env.IFOOD_CENTRALIZED_TEST_CLIENT_SECRET || null,
     },
   },
 };

@@ -1,0 +1,569 @@
+// Módulo Financial do iFood — Fase 2 (Homologação).
+//
+// Camada ISOLADA (Bloco B do pedido): não recria nada da Fase 1, só
+// REUTILIZA — conexão viva da unidade, merchant já vinculado, credencial
+// lógica `financial`, comAccessTokenValido() (refresh único + 1 retry em
+// 401), ifoodHttp.client (retry seletivo em 429/5xx, timeout, sanitização
+// de log). Nada aqui grava no banco: cada chamada resolve, chama a API,
+// normaliza (ifoodFinancial.mapper.js) e devolve — sem persistir payload
+// bruto.
+//
+// REGRA DESTA FASE (Bloco M): toda chamada às APIs Financial carrega
+// `homologacao: true` de forma explícita e INCONDICIONAL — esta fase existe
+// só para produzir evidência de homologação junto ao iFood (Bloco Q: nada
+// disso alimenta produção, dashboard ou lançamento diário ainda). Isso é
+// deliberadamente diferente do mecanismo opt-in geral do ifoodHttp.client:
+// aqui a decisão já foi tomada no nível da fase, não por
+// IFOOD_HOMOLOGATION_MODE — quando existir uma Fase 3 "Financial real", esse
+// `true` fixo deve virar condicional.
+//
+// Contratos de API: ver ifood.constants.js#IFOOD_ROTAS (comentário com a
+// fonte oficial e as divergências entre guia e Referência de API).
+
+import { ifoodErro, IFOOD_ERROS } from "./ifood.errors.js";
+import { ifoodLog } from "./ifood.logsafe.js";
+import { IFOOD_APPS, IFOOD_ROTAS, IFOOD_FINANCIAL_LIMITES } from "./ifood.constants.js";
+import * as httpClient from "./ifoodHttp.client.js";
+import * as repositorio from "./ifood.repository.js";
+import * as tokenService from "./ifoodToken.service.js";
+import {
+  mapearRespostaSales, mapearRespostaFinancialEvents, mapearRespostaSettlements,
+  mapearRespostaReconciliation, mapearRespostaReconciliationSolicitada, mapearRespostaReconciliationStatus,
+  parsearArquivoConciliacao, mapearRespostaAnticipation,
+} from "./ifoodFinancial.mapper.js";
+import * as downloadModule from "./ifoodFinancial.download.js";
+import { conciliarFinancial } from "./ifoodFinancial.reconciliation.js";
+import crypto from "node:crypto";
+
+const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
+const RE_COMPETENCIA = /^\d{4}-\d{2}$/;
+
+/**
+ * Valida um período (inicio/fim, AAAA-MM-DD) contra o teto de dias de uma
+ * API Financial específica. PURA — não chama rede nem banco. Reutilizável
+ * pelas próximas APIs desta fase (Events: 33 dias, etc. — cada uma com o
+ * seu próprio maxDias, nunca um teto genérico).
+ *
+ * @param {{inicio, fim}} p
+ * @param {{maxDias: number, campo?: string}} opts
+ * @returns {{inicio: string, fim: string, dias: number}}
+ */
+export function validarPeriodo({ inicio, fim }, { maxDias, campo = "o período" } = {}) {
+  const i = typeof inicio === "string" ? inicio.trim() : "";
+  const f = typeof fim === "string" ? fim.trim() : "";
+
+  if (!RE_DATA.test(i) || !RE_DATA.test(f) || Number.isNaN(Date.parse(i)) || Number.isNaN(Date.parse(f))) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_FINANCIAL_PERIODO_INVALIDO, {
+      mensagem: `Informe ${campo} inicial e final no formato AAAA-MM-DD.`,
+    });
+  }
+
+  const dIni = Date.parse(`${i}T00:00:00Z`);
+  const dFim = Date.parse(`${f}T00:00:00Z`);
+  if (dFim < dIni) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_FINANCIAL_PERIODO_INVALIDO, {
+      mensagem: "A data final não pode ser anterior à data inicial.",
+    });
+  }
+
+  const dias = Math.round((dFim - dIni) / 86_400_000) + 1;
+  if (maxDias && dias > maxDias) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_FINANCIAL_PERIODO_INVALIDO, {
+      mensagem: `O período não pode exceder ${maxDias} dias para esta consulta (${dias} informados).`,
+    });
+  }
+
+  return { inicio: i, fim: f, dias };
+}
+
+/** page é 1-indexed na API Sales (confirmado na Referência de API — ver
+ * ifood.constants.js). Qualquer valor inválido cai no padrão seguro: 1. */
+function validarPagina(valor) {
+  const n = Number(valor);
+  return Number.isInteger(n) && n >= 1 ? n : 1;
+}
+
+async function resolverConexaoComMerchant({ organizacaoId, unidadeId, repo }) {
+  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+  if (!conexao) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
+  // merchant SEMPRE da conexão da unidade — nunca aceito do chamador (Bloco N).
+  if (!conexao.merchant_id) throw ifoodErro(IFOOD_ERROS.IFOOD_FINANCIAL_SEM_MERCHANT);
+  return conexao;
+}
+
+/**
+ * API Sales — GET /financial/v3.0/merchants/{merchantId}/sales.
+ *
+ * @param {{organizacaoId, unidadeId, inicio, fim, page?, deps?: {repo, http, token}}} p
+ * @returns {Promise<{periodo, pagina, vendas: object[]}>}
+ */
+export async function listarSales({ organizacaoId, unidadeId, inicio, fim, page, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const http = deps.http ?? httpClient;
+  const token = deps.token ?? tokenService;
+
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const periodo = validarPeriodo({ inicio, fim }, { maxDias: IFOOD_FINANCIAL_LIMITES.sales.maxDias, campo: "a data de venda" });
+  const pagina = validarPagina(page);
+
+  const resposta = await token.comAccessTokenValido({
+    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    fn: (accessToken) => http.getJson(
+      IFOOD_ROTAS.financialSales(conexao.merchant_id, periodo.inicio, periodo.fim, pagina),
+      { accessToken, rotulo: "financial.sales", contexto: "financial", homologacao: true },
+    ),
+  });
+
+  const normalizado = mapearRespostaSales(resposta);
+
+  ifoodLog("info", "financial.sales.consultado", {
+    organizacaoId, unidadeId,
+    inicio: periodo.inicio, fim: periodo.fim, page: pagina,
+    total: normalizado.pagina.total, retornados: normalizado.vendas.length,
+  });
+
+  return normalizado;
+}
+
+// ===========================================================================
+// API Financial Events — GET /financial/v3.0/merchants/{merchantId}/financial-events
+// ===========================================================================
+
+function hojeISO() { return new Date().toISOString().slice(0, 10); }
+
+/**
+ * Ao contrário de Sales, beginDate/endDate são OPCIONAIS nesta API — a
+ * documentação oficial diz que, se ausentes, o iFood assume "hoje" (1 dia).
+ * Resolvo isso no servidor (sempre mando datas explícitas ao iFood) em vez
+ * de omitir o query param condicionalmente — mais previsível de testar.
+ * Exige as DUAS ou NENHUMA (evita uma faixa ambígua com só uma ponta).
+ */
+function resolverPeriodoEvents({ inicio, fim }) {
+  const nenhumaInformada = !inicio && !fim;
+  if (nenhumaInformada) {
+    const hoje = hojeISO();
+    return validarPeriodo({ inicio: hoje, fim: hoje }, { maxDias: IFOOD_FINANCIAL_LIMITES.events.maxDias, campo: "a data do evento" });
+  }
+  if (!inicio || !fim) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_FINANCIAL_PERIODO_INVALIDO, {
+      mensagem: "Informe as duas datas (inicial e final) ou nenhuma — nesse caso a consulta usa apenas o dia de hoje.",
+    });
+  }
+  return validarPeriodo({ inicio, fim }, { maxDias: IFOOD_FINANCIAL_LIMITES.events.maxDias, campo: "a data do evento" });
+}
+
+/** size: padrão 100 (igual ao servidor), sem teto documentado — só valida
+ * que é um inteiro positivo; qualquer coisa inválida cai no padrão. */
+function validarTamanhoPagina(valor) {
+  const n = Number(valor);
+  return Number.isInteger(n) && n >= 1 ? n : 100;
+}
+
+/**
+ * API Financial Events — GET /financial/v3.0/merchants/{merchantId}/financial-events.
+ * `idSaldo` (filtro alternativo por período de apuração de saldo) existe na
+ * spec oficial mas não está documentado o suficiente para eu implementar com
+ * segurança — fica de fora deste incremento (ver ifood.constants.js).
+ *
+ * @param {{organizacaoId, unidadeId, inicio?, fim?, page?, size?, deps?: {repo, http, token}}} p
+ * @returns {Promise<{pagina, eventos: object[]}>}
+ */
+export async function listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, page, size, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const http = deps.http ?? httpClient;
+  const token = deps.token ?? tokenService;
+
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const periodo = resolverPeriodoEvents({ inicio, fim });
+  const pagina = validarPagina(page);
+  const tamanho = validarTamanhoPagina(size);
+
+  const resposta = await token.comAccessTokenValido({
+    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    fn: (accessToken) => http.getJson(
+      IFOOD_ROTAS.financialEvents(conexao.merchant_id, periodo.inicio, periodo.fim, pagina, tamanho),
+      { accessToken, rotulo: "financial.events", contexto: "financial", homologacao: true },
+    ),
+  });
+
+  const normalizado = mapearRespostaFinancialEvents(resposta);
+
+  ifoodLog("info", "financial.events.consultado", {
+    organizacaoId, unidadeId,
+    inicio: periodo.inicio, fim: periodo.fim, page: pagina, size: tamanho,
+    retornados: normalizado.eventos.length, temProximaPagina: normalizado.pagina.temProximaPagina,
+  });
+
+  return { periodo: { inicio: periodo.inicio, fim: periodo.fim }, ...normalizado };
+}
+
+// ===========================================================================
+// API Settlements — GET /financial/v3.0/merchants/{merchantId}/settlements
+// SEM paginação. Dois pares de data MUTUAMENTE EXCLUSIVOS (a doc exige um dos
+// dois): `modo: "calculo"` -> período de liquidação/apuração (padrão — é o
+// que o pedido chama de "período de liquidação"); `modo: "pagamento"` ->
+// data em que o título foi efetivamente pago. As duas datas são SEMPRE
+// obrigatórias aqui (a API não tem default como em Financial Events).
+// ===========================================================================
+
+// Reaproveitado por Settlements E Anticipation — as duas APIs usam o mesmo
+// par mutuamente exclusivo de filtros de data ("calculo" = período de
+// apuração/liquidação, "pagamento" = data em que o valor foi de fato pago).
+const MODOS_PERIODO_FINANCEIRO = new Set(["calculo", "pagamento"]);
+
+function validarModoPeriodoFinanceiro(valor) {
+  return MODOS_PERIODO_FINANCEIRO.has(valor) ? valor : "calculo";
+}
+
+/**
+ * API Settlements — GET /financial/v3.0/merchants/{merchantId}/settlements.
+ * Sem limite de dias imposto aqui: a documentação oficial não define um teto
+ * rígido para este endpoint (só uma recomendação informal de 30-90 dias na
+ * "Referência de campos" — não é validado como erro, só sugerido na UI).
+ *
+ * @param {{organizacaoId, unidadeId, modo?, inicio, fim, deps?: {repo, http, token}}} p
+ * @returns {Promise<{periodo, saldo, merchantsConsolidados, titulos: object[]}>}
+ */
+export async function listarSettlements({ organizacaoId, unidadeId, modo, inicio, fim, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const http = deps.http ?? httpClient;
+  const token = deps.token ?? tokenService;
+
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const modoValidado = validarModoPeriodoFinanceiro(modo);
+  // Sem maxDias: a API exige as duas datas, mas não documenta um teto rígido
+  // (validarPeriodo só aplica o limite quando maxDias é passado).
+  const periodo = validarPeriodo({ inicio, fim }, { campo: modoValidado === "pagamento" ? "a data de pagamento" : "a data do período de liquidação" });
+
+  const resposta = await token.comAccessTokenValido({
+    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    fn: (accessToken) => http.getJson(
+      IFOOD_ROTAS.financialSettlements(conexao.merchant_id, modoValidado, periodo.inicio, periodo.fim),
+      { accessToken, rotulo: "financial.settlements", contexto: "financial", homologacao: true },
+    ),
+  });
+
+  const normalizado = mapearRespostaSettlements(resposta);
+
+  ifoodLog("info", "financial.settlements.consultado", {
+    organizacaoId, unidadeId, modo: modoValidado,
+    inicio: periodo.inicio, fim: periodo.fim, titulos: normalizado.titulos.length, saldo: normalizado.saldo,
+  });
+
+  return normalizado;
+}
+
+// ===========================================================================
+// Reconciliation + Reconciliation On Demand — CONTRATOS DIFERENTES entre os
+// dois (ver ifoodFinancial.mapper.js para o detalhe). Nunca persistem o
+// arquivo bruto: cada chamada baixa, faz o parse, devolve e esquece — nada
+// vai pro banco (Bloco N/R).
+// ===========================================================================
+
+const RE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * competence: YYYY-MM. Regras confirmadas na doc oficial ("Mapeamento de
+ * APIs" > Regra 3): só meses COMPLETOS (nunca o mês atual nem futuro) e
+ * janela de até 24 meses no passado.
+ */
+function validarCompetencia(competencia) {
+  const c = typeof competencia === "string" ? competencia.trim() : "";
+  if (!RE_COMPETENCIA.test(c)) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "Informe a competência no formato AAAA-MM." });
+  }
+  const [ano, mes] = c.split("-").map(Number);
+  if (mes < 1 || mes > 12) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "Mês inválido na competência." });
+  }
+  const competenciaData = new Date(Date.UTC(ano, mes - 1, 1));
+  const hoje = new Date();
+  const mesAtualData = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth(), 1));
+
+  if (competenciaData.getTime() >= mesAtualData.getTime()) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, {
+      mensagem: "Só é possível gerar conciliação de meses já fechados — o mês atual ainda está recebendo lançamentos.",
+    });
+  }
+  const limiteAntigo = new Date(Date.UTC(mesAtualData.getUTCFullYear(), mesAtualData.getUTCMonth() - 24, 1));
+  if (competenciaData.getTime() < limiteAntigo.getTime()) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, {
+      mensagem: "Competência fora da janela histórica permitida (até 24 meses no passado).",
+    });
+  }
+  return c;
+}
+
+function validarRequestId(valor) {
+  const r = typeof valor === "string" ? valor.trim() : "";
+  if (!RE_UUID.test(r)) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "Identificador de solicitação (requestId) inválido." });
+  }
+  return r;
+}
+
+/**
+ * Baixa e faz o parse do arquivo de conciliação, se houver downloadPath.
+ * Verifica sha256 quando disponível (só a Reconciliation "normal" traz esse
+ * hash — não sei se é do arquivo bruto ou já descompactado, então confiro
+ * os dois e marco íntegro se QUALQUER um bater — ver mapper.js).
+ */
+async function baixarEParsear({ downloadPath, shaEsperado, download, rotulo }) {
+  if (!downloadPath) return null;
+  let bytesBrutos;
+  try {
+    bytesBrutos = await download.baixarArquivoConciliacao({ url: downloadPath });
+  } catch (e) {
+    ifoodLog("warn", `${rotulo}.download_falhou`, { erro: e?.message });
+    throw e;
+  }
+
+  let parseado;
+  try {
+    parseado = parsearArquivoConciliacao(bytesBrutos);
+  } catch (e) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "O arquivo de conciliação veio num formato que não conseguimos interpretar." });
+  }
+
+  // A doc não diz se o sha256 é do arquivo BRUTO (como baixado) ou do
+  // conteúdo já descompactado — confere contra os bytes brutos, que é a
+  // leitura mais literal de "hash do arquivo". Se não bater, é sinal real
+  // (arquivo alterado, OU a hipótese acima está errada — qualquer um dos
+  // dois casos é uma divergência que vale mostrar, não esconder).
+  const integridadeVerificada = shaEsperado
+    ? crypto.createHash("sha256").update(bytesBrutos).digest("hex") === shaEsperado
+    : null;
+
+  return {
+    colunas: parseado.colunas,
+    linhas: parseado.linhas,
+    totalLinhas: parseado.totalLinhas,
+    truncado: parseado.truncado,
+    integridadeVerificada,
+    // eraGzip/delimitador já eram computados por parsearArquivoConciliacao
+    // e ficavam presos aqui dentro — repassados pro chamador (evidência de
+    // homologação: "formato detectado" / "delimitador detectado", ver
+    // frontend/src/ifoodEstado.js#montarEvidenciaHomologacao). Nenhum
+    // cálculo novo, só para de descartar o que já existia.
+    eraGzip: parseado.eraGzip,
+    delimitador: parseado.delimitador,
+  };
+}
+
+/**
+ * API Reconciliation — GET /financial/v3.0/merchants/{merchantId}/reconciliation.
+ * Síncrona: já devolve `downloadPath` na primeira chamada, sem status
+ * intermediário (diferente de On Demand).
+ *
+ * @param {{organizacaoId, unidadeId, competencia, deps?: {repo, http, token, download}}} p
+ */
+export async function obterReconciliation({ organizacaoId, unidadeId, competencia, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const http = deps.http ?? httpClient;
+  const token = deps.token ?? tokenService;
+  const download = deps.download ?? downloadModule;
+
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const competenciaValidada = validarCompetencia(competencia);
+
+  const resposta = await token.comAccessTokenValido({
+    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    fn: (accessToken) => http.getJson(
+      IFOOD_ROTAS.financialReconciliation(conexao.merchant_id, competenciaValidada),
+      { accessToken, rotulo: "financial.reconciliation", contexto: "reconciliation", homologacao: true },
+    ),
+  });
+
+  const normalizado = mapearRespostaReconciliation(resposta);
+  const arquivo = await baixarEParsear({
+    downloadPath: normalizado.downloadPath, shaEsperado: normalizado.metadados?.sha256,
+    download, rotulo: "financial.reconciliation",
+  });
+
+  ifoodLog("info", "financial.reconciliation.consultado", {
+    organizacaoId, unidadeId, competencia: competenciaValidada,
+    temArquivo: !!normalizado.downloadPath, linhas: arquivo?.totalLinhas ?? null,
+  });
+
+  // downloadPath NUNCA sai daqui pro frontend — só o resultado já parseado.
+  return { competencia: competenciaValidada, criadoEm: normalizado.criadoEm, metadados: normalizado.metadados, arquivo };
+}
+
+/**
+ * API Reconciliation On Demand — ETAPA 1: solicita a geração.
+ * POST /financial/v3.0/merchants/{merchantId}/reconciliation/on-demand.
+ * Devolve `requestId` — o FRONTEND guarda em memória e consulta o status
+ * manualmente (botão "Verificar status"); nada de polling em background
+ * aqui (Bloco Q).
+ */
+export async function solicitarReconciliationOnDemand({ organizacaoId, unidadeId, competencia, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const http = deps.http ?? httpClient;
+  const token = deps.token ?? tokenService;
+
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const competenciaValidada = validarCompetencia(competencia);
+
+  const resposta = await token.comAccessTokenValido({
+    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    fn: (accessToken) => http.postJson(
+      IFOOD_ROTAS.financialReconciliationOnDemand(conexao.merchant_id), { competence: competenciaValidada },
+      { accessToken, rotulo: "financial.reconciliation.on_demand.solicitar", contexto: "reconciliation", homologacao: true },
+    ),
+  });
+
+  const normalizado = mapearRespostaReconciliationSolicitada(resposta);
+  ifoodLog("info", "financial.reconciliation.on_demand.solicitado", {
+    organizacaoId, unidadeId, competencia: competenciaValidada, requestId: normalizado.requestId,
+  });
+  return normalizado;
+}
+
+/**
+ * API Reconciliation On Demand — ETAPA 2: consulta status por requestId.
+ * GET .../reconciliation/on-demand/{requestId}. Se status === "processed",
+ * baixa e faz o parse do arquivo automaticamente (o chamador já recebe os
+ * dados prontos, sem uma terceira chamada).
+ */
+export async function consultarReconciliationOnDemand({ organizacaoId, unidadeId, requestId, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const http = deps.http ?? httpClient;
+  const token = deps.token ?? tokenService;
+  const download = deps.download ?? downloadModule;
+
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const requestIdValidado = validarRequestId(requestId);
+
+  const resposta = await token.comAccessTokenValido({
+    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    fn: (accessToken) => http.getJson(
+      IFOOD_ROTAS.financialReconciliationOnDemandStatus(conexao.merchant_id, requestIdValidado),
+      { accessToken, rotulo: "financial.reconciliation.on_demand.status", contexto: "reconciliation", homologacao: true },
+    ),
+  });
+
+  const normalizado = mapearRespostaReconciliationStatus(resposta);
+  let arquivo = null;
+  if (normalizado.status === "processed" && normalizado.downloadPath) {
+    arquivo = await baixarEParsear({
+      downloadPath: normalizado.downloadPath, shaEsperado: null,
+      download, rotulo: "financial.reconciliation.on_demand",
+    });
+  }
+
+  ifoodLog("info", "financial.reconciliation.on_demand.consultado", {
+    organizacaoId, unidadeId, requestId: requestIdValidado, status: normalizado.status,
+    linhas: arquivo?.totalLinhas ?? null,
+  });
+
+  // downloadPath NUNCA sai daqui pro frontend.
+  return {
+    requestId: normalizado.requestId, competencia: normalizado.competencia, status: normalizado.status,
+    mensagemErro: normalizado.mensagemErro, arquivo,
+  };
+}
+
+// ===========================================================================
+// API Anticipation — GET /financial/v3.0/merchants/{merchantId}/anticipations.
+// SOMENTE LEITURA nesta fase (Bloco Q) — nenhum endpoint de solicitação de
+// antecipação é chamado ou exposto aqui. Mesmo par de datas mutuamente
+// exclusivo de Settlements — reaproveita validarModoPeriodoFinanceiro().
+// ===========================================================================
+
+/**
+ * @param {{organizacaoId, unidadeId, modo?, inicio, fim, deps?: {repo, http, token}}} p
+ * @returns {Promise<{periodo, saldo, antecipacoes: object[]}>}
+ */
+export async function listarAnticipations({ organizacaoId, unidadeId, modo, inicio, fim, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const http = deps.http ?? httpClient;
+  const token = deps.token ?? tokenService;
+
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const modoValidado = validarModoPeriodoFinanceiro(modo);
+  // Sem maxDias: assim como Settlements, a doc não define um teto rígido de
+  // período pra este endpoint.
+  const periodo = validarPeriodo({ inicio, fim }, { campo: modoValidado === "pagamento" ? "a data de pagamento antecipado" : "o período de cálculo" });
+
+  const resposta = await token.comAccessTokenValido({
+    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    fn: (accessToken) => http.getJson(
+      IFOOD_ROTAS.financialAnticipations(conexao.merchant_id, modoValidado, periodo.inicio, periodo.fim),
+      { accessToken, rotulo: "financial.anticipations", contexto: "financial", homologacao: true },
+    ),
+  });
+
+  const normalizado = mapearRespostaAnticipation(resposta);
+
+  ifoodLog("info", "financial.anticipations.consultado", {
+    organizacaoId, unidadeId, modo: modoValidado,
+    inicio: periodo.inicio, fim: periodo.fim, antecipacoes: normalizado.antecipacoes.length, saldo: normalizado.saldo,
+  });
+
+  return normalizado;
+}
+
+// ===========================================================================
+// Bloco H — Conciliação Financeira consolidada. ORQUESTRA as 5 chamadas já
+// existentes (Sales/Events/Settlements/Reconciliation/Anticipation) e passa
+// os resultados JÁ NORMALIZADOS pra função PURA conciliarFinancial()
+// (ifoodFinancial.reconciliation.js) — nenhuma lógica de conciliação mora
+// aqui, só orquestração de I/O + resiliência.
+//
+// RESILIÊNCIA (Bloco 12): Promise.allSettled — uma fonte falhar (período
+// inválido pra aquela API específica, indisponibilidade, sem dados) NUNCA
+// derruba as outras 4. A fonte que falhou entra como `null` na conciliação
+// (tratado como "incompleto", nunca como divergência) e aparece em
+// `fontesComErro` pra a UI explicar o motivo.
+// ===========================================================================
+
+const FONTES_CONCILIACAO = ["sales", "events", "settlements", "reconciliation", "anticipations"];
+
+/**
+ * @param {{organizacaoId, unidadeId, inicio, fim, competencia?, deps?: {repo, http, token, download}}} p
+ *   `competencia` (AAAA-MM) é opcional — se ausente, deriva do mês de
+ *   `inicio` (a Reconciliation é mensal, as outras 4 são por intervalo de
+ *   data; não há como unificar isso sem uma escolha — esta é a mais óbvia).
+ */
+export async function obterConciliacaoFinanceira({ organizacaoId, unidadeId, inicio, fim, competencia, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+
+  // Falha rápido e clara se não há conexão/merchant — evita 5 chamadas
+  // paralelas que fracassariam todas pelo mesmo motivo.
+  await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+
+  const competenciaEfetiva = competencia || (typeof inicio === "string" ? inicio.slice(0, 7) : null);
+
+  const resultados = await Promise.allSettled([
+    listarSales({ organizacaoId, unidadeId, inicio, fim, deps }),
+    listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, deps }),
+    listarSettlements({ organizacaoId, unidadeId, modo: "calculo", inicio, fim, deps }),
+    competenciaEfetiva
+      ? obterReconciliation({ organizacaoId, unidadeId, competencia: competenciaEfetiva, deps })
+      : Promise.reject(ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "Competência não informada nem derivável do período." })),
+    listarAnticipations({ organizacaoId, unidadeId, modo: "calculo", inicio, fim, deps }),
+  ]);
+
+  const [salesR, eventsR, settlementsR, reconciliationR, anticipationsR] = resultados;
+  const extrair = (r) => (r.status === "fulfilled" ? r.value : null);
+
+  const fontesComErro = resultados
+    .map((r, i) => (r.status === "rejected" ? { fonte: FONTES_CONCILIACAO[i], codigo: r.reason?.codigo ?? null, mensagem: r.reason?.message ?? "Falha desconhecida." } : null))
+    .filter(Boolean);
+
+  const resultado = conciliarFinancial({
+    periodo: { inicio: inicio ?? null, fim: fim ?? null },
+    sales: extrair(salesR),
+    events: extrair(eventsR),
+    settlements: extrair(settlementsR),
+    reconciliation: extrair(reconciliationR),
+    anticipations: extrair(anticipationsR),
+  });
+
+  ifoodLog("info", "financial.conciliation.consultado", {
+    organizacaoId, unidadeId, inicio, fim, competencia: competenciaEfetiva,
+    statusGeral: resultado.conciliacao.statusGeral, fontesComErro: fontesComErro.map((f) => f.fonte),
+  });
+
+  return { ...resultado, fontesComErro };
+}

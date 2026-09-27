@@ -1,5 +1,11 @@
 // Ciclo de vida do token OAuth do iFood.
 //
+// MODELO OFICIAL DO PRODUTO: aplicativo DISTRIBUÍDO (tudo abaixo, exceto o que
+// diz "CENTRALIZED_TEST"). Existe um segundo modo, TEMPORÁRIO e só para
+// desenvolvimento (app centralizado "Teste (C)", client_credentials) — vive em
+// ifoodAuthProvider.js e é escolhido por `provedorDeAutenticacao()`. As APIs de
+// negócio só chamam `comAccessTokenValido()` e não sabem qual dos dois é.
+//
 // Responsabilidades:
 //   * ler clientId/clientSecret do app a partir de ENV (nunca de banco/log);
 //   * trocar authorizationCode por token (fim do fluxo distribuído);
@@ -20,14 +26,46 @@ import { ifoodLog } from "./ifood.logsafe.js";
 import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_GRANT, IFOOD_ROTAS, IFOOD_TOKEN } from "./ifood.constants.js";
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
+import {
+  MODOS_AUTH, modoDeAutenticacao as modoDaConfig, criarProviderCentralizadoTeste,
+} from "./ifoodAuthProvider.js";
 
-/** clientId/clientSecret do app, de ENV. Lança se não configurado. */
+/**
+ * Modo de homologação iFood (IFOOD_HOMOLOGATION_MODE=true): usa o aplicativo
+ * distribuído de teste do iFood no lugar dos apps reais (analytics/financial),
+ * sem alterar o `app_type` gravado no banco nem o fluxo OAuth. Único ponto de
+ * leitura dessa flag — nada além disto lê `config.ifood.homologacao` direto.
+ */
+export function estaEmHomologacaoIfood() {
+  return config.ifood?.homologacao === true;
+}
+
+/**
+ * clientId/clientSecret do app, de ENV (via config/env.js — nunca process.env
+ * direto). Lança se não configurado.
+ *
+ * Em homologação, `analytics` e `financial` resolvem AMBOS para o mesmo app
+ * de teste (IFOOD_TEST_CLIENT_ID/SECRET) — o mesmo aplicativo distribuído
+ * autoriza os dois módulos nesse laboratório. Fora de homologação, cada
+ * appType usa sua credencial real, como antes.
+ */
 export function credenciaisDoApp(appType) {
   if (!IFOOD_APP_TYPES.includes(appType)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
+
+  if (estaEmHomologacaoIfood()) {
+    const t = config.ifood?.test ?? {};
+    if (!t.clientId || !t.clientSecret) {
+      throw ifoodErro(IFOOD_ERROS.IFOOD_APP_SEM_CREDENCIAL, { detalhes: { appType, origem: "test" } });
+    }
+    return { clientId: t.clientId, clientSecret: t.clientSecret, origem: "test" };
+  }
+
   const c = config.ifood?.[appType] ?? {};
   if (!c.clientId || !c.clientSecret) {
     throw ifoodErro(IFOOD_ERROS.IFOOD_APP_SEM_CREDENCIAL, { detalhes: { appType } });
   }
+  // Forma exata de antes da homologação (sem `origem`) — não quebra o
+  // contrato já testado em config-ifood.test.js (Fase 1).
   return { clientId: c.clientId, clientSecret: c.clientSecret };
 }
 
@@ -149,27 +187,86 @@ async function renovarEArmazenar({ conexaoId, appType, cred, repo, http }) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// AUTH PROVIDERS (ver ifoodAuthProvider.js para o contrato)
+// ---------------------------------------------------------------------------
+
 /**
- * Executa `fn(accessToken)` e, se o iFood responder 401 (IFOOD_TOKEN_EXPIRADO),
- * força UM refresh e repete `fn` UMA vez. Sem loop.
+ * Provider DISTRIBUÍDO — o modelo OFICIAL do produto. Nada de novo aqui: só dá
+ * a getValidAccessToken/renovarEArmazenar (acima) a forma do contrato comum,
+ * para que quem consome tokens não precise saber que existem dois modos.
+ */
+export const distributedAuthProvider = Object.freeze({
+  modo: MODOS_AUTH.DISTRIBUTED,
+  escopoDoToken: "conexao",   // credenciais persistidas POR conexão (unidade)
+
+  getAccessToken({ conexaoId, appType, deps = {} }) {
+    return getValidAccessToken({ conexaoId, appType, deps });
+  },
+
+  /** Após 401: refresh por refresh_token, persiste o novo par (cifrado). */
+  async renovarAposRejeicao({ conexaoId, appType, deps = {} }) {
+    const repo = deps.repo ?? repositorio;
+    const http = deps.http ?? httpClient;
+    const cred = await repo.obterCredencial({ conexaoId, appType });
+    if (!cred) throw ifoodErro(IFOOD_ERROS.IFOOD_CREDENCIAL_NAO_ENCONTRADA);
+    return renovarEArmazenar({ conexaoId, appType, cred, repo, http });
+  },
+});
+
+/** Modo de autenticação ativo: 'distributed' (padrão, oficial) ou 'centralized_test' (temporário). */
+export function modoDeAutenticacao() {
+  return modoDaConfig(config);
+}
+
+/**
+ * O token do modo ativo pertence a uma CONEXÃO (unidade) — 'conexao', distribuído —
+ * ou ao APP inteiro — 'app', centralizado de teste? Permite às APIs de negócio
+ * decidirem se precisam resolver a conexão da unidade SEM saber qual é o modo.
+ */
+export function escopoDoToken() {
+  return provedorDeAutenticacao().escopoDoToken;
+}
+
+let providerCentralizadoTeste = null;
+
+/** Provider do modo ativo. O centralizado é um singleton (o cache do token é do processo). */
+export function provedorDeAutenticacao() {
+  if (modoDeAutenticacao() === MODOS_AUTH.CENTRALIZED_TEST) {
+    providerCentralizadoTeste ??= criarProviderCentralizadoTeste();
+    return providerCentralizadoTeste;
+  }
+  return distributedAuthProvider;
+}
+
+/**
+ * ÚNICA porta de entrada de token para as APIs de negócio (Merchant, Financial,
+ * Events, Order...). Executa `fn(accessToken)` e, se o iFood responder 401
+ * (IFOOD_TOKEN_EXPIRADO), pede ao provider UMA renovação e repete `fn` UMA vez.
+ * Sem loop. Quem chama não sabe se o token veio de authorization_code,
+ * refresh_token ou client_credentials.
  *
- * @param {{conexaoId: string, appType: string, fn: (token: string) => Promise<any>, deps?: {repo, http}}} p
+ * @param {{conexaoId?: string|null, appType: string, fn: (token: string) => Promise<any>,
+ *          deps?: {repo?, http?, provider?}}} p
+ *   `conexaoId` só é usado pelo provider distribuído (credencial por conexão).
  */
 export async function comAccessTokenValido({ conexaoId, appType, fn, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
+  const provider = deps.provider ?? provedorDeAutenticacao();
+  const depsProvider = { repo, http };
 
-  const token1 = await getValidAccessToken({ conexaoId, appType, deps: { repo, http } });
+  const token1 = await provider.getAccessToken({ conexaoId, appType, deps: depsProvider });
   try {
     return await fn(token1);
   } catch (e) {
     if (!(e instanceof IfoodError) || e.codigo !== IFOOD_ERROS.IFOOD_TOKEN_EXPIRADO) throw e;
 
     // 401 mesmo com token "válido" pelo relógio: renova uma vez e tenta de novo.
-    ifoodLog("warn", "token.retry_apos_401", { conexaoId, appType });
-    const cred = await repo.obterCredencial({ conexaoId, appType });
-    if (!cred) throw ifoodErro(IFOOD_ERROS.IFOOD_CREDENCIAL_NAO_ENCONTRADA);
-    const token2 = await renovarEArmazenar({ conexaoId, appType, cred, repo, http });
+    ifoodLog("warn", "token.retry_apos_401", { conexaoId, appType, modo: provider.modo });
+    const token2 = await provider.renovarAposRejeicao({
+      conexaoId, appType, deps: depsProvider, tokenRejeitado: token1,
+    });
     return fn(token2);   // segunda e ÚLTIMA tentativa
   }
 }

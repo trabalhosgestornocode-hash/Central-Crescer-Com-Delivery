@@ -58,7 +58,7 @@ export const MENU = [
   { id: "distribuidoras",label: "Distribuidoras",  icon: "truck", logo: "/assets/menu-distribuidoras.png", tipo: "construcao",  secao: "OPERAÇÃO", modulo: "distributors" },
   { id: "martinbrower",  label: "Martin Brower",   icon: "package", tipo: "martinbrower", integ: "martinbrower", secao: "INTEGRAÇÕES", modulo: "martin_brower" },
   { id: "swfast",        label: "SWFast / PDV",    icon: "credit-card", tipo: "integracao",  integ: "swfast",       secao: "INTEGRAÇÕES", modulo: "swfast" },
-  { id: "ifood",         label: "iFood",           icon: "truck", tipo: "integracao",  integ: "ifood",        secao: "INTEGRAÇÕES", modulo: "ifood" },
+  { id: "ifood",         label: "iFood",           icon: "truck", tipo: "ifood",        integ: "ifood",        secao: "INTEGRAÇÕES", modulo: "ifood" },
   { id: "cocacola",      label: "Coca-Cola",       icon: "tag", tipo: "integracao",  integ: "cocacola",     secao: "INTEGRAÇÕES", modulo: "coca_cola" },
   { id: "claudiahortifruti", label: "Cláudia Hortifruti", icon: "tag", tipo: "integracao", integ: "claudiahortifruti", secao: "INTEGRAÇÕES", modulo: "hortifruti" },
   { id: "ia",            label: "Agente Crescer",  icon: "bot", tipo: "agente",      secao: "INTELIGÊNCIA", modulo: "agente_ia" },
