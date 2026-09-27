@@ -65,7 +65,11 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 099 = reconciliação oficial de efeitos externos incertos (colunas de metadados + RPC); sem tocar o outbox/claim.
       "099_whatsapp_reconciliacao_efeitos.sql", "099_rollback.sql",
       // 100 = responsável de comunicação POR EMPRESA (substitui o destinatário por perfil nas RPCs 088/092/093/094 e no roster 096).
-      "100_comunicacao_responsavel_empresa.sql", "100_rollback.sql"];
+      "100_comunicacao_responsavel_empresa.sql", "100_rollback.sql",
+      // 101 = iFood Events (eventos, pedidos mínimos e lease do poller): domínio próprio do iFood, sem tocar a comunicação.
+      "101_ifood_eventos.sql", "101_rollback.sql",
+      "102_ifood_pedidos_detalhes_confirm.sql", "102_rollback.sql",
+      "103_ifood_order_actions.sql", "103_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });
