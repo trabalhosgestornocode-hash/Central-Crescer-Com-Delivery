@@ -52,6 +52,7 @@ async function tratar(r, g) {
     }
     const erro = new Error(j.error || `${r.status} ${r.statusText}`);
     if (j.codigo) erro.codigo = j.codigo; // ex.: "TABELA_NAO_CONFIGURADA" — ver cmv.controller.js
+    if (j.details) erro.details = j.details; // ex.: sinaisQuedaMaterial/confirmacaoReforcadaNecessaria — ver dashboardExecutivo.service.js
     throw erro;
   }
   return r.json();
