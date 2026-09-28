@@ -80,6 +80,14 @@ export async function abrirLancamentoModal({ data, unidadeId, modeloLogistico, e
     // (ver avisarAlteracaoExterna, chamado pelo registro em dashboardExecutivo.js).
     conflitoExterno: false,
     motivoCorrecao: "", campos: camposPadrao(), avisos: [], confirmarAvisos: false, salvando: false,
+    // Quedas de acumulado (item E) — o servidor é quem detecta (precisa do
+    // histórico do mês, que o front não tem local); por isso essas listas só
+    // ganham conteúdo DEPOIS de uma tentativa de "Finalizar" rejeitada (ver
+    // `salvar`), nunca calculadas aqui antecipadamente. `avisosServidor`
+    // guarda avisos leves que só o backend enxerga (ex.: queda pequena,
+    // igualdade suspeita com o bruto) — mesclados aos avisos calculados no
+    // cliente (`calcularAvisos`) em `passoConferencia`, nunca substituindo-os.
+    avisosServidor: [], sinaisQuedaMaterial: [], confirmarQuedaMaterial: false, justificativaQuedaAcumulado: "",
     // Autoridade é sempre o servidor (ver obterLancamentoPorData/financeiroDisponivelNaData
     // no backend) — valores por omissão aqui só cobrem o instante antes da
     // resposta chegar, nunca usados pra decidir nada sozinhos.
@@ -530,7 +538,11 @@ function passoConferencia() {
       ${fm.modoCorrecao ? campoMotivoCorrecao() : ""}`;
   }
 
-  const avisos = calcularAvisos(c);
+  // Mescla o que o cliente consegue calcular sozinho com o que só o servidor
+  // enxerga (histórico do mês) — nunca substitui um pelo outro, senão um
+  // aviso do servidor "desaparece" no próximo render (ver comentário em
+  // `abrirLancamentoModal` sobre `avisosServidor`).
+  const avisos = [...calcularAvisos(c), ...fm.avisosServidor];
   fm.avisos = avisos;
   const calc = calculoPreview(c);
   return `
@@ -554,7 +566,30 @@ function passoConferencia() {
         <ul>${avisos.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>
         <label class="dex-radio"><input type="checkbox" id="dex-confirmar-avisos" ${fm.confirmarAvisos ? "checked" : ""}> Estou ciente e confirmo os valores mesmo assim.</label>
       </div>` : ""}
+    ${blocoQuedaMaterial()}
     ${fm.modoCorrecao ? campoMotivoCorrecao() : ""}`;
+}
+
+/**
+ * Bloco de confirmação REFORÇADA para queda de acumulado material (> R$ 50,
+ * ver LIMIAR_QUEDA_MATERIAL_REAIS no backend) — só aparece depois que uma
+ * tentativa de "Finalizar" já foi rejeitada com `confirmacaoReforcadaNecessaria`
+ * (ver `salvar`). Nunca bloqueia sem saída: com o checkbox marcado + a
+ * justificativa escrita, o próximo "Finalizar" reenvia `confirmarQuedaMaterial`
+ * + `justificativaQuedaAcumulado` e o backend grava os dois como rastro de
+ * auditoria (ver `sinaisQuedaMaterialConfirmados` em dashboardExecutivo.service.js).
+ */
+function blocoQuedaMaterial() {
+  if (!fm.sinaisQuedaMaterial.length) return "";
+  return `
+    <div class="dex-avisos dex-avisos-perigo">
+      <b>${icon("alert-triangle", { size: 13 })} Quedas de acumulado que exigem confirmação reforçada:</b>
+      <ul>${fm.sinaisQuedaMaterial.map((s) => `<li>${escapeHtml(s.mensagem)}</li>`).join("")}</ul>
+      <label class="dex-radio"><input type="checkbox" id="dex-confirmar-queda-material" ${fm.confirmarQuedaMaterial ? "checked" : ""}> Confirmo que verifiquei os valores e a queda é real (não é erro de digitação).</label>
+      <label class="cfg-campo ed-campo-full"><span>Justificativa da queda (obrigatório, mín. 10 caracteres) *</span>
+        <textarea id="dex-justificativa-queda" rows="3" maxlength="500" placeholder="Explique por que o valor deste dia é menor que o último Financeiro Oficial (ex.: estorno confirmado pelo iFood, correção retroativa, ajuste de conciliação).">${escapeHtml(fm.justificativaQuedaAcumulado)}</textarea>
+      </label>
+    </div>`;
 }
 
 function campoMotivoCorrecao() {
@@ -599,12 +634,26 @@ function wirePasso(m, chave) {
     campos.forEach((par) => {
       const [id, campo] = par.split(":");
       aplicarMascaraMoeda(m.querySelector(`#${id}`), {
-        aoAlterar: (valor) => { fm.campos[campo] = valor; atualizarPreviewFinanceiro(m); },
+        aoAlterar: (valor) => {
+          fm.campos[campo] = valor;
+          atualizarPreviewFinanceiro(m);
+          // Um valor financeiro mudou depois de uma rejeição por queda de
+          // acumulado — a mensagem/justificativa antiga não vale mais para o
+          // número novo (pode nem ser mais uma queda). Nunca reenvia uma
+          // confirmação "presa" a um valor diferente do que foi de fato
+          // confirmado; o próximo "Finalizar" reavalia do zero no servidor.
+          if (fm.sinaisQuedaMaterial.length || fm.avisosServidor.length) {
+            fm.sinaisQuedaMaterial = []; fm.avisosServidor = [];
+            fm.confirmarQuedaMaterial = false; fm.justificativaQuedaAcumulado = "";
+          }
+        },
       });
     });
   }
   if (chave === "conferencia") {
     m.querySelector("#dex-confirmar-avisos")?.addEventListener("change", (e) => { fm.confirmarAvisos = e.target.checked; });
+    m.querySelector("#dex-confirmar-queda-material")?.addEventListener("change", (e) => { fm.confirmarQuedaMaterial = e.target.checked; });
+    m.querySelector("#dex-justificativa-queda")?.addEventListener("input", (e) => { fm.justificativaQuedaAcumulado = e.target.value; });
     m.querySelector("#dex-motivo-correcao")?.addEventListener("input", (e) => { fm.motivoCorrecao = e.target.value; });
   }
 }
@@ -721,11 +770,25 @@ function payloadBase(status) {
     servicosPromocoes: numeroDecimalOuIndefinido(c.servicosPromocoes), taxasEntregadores: numeroDecimalOuIndefinido(c.taxasEntregadores),
     ajustesFavorLoja: numeroDecimalOuIndefinido(c.ajustesFavorLoja), ajustesContraLoja: numeroDecimalOuIndefinido(c.ajustesContraLoja),
     confirmarAvisos: fm.confirmarAvisos,
+    // Só manda algo aqui depois que o servidor já rejeitou uma vez pedindo
+    // confirmação reforçada (ver `salvar`/`blocoQuedaMaterial`) — em qualquer
+    // outro caso `sinaisQuedaMaterial` está vazio e isto vira `undefined`,
+    // omitido do corpo (mesmo padrão de `numOuIndefinido` acima).
+    confirmarQuedaMaterial: fm.sinaisQuedaMaterial.length ? fm.confirmarQuedaMaterial : undefined,
+    justificativaQuedaAcumulado: fm.sinaisQuedaMaterial.length ? (fm.justificativaQuedaAcumulado || undefined) : undefined,
   };
 }
 
 async function salvar(m, status) {
   if (fm.modoCorrecao && !fm.motivoCorrecao.trim()) { toast("Informe o motivo da correção."); return; }
+  // Bloco de queda material já apareceu (tentativa anterior rejeitada) — exige
+  // os dois antes de gastar outro round-trip: o checkbox marcado E a
+  // justificativa com o mínimo que o backend vai exigir de qualquer forma
+  // (ver `justificativaQuedaAcumulado` em dashboardExecutivo.service.js).
+  if (fm.sinaisQuedaMaterial.length) {
+    if (!fm.confirmarQuedaMaterial) { toast("Confirme que verificou a queda de acumulado antes de finalizar."); return; }
+    if (fm.justificativaQuedaAcumulado.trim().length < 10) { toast("A justificativa da queda de acumulado precisa ter pelo menos 10 caracteres."); return; }
+  }
   const btn = m.querySelector(status === "finalizado" ? "#dex-f-finalizar" : "#dex-f-rascunho");
   if (!btn || fm.salvando) return;
   fm.salvando = true;
@@ -751,6 +814,25 @@ async function salvar(m, status) {
     if (e.codigo === "LANCAMENTO_DESATUALIZADO") {
       fm.conflitoExterno = true;
       toast(e.message);
+      renderPasso(m);
+      return;
+    }
+    // Queda de acumulado MATERIAL (item E): o servidor recusou e devolveu os
+    // sinais — nunca um beco sem saída, o próprio "Finalizar" some e vira o
+    // bloco de confirmação reforçada (`blocoQuedaMaterial`); com o checkbox +
+    // justificativa, o próximo clique já manda os dois campos que faltavam.
+    if (e.details?.confirmacaoReforcadaNecessaria) {
+      fm.sinaisQuedaMaterial = e.details.sinaisQuedaMaterial || [];
+      toast("Há quedas de acumulado que precisam de confirmação e justificativa antes de finalizar.");
+      renderPasso(m);
+      return;
+    }
+    // Inconsistências "leves" que só o servidor enxerga (ex.: queda pequena
+    // de acumulado, igualdade suspeita com o valor bruto) — mesma ideia, mas
+    // usando o checkbox genérico que já existe (`confirmarAvisos`).
+    if (e.details?.confirmacaoNecessaria) {
+      fm.avisosServidor = e.details.avisos || [];
+      toast("Há inconsistências que precisam de confirmação antes de finalizar.");
       renderPasso(m);
       return;
     }
