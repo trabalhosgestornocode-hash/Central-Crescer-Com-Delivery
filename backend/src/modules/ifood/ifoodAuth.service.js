@@ -107,6 +107,11 @@ export async function concluirAutorizacao({
   const verifier = decifrar(sessao.authorization_code_verifier_cifrado);
   if (!verifier) throw ifoodErro(IFOOD_ERROS.IFOOD_OAUTH_SESSAO_JA_USADA);
 
+  // Uma sessão só pode ser concluída UMA vez: duas conclusões simultâneas
+  // (duplo clique, duas abas) não podem ambas trocar o código.
+  const reivindicada = await repo.reivindicarSessaoOAuth({ organizacaoId, unidadeId, sessaoId });
+  if (!reivindicada) throw ifoodErro(IFOOD_ERROS.IFOOD_OAUTH_SESSAO_JA_USADA);
+
   let tokens;
   try {
     tokens = await token.trocarAuthorizationCodePorToken({ appType, authorizationCode, verifier, http });

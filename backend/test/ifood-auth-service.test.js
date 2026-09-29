@@ -53,6 +53,12 @@ function repoFalso(overrides = {}) {
       if (appType && estado.sessao.app_type !== appType) throw ifoodErro(IFOOD_ERROS.IFOOD_OAUTH_SESSAO_NAO_ENCONTRADA);
       return { ...estado.sessao };
     },
+    async reivindicarSessaoOAuth() {
+      const x = estado.sessao;
+      if (!x || x.status !== "pending" || x.verifier_consumido_em) return null;
+      x.verifier_consumido_em = new Date().toISOString();   // síncrono = atômico, como o UPDATE condicional
+      return { id: x.id };
+    },
     async fecharSessaoOAuth({ status, anularVerifier = true }) {
       estado.fechamentos.push({ status, anularVerifier });
       estado.sessao = { ...estado.sessao, status, ...(anularVerifier ? { authorization_code_verifier_cifrado: null } : {}) };
@@ -209,4 +215,77 @@ test("concluirAutorizacao: appType diferente do da sessão -> IFOOD_OAUTH_SESSAO
     () => auth.concluirAutorizacao({ ...TENANT, appType: "analytics", sessaoId: "sess-1", authorizationCode: "AUTH", deps: { http: httpFalso({}), repo } }),
     (e) => e.codigo === IFOOD_ERROS.IFOOD_APP_SEM_CREDENCIAL || e.codigo === IFOOD_ERROS.IFOOD_OAUTH_SESSAO_NAO_ENCONTRADA,
   );
+});
+
+// =====================================================================
+// CHECKPOINT DISTRIBUÍDO — concorrência, isolamento e higiene de logs
+// =====================================================================
+test("concorrência: duas conclusões simultâneas da MESMA sessão -> só uma troca o código", async () => {
+  const repo = repoFalso();
+  await prepararSessao(repo);
+  const http = httpFalso({
+    "/authentication/v1.0/oauth/token": { accessToken: "AT-1", refreshToken: "RT-1", expiresIn: 21600, type: "bearer" },
+  });
+  const args = { ...TENANT, appType: "financial", sessaoId: "sess-1", authorizationCode: "AUTH-CODE-123", deps: { http, repo } };
+
+  const r = await Promise.allSettled([auth.concluirAutorizacao(args), auth.concluirAutorizacao(args)]);
+
+  assert.equal(r.filter((x) => x.status === "fulfilled").length, 1);
+  const rej = r.find((x) => x.status === "rejected");
+  assert.equal(rej.reason.codigo, IFOOD_ERROS.IFOOD_OAUTH_SESSAO_JA_USADA);
+  assert.equal(http.chamadas.length, 1, "o iFood recebeu mais de uma troca de código");
+});
+
+test("tentativa reutilizada depois de concluída -> IFOOD_OAUTH_SESSAO_JA_USADA, sem nova chamada ao iFood", async () => {
+  const repo = repoFalso();
+  await prepararSessao(repo);
+  const http = httpFalso({ "/authentication/v1.0/oauth/token": { accessToken: "AT-1", refreshToken: "RT-1", expiresIn: 21600 } });
+  const args = { ...TENANT, appType: "financial", sessaoId: "sess-1", authorizationCode: "AUTH-CODE-123", deps: { http, repo } };
+  await auth.concluirAutorizacao(args);
+  await assert.rejects(() => auth.concluirAutorizacao(args), (e) => e.codigo === IFOOD_ERROS.IFOOD_OAUTH_SESSAO_JA_USADA);
+  assert.equal(http.chamadas.length, 1);
+});
+
+test("sessão criada por OUTRA unidade -> IFOOD_OAUTH_SESSAO_NAO_ENCONTRADA, sem chamar o iFood", async () => {
+  // Fake que, como o repositório real, filtra a sessão por organização + unidade.
+  const base = repoFalso();
+  await prepararSessao(base);
+  const repo = {
+    ...base,
+    async obterSessaoOAuth({ organizacaoId, unidadeId, appType }) {
+      const x = base.estado.sessao;
+      if (!x || x.organizacao_id !== organizacaoId || x.unidade_id !== unidadeId || (appType && x.app_type !== appType)) {
+        throw ifoodErro(IFOOD_ERROS.IFOOD_OAUTH_SESSAO_NAO_ENCONTRADA);
+      }
+      return { ...x };
+    },
+  };
+  const http = httpFalso({});
+  for (const outro of [{ unidadeId: "uni-2" }, { organizacaoId: "org-2" }]) {
+    await assert.rejects(
+      () => auth.concluirAutorizacao({ ...TENANT, ...outro, appType: "financial", sessaoId: "sess-1", authorizationCode: "AUTH-CODE", deps: { http, repo } }),
+      (e) => e.codigo === IFOOD_ERROS.IFOOD_OAUTH_SESSAO_NAO_ENCONTRADA,
+    );
+  }
+  assert.equal(http.chamadas.length, 0);
+  assert.equal(base.estado.sessao.status, "pending", "sessão de outra unidade não pode ser alterada");
+});
+
+test("logs do fluxo completo não contêm verifier, clientSecret, tokens nem authorizationCode", async () => {
+  const saidas = [];
+  const orig = { log: console.log, warn: console.warn, error: console.error };
+  console.log = console.warn = console.error = (...a) => saidas.push(a.join(" "));
+  try {
+    const repo = repoFalso();
+    const http = httpFalso({
+      "/authentication/v1.0/oauth/userCode": { userCode: "HJLX-LPSQ", authorizationCodeVerifier: "VERIF-SECRETO", expiresIn: 600 },
+      "/authentication/v1.0/oauth/token": { accessToken: "AT-SECRETO", refreshToken: "RT-SECRETO", expiresIn: 21600, type: "bearer" },
+    });
+    await auth.iniciarConexao({ ...TENANT, appType: "financial", deps: { http, repo } });
+    await auth.concluirAutorizacao({ ...TENANT, appType: "financial", sessaoId: "sess-1", authorizationCode: "AUTH-CODE-SECRETO", deps: { http, repo } });
+  } finally { Object.assign(console, orig); }
+  const tudo = saidas.join(" | ");
+  for (const segredo of ["VERIF-SECRETO", "fin-client-secret", "AT-SECRETO", "RT-SECRETO", "AUTH-CODE-SECRETO"]) {
+    assert.equal(tudo.includes(segredo), false, `vazou em log: ${segredo}`);
+  }
 });

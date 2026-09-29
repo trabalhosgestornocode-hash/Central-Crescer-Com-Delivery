@@ -63,6 +63,21 @@ export async function obterSessaoOAuth({ organizacaoId, unidadeId, sessaoId, app
 }
 
 /**
+ * Reivindica a sessão para UMA conclusão só (atômico no banco): só uma chamada
+ * concorrente consegue mudar `verifier_consumido_em` de NULL para agora enquanto
+ * a sessão está 'pending'. Quem perder recebe null e deve tratar como sessão já usada.
+ * Não anula o verifier aqui — quem fecha a sessão (fecharSessaoOAuth) faz isso.
+ */
+export async function reivindicarSessaoOAuth({ organizacaoId, unidadeId, sessaoId }) {
+  exigirTenant(organizacaoId, unidadeId);
+  return ok(await supabase.from(T.sessoes)
+    .update({ verifier_consumido_em: new Date().toISOString() })
+    .eq("id", sessaoId).eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+    .eq("status", "pending").is("verifier_consumido_em", null)
+    .select("id").maybeSingle());
+}
+
+/**
  * Marca o desfecho da sessão OAuth e (opcionalmente) ANULA o verifier.
  * O verifier nunca é reutilizável depois de concluído o fluxo.
  */

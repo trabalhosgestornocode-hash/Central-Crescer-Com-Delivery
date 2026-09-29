@@ -278,6 +278,7 @@ function pintarEtapaOAuth(appType, passo, subtitulo) {
         ${!temCodigo ? `
           <p>Gere um código de vínculo e autorize o aplicativo no Portal do Parceiro iFood.</p>
           <button class="btn btn-primary" id="ifood-gerar">Gerar código</button>
+          ${appType === "analytics" ? `<button class="btn btn-ghost" id="ifood-pular">Pular por enquanto</button>` : ""}
         ` : `
           <div class="ifood-codigo-box">
             <div class="ifood-codigo-rotulo">Código de vínculo</div>
