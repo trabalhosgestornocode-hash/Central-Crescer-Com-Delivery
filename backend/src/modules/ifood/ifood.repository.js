@@ -217,25 +217,36 @@ export async function listarCredenciaisDaConexao({ conexaoId }) {
     .select("app_type, expira_em, status, atualizado_em").eq("conexao_id", conexaoId)) ?? [];
 }
 
-/** Upsert da credencial de um app (chave: conexao_id + app_type). */
+/**
+ * Upsert da credencial de um app (chave: conexao_id + app_type) — um único
+ * statement (access + refresh + expira_em juntos). `refreshTokenCifrado`
+ * undefined = o iFood não devolveu refresh novo: a coluna fica FORA do payload
+ * e o refresh anterior é preservado (nunca sobrescrito por null).
+ */
 export async function salvarCredencial({
   conexaoId, appType, accessTokenCifrado, refreshTokenCifrado, expiraEm, tokenType,
 }) {
   if (!conexaoId) throw ApiError.internal("conexaoId ausente ao salvar credencial iFood.");
-  return ok(await supabase.from(T.credenciais).upsert({
+  const linha = {
     conexao_id: conexaoId, app_type: appType,
     access_token_cifrado: accessTokenCifrado,
-    refresh_token_cifrado: refreshTokenCifrado ?? null,
     expira_em: expiraEm, token_type: tokenType ?? null,
     status: "ativa",
-  }, { onConflict: "conexao_id,app_type" }).select().single());
+  };
+  if (refreshTokenCifrado !== undefined) linha.refresh_token_cifrado = refreshTokenCifrado;
+  return ok(await supabase.from(T.credenciais).upsert(linha, { onConflict: "conexao_id,app_type" }).select().single());
 }
 
-export async function atualizarCredencial({ conexaoId, appType, campos }) {
+/**
+ * `seAccessCifradoIgual`: só atualiza se o access token gravado ainda for o que
+ * quem chama leu (compare-and-set) — não sobrescreve uma renovação concorrente.
+ */
+export async function atualizarCredencial({ conexaoId, appType, campos, seAccessCifradoIgual }) {
   if (!conexaoId) throw ApiError.internal("conexaoId ausente ao atualizar credencial iFood.");
-  return ok(await supabase.from(T.credenciais).update(campos)
-    .eq("conexao_id", conexaoId).eq("app_type", appType)
-    .select().maybeSingle());
+  let q = supabase.from(T.credenciais).update(campos)
+    .eq("conexao_id", conexaoId).eq("app_type", appType);
+  if (seAccessCifradoIgual !== undefined) q = q.eq("access_token_cifrado", seAccessCifradoIgual);
+  return ok(await q.select().maybeSingle());
 }
 
 /** Descarta os tokens locais de uma conexão (desconexão). */

@@ -62,15 +62,18 @@ test("saleGrossValue.total = itens + entrega + taxaServico (explicável, sem nú
   assert.equal(v.valorBruto.total, 109);
 });
 
-test("documents (plural, forma real da API) é lido corretamente", () => {
+test("merchant.documents (plural, forma real) NUNCA é mapeado — CPF/CNPJ não saem do mapper", () => {
   const v = mapearVenda(VENDA_MINIMA);
-  assert.deepEqual(v.merchant.documentos, [{ valor: "99999999999999", tipo: "CNPJ" }]);
+  assert.equal("documentos" in v.merchant, false);
+  assert.ok(!JSON.stringify(v).includes("99999999999999"));
+  assert.deepEqual(v.merchant, { id: "m-1", shortId: 456, nome: "Loja Teste", tipo: "RESTAURANT", timezone: "Etc/GMT+3" });
 });
 
-test("document (singular, forma da tabela de referência) também é aceito — fallback defensivo", () => {
-  const venda = { ...VENDA_MINIMA, merchant: { ...VENDA_MINIMA.merchant, documents: undefined, document: [{ value: "11111111111111", type: "CNPJ" }] } };
+test("merchant.document (singular, forma da tabela de referência) também NUNCA é mapeado", () => {
+  const venda = { ...VENDA_MINIMA, merchant: { ...VENDA_MINIMA.merchant, documents: undefined, document: [{ value: "11111111111", type: "CPF" }] } };
   const v = mapearVenda(venda);
-  assert.deepEqual(v.merchant.documentos, [{ valor: "11111111111111", tipo: "CNPJ" }]);
+  assert.ok(!JSON.stringify(v).includes("11111111111"));
+  assert.ok(!/document/i.test(JSON.stringify(v)));
 });
 
 test("benefits ausente -> beneficios null, sem lançar", () => {

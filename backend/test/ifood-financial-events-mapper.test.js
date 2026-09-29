@@ -77,14 +77,16 @@ test("hasTransferImpact=false é preservado (caso especial: pedido pago direto n
   assert.equal(e.temImpactoRepasse, false);
 });
 
-test("receiver.businessId/businessDocument (forma real da API) são lidos corretamente", () => {
+test("receiver.businessId (forma real da API) é lido; businessDocument NUNCA é mapeado", () => {
   const e = mapearEventoFinanceiro(EVENTO_CREDITO);
-  assert.deepEqual(e.comerciante, { id: "m-1", tipo: "MERCHANT", documento: "00011122233344" });
+  assert.deepEqual(e.comerciante, { id: "m-1", tipo: "MERCHANT" });
+  assert.ok(!JSON.stringify(e).includes("00011122233344"));
 });
 
-test("receiver.merchantId/merchantDocument (forma da tabela do guia) também é aceito — fallback defensivo", () => {
+test("receiver.merchantId (forma da tabela do guia) também é aceito; merchantDocument NUNCA é mapeado", () => {
   const e = mapearEventoFinanceiro({ ...EVENTO_CREDITO, receiver: { merchantId: "m-2", merchantDocument: "99999999999999" } });
-  assert.deepEqual(e.comerciante, { id: "m-2", tipo: null, documento: "99999999999999" });
+  assert.deepEqual(e.comerciante, { id: "m-2", tipo: null });
+  assert.ok(!JSON.stringify(e).includes("99999999999999"));
 });
 
 test("billing.baseValue/feePercentage também convertidos de string para number", () => {
@@ -98,7 +100,7 @@ test("mapearEventoFinanceiro nunca lança com objeto vazio (defensivo campo a ca
   assert.equal(e.nome, null);
   assert.equal(e.valor, null);
   assert.equal(e.tipoValor, null);
-  assert.equal(e.temImpactoRepasse, false);
+  assert.equal(e.temImpactoRepasse, null, "ausente = desconhecido, nunca 'sem impacto'");
   assert.equal(e.comerciante, null);
   assert.equal(e.faturamento, null);
   assert.equal(e.pagamento, null);
