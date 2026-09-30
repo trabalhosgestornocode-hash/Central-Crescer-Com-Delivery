@@ -58,7 +58,15 @@ export function criarRepoEmMemoria({ relogio = criarRelogio(), conexoes = [CONEX
     get lease() { return lease; },
     conexoes,
 
-    async listarConexoesComMerchant() { hook("listarConexoesComMerchant"); return repo.conexoes.map((c) => ({ ...c })); },
+    async listarConexoesComMerchant() { hook("listarConexoesComMerchant"); return repo.conexoes.map(({ credOrder, ...c }) => ({ ...c })); },
+    // Espelha o filtro do banco: só conexões COM credencial `order` (campo `credOrder` da conexão fake:
+    // 'ativa' por padrão, 'reauth_required', ou null = conexão só com analytics/financial).
+    async listarConexoesElegiveisParaEvents() {
+      hook("listarConexoesElegiveisParaEvents");
+      return repo.conexoes
+        .map(({ credOrder = "ativa", ...c }) => ({ ...c, credencial_order_status: credOrder }))
+        .filter((c) => c.credencial_order_status !== null);
+    },
 
     async inserirEventos(linhas) {
       hook("inserirEventos");

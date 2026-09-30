@@ -185,6 +185,8 @@ test("status sem conexão: não conectado, ambos apps desligados", async () => {
   assert.deepEqual(r, {
     conectado: false, status: "nao_conectado", merchant: null,
     apps: { analytics: { conectado: false, status: null, expiraEm: null }, financial: { conectado: false, status: null, expiraEm: null } },
+    order: null,                           // app Order tem bloco próprio (ifood-status-order.test.js)
+    atencao: { total: 0, apps: [] },
     conectadaEm: null, ultimaSincronizacao: null, ultimoErro: null,
     homologacao: false,
   });

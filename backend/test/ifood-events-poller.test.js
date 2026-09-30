@@ -506,9 +506,13 @@ test("worker: processo SEPARADO — o servidor HTTP não o importa; sai sem faze
   assert.doesNotMatch(server, /worker-ifood|ifoodEvents\.poller/);
   const w = ler("backend/src/worker-ifood/index.js");
   assert.ok(w.indexOf("if (!cfg.habilitado)") > -1);
-  assert.ok(w.indexOf("process.exit(0)") < w.indexOf("loop.iniciar()"), "o gate de habilitação vem antes de iniciar o laço");
-  assert.match(w, /SIGTERM/); assert.match(w, /SIGINT/);
-  assert.match(w, /loop\.parar\(\)/);
+  // o gate vem antes de carregar a config do backend e de iniciar o laço (que acontece no ciclo de vida)
+  assert.ok(w.indexOf("process.exit(0)") < w.indexOf("ifoodToken.service.js"), "desligado sai antes de carregar o resto");
+  assert.ok(w.indexOf("process.exit(0)") < w.indexOf("executarWorker("), "o gate de habilitação vem antes de iniciar o laço");
+  const ciclo = ler("backend/src/worker-ifood/lifecycle.js");
+  assert.match(ciclo, /SIGTERM/); assert.match(ciclo, /SIGINT/);
+  assert.match(ciclo, /loop\.parar\(\)/);
+  assert.match(ciclo, /loop\.iniciar\(\)/);
 });
 
 test("worker: comandos npm e SEM deploy (render.yaml intocado)", () => {

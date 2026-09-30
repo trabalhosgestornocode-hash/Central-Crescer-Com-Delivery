@@ -44,6 +44,25 @@ export async function listarConexoesComMerchant() {
     .not("merchant_id", "is", null)) ?? [];
 }
 
+/**
+ * Conexões ELEGÍVEIS para Events/Order no modo DISTRIBUÍDO: ativas, com merchant e COM credencial `order`
+ * (conexão só com analytics/financial NÃO entra — ela não tem token de Events). Traz o status da credencial
+ * (`credencial_order_status`): `reauth_required` continua na lista para ser MONITORADA — o poller a pula
+ * sem chamar o iFood, e ela nunca impede as demais. `db` é injetável só para teste.
+ * @returns {Promise<Array<{id, organizacao_id, unidade_id, merchant_id, credencial_order_status}>>}
+ */
+export async function listarConexoesElegiveisParaEvents({ db = supabase } = {}) {
+  const linhas = ok(await db.from(T.conexoes)
+    .select("id, organizacao_id, unidade_id, merchant_id, ifood_credenciais!inner(app_type, status)")
+    .eq("status", "ativa")
+    .not("merchant_id", "is", null)
+    .eq("ifood_credenciais.app_type", "order")) ?? [];
+  return linhas.map(({ ifood_credenciais: cred, ...c }) => {
+    const credOrder = (Array.isArray(cred) ? cred : [cred]).find((x) => x?.app_type === "order");
+    return { ...c, credencial_order_status: credOrder?.status ?? null };
+  }).filter((c) => c.credencial_order_status !== null);
+}
+
 // =====================================================================
 // EVENTOS
 // =====================================================================

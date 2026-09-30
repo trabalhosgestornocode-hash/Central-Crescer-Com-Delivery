@@ -18,10 +18,10 @@
 
 import { ifoodErro, IFOOD_ERROS } from "./ifood.errors.js";
 import { ifoodLog, mascararId } from "./ifood.logsafe.js";
-import { IFOOD_APPS, IFOOD_APP_TYPES } from "./ifood.constants.js";
+import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_APP_ORDER } from "./ifood.constants.js";
 import * as repositorio from "./ifood.repository.js";
 import * as merchantService from "./ifoodMerchant.service.js";
-import { estaEmHomologacaoIfood } from "./ifoodToken.service.js";
+import { estaEmHomologacaoIfood, appTypesDoOAuth } from "./ifoodToken.service.js";
 
 /**
  * Vincula um merchant do iFood à unidade do contexto.
@@ -66,12 +66,15 @@ export async function vincularMerchant({ organizacaoId, unidadeId, merchantId, u
 }
 
 /**
- * Status da integração iFood da unidade — analytics e financial SEPARADOS.
- * Sanitizado: nenhum token, secret ou merchantId completo.
+ * Status da integração iFood da unidade — analytics e financial SEPARADOS, e o app Order (pedidos e
+ * eventos) num bloco PRÓPRIO (`order`). Um problema do Order nunca muda o status geral nem o de
+ * analytics/financial, e vice-versa; `atencao` só resume quantos apps pedem atenção.
+ * Sanitizado: nenhum token, secret, merchantId completo ou identificação do worker.
  * @param {{organizacaoId, unidadeId, deps?: object}} p
  */
 export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
   const repo = deps.repo ?? repositorio;
+  const agora = deps.agora ?? (() => new Date());
 
   const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
 
@@ -83,6 +86,8 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
       status: "nao_conectado",
       merchant: null,
       apps: appsVazio,
+      order: null,
+      atencao: { total: 0, apps: [] },
       conectadaEm: null,
       ultimaSincronizacao: null,
       ultimoErro: null,
@@ -102,21 +107,87 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
   }));
 
   const financialOk = apps[IFOOD_APPS.FINANCIAL]?.conectado === true;
-  const algumReauth = credenciais.some((c) => c.status === "reauth_required");
+  // Status GERAL: só analytics/financial. A credencial `order` tem estado próprio (bloco `order`) e nunca o contamina.
+  const algumReauth = credenciais.some((c) => IFOOD_APP_TYPES.includes(c.app_type) && c.status === "reauth_required");
+  const merchant = conexao.merchant_id
+    ? { idMascarado: mascararId(conexao.merchant_id), nome: conexao.merchant_nome ?? null, razaoSocial: conexao.merchant_razao_social ?? null }
+    : null;
+
+  const order = await montarStatusOrder({
+    conexao, cred: porApp.get(IFOOD_APP_ORDER), merchant, organizacaoId, unidadeId, repo, agora,
+  });
+  const appsComAtencao = [
+    ...IFOOD_APP_TYPES.filter((a) => apps[a].status === "reauth_required"),
+    ...(order?.erroAtual ? [IFOOD_APP_ORDER] : []),
+  ];
 
   return {
     conectado: conexao.status === "ativa" && !!conexao.merchant_id && financialOk,
     status: algumReauth ? "reauth_required" : conexao.status,
-    merchant: conexao.merchant_id
-      ? { idMascarado: mascararId(conexao.merchant_id), nome: conexao.merchant_nome ?? null, razaoSocial: conexao.merchant_razao_social ?? null }
-      : null,
+    merchant,
     apps,
+    order,
+    atencao: { total: appsComAtencao.length, apps: appsComAtencao },
     conectadaEm: conexao.conectada_em ?? null,
     ultimaSincronizacao: conexao.ultima_sincronizacao_em ?? null,   // sempre null nesta fase
     ultimoErro: conexao.ultimo_erro ?? null,
     // Só um booleano — nunca clientId/clientSecret/token. Alimenta a badge
     // discreta "Ambiente de homologação iFood" no frontend.
     homologacao: estaEmHomologacaoIfood(),
+  };
+}
+
+/**
+ * Bloco do app Order (pedidos e eventos). `null` quando o app não existe neste ambiente (sem
+ * IFOOD_ORDER_* / fora de homologação) E a unidade não tem credencial `order` — o painel não mostra nada.
+ * Os sinais de Events vêm do banco (nunca do iFood); falha ao lê-los não derruba o status.
+ */
+async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unidadeId, repo, agora }) {
+  const configurado = appTypesDoOAuth().includes(IFOOD_APP_ORDER);
+  if (!configurado && !cred) return null;
+
+  const agoraMs = agora().getTime();
+  let obs = { disponivel: false };
+  let ultimaAutenticacao = null;
+  if (cred) {
+    [obs, ultimaAutenticacao] = await Promise.all([
+      conexao.merchant_id && repo.obterObservabilidadeOrder
+        ? repo.obterObservabilidadeOrder({ organizacaoId, unidadeId, merchantId: conexao.merchant_id })
+          .catch((e) => { ifoodLog("warn", "status.order_observabilidade_falhou", { erro: String(e?.message ?? e).slice(0, 200) }); return { disponivel: false }; })
+        : { disponivel: false },
+      repo.obterUltimaAutorizacao
+        ? repo.obterUltimaAutorizacao({ organizacaoId, unidadeId, appType: IFOOD_APP_ORDER }).catch(() => null)
+        : null,
+    ]);
+  }
+
+  const workerAtivo = !!obs.lease && Date.parse(obs.lease.leaseAte) > agoraMs;
+  const conectado = !!cred && cred.status === "ativa";
+  let erroAtual = null;
+  if (cred?.status === "reauth_required") {
+    erroAtual = { codigo: "REAUTH_REQUIRED", mensagem: "A autorização do app de pedidos expirou. Reconecte o app Order no iFood." };
+  } else if (conectado && obs.disponivel && obs.eventosComFalha > 0) {
+    erroAtual = { codigo: "EVENTOS_COM_FALHA", mensagem: `${obs.eventosComFalha} evento(s) com falha de processamento.` };
+  } else if (conectado && obs.disponivel && !workerAtivo) {
+    erroAtual = { codigo: "WORKER_INATIVO", mensagem: "O worker de eventos não está rodando: pedidos novos não chegam à Central." };
+  }
+
+  return {
+    configurado,
+    conectado,
+    status: cred?.status ?? null,                                   // 'ativa' | 'reauth_required' | null
+    tokenValido: conectado && Date.parse(cred.expira_em) > agoraMs,
+    expiraEm: cred?.expira_em ?? null,
+    merchant,
+    ultimaAutenticacao,
+    tokenAtualizadoEm: cred?.atualizado_em ?? null,                 // última emissão/renovação gravada
+    ultimoEvento: obs.ultimoEvento ?? null,
+    ultimoAck: obs.ultimoAck ?? null,
+    ultimoPedido: obs.ultimoPedido ?? null,
+    eventosComFalha: obs.eventosComFalha ?? 0,
+    worker: obs.disponivel ? { ativo: workerAtivo, atualizadoEm: obs.lease?.atualizadoEm ?? null } : null,
+    observabilidadeDisponivel: obs.disponivel === true,
+    erroAtual,
   };
 }
 

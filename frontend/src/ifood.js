@@ -19,7 +19,7 @@ import {
   derivarFontesConciliacao, derivarPendenciasHomologacao,
   saudeSalesVsEvents, saudeEventsVsSettlements, saudeSettlementsVsReconciliation,
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
-  rotuloStatusPedido, rotuloTipoPedido,
+  rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, derivarEstadoOrder, textoAtencao,
 } from "./ifoodEstado.js";
 
 const IFOOD_LOGO = "/assets/menu-dashboard-ifood.png";
@@ -103,6 +103,23 @@ function linhaApp(rotulo, appEstado) {
     </div>`;
 }
 
+// App Order (pedidos e eventos): estado PRÓPRIO, separado de analytics/financial. Só leitura — nenhuma
+// ação aqui. Sem o app Order neste ambiente (`order` null) o bloco não aparece.
+function blocoOrder(order) {
+  const o = derivarEstadoOrder(order);
+  if (!o) return "";
+  const valor = ([, v, tipo]) => (v == null || v === "" ? "—" : tipo === "data" ? fmtDataHora(v) : v);
+  return `
+    <div class="ifood-card" id="ifood-order-status">
+      <div class="ifood-app-linha">
+        <span class="ifood-app-nome">${esc(ORDER_ROTULO)}</span>
+        <span class="pill ${o.classe}" id="ifood-order-pill">${esc(o.rotulo)}</span>
+      </div>
+      ${o.erro ? `<div class="ifood-aviso ${o.classe === "bad" ? "bad" : "warn"}" id="ifood-order-erro">${esc(o.erro.mensagem)}</div>` : ""}
+      ${o.linhas.map((l) => `<div class="ifood-info-linha"><span>${esc(l[0])}</span><strong>${esc(valor(l))}</strong></div>`).join("")}
+    </div>`;
+}
+
 function blocoMerchant(merchant) {
   if (!merchant) return `<div class="ifood-merchant vazio">Nenhuma loja iFood vinculada</div>`;
   return `
@@ -167,6 +184,7 @@ function pintarPainel() {
         ${blocoMerchant(e.merchant)}
         ${e.aviso ? `<div class="ifood-aviso warn" id="ifood-aviso-estado">${esc(e.aviso)}</div>` : ""}
         ${estado.status?.ultimoErro ? `<div class="ifood-aviso bad">${esc(estado.status.ultimoErro)}</div>` : ""}
+        ${textoAtencao(estado.status?.atencao) ? `<div class="ifood-aviso warn" id="ifood-atencao">${esc(textoAtencao(estado.status.atencao))}</div>` : ""}
         <div class="ifood-info-linha">
           <span>Conectada em</span><strong>${e.conectadaEm ? fmtDataHora(e.conectadaEm) : "—"}</strong>
         </div>
@@ -175,6 +193,8 @@ function pintarPainel() {
         </div>
         <div class="ifood-acoes">${acoes.join("") || '<span class="ifood-tudo-ok">Integração conectada. Sincronização de dados chega em uma próxima fase.</span>'}</div>
       </div>
+
+      ${blocoOrder(estado.status?.order)}
 
       ${e.merchant ? `
         <div class="ifood-card">

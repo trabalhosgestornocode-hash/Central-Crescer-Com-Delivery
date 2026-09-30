@@ -1,8 +1,8 @@
 // Events do iFood — poller (um ciclo) e loop serial.
 //
 // CICLO (`executarCiclo`)
-//   lease -> reprocessa pendentes -> lista merchants (conexões vivas)
-//     -> por grupo: poll -> persistir/processar -> (renova lease) -> ACK
+//   lease -> reprocessa pendentes -> lista conexões elegíveis
+//     -> por grupo (isolado): poll -> persistir/processar -> (renova lease) -> ACK
 //
 // SEM setInterval: o próximo ciclo só nasce quando o anterior TERMINA (loop serial
 // com espera calculada). Nunca há dois ciclos na mesma instância; entre instâncias
@@ -16,10 +16,19 @@
 // FENCING LEVE: o lease é renovado imediatamente antes do ACK. Se foi perdido
 // (worker parado por muito tempo), NÃO reconhece — o outro poller cuida; o evento
 // volta e a UNIQUE impede efeito duplicado.
+//
+// MULTI-LOJA: uma conexão NUNCA impede o polling das outras.
+//   1. Seleção (modo distribuído): só conexões com credencial `order`; `reauth_required` é pulada sem chamar
+//      o iFood e sai no resultado como `conexoesIgnoradas` (monitorável).
+//   2. Isolamento: cada grupo roda no seu try/catch; a falha vira `conexoesComFalha` (conexão, merchant
+//      mascarado, código, etapa, horário) e o ciclo segue. Só quando TODOS os grupos falham o erro sobe
+//      (o loop aplica backoff — mesmo comportamento de antes com uma única conexão).
+//   Globais de propósito (param o ciclo inteiro): 429 (throttling é do app, não da loja) e lease perdido.
 
 import { IFOOD_APP_ORDER, IFOOD_EVENTS } from "./ifood.constants.js";
 import { IFOOD_ERROS } from "./ifood.errors.js";
 import { ifoodLog, mascararId } from "./ifood.logsafe.js";
+import { mensagemSegura } from "./ifoodAcoes.util.js";
 import * as eventsClient from "./ifoodEvents.client.js";
 import { processarLote, reprocessarPendentes, enviarAcks } from "./ifoodEvents.service.js";
 import { processarDetalhesPendentes } from "./ifoodOrder.service.js";
@@ -32,6 +41,15 @@ export function montarGrupos(conexoes, escopo, tamanho = IFOOD_EVENTS.maxMerchan
   }
   return conexoes.map((c) => ({ conexaoId: c.id, merchantIds: [c.merchant_id] }));
 }
+
+// Mensagem de erro para log: além do "Bearer ***" de mensagemSegura, remove qualquer header de autorização inteiro.
+const erroParaLog = (e) => mensagemSegura(e).replace(/authorization\s*[:=]\s*(bearer\s+)?\S+/gi, "[header removido]");
+
+// Falha de token/credencial daquela conexão (e não do polling em si).
+const ERROS_DE_AUTENTICACAO = new Set([
+  IFOOD_ERROS.IFOOD_CREDENCIAL_NAO_ENCONTRADA, IFOOD_ERROS.IFOOD_REFRESH_FALHOU, IFOOD_ERROS.IFOOD_TOKEN_EXPIRADO,
+  IFOOD_ERROS.IFOOD_APP_SEM_CREDENCIAL, IFOOD_ERROS.IFOOD_TOKEN_TROCA_FALHOU,
+]);
 
 /**
  * @param {{
@@ -78,72 +96,123 @@ export function criarPoller({
     const reproc = await reprocessarPendentes({ repo, agora, log })
       .catch((e) => { log("warn", "events.reprocessar_falhou", { erro: String(e?.message ?? e).slice(0, 200) }); return null; });
 
-    const conexoes = await repo.listarConexoesComMerchant();
+    // Distribuído (escopo 'conexao'): só conexões com credencial `order`. Centralizado de teste (escopo 'app'):
+    // o token é do app, não há credencial por conexão — todas as conexões com merchant.
+    const escopo = token.escopoDoToken?.() ?? "conexao";
+    const conexoes = escopo === "app" ? await repo.listarConexoesComMerchant() : await repo.listarConexoesElegiveisParaEvents();
     if (conexoes.length === 0) {
       log("info", "events.sem_merchants", {});
       return (info.ultimoEstado = { estado: "SEM_MERCHANTS", reprocessados: reproc?.tentados ?? 0 });
     }
     const porMerchant = new Map(conexoes.map((c) => [c.merchant_id, c]));
-    const grupos = montarGrupos(conexoes, token.escopoDoToken?.() ?? "conexao");
+
+    // reauth_required: o refresh já falhou e só uma nova autorização resolve — NÃO chama o iFood por ela.
+    const conexoesIgnoradas = [];
+    const aptas = conexoes.filter((c) => {
+      if (c.credencial_order_status !== "reauth_required") return true;
+      const ignorada = { conexaoId: c.id, merchant: mascararId(c.merchant_id), motivo: "reauth_required", em: agora().toISOString() };
+      conexoesIgnoradas.push(ignorada);
+      log("warn", "events.conexao_ignorada", ignorada);
+      return false;
+    });
+    const grupos = montarGrupos(aptas, escopo);
 
     const total = { polls: 0, eventos: 0, novos: 0, reentregas: 0, acks: 0 };
+    const conexoesComFalha = [];
+    let primeiroErro = null;
+
     for (const grupo of grupos) {
-      let merchantIds = grupo.merchantIds;
-      let eventos;
-      for (let tentativa = 1; tentativa <= 2; tentativa += 1) {
-        try {
-          total.polls += 1;
-          eventos = await pollGrupo(grupo, merchantIds);
-          break;
-        } catch (e) {
-          if (e?.codigo === IFOOD_ERROS.IFOOD_RATE_LIMITED) {
-            log("warn", "events.rate_limited", { polls: total.polls });
-            return (info.ultimoEstado = { estado: "RATE_LIMITED", ...total });
-          }
-          // 403: o token não acessa alguns merchants. Tira SÓ eles e tenta de novo uma vez.
-          const nao = e?.codigo === IFOOD_ERROS.IFOOD_MERCHANT_SEM_PERMISSAO ? e.details?.unauthorizedMerchants : null;
-          if (tentativa === 1 && Array.isArray(nao) && nao.length) {
-            log("warn", "events.merchants_sem_permissao", { merchants: nao.map(mascararId) });
-            merchantIds = merchantIds.filter((m) => !nao.includes(m));
-            if (merchantIds.length === 0) { eventos = []; break; }
-            continue;
-          }
-          throw e;
-        }
+      const etapa = { atual: "polling" };
+      try {
+        const global = await processarGrupo(grupo, { porMerchant, total, etapa });
+        if (global) return (info.ultimoEstado = { ...global, ...total, conexoesComFalha, conexoesIgnoradas });
+      } catch (e) {
+        primeiroErro ??= e;
+        const falha = {
+          conexaoId: grupo.conexaoId,
+          merchant: grupo.merchantIds.length === 1 ? mascararId(grupo.merchantIds[0]) : `${grupo.merchantIds.length} merchants`,
+          codigo: e?.codigo ?? "ERRO_INTERNO",
+          etapa: etapa.atual === "polling" && ERROS_DE_AUTENTICACAO.has(e?.codigo) ? "autenticacao" : etapa.atual,
+          em: agora().toISOString(),
+        };
+        conexoesComFalha.push(falha);
+        // Nunca token/header/segredo: só código, status HTTP e a mensagem sanitizada.
+        log("error", "events.conexao_falhou", { ...falha, status: e?.details?.status ?? null, erro: erroParaLog(e) });
       }
-      if (!eventos || eventos.length === 0) continue;   // 204: nada a fazer, nada a reconhecer
-
-      total.eventos += eventos.length;
-      // Persistir + processar. Se lançar, NADA é reconhecido (o evento volta no próximo polling).
-      const { idsParaAck, resumo } = await processarLote({ eventosBrutos: eventos, conexoesPorMerchant: porMerchant, repo, agora, log });
-      total.novos += resumo.novos;
-      total.reentregas += resumo.reentregas;
-      log("info", "events.lote", { ...resumo });
-
-      if (idsParaAck.length === 0) continue;
-
-      // Fencing leve: ainda sou o titular? Senão, não reconheço.
-      const renovado = await adquirir();
-      temLease = renovado.adquirido;
-      if (!renovado.adquirido) {
-        log("error", "events.lease_perdido_antes_do_ack", { titular: renovado.holder });
-        return (info.ultimoEstado = { estado: "LEASE_PERDIDO", ...total });
-      }
-
-      const r = await enviarAcks({
-        idsParaAck, repo, agora, log,
-        dividir: client.dividirEmLotesDeAck,
-        confirmar: (ids) => comToken(grupo.conexaoId, (accessToken) => client.confirmarEventos({ accessToken, eventIds: ids, http })),
-      });
-      total.acks += r.confirmados;
     }
+
+    // Todas as conexões aptas falharam (banco fora, iFood fora, ou a única loja): o erro sobe e o loop aplica
+    // backoff. Com pelo menos uma bem-sucedida, o ciclo termina PARCIAL e segue no intervalo normal.
+    if (grupos.length > 0 && conexoesComFalha.length === grupos.length) throw primeiroErro;
+
     if (detalhes) {
       // Falha aqui não derruba o ciclo: os eventos já foram persistidos e reconhecidos.
       total.detalhes = await processarDetalhesPendentes({
         repo, token, http, conexoesPorMerchant: porMerchant, agora, log, ...(detalhes.client ? { client: detalhes.client } : {}),
       }).catch((e) => { log("warn", "order.detalhes_passo_falhou", { erro: String(e?.message ?? e).slice(0, 200) }); return null; });
     }
-    return (info.ultimoEstado = { estado: "OK", ...total });
+    const estado = conexoesComFalha.length ? "PARCIAL" : grupos.length ? "OK" : "SEM_CONEXOES_APTAS";
+    return (info.ultimoEstado = { estado, ...total, conexoesComFalha, conexoesIgnoradas });
+  }
+
+  /**
+   * Um grupo (uma conexão no distribuído; um lote de merchants no centralizado): poll -> persistir/processar
+   * -> renovar lease -> ACK. Devolve um estado GLOBAL que encerra o ciclo (429, lease perdido) ou null.
+   * Lança em falha daquele grupo (quem chama isola). `etapa.atual` diz onde parou.
+   */
+  async function processarGrupo(grupo, { porMerchant, total, etapa }) {
+    let merchantIds = grupo.merchantIds;
+    let eventos;
+    for (let tentativa = 1; tentativa <= 2; tentativa += 1) {
+      try {
+        total.polls += 1;
+        eventos = await pollGrupo(grupo, merchantIds);
+        break;
+      } catch (e) {
+        if (e?.codigo === IFOOD_ERROS.IFOOD_RATE_LIMITED) {
+          log("warn", "events.rate_limited", { polls: total.polls });
+          return { estado: "RATE_LIMITED" };
+        }
+        // 403: o token não acessa alguns merchants. Tira SÓ eles e tenta de novo uma vez.
+        const nao = e?.codigo === IFOOD_ERROS.IFOOD_MERCHANT_SEM_PERMISSAO ? e.details?.unauthorizedMerchants : null;
+        if (tentativa === 1 && Array.isArray(nao) && nao.length) {
+          log("warn", "events.merchants_sem_permissao", { merchants: nao.map(mascararId) });
+          merchantIds = merchantIds.filter((m) => !nao.includes(m));
+          if (merchantIds.length === 0) { eventos = []; break; }
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (!eventos || eventos.length === 0) return null;   // 204: nada a fazer, nada a reconhecer
+
+    total.eventos += eventos.length;
+    // Persistir + processar. Se lançar, NADA é reconhecido (o evento volta no próximo polling).
+    etapa.atual = "persistir";
+    const { idsParaAck, resumo } = await processarLote({ eventosBrutos: eventos, conexoesPorMerchant: porMerchant, repo, agora, log });
+    total.novos += resumo.novos;
+    total.reentregas += resumo.reentregas;
+    log("info", "events.lote", { ...resumo });
+
+    if (idsParaAck.length === 0) return null;
+
+    // Fencing leve: ainda sou o titular? Senão, não reconheço.
+    etapa.atual = "lease";
+    const renovado = await adquirir();
+    temLease = renovado.adquirido;
+    if (!renovado.adquirido) {
+      log("error", "events.lease_perdido_antes_do_ack", { titular: renovado.holder });
+      return { estado: "LEASE_PERDIDO" };
+    }
+
+    etapa.atual = "ack";
+    const r = await enviarAcks({
+      idsParaAck, repo, agora, log,
+      dividir: client.dividirEmLotesDeAck,
+      confirmar: (ids) => comToken(grupo.conexaoId, (accessToken) => client.confirmarEventos({ accessToken, eventIds: ids, http })),
+    });
+    total.acks += r.confirmados;
+    return null;
   }
 
   /** Shutdown gracioso: libera o lease para outro poller assumir sem esperar o TTL. */
@@ -169,9 +238,11 @@ export function criarLoopDoPoller({
   let acordar = null;
   let promessaLoop = null;
 
+  // SEM unref(): entre ciclos este timer é o que mantém o processo do worker vivo. Com unref (e sem
+  // health server) o Node saía com código 0 logo depois do 1º ciclo, sem liberar o lease.
+  // O shutdown não depende disso: parar() chama acordar() -> clearTimeout.
   const dormir = sleep ?? ((ms) => new Promise((resolve) => {
     const t = setTimeout(() => { acordar = null; resolve(); }, ms);
-    t.unref?.();
     acordar = () => { clearTimeout(t); acordar = null; resolve(); };
   }));
 
