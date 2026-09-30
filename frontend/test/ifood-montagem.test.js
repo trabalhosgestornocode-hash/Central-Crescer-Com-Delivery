@@ -57,10 +57,12 @@ describe("frontend — iFood ligado de ponta a ponta", () => {
     assert.doesNotMatch(trecho, /merchantId/i);
   });
 
-  test("api.js: nenhuma função de Order/Events/operação de pedido foi adicionada nesta fase", () => {
-    const nomes = [...ler("api.js").matchAll(/export const (ifood[A-Za-z]+)/g)].map((m) => m[1]);
+  test("api.js: nenhuma função de Order/Events/operação de pedido — só a LEITURA da lista de pedidos (GET)", () => {
+    const api = ler("api.js");
+    const nomes = [...api.matchAll(/export const (ifood[A-Za-z]+)/g)].map((m) => m[1]);
     const suspeitos = nomes.filter((n) => /Order|Pedido|Polling|Ack|Confirm|Dispatch|Ready|Cancel|Handshake/i.test(n));
-    assert.deepEqual(suspeitos, []);
+    assert.deepEqual(suspeitos, ["ifoodPedidos"]);
+    assert.match(api, /export const ifoodPedidos = \(\) => getJson\(/, "ifoodPedidos é só GET, sem parâmetros");
   });
 
   test("ifood.js: nunca lê ou grava token/secret/verifier em localStorage", () => {

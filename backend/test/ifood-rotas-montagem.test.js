@@ -80,7 +80,7 @@ describe("ifoodRouter — rotas expostas", () => {
     for (const r of [
       "POST /oauth/start", "POST /oauth/complete",
       "GET /merchants", "POST /merchants/link", "GET /merchants/:merchantId",
-      "GET /status", "DELETE /",
+      "GET /status", "DELETE /", "GET /pedidos",
     ]) assert.ok(rotas.includes(r), `falta a rota ${r}`);
   });
 
@@ -202,6 +202,12 @@ describe("HTTP — autenticação, módulo, permissão e tenant", async () => {
 
     test(`${papel}: tem integracoes.ver — GET /status passa da autorização (tenant sem unidade -> 400, não 403)`, async () => {
       const r = await chamar(server, { method: "GET", url: "/api/v1/status", headers: semUnidade(papel) });
+      assert.equal(r.status, 400);
+      assert.match(JSON.stringify(r.json), /loja/i);
+    });
+
+    test(`${papel}: tem integracoes.ver — GET /pedidos (só leitura) passa da autorização (tenant sem unidade -> 400, não 403)`, async () => {
+      const r = await chamar(server, { method: "GET", url: "/api/v1/pedidos", headers: semUnidade(papel) });
       assert.equal(r.status, 400);
       assert.match(JSON.stringify(r.json), /loja/i);
     });

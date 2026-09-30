@@ -421,6 +421,34 @@ export function rotuloImpactoRepasse(v) {
   return v === true ? "Sim" : v === false ? "Não" : "Não informado";
 }
 
+// --- Pedidos iFood — rótulos do estado OFICIAL (status_oficial, vindo dos eventos) ---
+export const STATUS_PEDIDO_UI = Object.freeze({
+  PLACED: { rotulo: "Novo", classe: "warn" },
+  CONFIRMED: { rotulo: "Confirmado", classe: "info" },
+  SEPARATION_STARTED: { rotulo: "Em preparo", classe: "info" },
+  SEPARATION_ENDED: { rotulo: "Preparo finalizado", classe: "info" },
+  READY_TO_PICKUP: { rotulo: "Pronto para retirada", classe: "info" },
+  DISPATCHED: { rotulo: "Despachado", classe: "info" },
+  CONCLUDED: { rotulo: "Concluído", classe: "ok" },
+  CANCELLED: { rotulo: "Cancelado", classe: "bad" },
+});
+
+/** Status oficial -> {rotulo, classe}. Sem status (evento ainda não processado) ou desconhecido: nunca inventa um estado. */
+export function rotuloStatusPedido(status) {
+  if (!status) return { rotulo: "Aguardando status", classe: "muted" };
+  return STATUS_PEDIDO_UI[status] ?? { rotulo: String(status), classe: "muted" };
+}
+
+const TIPO_PEDIDO_UI = Object.freeze({ DELIVERY: "Entrega", TAKEOUT: "Retirada", DINE_IN: "Consumo no local", INDOOR: "Indoor" });
+
+/** Tipo + quem entrega (entrega própria x entrega iFood). */
+export function rotuloTipoPedido(tipo, entregaPor) {
+  if (!tipo) return "—";
+  const base = TIPO_PEDIDO_UI[tipo] ?? String(tipo);
+  if (tipo !== "DELIVERY") return base;
+  return entregaPor === "MERCHANT" ? `${base} própria` : entregaPor === "IFOOD" ? `${base} iFood` : base;
+}
+
 /** @param {{status,quantidadeVendas,quantidadeConciliadas,quantidadeDivergentes,quantidadeIncompletas}} sv */
 export function saudeSalesVsEvents(sv) {
   return {

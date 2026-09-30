@@ -40,6 +40,19 @@ export async function atualizarPedido({ pedido, campos, condicoes = {} }) {
 }
 
 /**
+ * Lista da tela "Pedidos iFood": SÓ do tenant e SÓ colunas sem dado pessoal (cliente, documento,
+ * endereço, itens e pagamentos nunca são lidos aqui). Mais recentes primeiro.
+ */
+export const COLUNAS_LISTA_PEDIDOS = "order_id, display_id, status_oficial, status_oficial_em, order_type, delivery_by, "
+  + "sales_channel, is_test, order_created_at, criado_em, total_order_amount, action_state, action_uncertain";
+
+export async function listarPedidosDoTenant({ organizacaoId, unidadeId, limite }) {
+  return ok(await supabase.from(T.pedidos).select(COLUNAS_LISTA_PEDIDOS)
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+    .order("criado_em", { ascending: false }).limit(limite)) ?? [];
+}
+
+/**
  * Candidatos à busca de detalhes: ainda sem sucesso, com tentativas sobrando e dentro da retenção
  * (o iFood só guarda os detalhes por 7 dias). O service aplica o backoff e a janela de 10 min.
  */
