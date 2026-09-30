@@ -3,12 +3,15 @@
 
 import * as v from "../../shared/validar.js";
 import { ifoodErro, IFOOD_ERROS } from "./ifood.errors.js";
-import { IFOOD_APP_TYPES } from "./ifood.constants.js";
+import { appTypesDoOAuth } from "./ifoodToken.service.js";
 
-/** appType: 'analytics' | 'financial'. Erro de domínio (não 400 genérico). */
+/**
+ * appType: 'analytics' | 'financial', + 'order' em homologação ou quando o app de Order está configurado
+ * (IFOOD_ORDER_CLIENT_*). Fonte única: appTypesDoOAuth(). Erro de domínio (não 400 genérico).
+ */
 export function validarAppType(valor) {
   const s = typeof valor === "string" ? valor.trim().toLowerCase() : "";
-  if (!IFOOD_APP_TYPES.includes(s)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
+  if (!appTypesDoOAuth().includes(s)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
   return s;
 }
 
