@@ -169,9 +169,11 @@ export function criarLoopDoPoller({
   let acordar = null;
   let promessaLoop = null;
 
+  // SEM unref(): entre ciclos este timer é o que mantém o processo do worker vivo. Com unref (e sem
+  // health server) o Node saía com código 0 logo depois do 1º ciclo, sem liberar o lease.
+  // O shutdown não depende disso: parar() chama acordar() -> clearTimeout.
   const dormir = sleep ?? ((ms) => new Promise((resolve) => {
     const t = setTimeout(() => { acordar = null; resolve(); }, ms);
-    t.unref?.();
     acordar = () => { clearTimeout(t); acordar = null; resolve(); };
   }));
 

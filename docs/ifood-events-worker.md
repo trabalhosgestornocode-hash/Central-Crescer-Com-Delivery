@@ -76,8 +76,10 @@ Validar no banco de **teste** (com autorização) continua sendo a prova final (
 
 | | |
 |---|---|
-| Processo | separado do `server.js` (nunca importado por ele). `npm run worker:ifood` (distribuído, usa `.env`) · `npm run worker:ifood:centralized-test` (Teste (C); só ambiente técnico; passa pela trava) |
-| Liga com | `IFOOD_EVENTS_WORKER_ENABLED=true` (padrão desligado: sai sem fazer nada) |
+| Processo | separado do `server.js` (nunca importado por ele). `npm run worker:ifood` = `node src/worker-ifood/index.js` (produção/Render: **só variáveis de ambiente do processo**, nenhum arquivo `.env`) · `npm run dev:worker:ifood` (desenvolvimento local, carrega `backend/.env`) · `npm run worker:ifood:centralized-test` (Teste (C); só ambiente técnico; passa pela trava) |
+| Liga com | `IFOOD_EVENTS_WORKER_ENABLED=true` (padrão desligado: sai com 0 **antes** de carregar a config do backend) |
+| Vivo entre ciclos | o timer do sono **não** usa `unref()`: sem health server ele é o que mantém o processo vivo (antes, o Node saía com 0 depois do 1º ciclo) |
+| Código de saída | 0 só em SIGTERM/SIGINT que terminou bem; o loop terminar sozinho → log `worker.loop_terminou_inesperadamente`, lease liberado, saída **1** (`src/worker-ifood/lifecycle.js`) |
 | Intervalo | 30 s de **início a início**, nunca menos (piso forçado no código e na config); ciclo lento desconta o tempo gasto |
 | Laço | **serial**, sem `setInterval`: o próximo ciclo só nasce quando o anterior termina |
 | Erros | backoff crescente 2 s → 4 s → … teto 5 min; `429`/throttling: +60 s; sucesso zera |
@@ -87,8 +89,11 @@ Validar no banco de **teste** (com autorização) continua sendo a prova final (
 | Memória | mínima: cache do token e contadores. Todo o estado vive no banco |
 | Health | opcional (`IFOOD_EVENTS_HEALTH_PORT`): `/health` com modo, último ciclo e resultado — sem segredos |
 
-**Render (NÃO aplicado):** um `type: worker` (ou private service) separado, `startCommand: cd backend && npm run worker:ifood`,
-com as mesmas variáveis Supabase/iFood do `web` e `IFOOD_EVENTS_WORKER_ENABLED=true`. `render.yaml` **não foi alterado**.
+**Render (NÃO aplicado):** um Background Worker separado, `rootDir: backend`, build `npm ci`,
+start **`node src/worker-ifood/index.js`** (ou `npm run worker:ifood`; nunca `--env-file`: não há `.env` no Render),
+**1 instância**, com as mesmas variáveis Supabase/iFood do `web` — inclusive o **mesmo** `IFOOD_TOKEN_SECRET` (senão não
+decifra os tokens) e `IFOOD_ORDER_CLIENT_ID/SECRET`. `IFOOD_EVENTS_WORKER_ENABLED=true` só na ativação autorizada.
+Nunca `IFOOD_HOMOLOGATION_MODE`, `IFOOD_CENTRALIZED_*` ou `IFOOD_FINANCIAL_FIXTURE` no worker. `render.yaml` **não foi alterado**.
 
 ## 5. Como Events obtém token
 

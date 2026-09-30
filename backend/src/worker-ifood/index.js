@@ -1,12 +1,15 @@
 // Entrypoint do worker de Events do iFood — PROCESSO SEPARADO (nunca iniciado
 // pelo backend HTTP principal; server.js não importa nada daqui).
 //
-//   npm run worker:ifood                       (distribuído — modelo oficial; usa o .env)
-//   npm run worker:ifood:centralized-test      (Teste (C), só ambiente técnico; ver scripts/)
+//   npm run worker:ifood                       produção/Render: SÓ variáveis de ambiente do processo
+//                                              (= node src/worker-ifood/index.js; nenhum arquivo .env)
+//   npm run dev:worker:ifood                   desenvolvimento local (carrega backend/.env)
+//   npm run worker:ifood:centralized-test      Teste (C), só ambiente técnico; ver scripts/
 //
 // Padrão operacional reaproveitado de worker-comunicacao/: config fail-closed,
 // loop SERIAL (sem setInterval), shutdown gracioso em SIGTERM/SIGINT,
 // uncaughtException derruba o processo, unhandledRejection só loga.
+// Sinais, término inesperado e código de saída: ./lifecycle.js.
 //
 // UM poller por vez: `ifood_poller_lease` (relógio do banco). Restart seguro:
 // o lease é liberado no shutdown gracioso; em queda brusca vence sozinho (TTL) e
@@ -14,27 +17,33 @@
 //
 // MEMÓRIA: estado em memória mínimo (o cache do token e contadores). Todo o
 // resto vive no banco; reiniciar não perde nada.
+//
+// ORDEM DE CARGA: a config do worker (pura) é lida ANTES de qualquer módulo que exija a config do
+// backend (Supabase etc.). Desligado = sai com 0 sem carregar mais nada.
 
-import http from "node:http";
-import os from "node:os";
-import { randomBytes } from "node:crypto";
 import { carregarConfigWorkerIfood } from "./config.js";
-import { ifoodLog } from "../modules/ifood/ifood.logsafe.js";
-import * as tokenService from "../modules/ifood/ifoodToken.service.js";
-import * as repoEvents from "../modules/ifood/ifoodEvents.repository.js";
-import * as repoOrder from "../modules/ifood/ifoodOrder.repository.js";
-import { criarPoller, criarLoopDoPoller } from "../modules/ifood/ifoodEvents.poller.js";
-import { MODOS_AUTH } from "../modules/ifood/ifoodAuthProvider.js";
-import { centralizadoTestePermitido } from "../modules/ifood/ifood.ambienteTeste.js";
+import { ifoodLog } from "../modules/ifood/ifood.logsafe.js";   // puro: sem config/ambiente
 
 const cfg = carregarConfigWorkerIfood();
-for (const a of cfg.avisos) ifoodLog("warn", "worker.config_ajustada", { aviso: a });
 
 if (!cfg.habilitado) {
   ifoodLog("info", "worker.desabilitado", { motivo: "IFOOD_EVENTS_WORKER_ENABLED != true" });
   console.log("iFood Events worker DESABILITADO (IFOOD_EVENTS_WORKER_ENABLED != true).");
   process.exit(0);
 }
+
+const http = await import("node:http");
+const os = await import("node:os");
+const { randomBytes } = await import("node:crypto");
+const tokenService = await import("../modules/ifood/ifoodToken.service.js");
+const repoEvents = await import("../modules/ifood/ifoodEvents.repository.js");
+const repoOrder = await import("../modules/ifood/ifoodOrder.repository.js");
+const { criarPoller, criarLoopDoPoller } = await import("../modules/ifood/ifoodEvents.poller.js");
+const { MODOS_AUTH } = await import("../modules/ifood/ifoodAuthProvider.js");
+const { centralizadoTestePermitido } = await import("../modules/ifood/ifood.ambienteTeste.js");
+const { executarWorker } = await import("./lifecycle.js");
+
+for (const a of cfg.avisos) ifoodLog("warn", "worker.config_ajustada", { aviso: a });
 
 const modo = tokenService.modoDeAutenticacao();
 if (modo === MODOS_AUTH.CENTRALIZED_TEST) {
@@ -66,22 +75,5 @@ if (cfg.healthPort) {
   }).listen(cfg.healthPort);
 }
 
-let encerrando = false;
-async function encerrar(sinal) {
-  if (encerrando) return;
-  encerrando = true;
-  ifoodLog("info", "worker.encerrando", { sinal });
-  const forca = setTimeout(() => { console.error("shutdown demorou demais: saindo"); process.exit(1); }, 30_000);
-  forca.unref?.();
-  try { await loop.parar(); } catch (e) { ifoodLog("error", "worker.erro_no_shutdown", { erro: String(e?.message ?? e).slice(0, 200) }); }
-  health?.close();
-  ifoodLog("info", "worker.encerrado", {});
-  process.exit(0);
-}
-process.on("SIGTERM", () => encerrar("SIGTERM"));
-process.on("SIGINT", () => encerrar("SIGINT"));
-process.on("uncaughtException", (e) => { ifoodLog("error", "worker.uncaughtException", { erro: String(e?.message ?? e).slice(0, 300) }); process.exit(1); });
-process.on("unhandledRejection", (e) => { ifoodLog("error", "worker.unhandledRejection", { erro: String(e?.message ?? e).slice(0, 300) }); });
-
 ifoodLog("info", "worker.iniciado", { modo, intervaloMs: loop.intervaloMs, leaseTtlS: cfg.leaseTtlS, holder });
-loop.iniciar();
+executarWorker({ loop, poller, health, log: ifoodLog });
