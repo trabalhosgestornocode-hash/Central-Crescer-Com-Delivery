@@ -84,6 +84,7 @@ Validar no banco de **teste** (com autorização) continua sendo a prova final (
 | Laço | **serial**, sem `setInterval`: o próximo ciclo só nasce quando o anterior termina |
 | Erros | backoff crescente 2 s → 4 s → … teto 5 min; `429`/throttling: +60 s; sucesso zera |
 | Um poller por vez | `ifood_poller_lease` (TTL 90 s; mínimo 45 s e ≥ 2,5× o intervalo) |
+| Multi-loja | uma loja **nunca** impede as outras. Distribuído: só conexões **com credencial `order`** (`listarConexoesElegiveisParaEvents`); `reauth_required` é pulada sem chamar o iFood (`conexoesIgnoradas`). Cada conexão roda isolada: a falha vira `conexoesComFalha` (conexão, merchant mascarado, código, etapa, horário) e log `events.conexao_falhou`; ciclo `PARCIAL`. Só quando **todas** falham o erro sobe (backoff). Globais: 429 (throttling do app) e lease perdido |
 | Restart limpo | SIGTERM/SIGINT: termina o ciclo em andamento, **libera o lease**, sai (30 s de limite) → o novo processo assume na hora |
 | Queda brusca | o lease vence sozinho (≤ TTL); eventos sem ACK voltam; `UNIQUE(event_id)` evita duplicidade; pendentes `RECEBIDO/FALHOU` são reprocessados |
 | Memória | mínima: cache do token e contadores. Todo o estado vive no banco |
