@@ -49,6 +49,9 @@ export function somaCentavos(valores) {
   }, 0);
 }
 
+/** hasTransferImpact não informado (null) — nunca tratado como "sem impacto". */
+export const impactoDesconhecido = (e) => e?.temImpactoRepasse !== true && e?.temImpactoRepasse !== false;
+
 // Tolerância monetária ÚNICA do módulo — 1 centavo. Cobre diferença de
 // arredondamento entre APIs que formatam o mesmo valor com casas decimais
 // calculadas de formas distintas (ex.: percentual de taxa aplicado em pontos
@@ -136,14 +139,15 @@ export function conciliarSalesComEvents(vendasList, eventosList) {
     const impactantes = eventosDaVenda.filter((e) => e.temImpactoRepasse === true);
     // Eventos SEM impacto continuam aparecendo na explicação (Bloco 1) —
     // só não entram na soma comparada contra o saldo.
-    const semImpacto = eventosDaVenda.filter((e) => e.temImpactoRepasse !== true);
+    const semImpacto = eventosDaVenda.filter((e) => e.temImpactoRepasse === false);
+    const impactoNaoInformado = eventosDaVenda.filter(impactoDesconhecido);
     const saleBalanceCentavos = paraCentavos(venda.resumoFinanceiro?.saldo);
     const somaImpactantesCentavos = somaCentavos(impactantes.map((e) => e.valor));
 
     // Nenhum evento encontrado pra esta venda: não é divergência (pode ainda
     // não ter chegado, ou o período consultado não cobriu os eventos dela)
-    // — é dado incompleto.
-    const comparacao = eventosDaVenda.length === 0
+    // — é dado incompleto. Evento com impacto desconhecido também: a soma não fecha.
+    const comparacao = eventosDaVenda.length === 0 || impactoNaoInformado.length > 0
       ? { status: STATUS_CONCILIACAO.INCOMPLETO, divergenciaCentavos: null }
       : classificarComparacao(saleBalanceCentavos, somaImpactantesCentavos);
 
@@ -154,6 +158,7 @@ export function conciliarSalesComEvents(vendasList, eventosList) {
       somaEventosImpactantes: centavosParaReais(somaImpactantesCentavos),
       eventosComImpacto: impactantes.length,
       eventosSemImpacto: semImpacto.length,
+      eventosImpactoNaoInformado: impactoNaoInformado.length,
       eventos: eventosDaVenda.map((e) => ({ nome: e.nome, valor: e.valor, temImpactoRepasse: e.temImpactoRepasse })),
       status: comparacao.status,
       divergencia: centavosParaReais(comparacao.divergenciaCentavos),
@@ -186,7 +191,8 @@ export function conciliarEventsComSettlements(eventosList, settlementsData) {
     const impactantes = eventos.filter((e) => e.temImpactoRepasse === true);
     return {
       eventosComImpacto: impactantes.length,
-      eventosSemImpacto: eventos.filter((e) => e.temImpactoRepasse !== true).length,
+      eventosSemImpacto: eventos.filter((e) => e.temImpactoRepasse === false).length,
+      eventosImpactoNaoInformado: eventos.filter(impactoDesconhecido).length,
       somaEventosImpactantes: eventosList ? centavosParaReais(somaCentavos(impactantes.map((e) => e.valor))) : null,
       settlementBalance: settlementsData?.saldo ?? null,
       closingItemsTotal: settlementsData ? centavosParaReais(somaCentavos((settlementsData.titulos ?? []).map((t) => t.valor))) : null,
@@ -196,16 +202,20 @@ export function conciliarEventsComSettlements(eventosList, settlementsData) {
   }
 
   const impactantes = eventosList.filter((e) => e.temImpactoRepasse === true);
-  const semImpacto = eventosList.filter((e) => e.temImpactoRepasse !== true);
+  const semImpacto = eventosList.filter((e) => e.temImpactoRepasse === false);
+  const impactoNaoInformado = eventosList.filter(impactoDesconhecido);
   const somaEventosCentavos = somaCentavos(impactantes.map((e) => e.valor));
   const settlementBalanceCentavos = paraCentavos(settlementsData.saldo);
   const closingItemsTotalCentavos = somaCentavos((settlementsData.titulos ?? []).map((t) => t.valor));
 
-  const comparacao = classificarComparacao(settlementBalanceCentavos, somaEventosCentavos);
+  const comparacao = impactoNaoInformado.length > 0
+    ? { status: STATUS_CONCILIACAO.INCOMPLETO, divergenciaCentavos: null }
+    : classificarComparacao(settlementBalanceCentavos, somaEventosCentavos);
 
   return {
     eventosComImpacto: impactantes.length,
     eventosSemImpacto: semImpacto.length,
+    eventosImpactoNaoInformado: impactoNaoInformado.length,
     somaEventosImpactantes: centavosParaReais(somaEventosCentavos),
     settlementBalance: settlementsData.saldo ?? null,
     closingItemsTotal: centavosParaReais(closingItemsTotalCentavos),
@@ -429,8 +439,12 @@ export function conciliarFinancial({ periodo, sales, events, settlements, reconc
     creditos: centavosParaReais(somaCentavos((eventosList ?? []).filter((e) => e.tipoValor === "credito").map((e) => e.valor))),
     debitos: centavosParaReais(somaCentavos((eventosList ?? []).filter((e) => e.tipoValor === "debito").map((e) => e.valor))),
     comImpactoTransferencia: (eventosList ?? []).filter((e) => e.temImpactoRepasse === true).length,
-    semImpactoTransferencia: (eventosList ?? []).filter((e) => e.temImpactoRepasse !== true).length,
-    saldoImpactante: centavosParaReais(somaCentavos((eventosList ?? []).filter((e) => e.temImpactoRepasse === true).map((e) => e.valor))),
+    semImpactoTransferencia: (eventosList ?? []).filter((e) => e.temImpactoRepasse === false).length,
+    impactoNaoInformado: (eventosList ?? []).filter(impactoDesconhecido).length,
+    // Com algum impacto desconhecido o saldo impactante não é calculável (null, não um parcial).
+    saldoImpactante: (eventosList ?? []).some(impactoDesconhecido)
+      ? null
+      : centavosParaReais(somaCentavos((eventosList ?? []).filter((e) => e.temImpactoRepasse === true).map((e) => e.valor))),
   } : null;
 
   const settlementsResumo = settlements ? {

@@ -1,5 +1,6 @@
 // Carrega e valida variáveis de ambiente. Rode com: node --env-file=.env
 import crypto from "node:crypto";
+import { resolverFixtureFinanceira } from "../modules/ifood/ifood.ambienteTeste.js";
 
 const obrigatorias = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"];
 const faltando = obrigatorias.filter((k) => !process.env[k]);
@@ -35,6 +36,16 @@ const profileSelectionSecret = process.env.PROFILE_SELECTION_TOKEN_SECRET
   || crypto.createHmac("sha256", process.env.SUPABASE_SERVICE_ROLE_KEY)
       .update("crescer:profile-selection:v1").digest("hex");
 
+// Fixture financeira do iFood: valor inválido ou `true` fora do ambiente de teste
+// impede a subida — nunca roda em silêncio contra produção.
+let ifoodFinancialFixture;
+try {
+  ifoodFinancialFixture = resolverFixtureFinanceira(process.env);
+} catch (e) {
+  console.error(`[config] ${e.message}`);
+  process.exit(1);
+}
+
 export const config = {
   port: Number(process.env.PORT) || 3001,
   supabaseUrl: process.env.SUPABASE_URL,
@@ -68,6 +79,9 @@ export const config = {
   // `estaEmHomologacaoIfood()` em ifoodToken.service.js.
   ifood: {
     homologacao: process.env.IFOOD_HOMOLOGATION_MODE === "true",
+    // Pedir a FIXTURE do iFood em Sales/Financial Events (default false = dado real).
+    // Independente de `homologacao`. Só o backend lê; nunca vem de query/frontend.
+    financialFixture: ifoodFinancialFixture,
     analytics: {
       clientId: process.env.IFOOD_ANALYTICS_CLIENT_ID || null,
       clientSecret: process.env.IFOOD_ANALYTICS_CLIENT_SECRET || null,

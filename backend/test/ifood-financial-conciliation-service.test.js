@@ -32,7 +32,7 @@ function repoFalso(opts = {}) {
   };
 }
 
-const RESP_SALES = { page: 1, size: 1, beginSalesDate: "2025-01-01", endSalesDate: "2025-01-31", sales: [{ id: "s1", shortId: "1", currentStatus: "CONCLUDED", billingSummary: { saleBalance: 91, billingEntries: [] } }], total: 1, pageCount: 1 };
+const RESP_SALES = { page: 1, size: 1, beginSalesDate: "2025-01-01", endSalesDate: "2025-01-31", sales: [{ id: "s1", shortId: "1", currentStatus: "CONCLUDED", merchant: { id: MERCHANT_ID }, billingSummary: { saleBalance: 91, billingEntries: [] } }], total: 1, pageCount: 1 };
 const RESP_EVENTS = { page: 1, size: 100, hasNextPage: false, financialEvents: [{ name: "ORDER_PAYMENT", hasTransferImpact: true, amount: { value: "91" }, reference: { type: "ORDER", id: "s1" } }] };
 const RESP_SETTLEMENTS = { beginDate: "2025-01-01", endDate: "2025-01-31", balance: 91, merchantId: MERCHANT_ID, settlements: [{ id: "t1", type: "REPASSE", amount: 91, status: "SUCCEED", accountDetails: {}, paymentDate: "2025-01-31" }] };
 const RESP_RECONCILIATION = [{ downloadPath: null, createdAt: "2025-02-01T00:00:00Z", metadata: null }];

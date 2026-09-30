@@ -9,7 +9,9 @@
 // bruto.
 //
 // REGRA DESTA FASE (Bloco M): toda chamada às APIs Financial carrega
-// `homologacao: true` de forma explícita e INCONDICIONAL — esta fase existe
+// `homologacao: true` de forma explícita — EXCETO Sales e Financial Events, onde
+// o chamador (backend, nunca o frontend) pode pedir `homologacao: false` (dado
+// real; ver listarSales). Esta fase existe
 // só para produzir evidência de homologação junto ao iFood (Bloco Q: nada
 // disso alimenta produção, dashboard ou lançamento diário ainda). Isso é
 // deliberadamente diferente do mecanismo opt-in geral do ifoodHttp.client:
@@ -21,7 +23,7 @@
 // fonte oficial e as divergências entre guia e Referência de API).
 
 import { ifoodErro, IFOOD_ERROS } from "./ifood.errors.js";
-import { ifoodLog } from "./ifood.logsafe.js";
+import { ifoodLog, mascararId } from "./ifood.logsafe.js";
 import { IFOOD_APPS, IFOOD_ROTAS, IFOOD_FINANCIAL_LIMITES } from "./ifood.constants.js";
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
@@ -91,16 +93,72 @@ async function resolverConexaoComMerchant({ organizacaoId, unidadeId, repo }) {
   return conexao;
 }
 
+/** Data local (AAAA-MM-DD) de um instante UTC no fuso da loja; null se não der para calcular. */
+function dataLocal(isoUtc, timezone) {
+  const ms = Date.parse(isoUtc ?? "");
+  if (Number.isNaN(ms)) return null;
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "America/Sao_Paulo" }).format(new Date(ms));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Confere se a resposta de Sales é mesmo da loja e do período pedidos. PURA.
+ * Venda de outro merchant (ou sem merchant) é DESCARTADA — nunca segue como dado
+ * da loja. Período divergente só marca a resposta como inválida.
+ */
+export function validarRespostaSales({ normalizado, merchantId, periodo }) {
+  const daLoja = [];
+  const recebidos = new Set();
+  let descartadas = 0;
+  for (const v of normalizado.vendas) {
+    if (v?.merchant?.id && v.merchant.id === merchantId) { daLoja.push(v); continue; }
+    descartadas += 1;
+    recebidos.add(v?.merchant?.id ? mascararId(v.merchant.id) : "ausente");
+  }
+
+  const retornado = normalizado.periodo;
+  const periodoConfere = retornado.inicio && retornado.fim
+    ? retornado.inicio === periodo.inicio && retornado.fim === periodo.fim
+    : null;
+  const foraDoPeriodo = daLoja.filter((v) => {
+    const d = dataLocal(v.criadoEm, v.merchant?.timezone);
+    return d === null || d < periodo.inicio || d > periodo.fim;
+  }).length;
+
+  const motivos = [];
+  if (descartadas > 0) motivos.push("MERCHANT_DIVERGENTE");
+  if (periodoConfere === false) motivos.push("PERIODO_RETORNADO_DIVERGENTE");
+  if (foraDoPeriodo > 0) motivos.push("VENDAS_FORA_DO_PERIODO");
+
+  return {
+    vendas: daLoja,
+    validacao: {
+      valida: motivos.length === 0,
+      motivos,
+      merchant: { esperado: mascararId(merchantId), recebidosDivergentes: [...recebidos], vendasDescartadas: descartadas },
+      periodo: { solicitado: { inicio: periodo.inicio, fim: periodo.fim }, retornado, confere: periodoConfere, vendasForaDoPeriodo: foraDoPeriodo },
+    },
+  };
+}
+
 /**
  * API Sales — GET /financial/v3.0/merchants/{merchantId}/sales.
  *
- * @param {{organizacaoId, unidadeId, inicio, fim, page?, deps?: {repo, http, token}}} p
- * @returns {Promise<{periodo, pagina, vendas: object[]}>}
+ * `homologacao`: true (padrão) envia `x-request-homologation: true` — o iFood
+ * devolve uma FIXTURE fixa (outro merchant, outro período); false consulta o
+ * dado real da loja. Só aceita boolean; qualquer outro valor mantém o padrão.
+ *
+ * @param {{organizacaoId, unidadeId, inicio, fim, page?, homologacao?: boolean, deps?: {repo, http, token}}} p
+ * @returns {Promise<{periodo, pagina, vendas: object[], validacao: object}>}
  */
-export async function listarSales({ organizacaoId, unidadeId, inicio, fim, page, deps = {} }) {
+export async function listarSales({ organizacaoId, unidadeId, inicio, fim, page, homologacao, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
+  const enviarHeaderHomologacao = typeof homologacao === "boolean" ? homologacao : true;
 
   const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const periodo = validarPeriodo({ inicio, fim }, { maxDias: IFOOD_FINANCIAL_LIMITES.sales.maxDias, campo: "a data de venda" });
@@ -110,19 +168,31 @@ export async function listarSales({ organizacaoId, unidadeId, inicio, fim, page,
     conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(
       IFOOD_ROTAS.financialSales(conexao.merchant_id, periodo.inicio, periodo.fim, pagina),
-      { accessToken, rotulo: "financial.sales", contexto: "financial", homologacao: true },
+      { accessToken, rotulo: "financial.sales", contexto: "financial", homologacao: enviarHeaderHomologacao },
     ),
   });
 
   const normalizado = mapearRespostaSales(resposta);
+  const { vendas, validacao } = validarRespostaSales({ normalizado, merchantId: conexao.merchant_id, periodo });
+
+  if (!validacao.valida) {
+    ifoodLog("warn", "financial.sales.resposta_invalida", {
+      organizacaoId, unidadeId, homologacao: enviarHeaderHomologacao,
+      motivos: validacao.motivos, merchantEsperado: validacao.merchant.esperado,
+      merchantsRecebidos: validacao.merchant.recebidosDivergentes, vendasDescartadas: validacao.merchant.vendasDescartadas,
+      periodoRetornado: validacao.periodo.retornado, vendasForaDoPeriodo: validacao.periodo.vendasForaDoPeriodo,
+    });
+  }
 
   ifoodLog("info", "financial.sales.consultado", {
-    organizacaoId, unidadeId,
+    organizacaoId, unidadeId, homologacao: enviarHeaderHomologacao,
     inicio: periodo.inicio, fim: periodo.fim, page: pagina,
-    total: normalizado.pagina.total, retornados: normalizado.vendas.length,
+    total: normalizado.pagina.total, retornados: normalizado.vendas.length, validas: vendas.length, valida: validacao.valida,
   });
 
-  return normalizado;
+  // O período exposto é o SOLICITADO; o que a API ecoou fica só em validacao.periodo.retornado.
+  // `fonte` marca fixture x real: nenhum consumidor pode tratar "fixture" como dado da loja.
+  return { fonte: enviarHeaderHomologacao ? "fixture" : "real", periodo: { inicio: periodo.inicio, fim: periodo.fim }, pagina: normalizado.pagina, vendas, validacao };
 }
 
 // ===========================================================================
@@ -160,18 +230,50 @@ function validarTamanhoPagina(valor) {
 }
 
 /**
+ * Confere se os eventos são da loja consultada. PURA. Cada evento traz
+ * `receiver` (businessId/merchantId): de outro merchant -> DESCARTADO; sem
+ * receiver -> mantido (a requisição já foi pelo merchant da conexão) e contado.
+ */
+export function validarRespostaFinancialEvents({ normalizado, merchantId }) {
+  const daLoja = [];
+  const recebidos = new Set();
+  let descartados = 0;
+  let semMerchant = 0;
+  for (const e of normalizado.eventos) {
+    const id = e?.comerciante?.id;
+    if (!id) { semMerchant += 1; daLoja.push(e); continue; }
+    if (id === merchantId) { daLoja.push(e); continue; }
+    descartados += 1;
+    recebidos.add(mascararId(id));
+  }
+  const motivos = descartados > 0 ? ["MERCHANT_DIVERGENTE"] : [];
+  return {
+    eventos: daLoja,
+    validacao: {
+      valida: motivos.length === 0,
+      motivos,
+      merchant: { esperado: mascararId(merchantId), recebidosDivergentes: [...recebidos], eventosDescartados: descartados, eventosSemMerchant: semMerchant },
+    },
+  };
+}
+
+/**
  * API Financial Events — GET /financial/v3.0/merchants/{merchantId}/financial-events.
  * `idSaldo` (filtro alternativo por período de apuração de saldo) existe na
  * spec oficial mas não está documentado o suficiente para eu implementar com
  * segurança — fica de fora deste incremento (ver ifood.constants.js).
  *
- * @param {{organizacaoId, unidadeId, inicio?, fim?, page?, size?, deps?: {repo, http, token}}} p
- * @returns {Promise<{pagina, eventos: object[]}>}
+ * `homologacao`: mesma regra de listarSales — só o boolean `false` tira o
+ * header de fixture; qualquer outro valor mantém o padrão (true).
+ *
+ * @param {{organizacaoId, unidadeId, inicio?, fim?, page?, size?, homologacao?: boolean, deps?: {repo, http, token}}} p
+ * @returns {Promise<{periodo, pagina, eventos: object[], validacao: object}>}
  */
-export async function listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, page, size, deps = {} }) {
+export async function listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, page, size, homologacao, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
+  const enviarHeaderHomologacao = typeof homologacao === "boolean" ? homologacao : true;
 
   const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const periodo = resolverPeriodoEvents({ inicio, fim });
@@ -182,19 +284,29 @@ export async function listarFinancialEvents({ organizacaoId, unidadeId, inicio, 
     conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(
       IFOOD_ROTAS.financialEvents(conexao.merchant_id, periodo.inicio, periodo.fim, pagina, tamanho),
-      { accessToken, rotulo: "financial.events", contexto: "financial", homologacao: true },
+      { accessToken, rotulo: "financial.events", contexto: "financial", homologacao: enviarHeaderHomologacao },
     ),
   });
 
   const normalizado = mapearRespostaFinancialEvents(resposta);
+  const { eventos, validacao } = validarRespostaFinancialEvents({ normalizado, merchantId: conexao.merchant_id });
+
+  if (!validacao.valida) {
+    ifoodLog("warn", "financial.events.resposta_invalida", {
+      organizacaoId, unidadeId, homologacao: enviarHeaderHomologacao, motivos: validacao.motivos,
+      merchantEsperado: validacao.merchant.esperado, merchantsRecebidos: validacao.merchant.recebidosDivergentes,
+      eventosDescartados: validacao.merchant.eventosDescartados,
+    });
+  }
 
   ifoodLog("info", "financial.events.consultado", {
-    organizacaoId, unidadeId,
+    organizacaoId, unidadeId, homologacao: enviarHeaderHomologacao,
     inicio: periodo.inicio, fim: periodo.fim, page: pagina, size: tamanho,
-    retornados: normalizado.eventos.length, temProximaPagina: normalizado.pagina.temProximaPagina,
+    retornados: normalizado.eventos.length, validos: eventos.length, valida: validacao.valida,
+    temProximaPagina: normalizado.pagina.temProximaPagina,
   });
 
-  return { periodo: { inicio: periodo.inicio, fim: periodo.fim }, ...normalizado };
+  return { fonte: enviarHeaderHomologacao ? "fixture" : "real", periodo: { inicio: periodo.inicio, fim: periodo.fim }, pagina: normalizado.pagina, eventos, validacao };
 }
 
 // ===========================================================================
@@ -534,9 +646,12 @@ export async function obterConciliacaoFinanceira({ organizacaoId, unidadeId, ini
 
   const competenciaEfetiva = competencia || (typeof inicio === "string" ? inicio.slice(0, 7) : null);
 
+  // As 5 fontes seguem na FIXTURE (Settlements/Reconciliation/Anticipations ainda não
+  // têm modo real) — Sales/Events fixos em fixture para NUNCA misturar dado real com
+  // fixture. Resultado é diagnóstico de homologação (`fonte: "fixture"`), não definitivo.
   const resultados = await Promise.allSettled([
-    listarSales({ organizacaoId, unidadeId, inicio, fim, deps }),
-    listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, deps }),
+    listarSales({ organizacaoId, unidadeId, inicio, fim, homologacao: true, deps }),
+    listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, homologacao: true, deps }),
     listarSettlements({ organizacaoId, unidadeId, modo: "calculo", inicio, fim, deps }),
     competenciaEfetiva
       ? obterReconciliation({ organizacaoId, unidadeId, competencia: competenciaEfetiva, deps })
@@ -565,5 +680,5 @@ export async function obterConciliacaoFinanceira({ organizacaoId, unidadeId, ini
     statusGeral: resultado.conciliacao.statusGeral, fontesComErro: fontesComErro.map((f) => f.fonte),
   });
 
-  return { ...resultado, fontesComErro };
+  return { ...resultado, fonte: "fixture", fontesComErro };
 }

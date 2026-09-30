@@ -18,7 +18,7 @@ import {
   precisaConfirmarTrocaMerchant, textoConfirmacaoTroca, mensagemErroAutorizacao, avisoDesconexao,
   derivarFontesConciliacao, derivarPendenciasHomologacao,
   saudeSalesVsEvents, saudeEventsVsSettlements, saudeSettlementsVsReconciliation,
-  montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml,
+  montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
 } from "./ifoodEstado.js";
 
 const IFOOD_LOGO = "/assets/menu-dashboard-ifood.png";
@@ -278,6 +278,7 @@ function pintarEtapaOAuth(appType, passo, subtitulo) {
         ${!temCodigo ? `
           <p>Gere um código de vínculo e autorize o aplicativo no Portal do Parceiro iFood.</p>
           <button class="btn btn-primary" id="ifood-gerar">Gerar código</button>
+          ${appType === "analytics" ? `<button class="btn btn-ghost" id="ifood-pular">Pular por enquanto</button>` : ""}
         ` : `
           <div class="ifood-codigo-box">
             <div class="ifood-codigo-rotulo">Código de vínculo</div>
@@ -817,7 +818,7 @@ function linhaEvento(ev, idx) {
       <td>${esc(ev.descricao ?? "—")}</td>
       <td>${ev.dataHora ? fmtDataHora(ev.dataHora) : "—"}</td>
       <td class="num"><span class="${ev.tipoValor === "debito" ? "ifin-debito" : "ifin-credito"}">${fmtMoeda(ev.valor)}</span></td>
-      <td><span class="pill ${ev.temImpactoRepasse ? "ok" : "muted"}">${ev.temImpactoRepasse ? "Sim" : "Não"}</span></td>
+      <td><span class="pill ${ev.temImpactoRepasse === true ? "ok" : "muted"}">${rotuloImpactoRepasse(ev.temImpactoRepasse)}</span></td>
       <td>${fmtDataSimples(ev.dataRepasseEsperada)}</td>
       <td><button class="btn btn-ghost btn-sm" data-tipo="evento" data-idx="${idx}">Ver detalhes</button></td>
     </tr>`;
@@ -1174,6 +1175,7 @@ export function conteudoAbaOverview(f, status = estado.status) {
         <div class="ifood-info-linha"><span>Débitos financeiros</span><strong>${fmtMoeda(r.eventos?.debitos)}</strong></div>
         <div class="ifood-info-linha"><span>Com impacto no repasse</span><strong>${r.eventos?.comImpactoTransferencia ?? "—"}</strong></div>
         <div class="ifood-info-linha"><span>Sem impacto no repasse</span><strong>${r.eventos?.semImpactoTransferencia ?? "—"}</strong></div>
+        ${r.eventos?.impactoNaoInformado ? `<div class="ifood-info-linha"><span>Impacto no repasse não informado</span><strong>${r.eventos.impactoNaoInformado}</strong></div>` : ""}
         <div class="ifood-info-linha"><span>Saldo impactante</span><strong>${fmtMoeda(r.eventos?.saldoImpactante)}</strong></div>
       </div>
       <div class="ifcon-fonte">
@@ -1252,7 +1254,7 @@ function linhaDivergencia(d) {
 // em cada venda.
 function trilhaVenda(v) {
   const eventosHtml = v.eventos.length
-    ? v.eventos.map((e) => `<div class="iftr-evento ${e.temImpactoRepasse ? "" : "iftr-sem-impacto"}"><span>${esc(e.nome ?? "—")}</span><strong>${fmtMoeda(e.valor)}</strong>${!e.temImpactoRepasse ? '<span class="iftr-tag">sem impacto no repasse</span>' : ""}</div>`).join("")
+    ? v.eventos.map((e) => `<div class="iftr-evento ${e.temImpactoRepasse === true ? "" : "iftr-sem-impacto"}"><span>${esc(e.nome ?? "—")}</span><strong>${fmtMoeda(e.valor)}</strong>${e.temImpactoRepasse === false ? '<span class="iftr-tag">sem impacto no repasse</span>' : e.temImpactoRepasse === true ? "" : '<span class="iftr-tag">impacto no repasse não informado</span>'}</div>`).join("")
     : `<div class="iftr-evento iftr-vazio">Nenhum evento encontrado para esta venda no período</div>`;
 
   return `
@@ -1296,6 +1298,7 @@ function conteudoAbaConciliation(f) {
         <div class="ifood-info-linha"><span>Quantidade</span><strong>${r.eventos.quantidade}</strong></div>
         <div class="ifood-info-linha"><span>Com impacto no repasse</span><strong>${r.eventos.comImpactoTransferencia}</strong></div>
         <div class="ifood-info-linha"><span>Sem impacto</span><strong>${r.eventos.semImpactoTransferencia}</strong></div>
+        ${r.eventos.impactoNaoInformado ? `<div class="ifood-info-linha"><span>Impacto não informado</span><strong>${r.eventos.impactoNaoInformado}</strong></div>` : ""}
         <div class="ifood-info-linha"><span>Saldo impactante</span><strong>${fmtMoeda(r.eventos.saldoImpactante)}</strong></div>
       ` : "")}
       ${resumoFonte("Settlements", !!r.settlements, r.settlements ? `
@@ -1549,7 +1552,7 @@ function pintarFinanceiro() {
         ["Gatilho", evento.gatilho ?? "—"],
         ["Data/hora", evento.dataHora ? fmtDataHora(evento.dataHora) : "—"],
         ["Valor", fmtMoeda(evento.valor)],
-        ["Impacta repasse", evento.temImpactoRepasse ? "Sim" : "Não"],
+        ["Impacta repasse", rotuloImpactoRepasse(evento.temImpactoRepasse)],
         ["Repasse esperado", fmtDataSimples(evento.dataRepasseEsperada)],
       ], evento);
     }));
