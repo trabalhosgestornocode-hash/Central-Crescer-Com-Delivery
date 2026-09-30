@@ -12,7 +12,7 @@
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
-import { MODOS } from "./comunicacao.constants.js";
+import { MODOS, LIMITE_PADRAO_DESTINATARIOS_ATIVOS } from "./comunicacao.constants.js";
 import { DISPONIBILIDADE_IFOOD_PADRAO, disponibilidadeValida, normalizarDisponibilidade } from "./comunicacao.disponibilidade.js";
 
 function intEnv(chave, padrao) {
@@ -38,8 +38,13 @@ const PADRAO = Object.freeze({
     // Nenhum default deste arquivo liga comunicação: `modo` nasce DISABLED e a habilitação é fail-closed.
     max_proativas_por_minuto: intEnv("WHATSAPP_MAX_PROACTIVE_PER_MINUTE", 5),
     max_proativas_por_minuto_por_organizacao: intEnv("WHATSAPP_MAX_PROACTIVE_PER_MINUTE_PER_ORG", 3),
+    // LIMITE POR DESTINATÁRIO / dia (o "contato" é a pessoa com telefone).
     max_por_contato_por_dia: intEnv("WHATSAPP_MAX_PER_CONTACT_PER_DAY", 3),
+    // LIMITE POR ORGANIZAÇÃO / dia (104): todos os destinatários da empresa somados — separado do limite por destinatário acima.
+    max_por_organizacao_por_dia: intEnv("WHATSAPP_MAX_PER_ORG_PER_DAY", 20),
   }),
+  // Teto de destinatários ATIVOS por empresa (o banco lê a MESMA chave: comunicacao_max_destinatarios_ativos()).
+  destinatarios: Object.freeze({ max_ativos_por_organizacao: LIMITE_PADRAO_DESTINATARIOS_ATIVOS }),
   // TTL da mensagem: expira_em = disponivel_em + ttl_horas (aviso velho nunca sai).
   ttl_horas: 24,
   // Disponibilidade dos dados do iFood (D-1) — ver comunicacao.disponibilidade.js. Configurável no Painel.
@@ -53,7 +58,7 @@ const PADRAO = Object.freeze({
  * tabela/linha não existir — nunca lança por isso (config ausente não pode
  * derrubar o pipeline; ver REGRA DE OURO de shared/auditoria.js#auditar,
  * mesmo espírito aqui).
- * @param {'modo'|'janelas'|'cooldowns_horas'|'limites'|'ttl_horas'|'jitter_max_minutos'|'disponibilidade_ifood'} chave
+ * @param {'modo'|'janelas'|'cooldowns_horas'|'limites'|'ttl_horas'|'jitter_max_minutos'|'disponibilidade_ifood'|'destinatarios'} chave
  * @param {{supabase?: any}} [deps]
  */
 export async function obterConfig(chave, deps = {}) {
@@ -74,6 +79,12 @@ export async function obterTtlHoras(deps = {}) {
 /** Teto do jitter determinístico em ms, já normalizado. @param {{supabase?: any}} [deps] */
 export async function obterJitterMaxMs(deps = {}) {
   return positivoOuPadrao(await obterConfig("jitter_max_minutos", deps), PADRAO.jitter_max_minutos) * 60_000;
+}
+
+/** Teto de destinatários ativos por empresa, já normalizado (inteiro > 0; corrompido cai no padrão — nunca "sem limite"). */
+export async function obterLimiteDestinatariosAtivos(deps = {}) {
+  const v = (await obterConfig("destinatarios", deps))?.max_ativos_por_organizacao;
+  return Number.isInteger(v) && v > 0 ? v : LIMITE_PADRAO_DESTINATARIOS_ATIVOS;
 }
 
 /** Horários de disponibilidade do iFood (D-1), normalizados: ausente/corrompido cai no PADRÃO (a espera nunca é desligada). */

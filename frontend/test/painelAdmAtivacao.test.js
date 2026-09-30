@@ -10,7 +10,7 @@ globalThis.window ??= {};
 globalThis.window.supabase = { createClient: () => ({ auth: { getSession: async () => ({ data: { session: { access_token: "jwt-identidade-fake" } } }) } }) };
 
 const { painelAdmApi } = await import("../src/painelAdmApi.js");
-const { htmlAtivacaoPiloto, htmlAcaoHabilitacao, htmlDrawerComunicacao } = await import("../src/painelAdmViews.js");
+const { htmlAtivacaoComunicacao, htmlDrawerComunicacao } = await import("../src/painelAdmViews.js");
 
 let capturado;
 const fetchOriginal = globalThis.fetch;
@@ -52,85 +52,56 @@ describe("painelAdmApi — contrato das alavancas (Bearer, sem x-context-token)"
   });
 });
 
-const ATIV_PRONTA = { modo: "DISABLED", piloto: { ativo: true, quantidadeDestinos: 1 }, organizacoesHabilitadas: 1, destinatariosPermitidos: true, pendenciasElegiveis: 1, gateway: "conectado" };
 
-describe("htmlAtivacaoPiloto — painel global", () => {
-  test("sem dados -> vazio (o painel é acessório e nunca derruba a tela)", () => {
-    assert.equal(htmlAtivacaoPiloto(null), "");
-  });
-  test("modo pausado + tudo pronto: 'Ativar piloto' habilitado, confirmação forte OCULTA com o texto exigido e Cancelar/Ativar piloto", () => {
-    const html = htmlAtivacaoPiloto(ATIV_PRONTA);
-    assert.match(html, /data-padm-acao="pedir-ativar-piloto"(?![^>]*disabled)/);
+const ATIV_PRONTA = { modo: "DISABLED", organizacoesHabilitadas: 3, organizacoesComEnvioAutomatico: 2, pendenciasElegiveis: 4, gateway: "conectado" };
+describe("API por empresa — contratos e autorização", () => {
+  const casos = [
+    ["comunicacaoPainelEmpresa", ["org/1"], "GET", "/org%2F1/whatsapp", null],
+    ["comunicacaoCriarDestinatario", ["o1", { nome: "Contato", telefone: "11987654321", categorias: ["pendencia_d1"] }], "POST", "/o1/destinatarios", { nome: "Contato", telefone: "11987654321", categorias: ["pendencia_d1"] }],
+    ["comunicacaoAtualizarDestinatario", ["o1", "ce/1", { nome: "Novo nome" }], "PUT", "/o1/destinatarios/ce%2F1", { nome: "Novo nome" }],
+    ["comunicacaoDestinatarioCategorias", ["o1", "ce1", []], "PUT", "/o1/destinatarios/ce1/categorias", { categorias: [] }],
+    ["comunicacaoDestinatarioAtivo", ["o1", "ce1", false], "PUT", "/o1/destinatarios/ce1/ativo", { ativo: false }],
+    ["comunicacaoDestinatarioAutorizar", ["o1", "ce1"], "POST", "/o1/destinatarios/ce1/autorizar", { confirmacaoExplicita: true }],
+    ["comunicacaoDestinatarioOptOut", ["o1", "ce1"], "POST", "/o1/destinatarios/ce1/opt-out", { confirmacaoExplicita: true }],
+    ["comunicacaoEnvioAutomatico", ["o1", true], "PUT", "/o1/envio-automatico", { ligar: true, confirmacaoExplicita: true }],
+    ["comunicacaoEnvioAutomatico", ["o1", false], "PUT", "/o1/envio-automatico", { ligar: false }],
+    ["comunicacaoLimites", ["o1", { limiteDiarioOrg: 20, cooldownMinutos: null }], "PUT", "/o1/limites", { limiteDiarioOrg: 20, cooldownMinutos: null }],
+    ["comunicacaoDryRun", ["o1"], "POST", "/o1/dry-run", {}],
+  ];
+  for (const [metodo, args, http, sufixo, corpo] of casos) {
+    test(`${metodo}: ${http} ${sufixo} ${JSON.stringify(corpo)}`, async () => {
+      await painelAdmApi[metodo](...args);
+      assert.equal(rotaDe(capturado.url), `/api/v1/administrativo/comunicacao/organizacoes${sufixo}`);
+      assert.equal(capturado.opcoes.method ?? "GET", http);
+      assert.equal(capturado.opcoes.headers.Authorization, "Bearer jwt-identidade-fake");
+      assert.ok(!Object.keys(capturado.opcoes.headers).some((k) => k.toLowerCase() === "x-context-token"));
+      if (corpo !== null) assert.deepEqual(JSON.parse(capturado.opcoes.body), corpo);
+    });
+  }
+});
+describe("ativação global após o piloto", () => {
+  test("sem dados não inventa estado", () => assert.equal(htmlAtivacaoComunicacao(null), ""));
+  test("várias empresas podem ativar com confirmação inicialmente oculta", () => {
+    const html = htmlAtivacaoComunicacao(ATIV_PRONTA);
+    assert.match(html, /data-padm-acao="pedir-ativar-comunicacao"(?![^>]*disabled)/);
     assert.match(html, /class="padm-ativacao-confirmar" hidden/);
-    assert.ok(html.includes("Você está prestes a ativar a comunicação automática do piloto. Existe 1 organização habilitada e 1 pendência D-1 elegível. Ao confirmar, o worker poderá criar e enviar a mensagem conforme as regras de horário, jitter, rate-limit, JIT e allowlist."));
-    assert.ok(html.includes('data-padm-acao="cancelar-ativar-piloto"'));
-    assert.ok(html.includes('data-padm-acao="confirmar-ativar-piloto"'));
-    assert.ok(html.includes("Comunicação automática pausada"));
-    assert.doesNotMatch(html, /desativar-comunicacao/);
+    for (const acao of ["cancelar", "confirmar"]) assert.ok(html.includes(`data-padm-acao="${acao}-ativar-comunicacao"`));
+    assert.match(html, /2 empresa\(s\) com envio automático e 4 pendência/);
+    assert.doesNotMatch(html, /ativar-piloto|allowlist/);
   });
-  test("pré-requisito ausente (piloto inativo, 0/2 empresas, destino fora, gateway fora) -> 'Ativar piloto' DESABILITADO", () => {
-    for (const parcial of [
-      { piloto: { ativo: false, quantidadeDestinos: 1 } }, { piloto: { ativo: true, quantidadeDestinos: 2 } },
-      { organizacoesHabilitadas: 0 }, { organizacoesHabilitadas: 2 }, { destinatariosPermitidos: false }, { gateway: "desconectado" },
-    ]) {
-      assert.match(htmlAtivacaoPiloto({ ...ATIV_PRONTA, ...parcial }), /data-padm-acao="pedir-ativar-piloto"[^>]*disabled/, JSON.stringify(parcial));
+  test("gateway ausente ou desconectado não permite ativar", () => {
+    for (const gateway of [undefined, "desconectado", "instavel", "desconhecido"]) {
+      assert.match(htmlAtivacaoComunicacao({ ...ATIV_PRONTA, gateway }), /data-padm-acao="pedir-ativar-comunicacao"[^>]*disabled/);
     }
   });
-  test("modo NORMAL -> mostra 'Desativar comunicação' (kill switch sem modal) e nenhuma opção de ativar", () => {
-    const html = htmlAtivacaoPiloto({ ...ATIV_PRONTA, modo: "NORMAL" });
-    assert.ok(html.includes('data-padm-acao="desativar-comunicacao"'));
-    assert.ok(html.includes("Desativar comunicação"));
-    assert.ok(html.includes("Comunicação automática ativa"));
-    assert.doesNotMatch(html, /pedir-ativar-piloto|confirmar-ativar-piloto/);
+  test("modo NORMAL oferece desligamento imediato", () => {
+    const html = htmlAtivacaoComunicacao({ ...ATIV_PRONTA, modo: "NORMAL" });
+    assert.match(html, /data-padm-acao="desativar-comunicacao"/);
+    assert.doesNotMatch(html, /pedir-ativar-comunicacao|confirmar-ativar-comunicacao/);
   });
-  test("nunca expõe telefone, enum de engenharia ou segredo", () => {
-    for (const modo of ["DISABLED", "NORMAL"]) {
-      const html = htmlAtivacaoPiloto({ ...ATIV_PRONTA, modo });
-      assert.doesNotMatch(html, /\+55|\d{8,}|DISABLED|CONNECTED|COMUNICACAO_PILOTO|E164/i);
-    }
-  });
-});
-
-const detalhe = (checklist = {}, extra = {}) => ({
-  organizacao: { organizacaoId: "o1", nome: "Grupo Jailton e Vanessa", status: "ativa" },
-  configuracao: { status: "PRONTA_PARA_PILOTO", timezone: "America/Sao_Paulo", tiposPermitidos: ["dashboard_ifood_d1"], destinatario: { telefoneMascarado: "+558********88", verificado: true, consentimento: true, optOut: false, perfilOperacionalId: "p1" } },
-  checklistPiloto: { responsavelDefinido: true, telefoneValido: true, consentimento: true, telefoneVerificado: true, timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false, ...checklist },
-  unidades: [], tiposAlertaDisponiveis: ["dashboard_ifood_d1"], ...extra,
-});
-
-describe("htmlAcaoHabilitacao — ação da empresa", () => {
-  test("pronta e não habilitada: 'Habilitar comunicação' com confirmação OCULTA, nome da empresa e Cancelar", () => {
-    const html = htmlAcaoHabilitacao(detalhe());
-    assert.ok(html.includes('data-padm-acao="pedir-habilitar-comunicacao"'));
-    assert.match(html, /class="padm-habilitacao-confirmar" hidden/);
-    assert.ok(html.includes("Grupo Jailton e Vanessa"));
-    assert.ok(html.includes('data-padm-acao="cancelar-habilitar-comunicacao"'));
-    assert.ok(html.includes('data-padm-acao="confirmar-habilitar-comunicacao"'));
-    assert.doesNotMatch(html, /desabilitar-comunicacao-org/);
-  });
-  test("faltando consentimento/verificação/perfil/timezone/tipo -> sem botão de habilitar, com orientação", () => {
-    for (const f of [{ consentimento: false }, { telefoneVerificado: false }, { responsavelDefinido: false }, { telefoneValido: false }, { timezone: false }, { tipoAlerta: false }]) {
-      const html = htmlAcaoHabilitacao(detalhe(f));
-      assert.doesNotMatch(html, /pedir-habilitar-comunicacao/, JSON.stringify(f));
-      assert.ok(html.includes("Conclua a configuração"));
-    }
-  });
-  test("já habilitada -> 'Desabilitar comunicação' (sem modal) e nenhuma opção de habilitar", () => {
-    const html = htmlAcaoHabilitacao(detalhe({ organizacaoHabilitada: true }));
-    assert.ok(html.includes('data-padm-acao="desabilitar-comunicacao-org"'));
-    assert.ok(html.includes("Comunicação habilitada"));
-    assert.doesNotMatch(html, /pedir-habilitar-comunicacao|confirmar-habilitar-comunicacao/);
-  });
-  test("sem checklist -> vazio", () => {
-    assert.equal(htmlAcaoHabilitacao({ organizacao: {} }), "");
-  });
-  test("o drawer separa 'Ativação da comunicação' de 'Configuração operacional' e o vocabulário antigo proibido (enviar/Agente Crescer) continua fora", () => {
-    const html = htmlDrawerComunicacao(detalhe(), []);
-    assert.ok(html.includes("Ativação da comunicação"));
-    assert.ok(html.includes("Configuração operacional"));
-    assert.ok(html.indexOf("Ativação da comunicação") < html.indexOf("Configuração operacional"), "ativação e configuração são seções distintas");
-    assert.match(html, /Salvar a configuração nunca habilita nem desabilita a comunicação/);
-    assert.ok(html.includes("Habilitar comunicação"));
-    assert.doesNotMatch(html, /Enviar|Habilitar organização|Ativar comunicação|Agente Crescer/i);
+  test("diagnóstico legado não reativa allowlist nem expõe telefone bruto", () => {
+    const html = htmlAtivacaoComunicacao({ ...ATIV_PRONTA, pilotoLegado: { configurado: true, rotulo: "LEGACY — sem efeito", telefone: "+5511987654321" } });
+    assert.match(html, /LEGACY — sem efeito/);
+    assert.doesNotMatch(html, /5511987654321|ativar-piloto/);
   });
 });

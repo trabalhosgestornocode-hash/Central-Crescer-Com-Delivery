@@ -6,7 +6,7 @@
 // Rodar: node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-reserva-capacidade.test.js
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
-import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
+import { agendarMensagemT, responsavelDoContato, definirTetoDestinatariosT, restaurarTetoDestinatariosT, apagarDestinatariosDasEmpresasT, categoriaParaTipoT, limparCategoriasDeTesteT } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
@@ -29,13 +29,14 @@ const inicioDoDia = () => new Date(Date.now() - 12 * HORA); // "hoje" = últimas
 
 let migracaoOk = true;
 let modoOriginal = null;
+let tetoOriginal = null;
 let orgA = null, orgB = null, unidadeA = null, unidadeA2 = null, unidadeB = null;
 let contaId = null, perfilId = null;
 const contatos = []; // ids criados (limpeza)
 let contatoP = null;  // contato principal
 
 const HABILITADA = async () => ({
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE",
 });
 // janela SEMPRE aberta (00:00–23:59, todos os dias): o relógio real do CI nunca decide o resultado
@@ -55,6 +56,7 @@ before(async () => {
   migracaoOk = (await migracao082Aplicada()) && (await migracao088Aplicada());
   if (!migracaoOk) return;
   modoOriginal = await modoAtual();
+  tetoOriginal = await definirTetoDestinatariosT(200); // 104: a suíte cria muitos responsáveis só para isolar cota/cooldown por contato
   orgA = await criarOrganizacao("TESTE capacidade A — descartável");
   orgB = await criarOrganizacao("TESTE capacidade B — descartável");
   unidadeA = await criarUnidade(orgA, "Unidade Cap A1");
@@ -68,6 +70,8 @@ before(async () => {
 
 after(async () => {
   if (modoOriginal) await definirModo(modoOriginal, {}).catch(() => {});
+  await restaurarTetoDestinatariosT(tetoOriginal);
+  await limparCategoriasDeTesteT();
   if (contatos.length) {
     await supabase.from("comunicacao_mensagens").delete().in("contato_id", contatos);
     await supabase.from("contatos_whatsapp").delete().in("id", contatos);
@@ -80,13 +84,16 @@ after(async () => {
 beforeEach(async () => {
   if (PULAR_INTEGRACAO || !migracaoOk) return;
   await supabase.from("comunicacao_mensagens").delete().in("organizacao_id", [orgA, orgB]);
+  await apagarDestinatariosDasEmpresasT([orgA, orgB]); // 104: destinatários são da EMPRESA — nunca sobram de um teste para o outro
 });
 
 let seq = 0;
 /** Insere uma mensagem crua (fixture) e devolve a linha. `campos` sobrescreve estado/colunas. */
 async function inserir({ org = orgA, unidade = unidadeA, contato = contatoP, tipo = `tipo_${tag}_${++seq}`, campos = {} } = {}) {
+  const ce = await responsavelDoContato({ organizacaoId: org, contatoId: contato, perfilId });
+  await categoriaParaTipoT(org, ce, tipo); // 104: o destinatário só recebe um tipo que uma categoria habilitada mapeie
   const { data, error } = await supabase.from("comunicacao_mensagens").insert({
-    organizacao_id: org, unidade_id: unidade, contato_id: contato, contato_empresa_id: await responsavelDoContato({ organizacaoId: org, contatoId: contato, perfilId }), destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
+    organizacao_id: org, unidade_id: unidade, contato_id: contato, contato_empresa_id: ce, destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
     tipo, conteudo: "aviso", idempotency_key: `cap-${tag}-${++seq}`, status: S.SCHEDULED, disponivel_em: new Date(Date.now() - 60_000).toISOString(),
     ...campos,
   }).select("*").single();
@@ -169,7 +176,7 @@ describe("cota diária por contato — DOIS workers, uma única vaga", { skip: P
       const chamadas = [];
       const original = provider.sendText.bind(provider);
       provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-      const whatsAppService = criarWhatsAppService({ provider, semGateIdentidade: true });
+      const whatsAppService = criarWhatsAppService({ provider, semGateIdentidade: true, semGateModo: true });
       const ctx = { whatsAppService, agora: new Date(), adiamentoMs: 900_000, verificarPendenciaAindaExiste: async () => true, resolverHabilitacao: HABILITADA_SEMPRE };
       const rs = await Promise.all([processarJobReivindicado(a, ctx), processarJobReivindicado(b, ctx)]);
       assert.equal(chamadas.length, 1, `o provider foi chamado ${chamadas.length}x — a 5ª vaga foi vendida duas vezes`);
@@ -264,7 +271,7 @@ describe("DUAS camadas de taxa por minuto — global E organização (ambas prec
       const chamadas = [];
       const original = provider.sendText.bind(provider);
       provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-      const r = await processarJobReivindicado(b, { whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }), agora: new Date(), adiamentoMs: 900_000, verificarPendenciaAindaExiste: async () => true, resolverHabilitacao: HABILITADA_SEMPRE });
+      const r = await processarJobReivindicado(b, { whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true, semGateModo: true }), agora: new Date(), adiamentoMs: 900_000, verificarPendenciaAindaExiste: async () => true, resolverHabilitacao: HABILITADA_SEMPRE });
       assert.equal(chamadas.length, 0, "o provider foi chamado apesar da organização esgotada");
       assert.equal(r.resultado, "ADIADO");
       assert.equal(r.motivo, "RATE_LIMIT");
@@ -306,25 +313,33 @@ describe("o que CONSOME capacidade (e o que não)", { skip: PULAR_INTEGRACAO }, 
     assert.equal(r.resultado, R.INICIADO, `estado que não deveria consumir barrou: ${r.resultado}`);
   });
 
-  test("UNKNOWN nunca deixa de consumir capacidade: um DELIVERY_UNKNOWN de 3 DIAS atrás ainda BLOQUEIA o cooldown do mesmo tipo/unidade (sem limite de tempo)", async (t) => {
+  test("UNKNOWN nunca deixa de consumir capacidade: um DELIVERY_UNKNOWN de 3 DIAS atrás ainda BLOQUEIA o cooldown do MESMO destinatário/tipo/unidade (sem limite de tempo)", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const tipo = `tipo_unk_${tag}`;
-    await inserir({ tipo, contato: await novoContato(), campos: { status: S.DELIVERY_UNKNOWN, entrega_incerta_em: new Date(Date.now() - 3 * DIA).toISOString() } });
+    await inserir({ tipo, campos: { status: S.DELIVERY_UNKNOWN, entrega_incerta_em: new Date(Date.now() - 3 * DIA).toISOString() } });
     const m = await emProcessamento({ tipo });
     assert.equal((await reservar(m, { cooldownHoras: 8 })).resultado, R.COOLDOWN);
   });
 });
 
-describe("COOLDOWN = organização + unidade + tipo (nunca o telefone global)", { skip: PULAR_INTEGRACAO }, () => {
+describe("COOLDOWN = DESTINATÁRIO + organização + unidade + tipo (104: o envio ao João nunca adia a Maria; nunca o telefone global)", { skip: PULAR_INTEGRACAO }, () => {
   const tipo = () => `tipo_cd_${tag}_${++seq}`;
   const recente = () => ({ status: S.SENT, enviado_em: new Date(Date.now() - HORA).toISOString() });
 
-  test("outro CONTATO, mesma organização+unidade+tipo, enviado há 1h -> COOLDOWN (pendência persistente não vira mensagem nova)", async (t) => {
+  test("MESMO destinatário, mesma organização+unidade+tipo, enviado há 1h -> COOLDOWN (pendência persistente não vira mensagem nova)", async (t) => {
+    if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
+    const tp = tipo();
+    await inserir({ tipo: tp, campos: recente() });
+    const m = await emProcessamento({ tipo: tp });
+    assert.equal((await reservar(m, { cooldownHoras: 8 })).resultado, R.COOLDOWN);
+  });
+
+  test("OUTRO destinatário, mesma organização+unidade+tipo, enviado há 1h -> NÃO há cooldown (o envio ao João não adia a Maria)", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const tp = tipo();
     await inserir({ tipo: tp, contato: await novoContato(), campos: recente() });
     const m = await emProcessamento({ tipo: tp });
-    assert.equal((await reservar(m, { cooldownHoras: 8 })).resultado, R.COOLDOWN);
+    assert.equal((await reservar(m, { cooldownHoras: 8 })).resultado, R.INICIADO);
   });
 
   test("mesmo CONTATO mas OUTRA unidade da mesma organização -> NÃO há cooldown", async (t) => {
@@ -361,11 +376,11 @@ describe("COOLDOWN = organização + unidade + tipo (nunca o telefone global)", 
     assert.equal((await reservar(b, { cooldownHoras: 8 })).resultado, R.COOLDOWN, "SENDING conta para o cooldown");
   });
 
-  test("COOLDOWN concorrente: 2 jobs do MESMO escopo reservam juntos -> só um INICIADO", async (t) => {
+  test("COOLDOWN concorrente: 2 jobs do MESMO destinatário/escopo reservam juntos -> só um INICIADO", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const tp = tipo();
     const a = await emProcessamento({ tipo: tp, worker: "cd-A" });
-    const b = await emProcessamento({ tipo: tp, worker: "cd-B", contato: await novoContato() });
+    const b = await emProcessamento({ tipo: tp, worker: "cd-B" });
     const rs = await Promise.all([reservar(a, { cooldownHoras: 8 }), reservar(b, { cooldownHoras: 8 })]);
     assert.deepEqual(contagem(rs), { [R.INICIADO]: 1, [R.COOLDOWN]: 1 });
   });

@@ -203,9 +203,10 @@ describe("cada motivo transitório calcula o seu próprio horário", () => {
     assert.equal(MOTIVO_DA_RESERVA.RATE_LIMIT_DIA, MOTIVOS_BLOQUEIO.RATE_LIMIT);
     assert.equal(MOTIVO_DA_RESERVA.RATE_LIMIT_MINUTO, MOTIVOS_BLOQUEIO.RATE_LIMIT);
     assert.equal(MOTIVO_DA_RESERVA.RATE_LIMIT_MINUTO_ORGANIZACAO, MOTIVOS_BLOQUEIO.RATE_LIMIT, "a camada por organização também adia (transitório)");
-    assert.equal(Object.keys(MOTIVO_DA_RESERVA).length, 4);
+    assert.equal(MOTIVO_DA_RESERVA.RATE_LIMIT_DIA_ORGANIZACAO, MOTIVOS_BLOQUEIO.RATE_LIMIT, "o limite diário da EMPRESA (104) também adia (transitório)");
+    assert.equal(Object.keys(MOTIVO_DA_RESERVA).length, 5);
     // todo resultado de bloqueio da RPC (exceto INICIADO/POSSE_PERDIDA/EXPIRADA, tratados à parte) precisa de motivo mapeado
-    for (const resultado of ["COOLDOWN", "RATE_LIMIT_DIA", "RATE_LIMIT_MINUTO", "RATE_LIMIT_MINUTO_ORGANIZACAO"]) assert.ok(MOTIVO_DA_RESERVA[resultado], `${resultado} sem motivo`);
+    for (const resultado of ["COOLDOWN", "RATE_LIMIT_DIA", "RATE_LIMIT_MINUTO", "RATE_LIMIT_MINUTO_ORGANIZACAO", "RATE_LIMIT_DIA_ORGANIZACAO"]) assert.ok(MOTIVO_DA_RESERVA[resultado], `${resultado} sem motivo`);
     assert.throws(() => { MOTIVO_DA_RESERVA.OUTRO = "x"; }, TypeError, "o mapa é congelado");
   });
 });

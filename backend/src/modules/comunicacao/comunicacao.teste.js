@@ -2,7 +2,7 @@
 // SEM depender do scheduler, do worker, de alerta D-1, de reforço ou de aviso tardio.
 //
 // PRINCÍPIOS
-//   * Fluxo INDEPENDENTE do worker: só roda com o modo global em DISABLED (o worker está pulando ciclos), então nenhum fluxo operacional coexiste.
+//   * Fluxo INDEPENDENTE do worker (mensagem própria, fora do claim). NÃO tem exceção ao KILL SWITCH: com o modo global em DISABLED nenhum teste real sai.
 //   * NUNCA cria/altera alerta. A mensagem tem identidade própria: tipo `teste_comunicacao`, metadados.proposito='teste', origem='teste_painel'.
 //   * Usa o MESMO outbox e as MESMAS RPCs fenced (iniciar_envio / finalizar_envio) — SENT/DELIVERED/READ seguem o pipeline da 095.
 //   * Só passa pelo provider via WhatsAppService (a invariante "Provider.send* só em whatsapp.service.js" continua valendo).
@@ -15,7 +15,8 @@
 import * as filaRepo from "./comunicacao.fila.repo.js";
 import * as tentativasRepo from "./comunicacao.tentativas.repo.js";
 import { classificarErroEnvio } from "./comunicacao.entrega.js";
-import { RESULTADO_FINAL_ENVIO, DESTINO_SEM_ENVIO, STATUS_MENSAGEM, CLASSIFICACAO_ERRO } from "./comunicacao.constants.js";
+import { RESULTADO_FINAL_ENVIO, DESTINO_SEM_ENVIO, STATUS_MENSAGEM, CLASSIFICACAO_ERRO, modoPermiteEnvioReal } from "./comunicacao.constants.js";
+import { modoAtual as lerModoAtual } from "./comunicacao.config.js";
 
 export { TIPO_MENSAGEM_TESTE, PROPOSITO_TESTE, ORIGEM_TESTE_PAINEL, chaveIdempotenciaTeste } from "./comunicacao.fila.repo.js";
 
@@ -46,7 +47,7 @@ export async function criarWhatsAppServiceDoAmbiente(env = process.env) {
   const { criarBaileysGatewayProvider } = await import("./providers/baileysGateway.provider.js");
   const { criarGateIdentidade } = await import("./comunicacao.identidade.js");
   // O gate de identidade vai junto: o serviço do ambiente NUNCA envia se a conta conectada não for a confirmada na aba Conexão.
-  return criarWhatsAppService({ provider: criarBaileysGatewayProvider({ gatewayUrl, segredoHmac }), identidadeConfirmada: criarGateIdentidade({ env }) });
+  return criarWhatsAppService({ provider: criarBaileysGatewayProvider({ gatewayUrl, segredoHmac }), identidadeConfirmada: criarGateIdentidade({ env }), modoAtual: () => lerModoAtual() });
 }
 
 /**
@@ -74,9 +75,10 @@ export async function enviarMensagemTeste({
     await cancelar(DESTINO_SEM_ENVIO.CANCELLED, "LIMITE_DE_TESTES_ATINGIDO");
     return { resultado: "LIMITE_ATINGIDO", mensagemId: mensagem.id };
   }
-  // Rechecagem do modo IMEDIATAMENTE antes da fronteira do envio (fail-closed: qualquer valor diferente de DISABLED cancela).
-  if ((await modoAtual()) !== "DISABLED") {
-    await cancelar(DESTINO_SEM_ENVIO.CANCELLED, "MODO_NAO_DISABLED");
+  // KILL SWITCH — rechecagem do modo IMEDIATAMENTE antes da fronteira do envio (fail-closed): DISABLED (ou qualquer valor desconhecido) cancela e o provider
+  // NÃO é chamado. O teste NÃO tem exceção ao kill switch (a fronteira do provider também o barra).
+  if (!modoPermiteEnvioReal(await modoAtual())) {
+    await cancelar(DESTINO_SEM_ENVIO.CANCELLED, "MODO_DISABLED");
     return { resultado: "MODO_NAO_PERMITIDO", mensagemId: mensagem.id };
   }
 

@@ -156,6 +156,23 @@ export const ACOES = {
   COMUNICACAO_MODO_ATIVADO: "comunicacao.modo_ativado_painel_admin",
   COMUNICACAO_MODO_DESATIVADO: "comunicacao.modo_desativado_painel_admin",
 
+  // Fim do piloto (migration 104) — configuração definitiva por empresa. Sempre com ator humano; telefone SEMPRE mascarado; nunca segredo/token.
+  COMUNICACAO_ENVIO_AUTOMATICO_LIGADO: "comunicacao.envio_automatico_ligado_painel_admin",
+  COMUNICACAO_ENVIO_AUTOMATICO_DESLIGADO: "comunicacao.envio_automatico_desligado_painel_admin",
+  COMUNICACAO_LIMITES_ALTERADOS: "comunicacao.limites_alterados_painel_admin",
+  COMUNICACAO_DESTINATARIO_CRIADO: "comunicacao.destinatario_criado_painel_admin",
+  COMUNICACAO_DESTINATARIO_ATIVADO: "comunicacao.destinatario_ativado_painel_admin",
+  COMUNICACAO_DESTINATARIO_DESATIVADO: "comunicacao.destinatario_desativado_painel_admin",
+  COMUNICACAO_DESTINATARIO_NUMERO_ALTERADO: "comunicacao.destinatario_numero_alterado_painel_admin",
+  COMUNICACAO_DESTINATARIO_AUTORIZADO: "comunicacao.destinatario_autorizado_painel_admin",
+  COMUNICACAO_CATEGORIA_HABILITADA: "comunicacao.categoria_habilitada_painel_admin",
+  COMUNICACAO_CATEGORIA_DESABILITADA: "comunicacao.categoria_desabilitada_painel_admin",
+  // Ciclo de vida da MENSAGEM automática, além de envio_permitido/bloqueado/falhou: criação/agendamento e descarte por idempotência.
+  COMUNICACAO_MENSAGEM_AGENDADA: "comunicacao.mensagem_agendada",
+  COMUNICACAO_MENSAGEM_DESCARTADA: "comunicacao.mensagem_descartada",
+  // Simulação administrativa (dry-run): quem executou e o resumo. NÃO cria alerta/mensagem e NÃO chama o provider.
+  COMUNICACAO_DRY_RUN_EXECUTADO: "comunicacao.dry_run_executado_painel_admin",
+
   // Painel Administrativo / Comunicação (H.4-B.5) — TESTE CONTROLADO da infraestrutura (sem alerta, sem worker). Sempre com ator humano
   // (id, e-mail, perfil). Nunca grava telefone completo (só mascarado) nem o conteúdo da mensagem.
   COMUNICACAO_TESTE_INICIADO: "COMUNICACAO_TESTE_INICIADO",

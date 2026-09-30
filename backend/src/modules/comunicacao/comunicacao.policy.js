@@ -45,7 +45,8 @@ const MODOS_VALIDOS = new Set(Object.values(MODOS));
  * @property {boolean} providerConectado     o WhatsAppService reporta conexão ativa?
  * @property {boolean} identidadeConfirmada  a conta conectada é EXATAMENTE a que o operador confirmou na aba Conexão? (exige === true, proativo ou não; CONNECTED sozinho não basta)
  * @property {boolean} [modoSeguro]          circuito de segurança ativo (opcional: só `true` bloqueia — o circuito ainda não existe)
- * @property {boolean} telefoneNaAllowlistPiloto  Checkpoint H.4-A: defesa em profundidade — `comunicacao.piloto.js#telefoneAutorizadoNoPiloto` já resolvido pelo chamador (exige === true; nunca lida aqui, `avaliarEnvio` continua sem I/O)
+ * @property {boolean} envioAutomatico       a empresa ligou o envio AUTOMÁTICO no Painel? (PROATIVO exige === true; opt-in explícito)
+ * @property {boolean} categoriaPermitida    o destinatário tem habilitada a categoria de aviso desta mensagem? (PROATIVO exige === true)
  */
 
 /**
@@ -74,6 +75,10 @@ export function avaliarEnvio(s) {
   // --- empresa/tipo: ter o telefone cadastrado não habilita ninguém ---
   if (proativo && s.empresaHabilitada !== true) return bloqueado(MOTIVOS_BLOQUEIO.EMPRESA_DESABILITADA);
   if (proativo && s.tipoPermitido !== true) return bloqueado(MOTIVOS_BLOQUEIO.TIPO_NAO_PERMITIDO);
+  // habilitar a empresa NÃO liga o envio automático: são decisões separadas (migration 104). Sem o opt-in explícito nada proativo sai.
+  if (proativo && s.envioAutomatico !== true) return bloqueado(MOTIVOS_BLOQUEIO.ENVIO_AUTOMATICO_DESLIGADO);
+  // o destinatário só recebe as categorias de aviso que lhe foram habilitadas
+  if (proativo && s.categoriaPermitida !== true) return bloqueado(MOTIVOS_BLOQUEIO.CATEGORIA_NAO_PERMITIDA);
   // habilitado=true não basta: a empresa não pode estar em pausa (`pausado_ate` no futuro -> ADIAMENTO,
   // nunca BLOCKED permanente; a pausa vencida volta sozinha à elegibilidade).
   if (proativo && s.empresaPausada !== false) return bloqueado(MOTIVOS_BLOQUEIO.EMPRESA_PAUSADA);
@@ -91,16 +96,6 @@ export function avaliarEnvio(s) {
   if (s.modoSeguro === true) return bloqueado(MOTIVOS_BLOQUEIO.SAFE_MODE);
   if (s.providerConectado !== true) return bloqueado(MOTIVOS_BLOQUEIO.PROVIDER_OFFLINE);
   if (s.identidadeConfirmada !== true) return bloqueado(MOTIVOS_BLOQUEIO.IDENTIDADE_NAO_CONFIRMADA);
-  // ÚLTIMO check de propósito (Checkpoint H.4-A) — o mais próximo da fronteira de envio:
-  // camada A MAIS, nunca substitui nada acima. Campo AUSENTE (undefined) = gate não
-  // aplicável — DIFERENTE do padrão "ausente bloqueia" do resto deste arquivo, de
-  // propósito: comunicacao.piloto.js#telefoneAutorizadoNoPiloto nunca devolve
-  // `undefined` em produção (sempre true/false explícito, já considerando
-  // COMUNICACAO_PILOTO_ENABLED) — só um snapshot montado à mão (testes antigos, que
-  // não conhecem o piloto) omite o campo, e esses continuam passando como antes.
-  // Só um `false` EXPLÍCITO bloqueia.
-  if (s.telefoneNaAllowlistPiloto === false) return bloqueado(MOTIVOS_BLOQUEIO.FORA_DA_ALLOWLIST_PILOTO);
-
   return { allowed: true, reason: null };
 }
 

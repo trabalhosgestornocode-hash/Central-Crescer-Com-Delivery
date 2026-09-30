@@ -315,7 +315,7 @@ describe("GATE de conta confirmada — banco real (manual, teste, provider)", pu
       const g = gatewayFalso();
       await rejeita(manual(g), 409);
       const provider = { getStatus: async () => ({ conectado: true }), sendText: mock.fn(async () => ({ providerMessageId: "P" })), sendImage: async () => ({}), sendDocument: async () => ({}), connect: async () => {}, disconnect: async () => {}, onMessage() {}, markAsRead: async () => {}, getMessageStatus: async () => ({}) };
-      const real = criarWhatsAppService({ provider, identidadeConfirmada: criarGateIdentidade({ supabase, env: {}, organizacaoConexaoId: conA, agora: AGORA }) });
+      const real = criarWhatsAppService({ semGateModo: true, provider, identidadeConfirmada: criarGateIdentidade({ supabase, env: {}, organizacaoConexaoId: conA, agora: AGORA }) });
       await assert.rejects(() => real.enviarTexto({ telefoneE164: telA, texto: "x", idempotencyKey: "k" }), IdentidadeNaoConfirmadaError, nome);
       assert.equal(provider.sendText.mock.callCount(), 0, `${nome}: provider = 0`);
       assert.equal(g.enviarTexto.mock.callCount(), 0, `${nome}: nada saiu`);
@@ -341,7 +341,7 @@ describe("GATE de conta confirmada — banco real (manual, teste, provider)", pu
     const g = gatewayFalso(); await conectarNoBanco(conA);
     const { data: contato } = await supabase.from("contatos_whatsapp").select("telefone_e164").eq("id", destA.contatoId).single();
     await supabase.from("comunicacao_habilitacoes").upsert({ organizacao_id: conA, habilitado: false, tipos_permitidos: ["dashboard_ifood_d1"], timezone: "America/Fortaleza", destinatario_contato_id: destA.contatoId, destinatario_perfil_id: destA.perfilId }, { onConflict: "organizacao_id" });
-    const deps = dep(conA, { env: envPiloto(), estadoGateway: { estado: "conectado" }, lerModo: async () => "DISABLED", whatsAppService: g.svc });
+    const deps = dep(conA, { env: envPiloto(), estadoGateway: { estado: "conectado" }, lerModo: async () => "NORMAL", whatsAppService: g.svc });
     const preparo = await teste.preparoTeste({ organizacaoId: conA, unidadeId: uA1 }, deps);
     assert.equal(preparo.podeEnviar, false);
     assert.ok(preparo.bloqueios.some((b) => b.codigo === "CONEXAO_NAO_CONFIRMADA"));

@@ -40,15 +40,15 @@ import { obterConfig, modoAtual, obterTtlHoras, obterJitterMaxMs, obterDisponibi
 import { avaliarEnvio } from "./comunicacao.policy.js";
 import * as contatosEmpresaRepo from "./comunicacao.contatosEmpresa.repo.js";
 import { avaliarResponsavelDaMensagem } from "./comunicacao.contatosEmpresa.repo.js";
-import { avaliarDisponibilidadeD1, janelasParaReferencia } from "./comunicacao.disponibilidade.js";
+import { avaliarDisponibilidadeD1, calcularInstanteDeEnvio, janelasParaReferencia } from "./comunicacao.disponibilidade.js";
 import { classificarErroEnvio, backoffRetrySegundos } from "./comunicacao.entrega.js";
 import { dentroDaJanelaLocal, proximoHorarioDeEnvio, inicioDoDiaLocal, ConfiguracaoHorarioInvalida } from "./comunicacao.horario.js";
 import { resolverHabilitacaoEmpresa, janelasEfetivas } from "./comunicacao.habilitacao.js";
-import { telefoneAutorizadoNoPiloto } from "./comunicacao.piloto.js";
+import { destinatarioRecebeTipo } from "./comunicacao.destinatarios.repo.js";
 import { formatarMensagemPendencia, formatarMensagemReforcoDia, formatarMensagemAvisoTardioD1 } from "./comunicacao.template.js";
 import {
   janelaDeReforcoAgora, instanteDoReforco, espacamentoCumprido, mesmoDiaLocal, prazoD1VenceHoje, propositoDaMensagem,
-  chaveIdempotenciaReforco, chaveIdempotenciaInicial, PROPOSITO, MOTIVO_REFORCO, MOTIVO_TARDIO, ehAvisoTardio, dataLocalIso,
+  chaveIdempotenciaDestinatario, ORIGEM, PROPOSITO, MOTIVO_REFORCO, MOTIVO_TARDIO, ehAvisoTardio, dataLocalIso,
 } from "./comunicacao.reforco.js";
 import { partesLocais } from "./comunicacao.horario.js";
 import { calcularDisponivelEm, chaveDeJitter, MOTIVO_DA_RESERVA } from "./comunicacao.adiamento.js";
@@ -65,11 +65,18 @@ const ADIAMENTO_PADRAO_MS = 15 * MIN;
 const LEASE_ENVIO_SEGUNDOS = 90;
 /** Só usados se a configuração vier corrompida (linha existe mas sem a chave): nunca "sem limite". */
 const COOLDOWN_PADRAO_HORAS = 8;
-/** Alertas cujo 1º aviso já saiu — os únicos candidatos ao reforço. */
+/** Status de MENSAGEM em que o 1º aviso de UM destinatário já saiu (base do reforço dele). */
 const STATUS_JA_ENVIADOS = [STATUS_ALERTA.SENT, STATUS_ALERTA.DELIVERED, STATUS_ALERTA.READ];
+/**
+ * Alertas candidatos ao reforço: já saiu ao menos um 1º aviso. Com vários destinatários o alerta fica SCHEDULED enquanto algum 1º aviso ainda está a caminho
+ * (status agregado, migration 104) — o reforço de quem JÁ recebeu não espera o de quem ainda não recebeu.
+ */
+const STATUS_CANDIDATOS_REFORCO = [STATUS_ALERTA.SCHEDULED, STATUS_ALERTA.SENT, STATUS_ALERTA.DELIVERED, STATUS_ALERTA.READ];
 const LIMITE_MINUTO_PADRAO = 5;
 const LIMITE_MINUTO_ORGANIZACAO_PADRAO = 3;
 const LIMITE_DIA_PADRAO = 3;
+/** Só usado se a configuração vier sem a chave: um teto SEMPRE existe por empresa/dia (nunca "sem limite"). */
+const LIMITE_ORGANIZACAO_DIA_PADRAO = 20;
 
 const numeroOuPadrao = (v, padrao) => (v !== null && v !== "" && v !== undefined && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : padrao);
 
@@ -151,45 +158,74 @@ export async function detectarESincronizarAlertas({ hojeIso, pendenciasSnapshot 
   };
 }
 
+// (calcularInstanteDeEnvio vive em comunicacao.disponibilidade.js — função pura compartilhada com a simulação administrativa; reexportada abaixo)
+export { calcularInstanteDeEnvio };
+
 /**
- * Primeiro instante de envio de um alerta ORDINÁRIO, respeitando a DISPONIBILIDADE do D-1: se o candidato cair num horário em que a
- * referência ainda é D-1 e cedo demais (< horário mínimo de envio), recalcula com as janelas ajustadas. A referência é reavaliada NO
- * instante candidato (à noite o D-1 de hoje já é D-2 amanhã de manhã). Pura. Lança ConfiguracaoHorarioInvalida se não houver janela útil.
+ * DESTINATÁRIOS ELEGÍVEIS da empresa para um tipo de alerta, UMA leitura por empresa por ciclo. A fonte é o banco
+ * (`comunicacao_resolver_destinatarios`): TODOS os destinatários ativos, validados, consentidos, sem opt-out e com a categoria habilitada.
+ * Devolve também os inelegíveis (com motivo) para contagem/diagnóstico.
  */
-export function calcularInstanteDeEnvio({ base, timezone, janelas, dataReferencia, disponibilidade, chave, spreadMaxMs }) {
-  let { instante } = proximoHorarioDeEnvio(base, timezone, janelas, chave, { spreadMaxMs });
-  if (!avaliarDisponibilidadeD1({ dataReferencia, agora: instante, timezone, config: disponibilidade }).disponivel) {
-    const ajustadas = janelasParaReferencia({ janelas, dataReferencia, agora: instante, timezone, config: disponibilidade });
-    ({ instante } = proximoHorarioDeEnvio(instante, timezone, ajustadas, chave, { spreadMaxMs }));
+function criarResolvedorDeDestinatarios({ resolverDestinatarios, deps }) {
+  const cache = new Map();
+  return async (organizacaoId, tipoAlerta) => {
+    const chave = `${organizacaoId}|${tipoAlerta}`;
+    if (!cache.has(chave)) cache.set(chave, await resolverDestinatarios({ organizacaoId, tipoAlerta }, deps));
+    return cache.get(chave);
+  };
+}
+
+/** Contabiliza o retorno de `agendarMensagensDoAlerta` nos contadores do ciclo (por destinatário) e audita o que foi criado/descartado. */
+async function contabilizarAgendamento(res, r, { alerta, deps }) {
+  if (res.acao !== "OK") {
+    if (res.acao === "NAO_HABILITADA" || res.acao === "TIPO_NAO_PERMITIDO") r.semHabilitacao += 1;
+    else if (res.acao === "ENVIO_AUTOMATICO_DESLIGADO") r.envioAutomaticoDesligado = (r.envioAutomaticoDesligado ?? 0) + 1;
+    else r.ignorados += 1; // ALERTA_NAO_DETECTED | ALERTA_SEM_PRIMEIRO_ENVIO | ALERTA_INEXISTENTE | TIPO_NAO_SUPORTADO | ...
+    return;
   }
-  return instante;
+  for (const it of res.itens ?? []) {
+    if (it.acao === "CRIADA") {
+      r.agendados += 1;
+      await melhorEsforco(() => auditar({
+        acao: ACOES.COMUNICACAO_MENSAGEM_AGENDADA, atorTipo: "sistema", organizacaoId: alerta.organizacao_id,
+        entidade: "comunicacao_mensagens", entidadeId: it.mensagem_id,
+        detalhes: { alertaId: alerta.id, destinatarioId: it.contato_empresa_id, tipo: alerta.tipo_alerta },
+      }));
+    } else if (it.acao === "JA_EXISTIA" || it.acao === "MENSAGEM_EXPIRADA") {
+      if (it.acao === "JA_EXISTIA") r.jaExistiam += 1; else r.mensagensExpiradas = (r.mensagensExpiradas ?? 0) + 1;
+      await melhorEsforco(() => auditar({
+        acao: ACOES.COMUNICACAO_MENSAGEM_DESCARTADA, atorTipo: "sistema", organizacaoId: alerta.organizacao_id,
+        entidade: "comunicacao_alertas", entidadeId: alerta.id,
+        detalhes: { motivo: it.acao === "JA_EXISTIA" ? "IDEMPOTENCIA" : "MENSAGEM_EXPIRADA", destinatarioId: it.contato_empresa_id ?? null },
+      }));
+    } else if (it.acao === "DESTINATARIO_INELEGIVEL" || it.acao === "DESTINATARIO_INEXISTENTE") r.destinatarioInelegivel += 1;
+    else if (it.acao === "PRIMEIRA_MENSAGEM_NAO_ENVIADA") r.primeiraNaoEnviada = (r.primeiraNaoEnviada ?? 0) + 1;
+    else r.ignorados += 1;
+  }
 }
 
 /**
- * Para alertas DETECTED com organização HABILITADA e um contato resolvível, agenda o
- * envio — IDEMPOTENTE (mesma idempotencyKey por alerta: chamar 100 vezes gera no
- * máximo UMA mensagem) e ATÔMICO (mensagem + alerta SCHEDULED na mesma transação).
+ * Para alertas DETECTED com organização HABILITADA, com ENVIO AUTOMÁTICO ligado e ao menos um destinatário elegível, agenda o envio a CADA destinatário
+ * elegível — cada um individualmente, com seu próprio instante — IDEMPOTENTE (alerta + destinatário + propósito: chamar 100 vezes gera no máximo UMA
+ * mensagem por destinatário) e ATÔMICO (todas as mensagens do alerta + alerta SCHEDULED na mesma transação, RPC
+ * comunicacao_agendar_mensagens_alerta). Uma mensagem enviada ao João nunca impede a Maria de receber o mesmo alerta; e o João nunca recebe duas vezes.
  *
- * HORÁRIO REAL: timezone IANA e janela da ORGANIZAÇÃO (ou a global, se ela não tiver
- * janela própria). Se `agora` está dentro da janela, envia já; senão, abertura da
- * PRÓXIMA janela + jitter determinístico (hash da idempotency_key + data lógica +
- * organização — nunca Math.random). Pausa ativa (`pausado_ate`) empurra o início.
- * `expira_em` = instante de envio + `ttl_horas`.
+ * HORÁRIO REAL: timezone IANA e janela da ORGANIZAÇÃO (ou a global, se ela não tiver janela própria). Se `agora` está dentro da janela, envia já; senão,
+ * abertura da PRÓXIMA janela + jitter determinístico POR DESTINATÁRIO (hash da chave de idempotência dele + data lógica + organização — nunca
+ * Math.random; destinatários diferentes caem em minutos diferentes). Pausa ativa (`pausado_ate`) empurra o início. `expira_em` = instante + `ttl_horas`.
  *
- * FAIL-CLOSED: organização sem habilitação/tipo/DESTINATÁRIO explícito não recebe
- * agendamento (o alerta continua DETECTED, sem mensagem órfã); timezone/janela inválidos
- * idem (`configInvalida`) — nunca assume UTC. O evento cuja mensagem JÁ EXPIROU não é
- * recriado (`mensagensExpiradas`): lembrete/nova versão exige uma regra explícita futura.
+ * FAIL-CLOSED: empresa sem habilitação/tipo/envio automático/destinatário elegível não recebe agendamento (o alerta continua DETECTED, sem mensagem
+ * órfã); timezone/janela inválidos idem (`configInvalida`) — nunca assume UTC. O evento cuja mensagem JÁ EXPIROU não é recriado (`mensagensExpiradas`).
  *
- * `organizacaoId` omitido = agenda a FROTA INTEIRA num lote só. Passe `organizacaoId`
- * para escopar a um teste/cenário específico.
- * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function}} [params]
+ * `organizacaoId` omitido = agenda a FROTA INTEIRA num lote só. Passe `organizacaoId` para escopar a um teste/cenário específico.
+ * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function, resolverDestinatarios?: Function}} [params]
  */
 export async function agendarEnviosPendentes({
   organizacaoId = null, tipoAlerta = TIPOS_ALERTA.DASHBOARD_IFOOD_D1, agora = new Date(), resolverHabilitacao = resolverHabilitacaoEmpresa,
+  resolverDestinatarios = filaRepo.resolverDestinatarios,
 } = {}, deps = {}) {
   const r = {
-    agendados: 0, semDestinatario: 0, destinatarioInelegivel: 0, semHabilitacao: 0, configInvalida: 0,
+    agendados: 0, semDestinatario: 0, destinatarioInelegivel: 0, semHabilitacao: 0, envioAutomaticoDesligado: 0, configInvalida: 0,
     jaExistiam: 0, mensagensExpiradas: 0, entregaDesconhecida: 0, ignorados: 0, aguardaJanelaTardia: 0,
     // D-1 ainda sem dados do iFood (antes do horário configurado): a empresa NÃO está atrasada, nada é agendado.
     aguardandoDisponibilidadeIfood: 0,
@@ -204,18 +240,22 @@ export async function agendarEnviosPendentes({
     if (!habilitacoes.has(orgId)) habilitacoes.set(orgId, await resolverHabilitacao({ organizacaoId: orgId, tipoAlerta, agora }, deps));
     return habilitacoes.get(orgId);
   };
+  const destinatariosDa = criarResolvedorDeDestinatarios({ resolverDestinatarios, deps });
 
   for (const alerta of detectados) {
     const hab = await habilitacaoDa(alerta.organizacao_id);
     if (hab?.empresaHabilitada !== true || hab?.tipoPermitido !== true) { r.semHabilitacao += 1; continue; }
+    // envio AUTOMÁTICO é um opt-in separado da habilitação (104): sem ele nada é agendado.
+    if (hab.envioAutomatico !== true) { r.envioAutomaticoDesligado += 1; continue; }
     const janelas = janelasEfetivas(hab, janelasGlobais);
     // pausa ativa sem um fim legível: não há horário confiável -> não agenda
     if (!janelas || (hab.empresaPausada === true && !hab.pausadoAte)) { r.configInvalida += 1; continue; }
 
-    // RESPONSÁVEL EXPLÍCITO DA EMPRESA: sem ele não há para quem enviar (fail-closed). NÃO é escolhido aqui nem passado ao banco —
-    // `comunicacao_agendar_mensagem_alerta` o lê da habilitação da organização e revalida (mesma empresa, ativo, WhatsApp validado,
-    // consentimento/verificação/opt-out). Nunca perfil/usuário/unidade.
-    if (!hab.destinatarioContatoId || !hab.destinatarioContatoEmpresaId) { r.semDestinatario += 1; continue; }
+    // DESTINATÁRIOS DA EMPRESA (todos os elegíveis). Sem nenhum não há para quem enviar (fail-closed). O banco os REVALIDA ao criar.
+    const todos = await destinatariosDa(alerta.organizacao_id, alerta.tipo_alerta);
+    if (!todos.length) { r.semDestinatario += 1; continue; }
+    const elegiveis = todos.filter((d) => d.elegivel === true);
+    if (!elegiveis.length) { r.destinatarioInelegivel += 1; continue; }
 
     // DISPONIBILIDADE DO iFOOD (D-1): antes do horário configurado (hora LOCAL da empresa) o dado do dia anterior ainda está incompleto ->
     // a empresa não está atrasada, NADA entra na fila.
@@ -224,67 +264,61 @@ export async function agendarEnviosPendentes({
     catch (e) { if (e instanceof ConfiguracaoHorarioInvalida) { r.configInvalida += 1; continue; } throw e; }
     if (!disp.disponivel) { r.aguardandoDisponibilidadeIfood += 1; continue; }
 
-    const idempotencyKey = `wa:alerta:${alerta.id}:v1`;
     const base = hab.empresaPausada === true && hab.pausadoAte && hab.pausadoAte.getTime() > agora.getTime() ? hab.pausadoAte : agora;
-    let instante;
-    try {
-      instante = calcularInstanteDeEnvio({
-        base, timezone: hab.timezone, janelas, dataReferencia: alerta.data_referencia, disponibilidade,
-        chave: chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }),
-        spreadMaxMs: jitterMaxMs,
-      });
-    } catch (e) {
-      if (e instanceof ConfiguracaoHorarioInvalida) { r.configInvalida += 1; continue; }
-      throw e;
-    }
-
-    // H.4-B.2: um D-1 que vence HOJE e que só caberia na PRÓXIMA janela comercial (já passou o expediente de hoje) NÃO é
-    // agendado para amanhã — o aviso tardio (20:00-22:00, agendarAvisosTardiosD1) é o único que pode criar a 1ª mensagem hoje.
-    // Domingo não tem janela tardia: segue o fluxo normal (próximo dia útil).
-    if (prazoD1VenceHoje(alerta.data_referencia, agora, hab.timezone) && partesLocais(agora, hab.timezone).diaSemana !== 0
-        && dataLocalIso(instante, hab.timezone) !== dataLocalIso(agora, hab.timezone)) { r.aguardaJanelaTardia += 1; continue; }
-
     const conteudo = formatarMensagemPendencia({
       unidadeNome: alerta.metadados?.unidade_nome ?? null,
       diasPendentes: Number(alerta.motivo?.match(/^(\d+)/)?.[1] ?? 1),
       pendenciaMaisAntiga: alerta.data_referencia,
     });
+    // H.4-B.2: um D-1 que vence HOJE e que só caberia na PRÓXIMA janela comercial (já passou o expediente de hoje) NÃO é agendado para amanhã —
+    // o aviso tardio (20:00-22:00, agendarAvisosTardiosD1) é o único que pode criar a 1ª mensagem hoje. Domingo segue o fluxo normal.
+    const venceHojeForaDoExpediente = prazoD1VenceHoje(alerta.data_referencia, agora, hab.timezone) && partesLocais(agora, hab.timezone).diaSemana !== 0;
 
-    const res = await filaRepo.agendarMensagemDoAlerta({
-      alertaId: alerta.id,
-      tipo: alerta.tipo_alerta, conteudo, idempotencyKey,
-      disponivelEm: instante, expiraEm: new Date(instante.getTime() + ttlHoras * HORA),
-    }, deps);
-    if (res.acao === "CRIADA") r.agendados += 1;
-    else if (res.acao === "JA_EXISTIA") r.jaExistiam += 1;
-    else if (res.acao === "MENSAGEM_EXPIRADA") r.mensagensExpiradas += 1;
-    else if (res.acao === "ENTREGA_DESCONHECIDA") r.entregaDesconhecida += 1;
-    else if (res.acao === "NAO_HABILITADA" || res.acao === "TIPO_NAO_PERMITIDO") r.semHabilitacao += 1;
-    else if (res.acao === "SEM_DESTINATARIO") r.semDestinatario += 1;
-    else if (res.acao === "DESTINATARIO_INELEGIVEL") r.destinatarioInelegivel += 1;
-    else r.ignorados += 1; // ALERTA_NAO_DETECTED | CHAVE_EM_USO | ALERTA_INEXISTENTE
+    const itens = [];
+    let configInvalida = false;
+    for (const d of elegiveis) {
+      const idempotencyKey = chaveIdempotenciaDestinatario({ alertaId: alerta.id, contatoEmpresaId: d.contato_empresa_id });
+      let instante;
+      try {
+        instante = calcularInstanteDeEnvio({
+          base, timezone: hab.timezone, janelas, dataReferencia: alerta.data_referencia, disponibilidade,
+          chave: chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }),
+          spreadMaxMs: jitterMaxMs,
+        });
+      } catch (e) {
+        if (e instanceof ConfiguracaoHorarioInvalida) { configInvalida = true; break; }
+        throw e;
+      }
+      if (venceHojeForaDoExpediente && dataLocalIso(instante, hab.timezone) !== dataLocalIso(agora, hab.timezone)) continue;
+      itens.push({ contatoEmpresaId: d.contato_empresa_id, conteudo, disponivelEm: instante, expiraEm: new Date(instante.getTime() + ttlHoras * HORA) });
+    }
+    if (configInvalida) { r.configInvalida += 1; continue; }
+    if (!itens.length) { r.aguardaJanelaTardia += 1; continue; }
+
+    const res = await filaRepo.agendarMensagensDoAlerta({ alertaId: alerta.id, proposito: PROPOSITO.INICIAL, itens }, deps);
+    await contabilizarAgendamento(res, r, { alerta, deps });
   }
   return r;
 }
 
 /**
- * PRIMEIRO AVISO TARDIO D-1 (H.4-B.2) — a 1ª mensagem de um alerta dashboard_ifood_d1 cujo prazo vence HOJE, que ainda
- * está DETECTED (nenhuma inicial existe) depois da janela comercial. NÃO é reforço nem retry: é a PRIMEIRA mensagem
- * (`wa:alerta:{id}:v1`, `proposito=inicial`, `origem=prazo_final_d1`) e continua dona de `comunicacao_alertas.status`.
- * Só AGENDA; a mensagem entra na MESMA fila e passa pelo MESMO claim -> JIT (com as regras do aviso tardio) -> policy ->
- * reserva (rate-limit) -> gateway -> provider.
+ * PRIMEIRO AVISO TARDIO D-1 (H.4-B.2) — a 1ª mensagem de um alerta dashboard_ifood_d1 cujo prazo vence HOJE, que ainda está DETECTED (nenhuma inicial
+ * existe) depois da janela comercial. NÃO é reforço nem retry: é a PRIMEIRA mensagem (`proposito=inicial`, `origem=prazo_final_d1`) de CADA destinatário
+ * elegível e continua dona de `comunicacao_alertas.status`. Só AGENDA; a mensagem entra na MESMA fila e passa pelo MESMO claim -> JIT (com as regras do
+ * aviso tardio) -> policy -> reserva (rate-limit) -> gateway -> provider.
  *
- * Só cria quando TODOS valem: alerta D1 DETECTED; empresa habilitada e não pausada; destinatário explícito; segunda a
- * sábado e agora em 20:00–22:00 locais (mesma janela do reforço); D-1 de hoje (backlog nunca). `expiraEm` = 22:30 locais:
- * nunca vira cobrança de amanhã. Corrida com o agendamento NORMAL: as duas usam a MESMA chave `…:v1` (única no banco) e o
- * banco serializa por alerta — exatamente UMA primeira mensagem, seja qual for o vencedor.
- * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function}} [params]
+ * Só cria quando TODOS valem: alerta D1 DETECTED; empresa habilitada, com envio automático, não pausada; ao menos um destinatário elegível; segunda a
+ * sábado e agora em 20:00–22:00 locais (mesma janela do reforço); D-1 de hoje (backlog nunca). `expiraEm` = 22:30 locais: nunca vira cobrança de amanhã.
+ * Corrida com o agendamento NORMAL: as duas usam a MESMA identidade por destinatário (única no banco) e o banco serializa por alerta — exatamente UMA
+ * primeira mensagem por destinatário, seja qual for o vencedor.
+ * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function, resolverDestinatarios?: Function}} [params]
  */
 export async function agendarAvisosTardiosD1({
   organizacaoId = null, tipoAlerta = TIPOS_ALERTA.DASHBOARD_IFOOD_D1, agora = new Date(), resolverHabilitacao = resolverHabilitacaoEmpresa,
+  resolverDestinatarios = filaRepo.resolverDestinatarios,
 } = {}, deps = {}) {
   const r = {
-    agendados: 0, jaExistiam: 0, mensagensExpiradas: 0, semHabilitacao: 0, empresaPausada: 0, semDestinatario: 0, destinatarioInelegivel: 0,
+    agendados: 0, jaExistiam: 0, mensagensExpiradas: 0, semHabilitacao: 0, envioAutomaticoDesligado: 0, empresaPausada: 0, semDestinatario: 0, destinatarioInelegivel: 0,
     configInvalida: 0, foraDaJanelaTardia: 0, foraDoPrazoD1: 0, inicialJaExiste: 0, entregaEmCurso: 0, ignorados: 0,
   };
   const ativos = await alertasRepo.listarAlertasAtivos({ organizacaoId, tipoAlerta }, deps);
@@ -296,13 +330,14 @@ export async function agendarAvisosTardiosD1({
     if (!habilitacoes.has(orgId)) habilitacoes.set(orgId, await resolverHabilitacao({ organizacaoId: orgId, tipoAlerta, agora }, deps));
     return habilitacoes.get(orgId);
   };
+  const destinatariosDa = criarResolvedorDeDestinatarios({ resolverDestinatarios, deps });
 
   for (const alerta of candidatos) {
     const hab = await habilitacaoDa(alerta.organizacao_id);
     if (hab?.empresaHabilitada !== true || hab?.tipoPermitido !== true) { r.semHabilitacao += 1; continue; }
+    if (hab.envioAutomatico !== true) { r.envioAutomaticoDesligado += 1; continue; }
     if (hab.empresaPausada === true) { r.empresaPausada += 1; continue; }
     if (hab.configHorarioValida !== true || !hab.timezone) { r.configInvalida += 1; continue; }
-    if (!hab.destinatarioContatoId || !hab.destinatarioContatoEmpresaId) { r.semDestinatario += 1; continue; }
 
     let janela;
     try { janela = janelaDeReforcoAgora(agora, hab.timezone); }
@@ -314,21 +349,19 @@ export async function agendarAvisosTardiosD1({
     // SÓ o D-1 que vence hoje; comparação de DATA, nunca contagem de dias pendentes.
     if (!prazoD1VenceHoje(alerta.data_referencia, agora, hab.timezone)) { r.foraDoPrazoD1 += 1; continue; }
 
-    const idempotencyKey = chaveIdempotenciaInicial(alerta.id); // a MESMA identidade da 1ª mensagem — nunca uma "…:tardio:v1"
-    const instante = instanteDoReforco(agora, janela, chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }));
-    const conteudo = formatarMensagemAvisoTardioD1({
-      unidadeNome: alerta.metadados?.unidade_nome ?? null, pendenciaMaisAntiga: alerta.data_referencia,
+    const todos = await destinatariosDa(alerta.organizacao_id, alerta.tipo_alerta);
+    if (!todos.length) { r.semDestinatario += 1; continue; }
+    const elegiveis = todos.filter((d) => d.elegivel === true);
+    if (!elegiveis.length) { r.destinatarioInelegivel += 1; continue; }
+
+    const conteudo = formatarMensagemAvisoTardioD1({ unidadeNome: alerta.metadados?.unidade_nome ?? null, pendenciaMaisAntiga: alerta.data_referencia });
+    const itens = elegiveis.map((d) => {
+      const idempotencyKey = chaveIdempotenciaDestinatario({ alertaId: alerta.id, contatoEmpresaId: d.contato_empresa_id });
+      const instante = instanteDoReforco(agora, janela, chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }));
+      return { contatoEmpresaId: d.contato_empresa_id, conteudo, disponivelEm: instante, expiraEm: janela.cutoff };
     });
-    const res = await filaRepo.agendarAvisoTardioD1({ alertaId: alerta.id, conteudo, disponivelEm: instante, expiraEm: janela.cutoff }, deps);
-    if (res.acao === "CRIADA") r.agendados += 1;
-    else if (res.acao === "JA_EXISTIA") r.jaExistiam += 1;
-    else if (res.acao === "MENSAGEM_EXPIRADA") r.mensagensExpiradas += 1;
-    else if (res.acao === "INICIAL_JA_EXISTE") r.inicialJaExiste += 1;
-    else if (res.acao === "ENTREGA_EM_CURSO") r.entregaEmCurso += 1;
-    else if (res.acao === "NAO_HABILITADA" || res.acao === "TIPO_NAO_PERMITIDO") r.semHabilitacao += 1;
-    else if (res.acao === "SEM_DESTINATARIO") r.semDestinatario += 1;
-    else if (res.acao === "DESTINATARIO_INELEGIVEL") r.destinatarioInelegivel += 1;
-    else r.ignorados += 1; // ALERTA_NAO_DETECTED | TIPO_NAO_SUPORTADO | CHAVE_INVALIDA | CHAVE_EM_USO | ALERTA_INEXISTENTE
+    const res = await filaRepo.agendarMensagensDoAlerta({ alertaId: alerta.id, proposito: PROPOSITO.INICIAL, origem: ORIGEM.PRAZO_FINAL_D1, itens }, deps);
+    await contabilizarAgendamento(res, r, { alerta, deps });
   }
   return r;
 }
@@ -346,28 +379,28 @@ function motivoDeCancelamentoDoAvisoTardio({ job, alerta, timezone, agora }) {
 }
 
 /**
- * REFORÇO DE PRAZO FINAL D-1 — a 2ª e ÚLTIMA mensagem de um alerta dashboard_ifood_d1 cujo prazo
- * vence HOJE (dataReferencia === diaAnterior(hoje local); backlog antigo nunca) e cuja 1ª mensagem
- * (`wa:alerta:{id}:v1`) já saiu HOJE. Só AGENDA: a mensagem entra na MESMA fila do primeiro aviso e
- * passa pelo MESMO claim -> JIT (revalidação definitiva, com as regras do reforço) -> policy ->
- * reserva (rate-limit) -> gateway -> provider. Nenhum transporte paralelo.
+ * REFORÇO DE PRAZO FINAL D-1 — a 2ª e ÚLTIMA mensagem, POR DESTINATÁRIO, de um alerta dashboard_ifood_d1 cujo prazo vence HOJE (dataReferencia ===
+ * diaAnterior(hoje local); backlog antigo nunca) e cuja 1ª mensagem DAQUELE destinatário já saiu HOJE. Só AGENDA: a mensagem entra na MESMA fila do
+ * primeiro aviso e passa pelo MESMO claim -> JIT (revalidação definitiva, com as regras do reforço) -> policy -> reserva (rate-limit) -> gateway ->
+ * provider. Nenhum transporte paralelo.
  *
- * Só cria quando TODOS valem: alerta em SENT/DELIVERED/READ; empresa habilitada e não pausada;
- * hoje é segunda a sábado e agora está em 20:00–22:00 locais (comunicacao.reforco.js); a 1ª mensagem
- * saiu hoje há >= 2h (espaçamento PRÓPRIO — o cooldown normal de 8h/4h não controla o reforço);
- * destinatário explícito. `expiraEm` = 22:30 locais (hard cutoff): nunca vira cobrança de amanhã.
- * Idempotência: `wa:alerta:{id}:reforco:v1`, única no banco (RPC 092).
- * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function}} [params]
+ * Cada destinatário é avaliado INDIVIDUALMENTE: o reforço do João depende só da inicial do João (a falha/pendência da Maria não o impede, e vice-versa).
+ * Só cria quando TODOS valem: alerta em SCHEDULED/SENT/DELIVERED/READ; empresa habilitada, com envio automático e não pausada; hoje é segunda a sábado e
+ * agora está em 20:00–22:00 locais (comunicacao.reforco.js); a 1ª mensagem do destinatário saiu hoje há >= 2h (espaçamento PRÓPRIO — o cooldown normal
+ * de 8h/4h não controla o reforço). `expiraEm` = 22:30 locais (hard cutoff): nunca vira cobrança de amanhã.
+ * Idempotência: alerta + destinatário + propósito=reforco, única no banco.
+ * @param {{organizacaoId?: string|null, tipoAlerta?: string, agora?: Date, resolverHabilitacao?: Function, resolverDestinatarios?: Function}} [params]
  */
 export async function agendarReforcosPendentes({
   organizacaoId = null, tipoAlerta = TIPOS_ALERTA.DASHBOARD_IFOOD_D1, agora = new Date(), resolverHabilitacao = resolverHabilitacaoEmpresa,
+  resolverDestinatarios = filaRepo.resolverDestinatarios,
 } = {}, deps = {}) {
   const r = {
-    agendados: 0, jaExistiam: 0, semHabilitacao: 0, empresaPausada: 0, semDestinatario: 0, destinatarioInelegivel: 0, configInvalida: 0,
-    foraDaJanelaReforco: 0, foraDoPrazoD1: 0, primeiraNaoEnviada: 0, primeiraDeOutroDia: 0, espacamentoPendente: 0, entregaEmCurso: 0, ignorados: 0,
+    agendados: 0, jaExistiam: 0, semHabilitacao: 0, envioAutomaticoDesligado: 0, empresaPausada: 0, semDestinatario: 0, destinatarioInelegivel: 0, configInvalida: 0,
+    foraDaJanelaReforco: 0, foraDoPrazoD1: 0, primeiraNaoEnviada: 0, primeiraDeOutroDia: 0, espacamentoPendente: 0, entregaEmCurso: 0, mensagensExpiradas: 0, ignorados: 0,
   };
   const ativos = await alertasRepo.listarAlertasAtivos({ organizacaoId, tipoAlerta }, deps);
-  const candidatos = ativos.filter((a) => a.tipo_alerta === TIPOS_ALERTA.DASHBOARD_IFOOD_D1 && STATUS_JA_ENVIADOS.includes(a.status));
+  const candidatos = ativos.filter((a) => a.tipo_alerta === TIPOS_ALERTA.DASHBOARD_IFOOD_D1 && STATUS_CANDIDATOS_REFORCO.includes(a.status));
   if (!candidatos.length) return r;
 
   const habilitacoes = new Map(); // uma leitura por organização por ciclo
@@ -375,13 +408,14 @@ export async function agendarReforcosPendentes({
     if (!habilitacoes.has(orgId)) habilitacoes.set(orgId, await resolverHabilitacao({ organizacaoId: orgId, tipoAlerta, agora }, deps));
     return habilitacoes.get(orgId);
   };
+  const destinatariosDa = criarResolvedorDeDestinatarios({ resolverDestinatarios, deps });
 
   for (const alerta of candidatos) {
     const hab = await habilitacaoDa(alerta.organizacao_id);
     if (hab?.empresaHabilitada !== true || hab?.tipoPermitido !== true) { r.semHabilitacao += 1; continue; }
+    if (hab.envioAutomatico !== true) { r.envioAutomaticoDesligado += 1; continue; }
     if (hab.empresaPausada === true) { r.empresaPausada += 1; continue; }
     if (hab.configHorarioValida !== true || !hab.timezone) { r.configInvalida += 1; continue; }
-    if (!hab.destinatarioContatoId || !hab.destinatarioContatoEmpresaId) { r.semDestinatario += 1; continue; }
 
     let janela;
     try { janela = janelaDeReforcoAgora(agora, hab.timezone); }
@@ -393,25 +427,26 @@ export async function agendarReforcosPendentes({
     // H.4-A.8: SÓ o D-1 que vence hoje; comparação de DATA, nunca contagem de dias pendentes.
     if (!prazoD1VenceHoje(alerta.data_referencia, agora, hab.timezone)) { r.foraDoPrazoD1 += 1; continue; }
 
-    const inicial = await filaRepo.obterMensagemInicialDoAlerta(alerta.id, deps);
-    if (!inicial || !STATUS_JA_ENVIADOS.includes(inicial.status) || !inicial.enviado_em) { r.primeiraNaoEnviada += 1; continue; }
-    if (!mesmoDiaLocal(inicial.enviado_em, agora, hab.timezone)) { r.primeiraDeOutroDia += 1; continue; }
-    if (!espacamentoCumprido(inicial.enviado_em, agora)) { r.espacamentoPendente += 1; continue; }
+    const todos = await destinatariosDa(alerta.organizacao_id, alerta.tipo_alerta);
+    if (!todos.length) { r.semDestinatario += 1; continue; }
+    const elegiveis = todos.filter((d) => d.elegivel === true);
+    if (!elegiveis.length) { r.destinatarioInelegivel += 1; continue; }
 
-    const idempotencyKey = chaveIdempotenciaReforco(alerta.id);
-    const instante = instanteDoReforco(agora, janela, chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }));
-    const conteudo = formatarMensagemReforcoDia({
-      unidadeNome: alerta.metadados?.unidade_nome ?? null, pendenciaMaisAntiga: alerta.data_referencia,
-    });
-    const res = await filaRepo.agendarReforcoDoAlerta({ alertaId: alerta.id, conteudo, disponivelEm: instante, expiraEm: janela.cutoff }, deps);
-    if (res.acao === "CRIADA") r.agendados += 1;
-    else if (res.acao === "JA_EXISTIA") r.jaExistiam += 1;
-    else if (res.acao === "ENTREGA_EM_CURSO") r.entregaEmCurso += 1;
-    else if (res.acao === "NAO_HABILITADA" || res.acao === "TIPO_NAO_PERMITIDO") r.semHabilitacao += 1;
-    else if (res.acao === "SEM_DESTINATARIO") r.semDestinatario += 1;
-    else if (res.acao === "DESTINATARIO_INELEGIVEL") r.destinatarioInelegivel += 1;
-    else if (res.acao === "ALERTA_SEM_PRIMEIRO_ENVIO" || res.acao === "PRIMEIRA_MENSAGEM_NAO_ENVIADA") r.primeiraNaoEnviada += 1;
-    else r.ignorados += 1; // ALERTA_INEXISTENTE | CHAVE_INVALIDA | CHAVE_EM_USO
+    const conteudo = formatarMensagemReforcoDia({ unidadeNome: alerta.metadados?.unidade_nome ?? null, pendenciaMaisAntiga: alerta.data_referencia });
+    const itens = [];
+    for (const d of elegiveis) {
+      // a INICIAL DESTE destinatário (contato_empresa_id ou, nas legadas, o contato) — nunca a de outro
+      const inicial = await filaRepo.obterMensagemInicialDoAlerta({ alertaId: alerta.id, contatoEmpresaId: d.contato_empresa_id, contatoId: d.contato_id }, deps);
+      if (!inicial || !STATUS_JA_ENVIADOS.includes(inicial.status) || !inicial.enviado_em) { r.primeiraNaoEnviada += 1; continue; }
+      if (!mesmoDiaLocal(inicial.enviado_em, agora, hab.timezone)) { r.primeiraDeOutroDia += 1; continue; }
+      if (!espacamentoCumprido(inicial.enviado_em, agora)) { r.espacamentoPendente += 1; continue; }
+      const idempotencyKey = chaveIdempotenciaDestinatario({ alertaId: alerta.id, contatoEmpresaId: d.contato_empresa_id, proposito: PROPOSITO.REFORCO });
+      const instante = instanteDoReforco(agora, janela, chaveDeJitter({ idempotencyKey, dataLogica: alerta.data_referencia, organizacaoId: alerta.organizacao_id }));
+      itens.push({ contatoEmpresaId: d.contato_empresa_id, conteudo, disponivelEm: instante, expiraEm: janela.cutoff });
+    }
+    if (!itens.length) continue;
+    const res = await filaRepo.agendarMensagensDoAlerta({ alertaId: alerta.id, proposito: PROPOSITO.REFORCO, itens }, deps);
+    await contabilizarAgendamento(res, r, { alerta, deps });
   }
   return r;
 }
@@ -427,7 +462,7 @@ async function motivoDeCancelamentoDoReforco({ job, alerta, timezone, agora }, d
   if (!alerta || alerta.tipo_alerta !== TIPOS_ALERTA.DASHBOARD_IFOOD_D1 || job.tipo !== TIPOS_ALERTA.DASHBOARD_IFOOD_D1) return MOTIVO_REFORCO.TIPO_NAO_SUPORTADO;
   if (!prazoD1VenceHoje(alerta.data_referencia, agora, timezone)) return MOTIVO_REFORCO.PRAZO_NAO_E_HOJE;
   if (!janelaDeReforcoAgora(agora, timezone)) return MOTIVO_REFORCO.FORA_DA_JANELA; // domingo, antes das 20:00, a partir das 22:00 ou do cutoff 22:30
-  const inicial = await filaRepo.obterMensagemInicialDoAlerta(alerta.id, deps);
+  const inicial = await filaRepo.obterMensagemInicialDoAlerta({ alertaId: alerta.id, contatoEmpresaId: job.contato_empresa_id ?? null, contatoId: job.contato_id ?? null }, deps);
   if (!inicial || !STATUS_JA_ENVIADOS.includes(inicial.status) || !inicial.enviado_em || !mesmoDiaLocal(inicial.enviado_em, agora, timezone)) return MOTIVO_REFORCO.PRIMEIRA_NAO_ENVIADA;
   if (!espacamentoCumprido(inicial.enviado_em, agora)) return MOTIVO_REFORCO.ESPACAMENTO_INSUFICIENTE;
   return null;
@@ -622,8 +657,8 @@ export async function processarJobReivindicado(job, {
   // são vetados pelos portões próprios da política.)
   const vinculoValido = !["SEM_RESPONSAVEL", "TELEFONE_DIVERGENTE"].includes(avaliarResponsavelDaMensagem({ job, contato, contatoEmpresa }).motivo);
 
-  // Duplicidade REAL: outra mensagem do mesmo evento que já saiu/pode ter saído (inclui DELIVERY_UNKNOWN).
-  const duplicado = job.alerta_id ? await filaRepo.existeOutraEntregaDoAlerta({ alertaId: job.alerta_id, exceptId: job.id, proposito: propositoDaMensagem(job) }, deps) : false;
+  // Duplicidade REAL: outra mensagem do mesmo evento PARA O MESMO DESTINATÁRIO que já saiu/pode ter saído (inclui DELIVERY_UNKNOWN). O envio ao João nunca é duplicata do da Maria.
+  const duplicado = job.alerta_id ? await filaRepo.existeOutraEntregaDoAlerta({ alertaId: job.alerta_id, exceptId: job.id, proposito: propositoDaMensagem(job), contatoEmpresaId: job.contato_empresa_id ?? null, contatoId: job.contato_id ?? null }, deps) : false;
 
   // HORÁRIO: sempre no timezone IANA da organização — nunca a hora do servidor, nunca UTC assumido.
   // D-1 ORDINÁRIO: antes de `envios_permitidos_apos` (hora local) a janela efetiva ainda está FECHADA para esta referência. Reforço e aviso tardio
@@ -689,6 +724,9 @@ export async function processarJobReivindicado(job, {
     vinculoValido,
     empresaHabilitada: habilitacao?.empresaHabilitada,
     tipoPermitido: habilitacao?.tipoPermitido,
+    envioAutomatico: habilitacao?.envioAutomatico,
+    // o destinatário só recebe as categorias de aviso que lhe foram habilitadas (revalidado aqui, no JIT do envio)
+    categoriaPermitida: await destinatarioRecebeTipo({ contatoEmpresaId: job.contato_empresa_id ?? null, tipoAlerta: job.tipo }, deps),
     empresaPausada: habilitacao?.empresaPausada,
     configHorarioValida,
     pendenciaAindaExiste: true, // já revalidado no passo 1 — chega aqui só se ainda existe (ou não é alerta)
@@ -703,9 +741,6 @@ export async function processarJobReivindicado(job, {
     providerConectado: statusProvider?.conectado === true,
     // Conta conectada = conta CONFIRMADA (aba Conexão). Serviço sem o gate (ou erro) ⇒ false ⇒ ADIADO com provider = 0, sem consumir tentativa.
     identidadeConfirmada: await Promise.resolve().then(() => whatsAppService.identidadeConfirmada?.()).then((r) => r === true).catch(() => false),
-    // Checkpoint H.4-A: defesa em profundidade, opt-in via COMUNICACAO_PILOTO_ENABLED
-    // (ver comunicacao.piloto.js). Com o piloto desligado, sempre `true` (não interfere).
-    telefoneNaAllowlistPiloto: telefoneAutorizadoNoPiloto(contato?.telefone_e164),
   };
 
   /**
@@ -735,14 +770,15 @@ export async function processarJobReivindicado(job, {
     await auditar({
       acao: ACOES.COMUNICACAO_ENVIO_BLOQUEADO, atorTipo: "sistema", organizacaoId: job.organizacao_id,
       entidade: "comunicacao_mensagens", entidadeId: job.id,
-      detalhes: { motivo, tipo: job.tipo, transitorio, statusResultante: r.status, disponivelEm: r.disponivel_em ?? null },
+      detalhes: { motivo, tipo: job.tipo, transitorio, statusResultante: r.status, disponivelEm: r.disponivel_em ?? null, destinatarioId: job.contato_empresa_id ?? null },
     });
     if (expiraReforco) return { id: job.id, resultado: "CANCELADO_REFORCO_EXPIRADO", motivo };
     if (transitorio) return { id: job.id, resultado: "ADIADO", motivo, disponivelEm: r.disponivel_em ?? null };
     // DUPLICATE = OUTRA mensagem do mesmo evento já saiu/pode ter saído (SENT ou DELIVERY_UNKNOWN): o evento NÃO está
     // "bloqueado", só esta segunda linha — o alerta não pode mudar de estado por causa dela.
     // O reforço é só a 2ª mensagem de um alerta cujo 1º aviso já saiu: o veto dele não muda o estado do alerta.
-    if (job.alerta_id && motivo !== MOTIVOS_BLOQUEIO.DUPLICATE && propositoDaMensagem(job) !== PROPOSITO.REFORCO) await melhorEsforco(() => alertasRepo.atualizarStatusAlerta(job.alerta_id, STATUS_ALERTA.BLOCKED, deps));
+    // (o status do ALERTA acompanha as mensagens pelo trigger do banco — agregado por precedência explícita, migration 104: o veto de UM destinatário
+    //  nunca marca o alerta como BLOQUEADO se outro ainda vai receber ou já recebeu.)
     return { id: job.id, resultado: "BLOQUEADO", motivo };
   };
 
@@ -757,18 +793,21 @@ export async function processarJobReivindicado(job, {
   const reserva = await filaRepo.reservarEnvio({
     ...claim, leaseSegundos: LEASE_ENVIO_SEGUNDOS,
     // reforço: cooldown normal (8h/4h) NÃO vale — o espaçamento próprio (>= 2h) já foi provado no JIT acima; cota diária e por minuto seguem valendo.
-    cooldownHoras: ehReforco ? null : numeroOuPadrao(alerta ? cooldowns?.[alerta.severidade] ?? cooldowns?.atencao : cooldowns?.atencao, COOLDOWN_PADRAO_HORAS),
+    // COOLDOWN POR DESTINATÁRIO; a empresa pode ter o seu (minutos), senão o padrão global por severidade.
+    cooldownHoras: ehReforco ? null : (habilitacao?.cooldownMinutos ? habilitacao.cooldownMinutos / 60 : numeroOuPadrao(alerta ? cooldowns?.[alerta.severidade] ?? cooldowns?.atencao : cooldowns?.atencao, COOLDOWN_PADRAO_HORAS)),
     maxPorContatoDia: numeroOuPadrao(limites?.max_por_contato_por_dia, LIMITE_DIA_PADRAO),
     // DUAS camadas, ambas precisam ter vaga (atômico no banco): global (o único número) e por organização.
     maxPorMinuto: numeroOuPadrao(limites?.max_proativas_por_minuto, LIMITE_MINUTO_PADRAO),
     maxPorMinutoOrganizacao: numeroOuPadrao(limites?.max_proativas_por_minuto_por_organizacao, LIMITE_MINUTO_ORGANIZACAO_PADRAO),
+    // LIMITE POR ORGANIZAÇÃO / dia — a empresa toda (todos os destinatários somados), separado do limite por destinatário acima.
+    maxPorOrganizacaoDia: habilitacao?.limiteDiarioOrg ?? numeroOuPadrao(limites?.max_por_organizacao_por_dia, LIMITE_ORGANIZACAO_DIA_PADRAO),
     inicioDia: inicioDoDiaLocal(agora, habilitacao.timezone), // a política já provou timezone válido
   }, deps);
 
   if (reserva.resultado === RESULTADO_RESERVA.POSSE_PERDIDA) return POSSE_PERDIDA(job);
   if (reserva.resultado === RESULTADO_RESERVA.EXPIRADA) return cancelarPorExpiracao(job, claim, deps, { linhaJaCancelada: true });
   if (reserva.resultado !== RESULTADO_RESERVA.INICIADO) {
-    return adiarOuBloquear(MOTIVO_DA_RESERVA[reserva.resultado], { ratePorDia: reserva.resultado === RESULTADO_RESERVA.RATE_LIMIT_DIA });
+    return adiarOuBloquear(MOTIVO_DA_RESERVA[reserva.resultado], { ratePorDia: reserva.resultado === RESULTADO_RESERVA.RATE_LIMIT_DIA || reserva.resultado === RESULTADO_RESERVA.RATE_LIMIT_DIA_ORGANIZACAO });
   }
 
   const emEnvio = reserva.mensagem;

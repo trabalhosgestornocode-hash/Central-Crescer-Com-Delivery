@@ -14,7 +14,7 @@ import { MOTIVOS_BLOQUEIO, MODOS, TIPOS_ALERTA } from "../src/modules/comunicaca
 const TIPO = TIPOS_ALERTA.DASHBOARD_IFOOD_D1;
 const AGORA = new Date("2026-09-16T13:00:00Z");
 const linhaOk = (extra = {}) => ({
-  organizacao_id: "org-1", habilitado: true, tipos_permitidos: [TIPO], timezone: "America/Fortaleza",
+  organizacao_id: "org-1", habilitado: true, envio_automatico: true, tipos_permitidos: [TIPO], timezone: "America/Fortaleza",
   janelas: null, pausado_ate: null, pausado_motivo: null, destinatario_contato_id: "contato-1", destinatario_contato_empresa_id: "ce-1", destinatario_perfil_id: "perfil-1", ...extra,
 });
 
@@ -55,18 +55,38 @@ describe("interpretarHabilitacao — fail-closed (unitário)", () => {
     );
   });
 
-  test("habilitado SEM destinatário explícito (contato ou perfil ausente/vazio/não-string) -> fechada (fail-closed)", () => {
+  test("o ponteiro LEGADO do destinatário NÃO é mais requisito (104): os destinatários são TODOS os ativos da empresa, resolvidos no banco", () => {
     const casos = [
       { destinatario_contato_id: null }, { destinatario_contato_empresa_id: null }, { destinatario_contato_id: "" }, { destinatario_contato_empresa_id: "" },
       { destinatario_contato_id: undefined, destinatario_contato_empresa_id: undefined }, { destinatario_contato_id: 42 }, { destinatario_contato_empresa_id: {} },
     ];
     for (const extra of casos) {
       const h = interpretarHabilitacao(linhaOk(extra), TIPO, AGORA);
-      assert.equal(h.empresaHabilitada, false, JSON.stringify(extra));
-      assert.equal(h.tipoPermitido, false, "tipo não pode valer sem destinatário");
-      assert.equal(h.fonte, "REGISTRO_INCOMPLETO_SEM_DESTINATARIO");
-      assert.equal(h.destinatarioContatoId, null);
-      assert.equal(h.destinatarioContatoEmpresaId, null);
+      assert.equal(h.empresaHabilitada, true, JSON.stringify(extra));
+      assert.equal(h.tipoPermitido, true);
+    }
+    const h = interpretarHabilitacao(linhaOk({ destinatario_contato_id: null, destinatario_contato_empresa_id: null }), TIPO, AGORA);
+    assert.equal(h.destinatarioContatoId, null);
+    assert.equal(h.destinatarioContatoEmpresaId, null);
+  });
+
+  test("ENVIO AUTOMÁTICO é opt-in separado: habilitada sem envio_automatico=true -> envioAutomatico=false (habilitar não o liga)", () => {
+    for (const valor of [false, null, undefined, "true", 1, 0]) {
+      const h = interpretarHabilitacao(linhaOk({ envio_automatico: valor }), TIPO, AGORA);
+      assert.equal(h.empresaHabilitada, true, String(valor));
+      assert.equal(h.envioAutomatico, false, `envio_automatico=${JSON.stringify(valor)} não pode ligar o envio automático`);
+    }
+    assert.equal(interpretarHabilitacao(linhaOk({ envio_automatico: true }), TIPO, AGORA).envioAutomatico, true);
+    // empresa FECHADA nunca tem envio automático, mesmo com a coluna true
+    assert.equal(interpretarHabilitacao(linhaOk({ habilitado: false, envio_automatico: true }), TIPO, AGORA).envioAutomatico, false);
+  });
+
+  test("limite diário da empresa e cooldown por destinatário: só inteiros positivos valem (senão o padrão global)", () => {
+    const h = interpretarHabilitacao(linhaOk({ limite_diario_org: 7, cooldown_minutos: 90 }), TIPO, AGORA);
+    assert.deepEqual([h.limiteDiarioOrg, h.cooldownMinutos], [7, 90]);
+    for (const ruim of [0, -1, 1.5, "7", null, undefined]) {
+      const r = interpretarHabilitacao(linhaOk({ limite_diario_org: ruim, cooldown_minutos: ruim }), TIPO, AGORA);
+      assert.deepEqual([r.limiteDiarioOrg, r.cooldownMinutos], [null, null], JSON.stringify(ruim));
     }
   });
 
@@ -142,7 +162,7 @@ describe("interpretarHabilitacao — fail-closed (unitário)", () => {
 describe("habilitado=true SOZINHO não basta — a política ainda exige o resto", () => {
   const snapshotLiberado = (h, extra = {}) => ({
     modo: MODOS.NORMAL, ehProativo: true, contatoExiste: true, telefoneVerificado: true, optOut: false, consentimento: true,
-    destinatarioAtivo: true, vinculoValido: true, empresaHabilitada: h.empresaHabilitada, tipoPermitido: h.tipoPermitido,
+    destinatarioAtivo: true, vinculoValido: true, empresaHabilitada: h.empresaHabilitada, tipoPermitido: h.tipoPermitido, envioAutomatico: h.envioAutomatico, categoriaPermitida: true,
     empresaPausada: h.empresaPausada, configHorarioValida: h.configHorarioValida, pendenciaAindaExiste: true,
     duplicado: false, cooldownAtivo: false, rateLimitExcedido: false, dentroDaJanela: true, providerConectado: true, identidadeConfirmada: true, ...extra,
   });
@@ -354,35 +374,43 @@ describe("comunicacao_habilitacoes — tabela real (banco de TESTE)", { skip: PU
     assert.equal(count, 0);
   });
 
-  test("habilitado=true SEM destinatário é RECUSADO pelo banco; com o par incompleto também", async (t) => {
+  test("habilitado=true SEM ponteiro é ACEITO (104: destinatários não são mais um ponteiro), mas o envio automático nasce DESLIGADO e o banco exige coerência", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const semDest = await inserir({ organizacao_id: orgA, habilitado: true, tipos_permitidos: [TIPO], timezone: "America/Fortaleza" });
-    assert.ok(semDest.error, "aceitou habilitado=true sem destinatário");
+    assert.equal(semDest.error, null, semDest.error?.message);
+    const { data } = await supabase.from("comunicacao_habilitacoes").select("habilitado, envio_automatico").eq("organizacao_id", orgA).single();
+    assert.deepEqual([data.habilitado, data.envio_automatico], [true, false], "habilitar NÃO liga o envio automático");
+    // o par contato/responsável incompleto continua recusado pelo banco
+    await supabase.from("comunicacao_habilitacoes").delete().eq("organizacao_id", orgA);
     const soContato = await inserir({ organizacao_id: orgA, habilitado: false, destinatario_contato_id: destA.contatoId });
-    assert.ok(soContato.error, "aceitou o par contato/perfil incompleto");
+    assert.ok(soContato.error, "aceitou o par contato/responsável incompleto");
+    // envio automático sem estar habilitada é recusado (constraint)
+    const autoSemHab = await inserir({ organizacao_id: orgA, habilitado: false, envio_automatico: true });
+    assert.ok(autoSemHab.error, "aceitou envio_automatico=true numa empresa NÃO habilitada");
     const { count } = await supabase.from("comunicacao_habilitacoes").select("organizacao_id", { count: "exact", head: true }).eq("organizacao_id", orgA);
     assert.equal(count, 0);
   });
 
-  test("DOIS contatos elegíveis existem e NENHUM foi selecionado -> nada é escolhido implicitamente (organização fechada, destinatário nulo)", async (t) => {
+  test("DOIS destinatários elegíveis existem -> AMBOS são resolvidos (nada é escolhido implicitamente por ordem; nenhum é ignorado)", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
-    await inserir({ organizacao_id: orgA, habilitado: false, tipos_permitidos: [TIPO], timezone: "America/Fortaleza" });
-    const h = await resolverHabilitacaoEmpresa({ organizacaoId: orgA, tipoAlerta: TIPO });
-    assert.equal(h.empresaHabilitada, false);
-    assert.equal(h.destinatarioContatoId, null, "um destinatário foi inferido dos contatos existentes");
-    const { data } = await supabase.from("comunicacao_habilitacoes").select("destinatario_contato_id, destinatario_perfil_id").eq("organizacao_id", orgA).single();
-    assert.deepEqual([data.destinatario_contato_id, data.destinatario_perfil_id], [null, null]);
+    await inserir({ organizacao_id: orgA, habilitado: true, tipos_permitidos: [TIPO], timezone: "America/Fortaleza" });
+    const { resolverDestinatarios } = await import("../src/modules/comunicacao/comunicacao.fila.repo.js");
+    const lista = await resolverDestinatarios({ organizacaoId: orgA, tipoAlerta: TIPO });
+    const elegiveis = lista.filter((d) => d.elegivel).map((d) => d.contato_empresa_id).sort();
+    assert.deepEqual(elegiveis, [ceA, ceA2].sort(), "todos os destinatários elegíveis da empresa devem aparecer");
+    assert.ok(lista.every((d) => d.contato_empresa_id !== ceB), "destinatário de OUTRA empresa apareceu na resolução");
     await supabase.from("comunicacao_habilitacoes").delete().eq("organizacao_id", orgA);
   });
 
-  test("destinatário EXPLICITAMENTE escolhido (o segundo) -> somente ele; trocar a escolha troca o destinatário", async (t) => {
+  test("desativar um destinatário o tira da resolução; o outro segue elegível (independência)", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
-    await inserir(comDestA({ destinatario_contato_id: destA2.contatoId, destinatario_contato_empresa_id: ceA2, destinatario_perfil_id: destA2.perfilId }));
-    const h = await resolverHabilitacaoEmpresa({ organizacaoId: orgA, tipoAlerta: TIPO });
-    assert.deepEqual([h.empresaHabilitada, h.destinatarioContatoId, h.destinatarioPerfilId], [true, destA2.contatoId, destA2.perfilId]);
-    await supabase.from("comunicacao_habilitacoes").update({ destinatario_contato_id: destA.contatoId, destinatario_contato_empresa_id: ceA, destinatario_perfil_id: destA.perfilId }).eq("organizacao_id", orgA);
-    const h2 = await resolverHabilitacaoEmpresa({ organizacaoId: orgA, tipoAlerta: TIPO });
-    assert.equal(h2.destinatarioContatoId, destA.contatoId);
+    await inserir({ organizacao_id: orgA, habilitado: true, tipos_permitidos: [TIPO], timezone: "America/Fortaleza" });
+    const { resolverDestinatarios } = await import("../src/modules/comunicacao/comunicacao.fila.repo.js");
+    await supabase.from("comunicacao_contatos_empresa").update({ ativo: false }).eq("id", ceA);
+    const lista = await resolverDestinatarios({ organizacaoId: orgA, tipoAlerta: TIPO });
+    assert.deepEqual(lista.filter((d) => d.elegivel).map((d) => d.contato_empresa_id), [ceA2]);
+    assert.equal(lista.find((d) => d.contato_empresa_id === ceA).motivo, "DESTINATARIO_INATIVO");
+    await supabase.from("comunicacao_contatos_empresa").update({ ativo: true }).eq("id", ceA);
     await supabase.from("comunicacao_habilitacoes").delete().eq("organizacao_id", orgA);
   });
 
@@ -390,7 +418,7 @@ describe("comunicacao_habilitacoes — tabela real (banco de TESTE)", { skip: PU
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const ins = await inserir(comDestA({ destinatario_contato_id: destB.contatoId, destinatario_contato_empresa_id: ceB, destinatario_perfil_id: destB.perfilId }));
     assert.ok(ins.error, "aceitou o destinatário da organização B na A");
-    assert.match(ins.error.message, /responsavel de comunicacao inexistente, inativo ou de outra empresa|foreign key/i);
+    assert.match(ins.error.message, /responsavel de comunicacao inexistente( , inativo)? ?ou de outra empresa|responsavel de comunicacao inexistente, inativo ou de outra empresa|foreign key/i);
     await inserir(comDestA());
     const upd = await supabase.from("comunicacao_habilitacoes").update({ destinatario_contato_id: destB.contatoId, destinatario_contato_empresa_id: ceB, destinatario_perfil_id: destB.perfilId }).eq("organizacao_id", orgA);
     assert.ok(upd.error, "o update trocou o destinatário para outra organização");

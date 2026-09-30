@@ -64,16 +64,16 @@ export function htmlCardsSaude(r) {
   const modo = r.comunicacao?.modo;
   const gw = r.gateway?.estado;
   const w = estadoWorkerCentral(r.worker);
-  const piloto = r.piloto ?? {};
   const orgsHab = r.empresas?.habilitadas ?? 0;
+  const orgsAuto = r.empresas?.comEnvioAutomatico ?? 0;
   const badgeGw = gw === "conectado" ? "ok" : gw === "instavel" ? "atencao" : "critico";
   return cards([
     card({ label: "Automação", valor: ROTULO_MODO_CENTRAL[modo] ?? "—", icone: "bell", tom: modo === "NORMAL" ? "ok" : "", nota: modo === "NORMAL" ? "Alertas automáticos em andamento." : "Nenhum alerta automático é enviado." }),
     card({ label: "Gateway WhatsApp", valor: ROTULO_GATEWAY[gw] ?? "—", icone: "smartphone", tom: badgeGw === "ok" ? "ok" : badgeGw === "atencao" ? "atencao" : "critico" }),
     card({ label: "Worker", valor: w.rotulo, icone: "send", tom: w.classe === "ok" ? "ok" : w.classe === "atencao" ? "atencao" : "" }),
     card({
-      label: "Piloto", valor: piloto.ativo ? `Ativo — ${Number(piloto.quantidadeDestinos ?? 0)} destino${Number(piloto.quantidadeDestinos ?? 0) === 1 ? "" : "s"} autorizado${Number(piloto.quantidadeDestinos ?? 0) === 1 ? "" : "s"}` : "Inativo",
-      icone: "lock", tom: piloto.ativo ? "ok" : "",
+      label: "Envio automático", valor: `${orgsAuto} empresa${orgsAuto === 1 ? "" : "s"}`,
+      icone: "lock", tom: orgsAuto > 0 && modo === "NORMAL" ? "ok" : "", nota: modo === "DISABLED" ? "Kill switch ligado — nenhum envio real." : modo === "REACTIVE_ONLY" ? "Somente respostas: alertas automáticos não são enviados." : modo !== "NORMAL" ? "Modo desconhecido — envio bloqueado." : (r.pilotoLegado?.configurado ? "Variáveis do piloto: LEGACY — sem efeito." : undefined),
     }),
     card({ label: "Organizações", valor: `${orgsHab} habilitada${orgsHab === 1 ? "" : "s"}`, icone: "building", tom: orgsHab > 0 ? "ok" : "" }),
   ].join(""));
@@ -431,8 +431,7 @@ export function htmlModalTeste(preparo, { fase = "confirmar", status = null, err
       ${linhaPreparo("WhatsApp", preparo.whatsapp === "conectado", "conectado", "não conectado")}
       ${linhaPreparo("Consentimento", c?.consentimento === true, "confirmado", "pendente")}
       ${linhaPreparo("Número", c?.verificado === true, "verificado", "não verificado")}
-      ${linhaPreparo("Automação", preparo.modo === "DISABLED", "desativada (necessário para o teste)", "ativada — desative antes de testar")}
-      ${linhaPreparo("Piloto", preparo.piloto?.destinatarioPermitido === true, "destinatário autorizado", "destinatário não autorizado")}
+      ${linhaPreparo("Modo global", ["NORMAL", "REACTIVE_ONLY"].includes(preparo.modo), "permite envio real", "DISABLED — altere o modo operacional antes de realizar um teste real")}
       ${linhaPreparo("Limite de testes", (preparo.limite?.usados ?? 0) < (preparo.limite?.maximo ?? 1), `${preparo.limite?.usados ?? 0} de ${preparo.limite?.maximo ?? 1} usado(s)`, `limite atingido (${preparo.limite?.usados ?? 0} de ${preparo.limite?.maximo ?? 1})`)}
     </ul>`;
   const unidades = (preparo.unidadesDisponiveis ?? []);
@@ -459,9 +458,10 @@ export function htmlModalTeste(preparo, { fase = "confirmar", status = null, err
 
 /** Aba "Teste": explica o objetivo, mostra o estado e o botão que abre o modal. */
 export function htmlAbaTeste({ resumo, orgs = [], testes = null } = {}) {
-  const desativada = resumo?.comunicacao?.modo === "DISABLED";
+  // KILL SWITCH: só NORMAL e REACTIVE_ONLY permitem envio real (teste incluso); DISABLED, indefinido ou desconhecido BLOQUEIAM.
+  const modoPermiteEnvio = ["NORMAL", "REACTIVE_ONLY"].includes(resumo?.comunicacao?.modo);
   const candidatas = orgs.filter((o) => o.contato);
-  const motivo = !desativada ? "O teste só pode ser feito com a automação desativada." : !candidatas.length ? "Nenhuma empresa tem destinatário configurado." : "";
+  const motivo = !modoPermiteEnvio ? "Envio bloqueado: o módulo WhatsApp está em modo DISABLED. Altere o modo operacional antes de realizar um teste real." : !candidatas.length ? "Nenhuma empresa tem destinatário configurado." : "";
   const seletor = candidatas.length > 1
     ? `<label class="padm-teste-empresa">Empresa<select id="padm-teste-org">${candidatas.map((o) => `<option value="${escapeHtml(o.organizacaoId)}">${escapeHtml(o.nome)}</option>`).join("")}</select></label>`
     : (candidatas[0] ? `<input type="hidden" id="padm-teste-org" value="${escapeHtml(candidatas[0].organizacaoId)}" /><p class="padm-teste-alvo">${escapeHtml(candidatas[0].nome)}</p>` : "");

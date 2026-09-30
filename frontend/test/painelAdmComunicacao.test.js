@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   htmlComunicacaoCards, htmlComunicacaoEmpresas, htmlComunicacaoFila, htmlComunicacaoHistorico,
-  htmlDrawerComunicacao, htmlChecklistPiloto, htmlComunicacaoConfiguracoes, htmlResumoEmpresas, TELAS_PADM,
+  htmlDrawerComunicacao, htmlChecklistAtivacao, htmlComunicacaoConfiguracoes, htmlResumoEmpresas, TELAS_PADM,
 } from "../src/painelAdmViews.js";
 
 test("a aba Comunicação existe na navegação do Painel Administrativo", () => {
@@ -14,12 +14,12 @@ test("a aba Comunicação existe na navegação do Painel Administrativo", () =>
   assert.equal(tela.label, "Comunicação");
 });
 
-test("Central: os 5 cards de saúde (Automação, Gateway WhatsApp, Worker, Piloto, Organizações) sem vocabulário de engenharia", () => {
+test("Central: os 5 cards de saúde incluem envio automático por empresa", () => {
   const html = htmlComunicacaoCards({
     gateway: { estado: "conectado" }, worker: { estado: "habilitado", rodandoNestaInstancia: true, ultimoCicloEm: "2026-09-23T20:00:00Z", resultadoUltimoCiclo: "skipped" }, comunicacao: { modo: "DISABLED" },
     piloto: { ativo: true, quantidadeDestinos: 1 }, empresas: { total: 48, configuradas: 0, habilitadas: 0, pausadas: 0 },
   });
-  for (const rotulo of ["Automação", "Desativada", "Gateway WhatsApp", "Conectado", "Worker", "Saudável", "Piloto", "Ativo — 1 destino autorizado", "Organizações", "0 habilitadas"]) {
+  for (const rotulo of ["Automação", "Desativada", "Gateway WhatsApp", "Conectado", "Worker", "Saudável", "Envio automático", "0 empresas", "Organizações", "0 habilitadas"]) {
     assert.ok(html.includes(rotulo), rotulo);
   }
   assert.ok(!/DISABLED|CONNECTED|offline_batch|marker|auth-state|lease|HMAC|token/i.test(html), "vocabulário de engenharia nunca pode vazar pra UI");
@@ -35,37 +35,25 @@ test("Central: o card do Worker só diz 'Saudável' com EVIDÊNCIA do último ci
   assert.match(comEvidencia, /Saudável/);
   assert.doesNotMatch(falhou, /Saudável/); assert.match(falhou, /Atenção/);
   assert.match(desligado, /Desativado/); assert.doesNotMatch(desligado, /Saudável/);
-  assert.match(semEvidencia, /Piloto/); assert.match(semEvidencia, /Inativo/);
+  assert.match(semEvidencia, /Envio automático/); assert.match(semEvidencia, /0 empresas/);
 });
 
-test("migration 100: o drawer NÃO tem seletor de perfil/usuário — o responsável é cadastrado por nome + telefone da empresa", () => {
-  const detalhe = {
-    organizacao: { organizacaoId: "org-1", nome: "Grupo Jailton e Vanessa" },
-    configuracao: {
-      status: "CONFIGURACAO_INCOMPLETA", timezone: null, tiposPermitidos: [], pausadoAte: null,
-      destinatario: { contatoEmpresaId: "ce1", nome: "Jailton Matos", ativo: true, telefoneMascarado: "+55 ** *****-1234", whatsappStatus: "AGUARDANDO_VALIDACAO", verificado: false, consentimento: false, optOut: false },
-    },
-    unidades: [],
-  };
-  const html = htmlDrawerComunicacao(detalhe);
-  assert.doesNotMatch(html, /<select|perfilOperacionalId|Destinatário \(perfil/);
-  assert.ok(html.includes("Responsável pelas comunicações"));
-  for (const campo of ['name="nome"', 'name="ddi"', 'name="telefone"', 'name="ativo"', 'name="observacoes"']) assert.ok(html.includes(campo), campo);
-  assert.ok(html.includes("Jailton Matos"));
-  assert.ok(html.includes("Aguardando validação"));
-  assert.ok(html.includes("Ativo para receber avisos"));
-  assert.doesNotMatch(html, /name="telefoneE164"/, "o formulário de configuração não pede mais telefone/perfil");
-});
-
-test("drawer sem responsável: empty state + campos de cadastro (telefone obrigatório), sem nenhum nome herdado de acesso", () => {
-  const html = htmlDrawerComunicacao({
-    organizacao: { organizacaoId: "org-1", nome: "Subway Centro - Mogi Mirim - SP" },
-    configuracao: { status: "NAO_CONFIGURADA", timezone: null, tiposPermitidos: [], pausadoAte: null, destinatario: null },
-    unidades: [],
+test("drawer apresenta vários destinatários sem seletor de perfil e mantém configuração separada", () => {
+  const html = htmlDrawerComunicacao({ organizacao: { nome: "Empresa teste" }, configuracao: { status: "PRONTA_PARA_HABILITAR" }, unidades: [] }, {
+    status: { empresaHabilitada: true, envioAutomatico: false },
+    destinatarios: [{ id: "ce1", nome: "Contato A", ativo: true, telefoneMascarado: "*******1234", whatsappStatus: "AGUARDANDO_VALIDACAO" }, { id: "ce2", nome: "Contato B", ativo: true }],
+    categoriasDisponiveis: [{ codigo: "pendencia_d1", rotulo: "Pendência D-1" }],
   });
-  assert.ok(html.includes("Nenhum responsável cadastrado."));
+  for (const nome of ["Contato A", "Contato B", "Destinatários", "Configuração operacional"]) assert.ok(html.includes(nome), nome);
+  assert.doesNotMatch(html, /perfilOperacionalId|Destinatário \(perfil/);
+  assert.match(html, /Salvar a configuração nunca habilita a empresa nem liga o envio automático/);
   assert.match(html, /name="telefone"[^>]*required/);
-  assert.doesNotMatch(html, /Jailton/);
+});
+
+test("empresa sem destinatários mostra cadastro vazio", () => {
+  const html = htmlDrawerComunicacao({ organizacao: { nome: "Empresa teste" }, configuracao: { status: "NAO_CONFIGURADA" }, unidades: [] }, { destinatarios: [] });
+  assert.match(html, /Nenhum destinatário cadastrado/);
+  assert.match(html, /name="telefone"[^>]*required/);
 });
 
 test("empty state: nenhuma organização não parece um erro (item 30)", () => {
@@ -76,7 +64,7 @@ test("empty state: nenhuma organização não parece um erro (item 30)", () => {
 
 test("lista de empresas nunca imprime telefone completo (item 14) — só o que a service já manda mascarado", () => {
   const html = htmlComunicacaoEmpresas([
-    { organizacaoId: "org-1", nome: "Grupo Saci", status: "PRONTA_PARA_PILOTO", habilitada: false, whatsappStatus: "NAO_CADASTRADO", responsavel: null, unidadesMonitoradas: 6, unidades: [{ unidadeId: "u1", nome: "Subway Saci — Matriz" }],
+    { organizacaoId: "org-1", nome: "Grupo Saci", status: "PRONTA_PARA_HABILITAR", habilitada: false, whatsappStatus: "NAO_CADASTRADO", responsavel: null, unidadesMonitoradas: 6, unidades: [{ unidadeId: "u1", nome: "Subway Saci — Matriz" }],
       contato: { telefoneMascarado: "********88", consentimento: true, verificado: true, optOut: false }, pendenciasAtuais: 2,
       ultimaMensagem: { status: "SENT", em: "2026-09-23T19:22:46Z" }, proximaAcao: "Habilitar a comunicação desta empresa" },
   ], "");
@@ -153,31 +141,31 @@ test("paginação aparece só quando há mais de uma página", () => {
   assert.ok(comPaginacao.includes("Página 2 de 3"));
 });
 
-test("H.4-A itens 34-36: checklist do piloto mostra os 9 itens, com estado textual além de ícone/cor", () => {
-  const tudoPendente = htmlChecklistPiloto({
+test("checklist de ativação mostra nove requisitos, incluindo envio automático, com estado textual", () => {
+  const tudoPendente = htmlChecklistAtivacao({
     responsavelDefinido: false, telefoneValido: false, consentimento: false, telefoneVerificado: false,
-    timezone: false, tipoAlerta: false, allowlistPiloto: false, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+    timezone: false, tipoAlerta: false, envioAutomatico: false, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
   });
-  for (const rotulo of ["Responsável definido", "Telefone válido", "Consentimento", "WhatsApp validado", "Timezone", "Tipo de alerta", "Allowlist do piloto", "Organização habilitada", "Comunicação global ativa"]) {
+  for (const rotulo of ["Destinatário definido", "Telefone válido", "Consentimento", "WhatsApp validado", "Timezone", "Tipo de alerta", "Envio automático", "Empresa habilitada", "Comunicação global ativa"]) {
     assert.ok(tudoPendente.includes(rotulo), `esperava "${rotulo}" no checklist`);
   }
   assert.equal((tudoPendente.match(/\(pendente\)/g) ?? []).length, 9);
   assert.ok(!tudoPendente.includes("(pronto)"));
 
-  const parcial = htmlChecklistPiloto({
+  const parcial = htmlChecklistAtivacao({
     responsavelDefinido: true, telefoneValido: true, consentimento: false, telefoneVerificado: false,
-    timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+    timezone: true, tipoAlerta: true, envioAutomatico: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
   });
   assert.equal((parcial.match(/\(pronto\)/g) ?? []).length, 5);
   assert.equal((parcial.match(/\(pendente\)/g) ?? []).length, 4);
 });
 
-test("H.4-A itens 34-36: organização/comunicação global SEMPRE aparecem pendentes nesta fase", () => {
-  const c = htmlChecklistPiloto({
+test("checklist mantém empresa e comunicação global pendentes quando o backend retorna false", () => {
+  const c = htmlChecklistAtivacao({
     responsavelDefinido: true, telefoneValido: true, consentimento: true, telefoneVerificado: true,
-    timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+    timezone: true, tipoAlerta: true, envioAutomatico: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
   });
-  const linhaOrg = c.split("<li").find((l) => l.includes("Organização habilitada"));
+  const linhaOrg = c.split("<li").find((l) => l.includes("Empresa habilitada"));
   const linhaModo = c.split("<li").find((l) => l.includes("Comunicação global ativa"));
   assert.ok(linhaOrg.includes("padm-check-pendente"));
   assert.ok(linhaModo.includes("padm-check-pendente"));
@@ -187,9 +175,9 @@ test("H.4-A itens 15-18: o drawer traz o botão de pré-visualização (nunca 'E
   const detalhe = {
     organizacao: { organizacaoId: "org-1", nome: "Grupo Jailton e Vanessa" },
     configuracao: { status: "CONFIGURACAO_INCOMPLETA", timezone: null, tiposPermitidos: [], pausadoAte: null, destinatario: null },
-    checklistPiloto: {
+    checklistAtivacao: {
       responsavelDefinido: false, telefoneValido: false, consentimento: false, telefoneVerificado: false,
-      timezone: false, tipoAlerta: false, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
+      timezone: false, tipoAlerta: false, envioAutomatico: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
     },
     unidades: [],
   };
@@ -197,71 +185,4 @@ test("H.4-A itens 15-18: o drawer traz o botão de pré-visualização (nunca 'E
   assert.ok(html.includes('data-padm-acao="preview-comunicacao"'));
   assert.ok(html.includes("Pré-visualizar mensagem"));
   assert.doesNotMatch(html, /Enviar agora|Testar mensagem|Disparar|Reenviar|Enviar mensagem/i);
-});
-
-function detalheComDestinatario(destinatario) {
-  return {
-    organizacao: { organizacaoId: "org-1", nome: "Grupo Jailton e Vanessa" },
-    configuracao: { status: "CONFIGURACAO_INCOMPLETA", timezone: "America/Sao_Paulo", tiposPermitidos: ["dashboard_ifood_d1"], pausadoAte: null, destinatario },
-    checklistPiloto: {
-      responsavelDefinido: true, telefoneValido: true, consentimento: destinatario?.consentimento ?? false, telefoneVerificado: destinatario?.verificado ?? false,
-      timezone: true, tipoAlerta: true, allowlistPiloto: true, organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
-    },
-    unidades: [],
-  };
-}
-
-// Checkpoint H.4-A.3.2, item 11 (A, B, C, F) — cobertura da ação de consentimento
-// no drawer. D, E, G, H, I (comportamento de clique/chamada de API) não são
-// testáveis neste arquivo: painelAdmComunicacao.test.js só testa construtores
-// HTML->string (sem DOM/jsdom neste projeto, mesmo padrão dos testes acima) —
-// esse comportamento foi validado por QA manual em produção (H.4-A.3.2, item 16).
-
-test("A. consentimento=false -> botão de confirmação aparece", () => {
-  const html = htmlDrawerComunicacao(detalheComDestinatario({
-    telefoneMascarado: "+558********88", verificado: true, consentimento: false, optOut: false, contatoEmpresaId: "ce1", ativo: true, nome: "Jailton Matos", whatsappStatus: "AGUARDANDO_VALIDACAO",
-  }));
-  assert.ok(html.includes('data-padm-acao="pedir-confirmacao-consentimento"'));
-  assert.ok(html.includes("Confirmar consentimento e verificação"));
-});
-
-test("B. verificado=false -> botão de confirmação aparece", () => {
-  const html = htmlDrawerComunicacao(detalheComDestinatario({
-    telefoneMascarado: "+558********88", verificado: false, consentimento: true, optOut: false, contatoEmpresaId: "ce1", ativo: true, nome: "Jailton Matos", whatsappStatus: "AGUARDANDO_VALIDACAO",
-  }));
-  assert.ok(html.includes('data-padm-acao="pedir-confirmacao-consentimento"'));
-});
-
-test("C. consentimento=true e verificado=true -> mostra 'Consentimento confirmado', sem botão", () => {
-  const html = htmlDrawerComunicacao(detalheComDestinatario({
-    telefoneMascarado: "+558********88", verificado: true, consentimento: true, optOut: false, contatoEmpresaId: "ce1", ativo: true, nome: "Jailton Matos", whatsappStatus: "VALIDADO",
-  }));
-  assert.ok(html.includes("Consentimento confirmado"));
-  assert.doesNotMatch(html, /pedir-confirmacao-consentimento/);
-});
-
-test("sem perfil associado -> nenhum botão/estado de consentimento aparece (contato incompleto)", () => {
-  const html = htmlDrawerComunicacao(detalheComDestinatario({
-    telefoneMascarado: "+558********88", verificado: false, consentimento: false, optOut: false, contatoEmpresaId: null, ativo: true, nome: "Jailton Matos",
-  }));
-  assert.doesNotMatch(html, /pedir-confirmacao-consentimento|Consentimento confirmado/);
-});
-
-test("F. o painel de confirmação traz o texto exato, nenhum checkbox, e nunca é exibido pré-aberto", () => {
-  const html = htmlDrawerComunicacao(detalheComDestinatario({
-    telefoneMascarado: "+558********88", verificado: false, consentimento: false, optOut: false, contatoEmpresaId: "ce1", ativo: true, nome: "Jailton Matos", whatsappStatus: "AGUARDANDO_VALIDACAO",
-  }));
-  assert.match(html, /class="padm-consentimento-confirmar" hidden/);
-  assert.ok(html.includes("Confirme somente se o destinatário autorizou o recebimento de alertas operacionais do Crescer com Delivery por WhatsApp e se este número foi validado administrativamente."));
-  assert.ok(html.includes('data-padm-acao="cancelar-confirmacao-consentimento"'));
-  assert.ok(html.includes("Cancelar"));
-  const blocoConfirmar = html.slice(html.indexOf("padm-consentimento-confirmar"));
-  assert.doesNotMatch(blocoConfirmar.slice(0, blocoConfirmar.indexOf("</div>")), /type="checkbox"/);
-});
-
-test("a ação de consentimento nunca é confundida com envio/habilitação (vocabulário)", () => {
-  const html = htmlDrawerComunicacao(detalheComDestinatario({
-    telefoneMascarado: "+558********88", verificado: false, consentimento: false, optOut: false, contatoEmpresaId: "ce1", ativo: true, nome: "Jailton Matos", whatsappStatus: "AGUARDANDO_VALIDACAO",
-  }));
-  assert.doesNotMatch(html, /Enviar|Habilitar organização|Ativar comunicação|Agente Crescer/i);
 });

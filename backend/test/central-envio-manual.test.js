@@ -1,5 +1,5 @@
 // Central de Comunicação — ENVIO MANUAL: mesmo pipeline do teste (gates → outbox → RPCs fenced → WhatsAppService → recibos), nunca um segundo.
-// FAIL-CLOSED: consentimento=false, opt-out, não verificado, fora da allowlist do piloto, Gateway fora, WhatsApp não configurado ⇒ 409 e o provider NUNCA é chamado.
+// FAIL-CLOSED: consentimento=false, opt-out, não verificado, modo DISABLED (kill switch), Gateway fora, WhatsApp não configurado ⇒ 409 e o provider NUNCA é chamado.
 // Idempotente: duplo clique (mesmo envioId) ⇒ UMA mensagem e UM provider call. Sem retry. Ator humano auditado. Sem banco, sem rede.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +11,7 @@ const C1 = uuid(101);
 const AUTOR = { contaId: uuid(7), perfilId: uuid(8), nome: "Camila Operadora", email: "camila@crescer.com" };
 const TEL = "+5511999990001";
 
-function montar({ roster, env = {}, estadoGateway = { estado: "conectado" }, envia, semServico = false, identidade = true } = {}) {
+function montar({ roster, env = {}, estadoGateway = { estado: "conectado" }, envia, semServico = false, identidade = true, modo = "NORMAL" } = {}) {
   const db = criarFakeDb({
     comunicacao_roster_autorizado: roster ?? [
       linhaRoster({ contato_id: C1, telefone_e164: TEL, organizacao_id: "o1", organizacao_nome: "Rede Sabor", unidade_id: "u1", unidade_nome: "Centro" }),
@@ -27,7 +27,7 @@ function montar({ roster, env = {}, estadoGateway = { estado: "conectado" }, env
       return { providerMessageId: "WA-1", enviadoEm: new Date().toISOString() };
     },
   };
-  const deps = { supabase: db, env, estadoGateway, whatsAppService, identidadeConfirmada: identidade, auditar: async (e) => auditorias.push(e) };
+  const deps = { supabase: db, env, estadoGateway, whatsAppService, identidadeConfirmada: identidade, modoAtual: async () => modo, auditar: async (e) => auditorias.push(e) };
   return { db, deps, chamadas, auditorias };
 }
 const enviar = (deps, extra = {}) => enviarMensagem({ contatoId: C1, envioId: uuid(500), texto: "Bom dia! Conseguem lançar o dashboard?", ...extra }, AUTOR, deps);
@@ -136,9 +136,8 @@ describe("gates — FAIL-CLOSED (o provider nunca é chamado e nada é criado)",
     ["consentimento=false", { roster: [linhaRoster({ contato_id: C1, telefone_e164: TEL, consentimento: false })] }, "SEM_CONSENTIMENTO"],
     ["não verificado", { roster: [linhaRoster({ contato_id: C1, telefone_e164: TEL, verificado: false })] }, "NAO_VERIFICADO"],
     ["opt-out", { roster: [linhaRoster({ contato_id: C1, telefone_e164: TEL, opt_out: true })] }, "OPT_OUT"],
-    ["piloto ligado e telefone FORA da allowlist", { env: { COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: "+5511888880000" } }, "FORA_DA_ALLOWLIST"],
-    ["piloto ligado com allowlist VAZIA", { env: { COMUNICACAO_PILOTO_ENABLED: "true" } }, "FORA_DA_ALLOWLIST"],
-    ["piloto ligado com allowlist MALFORMADA", { env: { COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: "abc" } }, "FORA_DA_ALLOWLIST"],
+    ["modo DISABLED (kill switch)", { modo: "DISABLED" }, "MODO_DISABLED"],
+    ["modo desconhecido (fail-closed)", { modo: "qualquer" }, "MODO_DISABLED"],
     ["Gateway desconectado", { estadoGateway: { estado: "desconectado" } }, "GATEWAY_INDISPONIVEL"],
     ["Gateway instável", { estadoGateway: { estado: "instavel" } }, "GATEWAY_INDISPONIVEL"],
     ["Gateway desconhecido", { estadoGateway: { estado: "desconhecido" } }, "GATEWAY_INDISPONIVEL"],
@@ -156,11 +155,14 @@ describe("gates — FAIL-CLOSED (o provider nunca é chamado e nada é criado)",
     });
   }
 
-  test("piloto ligado e telefone NA allowlist ⇒ envia; piloto desligado ⇒ a allowlist não se aplica", async () => {
-    const a = montar({ env: { COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: `+5511888880000,${TEL}` } });
-    assert.equal((await enviar(a.deps)).resultado, "ENVIADO");
-    const b = montar({ env: {} });
-    assert.equal((await enviar(b.deps)).resultado, "ENVIADO");
+  test("SEM piloto: as variáveis COMUNICACAO_PILOTO_* não decidem nada — envia com ou sem elas; NORMAL e REACTIVE_ONLY enviam, DISABLED não", async () => {
+    for (const env of [{}, { COMUNICACAO_PILOTO_ENABLED: "true" }, { COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: "+5511888880000" }]) {
+      assert.equal((await enviar(montar({ env }).deps)).resultado, "ENVIADO", JSON.stringify(env));
+    }
+    assert.equal((await enviar(montar({ modo: "REACTIVE_ONLY" }).deps)).resultado, "ENVIADO");
+    const bloqueado = montar({ modo: "DISABLED" });
+    await rejeitaCom(() => enviar(bloqueado.deps), 409, "MODO_DISABLED");
+    assert.equal(bloqueado.chamadas.length, 0, "provider 0 em DISABLED");
   });
 
   test("contato FORA do roster ⇒ 404 (não revela se o número existe) e nada é criado", async () => {

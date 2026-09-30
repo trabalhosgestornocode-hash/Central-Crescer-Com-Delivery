@@ -18,6 +18,8 @@ const BASE = () => ({
   vinculoValido: true,
   empresaHabilitada: true,
   tipoPermitido: true,
+  envioAutomatico: true,
+  categoriaPermitida: true,
   configHorarioValida: true,
   empresaPausada: false,
   pendenciaAindaExiste: true,
@@ -252,7 +254,7 @@ describe("comunicacao.policy — modo fail-closed (D.3-C)", () => {
 
 describe("comunicacao.policy — CADA condição obrigatória ausente bloqueia (D.3-C)", () => {
   const OBRIGATORIOS = ["modo", "contatoExiste", "telefoneVerificado", "optOut", "consentimento", "destinatarioAtivo", "vinculoValido",
-    "empresaHabilitada", "tipoPermitido", "configHorarioValida", "empresaPausada", "pendenciaAindaExiste", "duplicado", "cooldownAtivo", "dentroDaJanela", "rateLimitExcedido", "providerConectado", "identidadeConfirmada"];
+    "empresaHabilitada", "tipoPermitido", "envioAutomatico", "categoriaPermitida", "configHorarioValida", "empresaPausada", "pendenciaAindaExiste", "duplicado", "cooldownAtivo", "dentroDaJanela", "rateLimitExcedido", "providerConectado", "identidadeConfirmada"];
   for (const campo of OBRIGATORIOS) {
     test(`sem \`${campo}\` -> bloqueado (nunca "provavelmente ok")`, () => {
       const s = BASE(); delete s[campo];
@@ -268,26 +270,44 @@ describe("comunicacao.policy — CADA condição obrigatória ausente bloqueia (
   });
 });
 
-describe("Checkpoint H.4-A — allowlist do piloto (comunicacao.piloto.js), defesa em profundidade", () => {
-  test("telefoneNaAllowlistPiloto AUSENTE não bloqueia (retrocompatível com todo snapshot que não conhece o piloto)", () => {
-    assert.equal(avaliarEnvio(BASE()).allowed, true);
-  });
-  test("telefoneNaAllowlistPiloto: true não bloqueia", () => {
+describe("Fim do piloto (104) — envio automático, categoria e KILL SWITCH", () => {
+  test("a allowlist do piloto NÃO existe mais: um campo telefoneNaAllowlistPiloto=false não interfere em nada", () => {
+    assert.equal(avaliarEnvio({ ...BASE(), telefoneNaAllowlistPiloto: false }).allowed, true);
     assert.equal(avaliarEnvio({ ...BASE(), telefoneNaAllowlistPiloto: true }).allowed, true);
   });
-  test("telefoneNaAllowlistPiloto: false BLOQUEIA com FORA_DA_ALLOWLIST_PILOTO — mesmo com tudo o mais aprovado", () => {
-    const r = avaliarEnvio({ ...BASE(), telefoneNaAllowlistPiloto: false });
-    assert.equal(r.allowed, false);
-    assert.equal(r.reason, MOTIVOS_BLOQUEIO.FORA_DA_ALLOWLIST_PILOTO);
+  test("empresa habilitada mas envio automático DESLIGADO -> ENVIO_AUTOMATICO_DESLIGADO (opt-in explícito)", () => {
+    for (const v of [false, undefined, null, "true", 1]) {
+      assert.deepEqual(avaliarEnvio({ ...BASE(), envioAutomatico: v }), { allowed: false, reason: MOTIVOS_BLOQUEIO.ENVIO_AUTOMATICO_DESLIGADO });
+    }
   });
-  test("a allowlist é o ÚLTIMO gate — nunca disfarça outro bloqueio já presente (ex.: opt-out continua vencendo)", () => {
-    const r = avaliarEnvio({ ...BASE(), optOut: true, telefoneNaAllowlistPiloto: false });
-    assert.equal(r.reason, MOTIVOS_BLOQUEIO.OPT_OUT, "um bloqueio anterior no pipeline deve vencer, não a allowlist");
+  test("categoria não habilitada para o destinatário -> CATEGORIA_NAO_PERMITIDA (só o literal true libera)", () => {
+    for (const v of [false, undefined, null, "true", 1]) {
+      assert.deepEqual(avaliarEnvio({ ...BASE(), categoriaPermitida: v }), { allowed: false, reason: MOTIVOS_BLOQUEIO.CATEGORIA_NAO_PERMITIDA });
+    }
+  });
+  test("resposta NÃO proativa não exige envio automático nem categoria (são gates de alerta proativo)", () => {
+    assert.equal(avaliarEnvio({ ...BASE(), ehProativo: false, envioAutomatico: false, categoriaPermitida: false }).allowed, true);
+  });
+  test("KILL SWITCH: modo=DISABLED prevalece sobre empresa habilitada + envio automático + destinatário ativo + categoria (tudo aprovado)", () => {
+    const r = avaliarEnvio({ ...BASE(), modo: MODOS.DISABLED });
+    assert.deepEqual(r, { allowed: false, reason: MOTIVOS_BLOQUEIO.DISABLED });
+  });
+  test("KILL SWITCH prevalece também sobre o que NÃO é proativo (resposta humana)", () => {
+    assert.deepEqual(avaliarEnvio({ ...BASE(), modo: MODOS.DISABLED, ehProativo: false }), { allowed: false, reason: MOTIVOS_BLOQUEIO.DISABLED });
+  });
+  test("envio automático e categoria vêm DEPOIS dos gates do destinatário (opt-out continua vencendo) e ANTES de pausa/janela/limites", () => {
+    assert.equal(avaliarEnvio({ ...BASE(), optOut: true, envioAutomatico: false }).reason, MOTIVOS_BLOQUEIO.OPT_OUT);
+    assert.equal(avaliarEnvio({ ...BASE(), envioAutomatico: false, empresaPausada: true, dentroDaJanela: false }).reason, MOTIVOS_BLOQUEIO.ENVIO_AUTOMATICO_DESLIGADO);
+    assert.equal(avaliarEnvio({ ...BASE(), categoriaPermitida: false, rateLimitExcedido: true }).reason, MOTIVOS_BLOQUEIO.CATEGORIA_NAO_PERMITIDA);
+  });
+  test("ENVIO_AUTOMATICO_DESLIGADO e CATEGORIA_NAO_PERMITIDA são PERMANENTES (só uma ação humana muda)", () => {
+    assert.equal(bloqueioEhTransitorio("ENVIO_AUTOMATICO_DESLIGADO"), false);
+    assert.equal(bloqueioEhTransitorio("CATEGORIA_NAO_PERMITIDA"), false);
   });
 });
 
 describe("comunicacao — bloqueio PERMANENTE × TRANSITÓRIO (D.3, item 14)", () => {
-  const PERMANENTES = ["OPT_OUT", "NO_CONSENT", "NO_PHONE", "PHONE_NOT_VERIFIED", "USER_INACTIVE", "SEM_VINCULO", "CONTATO_AMBIGUO", "EMPRESA_DESABILITADA", "TIPO_NAO_PERMITIDO", "PENDING_RESOLVED", "DUPLICATE", "FORA_DA_ALLOWLIST_PILOTO"];
+  const PERMANENTES = ["OPT_OUT", "NO_CONSENT", "NO_PHONE", "PHONE_NOT_VERIFIED", "USER_INACTIVE", "SEM_VINCULO", "CONTATO_AMBIGUO", "EMPRESA_DESABILITADA", "TIPO_NAO_PERMITIDO", "PENDING_RESOLVED", "DUPLICATE", "FORA_DA_ALLOWLIST_PILOTO", "ENVIO_AUTOMATICO_DESLIGADO", "CATEGORIA_NAO_PERMITIDA"];
   const TRANSITORIOS = ["DISABLED", "MODO_INVALIDO", "REACTIVE_ONLY_BLOQUEIA_PROATIVO", "COOLDOWN", "OUTSIDE_ALLOWED_WINDOW", "RATE_LIMIT", "SAFE_MODE", "PROVIDER_OFFLINE", "IDENTIDADE_NAO_CONFIRMADA", "EMPRESA_PAUSADA", "CONFIG_INVALIDA"];
 
   test("todo motivo do vocabulário está classificado (nenhum esquecido)", () => {

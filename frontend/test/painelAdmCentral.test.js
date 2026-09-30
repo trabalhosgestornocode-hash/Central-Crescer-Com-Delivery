@@ -18,7 +18,7 @@ const TEXTO_TESTE = "Mensagem de teste — Crescer com Delivery.\n\nEste é um t
 const preparo = (extra = {}) => ({
   organizacao: { organizacaoId: "o1", nome: "Grupo Jailton e Vanessa" }, unidade: { unidadeId: "u1", nome: "Subway Saci — Matriz" },
   unidadesDisponiveis: [{ unidadeId: "u1", nome: "Subway Saci — Matriz" }], contato: { telefoneMascarado: "********88", consentimento: true, verificado: true, optOut: false },
-  whatsapp: "conectado", modo: "DISABLED", piloto: { ativo: true, destinatarioPermitido: true }, limite: { usados: 0, maximo: 1 }, previewTexto: TEXTO_TESTE, podeEnviar: true, bloqueios: [], ...extra,
+  whatsapp: "conectado", modo: "NORMAL", limite: { usados: 0, maximo: 1 }, previewTexto: TEXTO_TESTE, podeEnviar: true, bloqueios: [], ...extra,
 });
 const st = (situacao, extra = {}) => ({ mensagemId: "m-1", situacao, status: "SENT", enviadoEm: "2026-09-23T20:00:00Z", entregueEm: null, lidoEm: null, ...extra });
 
@@ -117,7 +117,7 @@ describe("histórico, detalhe e configurações", () => {
 describe("TESTE CONTROLADO — modal", () => {
   test("confirmar: empresa, unidade, contato mascarado, gateway, consentimento, verificação, preview EXATO, confirmação explícita e botão final desabilitado até marcar", () => {
     const html = htmlModalTeste(preparo());
-    for (const t of ["Enviar teste de comunicação", "Grupo Jailton e Vanessa", "Subway Saci — Matriz", "********88", "Conectado", "confirmado", "verificado", "desativada (necessário para o teste)", "Enviar mensagem de teste"]) assert.ok(html.includes(t), t);
+    for (const t of ["Enviar teste de comunicação", "Grupo Jailton e Vanessa", "Subway Saci — Matriz", "********88", "Conectado", "confirmado", "verificado", "permite envio real", "Enviar mensagem de teste"]) assert.ok(html.includes(t), t);
     assert.ok(html.includes("Este é um teste de comunicação da unidade Subway Saci — Matriz."));
     assert.ok(html.includes(TEXTO_CONFIRMACAO_TESTE));
     assert.equal(TEXTO_CONFIRMACAO_TESTE, "Confirmo o envio de uma mensagem de teste para este destinatário.");
@@ -127,8 +127,8 @@ describe("TESTE CONTROLADO — modal", () => {
     assert.doesNotMatch(html, /pendência|alerta D-1|Último lembrete/i, "o texto do teste não é mensagem de pendência");
   });
   test("bloqueios: mostra os motivos, desabilita a confirmação e o telefone continua mascarado", () => {
-    const html = htmlModalTeste(preparo({ podeEnviar: false, modo: "NORMAL", whatsapp: "desconectado", bloqueios: [{ codigo: "MODO_NAO_DISABLED", mensagem: "O teste só pode ser feito com a automação desativada." }, { codigo: "GATEWAY_INDISPONIVEL", mensagem: "O WhatsApp não está conectado no momento." }] }));
-    assert.match(html, /Não é possível enviar agora/); assert.match(html, /automação desativada/); assert.match(html, /não está conectado/);
+    const html = htmlModalTeste(preparo({ podeEnviar: false, modo: "DISABLED", whatsapp: "desconectado", bloqueios: [{ codigo: "MODO_DISABLED", mensagem: "Modo DISABLED bloqueia envio real." }, { codigo: "GATEWAY_INDISPONIVEL", mensagem: "O WhatsApp não está conectado no momento." }] }));
+    assert.match(html, /Não é possível enviar agora/); assert.match(html, /DISABLED bloqueia envio real/); assert.match(html, /não está conectado/);
     assert.match(html, /id="padm-teste-confirma" disabled/);
   });
   test("várias unidades: seletor de unidade; limite atingido aparece", () => {
@@ -182,12 +182,16 @@ describe("TESTE CONTROLADO — acompanhamento (SENT → DELIVERED → READ)", ()
 
 describe("aba Teste e navegação", () => {
   const orgs = [{ organizacaoId: "o1", nome: "Grupo Jailton e Vanessa", contato: { telefoneMascarado: "********88" } }, { organizacaoId: "o2", nome: "Sem contato", contato: null }];
-  test("botão habilitado só com automação desativada e empresa com destinatário", () => {
-    const ok = htmlAbaTeste({ resumo: { comunicacao: { modo: "DISABLED" } }, orgs });
-    assert.match(ok, /data-padm-acao="abrir-teste" >Enviar teste|data-padm-acao="abrir-teste"\s*>/); assert.doesNotMatch(ok, /abrir-teste"[^>]*disabled/);
-    const on = htmlAbaTeste({ resumo: { comunicacao: { modo: "NORMAL" } }, orgs });
-    assert.match(on, /abrir-teste"[^>]*disabled/); assert.match(on, /só pode ser feito com a automação desativada/);
-    assert.match(htmlAbaTeste({ resumo: { comunicacao: { modo: "DISABLED" } }, orgs: [orgs[1]] }), /Nenhuma empresa tem destinatário configurado/);
+  test("teste real: NORMAL e REACTIVE_ONLY permitem preparar; DISABLED e modo desconhecido bloqueiam", () => {
+    for (const modo of ["NORMAL", "REACTIVE_ONLY"]) {
+      const html = htmlAbaTeste({ resumo: { comunicacao: { modo } }, orgs });
+      assert.match(html, /data-padm-acao="abrir-teste"/);
+      assert.doesNotMatch(html, /abrir-teste"[^>]*disabled/);
+    }
+    for (const modo of ["DISABLED", undefined, "DESCONHECIDO"]) {
+      assert.match(htmlAbaTeste({ resumo: { comunicacao: { modo } }, orgs }), /abrir-teste"[^>]*disabled/);
+    }
+    assert.match(htmlAbaTeste({ resumo: { comunicacao: { modo: "NORMAL" } }, orgs: [orgs[1]] }), /Nenhuma empresa tem destinatário configurado/);
   });
   test("lista de testes realizados", () => {
     const html = htmlAbaTeste({ resumo: { comunicacao: { modo: "DISABLED" } }, orgs, testes: { itens: [{ id: "t1", criadoEm: "2026-09-23T20:00:00Z", empresa: "Grupo Jailton e Vanessa", status: "DELIVERED", entregueEm: "2026-09-23T20:00:05Z", lidoEm: null }] } });

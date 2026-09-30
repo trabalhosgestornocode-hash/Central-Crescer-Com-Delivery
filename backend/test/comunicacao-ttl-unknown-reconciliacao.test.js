@@ -2,6 +2,7 @@
 // nunca vira status do alerta), reconciliação humana (contrato), resolução de pendência e "pendencias() UMA vez
 // por lote/ciclo" (migration 088), contra o banco de TESTE.
 // Rodar: node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-ttl-unknown-reconciliacao.test.js
+import { agendarMensagemDoAlertaT, definirTetoDestinatariosT, restaurarTetoDestinatariosT, apagarDestinatariosDasEmpresasT, categoriaParaTipoT, limparCategoriasDeTesteT } from "./helpers/comunicacao-fixtures.js";
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
@@ -30,13 +31,14 @@ const DIA = 24 * HORA;
 
 let migracaoOk = true;
 let modoOriginal = null;
+let tetoOriginal = null;
 let orgA = null, orgB = null, unidadeA = null, perfilId = null, contatoId = null, destPrincipal = null;
 const extras = [];
 
 // janela SEMPRE aberta (o relógio real do CI nunca decide): 00:00–23:59, todos os dias
 const SEMPRE = { seg_sex: { inicio: "00:00", fim: "23:59" }, sab: { inicio: "00:00", fim: "23:59" }, dom: { inicio: "00:00", fim: "23:59" } };
 const HABILITADA = async () => ({
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
   destinatarioContatoId: "contato-de-teste", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "perfil-de-teste",
   timezone: "America/Fortaleza", janelas: SEMPRE, configHorarioValida: true, fonte: "TESTE",
 });
@@ -46,6 +48,7 @@ before(async () => {
   migracaoOk = (await migracao082Aplicada()) && (await migracao088Aplicada());
   if (!migracaoOk) return;
   modoOriginal = await modoAtual();
+  tetoOriginal = await definirTetoDestinatariosT(200); // 104: a suíte cria muitos responsáveis só para isolar cooldown/cota por contato
   orgA = await criarOrganizacao("TESTE ttl-unknown A — descartável");
   orgB = await criarOrganizacao("TESTE ttl-unknown B — descartável");
   unidadeA = await criarUnidade(orgA, "Unidade TTL A1");
@@ -55,6 +58,8 @@ before(async () => {
 
 after(async () => {
   if (modoOriginal) await definirModo(modoOriginal, {}).catch(() => {});
+  await restaurarTetoDestinatariosT(tetoOriginal);
+  await limparCategoriasDeTesteT();
   if (extras.length) {
     await supabase.from("comunicacao_mensagens").delete().in("contato_id", extras);
     await supabase.from("contatos_whatsapp").delete().in("id", extras);
@@ -69,6 +74,7 @@ beforeEach(async () => {
   await supabase.from("comunicacao_alertas").delete().in("organizacao_id", [orgA, orgB]);
   await supabase.from("comunicacao_mensagens").delete().in("organizacao_id", [orgA, orgB]);
   await supabase.from("comunicacao_habilitacoes").delete().in("organizacao_id", [orgA, orgB]); // cada teste habilita o que precisa
+  await apagarDestinatariosDasEmpresasT([orgA, orgB]); // 104: destinatários são da EMPRESA — nunca sobram de um teste para o outro
   await definirModo(MODOS.NORMAL, {});
 });
 
@@ -92,9 +98,12 @@ async function novoAlerta({ organizacaoId = orgA, unidadeId = unidadeA, data = `
 async function alertaComMensagem({ campos = {}, contato, tipo } = {}) {
   const alerta = await novoAlerta();
   const c = contato ?? await novoContato();
+  const tipoMsg = tipo ?? `tipo_${tag}_${++seq}`;
+  const ceMsg = await responsavelDoContato({ organizacaoId: orgA, contatoId: c, perfilId });
+  await categoriaParaTipoT(orgA, ceMsg, tipoMsg); // 104: o destinatário só recebe um tipo que uma categoria habilitada mapeie
   const { data, error } = await supabase.from("comunicacao_mensagens").insert({
-    alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: c, contato_empresa_id: await responsavelDoContato({ organizacaoId: orgA, contatoId: c, perfilId }), destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
-    tipo: tipo ?? `tipo_${tag}_${++seq}`, conteudo: "aviso", idempotency_key: `wa:alerta:${alerta.id}:v1`, status: SM.SCHEDULED,
+    alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: c, contato_empresa_id: ceMsg, destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
+    tipo: tipoMsg, conteudo: "aviso", idempotency_key: `wa:alerta:${alerta.id}:v1`, status: SM.SCHEDULED,
     disponivel_em: new Date(Date.now() - 60_000).toISOString(), ...campos,
   }).select("*").single();
   if (error) throw new Error(`fixture: ${error.message}`);
@@ -110,7 +119,7 @@ function providerComSpy() {
   const chamadas = [];
   const original = provider.sendText.bind(provider);
   provider.sendText = async (a) => { chamadas.push(a); return original(a); };
-  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }) };
+  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true, semGateModo: true }) };
 }
 const lote = (whatsAppService, extra = {}) => processarProximoLote({
   limite: 20, worker: `ttl-${tag}`, whatsAppService, agora: new Date(), verificarPendenciaAindaExiste: async () => true, resolverHabilitacao: HABILITADA, ...extra,
@@ -311,12 +320,14 @@ describe("DELIVERY_UNKNOWN — TRANSPORTE fica na mensagem; o ALERTA segue sendo
     assert.equal(await statusAlerta(alerta.id), SA.SCHEDULED, "a pendência continua ativa");
     // 2) PIOR CASO: alerta forçado a DETECTED + tentativa de :v2 -> a RPC recusa por causa da mensagem UNKNOWN
     await supabase.from("comunicacao_alertas").update({ status: SA.DETECTED }).eq("id", alerta.id);
-    const v2 = await filaRepo.agendarMensagemDoAlerta({
-      alertaId: alerta.id, tipo: TIPO, conteudo: "lembrete", idempotencyKey: `wa:alerta:${alerta.id}:v2`,
+    const v2 = await agendarMensagemDoAlertaT({
+      alertaId: alerta.id, tipo: TIPO, conteudo: "lembrete", contatoEmpresaId: job.contato_empresa_id,
       disponivelEm: new Date(), expiraEm: new Date(Date.now() + DIA),
     });
-    assert.equal(v2.acao, "ENTREGA_DESCONHECIDA");
-    assert.equal((await msgsDoAlerta(alerta.id)).length, 1, "nasceu uma segunda mensagem para o evento");
+    // 104: a identidade é alerta + DESTINATÁRIO + propósito — o destinatário com entrega incerta NUNCA ganha uma 2ª mensagem inicial
+    assert.equal(v2.acao, "JA_EXISTIA");
+    assert.equal(v2.mensagem_id, job.id);
+    assert.equal((await msgsDoAlerta(alerta.id)).length, 1, "nasceu uma segunda mensagem para o MESMO destinatário do evento");
     // 3) a mesma pendência que continua NÃO cria outro alerta (o UNKNOWN segue ativo) e o lote não reenvia nada
     await supabase.from("comunicacao_alertas").update({ status: SA.SCHEDULED }).eq("id", alerta.id);
     const { alerta: mesmo, criado } = await alertasRepo.criarOuEscalonarAlerta({
@@ -330,22 +341,32 @@ describe("DELIVERY_UNKNOWN — TRANSPORTE fica na mensagem; o ALERTA segue sendo
     assert.equal((await linha(job.id)).status, SM.DELIVERY_UNKNOWN);
   });
 
-  test("defesa em profundidade: uma SEGUNDA mensagem do mesmo alerta (linha legada, :v2) enquanto há UNKNOWN é BLOQUEADA (DUPLICATE) e o provider não é chamado; o ALERTA não é marcado BLOCKED por causa dela", async (t) => {
+  test("defesa em profundidade: uma SEGUNDA mensagem inicial do MESMO destinatário (:v2) é recusada pelo BANCO; um OUTRO destinatário é independente (não é DUPLICATE) e o ALERTA não é marcado BLOCKED", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const { alerta, job, chamadas, whatsAppService } = await gerarUnknown();
+    // (a) mesma identidade alerta+destinatário+propósito com OUTRA chave: o índice único parcial recusa
+    const dup = await supabase.from("comunicacao_mensagens").insert({
+      alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: job.contato_id, contato_empresa_id: job.contato_empresa_id, destinatario_perfil_id: perfilId,
+      canal: "whatsapp", direcao: "saida", tipo: job.tipo, conteudo: "lembrete", idempotency_key: `wa:alerta:${alerta.id}:v2`, status: SM.SCHEDULED, disponivel_em: new Date(Date.now() - 60_000).toISOString(),
+    });
+    assert.ok(dup.error, "o banco aceitou uma 2ª mensagem inicial do mesmo destinatário");
+    assert.equal(String(dup.error.code), "23505");
+    // (b) OUTRO destinatário no mesmo alerta: mensagem própria, processada por conta própria (o UNKNOWN do primeiro não a bloqueia)
+    const outro = await novoContato();
+    const ceOutro = await responsavelDoContato({ organizacaoId: orgA, contatoId: outro, perfilId });
+    const tipoOutro = `tipo_v2_${tag}`;
+    await categoriaParaTipoT(orgA, ceOutro, tipoOutro);
     const { data: v2, error } = await supabase.from("comunicacao_mensagens").insert({
-      alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, ...(await (async () => { const cv = await novoContato(); return { contato_id: cv, contato_empresa_id: await responsavelDoContato({ organizacaoId: orgA, contatoId: cv, perfilId }) }; })()), destinatario_perfil_id: perfilId,
-      canal: "whatsapp", direcao: "saida", tipo: `tipo_v2_${tag}`, conteudo: "lembrete", idempotency_key: `wa:alerta:${alerta.id}:v2`,
+      alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: outro, contato_empresa_id: ceOutro, destinatario_perfil_id: perfilId,
+      canal: "whatsapp", direcao: "saida", tipo: tipoOutro, conteudo: "aviso", idempotency_key: `wa:alerta:${alerta.id}:dest:${ceOutro}:v1`,
       status: SM.SCHEDULED, disponivel_em: new Date(Date.now() - 60_000).toISOString(),
     }).select("*").single();
     assert.equal(error, null, error?.message);
     const r = (await lote(whatsAppService)).find((x) => x.id === v2.id);
-    assert.equal(r?.resultado, "BLOQUEADO", JSON.stringify(r));
-    assert.equal(r?.motivo, "DUPLICATE");
-    assert.equal(chamadas.length, 1, "o :v2 foi enviado apesar do UNKNOWN do mesmo evento");
-    assert.equal((await linha(v2.id)).status, SM.BLOCKED);
+    assert.equal(r?.resultado, "ENVIADO", JSON.stringify(r));
+    assert.equal(chamadas.length, 2, "o outro destinatário deveria ter sido enviado");
     assert.equal((await linha(job.id)).status, SM.DELIVERY_UNKNOWN);
-    assert.equal(await statusAlerta(alerta.id), SA.SCHEDULED, "o bloqueio do :v2 (DUPLICATE) não pode marcar a PENDÊNCIA como BLOCKED");
+    assert.notEqual(await statusAlerta(alerta.id), SA.BLOCKED, "o alerta não pode virar BLOCKED por causa de um destinatário independente");
   });
 
   test("UNKNOWN + pendência que DESAPARECE: alerta RESOLVED, a mensagem CONTINUA DELIVERY_UNKNOWN (exige reconciliação), nenhum envio novo; a reconciliação tardia não reabre o alerta", async (t) => {

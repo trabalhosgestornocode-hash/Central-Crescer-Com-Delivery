@@ -2,6 +2,7 @@
 // EMPRESA, regressão do caso Jailton, cancelamento por pendência resolvida, regra 10:00/10:30 e isolamento entre empresas.
 // Rodar (só contra o projeto de TESTE, com a 100 aplicada):
 //   node --experimental-vm-modules --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-100-integracao.test.js
+import { agendarMensagemDoAlertaT, agendarReforcoDoAlertaT, agendarAvisoTardioD1T } from "./helpers/comunicacao-fixtures.js";
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { supabase } from "../src/config/supabase.js";
@@ -73,7 +74,7 @@ before(async () => {
     await svc.validarResponsavel({ organizacaoId: org, contatoEmpresaId: ce.contatoEmpresaId, confirmacaoExplicita: true }, AUTOR);
     await svc.atualizarConfiguracao({ organizacaoId: org, timezone: TZ, tiposPermitidos: [TIPO] }, AUTOR);
     // habilita direto no banco (fixture): a ação humana + gates do piloto (093/definirHabilitacao) têm testes próprios; aqui o foco é o motor.
-    const hb = await supabase.from("comunicacao_habilitacoes").update({ habilitado: true }).eq("organizacao_id", org);
+    const hb = await supabase.from("comunicacao_habilitacoes").update({ habilitado: true, envio_automatico: true }).eq("organizacao_id", org);
     if (hb.error) throw new Error("fixture habilitar: " + hb.error.message);
   }
   await definirModo(MODOS.NORMAL, {});
@@ -107,7 +108,7 @@ async function novoAlerta(org, unidade, dataReferencia) {
   });
   return alerta;
 }
-const rpc = (alerta, extra = {}) => filaRepo.agendarMensagemDoAlerta({
+const rpc = (alerta, extra = {}) => agendarMensagemDoAlertaT({
   alertaId: alerta.id, tipo: TIPO, conteudo: "aviso", idempotencyKey: `wa:alerta:${alerta.id}:v1`,
   disponivelEm: new Date(Date.now() - 60_000), expiraEm: new Date(Date.now() + 3600_000), ...extra,
 });
@@ -117,7 +118,7 @@ function providerComSpy() {
   const original = provider.sendText.bind(provider);
   provider.sendText = async (args) => { chamadas.push(args); return original(args); };
   // (gate de identidade da conta conectada, aba Conexão/097: fail-closed sem ele — aqui a conta está "confirmada")
-  return { chamadas, whatsAppService: criarWhatsAppService({ provider, identidadeConfirmada: async () => true }) };
+  return { chamadas, whatsAppService: criarWhatsAppService({ semGateModo: true, provider, identidadeConfirmada: async () => true }) };
 }
 const lote = (whatsAppService, agora, extra = {}) => processarProximoLote({ limite: 20, worker: "t100", whatsAppService, agora, ...extra });
 const pulaSePreciso = (t) => { if (!pronto) { t.skip("100 não aplicada neste banco (ou alvo não confirmado como TESTE) — pulando."); return true; } return false; };
@@ -428,13 +429,13 @@ describe("8) integridade da migration 100 (constraints reais)", { skip: PULAR },
       assert.equal(r.error?.code, "23514", JSON.stringify(dados));
     }
   });
-  test("habilitação recusa responsável INATIVO (trigger) e o par (contato, responsável) tem de coincidir", async (t) => {
+  test("104: desativar o responsável NÃO trava a linha da empresa (o ponteiro legado só exige a MESMA empresa); o par (contato, responsável) continua tendo de coincidir", async (t) => {
     if (pulaSePreciso(t)) return;
     await supabase.from("comunicacao_contatos_empresa").update({ ativo: false }).eq("id", ceOutra.contatoEmpresaId);
     const h = await habilitacaoDe(OUTRA);
     const r = await supabase.from("comunicacao_habilitacoes").update({ timezone: "America/Fortaleza" }).eq("organizacao_id", OUTRA);
-    assert.ok(r.error, "atualizar habilitação apontando para responsável inativo deve ser recusado");
     await supabase.from("comunicacao_contatos_empresa").update({ ativo: true }).eq("id", ceOutra.contatoEmpresaId);
+    assert.equal(r.error, null, "104: desativar um destinatário não pode impedir atualizar a configuração da empresa");
     const par = await supabase.from("comunicacao_habilitacoes").update({ destinatario_contato_id: null }).eq("organizacao_id", OUTRA);
     assert.ok(par.error, "contato e responsável andam juntos (trigger 22023 ou check destinatario_coerente 23514)");
     assert.equal((await habilitacaoDe(OUTRA)).destinatario_contato_id, h.destinatario_contato_id);
@@ -618,9 +619,9 @@ describe("13) REFORÇO, AVISO TARDIO e HABILITAÇÃO DO PILOTO usam o responsáv
     const alerta = await novoAlerta(GRUPO, unGrupo[0], D1);
     await supabase.from("comunicacao_contatos_empresa").update({ ativo: false }).eq("id", ceGrupo.contatoEmpresaId);
     try {
-      assert.equal((await filaRepo.agendarAvisoTardioD1({ alertaId: alerta.id, conteudo: "tardio", ...cedo() })).acao, "DESTINATARIO_INELEGIVEL");
+      assert.equal((await agendarAvisoTardioD1T({ alertaId: alerta.id, conteudo: "tardio", ...cedo() })).acao, "DESTINATARIO_INELEGIVEL");
     } finally { await supabase.from("comunicacao_contatos_empresa").update({ ativo: true }).eq("id", ceGrupo.contatoEmpresaId); }
-    const r = await filaRepo.agendarAvisoTardioD1({ alertaId: alerta.id, conteudo: "tardio", ...cedo() });
+    const r = await agendarAvisoTardioD1T({ alertaId: alerta.id, conteudo: "tardio", ...cedo() });
     assert.equal(r.acao, "CRIADA", JSON.stringify(r));
     const [m] = await msgs(GRUPO);
     assert.equal(m.telefone_snapshot, foneGrupo);
@@ -629,13 +630,13 @@ describe("13) REFORÇO, AVISO TARDIO e HABILITAÇÃO DO PILOTO usam o responsáv
     assert.equal(m.metadados?.origem, "prazo_final_d1");
     // empresa habilitada mas SEM responsável apontado (perfil com acesso não conta): SEM_DESTINATARIO
     const cwOutra = (await ce(ceOutra.contatoEmpresaId)).contato_whatsapp_id;
-    const sem = await supabase.from("comunicacao_habilitacoes").update({ habilitado: false, destinatario_contato_id: null, destinatario_contato_empresa_id: null }).eq("organizacao_id", OUTRA);
+    const sem = await supabase.from("comunicacao_habilitacoes").update({ habilitado: false, envio_automatico: false, destinatario_contato_id: null, destinatario_contato_empresa_id: null }).eq("organizacao_id", OUTRA);
     assert.equal(sem.error, null, sem.error?.message);
     try {
       const aB = await novoAlerta(OUTRA, unOutra, D1);
-      assert.equal((await filaRepo.agendarAvisoTardioD1({ alertaId: aB.id, conteudo: "x", ...cedo() })).acao, "NAO_HABILITADA", "empresa sem responsável não pode estar habilitada (constraint habilitado_exige_destinatario)");
+      assert.equal((await agendarAvisoTardioD1T({ alertaId: aB.id, conteudo: "x", ...cedo() })).acao, "NAO_HABILITADA", "empresa desabilitada nunca agenda");
     } finally {
-      await supabase.from("comunicacao_habilitacoes").update({ destinatario_contato_id: cwOutra, destinatario_contato_empresa_id: ceOutra.contatoEmpresaId, habilitado: true }).eq("organizacao_id", OUTRA);
+      await supabase.from("comunicacao_habilitacoes").update({ destinatario_contato_id: cwOutra, destinatario_contato_empresa_id: ceOutra.contatoEmpresaId, habilitado: true, envio_automatico: true }).eq("organizacao_id", OUTRA);
     }
   });
 
@@ -644,13 +645,14 @@ describe("13) REFORÇO, AVISO TARDIO e HABILITAÇÃO DO PILOTO usam o responsáv
     const alerta = await novoAlerta(GRUPO, unGrupo[0], D1);
     assert.equal((await rpc(alerta)).acao, "CRIADA");
     const [primeira] = await msgs(GRUPO);
-    assert.equal((await filaRepo.agendarReforcoDoAlerta({ alertaId: alerta.id, conteudo: "reforço", ...cedo() })).acao, "ALERTA_SEM_PRIMEIRO_ENVIO");
+    // 104: com a inicial ainda a caminho (alerta SCHEDULED) nada de reforço PARA ESTE destinatário
+    assert.equal((await agendarReforcoDoAlertaT({ alertaId: alerta.id, conteudo: "reforço", ...cedo() })).acao, "PRIMEIRA_MENSAGEM_NAO_ENVIADA");
     await supabase.from("comunicacao_mensagens").update({ status: "SENT", enviado_em: new Date().toISOString() }).eq("id", primeira.id);
     await supabase.from("comunicacao_contatos_empresa").update({ ativo: false }).eq("id", ceGrupo.contatoEmpresaId);
     try {
-      assert.equal((await filaRepo.agendarReforcoDoAlerta({ alertaId: alerta.id, conteudo: "reforço", ...cedo() })).acao, "DESTINATARIO_INELEGIVEL");
+      assert.equal((await agendarReforcoDoAlertaT({ alertaId: alerta.id, conteudo: "reforço", ...cedo() })).acao, "DESTINATARIO_INELEGIVEL");
     } finally { await supabase.from("comunicacao_contatos_empresa").update({ ativo: true }).eq("id", ceGrupo.contatoEmpresaId); }
-    const r = await filaRepo.agendarReforcoDoAlerta({ alertaId: alerta.id, conteudo: "reforço", ...cedo() });
+    const r = await agendarReforcoDoAlertaT({ alertaId: alerta.id, conteudo: "reforço", ...cedo() });
     assert.equal(r.acao, "CRIADA", JSON.stringify(r));
     const reforco = (await msgs(GRUPO)).find((m) => m.metadados?.proposito === "reforco");
     assert.equal(reforco.telefone_snapshot, foneGrupo);
@@ -658,17 +660,14 @@ describe("13) REFORÇO, AVISO TARDIO e HABILITAÇÃO DO PILOTO usam o responsáv
     assert.equal(reforco.empresa_nome_snapshot, `TESTE ${tag} Grupo Jailton e Vanessa`);
   });
 
-  test("habilitação atômica do piloto (093): exige o responsável da empresa ATIVO e VALIDADO; perfil com acesso não basta", async (t) => {
+  test("habilitação atômica da empresa (093/104): exige o responsável da empresa ATIVO e VALIDADO; perfil com acesso não basta; NÃO liga o envio automático; não depende de modo nem de outra empresa", async (t) => {
     if (pulaSePreciso(t)) return;
-    const habilitadasAntes = (await supabase.from("comunicacao_habilitacoes").select("organizacao_id").eq("habilitado", true)).data.map((h) => h.organizacao_id);
-    const modoAntes = await modoAtual();
-    const emp = await criarOrganizacao(`TESTE ${tag} Piloto`);
-    const hab = (org) => supabase.rpc("comunicacao_habilitar_organizacao_piloto", { p_organizacao_id: org, p_ator_perfil_id: null });
+    const emp = await criarOrganizacao(`TESTE ${tag} Habilitacao`);
+    const hab = (org) => supabase.rpc("comunicacao_habilitar_organizacao", { p_organizacao_id: org, p_ator_perfil_id: null });
+    const auto = (org, ligar) => supabase.rpc("comunicacao_definir_envio_automatico", { p_organizacao_id: org, p_ligar: ligar, p_ator_perfil_id: null });
     try {
-      // o RPC exige: modo DISABLED e nenhuma outra habilitada (as de teste ficam desabilitadas só durante este teste e são restauradas)
-      await definirModo(MODOS.DISABLED, {});
-      if (habilitadasAntes.length) await supabase.from("comunicacao_habilitacoes").update({ habilitado: false }).in("organizacao_id", habilitadasAntes);
-      const r1 = await svc.salvarResponsavel({ organizacaoId: emp, nome: "Resp Piloto", telefoneE164: fone(13) }, AUTOR);
+      // (104) NÃO exige mais "modo DISABLED" nem "nenhuma outra empresa habilitada": o Grupo e a Outra continuam habilitados e o modo segue NORMAL
+      const r1 = await svc.salvarResponsavel({ organizacaoId: emp, nome: "Resp Habilitacao", telefoneE164: fone(13) }, AUTOR);
       await svc.atualizarConfiguracao({ organizacaoId: emp, timezone: TZ, tiposPermitidos: [TIPO] }, AUTOR);
       assert.equal((await hab(emp)).data.acao, "DESTINATARIO_INELEGIVEL", "WhatsApp ainda não validado");
       await svc.validarResponsavel({ organizacaoId: emp, contatoEmpresaId: r1.contatoEmpresaId, confirmacaoExplicita: true }, AUTOR);
@@ -678,11 +677,13 @@ describe("13) REFORÇO, AVISO TARDIO e HABILITAÇÃO DO PILOTO usam o responsáv
       // o Jailton (perfil com acesso) NÃO habilita uma empresa sem responsável: MOGI não tem responsável
       const semResp = (await hab(MOGI)).data.acao;
       assert.ok(["SEM_CONFIGURACAO", "SEM_DESTINATARIO"].includes(semResp), semResp);
+      assert.equal((await auto(emp, true)).data.acao, "EMPRESA_NAO_HABILITADA", "envio automático exige a empresa habilitada");
       assert.equal((await hab(emp)).data.acao, "HABILITADA");
+      const depoisDeHabilitar = (await habilitacaoDe(emp));
+      assert.deepEqual([depoisDeHabilitar.habilitado, depoisDeHabilitar.envio_automatico], [true, false], "habilitar NÃO liga o envio automático");
+      assert.equal((await auto(emp, true)).data.acao, "LIGADO");
+      assert.equal((await auto(emp, false)).data.acao, "DESLIGADO");
     } finally {
-      await supabase.from("comunicacao_habilitacoes").update({ habilitado: false }).eq("organizacao_id", emp);
-      if (habilitadasAntes.length) await supabase.from("comunicacao_habilitacoes").update({ habilitado: true }).in("organizacao_id", habilitadasAntes);
-      await definirModo(modoAntes, {});
       await apagarOrganizacao(emp);
     }
   });

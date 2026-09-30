@@ -12,6 +12,7 @@
 
 import { validarProvider } from "./whatsapp.provider.js";
 import { motivoBloqueioAutomacao } from "./inbound/inbound.contrato.js";
+import { modoPermiteEnvioReal } from "./comunicacao.constants.js";
 
 /** Recusa de envio porque a conta do WhatsApp conectada NÃO é a que o operador confirmou (ou nada está confirmado). O provider NÃO foi chamado. */
 export class IdentidadeNaoConfirmadaError extends Error {
@@ -19,11 +20,25 @@ export class IdentidadeNaoConfirmadaError extends Error {
 }
 
 /**
+ * KILL SWITCH na FRONTEIRA FINAL DO PROVIDER. Com `modo = DISABLED` (ou ausente/desconhecido) NENHUM envio real chega ao provider — nem automático, nem
+ * teste controlado, nem resposta humana da Central, nem qualquer caminho inesperado. O provider NÃO foi chamado (preEnvio). Semântica única e inequívoca:
+ * DISABLED = WhatsApp completamente incapaz de realizar envio real. Só leitura/simulação (dry-run) continuam possíveis.
+ */
+export class ModoDesabilitadoError extends Error {
+  constructor(modo = null) {
+    super("Envio bloqueado: o módulo WhatsApp está em modo DISABLED. Altere o modo operacional antes de realizar um envio real.");
+    this.name = "ModoDesabilitadoError"; this.code = "MODO_DISABLED"; this.preEnvio = true; this.modo = modo;
+  }
+}
+
+/**
  * @param {{provider: import('./whatsapp.provider.js').WhatsAppProvider, identidadeConfirmada?: () => Promise<boolean>, semGateIdentidade?: boolean}} params
  *   - `identidadeConfirmada`: gate de identidade (comunicacao.identidade.js#criarGateIdentidade). FAIL-CLOSED: sem gate, NENHUM envio sai —
  *     a única exceção é `semGateIdentidade: true`, reservado a testes com provider falso (um teste estático proíbe seu uso em código de produção).
+ *   - `modoAtual`: lê o modo global (comunicacao.config.js#modoAtual). FAIL-CLOSED: sem ele, ou se a leitura falhar, NENHUM envio sai — a única exceção é
+ *     `semGateModo: true`, reservado a testes com provider falso (mesmo teste estático).
  */
-export function criarWhatsAppService({ provider, identidadeConfirmada = null, semGateIdentidade = false }) {
+export function criarWhatsAppService({ provider, identidadeConfirmada = null, semGateIdentidade = false, modoAtual = null, semGateModo = false }) {
   validarProvider(provider);
 
   /** A conta conectada é a confirmada? Qualquer dúvida ou exceção ⇒ false. */
@@ -32,10 +47,22 @@ export function criarWhatsAppService({ provider, identidadeConfirmada = null, se
     if (typeof identidadeConfirmada !== "function") return false;
     try { return (await identidadeConfirmada()) === true; } catch { return false; }
   }
-  /** TODO envio (texto, imagem, documento; worker, manual ou teste) passa por aqui ANTES do provider. */
-  async function exigirContaConfirmada() { if (!(await contaConfirmada())) throw new IdentidadeNaoConfirmadaError(); }
+  /** O modo global permite envio real? Qualquer dúvida (sem leitor, exceção, valor desconhecido, DISABLED) ⇒ false. */
+  async function modoPermiteEnvio() {
+    if (semGateModo === true) return true;
+    if (typeof modoAtual !== "function") return false;
+    try { return modoPermiteEnvioReal(await modoAtual()); } catch { return false; }
+  }
+  /** TODO envio (texto, imagem, documento; worker, manual ou teste) passa por aqui ANTES do provider: 1º o KILL SWITCH, depois a identidade. */
+  async function exigirContaConfirmada() {
+    if (!(await modoPermiteEnvio())) throw new ModoDesabilitadoError();
+    if (!(await contaConfirmada())) throw new IdentidadeNaoConfirmadaError();
+  }
 
   return {
+    /** Kill switch (só leitura): o modo global permite envio real agora? Usado pelas telas e pré-checagens. */
+    modoPermiteEnvio,
+
     /** Gate de identidade (só leitura): usado pela política do worker para ADIAR sem consumir tentativa, e pelas telas. */
     identidadeConfirmada: contaConfirmada,
 

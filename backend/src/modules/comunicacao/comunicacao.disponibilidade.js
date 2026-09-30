@@ -12,7 +12,7 @@
 // Só o dia D-1 (ontem, no calendário LOCAL da empresa) espera pela disponibilidade: uma pendência de
 // dias anteriores (D-2, D-3...) já tem dado completo há muito tempo e segue só a janela comercial.
 
-import { partesLocais } from "./comunicacao.horario.js";
+import { partesLocais, proximoHorarioDeEnvio } from "./comunicacao.horario.js";
 
 const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const emMinutos = (hhmm) => { const m = HHMM.exec(hhmm); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
@@ -95,4 +95,18 @@ export function janelasParaReferencia({ janelas, dataReferencia, agora, timezone
     nova[g] = ini < fim ? { inicio: fmt(ini), fim: j.fim } : null;
   }
   return nova;
+}
+
+/**
+ * Primeiro instante de envio de um alerta ORDINÁRIO, respeitando a DISPONIBILIDADE do D-1: se o candidato cair num horário em que a
+ * referência ainda é D-1 e cedo demais (< horário mínimo de envio), recalcula com as janelas ajustadas. A referência é reavaliada NO
+ * instante candidato (à noite o D-1 de hoje já é D-2 amanhã de manhã). Pura. Lança ConfiguracaoHorarioInvalida se não houver janela útil.
+ */
+export function calcularInstanteDeEnvio({ base, timezone, janelas, dataReferencia, disponibilidade, chave, spreadMaxMs }) {
+  let { instante } = proximoHorarioDeEnvio(base, timezone, janelas, chave, { spreadMaxMs });
+  if (!avaliarDisponibilidadeD1({ dataReferencia, agora: instante, timezone, config: disponibilidade }).disponivel) {
+    const ajustadas = janelasParaReferencia({ janelas, dataReferencia, agora: instante, timezone, config: disponibilidade });
+    ({ instante } = proximoHorarioDeEnvio(instante, timezone, ajustadas, chave, { spreadMaxMs }));
+  }
+  return instante;
 }

@@ -166,6 +166,26 @@ export const painelAdmApi = {
     chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/responsavel`, { method: "PUT", json: dados }),
 
   /** Ativa/desativa o recebimento de avisos de um responsável desta empresa. */
+  // Fim do piloto (104): configuração DEFINITIVA por empresa — status, VÁRIOS destinatários, envio automático, limites e simulação (dry-run, só leitura).
+  comunicacaoPainelEmpresa: (organizacaoId) => chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/whatsapp`),
+  comunicacaoCriarDestinatario: (organizacaoId, dados) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/destinatarios`, { method: "POST", json: dados }),
+  comunicacaoAtualizarDestinatario: (organizacaoId, contatoId, dados) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/destinatarios/${encodeURIComponent(contatoId)}`, { method: "PUT", json: dados }),
+  comunicacaoDestinatarioCategorias: (organizacaoId, contatoId, categorias) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/destinatarios/${encodeURIComponent(contatoId)}/categorias`, { method: "PUT", json: { categorias } }),
+  comunicacaoDestinatarioAtivo: (organizacaoId, contatoId, ativo) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/destinatarios/${encodeURIComponent(contatoId)}/ativo`, { method: "PUT", json: { ativo } }),
+  comunicacaoDestinatarioAutorizar: (organizacaoId, contatoId) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/destinatarios/${encodeURIComponent(contatoId)}/autorizar`, { method: "POST", json: { confirmacaoExplicita: true } }),
+  comunicacaoDestinatarioOptOut: (organizacaoId, contatoId) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/destinatarios/${encodeURIComponent(contatoId)}/opt-out`, { method: "POST", json: { confirmacaoExplicita: true } }),
+  comunicacaoEnvioAutomatico: (organizacaoId, ligar) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/envio-automatico`, { method: "PUT", json: ligar ? { ligar: true, confirmacaoExplicita: true } : { ligar: false } }),
+  comunicacaoLimites: (organizacaoId, dados) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/limites`, { method: "PUT", json: dados }),
+  comunicacaoDryRun: (organizacaoId) =>
+    chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/dry-run`, { method: "POST", json: {} }),
   comunicacaoDefinirAtivoResponsavel: (organizacaoId, contatoId, ativo) =>
     chamar(`/comunicacao/organizacoes/${encodeURIComponent(organizacaoId)}/responsaveis/${encodeURIComponent(contatoId)}/ativo`, { method: "PUT", json: { ativo } }),
 
@@ -197,7 +217,7 @@ export const painelAdmApi = {
 
   /**
    * Checkpoint H.4-B.1 — as ÚNICAS alavancas de envio (ator humano autenticado; o backend valida tudo).
-   * `comunicacaoAtivacao`: modo + prova do piloto no runtime do servidor (contagens, nunca telefone).
+   * `comunicacaoAtivacao`: modo global (kill switch) + contagens de empresas/envio automático (nunca telefone).
    */
   comunicacaoAtivacao: () => chamar("/comunicacao/ativacao"),
 

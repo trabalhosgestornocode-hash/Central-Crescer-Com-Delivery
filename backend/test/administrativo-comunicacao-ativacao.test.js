@@ -3,7 +3,7 @@
 //   PUT  /administrativo/comunicacao/organizacoes/:id/habilitacao   { habilitado, confirmacaoExplicita }
 //   PUT  /administrativo/comunicacao/modo                          { modo, confirmacaoExplicita }
 // Rotas HTTP reais sobre o `administrativoRouter` REAL, banco FALSO em memória, SEM rede.
-// O piloto é lido do `env` injetado em `adminDeps.env` (em produção é o process.env real do backend).
+// (migration 104) NÃO existe mais allowlist/piloto: as variáveis COMUNICACAO_PILOTO_* só aparecem como diagnóstico "LEGACY — sem efeito".
 // O comportamento do banco (RPC 093 atômica, auditoria real) está em comunicacao-ativacao-integracao.test.js.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
@@ -134,28 +134,43 @@ describe("H.4-B.1 — autorização: só o Painel Administrativo autenticado", (
 });
 
 describe("H.4-B.1 — GET /ativacao (prova do runtime, sem telefone)", () => {
-  test("piloto ativo + 1 destino: contagens/booleanos apenas; nunca telefone nem a lista", async () => {
+  test("contagens/booleanos apenas; nunca telefone nem a lista; variáveis do piloto aparecem só como LEGACY sem efeito", async () => {
     const { app } = makeApp({ estado: estadoBase() });
     const r = await GET(app, ATIV);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.json.data.piloto, { ativo: true, quantidadeDestinos: 1 });
     assert.equal(r.json.data.modo, "DISABLED");
+    assert.equal(r.json.data.envioRealPermitido, false);
     assert.equal(r.json.data.organizacoesHabilitadas, 0);
+    assert.equal(r.json.data.organizacoesComEnvioAutomatico, 0);
     assert.equal(r.json.data.gateway, "conectado");
+    assert.equal(r.json.data.pilotoLegado.semEfeito, true);
+    assert.match(r.json.data.pilotoLegado.rotulo, /LEGACY/);
+    assert.equal(r.json.data.piloto, undefined, "o bloco `piloto` (que decidia envio) não existe mais");
     const texto = JSON.stringify(r.json);
-    assert.doesNotMatch(texto, /5548999990088|999990088|COMUNICACAO_PILOTO_TELEFONES/);
+    assert.doesNotMatch(texto, /5548999990088|999990088/);
   });
-  test("piloto desligado / allowlist malformada / 2 destinos são refletidos (fail-closed)", async () => {
-    for (const [env, ativo, qtd] of [
+  test("as variáveis legadas NÃO mudam nada: nunca o valor, só presença/contagem — e nenhuma autorização", async () => {
+    for (const [env, configurado, qtd] of [
       [{}, false, 0],
       [{ COMUNICACAO_PILOTO_ENABLED: "true" }, true, 0],
-      [{ COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: `${TEL_A},abc` }, true, 0],
       [{ COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: `${TEL_A},${TEL_B}` }, true, 2],
     ]) {
       const { app } = makeApp({ estado: estadoBase(), env });
       const r = await GET(app, ATIV);
-      assert.deepEqual(r.json.data.piloto, { ativo, quantidadeDestinos: qtd }, JSON.stringify(env));
+      assert.equal(r.json.data.pilotoLegado.configurado, configurado, JSON.stringify(env));
+      assert.equal(r.json.data.pilotoLegado.quantidadeEntradas, qtd);
+      assert.equal(r.json.data.envioRealPermitido, false, "modo DISABLED continua sendo a única fonte");
+      assert.doesNotMatch(JSON.stringify(r.json), /5548999990088|5511988887777/);
     }
+  });
+  test("conta empresas habilitadas e com envio automático; modo NORMAL/REACTIVE_ONLY permitem envio real, DISABLED não", async () => {
+    const estado = estadoBase({ habilitadaA: true, orgBHabilitada: true, modo: "NORMAL" });
+    estado.comunicacao_habilitacoes[0].envio_automatico = true;
+    const { app } = makeApp({ estado });
+    const r = await GET(app, ATIV);
+    assert.equal(r.json.data.organizacoesHabilitadas, 2);
+    assert.equal(r.json.data.organizacoesComEnvioAutomatico, 1);
+    assert.equal(r.json.data.envioRealPermitido, true);
   });
 });
 
@@ -176,20 +191,12 @@ describe("H.4-B.1 — PUT /habilitacao", () => {
     assert.equal(db.chamadasRpc.length, 0);
     assert.equal(habDe(estado), false);
   });
-  test("gates do piloto no runtime REAL: inativo / allowlist != 1 / destinatário fora -> 409, RPC nunca chamada", async () => {
-    const casos = [
-      [{}, "PILOTO_INATIVO"],
-      [{ COMUNICACAO_PILOTO_ENABLED: "true" }, "ALLOWLIST_INVALIDA"],
-      [{ COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: `${TEL_A},${TEL_B}` }, "ALLOWLIST_INVALIDA"],
-      [{ COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: TEL_B }, "DESTINATARIO_FORA_DA_ALLOWLIST"],
-    ];
-    for (const [env, codigo] of casos) {
-      const { app, db, estado } = makeApp({ estado: estadoBase(), env });
+  test("SEM gates de piloto: env vazio, sem allowlist, com 2 telefones ou destinatário 'fora' — nada disso bloqueia; quem decide é o banco (RPC)", async () => {
+    for (const env of [{}, { COMUNICACAO_PILOTO_ENABLED: "true" }, { COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: `${TEL_A},${TEL_B}` }, { COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: TEL_B }]) {
+      const { app, db } = makeApp({ estado: estadoBase(), env });
       const r = await PUT(app, HAB(), { habilitado: true, confirmacaoExplicita: true });
-      assert.equal(r.status, 409, JSON.stringify(env));
-      assert.match(JSON.stringify(r.json), new RegExp(codigo));
-      assert.equal(db.chamadasRpc.length, 0);
-      assert.equal(habDe(estado), false);
+      assert.equal(r.status, 200, JSON.stringify(env) + JSON.stringify(r.json));
+      assert.equal(db.chamadasRpc.length, 1);
     }
   });
   test("tudo válido -> chama a RPC atômica com a organização e o perfil do ATOR; 200 alterou=true", async () => {
@@ -198,11 +205,11 @@ describe("H.4-B.1 — PUT /habilitacao", () => {
     assert.equal(r.status, 200, JSON.stringify(r.json));
     assert.deepEqual(r.json.data, { organizacaoId: ORG_A, habilitado: true, alterou: true });
     assert.equal(db.chamadasRpc.length, 1);
-    assert.equal(db.chamadasRpc[0].nome, "comunicacao_habilitar_organizacao_piloto");
+    assert.equal(db.chamadasRpc[0].nome, "comunicacao_habilitar_organizacao");
     assert.equal(db.chamadasRpc[0].args.p_organizacao_id, ORG_A);
   });
-  test("recusas do banco (outra organização habilitada, modo != DISABLED, destinatário inelegível...) viram 409 com o código", async () => {
-    for (const acao of ["OUTRA_ORGANIZACAO_HABILITADA", "MODO_NAO_DESABILITADO", "DESTINATARIO_INELEGIVEL", "SEM_DESTINATARIO", "TIMEZONE_AUSENTE"]) {
+  test("recusas do banco (sem destinatário, inelegível, sem timezone/tipo...) viram 409 com o código", async () => {
+    for (const acao of ["DESTINATARIO_INELEGIVEL", "SEM_DESTINATARIO", "TIMEZONE_AUSENTE", "TIPO_AUSENTE", "SEM_CONFIGURACAO"]) {
       const { app } = makeApp({ estado: estadoBase(), rpc: async () => ({ data: { acao }, error: null }) });
       const r = await PUT(app, HAB(), { habilitado: true, confirmacaoExplicita: true });
       assert.equal(r.status, 409, acao);
@@ -215,7 +222,7 @@ describe("H.4-B.1 — PUT /habilitacao", () => {
     assert.equal(r.status, 200);
     assert.equal(r.json.data.alterou, false);
   });
-  test("DESABILITAR é sempre permitido: sem confirmação, piloto desligado, sem allowlist — e não chama a RPC de habilitar", async () => {
+  test("DESABILITAR é sempre permitido: sem confirmação, sem qualquer variável — e não chama a RPC de habilitar", async () => {
     const { app, db, estado } = makeApp({ estado: estadoBase({ habilitadaA: true }), env: {} });
     const r = await PUT(app, HAB(), { habilitado: false });
     assert.equal(r.status, 200);
@@ -232,7 +239,7 @@ describe("H.4-B.1 — PUT /habilitacao", () => {
 });
 
 describe("H.4-B.1 — PUT /modo", () => {
-  test("só DISABLED|NORMAL: REACTIVE_ONLY, lixo e ausente -> 400", async () => {
+  test("o Painel só aceita DISABLED|NORMAL: REACTIVE_ONLY, lixo e ausente -> 400", async () => {
     const { app, estado } = makeApp({ estado: estadoBase({ habilitadaA: true }) });
     for (const modo of ["REACTIVE_ONLY", "normal", "", undefined, 1, null]) {
       assert.equal((await PUT(app, MODO, { modo, confirmacaoExplicita: true })).status, 400, String(modo));
@@ -246,22 +253,22 @@ describe("H.4-B.1 — PUT /modo", () => {
     }
     assert.equal(modoDe(estado), "DISABLED");
   });
-  test("NORMAL: gates — piloto inativo, allowlist != 1, nenhuma/duas organizações habilitadas, destinatário fora, Gateway fora", async () => {
-    const casos = [
-      [estadoBase({ habilitadaA: true }), {}, "PILOTO_INATIVO"],
-      [estadoBase({ habilitadaA: true }), { COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: `${TEL_A},${TEL_B}` }, "ALLOWLIST_INVALIDA"],
-      [estadoBase({ habilitadaA: false }), ENV_OK, "EXATAMENTE_UMA_ORGANIZACAO"],
-      [estadoBase({ habilitadaA: true, orgBHabilitada: true }), ENV_OK, "EXATAMENTE_UMA_ORGANIZACAO"],
-      [estadoBase({ habilitadaA: true, contatoTel: TEL_B }), ENV_OK, "DESTINATARIO_FORA_DA_ALLOWLIST"],
-      [estadoBase({ habilitadaA: true, gateway: "DISCONNECTED" }), ENV_OK, "GATEWAY_INDISPONIVEL"],
-      [estadoBase({ habilitadaA: true, gateway: null }), ENV_OK, "GATEWAY_INDISPONIVEL"],
-    ];
-    for (const [estado, env, codigo] of casos) {
-      const { app } = makeApp({ estado, env });
+  test("NORMAL: só o Gateway é exigido — sem allowlist, sem 'exatamente 1 empresa'; Gateway fora -> 409 e o modo não muda", async () => {
+    for (const gateway of ["DISCONNECTED", null]) {
+      const estado = estadoBase({ habilitadaA: true, gateway });
+      const { app } = makeApp({ estado, env: {} });
       const r = await PUT(app, MODO, { modo: "NORMAL", confirmacaoExplicita: true });
-      assert.equal(r.status, 409, codigo);
-      assert.match(JSON.stringify(r.json), new RegExp(codigo));
-      assert.equal(modoDe(estado), "DISABLED", codigo);
+      assert.equal(r.status, 409);
+      assert.match(JSON.stringify(r.json), /GATEWAY_INDISPONIVEL/);
+      assert.equal(modoDe(estado), "DISABLED");
+    }
+  });
+  test("NORMAL funciona com 0, 1 ou várias empresas habilitadas e sem nenhuma variável do piloto", async () => {
+    for (const estado of [estadoBase({ habilitadaA: false }), estadoBase({ habilitadaA: true }), estadoBase({ habilitadaA: true, orgBHabilitada: true })]) {
+      const { app } = makeApp({ estado, env: {} });
+      const r = await PUT(app, MODO, { modo: "NORMAL", confirmacaoExplicita: true });
+      assert.equal(r.status, 200, JSON.stringify(r.json));
+      assert.equal(modoDe(estado), "NORMAL");
     }
   });
   test("NORMAL com tudo válido -> 200, modo=NORMAL, anterior=DISABLED", async () => {
@@ -273,7 +280,7 @@ describe("H.4-B.1 — PUT /modo", () => {
     const de_novo = await PUT(app, MODO, { modo: "NORMAL", confirmacaoExplicita: true });
     assert.equal(de_novo.json.data.alterou, false, "idempotente");
   });
-  test("NORMAL -> DISABLED é SEMPRE permitido: sem confirmação, piloto desligado, Gateway fora, nenhuma organização", async () => {
+  test("NORMAL -> DISABLED é SEMPRE permitido: sem confirmação, Gateway fora, nenhuma organização", async () => {
     const { app, estado } = makeApp({ estado: estadoBase({ habilitadaA: false, gateway: null, modo: "NORMAL" }), env: {} });
     const r = await PUT(app, MODO, { modo: "DISABLED" });
     assert.equal(r.status, 200);
@@ -311,6 +318,6 @@ describe("H.4-B.1 — guarda estática: só o fluxo administrativo dedicado cham
     const svc = fs.readFileSync(path.join(src, "modules", "administrativo", "administrativo.comunicacao.service.js"), "utf8");
     const bloco = svc.slice(svc.indexOf("CHECKPOINT H.4-B.1"), svc.indexOf("/** GET /administrativo/comunicacao/fila */"));
     assert.doesNotMatch(bloco, /telefone_e164[^\n]*detalhes|detalhes[^\n]*telefone/i);
-    for (const a of ["COMUNICACAO_ORGANIZACAO_HABILITADA", "COMUNICACAO_ORGANIZACAO_DESABILITADA", "COMUNICACAO_MODO_ATIVADO", "COMUNICACAO_MODO_DESATIVADO"]) assert.match(bloco, new RegExp(`ACOES\\.${a}`));
+    for (const a of ["COMUNICACAO_ORGANIZACAO_HABILITADA", "COMUNICACAO_ORGANIZACAO_DESABILITADA", "COMUNICACAO_MODO_ATIVADO", "COMUNICACAO_MODO_DESATIVADO"]) assert.match(svc, new RegExp(`ACOES\\.${a}`));
   });
 });

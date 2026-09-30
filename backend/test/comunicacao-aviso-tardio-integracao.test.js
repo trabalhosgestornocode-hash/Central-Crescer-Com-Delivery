@@ -2,7 +2,7 @@
 // comunicacao_agendar_aviso_tardio_d1, o trigger (a INICIAL tardia continua dona de comunicacao_alertas.status),
 // concorrência (30 RPCs; scheduler NORMAL × TARDIO), e o PIPELINE REAL (claim -> JIT do aviso tardio -> policy ->
 // reservar_envio -> gateway -> FakeProvider): pendência resolvida, gates de janela/dia/D-1, opt-out, empresa,
-// allowlist do piloto, rate-limit, dois workers, zero reforço no mesmo dia.
+// rate-limit, dois workers, zero reforço no mesmo dia.
 // PULA (não falha) sem credencial de banco descartável / sem as migrations 082-088-092-094.
 // Rodar: node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-aviso-tardio-integracao.test.js
 import { test, describe, before, beforeEach, after } from "node:test";
@@ -11,7 +11,7 @@ import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
   criarOrganizacao, apagarOrganizacao, criarUnidade, criarDestinatario, apagarDestinatario, habilitarOrganizacao,
-  migracao082Aplicada, migracao088Aplicada,
+  migracao082Aplicada, migracao088Aplicada, migracao092Aplicada, agendarAvisoTardioD1T, agendarMensagemDoAlertaT,
 } from "./helpers/comunicacao-fixtures.js";
 import * as alertasRepo from "../src/modules/comunicacao/comunicacao.alertas.repo.js";
 import {
@@ -38,13 +38,8 @@ let orgA = null, unidadeA = null, dest = null, telefone = null;
 const definirLimites = (l) => supabase.from("comunicacao_configuracoes").upsert({ chave: "limites", valor: l }, { onConflict: "chave" });
 const LIMITES = { max_proativas_por_minuto: 1000, max_proativas_por_minuto_por_organizacao: 1000, max_por_contato_por_dia: 3 };
 
-async function migracao094Aplicada() {
-  const s = await supabase.rpc("comunicacao_agendar_aviso_tardio_d1", {
-    p_alerta_id: "00000000-0000-0000-0000-000000000000", p_conteudo: "probe", p_idempotency_key: "probe",
-    p_disponivel_em: new Date().toISOString(), p_expira_em: null, p_max_tentativas: 1,
-  });
-  return !s.error;
-}
+// 104: as RPCs de destinatário único (094/088) foram aposentadas; a sonda usa a RPC vigente (por destinatário).
+const migracao094Aplicada = migracao092Aplicada;
 
 before(async () => {
   if (PULAR_INTEGRACAO) return;
@@ -60,7 +55,6 @@ before(async () => {
 });
 
 after(async () => {
-  delete process.env.COMUNICACAO_PILOTO_ENABLED; delete process.env.COMUNICACAO_PILOTO_TELEFONES_E164;
   if (modoOriginal) await definirModo(modoOriginal, {}).catch(() => {});
   if (limitesOriginais) await definirLimites(limitesOriginais);
   await apagarOrganizacao(orgA);
@@ -69,7 +63,6 @@ after(async () => {
 
 beforeEach(async () => {
   if (PULAR_INTEGRACAO || !migracaoOk) return;
-  delete process.env.COMUNICACAO_PILOTO_ENABLED; delete process.env.COMUNICACAO_PILOTO_TELEFONES_E164;
   await definirLimites(LIMITES);
   await definirModo(MODOS.NORMAL, {});
   await supabase.from("comunicacao_mensagens").delete().eq("organizacao_id", orgA);
@@ -78,7 +71,8 @@ beforeEach(async () => {
   await habilitarOrganizacao(orgA, dest);
 });
 
-const chaveInicial = (id) => `wa:alerta:${id}:v1`;
+const chaveInicial = (id) => `wa:alerta:${id}:v1`; // chave LEGADA (fixtures manuais)
+const chaveDest = (id) => `wa:alerta:${id}:dest:${dest.contatoEmpresaId}:v1`; // 104: chave POR DESTINATÁRIO (derivada no banco)
 const linha = async (id) => (await supabase.from("comunicacao_mensagens").select("*").eq("id", id).single()).data;
 const statusAlerta = async (id) => (await supabase.from("comunicacao_alertas").select("status").eq("id", id).single()).data.status;
 const mensagensDoAlerta = async (id) => (await supabase.from("comunicacao_mensagens").select("*").eq("alerta_id", id)).data;
@@ -92,15 +86,11 @@ async function novoAlerta(dataReferencia = "2026-09-15") {
   return alerta;
 }
 
-const chamarTardio = (alertaId, { chave, disponivelEm = new Date(Date.now() - 60_000), expiraEm = null } = {}) =>
-  supabase.rpc("comunicacao_agendar_aviso_tardio_d1", {
-    p_alerta_id: alertaId, p_conteudo: "aviso tardio de teste", p_idempotency_key: chave ?? chaveInicial(alertaId),
-    p_disponivel_em: disponivelEm.toISOString(), p_expira_em: expiraEm ? expiraEm.toISOString() : null, p_max_tentativas: 5,
-  });
-const chamarNormal = (alertaId) => supabase.rpc("comunicacao_agendar_mensagem_alerta", {
-  p_alerta_id: alertaId, p_tipo: TIPO, p_conteudo: "inicial normal", p_idempotency_key: chaveInicial(alertaId),
-  p_disponivel_em: new Date(Date.now() - 60_000).toISOString(), p_expira_em: null, p_max_tentativas: 5,
-});
+// 104: adaptadores sobre `comunicacao_agendar_mensagens_alerta` (a única RPC vigente), devolvendo a FORMA antiga {data, error}.
+const chamarTardio = async (alertaId, { disponivelEm = new Date(Date.now() - 60_000), expiraEm = null } = {}) =>
+  ({ data: await agendarAvisoTardioD1T({ alertaId, conteudo: "aviso tardio de teste", disponivelEm, expiraEm }), error: null });
+const chamarNormal = async (alertaId) =>
+  ({ data: await agendarMensagemDoAlertaT({ alertaId, conteudo: "inicial normal", disponivelEm: new Date(Date.now() - 60_000) }), error: null });
 
 async function inserirMensagem({ alertaId, status, idempotencyKey, proposito = null, enviadoEm = null, extra = {} }) {
   const { data, error } = await supabase.from("comunicacao_mensagens").insert({
@@ -115,7 +105,7 @@ async function inserirMensagem({ alertaId, status, idempotencyKey, proposito = n
 }
 
 const HAB = (extra = {}) => async () => ({
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
   destinatarioContatoId: dest.contatoId, destinatarioPerfilId: dest.perfilId, destinatarioContatoEmpresaId: dest.contatoEmpresaId ?? null,
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE", ...extra,
 });
@@ -124,7 +114,7 @@ function criarProviderComSpy() {
   const chamadas = [];
   const original = provider.sendText.bind(provider);
   provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }) };
+  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true, semGateModo: true }) };
 }
 const lote = (whatsAppService, extra = {}) => processarProximoLote({
   limite: 20, worker: "teste-tardio", whatsAppService, agora: AGORA,
@@ -134,52 +124,56 @@ const sk = (t) => t.skip(PULAR_INTEGRACAO || "migrations 082/088/094 ainda não 
 const meu = (rs, id) => rs.find((r) => r.id === id);
 
 // ---------------------------------------------------------------------------
-describe("RPC comunicacao_agendar_aviso_tardio_d1 (094)", { skip: PULAR_INTEGRACAO }, () => {
-  test("cria a 1ª mensagem: chave …:v1, SCHEDULED, proposito=inicial, origem=prazo_final_d1; o alerta vai a SCHEDULED; repetir -> JA_EXISTIA", async (t) => {
+describe("RPC comunicacao_agendar_mensagens_alerta — 1ª mensagem TARDIA (094/104)", { skip: PULAR_INTEGRACAO }, () => {
+  test("cria a 1ª mensagem: chave …:dest:{destinatário}:v1, SCHEDULED, proposito=inicial, origem=prazo_final_d1; o alerta vai a SCHEDULED; repetir -> JA_EXISTIA", async (t) => {
     if (!migracaoOk) return sk(t);
     const alerta = await novoAlerta();
     const r1 = (await chamarTardio(alerta.id)).data;
     assert.equal(r1.acao, "CRIADA");
     const m = await linha(r1.mensagem_id);
-    assert.equal(m.idempotency_key, chaveInicial(alerta.id));
+    assert.equal(m.idempotency_key, chaveDest(alerta.id));
     assert.equal(m.status, SM.SCHEDULED);
     assert.deepEqual(m.metadados, { proposito: "inicial", origem: "prazo_final_d1" });
     assert.equal(m.tipo, TIPO);
     assert.equal(m.contato_id, dest.contatoId);
     assert.equal(await statusAlerta(alerta.id), SA.SCHEDULED);
     const r2 = (await chamarTardio(alerta.id)).data;
-    assert.equal(r2.acao, "JA_EXISTIA");
+    assert.ok(["JA_EXISTIA", "ALERTA_NAO_DETECTED"].includes(r2.acao), r2.acao); // alerta já SCHEDULED: repetir nunca cria outra
     assert.equal((await mensagensDoAlerta(alerta.id)).length, 1);
   });
 
-  test("chave que não é exatamente wa:alerta:{id}:v1 -> CHAVE_INVALIDA (nenhuma 2ª identidade 'tardio')", async (t) => {
+  test("a chave é derivada NO BANCO por destinatário: não há como criar uma 2ª identidade 'tardio' (o banco recusa a duplicata)", async (t) => {
     if (!migracaoOk) return sk(t);
     const alerta = await novoAlerta();
-    for (const chave of [`wa:alerta:${alerta.id}:tardio:v1`, `wa:alerta:${alerta.id}:v2`, `wa:alerta:${alerta.id}:reforco:v1`]) {
-      assert.equal((await chamarTardio(alerta.id, { chave })).data.acao, "CHAVE_INVALIDA", chave);
-    }
-    assert.equal((await mensagensDoAlerta(alerta.id)).length, 0);
+    assert.equal((await chamarTardio(alerta.id)).data.acao, "CRIADA");
+    const dup = await supabase.from("comunicacao_mensagens").insert({
+      alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: dest.contatoId, contato_empresa_id: dest.contatoEmpresaId, canal: "whatsapp", direcao: "saida",
+      tipo: TIPO, conteudo: "x", idempotency_key: `wa:alerta:${alerta.id}:tardio:v1`, status: SM.SCHEDULED, metadados: { proposito: "inicial", origem: "prazo_final_d1" }, disponivel_em: new Date().toISOString(),
+    });
+    assert.equal(String(dup.error?.code), "23505");
+    assert.equal((await mensagensDoAlerta(alerta.id)).length, 1);
   });
 
   test("alerta inexistente / alerta que não está DETECTED -> recusa", async (t) => {
     if (!migracaoOk) return sk(t);
-    assert.equal((await chamarTardio("00000000-0000-0000-0000-000000000000", { chave: "x" })).data.acao, "ALERTA_INEXISTENTE");
+    assert.equal((await chamarTardio("00000000-0000-0000-0000-000000000000")).data.acao, "ALERTA_INEXISTENTE");
     const alerta = await novoAlerta();
     await supabase.from("comunicacao_alertas").update({ status: SA.SENT }).eq("id", alerta.id);
     assert.equal((await chamarTardio(alerta.id)).data.acao, "ALERTA_NAO_DETECTED");
     assert.equal((await mensagensDoAlerta(alerta.id)).length, 0);
   });
 
-  test("inicial NORMAL já existe (mesma chave) -> JA_EXISTIA; inicial com OUTRA chave -> INICIAL_JA_EXISTE; nunca 2 iniciais", async (t) => {
+  test("inicial NORMAL já existe -> JA_EXISTIA; inicial do mesmo destinatário com OUTRA chave -> JA_EXISTIA; nunca 2 iniciais", async (t) => {
     if (!migracaoOk) return sk(t);
     const a1 = await novoAlerta("2026-09-15");
     assert.equal((await chamarNormal(a1.id)).data.acao, "CRIADA");
-    assert.equal((await chamarTardio(a1.id)).data.acao, "JA_EXISTIA");
+    assert.ok(["JA_EXISTIA", "ALERTA_NAO_DETECTED"].includes((await chamarTardio(a1.id)).data.acao));
     assert.equal((await mensagensDoAlerta(a1.id)).length, 1);
 
     const a2 = await novoAlerta("2026-09-14");
     await inserirMensagem({ alertaId: a2.id, status: SM.CANCELLED, idempotencyKey: `wa:alerta:${a2.id}:outra-chave`, extra: { erro: "X" } });
-    assert.equal((await chamarTardio(a2.id)).data.acao, "INICIAL_JA_EXISTE");
+    // 104: qualquer inicial do MESMO destinatário (mesmo com OUTRA chave) é a mesma identidade — nunca 2 iniciais
+    assert.equal((await chamarTardio(a2.id)).data.acao, "JA_EXISTIA");
     assert.equal((await mensagensDoAlerta(a2.id)).length, 1);
   });
 
@@ -191,17 +185,17 @@ describe("RPC comunicacao_agendar_aviso_tardio_d1 (094)", { skip: PULAR_INTEGRAC
     assert.equal((await mensagensDoAlerta(alerta.id)).length, 1);
   });
 
-  test("30 chamadas CONCORRENTES -> exatamente 1 CRIADA, 29 JA_EXISTIA, 1 única mensagem", async (t) => {
+  test("30 chamadas CONCORRENTES -> exatamente 1 CRIADA (as demais nunca duplicam), 1 única mensagem", async (t) => {
     if (!migracaoOk) return sk(t);
     const alerta = await novoAlerta();
     const rs = await Promise.all(Array.from({ length: 30 }, () => chamarTardio(alerta.id)));
     const acoes = rs.map((r) => r.data?.acao ?? r.error?.message);
     assert.equal(acoes.filter((a) => a === "CRIADA").length, 1, JSON.stringify(acoes));
-    assert.equal(acoes.filter((a) => a === "JA_EXISTIA").length, 29);
+    assert.equal(acoes.filter((a) => a === "JA_EXISTIA" || a === "ALERTA_NAO_DETECTED").length, 29, JSON.stringify(acoes));
     assert.equal((await mensagensDoAlerta(alerta.id)).length, 1);
   });
 
-  test("CORRIDA scheduler NORMAL (RPC 088) × TARDIO (RPC 094): 15+15 simultâneas -> exatamente UMA mensagem wa:alerta:{id}:v1", async (t) => {
+  test("CORRIDA scheduler NORMAL × TARDIO: 15+15 simultâneas -> exatamente UMA mensagem inicial por destinatário", async (t) => {
     if (!migracaoOk) return sk(t);
     const alerta = await novoAlerta();
     const rs = await Promise.all([...Array(15).fill(0).map(() => chamarNormal(alerta.id)), ...Array(15).fill(0).map(() => chamarTardio(alerta.id))]);
@@ -209,13 +203,13 @@ describe("RPC comunicacao_agendar_aviso_tardio_d1 (094)", { skip: PULAR_INTEGRAC
     assert.equal(criadas.length, 1, JSON.stringify(rs.map((r) => r.data?.acao ?? r.error?.message)));
     const msgs = await mensagensDoAlerta(alerta.id);
     assert.equal(msgs.length, 1);
-    assert.equal(msgs[0].idempotency_key, chaveInicial(alerta.id));
+    assert.equal(msgs[0].idempotency_key, chaveDest(alerta.id));
   });
 
   test("empresa desabilitada / contato sem consentimento, não verificado ou com opt-out -> não cria nada", async (t) => {
     if (!migracaoOk) return sk(t);
     const alerta = await novoAlerta();
-    await supabase.from("comunicacao_habilitacoes").update({ habilitado: false }).eq("organizacao_id", orgA);
+    await supabase.from("comunicacao_habilitacoes").update({ habilitado: false, envio_automatico: false }).eq("organizacao_id", orgA);
     assert.equal((await chamarTardio(alerta.id)).data.acao, "NAO_HABILITADA");
     await habilitarOrganizacao(orgA, dest);
     for (const campos of [{ opt_out: true }, { consentimento: false }, { verificado: false }]) {
@@ -273,7 +267,7 @@ describe("scheduler agendarAvisosTardiosD1 — contra o banco real", { skip: PUL
     assert.equal((await rodar(QUA("21:15"))).agendados, 0, "restart no meio da janela");
     const msgs = await mensagensDoAlerta(alerta.id);
     assert.equal(msgs.length, 1);
-    assert.equal(msgs[0].idempotency_key, chaveInicial(alerta.id));
+    assert.equal(msgs[0].idempotency_key, chaveDest(alerta.id));
     assert.deepEqual(msgs[0].metadados, { proposito: "inicial", origem: "prazo_final_d1" });
     assert.match(msgs[0].conteudo, /^Olá! Atenção: o lançamento da unidade Loja Tardio referente ao dia 15\/09\/2026 ainda consta pendente/);
     assert.equal(new Date(msgs[0].expira_em).toISOString(), QUA("22:30").toISOString());
@@ -319,7 +313,7 @@ describe("scheduler agendarAvisosTardiosD1 — contra o banco real", { skip: PUL
   test("organização desabilitada (habilitação REAL) -> nada criado", async (t) => {
     if (!migracaoOk) return sk(t);
     const alerta = await novoAlerta();
-    await supabase.from("comunicacao_habilitacoes").update({ habilitado: false }).eq("organizacao_id", orgA);
+    await supabase.from("comunicacao_habilitacoes").update({ habilitado: false, envio_automatico: false }).eq("organizacao_id", orgA);
     const r = await rodar(AGORA);
     assert.equal(r.agendados, 0);
     assert.equal(r.semHabilitacao, 1);
@@ -363,37 +357,41 @@ describe("pipeline real do aviso tardio: claim -> JIT -> policy -> reserva -> pr
     assert.equal(await statusAlerta(p.alerta.id), SA.SENT);
   });
 
-  test("com o piloto ativo e o destinatário NA allowlist -> enviado; com OUTRO número na allowlist -> BLOQUEADO, provider 0", async (t) => {
+  test("envio automático DESLIGADO depois de agendado -> BLOQUEADO (ENVIO_AUTOMATICO_DESLIGADO), provider 0; o alerta acompanha (BLOCKED)", async (t) => {
     if (!migracaoOk) return sk(t);
-    process.env.COMUNICACAO_PILOTO_ENABLED = "true";
-    process.env.COMUNICACAO_PILOTO_TELEFONES_E164 = "+5500000000000";
     const p = await tardioPronto();
+    const a = criarProviderComSpy();
+    const r = meu(await lote(a.whatsAppService, { resolverHabilitacao: HAB({ envioAutomatico: false }) }), p.id);
+    assert.equal(r?.resultado, "BLOQUEADO", JSON.stringify(r));
+    assert.equal(r.motivo, "ENVIO_AUTOMATICO_DESLIGADO");
+    assert.equal(a.chamadas.length, 0);
+    assert.equal(await statusAlerta(p.alerta.id), SA.BLOCKED);
+  });
+
+  test("categoria de aviso DESABILITADA para o destinatário depois de agendado -> BLOQUEADO (CATEGORIA_NAO_PERMITIDA), provider 0", async (t) => {
+    if (!migracaoOk) return sk(t);
+    const p = await tardioPronto();
+    await supabase.from("comunicacao_destinatario_categorias").update({ habilitado: false }).eq("contato_empresa_id", dest.contatoEmpresaId);
     const a = criarProviderComSpy();
     const r = meu(await lote(a.whatsAppService), p.id);
     assert.equal(r?.resultado, "BLOQUEADO", JSON.stringify(r));
+    assert.equal(r.motivo, "CATEGORIA_NAO_PERMITIDA");
     assert.equal(a.chamadas.length, 0);
-    assert.equal(await statusAlerta(p.alerta.id), SA.BLOCKED);
-    await supabase.from("comunicacao_mensagens").delete().eq("organizacao_id", orgA);
-    await supabase.from("comunicacao_alertas").delete().eq("organizacao_id", orgA);
-    process.env.COMUNICACAO_PILOTO_TELEFONES_E164 = telefone;
-    const q = await tardioPronto();
-    const b = criarProviderComSpy();
-    assert.equal(meu(await lote(b.whatsAppService), q.id)?.resultado, "ENVIADO");
-    assert.equal(b.chamadas.length, 1);
   });
 
-  test("piloto ativo com allowlist vazia/malformada -> BLOQUEADO, provider 0 (fail-closed)", async (t) => {
+  test("as variáveis LEGADAS do piloto (com OUTRO número) NÃO interferem: o aviso tardio é enviado normalmente", async (t) => {
     if (!migracaoOk) return sk(t);
+    const antes = [process.env.COMUNICACAO_PILOTO_ENABLED, process.env.COMUNICACAO_PILOTO_TELEFONES_E164];
     process.env.COMUNICACAO_PILOTO_ENABLED = "true";
-    for (const lista of [undefined, "abc", `${telefone},lixo`]) {
-      await supabase.from("comunicacao_mensagens").delete().eq("organizacao_id", orgA);
-      await supabase.from("comunicacao_alertas").delete().eq("organizacao_id", orgA);
-      if (lista === undefined) delete process.env.COMUNICACAO_PILOTO_TELEFONES_E164; else process.env.COMUNICACAO_PILOTO_TELEFONES_E164 = lista;
+    process.env.COMUNICACAO_PILOTO_TELEFONES_E164 = "+5500000000000";
+    try {
       const p = await tardioPronto();
-      const { chamadas, whatsAppService } = criarProviderComSpy();
-      const r = meu(await lote(whatsAppService), p.id);
-      assert.equal(r?.resultado, "BLOQUEADO", `${lista}: ${JSON.stringify(r)}`);
-      assert.equal(chamadas.length, 0);
+      const a = criarProviderComSpy();
+      assert.equal(meu(await lote(a.whatsAppService), p.id)?.resultado, "ENVIADO");
+      assert.equal(a.chamadas.length, 1);
+    } finally {
+      if (antes[0] === undefined) delete process.env.COMUNICACAO_PILOTO_ENABLED; else process.env.COMUNICACAO_PILOTO_ENABLED = antes[0];
+      if (antes[1] === undefined) delete process.env.COMUNICACAO_PILOTO_TELEFONES_E164; else process.env.COMUNICACAO_PILOTO_TELEFONES_E164 = antes[1];
     }
   });
 

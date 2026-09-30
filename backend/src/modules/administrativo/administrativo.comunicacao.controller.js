@@ -11,6 +11,7 @@ import * as central from "./administrativo.comunicacao.central.js";
 import * as teste from "./administrativo.comunicacao.teste.js";
 import * as conversas from "./administrativo.comunicacao.conversas.js";
 import * as conexao from "./administrativo.comunicacao.conexao.js";
+import * as empresa from "./administrativo.comunicacao.empresa.js";
 
 const ok = (res, data, status = 200) => res.status(status).json({ data });
 // Mesma seam de teste de administrativo.controller.js: `app.locals.adminDeps`.
@@ -103,6 +104,40 @@ export const modo = asyncHandler(async (req, res) =>
     modo: req.body?.modo,
     confirmacaoExplicita: req.body?.confirmacaoExplicita,
   }, autor(req), deps(req))));
+
+// ---- Configuração DEFINITIVA por empresa (fim do piloto, migration 104): status, VÁRIOS destinatários, envio automático, limites, dry-run ----
+// GET /administrativo/comunicacao/organizacoes/:organizacaoId/whatsapp
+export const painelEmpresa = asyncHandler(async (req, res) => ok(res, await empresa.painelEmpresa({ organizacaoId: req.params.organizacaoId }, deps(req))));
+// POST /organizacoes/:organizacaoId/destinatarios   { nome, telefone, tipo?, categorias, observacoes? }
+export const criarDestinatario = asyncHandler(async (req, res) =>
+  ok(res, await empresa.criarDestinatario({
+    organizacaoId: req.params.organizacaoId, nome: req.body?.nome, telefone: req.body?.telefone, tipo: req.body?.tipo, categorias: req.body?.categorias, observacoes: req.body?.observacoes,
+  }, autor(req), deps(req)), 201));
+// PUT /organizacoes/:organizacaoId/destinatarios/:contatoId   { nome?, telefone?, tipo?, observacoes? }
+export const atualizarDestinatario = asyncHandler(async (req, res) =>
+  ok(res, await empresa.atualizarDestinatario({
+    organizacaoId: req.params.organizacaoId, contatoEmpresaId: req.params.contatoId, nome: req.body?.nome, telefone: req.body?.telefone, tipo: req.body?.tipo, observacoes: req.body?.observacoes,
+  }, autor(req), deps(req))));
+// PUT /organizacoes/:organizacaoId/destinatarios/:contatoId/categorias   { categorias }
+export const definirCategoriasDestinatario = asyncHandler(async (req, res) =>
+  ok(res, await empresa.definirCategoriasDestinatario({ organizacaoId: req.params.organizacaoId, contatoEmpresaId: req.params.contatoId, categorias: req.body?.categorias }, autor(req), deps(req))));
+// PUT /organizacoes/:organizacaoId/destinatarios/:contatoId/ativo   { ativo }
+export const definirAtivoDestinatario = asyncHandler(async (req, res) =>
+  ok(res, await empresa.definirAtivoDestinatario({ organizacaoId: req.params.organizacaoId, contatoEmpresaId: req.params.contatoId, ativo: req.body?.ativo }, autor(req), deps(req))));
+// POST /organizacoes/:organizacaoId/destinatarios/:contatoId/autorizar   { confirmacaoExplicita }
+export const autorizarDestinatario = asyncHandler(async (req, res) =>
+  ok(res, await empresa.autorizarDestinatario({ organizacaoId: req.params.organizacaoId, contatoEmpresaId: req.params.contatoId, confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));
+// POST /organizacoes/:organizacaoId/destinatarios/:contatoId/opt-out   { confirmacaoExplicita }
+export const optOutDestinatario = asyncHandler(async (req, res) =>
+  ok(res, await empresa.registrarOptOutDestinatario({ organizacaoId: req.params.organizacaoId, contatoEmpresaId: req.params.contatoId, confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));
+// PUT /organizacoes/:organizacaoId/envio-automatico   { ligar, confirmacaoExplicita }
+export const envioAutomatico = asyncHandler(async (req, res) =>
+  ok(res, await empresa.definirEnvioAutomatico({ organizacaoId: req.params.organizacaoId, ligar: req.body?.ligar, confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));
+// PUT /organizacoes/:organizacaoId/limites   { limiteDiarioOrg?, cooldownMinutos? }
+export const limites = asyncHandler(async (req, res) =>
+  ok(res, await empresa.atualizarLimites({ organizacaoId: req.params.organizacaoId, limiteDiarioOrg: req.body?.limiteDiarioOrg, cooldownMinutos: req.body?.cooldownMinutos }, autor(req), deps(req))));
+// POST /organizacoes/:organizacaoId/dry-run — SOMENTE LEITURA (nada criado, provider = 0), permitido em qualquer modo
+export const dryRun = asyncHandler(async (req, res) => ok(res, await empresa.executarDryRun({ organizacaoId: req.params.organizacaoId }, autor(req), deps(req))));
 
 // GET /administrativo/comunicacao/ativacao
 export const ativacao = asyncHandler(async (req, res) => ok(res, await service.ativacao(deps(req))));

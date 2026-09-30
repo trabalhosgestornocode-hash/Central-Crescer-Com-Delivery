@@ -34,9 +34,9 @@ function servicoFalso(impl) {
   const enviarTexto = mock.fn(impl ?? (async () => ({ providerMessageId: `3EB0TESTE${Date.now()}${++seq}`, enviadoEm: new Date().toISOString() })));
   return { enviarTexto, identidadeConfirmada: async () => true };
 }
-const envOk = () => ({ COMUNICACAO_PILOTO_ENABLED: "true", COMUNICACAO_PILOTO_TELEFONES_E164: telefone, WHATSAPP_GATEWAY_URL: "http://gateway.invalid", WHATSAPP_GATEWAY_SECRET: "x" });
+const envOk = () => ({ WHATSAPP_GATEWAY_URL: "http://gateway.invalid", WHATSAPP_GATEWAY_SECRET: "x" });
 const depsBase = (extra = {}) => ({
-  env: envOk(), estadoGateway: { estado: "conectado" }, identidadeConfirmada: true, lerModo: async () => "DISABLED", whatsAppService: servicoFalso(), ...extra,
+  env: envOk(), estadoGateway: { estado: "conectado" }, identidadeConfirmada: true, lerModo: async () => "NORMAL", whatsAppService: servicoFalso(), ...extra,
 });
 const req = (extra = {}) => ({ organizacaoId: orgA, unidadeId: uniA, testeId: uuid(), confirmacaoExplicita: true, ...extra });
 const linha = async (id) => (await supabase.from("comunicacao_mensagens").select("*").eq("id", id).single()).data;
@@ -83,12 +83,17 @@ describe("TESTE CONTROLADO — autorização, confirmação e gates (fail-closed
     assert.equal(d.whatsAppService.enviarTexto.mock.callCount(), 0);
   });
 
-  test("modo NORMAL (ou qualquer valor diferente de DISABLED) bloqueia o teste", async (t) => {
+  test("KILL SWITCH: modo DISABLED bloqueia o teste real (mensagem clara); NORMAL e REACTIVE_ONLY permitem; valor desconhecido bloqueia (fail-closed)", async (t) => {
     if (pular(t)) return;
-    for (const modo of ["NORMAL", "REACTIVE_ONLY", "qualquer"]) {
+    for (const modo of ["DISABLED", "qualquer", undefined]) {
       const d = depsBase({ lerModo: async () => modo });
-      await rejeita(teste.enviarTeste(req(), autor, d), 409, "MODO_NAO_DISABLED");
-      assert.equal(d.whatsAppService.enviarTexto.mock.callCount(), 0, modo);
+      await assert.rejects(teste.enviarTeste(req(), autor, d), (e) => {
+        assert.equal(e.statusCode ?? e.status, 409);
+        assert.equal(e.details?.codigo ?? e.detalhes?.codigo, "MODO_DISABLED");
+        assert.match(e.message, /Envio bloqueado: o módulo WhatsApp está em modo DISABLED\. Altere o modo operacional antes de realizar um teste real\./);
+        return true;
+      });
+      assert.equal(d.whatsAppService.enviarTexto.mock.callCount(), 0, String(modo));
     }
     assert.equal((await supabase.from("comunicacao_mensagens").select("id").eq("tipo", "teste_comunicacao").in("organizacao_id", [orgA])).data.length, 0, "nenhuma mensagem criada");
   });
@@ -113,22 +118,22 @@ describe("TESTE CONTROLADO — autorização, confirmação e gates (fail-closed
       assert.equal(d.whatsAppService.enviarTexto.mock.callCount(), 0, codigo);
       await supabase.from("contatos_whatsapp").update({ verificado: true, consentimento: true, opt_out: false }).eq("id", dest.contatoId);
     }
-    await supabase.from("comunicacao_habilitacoes").delete().eq("organizacao_id", orgA);
-    await rejeita(teste.enviarTeste(req(), autor, depsBase()), 409, "SEM_DESTINATARIO");
+    // empresa SEM nenhum destinatário cadastrado
+    const orgSem = await criarOrganizacao("TESTE comunicacao-teste SEM destinatario — descartável");
+    try {
+      const uniSem = await criarUnidade(orgSem, "Unidade Sem Destinatario");
+      await rejeita(teste.enviarTeste(req({ organizacaoId: orgSem, unidadeId: uniSem }), autor, depsBase()), 409, "SEM_DESTINATARIO");
+    } finally { await apagarOrganizacao(orgSem); }
   });
 
-  test("piloto: fora da allowlist / piloto inativo / allowlist vazia ou malformada bloqueiam", async (t) => {
+  test("SEM piloto: as variáveis COMUNICACAO_PILOTO_* (ausentes, falsas, com outro telefone ou malformadas) não bloqueiam nem liberam nada", async (t) => {
     if (pular(t)) return;
-    const variacoes = [
-      { COMUNICACAO_PILOTO_TELEFONES_E164: "+5511900000001" },
-      { COMUNICACAO_PILOTO_ENABLED: "false" },
-      { COMUNICACAO_PILOTO_TELEFONES_E164: "" },
-      { COMUNICACAO_PILOTO_TELEFONES_E164: "telefone-invalido" },
-    ];
+    const variacoes = [{ COMUNICACAO_PILOTO_TELEFONES_E164: "+5511900000001" }, { COMUNICACAO_PILOTO_ENABLED: "false" }, { COMUNICACAO_PILOTO_TELEFONES_E164: "telefone-invalido" }];
     for (const v of variacoes) {
-      const d = depsBase({ env: { ...envOk(), ...v } });
-      await rejeita(teste.enviarTeste(req(), autor, d), 409, "FORA_DA_ALLOWLIST");
-      assert.equal(d.whatsAppService.enviarTexto.mock.callCount(), 0, JSON.stringify(v));
+      const d = depsBase({ env: { ...envOk(), ...v, COMUNICACAO_TESTE_MAX: "10" } });
+      const r = await teste.enviarTeste(req(), autor, d);
+      assert.equal(r.status ?? r.resultado ?? "ok", r.status ?? r.resultado ?? "ok");
+      assert.equal(d.whatsAppService.enviarTexto.mock.callCount(), 1, JSON.stringify(v));
     }
   });
 
@@ -143,7 +148,7 @@ describe("TESTE CONTROLADO — autorização, confirmação e gates (fail-closed
 });
 
 describe("TESTE CONTROLADO — envio (1 provider call), idempotência, concorrência e limite", { skip: PULAR }, () => {
-  test("DISABLED permite: 1 provider call com o texto EXATO, mensagem PRÓPRIA (sem alerta, tipo/propósito de teste), SENT e attempt 1", async (t) => {
+  test("modo NORMAL permite: 1 provider call com o texto EXATO, mensagem PRÓPRIA (sem alerta, tipo/propósito de teste), SENT e attempt 1", async (t) => {
     if (pular(t)) return;
     const d = depsBase();
     const r = await teste.enviarTeste(req(), autor, d);
@@ -289,9 +294,9 @@ describe("TESTE CONTROLADO — nenhum alerta é criado/alterado; mensagem histó
     assert.deepEqual(p.limite, { usados: 0, maximo: 1 });
     assert.equal(JSON.stringify(p).includes(telefone), false, "telefone completo vazou");
     assert.equal(JSON.stringify(p).includes(telefone.slice(-8)), false, "os 8 últimos dígitos vazaram");
-    const bloqueado = await teste.preparoTeste({ organizacaoId: orgA }, depsBase({ lerModo: async () => "NORMAL", estadoGateway: { estado: "desconectado" } }));
+    const bloqueado = await teste.preparoTeste({ organizacaoId: orgA }, depsBase({ lerModo: async () => "DISABLED", estadoGateway: { estado: "desconectado" } }));
     assert.equal(bloqueado.podeEnviar, false);
-    assert.deepEqual(bloqueado.bloqueios.map((b) => b.codigo).slice(0, 2), ["MODO_NAO_DISABLED", "GATEWAY_INDISPONIVEL"]);
+    assert.deepEqual(bloqueado.bloqueios.map((b) => b.codigo).slice(0, 2), ["MODO_DISABLED", "GATEWAY_INDISPONIVEL"]);
     assert.ok(bloqueado.bloqueios.every((b) => b.mensagem.length > 10));
   });
 

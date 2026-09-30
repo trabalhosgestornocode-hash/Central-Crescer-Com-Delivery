@@ -3,6 +3,7 @@
 // transação (entre criar a mensagem e mover o alerta para SCHEDULED) => rollback total.
 // Rodar (o teste de injeção de falha precisa também de DATABASE_TESTE_URL + psql; sem eles ele PULA):
 //   node --env-file=.env --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-agendamento-atomico.test.js
+import { agendarMensagemDoAlertaT } from "./helpers/comunicacao-fixtures.js";
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
@@ -30,7 +31,7 @@ let orgA = null, orgB = null, unidadeA = null, unidadeB = null;
 let destA = null, destA2 = null, destB = null; // destinatários EXPLÍCITOS (A = o configurado, A2 = outro elegível não selecionado, B = da outra org)
 
 const HABILITADA = async () => ({
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
   destinatarioContatoId: "contato-de-teste", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "perfil-de-teste",
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE",
 });
@@ -63,6 +64,7 @@ beforeEach(async () => {
   // estado-base de TODO teste: contatos elegíveis e SEM habilitação (cada teste habilita o que precisa)
   for (const d of [destA, destA2, destB]) await supabase.from("contatos_whatsapp").update({ verificado: true, consentimento: true, opt_out: false }).eq("id", d.contatoId);
   await supabase.from("comunicacao_habilitacoes").delete().in("organizacao_id", [orgA, orgB]);
+  await supabase.from("comunicacao_contatos_empresa").delete().in("organizacao_id", [orgA, orgB]); // 104: destinatários são da EMPRESA (cascade nas categorias)
 });
 
 const msgsDoAlerta = async (alertaId) => (await supabase.from("comunicacao_mensagens").select("*").eq("alerta_id", alertaId)).data ?? [];
@@ -109,7 +111,7 @@ describe("agendamento ATÔMICO alerta -> mensagem (RPC comunicacao_agendar_mensa
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const alerta = await novoAlerta("2026-08-01");
     assert.equal(alerta.status, STATUS_ALERTA.DETECTED);
-    const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
+    const r = await agendarMensagemDoAlertaT(paramsAgendar(alerta));
     assert.equal(r.acao, "CRIADA");
     assert.equal(await statusAlerta(alerta.id), STATUS_ALERTA.SCHEDULED);
     const msgs = await msgsDoAlerta(alerta.id);
@@ -123,13 +125,15 @@ describe("agendamento ATÔMICO alerta -> mensagem (RPC comunicacao_agendar_mensa
     assert.ok(msgs[0].expira_em, "TTL gravado");
   });
 
-  test("IDEMPOTÊNCIA: 30 chamadas CONCORRENTES para o mesmo alerta/chave -> exatamente UMA mensagem (1 CRIADA + 29 JA_EXISTIA)", async (t) => {
+  test("IDEMPOTÊNCIA: 30 chamadas CONCORRENTES para o mesmo alerta -> exatamente UMA mensagem por destinatário (1 CRIADA; as demais NÃO duplicam)", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const alerta = await novoAlerta("2026-08-02");
-    const resultados = await Promise.all(Array.from({ length: 30 }, () => filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta))));
+    const resultados = await Promise.all(Array.from({ length: 30 }, () => agendarMensagemDoAlertaT(paramsAgendar(alerta))));
     const contagem = resultados.reduce((m, r) => ({ ...m, [r.acao]: (m[r.acao] ?? 0) + 1 }), {});
-    assert.deepEqual(contagem, { CRIADA: 1, JA_EXISTIA: 29 });
-    assert.equal(new Set(resultados.map((r) => r.mensagem_id)).size, 1, "as chamadas devolveram mensagens diferentes");
+    assert.equal(contagem.CRIADA, 1, JSON.stringify(contagem));
+    // o lock do alerta serializa: quem chega depois vê o alerta já SCHEDULED (ou a mensagem já existente) — NUNCA cria outra
+    assert.ok(Object.keys(contagem).every((k) => ["CRIADA", "JA_EXISTIA", "ALERTA_NAO_DETECTED"].includes(k)), JSON.stringify(contagem));
+    assert.equal(new Set(resultados.filter((r) => r.mensagem_id).map((r) => r.mensagem_id)).size, 1, "as chamadas devolveram mensagens diferentes");
     assert.equal((await msgsDoAlerta(alerta.id)).length, 1);
     assert.equal(await statusAlerta(alerta.id), STATUS_ALERTA.SCHEDULED);
   });
@@ -146,33 +150,41 @@ describe("agendamento ATÔMICO alerta -> mensagem (RPC comunicacao_agendar_mensa
     assert.equal((await msgsDoAlerta(alerta.id)).length, 1);
   });
 
-  test("a idempotency_key mantém a identidade do evento (`wa:alerta:<id>:v1`) — nunca um UUID aleatório", async (t) => {
+  test("a idempotency_key mantém a identidade do evento POR DESTINATÁRIO (`wa:alerta:<id>:dest:<destinatário>:v1`) — nunca um UUID aleatório", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const alerta = await novoAlerta("2026-08-04");
     await agendarEnviosPendentes({ organizacaoId: orgA, agora: new Date("2026-09-16T13:00:00Z"), resolverHabilitacao: HABILITADA });
     const [m] = await msgsDoAlerta(alerta.id);
-    assert.equal(m.idempotency_key, `wa:alerta:${alerta.id}:v1`);
+    assert.equal(m.idempotency_key, `wa:alerta:${alerta.id}:dest:${destA.contatoEmpresaId}:v1`);
   });
 
-  test("CONFLITO de idempotency_key: a chave já pertence à mensagem de OUTRO alerta -> CHAVE_EM_USO, nada muda", async (t) => {
+  test("a chave é derivada NO BANCO (alerta + destinatário + propósito): alertas diferentes -> chaves diferentes; o índice único barra qualquer duplicata direta", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const a1 = await novoAlerta("2026-08-05");
     const a2 = await novoAlerta("2026-08-06");
-    await filaRepo.agendarMensagemDoAlerta(paramsAgendar(a1));
-    const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(a2, { idempotencyKey: `wa:alerta:${a1.id}:v1` }));
-    assert.equal(r.acao, "CHAVE_EM_USO");
-    assert.equal((await msgsDoAlerta(a2.id)).length, 0, "criou mensagem para o alerta 2 com a chave do alerta 1");
-    assert.equal(await statusAlerta(a2.id), STATUS_ALERTA.DETECTED, "o alerta 2 não pode virar SCHEDULED sem mensagem");
+    await agendarMensagemDoAlertaT(paramsAgendar(a1));
+    await agendarMensagemDoAlertaT(paramsAgendar(a2));
+    const [m1] = await msgsDoAlerta(a1.id);
+    const [m2] = await msgsDoAlerta(a2.id);
+    assert.notEqual(m1.idempotency_key, m2.idempotency_key);
+    // INSERT direto de uma 2ª mensagem inicial do MESMO destinatário no MESMO alerta (com outra chave): o índice único parcial recusa
+    const dup = await supabase.from("comunicacao_mensagens").insert({
+      alerta_id: a1.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: destA.contatoId, contato_empresa_id: destA.contatoEmpresaId,
+      canal: "whatsapp", direcao: "saida", tipo: TIPO, conteudo: "duplicata", idempotency_key: `outra-chave-${Date.now()}`, status: "SCHEDULED", disponivel_em: new Date().toISOString(),
+    });
+    assert.ok(dup.error, "o banco aceitou uma 2ª mensagem inicial do mesmo destinatário no mesmo alerta");
+    assert.equal(String(dup.error.code), "23505");
+    assert.equal((await msgsDoAlerta(a1.id)).length, 1);
   });
 
   test("alerta que NÃO está DETECTED (ex.: já RESOLVED) não agenda nada; alerta inexistente idem", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const alerta = await novoAlerta("2026-08-07");
     await alertasRepo.resolverAlerta(alerta.id);
-    const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
+    const r = await agendarMensagemDoAlertaT(paramsAgendar(alerta));
     assert.equal(r.acao, "ALERTA_NAO_DETECTED");
     assert.equal((await msgsDoAlerta(alerta.id)).length, 0);
-    const fantasma = await filaRepo.agendarMensagemDoAlerta(paramsAgendar({ id: "00000000-0000-0000-0000-000000000000" }));
+    const fantasma = await agendarMensagemDoAlertaT(paramsAgendar({ id: "00000000-0000-0000-0000-000000000000" }));
     assert.equal(fantasma.acao, "ALERTA_INEXISTENTE");
   });
 
@@ -215,7 +227,7 @@ describe("agendamento ATÔMICO alerta -> mensagem (RPC comunicacao_agendar_mensa
     // 2) a operação atômica com o MESMO defeito: nada muda
     const novo = await novoAlerta("2026-08-21");
     // defeito no INSERT da mensagem (max_tentativas = 0 viola o CHECK): a RPC inteira desfaz
-    await assert.rejects(() => filaRepo.agendarMensagemDoAlerta(paramsAgendar(novo, { maxTentativas: 0 })));
+    await assert.rejects(() => agendarMensagemDoAlertaT(paramsAgendar(novo, { maxTentativas: 0 })));
     assert.equal(await statusAlerta(novo.id), STATUS_ALERTA.DETECTED, "a RPC atômica deixou o alerta pela metade");
     assert.equal((await msgsDoAlerta(novo.id)).length, 0);
   });
@@ -225,7 +237,7 @@ describe("agendamento ATÔMICO alerta -> mensagem (RPC comunicacao_agendar_mensa
     const alerta = await novoAlerta("2026-08-09");
     const antiga = await agendarMensagemT({ ...paramsAgendar(alerta), organizacaoId: orgA, unidadeId: unidadeA, contatoId: destA.contatoId, destinatarioPerfilId: destA.perfilId });
     assert.equal(await statusAlerta(alerta.id), STATUS_ALERTA.DETECTED, "pré-condição: o insert cru não move o alerta");
-    const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
+    const r = await agendarMensagemDoAlertaT(paramsAgendar(alerta));
     assert.equal(r.acao, "JA_EXISTIA");
     assert.equal(r.mensagem_id, antiga.id);
     assert.equal(await statusAlerta(alerta.id), STATUS_ALERTA.SCHEDULED);
@@ -237,7 +249,7 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
   test("organização SEM habilitação (nenhuma linha) -> NAO_HABILITADA: nenhuma mensagem, o alerta segue DETECTED, mesmo com contatos elegíveis existindo", async (t) => {
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     const alerta = await novoAlerta("2026-08-30");
-    const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
+    const r = await agendarMensagemDoAlertaT(paramsAgendar(alerta));
     assert.equal(r.acao, "NAO_HABILITADA");
     assert.equal((await msgsDoAlerta(alerta.id)).length, 0);
     assert.equal(await statusAlerta(alerta.id), STATUS_ALERTA.DETECTED);
@@ -247,7 +259,7 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     await supabase.from("comunicacao_habilitacoes").insert({ organizacao_id: orgA, habilitado: false, tipos_permitidos: [TIPO], timezone: "America/Fortaleza" });
     const alerta = await novoAlerta("2026-08-31");
-    assert.equal((await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta))).acao, "NAO_HABILITADA");
+    assert.equal((await agendarMensagemDoAlertaT(paramsAgendar(alerta))).acao, "NAO_HABILITADA");
     const r = await agendarEnviosPendentes({ organizacaoId: orgA, agora: new Date("2026-09-16T13:00:00Z") });
     assert.equal(r.agendados, 0);
     assert.equal((await msgsDoAlerta(alerta.id)).length, 0, "algum contato foi escolhido sem seleção explícita");
@@ -257,7 +269,7 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     await habilitarOrganizacao(orgA, destA2);
     const alerta = await novoAlerta("2026-09-01");
-    const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
+    const r = await agendarMensagemDoAlertaT(paramsAgendar(alerta));
     assert.equal(r.acao, "CRIADA");
     const [m] = await msgsDoAlerta(alerta.id);
     assert.equal(m.contato_id, destA2.contatoId);
@@ -279,7 +291,7 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
       const alerta = await novoAlerta("2026-09-02");
       await preparar(destA);
       try {
-        const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
+        const r = await agendarMensagemDoAlertaT(paramsAgendar(alerta));
         assert.equal(r.acao, "DESTINATARIO_INELEGIVEL", JSON.stringify(r));
         assert.equal((await msgsDoAlerta(alerta.id)).length, 0);
         assert.equal(await statusAlerta(alerta.id), STATUS_ALERTA.DETECTED);
@@ -302,7 +314,7 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
       const alerta = await novoAlerta("2026-09-02");
       await preparar(destA);
       try {
-        const r = await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta));
+        const r = await agendarMensagemDoAlertaT(paramsAgendar(alerta));
         assert.equal(r.acao, "CRIADA", JSON.stringify(r));
         const [m] = await msgsDoAlerta(alerta.id);
         assert.equal(m.contato_id, destA.contatoId);
@@ -319,8 +331,8 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
     await habilitarOrganizacao(orgA, destA);
     const alertaA = await novoAlerta("2026-09-03");
     const alertaB = await novoAlerta("2026-09-03", { organizacaoId: orgB, unidadeId: unidadeB });
-    assert.equal((await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alertaA))).acao, "CRIADA");
-    assert.equal((await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alertaB))).acao, "CRIADA");
+    assert.equal((await agendarMensagemDoAlertaT(paramsAgendar(alertaA))).acao, "CRIADA");
+    assert.equal((await agendarMensagemDoAlertaT(paramsAgendar(alertaB))).acao, "CRIADA");
     assert.equal((await msgsDoAlerta(alertaA.id))[0].contato_id, destA.contatoId);
     assert.equal((await msgsDoAlerta(alertaB.id))[0].contato_id, destB.contatoId);
   });
@@ -329,7 +341,7 @@ describe("DESTINATÁRIO EXPLÍCITO — o agendamento nunca escolhe \"o primeiro 
     if (!migracaoOk) return t.skip("migration 088 ainda não aplicada — pulando.");
     await habilitarOrganizacao(orgA, destA, { tipos_permitidos: ["outro_tipo"] });
     const alerta = await novoAlerta("2026-09-04");
-    assert.equal((await filaRepo.agendarMensagemDoAlerta(paramsAgendar(alerta))).acao, "TIPO_NAO_PERMITIDO");
+    assert.equal((await agendarMensagemDoAlertaT(paramsAgendar(alerta))).acao, "TIPO_NAO_PERMITIDO");
     assert.equal((await msgsDoAlerta(alerta.id)).length, 0);
   });
 });

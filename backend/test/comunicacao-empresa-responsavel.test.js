@@ -70,7 +70,28 @@ function fakeDb(estado, { rpcs = [] } = {}) {
     };
     return b;
   }
-  return { from, rpc: async (nome, args) => { rpcs.push({ nome, args }); return { data: { acao: "CRIADA", mensagem_id: "m1" }, error: null }; } };
+  const rpc = async (nome, args) => {
+    if (nome === "comunicacao_resolver_destinatarios") {
+      // (104) o banco resolve TODOS os destinatários da empresa; aqui: os responsáveis ativos e VALIDADOS da empresa do estado simulado
+      const lista = (estado.comunicacao_contatos_empresa ?? []).filter((c) => c.organizacao_id === args.p_organizacao_id)
+        .map((c) => ({ contato_empresa_id: c.id, contato_id: c.contato_whatsapp_id, perfil_id: null, nome: c.nome, telefone: c.telefone_e164,
+          elegivel: c.ativo === true && c.whatsapp_status === "VALIDADO", motivo: c.ativo !== true ? "DESTINATARIO_INATIVO" : c.whatsapp_status !== "VALIDADO" ? "WHATSAPP_NAO_VALIDADO" : null }));
+      return { data: lista.length ? lista : [{ contato_empresa_id: "ce1", contato_id: "c1", perfil_id: null, nome: "Resp", telefone: "+5511900000000", elegivel: true, motivo: null }], error: null };
+    }
+    rpcs.push({ nome, args });
+    if (nome === "comunicacao_agendar_mensagens_alerta") {
+      return { data: { acao: "OK", criadas: args.p_itens.length, itens: args.p_itens.map((i) => ({ contato_empresa_id: i.contato_empresa_id, acao: "CRIADA", mensagem_id: "m1" })) }, error: null };
+    }
+    if (nome === "comunicacao_habilitar_organizacao") {
+      const lista = (estado.comunicacao_contatos_empresa ?? []).filter((c) => c.organizacao_id === args.p_organizacao_id);
+      if (!lista.length) return { data: { acao: "SEM_DESTINATARIO" }, error: null };
+      if (!lista.some((c) => c.ativo === true && c.whatsapp_status === "VALIDADO")) return { data: { acao: "DESTINATARIO_INELEGIVEL" }, error: null };
+      estado.comunicacao_habilitacoes = (estado.comunicacao_habilitacoes ?? []).map((h) => (h.organizacao_id === args.p_organizacao_id ? { ...h, habilitado: true } : h));
+      return { data: { acao: "HABILITADA" }, error: null };
+    }
+    return { data: { acao: "CRIADA", mensagem_id: "m1" }, error: null };
+  };
+  return { from, rpc };
 }
 
 function estadoBase() {
@@ -117,7 +138,7 @@ describe("BUG JAILTON — responsável de comunicação é EXPLÍCITO por empres
     const detMogi = await svc.detalheOrganizacao({ organizacaoId: MOGI }, deps);
     assert.equal(detMogi.configuracao.destinatario, null);
     assert.doesNotMatch(JSON.stringify(detMogi), /Jailton/, "nem o detalhe nem as unidades da Matriz Mogi Mirim citam o Jailton");
-    assert.equal(detMogi.checklistPiloto.responsavelDefinido, false);
+    assert.equal(detMogi.checklistAtivacao.responsavelDefinido, false);
 
     const detGrupo = await svc.detalheOrganizacao({ organizacaoId: GRUPO }, deps);
     assert.equal(detGrupo.configuracao.destinatario.nome, "Jailton Matos");
@@ -289,7 +310,7 @@ describe("Pré-envio: o responsável precisa pertencer à empresa, estar ativo e
   test("a política bloqueia (permanente) quando o snapshot vem de responsável inativo/sem vínculo/não validado", () => {
     const base = {
       modo: "NORMAL", ehProativo: true, contatoExiste: true, telefoneVerificado: true, optOut: false, consentimento: true, destinatarioAtivo: true, vinculoValido: true,
-      empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, configHorarioValida: true, pendenciaAindaExiste: true, duplicado: false,
+      empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, categoriaPermitida: true, empresaPausada: false, configHorarioValida: true, pendenciaAindaExiste: true, duplicado: false,
       cooldownAtivo: false, dentroDaJanela: true, rateLimitExcedido: false, providerConectado: true, identidadeConfirmada: true,
     };
     assert.equal(avaliarEnvio(base).allowed, true);
@@ -372,7 +393,7 @@ describe("agendarEnviosPendentes — o motor respeita a disponibilidade e usa o 
     data_referencia: D1, motivo: "1 dia(s) pendente(s)", metadados: { unidade_nome: "Loja Florianópolis-SC 1" }, severidade: "atencao", ...extra,
   });
   const hab = async (extra = {}) => ({
-    empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+    empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
     destinatarioContatoId: "c1", destinatarioContatoEmpresaId: "ce1", destinatarioPerfilId: null,
     timezone: TZ, janelas: null, configHorarioValida: true, fonte: "TESTE", ...extra,
   });
@@ -399,8 +420,9 @@ describe("agendarEnviosPendentes — o motor respeita a disponibilidade e usa o 
     assert.equal(r.agendados, 1);
     assert.equal(r.aguardandoDisponibilidadeIfood, 0);
     assert.equal(rpcs.length, 1);
-    assert.equal(rpcs[0].nome, "comunicacao_agendar_mensagem_alerta");
-    assert.ok(new Date(rpcs[0].args.p_disponivel_em).getTime() >= local("10:45").getTime());
+    assert.equal(rpcs[0].nome, "comunicacao_agendar_mensagens_alerta");
+    assert.equal(rpcs[0].args.p_proposito, "inicial");
+    assert.ok(new Date(rpcs[0].args.p_itens[0].disponivel_em).getTime() >= local("10:45").getTime());
   });
   test("pendência D-3 às 08:30 já pode ser agendada (dado completo há dias)", async () => {
     const { rpcs, deps } = montar([alerta({ data_referencia: "2026-09-22" })]);
@@ -410,7 +432,7 @@ describe("agendarEnviosPendentes — o motor respeita a disponibilidade e usa o 
   });
   test("SEM responsável da empresa (só perfil/contato solto): não agenda — nunca infere destinatário", async () => {
     const { rpcs, deps } = montar([alerta()]);
-    const r = await agendarEnviosPendentes({ agora: local("11:00"), resolverHabilitacao: async () => hab({ destinatarioContatoEmpresaId: null, destinatarioPerfilId: "perfil-com-acesso" }) }, deps);
+    const r = await agendarEnviosPendentes({ agora: local("11:00"), resolverHabilitacao: async () => hab({ destinatarioContatoEmpresaId: null, destinatarioPerfilId: "perfil-com-acesso" }), resolverDestinatarios: async () => [] }, deps);
     assert.equal(r.semDestinatario, 1);
     assert.equal(rpcs.length, 0);
   });
@@ -463,14 +485,19 @@ describe("`habilitado` só muda por ação EXPLÍCITA (nunca ao configurar / sal
     const deps = { supabase: fakeDb(habilitadaBase()) };
     for (const h of [true, 1, "true"]) await assert.rejects(() => svc.atualizarConfiguracao({ organizacaoId: GRUPO, habilitado: h }, AUTOR, deps), { statusCode: 400 });
   });
-  test("habilitar (ação explícita já existente) exige o RESPONSÁVEL da empresa, ativo e com WhatsApp validado — antes de qualquer gate do piloto", async () => {
+  test("habilitar (ação explícita) exige ao menos um destinatário ELEGÍVEL (ativo e com WhatsApp validado) — decidido atomicamente pelo banco; sem regras do piloto", async () => {
     const estado = estadoBase(); const deps = { supabase: fakeDb(estado), env: {} };
-    await assert.rejects(() => svc.definirHabilitacao({ organizacaoId: GRUPO, habilitado: true, confirmacaoExplicita: true }, AUTOR, deps), (e) => e.details?.codigo === "SEM_DESTINATARIO" || /responsável/i.test(e.message));
+    estado.comunicacao_habilitacoes = [{ organizacao_id: GRUPO, habilitado: false, timezone: "America/Sao_Paulo", tipos_permitidos: ["dashboard_ifood_d1"] }];
+    await assert.rejects(() => svc.definirHabilitacao({ organizacaoId: GRUPO, habilitado: true, confirmacaoExplicita: true }, AUTOR, deps), (e) => e.details?.codigo === "SEM_DESTINATARIO" && /destinatário/i.test(e.message));
     const r = await cadastrarJailtonNoGrupo(deps);
-    await assert.rejects(() => svc.definirHabilitacao({ organizacaoId: GRUPO, habilitado: true, confirmacaoExplicita: true }, AUTOR, deps), /Valide o WhatsApp/);
+    await assert.rejects(() => svc.definirHabilitacao({ organizacaoId: GRUPO, habilitado: true, confirmacaoExplicita: true }, AUTOR, deps), (e) => e.details?.codigo === "DESTINATARIO_INELEGIVEL" && /autorizado|validado/i.test(e.message));
     await svc.validarResponsavel({ organizacaoId: GRUPO, contatoEmpresaId: r.contatoEmpresaId, confirmacaoExplicita: true }, AUTOR, deps);
     await svc.definirAtivoResponsavel({ organizacaoId: GRUPO, contatoEmpresaId: r.contatoEmpresaId, ativo: false }, AUTOR, deps);
-    await assert.rejects(() => svc.definirHabilitacao({ organizacaoId: GRUPO, habilitado: true, confirmacaoExplicita: true }, AUTOR, deps), /desativados/);
+    await assert.rejects(() => svc.definirHabilitacao({ organizacaoId: GRUPO, habilitado: true, confirmacaoExplicita: true }, AUTOR, deps), (e) => e.details?.codigo === "DESTINATARIO_INELEGIVEL");
     assert.equal(estado.comunicacao_habilitacoes[0].habilitado, false);
+    await svc.definirAtivoResponsavel({ organizacaoId: GRUPO, contatoEmpresaId: r.contatoEmpresaId, ativo: true }, AUTOR, deps);
+    const ok = await svc.definirHabilitacao({ organizacaoId: GRUPO, habilitado: true, confirmacaoExplicita: true }, AUTOR, deps);
+    assert.equal(ok.habilitado, true);
+    assert.equal(estado.comunicacao_habilitacoes[0].envio_automatico ?? false, false, "habilitar NÃO liga o envio automático");
   });
 });

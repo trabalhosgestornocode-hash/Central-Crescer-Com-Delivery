@@ -64,6 +64,17 @@ administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId", cc.detalheO
 administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/responsavel", cc.salvarResponsavel);
 administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/responsaveis/:contatoId/ativo", cc.definirAtivoResponsavel);
 administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/responsaveis/:contatoId/validar", cc.validarResponsavel);
+// Fim do piloto (104) — configuração definitiva POR EMPRESA. Mesmo router (requirePainelAdministrativo); todo :organizacaoId é revalidado no service.
+administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/whatsapp", cc.painelEmpresa);
+administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/destinatarios", cc.criarDestinatario);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/destinatarios/:contatoId", cc.atualizarDestinatario);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/destinatarios/:contatoId/categorias", cc.definirCategoriasDestinatario);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/destinatarios/:contatoId/ativo", cc.definirAtivoDestinatario);
+administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/destinatarios/:contatoId/autorizar", cc.autorizarDestinatario);
+administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/destinatarios/:contatoId/opt-out", cc.optOutDestinatario);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/envio-automatico", cc.envioAutomatico);
+administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/limites", cc.limites);
+administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/dry-run", cc.dryRun);
 administrativoRouter.get("/comunicacao/disponibilidade", cc.disponibilidade);
 administrativoRouter.put("/comunicacao/disponibilidade", cc.atualizarDisponibilidade);
 administrativoRouter.get("/comunicacao/organizacoes/:organizacaoId/preview-mensagem", cc.preverMensagem);

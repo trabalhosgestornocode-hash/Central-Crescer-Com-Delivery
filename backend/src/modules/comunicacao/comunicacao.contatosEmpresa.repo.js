@@ -21,7 +21,7 @@ export const STATUS_WHATSAPP = Object.freeze({
   NAO_VALIDADO: "NAO_VALIDADO", AGUARDANDO_VALIDACAO: "AGUARDANDO_VALIDACAO", VALIDADO: "VALIDADO", ERRO: "ERRO",
 });
 
-const COLUNAS = "id, organizacao_id, nome, telefone_e164, ddi, tipo, contato_whatsapp_id, whatsapp_status, whatsapp_validado_em, ativo, observacoes, perfil_operacional_id, created_at, updated_at";
+const COLUNAS = "id, organizacao_id, nome, telefone_e164, ddi, tipo, contato_whatsapp_id, whatsapp_status, whatsapp_validado_em, ativo, observacoes, perfil_operacional_id, ativado_em, autorizacao_registrada_em, created_at, updated_at";
 
 /**
  * Todos os responsáveis de UMA empresa (ativos e inativos). Nunca sem `organizacaoId`.
@@ -162,6 +162,14 @@ export async function salvarResponsavelPrincipal({ organizacaoId, nome, telefone
     }).select(COLUNAS).single();
     if (error) throw ApiError.internal(error.message);
     salvo = data;
+    // Cadastro legado do "responsável principal": nasce com TODAS as categorias ATIVAS do catálogo (hoje só Pendência D-1), como sempre foi.
+    const { data: cats, error: ec } = await db.from("comunicacao_categorias").select("codigo").eq("ativo", true);
+    if (ec) throw ApiError.internal(ec.message);
+    if (cats?.length) {
+      const { error: eg } = await db.from("comunicacao_destinatario_categorias")
+        .upsert(cats.map((c) => ({ contato_empresa_id: salvo.id, organizacao_id: organizacaoId, categoria: c.codigo, habilitado: true, habilitado_por: autor?.perfilId ?? null })), { onConflict: "contato_empresa_id,categoria" });
+      if (eg) throw ApiError.internal(eg.message);
+    }
   }
 
   await apontarHabilitacao({ organizacaoId, contatoEmpresa: salvo }, deps);
@@ -182,8 +190,9 @@ export async function definirAtivo({ organizacaoId, contatoEmpresaId, ativo }, a
   const contato = await obterDaEmpresa({ organizacaoId, contatoEmpresaId }, deps);
   if (!contato) throw ApiError.notFound("Responsável não encontrado nesta empresa.");
   const { data, error } = await db.from("comunicacao_contatos_empresa")
-    .update({ ativo: ativo === true, atualizado_por: autor?.perfilId ?? null }).eq("id", contatoEmpresaId).select(COLUNAS).single();
-  if (error) throw ApiError.internal(error.message);
+    .update({ ativo: ativo === true, ...(ativo === true ? { ativado_em: new Date().toISOString() } : {}), atualizado_por: autor?.perfilId ?? null })
+    .eq("id", contatoEmpresaId).select(COLUNAS).single();
+  if (error) throw (/MAX_DESTINATARIOS_ATIVOS/.test(String(error.message)) ? new ApiError(409, "A empresa atingiu o limite de destinatários ativos.", { codigo: "LIMITE_DESTINATARIOS" }) : ApiError.internal(error.message));
   await auditar({
     acao: ACOES.COMUNICACAO_RESPONSAVEL_ALTERADO, atorTipo: "usuario", atorId: autor?.contaId ?? null, perfilId: autor?.perfilId ?? null, perfilNome: autor?.nome ?? null,
     organizacaoId, entidade: "comunicacao_contatos_empresa", entidadeId: contatoEmpresaId,
@@ -208,7 +217,7 @@ export async function validarWhatsApp({ organizacaoId, contatoEmpresaId }, autor
     origem: "confirmacao_explicita_operador_painel_admin",
   }, deps);
   const { data, error } = await db.from("comunicacao_contatos_empresa")
-    .update({ whatsapp_status: STATUS_WHATSAPP.VALIDADO, whatsapp_validado_em: new Date().toISOString(), atualizado_por: autor?.perfilId ?? null })
+    .update({ whatsapp_status: STATUS_WHATSAPP.VALIDADO, whatsapp_validado_em: new Date().toISOString(), autorizacao_registrada_em: new Date().toISOString(), autorizacao_registrada_por: autor?.perfilId ?? null, atualizado_por: autor?.perfilId ?? null })
     .eq("id", contatoEmpresaId).select(COLUNAS).single();
   if (error) throw ApiError.internal(error.message);
   await auditar({

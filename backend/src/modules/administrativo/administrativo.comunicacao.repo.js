@@ -17,7 +17,7 @@ import { mascararTelefone, obterContato, obterPerfilOperacional } from "../comun
 import { listarDaEmpresa as listarContatosDaEmpresa, escolherPrincipal, validarWhatsApp } from "../comunicacao/comunicacao.contatosEmpresa.repo.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
 
-const COLUNAS_HABILITACAO = "organizacao_id, habilitado, tipos_permitidos, timezone, janelas, pausado_ate, pausado_motivo, destinatario_contato_id, destinatario_contato_empresa_id, destinatario_perfil_id, atualizado_por, created_at, updated_at";
+const COLUNAS_HABILITACAO = "organizacao_id, habilitado, envio_automatico, envio_automatico_atualizado_em, limite_diario_org, cooldown_minutos, tipos_permitidos, timezone, janelas, pausado_ate, pausado_motivo, destinatario_contato_id, destinatario_contato_empresa_id, destinatario_perfil_id, atualizado_por, created_at, updated_at";
 
 // Estados possíveis de `whatsapp_conexoes.status` (migration 083) — vocabulário fechado, nunca inventado aqui.
 const GATEWAY_CONECTADO = new Set(["CONNECTED"]);
@@ -147,6 +147,14 @@ export async function contarOrganizacoesHabilitadas(deps = {}) {
   return count ?? 0;
 }
 
+/** @returns {Promise<number>} empresas com envio automático LIGADO (habilitado E envio_automatico). */
+export async function contarOrganizacoesComEnvioAutomatico(deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { count, error } = await db.from("comunicacao_habilitacoes").select("organizacao_id", { count: "exact", head: true }).eq("habilitado", true).eq("envio_automatico", true);
+  if (error) throw ApiError.internal(error.message);
+  return count ?? 0;
+}
+
 const COLUNAS_MENSAGEM_PAINEL = "id, organizacao_id, unidade_id, tipo, status, disponivel_em, enviado_em, entregue_em, lido_em, falhou_em, tentativas, max_tentativas, erro, erro_permanente, created_at";
 
 function paginacao({ pagina = 1, porPagina = 20 } = {}) {
@@ -218,8 +226,8 @@ export async function atualizarConfiguracaoOrganizacao({
     atualizado_por: autor?.perfilId ?? null,
   };
   // Uma empresa HABILITADA não pode ficar com a configuração incompleta (a 088 recusa no banco; aqui vira um 400 claro, sem tocar em nada).
-  if (habAtual?.habilitado === true && (!linha.timezone || !linha.destinatario_contato_id || !linha.destinatario_contato_empresa_id || !linha.tipos_permitidos?.length)) {
-    throw ApiError.badRequest("Esta empresa está com a comunicação habilitada: a configuração precisa continuar completa (timezone, responsável e tipo de alerta). Desabilite a comunicação antes de esvaziar estes campos.", { codigo: "CONFIG_INCOMPLETA_HABILITADA" });
+  if (habAtual?.habilitado === true && (!linha.timezone || !linha.tipos_permitidos?.length)) {
+    throw ApiError.badRequest("Esta empresa está com a comunicação habilitada: a configuração precisa continuar completa (timezone e tipo de alerta). Desabilite a comunicação antes de esvaziar estes campos.", { codigo: "CONFIG_INCOMPLETA_HABILITADA" });
   }
   const { data, error } = await db.from("comunicacao_habilitacoes")
     .upsert(linha, { onConflict: "organizacao_id" }).select(COLUNAS_HABILITACAO).single();
@@ -258,41 +266,107 @@ export async function confirmarConsentimentoOrganizacao({ organizacaoId }, autor
 }
 
 /**
- * Habilita ATOMICAMENTE a organização piloto (RPC da migration 093: advisory lock + modo DISABLED + nenhuma outra
- * habilitada + destinatário consentido/verificado). Só o Painel Administrativo chama isto (ator humano no service).
- * @returns {Promise<{acao: string, modo?: string}>}
+ * Habilita ATOMICAMENTE a empresa (RPC da migration 104: exige timezone, tipo permitido e ao menos um destinatário ELEGÍVEL). NÃO liga o envio
+ * automático (decisão separada). Só o Painel Administrativo chama isto (ator humano no service).
+ * @returns {Promise<{acao: string}>}
  */
-export async function habilitarOrganizacaoPiloto({ organizacaoId, atorPerfilId = null }, deps = {}) {
+export async function habilitarOrganizacao({ organizacaoId, atorPerfilId = null }, deps = {}) {
   const db = deps.supabase ?? supabase;
-  const { data, error } = await db.rpc("comunicacao_habilitar_organizacao_piloto", {
+  const { data, error } = await db.rpc("comunicacao_habilitar_organizacao", {
     p_organizacao_id: organizacaoId, p_ator_perfil_id: atorPerfilId,
   });
   if (error) throw ApiError.internal(error.message);
-  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_habilitar_organizacao_piloto: resposta inválida");
+  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_habilitar_organizacao: resposta inválida");
   return data;
 }
 
-/** Desabilita (habilitado=false). SEMPRE permitido (kill switch da organização) — sem gates de ativação. */
-export async function desabilitarOrganizacao({ organizacaoId, atorPerfilId = null }, deps = {}) {
+/**
+ * Liga/desliga o ENVIO AUTOMÁTICO da empresa (RPC 104). Desligar é sempre permitido; ligar exige empresa habilitada e destinatário elegível.
+ * @returns {Promise<{acao: 'LIGADO'|'DESLIGADO'|'JA_LIGADO'|'JA_DESLIGADO'|'SEM_CONFIGURACAO'|'EMPRESA_NAO_HABILITADA'|'SEM_DESTINATARIO_ELEGIVEL'}>}
+ */
+export async function definirEnvioAutomatico({ organizacaoId, ligar, atorPerfilId = null }, deps = {}) {
   const db = deps.supabase ?? supabase;
-  const { data: antes, error: e1 } = await db.from("comunicacao_habilitacoes").select("habilitado").eq("organizacao_id", organizacaoId).maybeSingle();
-  if (e1) throw ApiError.internal(e1.message);
-  if (!antes) return { estavaHabilitada: false, alterou: false };
-  const { error } = await db.from("comunicacao_habilitacoes")
-    .update({ habilitado: false, atualizado_por: atorPerfilId, updated_at: new Date().toISOString() }).eq("organizacao_id", organizacaoId);
+  const { data, error } = await db.rpc("comunicacao_definir_envio_automatico", {
+    p_organizacao_id: organizacaoId, p_ligar: ligar === true, p_ator_perfil_id: atorPerfilId,
+  });
   if (error) throw ApiError.internal(error.message);
-  return { estavaHabilitada: antes.habilitado === true, alterou: antes.habilitado === true };
+  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_definir_envio_automatico: resposta inválida");
+  return data;
 }
 
-/** Organizações habilitadas hoje: id + contato destinatário (para provar allowlist/contagem). */
+/** Limites POR EMPRESA (null = padrão global). Não toca em habilitado/envio_automatico. */
+export async function atualizarLimitesOrganizacao({ organizacaoId, limiteDiarioOrg, cooldownMinutos, atorPerfilId = null }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const campos = { atualizado_por: atorPerfilId };
+  if (limiteDiarioOrg !== undefined) campos.limite_diario_org = limiteDiarioOrg;
+  if (cooldownMinutos !== undefined) campos.cooldown_minutos = cooldownMinutos;
+  const { data, error } = await db.from("comunicacao_habilitacoes").update(campos).eq("organizacao_id", organizacaoId)
+    .select("limite_diario_org, cooldown_minutos").maybeSingle();
+  if (error) throw ApiError.internal(error.message);
+  if (!data) throw ApiError.notFound("A empresa ainda não tem configuração de WhatsApp. Salve a configuração antes de definir limites.");
+  return data;
+}
+
+/** Desabilita (habilitado=false) E desliga o envio automático junto (a constraint do banco exige). SEMPRE permitido (kill switch da empresa). */
+export async function desabilitarOrganizacao({ organizacaoId, atorPerfilId = null }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data: antes, error: e1 } = await db.from("comunicacao_habilitacoes").select("habilitado, envio_automatico").eq("organizacao_id", organizacaoId).maybeSingle();
+  if (e1) throw ApiError.internal(e1.message);
+  if (!antes) return { estavaHabilitada: false, alterou: false, tinhaEnvioAutomatico: false };
+  const { error } = await db.from("comunicacao_habilitacoes")
+    .update({ habilitado: false, envio_automatico: false, atualizado_por: atorPerfilId, updated_at: new Date().toISOString() }).eq("organizacao_id", organizacaoId);
+  if (error) throw ApiError.internal(error.message);
+  return { estavaHabilitada: antes.habilitado === true, alterou: antes.habilitado === true, tinhaEnvioAutomatico: antes.envio_automatico === true };
+}
+
+/** Organizações habilitadas hoje: id + se o envio automático está ligado. */
 export async function listarOrganizacoesHabilitadas(deps = {}) {
   const db = deps.supabase ?? supabase;
-  const { data, error } = await db.from("comunicacao_habilitacoes").select("organizacao_id, destinatario_contato_id").eq("habilitado", true);
+  const { data, error } = await db.from("comunicacao_habilitacoes").select("organizacao_id, envio_automatico").eq("habilitado", true);
   if (error) throw ApiError.internal(error.message);
   return data ?? [];
 }
 
 export { obterContato, obterPerfilOperacional, mascararTelefone };
+
+/**
+ * Atividade de UMA empresa: último envio (SENT/DELIVERED/READ), próxima mensagem agendada e o último envio por destinatário (chave = contato_whatsapp_id).
+ * Só agregados — nunca o corpo da mensagem.
+ * @returns {Promise<{ultimoEm: string|null, proximoEm: string|null, ultimoPorContato: Map<string, string>}>}
+ */
+export async function obterAtividadeDaEmpresa(organizacaoId, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const [ultimos, proximo] = await Promise.all([
+    db.from("comunicacao_mensagens").select("contato_id, enviado_em").eq("organizacao_id", organizacaoId).eq("direcao", "saida")
+      .in("status", ["SENT", "DELIVERED", "READ"]).not("enviado_em", "is", null).order("enviado_em", { ascending: false }).limit(200),
+    db.from("comunicacao_mensagens").select("disponivel_em").eq("organizacao_id", organizacaoId).eq("direcao", "saida").eq("status", "SCHEDULED")
+      .order("disponivel_em", { ascending: true }).limit(1),
+  ]);
+  if (ultimos.error) throw ApiError.internal(ultimos.error.message);
+  if (proximo.error) throw ApiError.internal(proximo.error.message);
+  const ultimoPorContato = new Map();
+  for (const m of ultimos.data ?? []) if (m.contato_id && !ultimoPorContato.has(m.contato_id)) ultimoPorContato.set(m.contato_id, m.enviado_em);
+  return { ultimoEm: ultimos.data?.[0]?.enviado_em ?? null, proximoEm: proximo.data?.[0]?.disponivel_em ?? null, ultimoPorContato };
+}
+
+/**
+ * Alertas recentes de UMA empresa com as mensagens INICIAIS de cada um (status/erro/metadados — nunca `conteudo` nem telefone). Base do resumo de entrega
+ * por destinatário (comunicacao.entrega.js). Somente leitura; sempre filtrado pela organização.
+ * @returns {Promise<Array<{alerta: object, mensagens: object[]}>>}
+ */
+export async function listarAlertasRecentesComMensagens({ organizacaoId, limite = 10 } = {}, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data: alertas, error } = await db.from("comunicacao_alertas")
+    .select("id, unidade_id, tipo_alerta, data_referencia, severidade, status, updated_at")
+    .eq("organizacao_id", organizacaoId).order("updated_at", { ascending: false }).limit(limite);
+  if (error) throw ApiError.internal(error.message);
+  if (!alertas?.length) return [];
+  const { data: msgs, error: e2 } = await db.from("comunicacao_mensagens")
+    .select("alerta_id, status, erro, metadados, direcao, contato_empresa_id")
+    .eq("organizacao_id", organizacaoId).eq("direcao", "saida").in("alerta_id", alertas.map((a) => a.id));
+  if (e2) throw ApiError.internal(e2.message);
+  return alertas.map((alerta) => ({ alerta, mensagens: (msgs ?? []).filter((m) => m.alerta_id === alerta.id) }));
+}
 
 // ---------------------------------------------------------------------------
 // CENTRAL DE COMUNICAÇÃO (H.4-B.5) — leituras adicionais (nunca `conteudo`, nunca telefone completo).

@@ -9,9 +9,10 @@
 //   * sem linha                      -> fechada
 //   * `habilitado !== true`          -> fechada
 //   * habilitada mas SEM timezone    -> registro incompleto -> fechada
-//   * habilitada mas SEM destinatário EXPLÍCITO (contato + perfil) -> fechada. Contato
-//                                       cadastrado/verificado/consentido NÃO é destinatário
-//                                       operacional: só o que foi configurado aqui.
+//   * DESTINATÁRIOS (104): NÃO são mais um ponteiro nesta linha — são TODOS os responsáveis ativos da empresa
+//                                       (comunicacao_contatos_empresa), resolvidos e revalidados no banco
+//                                       (comunicacao_resolver_destinatarios). Empresa sem nenhum elegível não recebe nada.
+//   * `envio_automatico !== true`     -> envioAutomatico=false (opt-in explícito; habilitar NÃO o liga)
 //   * tipo fora de `tipos_permitidos`-> tipoPermitido=false
 //   * erro ao ler o banco            -> o erro PROPAGA (não vira "desabilitada": um erro de
 //                                        rede não pode transformar a mensagem em BLOCKED terminal)
@@ -23,10 +24,10 @@
 // `habilitado=true` sozinho NÃO basta: modo, consentimento, verificação, opt-out,
 // tipo, janela, cooldown e cota continuam sendo avaliados pela política/reserva.
 //
-// DESTINATÁRIO (V1): pertence à ORGANIZAÇÃO. Uma organização multiunidade usa o MESMO
-// destinatário para os alertas de todas as suas unidades; nada seleciona contato por unidade.
+// DESTINATÁRIOS: pertencem à ORGANIZAÇÃO. Uma organização multiunidade usa os MESMOS destinatários
+// para os alertas de todas as suas unidades; nada seleciona contato por unidade.
 // "Override por unidade" seria uma feature explícita futura. Nenhum default aqui ativa
-// comunicação sozinho: sem linha/sem habilitado/sem destinatário/timezone inválido = fechado.
+// comunicação sozinho: sem linha/sem habilitado/timezone inválido = fechado.
 //
 // `processarProximoLote` recebe esta função por injeção (como
 // `verificarPendenciaAindaExiste`) — os testes injetam uma habilitação explícita.
@@ -45,6 +46,9 @@ import { timezoneValido, janelasValidas } from "./comunicacao.horario.js";
  * @property {string|null} destinatarioContatoId  contato do destinatário EXPLICITAMENTE configurado (null = nenhum)
  * @property {string|null} destinatarioContatoEmpresaId  RESPONSÁVEL DE COMUNICAÇÃO da empresa (comunicacao_contatos_empresa, migration 100) — o destinatário
  * @property {string|null} destinatarioPerfilId   (legado/informativo — NUNCA requisito)   perfil operacional do destinatário configurado
+ * @property {boolean} envioAutomatico      a empresa ligou o envio AUTOMÁTICO no Painel (opt-in; 104)?
+ * @property {number|null} limiteDiarioOrg  teto diário de mensagens de alerta da empresa (null = padrão global)
+ * @property {number|null} cooldownMinutos  cooldown por destinatário em minutos (null = padrão global por severidade)
  * @property {string|null} timezone         IANA da organização (null se ausente)
  * @property {object|null} janelas          janelas PRÓPRIAS da organização (null = usa a config global)
  * @property {boolean} configHorarioValida  timezone IANA reconhecido e janelas próprias (se houver) válidas
@@ -54,7 +58,8 @@ import { timezoneValido, janelasValidas } from "./comunicacao.horario.js";
 /** @returns {Habilitacao} */
 function fechada(fonte, extra = {}) {
   return {
-    empresaHabilitada: false, tipoPermitido: false, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+    empresaHabilitada: false, envioAutomatico: false, limiteDiarioOrg: null, cooldownMinutos: null,
+    tipoPermitido: false, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
     destinatarioContatoId: null, destinatarioContatoEmpresaId: null, destinatarioPerfilId: null,
     timezone: null, janelas: null, configHorarioValida: false, fonte, ...extra,
   };
@@ -73,11 +78,10 @@ export function interpretarHabilitacao(linha, tipoAlerta, agora = new Date()) {
 
   const tz = typeof linha.timezone === "string" ? linha.timezone.trim() : "";
   if (!tz) return fechada("REGISTRO_INCOMPLETO_SEM_TIMEZONE");
-  // sem destinatário EXPLÍCITO não há para quem enviar: fail-closed (o banco também barra: CHECK).
+  // ponteiro LEGADO do destinatário principal: informativo, NUNCA requisito (os destinatários vêm de comunicacao_resolver_destinatarios).
   const contatoId = typeof linha.destinatario_contato_id === "string" && linha.destinatario_contato_id ? linha.destinatario_contato_id : null;
   const contatoEmpresaId = typeof linha.destinatario_contato_empresa_id === "string" && linha.destinatario_contato_empresa_id ? linha.destinatario_contato_empresa_id : null;
   const perfilId = typeof linha.destinatario_perfil_id === "string" && linha.destinatario_perfil_id ? linha.destinatario_perfil_id : null;
-  if (!contatoId || !contatoEmpresaId) return fechada("REGISTRO_INCOMPLETO_SEM_DESTINATARIO");
 
   const tipos = Array.isArray(linha.tipos_permitidos) ? linha.tipos_permitidos : [];
   const janelasProprias = linha.janelas ?? null;
@@ -90,6 +94,9 @@ export function interpretarHabilitacao(linha, tipoAlerta, agora = new Date()) {
 
   return {
     empresaHabilitada: true,
+    envioAutomatico: linha.envio_automatico === true,
+    limiteDiarioOrg: Number.isInteger(linha.limite_diario_org) && linha.limite_diario_org > 0 ? linha.limite_diario_org : null,
+    cooldownMinutos: Number.isInteger(linha.cooldown_minutos) && linha.cooldown_minutos > 0 ? linha.cooldown_minutos : null,
     tipoPermitido: typeof tipoAlerta === "string" && tipoAlerta.length > 0 && tipos.includes(tipoAlerta),
     empresaPausada: pausaAtiva,
     pausadoAte: pausaAtiva && !pausaIlegivel ? ate : null,
@@ -126,7 +133,7 @@ export async function resolverHabilitacaoEmpresa({ organizacaoId, tipoAlerta, ag
   if (!organizacaoId || typeof organizacaoId !== "string") return fechada("SEM_ORGANIZACAO");
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.from("comunicacao_habilitacoes")
-    .select("organizacao_id, habilitado, tipos_permitidos, timezone, janelas, pausado_ate, pausado_motivo, destinatario_contato_id, destinatario_contato_empresa_id, destinatario_perfil_id")
+    .select("organizacao_id, habilitado, envio_automatico, limite_diario_org, cooldown_minutos, tipos_permitidos, timezone, janelas, pausado_ate, pausado_motivo, destinatario_contato_id, destinatario_contato_empresa_id, destinatario_perfil_id")
     .eq("organizacao_id", organizacaoId) // SEMPRE escopado à organização: sem fallback global
     .maybeSingle();
   // Falha de LEITURA (rede/PostgREST) NÃO é "empresa desabilitada": fechar aqui viraria um

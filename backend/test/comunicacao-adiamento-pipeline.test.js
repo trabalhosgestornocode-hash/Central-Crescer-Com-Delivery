@@ -6,7 +6,7 @@
 // Rodar: node --env-file=.env.test-integracao --test --test-concurrency=1 test/comunicacao-adiamento-pipeline.test.js
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
-import { agendarMensagemT, responsavelDoContato } from "./helpers/comunicacao-fixtures.js";
+import { agendarMensagemT, responsavelDoContato, categoriaParaTipoT, limparCategoriasDeTesteT } from "./helpers/comunicacao-fixtures.js";
 import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
@@ -32,7 +32,7 @@ let modoOriginal = null;
 let orgA = null, unidadeA = null, contaId = null, perfilId = null, contatoId = null;
 
 const hab = (extra = {}) => async () => ({
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE", ...extra,
 });
 
@@ -60,6 +60,7 @@ after(async () => {
   }
   if (contaId) await apagarConta(contaId);
   await apagarOrganizacao(orgA);
+  await limparCategoriasDeTesteT();
 });
 
 beforeEach(async () => {
@@ -70,9 +71,12 @@ beforeEach(async () => {
 
 let seq = 0;
 async function mensagemDevida() {
+  const ce = await responsavelDoContato({ organizacaoId: orgA, contatoId, perfilId });
+  const tipo = `tipo_${tag}_${++seq}`;
+  await categoriaParaTipoT(orgA, ce, tipo); // 104: o destinatário só recebe um tipo que uma categoria habilitada mapeie
   const { data, error } = await supabase.from("comunicacao_mensagens").insert({
-    organizacao_id: orgA, unidade_id: unidadeA, contato_id: contatoId, contato_empresa_id: await responsavelDoContato({ organizacaoId: orgA, contatoId, perfilId }), destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
-    tipo: `tipo_${tag}_${++seq}`, conteudo: "aviso", idempotency_key: `adp-${tag}-${++seq}`, status: SM.SCHEDULED,
+    organizacao_id: orgA, unidade_id: unidadeA, contato_id: contatoId, contato_empresa_id: ce, destinatario_perfil_id: perfilId, canal: "whatsapp", direcao: "saida",
+    tipo, conteudo: "aviso", idempotency_key: `adp-${tag}-${++seq}`, status: SM.SCHEDULED,
     disponivel_em: new Date(Date.now() - 60_000).toISOString(),
   }).select("*").single();
   if (error) throw new Error(`fixture: ${error.message}`);
@@ -84,7 +88,7 @@ function provider() {
   const chamadas = [];
   const original = p.sendText.bind(p);
   p.sendText = async (a) => { chamadas.push(a); return original(a); };
-  return { p, chamadas, whatsAppService: criarWhatsAppService({ provider: p, semGateIdentidade: true }) };
+  return { p, chamadas, whatsAppService: criarWhatsAppService({ provider: p, semGateIdentidade: true, semGateModo: true }) };
 }
 const rodar = (whatsAppService, agora, resolverHabilitacao, extra = {}) => processarProximoLote({
   limite: 20, worker: `adp-${tag}`, whatsAppService, agora, adiamentoMs: 15 * MIN,
@@ -99,7 +103,7 @@ describe("adiamento com HORÁRIO REAL no pipeline", { skip: PULAR_INTEGRACAO }, 
     const m = await mensagemDevida();
     const { p, chamadas } = provider();
     let consultas = 0;
-    const svc = criarWhatsAppService({ provider: p, identidadeConfirmada: async () => ++consultas === 1 });
+    const svc = criarWhatsAppService({ provider: p, semGateModo: true, identidadeConfirmada: async () => ++consultas === 1 });
     const r = (await rodar(svc, QUARTA_10H_FIXA, hab())).find((x) => x.id === m.id);
     assert.equal(r?.resultado, "FALHOU_RETRY");
     const l = await linha(m.id);
@@ -115,7 +119,7 @@ describe("adiamento com HORÁRIO REAL no pipeline", { skip: PULAR_INTEGRACAO }, 
     const m = await mensagemDevida();
     const { p, chamadas } = provider();
     let confirmada = false;
-    const svc = criarWhatsAppService({ provider: p, identidadeConfirmada: async () => confirmada });
+    const svc = criarWhatsAppService({ provider: p, semGateModo: true, identidadeConfirmada: async () => confirmada });
     const r = (await rodar(svc, QUARTA_10H_FIXA, hab())).find((x) => x.id === m.id);
     assert.equal(r?.motivo, "IDENTIDADE_NAO_CONFIRMADA");
     const adiada = await linha(m.id);

@@ -442,15 +442,15 @@ describe("Checkpoint H.3-A — empty states honestos (item 30)", () => {
   });
 });
 
-describe("Checkpoint H.4-A — checklistPiloto (itens 34-36): 100% derivado, nunca hardcoded", () => {
+describe("Checkpoint H.4-A — checklistAtivacao (itens 34-36): 100% derivado, nunca hardcoded", () => {
   test("organização sem NENHUMA configuração -> todo o checklist false", async () => {
     const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estadoBase()) } });
     const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}`);
     assert.equal(r.status, 200);
-    const c = r.json.data.checklistPiloto;
+    const c = r.json.data.checklistAtivacao;
     assert.deepEqual(c, {
       responsavelDefinido: false, telefoneValido: false, consentimento: false, telefoneVerificado: false,
-      timezone: false, tipoAlerta: false, allowlistPiloto: true /* piloto desligado = gate não aplicável, ver comunicacao.piloto.js */,
+      timezone: false, tipoAlerta: false, envioAutomatico: false,
       organizacaoHabilitada: false, comunicacaoGlobalAtiva: false,
     });
   });
@@ -466,7 +466,7 @@ describe("Checkpoint H.4-A — checklistPiloto (itens 34-36): 100% derivado, nun
     }];
     const app = makeApp({ user: USUARIO_PAINEL, deps: { supabase: fakeDb(estado) } });
     const r = await GET(app, `/administrativo/comunicacao/organizacoes/${ORG_A}`);
-    const c = r.json.data.checklistPiloto;
+    const c = r.json.data.checklistAtivacao;
     assert.equal(c.responsavelDefinido, true);
     assert.equal(c.telefoneValido, true);
     assert.equal(c.timezone, true);

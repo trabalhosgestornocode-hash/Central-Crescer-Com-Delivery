@@ -12,7 +12,7 @@
 //
 // (Este arquivo NÃO importa o pipeline de orquestração de alertas — só a
 // fonte de pendência já compartilhada, o template de texto puro (sem
-// orquestração) e a allowlist do piloto (H.4-A). Ver o teste arquitetural
+// orquestração) e o diagnóstico LEGADO do piloto (sem efeito). Ver o teste arquitetural
 // em comunicacao-arquitetura-agendamento.test.js, que barra qualquer import
 // desse pipeline fora do worker dedicado — nenhum import deste arquivo o viola.)
 
@@ -22,10 +22,10 @@ import * as repo from "./administrativo.comunicacao.repo.js";
 import { pendencias as lerPendencias } from "./administrativo.service.js";
 import { modoAtual, definirModo, obterDisponibilidadeIfood, definirDisponibilidadeIfood } from "../comunicacao/comunicacao.config.js";
 import * as contatosEmpresa from "../comunicacao/comunicacao.contatosEmpresa.repo.js";
-import { TIPOS_ALERTA, MODOS } from "../comunicacao/comunicacao.constants.js";
+import { TIPOS_ALERTA, MODOS, modoPermiteEnvioReal } from "../comunicacao/comunicacao.constants.js";
 import { timezoneValido } from "../comunicacao/comunicacao.horario.js";
 import { formatarMensagemPendencia } from "../comunicacao/comunicacao.template.js";
-import { telefoneAutorizadoNoPiloto, pilotoHabilitado, lerAllowlistPiloto } from "../comunicacao/comunicacao.piloto.js";
+import { diagnosticoPilotoLegado } from "../comunicacao/comunicacao.piloto.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
 import { lerEstadoDoWorker } from "../../worker-comunicacao/estado.js";
 import { mascararTelefoneUi } from "./administrativo.comunicacao.central.js";
@@ -61,12 +61,13 @@ const rotuloModo = (modo) => (modo === "NORMAL" ? "ATIVA" : modo === "REACTIVE_O
 
 /** GET /administrativo/comunicacao/resumo */
 export async function resumo(deps = {}) {
-  const [gateway, modo, totalOrgs, orgsHabilitadas, porStatus] = await Promise.all([
+  const [gateway, modo, totalOrgs, orgsHabilitadas, porStatus, orgsAuto] = await Promise.all([
     repo.obterEstadoGateway(deps),
     modoAtual(deps),
     repo.contarOrganizacoesTotal(deps),
     repo.contarOrganizacoesHabilitadas(deps),
     repo.contarMensagensPorStatus(deps),
+    repo.contarOrganizacoesComEnvioAutomatico(deps),
   ]);
   const linhas = await repo.listarOrganizacoesComConfiguracao({}, deps);
   const porEmpresa = await contatosEmpresa.listarDasEmpresas(linhas.map((o) => o.id), deps);
@@ -85,7 +86,7 @@ export async function resumo(deps = {}) {
   // itens 7/8). Antes disto, "falhas hoje" na verdade lia o total histórico
   // de FAILED (nunca esteve de fato recortado por tempo) — corrigido aqui.
   const ultimas24h = await repo.contarUltimas24h(deps);
-  const piloto = estadoPilotoRuntime(null, deps.env ?? process.env);
+  const pilotoLegado = diagnosticoPilotoLegado(deps.env ?? process.env);
   const fila = { deliveryUnknown: porStatus.DELIVERY_UNKNOWN ?? 0 };
 
   return {
@@ -93,14 +94,15 @@ export async function resumo(deps = {}) {
     worker: estadoWorkerLocal(),
     comunicacao: { modo, rotulo: rotuloModo(modo) },
     // H.4-B.5 — saúde da Central. Só booleanos/contagens/rótulos: nunca telefone, segredo, HMAC nem auth-state.
-    piloto: { ativo: piloto.pilotoAtivo, quantidadeDestinos: piloto.quantidadeDestinos },
+    // O piloto foi ENCERRADO (104): as variáveis antigas, se ainda existirem no ambiente, aparecem só como "LEGACY — sem efeito".
+    pilotoLegado,
     backend: { online: true, versao: String(process.env.RENDER_GIT_COMMIT ?? "").slice(0, 7) || null },
     recovery: { estado: "desativado", fonte: "politica_do_projeto" }, // política registrada (G.4.1); o Painel não lê o runtime do Gateway
     entrega: {
       estado: gateway?.estado === "conectado" && fila.deliveryUnknown === 0 ? "operacional" : "atencao",
       motivo: gateway?.estado !== "conectado" ? "WhatsApp desconectado" : fila.deliveryUnknown > 0 ? "Há mensagens com entrega não confirmada" : null,
     },
-    empresas: { total: linhas.length || totalOrgs, configuradas, validados, semResponsavel, habilitadas: orgsHabilitadas, pausadas },
+    empresas: { total: linhas.length || totalOrgs, configuradas, validados, semResponsavel, habilitadas: orgsHabilitadas, comEnvioAutomatico: orgsAuto, pausadas },
     fila: {
       scheduled: porStatus.SCHEDULED ?? 0, processing: porStatus.PROCESSING ?? 0, sending: porStatus.SENDING ?? 0,
       deliveryUnknown: porStatus.DELIVERY_UNKNOWN ?? 0, failed: porStatus.FAILED ?? 0,
@@ -133,7 +135,7 @@ function statusConfiguracao(hab, responsavel = null) {
   if (responsavel && responsavel.ativo !== true) return "DESATIVADA";
   if (pausada) return "PAUSADA";
   if (hab?.habilitado === true) return "HABILITADA";
-  return completo ? "PRONTA_PARA_PILOTO" : "CONFIGURACAO_INCOMPLETA";
+  return completo ? "PRONTA_PARA_HABILITAR" : "CONFIGURACAO_INCOMPLETA";
 }
 
 const ROTULO_WA = { NAO_CADASTRADO: "NAO_CADASTRADO", AGUARDANDO_VALIDACAO: "AGUARDANDO_VALIDACAO", VALIDADO: "VALIDADO", ERRO: "ERRO", DESATIVADO: "DESATIVADO" };
@@ -197,6 +199,10 @@ export async function organizacoes({ busca, filtro } = {}, deps = {}) {
       nome: o.nome,
       // H.4-B.5 — Central: por que esta empresa pode ou não receber, e qual é o próximo passo (tudo derivado dos dados reais).
       habilitada,
+      // VÁRIOS destinatários por empresa (104): contagens — o detalhe (mascarado) vem de GET .../organizacoes/:id/whatsapp
+      envioAutomatico: hab?.envio_automatico === true,
+      destinatariosAtivos: (porEmpresa.get(o.id) ?? []).filter((c) => c.ativo === true).length,
+      destinatariosTotal: (porEmpresa.get(o.id) ?? []).length,
       unidadesMonitoradas: unidades.length, unidades: unidades.slice(0, 20),
       responsavel: resp ? { id: resp.id, nome: resp.nome, tipo: resp.tipo, ativo: resp.ativo, telefoneMascarado: mascararTelefoneUi(resp.telefone_e164), whatsappValidadoEm: resp.whatsapp_validado_em ?? null } : null,
       whatsappStatus: whatsapp,
@@ -258,6 +264,7 @@ export async function detalheOrganizacao({ organizacaoId } = {}, deps = {}) {
       habilitado: hab?.habilitado === true,
       timezone: hab?.timezone ?? null,
       tiposPermitidos: hab?.tipos_permitidos ?? [],
+      envioAutomatico: hab?.envio_automatico === true,
       pausadoAte: hab?.pausado_ate ?? null,
       pausadoMotivo: hab?.pausado_motivo ?? null,
       destinatario: principal ? {
@@ -269,21 +276,16 @@ export async function detalheOrganizacao({ organizacaoId } = {}, deps = {}) {
       responsaveis: responsaveis.map((r) => ({ id: r.id, nome: r.nome, tipo: r.tipo, ativo: r.ativo, telefoneMascarado: repo.mascararTelefone(r.telefone_e164), whatsappStatus: statusWhatsapp(r) })),
       atualizadoEm: hab?.updated_at ?? null,
     },
-    // Checklist de prontidão para piloto (H.4-A, itens 34-36) — 100% DERIVADO
-    // dos dados reais acima, nenhuma coluna nova de banco. `allowlistPiloto`
-    // é só o booleano (nunca a lista crua — comunicacao.piloto.js já não
-    // expõe o valor bruto do telefone em nenhum log; aqui é a mesma
-    // disciplina). `organizacaoHabilitada`/`comunicacaoGlobalAtiva` são
-    // sempre `false` hoje (habilitado=false hard-coded, modo=DISABLED) —
-    // nunca hardcoded no código, sempre lidos dos valores reais.
-    checklistPiloto: {
+    // Checklist de prontidão da empresa — 100% DERIVADO dos dados reais acima. Sem allowlist: o piloto foi encerrado (104).
+    // A configuração completa por empresa (VÁRIOS destinatários, envio automático, limites) vem de GET .../organizacoes/:id/whatsapp.
+    checklistAtivacao: {
       responsavelDefinido: !!(principal && hab?.destinatario_contato_empresa_id === principal.id),
       telefoneValido: !!principal?.telefone_e164,
       consentimento: contato?.consentimento === true,
       telefoneVerificado: contato?.verificado === true && principal?.whatsapp_status === "VALIDADO",
       timezone: !!hab?.timezone,
       tipoAlerta: !!(hab?.tipos_permitidos?.length),
-      allowlistPiloto: telefoneAutorizadoNoPiloto(principal?.telefone_e164 ?? null),
+      envioAutomatico: hab?.envio_automatico === true,
       organizacaoHabilitada: hab?.habilitado === true,
       comunicacaoGlobalAtiva: modo === "NORMAL",
     },
@@ -389,56 +391,49 @@ export async function confirmarConsentimento({ organizacaoId, confirmacaoExplici
 }
 
 // ---------------------------------------------------------------------------
-// CHECKPOINT H.4-B.1 — AS ALAVANCAS DE ENVIO (habilitação da organização + modo global)
+// AS ALAVANCAS DE ENVIO (fim do piloto, migration 104): habilitação da EMPRESA, envio automático da empresa (administrativo.comunicacao.empresa.js) e modo GLOBAL
 // ---------------------------------------------------------------------------
-// Sempre com ator humano autenticado (o `autor` vem da sessão do Painel, nunca service_role como ator),
-// confirmação explícita para LIGAR, e os gates do piloto lidos do process.env REAL do backend
-// (`deps.env` só existe para os testes). DESLIGAR (organização e modo) é sempre permitido.
+// Sempre com ator humano autenticado (o `autor` vem da sessão do Painel, nunca service_role como ator) e confirmação explícita para LIGAR. DESLIGAR
+// (empresa e modo) é sempre permitido. NÃO existe mais allowlist de telefones, "exatamente 1 destino" nem "exatamente 1 empresa": a autorização é a
+// configuração persistida da empresa (habilitada + envio automático + destinatários ativos, autorizados e com a categoria habilitada). O KILL SWITCH é o
+// modo global: DISABLED ⇒ nenhum envio real, qualquer que seja a configuração da empresa.
 
 const conflito = (msg, codigo) => new ApiError(409, msg, { codigo });
 
-/** Estado do piloto no runtime REAL: só booleanos/contagens — nunca telefone, nunca a lista, nunca segredo. */
-function estadoPilotoRuntime(telefoneDestinatario, env = process.env) {
-  const lista = lerAllowlistPiloto(env);
-  return {
-    pilotoAtivo: pilotoHabilitado(env),
-    quantidadeDestinos: lista.length,
-    destinatarioPermitido: !!telefoneDestinatario && lista.includes(telefoneDestinatario),
-  };
-}
+const MOTIVO_HABILITACAO = Object.freeze({
+  SEM_CONFIGURACAO: "A empresa ainda não tem configuração de WhatsApp. Defina o fuso horário e o tipo de alerta.",
+  TIMEZONE_AUSENTE: "Defina o fuso horário da empresa antes de ativar os avisos.",
+  TIPO_AUSENTE: "Escolha ao menos um tipo de alerta permitido antes de ativar os avisos.",
+  SEM_DESTINATARIO: "Cadastre ao menos um destinatário para esta empresa antes de ativar os avisos.",
+  DESTINATARIO_INELEGIVEL: "Nenhum destinatário está apto: é preciso ao menos um ativo, autorizado (WhatsApp validado), sem opt-out e com a categoria de aviso habilitada.",
+});
 
 /**
- * GET /administrativo/comunicacao/ativacao — o que a UI mostra antes de ligar: modo, prova do piloto no runtime
- * real, organizações habilitadas, pendências elegíveis das habilitadas e Gateway. Somente leitura, sem telefone.
+ * GET /administrativo/comunicacao/ativacao — o que a UI mostra sobre o envio: modo global, empresas habilitadas/com envio automático, pendências das que
+ * enviam, Gateway e o diagnóstico LEGADO do piloto (variáveis antigas: "LEGACY — sem efeito"). Somente leitura, sem telefone.
  */
 export async function ativacao(deps = {}) {
   const env = deps.env ?? process.env;
   const [modo, habilitadas, gateway, snapshot] = await Promise.all([
     modoAtual(deps), repo.listarOrganizacoesHabilitadas(deps), repo.obterEstadoGateway(deps), lerPendencias({}, deps),
   ]);
-  const idsHabilitadas = new Set(habilitadas.map((h) => h.organizacao_id));
-  const pendenciasElegiveis = (snapshot.unidades ?? []).filter((u) => idsHabilitadas.has(u.organizacaoId)).length;
-  let destinatariosPermitidos = habilitadas.length > 0;
-  for (const h of habilitadas) {
-    const contato = h.destinatario_contato_id ? await repo.obterContato(h.destinatario_contato_id, deps) : null;
-    if (!estadoPilotoRuntime(contato?.telefone_e164 ?? null, env).destinatarioPermitido) destinatariosPermitidos = false;
-  }
-  const piloto = estadoPilotoRuntime(null, env);
+  const idsAutomaticas = new Set(habilitadas.filter((h) => h.envio_automatico === true).map((h) => h.organizacao_id));
+  const pendenciasElegiveis = (snapshot.unidades ?? []).filter((u) => idsAutomaticas.has(u.organizacaoId)).length;
   return {
     modo,
-    piloto: { ativo: piloto.pilotoAtivo, quantidadeDestinos: piloto.quantidadeDestinos },
+    envioRealPermitido: modoPermiteEnvioReal(modo),
     organizacoesHabilitadas: habilitadas.length,
-    destinatariosPermitidos,
+    organizacoesComEnvioAutomatico: idsAutomaticas.size,
     pendenciasElegiveis,
     gateway: gateway.estado,
+    pilotoLegado: diagnosticoPilotoLegado(env),
   };
 }
 
 /**
  * PUT /administrativo/comunicacao/organizacoes/:organizacaoId/habilitacao   { habilitado, confirmacaoExplicita }
- * false: sempre permitido. true: confirmação explícita + piloto ativo + exatamente 1 destino na allowlist +
- * destinatário da organização nela + (no banco, atômico) modo DISABLED, nenhuma outra organização habilitada,
- * timezone/tipo/destinatário configurados e destinatário consentido/verificado/sem opt-out.
+ * false: sempre permitido (desliga também o envio automático da empresa). true: confirmação explícita + (no banco, atômico) timezone, tipo permitido e ao
+ * menos um destinatário ELEGÍVEL. Habilitar NÃO liga o envio automático — é uma decisão separada (PUT .../envio-automatico).
  */
 export async function definirHabilitacao({ organizacaoId, habilitado, confirmacaoExplicita } = {}, autor, deps = {}) {
   const orgId = v.uuid(organizacaoId, "Empresa");
@@ -452,39 +447,30 @@ export async function definirHabilitacao({ organizacaoId, habilitado, confirmaca
     if (r.alterou) {
       await auditar({ ...ator, acao: ACOES.COMUNICACAO_ORGANIZACAO_DESABILITADA, entidade: "comunicacao_habilitacoes", entidadeId: orgId, organizacaoId: orgId, detalhes: { de: true, para: false } });
     }
+    if (r.tinhaEnvioAutomatico) {
+      await auditar({ ...ator, acao: ACOES.COMUNICACAO_ENVIO_AUTOMATICO_DESLIGADO, entidade: "comunicacao_habilitacoes", entidadeId: orgId, organizacaoId: orgId, detalhes: { de: true, para: false, motivo: "empresa_desabilitada" } });
+    }
     return { organizacaoId: orgId, habilitado: false, alterou: r.alterou };
   }
 
   if (confirmacaoExplicita !== true) {
     throw ApiError.badRequest("Confirmação explícita obrigatória para habilitar a comunicação desta empresa.", { codigo: "CONFIRMACAO_OBRIGATORIA" });
   }
-  const hab = org.comunicacao_habilitacoes ?? null;
-  const contato = hab?.destinatario_contato_id ? await repo.obterContato(hab.destinatario_contato_id, deps) : null;
-  const responsavel = hab?.destinatario_contato_empresa_id
-    ? await contatosEmpresa.obterDaEmpresa({ organizacaoId: orgId, contatoEmpresaId: hab.destinatario_contato_empresa_id }, deps) : null;
-  if (!responsavel) throw conflito("Cadastre o responsável pelas comunicações desta empresa antes de habilitar.", "SEM_DESTINATARIO");
-  if (responsavel.ativo !== true) throw conflito("O responsável desta empresa está com os avisos desativados.", "DESTINATARIO_INELEGIVEL");
-  if (responsavel.whatsapp_status !== "VALIDADO") throw conflito("Valide o WhatsApp do responsável antes de habilitar.", "DESTINATARIO_INELEGIVEL");
-  const piloto = estadoPilotoRuntime(contato?.telefone_e164 ?? null, deps.env ?? process.env);
-  if (!piloto.pilotoAtivo) throw conflito("O piloto não está ativo no servidor (COMUNICACAO_PILOTO_ENABLED).", "PILOTO_INATIVO");
-  if (piloto.quantidadeDestinos !== 1) throw conflito("A allowlist do piloto precisa ter exatamente 1 destino.", "ALLOWLIST_INVALIDA");
-  if (!piloto.destinatarioPermitido) throw conflito("O destinatário desta empresa não está na allowlist do piloto.", "DESTINATARIO_FORA_DA_ALLOWLIST");
-
-  const r = await repo.habilitarOrganizacaoPiloto({ organizacaoId: orgId, atorPerfilId: autor?.perfilId ?? null }, deps);
+  const r = await repo.habilitarOrganizacao({ organizacaoId: orgId, atorPerfilId: autor?.perfilId ?? null }, deps);
   if (r.acao === "JA_HABILITADA") return { organizacaoId: orgId, habilitado: true, alterou: false };
-  if (r.acao !== "HABILITADA") throw conflito(`Não foi possível habilitar: ${r.acao}.`, r.acao);
+  if (r.acao !== "HABILITADA") throw conflito(MOTIVO_HABILITACAO[r.acao] ?? `Não foi possível habilitar: ${r.acao}.`, r.acao);
   await auditar({
     ...ator, acao: ACOES.COMUNICACAO_ORGANIZACAO_HABILITADA, entidade: "comunicacao_habilitacoes", entidadeId: orgId, organizacaoId: orgId,
-    detalhes: { de: false, para: true, piloto: { quantidadeDestinos: piloto.quantidadeDestinos }, modo: MODOS.DISABLED },
+    detalhes: { de: false, para: true, envio_automatico: false },
   });
   return { organizacaoId: orgId, habilitado: true, alterou: true };
 }
 
 /**
- * PUT /administrativo/comunicacao/modo   { modo: "DISABLED"|"NORMAL", confirmacaoExplicita }
+ * PUT /administrativo/comunicacao/modo   { modo: "DISABLED"|"NORMAL", confirmacaoExplicita }   — o KILL SWITCH GLOBAL (única fonte).
  * Este é o ÚNICO chamador de `definirModo` fora do módulo comunicacao (guarda estática em teste).
- * DISABLED: sempre permitido. NORMAL: confirmação explícita + piloto ativo + 1 destino + exatamente 1 organização
- * habilitada + destinatário dela na allowlist + Gateway conectado.
+ * DISABLED: sempre permitido e prevalece sobre TUDO (empresa habilitada, envio automático, destinatários, worker, teste, resposta manual): nenhum envio real
+ * chega ao provider. NORMAL: confirmação explícita + Gateway conectado.
  */
 export async function alterarModoGlobal({ modo, confirmacaoExplicita } = {}, autor, deps = {}) {
   if (modo !== MODOS.DISABLED && modo !== MODOS.NORMAL) {
@@ -505,17 +491,13 @@ export async function alterarModoGlobal({ modo, confirmacaoExplicita } = {}, aut
     throw ApiError.badRequest("Confirmação explícita obrigatória para ativar a comunicação automática.", { codigo: "CONFIRMACAO_OBRIGATORIA" });
   }
   const a = await ativacao(deps);
-  if (!a.piloto.ativo) throw conflito("O piloto não está ativo no servidor (COMUNICACAO_PILOTO_ENABLED).", "PILOTO_INATIVO");
-  if (a.piloto.quantidadeDestinos !== 1) throw conflito("A allowlist do piloto precisa ter exatamente 1 destino.", "ALLOWLIST_INVALIDA");
-  if (a.organizacoesHabilitadas !== 1) throw conflito("É preciso haver exatamente 1 organização habilitada.", "EXATAMENTE_UMA_ORGANIZACAO");
-  if (!a.destinatariosPermitidos) throw conflito("O destinatário da organização habilitada não está na allowlist do piloto.", "DESTINATARIO_FORA_DA_ALLOWLIST");
   if (a.gateway !== "conectado") throw conflito("O Gateway do WhatsApp não está conectado.", "GATEWAY_INDISPONIVEL");
   if (anterior === MODOS.NORMAL) return { modo: MODOS.NORMAL, anterior, alterou: false };
 
-  await definirModo(MODOS.NORMAL, { atorPerfilId: autor?.perfilId ?? null, atorId: autor?.contaId ?? null, motivo: "painel_admin_ativar_piloto" }, deps);
+  await definirModo(MODOS.NORMAL, { atorPerfilId: autor?.perfilId ?? null, atorId: autor?.contaId ?? null, motivo: "painel_admin_ativar_comunicacao" }, deps);
   await auditar({
     ...ator, acao: ACOES.COMUNICACAO_MODO_ATIVADO, entidade: "comunicacao_configuracoes", entidadeId: "modo",
-    detalhes: { de: anterior, para: MODOS.NORMAL, organizacoesHabilitadas: a.organizacoesHabilitadas, pendenciasElegiveis: a.pendenciasElegiveis, quantidadeDestinos: a.piloto.quantidadeDestinos },
+    detalhes: { de: anterior, para: MODOS.NORMAL, organizacoesHabilitadas: a.organizacoesHabilitadas, organizacoesComEnvioAutomatico: a.organizacoesComEnvioAutomatico, pendenciasElegiveis: a.pendenciasElegiveis },
   });
   return { modo: MODOS.NORMAL, anterior, alterou: true };
 }

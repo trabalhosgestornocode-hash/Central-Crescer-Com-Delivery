@@ -11,7 +11,7 @@ import { supabase } from "../src/config/supabase.js";
 import { motivoPularIntegracao } from "./helpers/preflight-integracao.js";
 import {
   criarOrganizacao, apagarOrganizacao, criarUnidade, criarDestinatario, apagarDestinatario, habilitarOrganizacao,
-  migracao082Aplicada, migracao088Aplicada, migracao092Aplicada,
+  migracao082Aplicada, migracao088Aplicada, migracao092Aplicada, agendarReforcoDoAlertaT, agendarMensagemDoAlertaT,
 } from "./helpers/comunicacao-fixtures.js";
 import * as alertasRepo from "../src/modules/comunicacao/comunicacao.alertas.repo.js";
 import { processarProximoLote, agendarReforcosPendentes } from "../src/modules/comunicacao/comunicacao.alertas.service.js";
@@ -67,7 +67,7 @@ beforeEach(async () => {
 });
 
 const chaveInicial = (id) => `wa:alerta:${id}:v1`;
-const chaveReforco = (id) => `wa:alerta:${id}:reforco:v1`;
+const chaveReforco = (id) => `wa:alerta:${id}:dest:${dest.contatoEmpresaId}:reforco:v1`; // 104: chave POR DESTINATÁRIO (derivada no banco)
 const linha = async (id) => (await supabase.from("comunicacao_mensagens").select("*").eq("id", id).single()).data;
 const statusAlerta = async (id) => (await supabase.from("comunicacao_alertas").select("status").eq("id", id).single()).data.status;
 const mensagensDoAlerta = async (id) => (await supabase.from("comunicacao_mensagens").select("*").eq("alerta_id", id)).data;
@@ -101,14 +101,12 @@ async function alertaComPrimeiroEnviado({ enviadoEm = ENVIO_INICIAL, dataReferen
   return { alerta, inicial };
 }
 
-const chamarReforco = (alertaId, { chave, disponivelEm = new Date(Date.now() - 60_000), expiraEm = null } = {}) =>
-  supabase.rpc("comunicacao_agendar_reforco_alerta", {
-    p_alerta_id: alertaId, p_conteudo: "reforço de teste", p_idempotency_key: chave ?? chaveReforco(alertaId),
-    p_disponivel_em: disponivelEm.toISOString(), p_expira_em: expiraEm ? expiraEm.toISOString() : null, p_max_tentativas: 5,
-  });
+// 104: a RPC de destinatário único foi aposentada; o adaptador chama `comunicacao_agendar_mensagens_alerta` (propósito reforço) e devolve a FORMA antiga {data, error}.
+const chamarReforco = async (alertaId, { disponivelEm = new Date(Date.now() - 60_000), expiraEm = null } = {}) =>
+  ({ data: await agendarReforcoDoAlertaT({ alertaId, conteudo: "reforço de teste", disponivelEm, expiraEm }), error: null });
 
 const HAB = (extra = {}) => async () => ({
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
   destinatarioContatoId: dest.contatoId, destinatarioPerfilId: dest.perfilId, destinatarioContatoEmpresaId: dest.contatoEmpresaId ?? null,
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE", ...extra,
 });
@@ -118,7 +116,7 @@ function criarProviderComSpy() {
   const chamadas = [];
   const original = provider.sendText.bind(provider);
   provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }) };
+  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true, semGateModo: true }) };
 }
 const lote = (whatsAppService, extra = {}) => processarProximoLote({
   limite: 20, worker: "teste-reforco", whatsAppService, agora: AGORA,
@@ -127,28 +125,35 @@ const lote = (whatsAppService, extra = {}) => processarProximoLote({
 const sk = (t) => t.skip(PULAR_INTEGRACAO || "migrations 082/088/092 ainda não aplicadas — pulando.");
 
 // ---------------------------------------------------------------------------
-describe("RPC comunicacao_agendar_reforco_alerta (092)", { skip: PULAR_INTEGRACAO }, () => {
+describe("RPC comunicacao_agendar_mensagens_alerta — propósito reforço (092/104)", { skip: PULAR_INTEGRACAO }, () => {
   test("alerta inexistente -> ALERTA_INEXISTENTE", async (t) => {
     if (!migracaoOk) return sk(t);
     assert.equal((await chamarReforco("00000000-0000-0000-0000-000000000000", { chave: "x" })).data.acao, "ALERTA_INEXISTENTE");
   });
 
-  test("chave que não é a do reforço do alerta -> CHAVE_INVALIDA (impossível criar um 2º reforço com outra chave)", async (t) => {
+  test("a chave do reforço é derivada NO BANCO por destinatário (impossível criar um 2º reforço do mesmo destinatário, com qualquer chave)", async (t) => {
     if (!migracaoOk) return sk(t);
     const { alerta } = await alertaComPrimeiroEnviado();
-    assert.equal((await chamarReforco(alerta.id, { chave: `wa:alerta:${alerta.id}:reforco:v2` })).data.acao, "CHAVE_INVALIDA");
-    assert.equal((await chamarReforco(alerta.id, { chave: chaveInicial(alerta.id) })).data.acao, "CHAVE_INVALIDA");
-    assert.equal((await mensagensDoAlerta(alerta.id)).length, 1, "nada criado além da inicial");
+    assert.equal((await chamarReforco(alerta.id)).data.acao, "CRIADA");
+    const dup = await supabase.from("comunicacao_mensagens").insert({
+      alerta_id: alerta.id, organizacao_id: orgA, unidade_id: unidadeA, contato_id: dest.contatoId, contato_empresa_id: dest.contatoEmpresaId, canal: "whatsapp", direcao: "saida",
+      tipo: TIPO, conteudo: "x", idempotency_key: `wa:alerta:${alerta.id}:reforco:v2`, status: SM.SCHEDULED, metadados: { proposito: "reforco" }, disponivel_em: new Date().toISOString(),
+    });
+    assert.equal(String(dup.error?.code), "23505", "o banco aceitou um 2º reforço do mesmo destinatário");
+    assert.equal((await mensagensDoAlerta(alerta.id)).length, 2, "só a inicial + 1 reforço");
   });
 
-  test("alerta que NÃO chegou ao 1º envio (DETECTED/SCHEDULED/BLOCKED/FAILED/RESOLVED) -> ALERTA_SEM_PRIMEIRO_ENVIO", async (t) => {
+  test("alerta que NÃO chegou ao 1º envio (DETECTED/BLOCKED/FAILED/RESOLVED) -> ALERTA_SEM_PRIMEIRO_ENVIO; SCHEDULED sem a inicial DESTE destinatário -> PRIMEIRA_MENSAGEM_NAO_ENVIADA", async (t) => {
     if (!migracaoOk) return sk(t);
     const alerta = await novoAlerta();
     assert.equal((await chamarReforco(alerta.id)).data.acao, "ALERTA_SEM_PRIMEIRO_ENVIO");
-    for (const s of [SA.SCHEDULED, SA.BLOCKED, SA.FAILED, SA.RESOLVED]) {
+    for (const s of [SA.BLOCKED, SA.FAILED, SA.RESOLVED]) {
       await supabase.from("comunicacao_alertas").update({ status: s }).eq("id", alerta.id);
       assert.equal((await chamarReforco(alerta.id)).data.acao, "ALERTA_SEM_PRIMEIRO_ENVIO", s);
     }
+    // 104: alerta SCHEDULED (há inicial a caminho de OUTRO destinatário) é candidato — mas sem a inicial DESTE destinatário enviada nada nasce
+    await supabase.from("comunicacao_alertas").update({ status: SA.SCHEDULED }).eq("id", alerta.id);
+    assert.equal((await chamarReforco(alerta.id)).data.acao, "PRIMEIRA_MENSAGEM_NAO_ENVIADA");
     assert.equal((await mensagensDoAlerta(alerta.id)).length, 0);
   });
 
@@ -177,13 +182,10 @@ describe("RPC comunicacao_agendar_reforco_alerta (092)", { skip: PULAR_INTEGRACA
     assert.equal(await statusAlerta(alerta.id), SA.SENT);
   });
 
-  test("a RPC NORMAL (088) continua intacta: alerta já SENT -> nunca cria outra mensagem inicial", async (t) => {
+  test("o propósito INICIAL continua intacto: alerta já SENT -> nunca cria outra mensagem inicial", async (t) => {
     if (!migracaoOk) return sk(t);
     const { alerta } = await alertaComPrimeiroEnviado();
-    const { data } = await supabase.rpc("comunicacao_agendar_mensagem_alerta", {
-      p_alerta_id: alerta.id, p_tipo: TIPO, p_conteudo: "x", p_idempotency_key: `wa:alerta:${alerta.id}:v9`,
-      p_disponivel_em: new Date().toISOString(), p_expira_em: null, p_max_tentativas: 5,
-    });
+    const data = await agendarMensagemDoAlertaT({ alertaId: alerta.id, conteudo: "x", disponivelEm: new Date() });
     assert.notEqual(data.acao, "CRIADA");
   });
 
@@ -207,18 +209,20 @@ describe("RPC comunicacao_agendar_reforco_alerta (092)", { skip: PULAR_INTEGRACA
     assert.equal((await mensagensDoAlerta(alerta.id)).filter((m) => m.metadados?.proposito === "reforco").length, 1);
   });
 
-  test("entrega em curso do alerta (PROCESSING/SENDING/DELIVERY_UNKNOWN) -> ENTREGA_EM_CURSO", async (t) => {
+  test("reforço DESTE destinatário já em curso (PROCESSING/SENDING/DELIVERY_UNKNOWN) -> JA_EXISTIA: nunca um segundo", async (t) => {
     if (!migracaoOk) return sk(t);
     const { alerta } = await alertaComPrimeiroEnviado();
     const outra = await inserirMensagem({ alertaId: alerta.id, status: SM.PROCESSING, idempotencyKey: `wa:alerta:${alerta.id}:outra`, proposito: "reforco" });
-    assert.equal((await chamarReforco(alerta.id)).data.acao, "ENTREGA_EM_CURSO");
+    const r = (await chamarReforco(alerta.id)).data;
+    assert.equal(r.acao, "JA_EXISTIA");
+    assert.equal(r.mensagem_id, outra.id);
     await supabase.from("comunicacao_mensagens").delete().eq("id", outra.id);
   });
 
-  test("empresa desabilitada / tipo não permitido / sem destinatário / contato inelegível -> não cria (mesmas regras da 088)", async (t) => {
+  test("empresa desabilitada / tipo não permitido / contato inelegível -> não cria (mesmas regras da 088)", async (t) => {
     if (!migracaoOk) return sk(t);
     const { alerta } = await alertaComPrimeiroEnviado();
-    await supabase.from("comunicacao_habilitacoes").update({ habilitado: false }).eq("organizacao_id", orgA);
+    await supabase.from("comunicacao_habilitacoes").update({ habilitado: false, envio_automatico: false }).eq("organizacao_id", orgA);
     assert.equal((await chamarReforco(alerta.id)).data.acao, "NAO_HABILITADA");
     await habilitarOrganizacao(orgA, dest, { tipos_permitidos: ["outro_tipo"] });
     assert.equal((await chamarReforco(alerta.id)).data.acao, "TIPO_NAO_PERMITIDO");
@@ -385,7 +389,7 @@ describe("scheduler agendarReforcosPendentes — contra o banco real (Política 
   test("organização desabilitada (habilitação REAL) -> nada criado", async (t) => {
     if (!migracaoOk) return sk(t);
     const { alerta } = await alertaComPrimeiroEnviado();
-    await supabase.from("comunicacao_habilitacoes").update({ habilitado: false }).eq("organizacao_id", orgA);
+    await supabase.from("comunicacao_habilitacoes").update({ habilitado: false, envio_automatico: false }).eq("organizacao_id", orgA);
     const r = await rodar(AGORA);
     assert.equal(r.agendados, 0);
     assert.equal(r.semHabilitacao, 1);
@@ -502,27 +506,18 @@ describe("pipeline real do reforço: claim -> JIT -> policy -> reserva -> provid
     assert.equal(chamadas.length, 0);
   });
 
-  test("segunda mensagem INICIAL do mesmo alerta (1ª já SENT) continua BLOQUEADA como DUPLICATE", async (t) => {
+  test("segunda mensagem INICIAL do MESMO destinatário (1ª já SENT) é recusada pelo BANCO; a de OUTRO destinatário é independente", async (t) => {
     if (!migracaoOk) return sk(t);
     const { alerta } = await alertaComPrimeiroEnviado();
-    const segunda = await inserirMensagem({ alertaId: alerta.id, status: SM.SCHEDULED, idempotencyKey: `wa:alerta:${alerta.id}:v-dup` });
-    const { chamadas, whatsAppService } = criarProviderComSpy();
-    const r = meu(await lote(whatsAppService), segunda.id);
-    assert.equal(r?.resultado, "BLOQUEADO", JSON.stringify(r));
-    assert.equal(r.motivo, "DUPLICATE");
-    assert.equal(chamadas.length, 0);
+    await assert.rejects(() => inserirMensagem({ alertaId: alerta.id, status: SM.SCHEDULED, idempotencyKey: `wa:alerta:${alerta.id}:v-dup` }), /23505|duplicate|unique|ux_mensagens_alerta_destinatario_proposito/i);
+    assert.equal((await mensagensDoAlerta(alerta.id)).length, 1);
   });
 
-  test("SEGUNDO reforço (1º reforço já SENT) continua BLOQUEADO como DUPLICATE", async (t) => {
+  test("SEGUNDO reforço do MESMO destinatário (1º reforço já SENT) é recusado pelo BANCO", async (t) => {
     if (!migracaoOk) return sk(t);
     const { alerta } = await alertaComPrimeiroEnviado();
     await inserirMensagem({ alertaId: alerta.id, status: SM.SENT, idempotencyKey: chaveReforco(alerta.id), proposito: "reforco", enviadoEm: QUA("20:10").toISOString() });
-    const segundo = await inserirMensagem({ alertaId: alerta.id, status: SM.SCHEDULED, idempotencyKey: `wa:alerta:${alerta.id}:reforco:v-dup`, proposito: "reforco" });
-    const { chamadas, whatsAppService } = criarProviderComSpy();
-    const r = meu(await lote(whatsAppService), segundo.id);
-    assert.equal(r?.resultado, "BLOQUEADO", JSON.stringify(r));
-    assert.equal(r.motivo, "DUPLICATE");
-    assert.equal(chamadas.length, 0);
+    await assert.rejects(() => inserirMensagem({ alertaId: alerta.id, status: SM.SCHEDULED, idempotencyKey: `wa:alerta:${alerta.id}:reforco:v-dup`, proposito: "reforco" }), /23505|duplicate|unique|ux_mensagens_alerta_destinatario_proposito/i);
   });
 
   test("veto do reforço (contato com opt-out) -> BLOQUEADO e o status do ALERTA continua SENT", async (t) => {

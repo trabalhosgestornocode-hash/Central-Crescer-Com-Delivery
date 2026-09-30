@@ -33,7 +33,7 @@ describe("POST /eventos/mensagem-recebida — contrato, persistência idempotent
   before(async () => {
     repo = criarRepoEmMemoria();
     provider = criarBaileysGatewayProvider({ gatewayUrl: "http://unused.invalid", segredoHmac: SEGREDO });
-    servico = criarWhatsAppService({ provider, semGateIdentidade: true });
+    servico = criarWhatsAppService({ provider, semGateIdentidade: true, semGateModo: true });
     recebidosProvider = []; recebidosServico = [];
     provider.onMessage((m) => recebidosProvider.push(m));                    // handler DIRETO no provider (o caminho mais fraco)
     servico.onMensagemRecebida((m) => recebidosServico.push(m));             // handler via service (o caminho do futuro Agente)

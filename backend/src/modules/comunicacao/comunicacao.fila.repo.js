@@ -20,7 +20,7 @@ import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { STATUS_MENSAGEM, CANAIS, DIRECAO, RESULTADO_FINAL_ENVIO, DESTINO_SEM_ENVIO, RESULTADO_RESERVA } from "./comunicacao.constants.js";
 import * as tentativasRepo from "./comunicacao.tentativas.repo.js";
-import { PROPOSITO, propositoDaMensagem, chaveIdempotenciaInicial, chaveIdempotenciaReforco } from "./comunicacao.reforco.js";
+import { PROPOSITO, propositoDaMensagem } from "./comunicacao.reforco.js";
 
 /** Chama uma RPC `setof comunicacao_mensagens` e devolve a 1ª linha, ou `null` (= 0 linhas = perdeu a posse). */
 async function rpcFenced(db, nome, args) {
@@ -83,79 +83,43 @@ export async function agendarMensagem(params, deps = {}) {
 }
 
 /**
- * ATOMICIDADE alerta -> mensagem (migration 088): cria a mensagem (idempotente pela
- * `idempotencyKey`) E move o alerta DETECTED -> SCHEDULED na MESMA transação do
- * banco — ou os dois, ou nada. Uma falha no meio não deixa alerta órfão (SCHEDULED
- * sem mensagem) nem mensagem sem alerta atualizado. Repetir a chamada N vezes gera
- * no máximo UMA mensagem por chave.
- *
- * O DESTINATÁRIO NÃO É PARÂMETRO: o banco o lê da habilitação da organização do alerta
- * (`comunicacao_habilitacoes.destinatario_*`, configurado explicitamente) e recusa se
- * ausente/inelegível. Ninguém aqui escolhe "o primeiro contato".
- *
- * Resultado (`acao`): CRIADA | JA_EXISTIA | ALERTA_NAO_DETECTED | ENTREGA_DESCONHECIDA
- * (já existe SENDING/DELIVERY_UNKNOWN do alerta: nada novo até reconciliar) |
- * MENSAGEM_EXPIRADA (a mensagem deste evento já expirou: NÃO recria — lembrete/nova
- * versão exige regra explícita) | NAO_HABILITADA | TIPO_NAO_PERMITIDO | SEM_DESTINATARIO |
- * DESTINATARIO_INELEGIVEL | CHAVE_EM_USO | ALERTA_INEXISTENTE.
- * @param {{alertaId: string, tipo: string, conteudo: string, idempotencyKey: string, disponivelEm: Date, expiraEm?: Date|null, maxTentativas?: number}} params
- * @returns {Promise<{acao: string, mensagem_id?: string, status?: string, status_alerta?: string}>}
+ * DESTINATÁRIOS da empresa para um tipo de alerta (migration 104) — TODOS, elegíveis ou não, com o MOTIVO. Só leitura. Fonte única no banco
+ * (`comunicacao_resolver_destinatarios`): nunca perfil/usuário/unidade. O telefone volta COMPLETO (uso interno do pipeline); quem expõe ao frontend mascara.
+ * @param {{organizacaoId: string, tipoAlerta: string}} params
+ * @returns {Promise<Array<{contato_empresa_id: string, contato_id: string|null, perfil_id: string|null, nome: string, telefone: string, elegivel: boolean, motivo: string|null}>>}
  */
-export async function agendarMensagemDoAlerta(params, deps = {}) {
+export async function resolverDestinatarios({ organizacaoId, tipoAlerta }, deps = {}) {
   const db = deps.supabase ?? supabase;
-  const { data, error } = await db.rpc("comunicacao_agendar_mensagem_alerta", {
+  const { data, error } = await db.rpc("comunicacao_resolver_destinatarios", { p_organizacao_id: organizacaoId, p_tipo_alerta: tipoAlerta });
+  if (error) throw ApiError.internal(error.message);
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * ATOMICIDADE alerta -> mensagens (migration 104): cria, NUMA transação, UMA mensagem por destinatário elegível — cada uma com seu horário e sua chave
+ * de idempotência (derivada no BANCO: alerta + destinatário + propósito) — e move o alerta DETECTED -> SCHEDULED. Chamar N vezes nunca duplica; dois
+ * workers ao mesmo tempo nunca duplicam (lock do alerta + índice único parcial). A elegibilidade de cada destinatário é REVALIDADA no banco.
+ *
+ * Resultado do CONJUNTO (`acao`): OK | PROPOSITO_INVALIDO | ORIGEM_INVALIDA | ITENS_INVALIDOS | ALERTA_INEXISTENTE | TIPO_NAO_SUPORTADO | NAO_HABILITADA |
+ * ENVIO_AUTOMATICO_DESLIGADO | TIPO_NAO_PERMITIDO | ALERTA_NAO_DETECTED | ALERTA_SEM_PRIMEIRO_ENVIO. Em OK, `itens[]` traz, por destinatário:
+ * CRIADA | JA_EXISTIA | MENSAGEM_EXPIRADA | DESTINATARIO_INELEGIVEL | DESTINATARIO_INEXISTENTE | PRIMEIRA_MENSAGEM_NAO_ENVIADA | ITEM_INVALIDO.
+ * @param {{alertaId: string, proposito: 'inicial'|'reforco', origem?: string|null, itens: Array<{contatoEmpresaId: string, conteudo: string, disponivelEm: Date, expiraEm?: Date|null}>, maxTentativas?: number}} params
+ * @returns {Promise<{acao: string, criadas?: number, itens?: Array<{contato_empresa_id?: string, acao: string, mensagem_id?: string, status?: string, motivo?: string}>, status_alerta?: string}>}
+ */
+export async function agendarMensagensDoAlerta(params, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.rpc("comunicacao_agendar_mensagens_alerta", {
     p_alerta_id: params.alertaId,
-    p_tipo: params.tipo, p_conteudo: params.conteudo, p_idempotency_key: params.idempotencyKey,
-    p_disponivel_em: params.disponivelEm.toISOString(),
-    p_expira_em: params.expiraEm ? params.expiraEm.toISOString() : null,
+    p_proposito: params.proposito,
+    p_origem: params.origem ?? null,
+    p_itens: params.itens.map((i) => ({
+      contato_empresa_id: i.contatoEmpresaId, conteudo: i.conteudo,
+      disponivel_em: i.disponivelEm.toISOString(), expira_em: i.expiraEm ? i.expiraEm.toISOString() : null,
+    })),
     p_max_tentativas: params.maxTentativas ?? 5,
   });
   if (error) throw ApiError.internal(error.message);
-  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_agendar_mensagem_alerta: resposta inválida");
-  return data;
-}
-
-/**
- * Agenda o ÚNICO reforço de um alerta cujo 1º aviso já saiu (migration 092). Espelha
- * `agendarMensagemDoAlerta` (mesma atomicidade); as checagens vivem só no banco.
- * Resultado (`acao`): CRIADA | JA_EXISTIA | ALERTA_INEXISTENTE | CHAVE_INVALIDA | CHAVE_EM_USO |
- * ALERTA_SEM_PRIMEIRO_ENVIO | PRIMEIRA_MENSAGEM_NAO_ENVIADA | ENTREGA_EM_CURSO | NAO_HABILITADA |
- * TIPO_NAO_PERMITIDO | SEM_DESTINATARIO | DESTINATARIO_INELEGIVEL.
- * @param {{alertaId: string, conteudo: string, disponivelEm: Date, expiraEm?: Date|null, maxTentativas?: number}} params
- */
-export async function agendarReforcoDoAlerta(params, deps = {}) {
-  const db = deps.supabase ?? supabase;
-  const { data, error } = await db.rpc("comunicacao_agendar_reforco_alerta", {
-    p_alerta_id: params.alertaId, p_conteudo: params.conteudo,
-    p_idempotency_key: chaveIdempotenciaReforco(params.alertaId),
-    p_disponivel_em: params.disponivelEm.toISOString(),
-    p_expira_em: params.expiraEm ? params.expiraEm.toISOString() : null,
-    p_max_tentativas: params.maxTentativas ?? 5,
-  });
-  if (error) throw ApiError.internal(error.message);
-  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_agendar_reforco_alerta: resposta inválida");
-  return data;
-}
-
-/**
- * Agenda o PRIMEIRO aviso tardio D-1 (migration 094): a 1ª mensagem do alerta (chave `wa:alerta:{id}:v1`,
- * `proposito=inicial`, `origem=prazo_final_d1`). As checagens (tipo, DETECTED, nenhuma inicial, habilitação,
- * destinatário) vivem só no banco. Resultado (`acao`): CRIADA | JA_EXISTIA | MENSAGEM_EXPIRADA | INICIAL_JA_EXISTE |
- * ENTREGA_EM_CURSO | ALERTA_NAO_DETECTED | NAO_HABILITADA | TIPO_NAO_PERMITIDO | SEM_DESTINATARIO |
- * DESTINATARIO_INELEGIVEL | TIPO_NAO_SUPORTADO | CHAVE_INVALIDA | CHAVE_EM_USO | ALERTA_INEXISTENTE.
- * @param {{alertaId: string, conteudo: string, disponivelEm: Date, expiraEm?: Date|null, maxTentativas?: number}} params
- */
-export async function agendarAvisoTardioD1(params, deps = {}) {
-  const db = deps.supabase ?? supabase;
-  const { data, error } = await db.rpc("comunicacao_agendar_aviso_tardio_d1", {
-    p_alerta_id: params.alertaId, p_conteudo: params.conteudo,
-    p_idempotency_key: chaveIdempotenciaInicial(params.alertaId),
-    p_disponivel_em: params.disponivelEm.toISOString(),
-    p_expira_em: params.expiraEm ? params.expiraEm.toISOString() : null,
-    p_max_tentativas: params.maxTentativas ?? 5,
-  });
-  if (error) throw ApiError.internal(error.message);
-  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_agendar_aviso_tardio_d1: resposta inválida");
+  if (!data || typeof data.acao !== "string") throw ApiError.internal("comunicacao_agendar_mensagens_alerta: resposta inválida");
   return data;
 }
 
@@ -211,16 +175,19 @@ export async function iniciarEnvio({ id, worker, claimGeracao, leaseSegundos = 9
  * SCHEDULED, PROCESSING, CANCELLED, BLOCKED e FAILED (rejeição definitiva/comprovadamente
  * não enviada: nenhuma mensagem saiu do número).
  * Substitui `iniciarEnvio` no pipeline (que continua existindo, sem a reserva).
- * @param {{id: string, worker: string, claimGeracao: number, leaseSegundos?: number, cooldownHoras: number, maxPorContatoDia: number, maxPorMinuto: number, maxPorMinutoOrganizacao: number, inicioDia: Date}} params
+ * LIMITES SEPARADOS (104): cooldown e `maxPorContatoDia` valem POR DESTINATÁRIO; `maxPorOrganizacaoDia` vale para a EMPRESA (todos os destinatários
+ * somados, só mensagens de alerta) — resultado RATE_LIMIT_DIA_ORGANIZACAO. `null` = sem esse limite.
+ * @param {{id: string, worker: string, claimGeracao: number, leaseSegundos?: number, cooldownHoras: number|null, maxPorContatoDia: number, maxPorMinuto: number, maxPorMinutoOrganizacao: number, maxPorOrganizacaoDia?: number|null, inicioDia: Date}} params
  * @returns {Promise<{resultado: keyof typeof RESULTADO_RESERVA, mensagem?: object}>}
  */
-export async function reservarEnvio({ id, worker, claimGeracao, leaseSegundos = 90, cooldownHoras, maxPorContatoDia, maxPorMinuto, maxPorMinutoOrganizacao, inicioDia }, deps = {}) {
+export async function reservarEnvio({ id, worker, claimGeracao, leaseSegundos = 90, cooldownHoras, maxPorContatoDia, maxPorMinuto, maxPorMinutoOrganizacao, maxPorOrganizacaoDia = null, inicioDia }, deps = {}) {
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.rpc("comunicacao_reservar_envio", {
     p_id: id, p_worker: worker, p_claim_geracao: claimGeracao, p_lease_segundos: leaseSegundos,
     p_cooldown_horas: cooldownHoras, p_max_por_contato_dia: maxPorContatoDia, p_max_por_minuto: maxPorMinuto,
     p_max_por_minuto_org: maxPorMinutoOrganizacao,
     p_inicio_dia: inicioDia.toISOString(),
+    p_max_por_org_dia: maxPorOrganizacaoDia,
   });
   if (error) throw ApiError.internal(error.message);
   // resposta desconhecida = NÃO iniciado (fail-closed): nunca "provavelmente ok".
@@ -365,40 +332,61 @@ export async function existeEnvioAtivoParaAlerta(alertaId, deps = {}) {
 }
 
 /**
- * Existe OUTRA mensagem deste alerta (que não `exceptId`) DO MESMO PROPÓSITO que já saiu,
- * está saindo ou PODE ter saído (SENDING/SENT/DELIVERED/READ/DELIVERY_UNKNOWN)? Base real da
- * checagem de duplicidade: enquanto houver uma entrega desconhecida do mesmo evento
- * lógico, nenhuma outra mensagem pode ser enviada para ele.
+ * Existe OUTRA mensagem deste alerta, PARA O MESMO DESTINATÁRIO, do mesmo propósito, que já saiu, está saindo ou PODE ter saído
+ * (SENDING/SENT/DELIVERED/READ/DELIVERY_UNKNOWN)? Base real da checagem de duplicidade: enquanto houver uma entrega desconhecida do mesmo evento
+ * lógico PARA ESTE DESTINATÁRIO, nenhuma outra mensagem pode ser enviada a ele.
  *
- * PROPÓSITO (`inicial` | `reforco`): um alerta tem legitimamente 1 mensagem inicial + 1 reforço.
- * Uma segunda inicial continua duplicada da primeira, e um segundo reforço continua duplicado
- * do primeiro — só o reforço NÃO é duplicata da inicial (e vice-versa). Sem `proposito`
- * (chamadas antigas) = `inicial`, o comportamento histórico.
- * @param {{alertaId: string, exceptId: string, proposito?: string}} params
+ * POR DESTINATÁRIO (104): a mensagem enviada ao João NUNCA torna a da Maria "duplicada". O destinatário é casado por `contato_empresa_id` ou, nas
+ * mensagens legadas (pré-100, sem contato_empresa_id), pelo `contato_id`. Sem nenhum dos dois na chamada = comportamento histórico (todo o alerta).
+ *
+ * PROPÓSITO (`inicial` | `reforco`): um alerta tem legitimamente 1 mensagem inicial + 1 reforço POR DESTINATÁRIO. Sem `proposito` = `inicial`.
+ * @param {{alertaId: string, exceptId: string, proposito?: string, contatoEmpresaId?: string|null, contatoId?: string|null}} params
  */
-export async function existeOutraEntregaDoAlerta({ alertaId, exceptId, proposito = PROPOSITO.INICIAL }, deps = {}) {
+export async function existeOutraEntregaDoAlerta({ alertaId, exceptId, proposito = PROPOSITO.INICIAL, contatoEmpresaId = null, contatoId = null }, deps = {}) {
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.from("comunicacao_mensagens")
-    .select("id, metadados").eq("alerta_id", alertaId).neq("id", exceptId)
+    .select("id, metadados, contato_empresa_id, contato_id").eq("alerta_id", alertaId).neq("id", exceptId)
     .in("status", [
       STATUS_MENSAGEM.SENDING, STATUS_MENSAGEM.SENT, STATUS_MENSAGEM.DELIVERED,
       STATUS_MENSAGEM.READ, STATUS_MENSAGEM.DELIVERY_UNKNOWN,
     ]);
   if (error) throw ApiError.internal(error.message);
-  return (data ?? []).some((m) => propositoDaMensagem(m) === proposito);
+  return (data ?? []).some((m) => propositoDaMensagem(m) === proposito && mesmoDestinatario(m, { contatoEmpresaId, contatoId }));
+}
+
+/** A mensagem `m` é DESTE destinatário? Sem identificação (nem contato_empresa_id nem contato_id) = qualquer (compatibilidade histórica). */
+export function mesmoDestinatario(m, { contatoEmpresaId = null, contatoId = null } = {}) {
+  if (!contatoEmpresaId && !contatoId) return true;
+  if (contatoEmpresaId && m.contato_empresa_id) return m.contato_empresa_id === contatoEmpresaId;
+  if (contatoId && !m.contato_empresa_id) return m.contato_id === contatoId; // legada, casada pelo telefone
+  return false;
 }
 
 /**
- * 1ª mensagem (`wa:alerta:{id}:v1`) de um alerta — base do reforço (status, `enviado_em`).
- * `null` se não existe.
- * @param {string} alertaId
+ * A mensagem INICIAL deste destinatário (status, `enviado_em`) — base do reforço. `null` se não existe. Casa por `contato_empresa_id` ou, nas legadas
+ * (chave `wa:alerta:{id}:v1`, sem contato_empresa_id), pelo `contato_id`.
+ * @param {{alertaId: string, contatoEmpresaId?: string|null, contatoId?: string|null}} params
  */
-export async function obterMensagemInicialDoAlerta(alertaId, deps = {}) {
+export async function obterMensagemInicialDoAlerta({ alertaId, contatoEmpresaId = null, contatoId = null }, deps = {}) {
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.from("comunicacao_mensagens")
-    .select("id, status, enviado_em, metadados").eq("idempotency_key", chaveIdempotenciaInicial(alertaId)).maybeSingle();
+    .select("id, status, enviado_em, metadados, contato_empresa_id, contato_id, created_at")
+    .eq("alerta_id", alertaId).eq("direcao", DIRECAO.SAIDA).order("created_at", { ascending: true });
   if (error) throw ApiError.internal(error.message);
-  return data ?? null;
+  return (data ?? []).find((m) => propositoDaMensagem(m) === PROPOSITO.INICIAL && mesmoDestinatario(m, { contatoEmpresaId, contatoId })) ?? null;
+}
+
+/**
+ * Mensagens de SAÍDA de uma empresa desde `desde` — SOMENTE LEITURA (base da simulação administrativa: cooldown, limites e idempotência atuais).
+ * Nunca traz `conteudo`. @param {{organizacaoId: string, desde: Date}} params
+ */
+export async function listarMensagensDaEmpresaDesde({ organizacaoId, desde }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const { data, error } = await db.from("comunicacao_mensagens")
+    .select("id, alerta_id, contato_id, contato_empresa_id, unidade_id, tipo, status, direcao, enviado_em, entrega_incerta_em, claimed_at, created_at, metadados")
+    .eq("organizacao_id", organizacaoId).eq("direcao", DIRECAO.SAIDA).gte("created_at", desde.toISOString());
+  if (error) throw ApiError.internal(error.message);
+  return data ?? [];
 }
 
 // ---------------------------------------------------------------------------

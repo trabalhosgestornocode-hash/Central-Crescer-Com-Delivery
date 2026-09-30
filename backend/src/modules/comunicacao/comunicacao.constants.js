@@ -12,6 +12,16 @@ export const MODOS = Object.freeze({
   DISABLED: "DISABLED",
 });
 
+/**
+ * KILL SWITCH — regra ÚNICA e inequívoca: só NORMAL e REACTIVE_ONLY permitem envio REAL (a política decide o resto). DISABLED — e qualquer valor
+ * desconhecido/corrompido — significa WhatsApp incapaz de realizar envio real: nada chega ao provider (automático, teste controlado, resposta humana).
+ * Vale para a política, a fronteira do provider (whatsapp.service.js) e as pré-checagens do Painel.
+ * @param {unknown} modo
+ */
+export function modoPermiteEnvioReal(modo) {
+  return modo === MODOS.NORMAL || modo === MODOS.REACTIVE_ONLY;
+}
+
 /** Severidade reaproveitada de administrativo.status.js#ROLLUP — nunca uma segunda classificação. */
 export const SEVERIDADE = Object.freeze({
   ATENCAO: "atencao",
@@ -93,6 +103,8 @@ export const RESULTADO_RESERVA = Object.freeze({
   RATE_LIMIT_MINUTO: "RATE_LIMIT_MINUTO",
   /** Camada por ORGANIZAÇÃO: fairness multi-tenant (uma empresa não consome a capacidade das outras). */
   RATE_LIMIT_MINUTO_ORGANIZACAO: "RATE_LIMIT_MINUTO_ORGANIZACAO",
+  /** Camada por ORGANIZAÇÃO / dia (104): todos os destinatários da empresa somados — um alerta nunca vira uma explosão de mensagens só porque a empresa tem N destinatários. */
+  RATE_LIMIT_DIA_ORGANIZACAO: "RATE_LIMIT_DIA_ORGANIZACAO",
 });
 
 /** Motivo gravado em `erro` ao cancelar uma mensagem cujo TTL venceu (CANCELLED + motivo — sem novo status). */
@@ -153,8 +165,12 @@ export const MOTIVOS_BLOQUEIO = Object.freeze({
   SAFE_MODE: "SAFE_MODE",
   PROVIDER_OFFLINE: "PROVIDER_OFFLINE",
   IDENTIDADE_NAO_CONFIRMADA: "IDENTIDADE_NAO_CONFIRMADA",
-  /** Checkpoint H.4-A: telefone fora da allowlist do piloto (comunicacao.piloto.js) — defesa em profundidade, nunca substitui os gates acima. */
+  /** LEGADO (piloto encerrado na migration 104): só para ler o histórico gravado. NENHUM código novo produz este motivo. */
   FORA_DA_ALLOWLIST_PILOTO: "FORA_DA_ALLOWLIST_PILOTO",
+  /** A empresa está habilitada mas o envio AUTOMÁTICO está desligado (opt-in explícito no Painel). Terminal: só uma ação humana muda. */
+  ENVIO_AUTOMATICO_DESLIGADO: "ENVIO_AUTOMATICO_DESLIGADO",
+  /** O destinatário não tem habilitada a categoria de aviso desta mensagem. Terminal. */
+  CATEGORIA_NAO_PERMITIDA: "CATEGORIA_NAO_PERMITIDA",
 });
 
 /**
@@ -181,6 +197,17 @@ export const MOTIVOS_BLOQUEIO_TRANSITORIOS = Object.freeze(new Set([
 
 /** Bloqueio que pode passar sozinho? Motivo desconhecido -> `false` (terminal, o mais conservador). */
 export const bloqueioEhTransitorio = (motivo) => MOTIVOS_BLOQUEIO_TRANSITORIOS.has(motivo);
+
+/**
+ * CATEGORIAS de aviso (catálogo extensível: tabela `comunicacao_categorias`, migration 104). Só o que já existe funcionalmente.
+ * Reforço e aviso tardio são ESTÁGIOS de `pendencia_d1`, não categorias próprias. Cada categoria mapeia UM tipo de alerta.
+ */
+export const CATEGORIAS = Object.freeze({
+  PENDENCIA_D1: "pendencia_d1",
+});
+
+/** Teto padrão de destinatários ATIVOS por empresa — ÚNICO valor no JS; o banco lê `comunicacao_configuracoes.destinatarios` (mesma chave) e o Painel pode alterá-lo. */
+export const LIMITE_PADRAO_DESTINATARIOS_ATIVOS = 5;
 
 /** Fase 1: único monitor ligado (ajuste aprovado — não generalizar ainda). */
 export const TIPOS_ALERTA = Object.freeze({

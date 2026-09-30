@@ -24,7 +24,7 @@ import { normalizarBusca, iniciais } from "../comunicacao/comunicacao.roster.js"
 import * as inboxRepo from "../comunicacao/comunicacao.inbox.repo.js";
 import { metricasInbox } from "../comunicacao/comunicacao.inbox.service.js";
 import * as centralRepo from "../comunicacao/comunicacao.central.repo.js";
-import { telefoneAutorizadoNoPiloto } from "../comunicacao/comunicacao.piloto.js";
+import { modoPermiteEnvioReal } from "../comunicacao/comunicacao.constants.js";
 import { criarWhatsAppServiceDoAmbiente } from "../comunicacao/comunicacao.teste.js";
 import { enviarMensagemManual, normalizarTextoManual, chaveIdempotenciaManual } from "../comunicacao/comunicacao.manual.js";
 import { JANELA_REFORCO, CUTOFF_REFORCO, ESPACAMENTO_MINIMO_HORAS } from "../comunicacao/comunicacao.reforco.js";
@@ -189,7 +189,7 @@ const MENSAGENS_GATE = Object.freeze({
   SEM_CONSENTIMENTO: "Este responsável ainda não teve o consentimento confirmado.",
   NAO_VERIFICADO: "O número deste responsável ainda não foi verificado.",
   OPT_OUT: "Este responsável pediu para não receber mensagens.",
-  FORA_DA_ALLOWLIST: "Este número não está autorizado pelo piloto neste servidor.",
+  MODO_DISABLED: "Envio bloqueado: o módulo WhatsApp está em modo DISABLED. Altere o modo operacional antes de enviar.",
   GATEWAY_INDISPONIVEL: "O WhatsApp não está conectado no momento.",
   CONEXAO_NAO_CONFIRMADA: "A conta do WhatsApp conectada ainda não foi confirmada. Confirme a conta na aba Conexão antes de enviar.",
   WHATSAPP_NAO_CONFIGURADO: "A conexão do backend com o WhatsApp não está configurada.",
@@ -203,7 +203,8 @@ async function avaliarGatesManual(contato, deps) {
   if (contato.consentimento !== true) codigos.push("SEM_CONSENTIMENTO");
   if (contato.verificado !== true) codigos.push("NAO_VERIFICADO");
   if (contato.optOut !== false) codigos.push("OPT_OUT");
-  if (!telefoneAutorizadoNoPiloto(contato.telefoneE164, env)) codigos.push("FORA_DA_ALLOWLIST");
+  // KILL SWITCH: DISABLED bloqueia TODO envio real, inclusive a resposta humana pela Central (sem exceção escondida).
+  if (!modoPermiteEnvioReal(await (deps.modoAtual ?? modoAtual)(deps).catch(() => null))) codigos.push("MODO_DISABLED");
   if (gateway?.estado !== "conectado") codigos.push("GATEWAY_INDISPONIVEL");
   // A conta conectada precisa ser a que o operador CONFIRMOU na aba Conexão (outro número, ou conta pendente, nunca envia). Só banco; fail-closed.
   const confirmada = deps.identidadeConfirmada !== undefined ? deps.identidadeConfirmada : await conexao.identidadeConfirmada(deps);

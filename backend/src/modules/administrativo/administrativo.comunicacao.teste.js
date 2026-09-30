@@ -1,6 +1,6 @@
-// TESTE CONTROLADO — camada do PAINEL ADMINISTRATIVO (H.4-B.5). Só um operador HUMANO autenticado, com confirmação explícita, e só com o modo global
-// em DISABLED (o worker está pulando ciclos: nenhum fluxo operacional coexiste). FAIL-CLOSED em qualquer divergência: se qualquer gate falha, o provider
-// NÃO é chamado. O envio em si (mensagem própria, sem alerta, 1 provider call) é do módulo comunicacao/comunicacao.teste.js.
+// TESTE CONTROLADO — camada do PAINEL ADMINISTRATIVO (H.4-B.5). Só um operador HUMANO autenticado, com confirmação explícita. SEM exceção ao KILL SWITCH:
+// com o modo global em DISABLED nenhum teste real sai (o próprio serviço também o barra na fronteira do provider). FAIL-CLOSED em qualquer divergência: se
+// qualquer gate falha, o provider NÃO é chamado. O envio em si (mensagem própria, sem alerta, 1 provider call) é do módulo comunicacao/comunicacao.teste.js.
 //
 // A mensagem NÃO é uma pendência: nunca cria/altera alerta D-1, nunca toca a mensagem histórica do 1º piloto.
 
@@ -10,8 +10,8 @@ import { auditar, ACOES } from "../../shared/auditoria.js";
 import * as repo from "./administrativo.comunicacao.repo.js";
 import { mascararTelefoneUi, abreviarId } from "./administrativo.comunicacao.central.js";
 import { modoAtual } from "../comunicacao/comunicacao.config.js";
-import { MODOS, STATUS_MENSAGEM } from "../comunicacao/comunicacao.constants.js";
-import { pilotoHabilitado, lerAllowlistPiloto } from "../comunicacao/comunicacao.piloto.js";
+import { STATUS_MENSAGEM, modoPermiteEnvioReal } from "../comunicacao/comunicacao.constants.js";
+import * as contatosEmpresa from "../comunicacao/comunicacao.contatosEmpresa.repo.js";
 import * as filaRepo from "../comunicacao/comunicacao.fila.repo.js";
 import { identidadeConfirmada as lerIdentidadeConfirmada } from "../comunicacao/comunicacao.identidade.js";
 import {
@@ -26,7 +26,7 @@ const lerGateway = (deps) => (deps.estadoGateway !== undefined ? deps.estadoGate
 
 /** Bloqueios possíveis (código estável + mensagem para o gestor). A ORDEM é a ordem de exibição. */
 const MENSAGENS = Object.freeze({
-  MODO_NAO_DISABLED: "O teste só pode ser feito com a automação desativada. Desative a comunicação automática antes de testar.",
+  MODO_DISABLED: "Envio bloqueado: o módulo WhatsApp está em modo DISABLED. Altere o modo operacional antes de realizar um teste real.",
   GATEWAY_INDISPONIVEL: "O WhatsApp não está conectado no momento.",
   CONEXAO_NAO_CONFIRMADA: "A conta do WhatsApp conectada ainda não foi confirmada. Confirme a conta na aba Conexão antes de testar.",
   WHATSAPP_NAO_CONFIGURADO: "A conexão do backend com o WhatsApp não está configurada.",
@@ -35,7 +35,6 @@ const MENSAGENS = Object.freeze({
   SEM_CONSENTIMENTO: "O destinatário ainda não teve o consentimento confirmado.",
   NAO_VERIFICADO: "O número do destinatário ainda não foi verificado.",
   OPT_OUT: "O destinatário pediu para não receber mensagens.",
-  FORA_DA_ALLOWLIST: "O destinatário não está autorizado pelo piloto neste servidor.",
   LIMITE_TESTE_ATINGIDO: "O limite de mensagens reais de teste já foi atingido.",
 });
 
@@ -58,22 +57,21 @@ async function avaliarGates({ organizacaoId, unidadeId }, deps = {}) {
   const org = await repo.obterOrganizacaoComConfiguracao(organizacaoId, deps);
   if (!org) throw ApiError.notFound("Empresa não encontrada.");
   const hab = org.comunicacao_habilitacoes ?? null;
+  // O teste vai ao destinatário PRINCIPAL da empresa (o cadastro de vários destinatários não muda quem recebe o teste).
+  const principal = contatosEmpresa.escolherPrincipal(await contatosEmpresa.listarDaEmpresa(organizacaoId, deps));
   const [modo, gateway, unidades, contato, contabilizadas] = await Promise.all([
     lerModo(deps), lerGateway(deps), repo.listarUnidades({ organizacaoId }, deps),
-    hab?.destinatario_contato_id ? repo.obterContato(hab.destinatario_contato_id, deps) : null,
+    principal?.contato_whatsapp_id ? repo.obterContato(principal.contato_whatsapp_id, deps) : null,
     filaRepo.listarMensagensTesteContabilizadas(deps),
   ]);
   const unidade = unidadeId ? (unidades.find((u) => u.id === unidadeId && u.ativo !== false) ?? null) : unidadePadrao(unidades);
-  const lista = lerAllowlistPiloto(env);
-  const pilotoAtivo = pilotoHabilitado(env);
-  const permitidoNoPiloto = pilotoAtivo && !!contato?.telefone_e164 && lista.includes(contato.telefone_e164);
   const whatsappConfigurado = deps.whatsAppService !== undefined
     ? !!deps.whatsAppService
     : !!String(env.WHATSAPP_GATEWAY_URL ?? "").trim() && !!String(env.WHATSAPP_GATEWAY_SECRET ?? "").trim();
   const limite = limiteTestesReais(env);
 
   const bloqueios = [];
-  if (modo !== MODOS.DISABLED) bloqueios.push("MODO_NAO_DISABLED");
+  if (!modoPermiteEnvioReal(modo)) bloqueios.push("MODO_DISABLED");
   if (gateway.estado !== "conectado") bloqueios.push("GATEWAY_INDISPONIVEL");
   // CONNECTED sozinho não basta: a conta conectada precisa ser a CONFIRMADA na aba Conexão (só banco; fail-closed). Vale para o teste real também.
   const confirmada = deps.identidadeConfirmada !== undefined ? deps.identidadeConfirmada : await lerIdentidadeConfirmada(deps);
@@ -85,10 +83,9 @@ async function avaliarGates({ organizacaoId, unidadeId }, deps = {}) {
     if (contato.consentimento !== true) bloqueios.push("SEM_CONSENTIMENTO");
     if (contato.verificado !== true) bloqueios.push("NAO_VERIFICADO");
     if (contato.opt_out !== false) bloqueios.push("OPT_OUT");
-    if (!permitidoNoPiloto) bloqueios.push("FORA_DA_ALLOWLIST");
   }
   if (contabilizadas.length >= limite) bloqueios.push("LIMITE_TESTE_ATINGIDO");
-  return { org, hab, contato, unidade, unidades, modo, gateway, pilotoAtivo, permitidoNoPiloto, contabilizadas, limite, bloqueios };
+  return { org, hab, principal, contato, unidade, unidades, modo, gateway, contabilizadas, limite, bloqueios };
 }
 
 /** GET /administrativo/comunicacao/teste/preparo?organizacaoId=&unidadeId= — o que o modal mostra (sem telefone completo). */
@@ -103,7 +100,6 @@ export async function preparoTeste({ organizacaoId, unidadeId } = {}, deps = {})
     contato: g.contato ? { telefoneMascarado: mascararTelefoneUi(g.contato.telefone_e164), consentimento: g.contato.consentimento === true, verificado: g.contato.verificado === true, optOut: g.contato.opt_out === true } : null,
     whatsapp: g.gateway.estado,
     modo: g.modo,
-    piloto: { ativo: g.pilotoAtivo, destinatarioPermitido: g.permitidoNoPiloto },
     limite: { usados: g.contabilizadas.length, maximo: g.limite },
     previewTexto: textoDoTeste(g.unidade?.nome),
     podeEnviar: g.bloqueios.length === 0,
@@ -148,7 +144,7 @@ export async function enviarTeste({ organizacaoId, unidadeId, testeId, confirmac
   let r;
   try {
     r = await enviarMensagemTeste({
-      testeId: tid, organizacaoId: orgId, unidadeId: uniId, contatoId: g.contato.id, destinatarioPerfilId: g.hab?.destinatario_perfil_id ?? null, contatoEmpresaId: g.hab?.destinatario_contato_empresa_id ?? null,
+      testeId: tid, organizacaoId: orgId, unidadeId: uniId, contatoId: g.contato.id, destinatarioPerfilId: g.principal?.perfil_operacional_id ?? null, contatoEmpresaId: g.principal?.id ?? null,
       telefoneE164: g.contato.telefone_e164, texto: textoDoTeste(g.unidade.nome), atorPerfilId: autor.perfilId ?? null,
       limite: g.limite, whatsAppService, modoAtual: () => lerModo(deps),
       aoIniciar: (mensagemId) => auditar({ ...base, acao: ACOES.COMUNICACAO_TESTE_INICIADO, entidade: "comunicacao_mensagens", entidadeId: mensagemId, organizacaoId: orgId, detalhes: detalhesBase }),
@@ -160,7 +156,7 @@ export async function enviarTeste({ organizacaoId, unidadeId, testeId, confirmac
 
   if (r.resultado === "JA_EXISTIA") return { mensagemId: r.mensagemId, status: r.status, resultado: "JA_EXISTIA", jaExistia: true };
   if (r.resultado === "LIMITE_ATINGIDO") throw conflito(MENSAGENS.LIMITE_TESTE_ATINGIDO, "LIMITE_TESTE_ATINGIDO");
-  if (r.resultado === "MODO_NAO_PERMITIDO") throw conflito(MENSAGENS.MODO_NAO_DISABLED, "MODO_NAO_DISABLED");
+  if (r.resultado === "MODO_NAO_PERMITIDO") throw conflito(MENSAGENS.MODO_DISABLED, "MODO_DISABLED");
   if (r.resultado === "POSSE_PERDIDA") throw conflito("O envio deste teste já está em andamento.", "TESTE_EM_ANDAMENTO");
 
   if (r.resultado === "ENVIADO") {

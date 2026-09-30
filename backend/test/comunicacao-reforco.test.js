@@ -127,6 +127,10 @@ describe("templates", () => {
 
 // ---------------------------------------------------------------------------
 // supabase FALSO em memória (só o que o scheduler/DUPLICATE usam)
+const DESTINATARIOS_PADRAO = [{ contato_empresa_id: "ce1", contato_id: "c1", perfil_id: null, nome: "João", telefone: "+5562991234567", elegivel: true, motivo: null }];
+const destinatarios = (lista) => async () => lista;
+/** chamadas à RPC de AGENDAMENTO (a resolução de destinatários também passa pelo fake e não conta aqui) */
+const agendamentos = (db) => db.chamadas.filter((c) => c.nome === "comunicacao_agendar_mensagens_alerta");
 function fakeDb({ alertas = [], mensagens = [], configs = {}, rpcs = {} } = {}) {
   const tabelas = {
     comunicacao_alertas: alertas, comunicacao_mensagens: mensagens,
@@ -137,7 +141,7 @@ function fakeDb({ alertas = [], mensagens = [], configs = {}, rpcs = {} } = {}) 
     const filtros = [];
     const linhas = () => (tabelas[tabela] ?? []).filter((r) => filtros.every((f) => f(r)));
     const b = {
-      select() { return b; }, limit() { return b; },
+      select() { return b; }, limit() { return b; }, order() { return b; },
       eq(k, v) { filtros.push((r) => r[k] === v); return b; },
       neq(k, v) { filtros.push((r) => r[k] !== v); return b; },
       in(k, vs) { filtros.push((r) => vs.includes(r[k])); return b; },
@@ -146,12 +150,16 @@ function fakeDb({ alertas = [], mensagens = [], configs = {}, rpcs = {} } = {}) 
     };
     return b;
   };
-  const rpc = async (nome, args) => { chamadas.push({ nome, args }); return rpcs[nome](args); };
+  const rpc = async (nome, args) => {
+    chamadas.push({ nome, args });
+    if (!rpcs[nome] && nome === "comunicacao_resolver_destinatarios") return { data: DESTINATARIOS_PADRAO, error: null };
+    return rpcs[nome](args);
+  };
   return { supabase: { from, rpc }, chamadas };
 }
 
 const HAB_OK = async () => ({
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null,
   destinatarioContatoId: "c1", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "p1", timezone: TZ, janelas: null, configHorarioValida: true,
 });
 const alerta = (extra = {}) => ({
@@ -159,14 +167,18 @@ const alerta = (extra = {}) => ({
   data_referencia: "2026-09-15", metadados: { unidade_nome: "Loja X" }, ...extra,
 });
 const inicial = (extra = {}) => ({
-  id: "m1", alerta_id: "a1", idempotency_key: "wa:alerta:a1:v1", status: "SENT", enviado_em: QUA("17:00").toISOString(), metadados: {}, ...extra,
+  id: "m1", alerta_id: "a1", direcao: "saida", contato_empresa_id: "ce1", contato_id: "c1", idempotency_key: "wa:alerta:a1:dest:ce1:v1", status: "SENT", enviado_em: QUA("17:00").toISOString(), metadados: {}, ...extra,
 });
 const rpcCriaUmaVez = () => {
   const vistas = new Set();
-  return { comunicacao_agendar_reforco_alerta: async (a) => {
-    if (vistas.has(a.p_idempotency_key)) return { data: { acao: "JA_EXISTIA" }, error: null };
-    vistas.add(a.p_idempotency_key);
-    return { data: { acao: "CRIADA", mensagem_id: "r1" }, error: null };
+  return { comunicacao_agendar_mensagens_alerta: async (a) => {
+    const itens = a.p_itens.map((it) => {
+      const chave = `${a.p_alerta_id}|${it.contato_empresa_id}|${a.p_proposito}`;
+      if (vistas.has(chave)) return { contato_empresa_id: it.contato_empresa_id, acao: "JA_EXISTIA" };
+      vistas.add(chave);
+      return { contato_empresa_id: it.contato_empresa_id, acao: "CRIADA", mensagem_id: `r-${it.contato_empresa_id}` };
+    });
+    return { data: { acao: "OK", criadas: itens.filter((x) => x.acao === "CRIADA").length, itens }, error: null };
   } };
 };
 const rodar = (db, agora, extra = {}) => agendarReforcosPendentes({ agora, resolverHabilitacao: HAB_OK, ...extra }, { supabase: db.supabase });
@@ -177,11 +189,14 @@ describe("agendarReforcosPendentes — scheduler (Política B)", () => {
     const agora = QUA("20:30");
     const r = await rodar(db, agora);
     assert.equal(r.agendados, 1, JSON.stringify(r));
-    const { args } = db.chamadas[0];
-    assert.equal(args.p_idempotency_key, "wa:alerta:a1:reforco:v1");
-    assert.ok(new Date(args.p_disponivel_em) >= agora && new Date(args.p_disponivel_em) < QUA("22:00"));
-    assert.equal(args.p_expira_em, QUA("22:30").toISOString());
-    assert.match(args.p_conteudo, /^Último lembrete de hoje/);
+    const { args } = agendamentos(db)[0];
+    assert.equal(args.p_proposito, "reforco", "o propósito (e portanto a chave por destinatário) é definido no banco, nunca pelo chamador");
+    assert.equal(args.p_itens.length, 1);
+    const item = args.p_itens[0];
+    assert.equal(item.contato_empresa_id, "ce1");
+    assert.ok(new Date(item.disponivel_em) >= agora && new Date(item.disponivel_em) < QUA("22:00"));
+    assert.equal(item.expira_em, QUA("22:30").toISOString());
+    assert.match(item.conteudo, /^Último lembrete de hoje/);
   });
 
   test("espaçamento próprio: 1ª às 15:00 e às 18:00 -> elegível; 1ª às 19:00 (1h30 antes de 20:30) -> aguarda", async () => {
@@ -207,14 +222,14 @@ describe("agendarReforcosPendentes — scheduler (Política B)", () => {
       const r = await rodar(db, QUA(hhmm));
       assert.equal(r.agendados, 0, hhmm);
       assert.equal(r.foraDaJanelaReforco, 1);
-      assert.equal(db.chamadas.length, 0);
+      assert.equal(agendamentos(db).length, 0);
     }
   });
 
   test("domingo -> não cria; sábado -> cria (D-1 = sexta)", async () => {
     const dom = fakeDb({ alertas: [alerta({ data_referencia: "2026-09-19" })], mensagens: [inicial({ enviado_em: DOM("17:00").toISOString() })], rpcs: rpcCriaUmaVez() });
     assert.equal((await rodar(dom, DOM("20:30"))).agendados, 0);
-    assert.equal(dom.chamadas.length, 0);
+    assert.equal(agendamentos(dom).length, 0);
     const sab = fakeDb({ alertas: [alerta({ data_referencia: "2026-09-18" })], mensagens: [inicial({ enviado_em: SAB("17:00").toISOString() })], rpcs: rpcCriaUmaVez() });
     assert.equal((await rodar(sab, SAB("20:30"))).agendados, 1);
   });
@@ -225,11 +240,11 @@ describe("agendarReforcosPendentes — scheduler (Política B)", () => {
       const r = await rodar(db, QUA("20:30"));
       assert.equal(r.agendados, 0, data);
       assert.equal(r.foraDoPrazoD1, 1);
-      assert.equal(db.chamadas.length, 0);
+      assert.equal(agendamentos(db).length, 0);
     }
     const outro = fakeDb({ alertas: [alerta({ tipo_alerta: "outro_tipo" })], mensagens: [inicial()], rpcs: rpcCriaUmaVez() });
     assert.equal((await rodar(outro, QUA("20:30"), { tipoAlerta: "outro_tipo" })).agendados, 0);
-    assert.equal(outro.chamadas.length, 0);
+    assert.equal(agendamentos(outro).length, 0);
   });
 
   test("1ª mensagem inexistente / não enviada / incerta / de outro dia -> não cria", async () => {
@@ -244,42 +259,84 @@ describe("agendarReforcosPendentes — scheduler (Política B)", () => {
       const r = await rodar(db, QUA("20:30"));
       assert.equal(r.agendados, 0);
       assert.equal(r[campo], 1, campo);
-      assert.equal(db.chamadas.length, 0);
+      assert.equal(agendamentos(db).length, 0);
     }
   });
 
-  test("só alertas SENT/DELIVERED/READ são candidatos", async () => {
-    for (const status of ["DETECTED", "SCHEDULED", "PROCESSING", "BLOCKED", "FAILED", "RESPONDED"]) {
+  test("só alertas SCHEDULED (há inicial a caminho de OUTRO destinatário)/SENT/DELIVERED/READ são candidatos — o reforço de cada destinatário depende da inicial DELE", async () => {
+    for (const status of ["DETECTED", "PROCESSING", "BLOCKED", "FAILED", "RESPONDED"]) {
       const db = fakeDb({ alertas: [alerta({ status })], mensagens: [inicial()], rpcs: rpcCriaUmaVez() });
       assert.equal((await rodar(db, QUA("20:30"))).agendados, 0, status);
-      assert.equal(db.chamadas.length, 0);
+      assert.equal(agendamentos(db).length, 0);
     }
-    for (const status of ["DELIVERED", "READ"]) {
+    for (const status of ["SCHEDULED", "DELIVERED", "READ"]) {
       const db = fakeDb({ alertas: [alerta({ status })], mensagens: [inicial()], rpcs: rpcCriaUmaVez() });
       assert.equal((await rodar(db, QUA("20:30"))).agendados, 1, status);
     }
   });
 
-  test("organização desabilitada / tipo não permitido / pausada / sem destinatário -> não cria", async () => {
+  test("organização desabilitada / tipo não permitido / pausada / envio automático desligado / sem destinatário -> não cria", async () => {
     const base = await HAB_OK();
     for (const [hab, campo] of [
       [{ empresaHabilitada: false }, "semHabilitacao"], [{ tipoPermitido: false }, "semHabilitacao"],
-      [{ empresaPausada: true }, "empresaPausada"], [{ destinatarioContatoId: null }, "semDestinatario"],
-      [{ destinatarioContatoEmpresaId: null }, "semDestinatario"],
+      [{ empresaPausada: true }, "empresaPausada"], [{ envioAutomatico: false }, "envioAutomaticoDesligado"],
     ]) {
       const db = fakeDb({ alertas: [alerta()], mensagens: [inicial()], rpcs: rpcCriaUmaVez() });
       const r = await rodar(db, QUA("20:30"), { resolverHabilitacao: async () => ({ ...base, ...hab }) });
       assert.equal(r.agendados, 0);
       assert.equal(r[campo], 1, campo);
-      assert.equal(db.chamadas.length, 0);
+      assert.equal(agendamentos(db).length, 0);
     }
+    // sem NENHUM destinatário / nenhum elegível
+    for (const [lista, campo] of [[[], "semDestinatario"], [[{ ...DESTINATARIOS_PADRAO[0], elegivel: false, motivo: "OPT_OUT" }], "destinatarioInelegivel"]]) {
+      const db = fakeDb({ alertas: [alerta()], mensagens: [inicial()], rpcs: rpcCriaUmaVez() });
+      const r = await rodar(db, QUA("20:30"), { resolverDestinatarios: async () => lista });
+      assert.equal(r.agendados, 0);
+      assert.equal(r[campo], 1, campo);
+      assert.equal(agendamentos(db).length, 0);
+    }
+  });
+
+  test("VÁRIOS destinatários: cada reforço depende só da inicial DELE (João enviado + Maria com inicial pendente -> só o João)", async () => {
+    const lista = [
+      { contato_empresa_id: "ce1", contato_id: "c1", nome: "João", telefone: "+5562991234567", elegivel: true, motivo: null },
+      { contato_empresa_id: "ce2", contato_id: "c2", nome: "Maria", telefone: "+5562991234568", elegivel: true, motivo: null },
+      { contato_empresa_id: "ce3", contato_id: "c3", nome: "Pedro", telefone: "+5562991234569", elegivel: true, motivo: null },
+    ];
+    const db = fakeDb({
+      alertas: [alerta({ status: "SCHEDULED" })],
+      mensagens: [
+        inicial(),
+        inicial({ id: "m2", contato_empresa_id: "ce2", contato_id: "c2", status: "SCHEDULED", enviado_em: null }),
+        inicial({ id: "m3", contato_empresa_id: "ce3", contato_id: "c3", status: "FAILED", enviado_em: null }),
+      ],
+      rpcs: rpcCriaUmaVez(),
+    });
+    const r = await rodar(db, QUA("20:30"), { resolverDestinatarios: async () => lista });
+    assert.equal(r.agendados, 1);
+    assert.equal(r.primeiraNaoEnviada, 2, "a inicial pendente/falha de outro destinatário não impede o reforço do João, e vice-versa");
+    assert.deepEqual(agendamentos(db)[0].args.p_itens.map((i) => i.contato_empresa_id), ["ce1"]);
+  });
+
+  test("VÁRIOS destinatários enviados: um reforço POR destinatário, com horários próprios (jitter por destinatário)", async () => {
+    const lista = ["ce1", "ce2", "ce3"].map((id, n) => ({ contato_empresa_id: id, contato_id: `c${n + 1}`, nome: id, telefone: `+55629912345${n}0`, elegivel: true, motivo: null }));
+    const db = fakeDb({
+      alertas: [alerta()],
+      mensagens: lista.map((d, n) => inicial({ id: `m${n}`, contato_empresa_id: d.contato_empresa_id, contato_id: d.contato_id })),
+      rpcs: rpcCriaUmaVez(),
+    });
+    const r = await rodar(db, QUA("20:30"), { resolverDestinatarios: async () => lista });
+    assert.equal(r.agendados, 3);
+    assert.equal(agendamentos(db).length, 1, "UMA chamada transacional por alerta");
+    const horarios = agendamentos(db)[0].args.p_itens.map((i) => i.disponivel_em);
+    assert.ok(new Set(horarios).size >= 2, "os reforços não devem cair todos no mesmo instante");
   });
 
   test("timezone/janelas inválidos -> configInvalida, nada é criado (fail-closed)", async () => {
     const db = fakeDb({ alertas: [alerta()], mensagens: [inicial()], rpcs: rpcCriaUmaVez() });
     const r = await rodar(db, QUA("20:30"), { resolverHabilitacao: async () => ({ ...(await HAB_OK()), configHorarioValida: false }) });
     assert.equal(r.configInvalida, 1);
-    assert.equal(db.chamadas.length, 0);
+    assert.equal(agendamentos(db).length, 0);
   });
 
   test("restart e duas instâncias do scheduler -> 1 CRIADA, o resto JA_EXISTIA, mesma chave e mesmo horário", async () => {
@@ -289,7 +346,7 @@ describe("agendarReforcosPendentes — scheduler (Política B)", () => {
     const rs = await Promise.all(dbs.map((d) => rodar(d, agora)));
     assert.equal(rs.reduce((n, r) => n + r.agendados, 0), 1);
     assert.equal(rs.reduce((n, r) => n + r.jaExistiam, 0), 4);
-    assert.equal(new Set(dbs.map((d) => d.chamadas[0].args.p_disponivel_em)).size, 1, "jitter determinístico: mesmo alerta -> mesmo horário");
+    assert.equal(new Set(dbs.map((d) => agendamentos(d)[0].args.p_itens[0].disponivel_em)).size, 1, "jitter determinístico: mesmo alerta -> mesmo horário");
     // restart no meio da janela (20:30 -> 21:15): nenhum segundo reforço
     const restart = await rodar(fakeDb({ alertas: [alerta()], mensagens: [inicial()], rpcs }), QUA("21:15"));
     assert.equal(restart.agendados, 0);
@@ -297,9 +354,14 @@ describe("agendarReforcosPendentes — scheduler (Política B)", () => {
   });
 
   test("respostas de recusa do banco viram contadores, nunca exceção", async () => {
-    for (const [acao, campo] of [["ENTREGA_EM_CURSO", "entregaEmCurso"], ["NAO_HABILITADA", "semHabilitacao"], ["SEM_DESTINATARIO", "semDestinatario"],
-      ["DESTINATARIO_INELEGIVEL", "destinatarioInelegivel"], ["PRIMEIRA_MENSAGEM_NAO_ENVIADA", "primeiraNaoEnviada"], ["CHAVE_INVALIDA", "ignorados"]]) {
-      const db = fakeDb({ alertas: [alerta()], mensagens: [inicial()], rpcs: { comunicacao_agendar_reforco_alerta: async () => ({ data: { acao }, error: null }) } });
+    for (const [acao, campo] of [["NAO_HABILITADA", "semHabilitacao"], ["TIPO_NAO_PERMITIDO", "semHabilitacao"], ["ENVIO_AUTOMATICO_DESLIGADO", "envioAutomaticoDesligado"],
+      ["ALERTA_SEM_PRIMEIRO_ENVIO", "ignorados"], ["ALERTA_INEXISTENTE", "ignorados"]]) {
+      const db = fakeDb({ alertas: [alerta()], mensagens: [inicial()], rpcs: { comunicacao_agendar_mensagens_alerta: async () => ({ data: { acao }, error: null }) } });
+      assert.equal((await rodar(db, QUA("20:30")))[campo], 1, acao);
+    }
+    for (const [acao, campo] of [["DESTINATARIO_INELEGIVEL", "destinatarioInelegivel"], ["DESTINATARIO_INEXISTENTE", "destinatarioInelegivel"], ["PRIMEIRA_MENSAGEM_NAO_ENVIADA", "primeiraNaoEnviada"],
+      ["JA_EXISTIA", "jaExistiam"], ["ITEM_INVALIDO", "ignorados"]]) {
+      const db = fakeDb({ alertas: [alerta()], mensagens: [inicial()], rpcs: { comunicacao_agendar_mensagens_alerta: async () => ({ data: { acao: "OK", criadas: 0, itens: [{ contato_empresa_id: "ce1", acao }] }, error: null }) } });
       assert.equal((await rodar(db, QUA("20:30")))[campo], 1, acao);
     }
   });

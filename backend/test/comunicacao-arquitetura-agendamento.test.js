@@ -69,7 +69,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 101 = iFood Events (eventos, pedidos mínimos e lease do poller): domínio próprio do iFood, sem tocar a comunicação.
       "101_ifood_eventos.sql", "101_rollback.sql",
       "102_ifood_pedidos_detalhes_confirm.sql", "102_rollback.sql",
-      "103_ifood_order_actions.sql", "103_rollback.sql"];
+      "103_ifood_order_actions.sql", "103_rollback.sql",
+      // 104 = fim do piloto: envio automático opt-in, vários destinatários por empresa (idempotência/cooldown por destinatário), categorias e status agregado do alerta.
+      "104_comunicacao_destinatarios_multiplos.sql", "104_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

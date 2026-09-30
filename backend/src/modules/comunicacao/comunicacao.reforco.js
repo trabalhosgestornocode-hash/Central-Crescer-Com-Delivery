@@ -56,8 +56,15 @@ export const MOTIVO_REFORCO = Object.freeze({
   ESPACAMENTO_INSUFICIENTE: "REFORCO_ESPACAMENTO_INSUFICIENTE",
 });
 
+/** LEGADAS (uma mensagem por alerta, pré-104): continuam reconhecidas no histórico; NUNCA criam mensagem nova. */
 export const chaveIdempotenciaInicial = (alertaId) => `wa:alerta:${alertaId}:v1`;
 export const chaveIdempotenciaReforco = (alertaId) => `wa:alerta:${alertaId}:reforco:v1`;
+/**
+ * Chave de idempotência POR DESTINATÁRIO (104) — a MESMA que o banco deriva em comunicacao_agendar_mensagens_alerta (alerta + destinatário + propósito).
+ * Aqui serve ao jitter determinístico e ao diagnóstico; quem GRAVA a chave é o banco.
+ */
+export const chaveIdempotenciaDestinatario = ({ alertaId, contatoEmpresaId, proposito = PROPOSITO.INICIAL }) =>
+  `wa:alerta:${alertaId}:dest:${contatoEmpresaId}${proposito === PROPOSITO.REFORCO ? ":reforco:v1" : ":v1"}`;
 
 /** Propósito de uma linha de `comunicacao_mensagens` (sem metadados = inicial, compatibilidade histórica). */
 export const propositoDaMensagem = (mensagem) => (mensagem?.metadados?.proposito === PROPOSITO.REFORCO ? PROPOSITO.REFORCO : PROPOSITO.INICIAL);

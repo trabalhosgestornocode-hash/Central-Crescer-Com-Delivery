@@ -28,6 +28,8 @@ const whatsAppService = criarWhatsAppService({
   provider: criarBaileysGatewayProvider({ gatewayUrl: config.gatewayUrl, segredoHmac: config.segredoHmac }),
   // O worker/automação só envia com a conta CONFIRMADA na aba Conexão (mesma regra do envio manual). Sem confirmação: provider = 0.
   identidadeConfirmada: criarGateIdentidade({ env: process.env }),
+  // KILL SWITCH também na fronteira do provider: modo DISABLED ⇒ nenhuma chamada ao provider, mesmo por um caminho inesperado.
+  modoAtual,
 });
 
 const loop = criarLoopWorker({

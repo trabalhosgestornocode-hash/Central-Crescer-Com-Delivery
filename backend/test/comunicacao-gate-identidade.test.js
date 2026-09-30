@@ -20,7 +20,7 @@ const TEL_B = "+5511911112222";
 
 const BASE = (o = {}) => ({
   modo: MODOS.NORMAL, ehProativo: true, contatoExiste: true, telefoneVerificado: true, optOut: false, consentimento: true, destinatarioAtivo: true, vinculoValido: true,
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, configHorarioValida: true, pendenciaAindaExiste: true, duplicado: false, cooldownAtivo: false,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, categoriaPermitida: true, empresaPausada: false, configHorarioValida: true, pendenciaAindaExiste: true, duplicado: false, cooldownAtivo: false,
   dentroDaJanela: true, rateLimitExcedido: false, providerConectado: true, identidadeConfirmada: true, telefoneNaAllowlistPiloto: true, ...o,
 });
 
@@ -64,7 +64,7 @@ describe("política: identidadeConfirmada é obrigatória (fail-closed, proativo
 describe("WhatsAppService: nenhum envio chega ao provider sem conta confirmada (provider = 0)", () => {
   test("recusa no último gate é pré-envio comprovado, nunca entrega incerta", async () => {
     const { p, chamadas } = providerFalso();
-    const s = criarWhatsAppService({ provider: p, identidadeConfirmada: async () => false });
+    const s = criarWhatsAppService({ semGateModo: true, provider: p, identidadeConfirmada: async () => false });
     await assert.rejects(() => s.enviarTexto(envio), (e) => {
       assert.equal(e.preEnvio, true);
       assert.equal(classificarErroEnvio(e), "RETRYAVEL");
@@ -74,7 +74,7 @@ describe("WhatsAppService: nenhum envio chega ao provider sem conta confirmada (
   });
   test("sem gate injetado ⇒ FAIL-CLOSED: texto, imagem e documento são recusados", async () => {
     const { p, chamadas } = providerFalso();
-    const s = criarWhatsAppService({ provider: p });
+    const s = criarWhatsAppService({ semGateModo: true, provider: p });
     for (const f of [() => s.enviarTexto(envio), () => s.enviarImagem(envio), () => s.enviarDocumento(envio)]) await assert.rejects(f, IdentidadeNaoConfirmadaError);
     assert.equal(chamadas.length, 0);
     assert.equal(await s.identidadeConfirmada(), false);
@@ -82,20 +82,20 @@ describe("WhatsAppService: nenhum envio chega ao provider sem conta confirmada (
   test("gate false / lança / devolve valor não-booleano ⇒ recusa, provider = 0", async () => {
     for (const gate of [async () => false, async () => { throw new Error("banco fora"); }, async () => "true", async () => 1, async () => undefined, () => null]) {
       const { p, chamadas } = providerFalso();
-      const s = criarWhatsAppService({ provider: p, identidadeConfirmada: gate });
+      const s = criarWhatsAppService({ semGateModo: true, provider: p, identidadeConfirmada: gate });
       await assert.rejects(() => s.enviarTexto(envio), (e) => e instanceof IdentidadeNaoConfirmadaError && e.code === "CONEXAO_NAO_CONFIRMADA");
       assert.equal(chamadas.length, 0);
     }
   });
   test("gate true ⇒ exatamente UMA chamada ao provider por envio", async () => {
     const { p, chamadas } = providerFalso();
-    const s = criarWhatsAppService({ provider: p, identidadeConfirmada: async () => true });
+    const s = criarWhatsAppService({ semGateModo: true, provider: p, identidadeConfirmada: async () => true });
     await s.enviarTexto(envio); await s.enviarImagem(envio); await s.enviarDocumento(envio);
     assert.deepEqual(chamadas.map((c) => c[0]), ["texto", "imagem", "documento"]);
   });
   test("o gate é reavaliado A CADA envio (troca de conta no meio de um lote bloqueia o resto)", async () => {
     const { p, chamadas } = providerFalso(); let ok = true;
-    const s = criarWhatsAppService({ provider: p, identidadeConfirmada: async () => ok });
+    const s = criarWhatsAppService({ semGateModo: true, provider: p, identidadeConfirmada: async () => ok });
     await s.enviarTexto(envio); ok = false;
     await assert.rejects(() => s.enviarTexto(envio), IdentidadeNaoConfirmadaError);
     assert.equal(chamadas.length, 1);
@@ -103,7 +103,7 @@ describe("WhatsAppService: nenhum envio chega ao provider sem conta confirmada (
   test("a recusa ocorre ANTES de qualquer efeito colateral no provider (não chama nem getStatus/connect)", async () => {
     const { p } = providerFalso(); let tocou = 0;
     const p2 = new Proxy(p, { get: (t, k) => (typeof t[k] === "function" ? (...a) => { tocou += 1; return t[k](...a); } : t[k]) });
-    const s = criarWhatsAppService({ provider: p2, identidadeConfirmada: async () => false });
+    const s = criarWhatsAppService({ semGateModo: true, provider: p2, identidadeConfirmada: async () => false });
     const antes = tocou;
     await assert.rejects(() => s.enviarTexto(envio), IdentidadeNaoConfirmadaError);
     assert.equal(tocou, antes);
@@ -173,8 +173,8 @@ describe("regra de identidade: vinculada à CONTA concreta (hash), não a um boo
   });
   test("criarGateIdentidade devolve uma função que integra com o WhatsAppService (ponta a ponta)", async () => {
     const { p, chamadas } = providerFalso();
-    const ok = criarWhatsAppService({ provider: p, identidadeConfirmada: criarGateIdentidade(deps(conexao(), identidade())) });
-    const bloq = criarWhatsAppService({ provider: p, identidadeConfirmada: criarGateIdentidade(deps(conexao({ telefone_e164: TEL_B }), identidade())) });
+    const ok = criarWhatsAppService({ semGateModo: true, provider: p, identidadeConfirmada: criarGateIdentidade(deps(conexao(), identidade())) });
+    const bloq = criarWhatsAppService({ semGateModo: true, provider: p, identidadeConfirmada: criarGateIdentidade(deps(conexao({ telefone_e164: TEL_B }), identidade())) });
     await ok.enviarTexto(envio);
     await assert.rejects(() => bloq.enviarTexto(envio), IdentidadeNaoConfirmadaError);
     assert.equal(chamadas.length, 1);

@@ -41,7 +41,7 @@ const AGORA_UTIL = new Date("2026-09-16T13:00:00Z");
 // Domingo 20/09/2026 10:00 em Fortaleza — sem expediente.
 const AGORA_DOMINGO = new Date("2026-09-20T13:00:00Z");
 const HABILITADA = async () => ({
-  empresaHabilitada: true, tipoPermitido: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
+  empresaHabilitada: true, tipoPermitido: true, envioAutomatico: true, empresaPausada: false, pausadoAte: null, pausadoMotivo: null,
   destinatarioContatoId: "contato-de-teste", destinatarioContatoEmpresaId: "ce-de-teste", destinatarioPerfilId: "perfil-de-teste",
   timezone: "America/Fortaleza", janelas: null, configHorarioValida: true, fonte: "TESTE",
 });
@@ -129,7 +129,7 @@ function criarProviderComSpy() {
   const chamadas = [];
   const original = provider.sendText.bind(provider);
   provider.sendText = async (args) => { chamadas.push(args); return original(args); };
-  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true }) };
+  return { provider, chamadas, whatsAppService: criarWhatsAppService({ provider, semGateIdentidade: true, semGateModo: true }) };
 }
 
 const lote = (whatsAppService, extra = {}) => processarProximoLote({
@@ -413,7 +413,7 @@ describe("D.3 — bloqueio TRANSITÓRIO adia (não vira BLOCKED terminal)", { sk
     for (const gate of [async () => false, null, async () => { throw new Error("banco fora"); }]) {
       const provider = criarFakeProvider(); const chamadas = [];
       provider.sendText = async (a) => { chamadas.push(a); return { providerMessageId: "X" }; };
-      const whatsAppService = criarWhatsAppService({ provider, identidadeConfirmada: gate });
+      const whatsAppService = criarWhatsAppService({ semGateModo: true, provider, identidadeConfirmada: gate });
       const msg = await esperarAdiado(par, "IDENTIDADE_NAO_CONFIRMADA", {}, { chamadas, whatsAppService });
       assert.equal(msg.tentativas, 0, "adiar não consome tentativa");
       await supabase.from("comunicacao_mensagens").update({ disponivel_em: new Date(Date.now() - 1000).toISOString() }).eq("id", par.job.id);
@@ -422,7 +422,7 @@ describe("D.3 — bloqueio TRANSITÓRIO adia (não vira BLOCKED terminal)", { sk
     const provider = criarFakeProvider(); const chamadas = [];
     const original = provider.sendText.bind(provider);
     provider.sendText = async (a) => { chamadas.push(a); return original(a); };
-    const resultados = await lote(criarWhatsAppService({ provider, identidadeConfirmada: async () => true }));
+    const resultados = await lote(criarWhatsAppService({ semGateModo: true, provider, identidadeConfirmada: async () => true }));
     assert.equal(resultados.find((r) => r.id === par.job.id)?.resultado, "ENVIADO");
     assert.equal(chamadas.length, 1);
     await limpar(par);
