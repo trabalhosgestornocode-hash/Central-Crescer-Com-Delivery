@@ -19,6 +19,7 @@ import {
   derivarFontesConciliacao, derivarPendenciasHomologacao,
   saudeSalesVsEvents, saudeEventsVsSettlements, saudeSettlementsVsReconciliation,
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
+  rotuloStatusPedido, rotuloTipoPedido,
 } from "./ifoodEstado.js";
 
 const IFOOD_LOGO = "/assets/menu-dashboard-ifood.png";
@@ -29,6 +30,7 @@ const estado = {
   carregando: false,
   wizard: null,   // { etapa, appType, sessionId, userCode, verificationUrlComplete, expiraEm, timer, feito:{analytics,financial}, selecao }
   financeiro: null, // { inicio, fim, page, carregando, resultado, erro } — Homologação Financeira (Sales)
+  pedidos: null,    // { carregando, lista, erro, consultadoEm } — tela Pedidos iFood (leitura do banco local)
 };
 
 // Fase F (auditoria de troca de contexto): trocar de unidade pelo seletor
@@ -41,6 +43,7 @@ registrarResetDeContexto(() => {
   estado.statusErro = null;
   estado.wizard = null;
   estado.financeiro = null; // nunca deixa dado financeiro de uma unidade vazar pra outra
+  estado.pedidos = null;    // idem para os pedidos
 });
 
 // ---------------------------------------------------------------------------
@@ -173,6 +176,14 @@ function pintarPainel() {
         <div class="ifood-acoes">${acoes.join("") || '<span class="ifood-tudo-ok">Integração conectada. Sincronização de dados chega em uma próxima fase.</span>'}</div>
       </div>
 
+      ${e.merchant ? `
+        <div class="ifood-card">
+          <div class="ifood-secao-rotulo">Pedidos iFood</div>
+          <p class="ifood-instrucao">Pedidos recebidos da loja vinculada, com o status oficial informado pelo iFood.</p>
+          <button class="btn btn-ghost" id="ifood-abrir-pedidos">Ver pedidos iFood</button>
+        </div>
+      ` : ""}
+
       ${e.apps.financial.conectado && e.merchant ? `
         <div class="ifood-card">
           <div class="ifood-secao-rotulo">Homologação Financeira</div>
@@ -184,6 +195,94 @@ function pintarPainel() {
 
   ligarAcoesDoPainel();
   el("#ifood-abrir-financeiro")?.addEventListener("click", abrirFinanceiro);
+  el("#ifood-abrir-pedidos")?.addEventListener("click", abrirPedidos);
+}
+
+// ---------------------------------------------------------------------------
+// Pedidos iFood — só leitura. O status exibido é o OFICIAL (muda só por evento do iFood);
+// nenhuma ação (confirmar/despachar/cancelar) é disparada desta tela.
+// ---------------------------------------------------------------------------
+function abrirPedidos() {
+  estado.pedidos = { carregando: false, lista: null, erro: null, consultadoEm: null };
+  carregarPedidos();
+}
+
+function fecharPedidos() {
+  estado.pedidos = null;
+  pintarPainel();
+}
+
+async function carregarPedidos() {
+  const p = estado.pedidos;
+  if (!p) return;
+  p.carregando = true;
+  p.erro = null;
+  pintarPedidos();
+  try {
+    const { data } = await api.ifoodPedidos();
+    if (estado.pedidos !== p) return;               // saiu da tela / trocou de unidade no meio
+    p.lista = data?.pedidos ?? [];
+    p.consultadoEm = new Date().toISOString();
+  } catch (e) {
+    if (estado.pedidos !== p) return;
+    p.erro = e?.message || "Não foi possível carregar os pedidos iFood.";
+  } finally {
+    p.carregando = false;
+  }
+  pintarPedidos();
+}
+
+function linhaPedido(p) {
+  const st = rotuloStatusPedido(p.status);
+  return `
+    <tr data-order-id="${esc(p.orderId)}">
+      <td><strong>#${esc(p.displayId ?? "—")}</strong>${p.isTest ? ' <span class="pill muted">Teste</span>' : ""}</td>
+      <td class="ifood-pedido-id">${esc(p.orderId)}</td>
+      <td>${esc(rotuloTipoPedido(p.tipo, p.entregaPor))}</td>
+      <td><span class="pill ${st.classe}" data-status="${esc(p.status ?? "")}">${esc(st.rotulo)}</span>${p.acaoIncerta ? ' <span class="pill warn">Aguardando confirmação do iFood</span>' : ""}</td>
+      <td>${p.statusEm ? fmtDataHora(p.statusEm) : "—"}</td>
+      <td>${p.criadoEm ? fmtDataHora(p.criadoEm) : "—"}</td>
+      <td class="num">${p.total != null ? fmtMoeda(p.total) : "—"}</td>
+    </tr>`;
+}
+
+function pintarPedidos() {
+  const view = el("#view");
+  const p = estado.pedidos;
+  if (!view || !p) return;
+  const linhas = p.lista?.length
+    ? p.lista.map(linhaPedido).join("")
+    : `<tr><td colspan="7" class="ifood-vazio">${p.carregando ? "Carregando pedidos…" : "Nenhum pedido iFood recebido nesta loja."}</td></tr>`;
+
+  view.innerHTML = `
+    <div class="ifood-page">
+      <div class="vd-head ifood-head">
+        <div class="ifood-head-id">
+          <img src="${IFOOD_LOGO}" alt="iFood" class="ifood-head-logo" />
+          <div class="vd-head-txt">
+            <h2>Pedidos iFood${badgeHomologacao()}</h2>
+            <p>Status oficial de cada pedido, atualizado pelos eventos do iFood.</p>
+          </div>
+        </div>
+        <div class="ifood-acoes">
+          <button class="btn btn-ghost" id="ifped-atualizar" ${p.carregando ? "disabled" : ""}>${p.carregando ? "Atualizando…" : "Atualizar"}</button>
+          <button class="btn btn-ghost" id="ifped-voltar">Voltar ao status</button>
+        </div>
+      </div>
+      <div class="ifood-card">
+        ${p.erro ? `<div class="ifood-aviso bad">${esc(p.erro)}</div>` : ""}
+        ${p.consultadoEm ? `<div class="ifood-info-linha"><span>Atualizado em</span><strong>${fmtDataHora(p.consultadoEm)}</strong></div>` : ""}
+        <div class="tabela-wrap">
+          <table class="grid" id="ifood-pedidos-tabela">
+            <thead><tr><th>Pedido</th><th>ID do pedido</th><th>Tipo</th><th>Status</th><th>Status desde</th><th>Criado em</th><th class="num">Total</th></tr></thead>
+            <tbody>${linhas}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+
+  el("#ifped-voltar")?.addEventListener("click", fecharPedidos);
+  el("#ifped-atualizar")?.addEventListener("click", carregarPedidos);
 }
 
 // Cada `id` de acoesDoPainel() -> um handler. Um só lugar para o mapeamento.

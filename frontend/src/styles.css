@@ -423,6 +423,7 @@ body {
 .ifood-vazio { text-align: center; padding: 36px 20px; color: var(--cinza); }
 .ifood-vazio .emoji { font-size: 34px; display: block; margin-bottom: 8px; }
 .ifood-vazio code { background: #eef1f0; padding: 2px 6px; border-radius: 5px; font-size: 12px; }
+.ifood-pedido-id { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
 
 /* ===================== INTEGRAÇÃO IFOOD (real, frontend/src/ifood.js) =====
    Bloco acima ("JANELA LOJA iFOOD") é do widget de iframe legado — não é

@@ -23,7 +23,7 @@ import { config } from "../../config/env.js";
 import { cifrar, decifrar } from "../../shared/cripto.js";
 import { ifoodErro, IFOOD_ERROS, IfoodError } from "./ifood.errors.js";
 import { ifoodLog } from "./ifood.logsafe.js";
-import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_GRANT, IFOOD_ROTAS, IFOOD_TOKEN } from "./ifood.constants.js";
+import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_APP_ORDER, IFOOD_GRANT, IFOOD_ROTAS, IFOOD_TOKEN } from "./ifood.constants.js";
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
 import {
@@ -41,16 +41,29 @@ export function estaEmHomologacaoIfood() {
 }
 
 /**
+ * appTypes que o fluxo OAuth distribuído aceita. `order` (Events/Order):
+ *   * em homologação: resolve para o mesmo app de teste (Teste D);
+ *   * fora de homologação: SÓ quando o app homologado de Order/Events está configurado
+ *     (IFOOD_ORDER_CLIENT_ID + IFOOD_ORDER_CLIENT_SECRET, app central-ccd). Sem ele, recusado como antes.
+ * Em ambos o poller distribuído usa a SUA credencial `order`, nunca a do financial.
+ */
+export function appTypesDoOAuth() {
+  if (estaEmHomologacaoIfood()) return [...IFOOD_APP_TYPES, IFOOD_APP_ORDER];
+  const o = config.ifood?.order ?? {};
+  return o.clientId && o.clientSecret ? [...IFOOD_APP_TYPES, IFOOD_APP_ORDER] : [...IFOOD_APP_TYPES];
+}
+
+/**
  * clientId/clientSecret do app, de ENV (via config/env.js — nunca process.env
  * direto). Lança se não configurado.
  *
- * Em homologação, `analytics` e `financial` resolvem AMBOS para o mesmo app
- * de teste (IFOOD_TEST_CLIENT_ID/SECRET) — o mesmo aplicativo distribuído
- * autoriza os dois módulos nesse laboratório. Fora de homologação, cada
- * appType usa sua credencial real, como antes.
+ * Em homologação, `analytics`, `financial` e `order` resolvem TODOS para o mesmo
+ * app de teste (IFOOD_TEST_CLIENT_ID/SECRET) — o mesmo aplicativo distribuído
+ * autoriza os módulos nesse laboratório. Fora de homologação, cada appType usa
+ * SÓ a sua credencial real (config.ifood[appType]) — nunca a de outro app.
  */
 export function credenciaisDoApp(appType) {
-  if (!IFOOD_APP_TYPES.includes(appType)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
+  if (!appTypesDoOAuth().includes(appType)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
 
   if (estaEmHomologacaoIfood()) {
     const t = config.ifood?.test ?? {};

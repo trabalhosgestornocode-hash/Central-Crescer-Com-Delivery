@@ -447,6 +447,8 @@ export const ifoodMerchants = () => getJson(`${IFOOD}/merchants`);
 export const ifoodMerchantDetalhe = (merchantId) => getJson(`${IFOOD}/merchants/${encodeURIComponent(merchantId)}`);
 export const ifoodVincularMerchant = (merchantId) => postJson(`${IFOOD}/merchants/link`, { merchantId });
 export const ifoodDesconectar = () => delJson(`${IFOOD}/`);
+// Pedidos iFood da unidade — leitura do banco local (estado oficial vindo dos eventos); não chama o iFood.
+export const ifoodPedidos = () => getJson(`${IFOOD}/pedidos`);
 
 // Financial (Fase 2 — Homologação, só leitura). merchantId NUNCA é enviado
 // daqui — o backend resolve sempre da conexão da unidade.

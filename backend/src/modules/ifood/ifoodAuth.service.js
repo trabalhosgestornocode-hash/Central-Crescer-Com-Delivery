@@ -17,13 +17,13 @@
 import { cifrar, decifrar } from "../../shared/cripto.js";
 import { ifoodErro, IFOOD_ERROS, IfoodError } from "./ifood.errors.js";
 import { ifoodLog } from "./ifood.logsafe.js";
-import { IFOOD_ROTAS, IFOOD_OAUTH, IFOOD_APP_TYPES } from "./ifood.constants.js";
+import { IFOOD_ROTAS, IFOOD_OAUTH } from "./ifood.constants.js";
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
 import * as tokenService from "./ifoodToken.service.js";
 
 function validarAppType(appType) {
-  if (!IFOOD_APP_TYPES.includes(appType)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
+  if (!tokenService.appTypesDoOAuth().includes(appType)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
   return appType;
 }
 

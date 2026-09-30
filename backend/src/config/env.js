@@ -68,7 +68,7 @@ export const config = {
   // Credenciais dos apps iFood (Portal do Desenvolvedor). Opcionais: vazio =
   // o fluxo OAuth responde IFOOD_APP_SEM_CREDENCIAL de forma controlada.
   // Lido só aqui; `credenciaisDoApp()` (ifoodToken.service.js) consome
-  // `config.ifood[appType].{clientId,clientSecret}` — appType ∈ analytics|financial.
+  // `config.ifood[appType].{clientId,clientSecret}` — appType ∈ analytics|financial|order.
   //
   // `homologacao` (IFOOD_HOMOLOGATION_MODE=true) e `test` (IFOOD_TEST_CLIENT_*)
   // dão suporte ao aplicativo distribuído de teste do iFood (laboratório de
@@ -89,6 +89,12 @@ export const config = {
     financial: {
       clientId: process.env.IFOOD_FINANCIAL_CLIENT_ID || null,
       clientSecret: process.env.IFOOD_FINANCIAL_CLIENT_SECRET || null,
+    },
+    // App distribuído homologado de Order + Events (central-ccd). Opcional: sem ele, `order`
+    // segue fora do OAuth fora de homologação (ver appTypesDoOAuth em ifoodToken.service.js).
+    order: {
+      clientId: process.env.IFOOD_ORDER_CLIENT_ID || null,
+      clientSecret: process.env.IFOOD_ORDER_CLIENT_SECRET || null,
     },
     // Aplicativo distribuído de teste — só usado quando `homologacao` é true.
     test: {

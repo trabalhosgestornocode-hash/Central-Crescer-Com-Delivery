@@ -14,6 +14,7 @@ import * as authService from "./ifoodAuth.service.js";
 import * as merchantService from "./ifoodMerchant.service.js";
 import * as connectionService from "./ifoodConnection.service.js";
 import * as financialService from "./ifoodFinancial.service.js";
+import * as pedidosLeitura from "./ifoodPedidosLeitura.service.js";
 import * as val from "./ifood.validators.js";
 import { config } from "../../config/env.js";
 
@@ -91,6 +92,12 @@ export const desconectar = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
   const data = await connectionService.desconectar({ organizacaoId, unidadeId, usuarioId: req.user.id });
   res.json({ data });
+});
+
+// Pedidos iFood da unidade — lidos do banco local (estado OFICIAL, vindo dos eventos). Não chama o iFood.
+export const pedidos = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  res.json({ data: await pedidosLeitura.listarPedidos({ organizacaoId, unidadeId }) });
 });
 
 // --- Financial (Fase 2 — Homologação, só leitura) ------------------------

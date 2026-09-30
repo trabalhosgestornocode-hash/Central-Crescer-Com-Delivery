@@ -54,6 +54,9 @@ ifoodRouter.get("/financial/reconciliation/on-demand/:requestId", gerenciar, lim
 ifoodRouter.get("/financial/anticipations", gerenciar, limitarFinancial, controller.financialAnticipations);
 ifoodRouter.get("/financial/conciliation", gerenciar, limitarFinancial, controller.financialConciliation);
 
+// --- Pedidos iFood (leitura do banco local — não chama a API do iFood) ----
+ifoodRouter.get("/pedidos", requirePermissao(PERMISSOES.INTEGRACOES_VER), controller.pedidos);
+
 // --- Status da integração (leitura — não chama a API do iFood) -----------
 ifoodRouter.get("/status", requirePermissao(PERMISSOES.INTEGRACOES_VER), controller.status);
 
