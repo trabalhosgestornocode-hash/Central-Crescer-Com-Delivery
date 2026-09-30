@@ -14,6 +14,7 @@
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { ifoodErro, IFOOD_ERROS } from "./ifood.errors.js";
+import { IFOOD_EVENTS } from "./ifood.constants.js";
 
 const T = {
   conexoes: "ifood_conexoes",
@@ -253,4 +254,60 @@ export async function atualizarCredencial({ conexaoId, appType, campos, seAccess
 export async function apagarCredenciais({ conexaoId }) {
   if (!conexaoId) throw ApiError.internal("conexaoId ausente.");
   return ok(await supabase.from(T.credenciais).delete().eq("conexao_id", conexaoId).select("id"));
+}
+
+// =====================================================================
+// STATUS DO APP ORDER (painel) — SÓ LEITURA
+// =====================================================================
+
+/** Quando a unidade concluiu pela última vez o OAuth daquele app (sessão 'authorized' mais recente). */
+export async function obterUltimaAutorizacao({ organizacaoId, unidadeId, appType, db = supabase }) {
+  exigirTenant(organizacaoId, unidadeId);
+  const linhas = ok(await db.from(T.sessoes).select("atualizado_em")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+    .eq("app_type", appType).eq("status", "authorized")
+    .order("atualizado_em", { ascending: false }).limit(1)) ?? [];
+  return linhas[0]?.atualizado_em ?? null;
+}
+
+const TABELA_AUSENTE = Symbol("tabela_ausente");
+const tabelaAusente = (err) => ["PGRST205", "42P01"].includes(String(err?.code ?? ""))
+  || /does not exist|could not find the table/i.test(String(err?.message ?? ""));
+
+/**
+ * Sinais operacionais de Events/Order de UMA conexão (tenant + merchant): último evento recebido, último
+ * ACK, eventos com falha, último pedido e o lease do worker. Tabelas da migration 101: se ainda não
+ * existem no banco, devolve `{ disponivel: false }` em vez de derrubar o status. Nunca devolve o
+ * `holder` do lease nem ids internos. `db` é injetável só para teste.
+ */
+export async function obterObservabilidadeOrder({ organizacaoId, unidadeId, merchantId, db = supabase }) {
+  exigirTenant(organizacaoId, unidadeId);
+  const exec = async (q) => {
+    const r = await q;
+    if (r.error) { if (tabelaAusente(r.error)) throw TABELA_AUSENTE; throw ApiError.internal(r.error.message); }
+    return r;
+  };
+  const doTenant = (tabela, colunas, opcoes) => db.from(tabela).select(colunas, opcoes)
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId);
+  try {
+    const [evento, ack, falhas, pedido, lease] = await Promise.all([
+      exec(doTenant("ifood_eventos", "criado_em").eq("merchant_id", merchantId).order("criado_em", { ascending: false }).limit(1)),
+      exec(doTenant("ifood_eventos", "acknowledged_at").eq("merchant_id", merchantId).not("acknowledged_at", "is", null)
+        .order("acknowledged_at", { ascending: false }).limit(1)),
+      exec(doTenant("ifood_eventos", "id", { count: "exact", head: true }).eq("merchant_id", merchantId).eq("processing_status", "FALHOU")),
+      exec(doTenant("ifood_pedidos", "criado_em").order("criado_em", { ascending: false }).limit(1)),
+      exec(db.from("ifood_poller_lease").select("lease_ate, atualizado_em").eq("nome", IFOOD_EVENTS.leaseNome).maybeSingle()),
+    ]);
+    return {
+      disponivel: true,
+      ultimoEvento: evento.data?.[0]?.criado_em ?? null,
+      ultimoAck: ack.data?.[0]?.acknowledged_at ?? null,
+      eventosComFalha: falhas.count ?? 0,
+      ultimoPedido: pedido.data?.[0]?.criado_em ?? null,
+      lease: lease.data ? { leaseAte: lease.data.lease_ate, atualizadoEm: lease.data.atualizado_em } : null,
+    };
+  } catch (e) {
+    if (e === TABELA_AUSENTE) return { disponivel: false };
+    throw e;
+  }
 }
