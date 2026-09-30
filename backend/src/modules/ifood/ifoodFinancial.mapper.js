@@ -23,6 +23,11 @@ function numOuZero(v) {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
+// "Não informado" != zero: para campo que a doc diz nunca vir nulo, ausência vira null, não 0.
+function numOuNull(v) {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
 /**
  * A resposta 200 das APIs Financial (Sales, Financial Events, ...) tem DUAS
  * formas documentadas oficialmente (guia narrativo x Referência de API — ver
@@ -35,10 +40,7 @@ function desembrulharEnvelope(resp) {
   return resp ?? {};
 }
 
-function mapearDocumento(d) {
-  return { valor: d?.value ?? null, tipo: d?.type ?? null };
-}
-
+// `merchant.documents` (CNPJ/CPF do titular, MCC) NUNCA é mapeado: é PII e nenhum consumidor precisa dele.
 function mapearMerchantDaVenda(m) {
   if (!m) return null;
   return {
@@ -47,21 +49,18 @@ function mapearMerchantDaVenda(m) {
     nome: m.name ?? null,
     tipo: m.type ?? null,
     timezone: m.timezone ?? null,
-    // A "Referência de campos" documenta a chave como `document[]`
-    // (singular) mas os DOIS exemplos reais de resposta (guia e Referência
-    // de API) usam `documents` (plural) — segue o que a API realmente
-    // devolve nos exemplos, com fallback defensivo pro nome singular.
-    documentos: Array.isArray(m.documents) ? m.documents.map(mapearDocumento)
-      : Array.isArray(m.document) ? m.document.map(mapearDocumento)
-      : [],
   };
 }
 
+// bag é obrigatório na doc: sem ele o valor bruto é desconhecido (null), nunca "venda de R$ 0".
+// deliveryFee/serviceFee ausentes significam "não cobrado" (retirada / só alguns pedidos) -> 0.
 function mapearValorBruto(sgv) {
-  const itens = numOuZero(sgv?.bag);
-  const entrega = numOuZero(sgv?.deliveryFee);
-  const taxaServico = numOuZero(sgv?.serviceFee);
-  return { itens, entrega, taxaServico, total: itens + entrega + taxaServico };
+  const itens = numOuNull(sgv?.bag);
+  if (itens === null) return { itens: null, entrega: null, taxaServico: null, total: null };
+  const entrega = numOuZero(sgv.deliveryFee);
+  const taxaServico = numOuZero(sgv.serviceFee);
+  // Valores em reais com 2 casas: arredonda a soma para não expor ruído de ponto flutuante (0.1 + 0.2).
+  return { itens, entrega, taxaServico, total: Math.round((itens + entrega + taxaServico) * 100) / 100 };
 }
 
 function mapearBeneficios(b) {
@@ -132,10 +131,10 @@ function mapearHistoricoStatus(h) {
 function mapearResumoFinanceiro(bs) {
   if (!bs) return null;
   return {
-    saldo: numOuZero(bs.saleBalance),
+    saldo: numOuNull(bs.saleBalance),
     lancamentos: Array.isArray(bs.billingEntries) ? bs.billingEntries.map((e) => {
-      const valor = numOuZero(e?.value);
-      return { nome: e?.name ?? null, valor, tipo: valor >= 0 ? "credito" : "debito" };
+      const valor = numOuNull(e?.value);
+      return { nome: e?.name ?? null, valor, tipo: valor === null ? null : valor >= 0 ? "credito" : "debito" };
     }) : [],
   };
 }
@@ -204,15 +203,13 @@ function numOuNulo(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Referência de API: businessId/businessType; guia: merchantId. O documento
+// (businessDocument/merchantDocument = CNPJ ou CPF do titular) NUNCA é mapeado.
 function mapearReceiver(r) {
   if (!r) return null;
   return {
-    // O exemplo real da Referência de API usa businessId/businessType/
-    // businessDocument; a "Referência de campos" (guia) documenta
-    // merchantId/merchantDocument. Aceita os dois, sem inventar um terceiro.
     id: r.businessId ?? r.merchantId ?? null,
     tipo: r.businessType ?? null,
-    documento: r.businessDocument ?? r.merchantDocument ?? null,
   };
 }
 
@@ -228,12 +225,18 @@ export function mapearEventoFinanceiro(e) {
     competencia: e?.competence ?? null,
     periodoApuracao: e?.period ? { inicio: e.period.beginDate ?? null, fim: e.period.endDate ?? null } : null,
     referencia: e?.reference ? { tipo: e.reference.type ?? null, id: e.reference.id ?? null, data: e.reference.date ?? null } : null,
-    temImpactoRepasse: e?.hasTransferImpact === true,
+    // Ausente = desconhecido (null), nunca "sem impacto".
+    temImpactoRepasse: typeof e?.hasTransferImpact === "boolean" ? e.hasTransferImpact : null,
     valor,
     // crédito/débito derivado do SINAL do valor (mesma regra de billingEntries
     // em Sales) — não é um campo que a API devolva pronto.
     tipoValor: valor === null ? null : valor >= 0 ? "credito" : "debito",
-    faturamento: e?.billing ? { valorBase: numOuNulo(e.billing.baseValue), percentualTaxa: numOuNulo(e.billing.feePercentage) } : null,
+    faturamento: e?.billing ? {
+      valorBase: numOuNulo(e.billing.baseValue),
+      percentualTaxa: numOuNulo(e.billing.feePercentage),
+      // Parcela (ex.: "1/3") — ORDER_PAYMENT parcelado vem em vários eventos; somar sem olhar isto duplica receita.
+      parcela: e.billing.installments ? { referencia: e.billing.installments.reference ?? null, dataReferencia: e.billing.installments.referenceDate ?? null } : null,
+    } : null,
     dataRepasseEsperada: e?.settlement?.expectedDate ?? null,
     comerciante: mapearReceiver(e?.receiver),
     pagamento: e?.payment ? { metodo: e.payment.method ?? null, bandeira: e.payment.brand ?? null, responsavel: e.payment.liability ?? null } : null,

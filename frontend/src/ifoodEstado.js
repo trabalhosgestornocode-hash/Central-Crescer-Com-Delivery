@@ -416,6 +416,11 @@ function dinheiroOuTraco(v) {
 // conciliarSettlementsComReconciliation/resumirAnticipation).
 // ---------------------------------------------------------------------------
 
+/** hasTransferImpact: true/false vêm do iFood; qualquer outra coisa é desconhecido, nunca "Não". */
+export function rotuloImpactoRepasse(v) {
+  return v === true ? "Sim" : v === false ? "Não" : "Não informado";
+}
+
 /** @param {{status,quantidadeVendas,quantidadeConciliadas,quantidadeDivergentes,quantidadeIncompletas}} sv */
 export function saudeSalesVsEvents(sv) {
   return {

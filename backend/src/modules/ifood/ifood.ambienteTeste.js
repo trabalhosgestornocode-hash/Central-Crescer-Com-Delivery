@@ -42,3 +42,24 @@ export function centralizadoTestePermitido(env) {
   if (String(env.NODE_ENV ?? "").toLowerCase() === "production") motivos.push("NODE_ENV=production");
   return { ok: motivos.length === 0, motivos };
 }
+
+/**
+ * IFOOD_FINANCIAL_FIXTURE: pedir ao iFood a FIXTURE (header x-request-homologation)
+ * em Sales/Financial Events. NÃO é IFOOD_HOMOLOGATION_MODE (que só escolhe o app de teste).
+ * Parse estrito: ausente/vazio/"false" -> false; "true" -> true; qualquer outro valor lança.
+ * `true` só é aceito no mesmo ambiente em que o modo centralizado de teste é permitido
+ * (Supabase de teste, fora do Render, NODE_ENV != production) — senão lança.
+ * @returns {boolean}
+ */
+export function resolverFixtureFinanceira(env) {
+  const bruto = String(env.IFOOD_FINANCIAL_FIXTURE ?? "").trim().toLowerCase();
+  if (bruto === "" || bruto === "false") return false;
+  if (bruto !== "true") {
+    throw new Error(`IFOOD_FINANCIAL_FIXTURE inválida ("${bruto}") — use exatamente true ou false.`);
+  }
+  const r = centralizadoTestePermitido(env);
+  if (!r.ok) {
+    throw new Error(`IFOOD_FINANCIAL_FIXTURE=true recusada: fixture do iFood não pode rodar neste ambiente (${r.motivos.join("; ")}).`);
+  }
+  return true;
+}
