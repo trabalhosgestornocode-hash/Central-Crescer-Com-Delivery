@@ -5,6 +5,8 @@ import { inicializarWorkerRemoto } from "./modules/martinbrower/martinbrower.wor
 import { iniciarWorkerComunicacaoEmbutido, pararWorkerComunicacaoEmbutido } from "./worker-comunicacao/lifecycle.js";
 import { workerLog } from "./worker-comunicacao/worker-comunicacao.logsafe.js";
 import { iniciarPurgaPeriodica } from "./modules/comunicacao/comunicacao.inbox.retencao.js";
+import { iniciarEventsIfoodEmbutido, pararEventsIfoodEmbutido } from "./worker-ifood/embedded.js";
+import { iniciarServidorHttp } from "./servidor.lifecycle.js";
 
 // Worker Martin Brower: só é carregado com MB_PLAYWRIGHT_ENABLED=true. Com a
 // flag desligada (padrão), o adapter nem é importado — nenhum código de
@@ -30,31 +32,32 @@ iniciarWorkerComunicacaoEmbutido({ log: (nivel, evento, dados) => workerLog(nive
 const purgaInbox = iniciarPurgaPeriodica({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados) });
 console.log(purgaInbox.ativa ? "   Comunicação: purga da caixa de entrada ATIVA" : "   Comunicação: purga da caixa de entrada DESLIGADA");
 
-const servidor = createApp().listen(config.port, () => {
-  console.log(`🥪 Subway Saci API rodando em http://localhost:${config.port}`);
-  console.log(`   Health:   http://localhost:${config.port}/health`);
-  console.log(`   Produtos: http://localhost:${config.port}/api/v1/produtos?vendavel=true`);
-});
+// Encerramento gracioso (servidor.lifecycle.js): o Render manda SIGTERM antes de
+// derrubar a instância. Um único handler; os laços embarcados param em paralelo,
+// cada um com prazo próprio (comunicação 8 s, iFood Events 7 s) sempre menor que
+// o fallback de 10 s — nunca competem pelo mesmo encerramento. As paradas são
+// idempotentes/no-op quando o laço nunca iniciou (flag desligada).
+iniciarServidorHttp({
+  app: createApp(),
+  porta: config.port,
+  timeouts: TIMEOUTS,
+  aoEscutar: () => {
+    console.log(`🥪 Subway Saci API rodando em http://localhost:${config.port}`);
+    console.log(`   Health:   http://localhost:${config.port}/health`);
+    console.log(`   Produtos: http://localhost:${config.port}/api/v1/produtos?vendavel=true`);
 
-// Timeouts globais: sem eles uma conexão lenta (ou maliciosa) segura um socket
-// indefinidamente. keepAliveTimeout > o do proxy do Render evita 502 espúrio.
-servidor.requestTimeout = TIMEOUTS.requestTimeoutMs;
-servidor.headersTimeout = TIMEOUTS.headersTimeoutMs;
-servidor.keepAliveTimeout = TIMEOUTS.keepAliveTimeoutMs;
-
-// Encerramento gracioso: o Render manda SIGTERM antes de derrubar a instância.
-// pararWorkerComunicacaoEmbutido() é idempotente/no-op se o worker nunca
-// iniciou (flag desligada) — por isso entra aqui sem precisar de um segundo
-// handler de sinal. O grace period do worker embutido (8s) é sempre menor
-// que o fallback de 10s abaixo, então nunca competem pelo mesmo encerramento.
-for (const sinal of ["SIGTERM", "SIGINT"]) {
-  process.on(sinal, () => {
-    console.log(`[${sinal}] encerrando servidor…`);
-    purgaInbox.parar();
-    pararWorkerComunicacaoEmbutido(sinal).finally(() => {
-      servidor.close(() => process.exit(0));
+    // iFood Events embarcado: só com IFOOD_EVENTS_EMBEDDED_ENABLED=true (padrão: desligado = nenhum polling).
+    // Começa DEPOIS do HTTP ouvir e sem await: banco, iFood ou config com problema viram estado `degraded`
+    // do Events — o Web Service continua saudável. Nunca rejeita.
+    iniciarEventsIfoodEmbutido().then((r) => {
+      console.log(r.habilitado
+        ? "   iFood Events: embarcado ATIVO"
+        : `   iFood Events: embarcado ${r.estado === "disabled" ? "DESABILITADO" : "NÃO INICIADO"} (${r.motivo})`);
     });
-    // Rede de segurança caso alguma conexão não feche sozinha.
-    setTimeout(() => process.exit(0), 10_000).unref();
-  });
-}
+  },
+  antesDeFechar: [
+    () => purgaInbox.parar(),
+    (sinal) => pararWorkerComunicacaoEmbutido(sinal),
+    (sinal) => pararEventsIfoodEmbutido(sinal),
+  ],
+});

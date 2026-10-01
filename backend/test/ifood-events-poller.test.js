@@ -502,7 +502,9 @@ test("worker: porta de health opcional e validada", () => {
 });
 
 test("worker: processo SEPARADO — o servidor HTTP não o importa; sai sem fazer nada se desligado", () => {
-  const server = ler("backend/src/server.js") + ler("backend/src/app.js") + ler("backend/src/routes.js");
+  // O servidor HTTP só conhece o host EMBARCADO (fail-closed, flag própria) — nunca o entrypoint dedicado nem o poller.
+  const server = ler("backend/src/server.js").replace(/import\s*\{[^}]*\}\s*from\s*"\.\/worker-ifood\/embedded\.js";/, "")
+    + ler("backend/src/app.js") + ler("backend/src/routes.js");
   assert.doesNotMatch(server, /worker-ifood|ifoodEvents\.poller/);
   const w = ler("backend/src/worker-ifood/index.js");
   assert.ok(w.indexOf("if (!cfg.habilitado)") > -1);

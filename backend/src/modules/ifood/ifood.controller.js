@@ -16,6 +16,7 @@ import * as connectionService from "./ifoodConnection.service.js";
 import * as financialService from "./ifoodFinancial.service.js";
 import * as pedidosLeitura from "./ifoodPedidosLeitura.service.js";
 import * as val from "./ifood.validators.js";
+import { resumoEventsParaStatus } from "./ifoodEventsEstado.js";
 import { config } from "../../config/env.js";
 
 function tenant(req) {
@@ -79,10 +80,12 @@ export const vincularMerchant = asyncHandler(async (req, res) => {
   res.status(201).json({ data });
 });
 
-// Status da integração da unidade — analytics e financial separados.
+// Status da integração da unidade — analytics e financial separados. `eventosRecebimento`: estado do
+// recebimento de eventos NESTA instância (só estado e horários; nada que agregue outras lojas).
 export const status = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
-  res.json({ data: await connectionService.obterStatus({ organizacaoId, unidadeId }) });
+  const data = await connectionService.obterStatus({ organizacaoId, unidadeId });
+  res.json({ data: { ...data, eventosRecebimento: resumoEventsParaStatus() } });
 });
 
 // Desconexão LOCAL — descarta tokens, marca a conexão como 'revogada'.
