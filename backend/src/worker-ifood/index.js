@@ -1,5 +1,6 @@
 // Entrypoint do worker de Events do iFood — PROCESSO SEPARADO (nunca iniciado
-// pelo backend HTTP principal; server.js não importa nada daqui).
+// pelo backend HTTP principal; server.js não importa nada daqui). O modo
+// EMBARCADO no Web Service é outro host (embedded.js) sobre o mesmo runtime.js.
 //
 //   npm run worker:ifood                       produção/Render: SÓ variáveis de ambiente do processo
 //                                              (= node src/worker-ifood/index.js; nenhum arquivo .env)

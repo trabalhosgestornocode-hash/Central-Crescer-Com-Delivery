@@ -1,7 +1,8 @@
 // Configuração do worker de Events do iFood (fail-closed).
 //
-// O worker é um PROCESSO SEPARADO (nunca iniciado pelo server.js) e só roda se
-// `IFOOD_EVENTS_WORKER_ENABLED=true`. Sem isso, sai sem fazer nada.
+// Lida pelos DOIS hosts do Events. `habilitado` é só do worker dedicado (processo separado, src/worker-ifood/index.js):
+// roda se `IFOOD_EVENTS_WORKER_ENABLED=true`; sem isso, sai sem fazer nada. O modo embarcado no Web Service tem a
+// flag própria (IFOOD_EVENTS_EMBEDDED_ENABLED, ver embedded.js) e usa daqui só intervalo e TTL do lease.
 //
 //   IFOOD_EVENTS_WORKER_ENABLED    'true' para ligar (padrão: desligado)
 //   IFOOD_EVENTS_POLL_INTERVAL_MS  intervalo de início a início; NUNCA abaixo de 30000 (piso da doc iFood)
