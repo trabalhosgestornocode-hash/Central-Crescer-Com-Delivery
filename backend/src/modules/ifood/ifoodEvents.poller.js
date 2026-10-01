@@ -70,9 +70,15 @@ export function criarPoller({
 }) {
   if (!holder) throw new Error("holder é obrigatório");
   let temLease = false;
-  const info = { ultimoCiclo: null, ultimoEstado: null, geracao: null };
+  // `lease`: última leitura do lease (titular e vencimento) — só observabilidade; quem decide é o banco.
+  const info = { ultimoCiclo: null, ultimoEstado: null, geracao: null, lease: null };
 
-  const adquirir = () => repo.adquirirLease({ nome: IFOOD_EVENTS.leaseNome, holder, ttlS: leaseTtlS });
+  const adquirir = async () => {
+    const r = await repo.adquirirLease({ nome: IFOOD_EVENTS.leaseNome, holder, ttlS: leaseTtlS });
+    temLease = r.adquirido;
+    info.lease = { souTitular: r.adquirido, titular: r.holder ?? null, ate: r.leaseAte ?? null };
+    return r;
+  };
 
   const comToken = (conexaoId, fn) => token.comAccessTokenValido({ conexaoId, appType, deps: { http }, fn });
 
@@ -85,7 +91,6 @@ export function criarPoller({
     info.ultimoCiclo = inicio.toISOString();
 
     const lease = await adquirir();
-    temLease = lease.adquirido;
     info.geracao = lease.geracao;
     if (!lease.adquirido) {
       log("info", "events.lease_de_outro", { titular: lease.holder, leaseAte: lease.leaseAte });
@@ -198,21 +203,48 @@ export function criarPoller({
 
     // Fencing leve: ainda sou o titular? Senão, não reconheço.
     etapa.atual = "lease";
-    const renovado = await adquirir();
-    temLease = renovado.adquirido;
-    if (!renovado.adquirido) {
-      log("error", "events.lease_perdido_antes_do_ack", { titular: renovado.holder });
+    let fencing = await renovarParaAck();
+    if (!fencing) {
+      log("error", "events.lease_perdido_antes_do_ack", { titular: info.lease?.titular ?? null });
       return { estado: "LEASE_PERDIDO" };
     }
 
     etapa.atual = "ack";
+    let semLease = false;
+    let lotes = 0;
     const r = await enviarAcks({
       idsParaAck, repo, agora, log,
       dividir: client.dividirEmLotesDeAck,
-      confirmar: (ids) => comToken(grupo.conexaoId, (accessToken) => client.confirmarEventos({ accessToken, eventIds: ids, http })),
-    });
+      confirmar: async (ids) => {
+        // Do 2º lote em diante, renova de novo: cada lote sai com um prazo recém-verificado.
+        if ((lotes += 1) > 1) fencing = await renovarParaAck();
+        const restanteMs = fencing ? fencing.restanteMs() : 0;
+        if (restanteMs <= 0) { semLease = true; throw new Error("lease sem prazo para o ACK"); }
+        // O prazo aborta o ACK (e qualquer retry dele) antes que o lease possa vencer.
+        const sinal = AbortSignal.timeout(restanteMs);
+        return comToken(grupo.conexaoId, (accessToken) => client.confirmarEventos({ accessToken, eventIds: ids, http, sinal }));
+      },
+    }).catch((e) => { if (semLease) return null; throw e; });
+    if (semLease) {
+      log("error", "events.lease_perdido_antes_do_ack", { titular: info.lease?.titular ?? null, lote: lotes });
+      return { estado: "LEASE_PERDIDO" };
+    }
     total.acks += r.confirmados;
     return null;
+  }
+
+  /**
+   * Renova o lease para reconhecer. O prazo conta do instante ANTES da renovação: a linha do banco vence em
+   * (relógio do banco na renovação + TTL), que é sempre depois disso. Com a margem, nenhum ACK desta instância
+   * sai depois que o lease poderia ter vencido — e outra instância só consegue o lease depois do vencimento.
+   * @returns {Promise<{restanteMs: () => number}|null>} null = não sou mais o titular.
+   */
+  async function renovarParaAck() {
+    const antesMs = agora().getTime();
+    const renovado = await adquirir();
+    if (!renovado.adquirido) return null;
+    const ateMs = antesMs + leaseTtlS * 1000 - IFOOD_EVENTS.margemFencingAckMs;
+    return { restanteMs: () => ateMs - agora().getTime() };
   }
 
   /** Shutdown gracioso: libera o lease para outro poller assumir sem esperar o TTL. */

@@ -98,6 +98,9 @@ async function requisitar({ metodo, caminho, headers = {}, corpo, rotulo, contex
   // o iFood deixou de processar. Quem chama decide (aguarda o evento oficial).
   const maxTentativas = semRetry ? 1 : IFOOD_HTTP.maxTentativas;
   for (let tentativa = 1; tentativa <= maxTentativas; tentativa += 1) {
+    // Cancelado ANTES desta tentativa (ex.: durante a espera do retry): não envia de novo. O listener abaixo
+    // não dispara para um sinal que já estava abortado — sem esta checagem o fetch sairia mesmo assim.
+    if (sinal?.aborted) throw ifoodErro(IFOOD_ERROS.IFOOD_CANCELADO);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), IFOOD_HTTP.timeoutMs);
     const aoCancelar = () => ctrl.abort();

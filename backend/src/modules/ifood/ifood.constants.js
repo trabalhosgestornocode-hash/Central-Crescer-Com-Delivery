@@ -242,6 +242,10 @@ export const IFOOD_EVENTS = {
   maxIdsPorAck: 2000,
   leaseNome: "ifood-events-poller",
   leaseTtlS: 90,                        // 3 ciclos: se o worker cair, outro assume em <= 90 s
+  // Fencing do ACK: cada lote de ACK só pode SAIR até (renovação do lease + TTL - esta margem). Um ACK com retries
+  // (3 x 20 s + Retry-After de até 30 s) poderia passar do TTL; o prazo garante que esta instância nunca reconhece
+  // depois que outra já pode ter assumido o lease.
+  margemFencingAckMs: 15_000,
   maxTentativasProcessamento: 5,        // reprocessamento de eventos FALHOU (retry_count)
   backoffMaxMs: 5 * 60_000,             // erro repetido: espera crescente, teto de 5 min
   // Doc (throttling): 429 = polling bloqueado por 5 min quando há eventos sem ACK.

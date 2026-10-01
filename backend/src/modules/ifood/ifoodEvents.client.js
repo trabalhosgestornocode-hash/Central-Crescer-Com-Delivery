@@ -46,16 +46,17 @@ export async function buscarEventos({ accessToken, merchantIds, http = httpClien
 
 /**
  * ACK de UM lote (até 2000 ids). Quem chama divide em lotes com `dividirEmLotesDeAck`.
- * @param {{accessToken: string, eventIds: string[], http?: object}} p
+ * `sinal`: prazo do lease (fencing) — abortado, nenhuma tentativa nova é enviada.
+ * @param {{accessToken: string, eventIds: string[], http?: object, sinal?: AbortSignal}} p
  */
-export async function confirmarEventos({ accessToken, eventIds, http = httpClient }) {
+export async function confirmarEventos({ accessToken, eventIds, http = httpClient, sinal }) {
   const ids = idsUnicos(eventIds);
   if (ids.length === 0) return { enviados: 0 };
   if (ids.length > IFOOD_EVENTS.maxIdsPorAck) {
     throw ifoodErro(IFOOD_ERROS.IFOOD_REQUISICAO_INVALIDA, { detalhes: { motivo: `mais de ${IFOOD_EVENTS.maxIdsPorAck} ids no ACK` } });
   }
   await http.postJson(IFOOD_ROTAS.eventsAck, ids.map((id) => ({ id })), {
-    accessToken, rotulo: "events.ack", contexto: "events",
+    accessToken, rotulo: "events.ack", contexto: "events", sinal,
   });
   return { enviados: ids.length };
 }
