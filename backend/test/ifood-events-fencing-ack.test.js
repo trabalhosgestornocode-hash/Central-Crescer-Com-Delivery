@@ -111,6 +111,24 @@ test("vários lotes: o lease é renovado a cada lote; se outra instância assumi
   assert.equal(repo.lease.holder, "inst-B");
 });
 
+test("vários lotes, ainda titular mas o prazo do 1º lote passou: a renovação por lote deixa o 2º lote sair", async () => {
+  const relogio = criarRelogio();
+  const repo = criarRepoEmMemoria({ relogio });
+  const n = IFOOD_EVENTS.maxIdsPorAck + 5;   // 2 lotes
+  const eventos = Array.from({ length: n }, (_, i) => ev(`e${i}`, "PLC", { orderId: `o${i}` }));
+  const { client, poller } = montar({ relogio, repo, respostas: [eventos] });
+  const original = client.confirmarEventos;
+  client.confirmarEventos = async (a) => {
+    const r = await original(a);
+    relogio.avancarS(80);   // > TTL 90 - margem 15: o prazo do 1º lote acabou, mas o lease (90 s) ainda é desta instância
+    return r;
+  };
+  const r = await poller.executarCiclo();
+  assert.equal(r.estado, "OK");
+  assert.equal(client.acks.length, 2, "o 2º lote sai com um prazo novo, renovado");
+  assert.equal(repo.lease.holder, "inst-A");
+});
+
 test("ACK pendurado é abortado no prazo — antes do lease poder vencer (relógio real)", async () => {
   const relogio = { agoraMs: () => Date.now(), agora: () => new Date(), avancarS: () => {} };
   const repo = criarRepoEmMemoria({ relogio });
