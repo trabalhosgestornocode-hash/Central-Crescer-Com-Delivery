@@ -122,7 +122,8 @@ export function criarPoller({
     });
     const grupos = montarGrupos(aptas, escopo);
 
-    const total = { polls: 0, eventos: 0, novos: 0, reentregas: 0, acks: 0 };
+    // `grupos`: conexões (distribuído) ou lotes de merchants (centralizado) tentados neste ciclo.
+    const total = { grupos: grupos.length, polls: 0, eventos: 0, novos: 0, reentregas: 0, acks: 0 };
     const conexoesComFalha = [];
     let primeiroErro = null;
 
@@ -260,9 +261,10 @@ export function criarPoller({
 /**
  * Loop SERIAL (sem setInterval). Intervalo de início a início, nunca abaixo de 30 s.
  * Erros: espera crescente (teto 5 min). 429/throttling: espera extra de 60 s.
+ * `aoAgendarProximo(esperaMs)`: chamado antes de cada espera (observabilidade: "próximo ciclo em").
  */
 export function criarLoopDoPoller({
-  poller, intervaloMs = IFOOD_EVENTS.intervaloPollingMs, sleep, agora = () => Date.now(), log = ifoodLog, aoFinalizarCiclo,
+  poller, intervaloMs = IFOOD_EVENTS.intervaloPollingMs, sleep, agora = () => Date.now(), log = ifoodLog, aoFinalizarCiclo, aoAgendarProximo,
 }) {
   const intervalo = Math.max(Number(intervaloMs) || 0, IFOOD_EVENTS.intervaloMinimoMs);
   let parar = false;
@@ -294,19 +296,38 @@ export function criarLoopDoPoller({
         aoFinalizarCiclo?.({ estado: "ERRO", codigo: e?.codigo ?? null });
       }
       if (parar) break;
-      await dormir(Math.max(intervalo - (agora() - t0), 0) + extraMs);
+      const esperaMs = Math.max(intervalo - (agora() - t0), 0) + extraMs;
+      aoAgendarProximo?.(esperaMs);
+      await dormir(esperaMs);
     }
   }
 
   return {
     intervaloMs: intervalo,
     iniciar() { promessaLoop ??= rodar(); return promessaLoop; },
-    /** Para depois do ciclo em andamento e libera o lease. */
-    async parar() {
+    /**
+     * Para depois do ciclo em andamento e libera o lease.
+     * `prazoMs` (modo embarcado): espera o ciclo em voo no máximo isso. Se ele não terminou, o lease NÃO é
+     * liberado — o ciclo ainda pode reconhecer eventos; o lease vence sozinho (TTL) e só então outra instância
+     * assume. Sem `prazoMs` (worker dedicado): espera o ciclo terminar, como sempre.
+     * @param {{prazoMs?: number}} [opcoes]
+     * @returns {Promise<{drenado: boolean, leaseLiberado: boolean}>}
+     */
+    async parar({ prazoMs } = {}) {
       parar = true;
       acordar?.();
-      await promessaLoop;
-      await poller.encerrar?.();
+      if (prazoMs == null) {
+        await promessaLoop;
+        return { drenado: true, leaseLiberado: (await poller.encerrar?.()) === true };
+      }
+      let timer;
+      const drenado = await Promise.race([
+        Promise.resolve(promessaLoop).then(() => true, () => true),
+        new Promise((resolve) => { timer = setTimeout(() => resolve(false), prazoMs); }),
+      ]);
+      clearTimeout(timer);
+      if (!drenado) return { drenado: false, leaseLiberado: false };
+      return { drenado: true, leaseLiberado: (await poller.encerrar?.()) === true };
     },
   };
 }
