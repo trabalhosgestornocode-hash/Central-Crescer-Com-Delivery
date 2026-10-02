@@ -15,6 +15,10 @@ import { criarBaileysGatewayProvider } from "../src/modules/comunicacao/provider
 import { criarWhatsAppService } from "../src/modules/comunicacao/whatsapp.service.js";
 import { ORIGENS_TIPO, ORIGENS_JID_TIPO, MOTIVOS_FALHA_DECRYPT, ESTADOS_INBOUND } from "../src/modules/comunicacao/inbound/inbound.contrato.js";
 
+// Guarda de efeitos externos (src/ambiente/efeitosExternos.js): este arquivo EXERCITA o provider/worker contra fakes locais
+// (fetch falso / Gateway em 127.0.0.1), então autoriza explicitamente — só neste processo de teste.
+process.env.EFEITOS_EXTERNOS_LOCAL_PERMITIDOS = "true";
+
 const aqui = dirname(fileURLToPath(import.meta.url));
 const SEGREDO = "s".repeat(32);
 const ORG = "org-inbound-1";

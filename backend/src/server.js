@@ -7,6 +7,19 @@ import { workerLog } from "./worker-comunicacao/worker-comunicacao.logsafe.js";
 import { iniciarPurgaPeriodica } from "./modules/comunicacao/comunicacao.inbox.retencao.js";
 import { iniciarEventsIfoodEmbutido, pararEventsIfoodEmbutido } from "./worker-ifood/embedded.js";
 import { iniciarServidorHttp } from "./servidor.lifecycle.js";
+import { avaliarEfeitosExternos } from "./ambiente/efeitosExternos.js";
+import { lerAllowlistRetryResend } from "./modules/comunicacao/retryResendAllowlist.js";
+
+// Guarda de efeitos externos (ambiente/efeitosExternos.js): decide, ANTES das flags de cada rotina, se este processo pode
+// consumir fila, enviar WhatsApp, purgar dados ou falar com iFood/Martin Brower. Autorização POSITIVA: sem ela (PR
+// Preview, serviço não autorizado, local/teste sem opt-in) tudo fica bloqueado. Só vocabulário fechado no log.
+{
+  const e = avaliarEfeitosExternos();
+  console.log(`   Efeitos externos: ${e.permitido ? "PERMITIDOS" : "BLOQUEADOS"} (ambiente=${e.ambiente}, motivo=${e.motivo})`);
+  // Allowlist do reenvio sob retry (modules/comunicacao/retryResendAllowlist.js): só estado e contagem — nunca os contato_id.
+  const a = lerAllowlistRetryResend();
+  console.log(`   WhatsApp retry resend: allowlist ${a.estado} (${a.total} contato(s))`);
+}
 
 // Worker Martin Brower: só é carregado com MB_PLAYWRIGHT_ENABLED=true. Com a
 // flag desligada (padrão), o adapter nem é importado — nenhum código de

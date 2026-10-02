@@ -48,10 +48,14 @@
 //   6. O orderId vem sempre do findProxPedidoV2, nunca é fixo.
 
 import { mbErro, MB_ERROS } from "./martinbrower.errors.js";
+import { efeitosExternosPermitidos } from "../../ambiente/efeitosExternos.js";
 
-/** A automação está habilitada neste ambiente? Default: NÃO. */
+/**
+ * A automação está habilitada neste ambiente? Default: NÃO. Além da flag, exige a guarda de efeitos externos
+ * (ambiente/efeitosExternos.js): um PR Preview do Render herda MB_PLAYWRIGHT_ENABLED e não pode receber credenciais.
+ */
 export function workerHabilitado() {
-  return process.env.MB_PLAYWRIGHT_ENABLED === "true";
+  return process.env.MB_PLAYWRIGHT_ENABLED === "true" && efeitosExternosPermitidos(process.env);
 }
 
 export function exigirWorkerHabilitado() {

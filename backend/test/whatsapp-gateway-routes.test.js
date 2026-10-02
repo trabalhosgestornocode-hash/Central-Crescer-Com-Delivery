@@ -13,6 +13,10 @@ import { criarWhatsappGatewayRouter } from "../src/modules/comunicacao/gateway/w
 import { criarRepoEmMemoria } from "../src/modules/comunicacao/gateway/whatsappGateway.repo.js";
 import { criarBaileysGatewayProvider } from "../src/modules/comunicacao/providers/baileysGateway.provider.js";
 
+// Guarda de efeitos externos (src/ambiente/efeitosExternos.js): este arquivo EXERCITA o provider/worker contra fakes locais
+// (fetch falso / Gateway em 127.0.0.1), então autoriza explicitamente — só neste processo de teste.
+process.env.EFEITOS_EXTERNOS_LOCAL_PERMITIDOS = "true";
+
 const SEGREDO = "s".repeat(32);
 const ORG_ID = "org-teste-1";
 

@@ -48,6 +48,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { validarProvider } from "../whatsapp.provider.js";
 import { assinarRequisicao } from "../gateway/whatsappGateway.hmac.js";
 import { motivoBloqueioAutomacao } from "../inbound/inbound.contrato.js";
+import { avaliarEfeitosExternos } from "../../../ambiente/efeitosExternos.js";
 
 /**
  * Tabela definitiva código-de-contrato-do-Gateway -> marcas do erro. Só o que
@@ -120,9 +121,15 @@ function motivoPedidoInvalido({ telefoneE164, idempotencyKey }, extra = {}) {
  * @param {number} [opts.timeoutMs]
  * @returns {import('../whatsapp.provider.js').WhatsAppProvider}
  */
-export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs = 15_000 }) {
+export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs = 15_000, env = process.env }) {
   const handlersMensagem = [];
   const url = String(gatewayUrl ?? "").replace(/\/+$/, "");
+  // Guarda de efeitos externos (ambiente/efeitosExternos.js) no ÚNICO ponto que fala com o Gateway: processo sem
+  // autorização positiva (PR Preview do Render — que herda WHATSAPP_GATEWAY_URL/SECRET —, serviço do Render fora da
+  // lista, local/teste sem EFEITOS_EXTERNOS_LOCAL_PERMITIDOS=true, ambiente desconhecido) NUNCA alcança o Gateway — vale
+  // para o worker, o envio manual da Central, a aba Conexão e qualquer chamada futura. Avaliada uma vez, na criação.
+  const efeitos = avaliarEfeitosExternos(env);
+  const bloqueioExterno = efeitos.permitido ? null : efeitos.motivo;
 
   function erroEnvio(mensagem, { preEnvio = false, permanente = false } = {}) {
     const e = new Error(mensagem);
@@ -138,6 +145,9 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
     return e;
   }
 
+  /** `{retryResend: true}` só para o booleano `true` exato; qualquer outra coisa ⇒ `{}` (fail closed, corpo inalterado). */
+  const marcaRetry = (v) => (v === true ? { retryResend: true } : {});
+
   /** Pedido de envio inválido: PERMANENTE e comprovadamente pré-envio (nenhuma rede tocada). */
   function rejeitarPedidoInvalido(motivo) {
     return erroEnvio(`BAILEYS_GATEWAY_INVALID_MESSAGE: ${motivo}`, { preEnvio: true, permanente: true });
@@ -151,6 +161,10 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
    *   (leitura estrita da resposta: 2xx ilegível NÃO é sucesso, é INCERTO).
    */
   async function chamar(metodo, caminho, corpoObj, { envio = false } = {}) {
+    if (bloqueioExterno) {
+      // Nenhuma rede é tocada: comprovadamente pré-envio e PERMANENTE neste processo (nunca vira retry).
+      throw erroEnvio(`BAILEYS_GATEWAY_EFEITOS_EXTERNOS_BLOQUEADOS: ${bloqueioExterno}`, { preEnvio: true, permanente: true });
+    }
     if (!url || !segredoHmac) {
       // Configuração ausente é um "nada saiu" claro — seguro reivindicar de novo.
       throw erroEnvio("BAILEYS_GATEWAY_DISABLED: gatewayUrl/segredoHmac ausente.", { preEnvio: true });
@@ -214,20 +228,23 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
     // oficial (Meta/Z-API não tem "ciphertext de sessão" para resetar).
     async reset() { await chamar("POST", "/internal/whatsapp/reset", {}); },
 
-    async sendText({ telefoneE164, texto, idempotencyKey }) {
+    // `retryResend` (opcional): decisão do BACKEND (whatsapp.service.js + modules/comunicacao/retryResendAllowlist.js) de que ESTA
+    // mensagem pode ser guardada para reenvio sob retry receipt. Só vai no corpo (assinado por HMAC) quando é exatamente
+    // `true`; ausente/qualquer outro valor ⇒ o corpo fica idêntico ao de antes e o Gateway não guarda nada.
+    async sendText({ telefoneE164, texto, idempotencyKey, retryResend }) {
       const invalido = motivoPedidoInvalido({ telefoneE164, idempotencyKey }, { texto });
       if (invalido) throw rejeitarPedidoInvalido(invalido);
-      return chamar("POST", "/internal/whatsapp/messages", { telefoneE164, tipo: "text", texto, idempotencyKey }, { envio: true });
+      return chamar("POST", "/internal/whatsapp/messages", { telefoneE164, tipo: "text", texto, idempotencyKey, ...marcaRetry(retryResend) }, { envio: true });
     },
-    async sendImage({ telefoneE164, urlImagem, legenda, idempotencyKey }) {
+    async sendImage({ telefoneE164, urlImagem, legenda, idempotencyKey, retryResend }) {
       const invalido = motivoPedidoInvalido({ telefoneE164, idempotencyKey }, { url: urlImagem });
       if (invalido) throw rejeitarPedidoInvalido(invalido);
-      return chamar("POST", "/internal/whatsapp/messages", { telefoneE164, tipo: "image", urlImagem, legenda, idempotencyKey }, { envio: true });
+      return chamar("POST", "/internal/whatsapp/messages", { telefoneE164, tipo: "image", urlImagem, legenda, idempotencyKey, ...marcaRetry(retryResend) }, { envio: true });
     },
-    async sendDocument({ telefoneE164, urlDocumento, nomeArquivo, idempotencyKey }) {
+    async sendDocument({ telefoneE164, urlDocumento, nomeArquivo, idempotencyKey, retryResend }) {
       const invalido = motivoPedidoInvalido({ telefoneE164, idempotencyKey }, { url: urlDocumento });
       if (invalido) throw rejeitarPedidoInvalido(invalido);
-      return chamar("POST", "/internal/whatsapp/messages", { telefoneE164, tipo: "document", urlDocumento, nomeArquivo, idempotencyKey }, { envio: true });
+      return chamar("POST", "/internal/whatsapp/messages", { telefoneE164, tipo: "document", urlDocumento, nomeArquivo, idempotencyKey, ...marcaRetry(retryResend) }, { envio: true });
     },
 
     onMessage(handler) { handlersMensagem.push(handler); },

@@ -287,3 +287,28 @@ describe("config — capacidade de auth-state por env (Checkpoint G.3.3: WHATSAP
     assert.equal(guarda2MiB.estado().maxUsagePct, 85, "85% continua 85% — nunca vira 90/95 silenciosamente");
   });
 });
+
+describe("config — reenvio sob retry (WHATSAPP_RETRY_*)", () => {
+  test("padrão: flag DESLIGADA, TTL/teto ausentes (ficam nos defaults do módulo)", async () => {
+    const { config, erro } = await carregarConfigCom({ WHATSAPP_RETRY_RESEND_ENABLED: "", WHATSAPP_RETRY_CACHE_TTL_HORAS: "", WHATSAPP_RETRY_MAX_REENVIOS: "" });
+    assert.equal(erro, null);
+    assert.equal(config.retryResendHabilitado, false);
+    assert.equal(config.retryCacheTtlHoras, undefined);
+    assert.equal(config.retryMaxReenvios, undefined);
+  });
+
+  test("liga só com valor afirmativo explícito", async () => {
+    for (const v of ["true", "1", "on", "YES"]) assert.equal((await carregarConfigCom({ WHATSAPP_RETRY_RESEND_ENABLED: v })).config.retryResendHabilitado, true, v);
+    for (const v of ["false", "0", "talvez"]) assert.equal((await carregarConfigCom({ WHATSAPP_RETRY_RESEND_ENABLED: v })).config.retryResendHabilitado, false, v);
+  });
+
+  test("TTL/teto fornecidos e fora da faixa FALHAM no boot (nunca caem num default silencioso)", async () => {
+    for (const [env, v] of [["WHATSAPP_RETRY_CACHE_TTL_HORAS", "0"], ["WHATSAPP_RETRY_CACHE_TTL_HORAS", "721"], ["WHATSAPP_RETRY_CACHE_TTL_HORAS", "7d"], ["WHATSAPP_RETRY_MAX_REENVIOS", "0"], ["WHATSAPP_RETRY_MAX_REENVIOS", "51"]]) {
+      const { erro } = await carregarConfigCom({ [env]: v });
+      assert.ok(erro && erro.message.includes(env), `${env}=${v}`);
+    }
+    const { config, erro } = await carregarConfigCom({ WHATSAPP_RETRY_CACHE_TTL_HORAS: "48", WHATSAPP_RETRY_MAX_REENVIOS: "10" });
+    assert.equal(erro, null);
+    assert.deepEqual([config.retryCacheTtlHoras, config.retryMaxReenvios], [48, 10]);
+  });
+});

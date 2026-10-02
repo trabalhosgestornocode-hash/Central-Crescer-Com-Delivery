@@ -3,6 +3,7 @@
 // no processo web, independente de haver tráfego novo e independente do worker de automação (que pode estar desligado).
 // Sem setInterval: o próximo tick só é agendado depois que o anterior termina. Timer com unref (nunca segura o processo). Falha NUNCA derruba o servidor.
 import { purgarVencidas, retencaoDias } from "./comunicacao.inbox.repo.js";
+import { avaliarEfeitosExternos } from "../../ambiente/efeitosExternos.js";
 
 const PADRAO_MIN = 360;      // a cada 6 h
 const PRIMEIRA_MS = 90_000;  // 1º passe 90 s após o boot (não disputa a subida)
@@ -38,6 +39,12 @@ export async function executarPurga({ log = () => {}, deps = {} } = {}) {
 export function iniciarPurgaPeriodica({ env = process.env, log = () => {}, deps = {}, primeiraMs = PRIMEIRA_MS } = {}) {
   const min = intervaloPurgaMin(env);
   if (min === 0) return { ativa: false, parar() {} };
+  // A purga APAGA dados: nunca roda num PR Preview do Render nem fora do Render sem autorização (ambiente/efeitosExternos.js).
+  const efeitos = avaliarEfeitosExternos(env);
+  if (!efeitos.permitido) {
+    log("warn", "comunicacao.inbox_purga_bloqueada", { ambiente: efeitos.ambiente, motivo: efeitos.motivo });
+    return { ativa: false, motivo: efeitos.motivo, parar() {} };
+  }
   let timer = null; let parado = false;
   const agendar = (ms) => {
     if (parado) return;

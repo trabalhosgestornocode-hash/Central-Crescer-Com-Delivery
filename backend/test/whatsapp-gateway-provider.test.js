@@ -13,6 +13,10 @@ import { classificarErroEnvio, permiteRetryAutomatico } from "../src/modules/com
 import { CLASSIFICACAO_ERRO } from "../src/modules/comunicacao/comunicacao.constants.js";
 import express from "express";
 
+// Guarda de efeitos externos (src/ambiente/efeitosExternos.js): este arquivo EXERCITA o provider/worker contra fakes locais
+// (fetch falso / Gateway em 127.0.0.1), então autoriza explicitamente — só neste processo de teste.
+process.env.EFEITOS_EXTERNOS_LOCAL_PERMITIDOS = "true";
+
 const SEGREDO = "s".repeat(32);
 
 describe("BaileysGatewayProvider — contrato e classificação de erro", () => {

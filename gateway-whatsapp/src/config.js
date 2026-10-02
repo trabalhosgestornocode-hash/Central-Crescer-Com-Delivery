@@ -7,6 +7,8 @@
 // Ver test/config-sem-service-role.test.js e
 // test/seguranca-sem-supabase.test.js para a verificação executável disso.
 
+import { RETRY_TTL_MIN_HORAS, RETRY_TTL_MAX_HORAS, RETRY_MAX_REENVIOS_TETO } from "./retryLimites.js";
+
 // Checkpoint G.2.0 — parse NÃO permissivo (nunca `Number(env) || default`) para os caps do motor de
 // OFFLINE_RECOVERY abaixo. Ausente ou vazio (após trim) ⇒ `undefined` — mesmo tratamento que os outros flags deste
 // arquivo já dão a env vazia (ver offlineRecoveryHabilitado/offlineObserveHabilitado acima: string vazia cai no
@@ -112,6 +114,13 @@ export const config = {
     batchQuietMs: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_OFFLINE_RECOVERY_BATCH_QUIET_MS),
   },
 
+  // Reenvio sob RETRY RECEIPT (src/retryCache.js; docs/whatsapp-retry-resend.md). Padrão DESLIGADO: sem a flag, o
+  // socket é criado exatamente como antes (sem getMessage) e nada de conteúdo é gravado. Ligar/desligar não exige
+  // migration nem rollback de banco — só a env + restart. TTL/teto ausentes = default; fornecidos e inválidos = falha no boot.
+  retryResendHabilitado: /^(1|true|yes|on)$/i.test(String(process.env.WHATSAPP_RETRY_RESEND_ENABLED ?? "").trim()),
+  retryCacheTtlHoras: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_RETRY_CACHE_TTL_HORAS),
+  retryMaxReenvios: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_RETRY_MAX_REENVIOS),
+
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",
 
@@ -197,6 +206,19 @@ export function validarConfig() {
     if (valor === undefined) continue;
     if (!Number.isInteger(valor) || valor < 1) {
       throw new Error(`${nomeEnv} precisa ser um inteiro >= 1 (recebido: "${process.env[nomeEnv]}")`);
+    }
+  }
+
+  // Reenvio sob retry — mesma regra fail-closed: ausente = default de src/retryCache.js; fornecido e fora da faixa FALHA.
+  // Faixas replicadas das constantes do módulo (e das CHECKs da migration 105 no lado do banco).
+  const LIMITES_RETRY = [
+    ["WHATSAPP_RETRY_CACHE_TTL_HORAS", config.retryCacheTtlHoras, RETRY_TTL_MIN_HORAS, RETRY_TTL_MAX_HORAS],
+    ["WHATSAPP_RETRY_MAX_REENVIOS", config.retryMaxReenvios, 1, RETRY_MAX_REENVIOS_TETO],
+  ];
+  for (const [nomeEnv, valor, min, max] of LIMITES_RETRY) {
+    if (valor === undefined) continue;
+    if (!Number.isInteger(valor) || valor < min || valor > max) {
+      throw new Error(`${nomeEnv} precisa ser um inteiro entre ${min} e ${max} (recebido: "${process.env[nomeEnv]}")`);
     }
   }
 

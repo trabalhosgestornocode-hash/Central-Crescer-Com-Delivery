@@ -19,13 +19,24 @@ import { executarCiclo } from "../modules/comunicacao/comunicacao.alertas.servic
 import { criarWhatsAppService } from "../modules/comunicacao/whatsapp.service.js";
 import { criarGateIdentidade } from "../modules/comunicacao/comunicacao.identidade.js";
 import { criarBaileysGatewayProvider } from "../modules/comunicacao/providers/baileysGateway.provider.js";
+import { avaliarEfeitosExternos } from "../ambiente/efeitosExternos.js";
+
+// Guarda de efeitos externos (ambiente/efeitosExternos.js): PR Preview do Render ou processo fora do Render sem autorização
+// explícita ⇒ não consome a fila nem chama o Gateway. Sai com 0 (estado seguro), sem carregar a config do worker.
+{
+  const efeitos = avaliarEfeitosExternos();
+  if (!efeitos.permitido) {
+    workerLog("warn", "comunicacao.worker_not_started", { reason: "efeitos_externos_bloqueados", ambiente: efeitos.ambiente, motivo: efeitos.motivo });
+    process.exit(0);
+  }
+}
 
 // Falhar no boot é melhor que subir com config incompleta/inválida
 // (intervalo, URL do Gateway ou segredo HMAC — ver config.js#carregarConfig).
 const config = carregarConfig();
 
 const whatsAppService = criarWhatsAppService({
-  provider: criarBaileysGatewayProvider({ gatewayUrl: config.gatewayUrl, segredoHmac: config.segredoHmac }),
+  provider: criarBaileysGatewayProvider({ gatewayUrl: config.gatewayUrl, segredoHmac: config.segredoHmac, env: process.env }),
   // O worker/automação só envia com a conta CONFIRMADA na aba Conexão (mesma regra do envio manual). Sem confirmação: provider = 0.
   identidadeConfirmada: criarGateIdentidade({ env: process.env }),
   // KILL SWITCH também na fronteira do provider: modo DISABLED ⇒ nenhuma chamada ao provider, mesmo por um caminho inesperado.

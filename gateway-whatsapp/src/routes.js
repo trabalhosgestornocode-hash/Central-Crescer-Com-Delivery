@@ -16,7 +16,7 @@ import { qrParaSvg } from "./qrSvg.js";
 /**
  * @param {ReturnType<import('./baileysSession.js').criarSessaoBaileys>} sessao
  */
-export function criarRotas(sessao, { executarOperacao } = {}) {
+export function criarRotas(sessao, { executarOperacao, retryCache } = {}) {
   const router = Router();
   router.post("/whatsapp/operacao", async (req, res, next) => {
     try {
@@ -95,7 +95,11 @@ export function criarRotas(sessao, { executarOperacao } = {}) {
   router.post("/whatsapp/messages", async (req, res, next) => {
     try {
       const { telefoneE164, tipo, idempotencyKey, texto, urlImagem, legenda, urlDocumento, nomeArquivo } = req.corpoJson ?? {};
-      log("info", "mensagens.recebido_pedido_envio", { tipo, idempotencyKey });
+      // Reenvio sob retry (src/retryCache.js): o BACKEND decide por destinatário (allowlist por contato_id, que o Gateway
+      // não conhece) e marca o pedido — corpo autenticado por HMAC. Só o booleano `true` exato vale; ausente, string,
+      // número ou qualquer outra coisa ⇒ false (a mensagem é enviada igual, mas NÃO é guardada para reenvio).
+      const retryResend = req.corpoJson?.retryResend === true;
+      log("info", "mensagens.recebido_pedido_envio", { tipo, idempotencyKey, retryResend });
 
       let conteudo;
       if (tipo === "text") conteudo = { text: texto };
@@ -103,7 +107,7 @@ export function criarRotas(sessao, { executarOperacao } = {}) {
       else if (tipo === "document") conteudo = { document: { url: urlDocumento }, fileName: nomeArquivo };
       else return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_MESSAGE", detalhe: "tipo desconhecido" });
 
-      const resultado = await sessao.enviar({ tipo, telefoneE164, conteudo, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null });
+      const resultado = await sessao.enviar({ tipo, telefoneE164, conteudo, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null, retryResend });
       res.json(resultado);
     } catch (e) { next(e); }
   });
@@ -124,6 +128,14 @@ export function criarRotas(sessao, { executarOperacao } = {}) {
       res.set("Cache-Control", "no-store");
       res.json(await sessao.fotoPerfil({ telefoneE164 }));
     } catch (e) { next(e); }
+  });
+
+  // Métricas do reenvio sob retry (src/retryCache.js) — SÓ números/vocabulário fechado (nunca id, JID ou conteúdo).
+  // É o que mede a correção: retryRecebido, cacheHit, cacheMiss, reenvioEnviado, esgotado e cacheHitRate.
+  router.get("/whatsapp/retry/metricas", (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!retryCache) return res.status(404).json({ error: "not_found" });
+    res.json(retryCache.metricas());
   });
 
   router.get("/whatsapp/messages/:id/status", async (req, res, next) => {

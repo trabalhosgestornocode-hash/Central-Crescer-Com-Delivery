@@ -47,7 +47,7 @@ export async function criarWhatsAppServiceDoAmbiente(env = process.env) {
   const { criarBaileysGatewayProvider } = await import("./providers/baileysGateway.provider.js");
   const { criarGateIdentidade } = await import("./comunicacao.identidade.js");
   // O gate de identidade vai junto: o serviço do ambiente NUNCA envia se a conta conectada não for a confirmada na aba Conexão.
-  return criarWhatsAppService({ provider: criarBaileysGatewayProvider({ gatewayUrl, segredoHmac }), identidadeConfirmada: criarGateIdentidade({ env }), modoAtual: () => lerModoAtual() });
+  return criarWhatsAppService({ provider: criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, env }), identidadeConfirmada: criarGateIdentidade({ env }), modoAtual: () => lerModoAtual() });
 }
 
 /**
@@ -93,7 +93,7 @@ export async function enviarMensagemTeste({
 
   let envio;
   try {
-    envio = await whatsAppService.enviarTexto({ telefoneE164, texto, idempotencyKey: mensagem.idempotency_key });
+    envio = await whatsAppService.enviarTexto({ telefoneE164, texto, idempotencyKey: mensagem.idempotency_key, contatoId });
   } catch (e) {
     // SEM retry: pré-envio comprovado e permanente viram FAILED; incerto vira DELIVERY_UNKNOWN. Nunca SCHEDULED/RETRY.
     const classificacao = classificarErroEnvio(e);

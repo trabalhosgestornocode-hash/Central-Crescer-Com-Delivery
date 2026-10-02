@@ -21,6 +21,7 @@ import { instalarGuardaLibsignal } from "./libsignalLogGuard.js";
 import { criarInboundGateway } from "./inboundScope.js";
 import { criarRastreadorOrigem } from "./inboundContrato.js";
 import { criarGuardaAuthHeadroom } from "./authHeadroom.js";
+import { criarCacheRetry } from "./retryCache.js";
 
 // Checkpoint C3.5-C.9.1 — a libsignal escreve OBJETOS de sessão (material de chave) em
 // console.*. Instalada ANTES de qualquer socket/libsignal existir e SEM depender de flag:
@@ -141,6 +142,21 @@ log(inbound.valido ? "info" : "warn", inbound.valido ? "inbound.escopo" : "inbou
 // injetar isto em vez de deixar baileysSession.js criar o seu próprio, como antes do Checkpoint G.
 const rastreadorOrigem = criarRastreadorOrigem({ rotularOffline: () => (inbound.recoveryAtivo() ? "OFFLINE_RECOVERY" : "OFFLINE_NORMAL") });
 
+// Reenvio sob retry receipt (src/retryCache.js; docs/whatsapp-retry-resend.md). WHATSAPP_RETRY_RESEND_ENABLED desligada
+// (padrão) ⇒ o socket nasce idêntico ao de antes; só a observação passiva dos retries fica ativa. Usa SUBCHAVES derivadas
+// (HKDF) da mesma chave mestra do auth state — nunca a chave em si — e grava no backend sob a mesma lease (fencing).
+const retryCache = criarCacheRetry({
+  backendClient,
+  chaveEncriptacaoEnv: config.chaveEncriptacaoAuthState,
+  providerInstanceId: config.providerInstanceId,
+  obterContextoLease: () => leaseManager.contexto(),
+  habilitado: config.retryResendHabilitado,
+  ttlHoras: config.retryCacheTtlHoras,
+  maxReenvios: config.retryMaxReenvios,
+});
+log("info", "whatsapp.retry.config", retryCache.configuracao());
+retryCache.iniciarMetricasPeriodicas();
+
 const sessao = criarSessaoBaileys({
   authAdapter,
   backendClient,
@@ -150,6 +166,7 @@ const sessao = criarSessaoBaileys({
   rastreadorOrigem,
   DisconnectReasonLoggedOut: DisconnectReason.loggedOut,
   leaseManager,
+  retryCache,
 });
 
 const app = express();
@@ -171,7 +188,7 @@ app.use(
       return res.status(409).json({ error: "OPERACAO_OBRIGATORIA" });
     next();
   },
-  criarRotas(sessao, { executarOperacao: criarExecutorOperacao(sessao, backendClient) }),
+  criarRotas(sessao, { executarOperacao: criarExecutorOperacao(sessao, backendClient), retryCache }),
 );
 
 app.use((_req, res) => res.status(404).json({ error: "not_found" }));
@@ -212,6 +229,7 @@ async function encerrar(sinal) {
   encerrando = true;
   log("warn", "gateway.encerrando", { sinal });
   servidor.close();
+  try { retryCache.emitirMetricas({ forcar: true }); retryCache.parar(); } catch { /* métricas nunca atrasam o shutdown */ }
 
   leaseManager.pararTemporizadores();
   if (leaseManager.souLeader()) {

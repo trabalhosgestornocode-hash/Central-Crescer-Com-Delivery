@@ -54,7 +54,7 @@ export function criarLoggerGravador() {
   const l = mk(); l.eventos = eventos; return l;
 }
 
-export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerBaileysSilencioso(), inbound, opcoesBaileys = {}, meLid = MEU_LID, latenciaKeysMs = 0 } = {}) {
+export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerBaileysSilencioso(), inbound, opcoesBaileys = {}, meLid = MEU_LID, latenciaKeysMs = 0, defaultQueryTimeoutMs = 40 } = {}) {
   const servidor = new WebSocketServer({ host: "127.0.0.1", port: 0 });
   await once(servidor, "listening");
   const quadros = [];
@@ -95,7 +95,9 @@ export async function criarGatewayFalso({ shouldIgnoreJid, logger = criarLoggerB
     ...(shouldIgnoreJid ? { shouldIgnoreJid } : {}),
     ...(inbound?.opcoesSocket?.() ?? {}),   // NUNCA passar undefined: o merge de defaults do Baileys o sobrescreveria
     ...opcoesBaileys,                       // ex.: shouldSyncHistoryMessage, placeholderResendCache (só testes)
-    connectTimeoutMs: CONNECT_TIMEOUT_TESTE_MS, defaultQueryTimeoutMs: 40, keepAliveIntervalMs: 600_000,
+    // `defaultQueryTimeoutMs` curto por padrão (ninguém responde iq aqui); o teste de retry responde as consultas de
+    // pré-chave (servidor falso) e pede uma janela maior.
+    connectTimeoutMs: CONNECT_TIMEOUT_TESTE_MS, defaultQueryTimeoutMs, keepAliveIntervalMs: 600_000,
     retryRequestDelayMs: 0, fireInitQueries: false, markOnlineOnConnect: false, syncFullHistory: false,
   });
   for (let i = 0; i < 100 && !sock.ws.isOpen; i++) await espera(20);

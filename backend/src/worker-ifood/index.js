@@ -33,6 +33,17 @@ if (!cfg.habilitado) {
   process.exit(0);
 }
 
+// Guarda de efeitos externos (ambiente/efeitosExternos.js): flag herdada por um PR Preview, ou processo fora do Render sem
+// autorização explícita ⇒ não faz polling/ACK no iFood de produção. Sai com 0 (estado seguro), como a flag desligada.
+{
+  const { avaliarEfeitosExternos } = await import("../ambiente/efeitosExternos.js");   // puro
+  const efeitos = avaliarEfeitosExternos();
+  if (!efeitos.permitido) {
+    ifoodLog("warn", "worker.bloqueado_efeitos_externos", { ambiente: efeitos.ambiente, motivo: efeitos.motivo });
+    process.exit(0);
+  }
+}
+
 const http = await import("node:http");
 const { montarRuntimeEventsIfood } = await import("./runtime.js");   // mesma montagem do modo embarcado
 const { executarWorker } = await import("./lifecycle.js");

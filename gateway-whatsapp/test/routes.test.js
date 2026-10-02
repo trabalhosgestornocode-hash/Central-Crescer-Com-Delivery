@@ -179,6 +179,30 @@ describe("routes — Backend -> Gateway", () => {
     assert.equal(chamada.correlationId, "k1", "H.4-B.4: a idempotencyKey vira o correlationId dos logs de envio");
   });
 
+  // Allowlist do reenvio sob retry: o backend decide por destinatário e manda SÓ um booleano no corpo assinado.
+  for (const [valor, esperado] of [[true, true], [undefined, false], [false, false], ["true", false], [1, false], [null, false], [{ a: 1 }, false]]) {
+    test(`POST /internal/whatsapp/messages com retryResend=${JSON.stringify(valor)} ⇒ enviar() recebe retryResend=${esperado} (só o booleano true vale)`, async () => {
+      _resetarNonces();
+      const corpo = { telefoneE164: "+5511999990000", tipo: "text", texto: "oi", idempotencyKey: "k-rr" };
+      if (valor !== undefined) corpo.retryResend = valor;
+      const r = await chamarAssinado("POST", "/internal/whatsapp/messages", corpo);
+      assert.equal(r.status, 200);
+      const chamada = sessao.enviar.mock.calls.at(-1).arguments[0];
+      assert.equal(chamada.retryResend, esperado);
+      assert.deepEqual(chamada.conteudo, { text: "oi" }, "o envio em si não muda");
+    });
+  }
+
+  test("POST /internal/whatsapp/messages com retryResend SEM HMAC é recusado com 401 (ninguém fora do backend marca mensagem)", async () => {
+    const antes = sessao.enviar.mock.calls.length;
+    const r = await fetch(`${baseUrl}/internal/whatsapp/messages`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ telefoneE164: "+5511999990000", tipo: "text", texto: "oi", idempotencyKey: "k-x", retryResend: true }),
+    });
+    assert.equal(r.status, 401);
+    assert.equal(sessao.enviar.mock.calls.length, antes);
+  });
+
   test("POST /internal/whatsapp/messages com tipo desconhecido devolve 400 sem chamar enviar()", async () => {
     _resetarNonces();
     const antes = sessao.enviar.mock.calls.length;

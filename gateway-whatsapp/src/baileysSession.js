@@ -37,6 +37,7 @@ import { criarRastreadorOrigem, observarOrigem, montarEventoInbound } from "./in
 import { criarFilaConcorrenciaLimitada } from "./filaConcorrenciaLimitada.js";
 import { criarObservadorEntrega } from "./entregaProvider.js";
 import { resolverJidCanonico } from "./destinatario.js";
+import { hashId } from "./retryCache.js";
 
 // Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
 // numéricos de DisconnectReason do Baileys (node_modules/baileys/lib/Types/
@@ -167,6 +168,9 @@ export function deJid(jid) {
 export function criarSessaoBaileys({
   authAdapter, backendClient, config, fabricaSocket, DisconnectReasonLoggedOut, agendar = setTimeout, cancelar = clearTimeout,
   leaseManager, inbound, rastreadorOrigem = criarRastreadorOrigem(),
+  // Reenvio sob retry receipt (src/retryCache.js). Ausente (testes antigos) ⇒ socket exatamente como antes; presente e
+  // DESLIGADO (flag) ⇒ também idêntico, só com observação passiva dos retries.
+  retryCache,
   // Checkpoint G.0.1 (Partes C-J) — concorrência limitada + prioridade LIVE > OFFLINE_* para
   // backendClient.notificarMensagemRecebida(): ver aoMessagesUpsert abaixo e src/filaConcorrenciaLimitada.js.
   filaNotificacaoBackend = criarFilaConcorrenciaLimitada({ concorrencia: config?.backendNotifyConcurrency ?? 4 }),
@@ -937,8 +941,24 @@ export function criarSessaoBaileys({
     // C.9.3 — `inbound.opcoesSocket()` é `{}` em ALL_SUPPORTED (com ou sem diagnóstico): nada muda no socket.
     // O diagnóstico só OBSERVA (logger com contagem de retry + listeners ws de leitura); desligado, é o mesmo logger.
     const loggerBaileys = criarLoggerBaileysSilencioso();
-    socket = fabricaSocket({ auth: authAdapter.comoAuthState(), logger: inbound?.envolverLogger?.(loggerBaileys) ?? loggerBaileys, printQRInTerminal: false, ...(inbound?.opcoesSocket?.() ?? {}) });
+    // Cache de retry: o wrapper de logger só OBSERVA 4 mensagens exatas do Baileys (nunca repassa argumentos ao log).
+    const loggerComRetry = retryCache?.envolverLogger?.(loggerBaileys) ?? loggerBaileys;
+    // Geração DESTE socket (definida logo abaixo, quando `geracaoSocket` sobe) — o getMessage a lê na hora da chamada.
+    let geracaoDesteSocket = null;
+    socket = fabricaSocket({
+      auth: authAdapter.comoAuthState(), logger: inbound?.envolverLogger?.(loggerComRetry) ?? loggerComRetry, printQRInTerminal: false,
+      ...(inbound?.opcoesSocket?.() ?? {}),
+      // `{}` com a flag desligada; ligada: getMessage + msgRetryCounterCache com escopo de processo (src/retryCache.js).
+      ...(retryCache?.opcoesSocket?.({ obterGeracaoSocket: () => geracaoDesteSocket }) ?? {}),
+    });
+    const socketCriado = socket;
     try { inbound?.observarSocket?.(socket); } catch { /* diagnóstico nunca interfere */ }
+    try {
+      retryCache?.observarSocket?.(socket, {
+        obterGeracaoSocket: () => geracaoDesteSocket,
+        obterIdentidade: () => identidadeDe(socketCriado?.user ?? socketCriado?.authState?.creds?.me),
+      });
+    } catch { /* observação nunca interfere */ }
     // Checkpoint F: passivo (só LÊ o stanza); independe do diagnóstico estar ligado.
     try { observarOrigem(socket, rastreadorOrigem); } catch { /* nunca interfere */ }
     const socketDesteListener = socket;
@@ -969,6 +989,7 @@ export function criarSessaoBaileys({
     // H.4-B.4 — leitura PURA dos nós crus (ack do servidor e recibos das mensagens que enviamos), independente do buffer de eventos do Baileys.
     // Nunca ack/flush/nada que altere o processamento do Baileys; só ids rastreados por `enviar()` viram evento.
     geracaoSocket += 1;
+    geracaoDesteSocket = geracaoSocket;
     try {
       socket.ws?.on?.("CB:ack,class:message", (no) => observadorEntrega.aoAckWs(no));
       socket.ws?.on?.("CB:receipt", (no) => observadorEntrega.aoReceiptWs(no));
@@ -1554,7 +1575,9 @@ export function criarSessaoBaileys({
      * 2) gera o providerMessageId ANTES do sendMessage (mesma função do Baileys) e o rastreia, para que um recibo/ack rápido nunca ganhe do registro;
      * 3) loga send_start/send_resolved sanitizados (JID mascarado, sem conteúdo). `correlationId` = idempotencyKey (o Gateway não conhece o id interno).
      */
-    async enviar({ tipo, telefoneE164, conteudo, correlationId = null }) {
+    async enviar({ tipo, telefoneE164, conteudo, correlationId = null, retryResend = false }) {
+      // Só o booleano `true` (decisão do backend, por destinatário) guarda a mensagem para reenvio sob retry; o envio é igual.
+      const guardarParaRetry = retryResend === true;
       const naoConectado = () => {
         // preEnvio: true — sabemos com certeza que nada saiu (nem tentamos).
         const e = erro(CODIGOS.NAO_CONECTADO);
@@ -1578,17 +1601,33 @@ export function criarSessaoBaileys({
       const jidMascarado = mascararTelefone(destino.jid);
       const providerIdGerado = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
       observadorEntrega.rastrear({ providerMessageId: providerIdGerado, correlationId, jidMascarado });
-      log("info", "send_start", { ...contextoLog(), tipo, providerMessageId: providerIdGerado, jid: jidMascarado, jidDifereDoPedido: destino.jidDifereDoPedido, lookupMs });
+      // `idHash` = o MESMO hash dos eventos whatsapp.retry.* (src/retryCache.js#hashId): correlaciona envio ↔ retry.
+      log("info", "send_start", { ...contextoLog(), tipo, providerMessageId: providerIdGerado, idHash: hashId(providerIdGerado), jid: jidMascarado, jidDifereDoPedido: destino.jidDifereDoPedido, destinoLidConhecido: Boolean(destino.lid), retryResend: guardarParaRetry, lookupMs });
+      // Um retry receipt pode chegar ~0,5 s depois do envio: o getMessage espera (com teto) até o conteúdo ser registrado.
+      if (guardarParaRetry) { try { retryCache?.marcarEnvioIniciado?.(providerIdGerado); } catch { /* cache nunca interfere no envio */ } }
       const t1 = Date.now();
       let resultado;
       try {
         resultado = await sockEnvio.sendMessage(destino.jid, conteudo, { messageId: providerIdGerado });
       } catch (e) {
+        try { retryCache?.cancelarEnvio?.(providerIdGerado); } catch { /* idem */ }
         log("error", "send_falhou", { ...contextoLog(), providerMessageId: providerIdGerado, jid: jidMascarado, durationMs: Date.now() - t1, erro: e?.name ?? "erro" });
         throw e;
       }
       const providerMessageId = resultado?.key?.id;
       if (providerMessageId && providerMessageId !== providerIdGerado) observadorEntrega.rastrear({ providerMessageId, correlationId, jidMascarado });
+      // Guarda o CONTEÚDO exato que o Baileys cifrou (`fullMsg.message`) para um eventual reenvio sob retry. Síncrono na
+      // memória, assíncrono no backend; NUNCA atrasa nem derruba o envio (o envio já aconteceu).
+      // Mensagem NÃO autorizada (allowlist do backend) ⇒ nada é guardado: um retry dela vira cache miss, como sem a feature.
+      if (guardarParaRetry) {
+        try {
+          retryCache?.registrarEnvio?.({
+            providerMessageId: providerMessageId ?? providerIdGerado, mensagem: resultado?.message,
+            destinoJid: destino.jid, destinoLid: destino.lid ?? null, socketGeneration: geracaoSocket,
+          })?.catch?.(() => {});
+          if (providerMessageId && providerMessageId !== providerIdGerado) retryCache?.cancelarEnvio?.(providerIdGerado);
+        } catch { /* cache nunca interfere no envio */ }
+      }
       log("info", "send_resolved", { ...contextoLog(), providerMessageId, jid: jidMascarado, durationMs: Date.now() - t1, idPreGeradoConfere: providerMessageId === providerIdGerado });
       return { providerMessageId, enviadoEm: new Date().toISOString() };
     },

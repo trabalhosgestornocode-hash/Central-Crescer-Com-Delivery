@@ -65,5 +65,9 @@ export async function resolverJidCanonico({ socket, telefoneE164, timeoutMs = TI
   const m = typeof item.jid === "string" ? JID_USUARIO_PN.exec(item.jid) : null;
   if (!m) throw falha(CODIGOS.DESTINATARIO_NAO_VERIFICADO, "jid fora do formato de usuário");
   if (m[1].slice(-DIGITOS_FINAIS) !== digitos.slice(-DIGITOS_FINAIS)) throw falha(CODIGOS.DESTINATARIO_NAO_VERIFICADO, "jid incoerente com o número pedido");
-  return { jid: item.jid, jidDifereDoPedido: m[1] !== digitos };
+  // `lid` (quando o servidor informa — chats.js#onWhatsApp do 6.7.24 o repassa) NÃO muda o endereçamento do envio (que
+  // continua no JID PN acima). Só serve ao cache de retry: um retry que chegue pelo LID pode ser conferido contra o
+  // destinatário original (src/retryCache.js#verificarDestino). Formato inesperado ⇒ null (nunca usado).
+  const lid = typeof item.lid === "string" && /^[0-9]{1,24}@lid$/.test(item.lid) ? item.lid : null;
+  return { jid: item.jid, jidDifereDoPedido: m[1] !== digitos, lid };
 }
