@@ -1,5 +1,6 @@
 // Entrypoint do worker de Events do iFood — PROCESSO SEPARADO (nunca iniciado
-// pelo backend HTTP principal; server.js não importa nada daqui).
+// pelo backend HTTP principal; server.js não importa nada daqui). O modo
+// EMBARCADO no Web Service é outro host (embedded.js) sobre o mesmo runtime.js.
 //
 //   npm run worker:ifood                       produção/Render: SÓ variáveis de ambiente do processo
 //                                              (= node src/worker-ifood/index.js; nenhum arquivo .env)
@@ -33,36 +34,20 @@ if (!cfg.habilitado) {
 }
 
 const http = await import("node:http");
-const os = await import("node:os");
-const { randomBytes } = await import("node:crypto");
-const tokenService = await import("../modules/ifood/ifoodToken.service.js");
-const repoEvents = await import("../modules/ifood/ifoodEvents.repository.js");
-const repoOrder = await import("../modules/ifood/ifoodOrder.repository.js");
-const { criarPoller, criarLoopDoPoller } = await import("../modules/ifood/ifoodEvents.poller.js");
-const { MODOS_AUTH } = await import("../modules/ifood/ifoodAuthProvider.js");
-const { centralizadoTestePermitido } = await import("../modules/ifood/ifood.ambienteTeste.js");
+const { montarRuntimeEventsIfood } = await import("./runtime.js");   // mesma montagem do modo embarcado
 const { executarWorker } = await import("./lifecycle.js");
 
 for (const a of cfg.avisos) ifoodLog("warn", "worker.config_ajustada", { aviso: a });
 
-const modo = tokenService.modoDeAutenticacao();
-if (modo === MODOS_AUTH.CENTRALIZED_TEST) {
-  const permitido = centralizadoTestePermitido(process.env);
-  if (!permitido.ok) {
-    console.error(`iFood Events worker RECUSADO: modo centralized_test não permitido (${permitido.motivos.join("; ")}).`);
-    process.exit(1);
-  }
+const runtime = await montarRuntimeEventsIfood({ env: process.env, cfg });
+if (!runtime.ok) {
+  console.error(`iFood Events worker RECUSADO: ${runtime.motivo}.`);
+  process.exit(1);
 }
-
-const holder = `${os.hostname()}:${process.pid}:${randomBytes(4).toString("hex")}`;
-const repo = { ...repoEvents, ...repoOrder };
-// Order Details (Checkpoint C) exige a migration 102: só liga com IFOOD_ORDER_DETAILS_ENABLED=true.
-const detalhes = process.env.IFOOD_ORDER_DETAILS_ENABLED === "true" ? {} : null;
-const poller = criarPoller({ repo, token: tokenService, holder, leaseTtlS: cfg.leaseTtlS, detalhes });
+const { modo, holder, poller } = runtime;
 
 let ultimoResultado = null;
-const loop = criarLoopDoPoller({
-  poller, intervaloMs: cfg.intervaloMs,
+const loop = runtime.criarLoop({
   aoFinalizarCiclo: (r) => { ultimoResultado = { ...r, em: new Date().toISOString() }; },
 });
 

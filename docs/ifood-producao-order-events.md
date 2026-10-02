@@ -37,7 +37,59 @@ tabelas da 101. Em produção hoje: 101 0/10, 102 0/4, 103 0/6; `ifood_credencia
 
 Rollback (só com autorização): 103 → 102 → 101, cada um em transação; os scripts abortam se houver dados.
 
-## 2. Worker de Events no Render (NÃO criado)
+> **Atualização 2026-10-01:** 101, 102 e 103 **aplicadas e validadas em produção** (`20261001192230`,
+> `20261001214117`, `20261001214706`), com 0 linhas iFood e as 12 sessões OAuth antigas preservadas.
+
+## 2. Onde o Events roda
+
+**Decisão desta fase: EMBARCADO no Web Service** (sem serviço novo no Render). O worker dedicado (abaixo)
+continua existindo como rota de escala — os dois usam o MESMO core (`worker-ifood/runtime.js`: poller,
+service, repositórios, lease, loop); só muda o host.
+
+### 2a. Embarcado no Web Service (`IFOOD_EVENTS_EMBEDDED_ENABLED=true`; padrão desligado)
+
+- **Host:** `src/worker-ifood/embedded.js`, chamado pelo `server.js` **depois** do `listen()` e sem `await`;
+  o `/health` já responde antes de qualquer polling. Flag desligada = runtime/poller/token nem são importados.
+- **Supervisor** (`src/worker-ifood/supervisor.js`, host-agnóstico): dá vida ao loop serial, traduz cada
+  ciclo em estado e, se o próprio loop terminar/quebrar, registra e cria outro com backoff (5 s → 5 min).
+  **Nunca chama `process.exit`**: falha do Events = estado `degraded` + log, a API segue saudável.
+- **Estados:** `disabled` · `starting` · `active` · `waiting_lease` (outra instância tem o lease — normal em
+  deploy) · `degraded` · `stopping` · `stopped`. `/health` mostra só `ifoodEvents: <estado>` e é **sempre
+  200**; `GET /integracoes/ifood/status` traz `eventosRecebimento` (estado e horários, nada que agregue outras
+  lojas). Detalhe (contagens, lease mascarado, duração do ciclo): logs `events.supervisor_estado`,
+  `events.ciclo_resumo`, `events.supervisor_loop_terminou`.
+- **Deploy com duas instâncias:** o lease decide. A nova sobe, recebe `LEASE_DE_OUTRO` (`waiting_lease`) e
+  segue saudável; quando a antiga libera (SIGTERM) ou o lease vence, a nova assume. **Fencing do ACK:** cada
+  lote de ACK só pode sair até (renovação do lease + TTL − 15 s) — um AbortSignal corta o ACK e os retries
+  dele antes do vencimento; do 2º lote em diante o lease é renovado de novo. Assim nenhuma instância envia
+  ACK depois que a outra pode ter assumido.
+- **SIGTERM:** um único handler (`src/servidor.lifecycle.js`): sem ciclo novo; espera o ciclo em voo até 7 s;
+  libera o lease **só se o ciclo terminou** (se não, o lease vence sozinho em ≤ 90 s e ninguém reconhece em
+  paralelo); fecha o HTTP; exit 0. Prazo final de 10 s.
+
+### 2b. Carga no processo Web e quando migrar para o worker dedicado
+
+Base: polling a cada 30 s (piso da doc), **serial** — no modo distribuído, uma requisição de polling por
+conexão por ciclo; ACK só quando há eventos; Supabase via HTTP (PostgREST, sem pool de conexões persistente);
+1 timer de espera do loop + 1 timeout por chamada HTTP em voo. Plano atual do web: 0,5 CPU / 512 MB.
+
+| Lojas | Chamadas iFood (sem eventos) | Duração do ciclo | Leitura |
+|---|---|---|---|
+| 1 | ~2 polls/min | ≈ latência de 1 poll + escritas | desprezível |
+| 10 | ~20 polls/min | ~10 × (latência do poll + escrita) | baixo; a medir |
+| 50 | ~100 polls/min | ~50 × (…) — pode se aproximar de 30 s | o limite é o loop SERIAL, não CPU |
+
+Os números de duração dependem da latência real do iFood e do Supabase — **medir na Fase 1** com
+`events.ciclo_resumo.duracaoMs`. Uma loja lenta (timeout 20 s × 3 tentativas) atrasa as demais do ciclo.
+
+**Sinais para migrar para Background Worker dedicado** (qualquer um sustentado): duração do ciclo p95 > 15 s
+(metade do intervalo); atraso de evento (`received_at − event_created_at`) p95 > 60 s; 429 recorrente; CPU do
+web > 70 % ou memória > 80 % com o Events ligado; lag do event loop perceptível na API; reinícios frequentes
+do supervisor; mais de ~20–30 lojas conectadas (confirmar com as medições). Migrar = ligar
+`IFOOD_EVENTS_WORKER_ENABLED` no worker e desligar `IFOOD_EVENTS_EMBEDDED_ENABLED` no web — o lease impede
+dois pollers durante a troca.
+
+### 2c. Worker dedicado no Render (NÃO criado — rota de escala)
 
 - **Tipo:** Background Worker, `rootDir: backend`, build `npm ci`, start **`node src/worker-ifood/index.js`**
   (= `npm run worker:ifood`; nenhum `--env-file`). **1 instância.**
