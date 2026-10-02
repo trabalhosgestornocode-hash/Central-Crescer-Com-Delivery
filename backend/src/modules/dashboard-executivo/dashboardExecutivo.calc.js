@@ -901,7 +901,7 @@ export const TAXAS_COMISSOES_REFERENCIA_FS = REFERENCIA_META_TAXAS_COMISSOES.ful
  * da combinação de tabelas — vale para os DOIS modelos, com a "reserva" própria
  * de cada um:
  *
- *   metaIdeal(servicos_promocoes) = min(limiteServicos, max(0, protecaoPrecificacao − reserva))
+ *   metaIdeal(servicos_promocoes) = max(0, protecaoPrecificacao − reserva)
  *   metaIdeal(total_deducoes)     = Σ metaIdeal dos componentes APLICÁVEIS ao modelo
  *                                 = reserva + servicosMeta
  *
@@ -910,13 +910,20 @@ export const TAXAS_COMISSOES_REFERENCIA_FS = REFERENCIA_META_TAXAS_COMISSOES.ful
  *     marketplace  → meta(taxas_comissoes) + meta(taxas_entregadores)
  *
  * O Total NUNCA recebe a Proteção da Precificação crua. `reserva + servicosMeta`
- * É, por construção, a soma das metas ideais dos componentes aplicáveis DEPOIS
- * dos clamps: `reserva` são os componentes fixos aplicáveis (Taxas [+ Entregadores
- * no Marketplace]) e `servicosMeta` é o componente variável já com `max(0, …)` e
- * `min(limiteServicos, …)` aplicados. No caso normal (sem clamp) isso coincide
- * com a proteção — `reserva + (protecao − reserva)`; quando um clamp de Serviços
- * age, o Total acompanha a soma real das linhas, não a proteção. Invariante
- * garantida: `metaIdeal(total_deducoes) === Σ metaIdeal(componentes aplicáveis)`.
+ * É, por construção, a soma das metas ideais dos componentes aplicáveis:
+ * `reserva` são os componentes fixos aplicáveis (Taxas [+ Entregadores no
+ * Marketplace]) e `servicosMeta` é o componente variável (só com o piso
+ * `max(0, …)`). Sempre que proteção ≥ reserva, isso coincide com a proteção —
+ * `reserva + (protecao − reserva)`; só quando a proteção é insuficiente o Total
+ * fica na reserva. Invariante garantida:
+ * `metaIdeal(total_deducoes) === Σ metaIdeal(componentes aplicáveis)`.
+ *
+ * A Meta Ideal de Serviços NÃO é travada no Limite logístico (2026-10-02, caso
+ * real Marketplace D × Z4: proteção 32,86% → Serviços 7,86% / Total 32,86%;
+ * a trava antiga dava 7,00% / 32,00% e divergia do Simulador). Meta acima do
+ * limite não gera "Dentro da Meta" indevido: `statusIndicadorRentabilidade`
+ * testa o limite primeiro ("Atenção" acima dele) e Disponível/saldo seguem
+ * contra o limite.
  *
  * `taxas_comissoes` e `taxas_entregadores` nunca são derivadas. Os LIMITES
  * continuam vindo de `metas_indicadores`. `protecaoPrecificacao` NÃO é
@@ -925,8 +932,9 @@ export const TAXAS_COMISSOES_REFERENCIA_FS = REFERENCIA_META_TAXAS_COMISSOES.ful
  *
  * Sinais internos (não renderizados):
  *   protecaoInsuficiente       → proteção < reserva (Serviços iria a negativo → 0).
- *   metaServicosAcimaDoLimite  → a proteção sobraria mais do que o Limite
- *                                logístico de Serviços permite (meta fica no limite).
+ *   metaServicosAcimaDoLimite  → a Meta Ideal de Serviços derivada ficou acima
+ *                                do Limite logístico de Serviços (só sinaliza;
+ *                                a meta NÃO é travada).
  *
  * @param {Record<string, {metaIdeal: number|null, limite: number}>} metas
  * @param {number|null} protecaoPrecificacaoPct  em 0–100
@@ -947,7 +955,7 @@ export function metasComProtecaoPrecificacao(metas, protecaoPrecificacaoPct, mod
   const reserva = metaTaxas + metaEntregadores;
   const servicosBruto = protecaoPrecificacaoPct - reserva;
   const limiteServicos = Number.isFinite(metas.servicos_promocoes?.limite) ? metas.servicos_promocoes.limite : Infinity;
-  const servicosMeta = Math.min(limiteServicos, Math.max(0, servicosBruto));
+  const servicosMeta = Math.max(0, servicosBruto);
 
   const novo = { ...metas };
   if (metas.servicos_promocoes) {
@@ -955,10 +963,10 @@ export function metasComProtecaoPrecificacao(metas, protecaoPrecificacaoPct, mod
   }
   if (metas.total_deducoes) {
     // metaIdeal(total_deducoes) = SOMA das metas ideais dos componentes
-    // APLICÁVEIS ao modelo, já com os clamps de Serviços aplicados — NUNCA a
-    // Proteção da Precificação crua. `reserva` = componentes fixos aplicáveis
-    // (Taxas [+ Entregadores no Marketplace]); `servicosMeta` = componente
-    // variável clampado. Invariante: Total === Σ componentes aplicáveis.
+    // APLICÁVEIS ao modelo — NUNCA a Proteção da Precificação crua. `reserva` =
+    // componentes fixos aplicáveis (Taxas [+ Entregadores no Marketplace]);
+    // `servicosMeta` = componente variável (piso 0). Invariante: Total === Σ
+    // componentes aplicáveis.
     novo.total_deducoes = { ...metas.total_deducoes, metaIdeal: reserva + servicosMeta };
   }
   return {

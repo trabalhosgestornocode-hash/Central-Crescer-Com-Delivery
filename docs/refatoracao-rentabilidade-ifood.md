@@ -31,9 +31,9 @@ Deduções** é a **soma das metas ideais dos componentes aplicáveis ao modelo*
 duplicar a fórmula):
 
 ```
-metaIdeal(servicos_promocoes) = min(limiteServicos, max(0, protecao − reserva))
+metaIdeal(servicos_promocoes) = max(0, protecao − reserva)        (sem trava no limite — ver 2026-10-02)
 metaIdeal(total_deducoes)     = Σ metaIdeal dos componentes aplicáveis ao modelo
-                              = reserva + servicosMeta      (após os clamps de Serviços)
+                              = reserva + servicosMeta = max(reserva, protecao)
 
 reserva = metas FIXAS dos indicadores que não variam:
   full_service → meta(Taxas e Comissões) = 20,50%                       (não há entregadores)
@@ -42,10 +42,9 @@ reserva = metas FIXAS dos indicadores que não variam:
 
 `reserva + servicosMeta` **é**, por construção, a soma das metas dos componentes
 aplicáveis: `reserva` são os componentes fixos aplicáveis e `servicosMeta` o
-componente variável já clampado. No caso normal (sem clamp de Serviços) isso
-coincide com a proteção — `reserva + (protecao − reserva)`; quando um clamp age
-(`max(0, …)` ou `min(limiteServicos, …)`), o Total acompanha a **soma real das
-linhas**, não a proteção. Invariante garantida (e coberta por teste):
+componente variável (só com piso 0). Sempre que a proteção cobre a reserva isso
+coincide com a proteção — `reserva + (protecao − reserva)`; só com proteção
+insuficiente (`max(0, …)`) o Total fica na reserva. Invariante garantida (e coberta por teste):
 `metaIdeal(total_deducoes) === Σ metaIdeal(componentes aplicáveis ao modelo)`.
 
 `Taxas e Comissões` e `Taxas de Entregadores` **nunca** são derivadas. Os
@@ -57,14 +56,25 @@ linhas**, não a proteção. Invariante garantida (e coberta por teste):
 | **FS** D × Z4 | 32,86% | 12,36% | 32,86% (`20,50 + 12,36`) |
 | **MP** E × Z4 | 31,43% | **6,43%** (`31,43 − 13 − 12`) | 31,43% (`13 + 6,43 + 12`) |
 | **MP** F × Z4 | 30,00% | **5,00%** | 30,00% (`13 + 5,00 + 12`) |
-| **MP** D × Z4 | 32,86% | **7,00%** (clamp: bruto 7,86% > limite 7%) | **32,00%** (`13 + 7,00 + 12` — **não** 32,86%) |
+| **MP** D × Z4 | 32,86% | **7,86%** (acima do limite 7% — só sinaliza) | **32,86%** (`13 + 7,86 + 12`) |
 | **MP** A × A (22,00 / 24,50) | 10,20% | **0,00%** (`protecaoInsuficiente`: 10,20 < reserva 25) | **25,00%** (`13 + 0,00 + 12` — **não** 10,20%) |
 
 Sinais internos (não renderizados, em `protecaoPrecificacao`):
 `protecaoInsuficiente` (proteção < reserva → Serviços meta = 0) e
-`metaServicosAcimaDoLimite` (a proteção permitiria mais do que a política
-logística de Serviços — meta fica travada no limite). Nos dois casos o Total
-deixa de coincidir com a proteção e passa a ser a soma dos componentes.
+`metaServicosAcimaDoLimite` (a Meta Ideal de Serviços derivada ficou acima do
+limite logístico de Serviços — **só sinaliza, não trava**). Só no primeiro caso o
+Total deixa de coincidir com a proteção.
+
+**2026-10-02 — trava de Serviços no limite removida.** Caso real (Matriz Subway
+Prainha, Marketplace, D × Z4 — Churrasco 15cm D 23,50 / Z4 35,00): o Simulador
+mostrava Proteção 32,86% e os Indicadores, Serviços 7,00% / Total 32,00%, porque
+`min(limiteServicos, …)` travava Serviços em 7%. A proteção era encontrada — não
+era falha de lookup nem fallback (fallback = `metas_indicadores`, MP 5% / 30%).
+Agora Serviços 7,86% / Total 32,86%, igual ao Simulador. Meta acima do limite não
+gera "Dentro da Meta" indevido: o status testa o limite primeiro e
+`Disponível`/saldo seguem contra o limite. Consequência aceita: com proteção acima
+de 35% a Meta Ideal do Total também passa do limite do Total (35%). Testes:
+`backend/test/dashboard-executivo-protecao-consistencia.test.js`.
 
 As metas derivadas alimentam a **tabela de Indicadores** (payload
 `indicadoresRentabilidade` + gráfico) **e os 4 cards de rentabilidade da Visão
