@@ -167,6 +167,10 @@ export function renderConfiguracoes() {
   view.querySelectorAll(".cfg-card").forEach((b) => b.addEventListener("click", () => abrirSecao(b.dataset.sec)));
 }
 
+/** Abre direto uma seção (ex.: "precos" = Tabelas Comerciais) — usado pelo
+ * CTA "Selecionar tabelas oficiais" do Dashboard iFood (via app.js). */
+export function abrirSecaoConfiguracoes(id) { abrirSecao(id); }
+
 function abrirSecao(id) {
   const s = SECOES.find((x) => x.id === id);
   if (!s) return renderConfiguracoes();

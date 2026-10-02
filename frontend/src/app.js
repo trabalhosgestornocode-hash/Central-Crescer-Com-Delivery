@@ -39,7 +39,9 @@ import { abrirInsumoPorNome } from "./insumoModal.js";
 import { abrirParserCancelamentos, abrirParserPedidoPorNumero, aguardarCarregamentoParser } from "./parserFoodDelivery.js";
 import { registrarResolverAcao } from "./agenteAcoesResolvedores.js";
 import { iniciarEfeitosLogin, marcarCamposInvalidos, limparCamposInvalidos, bloquearCamposLogin } from "./loginFx.js";
-import { aplicarTemaSalvo } from "./configuracoes.js";
+import { aplicarTemaSalvo, abrirSecaoConfiguracoes } from "./configuracoes.js";
+import { EVENTO_ABRIR_TABELAS_OFICIAIS } from "./dashboardExecutivoBloqueio.js";
+import { abrirTabelasComerciaisDaUnidade } from "./abrirTabelasComerciais.js";
 import { precisaDesafioMfa, abrirDesafioMfa } from "./mfa.js";
 import { abrirPainelAdmin, fecharPainelAdmin } from "./admin.js";
 import { abrirPainelAdministrativo } from "./painelAdm.js";
@@ -271,7 +273,13 @@ function atualizarCabecalho() {
 }
 
 // ---------- tela: app (tenant) ----------
-async function mostrarApp() {
+/**
+ * @param {{rotaInicial?: string}} [opts] — rota de entrada no lugar da
+ *   primeira acessível (ex.: CTA → Configurações depois de trocar a unidade).
+ * @returns {Promise<void>|undefined} a carga inicial (`carregar()`) — quem
+ *   precisa abrir algo só DEPOIS que o shell terminou de pintar aguarda isto.
+ */
+async function mostrarApp({ rotaInicial } = {}) {
   // FUNIL ÚNICO de entrada no shell do tenant (seleção de unidade,
   // restauração de sessão e impersonação passam todos por aqui) — e por isso
   // o único lugar certo para invalidar o contexto anterior. Tem que ser a
@@ -303,8 +311,7 @@ async function mostrarApp() {
   if (!unidade && state.sessao.unidadesDaEmpresa.length === 1) {
     try {
       await trocarUnidadeDoContexto({ unidadeId: state.sessao.unidadesDaEmpresa[0].id });
-      mostrarApp();
-      return;
+      return mostrarApp({ rotaInicial });
     } catch {
       // Não foi possível entrar sozinho na única unidade — segue no modo
       // consolidado; o seletor (não interativo, com 1 unidade só) e os
@@ -353,8 +360,8 @@ async function mostrarApp() {
   // (seção `inteligencia` + módulo `agente_ia`). Idempotente — sobrevive a
   // trocas de unidade/empresa, só reseta a conversa (ver agentePainel.js).
   if (temModulo("inteligencia") && temModulo("agente_ia")) montarPainelGlobal();
-  irPara(primeiraRotaAcessivel());
-  carregar();
+  irPara(rotaInicial ?? primeiraRotaAcessivel());
+  return carregar();
 }
 
 // ---------- tela: seleção de unidade ----------
@@ -875,6 +882,22 @@ function wireEventos() {
     if (!chip || chip.disabled) { toast("Nenhuma outra unidade disponível para selecionar."); return; }
     chip.click();
   });
+
+  // CTA "Selecionar tabelas oficiais" (Indicadores de Rentabilidade bloqueados
+  // no Dashboard iFood) — reaproveita a tela EXISTENTE de Configurações →
+  // Tabelas Comerciais, DA UNIDADE ANALISADA (`detail.unidadeId`): se ela não
+  // for a da sessão, troca o contexto pelo mesmo caminho autorizado do seletor
+  // do topbar antes de abrir (ver abrirTabelasComerciais.js). Ao voltar ao
+  // Dashboard iFood, renderDashboardExecutivo rebusca o mês e reavalia o bloqueio.
+  document.addEventListener(EVENTO_ABRIR_TABELAS_OFICIAIS, (e) => abrirTabelasComerciaisDaUnidade(e.detail ?? {}, {
+    unidadeDaSessao: () => state.sessao.unidade?.id ?? null,
+    trocarUnidade: (unidadeId) => trocarUnidadeDoContexto({ unidadeId }),
+    recarregarApp: () => mostrarApp({ rotaInicial: "configuracoes" }),
+    irPara,
+    rotaAtual: () => state.rota,
+    abrirSecao: abrirSecaoConfiguracoes,
+    avisar: toast,
+  }));
 
   // Mostrar/ocultar senha (UI apenas — não altera a lógica de login)
   const toggleSenha = el("#toggle-senha");
