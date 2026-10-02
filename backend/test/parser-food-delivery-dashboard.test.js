@@ -392,3 +392,155 @@ test("análise operacional: pontualidade geral e atraso médio só aparecem quan
 });
 
 function arredondar(n) { return Math.round(n * 10) / 10; }
+
+// ---------------------------------------------------------------------------
+// Cards "Tempo médio de vida do pedido" (aberto -> ENTREGUE) e
+// "Tempo médio de preparo" (aberto -> coletado)
+// ---------------------------------------------------------------------------
+const pedidoTempos = (num, dia, aberto, coletado, entregue, extra = {}) => pedido({
+  numeroPedido: num,
+  dataHora: aberto && `${dia}T${aberto}:00`,
+  dataColetado: coletado && `${dia}T${coletado}:00`,
+  dataEntregue: entregue && `${dia}T${entregue}:00`,
+  ...extra,
+});
+
+test("vida e preparo: exemplo A/B — preparo 17,5 min, vida 35,0 min", () => {
+  const { resumo } = calcularDashboardOperacional([
+    pedidoTempos("A", "2026-09-01", "12:00", "12:15", "12:30"),
+    pedidoTempos("B", "2026-09-01", "13:00", "13:20", "13:40"),
+  ]);
+  assert.deepEqual(resumo.tempoMedioPreparo, { mediaMin: 17.5, pedidosValidos: 2, pedidosTotal: 2 });
+  assert.deepEqual(resumo.tempoMedioVidaPedido, { mediaMin: 35, pedidosValidos: 2, pedidosTotal: 2 });
+});
+
+test("vida usa dataEntregue - dataHora; preparo usa dataColetado - dataHora (nunca marco intermediário)", () => {
+  const { resumo } = calcularDashboardOperacional([
+    pedidoTempos("1", "2026-09-01", "12:00", "12:10", "12:40", {
+      dataPronto: "2026-09-01T12:05:00", dataChegadaEntrega: "2026-09-01T12:35:00", dataFinalizado: "2026-09-01T13:30:00",
+    }),
+  ]);
+  assert.equal(resumo.tempoMedioPreparo.mediaMin, 10);
+  assert.equal(resumo.tempoMedioVidaPedido.mediaMin, 40); // entregue 12:40, não finalizado 13:30 (seria 90)
+});
+
+test("vida: dataFinalizado não interfere no resultado (ausente, posterior ou anterior à entrega)", () => {
+  const base = [
+    pedidoTempos("1", "2026-09-01", "12:00", "12:10", "12:30"),
+    pedidoTempos("2", "2026-09-01", "12:00", "12:10", "12:50"),
+  ];
+  const semFinalizado = calcularDashboardOperacional(base).resumo.tempoMedioVidaPedido;
+  const comFinalizado = calcularDashboardOperacional(base.map((p) => ({ ...p, dataFinalizado: "2026-09-01T18:00:00" }))).resumo.tempoMedioVidaPedido;
+  const finalizadoAnterior = calcularDashboardOperacional(base.map((p) => ({ ...p, dataFinalizado: "2026-09-01T11:00:00" }))).resumo.tempoMedioVidaPedido;
+  assert.deepEqual(semFinalizado, { mediaMin: 40, pedidosValidos: 2, pedidosTotal: 2 });
+  assert.deepEqual(comFinalizado, semFinalizado);
+  assert.deepEqual(finalizadoAnterior, semFinalizado);
+});
+
+test("vida: pedido com dataFinalizado mas sem dataEntregue NÃO entra (sem fallback), cobertura correta", () => {
+  const { resumo } = calcularDashboardOperacional([
+    pedidoTempos("1", "2026-09-01", "12:00", "12:15", "12:30"),
+    pedidoTempos("2", "2026-09-01", "12:00", "12:15", null, { dataFinalizado: "2026-09-01T12:20:00" }),
+  ]);
+  assert.deepEqual(resumo.tempoMedioVidaPedido, { mediaMin: 30, pedidosValidos: 1, pedidosTotal: 2 });
+  // O mesmo pedido continua válido para o preparo (tem aberto + coletado).
+  assert.deepEqual(resumo.tempoMedioPreparo, { mediaMin: 15, pedidosValidos: 2, pedidosTotal: 2 });
+});
+
+test("vida: pedido com dataEntregue válido entra normalmente, mesmo sem coleta nem finalização", () => {
+  const { resumo } = calcularDashboardOperacional([pedidoTempos("1", "2026-09-01", "12:00", null, "12:45")]);
+  assert.deepEqual(resumo.tempoMedioVidaPedido, { mediaMin: 45, pedidosValidos: 1, pedidosTotal: 1 });
+  assert.deepEqual(resumo.tempoMedioPreparo, { mediaMin: null, pedidosValidos: 0, pedidosTotal: 1 });
+});
+
+test("vida e preparo: vários pedidos em vários dias — média por pedido, NÃO média das médias diárias", () => {
+  // Dia 1: 4 pedidos com preparo 10 / vida 20. Dia 2: 1 pedido com preparo 60 / vida 100.
+  const pedidos = [
+    ...["1", "2", "3", "4"].map((n) => pedidoTempos(n, "2026-09-01", "12:00", "12:10", "12:20")),
+    pedidoTempos("5", "2026-09-02", "12:00", "13:00", "13:40"),
+  ];
+  const { resumo } = calcularDashboardOperacional(pedidos);
+  // Por pedido: (4*10 + 60)/5 = 20 ; média das médias seria (10+60)/2 = 35.
+  assert.equal(resumo.tempoMedioPreparo.mediaMin, 20);
+  // Por pedido: (4*20 + 100)/5 = 36 ; média das médias seria (20+100)/2 = 60.
+  assert.equal(resumo.tempoMedioVidaPedido.mediaMin, 36);
+  assert.equal(resumo.tempoMedioVidaPedido.pedidosValidos, 5);
+});
+
+test("vida e preparo: arredonda para 1 casa decimal", () => {
+  const { resumo } = calcularDashboardOperacional([
+    pedidoTempos("1", "2026-09-01", "12:00", "12:10", "12:20"),
+    pedidoTempos("2", "2026-09-01", "12:00", "12:11", "12:21"),
+    pedidoTempos("3", "2026-09-01", "12:00", "12:11", "12:21"),
+  ]);
+  assert.equal(resumo.tempoMedioPreparo.mediaMin, 10.7); // 32/3 = 10,666…
+  assert.equal(resumo.tempoMedioVidaPedido.mediaMin, 20.7);
+});
+
+test("preparo: pedido sem coleta é excluído (não vira 0)", () => {
+  const { resumo } = calcularDashboardOperacional([
+    pedidoTempos("1", "2026-09-01", "12:00", "12:20", "12:30"),
+    pedidoTempos("2", "2026-09-01", "12:00", null, "12:30"),
+  ]);
+  assert.deepEqual(resumo.tempoMedioPreparo, { mediaMin: 20, pedidosValidos: 1, pedidosTotal: 2 });
+  assert.equal(resumo.tempoMedioVidaPedido.pedidosValidos, 2);
+});
+
+test("vida e preparo: pedido sem abertura é excluído dos dois indicadores", () => {
+  const { resumo } = calcularDashboardOperacional([
+    pedidoTempos("1", "2026-09-01", "12:00", "12:10", "12:20"),
+    pedidoTempos("2", "2026-09-01", null, "12:10", "12:20"),
+  ]);
+  assert.deepEqual(resumo.tempoMedioPreparo, { mediaMin: 10, pedidosValidos: 1, pedidosTotal: 2 });
+  assert.deepEqual(resumo.tempoMedioVidaPedido, { mediaMin: 20, pedidosValidos: 1, pedidosTotal: 2 });
+});
+
+test("vida e preparo: fim anterior ao início ou data inválida é excluído, nunca duração negativa", () => {
+  const { resumo } = calcularDashboardOperacional([
+    pedidoTempos("1", "2026-09-01", "12:00", "11:50", "11:40"),
+    pedidoTempos("2", "2026-09-01", "12:00", "12:30", "12:40"),
+    pedidoTempos("3", "2026-09-01", "12:00", "data-invalida", "lixo"),
+  ]);
+  assert.deepEqual(resumo.tempoMedioPreparo, { mediaMin: 30, pedidosValidos: 1, pedidosTotal: 3 });
+  assert.deepEqual(resumo.tempoMedioVidaPedido, { mediaMin: 40, pedidosValidos: 1, pedidosTotal: 3 });
+});
+
+test("vida e preparo: somente um pedido válido", () => {
+  const { resumo } = calcularDashboardOperacional([pedidoTempos("1", "2026-09-01", "12:00", "12:09", "12:27")]);
+  assert.equal(resumo.tempoMedioPreparo.mediaMin, 9);
+  assert.equal(resumo.tempoMedioVidaPedido.mediaMin, 27);
+});
+
+test("vida e preparo: nenhum pedido válido -> mediaMin null (nunca 0)", () => {
+  const vazio = calcularDashboardOperacional([]);
+  assert.deepEqual(vazio.resumo.tempoMedioPreparo, { mediaMin: null, pedidosValidos: 0, pedidosTotal: 0 });
+  assert.deepEqual(vazio.resumo.tempoMedioVidaPedido, { mediaMin: null, pedidosValidos: 0, pedidosTotal: 0 });
+  const semTimestamps = calcularDashboardOperacional([pedido(), pedido({ numeroPedido: "2" })]);
+  assert.deepEqual(semTimestamps.resumo.tempoMedioPreparo, { mediaMin: null, pedidosValidos: 0, pedidosTotal: 2 });
+  assert.deepEqual(semTimestamps.resumo.tempoMedioVidaPedido, { mediaMin: null, pedidosValidos: 0, pedidosTotal: 2 });
+});
+
+test("vida e preparo: mesmo universo dos demais cards — cancelados e sem entregador ficam de fora", () => {
+  const { resumo } = calcularDashboardOperacional([
+    pedidoTempos("1", "2026-09-01", "12:00", "12:10", "12:20"),
+    pedidoTempos("2", "2026-09-01", "12:00", "12:50", "13:30", { situacao: "Cancelado", dataCancelado: "2026-09-01T13:30:00" }),
+    pedidoTempos("3", "2026-09-01", "12:00", "12:50", "13:30", { entregador: "" }),
+  ]);
+  assert.equal(resumo.totalEntregas, 1);
+  assert.deepEqual(resumo.tempoMedioPreparo, { mediaMin: 10, pedidosValidos: 1, pedidosTotal: 1 });
+  assert.deepEqual(resumo.tempoMedioVidaPedido, { mediaMin: 20, pedidosValidos: 1, pedidosTotal: 1 });
+});
+
+test("regressão: indicadores já existentes não mudam com os novos campos", () => {
+  const { resumo, tempoPorDia, vidaPedidoPorDia } = calcularDashboardOperacional([
+    pedidoTempos("1", "2026-09-01", "12:00", "12:10", "12:30", { dataFinalizado: "2026-09-01T12:40:00", taxaEntregador: 7 }),
+    pedidoTempos("2", "2026-09-02", "12:00", "12:20", "12:50", { dataFinalizado: "2026-09-02T13:00:00", taxaEntregador: 8, entregador: "Bia" }),
+  ]);
+  assert.equal(resumo.totalEntregas, 2);
+  assert.equal(resumo.taxasTotal, 15);
+  assert.equal(resumo.tempoMedioEntregaMin, 25); // coleta -> entrega: (20 + 30) / 2
+  assert.equal(resumo.entregadoresAtivos, 2);
+  assert.deepEqual(tempoPorDia.map((d) => d.mediaMin), [20, 30]);
+  // Gráfico "vida do pedido por dia" (já existente) mantém a regra própria: finalizado, fallback entregue.
+  assert.deepEqual(vidaPedidoPorDia.concluidos.map((d) => d.mediaMin), [40, 60]);
+});

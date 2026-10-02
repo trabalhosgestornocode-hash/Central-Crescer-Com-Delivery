@@ -714,16 +714,22 @@ function renderDashboardOperacional(box) {
       <div class="vd-card-topo"><span class="vd-card-ico">${icon(iconeNome, { size: 16 })}</span><span class="vd-card-lbl" title="${escapeHtml(lbl)}">${lbl}</span></div>
       <div class="vd-card-val">${val}</div>${sub ? `<div class="vd-card-sub">${sub}</div>` : ""}
     </div>`;
+  // Média já calculada no backend (resumo.tempoMedio*); sem pedido válido o
+  // valor é "—", nunca "0 min". Cobertura igual ao card "Entregas no prazo".
+  const cardTempoMedio = (iconeNome, lbl, t, legenda) => card(iconeNome, lbl, fmtMin(t?.mediaMin ?? null),
+    t?.pedidosValidos > 0 ? `${legenda} · ${t.pedidosValidos.toLocaleString("pt-BR")} de ${t.pedidosTotal.toLocaleString("pt-BR")} entregas` : legenda);
 
   box.innerHTML = `
     <div class="vd-cards pfd-kpis pfd-kpis--dash">
       ${card("receipt", "Entregas", resumo.totalEntregas, "Concluídas no período")}
       ${card("banknote", "Taxas de entregador", fmtMoedaHtml(resumo.taxasTotal), "Total pago no período")}
       ${card("truck", "Distância estimada", `${d.distanciaEstimada.totalKm.toFixed(1).replace(".", ",")} km`, "Soma das distâncias em raio informadas pelo relatório — não é o percurso real")}
+      ${card("users", "Entregadores ativos", resumo.entregadoresAtivos, "Com entregas no período")}
+      ${cardTempoMedio("package", "Tempo médio de preparo", resumo.tempoMedioPreparo, "Aberto → Coletado")}
       ${card("clock", "Tempo médio de entrega", resumo.tempoMedioEntregaMin != null ? fmtMin(resumo.tempoMedioEntregaMin) : "—", "Coleta até a entrega")}
+      ${cardTempoMedio("hourglass", "Tempo médio de vida do pedido", resumo.tempoMedioVidaPedido, "Aberto → Entregue")}
       ${card("target", "Entregas no prazo", d.pontualidade.classificaveis > 0 ? fmtPctBr(d.pontualidade.percentualNoPrazo) : "—",
         d.pontualidade.classificaveis > 0 ? `${d.pontualidade.noPrazo} de ${d.pontualidade.classificaveis} entregas classificáveis` : "Dados de prazo não disponíveis")}
-      ${card("users", "Entregadores ativos", resumo.entregadoresAtivos, "Com entregas no período")}
     </div>
 
     ${pfdSecao("award", "Entregadores por quantidade de entregas", "Entregadores com mais entregas no período selecionado", `

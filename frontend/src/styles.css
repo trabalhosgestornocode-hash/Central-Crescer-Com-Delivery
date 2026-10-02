@@ -4560,8 +4560,10 @@ tr.dex-linha-na { opacity: .65; }
 
 /* ---------- KPIs ---------- */
 .pfd-kpis { grid-template-columns: repeat(4, 1fr); gap: 16px; }
-/* Aba Dashboard tem 5 cards (Entregas/Taxas/Distância/Tempo/Entregadores) — largura flexível em vez do grid fixo de 4. */
-.pfd-kpis--dash { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+/* Aba Dashboard tem 8 cards — 2 linhas de 4 (volume/custo em cima, tempos/prazo embaixo);
+   em telas de notebook estreitas cai para 2 colunas antes de apertar o valor em 28px. */
+.pfd-kpis--dash { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .pfd-kpis--dash { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 /* Rótulos mais longos que o padrão do resto do app ("Taxas de entregador",
    "Tempo médio de entrega") — quebra em 2 linhas em vez de cortar com "...",
    só nestes cards (escopo local, não mexe no .vd-card-lbl compartilhado). */
