@@ -70,7 +70,7 @@ describe("sessão × cache de retry", () => {
   test("4. enviar() registra o conteúdo; o socket RECRIADO (reconexão) ainda serve a mensagem via getMessage", async () => {
     const { sessao, fabricaSocket, beRetry, abrir } = await montar({ habilitado: true });
     assert.equal(sessao._status(), "CONNECTED");
-    const { providerMessageId } = await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:x:v1" });
+    const { providerMessageId } = await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:x:v1", retryResend: true });
     for (let i = 0; i < 50 && beRetry.linhas.size === 0; i++) await espera(5);
     assert.equal(beRetry.linhas.size, 1, "persistido no 'banco'");
     assert.ok(beRetry.linhas.get(providerMessageId).destinoLidHash, "o LID que o WhatsApp informou entra como HMAC");
@@ -93,11 +93,11 @@ describe("sessão × cache de retry", () => {
     await sessao.desconectar();
   });
 
-  test("flag DESLIGADA: as opções do socket são as mesmas de antes (sem getMessage/msgRetryCounterCache) e nada é gravado", async () => {
+  test("flag DESLIGADA (mesmo com a mensagem AUTORIZADA pelo backend): as opções do socket são as de antes e nada é gravado", async () => {
     const { sessao, fabricaSocket, beRetry } = await montar({ habilitado: false });
     const opcoes = fabricaSocket.criados[0].opcoes;
     assert.deepEqual(Object.keys(opcoes).sort(), ["auth", "logger", "printQRInTerminal"]);
-    await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:y:v1" });
+    await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:y:v1", retryResend: true });
     await espera(20);
     assert.equal(beRetry.chamadas.salvar.length, 0);
     await sessao.desconectar();
@@ -106,8 +106,48 @@ describe("sessão × cache de retry", () => {
   test("uma falha do cache NUNCA derruba o envio (o envio já aconteceu)", async () => {
     const { sessao, retryCache } = await montar({ habilitado: true });
     retryCache.registrarEnvio = () => { throw new Error("bug no cache"); };
-    const r = await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:z:v1" });
+    const r = await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:z:v1", retryResend: true });
     assert.ok(r.providerMessageId);
+    await sessao.desconectar();
+  });
+
+  // ---- Allowlist (decisão do BACKEND por contato_id; o Gateway só recebe o booleano) ----
+  const keyPn = (id) => ({ remoteJid: "5511987654321@s.whatsapp.net", id, fromMe: true, participant: "5511987654321@s.whatsapp.net" });
+
+  test("allowlist: mensagem NÃO autorizada (sem retryResend) é enviada normalmente, mas não é guardada e o getMessage não a encontra", async () => {
+    const { sessao, fabricaSocket, beRetry } = await montar({ habilitado: true });
+    const s1 = fabricaSocket.criados[0];
+    const { providerMessageId } = await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:n:v1" });
+    assert.ok(providerMessageId, "envio normal intacto");
+    assert.equal(s1.sendMessage.mock.callCount(), 1);
+    await espera(30);
+    assert.equal(beRetry.chamadas.salvar.length, 0, "nada gravado no 'banco'");
+    assert.equal(await s1.opcoes.getMessage(keyPn(providerMessageId)), undefined, "retry vira cache miss");
+    await sessao.desconectar();
+  });
+
+  for (const valor of ["true", 1, "1", {}, null, false]) {
+    test(`allowlist: retryResend=${JSON.stringify(valor)} (não é o booleano true) ⇒ fail closed, nada guardado`, async () => {
+      const { sessao, fabricaSocket, beRetry } = await montar({ habilitado: true });
+      const { providerMessageId } = await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:v:v1", retryResend: valor });
+      assert.ok(providerMessageId);
+      await espera(30);
+      assert.equal(beRetry.chamadas.salvar.length, 0);
+      assert.equal(await fabricaSocket.criados[0].opcoes.getMessage(keyPn(providerMessageId)), undefined);
+      await sessao.desconectar();
+    });
+  }
+
+  test("allowlist: autorizada e não autorizada no MESMO socket — só a autorizada é servida ao retry", async () => {
+    const { sessao, fabricaSocket, beRetry } = await montar({ habilitado: true });
+    const sim = await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:s:v1", retryResend: true });
+    const nao = await sessao.enviar({ tipo: "text", telefoneE164: TEL, conteudo: { text: TEXTO }, correlationId: "wa:alerta:t:v1" });
+    for (let i = 0; i < 50 && beRetry.linhas.size === 0; i++) await espera(5);
+    await espera(20);
+    assert.deepEqual([...beRetry.linhas.keys()], [sim.providerMessageId]);
+    const s1 = fabricaSocket.criados[0];
+    assert.ok(await s1.opcoes.getMessage(keyPn(sim.providerMessageId)));
+    assert.equal(await s1.opcoes.getMessage(keyPn(nao.providerMessageId)), undefined);
     await sessao.desconectar();
   });
 });

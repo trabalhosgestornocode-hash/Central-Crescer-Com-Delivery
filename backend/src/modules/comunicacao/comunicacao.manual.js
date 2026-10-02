@@ -62,7 +62,7 @@ export async function enviarMensagemManual({
 
   let envio;
   try {
-    envio = await whatsAppService.enviarTexto({ telefoneE164, texto, idempotencyKey: mensagem.idempotency_key });
+    envio = await whatsAppService.enviarTexto({ telefoneE164, texto, idempotencyKey: mensagem.idempotency_key, contatoId });
   } catch (e) {
     // SEM retry: pré-envio comprovado e permanente vira FAILED; incerto vira DELIVERY_UNKNOWN. Nunca SCHEDULED/RETRY.
     const classificacao = classificarErroEnvio(e);

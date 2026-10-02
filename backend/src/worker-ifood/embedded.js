@@ -17,6 +17,7 @@
 import { carregarConfigWorkerIfood } from "./config.js";                       // puro
 import { ifoodLog, mascararId } from "../modules/ifood/ifood.logsafe.js";      // puro
 import { registrarEstadoEvents } from "../modules/ifood/ifoodEventsEstado.js"; // puro
+import { avaliarEfeitosExternos } from "../ambiente/efeitosExternos.js";         // puro
 
 // < fallback de 10 s do server.js; roda em paralelo com o grace (8 s) do worker de comunicação.
 export const PRAZO_PARADA_EMBUTIDO_MS = 7_000;
@@ -44,6 +45,14 @@ export async function iniciarEventsIfoodEmbutido({ env = process.env, log = ifoo
     return { habilitado: false, estado: "disabled", motivo: "IFOOD_EVENTS_EMBEDDED_ENABLED != true" };
   }
   if (pararAtual) return { habilitado: true, estado: "already_started" };
+  // Guarda de efeitos externos (ambiente/efeitosExternos.js): polling/ACK no iFood de produção nunca a partir de um PR
+  // Preview do Render (que herda a flag) nem fora do Render sem autorização explícita.
+  const efeitos = avaliarEfeitosExternos(env);
+  if (!efeitos.permitido) {
+    registrarEstadoEvents(() => ({ estado: "disabled", motivo: `efeitos_externos_bloqueados:${efeitos.motivo}` }));
+    log("warn", "events.embutido_bloqueado", { ambiente: efeitos.ambiente, motivo: efeitos.motivo });
+    return { habilitado: false, estado: "disabled", motivo: `efeitos externos bloqueados (${efeitos.motivo})` };
+  }
 
   registrarEstadoEvents(() => ({ estado: "starting" }));
   try {

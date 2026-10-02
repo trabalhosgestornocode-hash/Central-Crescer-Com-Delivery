@@ -1575,7 +1575,9 @@ export function criarSessaoBaileys({
      * 2) gera o providerMessageId ANTES do sendMessage (mesma função do Baileys) e o rastreia, para que um recibo/ack rápido nunca ganhe do registro;
      * 3) loga send_start/send_resolved sanitizados (JID mascarado, sem conteúdo). `correlationId` = idempotencyKey (o Gateway não conhece o id interno).
      */
-    async enviar({ tipo, telefoneE164, conteudo, correlationId = null }) {
+    async enviar({ tipo, telefoneE164, conteudo, correlationId = null, retryResend = false }) {
+      // Só o booleano `true` (decisão do backend, por destinatário) guarda a mensagem para reenvio sob retry; o envio é igual.
+      const guardarParaRetry = retryResend === true;
       const naoConectado = () => {
         // preEnvio: true — sabemos com certeza que nada saiu (nem tentamos).
         const e = erro(CODIGOS.NAO_CONECTADO);
@@ -1600,9 +1602,9 @@ export function criarSessaoBaileys({
       const providerIdGerado = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
       observadorEntrega.rastrear({ providerMessageId: providerIdGerado, correlationId, jidMascarado });
       // `idHash` = o MESMO hash dos eventos whatsapp.retry.* (src/retryCache.js#hashId): correlaciona envio ↔ retry.
-      log("info", "send_start", { ...contextoLog(), tipo, providerMessageId: providerIdGerado, idHash: hashId(providerIdGerado), jid: jidMascarado, jidDifereDoPedido: destino.jidDifereDoPedido, destinoLidConhecido: Boolean(destino.lid), lookupMs });
+      log("info", "send_start", { ...contextoLog(), tipo, providerMessageId: providerIdGerado, idHash: hashId(providerIdGerado), jid: jidMascarado, jidDifereDoPedido: destino.jidDifereDoPedido, destinoLidConhecido: Boolean(destino.lid), retryResend: guardarParaRetry, lookupMs });
       // Um retry receipt pode chegar ~0,5 s depois do envio: o getMessage espera (com teto) até o conteúdo ser registrado.
-      try { retryCache?.marcarEnvioIniciado?.(providerIdGerado); } catch { /* cache nunca interfere no envio */ }
+      if (guardarParaRetry) { try { retryCache?.marcarEnvioIniciado?.(providerIdGerado); } catch { /* cache nunca interfere no envio */ } }
       const t1 = Date.now();
       let resultado;
       try {
@@ -1616,13 +1618,16 @@ export function criarSessaoBaileys({
       if (providerMessageId && providerMessageId !== providerIdGerado) observadorEntrega.rastrear({ providerMessageId, correlationId, jidMascarado });
       // Guarda o CONTEÚDO exato que o Baileys cifrou (`fullMsg.message`) para um eventual reenvio sob retry. Síncrono na
       // memória, assíncrono no backend; NUNCA atrasa nem derruba o envio (o envio já aconteceu).
-      try {
-        retryCache?.registrarEnvio?.({
-          providerMessageId: providerMessageId ?? providerIdGerado, mensagem: resultado?.message,
-          destinoJid: destino.jid, destinoLid: destino.lid ?? null, socketGeneration: geracaoSocket,
-        })?.catch?.(() => {});
-        if (providerMessageId && providerMessageId !== providerIdGerado) retryCache?.cancelarEnvio?.(providerIdGerado);
-      } catch { /* cache nunca interfere no envio */ }
+      // Mensagem NÃO autorizada (allowlist do backend) ⇒ nada é guardado: um retry dela vira cache miss, como sem a feature.
+      if (guardarParaRetry) {
+        try {
+          retryCache?.registrarEnvio?.({
+            providerMessageId: providerMessageId ?? providerIdGerado, mensagem: resultado?.message,
+            destinoJid: destino.jid, destinoLid: destino.lid ?? null, socketGeneration: geracaoSocket,
+          })?.catch?.(() => {});
+          if (providerMessageId && providerMessageId !== providerIdGerado) retryCache?.cancelarEnvio?.(providerIdGerado);
+        } catch { /* cache nunca interfere no envio */ }
+      }
       log("info", "send_resolved", { ...contextoLog(), providerMessageId, jid: jidMascarado, durationMs: Date.now() - t1, idPreGeradoConfere: providerMessageId === providerIdGerado });
       return { providerMessageId, enviadoEm: new Date().toISOString() };
     },

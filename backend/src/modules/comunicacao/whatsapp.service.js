@@ -13,6 +13,7 @@
 import { validarProvider } from "./whatsapp.provider.js";
 import { motivoBloqueioAutomacao } from "./inbound/inbound.contrato.js";
 import { modoPermiteEnvioReal } from "./comunicacao.constants.js";
+import { lerAllowlistRetryResend } from "./retryResendAllowlist.js";
 
 /** Recusa de envio porque a conta do WhatsApp conectada NÃO é a que o operador confirmou (ou nada está confirmado). O provider NÃO foi chamado. */
 export class IdentidadeNaoConfirmadaError extends Error {
@@ -37,9 +38,16 @@ export class ModoDesabilitadoError extends Error {
  *     a única exceção é `semGateIdentidade: true`, reservado a testes com provider falso (um teste estático proíbe seu uso em código de produção).
  *   - `modoAtual`: lê o modo global (comunicacao.config.js#modoAtual). FAIL-CLOSED: sem ele, ou se a leitura falhar, NENHUM envio sai — a única exceção é
  *     `semGateModo: true`, reservado a testes com provider falso (mesmo teste estático).
+ *   - `allowlistRetryResend`: modules/comunicacao/retryResendAllowlist.js (padrão: lida da env). Decide, por `contatoId`, se a mensagem vai ao Gateway marcada
+ *     `retryResend: true` (guardada para reenvio sob retry receipt). Fail closed: sem contatoId, contato fora da lista ou lista vazia/inválida ⇒ sem marca.
+ *     Só isso muda: o envio em si (gates, provider, corpo) é idêntico para todos.
  */
-export function criarWhatsAppService({ provider, identidadeConfirmada = null, semGateIdentidade = false, modoAtual = null, semGateModo = false }) {
+export function criarWhatsAppService({ provider, identidadeConfirmada = null, semGateIdentidade = false, modoAtual = null, semGateModo = false, allowlistRetryResend = lerAllowlistRetryResend() }) {
   validarProvider(provider);
+  /** `true` só para contato autorizado; qualquer dúvida ⇒ `undefined` (o provider nem inclui o campo). */
+  const retryResendPara = (contatoId) => {
+    try { return allowlistRetryResend?.permite?.(contatoId) === true ? true : undefined; } catch { return undefined; }
+  };
 
   /** A conta conectada é a confirmada? Qualquer dúvida ou exceção ⇒ false. */
   async function contaConfirmada() {
@@ -72,24 +80,25 @@ export function criarWhatsAppService({ provider, identidadeConfirmada = null, se
     },
 
     /**
-     * @param {{telefoneE164: string, texto: string, idempotencyKey: string}} params
+     * @param {{telefoneE164: string, texto: string, idempotencyKey: string, contatoId?: string|null}} params
+     *   `contatoId` só alimenta a allowlist do reenvio sob retry (nunca vai ao Gateway).
      * @returns {Promise<import('./whatsapp.provider.js').ResultadoEnvio>}
      */
-    async enviarTexto({ telefoneE164, texto, idempotencyKey }) {
+    async enviarTexto({ telefoneE164, texto, idempotencyKey, contatoId = null }) {
       await exigirContaConfirmada();
-      return provider.sendText({ telefoneE164, texto, idempotencyKey });
+      return provider.sendText({ telefoneE164, texto, idempotencyKey, retryResend: retryResendPara(contatoId) });
     },
 
-    /** @param {{telefoneE164: string, urlImagem: string, legenda?: string, idempotencyKey: string}} params */
-    async enviarImagem({ telefoneE164, urlImagem, legenda, idempotencyKey }) {
+    /** @param {{telefoneE164: string, urlImagem: string, legenda?: string, idempotencyKey: string, contatoId?: string|null}} params */
+    async enviarImagem({ telefoneE164, urlImagem, legenda, idempotencyKey, contatoId = null }) {
       await exigirContaConfirmada();
-      return provider.sendImage({ telefoneE164, urlImagem, legenda, idempotencyKey });
+      return provider.sendImage({ telefoneE164, urlImagem, legenda, idempotencyKey, retryResend: retryResendPara(contatoId) });
     },
 
-    /** @param {{telefoneE164: string, urlDocumento: string, nomeArquivo?: string, idempotencyKey: string}} params */
-    async enviarDocumento({ telefoneE164, urlDocumento, nomeArquivo, idempotencyKey }) {
+    /** @param {{telefoneE164: string, urlDocumento: string, nomeArquivo?: string, idempotencyKey: string, contatoId?: string|null}} params */
+    async enviarDocumento({ telefoneE164, urlDocumento, nomeArquivo, idempotencyKey, contatoId = null }) {
       await exigirContaConfirmada();
-      return provider.sendDocument({ telefoneE164, urlDocumento, nomeArquivo, idempotencyKey });
+      return provider.sendDocument({ telefoneE164, urlDocumento, nomeArquivo, idempotencyKey, retryResend: retryResendPara(contatoId) });
     },
 
     /** @param {(mensagem: object) => void} handler */

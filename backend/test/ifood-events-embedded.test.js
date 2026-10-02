@@ -36,7 +36,8 @@ import {
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const BACKEND = path.join(AQUI, "..");
 const silencio = () => {};
-const LIGADO = { IFOOD_EVENTS_EMBEDDED_ENABLED: "true" };
+// Guarda de efeitos externos: o Events é exercitado com runtime/lease FALSOS — autorização explícita, só nos testes.
+const LIGADO = { IFOOD_EVENTS_EMBEDDED_ENABLED: "true", EFEITOS_EXTERNOS_LOCAL_PERMITIDOS: "true" };
 
 // Relógio REAL compartilhado: o lease do repositório falso usa o mesmo tempo que os supervisores.
 const relogioReal = () => ({ agoraMs: () => Date.now(), agora: () => new Date(), avancarS() {} });
@@ -557,7 +558,7 @@ test("processo real: server.js sobe, /health 200 com Events DEGRADED (Supabase f
       env: {
         PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, PORT: String(porta),
         SUPABASE_URL: "http://127.0.0.1:1", SUPABASE_SERVICE_ROLE_KEY: "x".repeat(40), SUPABASE_ANON_KEY: "y".repeat(40),
-        IFOOD_TOKEN_SECRET: "z".repeat(40), ...(flag ? { IFOOD_EVENTS_EMBEDDED_ENABLED: "true" } : {}),
+        IFOOD_TOKEN_SECRET: "z".repeat(40), ...(flag ? { IFOOD_EVENTS_EMBEDDED_ENABLED: "true", EFEITOS_EXTERNOS_LOCAL_PERMITIDOS: "true" } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });

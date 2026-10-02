@@ -23,6 +23,7 @@
 // com a flag desligada".
 import { ESTADOS } from "./loop.js";
 import { registrarEstadoDoWorker } from "./estado.js";
+import { avaliarEfeitosExternos } from "../ambiente/efeitosExternos.js";
 
 const GRACE_PERIOD_EMBUTIDO_MS = 8_000; // < que o fallback de 10s do próprio server.js — nunca corre com ele
 
@@ -53,6 +54,13 @@ export async function iniciarWorkerComunicacaoEmbutido({
     log("info", "comunicacao.worker_not_started", { reason: "worker_disabled" });
     return { habilitado: false, motivo: "COMUNICACAO_WORKER_ENABLED != true", workerState: ESTADOS.DISABLED };
   }
+  // Guarda de efeitos externos (ambiente/efeitosExternos.js): a flag acima pode ter sido HERDADA por um PR Preview do
+  // Render, ou vir de um `.env` local apontado para produção — nesses casos o worker NÃO consome a fila nem chama o Gateway.
+  const efeitos = avaliarEfeitosExternos(env);
+  if (!efeitos.permitido) {
+    log("warn", "comunicacao.worker_not_started", { reason: "efeitos_externos_bloqueados", ambiente: efeitos.ambiente, motivo: efeitos.motivo });
+    return { habilitado: false, motivo: `efeitos externos bloqueados (${efeitos.motivo})`, workerState: ESTADOS.DISABLED };
+  }
 
   // DISTINTO de cima de propósito (Checkpoint H.2-B, item 2): "desligado pela
   // flag" e "ligado mas mal configurado" são estados operacionais diferentes
@@ -77,7 +85,7 @@ export async function iniciarWorkerComunicacaoEmbutido({
 
   const { criarGateIdentidade: criarGate } = await import("../modules/comunicacao/comunicacao.identidade.js");
   const whatsAppService = criarWhatsAppService({
-    provider: criarBaileysGatewayProvider({ gatewayUrl: config.gatewayUrl, segredoHmac: config.segredoHmac }),
+    provider: criarBaileysGatewayProvider({ gatewayUrl: config.gatewayUrl, segredoHmac: config.segredoHmac, env }),
     // O worker/automação só envia com a conta CONFIRMADA na aba Conexão (mesma regra do envio manual). Sem confirmação: provider = 0.
     identidadeConfirmada: criarGate({ env }),
     // KILL SWITCH também na fronteira do provider: modo DISABLED ⇒ nenhuma chamada ao provider, mesmo por um caminho inesperado.

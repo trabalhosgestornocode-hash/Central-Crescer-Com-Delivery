@@ -5,6 +5,9 @@ import {
 } from "../src/worker-comunicacao/lifecycle.js";
 import { ESTADOS } from "../src/worker-comunicacao/loop.js";
 
+// Guarda de efeitos externos (src/ambiente/efeitosExternos.js): este arquivo EXERCITA o worker com dependências injetadas
+// (nenhuma fila/Gateway real), então autoriza explicitamente — só neste processo de teste.
+const AUTORIZADO = { EFEITOS_EXTERNOS_LOCAL_PERMITIDOS: "true" };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const configValida = () => ({ intervalMs: 15, gatewayUrl: "http://gateway.teste", segredoHmac: "segredo-de-teste" });
 
@@ -35,7 +38,7 @@ describe("Checkpoint H.2-B.1 — lifecycle embutido (A-G)", () => {
   test("B. ENABLED=true + modo global DISABLED (mock) -> laço real inicia mas executarCiclo=0", async () => {
     let chamadas = 0;
     const r = await iniciarWorkerComunicacaoEmbutido({
-      env: { COMUNICACAO_WORKER_ENABLED: "true" },
+      env: { COMUNICACAO_WORKER_ENABLED: "true", ...AUTORIZADO },
       carregarConfig: configValida,
       modoAtual: async () => "DISABLED",
       executarCiclo: async () => { chamadas += 1; return {}; },
@@ -52,7 +55,7 @@ describe("Checkpoint H.2-B.1 — lifecycle embutido (A-G)", () => {
   test("C. ENABLED=true + modo NORMAL (mock) -> executarCiclo é chamado", async () => {
     let chamadas = 0;
     const r = await iniciarWorkerComunicacaoEmbutido({
-      env: { COMUNICACAO_WORKER_ENABLED: "true" },
+      env: { COMUNICACAO_WORKER_ENABLED: "true", ...AUTORIZADO },
       carregarConfig: () => ({ ...configValida(), intervalMs: 5000 }),
       modoAtual: async () => "NORMAL",
       executarCiclo: async () => { chamadas += 1; return { deteccao: {}, agendamento: {}, lote: [] }; },
@@ -73,7 +76,7 @@ describe("Checkpoint H.2-B.1 — lifecycle embutido (A-G)", () => {
       obterEstado: () => ({ estado: "IDLE", lastCycleAt: null, lastCycleStatus: null }),
     };
     const r = await iniciarWorkerComunicacaoEmbutido({
-      env: { COMUNICACAO_WORKER_ENABLED: "true" },
+      env: { COMUNICACAO_WORKER_ENABLED: "true", ...AUTORIZADO },
       carregarConfig: configValida,
       criarLoopWorker: () => loopFake,
       modoAtual: async () => "DISABLED",
@@ -101,7 +104,7 @@ describe("Checkpoint H.2-B.1 — lifecycle embutido (A-G)", () => {
     process.on("unhandledRejection", handler);
     try {
       const r = await iniciarWorkerComunicacaoEmbutido({
-        env: { COMUNICACAO_WORKER_ENABLED: "true" },
+        env: { COMUNICACAO_WORKER_ENABLED: "true", ...AUTORIZADO },
         carregarConfig: configValida,
         modoAtual: async () => "NORMAL",
         executarCiclo: async () => { throw new Error("falha simulada"); },
@@ -119,7 +122,7 @@ describe("Checkpoint H.2-B.1 — lifecycle embutido (A-G)", () => {
 
   test("F. ENABLED=true + config inválida -> worker não inicia, mas iniciarWorkerComunicacaoEmbutido NÃO lança", async () => {
     const r = await iniciarWorkerComunicacaoEmbutido({
-      env: { COMUNICACAO_WORKER_ENABLED: "true" },
+      env: { COMUNICACAO_WORKER_ENABLED: "true", ...AUTORIZADO },
       carregarConfig: () => { throw new Error("WHATSAPP_GATEWAY_URL ausente — obrigatória"); },
     });
     assert.equal(r.habilitado, false);
@@ -129,7 +132,7 @@ describe("Checkpoint H.2-B.1 — lifecycle embutido (A-G)", () => {
   test("H.2-B item 2: config inválida com ENABLED=true emite worker_start_failed + workerState=ERROR — NUNCA worker_not_started/reason=worker_disabled", async () => {
     const eventos = [];
     const r = await iniciarWorkerComunicacaoEmbutido({
-      env: { COMUNICACAO_WORKER_ENABLED: "true" },
+      env: { COMUNICACAO_WORKER_ENABLED: "true", ...AUTORIZADO },
       log: (nivel, evento, dados) => eventos.push({ nivel, evento, dados }),
       carregarConfig: () => { throw new Error("WHATSAPP_GATEWAY_SECRET ausente — obrigatório"); },
     });

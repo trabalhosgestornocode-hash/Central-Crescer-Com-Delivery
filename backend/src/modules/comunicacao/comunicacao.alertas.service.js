@@ -824,7 +824,7 @@ export async function processarJobReivindicado(job, {
   let envio;
   try {
     envio = await whatsAppService.enviarTexto({
-      telefoneE164: contato.telefone_e164, texto: job.conteudo, idempotencyKey: job.idempotency_key,
+      telefoneE164: contato.telefone_e164, texto: job.conteudo, idempotencyKey: job.idempotency_key, contatoId: job.contato_id ?? null,
     });
   } catch (e) {
     return resolverFalhaDeEnvio(job, attempt, e, deps);

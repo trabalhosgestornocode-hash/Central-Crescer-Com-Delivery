@@ -109,6 +109,26 @@ Além disso, o reenvio para o aparelho primário (`sendToAll`) já ignora o cach
 
 Ligar ou desligar exige só a env e um restart. Não há migration nem rollback de banco.
 
+### 8.1 Allowlist por destinatário (backend) — homologação
+
+A flag do Gateway é global (um número para todos). Para ligar só para um destinatário de teste, quem decide é o **backend**:
+
+| Env (backend) | Padrão | Efeito |
+|---|---|---|
+| `WHATSAPP_RETRY_RESEND_CONTATOS` | vazia | `contato_id` internos (UUID), separados por vírgula. Só esses envios vão ao Gateway com `retryResend: true`. |
+
+- **Por que `contato_id`:** os três pontos de envio (alertas `job.contato_id`, manual da Central e teste `contatoId`) já o têm. É um UUID globalmente único: autorizar um contato não autoriza nenhum outro, de nenhuma organização. Telefone, JID e nome nunca entram na configuração.
+- **Quem conhece o quê:** o backend lê a lista em `whatsapp.service.js` (via `src/modules/comunicacao/retryResendAllowlist.js`) e manda ao Gateway só o booleano `retryResend: true`, no corpo assinado por HMAC. O `contato_id` nunca sai do backend. O Gateway não conhece a regra de negócio: ele guarda no cache **apenas** o que veio marcado.
+- **Fail closed:** lista ausente ou vazia ⇒ ninguém. Qualquer item que não seja UUID ⇒ a lista inteira é descartada ⇒ ninguém. Sem `contatoId` ⇒ não. Na rota, só o booleano `true` exato vale; ausente, `"true"`, `1` ou qualquer outra coisa ⇒ `false`. Sem HMAC, a rota responde 401.
+- **Envio normal:** idêntico para todos. Uma mensagem não autorizada é enviada igual, mas não entra no cache: um retry dela vira `message_missing` (`nao_encontrada`), exatamente como sem a feature.
+
+| Flag do Gateway | Allowlist do backend | Resultado |
+|---|---|---|
+| desligada | qualquer | nada guardado, socket idêntico ao anterior |
+| ligada | vazia/inválida | nada guardado; o `getMessage` existe, mas sempre dá miss |
+| ligada | contato autorizado | guardado e reenviado sob retry |
+| ligada | contato não autorizado | enviado normalmente, não guardado |
+
 ## 9. Observabilidade (sempre ligada, sanitizada)
 
 | Evento | Quando | Campos |
@@ -136,7 +156,7 @@ O `send_start` passou a trazer `idHash`, o mesmo dos eventos de retry, e `destin
 1. **Banco:** aplicar a migration 105, que é aditiva e não toca `whatsapp_conexoes`.
 2. **Backend:** deploy com as rotas novas. Com o Gateway antigo, elas ficam sem uso.
 3. **Gateway:** deploy com a flag **desligada**. O socket fica idêntico ao atual e passa a emitir `whatsapp.retry.received`, o que dá a medição do "antes". O handover pela lease preserva a sessão, sem QR.
-4. Ligar `WHATSAPP_RETRY_RESEND_ENABLED=true` e reiniciar o Gateway. Validar primeiro com um número de teste (seção 12).
+4. No backend, preencher `WHATSAPP_RETRY_RESEND_CONTATOS` só com o `contato_id` do número de teste (seção 8.1). Depois, ligar `WHATSAPP_RETRY_RESEND_ENABLED=true` e reiniciar o Gateway. Validar com o número de teste (seção 12); os demais destinatários continuam sem cache.
 5. Acompanhar `cacheHitRate`, `reenvioEnviado` e a queda de `READ` ausente/"Aguardando" nos destinatários.
 
 ## 11. Rollback

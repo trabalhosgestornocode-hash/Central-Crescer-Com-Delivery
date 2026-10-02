@@ -20,6 +20,10 @@ import { CLASSIFICACAO_ERRO } from "../src/modules/comunicacao/comunicacao.const
 // os códigos que o provider trata como "pré-envio" continuam existindo lá.
 import { CODIGOS as CODIGOS_GATEWAY } from "../../gateway-whatsapp/src/errors.js";
 
+// Guarda de efeitos externos (src/ambiente/efeitosExternos.js): este arquivo EXERCITA o provider/worker contra fakes locais
+// (fetch falso / Gateway em 127.0.0.1), então autoriza explicitamente — só neste processo de teste.
+process.env.EFEITOS_EXTERNOS_LOCAL_PERMITIDOS = "true";
+
 const SEGREDO = "s".repeat(32);
 const PEDIDO = { telefoneE164: "+5511999990000", texto: "oi", idempotencyKey: "k-teste" };
 
