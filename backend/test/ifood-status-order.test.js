@@ -145,10 +145,15 @@ test("SEM app Order no ambiente (produção hoje: sem IFOOD_ORDER_*) e sem crede
   });
 });
 
-test("sem conexão: order null e atenção zerada", async () => {
-  const s = await conn.obterStatus({ ...TENANT, deps: { repo: { async obterConexaoViva() { return null; } }, agora } });
-  assert.equal(s.order, null);
+test("sem conexão: unidade piloto vê o Order 'não conectado'; fora do piloto, order null; atenção zerada", async () => {
+  const semConexao = { async obterConexaoViva() { return null; } };
+  const s = await conn.obterStatus({ ...TENANT, deps: { repo: semConexao, agora } });
+  assert.equal(s.order.configurado, true);
+  assert.equal(s.order.conectado, false);
+  assert.equal(s.order.erroAtual, null);
   assert.deepEqual(s.atencao, { total: 0, apps: [] });
+  const fora = await conn.obterStatus({ organizacaoId: "org-1", unidadeId: "00000000-0000-4000-8000-0000000000ff", deps: { repo: semConexao, agora } });
+  assert.equal(fora.order, null);
 });
 
 test("nada sensível no status: sem token, secret, client id, merchant completo, holder ou ids internos", async () => {

@@ -1,10 +1,10 @@
-// Painel iFood — bloco PRÓPRIO do app Order (pedidos e eventos) + resumo de atenção. Sem DOM.
+// Painel iFood — card "Pedidos / Order" (estado PRÓPRIO do app Order) + resumo de atenção. Sem DOM.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { derivarEstadoOrder, textoAtencao, ORDER_ROTULO } from "../src/ifoodEstado.js";
+import { derivarEstadoOrder, textoAtencao, ORDER_ROTULO, mensagemErroAutorizacao } from "../src/ifoodEstado.js";
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src");
 const ler = (f) => readFileSync(path.join(SRC, f), "utf8");
@@ -18,48 +18,64 @@ const BASE = {
 };
 const linha = (o, rotulo) => o.linhas.find((l) => l[0] === rotulo);
 
-test("sem app Order no ambiente (order null): o painel não mostra o bloco", () => {
-  assert.equal(derivarEstadoOrder(null), null);
-  assert.equal(derivarEstadoOrder(undefined), null);
+test("fora do piloto (order null): 'Ainda não disponível para esta unidade' — informativo, sem ação, sem cara de erro", () => {
+  for (const v of [null, undefined]) {
+    const o = derivarEstadoOrder(v);
+    assert.equal(o.disponivel, false);
+    assert.equal(o.chave, "indisponivel");
+    assert.equal(o.rotulo, "Ainda não disponível para esta unidade");
+    assert.equal(o.classe, "muted");
+    assert.equal(o.podeConectar, false);
+    assert.equal(o.erro, null);
+    assert.deepEqual(o.linhas, []);
+  }
 });
 
-test("conectado e saudável: 'Conectado' (ok), todos os campos presentes, sem erro", () => {
+test("unidade piloto sem autorização: 'Não conectado' e pode conectar", () => {
+  const o = derivarEstadoOrder({ ...BASE, conectado: false, status: null, tokenValido: false, worker: null, observabilidadeDisponivel: false });
+  assert.equal(o.chave, "nao_conectado");
+  assert.equal(o.rotulo, "Não conectado");
+  assert.equal(o.classe, "muted");
+  assert.equal(o.podeConectar, true);
+});
+
+test("credencial antiga de unidade que saiu do piloto (configurado false): mostra o estado, mas não oferece conectar", () => {
+  const o = derivarEstadoOrder({ ...BASE, configurado: false, conectado: false, status: "reauth_required" });
+  assert.equal(o.chave, "reauth");
+  assert.equal(o.podeConectar, false);
+});
+
+test("conectado: 'Conectado' (ok), só dados operacionais (sem token/ACK/worker/lease na tela do cliente)", () => {
   const o = derivarEstadoOrder(BASE);
   assert.equal(o.rotulo, "Conectado");
   assert.equal(o.classe, "ok");
   assert.equal(o.erro, null);
-  assert.deepEqual(o.linhas.map((l) => l[0]), [
-    "Conexão", "Loja iFood", "Token", "Token válido até", "Última autenticação", "Token atualizado em",
-    "Último evento recebido", "Último ACK", "Último pedido", "Worker de eventos", "Worker visto em", "Erro atual",
-  ]);
-  assert.equal(linha(o, "Loja iFood")[1], "Loja X · 55c8****7040");
-  assert.equal(linha(o, "Token")[1], "Válido");
-  assert.equal(linha(o, "Worker de eventos")[1], "Ativo");
-  assert.equal(linha(o, "Último ACK")[2], "data");
-  assert.equal(linha(o, "Erro atual")[1], "Nenhum");
+  assert.equal(o.podeConectar, false);
+  assert.deepEqual(o.linhas.map((l) => l[0]), ["Última autenticação", "Último pedido recebido"]);
+  assert.equal(linha(o, "Último pedido recebido")[2], "data");
+  const tudo = JSON.stringify(o);
+  for (const tecnico of ["Token", "ACK", "Worker", "lease", "waiting_lease", "degraded"]) assert.ok(!tudo.includes(tecnico), tecnico);
 });
 
-test("reauth_required: 'Reconexão necessária' (bad) com a mensagem do erro", () => {
+test("reauth_required: 'Reautenticação necessária' (bad), mensagem do erro, pode reconectar", () => {
   const o = derivarEstadoOrder({ ...BASE, conectado: false, status: "reauth_required", tokenValido: false, erroAtual: { codigo: "REAUTH_REQUIRED", mensagem: "Reconecte" } });
-  assert.equal(o.rotulo, "Reconexão necessária");
+  assert.equal(o.rotulo, "Reautenticação necessária");
   assert.equal(o.classe, "bad");
   assert.equal(o.erro.codigo, "REAUTH_REQUIRED");
-  assert.equal(linha(o, "Erro atual")[1], "Reconecte");
+  assert.equal(o.podeConectar, true);
 });
 
-test("worker inativo: 'Atenção' (warn)", () => {
-  const o = derivarEstadoOrder({ ...BASE, worker: { ativo: false, atualizadoEm: null }, erroAtual: { codigo: "WORKER_INATIVO", mensagem: "Worker parado" } });
-  assert.equal(o.rotulo, "Atenção");
-  assert.equal(o.classe, "warn");
-  assert.equal(linha(o, "Worker de eventos")[1], "Inativo");
+test("erros de RECEBIMENTO de eventos não poluem o card de Pedidos (vão para o card Eventos)", () => {
+  for (const codigo of ["WORKER_INATIVO", "EVENTOS_COM_FALHA"]) {
+    const o = derivarEstadoOrder({ ...BASE, erroAtual: { codigo, mensagem: "x" } });
+    assert.equal(o.rotulo, "Conectado", codigo);
+    assert.equal(o.erro, null, codigo);
+  }
 });
 
-test("não conectado e migrations pendentes: 'Não conectado' e worker 'Sem dados'", () => {
-  const o = derivarEstadoOrder({ ...BASE, conectado: false, status: null, tokenValido: false, worker: null, observabilidadeDisponivel: false });
-  assert.equal(o.rotulo, "Não conectado");
-  assert.equal(o.classe, "muted");
-  assert.equal(linha(o, "Token")[1], "—");
-  assert.match(linha(o, "Worker de eventos")[1], /Sem dados/);
+test("nunca existe o texto antigo 'migrations de Events pendentes' (ausência de dado não é migration pendente)", () => {
+  assert.doesNotMatch(ler("ifoodEstado.js"), /migrations? de Events pendentes|migration pendente/i);
+  assert.doesNotMatch(ler("ifood.js"), /migrations? de Events pendentes|migration pendente/i);
 });
 
 test("resumo agregado: 'Atenção em N integração(ões)'; nada quando zero", () => {
@@ -69,12 +85,15 @@ test("resumo agregado: 'Atenção em N integração(ões)'; nada quando zero", (
   assert.equal(textoAtencao({ total: 2, apps: ["financial", "order"] }), "Atenção em 2 integrações");
 });
 
-test("ifood.js: bloco próprio do Order e aviso de atenção ligados; só leitura (nenhuma ação de pedido)", () => {
+test("erro do backend para unidade fora do piloto vira mensagem amigável", () => {
+  assert.equal(mensagemErroAutorizacao({ codigo: "IFOOD_ORDER_PILOTO_NAO_HABILITADO" }), "Pedidos e eventos do iFood ainda não estão disponíveis para esta unidade.");
+});
+
+test("ifood.js: card de Pedidos ligado ao status e só leitura (nenhuma ação de pedido)", () => {
   const s = ler("ifood.js");
-  assert.match(s, /blocoOrder\(estado\.status\?\.order\)/);
-  assert.match(s, /derivarEstadoOrder\(order\)/);
-  assert.match(s, /textoAtencao\(estado\.status\?\.atencao\)/);
+  assert.match(s, /derivarEstadoOrder\(statusApi\?\.order\)/);
+  assert.match(s, /textoAtencao\(statusApi\?\.atencao\)/);
   assert.match(s, /id="ifood-order-status"/);
-  assert.equal(ORDER_ROTULO, "Pedidos e eventos (app Order)");
+  assert.equal(ORDER_ROTULO, "Pedidos / Order");
   assert.doesNotMatch(s, /confirmarPedido|requestCancellation|readyToPickup|\/dispatch/);
 });

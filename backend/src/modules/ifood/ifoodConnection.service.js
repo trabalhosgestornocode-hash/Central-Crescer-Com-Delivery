@@ -86,7 +86,8 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
       status: "nao_conectado",
       merchant: null,
       apps: appsVazio,
-      order: null,
+      // Unidade piloto sem conexão ainda: o Order aparece como "não conectado" (e não como indisponível).
+      order: orderLiberadoParaUnidade(unidadeId) ? statusOrderSemCredencial() : null,
       atencao: { total: 0, apps: [] },
       conectadaEm: null,
       ultimaSincronizacao: null,
@@ -134,6 +135,15 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
     // Só um booleano — nunca clientId/clientSecret/token. Alimenta a badge
     // discreta "Ambiente de homologação iFood" no frontend.
     homologacao: estaEmHomologacaoIfood(),
+  };
+}
+
+/** Bloco Order de uma unidade piloto que ainda não autorizou o app (mesma forma de montarStatusOrder). */
+function statusOrderSemCredencial() {
+  return {
+    configurado: true, conectado: false, status: null, tokenValido: false, expiraEm: null, merchant: null,
+    ultimaAutenticacao: null, tokenAtualizadoEm: null, ultimoEvento: null, ultimoAck: null, ultimoPedido: null,
+    eventosComFalha: 0, worker: null, observabilidadeDisponivel: false, erroAtual: null,
   };
 }
 
