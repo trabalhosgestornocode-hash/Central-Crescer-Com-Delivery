@@ -209,6 +209,32 @@ test("distribuição de operações/ignorados usa exatamente o período", async 
   assert.equal(d.pedidosIgnorados.length, 2);
 });
 
+test("cards vida/preparo respeitam o período (um dia e vários dias) — média por pedido", async () => {
+  const t = (id, dia, ab, col, fin) => linha(id, { data_hora: `${dia}T${ab}:00Z`, data_coletado: `${dia}T${col}:00Z`, data_entregue: `${dia}T${fin}:00Z`, data_finalizado: `${dia}T23:59:00Z` });
+  const a = await ambiente({ pedidos: [
+    t("d1-a", "2026-09-01", "12:00", "12:15", "12:30"), t("d1-b", "2026-09-01", "13:00", "13:20", "13:40"),
+    t("d2", "2026-09-02", "12:00", "13:00", "14:00"), t("fora", "2026-09-03", "12:00", "15:00", "18:00"),
+  ] });
+  const umDia = (await a.service.analisarPeriodo({ ...tenant, dataInicio: "2026-09-01", dataFim: "2026-09-01" })).dashboardOperacional.resumo;
+  assert.deepEqual(umDia.tempoMedioPreparo, { mediaMin: 17.5, pedidosValidos: 2, pedidosTotal: 2 });
+  assert.deepEqual(umDia.tempoMedioVidaPedido, { mediaMin: 35, pedidosValidos: 2, pedidosTotal: 2 });
+  const doisDias = (await a.service.analisarPeriodo({ ...tenant, dataInicio: "2026-09-01", dataFim: "2026-09-02" })).dashboardOperacional.resumo;
+  // (15 + 20 + 60) / 3 = 31,7 — a média das médias diárias seria (17,5 + 60) / 2 = 38,8.
+  assert.deepEqual(doisDias.tempoMedioPreparo, { mediaMin: 31.7, pedidosValidos: 3, pedidosTotal: 3 });
+  // (30 + 40 + 120) / 3 = 63,3 — o pedido de 03/09 (fora do período) não entra.
+  assert.deepEqual(doisDias.tempoMedioVidaPedido, { mediaMin: 63.3, pedidosValidos: 3, pedidosTotal: 3 });
+});
+
+test("cards vida/preparo isolados por empresa/unidade", async () => {
+  const t = (id, col, extra = {}) => linha(id, { data_coletado: `2026-09-01T12:${col}:00Z`, data_entregue: "2026-09-01T12:50:00Z", ...extra });
+  const a = await ambiente({ importacoes: [fonte("imp-a"), fonte("outra", { organizacao_id: "org-b", unidade_id: "un-b" })], pedidos: [
+    t("ok", "10"), t("empresa", "40", { organizacao_id: "org-b" }), t("unidade", "40", { unidade_id: "un-b" }), t("join", "40", { importacao_id: "outra" }),
+  ] });
+  const { resumo } = (await a.service.analisarPeriodo({ ...tenant, dataInicio: "2026-09-01", dataFim: "2026-09-01" })).dashboardOperacional;
+  assert.deepEqual(resumo.tempoMedioPreparo, { mediaMin: 10, pedidosValidos: 1, pedidosTotal: 1 });
+  assert.deepEqual(resumo.tempoMedioVidaPedido, { mediaMin: 50, pedidosValidos: 1, pedidosTotal: 1 });
+});
+
 const relatorio = { hash: "novo-hash", periodoInicio: "2026-09-01", periodoFim: "2026-09-05", colunaDetalhesEncontrada: false,
   pedidos: [{ numeroPedido: "123", dataHora: "2026-09-01T00:00:00", situacao: "Cancelado", entregador: "João", taxaEntregador: 10, dadosBrutos: {} }] };
 

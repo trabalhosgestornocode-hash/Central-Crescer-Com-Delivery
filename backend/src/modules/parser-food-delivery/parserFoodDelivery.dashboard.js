@@ -158,6 +158,22 @@ function vidaPedidoPorDiaSerie(pedidos, campoFim) {
 }
 
 // ---------------------------------------------------------------------------
+// Cards "Tempo médio de vida do pedido" (aberto -> ENTREGUE) e "Tempo
+// médio de preparo" (aberto -> coletado), sobre as entregas CONCLUÍDAS do
+// período. A vida usa só `dataEntregue` (chegada ao cliente) — nunca
+// `dataFinalizado`, nem como fallback: o ciclo é ABERTO -> COLETADO -> ENTREGUE.
+// Média POR PEDIDO (soma das durações / pedidos válidos), nunca média das
+// médias diárias. Pedido sem algum dos dois timestamps, ou com
+// fim anterior ao início, fica de fora (diffMinutos -> null) — nunca vira 0.
+// ---------------------------------------------------------------------------
+function tempoMedioEntre(pedidos, duracaoFn) {
+  const duracoes = pedidos.map(duracaoFn).filter((d) => d != null);
+  return { mediaMin: arred(media(duracoes)), pedidosValidos: duracoes.length, pedidosTotal: pedidos.length };
+}
+const tempoMedioVidaPedido = (concluidos) => tempoMedioEntre(concluidos, (p) => diffMinutos(p.dataHora, p.dataEntregue));
+const tempoMedioPreparo = (concluidos) => tempoMedioEntre(concluidos, (p) => diffMinutos(p.dataHora, p.dataColetado));
+
+// ---------------------------------------------------------------------------
 // ETAPA 7 — pontualidade ("Entregas no prazo"). Compara `dataEntregue`
 // (momento real da entrega) contra `prazoEntrega` (prazo prometido, coluna
 // real "Prazo de entrega"). NUNCA usa `dataFinalizado`: esse marco pode
@@ -375,6 +391,8 @@ export function calcularDashboardOperacional(pedidos) {
       taxasTotal,
       tempoMedioEntregaMin: temposGerais.length ? arred(media(temposGerais)) : null,
       entregadoresAtivos: porEntregas.length,
+      tempoMedioVidaPedido: tempoMedioVidaPedido(concluidos),
+      tempoMedioPreparo: tempoMedioPreparo(concluidos),
     },
     entregadoresPorEntregas: porEntregas,
     entregadoresPorTaxas: porTaxas,
