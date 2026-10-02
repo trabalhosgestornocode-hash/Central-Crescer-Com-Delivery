@@ -114,14 +114,16 @@ test('FS proteção insuficiente (< 20,50%): Serviços 0; Total = Σ componentes
   invarianteTotal(metas, 'full_service');
 });
 
-test('FS proteção acima da capacidade de Serviços (> 35%): Serviços no limite 14,50; Total 35,00 = Σ componentes', () => {
+test('FS proteção acima do limite de Serviços (> 35%): Serviços SEM trava (22,36 > limite 14,50, só sinaliza); Total = proteção = Σ componentes', () => {
   const p = protecao(20, 35); // (35−20)/35 = 42,857% > 20,50 + 14,50
   const { metas, metaServicosAcimaDoLimite } = fs(metasFS(), p);
-  assert.equal(metaServicosAcimaDoLimite, true);
-  assert.equal(metas.servicos_promocoes.metaIdeal, 14.5);
-  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '35.00'); // 20,50 + 14,50 — não os ~42,86% da proteção
-  assert.notEqual(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2));
+  assert.equal(metaServicosAcimaDoLimite, true); // sinal interno continua
+  assert.equal(metas.servicos_promocoes.metaIdeal.toFixed(2), '22.36'); // 42,86 − 20,50
+  assert.equal(metas.servicos_promocoes.limite, 14.5);                  // limite intacto
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2)); // 42,86
   invarianteTotal(metas, 'full_service');
+  // meta acima do limite nunca vira "Dentro da Meta" acima do limite: limite tem precedência
+  assert.equal(statusIndicadorRentabilidade(15, metas.servicos_promocoes).chave, 'atencao');
 });
 
 test('FS proteção exatamente na reserva (20,50%): Serviços 0; Total 20,50', () => {
@@ -180,17 +182,21 @@ test('MP F × Z4 (protecao 30,00): Serviços 5,00; Total 30,00 = 13 + 5 + 12', (
   invarianteTotal(metas, 'marketplace');
 });
 
-test('MP D × Z4 (protecao 32,86): bruto Serviços 7,86 > limite 7 → Serviços 7,00; Total = Σ componentes = 32,00 (NÃO 32,86)', () => {
+// REGRESSÃO 2026-10-02 (Matriz Subway Prainha, Marketplace, D × Z4 — preços reais
+// Churrasco 15cm D 23,50 / Z4 35,00): a trava de Serviços no limite (7%) fazia
+// os Indicadores mostrarem 7,00% / 32,00% enquanto o Simulador mostrava 32,86%.
+test('MP D × Z4 (protecao 32,86): Serviços 7,86; Total 32,86 = Σ componentes = proteção (sem trava no limite 7)', () => {
   const p = protecao(23.5, 35);
   assert.equal(p.toFixed(2), '32.86');
   const { metas, protecaoInsuficiente, metaServicosAcimaDoLimite } = mp(metasMP(), p);
-  assert.equal(metas.servicos_promocoes.metaIdeal, 7);      // clamp no limite logístico
-  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '32.00'); // 13 + 7 + 12 — não os 32,86% da proteção
-  assert.notEqual(metas.total_deducoes.metaIdeal.toFixed(2), p.toFixed(2));
+  assert.equal(metas.servicos_promocoes.metaIdeal.toFixed(2), '7.86');  // 32,86 − 13 − 12
+  assert.equal(metas.total_deducoes.metaIdeal.toFixed(2), '32.86');     // 13 + 7,86 + 12
+  assert.equal(metas.total_deducoes.metaIdeal, p);                       // mesma precisão bruta do Simulador
+  assert.equal(metas.servicos_promocoes.limite, 7);                      // limite intacto
   assert.equal(protecaoInsuficiente, false);
-  assert.equal(metaServicosAcimaDoLimite, true);
+  assert.equal(metaServicosAcimaDoLimite, true);                         // só sinaliza
   invarianteTotal(metas, 'marketplace');
-  // status: Serviços atual 6,9% <= meta 7 => dentro_da_meta; 7,5% > limite 7 => atencao
+  // status: limite tem precedência — 7,5% > limite 7 é Atenção mesmo abaixo da meta 7,86
   assert.equal(statusIndicadorRentabilidade(6.9, metas.servicos_promocoes).chave, 'dentro_da_meta');
   assert.equal(statusIndicadorRentabilidade(7.5, metas.servicos_promocoes).chave, 'atencao');
 });
@@ -253,16 +259,19 @@ test('CASO REPORTADO — mesma proteção 10,20% em Full Service → Total 20,50
 
 // Varredura de proteção nos dois modelos — a invariante Total == Σ componentes
 // vale SEMPRE, e a Meta Ideal do Total NUNCA é a proteção crua quando há clamp.
-test('varredura de proteção (0 · abaixo · na reserva · normal · acima da capacidade) — invariante nos 2 modelos', () => {
+test('varredura de proteção (0 · abaixo · na reserva · normal · acima do limite) — invariante nos 2 modelos', () => {
   for (const [modelo, mk, aplic] of [['full_service', metasFS, fs], ['marketplace', metasMP, mp]]) {
     for (const pct of [0, 5, 10.204082, 20.5, 25, 28, 31.43, 34, 45, 80]) {
       const { metas } = aplic(mk(), pct);
       invarianteTotal(metas, modelo);
-      // servicos sempre dentro de [0, limite]
+      // Serviços nunca negativo; sem trava superior (o limite só alimenta status/saldo)
       assert.ok(metas.servicos_promocoes.metaIdeal >= 0);
-      assert.ok(metas.servicos_promocoes.metaIdeal <= metas.servicos_promocoes.limite + 1e-9);
-      // Total nunca ultrapassa o limite logístico do Total
-      assert.ok(metas.total_deducoes.metaIdeal <= metas.total_deducoes.limite + 1e-9);
+      // Total = proteção sempre que ela cobre a reserva; senão fica na reserva
+      const reserva = modelo === 'marketplace' ? 25 : 20.5;
+      assert.ok(Math.abs(metas.total_deducoes.metaIdeal - Math.max(reserva, pct)) < 1e-9);
+      // limites nunca mudam
+      assert.equal(metas.servicos_promocoes.limite, mk().servicos_promocoes.limite);
+      assert.equal(metas.total_deducoes.limite, mk().total_deducoes.limite);
     }
   }
 });

@@ -62,12 +62,13 @@ test('mês e simulador: proteção da precificação separada das metas logísti
  assert.equal(d.protecaoPrecificacao.protecaoPrecificacaoPct.toFixed(2),'32.86');
  assert.equal(d.indicadoresRentabilidade.servicos_promocoes.limite,7);
  assert.equal(d.indicadoresRentabilidade.taxas_comissoes.limite,13);
- // D×Z4: bruto Serviços 7,86 > limite 7 → meta fica em 7,00 + flag interna.
- assert.equal(d.indicadoresRentabilidade.servicos_promocoes.metaIdeal,7);
+ // D×Z4 (regressão 2026-10-02): Serviços 7,86 acima do limite 7 NÃO é travado —
+ // meta segue a proteção; flag interna só sinaliza. Total = 13 + 7,86 + 12 = 32,86
+ // = a MESMA proteção que o Simulador recebe neste payload.
+ assert.equal(d.indicadoresRentabilidade.servicos_promocoes.metaIdeal.toFixed(2),'7.86');
  assert.equal(d.protecaoPrecificacao.metaServicosAcimaDoLimite,true);
- // Serviços clampou em 7 → o Total é 13 + 7 + 12 = 32,00 (Σ componentes), NUNCA a proteção 32,86.
- assert.equal(d.indicadoresRentabilidade.total_deducoes.metaIdeal.toFixed(2),'32.00');
- assert.notEqual(d.indicadoresRentabilidade.total_deducoes.metaIdeal.toFixed(2), d.protecaoPrecificacao.protecaoPrecificacaoPct.toFixed(2));
+ assert.equal(d.indicadoresRentabilidade.total_deducoes.metaIdeal.toFixed(2),'32.86');
+ assert.equal(d.indicadoresRentabilidade.total_deducoes.metaIdeal, d.protecaoPrecificacao.protecaoPrecificacaoPct);
 
  const b=await svc.obterMes({...pedido,unidadeIdSolicitado:'b'});
  assert.equal(b.protecaoPrecificacao.precos.tabelas.balcao,'D');
