@@ -6,6 +6,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+// Unidade do piloto do app Order (IFOOD_ORDER_PILOT_UNITS): sem ela o Order fica indisponível (fail-closed).
+process.env.IFOOD_ORDER_PILOT_UNITS = "00000000-0000-4000-8000-0000000000a1";
 process.env.IFOOD_API_BASE_URL = "https://mock.ifood.test";
 process.env.IFOOD_TOKEN_SECRET = process.env.IFOOD_TOKEN_SECRET || "teste-secret-fixo-para-cripto-1234567890";
 process.env.IFOOD_HOMOLOGATION_MODE = "false";
@@ -18,7 +20,7 @@ const { config } = await import("../src/config/env.js");
 const conn = await import("../src/modules/ifood/ifoodConnection.service.js");
 const { obterObservabilidadeOrder, obterUltimaAutorizacao } = await import("../src/modules/ifood/ifood.repository.js");
 
-const TENANT = { organizacaoId: "org-1", unidadeId: "uni-1" };
+const TENANT = { organizacaoId: "org-1", unidadeId: "00000000-0000-4000-8000-0000000000a1" };
 const MERCHANT = "55c8f464-e65f-4340-b2c7-62d143027040";
 const AGORA = Date.parse("2026-10-01T12:00:00.000Z");
 const iso = (minDoAgora) => new Date(AGORA + minDoAgora * 60_000).toISOString();
@@ -143,10 +145,15 @@ test("SEM app Order no ambiente (produção hoje: sem IFOOD_ORDER_*) e sem crede
   });
 });
 
-test("sem conexão: order null e atenção zerada", async () => {
-  const s = await conn.obterStatus({ ...TENANT, deps: { repo: { async obterConexaoViva() { return null; } }, agora } });
-  assert.equal(s.order, null);
+test("sem conexão: unidade piloto vê o Order 'não conectado'; fora do piloto, order null; atenção zerada", async () => {
+  const semConexao = { async obterConexaoViva() { return null; } };
+  const s = await conn.obterStatus({ ...TENANT, deps: { repo: semConexao, agora } });
+  assert.equal(s.order.configurado, true);
+  assert.equal(s.order.conectado, false);
+  assert.equal(s.order.erroAtual, null);
   assert.deepEqual(s.atencao, { total: 0, apps: [] });
+  const fora = await conn.obterStatus({ organizacaoId: "org-1", unidadeId: "00000000-0000-4000-8000-0000000000ff", deps: { repo: semConexao, agora } });
+  assert.equal(fora.order, null);
 });
 
 test("nada sensível no status: sem token, secret, client id, merchant completo, holder ou ids internos", async () => {
@@ -195,7 +202,7 @@ test("repositório: observabilidade lê eventos/pedidos DO TENANT (e do merchant
   assert.deepEqual(r, { disponivel: true, ultimoEvento: iso(-1), ultimoAck: iso(-1), eventosComFalha: 2, ultimoPedido: iso(-5), lease: { leaseAte: iso(1), atualizadoEm: iso(0) } });
   for (const q of db.chamadas.filter((c) => c.tabela !== "ifood_poller_lease")) {
     assert.ok(q.ops.some((o) => o[0] === "eq" && o[1] === "organizacao_id" && o[2] === "org-1"), q.tabela);
-    assert.ok(q.ops.some((o) => o[0] === "eq" && o[1] === "unidade_id" && o[2] === "uni-1"), q.tabela);
+    assert.ok(q.ops.some((o) => o[0] === "eq" && o[1] === "unidade_id" && o[2] === TENANT.unidadeId), q.tabela);
   }
   for (const q of db.chamadas.filter((c) => c.tabela === "ifood_eventos")) assert.ok(q.ops.some((o) => o[0] === "eq" && o[1] === "merchant_id" && o[2] === MERCHANT));
   const lease = db.chamadas.find((c) => c.tabela === "ifood_poller_lease");
@@ -215,7 +222,7 @@ test("repositório: última autorização = sessão 'authorized' mais recente do
   assert.equal(await obterUltimaAutorizacao({ ...TENANT, appType: "order", db }), iso(-7));
   const ops = db.chamadas[0].ops;
   assert.equal(db.chamadas[0].tabela, "ifood_oauth_sessoes");
-  for (const [c, v] of [["organizacao_id", "org-1"], ["unidade_id", "uni-1"], ["app_type", "order"], ["status", "authorized"]]) {
+  for (const [c, v] of [["organizacao_id", "org-1"], ["unidade_id", TENANT.unidadeId], ["app_type", "order"], ["status", "authorized"]]) {
     assert.ok(ops.some((o) => o[0] === "eq" && o[1] === c && o[2] === v), c);
   }
 });

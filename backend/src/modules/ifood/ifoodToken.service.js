@@ -26,6 +26,7 @@ import { ifoodLog } from "./ifood.logsafe.js";
 import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_APP_ORDER, IFOOD_GRANT, IFOOD_ROTAS, IFOOD_TOKEN } from "./ifood.constants.js";
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
+import { unidadeNoPilotoOrder } from "./ifoodOrderPiloto.js";
 import {
   MODOS_AUTH, modoDeAutenticacao as modoDaConfig, criarProviderCentralizadoTeste,
 } from "./ifoodAuthProvider.js";
@@ -51,6 +52,18 @@ export function appTypesDoOAuth() {
   if (estaEmHomologacaoIfood()) return [...IFOOD_APP_TYPES, IFOOD_APP_ORDER];
   const o = config.ifood?.order ?? {};
   return o.clientId && o.clientSecret ? [...IFOOD_APP_TYPES, IFOOD_APP_ORDER] : [...IFOOD_APP_TYPES];
+}
+
+/**
+ * O app Order está liberado PARA ESTA UNIDADE? Exige as duas coisas:
+ *   1. o app existe neste ambiente (appTypesDoOAuth inclui `order` — credenciais ou homologação);
+ *   2. a unidade está no piloto (IFOOD_ORDER_PILOT_UNITS). Vale também em homologação: fail-closed.
+ * As credenciais sozinhas NUNCA liberam o Order. Não tem relação com o Events (outra flag).
+ * @param {string|null|undefined} unidadeId SEMPRE de req.tenant (contexto validado no servidor)
+ */
+export function orderLiberadoParaUnidade(unidadeId) {
+  if (!appTypesDoOAuth().includes(IFOOD_APP_ORDER)) return false;
+  return unidadeNoPilotoOrder(config.ifood?.orderPilotoUnidades, unidadeId);
 }
 
 /**

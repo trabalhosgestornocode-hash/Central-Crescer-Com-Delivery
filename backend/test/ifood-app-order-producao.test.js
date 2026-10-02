@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+process.env.IFOOD_ORDER_PILOT_UNITS = "00000000-0000-4000-8000-0000000000a1";   // unidade do piloto do app Order
 process.env.IFOOD_TOKEN_SECRET = process.env.IFOOD_TOKEN_SECRET || "teste-secret-fixo-para-cripto-1234567890";
 process.env.IFOOD_API_BASE_URL = "https://mock.ifood.test";
 process.env.IFOOD_HOMOLOGATION_MODE = "false";
@@ -127,7 +128,7 @@ test("OAuth 'order' fora de homologação: userCode e troca com o app de Order; 
     "/authentication/v1.0/oauth/userCode": { userCode: "ABCD-1234", authorizationCodeVerifier: "verif-1", verificationUrl: "https://portal", verificationUrlComplete: "https://portal?c=ABCD-1234", expiresIn: 600 },
     "/authentication/v1.0/oauth/token": { accessToken: "AT-order", refreshToken: "RT-order", expiresIn: 21600 },
   });
-  const T = { organizacaoId: "org-1", unidadeId: "uni-1", usuarioId: "user-1" };
+  const T = { organizacaoId: "org-1", unidadeId: "00000000-0000-4000-8000-0000000000a1", usuarioId: "user-1" };
   const ini = await auth.iniciarConexao({ ...T, appType: "order", deps: { repo, http } });
   assert.deepEqual(http.chamadas[0].campos, { clientId: "order-prod-id" }, "userCode só com o clientId do app de Order");
   const r = await auth.concluirAutorizacao({ ...T, appType: "order", sessaoId: ini.sessionId, authorizationCode: "AUTH-1", deps: { repo, http } });

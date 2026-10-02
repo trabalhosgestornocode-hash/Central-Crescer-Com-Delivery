@@ -19,7 +19,7 @@ import {
   derivarFontesConciliacao, derivarPendenciasHomologacao,
   saudeSalesVsEvents, saudeEventsVsSettlements, saudeSettlementsVsReconciliation,
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
-  rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, derivarEstadoOrder, textoAtencao,
+  rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
 } from "./ifoodEstado.js";
 
 const IFOOD_LOGO = "/assets/menu-dashboard-ifood.png";
@@ -103,30 +103,121 @@ function linhaApp(rotulo, appEstado) {
     </div>`;
 }
 
-// App Order (pedidos e eventos): estado PRÓPRIO, separado de analytics/financial. Só leitura — nenhuma
-// ação aqui. Sem o app Order neste ambiente (`order` null) o bloco não aparece.
-function blocoOrder(order) {
-  const o = derivarEstadoOrder(order);
-  if (!o) return "";
-  const valor = ([, v, tipo]) => (v == null || v === "" ? "—" : tipo === "data" ? fmtDataHora(v) : v);
+const valorLinha = ([, v, tipo]) => (v == null || v === "" ? "—" : tipo === "data" ? fmtDataHora(v) : v);
+const linhasInfo = (linhas) => linhas.map((l) => `<div class="ifood-info-linha"><span>${esc(l[0])}</span><strong>${esc(valorLinha(l))}</strong></div>`).join("");
+
+// OPERAÇÃO — Pedidos (app Order) e Eventos, cada um com o SEU estado (separado de analytics/financial).
+// Pedidos: fora do piloto (`order` null) é "Ainda não disponível para esta unidade" — informativo, sem
+// ação e sem cara de erro. Só leitura: nenhuma ação de pedido sai desta tela. O botão de conectar só
+// aparece para a unidade piloto e exige a loja já vinculada (o recebimento de eventos usa o merchant).
+function blocoOperacao(statusApi, merchant) {
+  const o = derivarEstadoOrder(statusApi?.order);
+  const ev = derivarEstadoEvents(statusApi?.eventosRecebimento, statusApi?.order);
+  const botaoOrder = o.podeConectar
+    ? (merchant
+      ? `<button class="btn btn-ghost" id="ifood-acao-conectar_order" data-acao="conectar_order">${o.chave === "reauth" ? "Reconectar pedidos" : "Conectar pedidos"}</button>`
+      : `<p class="ifood-instrucao" id="ifood-order-sem-loja">Vincule a loja iFood desta unidade para conectar os pedidos.</p>`)
+    : "";
   return `
-    <div class="ifood-card" id="ifood-order-status">
-      <div class="ifood-app-linha">
-        <span class="ifood-app-nome">${esc(ORDER_ROTULO)}</span>
-        <span class="pill ${o.classe}" id="ifood-order-pill">${esc(o.rotulo)}</span>
+    <div class="ifood-card" id="ifood-operacao">
+      <div class="ifood-secao-rotulo">Operação</div>
+      <div class="ifood-apps">
+        <div class="ifood-app-linha" id="ifood-order-status">
+          <span class="ifood-app-nome">${esc(ORDER_ROTULO)}</span>
+          <span class="pill ${o.classe}" id="ifood-order-pill">${esc(o.rotulo)}</span>
+        </div>
+        ${o.erro ? `<div class="ifood-aviso ${o.classe === "bad" ? "bad" : "warn"}" id="ifood-order-erro">${esc(o.erro.mensagem)}</div>` : ""}
+        ${linhasInfo(o.linhas)}
+        ${botaoOrder}
+        <div class="ifood-app-linha" id="ifood-events-status">
+          <span class="ifood-app-nome">${esc(EVENTS_ROTULO)}</span>
+          <span class="pill ${ev.classe}" id="ifood-events-pill">${esc(ev.rotulo)}</span>
+        </div>
+        ${ev.aviso ? `<div class="ifood-aviso warn" id="ifood-events-aviso">${esc(ev.aviso)}</div>` : ""}
+        ${linhasInfo(ev.linhas)}
       </div>
-      ${o.erro ? `<div class="ifood-aviso ${o.classe === "bad" ? "bad" : "warn"}" id="ifood-order-erro">${esc(o.erro.mensagem)}</div>` : ""}
-      ${o.linhas.map((l) => `<div class="ifood-info-linha"><span>${esc(l[0])}</span><strong>${esc(valor(l))}</strong></div>`).join("")}
     </div>`;
 }
 
-function blocoMerchant(merchant) {
-  if (!merchant) return `<div class="ifood-merchant vazio">Nenhuma loja iFood vinculada</div>`;
+// DADOS — Desempenho (Analytics) e Financeiro, como antes (assistente próprio).
+function blocoDados(e) {
   return `
-    <div class="ifood-merchant">
-      <div class="ifood-merchant-nome">${esc(merchant.nome || "—")}</div>
-      <div class="ifood-merchant-meta">Razão social: ${esc(merchant.razaoSocial || "—")}</div>
-      <div class="ifood-merchant-meta">Merchant: <span class="mono">${esc(merchant.idMascarado || "—")}</span></div>
+    <div class="ifood-card" id="ifood-dados">
+      <div class="ifood-secao-rotulo">Dados</div>
+      <div class="ifood-apps">
+        ${linhaApp(APP_ROTULO.analytics, e.apps.analytics)}
+        ${linhaApp(APP_ROTULO.financial, e.apps.financial)}
+      </div>
+    </div>`;
+}
+
+// LOJA IFOOD VINCULADA — só dados que já existem (nada de métrica inventada).
+function blocoLoja(e, statusApi) {
+  const m = e.merchant;
+  const ultimoEvento = statusApi?.order?.ultimoEvento ?? null;
+  return `
+    <div class="ifood-card" id="ifood-loja">
+      <div class="ifood-secao-rotulo">Loja iFood vinculada</div>
+      ${m ? `
+        <div class="ifood-merchant">
+          <div class="ifood-merchant-nome">${esc(m.nome || "—")}</div>
+          <div class="ifood-merchant-meta">Razão social: ${esc(m.razaoSocial || "—")}</div>
+          <div class="ifood-merchant-meta">Merchant: <span class="mono">${esc(m.idMascarado || "—")}</span></div>
+        </div>` : `<div class="ifood-merchant vazio">Nenhuma loja iFood vinculada</div>`}
+      <div class="ifood-info-linha"><span>Conectada em</span><strong>${e.conectadaEm ? fmtDataHora(e.conectadaEm) : "—"}</strong></div>
+      <div class="ifood-info-linha"><span>Última atualização</span><strong>${statusApi?.ultimaSincronizacao ? fmtDataHora(statusApi.ultimaSincronizacao) : "—"}</strong></div>
+      ${ultimoEvento ? `<div class="ifood-info-linha"><span>Último evento recebido</span><strong>${fmtDataHora(ultimoEvento)}</strong></div>` : ""}
+    </div>`;
+}
+
+/**
+ * HTML do painel de status (estado já carregado, sem erro de status). PURO: só lê `statusApi` — sem DOM,
+ * sem rede. Usado por pintarPainel() e pelos testes/preview da tela.
+ * Hierarquia: status geral -> OPERAÇÃO (Pedidos, Eventos) -> DADOS (Analytics, Financeiro) -> LOJA VINCULADA.
+ * "Ver pedidos iFood" só aparece com o Order CONECTADO na unidade.
+ */
+export function montarHtmlPainel(statusApi) {
+  const e = derivarEstadoIntegracao(statusApi);
+  const acoes = acoesDoPainel(e).map((a) =>
+    `<button class="btn ${a.primaria ? "btn-primary" : "btn-ghost"}" id="ifood-acao-${a.id}" data-acao="${a.id}">${esc(a.rotulo)}</button>`);
+  return `
+    <div class="ifood-page">
+      <div class="vd-head ifood-head">
+        <div class="ifood-head-id">
+          <img src="${IFOOD_LOGO}" alt="iFood" class="ifood-head-logo" />
+          <div class="vd-head-txt">
+            <h2>Integração iFood <span class="pill ${e.classe}" id="ifood-status-pill">${esc(e.rotulo)}</span>${badgeHomologacao(statusApi)}</h2>
+            <p>Conecte esta unidade ao iFood para centralizar pedidos, eventos e dados da operação. Cada módulo é ativado de forma controlada, conforme a configuração da loja.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="ifood-card" id="ifood-geral">
+        ${e.aviso ? `<div class="ifood-aviso warn" id="ifood-aviso-estado">${esc(e.aviso)}</div>` : ""}
+        ${statusApi?.ultimoErro ? `<div class="ifood-aviso bad">${esc(statusApi.ultimoErro)}</div>` : ""}
+        ${textoAtencao(statusApi?.atencao) ? `<div class="ifood-aviso warn" id="ifood-atencao">${esc(textoAtencao(statusApi.atencao))}</div>` : ""}
+        <div class="ifood-acoes">${acoes.join("") || '<span class="ifood-tudo-ok">Integração conectada.</span>'}</div>
+      </div>
+
+      ${blocoOperacao(statusApi, e.merchant)}
+      ${blocoDados(e)}
+      ${blocoLoja(e, statusApi)}
+
+      ${e.merchant && statusApi?.order?.conectado ? `
+        <div class="ifood-card">
+          <div class="ifood-secao-rotulo">Pedidos iFood</div>
+          <p class="ifood-instrucao">Pedidos recebidos da loja vinculada, com o status oficial informado pelo iFood.</p>
+          <button class="btn btn-ghost" id="ifood-abrir-pedidos">Ver pedidos iFood</button>
+        </div>
+      ` : ""}
+
+      ${e.apps.financial.conectado && e.merchant ? `
+        <div class="ifood-card">
+          <div class="ifood-secao-rotulo">Homologação Financeira</div>
+          <p class="ifood-instrucao">Consulta de dados financeiros do ambiente de teste (API Sales) para gerar evidência junto ao iFood. Nesta fase, só leitura — nenhum dado alimenta o Dashboard iFood ou o lançamento diário.</p>
+          <button class="btn btn-ghost" id="ifood-abrir-financeiro">Abrir Homologação Financeira</button>
+        </div>
+      ` : ""}
     </div>`;
 }
 
@@ -163,55 +254,7 @@ function pintarPainel() {
     return;
   }
 
-  view.innerHTML = `
-    <div class="ifood-page">
-      <div class="vd-head ifood-head">
-        <div class="ifood-head-id">
-          <img src="${IFOOD_LOGO}" alt="iFood" class="ifood-head-logo" />
-          <div class="vd-head-txt">
-            <h2>Integração iFood <span class="pill ${e.classe}" id="ifood-status-pill">${esc(e.rotulo)}</span>${badgeHomologacao()}</h2>
-            <p>Conecte esta unidade ao iFood para, no futuro, sincronizar dados de desempenho e financeiro. Nesta fase só a conexão e a identificação da loja são feitas.</p>
-          </div>
-        </div>
-      </div>
-
-      <div class="ifood-card">
-        <div class="ifood-apps">
-          ${linhaApp(APP_ROTULO.analytics, e.apps.analytics)}
-          ${linhaApp(APP_ROTULO.financial, e.apps.financial)}
-        </div>
-        <div class="ifood-secao-rotulo">Loja iFood vinculada</div>
-        ${blocoMerchant(e.merchant)}
-        ${e.aviso ? `<div class="ifood-aviso warn" id="ifood-aviso-estado">${esc(e.aviso)}</div>` : ""}
-        ${estado.status?.ultimoErro ? `<div class="ifood-aviso bad">${esc(estado.status.ultimoErro)}</div>` : ""}
-        ${textoAtencao(estado.status?.atencao) ? `<div class="ifood-aviso warn" id="ifood-atencao">${esc(textoAtencao(estado.status.atencao))}</div>` : ""}
-        <div class="ifood-info-linha">
-          <span>Conectada em</span><strong>${e.conectadaEm ? fmtDataHora(e.conectadaEm) : "—"}</strong>
-        </div>
-        <div class="ifood-info-linha">
-          <span>Última atualização</span><strong>Ainda não sincronizado</strong>
-        </div>
-        <div class="ifood-acoes">${acoes.join("") || '<span class="ifood-tudo-ok">Integração conectada. Sincronização de dados chega em uma próxima fase.</span>'}</div>
-      </div>
-
-      ${blocoOrder(estado.status?.order)}
-
-      ${e.merchant ? `
-        <div class="ifood-card">
-          <div class="ifood-secao-rotulo">Pedidos iFood</div>
-          <p class="ifood-instrucao">Pedidos recebidos da loja vinculada, com o status oficial informado pelo iFood.</p>
-          <button class="btn btn-ghost" id="ifood-abrir-pedidos">Ver pedidos iFood</button>
-        </div>
-      ` : ""}
-
-      ${e.apps.financial.conectado && e.merchant ? `
-        <div class="ifood-card">
-          <div class="ifood-secao-rotulo">Homologação Financeira</div>
-          <p class="ifood-instrucao">Consulta de dados financeiros do ambiente de teste (API Sales) para gerar evidência junto ao iFood. Nesta fase, só leitura — nenhum dado alimenta o Dashboard iFood ou o lançamento diário.</p>
-          <button class="btn btn-ghost" id="ifood-abrir-financeiro">Abrir Homologação Financeira</button>
-        </div>
-      ` : ""}
-    </div>`;
+  view.innerHTML = montarHtmlPainel(estado.status);
 
   ligarAcoesDoPainel();
   el("#ifood-abrir-financeiro")?.addEventListener("click", abrirFinanceiro);
@@ -313,6 +356,8 @@ function ligarAcoesDoPainel() {
     continuar: () => abrirWizard("auto"),
     autorizar_analytics: () => abrirWizard("analytics"),
     reconectar: () => abrirWizard("reauth"),
+    // Pedidos (app Order): só existe o botão para a unidade piloto; o backend recusa as demais (403).
+    conectar_order: () => abrirWizard("order"),
     // Loja pendente: vai DIRETO para a seleção de loja (GET /merchants ->
     // escolher -> POST /merchants/link). Não refaz OAuth.
     vincular: () => abrirWizard("merchant"),
@@ -334,6 +379,7 @@ function pintarCarregando() {
 function primeiraEtapaPendente(modo) {
   const e = derivarEstadoIntegracao(estado.status);
   if (modo === "merchant") return "merchant";
+  if (modo === "order") return "order";
   if (modo === "analytics") return "analytics";
   if (modo === "reauth") {
     return e.apps.financial.classe === "bad" ? "financial" : "analytics";
@@ -357,8 +403,8 @@ function sairDoWizard() {
 // Badge discreta — só aparece com IFOOD_HOMOLOGATION_MODE=true no backend.
 // Nunca exibe clientId/clientSecret/token: só sinaliza que o ambiente é de
 // teste (aplicativo distribuído de teste do iFood, não os apps reais).
-function badgeHomologacao() {
-  if (!estado.status?.homologacao) return "";
+function badgeHomologacao(statusApi = estado.status) {
+  if (!statusApi?.homologacao) return "";
   return ` <span class="pill info" id="ifood-badge-homologacao" title="Conexão usando o aplicativo de teste do iFood — não representa produção.">Ambiente de homologação iFood</span>`;
 }
 
@@ -366,7 +412,7 @@ function cabecalhoWizard(tituloEtapa, passo) {
   return `
     <div class="vd-head ifood-head">
       <div class="vd-head-txt">
-        <h2>Conectar iFood <span class="ifood-passo">Etapa ${passo} de 2</span>${badgeHomologacao()}</h2>
+        <h2>Conectar iFood ${passo ? `<span class="ifood-passo">Etapa ${passo} de 2</span>` : ""}${badgeHomologacao()}</h2>
         <p>${esc(tituloEtapa)}</p>
       </div>
       <button class="btn btn-ghost" id="ifood-wizard-sair">Voltar ao status</button>
@@ -382,6 +428,7 @@ function pintarWizard() {
   if (w.etapa === "analytics") return pintarEtapaOAuth("analytics", 1, "Dados de desempenho — autorize o aplicativo de Analytics.");
   if (w.etapa === "financial") return pintarEtapaOAuth("financial", 2, "Dados financeiros — autorize o aplicativo Financial + Merchant.");
   if (w.etapa === "merchant") return pintarEtapaMerchant();
+  if (w.etapa === "order") return pintarEtapaOAuth("order", null, "Pedidos e eventos — autorize o aplicativo de pedidos (Order) do iFood.");
 }
 
 function pintarEtapaOAuth(appType, passo, subtitulo) {
@@ -452,7 +499,10 @@ async function concluirAutorizacao(appType) {
     await api.ifoodOauthComplete(appType, estado.wizard.sessionId, code);
     estado.wizard.feito[appType] = true;
     pararContador();
-    if (appType === "analytics" && derivarEstadoIntegracao(estado.status).apps.financial.conectado) {
+    if (appType === "order") {
+      // Pedidos autorizados: nada mais neste assistente (o recebimento de eventos tem flag própria no servidor).
+      sairDoWizard();
+    } else if (appType === "analytics" && derivarEstadoIntegracao(estado.status).apps.financial.conectado) {
       // Analytics autorizado depois do Financial (caminho "Autorizar Analytics"):
       // nada mais a autorizar — volta ao status.
       sairDoWizard();

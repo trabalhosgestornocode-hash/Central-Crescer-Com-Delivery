@@ -6,7 +6,7 @@
 /** Rótulos amigáveis dos dois aplicativos distribuídos. */
 export const APP_ROTULO = Object.freeze({
   analytics: "Desempenho / Analytics",
-  financial: "Financeiro / Merchant",
+  financial: "Financeiro",
 });
 
 // Estados explícitos da integração (a `chave` é o contrato com os testes/view):
@@ -208,6 +208,8 @@ export function mensagemErroAutorizacao(err) {
       return "Não foi possível concluir a autorização. Confira o código de autorização fornecido pelo iFood e tente novamente, ou gere um novo código.";
     case "IFOOD_APP_SEM_CREDENCIAL":
       return "Este aplicativo iFood ainda não está configurado no sistema. Fale com o suporte da plataforma.";
+    case "IFOOD_ORDER_PILOTO_NAO_HABILITADO":
+      return "Pedidos e eventos do iFood ainda não estão disponíveis para esta unidade.";
     default:
       return err?.message || "Não foi possível concluir a autorização. Gere um novo código e tente novamente.";
   }
@@ -449,42 +451,79 @@ export function rotuloTipoPedido(tipo, entregaPor) {
   return entregaPor === "MERCHANT" ? `${base} própria` : entregaPor === "IFOOD" ? `${base} iFood` : base;
 }
 
-// --- App Order (pedidos e eventos) — status PRÓPRIO, separado de analytics/financial ---
-export const ORDER_ROTULO = "Pedidos e eventos (app Order)";
+// --- Operação: Pedidos (app Order) e Eventos — estados PRÓPRIOS, separados de analytics/financial ---
+//
+// Linguagem operacional para o cliente: nada de lease/TTL/holder/estado técnico do supervisor. Nunca se
+// trata falta de dado como problema de schema — falta de dado é "nenhum evento recebido ainda".
+export const ORDER_ROTULO = "Pedidos / Order";
+export const EVENTS_ROTULO = "Eventos";
+
+// Erros do bloco `order` que dizem respeito ao RECEBIMENTO de eventos — aparecem no card Eventos, não no Order.
+const ERROS_DE_EVENTOS = new Set(["WORKER_INATIVO", "EVENTOS_COM_FALHA"]);
 
 /**
- * Bloco `order` do GET /status -> o que o painel mostra. `null` quando o app Order não existe neste
- * ambiente (o painel não mostra o bloco). Datas voltam em ISO (tipo 'data') para o DOM formatar.
- * @returns {null | { rotulo, classe, linhas: Array<[string, string|null, 'texto'|'data']>, erro: {codigo, mensagem}|null }}
+ * Bloco `order` do GET /status -> card "Pedidos / Order".
+ *   order null      -> "Ainda não disponível para esta unidade" (fora do piloto; não é erro, sem ação)
+ *   reauth_required -> "Reautenticação necessária"
+ *   sem credencial  -> "Não conectado" (unidade piloto: pode conectar)
+ *   ativa           -> "Conectado"
+ * @returns {{ disponivel: boolean, chave: 'indisponivel'|'reauth'|'nao_conectado'|'conectado', rotulo: string,
+ *   classe: string, linhas: Array<[string, string|null, 'texto'|'data']>, erro: {codigo, mensagem}|null,
+ *   podeConectar: boolean }}
  */
 export function derivarEstadoOrder(order) {
-  if (!order) return null;
-  const erro = order.erroAtual ?? null;
-  let rotulo; let classe;
-  if (order.status === "reauth_required") { rotulo = "Reconexão necessária"; classe = "bad"; }
-  else if (!order.conectado) { rotulo = "Não conectado"; classe = "muted"; }
-  else if (erro) { rotulo = "Atenção"; classe = "warn"; }
-  else { rotulo = "Conectado"; classe = "ok"; }
+  if (!order) {
+    return { disponivel: false, chave: "indisponivel", rotulo: "Ainda não disponível para esta unidade", classe: "muted", linhas: [], erro: null, podeConectar: false };
+  }
+  const erroOrder = order.erroAtual && !ERROS_DE_EVENTOS.has(order.erroAtual.codigo) ? order.erroAtual : null;
+  if (order.status === "reauth_required") {
+    return { disponivel: true, chave: "reauth", rotulo: "Reautenticação necessária", classe: "bad", linhas: [], erro: erroOrder, podeConectar: order.configurado === true };
+  }
+  if (!order.conectado) {
+    return { disponivel: true, chave: "nao_conectado", rotulo: "Não conectado", classe: "muted", linhas: [], erro: null, podeConectar: order.configurado === true };
+  }
+  return {
+    disponivel: true, chave: "conectado", rotulo: "Conectado", classe: "ok", erro: erroOrder, podeConectar: false,
+    linhas: [
+      ["Última autenticação", order.ultimaAutenticacao ?? null, "data"],
+      ["Último pedido recebido", order.ultimoPedido ?? null, "data"],
+    ],
+  };
+}
 
-  const m = order.merchant;
-  const merchant = m ? [m.nome ?? m.razaoSocial, m.idMascarado].filter(Boolean).join(" · ") : null;
-  const token = !order.status ? "—" : order.tokenValido ? "Válido" : "Expirado ou inválido (renova no próximo uso)";
-  const worker = !order.worker ? "Sem dados (migrations de Events pendentes)" : order.worker.ativo ? "Ativo" : "Inativo";
-  const linhas = [
-    ["Conexão", rotulo, "texto"],
-    ["Loja iFood", merchant ?? "—", "texto"],
-    ["Token", token, "texto"],
-    ["Token válido até", order.expiraEm, "data"],
-    ["Última autenticação", order.ultimaAutenticacao, "data"],
-    ["Token atualizado em", order.tokenAtualizadoEm, "data"],
-    ["Último evento recebido", order.ultimoEvento, "data"],
-    ["Último ACK", order.ultimoAck, "data"],
-    ["Último pedido", order.ultimoPedido, "data"],
-    ["Worker de eventos", worker, "texto"],
-    ["Worker visto em", order.worker?.atualizadoEm ?? null, "data"],
-    ["Erro atual", erro?.mensagem ?? "Nenhum", "texto"],
-  ];
-  return { rotulo, classe, linhas, erro };
+/**
+ * Card "Eventos" — estado de alto nível do recebimento de eventos para ESTA unidade.
+ * @param {{estado?: string, ultimoCicloOkEm?: string|null}|null|undefined} recebimento `eventosRecebimento` do GET /status
+ * @param {object|null|undefined} order bloco `order` do GET /status
+ *   Desativado                -> recebimento automático desligado neste ambiente
+ *   Aguardando conexão Order  -> ligado, mas a unidade não tem o Order conectado
+ *   Ativo                     -> recebendo
+ *   Aguardando processamento  -> iniciando / outra instância processando (troca de versão, deploy)
+ *   Atenção                   -> recebimento com problema
+ * @returns {{ chave: string, rotulo: string, classe: string, linhas: Array<[string, string|null, 'texto'|'data']>, aviso: string|null }}
+ */
+export function derivarEstadoEvents(recebimento, order) {
+  const tecnico = recebimento?.estado ?? "disabled";
+  const conectado = order?.conectado === true;
+  const erroEventos = order?.erroAtual && ERROS_DE_EVENTOS.has(order.erroAtual.codigo) ? order.erroAtual.mensagem : null;
+  const linhas = conectado ? [
+    ["Último evento recebido", order.ultimoEvento ?? null, "data"],
+    ["Última sincronização", recebimento?.ultimoCicloOkEm ?? null, "data"],
+  ] : [];
+
+  if (tecnico === "disabled") {
+    return { chave: "desativado", rotulo: "Desativado", classe: "muted", linhas, aviso: null };
+  }
+  if (!conectado) {
+    return { chave: "aguardando_order", rotulo: "Aguardando conexão Order", classe: "muted", linhas: [], aviso: null };
+  }
+  if (tecnico === "active" && !erroEventos) {
+    return { chave: "ativo", rotulo: "Ativo", classe: "ok", linhas, aviso: null };
+  }
+  if (tecnico === "starting" || tecnico === "waiting_lease") {
+    return { chave: "aguardando", rotulo: "Aguardando processamento", classe: "info", linhas, aviso: null };
+  }
+  return { chave: "atencao", rotulo: "Atenção", classe: "warn", linhas, aviso: erroEventos ?? "O recebimento de eventos está com instabilidade no momento." };
 }
 
 /** Resumo agregado: "Atenção em N integração(ões)". Cada app continua com o seu próprio estado. */

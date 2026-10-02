@@ -17,13 +17,18 @@
 import { cifrar, decifrar } from "../../shared/cripto.js";
 import { ifoodErro, IFOOD_ERROS, IfoodError } from "./ifood.errors.js";
 import { ifoodLog } from "./ifood.logsafe.js";
-import { IFOOD_ROTAS, IFOOD_OAUTH } from "./ifood.constants.js";
+import { IFOOD_ROTAS, IFOOD_OAUTH, IFOOD_APP_ORDER } from "./ifood.constants.js";
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
 import * as tokenService from "./ifoodToken.service.js";
 
-function validarAppType(appType) {
+// Política de ambiente (config), não dependência injetável: sempre o tokenService real. `order` exige a
+// unidade no piloto — checado AQUI, antes de qualquer chamada ao iFood, no início E na conclusão do OAuth.
+function validarAppType(appType, unidadeId) {
   if (!tokenService.appTypesDoOAuth().includes(appType)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
+  if (appType === IFOOD_APP_ORDER && !tokenService.orderLiberadoParaUnidade(unidadeId)) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_ORDER_PILOTO_NAO_HABILITADO);
+  }
   return appType;
 }
 
@@ -37,7 +42,7 @@ export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuari
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
 
-  validarAppType(appType);
+  validarAppType(appType, unidadeId);
   const { clientId } = token.credenciaisDoApp(appType);   // lança IFOOD_APP_SEM_CREDENCIAL se faltar ENV
 
   let resp;
@@ -94,7 +99,7 @@ export async function concluirAutorizacao({
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
 
-  validarAppType(appType);
+  validarAppType(appType, unidadeId);
 
   const sessao = await repo.obterSessaoOAuth({ organizacaoId, unidadeId, sessaoId, appType });
 

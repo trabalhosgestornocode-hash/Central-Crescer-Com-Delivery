@@ -1,6 +1,7 @@
 // Carrega e valida variáveis de ambiente. Rode com: node --env-file=.env
 import crypto from "node:crypto";
 import { resolverFixtureFinanceira } from "../modules/ifood/ifood.ambienteTeste.js";
+import { parsearUnidadesPiloto } from "../modules/ifood/ifoodOrderPiloto.js";
 
 const obrigatorias = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_ANON_KEY"];
 const faltando = obrigatorias.filter((k) => !process.env[k]);
@@ -44,6 +45,13 @@ try {
 } catch (e) {
   console.error(`[config] ${e.message}`);
   process.exit(1);
+}
+
+// Unidades liberadas para o piloto do app Order (fail-closed: vazio = nenhuma). Valor inválido é
+// ignorado e só CONTADO no log — os ids nunca são impressos.
+const ifoodOrderPiloto = parsearUnidadesPiloto(process.env.IFOOD_ORDER_PILOT_UNITS);
+if (ifoodOrderPiloto.ignorados > 0) {
+  console.warn(`[config] IFOOD_ORDER_PILOT_UNITS: ${ifoodOrderPiloto.ignorados} valor(es) ignorado(s) (não são UUID de unidade).`);
 }
 
 export const config = {
@@ -96,6 +104,9 @@ export const config = {
       clientId: process.env.IFOOD_ORDER_CLIENT_ID || null,
       clientSecret: process.env.IFOOD_ORDER_CLIENT_SECRET || null,
     },
+    // Unidades do piloto do app Order (IFOOD_ORDER_PILOT_UNITS). As credenciais acima só dizem que o app
+    // existe; usar o Order (status, OAuth) exige a unidade nesta lista. Ver ifoodOrderPiloto.js.
+    orderPilotoUnidades: ifoodOrderPiloto.unidades,
     // Aplicativo distribuído de teste — só usado quando `homologacao` é true.
     test: {
       clientId: process.env.IFOOD_TEST_CLIENT_ID || null,

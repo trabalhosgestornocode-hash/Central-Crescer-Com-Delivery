@@ -21,6 +21,10 @@ export class IfoodError extends ApiError {
 const CATALOGO = {
   IFOOD_APP_TYPE_INVALIDO: [400,
     "Aplicativo iFood inválido. Escolha entre desempenho (Analytics) e financeiro (Financial)."],
+  // App Order existe no ambiente, mas a unidade não está no piloto (IFOOD_ORDER_PILOT_UNITS). 403 explícito,
+  // sem nenhuma chamada ao iFood.
+  IFOOD_ORDER_PILOTO_NAO_HABILITADO: [403,
+    "Pedidos e eventos do iFood ainda não estão disponíveis para esta unidade."],
   IFOOD_APP_SEM_CREDENCIAL: [503,
     "As credenciais deste aplicativo iFood não estão configuradas neste ambiente. Fale com o suporte da plataforma."],
   IFOOD_OAUTH_SESSAO_NAO_ENCONTRADA: [404,
