@@ -14,8 +14,9 @@ const semComentarios = (sql) => sql.split(/\r?\n/).filter((l) => !/^\s*--/.test(
 test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
   assert.ok(existsSync(path.join(MIG, "103_ifood_order_actions.sql")));
   assert.ok(existsSync(path.join(MIG, "103_rollback.sql")));
-  // Posteriores conhecidas (não pertencem a este checkpoint): 104 = WhatsApp com vários destinatários (fim do piloto).
-  const POSTERIORES_CONHECIDAS = new Set(["104_comunicacao_destinatarios_multiplos.sql", "104_rollback.sql"]);
+  // Posteriores conhecidas (não pertencem a este checkpoint): 104 = WhatsApp com vários destinatários (fim do piloto);
+  // 105 = cache de retry do WhatsApp (reenvio sob retry receipt).
+  const POSTERIORES_CONHECIDAS = new Set(["104_comunicacao_destinatarios_multiplos.sql", "104_rollback.sql", "105_whatsapp_retry_cache.sql", "105_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });

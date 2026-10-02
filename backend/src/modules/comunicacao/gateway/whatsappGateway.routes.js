@@ -17,7 +17,7 @@
 
 import { Router } from "express";
 import { transicaoEfeito } from "../comunicacao.operacoes.js";
-import { LeaseStaleError, AuthSessionStaleError, AuthConfirmacaoRecusadaError } from "./whatsappGateway.repo.js";
+import { LeaseStaleError, AuthSessionStaleError, AuthConfirmacaoRecusadaError, RETRY_TTL_MIN_SEGUNDOS, RETRY_TTL_MAX_SEGUNDOS } from "./whatsappGateway.repo.js";
 import { validarEventoInbound, motivoBloqueioAutomacao } from "../inbound/inbound.contrato.js";
 import { validarEventoStatusProvider, CONTRATO_STATUS_VERSAO_VINCULADO } from "../comunicacao.statusProvider.js";
 
@@ -32,6 +32,12 @@ const GATEWAY_PROCESS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 // HTTP, antes de chegar ao repo/RPC — defesa em profundidade, mesmo padrão
 // já usado para gatewayProcessId.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Cache de retry (105) — mesmas regras das CHECKs da tabela (defesa em profundidade: a autoridade final é o banco).
+const PROVIDER_MESSAGE_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
+const PAYLOAD_RETRY_RE = /^r1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/;
+const PAYLOAD_RETRY_MAX_CHARS = 131_072;
+const HASH_RE = /^[0-9a-f]{64}$/;
 
 function processIdValido(v) {
   return typeof v === "string" && GATEWAY_PROCESS_ID_RE.test(v);
@@ -247,6 +253,57 @@ export function criarWhatsappGatewayRouter({ repo, organizacaoId, provider, inbo
       } else {
         res.json({ status: "absent" });
       }
+    } catch (e) {
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
+  });
+
+  // ---- cache de RETRY (migration 105; gateway-whatsapp/src/retryCache.js) ----
+  // O Gateway grava o conteúdo CIFRADO de cada mensagem enviada e o lê de volta quando um aparelho destinatário pede
+  // retry ("Aguardando mensagem"). O backend nunca decifra nada (não tem a chave). FENCED pela lease (owner+epoch, como
+  // auth-state): só o dono atual do socket grava/lê. 400 com CAMPO fechado (nunca ecoa valor); organizacaoId e instância
+  // vêm da CONFIG do backend, nunca do corpo.
+  function campoRetryInvalido(corpo, { gravacao }) {
+    if (!corpoFencingValido(corpo)) return "fencing";
+    if (typeof corpo.providerMessageId !== "string" || !PROVIDER_MESSAGE_ID_RE.test(corpo.providerMessageId)) return "providerMessageId";
+    if (!gravacao) return null;
+    if (typeof corpo.payloadCifrado !== "string" || corpo.payloadCifrado.length > PAYLOAD_RETRY_MAX_CHARS || !PAYLOAD_RETRY_RE.test(corpo.payloadCifrado)) return "payloadCifrado";
+    if (corpo.payloadVersao !== "r1") return "payloadVersao";
+    if (typeof corpo.destinoHash !== "string" || !HASH_RE.test(corpo.destinoHash)) return "destinoHash";
+    if (corpo.destinoLidHash != null && (typeof corpo.destinoLidHash !== "string" || !HASH_RE.test(corpo.destinoLidHash))) return "destinoLidHash";
+    if (!Number.isInteger(corpo.ttlSegundos) || corpo.ttlSegundos < RETRY_TTL_MIN_SEGUNDOS || corpo.ttlSegundos > RETRY_TTL_MAX_SEGUNDOS) return "ttlSegundos";
+    if (!Number.isInteger(corpo.maxReenvios) || corpo.maxReenvios < 1 || corpo.maxReenvios > 50) return "maxReenvios";
+    return null;
+  }
+
+  router.post("/eventos/retry-cache", async (req, res, next) => {
+    try {
+      const corpo = req.corpoJson ?? {};
+      const campo = campoRetryInvalido(corpo, { gravacao: true });
+      if (campo) return res.status(400).json({ error: "retry_cache_invalido", campo });
+      const r = await repo.salvarRetryCache(organizacaoId, {
+        providerInstanceId, providerMessageId: corpo.providerMessageId, payloadCifrado: corpo.payloadCifrado, payloadVersao: corpo.payloadVersao,
+        destinoHash: corpo.destinoHash, destinoLidHash: corpo.destinoLidHash ?? null, ttlSegundos: corpo.ttlSegundos, maxReenvios: corpo.maxReenvios,
+        gatewayProcessId: corpo.gatewayProcessId, leaseEpoch: corpo.leaseEpoch,
+      });
+      res.json({ ok: true, resultado: r.resultado, expiraEm: r.expiraEm ?? null });
+    } catch (e) {
+      if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
+      next(e);
+    }
+  });
+
+  router.post("/eventos/retry-cache/consumir", async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      const corpo = req.corpoJson ?? {};
+      const campo = campoRetryInvalido(corpo, { gravacao: false });
+      if (campo) return res.status(400).json({ error: "retry_cache_invalido", campo });
+      const r = await repo.consumirRetryCache(organizacaoId, {
+        providerInstanceId, providerMessageId: corpo.providerMessageId, gatewayProcessId: corpo.gatewayProcessId, leaseEpoch: corpo.leaseEpoch,
+      });
+      res.json({ ok: true, ...r });
     } catch (e) {
       if (e instanceof LeaseStaleError) return res.status(409).json({ error: e.code });
       next(e);

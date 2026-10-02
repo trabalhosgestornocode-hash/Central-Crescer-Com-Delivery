@@ -140,6 +140,15 @@ export function criarBackendClient({ backendUrl, segredoHmac, timeoutMs }) {
       }
       return chamar("GET", caminho);
     },
+    // ---- cache de retry (src/retryCache.js; migration 105) — fenced (owner+epoch), corpo SEMPRE cifrado ----
+    /** Grava o conteúdo cifrado de uma mensagem enviada (idempotente: nunca sobrescreve). */
+    async salvarRetryCache(payload) {
+      return chamar("POST", `${R}/eventos/retry-cache`, payload);
+    },
+    /** Lê e conta UM reenvio (atômico no banco). @returns {Promise<{resultado: 'OK'|'NAO_ENCONTRADA'|'EXPIRADA'|'ESGOTADA'}>} */
+    async consumirRetryCache(payload) {
+      return chamar("POST", `${R}/eventos/retry-cache/consumir`, payload);
+    },
     // ---- lease/fencing (Checkpoint C3.5) ----
     /** @returns {Promise<{acquired: boolean, leaseEpoch: number, expiresAt: string|null}>} */
     async adquirirLease(payload) {

@@ -16,7 +16,7 @@ import { qrParaSvg } from "./qrSvg.js";
 /**
  * @param {ReturnType<import('./baileysSession.js').criarSessaoBaileys>} sessao
  */
-export function criarRotas(sessao, { executarOperacao } = {}) {
+export function criarRotas(sessao, { executarOperacao, retryCache } = {}) {
   const router = Router();
   router.post("/whatsapp/operacao", async (req, res, next) => {
     try {
@@ -124,6 +124,14 @@ export function criarRotas(sessao, { executarOperacao } = {}) {
       res.set("Cache-Control", "no-store");
       res.json(await sessao.fotoPerfil({ telefoneE164 }));
     } catch (e) { next(e); }
+  });
+
+  // Métricas do reenvio sob retry (src/retryCache.js) — SÓ números/vocabulário fechado (nunca id, JID ou conteúdo).
+  // É o que mede a correção: retryRecebido, cacheHit, cacheMiss, reenvioEnviado, esgotado e cacheHitRate.
+  router.get("/whatsapp/retry/metricas", (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!retryCache) return res.status(404).json({ error: "not_found" });
+    res.json(retryCache.metricas());
   });
 
   router.get("/whatsapp/messages/:id/status", async (req, res, next) => {

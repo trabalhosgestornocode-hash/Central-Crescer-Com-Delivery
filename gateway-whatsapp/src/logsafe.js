@@ -50,6 +50,8 @@ const PADROES_TEXTO = [
   // mesmo cifrado, por reflexo: um blob cifrado ainda é o material mais
   // sensível deste processo.
   [/\bv1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+/g, MASCARA],
+  // Mesmo reflexo para o payload cifrado do cache de retry (src/crypto.js#encriptarBytes, formato `r1:…`).
+  [/\br1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+/g, MASCARA],
 ];
 
 const sanitizarTexto = (t) => PADROES_TEXTO.reduce((s, [re, sub]) => s.replace(re, sub), t);

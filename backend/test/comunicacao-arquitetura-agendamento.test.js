@@ -71,7 +71,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       "102_ifood_pedidos_detalhes_confirm.sql", "102_rollback.sql",
       "103_ifood_order_actions.sql", "103_rollback.sql",
       // 104 = fim do piloto: envio automático opt-in, vários destinatários por empresa (idempotência/cooldown por destinatário), categorias e status agregado do alerta.
-      "104_comunicacao_destinatarios_multiplos.sql", "104_rollback.sql"];
+      "104_comunicacao_destinatarios_multiplos.sql", "104_rollback.sql",
+      // 105 = cache de RETRY do WhatsApp (conteúdo cifrado no Gateway p/ reenvio sob retry receipt): tabela + funções novas, sem tocar o outbox/claim nem whatsapp_conexoes.
+      "105_whatsapp_retry_cache.sql", "105_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });
