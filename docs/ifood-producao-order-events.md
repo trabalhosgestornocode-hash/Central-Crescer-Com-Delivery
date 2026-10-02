@@ -1,6 +1,6 @@
 # iFood Order + Events — preparação de produção (Fase 0)
 
-> **Status:** procedimento preparado e revisado. **Nada aqui foi executado em produção.** Cada passo
+> **Status:** migrations 101–103 aplicadas (2026-10-01); Events embarcado publicado e DESLIGADO (2026-10-02). Cada passo
 > operacional exige autorização explícita no checkpoint correspondente.
 
 ## 1. Migrations 101 → 102 → 103
@@ -121,11 +121,13 @@ Render + os sinais acima bastam. **Proposta mínima** para antes de alertas/expa
 pelo titular do lease ao fim do ciclo. Número: a sequência real termina em **104** (nenhuma branch/worktree
 tem 105+); como a frente de comunicação também numera, **reservar o número só no momento do merge**.
 
-## 4. Pendências externas (iFood) — bloqueiam a Fase 1 real
+## 4. Pendências externas (iFood) — RESOLVIDAS (2026-10-02)
 
-Sem resposta confiável do iFood, **não** assumir:
+1. **ACK:** controle de entrega/ACK **por device** (um por aplicativo, baseado nas credenciais) — o nosso ACK
+   não interfere no Gestor de Pedidos nem em outro integrador (FAQ oficial + guia "Polling de eventos").
+2. **Heartbeat:** confirmado pelo suporte iFood — o polling da aplicação Order **mantém a loja online**, mesmo
+   com o Gestor fechado (basta um device ativo). `excludeHeartbeat=true` **não é suportado/recomendado** para
+   Order e **não será implementado**.
 
-1. **ACK:** o ACK de Events do nosso app pode interferir nos eventos que outras interfaces/aplicações da loja
-   (ex.: Gestor de Pedidos) recebem ou processam?
-2. **Heartbeat:** o polling do app integrador funciona como heartbeat operacional capaz de afetar a
-   disponibilidade da loja quando o worker fica offline?
+Consequência e controles da Fase 1 (piloto em uma loja, Gestor aberto, responsável presente, janela curta,
+kill switch): [`ifood-fase1-piloto-runbook.md`](ifood-fase1-piloto-runbook.md).
