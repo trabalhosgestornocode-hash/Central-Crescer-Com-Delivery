@@ -3832,6 +3832,39 @@ tr.dex-linha-na { opacity: .65; }
 .dex-graficos { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; margin-bottom: 18px; }
 .dex-painel { background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio); padding: 16px 18px; box-shadow: var(--sombra-sm); }
 .dex-painel h3 { font-size: 15px; margin-bottom: 12px; }
+/* Indicadores de Rentabilidade BLOQUEADOS (sem as 2 tabelas oficiais) — ver
+   dashboardExecutivoBloqueio.js. O fundo é só estrutura fictícia (sem valores
+   reais), desfocado e inerte; o overlay comunica "configuração pendente",
+   não erro: cartão neutro, sem cor de alerta. */
+.dex-bloqueio-area { position: relative; min-height: 260px; border-radius: var(--raio-sm); overflow: hidden; }
+.dex-bloqueio-fundo { filter: blur(5px); opacity: .55; pointer-events: none; user-select: none; }
+.dex-bloqueio-overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,.35), rgba(255,255,255,.7));
+}
+.dex-bloqueio-cartao {
+  width: min(440px, 100%); display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+  background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio); box-shadow: var(--sombra-md);
+  padding: 22px 22px 20px;
+}
+.dex-bloqueio-icone {
+  display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px;
+  background: var(--vermelho-tint); border: 1px solid var(--vermelho-tint-borda); color: var(--verde-med); margin-bottom: 2px;
+}
+.dex-bloqueio-cartao h4 { font-size: 16px; font-weight: 750; letter-spacing: -.1px; color: var(--texto); }
+.dex-bloqueio-cartao p { font-size: 13.5px; line-height: 1.5; color: var(--cinza); max-width: 360px; }
+.dex-bloqueio-cartao .dex-bloqueio-pendencia { font-size: 12px; color: var(--cinza-claro); }
+.dex-bloqueio-cta { margin-top: 6px; white-space: normal; }
+.dex-bloqueio-cta:focus-visible { outline: 3px solid var(--verde-vivo); outline-offset: 3px; }
+[data-theme="dark"] .dex-bloqueio-overlay { background: linear-gradient(180deg, rgba(22,32,28,.35), rgba(22,32,28,.75)); }
+[data-theme="dark"] .dex-bloqueio-icone { background: rgba(244,36,51,.12); color: var(--amarelo-vivo); }
+/* `[data-theme="dark"] .btn` (global) achata o .btn-primary — o CTA mantém a identidade da marca. */
+[data-theme="dark"] .dex-bloqueio-cta { background: var(--grad-verde); color: #fff; }
+@media (max-width: 560px) {
+  .dex-bloqueio-area { min-height: 300px; }
+  .dex-bloqueio-cartao { padding: 18px 16px; }
+  .dex-bloqueio-cta { width: 100%; }
+}
 .dex-chart-wrap { position: relative; height: 260px; }
 .dex-desempenho { margin-bottom: 18px; }
 .dex-desemp-stats { margin-top: 12px; font-size: 13px; }

@@ -26,6 +26,7 @@ import {
   montarConciliacao, linhasComparativoIndicadores, linhasComparativoOperacional, notaAmostraPequena,
 } from "./dashboardExecutivoConciliacao.js";
 import { montarSimuladorPreco } from "./dashboardExecutivoSimulador.js";
+import { indicadoresRentabilidadeLiberados, indicadoresBloqueadosHtml, ligarBloqueioIndicadores } from "./dashboardExecutivoBloqueio.js";
 import { icon } from "./icons.js";
 import { botaoContextualHtml, botaoDiagnosticoHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
 import { planoAcaoHtml, fmtPp } from "./dashboardExecutivoPlano.js";
@@ -131,6 +132,8 @@ const atualizacaoRecente = () => Date.now() - ultimaAtualizacaoEm < JANELA_SUPRI
  * em sequência (cada um bem abaixo de 3s) não sejam suprimidos pelo refresh
  * do teste anterior — mesmo padrão de `realtimeBus.js#_resetParaTeste`. */
 export function _resetCoalescingParaTeste() { ultimaAtualizacaoEm = 0; }
+/** Só para teste: renderiza a aba Indicadores a partir de um payload de /mes. */
+export function _renderIndicadoresParaTeste(box, dadosMes) { renderIndicadores(box, dadosMes); }
 
 /** Eventos que podem descrever a MESMA entidade que um formulário tem aberto
  * — só edição/exclusão; criação sempre é uma entidade NOVA (nunca colide
@@ -991,10 +994,24 @@ function diaHtml(dia) {
 // ---------------------------------------------------------------------------
 // ABA 3 — INDICADORES
 // ---------------------------------------------------------------------------
-function renderIndicadores(box) {
-  const d = dex.dadosMes;
+function renderIndicadores(box, d = dex.dadosMes) {
   if (d.agregado) {
     box.innerHTML = vazio("building", "Visão consolidada", "Os indicadores de rentabilidade dependem do modelo logístico (Marketplace/Full Service) de cada unidade e não são exibidos nesta visão. Selecione uma unidade específica no filtro acima.");
+    return;
+  }
+  // O gráfico "Comparativo de percentuais" é um componente À PARTE: nunca
+  // herda o bloqueio da tabela. A dependência dele das tabelas oficiais
+  // (só a Meta Ideal de 2 indicadores) é tratada nele mesmo — ver
+  // graficoComparativoIndicadoresHtml.
+  const graficos = `<div class="dex-graficos">${graficoComparativoIndicadoresHtml(d)}</div>`;
+  // Sem as DUAS tabelas oficiais PERSISTIDAS da unidade deste payload, a seção
+  // "Indicadores de Rentabilidade" fica censurada (configuração pendente ≠
+  // "Dados insuficientes"); nenhum valor real dela é renderizado. O CTA leva a
+  // unidade DESTE payload — que pode não ser a unidade da sessão.
+  if (!indicadoresRentabilidadeLiberados(d)) {
+    box.innerHTML = indicadoresBloqueadosHtml(d) + graficos;
+    ligarBloqueioIndicadores(box, d.unidadeId ?? dex.unidadeId);
+    barraComparativaMeta("dex-chart-ind", d.graficos.comparativoPercentuais);
     return;
   }
   const misto = d.modeloPeriodo?.misto && d.indicadoresPorSegmento?.length;
@@ -1034,7 +1051,7 @@ function renderIndicadores(box) {
         <tbody>${linhas}</tbody>
       </table></div>
     </section>
-    <div class="dex-graficos">${graficoComparativoIndicadoresHtml(d)}</div>`;
+    ${graficos}`;
   barraComparativaMeta("dex-chart-ind", d.graficos.comparativoPercentuais);
   els(".dex-ind-expandir").forEach((btn) => btn.addEventListener("click", () => {
     const linha = document.getElementById(`dex-ind-comp-${btn.dataset.chave}`);
@@ -1067,7 +1084,22 @@ function graficoComparativoIndicadoresHtml(d) {
   const nota = semReferencia
     ? `<p class="dex-grafico-nota">${icon("info", { size: 12 })} Meta/Limite consolidados indisponíveis neste período — veja a composição de cada indicador na tabela acima.</p>`
     : "";
-  return `<section class="dex-painel"><h3>${icon("trending-up", { size: 15 })} Comparativo de percentuais</h3>${nota}<div class="dex-chart-wrap"><canvas id="dex-chart-ind"></canvas></div></section>`;
+  return `<section class="dex-painel"><h3>${icon("trending-up", { size: 15 })} Comparativo de percentuais</h3>${nota}${notaMetaIdealSemProtecao(d)}<div class="dex-chart-wrap"><canvas id="dex-chart-ind"></canvas></div></section>`;
+}
+
+/**
+ * Dependência REAL do gráfico em relação às tabelas oficiais: Atual (financeiro)
+ * e Limite (metas_indicadores) nunca dependem delas; a Meta Ideal de Taxas e
+ * comissões e de Taxas de entregadores também não (fixas). Só a Meta Ideal de
+ * Serviços e promoções e de Total de deduções é DERIVADA da Proteção da
+ * Precificação (preços Balcão × iFood das tabelas oficiais —
+ * calc.js#metasComProtecaoPrecificacao). Sem proteção calculável (tabela não
+ * configurada OU sem preço), o backend mantém a meta-padrão do modelo
+ * logístico para esses dois — o gráfico continua, mas diz isso explicitamente.
+ */
+function notaMetaIdealSemProtecao(d) {
+  if (Number.isFinite(d.protecaoPrecificacao?.protecaoPrecificacaoPct)) return "";
+  return `<p class="dex-grafico-nota" data-nota-meta-sem-protecao>${icon("info", { size: 12 })} Meta ideal de Serviços e promoções e de Total de deduções depende das tabelas oficiais de Balcão e iFood (Proteção da Precificação), indisponível nesta unidade — para esses dois indicadores o gráfico mostra a meta-padrão do modelo logístico.</p>`;
 }
 
 function rotuloIndicador(chave) {
