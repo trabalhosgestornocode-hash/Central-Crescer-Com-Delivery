@@ -6,6 +6,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+// Unidade do piloto do app Order (IFOOD_ORDER_PILOT_UNITS): sem ela o Order fica indisponível (fail-closed).
+process.env.IFOOD_ORDER_PILOT_UNITS = "00000000-0000-4000-8000-0000000000a1";
 process.env.IFOOD_API_BASE_URL = "https://mock.ifood.test";
 process.env.IFOOD_TOKEN_SECRET = process.env.IFOOD_TOKEN_SECRET || "teste-secret-fixo-para-cripto-1234567890";
 process.env.IFOOD_HOMOLOGATION_MODE = "true";
@@ -19,7 +21,7 @@ const { validarAppType } = await import("../src/modules/ifood/ifood.validators.j
 const { IFOOD_APP_TYPES } = await import("../src/modules/ifood/ifood.constants.js");
 const { decifrar } = await import("../src/shared/cripto.js");
 
-const TENANT = { organizacaoId: "org-1", unidadeId: "uni-1", usuarioId: "user-1" };
+const TENANT = { organizacaoId: "org-1", unidadeId: "00000000-0000-4000-8000-0000000000a1", usuarioId: "user-1" };
 
 function httpFalso(map) {
   const chamadas = [];

@@ -21,7 +21,7 @@ import { ifoodLog, mascararId } from "./ifood.logsafe.js";
 import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_APP_ORDER } from "./ifood.constants.js";
 import * as repositorio from "./ifood.repository.js";
 import * as merchantService from "./ifoodMerchant.service.js";
-import { estaEmHomologacaoIfood, appTypesDoOAuth } from "./ifoodToken.service.js";
+import { estaEmHomologacaoIfood, orderLiberadoParaUnidade } from "./ifoodToken.service.js";
 
 /**
  * Vincula um merchant do iFood à unidade do contexto.
@@ -138,12 +138,14 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
 }
 
 /**
- * Bloco do app Order (pedidos e eventos). `null` quando o app não existe neste ambiente (sem
- * IFOOD_ORDER_* / fora de homologação) E a unidade não tem credencial `order` — o painel não mostra nada.
+ * Bloco do app Order (pedidos e eventos). `null` quando o Order NÃO está liberado para esta unidade
+ * (app ausente no ambiente OU unidade fora do piloto — IFOOD_ORDER_PILOT_UNITS) E a unidade não tem
+ * credencial `order`: o painel mostra "Ainda não disponível", sem revelar se o app existe no ambiente.
+ * Credencial já existente (ex.: unidade saiu do piloto) continua visível, para reconectar/desconectar.
  * Os sinais de Events vêm do banco (nunca do iFood); falha ao lê-los não derruba o status.
  */
 async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unidadeId, repo, agora }) {
-  const configurado = appTypesDoOAuth().includes(IFOOD_APP_ORDER);
+  const configurado = orderLiberadoParaUnidade(unidadeId);
   if (!configurado && !cred) return null;
 
   const agoraMs = agora().getTime();
@@ -169,7 +171,7 @@ async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unida
   } else if (conectado && obs.disponivel && obs.eventosComFalha > 0) {
     erroAtual = { codigo: "EVENTOS_COM_FALHA", mensagem: `${obs.eventosComFalha} evento(s) com falha de processamento.` };
   } else if (conectado && obs.disponivel && !workerAtivo) {
-    erroAtual = { codigo: "WORKER_INATIVO", mensagem: "O worker de eventos não está rodando: pedidos novos não chegam à Central." };
+    erroAtual = { codigo: "WORKER_INATIVO", mensagem: "O recebimento de eventos não está ativo: pedidos novos não chegam à Central." };
   }
 
   return {
