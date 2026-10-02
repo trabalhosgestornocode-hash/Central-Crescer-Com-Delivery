@@ -296,6 +296,43 @@ test("SIGTERM: para o Events, libera o lease, fecha o HTTP e sai com 0 — uma v
   assert.equal(lerEstadoEvents().estado, ESTADOS_EVENTS.STOPPED);
 });
 
+test("lifecycle: uma parada que FALHA não impede as outras, o HTTP fecha e a saída é 0", async () => {
+  const proc = procFalso();
+  const rodaram = [];
+  const { servidor } = iniciarServidorHttp({
+    app: appComHealth(), porta: 0, proc, prazoFinalMs: 60_000, log: silencio,
+    antesDeFechar: [
+      async () => { rodaram.push("a"); throw new Error("parada quebrou"); },
+      () => { rodaram.push("b-sync"); throw new Error("síncrona também"); },
+      async () => { rodaram.push("c"); },
+    ],
+  });
+  await new Promise((r) => (servidor.listening ? r() : servidor.once("listening", r)));
+  proc.emit("SIGTERM");
+  await aguardar(() => proc.saidas.length === 1);
+  assert.deepEqual(rodaram.sort(), ["a", "b-sync", "c"]);
+  assert.deepEqual(proc.saidas, [0]);
+  assert.equal(servidor.listening, false);
+});
+
+test("lifecycle: parada PENDURADA — o prazo final força exit(0); o HTTP não fica preso esperando", async () => {
+  const proc = procFalso();
+  const { servidor } = iniciarServidorHttp({
+    app: appComHealth(), porta: 0, proc, prazoFinalMs: 80, log: silencio,
+    antesDeFechar: [() => new Promise(() => {})],   // nunca termina
+  });
+  await new Promise((r) => (servidor.listening ? r() : servidor.once("listening", r)));
+  const t0 = Date.now();
+  proc.emit("SIGTERM");
+  // o prazo final é unref (não segura o processo); aqui um timer de teste segura até ele disparar
+  const vivo = setTimeout(() => {}, 2_000);
+  await aguardar(() => proc.saidas.length === 1, { ms: 1_500 });
+  clearTimeout(vivo);
+  assert.deepEqual(proc.saidas, [0]);
+  assert.ok(Date.now() - t0 >= 70, "saiu pelo prazo final");
+  servidor.close();
+});
+
 test("ciclo pendurado além do prazo de parada: o lease NÃO é liberado (ninguém reconhece em paralelo)", async (t) => {
   proibirProcessExit(t);
   const relogio = relogioReal();

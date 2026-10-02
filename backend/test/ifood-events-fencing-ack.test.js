@@ -46,6 +46,21 @@ test("HTTP: sinal abortado DURANTE a espera do retry -> a 2ª tentativa não é 
   assert.equal(chamadas, 1, `retry enviado depois do abort (backoff de ${IFOOD_HTTP.backoffBaseMs} ms)`);
 });
 
+test("HTTP: abort DURANTE uma tentativa em voo -> ela é cancelada e não há retry", async () => {
+  let chamadas = 0;
+  const ctrl = new AbortController();
+  const p = postJson("/events/v1.0/events/acknowledgment", [{ id: "e1" }], {
+    accessToken: "tok", sinal: ctrl.signal,
+    fetchImpl: (_url, opts) => new Promise((_, rej) => {
+      chamadas += 1;
+      opts.signal.addEventListener("abort", () => rej(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+      setTimeout(() => ctrl.abort(), 10);   // o prazo vence com a requisição ainda sem resposta
+    }),
+  });
+  await assert.rejects(p, (e) => e.codigo === IFOOD_ERROS.IFOOD_CANCELADO);
+  assert.equal(chamadas, 1, "cancelado pelo chamador não é 'timeout': não pode virar retry");
+});
+
 // ---------------------------------------------------------------------------
 // Poller: prazo do ACK derivado da renovação do lease
 // ---------------------------------------------------------------------------
@@ -127,6 +142,31 @@ test("vários lotes, ainda titular mas o prazo do 1º lote passou: a renovação
   assert.equal(r.estado, "OK");
   assert.equal(client.acks.length, 2, "o 2º lote sai com um prazo novo, renovado");
   assert.equal(repo.lease.holder, "inst-A");
+});
+
+test("ponta a ponta (cliente de Events + cliente HTTP REAIS): o retry do ACK não sai depois do prazo do lease", async () => {
+  const { getJson, postJson: postReal } = await import("../src/modules/ifood/ifoodHttp.client.js");
+  const relogio = { agoraMs: () => Date.now(), agora: () => new Date(), avancarS: () => {} };
+  const repo = criarRepoEmMemoria({ relogio });
+  const chamadas = { polling: 0, ack: 0 };
+  // fetch falso: polling devolve 1 evento; ACK responde 503 (transitório -> haveria retry após 700 ms de backoff).
+  const fetchImpl = async (url) => {
+    const ehAck = String(url).includes("acknowledgment");
+    chamadas[ehAck ? "ack" : "polling"] += 1;
+    if (ehAck) return { ok: false, status: 503, headers: { get: () => null }, text: async () => "" };
+    return { ok: true, status: 200, headers: { get: (h) => (h.toLowerCase() === "content-type" ? "application/json" : null) }, text: async () => JSON.stringify([ev("e1", "PLC")]) };
+  };
+  const http = {
+    getJson: (c, o) => getJson(c, { ...o, fetchImpl }),
+    postJson: (c, b, o) => postReal(c, b, { ...o, fetchImpl }),
+  };
+  // Prazo do ACK = TTL - margem = 150 ms: vence DURANTE o backoff de 700 ms do 1º retry.
+  const leaseTtlS = (IFOOD_EVENTS.margemFencingAckMs + 150) / 1000;
+  const poller = criarPoller({ repo, token: criarTokenFake({ escopo: "app" }), http, holder: "inst-A", agora: relogio.agora, log: silencio, leaseTtlS });
+  await assert.rejects(poller.executarCiclo(), (e) => e.codigo === IFOOD_ERROS.IFOOD_CANCELADO);
+  assert.equal(chamadas.polling, 1);
+  assert.equal(chamadas.ack, 1, "o retry do ACK não pode sair depois do prazo do lease");
+  assert.equal(repo.eventos.get("e1").acknowledged_at, null);
 });
 
 test("ACK pendurado é abortado no prazo — antes do lease poder vencer (relógio real)", async () => {
