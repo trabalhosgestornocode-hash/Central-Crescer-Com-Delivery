@@ -770,3 +770,107 @@ export function montarExportacaoHtml(evidencia) {
   ` : "<p><em>Conciliação (Bloco H) ainda não foi consultada nesta sessão — sem validações para mostrar.</em></p>"}
 </body></html>`;
 }
+
+// ---------------------------------------------------------------------------
+// Sales — dados mínimos exigidos pela homologação Financial ("Método de
+// pagamento e responsável", "Comissões e taxas aplicadas"). PURO: só lê o
+// que ifoodFinancial.mapper.js#mapearVenda já entrega (`pagamentos[]`,
+// `resumoFinanceiro.lancamentos[]`). Valores de enum desconhecidos aparecem
+// como vieram — nunca um significado inventado.
+// ---------------------------------------------------------------------------
+
+const METODO_PAGAMENTO_ROTULO = Object.freeze({
+  CREDIT: "Cartão de crédito",
+  DEBIT: "Cartão de débito",
+  CASH: "Dinheiro",
+  PIX: "Pix",
+  MEAL_VOUCHER: "Vale-refeição",
+  FOOD_VOUCHER: "Vale-alimentação",
+  DIGITAL_WALLET: "Carteira digital",
+});
+
+/** Método de pagamento (CREDIT, CASH, PIX...) -> rótulo em português. */
+export function rotuloMetodoPagamento(metodo) {
+  if (!metodo) return "Não informado";
+  return METODO_PAGAMENTO_ROTULO[String(metodo).toUpperCase()] ?? String(metodo);
+}
+
+/** `liability` do método: quem recebe/responde pelo pagamento. */
+export function rotuloResponsavelPagamento(liability) {
+  const v = String(liability ?? "").toUpperCase();
+  if (v === "IFOOD") return "iFood";
+  if (v === "MERCHANT") return "Loja";
+  return liability ? String(liability) : "Não informado";
+}
+
+/** ONLINE (pago no app) x OFFLINE (pago na entrega). */
+export function rotuloTipoPagamento(tipo) {
+  const v = String(tipo ?? "").toUpperCase();
+  if (v === "ONLINE") return "Online (no app)";
+  if (v === "OFFLINE") return "Na entrega";
+  return tipo ? String(tipo) : "Não informado";
+}
+
+/** Resumo curto dos pagamentos de uma venda para a coluna da tabela. */
+export function resumirPagamentosVenda(pagamentos) {
+  const lista = Array.isArray(pagamentos) ? pagamentos : [];
+  if (!lista.length) return { metodo: "Não informado", responsavel: "Não informado" };
+  const metodos = [...new Set(lista.map((p) => rotuloMetodoPagamento(p?.metodo)))];
+  const responsaveis = [...new Set(lista.map((p) => rotuloResponsavelPagamento(p?.responsavel)))];
+  return { metodo: metodos.join(" + "), responsavel: responsaveis.join(" + ") };
+}
+
+// Nomes de `billingSummary.billingEntries[].name` vistos na documentação oficial
+// (API Sales / Mapeamento de APIs). Nome fora daqui aparece cru.
+const LANCAMENTO_VENDA_ROTULO = Object.freeze({
+  ORDER_PAYMENT: "Pagamento do pedido",
+  ORDER_COMMISSION: "Comissão do iFood",
+  SERVICE_FEE: "Taxa de serviço",
+  DELIVERY_FEE_IFOOD: "Taxa de entrega (iFood)",
+  PAYMENT_TRANSACTION_FEE: "Taxa de transação do pagamento",
+  IFOOD_SUBSIDY: "Subsídio do iFood",
+  CHAIN_SUBSIDY: "Subsídio da rede",
+  STORE_SUBSIDY: "Subsídio da loja",
+});
+
+export function rotuloLancamentoVenda(nome) {
+  if (!nome) return "Lançamento sem nome";
+  return LANCAMENTO_VENDA_ROTULO[nome] ?? String(nome);
+}
+
+const somaCentavos = (itens) => Math.round(itens.reduce((s, i) => s + Math.round((i.valor ?? 0) * 100), 0)) / 100;
+
+/**
+ * Separa os lançamentos da venda em comissões (nome com COMMISSION), taxas
+ * (nome com FEE) e demais lançamentos — classificação pelo NOME oficial, sem
+ * recalcular nada. Totais em reais (soma em centavos).
+ */
+export function classificarLancamentosVenda(resumoFinanceiro) {
+  const lancamentos = Array.isArray(resumoFinanceiro?.lancamentos) ? resumoFinanceiro.lancamentos : [];
+  const comRotulo = lancamentos.map((l) => ({ nome: l?.nome ?? null, rotulo: rotuloLancamentoVenda(l?.nome), valor: typeof l?.valor === "number" ? l.valor : null }));
+  const ehComissao = (l) => /COMMISSION/i.test(l.nome ?? "");
+  const ehTaxa = (l) => !ehComissao(l) && /FEE/i.test(l.nome ?? "");
+  const comissoes = comRotulo.filter(ehComissao);
+  const taxas = comRotulo.filter(ehTaxa);
+  const outros = comRotulo.filter((l) => !ehComissao(l) && !ehTaxa(l));
+  return {
+    informado: lancamentos.length > 0,
+    comissoes, taxas, outros,
+    totalComissoes: comissoes.length ? somaCentavos(comissoes) : null,
+    totalTaxas: taxas.length ? somaCentavos(taxas) : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation On Demand — rótulos da fase do acompanhamento automático.
+// ---------------------------------------------------------------------------
+export const FASE_ON_DEMAND_ROTULO = Object.freeze({
+  solicitando: "Enviando solicitação ao iFood…",
+  processando: "Processando no iFood — acompanhando automaticamente",
+  instavel: "iFood instável — tentando de novo automaticamente",
+  concluido: "Concluída — arquivo disponível",
+  falhou: "A geração do arquivo falhou no iFood",
+  erro: "Não foi possível acompanhar a solicitação",
+  tempo_esgotado: "Ainda processando — acompanhamento automático pausado",
+  cancelado: "Acompanhamento interrompido",
+});

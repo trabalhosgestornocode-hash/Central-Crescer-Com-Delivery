@@ -498,6 +498,19 @@ body {
 }
 .ifin-credito { color: var(--ok); font-weight: 700; }
 .ifin-debito { color: var(--bad); font-weight: 700; }
+/* Resumo do impacto no repasse (Reconciliation) — grade que quebra sozinha, sem rolagem horizontal. */
+.ifin-resumo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 10px 0 6px; }
+.ifin-resumo-item { display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--linha); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.ifin-resumo-item span { font-size: 12.5px; color: var(--cinza); }
+.ifin-resumo-item strong { font-size: 18px; overflow-wrap: anywhere; }
+.ifin-resumo-item small { font-size: 12px; color: var(--cinza); }
+.ifin-resumo-item.destaque { border-color: var(--ok); background: var(--ok-bg); }
+.ifin-tecnico { font-size: 12px; color: var(--cinza); margin: 6px 0 0; overflow-wrap: anywhere; }
+/* Detalhe da venda: seções + célula de pagamento em duas linhas. */
+.ifin-detalhe-secao { margin-top: 12px; }
+.ifin-detalhe-secao h4 { margin: 0 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--cinza); }
+.ifin-celula-2l { display: flex; flex-direction: column; line-height: 1.25; }
+.ifin-celula-2l small { color: var(--cinza); font-size: 12px; }
 
 /* --------------------- Bloco H — Conciliação consolidada ----------------- */
 .ifcon-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 8px 0; }
