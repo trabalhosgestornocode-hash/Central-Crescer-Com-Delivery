@@ -166,6 +166,17 @@ export async function atualizarConexao({ organizacaoId, unidadeId, conexaoId, ca
  * todo o SaaS (espelha o índice único parcial uq_ifood_conexao_merchant_vivo).
  * Usado para bloquear "merchant já vinculado a outra unidade" ANTES de gravar.
  */
+/**
+ * unidade_id de uma conexão, pelo id (que vem do PRÓPRIO banco — credencial/conexão já
+ * resolvida pelo backend, nunca do navegador). Usado só para escolher a credencial do
+ * refresh Financial (app de teste x produção). null se não existir.
+ */
+export async function obterUnidadeDaConexao({ conexaoId }) {
+  if (!conexaoId) return null;
+  const r = ok(await supabase.from(T.conexoes).select("unidade_id").eq("id", conexaoId).maybeSingle());
+  return r?.unidade_id ?? null;
+}
+
 export async function conexaoVivaDoMerchant({ merchantId }) {
   if (!merchantId) return null;
   return ok(await supabase.from(T.conexoes)

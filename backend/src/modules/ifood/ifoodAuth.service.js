@@ -43,7 +43,11 @@ export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuari
   const token = deps.token ?? tokenService;
 
   validarAppType(appType, unidadeId);
-  const { clientId } = token.credenciaisDoApp(appType);   // lança IFOOD_APP_SEM_CREDENCIAL se faltar ENV
+  // Unidade do TENANT (req.tenant, via controller) — decide o app de teste no Financial
+  // por unidade. Lança IFOOD_APP_SEM_CREDENCIAL se faltar ENV (sem fallback de app).
+  const credencial = token.credenciaisDoApp(appType, { unidadeId });
+  const { clientId } = credencial;
+  const origemCredencial = credencial.origem === "test" ? "test" : "producao";
 
   let resp;
   try {
@@ -74,7 +78,7 @@ export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuari
     expiraEm, criadoPor: usuarioId,
   });
 
-  ifoodLog("info", "oauth.iniciado", { organizacaoId, unidadeId, appType, sessionId: sessao.id, expiraEm });
+  ifoodLog("info", "oauth.iniciado", { organizacaoId, unidadeId, appType, sessionId: sessao.id, expiraEm, origemCredencial });
 
   // NUNCA devolve o verifier.
   return {
@@ -119,7 +123,9 @@ export async function concluirAutorizacao({
 
   let tokens;
   try {
-    tokens = await token.trocarAuthorizationCodePorToken({ appType, authorizationCode, verifier, http });
+    // Unidade da SESSÃO persistida (já filtrada por org+unidade do tenant): a mesma regra do
+    // userCode escolhe o app — um userCode do app de teste nunca é trocado com o app de produção.
+    tokens = await token.trocarAuthorizationCodePorToken({ appType, authorizationCode, verifier, unidadeId: sessao.unidade_id ?? unidadeId, http });
   } catch (e) {
     await repo.fecharSessaoOAuth({ organizacaoId, unidadeId, sessaoId, status: "failed" });
     throw e;
