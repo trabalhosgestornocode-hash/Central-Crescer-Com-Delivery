@@ -20,6 +20,9 @@
 --   Backend-only (RLS habilitado SEM policy => deny-all para authenticated;
 --   o backend usa service_role). Não guarda token, URL de download (assinada)
 --   nem conteúdo do arquivo — só identificadores e status.
+--   Os default privileges do Supabase dão GRANT ALL (inclusive TRUNCATE, que
+--   NÃO passa por RLS) a anon/authenticated em toda tabela nova de `public`:
+--   por isso o REVOKE explícito no fim (mesma convenção das migrations 104/105).
 --
 -- SEM A MIGRATION: o backend cai num registro em memória (mesmo isolamento)
 -- e registra aviso — ver backend/src/modules/ifood/ifoodFinancial.solicitacoes.js.
@@ -60,3 +63,7 @@ create trigger trg_ifood_fin_recon_od_upd before update on ifood_financial_recon
 
 alter table ifood_financial_reconciliacoes_on_demand enable row level security;
 -- Sem policy para `authenticated`: deny-all é o comportamento desejado.
+
+-- Nenhum privilégio para os papéis do frontend (anon/authenticated); só o
+-- backend (service_role) acessa. Idempotente.
+revoke all on ifood_financial_reconciliacoes_on_demand from anon, authenticated;
