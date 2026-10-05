@@ -248,17 +248,26 @@ describe("Merchant, Order e Events operacional NÃO usam a allowlist", () => {
     for (const o of chamadas) assert.notEqual(o.homologacao, true);
   });
 
-  test("Order, Events, Handshake, OAuth, token e worker não importam a decisão nem a variável", () => {
+  test("Order, Events, Handshake, OAuth e worker não importam a decisão nem a variável", () => {
     const arquivos = ["ifoodOrder.service.js", "ifoodOrder.client.js", "ifoodOrderActions.service.js", "ifoodHandshake.service.js", "ifoodHandshake.client.js",
-      "ifoodEvents.client.js", "ifoodEvents.poller.js", "ifoodEvents.service.js", "ifoodAuth.service.js", "ifoodToken.service.js", "ifoodAuthProvider.js", "ifoodMerchant.service.js"];
+      "ifoodEvents.client.js", "ifoodEvents.poller.js", "ifoodEvents.service.js", "ifoodAuth.service.js", "ifoodAuthProvider.js", "ifoodMerchant.service.js"];
     for (const f of arquivos) {
       const s = SRC(`modules/ifood/${f}`);
       assert.doesNotMatch(s, /ifoodFinancialHomologacao|financialHomologacaoUnidades|IFOOD_FINANCIAL_HOMOLOGATION_UNITS|usarHomologacaoFinancial/, f);
     }
   });
 
-  test("só o service Financial e o status (selo) consultam a decisão", () => {
-    const usam = ["modules/ifood/ifoodFinancial.service.js", "modules/ifood/ifoodConnection.service.js", "server.js"];
+  test("token service: a allowlist só escolhe credencial para o appType financial", () => {
+    const s = SRC("modules/ifood/ifoodToken.service.js");
+    const usos = s.split(/\r?\n/).filter((l) => /unidadeEmHomologacaoFinancial\(|totalUnidadesHomologacaoFinancial\(/.test(l) && !/^\s*(\/\/|\*|import)/.test(l));
+    assert.equal(usos.length, 2, usos.join("\n"));
+    for (const l of usos) assert.match(l, /IFOOD_APPS\.FINANCIAL/, l);
+    const codigo = s.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, ""); // comentários podem citar a variável
+    assert.doesNotMatch(codigo, /usarHomologacaoFinancial|financialHomologacaoUnidades|IFOOD_FINANCIAL_HOMOLOGATION_UNITS/);
+  });
+
+  test("só o service Financial, o token service (credencial Financial) e o status (selo) consultam a allowlist", () => {
+    const usam = ["modules/ifood/ifoodFinancial.service.js", "modules/ifood/ifoodConnection.service.js", "modules/ifood/ifoodToken.service.js", "server.js"];
     for (const f of usam) assert.match(SRC(f), /ifoodFinancialHomologacao\.js/, f);
   });
 });

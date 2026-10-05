@@ -27,6 +27,7 @@ import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_APP_ORDER, IFOOD_GRANT, IFOOD_ROTAS,
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
 import { unidadeNoPilotoOrder } from "./ifoodOrderPiloto.js";
+import { unidadeEmHomologacaoFinancial, totalUnidadesHomologacaoFinancial } from "./ifoodFinancialHomologacao.js";
 import {
   MODOS_AUTH, modoDeAutenticacao as modoDaConfig, criarProviderCentralizadoTeste,
 } from "./ifoodAuthProvider.js";
@@ -67,18 +68,38 @@ export function orderLiberadoParaUnidade(unidadeId) {
 }
 
 /**
+ * De onde vem a credencial do app para esta chamada:
+ *   * 'test' — app distribuído de TESTE (IFOOD_TEST_CLIENT_ID/SECRET):
+ *       - modo global IFOOD_HOMOLOGATION_MODE=true (legado: TODOS os appTypes, todas as unidades); ou
+ *       - appType 'financial' + unidade na allowlist IFOOD_FINANCIAL_HOMOLOGATION_UNITS
+ *         (homologação Financial POR UNIDADE — Order/Analytics/Events nunca entram aqui);
+ *   * 'app'  — a credencial real do próprio appType (config.ifood[appType]).
+ * `unidadeId` vem sempre do backend (tenant, sessão OAuth ou conexão persistida).
+ */
+export function fonteDaCredencial(appType, { unidadeId } = {}) {
+  if (estaEmHomologacaoIfood()) return "test";
+  if (appType === IFOOD_APPS.FINANCIAL && unidadeEmHomologacaoFinancial(unidadeId)) return "test";
+  return "app";
+}
+
+/**
  * clientId/clientSecret do app, de ENV (via config/env.js — nunca process.env
  * direto). Lança se não configurado.
  *
- * Em homologação, `analytics`, `financial` e `order` resolvem TODOS para o mesmo
- * app de teste (IFOOD_TEST_CLIENT_ID/SECRET) — o mesmo aplicativo distribuído
- * autoriza os módulos nesse laboratório. Fora de homologação, cada appType usa
+ * Em homologação global, `analytics`, `financial` e `order` resolvem TODOS para o
+ * mesmo app de teste (IFOOD_TEST_CLIENT_ID/SECRET). Fora dela, só o `financial`
+ * de uma unidade na allowlist de homologação usa o app de teste; todo o resto usa
  * SÓ a sua credencial real (config.ifood[appType]) — nunca a de outro app.
+ *
+ * FAIL-CLOSED: se a fonte é 'test' e IFOOD_TEST_CLIENT_* faltar, lança
+ * IFOOD_APP_SEM_CREDENCIAL — NUNCA cai para a credencial de produção (um userCode
+ * do app de teste trocado/renovado com o app de produção falharia de qualquer jeito,
+ * e a unidade de homologação jamais deve autorizar o app real por engano).
  */
-export function credenciaisDoApp(appType) {
+export function credenciaisDoApp(appType, { unidadeId } = {}) {
   if (!appTypesDoOAuth().includes(appType)) throw ifoodErro(IFOOD_ERROS.IFOOD_APP_TYPE_INVALIDO);
 
-  if (estaEmHomologacaoIfood()) {
+  if (fonteDaCredencial(appType, { unidadeId }) === "test") {
     const t = config.ifood?.test ?? {};
     if (!t.clientId || !t.clientSecret) {
       throw ifoodErro(IFOOD_ERROS.IFOOD_APP_SEM_CREDENCIAL, { detalhes: { appType, origem: "test" } });
@@ -112,11 +133,12 @@ function normalizarToken(resp) {
 
 /**
  * ETAPA FINAL DO FLUXO: troca authorizationCode + verifier por token.
- * @param {{appType: string, authorizationCode: string, verifier: string, http?: typeof httpClient}} p
+ * `unidadeId`: a da SESSÃO OAuth persistida — a mesma regra do userCode escolhe o app.
+ * @param {{appType: string, authorizationCode: string, verifier: string, unidadeId?: string, http?: typeof httpClient}} p
  * @returns {Promise<{accessToken, refreshToken, tokenType, expiraEm}>}
  */
-export async function trocarAuthorizationCodePorToken({ appType, authorizationCode, verifier, http = httpClient }) {
-  const { clientId, clientSecret } = credenciaisDoApp(appType);
+export async function trocarAuthorizationCodePorToken({ appType, authorizationCode, verifier, unidadeId, http = httpClient }) {
+  const { clientId, clientSecret } = credenciaisDoApp(appType, { unidadeId });
   let resp;
   try {
     resp = await http.postForm(IFOOD_ROTAS.token, {
@@ -137,11 +159,12 @@ export async function trocarAuthorizationCodePorToken({ appType, authorizationCo
 
 /**
  * Renova o accessToken usando o refreshToken.
- * @param {{appType: string, refreshToken: string, http?: typeof httpClient}} p
+ * `unidadeId`: a da CONEXÃO persistida (ver unidadeParaCredencial) — mesma regra do userCode.
+ * @param {{appType: string, refreshToken: string, unidadeId?: string, http?: typeof httpClient}} p
  */
-export async function renovarToken({ appType, refreshToken, http = httpClient }) {
+export async function renovarToken({ appType, refreshToken, unidadeId, http = httpClient }) {
   if (!refreshToken) throw ifoodErro(IFOOD_ERROS.IFOOD_REFRESH_FALHOU, { detalhes: { motivo: "sem refreshToken" } });
-  const { clientId, clientSecret } = credenciaisDoApp(appType);
+  const { clientId, clientSecret } = credenciaisDoApp(appType, { unidadeId });
   let resp;
   try {
     resp = await http.postForm(IFOOD_ROTAS.token, {
@@ -219,12 +242,28 @@ function renovarEArmazenar({ conexaoId, appType, cred, repo, http }) {
   return p;
 }
 
+/**
+ * Unidade da CONEXÃO persistida, para escolher a credencial do refresh — só quando
+ * pode fazer diferença: appType 'financial' com allowlist de homologação não vazia.
+ * Fora disso devolve null sem consultar nada (Order/Analytics e produção sem
+ * homologação: comportamento idêntico ao anterior). Fail-closed: sem conseguir
+ * descobrir a unidade, NÃO renova (nunca adivinha a credencial).
+ */
+async function unidadeParaCredencial({ conexaoId, appType, repo }) {
+  if (appType !== IFOOD_APPS.FINANCIAL || totalUnidadesHomologacaoFinancial() === 0) return null;
+  const unidadeId = typeof repo.obterUnidadeDaConexao === "function" ? await repo.obterUnidadeDaConexao({ conexaoId }) : null;
+  if (!unidadeId) throw ifoodErro(IFOOD_ERROS.IFOOD_REFRESH_FALHOU, { detalhes: { motivo: "unidade da conexão não encontrada" } });
+  return unidadeId;
+}
+
 async function executarRenovacao({ conexaoId, appType, cred, repo, http }) {
   const refreshToken = cred.refresh_token_cifrado ? decifrar(cred.refresh_token_cifrado) : null;
+  // Antes do try: falha ao descobrir a unidade não é "refresh recusado" — não marca reauth.
+  const unidadeId = await unidadeParaCredencial({ conexaoId, appType, repo });
   try {
-    const tokens = await renovarToken({ appType, refreshToken, http });
+    const tokens = await renovarToken({ appType, refreshToken, unidadeId, http });
     await salvarTokens({ conexaoId, appType, tokens, repo });
-    ifoodLog("info", "token.renovado", { conexaoId, appType, rotacionado: !!tokens.refreshToken });
+    ifoodLog("info", "token.renovado", { conexaoId, appType, rotacionado: !!tokens.refreshToken, origemCredencial: fonteDaCredencial(appType, { unidadeId }) });
     return tokens.accessToken;
   } catch (e) {
     const causa = e?.details?.causa ?? e?.codigo ?? null;
