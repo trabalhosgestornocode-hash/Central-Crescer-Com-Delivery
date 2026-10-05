@@ -6,6 +6,7 @@ import { iniciarWorkerComunicacaoEmbutido, pararWorkerComunicacaoEmbutido } from
 import { workerLog } from "./worker-comunicacao/worker-comunicacao.logsafe.js";
 import { iniciarPurgaPeriodica } from "./modules/comunicacao/comunicacao.inbox.retencao.js";
 import { iniciarEventsIfoodEmbutido, pararEventsIfoodEmbutido } from "./worker-ifood/embedded.js";
+import { totalUnidadesHomologacaoFinancial } from "./modules/ifood/ifoodFinancialHomologacao.js";
 import { iniciarServidorHttp } from "./servidor.lifecycle.js";
 import { avaliarEfeitosExternos } from "./ambiente/efeitosExternos.js";
 import { lerAllowlistRetryResend } from "./modules/comunicacao/retryResendAllowlist.js";
@@ -58,6 +59,8 @@ iniciarServidorHttp({
     console.log(`🥪 Subway Saci API rodando em http://localhost:${config.port}`);
     console.log(`   Health:   http://localhost:${config.port}/health`);
     console.log(`   Produtos: http://localhost:${config.port}/api/v1/produtos?vendavel=true`);
+    // Só a QUANTIDADE — nunca os UUIDs das unidades.
+    console.log(`   iFood Financial homologação: ${totalUnidadesHomologacaoFinancial()} unidade(s) habilitada(s)`);
 
     // iFood Events embarcado: só com IFOOD_EVENTS_EMBEDDED_ENABLED=true (padrão: desligado = nenhum polling).
     // Começa DEPOIS do HTTP ouvir e sem await: banco, iFood ou config com problema viram estado `degraded`

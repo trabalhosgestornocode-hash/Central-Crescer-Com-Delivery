@@ -670,7 +670,7 @@ export function montarEvidenciaHomologacao({ geradoEm, status, financeiro }) {
 
   return {
     geradoEm: geradoEm ?? null,
-    ambiente: status?.homologacao ? "homologacao" : "producao",
+    ambiente: status?.homologacao || status?.financialHomologacao ? "homologacao" : "producao",
     merchant: status?.merchant ?? null,
     resumo,
     apis,

@@ -54,6 +54,14 @@ if (ifoodOrderPiloto.ignorados > 0) {
   console.warn(`[config] IFOOD_ORDER_PILOT_UNITS: ${ifoodOrderPiloto.ignorados} valor(es) ignorado(s) (não são UUID de unidade).`);
 }
 
+// Unidades em HOMOLOGAÇÃO Financial (header x-request-homologation só para elas — ver
+// ifoodFinancialHomologacao.js). Mesmo parser fail-closed do piloto Order: vazio = nenhuma;
+// inválido é ignorado e só CONTADO no log — os ids nunca são impressos.
+const ifoodFinancialHomologacao = parsearUnidadesPiloto(process.env.IFOOD_FINANCIAL_HOMOLOGATION_UNITS);
+if (ifoodFinancialHomologacao.ignorados > 0) {
+  console.warn(`[config] IFOOD_FINANCIAL_HOMOLOGATION_UNITS: ${ifoodFinancialHomologacao.ignorados} valor(es) ignorado(s) (não são UUID de unidade).`);
+}
+
 export const config = {
   port: Number(process.env.PORT) || 3001,
   supabaseUrl: process.env.SUPABASE_URL,
@@ -87,9 +95,13 @@ export const config = {
   // `estaEmHomologacaoIfood()` em ifoodToken.service.js.
   ifood: {
     homologacao: process.env.IFOOD_HOMOLOGATION_MODE === "true",
-    // Pedir a FIXTURE do iFood em Sales/Financial Events (default false = dado real).
+    // Pedir a FIXTURE do iFood em TODAS as APIs Financial, para todas as unidades (default false).
+    // Só pode ser true em ambiente seguro de teste — o guard acima recusa produção/Render.
     // Independente de `homologacao`. Só o backend lê; nunca vem de query/frontend.
     financialFixture: ifoodFinancialFixture,
+    // Homologação Financial POR UNIDADE (IFOOD_FINANCIAL_HOMOLOGATION_UNITS): só estas unidades
+    // enviam x-request-homologation. Vale em produção. Ver ifoodFinancialHomologacao.js.
+    financialHomologacaoUnidades: ifoodFinancialHomologacao.unidades,
     analytics: {
       clientId: process.env.IFOOD_ANALYTICS_CLIENT_ID || null,
       clientSecret: process.env.IFOOD_ANALYTICS_CLIENT_SECRET || null,
