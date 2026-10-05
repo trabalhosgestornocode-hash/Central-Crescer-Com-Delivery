@@ -50,6 +50,19 @@ function httpFalso({ get, post } = {}) {
   };
 }
 
+// Registro de solicitações On Demand (ifoodFinancial.solicitacoes.js) falso —
+// já conhece REQUEST_ID como solicitação desta unidade/conexão.
+function solicitacoesFalso(registros = [{ organizacao_id: TENANT.organizacaoId, unidade_id: TENANT.unidadeId, conexao_id: "conx-1", request_id: REQUEST_ID, competencia: "2025-07", status: "solicitado", expira_em: daquiA(60 * 60 * 1000) }]) {
+  const lista = registros.map((r) => ({ ...r }));
+  return {
+    lista,
+    async registrar(k) { const r = { organizacao_id: k.organizacaoId, unidade_id: k.unidadeId, conexao_id: k.conexaoId, competencia: k.competencia, request_id: k.requestId, status: "solicitado", expira_em: daquiA(60 * 60 * 1000) }; lista.push(r); return r; },
+    async obterVigente(k) { return lista.filter((r) => r.organizacao_id === k.organizacaoId && r.unidade_id === k.unidadeId && r.conexao_id === k.conexaoId && r.competencia === k.competencia).at(-1) ?? null; },
+    async obterPorRequestId(k) { return lista.find((r) => r.organizacao_id === k.organizacaoId && r.unidade_id === k.unidadeId && r.conexao_id === k.conexaoId && r.request_id === k.requestId) ?? null; },
+    async atualizarStatus(k) { const r = lista.find((x) => x.request_id === k.requestId); if (r) r.status = k.status; return r ?? null; },
+  };
+}
+
 function downloadFalso(bytes) {
   const chamadas = [];
   return { chamadas, async baixarArquivoConciliacao({ url }) { chamadas.push(url); return bytes ?? Buffer.from("pedido,valor\n1,10.00\n", "utf8"); } };
@@ -169,20 +182,28 @@ test("downloadPath NUNCA aparece na resposta normalizada nem em texto", async ()
 // =====================================================================
 test("solicitação válida: devolve requestId", async () => {
   const http = httpFalso({ post: () => ({ competence: competenciaFechada(), merchantId: MERCHANT_ID, requestId: REQUEST_ID }) });
-  const r = await financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: competenciaFechada(), deps: { repo: repoFalso(), http } });
+  const r = await financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: competenciaFechada(), deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http } });
   assert.equal(r.requestId, REQUEST_ID);
 });
 
 test("corpo enviado é {competence} — nome exato confirmado no Swagger", async () => {
   const http = httpFalso({ post: () => ({ competence: competenciaFechada(), requestId: REQUEST_ID }) });
-  await financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: competenciaFechada(), deps: { repo: repoFalso(), http } });
+  await financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: competenciaFechada(), deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http } });
   assert.deepEqual(http.chamadas.post[0].corpo, { competence: competenciaFechada() });
 });
 
-test("409 (já existe solicitação recente) -> IFOOD_RECONCILIATION_INVALIDA", async () => {
-  const http = httpFalso({ post: () => { throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "Já existe uma solicitação..." }); } });
+test("409 sem requestId registrado para a competência -> IFOOD_RECONCILIATION_EM_ANDAMENTO (409)", async () => {
+  const http = httpFalso({ post: () => { throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_EM_ANDAMENTO); } });
   await assert.rejects(
-    () => financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: competenciaFechada(), deps: { repo: repoFalso(), http } }),
+    () => financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: competenciaFechada(), deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso([]), http } }),
+    (e) => e.codigo === IFOOD_ERROS.IFOOD_RECONCILIATION_EM_ANDAMENTO && e.statusCode === 409,
+  );
+});
+
+test("outro erro do POST (não-409) sobe como veio, sem retomar requestId", async () => {
+  const http = httpFalso({ post: () => { throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "400" }); } });
+  await assert.rejects(
+    () => financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: competenciaFechada(), deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http } }),
     (e) => e.codigo === IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA,
   );
 });
@@ -190,7 +211,7 @@ test("409 (já existe solicitação recente) -> IFOOD_RECONCILIATION_INVALIDA", 
 test("competência inválida -> erro sem chamar a API", async () => {
   const http = httpFalso({ post: () => { throw new Error("não deveria chamar"); } });
   await assert.rejects(
-    () => financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: "2015-01", deps: { repo: repoFalso(), http } }),
+    () => financial.solicitarReconciliationOnDemand({ ...TENANT, competencia: "2015-01", deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http } }),
     (e) => e.codigo === IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA,
   );
 });
@@ -201,7 +222,7 @@ test("competência inválida -> erro sem chamar a API", async () => {
 test("status 'created': sem arquivo, sem tentar baixar", async () => {
   const http = httpFalso({ get: () => ({ id: REQUEST_ID, status: "created", competence: "2025-07" }) });
   const download = downloadFalso();
-  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), http, download } });
+  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http, download } });
   assert.equal(r.status, "created");
   assert.equal(r.arquivo, null);
   assert.equal(download.chamadas.length, 0);
@@ -210,14 +231,14 @@ test("status 'created': sem arquivo, sem tentar baixar", async () => {
 test("status 'processed': baixa e parseia automaticamente", async () => {
   const http = httpFalso({ get: () => ({ id: REQUEST_ID, status: "processed", competence: "2025-07", downloadPath: URL_SEGREDA }) });
   const download = downloadFalso();
-  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), http, download } });
+  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http, download } });
   assert.equal(r.status, "processed");
   assert.equal(r.arquivo.totalLinhas, 1);
 });
 
 test("status 'error': devolve mensagemErro, sem arquivo", async () => {
   const http = httpFalso({ get: () => ({ id: REQUEST_ID, status: "error", competence: "2025-07", message: "No financial entries found." }) });
-  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), http, download: downloadFalso() } });
+  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http, download: downloadFalso() } });
   assert.equal(r.status, "error");
   assert.equal(r.mensagemErro, "No financial entries found.");
   assert.equal(r.arquivo, null);
@@ -226,7 +247,7 @@ test("status 'error': devolve mensagemErro, sem arquivo", async () => {
 test("requestId com formato inválido -> IFOOD_RECONCILIATION_INVALIDA, sem chamar a API", async () => {
   const http = httpFalso({ get: () => { throw new Error("não deveria chamar"); } });
   await assert.rejects(
-    () => financial.consultarReconciliationOnDemand({ ...TENANT, requestId: "nao-e-um-uuid", deps: { repo: repoFalso(), http, download: downloadFalso() } }),
+    () => financial.consultarReconciliationOnDemand({ ...TENANT, requestId: "nao-e-um-uuid", deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http, download: downloadFalso() } }),
     (e) => e.codigo === IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA,
   );
 });
@@ -234,21 +255,21 @@ test("requestId com formato inválido -> IFOOD_RECONCILIATION_INVALIDA, sem cham
 test("404 (requestId não encontrado/expirado) -> IFOOD_RECONCILIATION_INVALIDA", async () => {
   const http = httpFalso({ get: () => { throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "expirou" }); } });
   await assert.rejects(
-    () => financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), http, download: downloadFalso() } }),
+    () => financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http, download: downloadFalso() } }),
     (e) => e.codigo === IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA,
   );
 });
 
 test("downloadPath NUNCA aparece na resposta normalizada (mesmo quando processed)", async () => {
   const http = httpFalso({ get: () => ({ id: REQUEST_ID, status: "processed", competence: "2025-07", downloadPath: URL_SEGREDA }) });
-  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), http, download: downloadFalso() } });
+  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http, download: downloadFalso() } });
   const txt = JSON.stringify(r);
   assert.ok(!txt.includes("SEGREDO-NUNCA-PODE-VAZAR"));
 });
 
 test("resposta normalizada nunca contém token/secret/authorization", async () => {
   const http = httpFalso({ get: () => ({ id: REQUEST_ID, status: "processed", competence: "2025-07", downloadPath: URL_SEGREDA }) });
-  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), http, download: downloadFalso() } });
+  const r = await financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQUEST_ID, deps: { repo: repoFalso(), solicitacoes: solicitacoesFalso(), http, download: downloadFalso() } });
   const txt = JSON.stringify(r).toLowerCase();
   for (const vazamento of ["accesstoken", "refreshtoken", "authorization", "clientsecret", "at-atual", "rt-atual"]) {
     assert.ok(!txt.includes(vazamento), `vazou: ${vazamento}`);

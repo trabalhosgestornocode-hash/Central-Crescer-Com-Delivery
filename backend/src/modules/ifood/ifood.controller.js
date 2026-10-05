@@ -147,16 +147,43 @@ export const financialReconciliation = asyncHandler(async (req, res) => {
 });
 
 // API Reconciliation On Demand — etapa 1: solicita a geração (assíncrona).
+// O requestId fica registrado por organização/unidade/competência; no 409 do
+// iFood o service devolve o requestId registrado (`reutilizado: true`, HTTP 200).
 export const financialReconciliationOnDemandSolicitar = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
   const { competencia } = req.body ?? {};
-  const data = await financialService.solicitarReconciliationOnDemand({ organizacaoId, unidadeId, competencia });
-  res.status(201).json({ data });
+  const data = await financialService.solicitarReconciliationOnDemand({ organizacaoId, unidadeId, competencia, usuarioId: req.user?.id });
+  res.status(data.reutilizado ? 200 : 201).json({ data });
+});
+
+// Solicitação vigente (< 24h) da unidade para a competência — a UI usa ao
+// reabrir/recarregar para retomar o acompanhamento. Não chama o iFood.
+export const financialReconciliationOnDemandAtual = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { competencia } = req.query;
+  res.json({ data: await financialService.obterSolicitacaoReconciliationOnDemand({ organizacaoId, unidadeId, competencia }) });
+});
+
+// Exportação do CSV de conciliação — proxy autenticado: o backend pede um
+// link novo ao iFood, baixa e devolve o CSV. URL assinada e token nunca saem.
+export const financialReconciliationOnDemandArquivo = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const { requestId } = req.params;
+  const { nomeArquivo, conteudo, contentType } = await financialService.baixarArquivoReconciliationOnDemand({ organizacaoId, unidadeId, requestId });
+  res.set({
+    "Content-Type": contentType,
+    // nomeArquivo já vem restrito a [A-Za-z0-9._-] (service#nomeArquivoConciliacao).
+    "Content-Disposition": `attachment; filename="${nomeArquivo}"`,
+    "Content-Length": String(conteudo.length),
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.send(conteudo);
 });
 
 // API Reconciliation On Demand — etapa 2: consulta status (e baixa/parseia
-// o arquivo automaticamente quando pronto). Chamada manual pelo frontend —
-// nunca em polling automático de background (Bloco Q).
+// o arquivo automaticamente quando pronto). O frontend acompanha com polling
+// e backoff exponencial (frontend/src/ifoodReconciliacaoPolling.js).
 export const financialReconciliationOnDemandStatus = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
   const { requestId } = req.params;

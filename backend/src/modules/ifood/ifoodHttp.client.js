@@ -76,6 +76,22 @@ async function anexarErroDoIfood(erro, resp) {
 }
 
 /**
+ * Reconciliation On Demand (409 "solicitação recente já em progresso — reutilize o
+ * requestId anterior"): o Swagger documenta só {code, message}, mas SE o corpo
+ * trouxer um requestId (UUID), anexa SÓ ele ao erro para o service retomar. Nunca
+ * guarda nem loga o corpo bruto.
+ */
+async function anexarRequestIdDoConflito(erro, resp) {
+  try {
+    const j = JSON.parse(String(await resp.text()).slice(0, 8 * 1024));
+    const id = j?.requestId ?? j?.id ?? null;
+    if (typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      erro.details = { ...(erro.details ?? {}), requestId: id };
+    }
+  } catch { /* corpo ausente/ilegível: o service usa o requestId registrado */ }
+}
+
+/**
  * Uma requisição com timeout, classificação de erro e retry seletivo.
  * @param {object} params
  * @param {string} params.metodo 'GET' | 'POST'
@@ -125,6 +141,7 @@ async function requisitar({ metodo, caminho, headers = {}, corpo, rotulo, contex
           // acessa) — o poller precisa disso para tirar só elas do próximo pedido.
           if (contexto === "events" && resp.status === 403) await anexarMerchantsNaoAutorizados(erro, resp);
           if (contexto === "order") await anexarErroDoIfood(erro, resp);
+          if (contexto === "reconciliation" && resp.status === 409) await anexarRequestIdDoConflito(erro, resp);
           throw erro;
         }
 

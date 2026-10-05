@@ -31,9 +31,10 @@ import * as tokenService from "./ifoodToken.service.js";
 import {
   mapearRespostaSales, mapearRespostaFinancialEvents, mapearRespostaSettlements,
   mapearRespostaReconciliation, mapearRespostaReconciliationSolicitada, mapearRespostaReconciliationStatus,
-  parsearArquivoConciliacao, mapearRespostaAnticipation,
+  parsearArquivoConciliacao, descompactarArquivoConciliacao, mapearRespostaAnticipation,
 } from "./ifoodFinancial.mapper.js";
 import * as downloadModule from "./ifoodFinancial.download.js";
+import * as solicitacoesModule from "./ifoodFinancial.solicitacoes.js";
 import { conciliarFinancial } from "./ifoodFinancial.reconciliation.js";
 import crypto from "node:crypto";
 
@@ -351,7 +352,7 @@ export async function listarSettlements({ organizacaoId, unidadeId, modo, inicio
     conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(
       IFOOD_ROTAS.financialSettlements(conexao.merchant_id, modoValidado, periodo.inicio, periodo.fim),
-      { accessToken, rotulo: "financial.settlements", contexto: "financial", homologacao: true },
+      { accessToken, rotulo: "financial.settlements", contexto: "settlements", homologacao: true },
     ),
   });
 
@@ -459,6 +460,8 @@ async function baixarEParsear({ downloadPath, shaEsperado, download, rotulo }) {
     // cálculo novo, só para de descartar o que já existia.
     eraGzip: parseado.eraGzip,
     delimitador: parseado.delimitador,
+    // Critério de homologação: só `impacto_no_repasse = SIM` compõe o líquido (ver mapper).
+    resumoRepasse: parseado.resumoRepasse,
   };
 }
 
@@ -501,60 +504,159 @@ export async function obterReconciliation({ organizacaoId, unidadeId, competenci
   return { competencia: competenciaValidada, criadoEm: normalizado.criadoEm, metadados: normalizado.metadados, arquivo };
 }
 
+// ---------------------------------------------------------------------------
+// Reconciliation On Demand — fluxo completo de homologação:
+//   solicitar (POST) -> guardar requestId por organização/unidade/conexão/
+//   competência -> acompanhar status (o FRONTEND faz o polling com backoff,
+//   ver frontend/src/ifoodReconciliacaoPolling.js) -> baixar o CSV pela rota
+//   autenticada (nunca pela URL assinada).
+//
+// 409 (doc oficial: "solicitação recente já em progresso — reutilize o
+// requestId anterior"): o iFood NÃO devolve o requestId no 409 (Swagger:
+// "There is already a recent and valid request"). Por isso o requestId é
+// persistido no momento do POST bem-sucedido; no 409 a Central retoma o
+// registro guardado. Se o corpo do 409 trouxer um requestId (defensivo),
+// ele é usado e registrado.
+//
+// Posse do requestId: status e download só aceitam um requestId registrado
+// para a MESMA organização + unidade + conexão viva. requestId de outra
+// unidade (ou digitado) -> 404, sem chamar o iFood.
+// ---------------------------------------------------------------------------
+
+const STATUS_ON_DEMAND_TERMINAIS = new Set(["processed", "error"]);
+
+function registroParaSolicitacao(registro) {
+  if (!registro) return null;
+  return {
+    requestId: registro.request_id,
+    competencia: registro.competencia,
+    status: registro.status,
+    mensagemErro: registro.mensagem_erro ?? null,
+    solicitadoEm: registro.solicitado_em ?? null,
+    expiraEm: registro.expira_em ?? null,
+    finalizado: STATUS_ON_DEMAND_TERMINAIS.has(registro.status),
+  };
+}
+
+async function exigirSolicitacaoDaUnidade({ organizacaoId, unidadeId, conexao, requestId, solicitacoes }) {
+  const registro = await solicitacoes.obterPorRequestId({ organizacaoId, unidadeId, conexaoId: conexao.id, requestId });
+  if (!registro) {
+    ifoodLog("warn", "financial.reconciliation.on_demand.request_id_desconhecido", { organizacaoId, unidadeId, requestId: mascararId(requestId) });
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_SOLICITACAO_NAO_ENCONTRADA);
+  }
+  return registro;
+}
+
 /**
  * API Reconciliation On Demand — ETAPA 1: solicita a geração.
  * POST /financial/v3.0/merchants/{merchantId}/reconciliation/on-demand.
- * Devolve `requestId` — o FRONTEND guarda em memória e consulta o status
- * manualmente (botão "Verificar status"); nada de polling em background
- * aqui (Bloco Q).
+ * Sucesso -> registra o requestId. 409 -> retoma o requestId registrado para
+ * esta unidade/competência (`reutilizado: true`).
+ *
+ * @returns {Promise<{requestId, competencia, reutilizado: boolean}>}
  */
-export async function solicitarReconciliationOnDemand({ organizacaoId, unidadeId, competencia, deps = {} }) {
+export async function solicitarReconciliationOnDemand({ organizacaoId, unidadeId, competencia, usuarioId, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
+  const solicitacoes = deps.solicitacoes ?? solicitacoesModule;
 
   const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const competenciaValidada = validarCompetencia(competencia);
+  const chave = { organizacaoId, unidadeId, conexaoId: conexao.id, competencia: competenciaValidada };
 
-  const resposta = await token.comAccessTokenValido({
-    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
-    fn: (accessToken) => http.postJson(
-      IFOOD_ROTAS.financialReconciliationOnDemand(conexao.merchant_id), { competence: competenciaValidada },
-      { accessToken, rotulo: "financial.reconciliation.on_demand.solicitar", contexto: "reconciliation", homologacao: true },
-    ),
-  });
+  let resposta;
+  try {
+    resposta = await token.comAccessTokenValido({
+      conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+      fn: (accessToken) => http.postJson(
+        IFOOD_ROTAS.financialReconciliationOnDemand(conexao.merchant_id), { competence: competenciaValidada },
+        { accessToken, rotulo: "financial.reconciliation.on_demand.solicitar", contexto: "reconciliation", homologacao: true },
+      ),
+    });
+  } catch (e) {
+    if (e?.codigo !== IFOOD_ERROS.IFOOD_RECONCILIATION_EM_ANDAMENTO) throw e;
+
+    const doIfood = typeof e.details?.requestId === "string" && RE_UUID.test(e.details.requestId) ? e.details.requestId : null;
+    const registrado = await solicitacoes.obterVigente(chave);
+    const requestId = doIfood ?? registrado?.request_id ?? null;
+    if (!requestId) {
+      // Solicitação recente existe no iFood, mas não foi feita por esta
+      // Central (ou o registro expirou) — não há requestId para retomar.
+      ifoodLog("warn", "financial.reconciliation.on_demand.conflito_sem_registro", { organizacaoId, unidadeId, competencia: competenciaValidada });
+      throw e;
+    }
+    if (doIfood && registrado?.request_id !== doIfood) {
+      await solicitacoes.registrar({ ...chave, merchantId: conexao.merchant_id, requestId: doIfood, usuarioId });
+    }
+    ifoodLog("info", "financial.reconciliation.on_demand.reutilizado", {
+      organizacaoId, unidadeId, competencia: competenciaValidada, requestId: mascararId(requestId), origem: doIfood ? "ifood" : "registro",
+    });
+    return { requestId, competencia: competenciaValidada, reutilizado: true };
+  }
 
   const normalizado = mapearRespostaReconciliationSolicitada(resposta);
+  if (!normalizado.requestId || !RE_UUID.test(String(normalizado.requestId))) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RESPOSTA_INVALIDA, { detalhes: { motivo: "requestId ausente na solicitação de conciliação" } });
+  }
+  await solicitacoes.registrar({ ...chave, merchantId: conexao.merchant_id, requestId: normalizado.requestId, usuarioId });
   ifoodLog("info", "financial.reconciliation.on_demand.solicitado", {
-    organizacaoId, unidadeId, competencia: competenciaValidada, requestId: normalizado.requestId,
+    organizacaoId, unidadeId, competencia: competenciaValidada, requestId: mascararId(normalizado.requestId),
   });
-  return normalizado;
+  return { requestId: normalizado.requestId, competencia: competenciaValidada, reutilizado: false };
+}
+
+/**
+ * Solicitação On Demand VIGENTE (até 24h) desta unidade para a competência —
+ * usada pela UI ao reabrir/recarregar a tela para retomar o acompanhamento.
+ * Não chama o iFood. `null` quando não há.
+ */
+export async function obterSolicitacaoReconciliationOnDemand({ organizacaoId, unidadeId, competencia, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const solicitacoes = deps.solicitacoes ?? solicitacoesModule;
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const competenciaValidada = validarCompetencia(competencia);
+  const registro = await solicitacoes.obterVigente({ organizacaoId, unidadeId, conexaoId: conexao.id, competencia: competenciaValidada });
+  return registroParaSolicitacao(registro);
+}
+
+/** GET de status no iFood (link de download novo a cada consulta — doc oficial). */
+async function consultarStatusNoIfood({ conexao, requestId, repo, http, token }) {
+  const resposta = await token.comAccessTokenValido({
+    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
+    fn: (accessToken) => http.getJson(
+      IFOOD_ROTAS.financialReconciliationOnDemandStatus(conexao.merchant_id, requestId),
+      { accessToken, rotulo: "financial.reconciliation.on_demand.status", contexto: "reconciliation", homologacao: true },
+    ),
+  });
+  return mapearRespostaReconciliationStatus(resposta);
 }
 
 /**
  * API Reconciliation On Demand — ETAPA 2: consulta status por requestId.
  * GET .../reconciliation/on-demand/{requestId}. Se status === "processed",
- * baixa e faz o parse do arquivo automaticamente (o chamador já recebe os
- * dados prontos, sem uma terceira chamada).
+ * baixa e faz o parse do arquivo automaticamente (tabela + resumo do impacto
+ * no repasse). `arquivoDisponivel` habilita o botão "Baixar CSV".
  */
 export async function consultarReconciliationOnDemand({ organizacaoId, unidadeId, requestId, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
   const download = deps.download ?? downloadModule;
+  const solicitacoes = deps.solicitacoes ?? solicitacoesModule;
 
-  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const requestIdValidado = validarRequestId(requestId);
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const registro = await exigirSolicitacaoDaUnidade({ organizacaoId, unidadeId, conexao, requestId: requestIdValidado, solicitacoes });
 
-  const resposta = await token.comAccessTokenValido({
-    conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
-    fn: (accessToken) => http.getJson(
-      IFOOD_ROTAS.financialReconciliationOnDemandStatus(conexao.merchant_id, requestIdValidado),
-      { accessToken, rotulo: "financial.reconciliation.on_demand.status", contexto: "reconciliation", homologacao: true },
-    ),
-  });
+  const normalizado = await consultarStatusNoIfood({ conexao, requestId: requestIdValidado, repo, http, token });
+  if (normalizado.status && normalizado.status !== registro.status) {
+    await solicitacoes.atualizarStatus({
+      organizacaoId, unidadeId, conexaoId: conexao.id, requestId: requestIdValidado,
+      status: normalizado.status, mensagemErro: normalizado.mensagemErro,
+    });
+  }
 
-  const normalizado = mapearRespostaReconciliationStatus(resposta);
   let arquivo = null;
   if (normalizado.status === "processed" && normalizado.downloadPath) {
     arquivo = await baixarEParsear({
@@ -564,15 +666,68 @@ export async function consultarReconciliationOnDemand({ organizacaoId, unidadeId
   }
 
   ifoodLog("info", "financial.reconciliation.on_demand.consultado", {
-    organizacaoId, unidadeId, requestId: requestIdValidado, status: normalizado.status,
+    organizacaoId, unidadeId, requestId: mascararId(requestIdValidado), status: normalizado.status,
     linhas: arquivo?.totalLinhas ?? null,
   });
 
   // downloadPath NUNCA sai daqui pro frontend.
   return {
-    requestId: normalizado.requestId, competencia: normalizado.competencia, status: normalizado.status,
-    mensagemErro: normalizado.mensagemErro, arquivo,
+    requestId: normalizado.requestId ?? requestIdValidado,
+    competencia: normalizado.competencia ?? registro.competencia,
+    status: normalizado.status,
+    finalizado: STATUS_ON_DEMAND_TERMINAIS.has(normalizado.status),
+    mensagemErro: normalizado.mensagemErro,
+    arquivoDisponivel: normalizado.status === "processed" && !!normalizado.downloadPath,
+    arquivo,
   };
+}
+
+/** Nome de arquivo seguro para Content-Disposition: só [A-Za-z0-9._-]. */
+export function nomeArquivoConciliacao(competencia) {
+  const c = RE_COMPETENCIA.test(String(competencia ?? "")) ? competencia : "competencia";
+  return `conciliacao-ifood-${c}.csv`.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+/**
+ * Exportação do CSV de conciliação (critério de homologação: "download/
+ * exportação CSV" + "disponibilizar arquivo para download").
+ *
+ * PROXY SEGURO, sem guarda permanente: valida a posse do requestId, pede ao
+ * iFood um link NOVO (GET de status — o link expira e é regenerado a cada
+ * consulta), baixa no backend com teto de tamanho/timeout, descompacta o
+ * .gz e devolve o CSV. A URL assinada e o access token nunca saem do backend.
+ *
+ * @returns {Promise<{nomeArquivo: string, conteudo: Buffer, contentType: string}>}
+ */
+export async function baixarArquivoReconciliationOnDemand({ organizacaoId, unidadeId, requestId, deps = {} }) {
+  const repo = deps.repo ?? repositorio;
+  const http = deps.http ?? httpClient;
+  const token = deps.token ?? tokenService;
+  const download = deps.download ?? downloadModule;
+  const solicitacoes = deps.solicitacoes ?? solicitacoesModule;
+
+  const requestIdValidado = validarRequestId(requestId);
+  const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
+  const registro = await exigirSolicitacaoDaUnidade({ organizacaoId, unidadeId, conexao, requestId: requestIdValidado, solicitacoes });
+
+  const normalizado = await consultarStatusNoIfood({ conexao, requestId: requestIdValidado, repo, http, token });
+  if (normalizado.status !== "processed" || !normalizado.downloadPath) {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_ARQUIVO_INDISPONIVEL);
+  }
+
+  const bytesBrutos = await download.baixarArquivoConciliacao({ url: normalizado.downloadPath });
+  let conteudo;
+  try {
+    ({ conteudo } = descompactarArquivoConciliacao(bytesBrutos));
+  } catch {
+    throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "O arquivo de conciliação veio num formato que não conseguimos interpretar." });
+  }
+
+  const competenciaArquivo = normalizado.competencia ?? registro.competencia;
+  ifoodLog("info", "financial.reconciliation.on_demand.arquivo_exportado", {
+    organizacaoId, unidadeId, requestId: mascararId(requestIdValidado), competencia: competenciaArquivo, bytes: conteudo.length,
+  });
+  return { nomeArquivo: nomeArquivoConciliacao(competenciaArquivo), conteudo, contentType: "text/csv; charset=utf-8" };
 }
 
 // ===========================================================================
@@ -601,7 +756,7 @@ export async function listarAnticipations({ organizacaoId, unidadeId, modo, inic
     conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(
       IFOOD_ROTAS.financialAnticipations(conexao.merchant_id, modoValidado, periodo.inicio, periodo.fim),
-      { accessToken, rotulo: "financial.anticipations", contexto: "financial", homologacao: true },
+      { accessToken, rotulo: "financial.anticipations", contexto: "anticipations", homologacao: true },
     ),
   });
 

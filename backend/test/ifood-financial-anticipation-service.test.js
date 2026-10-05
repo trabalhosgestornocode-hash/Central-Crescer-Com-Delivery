@@ -75,7 +75,7 @@ test("modo padrão ('calculo') usa beginCalculationDate/endCalculationDate", asy
   const { caminho, opts } = http.chamadas.get[0];
   assert.equal(caminho, `/financial/v3.0/merchants/${MERCHANT_ID}/anticipations?beginCalculationDate=2024-01-01&endCalculationDate=2024-01-31`);
   assert.equal(opts.homologacao, true);
-  assert.equal(opts.contexto, "financial");
+  assert.equal(opts.contexto, "anticipations"); // 404 = "loja sem plano de antecipação" (ifood.errors.js)
 });
 
 test("modo 'pagamento' usa beginAnticipatedPaymentDate/endAnticipatedPaymentDate (par mutuamente exclusivo)", async () => {
