@@ -137,15 +137,35 @@ describe("merchant pelo receiver", () => {
     assert.equal(r.eventos.length, 2);
     assert.equal(r.validacao.valida, true);
   });
-  test("[6] merchant de outra loja (fixture) -> evento descartado, resposta inválida, log sem documento", async () => {
+  test("[6] MODO REAL: receiver de outra loja -> evento descartado, resposta inválida, log 'rejeitada' sem documento", async () => {
     const alheio = ev("SERVICE_FEE", "-0.99", { receiver: { businessId: MERCHANT_FIXTURE, businessDocument: "72821234000100" } });
-    const { r, log } = await comSilencio(() => chamar({ homologacao: true }, ok200([alheio, ev("ORDER_PAYMENT", "27")])));
+    const { r, log } = await comSilencio(() => chamar({ homologacao: false }, ok200([alheio, ev("ORDER_PAYMENT", "27")])));
     assert.deepEqual(r.eventos.map((e) => e.nome), ["ORDER_PAYMENT"]);
     assert.equal(r.validacao.valida, false);
     assert.deepEqual(r.validacao.motivos, ["MERCHANT_DIVERGENTE"]);
     assert.deepEqual(r.validacao.merchant.recebidosDivergentes, ["35e5****647e"]);
+    assert.equal(r.validacao.merchant.eventosDescartados, 1);
+    assert.equal(r.validacao.divergencia, "rejeitada");
+    assert.equal(r.fonte, "real");
+    assert.equal(r.amostraHomologacao, false);
     assert.match(log, /financial\.events\.resposta_invalida/);
+    assert.match(log, /"divergencia":"rejeitada"/);
     assert.ok(!log.includes("72821234000100") && !log.includes(CNPJ));
+  });
+  test("[6c] HOMOLOGAÇÃO: receiver da fixture oficial -> evento MANTIDO como amostra, log 'fixture_oficial_aceita' sem documento", async () => {
+    const alheio = ev("SERVICE_FEE", "-0.99", { receiver: { businessId: MERCHANT_FIXTURE, businessDocument: "72821234000100" } });
+    const { r, log } = await comSilencio(() => chamar({ homologacao: true }, ok200([alheio, ev("ORDER_PAYMENT", "27")])));
+    assert.deepEqual(r.eventos.map((e) => e.nome), ["SERVICE_FEE", "ORDER_PAYMENT"]);
+    assert.equal(r.fonte, "fixture");
+    assert.equal(r.amostraHomologacao, true);
+    assert.deepEqual(r.amostra.merchants, ["35e5****647e"]);
+    assert.equal(r.validacao.merchant.eventosDescartados, 0);
+    assert.equal(r.validacao.merchant.fixtureAceitos, 1);
+    assert.equal(r.validacao.divergencia, "fixture_oficial_aceita");
+    assert.match(log, /financial\.events\.fixture_aceita/);
+    assert.doesNotMatch(log, /financial\.events\.resposta_invalida/);
+    assert.ok(!log.includes("72821234000100") && !log.includes(CNPJ) && !log.includes(MERCHANT_FIXTURE));
+    assert.ok(!JSON.stringify(r.amostra).includes(MERCHANT_FIXTURE), "merchant da fixture só mascarado");
   });
   test("[6b] evento sem receiver: mantido (requisição já foi pelo merchant da conexão) e contado", async () => {
     const r = await chamar({ homologacao: false }, ok200([ev("ORDER_PAYMENT", "27", { receiver: undefined })]));

@@ -1132,6 +1132,22 @@ function abasHtml(f) {
   `).join("")}</div>`;
 }
 
+// Homologação Financial: o iFood devolve a FIXTURE oficial (loja e período de exemplo),
+// não dados da loja vinculada. O backend marca `fonte: "fixture"` / `amostraHomologacao`
+// — o frontend só exibe o aviso (nunca decide o modo). Loja da fixture só mascarada.
+function avisoAmostraHomologacao(r) {
+  if (!r || (r.fonte !== "fixture" && r.amostraHomologacao !== true)) return "";
+  const lojas = r.amostra?.merchants?.length ? r.amostra.merchants.join(", ") : null;
+  const p = r.amostra?.periodo;
+  const periodo = p && (p.inicio || p.fim) ? `${fmtDataSimples(p.inicio)} a ${fmtDataSimples(p.fim)}` : null;
+  return `
+    <div class="ifood-aviso warn" id="ifin-aviso-amostra">
+      <strong>Dados de exemplo do ambiente de homologação do iFood</strong><br/>
+      Os registros exibidos são fornecidos pelo ambiente de homologação do iFood e podem representar uma loja de exemplo diferente da loja vinculada.
+      ${lojas ? `<br/><span class="ifin-tecnico">Loja de exemplo: <span class="mono">${esc(lojas)}</span>${periodo ? ` · período da amostra: ${esc(periodo)}` : ""}</span>` : ""}
+    </div>`;
+}
+
 function conteudoAbaSales(f) {
   const s = f.sales;
   const r = s.resultado;
@@ -1154,8 +1170,9 @@ function conteudoAbaSales(f) {
     </div>
     <p class="ifood-instrucao">Período máximo permitido pela API Sales: 90 dias.</p>
     ${s.erro ? `<div class="ifood-aviso bad">${esc(s.erro)}</div>` : ""}
+    ${avisoAmostraHomologacao(r)}
     ${r ? `
-      <div class="ifood-info-linha"><span>Total de vendas no período</span><strong>${r.pagina.total}</strong></div>
+      <div class="ifood-info-linha"><span>Total de vendas ${r.amostraHomologacao ? "na amostra" : "no período"}</span><strong>${r.pagina.total}</strong></div>
       <div class="tabela-wrap">
         <table class="grid">
           <thead><tr><th>Pedido</th><th>Criado em</th><th>Status</th><th>Pagamento</th><th class="num">Valor bruto</th><th class="num">Comissões e taxas</th><th class="num">Saldo líquido</th><th>Detalhes</th></tr></thead>
@@ -1188,6 +1205,7 @@ function conteudoAbaEvents(f) {
     </div>
     <p class="ifood-instrucao">Período máximo permitido pela API Financial Events: 33 dias. Sem datas, a consulta usa só o dia de hoje.</p>
     ${ev.erro ? `<div class="ifood-aviso bad">${esc(ev.erro)}</div>` : ""}
+    ${avisoAmostraHomologacao(r)}
     ${r ? `
       <div class="ifood-info-linha"><span>Eventos retornados nesta página</span><strong>${r.eventos.length}</strong></div>
       <div class="tabela-wrap">
