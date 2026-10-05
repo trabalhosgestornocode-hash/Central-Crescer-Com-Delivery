@@ -165,11 +165,14 @@ describe("merchant obrigatoriamente correto", () => {
     assert.deepEqual(r.validacao.motivos, []);
   });
 
-  test("[5] merchant diferente (fixture) -> venda descartada, resposta inválida, log sanitizado com esperado x recebido", async () => {
+  test("[5] MODO REAL: merchant diferente -> venda descartada, resposta inválida, log sanitizado com esperado x recebido", async () => {
     const cap = silenciar();
     let r;
-    try { r = await chamar({ homologacao: true }, fetchFalso(FIXTURE)); } finally { cap.restaurar(); }
+    try { r = await chamar({ homologacao: false }, fetchFalso(FIXTURE)); } finally { cap.restaurar(); }
     assert.deepEqual(r.vendas, []);
+    assert.equal(r.fonte, "real");
+    assert.equal(r.amostraHomologacao, false);
+    assert.equal(r.validacao.divergencia, "rejeitada");
     assert.equal(r.validacao.valida, false);
     assert.ok(r.validacao.motivos.includes("MERCHANT_DIVERGENTE"));
     assert.equal(r.validacao.merchant.esperado, "55c8****7040");
@@ -178,6 +181,24 @@ describe("merchant obrigatoriamente correto", () => {
     const log = cap.linhas.join("\n");
     assert.match(log, /financial\.sales\.resposta_invalida/);
     assert.ok(!log.includes("99999999999") && !/documents|documentos/i.test(log), "log não pode ter documentos");
+  });
+
+  test("[5c] HOMOLOGAÇÃO: venda da fixture oficial (outra loja/período) -> MANTIDA como amostra, log 'fixture_oficial_aceita'", async () => {
+    const cap = silenciar();
+    let r;
+    try { r = await chamar({ homologacao: true }, fetchFalso(FIXTURE)); } finally { cap.restaurar(); }
+    assert.equal(r.vendas.length, 1);
+    assert.equal(r.vendas[0].merchant.id, MERCHANT_FIXTURE, "dado da fixture preservado como veio");
+    assert.equal(r.fonte, "fixture");
+    assert.equal(r.amostraHomologacao, true);
+    assert.deepEqual(r.amostra.merchants, ["f07d****7c00"]);
+    assert.equal(r.validacao.merchant.vendasDescartadas, 0);
+    assert.equal(r.validacao.merchant.fixtureAceitas, 1);
+    assert.equal(r.validacao.divergencia, "fixture_oficial_aceita");
+    const log = cap.linhas.join("\n");
+    assert.match(log, /financial\.sales\.fixture_aceita/);
+    assert.doesNotMatch(log, /financial\.sales\.resposta_invalida/);
+    assert.ok(!log.includes("99999999999") && !/documents|documentos/i.test(log) && !log.includes(MERCHANT_FIXTURE));
   });
 
   test("[5b] resposta mista: só a venda do merchant consultado segue; a outra é descartada", async () => {

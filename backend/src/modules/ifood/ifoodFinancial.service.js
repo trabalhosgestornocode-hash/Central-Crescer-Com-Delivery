@@ -118,17 +118,27 @@ function dataLocal(isoUtc, timezone) {
 
 /**
  * Confere se a resposta de Sales é mesmo da loja e do período pedidos. PURA.
- * Venda de outro merchant (ou sem merchant) é DESCARTADA — nunca segue como dado
- * da loja. Período divergente só marca a resposta como inválida.
+ *
+ * MODO REAL (`aceitarFixture` false — padrão): venda de outro merchant (ou sem
+ * merchant) é DESCARTADA — nunca segue como dado da loja. Período divergente só
+ * marca a resposta como inválida.
+ *
+ * MODO HOMOLOGAÇÃO (`aceitarFixture` true — SÓ quando o backend decidiu
+ * modoHomologacao para a unidade do tenant): o iFood devolve a FIXTURE oficial de
+ * outra loja e outro período; essas vendas são MANTIDAS como amostra
+ * (`fixtureAceitas`), nunca como dado da loja conectada. A divergência continua
+ * registrada nos motivos, só não provoca descarte.
  */
-export function validarRespostaSales({ normalizado, merchantId, periodo }) {
+export function validarRespostaSales({ normalizado, merchantId, periodo, aceitarFixture = false }) {
   const daLoja = [];
   const recebidos = new Set();
   let descartadas = 0;
+  let fixtureAceitas = 0;
   for (const v of normalizado.vendas) {
     if (v?.merchant?.id && v.merchant.id === merchantId) { daLoja.push(v); continue; }
-    descartadas += 1;
     recebidos.add(v?.merchant?.id ? mascararId(v.merchant.id) : "ausente");
+    if (aceitarFixture) { fixtureAceitas += 1; daLoja.push(v); continue; }
+    descartadas += 1;
   }
 
   const retornado = normalizado.periodo;
@@ -141,7 +151,7 @@ export function validarRespostaSales({ normalizado, merchantId, periodo }) {
   }).length;
 
   const motivos = [];
-  if (descartadas > 0) motivos.push("MERCHANT_DIVERGENTE");
+  if (descartadas > 0 || fixtureAceitas > 0) motivos.push("MERCHANT_DIVERGENTE");
   if (periodoConfere === false) motivos.push("PERIODO_RETORNADO_DIVERGENTE");
   if (foraDoPeriodo > 0) motivos.push("VENDAS_FORA_DO_PERIODO");
 
@@ -150,7 +160,8 @@ export function validarRespostaSales({ normalizado, merchantId, periodo }) {
     validacao: {
       valida: motivos.length === 0,
       motivos,
-      merchant: { esperado: mascararId(merchantId), recebidosDivergentes: [...recebidos], vendasDescartadas: descartadas },
+      merchant: { esperado: mascararId(merchantId), recebidosDivergentes: [...recebidos], vendasDescartadas: descartadas, fixtureAceitas },
+      divergencia: fixtureAceitas > 0 ? "fixture_oficial_aceita" : descartadas > 0 ? "rejeitada" : null,
       periodo: { solicitado: { inicio: periodo.inicio, fim: periodo.fim }, retornado, confere: periodoConfere, vendasForaDoPeriodo: foraDoPeriodo },
     },
   };
@@ -185,13 +196,16 @@ export async function listarSales({ organizacaoId, unidadeId, inicio, fim, page,
   });
 
   const normalizado = mapearRespostaSales(resposta);
-  const { vendas, validacao } = validarRespostaSales({ normalizado, merchantId: conexao.merchant_id, periodo });
+  // A fixture de outra loja só é aceita no modo homologação decidido pelo backend.
+  const { vendas, validacao } = validarRespostaSales({ normalizado, merchantId: conexao.merchant_id, periodo, aceitarFixture: enviarHeaderHomologacao });
 
   if (!validacao.valida) {
-    ifoodLog("warn", "financial.sales.resposta_invalida", {
-      organizacaoId, unidadeId, homologacao: enviarHeaderHomologacao,
+    // Real: divergência REJEITADA (warn). Homologação: fixture oficial ACEITA (info, rastreável).
+    ifoodLog(enviarHeaderHomologacao ? "info" : "warn", enviarHeaderHomologacao ? "financial.sales.fixture_aceita" : "financial.sales.resposta_invalida", {
+      organizacaoId, unidadeId, homologacao: enviarHeaderHomologacao, divergencia: validacao.divergencia,
       motivos: validacao.motivos, merchantEsperado: validacao.merchant.esperado,
       merchantsRecebidos: validacao.merchant.recebidosDivergentes, vendasDescartadas: validacao.merchant.vendasDescartadas,
+      fixtureAceitas: validacao.merchant.fixtureAceitas,
       periodoRetornado: validacao.periodo.retornado, vendasForaDoPeriodo: validacao.periodo.vendasForaDoPeriodo,
     });
   }
@@ -204,7 +218,24 @@ export async function listarSales({ organizacaoId, unidadeId, inicio, fim, page,
 
   // O período exposto é o SOLICITADO; o que a API ecoou fica só em validacao.periodo.retornado.
   // `fonte` marca fixture x real: nenhum consumidor pode tratar "fixture" como dado da loja.
-  return { fonte: enviarHeaderHomologacao ? "fixture" : "real", periodo: { inicio: periodo.inicio, fim: periodo.fim }, pagina: normalizado.pagina, vendas, validacao };
+  return {
+    fonte: enviarHeaderHomologacao ? "fixture" : "real",
+    ...amostraHomologacao(enviarHeaderHomologacao, validacao.merchant.recebidosDivergentes, validacao.periodo.retornado),
+    periodo: { inicio: periodo.inicio, fim: periodo.fim }, pagina: normalizado.pagina, vendas, validacao,
+  };
+}
+
+/**
+ * Marca da amostra de homologação para o frontend (o controller não repassa
+ * `validacao`): só no modo homologação. Merchant da fixture SEMPRE mascarado —
+ * nunca substitui nem é persistido como o merchant da conexão.
+ */
+function amostraHomologacao(emHomologacao, merchantsMascarados, periodoRetornado) {
+  if (!emHomologacao) return { amostraHomologacao: false };
+  return {
+    amostraHomologacao: true,
+    amostra: { merchants: [...(merchantsMascarados ?? [])], periodo: periodoRetornado?.inicio || periodoRetornado?.fim ? { ...periodoRetornado } : null },
+  };
 }
 
 // ===========================================================================
@@ -246,25 +277,29 @@ function validarTamanhoPagina(valor) {
  * `receiver` (businessId/merchantId): de outro merchant -> DESCARTADO; sem
  * receiver -> mantido (a requisição já foi pelo merchant da conexão) e contado.
  */
-export function validarRespostaFinancialEvents({ normalizado, merchantId }) {
+export function validarRespostaFinancialEvents({ normalizado, merchantId, aceitarFixture = false }) {
   const daLoja = [];
   const recebidos = new Set();
   let descartados = 0;
   let semMerchant = 0;
+  let fixtureAceitos = 0;
   for (const e of normalizado.eventos) {
     const id = e?.comerciante?.id;
     if (!id) { semMerchant += 1; daLoja.push(e); continue; }
     if (id === merchantId) { daLoja.push(e); continue; }
-    descartados += 1;
     recebidos.add(mascararId(id));
+    // Homologação (decidida pelo backend): fixture oficial de outro receiver é amostra, não descarte.
+    if (aceitarFixture) { fixtureAceitos += 1; daLoja.push(e); continue; }
+    descartados += 1;
   }
-  const motivos = descartados > 0 ? ["MERCHANT_DIVERGENTE"] : [];
+  const motivos = descartados > 0 || fixtureAceitos > 0 ? ["MERCHANT_DIVERGENTE"] : [];
   return {
     eventos: daLoja,
     validacao: {
       valida: motivos.length === 0,
       motivos,
-      merchant: { esperado: mascararId(merchantId), recebidosDivergentes: [...recebidos], eventosDescartados: descartados, eventosSemMerchant: semMerchant },
+      merchant: { esperado: mascararId(merchantId), recebidosDivergentes: [...recebidos], eventosDescartados: descartados, eventosSemMerchant: semMerchant, fixtureAceitos },
+      divergencia: fixtureAceitos > 0 ? "fixture_oficial_aceita" : descartados > 0 ? "rejeitada" : null,
     },
   };
 }
@@ -300,13 +335,14 @@ export async function listarFinancialEvents({ organizacaoId, unidadeId, inicio, 
   });
 
   const normalizado = mapearRespostaFinancialEvents(resposta);
-  const { eventos, validacao } = validarRespostaFinancialEvents({ normalizado, merchantId: conexao.merchant_id });
+  const { eventos, validacao } = validarRespostaFinancialEvents({ normalizado, merchantId: conexao.merchant_id, aceitarFixture: enviarHeaderHomologacao });
 
   if (!validacao.valida) {
-    ifoodLog("warn", "financial.events.resposta_invalida", {
-      organizacaoId, unidadeId, homologacao: enviarHeaderHomologacao, motivos: validacao.motivos,
+    // Real: divergência REJEITADA (warn). Homologação: fixture oficial ACEITA (info, rastreável).
+    ifoodLog(enviarHeaderHomologacao ? "info" : "warn", enviarHeaderHomologacao ? "financial.events.fixture_aceita" : "financial.events.resposta_invalida", {
+      organizacaoId, unidadeId, homologacao: enviarHeaderHomologacao, divergencia: validacao.divergencia, motivos: validacao.motivos,
       merchantEsperado: validacao.merchant.esperado, merchantsRecebidos: validacao.merchant.recebidosDivergentes,
-      eventosDescartados: validacao.merchant.eventosDescartados,
+      eventosDescartados: validacao.merchant.eventosDescartados, fixtureAceitos: validacao.merchant.fixtureAceitos,
     });
   }
 
@@ -317,7 +353,11 @@ export async function listarFinancialEvents({ organizacaoId, unidadeId, inicio, 
     temProximaPagina: normalizado.pagina.temProximaPagina,
   });
 
-  return { fonte: enviarHeaderHomologacao ? "fixture" : "real", periodo: { inicio: periodo.inicio, fim: periodo.fim }, pagina: normalizado.pagina, eventos, validacao };
+  return {
+    fonte: enviarHeaderHomologacao ? "fixture" : "real",
+    ...amostraHomologacao(enviarHeaderHomologacao, validacao.merchant.recebidosDivergentes, null),
+    periodo: { inicio: periodo.inicio, fim: periodo.fim }, pagina: normalizado.pagina, eventos, validacao,
+  };
 }
 
 // ===========================================================================
