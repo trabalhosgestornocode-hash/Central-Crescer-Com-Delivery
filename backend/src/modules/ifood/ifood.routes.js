@@ -50,7 +50,9 @@ ifoodRouter.get("/financial/events", gerenciar, limitarFinancial, controller.fin
 ifoodRouter.get("/financial/settlements", gerenciar, limitarFinancial, controller.financialSettlements);
 ifoodRouter.get("/financial/reconciliation", gerenciar, limitarFinancial, controller.financialReconciliation);
 ifoodRouter.post("/financial/reconciliation/on-demand", gerenciar, limitarFinancial, controller.financialReconciliationOnDemandSolicitar);
+ifoodRouter.get("/financial/reconciliation/on-demand", gerenciar, limitarFinancial, controller.financialReconciliationOnDemandAtual);
 ifoodRouter.get("/financial/reconciliation/on-demand/:requestId", gerenciar, limitarFinancial, controller.financialReconciliationOnDemandStatus);
+ifoodRouter.get("/financial/reconciliation/on-demand/:requestId/arquivo", gerenciar, limitarFinancial, controller.financialReconciliationOnDemandArquivo);
 ifoodRouter.get("/financial/anticipations", gerenciar, limitarFinancial, controller.financialAnticipations);
 ifoodRouter.get("/financial/conciliation", gerenciar, limitarFinancial, controller.financialConciliation);
 

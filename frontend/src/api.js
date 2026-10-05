@@ -463,14 +463,25 @@ export const ifoodFinancialSettlements = (modo, inicio, fim) =>
   getJson(`${IFOOD}/financial/settlements${qs({ modo, inicio, fim })}`);
 
 // Reconciliation (mês fechado, síncrona) x Reconciliation On Demand
-// (assíncrona: solicita -> guarda requestId -> consulta status manualmente,
-// sem polling automático). Contratos DIFERENTES — nunca misture as chamadas.
+// (assíncrona: solicita -> o backend registra o requestId -> a UI acompanha com
+// polling + backoff). Contratos DIFERENTES — nunca misture as chamadas.
 export const ifoodFinancialReconciliation = (competencia) =>
   getJson(`${IFOOD}/financial/reconciliation${qs({ competencia })}`);
 export const ifoodFinancialReconciliationOnDemandSolicitar = (competencia) =>
   postJson(`${IFOOD}/financial/reconciliation/on-demand`, { competencia });
 export const ifoodFinancialReconciliationOnDemandStatus = (requestId) =>
   getJson(`${IFOOD}/financial/reconciliation/on-demand/${encodeURIComponent(requestId)}`);
+// Solicitação vigente (< 24h) da unidade para a competência — retoma o acompanhamento após reload. null = nenhuma.
+export const ifoodFinancialReconciliationOnDemandAtual = (competencia) =>
+  getJson(`${IFOOD}/financial/reconciliation/on-demand${qs({ competencia })}`);
+// CSV de conciliação via proxy autenticado do backend — a URL assinada do iFood nunca chega ao navegador.
+export const ifoodFinancialReconciliationOnDemandArquivo = async (requestId) => {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${IFOOD}/financial/reconciliation/on-demand/${encodeURIComponent(requestId)}/arquivo`, { headers: await comAuth() });
+  if (!r.ok) return tratar(r, g); // lança o erro do backend (mensagem + codigo)
+  const nomeArquivo = (r.headers.get("content-disposition") || "").match(/filename="([A-Za-z0-9._-]+)"/)?.[1] ?? null;
+  return { blob: await r.blob(), nomeArquivo };
+};
 
 // Anticipation — SOMENTE LEITURA (nenhuma função de solicitar antecipação
 // existe aqui). `modo`: "calculo" (período de cálculo, padrão) ou

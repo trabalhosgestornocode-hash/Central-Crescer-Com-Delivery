@@ -76,7 +76,7 @@ test("modo padrão ('calculo') usa beginCalculationDate/endCalculationDate", asy
   const { caminho, opts } = http.chamadas.get[0];
   assert.equal(caminho, `/financial/v3.0/merchants/${MERCHANT_ID}/settlements?beginCalculationDate=2024-01-01&endCalculationDate=2024-01-31`);
   assert.equal(opts.homologacao, true);
-  assert.equal(opts.contexto, "financial");
+  assert.equal(opts.contexto, "settlements"); // 404 = "nenhuma liquidação no período" (ifood.errors.js)
 });
 
 test("modo 'pagamento' usa beginPaymentDate/endPaymentDate (par mutuamente exclusivo)", async () => {

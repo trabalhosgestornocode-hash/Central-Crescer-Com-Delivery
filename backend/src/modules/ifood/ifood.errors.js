@@ -65,6 +65,17 @@ const CATALOGO = {
     "Vincule uma loja do iFood a esta unidade antes de consultar dados financeiros."],
   IFOOD_RECONCILIATION_INVALIDA: [400,
     "Não foi possível processar essa solicitação de conciliação. Confira a competência informada."],
+  // 409 do POST on-demand: já existe solicitação recente no iFood. O service retoma o requestId
+  // registrado; este erro só chega ao usuário quando NÃO há requestId para retomar.
+  IFOOD_RECONCILIATION_EM_ANDAMENTO: [409,
+    "Já existe uma solicitação recente de conciliação para esta competência no iFood, feita fora desta Central. Aguarde alguns minutos e tente novamente."],
+  IFOOD_RECONCILIATION_SOLICITACAO_NAO_ENCONTRADA: [404,
+    "Não encontramos essa solicitação de conciliação para esta unidade. Gere uma nova solicitação."],
+  IFOOD_RECONCILIATION_ARQUIVO_INDISPONIVEL: [409,
+    "O arquivo de conciliação ainda não está pronto para download. Aguarde a conclusão do processamento."],
+  // 404 de consultas Financial que significam "não há dados" — nunca "loja não encontrada".
+  IFOOD_FINANCIAL_SEM_DADOS: [404,
+    "Nenhum dado financeiro encontrado para o período informado."],
 
   // --- modo CENTRALIZED_TEST (temporário, só ambiente técnico) ---
   IFOOD_CENTRALIZADO_BLOQUEADO: [403,
@@ -114,6 +125,11 @@ export const IFOOD_ERROS = Object.freeze(
   Object.fromEntries(Object.keys(CATALOGO).map((k) => [k, k]))
 );
 
+// Contextos das leituras Financial: 'financial' (Sales/Events) e os dois com
+// 404 próprio — Settlements ("nenhuma liquidação no período") e Anticipation
+// ("loja sem plano de antecipação"), ambos documentados na API oficial.
+const CONTEXTOS_FINANCIAL = new Set(["financial", "settlements", "anticipations"]);
+
 // Traduz um status HTTP do iFood para o erro de domínio correspondente.
 // 400/401/403 NUNCA viram retry — quem chama usa isto para decidir.
 export function erroPorStatusHttp(status, { contexto } = {}) {
@@ -130,7 +146,7 @@ export function erroPorStatusHttp(status, { contexto } = {}) {
   if (status === 403) {
     // Mesmo código (o frontend decide pelo `codigo`, nunca pela mensagem) —
     // só a mensagem muda para fazer sentido fora do fluxo de vínculo.
-    if (contexto === "financial") {
+    if (CONTEXTOS_FINANCIAL.has(contexto)) {
       return ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_SEM_PERMISSAO, {
         mensagem: "Você não tem permissão para consultar os dados financeiros desta loja no iFood.",
       });
@@ -145,16 +161,20 @@ export function erroPorStatusHttp(status, { contexto } = {}) {
         mensagem: "Não encontramos essa solicitação de conciliação. Ela pode ter expirado (validade de 24 horas) — gere uma nova.",
       });
     }
+    if (contexto === "settlements") {
+      return ifoodErro(IFOOD_ERROS.IFOOD_FINANCIAL_SEM_DADOS, { mensagem: "Nenhuma liquidação encontrada para o período." });
+    }
+    if (contexto === "anticipations") {
+      return ifoodErro(IFOOD_ERROS.IFOOD_FINANCIAL_SEM_DADOS, { mensagem: "A loja não possui plano de antecipação disponível no iFood." });
+    }
     return ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_NAO_ENCONTRADO);
   }
   if (status === 409) {
     // POST .../reconciliation/on-demand: "There is already a recent and
-    // valid request. Please try again later." (confirmado no Swagger).
-    if (contexto === "reconciliation") {
-      return ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, {
-        mensagem: "Já existe uma solicitação de conciliação em andamento para esta competência. Aguarde alguns instantes e tente novamente.",
-      });
-    }
+    // valid request. Please try again later." (confirmado no Swagger). Doc:
+    // "reutilize o requestId anterior" — código próprio para o service retomar
+    // o requestId registrado (ifoodFinancial.service.js#solicitarReconciliationOnDemand).
+    if (contexto === "reconciliation") return ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_EM_ANDAMENTO);
     return ifoodErro(IFOOD_ERROS.IFOOD_RESPOSTA_INVALIDA, { detalhes: { status } });
   }
   if (status === 429) return ifoodErro(IFOOD_ERROS.IFOOD_RATE_LIMITED);

@@ -20,7 +20,10 @@ import {
   saudeSalesVsEvents, saudeEventsVsSettlements, saudeSettlementsVsReconciliation,
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
   rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
+  resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
+  FASE_ON_DEMAND_ROTULO,
 } from "./ifoodEstado.js";
+import { criarAcompanhamentoReconciliacao } from "./ifoodReconciliacaoPolling.js";
 
 const IFOOD_LOGO = "/assets/menu-dashboard-ifood.png";
 
@@ -39,6 +42,7 @@ const estado = {
 // contexto da unidade B.
 registrarResetDeContexto(() => {
   pararContador();
+  pararAcompanhamentoOnDemand(); // o polling da unidade A nunca segue rodando na unidade B
   estado.status = null;
   estado.statusErro = null;
   estado.wizard = null;
@@ -703,7 +707,14 @@ function abrirFinanceiro() {
     // aqui também, nunca misturados.
     reconciliation: {
       competencia: mesFechadoAnterior(), carregando: false, resultado: null, erro: null,
-      onDemand: { competencia: mesFechadoAnterior(), carregando: false, requestId: null, resultado: null, erro: null },
+      // `fase`: null | solicitando | processando | instavel | concluido | falhou | erro | tempo_esgotado | cancelado
+      // (ver FASE_ON_DEMAND_ROTULO). `retomadaVerificada`: já procurou a solicitação vigente
+      // desta competência no backend (retoma o acompanhamento após reload).
+      onDemand: {
+        competencia: mesFechadoAnterior(), carregando: false, requestId: null, reutilizado: false,
+        fase: null, proximaEmMs: null, resultado: null, erro: null,
+        baixando: false, erroDownload: null, retomadaVerificada: false,
+      },
     },
     // Somente leitura — sem valor padrão óbvio, mesma regra de Settlements.
     anticipation: { modo: "calculo", inicio: diasAtrasISO(13), fim: diasAtrasISO(7), carregando: false, resultado: null, erro: null },
@@ -721,6 +732,7 @@ function abrirFinanceiro() {
 }
 
 function fecharFinanceiro() {
+  pararAcompanhamentoOnDemand();
   estado.financeiro = null;
   pintarPainel();
 }
@@ -810,40 +822,117 @@ async function buscarReconciliation() {
   pintarFinanceiro();
 }
 
-// --- Reconciliation On Demand (assíncrona) — solicitar + consultar status,
-// os dois disparados só por clique do usuário (nunca polling automático). --
+// --- Reconciliation On Demand (assíncrona) — solicitar -> acompanhar
+// automaticamente (polling + backoff, ifoodReconciliacaoPolling.js) ->
+// baixar o CSV pelo backend. O requestId fica registrado no backend por
+// unidade/competência: o 409 do iFood reaproveita o mesmo id e um reload
+// retoma o acompanhamento. -------------------------------------------------
+const acompanhamentoOnDemand = criarAcompanhamentoReconciliacao({
+  consultar: async (requestId) => (await api.ifoodFinancialReconciliationOnDemandStatus(requestId)).data,
+  aoAtualizar: ({ fase, resultado, erro, proximaEmMs }) => {
+    const od = estado.financeiro?.reconciliation?.onDemand;
+    if (!od) return;
+    od.fase = fase;
+    od.proximaEmMs = proximaEmMs ?? null;
+    if (resultado) od.resultado = resultado;
+    od.erro = fase === "instavel" ? (erro?.message || "Falha temporária ao consultar o iFood.") : null;
+    pintarFinanceiro();
+  },
+});
+
+function pararAcompanhamentoOnDemand() {
+  acompanhamentoOnDemand.cancelar();
+}
+
+/** Acompanha `requestId` até o estado final (sobrescreve um acompanhamento anterior). */
+async function acompanharReconciliationOnDemand(requestId) {
+  const od = estado.financeiro?.reconciliation?.onDemand;
+  if (!od || !requestId) return;
+  od.requestId = requestId;
+  od.fase = "processando";
+  od.erro = null;
+  od.erroDownload = null;
+  pintarFinanceiro();
+  const fim = await acompanhamentoOnDemand.iniciar(requestId);
+  const atual = estado.financeiro?.reconciliation?.onDemand;
+  // Cancelado (saiu da tela, trocou de unidade, nova solicitação) ou o estado mudou por baixo: não pinta nada.
+  if (fim.estado === "cancelado" || atual !== od || od.requestId !== requestId) return;
+  od.fase = fim.estado;
+  od.proximaEmMs = null;
+  if (fim.resultado) od.resultado = fim.resultado;
+  od.erro = fim.estado === "erro" ? (fim.erro?.message || "Não foi possível acompanhar a solicitação.") : null;
+  if (fim.estado === "concluido") toast("Arquivo de conciliação pronto.");
+  pintarFinanceiro();
+}
+
 async function solicitarReconciliationOnDemand() {
   const od = estado.financeiro?.reconciliation?.onDemand;
-  if (!od) return;
+  if (!od || od.carregando) return; // duplo clique: uma solicitação por vez
+  pararAcompanhamentoOnDemand();
   od.competencia = el("#ifrec-od-competencia")?.value || od.competencia;
   od.carregando = true;
+  od.fase = "solicitando";
   od.erro = null;
+  od.erroDownload = null;
   od.resultado = null;
+  od.requestId = null;
+  od.reutilizado = false;
+  od.retomadaVerificada = true;
   pintarFinanceiro();
+  let requestId = null;
   try {
     const { data } = await api.ifoodFinancialReconciliationOnDemandSolicitar(od.competencia);
-    od.requestId = data.requestId;
-    toast("Solicitação enviada. Clique em \"Verificar status\" em alguns instantes.");
+    requestId = data.requestId;
+    od.reutilizado = data.reutilizado === true;
+    if (od.reutilizado) toast("Já existia uma solicitação recente para esta competência — acompanhando a mesma.");
   } catch (e) {
+    od.fase = "erro";
     od.erro = e.message || "Não foi possível solicitar a conciliação sob demanda.";
   }
   od.carregando = false;
   pintarFinanceiro();
+  if (requestId) acompanharReconciliationOnDemand(requestId);
 }
 
-async function verificarStatusReconciliationOnDemand() {
+/** "Verificar agora": consulta imediata + reinicia o backoff (útil após "tempo esgotado"). */
+function verificarStatusReconciliationOnDemand() {
   const od = estado.financeiro?.reconciliation?.onDemand;
-  if (!od || !od.requestId) return;
-  od.carregando = true;
-  od.erro = null;
+  if (!od?.requestId) return;
+  acompanharReconciliationOnDemand(od.requestId);
+}
+
+/** Ao abrir a aba: retoma a solicitação vigente (< 24h) desta competência, se houver. */
+async function retomarReconciliationOnDemand() {
+  const od = estado.financeiro?.reconciliation?.onDemand;
+  if (!od || od.retomadaVerificada || od.requestId) return;
+  od.retomadaVerificada = true;
+  try {
+    const { data } = await api.ifoodFinancialReconciliationOnDemandAtual(od.competencia);
+    const atual = estado.financeiro?.reconciliation?.onDemand;
+    if (data?.requestId && atual === od && !od.requestId) acompanharReconciliationOnDemand(data.requestId);
+  } catch { /* sem solicitação retomável: a tela segue no estado inicial */ }
+}
+
+async function baixarCsvReconciliationOnDemand() {
+  const od = estado.financeiro?.reconciliation?.onDemand;
+  if (!od?.requestId || od.baixando) return;
+  od.baixando = true;
+  od.erroDownload = null;
   pintarFinanceiro();
   try {
-    const { data } = await api.ifoodFinancialReconciliationOnDemandStatus(od.requestId);
-    od.resultado = data;
+    const { blob, nomeArquivo } = await api.ifoodFinancialReconciliationOnDemandArquivo(od.requestId);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = nomeArquivo || `conciliacao-ifood-${od.resultado?.competencia ?? od.competencia}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (e) {
-    od.erro = e.message || "Não foi possível verificar o status.";
+    od.erroDownload = e.message || "Não foi possível baixar o arquivo de conciliação.";
   }
-  od.carregando = false;
+  od.baixando = false;
   pintarFinanceiro();
 }
 
@@ -967,17 +1056,53 @@ function statusVendaClasse(status) {
   return "muted";
 }
 
+// Comissões + taxas da venda (soma dos lançamentos oficiais) — "—" quando o iFood não informou nenhum.
+function totalComissoesTaxas(c) {
+  if (c.totalComissoes === null && c.totalTaxas === null) return null;
+  return Math.round(((c.totalComissoes ?? 0) + (c.totalTaxas ?? 0)) * 100) / 100;
+}
+
 function linhaVenda(v) {
+  const pg = resumirPagamentosVenda(v.pagamentos);
+  const ct = totalComissoesTaxas(classificarLancamentosVenda(v.resumoFinanceiro));
   return `
     <tr>
       <td>${esc(String(v.shortId ?? v.id ?? "—"))}</td>
       <td>${v.criadoEm ? fmtDataHora(v.criadoEm) : "—"}</td>
       <td><span class="pill ${statusVendaClasse(v.status)}">${esc(v.status ?? "—")}</span></td>
-      <td>${esc(v.canal ?? "—")}</td>
+      <td><span class="ifin-celula-2l">${esc(pg.metodo)}<small>Responsável: ${esc(pg.responsavel)}</small></span></td>
       <td class="num">${fmtMoeda(v.valorBruto?.total)}</td>
+      <td class="num">${ct === null ? "—" : `<span class="${ct < 0 ? "ifin-debito" : ""}">${fmtMoeda(ct)}</span>`}</td>
       <td class="num">${v.resumoFinanceiro ? fmtMoeda(v.resumoFinanceiro.saldo) : "—"}</td>
       <td><button class="btn btn-ghost btn-sm" data-tipo="venda" data-id="${esc(v.id ?? "")}">Ver detalhes</button></td>
     </tr>`;
+}
+
+/** Seções do detalhe da venda: venda, pagamento, comissões/taxas e demais lançamentos oficiais. */
+function secoesDetalheVenda(venda) {
+  const c = classificarLancamentosVenda(venda.resumoFinanceiro);
+  const linhasLanc = (lista, vazio) => (lista.length ? lista.map((l) => [l.rotulo, l.valor === null ? "Não informado" : fmtMoeda(l.valor)]) : [[vazio, "—"]]);
+  const pagamentos = Array.isArray(venda.pagamentos) ? venda.pagamentos : [];
+  return [
+    { titulo: "Venda", campos: [
+      ["Status", venda.status ?? "—"],
+      ["Criado em", venda.criadoEm ? fmtDataHora(venda.criadoEm) : "—"],
+      ["Canal", venda.canal ?? "—"],
+      ["Valor bruto", fmtMoeda(venda.valorBruto?.total)],
+      ["Saldo líquido (após comissões e taxas)", venda.resumoFinanceiro ? fmtMoeda(venda.resumoFinanceiro.saldo) : "Não informado"],
+    ] },
+    { titulo: "Pagamento", campos: pagamentos.length
+      ? pagamentos.flatMap((p, i) => [
+        [`${pagamentos.length > 1 ? `${i + 1}. ` : ""}Forma`, `${rotuloMetodoPagamento(p.metodo)}${p.bandeira ? ` (${p.bandeira})` : ""}`],
+        ["Responsável pelo pagamento", rotuloResponsavelPagamento(p.responsavel)],
+        ["Tipo", rotuloTipoPagamento(p.tipo)],
+        ["Valor", fmtMoeda(p.valor)],
+      ])
+      : [["Forma de pagamento", "Não informado pelo iFood"]] },
+    { titulo: "Comissões", campos: [...linhasLanc(c.comissoes, "Nenhuma comissão informada"), ...(c.totalComissoes !== null && c.comissoes.length > 1 ? [["Total de comissões", fmtMoeda(c.totalComissoes)]] : [])] },
+    { titulo: "Taxas", campos: [...linhasLanc(c.taxas, "Nenhuma taxa informada"), ...(c.totalTaxas !== null && c.taxas.length > 1 ? [["Total de taxas", fmtMoeda(c.totalTaxas)]] : [])] },
+    ...(c.outros.length ? [{ titulo: "Demais lançamentos", campos: linhasLanc(c.outros, "") }] : []),
+  ];
 }
 
 function linhaEvento(ev, idx) {
@@ -1004,7 +1129,7 @@ function conteudoAbaSales(f) {
   const r = s.resultado;
   const linhas = r?.vendas?.length
     ? r.vendas.map(linhaVenda).join("")
-    : `<tr><td colspan="7" class="ifood-vazio">${s.carregando ? "Consultando…" : "Nenhuma venda encontrada para este período."}</td></tr>`;
+    : `<tr><td colspan="8" class="ifood-vazio">${s.carregando ? "Consultando…" : "Nenhuma venda encontrada para este período."}</td></tr>`;
   const totalPaginas = r?.pagina?.totalPaginas ?? 0;
   const paginacao = totalPaginas > 1 ? `
     <div class="ifin-paginacao">
@@ -1025,7 +1150,7 @@ function conteudoAbaSales(f) {
       <div class="ifood-info-linha"><span>Total de vendas no período</span><strong>${r.pagina.total}</strong></div>
       <div class="tabela-wrap">
         <table class="grid">
-          <thead><tr><th>Pedido</th><th>Criado em</th><th>Status</th><th>Canal</th><th class="num">Valor bruto</th><th class="num">Saldo líquido</th><th>Detalhes</th></tr></thead>
+          <thead><tr><th>Pedido</th><th>Criado em</th><th>Status</th><th>Pagamento</th><th class="num">Valor bruto</th><th class="num">Comissões e taxas</th><th class="num">Saldo líquido</th><th>Detalhes</th></tr></thead>
           <tbody>${linhas}</tbody>
         </table>
       </div>
@@ -1167,7 +1292,8 @@ function conteudoAbaReconciliation(f) {
           <div class="ifood-info-linha"><span>Integridade do arquivo (SHA-256)</span><strong>${r.arquivo?.integridadeVerificada === true ? "Confere" : r.arquivo?.integridadeVerificada === false ? "Não confere" : "Não verificável"}</strong></div>
         ` : ""}
         ${r.arquivo ? `
-          <div class="ifood-info-linha"><span>Registros parseados</span><strong>${r.arquivo.totalLinhas}${r.arquivo.truncado ? " (exibindo os 2000 primeiros)" : ""}</strong></div>
+          ${blocoImpactoRepasse(r.arquivo.resumoRepasse)}
+          <div class="ifood-info-linha"><span>Registros no arquivo</span><strong>${r.arquivo.totalLinhas}${r.arquivo.truncado ? " (tabela mostra os 2000 primeiros)" : ""}</strong></div>
           ${tabelaArquivo(r.arquivo, 10)}
           <div class="ifood-acoes"><button class="btn btn-ghost btn-sm" id="ifrec-detalhe">Ver todos os registros</button></div>
         ` : `<p class="ifood-instrucao">Esta competência não tem arquivo de conciliação disponível.</p>`}
@@ -1175,25 +1301,75 @@ function conteudoAbaReconciliation(f) {
     </div>
 
     <div class="ifood-card">
-      <div class="ifood-secao-rotulo">Reconciliation On Demand — sob demanda (assíncrona)</div>
-      <p class="ifood-instrucao">Solicite a geração, depois clique em "Verificar status" — sem atualização automática. O status <code>enqueue</code>/<code>created</code> significa que ainda está processando; tente de novo em alguns instantes.</p>
+      <div class="ifood-secao-rotulo">Reconciliation On Demand — arquivo sob demanda</div>
+      <p class="ifood-instrucao">Solicite a geração do arquivo do mês: a Central acompanha o processamento automaticamente e libera o download do CSV quando ficar pronto. Se já houver uma solicitação recente para a mesma competência, ela é reaproveitada.</p>
       <div class="ifin-filtro">
         <label class="ifood-label">Competência (mês)<input type="month" id="ifrec-od-competencia" class="ifood-input" value="${esc(od.competencia)}" /></label>
         <button class="btn btn-primary" id="ifrec-od-solicitar" ${od.carregando ? "disabled" : ""}>${od.carregando ? "Solicitando…" : "Solicitar geração"}</button>
-        <button class="btn btn-ghost" id="ifrec-od-verificar" ${!od.requestId || od.carregando ? "disabled" : ""}>Verificar status</button>
+        ${od.requestId && !["processando", "instavel", "solicitando"].includes(od.fase)
+          ? `<button class="btn btn-ghost" id="ifrec-od-verificar">Verificar agora</button>` : ""}
       </div>
-      ${od.erro ? `<div class="ifood-aviso bad">${esc(od.erro)}</div>` : ""}
-      ${od.requestId ? `<div class="ifood-info-linha"><span>requestId</span><strong class="mono">${esc(od.requestId)}</strong></div>` : ""}
-      ${rOd ? `
-        <div class="ifood-info-linha"><span>Status</span><strong><span class="pill ${statusOnDemandClasse(rOd.status)}">${esc(STATUS_OD_ROTULO[rOd.status] ?? rOd.status ?? "—")}</span></strong></div>
-        ${rOd.status === "error" ? `<div class="ifood-aviso bad">${esc(rOd.mensagemErro || "A geração falhou.")}</div>` : ""}
-        ${rOd.arquivo ? `
-          <div class="ifood-info-linha"><span>Registros parseados</span><strong>${rOd.arquivo.totalLinhas}${rOd.arquivo.truncado ? " (exibindo os 2000 primeiros)" : ""}</strong></div>
-          ${tabelaArquivo(rOd.arquivo, 10)}
-          <div class="ifood-acoes"><button class="btn btn-ghost btn-sm" id="ifrec-od-detalhe">Ver todos os registros</button></div>
-        ` : ""}
+      ${blocoFaseOnDemand(od)}
+      ${od.erro ? `<div class="ifood-aviso ${od.fase === "instavel" ? "warn" : "bad"}">${esc(od.erro)}</div>` : ""}
+      ${rOd?.status === "error" ? `<div class="ifood-aviso bad">${esc(rOd.mensagemErro || "A geração falhou no iFood.")}</div>` : ""}
+      ${rOd?.arquivoDisponivel ? `
+        <div class="ifood-acoes">
+          <button class="btn btn-primary" id="ifrec-od-baixar" ${od.baixando ? "disabled" : ""}>${od.baixando ? "Preparando o CSV…" : "Baixar CSV"}</button>
+        </div>
+        ${od.erroDownload ? `<div class="ifood-aviso bad">${esc(od.erroDownload)}</div>` : ""}
       ` : ""}
+      ${rOd?.arquivo ? `
+        ${blocoImpactoRepasse(rOd.arquivo.resumoRepasse)}
+        <div class="ifood-info-linha"><span>Registros no arquivo</span><strong>${rOd.arquivo.totalLinhas}${rOd.arquivo.truncado ? " (tabela mostra os 2000 primeiros — o CSV tem todos)" : ""}</strong></div>
+        ${tabelaArquivo(rOd.arquivo, 10)}
+        <div class="ifood-acoes"><button class="btn btn-ghost btn-sm" id="ifrec-od-detalhe">Ver todos os registros</button></div>
+      ` : ""}
+      ${od.requestId ? `<p class="ifin-tecnico">Identificador da solicitação no iFood: <span class="mono">${esc(od.requestId)}</span>${od.reutilizado ? " (solicitação reaproveitada)" : ""}</p>` : ""}
     </div>`;
+}
+
+/** Fase do acompanhamento automático — o que o usuário precisa saber agora. */
+function blocoFaseOnDemand(od) {
+  if (!od.fase) return "";
+  const classe = { concluido: "ok", falhou: "bad", erro: "bad", tempo_esgotado: "warn", instavel: "warn", cancelado: "muted" }[od.fase] ?? "info";
+  const statusIfood = od.resultado?.status ? ` · status no iFood: ${STATUS_OD_ROTULO[od.resultado.status] ?? od.resultado.status}` : "";
+  const proxima = ["processando", "instavel"].includes(od.fase) && od.proximaEmMs
+    ? ` · próxima verificação em ${Math.round(od.proximaEmMs / 1000)}s` : "";
+  return `<div class="ifood-info-linha"><span>Situação</span><strong><span class="pill ${classe}">${esc(FASE_ON_DEMAND_ROTULO[od.fase] ?? od.fase)}</span></strong></div>
+    ${statusIfood || proxima ? `<p class="ifin-tecnico">${esc((statusIfood + proxima).replace(/^ · /, ""))}</p>` : ""}
+    ${od.fase === "tempo_esgotado" ? `<p class="ifood-instrucao">O iFood ainda não terminou. Use "Verificar agora" em alguns minutos.</p>` : ""}`;
+}
+
+/**
+ * Critério de homologação: só `impacto_no_repasse = SIM` compõe o valor
+ * líquido a receber. Mostra os dois totais lado a lado — nada é escondido.
+ */
+function blocoImpactoRepasse(resumo) {
+  if (!resumo || !resumo.totalLinhas) return "";
+  if (!resumo.colunaImpactoEncontrada || !resumo.colunaValorEncontrada) {
+    return `<div class="ifood-aviso warn">O arquivo não trouxe ${!resumo.colunaImpactoEncontrada ? "a coluna de impacto no repasse" : "a coluna de valor"} — não é possível separar o valor que compõe o repasse.</div>`;
+  }
+  return `
+    <div class="ifin-resumo-grid">
+      <div class="ifin-resumo-item destaque">
+        <span>Valor que compõe o repasse</span>
+        <strong>${fmtMoeda(resumo.totalComImpacto)}</strong>
+        <small>${resumo.linhasComImpacto} de ${resumo.totalLinhas} lançamentos (impacto no repasse = SIM)</small>
+      </div>
+      <div class="ifin-resumo-item">
+        <span>Total bruto do arquivo</span>
+        <strong>${fmtMoeda(resumo.totalBruto)}</strong>
+        <small>todos os ${resumo.totalLinhas} lançamentos</small>
+      </div>
+      <div class="ifin-resumo-item">
+        <span>Lançamentos só informativos</span>
+        <strong>${fmtMoeda(resumo.totalSemImpacto)}</strong>
+        <small>${resumo.linhasSemImpacto} sem impacto no repasse</small>
+      </div>
+    </div>
+    <p class="ifood-instrucao">Só os lançamentos com impacto no repasse entram no valor líquido a receber do iFood. Os demais aparecem apenas para informação (ex.: pagamentos recebidos direto pela loja, promoções bancadas pela loja).</p>
+    ${resumo.linhasImpactoNaoInformado ? `<div class="ifood-aviso warn">${resumo.linhasImpactoNaoInformado} lançamento(s) sem a indicação de impacto no repasse — ficaram fora do valor do repasse.</div>` : ""}
+    ${resumo.linhasValorInvalido ? `<div class="ifood-aviso warn">${resumo.linhasValorInvalido} lançamento(s) com valor ilegível — fora dos totais.</div>` : ""}`;
 }
 
 // "Ver todos os registros" — tabela completa (até o teto de linhas exibidas
@@ -1702,12 +1878,7 @@ function pintarFinanceiro() {
     el("#ifin-proxima")?.addEventListener("click", () => { s.page += 1; buscarSales({ resetarPagina: false }); });
     els("[data-tipo='venda']", view).forEach((btn) => btn.addEventListener("click", () => {
       const venda = s.resultado?.vendas?.find((v) => String(v.id) === btn.dataset.id);
-      if (venda) abrirDetalheItem(`Venda ${venda.shortId ?? venda.id ?? ""}`, [
-        ["Status", venda.status ?? "—"],
-        ["Criado em", venda.criadoEm ? fmtDataHora(venda.criadoEm) : "—"],
-        ["Valor bruto", fmtMoeda(venda.valorBruto?.total)],
-        ["Saldo líquido", venda.resumoFinanceiro ? fmtMoeda(venda.resumoFinanceiro.saldo) : "—"],
-      ], venda);
+      if (venda) abrirDetalheItem(`Venda ${venda.shortId ?? venda.id ?? ""}`, [], venda, secoesDetalheVenda(venda));
     }));
   } else if (f.aba === "events") {
     const ev = f.events;
@@ -1746,6 +1917,9 @@ function pintarFinanceiro() {
     el("#ifrec-consultar")?.addEventListener("click", buscarReconciliation);
     el("#ifrec-od-solicitar")?.addEventListener("click", solicitarReconciliationOnDemand);
     el("#ifrec-od-verificar")?.addEventListener("click", verificarStatusReconciliationOnDemand);
+    el("#ifrec-od-baixar")?.addEventListener("click", baixarCsvReconciliationOnDemand);
+    // Reabriu a aba (ou recarregou a página): retoma a solicitação vigente da competência — uma vez só.
+    if (!rec.onDemand.retomadaVerificada) retomarReconciliationOnDemand();
     el("#ifrec-detalhe")?.addEventListener("click", () => {
       if (rec.resultado?.arquivo) abrirDetalheArquivoConciliacao(`Conciliação — ${rec.competencia}`, rec.resultado);
     });
@@ -1789,18 +1963,22 @@ function fecharDetalheItem() {
   el("#ifin-detalhe-overlay")?.remove();
   document.removeEventListener("keydown", onKeyDetalheItem);
 }
-function abrirDetalheItem(titulo, camposDestaque, itemBruto) {
+// `secoes` (opcional): [{ titulo, campos: [[rotulo, valor]] }] — detalhe organizado por assunto.
+function abrirDetalheItem(titulo, camposDestaque, itemBruto, secoes = []) {
   fecharDetalheItem();
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
   overlay.id = "ifin-detalhe-overlay";
-  const destaque = camposDestaque.map(([rotulo, valor]) =>
+  const linhas = (campos) => campos.map(([rotulo, valor]) =>
     `<div class="ifood-info-linha"><span>${esc(rotulo)}</span><strong>${esc(String(valor))}</strong></div>`).join("");
+  const destaque = linhas(camposDestaque);
+  const blocos = secoes.map((s) => `<div class="ifin-detalhe-secao"><h4>${esc(s.titulo)}</h4>${linhas(s.campos)}</div>`).join("");
   overlay.innerHTML = `
     <div class="modal">
       <button class="modal-close" aria-label="Fechar" id="ifin-detalhe-fechar">×</button>
       <h3>${esc(titulo)}</h3>
       ${destaque}
+      ${blocos}
       <div class="ifood-secao-rotulo">Detalhe técnico (JSON sanitizado — sem token/secret)</div>
       <pre class="ifin-json">${esc(JSON.stringify(itemBruto, null, 2))}</pre>
     </div>`;
@@ -1825,6 +2003,7 @@ async function carregarStatusSilencioso() {
 // ---------------------------------------------------------------------------
 export function renderIfood() {
   pararContador();
+  pararAcompanhamentoOnDemand();
   estado.wizard = null;
   const view = el("#view");
   if (view) view.innerHTML = `<div class="ifood-page"><div class="ifood-card"><div class="ifood-msg">Carregando integração iFood…</div></div></div>`;

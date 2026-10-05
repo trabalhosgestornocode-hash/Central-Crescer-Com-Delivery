@@ -504,18 +504,19 @@ function parsearLinhaCsv(linha, delimitador) {
 }
 
 /**
- * Descompacta (se gzip) e faz o parse de um arquivo de conciliação em bytes
- * brutos. PURA no sentido de não fazer rede/disco — só transforma o Buffer
- * já baixado (por ifoodFinancial.download.js).
+ * Descompacta (se gzip) os bytes brutos do arquivo de conciliação, com teto
+ * de tamanho pós-descompactação. Compartilhado pelo parse (tabela + resumo)
+ * e pela exportação do CSV — um só lugar decide gzip.
  * @param {Buffer} bufferBruto
- * @returns {{colunas: string[], linhas: object[], totalLinhas: number, truncado: boolean, eraGzip: boolean, delimitador: string|null}}
+ * @returns {{conteudo: Buffer, eraGzip: boolean}}
  */
-export function parsearArquivoConciliacao(bufferBruto) {
+export function descompactarArquivoConciliacao(bufferBruto) {
   let conteudo = bufferBruto;
   const eraGzip = pareceGzip(bufferBruto);
   if (eraGzip) {
     try {
-      conteudo = zlib.gunzipSync(bufferBruto);
+      // maxOutputLength: corta a descompactação no teto em vez de materializar um "zip bomb" inteiro.
+      conteudo = zlib.gunzipSync(bufferBruto, { maxOutputLength: IFOOD_RECONCILIATION_ARQUIVO.maxBytesDescompactado + 1 });
     } catch {
       throw new Error("Arquivo de conciliação: falha ao descompactar gzip.");
     }
@@ -523,25 +524,141 @@ export function parsearArquivoConciliacao(bufferBruto) {
   if (conteudo.length > IFOOD_RECONCILIATION_ARQUIVO.maxBytesDescompactado) {
     throw new Error("Arquivo de conciliação excede o tamanho máximo permitido após descompactar.");
   }
+  return { conteudo, eraGzip };
+}
 
-  const texto = conteudo.toString("utf8");
+// --- Impacto no repasse (critério de homologação Financial) ----------------
+//
+// Doc oficial (API Reconciliation On Demand > "Impacto no repasse"): para
+// chegar ao valor líquido que a loja tem a receber, consideram-se APENAS os
+// lançamentos com `impacto_no_repasse = SIM`; os demais são informativos
+// (ex.: meal voucher recebido pela loja, promoção incentivada pela loja).
+// Valor da linha: coluna `valor` ("Valor do lançamento", double) — NÃO
+// `valor_transacao`, que é o valor do título bancário inteiro e se repete
+// em várias linhas.
+//
+// Nada é descartado: todas as linhas continuam na tabela; o resumo só separa
+// os totais. Impacto fora de SIM/NÃO conta como "não informado" e fica FORA
+// do total com impacto (nunca vira "sem impacto").
+
+const COLUNA_IMPACTO = "impacto_no_repasse";
+const COLUNA_VALOR = "valor";
+
+/** Texto comparável: sem BOM, sem acento, minúsculo, aparado. */
+export function normalizarTextoCsv(v) {
+  return String(v ?? "").replace(/^﻿/, "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+}
+
+/** "SIM" -> true, "NÃO"/"NAO" -> false (caixa e acento indiferentes); qualquer outra coisa -> null. */
+export function interpretarImpactoNoRepasse(v) {
+  const n = normalizarTextoCsv(v);
+  if (n === "sim") return true;
+  if (n === "nao") return false;
+  return null;
+}
+
+/**
+ * Célula numérica do CSV -> CENTAVOS (inteiro), ou null. Aceita "1234.56",
+ * "-12,50", "1.234,56", "1,234.56": o separador decimal é o ÚLTIMO entre
+ * ponto e vírgula; o outro é milhar. Centavos inteiros evitam ruído de ponto
+ * flutuante ao somar milhares de linhas.
+ */
+export function valorCsvEmCentavos(v) {
+  let t = String(v ?? "").trim().replace(/\s|R\$/g, "");
+  if (!t) return null;
+  const ultimoPonto = t.lastIndexOf(".");
+  const ultimaVirgula = t.lastIndexOf(",");
+  if (ultimoPonto >= 0 && ultimaVirgula >= 0) {
+    t = ultimaVirgula > ultimoPonto ? t.replace(/\./g, "").replace(",", ".") : t.replace(/,/g, "");
+  } else if (ultimaVirgula >= 0) {
+    t = t.replace(",", ".");
+  }
+  if (!/^[-+]?\d+(\.\d+)?$/.test(t)) return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? Math.round(n * 100) : null;
+}
+
+const centavosParaReais = (c) => c / 100;
+
+/**
+ * Resumo do impacto no repasse sobre TODAS as linhas de dado (não só as
+ * exibidas na tabela). PURA.
+ * @param {string[]} colunas cabeçalho como veio
+ * @param {string[][]} linhasCampos campos de cada linha de dado
+ */
+export function resumirImpactoNoRepasse(colunas, linhasCampos) {
+  const idxImpacto = colunas.findIndex((c) => normalizarTextoCsv(c) === COLUNA_IMPACTO);
+  const idxValor = colunas.findIndex((c) => normalizarTextoCsv(c) === COLUNA_VALOR);
+  const r = {
+    colunaImpactoEncontrada: idxImpacto >= 0,
+    colunaValorEncontrada: idxValor >= 0,
+    totalLinhas: linhasCampos.length,
+    linhasComImpacto: 0,
+    linhasSemImpacto: 0,
+    linhasImpactoNaoInformado: 0,
+    linhasValorInvalido: 0,
+    totalBruto: null,
+    totalComImpacto: null,
+    totalSemImpacto: null,
+  };
+  let bruto = 0;
+  let comImpacto = 0;
+  let semImpacto = 0;
+  for (const campos of linhasCampos) {
+    const impacto = idxImpacto >= 0 ? interpretarImpactoNoRepasse(campos[idxImpacto]) : null;
+    if (impacto === true) r.linhasComImpacto += 1;
+    else if (impacto === false) r.linhasSemImpacto += 1;
+    else r.linhasImpactoNaoInformado += 1;
+    if (idxValor < 0) continue;
+    const c = valorCsvEmCentavos(campos[idxValor]);
+    if (c === null) { r.linhasValorInvalido += 1; continue; }
+    bruto += c;
+    if (impacto === true) comImpacto += c;
+    else if (impacto === false) semImpacto += c;
+  }
+  if (idxValor >= 0) {
+    r.totalBruto = centavosParaReais(bruto);
+    // Sem a coluna de impacto não há como separar — null, nunca "R$ 0 com impacto".
+    r.totalComImpacto = idxImpacto >= 0 ? centavosParaReais(comImpacto) : null;
+    r.totalSemImpacto = idxImpacto >= 0 ? centavosParaReais(semImpacto) : null;
+  }
+  return r;
+}
+
+/**
+ * Descompacta (se gzip) e faz o parse de um arquivo de conciliação em bytes
+ * brutos. PURA no sentido de não fazer rede/disco — só transforma o Buffer
+ * já baixado (por ifoodFinancial.download.js).
+ * @param {Buffer} bufferBruto
+ * @returns {{colunas: string[], linhas: object[], totalLinhas: number, truncado: boolean, eraGzip: boolean, delimitador: string|null, resumoRepasse: object}}
+ */
+export function parsearArquivoConciliacao(bufferBruto) {
+  const { conteudo, eraGzip } = descompactarArquivoConciliacao(bufferBruto);
+
+  const texto = conteudo.toString("utf8").replace(/^﻿/, "");
   const linhasBrutas = texto.split(/\r\n|\n|\r/).filter((l) => l.length > 0);
   // Sem nenhuma linha, não há o que detectar (delimitador precisa de uma
   // primeira linha pra contar vírgulas/ponto-e-vírgulas) — null, nunca um
   // valor chutado.
-  if (linhasBrutas.length === 0) return { colunas: [], linhas: [], totalLinhas: 0, truncado: false, eraGzip, delimitador: null };
+  if (linhasBrutas.length === 0) {
+    return { colunas: [], linhas: [], totalLinhas: 0, truncado: false, eraGzip, delimitador: null, resumoRepasse: resumirImpactoNoRepasse([], []) };
+  }
 
   const delimitador = detectarDelimitador(linhasBrutas[0]);
   const colunas = parsearLinhaCsv(linhasBrutas[0], delimitador);
 
-  const corpo = linhasBrutas.slice(1);
-  const truncado = corpo.length > IFOOD_RECONCILIATION_ARQUIVO.maxLinhasExibidas;
-  const linhas = corpo.slice(0, IFOOD_RECONCILIATION_ARQUIVO.maxLinhasExibidas).map((linhaTexto) => {
-    const campos = parsearLinhaCsv(linhaTexto, delimitador);
+  // Todas as linhas são parseadas (o resumo cobre o arquivo inteiro); só a
+  // TABELA é cortada no teto de exibição.
+  const camposPorLinha = linhasBrutas.slice(1).map((linhaTexto) => parsearLinhaCsv(linhaTexto, delimitador));
+  const truncado = camposPorLinha.length > IFOOD_RECONCILIATION_ARQUIVO.maxLinhasExibidas;
+  const linhas = camposPorLinha.slice(0, IFOOD_RECONCILIATION_ARQUIVO.maxLinhasExibidas).map((campos) => {
     const linha = {};
     colunas.forEach((col, i) => { linha[col] = campos[i] ?? null; });
     return linha;
   });
 
-  return { colunas, linhas, totalLinhas: corpo.length, truncado, eraGzip, delimitador };
+  return {
+    colunas, linhas, totalLinhas: camposPorLinha.length, truncado, eraGzip, delimitador,
+    resumoRepasse: resumirImpactoNoRepasse(colunas, camposPorLinha),
+  };
 }
