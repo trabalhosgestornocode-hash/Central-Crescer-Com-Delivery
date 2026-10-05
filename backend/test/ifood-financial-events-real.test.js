@@ -109,20 +109,22 @@ describe("header x-request-homologation (Financial Events)", () => {
     assert.equal(HEADER in f.chamadas[0].headers, false);
     assert.equal(f.chamadas[0].url, `https://mock.ifood.test/financial/v3.0/merchants/${MERCHANT_A}/financial-events?beginDate=2026-09-26&endDate=2026-09-27&page=1&size=100`);
   });
-  test("[3] homologacao omitido mantém o comportamento anterior (header enviado)", async () => {
+  test("[3] homologacao omitido -> decide a UNIDADE: fora da allowlist = SEM header (dado real)", async () => {
     const f = ok200([]); await chamar({}, f);
-    assert.equal(f.chamadas[0].headers[HEADER], "true");
+    assert.equal(HEADER in f.chamadas[0].headers, false);
   });
-  test("[4] string 'false' (e outros não-boolean) NÃO desligam a fixture", async () => {
-    for (const v of ["false", 0, null, "0"]) {
+  test("[4] valor não-boolean (ex.: 'true' vindo de query) NÃO liga a fixture — decide a unidade", async () => {
+    for (const v of ["true", "false", 1, 0, null, "0"]) {
       const f = ok200([]); await chamar({ homologacao: v }, f);
-      assert.equal(f.chamadas[0].headers[HEADER], "true", `homologacao=${JSON.stringify(v)}`);
+      assert.equal(HEADER in f.chamadas[0].headers, false, `homologacao=${JSON.stringify(v)}`);
     }
   });
-  test("[4b] Settlements continua com o header (não foi alterado neste checkpoint)", async () => {
+  test("[4b] Settlements segue a UNIDADE: fora da allowlist sem header; na allowlist com header", async () => {
     const f = fetchFalso(() => resposta(200, { settlements: [] }));
     await comSilencio(() => financial.listarSettlements({ ...TENANT_A, modo: "calculo", ...PERIODO, deps: { repo: repoFalso().repo, http: httpReal(f) } }).catch(() => {}));
-    assert.equal(f.chamadas[0].headers[HEADER], "true");
+    await comSilencio(() => financial.listarSettlements({ ...TENANT_A, modo: "calculo", ...PERIODO, deps: { homologacaoFinancial: (u) => u === TENANT_A.unidadeId, repo: repoFalso().repo, http: httpReal(f) } }).catch(() => {}));
+    assert.equal(HEADER in f.chamadas[0].headers, false);
+    assert.equal(f.chamadas[1].headers[HEADER], "true");
   });
 });
 

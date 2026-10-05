@@ -8,7 +8,7 @@
 //   +     header x-request-homologation, isolamento de tenant, nada de token/URL
 //
 // Zero rede real e zero banco: http/fetch/download/supabase falsos.
-import { test, describe, after } from "node:test";
+import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import zlib from "node:zlib";
@@ -34,6 +34,7 @@ const { requireModulo } = await import("../src/middlewares/auth.js");
 const { errorHandler } = await import("../src/middlewares/errorHandler.js");
 const { MODULOS } = await import("../src/shared/modulos.js");
 const { permissoesDoPapel } = await import("../src/shared/permissoes.js");
+const { config } = await import("../src/config/env.js");
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const TENANT_A = { organizacaoId: "org-A", unidadeId: "uni-A" };
@@ -239,7 +240,7 @@ describe("P0-2 — download do CSV de conciliação", () => {
     assert.equal(r.contentType, "text/csv; charset=utf-8");
     assert.equal(r.nomeArquivo, `conciliacao-ifood-${COMP}.csv`);
     assert.equal(http.chamadas.get.length, 1, "consulta o status para obter um link novo");
-    assert.equal(http.chamadas.get[0].opts.homologacao, true);
+    assert.equal(http.chamadas.get[0].opts.homologacao, false, "unidade fora da allowlist: dado real");
     assert.deepEqual(download.chamadas, [URL_ASSINADA], "o backend baixa — a URL não vai ao frontend");
     semSegredo(r.nomeArquivo + r.contentType, "metadados do download");
   });
@@ -338,7 +339,7 @@ describe("P0-3 — Reconciliation On Demand: requestId e 409", () => {
     assert.deepEqual(r, { requestId: REQ_A, competencia: COMP, reutilizado: false });
     assert.equal(sol.chamadas.registrar.length, 1);
     assert.deepEqual(sol.chamadas.registrar[0], { organizacaoId: "org-A", unidadeId: "uni-A", conexaoId: "conx-A", competencia: COMP, merchantId: MERCHANT_A, requestId: REQ_A, usuarioId: "u-1" });
-    assert.equal(http.chamadas.post[0].opts.homologacao, true);
+    assert.equal(http.chamadas.post[0].opts.homologacao, false, "unidade fora da allowlist: dado real");
   });
 
   test("409 com requestId registrado: reaproveita o MESMO id (reutilizado), sem novo registro", async () => {
@@ -524,28 +525,53 @@ describe("P1 — 404 com mensagem fiel à API", () => {
 // ===========================================================================
 // Header x-request-homologation
 // ===========================================================================
-describe("header x-request-homologation (fase de homologação)", () => {
-  test("Settlements, Anticipation, Reconciliation e On Demand (POST, status, download) enviam homologacao: true", async () => {
-    const http = httpFalso({ get: (c) => (c.includes("on-demand") ? statusProcessed() : c.includes("reconciliation") ? [{ downloadPath: null }] : {}), post: () => ({ requestId: REQ_A, competence: COMP }) });
-    const deps = { repo: repoFalso(), http, download: downloadFalso(), solicitacoes: solicitacoesFalso() };
+describe("header x-request-homologation decidido POR UNIDADE (allowlist)", () => {
+  // Unidade A na allowlist; unidade B fora. Mesmas chamadas, mesmos fakes.
+  const naAllowlist = (u) => u === TENANT_A.unidadeId;
+  async function todasAsApis(tenant, requestId) {
+    const http = httpFalso({ get: (c) => (c.includes("on-demand") ? statusProcessed(requestId) : c.includes("/reconciliation") ? [{ downloadPath: null }] : {}), post: () => ({ requestId, competence: COMP }) });
+    const deps = { repo: repoFalso(), http, download: downloadFalso(), solicitacoes: solicitacoesFalso(), homologacaoFinancial: naAllowlist };
+    const periodo = { inicio: "2026-09-01", fim: "2026-09-07" };
     await quieto(async () => {
-      await financial.listarSettlements({ ...TENANT_A, inicio: "2026-09-01", fim: "2026-09-07", deps });
-      await financial.listarAnticipations({ ...TENANT_A, inicio: "2026-09-01", fim: "2026-09-07", deps });
-      await financial.obterReconciliation({ ...TENANT_A, competencia: COMP, deps });
-      await financial.solicitarReconciliationOnDemand({ ...TENANT_A, competencia: COMP, deps });
-      await financial.consultarReconciliationOnDemand({ ...TENANT_A, requestId: REQ_A, deps });
-      await financial.baixarArquivoReconciliationOnDemand({ ...TENANT_A, requestId: REQ_A, deps });
+      await financial.listarSales({ ...tenant, ...periodo, deps }).catch(() => {});
+      await financial.listarFinancialEvents({ ...tenant, ...periodo, deps }).catch(() => {});
+      await financial.listarSettlements({ ...tenant, ...periodo, deps });
+      await financial.listarAnticipations({ ...tenant, ...periodo, deps });
+      await financial.obterReconciliation({ ...tenant, competencia: COMP, deps });
+      await financial.solicitarReconciliationOnDemand({ ...tenant, competencia: COMP, deps });
+      await financial.consultarReconciliationOnDemand({ ...tenant, requestId, deps });
+      await financial.baixarArquivoReconciliationOnDemand({ ...tenant, requestId, deps });
     });
-    const todas = [...http.chamadas.get, ...http.chamadas.post];
-    assert.equal(todas.length, 6); // settlements, anticipations, reconciliation, POST on-demand, status, status do download
-    for (const c of todas) assert.equal(c.opts.homologacao, true, c.caminho);
+    return [...http.chamadas.get, ...http.chamadas.post].map((c) => ({ rotulo: c.opts.rotulo, homologacao: c.opts.homologacao }));
+  }
+  const ROTULOS = ["financial.sales", "financial.events", "financial.settlements", "financial.anticipations", "financial.reconciliation",
+    "financial.reconciliation.on_demand.status", "financial.reconciliation.on_demand.status", "financial.reconciliation.on_demand.solicitar"];
+
+  test("unidade A (na allowlist): TODAS as APIs Financial enviam o header — POST, status e download no mesmo modo", async () => {
+    const chamadas = await todasAsApis(TENANT_A, REQ_A);
+    assert.deepEqual(chamadas.map((c) => c.rotulo).sort(), [...ROTULOS].sort());
+    for (const c of chamadas) assert.equal(c.homologacao, true, c.rotulo);
+  });
+
+  test("unidade B (fora da allowlist): NENHUMA API Financial envia o header (dado real)", async () => {
+    const chamadas = await todasAsApis(TENANT_B, REQ_B);
+    assert.deepEqual(chamadas.map((c) => c.rotulo).sort(), [...ROTULOS].sort());
+    for (const c of chamadas) assert.equal(c.homologacao, false, c.rotulo);
+  });
+
+  test("sem allowlist injetada, a config vazia vale: nenhuma unidade em homologação", async () => {
+    const http = httpFalso({ get: () => ({}) });
+    await quieto(() => financial.listarSettlements({ ...TENANT_A, inicio: "2026-09-01", fim: "2026-09-07", deps: { repo: repoFalso(), http } }));
+    assert.equal(http.chamadas.get[0].opts.homologacao, false);
   });
 });
 
 // ===========================================================================
-// Rotas HTTP reais (express + errorHandler) — sem banco e sem rede
-// ===========================================================================
 describe("rotas HTTP do On Demand (download, solicitação vigente)", async () => {
+  // A unidade do tenant (req.tenant.unidadeId = "uni-A") está na allowlist desta suíte:
+  // prova a decisão ponta a ponta a partir do TENANT, não de query/body.
+  const allowlistOriginal = config.ifood.financialHomologacaoUnidades;
+  before(() => { config.ifood.financialHomologacaoUnidades = ["uni-a"]; });
   const fromOriginal = supabase.from;
   const fetchOriginal = globalThis.fetch;
   const TABELAS = {
@@ -586,7 +612,7 @@ describe("rotas HTTP do On Demand (download, solicitação vigente)", async () =
   app.use(errorHandler);
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  after(() => { server.close(); supabase.from = fromOriginal; globalThis.fetch = fetchOriginal; });
+  after(() => { server.close(); supabase.from = fromOriginal; globalThis.fetch = fetchOriginal; config.ifood.financialHomologacaoUnidades = allowlistOriginal; });
 
   const get = (url) => new Promise((resolve, reject) => {
     const req = http.request({ host: "127.0.0.1", port: server.address().port, method: "GET", path: url }, (res) => {

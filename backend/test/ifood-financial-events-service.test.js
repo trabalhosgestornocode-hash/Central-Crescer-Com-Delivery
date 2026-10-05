@@ -84,7 +84,7 @@ test("caminho chamado: merchantId da conexão, page 1-indexed, size padrão 100"
   await financial.listarFinancialEvents({ ...TENANT, inicio: "2025-01-01", fim: "2025-01-05", deps: { repo: repoFalso(), http } });
   const { caminho, opts } = http.chamadas.get[0];
   assert.equal(caminho, `/financial/v3.0/merchants/${MERCHANT_ID}/financial-events?beginDate=2025-01-01&endDate=2025-01-05&page=1&size=100`);
-  assert.equal(opts.homologacao, true);
+  assert.equal(opts.homologacao, false); // unidade fora da allowlist de homologação: dado real
   assert.equal(opts.contexto, "financial");
 });
 
@@ -180,10 +180,12 @@ test("5xx -> IFOOD_INDISPONIVEL propagado", async () => {
 // =====================================================================
 // segurança
 // =====================================================================
-test("header de homologação (homologacao:true) é sempre passado ao http client nesta fase", async () => {
+test("header de homologação decidido pela UNIDADE: fora da allowlist sem header; na allowlist com header", async () => {
   const http = httpFalso({ get: () => RESP_2_EVENTOS });
   await financial.listarFinancialEvents({ ...TENANT, inicio: "2025-01-01", fim: "2025-01-05", deps: { repo: repoFalso(), http } });
-  assert.equal(http.chamadas.get[0].opts.homologacao, true);
+  await financial.listarFinancialEvents({ ...TENANT, inicio: "2025-01-01", fim: "2025-01-05", deps: { homologacaoFinancial: (u) => u === TENANT.unidadeId, repo: repoFalso(), http } });
+  assert.equal(http.chamadas.get[0].opts.homologacao, false, "unidade fora da allowlist: dado real");
+  assert.equal(http.chamadas.get[1].opts.homologacao, true, "unidade na allowlist: ambiente de homologação");
 });
 
 test("resposta normalizada nunca contém token/secret/authorization", async () => {
