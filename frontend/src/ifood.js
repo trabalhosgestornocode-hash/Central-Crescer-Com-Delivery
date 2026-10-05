@@ -412,6 +412,14 @@ function badgeHomologacao(statusApi = estado.status) {
   return ` <span class="pill info" id="ifood-badge-homologacao" title="Conexão usando o aplicativo de teste do iFood — não representa produção.">Ambiente de homologação iFood</span>`;
 }
 
+// Só na área Financial: ESTA unidade está na allowlist de homologação Financial do
+// backend (IFOOD_FINANCIAL_HOMOLOGATION_UNITS) — as consultas usam o ambiente de
+// teste do iFood. Decisão 100% do backend (só um booleano em /status).
+function badgeHomologacaoFinancial(statusApi = estado.status) {
+  if (!statusApi?.financialHomologacao || statusApi?.homologacao) return ""; // o selo geral já cobre
+  return ` <span class="pill info" id="ifood-badge-homologacao-financial" title="Esta unidade consulta o ambiente de homologação do iFood nas APIs Financial — os dados não são da loja real.">Ambiente de homologação iFood</span>`;
+}
+
 function cabecalhoWizard(tituloEtapa, passo) {
   return `
     <div class="vd-head ifood-head">
@@ -1488,7 +1496,7 @@ export function conteudoAbaOverview(f, status = estado.status) {
   const r = f.resultado;
   const rc = r?.conciliacao;
   const merchant = status?.merchant;
-  const homologacao = !!status?.homologacao;
+  const homologacao = !!status?.homologacao || !!status?.financialHomologacao;
   const fontes = derivarFontesConciliacao(r);
   const pendencias = derivarPendenciasHomologacao(r);
 
@@ -1849,7 +1857,7 @@ function pintarFinanceiro() {
     <div class="ifood-page">
       <div class="vd-head ifood-head">
         <div class="vd-head-txt">
-          <h2>Homologação Financeira${badgeHomologacao()}</h2>
+          <h2>Homologação Financeira${badgeHomologacao()}${badgeHomologacaoFinancial()}</h2>
           <p>Dados do ambiente de teste iFood, somente leitura — evidência para a homologação do módulo Financial.</p>
         </div>
         <button class="btn btn-ghost" id="ifin-voltar">Voltar ao status</button>

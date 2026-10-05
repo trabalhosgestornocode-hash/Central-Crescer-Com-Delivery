@@ -8,16 +8,15 @@
 // normaliza (ifoodFinancial.mapper.js) e devolve — sem persistir payload
 // bruto.
 //
-// REGRA DESTA FASE (Bloco M): toda chamada às APIs Financial carrega
-// `homologacao: true` de forma explícita — EXCETO Sales e Financial Events, onde
-// o chamador (backend, nunca o frontend) pode pedir `homologacao: false` (dado
-// real; ver listarSales). Esta fase existe
-// só para produzir evidência de homologação junto ao iFood (Bloco Q: nada
-// disso alimenta produção, dashboard ou lançamento diário ainda). Isso é
-// deliberadamente diferente do mecanismo opt-in geral do ifoodHttp.client:
-// aqui a decisão já foi tomada no nível da fase, não por
-// IFOOD_HOMOLOGATION_MODE — quando existir uma Fase 3 "Financial real", esse
-// `true` fixo deve virar condicional.
+// HEADER x-request-homologation (homologação Financial): decidido POR UNIDADE,
+// num lugar só — modoHomologacao() abaixo, que consulta
+// ifoodFinancialHomologacao.js#usarHomologacaoFinancial(unidadeId do tenant).
+// Vale para TODAS as APIs deste arquivo (Sales, Financial Events, Settlements,
+// Anticipation, Reconciliation, On Demand: POST, status e download). Unidade fora
+// da allowlist IFOOD_FINANCIAL_HOMOLOGATION_UNITS -> dado real, sem header.
+// O parâmetro interno `homologacao` (boolean) só existe para a orquestração da
+// conciliação repassar o MESMO modo às 5 fontes e para testes — o controller
+// nunca o envia, e nada vindo do frontend chega até aqui.
 //
 // Contratos de API: ver ifood.constants.js#IFOOD_ROTAS (comentário com a
 // fonte oficial e as divergências entre guia e Referência de API).
@@ -35,10 +34,22 @@ import {
 } from "./ifoodFinancial.mapper.js";
 import * as downloadModule from "./ifoodFinancial.download.js";
 import * as solicitacoesModule from "./ifoodFinancial.solicitacoes.js";
+import { usarHomologacaoFinancial } from "./ifoodFinancialHomologacao.js";
 import { conciliarFinancial } from "./ifoodFinancial.reconciliation.js";
 import crypto from "node:crypto";
 
 const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Modo da chamada ao iFood: true = ambiente de homologação (header
+ * x-request-homologation), false = dado real. ÚNICO ponto de decisão do arquivo.
+ * `homologacao` boolean explícito (interno) prevalece; senão decide a allowlist
+ * por unidade (`deps.homologacaoFinancial` só para testes).
+ */
+function modoHomologacao({ unidadeId, homologacao, deps = {} }) {
+  if (typeof homologacao === "boolean") return homologacao;
+  return (deps.homologacaoFinancial ?? usarHomologacaoFinancial)(unidadeId) === true;
+}
 const RE_COMPETENCIA = /^\d{4}-\d{2}$/;
 
 /**
@@ -148,9 +159,9 @@ export function validarRespostaSales({ normalizado, merchantId, periodo }) {
 /**
  * API Sales — GET /financial/v3.0/merchants/{merchantId}/sales.
  *
- * `homologacao`: true (padrão) envia `x-request-homologation: true` — o iFood
- * devolve uma FIXTURE fixa (outro merchant, outro período); false consulta o
- * dado real da loja. Só aceita boolean; qualquer outro valor mantém o padrão.
+ * Modo (modoHomologacao): unidade em homologação envia `x-request-homologation:
+ * true` — o iFood devolve uma FIXTURE fixa (outro merchant, outro período); as
+ * demais consultam o dado real da loja. `homologacao` boolean é só interno.
  *
  * @param {{organizacaoId, unidadeId, inicio, fim, page?, homologacao?: boolean, deps?: {repo, http, token}}} p
  * @returns {Promise<{periodo, pagina, vendas: object[], validacao: object}>}
@@ -159,7 +170,7 @@ export async function listarSales({ organizacaoId, unidadeId, inicio, fim, page,
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
-  const enviarHeaderHomologacao = typeof homologacao === "boolean" ? homologacao : true;
+  const enviarHeaderHomologacao = modoHomologacao({ unidadeId, homologacao, deps });
 
   const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const periodo = validarPeriodo({ inicio, fim }, { maxDias: IFOOD_FINANCIAL_LIMITES.sales.maxDias, campo: "a data de venda" });
@@ -264,8 +275,7 @@ export function validarRespostaFinancialEvents({ normalizado, merchantId }) {
  * spec oficial mas não está documentado o suficiente para eu implementar com
  * segurança — fica de fora deste incremento (ver ifood.constants.js).
  *
- * `homologacao`: mesma regra de listarSales — só o boolean `false` tira o
- * header de fixture; qualquer outro valor mantém o padrão (true).
+ * Modo: mesma regra de listarSales (modoHomologacao — decidido pela unidade).
  *
  * @param {{organizacaoId, unidadeId, inicio?, fim?, page?, size?, homologacao?: boolean, deps?: {repo, http, token}}} p
  * @returns {Promise<{periodo, pagina, eventos: object[], validacao: object}>}
@@ -274,7 +284,7 @@ export async function listarFinancialEvents({ organizacaoId, unidadeId, inicio, 
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
-  const enviarHeaderHomologacao = typeof homologacao === "boolean" ? homologacao : true;
+  const enviarHeaderHomologacao = modoHomologacao({ unidadeId, homologacao, deps });
 
   const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const periodo = resolverPeriodoEvents({ inicio, fim });
@@ -337,7 +347,7 @@ function validarModoPeriodoFinanceiro(valor) {
  * @param {{organizacaoId, unidadeId, modo?, inicio, fim, deps?: {repo, http, token}}} p
  * @returns {Promise<{periodo, saldo, merchantsConsolidados, titulos: object[]}>}
  */
-export async function listarSettlements({ organizacaoId, unidadeId, modo, inicio, fim, deps = {} }) {
+export async function listarSettlements({ organizacaoId, unidadeId, modo, inicio, fim, homologacao, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
@@ -352,7 +362,7 @@ export async function listarSettlements({ organizacaoId, unidadeId, modo, inicio
     conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(
       IFOOD_ROTAS.financialSettlements(conexao.merchant_id, modoValidado, periodo.inicio, periodo.fim),
-      { accessToken, rotulo: "financial.settlements", contexto: "settlements", homologacao: true },
+      { accessToken, rotulo: "financial.settlements", contexto: "settlements", homologacao: modoHomologacao({ unidadeId, homologacao, deps }) },
     ),
   });
 
@@ -472,7 +482,7 @@ async function baixarEParsear({ downloadPath, shaEsperado, download, rotulo }) {
  *
  * @param {{organizacaoId, unidadeId, competencia, deps?: {repo, http, token, download}}} p
  */
-export async function obterReconciliation({ organizacaoId, unidadeId, competencia, deps = {} }) {
+export async function obterReconciliation({ organizacaoId, unidadeId, competencia, homologacao, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
@@ -485,7 +495,7 @@ export async function obterReconciliation({ organizacaoId, unidadeId, competenci
     conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(
       IFOOD_ROTAS.financialReconciliation(conexao.merchant_id, competenciaValidada),
-      { accessToken, rotulo: "financial.reconciliation", contexto: "reconciliation", homologacao: true },
+      { accessToken, rotulo: "financial.reconciliation", contexto: "reconciliation", homologacao: modoHomologacao({ unidadeId, homologacao, deps }) },
     ),
   });
 
@@ -571,7 +581,7 @@ export async function solicitarReconciliationOnDemand({ organizacaoId, unidadeId
       conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
       fn: (accessToken) => http.postJson(
         IFOOD_ROTAS.financialReconciliationOnDemand(conexao.merchant_id), { competence: competenciaValidada },
-        { accessToken, rotulo: "financial.reconciliation.on_demand.solicitar", contexto: "reconciliation", homologacao: true },
+        { accessToken, rotulo: "financial.reconciliation.on_demand.solicitar", contexto: "reconciliation", homologacao: modoHomologacao({ unidadeId, deps }) },
       ),
     });
   } catch (e) {
@@ -621,12 +631,12 @@ export async function obterSolicitacaoReconciliationOnDemand({ organizacaoId, un
 }
 
 /** GET de status no iFood (link de download novo a cada consulta — doc oficial). */
-async function consultarStatusNoIfood({ conexao, requestId, repo, http, token }) {
+async function consultarStatusNoIfood({ conexao, requestId, repo, http, token, homologacao }) {
   const resposta = await token.comAccessTokenValido({
     conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(
       IFOOD_ROTAS.financialReconciliationOnDemandStatus(conexao.merchant_id, requestId),
-      { accessToken, rotulo: "financial.reconciliation.on_demand.status", contexto: "reconciliation", homologacao: true },
+      { accessToken, rotulo: "financial.reconciliation.on_demand.status", contexto: "reconciliation", homologacao },
     ),
   });
   return mapearRespostaReconciliationStatus(resposta);
@@ -649,7 +659,7 @@ export async function consultarReconciliationOnDemand({ organizacaoId, unidadeId
   const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const registro = await exigirSolicitacaoDaUnidade({ organizacaoId, unidadeId, conexao, requestId: requestIdValidado, solicitacoes });
 
-  const normalizado = await consultarStatusNoIfood({ conexao, requestId: requestIdValidado, repo, http, token });
+  const normalizado = await consultarStatusNoIfood({ conexao, requestId: requestIdValidado, repo, http, token, homologacao: modoHomologacao({ unidadeId, deps }) });
   if (normalizado.status && normalizado.status !== registro.status) {
     await solicitacoes.atualizarStatus({
       organizacaoId, unidadeId, conexaoId: conexao.id, requestId: requestIdValidado,
@@ -710,7 +720,7 @@ export async function baixarArquivoReconciliationOnDemand({ organizacaoId, unida
   const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const registro = await exigirSolicitacaoDaUnidade({ organizacaoId, unidadeId, conexao, requestId: requestIdValidado, solicitacoes });
 
-  const normalizado = await consultarStatusNoIfood({ conexao, requestId: requestIdValidado, repo, http, token });
+  const normalizado = await consultarStatusNoIfood({ conexao, requestId: requestIdValidado, repo, http, token, homologacao: modoHomologacao({ unidadeId, deps }) });
   if (normalizado.status !== "processed" || !normalizado.downloadPath) {
     throw ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_ARQUIVO_INDISPONIVEL);
   }
@@ -741,7 +751,7 @@ export async function baixarArquivoReconciliationOnDemand({ organizacaoId, unida
  * @param {{organizacaoId, unidadeId, modo?, inicio, fim, deps?: {repo, http, token}}} p
  * @returns {Promise<{periodo, saldo, antecipacoes: object[]}>}
  */
-export async function listarAnticipations({ organizacaoId, unidadeId, modo, inicio, fim, deps = {} }) {
+export async function listarAnticipations({ organizacaoId, unidadeId, modo, inicio, fim, homologacao, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
@@ -756,7 +766,7 @@ export async function listarAnticipations({ organizacaoId, unidadeId, modo, inic
     conexaoId: conexao.id, appType: IFOOD_APPS.FINANCIAL, deps: { repo, http },
     fn: (accessToken) => http.getJson(
       IFOOD_ROTAS.financialAnticipations(conexao.merchant_id, modoValidado, periodo.inicio, periodo.fim),
-      { accessToken, rotulo: "financial.anticipations", contexto: "anticipations", homologacao: true },
+      { accessToken, rotulo: "financial.anticipations", contexto: "anticipations", homologacao: modoHomologacao({ unidadeId, homologacao, deps }) },
     ),
   });
 
@@ -801,17 +811,17 @@ export async function obterConciliacaoFinanceira({ organizacaoId, unidadeId, ini
 
   const competenciaEfetiva = competencia || (typeof inicio === "string" ? inicio.slice(0, 7) : null);
 
-  // As 5 fontes seguem na FIXTURE (Settlements/Reconciliation/Anticipations ainda não
-  // têm modo real) — Sales/Events fixos em fixture para NUNCA misturar dado real com
-  // fixture. Resultado é diagnóstico de homologação (`fonte: "fixture"`), não definitivo.
+  // UM modo para as 5 fontes (decidido pela unidade): nunca mistura dado real com
+  // fixture na mesma conciliação.
+  const homologacao = modoHomologacao({ unidadeId, deps });
   const resultados = await Promise.allSettled([
-    listarSales({ organizacaoId, unidadeId, inicio, fim, homologacao: true, deps }),
-    listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, homologacao: true, deps }),
-    listarSettlements({ organizacaoId, unidadeId, modo: "calculo", inicio, fim, deps }),
+    listarSales({ organizacaoId, unidadeId, inicio, fim, homologacao, deps }),
+    listarFinancialEvents({ organizacaoId, unidadeId, inicio, fim, homologacao, deps }),
+    listarSettlements({ organizacaoId, unidadeId, modo: "calculo", inicio, fim, homologacao, deps }),
     competenciaEfetiva
-      ? obterReconciliation({ organizacaoId, unidadeId, competencia: competenciaEfetiva, deps })
+      ? obterReconciliation({ organizacaoId, unidadeId, competencia: competenciaEfetiva, homologacao, deps })
       : Promise.reject(ifoodErro(IFOOD_ERROS.IFOOD_RECONCILIATION_INVALIDA, { mensagem: "Competência não informada nem derivável do período." })),
-    listarAnticipations({ organizacaoId, unidadeId, modo: "calculo", inicio, fim, deps }),
+    listarAnticipations({ organizacaoId, unidadeId, modo: "calculo", inicio, fim, homologacao, deps }),
   ]);
 
   const [salesR, eventsR, settlementsR, reconciliationR, anticipationsR] = resultados;
@@ -835,5 +845,5 @@ export async function obterConciliacaoFinanceira({ organizacaoId, unidadeId, ini
     statusGeral: resultado.conciliacao.statusGeral, fontesComErro: fontesComErro.map((f) => f.fonte),
   });
 
-  return { ...resultado, fonte: "fixture", fontesComErro };
+  return { ...resultado, fonte: homologacao ? "fixture" : "real", fontesComErro };
 }

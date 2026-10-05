@@ -162,10 +162,12 @@ test("401: 1 refresh + 1 repetição, depois sucesso", async () => {
   assert.equal(http.chamadas.post.length, 1);
 });
 
-test("homologação sempre true, contexto 'reconciliation'", async () => {
+test("homologação decidida pela unidade (fora: false; na allowlist: true), contexto 'reconciliation'", async () => {
   const http = httpFalso({ get: () => [{ downloadPath: null, metadata: null }] });
   await financial.obterReconciliation({ ...TENANT, competencia: competenciaFechada(), deps: { repo: repoFalso(), http, download: downloadFalso() } });
-  assert.equal(http.chamadas.get[0].opts.homologacao, true);
+  await financial.obterReconciliation({ ...TENANT, competencia: competenciaFechada(), deps: { homologacaoFinancial: () => true, repo: repoFalso(), http, download: downloadFalso() } });
+  assert.equal(http.chamadas.get[0].opts.homologacao, false);
+  assert.equal(http.chamadas.get[1].opts.homologacao, true);
   assert.equal(http.chamadas.get[0].opts.contexto, "reconciliation");
 });
 

@@ -189,6 +189,7 @@ test("status sem conexão: não conectado, ambos apps desligados", async () => {
     atencao: { total: 0, apps: [] },
     conectadaEm: null, ultimaSincronizacao: null, ultimoErro: null,
     homologacao: false,
+    financialHomologacao: false, // unidade fora da allowlist IFOOD_FINANCIAL_HOMOLOGATION_UNITS
   });
 });
 

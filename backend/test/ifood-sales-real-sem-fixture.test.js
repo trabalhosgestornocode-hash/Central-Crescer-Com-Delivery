@@ -103,10 +103,10 @@ describe("header x-request-homologation (Sales)", () => {
     assert.equal(f.chamadas[0].headers[HEADER], "true");
   });
 
-  test("[1b] homologacao omitido -> mantém o comportamento anterior (header enviado)", async () => {
+  test("[1b] homologacao omitido -> decide a UNIDADE: fora da allowlist = SEM header", async () => {
     const f = fetchFalso(envelope([venda()]));
     await chamar({}, f);
-    assert.equal(f.chamadas[0].headers[HEADER], "true");
+    assert.equal(HEADER in f.chamadas[0].headers, false);
   });
 
   test("[2] homologacao:false -> NÃO envia o header (e o resto da requisição é idêntico)", async () => {
@@ -118,15 +118,15 @@ describe("header x-request-homologation (Sales)", () => {
     assert.equal(f.chamadas[0].url, `https://mock.ifood.test/financial/v3.0/merchants/${MERCHANT}/sales?beginSalesDate=2026-09-26&endSalesDate=2026-09-27&page=1`);
   });
 
-  test("[2c] valor não-boolean (ex.: string 'false' vinda de query) NÃO desliga o header", async () => {
-    for (const v of ["false", 0, null, "nao"]) {
+  test("[2c] valor não-boolean (ex.: 'true' vindo de query) NÃO liga o header — decide a unidade", async () => {
+    for (const v of ["true", "false", 1, 0, null, "nao"]) {
       const f = fetchFalso(envelope([venda()]));
       await chamar({ homologacao: v }, f);
-      assert.equal(f.chamadas[0].headers[HEADER], "true", `homologacao=${JSON.stringify(v)}`);
+      assert.equal(HEADER in f.chamadas[0].headers, false, `homologacao=${JSON.stringify(v)}`);
     }
   });
 
-  test("[3] outras APIs Financial continuam enviando o header (comportamento inalterado)", async () => {
+  test("[3] demais APIs Financial seguem a UNIDADE: fora da allowlist, sem header", async () => {
     const casos = [
       ["events", () => financial.listarFinancialEvents({ ...TENANT, ...PERIODO, deps: { repo: repoFalso().repo, http: httpReal(fev) } })],
       ["settlements", () => financial.listarSettlements({ ...TENANT, modo: "calculo", ...PERIODO, deps: { repo: repoFalso().repo, http: httpReal(fset) } })],
@@ -139,7 +139,7 @@ describe("header x-request-homologation (Sales)", () => {
     try { for (const [, fn] of casos) await fn().catch(() => {}); } finally { cap.restaurar(); }
     for (const [nome, f] of [["events", fev], ["settlements", fset], ["anticipations", fant]]) {
       assert.ok(f.chamadas.length >= 1, `${nome}: esperava 1 chamada`);
-      assert.equal(f.chamadas[0].headers[HEADER], "true", `${nome} deveria continuar com o header`);
+      assert.equal(HEADER in f.chamadas[0].headers, false, `${nome}: unidade fora da allowlist não envia o header`);
     }
   });
 

@@ -155,19 +155,22 @@ describe("fixture nunca se passa por dado real", () => {
       assert.equal((await financial.listarSales({ ...base, homologacao: false })).fonte, "real");
       assert.equal((await financial.listarSales({ ...base, homologacao: true })).fonte, "fixture");
       assert.equal((await financial.listarFinancialEvents({ ...base, homologacao: false })).fonte, "real");
-      assert.equal((await financial.listarFinancialEvents({ ...base })).fonte, "fixture");
+      assert.equal((await financial.listarFinancialEvents({ ...base })).fonte, "real", "omitido: unidade fora da allowlist");
+      assert.equal((await financial.listarFinancialEvents({ ...base, deps: { ...base.deps, homologacaoFinancial: () => true } })).fonte, "fixture");
     } finally { restaurar(); }
   });
-  test("conciliação: TODAS as fontes em fixture (nunca mistura real com fixture) e resultado marcado fonte 'fixture'", async () => {
+  test("conciliação: UM modo para TODAS as fontes (nunca mistura real com fixture), decidido pela unidade", async () => {
     const restaurar = silenciar();
     try {
-      const h = httpGravador();
-      const r = await financial.obterConciliacaoFinanceira({ organizacaoId: "o", unidadeId: "u", inicio: "2026-09-21", fim: "2026-09-29", deps: { repo, http: h } });
-      assert.equal(r.fonte, "fixture");
-      const porRotulo = Object.fromEntries(h.chamadas.map((c) => [c.rotulo, c.homologacao]));
-      assert.equal(porRotulo["financial.sales"], true);
-      assert.equal(porRotulo["financial.events"], true);
-      assert.equal(porRotulo["financial.settlements"], true);
+      for (const [emHomologacao, fonte] of [[false, "real"], [true, "fixture"]]) {
+        const h = httpGravador();
+        const r = await financial.obterConciliacaoFinanceira({ organizacaoId: "o", unidadeId: "u", inicio: "2026-09-21", fim: "2026-09-29", deps: { repo, http: h, homologacaoFinancial: () => emHomologacao } });
+        assert.equal(r.fonte, fonte);
+        const porRotulo = Object.fromEntries(h.chamadas.map((c) => [c.rotulo, c.homologacao]));
+        for (const rot of ["financial.sales", "financial.events", "financial.settlements", "financial.anticipations"]) {
+          assert.equal(porRotulo[rot], emHomologacao, `${rot} (homologação=${emHomologacao})`);
+        }
+      }
     } finally { restaurar(); }
   });
 });

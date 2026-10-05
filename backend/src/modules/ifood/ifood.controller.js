@@ -17,7 +17,6 @@ import * as financialService from "./ifoodFinancial.service.js";
 import * as pedidosLeitura from "./ifoodPedidosLeitura.service.js";
 import * as val from "./ifood.validators.js";
 import { resumoEventsParaStatus } from "./ifoodEventsEstado.js";
-import { config } from "../../config/env.js";
 
 function tenant(req) {
   const { organizacaoId, unidadeId } = req.tenant ?? {};
@@ -105,8 +104,8 @@ export const pedidos = asyncHandler(async (req, res) => {
 
 // --- Financial (Fase 2 — Homologação, só leitura) ------------------------
 
-// Fixture x dado real: SÓ a configuração do backend decide (IFOOD_FINANCIAL_FIXTURE).
-const fixtureFinanceira = () => config.ifood?.financialFixture === true;
+// Fixture x dado real: decidido NO SERVICE, por unidade (req.tenant), via
+// ifoodFinancialHomologacao.js — nada de query/body/header do navegador chega lá.
 
 // API Sales. merchantId SEMPRE da conexão da unidade — nunca do query string.
 // `validacao` é diagnóstico técnico (já vai para o log) — não sai para o frontend.
@@ -114,7 +113,7 @@ export const financialSales = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
   const { inicio, fim, page } = req.query;
   const { validacao: _validacao, ...data } = await financialService.listarSales({
-    organizacaoId, unidadeId, inicio, fim, page, homologacao: fixtureFinanceira(),
+    organizacaoId, unidadeId, inicio, fim, page,
   });
   res.json({ data });
 });
@@ -124,7 +123,7 @@ export const financialEvents = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
   const { inicio, fim, page, size } = req.query;
   const { validacao: _validacao, ...data } = await financialService.listarFinancialEvents({
-    organizacaoId, unidadeId, inicio, fim, page, size, homologacao: fixtureFinanceira(),
+    organizacaoId, unidadeId, inicio, fim, page, size,
   });
   res.json({ data });
 });

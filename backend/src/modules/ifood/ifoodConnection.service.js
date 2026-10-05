@@ -22,6 +22,7 @@ import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_APP_ORDER } from "./ifood.constants.
 import * as repositorio from "./ifood.repository.js";
 import * as merchantService from "./ifoodMerchant.service.js";
 import { estaEmHomologacaoIfood, orderLiberadoParaUnidade } from "./ifoodToken.service.js";
+import { usarHomologacaoFinancial } from "./ifoodFinancialHomologacao.js";
 
 /**
  * Vincula um merchant do iFood à unidade do contexto.
@@ -93,6 +94,7 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
       ultimaSincronizacao: null,
       ultimoErro: null,
       homologacao: estaEmHomologacaoIfood(),
+      financialHomologacao: usarHomologacaoFinancial(unidadeId),
     };
   }
 
@@ -135,6 +137,9 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
     // Só um booleano — nunca clientId/clientSecret/token. Alimenta a badge
     // discreta "Ambiente de homologação iFood" no frontend.
     homologacao: estaEmHomologacaoIfood(),
+    // Esta UNIDADE consulta o ambiente de homologação do iFood nas APIs Financial
+    // (IFOOD_FINANCIAL_HOMOLOGATION_UNITS). Só um booleano — selo na área Financial.
+    financialHomologacao: usarHomologacaoFinancial(unidadeId),
   };
 }
 
