@@ -499,7 +499,8 @@ describe("montarEvidenciaHomologacao — evidência completa", () => {
     assert.equal(rec.hashVerificado, true);
     assert.equal(rec.formatoDetectado, "csv");
     assert.equal(rec.delimitadorDetectado, ",");
-    assert.equal(rec.onDemand.consultado, false);
+    assert.equal(rec.onDemand, undefined, "On Demand tem bloco próprio (reconciliationOnDemand)");
+    assert.equal(evidencia.reconciliationOnDemand.solicitado, false);
   });
 
   test("validações: as 4 + nenhuma divergência", () => {

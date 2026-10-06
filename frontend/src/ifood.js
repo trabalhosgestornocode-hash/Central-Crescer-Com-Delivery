@@ -21,7 +21,7 @@ import {
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
   rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
   resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
-  FASE_ON_DEMAND_ROTULO,
+  FASE_ON_DEMAND_ROTULO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
 } from "./ifoodEstado.js";
 import { criarAcompanhamentoReconciliacao } from "./ifoodReconciliacaoPolling.js";
 
@@ -929,6 +929,8 @@ async function baixarCsvReconciliationOnDemand() {
   pintarFinanceiro();
   try {
     const { blob, nomeArquivo } = await api.ifoodFinancialReconciliationOnDemandArquivo(od.requestId);
+    // Só para a evidência do On Demand (nome sanitizado pelo backend + tamanho).
+    od.arquivoBaixado = { requestId: od.requestId, nome: nomeArquivo || null, bytes: typeof blob?.size === "number" ? blob.size : null };
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -1350,7 +1352,7 @@ function conteudoAbaReconciliation(f) {
         ${tabelaArquivo(rOd.arquivo, 10)}
         <div class="ifood-acoes"><button class="btn btn-ghost btn-sm" id="ifrec-od-detalhe">Ver todos os registros</button></div>
       ` : ""}
-      ${od.requestId ? `<p class="ifin-tecnico">Identificador da solicitação no iFood: <span class="mono">${esc(od.requestId)}</span>${od.reutilizado ? " (solicitação reaproveitada)" : ""}</p>` : ""}
+      ${od.requestId ? `<p class="ifin-tecnico">Identificador da solicitação no iFood: <span class="mono">${esc(mascararRequestId(od.requestId))}</span>${od.reutilizado ? " (solicitação reaproveitada)" : ""}</p>` : ""}
     </div>`;
 }
 
@@ -1751,6 +1753,30 @@ function blocoEvidenciaApi(rotulo, bloco, linhasEspecificas) {
     </div>`;
 }
 
+/** Evidência da Conciliação sob demanda — bloco próprio, nunca misturado com o mensal. */
+function blocoEvidenciaOnDemand(od) {
+  if (!od) return "";
+  const linha = (rotulo, valor) => `<div class="ifood-info-linha"><span>${esc(rotulo)}</span><strong>${valor}</strong></div>`;
+  return `
+    <div class="ifcon-fonte ${od.csvProcessado ? "" : "ifcon-fonte-ausente"}">
+      <div class="ifood-secao-rotulo">Conciliação sob demanda</div>
+      <p class="ifood-instrucao">${esc(TEXTO_FONTE_ON_DEMAND)}</p>
+      ${od.amostraHomologacao ? `<div class="ifood-aviso warn">${esc(TEXTO_AMOSTRA_HOMOLOGACAO)}</div>` : ""}
+      ${!od.solicitado ? linha("Solicitação", "Não utilizada nesta sessão") : `
+        ${linha("Competência", esc(od.competencia ?? "—"))}
+        ${linha("Identificador (requestId)", `<span class="mono">${esc(od.requestId ?? "—")}</span>`)}
+        ${linha("Status", esc(od.status ?? "—"))}
+        ${linha("Solicitação reaproveitada", od.reutilizado ? "Sim" : "Não")}
+        ${linha("Linhas do CSV", od.csvProcessado ? esc(od.quantidadeLinhas ?? "—") : "Não processado")}
+        ${linha("Total bruto", fmtMoeda(od.totalBruto))}
+        ${linha("Impacto no repasse = SIM", fmtMoeda(od.impactoRepasseSim))}
+        ${linha("Impacto no repasse = NÃO", fmtMoeda(od.impactoRepasseNao))}
+        ${linha("Valor líquido considerado", fmtMoeda(od.valorLiquidoConsiderado))}
+        ${od.arquivo ? linha("Arquivo", `${esc(od.arquivo)}${od.tamanhoArquivo != null ? ` (${esc(od.tamanhoArquivo)} bytes)` : ""}`) : ""}
+        ${od.erro ? `<p class="ifood-instrucao">Erro: ${esc(od.erro)}</p>` : ""}`}
+    </div>`;
+}
+
 const FORMATO_ARQUIVO_ROTULO = { csv: "CSV (sem compressão)", csv_gzip: "CSV comprimido (gzip)" };
 const DELIMITADOR_ROTULO = { ",": "vírgula ( , )", ";": "ponto e vírgula ( ; )" };
 
@@ -1829,9 +1855,8 @@ export function conteudoAbaEvidencia(f, status = estado.status, financeiro = est
         <div class="ifood-info-linha"><span>Hash verificado</span><strong>${a.reconciliation.hashVerificado === null ? "Não informado pelo iFood" : a.reconciliation.hashVerificado ? "Sim" : "Não confere"}</strong></div>
         <div class="ifood-info-linha"><span>Formato detectado</span><strong>${esc(FORMATO_ARQUIVO_ROTULO[a.reconciliation.formatoDetectado] ?? "—")}</strong></div>
         <div class="ifood-info-linha"><span>Delimitador detectado</span><strong>${esc(DELIMITADOR_ROTULO[a.reconciliation.delimitadorDetectado] ?? "—")}</strong></div>
-        <div class="ifood-info-linha"><span>On Demand</span><strong>${a.reconciliation.onDemand.consultado ? esc(a.reconciliation.onDemand.status ?? "—") : "Não utilizado nesta sessão"}</strong></div>
-        ${a.reconciliation.onDemand.mensagemErro ? `<p class="ifood-instrucao">On Demand: ${esc(a.reconciliation.onDemand.mensagemErro)}</p>` : ""}
       `)}
+      ${blocoEvidenciaOnDemand(evidencia.reconciliationOnDemand)}
       ${blocoEvidenciaApi(FONTE_ROTULO.anticipations, a.anticipation, `
         <div class="ifood-info-linha"><span>Quantidade</span><strong>${a.anticipation.quantidade ?? "—"}</strong></div>
         <div class="ifood-info-linha"><span>Valor original</span><strong>${fmtMoeda(a.anticipation.valorOriginal)}</strong></div>
