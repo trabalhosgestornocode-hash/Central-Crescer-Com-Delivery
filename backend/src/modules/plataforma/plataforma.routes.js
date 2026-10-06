@@ -62,6 +62,9 @@ plataformaRouter.get("/unidades/:id/usuarios", c.usuariosDaUnidade);
 plataformaRouter.get("/unidades/:id/logs", c.logsDaUnidade);
 plataformaRouter.get("/unidades/:id/modulos", c.modulosDaUnidade);
 plataformaRouter.put("/unidades/:id/modulos", c.definirModulosUnidade);
+// Dashboard iFood — estrutura do lançamento e canais da unidade (migration 108).
+plataformaRouter.get("/unidades/:id/dashboard-ifood", c.dashboardIfoodDaUnidade);
+plataformaRouter.put("/unidades/:id/dashboard-ifood", c.salvarDashboardIfoodDaUnidade);
 
 // ---- Estrutura organizacional (promover/converter/transferir) — cada uma
 // roda em transação única no banco (migration 053). Só SuperAdmin chega

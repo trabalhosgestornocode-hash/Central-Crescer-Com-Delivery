@@ -46,6 +46,16 @@ export const ACOES = {
   // (unidade_tabela_comercial_historico), onde o antes/depois fica gravado
   // junto — esta linha em plataforma_auditoria é o espelho geral.
   UNIDADE_TABELA_COMERCIAL_ALTERADA: "unidade.tabela_comercial_alterada",
+  // Estrutura do lançamento do Dashboard iFood da unidade (migration 108) —
+  // configurada só pelo SuperAdmin (plataforma.dashboardIfood.service.js).
+  // `detalhes` guarda só ids/nomes/de-para — nunca valor financeiro.
+  UNIDADE_DASHBOARD_IFOOD_ESTRUTURA: "unidade.dashboard_ifood_estrutura_alterada",
+  UNIDADE_DASHBOARD_IFOOD_ENTREGADORES: "unidade.dashboard_ifood_entregadores_escopo_alterado",
+  UNIDADE_DASHBOARD_IFOOD_CANAL_CRIADO: "unidade.dashboard_ifood_canal_criado",
+  UNIDADE_DASHBOARD_IFOOD_CANAL_RENOMEADO: "unidade.dashboard_ifood_canal_renomeado",
+  UNIDADE_DASHBOARD_IFOOD_CANAL_ATIVADO: "unidade.dashboard_ifood_canal_ativado",
+  UNIDADE_DASHBOARD_IFOOD_CANAL_DESATIVADO: "unidade.dashboard_ifood_canal_desativado",
+  UNIDADE_DASHBOARD_IFOOD_CANAIS_ORDEM: "unidade.dashboard_ifood_canais_ordem_alterada",
   // Estrutura organizacional (Fase D) — as ações em si são gravadas DENTRO
   // das funções PL/pgSQL da migration 053 (mesma transação da mudança),
   // não por auditar()/auditarReq(). Estas constantes existem para o

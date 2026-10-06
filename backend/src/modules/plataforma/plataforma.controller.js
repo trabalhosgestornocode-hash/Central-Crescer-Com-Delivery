@@ -17,6 +17,7 @@ import * as monitoramento from "./plataforma.monitoramento.service.js";
 import * as auditoria from "./plataforma.auditoria.service.js";
 import * as configuracao from "./plataforma.config.service.js";
 import * as agenteUso from "./plataforma.agenteUso.service.js";
+import * as dashboardIfood from "./plataforma.dashboardIfood.service.js";
 import { buscar } from "./plataforma.repo.js";
 
 const ok = (res, data, status = 200) => res.status(status).json({ data });
@@ -132,6 +133,13 @@ export const modulosDaUnidade = asyncHandler(async (req, res) =>
 
 export const definirModulosUnidade = asyncHandler(async (req, res) =>
   ok(res, await unidades.definirModulosUnidadeAdmin(req, req.params.id, v.corpo(req.body))));
+
+// Estrutura do lançamento do Dashboard iFood (padrão × múltiplos canais).
+export const dashboardIfoodDaUnidade = asyncHandler(async (req, res) =>
+  ok(res, await dashboardIfood.obterConfigDashboardIfood(req.params.id)));
+
+export const salvarDashboardIfoodDaUnidade = asyncHandler(async (req, res) =>
+  ok(res, await dashboardIfood.salvarConfigDashboardIfood(req, req.params.id, v.corpo(req.body))));
 
 // ------------------------------------------------------------------ Usuários
 export const listarUsuarios = asyncHandler(async (req, res) =>
