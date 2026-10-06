@@ -717,7 +717,14 @@ export async function consultarReconciliationOnDemand({ organizacaoId, unidadeId
 
   ifoodLog("info", "financial.reconciliation.on_demand.consultado", {
     organizacaoId, unidadeId, requestId: mascararId(requestIdValidado), status: normalizado.status,
+    ...(normalizado.statusIfood && normalizado.statusIfood !== normalizado.status ? { statusIfood: normalizado.statusIfood } : {}),
     linhas: arquivo?.totalLinhas ?? null,
+    // Diagnóstico do "error": motivo oficial (`message`, já sanitizado) ou,
+    // se ausente, só os NOMES dos campos que vieram (nunca valores).
+    ...(normalizado.status === "error" ? {
+      mensagemErro: normalizado.mensagemErro ?? null,
+      ...(normalizado.camposRecebidosNoErro ? { camposRecebidos: normalizado.camposRecebidosNoErro } : {}),
+    } : {}),
   });
 
   // downloadPath NUNCA sai daqui pro frontend.

@@ -436,18 +436,50 @@ export function mapearRespostaReconciliationSolicitada(resp) {
   };
 }
 
-/** GET .../reconciliation/on-demand/{requestId}. Os 4 valores de `status`
- * confirmados nos exemplos reais: created, enqueue, processed, error. */
+// Status do GET on-demand/{requestId}. Swagger (Referência de API, Financial
+// v3.0, exemplos Created/Enqueued/Processed/No Financial Entries): created,
+// enqueue, processed, error. A API REAL de homologação devolveu "enqueued"
+// (2026-10-06, requestId 988e****f836) — sinônimo normalizado para o valor
+// canônico "enqueue" (é o que a constraint da tabela da migration 106 aceita).
+const SINONIMOS_STATUS_ON_DEMAND = Object.freeze({ enqueued: "enqueue" });
+export const STATUS_ON_DEMAND_CONHECIDOS = Object.freeze(["created", "enqueue", "processed", "error"]);
+
+export function normalizarStatusOnDemand(status) {
+  if (typeof status !== "string" || !status.trim()) return null;
+  const s = status.trim().toLowerCase();
+  return SINONIMOS_STATUS_ON_DEMAND[s] ?? s;
+}
+
+const MAX_MENSAGEM_ERRO = 300;
+/** `message` do status "error" (único campo de motivo documentado), sanitizado:
+ * só string, sem URL (nunca uma URL assinada), espaços colapsados, até 300 chars. */
+export function sanitizarMensagemErroOnDemand(valor) {
+  if (typeof valor !== "string") return null;
+  const limpo = valor.replace(/https?:\/\/\S+/gi, "[url removida]").replace(/\s+/g, " ").trim();
+  return limpo ? limpo.slice(0, MAX_MENSAGEM_ERRO) : null;
+}
+
+/** GET .../reconciliation/on-demand/{requestId}. */
 export function mapearRespostaReconciliationStatus(resp) {
+  const statusIfood = typeof resp?.status === "string" ? resp.status : null;
+  const status = normalizarStatusOnDemand(statusIfood);
+  const mensagemErro = sanitizarMensagemErroOnDemand(resp?.message);
   return {
     requestId: resp?.id ?? null,
     competencia: resp?.competence ?? null,
-    status: resp?.status ?? null,
+    status,
+    statusIfood, // valor bruto, só para diagnóstico (ex.: "enqueued")
     // Só existe quando status === "processed". NUNCA logar — carrega
     // assinatura AWS temporária (ver ifoodFinancial.download.js).
     downloadPath: resp?.downloadPath ?? null,
-    // Só existe quando status === "error".
-    mensagemErro: resp?.message ?? null,
+    // Doc oficial: status "error" traz `message` (ex.: "No financial entries
+    // found for the specified merchant and competence.").
+    mensagemErro,
+    // "error" SEM `message`: guarda só os NOMES dos campos recebidos (nunca
+    // valores) para descobrir se o iFood usou outro campo não documentado.
+    camposRecebidosNoErro: status === "error" && !mensagemErro && resp && typeof resp === "object"
+      ? Object.keys(resp).filter((k) => /^[A-Za-z0-9_]{1,40}$/.test(k)).slice(0, 20)
+      : null,
   };
 }
 

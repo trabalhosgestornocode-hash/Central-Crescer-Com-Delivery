@@ -21,7 +21,7 @@ import {
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
   rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
   resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
-  FASE_ON_DEMAND_ROTULO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
+  FASE_ON_DEMAND_ROTULO, MENSAGEM_ERRO_OD_SEM_MOTIVO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
 } from "./ifoodEstado.js";
 import { criarAcompanhamentoReconciliacao } from "./ifoodReconciliacaoPolling.js";
 
@@ -1294,9 +1294,10 @@ function tabelaArquivo(arquivo, maxLinhas) {
 function statusOnDemandClasse(status) {
   if (status === "processed") return "ok";
   if (status === "error") return "bad";
-  return "info"; // created, enqueue
+  return "info"; // created, enqueue/enqueued
 }
-const STATUS_OD_ROTULO = { created: "Criada", enqueue: "Na fila", processed: "Pronta", error: "Erro" };
+// "enqueued" é o valor real da API (o backend já normaliza para "enqueue"; mantido por segurança).
+const STATUS_OD_ROTULO = { created: "Criada", enqueue: "Na fila", enqueued: "Na fila", processed: "Concluída", error: "Erro" };
 
 function conteudoAbaReconciliation(f) {
   const rec = f.reconciliation;
@@ -1339,7 +1340,7 @@ function conteudoAbaReconciliation(f) {
       </div>
       ${blocoFaseOnDemand(od)}
       ${od.erro ? `<div class="ifood-aviso ${od.fase === "instavel" ? "warn" : "bad"}">${esc(od.erro)}</div>` : ""}
-      ${rOd?.status === "error" ? `<div class="ifood-aviso bad">${esc(rOd.mensagemErro || "A geração falhou no iFood.")}</div>` : ""}
+      ${rOd?.status === "error" ? `<div class="ifood-aviso bad">${esc(rOd.mensagemErro || MENSAGEM_ERRO_OD_SEM_MOTIVO)}</div>` : ""}
       ${rOd?.arquivoDisponivel ? `
         <div class="ifood-acoes">
           <button class="btn btn-primary" id="ifrec-od-baixar" ${od.baixando ? "disabled" : ""}>${od.baixando ? "Preparando o CSV…" : "Baixar CSV"}</button>
