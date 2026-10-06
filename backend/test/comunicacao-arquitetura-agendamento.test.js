@@ -75,7 +75,11 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 105 = cache de RETRY do WhatsApp (conteúdo cifrado no Gateway p/ reenvio sob retry receipt): tabela + funções novas, sem tocar o outbox/claim nem whatsapp_conexoes.
       "105_whatsapp_retry_cache.sql", "105_rollback.sql",
       // 106 = iFood Financial: registro do requestId da Reconciliation On Demand (tabela nova, backend-only), sem tocar a comunicação.
-      "106_ifood_financial_reconciliacao_on_demand.sql", "106_rollback.sql"];
+      "106_ifood_financial_reconciliacao_on_demand.sql", "106_rollback.sql",
+      // 107 = RLS + revoke anon/authenticated na tabela de desbloqueios do Dashboard iFood (corretiva da 068).
+      "107_dashboard_ifood_desbloqueios_rls.sql",
+      // 108 = Dashboard iFood multicanal (estrutura por unidade, canais e valores por canal).
+      "108_dashboard_ifood_canais.sql", "108_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });
