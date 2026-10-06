@@ -726,7 +726,7 @@ export function montarEvidenciaOnDemand(od, { ambiente } = {}) {
     delimitadorDetectado: arquivo?.delimitador ?? null,
     arquivo: baixado?.nome ?? null,
     tamanhoArquivo: typeof baixado?.bytes === "number" ? baixado.bytes : null,
-    erro: doRequest?.status === "error" ? (doRequest.mensagemErro ?? "A geração falhou no iFood.") : (sub.erro ?? sub.erroDownload ?? null),
+    erro: doRequest?.status === "error" ? (doRequest.mensagemErro ?? MENSAGEM_ERRO_OD_SEM_MOTIVO) : (sub.erro ?? sub.erroDownload ?? null),
   };
 }
 
@@ -950,6 +950,9 @@ export function classificarLancamentosVenda(resumoFinanceiro) {
 // ---------------------------------------------------------------------------
 // Reconciliation On Demand — rótulos da fase do acompanhamento automático.
 // ---------------------------------------------------------------------------
+/** Status "error" do On Demand sem o campo oficial `message`. */
+export const MENSAGEM_ERRO_OD_SEM_MOTIVO = "O iFood informou erro na geração do arquivo, sem detalhar o motivo.";
+
 export const FASE_ON_DEMAND_ROTULO = Object.freeze({
   solicitando: "Enviando solicitação ao iFood…",
   processando: "Processando no iFood — acompanhando automaticamente",
