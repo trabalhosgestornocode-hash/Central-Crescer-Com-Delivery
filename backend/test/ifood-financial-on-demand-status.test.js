@@ -2,9 +2,10 @@
 //
 // Swagger (Financial v3.0, GET on-demand/{requestId}): exemplos created,
 // enqueue, processed e "No Financial Entries" (status "error" + `message`).
-// API real de homologação (2026-10-06): created -> enqueued -> error, SEM
-// `message`. Aqui: "enqueued" vira o canônico "enqueue"; `message` é o único
-// motivo lido (sanitizado); sem ele, só os NOMES dos campos vão para o log.
+// API real de homologação (2026-10-06): created -> enqueued -> error, sem
+// `message` e com o motivo em `errorMessage` (descoberto pelos nomes de campos
+// logados). Aqui: "enqueued" vira o canônico "enqueue"; o motivo vem de
+// `message` ou `errorMessage` (sanitizado); sem nenhum, só os NOMES dos campos.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import zlib from "node:zlib";
@@ -119,6 +120,18 @@ describe("mapper — motivo do erro", () => {
     assert.deepEqual(r.camposRecebidosNoErro, ["id", "status", "merchantId", "competence", "reason"]);
     assert.ok(!JSON.stringify(r.camposRecebidosNoErro).includes("segredo-do-valor"));
   });
+  test("error com `errorMessage` (formato da API real) -> mensagemErro, sem lista de campos", () => {
+    const r = mapper.mapearRespostaReconciliationStatus(st("error", { errorMessage: `Falha   ao gerar ${URL_ASSINADA}` }));
+    assert.equal(r.mensagemErro, "Falha ao gerar [url removida]");
+    assert.equal(r.camposRecebidosNoErro, null);
+  });
+  test("`message` tem precedência sobre `errorMessage`; `errorMessage` vazio/não-string cai para os nomes", () => {
+    assert.equal(mapper.mapearRespostaReconciliationStatus(st("error", { message: MSG_OFICIAL, errorMessage: "outro" })).mensagemErro, MSG_OFICIAL);
+    assert.equal(mapper.mapearRespostaReconciliationStatus(st("error", { message: "  ", errorMessage: "outro" })).mensagemErro, "outro");
+    const r = mapper.mapearRespostaReconciliationStatus(st("error", { errorMessage: { code: 1 } }));
+    assert.equal(r.mensagemErro, null);
+    assert.deepEqual(r.camposRecebidosNoErro, ["id", "status", "merchantId", "competence", "errorMessage"]);
+  });
   test("campos recebidos só aparecem no error (nunca em created/enqueue/processed)", () => {
     for (const s of ["created", "enqueued", "processed"]) assert.equal(mapper.mapearRespostaReconciliationStatus(st(s)).camposRecebidosNoErro, null);
   });
@@ -154,6 +167,14 @@ describe("service — transições do acompanhamento", () => {
     assert.equal(resultados[2].mensagemErro, null);
     assert.match(log, /"status":"error".*"mensagemErro":null,"camposRecebidos":\["id","status","merchantId","competence"\]/);
     assert.ok(!log.includes(MERCHANT), "valor do merchantId nunca vai para o log, só o nome do campo");
+  });
+
+  test("created -> enqueued -> error COM errorMessage (formato real): motivo gravado, devolvido e logado", async () => {
+    const { resultados, sol, log } = await rodarSequencia([st("created"), st("enqueued"), st("error", { errorMessage: "Erro ao gerar arquivo" })]);
+    assert.equal(resultados[2].mensagemErro, "Erro ao gerar arquivo");
+    assert.equal(sol.chamadas.atualizarStatus.at(-1).mensagemErro, "Erro ao gerar arquivo");
+    assert.match(log, /"mensagemErro":"Erro ao gerar arquivo"/);
+    assert.doesNotMatch(log, /camposRecebidos/);
   });
 
   test("download segue exigindo 'processed' (enqueued não libera arquivo)", async () => {

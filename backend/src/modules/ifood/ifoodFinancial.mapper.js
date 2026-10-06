@@ -451,7 +451,7 @@ export function normalizarStatusOnDemand(status) {
 }
 
 const MAX_MENSAGEM_ERRO = 300;
-/** `message` do status "error" (único campo de motivo documentado), sanitizado:
+/** Motivo do status "error" (`message` no Swagger; `errorMessage` na API real), sanitizado:
  * só string, sem URL (nunca uma URL assinada), espaços colapsados, até 300 chars. */
 export function sanitizarMensagemErroOnDemand(valor) {
   if (typeof valor !== "string") return null;
@@ -463,7 +463,7 @@ export function sanitizarMensagemErroOnDemand(valor) {
 export function mapearRespostaReconciliationStatus(resp) {
   const statusIfood = typeof resp?.status === "string" ? resp.status : null;
   const status = normalizarStatusOnDemand(statusIfood);
-  const mensagemErro = sanitizarMensagemErroOnDemand(resp?.message);
+  const mensagemErro = sanitizarMensagemErroOnDemand(resp?.message) ?? sanitizarMensagemErroOnDemand(resp?.errorMessage);
   return {
     requestId: resp?.id ?? null,
     competencia: resp?.competence ?? null,
@@ -473,9 +473,11 @@ export function mapearRespostaReconciliationStatus(resp) {
     // assinatura AWS temporária (ver ifoodFinancial.download.js).
     downloadPath: resp?.downloadPath ?? null,
     // Doc oficial: status "error" traz `message` (ex.: "No financial entries
-    // found for the specified merchant and competence.").
+    // found for the specified merchant and competence."). A API REAL de
+    // homologação (2026-10-06, requestId 988e****f836) devolveu o motivo em
+    // `errorMessage` — lido como alternativa; `message` tem precedência.
     mensagemErro,
-    // "error" SEM `message`: guarda só os NOMES dos campos recebidos (nunca
+    // "error" sem nenhum dos dois: guarda só os NOMES dos campos recebidos (nunca
     // valores) para descobrir se o iFood usou outro campo não documentado.
     camposRecebidosNoErro: status === "error" && !mensagemErro && resp && typeof resp === "object"
       ? Object.keys(resp).filter((k) => /^[A-Za-z0-9_]{1,40}$/.test(k)).slice(0, 20)
