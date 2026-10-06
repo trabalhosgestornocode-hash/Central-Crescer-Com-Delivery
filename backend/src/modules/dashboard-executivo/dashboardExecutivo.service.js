@@ -28,6 +28,11 @@ import { gerarDiagnostico, LIMIARES_DIAGNOSTICO } from "./dashboardExecutivo.dia
 import { carregarDatasLiberadas } from "../../shared/desbloqueiosIfood.js";
 import { emitirEventoRealtime } from "../realtime/emitirEvento.js";
 import { EVENTOS_DASHBOARD_IFOOD, competenciaDe } from "./dashboardExecutivo.eventos.js";
+import { ESTRUTURA, diffCanais, composicaoCanaisDoMes, estruturaDaUnidade, valorCanalParaApi } from "./dashboardExecutivo.canais.js";
+import { lerConfigECanais, lerValoresCanais } from "./dashboardExecutivo.canaisRepo.js";
+import {
+  estruturaDoDiaComConfig, contextoMulticanal, normalizarDiaMulticanal, gravarDiaMulticanal, blocoMulticanal,
+} from "./dashboardExecutivo.multicanal.js";
 
 const TABELA = "lancamentos_financeiros_diarios";
 const TABELA_AUDITORIA = "lancamentos_financeiros_auditoria";
@@ -864,6 +869,23 @@ async function obterMesDeUmaUnidade({
       parcial: resumo.diasPendentes > 0,
     },
     diagnostico: diagnosticoNovo,
+    // Composição por canal (Checkpoint D) — campo OPCIONAL: só aparece para
+    // unidade multicanal ou mês com dia multicanal. Unidade padrão: resposta
+    // idêntica à de sempre. Os cards acima continuam vindo do consolidado.
+    ...(await composicaoCanaisOpcional({ unidadeId, linhas })),
+  };
+}
+
+/** `{ composicaoCanais }` ou `{}` — ver composicaoCanaisDoMes (canais.js). */
+async function composicaoCanaisOpcional({ unidadeId, linhas }) {
+  const lido = await lerConfigECanais({ unidadeId, db: supabase });
+  if (lido.ausente) return {};
+  const estruturaUnidade = estruturaDaUnidade(lido.config);
+  const idsMulticanal = linhas.filter((r) => r.estrutura_lancamento === ESTRUTURA.MULTICANAL).map((r) => r.id);
+  if (estruturaUnidade !== ESTRUTURA.MULTICANAL && !idsMulticanal.length) return {};
+  const linhasCanaisDoMes = await lerValoresCanais({ lancamentoIds: idsMulticanal, db: supabase });
+  return {
+    composicaoCanais: { estruturaUnidade, ...composicaoCanaisDoMes({ linhasDoMes: linhas, linhasCanaisDoMes, canais: lido.canais }) },
   };
 }
 
@@ -1078,13 +1100,27 @@ export async function obterLancamentoPorData({ organizacaoId, unidadeIdSessao, u
 
   const hojeIso = hojeIsoBrasil();
   const [ano, mes] = dataIso.split("-").map(Number);
-  const { diasComStatus, desbloqueios } = await carregarCalendarioMes({ unidadeId, ano, mes, hojeIso });
+  const { diasComStatus, desbloqueios, linhas } = await carregarCalendarioMes({ unidadeId, ano, mes, hojeIso });
   const disponibilidade = verificarDisponibilidade(diasComStatus, dataIso);
+  const financeiro = financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistente: row?.valor_vendas_ifood ?? null, desbloqueios });
+
+  // Estrutura DO DIA: lançamento existente -> a dele; dia novo -> configuração
+  // atual da unidade. Dia padrão: resposta idêntica à de sempre (sem campo novo).
+  const { estrutura, lido } = await estruturaDoDiaComConfig({ unidadeId, lancamento: row, db: supabase });
+  let multicanal;
+  if (estrutura === ESTRUTURA.MULTICANAL) {
+    const ctx = await contextoMulticanal({
+      unidadeId, dataIso, linhasDoMes: linhas, lancamento: row, lido, db: supabase,
+      modeloNaDataLancamento: await modeloVigenteNaData({ unidadeId, organizacaoId, dataIso }),
+    });
+    multicanal = blocoMulticanal({ ctx, lancamento: row, mostrarFinanceiro: financeiro.mostrarFinanceiro });
+  }
 
   return {
     lancamento: row ? paraApi(row) : null,
     disponibilidade,
-    ...financeiroDisponivelNaData({ dataIso, hojeIso, valorVendasIfoodExistente: row?.valor_vendas_ifood ?? null, desbloqueios }),
+    ...financeiro,
+    ...(multicanal ? { multicanal } : {}),
   };
 }
 
@@ -1160,7 +1196,12 @@ function montarFinanceiroAnterior(linhas, dataIso) {
 // um checkbox genérico. Casos legítimos de correção continuam possíveis,
 // só passam a deixar rastro explícito (ver `criarLancamento`/`atualizarLancamento`,
 // que gravam a justificativa na auditoria).
-export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior = null, modeloNaDataLancamento = null }) {
+//
+// `sinaisQuedaExtras` (opcional, lançamento multicanal): quedas de acumulado
+// POR CANAL já avaliadas por quem chama (canais.js#quedasPorCanal) — entram no
+// MESMO fluxo de confirmação das quedas do consolidado. Vazio = comportamento
+// de sempre, byte a byte.
+export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior = null, modeloNaDataLancamento = null, sinaisQuedaExtras = [] }) {
   const b = v.corpo(body);
   const situacao = v.umDe(b.situacao, "Situação", ["normal", "parcial", "sem_operacao", "zero_vendas"]);
   const statusAlvo = v.umDeOpcional(b.status, "Status", ["rascunho", "finalizado"], "rascunho");
@@ -1263,7 +1304,8 @@ export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAn
   const sinaisQueda = CAMPOS_ACUMULADOS
     .filter(([campo]) => campo !== "taxasEntregadores" || !modeloNaDataLancamento || indicadorAplicavel(modeloNaDataLancamento, "taxas_entregadores"))
     .map(([campo, rotulo, valorNovo]) => avaliarQuedaAcumulado({ campo, rotulo, valorNovo, ultimoConhecido: financeiroAnterior?.porCampo?.[campo] ?? null }))
-    .filter(Boolean);
+    .filter(Boolean)
+    .concat(sinaisQuedaExtras ?? []);
   for (const sinal of sinaisQueda) if (sinal.nivel === "leve") avisos.push(sinal.mensagem);
 
   const avisoIgualdade = avisoIgualdadeSuspeitaComBruto({
@@ -1340,7 +1382,25 @@ export async function criarLancamento({ organizacaoId, unidadeIdSessao, acesso, 
   // situação for Sem operação/Zero vendas, ver normalizarDadosLancamento).
   const desempenhoAnterior = ultimoDesempenhoConhecido(linhas, dataIso);
   const modeloNaDataLancamento = await modeloVigenteNaData({ unidadeId, organizacaoId, dataIso });
-  const dados = normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhas, dataIso), modeloNaDataLancamento });
+
+  // Dia novo: a estrutura vem da configuração ATUAL da unidade (migration 108;
+  // sem ela, padrão). Multicanal: o consolidado é calculado AQUI a partir dos
+  // canais — o cliente nunca manda o consolidado. Padrão: caminho de sempre.
+  const { estrutura, lido } = await estruturaDoDiaComConfig({ unidadeId, lancamento: null, db: supabase });
+  const ehMulticanal = estrutura === ESTRUTURA.MULTICANAL;
+  if (!ehMulticanal && b.canais !== undefined) throw ApiError.badRequest("Esta unidade não usa lançamento por canais.");
+  let dados;
+  let ctxMulti = null;
+  let linhasCanais = null;
+  if (ehMulticanal) {
+    ctxMulti = await contextoMulticanal({ unidadeId, dataIso, linhasDoMes: linhas, lancamento: null, lido, modeloNaDataLancamento, db: supabase });
+    ({ dados, linhasCanais } = normalizarDiaMulticanal(body, {
+      ctx: ctxMulti, dataIso, linhasDoMes: linhas, exigirFinanceiro, desempenhoAnteriorUnidade: desempenhoAnterior,
+      financeiroAnterior: montarFinanceiroAnterior(linhas, dataIso), modeloNaDataLancamento, normalizarDadosLancamento,
+    }));
+  } else {
+    dados = normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhas, dataIso), modeloNaDataLancamento });
+  }
 
   const linha = {
     organizacao_id: organizacaoId,
@@ -1366,12 +1426,23 @@ export async function criarLancamento({ organizacaoId, unidadeIdSessao, acesso, 
     finalizado_em: dados.statusAlvo === "finalizado" ? new Date().toISOString() : null,
   };
 
-  const { data: row, error } = await supabase.from(TABELA).insert(linha).select("*").single();
-  if (error) {
-    if (/duplicate key|unique/i.test(error.message)) {
-      throw new ApiError(409, "Já existe um lançamento para esta unidade e data.", { statusDia: STATUS_DIA.PREENCHIDO });
+  let row;
+  if (ehMulticanal) {
+    // Consolidado + canais numa única transação (RPC da migration 108).
+    row = await gravarDiaMulticanal({
+      organizacaoId, unidadeId,
+      linha: { ...linha, escopo_entregadores_lancamento: ctxMulti.escopoEntregadores },
+      linhasCanais, db: supabase,
+    });
+  } else {
+    const { data, error } = await supabase.from(TABELA).insert(linha).select("*").single();
+    if (error) {
+      if (/duplicate key|unique/i.test(error.message)) {
+        throw new ApiError(409, "Já existe um lançamento para esta unidade e data.", { statusDia: STATUS_DIA.PREENCHIDO });
+      }
+      throw ApiError.badRequest(error.message);
     }
-    throw ApiError.badRequest(error.message);
+    row = data;
   }
 
   // Auditoria do ciclo de vida do rascunho (item novo — "criação do
@@ -1406,7 +1477,7 @@ export async function criarLancamento({ organizacaoId, unidadeIdSessao, acesso, 
     entidadeId: row.id, versao: row.updated_at,
   });
 
-  return { lancamento: paraApi(row), avisos: dados.avisos };
+  return { lancamento: paraApi(row), avisos: dados.avisos, ...(ehMulticanal ? { multicanal: { canais: linhasCanais.map(valorCanalParaApi) } } : {}) };
 }
 
 // Campos "de dado" de um lançamento — usados tanto pra decidir se uma edição
@@ -1487,9 +1558,31 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
   });
   const desempenhoAnterior = ultimoDesempenhoConhecido(linhasDoMes, antes.data_lancamento);
   const modeloNaDataLancamento = await modeloVigenteNaData({ unidadeId: antes.unidade_id, organizacaoId: antes.organizacao_id, dataIso: antes.data_lancamento });
-  const dados = normalizarDadosLancamento(body, {
-    exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhasDoMes, antes.data_lancamento), modeloNaDataLancamento,
-  });
+
+  // A estrutura é a DO DIA (gravada nele, imutável) — nunca a configuração
+  // atual da unidade. Dia padrão: caminho de sempre, intacto.
+  const ehMulticanal = antes.estrutura_lancamento === ESTRUTURA.MULTICANAL;
+  if (!ehMulticanal && body?.canais !== undefined) throw ApiError.badRequest("Este dia não foi lançado por canais.");
+  let dados;
+  let linhasCanais = null;
+  let mudancasCanais = [];
+  if (ehMulticanal) {
+    // Concorrência: num dia multicanal a versão é OBRIGATÓRIA — ela protege o
+    // dia inteiro (consolidado + composição), e a RPC confere de novo sob lock.
+    if (!body?.seVersao) throw ApiError.badRequest("Versão do lançamento ausente — recarregue o lançamento antes de salvar.");
+    const ctx = await contextoMulticanal({
+      unidadeId: antes.unidade_id, dataIso: antes.data_lancamento, linhasDoMes, lancamento: antes, modeloNaDataLancamento, db: supabase,
+    });
+    ({ dados, linhasCanais } = normalizarDiaMulticanal(body, {
+      ctx, dataIso: antes.data_lancamento, linhasDoMes, exigirFinanceiro, desempenhoAnteriorUnidade: desempenhoAnterior,
+      financeiroAnterior: montarFinanceiroAnterior(linhasDoMes, antes.data_lancamento), modeloNaDataLancamento, normalizarDadosLancamento,
+    }));
+    mudancasCanais = diffCanais(ctx.valoresDoDia, linhasCanais);
+  } else {
+    dados = normalizarDadosLancamento(body, {
+      exigirFinanceiro, desempenhoAnterior, financeiroAnterior: montarFinanceiroAnterior(linhasDoMes, antes.data_lancamento), modeloNaDataLancamento,
+    });
+  }
 
   const patch = {
     situacao: dados.situacao,
@@ -1508,7 +1601,9 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
   };
 
   let motivoCorrecao = null;
-  if (eraFinalizado && precisaCorrecao(antes, patch)) {
+  // Num dia multicanal, mudar um valor JÁ gravado em qualquer canal também é
+  // correção (mesma regra: completar um campo vazio não é).
+  if (eraFinalizado && (precisaCorrecao(antes, patch) || mudancasCanais.some((m) => m.exigeCorrecao))) {
     if (!podeCorrigir) throw ApiError.forbidden("Editar um lançamento finalizado exige a permissão de correção.");
     motivoCorrecao = v.texto(v.corpo(body).motivo, "Motivo da correção", { min: 3, max: 500 });
   }
@@ -1526,9 +1621,19 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
   // `organizacao_id` repetido na própria escrita (não só na leitura acima,
   // linha 676): defesa em profundidade — o `id` já foi validado contra o
   // tenant, mas a escrita não deve depender só de quem chamou ter feito isso.
-  const { data: depois, error } = await supabase
-    .from(TABELA).update(patch).eq("id", lancamentoId).eq("organizacao_id", organizacaoId).select("*").single();
-  if (error) throw ApiError.badRequest(error.message);
+  let depois;
+  if (ehMulticanal) {
+    // Consolidado + canais na MESMA transação; a RPC reconfere empresa,
+    // unidade, estrutura e versão (updated_at) sob lock da linha.
+    depois = await gravarDiaMulticanal({
+      organizacaoId, unidadeId: antes.unidade_id, lancamentoId, versao: body.seVersao, linha: patch, linhasCanais, db: supabase,
+    });
+  } else {
+    const { data, error } = await supabase
+      .from(TABELA).update(patch).eq("id", lancamentoId).eq("organizacao_id", organizacaoId).select("*").single();
+    if (error) throw ApiError.badRequest(error.message);
+    depois = data;
+  }
 
   // Auditoria: um lançamento finalizado editado grava uma linha POR CAMPO
   // alterado, preservando o registro original (nunca se sobrescreve "em silêncio").
@@ -1544,6 +1649,17 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
           usuario, motivo: motivoCorrecao,
         });
       }
+    }
+    // Multicanal: uma linha por (canal, campo) que mudou, no MESMO formato —
+    // `campo = canal:<canalId>:<coluna>`. A linha consolidada continua
+    // auditada acima, exatamente como no modo padrão.
+    for (const m of mudancasCanais) {
+      await registrarAuditoria({
+        lancamentoId, organizacaoId, unidadeId: antes.unidade_id, campo: `canal:${m.canalId}:${m.coluna}`,
+        valorAnterior: m.anterior != null ? String(m.anterior) : null,
+        valorNovo: m.novo != null ? String(m.novo) : null,
+        usuario, motivo: motivoCorrecao,
+      });
     }
   } else {
     // Auditoria do ciclo de vida do rascunho (item novo): "atualizações
@@ -1575,7 +1691,7 @@ export async function atualizarLancamento({ organizacaoId, unidadeIdSessao, aces
     entidadeId: lancamentoId, versao: depois.updated_at,
   });
 
-  return { lancamento: paraApi(depois), avisos: dados.avisos };
+  return { lancamento: paraApi(depois), avisos: dados.avisos, ...(ehMulticanal ? { multicanal: { canais: linhasCanais.map(valorCanalParaApi) } } : {}) };
 }
 
 async function registrarAuditoria({ lancamentoId, organizacaoId, unidadeId, campo, valorAnterior, valorNovo, usuario, motivo }) {
@@ -1617,10 +1733,16 @@ export async function excluirLancamento({ organizacaoId, unidadeIdSessao, unidad
 
   // Snapshot ANTES de apagar — tabela própria, sem FK para o lançamento (que
   // está prestes a deixar de existir), então o registro da exclusão nunca
-  // some junto com o que foi apagado.
+  // some junto com o que foi apagado. Dia multicanal: a composição por canal
+  // vai junto no MESMO jsonb (`canais_valores`) — os valores por canal são
+  // apagados pela FK (cascade) e não podem sumir do registro da exclusão.
+  // Dia padrão: snapshot idêntico ao de sempre.
+  const snapshot = linha.estrutura_lancamento === ESTRUTURA.MULTICANAL
+    ? { ...linha, canais_valores: await lerValoresCanais({ lancamentoIds: [linha.id], db: supabase }) }
+    : linha;
   const { error: eLog } = await supabase.from("lancamentos_financeiros_exclusoes").insert({
     organizacao_id: organizacaoId, unidade_id: linha.unidade_id, data_lancamento: linha.data_lancamento,
-    lancamento_snapshot: linha, motivo,
+    lancamento_snapshot: snapshot, motivo,
     usuario_id: usuario?.id ?? null, usuario_nome: usuario?.nome ?? null, usuario_email: usuario?.email ?? null,
   });
   if (eLog) console.error("[dashboard-executivo] falha ao registrar log de exclusão:", eLog.message);

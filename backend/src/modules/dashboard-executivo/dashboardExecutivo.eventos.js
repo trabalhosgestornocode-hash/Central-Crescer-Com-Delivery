@@ -16,6 +16,10 @@ export const EVENTOS_DASHBOARD_IFOOD = Object.freeze({
   // nem inventar variantes que a Etapa 1 não aprovou.
   LANCAMENTO_MENSAL_ATUALIZADO: "dashboard_ifood.lancamento_mensal_atualizado",
   MODELO_LOGISTICO_ATUALIZADO: "dashboard_ifood.modelo_logistico_atualizado",
+  // Estrutura do lançamento (padrão/multicanal, canais, escopo de
+  // entregadores) alterada pelo SuperAdmin — mesmo papel do modelo
+  // logístico: não tem competência, vale para os lançamentos futuros.
+  ESTRUTURA_ATUALIZADA: "dashboard_ifood.estrutura_atualizada",
 });
 
 /** "YYYY-MM" a partir de um ano/mês numéricos — formato de `competencia` no payload dos eventos. */

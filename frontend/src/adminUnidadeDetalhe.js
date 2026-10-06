@@ -16,10 +16,12 @@ import {
   campo, grade, valor, fmtDataHora, fmtRelativo, num, carregando, erro,
   tabela, abrirModal, mostrarErroModal,
 } from "./adminUi.js";
+import { corpoDashboardIfood, ligarDashboardIfood } from "./adminUnidadeDashboardIfood.js";
 
 const ABAS = [
   { id: "informacoes", label: "Informações" },
   { id: "acessos", label: "Acessos" },
+  { id: "dashboard-ifood", label: "Dashboard iFood" },
   { id: "usuarios", label: "Usuários" },
   { id: "dados", label: "Dados/Configurações" },
   { id: "auditoria", label: "Auditoria" },
@@ -125,6 +127,12 @@ function ligarAba(aba) {
         () => adminApi.definirModulosUnidade(unidadeId, ids),
         "Acessos atualizados — as sessões ativas desta unidade foram encerradas."
       );
+    });
+  } else if (aba === "dashboard-ifood") {
+    ligarDashboardIfood({
+      unidadeId,
+      irParaAcessos: () => { abaAtual = "acessos"; desenhar(); },
+      salvar,
     });
   } else if (aba === "dados") {
     el("#ud-status-toggle")?.addEventListener("click", () => {
@@ -251,6 +259,8 @@ const CORPOS = {
         <button class="btn btn-primary btn-sm" id="ud-salvar-acessos" type="button">Salvar acessos</button>
       </div>`;
   },
+
+  "dashboard-ifood": () => corpoDashboardIfood(unidadeId),
 
   usuarios: async () => {
     const usuarios = await adminApi.usuariosDaUnidade(unidadeId);
