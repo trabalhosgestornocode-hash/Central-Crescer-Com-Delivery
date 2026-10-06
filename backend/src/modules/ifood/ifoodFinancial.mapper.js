@@ -18,6 +18,7 @@
 
 import zlib from "node:zlib";
 import { IFOOD_RECONCILIATION_ARQUIVO } from "./ifood.constants.js";
+import { mascararId } from "./ifood.logsafe.js";
 
 function numOuZero(v) {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
@@ -452,10 +453,17 @@ export function normalizarStatusOnDemand(status) {
 
 const MAX_MENSAGEM_ERRO = 300;
 /** Motivo do status "error" (`message` no Swagger; `errorMessage` na API real), sanitizado:
- * só string, sem URL (nunca uma URL assinada), espaços colapsados, até 300 chars. */
+ * só string, sem URL (nunca uma URL assinada), UUIDs mascarados (a API real
+ * devolve o merchantId inteiro: "No financial entries exist for merchant <uuid>
+ * ..."), espaços colapsados, até 300 chars. Idempotente. */
+const UUID_EM_TEXTO = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 export function sanitizarMensagemErroOnDemand(valor) {
   if (typeof valor !== "string") return null;
-  const limpo = valor.replace(/https?:\/\/\S+/gi, "[url removida]").replace(/\s+/g, " ").trim();
+  const limpo = valor
+    .replace(/https?:\/\/\S+/gi, "[url removida]")
+    .replace(UUID_EM_TEXTO, (uuid) => mascararId(uuid))
+    .replace(/\s+/g, " ")
+    .trim();
   return limpo ? limpo.slice(0, MAX_MENSAGEM_ERRO) : null;
 }
 

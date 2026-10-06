@@ -31,6 +31,7 @@ import {
   mapearRespostaSales, mapearRespostaFinancialEvents, mapearRespostaSettlements,
   mapearRespostaReconciliation, mapearRespostaReconciliationSolicitada, mapearRespostaReconciliationStatus,
   parsearArquivoConciliacao, descompactarArquivoConciliacao, mapearRespostaAnticipation,
+  sanitizarMensagemErroOnDemand,
 } from "./ifoodFinancial.mapper.js";
 import * as downloadModule from "./ifoodFinancial.download.js";
 import * as solicitacoesModule from "./ifoodFinancial.solicitacoes.js";
@@ -581,7 +582,9 @@ function registroParaSolicitacao(registro) {
     requestId: registro.request_id,
     competencia: registro.competencia,
     status: registro.status,
-    mensagemErro: registro.mensagem_erro ?? null,
+    // Defesa extra: o banco só recebe mensagem sanitizada, mas re-sanitizar é
+    // idempotente e garante que nenhum UUID integral volte para a tela.
+    mensagemErro: sanitizarMensagemErroOnDemand(registro.mensagem_erro),
     solicitadoEm: registro.solicitado_em ?? null,
     expiraEm: registro.expira_em ?? null,
     finalizado: STATUS_ON_DEMAND_TERMINAIS.has(registro.status),
@@ -700,7 +703,13 @@ export async function consultarReconciliationOnDemand({ organizacaoId, unidadeId
   const registro = await exigirSolicitacaoDaUnidade({ organizacaoId, unidadeId, conexao, requestId: requestIdValidado, solicitacoes });
 
   const normalizado = await consultarStatusNoIfood({ conexao, requestId: requestIdValidado, repo, http, token, homologacao: modoHomologacao({ unidadeId, deps }) });
-  if (normalizado.status && normalizado.status !== registro.status) {
+  // Grava quando o status muda OU quando o "error" passou a trazer um motivo
+  // diferente do gravado (ex.: registro já em error com mensagem_erro null e o
+  // iFood agora devolve errorMessage). Consulta sem motivo nunca apaga um
+  // motivo já gravado; mesma mensagem não gera UPDATE.
+  const mensagemNova = normalizado.status === "error" && !!normalizado.mensagemErro
+    && normalizado.mensagemErro !== (registro.mensagem_erro ?? null);
+  if (normalizado.status && (normalizado.status !== registro.status || mensagemNova)) {
     await solicitacoes.atualizarStatus({
       organizacaoId, unidadeId, conexaoId: conexao.id, requestId: requestIdValidado,
       status: normalizado.status, mensagemErro: normalizado.mensagemErro,

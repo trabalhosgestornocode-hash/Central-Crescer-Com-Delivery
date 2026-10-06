@@ -42,13 +42,15 @@ function repoFalso() {
     async atualizarCredencial() { return cred; },
   };
 }
-function solicitacoesFalso() {
-  const r = { organizacao_id: "org-A", unidade_id: "uni-A", conexao_id: "conx-A", competencia: COMP, request_id: REQ, status: "solicitado", expira_em: daquiA(3_600_000) };
+function solicitacoesFalso(inicial = {}) {
+  const r = { organizacao_id: "org-A", unidade_id: "uni-A", conexao_id: "conx-A", competencia: COMP, request_id: REQ, status: "solicitado", mensagem_erro: null, expira_em: daquiA(3_600_000), ...inicial };
   const chamadas = { atualizarStatus: [] };
   return {
     registro: r, chamadas,
     async obterPorRequestId(k) { return k.requestId === REQ && k.conexaoId === "conx-A" ? r : null; },
-    async atualizarStatus(k) { chamadas.atualizarStatus.push(k); r.status = k.status; return r; },
+    async obterVigente(k) { return k.competencia === r.competencia && k.conexaoId === "conx-A" ? r : null; },
+    // Mesma regra do registro real: mensagem_erro só existe no "error".
+    async atualizarStatus(k) { chamadas.atualizarStatus.push(k); r.status = k.status; r.mensagem_erro = k.status === "error" ? (k.mensagemErro ?? null) : null; return r; },
   };
 }
 function httpSequencia(respostas) {
@@ -213,5 +215,109 @@ describe("registro (solicitacoes) — persistência do status canônico", () => 
     await solicitacoes.atualizarStatus({ ...chave, status: "error", mensagemErro: MSG_OFICIAL, db });
     await solicitacoes.atualizarStatus({ ...chave, status: "error", mensagemErro: null, db });
     assert.deepEqual(db.updates, [{ status: "error", mensagem_erro: MSG_OFICIAL }, { status: "error", mensagem_erro: null }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mensagem real da API (2026-10-06): o motivo vem em `errorMessage` e carrega
+// o merchantId INTEIRO. UUIDs são mascarados na sanitização (antes de log,
+// banco, resposta e evidência) e o motivo é gravado mesmo sem mudar o status.
+// ---------------------------------------------------------------------------
+const MSG_REAL = `File generation failed: No financial entries exist for merchant ${MERCHANT} in the requested time frame.`;
+const MSG_REAL_MASCARADA = "File generation failed: No financial entries exist for merchant 55c8****7040 in the requested time frame.";
+const { montarEvidenciaHomologacao, montarExportacaoJson } = await import("../../frontend/src/ifoodEstado.js");
+
+describe("sanitização — UUID em texto livre", () => {
+  test("mensagem real: merchant mascarado no formato do mascararId", () => {
+    assert.equal(mapper.sanitizarMensagemErroOnDemand(MSG_REAL), MSG_REAL_MASCARADA);
+  });
+  test("sem UUID: texto preservado", () => {
+    assert.equal(mapper.sanitizarMensagemErroOnDemand(MSG_OFICIAL), MSG_OFICIAL);
+  });
+  test("múltiplos UUIDs e maiúsculas/minúsculas", () => {
+    const r = mapper.sanitizarMensagemErroOnDemand(`a ${MERCHANT.toUpperCase()} b ${REQ} c`);
+    assert.equal(r, "a 55C8****7040 b 988e****f836 c");
+    assert.doesNotMatch(r, /[0-9a-f]{8}-[0-9a-f]{4}-/i);
+  });
+  test("vazio/null/não-string -> null; idempotente", () => {
+    for (const v of ["", "   ", null, undefined, 42]) assert.equal(mapper.sanitizarMensagemErroOnDemand(v), null);
+    assert.equal(mapper.sanitizarMensagemErroOnDemand(MSG_REAL_MASCARADA), MSG_REAL_MASCARADA);
+  });
+});
+
+describe("service — motivo real: mascarado em log/resposta/banco/evidência e persistido sem mudar status", () => {
+  async function consultarCom(resposta, inicial) {
+    const sol = solicitacoesFalso(inicial);
+    const deps = { repo: repoFalso(), http: httpSequencia([resposta]), download: downloadFalso(), solicitacoes: sol, homologacaoFinancial: () => true };
+    const c = await capturar(() => financial.consultarReconciliationOnDemand({ ...TENANT, requestId: REQ, deps }));
+    return { ...c, sol, deps };
+  }
+
+  test("error + errorMessage com UUID: nunca no log, nunca na resposta, nunca na evidência", async () => {
+    const { r, log, sol } = await consultarCom(st("error", { errorMessage: MSG_REAL }), { status: "enqueue" });
+    assert.equal(r.mensagemErro, MSG_REAL_MASCARADA);
+    assert.ok(!JSON.stringify(r).includes(MERCHANT), "resposta ao frontend sem merchantId integral");
+    assert.ok(!log.includes(MERCHANT), "log sem merchantId integral");
+    assert.match(log, /"mensagemErro":"File generation failed: No financial entries exist for merchant 55c8\*\*\*\*7040/);
+    assert.equal(sol.registro.mensagem_erro, MSG_REAL_MASCARADA, "banco só recebe a versão mascarada");
+    const ev = montarEvidenciaHomologacao({
+      geradoEm: "2026-10-06T05:21:00Z", status: { financialHomologacao: true },
+      financeiro: { reconciliation: { competencia: COMP, erro: null, resultado: null, onDemand: { competencia: COMP, requestId: REQ, reutilizado: false, resultado: r } } },
+    });
+    assert.equal(ev.reconciliationOnDemand.erro, MSG_REAL_MASCARADA);
+    const json = montarExportacaoJson(ev);
+    assert.ok(!json.includes(MERCHANT) && !json.includes(REQ), "evidência exportada sem IDs integrais");
+  });
+
+  test("banco error + mensagem NULL -> iFood error + errorMessage: UPDATE com a mensagem; status segue error", async () => {
+    const { r, sol } = await consultarCom(st("error", { errorMessage: MSG_REAL }), { status: "error", mensagem_erro: null });
+    assert.equal(sol.chamadas.atualizarStatus.length, 1);
+    assert.deepEqual(
+      { status: sol.chamadas.atualizarStatus[0].status, mensagemErro: sol.chamadas.atualizarStatus[0].mensagemErro },
+      { status: "error", mensagemErro: MSG_REAL_MASCARADA },
+    );
+    assert.equal(r.status, "error");
+    assert.equal(r.finalizado, true, "error continua final (não reabre polling)");
+  });
+
+  test("banco error + mesma mensagem mascarada -> sem UPDATE", async () => {
+    const { sol } = await consultarCom(st("error", { errorMessage: MSG_REAL }), { status: "error", mensagem_erro: MSG_REAL_MASCARADA });
+    assert.equal(sol.chamadas.atualizarStatus.length, 0);
+  });
+
+  test("banco error + mensagem diferente -> UPDATE com a nova", async () => {
+    const { sol } = await consultarCom(st("error", { errorMessage: MSG_REAL }), { status: "error", mensagem_erro: "motivo antigo" });
+    assert.equal(sol.chamadas.atualizarStatus.length, 1);
+    assert.equal(sol.registro.mensagem_erro, MSG_REAL_MASCARADA);
+    assert.equal(sol.registro.status, "error");
+  });
+
+  test("banco error com motivo + consulta sem motivo -> sem UPDATE (não apaga o motivo); só nomes dos campos no log", async () => {
+    const { sol, log } = await consultarCom(st("error"), { status: "error", mensagem_erro: MSG_REAL_MASCARADA });
+    assert.equal(sol.chamadas.atualizarStatus.length, 0);
+    assert.equal(sol.registro.mensagem_erro, MSG_REAL_MASCARADA);
+    assert.match(log, /"camposRecebidos":\["id","status","merchantId","competence"\]/);
+  });
+
+  test("motivo persiste após reload: a solicitação lida do registro devolve a mensagem mascarada", async () => {
+    const { sol, deps } = await consultarCom(st("error", { errorMessage: MSG_REAL }), { status: "error", mensagem_erro: null });
+    const recarregada = await financial.obterSolicitacaoReconciliationOnDemand({ ...TENANT, competencia: COMP, deps });
+    assert.equal(recarregada.status, "error");
+    assert.equal(recarregada.mensagemErro, MSG_REAL_MASCARADA);
+    assert.equal(sol.registro.mensagem_erro, MSG_REAL_MASCARADA);
+  });
+
+  test("registro legado com UUID integral no banco nunca volta inteiro para a tela", async () => {
+    const sol = solicitacoesFalso({ status: "error", mensagem_erro: MSG_REAL });
+    const deps = { repo: repoFalso(), solicitacoes: sol };
+    const recarregada = await financial.obterSolicitacaoReconciliationOnDemand({ ...TENANT, competencia: COMP, deps });
+    assert.equal(recarregada.mensagemErro, MSG_REAL_MASCARADA);
+  });
+
+  test("regressão: created -> enqueued -> error(errorMessage) grava cada transição uma vez e termina em error", async () => {
+    const { resultados, sol, log } = await rodarSequencia([st("created"), st("enqueued"), st("error", { errorMessage: MSG_REAL }), st("error", { errorMessage: MSG_REAL })]);
+    assert.deepEqual(resultados.map((x) => x.status), ["created", "enqueue", "error", "error"]);
+    assert.deepEqual(sol.chamadas.atualizarStatus.map((c) => c.status), ["created", "enqueue", "error"], "4ª consulta com a mesma mensagem não regrava");
+    assert.ok(!log.includes(MERCHANT));
   });
 });
