@@ -624,15 +624,15 @@ export function montarEvidenciaHomologacao({ geradoEm, status, financeiro }) {
       taxas: rc?.anticipation?.taxas ?? null,
       valorAntecipado: rc?.anticipation?.valorAntecipado ?? null,
     }),
+    // Reconciliation MENSAL — só o resultado da consulta mensal. O On Demand
+    // tem bloco próprio (`reconciliationOnDemand`, abaixo): as duas fontes
+    // nunca se completam uma com a outra.
     reconciliation: (() => {
       const subEstado = fin.reconciliation ?? {};
-      const brutoNormal = subEstado.resultado ?? null;
-      const od = subEstado.onDemand ?? {};
-      const brutoUsado = brutoNormal ?? od.resultado ?? null; // usa o On Demand se só ele foi consultado
-      const arquivo = brutoUsado?.arquivo ?? null;
+      const arquivo = subEstado.resultado?.arquivo ?? null;
       const primeiraLinha = Array.isArray(arquivo?.linhas) ? arquivo.linhas[0] ?? null : null;
       return {
-        consultada: jaConsultou(subEstado) || jaConsultou(od),
+        consultada: jaConsultou(subEstado),
         disponivel: !!rc?.reconciliation?.disponivel,
         erro: subEstado.erro ?? null,
         competencia: rc?.reconciliation?.competencia ?? subEstado.competencia ?? null,
@@ -641,12 +641,11 @@ export function montarEvidenciaHomologacao({ geradoEm, status, financeiro }) {
         formatoDetectado: arquivo ? (arquivo.eraGzip ? "csv_gzip" : "csv") : null,
         delimitadorDetectado: arquivo?.delimitador ?? null,
         exemplo: primeiraLinha ? sanitizarProfundo(primeiraLinha) : null,
-        onDemand: jaConsultou(od)
-          ? { consultado: true, status: od.resultado?.status ?? null, mensagemErro: od.resultado?.mensagemErro ?? od.erro ?? null }
-          : { consultado: false, status: null, mensagemErro: null },
       };
     })(),
   };
+
+  const ambiente = status?.homologacao || status?.financialHomologacao ? "homologacao" : "producao";
 
   // Forma UNIFORME {status,esperado,encontrado,diferenca,explicacao} nos 4
   // pares — mesmos transformadores puros "saude*" usados na Visão Geral, só
@@ -670,11 +669,64 @@ export function montarEvidenciaHomologacao({ geradoEm, status, financeiro }) {
 
   return {
     geradoEm: geradoEm ?? null,
-    ambiente: status?.homologacao || status?.financialHomologacao ? "homologacao" : "producao",
+    ambiente,
     merchant: status?.merchant ?? null,
     resumo,
     apis,
+    reconciliationOnDemand: montarEvidenciaOnDemand(fin.reconciliation?.onDemand, { ambiente }),
     validacoes,
+  };
+}
+
+/** requestId para evidência/tela: `abcd****wxyz`. O valor persistido não muda. */
+export function mascararRequestId(id) {
+  const s = typeof id === "string" ? id.trim() : "";
+  if (!s) return null;
+  return s.length <= 8 ? "****" : `${s.slice(0, 4)}****${s.slice(-4)}`;
+}
+
+/**
+ * Evidência da Reconciliation ON DEMAND — lê SÓ o sub-estado do On Demand
+ * (`financeiro.reconciliation.onDemand`): requestId da solicitação e o
+ * resultado do GET de status desse requestId (arquivo já parseado pelo
+ * backend). Nunca recebe nem consulta o Reconciliation mensal — campo que o
+ * On Demand ainda não tem fica null, sem herdar valor de outra fonte. PURA.
+ * @param {object|undefined} od estado.financeiro.reconciliation.onDemand
+ * @param {{ambiente: string}} opts
+ */
+export function montarEvidenciaOnDemand(od, { ambiente } = {}) {
+  const sub = od ?? {};
+  const resultado = sub.resultado ?? null;
+  const requestId = sub.requestId ?? resultado?.requestId ?? null;
+  // Só o resultado do MESMO requestId conta (troca de solicitação = resultado antigo descartado).
+  const doRequest = resultado && (!resultado.requestId || !requestId || resultado.requestId === requestId) ? resultado : null;
+  const arquivo = doRequest?.arquivo ?? null;
+  const resumo = arquivo?.resumoRepasse ?? null;
+  const baixado = sub.arquivoBaixado && sub.arquivoBaixado.requestId === requestId ? sub.arquivoBaixado : null;
+  return {
+    tipo: "reconciliation_on_demand",
+    ambiente: ambiente ?? null,
+    amostraHomologacao: ambiente === "homologacao",
+    solicitado: !!requestId,
+    competencia: doRequest?.competencia ?? sub.competencia ?? null,
+    requestId: mascararRequestId(requestId),
+    status: doRequest?.status ?? (requestId ? "solicitado" : null),
+    reutilizado: requestId ? sub.reutilizado === true : null,
+    csvProcessado: !!arquivo,
+    quantidadeLinhas: arquivo?.totalLinhas ?? null,
+    totalBruto: resumo?.totalBruto ?? null,
+    impactoRepasseSim: resumo?.totalComImpacto ?? null,
+    impactoRepasseNao: resumo?.totalSemImpacto ?? null,
+    linhasImpactoSim: resumo?.linhasComImpacto ?? null,
+    linhasImpactoNao: resumo?.linhasSemImpacto ?? null,
+    linhasImpactoNaoInformado: resumo?.linhasImpactoNaoInformado ?? null,
+    // Regra de homologação: só impacto_no_repasse = SIM compõe o líquido.
+    valorLiquidoConsiderado: resumo?.totalComImpacto ?? null,
+    formatoDetectado: arquivo ? (arquivo.eraGzip ? "csv_gzip" : "csv") : null,
+    delimitadorDetectado: arquivo?.delimitador ?? null,
+    arquivo: baixado?.nome ?? null,
+    tamanhoArquivo: typeof baixado?.bytes === "number" ? baixado.bytes : null,
+    erro: doRequest?.status === "error" ? (doRequest.mensagemErro ?? "A geração falhou no iFood.") : (sub.erro ?? sub.erroDownload ?? null),
   };
 }
 
@@ -704,6 +756,38 @@ const ROTULO_FONTE_EXPORT = Object.freeze({
  * — pensado pra ser aberto offline e anexado a um e-mail/ticket de
  * homologação. Mesma sanitização do JSON (nenhum segredo pode aparecer).
  */
+export const TEXTO_FONTE_ON_DEMAND = "Dados obtidos a partir do arquivo gerado para esta solicitação.";
+export const TEXTO_AMOSTRA_HOMOLOGACAO = "Dados de exemplo do ambiente de homologação do iFood";
+
+const dinheiroExport = (v) => (typeof v === "number" ? `R$ ${v.toFixed(2).replace(".", ",")}` : "—");
+
+/** Seção "Conciliação sob demanda" do HTML exportado — só o bloco do On Demand. */
+function blocoOnDemandHtml(od) {
+  if (!od) return "";
+  const linha = (rotulo, valor) => `<dt>${escHtmlExport(rotulo)}</dt><dd>${escHtmlExport(valor)}</dd>`;
+  return `
+  <h2>Conciliação sob demanda</h2>
+  <p>${escHtmlExport(TEXTO_FONTE_ON_DEMAND)}</p>
+  ${od.amostraHomologacao ? `<p><strong>${escHtmlExport(TEXTO_AMOSTRA_HOMOLOGACAO)}</strong></p>` : ""}
+  ${!od.solicitado ? "<p><em>Nenhuma solicitação On Demand nesta sessão.</em></p>" : `
+  <dl>
+    ${linha("Tipo", od.tipo)}
+    ${linha("Competência", od.competencia)}
+    ${linha("Identificador (requestId)", od.requestId)}
+    ${linha("Status", od.status)}
+    ${linha("Solicitação reaproveitada", od.reutilizado ? "sim" : "não")}
+    ${linha("CSV processado", od.csvProcessado ? "sim" : "não processado")}
+    ${linha("Quantidade de linhas", od.quantidadeLinhas ?? "indisponível")}
+    ${linha("Total bruto", dinheiroExport(od.totalBruto))}
+    ${linha("Impacto no repasse = SIM", `${dinheiroExport(od.impactoRepasseSim)} (${od.linhasImpactoSim ?? "—"} linha(s))`)}
+    ${linha("Impacto no repasse = NÃO", `${dinheiroExport(od.impactoRepasseNao)} (${od.linhasImpactoNao ?? "—"} linha(s))`)}
+    ${linha("Valor líquido considerado", dinheiroExport(od.valorLiquidoConsiderado))}
+    ${linha("Arquivo", od.arquivo ?? "—")}
+    ${linha("Tamanho do arquivo (bytes)", od.tamanhoArquivo ?? "—")}
+    ${od.erro ? linha("Erro", od.erro) : ""}
+  </dl>`}`;
+}
+
 export function montarExportacaoHtml(evidencia) {
   const e = sanitizarProfundo(evidencia);
   const r = e.resumo;
@@ -753,6 +837,8 @@ export function montarExportacaoHtml(evidencia) {
 
   <h2>Resultados resumidos por API</h2>
   ${blocosExemplo}
+
+  ${blocoOnDemandHtml(e.reconciliationOnDemand)}
 
   <h2>Validações financeiras</h2>
   ${v.disponivel ? `
