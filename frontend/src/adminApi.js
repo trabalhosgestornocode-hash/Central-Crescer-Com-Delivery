@@ -73,6 +73,9 @@ export const adminApi = {
   logsDaUnidade: (id, limite) => get(`/unidades/${id}/logs${qs({ limite })}`),
   modulosDaUnidade: (id) => get(`/unidades/${id}/modulos`),
   definirModulosUnidade: (id, modulos) => put(`/unidades/${id}/modulos`, { modulos }),
+  // Dashboard iFood da unidade — estrutura do lançamento e canais.
+  dashboardIfoodDaUnidade: (id) => get(`/unidades/${id}/dashboard-ifood`),
+  salvarDashboardIfoodDaUnidade: (id, dados) => put(`/unidades/${id}/dashboard-ifood`, dados),
 
   // Estrutura organizacional (promover/converter/transferir) — cada uma é
   // uma transação única no banco (migration 053).

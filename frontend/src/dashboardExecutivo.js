@@ -33,6 +33,7 @@ import { planoAcaoHtml, fmtPp } from "./dashboardExecutivoPlano.js";
 // Formatadores de 2 casas — SÓ para a tabela de Indicadores de Rentabilidade
 // (ver renderIndicadores). O resto do Dashboard segue `fmtPct`/`fmtPp` de 1 casa.
 import { fmtPctRentabilidade, fmtPpRentabilidade } from "./dashboardExecutivoRentabilidade.js";
+import { atualizarTutorialDashboard } from "./dashboardExecutivoTutorial.js";
 
 const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 const ABAS = [
@@ -341,6 +342,12 @@ async function carregarConteudo({ silencioso = false } = {}) {
     dex.dadosMes = data;
     renderModeloBox();
     renderAbaAtual();
+    // Sanduíches + Saladas: botão "Como preencher" + abertura automática na
+    // 1ª visita. Unidade padrão: nada é inserido (markup de sempre).
+    atualizarTutorialDashboard({
+      dadosMes: data, unidadeId: dex.unidadeId, usuarioId: state.sessao?.usuario?.id ?? null,
+      cabecalho: el(".dex-head-txt"),
+    });
   } catch (e) {
     if (contextoMudou(g)) return;
     if (minhaGeracao !== geracaoConteudo) return;

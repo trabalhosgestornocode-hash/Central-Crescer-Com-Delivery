@@ -17,6 +17,7 @@ export const EVENTOS_DASHBOARD_IFOOD = Object.freeze({
   LANCAMENTO_EXCLUIDO: "dashboard_ifood.lancamento_excluido",
   LANCAMENTO_MENSAL_ATUALIZADO: "dashboard_ifood.lancamento_mensal_atualizado",
   MODELO_LOGISTICO_ATUALIZADO: "dashboard_ifood.modelo_logistico_atualizado",
+  ESTRUTURA_ATUALIZADA: "dashboard_ifood.estrutura_atualizada",
 });
 
 /**

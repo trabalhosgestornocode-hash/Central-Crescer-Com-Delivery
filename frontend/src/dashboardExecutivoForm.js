@@ -10,6 +10,13 @@ import {
 } from "./api.js";
 import { icon } from "./icons.js";
 import { aplicarMascaraMoeda, formatarMoedaBRL, numeroDecimal, numeroDecimalOuIndefinido } from "./numeroDecimal.js";
+// Dia MULTICANAL (Checkpoint E): só entra em ação quando o GET por data traz o
+// bloco `multicanal` — dia padrão segue exatamente o fluxo de sempre.
+import {
+  criarEstadoMulticanal, htmlSituacaoCanais, htmlDesempenhoMulticanal, htmlFinanceiroMulticanal, ligarCanais,
+  validarEtapaMulticanal, payloadMulticanal, financeiroMulticanalCompleto, camposConsolidadosParaConferencia, mensagemSinalQueda,
+  htmlConferenciaMulticanal,
+} from "./dashboardExecutivoCanais.js";
 
 const MOTIVOS_SEM_OPERACAO = ["Folga", "Feriado", "Manutenção", "Problema operacional", "Falta de insumos", "Fechamento temporário", "Outro"];
 
@@ -65,6 +72,8 @@ function camposDoLancamento(l) {
 // dashboardExecutivo.calc.js#INDICADORES_POR_MODELO, espelhada aqui só para
 // exibição/validação do formulário).
 function mostraEntregadores() {
+  // Multicanal: a aplicabilidade vem do backend (modelo vigente NA DATA).
+  if (fm.mc) return fm.mc.entregadoresAplicavel;
   return fm.modeloLogistico !== "full_service";
 }
 
@@ -92,6 +101,8 @@ export async function abrirLancamentoModal({ data, unidadeId, modeloLogistico, e
     // no backend) — valores por omissão aqui só cobrem o instante antes da
     // resposta chegar, nunca usados pra decidir nada sozinhos.
     mostrarFinanceiro: true, periodoFinanceiroInicio: data, periodoFinanceiroFim: data,
+    // Estado por canal (dashboardExecutivoCanais.js) — null em dia padrão.
+    mc: null,
   };
   try {
     const resp = await carregarLancamentoNoFormulario();
@@ -121,6 +132,8 @@ async function carregarLancamentoNoFormulario() {
   fm.mostrarFinanceiro = resp.mostrarFinanceiro;
   fm.periodoFinanceiroInicio = resp.periodoFinanceiroInicio;
   fm.periodoFinanceiroFim = resp.periodoFinanceiroFim;
+  // A estrutura é a DO DIA (o backend já decide): bloco presente = multicanal.
+  fm.mc = resp.multicanal ? criarEstadoMulticanal(resp.multicanal) : null;
   if (resp.lancamento) {
     fm.lancamentoId = resp.lancamento.id;
     fm.statusOriginal = resp.lancamento.status;
@@ -141,6 +154,8 @@ async function carregarLancamentoNoFormulario() {
 function primeiroPassoIncompletoIndex() {
   const passos = passosAtivos();
   const c = fm.campos;
+  // Multicanal: o backend já devolve a etapa onde o rascunho parou.
+  if (fm.mc?.etapaIncompleta && passos.includes(fm.mc.etapaIncompleta)) return passos.indexOf(fm.mc.etapaIncompleta) + 1;
   if (c.situacao === "sem_operacao" && !c.motivoSemOperacao) return passos.indexOf("situacao") + 1;
   if (passos.includes("financeiro") && situacaoOperou(c.situacao) && c.valorVendasIfood === "") return passos.indexOf("financeiro") + 1;
   return passos.length;
@@ -394,7 +409,8 @@ function botaoUltimoPasso() {
   // oferecia o botão). Quando o Financeiro é elegível, ainda exige o campo
   // principal preenchido antes de habilitar — evita um round-trip óbvio; os
   // demais campos ficam a cargo da validação do servidor (autoridade final).
-  const financeiroExigidoEPreenchido = !fm.mostrarFinanceiro || fm.campos.valorVendasIfood !== "";
+  const financeiroExigidoEPreenchido = !fm.mostrarFinanceiro
+    || (fm.mc ? financeiroMulticanalCompleto(fm.mc) : fm.campos.valorVendasIfood !== "");
   const podeFinalizar = !situacaoOperou(fm.campos.situacao) || financeiroExigidoEPreenchido;
   return podeFinalizar
     ? `<button class="btn btn-primary" id="dex-f-finalizar">${fm.modoCorrecao ? "Salvar correção" : "Finalizar lançamento"}</button>`
@@ -418,7 +434,7 @@ function passoSituacao() {
       <label class="cfg-campo"><span>Motivo *</span>
         <select id="dex-motivo">${MOTIVOS_SEM_OPERACAO.map((mo) => `<option ${c.motivoSemOperacao === mo ? "selected" : ""}>${mo}</option>`).join("")}</select>
       </label>
-    </div>
+    </div>${fm.mc ? htmlSituacaoCanais(fm.mc, { visivel: situacaoOperou(c.situacao) }) : ""}
     <label class="cfg-campo"><span>Observação (opcional)</span><input type="text" id="dex-obs" value="${escapeHtml(c.observacao)}"></label>`;
 }
 
@@ -430,8 +446,9 @@ function passoDesempenho() {
   if (!situacaoOperou(c.situacao)) {
     return `<p class="dex-form-info">Situação "${c.situacao === "sem_operacao" ? "Sem operação" : "Zero vendas"}" — os campos de desempenho e financeiro ficam zerados automaticamente.</p>`;
   }
-  const ticket = ticketMedioPreview(c);
   const inicioMes = `${fm.data.slice(0, 8)}01`;
+  if (fm.mc) return htmlDesempenhoMulticanal(fm.mc, { inicioMesBr: fmtDataBr(inicioMes), dataBr: fmtDataBr(fm.data), mostrarFinanceiro: fm.mostrarFinanceiro });
+  const ticket = ticketMedioPreview(c);
   return `
     <p class="dex-form-info">${icon("bar-chart", { size: 13 })} Desempenho acumulado do mês até aqui — informe o TOTAL desde ${fmtDataBr(inicioMes)} até ${fmtDataBr(fm.data)} (não só o que esse dia fez sozinho). O sistema calcula automaticamente quanto cada dia rendeu por conta própria, pela diferença com o acumulado do dia anterior. Preencha caso tenha acesso às informações — nada aqui é obrigatório: o que ficar em branco fica registrado como "não informado", nunca como zero.</p>
     <div class="cfg-form-grid">
@@ -457,6 +474,7 @@ function ticketMedioPreview(c) {
 function passoFinanceiro() {
   const c = fm.campos;
   if (!situacaoOperou(c.situacao)) return `<p class="dex-form-info">Sem valores financeiros para esta situação.</p>`;
+  if (fm.mc) return htmlFinanceiroMulticanal(fm.mc, { inicioBr: fmtDataBr(fm.periodoFinanceiroInicio), fimBr: fmtDataBr(fm.periodoFinanceiroFim) });
   const calc = calculoPreview(c);
   const mostrarEntreg = mostraEntregadores();
   return `
@@ -505,7 +523,11 @@ function calculoPreview(c) {
 // ETAPA 4 — CONFERÊNCIA
 // ---------------------------------------------------------------------------
 function passoConferencia() {
-  const c = fm.campos;
+  // Sanduíches + Saladas: os avisos/inconsistências continuam avaliados sobre o
+  // CONSOLIDADO (mesma regra do modo padrão); o corpo da conferência mostra os
+  // quatro blocos (Sanduíches, Saladas, Operação da unidade, Consolidado).
+  const c = fm.mc ? camposConsolidadosParaConferencia(fm.mc, fm.campos) : fm.campos;
+  if (fm.mc && situacaoOperou(c.situacao)) return conferenciaMulticanal(c);
   const linha = (l, v) => `<div class="dex-conf-item"><span>${l}</span><b>${v}</b></div>`;
   if (!situacaoOperou(c.situacao)) {
     fm.avisos = [];
@@ -570,6 +592,25 @@ function passoConferencia() {
     ${fm.modoCorrecao ? campoMotivoCorrecao() : ""}`;
 }
 
+/** Etapa 4 de um dia Sanduíches + Saladas — blocos somente leitura + os mesmos avisos/confirmações do modo padrão. */
+function conferenciaMulticanal(c) {
+  const avisos = fm.mostrarFinanceiro ? [...calcularAvisos(c), ...fm.avisosServidor] : [];
+  fm.avisos = avisos;
+  return `
+    ${htmlConferenciaMulticanal(fm.mc, { mostrarFinanceiro: fm.mostrarFinanceiro })}
+    ${fm.mostrarFinanceiro ? "" : `<p class="dex-form-info">${icon("banknote", { size: 13 })} Financeiro ainda não disponível para esta data — o iFood só consolida com 1 dia
+      de atraso. Você pode finalizar este dia normalmente com os dados acima; quando esta data virar "ontem", volte
+      aqui para completar o Financeiro (o registro atual não precisa ser desfeito).</p>`}
+    ${avisos.length ? `
+      <div class="dex-avisos">
+        <b>${icon("alert-triangle", { size: 13 })} Inconsistências encontradas:</b>
+        <ul>${avisos.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul>
+        <label class="dex-radio"><input type="checkbox" id="dex-confirmar-avisos" ${fm.confirmarAvisos ? "checked" : ""}> Estou ciente e confirmo os valores mesmo assim.</label>
+      </div>` : ""}
+    ${blocoQuedaMaterial()}
+    ${fm.modoCorrecao ? campoMotivoCorrecao() : ""}`;
+}
+
 /**
  * Bloco de confirmação REFORÇADA para queda de acumulado material (> R$ 50,
  * ver LIMIAR_QUEDA_MATERIAL_REAIS no backend) — só aparece depois que uma
@@ -584,7 +625,7 @@ function blocoQuedaMaterial() {
   return `
     <div class="dex-avisos dex-avisos-perigo">
       <b>${icon("alert-triangle", { size: 13 })} Quedas de acumulado que exigem confirmação reforçada:</b>
-      <ul>${fm.sinaisQuedaMaterial.map((s) => `<li>${escapeHtml(s.mensagem)}</li>`).join("")}</ul>
+      <ul>${fm.sinaisQuedaMaterial.map((s) => `<li>${escapeHtml(mensagemSinalQueda(s))}</li>`).join("")}</ul>
       <label class="dex-radio"><input type="checkbox" id="dex-confirmar-queda-material" ${fm.confirmarQuedaMaterial ? "checked" : ""}> Confirmo que verifiquei os valores e a queda é real (não é erro de digitação).</label>
       <label class="cfg-campo ed-campo-full"><span>Justificativa da queda (obrigatório, mín. 10 caracteres) *</span>
         <textarea id="dex-justificativa-queda" rows="3" maxlength="500" placeholder="Explique por que o valor deste dia é menor que o último Financeiro Oficial (ex.: estorno confirmado pelo iFood, correção retroativa, ajuste de conciliação).">${escapeHtml(fm.justificativaQuedaAcumulado)}</textarea>
@@ -613,10 +654,19 @@ function calcularAvisos(c) {
 // LEITURA DOS CAMPOS DO DOM -> fm.campos
 // ---------------------------------------------------------------------------
 function wirePasso(m, chave) {
+  if (fm.mc && chave !== "conferencia" && (chave === "situacao" || situacaoOperou(fm.campos.situacao))) {
+    ligarCanais(m, fm.mc, chave, {
+      rerender: () => renderPasso(m), mostrarFinanceiro: fm.mostrarFinanceiro, aoAlterarFinanceiro: descartarConfirmacoesDeQueda,
+    });
+    if (chave !== "situacao") return;
+  }
   if (chave === "situacao") {
     m.querySelectorAll('input[name="situacao"]').forEach((r) => r.addEventListener("change", (e) => {
       fm.campos.situacao = e.target.value;
       m.querySelector("#dex-sem-op").hidden = e.target.value !== "sem_operacao";
+      // Situação por canal só existe com a unidade operando (normal/parcial).
+      const porCanal = m.querySelector("#dex-mc-situacao");
+      if (porCanal) porCanal.hidden = !situacaoOperou(e.target.value);
     }));
     m.querySelector("#dex-motivo")?.addEventListener("change", (e) => { fm.campos.motivoSemOperacao = e.target.value; });
     m.querySelector("#dex-obs")?.addEventListener("input", (e) => { fm.campos.observacao = e.target.value; });
@@ -637,15 +687,7 @@ function wirePasso(m, chave) {
         aoAlterar: (valor) => {
           fm.campos[campo] = valor;
           atualizarPreviewFinanceiro(m);
-          // Um valor financeiro mudou depois de uma rejeição por queda de
-          // acumulado — a mensagem/justificativa antiga não vale mais para o
-          // número novo (pode nem ser mais uma queda). Nunca reenvia uma
-          // confirmação "presa" a um valor diferente do que foi de fato
-          // confirmado; o próximo "Finalizar" reavalia do zero no servidor.
-          if (fm.sinaisQuedaMaterial.length || fm.avisosServidor.length) {
-            fm.sinaisQuedaMaterial = []; fm.avisosServidor = [];
-            fm.confirmarQuedaMaterial = false; fm.justificativaQuedaAcumulado = "";
-          }
+          descartarConfirmacoesDeQueda();
         },
       });
     });
@@ -655,6 +697,19 @@ function wirePasso(m, chave) {
     m.querySelector("#dex-confirmar-queda-material")?.addEventListener("change", (e) => { fm.confirmarQuedaMaterial = e.target.checked; });
     m.querySelector("#dex-justificativa-queda")?.addEventListener("input", (e) => { fm.justificativaQuedaAcumulado = e.target.value; });
     m.querySelector("#dex-motivo-correcao")?.addEventListener("input", (e) => { fm.motivoCorrecao = e.target.value; });
+  }
+}
+
+/**
+ * Um valor financeiro mudou depois de uma rejeição por queda de acumulado — a
+ * mensagem/justificativa antiga não vale mais para o número novo (pode nem ser
+ * mais uma queda). Nunca reenvia uma confirmação "presa" a um valor diferente
+ * do que foi de fato confirmado; o próximo "Finalizar" reavalia no servidor.
+ */
+function descartarConfirmacoesDeQueda() {
+  if (fm.sinaisQuedaMaterial.length || fm.avisosServidor.length) {
+    fm.sinaisQuedaMaterial = []; fm.avisosServidor = [];
+    fm.confirmarQuedaMaterial = false; fm.justificativaQuedaAcumulado = "";
   }
 }
 
@@ -683,6 +738,11 @@ function atualizarPreviewFinanceiro(m) {
 function validarPassoAtual(m) {
   const c = fm.campos;
   const chave = passosAtivos()[fm.passo - 1];
+  if (fm.mc && situacaoOperou(c.situacao) && chave !== "conferencia") {
+    const erro = validarEtapaMulticanal(fm.mc, chave, { mostrarFinanceiro: fm.mostrarFinanceiro });
+    if (erro) { toast(erro); return false; }
+    return true;
+  }
   if (chave === "situacao") {
     if (c.situacao === "sem_operacao" && !c.motivoSemOperacao) {
       c.motivoSemOperacao = m.querySelector("#dex-motivo")?.value || "";
@@ -746,6 +806,7 @@ function payloadBase(status) {
     seVersao: fm.lancamentoId ? fm.atualizadoEm || undefined : undefined,
   };
   if (c.situacao === "sem_operacao") return { ...base, motivoSemOperacao: c.motivoSemOperacao };
+  if (fm.mc) return payloadDiaMulticanal(base, c);
   if (c.situacao === "zero_vendas") return { ...base, novosClientes: numOuIndefinido(c.novosClientes) };
   const desempenho = {
     // Desempenho: opcional, nunca vira 0 por conta própria.
@@ -776,6 +837,24 @@ function payloadBase(status) {
     // omitido do corpo (mesmo padrão de `numOuIndefinido` acima).
     confirmarQuedaMaterial: fm.sinaisQuedaMaterial.length ? fm.confirmarQuedaMaterial : undefined,
     justificativaQuedaAcumulado: fm.sinaisQuedaMaterial.length ? (fm.justificativaQuedaAcumulado || undefined) : undefined,
+  };
+}
+
+/**
+ * Dia multicanal: `canais` (+ taxa compartilhada) no contrato do backend —
+ * NUNCA o consolidado (o servidor soma os canais). "Zero vendas" da unidade
+ * não manda canais: o backend gera todos como "sem vendas".
+ */
+function payloadDiaMulticanal(base, c) {
+  if (!situacaoOperou(c.situacao)) return base;
+  return {
+    ...base,
+    ...payloadMulticanal(fm.mc, { situacao: c.situacao, mostrarFinanceiro: fm.mostrarFinanceiro }),
+    ...(fm.mostrarFinanceiro ? {
+      confirmarAvisos: fm.confirmarAvisos,
+      confirmarQuedaMaterial: fm.sinaisQuedaMaterial.length ? fm.confirmarQuedaMaterial : undefined,
+      justificativaQuedaAcumulado: fm.sinaisQuedaMaterial.length ? (fm.justificativaQuedaAcumulado || undefined) : undefined,
+    } : {}),
   };
 }
 
