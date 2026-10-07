@@ -686,6 +686,46 @@ export function mascararRequestId(id) {
 }
 
 /**
+ * Cópia do item (venda/evento) para o bloco "Detalhe técnico (JSON
+ * sanitizado)": `merchant.id` (Sales) e `comerciante.id` (Events) saem
+ * mascarados (`abcd****wxyz`), e qualquer outra ocorrência do MESMO id no
+ * JSON também. Nunca muta o original (a tela e os cálculos seguem usando
+ * ele). Valores financeiros e demais campos ficam intactos. PURA.
+ */
+export function itemParaJsonTecnico(item) {
+  if (!item || typeof item !== "object") return item;
+  const copia = JSON.parse(JSON.stringify(item));
+  const ids = new Set([copia.merchant?.id, copia.comerciante?.id].filter((v) => typeof v === "string" && v.trim()));
+  if (!ids.size) return copia;
+  const mascarar = (v) => {
+    if (typeof v === "string") return ids.has(v) ? mascararRequestId(v) : v;
+    if (Array.isArray(v)) return v.map(mascarar);
+    if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, mascarar(x)]));
+    return v;
+  };
+  return mascarar(copia);
+}
+
+/**
+ * Solicitação On Demand HISTÓRICA (expirada, > 24h) — vem do
+ * banco via GET .../on-demand?competencia= com `historico: true`. Só rótulos
+ * para exibição/evidência; nada aqui retoma acompanhamento. PURA.
+ */
+export function derivarHistoricoOnDemand(h) {
+  if (!h || h.historico !== true) return null;
+  const situacao = h.status === "error" ? { rotulo: FASE_ON_DEMAND_ROTULO.falhou, classe: "bad" }
+    : h.status === "processed" ? { rotulo: "Concluída", classe: "ok" }
+    : { rotulo: "Encerrada sem status final (validade expirada)", classe: "muted" };
+  return {
+    situacao,
+    statusRotulo: STATUS_OD_HISTORICO_ROTULO[h.status] ?? h.status ?? "—",
+    erro: h.status === "error" ? (h.mensagemErro || MENSAGEM_ERRO_OD_SEM_MOTIVO) : null,
+    validade: h.expirado ? "Expirada (janela de 24h do iFood encerrada)" : "Dentro da janela de 24h",
+  };
+}
+const STATUS_OD_HISTORICO_ROTULO = Object.freeze({ solicitado: "Solicitada", created: "Criada", enqueue: "Na fila", enqueued: "Na fila", processed: "Concluída", error: "Erro" });
+
+/**
  * Evidência da Reconciliation ON DEMAND — lê SÓ o sub-estado do On Demand
  * (`financeiro.reconciliation.onDemand`): requestId da solicitação e o
  * resultado do GET de status desse requestId (arquivo já parseado pelo
@@ -698,6 +738,21 @@ export function montarEvidenciaOnDemand(od, { ambiente } = {}) {
   const sub = od ?? {};
   const resultado = sub.resultado ?? null;
   const requestId = sub.requestId ?? resultado?.requestId ?? null;
+  // Sem solicitação acompanhada nesta sessão, mas com histórico gravado no
+  // banco (expirada): evidência do estado PERSISTIDO, requestId já mascarado.
+  const hist = !requestId && sub.historico?.historico === true ? sub.historico : null;
+  if (hist) {
+    return {
+      tipo: "reconciliation_on_demand", ambiente: ambiente ?? null, amostraHomologacao: ambiente === "homologacao",
+      solicitado: true, historico: true, competencia: hist.competencia ?? sub.competencia ?? null,
+      requestId: hist.requestIdMascarado ?? null, status: hist.status ?? null, reutilizado: null,
+      solicitadoEm: hist.solicitadoEm ?? null, expirado: hist.expirado === true,
+      csvProcessado: false, quantidadeLinhas: null, totalBruto: null, impactoRepasseSim: null, impactoRepasseNao: null,
+      linhasImpactoSim: null, linhasImpactoNao: null, linhasImpactoNaoInformado: null, valorLiquidoConsiderado: null,
+      formatoDetectado: null, delimitadorDetectado: null, arquivo: null, tamanhoArquivo: null,
+      erro: hist.status === "error" ? (hist.mensagemErro ?? MENSAGEM_ERRO_OD_SEM_MOTIVO) : null,
+    };
+  }
   // Só o resultado do MESMO requestId conta (troca de solicitação = resultado antigo descartado).
   const doRequest = resultado && (!resultado.requestId || !requestId || resultado.requestId === requestId) ? resultado : null;
   const arquivo = doRequest?.arquivo ?? null;
@@ -708,6 +763,7 @@ export function montarEvidenciaOnDemand(od, { ambiente } = {}) {
     ambiente: ambiente ?? null,
     amostraHomologacao: ambiente === "homologacao",
     solicitado: !!requestId,
+    historico: false,
     competencia: doRequest?.competencia ?? sub.competencia ?? null,
     requestId: mascararRequestId(requestId),
     status: doRequest?.status ?? (requestId ? "solicitado" : null),

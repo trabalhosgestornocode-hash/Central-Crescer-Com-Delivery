@@ -84,16 +84,30 @@ export async function registrar({ organizacaoId, unidadeId, conexaoId, competenc
   );
 }
 
-/** Solicitação ainda válida (< 24h) da conexão para a competência, ou null. */
-export async function obterVigente({ organizacaoId, unidadeId, conexaoId, competencia, db = supabase }) {
+/**
+ * Última solicitação PERSISTIDA da conexão para a competência — vigente ou
+ * não (uma linha por conexão + competência). Só leitura: usada para exibir o
+ * histórico/evidência de uma solicitação já expirada ou finalizada.
+ */
+export async function obterUltima({ organizacaoId, unidadeId, conexaoId, competencia, db = supabase }) {
   exigirChave({ organizacaoId, unidadeId, conexaoId });
-  const r = await executar(
+  return executar(
     () => db.from(TABELA).select("*")
       .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("conexao_id", conexaoId)
       .eq("competencia", competencia).maybeSingle(),
     () => memoria.get(chaveMemoria({ organizacaoId, unidadeId, conexaoId, competencia })) ?? null,
   );
+}
+
+/** Solicitação ainda válida (< 24h) da conexão para a competência, ou null. */
+export async function obterVigente(chave) {
+  const r = await obterUltima(chave);
   return vigente(r) ? r : null;
+}
+
+/** A solicitação ainda está dentro da validade de 24h do requestId? */
+export function estaVigente(registro, agora = Date.now()) {
+  return vigente(registro, agora);
 }
 
 /** Solicitação pelo requestId — SÓ se pertence a esta org + unidade + conexão. */

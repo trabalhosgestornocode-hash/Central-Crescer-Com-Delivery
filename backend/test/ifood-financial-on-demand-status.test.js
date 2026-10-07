@@ -49,6 +49,7 @@ function solicitacoesFalso(inicial = {}) {
     registro: r, chamadas,
     async obterPorRequestId(k) { return k.requestId === REQ && k.conexaoId === "conx-A" ? r : null; },
     async obterVigente(k) { return k.competencia === r.competencia && k.conexaoId === "conx-A" ? r : null; },
+    async obterUltima(k) { return k.competencia === r.competencia && k.conexaoId === "conx-A" ? r : null; },
     // Mesma regra do registro real: mensagem_erro só existe no "error".
     async atualizarStatus(k) { chamadas.atualizarStatus.push(k); r.status = k.status; r.mensagem_erro = k.status === "error" ? (k.mensagemErro ?? null) : null; return r; },
   };
