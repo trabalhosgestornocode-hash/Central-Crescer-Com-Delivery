@@ -1019,3 +1019,40 @@ export const FASE_ON_DEMAND_ROTULO = Object.freeze({
   tempo_esgotado: "Ainda processando — acompanhamento automático pausado",
   cancelado: "Acompanhamento interrompido",
 });
+
+// ---------------------------------------------------------------------------
+// Reconciliation mensal: competência CONSULTADA x competência DOS REGISTROS.
+// O backend devolve a consultada (`resultado.competencia`, eco do parâmetro
+// enviado ao iFood) e as competências contadas na coluna `competencia` do CSV
+// (`arquivo.competenciasArquivo`). No ambiente de homologação o iFood devolve
+// um arquivo de exemplo com competência própria (ex.: consulta 2026-09 ->
+// registros 2025-08). A interface NUNCA apresenta a competência dos registros
+// como se fosse a consultada, e nunca converte uma na outra.
+// ---------------------------------------------------------------------------
+
+/** "2026-09" -> "09/2026"; qualquer outro formato volta como veio. */
+export function fmtCompetencia(c) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(c ?? "").trim());
+  return m ? `${m[2]}/${m[1]}` : String(c ?? "");
+}
+
+/**
+ * PURA. Compara a competência consultada com as competências do arquivo.
+ * `situacao`:
+ *   - null           — sem resultado/arquivo, ou o CSV não tem a coluna `competencia`;
+ *   - "confere"      — todos os registros com competência são da consultada;
+ *   - "amostra"      — divergem, e a unidade está em homologação (fixture do iFood);
+ *   - "divergente"   — divergem FORA da homologação (dado real inconsistente: alerta).
+ * @param {object|null} resultado resposta de GET /financial/reconciliation
+ * @param {{homologacao?: boolean}} [opts] decisão do backend (/status.financialHomologacao)
+ */
+export function derivarCompetenciaReconciliation(resultado, { homologacao = false } = {}) {
+  const consultada = resultado?.competencia ?? null;
+  const ca = resultado?.arquivo?.competenciasArquivo;
+  const noArquivo = ca?.colunaEncontrada ? ca.competencias ?? [] : [];
+  const base = { consultada, noArquivo, situacao: null };
+  if (!consultada || !ca?.colunaEncontrada || noArquivo.length === 0) return base;
+  const confere = noArquivo.every((x) => x.competencia === consultada);
+  if (confere) return { ...base, situacao: "confere" };
+  return { ...base, situacao: homologacao === true ? "amostra" : "divergente" };
+}
