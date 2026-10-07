@@ -640,7 +640,12 @@ export function montarEvidenciaHomologacao({ geradoEm, status, financeiro }) {
         hashVerificado: arquivo?.integridadeVerificada ?? null, // true/false/null (null = iFood não mandou sha256)
         formatoDetectado: arquivo ? (arquivo.eraGzip ? "csv_gzip" : "csv") : null,
         delimitadorDetectado: arquivo?.delimitador ?? null,
-        exemplo: primeiraLinha ? sanitizarProfundo(primeiraLinha) : null,
+        // Só as colunas financeiras da visão de evidência — a linha crua traria
+        // LOJA_ID, CNPJ, PEDIDO_ASSOCIADO_IFOOD etc. para o JSON/HTML exportado.
+        exemplo: (() => {
+          const p = primeiraLinha ? projetarArquivoParaEvidencia({ colunas: arquivo.colunas, linhas: [primeiraLinha] }) : null;
+          return p?.colunas.length ? sanitizarProfundo(p.linhas[0]) : null;
+        })(),
       };
     })(),
   };
@@ -1055,4 +1060,83 @@ export function derivarCompetenciaReconciliation(resultado, { homologacao = fals
   const confere = noArquivo.every((x) => x.competencia === consultada);
   if (confere) return { ...base, situacao: "confere" };
   return { ...base, situacao: homologacao === true ? "amostra" : "divergente" };
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation — VISÃO DE EVIDÊNCIA (homologação). A tabela operacional
+// (todas as colunas do CSV) continua existindo; esta é só uma PROJEÇÃO para
+// apresentar o requisito financeiro sem identificadores técnicos (LOJA_ID,
+// CNPJ, PEDIDO_ASSOCIADO_IFOOD, ids externos/curtos, UUIDs...).
+//   * ALLOWLIST de colunas financeiras — coluna desconhecida NUNCA aparece
+//     (falha fechada; nada depende do arquivo de exemplo atual);
+//   * cabeçalhos como vieram (sem renomear) e linhas na ordem e quantidade
+//     originais; valores intactos, exceto UUID/CNPJ embutido numa célula
+//     permitida, que é mascarado e contado;
+//   * nenhum cálculo financeiro novo: o resumo é o `resumoRepasse` do backend.
+// ---------------------------------------------------------------------------
+
+/** Colunas financeiras exibidas na evidência, na ordem de exibição (nome normalizado). */
+export const COLUNAS_EVIDENCIA_RECONCILIATION = Object.freeze([
+  "competencia",
+  "data_fato_gerador", "data_lancamento", "data_do_lancamento",
+  "fato_gerador", "tipo_lancamento", "descricao_lancamento",
+  "valor", "impacto_no_repasse",
+  "base_calculo", "percentual_taxa",
+  "metodo_pagamento", "parcela", "numero_parcela", "quantidade_parcelas",
+  "data_repasse_esperada",
+]);
+
+/** "Descrição Lançamento" / "DESCRICAO_LANCAMENTO" -> "descricao_lancamento". */
+export function normalizarNomeColunaCsv(c) {
+  return String(c ?? "").replace(/^﻿/, "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+const RE_UUID_EMBUTIDO = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const RE_CNPJ_EMBUTIDO = /\b\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\b|\b\d{14}\b/g;
+const CNPJ_MASCARADO = "**.***.***/****-**";
+
+/** Mascara UUID/CNPJ dentro de um texto. PURA. @returns {{valor, mascarados: number}} */
+export function mascararIdsEmbutidos(valor) {
+  if (typeof valor !== "string") return { valor, mascarados: 0 };
+  let mascarados = 0;
+  const saida = valor
+    .replace(RE_UUID_EMBUTIDO, (m) => { mascarados += 1; return mascararRequestId(m); })
+    .replace(RE_CNPJ_EMBUTIDO, () => { mascarados += 1; return CNPJ_MASCARADO; });
+  return { valor: saida, mascarados };
+}
+
+/**
+ * PURA. Projeta o arquivo parseado (`resultado.arquivo`) para a visão de
+ * evidência. Não muta a entrada.
+ * @returns {null|{colunas: string[], linhas: object[], totalLinhas: number, truncado: boolean,
+ *   colunasOcultas: string[], valoresMascarados: number, resumoRepasse: object|null}}
+ */
+export function projetarArquivoParaEvidencia(arquivo) {
+  if (!arquivo || !Array.isArray(arquivo.colunas)) return null;
+  const porNome = new Map();
+  for (const c of arquivo.colunas) {
+    const n = normalizarNomeColunaCsv(c);
+    if (COLUNAS_EVIDENCIA_RECONCILIATION.includes(n) && !porNome.has(n)) porNome.set(n, c);
+  }
+  const colunas = COLUNAS_EVIDENCIA_RECONCILIATION.filter((n) => porNome.has(n)).map((n) => porNome.get(n));
+  let valoresMascarados = 0;
+  const linhas = (arquivo.linhas ?? []).map((linha) => {
+    const saida = {};
+    for (const c of colunas) {
+      const { valor, mascarados } = mascararIdsEmbutidos(linha?.[c] ?? null);
+      valoresMascarados += mascarados;
+      saida[c] = valor;
+    }
+    return saida;
+  });
+  return {
+    colunas,
+    linhas,
+    totalLinhas: arquivo.totalLinhas ?? linhas.length,
+    truncado: !!arquivo.truncado,
+    colunasOcultas: arquivo.colunas.filter((c) => !colunas.includes(c)),
+    valoresMascarados,
+    resumoRepasse: arquivo.resumoRepasse ?? null,
+  };
 }

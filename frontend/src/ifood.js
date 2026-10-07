@@ -23,6 +23,7 @@ import {
   resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
   FASE_ON_DEMAND_ROTULO, MENSAGEM_ERRO_OD_SEM_MOTIVO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
   itemParaJsonTecnico, derivarHistoricoOnDemand, derivarCompetenciaReconciliation, fmtCompetencia,
+  projetarArquivoParaEvidencia,
 } from "./ifoodEstado.js";
 import { criarAcompanhamentoReconciliacao } from "./ifoodReconciliacaoPolling.js";
 
@@ -1337,7 +1338,7 @@ function conteudoAbaReconciliation(f) {
         ${r.arquivo ? `
           ${blocoImpactoRepasse(r.arquivo.resumoRepasse)}
           <div class="ifood-info-linha"><span>Registros no arquivo</span><strong>${r.arquivo.totalLinhas}${r.arquivo.truncado ? " (tabela mostra os 2000 primeiros)" : ""}</strong></div>
-          ${tabelaArquivo(r.arquivo, 10)}
+          ${estado.status?.financialHomologacao === true ? previaEvidenciaArquivo(r.arquivo, 10) : tabelaArquivo(r.arquivo, 10)}
           <div class="ifood-acoes"><button class="btn btn-ghost btn-sm" id="ifrec-detalhe">Ver todos os registros</button></div>
         ` : `<p class="ifood-instrucao">Esta competência não tem arquivo de conciliação disponível.</p>`}
       ` : ""}
@@ -1482,7 +1483,11 @@ function fecharDetalheArquivo() {
   document.removeEventListener("keydown", onKeyDetalheArquivo);
 }
 function onKeyDetalheArquivo(e) { if (e.key === "Escape") fecharDetalheArquivo(); }
-function abrirDetalheArquivoConciliacao(titulo, resultado) {
+// `evidencia: true` (Reconciliation mensal em homologação): abre na VISÃO DE
+// EVIDÊNCIA (só colunas financeiras, ver ifoodEstado.js#projetarArquivoParaEvidencia)
+// e oferece alternar para a tabela completa de uso interno. Sem a opção, o modal
+// é o operacional de sempre (todas as colunas), inclusive no On Demand.
+function abrirDetalheArquivoConciliacao(titulo, resultado, { evidencia = false } = {}) {
   fecharDetalheArquivo();
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -1491,13 +1496,56 @@ function abrirDetalheArquivoConciliacao(titulo, resultado) {
     <div class="modal modal-lg">
       <button class="modal-close" aria-label="Fechar" id="ifrec-arquivo-fechar">×</button>
       <h3>${esc(titulo)}</h3>
-      <p class="ifood-instrucao">${resultado.arquivo.totalLinhas} registro(s)${resultado.arquivo.truncado ? " — exibindo os primeiros 2000" : ""}.</p>
-      ${tabelaArquivo(resultado.arquivo)}
+      <div id="ifrec-arquivo-corpo"></div>
     </div>`;
   overlay.addEventListener("click", (e) => { if (e.target === overlay) fecharDetalheArquivo(); });
   document.body.appendChild(overlay);
   document.addEventListener("keydown", onKeyDetalheArquivo);
   el("#ifrec-arquivo-fechar")?.addEventListener("click", fecharDetalheArquivo);
+  const pintar = (modo) => {
+    const corpo = el("#ifrec-arquivo-corpo");
+    if (!corpo) return;
+    corpo.innerHTML = corpoDetalheArquivo(resultado.arquivo, modo, evidencia);
+    el("#ifrec-arquivo-modo")?.addEventListener("click", () => pintar(modo === "evidencia" ? "completa" : "evidencia"));
+  };
+  pintar(evidencia ? "evidencia" : "completa");
+}
+
+/** Conteúdo do modal: "completa" = tabela operacional; "evidencia" = projeção sem ids técnicos. */
+export function corpoDetalheArquivo(arquivo, modo, alternavel) {
+  if (modo === "evidencia") {
+    const p = projetarArquivoParaEvidencia(arquivo);
+    return `
+      ${avisoVisaoEvidencia(p)}
+      ${blocoImpactoRepasse(p?.resumoRepasse)}
+      <p class="ifood-instrucao">${p?.totalLinhas ?? 0} registro(s)${p?.truncado ? " — exibindo os primeiros 2000" : ""}.</p>
+      ${p?.colunas.length ? tabelaArquivo(p) : ""}
+      <div class="ifood-acoes"><button class="btn btn-ghost btn-sm" id="ifrec-arquivo-modo">Ver tabela completa (uso interno)</button></div>`;
+  }
+  return `
+    <p class="ifood-instrucao">${arquivo.totalLinhas} registro(s)${arquivo.truncado ? " — exibindo os primeiros 2000" : ""}.</p>
+    ${tabelaArquivo(arquivo)}
+    ${alternavel ? `<div class="ifood-acoes"><button class="btn btn-ghost btn-sm" id="ifrec-arquivo-modo">Voltar à visão de evidência</button></div>` : ""}`;
+}
+
+/** Explica o que a visão de evidência mostra e o que ficou de fora (só NOMES de coluna, nunca valores). */
+function avisoVisaoEvidencia(p) {
+  if (!p?.colunas.length) {
+    return `<div class="ifood-aviso warn">Nenhuma coluna financeira reconhecida neste arquivo para a visão de evidência. Use a tabela completa (uso interno).</div>`;
+  }
+  return `
+    <div class="ifood-aviso ok" id="ifrec-visao-evidencia">
+      <strong>Visão de evidência</strong> — todos os registros do arquivo, só com as colunas financeiras (competência, fato gerador, lançamento, valor e impacto no repasse). Valores exibidos exatamente como vieram do iFood.
+      ${p.colunasOcultas.length ? `<br/><span class="ifin-tecnico">Colunas técnicas ocultas nesta visão: ${esc(p.colunasOcultas.join(", "))}</span>` : ""}
+      ${p.valoresMascarados ? `<br/><span class="ifin-tecnico">${p.valoresMascarados} identificador(es) dentro de células exibidas foram mascarados.</span>` : ""}
+    </div>`;
+}
+
+/** Prévia do card mensal em homologação: mesma projeção, primeiras `max` linhas. */
+export function previaEvidenciaArquivo(arquivo, max) {
+  const p = projetarArquivoParaEvidencia(arquivo);
+  if (!p?.colunas.length) return avisoVisaoEvidencia(p);
+  return `${tabelaArquivo(p, max)}<p class="ifin-tecnico">Prévia na visão de evidência (só colunas financeiras). A tabela completa fica disponível em "Ver todos os registros".</p>`;
 }
 
 function statusAntecipacaoClasse(status) {
@@ -2047,7 +2095,7 @@ function pintarFinanceiro() {
     // Reabriu a aba (ou recarregou a página): retoma a solicitação vigente da competência — uma vez só.
     if (!rec.onDemand.retomadaVerificada) retomarReconciliationOnDemand();
     el("#ifrec-detalhe")?.addEventListener("click", () => {
-      if (rec.resultado?.arquivo) abrirDetalheArquivoConciliacao(`Conciliação — competência consultada ${fmtCompetencia(rec.resultado.competencia ?? rec.competencia)}`, rec.resultado);
+      if (rec.resultado?.arquivo) abrirDetalheArquivoConciliacao(`Conciliação — competência consultada ${fmtCompetencia(rec.resultado.competencia ?? rec.competencia)}`, rec.resultado, { evidencia: estado.status?.financialHomologacao === true });
     });
     el("#ifrec-od-detalhe")?.addEventListener("click", () => {
       if (rec.onDemand.resultado?.arquivo) abrirDetalheArquivoConciliacao(`Conciliação sob demanda — ${rec.onDemand.competencia}`, rec.onDemand.resultado);
