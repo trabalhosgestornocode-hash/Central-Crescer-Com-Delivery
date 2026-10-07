@@ -8,8 +8,23 @@ const painel = (destinatarios = []) => ({ destinatarios, categoriasDisponiveis: 
 
 test("status distingue empresa habilitada, automático desligado e bloqueio global", () => {
   const html = htmlStatusWhatsappEmpresa({ status: { codigo: "ENVIO_GLOBAL_DESATIVADO", rotulo: "Envio bloqueado", whatsapp: "conectado", empresaHabilitada: true, envioAutomatico: false, envioRealPermitido: false, destinatariosAtivos: 2, destinatariosTotal: 3 } });
-  for (const texto of ["Conectado", "Desligado", "Habilitada", "2 ativos (de 3)", "Bloqueado", "Nenhum envio ainda"]) assert.ok(html.includes(texto), texto);
+  for (const texto of ["Conectado", "2 ativos (de 3)", "Bloqueado (DISABLED)", "Nenhum envio ainda"]) assert.ok(html.includes(texto), texto);
+  assert.doesNotMatch(html, /Próximo envio possível/, "sem próximo envio, o campo nem aparece");
   assert.equal(htmlStatusWhatsappEmpresa(null), "");
+});
+
+test("interruptores refletem empresa e envio automático (automático desabilitado sem a empresa)", () => {
+  const desligada = htmlAlavancasEmpresa({ status: { empresaHabilitada: false, envioAutomatico: false } });
+  assert.match(desligada, /role="switch" aria-checked="false"[^>]*data-padm-acao="pedir-habilitar-comunicacao"/);
+  assert.match(desligada, /Ative os avisos primeiro/);
+  assert.match(desligada, /role="switch" aria-checked="false"[^>]* disabled/);
+  const ligada = htmlAlavancasEmpresa({ status: { empresaHabilitada: true, envioAutomatico: true } });
+  assert.equal((ligada.match(/aria-checked="true"/g) ?? []).length, 2);
+});
+
+test("formulário de novo destinatário fica recolhido quando já há destinatários", () => {
+  assert.match(htmlDestinatarios(painel([destinatario()])), /<details class="padm-dest-novo">/);
+  assert.match(htmlDestinatarios(painel([])), /<details class="padm-dest-novo" open>/);
 });
 
 test("habilitar empresa não oferece ativação automática antes de habilitada", () => {

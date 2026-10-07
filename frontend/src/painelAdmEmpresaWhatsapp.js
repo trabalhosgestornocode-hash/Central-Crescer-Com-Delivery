@@ -33,61 +33,91 @@ export const ROTULO_MOTIVO = Object.freeze({
 });
 export const rotuloMotivo = (m) => ROTULO_MOTIVO[m] ?? String(m ?? "—");
 
-/** Status operacional da empresa (etapa 10): WhatsApp, envio automático, empresa, destinatários, último envio, próximo envio possível. */
+/**
+ * Grupo recolhível do drawer: o que é consulta ou ajuste eventual fica fechado por padrão, para o operador ver
+ * primeiro só o essencial (situação, interruptores e destinatários). `resumo` aparece ao lado do título mesmo fechado.
+ */
+export function grupo({ titulo, icone = "", resumo = "", corpo, aberto = false, attrs = "" }) {
+  return `
+    <details class="padm-wa-grupo"${aberto ? " open" : ""}${attrs ? ` ${attrs}` : ""}>
+      <summary>
+        ${icone ? `<span class="padm-wa-grupo-ic">${icon(icone, { size: 15 })}</span>` : ""}
+        <span class="padm-wa-grupo-tit">${escapeHtml(titulo)}</span>
+        ${resumo ? `<span class="padm-wa-grupo-resumo">${resumo}</span>` : ""}
+        <span class="padm-wa-grupo-seta" aria-hidden="true">${icon("chevron-right", { size: 14 })}</span>
+      </summary>
+      <div class="padm-wa-grupo-corpo">${corpo}</div>
+    </details>`;
+}
+
+/** Situação da empresa: um chip com o motivo + os fatos do envio em grade compacta (os interruptores mostram empresa/automático). */
 export function htmlStatusWhatsappEmpresa(p) {
   if (!p?.status) return "";
   const s = p.status;
   const n = Number(s.destinatariosAtivos ?? 0);
-  const linhas = [
+  const fatos = [
     ["WhatsApp", escapeHtml(ROTULO_GATEWAY[s.whatsapp] ?? "—")],
-    ["Envio automático", s.envioAutomatico ? "Ativo" : "Desligado"],
-    ["Empresa", s.empresaHabilitada ? "Habilitada" : "Desativada"],
+    ["Envio global", s.envioRealPermitido ? "Permitido" : "Bloqueado (DISABLED)"],
     ["Destinatários", `${n} ativo${n === 1 ? "" : "s"}${s.destinatariosTotal > n ? ` (de ${Number(s.destinatariosTotal)})` : ""}`],
     ["Último envio", s.ultimoEnvioEm ? dt(s.ultimoEnvioEm) : "Nenhum envio ainda"],
-    ["Próximo envio possível", s.proximoEnvioPossivelEm ? dt(s.proximoEnvioPossivelEm) : "—"],
-    ["Envio global (kill switch)", s.envioRealPermitido ? "Permitido" : "Bloqueado — modo DISABLED"],
+    ...(s.proximoEnvioPossivelEm ? [["Próximo envio possível", dt(s.proximoEnvioPossivelEm)]] : []),
   ];
   return `
-    <p>${chip({ classe: TOM_STATUS[s.codigo] ?? "muted", rotulo: s.rotulo })}${s.motivo ? ` <small>${escapeHtml(s.motivo)}</small>` : ""}</p>
-    <dl class="padm-detalhe" data-padm-status-whatsapp>${linhas.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
+    <div class="padm-wa-situacao">${chip({ classe: TOM_STATUS[s.codigo] ?? "muted", rotulo: s.rotulo })}${s.motivo ? `<small>${escapeHtml(s.motivo)}</small>` : ""}</div>
+    <dl class="padm-wa-fatos" data-padm-status-whatsapp>${fatos.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
 }
 
-/** Ativar/desativar os avisos da empresa + envio automático (decisões SEPARADAS; ligar exige confirmação). */
+/** Interruptor visual (role=switch). Sem `acao` fica desabilitado. */
+const interruptor = ({ ligado, acao = "", rotulo }) =>
+  `<button type="button" class="padm-switch" role="switch" aria-checked="${ligado ? "true" : "false"}" aria-label="${escapeHtml(rotulo)}" title="${escapeHtml(rotulo)}"${acao ? ` data-padm-acao="${acao}"` : " disabled"}><i></i></button>`;
+
+/** Uma linha de alavanca: ícone, título, estado em uma frase e o interruptor; a confirmação (quando houver) abre logo abaixo. */
+const alavanca = ({ icone, titulo, estado, ligado, controle, confirmar = "" }) => `
+  <div class="padm-alavanca padm-habilitacao-acao" data-ligado="${ligado ? "1" : "0"}">
+    <span class="padm-alavanca-ic">${icon(icone, { size: 15 })}</span>
+    <div class="padm-alavanca-txt"><strong>${escapeHtml(titulo)}</strong><small>${escapeHtml(estado)}</small></div>
+    ${controle}
+    ${confirmar}
+  </div>`;
+
+const confirmacao = (texto, cancelar, confirmar, rotulo) => `
+  <div class="padm-habilitacao-confirmar" hidden>
+    <p>${texto}</p>
+    <div>
+      <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="${cancelar}">Cancelar</button>
+      <button type="button" class="btn btn-primary btn-sm" data-padm-acao="${confirmar}">${escapeHtml(rotulo)}</button>
+    </div>
+  </div>`;
+
+/** Ativar/desativar os avisos da empresa + envio automático (decisões SEPARADAS; ligar exige confirmação, desligar é direto). */
 export function htmlAlavancasEmpresa(p) {
   if (!p?.status) return "";
   const s = p.status;
   const habilitada = s.empresaHabilitada === true;
-  const habil = habilitada
-    ? `<p>${chip({ classe: "ok", rotulo: "Avisos pelo WhatsApp ativados" })}</p>
-       <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="desabilitar-comunicacao-org">Desativar avisos pelo WhatsApp</button>`
-    : `<div class="padm-habilitacao-acao">
-         <button type="button" class="btn btn-primary btn-sm" data-padm-acao="pedir-habilitar-comunicacao">Ativar avisos pelo WhatsApp</button>
-         <div class="padm-habilitacao-confirmar" hidden>
-           <p>Você vai ativar os avisos pelo WhatsApp para esta empresa. Isso <strong>não</strong> liga o envio automático — é uma decisão separada, logo abaixo.</p>
-           <div>
-             <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="cancelar-habilitar-comunicacao">Cancelar</button>
-             <button type="button" class="btn btn-primary btn-sm" data-padm-acao="confirmar-habilitar-comunicacao">Ativar avisos</button>
-           </div>
-         </div>
-       </div>`;
-  const auto = !habilitada
-    ? `<p class="padm-vazio">Ative os avisos da empresa antes de ligar o envio automático.</p>`
-    : s.envioAutomatico
-      ? `<p>${chip({ classe: "ok", rotulo: "Envio automático ativado" })}</p>
-         <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="desligar-envio-automatico">Desligar envio automático</button>`
-      : `<p>${chip({ classe: "muted", rotulo: "Envio automático desligado" })}</p>
-         <div class="padm-habilitacao-acao">
-           <button type="button" class="btn btn-primary btn-sm" data-padm-acao="pedir-ligar-envio-automatico">Ligar envio automático</button>
-           <div class="padm-habilitacao-confirmar" hidden>
-             <p>As mensagens desta empresa passarão a ser enviadas automaticamente, dentro do horário comercial, para os destinatários ativos e autorizados, respeitando limites e cooldown. Com o modo global em DISABLED nada é enviado.</p>
-             <div>
-               <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="cancelar-ligar-envio-automatico">Cancelar</button>
-               <button type="button" class="btn btn-primary btn-sm" data-padm-acao="confirmar-ligar-envio-automatico">Ligar envio automático</button>
-             </div>
-           </div>
-         </div>`;
-  return `${secao({ titulo: "Avisos pelo WhatsApp", icone: "bell", sub: "Ativar é uma ação do operador, registrada na auditoria. Desativar é sempre permitido.", corpo: habil })}
-    ${secao({ titulo: "Envio automático", icone: "send", sub: "Precisa de ação explícita: habilitar a empresa não liga o envio automático.", corpo: auto })}`;
+  const automatico = habilitada && s.envioAutomatico === true;
+  const avisos = alavanca({
+    icone: "bell", titulo: "Avisos pelo WhatsApp", ligado: habilitada,
+    estado: habilitada ? "Ativados — a empresa pode receber avisos." : "Desativados — nenhum aviso é gerado para esta empresa.",
+    controle: habilitada
+      ? interruptor({ ligado: true, acao: "desabilitar-comunicacao-org", rotulo: "Desativar avisos pelo WhatsApp" })
+      : interruptor({ ligado: false, acao: "pedir-habilitar-comunicacao", rotulo: "Ativar avisos pelo WhatsApp" }),
+    confirmar: habilitada ? "" : confirmacao(
+      "Ativar os avisos pelo WhatsApp para esta empresa? Fica registrado na auditoria. Isso <strong>não</strong> liga o envio automático.",
+      "cancelar-habilitar-comunicacao", "confirmar-habilitar-comunicacao", "Ativar avisos"),
+  });
+  const auto = alavanca({
+    icone: "send", titulo: "Envio automático", ligado: automatico,
+    estado: !habilitada ? "Ative os avisos primeiro." : automatico ? "Ligado — envia no horário comercial, com limites e cooldown." : "Desligado — nada é enviado sozinho.",
+    controle: !habilitada
+      ? interruptor({ ligado: false, rotulo: "Ative os avisos da empresa antes de ligar o envio automático" })
+      : automatico
+        ? interruptor({ ligado: true, acao: "desligar-envio-automatico", rotulo: "Desligar envio automático" })
+        : interruptor({ ligado: false, acao: "pedir-ligar-envio-automatico", rotulo: "Ligar envio automático" }),
+    confirmar: habilitada && !automatico ? confirmacao(
+      "Ligar o envio automático? As mensagens passam a sair sozinhas, no horário comercial, para os destinatários ativos e autorizados. Com o modo global em DISABLED nada é enviado.",
+      "cancelar-ligar-envio-automatico", "confirmar-ligar-envio-automatico", "Ligar envio automático") : "",
+  });
+  return `<div class="padm-alavancas">${avisos}${auto}</div>`;
 }
 
 function checksCategorias(disponiveis, marcadas, nome) {
@@ -106,36 +136,44 @@ function linhaDestinatario(d, categorias) {
   const cats = (d.categorias ?? []).map((c) => rot.get(c) ?? c);
   const id = escapeHtml(d.id);
   const autorizado = d.whatsappStatus === "VALIDADO" && d.consentimento && d.verificado;
+  // Um chip só quando está tudo certo; os problemas aparecem um a um (menos ruído na linha saudável).
+  const chips = d.optOut ? chip({ classe: "critico", rotulo: "Opt-out" })
+    : !d.ativo ? chip({ classe: "muted", rotulo: "Inativo" })
+      : autorizado ? chip({ classe: "ok", rotulo: "Recebendo" })
+        : chip({ classe: tomWa === "ok" ? "atencao" : tomWa, rotulo: tomWa === "ok" ? "Autorização incompleta" : rotWa });
+  const datas = [["Autorizado em", d.autorizadoEm], ["Ativado em", d.ativadoEm]].filter(([, v]) => v).map(([k, v]) => `${k} ${dt(v)}`).join(" · ");
   return `
-    <li class="padm-dest" data-padm-dest="${id}">
+    <li class="padm-dest${d.ativo ? "" : " padm-dest--inativo"}" data-padm-dest="${id}">
       <div class="padm-dest-topo">
-        <strong>${escapeHtml(d.nome)}</strong> <span class="padm-mono">${escapeHtml(d.telefoneMascarado ?? "—")}</span>
-        ${chip({ classe: d.ativo ? "ok" : "muted", rotulo: d.ativo ? "Ativo" : "Inativo" })}
-        ${chip({ classe: tomWa, rotulo: rotWa })}
-        ${d.optOut ? chip({ classe: "critico", rotulo: "Opt-out" }) : ""}
+        <div class="padm-dest-id"><strong>${escapeHtml(d.nome)}</strong><span class="padm-mono">${escapeHtml(d.telefoneMascarado ?? "—")}</span></div>
+        ${chips}
       </div>
       <div class="padm-dest-meta">
-        ${escapeHtml(ROTULO_TIPO[d.tipo] ?? d.tipo ?? "")} · Avisos: ${cats.length ? escapeHtml(cats.join(", ")) : "nenhum"}
-        · Autorizado em: ${d.autorizadoEm ? dt(d.autorizadoEm) : "—"} · Ativado em: ${d.ativadoEm ? dt(d.ativadoEm) : "—"} · Último envio: ${d.ultimoEnvioEm ? dt(d.ultimoEnvioEm) : "—"}
+        ${escapeHtml(ROTULO_TIPO[d.tipo] ?? d.tipo ?? "")} · ${cats.length ? escapeHtml(cats.join(", ")) : "nenhum aviso"} · Último envio: ${d.ultimoEnvioEm ? dt(d.ultimoEnvioEm) : "—"}
       </div>
       <div class="padm-dest-acoes">
-        <button type="button" class="btn btn-ghost btn-sm" data-padm-dest-acao="ativo" data-padm-dest-id="${id}" data-padm-ativo="${d.ativo ? "0" : "1"}">${d.ativo ? "Desativar" : "Reativar"}</button>
-        ${autorizado ? "" : `<button type="button" class="btn btn-ghost btn-sm" data-padm-dest-acao="autorizar" data-padm-dest-id="${id}">Registrar autorização</button>`}
+        ${autorizado || d.optOut ? "" : `<button type="button" class="btn btn-primary btn-sm" data-padm-dest-acao="autorizar" data-padm-dest-id="${id}">Registrar autorização</button>`}
         <button type="button" class="btn btn-ghost btn-sm" data-padm-dest-acao="editar" data-padm-dest-id="${id}">Editar</button>
-        ${d.optOut ? "" : `<button type="button" class="btn btn-ghost btn-sm" data-padm-dest-acao="optout" data-padm-dest-id="${id}">Registrar opt-out</button>`}
+        <button type="button" class="btn btn-ghost btn-sm" data-padm-dest-acao="ativo" data-padm-dest-id="${id}" data-padm-ativo="${d.ativo ? "0" : "1"}">${d.ativo ? "Desativar" : "Reativar"}</button>
       </div>
       <form class="padm-form padm-dest-editar" data-padm-dest-form="editar" data-padm-dest-id="${id}" hidden>
-        <label>Nome<input type="text" name="nome" value="${escapeHtml(d.nome)}" required /></label>
-        <label>Tipo<select name="tipo">${optionsTipo(d.tipo)}</select></label>
-        <label>Novo telefone (DDD + número) — só para trocar; a autorização será refeita
+        <div class="padm-form-linha">
+          <label>Nome<input type="text" name="nome" value="${escapeHtml(d.nome)}" required /></label>
+          <label>Tipo<select name="tipo">${optionsTipo(d.tipo)}</select></label>
+        </div>
+        <label>Novo telefone <small>(só para trocar — a autorização será refeita)</small>
           <input type="text" name="telefone" inputmode="tel" placeholder="11 99999-8888" /></label>
-        <fieldset><legend>Tipos de aviso</legend>${checksCategorias(categorias, d.categorias, "categorias")}</fieldset>
-        <button type="submit" class="btn btn-primary btn-sm">Salvar destinatário</button>
+        <fieldset class="padm-checks"><legend>Avisos que recebe</legend>${checksCategorias(categorias, d.categorias, "categorias")}</fieldset>
+        ${datas ? `<p class="padm-form-nota">${datas}</p>` : ""}
+        <div class="padm-form-rodape">
+          <button type="submit" class="btn btn-primary btn-sm">Salvar</button>
+          ${d.optOut ? "" : `<button type="button" class="btn btn-ghost btn-sm padm-btn-discreto" data-padm-dest-acao="optout" data-padm-dest-id="${id}">Registrar opt-out</button>`}
+        </div>
       </form>
     </li>`;
 }
 
-/** Destinatários (VÁRIOS por empresa) + formulário de novo destinatário. */
+/** Destinatários (VÁRIOS por empresa) + formulário de novo destinatário (recolhido quando já existe alguém). */
 export function htmlDestinatarios(p) {
   if (!p) return "";
   const lista = p.destinatarios ?? [];
@@ -145,22 +183,32 @@ export function htmlDestinatarios(p) {
   const cats = p.categoriasDisponiveis ?? [];
   return secao({
     titulo: "Destinatários", icone: "users",
-    sub: `Quem recebe os avisos desta empresa — cada um é tratado individualmente (limites, cooldown e idempotência próprios).${teto != null ? ` Até ${teto} ativos por empresa.` : ""}`,
+    sub: `${ativos} ativo${ativos === 1 ? "" : "s"}${teto != null ? ` de até ${teto}` : ""} · cada um com limites e cooldown próprios`,
     corpo: `
       ${lista.length ? `<ul class="padm-dest-lista">${lista.map((d) => linhaDestinatario(d, cats)).join("")}</ul>` : `<p class="padm-vazio">Nenhum destinatário cadastrado.</p>`}
-      <form class="padm-form" data-padm-dest-form="novo">
-        <h4>Adicionar destinatário</h4>
-        <label>Nome<input type="text" name="nome" required /></label>
-        <label>Código do país<input type="text" name="ddi" value="55" inputmode="numeric" pattern="[0-9]{1,3}" /></label>
-        <label>Telefone (DDD + número)<input type="text" name="telefone" inputmode="tel" placeholder="11 99999-8888" required /></label>
-        <label>Tipo<select name="tipo">${optionsTipo("secundario")}</select></label>
-        <fieldset><legend>Tipos de aviso</legend>${checksCategorias(cats, cats.map((c) => c.codigo), "categorias")}</fieldset>
-        <label>Observações<input type="text" name="observacoes" /></label>
-        <button type="submit" class="btn btn-primary btn-sm" ${cheio ? "disabled" : ""}>Adicionar destinatário</button>
-        <p class="padm-form-nota">${cheio ? "Limite de destinatários ativos atingido — desative um antes de adicionar." : "O destinatário só recebe depois de a autorização (consentimento) ser registrada. Nada é enviado ao salvar."}</p>
-      </form>`,
+      <details class="padm-dest-novo"${lista.length ? "" : " open"}>
+        <summary>${icon("plus", { size: 14 })} Novo destinatário</summary>
+        <form class="padm-form" data-padm-dest-form="novo">
+          <div class="padm-form-linha">
+            <label>Nome<input type="text" name="nome" required /></label>
+            <label>Tipo<select name="tipo">${optionsTipo("secundario")}</select></label>
+          </div>
+          <div class="padm-form-linha padm-form-linha--tel">
+            <label>DDI<input type="text" name="ddi" value="55" inputmode="numeric" pattern="[0-9]{1,3}" /></label>
+            <label>Telefone (DDD + número)<input type="text" name="telefone" inputmode="tel" placeholder="11 99999-8888" required /></label>
+          </div>
+          <fieldset class="padm-checks"><legend>Avisos que recebe</legend>${checksCategorias(cats, cats.map((c) => c.codigo), "categorias")}</fieldset>
+          <label>Observações <small>(opcional)</small><input type="text" name="observacoes" /></label>
+          <div class="padm-form-rodape">
+            <button type="submit" class="btn btn-primary btn-sm" ${cheio ? "disabled" : ""}>Adicionar destinatário</button>
+          </div>
+          <p class="padm-form-nota">${cheio ? "Limite de destinatários ativos atingido — desative um antes de adicionar." : "Só recebe depois de a autorização ser registrada. Nada é enviado ao salvar."}</p>
+        </form>
+      </details>`,
   });
 }
+
+const ALERTA_SITUACOES = new Set(["PARCIAL", "PARCIAL_EM_ANDAMENTO", "SEM_ENTREGA", "INCERTA"]);
 
 /** Alertas recentes com a ENTREGA por destinatário: uma entrega parcial nunca fica escondida atrás do status "enviado" do alerta. */
 export function htmlAlertasRecentes(p) {
@@ -170,35 +218,36 @@ export function htmlAlertasRecentes(p) {
     ["previstos", e.previstos], ["enviados", e.enviados], ["pendentes", e.pendentes], ["entrega incerta", e.entregaIncerta],
     ["falha permanente", e.falhaPermanente], ["opt-out", e.optOut], ["bloqueados", e.bloqueados], ["expirados", e.expirados],
   ].filter(([r, n]) => n > 0 || r === "previstos" || r === "enviados").map(([r, n]) => `${n} ${r}`).join(" · ");
-  const alerta = (e) => e.situacao === "PARCIAL" || e.situacao === "PARCIAL_EM_ANDAMENTO" || e.situacao === "SEM_ENTREGA" || e.situacao === "INCERTA";
-  return secao({
-    titulo: "Alertas recentes", icone: "bell",
-    sub: "Entrega por destinatário. O status do alerta não muda por uma falha individual; aqui aparece o que cada pessoa recebeu.",
+  const problemas = lista.filter((a) => ALERTA_SITUACOES.has(a.entrega?.situacao)).length;
+  const resumo = !lista.length ? "nenhum"
+    : problemas ? chip({ classe: "atencao", rotulo: `${problemas} com entrega incompleta` })
+      : `${lista.length}`;
+  return grupo({
+    titulo: "Alertas recentes", icone: "bell", resumo, aberto: problemas > 0,
     corpo: lista.length ? `<ul class="padm-alertas-recentes">${lista.map((a) => `
       <li data-situacao="${escapeHtml(a.entrega.situacao)}">
         <strong>${escapeHtml(a.tipo)} · ${escapeHtml(a.dataReferencia)}</strong>
-        <span class="padm-chip${alerta(a.entrega) ? " padm-chip-alerta" : ""}">${escapeHtml(a.entrega.rotulo)}</span>
+        <span class="padm-chip${ALERTA_SITUACOES.has(a.entrega.situacao) ? " padm-chip-alerta" : ""}">${escapeHtml(a.entrega.rotulo)}</span>
         <small>${escapeHtml(cont(a.entrega))}</small>
       </li>`).join("")}</ul>` : `<p class="padm-vazio">Nenhum alerta ainda.</p>`,
   });
 }
 
-/** Limites por empresa: por destinatário × por empresa (em branco = padrão global). */
+/** Limites por empresa: por destinatário × por empresa (em branco = padrão global). Bloco interno do grupo "Configuração". */
 export function htmlLimitesEmpresa(p) {
   const l = p?.configuracao?.limites;
   if (!l) return "";
   const g = l.padraoGlobal ?? {};
-  return secao({
-    titulo: "Limites", icone: "settings",
-    sub: "Dois limites distintos: por destinatário (cota diária e cooldown) e por empresa (todos os destinatários somados). Em branco = padrão global.",
-    corpo: `
-      <p class="padm-form-nota">Padrão global: até ${g.maxPorDestinatarioPorDia ?? "—"} mensagens por destinatário/dia · até ${g.maxPorOrganizacaoPorDia ?? "—"} por empresa/dia.</p>
-      <form id="padm-com-limites-form" class="padm-form">
-        <label>Limite diário da EMPRESA (mensagens)<input type="number" min="1" name="limiteDiarioOrg" value="${l.limiteDiarioOrg ?? ""}" placeholder="padrão" /></label>
-        <label>Cooldown por DESTINATÁRIO (minutos)<input type="number" min="1" name="cooldownMinutos" value="${l.cooldownMinutos ?? ""}" placeholder="padrão" /></label>
-        <button type="submit" class="btn btn-primary btn-sm">Salvar limites</button>
-      </form>`,
-  });
+  return `
+    <form id="padm-com-limites-form" class="padm-form">
+      <h4>Limites de envio</h4>
+      <div class="padm-form-linha">
+        <label>Máx. por dia (empresa)<input type="number" min="1" name="limiteDiarioOrg" value="${l.limiteDiarioOrg ?? ""}" placeholder="padrão" /></label>
+        <label>Cooldown por destinatário (min)<input type="number" min="1" name="cooldownMinutos" value="${l.cooldownMinutos ?? ""}" placeholder="padrão" /></label>
+      </div>
+      <p class="padm-form-nota">Em branco = padrão global: até ${g.maxPorDestinatarioPorDia ?? "—"} mensagens por destinatário/dia · até ${g.maxPorOrganizacaoPorDia ?? "—"} por empresa/dia.</p>
+      <div class="padm-form-rodape"><button type="submit" class="btn btn-ghost btn-sm">Salvar limites</button></div>
+    </form>`;
 }
 
 const OK_ICONE = (ok) => icon(ok ? "check-circle" : "minus-circle", { size: 13 });
@@ -237,18 +286,23 @@ export function htmlResultadoDryRun(r) {
   return `${cab}${blocos}`;
 }
 
-/** Simulação + diagnóstico técnico (variáveis LEGACY do piloto, se ainda existirem). */
+/** "Testar sem enviar" (pré-visualização + dry-run, ambos sem efeito) + diagnóstico técnico (variáveis LEGACY do piloto, se ainda existirem). */
 export function htmlSimulacaoEDiagnostico(p) {
   const leg = p?.diagnostico?.pilotoLegado;
   return `
-    ${secao({
-      titulo: "Simulação (dry-run)", icone: "eye",
-      sub: "Roda o motor completo — alerta, empresa, destinatários, horário, cooldown, limites, idempotência e mensagem — SEM criar nada e SEM chamar o WhatsApp. Funciona mesmo com o modo global em DISABLED.",
-      corpo: `<button type="button" class="btn btn-ghost btn-sm" data-padm-acao="dry-run">Simular envio (dry-run)</button>
-              <div id="padm-com-dryrun" class="padm-dryrun"></div>`,
+    ${grupo({
+      titulo: "Testar sem enviar", icone: "eye", resumo: "nada sai pelo WhatsApp",
+      corpo: `
+        <p class="padm-form-nota">Pré-visualizar mensagem monta o texto exato com dados reais. A simulação roda o motor completo (alerta, destinatários, horário, cooldown, limites e idempotência) sem criar nada. Funciona mesmo com o modo global em DISABLED.</p>
+        <div class="padm-form-rodape">
+          <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="preview-comunicacao">Pré-visualizar mensagem</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="dry-run">Simular envio (dry-run)</button>
+        </div>
+        <div id="padm-com-preview" class="padm-preview-mensagem"></div>
+        <div id="padm-com-dryrun" class="padm-dryrun"></div>`,
     })}
-    ${leg?.configurado ? secao({
-      titulo: "Diagnóstico técnico", icone: "settings",
-      corpo: `<p>${chip({ classe: "muted", rotulo: leg.rotulo })} As variáveis <code>COMUNICACAO_PILOTO_*</code> ainda existem neste ambiente, mas <strong>não têm efeito</strong> e podem ser removidas em um checkpoint separado.</p>`,
+    ${leg?.configurado ? grupo({
+      titulo: "Diagnóstico técnico", icone: "settings", resumo: chip({ classe: "muted", rotulo: leg.rotulo }),
+      corpo: `<p class="padm-form-nota">As variáveis <code>COMUNICACAO_PILOTO_*</code> ainda existem neste ambiente, mas <strong>não têm efeito</strong> e podem ser removidas em um checkpoint separado.</p>`,
     }) : ""}`;
 }

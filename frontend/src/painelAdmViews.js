@@ -33,7 +33,7 @@ import {
   tomVariacao, seloProvisorio, textoCobertura, linhaRanking, barrasEvolucao,
 } from "./painelAdmUi.js";
 import {
-  htmlStatusWhatsappEmpresa, htmlAlavancasEmpresa, htmlDestinatarios, htmlAlertasRecentes, htmlLimitesEmpresa, htmlResultadoDryRun, htmlSimulacaoEDiagnostico,
+  htmlStatusWhatsappEmpresa, htmlAlavancasEmpresa, htmlDestinatarios, htmlAlertasRecentes, htmlLimitesEmpresa, htmlResultadoDryRun, htmlSimulacaoEDiagnostico, grupo,
 } from "./painelAdmEmpresaWhatsapp.js";
 import {
   htmlCabecalhoCentral, htmlCardsSaude, htmlSaudeComunicacao, htmlFluxoComunicacao, htmlEmpresasCentral, htmlHistoricoCentral, htmlDetalheMensagem,
@@ -825,7 +825,7 @@ function agruparPorEmpresa(unidades, termo) {
     mapa.get(k).itens.push(u);
   }
   // A ordem da fila já vem do backend; o grupo herda a posição do seu 1º item.
-  return `<div class="padm-grupos">${[...mapa.values()].map((g) => {
+  return `<div class="padm-wa-grupos">${[...mapa.values()].map((g) => {
     const criticas = g.itens.filter((u) => u.criticidade === "critico").length;
     const tom = criticas > 0 ? "critico" : "atencao";
     return `
@@ -850,7 +850,7 @@ function agruparPorStatus(unidades, termo) {
   const outras = unidades.filter((u) => !ORDEM_ACAO.includes(u.d1Status));
   if (outras.length) grupos.push({ cat: "outras", meta: { classe: "muted", rotulo: "Outras", icone: "inbox" }, itens: outras });
 
-  return `<div class="padm-grupos">${grupos.map((g) => `
+  return `<div class="padm-wa-grupos">${grupos.map((g) => `
     <div class="padm-grupo padm-grupo--${g.meta.classe}">
       <header class="padm-grupo-head">
         <span class="padm-grupo-ic">${icon(g.meta.icone, { size: 15 })}</span>
@@ -1714,56 +1714,61 @@ export function htmlAtivacaoComunicacao(a) {
 
 export function htmlDrawerComunicacao(d, painel = null) {
   const cfg = d.configuracao;
+  const checklist = d.checklistAtivacao;
+  const prontos = checklist ? ITENS_CHECKLIST_ATIVACAO.filter(([k]) => checklist[k]).length : 0;
+  const pendentes = d.unidades?.length ?? 0;
   return `
-    <div class="padm-drawer">
+    <div class="padm-drawer padm-drawer--wa">
       <header class="padm-drawer-head">
-        <h2>${escapeHtml(d.organizacao.nome)}</h2>
-        <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="fechar-comunicacao">Fechar</button>
+        <div class="padm-drawer-tit">
+          <small>${icon("message-circle", { size: 12 })} Avisos pelo WhatsApp</small>
+          <h2>${escapeHtml(d.organizacao.nome)}</h2>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="fechar-comunicacao" aria-label="Fechar">${icon("x", { size: 16 })}</button>
       </header>
       <div class="padm-drawer-corpo">
-        ${secao({ titulo: "WhatsApp", icone: "message-circle", sub: "Situação atual desta empresa para receber avisos.", corpo: painel ? htmlStatusWhatsappEmpresa(painel) : `<p>${chipStatusConfig(cfg.status)}</p>` })}
-        ${htmlAlavancasEmpresa(painel)}
+        <section class="padm-wa-controle">
+          ${painel?.status ? htmlStatusWhatsappEmpresa(painel) : `<div class="padm-wa-situacao">${chipStatusConfig(cfg.status)}</div>`}
+          ${htmlAlavancasEmpresa(painel)}
+        </section>
         ${htmlDestinatarios(painel)}
-        ${htmlAlertasRecentes(painel)}
-        ${htmlLimitesEmpresa(painel)}
-        ${secao({
-          titulo: "Prontidão", icone: "list-checks",
-          sub: "Checklist derivado dos dados reais desta empresa.",
-          corpo: htmlChecklistAtivacao(d.checklistAtivacao),
-        })}
-        ${secao({
-          titulo: "Unidades pendentes", corpo: d.unidades?.length
-            ? `<ul class="padm-vinc-unidades">${d.unidades.map((u) => `<li>${escapeHtml(u.unidadeNome ?? u.unidadeId)} — ${escapeHtml(u.criticidade)} (${u.diasPendentes} dia(s))</li>`).join("")}</ul>`
-            : `<p class="padm-vazio">Nenhuma pendência atual.</p>`,
-        })}
-        ${secao({
-          titulo: "Pré-visualizar mensagem", icone: "eye",
-          sub: "Monta o texto exato com dados reais — nunca envia nada.",
-          corpo: `
-            <button type="button" class="btn btn-ghost btn-sm" data-padm-acao="preview-comunicacao">Pré-visualizar mensagem</button>
-            <div id="padm-com-preview" class="padm-preview-mensagem"></div>`,
-        })}
-        ${secao({
-          titulo: "Configuração operacional", icone: "settings",
-          sub: "Timezone, tipo de alerta e pausa. Os destinatários são cadastrados acima. Salvar nunca liga o envio.",
-          corpo: `
-            <form id="padm-com-form" class="padm-form">
-              <label>Timezone (IANA)
-                <input type="text" name="timezone" value="${escapeHtml(cfg.timezone ?? "")}" placeholder="America/Sao_Paulo" />
-              </label>
-              <label class="padm-check">
-                <input type="checkbox" name="tipoDashboardIfoodD1" ${cfg.tiposPermitidos?.includes("dashboard_ifood_d1") ? "checked" : ""} />
-                Lançamento iFood D-1 pendente
-              </label>
-              <label class="padm-check">
-                <input type="checkbox" name="pausar" ${cfg.pausadoAte ? "checked" : ""} />
-                Pausar comunicação desta empresa
-              </label>
-              <button type="submit" class="btn btn-primary btn-sm">Salvar configuração</button>
-              <p class="padm-form-nota">Salvar a configuração nunca habilita a empresa nem liga o envio automático — são ações separadas, acima.</p>
-            </form>`,
-        })}
-        ${htmlSimulacaoEDiagnostico(painel)}
+        <div class="padm-wa-grupos">
+          ${htmlAlertasRecentes(painel)}
+          ${htmlSimulacaoEDiagnostico(painel)}
+          ${grupo({
+            titulo: "Prontidão", icone: "list-checks",
+            resumo: checklist ? `${prontos} de ${ITENS_CHECKLIST_ATIVACAO.length}` : "",
+            corpo: htmlChecklistAtivacao(checklist) || `<p class="padm-vazio">Sem checklist.</p>`,
+          })}
+          ${grupo({
+            titulo: "Unidades pendentes", icone: "store",
+            resumo: pendentes ? chip({ classe: "atencao", rotulo: `${pendentes}` }) : "nenhuma",
+            corpo: pendentes
+              ? `<ul class="padm-vinc-unidades">${d.unidades.map((u) => `<li>${escapeHtml(u.unidadeNome ?? u.unidadeId)} — ${escapeHtml(u.criticidade)} (${u.diasPendentes} dia(s))</li>`).join("")}</ul>`
+              : `<p class="padm-vazio">Nenhuma pendência atual.</p>`,
+          })}
+          ${grupo({
+            titulo: "Configuração operacional", icone: "settings",
+            resumo: cfg.pausadoAte ? chip({ classe: "muted", rotulo: "Pausada" }) : escapeHtml(cfg.timezone ?? ""),
+            corpo: `
+              <form id="padm-com-form" class="padm-form">
+                <label>Fuso horário (IANA)
+                  <input type="text" name="timezone" value="${escapeHtml(cfg.timezone ?? "")}" placeholder="America/Sao_Paulo" />
+                </label>
+                <label class="padm-check">
+                  <input type="checkbox" name="tipoDashboardIfoodD1" ${cfg.tiposPermitidos?.includes("dashboard_ifood_d1") ? "checked" : ""} />
+                  Avisar lançamento iFood D-1 pendente
+                </label>
+                <label class="padm-check">
+                  <input type="checkbox" name="pausar" ${cfg.pausadoAte ? "checked" : ""} />
+                  Pausar comunicação desta empresa
+                </label>
+                <div class="padm-form-rodape"><button type="submit" class="btn btn-ghost btn-sm">Salvar configuração</button></div>
+                <p class="padm-form-nota">Salvar a configuração nunca habilita a empresa nem liga o envio automático — são ações separadas, acima.</p>
+              </form>
+              ${htmlLimitesEmpresa(painel)}`,
+          })}
+        </div>
       </div>
     </div>`;
 }
@@ -1782,7 +1787,11 @@ export async function abrirDrawerComunicacao(organizacaoId, { foco = null } = {}
     ]);
     cx.innerHTML = htmlDrawerComunicacao(detalhe, painel);
     ligarDrawerComunicacao(organizacaoId, api);
-    if (foco === "responsavel") el('[data-padm-dest-form="novo"]')?.scrollIntoView?.({ block: "center" });
+    if (foco === "responsavel") {
+      const novo = el('[data-padm-dest-form="novo"]');
+      novo?.closest?.("details")?.setAttribute("open", "");
+      novo?.scrollIntoView?.({ block: "center" });
+    }
   } catch (e) {
     cx.innerHTML = `<div class="padm-drawer">${erro(e)}</div>`;
   }
@@ -1828,17 +1837,14 @@ function ligarDrawerComunicacao(organizacaoId, api) {
   });
 
   // ---- pares "pedir -> confirmar" (habilitar empresa / ligar envio automático) ----
+  // O interruptor fica visível: clicar nele abre/fecha a confirmação logo abaixo da linha.
   const parConfirmacao = (pedir, cancelar) => {
     el(`[data-padm-acao="${pedir}"]`)?.addEventListener("click", (e) => {
-      e.currentTarget.hidden = true;
-      const painel = e.currentTarget.parentElement?.querySelector(".padm-habilitacao-confirmar");
-      if (painel) painel.hidden = false;
+      const painel = e.currentTarget.closest(".padm-habilitacao-acao")?.querySelector(".padm-habilitacao-confirmar");
+      if (painel) painel.hidden = !painel.hidden;
     });
     el(`[data-padm-acao="${cancelar}"]`)?.addEventListener("click", (e) => {
-      const raiz = e.currentTarget.closest(".padm-habilitacao-acao");
-      raiz?.querySelector(".padm-habilitacao-confirmar")?.setAttribute("hidden", "");
-      const botao = raiz?.querySelector(`[data-padm-acao="${pedir}"]`);
-      if (botao) botao.hidden = false;
+      e.currentTarget.closest(".padm-habilitacao-acao")?.querySelector(".padm-habilitacao-confirmar")?.setAttribute("hidden", "");
     });
   };
   parConfirmacao("pedir-habilitar-comunicacao", "cancelar-habilitar-comunicacao");
