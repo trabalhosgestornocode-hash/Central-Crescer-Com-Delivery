@@ -100,6 +100,7 @@ function solicitacoesFalso(registros = [registroA(), registroB()]) {
       return r;
     },
     async obterVigente(k) { const r = lista.find((x) => casa(x, k) && x.competencia === k.competencia); return r && Date.parse(r.expira_em) > Date.now() ? r : null; },
+    async obterUltima(k) { return lista.find((x) => casa(x, k) && x.competencia === k.competencia) ?? null; },
     async obterPorRequestId(k) { return lista.find((x) => casa(x, k) && x.request_id === k.requestId) ?? null; },
     async atualizarStatus(k) { chamadas.atualizarStatus.push(k); const r = lista.find((x) => casa(x, k) && x.request_id === k.requestId); if (r) r.status = k.status; return r ?? null; },
   };

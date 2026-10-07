@@ -588,6 +588,27 @@ function registroParaSolicitacao(registro) {
     solicitadoEm: registro.solicitado_em ?? null,
     expiraEm: registro.expira_em ?? null,
     finalizado: STATUS_ON_DEMAND_TERMINAIS.has(registro.status),
+    historico: false,
+  };
+}
+
+// Histórico/evidência: solicitação já EXPIRADA (> 24h) — só usada quando não
+// há solicitação vigente. Só o que está gravado no banco — nada é consultado no iFood e o
+// requestId sai SÓ mascarado (`requestId: null`), então a UI não tem como
+// retomar o acompanhamento nem pedir status/download com ele.
+function registroParaHistorico(registro) {
+  return {
+    requestId: null,
+    requestIdMascarado: mascararId(registro.request_id),
+    competencia: registro.competencia,
+    status: registro.status,
+    mensagemErro: sanitizarMensagemErroOnDemand(registro.mensagem_erro),
+    solicitadoEm: registro.solicitado_em ?? null,
+    expiraEm: registro.expira_em ?? null,
+    atualizadoEm: registro.atualizado_em ?? null,
+    finalizado: STATUS_ON_DEMAND_TERMINAIS.has(registro.status),
+    expirado: !solicitacoesModule.estaVigente(registro),
+    historico: true,
   };
 }
 
@@ -660,17 +681,25 @@ export async function solicitarReconciliationOnDemand({ organizacaoId, unidadeId
 }
 
 /**
- * Solicitação On Demand VIGENTE (até 24h) desta unidade para a competência —
- * usada pela UI ao reabrir/recarregar a tela para retomar o acompanhamento.
- * Não chama o iFood. `null` quando não há.
+ * Solicitação On Demand desta unidade para a competência, lida SÓ do banco
+ * (nunca chama o iFood) — usada pela UI ao reabrir/recarregar a tela.
+ *  - VIGENTE (até 24h), qualquer status -> fluxo operacional de sempre
+ *    (`historico: false`, requestId para a UI retomar/consultar o status).
+ *  - SÓ quando não há vigente: a última EXPIRADA -> `historico: true`
+ *    (registroParaHistorico): só exibição/evidência, requestId mascarado.
+ *  - nenhuma -> `null`.
  */
 export async function obterSolicitacaoReconciliationOnDemand({ organizacaoId, unidadeId, competencia, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const solicitacoes = deps.solicitacoes ?? solicitacoesModule;
   const conexao = await resolverConexaoComMerchant({ organizacaoId, unidadeId, repo });
   const competenciaValidada = validarCompetencia(competencia);
-  const registro = await solicitacoes.obterVigente({ organizacaoId, unidadeId, conexaoId: conexao.id, competencia: competenciaValidada });
-  return registroParaSolicitacao(registro);
+  const chave = { organizacaoId, unidadeId, conexaoId: conexao.id, competencia: competenciaValidada };
+  const vigente = await solicitacoes.obterVigente(chave);
+  if (vigente) return registroParaSolicitacao(vigente);
+  // Fallback de evidência: sem vigente, a última persistida (necessariamente expirada).
+  const ultima = await solicitacoes.obterUltima(chave);
+  return ultima && !solicitacoesModule.estaVigente(ultima) ? registroParaHistorico(ultima) : null;
 }
 
 /** GET de status no iFood (link de download novo a cada consulta — doc oficial). */

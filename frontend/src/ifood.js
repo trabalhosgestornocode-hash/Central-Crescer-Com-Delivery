@@ -22,6 +22,7 @@ import {
   rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
   resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
   FASE_ON_DEMAND_ROTULO, MENSAGEM_ERRO_OD_SEM_MOTIVO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
+  itemParaJsonTecnico, derivarHistoricoOnDemand,
 } from "./ifoodEstado.js";
 import { criarAcompanhamentoReconciliacao } from "./ifoodReconciliacaoPolling.js";
 
@@ -722,6 +723,9 @@ function abrirFinanceiro() {
         competencia: mesFechadoAnterior(), carregando: false, requestId: null, reutilizado: false,
         fase: null, proximaEmMs: null, resultado: null, erro: null,
         baixando: false, erroDownload: null, retomadaVerificada: false,
+        // Solicitação HISTÓRICA (expirada, > 24h) lida do banco —
+        // só exibição/evidência, nunca vira acompanhamento (requestId vem só mascarado).
+        historico: null,
       },
     },
     // Somente leitura — sem valor padrão óbvio, mesma regra de Settlements.
@@ -886,6 +890,7 @@ async function solicitarReconciliationOnDemand() {
   od.requestId = null;
   od.reutilizado = false;
   od.retomadaVerificada = true;
+  od.historico = null;
   pintarFinanceiro();
   let requestId = null;
   try {
@@ -909,7 +914,11 @@ function verificarStatusReconciliationOnDemand() {
   acompanharReconciliationOnDemand(od.requestId);
 }
 
-/** Ao abrir a aba: retoma a solicitação vigente (< 24h) desta competência, se houver. */
+/**
+ * Ao abrir a aba: lê do BANCO a solicitação desta competência (nunca chama o iFood aqui).
+ * Vigente (qualquer status) -> retoma o acompanhamento de sempre. Histórica (expirada) ->
+ * só exibe o estado gravado, sem GET de status e sem nova solicitação.
+ */
 async function retomarReconciliationOnDemand() {
   const od = estado.financeiro?.reconciliation?.onDemand;
   if (!od || od.retomadaVerificada || od.requestId) return;
@@ -917,7 +926,9 @@ async function retomarReconciliationOnDemand() {
   try {
     const { data } = await api.ifoodFinancialReconciliationOnDemandAtual(od.competencia);
     const atual = estado.financeiro?.reconciliation?.onDemand;
-    if (data?.requestId && atual === od && !od.requestId) acompanharReconciliationOnDemand(data.requestId);
+    if (atual !== od || od.requestId) return;
+    if (data?.historico === true) { od.historico = data; pintarFinanceiro(); return; }
+    if (data?.requestId) acompanharReconciliationOnDemand(data.requestId);
   } catch { /* sem solicitação retomável: a tela segue no estado inicial */ }
 }
 
@@ -1259,10 +1270,11 @@ function conteudoAbaSettlements(f) {
       <label class="ifood-label">Data final<input type="date" id="ifin-fim" class="ifood-input" value="${esc(st.fim)}" /></label>
       <button class="btn btn-primary" id="ifin-consultar" ${st.carregando ? "disabled" : ""}>${st.carregando ? "Consultando…" : "Consultar"}</button>
     </div>
-    <p class="ifood-instrucao">Sem paginação nesta API. Sem limite de dias imposto pelo iFood, mas a documentação recomenda períodos de até 90 dias. O saldo (<code>balance</code>) deve se aproximar da soma dos eventos financeiros com impacto no repasse (<code>hasTransferImpact=true</code>) do mesmo período — comparação automática chega em um incremento futuro (Conciliação).</p>
+    <p class="ifood-instrucao">Sem paginação nesta API. Sem limite de dias imposto pelo iFood, mas a documentação recomenda períodos de até 90 dias. O saldo (<code>balance</code>) deve se aproximar da soma dos eventos financeiros com impacto no repasse (<code>hasTransferImpact=true</code>) do mesmo período — a comparação automática fica na aba Conciliação.</p>
     ${st.erro ? `<div class="ifood-aviso bad">${esc(st.erro)}</div>` : ""}
     ${r ? `
       <div class="ifood-info-linha"><span>Saldo do período (líquido)</span><strong>${fmtMoeda(r.saldo)}</strong></div>
+      ${r.titulos.length ? "" : `<div class="ifood-aviso ok" id="ifin-settlements-vazio">Consulta concluída — o iFood não retornou registros para o período.</div>`}
       <div class="ifood-info-linha"><span>Títulos no período</span><strong>${r.titulos.length}</strong></div>
       <div class="tabela-wrap">
         <table class="grid">
@@ -1309,6 +1321,7 @@ function conteudoAbaReconciliation(f) {
     <div class="ifood-card">
       <div class="ifood-secao-rotulo">Reconciliation — mês fechado (síncrona)</div>
       <p class="ifood-instrucao">Arquivo mensal oficial de conciliação. Só aceita meses já fechados (o mês atual e futuros são inválidos), até 24 meses no passado.</p>
+      ${avisoAmostraReconciliation()}
       <div class="ifin-filtro">
         <label class="ifood-label">Competência (mês)<input type="month" id="ifrec-competencia" class="ifood-input" value="${esc(rec.competencia)}" /></label>
         <button class="btn btn-primary" id="ifrec-consultar" ${rec.carregando ? "disabled" : ""}>${rec.carregando ? "Consultando…" : "Consultar"}</button>
@@ -1332,6 +1345,8 @@ function conteudoAbaReconciliation(f) {
     <div class="ifood-card">
       <div class="ifood-secao-rotulo">Reconciliation On Demand — arquivo sob demanda</div>
       <p class="ifood-instrucao">Solicite a geração do arquivo do mês: a Central acompanha o processamento automaticamente e libera o download do CSV quando ficar pronto. Se já houver uma solicitação recente para a mesma competência, ela é reaproveitada.</p>
+      ${blocoHistoricoOnDemand(od.historico)}
+      ${od.historico ? `<div class="ifood-secao-rotulo">Nova solicitação</div>` : ""}
       <div class="ifin-filtro">
         <label class="ifood-label">Competência (mês)<input type="month" id="ifrec-od-competencia" class="ifood-input" value="${esc(od.competencia)}" /></label>
         <button class="btn btn-primary" id="ifrec-od-solicitar" ${od.carregando ? "disabled" : ""}>${od.carregando ? "Solicitando…" : "Solicitar geração"}</button>
@@ -1354,6 +1369,36 @@ function conteudoAbaReconciliation(f) {
         <div class="ifood-acoes"><button class="btn btn-ghost btn-sm" id="ifrec-od-detalhe">Ver todos os registros</button></div>
       ` : ""}
       ${od.requestId ? `<p class="ifin-tecnico">Identificador da solicitação no iFood: <span class="mono">${esc(mascararRequestId(od.requestId))}</span>${od.reutilizado ? " (solicitação reaproveitada)" : ""}</p>` : ""}
+    </div>`;
+}
+
+// Reconciliation mensal em homologação: o iFood devolve a FIXTURE de teste,
+// não a movimentação da loja. Decisão do backend (/status.financialHomologacao).
+function avisoAmostraReconciliation(statusApi = estado.status) {
+  if (statusApi?.financialHomologacao !== true) return "";
+  return `
+    <div class="ifood-aviso warn" id="ifrec-aviso-amostra">
+      <strong>Dados de exemplo do ambiente de homologação do iFood</strong><br/>
+      O arquivo de conciliação desta competência é fornecido pelo ambiente de homologação do iFood (dados de teste). Os valores exibidos não representam movimentação financeira real da loja.
+    </div>`;
+}
+
+/** Solicitação On Demand HISTÓRICA (do banco) — só exibição/evidência, sem ações. */
+function blocoHistoricoOnDemand(h) {
+  const d = derivarHistoricoOnDemand(h);
+  if (!d) return "";
+  const linha = (rotulo, valor) => `<div class="ifood-info-linha"><span>${esc(rotulo)}</span><strong>${valor}</strong></div>`;
+  return `
+    <div class="ifcon-fonte" id="ifrec-od-historico">
+      <div class="ifood-secao-rotulo">Última solicitação registrada <span class="pill muted">Histórico / evidência</span></div>
+      <p class="ifood-instrucao">Esta solicitação já foi concluída e está sendo exibida apenas como evidência/histórico — dados gravados pela Central, sem nova consulta ao iFood e sem acompanhamento em tempo real.</p>
+      ${linha("Competência", esc(h.competencia ?? "—"))}
+      ${linha("Situação", `<span class="pill ${d.situacao.classe}">${esc(d.situacao.rotulo)}</span>`)}
+      ${linha("Status no iFood", esc(d.statusRotulo))}
+      ${linha("Solicitada em", h.solicitadoEm ? esc(fmtDataHora(h.solicitadoEm)) : "—")}
+      ${linha("Validade do identificador", esc(d.validade))}
+      ${d.erro ? `<div class="ifood-aviso bad"><strong>Mensagem oficial do iFood:</strong> ${esc(d.erro)}</div>` : ""}
+      <p class="ifin-tecnico">Identificador da solicitação no iFood: <span class="mono">${esc(h.requestIdMascarado ?? "—")}</span></p>
     </div>`;
 }
 
@@ -1470,6 +1515,7 @@ function conteudoAbaAnticipation(f) {
     ${an.erro ? `<div class="ifood-aviso bad">${esc(an.erro)}</div>` : ""}
     ${r ? `
       <div class="ifood-info-linha"><span>Total antecipado no período (líquido)</span><strong>${fmtMoeda(r.saldo)}</strong></div>
+      ${r.antecipacoes.length ? "" : `<div class="ifood-aviso ok" id="ifant-vazio">Consulta concluída — o iFood não retornou registros para o período.</div>`}
       <div class="ifood-info-linha"><span>Antecipações no período</span><strong>${r.antecipacoes.length}</strong></div>
       <div class="tabela-wrap">
         <table class="grid">
@@ -1767,7 +1813,7 @@ function blocoEvidenciaOnDemand(od) {
         ${linha("Competência", esc(od.competencia ?? "—"))}
         ${linha("Identificador (requestId)", `<span class="mono">${esc(od.requestId ?? "—")}</span>`)}
         ${linha("Status", esc(od.status ?? "—"))}
-        ${linha("Solicitação reaproveitada", od.reutilizado ? "Sim" : "Não")}
+        ${od.historico ? linha("Origem", "Histórico registrado na Central (sem nova consulta ao iFood)") : linha("Solicitação reaproveitada", od.reutilizado ? "Sim" : "Não")}
         ${linha("Linhas do CSV", od.csvProcessado ? esc(od.quantidadeLinhas ?? "—") : "Não processado")}
         ${linha("Total bruto", fmtMoeda(od.totalBruto))}
         ${linha("Impacto no repasse = SIM", fmtMoeda(od.impactoRepasseSim))}
@@ -2032,7 +2078,7 @@ function abrirDetalheItem(titulo, camposDestaque, itemBruto, secoes = []) {
       ${destaque}
       ${blocos}
       <div class="ifood-secao-rotulo">Detalhe técnico (JSON sanitizado — sem token/secret)</div>
-      <pre class="ifin-json">${esc(JSON.stringify(itemBruto, null, 2))}</pre>
+      <pre class="ifin-json">${esc(JSON.stringify(itemParaJsonTecnico(itemBruto), null, 2))}</pre>
     </div>`;
   overlay.addEventListener("click", (e) => { if (e.target === overlay) fecharDetalheItem(); });
   document.body.appendChild(overlay);
