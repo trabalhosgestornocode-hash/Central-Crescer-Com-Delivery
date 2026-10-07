@@ -667,12 +667,45 @@ export function resumirImpactoNoRepasse(colunas, linhasCampos) {
   return r;
 }
 
+// --- Competência CONTIDA no arquivo -----------------------------------------
+//
+// A competência CONSULTADA (`?competence=`) e a competência DOS REGISTROS
+// (coluna `competencia` do CSV) são informações diferentes. No ambiente de
+// homologação (`x-request-homologation: true`) o iFood devolve um arquivo de
+// exemplo fixo com competência própria (ex.: consulta 2026-09 -> registros
+// 2025-08), como já acontece com a fixture de Sales (período 2025-08-01).
+// Aqui só CONTAMOS o que veio — nada é convertido nem reescrito; quem compara
+// com a competência consultada é a interface.
+
+const COLUNA_COMPETENCIA = "competencia";
+
+/**
+ * Competências distintas presentes no arquivo, com a contagem de linhas de
+ * cada uma, sobre TODAS as linhas de dado. PURA.
+ * @returns {{colunaEncontrada: boolean, competencias: {competencia: string, linhas: number}[], linhasSemCompetencia: number}}
+ */
+export function resumirCompetenciasDoArquivo(colunas, linhasCampos) {
+  const idx = colunas.findIndex((c) => normalizarTextoCsv(c) === COLUNA_COMPETENCIA);
+  if (idx < 0) return { colunaEncontrada: false, competencias: [], linhasSemCompetencia: linhasCampos.length };
+  const contagem = new Map();
+  let semCompetencia = 0;
+  for (const campos of linhasCampos) {
+    const v = String(campos[idx] ?? "").trim();
+    if (!v) { semCompetencia += 1; continue; }
+    contagem.set(v, (contagem.get(v) ?? 0) + 1);
+  }
+  const competencias = [...contagem.entries()]
+    .map(([competencia, linhas]) => ({ competencia, linhas }))
+    .sort((a, b) => a.competencia.localeCompare(b.competencia));
+  return { colunaEncontrada: true, competencias, linhasSemCompetencia: semCompetencia };
+}
+
 /**
  * Descompacta (se gzip) e faz o parse de um arquivo de conciliação em bytes
  * brutos. PURA no sentido de não fazer rede/disco — só transforma o Buffer
  * já baixado (por ifoodFinancial.download.js).
  * @param {Buffer} bufferBruto
- * @returns {{colunas: string[], linhas: object[], totalLinhas: number, truncado: boolean, eraGzip: boolean, delimitador: string|null, resumoRepasse: object}}
+ * @returns {{colunas: string[], linhas: object[], totalLinhas: number, truncado: boolean, eraGzip: boolean, delimitador: string|null, resumoRepasse: object, competenciasArquivo: object}}
  */
 export function parsearArquivoConciliacao(bufferBruto) {
   const { conteudo, eraGzip } = descompactarArquivoConciliacao(bufferBruto);
@@ -683,7 +716,10 @@ export function parsearArquivoConciliacao(bufferBruto) {
   // primeira linha pra contar vírgulas/ponto-e-vírgulas) — null, nunca um
   // valor chutado.
   if (linhasBrutas.length === 0) {
-    return { colunas: [], linhas: [], totalLinhas: 0, truncado: false, eraGzip, delimitador: null, resumoRepasse: resumirImpactoNoRepasse([], []) };
+    return {
+      colunas: [], linhas: [], totalLinhas: 0, truncado: false, eraGzip, delimitador: null,
+      resumoRepasse: resumirImpactoNoRepasse([], []), competenciasArquivo: resumirCompetenciasDoArquivo([], []),
+    };
   }
 
   const delimitador = detectarDelimitador(linhasBrutas[0]);
@@ -702,5 +738,6 @@ export function parsearArquivoConciliacao(bufferBruto) {
   return {
     colunas, linhas, totalLinhas: camposPorLinha.length, truncado, eraGzip, delimitador,
     resumoRepasse: resumirImpactoNoRepasse(colunas, camposPorLinha),
+    competenciasArquivo: resumirCompetenciasDoArquivo(colunas, camposPorLinha),
   };
 }

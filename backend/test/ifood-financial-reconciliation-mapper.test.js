@@ -105,10 +105,11 @@ test("gzip: descompactado corretamente, eraGzip=true, magic bytes (não a extens
 
 test("arquivo vazio: colunas/linhas vazias, sem lançar", () => {
   const r = parsearArquivoConciliacao(Buffer.from("", "utf8"));
-  const { resumoRepasse, ...resto } = r;
+  const { resumoRepasse, competenciasArquivo, ...resto } = r;
   assert.deepEqual(resto, { colunas: [], linhas: [], totalLinhas: 0, truncado: false, eraGzip: false, delimitador: null });
   assert.equal(resumoRepasse.totalLinhas, 0);
   assert.equal(resumoRepasse.totalBruto, null);
+  assert.deepEqual(competenciasArquivo, { colunaEncontrada: false, competencias: [], linhasSemCompetencia: 0 });
 });
 
 test("só cabeçalho, sem linhas de dado: totalLinhas 0", () => {

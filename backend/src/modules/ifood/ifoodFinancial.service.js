@@ -513,6 +513,9 @@ async function baixarEParsear({ downloadPath, shaEsperado, download, rotulo }) {
     delimitador: parseado.delimitador,
     // Critério de homologação: só `impacto_no_repasse = SIM` compõe o líquido (ver mapper).
     resumoRepasse: parseado.resumoRepasse,
+    // Competência(s) dos REGISTROS — pode diferir da consultada (fixture de
+    // homologação). Só repassada; quem compara e avisa é a interface.
+    competenciasArquivo: parseado.competenciasArquivo,
   };
 }
 

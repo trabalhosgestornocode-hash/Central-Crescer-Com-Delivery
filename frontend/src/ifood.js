@@ -22,7 +22,7 @@ import {
   rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
   resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
   FASE_ON_DEMAND_ROTULO, MENSAGEM_ERRO_OD_SEM_MOTIVO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
-  itemParaJsonTecnico, derivarHistoricoOnDemand,
+  itemParaJsonTecnico, derivarHistoricoOnDemand, derivarCompetenciaReconciliation, fmtCompetencia,
 } from "./ifoodEstado.js";
 import { criarAcompanhamentoReconciliacao } from "./ifoodReconciliacaoPolling.js";
 
@@ -1328,7 +1328,8 @@ function conteudoAbaReconciliation(f) {
       </div>
       ${rec.erro ? `<div class="ifood-aviso bad">${esc(rec.erro)}</div>` : ""}
       ${r ? `
-        <div class="ifood-info-linha"><span>Gerado em</span><strong>${r.criadoEm ? fmtDataHora(r.criadoEm) : "—"}</strong></div>
+        ${blocoCompetenciaReconciliation(r)}
+        <div class="ifood-info-linha"><span>Gerado em (informado pelo iFood)</span><strong>${r.criadoEm ? fmtDataHora(r.criadoEm) : "—"}</strong></div>
         ${r.metadados ? `
           <div class="ifood-info-linha"><span>Total de linhas (informado pelo iFood)</span><strong>${r.metadados.totalLinhas ?? "—"}</strong></div>
           <div class="ifood-info-linha"><span>Integridade do arquivo (SHA-256)</span><strong>${r.arquivo?.integridadeVerificada === true ? "Confere" : r.arquivo?.integridadeVerificada === false ? "Não confere" : "Não verificável"}</strong></div>
@@ -1379,8 +1380,35 @@ function avisoAmostraReconciliation(statusApi = estado.status) {
   return `
     <div class="ifood-aviso warn" id="ifrec-aviso-amostra">
       <strong>Dados de exemplo do ambiente de homologação do iFood</strong><br/>
-      O arquivo de conciliação desta competência é fornecido pelo ambiente de homologação do iFood (dados de teste). Os valores exibidos não representam movimentação financeira real da loja.
+      O arquivo de conciliação é fornecido pelo ambiente de homologação do iFood (dados de teste) e pode ter competência de referência diferente da consultada. Os valores exibidos não representam movimentação financeira real da loja.
     </div>`;
+}
+
+// Competência CONSULTADA (eco do backend, não o campo do formulário) x
+// competência DOS REGISTROS (coluna `competencia` do CSV). Nunca converte uma
+// na outra: em homologação a divergência é explicada como arquivo de exemplo;
+// fora dela é alerta de dado inconsistente.
+function blocoCompetenciaReconciliation(r, statusApi = estado.status) {
+  const c = derivarCompetenciaReconciliation(r, { homologacao: statusApi?.financialHomologacao === true });
+  const linha = (rotulo, valor) => `<div class="ifood-info-linha"><span>${esc(rotulo)}</span><strong>${valor}</strong></div>`;
+  const noArquivo = c.noArquivo.length
+    ? c.noArquivo.map((x) => `${esc(fmtCompetencia(x.competencia))} (${x.linhas} registro${x.linhas === 1 ? "" : "s"})`).join(", ")
+    : "Não informada no arquivo";
+  const consultada = esc(fmtCompetencia(c.consultada ?? "—"));
+  const outras = esc(c.noArquivo.map((x) => fmtCompetencia(x.competencia)).join(", "));
+  return `
+    ${linha("Competência consultada", consultada)}
+    ${r.arquivo ? linha("Competência dos registros no arquivo", noArquivo) : ""}
+    ${c.situacao === "amostra" ? `
+      <div class="ifood-aviso warn" id="ifrec-aviso-competencia">
+        <strong>A competência dos registros (${outras}) é diferente da consultada (${consultada}).</strong><br/>
+        A Central consultou ${consultada}. O ambiente de homologação do iFood devolve um arquivo de exemplo com competência de referência própria — os registros e valores abaixo são exibidos exatamente como vieram, sem conversão de competência, e não representam movimentação financeira real da loja.
+      </div>` : ""}
+    ${c.situacao === "divergente" ? `
+      <div class="ifood-aviso bad" id="ifrec-aviso-competencia">
+        <strong>Atenção: o arquivo devolvido pelo iFood contém competência ${outras}, diferente da consultada (${consultada}).</strong><br/>
+        Os registros são exibidos como vieram, sem conversão. Confirme com o iFood antes de usar estes valores.
+      </div>` : ""}`;
 }
 
 /** Solicitação On Demand HISTÓRICA (do banco) — só exibição/evidência, sem ações. */
@@ -2019,7 +2047,7 @@ function pintarFinanceiro() {
     // Reabriu a aba (ou recarregou a página): retoma a solicitação vigente da competência — uma vez só.
     if (!rec.onDemand.retomadaVerificada) retomarReconciliationOnDemand();
     el("#ifrec-detalhe")?.addEventListener("click", () => {
-      if (rec.resultado?.arquivo) abrirDetalheArquivoConciliacao(`Conciliação — ${rec.competencia}`, rec.resultado);
+      if (rec.resultado?.arquivo) abrirDetalheArquivoConciliacao(`Conciliação — competência consultada ${fmtCompetencia(rec.resultado.competencia ?? rec.competencia)}`, rec.resultado);
     });
     el("#ifrec-od-detalhe")?.addEventListener("click", () => {
       if (rec.onDemand.resultado?.arquivo) abrirDetalheArquivoConciliacao(`Conciliação sob demanda — ${rec.onDemand.competencia}`, rec.onDemand.resultado);
