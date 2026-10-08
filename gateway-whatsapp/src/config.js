@@ -30,6 +30,9 @@ function numeroInteiroEnvOuIndefinido(bruto) {
 // forma, em vez de deixar o recovery acreditar ter mais espaço do que a rota `/eventos/auth-state` jamais aceitaria.
 const AUTH_STATE_CAPACIDADE_TETO_BYTES = 4 * 1024 * 1024;
 
+/** JID de grupo do WhatsApp (`<criador>-<timestamp>@g.us` antigo ou `<id>@g.us` novo). Nunca aceita usuário, LID, broadcast ou newsletter. */
+export const REGEX_JID_GRUPO = /^[0-9]{5,40}(-[0-9]{5,20})?@g\.us$/;
+
 export const config = {
   // O Render injeta PORT; 8080 é o padrão de qualquer serviço aqui.
   porta: Number(process.env.PORT) || 8080,
@@ -120,6 +123,10 @@ export const config = {
   retryResendHabilitado: /^(1|true|yes|on)$/i.test(String(process.env.WHATSAPP_RETRY_RESEND_ENABLED ?? "").trim()),
   retryCacheTtlHoras: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_RETRY_CACHE_TTL_HORAS),
   retryMaxReenvios: numeroInteiroEnvOuIndefinido(process.env.WHATSAPP_RETRY_MAX_REENVIOS),
+
+  // Exceção ESTREITA de grupo (src/grupoInterno.js): o ÚNICO grupo para o qual o Gateway aceita enviar — o grupo interno da operação.
+  // Ausente/vazio ⇒ null ⇒ nenhum envio a grupo (a listagem continua só leitura). Fornecido fora do formato ⇒ falha no boot.
+  grupoInternoJid: String(process.env.WHATSAPP_GRUPO_INTERNO_JID ?? "").trim() || null,
 
   gatewayVersion: process.env.npm_package_version ?? "0.1.0",
   providerInstanceId: process.env.WHATSAPP_PROVIDER_INSTANCE_ID ?? "default",
@@ -220,6 +227,10 @@ export function validarConfig() {
     if (!Number.isInteger(valor) || valor < min || valor > max) {
       throw new Error(`${nomeEnv} precisa ser um inteiro entre ${min} e ${max} (recebido: "${process.env[nomeEnv]}")`);
     }
+  }
+
+  if (config.grupoInternoJid !== null && !REGEX_JID_GRUPO.test(config.grupoInternoJid)) {
+    throw new Error("WHATSAPP_GRUPO_INTERNO_JID precisa ser um JID de grupo (formato <numeros>@g.us)");
   }
 
   // Checkpoint G.3.3 — mesma regra fail-closed dos caps de recovery acima: ausente = ok (fica no default de 1 MiB

@@ -65,7 +65,15 @@ export const MARCAS_POR_CODIGO_GATEWAY = Object.freeze({
   WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP: Object.freeze({ preEnvio: true, permanente: true }),
   WHATSAPP_GATEWAY_RECIPIENT_UNVERIFIED: Object.freeze({ preEnvio: true, permanente: true }),
   WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED: Object.freeze({ preEnvio: true }),
+  // Exceção estreita de grupo (gateway-whatsapp/src/grupoInterno.js): o Gateway recusa ANTES do sendMessage em todos os quatro.
+  WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED: Object.freeze({ preEnvio: true, permanente: true }),
+  WHATSAPP_GATEWAY_GROUP_NOT_FOUND: Object.freeze({ preEnvio: true, permanente: true }),
+  WHATSAPP_GATEWAY_GROUP_SEND_FORBIDDEN: Object.freeze({ preEnvio: true, permanente: true }),
+  WHATSAPP_GATEWAY_GROUP_LOOKUP_FAILED: Object.freeze({ preEnvio: true }),
 });
+
+/** JID de grupo do WhatsApp — mesmo formato aceito pelo Gateway (gateway-whatsapp/src/config.js#REGEX_JID_GRUPO). */
+export const REGEX_JID_GRUPO = /^[0-9]{5,40}(-[0-9]{5,20})?@g\.us$/;
 
 /**
  * Erros de sistema que só existem na fase de CONEXÃO — se o fetch falhou
@@ -245,6 +253,20 @@ export function criarBaileysGatewayProvider({ gatewayUrl, segredoHmac, timeoutMs
       const invalido = motivoPedidoInvalido({ telefoneE164, idempotencyKey }, { url: urlDocumento });
       if (invalido) throw rejeitarPedidoInvalido(invalido);
       return chamar("POST", "/internal/whatsapp/messages", { telefoneE164, tipo: "document", urlDocumento, nomeArquivo, idempotencyKey, ...marcaRetry(retryResend) }, { envio: true });
+    },
+
+    // ---- fora do contrato WhatsAppProvider: EXCEÇÃO ESTREITA DE GRUPO. O Gateway só aceita o grupo interno configurado nele
+    // (WHATSAPP_GRUPO_INTERNO_JID); o backend valida o formato antes de qualquer rede. Envio: só whatsapp.service.js chama.
+    async listarGrupos() { return chamar("GET", "/internal/whatsapp/grupos"); },
+    async verificarGrupoInterno({ grupoJid }) {
+      if (typeof grupoJid !== "string" || !REGEX_JID_GRUPO.test(grupoJid)) throw rejeitarPedidoInvalido("grupoJid fora do formato de grupo");
+      return chamar("POST", "/internal/whatsapp/grupo-interno/verificar", { grupoJid });
+    },
+    async sendTextGrupoInterno({ grupoJid, texto, idempotencyKey }) {
+      if (typeof grupoJid !== "string" || !REGEX_JID_GRUPO.test(grupoJid)) throw rejeitarPedidoInvalido("grupoJid fora do formato de grupo");
+      if (typeof idempotencyKey !== "string" || !idempotencyKey.trim() || idempotencyKey.length > 200) throw rejeitarPedidoInvalido("idempotencyKey ausente/vazia");
+      if (typeof texto !== "string" || !texto.trim() || texto.length > MAX_TEXTO_ENVIO) throw rejeitarPedidoInvalido(`texto ausente/vazio ou maior que ${MAX_TEXTO_ENVIO} caracteres`);
+      return chamar("POST", "/internal/whatsapp/grupo-interno/messages", { grupoJid, texto, idempotencyKey }, { envio: true });
     },
 
     onMessage(handler) { handlersMensagem.push(handler); },

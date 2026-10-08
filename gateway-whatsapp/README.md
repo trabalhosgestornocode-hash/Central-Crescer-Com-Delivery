@@ -24,7 +24,10 @@ documento, reporta status de conexão e de entrega ao backend.
 
 **Não faz:** decidir destinatário, cooldown, permissão, política de envio,
 Agente Crescer — nada disso. Não acessa dados financeiros nem organizações/
-unidades. Não faz bulk, broadcast, grupos, campanhas ou automação comercial.
+unidades. Não faz bulk, broadcast, campanhas ou automação comercial. Grupos:
+só a **exceção estreita** de `src/grupoInterno.js` — listar nome/JID dos grupos
+(só leitura) e enviar texto ao **único** grupo interno configurado em
+`WHATSAPP_GRUPO_INTERNO_JID` (qualquer outro `@g.us` é recusado com 403).
 Toda inteligência de negócio mora no backend; este processo só traduz
 Baileys ↔ protocolo interno.
 
@@ -43,7 +46,7 @@ Backend Crescer ──HTTP + HMAC──► Gateway ──WebSocket──► What
 | Autenticação em 2 camadas de fronteira | HMAC nas duas direções (`src/hmac.js`) + rede privada do Render (Private Service, quando provisionado) |
 | Sem segredo em log | `src/logsafe.js` mascara HMAC secret, chave de cifra, auth state, QR, conteúdo de mensagem, telefone completo |
 | `LOGGED_OUT` nunca reconecta sozinho | `src/baileysSession.js` — só um novo pareamento explícito sai desse estado |
-| Superfície HTTP mínima | sem bulk, broadcast, groups, contacts dump, ou endpoint genérico de Baileys |
+| Superfície HTTP mínima | sem bulk, broadcast, contacts dump, ou endpoint genérico de Baileys; grupo só o interno configurado (`src/grupoInterno.js`) |
 
 ## Rotas internas (Backend → Gateway)
 
@@ -57,6 +60,9 @@ Todas exigem HMAC, exceto `/health`.
 | POST | `/internal/whatsapp/messages` |
 | POST | `/internal/whatsapp/messages/:id/read` |
 | GET | `/internal/whatsapp/messages/:id/status` |
+| GET | `/internal/whatsapp/grupos` — só leitura: nome, JID, tamanho (nunca participantes) |
+| POST | `/internal/whatsapp/grupo-interno/verificar` — só o JID configurado |
+| POST | `/internal/whatsapp/grupo-interno/messages` — texto, só o JID configurado |
 | GET | `/health` — **sem HMAC** (probe do Render) |
 
 ### Eventos que o Gateway envia (Gateway → Backend)

@@ -37,6 +37,7 @@ import { criarRastreadorOrigem, observarOrigem, montarEventoInbound } from "./in
 import { criarFilaConcorrenciaLimitada } from "./filaConcorrenciaLimitada.js";
 import { criarObservadorEntrega } from "./entregaProvider.js";
 import { resolverJidCanonico } from "./destinatario.js";
+import { listarGruposDaConta, consultarGrupo, exigirGrupoAutorizado, exigirGrupoEnviavel, mascararJidGrupo } from "./grupoInterno.js";
 import { hashId } from "./retryCache.js";
 
 // Diagnóstico (Checkpoint C3, instrumentação read-only): nomes dos códigos
@@ -1741,6 +1742,62 @@ export function criarSessaoBaileys({
         const code = e?.data ?? e?.output?.statusCode;
         return { url: null, motivo: code === 401 || code === 404 ? "sem_foto" : "erro" };
       }
+    },
+
+    // ---- EXCEÇÃO ESTREITA DE GRUPO (src/grupoInterno.js). Nada aqui toca enviar()/contatos individuais, sessão, auth ou retry. ----
+
+    /**
+     * SÓ LEITURA — grupos de que a conta participa (nome, JID, tamanho). Serve para o operador achar o JID real do grupo interno.
+     * Nunca devolve participantes/telefones. Nunca loga nomes.
+     */
+    async listarGrupos() {
+      if (status !== STATUS_CONEXAO.CONNECTED || !socket) { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; throw e; }
+      const grupos = await listarGruposDaConta({ socket, timeoutMs: config?.grupoTimeoutMs });
+      log("info", "grupos.listados", { total: grupos.length });
+      return { grupos, grupoInternoJid: config?.grupoInternoJid ?? null };
+    },
+
+    /** SÓ LEITURA — o grupo interno configurado existe, a conta participa e pode enviar? `grupoJid` precisa ser o configurado. */
+    async verificarGrupoInterno({ grupoJid }) {
+      exigirGrupoAutorizado(grupoJid, config?.grupoInternoJid ?? null);
+      if (status !== STATUS_CONEXAO.CONNECTED || !socket) { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; throw e; }
+      return consultarGrupo({ socket, grupoJid, timeoutMs: config?.grupoTimeoutMs });
+    },
+
+    /**
+     * Envia UM texto ao grupo interno configurado. Ordem fail-closed (tudo antes do sendMessage é `preEnvio`): grupo autorizado →
+     * conectado → `groupMetadata` confirma que existe, que a conta participa e pode enviar → sessão ainda é a mesma → sendMessage.
+     * Não entra no rastreio de recibos (observadorEntrega) nem no cache de retry: não é uma mensagem de `comunicacao_mensagens`.
+     */
+    async enviarGrupoInterno({ grupoJid, texto, correlationId = null }) {
+      exigirGrupoAutorizado(grupoJid, config?.grupoInternoJid ?? null);
+      const naoConectado = () => { const e = erro(CODIGOS.NAO_CONECTADO); e.preEnvio = true; return e; };
+      if (status !== STATUS_CONEXAO.CONNECTED || !socket) throw naoConectado();
+      const sockEnvio = socket;
+      const jidMascarado = mascararJidGrupo(grupoJid);
+      const t0 = Date.now();
+      let info;
+      try {
+        info = await consultarGrupo({ socket: sockEnvio, grupoJid, timeoutMs: config?.grupoTimeoutMs });
+        exigirGrupoEnviavel(info);
+      } catch (e) {
+        log("warn", "grupo.send_bloqueado", { correlationId, motivo: e?.codigo ?? "erro", detalhe: e?.detalheInterno, jid: jidMascarado, durationMs: Date.now() - t0 });
+        throw e;
+      }
+      if (status !== STATUS_CONEXAO.CONNECTED || socket !== sockEnvio) throw naoConectado();
+      const providerIdGerado = generateMessageIDV2(sockEnvio.user?.id ?? sockEnvio.authState?.creds?.me?.id);
+      log("info", "grupo.send_start", { correlationId, socketGeneration: geracaoSocket, providerMessageId: providerIdGerado, jid: jidMascarado, lookupMs: Date.now() - t0 });
+      const t1 = Date.now();
+      let resultado;
+      try {
+        resultado = await sockEnvio.sendMessage(grupoJid, { text: texto }, { messageId: providerIdGerado });
+      } catch (e) {
+        log("error", "grupo.send_falhou", { correlationId, providerMessageId: providerIdGerado, jid: jidMascarado, durationMs: Date.now() - t1, erro: e?.name ?? "erro" });
+        throw e;
+      }
+      const providerMessageId = resultado?.key?.id ?? providerIdGerado;
+      log("info", "grupo.send_resolved", { correlationId, providerMessageId, jid: jidMascarado, durationMs: Date.now() - t1 });
+      return { providerMessageId, enviadoEm: new Date().toISOString(), grupo: { jid: info.jid, nome: info.nome } };
     },
   };
 }

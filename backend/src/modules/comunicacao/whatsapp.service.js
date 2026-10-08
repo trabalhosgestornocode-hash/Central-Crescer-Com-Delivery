@@ -101,6 +101,27 @@ export function criarWhatsAppService({ provider, identidadeConfirmada = null, se
       return provider.sendDocument({ telefoneE164, urlDocumento, nomeArquivo, idempotencyKey, retryResend: retryResendPara(contatoId) });
     },
 
+    /**
+     * EXCEÇÃO ESTREITA DE GRUPO — texto ao grupo interno da operação (o Gateway só aceita o JID configurado nele). MESMOS gates de
+     * qualquer envio: kill switch e conta confirmada, ANTES do provider. Provider sem a capacidade (ex.: fake) ⇒ erro, nada sai.
+     * @param {{grupoJid: string, texto: string, idempotencyKey: string}} params
+     */
+    async enviarTextoGrupoInterno({ grupoJid, texto, idempotencyKey }) {
+      await exigirContaConfirmada();
+      if (typeof provider.sendTextGrupoInterno !== "function") throw new Error("provider sem envio a grupo interno");
+      return provider.sendTextGrupoInterno({ grupoJid, texto, idempotencyKey });
+    },
+    /** SÓ LEITURA — grupos da conta conectada (nome, JID, tamanho). Não envia nada. */
+    async listarGrupos() {
+      if (typeof provider.listarGrupos !== "function") throw new Error("provider sem listagem de grupos");
+      return provider.listarGrupos();
+    },
+    /** SÓ LEITURA — o grupo interno existe, a conta participa e pode enviar? Não envia nada. */
+    async verificarGrupoInterno({ grupoJid }) {
+      if (typeof provider.verificarGrupoInterno !== "function") throw new Error("provider sem verificação de grupo");
+      return provider.verificarGrupoInterno({ grupoJid });
+    },
+
     /** @param {(mensagem: object) => void} handler */
     onMensagemRecebida(handler) {
       // Checkpoint F — 3ª camada: o handler (futuro Agente/automação) só vê evento elegível (LIVE, cliente direto, sem fromMe/falha/stub).
