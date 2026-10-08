@@ -3,7 +3,8 @@
 // NÃO implementa nenhuma regra de negócio: detecção de pendência, agendamento,
 // policy, claim, rate-limit, cooldown, jitter, horário comercial, retry e
 // provider já existem em comunicacao.alertas.service.js/whatsapp.service.js.
-// Este módulo só decide QUANDO chamar executarCiclo() e nunca chama
+// Este módulo só decide QUANDO chamar executarCiclo() (e, se instalado, o
+// passo INDEPENDENTE do relatório do grupo interno) e nunca chama
 // whatsapp.service.js/Gateway/provider diretamente.
 //
 // GATE GLOBAL MAIS FORTE que o já existente dentro de processarProximoLote:
@@ -52,12 +53,12 @@ function resumoDoResultado(resultado) {
  * @param {{
  *   executarCiclo: Function, modoAtual: Function, whatsAppService: object,
  *   intervalMs: number, agora?: () => Date, log?: Function,
- *   gracePeriodMs?: number,
- * }} params
+ *   gracePeriodMs?: number, executarRelatorio?: Function|null,
+ * }} params  `executarRelatorio`: passo do relatório do grupo interno (relatorioDashboardGrupo.js), ou null.
  */
 export function criarLoopWorker({
   executarCiclo, modoAtual, whatsAppService, intervalMs,
-  agora = () => new Date(), log = () => {}, gracePeriodMs = GRACE_PERIOD_PADRAO_MS,
+  agora = () => new Date(), log = () => {}, gracePeriodMs = GRACE_PERIOD_PADRAO_MS, executarRelatorio = null,
 }) {
   let estado = ESTADOS.BOOTING;
   let lastCycleAt = null;
@@ -101,6 +102,25 @@ export function criarLoopWorker({
       promiseCicloAtual = null;
       lastCycleAt = agora().toISOString();
       estado = parando ? ESTADOS.STOPPING : ESTADOS.IDLE;
+    }
+    await executarPassoRelatorioIsolado();
+  }
+
+  // RELATÓRIO DO GRUPO INTERNO (Fase 4) — fluxo INDEPENDENTE do ciclo individual acima: roda mesmo que o ciclo tenha falhado,
+  // e uma falha dele nunca chega ao ciclo (try/catch próprio). Só existe se o lifecycle o instalou (modo != DESLIGADO).
+  async function executarPassoRelatorioIsolado() {
+    if (!executarRelatorio || parando) return;
+    const p = Promise.resolve().then(() => executarRelatorio({ agora: agora() }));
+    promiseCicloAtual = p;
+    try {
+      const r = await p;
+      if (r?.acao && !["DOMINGO", "ANTES_DO_HORARIO", "JA_EXISTIA", "SIMULACAO_JA_FEITA", "DESLIGADO"].includes(r.acao)) {
+        log("info", "comunicacao.relatorio_grupo", { acao: r.acao, dataLocal: r.dataLocal ?? null, status: r.status ?? null, motivo: r.motivo ?? null });
+      }
+    } catch (e) {
+      log("error", "comunicacao.relatorio_grupo_falhou", { erro: String(e?.message ?? e).slice(0, 300) });
+    } finally {
+      promiseCicloAtual = null;
     }
   }
 

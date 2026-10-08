@@ -49,6 +49,7 @@ export async function iniciarWorkerComunicacaoEmbutido({
   carregarConfig: carregarConfigInjetado, criarLoopWorker: criarLoopWorkerInjetado,
   modoAtual: modoAtualInjetado, executarCiclo: executarCicloInjetado,
   criarWhatsAppService: criarWhatsAppServiceInjetado, criarBaileysGatewayProvider: criarProviderInjetado,
+  executarRelatorio: executarRelatorioInjetado,
 } = {}) {
   if (!workerEmbutidoHabilitado(env)) {
     log("info", "comunicacao.worker_not_started", { reason: "worker_disabled" });
@@ -91,7 +92,10 @@ export async function iniciarWorkerComunicacaoEmbutido({
     // KILL SWITCH também na fronteira do provider: modo DISABLED ⇒ nenhuma chamada ao provider, mesmo por um caminho inesperado.
     modoAtual,
   });
-  const loop = criarLoopWorker({ executarCiclo, modoAtual, whatsAppService, intervalMs: config.intervalMs, log, gracePeriodMs });
+  // RELATÓRIO DIÁRIO DO GRUPO INTERNO (Fase 4): fluxo independente do dashboard_ifood_d1, no MESMO laço (sem cron/serviço novo).
+  // IFOOD_DASHBOARD_RELATORIO_GRUPO_MODO ausente/DESLIGADO ⇒ o passo nem é instalado.
+  const executarRelatorio = await criarPassoRelatorio({ env, whatsAppService, log, injetado: executarRelatorioInjetado });
+  const loop = criarLoopWorker({ executarCiclo, modoAtual, whatsAppService, intervalMs: config.intervalMs, log, gracePeriodMs, executarRelatorio });
 
   // Fire-and-forget de propósito (mesmo padrão do `.then()` de
   // inicializarWorkerRemoto em server.js): o laço roda até `encerrar()`, sem
@@ -105,6 +109,25 @@ export async function iniciarWorkerComunicacaoEmbutido({
   pararAtual = (sinal) => { registrarEstadoDoWorker(null); return loop.encerrar(sinal); };
 
   return { habilitado: true, obterEstado: loop.obterEstado };
+}
+
+/**
+ * Passo do relatório do grupo interno para o laço, ou `null` se o modo é DESLIGADO (padrão). Import dinâmico, como os demais.
+ * `estado` vive enquanto o processo vive (só evita repetir log/simulação; a garantia de UM envio por dia é a UNIQUE do banco).
+ */
+async function criarPassoRelatorio({ env, whatsAppService, log, injetado }) {
+  const cfg = await import("../modules/comunicacao/relatorioDashboardGrupo.config.js"); // puro: não carrega Supabase
+  const modo = cfg.modoRelatorio(env);
+  if (modo === cfg.MODOS_RELATORIO.DESLIGADO) {
+    log("info", "comunicacao.relatorio_grupo_desligado", {});
+    return null;
+  }
+  const { grupoInternoJidDoAmbiente } = await import("../modules/comunicacao/comunicacao.grupoInterno.js");
+  const grupoJid = grupoInternoJidDoAmbiente(env);
+  const executar = injetado ?? (await import("../modules/comunicacao/relatorioDashboardGrupo.js")).executarPassoRelatorio;
+  const estado = {};
+  log("info", "comunicacao.relatorio_grupo_instalado", { modo, horario: "16:30", timezone: cfg.TIMEZONE_RELATORIO, grupoConfigurado: !!grupoJid });
+  return ({ agora }) => executar({ agora, modo, grupoJid, whatsAppService, estado });
 }
 
 /**

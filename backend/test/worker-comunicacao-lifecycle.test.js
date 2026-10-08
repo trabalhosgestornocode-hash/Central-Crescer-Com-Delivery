@@ -159,3 +159,36 @@ describe("Checkpoint H.2-B.1 — lifecycle embutido (A-G)", () => {
     assert.equal(r.motivo, "COMUNICACAO_WORKER_ENABLED != true");
   });
 });
+
+describe("Fase 4 — passo do relatório do grupo interno no worker embutido", () => {
+  const base = (env, executarRelatorio) => iniciarWorkerComunicacaoEmbutido({
+    env: { COMUNICACAO_WORKER_ENABLED: "true", ...AUTORIZADO, ...env },
+    carregarConfig: configValida,
+    modoAtual: async () => "NORMAL",
+    executarCiclo: async () => ({ deteccao: {}, agendamento: {}, lote: [] }),
+    criarWhatsAppService: () => ({}),
+    criarBaileysGatewayProvider: () => ({}),
+    executarRelatorio,
+  });
+
+  test("IFOOD_DASHBOARD_RELATORIO_GRUPO_MODO ausente: o passo NÃO é instalado (nada roda)", async () => {
+    let chamadas = 0;
+    const r = await base({}, async () => { chamadas += 1; return {}; });
+    await sleep(60);
+    await pararWorkerComunicacaoEmbutido("TESTE");
+    assert.equal(r.habilitado, true);
+    assert.equal(chamadas, 0);
+  });
+
+  test("modo SIMULACAO: o passo é instalado no MESMO laço e recebe modo/JID/serviço", async () => {
+    const recebidos = [];
+    await base({ IFOOD_DASHBOARD_RELATORIO_GRUPO_MODO: "SIMULACAO", WHATSAPP_GRUPO_INTERNO_JID: "120363000000000001@g.us" },
+      async (p) => { recebidos.push(p); return { acao: "ANTES_DO_HORARIO" }; });
+    await sleep(60);
+    await pararWorkerComunicacaoEmbutido("TESTE");
+    assert.ok(recebidos.length >= 1);
+    assert.equal(recebidos[0].modo, "SIMULACAO");
+    assert.equal(recebidos[0].grupoJid, "120363000000000001@g.us");
+    assert.ok(recebidos[0].agora instanceof Date);
+  });
+});
