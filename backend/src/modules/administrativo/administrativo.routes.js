@@ -123,6 +123,11 @@ administrativoRouter.post("/comunicacao/conexao/desconectar", limiteConexao, cc.
 administrativoRouter.post("/comunicacao/conexao/trocar", limiteConexao, cc.conexaoTrocar);
 administrativoRouter.post("/comunicacao/conexao/reconciliar", limiteConexao, cc.conexaoReconciliar);
 administrativoRouter.put("/comunicacao/conexao/identidade", limiteConexao, cc.conexaoIdentidade);
+// Grupo interno ("Crescer Com Delivery - Central"): listar grupos (só leitura) e teste controlado — mesmos guards do router (painel + MFA)
+// e o mesmo limite de taxa da Conexão nas chamadas que vão ao Gateway.
+administrativoRouter.get("/comunicacao/grupo-interno/grupos", limiteConexao, cc.grupoInternoGrupos);
+administrativoRouter.get("/comunicacao/grupo-interno/teste/preparo", cc.grupoInternoPreparoTeste);
+administrativoRouter.post("/comunicacao/grupo-interno/teste", limiteConexao, cc.grupoInternoEnviarTeste);
 administrativoRouter.post("/comunicacao/conversas/:contatoId/mensagens", limiteDeTaxa({ escopo: "comunicacao_manual", ...RATE_LIMIT.comunicacaoManual }), cc.enviarMensagemConversa);
 
 // ---- Mentorados: contas da plataforma + vínculos empresa/unidade, só leitura.

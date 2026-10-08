@@ -9,6 +9,7 @@ import { identidadeOperacional } from "../../shared/identidade.js";
 import * as service from "./administrativo.comunicacao.service.js";
 import * as central from "./administrativo.comunicacao.central.js";
 import * as teste from "./administrativo.comunicacao.teste.js";
+import * as grupoInterno from "./administrativo.comunicacao.grupoInterno.js";
 import * as conversas from "./administrativo.comunicacao.conversas.js";
 import * as conexao from "./administrativo.comunicacao.conexao.js";
 import * as empresa from "./administrativo.comunicacao.empresa.js";
@@ -238,3 +239,9 @@ export const conexaoReconciliar = asyncHandler(async (req, res) => ok(res, await
 export const conexaoTrocar = asyncHandler(async (req, res) => ok(res, await conexao.trocar({ confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));
 // PUT /administrativo/comunicacao/conexao/identidade   { ambiente?, agenteCrescer? }
 export const conexaoIdentidade = asyncHandler(async (req, res) => ok(res, await conexao.definirIdentidade({ ambiente: req.body?.ambiente, agenteCrescer: req.body?.agenteCrescer }, autor(req), deps(req))));
+
+// ---- Grupo interno da operação (listagem só leitura + teste controlado) ----
+export const grupoInternoGrupos = asyncHandler(async (req, res) => ok(res, await grupoInterno.listarGrupos(deps(req))));
+export const grupoInternoPreparoTeste = asyncHandler(async (req, res) => ok(res, await grupoInterno.preparoTesteGrupo(deps(req))));
+export const grupoInternoEnviarTeste = asyncHandler(async (req, res) =>
+  ok(res, await grupoInterno.enviarTesteGrupo({ testeId: req.body?.testeId, confirmacaoExplicita: req.body?.confirmacaoExplicita }, autor(req), deps(req))));

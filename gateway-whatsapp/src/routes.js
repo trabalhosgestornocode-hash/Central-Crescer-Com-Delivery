@@ -1,7 +1,8 @@
 // Rotas do Gateway — a direção Backend -> Gateway do protocolo (Checkpoint
 // C0, item 6). Superfície deliberadamente pequena: sem bulk, sem broadcast,
-// sem groups/contacts dump, sem endpoint genérico para "executar um método
-// qualquer do Baileys".
+// sem contacts dump, sem endpoint genérico para "executar um método
+// qualquer do Baileys". Grupos: SÓ a exceção estreita de src/grupoInterno.js
+// (listar nome/JID, e enviar texto ao ÚNICO grupo interno configurado).
 //
 // `idempotencyKey` chega em /messages só para CORRELAÇÃO no log — o Gateway
 // NUNCA decide se um envio é duplicado; isso é responsabilidade do backend
@@ -127,6 +128,31 @@ export function criarRotas(sessao, { executarOperacao, retryCache } = {}) {
       if (typeof telefoneE164 !== "string" || !/^\+[1-9][0-9]{7,14}$/.test(telefoneE164)) return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_PHONE" });
       res.set("Cache-Control", "no-store");
       res.json(await sessao.fotoPerfil({ telefoneE164 }));
+    } catch (e) { next(e); }
+  });
+
+  // EXCEÇÃO ESTREITA DE GRUPO (src/grupoInterno.js) — listagem SÓ LEITURA (nome/JID/tamanho, nunca participantes) e envio de texto
+  // SOMENTE ao grupo interno configurado em WHATSAPP_GRUPO_INTERNO_JID. Qualquer outro @g.us é recusado (403) antes do socket.
+  router.get("/whatsapp/grupos", async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(await sessao.listarGrupos());
+    } catch (e) { next(e); }
+  });
+
+  router.post("/whatsapp/grupo-interno/verificar", async (req, res, next) => {
+    try {
+      res.set("Cache-Control", "no-store");
+      res.json(await sessao.verificarGrupoInterno({ grupoJid: req.corpoJson?.grupoJid }));
+    } catch (e) { next(e); }
+  });
+
+  router.post("/whatsapp/grupo-interno/messages", async (req, res, next) => {
+    try {
+      const { grupoJid, texto, idempotencyKey } = req.corpoJson ?? {};
+      if (typeof texto !== "string" || !texto.trim() || texto.length > 4096) return res.status(400).json({ error: "WHATSAPP_GATEWAY_INVALID_MESSAGE", detalhe: "texto inválido" });
+      log("info", "grupo.recebido_pedido_envio", { idempotencyKey });
+      res.json(await sessao.enviarGrupoInterno({ grupoJid, texto, correlationId: typeof idempotencyKey === "string" ? idempotencyKey.slice(0, 200) : null }));
     } catch (e) { next(e); }
   });
 

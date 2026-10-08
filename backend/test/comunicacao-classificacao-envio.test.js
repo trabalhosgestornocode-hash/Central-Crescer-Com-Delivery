@@ -384,6 +384,11 @@ describe("D.3-R — TABELA DEFINITIVA de classificação (RETRYAVEL × PERMANENT
       WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP: [422, P],
       WHATSAPP_GATEWAY_RECIPIENT_UNVERIFIED: [422, P],
       WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED: [503, R],
+      // Exceção estreita de grupo (gateway-whatsapp/src/grupoInterno.js): o Gateway recusa ANTES do sendMessage em todos.
+      WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED: [403, P],
+      WHATSAPP_GATEWAY_GROUP_NOT_FOUND: [422, P],
+      WHATSAPP_GATEWAY_GROUP_SEND_FORBIDDEN: [422, P],
+      WHATSAPP_GATEWAY_GROUP_LOOKUP_FAILED: [503, R],
     };
     for (const codigo of Object.values(CODIGOS_GATEWAY)) {
       assert.ok(ESPERADO[codigo], `o Gateway ganhou o código ${codigo}: decida sua classificação (RETRYAVEL só com prova de pré-envio)`);
@@ -392,8 +397,9 @@ describe("D.3-R — TABELA DEFINITIVA de classificação (RETRYAVEL × PERMANENT
     }
   });
 
-  test("MARCAS_POR_CODIGO_GATEWAY: exatamente NOT_CONNECTED -> preEnvio, LOGGED_OUT/INVALID_MESSAGE -> permanente e os 3 códigos de destinatário da H.4-B.4 (mais nada)", () => {
+  test("MARCAS_POR_CODIGO_GATEWAY: exatamente NOT_CONNECTED -> preEnvio, LOGGED_OUT/INVALID_MESSAGE -> permanente, os 3 códigos de destinatário da H.4-B.4 e os 4 do grupo interno (mais nada)", () => {
     assert.deepEqual(Object.keys(MARCAS_POR_CODIGO_GATEWAY).sort(), [
+      "WHATSAPP_GATEWAY_GROUP_LOOKUP_FAILED", "WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED", "WHATSAPP_GATEWAY_GROUP_NOT_FOUND", "WHATSAPP_GATEWAY_GROUP_SEND_FORBIDDEN",
       "WHATSAPP_GATEWAY_INVALID_MESSAGE", "WHATSAPP_GATEWAY_LOGGED_OUT", "WHATSAPP_GATEWAY_NOT_CONNECTED",
       "WHATSAPP_GATEWAY_RECIPIENT_LOOKUP_FAILED", "WHATSAPP_GATEWAY_RECIPIENT_NOT_ON_WHATSAPP", "WHATSAPP_GATEWAY_RECIPIENT_UNVERIFIED",
     ]);
@@ -403,6 +409,10 @@ describe("D.3-R — TABELA DEFINITIVA de classificação (RETRYAVEL × PERMANENT
     assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_NOT_CONNECTED, { preEnvio: true });
     assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_LOGGED_OUT, { permanente: true });
     assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_INVALID_MESSAGE, { permanente: true });
+    for (const c of ["WHATSAPP_GATEWAY_GROUP_NOT_AUTHORIZED", "WHATSAPP_GATEWAY_GROUP_NOT_FOUND", "WHATSAPP_GATEWAY_GROUP_SEND_FORBIDDEN"]) {
+      assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY[c], { preEnvio: true, permanente: true }, c);
+    }
+    assert.deepEqual(MARCAS_POR_CODIGO_GATEWAY.WHATSAPP_GATEWAY_GROUP_LOOKUP_FAILED, { preEnvio: true });
   });
 
   test("LOGGED_OUT e INVALID_MESSAGE são PERMANENTES e NÃO alegam pré-envio (o Gateway não garante); NOT_CONNECTED é o único RETRYAVEL do contrato", async () => {

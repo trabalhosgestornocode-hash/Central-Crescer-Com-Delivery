@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(__dirname, "..", "src");
 
-const METODOS_ENVIO = ["sendText(", "sendImage(", "sendDocument("];
+const METODOS_ENVIO = ["sendText(", "sendImage(", "sendDocument(", "sendTextGrupoInterno("];
 
 // Arquivos com permissão de MENCIONAR esses métodos — a definição do
 // contrato (JSDoc), o próprio serviço que os invoca, e o FakeProvider (que

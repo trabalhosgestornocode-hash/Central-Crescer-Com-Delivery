@@ -261,6 +261,11 @@ export const painelAdmApi = {
   /** Acompanhamento do teste (a tela consulta a cada poucos segundos). */
   comunicacaoTesteStatus: (mensagemId) => chamar(`/comunicacao/teste/${encodeURIComponent(mensagemId)}`),
 
+  // -- Grupo interno ("Crescer Com Delivery - Central"): listagem só leitura e teste controlado (confirmação explícita + testeId da tela).
+  grupoInternoGrupos: () => chamar("/comunicacao/grupo-interno/grupos", { headers: { "Cache-Control": "no-store" }, cache: "no-store" }),
+  grupoInternoPreparo: () => chamar("/comunicacao/grupo-interno/teste/preparo"),
+  grupoInternoEnviarTeste: ({ testeId }) => chamar("/comunicacao/grupo-interno/teste", { method: "POST", json: { testeId, confirmacaoExplicita: true } }),
+
   // -- Central de Comunicação: conversas com responsáveis autorizados --
   // A autorização de quem aparece é do BACKEND (roster); nenhum telefone completo trafega. O envio manual leva um `envioId` gerado pela tela
   // (duplo clique/reenvio = mesmo envioId = uma única mensagem).

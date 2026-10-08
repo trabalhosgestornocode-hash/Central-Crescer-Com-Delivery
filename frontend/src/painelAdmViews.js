@@ -21,6 +21,7 @@ import { travarScroll, destravarScroll, resetScrollLock } from "./scrollLock.js"
 import { renderPerformance } from './performance.js';
 import { renderDesenvolvimento, montarCardDesenvolvimento } from './desenvolvimento.js';
 import { renderCentral, pararCentral, recarregarCentral } from './central/centralComunicacao.js';
+import { ligarGrupoInterno } from './central/centralGrupoInterno.js';
 import { SECOES_PDF, secoesPadrao, gerarPdf, previewPdf, nomeArquivoPdf } from "./painelAdmPdf.js";
 import {
   card, cards, secao, carregando, erro, vazio, busca, metrica, barraSaude,
@@ -1533,6 +1534,7 @@ function ligarLegadoCentral(host, { aoAtualizar } = {}) {
   });
   host.querySelectorAll("[data-padm-com-msg]").forEach((b) => b.addEventListener("click", () => abrirDetalheMensagem(b.dataset.padmComMsg)));
   q('[data-padm-acao="abrir-teste"]')?.addEventListener("click", () => abrirModalTeste());
+  ligarGrupoInterno(host, api);
 }
 
 /** Monta a Central de Comunicação na tela (a costura entre o painel legado e o módulo novo). */

@@ -190,6 +190,10 @@ export const ACOES = {
   COMUNICACAO_TESTE_ENTREGUE: "COMUNICACAO_TESTE_ENTREGUE",
   COMUNICACAO_TESTE_LIDO: "COMUNICACAO_TESTE_LIDO",
   COMUNICACAO_TESTE_FALHOU: "COMUNICACAO_TESTE_FALHOU",
+  // Grupo interno da operação (comunicacao.grupoInterno.js) — teste controlado pelo Painel.
+  COMUNICACAO_GRUPO_TESTE_INICIADO: "COMUNICACAO_GRUPO_TESTE_INICIADO",
+  COMUNICACAO_GRUPO_TESTE_ENVIADO: "COMUNICACAO_GRUPO_TESTE_ENVIADO",
+  COMUNICACAO_GRUPO_TESTE_FALHOU: "COMUNICACAO_GRUPO_TESTE_FALHOU",
 
   // Central de Comunicação — conversas com responsáveis. Sempre com ator humano. Nunca grava telefone completo (só mascarado) nem o TEXTO da mensagem.
   // Responsável de COMUNICAÇÃO da EMPRESA (migration 100): criado/editado/ativado/desativado/validado. Telefone sempre mascarado.

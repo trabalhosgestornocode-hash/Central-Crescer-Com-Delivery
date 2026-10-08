@@ -9,6 +9,7 @@
 import { escapeHtml } from "./utils.js";
 import { icon } from "./icons.js";
 import { card, cards, secao, chip, vazio, carregando, busca, fmtData, fmtDataCurta } from "./painelAdmUi.js";
+import { htmlSecaoGrupoInterno } from "./central/centralGrupoInterno.js";
 
 // ---------------------------------------------------------------------------
 // Vocabulário
@@ -476,7 +477,7 @@ export function htmlAbaTeste({ resumo, orgs = [], testes = null } = {}) {
       ${seletor}
       <div class="padm-teste-acoes"><button type="button" class="btn btn-primary btn-sm" data-padm-acao="abrir-teste" ${motivo ? "disabled" : ""}>Enviar teste</button></div>
       ${motivo ? `<p class="padm-form-nota">${escapeHtml(motivo)}</p>` : ""}`,
-  })}${secao({ titulo: "Testes realizados", icone: "clock", corpo: lista })}`;
+  })}${secao({ titulo: "Testes realizados", icone: "clock", corpo: lista })}${htmlSecaoGrupoInterno()}`;
 }
 
 // ---------------------------------------------------------------------------
