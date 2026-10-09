@@ -17,7 +17,9 @@
 -- códigos por força bruta. O banco nunca recebe nem devolve nada em claro.
 --
 -- ACESSO SÓ POR FUNÇÃO: as tabelas não têm privilégio para NENHUM papel (nem service_role). Tudo passa por funções
--- SECURITY DEFINER (search_path fixo, EXECUTE só para service_role) que (1) exigem empresa+unidade explícitas em toda
+-- SECURITY DEFINER (search_path = pg_catalog, pg_temp — `public` FORA do caminho: tudo nosso é chamado como
+-- `public.<objeto>`, então nada criado no schema public consegue se passar por uma função nativa; EXECUTE só para
+-- service_role) que (1) exigem empresa+unidade explícitas em toda
 -- gestão, (2) nunca devolvem hash, (3) fazem as transições com FOR UPDATE — aprovação e consumo atômicos, sem
 -- dupla aprovação nem reuso de pareamento.
 --
@@ -135,7 +137,7 @@ alter table pareamentos_exibicao
 -- ---------------------------------------------------------------------------
 create or replace function exibicao_conferir_tenant() returns trigger
 language plpgsql
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 begin
   if tg_op = 'UPDATE' then
@@ -168,7 +170,7 @@ create trigger trg_pareamentos_exibicao_tenant before insert or update of organi
 create or replace function exibicao_unidade_alterada() returns trigger
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   v_motivo text;
@@ -199,7 +201,7 @@ create or replace function exibicao_unidade_elegivel(p_organizacao_id uuid, p_un
 language sql
 stable
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
   select case
     when u.id is null or u.organizacao_id is distinct from p_organizacao_id or not u.ativo then 'unidade_indisponivel'
@@ -224,7 +226,7 @@ create or replace function exibicao_pareamento_iniciar(
 ) returns table(resultado text, pareamento_id uuid, expira_em timestamptz)
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   v_id uuid;
@@ -245,7 +247,7 @@ begin
   end if;
   begin
     insert into public.pareamentos_exibicao (codigo_hash, segredo_hash, expira_em, rede_prefixo, navegador_resumo)
-    values (p_codigo_hash, p_segredo_hash, now() + make_interval(secs => p_validade_s),
+    values (p_codigo_hash, p_segredo_hash, now() + make_interval(secs => p_validade_s::double precision),
             left(p_rede, 45), left(p_navegador, 80))
     returning id, pareamentos_exibicao.expira_em into v_id, v_expira;
   exception when unique_violation then
@@ -260,7 +262,7 @@ create or replace function exibicao_pareamento_estado(p_segredo_hash text)
 returns table(estado text, expira_em timestamptz, unidade_nome text, nome_dispositivo text)
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   p public.pareamentos_exibicao%rowtype;
@@ -286,7 +288,7 @@ returns table(resultado text, criado_em timestamptz, expira_em timestamptz, nave
 language plpgsql
 stable
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   p public.pareamentos_exibicao%rowtype;
@@ -310,7 +312,7 @@ create or replace function exibicao_pareamento_aprovar(
 ) returns table(resultado text, pareamento_id uuid)
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   p public.pareamentos_exibicao%rowtype;
@@ -360,7 +362,7 @@ create or replace function exibicao_pareamento_consumir(
 ) returns table(resultado text, dispositivo_id uuid)
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   p public.pareamentos_exibicao%rowtype;
@@ -396,7 +398,7 @@ begin
     return query select v_eleg, null::uuid; return;
   end if;
   -- Limite de telas ativas por unidade, serializado por unidade (duas telas consumindo ao mesmo tempo não furam).
-  perform pg_advisory_xact_lock(hashtextextended('exibicao:' || p.unidade_id::text, 0));
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('exibicao:' || p.unidade_id::text, 0::bigint));
   if (select count(*) from public.dispositivos_exibicao d
        where d.unidade_id = p.unidade_id and d.revogado_em is null and d.expira_em > now()) >= p_limite_unidade then
     update public.pareamentos_exibicao set estado = 'cancelado' where id = p.id;
@@ -419,7 +421,7 @@ $$;
 create or replace function exibicao_pareamento_cancelar(p_segredo_hash text) returns text
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 begin
   update public.pareamentos_exibicao set estado = 'cancelado'
@@ -445,7 +447,7 @@ create or replace function exibicao_dispositivo_resolver(p_token_hash text, p_re
 returns table(resultado text, dispositivo_id uuid, organizacao_id uuid, unidade_id uuid, nome text, modo_padrao text, rotacao_devida boolean)
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   d public.dispositivos_exibicao%rowtype;
@@ -524,7 +526,7 @@ create or replace function exibicao_dispositivo_rotacionar(p_dispositivo_id uuid
 returns text
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   d public.dispositivos_exibicao%rowtype;
@@ -556,7 +558,7 @@ $$;
 create or replace function exibicao_dispositivo_desconectar(p_token_hash text) returns text
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 begin
   if p_token_hash is null or p_token_hash !~ '^[0-9a-f]{64}$' then return 'nao_encontrado'; end if;
@@ -579,7 +581,7 @@ returns table(id uuid, nome text, modo_padrao text, situacao text, criado_em tim
 language sql
 stable
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
   select d.id, d.nome, d.modo_padrao,
          case when d.revogado_em is not null then 'revogada'
@@ -600,7 +602,7 @@ create or replace function exibicao_dispositivo_renomear(p_organizacao_id uuid, 
 returns text
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 begin
   if p_organizacao_id is null or p_unidade_id is null then
@@ -619,7 +621,7 @@ create or replace function exibicao_dispositivos_revogar(
 ) returns integer
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   v_n integer;
@@ -645,7 +647,7 @@ $$;
 create or replace function exibicao_limpar(p_limite integer) returns integer
 language plpgsql
 security definer
-set search_path = public, pg_temp
+set search_path = pg_catalog, pg_temp
 as $$
 declare
   v_a integer; v_b integer;

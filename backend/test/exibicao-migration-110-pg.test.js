@@ -127,7 +127,7 @@ describe("MIGRATION 110 em Postgres real e descartável", { skip: motivoPular },
       const linhas = ok(`select p.proname || ':' || p.prosecdef || ':' || coalesce(array_to_string(p.proconfig, ';'), '')
                            from pg_proc p where p.proname like 'exibicao\\_%' order by 1`).split("\n");
       assert.ok(linhas.length >= 14);
-      for (const l of linhas) assert.match(l, /search_path=public, pg_temp/, l);
+      for (const l of linhas) assert.match(l, /search_path=pg_catalog, pg_temp/, l);
       for (const l of linhas.filter((x) => !x.startsWith("exibicao_conferir_tenant"))) assert.match(l, /:true:/, l);
     });
     test("nenhuma função de gestão ou de estado devolve hash/segredo", () => {
@@ -139,6 +139,26 @@ describe("MIGRATION 110 em Postgres real e descartável", { skip: motivoPular },
       const listagem = comoBackend(`select row_to_json(l)::text from exibicao_dispositivos_listar('${ORG_A}', '${UNI_A1}') l`);
       assert.ok(!listagem.includes(t.token), "a listagem não contém o hash do token");
       assert.doesNotMatch(listagem, /[0-9a-f]{64}/);
+    });
+    test("sombra no schema public NÃO sequestra as funções (papel com CREATE em public)", () => {
+      ok(`do $$ begin if not exists (select 1 from pg_roles where rolname = 'atacante_teste') then create role atacante_teste; end if; end $$;
+          grant usage, create on schema public to atacante_teste;
+          create table if not exists public.prova_sombra (quem text);
+          grant insert on public.prova_sombra to atacante_teste;
+          truncate public.prova_sombra;`);
+      // Sobrecargas com a assinatura EXATA dos argumentos usados nas funções (antes: venciam a nativa).
+      ok(`set role atacante_teste;
+          create or replace function public.hashtextextended(t text, s integer) returns bigint language sql as $f$ insert into public.prova_sombra values (current_user) returning 1::bigint $f$;
+          create or replace function public.make_interval(secs integer) returns interval language sql as $f$ insert into public.prova_sombra values (current_user) returning interval '1 second' $f$;
+          create or replace function public.left(t text, n integer) returns text language sql as $f$ insert into public.prova_sombra values (current_user) returning t $f$;
+          create or replace function public.now() returns timestamptz language sql as $f$ insert into public.prova_sombra values (current_user) returning clock_timestamp() $f$;`);
+      const t = criarTela();
+      resolver(t.token);
+      comoBackend(`select count(*) from exibicao_dispositivos_listar('${ORG_A}', '${UNI_A1}')`);
+      assert.equal(ok("select count(*) from public.prova_sombra"), "0", "nenhuma função do atacante executou");
+      ok(`drop function public.hashtextextended(text, integer); drop function public.make_interval(integer);
+          drop function public."left"(text, integer); drop function public.now(); drop table public.prova_sombra;
+          revoke create on schema public from atacante_teste;`);
     });
     test("formato: só hash hex de 64 é aceito (texto em claro é recusado)", () => {
       falha(`insert into dispositivos_exibicao (organizacao_id, unidade_id, nome, token_hash, autorizado_por_conta_id, expira_em)

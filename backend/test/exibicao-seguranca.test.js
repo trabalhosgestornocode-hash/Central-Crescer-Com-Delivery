@@ -180,7 +180,8 @@ describe("migration 110 — travas estáticas", () => {
     const funcoes = [...sql.matchAll(/create or replace function (exibicao_\w+)\(/g)].map((m) => m[1]);
     assert.ok(funcoes.length >= 14);
     for (const f of funcoes) assert.match(sql, new RegExp(`revoke all on function ${f}\\(`), f);
-    assert.equal((sql.match(/set search_path = public, pg_temp/g) ?? []).length, funcoes.length);
+    assert.equal((sql.match(/set search_path = pg_catalog, pg_temp/g) ?? []).length, funcoes.length, "public fora do search_path");
+    assert.doesNotMatch(sql, /search_path = public/);
   });
   test("só hashes: nenhuma coluna de token/código/segredo em claro", () => {
     // Colunas de TEXTO (onde um segredo poderia morar) com token/código/segredo no nome: só *_hash.
