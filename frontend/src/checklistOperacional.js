@@ -30,6 +30,20 @@
 // RELÓGIO: os contadores usam a hora do SERVIDOR (`servidorEm` corrige o
 // relógio do aparelho) — uma TV com o relógio errado não mostra tempo errado.
 //
+// MODOS DE EXIBIÇÃO: a página do menu mostra a escolha entre Televisão e Tablet (telaSelecaoModos). Os dois
+// modos são o MESMO dashboard — mesmo resumo, mesmo sincronizador, mesmo aviso do Realtime, mesmo HTML de
+// conteúdo; o modo só troca a classe da raiz (CSS) e o encaixe das listas (checklistOperacionalExibicao.js).
+// A consulta e o Realtime só rodam com um modo aberto: voltar à seleção para tudo (sincronizador, tique,
+// observador, wake lock, tela cheia, foco isolado). Entrar de novo cria UM sincronizador novo — nunca dois.
+//
+// PAGINAÇÃO (só TV): listas que não cabem viram páginas que alternam a cada 10 s, sobre os dados JÁ recebidos
+// (nenhuma consulta nova). Quem vira a página é o próprio tique de 1 s — sem timer extra para duplicar ou
+// esquecer. Dado novo mantém a página (ou a última válida); com movimento reduzido nada vira sozinho e as
+// setas do paginador trocam a página. No Tablet a lista é completa e a tela rola.
+//
+// FOCO: com um modo aberto, o resto da Central fica `inert` (isolarFoco) e o foco vai para a raiz; o Tab só
+// percorre os controles visíveis. Redesenho mantém o foco no mesmo controle. Voltar desfaz o inert.
+//
 // DEMONSTRAÇÃO: só quando pedida EXPLICITAMENTE (?checklist=demonstracao na
 // URL) e sempre identificada pela faixa e pelo selo. Nunca é usada como
 // substituta de dado real ausente.
@@ -57,9 +71,13 @@ import {
   resumoCarregando, adaptarResumo, marcarFalha, envelhecido, marcarEnvelhecido, assinaturaDados,
 } from "./checklistOperacionalDados.js";
 import {
-  montarTela, conteudoTela, telaSemUnidade, cardTempo, cardStatus, painelPedidosAtivos, assinaturaStatus,
+  montarTela, conteudoTela, telaSemUnidade, telaSelecaoModos, cardTempo, cardStatus, painelPedidosAtivos, assinaturaStatus,
   textoSincronizacao, textoQuantidade, textoVida, dialogoMetas,
 } from "./checklistOperacionalVisual.js";
+import {
+  MODOS_EXIBICAO, modoValido, pedirTelaCheia, sairDaTelaCheia, telaCheiaAtiva, avisoTelaCheia,
+  INTERVALO_PAGINA_MS, montarPaginas, paginaValida, girarPagina, textoPagina, isolarFoco,
+} from "./checklistOperacionalExibicao.js";
 
 const NIVEIS = ["ok", "atencao", "critico", "neutro"];
 const CHAVES = ["preparo", "entrega", "vida"];
@@ -74,12 +92,18 @@ const estado = {
   raiz: null,
   observador: null, // ResizeObserver: refaz o encaixe das listas quando a área muda (tela cheia, rotação do tablet)
   wakeLock: null,
-  sincronizador: null, // só existe com a tela aberta em dado real (nunca na demonstração)
+  sincronizador: null, // só existe com um modo aberto em dado real (nunca na demonstração nem na seleção)
   assinatura: "",
+  modo: null,       // "tv" | "tablet" com o dashboard aberto; null = página de seleção
+  tentativaTelaCheia: null, // última recusa do navegador ("recusado" | "sem_suporte"), para o aviso discreto
+  paginas: new Map(), // painel ("ativos" | "ultimos" | "avaliacoes") -> índice da página visível (só TV)
+  proximaPaginaEm: null, // Date.now() em que as páginas viram; null = ciclo parado
+  restaurarFoco: null, // desfaz o `inert` aplicado ao resto da Central
 };
 
 registrarResetDeContexto(() => {
   parar();
+  estado.modo = null; // outra unidade/empresa: volta à seleção
   estado.resumo = null;
   estado.metas = null;
   estado.assinatura = "";
@@ -103,6 +127,9 @@ function parar() {
   estado.observador?.disconnect();
   estado.observador = null;
   liberarWakeLock();
+  estado.restaurarFoco?.();
+  estado.restaurarFoco = null;
+  estado.proximaPaginaEm = null;
   estado.raiz = null;
 }
 
@@ -121,21 +148,68 @@ export function renderChecklistOperacional() {
   const view = el("#view");
   const unidade = state.sessao?.unidade;
   if (!unidade?.id) {
+    estado.modo = null;
     view.innerHTML = telaSemUnidade();
     return;
   }
   estado.metas ??= clonarMetas(METAS_EXEMPLO);
+  if (modoValido(estado.modo)) abrirModo(estado.modo); // redesenho da rota com um modo aberto: continua nele
+  else desenharSelecao(unidade);
+}
+
+// ---------------------------------------------------------------------------
+// Seleção do modo e ciclo de vida do modo aberto
+// ---------------------------------------------------------------------------
+
+function desenharSelecao(unidade, focarModo = null) {
+  estado.modo = null;
+  const view = el("#view");
+  view.innerHTML = telaSelecaoModos({ unidadeNome: unidade.nome, demonstracao: demonstracaoPedida() });
+  const pagina = view.querySelector("[data-ckm]");
+  pagina.addEventListener("click", (ev) => {
+    const modo = ev.target.closest('[data-acao="iniciar-modo"]')?.dataset.modo;
+    if (modoValido(modo)) iniciarModo(modo);
+  });
+  if (focarModo) pagina.querySelector(`[data-acao="iniciar-modo"][data-modo="${focarModo}"]`)?.focus();
+}
+
+/** Clique em "Iniciar Modo ...": abre o modo e pede a tela cheia AINDA dentro do gesto do usuário. */
+function iniciarModo(modo) {
+  estado.tentativaTelaCheia = null;
+  abrirModo(modo);
+  entrarEmTelaCheia();
+}
+
+/** Abre o dashboard no modo pedido. Sempre parte de tudo parado: nunca há dois sincronizadores. */
+function abrirModo(modo) {
+  parar();
+  const unidade = state.sessao?.unidade;
+  estado.modo = modo;
+  estado.paginas = new Map(); // cada abertura começa na primeira página
+  document.addEventListener("visibilitychange", aoVoltarVisivel);
   if (demonstracaoPedida()) {
     estado.resumo = amostraDemonstracao({ unidadeNome: unidade.nome, metas: estado.metas });
     desenhar();
+    pedirWakeLock();
     return;
   }
   estado.assinatura = "";
   estado.resumo = resumoCarregando({ unidade, metas: estado.metas });
   desenhar();
-  document.addEventListener("visibilitychange", aoVoltarVisivel);
   estado.sincronizador = criarSincronizadorDaTela(unidade);
   estado.sincronizador.iniciar();
+  pedirWakeLock();
+}
+
+/** "Voltar ao Checklist": sai da tela cheia, para consulta/tique/listeners e volta à seleção (mesma unidade). */
+function voltarParaSelecao() {
+  const modoAnterior = estado.modo;
+  sairDaTelaCheia(); // pedido enquanto a raiz ainda está no DOM (removê-la também encerra a tela cheia)
+  parar();
+  estado.tentativaTelaCheia = null;
+  const unidade = state.sessao?.unidade;
+  if (unidade?.id) desenharSelecao(unidade, modoAnterior);
+  else renderChecklistOperacional();
 }
 
 // ---------------------------------------------------------------------------
@@ -178,28 +252,39 @@ function redesenharQuandoPuder() {
   dlg.addEventListener("close", () => { delete dlg.dataset.redesenhoPendente; if (estado.raiz?.isConnected) desenhar(); }, { once: true });
 }
 
-/** Aba/TV voltou a ficar visível: consulta já, sem esperar o próximo ciclo. */
+/** Aba/TV voltou a ficar visível: consulta já, sem esperar o próximo ciclo, e retoma o wake lock. */
 function aoVoltarVisivel() {
   if (document.visibilityState !== "visible" || !estado.raiz?.isConnected) return;
   estado.sincronizador?.agora();
+  pedirWakeLock();
 }
 
 function desenhar() {
-  const opcoes = { podeEditarMetas: podeEditarMetas() };
+  const opcoes = { podeEditarMetas: podeEditarMetas(), modo: estado.modo };
   const agora = agoraServidor();
   if (estado.raiz?.isConnected) {
-    // Redesenho DENTRO da raiz: a tela cheia (presa ao elemento raiz) continua ativa.
+    // Redesenho DENTRO da raiz: a tela cheia (presa ao elemento raiz) continua ativa, e o foco volta
+    // para o mesmo controle (o botão antigo some com o innerHTML).
+    const foco = seletorDoFoco(estado.raiz);
     estado.raiz.innerHTML = conteudoTela(estado.resumo, agora, opcoes);
     aoMudarTelaCheia();
+    paginarPaineis(estado.raiz);
+    devolverFoco(estado.raiz, foco);
   } else {
     const view = el("#view");
     view.innerHTML = montarTela(estado.resumo, agora, opcoes);
     estado.raiz = view.querySelector("[data-cko]");
     ligarEventos(estado.raiz);
+    aoMudarTelaCheia();
+    paginarPaineis(estado.raiz);
+    if (modoValido(estado.modo)) {
+      // O resto da Central sai da ordem do Tab e da árvore de acessibilidade enquanto o modo estiver aberto.
+      estado.restaurarFoco = isolarFoco(estado.raiz);
+      estado.raiz.focus({ preventScroll: true });
+    }
   }
-  ajustarAoEspaco(estado.raiz);
   if (!estado.observador && typeof ResizeObserver === "function") {
-    estado.observador = new ResizeObserver(() => ajustarAoEspaco(estado.raiz));
+    estado.observador = new ResizeObserver(() => paginarPaineis(estado.raiz));
     estado.observador.observe(estado.raiz);
   }
   tique(); // liga os pulsos já no primeiro quadro
@@ -271,7 +356,7 @@ function restante(no, r) {
 
 function tique() {
   const raiz = estado.raiz;
-  if (!raiz || !raiz.isConnected) { parar(); return; }
+  if (!raiz || !raiz.isConnected) { parar(); estado.modo = null; return; } // saiu da tela: a volta começa na seleção
   // Sem resposta boa há tempo demais (rede lenta, aba congelada): a tela se declara desatualizada sozinha.
   if (estado.resumo?.origem === "api" && estado.resumo.conexao?.estado !== "indisponivel"
     && estado.resumo.conexao?.estado !== "desatualizado" && envelhecido(estado.resumo, Date.now())) {
@@ -305,6 +390,7 @@ function tique() {
       aplicarNivel(novo, s.nivel);
     }
   }
+  if (paginando()) virarPaginasNoTempo(raiz);
 }
 
 function atualizarCard(raiz, chave, resumo, agora) {
@@ -340,13 +426,15 @@ function atualizarPedidos(raiz, resumo, agora) {
     // Um pedido mudou de estado e precisa subir na lista: remonta SÓ este painel,
     // preservando o nível anterior de cada linha para o destaque de virada.
     const anteriores = new Map([...painel.querySelectorAll("[data-pedido]")].map((l) => [l.dataset.pedido, l.dataset.nivel]));
+    const foco = painel.contains(document.activeElement) ? seletorDoFoco(raiz) : null;
     painel.outerHTML = painelPedidosAtivos(resumo, agora);
     const novo = raiz.querySelector(".cko-painel--ativos");
     novo.querySelectorAll("[data-pedido]").forEach((l) => {
       const nivel = l.dataset.nivel;
       if (anteriores.has(l.dataset.pedido)) { l.dataset.nivel = anteriores.get(l.dataset.pedido); aplicarNivel(l, nivel); }
     });
-    ajustarAoEspaco(raiz);
+    paginarPainel(novo); // mesma página (ou a última que ainda existe), mesmo ciclo
+    devolverFoco(raiz, foco);
   }
   const porId = new Map(derivados.map((p) => [p.id, p]));
   raiz.querySelectorAll(".cko-painel--ativos [data-pedido]").forEach((linha) => {
@@ -368,51 +456,128 @@ function atualizarPedidos(raiz, resumo, agora) {
 }
 
 // ---------------------------------------------------------------------------
-// Encaixe sem rolagem: em painel de altura limitada (tela cheia), esconde as
-// linhas que não cabem INTEIRAS e conta o excedente em "E mais N". Fora da
-// tela cheia o painel cresce com o conteúdo e nada é escondido.
+// Paginação das listas (só Modo Televisão). Todas as linhas estão no DOM; aqui
+// se decide quais aparecem. Páginas = linhas que cabem INTEIRAS no painel, na
+// ordem, sem pular nenhuma. No Tablet: tudo visível e o paginador escondido.
 // ---------------------------------------------------------------------------
 
-function ajustarAoEspaco(raiz) {
+const paginando = () => MODOS_EXIBICAO[estado.modo]?.paginarListas === true;
+
+function paginarPaineis(raiz) {
   if (!raiz?.isConnected) return;
-  raiz.querySelectorAll(".cko-painel").forEach((painel) => {
-    const lista = painel.querySelector("[data-cabe]");
-    const mais = painel.querySelector("[data-mais]");
-    if (!lista || !mais) return;
-    const itens = [...lista.children];
-    itens.forEach((i) => { i.hidden = false; });
-    const extra = Number(mais.dataset.extra) || 0;
-    let ocultos = 0;
-    const escrever = () => {
-      const n = ocultos + extra;
-      mais.hidden = n === 0;
-      mais.textContent = n ? `E mais ${n} ${n === 1 ? mais.dataset.singular : mais.dataset.plural}` : "";
-    };
-    escrever();
-    for (let i = itens.length - 1; i > 0 && painel.scrollHeight > painel.clientHeight + 1; i--) {
-      itens[i].hidden = true;
-      ocultos++;
-      escrever();
-    }
+  raiz.querySelectorAll("[data-painel]").forEach(paginarPainel);
+}
+
+function paginarPainel(painel) {
+  const lista = painel?.querySelector("[data-cabe]");
+  const nav = painel?.querySelector("[data-paginacao]");
+  if (!lista || !nav) return;
+  const itens = [...lista.children];
+  itens.forEach((i) => { i.hidden = false; });
+  if (!paginando()) { esconderPaginador(nav); painel._paginas = null; return; }
+  // Mede com o paginador visível (o espaço dele é reservado); se tudo couber numa página, ele some depois.
+  nav.hidden = false;
+  const cssPainel = getComputedStyle(painel);
+  const fundo = painel.getBoundingClientRect().bottom - parseFloat(cssPainel.paddingBottom)
+    - nav.getBoundingClientRect().height - (parseFloat(cssPainel.rowGap) || 0);
+  const disponivel = fundo - lista.getBoundingClientRect().top;
+  const paginas = montarPaginas(itens.map((i) => i.getBoundingClientRect().height), disponivel, parseFloat(getComputedStyle(lista).rowGap) || 0);
+  painel._paginas = paginas;
+  mostrarPagina(painel, estado.paginas.get(nav.dataset.paginacao) ?? 0);
+}
+
+function mostrarPagina(painel, pedida) {
+  const nav = painel.querySelector("[data-paginacao]");
+  const itens = [...painel.querySelector("[data-cabe]").children];
+  const paginas = painel._paginas ?? [[0, itens.length]];
+  const pagina = paginaValida(pedida, paginas.length);
+  estado.paginas.set(nav.dataset.paginacao, pagina);
+  const [ini, fim] = paginas[pagina];
+  itens.forEach((item, i) => { item.hidden = i < ini || i >= fim; });
+  if (paginas.length <= 1) { esconderPaginador(nav); return; }
+  nav.hidden = false;
+  texto(nav.querySelector("[data-pagina-rot]"), textoPagina({
+    pagina, paginas: paginas.length, total: Number(nav.dataset.total) || itens.length, singular: nav.dataset.singular, plural: nav.dataset.plural,
+  }));
+}
+
+/** Paginador some (uma página só ou Tablet); se o foco estava nele, volta para a raiz — nunca para o vazio. */
+function esconderPaginador(nav) {
+  const tinhaFoco = nav.contains(document.activeElement);
+  nav.hidden = true;
+  if (tinhaFoco) estado.raiz?.focus({ preventScroll: true });
+}
+
+/** Chamado pelo tique: vira todas as listas juntas a cada 10 s; reage também a linha que cresceu. */
+function virarPaginasNoTempo(raiz) {
+  raiz.querySelectorAll("[data-painel]").forEach((painel) => {
+    // Linha que ganhou o aviso de vida (ou trocou de etapa) e passou do fundo: refaz as páginas deste painel.
+    if (painel._paginas && painel.scrollHeight > painel.clientHeight + 1) paginarPainel(painel);
   });
+  if (reduzMovimento()) { estado.proximaPaginaEm = null; return; } // sem virada automática: setas do paginador
+  const agoraLocal = Date.now(); // cadência da virada: relógio do aparelho (não é um tempo exibido)
+  if (estado.proximaPaginaEm == null) { estado.proximaPaginaEm = agoraLocal + INTERVALO_PAGINA_MS; return; }
+  if (agoraLocal < estado.proximaPaginaEm) return;
+  estado.proximaPaginaEm = agoraLocal + INTERVALO_PAGINA_MS;
+  raiz.querySelectorAll("[data-painel]").forEach((painel) => virarPagina(painel, 1));
+}
+
+function virarPagina(painel, passo) {
+  const paginas = painel._paginas;
+  if (!paginas || paginas.length <= 1) return;
+  const chave = painel.querySelector("[data-paginacao]").dataset.paginacao;
+  mostrarPagina(painel, girarPagina(estado.paginas.get(chave) ?? 0, paginas.length, passo));
 }
 
 // ---------------------------------------------------------------------------
-// Tela cheia (modo TV) — o elemento do Checklist ocupa a tela, sem o menu
+// Foco nos redesenhos: o controle focado é recriado; o foco vai para o novo
 // ---------------------------------------------------------------------------
 
-async function alternarTelaCheia() {
+function seletorDoFoco(raiz) {
+  const foco = document.activeElement;
+  if (!foco || foco === raiz || !raiz.contains(foco)) return null;
+  const acao = foco.closest("[data-acao]")?.dataset.acao;
+  if (!acao) return null;
+  const pag = foco.closest("[data-paginacao]")?.dataset.paginacao;
+  return pag ? `[data-paginacao="${pag}"] [data-acao="${acao}"]` : `[data-acao="${acao}"]`;
+}
+
+function devolverFoco(raiz, seletor) {
+  if (!seletor) return;
+  const alvo = raiz.querySelector(seletor);
+  if (alvo && !alvo.closest("[hidden]")) alvo.focus({ preventScroll: true });
+  else raiz.focus({ preventScroll: true });
+}
+
+// ---------------------------------------------------------------------------
+// Tela cheia — o elemento do Checklist ocupa a tela. Sem ela (recusa, Esc,
+// navegador sem a API) o modo continua imersivo DENTRO da página (CSS
+// .cko--imersivo cobre o menu) e o botão "Tela cheia" tenta de novo.
+// ---------------------------------------------------------------------------
+
+async function entrarEmTelaCheia() {
   const raiz = estado.raiz;
   if (!raiz) return;
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen();
-    else await raiz.requestFullscreen({ navigationUI: "hide" });
-  } catch { /* navegador recusou (ex.: iframe sem permissão) — segue na janela */ }
+  const r = await pedirTelaCheia(raiz);
+  if (estado.raiz !== raiz) return; // voltou à seleção enquanto o navegador decidia
+  estado.tentativaTelaCheia = r.ok ? null : r.motivo;
+  aoMudarTelaCheia();
+}
+
+function alternarTelaCheia() {
+  if (telaCheiaAtiva(estado.raiz)) sairDaTelaCheia();
+  else entrarEmTelaCheia();
 }
 
 async function pedirWakeLock() {
-  // Mantém a TV/tablet acordada enquanto o Checklist estiver em tela cheia.
-  try { estado.wakeLock = await navigator.wakeLock?.request("screen"); } catch { estado.wakeLock = null; }
+  // Mantém a TV/tablet acordada enquanto um modo estiver aberto (o navegador solta ao esconder a aba).
+  const raiz = estado.raiz;
+  if (!raiz || (estado.wakeLock && !estado.wakeLock.released)) return;
+  try {
+    const trava = await navigator.wakeLock?.request("screen");
+    if (estado.raiz !== raiz) { trava?.release?.().catch(() => {}); return; } // já saiu do modo
+    estado.wakeLock = trava ?? null;
+  } catch { estado.wakeLock = null; }
 }
 
 function liberarWakeLock() {
@@ -423,15 +588,22 @@ function liberarWakeLock() {
 function aoMudarTelaCheia() {
   const raiz = estado.raiz;
   if (!raiz) return;
-  const ativa = document.fullscreenElement === raiz;
+  const ativa = telaCheiaAtiva(raiz);
+  if (ativa) estado.tentativaTelaCheia = null;
   raiz.classList.toggle("cko--tela-cheia", ativa);
   const btn = raiz.querySelector('[data-acao="tela-cheia"]');
-  if (btn) {
+  if (btn && btn.getAttribute("aria-pressed") !== String(ativa)) {
     btn.setAttribute("aria-pressed", String(ativa));
     btn.querySelector("[data-rotulo-tela]").textContent = ativa ? "Sair da tela cheia" : "Tela cheia";
     btn.querySelector("[data-icone-tela]").innerHTML = icon(ativa ? "minimize" : "maximize", { size: 18 });
   }
-  if (ativa) pedirWakeLock(); else liberarWakeLock();
+  // Esc ou recusa: continua no modo, dentro da página, com o motivo escrito (nunca finge estar em tela cheia).
+  const aviso = raiz.querySelector("[data-aviso-tela]");
+  if (aviso) {
+    const t = avisoTelaCheia({ ativa, ultimaTentativa: estado.tentativaTelaCheia });
+    texto(aviso, t);
+    aviso.hidden = !t;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +653,13 @@ function ligarEventos(raiz) {
   raiz.addEventListener("click", (ev) => {
     const acao = ev.target.closest("[data-acao]")?.dataset.acao;
     if (acao === "tela-cheia") alternarTelaCheia();
+    else if (acao === "voltar") voltarParaSelecao();
     else if (acao === "metas") abrirMetas();
+    else if (acao === "pagina-anterior" || acao === "pagina-proxima") {
+      // Página escolhida à mão fica os 10 s inteiros na tela antes da próxima virada automática.
+      virarPagina(ev.target.closest("[data-painel]"), acao === "pagina-proxima" ? 1 : -1);
+      estado.proximaPaginaEm = Date.now() + INTERVALO_PAGINA_MS;
+    }
   });
   // fullscreenchange borbulha do elemento até o document: ouvir na raiz evita
   // listener global que sobreviveria à troca de rota.
