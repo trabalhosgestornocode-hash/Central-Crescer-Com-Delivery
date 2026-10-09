@@ -20,6 +20,7 @@ import { agenteRouter } from "./modules/agente/agente.routes.js";
 import { inteligenciaRouter } from "./modules/inteligencia/inteligencia.routes.js";
 import { unidadeRouter } from "./modules/unidade/unidade.routes.js";
 import { realtimeRouter } from "./modules/realtime/realtime.routes.js";
+import { checklistOperacionalRouter } from "./modules/checklist-operacional/checklistOperacional.routes.js";
 
 // Todas as rotas daqui já passaram por `requireAuth` (aplicado em app.js).
 // O que este arquivo decide é a SEGUNDA camada, e ela divide a API em mundos
@@ -80,6 +81,9 @@ tenant.use("/realtime", realtimeRouter);   // idem — credencial de canal Realt
 tenant.use("/vendas", requireModulo(MODULOS.SALES), vendasRouter);
 tenant.use("/integracoes/martin-brower", requireModulo(MODULOS.MARTIN_BROWER), martinBrowerRouter);
 tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
+// Checklist Operacional: lê os pedidos iFood da unidade — mesmo módulo (`ifood`) e mesma permissão
+// (INTEGRACOES_VER, no router) da lista de pedidos. Nunca mais aberto que o dado que mostra.
+tenant.use("/checklist-operacional", requireModulo(MODULOS.IFOOD), checklistOperacionalRouter);
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);
 // Seção "INTELIGÊNCIA" do menu (Agente Crescer · Relatórios · Integrações).
 // `inteligencia` é o gate-pai: sem ele, NADA da área responde. O catálogo de
