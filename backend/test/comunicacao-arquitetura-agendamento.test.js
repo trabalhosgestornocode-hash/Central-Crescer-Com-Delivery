@@ -81,7 +81,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 108 = Dashboard iFood multicanal (estrutura por unidade, canais e valores por canal).
       "108_dashboard_ifood_canais.sql", "108_rollback.sql",
       // 109 = envios ao grupo interno da operação (tabela própria; não toca o outbox, o claim nem as RPCs da 088).
-      "109_comunicacao_envios_grupo.sql", "109_rollback.sql"];
+      "109_comunicacao_envios_grupo.sql", "109_rollback.sql",
+      // 110 = telas de exibição do Checklist (TV/tablet) e pareamento por código.
+      "110_exibicao_dispositivos.sql", "110_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });
