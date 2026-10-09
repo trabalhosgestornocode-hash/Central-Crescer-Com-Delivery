@@ -1,0 +1,437 @@
+/* =========================================================================
+   Checklist Operacional — painel do delivery (TV, desktop, tablet)
+   Mesma linguagem dos cards de status da Central (.adm-kpi / .padm-card):
+   superfície sólida, cantos de 14px, Inter, e a FAIXA LATERAL carregando o
+   estado. Sem brilhos nem gradientes decorativos.
+
+   Cor = estado da meta (verde / amarelo / vermelho), sempre acompanhada de
+   texto. Movimento = urgência: só contadores vivos pulsam, num ritmo que o
+   controlador calcula pela razão tempo/meta. Fora da meta o card fica
+   estável. Sempre escuro: é uma tela de parede.
+   Prefixo único `cko-` — nada aqui vaza para outras telas.
+   ========================================================================= */
+
+/* --tom registrado como cor para a TROCA de estado ser uma transição suave */
+@property --tom {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #8e7479;
+}
+
+.cko {
+  --cko-fundo: #150a0d;
+  --cko-sup: #1f1115;
+  --cko-sup-2: #28171c;
+  --cko-sup-3: #321e24;
+  --cko-linha: rgba(255, 232, 236, .08);
+  --cko-linha-forte: rgba(255, 232, 236, .15);
+  --cko-texto: #f6edef;
+  --cko-suave: #c4aab0;
+  --cko-apagado: #8e7479;
+  --cko-marca: #d81324;
+  --cko-ok: #23c47e;
+  --cko-atencao: #f2b33d;
+  --cko-critico: #ff4d5a;
+  --cko-demo: #a98bff;
+  --cko-raio: 14px;
+  --tom: var(--cko-apagado);
+
+  container: cko / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(12px, 1vw, 18px);
+  padding: clamp(14px, 1.2vw, 24px);
+  border-radius: 20px;
+  background: var(--cko-fundo);
+  color: var(--cko-texto);
+  font-family: "Inter", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+}
+.cko *, .cko *::before, .cko *::after { box-sizing: border-box; }
+.cko h1, .cko h2, .cko p, .cko dl, .cko dd, .cko figure, .cko blockquote, .cko ul, .cko ol { margin: 0; }
+.cko ul, .cko ol { padding: 0; list-style: none; }
+.cko [hidden] { display: none !important; }
+
+/* Tom por estado — todo componente usa var(--tom) */
+.cko .cko-nivel--ok { --tom: var(--cko-ok); }
+.cko .cko-nivel--atencao { --tom: var(--cko-atencao); }
+.cko .cko-nivel--critico { --tom: var(--cko-critico); }
+.cko .cko-nivel--neutro { --tom: var(--cko-apagado); }
+.cko .cko-nivel-txt--ok { color: var(--cko-ok); }
+.cko .cko-nivel-txt--atencao { color: var(--cko-atencao); }
+.cko .cko-nivel-txt--critico { color: var(--cko-critico); }
+.cko .cko-nivel-txt--neutro { color: var(--cko-apagado); }
+
+/* ---------- Demonstração ---------- */
+.cko-faixa-demo {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border-left: 3px solid var(--cko-demo);
+  background: rgba(169, 139, 255, .1);
+  color: #dcd0ff;
+  font-size: clamp(12.5px, .82cqi, 15px);
+}
+.cko-faixa-demo b { font-weight: 700; }
+/* Estado dos dados reais: mesma faixa da demonstração, na cor do estado. */
+.cko-faixa-aviso { --aviso: var(--cko-apagado); border-left-color: var(--aviso); background: color-mix(in srgb, var(--aviso) 12%, transparent); color: var(--cko-texto); }
+.cko-faixa-aviso--atencao { --aviso: var(--cko-atencao); }
+.cko-faixa-aviso--critico { --aviso: var(--cko-critico); }
+[data-slot-aviso]:empty { display: none; }
+
+/* ---------- Cabeçalho ---------- */
+.cko-cab { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: clamp(12px, 1.5cqi, 28px); }
+.cko-cab-id { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.cko-cab-logo { width: clamp(38px, 2.8cqi, 52px); height: auto; flex: none; }
+.cko-cab h1 { font-size: clamp(18px, 1.45cqi, 28px); font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+.cko-cab-unidade { color: var(--cko-suave); font-size: clamp(13px, .92cqi, 17px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cko-cab-estado { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-self: end; }
+.cko-selo {
+  --selo: var(--cko-apagado);
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 12px 5px 10px; border-radius: 999px;
+  background: color-mix(in srgb, var(--selo) 15%, transparent);
+  color: color-mix(in srgb, var(--selo) 65%, white);
+  font-size: clamp(12.5px, .82cqi, 15px); font-weight: 700; white-space: nowrap;
+}
+.cko-selo i { width: 8px; height: 8px; border-radius: 50%; background: var(--selo); }
+.cko-selo--demo { --selo: var(--cko-demo); }
+.cko-selo--ok { --selo: var(--cko-ok); }
+.cko-selo--atencao { --selo: var(--cko-atencao); }
+.cko-selo--critico { --selo: var(--cko-critico); }
+.cko-sinc { color: var(--cko-suave); font-size: clamp(12.5px, .82cqi, 15px); white-space: nowrap; }
+.cko-relogio {
+  font-size: clamp(26px, 2.3cqi, 50px); font-weight: 700; letter-spacing: -.02em; line-height: 1;
+  padding-left: clamp(12px, 1.5cqi, 28px); border-left: 1px solid var(--cko-linha-forte);
+}
+.cko-cab-acoes { display: flex; gap: 8px; }
+
+.cko-btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 40px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid var(--cko-linha-forte); background: var(--cko-sup-2); color: var(--cko-texto);
+  font: 600 14px/1 "Inter", system-ui, sans-serif; cursor: pointer;
+  transition: border-color .15s, background-color .15s;
+}
+.cko-btn:hover { border-color: var(--cko-suave); background: var(--cko-sup-3); }
+.cko-btn:focus-visible, .cko input:focus-visible { outline: 3px solid color-mix(in srgb, var(--cko-marca) 70%, white); outline-offset: 2px; }
+.cko-btn--primario { background: var(--cko-marca); border-color: var(--cko-marca); color: #fff; }
+.cko-btn--primario:hover { background: #ae0d1a; border-color: #ae0d1a; }
+.cko-btn--sutil { background: transparent; }
+
+/* ---------- Linhas ---------- */
+.cko-linha { display: grid; gap: clamp(12px, 1vw, 18px); min-height: 0; }
+.cko-linha--tempos { grid-template-columns: 1fr 1fr 1.2fr .95fr; }
+.cko-linha--operacao { grid-template-columns: 1.15fr 1.25fr .9fr; }
+.cko-linha--tempos > [data-slot-status] { display: flex; min-width: 0; }
+
+/* ---------- Card (base comum) ---------- */
+.cko-card {
+  position: relative; isolation: isolate; min-width: 0;
+  border-radius: var(--cko-raio);
+  border: 1px solid var(--cko-linha);
+  background-color: var(--cko-sup);
+  padding: clamp(14px, 1.05cqi, 22px) clamp(14px, 1.05cqi, 22px) clamp(14px, 1.05cqi, 22px) calc(clamp(14px, 1.05cqi, 22px) + 4px);
+  transition: --tom .9s ease, background-color .9s ease, border-color .9s ease;
+}
+.cko h2 { font-size: clamp(15px, 1cqi, 20px); font-weight: 700; letter-spacing: -.01em; line-height: 1.2; }
+
+/* Faixa de estado (a mesma das cards de status da Central) + anel que pulsa */
+.cko-faixa { position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 0; }
+.cko-faixa::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  border-radius: var(--cko-raio) 0 0 var(--cko-raio); background: var(--tom);
+}
+.cko-pulso {
+  position: absolute; inset: -1px; border-radius: inherit;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--tom) calc(var(--int, 0) * 100%), transparent);
+  opacity: .3;
+  will-change: opacity;
+}
+.cko-pulso[data-estatico] { opacity: 1; }
+.cko-card > :not(.cko-faixa) { position: relative; z-index: 1; }
+
+.cko-card.cko-nivel--atencao { border-color: color-mix(in srgb, var(--cko-atencao) 28%, transparent); }
+.cko-card.cko-nivel--critico {
+  border-color: color-mix(in srgb, var(--cko-critico) 55%, transparent);
+  background-color: color-mix(in srgb, var(--cko-critico) 10%, var(--cko-sup));
+}
+
+/* Ao CRUZAR para fora da meta: um destaque breve, uma vez — depois estável */
+.cko-ultrapassou::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: 0;
+  background: var(--cko-critico); opacity: 0;
+  animation: ckoUltrapassou 1.8s ease-out 1;
+}
+@keyframes ckoUltrapassou { 0% { opacity: 0; } 14% { opacity: .26; } 100% { opacity: 0; } }
+
+/* Texto de estado (nunca só cor) */
+.cko-estado {
+  display: inline-flex; align-items: center; gap: 7px; flex: none;
+  padding: 4px 11px 4px 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--tom) 15%, transparent);
+  color: color-mix(in srgb, var(--tom) 70%, white);
+  font-size: clamp(12px, .8cqi, 15px); font-weight: 700; white-space: nowrap;
+}
+.cko-estado-marca { width: 8px; height: 8px; border-radius: 2px; background: var(--tom); }
+.cko-nivel--critico > .cko-card-cab .cko-estado,
+.cko-nivel--critico > .cko-painel-cab .cko-estado { background: var(--cko-critico); color: #fff; }
+.cko-nivel--critico > .cko-card-cab .cko-estado-marca,
+.cko-nivel--critico > .cko-painel-cab .cko-estado-marca { background: #fff; }
+
+/* ---------- Cards de tempo ---------- */
+.cko-tempo { display: flex; flex-direction: column; gap: clamp(10px, .8cqi, 16px); }
+.cko-card-cab { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px; }
+.cko-card-cab > div { flex: 1 1 180px; }
+.cko-def { margin-top: 2px; color: var(--cko-apagado); font-size: clamp(12px, .76cqi, 14px); }
+
+.cko-agora { display: grid; gap: 8px; }
+.cko-agora-rot { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; color: var(--cko-suave); font-size: clamp(12.5px, .82cqi, 15px); }
+.cko-agora-rot b { color: var(--cko-texto); font-weight: 700; }
+.cko-agora-rot span { color: var(--cko-apagado); }
+.cko-num {
+  font-size: clamp(46px, 4.3cqi, 104px); font-weight: 800; line-height: .95; letter-spacing: -.035em;
+  color: var(--cko-texto);
+  transition: color .9s ease;
+}
+.cko-nivel--atencao .cko-num { color: var(--cko-atencao); }
+.cko-nivel--critico .cko-num { color: var(--cko-critico); }
+.cko-agora-pe { display: flex; justify-content: space-between; gap: 10px; color: var(--cko-apagado); font-size: clamp(12.5px, .82cqi, 15px); }
+.cko-restante { color: var(--cko-suave); font-weight: 600; }
+.cko-restante--excedido { color: var(--cko-critico); }
+.cko-agora--vazio { min-height: clamp(110px, 8cqi, 170px); align-content: start; }
+.cko-agora-vazio { color: var(--cko-apagado); font-size: clamp(14px, 1cqi, 18px); }
+
+/* Régua até 120% da meta: marca fina = início da atenção; marca forte = meta */
+.cko-regua { position: relative; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .08); }
+.cko-regua-fill { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--tom); transition: width 1s linear; }
+.cko-regua-marca { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; }
+.cko-regua-marca--aviso { background: rgba(255, 255, 255, .28); top: 0; bottom: 0; }
+.cko-regua-marca--meta { background: rgba(255, 255, 255, .85); }
+
+.cko-hoje { display: grid; grid-template-columns: repeat(3, auto); justify-content: space-between; gap: 10px; margin-top: auto; padding-top: clamp(10px, .8cqi, 14px); border-top: 1px solid var(--cko-linha); }
+.cko-hoje dt { color: var(--cko-apagado); font-size: clamp(11.5px, .74cqi, 14px); white-space: nowrap; }
+.cko-hoje dd { font-size: clamp(15px, 1cqi, 20px); font-weight: 700; white-space: nowrap; }
+.cko-hoje-vazio { color: var(--cko-apagado); }
+.cko-hoje-amostras { font-size: .9em; color: var(--cko-apagado); font-weight: 500; }
+.cko-hoje--indisponivel { grid-template-columns: 1fr auto; }
+.cko-hoje-indisp dt { color: var(--cko-suave); font-weight: 700; }
+.cko-hoje-indisp dd { font-size: clamp(12px, .78cqi, 14.5px); font-weight: 500; color: var(--cko-apagado); white-space: normal; }
+
+/* Decomposição da vida (último concluído) — tons neutros, não é julgamento */
+.cko-decomp { display: grid; gap: 7px; }
+.cko-decomp-rot { color: var(--cko-apagado); font-size: clamp(11.5px, .74cqi, 14px); }
+.cko-decomp-barra { display: flex; gap: 2px; height: 8px; }
+.cko-decomp-seg { flex-basis: 0; min-width: 4px; border-radius: 3px; }
+.cko-decomp-seg--confirmacao { background: #8e7479; }
+.cko-decomp-seg--preparo { background: #efe2e5; }
+.cko-decomp-seg--espera { background: #5e464c; }
+.cko-decomp-seg--entrega { background: #c39aa3; }
+.cko-decomp-seg--lacuna { background: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255, 255, 255, .16) 4px 6px); }
+.cko-decomp-legenda { display: flex; flex-wrap: wrap; gap: 3px 12px; color: var(--cko-suave); font-size: clamp(11.5px, .74cqi, 14px); }
+.cko-decomp-legenda li { display: inline-flex; align-items: center; gap: 6px; }
+.cko-decomp-legenda b { color: var(--cko-texto); }
+.cko-decomp-cor { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.cko-decomp-nota { color: var(--cko-apagado); font-size: 12px; }
+
+/* ---------- Status da operação ---------- */
+.cko-status { flex: 1; display: flex; flex-direction: column; gap: clamp(8px, .7cqi, 12px); }
+.cko-status-veredito { font-size: clamp(28px, 2.5cqi, 54px); font-weight: 800; letter-spacing: -.03em; line-height: 1; color: var(--tom); transition: color .9s ease; }
+.cko-status.cko-nivel--neutro .cko-status-veredito { font-size: clamp(22px, 1.8cqi, 36px); color: var(--cko-suave); }
+.cko-status-motivos { display: grid; gap: 4px; font-size: clamp(12.5px, .82cqi, 15px); }
+.cko-status-motivos li { padding-left: 14px; position: relative; }
+.cko-status-motivos li::before { content: ""; position: absolute; left: 0; top: .5em; width: 6px; height: 6px; border-radius: 2px; background: var(--tom); }
+.cko-status-calmo { color: var(--cko-suave); font-size: clamp(12.5px, .82cqi, 15px); }
+.cko-status-contagem { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin-top: auto; padding-top: 10px; border-top: 1px solid var(--cko-linha); }
+.cko-status-contagem dt { color: var(--cko-apagado); font-size: clamp(11.5px, .74cqi, 14px); }
+.cko-status-contagem dd { font-size: clamp(22px, 1.7cqi, 36px); font-weight: 800; letter-spacing: -.02em; line-height: 1.05; }
+.cko-status-medias { display: grid; gap: 5px; font-size: clamp(12px, .78cqi, 14.5px); }
+.cko-status-medias li { display: flex; align-items: center; gap: 8px; color: var(--cko-suave); }
+.cko-status-medias li span { margin-left: auto; font-weight: 600; }
+.cko-status-medias li.cko-nivel-txt--ok span { color: var(--cko-ok); }
+.cko-status-medias li.cko-nivel-txt--atencao span { color: var(--cko-atencao); }
+.cko-status-medias li.cko-nivel-txt--critico span { color: var(--cko-critico); }
+.cko-status-medias li.cko-nivel-txt--neutro span { color: var(--cko-apagado); }
+.cko-ponto { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.cko-status-medias li.cko-nivel-txt--ok .cko-ponto { background: var(--cko-ok); }
+.cko-status-medias li.cko-nivel-txt--atencao .cko-ponto { background: var(--cko-atencao); }
+.cko-status-medias li.cko-nivel-txt--critico .cko-ponto { background: var(--cko-critico); }
+.cko-status-medias li.cko-nivel-txt--neutro .cko-ponto { background: var(--cko-apagado); }
+.cko-status-medias li[class*="cko-nivel-txt--"] { color: var(--cko-suave); }
+
+/* ---------- Painéis da segunda linha ---------- */
+.cko-painel { display: flex; flex-direction: column; gap: clamp(10px, .8cqi, 14px); min-height: 0; }
+.cko-painel-cab { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cko-contagem { min-width: 28px; padding: 2px 9px; border-radius: 999px; background: var(--cko-sup-3); color: var(--cko-texto); font-size: 14px; font-weight: 700; text-align: center; }
+.cko-painel-nota { margin-left: auto; color: var(--cko-apagado); font-size: clamp(11.5px, .74cqi, 14px); }
+.cko-painel-cab .cko-estado { margin-left: auto; }
+
+/* Pedidos em andamento — a mesma linguagem dos cards, em escala de linha */
+.cko-peds { display: grid; gap: 8px; }
+.cko-ped {
+  position: relative; isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(96px, .7fr) minmax(0, 1.2fr) auto;
+  grid-template-areas: "id etapa tempo" "meta meta meta" "vida vida vida";
+  align-items: center; gap: 6px 14px;
+  padding: 10px 14px 11px 18px;
+  border-radius: 10px;
+  border: 1px solid var(--cko-linha);
+  background-color: rgba(255, 255, 255, .02);
+  --cko-raio: 10px;
+  transition: --tom .9s ease, background-color .9s ease, border-color .9s ease;
+}
+.cko-ped > :not(.cko-faixa) { position: relative; z-index: 1; }
+.cko-ped.cko-nivel--critico { border-color: color-mix(in srgb, var(--cko-critico) 45%, transparent); background-color: color-mix(in srgb, var(--cko-critico) 10%, transparent); }
+.cko-ped-id { grid-area: id; display: grid; }
+.cko-ped-id strong { font-size: clamp(16px, 1.1cqi, 22px); font-weight: 800; }
+.cko-ped-id span { color: var(--cko-apagado); font-size: clamp(11.5px, .74cqi, 14px); white-space: nowrap; }
+.cko-ped-etapa { grid-area: etapa; display: grid; gap: 6px; min-width: 0; }
+.cko-ped-etapa-rot { font-size: clamp(13px, .88cqi, 17px); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cko-trilho { display: flex; align-items: center; }
+.cko-trilho li { width: 9px; height: 9px; border-radius: 50%; background: rgba(255, 255, 255, .14); flex: none; }
+.cko-trilho li + li { margin-left: 16px; position: relative; }
+.cko-trilho li + li::before { content: ""; position: absolute; right: 11px; top: 3.5px; width: 12px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, .14); }
+.cko-trilho li.feito, .cko-trilho li.feito + li::before { background: var(--cko-suave); }
+.cko-trilho li.atual { background: var(--cko-texto); box-shadow: 0 0 0 3px rgba(255, 255, 255, .14); }
+.cko-trilho li.atual::before { background: var(--cko-suave); }
+.cko-ped-meta { grid-area: meta; display: grid; gap: 5px; }
+.cko-ped-meta > span { color: var(--cko-apagado); font-size: clamp(11.5px, .72cqi, 13.5px); }
+.cko-ped-tempo { grid-area: tempo; display: grid; justify-items: end; }
+.cko-crono { font-size: clamp(24px, 1.85cqi, 42px); font-weight: 800; letter-spacing: -.03em; line-height: 1; color: var(--cko-texto); transition: color .9s ease; }
+/* O contador segue a meta da PRÓPRIA etapa; a faixa da linha segue o pior caso (etapa ou vida) */
+.cko-crono--atencao { color: var(--cko-atencao); }
+.cko-crono--critico { color: var(--cko-critico); }
+.cko-ped-tempo .cko-restante { font-size: clamp(11.5px, .76cqi, 14px); }
+.cko-ped-vida { grid-area: vida; color: var(--cko-critico); font-size: clamp(12px, .76cqi, 14px); font-weight: 600; }
+.cko-ped.cko-nivel--atencao .cko-ped-vida { color: var(--cko-atencao); }
+.cko-ped-alerta { color: var(--cko-critico); font-weight: 700; }
+.cko-ped-agendado { color: var(--cko-suave); font-weight: 600; }
+.cko-mais { color: var(--cko-suave); font-size: 14px; font-weight: 600; text-align: center; }
+
+/* Últimos pedidos — tempos encerrados: cor do estado, sem movimento */
+.cko-tabela-wrap { overflow-x: auto; min-height: 0; }
+.cko-tabela { width: 100%; border-collapse: collapse; font-size: clamp(13px, .9cqi, 17px); }
+.cko-tabela thead th { padding: 0 8px 9px; color: var(--cko-apagado); font-size: clamp(11.5px, .74cqi, 14px); font-weight: 600; text-align: left; border-bottom: 1px solid var(--cko-linha); white-space: nowrap; }
+.cko-tabela .cko-th-tempo { text-align: right; }
+.cko-tabela tbody th, .cko-tabela td { padding: clamp(8px, .6cqi, 11px) 8px; border-bottom: 1px solid var(--cko-linha); text-align: left; white-space: nowrap; }
+.cko-tabela tbody tr:last-child > * { border-bottom: 0; }
+.cko-tabela tbody th { font-weight: 800; }
+.cko-td-tempo { text-align: right !important; font-weight: 700; }
+.cko-td-vazio { color: var(--cko-apagado); font-weight: 500; }
+.cko-tr-cancelado > * { color: var(--cko-apagado); }
+.cko-etq { display: inline-block; padding: 3px 9px; border-radius: 999px; background: rgba(255, 255, 255, .06); font-size: .86em; font-weight: 600; }
+.cko-etq--andamento { background: var(--cko-sup-3); }
+.cko-etq--cancelado { background: transparent; border: 1px solid var(--cko-linha-forte); color: var(--cko-apagado); }
+
+/* Avaliações — satisfação tem critério próprio; negativas em destaque */
+.cko-aval-topo { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 16px; }
+.cko-aval-media { display: flex; align-items: center; gap: 12px; }
+.cko-aval-num { font-size: clamp(44px, 3.6cqi, 84px); font-weight: 800; letter-spacing: -.035em; line-height: .95; }
+.cko-aval-media > div { display: grid; gap: 3px; }
+.cko-estrelas { display: inline-flex; gap: 2px; }
+.cko-estrelas svg { fill: rgba(255, 255, 255, .14); }
+.cko-estrelas svg.on { fill: var(--cko-texto); }
+.cko-aval-total { color: var(--cko-suave); font-size: clamp(12px, .8cqi, 15px); }
+.cko-aval-var { color: var(--cko-apagado); font-size: clamp(12px, .78cqi, 14px); }
+.cko-aval-dist { display: grid; gap: 4px; }
+.cko-aval-dist li { display: grid; grid-template-columns: 12px 1fr 26px; align-items: center; gap: 8px; color: var(--cko-suave); font-size: 12.5px; }
+.cko-aval-dist em { font-style: normal; text-align: right; color: var(--cko-texto); font-weight: 600; }
+.cko-aval-barra { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .07); overflow: hidden; }
+.cko-aval-barra b { display: block; height: 100%; border-radius: 3px; background: var(--cko-suave); }
+.cko-aval-dist--neg .cko-aval-barra b { background: var(--cko-critico); }
+.cko-aval-dist--neg em { color: var(--cko-critico); }
+.cko-aval-rot { color: var(--cko-apagado); font-size: clamp(11.5px, .74cqi, 14px); }
+.cko-aval-lista { display: grid; gap: 8px; }
+.cko-aval-item { display: grid; gap: 4px; padding: 9px 12px 10px 14px; border-radius: 10px; background: rgba(255, 255, 255, .03); box-shadow: inset 3px 0 0 var(--cko-linha-forte); }
+.cko-aval-item--negativa { background: color-mix(in srgb, var(--cko-critico) 10%, transparent); box-shadow: inset 3px 0 0 var(--cko-critico); }
+.cko-aval-item-cab { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--cko-apagado); font-size: 12.5px; }
+.cko-aval-neg { font-style: normal; font-weight: 700; color: var(--cko-critico); }
+.cko-aval-item blockquote { font-size: clamp(13px, .86cqi, 16.5px); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cko-aval-semcom { color: var(--cko-apagado); font-size: 13px; }
+
+/* Vazios e bloqueios */
+.cko-vazio { flex: 1; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 24px 16px; text-align: center; color: var(--cko-suave); font-size: clamp(13px, .86cqi, 16px); max-width: 46ch; margin: 0 auto; }
+.cko-vazio .icon { color: var(--cko-apagado); }
+.cko-vazio strong { color: var(--cko-texto); font-size: 1.06em; }
+.cko--sem-unidade { min-height: 60vh; justify-content: center; }
+
+/* ---------- Metas (diálogo) ---------- */
+.cko-dialogo {
+  margin: auto; /* o reset global de styles.css zera a margem que centraliza o <dialog> */
+  width: min(620px, calc(100vw - 32px)); max-height: calc(100vh - 32px);
+  padding: 0; border: 1px solid var(--cko-linha-forte); border-radius: 18px;
+  background: var(--cko-sup); color: var(--cko-texto);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, .55);
+}
+.cko-dialogo::backdrop { background: rgba(8, 3, 5, .7); }
+.cko-metas { display: grid; gap: 14px; padding: 22px; }
+.cko-metas header p { margin-top: 6px; color: var(--cko-suave); font-size: 14px; }
+.cko-metas .cko-metas-demo { color: #dcd0ff; font-weight: 600; }
+.cko-metas-grupo { min-width: 0; margin: 0; padding: 12px 14px; border: 1px solid var(--cko-linha); border-radius: 12px; }
+.cko-metas-grupo legend { padding: 0 6px; font-weight: 700; }
+.cko-metas-grupo > p { color: var(--cko-apagado); font-size: 13px; margin-bottom: 10px; }
+.cko-metas-par { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.cko-campo { display: grid; gap: 5px; font-size: 13px; color: var(--cko-suave); }
+.cko-campo-entrada { display: flex; align-items: center; border: 1px solid var(--cko-linha-forte); border-radius: 10px; background: var(--cko-fundo); }
+.cko-campo-entrada input { flex: 1; width: 100%; min-width: 0; padding: 10px 12px; border: 0; background: transparent; color: var(--cko-texto); font: 700 16px "Inter", system-ui, sans-serif; border-radius: 10px; }
+.cko-campo-entrada i { padding-right: 12px; font-style: normal; color: var(--cko-apagado); white-space: nowrap; }
+.cko-campo--erro .cko-campo-entrada { border-color: var(--cko-critico); }
+.cko-campo em { font-style: normal; color: var(--cko-critico); font-size: 12.5px; }
+.cko-metas footer { display: flex; gap: 8px; align-items: center; }
+.cko-metas footer span { flex: 1; }
+
+/* ---------- Tela cheia (modo TV): cabe em 1920×1080 sem rolagem ---------- */
+.cko:fullscreen { border-radius: 0; }
+.cko--tela-cheia { height: 100vh; overflow: hidden; }
+.cko--tela-cheia .cko-linha--operacao { flex: 1 1 0; }
+.cko--tela-cheia .cko-linha--operacao > .cko-painel { overflow: hidden; }
+.cko--tela-cheia .cko-tabela-wrap { overflow: visible; flex: none; }
+.cko--tela-cheia .cko-tempo, .cko--tela-cheia .cko-status { padding-block: clamp(12px, .85cqi, 18px); gap: clamp(8px, .6cqi, 12px); }
+.cko--tela-cheia .cko-peds { gap: 6px; }
+/* Na TV cada pedido ocupa UMA faixa: número | etapa | régua com meta | contador */
+.cko--tela-cheia .cko-ped {
+  grid-template-columns: minmax(118px, .75fr) minmax(150px, 1fr) minmax(120px, 1.1fr) auto;
+  grid-template-areas: "id etapa meta tempo" "vida vida vida vida";
+  padding-block: 8px; gap: 2px 16px;
+}
+
+/* ---------- Movimento reduzido: tudo estático, o estado continua no texto ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .cko *, .cko *::before, .cko *::after { animation: none !important; transition: none !important; }
+  .cko-pulso { opacity: 1; }
+}
+
+/* ---------- Desktop dentro do app (sem tela cheia) ---------- */
+@container cko (max-width: 1480px) {
+  .cko-linha--operacao { grid-template-columns: 1fr 1.15fr; grid-template-areas: "ativos ultimos" "ativos aval"; }
+  .cko-painel--ativos { grid-area: ativos; }
+  .cko-painel--avaliacoes { grid-area: aval; }
+  .cko-painel--ultimos { grid-area: ultimos; }
+}
+
+/* ---------- Tablet horizontal ---------- */
+@container cko (max-width: 1180px) {
+  .cko-linha--tempos { grid-template-columns: 1fr 1fr; }
+  .cko-num { font-size: clamp(48px, 7cqi, 88px); }
+  .cko-status-veredito { font-size: clamp(30px, 4.6cqi, 52px); }
+  .cko h2 { font-size: clamp(16px, 1.9cqi, 21px); }
+  .cko-crono { font-size: clamp(24px, 3.2cqi, 34px); }
+  .cko-tabela { font-size: 15px; }
+  .cko-cab { grid-template-columns: 1fr auto auto; }
+  .cko-cab-estado { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
+}
+
+/* ---------- Tablet vertical ---------- */
+@container cko (max-width: 760px) {
+  .cko-linha--tempos, .cko-linha--operacao { grid-template-columns: 1fr; grid-template-areas: "ativos" "ultimos" "aval"; }
+  .cko-linha--tempos > [data-slot-status] { order: -1; } /* tela estreita: o veredito vem primeiro */
+  .cko-cab { grid-template-columns: 1fr auto; }
+  .cko-cab-acoes { grid-column: 1 / -1; grid-row: 3; }
+  .cko-relogio { border-left: 0; padding-left: 0; }
+  .cko-num { font-size: clamp(46px, 13cqi, 80px); }
+  .cko-aval-topo { grid-template-columns: 1fr; }
+  .cko-ped { grid-template-columns: 1fr auto; grid-template-areas: "id tempo" "etapa etapa" "meta meta" "vida vida"; }
+  .cko-metas-par { grid-template-columns: minmax(0, 1fr); }
+}

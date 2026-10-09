@@ -51,6 +51,7 @@ async function tratar(r, g) {
       document.dispatchEvent(new CustomEvent("app:contexto-invalido", { detail: j.error }));
     }
     const erro = new Error(j.error || `${r.status} ${r.statusText}`);
+    erro.status = r.status; // ex.: 403 do Checklist Operacional vira "Sem acesso", não "sem conexão"
     if (j.codigo) erro.codigo = j.codigo; // ex.: "TABELA_NAO_CONFIGURADA" — ver cmv.controller.js
     if (j.details) erro.details = j.details; // ex.: sinaisQuedaMaterial/confirmacaoReforcadaNecessaria — ver dashboardExecutivo.service.js
     throw erro;
@@ -449,6 +450,8 @@ export const ifoodVincularMerchant = (merchantId) => postJson(`${IFOOD}/merchant
 export const ifoodDesconectar = () => delJson(`${IFOOD}/`);
 // Pedidos iFood da unidade — leitura do banco local (estado oficial vindo dos eventos); não chama o iFood.
 export const ifoodPedidos = () => getJson(`${IFOOD}/pedidos`);
+// Checklist Operacional — resumo do dia da unidade do contexto (só leitura; tenant vem do Context Token).
+export const obterResumoChecklist = () => getJson("/api/v1/checklist-operacional/resumo");
 
 // Financial (Fase 2 — Homologação, só leitura). merchantId NUNCA é enviado
 // daqui — o backend resolve sempre da conexão da unidade.

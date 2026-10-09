@@ -11,6 +11,7 @@ import { renderInsumos } from "./insumos.js";
 import { renderDashboardExecutivo } from "./dashboardExecutivo.js";
 import { renderBonificacaoMensal } from "./bonificacaoMensal.js";
 import { renderParserFoodDelivery } from "./parserFoodDelivery.js";
+import { renderChecklistOperacional } from "./checklistOperacional.js";
 import { renderAgente } from "./agente.js";
 import { sincronizarContextoPainel } from "./agentePainel.js";
 import { resetScrollLock } from "./scrollLock.js";
@@ -94,6 +95,9 @@ export function renderRotaAtual() {
       break;
     case "bonificacao-mensal":
       renderBonificacaoMensal();
+      break;
+    case "checklist-operacional":
+      renderChecklistOperacional();
       break;
     case "parser-food-delivery":
       renderParserFoodDelivery();
