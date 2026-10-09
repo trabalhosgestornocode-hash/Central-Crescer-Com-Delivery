@@ -138,11 +138,14 @@ export const helmetOptions = {
 // Permissions-Policy — o helmet 7 NÃO tem esta diretiva; setamos à mão.
 // Nega recursos que o app não usa. Um XSS num contexto do app não consegue
 // abrir câmera/microfone/geolocalização/pagamento, etc.
+// screen-wake-lock=(self): só as páginas da própria Central podem pedir para a
+// tela não apagar — o Checklist Operacional pede enquanto um modo Televisão/Tablet
+// está aberto. Não expõe dado nenhum e não vale para iframes de outra origem.
 export const PERMISSIONS_POLICY = [
   "accelerometer=()", "autoplay=()", "camera=()", "display-capture=()",
   "encrypted-media=()", "fullscreen=(self)", "geolocation=()", "gyroscope=()",
   "magnetometer=()", "microphone=()", "midi=()", "payment=()",
-  "picture-in-picture=()", "usb=()", "screen-wake-lock=()",
+  "picture-in-picture=()", "usb=()", "screen-wake-lock=(self)",
 ].join(", ");
 
 /** Middleware: adiciona os headers que o helmet não cobre. */

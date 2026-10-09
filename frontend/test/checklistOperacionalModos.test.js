@@ -74,6 +74,10 @@ describe("página de seleção", () => {
     assert.doesNotMatch(html, /\bmin\b|\d+\s*pedidos?/);
     assert.doesNotMatch(html, /data-cko/);
   });
+  test("aviso da seleção (perda de acesso) escapado e como alerta", () => {
+    assert.match(telaSelecaoModos({ unidadeNome: "U", aviso: "<x> sem acesso" }), /<p class="ckm-aviso" role="alert">&lt;x&gt; sem acesso<\/p>/);
+    assert.doesNotMatch(html, /ckm-aviso/);
+  });
   test("nome da unidade escapado; demonstração identificada só quando pedida", () => {
     assert.match(telaSelecaoModos({ unidadeNome: "<b>X</b>" }), /&lt;b&gt;X&lt;\/b&gt;/);
     assert.doesNotMatch(html, /Modo demonstração/);
@@ -288,6 +292,28 @@ describe("controlador", () => {
     assert.match(corpo("parar"), /estado\.proximaPaginaEm = null/);
     assert.match(corpo("virarPaginasNoTempo"), /reduzMovimento\(\)/);
   });
+  test("fim da sessão: ouve os eventos que a Central já dispara, UMA vez, e encerra tudo", () => {
+    for (const ev of ["app:logout", "app:sessao-expirada", "app:contexto-invalido", "app:mfa-requerida"]) assert.match(fonte, new RegExp(`"${ev}"`));
+    assert.equal(contar(fonte, /document\.addEventListener\(evento, \(\) => encerrarModo\(\)\)/g), 1, "um único laço de registro, no módulo");
+    const fim = corpo("encerrarModo");
+    assert.match(fim, /if \(!estado\.raiz && !estado\.modo && !estado\.sincronizador\) return;/, "fechado: não faz nada");
+    assert.ok(fim.indexOf("sairDaTelaCheia()") < fim.indexOf("parar()") && fim.indexOf("parar()") < fim.indexOf("raiz?.remove()"));
+    assert.match(fim, /estado\.resumo = null/);
+    assert.doesNotMatch(fonte, /renovar|refreshSession|aplicarContexto/, "não renova sessão vencida nem duplica a autenticação");
+  });
+  test("403 fecha o modo (sessão continua); falha de rede não", () => {
+    const falhou = fonte.slice(fonte.indexOf("falhou: (erro) =>"), fonte.indexOf("});", fonte.indexOf("falhou: (erro) =>")));
+    assert.match(falhou, /if \(erro\?\.status === 403\) \{ encerrarPorFaltaDeAcesso\(\); return; \}/);
+    assert.match(falhou, /marcarFalha\(antes, erro\)/, "outras falhas seguem como 'Sem conexão'");
+  });
+  test("wake lock: um pedido por vez, solto ao sair; recusa não quebra", () => {
+    const pedir = corpo("pedirWakeLock");
+    assert.match(pedir, /estado\.pedindoWakeLock \|\|/);
+    assert.match(pedir, /finally \{ estado\.pedindoWakeLock = false; \}/);
+    assert.match(pedir, /catch \{ estado\.wakeLock = null; \}/);
+    assert.match(corpo("parar"), /liberarWakeLock\(\)/);
+    assert.doesNotMatch(corpo("desenharSelecao"), /WakeLock/, "a seleção não pede");
+  });
   test("foco: o resto da Central fica inerte com o modo aberto e volta ao sair", () => {
     assert.match(corpo("desenhar"), /estado\.restaurarFoco = isolarFoco\(estado\.raiz\);/);
     assert.match(corpo("parar"), /estado\.restaurarFoco\?\.\(\);/);
@@ -309,7 +335,7 @@ describe("CSS dos modos", () => {
     assert.match(css, /\.cko--tablet \.cko-btn \{ min-height: 44px;/);
   });
   test("index carrega a versão nova do CSS", () => {
-    assert.match(ler("../index.html"), /checklistOperacional\.css\?v=3/);
+    assert.match(ler("../index.html"), /checklistOperacional\.css\?v=4/);
   });
   test("4K: zoom só onde o navegador o oferece; sem ele, a grade normal da TV", () => {
     assert.match(css, /@supports \(zoom: 2\) \{\s*@media \(min-width: 3000px\) and \(min-height: 1600px\) \{\s*\.cko--tv \{ zoom: 2;/);

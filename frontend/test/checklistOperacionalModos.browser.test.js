@@ -34,7 +34,18 @@ const PAGINA = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/src/styles.css"><link rel="stylesheet" href="/src/checklistOperacional.css">
 <script>window.supabase={createClient:()=>({auth:{getSession:async()=>({data:{session:null}})}})};</script>
+<script>
+// Mesmas reações do app.js (wireEventos/mostrarTela): 401 -> logout() (que dispara app:logout) -> tela de login;
+// 409 do contexto vigente -> tela de seleção de unidade. A Central só alterna \`hidden\` entre as telas.
+function mostrarTela(qual) { for (const [n, s] of [["login", "#login-screen"], ["selecao", "#selecao-screen"], ["app", "#app"]]) document.querySelector(s).hidden = n !== qual; }
+document.addEventListener("app:sessao-expirada", () => { document.dispatchEvent(new CustomEvent("app:logout")); mostrarTela("login"); });
+document.addEventListener("app:contexto-invalido", () => mostrarTela("selecao"));
+// mfa.js#abrirDesafioMfa: o desafio é uma camada NOVA no body, criada ao receber app:mfa-requerida.
+document.addEventListener("app:mfa-requerida", () => { const ov = document.createElement("div"); ov.id = "mfa-overlay"; ov.innerHTML = '<label>Código <input id="mfa-codigo" inputmode="numeric"></label>'; document.body.appendChild(ov); });
+</script>
 </head><body>
+<div id="login-screen" hidden><form><label>E-mail <input id="login-email" type="email"></label><label>Senha <input id="login-pass" type="password"></label><button type="submit" id="login-entrar">Entrar</button></form></div>
+<div id="selecao-screen" hidden><button type="button" id="sel-unidade">Unidade de teste Centro</button></div>
 <div id="app" class="app"><aside id="sidebar" class="sidebar"><nav class="menu"><ul id="menu"><li data-rota="checklist-operacional"><a href="#checklist">Checklist Operacional</a></li><li><a href="#vendas">Vendas</a></li></ul></nav></aside>
 <div class="main"><header class="topbar"><h1 id="page-title">Checklist Operacional</h1><button type="button" id="seletor-unidade">Trocar unidade</button></header><main id="view" class="content"></main></div></div>
 </body></html>`;
@@ -43,7 +54,7 @@ const PAGINA = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 // Servidor de teste: frontend estático + /resumo controlável
 // ---------------------------------------------------------------------------
 
-const api = { consultas: 0, unidades: [], segurar: null, falhar: false, dados: () => respostaResumo(AGORA) };
+const api = { consultas: 0, unidades: [], segurar: null, falhar: false, erro: null, dados: () => respostaResumo(AGORA) };
 let servidor; let base;
 
 before(async () => {
@@ -52,12 +63,20 @@ before(async () => {
     const caminho = new URL(req.url, "http://x").pathname;
     if (caminho === "/") { res.setHeader("Content-Type", "text/html; charset=utf-8"); res.end(PAGINA); return; }
     if (caminho === "/favicon.ico") { res.writeHead(204).end(); return; }
+    if (caminho === "/politica") {
+      // Página mínima servida com a Permissions-Policy pedida (teste da tela acesa em navegador real).
+      res.setHeader("Permissions-Policy", new URL(req.url, "http://x").searchParams.get("pp") ?? "");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.end("<!doctype html><title>politica</title>");
+      return;
+    }
     if (caminho === "/api/config") { res.setHeader("Content-Type", "application/json"); res.end('{"supabaseUrl":"http://127.0.0.1:9","supabaseAnonKey":"x"}'); return; }
     if (caminho === "/api/v1/checklist-operacional/resumo") {
       api.consultas += 1;
       api.unidades.push(req.headers["x-teste-unidade"] ?? null);
       if (api.segurar) await api.segurar;
       if (api.falhar) { res.writeHead(503, { "Content-Type": "application/json" }); res.end('{"error":"indisponível"}'); return; }
+      if (api.erro) { res.writeHead(api.erro.status, { "Content-Type": "application/json" }); res.end(JSON.stringify(api.erro.corpo)); return; }
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ data: api.dados() }));
       return;
@@ -75,15 +94,35 @@ before(async () => {
 after(async () => { if (servidor) await new Promise((r) => servidor.close(r)); });
 
 function zerarApi() {
-  Object.assign(api, { consultas: 0, unidades: [], segurar: null, falhar: false, dados: () => respostaResumo(AGORA) });
+  Object.assign(api, { consultas: 0, unidades: [], segurar: null, falhar: false, erro: null, dados: () => respostaResumo(AGORA) });
 }
 
 /** Abre a Central de teste com uma sessão em memória e a rota do Checklist já renderizada. */
-async function abrirCentral(browser, { viewport = { width: 1920, height: 1080 }, recusarTelaCheia = false, url = "/" } = {}) {
+async function abrirCentral(browser, { viewport = { width: 1920, height: 1080 }, recusarTelaCheia = false, url = "/", wakeLock = null } = {}) {
   const pagina = await browser.newPage({ viewport });
   const erros = [];
   pagina.on("pageerror", (e) => erros.push(e.message));
-  pagina.on("console", (m) => { if (m.type() === "error") erros.push(m.text()); });
+  // "Failed to load resource" é o próprio navegador registrando um 401/403/409 de propósito do teste.
+  pagina.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) erros.push(m.text()); });
+  if (wakeLock) {
+    // Wake lock controlado: conta pedidos e liberações; "recusar" imita o navegador negando (política/bateria).
+    await pagina.addInitScript((modo) => {
+      window.__wl = { pedidos: 0, liberados: 0, atual: null, recusar: modo === "recusar", ausente: modo === "ausente" };
+      if (window.__wl.ausente) { Object.defineProperty(navigator, "wakeLock", { value: undefined, configurable: true }); return; }
+      Object.defineProperty(navigator, "wakeLock", {
+        configurable: true,
+        value: {
+          request: async () => {
+            window.__wl.pedidos += 1;
+            if (window.__wl.recusar) throw new DOMException("Bloqueado pela política", "NotAllowedError");
+            const trava = { released: false, release: async () => { if (!trava.released) { trava.released = true; window.__wl.liberados += 1; } } };
+            window.__wl.atual = trava;
+            return trava;
+          },
+        },
+      });
+    }, wakeLock);
+  }
   await pagina.clock.install({ time: AGORA });
   await pagina.clock.pauseAt(AGORA);
   if (recusarTelaCheia) {
@@ -646,6 +685,244 @@ describe("Checklist Operacional — paginação da TV e teclado", { skip: PULAR,
     await assentar(pagina);
     assert.equal(await pagina.evaluate(() => document.querySelectorAll("[inert]").length), 0);
     assert.equal(await pagina.locator("[data-ckm]").count(), 1);
+    await pagina.close();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fim da sessão (401 / logout / 409 / 403) e tela acesa (wake lock)
+// ---------------------------------------------------------------------------
+
+const avisoDaUnidade = (pagina) => pagina.evaluate(({ org, u }) =>
+  window.__bus.receberEvento({ tipo: "ifood_pedido.estado_atualizado", organizacaoId: org, unidadeId: u, versao: Math.random() }), { org: ORG, u: UNIDADE.id });
+
+/** Retrato do que sobrou depois do fim da sessão. */
+const depoisDoFim = (pagina) => pagina.evaluate(() => ({
+  dashboard: document.querySelectorAll("[data-cko]").length,
+  inertes: [...document.querySelectorAll("[inert]")].map((n) => n.id || n.className),
+  telaCheia: !!document.fullscreenElement,
+  login: !document.querySelector("#login-screen").hidden,
+  selecaoUnidade: !document.querySelector("#selecao-screen").hidden,
+  numerosNaPagina: /\d{1,2}:\d{2}(?!:)|\d+,\d min/.test(document.querySelector("#view").textContent),
+  htmlTemOverflowTravado: getComputedStyle(document.documentElement).overflow === "hidden",
+}));
+
+describe("Checklist Operacional — fim da sessão e tela acesa", { skip: PULAR, timeout: 300_000 }, () => {
+  let browser;
+  before(async () => { browser = await chromium.launch({ headless: true, ...(CANAL ? { channel: CANAL } : {}) }); });
+  after(async () => { await browser?.close(); });
+
+  for (const modo of ["tv", "tablet"]) {
+    test(`sessão expira (401 no polling) com o Modo ${modo === "tv" ? "Televisão" : "Tablet"} aberto: login acessível por teclado, nada sobra`, async () => {
+      zerarApi();
+      const { pagina, erros } = await abrirCentral(browser, { viewport: { width: 1366, height: 768 }, wakeLock: "stub" });
+      const interesses = await pagina.evaluate(() => window.__bus._interessesAtivos());
+      await iniciarModo(pagina, modo);
+      await assentar(pagina);
+      // Camada criada com o modo aberto (deve ser liberada e o observador desligado no fim).
+      await pagina.evaluate(() => { const d = document.createElement("div"); d.id = "camada-durante"; d.innerHTML = "<button>Agente</button>"; document.body.appendChild(d); });
+      await assentar(pagina);
+      assert.equal(await pagina.evaluate(() => document.querySelector("#login-screen").inert), true, "pré-condição: login inerte com o modo aberto");
+
+      api.erro = { status: 401, corpo: { error: "Sessão expirada." } };
+      await avancar(pagina, 31_000); // próximo ciclo do polling recebe 401
+      await assentar(pagina);
+      const fim = await depoisDoFim(pagina);
+      assert.deepEqual(fim, { dashboard: 0, inertes: [], telaCheia: false, login: true, selecaoUnidade: false, numerosNaPagina: false, htmlTemOverflowTravado: false });
+
+      // Teclado: o campo do login recebe foco pelo Tab e aceita digitação.
+      await pagina.locator("body").focus();
+      let chegou = false;
+      for (let i = 0; i < 6 && !chegou; i++) { await pagina.keyboard.press("Tab"); chegou = await pagina.evaluate(() => document.activeElement?.id === "login-email"); }
+      assert.ok(chegou, "Tab alcança o e-mail do login");
+      await pagina.keyboard.type("gerente@exemplo.com");
+      assert.equal(await pagina.locator("#login-email").inputValue(), "gerente@exemplo.com");
+
+      // Nada continua rodando: nem polling, nem aviso do Realtime, nem paginação; observador desligado; wake lock solto.
+      const consultas = api.consultas;
+      await avisoDaUnidade(pagina);
+      await avancar(pagina, 180_000);
+      assert.equal(api.consultas, consultas, "sem consultas depois do fim da sessão");
+      assert.equal(await pagina.evaluate(() => window.__bus._interessesAtivos()), interesses, "nenhuma inscrição nova");
+      await pagina.evaluate(() => { const d = document.createElement("div"); d.id = "camada-depois"; document.body.appendChild(d); });
+      await assentar(pagina);
+      assert.equal(await pagina.evaluate(() => document.querySelector("#camada-depois").inert), false, "observador de camadas desligado");
+      assert.deepEqual(await pagina.evaluate(() => ({ pedidos: window.__wl.pedidos, liberados: window.__wl.liberados, soltou: window.__wl.atual?.released })), { pedidos: 1, liberados: 1, soltou: true });
+      assert.deepEqual(erros, []);
+      await pagina.close();
+    });
+  }
+
+  test("logout durante uma consulta em andamento: a resposta que chega depois não reabre nem mostra dados", async () => {
+    zerarApi();
+    const { pagina, erros } = await abrirCentral(browser, { wakeLock: "stub" });
+    await iniciarModo(pagina, "tv");
+    await assentar(pagina);
+    let soltar;
+    api.segurar = new Promise((r) => { soltar = r; });
+    await avisoDaUnidade(pagina);
+    await avancar(pagina, 2_000); // a consulta antecipada pelo aviso fica presa no servidor
+    const emVoo = api.consultas;
+    // "Sair" na Central: sessao.js#logout dispara app:logout e a Central mostra o login.
+    await pagina.evaluate(() => { document.dispatchEvent(new CustomEvent("app:logout")); mostrarTela("login"); });
+    api.segurar = null;
+    soltar();
+    await assentar(pagina);
+    await avancar(pagina, 65_000);
+    const fim = await depoisDoFim(pagina);
+    assert.equal(fim.dashboard, 0);
+    assert.deepEqual(fim.inertes, []);
+    assert.equal(fim.numerosNaPagina, false);
+    assert.equal(api.consultas, emVoo, "nenhuma consulta nova depois do logout");
+    assert.deepEqual(erros, []);
+    await pagina.close();
+  });
+
+  test("contexto inválido (409 do contexto vigente): seleção de unidade da Central acessível, modo encerrado", async () => {
+    zerarApi();
+    const { pagina, erros } = await abrirCentral(browser, { wakeLock: "stub" });
+    await iniciarModo(pagina, "tablet");
+    await assentar(pagina);
+    api.erro = { status: 409, corpo: { error: "Contexto expirado. Selecione a unidade novamente.", details: { contexto: "invalido" } } };
+    await avancar(pagina, 31_000);
+    await assentar(pagina);
+    const fim = await depoisDoFim(pagina);
+    assert.deepEqual([fim.dashboard, fim.inertes, fim.selecaoUnidade, fim.telaCheia], [0, [], true, false]);
+    await pagina.locator("#sel-unidade").focus();
+    assert.equal(await pagina.evaluate(() => document.activeElement?.id), "sel-unidade", "a escolha de unidade recebe foco");
+    const consultas = api.consultas;
+    await avancar(pagina, 125_000);
+    assert.equal(api.consultas, consultas);
+    assert.deepEqual(erros, []);
+    await pagina.close();
+  });
+
+  test("2º fator exigido (401 MFA_REQUERIDA): o modo fecha e o desafio da Central fica acessível", async () => {
+    zerarApi();
+    const { pagina, erros } = await abrirCentral(browser, { wakeLock: "stub" });
+    await iniciarModo(pagina, "tv");
+    await assentar(pagina);
+    api.erro = { status: 401, corpo: { error: "Verificação em duas etapas necessária.", codigo: "MFA_REQUERIDA" } };
+    await avancar(pagina, 31_000);
+    await assentar(pagina);
+    const fim = await depoisDoFim(pagina);
+    assert.deepEqual([fim.dashboard, fim.inertes, fim.telaCheia, fim.login], [0, [], false, false], "não é logout: só fecha o modo");
+    assert.equal(await pagina.evaluate(() => document.querySelector("#mfa-overlay")?.inert), false, "desafio de MFA não fica inerte");
+    await pagina.locator("#mfa-codigo").focus();
+    await pagina.keyboard.type("123456");
+    assert.equal(await pagina.locator("#mfa-codigo").inputValue(), "123456");
+    const consultas = api.consultas;
+    await avancar(pagina, 125_000);
+    assert.equal(api.consultas, consultas, "sem polling enquanto o 2º fator não é resolvido");
+    assert.deepEqual(erros, []);
+    await pagina.close();
+  });
+
+  test("perda de permissão (403): volta à seleção do Checklist com o aviso, sem números e sem polling", async () => {
+    zerarApi();
+    const { pagina, erros } = await abrirCentral(browser, { wakeLock: "stub" });
+    await iniciarModo(pagina, "tv");
+    await assentar(pagina);
+    api.erro = { status: 403, corpo: { error: "Sem permissão." } };
+    await avancar(pagina, 31_000);
+    await assentar(pagina);
+    assert.equal(await pagina.locator("[data-ckm]").count(), 1, "seleção do Checklist (a sessão continua)");
+    assert.match(await pagina.locator(".ckm-aviso").textContent(), /não tem mais acesso/);
+    const fim = await depoisDoFim(pagina);
+    assert.deepEqual([fim.dashboard, fim.inertes, fim.telaCheia, fim.login, fim.numerosNaPagina], [0, [], false, false, false]);
+    assert.equal(await pagina.evaluate(() => window.__wl.atual?.released), true, "wake lock solto");
+    const consultas = api.consultas;
+    await avancar(pagina, 125_000);
+    assert.equal(api.consultas, consultas, "sem polling depois do 403");
+    assert.deepEqual(erros, []);
+    await pagina.close();
+  });
+
+  test("falha de rede NÃO é logout: o modo continua, mostra o problema e se recupera sozinho", async () => {
+    zerarApi();
+    const { pagina, erros } = await abrirCentral(browser, { wakeLock: "stub" });
+    await iniciarModo(pagina, "tv");
+    await assentar(pagina);
+    api.falhar = true; // 503
+    await avancar(pagina, 31_000);
+    await assentar(pagina);
+    assert.equal(await pagina.locator(".cko--tv").count(), 1, "modo continua aberto");
+    assert.match((await informacoes(pagina)).aviso.join(" "), /Sem conexão|Dados desatualizados/);
+    assert.equal((await informacoes(pagina)).cards.length, 3, "último retrato continua, identificado como desatualizado");
+    assert.equal(await pagina.evaluate(() => document.querySelector("#login-screen").hidden), true);
+    api.falhar = false;
+    await avancar(pagina, 61_000); // recuo de 60 s após a 1ª falha
+    await assentar(pagina);
+    assert.match((await informacoes(pagina)).selo.join(" "), /Ao vivo/);
+    assert.deepEqual(erros, []);
+    await pagina.close();
+  });
+
+  test("wake lock: nada na seleção; 1 pedido ao abrir; solta ao voltar; solta ao esconder a aba e pede de novo ao voltar", async () => {
+    zerarApi();
+    const { pagina, erros } = await abrirCentral(browser, { wakeLock: "stub" });
+    const wl = () => pagina.evaluate(() => ({ pedidos: window.__wl.pedidos, liberados: window.__wl.liberados, ativa: window.__wl.atual ? !window.__wl.atual.released : false }));
+    await avancar(pagina, 5_000);
+    assert.deepEqual(await wl(), { pedidos: 0, liberados: 0, ativa: false }, "a seleção não pede");
+    await iniciarModo(pagina, "tv");
+    await assentar(pagina);
+    assert.deepEqual(await wl(), { pedidos: 1, liberados: 0, ativa: true });
+    // Aba escondida: o navegador solta a trava sozinho; ao voltar a ficar visível, o Checklist pede de novo (uma vez).
+    await pagina.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => window.__vis ?? "visible" });
+      window.__vis = "hidden"; window.__wl.atual.released = true; document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await assentar(pagina);
+    assert.equal((await wl()).pedidos, 1, "escondida: não pede");
+    const consultas = api.consultas;
+    await pagina.evaluate(() => { window.__vis = "visible"; document.dispatchEvent(new Event("visibilitychange")); document.dispatchEvent(new Event("visibilitychange")); });
+    await assentar(pagina);
+    assert.deepEqual(await wl(), { pedidos: 2, liberados: 0, ativa: true }, "voltou: pede de novo, sem pedido duplicado");
+    assert.ok(api.consultas > consultas, "voltou: consulta na hora");
+    await voltar(pagina);
+    assert.deepEqual(await wl(), { pedidos: 2, liberados: 1, ativa: false }, "voltar à seleção solta");
+    await pagina.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await assentar(pagina);
+    assert.equal((await wl()).pedidos, 2, "na seleção, voltar à aba não pede");
+    assert.deepEqual(erros, []);
+    await pagina.close();
+  });
+
+  for (const modoWl of ["recusar", "ausente"]) {
+    test(`wake lock ${modoWl === "recusar" ? "recusado" : "indisponível"}: o Checklist funciona, sem erro nem promessa rejeitada`, async () => {
+      zerarApi();
+      const { pagina, erros } = await abrirCentral(browser, { wakeLock: modoWl });
+      await pagina.evaluate(() => { window.__rejeicoes = 0; window.addEventListener("unhandledrejection", () => { window.__rejeicoes += 1; }); });
+      await iniciarModo(pagina, "tablet");
+      await assentar(pagina);
+      await pagina.evaluate(() => { document.dispatchEvent(new Event("visibilitychange")); });
+      await avancar(pagina, 31_000);
+      assert.equal((await informacoes(pagina)).cards.length, 3);
+      assert.equal(await pagina.evaluate(() => window.__rejeicoes), 0);
+      if (modoWl === "recusar") assert.ok((await pagina.evaluate(() => window.__wl.pedidos)) <= 3, "sem laço de pedidos");
+      assert.deepEqual(erros, []);
+      await pagina.close();
+    });
+  }
+
+  test("Permissions-Policy REAL da Central libera a tela acesa no Chrome; a antiga bloqueava", async () => {
+    process.env.SUPABASE_URL ??= "http://127.0.0.1:9";
+    process.env.SUPABASE_SERVICE_ROLE_KEY ??= "x";
+    process.env.SUPABASE_ANON_KEY ??= "x";
+    const { PERMISSIONS_POLICY } = await import("../../backend/src/config/seguranca.js");
+    const pagina = await browser.newPage();
+    const tentar = async (pp) => {
+      await pagina.goto(`${base}/politica?pp=${encodeURIComponent(pp)}`);
+      return pagina.evaluate(async () => {
+        try { const t = await navigator.wakeLock.request("screen"); await t.release(); return "concedido"; } catch (e) { return `${e.name}: ${e.message}`; }
+      });
+    };
+    const atual = await tentar(PERMISSIONS_POLICY);
+    const antiga = await tentar(PERMISSIONS_POLICY.replace("screen-wake-lock=(self)", "screen-wake-lock=()"));
+    console.log(`  wake lock — política atual: ${atual} | política antiga: ${antiga}`);
+    assert.match(PERMISSIONS_POLICY, /screen-wake-lock=\(self\)/);
+    assert.match(antiga, /NotAllowedError.*[Pp]ermissions? [Pp]olicy/, "a política antiga bloqueava pela Permissions-Policy");
+    assert.doesNotMatch(atual, /[Pp]ermissions? [Pp]olicy/, "a política atual não bloqueia mais");
     await pagina.close();
   });
 });
