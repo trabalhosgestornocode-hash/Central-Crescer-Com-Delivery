@@ -101,6 +101,9 @@ const PATHS = {
   // Checklist Operacional (tela cheia / modo TV)
   maximize: '<path d="M8 3.5H5a1.5 1.5 0 0 0-1.5 1.5v3M16 3.5h3A1.5 1.5 0 0 1 20.5 5v3M20.5 16v3a1.5 1.5 0 0 1-1.5 1.5h-3M3.5 16v3A1.5 1.5 0 0 0 5 20.5h3"/>',
   minimize: '<path d="M3.5 8h3A1.5 1.5 0 0 0 8 6.5v-3M16 3.5v3A1.5 1.5 0 0 0 17.5 8h3M20.5 16h-3a1.5 1.5 0 0 0-1.5 1.5v3M8 20.5v-3A1.5 1.5 0 0 0 6.5 16h-3"/>',
+  // Checklist Operacional (seleção do modo de exibição)
+  tv: '<rect x="2.5" y="4" width="19" height="12.5" rx="1.8"/><path d="M8 20.5h8M12 16.5v4"/>',
+  tablet: '<rect x="4.5" y="2.5" width="15" height="19" rx="2.2"/><path d="M11.2 18.3h1.6"/>',
 };
 
 /**

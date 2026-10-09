@@ -15,6 +15,7 @@
 
 import { escapeHtml } from "./utils.js";
 import { icon } from "./icons.js";
+import { MODOS_EXIBICAO } from "./checklistOperacionalExibicao.js";
 import {
   ROTULO_NIVEL, ROTULO_SATISFACAO, PASSOS, SELO_CONEXAO, TETO_REGUA,
   fmtMin, fmtHoraCurta, fmtIdade, fmtCronometro, rotuloPedido, etapaDoStatus, classificar,
@@ -23,10 +24,18 @@ import {
 } from "./checklistOperacionalModelo.js";
 
 /**
- * Teto de linhas montadas no DOM. Quantas APARECEM é decidido pela altura
- * disponível (controlador: ajustarAoEspaco) — na TV nada rola, o excedente vira "E mais N".
+ * Paginador de uma lista longa. TODOS os itens ficam no DOM (nos dois modos); no Modo Televisão o controlador
+ * mostra uma página por vez e alterna sozinho (paginarPaineis). No Tablet fica escondido e a lista rola.
+ * O total escrito vem do dado, não da página: nunca muda com a página visível.
  */
-export const LIMITE_ATIVOS_VISIVEIS = 12;
+export function paginacao(chave, { total, singular, plural, rotulo }) {
+  return `
+      <nav class="cko-paginacao" data-paginacao="${chave}" data-total="${total}" data-singular="${singular}" data-plural="${plural}" aria-label="Páginas de ${rotulo}" hidden>
+        <button type="button" class="cko-pag-btn" data-acao="pagina-anterior" aria-label="Página anterior de ${rotulo}">${icon("chevron-left", { size: 18 })}</button>
+        <span class="cko-pag-rot" data-pagina-rot>Página 1 de 1</span>
+        <button type="button" class="cko-pag-btn" data-acao="pagina-proxima" aria-label="Próxima página de ${rotulo}">${icon("chevron-right", { size: 18 })}</button>
+      </nav>`;
+}
 
 const faixa = (pulsa) => `<span class="cko-faixa" aria-hidden="true">${pulsa ? '<i class="cko-pulso" data-pulso></i>' : ""}</span>`;
 
@@ -225,14 +234,13 @@ export function linhaPedidoAtivo(p) {
 
 export function painelPedidosAtivos(resumo, agora) {
   const derivados = ordenarPorUrgencia((resumo.pedidosAtivos ?? []).map((p) => derivarPedidoAtivo(p, resumo.metas, agora)));
-  const visiveis = derivados.slice(0, LIMITE_ATIVOS_VISIVEIS);
-  const restantes = derivados.length - visiveis.length;
+  // Todos os pedidos em andamento, sem teto: a TV pagina, o Tablet rola — nenhum fica de fora.
   const corpo = derivados.length
-    ? `<ul class="cko-peds" data-cabe>${visiveis.map(linhaPedidoAtivo).join("")}</ul>
-       <p class="cko-mais" data-mais data-extra="${restantes}" data-singular="pedido em andamento" data-plural="pedidos em andamento"${restantes > 0 ? "" : " hidden"}>${restantes > 0 ? `E mais ${restantes} ${restantes === 1 ? "pedido em andamento" : "pedidos em andamento"}` : ""}</p>`
+    ? `<ul class="cko-peds" data-cabe>${derivados.map(linhaPedidoAtivo).join("")}</ul>
+       ${paginacao("ativos", { total: derivados.length, singular: "pedido em andamento", plural: "pedidos em andamento", rotulo: "Pedidos em andamento" })}`
     : `<div class="cko-vazio">${icon("check-circle", { size: 26 })}<p>Nenhum pedido em andamento agora.</p></div>`;
   return `
-    <section class="cko-card cko-painel cko-painel--ativos" aria-labelledby="cko-t-ativos" data-assinatura-ativos="${derivados.map((p) => p.id).join(",")}">
+    <section class="cko-card cko-painel cko-painel--ativos" data-painel="ativos" aria-labelledby="cko-t-ativos" data-assinatura-ativos="${derivados.map((p) => p.id).join(",")}">
       <header class="cko-painel-cab">
         <h2 id="cko-t-ativos">Pedidos em andamento</h2>
         <span class="cko-contagem">${derivados.length}</span>
@@ -275,10 +283,10 @@ export function painelUltimosPedidos(resumo) {
         <thead><tr><th scope="col">Pedido</th><th scope="col">Horário</th><th scope="col">Status</th>
           <th scope="col" class="cko-th-tempo">Preparo</th><th scope="col" class="cko-th-tempo">Entrega</th><th scope="col" class="cko-th-tempo">Vida</th></tr></thead>
         <tbody data-cabe>${linhas}</tbody></table></div>
-        <p class="cko-mais" data-mais data-extra="0" data-singular="pedido anterior" data-plural="pedidos anteriores" hidden></p>`
+        ${paginacao("ultimos", { total: lista.length, singular: "pedido recente", plural: "pedidos recentes", rotulo: "Últimos pedidos" })}`
     : `<div class="cko-vazio">${icon("inbox", { size: 26 })}<p>Os pedidos do dia aparecem aqui assim que chegarem.</p></div>`;
   return `
-    <section class="cko-card cko-painel cko-painel--ultimos" aria-labelledby="cko-t-ultimos">
+    <section class="cko-card cko-painel cko-painel--ultimos" data-painel="ultimos" aria-labelledby="cko-t-ultimos">
       <header class="cko-painel-cab">
         <h2 id="cko-t-ultimos">Últimos pedidos</h2>
         <span class="cko-painel-nota">Tempos em minutos</span>
@@ -326,7 +334,7 @@ export function painelAvaliacoes(resumo) {
   const dist = a.distribuicao.map((d) =>
     `<li class="${d.negativa && d.qtd ? "cko-aval-dist--neg" : ""}"><span>${d.nota}</span><i class="cko-aval-barra"><b style="width:${d.pct.toFixed(1)}%"></b></i><em>${d.qtd}</em></li>`).join("");
   return `
-    <section class="cko-card cko-painel cko-painel--avaliacoes cko-nivel--${a.nivel}" aria-labelledby="cko-t-aval">
+    <section class="cko-card cko-painel cko-painel--avaliacoes cko-nivel--${a.nivel}" data-painel="avaliacoes" aria-labelledby="cko-t-aval">
       ${faixa(false)}
       <header class="cko-painel-cab">
         <h2 id="cko-t-aval">Avaliações dos clientes</h2>
@@ -346,7 +354,7 @@ export function painelAvaliacoes(resumo) {
       <p class="cko-aval-rot">Comentários recentes</p>
       ${a.recentes.length
         ? `<ul class="cko-aval-lista" data-cabe>${a.recentes.map(itemAvaliacao).join("")}</ul>
-           <p class="cko-mais" data-mais data-extra="0" data-singular="comentário" data-plural="comentários" hidden></p>`
+           ${paginacao("avaliacoes", { total: a.recentes.length, singular: "comentário", plural: "comentários", rotulo: "Comentários recentes" })}`
         : '<p class="cko-aval-semcom">Nenhum comentário hoje.</p>'}
     </section>`;
 }
@@ -382,7 +390,9 @@ export function cabecalho(resumo, agora, { podeEditarMetas = false } = {}) {
       <div class="cko-cab-acoes">
         ${podeEditarMetas ? `<button type="button" class="cko-btn" data-acao="metas">${icon("sliders-horizontal", { size: 18 })}<span>Metas</span></button>` : ""}
         <button type="button" class="cko-btn" data-acao="tela-cheia" aria-pressed="false"><span data-icone-tela>${icon("maximize", { size: 18 })}</span><span data-rotulo-tela>Tela cheia</span></button>
+        <button type="button" class="cko-btn cko-btn--sutil" data-acao="voltar">${icon("arrow-left", { size: 18 })}<span>Voltar ao Checklist</span></button>
       </div>
+      <p class="cko-aviso-tela" data-aviso-tela role="status" hidden></p>
     </header>`;
 }
 
@@ -402,8 +412,15 @@ export function faixaAviso(resumo) {
   return `<p class="cko-faixa-demo cko-faixa-aviso cko-faixa-aviso--${escapeHtml(a.tom ?? "neutro")}" role="status" data-aviso><b>${escapeHtml(a.titulo)}.</b>${a.texto ? ` ${escapeHtml(a.texto)}` : ""}</p>`;
 }
 
+/**
+ * Raiz do dashboard. `opcoes.modo` ("tv" | "tablet") só muda a CLASSE da raiz: o conteúdo é o mesmo
+ * `conteudoTela` nos dois modos (paridade garantida por construção — ver checklistOperacionalExibicao.js).
+ */
 export function montarTela(resumo, agora, opcoes = {}) {
-  return `<div class="cko${resumo.origem === "demonstracao" ? " cko--demo" : ""}" data-cko>${conteudoTela(resumo, agora, opcoes)}</div>`;
+  const modo = MODOS_EXIBICAO[opcoes.modo] ? opcoes.modo : null;
+  const classes = ["cko", resumo.origem === "demonstracao" ? "cko--demo" : "", modo ? `cko--imersivo cko--${modo}` : ""].filter(Boolean).join(" ");
+  // No modo, a raiz recebe o foco ao abrir (tabindex -1: focável por script, fora da ordem do Tab).
+  return `<div class="${classes}" data-cko${modo ? ` data-modo="${modo}" tabindex="-1" role="region" aria-label="Checklist Operacional"` : ""}>${conteudoTela(resumo, agora, opcoes)}</div>`;
 }
 
 /** Miolo da tela — redesenhado DENTRO da raiz para não derrubar a tela cheia. */
@@ -479,4 +496,59 @@ export function telaSemUnidade() {
         <p>O Checklist Operacional acompanha uma unidade por vez. Selecione a unidade no seletor do topo da página.</p>
       </div>
     </div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Seleção do modo de exibição (página do menu, dentro da Central)
+// ---------------------------------------------------------------------------
+
+/** Miniatura esquemática do arranjo (blocos neutros, sem número nenhum: não é dado). */
+const MINIATURA = {
+  tv: ["ok", "atencao", "ok", "critico", "neutro", "neutro", "neutro"],
+  tablet: ["ok", "atencao", "ok", "critico", "neutro", "neutro"],
+};
+
+function opcaoModo(modo) {
+  const m = MODOS_EXIBICAO[modo];
+  return `
+    <article class="ckm-opcao" data-opcao-modo="${m.id}" aria-labelledby="ckm-t-${m.id}">
+      <div class="ckm-ilustra" aria-hidden="true">
+        <div class="ckm-aparelho ckm-aparelho--${m.id}">
+          <div class="ckm-tela">${MINIATURA[m.id].map((t) => `<i class="ckm-bloco ckm-bloco--${t}"></i>`).join("")}</div>
+        </div>
+      </div>
+      <h2 id="ckm-t-${m.id}"><span class="ckm-icone">${icon(m.id, { size: 22 })}</span>${m.rotulo}</h2>
+      <p class="ckm-desc">${m.descricao}</p>
+      <ul class="ckm-destaques">${m.destaques.map((d) => `<li>${icon("check-circle", { size: 16 })}<span>${d}</span></li>`).join("")}</ul>
+      <button type="button" class="btn btn-primary ckm-iniciar" data-acao="iniciar-modo" data-modo="${m.id}">${icon("maximize", { size: 17 })}<span>${m.acao}</span></button>
+    </article>`;
+}
+
+/**
+ * Página do Checklist no menu: escolha entre Televisão e Tablet. Nenhum dado é consultado aqui — a consulta
+ * e o Realtime começam só quando um modo é aberto (e param ao voltar).
+ */
+export function telaSelecaoModos({ unidadeNome, demonstracao = false } = {}) {
+  return `
+    <section class="ckm" data-ckm aria-labelledby="ckm-titulo">
+      <header class="ckm-cab">
+        <img src="/assets/menu-checklist-operacional.svg" alt="" class="ckm-logo" />
+        <div>
+          <h1 id="ckm-titulo">Checklist Operacional</h1>
+          <p>Acompanhe os indicadores da sua operação em tempo real. Escolha o formato ideal para seu dispositivo.</p>
+        </div>
+      </header>
+      <p class="ckm-contexto">
+        <span>${icon("store", { size: 16 })}<b>${escapeHtml(unidadeNome ?? "Unidade")}</b></span>
+        ${demonstracao ? '<span class="ckm-demo">Modo demonstração: dados simulados</span>' : ""}
+      </p>
+      <div class="ckm-opcoes">
+        ${opcaoModo("tv")}
+        ${opcaoModo("tablet")}
+      </div>
+      <p class="ckm-nota">
+        Os dois formatos mostram exatamente os mesmos indicadores, alertas e estados, do mesmo resumo da unidade.
+        A tela cheia esconde o menu, mas a sessão continua sendo a sua: não deixe o aparelho sem supervisão.
+      </p>
+    </section>`;
 }

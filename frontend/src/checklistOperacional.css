@@ -306,9 +306,19 @@
 .cko-ped-tempo .cko-restante { font-size: clamp(11.5px, .76cqi, 14px); }
 .cko-ped-vida { grid-area: vida; color: var(--cko-critico); font-size: clamp(12px, .76cqi, 14px); font-weight: 600; }
 .cko-ped.cko-nivel--atencao .cko-ped-vida { color: var(--cko-atencao); }
-.cko-ped-alerta { color: var(--cko-critico); font-weight: 700; }
+.cko-ped-alerta { color: var(--cko-critico); font-weight: 700; white-space: normal !important; }
 .cko-ped-agendado { color: var(--cko-suave); font-weight: 600; }
-.cko-mais { color: var(--cko-suave); font-size: 14px; font-weight: 600; text-align: center; }
+/* Paginador (só aparece no Modo Televisão, com mais de uma página): página atual, total de páginas e o
+   total da lista inteira. As setas trocam a página à mão (teclado, ou movimento reduzido sem virada automática). */
+.cko-paginacao { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: auto; flex: none; }
+.cko-pag-rot { color: var(--cko-suave); font-size: clamp(13px, .82cqi, 16px); font-weight: 600; white-space: nowrap; }
+.cko-pag-btn {
+  display: inline-grid; place-items: center; width: 34px; height: 30px; padding: 0;
+  border-radius: 8px; border: 1px solid var(--cko-linha-forte); background: var(--cko-sup-2); color: var(--cko-texto); cursor: pointer;
+}
+.cko-pag-btn:hover { border-color: var(--cko-suave); }
+.cko-pag-btn:focus-visible, .cko[data-modo]:focus-visible { outline: 3px solid color-mix(in srgb, var(--cko-marca) 70%, white); outline-offset: 2px; }
+.cko[data-modo]:focus:not(:focus-visible) { outline: none; }
 
 /* Últimos pedidos — tempos encerrados: cor do estado, sem movimento */
 .cko-tabela-wrap { overflow-x: auto; min-height: 0; }
@@ -382,20 +392,44 @@
 .cko-metas footer { display: flex; gap: 8px; align-items: center; }
 .cko-metas footer span { flex: 1; }
 
-/* ---------- Tela cheia (modo TV): cabe em 1920×1080 sem rolagem ---------- */
+/* ---------- Modos de exibição (Televisão e Tablet) ----------
+   Os dois modos têm o MESMO conteúdo; aqui só muda a organização. Imersivo: a
+   raiz cobre a Central inteira (menu e topo) mesmo sem tela cheia — a tela cheia
+   do navegador é um extra, pedido no clique. */
 .cko:fullscreen { border-radius: 0; }
-.cko--tela-cheia { height: 100vh; overflow: hidden; }
-.cko--tela-cheia .cko-linha--operacao { flex: 1 1 0; }
-.cko--tela-cheia .cko-linha--operacao > .cko-painel { overflow: hidden; }
-.cko--tela-cheia .cko-tabela-wrap { overflow: visible; flex: none; }
-.cko--tela-cheia .cko-tempo, .cko--tela-cheia .cko-status { padding-block: clamp(12px, .85cqi, 18px); gap: clamp(8px, .6cqi, 12px); }
-.cko--tela-cheia .cko-peds { gap: 6px; }
+.cko--imersivo {
+  position: fixed; inset: 0; z-index: 900;
+  border-radius: 0;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+}
+html:has(.cko--imersivo) { overflow: hidden; }
+/* Altura fixa da raiz: as linhas nunca encolhem abaixo do próprio conteúdo (senão se sobrepõem) — sobra rola. */
+.cko--imersivo > * { flex-shrink: 0; }
+
+/* Aviso discreto do estado da tela cheia (recusa / navegador sem a API) */
+.cko-aviso-tela { grid-column: 1 / -1; justify-self: end; color: var(--cko-suave); font-size: clamp(12px, .78cqi, 14px); }
+
+/* Televisão: a tela inteira, sem rolagem na resolução comum. Se a altura não
+   der nem para o mínimo, a raiz rola — nunca corta um card. */
+.cko--tv { height: 100vh; height: 100dvh; }
+.cko--tv .cko-linha--operacao { flex: 1 1 0; min-height: min(300px, 42vh); }
+.cko--tv .cko-linha--operacao > .cko-painel { overflow: hidden; }
+.cko--tv .cko-tabela-wrap { overflow: visible; flex: none; }
+.cko--tv .cko-tempo, .cko--tv .cko-status { padding-block: clamp(12px, .85cqi, 18px); gap: clamp(8px, .6cqi, 12px); }
+.cko--tv .cko-peds { gap: 6px; }
 /* Na TV cada pedido ocupa UMA faixa: número | etapa | régua com meta | contador */
-.cko--tela-cheia .cko-ped {
+.cko--tv .cko-ped {
   grid-template-columns: minmax(118px, .75fr) minmax(150px, 1fr) minmax(120px, 1.1fr) auto;
   grid-template-areas: "id etapa meta tempo" "vida vida vida vida";
   padding-block: 8px; gap: 2px 16px;
 }
+.cko--tv .cko-btn { min-height: 36px; padding: 0 12px; font-size: 13px; }
+.cko--tv .cko-btn--sutil { color: var(--cko-suave); }
+
+/* Tablet: leitura de perto e toque. Rola na vertical; nada some por falta de espaço. */
+.cko--tablet { min-height: 100vh; min-height: 100dvh; }
+.cko--tablet .cko-btn { min-height: 44px; padding: 0 16px; font-size: 15px; }
+.cko--tablet .cko-cab-acoes { flex-wrap: wrap; }
 
 /* ---------- Movimento reduzido: tudo estático, o estado continua no texto ---------- */
 @media (prefers-reduced-motion: reduce) {
@@ -434,4 +468,112 @@
   .cko-aval-topo { grid-template-columns: 1fr; }
   .cko-ped { grid-template-columns: 1fr auto; grid-template-areas: "id tempo" "etapa etapa" "meta meta" "vida vida"; }
   .cko-metas-par { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- Tablet: arranjo por largura (mesmo conteúdo, outra grade) ---------- */
+@container cko (max-width: 980px) {
+  .cko--tablet .cko-linha--operacao { grid-template-columns: 1fr; grid-template-areas: "ativos" "ultimos" "aval"; }
+  .cko--tablet .cko-cab { grid-template-columns: 1fr auto; }
+  .cko--tablet .cko-cab-acoes { grid-column: 1 / -1; grid-row: 3; }
+  .cko--tablet .cko-relogio { border-left: 0; padding-left: 0; }
+}
+
+/* ---------- Televisão de 1280 a 1480 px (720p, 768p): 3 colunas, uma faixa por pedido ----------
+   O arranjo de 2 colunas do desktop deixaria "Últimos pedidos" com uma linha só. Aqui a
+   coluna de pedidos em andamento (quem precisa de ação) ganha a maior largura. */
+@container cko (max-width: 1480px) {
+  .cko--tv .cko-linha--operacao { grid-template-columns: 1.3fr 1.35fr .7fr; grid-template-areas: none; }
+  .cko--tv .cko-linha--operacao > .cko-painel { grid-area: auto; }
+  .cko--tv .cko-ped { grid-template-columns: minmax(92px, .75fr) minmax(104px, 1fr) minmax(84px, 1fr) auto; gap: 2px 12px; }
+  /* A tabela de últimos pedidos tem 6 colunas: mais justa, para caber inteira na coluna do meio. */
+  .cko--tv .cko-tabela { font-size: 13.5px; }
+  .cko--tv .cko-tabela thead th, .cko--tv .cko-tabela tbody th, .cko--tv .cko-tabela td { padding-inline: 5px; }
+  .cko--tv .cko-etq { padding: 2px 7px; }
+  /* "Média hoje N pedidos | Último concluído | Meta": os rótulos quebram em vez de passar da borda do card. */
+  .cko--tv .cko-hoje { gap: 8px; }
+  .cko--tv .cko-hoje dt { white-space: normal; }
+}
+
+/* ---------- Televisão baixa (720p, 768p): linha de cima mais compacta, nada escondido ---------- */
+@media (max-height: 820px) {
+  .cko--tv { gap: 10px; padding-block: 10px; }
+  .cko--tv .cko-num { font-size: clamp(40px, 3.7cqi, 64px); }
+  .cko--tv .cko-status-veredito { font-size: clamp(24px, 2.1cqi, 40px); }
+  .cko--tv .cko-status-contagem dd { font-size: clamp(20px, 1.5cqi, 30px); }
+  .cko--tv .cko-tempo, .cko--tv .cko-status { padding-block: 10px; gap: 7px; }
+  .cko--tv .cko-hoje { padding-top: 8px; }
+  .cko--tv .cko-decomp { gap: 4px; }
+}
+
+/* ---------- Televisão 4K com densidade 1 (3840 px de CSS): a mesma grade do Full HD, em dobro ----------
+   A maioria das TVs 4K já informa 1920 px de CSS (densidade 2) e nem chega aqui. `zoom` é padrão do CSS
+   (Chrome/Edge, Safari; Firefox 126+); a altura compensa o zoom. Navegador sem `zoom` ignora o bloco inteiro
+   (@supports) e fica com a grade normal da TV na largura toda — funcional, só com letras menores. */
+@supports (zoom: 2) {
+  @media (min-width: 3000px) and (min-height: 1600px) {
+    .cko--tv { zoom: 2; height: 50vh; height: 50dvh; }
+  }
+}
+
+/* =========================================================================
+   Página do Checklist no menu: escolha do modo de exibição.
+   Dentro da Central: usa as cores e superfícies dela (tema claro e escuro).
+   ========================================================================= */
+.ckm { max-width: 1080px; margin: 0 auto; display: grid; gap: 20px; padding: 4px 0 28px; color: var(--texto); }
+.ckm-cab { display: flex; align-items: center; gap: 16px; }
+.ckm-logo { width: 56px; height: 56px; flex: none; }
+.ckm-cab h1 { margin: 0; font-size: clamp(24px, 2.4vw, 32px); font-weight: 800; letter-spacing: -.02em; line-height: 1.1; }
+.ckm-cab p { margin: 6px 0 0; color: var(--cinza); font-size: 15.5px; line-height: 1.45; max-width: 62ch; }
+.ckm-contexto { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0; }
+.ckm-contexto > span { display: inline-flex; align-items: center; gap: 8px; padding: 6px 13px; border-radius: 999px; font-size: 13.5px; }
+.ckm-contexto > span:first-child { background: var(--card); border: 1px solid var(--linha); color: var(--cinza); }
+.ckm-contexto > span:first-child b { color: var(--texto); font-weight: 700; }
+.ckm-demo { background: rgba(169, 139, 255, .14); color: #6b4fd8; font-weight: 700; }
+:root[data-theme="dark"] .ckm-demo { color: #cbbcff; }
+
+.ckm-opcoes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.ckm-opcao {
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 20px 22px; border-radius: var(--raio-lg);
+  background: var(--card); border: 1px solid var(--linha); box-shadow: var(--sombra);
+  transition: transform var(--t), box-shadow var(--t), border-color var(--t);
+}
+.ckm-opcao:hover, .ckm-opcao:focus-within { transform: translateY(-2px); box-shadow: var(--sombra-md); border-color: var(--vermelho-tint-borda); }
+.ckm-opcao h2 { display: flex; align-items: center; gap: 10px; margin: 4px 0 0; font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+.ckm-icone { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; background: var(--vermelho-tint); color: var(--verde); flex: none; }
+:root[data-theme="dark"] .ckm-icone { background: rgba(216, 19, 36, .16); color: #ff6b76; }
+.ckm-desc { margin: 0; color: var(--cinza); font-size: 14.5px; line-height: 1.5; }
+.ckm-destaques { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; font-size: 14px; }
+.ckm-destaques li { display: flex; align-items: center; gap: 9px; }
+.ckm-destaques .icon { color: var(--ok); flex: none; }
+.ckm-iniciar { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 9px; min-height: 46px; padding: 0 20px; font-size: 15px; }
+
+/* Miniatura: a superfície escura do próprio Checklist, com o arranjo de cada modo */
+.ckm-ilustra { display: grid; place-items: center; height: 168px; border-radius: 14px; background: radial-gradient(120% 100% at 50% 0%, #2a1419 0%, #150a0d 70%); }
+.ckm-aparelho { position: relative; padding: 7px; border-radius: 10px; background: #0b0507; box-shadow: 0 0 0 1px rgba(255, 232, 236, .14), 0 14px 30px rgba(0, 0, 0, .45); }
+.ckm-aparelho--tv { width: 232px; aspect-ratio: 16 / 9; margin-bottom: 12px; }
+.ckm-aparelho--tv::after { content: ""; position: absolute; left: 50%; bottom: -13px; width: 64px; height: 6px; margin-left: -32px; border-radius: 0 0 6px 6px; background: rgba(255, 232, 236, .16); }
+.ckm-aparelho--tablet { height: 142px; aspect-ratio: 3 / 4; border-radius: 13px; padding: 8px; }
+.ckm-tela { display: grid; gap: 4px; width: 100%; height: 100%; padding: 5px; border-radius: 5px; background: #150a0d; }
+.ckm-aparelho--tv .ckm-tela { grid-template-columns: repeat(12, 1fr); grid-template-rows: 1fr 1.25fr; }
+.ckm-aparelho--tv .ckm-bloco:nth-child(-n + 4) { grid-column: span 3; }
+.ckm-aparelho--tv .ckm-bloco:nth-child(5) { grid-column: span 4; }
+.ckm-aparelho--tv .ckm-bloco:nth-child(6) { grid-column: span 5; }
+.ckm-aparelho--tv .ckm-bloco:nth-child(7) { grid-column: span 3; }
+.ckm-aparelho--tablet .ckm-tela { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr 1.1fr .8fr; }
+.ckm-aparelho--tablet .ckm-bloco:nth-child(n + 5) { grid-column: 1 / -1; }
+.ckm-bloco { --b: #8e7479; border-radius: 3px; background: #1f1115; box-shadow: inset 2px 0 0 var(--b), inset 0 0 0 1px rgba(255, 232, 236, .06); }
+.ckm-bloco--ok { --b: #23c47e; }
+.ckm-bloco--atencao { --b: #f2b33d; }
+.ckm-bloco--critico { --b: #ff4d5a; background: #2a1217; }
+
+.ckm-nota { margin: 0; color: var(--cinza); font-size: 13.5px; line-height: 1.5; max-width: 90ch; }
+
+@media (max-width: 760px) {
+  .ckm-opcoes { grid-template-columns: 1fr; }
+  .ckm-iniciar { align-self: stretch; justify-content: center; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ckm-opcao { transition: none; }
+  .ckm-opcao:hover, .ckm-opcao:focus-within { transform: none; }
 }
