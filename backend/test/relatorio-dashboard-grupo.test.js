@@ -10,7 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  avaliarHorarioDoRelatorio, chaveRelatorio, montarRelatorio, executarPassoRelatorio, unidadesAvisadasHoje, MODOS_RELATORIO,
+  avaliarHorarioDoRelatorio, chaveRelatorio, montarRelatorio, nomesDeExibicao, executarPassoRelatorio, unidadesAvisadasHoje, MODOS_RELATORIO,
 } from "../src/modules/comunicacao/relatorioDashboardGrupo.js";
 import { modoRelatorio } from "../src/modules/comunicacao/relatorioDashboardGrupo.config.js";
 import { criarLoopWorker } from "../src/worker-comunicacao/loop.js";
@@ -117,44 +117,159 @@ describe("horário, dias e chave", () => {
   });
 });
 
-describe("texto do relatório", () => {
-  test("com pendências: 🔴 no topo, seções separadas, data e 'loja avisada hoje' por unidade", () => {
-    const { texto, resumo } = montarRelatorio({ snapshot: SNAP_PEND, avisadasHoje: new Set(["u-1"]), dataLocal: "2026-10-08", horaLocal: "16:30" });
-    assert.match(texto, /^🔴 RELATÓRIO DIÁRIO — DASHBOARD iFOOD/);
-    assert.match(texto, /D-1 de referência: 07\/10\/2026/);
-    assert.match(texto, /🔴 1 crítica\(s\) · 🟡 2 em atenção/);
-    assert.match(texto, /Lojas já avisadas hoje \(alerta individual\): 1 de 3/);
-    assert.ok(texto.indexOf("🔴 CRÍTICO (1)") < texto.indexOf("🟡 ATENÇÃO (2)"));
-    assert.match(texto, /• Subway Centro\n  D-1 não lançado · 3 dia\(s\) pendente\(s\) no período · pendência desde 05\/10\/2026 · loja avisada hoje: SIM/);
-    assert.match(texto, /• Subway Norte\n  D-1 não lançado · pendência desde 07\/10\/2026 · loja avisada hoje: NÃO/);
-    assert.match(texto, /• Subway Sul\n  D-1 em preenchimento · pendência desde 07\/10\/2026 · loja avisada hoje: NÃO/);
-    assert.deepEqual([resumo.criticas, resumo.atencao, resumo.avisadas_hoje], [1, 2, 1]);
+describe("boletim de pendências — formato", () => {
+  const gerar = (snapshot, avisadas, extra = {}) => montarRelatorio({ snapshot, avisadasHoje: avisadas, dataLocal: "2026-10-08", horaLocal: "16:30", ...extra });
+  const u = (id, criticidade, over = {}) => ({ organizacaoId: `org-${id}`, unidadeId: id, unidadeNome: `Loja ${id}`, criticidade, d1Status: "nao_realizado", pendenciaMaisAntiga: "2026-10-07", diasPendentes: 0, ...over });
+
+  test("estrutura completa: cabeçalho institucional, panorama, prioridade máxima, pendências D-1, orientação e rodapé", () => {
+    const { texto } = gerar(SNAP_PEND, new Set(["u-1"]));
+    assert.ok(texto.startsWith("📊 *CENTRAL CRESCER COM DELIVERY*\n*BOLETIM DE PENDÊNCIAS | iFood*\n\n📅 Quinta-feira, 08/10/2026\n🕔 Atualizado às 16:30\n📆 Lançamentos referentes a 07/10\n"));
+    assert.match(texto, /📍 \*PANORAMA GERAL\*\n━+\n\n\*3 unidades com pendências\*\n\n🔴 01 em situação crítica\n🟡 02 exigem atenção\n\n📨 \*1 de 3\* unidades já receberam alerta individual hoje\./);
+    assert.match(texto, /🚨 \*PRIORIDADE MÁXIMA\*\n━+\n\n🔴 \*Subway Centro\*\n   3 dias pendentes \(desde 05\/10\)\n   D-1 não lançado\n   Avisada hoje: SIM/);
+    assert.match(texto, /🟡 \*PENDÊNCIAS D-1\*\n━+\n\n\*SEM ALERTA HOJE \(2\)\*\n\n○ Subway Norte\n○ Subway Sul/);
+    assert.match(texto, /📌 \*ORIENTAÇÃO OPERACIONAL\*\n━+\n\nPriorizar a análise das unidades críticas e acompanhar a regularização das pendências D-1\.\n\nA indicação de alerta considera apenas os envios realizados hoje\.\n\n🔎 Consulte o Painel Administrativo para informações detalhadas\./);
+    assert.ok(texto.endsWith("\n\n_Central Crescer com Delivery_\n_Monitoramento automático · iFood_"));
+    assert.ok(texto.indexOf("PRIORIDADE MÁXIMA") < texto.indexOf("PENDÊNCIAS D-1"));
   });
 
-  test("só atenção: cabeçalho 🟡", () => {
-    const snap = { ...SNAP_PEND, unidades: SNAP_PEND.unidades.filter((u) => u.criticidade === "atencao") };
-    assert.match(montarRelatorio({ snapshot: snap, avisadasHoje: new Set(), dataLocal: "2026-10-08", horaLocal: "16:30" }).texto, /^🟡 RELATÓRIO DIÁRIO/);
+  test("contagens: total = críticas + atenção; avisadas (geral) = críticas avisadas + atenção com alerta; subtotais só de atenção; cada unidade UMA vez", () => {
+    const unidades = Array.from({ length: 23 }, (_, i) => u(`x${i}`, i % 5 === 0 ? "critico" : "atencao"));
+    const avisadas = new Set(unidades.filter((_, i) => i % 2 === 0).map((x) => x.unidadeId));
+    const { texto, resumo } = gerar({ d1: "2026-10-07", unidades }, avisadas);
+    const crit = unidades.filter((x) => x.criticidade === "critico"), aten = unidades.filter((x) => x.criticidade === "atencao");
+    assert.equal(resumo.total, crit.length + aten.length);
+    assert.equal(resumo.avisadas_hoje, unidades.filter((x) => avisadas.has(x.unidadeId)).length);
+    assert.equal(resumo.avisadas_hoje, resumo.criticas_avisadas + resumo.atencao_com_alerta);
+    assert.equal(resumo.atencao_com_alerta + resumo.atencao_sem_alerta, aten.length);
+    assert.match(texto, new RegExp(`\\*${resumo.avisadas_hoje} de ${resumo.total}\\* unidades`));
+    assert.match(texto, new RegExp(`\\*ALERTA ENVIADO HOJE \\(${resumo.atencao_com_alerta}\\)\\*`));
+    assert.match(texto, new RegExp(`\\*SEM ALERTA HOJE \\(${resumo.atencao_sem_alerta}\\)\\*`));
+    for (const x of unidades) {
+      const ocorrencias = texto.split("\n").filter((l) => l === `🔴 *${x.unidadeNome}*` || l === `✓ ${x.unidadeNome}` || l === `○ ${x.unidadeNome}`);
+      assert.equal(ocorrencias.length, 1, `${x.unidadeNome} deveria aparecer exatamente 1 vez`);
+      const esperado = x.criticidade === "critico" ? `🔴 *${x.unidadeNome}*` : `${avisadas.has(x.unidadeId) ? "✓" : "○"} ${x.unidadeNome}`;
+      assert.equal(ocorrencias[0], esperado);
+    }
   });
 
-  test("sem pendências: 🟢 TUDO CERTO deixando explícito que a consulta foi feita", () => {
-    const { texto, resumo } = montarRelatorio({ snapshot: SNAP_VAZIO, avisadasHoje: new Set(), dataLocal: "2026-10-08", horaLocal: "16:30" });
-    assert.match(texto, /^🟢 TUDO CERTO — DASHBOARD iFOOD/);
-    assert.match(texto, /Consulta realizada às 16:30: nenhuma unidade com pendência 🔴 Crítico ou 🟡 Atenção no momento\./);
+  test("sem críticas: nenhuma seção de prioridade máxima vazia", () => {
+    const { texto } = gerar({ d1: "2026-10-07", unidades: [u("a", "atencao")] }, new Set());
+    assert.doesNotMatch(texto, /PRIORIDADE MÁXIMA/);
+    assert.match(texto, /🔴 00 em situação crítica/);
+    assert.match(texto, /\nAcompanhar a regularização das pendências D-1\./);
+  });
+
+  test("sem atenção: nenhuma lista de pendências D-1 vazia", () => {
+    const { texto } = gerar({ d1: "2026-10-07", unidades: [u("a", "critico", { diasPendentes: 2 })] }, new Set());
+    assert.doesNotMatch(texto, /PENDÊNCIAS D-1|ALERTA ENVIADO HOJE|SEM ALERTA HOJE/);
+    assert.match(texto, /\nPriorizar a análise das unidades críticas\.\n/);
+  });
+
+  test("todas avisadas hoje: só 'ALERTA ENVIADO HOJE'; nenhuma avisada: só 'SEM ALERTA HOJE'", () => {
+    const unidades = [u("a", "atencao"), u("b", "atencao"), u("c", "critico", { diasPendentes: 1 })];
+    const todas = gerar({ d1: "2026-10-07", unidades }, new Set(["a", "b", "c"])).texto;
+    assert.match(todas, /\*ALERTA ENVIADO HOJE \(2\)\*/);
+    assert.doesNotMatch(todas, /SEM ALERTA HOJE/);
+    assert.match(todas, /📨 \*3 de 3\* unidades/);
+    assert.match(todas, /\n   1 dia pendente \(desde 07\/10\)\n/);
+    const nenhuma = gerar({ d1: "2026-10-07", unidades }, new Set()).texto;
+    assert.match(nenhuma, /\*SEM ALERTA HOJE \(2\)\*/);
+    assert.doesNotMatch(nenhuma, /ALERTA ENVIADO HOJE/);
+    assert.match(nenhuma, /📨 \*0 de 3\* unidades/);
+  });
+
+  test("motivo crítico: sequência bloqueada (rótulo do D-1 ou indicador) e pendência herdada", () => {
+    const unidades = [
+      u("s", "critico", { unidadeNome: "Loja Sequencia", d1Status: "sequencia_bloqueada", diasPendentes: 6, pendenciaMaisAntiga: "2026-10-01", pendenciaHerdada: true, pendenciaHerdadaDesde: "2026-09-16" }),
+      u("f", "critico", { unidadeNome: "Loja Flag", d1Status: "nao_realizado", sequenciaBloqueada: true, diasPendentes: 2, pendenciaMaisAntiga: "2026-10-05" }),
+      u("h", "atencao", { unidadeNome: "Loja Herdada", pendenciaMaisAntiga: "2026-10-01", pendenciaHerdada: true }),
+    ];
+    const { texto } = gerar({ d1: "2026-10-07", unidades }, new Set());
+    assert.match(texto, /🔴 \*Loja Sequencia\*\n   6 dias pendentes \(desde 01\/10\)\n   Sequência de lançamentos bloqueada\n   Pendência herdada desde 16\/09\/2026\n   Avisada hoje: NÃO/);
+    assert.match(texto, /🔴 \*Loja Flag\*\n   2 dias pendentes \(desde 05\/10\)\n   D-1 não lançado\n   Sequência de lançamentos bloqueada\n   Avisada hoje: NÃO/);
+    assert.match(texto, /○ Loja Herdada _\(desde 01\/10, herdada\)_/);
+  });
+
+  test("singular: 1 unidade", () => {
+    const { texto } = gerar({ d1: "2026-10-07", unidades: [u("a", "atencao")] }, new Set(["a"]));
+    assert.match(texto, /\*1 unidade com pendência\*/);
+    assert.match(texto, /🟡 01 exige atenção/);
+    assert.match(texto, /📨 \*1 de 1\* unidade já recebeu alerta individual hoje\./);
+  });
+
+  test("avisos individuais não verificados: nunca SIM/NÃO inventado nem listas por alerta", () => {
+    const { texto, resumo } = gerar(SNAP_PEND, null);
+    assert.match(texto, /📨 Alerta individual de hoje: _não verificado_\./);
+    assert.match(texto, /Avisada hoje: não verificado/);
+    assert.match(texto, /\*UNIDADES EM ATENÇÃO \(2\)\*\n\n• Subway Norte\n• Subway Sul/);
+    assert.doesNotMatch(texto, /Avisada hoje: (SIM|NÃO)|ALERTA ENVIADO HOJE|SEM ALERTA HOJE/);
+    assert.equal(resumo.avisadas_hoje, null);
+  });
+
+  test("sem pendências: 🟢 TUDO CERTO com a mesma identidade visual e a consulta explícita", () => {
+    const { texto, resumo } = gerar(SNAP_VAZIO, new Set());
+    assert.ok(texto.startsWith("📊 *CENTRAL CRESCER COM DELIVERY*\n*BOLETIM DE PENDÊNCIAS | iFood*"));
+    assert.match(texto, /🟢 \*TUDO CERTO\*\n━+\n\nConsulta realizada às 16:30: nenhuma unidade com pendência 🔴 crítica ou 🟡 em atenção no momento\.\n\n🏢 2 empresas monitoradas/);
+    assert.doesNotMatch(texto, /PANORAMA|PRIORIDADE|PENDÊNCIAS D-1/);
     assert.equal(resumo.situacao, "TUDO_CERTO");
   });
 
-  test("falha ao ler os avisos individuais: 'não verificado' (nunca SIM/NÃO inventado)", () => {
-    const { texto } = montarRelatorio({ snapshot: SNAP_PEND, avisadasHoje: null, dataLocal: "2026-10-08", horaLocal: "16:30" });
-    assert.match(texto, /loja avisada hoje: não verificado/);
-    assert.doesNotMatch(texto, /loja avisada hoje: (SIM|NÃO)/);
+  test("nomes: tira 'Matriz', abrevia 'Avenida', remove UF final — e volta ao oficial se a simplificação gerar nomes iguais", () => {
+    const nomes = nomesDeExibicao([
+      { unidadeId: "1", unidadeNome: "Matriz  Subway Avenida Piracicaba Limeira SP" },
+      { unidadeId: "2", unidadeNome: "Matriz Subway Centro - Mogi Mirim - SP" },
+      { unidadeId: "3", unidadeNome: "Subway Saci — Matriz" },
+      { unidadeId: "4", unidadeNome: "Matriz Subway Shopping" },
+      { unidadeId: "5", unidadeNome: "Subway Shopping" },
+    ]);
+    assert.equal(nomes.get("1"), "Subway Av. Piracicaba Limeira");
+    assert.equal(nomes.get("2"), "Subway Centro — Mogi Mirim");
+    assert.equal(nomes.get("3"), "Subway Saci — Matriz");
+    assert.equal(nomes.get("4"), "Matriz Subway Shopping");
+    assert.equal(nomes.get("5"), "Subway Shopping");
   });
 
-  test("frota grande: texto nunca passa do limite do Gateway (4096) e avisa quantas ficaram de fora", () => {
-    const unidades = Array.from({ length: 120 }, (_, i) => ({ unidadeId: `u-${i}`, unidadeNome: `Subway Unidade Número ${i}`, criticidade: i % 3 ? "atencao" : "critico", d1Status: "nao_realizado", pendenciaMaisAntiga: "2026-10-01", diasPendentes: 6 }));
-    const { texto, resumo } = montarRelatorio({ snapshot: { d1: "2026-10-07", unidades }, avisadasHoje: new Set(), dataLocal: "2026-10-08", horaLocal: "16:30" });
+  test("texto puro de WhatsApp: sem HTML, entidades ou escapes literais; quebras de linha reais", () => {
+    const casos = [gerar(SNAP_PEND, new Set(["u-1"])), gerar(SNAP_PEND, null), gerar(SNAP_VAZIO, new Set()),
+      gerar({ d1: "2026-10-07", unidades: [u("a", "atencao", { unidadeNome: "Loja <b>&amp; Cia</b>" })] }, new Set())];
+    for (const { texto } of casos.slice(0, 3)) {
+      assert.doesNotMatch(texto, /&#|&[a-z]+;|<\/?[a-z]|\\n|\\u|\\"/i);
+      assert.ok(texto.includes("\n"));
+      assert.doesNotMatch(texto, /\r/);
+    }
+    // nome vindo do banco é exibido como está (texto puro; o WhatsApp não interpreta HTML) — nada é "escapado" para entidade
+    assert.match(casos[3].texto, /○ Loja <b>&amp; Cia<\/b>/);
+  });
+
+  test("frota grande: nunca passa do limite do transporte (4096) e nunca omite em silêncio — críticas têm prioridade", () => {
+    const unidades = [
+      ...Array.from({ length: 10 }, (_, i) => u(`c${i}`, "critico", { unidadeNome: `Subway Unidade Crítica Número ${i}`, diasPendentes: 6 })),
+      ...Array.from({ length: 200 }, (_, i) => u(`a${i}`, "atencao", { unidadeNome: `Subway Unidade em Atenção Número ${i}` })),
+    ];
+    const { texto, resumo } = gerar({ d1: "2026-10-07", unidades }, new Set());
     assert.ok(texto.length <= 4096, `texto com ${texto.length} caracteres`);
+    assert.equal(resumo.omitidas_criticas, 0);
+    for (let i = 0; i < 10; i += 1) assert.match(texto, new RegExp(`Subway Unidade Crítica Número ${i}\\*`));
     assert.ok(resumo.omitidas > 0);
-    assert.match(texto, new RegExp(`… e mais ${resumo.omitidas} unidade\\(s\\)`));
+    assert.match(texto, new RegExp(`… e mais ${resumo.omitidas} unidades em atenção — lista completa no Painel Administrativo\\.`));
+    assert.match(texto, /\*200 unidades|\*210 unidades/);
+  });
+
+  test("críticas demais para caber: encurta também as críticas, com aviso explícito", () => {
+    const unidades = Array.from({ length: 150 }, (_, i) => u(`c${i}`, "critico", { unidadeNome: `Subway Unidade Crítica Número ${i}`, diasPendentes: 6 }));
+    const { texto, resumo } = gerar({ d1: "2026-10-07", unidades }, new Set());
+    assert.ok(texto.length <= 4096, `texto com ${texto.length} caracteres`);
+    assert.ok(resumo.omitidas_criticas > 0);
+    assert.match(texto, new RegExp(`… e mais ${resumo.omitidas_criticas} unidades críticas — lista completa no Painel Administrativo\\.`));
+    assert.match(texto, /\*150 unidades com pendências\*/);
+  });
+
+  test("nenhum dado do exemplo está fixo no código", () => {
+    const raiz = path.dirname(fileURLToPath(import.meta.url));
+    const src = fs.readFileSync(path.join(raiz, "../src/modules/comunicacao/relatorioDashboardGrupo.js"), "utf8");
+    for (const fixo of ["Stellato", "Caramelle", "Piracicaba", "Limeira", "08/10", "07/10", "17:02", "22 unidades", "13 de 22", "Quinta-feira, "]) {
+      assert.ok(!src.includes(fixo), `"${fixo}" não pode estar no código`);
+    }
   });
 });
 
@@ -177,7 +292,7 @@ describe("execução (modo ATIVO) — idempotência por data local + JID", () =>
     const db = fakeDb(), wa = whatsFalso();
     const r = await passo({ whatsAppService: wa, lerPendencias: async () => SNAP_VAZIO }, { supabase: db });
     assert.equal(r.acao, "ENVIADO");
-    assert.match(wa.envios[0].texto, /^🟢 TUDO CERTO/);
+    assert.match(wa.envios[0].texto, /🟢 \*TUDO CERTO\*/);
   });
 
   test("segunda execução no mesmo dia: NÃO envia de novo e nem relê pendencias()", async () => {
@@ -278,7 +393,7 @@ describe("modo seguro", () => {
     const estado = {};
     const r = await passo({ whatsAppService: wa, modo: MODOS_RELATORIO.SIMULACAO, estado }, { supabase: db });
     assert.equal(r.acao, "SIMULADO");
-    assert.match(r.texto, /^🔴 RELATÓRIO DIÁRIO/);
+    assert.match(r.texto, /BOLETIM DE PENDÊNCIAS/);
     assert.equal((await passo({ whatsAppService: wa, modo: MODOS_RELATORIO.SIMULACAO, estado, agora: QUI_1700 }, { supabase: db })).acao, "SIMULACAO_JA_FEITA");
     assert.equal(wa.envios.length + db.escritas.length, 0);
   });
