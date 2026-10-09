@@ -27,8 +27,12 @@ import { ifoodLog, mascararId } from "./ifood.logsafe.js";
 import {
   normalizarEvento, ordenarPorCriacao, classificarCodigo, RANK_STATUS, STATUS_TERMINAIS,
 } from "./ifoodEvents.parser.js";
+import { avisarPedidosAtualizados } from "./ifoodPedidosAviso.js";
 
 const msg = (e) => String(e?.message ?? e ?? "erro").slice(0, 300);
+
+/** Resultados que GRAVARAM algo no pedido (estado oficial ou carimbo/ação): a tela da unidade deve reconsultar. */
+const TOCOU_O_PEDIDO = new Set(["PROCESSADO", "IGNORADO"]);
 const ms = (iso) => (iso ? Date.parse(iso) : NaN);
 
 /**
@@ -248,6 +252,7 @@ export async function processarLote({ eventosBrutos, conexoesPorMerchant, repo, 
   }
 
   // 5) processa só os NOVOS, em ordem de criação
+  const unidadesAtualizadas = [];   // só para o aviso de Realtime (passo 6) — não influencia nada do processamento
   for (const e of ordenados) {
     if (!inseridos.has(e.eventId)) continue;
     log("info", "events.recebido", {
@@ -258,6 +263,7 @@ export async function processarLote({ eventosBrutos, conexoesPorMerchant, repo, 
     try {
       const r = await aplicarEfeito({ evento: e, tenant: { organizacaoId: con.organizacao_id, unidadeId: con.unidade_id }, repo, agora, log, recebidoEm });
       await gravarResultado(repo, e.eventId, r, agora);
+      if (TOCOU_O_PEDIDO.has(r.status)) unidadesAtualizadas.push({ organizacaoId: con.organizacao_id, unidadeId: con.unidade_id });
       if (r.status === "PROCESSADO") resumo.processados += 1;
       else if (r.status === "IGNORADO") resumo.ignorados += 1;
       else if (r.status === "DESCONHECIDO") resumo.desconhecidos += 1;
@@ -270,7 +276,11 @@ export async function processarLote({ eventosBrutos, conexoesPorMerchant, repo, 
     }
   }
 
-  // 6) reconhece TODOS os eventos persistidos do lote (novos, reentregues, desconhecidos, quarentena)
+  // 6) avisa as unidades cujos pedidos mudaram (Realtime). Tudo já está gravado; o aviso é agendado e volta na
+  //    hora (nunca aguardado, nunca lança): não atrasa nem condiciona o ACK. Reentregas não chegam aqui.
+  avisarPedidosAtualizados(unidadesAtualizadas, { log });
+
+  // 7) reconhece TODOS os eventos persistidos do lote (novos, reentregues, desconhecidos, quarentena)
   return { idsParaAck: ordenados.map((e) => e.eventId), resumo };
 }
 
@@ -282,6 +292,7 @@ export async function processarLote({ eventosBrutos, conexoesPorMerchant, repo, 
 export async function reprocessarPendentes({ repo, limite = 50, agora = () => new Date(), log = ifoodLog }) {
   const linhas = await repo.listarEventosPendentes(limite, IFOOD_EVENTS.maxTentativasProcessamento);
   const out = { tentados: linhas.length, processados: 0, falhas: 0 };
+  const unidadesAtualizadas = [];   // só para o aviso de Realtime — não influencia nada do reprocessamento
   for (const l of linhas) {
     const evento = {
       eventId: l.event_id, code: l.event_code, orderId: l.order_id, merchantId: l.merchant_id,
@@ -291,6 +302,7 @@ export async function reprocessarPendentes({ repo, limite = 50, agora = () => ne
     try {
       const r = await aplicarEfeito({ evento, tenant: { organizacaoId: l.organizacao_id, unidadeId: l.unidade_id }, repo, agora, log, recebidoEm: l.received_at ?? null });
       await gravarResultado(repo, l.event_id, r, agora);
+      if (TOCOU_O_PEDIDO.has(r.status)) unidadesAtualizadas.push({ organizacaoId: l.organizacao_id, unidadeId: l.unidade_id });
       if (r.status === "FALHOU") out.falhas += 1; else out.processados += 1;
     } catch (err) {
       out.falhas += 1;
@@ -299,6 +311,7 @@ export async function reprocessarPendentes({ repo, limite = 50, agora = () => ne
         .catch(() => {});
     }
   }
+  avisarPedidosAtualizados(unidadesAtualizadas, { log });   // agendado, nunca aguardado, nunca lança
   return out;
 }
 

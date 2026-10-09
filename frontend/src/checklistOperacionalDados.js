@@ -39,6 +39,7 @@ export function resumoCarregando({ unidade, metas }) {
     aviso: { tom: "neutro", titulo: "Carregando", texto: "Buscando o resumo da unidade." },
     relogioOffsetMs: 0,
     atualizarEmS: 30,
+    avisosTempoReal: false,
     recebidoEmMs: null,
   };
 }
@@ -70,6 +71,8 @@ export function adaptarResumo(dados, { unidade, metas, recebidoEmMs }) {
     diaOperacional: dados?.diaOperacional ?? null,
     relogioOffsetMs: Number.isFinite(servidor) ? servidor - recebidoEmMs : 0,
     atualizarEmS: Number.isFinite(dados?.atualizarEmS) && dados.atualizarEmS >= 10 ? dados.atualizarEmS : 30,
+    // Só `true` explícito do servidor: emissão de avisos ligada E recebimento ao vivo (sem isso, polling).
+    avisosTempoReal: dados?.tempoReal?.avisosAtivos === true,
     recebidoEmMs,
   };
 }

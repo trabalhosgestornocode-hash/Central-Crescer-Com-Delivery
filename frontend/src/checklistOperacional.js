@@ -15,10 +15,17 @@
 // anima: o estado fica no texto, na faixa e na régua.
 //
 // Origem dos dados: GET /api/v1/checklist-operacional/resumo (só leitura; o
-// tenant vem do Context Token). Polling de segurança no intervalo que o
-// servidor indica (`atualizarEmS`), com recuo em falha; resposta igual à
-// anterior não redesenha a tela. A próxima etapa (Realtime) só antecipa esta
-// mesma consulta — o endpoint continua sendo a fonte da verdade.
+// tenant vem do Context Token). Quem decide QUANDO consultar é o sincronizador
+// (checklistOperacionalSincronizacao.js): uma consulta por vez, polling de
+// segurança no intervalo do servidor (`atualizarEmS`) com recuo em falha, e
+// resposta antiga nunca sobrescreve a nova. Resposta igual à anterior não
+// redesenha a tela.
+//
+// TEMPO REAL: o aviso `ifood_pedido.estado_atualizado` (tópico privado da
+// unidade, via realtimeBus — esta tela nunca fala com o Supabase Realtime) e a
+// resincronização depois de reconectar só ANTECIPAM a mesma consulta. Aviso de
+// outra unidade/empresa é ignorado. Sem Realtime, o polling mantém a tela certa;
+// o cabeçalho diz qual dos dois está valendo ("tempo real" / "atualiza a cada 30 s").
 //
 // RELÓGIO: os contadores usam a hora do SERVIDOR (`servidorEm` corrige o
 // relógio do aparelho) — uma TV com o relógio errado não mostra tempo errado.
@@ -38,6 +45,9 @@ import { pode } from "./sessao.js";
 import { icon } from "./icons.js";
 import { obterResumoChecklist } from "./api.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./contextoEscopo.js";
+import { registrarInteresse, statusCanal } from "./realtime/realtimeBus.js";
+import { EVENTOS_IFOOD_PEDIDOS, RESINCRONIZACAO, topicoUnidade } from "./realtime/realtimeEvents.js";
+import { criarSincronizador, avisoDaMinhaUnidade, textoModoAtualizacao } from "./checklistOperacionalSincronizacao.js";
 import {
   METAS_EXEMPLO, ROTULO_NIVEL, TETO_REGUA, estadoDoCard, derivarPedidoAtivo, ordenarPorUrgencia,
   derivarStatusOperacao, validarMetas, rotuloPedido,
@@ -54,7 +64,6 @@ import {
 const NIVEIS = ["ok", "atencao", "critico", "neutro"];
 const CHAVES = ["preparo", "entrega", "vida"];
 const DURACAO_DESTAQUE_MS = 1800;
-const RECUO_MAXIMO_S = 120;
 
 const clonarMetas = (m) => JSON.parse(JSON.stringify(m));
 
@@ -65,9 +74,7 @@ const estado = {
   raiz: null,
   observador: null, // ResizeObserver: refaz o encaixe das listas quando a área muda (tela cheia, rotação do tablet)
   wakeLock: null,
-  consulta: null,   // timer da próxima consulta ao resumo
-  geracao: 0,       // ciclo de consulta atual: uma resposta de ciclo antigo é descartada
-  falhas: 0,
+  sincronizador: null, // só existe com a tela aberta em dado real (nunca na demonstração)
   assinatura: "",
 };
 
@@ -78,11 +85,20 @@ registrarResetDeContexto(() => {
   estado.assinatura = "";
 });
 
+// Aviso do Realtime: registrado UMA vez; só age com a tela aberta, em dado real, e se o aviso for da
+// organização + unidade do contexto ATUAL. O manager já descarta mensagens de contexto antigo; aqui é a
+// segunda trava (nunca confia só no canal).
+registrarInteresse({
+  eventos: [EVENTOS_IFOOD_PEDIDOS.ESTADO_ATUALIZADO, RESINCRONIZACAO],
+  relevante: (evento) => state.rota === "checklist-operacional" && estado.sincronizador?.ativo === true
+    && avisoDaMinhaUnidade(evento, { organizacaoId: state.sessao?.empresa?.id, unidadeId: state.sessao?.unidade?.id }),
+  aoReceber: () => estado.sincronizador?.avisar(),
+});
+
 function parar() {
   if (estado.tique) { clearInterval(estado.tique); estado.tique = null; }
-  if (estado.consulta) { clearTimeout(estado.consulta); estado.consulta = null; }
-  estado.geracao += 1;
-  estado.falhas = 0;
+  estado.sincronizador?.parar();
+  estado.sincronizador = null;
   document.removeEventListener("visibilitychange", aoVoltarVisivel);
   estado.observador?.disconnect();
   estado.observador = null;
@@ -118,38 +134,39 @@ export function renderChecklistOperacional() {
   estado.resumo = resumoCarregando({ unidade, metas: estado.metas });
   desenhar();
   document.addEventListener("visibilitychange", aoVoltarVisivel);
-  consultar(estado.geracao);
+  estado.sincronizador = criarSincronizadorDaTela(unidade);
+  estado.sincronizador.iniciar();
 }
 
 // ---------------------------------------------------------------------------
-// Consulta ao resumo (polling de segurança)
+// Consulta ao resumo — sincronizador (Realtime antecipa, polling garante)
 // ---------------------------------------------------------------------------
 
-async function consultar(geracao) {
+function criarSincronizadorDaTela(unidade) {
   const g = geracaoContexto();
-  const unidade = state.sessao?.unidade;
-  try {
-    const { data } = await obterResumoChecklist();
-    if (geracao !== estado.geracao || contextoMudou(g) || !estado.raiz?.isConnected) return; // saiu da tela / trocou de unidade
-    estado.falhas = 0;
-    const novo = adaptarResumo(data, { unidade, metas: estado.metas, recebidoEmMs: Date.now() });
-    const assinatura = assinaturaDados(data);
-    const mudouVisivel = assinatura !== estado.assinatura || estado.resumo?.conexao?.estado !== novo.conexao.estado;
-    estado.resumo = novo;
-    estado.assinatura = assinatura;
-    if (mudouVisivel) redesenharQuandoPuder();
-    agendar(geracao, novo.atualizarEmS);
-  } catch (erro) {
-    if (geracao !== estado.geracao || contextoMudou(g) || !estado.raiz?.isConnected) return;
-    estado.falhas += 1;
-    const antes = estado.resumo;
-    estado.resumo = marcarFalha(antes, erro);
-    estado.assinatura = "";
-    if (antes?.conexao?.estado !== "indisponivel" || antes?.aviso?.titulo !== estado.resumo.aviso.titulo) redesenharQuandoPuder();
-    // Recuo exponencial a partir do intervalo normal, com teto: a TV volta sozinha quando a rede volta.
-    const base = antes?.atualizarEmS ?? 30;
-    agendar(geracao, Math.min(RECUO_MAXIMO_S, base * 2 ** Math.min(estado.falhas - 1, 3)));
-  }
+  const daTela = () => !contextoMudou(g) && estado.raiz?.isConnected; // saiu da tela / trocou de unidade: descarta
+  const sinc = criarSincronizador({
+    buscar: obterResumoChecklist,
+    intervaloMs: (estado.resumo?.atualizarEmS ?? 30) * 1000,
+    aplicar: ({ data }) => {
+      if (!daTela()) return;
+      const novo = adaptarResumo(data, { unidade, metas: estado.metas, recebidoEmMs: Date.now() });
+      const assinatura = assinaturaDados(data);
+      const mudouVisivel = assinatura !== estado.assinatura || estado.resumo?.conexao?.estado !== novo.conexao.estado;
+      estado.resumo = novo;
+      estado.assinatura = assinatura;
+      sinc.definirIntervalo(novo.atualizarEmS * 1000);
+      if (mudouVisivel) redesenharQuandoPuder();
+    },
+    falhou: (erro) => {
+      if (!daTela()) return;
+      const antes = estado.resumo;
+      estado.resumo = marcarFalha(antes, erro);
+      estado.assinatura = "";
+      if (antes?.conexao?.estado !== "indisponivel" || antes?.aviso?.titulo !== estado.resumo.aviso.titulo) redesenharQuandoPuder();
+    },
+  });
+  return sinc;
 }
 
 /** Com o diálogo de metas aberto, o redesenho espera ele fechar (senão apagaria o que a pessoa digita). */
@@ -161,16 +178,10 @@ function redesenharQuandoPuder() {
   dlg.addEventListener("close", () => { delete dlg.dataset.redesenhoPendente; if (estado.raiz?.isConnected) desenhar(); }, { once: true });
 }
 
-function agendar(geracao, segundos) {
-  if (estado.consulta) clearTimeout(estado.consulta);
-  estado.consulta = setTimeout(() => { estado.consulta = null; consultar(geracao); }, segundos * 1000);
-}
-
 /** Aba/TV voltou a ficar visível: consulta já, sem esperar o próximo ciclo. */
 function aoVoltarVisivel() {
   if (document.visibilityState !== "visible" || !estado.raiz?.isConnected) return;
-  if (estado.consulta) { clearTimeout(estado.consulta); estado.consulta = null; }
-  consultar(estado.geracao);
+  estado.sincronizador?.agora();
 }
 
 function desenhar() {
@@ -273,7 +284,11 @@ function tique() {
   const resumo = estado.resumo;
 
   texto(raiz.querySelector("[data-relogio]"), new Date(agora).toLocaleTimeString("pt-BR"));
-  texto(raiz.querySelector("[data-sinc]"), textoSincronizacao(resumo.conexao, agora));
+  // Em dado real, diz também COMO a tela se atualiza: "tempo real" só se o servidor emite avisos (flag ligada
+  // E recebimento ao vivo) E o canal privado da unidade está assinado; senão = polling de segurança.
+  const modo = resumo.origem === "api" && estado.sincronizador
+    ? ` · ${textoModoAtualizacao(statusCanal(topicoUnidade(state.sessao?.unidade?.id)), resumo.atualizarEmS, resumo.avisosTempoReal)}` : "";
+  texto(raiz.querySelector("[data-sinc]"), textoSincronizacao(resumo.conexao, agora) + modo);
 
   for (const chave of CHAVES) atualizarCard(raiz, chave, resumo, agora);
   atualizarPedidos(raiz, resumo, agora);

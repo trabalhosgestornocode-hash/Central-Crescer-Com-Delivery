@@ -85,6 +85,24 @@ export function receberEvento(evento) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Status dos canais — para uma tela poder DIZER se está em tempo real ou só no
+// polling, sem conhecer o RealtimeManager (que continua sendo o único a
+// escrever aqui). Só leitura para as telas; nunca muda o comportamento do bus.
+// ---------------------------------------------------------------------------
+
+/** @type {Map<string, string>} tópico -> último status do canal ("SUBSCRIBED", "CHANNEL_ERROR", "TIMED_OUT", "CLOSED"...) */
+let statusCanais = new Map();
+
+/** Chamado SÓ pelo RealtimeManager a cada mudança de status de um canal do contexto atual. */
+export function registrarStatusCanal(topico, status) { statusCanais.set(topico, String(status)); }
+
+/** Chamado SÓ pelo RealtimeManager ao desligar (troca de contexto/logout): nenhum status antigo sobrevive. */
+export function limparStatusCanais() { statusCanais = new Map(); }
+
+/** Último status conhecido do canal, ou `null` (não assinado neste contexto / sem Realtime). */
+export function statusCanal(topico) { return statusCanais.get(topico) ?? null; }
+
 /** Só para teste: número de interesses registrados agora. */
 export function _interessesAtivos() {
   return interesses.length;
@@ -94,4 +112,5 @@ export function _interessesAtivos() {
 export function _resetParaTeste() {
   interesses.length = 0;
   ultimosAceitos = new Map();
+  statusCanais = new Map();
 }

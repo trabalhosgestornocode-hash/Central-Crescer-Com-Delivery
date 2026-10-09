@@ -94,14 +94,14 @@ function ifoodRepoFalso({ conexao = { id: "c1", status: "ativa", merchant_id: "m
   };
 }
 
-const resumoCom = ({ linhas = [], unidade = UN_A, ifood = ifoodRepoFalso() } = {}) => {
+const resumoCom = ({ linhas = [], unidade = UN_A, ifood = ifoodRepoFalso(), env = {} } = {}) => {
   const db = dbFalso(linhas);
   const repo = {
     ...repoChecklist,
     listarPedidosDaJanela: (a) => repoChecklist.listarPedidosDaJanela({ ...a, db }),
     contarAbertosAntesDe: (a) => repoChecklist.contarAbertosAntesDe({ ...a, db }),
   };
-  return service.obterResumo({ organizacaoId: ORG, unidadeId: unidade, agora: () => AGORA, deps: { repo, ifoodRepo: ifood, pilotoOrder: () => false } })
+  return service.obterResumo({ organizacaoId: ORG, unidadeId: unidade, agora: () => AGORA, deps: { repo, ifoodRepo: ifood, pilotoOrder: () => false, env } })
     .then((r) => ({ r, db, ifood }));
 };
 
@@ -163,13 +163,25 @@ describe("resumo do service", () => {
     assert.equal(r.semPedidosNoDia, true);
   });
 
-  test("traz horário do servidor, contrato, intervalo e o contrato do Realtime (ainda desligado)", async () => {
+  test("traz horário do servidor, contrato e intervalo", async () => {
     const { r } = await resumoCom();
     assert.equal(r.servidorEm, AGORA.toISOString());
     assert.equal(r.versao, 1);
     assert.equal(r.atualizarEmS, 30);
-    assert.deepEqual(r.tempoReal, { disponivel: false, topico: `unidade:${UN_A}`, evento: "ifood_pedido.estado_atualizado" });
     assert.equal(r.diaOperacional.data, "2026-10-09");
+  });
+
+  test("tempoReal separa flag (habilitado) de avisos de fato (flag + recebimento ao vivo)", async () => {
+    const LIGADA = { IFOOD_CHECKLIST_REALTIME_ENABLED: "true" };
+    const base = { topico: `unidade:${UN_A}`, evento: "ifood_pedido.estado_atualizado" };
+    // flag ausente: nada de aviso, mesmo com o recebimento ao vivo
+    assert.deepEqual((await resumoCom()).r.tempoReal, { habilitado: false, avisosAtivos: false, ...base });
+    assert.deepEqual((await resumoCom({ env: { IFOOD_CHECKLIST_REALTIME_ENABLED: "false" } })).r.tempoReal, { habilitado: false, avisosAtivos: false, ...base });
+    // flag ligada + recebimento ao vivo: avisos ativos
+    assert.deepEqual((await resumoCom({ env: LIGADA })).r.tempoReal, { habilitado: true, avisosAtivos: true, ...base });
+    // flag ligada, mas integração não ativada: habilitado, porém sem avisos para chegar
+    const { r } = await resumoCom({ env: LIGADA, ifood: ifoodRepoFalso({ conexao: null }) });
+    assert.deepEqual(r.tempoReal, { habilitado: true, avisosAtivos: false, ...base });
   });
 
   test("eventos com falha viram alerta", async () => {
