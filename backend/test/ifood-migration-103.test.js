@@ -21,7 +21,9 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
     "106_ifood_financial_reconciliacao_on_demand.sql", "106_rollback.sql",
     // 107 = RLS dos desbloqueios do Dashboard iFood (corretiva da 068); 108 = Dashboard iFood multicanal.
     "107_dashboard_ifood_desbloqueios_rls.sql", "108_dashboard_ifood_canais.sql", "108_rollback.sql",
-    "109_comunicacao_envios_grupo.sql", "109_rollback.sql"]);
+    "109_comunicacao_envios_grupo.sql", "109_rollback.sql",
+    // 110 = telas de exibição do Checklist (TV/tablet) e pareamento por código.
+    "110_exibicao_dispositivos.sql", "110_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });
