@@ -17,6 +17,7 @@ import * as repo from "./checklistOperacional.repository.js";
 import * as ifoodRepo from "../ifood/ifood.repository.js";
 import { orderLiberadoParaUnidade } from "../ifood/ifoodToken.service.js";
 import { montarResumo, diaOperacional, LIMITE_ATIVO_MIN } from "./checklistOperacional.calc.js";
+import { EVENTO_PEDIDOS_ATUALIZADOS, checklistRealtimeHabilitado } from "../ifood/ifoodPedidosAviso.js";
 
 export const VERSAO_CONTRATO = 1;
 /** Lease renovado a cada ciclo (30 s). Sem renovação por mais que isto, o recebimento é tratado como parado. */
@@ -61,12 +62,13 @@ export function derivarEstadoIntegracao({ conexao, credencialOrder, observabilid
 
 /**
  * @param {{organizacaoId: string, unidadeId: string, agora?: () => Date,
- *          deps?: {repo?: object, ifoodRepo?: object, pilotoOrder?: (unidadeId: string) => boolean}}} p
+ *          deps?: {repo?: object, ifoodRepo?: object, pilotoOrder?: (unidadeId: string) => boolean, env?: object}}} p
  */
 export async function obterResumo({ organizacaoId, unidadeId, agora = () => new Date(), deps = {} }) {
   const r = deps.repo ?? repo;
   const ir = deps.ifoodRepo ?? ifoodRepo;
   const piloto = deps.pilotoOrder ?? orderLiberadoParaUnidade;
+  const realtimeLigado = checklistRealtimeHabilitado(deps.env ?? process.env);
   const agoraMs = agora().getTime();
 
   const conexao = await ir.obterConexaoViva({ organizacaoId, unidadeId });
@@ -122,9 +124,17 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
     semPedidosNoDia: resumo.contagemDia.recebidos === 0 && resumo.contagemDia.emAndamento === 0,
     ...resumo,
     avaliacoes: { disponivel: false, motivo: "As avaliações do iFood ainda não estão conectadas à Central." },
-    // Contrato da próxima etapa (Realtime): o Events emitirá este evento no tópico privado da unidade depois de
-    // gravar um estado de pedido; a tela, ao receber (ou ao resincronizar), consulta este endpoint de novo.
-    // Payload previsto: vazio (só o aviso) — o resumo continua vindo daqui. Ainda não emitido (`disponivel: false`).
-    tempoReal: { disponivel: false, topico: `unidade:${unidadeId}`, evento: "ifood_pedido.estado_atualizado" },
+    // Realtime: o Events emite este evento SÓ no tópico privado da unidade depois de gravar um pedido; a tela,
+    // ao receber (ou ao resincronizar), consulta este endpoint de novo. Payload: só tipo + organização + unidade.
+    // Três coisas DIFERENTES, nunca confundidas:
+    //   habilitado    a emissão de avisos está ligada (IFOOD_CHECKLIST_REALTIME_ENABLED, lida neste processo);
+    //   avisosAtivos  habilitado E o recebimento está ao vivo — só assim existem avisos para chegar;
+    //   (conexão do canal) quem sabe é a tela: "tempo real" só com avisosAtivos E o canal da unidade assinado.
+    tempoReal: {
+      habilitado: realtimeLigado,
+      avisosAtivos: realtimeLigado && integracao.estado === "ao_vivo",
+      topico: `unidade:${unidadeId}`,
+      evento: EVENTO_PEDIDOS_ATUALIZADOS,
+    },
   };
 }

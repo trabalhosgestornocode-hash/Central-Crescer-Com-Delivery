@@ -20,6 +20,13 @@ export const EVENTOS_DASHBOARD_IFOOD = Object.freeze({
   ESTRUTURA_ATUALIZADA: "dashboard_ifood.estrutura_atualizada",
 });
 
+/** Pedidos iFood — Checklist Operacional. Espelha backend/src/modules/ifood/ifoodPedidosAviso.js.
+ * Sinal de INVALIDAÇÃO: payload só {tipo, organizacaoId, unidadeId, emitidoEm}, publicado SÓ no tópico da
+ * unidade; quem recebe consulta o resumo de novo (a fonte da verdade continua sendo o endpoint). */
+export const EVENTOS_IFOOD_PEDIDOS = Object.freeze({
+  ESTADO_ATUALIZADO: "ifood_pedido.estado_atualizado",
+});
+
 /**
  * Sinal interno (não vem do servidor) que o RealtimeManager injeta no bus
  * quando um canal RECONECTA depois de já ter estado subscrito (Fase S/T da

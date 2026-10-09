@@ -37,7 +37,7 @@
 // Se uma confirmação futura (teste contra um projeto real) mostrar que o lote
 // aceita `private` por mensagem com segurança, dá pra voltar a agrupar.
 import { config } from "../../config/env.js";
-import { topicosAutorizados } from "./realtime.topicos.js";
+import { topicosAutorizados, topicoUnidade } from "./realtime.topicos.js";
 
 const NOME_EVENTO = "evento_dominio";
 
@@ -67,17 +67,22 @@ async function publicarBroadcast(topico, payload, fetchImpl) {
  * @param {string} evento.organizacaoId
  * @param {string|null} [evento.unidadeId]
  * @param {Record<string, unknown>} [evento.resto]  campos mínimos do payload (Fase F: ids/datas/versão, nunca valor monetário/nome de pessoa)
- * @param {{fetchImpl?: typeof fetch, log?: (msg: string, err: unknown) => void}} [opts]  injeção pra teste
+ * @param {{fetchImpl?: typeof fetch, log?: (msg: string, err: unknown) => void, somenteUnidade?: boolean}} [opts]
+ *   `somenteUnidade` (opt-in): publica SÓ no tópico da unidade — o evento não chega a quem assina apenas o canal
+ *   da empresa (outras unidades / "Todas as unidades"). Sem `unidadeId`, não publica nada. Padrão: os dois tópicos.
+ *   `fetchImpl`/`log`: injeção pra teste.
  */
 export async function emitirEventoRealtime(
   { tipo, organizacaoId, unidadeId = null, ...resto },
-  { fetchImpl = fetch, log = (msg, err) => console.error(msg, err?.message ?? err) } = {},
+  { fetchImpl = fetch, log = (msg, err) => console.error(msg, err?.message ?? err), somenteUnidade = false } = {},
 ) {
   if (!tipo || !organizacaoId) {
     log("[realtime] emitirEventoRealtime chamado sem tipo/organizacaoId — ignorado", { tipo, organizacaoId });
     return;
   }
-  const topicos = topicosAutorizados({ organizacaoId, unidadeId });
+  const topicos = somenteUnidade
+    ? (unidadeId ? [topicoUnidade(unidadeId)] : [])
+    : topicosAutorizados({ organizacaoId, unidadeId });
   if (!topicos.length) return;
 
   const payload = { tipo, organizacaoId, unidadeId, ...resto, emitidoEm: new Date().toISOString() };

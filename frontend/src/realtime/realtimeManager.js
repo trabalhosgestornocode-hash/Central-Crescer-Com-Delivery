@@ -50,7 +50,7 @@ import { state } from "../state.js";
 import { http } from "../sessao.js";
 import { getSupabase, tokenAtual } from "../supabaseClient.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "../contextoEscopo.js";
-import { receberEvento } from "./realtimeBus.js";
+import { receberEvento, registrarStatusCanal, limparStatusCanais } from "./realtimeBus.js";
 import { RESINCRONIZACAO } from "./realtimeEvents.js";
 
 const DEV = typeof location !== "undefined" && /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
@@ -122,6 +122,7 @@ function assinarCanal(sb, topico, g, ctx) {
 
   canal.subscribe((status) => {
     if (contextoMudou(g)) return;
+    registrarStatusCanal(topico, status); // só leitura para as telas (ex.: selo "tempo real" do Checklist)
     if (status === "SUBSCRIBED") {
       if (entrada.jaSubscrito) {
         // Reconexão de verdade (não a primeira vez neste ciclo) — Fase S/T:
@@ -147,6 +148,7 @@ function assinarCanal(sb, topico, g, ctx) {
 export async function desligarTudo() {
   limparTimer();
   geracaoConectada = null;
+  limparStatusCanais();
   if (!canais.size) return;
   try {
     const sb = await deps.obterCliente();

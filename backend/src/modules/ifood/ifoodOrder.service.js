@@ -18,6 +18,7 @@ import { ifoodLog } from "./ifood.logsafe.js";
 import { STATUS_PEDIDO } from "./ifoodEvents.parser.js";
 import * as orderClient from "./ifoodOrder.client.js";
 import { interpretarPedido } from "./ifoodOrder.parser.js";
+import { avisarPedidosAtualizados } from "./ifoodPedidosAviso.js";
 
 const msg = (e) => String(e?.message ?? e ?? "erro").slice(0, 300);
 const ms = (iso) => (iso ? Date.parse(iso) : NaN);
@@ -115,18 +116,22 @@ export async function processarDetalhesPendentes({
   const devidos = candidatos.filter((p) => detalhesDevidos(p, agoraMs, cfg)).slice(0, cfg.detalhesPorCiclo);
 
   const out = { tentados: 0, gravados: 0, semMudanca: 0, naoEncontrados: 0, erros: 0, semConexao: 0, rateLimited: false };
+  const unidadesAtualizadas = [];   // só para o aviso de Realtime — não influencia nada da busca de detalhes
   for (const pedido of devidos) {
     const con = conexoesPorMerchant.get(pedido.merchant_id);
     // A conexão precisa continuar viva E ser da mesma unidade do pedido (tenant nunca vem do payload).
     if (!con || con.organizacao_id !== pedido.organizacao_id || con.unidade_id !== pedido.unidade_id) { out.semConexao += 1; continue; }
     out.tentados += 1;
     const r = await buscarEPersistirDetalhes({ pedido, conexaoId: con.id, repo, token, client, http, agora, log });
+    if (r.resultado === "GRAVADO") unidadesAtualizadas.push({ organizacaoId: pedido.organizacao_id, unidadeId: pedido.unidade_id });
     if (r.resultado === "GRAVADO") out.gravados += 1;
     else if (r.resultado === "SEM_MUDANCA") out.semMudanca += 1;
     else if (r.resultado === "NAO_ENCONTRADO") out.naoEncontrados += 1;
     else out.erros += 1;
     if (r.codigo === IFOOD_ERROS.IFOOD_RATE_LIMITED) { out.rateLimited = true; break; }
   }
+  // Número e tipo do pedido chegaram: as telas da unidade reconsultam. Agendado, nunca aguardado, nunca lança.
+  avisarPedidosAtualizados(unidadesAtualizadas, { log });
   return out;
 }
 
