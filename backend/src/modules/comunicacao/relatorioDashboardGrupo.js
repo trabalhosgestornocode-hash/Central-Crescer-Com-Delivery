@@ -59,29 +59,71 @@ export function avaliarHorarioDoRelatorio(agora) {
   return { ...base, situacao: "NO_HORARIO" };
 }
 
-const ROTULO_D1 = Object.freeze({
+// ---------------------------------------------------------------------------
+// FORMATADOR — "Boletim de Pendências | iFood". Só APRESENTAÇÃO: toda contagem/classificação vem de pendencias() como está.
+// Formatação de texto do WhatsApp apenas (*negrito*, _itálico_, quebras de linha reais) — nunca HTML/entidades/Markdown.
+// ---------------------------------------------------------------------------
+
+const SEPARADOR = "━━━━━━━━━━━━━━━━━━";
+const DIAS_SEMANA = Object.freeze(["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"]);
+const UFS = "AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO";
+const RE_UF_FINAL = new RegExp(`\\s*(?:-|—)?\\s*\\b(?:${UFS})$`);
+
+/** Motivo da classificação crítica, só com o que pendencias() já informa (nunca recalcula). */
+const MOTIVO_D1 = Object.freeze({
   nao_realizado: "D-1 não lançado",
   em_preenchimento: "D-1 em preenchimento",
-  sequencia_bloqueada: "sequência bloqueada",
-  concluido: "D-1 concluído",
+  sequencia_bloqueada: "Sequência de lançamentos bloqueada",
 });
 
+const dataCurta = (iso) => (dataBr(iso) ?? "—").slice(0, 5);
+const diaDaSemana = (iso) => DIAS_SEMANA[new Date(`${iso}T12:00:00Z`).getUTCDay()];
+const plural = (n, um, varios) => (n === 1 ? um : varios);
+
 /**
- * Texto curto da situação de UMA unidade, só com dados de pendencias() (nunca recalcula nada). `sequenciaBloqueada` sozinho não
- * entra: acompanha quase todo D-1 não lançado e só repetiria a informação; o rótulo do D-1 já diz "sequência bloqueada" quando é o caso.
+ * Nome para EXIBIÇÃO: tira o prefixo "Matriz", abrevia "Avenida", troca " - " por " — " e remove a UF final. O dado oficial não muda.
+ * Se dois nomes simplificados coincidirem, os envolvidos voltam ao nome oficial (só com espaços normalizados) para não gerar ambiguidade.
+ * @param {object[]} unidades
+ * @returns {Map<string, string>} unidadeId -> nome exibido
  */
-export function situacaoDaUnidade(u) {
-  const partes = [];
-  if (ROTULO_D1[u.d1Status]) partes.push(ROTULO_D1[u.d1Status]);
-  if (Number(u.diasPendentes) > 0) partes.push(`${u.diasPendentes} dia(s) pendente(s) no período`);
-  return partes.length ? partes.join(" · ") : "pendente";
+export function nomesDeExibicao(unidades) {
+  const oficial = (u) => String(u.unidadeNome ?? u.empresaNome ?? "Unidade sem nome").replace(/\s+/g, " ").trim();
+  const simplificar = (nome) => {
+    let s = nome.replace(/^matriz\s+/i, "").replace(/\bAvenida\b/g, "Av.").replace(/\s+-\s+/g, " — ");
+    s = s.replace(RE_UF_FINAL, "").replace(/\s*—\s*$/, "").trim();
+    return s || nome;
+  };
+  const curtos = new Map(unidades.map((u) => [u.unidadeId, simplificar(oficial(u))]));
+  const contagem = new Map();
+  for (const n of curtos.values()) contagem.set(n, (contagem.get(n) ?? 0) + 1);
+  return new Map(unidades.map((u) => [u.unidadeId, contagem.get(curtos.get(u.unidadeId)) > 1 ? oficial(u) : curtos.get(u.unidadeId)]));
 }
 
-const nomeDaUnidade = (u) => String(u.unidadeNome ?? u.empresaNome ?? "Unidade sem nome").replace(/\s+/g, " ").trim();
-const notaHerdada = (u) => (u.pendenciaHerdada ? ` · herdada de antes do período${u.pendenciaHerdadaDesde ? ` (desde ${dataBr(u.pendenciaHerdadaDesde)})` : ""}` : "");
+/** Linhas de detalhe de UMA unidade crítica (dias pendentes, motivo, herança, aviso de hoje). */
+function blocoCritica(u, nome, avisada) {
+  const dias = Number(u.diasPendentes) || 0;
+  const desde = u.pendenciaMaisAntiga ? ` (desde ${dataCurta(u.pendenciaMaisAntiga)})` : "";
+  const linhas = [`🔴 *${nome}*`];
+  linhas.push(dias > 0 ? `   ${dias} ${plural(dias, "dia pendente", "dias pendentes")}${desde}` : `   Pendente${desde}`);
+  const motivos = [];
+  if (MOTIVO_D1[u.d1Status]) motivos.push(MOTIVO_D1[u.d1Status]);
+  if (u.sequenciaBloqueada && u.d1Status !== "sequencia_bloqueada") motivos.push(MOTIVO_D1.sequencia_bloqueada);
+  for (const m of motivos) linhas.push(`   ${m}`);
+  if (u.pendenciaHerdada) linhas.push(`   Pendência herdada${u.pendenciaHerdadaDesde ? ` desde ${dataBr(u.pendenciaHerdadaDesde)}` : " de período anterior"}`);
+  linhas.push(`   Avisada hoje: ${avisada}`);
+  return linhas;
+}
+
+/** Uma linha de unidade em atenção. Só acrescenta data/herança quando fogem do caso comum (pendência do próprio D-1). */
+function linhaAtencao(u, nome, marcador, d1) {
+  const notas = [];
+  if (u.pendenciaMaisAntiga && u.pendenciaMaisAntiga !== d1) notas.push(`desde ${dataCurta(u.pendenciaMaisAntiga)}`);
+  if (u.pendenciaHerdada) notas.push("herdada");
+  return `${marcador} ${nome}${notas.length ? ` _(${notas.join(", ")})_` : ""}`;
+}
 
 /**
- * Monta o texto do relatório. Função PURA.
+ * Monta o boletim. Função PURA.
  * @param {{snapshot: {d1?: string|null, unidades?: object[], organizacoesMonitoradas?: string[]}, avisadasHoje: Set<string>|null,
  *   dataLocal: string, horaLocal: string}} p  `avisadasHoje = null` ⇒ não foi possível verificar ("não verificado").
  * @returns {{texto: string, resumo: object}}
@@ -90,49 +132,115 @@ export function montarRelatorio({ snapshot, avisadasHoje, dataLocal, horaLocal }
   const unidades = snapshot?.unidades ?? [];
   const criticas = unidades.filter((u) => u.criticidade === "critico");
   const atencao = unidades.filter((u) => u.criticidade === "atencao");
-  const d1 = dataBr(snapshot?.d1) ?? "—";
-  const cab = (emoji, titulo) => [`${emoji} ${titulo} — DASHBOARD iFOOD`, `Crescer com Delivery · ${dataBr(dataLocal)} ${horaLocal} (Brasília)`, `D-1 de referência: ${d1}`, ""];
-  const avisada = (u) => (avisadasHoje === null ? "não verificado" : avisadasHoje.has(u.unidadeId) ? "SIM" : "NÃO");
+  const d1 = snapshot?.d1 ?? null;
   const empresas = (snapshot?.organizacoesMonitoradas ?? []).length;
+  const nomes = nomesDeExibicao([...criticas, ...atencao]);
+  const verificado = avisadasHoje !== null;
+  const foiAvisada = (u) => verificado && avisadasHoje.has(u.unidadeId);
+
+  const cabecalho = [
+    "📊 *CENTRAL CRESCER COM DELIVERY*",
+    "*BOLETIM DE PENDÊNCIAS | iFood*",
+    "",
+    `📅 ${diaDaSemana(dataLocal)}, ${dataBr(dataLocal)}`,
+    `🕔 Atualizado às ${horaLocal}`,
+    `📆 Lançamentos referentes a ${d1 ? dataCurta(d1) : "—"}`,
+  ];
+  const secao = (titulo) => ["", SEPARADOR, titulo, SEPARADOR, ""];
+  const rodape = ["", "_Central Crescer com Delivery_", "_Monitoramento automático · iFood_"];
 
   if (!criticas.length && !atencao.length) {
     const linhas = [
-      ...cab("🟢", "TUDO CERTO"),
-      `Consulta realizada às ${horaLocal}: nenhuma unidade com pendência 🔴 Crítico ou 🟡 Atenção no momento.`,
-      `Empresas monitoradas: ${empresas}`,
+      ...cabecalho,
+      ...secao("🟢 *TUDO CERTO*"),
+      `Consulta realizada às ${horaLocal}: nenhuma unidade com pendência 🔴 crítica ou 🟡 em atenção no momento.`,
+      "",
+      `🏢 ${empresas} ${plural(empresas, "empresa monitorada", "empresas monitoradas")}`,
+      ...rodape,
     ];
-    return { texto: linhas.join("\n"), resumo: { situacao: "TUDO_CERTO", criticas: 0, atencao: 0, total: 0, empresas_monitoradas: empresas, d1: snapshot?.d1 ?? null } };
+    return { texto: linhas.join("\n"), resumo: { situacao: "TUDO_CERTO", criticas: 0, atencao: 0, total: 0, empresas_monitoradas: empresas, d1 } };
   }
 
   const total = criticas.length + atencao.length;
-  const avisadas = avisadasHoje === null ? null : [...criticas, ...atencao].filter((u) => avisadasHoje.has(u.unidadeId)).length;
-  const linhas = [
-    ...cab(criticas.length ? "🔴" : "🟡", "RELATÓRIO DIÁRIO"),
-    `Resumo: ${total} unidade(s) com pendência — 🔴 ${criticas.length} crítica(s) · 🟡 ${atencao.length} em atenção`,
-    `Lojas já avisadas hoje (alerta individual): ${avisadas === null ? "não verificado" : `${avisadas} de ${total}`}`,
+  const avisadasCriticas = criticas.filter(foiAvisada).length;
+  const atencaoAvisadas = atencao.filter(foiAvisada);
+  const atencaoSemAlerta = atencao.filter((u) => !foiAvisada(u));
+  const avisadas = verificado ? avisadasCriticas + atencaoAvisadas.length : null;
+
+  const panorama = [
+    ...secao("📍 *PANORAMA GERAL*"),
+    `*${total} ${plural(total, "unidade com pendência", "unidades com pendências")}*`,
+    "",
+    `🔴 ${pad2(criticas.length)} em situação crítica`,
+    `🟡 ${pad2(atencao.length)} ${plural(atencao.length, "exige", "exigem")} atenção`,
+    "",
+    verificado
+      ? `📨 *${avisadas} de ${total}* ${plural(total, "unidade já recebeu", "unidades já receberam")} alerta individual hoje.`
+      : "📨 Alerta individual de hoje: _não verificado_.",
   ];
-  const rodape = ["", "Detalhes no Painel Administrativo."];
-  let omitidas = 0;
-  const caber = (bloco) => {
-    const prox = [...linhas, ...bloco].join("\n").length + rodape.join("\n").length + 80;
-    if (prox > LIMITE_TEXTO) return false;
-    linhas.push(...bloco);
-    return true;
+
+  const blocoPrioridade = (limite = Infinity) => {
+    if (!criticas.length) return { linhas: [], omitidas: 0 };
+    const mostradas = criticas.slice(0, limite);
+    const linhas = [...secao("🚨 *PRIORIDADE MÁXIMA*"), ...mostradas.flatMap((u, i) => [...(i ? [""] : []), ...blocoCritica(u, nomes.get(u.unidadeId), verificado ? (foiAvisada(u) ? "SIM" : "NÃO") : "não verificado")])];
+    const resto = criticas.length - mostradas.length;
+    if (resto) linhas.push("", `_… e mais ${resto} ${plural(resto, "unidade crítica", "unidades críticas")} — lista completa no Painel Administrativo._`);
+    return { linhas, omitidas: resto };
   };
-  for (const [titulo, grupo] of [["🔴 CRÍTICO", criticas], ["🟡 ATENÇÃO", atencao]]) {
-    if (!grupo.length) continue;
-    if (!caber(["", `${titulo} (${grupo.length})`])) { omitidas += grupo.length; continue; }
-    for (const u of grupo) {
-      const data = dataBr(u.pendenciaMaisAntiga ?? u.pendenciaHerdadaDesde) ?? "—";
-      const ok = caber([`• ${nomeDaUnidade(u)}`, `  ${situacaoDaUnidade(u)} · pendência desde ${data} · loja avisada hoje: ${avisada(u)}${notaHerdada(u)}`]);
-      if (!ok) omitidas += 1;
+
+  // Atenção: listas por situação do alerta de hoje. Cada unidade aparece UMA vez. Listas vazias não são exibidas.
+  const listas = verificado
+    ? [["*ALERTA ENVIADO HOJE", "✓", atencaoAvisadas], ["*SEM ALERTA HOJE", "○", atencaoSemAlerta]]
+    : [["*UNIDADES EM ATENÇÃO", "•", atencao]];
+  const blocoAtencao = (limite = Infinity) => {
+    const linhas = [...secao("🟡 *PENDÊNCIAS D-1*")];
+    let mostradas = 0;
+    for (const [titulo, marcador, grupo] of listas.filter(([, , g]) => g.length)) {
+      if (linhas.length > 5) linhas.push("");
+      linhas.push(`${titulo} (${grupo.length})*`, "");
+      for (const u of grupo) {
+        if (mostradas >= limite) break;
+        linhas.push(linhaAtencao(u, nomes.get(u.unidadeId), marcador, d1));
+        mostradas += 1;
+      }
     }
+    if (mostradas < atencao.length) linhas.push("", `_… e mais ${atencao.length - mostradas} ${plural(atencao.length - mostradas, "unidade", "unidades")} em atenção — lista completa no Painel Administrativo._`);
+    return { linhas, omitidas: atencao.length - mostradas };
+  };
+
+  const orientacao = [
+    ...secao("📌 *ORIENTAÇÃO OPERACIONAL*"),
+    criticas.length && atencao.length ? "Priorizar a análise das unidades críticas e acompanhar a regularização das pendências D-1."
+      : criticas.length ? "Priorizar a análise das unidades críticas."
+        : "Acompanhar a regularização das pendências D-1.",
+    "",
+    "A indicação de alerta considera apenas os envios realizados hoje.",
+    "",
+    "🔎 Consulte o Painel Administrativo para informações detalhadas.",
+  ];
+
+  // Limite REAL do transporte: o Gateway recusa texto > 4096 (LIMITE_TEXTO deixa folga). Encurta primeiro a lista de atenção e, só se
+  // ainda não couber, a de críticas — sempre com aviso explícito de quantas ficaram de fora (nunca omissão silenciosa).
+  const montar = (limA, limC) => {
+    const a = atencao.length ? blocoAtencao(limA) : { linhas: [], omitidas: 0 };
+    const c = blocoPrioridade(limC);
+    return { texto: [...cabecalho, ...panorama, ...c.linhas, ...a.linhas, ...orientacao, ...rodape].join("\n"), omitidas: a.omitidas + c.omitidas, omitidasCriticas: c.omitidas };
+  };
+  let limA = atencao.length, limC = criticas.length;
+  let r = montar(limA, limC);
+  while (r.texto.length > LIMITE_TEXTO && (limA > 0 || limC > 0)) {
+    if (limA > 0) limA -= 1; else limC -= 1;
+    r = montar(limA, limC);
   }
-  if (omitidas) linhas.push("", `… e mais ${omitidas} unidade(s) — lista completa no Painel Administrativo.`);
-  linhas.push(...rodape);
+
   return {
-    texto: linhas.join("\n"),
-    resumo: { situacao: criticas.length ? "CRITICO" : "ATENCAO", criticas: criticas.length, atencao: atencao.length, total, avisadas_hoje: avisadas, omitidas, empresas_monitoradas: empresas, d1: snapshot?.d1 ?? null },
+    texto: r.texto,
+    resumo: {
+      situacao: criticas.length ? "CRITICO" : "ATENCAO", criticas: criticas.length, atencao: atencao.length, total,
+      avisadas_hoje: avisadas, criticas_avisadas: verificado ? avisadasCriticas : null,
+      atencao_com_alerta: verificado ? atencaoAvisadas.length : null, atencao_sem_alerta: verificado ? atencaoSemAlerta.length : null,
+      omitidas: r.omitidas, omitidas_criticas: r.omitidasCriticas, empresas_monitoradas: empresas, d1,
+    },
   };
 }
 
