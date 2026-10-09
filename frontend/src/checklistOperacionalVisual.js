@@ -528,7 +528,7 @@ function opcaoModo(modo) {
  * Página do Checklist no menu: escolha entre Televisão e Tablet. Nenhum dado é consultado aqui — a consulta
  * e o Realtime começam só quando um modo é aberto (e param ao voltar).
  */
-export function telaSelecaoModos({ unidadeNome, demonstracao = false } = {}) {
+export function telaSelecaoModos({ unidadeNome, demonstracao = false, aviso = null } = {}) {
   return `
     <section class="ckm" data-ckm aria-labelledby="ckm-titulo">
       <header class="ckm-cab">
@@ -542,6 +542,7 @@ export function telaSelecaoModos({ unidadeNome, demonstracao = false } = {}) {
         <span>${icon("store", { size: 16 })}<b>${escapeHtml(unidadeNome ?? "Unidade")}</b></span>
         ${demonstracao ? '<span class="ckm-demo">Modo demonstração: dados simulados</span>' : ""}
       </p>
+      ${aviso ? `<p class="ckm-aviso" role="alert">${escapeHtml(aviso)}</p>` : ""}
       <div class="ckm-opcoes">
         ${opcaoModo("tv")}
         ${opcaoModo("tablet")}

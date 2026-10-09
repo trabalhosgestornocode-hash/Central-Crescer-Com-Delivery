@@ -44,6 +44,14 @@
 // FOCO: com um modo aberto, o resto da Central fica `inert` (isolarFoco) e o foco vai para a raiz; o Tab só
 // percorre os controles visíveis. Redesenho mantém o foco no mesmo controle. Voltar desfaz o inert.
 //
+// FIM DA SESSÃO: os mesmos eventos que a Central já dispara e que o RealtimeManager já ouve — `app:logout`
+// (sair, ou 401 → app.js chama logout), `app:sessao-expirada` (401), `app:contexto-invalido` (409 do
+// contexto vigente) e `app:mfa-requerida` (401 MFA_REQUERIDA: a Central abre o desafio numa camada nova do
+// body, que o modo deixaria inerte e coberta; depois do 2º fator ela mesma recarrega) — encerram o modo por inteiro: tela cheia, sincronizador, tique, observadores, wake lock,
+// `inert`, e o próprio dashboard sai do DOM (nenhum dado da sessão antiga fica na página). A Central segue o
+// fluxo dela (login / seleção de unidade). 403 (perdeu a permissão) também fecha o modo, mas a sessão continua:
+// volta à seleção com o aviso, sem números. Falha de rede NÃO encerra nada: segue "Sem conexão", tentando.
+//
 // DEMONSTRAÇÃO: só quando pedida EXPLICITAMENTE (?checklist=demonstracao na
 // URL) e sempre identificada pela faixa e pelo selo. Nunca é usada como
 // substituta de dado real ausente.
@@ -92,6 +100,7 @@ const estado = {
   raiz: null,
   observador: null, // ResizeObserver: refaz o encaixe das listas quando a área muda (tela cheia, rotação do tablet)
   wakeLock: null,
+  pedindoWakeLock: false, // pedido em voo: dois "voltou a ficar visível" seguidos não viram duas travas
   sincronizador: null, // só existe com um modo aberto em dado real (nunca na demonstração nem na seleção)
   assinatura: "",
   modo: null,       // "tv" | "tablet" com o dashboard aberto; null = página de seleção
@@ -108,6 +117,13 @@ registrarResetDeContexto(() => {
   estado.metas = null;
   estado.assinatura = "";
 });
+
+// Fim da sessão (ver cabeçalho): registrado UMA vez, como o aviso do Realtime. Fechado, não faz nada.
+if (typeof document !== "undefined") {
+  for (const evento of ["app:logout", "app:sessao-expirada", "app:contexto-invalido", "app:mfa-requerida"]) {
+    document.addEventListener(evento, () => encerrarModo());
+  }
+}
 
 // Aviso do Realtime: registrado UMA vez; só age com a tela aberta, em dado real, e se o aviso for da
 // organização + unidade do contexto ATUAL. O manager já descarta mensagens de contexto antigo; aqui é a
@@ -161,10 +177,10 @@ export function renderChecklistOperacional() {
 // Seleção do modo e ciclo de vida do modo aberto
 // ---------------------------------------------------------------------------
 
-function desenharSelecao(unidade, focarModo = null) {
+function desenharSelecao(unidade, focarModo = null, { aviso = null } = {}) {
   estado.modo = null;
   const view = el("#view");
-  view.innerHTML = telaSelecaoModos({ unidadeNome: unidade.nome, demonstracao: demonstracaoPedida() });
+  view.innerHTML = telaSelecaoModos({ unidadeNome: unidade.nome, demonstracao: demonstracaoPedida(), aviso });
   const pagina = view.querySelector("[data-ckm]");
   pagina.addEventListener("click", (ev) => {
     const modo = ev.target.closest('[data-acao="iniciar-modo"]')?.dataset.modo;
@@ -201,6 +217,32 @@ function abrirModo(modo) {
   pedirWakeLock();
 }
 
+/**
+ * Encerra o modo sem voltar à seleção: sessão acabou (logout, 401, 409) — quem decide a próxima tela é a
+ * Central. O dashboard sai do DOM (dados da sessão antiga não ficam na página escondida) e tudo para.
+ * Idempotente; com o Checklist fechado não faz nada.
+ */
+function encerrarModo() {
+  if (!estado.raiz && !estado.modo && !estado.sincronizador) return;
+  const raiz = estado.raiz;
+  sairDaTelaCheia(); // pedido com a raiz ainda no DOM; removê-la também encerra a tela cheia
+  parar();           // sincronizador, tique, observadores, wake lock, inert, listener de visibilidade
+  raiz?.remove();
+  estado.modo = null;
+  estado.resumo = null;
+  estado.assinatura = "";
+  estado.tentativaTelaCheia = null;
+}
+
+/** Perdeu a permissão (403) com a sessão válida: fecha o modo e volta à seleção, com o aviso e sem números. */
+function encerrarPorFaltaDeAcesso() {
+  const unidade = state.sessao?.unidade;
+  encerrarModo();
+  if (unidade?.id && state.rota === "checklist-operacional") {
+    desenharSelecao(unidade, null, { aviso: "Este perfil não tem mais acesso aos pedidos iFood desta unidade. Fale com o responsável pela Central." });
+  }
+}
+
 /** "Voltar ao Checklist": sai da tela cheia, para consulta/tique/listeners e volta à seleção (mesma unidade). */
 function voltarParaSelecao() {
   const modoAnterior = estado.modo;
@@ -234,6 +276,9 @@ function criarSincronizadorDaTela(unidade) {
     },
     falhou: (erro) => {
       if (!daTela()) return;
+      // 403: a sessão vale, mas este perfil/empresa perdeu o acesso — nada de manter o retrato antigo na tela.
+      // (401 e 409 não chegam aqui com a tela aberta: o evento da Central já encerrou o modo.)
+      if (erro?.status === 403) { encerrarPorFaltaDeAcesso(); return; }
       const antes = estado.resumo;
       estado.resumo = marcarFalha(antes, erro);
       estado.assinatura = "";
@@ -572,12 +617,14 @@ function alternarTelaCheia() {
 async function pedirWakeLock() {
   // Mantém a TV/tablet acordada enquanto um modo estiver aberto (o navegador solta ao esconder a aba).
   const raiz = estado.raiz;
-  if (!raiz || (estado.wakeLock && !estado.wakeLock.released)) return;
+  if (!raiz || estado.pedindoWakeLock || (estado.wakeLock && !estado.wakeLock.released)) return;
+  estado.pedindoWakeLock = true;
   try {
     const trava = await navigator.wakeLock?.request("screen");
-    if (estado.raiz !== raiz) { trava?.release?.().catch(() => {}); return; } // já saiu do modo
+    if (estado.raiz !== raiz) { trava?.release?.().catch(() => {}); return; } // já saiu do modo (ou a sessão acabou)
     estado.wakeLock = trava ?? null;
-  } catch { estado.wakeLock = null; }
+  } catch { estado.wakeLock = null; } // recusa (política, bateria, aba oculta) ou sem suporte: segue sem trava
+  finally { estado.pedindoWakeLock = false; }
 }
 
 function liberarWakeLock() {

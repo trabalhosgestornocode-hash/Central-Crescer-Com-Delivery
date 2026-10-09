@@ -49,6 +49,18 @@ test("Permissions-Policy nega câmera/microfone/geoloc/pagamento", async () => {
   }
 });
 
+test("Permissions-Policy: tela acesa (screen-wake-lock) só para a própria origem; o resto inalterado", async () => {
+  const { h } = await headers();
+  const diretivas = (h["permissions-policy"] || "").split(",").map((d) => d.trim());
+  assert.deepEqual(diretivas, [
+    "accelerometer=()", "autoplay=()", "camera=()", "display-capture=()",
+    "encrypted-media=()", "fullscreen=(self)", "geolocation=()", "gyroscope=()",
+    "magnetometer=()", "microphone=()", "midi=()", "payment=()",
+    "picture-in-picture=()", "usb=()", "screen-wake-lock=(self)",
+  ]);
+  assert.ok(!diretivas.some((d) => d.includes("*")), "nenhuma diretiva liberada para qualquer origem");
+});
+
 test("CSP: script-src sem 'unsafe-inline'/'unsafe-eval'; object-src 'none'", async () => {
   const { h } = await headers();
   const csp = h["content-security-policy"] || h["content-security-policy-report-only"] || "";

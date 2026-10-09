@@ -567,6 +567,9 @@ html:has(.cko--imersivo) { overflow: hidden; }
 .ckm-bloco--atencao { --b: #f2b33d; }
 .ckm-bloco--critico { --b: #ff4d5a; background: #2a1217; }
 
+/* Aviso da seleção (ex.: o perfil perdeu o acesso com um modo aberto) */
+.ckm-aviso { margin: 0; padding: 11px 15px; border-radius: 11px; border: 1px solid rgba(219, 59, 59, .2); background: var(--bad-bg); color: var(--bad); font-size: 14px; font-weight: 600; }
+
 .ckm-nota { margin: 0; color: var(--cinza); font-size: 13.5px; line-height: 1.5; max-width: 90ch; }
 
 @media (max-width: 760px) {
