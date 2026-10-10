@@ -14,10 +14,19 @@
 //   vida     = recebimento (PLC) → conclusão (CON), medida DIRETA
 //   decomposição da vida = confirmação + preparo + espera + entrega
 //
-// Estados de um TEMPO (menor é melhor), proporcionais à meta da unidade:
-//   dentro da meta   razão < aviso            (ex.: < 80% da meta)
-//   próximo da meta  aviso ≤ razão ≤ 1        (a meta exata ainda é "limite atingido")
-//   fora da meta     razão > 1
+// Um TEMPO (menor é melhor) tem DUAS classificações, conforme a etapa ainda corre ou já terminou:
+//
+//   PREVENTIVA — etapa EM ANDAMENTO (contador vivo): ainda dá para agir.
+//     dentro da meta   razão < aviso            (ex.: < 80% da meta)
+//     próximo da meta  aviso ≤ razão ≤ 1        (alerta: está chegando na meta)
+//     atrasado         razão > 1
+//
+//   FINAL — etapa CONCLUÍDA (duração definitiva: último pedido, média do dia, tempos encerrados).
+//     dentro da meta   razão ≤ 1                (terminou em 10 de 12 min = dentro, não "próximo")
+//     acima da meta    razão > 1
+//
+// O amarelo é só aviso de quem ainda está em curso: um tempo encerrado dentro da meta nunca fica amarelo.
+// Sem medição não é resultado nenhum (nunca vira verde).
 // Não existe faixa oficial de atenção para tempos na Central (o Parser só tem
 // "no prazo / fora do prazo" contra o prazo prometido): os 80% são o valor
 // inicial demonstrativo, configurável por indicador.
@@ -60,10 +69,18 @@ export const METAS_EXEMPLO = Object.freeze({
   vida: Object.freeze({ meta: 45, avisoPct: 80 }),
 });
 
+/** Rótulos da classificação PREVENTIVA (etapa em andamento). */
 export const ROTULO_NIVEL = Object.freeze({
   ok: "Dentro da meta",
   atencao: "Próximo da meta",
-  critico: "Fora da meta",
+  critico: "Atrasado",
+  neutro: "Sem medição",
+});
+
+/** Rótulos da classificação FINAL (etapa concluída). Não existe "próximo da meta" para o que já terminou. */
+export const ROTULO_NIVEL_FINAL = Object.freeze({
+  ok: "Dentro da meta",
+  critico: "Acima da meta",
   neutro: "Sem medição",
 });
 
@@ -80,12 +97,24 @@ export function razaoMeta(valorMin, limite) {
   return valorMin / limite.meta;
 }
 
-/** Tempo (menor é melhor) contra a meta do indicador. */
+/** PREVENTIVA: tempo de uma etapa EM ANDAMENTO contra a meta (usa a faixa de aviso do indicador). */
 export function classificar(valorMin, limite) {
   const r = razaoMeta(valorMin, limite);
   if (r == null) return "neutro";
   if (r > 1 + EPS) return "critico";
   return r >= avisoDe(limite) - EPS ? "atencao" : "ok";
+}
+
+/**
+ * FINAL: duração DEFINITIVA de uma etapa concluída contra a meta. Só dois resultados — dentro (até a meta,
+ * inclusive) ou acima. A faixa de aviso não entra: ela é alerta de quem ainda está em curso.
+ * Sem valor ou sem meta → 'neutro' (falta de dado nunca é resultado positivo).
+ * @returns {'ok'|'critico'|'neutro'}
+ */
+export function classificarFinal(valorMin, limite) {
+  const r = razaoMeta(valorMin, limite);
+  if (r == null) return "neutro";
+  return r > 1 + EPS ? "critico" : "ok";
 }
 
 export const piorNivel = (...niveis) =>
@@ -308,12 +337,12 @@ export function derivarIndicador(indicador, limite) {
     motivo: indicador?.motivo ?? null,
     mediaAproximada: indicador?.mediaAproximada === true,
     ultimoMin: ultimo && finito(ultimo.min) ? ultimo.min : null,
-    ultimoNivel: classificar(ultimo?.min, limite),
+    ultimoNivel: classificarFinal(ultimo?.min, limite),
     ultimoAproximado: ultimo?.aproximado === true,
     ultimoPedido: ultimo?.displayId ?? null,
     ultimoEm: ultimo?.em ?? null,
     mediaMin: media,
-    mediaNivel: classificar(media, limite),
+    mediaNivel: classificarFinal(media, limite),
     amostras: finito(indicador?.amostras) ? indicador.amostras : 0,
     meta: limite?.meta ?? null,
     avisoPct: limite?.avisoPct ?? 80,
@@ -323,17 +352,20 @@ export function derivarIndicador(indicador, limite) {
 
 /**
  * Estado do card: com pedido em acompanhamento, é o contador VIVO que manda
- * (é o que o gerente ainda pode salvar) e o card pulsa; sem pedido na etapa,
- * vale a média do dia — estática, porque um tempo encerrado não cresce.
+ * (é o que o gerente ainda pode salvar) e o card pulsa — classificação PREVENTIVA; sem pedido na etapa,
+ * vale a média do dia — estática, porque um tempo encerrado não cresce — classificação FINAL.
+ * `rotulo` já vem no vocabulário certo de cada uma ("Atrasado" x "Acima da meta").
  */
 export function estadoDoCard(chave, resumo, agora) {
   const vivo = emAcompanhamento(chave, resumo, agora);
   const hoje = derivarIndicador(resumo.indicadores?.[chave], resumo.metas?.[chave]);
+  const nivel = vivo ? vivo.nivel : hoje.mediaNivel;
   return {
     chave,
     vivo,
     hoje,
-    nivel: vivo ? vivo.nivel : hoje.mediaNivel,
+    nivel,
+    rotulo: vivo ? ROTULO_NIVEL[nivel] : ROTULO_NIVEL_FINAL[nivel],
     pulso: vivo ? vivo.pulso : null,
     origemNivel: vivo ? "agora" : "media",
   };
@@ -368,11 +400,15 @@ export function derivarDecomposicao(decomposicao, vidaMin) {
 /**
  * Situação geral da unidade: o PIOR entre as médias do dia e os pedidos em
  * andamento. Cada motivo é escrito — o gerente vê por que, não só a cor.
+ *
+ * As duas fontes têm naturezas diferentes e ficam separadas no resultado:
+ *   `nivelAtivos`  PREVENTIVO — pedidos em andamento (dentro / próximo da meta / atrasado);
+ *   `nivelMedias`  FINAL      — médias do dia já concluídas (dentro / acima da meta; nunca "próximo").
  */
 export function derivarStatusOperacao(resumo, agora) {
   const metas = resumo.metas;
   const ind = resumo.indicadores;
-  const medias = ["preparo", "entrega", "vida"].map((c) => [NOME_INDICADOR[c], classificar(ind?.[c]?.mediaDia, metas?.[c])]);
+  const medias = ["preparo", "entrega", "vida"].map((c) => [NOME_INDICADOR[c], classificarFinal(ind?.[c]?.mediaDia, metas?.[c])]);
   const ativos = (resumo.pedidosAtivos ?? []).map((p) => derivarPedidoAtivo(p, metas, agora));
   // Os abertos há tempo demais já têm alerta crítico próprio (do servidor): não são contados de novo aqui.
   const acompanhados = ativos.filter((p) => !p.semConclusao);
@@ -385,17 +421,27 @@ export function derivarStatusOperacao(resumo, agora) {
   // inconsistência operacional nunca fica escondida atrás de um card verde.
   const alertas = (resumo.alertas ?? []).filter((a) => a?.texto);
   const nivelAlertas = alertas.map((a) => (a.nivel === "critico" || a.nivel === "atencao" ? a.nivel : "neutro"));
-  const nivel = piorNivel(...medias.map(([, n]) => n), nivelAtivos, ...nivelAlertas);
+  const nivelMedias = piorNivel(...medias.map(([, n]) => n));
+  const nivel = piorNivel(nivelMedias, nivelAtivos, ...nivelAlertas);
 
   const motivos = [];
-  if (fora) motivos.push(`${fora} ${fora === 1 ? "pedido fora da meta" : "pedidos fora da meta"}`);
-  if (proximos) motivos.push(`${proximos} ${proximos === 1 ? "pedido próximo da meta" : "pedidos próximos da meta"}`);
-  for (const [nome, n] of medias) if (n === "critico" || n === "atencao") motivos.push(`${nome}: média ${n === "critico" ? "fora da meta" : "próxima da meta"}`);
+  if (fora) motivos.push(`${fora} ${fora === 1 ? "pedido em andamento atrasado" : "pedidos em andamento atrasados"}`);
+  if (proximos) motivos.push(`${proximos} ${proximos === 1 ? "pedido em andamento próximo da meta" : "pedidos em andamento próximos da meta"}`);
+  for (const [nome, n] of medias) if (n === "critico") motivos.push(`${nome}: média do dia acima da meta`);
   for (const a of alertas) motivos.push(a.texto);
+
+  // Veredito: vermelho pode vir de pedido atrasado ou de média acima da meta ("Fora da meta" cobre os dois, e
+  // os motivos dizem qual). Amarelo só existe por alerta: pedido em andamento chegando na meta, ou aviso do servidor.
+  const rotulo = nivel === "neutro" ? "Sem medições hoje"
+    : nivel === "critico" ? "Fora da meta"
+      : nivel === "atencao" ? (proximos ? "Próximo da meta" : "Atenção")
+        : "Dentro da meta";
 
   return {
     nivel,
-    rotulo: nivel === "neutro" ? "Sem medições hoje" : ROTULO_NIVEL[nivel],
+    rotulo,
+    nivelAtivos,
+    nivelMedias,
     motivos,
     medias,
     ativos: emAndamento,

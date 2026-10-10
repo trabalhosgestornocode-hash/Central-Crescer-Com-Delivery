@@ -451,7 +451,7 @@ function atualizarCard(raiz, chave, resumo, agora) {
     card.dataset.nivel = nivelAnterior;
   }
   aplicarNivel(card, e.nivel);
-  texto(card.querySelector("[data-estado-rot]"), ROTULO_NIVEL[e.nivel]);
+  texto(card.querySelector("[data-estado-rot]"), e.rotulo);
   if (e.vivo) {
     texto(card.querySelector("[data-agora-crono]"), e.vivo.cronometro);
     texto(card.querySelector("[data-agora-pedido]"), rotuloPedido(e.vivo.pedido.displayId));
