@@ -27,12 +27,16 @@ git push -u origin main
    - `SUPABASE_SERVICE_ROLE_KEY`  ← a chave **secreta**
    - `SUPABASE_ANON_KEY`
    (`DEFAULT_ORG_ID` e `DEFAULT_UNIDADE_ID` já vêm preenchidas.)
-5. **Create** → o Render roda `npm install` e `npm start`. Ao terminar, você recebe uma URL
+5. **Create** → o Render roda `npm ci` e inicia o servidor com `node src/server.js`. Ao terminar, você recebe uma URL
    `https://subway-saci.onrender.com` (HTTPS automático).
 
 > Sem usar o blueprint? Crie um **Web Service** manual apontando para o repo, com
-> **Root Directory:** `backend`, **Build:** `npm install`, **Start:** `npm start`,
+> **Root Directory:** `backend`, **Build:** `npm ci`, **Start:** `node src/server.js`,
 > **Health Check Path:** `/health`, e as mesmas variáveis de ambiente.
+>
+> **Não use `npm start` como Start Command.** O Render encerra a instância com SIGTERM, e o npm não repassa
+> o sinal ao Node: o backend não faz o encerramento gracioso (o poller do iFood Events continua consultando
+> até o processo ser morto, e o lease vence em vez de ser liberado). Com `node src/server.js` o sinal chega.
 
 ## 3. Criar o primeiro admin (em produção)
 As mesmas contas do Supabase valem em produção. Você pode criar o admin de duas formas:
