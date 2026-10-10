@@ -20,6 +20,7 @@ import {
   saudeSalesVsEvents, saudeEventsVsSettlements, saudeSettlementsVsReconciliation,
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
   rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
+  validarIdLojaDigitado,
   resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
   FASE_ON_DEMAND_ROTULO, MENSAGEM_ERRO_OD_SEM_MOTIVO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
   itemParaJsonTecnico, derivarHistoricoOnDemand, derivarCompetenciaReconciliation, fmtCompetencia,
@@ -115,14 +116,24 @@ const linhasInfo = (linhas) => linhas.map((l) => `<div class="ifood-info-linha">
 // OPERAÇÃO — Pedidos (app Order) e Eventos, cada um com o SEU estado (separado de analytics/financial).
 // Pedidos: fora do piloto (`order` null) é "Ainda não disponível para esta unidade" — informativo, sem
 // ação e sem cara de erro. Só leitura: nenhuma ação de pedido sai desta tela. O botão de conectar só
-// aparece para a unidade piloto e exige a loja já vinculada (o recebimento de eventos usa o merchant).
-function blocoOperacao(statusApi, merchant) {
+// aparece para a unidade piloto. A loja NÃO precisa estar vinculada antes: sem loja, depois de autorizar o
+// aplicativo de pedidos o gestor informa e confere o ID da loja — e o painel só mostra "Conectado" depois
+// da validação final (até lá os pedidos não chegam).
+function blocoOperacao(statusApi) {
   const o = derivarEstadoOrder(statusApi?.order);
   const ev = derivarEstadoEvents(statusApi?.eventosRecebimento, statusApi?.order);
   const botaoOrder = o.podeConectar
-    ? (merchant
-      ? `<button class="btn btn-ghost" id="ifood-acao-conectar_order" data-acao="conectar_order">${o.chave === "reauth" ? "Reconectar pedidos" : "Conectar pedidos"}</button>`
-      : `<p class="ifood-instrucao" id="ifood-order-sem-loja">Vincule a loja iFood desta unidade para conectar os pedidos.</p>`)
+    ? `<button class="btn btn-ghost" id="ifood-acao-conectar_order" data-acao="conectar_order">${o.chave === "reauth" ? "Reconectar pedidos" : "Conectar pedidos"}</button>`
+    : "";
+  const acoesLoja = o.acaoLoja === "informar"
+    ? `<button class="btn btn-primary" id="ifood-acao-informar_loja" data-acao="informar_loja">${o.chave === "loja_rejeitada" ? "Informar o ID da loja novamente" : "Informar o ID da loja"}</button>`
+    : o.acaoLoja === "conferir"
+      ? `<button class="btn btn-primary" id="ifood-acao-conferir_loja" data-acao="conferir_loja">Conferir o ID da loja</button>
+         <button class="btn btn-ghost" id="ifood-acao-corrigir_loja" data-acao="informar_loja">Corrigir o ID</button>`
+      : "";
+  const blocoLojaPendente = o.lojaPendente
+    ? `${o.instrucao ? `<p class="ifood-instrucao" id="ifood-order-loja-instrucao">${esc(o.instrucao)}</p>` : ""}
+       ${acoesLoja ? `<div class="ifood-acoes" id="ifood-order-loja-acoes">${acoesLoja}</div>` : ""}`
     : "";
   return `
     <div class="ifood-card" id="ifood-operacao">
@@ -135,6 +146,7 @@ function blocoOperacao(statusApi, merchant) {
         ${o.erro ? `<div class="ifood-aviso ${o.classe === "bad" ? "bad" : "warn"}" id="ifood-order-erro">${esc(o.erro.mensagem)}</div>` : ""}
         ${linhasInfo(o.linhas)}
         ${botaoOrder}
+        ${blocoLojaPendente}
         <div class="ifood-app-linha" id="ifood-events-status">
           <span class="ifood-app-nome">${esc(EVENTS_ROTULO)}</span>
           <span class="pill ${ev.classe}" id="ifood-events-pill">${esc(ev.rotulo)}</span>
@@ -205,7 +217,7 @@ export function montarHtmlPainel(statusApi) {
         <div class="ifood-acoes">${acoes.join("") || '<span class="ifood-tudo-ok">Integração conectada.</span>'}</div>
       </div>
 
-      ${blocoOperacao(statusApi, e.merchant)}
+      ${blocoOperacao(statusApi)}
       ${blocoDados(e)}
       ${blocoLoja(e, statusApi)}
 
@@ -364,6 +376,9 @@ function ligarAcoesDoPainel() {
     reconectar: () => abrirWizard("reauth"),
     // Pedidos (app Order): só existe o botão para a unidade piloto; o backend recusa as demais (403).
     conectar_order: () => abrirWizard("order"),
+    // Unidade só com o app de pedidos: informar / conferir o ID da loja (Portal do Parceiro).
+    informar_loja: () => abrirWizard("loja_manual"),
+    conferir_loja: () => abrirWizard("loja_conferir"),
     // Loja pendente: vai DIRETO para a seleção de loja (GET /merchants ->
     // escolher -> POST /merchants/link). Não refaz OAuth.
     vincular: () => abrirWizard("merchant"),
@@ -386,6 +401,7 @@ function primeiraEtapaPendente(modo) {
   const e = derivarEstadoIntegracao(estado.status);
   if (modo === "merchant") return "merchant";
   if (modo === "order") return "order";
+  if (modo === "loja_manual" || modo === "loja_conferir") return modo;
   if (modo === "analytics") return "analytics";
   if (modo === "reauth") {
     return e.apps.financial.classe === "bad" ? "financial" : "analytics";
@@ -443,6 +459,135 @@ function pintarWizard() {
   if (w.etapa === "financial") return pintarEtapaOAuth("financial", 2, "Dados financeiros — autorize o aplicativo Financial + Merchant.");
   if (w.etapa === "merchant") return pintarEtapaMerchant();
   if (w.etapa === "order") return pintarEtapaOAuth("order", null, "Pedidos e eventos — autorize o aplicativo de pedidos (Order) do iFood.");
+  if (w.etapa === "loja_manual") return pintarEtapaLojaManual();
+  if (w.etapa === "loja_conferir") return pintarEtapaLojaConferir();
+  if (w.etapa === "loja_aguardando") return pintarEtapaLojaAguardando();
+}
+
+// ---------------------------------------------------------------------------
+// Loja informada pelo gestor (unidade só com o app de pedidos)
+//   1. informar o ID  ->  2. conferir e confirmar  ->  3. aguardar a validação final
+// Nenhuma destas etapas chama o iFood nem liga o recebimento de pedidos.
+// ---------------------------------------------------------------------------
+const TRILHA_LOJA = ["Conectar pedidos", "Autorizar o aplicativo", "Informar o ID da loja", "Conferir os dados", "Validação final"];
+function trilhaLoja(atual) {
+  return `<ol class="ifood-trilha" id="ifood-trilha-loja">${TRILHA_LOJA.map((t, i) =>
+    `<li class="${i < atual ? "feito" : i === atual ? "atual" : ""}">${i < atual ? "✓ " : ""}${esc(t)}</li>`).join("")}</ol>`;
+}
+
+function pintarEtapaLojaManual() {
+  const view = el("#view");
+  const w = estado.wizard;
+  view.innerHTML = `
+    <div class="ifood-page">
+      ${cabecalhoWizard("Loja do iFood — informe o ID da loja desta unidade.", null)}
+      <div class="ifood-card">
+        ${trilhaLoja(2)}
+        ${w.feito.order ? `<div class="ifood-aviso ok">Aplicativo de pedidos autorizado ✓</div>` : ""}
+        <p>No <strong>Portal do Parceiro iFood</strong>, abra os dados da loja e copie o <strong>ID da loja</strong>. Ele tem 36 caracteres, no formato <span class="mono">xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx</span>.</p>
+        <label class="ifood-label" for="ifood-loja-id">ID da loja no iFood</label>
+        <input type="text" id="ifood-loja-id" class="ifood-input mono" autocomplete="off" spellcheck="false" maxlength="64" placeholder="Cole aqui o ID da loja" value="${esc(w.lojaId || "")}" />
+        <p class="ifood-instrucao">Informe o ID desta unidade — não o de outra loja do grupo. Na próxima etapa você confere antes de confirmar.</p>
+        <div class="ifood-acoes">
+          <button class="btn btn-primary" id="ifood-loja-continuar">Continuar</button>
+        </div>
+        <div class="ifood-msg" id="ifood-msg"></div>
+      </div>
+    </div>`;
+  el("#ifood-wizard-sair")?.addEventListener("click", sairDoWizard);
+  el("#ifood-loja-continuar")?.addEventListener("click", informarLoja);
+}
+
+async function informarLoja() {
+  const v = validarIdLojaDigitado(el("#ifood-loja-id")?.value);
+  if (!v.ok) return mostrarMsg(v.erro, "bad");
+  const btn = el("#ifood-loja-continuar");
+  if (btn) btn.disabled = true;
+  try {
+    const { data } = await api.ifoodInformarLoja(v.id);
+    estado.status = data;
+    estado.wizard.lojaId = v.id;            // só em memória, para a conferência; nunca é guardado no navegador
+    estado.wizard.etapa = data?.order?.lojaValidada ? "loja_aguardando" : "loja_conferir";
+    pintarWizard();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    mostrarMsg(e?.message || "Não foi possível registrar o ID da loja.", "bad");
+  }
+}
+
+function pintarEtapaLojaConferir() {
+  const view = el("#view");
+  const w = estado.wizard;
+  const mascarado = estado.status?.order?.lojaInformada?.idMascarado ?? null;
+  // Sem o ID em memória (a tela foi reaberta): o gestor digita de novo — é a própria conferência.
+  const precisaDigitar = !w.lojaId;
+  view.innerHTML = `
+    <div class="ifood-page">
+      ${cabecalhoWizard("Loja do iFood — confira o ID antes de confirmar.", null)}
+      <div class="ifood-card">
+        ${trilhaLoja(3)}
+        ${precisaDigitar ? `
+          <p>Loja informada: <span class="mono">${esc(mascarado || "—")}</span>. Para conferir, digite novamente o <strong>ID completo</strong> como aparece no Portal do Parceiro.</p>
+          <label class="ifood-label" for="ifood-loja-id-conf">ID da loja no iFood</label>
+          <input type="text" id="ifood-loja-id-conf" class="ifood-input mono" autocomplete="off" spellcheck="false" maxlength="64" placeholder="Digite o ID da loja" />
+        ` : `
+          <div class="ifood-codigo-box" id="ifood-loja-conferencia">
+            <div class="ifood-codigo-rotulo">ID da loja informado</div>
+            <div class="ifood-codigo mono" id="ifood-loja-id-exibido">${esc(w.lojaId)}</div>
+          </div>
+          <p class="ifood-instrucao">Compare caractere por caractere com o ID exibido no Portal do Parceiro iFood.</p>
+        `}
+        <label class="ifood-check" for="ifood-loja-ciente">
+          <input type="checkbox" id="ifood-loja-ciente" />
+          <span>Conferi no Portal do Parceiro que este é o ID da loja <strong>desta unidade</strong>.</span>
+        </label>
+        <div class="ifood-acoes">
+          <button class="btn btn-primary" id="ifood-loja-confirmar">Confirmar loja</button>
+          <button class="btn btn-ghost" id="ifood-loja-corrigir">Corrigir o ID</button>
+        </div>
+        <div class="ifood-msg" id="ifood-msg"></div>
+      </div>
+    </div>`;
+  el("#ifood-wizard-sair")?.addEventListener("click", sairDoWizard);
+  el("#ifood-loja-confirmar")?.addEventListener("click", conferirLoja);
+  el("#ifood-loja-corrigir")?.addEventListener("click", () => { estado.wizard.etapa = "loja_manual"; pintarWizard(); });
+}
+
+async function conferirLoja() {
+  const w = estado.wizard;
+  const v = validarIdLojaDigitado(w.lojaId || el("#ifood-loja-id-conf")?.value);
+  if (!v.ok) return mostrarMsg(v.erro, "bad");
+  if (!el("#ifood-loja-ciente")?.checked) return mostrarMsg("Marque a confirmação de que você conferiu o ID no Portal do Parceiro.", "bad");
+  const btn = el("#ifood-loja-confirmar");
+  if (btn) btn.disabled = true;
+  try {
+    const { data } = await api.ifoodConferirLoja(v.id);
+    estado.status = data;
+    estado.wizard.lojaId = null;
+    estado.wizard.etapa = "loja_aguardando";
+    pintarWizard();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    mostrarMsg(e?.message || "Não foi possível confirmar a loja.", "bad");
+  }
+}
+
+function pintarEtapaLojaAguardando() {
+  const view = el("#view");
+  view.innerHTML = `
+    <div class="ifood-page">
+      ${cabecalhoWizard("Loja do iFood — aguardando a validação final.", null)}
+      <div class="ifood-card">
+        ${trilhaLoja(4)}
+        <div class="ifood-aviso info" id="ifood-loja-aguardando">Loja informada e conferida. <strong>Aguardando validação final.</strong></div>
+        <p>A validação final é feita pelo suporte da plataforma, em horário acompanhado, com a loja e o Gestor de Pedidos do iFood abertos. Até lá <strong>os pedidos ainda não chegam à Central</strong> — continue usando o Gestor de Pedidos normalmente.</p>
+        <div class="ifood-acoes">
+          <button class="btn btn-primary" id="ifood-loja-concluir">Voltar ao status</button>
+        </div>
+      </div>
+    </div>`;
+  el("#ifood-wizard-sair")?.addEventListener("click", sairDoWizard);
+  el("#ifood-loja-concluir")?.addEventListener("click", sairDoWizard);
 }
 
 function pintarEtapaOAuth(appType, passo, subtitulo) {
@@ -514,8 +659,13 @@ async function concluirAutorizacao(appType) {
     estado.wizard.feito[appType] = true;
     pararContador();
     if (appType === "order") {
-      // Pedidos autorizados: nada mais neste assistente (o recebimento de eventos tem flag própria no servidor).
-      sairDoWizard();
+      // Pedidos autorizados. Com a loja já validada (unidade que vinculou pela conta Financial) não há mais
+      // nada neste assistente. Sem loja validada, segue para informar o ID da loja.
+      await carregarStatusSilencioso();
+      const o = derivarEstadoOrder(estado.status?.order);
+      if (o.acaoLoja === "informar") { estado.wizard.etapa = "loja_manual"; pintarWizard(); }
+      else if (o.acaoLoja === "conferir") { estado.wizard.etapa = "loja_conferir"; pintarWizard(); }
+      else sairDoWizard();
     } else if (appType === "analytics" && derivarEstadoIntegracao(estado.status).apps.financial.conectado) {
       // Analytics autorizado depois do Financial (caminho "Autorizar Analytics"):
       // nada mais a autorizar — volta ao status.

@@ -83,14 +83,16 @@ test("unidade NÃO piloto: Pedidos 'Ainda não disponível', sem botão de Order
   assert.match(html, /id="ifood-events-pill">Desativado/);
 });
 
-test("unidade piloto sem Order: 'Não conectado' + botão 'Conectar pedidos' (só com loja vinculada)", () => {
+test("unidade piloto sem Order: 'Não conectado' + botão 'Conectar pedidos' (com ou sem loja vinculada)", () => {
   const html = montarHtmlPainel(PILOTO_SEM_ORDER);
   assert.match(html, /id="ifood-order-pill">Não conectado/);
   assert.match(html, /data-acao="conectar_order">Conectar pedidos</);
   assert.doesNotMatch(html, /ifood-abrir-pedidos/, "sem Order conectado não há lista de pedidos");
+  // Unidade só com o app de pedidos (sem Financial, sem loja): o botão aparece — a loja é informada depois.
   const semLoja = montarHtmlPainel({ ...PILOTO_SEM_ORDER, merchant: null });
-  assert.doesNotMatch(semLoja, /conectar_order/);
-  assert.match(semLoja, /Vincule a loja iFood desta unidade para conectar os pedidos/);
+  assert.match(semLoja, /data-acao="conectar_order">Conectar pedidos</);
+  assert.doesNotMatch(semLoja, /Vincule a loja iFood desta unidade para conectar os pedidos/);
+  assert.doesNotMatch(semLoja, /informar_loja|conferir_loja/, "o ID da loja só é pedido DEPOIS de autorizar o aplicativo");
 });
 
 test("unidade piloto conectada: Pedidos 'Conectado', Eventos 'Ativo', último evento na loja, 'Ver pedidos' disponível", () => {

@@ -447,6 +447,11 @@ export const ifoodOauthComplete = (appType, sessionId, authorizationCode) =>
 export const ifoodMerchants = () => getJson(`${IFOOD}/merchants`);
 export const ifoodMerchantDetalhe = (merchantId) => getJson(`${IFOOD}/merchants/${encodeURIComponent(merchantId)}`);
 export const ifoodVincularMerchant = (merchantId) => postJson(`${IFOOD}/merchants/link`, { merchantId });
+// Vínculo MANUAL da loja (unidade só com o app de pedidos): o gestor informa o ID do Portal do Parceiro e
+// depois o confere. Nenhuma das duas chama o iFood; a validação final não é feita por esta tela.
+// (Corrigir o ID = informar de novo: o servidor encerra o anterior.)
+export const ifoodInformarLoja = (merchantId) => postJson(`${IFOOD}/merchants/manual`, { merchantId });
+export const ifoodConferirLoja = (merchantId) => postJson(`${IFOOD}/merchants/manual/conferir`, { merchantId });
 export const ifoodDesconectar = () => delJson(`${IFOOD}/`);
 // Pedidos iFood da unidade — leitura do banco local (estado oficial vindo dos eventos); não chama o iFood.
 export const ifoodPedidos = () => getJson(`${IFOOD}/pedidos`);
