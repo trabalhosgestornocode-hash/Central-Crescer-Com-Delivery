@@ -1,6 +1,7 @@
 import { asyncHandler } from "../../shared/asyncHandler.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { renovarGrantsRealtime } from "./realtime.grants.service.js";
+import { PAPEL_EXIBICAO } from "../../shared/permissoes.js";
 
 /**
  * Deriva os parâmetros do grant EXCLUSIVAMENTE do que `requireContexto`/
@@ -8,6 +9,9 @@ import { renovarGrantsRealtime } from "./realtime.grants.service.js";
  * Função pura e separada de propósito: é o ponto exato que garante que um
  * cliente não pode "escolher" outra organização/unidade/sessão só porque
  * mandou algo diferente no corpo da requisição.
+ *
+ * Perfil de EXIBIÇÃO: só o canal da UNIDADE (`somenteUnidade`). O canal da empresa carrega agregados da
+ * empresa inteira, que um computador de TV com acesso exclusivo ao Checklist não deve assinar.
  * @param {import('express').Request} req
  */
 export function parametrosGrantDoRequest(req) {
@@ -16,6 +20,7 @@ export function parametrosGrantDoRequest(req) {
     sessaoContextoId: req.acesso.sessionId,
     organizacaoId: req.tenant.organizacaoId,
     unidadeId: req.tenant.unidadeId,
+    ...(req.acesso.papel === PAPEL_EXIBICAO ? { somenteUnidade: true } : {}),
   };
 }
 

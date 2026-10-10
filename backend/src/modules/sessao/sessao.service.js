@@ -42,12 +42,13 @@
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { emitirContextToken, VALIDADE_PADRAO_S } from "../../shared/contextToken.js";
-import { permissoesDoPapel, rotuloPapel } from "../../shared/permissoes.js";
+import { permissoesDoPapel, rotuloPapel, PAPEL_EXIBICAO } from "../../shared/permissoes.js";
 import { modulosDaEmpresa, modulosEfetivosDaUnidade } from "../../shared/modulos.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
 import { resolverPerfilParaContexto } from "./perfil.service.js";
 import * as v from "../../shared/validar.js";
 import { removerGrantsDeSessoes } from "../realtime/realtime.grants.service.js";
+import { limiteDaAutenticacao, mfaExigidoParaExibicao } from "../../shared/renovacaoExibicao.js";
 
 /** Status de empresa que impedem o tenant de entrar. */
 const STATUS_BLOQUEANTES = { bloqueada: "Empresa bloqueada.", suspensa: "Empresa suspensa.", cancelada: "Empresa cancelada." };
@@ -400,10 +401,15 @@ async function buscarUnidadePorId(unidadeId) {
  * @param {string|null} [params.ip]
  * @param {string|null} [params.userAgent]
  * @param {boolean} [params.troca]  true quando é troca de contexto (só p/ auditoria)
+ * @param {number|null} [params.validadeS]  USO INTERNO (renovação do perfil de exibição): validade menor que a padrão.
+ *   Nunca vem do cliente: o controller não repassa nada do corpo.
+ * @param {{sessaoAnteriorId: string}|null} [params.renovacao]  USO INTERNO: marca esta seleção como RENOVAÇÃO (auditoria).
+ * @param {() => number} [params.agora]  relógio injetável (testes)
  * @param {{resolverPerfil?: Function}} [deps]  injeção p/ teste
  */
 export async function selecionarContexto(
-  { usuario, perfilId, provaSelecao = null, organizacaoId, unidadeId, revogarSessionId = null, ip = null, userAgent = null, troca = false },
+  { usuario, perfilId, provaSelecao = null, organizacaoId, unidadeId, revogarSessionId = null, ip = null, userAgent = null, troca = false,
+    validadeS = null, renovacao = null, agora = () => Date.now() },
   deps = {},
 ) {
   const orgId = v.uuid(organizacaoId, "Empresa");
@@ -477,6 +483,12 @@ export async function selecionarContexto(
     throw ApiError.forbidden("Não foi possível determinar seu cargo nesta unidade — vínculo incompleto. Fale com o administrador.");
   }
 
+  // PERFIL DE EXIBIÇÃO (computador da TV): só existe como vínculo DIRETO de UMA unidade. Nunca consolidado
+  // ("todas as unidades") e nunca herdado de um vínculo de empresa — senão valeria para todas as unidades dela.
+  // O banco também recusa o papel em usuarios_organizacoes (migration 113); isto cobre o intervalo até ela
+  // existir e qualquer dado fora do padrão. Mesma resposta do "sem acesso" (não revela a configuração).
+  if (papel === PAPEL_EXIBICAO && (!unidade || papelDaEmpresa === PAPEL_EXIBICAO)) return negarAcesso();
+
   const permissoes = permissoesDoPapel(papel);
   // Acesso efetivo = módulos da empresa ∩ módulos da unidade (item 4 do
   // pedido de gerenciamento de Unidades) — só faz sentido cruzar quando uma
@@ -486,24 +498,52 @@ export async function selecionarContexto(
     ? await modulosEfetivosDaUnidade(orgId, unidade.id)
     : await modulosDaEmpresa(orgId);
 
+  // PERFIL DE EXIBIÇÃO — duas travas que valem para entrar E para renovar:
+  //   * MFA (dormente por padrão: MFA_ENFORCE_EXIBICAO=true liga): sem o nível aal2 no JWT, não entra;
+  //   * limite ABSOLUTO desde a AUTENTICAÇÃO (padrão conservador 8 h; 20 h só por configuração, após validar o JWT real): passou, é preciso entrar de novo com a senha — inclusive
+  //     pela reentrada automática, que de outro modo recomeçaria a contagem. Perto do limite o contexto sai CURTO
+  //     (só até o limite). Sem o carimbo de autenticação no JWT mantém-se o comportamento antigo (validade padrão).
+  let validadeFinalS = validadeS ?? undefined;
+  let limiteAbsolutoEm = null;
+  if (papel === PAPEL_EXIBICAO) {
+    if (mfaExigidoParaExibicao() && usuario.aal !== "aal2") {
+      throw new ApiError(401, "Este acesso exige verificação em duas etapas (MFA). Entre novamente.", { codigo: "MFA_REQUERIDA" });
+    }
+    const lim = limiteDaAutenticacao({ agoraMs: agora(), authEmMs: usuario.authEm ?? null });
+    if (lim.acao === "reautenticar") {
+      throw new ApiError(401, "O tempo máximo desta autenticação terminou. Entre novamente com a senha.", { codigo: "REAUTENTICACAO_NECESSARIA" });
+    }
+    if (lim.acao === "ok") {
+      validadeFinalS = Math.min(validadeFinalS ?? lim.validadeS, lim.validadeS);
+      limiteAbsolutoEm = new Date(lim.limiteEm).toISOString();
+    }
+  }
+
   const sessao = await criarSessao({
     contaId: usuario.id, perfilId: perfil.id,
     organizacaoId: orgId, unidadeId: unidade?.id ?? null,
     papel, permissoes, modulos, impersonadoPor: null, ip, userAgent,
+    ...(validadeFinalS ? { validadeS: validadeFinalS } : {}),
     revogarSessionId, // Model Y: só a sessão da própria aba (troca de unidade)
     selecaoNonce: perfil.selecaoNonce ?? null, // uso único da prova de PIN (Fase H)
   });
 
   await auditar({
     atorId: usuario.id, atorEmail: usuario.email, perfilId: perfil.id,
-    acao: troca ? ACOES.CONTEXTO_TROCADO : ACOES.CONTEXTO_SELECIONADO,
+    acao: renovacao ? ACOES.CONTEXTO_RENOVADO : (troca ? ACOES.CONTEXTO_TROCADO : ACOES.CONTEXTO_SELECIONADO),
     entidade: "organizacao", entidadeId: orgId, organizacaoId: orgId, ip, userAgent,
-    detalhes: { papel, perfil: perfil.nome, unidadeId: unidade?.id ?? null, empresa: empresa.nome },
+    detalhes: {
+      papel, perfil: perfil.nome, unidadeId: unidade?.id ?? null, empresa: empresa.nome,
+      // Renovação: só ids e prazos (nunca token).
+      ...(renovacao ? { sessaoAnteriorId: renovacao.sessaoAnteriorId, sessaoNovaId: sessao.id, validadeS: validadeFinalS ?? null, limiteAbsolutoEm } : {}),
+    },
   });
 
   return {
     contextToken: sessao.token,
     expiraEm: sessao.expiraEm,
+    servidorEm: new Date(agora()).toISOString(),   // relógio do SERVIDOR: o navegador agenda a renovação por ele
+    limiteAbsolutoEm,
     sessionId: sessao.id,
     perfil: { id: perfil.id, nome: perfil.nome },
     empresa: { id: empresa.id, nome: empresa.nome, logoUrl: empresa.logo_url ?? null, status: empresa.status },
@@ -934,5 +974,9 @@ export function contextoAtual(req) {
     impersonando: req.acesso.impersonando,
     organizacaoId: req.tenant.organizacaoId,
     unidadeId: req.tenant.unidadeId,
+    // Prazo do contexto (relido do banco) e relógio do servidor: o navegador agenda a renovação do perfil de exibição
+    // por ESTES valores, não pelo relógio do aparelho.
+    expiraEm: req.acesso.expiraEm ?? null,
+    servidorEm: new Date().toISOString(),
   };
 }

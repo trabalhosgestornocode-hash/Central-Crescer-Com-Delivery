@@ -26,6 +26,7 @@ import { verificarContextToken, validarPidContraSessao } from "../shared/context
 import { temPermissao } from "../shared/permissoes.js";
 import { rotuloModulo } from "../shared/modulos.js";
 import { MFA } from "../config/seguranca.js";
+import { carimboDeAutenticacao } from "../shared/renovacaoExibicao.js";
 
 /** Nome do header que transporta o Context Token. */
 export const HEADER_CONTEXTO = "x-context-token";
@@ -52,7 +53,8 @@ const STATUS_BLOQUEANTES = new Set(["bloqueada", "suspensa", "cancelada"]);
  * `supabase.auth.getUser(token)` ter validado a assinatura — aqui apenas
  * decodificamos o corpo já autenticado. Nunca lança.
  * @param {string} token
- * @returns {{ aal: 'aal1'|'aal2'|null, amr: string[] }}
+ * @returns {{ aal: 'aal1'|'aal2'|null, amr: string[], authEm: number|null }} `authEm`: instante (ms) da autenticação
+ *   mais recente declarada em `amr[].timestamp` — base do limite absoluto da renovação do perfil de exibição.
  */
 function lerNivelMfaDoJwt(token) {
   try {
@@ -62,9 +64,9 @@ function lerNivelMfaDoJwt(token) {
     const amr = Array.isArray(payload?.amr)
       ? payload.amr.map((m) => (typeof m === "string" ? m : m?.method)).filter(Boolean)
       : [];
-    return { aal, amr };
+    return { aal, amr, authEm: carimboDeAutenticacao(payload?.amr) };
   } catch {
-    return { aal: null, amr: [] };
+    return { aal: null, amr: [], authEm: null };
   }
 }
 
@@ -122,13 +124,13 @@ export async function requireAuth(req, _res, next) {
     // pode ficar impedida de logar por causa de uma tabela de apoio. O que ela
     // não terá é CONTEXTO (nenhuma empresa), e o front trata esse caso.
     if (perfil && perfil.ativo === false) {
-      return next(ApiError.forbidden("Usuário inativo. Contate o administrador."));
+      return next(ApiError.forbidden("Usuário inativo. Contate o administrador.", { codigo: "CONTA_INATIVA" }));
     }
 
     // Nível de MFA do JWT (dormente: só é EXIGIDO onde `exigirMfaSeExigido`
     // estiver ligado por env — ver config/seguranca.js#MFA). Exposto sempre
     // para o frontend saber se deve oferecer o cadastro do 2º fator.
-    const { aal, amr } = lerNivelMfaDoJwt(token);
+    const { aal, amr, authEm } = lerNivelMfaDoJwt(token);
     const mfaCadastrada = Array.isArray(data.user.factors)
       && data.user.factors.some((f) => f?.status === "verified");
 
@@ -139,6 +141,9 @@ export async function requireAuth(req, _res, next) {
       nome: perfil?.nome || data.user.user_metadata?.nome || (data.user.email ?? "").split("@")[0],
       aal,
       amr,
+      // Instante (ms) da autenticação mais recente do JWT (claim amr[].timestamp); null se o token não traz.
+      // Só o perfil de exibição usa (limite absoluto da renovação do contexto) — ver shared/renovacaoExibicao.js.
+      authEm,
       mfaCadastrada,
       superadmin: !!superRes.data,
       // Acesso GLOBAL ao Painel Administrativo (monitoramento gerencial
@@ -265,6 +270,7 @@ export async function requireContexto(req, _res, next) {
     /** @type {AcessoContexto} */
     req.acesso = {
       sessionId: sessao.id,
+      expiraEm: sessao.expira_em ?? null,   // quando ESTA sessão de contexto vence (relida do banco, nunca do navegador)
       perfilId: sessao.perfil_id ?? null,
       papel: sessao.papel,
       permissoes: Array.isArray(sessao.permissoes) ? sessao.permissoes : [],
@@ -415,6 +421,24 @@ export function requirePermissao(permissao) {
     if (!req.acesso) return next(ApiError.forbidden("Contexto de empresa não definido."));
     if (req.acesso.impersonando) return next();
     if (!temPermissao(req.acesso.permissoes, permissao)) {
+      return next(ApiError.forbidden("Permissão insuficiente para esta ação."));
+    }
+    next();
+  };
+}
+
+/**
+ * Exige QUALQUER UMA das permissões informadas (OU). Mesma regra de bypass de `requirePermissao`.
+ * Existe para trocas de permissão sem quebrar sessões já abertas: a lista de permissões fica CONGELADA na
+ * sessão de contexto até ela expirar (≤ 8 h), então uma permissão nova só aparece nas sessões criadas depois.
+ * @param {...string} permissoes
+ */
+export function requireAlgumaPermissao(...permissoes) {
+  if (!permissoes.length) throw new Error("requireAlgumaPermissao: informe ao menos uma permissão.");
+  return (req, _res, next) => {
+    if (!req.acesso) return next(ApiError.forbidden("Contexto de empresa não definido."));
+    if (req.acesso.impersonando) return next();
+    if (!permissoes.some((p) => temPermissao(req.acesso.permissoes, p))) {
       return next(ApiError.forbidden("Permissão insuficiente para esta ação."));
     }
     next();

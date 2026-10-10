@@ -20,7 +20,7 @@
 // renovar/limpar o grant de uma sessão jamais apaga o de outra.
 import { supabase } from "../../config/supabase.js";
 import { config } from "../../config/env.js";
-import { topicosAutorizados } from "./realtime.topicos.js";
+import { topicosAutorizados, topicoUnidade } from "./realtime.topicos.js";
 
 const TABELA = "realtime_channel_grants";
 
@@ -36,14 +36,18 @@ const TABELA = "realtime_channel_grants";
  * @param {string} params.organizacaoId      req.tenant.organizacaoId — nunca do body/query
  * @param {string|null} [params.unidadeId]   req.tenant.unidadeId — nunca do body/query
  * @param {number} [params.validadeS]
+ * @param {boolean} [params.somenteUnidade]  perfil de exibição: SÓ o canal da unidade (sem o da empresa; sem
+ *                                           unidade, nenhum canal)
  * @param {{db?: typeof supabase}} [deps]     injeção só para teste
  * @returns {Promise<{topicos: string[], expiraEm: string, validadeS: number}>}
  */
 export async function renovarGrantsRealtime(
-  { usuarioId, sessaoContextoId, organizacaoId, unidadeId = null, validadeS = config.realtimeCredentialTtlS },
+  { usuarioId, sessaoContextoId, organizacaoId, unidadeId = null, validadeS = config.realtimeCredentialTtlS, somenteUnidade = false },
   { db = supabase } = {},
 ) {
-  const topicos = topicosAutorizados({ organizacaoId, unidadeId });
+  const topicos = somenteUnidade
+    ? (unidadeId ? [topicoUnidade(unidadeId)] : [])
+    : topicosAutorizados({ organizacaoId, unidadeId });
   const expiraEmDate = new Date(Date.now() + validadeS * 1000);
   const expiraEm = expiraEmDate.toISOString();
 

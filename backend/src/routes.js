@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireContexto, exigirSenhaDefinitiva, requireModulo } from "./middlewares/auth.js";
+import { restringirPerfilExibicao } from "./middlewares/perfilExibicao.js";
 import { MODULOS } from "./shared/modulos.js";
 import { produtosRouter } from "./modules/produtos/produtos.routes.js";
 import { insumosRouter } from "./modules/insumos/insumos.routes.js";
@@ -69,6 +70,9 @@ router.use("/administrativo", administrativoRouter);
 //     impersonação, igual a `requirePermissao`.
 const tenant = Router();
 tenant.use(requireContexto);
+// Perfil de EXIBIÇÃO (computador da TV): só as rotas da lista do middleware respondem; o resto é 403 aqui, antes
+// de qualquer módulo — mesmo uma rota futura que esqueça de exigir permissão. Os demais papéis passam direto.
+tenant.use(restringirPerfilExibicao);
 tenant.use("/produtos", requireModulo(MODULOS.PRODUTOS_CMV), produtosRouter);
 tenant.use("/insumos", requireModulo(MODULOS.INGREDIENTS), insumosRouter);
 tenant.use("/cmv", requireModulo(MODULOS.PRODUTOS_CMV), cmvRouter);
@@ -81,8 +85,8 @@ tenant.use("/realtime", realtimeRouter);   // idem — credencial de canal Realt
 tenant.use("/vendas", requireModulo(MODULOS.SALES), vendasRouter);
 tenant.use("/integracoes/martin-brower", requireModulo(MODULOS.MARTIN_BROWER), martinBrowerRouter);
 tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
-// Checklist Operacional: lê os pedidos iFood da unidade — mesmo módulo (`ifood`) e mesma permissão
-// (INTEGRACOES_VER, no router) da lista de pedidos. Nunca mais aberto que o dado que mostra.
+// Checklist Operacional: lê os pedidos iFood da unidade — módulo `ifood` e permissão `checklist.visualizar`
+// (ou integracoes.ver, enquanto existirem sessões antigas — ver o router). Nunca mais aberto que o dado que mostra.
 tenant.use("/checklist-operacional", requireModulo(MODULOS.IFOOD), checklistOperacionalRouter);
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);
 // Seção "INTELIGÊNCIA" do menu (Agente Crescer · Relatórios · Integrações).

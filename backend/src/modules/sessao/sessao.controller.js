@@ -1,5 +1,6 @@
 import { asyncHandler } from "../../shared/asyncHandler.js";
 import * as service from "./sessao.service.js";
+import { renovarContexto } from "./sessao.renovacao.service.js";
 import * as perfilService from "./perfil.service.js";
 import * as v from "../../shared/validar.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
@@ -95,6 +96,16 @@ export const trocarUnidade = asyncHandler(async (req, res) => {
     ...origem(req),
   });
   res.status(201).json({ data });
+});
+
+// POST /api/v1/sessao/renovar — renovação automática do contexto do PERFIL DE EXIBIÇÃO (ver
+// sessao.service.js#renovarContexto). NÃO lê o corpo: conta, empresa, unidade e perfil vêm da sessão já validada
+// (req.user/req.tenant/req.acesso), nunca do cliente. 200 com `renovado:false` = ainda cedo (nada mudou).
+export const renovar = asyncHandler(async (req, res) => {
+  const data = await renovarContexto({
+    usuario: req.user, acesso: req.acesso, tenant: req.tenant, ...origem(req),
+  });
+  res.status(data.renovado ? 201 : 200).json({ data });
 });
 
 // GET /api/v1/sessao/atual — contexto vigente (recarregamento de página).

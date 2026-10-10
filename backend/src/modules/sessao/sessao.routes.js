@@ -15,6 +15,7 @@ const limitePin = combinar(
 );
 const limiteSelecionar = limiteDeTaxa({ escopo: "sessao:selecionar", ...RATE_LIMIT.selecionarContexto });
 const limiteSenha = limiteDeTaxa({ escopo: "sessao:senha", ...RATE_LIMIT.trocarSenha });
+const limiteRenovar = limiteDeTaxa({ escopo: "sessao:renovar", max: Number(process.env.RATE_LIMIT_RENOVAR_MAX) || 40, janelaMs: 60 * 60_000 });
 
 // Rotas de sessão. Todas exigem estar AUTENTICADO (requireAuth já roda em
 // /api/v1), mas quase nenhuma exige CONTEXTO — é justamente aqui que o
@@ -60,6 +61,11 @@ sessaoRouter.get("/unidades", exigirSenhaDefinitiva, requireContexto, controller
 // sessão atual é uma impersonação e aplica a regra certa (ver
 // sessao.service.js#trocarUnidadeDoContexto).
 sessaoRouter.post("/trocar-unidade", exigirSenhaDefinitiva, requireContexto, controller.trocarUnidade);
+
+// `renovar`: renovação AUTOMÁTICA do contexto — SÓ do perfil de exibição (computador da TV, expediente de ~17 h).
+// Exige autenticação (JWT do Supabase válido), senha definitiva e contexto VIVO; o serviço recusa (403, sem alterar nada)
+// qualquer outro papel e qualquer impersonação. Não lê o corpo. Limite de taxa por conta: a TV renova ~3 vezes por jornada.
+sessaoRouter.post("/renovar", exigirSenhaDefinitiva, requireContexto, limiteRenovar, controller.renovar);
 
 // `encerrar` funciona com ou sem contexto: revoga o que houver. Se exigisse
 // contexto, um token já expirado impediria o logout — o pior momento para

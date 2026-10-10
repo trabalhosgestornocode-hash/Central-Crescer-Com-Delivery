@@ -77,6 +77,7 @@ plataformaRouter.post("/empresas/:id/converter-em-unidade", c.converterEmpresaPa
 plataformaRouter.get("/usuarios", c.listarUsuarios);
 plataformaRouter.post("/usuarios", c.criarUsuario);
 plataformaRouter.get("/usuarios/papeis", c.papeis);   // antes de /:id, senão "papeis" cai como id
+plataformaRouter.get("/usuarios/papeis-unidade", c.papeisUnidade);   // idem; inclui o Operador de Exibição (só de unidade)
 plataformaRouter.get("/usuarios/:id", c.obterUsuario);
 plataformaRouter.patch("/usuarios/:id", c.atualizarUsuario);
 plataformaRouter.delete("/usuarios/:id", c.excluirUsuario);
