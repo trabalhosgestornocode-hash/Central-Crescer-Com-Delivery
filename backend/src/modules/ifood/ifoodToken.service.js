@@ -56,6 +56,15 @@ export function appTypesDoOAuth() {
 }
 
 /**
+ * Unidades do piloto Order (IFOOD_ORDER_PILOT_UNITS), já normalizadas. É a ÚNICA fonte do poller de Events
+ * para decidir quais lojas consultar. Cópia: quem recebe não altera a config. Vazia = nenhuma unidade.
+ * @returns {string[]}
+ */
+export function unidadesPilotoOrder() {
+  return [...(config.ifood?.orderPilotoUnidades ?? [])];
+}
+
+/**
  * O app Order está liberado PARA ESTA UNIDADE? Exige as duas coisas:
  *   1. o app existe neste ambiente (appTypesDoOAuth inclui `order` — credenciais ou homologação);
  *   2. a unidade está no piloto (IFOOD_ORDER_PILOT_UNITS). Vale também em homologação: fail-closed.

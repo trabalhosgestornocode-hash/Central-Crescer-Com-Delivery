@@ -16,7 +16,7 @@ const { postJson } = await import("../src/modules/ifood/ifoodHttp.client.js");
 const { criarPoller } = await import("../src/modules/ifood/ifoodEvents.poller.js");
 const { IFOOD_EVENTS, IFOOD_HTTP } = await import("../src/modules/ifood/ifood.constants.js");
 const { IFOOD_ERROS } = await import("../src/modules/ifood/ifood.errors.js");
-const { criarRepoEmMemoria, criarRelogio, criarClienteFake, criarTokenFake, ev } = await import("./helpers/ifood-events-fakes.js");
+const { criarRepoEmMemoria, criarRelogio, criarClienteFake, criarTokenFake, ev, pilotoDe } = await import("./helpers/ifood-events-fakes.js");
 
 const silencio = () => {};
 const resposta = (status) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, text: async () => "" });
@@ -68,7 +68,7 @@ function montar({ relogio = criarRelogio(), repo, respostas, holder = "inst-A", 
   repo ??= criarRepoEmMemoria({ relogio });
   const client = criarClienteFake(clienteReal, { respostasPolling: respostas });
   const token = criarTokenFake({ escopo: "app" });
-  const poller = criarPoller({ repo, token, client, holder, agora: relogio.agora, log: silencio, leaseTtlS });
+  const poller = criarPoller({ repo, token, client, holder, agora: relogio.agora, log: silencio, leaseTtlS, unidadesPiloto: pilotoDe(repo) });
   return { repo, client, poller, relogio };
 }
 
@@ -162,7 +162,7 @@ test("ponta a ponta (cliente de Events + cliente HTTP REAIS): o retry do ACK nã
   };
   // Prazo do ACK = TTL - margem = 150 ms: vence DURANTE o backoff de 700 ms do 1º retry.
   const leaseTtlS = (IFOOD_EVENTS.margemFencingAckMs + 150) / 1000;
-  const poller = criarPoller({ repo, token: criarTokenFake({ escopo: "app" }), http, holder: "inst-A", agora: relogio.agora, log: silencio, leaseTtlS });
+  const poller = criarPoller({ repo, token: criarTokenFake({ escopo: "app" }), http, holder: "inst-A", agora: relogio.agora, log: silencio, leaseTtlS, unidadesPiloto: pilotoDe(repo) });
   await assert.rejects(poller.executarCiclo(), (e) => e.codigo === IFOOD_ERROS.IFOOD_CANCELADO);
   assert.equal(chamadas.polling, 1);
   assert.equal(chamadas.ack, 1, "o retry do ACK não pode sair depois do prazo do lease");

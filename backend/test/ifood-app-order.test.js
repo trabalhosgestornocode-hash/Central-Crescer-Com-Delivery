@@ -23,7 +23,7 @@ import * as tokenService from "../src/modules/ifood/ifoodToken.service.js";
 import { criarPoller } from "../src/modules/ifood/ifoodEvents.poller.js";
 import * as clienteReal from "../src/modules/ifood/ifoodEvents.client.js";
 import { PROJETO_TESTE_REF } from "../src/modules/ifood/ifood.ambienteTeste.js";
-import { criarRepoEmMemoria, criarClienteFake, criarRelogio, ev } from "./helpers/ifood-events-fakes.js";
+import { criarRepoEmMemoria, criarClienteFake, criarRelogio, ev, pilotoDe } from "./helpers/ifood-events-fakes.js";
 
 const { cifrar } = await import("../src/shared/cripto.js");
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
@@ -46,7 +46,7 @@ test("o poller de Events pede o token como appType = 'order' (nunca 'financial')
   const chamadas = [];
   const token = { escopoDoToken: () => "app", comAccessTokenValido: async ({ conexaoId, appType, fn }) => { chamadas.push({ conexaoId, appType }); return fn("tok"); } };
   const client = criarClienteFake(clienteReal, { respostasPolling: [[ev("e1", "PLC", { min: 1 })]] });
-  const poller = criarPoller({ repo, token, client, holder: "w", agora: relogio.agora, log: () => {} });
+  const poller = criarPoller({ repo, token, client, holder: "w", agora: relogio.agora, log: () => {}, unidadesPiloto: pilotoDe(repo) });
   await poller.executarCiclo();
   assert.ok(chamadas.length >= 2, "poll + ACK");
   assert.ok(chamadas.every((c) => c.appType === "order"), JSON.stringify(chamadas));
