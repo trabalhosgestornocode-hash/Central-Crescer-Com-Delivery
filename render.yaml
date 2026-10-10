@@ -13,7 +13,10 @@ services:
     # distribuição oficial do SheetJS e os `overrides` de qs/body-parser).
     # Deploy reproduzível; nunca "resolve" uma versão diferente no build.
     buildCommand: cd backend && npm ci
-    startCommand: cd backend && npm start
+    # `exec node` (NUNCA `npm start`): o Render encerra a instância com SIGTERM no processo do start command.
+    # O npm não repassa o sinal ao Node — o backend seguia rodando (inclusive o poller do iFood Events) até o
+    # SIGKILL, sem encerramento gracioso e sem liberar o lease. Com `exec`, o Node É o processo que recebe o sinal.
+    startCommand: cd backend && exec node src/server.js
     healthCheckPath: /health
     envVars:
       - key: SUPABASE_URL
