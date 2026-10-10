@@ -42,6 +42,16 @@ ifoodRouter.get("/merchants", gerenciar, limitarMerchants, controller.descobrirM
 ifoodRouter.post("/merchants/link", gerenciar, limitarMerchants, controller.vincularMerchant);
 ifoodRouter.get("/merchants/:merchantId", gerenciar, limitarMerchants, controller.detalharMerchant);
 
+// --- Vínculo MANUAL do merchant (unidade só com o app Order: sem Merchant API e sem Financial) ---
+// Informar e conferir o ID NÃO chamam o iFood. Verificar a autorização e validar exigem
+// IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED=true (janela acompanhada) — fora disso respondem 403.
+const limitarVinculoManual = limitarPorUsuario({ escopo: "ifood:merchant-manual", max: IFOOD_RATE_LIMIT.maxMerchants });
+ifoodRouter.post("/merchants/manual", gerenciar, limitarVinculoManual, controller.informarMerchantManual);
+ifoodRouter.post("/merchants/manual/conferir", gerenciar, limitarVinculoManual, controller.confirmarMerchantManual);
+ifoodRouter.delete("/merchants/manual", gerenciar, limitarVinculoManual, controller.cancelarMerchantManual);
+ifoodRouter.post("/merchants/manual/verificar-autorizacao", gerenciar, limitarVinculoManual, controller.verificarAutorizacaoMerchantManual);
+ifoodRouter.post("/merchants/manual/validar", gerenciar, limitarVinculoManual, controller.validarMerchantManual);
+
 // --- Financial (Fase 2 — Homologação, READ-ONLY) — chama a API externa ---
 const limitarFinancial = limitarPorUsuario({ escopo: "ifood:financial", max: IFOOD_RATE_LIMIT.maxFinancial });
 

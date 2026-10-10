@@ -119,6 +119,10 @@ export const config = {
     // Unidades do piloto do app Order (IFOOD_ORDER_PILOT_UNITS). As credenciais acima só dizem que o app
     // existe; usar o Order (status, OAuth) exige a unidade nesta lista. Ver ifoodOrderPiloto.js.
     orderPilotoUnidades: ifoodOrderPiloto.unidades,
+    // Validação FINAL do vínculo manual de merchant (checagem de autorização no iFood + promoção da conexão).
+    // Desligada por padrão: só com IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED=true, em janela acompanhada.
+    // Informar e conferir o ID da loja NÃO dependem desta flag (não chamam o iFood).
+    orderMerchantValidacao: process.env.IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED === "true",
     // Aplicativo distribuído de teste — só usado quando `homologacao` é true.
     test: {
       clientId: process.env.IFOOD_TEST_CLIENT_ID || null,

@@ -20,6 +20,12 @@ const META_ESTADO = Object.freeze({
   erro_status: { rotulo: "Status indisponível", classe: "bad" },
   nao_conectado: { rotulo: "Não conectado", classe: "muted" },
   parcial: { rotulo: "Parcialmente conectado", classe: "warn" },
+  // Unidade só com o aplicativo de pedidos autorizado e a loja ainda NÃO validada: nada está operando.
+  // Não é "parcialmente conectado" e o próximo passo NÃO é o assistente de Analytics/Financial.
+  pedidos_em_configuracao: {
+    rotulo: "Em configuração", classe: "warn",
+    aviso: "Pedidos em configuração: a etapa pendente está em Operação, logo abaixo. Nada está sendo recebido ainda.",
+  },
   merchant_pendente: {
     rotulo: "Loja pendente", classe: "warn",
     aviso: "Aplicativo autorizado. Falta escolher qual loja do iFood pertence a esta unidade.",
@@ -42,7 +48,7 @@ function estadoDeApp(app = {}) {
  * @param {{erro?: boolean}} [opts] `erro: true` quando GET /status FALHOU — o
  *   estado real é desconhecido e NUNCA deve virar "Não conectado".
  * @returns {{
- *   chave: 'erro_status'|'nao_conectado'|'parcial'|'merchant_pendente'|'conectado'|'reauth',
+ *   chave: 'erro_status'|'nao_conectado'|'parcial'|'pedidos_em_configuracao'|'merchant_pendente'|'conectado'|'reauth',
  *   rotulo: string, classe: string, aviso?: string,
  *   apps: { analytics: object, financial: object },
  *   merchant: {idMascarado, nome, razaoSocial}|null,
@@ -80,9 +86,14 @@ export function derivarEstadoIntegracao(status, { erro = false } = {}) {
   const nada = !analytics.conectado && !financial.conectado && !merchant && !algumReauth
     && (!s.status || s.status === "nao_conectado" || s.status === "revogada");
 
+  // Só o aplicativo de pedidos (sem Analytics, sem Financial) e a loja ainda não validada.
+  const soPedidosPendente = !analytics.conectado && !financial.conectado && !merchant
+    && s.order?.conectado === true && s.order?.lojaValidada === false;
+
   let chave;
   if (algumReauth) chave = "reauth";
   else if (nada) chave = "nao_conectado";
+  else if (soPedidosPendente) chave = "pedidos_em_configuracao";
   // O token Financial basta para listar/vincular lojas: já autorizado e sem
   // merchant = falta só escolher a loja (NÃO exige refazer o OAuth).
   else if (financial.conectado && !merchant) chave = "merchant_pendente";
@@ -128,6 +139,9 @@ export function acoesDoPainel(e) {
         ...(e.podeConectarAnalytics ? [acao("autorizar_analytics", "Autorizar Analytics")] : []),
         ...desconectar,
       ];
+    case "pedidos_em_configuracao":
+      // Sem ação principal aqui: o próximo passo (informar/conferir a loja) fica no card Pedidos.
+      return desconectar;
     case "parcial":
       return [acao("continuar", "Continuar conexão", true), ...desconectar];
     default: // conectado
@@ -482,6 +496,10 @@ export function derivarEstadoOrder(order) {
   if (!order.conectado) {
     return { disponivel: true, chave: "nao_conectado", rotulo: "Não conectado", classe: "muted", linhas: [], erro: null, podeConectar: order.configurado === true };
   }
+  // App de pedidos autorizado, mas a loja ainda NÃO está validada (unidade só com o Order: o ID da loja é
+  // informado pelo gestor e passa por conferência e validação final). Nunca aparece como "Conectado".
+  // `lojaValidada` ausente (servidor antigo) = comportamento de antes.
+  if (order.lojaValidada === false) return estadoOrderSemLojaValidada(order, erroOrder);
   return {
     disponivel: true, chave: "conectado", rotulo: "Conectado", classe: "ok", erro: erroOrder, podeConectar: false,
     linhas: [
@@ -489,6 +507,59 @@ export function derivarEstadoOrder(order) {
       ["Último pedido recebido", order.ultimoPedido ?? null, "data"],
     ],
   };
+}
+
+/** Motivo da rejeição do vínculo manual da loja, em linguagem de gestor. */
+export const MOTIVO_LOJA_REJEITADA = Object.freeze({
+  SEM_AUTORIZACAO: "O iFood não reconheceu esta loja na autorização do aplicativo de pedidos. Confira o ID no Portal do Parceiro e informe novamente.",
+  MERCHANT_JA_VINCULADO: "Esta loja do iFood já está vinculada a outra unidade.",
+});
+
+/**
+ * Pedidos autorizados, loja ainda não validada. `acaoLoja`: o que o gestor pode fazer agora
+ * ('informar' | 'conferir' | null). Em nenhum destes estados os pedidos chegam à Central.
+ */
+function estadoOrderSemLojaValidada(order, erroOrder) {
+  const base = { disponivel: true, podeConectar: false, erro: erroOrder, lojaPendente: true };
+  const linhasBase = [["Última autenticação", order.ultimaAutenticacao ?? null, "data"]];
+  const v = order.lojaInformada ?? null;
+  if (!v) {
+    return {
+      ...base, chave: "aguardando_loja", rotulo: "Aguardando ID da loja", classe: "warn", acaoLoja: "informar", linhas: linhasBase,
+      instrucao: "O aplicativo de pedidos foi autorizado. Informe o ID da loja (Portal do Parceiro iFood) para continuar.",
+    };
+  }
+  const linhas = [...linhasBase, ["Loja informada", v.idMascarado ?? null, "texto"]];
+  if (v.estado === "informado") {
+    return {
+      ...base, chave: "loja_informada", rotulo: "Aguardando conferência", classe: "warn", acaoLoja: "conferir", linhas,
+      instrucao: "O ID da loja foi informado. Confira-o no Portal do Parceiro e confirme para seguir.",
+    };
+  }
+  if (v.estado === "rejeitado") {
+    return {
+      ...base, chave: "loja_rejeitada", rotulo: "Loja não confirmada", classe: "bad", acaoLoja: "informar", linhas,
+      erro: { codigo: v.motivo ?? "REJEITADO", mensagem: MOTIVO_LOJA_REJEITADA[v.motivo] ?? "A loja informada não foi confirmada. Confira o ID no Portal do Parceiro e informe novamente." },
+      instrucao: null,
+    };
+  }
+  return {
+    ...base, chave: "aguardando_validacao", rotulo: "Aguardando validação final", classe: "info", acaoLoja: null, linhas,
+    instrucao: "A loja foi informada e conferida. A validação final é feita pelo suporte da plataforma, em horário acompanhado. Até lá os pedidos ainda não chegam à Central.",
+  };
+}
+
+const UUID_LOJA = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * ID de loja digitado pelo gestor -> { ok, id, erro }. O iFood mostra o ID no formato
+ * xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (Portal do Parceiro). A decisão final é sempre do servidor.
+ */
+export function validarIdLojaDigitado(valor) {
+  const id = String(valor ?? "").trim().toLowerCase();
+  if (!id) return { ok: false, id: "", erro: "Informe o ID da loja." };
+  if (!UUID_LOJA.test(id)) return { ok: false, id, erro: "O ID da loja tem 36 caracteres, no formato xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx. Copie-o do Portal do Parceiro." };
+  return { ok: true, id, erro: null };
 }
 
 /**
@@ -512,10 +583,14 @@ export function derivarEstadoEvents(recebimento, order) {
   ] : [];
 
   if (tecnico === "disabled") {
-    return { chave: "desativado", rotulo: "Desativado", classe: "muted", linhas, aviso: null };
+    return { chave: "desativado", rotulo: "Desativado", classe: "muted", linhas: order?.lojaValidada === false ? [] : linhas, aviso: null };
   }
   if (!conectado) {
     return { chave: "aguardando_order", rotulo: "Aguardando conexão Order", classe: "muted", linhas: [], aviso: null };
+  }
+  // Pedidos autorizados, mas a loja ainda não foi validada: nenhum evento desta unidade é recebido.
+  if (order?.lojaValidada === false) {
+    return { chave: "aguardando_loja", rotulo: "Aguardando validação da loja", classe: "muted", linhas: [], aviso: null };
   }
   if (tecnico === "active" && !erroEventos) {
     return { chave: "ativo", rotulo: "Ativo", classe: "ok", linhas, aviso: null };

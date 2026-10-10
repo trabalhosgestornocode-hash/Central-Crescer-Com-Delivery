@@ -65,6 +65,14 @@ export function unidadesPilotoOrder() {
 }
 
 /**
+ * A validação FINAL do vínculo manual de merchant está liberada neste ambiente?
+ * (IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED=true). Fail-closed: qualquer outro valor = não.
+ */
+export function validacaoMerchantManualHabilitada() {
+  return config.ifood?.orderMerchantValidacao === true;
+}
+
+/**
  * O app Order está liberado PARA ESTA UNIDADE? Exige as duas coisas:
  *   1. o app existe neste ambiente (appTypesDoOAuth inclui `order` — credenciais ou homologação);
  *   2. a unidade está no piloto (IFOOD_ORDER_PILOT_UNITS). Vale também em homologação: fail-closed.

@@ -58,6 +58,28 @@ const CATALOGO = {
   IFOOD_VINCULO_DUPLICADO: [409,
     "Esta loja do iFood já está vinculada a outra unidade."],
 
+  // --- Vínculo MANUAL do merchant (unidade só com o app Order — sem Merchant API nem Financial) ---
+  IFOOD_ORDER_NAO_CONECTADO: [409,
+    "Conecte os pedidos (app Order) desta unidade antes de informar a loja."],
+  IFOOD_MERCHANT_ID_INVALIDO: [400,
+    "O ID da loja não está no formato do iFood. Copie o ID exatamente como aparece no Portal do Parceiro."],
+  IFOOD_MERCHANT_JA_VINCULADO: [409,
+    "Esta unidade já tem uma loja iFood vinculada. Para trocar de loja, desconecte a integração primeiro."],
+  IFOOD_VINCULO_MANUAL_INDISPONIVEL: [503,
+    "O vínculo manual da loja ainda não está disponível neste ambiente. Fale com o suporte da plataforma."],
+  IFOOD_VINCULO_NAO_ENCONTRADO: [404,
+    "Nenhuma loja informada aguardando confirmação nesta unidade."],
+  IFOOD_VINCULO_CONFIRMACAO_DIVERGENTE: [400,
+    "O ID confirmado é diferente do ID informado. Confira o ID da loja no Portal do Parceiro."],
+  IFOOD_VINCULO_ESTADO_INVALIDO: [409,
+    "Esta etapa não está disponível no estado atual do vínculo da loja."],
+  IFOOD_VINCULO_TENTATIVAS_ESGOTADAS: [429,
+    "Limite de tentativas de vínculo desta loja atingido. Confira o ID no Portal do Parceiro e fale com o suporte da plataforma."],
+  IFOOD_VALIDACAO_NAO_HABILITADA: [403,
+    "A validação final da loja ainda não está liberada. Ela é feita em janela acompanhada pelo suporte da plataforma."],
+  IFOOD_VALIDACAO_SEM_EVIDENCIA: [400,
+    "Para validar a loja, confirme a conferência no Portal do Parceiro e a confirmação operacional."],
+
   // --- Financial (Fase 2 — Homologação) ---
   IFOOD_FINANCIAL_PERIODO_INVALIDO: [400,
     "Período inválido. Confira as datas informadas e o limite máximo permitido para esta consulta."],

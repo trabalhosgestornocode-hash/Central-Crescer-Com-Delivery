@@ -13,6 +13,7 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as authService from "./ifoodAuth.service.js";
 import * as merchantService from "./ifoodMerchant.service.js";
 import * as connectionService from "./ifoodConnection.service.js";
+import * as vinculoService from "./ifoodMerchantVinculo.service.js";
 import * as financialService from "./ifoodFinancial.service.js";
 import * as pedidosLeitura from "./ifoodPedidosLeitura.service.js";
 import * as val from "./ifood.validators.js";
@@ -77,6 +78,50 @@ export const vincularMerchant = asyncHandler(async (req, res) => {
     organizacaoId, unidadeId, merchantId, usuarioId: req.user.id,
   });
   res.status(201).json({ data });
+});
+
+// --- Vínculo MANUAL do merchant (unidade só com o app Order) -------------
+// O merchantId vem do corpo, mas o tenant é SEMPRE o do contexto: não há como informar a loja de outra
+// unidade/organização por parâmetro. A resposta é o status sanitizado (merchant sempre mascarado).
+const statusDaUnidade = async (organizacaoId, unidadeId) => ({
+  ...(await connectionService.obterStatus({ organizacaoId, unidadeId })),
+  eventosRecebimento: resumoEventsParaStatus(),
+});
+
+export const informarMerchantManual = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  await vinculoService.informarMerchant({ organizacaoId, unidadeId, merchantId: req.body?.merchantId, usuarioId: req.user.id });
+  res.status(201).json({ data: await statusDaUnidade(organizacaoId, unidadeId) });
+});
+
+export const confirmarMerchantManual = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  await vinculoService.confirmarMerchant({ organizacaoId, unidadeId, merchantId: req.body?.merchantId, usuarioId: req.user.id });
+  res.json({ data: await statusDaUnidade(organizacaoId, unidadeId) });
+});
+
+export const cancelarMerchantManual = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  await vinculoService.cancelarMerchantInformado({ organizacaoId, unidadeId, usuarioId: req.user.id });
+  res.json({ data: await statusDaUnidade(organizacaoId, unidadeId) });
+});
+
+// As duas rotas abaixo só funcionam com IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED=true (o service recusa antes
+// de qualquer leitura ou chamada ao iFood).
+export const verificarAutorizacaoMerchantManual = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const r = await vinculoService.verificarAutorizacao({ organizacaoId, unidadeId, usuarioId: req.user.id });
+  res.json({ data: { ...(await statusDaUnidade(organizacaoId, unidadeId)), autorizacaoVerificada: r.autorizacaoVerificada } });
+});
+
+export const validarMerchantManual = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  await vinculoService.concluirValidacao({
+    organizacaoId, unidadeId, merchantId: req.body?.merchantId,
+    evidenciaPortalParceiro: req.body?.evidenciaPortalParceiro, confirmacaoOperacional: req.body?.confirmacaoOperacional,
+    usuarioId: req.user.id,
+  });
+  res.json({ data: await statusDaUnidade(organizacaoId, unidadeId) });
 });
 
 // Status da integração da unidade — analytics e financial separados. `eventosRecebimento`: estado do

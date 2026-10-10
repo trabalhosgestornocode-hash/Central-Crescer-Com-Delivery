@@ -83,7 +83,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 109 = envios ao grupo interno da operação (tabela própria; não toca o outbox, o claim nem as RPCs da 088).
       "109_comunicacao_envios_grupo.sql", "109_rollback.sql",
       // 110 = telas de exibição do Checklist (TV/tablet) e pareamento por código.
-      "110_exibicao_dispositivos.sql", "110_rollback.sql"];
+      "110_exibicao_dispositivos.sql", "110_rollback.sql",
+      // 116 = vinculo manual do merchant para unidades so com o app Order (111-115 reservadas a outros trabalhos).
+      "116_ifood_merchant_vinculo_manual.sql", "116_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

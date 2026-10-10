@@ -466,6 +466,7 @@ body {
 .ifood-aviso.bad { background: var(--bad-bg); color: var(--bad); }
 .ifood-aviso.ok { background: var(--ok-bg); color: var(--ok); }
 .ifood-aviso.warn { background: var(--warn-bg); color: var(--warn); }
+.ifood-aviso.info { background: var(--info-bg); color: var(--info); }
 
 .ifood-msg { font-size: 13px; min-height: 0; }
 .ifood-msg.bad { color: var(--bad); }
@@ -474,6 +475,13 @@ body {
 .ifood-acoes { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .ifood-tudo-ok { font-size: 13.5px; color: var(--ok); }
 .ifood-instrucao { font-size: 13px; color: var(--cinza); }
+/* Loja informada pelo gestor (unidade só com o app de pedidos): trilha das 5 etapas e confirmação. */
+.ifood-trilha { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 0; margin: 0 0 14px; font-size: 12px; color: var(--cinza); }
+.ifood-trilha li.feito { color: var(--verde-vivo); }
+.ifood-trilha li.atual { font-weight: 700; color: inherit; }
+.ifood-check { display: flex; align-items: flex-start; gap: 8px; margin: 12px 0; font-size: 14px; }
+.ifood-check input { margin-top: 3px; }
+.ifood-codigo.mono { font-size: 16px; word-break: break-all; text-align: center; }
 
 .ifood-codigo-box { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px; background: var(--campo-bg); border-radius: 12px; border: 1.5px dashed var(--linha); }
 .ifood-codigo-rotulo { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--cinza); }

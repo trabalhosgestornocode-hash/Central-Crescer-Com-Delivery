@@ -21,7 +21,9 @@ import { ifoodLog, mascararId } from "./ifood.logsafe.js";
 import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_APP_ORDER } from "./ifood.constants.js";
 import * as repositorio from "./ifood.repository.js";
 import * as merchantService from "./ifoodMerchant.service.js";
-import { estaEmHomologacaoIfood, orderLiberadoParaUnidade } from "./ifoodToken.service.js";
+import { estaEmHomologacaoIfood, orderLiberadoParaUnidade, validacaoMerchantManualHabilitada } from "./ifoodToken.service.js";
+import * as vinculoRepositorio from "./ifoodMerchantVinculo.repository.js";
+import { resumirVinculo, MOTIVOS } from "./ifoodMerchantVinculo.service.js";
 import { usarHomologacaoFinancial } from "./ifoodFinancialHomologacao.js";
 
 /**
@@ -118,6 +120,7 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
 
   const order = await montarStatusOrder({
     conexao, cred: porApp.get(IFOOD_APP_ORDER), merchant, organizacaoId, unidadeId, repo, agora,
+    vinculos: deps.vinculos ?? vinculoRepositorio,
   });
   const appsComAtencao = [
     ...IFOOD_APP_TYPES.filter((a) => apps[a].status === "reauth_required"),
@@ -149,6 +152,7 @@ function statusOrderSemCredencial() {
     configurado: true, conectado: false, status: null, tokenValido: false, expiraEm: null, merchant: null,
     ultimaAutenticacao: null, tokenAtualizadoEm: null, ultimoEvento: null, ultimoAck: null, ultimoPedido: null,
     eventosComFalha: 0, worker: null, observabilidadeDisponivel: false, erroAtual: null,
+    lojaValidada: false, lojaInformada: null, validacaoFinalHabilitada: false,
   };
 }
 
@@ -159,9 +163,20 @@ function statusOrderSemCredencial() {
  * Credencial já existente (ex.: unidade saiu do piloto) continua visível, para reconectar/desconectar.
  * Os sinais de Events vêm do banco (nunca do iFood); falha ao lê-los não derruba o status.
  */
-async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unidadeId, repo, agora }) {
+async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unidadeId, repo, agora, vinculos }) {
   const configurado = orderLiberadoParaUnidade(unidadeId);
   if (!configurado && !cred) return null;
+  // Loja VALIDADA = merchant gravado na conexão ativa (pela Merchant API no fluxo antigo, ou pela validação
+  // final do vínculo manual). Sem ela a unidade NÃO está operando, mesmo com o app Order autorizado.
+  const lojaValidada = !!conexao.merchant_id && conexao.status === "ativa";
+  // Vínculo manual (unidade só com o Order): último registro, só enquanto a loja não está validada. Falha ao
+  // ler (ex.: migration 116 ainda não aplicada) não derruba o status — o painel só não mostra a etapa.
+  let lojaInformada = null;
+  if (cred && !lojaValidada && vinculos?.obterUltimoVinculo) {
+    lojaInformada = await vinculos.obterUltimoVinculo({ organizacaoId, unidadeId, conexaoId: conexao.id })
+      .then((v) => (v && v.estado !== "cancelado" && v.estado !== "validado" ? resumirVinculo(v) : null))
+      .catch(() => null);
+  }
 
   const agoraMs = agora().getTime();
   let obs = { disponivel: false };
@@ -205,6 +220,10 @@ async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unida
     worker: obs.disponivel ? { ativo: workerAtivo, atualizadoEm: obs.lease?.atualizadoEm ?? null } : null,
     observabilidadeDisponivel: obs.disponivel === true,
     erroAtual,
+    lojaValidada,
+    lojaInformada,
+    // Só um booleano: a etapa de validação final existe neste ambiente (janela acompanhada)?
+    validacaoFinalHabilitada: validacaoMerchantManualHabilitada(),
   };
 }
 
@@ -229,6 +248,12 @@ export async function desconectar({ organizacaoId, unidadeId, usuarioId, deps = 
     return { ok: true, jaDesconectado: true, revogacaoNoIfood: "manual_no_portal" };
   }
 
+  // Vínculo manual em aberto (loja informada, ainda não validada): encerra junto, para liberar o merchant.
+  // Nunca impede a desconexão (inclusive se a migration 116 ainda não existir).
+  await Promise.resolve()
+    .then(() => (deps.vinculos ?? vinculoRepositorio)
+      .cancelarVinculosAbertos({ organizacaoId, unidadeId, conexaoId: conexao.id, motivo: MOTIVOS.DESCONEXAO }))
+    .catch(() => {});
   await repo.apagarCredenciais({ conexaoId: conexao.id });
   await repo.atualizarConexao({
     organizacaoId, unidadeId, conexaoId: conexao.id,
