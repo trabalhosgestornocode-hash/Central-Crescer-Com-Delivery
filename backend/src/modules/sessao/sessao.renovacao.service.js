@@ -20,7 +20,7 @@ import { selecionarContexto, revogarSessoes } from "./sessao.service.js";
  *     (`req.tenant`/`req.acesso`), nunca do corpo; o corpo não é lido;
  *   * elegibilidade: SÓ `display_operator` e nunca impersonação — qualquer outro papel recebe 403 e NADA muda;
  *   * tempo: só dentro da janela antes do vencimento (antes disso é "cedo": nada muda); limite ABSOLUTO desde a
- *     AUTENTICAÇÃO (padrão 20 h) — passou, 401 REAUTENTICACAO_NECESSARIA; sem carimbo no JWT não renova (fail-closed);
+ *     AUTENTICAÇÃO (padrão conservador 8 h; 20 h só por configuração, após validar o JWT real) — passou, 401 REAUTENTICACAO_NECESSARIA; sem carimbo no JWT não renova (fail-closed);
  *   * MFA: se `MFA_ENFORCE_EXIBICAO=true`, o JWT precisa estar em aal2;
  *   * tudo é REVALIDADO pelo mesmo caminho da seleção de contexto (conta → perfil → vínculo direto da unidade →
  *     empresa → papel → permissões → módulos). Permissões e módulos são RECALCULADOS, nunca copiados do contexto

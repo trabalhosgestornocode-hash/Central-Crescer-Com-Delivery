@@ -500,7 +500,7 @@ export async function selecionarContexto(
 
   // PERFIL DE EXIBIÇÃO — duas travas que valem para entrar E para renovar:
   //   * MFA (dormente por padrão: MFA_ENFORCE_EXIBICAO=true liga): sem o nível aal2 no JWT, não entra;
-  //   * limite ABSOLUTO desde a AUTENTICAÇÃO (padrão 20 h): passou, é preciso entrar de novo com a senha — inclusive
+  //   * limite ABSOLUTO desde a AUTENTICAÇÃO (padrão conservador 8 h; 20 h só por configuração, após validar o JWT real): passou, é preciso entrar de novo com a senha — inclusive
   //     pela reentrada automática, que de outro modo recomeçaria a contagem. Perto do limite o contexto sai CURTO
   //     (só até o limite). Sem o carimbo de autenticação no JWT mantém-se o comportamento antigo (validade padrão).
   let validadeFinalS = validadeS ?? undefined;

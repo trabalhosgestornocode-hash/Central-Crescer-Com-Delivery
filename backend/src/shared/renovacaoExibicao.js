@@ -4,7 +4,7 @@
 // exibição pode RENOVAR o próprio contexto, de forma controlada:
 //
 //   * preventiva: só dentro de uma janela antes do vencimento (o navegador agenda; o SERVIDOR confere);
-//   * ancorada na AUTENTICAÇÃO: o limite absoluto (padrão 20 h) conta a partir do momento do LOGIN no Supabase
+//   * ancorada na AUTENTICAÇÃO: o limite absoluto (padrão conservador 8 h; 20 h só por configuração, após validar o JWT real) conta a partir do momento do LOGIN no Supabase
 //     (claim `amr[].timestamp` do JWT), não a partir do contexto. Se contasse a partir do contexto, a reentrada
 //     automática (que existe e não pede senha) recomeçaria a contagem e o limite nunca valeria;
 //   * fail-closed: sem o carimbo de autenticação no JWT NÃO há renovação (a TV segue com os 8 h de sempre);
@@ -29,8 +29,8 @@ const NUM = (v, padrao, min, max) => {
  */
 export function lerPoliticaRenovacao(env = process.env) {
   return Object.freeze({
-    /** Limite ABSOLUTO desde a autenticação (login). Padrão 20 h = expediente de 17 h + margem. */
-    limiteAbsolutoS: NUM(env.RENOVACAO_EXIBICAO_LIMITE_S, 20 * 3600, 600, 24 * 3600),
+    /** Limite ABSOLUTO desde a autenticação (login). Padrão CONSERVADOR = 8 h (a validade do contexto: sem renovação útil além do que já existe). 20 h (expediente de 17 h + margem) só por configuração explícita, DEPOIS de validar o `amr[].timestamp` do JWT real (docs/verificacao-jwt-supabase-conta-teste.md). */
+    limiteAbsolutoS: NUM(env.RENOVACAO_EXIBICAO_LIMITE_S, 8 * 3600, 600, 24 * 3600),
     /** O servidor só renova quando falta MENOS que isto para o contexto vencer (antes disso: "cedo", sem mudar nada). */
     janelaS: NUM(env.RENOVACAO_EXIBICAO_JANELA_S, 2 * 3600, 60, Math.floor(VALIDADE_PADRAO_S / 2)),
     /** O contexto ANTIGO continua valendo só por isto depois da troca (cobre requisições em voo; não reaproveitável). */

@@ -112,6 +112,7 @@ describe("EXPEDIENTE 11h–04h (17 h): limite absoluto de 20 h desde a AUTENTICA
       SUPABASE_URL: falso.url, SUPABASE_SERVICE_ROLE_KEY: "chave-service-role-de-teste-".padEnd(48, "z"), SUPABASE_ANON_KEY: "chave-anon-de-teste-".padEnd(48, "a"),
       CONTEXT_TOKEN_SECRET: "segredo-do-token-de-contexto-de-teste-".padEnd(64, "k"), NODE_ENV: "test",
       RATE_LIMIT_API_MAX: "1000000", RATE_LIMIT_CONTEXTO_MAX: "1000000", RATE_LIMIT_RENOVAR_MAX: "1000000",
+      RENOVACAO_EXIBICAO_LIMITE_S: "72000", // o teste simula a política de 20 h; o PADRÃO do código é conservador (8 h)
     });
     const { createApp } = await import("../src/app.js");
     servidor = await new Promise((r) => { const s = http.createServer(createApp()).listen(0, "127.0.0.1", () => r(s)); });
