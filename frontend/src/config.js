@@ -55,7 +55,7 @@ export const MENU = [
   // Checklist Operacional — mostra os pedidos iFood da unidade, então segue a
   // MESMA régua do backend (/checklist-operacional: módulo `ifood` +
   // integracoes.ver). Um módulo próprio exigiria migration.
-  { id: "checklist-operacional", label: "Checklist Operacional", icon: "activity", logo: "/assets/menu-checklist-operacional.svg", tipo: "checklist-operacional", secao: "OPERAÇÃO", modulo: "ifood" },
+  { id: "checklist-operacional", label: "Checklist Operacional", icon: "activity", logo: "/assets/menu-checklist-operacional.png", tipo: "checklist-operacional", secao: "OPERAÇÃO", modulo: "ifood" },
   { id: "dashboard-executivo", label: "Dashboard iFood", icon: "trending-up", logo: "/assets/menu-dashboard-ifood.png", tipo: "dashboard-executivo", secao: "OPERAÇÃO", modulo: "ifood_dashboard" },
   { id: "bonificacao-mensal", label: "Bonificação Mensal", icon: "award", logo: "/assets/menu-bonificacao-mensal.png", tipo: "bonificacao-mensal", secao: "OPERAÇÃO", modulo: "monthly_bonus" },
   { id: "parser-food-delivery", label: "Parser Food Delivery", icon: "truck", logo: "/assets/menu-parser-food-delivery.png", tipo: "parser-food-delivery", secao: "OPERAÇÃO", modulo: "parser_food_delivery" },

@@ -43,7 +43,8 @@ describe("estados proporcionais à meta (tempo: menor é melhor)", () => {
     assert.equal(razaoMeta(10, { meta: 0 }), null);
   });
   test("rótulos escritos — nunca só cor", () => {
-    assert.deepEqual([ROTULO_NIVEL.ok, ROTULO_NIVEL.atencao, ROTULO_NIVEL.critico], ["Dentro da meta", "Próximo da meta", "Fora da meta"]);
+    // Vocabulário da etapa EM ANDAMENTO (o de etapa concluída está em checklistOperacionalAlertas.test.js).
+    assert.deepEqual([ROTULO_NIVEL.ok, ROTULO_NIVEL.atencao, ROTULO_NIVEL.critico], ["Dentro da meta", "Próximo da meta", "Atrasado"]);
   });
   test("piorNivel escolhe o mais grave", () => {
     assert.equal(piorNivel("ok", "neutro", "atencao"), "atencao");
@@ -174,8 +175,10 @@ describe("status da operação", () => {
     const s = derivarStatusOperacao(amostraDemonstracao({ agora: AGORA }), AGORA);
     assert.equal(s.nivel, "critico");
     assert.equal(s.fora, 1);
-    assert.ok(s.motivos.includes("1 pedido fora da meta"));
-    assert.ok(s.motivos.some((m) => m.startsWith("Vida do pedido: média próxima")));
+    assert.ok(s.motivos.includes("1 pedido em andamento atrasado"));
+    // Média CONCLUÍDA abaixo da meta é "dentro" — nunca "próxima": o amarelo é só de pedido em andamento.
+    assert.ok(!s.motivos.some((m) => /média.*próxim/i.test(m)), s.motivos.join(" | "));
+    assert.ok(s.medias.every(([, n]) => n !== "atencao"));
   });
   test("sem pedidos nem medições: neutro", () => {
     const r = { ...amostraDemonstracao({ agora: AGORA }), pedidosAtivos: [], indicadores: { preparo: {}, entrega: {}, vida: {} } };
@@ -239,7 +242,7 @@ describe("componentes visuais", () => {
     const vivo = cardTempo("preparo", r, AGORA);
     assert.match(vivo, /data-pulso/);
     assert.match(vivo, /data-agora-crono>12:54</);
-    assert.match(vivo, /Fora da meta/);
+    assert.match(vivo, /data-estado-rot>Atrasado</);
     const parado = cardTempo("entrega", { ...r, pedidosAtivos: [] }, AGORA);
     assert.doesNotMatch(parado, /data-pulso|data-agora-crono/);
     assert.match(parado, /Nenhum pedido em entrega agora/);

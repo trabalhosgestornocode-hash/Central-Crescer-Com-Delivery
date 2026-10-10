@@ -17,8 +17,8 @@ import { escapeHtml } from "./utils.js";
 import { icon } from "./icons.js";
 import { MODOS_EXIBICAO } from "./checklistOperacionalExibicao.js";
 import {
-  ROTULO_NIVEL, ROTULO_SATISFACAO, PASSOS, SELO_CONEXAO, TETO_REGUA,
-  fmtMin, fmtHoraCurta, fmtIdade, fmtCronometro, rotuloPedido, etapaDoStatus, classificar,
+  ROTULO_NIVEL, ROTULO_NIVEL_FINAL, ROTULO_SATISFACAO, PASSOS, SELO_CONEXAO, TETO_REGUA,
+  fmtMin, fmtHoraCurta, fmtIdade, fmtCronometro, rotuloPedido, etapaDoStatus, classificarFinal,
   estadoDoCard, derivarDecomposicao, derivarPedidoAtivo, ordenarPorUrgencia,
   derivarStatusOperacao, derivarAvaliacoes,
 } from "./checklistOperacionalModelo.js";
@@ -39,8 +39,8 @@ export function paginacao(chave, { total, singular, plural, rotulo }) {
 
 const faixa = (pulsa) => `<span class="cko-faixa" aria-hidden="true">${pulsa ? '<i class="cko-pulso" data-pulso></i>' : ""}</span>`;
 
-const estadoTexto = (nivel, rotulos = ROTULO_NIVEL) =>
-  `<p class="cko-estado" data-estado><i class="cko-estado-marca" aria-hidden="true"></i><span data-estado-rot>${rotulos[nivel]}</span></p>`;
+const estadoTexto = (nivel, rotulos = ROTULO_NIVEL, rotulo = rotulos[nivel]) =>
+  `<p class="cko-estado" data-estado><i class="cko-estado-marca" aria-hidden="true"></i><span data-estado-rot>${rotulo}</span></p>`;
 
 /** Régua até 120% da meta, com marcas no início da atenção e na meta. */
 export function regua(razao, avisoPct) {
@@ -113,7 +113,7 @@ function zonaHoje(e, chave) {
   }
   const valor = (min, nivel, aprox = false) => min == null
     ? '<dd class="cko-hoje-vazio">—</dd>'
-    : `<dd class="cko-nivel-txt--${nivel}" title="${ROTULO_NIVEL[nivel]}">${aprox ? `<span title="${MOTIVO_APROXIMADO[chave] ?? "Aproximado"}">≈</span>` : ""}${fmtMin(min)} min</dd>`;
+    : `<dd class="cko-nivel-txt--${nivel}" title="${ROTULO_NIVEL_FINAL[nivel]}">${aprox ? `<span title="${MOTIVO_APROXIMADO[chave] ?? "Aproximado"}">≈</span>` : ""}${fmtMin(min)} min</dd>`;
   const amostras = h.mediaMin == null ? "" : ` <small class="cko-hoje-amostras">${h.amostras} ${h.amostras === 1 ? "pedido" : "pedidos"}</small>`;
   return `
     <dl class="cko-hoje">
@@ -150,7 +150,7 @@ export function cardTempo(chave, resumo, agora) {
           <h2 id="cko-t-${chave}">${TITULO[chave]}</h2>
           <p class="cko-def">${DEFINICAO[chave]}</p>
         </div>
-        ${estadoTexto(e.nivel)}
+        ${estadoTexto(e.nivel, ROTULO_NIVEL, e.rotulo)}
       </header>
       ${zonaAgora(chave, e)}
       ${zonaHoje(e, chave)}
@@ -168,7 +168,7 @@ export function cardStatus(resumo, agora) {
     ? `<ul class="cko-status-motivos">${s.motivos.map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul>`
     : `<p class="cko-status-calmo">${s.nivel === "neutro" ? "Os indicadores aparecem com o primeiro pedido do dia." : "Pedidos e médias do dia dentro das metas da unidade."}</p>`;
   const medias = s.medias.map(([nome, n]) =>
-    `<li class="cko-nivel-txt--${n}"><i class="cko-ponto"></i>${nome}<span>${ROTULO_NIVEL[n]}</span></li>`).join("");
+    `<li class="cko-nivel-txt--${n}"><i class="cko-ponto"></i>${nome}<span>${ROTULO_NIVEL_FINAL[n]}</span></li>`).join("");
   return `
     <article class="cko-card cko-status cko-nivel--${s.nivel}" data-assinatura="${assinaturaStatus(s)}" data-nivel="${s.nivel}" aria-labelledby="cko-t-status">
       ${faixa(false)}
@@ -177,7 +177,7 @@ export function cardStatus(resumo, agora) {
       ${motivos}
       <dl class="cko-status-contagem">
         <div><dt>Em andamento</dt><dd>${s.ativos}</dd></div>
-        <div class="${s.fora ? "cko-nivel-txt--critico" : ""}"><dt>Fora da meta</dt><dd>${s.fora}</dd></div>
+        <div class="${s.fora ? "cko-nivel-txt--critico" : ""}"><dt>Atrasados agora</dt><dd>${s.fora}</dd></div>
         <div><dt>Concluídos hoje</dt><dd>${s.concluidos}</dd></div>
         <div><dt>Cancelados hoje</dt><dd>${s.cancelados}</dd></div>
       </dl>
@@ -256,8 +256,8 @@ export function painelPedidosAtivos(resumo, agora) {
 
 function celulaTempo(min, limite, { emAndamento = false, aproximado = false } = {}) {
   if (min == null) return `<td class="cko-td-tempo cko-td-vazio">${emAndamento ? "em curso" : "—"}</td>`;
-  const n = classificar(min, limite);
-  return `<td class="cko-td-tempo cko-nivel-txt--${n}" title="${ROTULO_NIVEL[n]}">${aproximado ? '<span title="Aproximado">≈</span>' : ""}${fmtMin(min)}</td>`;
+  const n = classificarFinal(min, limite);   // tempo ENCERRADO: dentro ou acima da meta — nunca "próximo"
+  return `<td class="cko-td-tempo cko-nivel-txt--${n}" title="${ROTULO_NIVEL_FINAL[n]}">${aproximado ? '<span title="Aproximado">≈</span>' : ""}${fmtMin(min)}</td>`;
 }
 
 export function painelUltimosPedidos(resumo) {
@@ -376,7 +376,7 @@ export function cabecalho(resumo, agora, { podeEditarMetas = false } = {}) {
   return `
     <header class="cko-cab">
       <div class="cko-cab-id">
-        <img src="/assets/menu-checklist-operacional.svg" alt="" class="cko-cab-logo" />
+        <img src="/assets/menu-checklist-operacional.png" alt="" class="cko-cab-logo" />
         <div>
           <h1>Checklist Operacional</h1>
           <p class="cko-cab-unidade">${escapeHtml(resumo.unidade?.nome ?? "Unidade")}</p>
@@ -469,7 +469,7 @@ export function dialogoMetas(metas, { erros = {}, demonstracao = true } = {}) {
     <form method="dialog" class="cko-metas" novalidate>
       <header>
         <h2 id="cko-t-metas">Metas da unidade</h2>
-        <p>Abaixo do aviso: dentro da meta. Do aviso até a meta: próximo da meta. Acima da meta: fora da meta.</p>
+        <p>Pedido em andamento: abaixo do aviso, dentro da meta; do aviso até a meta, próximo da meta; depois da meta, atrasado. Etapa concluída: dentro da meta até a meta, acima da meta depois dela.</p>
         ${demonstracao
           ? '<p class="cko-metas-demo">Metas de demonstração: valem só nesta tela e não são salvas.</p>'
           : '<p class="cko-metas-demo">Metas desta tela: valem só neste aparelho até recarregar e ainda não são salvas para a unidade.</p>'}
@@ -532,7 +532,7 @@ export function telaSelecaoModos({ unidadeNome, demonstracao = false, aviso = nu
   return `
     <section class="ckm" data-ckm aria-labelledby="ckm-titulo">
       <header class="ckm-cab">
-        <img src="/assets/menu-checklist-operacional.svg" alt="" class="ckm-logo" />
+        <img src="/assets/menu-checklist-operacional.png" alt="" class="ckm-logo" />
         <div>
           <h1 id="ckm-titulo">Checklist Operacional</h1>
           <p>Acompanhe os indicadores da sua operação em tempo real. Escolha o formato ideal para seu dispositivo.</p>
