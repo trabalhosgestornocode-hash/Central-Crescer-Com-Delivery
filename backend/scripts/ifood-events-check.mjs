@@ -70,7 +70,12 @@ const client = {
     return r2;
   },
 };
-const poller = criarPoller({ repo, token: tokenService, http, client, holder: `check-${process.pid}`, log: () => {} });
+// Escopo do poller = a única unidade deste repositório em memória (fictícia, só existe neste processo). Sem isto
+// o poller é fail-closed (IFOOD_ORDER_PILOT_UNITS só aceita UUID de unidade real) e não consultaria nada.
+const poller = criarPoller({
+  repo, token: tokenService, http, client, holder: `check-${process.pid}`, log: () => {},
+  unidadesPiloto: () => repo.conexoes.map((c) => c.unidade_id),
+});
 
 const resumir = () => {
   const porCodigo = {};

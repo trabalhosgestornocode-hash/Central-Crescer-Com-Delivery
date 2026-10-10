@@ -116,15 +116,20 @@ export async function marcarAck(eventIds, quandoIso) {
   }
 }
 
-/** Fila de reprocessamento: RECEBIDO/FALHOU com tentativas sobrando (tenant já resolvido). */
-export async function listarEventosPendentes(limite, maxTentativas) {
-  return ok(await supabase.from(T.eventos)
+/**
+ * Fila de reprocessamento: RECEBIDO/FALHOU com tentativas sobrando (tenant já resolvido).
+ * `unidades` (opcional): restringe às unidades do piloto. Lista vazia = nada (nem consulta o banco). Os eventos
+ * das demais unidades NÃO são apagados nem alterados: ficam pendentes para quando a unidade voltar ao piloto.
+ */
+export async function listarEventosPendentes(limite, maxTentativas, { unidades } = {}) {
+  if (Array.isArray(unidades) && unidades.length === 0) return [];
+  let q = supabase.from(T.eventos)
     .select("*")
     .in("processing_status", ["RECEBIDO", "FALHOU"])
     .lt("retry_count", maxTentativas)
-    .not("organizacao_id", "is", null)
-    .order("received_at", { ascending: true })
-    .limit(limite)) ?? [];
+    .not("organizacao_id", "is", null);
+  if (Array.isArray(unidades)) q = q.in("unidade_id", unidades);
+  return ok(await q.order("received_at", { ascending: true }).limit(limite)) ?? [];
 }
 
 // =====================================================================

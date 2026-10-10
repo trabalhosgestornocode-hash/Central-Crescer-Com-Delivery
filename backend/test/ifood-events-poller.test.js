@@ -20,8 +20,7 @@ import { IFOOD_EVENTS } from "../src/modules/ifood/ifood.constants.js";
 import { IFOOD_ERROS } from "../src/modules/ifood/ifood.errors.js";
 import {
   criarRepoEmMemoria, criarRelogio, criarClienteFake, criarTokenFake, erroIfood,
-  ev, M_A, M_B, ORG_A, ORG_B, CONEXAO_A, CONEXAO_B,
-} from "./helpers/ifood-events-fakes.js";
+  ev, M_A, M_B, ORG_A, ORG_B, CONEXAO_A, CONEXAO_B, pilotoDe } from "./helpers/ifood-events-fakes.js";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const RAIZ = path.join(AQUI, "..", "..");
@@ -34,7 +33,7 @@ function montar({ escopo = "app", conexoes, respostas = [], falhasAck = [], hold
   const original = client.confirmarEventos;
   client.confirmarEventos = async (a) => { repo.chamadas.push("ACK"); return original(a); };   // marca a ordem
   const token = criarTokenFake({ escopo });
-  const poller = criarPoller({ repo, token, client, holder, agora: relogio.agora, log: silencio, leaseTtlS: 90 });
+  const poller = criarPoller({ repo, token, client, holder, agora: relogio.agora, log: silencio, leaseTtlS: 90, unidadesPiloto: pilotoDe(repo) });
   return { repo, client, token, poller, relogio };
 }
 const conexoesGeradas = (n) => Array.from({ length: n }, (_, i) => ({ id: `con-${i}`, organizacao_id: `org-${i}`, unidade_id: `un-${i}`, merchant_id: `merchant-${String(i).padStart(4, "0")}` }));
@@ -352,7 +351,7 @@ test("logs: nunca o token; merchant sempre mascarado", async () => {
     const repo = criarRepoEmMemoria({ relogio });
     const client = criarClienteFake(clienteReal, { respostasPolling: [[ev("e1", "PLC", { min: 1 }), ev("e2", "PLC", { merchantId: "loja-fantasma-muito-longa-123456" })]] });
     const token = criarTokenFake({ token: "TOKEN-SECRETO-QUE-NAO-PODE-VAZAR" });
-    const poller = criarPoller({ repo, token, client, holder: "w", agora: relogio.agora });   // log padrão (ifoodLog)
+    const poller = criarPoller({ repo, token, client, holder: "w", agora: relogio.agora, unidadesPiloto: pilotoDe(repo) });   // log padrão (ifoodLog)
     await poller.executarCiclo();
   } finally { Object.assign(console, orig); }
   const saida = linhas.join("\n");

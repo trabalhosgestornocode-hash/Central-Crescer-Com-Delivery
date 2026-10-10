@@ -21,7 +21,7 @@ const { criarPoller } = await import("../src/modules/ifood/ifoodEvents.poller.js
 const eventsClientReal = await import("../src/modules/ifood/ifoodEvents.client.js");
 const {
   criarRepoEmMemoria, criarRelogio, criarTokenFake, criarClienteFake, ev, t,
-  ORG_A, UN_A, ORG_B, UN_B, M_A, M_B, CONEXAO_A, CONEXAO_B,
+  ORG_A, UN_A, ORG_B, UN_B, M_A, M_B, CONEXAO_A, CONEXAO_B, pilotoDe
 } = await import("./helpers/ifood-events-fakes.js");
 
 const silencio = () => {};
@@ -748,7 +748,7 @@ test("evento repetido (mesmo id) é idempotente e não mexe nos carimbos", async
 // ===========================================================================
 function montarPoller(a, { detalhes, evts }) {
   const client = criarClienteFake(eventsClientReal, { respostasPolling: [evts] });
-  return { client, poller: criarPoller({ repo: a.repo, token: a.token, client, holder: "h1", agora: a.relogio.agora, log: silencio, detalhes }) };
+  return { client, poller: criarPoller({ repo: a.repo, token: a.token, client, holder: "h1", agora: a.relogio.agora, log: silencio, detalhes, unidadesPiloto: pilotoDe(a.repo) }) };
 }
 
 test("poller com `detalhes`: no mesmo ciclo do PLC busca os detalhes; sem `detalhes` (padrão) não busca nada", async () => {

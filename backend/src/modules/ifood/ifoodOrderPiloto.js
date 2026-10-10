@@ -9,6 +9,8 @@
 // nunca ecoado). A chave é o id estável da unidade — nunca nome de empresa ou de loja.
 //
 // Independente do Events: liberar uma unidade NÃO liga polling (IFOOD_EVENTS_EMBEDDED_ENABLED é outra flag).
+// Mas, com o Events ligado, esta lista é o ESCOPO do poller: só as unidades daqui são consultadas, têm token
+// renovado, eventos reconhecidos e pendentes reprocessados (ifoodEvents.poller.js). Vazia = poller ocioso.
 // Puro (sem config/rede): o env.js chama `parsearUnidadesPiloto` no boot; as decisões leem `config`.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

@@ -38,6 +38,12 @@ export function ev(id, code, { min = 0, orderId = "order-1", merchantId = M_A, .
   return { id, code, fullCode: CODIGOS[code] ?? code, orderId, merchantId, createdAt: t(min), salesChannel: "IFOOD", metadata: { CLIENT_ID: "x" }, ...resto };
 }
 
+/**
+ * Allowlist do piloto para os testes que NÃO tratam do piloto: todas as unidades do repo fake (lida a cada
+ * ciclo, como em produção). Sem isto o poller é fail-closed e não consulta ninguém.
+ */
+export const pilotoDe = (repo) => () => repo.conexoes.map((c) => c.unidade_id);
+
 export function criarRepoEmMemoria({ relogio = criarRelogio(), conexoes = [CONEXAO_A, CONEXAO_B] } = {}) {
   const eventos = new Map();   // event_id -> linha
   const pedidos = new Map();   // order_id -> linha
@@ -57,6 +63,7 @@ export function criarRepoEmMemoria({ relogio = criarRelogio(), conexoes = [CONEX
     eventos, pedidos, chamadas, falhar, relogio,
     get lease() { return lease; },
     conexoes,
+    filtrosPendentes: [],        // `unidades` recebido em cada listarEventosPendentes (escopo do piloto)
 
     async listarConexoesComMerchant() { hook("listarConexoesComMerchant"); return repo.conexoes.map(({ credOrder, ...c }) => ({ ...c })); },
     // Espelha o filtro do banco: só conexões COM credencial `order` (campo `credOrder` da conexão fake:
@@ -92,10 +99,13 @@ export function criarRepoEmMemoria({ relogio = criarRelogio(), conexoes = [CONEX
       hook("marcarAck");
       for (const i of ids) { const e = eventos.get(i); if (e && !e.acknowledged_at) e.acknowledged_at = quando; }
     },
-    async listarEventosPendentes(limite, max) {
+    async listarEventosPendentes(limite, max, { unidades } = {}) {
       hook("listarEventosPendentes");
+      repo.filtrosPendentes.push(unidades === undefined ? undefined : [...unidades]);
+      if (Array.isArray(unidades) && unidades.length === 0) return [];
       return [...eventos.values()]
         .filter((e) => ["RECEBIDO", "FALHOU"].includes(e.processing_status) && e.retry_count < max && e.organizacao_id)
+        .filter((e) => !Array.isArray(unidades) || unidades.includes(e.unidade_id))
         .slice(0, limite).map((e) => ({ ...e }));
     },
 

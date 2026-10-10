@@ -30,8 +30,7 @@ import { lerEstadoEvents, resumoEventsParaStatus } from "../src/modules/ifood/if
 import { iniciarServidorHttp } from "../src/servidor.lifecycle.js";
 import { IFOOD_EVENTS } from "../src/modules/ifood/ifood.constants.js";
 import {
-  criarRepoEmMemoria, criarClienteFake, criarTokenFake, erroIfood, ev, CONEXAO_A, CONEXAO_B, M_A,
-} from "./helpers/ifood-events-fakes.js";
+  criarRepoEmMemoria, criarClienteFake, criarTokenFake, erroIfood, ev, CONEXAO_A, CONEXAO_B, M_A, pilotoDe } from "./helpers/ifood-events-fakes.js";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const BACKEND = path.join(AQUI, "..");
@@ -56,7 +55,7 @@ async function aguardar(cond, { ms = 4_000, msg = "condição não atingida a te
 /** Uma "instância" do Web Service: poller real + loop real + dependências falsas. */
 function instancia({ holder, repo, relogio, client, token = criarTokenFake({ escopo: "app" }), leaseTtlS = 90 }) {
   client ??= criarClienteFake(clienteReal);
-  const poller = criarPoller({ repo, token, client, holder, agora: relogio.agora, log: silencio, leaseTtlS });
+  const poller = criarPoller({ repo, token, client, holder, agora: relogio.agora, log: silencio, leaseTtlS, unidadesPiloto: pilotoDe(repo) });
   const criarLoop = (extras = {}) => criarLoopDoPoller({ poller, intervaloMs: 30_000, sleep: sonoRapido, log: silencio, ...extras });
   const runtime = { ok: true, modo: "distributed", holder, poller, criarLoop, intervaloMs: 30_000, leaseTtlS };
   return { poller, client, criarLoop, runtime };

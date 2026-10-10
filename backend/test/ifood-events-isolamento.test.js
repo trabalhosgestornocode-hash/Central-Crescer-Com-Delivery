@@ -16,7 +16,7 @@ import { IFOOD_EVENTS } from "../src/modules/ifood/ifood.constants.js";
 import { IFOOD_ERROS } from "../src/modules/ifood/ifood.errors.js";
 import { mascararId } from "../src/modules/ifood/ifood.logsafe.js";
 import {
-  criarRepoEmMemoria, criarRelogio, criarClienteFake, erroIfood, ev, M_A, M_B, CONEXAO_A, CONEXAO_B,
+  criarRepoEmMemoria, criarRelogio, criarClienteFake, erroIfood, ev, M_A, M_B, CONEXAO_A, CONEXAO_B, pilotoDe
 } from "./helpers/ifood-events-fakes.js";
 
 const M_C = "cccccccc-0000-4000-8000-00000000000c";
@@ -53,7 +53,7 @@ function montar({ conexoes = [CONEXAO_A, CONEXAO_B, CONEXAO_C], respostas, token
   const client = criarClienteFake(clienteReal, { respostasPolling: respostas ?? porMerchant(eventosPadrao()) });
   const logs = [];
   const log = (nivel, evento, dados) => logs.push({ nivel, evento, dados });
-  const poller = criarPoller({ repo, token, client, holder: "worker-1", agora: relogio.agora, log, leaseTtlS: 90 });
+  const poller = criarPoller({ repo, token, client, holder: "worker-1", agora: relogio.agora, log, leaseTtlS: 90, unidadesPiloto: pilotoDe(repo) });
   return { repo, client, token, poller, logs };
 }
 const merchantsPollados = (client) => client.polls.map((p) => p.merchantIds[0]);

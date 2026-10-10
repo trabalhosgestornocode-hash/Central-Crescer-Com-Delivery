@@ -24,14 +24,21 @@
 //      mascarado, código, etapa, horário) e o ciclo segue. Só quando TODOS os grupos falham o erro sobe
 //      (o loop aplica backoff — mesmo comportamento de antes com uma única conexão).
 //   Globais de propósito (param o ciclo inteiro): 429 (throttling é do app, não da loja) e lease perdido.
+//
+// PILOTO (IFOOD_ORDER_PILOT_UNITS): o poller só enxerga conexões cuja UNIDADE está na lista — nos dois modos
+//   (distribuído e centralizado). Fail-closed: lista vazia/ausente = nenhuma loja é consultada, nenhum token é
+//   pedido/renovado e nenhum ACK sai. O critério é sempre `unidade_id` da conexão (nunca organização/merchant).
+//   Eventos já gravados de uma unidade que saiu da lista NÃO são apagados nem aplicados: ficam pendentes.
+//   A lista é relida a cada ciclo; um ciclo já em andamento termina com a lista com que começou.
 
 import { IFOOD_APP_ORDER, IFOOD_EVENTS } from "./ifood.constants.js";
-import { IFOOD_ERROS } from "./ifood.errors.js";
+import { IFOOD_ERROS, ifoodErro } from "./ifood.errors.js";
 import { ifoodLog, mascararId } from "./ifood.logsafe.js";
 import { mensagemSegura } from "./ifoodAcoes.util.js";
 import * as eventsClient from "./ifoodEvents.client.js";
 import { processarLote, reprocessarPendentes, enviarAcks } from "./ifoodEvents.service.js";
 import { processarDetalhesPendentes } from "./ifoodOrder.service.js";
+import { unidadeNoPilotoOrder } from "./ifoodOrderPiloto.js";
 
 /** Grupos de polling conforme o escopo do token. */
 export function montarGrupos(conexoes, escopo, tamanho = IFOOD_EVENTS.maxMerchantsPorPolling) {
@@ -55,7 +62,7 @@ const ERROS_DE_AUTENTICACAO = new Set([
  * @param {{
  *   repo: object, token: object, http?: object, client?: object,
  *   holder: string, leaseTtlS?: number, agora?: () => Date, log?: Function,
- *   appType?: string,
+ *   appType?: string, unidadesPiloto?: () => string[],
  * }} p
  */
 export function criarPoller({
@@ -67,9 +74,16 @@ export function criarPoller({
   // Checkpoint C: `detalhes = { client? }` liga o passo "buscar Order Details dos pedidos pendentes" no fim de
   // cada ciclo. Desligado por padrão (o poller de Events continua funcionando sozinho).
   detalhes = null,
+  // Unidades autorizadas (ids normalizados). Padrão: o que o token service lê de IFOOD_ORDER_PILOT_UNITS;
+  // sem essa fonte = lista vazia (fail-closed). Nunca "todas as conexões" por omissão.
+  unidadesPiloto = () => token?.unidadesPilotoOrder?.() ?? [],
 }) {
   if (!holder) throw new Error("holder é obrigatório");
   let temLease = false;
+  // Escopo do ciclo em andamento: conexões e merchants das unidades do piloto. Refeito a cada ciclo.
+  let autorizadas = new Set();
+  let merchantsAutorizados = new Set();
+  let merchantsForaDoPiloto = new Set();   // merchants de conexões vivas cuja unidade NÃO está no piloto
   // `lease`: última leitura do lease (titular e vencimento) — só observabilidade; quem decide é o banco.
   const info = { ultimoCiclo: null, ultimoEstado: null, geracao: null, lease: null };
 
@@ -80,10 +94,19 @@ export function criarPoller({
     return r;
   };
 
-  const comToken = (conexaoId, fn) => token.comAccessTokenValido({ conexaoId, appType, deps: { http }, fn });
+  // TRAVA do token: nenhum token é pedido (nem renovado) para conexão/merchant fora do escopo do ciclo.
+  // Distribuído: a conexão tem de estar entre as autorizadas. Centralizado (conexaoId null, token do app):
+  // todos os merchants do lote têm de ser de unidades autorizadas.
+  const comToken = async (grupo, merchantIds, fn) => {
+    const dentro = grupo.conexaoId != null
+      ? autorizadas.has(grupo.conexaoId)
+      : merchantIds.length > 0 && merchantIds.every((m) => merchantsAutorizados.has(m));
+    if (!dentro) throw ifoodErro(IFOOD_ERROS.IFOOD_ORDER_PILOTO_NAO_HABILITADO);
+    return token.comAccessTokenValido({ conexaoId: grupo.conexaoId, appType, deps: { http }, fn });
+  };
 
   async function pollGrupo(grupo, merchantIds) {
-    return comToken(grupo.conexaoId, (accessToken) => client.buscarEventos({ accessToken, merchantIds, http }));
+    return comToken(grupo, merchantIds, (accessToken) => client.buscarEventos({ accessToken, merchantIds, http }));
   }
 
   async function executarCiclo() {
@@ -97,18 +120,31 @@ export function criarPoller({
       return (info.ultimoEstado = { estado: "LEASE_DE_OUTRO" });
     }
 
-    // Eventos persistidos que ficaram sem processar (queda entre persistir e processar).
-    const reproc = await reprocessarPendentes({ repo, agora, log })
+    // PILOTO: a lista é lida a cada ciclo (hoje vem do `config`, fixado no boot — mudar a variável só vale depois
+    // do restart/deploy). Vazia = nenhuma unidade: o ciclo não chama o iFood, não renova token e não faz ACK.
+    const piloto = (unidadesPiloto() ?? []).map((u) => String(u).toLowerCase());
+    autorizadas = new Set();
+    merchantsAutorizados = new Set();
+    merchantsForaDoPiloto = new Set();
+
+    // Eventos persistidos que ficaram sem processar (queda entre persistir e processar) — só das unidades do piloto.
+    const reproc = await reprocessarPendentes({ repo, agora, log, unidades: piloto })
       .catch((e) => { log("warn", "events.reprocessar_falhou", { erro: String(e?.message ?? e).slice(0, 200) }); return null; });
 
     // Distribuído (escopo 'conexao'): só conexões com credencial `order`. Centralizado de teste (escopo 'app'):
-    // o token é do app, não há credencial por conexão — todas as conexões com merchant.
+    // o token é do app, não há credencial por conexão — todas as conexões com merchant. NOS DOIS, só entram as
+    // conexões cuja UNIDADE está em IFOOD_ORDER_PILOT_UNITS (nunca a empresa nem o merchant como critério).
     const escopo = token.escopoDoToken?.() ?? "conexao";
-    const conexoes = escopo === "app" ? await repo.listarConexoesComMerchant() : await repo.listarConexoesElegiveisParaEvents();
+    const todas = escopo === "app" ? await repo.listarConexoesComMerchant() : await repo.listarConexoesElegiveisParaEvents();
+    const conexoes = todas.filter((c) => unidadeNoPilotoOrder(piloto, c.unidade_id));
+    const foraDoPiloto = todas.length - conexoes.length;
+    for (const c of todas) if (!unidadeNoPilotoOrder(piloto, c.unidade_id)) merchantsForaDoPiloto.add(c.merchant_id);
+    if (foraDoPiloto > 0) log("info", "events.conexoes_fora_do_piloto", { quantidade: foraDoPiloto });
     if (conexoes.length === 0) {
-      log("info", "events.sem_merchants", {});
-      return (info.ultimoEstado = { estado: "SEM_MERCHANTS", reprocessados: reproc?.tentados ?? 0 });
+      log("info", "events.sem_merchants", { foraDoPiloto });
+      return (info.ultimoEstado = { estado: "SEM_MERCHANTS", reprocessados: reproc?.tentados ?? 0, foraDoPiloto });
     }
+    for (const c of conexoes) { autorizadas.add(c.id); merchantsAutorizados.add(c.merchant_id); }
     const porMerchant = new Map(conexoes.map((c) => [c.merchant_id, c]));
 
     // reauth_required: o refresh já falhou e só uma nova autorização resolve — NÃO chama o iFood por ela.
@@ -192,6 +228,16 @@ export function criarPoller({
     }
     if (!eventos || eventos.length === 0) return null;   // 204: nada a fazer, nada a reconhecer
 
+    // Defesa: o iFood só deveria devolver os merchants pedidos. Se vier evento de uma loja NOSSA que está fora
+    // do piloto, ele não é gravado, não é aplicado e NÃO é reconhecido (continua disponível no iFood).
+    const alheios = eventos.filter((e) => merchantsForaDoPiloto.has(e?.merchantId));
+    if (alheios.length) {
+      total.eventosForaDoPiloto = (total.eventosForaDoPiloto ?? 0) + alheios.length;
+      log("warn", "events.evento_fora_do_piloto", { quantidade: alheios.length });
+      eventos = eventos.filter((e) => !merchantsForaDoPiloto.has(e?.merchantId));
+      if (eventos.length === 0) return null;
+    }
+
     total.eventos += eventos.length;
     // Persistir + processar. Se lançar, NADA é reconhecido (o evento volta no próximo polling).
     etapa.atual = "persistir";
@@ -223,7 +269,7 @@ export function criarPoller({
         if (restanteMs <= 0) { semLease = true; throw new Error("lease sem prazo para o ACK"); }
         // O prazo aborta o ACK (e qualquer retry dele) antes que o lease possa vencer.
         const sinal = AbortSignal.timeout(restanteMs);
-        return comToken(grupo.conexaoId, (accessToken) => client.confirmarEventos({ accessToken, eventIds: ids, http, sinal }));
+        return comToken(grupo, merchantIds, (accessToken) => client.confirmarEventos({ accessToken, eventIds: ids, http, sinal }));
       },
     }).catch((e) => { if (semLease) return null; throw e; });
     if (semLease) {

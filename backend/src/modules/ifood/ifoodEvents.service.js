@@ -289,8 +289,12 @@ export async function processarLote({ eventosBrutos, conexoesPorMerchant, repo, 
  * persistir e processar). Não fala com o iFood.
  * @returns {Promise<{tentados: number, processados: number, falhas: number}>}
  */
-export async function reprocessarPendentes({ repo, limite = 50, agora = () => new Date(), log = ifoodLog }) {
-  const linhas = await repo.listarEventosPendentes(limite, IFOOD_EVENTS.maxTentativasProcessamento);
+export async function reprocessarPendentes({ repo, limite = 50, agora = () => new Date(), log = ifoodLog, unidades }) {
+  // `unidades` (do poller): só reprocessa eventos das unidades do piloto; os das outras continuam pendentes, intactos.
+  // Trava dupla: além do filtro na consulta, uma linha de outra unidade nunca é processada aqui.
+  const permitidas = Array.isArray(unidades) ? new Set(unidades) : null;
+  const brutas = await repo.listarEventosPendentes(limite, IFOOD_EVENTS.maxTentativasProcessamento, permitidas ? { unidades } : undefined);
+  const linhas = permitidas ? brutas.filter((l) => permitidas.has(String(l.unidade_id ?? "").toLowerCase())) : brutas;
   const out = { tentados: linhas.length, processados: 0, falhas: 0 };
   const unidadesAtualizadas = [];   // só para o aviso de Realtime — não influencia nada do reprocessamento
   for (const l of linhas) {
