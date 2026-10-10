@@ -13,6 +13,7 @@ import { API_BASE } from "./config.js";
 import { state } from "./state.js";
 import { getSupabase, tokenAtual } from "./supabaseClient.js";
 import { geracaoContexto, contextoMudou, invalidarGeracaoDeContexto } from "./contextoEscopo.js";
+import { ehContaInativa, avisarContaInativa } from "./contaInativa.js";
 
 const CHAVE_TOKEN = "cd.contextToken";
 
@@ -43,6 +44,7 @@ export function limparContexto() {
   state.sessao.impersonando = false;
   state.sessao.unidadesDaEmpresa = [];
   state.sessao.perfil = null; // Fase I — a PESSOA do contexto (a CONTA fica em state.sessao.usuario)
+  state.sessao.expiraEm = null;
   // Fase F — a prova de PIN nunca sobrevive à queda do contexto.
   state.sessao.profileSelectionToken = null;
 }
@@ -100,6 +102,7 @@ async function chamar(url, opcoes = {}) {
     throw new Error(corpo.error || "Contexto encerrado.");
   }
   if (!r.ok) {
+    if (ehContaInativa(r.status, corpo)) avisarContaInativa(corpo.error); // conta bloqueada: sem reentrada (ver contaInativa.js)
     const erro = new Error(corpo.error || `${r.status} ${r.statusText}`);
     erro.status = r.status;
     erro.codigo = corpo.codigo || corpo.details?.codigo || null; // Fase F/H — ex.: CONFIGURACAO_PIN_INCOMPLETA
@@ -290,6 +293,39 @@ export function aplicarContexto(data) {
   // Fase I — a PESSOA operacional deste contexto (null em impersonação).
   // `state.sessao.usuario` continua sendo a CONTA (/me). Sem UI ainda (Fase F).
   state.sessao.perfil = data.perfil ?? null;
+  registrarPrazoDoContexto(data);
+}
+
+/**
+ * Prazo do contexto + relógio do SERVIDOR (para o perfil de exibição agendar a renovação pelo relógio do servidor,
+ * nunca pelo do aparelho) e aviso aos interessados. Só o perfil de exibição reage ao evento (renovacaoContexto.js).
+ */
+function registrarPrazoDoContexto(data) {
+  state.sessao.expiraEm = data.expiraEm ?? null;
+  const servidor = Date.parse(data.servidorEm);
+  state.sessao.relogioOffsetMs = Number.isFinite(servidor) ? servidor - Date.now() : 0;
+  document.dispatchEvent(new CustomEvent("app:contexto-aplicado"));
+}
+
+/** Chama o servidor para renovar o contexto (só o perfil de exibição; o servidor recusa os demais). */
+export const renovarContextoNoServidor = async () => (await post("/api/v1/sessao/renovar")).data;
+
+/**
+ * Adota o contexto RENOVADO sem mexer na identidade nem na "geração" do contexto: o Modo Televisão e a tela cheia
+ * continuam como estão; só o token (e o prazo) trocam. Se o servidor devolver QUALQUER diferença de empresa, unidade,
+ * perfil, papel ou permissões, NÃO adota: lança, e o token atual segue valendo até vencer (então vale o fluxo normal).
+ */
+export function aplicarRenovacao(data) {
+  const s = state.sessao;
+  const mesmas = (a, b) => JSON.stringify([...(a ?? [])].sort()) === JSON.stringify([...(b ?? [])].sort());
+  if (!data?.contextToken
+    || data.empresa?.id !== s.empresa?.id || data.unidade?.id !== s.unidade?.id || (data.perfil?.id ?? null) !== (s.perfil?.id ?? null)
+    || data.papel !== s.papel || !mesmas(data.permissoes, s.permissoes)) {
+    throw new Error("A renovação devolveu outra identidade; mantido o contexto atual.");
+  }
+  guardarContextToken(data.contextToken);
+  s.modulos = data.modulos ?? s.modulos;
+  registrarPrazoDoContexto(data);
 }
 
 /**
@@ -308,6 +344,7 @@ export async function restaurarContexto() {
     state.sessao.modulos = data.modulos ?? [];
     state.sessao.impersonando = !!data.impersonando;
     state.sessao.perfil = data.perfil ?? null; // Fase I — a PESSOA (null em impersonação)
+    registrarPrazoDoContexto(data);
     return true;
   } catch {
     limparContexto();

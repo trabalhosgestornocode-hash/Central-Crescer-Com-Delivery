@@ -14,7 +14,7 @@
 import { supabase } from "../../config/supabase.js";
 import { config } from "../../config/env.js";
 import { ApiError } from "../../shared/ApiError.js";
-import { papelValido, rotuloPapel, permissoesDoPapel } from "../../shared/permissoes.js";
+import { papelValido, rotuloPapel, permissoesDoPapel, PAPEL_EXIBICAO } from "../../shared/permissoes.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
 import { revogarSessoes } from "../sessao/sessao.service.js";
 import {
@@ -44,6 +44,50 @@ import { JANELA_ONLINE_MS } from "../../middlewares/auth.js";
 import * as v from "../../shared/validar.js";
 
 const PAPEIS = /** @type {const} */ (["organization_admin", "unit_manager", "finance", "operations", "viewer"]);
+/** Papéis de um vínculo de UNIDADE: os de empresa + o de exibição (que NUNCA é de empresa). */
+const PAPEIS_DA_UNIDADE = [...PAPEIS, PAPEL_EXIBICAO];
+
+const MSG_EXCLUSIVA = "A conta de exibição (Operador de Exibição) é exclusiva: só pode ter vínculo de unidade com esse papel, "
+  + "sem nenhum vínculo de empresa. Use uma conta própria para a TV.";
+
+const MSG_UMA_UNIDADE = "A conta de exibição pertence a UMA única unidade (a da TV): com duas, a reentrada automática deixaria de "
+  + "ser possível. Use outra conta para outra unidade.";
+
+/**
+ * Virar (ou ser) Operador de Exibição numa unidade só vale em conta EXCLUSIVA: sem NENHUM vínculo de empresa, sem outro
+ * papel e sem OUTRA unidade na conta (a conta da TV é de UMA unidade). Lança 409 caso contrário. (Função à parte para
+ * manter curtas as funções de vínculo, cuja trava estática confere o escopo por perfil logo no começo de cada uma.)
+ */
+async function exigirContaExclusivaParaExibicao(usuarioId, unidadeId, db = supabase) {
+  const ex = await estadoDeExibicao(usuarioId, db);
+  const outras = await db.from("usuarios_unidades").select("papel").eq("usuario_id", usuarioId).neq("unidade_id", unidadeId);
+  if (outras.error) throw ApiError.internal(outras.error.message);
+  const lista = Array.isArray(outras.data) ? outras.data : (outras.data ? [outras.data] : []);
+  if (ex.temEmpresa || lista.some((u) => u.papel !== PAPEL_EXIBICAO)) throw new ApiError(409, MSG_EXCLUSIVA);
+  if (lista.length) throw new ApiError(409, MSG_UMA_UNIDADE);
+}
+
+/**
+ * Estado da conta quanto ao papel de exibição (olha TODOS os perfis da conta). O papel de exibição é de uma
+ * conta DEDICADA ao computador da TV: se a conta o tem, não pode ter vínculo de empresa nem outro papel em
+ * unidade — senão a "conta só do Checklist" herdaria um papel com permissões reais.
+ * @returns {Promise<{temEmpresa: boolean, temUnidadeExibicao: boolean, temUnidadeOutra: boolean}>}
+ */
+async function estadoDeExibicao(usuarioId, db = supabase) {
+  const [orgs, unis] = await Promise.all([
+    db.from("usuarios_organizacoes").select("id").eq("usuario_id", usuarioId),
+    db.from("usuarios_unidades").select("papel").eq("usuario_id", usuarioId),
+  ]);
+  if (orgs.error) throw ApiError.internal(orgs.error.message);
+  if (unis.error) throw ApiError.internal(unis.error.message);
+  const lista = (x) => (Array.isArray(x) ? x : x ? [x] : []);
+  const papeis = lista(unis.data).map((u) => u.papel);
+  return {
+    temEmpresa: lista(orgs.data).length > 0,
+    temUnidadeExibicao: papeis.some((p) => p === PAPEL_EXIBICAO),
+    temUnidadeOutra: papeis.some((p) => p !== PAPEL_EXIBICAO),
+  };
+}
 
 /**
  * @typedef {object} VinculoEmpresa
@@ -80,7 +124,7 @@ export async function listarUsuarios({ busca, limite, semEmpresa = false } = {},
 
   const ids = usuarios.map((u) => u.id);
   const desdeOnline = new Date(Date.now() - JANELA_ONLINE_MS).toISOString();
-  const [vinculos, admins, painelAdms, sessoes] = await Promise.all([
+  const [vinculos, admins, painelAdms, sessoes, vinculosExibicao] = await Promise.all([
     buscar("usuarios_organizacoes", "usuario_id, organizacao_id, papel, ativo, organizacoes(id, nome)",
       (qq) => qq.in("usuario_id", ids), db),
     buscar("plataforma_admins", "usuario_id", (qq) => qq.in("usuario_id", ids).eq("ativo", true), db),
@@ -89,7 +133,11 @@ export async function listarUsuarios({ busca, limite, semEmpresa = false } = {},
     buscar("painel_administrativo_usuarios", "usuario_id", (qq) => qq.in("usuario_id", ids).eq("ativo", true), db),
     buscar("sessoes_contexto", "usuario_id",
       (qq) => qq.in("usuario_id", ids).is("revogada_em", null).gte("ultimo_uso_em", desdeOnline), db),
+    // Contas de EXIBIÇÃO (TV): por desenho só têm vínculo de unidade. Tolerante: sem a migration 112 o valor do enum nem
+    // existe e a consulta falha — nesse caso nenhuma conta é de exibição, e a lista de usuários não pode cair por isso.
+    buscar("usuarios_unidades", "usuario_id", (qq) => qq.in("usuario_id", ids).eq("papel", PAPEL_EXIBICAO), db).catch(() => []),
   ]);
+  const contasExibicao = new Set(vinculosExibicao.map((x) => x.usuario_id));
 
   const porUsuario = new Map();
   for (const x of vinculos) {
@@ -113,11 +161,13 @@ export async function listarUsuarios({ busca, limite, semEmpresa = false } = {},
     painelAdministrativo: painelAdministrativos.has(u.id),
     online: online.has(u.id),
     empresas: porUsuario.get(u.id) ?? [],
+    // Conta dedicada à TV: não tem (nem deve ter) empresa — não é "pendente de associação".
+    contaExibicao: contasExibicao.has(u.id),
   }));
 
   // "Sem empresa" é a fila de trabalho depois da virada da migration 020:
-  // são as contas que existem e ainda precisam ser associadas.
-  return semEmpresa ? lista.filter((u) => !u.empresas.some((e) => e.ativo)) : lista;
+  // são as contas que existem e ainda precisam ser associadas. Conta de exibição NÃO entra: ela é completa assim.
+  return semEmpresa ? lista.filter((u) => !u.empresas.some((e) => e.ativo) && !u.contaExibicao) : lista;
 }
 
 /**
@@ -532,6 +582,18 @@ export async function criarPerfilNaConta(req, contaIdBruto, body) {
   const orgSet = new Set((orgsOk ?? []).map((o) => o.id));
   for (const e of empresas) if (!orgSet.has(e.organizacaoId)) throw ApiError.badRequest("Uma das empresas informadas não existe.");
 
+  // ---- exclusividade do papel de exibição (conta dedicada à TV), ANTES de escrever ----
+  const papeisPedidos = unidades.map((u) => (u?.papel == null || u?.papel === "" ? null : String(u.papel)));
+  if (papeisPedidos.includes(PAPEL_EXIBICAO)) {
+    if (empresas.length || papeisPedidos.some((p) => p !== PAPEL_EXIBICAO)) throw new ApiError(409, MSG_EXCLUSIVA);
+    if (papeisPedidos.length > 1) throw new ApiError(409, MSG_UMA_UNIDADE);
+    const ex = await estadoDeExibicao(contaId);
+    if (ex.temEmpresa || ex.temUnidadeOutra) throw new ApiError(409, MSG_EXCLUSIVA);
+    if (ex.temUnidadeExibicao) throw new ApiError(409, MSG_UMA_UNIDADE);
+  } else if (empresas.length && (await estadoDeExibicao(contaId)).temUnidadeExibicao) {
+    throw new ApiError(409, MSG_EXCLUSIVA);
+  }
+
   // ---- 2. cria o perfil (UUID novo) ----
   const perfil = await criarPerfilOperacional({ contaId, nome, ativo });
 
@@ -543,7 +605,7 @@ export async function criarPerfilNaConta(req, contaIdBruto, body) {
     }
     for (const u of unidades) {
       const unidadeId = v.uuid(u?.unidadeId, "Unidade");
-      const papelU = u?.papel == null || u?.papel === "" ? null : v.umDe(u.papel, "Cargo", PAPEIS);
+      const papelU = u?.papel == null || u?.papel === "" ? null : v.umDe(u.papel, "Cargo", PAPEIS_DA_UNIDADE);
       const err = await inserirVinculoUnidadeComPerfil({ usuarioId: contaId, perfilId: perfil.id, unidadeId, papel: papelU });
       if (err) throw ApiError.internal(err.message);
     }
@@ -689,6 +751,8 @@ export async function associarEmpresa(req, idBruto, body) {
   ]);
   if (!usuario) throw ApiError.notFound("Usuário não encontrado.");
   if (!empresa) throw ApiError.notFound("Empresa não encontrada.");
+  // Conta de exibição é exclusiva: nunca ganha vínculo de empresa.
+  if ((await estadoDeExibicao(usuarioId)).temUnidadeExibicao) throw new ApiError(409, MSG_EXCLUSIVA);
 
   // Fase G — `body.perfilId` mira um perfil específico da conta; ausente ->
   // perfil inicial (garantido para contas legadas que nunca tiveram a linha).
@@ -742,6 +806,8 @@ export async function associarEmpresasLote(req, idBruto, body, deps = {}) {
 
   const { data: usuario } = await db.from("perfis").select("id, nome").eq("id", usuarioId).maybeSingle();
   if (!usuario) throw ApiError.notFound("Usuário não encontrado.");
+  // Conta de exibição é exclusiva: nunca ganha vínculo de empresa.
+  if ((await estadoDeExibicao(usuarioId, db)).temUnidadeExibicao) throw new ApiError(409, MSG_EXCLUSIVA);
 
   const { data: orgs, error: eOrgs } = await db.from("organizacoes").select("id, nome").in("id", idsUnicos);
   if (eOrgs) throw ApiError.internal(eOrgs.message);
@@ -871,11 +937,15 @@ export async function removerVinculo(req, idBruto, organizacaoIdBruto, opts = {}
  * empresa. Exige que o vínculo com a empresa da unidade já exista — caso
  * contrário o acesso ficaria pendurado numa empresa à qual a pessoa não
  * pertence.
+ *
+ * EXCEÇÃO — papel de EXIBIÇÃO (Operador de Exibição): é o único vínculo de unidade SEM vínculo de empresa, de
+ * propósito (a conta da TV não herda papel nenhum da empresa e nunca enxerga outras unidades nem o consolidado).
+ * Em troca, a conta é EXCLUSIVA: sem vínculo de empresa e sem outro papel em unidade (ver estadoDeExibicao).
  */
 export async function associarUnidade(req, idBruto, body) {
   const usuarioId = v.uuid(idBruto, "Usuário");
   const unidadeId = v.uuid(body.unidadeId, "Unidade");
-  const papel = body.papel == null || body.papel === "" ? null : v.umDe(body.papel, "Cargo", PAPEIS);
+  const papel = body.papel == null || body.papel === "" ? null : v.umDe(body.papel, "Cargo", PAPEIS_DA_UNIDADE);
   const perfilAlvo = await resolverPerfilAlvo(usuarioId, body.perfilId);
 
   const { data: unidade } = await supabase.from("unidades")
@@ -886,9 +956,15 @@ export async function associarUnidade(req, idBruto, body) {
     .select("id, perfil_id").eq("usuario_id", usuarioId).eq("organizacao_id", unidade.organizacao_id);
   if (perfilAlvo !== usuarioId) qOrg = qOrg.eq("perfil_id", perfilAlvo);
   const { data: vinculoOrg } = await qOrg.maybeSingle();
-  if (!vinculoOrg) throw ApiError.badRequest("Associe o usuário à empresa desta unidade primeiro.");
 
-  const perfilId = vinculoOrg.perfil_id ?? perfilAlvo;
+  let perfilId;
+  if (papel === PAPEL_EXIBICAO) {
+    await exigirContaExclusivaParaExibicao(usuarioId, unidadeId);
+    perfilId = perfilAlvo;
+  } else {
+    if (!vinculoOrg) throw ApiError.badRequest("Associe o usuário à empresa desta unidade primeiro.");
+    perfilId = vinculoOrg.perfil_id ?? perfilAlvo;
+  }
   const error = await inserirVinculoUnidadeComPerfil({ usuarioId, perfilId, unidadeId, papel, upsert: true });
   if (error) throw ApiError.internal(error.message);
 
@@ -942,9 +1018,11 @@ export async function atualizarVinculoUnidade(req, idBruto, unidadeIdBruto, body
   const perfilAlvo = await resolverPerfilAlvo(usuarioId, body.perfilId);
 
   const patch = {};
-  if (body.papel !== undefined) patch.papel = body.papel == null || body.papel === "" ? null : v.umDe(body.papel, "Cargo", PAPEIS);
+  if (body.papel !== undefined) patch.papel = body.papel == null || body.papel === "" ? null : v.umDe(body.papel, "Cargo", PAPEIS_DA_UNIDADE);
   if (body.ativo !== undefined) patch.ativo = v.booleano(body.ativo, true);
   if (!Object.keys(patch).length) throw ApiError.badRequest("Informe o cargo ou o status do acesso.");
+
+  if (patch.papel === PAPEL_EXIBICAO) await exigirContaExclusivaParaExibicao(usuarioId, unidadeId);
 
   let q = supabase.from("usuarios_unidades")
     .update(patch).eq("usuario_id", usuarioId).eq("unidade_id", unidadeId);
@@ -1238,6 +1316,11 @@ function traduzErroAuth(msg) {
 /** Permissões de um papel — o painel usa para mostrar o que cada cargo pode. */
 export function detalharPapeis() {
   return PAPEIS.map((p) => ({ valor: p, rotulo: rotuloPapel(p), permissoes: permissoesDoPapel(p) }));
+}
+
+/** Papéis de um vínculo de UNIDADE (os de empresa + o de exibição, que só existe em unidade). */
+export function detalharPapeisUnidade() {
+  return PAPEIS_DA_UNIDADE.map((p) => ({ valor: p, rotulo: rotuloPapel(p), permissoes: permissoesDoPapel(p), somenteUnidade: p === PAPEL_EXIBICAO }));
 }
 
 /** @param {import('express').Request} req */

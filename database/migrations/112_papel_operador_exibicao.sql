@@ -1,0 +1,21 @@
+-- =====================================================================
+-- MIGRATION 112 — Papel "Operador de Exibição" (display_operator): valor novo do enum papel_acesso
+-- =====================================================================
+-- ⚠️  NÃO APLICAR EM PRODUÇÃO SEM APROVAÇÃO EXPLÍCITA. Escrita e testada SÓ contra um Postgres local descartável
+--     (backend/test/perfil-exibicao-migration-pg.test.js). A aplicação é um passo separado.
+-- ✅  ADITIVA: acrescenta UM valor ao enum; nenhuma tabela, coluna ou linha existente muda.
+--
+-- POR QUE EXISTE: o computador ligado à TV da loja entra com uma conta que só pode ver o Checklist Operacional de
+-- UMA unidade. O papel é o `usuarios_unidades.papel` dessa conta; as permissões dele (somente `checklist.visualizar`)
+-- ficam em backend/src/shared/permissoes.js. `papel` é o enum `papel_acesso`, então o valor precisa existir aqui.
+--
+-- ATENÇÃO (Postgres): `ALTER TYPE ... ADD VALUE` não pode ser DESFEITO e o valor novo só pode ser USADO depois do
+-- COMMIT desta instrução. Por isso este arquivo NÃO tem begin/commit e a 113 (que usa o valor) é separada.
+-- NÃO numerada como 111 de propósito: o worktree do Checkpoint 5C (suspenso, não consolidado) tem uma 111 local.
+--
+-- ORDEM: aplicar ESTA antes de qualquer conta receber o papel. O código novo (deploy) pode ir antes ou depois:
+-- sem a 112 simplesmente não dá para gravar o papel (o painel recusa com erro do banco; nada abre).
+-- Rollback: 112_rollback.sql (o valor do enum permanece — o Postgres não remove valores de enum).
+-- =====================================================================
+
+alter type papel_acesso add value if not exists 'display_operator';

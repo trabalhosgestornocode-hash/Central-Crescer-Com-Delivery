@@ -225,6 +225,7 @@ export const removerVinculoUnidade = asyncHandler(async (req, res) =>
   ok(res, await usuarios.removerVinculoUnidade(req, req.params.id, req.params.unidadeId)));
 
 export const papeis = asyncHandler(async (_req, res) => ok(res, usuarios.detalharPapeis()));
+export const papeisUnidade = asyncHandler(async (_req, res) => ok(res, usuarios.detalharPapeisUnidade()));
 
 // ----------------------------------------------------------------- Financeiro
 export const panoramaFinanceiro = asyncHandler(async (_req, res) => ok(res, await financeiro.obterPanorama()));

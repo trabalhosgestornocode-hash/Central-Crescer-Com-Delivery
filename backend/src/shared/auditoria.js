@@ -17,6 +17,9 @@ export const ACOES = {
   LOGOUT: "sessao.logout",
   CONTEXTO_SELECIONADO: "sessao.contexto_selecionado",
   CONTEXTO_TROCADO: "sessao.contexto_trocado",
+  // Renovação automática do contexto do perfil de EXIBIÇÃO (computador da TV). Nunca grava token: só ids, motivos e prazos.
+  CONTEXTO_RENOVADO: "sessao.contexto_renovado",
+  CONTEXTO_RENOVACAO_NEGADA: "sessao.contexto_renovacao_negada",
   LOGIN_NEGADO: "sessao.login_negado",
   SENHA_DEFINIDA: "sessao.senha_definida",
 

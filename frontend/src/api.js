@@ -3,6 +3,7 @@ import { statusCmv } from "./utils.js";
 import { tokenAtual } from "./supabaseClient.js";
 import { contextTokenAtual, limparContexto } from "./sessao.js";
 import { geracaoContexto, contextoMudou } from "./contextoEscopo.js";
+import { ehContaInativa, avisarContaInativa } from "./contaInativa.js";
 
 // Anexa as DUAS credenciais a cada requisição:
 //   Authorization    -> quem sou eu (Access Token do Supabase)
@@ -46,6 +47,7 @@ async function tratar(r, g) {
   }
   if (!r.ok) {
     const j = await r.json().catch(() => ({}));
+    if (ehContaInativa(r.status, j)) avisarContaInativa(j.error); // conta bloqueada: sem reentrada (ver contaInativa.js)
     if (r.status === 409 && j?.details?.contexto === "invalido" && !contextoMudou(g)) {
       limparContexto();
       document.dispatchEvent(new CustomEvent("app:contexto-invalido", { detail: j.error }));

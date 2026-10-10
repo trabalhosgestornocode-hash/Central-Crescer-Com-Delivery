@@ -93,14 +93,20 @@ export const PERMISSOES = {
   // organization_admin via Object.values(P), mesmo espírito de
   // BONIFICACAO_MENSAL_EXCLUIR/DASHBOARD_EXECUTIVO_EXCLUIR.
   PARSER_FD_EXCLUIR: "parser_food_delivery.excluir",
+
+  // Checklist Operacional — SOMENTE visualizar (o resumo da unidade). Existe para o perfil de exibição
+  // (`display_operator`, computador ligado à TV): ele tem ESTA permissão e nenhuma outra. Todos os papéis
+  // que já abriam o Checklist (via integracoes.ver) a recebem junto com a leitura, então ninguém perde acesso.
+  CHECKLIST_VISUALIZAR: "checklist.visualizar",
 };
 
 const P = PERMISSOES;
 
-/** Só leitura — a base de todos os papéis. */
+/** Só leitura — a base de todos os papéis operacionais. (Não inclui o perfil de exibição.) */
 const LEITURA = [
   P.DASHBOARD_VER, P.PRODUTOS_VER, P.INSUMOS_VER, P.CMV_VER, P.VENDAS_VER,
   P.INTEGRACOES_VER, P.DASHBOARD_EXECUTIVO_VER, P.BONIFICACAO_MENSAL_VER, P.PARSER_FD_VER,
+  P.CHECKLIST_VISUALIZAR,
 ];
 
 /** @type {Record<string, string[]>} */
@@ -119,10 +125,21 @@ const POR_PAPEL = {
   operations: [...LEITURA, P.PRODUTOS_EDITAR, P.INSUMOS_EDITAR, P.VENDAS_IMPORTAR, P.DASHBOARD_EXECUTIVO_LANCAR, P.DASHBOARD_EXECUTIVO_CORRIGIR, P.DASHBOARD_EXECUTIVO_CONFIGURAR, P.DASHBOARD_EXECUTIVO_RESETAR_TESTE, P.BONIFICACAO_MENSAL_LANCAR, P.PARSER_FD_IMPORTAR, P.PARSER_FD_CLASSIFICAR],
 
   viewer: [...LEITURA],
+
+  // Perfil de EXIBIÇÃO (computador ligado à TV da loja): vê o Checklist Operacional da unidade e MAIS NADA.
+  // Deliberadamente fora de LEITURA e sem nenhum item dela (nem integracoes.ver). Só existe como vínculo de
+  // UNIDADE (nunca de empresa, nunca consolidado) — ver PAPEIS_UNIDADE/PAPEIS_VINCULO abaixo.
+  display_operator: [P.CHECKLIST_VISUALIZAR],
 };
 
-/** Papéis atribuíveis a um vínculo. `platform_superadmin` NÃO está aqui: é global. */
-export const PAPEIS_VINCULO = Object.keys(POR_PAPEL);
+/** O perfil de exibição (Operador de Exibição). Valor do enum `papel_acesso` (migration 112). */
+export const PAPEL_EXIBICAO = "display_operator";
+
+/** Papéis de vínculo de EMPRESA (usuarios_organizacoes). O de exibição NÃO entra: ele é só de unidade. `platform_superadmin` NÃO está aqui: é global. */
+export const PAPEIS_VINCULO = Object.keys(POR_PAPEL).filter((p) => p !== PAPEL_EXIBICAO);
+
+/** Papéis atribuíveis a um vínculo de UNIDADE (usuarios_unidades): os de empresa + o de exibição. */
+export const PAPEIS_UNIDADE = Object.keys(POR_PAPEL);
 
 /** Rótulos em pt-BR — usados no painel e nas telas de seleção. */
 export const PAPEIS_ROTULO = {
@@ -132,6 +149,7 @@ export const PAPEIS_ROTULO = {
   finance: "Financeiro",
   operations: "Operação",
   viewer: "Consulta",
+  display_operator: "Operador de Exibição",
 };
 
 /**
@@ -153,9 +171,14 @@ export function temPermissao(permissoes, necessaria) {
   return Array.isArray(permissoes) && permissoes.includes(necessaria);
 }
 
-/** @param {string} papel */
+/** Papel válido para um vínculo de EMPRESA. @param {string} papel */
 export function papelValido(papel) {
   return PAPEIS_VINCULO.includes(papel);
+}
+
+/** Papel válido para um vínculo de UNIDADE (inclui o de exibição). @param {string} papel */
+export function papelUnidadeValido(papel) {
+  return PAPEIS_UNIDADE.includes(papel);
 }
 
 /** @param {string} papel */

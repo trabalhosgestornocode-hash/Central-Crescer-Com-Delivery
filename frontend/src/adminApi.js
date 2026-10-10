@@ -87,6 +87,8 @@ export const adminApi = {
   usuarios: (f) => get(`/usuarios${qs(f)}`),
   usuario: (id) => get(`/usuarios/${id}`),
   papeis: () => get("/usuarios/papeis"),
+  // Cargos de um vínculo de UNIDADE: os de empresa + o Operador de Exibição (marcado `somenteUnidade`).
+  papeisUnidade: () => get("/usuarios/papeis-unidade"),
   criarUsuario: (dados) => post("/usuarios", dados),
   atualizarUsuario: (id, dados) => patch(`/usuarios/${id}`, dados),
   excluirUsuario: (id) => del(`/usuarios/${id}`),

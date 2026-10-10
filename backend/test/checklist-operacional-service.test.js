@@ -273,9 +273,9 @@ function montarApp() {
     const papel = req.headers["x-teste-papel"];
     if (papel) {
       const modulos = String(req.headers["x-teste-modulos"] ?? MODULOS.IFOOD).split(",").filter(Boolean);
-      // `x-teste-sem`: retira uma permissão do papel (prova o 403 de PERMISSÃO, não só o de módulo).
-      const sem = req.headers["x-teste-sem"];
-      const permissoes = permissoesDoPapel(papel).filter((p) => p !== sem);
+      // `x-teste-sem`: retira permissões do papel (lista separada por vírgula; prova o 403 de PERMISSÃO, não só o de módulo).
+      const sem = String(req.headers["x-teste-sem"] ?? "").split(",").filter(Boolean);
+      const permissoes = permissoesDoPapel(papel).filter((p) => !sem.includes(p));
       req.acesso = { papel, permissoes, modulos, impersonando: false };
       req.tenant = { organizacaoId: ORG, unidadeId: null }; // sem unidade: o controller para ANTES de qualquer banco
     }
@@ -310,18 +310,29 @@ describe("HTTP — permissões do Checklist", async () => {
     assert.equal(r.status, 403);
   });
 
-  test("todo papel com INTEGRACOES_VER passa a autorização (para no 'selecione a unidade')", async () => {
-    for (const papel of ["organization_admin", "unit_manager", "finance", "operations", "viewer"]) {
-      const pode = permissoesDoPapel(papel).includes("integracoes.ver");
+  test("todo papel com checklist.visualizar OU integracoes.ver passa a autorização (para no 'selecione a unidade')", async () => {
+    for (const papel of ["organization_admin", "unit_manager", "finance", "operations", "viewer", "display_operator"]) {
+      const perms = permissoesDoPapel(papel);
+      const pode = perms.includes("checklist.visualizar") || perms.includes("integracoes.ver");
       const r = await chamar(server, "/api/v1/resumo", h(papel));
       assert.equal(r.status, pode ? 400 : 403, `papel ${papel}`);
     }
   });
 
-  test("sem a permissão integracoes.ver: 403, mesmo com o módulo iFood contratado", async () => {
-    const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-sem": "integracoes.ver" }));
+  test("sem checklist.visualizar NEM integracoes.ver: 403, mesmo com o módulo iFood contratado", async () => {
+    const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-sem": "integracoes.ver,checklist.visualizar" }));
     assert.equal(r.status, 403);
     assert.ok(!JSON.stringify(r.json).match(/pedido|merchant|order/i), "403 não traz dado nenhum");
+  });
+
+  test("perfil de exibição: só checklist.visualizar já basta (e é a ÚNICA permissão dele)", async () => {
+    assert.deepEqual(permissoesDoPapel("display_operator"), ["checklist.visualizar"]);
+    assert.equal((await chamar(server, "/api/v1/resumo", h("display_operator"))).status, 400); // passou a autorização
+  });
+
+  test("sessão aberta ANTES da mudança (só integracoes.ver, sem a permissão nova) continua abrindo o Checklist", async () => {
+    const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-sem": "checklist.visualizar" }));
+    assert.equal(r.status, 400);
   });
 
   test("só GET /resumo existe — nenhuma rota de escrita", () => {

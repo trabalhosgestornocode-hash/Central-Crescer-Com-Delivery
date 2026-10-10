@@ -15,6 +15,7 @@ import { renderChecklistOperacional } from "./checklistOperacional.js";
 import { renderAgente } from "./agente.js";
 import { sincronizarContextoPainel } from "./agentePainel.js";
 import { resetScrollLock } from "./scrollLock.js";
+import { ehPerfilExibicao, itemPermitidoAoPerfil, rotaInicialDoPerfil } from "./perfilExibicao.js";
 
 /**
  * Um item da sidebar está liberado para a empresa do contexto atual?
@@ -22,8 +23,13 @@ import { resetScrollLock } from "./scrollLock.js";
  *   1. gate-pai da SEÇÃO (SECAO_MODULO) — ex.: sem `inteligencia`, nenhum item
  *      da seção "INTELIGÊNCIA" passa, mesmo que tenha módulo próprio;
  *   2. módulo do próprio item (ex.: `agente_ia`).
+ *
+ * Perfil de EXIBIÇÃO (computador da TV): só o Checklist, sempre. Quem decide o resto (módulo iFood, permissão) é
+ * o backend; sem o módulo, a própria página do Checklist mostra "sem acesso". Isso também evita o laço de
+ * redirecionamento: a rota de saída existe mesmo sem módulo.
  */
 const acessivel = (item) => {
+  if (ehPerfilExibicao(state.sessao)) return itemPermitidoAoPerfil(item, state.sessao);
   const gateSecao = SECAO_MODULO[item.secao];
   if (gateSecao && !temModulo(gateSecao)) return false;
   return !item.modulo || temModulo(item.modulo);
@@ -36,7 +42,7 @@ const acessivel = (item) => {
  * uma rota de saída: nunca cai num loop de redirecionamento.
  */
 export function primeiraRotaAcessivel() {
-  return MENU.find(acessivel)?.id ?? "configuracoes";
+  return rotaInicialDoPerfil(state.sessao) ?? MENU.find(acessivel)?.id ?? "configuracoes";
 }
 
 // Navega para uma rota da sidebar

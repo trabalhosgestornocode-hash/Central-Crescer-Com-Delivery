@@ -52,6 +52,8 @@ import { montarPainelGlobal, alternarPainel } from "./agentePainel.js";
 import { montarSelecao, registrarAcessoRecente } from "./selecaoAmbiente.js";
 import { montarSeletorUnidade } from "./seletorUnidade.js";
 import { iniciar as iniciarRealtime } from "./realtime/realtimeManager.js";
+import { ehPerfilExibicao, itemPermitidoAoPerfil, rotaInicialDoPerfil } from "./perfilExibicao.js";
+import { iniciarRenovacaoAutomatica } from "./renovacaoContexto.js";
 
 // ---------- Ações de navegação do Agente Crescer (Etapa F.1) ----------
 // Registradas UMA vez, aqui — app.js é o topo do grafo de imports (nada o
@@ -91,7 +93,11 @@ function montarMenu() {
     // Um item sem `modulo` é sempre visível; com `modulo`, só se a empresa do
     // contexto atual contratou (ver sessao.js#temModulo — bloqueio real está
     // na API, isto aqui é só não oferecer o que já sabemos que vai dar 403).
-    const itens = MENU.filter((m) => m.secao === secao && (!m.modulo || temModulo(m.modulo)));
+    // Perfil de EXIBIÇÃO (computador da TV): SÓ o Checklist, sem checar módulo aqui (se a empresa não tem o
+    // módulo, a página do Checklist mostra "sem acesso" — nunca um menu vazio nem outra tela).
+    const exibicao = ehPerfilExibicao(state.sessao);
+    const itens = MENU.filter((m) => m.secao === secao
+      && (exibicao ? itemPermitidoAoPerfil(m, state.sessao) : (!m.modulo || temModulo(m.modulo))));
     if (!itens.length) return "";
     return `<li class="menu-secao">${secao}</li>` + itens.map((m) => {
       const logo = (m.integ && INTEGRACOES_LOGOS[m.integ]) || m.logo;
@@ -109,8 +115,12 @@ function montarMenu() {
   // Entradas do Agente Crescer FORA do menu (botão da topbar; o painel global e
   // os botões "✦ Analisar" das telas são cobertos em agentePainel.js) — mesmo
   // gate DUPLO do item "ia": seção `inteligencia` + módulo `agente_ia`.
+  const exibicaoTopo = ehPerfilExibicao(state.sessao);
   const btnAgente = el("#btn-agente");
-  if (btnAgente) btnAgente.hidden = !(temModulo("inteligencia") && temModulo("agente_ia"));
+  if (btnAgente) btnAgente.hidden = exibicaoTopo || !(temModulo("inteligencia") && temModulo("agente_ia"));
+  // Perfil de exibição: sem atualizar dados do app (carga de CMV) nem alertas operacionais (levam ao Dashboard).
+  // O painel do Checklist se atualiza sozinho. Para os demais papéis, voltam a aparecer (a página pode ser reaproveitada).
+  for (const id of ["#btn-refresh", "#btn-notif"]) { const n = el(id); if (n) n.hidden = exibicaoTopo; }
 }
 
 // Relógio em tempo real (topbar)
@@ -265,7 +275,10 @@ function atualizarCabecalho() {
   el("#um-painel").hidden = !state.sessao.superadmin;
   // Trocar de unidade não faz sentido dentro de uma impersonação: o contexto
   // não veio de um vínculo do usuário, veio de um acesso de suporte.
-  el("#um-trocar").hidden = !!impersonando;
+  // Perfil de exibição: conta de UMA unidade — não há outra empresa/unidade para trocar (o backend também recusa).
+  const exibicao = ehPerfilExibicao(state.sessao);
+  el("#um-trocar").hidden = !!impersonando || exibicao;
+  el("#um2-empresas").hidden = exibicao;
 
   const barra = el("#imp-barra");
   barra.hidden = !impersonando;
@@ -321,6 +334,17 @@ async function mostrarApp({ rotaInicial } = {}) {
 
   mostrarTela("app");
   atualizarCabecalho();
+
+  // Perfil de EXIBIÇÃO (computador da TV): shell mínimo, direto no Checklist. Nada de tabelas comerciais, metas de
+  // CMV, carga de CMV nem painel do Agente — o backend recusaria (403) e não há tela para isso. A entrada vale para
+  // TODO caminho que passa por aqui (login, reentrada depois do vencimento do contexto, reinício do navegador).
+  if (ehPerfilExibicao(state.sessao)) {
+    limparComparacaoSalva();
+    montarMenu();
+    iniciarRelogio();
+    irPara(rotaInicialDoPerfil(state.sessao));
+    return;
+  }
 
   // Restaura o modo de comparação SÓ se for da MESMA unidade (sessionStorage
   // — sobrevive a um F5, nunca atravessa troca de unidade/empresa/logout;
@@ -847,6 +871,19 @@ function wireEventos() {
 
   // Sessão expirada (401): o login caiu, volta para o login.
   document.addEventListener("app:sessao-expirada", async () => { await logout(); mostrarLogin(); });
+
+  // Conta BLOQUEADA no meio do uso (403 CONTA_INATIVA): nada de reentrada automática. Encerra o contexto (app:logout fecha o
+  // Modo TV e tira os dados da tela; o servidor revoga o que ainda der), derruba o login local e mostra o login com o motivo.
+  // Trava contra repetição: o próprio encerramento chama a API e receberia o mesmo 403.
+  let encerrandoContaInativa = false;
+  document.addEventListener("app:conta-inativa", async (e) => {
+    if (encerrandoContaInativa) return;
+    encerrandoContaInativa = true;
+    try { await logout(); } finally { encerrandoContaInativa = false; }
+    mostrarLogin();
+    const caixa = el("#login-erro");
+    if (caixa) { caixa.textContent = e.detail || "Usuário inativo. Contate o administrador."; caixa.hidden = false; }
+  });
   // MFA exigida pelo backend numa rota protegida (enforcement ligado): a sessão
   // é válida, só falta o 2º fator. Pede o código e, se verificar, recarrega.
   document.addEventListener("app:mfa-requerida", async () => {
@@ -952,6 +989,8 @@ async function boot() {
   // acontece quando resetarEscopoDeContexto() disparar pela 1ª vez (dentro de
   // mostrarApp/encaminhar, mais abaixo). Ver realtime/realtimeManager.js.
   iniciarRealtime();
+  // Renovação automática do contexto: só age para o perfil de exibição (computador da TV); para os demais é inerte.
+  iniciarRenovacaoAutomatica();
   try {
     if (await restaurarSessao()) await encaminhar();
     else mostrarLogin();

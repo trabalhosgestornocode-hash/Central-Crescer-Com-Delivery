@@ -392,7 +392,8 @@ async function viewUsuarios() {
   cache.empresas = empresas;
   cache.papeis = papeis;
 
-  const semEmpresa = usuarios.filter((u) => !u.empresas.some((x) => x.ativo) && !u.superadmin);
+  // Conta de exibição (TV) só tem vínculo de unidade — por desenho, não é "pendente de associação".
+  const semEmpresa = usuarios.filter((u) => !u.empresas.some((x) => x.ativo) && !u.superadmin && !u.contaExibicao);
 
   const linhas = usuarios.map((u) => [
     `<div class="adm-cel-empresa">
@@ -403,7 +404,7 @@ async function viewUsuarios() {
     u.online ? '<span class="pill ok">Online</span>' : '<span class="pill muted">Offline</span>',
     u.empresas.length
       ? u.empresas.map((x) => `<span class="adm-tag ${x.ativo ? "" : "adm-tag--off"}" title="${escapeHtml(x.papelRotulo)}">${escapeHtml(x.empresaNome)}</span>`).join(" ")
-      : '<span class="pill muted">nenhuma</span>',
+      : (u.contaExibicao ? '<span class="pill info" title="Conta dedicada à TV: vê só o Checklist de uma unidade">Exibição (TV)</span>' : '<span class="pill muted">nenhuma</span>'),
     `<div class="adm-acoes-cel">
        <button class="btn btn-primary btn-sm" data-adm-acao="usuario-associar" data-id="${escapeHtml(u.id)}" data-nome="${escapeHtml(u.nome ?? u.email ?? "")}">Associar</button>
        <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-ver" data-id="${escapeHtml(u.id)}">Detalhes</button>
@@ -521,10 +522,13 @@ async function abrirDetalheUsuario(id) {
     ? u.unidades.map((x) => `
       <div class="adm-vinculo">
         <span class="adm-vinculo-nome"><b>${escapeHtml(x.unidadeNome)}</b>${x.ativo ? "" : '<span class="pill bad">bloqueado</span>'}</span>
-        <select class="adm-vinculo-papel" data-adm-acao="vinculo-unidade-papel" data-usuario="${escapeHtml(u.id)}" data-unidade="${escapeHtml(x.unidadeId)}">
+        ${x.papel === "display_operator"
+    // Conta de exibição (TV): o papel é fixo e exclusivo — sem seletor (as opções de empresa não se aplicam a ela).
+    ? '<span class="pill muted adm-vinculo-papel" data-papel-fixo="display_operator">Operador de Exibição</span>'
+    : `<select class="adm-vinculo-papel" data-adm-acao="vinculo-unidade-papel" data-usuario="${escapeHtml(u.id)}" data-unidade="${escapeHtml(x.unidadeId)}">
           <option value="">Herdar da empresa</option>
           ${papeis.map((p) => `<option value="${escapeHtml(p.valor)}" ${p.valor === x.papel ? "selected" : ""}>${escapeHtml(p.rotulo)}</option>`).join("")}
-        </select>
+        </select>`}
         <button class="btn btn-ghost btn-sm" data-adm-acao="vinculo-unidade-toggle"
                 data-usuario="${escapeHtml(u.id)}" data-unidade="${escapeHtml(x.unidadeId)}" data-ativo="${x.ativo}">
           ${x.ativo ? "Bloquear" : "Liberar"}
@@ -593,6 +597,7 @@ async function abrirDetalheUsuario(id) {
       <div class="adm-det-acoes">
         <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-associar" ${dId}>+ Associar empresa</button>
         <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-associar-unidade" ${dId}>+ Associar unidade</button>
+        <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-exibicao" ${dId}>+ Acesso de exibição (TV)</button>
         <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-senha" ${dId}>Redefinir senha</button>
         <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-email" ${dId} data-email="${escapeHtml(u.emailLogin ?? u.email ?? "")}">Alterar e-mail</button>
         <button class="btn btn-ghost btn-sm" data-adm-acao="usuario-logout" ${dId}>Forçar logout</button>
@@ -1711,6 +1716,42 @@ const ACOES = {
       const unidades = await adminApi.unidadesDaEmpresa(e.target.value);
       el("#ua-unidade").innerHTML = unidades.length
         ? unidades.map((un) => `<option value="${escapeHtml(un.id)}">${escapeHtml(un.nome)}${un.ativo ? "" : " (inativa)"}</option>`).join("")
+        : `<option value="">Nenhuma unidade nesta empresa</option>`;
+    });
+  },
+
+  // Conta DEDICADA ao computador da TV (Operador de Exibição): vínculo SÓ de unidade, sem vínculo de empresa — é o
+  // único caso em que uma unidade é associada sem empresa. O backend exige a exclusividade (409 se a conta já tem
+  // empresa ou outro cargo); aqui só se oferece o fluxo.
+  "usuario-exibicao": async ({ id, nome }) => {
+    const empresas = await adminApi.empresas();
+    if (!empresas.length) { toast("Nenhuma empresa cadastrada."); return; }
+    const primeira = empresas[0].id;
+    const unidadesIniciais = await adminApi.unidadesDaEmpresa(primeira);
+    const opcoesUnidade = (lista) => lista.map((un) => ({ valor: un.id, rotulo: un.nome + (un.ativo ? "" : " (inativa)") }));
+    abrirModal({
+      titulo: `Acesso de exibição (TV) — ${nome}`,
+      corpo: `<div class="adm-aviso">Conta exclusiva do computador da TV: vê <b>somente o Checklist Operacional</b> desta unidade, sem Financeiro, Vendas, CMV nem menus administrativos. Não pode ter vínculo de empresa nem outros cargos — use uma conta própria para a TV.</div>`
+        + grade(
+          selecao({ id: "ex-empresa", label: "Empresa", valor: primeira, opcoes: empresas.map((e) => ({ valor: e.id, rotulo: e.nome })) })
+          + selecao({
+            id: "ex-unidade", label: "Unidade", opcoes: opcoesUnidade(unidadesIniciais),
+            vazio: unidadesIniciais.length ? "" : "Nenhuma unidade nesta empresa",
+          }),
+        ),
+      confirmar: "Criar acesso de exibição",
+      aoConfirmar: async () => {
+        const unidadeId = valor("ex-unidade");
+        if (!unidadeId) throw new Error("Selecione uma unidade.");
+        await adminApi.associarUnidade(id, unidadeId, "display_operator");
+        toast("Acesso de exibição criado.");
+        recarregarAdmin();
+      },
+    });
+    el("#ex-empresa").addEventListener("change", async (e) => {
+      const unidades = await adminApi.unidadesDaEmpresa(e.target.value);
+      el("#ex-unidade").innerHTML = unidades.length
+        ? opcoesUnidade(unidades).map((o) => `<option value="${escapeHtml(o.valor)}">${escapeHtml(o.rotulo)}</option>`).join("")
         : `<option value="">Nenhuma unidade nesta empresa</option>`;
     });
   },
