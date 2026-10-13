@@ -223,6 +223,22 @@ export async function obterCredencial({ conexaoId, appType }) {
     .eq("conexao_id", conexaoId).eq("app_type", appType).maybeSingle());
 }
 
+/**
+ * Lojas ADICIONAIS vivas da conexão que o poller consulta (`ativa`/`liberada`; migration 117) — o que uma troca de credencial NÃO pode perder.
+ * Sem a tabela (migration ainda não aplicada) = nenhuma loja adicional. Qualquer OUTRO erro SOBE: quem chama (a proteção da credencial)
+ * recusa a troca em vez de adivinhar (falha segura).
+ * @returns {Promise<string[]>} merchant ids
+ */
+export async function listarLojasExtrasVivasDaConexao({ conexaoId, db = supabase }) {
+  if (!conexaoId) throw ApiError.internal("conexaoId ausente ao listar lojas da conexão iFood.");
+  const { data, error } = await db.from("ifood_conexao_lojas").select("merchant_id").eq("conexao_id", conexaoId).in("estado", ["ativa", "liberada"]);
+  if (error) {
+    if (error.code === "42P01" || error.code === "PGRST205" || error.code === "PGRST200") return [];
+    throw ApiError.internal(error.message);
+  }
+  return (data ?? []).map((l) => l.merchant_id);
+}
+
 export async function listarCredenciaisDaConexao({ conexaoId }) {
   if (!conexaoId) throw ApiError.internal("conexaoId ausente.");
   return ok(await supabase.from(T.credenciais)

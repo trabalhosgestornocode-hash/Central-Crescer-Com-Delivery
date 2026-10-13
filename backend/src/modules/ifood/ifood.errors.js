@@ -35,6 +35,8 @@ const CATALOGO = {
     "Essa autorização já foi concluída ou cancelada. Gere um novo código se precisar reconectar."],
   IFOOD_OAUTH_CODIGO_INVALIDO: [400,
     "Não foi possível concluir a autorização. Verifique o código de autorização fornecido pelo iFood e tente novamente, ou gere um novo código."],
+  IFOOD_CREDENCIAL_SEM_COBERTURA: [409,
+    "A nova autorização do iFood não comprova o acesso a todas as lojas já conectadas desta unidade (ou a credencial mudou durante a troca). Nada foi alterado: a conexão atual foi mantida. Fale com o suporte da plataforma antes de tentar de novo."],
   IFOOD_USER_CODE_FALHOU: [502,
     "Não foi possível gerar o código de vínculo com o iFood. Tente novamente em alguns minutos."],
   IFOOD_TOKEN_TROCA_FALHOU: [502,
