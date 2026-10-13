@@ -17,6 +17,7 @@ import * as repo from "./checklistOperacional.repository.js";
 import * as ifoodRepo from "../ifood/ifood.repository.js";
 import { orderLiberadoParaUnidade } from "../ifood/ifoodToken.service.js";
 import { montarResumo, diaOperacional, LIMITE_ATIVO_MIN } from "./checklistOperacional.calc.js";
+import { anotarOrigem } from "./checklistOperacional.lojas.js";
 import { EVENTO_PEDIDOS_ATUALIZADOS, checklistRealtimeHabilitado } from "../ifood/ifoodPedidosAviso.js";
 
 export const VERSAO_CONTRATO = 1;
@@ -115,6 +116,10 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
     resumo.alertas.push({ codigo: "eventos_com_falha", nivel: "atencao", quantidade: n, texto: `${n} ${n === 1 ? "evento do iFood não processado" : "eventos do iFood não processados"}` });
   }
 
+  // Várias lojas iFood na mesma unidade: acrescenta a ORIGEM (rótulo por pedido, contagem por loja, aviso de loja sem recebimento).
+  // Com uma loja só devolve null e a resposta fica IDÊNTICA à de antes. Nunca lança.
+  const origemLojas = await anotarOrigem({ resumo, pedidos, conexao, repo: r, organizacaoId, unidadeId, agoraMs }).catch(() => null);
+
   return {
     versao: VERSAO_CONTRATO,
     origem: "api",
@@ -123,6 +128,7 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
     integracao: { ...integracao, pilotoOrder: piloto(unidadeId) === true },
     semPedidosNoDia: resumo.contagemDia.recebidos === 0 && resumo.contagemDia.emAndamento === 0,
     ...resumo,
+    ...(origemLojas ? { lojas: origemLojas.lojas } : {}),
     avaliacoes: { disponivel: false, motivo: "As avaliações do iFood ainda não estão conectadas à Central." },
     // Realtime: o Events emite este evento SÓ no tópico privado da unidade depois de gravar um pedido; a tela,
     // ao receber (ou ao resincronizar), consulta este endpoint de novo. Payload: só tipo + organização + unidade.

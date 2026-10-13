@@ -13,6 +13,7 @@ export const COLUNAS_PEDIDO_CHECKLIST = [
   "order_id", "display_id", "status_oficial", "status_oficial_em", "order_type", "delivery_by", "order_timing", "is_test",
   "order_created_at", "placed_event_created_at", "confirmed_event_at", "ready_event_at", "dispatch_event_at", "cancel_event_at",
   "primeiro_evento_em", "criado_em",
+  "merchant_id",   // só para agrupar por loja no servidor (origem Sanduíches/Saladas); nunca sai na resposta
 ].join(", ");
 
 /** Teto de linhas por consulta: uma loja não recebe isso em 2 dias; acima disso o resumo avisa (truncado). */
@@ -46,4 +47,35 @@ export async function contarAbertosAntesDe({ organizacaoId, unidadeId, antesIso,
     .not("is_test", "is", true);   // IS NOT TRUE: inclui null e false
   if (error) throw ApiError.internal(error.message);
   return count ?? 0;
+}
+
+/**
+ * Lojas ADICIONAIS da conexão da unidade (migration 117): só merchant, rótulo e estado — nada de token nem id de usuário.
+ * Sem a tabela (migration ainda não aplicada) o erro sobe e o chamador trata como "sem lojas adicionais".
+ */
+export async function listarLojasExtras({ organizacaoId, unidadeId, conexaoId, db = supabase }) {
+  if (!organizacaoId || !unidadeId || !conexaoId) throw ApiError.internal("Escopo de tenant ausente na consulta de lojas do Checklist.");
+  const { data, error } = await db.from("ifood_conexao_lojas").select("merchant_id, rotulo, estado")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("conexao_id", conexaoId).neq("estado", "desativada");
+  if (error) throw ApiError.internal(error.message);
+  return data ?? [];
+}
+
+/**
+ * Nome da loja como o próprio iFood informa nos detalhes de um pedido (`merchant.name`), um por merchant do tenant.
+ * Só esse campo é lido do payload (nunca cliente, endereço, itens ou pagamento). Serve de rótulo quando não há um configurado.
+ * @returns {Promise<Map<string,string>>}
+ */
+export async function obterNomesDasLojas({ organizacaoId, unidadeId, merchantIds, db = supabase }) {
+  if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente na consulta de nomes de lojas do Checklist.");
+  const nomes = new Map();
+  for (const merchantId of merchantIds ?? []) {
+    const { data, error } = await db.from("ifood_pedidos").select("nome:details_payload->merchant->>name")
+      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("merchant_id", merchantId)
+      .not("details_payload", "is", null).limit(1);
+    if (error) throw ApiError.internal(error.message);
+    const nome = data?.[0]?.nome;
+    if (typeof nome === "string" && nome.trim()) nomes.set(merchantId, nome);
+  }
+  return nomes;
 }

@@ -64,6 +64,49 @@ export async function listarConexoesElegiveisParaEvents({ db = supabase } = {}) 
 }
 
 // =====================================================================
+// LOJAS ADICIONAIS DA CONEXÃO (migration 117)
+// =====================================================================
+
+/**
+ * Lojas ADICIONAIS que o poller pode consultar junto com a loja principal da conexão: só `ativa` e `liberada`.
+ * (`pendente`, `bloqueada` e `desativada` NUNCA entram.) Sem a migration 117 a tabela não existe: o erro sobe e quem
+ * chama (o poller) trata como "nenhuma loja adicional" — o recebimento da loja principal nunca depende disto.
+ * @returns {Promise<Array<{id, conexao_id, organizacao_id, unidade_id, merchant_id, estado, rotulo, verificacoes, liberada_em}>>}
+ */
+export async function listarLojasExtrasParaPolling({ conexaoIds, db = supabase }) {
+  if (!Array.isArray(conexaoIds) || conexaoIds.length === 0) return [];
+  return ok(await db.from("ifood_conexao_lojas")
+    .select("id, conexao_id, organizacao_id, unidade_id, merchant_id, estado, rotulo, verificacoes, liberada_em")
+    .in("conexao_id", conexaoIds)
+    .in("estado", ["ativa", "liberada"])) ?? [];
+}
+
+/**
+ * Conta a tentativa de uma loja `liberada` ANTES de consultá-la (atômico no banco). Devolve 'ok' (pode consultar),
+ * 'bloqueada' (tentativas esgotadas: o banco já bloqueou), 'estado_invalido' ou 'nao_encontrada'.
+ * @returns {Promise<string>}
+ */
+export async function iniciarVerificacaoLoja({ id, max }) {
+  const { data, error } = await supabase.rpc("ifood_loja_iniciar_verificacao", { p_id: id, p_max: max });
+  if (error) throw ApiError.internal(error.message);
+  return String(data ?? "");
+}
+
+/** `liberada` -> `ativa` (o iFood aceitou o merchant). @returns {Promise<boolean>} */
+export async function marcarLojaAtiva({ id }) {
+  const { data, error } = await supabase.rpc("ifood_loja_marcar_ativa", { p_id: id });
+  if (error) throw ApiError.internal(error.message);
+  return data === true;
+}
+
+/** `liberada`/`ativa` -> `bloqueada` (persistente: a loja NUNCA mais é consultada até nova liberação supervisionada). */
+export async function bloquearLoja({ id, motivo }) {
+  const { data, error } = await supabase.rpc("ifood_loja_bloquear", { p_id: id, p_motivo: motivo });
+  if (error) throw ApiError.internal(error.message);
+  return data === true;
+}
+
+// =====================================================================
 // EVENTOS
 // =====================================================================
 

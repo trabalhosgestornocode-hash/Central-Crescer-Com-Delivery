@@ -67,6 +67,8 @@ export function adaptarResumo(dados, { unidade, metas, recebidoEmMs }) {
     avaliacoes: dados?.avaliacoes ?? { disponivel: false },
     contagemDia: dados?.contagemDia ?? { concluidos: 0, cancelados: 0 },
     alertas: dados?.alertas ?? [],
+    // Várias lojas iFood na unidade: contagem por loja (rótulo, estado, recebidos…). Vazio com uma loja só.
+    lojas: Array.isArray(dados?.lojas) ? dados.lojas : [],
     aviso: avisoDe(dados),
     diaOperacional: dados?.diaOperacional ?? null,
     relogioOffsetMs: Number.isFinite(servidor) ? servidor - recebidoEmMs : 0,

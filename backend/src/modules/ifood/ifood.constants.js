@@ -247,6 +247,9 @@ export const IFOOD_EVENTS = {
   // depois que outra já pode ter assumido o lease.
   margemFencingAckMs: 15_000,
   maxTentativasProcessamento: 5,        // reprocessamento de eventos FALHOU (retry_count)
+  // Lojas ADICIONAIS da conexão (migration 117): quantas vezes uma loja `liberada` pode entrar no polling antes de ser bloqueada.
+  // Consultar merchant não autorizado é infração no iFood: poucas tentativas, e o bloqueio é PERSISTENTE.
+  lojaExtraMaxVerificacoes: 3,
   backoffMaxMs: 5 * 60_000,             // erro repetido: espera crescente, teto de 5 min
   // Doc (throttling): 429 = polling bloqueado por 5 min quando há eventos sem ACK.
   espera429Ms: 60_000,
