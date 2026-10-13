@@ -33,17 +33,30 @@ function validarAppType(appType, unidadeId) {
   return appType;
 }
 
+// LOJA-ALVO (credenciais independentes por merchant, migration 118): `merchantId` opcional escolhe UMA loja adicional já cadastrada da unidade.
+// Só vale para o app Order. A autorização dessa loja grava EXCLUSIVAMENTE na credencial própria dela; não habilita a loja no polling
+// (o estado da loja não muda) e nunca toca a credencial da conexão.
+async function resolverLojaAlvo({ repo, organizacaoId, unidadeId, appType, merchantId }) {
+  if (!merchantId) return null;
+  if (appType !== IFOOD_APP_ORDER) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_OAUTH_INVALIDO);
+  const loja = await repo.obterLojaAdicionalDaUnidade({ organizacaoId, unidadeId, merchantId });
+  if (!loja) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_NAO_ENCONTRADA);
+  return loja;
+}
+
 /**
  * ETAPA 1 — gera o código de vínculo.
- * @param {{organizacaoId, unidadeId, appType, usuarioId, deps?: object}} p
+ * @param {{organizacaoId, unidadeId, appType, usuarioId, merchantId?: string, deps?: object}} p
  * @returns {Promise<{sessionId, userCode, verificationUrl, verificationUrlComplete, expiraEm, appType}>}
  */
-export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuarioId, deps = {} }) {
+export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuarioId, merchantId = null, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
 
   validarAppType(appType, unidadeId);
+  // Antes de qualquer chamada ao iFood: a loja-alvo existe nesta unidade (e a conexão da unidade está viva).
+  const loja = await resolverLojaAlvo({ repo, organizacaoId, unidadeId, appType, merchantId });
   // Unidade do TENANT (req.tenant, via controller) — decide o app de teste no Financial
   // por unidade. Lança IFOOD_APP_SEM_CREDENCIAL se faltar ENV (sem fallback de app).
   const credencial = token.credenciaisDoApp(appType, { unidadeId });
@@ -76,10 +89,10 @@ export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuari
     verifierCifrado: cifrar(verifier),
     verificationUrl: resp?.verificationUrl ?? null,
     verificationUrlComplete: resp?.verificationUrlComplete ?? null,
-    expiraEm, criadoPor: usuarioId,
+    expiraEm, criadoPor: usuarioId, ...(loja ? { lojaId: loja.id } : {}),
   });
 
-  ifoodLog("info", "oauth.iniciado", { organizacaoId, unidadeId, appType, sessionId: sessao.id, expiraEm, origemCredencial });
+  ifoodLog("info", "oauth.iniciado", { organizacaoId, unidadeId, appType, sessionId: sessao.id, expiraEm, origemCredencial, ...(loja ? { lojaAlvo: true } : {}) });
 
   // NUNCA devolve o verifier.
   return {
@@ -117,6 +130,23 @@ export async function concluirAutorizacao({
   const verifier = decifrar(sessao.authorization_code_verifier_cifrado);
   if (!verifier) throw ifoodErro(IFOOD_ERROS.IFOOD_OAUTH_SESSAO_JA_USADA);
 
+  // Sessão de LOJA: a loja-alvo e a conexão da unidade são conferidas ANTES de trocar o código (o código não se perde por falta de destino).
+  let loja = null;
+  let conexaoDaLoja = null;
+  if (sessao.loja_id) {
+    try {
+      if (appType !== IFOOD_APP_ORDER) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_OAUTH_INVALIDO);
+      loja = await repo.obterLojaAdicionalDaUnidade({ organizacaoId, unidadeId, lojaId: sessao.loja_id });
+      if (!loja) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_NAO_ENCONTRADA);
+      conexaoDaLoja = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+      if (!conexaoDaLoja) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
+      if (loja.conexao_id !== conexaoDaLoja.id) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_OAUTH_INVALIDO);
+    } catch (e) {
+      await repo.fecharSessaoOAuth({ organizacaoId, unidadeId, sessaoId, status: "failed" });
+      throw e;
+    }
+  }
+
   // Uma sessão só pode ser concluída UMA vez: duas conclusões simultâneas
   // (duplo clique, duas abas) não podem ambas trocar o código.
   const reivindicada = await repo.reivindicarSessaoOAuth({ organizacaoId, unidadeId, sessaoId });
@@ -132,14 +162,15 @@ export async function concluirAutorizacao({
     throw e;
   }
 
-  const conexao = await repo.obterOuCriarConexao({ organizacaoId, unidadeId, criadoPor: usuarioId });
-  const gravacao = await gravarCredencialComProtecao({ conexao, appType, tokens, repo, token, organizacaoId, unidadeId, sessaoId });
+  // Loja-alvo: NUNCA cria nem altera a conexão da unidade; só a credencial própria da loja.
+  const conexao = conexaoDaLoja ?? await repo.obterOuCriarConexao({ organizacaoId, unidadeId, criadoPor: usuarioId });
+  const gravacao = await gravarCredencialComProtecao({ conexao, appType, tokens, repo, token, organizacaoId, unidadeId, sessaoId, loja });
   await repo.fecharSessaoOAuth({ organizacaoId, unidadeId, sessaoId, status: "authorized" });
 
   ifoodLog("info", "oauth.concluido", {
     organizacaoId, unidadeId, appType, conexaoId: conexao.id,
-    credencialSubstituida: gravacao.substituida, lojasNovasNoToken: gravacao.novasLojas?.length ?? 0,
+    credencialSubstituida: gravacao.substituida, lojasNovasNoToken: gravacao.novasLojas?.length ?? 0, ...(loja ? { lojaAlvo: true } : {}),
   });
 
-  return { appType, status: "authorized", conexaoStatus: conexao.status };
+  return { appType, status: "authorized", conexaoStatus: conexao.status, ...(loja ? { lojaAlvo: true } : {}) };
 }

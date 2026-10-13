@@ -20,6 +20,8 @@ const T = {
   conexoes: "ifood_conexoes",
   credenciais: "ifood_credenciais",
   sessoes: "ifood_oauth_sessoes",
+  lojas: "ifood_conexao_lojas",
+  credenciaisLoja: "ifood_loja_credenciais",   // migration 118: credencial Order PRÓPRIA de uma loja adicional
 };
 
 function exigirTenant(organizacaoId, unidadeId) {
@@ -39,11 +41,12 @@ const ok = (res) => {
 
 export async function criarSessaoOAuth({
   organizacaoId, unidadeId, appType, userCode, verifierCifrado,
-  verificationUrl, verificationUrlComplete, expiraEm, criadoPor,
+  verificationUrl, verificationUrlComplete, expiraEm, criadoPor, lojaId = null,
 }) {
   exigirTenant(organizacaoId, unidadeId);
   return ok(await supabase.from(T.sessoes).insert({
     organizacao_id: organizacaoId, unidade_id: unidadeId, app_type: appType,
+    ...(lojaId ? { loja_id: lojaId } : {}),   // só quando há loja-alvo: sem a coluna (migration 118 ausente) o fluxo da conexão segue igual
     user_code: userCode,
     authorization_code_verifier_cifrado: verifierCifrado ?? null,
     verification_url: verificationUrl ?? null,
@@ -217,7 +220,14 @@ export async function definirMerchantDaConexao({
 // CREDENCIAIS (tokens cifrados por app) — sempre via conexão do tenant
 // =====================================================================
 
-export async function obterCredencial({ conexaoId, appType }) {
+/**
+ * Credencial do app. Sem `lojaId`: a da CONEXÃO (como sempre). Com `lojaId`: a credencial PRÓPRIA da loja adicional (118) — nunca cai de
+ * volta na da conexão (quem pede a da loja e não a encontra recebe null).
+ */
+export async function obterCredencial({ conexaoId, appType, lojaId = null }) {
+  if (lojaId) {
+    return ok(await supabase.from(T.credenciaisLoja).select("*").eq("loja_id", lojaId).eq("app_type", appType).maybeSingle());
+  }
   if (!conexaoId) throw ApiError.internal("conexaoId ausente na consulta de credencial iFood.");
   return ok(await supabase.from(T.credenciais).select("*")
     .eq("conexao_id", conexaoId).eq("app_type", appType).maybeSingle());
@@ -231,12 +241,52 @@ export async function obterCredencial({ conexaoId, appType }) {
  */
 export async function listarLojasExtrasVivasDaConexao({ conexaoId, db = supabase }) {
   if (!conexaoId) throw ApiError.internal("conexaoId ausente ao listar lojas da conexão iFood.");
-  const { data, error } = await db.from("ifood_conexao_lojas").select("merchant_id").eq("conexao_id", conexaoId).in("estado", ["ativa", "liberada"]);
+  const { data, error } = await db.from(T.lojas).select("id, merchant_id").eq("conexao_id", conexaoId).in("estado", ["ativa", "liberada"]);
   if (error) {
-    if (error.code === "42P01" || error.code === "PGRST205" || error.code === "PGRST200") return [];
+    if (error.code === TABELA_AUSENTE_PG || error.code === "PGRST205" || error.code === "PGRST200") return [];
     throw ApiError.internal(error.message);
   }
-  return (data ?? []).map((l) => l.merchant_id);
+  const lojas = data ?? [];
+  // Loja com credencial PRÓPRIA não depende do token da conexão: trocar a credencial da conexão não a afeta (nem a cobre).
+  const proprias = await lojasComCredencialPropria({ lojaIds: lojas.map((l) => l.id), db });
+  return lojas.filter((l) => !proprias.has(l.id)).map((l) => l.merchant_id);
+}
+
+const TABELA_AUSENTE_PG = "42P01";
+
+/**
+ * Entre estas lojas, as que têm credencial Order PRÓPRIA (118): Map(lojaId -> status da credencial). Tabela ausente = nenhuma
+ * (migration ainda não aplicada); qualquer OUTRO erro sobe — quem chama decide (o poller não consulta a loja às cegas).
+ * @returns {Promise<Map<string, string>>}
+ */
+export async function lojasComCredencialPropria({ lojaIds, db = supabase }) {
+  const mapa = new Map();
+  if (!Array.isArray(lojaIds) || lojaIds.length === 0) return mapa;
+  const { data, error } = await db.from(T.credenciaisLoja).select("loja_id, status").eq("app_type", "order").in("loja_id", lojaIds);
+  if (error) {
+    if (error.code === TABELA_AUSENTE_PG || error.code === "PGRST205" || error.code === "PGRST200") return mapa;
+    throw ApiError.internal(error.message);
+  }
+  for (const c of data ?? []) mapa.set(c.loja_id, c.status);
+  return mapa;
+}
+
+/**
+ * Loja ADICIONAL da unidade do tenant (para o OAuth direcionado). Aceita `merchantId` OU `lojaId`; só lojas vivas (não `desativada`).
+ * Tenant sempre conferido no filtro. null se não existir.
+ */
+export async function obterLojaAdicionalDaUnidade({ organizacaoId, unidadeId, merchantId = null, lojaId = null, db = supabase }) {
+  exigirTenant(organizacaoId, unidadeId);
+  if (!merchantId && !lojaId) throw ApiError.internal("merchantId ou lojaId obrigatório ao buscar loja adicional.");
+  let q = db.from(T.lojas).select("id, conexao_id, organizacao_id, unidade_id, merchant_id, rotulo, estado")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).neq("estado", "desativada");
+  q = lojaId ? q.eq("id", lojaId) : q.eq("merchant_id", String(merchantId).toLowerCase());
+  const { data, error } = await q.maybeSingle();
+  if (error) {
+    if (error.code === TABELA_AUSENTE_PG || error.code === "PGRST205" || error.code === "PGRST200") return null;
+    throw ApiError.internal(error.message);
+  }
+  return data ?? null;
 }
 
 export async function listarCredenciaisDaConexao({ conexaoId }) {
@@ -252,8 +302,14 @@ export async function listarCredenciaisDaConexao({ conexaoId }) {
  * e o refresh anterior é preservado (nunca sobrescrito por null).
  */
 export async function salvarCredencial({
-  conexaoId, appType, accessTokenCifrado, refreshTokenCifrado, expiraEm, tokenType,
+  conexaoId, appType, accessTokenCifrado, refreshTokenCifrado, expiraEm, tokenType, lojaId = null,
 }) {
+  if (lojaId) {
+    // Credencial PRÓPRIA da loja adicional: tenant derivado da loja pelo gatilho do banco (118).
+    const linhaLoja = { loja_id: lojaId, app_type: appType, access_token_cifrado: accessTokenCifrado, expira_em: expiraEm, token_type: tokenType ?? null, status: "ativa" };
+    if (refreshTokenCifrado !== undefined) linhaLoja.refresh_token_cifrado = refreshTokenCifrado;
+    return ok(await supabase.from(T.credenciaisLoja).upsert(linhaLoja, { onConflict: "loja_id,app_type" }).select().single());
+  }
   if (!conexaoId) throw ApiError.internal("conexaoId ausente ao salvar credencial iFood.");
   const linha = {
     conexao_id: conexaoId, app_type: appType,
@@ -269,10 +325,11 @@ export async function salvarCredencial({
  * `seAccessCifradoIgual`: só atualiza se o access token gravado ainda for o que
  * quem chama leu (compare-and-set) — não sobrescreve uma renovação concorrente.
  */
-export async function atualizarCredencial({ conexaoId, appType, campos, seAccessCifradoIgual }) {
-  if (!conexaoId) throw ApiError.internal("conexaoId ausente ao atualizar credencial iFood.");
-  let q = supabase.from(T.credenciais).update(campos)
-    .eq("conexao_id", conexaoId).eq("app_type", appType);
+export async function atualizarCredencial({ conexaoId, appType, campos, seAccessCifradoIgual, lojaId = null }) {
+  if (!lojaId && !conexaoId) throw ApiError.internal("conexaoId ausente ao atualizar credencial iFood.");
+  let q = lojaId
+    ? supabase.from(T.credenciaisLoja).update(campos).eq("loja_id", lojaId).eq("app_type", appType)
+    : supabase.from(T.credenciais).update(campos).eq("conexao_id", conexaoId).eq("app_type", appType);
   if (seAccessCifradoIgual !== undefined) q = q.eq("access_token_cifrado", seAccessCifradoIgual);
   return ok(await q.select().maybeSingle());
 }

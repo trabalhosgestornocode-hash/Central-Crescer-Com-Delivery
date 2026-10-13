@@ -354,12 +354,14 @@ test("repositório: chama as funções SQL certas com os parâmetros certos; err
 
   const filtros = [];
   const db = { from(tabela) {
-    const q = { tabela, select(c) { q.colunas = c; return q; }, in(c, v) { filtros.push([c, v]); return q; }, then(ok) { return Promise.resolve({ data: [{ id: "L1" }], error: null }).then(ok); } };
+    const q = { tabela, select(c) { q.colunas = c; return q; }, eq() { return q; }, in(c, v) { filtros.push([c, v]); return q; },
+      then(ok) { return Promise.resolve({ data: tabela === "ifood_loja_credenciais" ? [] : [{ id: "L1" }], error: null }).then(ok); } };
     return q;
   } };
   assert.deepEqual(await repoEv.listarLojasExtrasParaPolling({ conexaoIds: [] , db }), []);
-  assert.deepEqual(await repoEv.listarLojasExtrasParaPolling({ conexaoIds: ["C1"], db }), [{ id: "L1" }]);
-  assert.deepEqual(filtros, [["conexao_id", ["C1"]], ["estado", ["ativa", "liberada"]]]);
+  // `credencial_propria: false` = sem linha em ifood_loja_credenciais (118): a loja usa a credencial da conexão, como na 117.
+  assert.deepEqual(await repoEv.listarLojasExtrasParaPolling({ conexaoIds: ["C1"], db }), [{ id: "L1", credencial_propria: false }]);
+  assert.deepEqual(filtros, [["conexao_id", ["C1"]], ["estado", ["ativa", "liberada"]], ["loja_id", ["L1"]]]);
 });
 
 test("bloqueio em memória (gravação falhou) cede a uma NOVA liberação supervisionada: vale no ciclo seguinte, sem reiniciar", async () => {

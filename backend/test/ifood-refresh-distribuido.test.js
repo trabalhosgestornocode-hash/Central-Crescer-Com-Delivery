@@ -112,8 +112,9 @@ describe("renovação", () => {
   test("[6] SEM refresh novo na resposta: o refresh anterior é PRESERVADO (não vira null)", async () => {
     const repo = repoFalso();
     await logado(() => renovar(repo, httpComFetch(() => resposta(200, OK_SEM_REFRESH))));
-    const [, , args] = repo.chamadas.find((c) => c[0] === "salvar");
-    assert.equal(args.refreshTokenCifrado, undefined, "salvarTokens não manda refresh quando o iFood não devolve");
+    // A renovação grava de forma CONDICIONAL (atualizarCredencial + seAccessCifradoIgual): sem refresh novo, a coluna fica FORA do payload.
+    const [, , args] = repo.chamadas.find((c) => c[0] === "atualizar" && c[2].campos.access_token_cifrado);
+    assert.ok(!("refresh_token_cifrado" in args.campos), "a gravação não manda refresh quando o iFood não devolve");
     assert.equal(decifrar(repo.creds["conx-A"].refresh_token_cifrado), "RT-velho");
   });
 
@@ -197,7 +198,7 @@ describe("[17] concorrência", () => {
       assert.deepEqual(rs, Array(5).fill("AT-novo"));
     } finally { c.restaurar(); }
     assert.equal(http.chamadas.length, 1);
-    assert.equal(repo.chamadas.filter((x) => x[0] === "salvar").length, 1);
+    assert.equal(repo.chamadas.filter((x) => x[0] === "atualizar" && x[2].campos.access_token_cifrado).length, 1, "uma única gravação (condicional)");
   });
 
   test("entre processos: o outro renovou antes (iFood rotacionou) -> nosso refresh falha, mas usamos a credencial nova e NÃO marcamos reauth", async () => {

@@ -13,6 +13,7 @@
 
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
+import { lojasComCredencialPropria } from "./ifood.repository.js";
 
 const T = { eventos: "ifood_eventos", pedidos: "ifood_pedidos", conexoes: "ifood_conexoes" };
 const LOTE = 200; // ids por consulta .in(...)
@@ -75,10 +76,14 @@ export async function listarConexoesElegiveisParaEvents({ db = supabase } = {}) 
  */
 export async function listarLojasExtrasParaPolling({ conexaoIds, db = supabase }) {
   if (!Array.isArray(conexaoIds) || conexaoIds.length === 0) return [];
-  return ok(await db.from("ifood_conexao_lojas")
+  const lojas = ok(await db.from("ifood_conexao_lojas")
     .select("id, conexao_id, organizacao_id, unidade_id, merchant_id, estado, rotulo, verificacoes, liberada_em")
     .in("conexao_id", conexaoIds)
     .in("estado", ["ativa", "liberada"])) ?? [];
+  // Titular da credencial de cada loja (118): com linha própria = `credencial_propria` (e o status dela). Se não der para saber, o erro SOBE
+  // (o poller não consulta nenhuma loja adicional neste ciclo): nunca arrisca consultar com o token errado.
+  const proprias = await lojasComCredencialPropria({ lojaIds: lojas.map((l) => l.id), db });
+  return lojas.map((l) => (proprias.has(l.id) ? { ...l, credencial_propria: true, credencial_status: proprias.get(l.id) } : { ...l, credencial_propria: false }));
 }
 
 /**

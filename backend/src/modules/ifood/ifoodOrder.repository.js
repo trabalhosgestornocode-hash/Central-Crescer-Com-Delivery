@@ -7,6 +7,7 @@
 
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
+import { lojasComCredencialPropria } from "./ifood.repository.js";
 
 const T = { pedidos: "ifood_pedidos", acoes: "ifood_pedido_acoes", conexoes: "ifood_conexoes" };
 
@@ -21,11 +22,31 @@ export async function obterPedidoDoTenant({ organizacaoId, unidadeId, orderId })
     .eq("order_id", orderId).eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).maybeSingle());
 }
 
-/** Conexão viva que liga o merchant do pedido à unidade (fonte do `conexaoId` para o token distribuído). */
+/**
+ * Conexão viva que liga o merchant do pedido à unidade (fonte do `conexaoId` para o token distribuído).
+ * Merchant ADICIONAL (migration 117; `ativa`/`liberada`) resolve na conexão da unidade; se a loja tiver credencial PRÓPRIA (118) o resultado
+ * traz `lojaId` — quem chama usa o token da loja, nunca o da conexão. Sem `lojaId`: credencial da conexão, como sempre.
+ */
 export async function obterConexaoAtivaDoMerchant({ organizacaoId, unidadeId, merchantId }) {
-  return ok(await supabase.from(T.conexoes).select("id, organizacao_id, unidade_id, merchant_id")
+  const principal = ok(await supabase.from(T.conexoes).select("id, organizacao_id, unidade_id, merchant_id")
     .eq("status", "ativa").eq("merchant_id", merchantId)
     .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).maybeSingle());
+  if (principal) return principal;
+
+  const { data: loja, error } = await supabase.from("ifood_conexao_lojas").select("id, conexao_id")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("merchant_id", merchantId)
+    .in("estado", ["ativa", "liberada"]).maybeSingle();
+  if (error) {
+    if (error.code === "42P01" || error.code === "PGRST205" || error.code === "PGRST200") return null;   // 117 ainda não aplicada
+    throw ApiError.internal(error.message);
+  }
+  if (!loja) return null;
+  const con = ok(await supabase.from(T.conexoes).select("id, organizacao_id, unidade_id, merchant_id")
+    .eq("id", loja.conexao_id).eq("status", "ativa")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).maybeSingle());
+  if (!con) return null;
+  const proprias = await lojasComCredencialPropria({ lojaIds: [loja.id] });
+  return proprias.has(loja.id) ? { ...con, lojaId: loja.id } : con;
 }
 
 /**

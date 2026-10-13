@@ -32,8 +32,9 @@ export const iniciar = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
   const appType = val.validarAppType(req.body?.appType);
 
+  const merchantId = req.body?.merchantId == null || req.body.merchantId === "" ? null : val.validarMerchantId(req.body.merchantId);
   const data = await authService.iniciarConexao({
-    organizacaoId, unidadeId, appType, usuarioId: req.user.id,
+    organizacaoId, unidadeId, appType, usuarioId: req.user.id, merchantId,
   });
   res.status(201).json({ data });
 });

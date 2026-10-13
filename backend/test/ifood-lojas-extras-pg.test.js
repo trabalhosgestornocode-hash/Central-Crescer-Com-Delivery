@@ -14,6 +14,7 @@ import { construirSchemaReal, MIGRATIONS_DIR } from "./helpers/schema-real-pg.js
 const OPS = join(MIGRATIONS_DIR, "..", "operacoes");
 const M117 = join(MIGRATIONS_DIR, "117_ifood_conexao_lojas.sql");
 const R117 = join(MIGRATIONS_DIR, "117_rollback.sql");
+const R118 = join(MIGRATIONS_DIR, "118_rollback.sql");   // a 118 depende da tabela da 117: o rollback é na ORDEM INVERSA (118 antes da 117)
 
 const ORG = "00000000-0000-0000-0000-0000000000a0"; const ORG2 = "00000000-0000-0000-0000-0000000000b0";
 const UN_A = "00000000-0000-0000-0000-0000000000a1"; const UN_B = "00000000-0000-0000-0000-0000000000b1";
@@ -339,6 +340,7 @@ describe("lojas adicionais por conexão (117) — Postgres descartável, schema 
   // =====================================================================
   describe("rollback", () => {
     test("recusa se houver loja `ativa`/`liberada` (nada é removido); com tudo desativado remove tabela e funções; idempotente", () => {
+      assert.equal(psqlSync(b.url, "", { arquivo: R118 }).ok, true, "ordem inversa: a 118 sai antes da 117");
       q("delete from ifood_conexao_lojas");
       ok(cadastrar(M_SAL, "Saladas"));
       ok(liberar(M_SAL, "Gerente"));
