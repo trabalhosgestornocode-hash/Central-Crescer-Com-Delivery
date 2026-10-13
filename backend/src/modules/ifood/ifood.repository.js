@@ -272,6 +272,24 @@ export async function lojasComCredencialPropria({ lojaIds, db = supabase }) {
 }
 
 /**
+ * Lojas adicionais da unidade (não `desativada`) para o painel: dados sem segredo + status da credencial PRÓPRIA (null = usa a da conexão).
+ * Tabela ausente = []. Outros erros sobem (quem chama decide; o status do painel não cai por isso).
+ * @returns {Promise<Array<{id: string, merchant_id: string, rotulo: string|null, estado: string, credencial_status: string|null}>>}
+ */
+export async function listarLojasAdicionaisDaUnidade({ organizacaoId, unidadeId, db = supabase }) {
+  exigirTenant(organizacaoId, unidadeId);
+  const { data, error } = await db.from(T.lojas).select("id, merchant_id, rotulo, estado")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).neq("estado", "desativada").order("criado_em", { ascending: true });
+  if (error) {
+    if (error.code === TABELA_AUSENTE_PG || error.code === "PGRST205" || error.code === "PGRST200") return [];
+    throw ApiError.internal(error.message);
+  }
+  const lojas = data ?? [];
+  const proprias = await lojasComCredencialPropria({ lojaIds: lojas.map((l) => l.id), db });
+  return lojas.map((l) => ({ ...l, credencial_status: proprias.get(l.id) ?? null }));
+}
+
+/**
  * Loja ADICIONAL da unidade do tenant (para o OAuth direcionado). Aceita `merchantId` OU `lojaId`; só lojas vivas (não `desativada`).
  * Tenant sempre conferido no filtro. null se não existir.
  */

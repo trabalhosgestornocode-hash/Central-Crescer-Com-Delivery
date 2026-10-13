@@ -473,6 +473,15 @@ body {
 .ifood-msg.ok { color: var(--ok); }
 
 .ifood-acoes { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+/* Lojas adicionais (Saladas etc.): uma linha por loja no desktop; empilhada no celular, sem rolagem horizontal. */
+.ifood-lojas-lista { display: flex; flex-direction: column; gap: 10px; }
+.ifood-loja-item { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 12px; border: 1px solid var(--borda, rgba(128,128,128,.25)); border-radius: 10px; }
+.ifood-loja-item-id { display: flex; flex-direction: column; gap: 2px; min-width: 140px; flex: 1 1 160px; }
+.ifood-loja-item-estado { display: flex; flex-wrap: wrap; gap: 6px; flex: 2 1 220px; }
+.ifood-loja-item-acao { flex: 0 1 auto; max-width: 100%; }
+.ifood-loja-item-acao .btn { white-space: normal; }
+.ifood-loja-selecionada { border: 1px solid var(--borda, rgba(128,128,128,.25)); border-radius: 10px; padding: 10px 13px; margin-bottom: 12px; }
+@media (max-width: 600px) { .ifood-loja-item-acao, .ifood-loja-item-acao .btn { width: 100%; } }
 .ifood-tudo-ok { font-size: 13.5px; color: var(--ok); }
 .ifood-instrucao { font-size: 13px; color: var(--cinza); }
 /* Loja informada pelo gestor (unidade só com o app de pedidos): trilha das 5 etapas e confirmação. */

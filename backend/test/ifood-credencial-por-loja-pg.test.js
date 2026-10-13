@@ -185,6 +185,22 @@ describe("credencial própria por loja (118) — Postgres descartável, schema r
       assert.equal(await repoOrder.obterConexaoAtivaDoMerchant({ ...t, merchantId: M_OUTRA_UN }), null, "loja de outra unidade nunca resolve aqui");
     });
 
+    test("lista de lojas do painel + escolha por lojaId: só as DA unidade do tenant, sem desativadas, com o status da credencial própria", async () => {
+      recriarLojaA("liberada");
+      q(`insert into ifood_loja_credenciais (loja_id, app_type, access_token_cifrado, expira_em, status) values ('${LOJA_A}', 'order', 'AC', now() + interval '1 hour', 'reauth_required')`);
+      const lista = await repo.listarLojasAdicionaisDaUnidade({ organizacaoId: ORG, unidadeId: UN_A });
+      assert.deepEqual(lista.map((l) => [l.id, l.estado, l.credencial_status, l.rotulo]), [[LOJA_A, "liberada", "reauth_required", "Saladas"]]);
+      assert.deepEqual((await repo.listarLojasAdicionaisDaUnidade({ organizacaoId: ORG2, unidadeId: UN_B })).map((l) => l.id), [LOJA_B]);
+      assert.deepEqual(await repo.listarLojasAdicionaisDaUnidade({ organizacaoId: ORG, unidadeId: UN_B }), [], "tenant cruzado não lista nada");
+      // escolha por lojaId (o que a tela envia): só a loja da unidade; a de outra unidade é invisível
+      assert.equal((await repo.obterLojaAdicionalDaUnidade({ organizacaoId: ORG, unidadeId: UN_A, lojaId: LOJA_A })).merchant_id, M_SAL);
+      assert.equal(await repo.obterLojaAdicionalDaUnidade({ organizacaoId: ORG, unidadeId: UN_A, lojaId: LOJA_B }), null);
+      assert.equal(await repo.obterLojaAdicionalDaUnidade({ organizacaoId: ORG2, unidadeId: UN_B, lojaId: LOJA_A }), null);
+      recriarLojaA("desativada");
+      assert.deepEqual(await repo.listarLojasAdicionaisDaUnidade({ organizacaoId: ORG, unidadeId: UN_A }), [], "desativada não aparece");
+      assert.equal(await repo.obterLojaAdicionalDaUnidade({ organizacaoId: ORG, unidadeId: UN_A, lojaId: LOJA_A }), null, "nem pode ser alvo do OAuth");
+    });
+
     test("OAuth da Saladas ponta a ponta: a credencial nasce em ifood_loja_credenciais; Sanduíches, conexão e estado da loja NÃO mudam", async () => {
       recriarLojaA("pendente");
       const antesSand = q(`select access_token_cifrado || '|' || refresh_token_cifrado || '|' || expira_em from ifood_credenciais where conexao_id = '${CON_A}'`);

@@ -36,10 +36,12 @@ function validarAppType(appType, unidadeId) {
 // LOJA-ALVO (credenciais independentes por merchant, migration 118): `merchantId` opcional escolhe UMA loja adicional já cadastrada da unidade.
 // Só vale para o app Order. A autorização dessa loja grava EXCLUSIVAMENTE na credencial própria dela; não habilita a loja no polling
 // (o estado da loja não muda) e nunca toca a credencial da conexão.
-async function resolverLojaAlvo({ repo, organizacaoId, unidadeId, appType, merchantId }) {
-  if (!merchantId) return null;
-  if (appType !== IFOOD_APP_ORDER) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_OAUTH_INVALIDO);
-  const loja = await repo.obterLojaAdicionalDaUnidade({ organizacaoId, unidadeId, merchantId });
+// A tela escolhe a loja por `lojaId` (id da linha, vindo da lista do /status — o merchant inteiro nunca trafega para a tela); `merchantId`
+// serve a operações. Informar os dois é recusado (ambiguidade).
+async function resolverLojaAlvo({ repo, organizacaoId, unidadeId, appType, merchantId, lojaId }) {
+  if (!merchantId && !lojaId) return null;
+  if (appType !== IFOOD_APP_ORDER || (merchantId && lojaId)) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_OAUTH_INVALIDO);
+  const loja = await repo.obterLojaAdicionalDaUnidade({ organizacaoId, unidadeId, ...(lojaId ? { lojaId } : { merchantId }) });
   if (!loja) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_NAO_ENCONTRADA);
   return loja;
 }
@@ -49,14 +51,14 @@ async function resolverLojaAlvo({ repo, organizacaoId, unidadeId, appType, merch
  * @param {{organizacaoId, unidadeId, appType, usuarioId, merchantId?: string, deps?: object}} p
  * @returns {Promise<{sessionId, userCode, verificationUrl, verificationUrlComplete, expiraEm, appType}>}
  */
-export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuarioId, merchantId = null, deps = {} }) {
+export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuarioId, merchantId = null, lojaId = null, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const token = deps.token ?? tokenService;
 
   validarAppType(appType, unidadeId);
   // Antes de qualquer chamada ao iFood: a loja-alvo existe nesta unidade (e a conexão da unidade está viva).
-  const loja = await resolverLojaAlvo({ repo, organizacaoId, unidadeId, appType, merchantId });
+  const loja = await resolverLojaAlvo({ repo, organizacaoId, unidadeId, appType, merchantId, lojaId });
   // Unidade do TENANT (req.tenant, via controller) — decide o app de teste no Financial
   // por unidade. Lança IFOOD_APP_SEM_CREDENCIAL se faltar ENV (sem fallback de app).
   const credencial = token.credenciaisDoApp(appType, { unidadeId });
