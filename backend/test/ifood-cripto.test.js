@@ -32,13 +32,32 @@ test("null / undefined / '' passam como null nos dois sentidos", () => {
   assert.equal(decifrar(""), null);
 });
 
-test("adulteração do ciphertext faz decifrar lançar (authTag GCM)", () => {
-  const cifrado = cifrar("token-sensivel");
+// Adultera os BYTES de uma parte ("v1:iv:tag:ct"): decodifica o base64url, inverte todos os bits do primeiro byte e recodifica.
+// (Trocar só o último caractere do base64 NÃO garante mudança: com preenchimento, os bits finais do último caractere são descartados.)
+function adulterarBytes(cifrado, indice) {
   const partes = cifrado.split(":");
-  // Vira o último caractere do ciphertext.
-  const ct = partes[3];
-  partes[3] = ct.slice(0, -1) + (ct.at(-1) === "A" ? "B" : "A");
-  assert.throws(() => decifrar(partes.join(":")));
+  const bytes = Buffer.from(partes[indice], "base64url");
+  bytes[0] ^= 0xff;
+  partes[indice] = bytes.toString("base64url");
+  return partes.join(":");
+}
+
+test("adulteração do ciphertext faz decifrar lançar (authTag GCM) — bytes realmente alterados, sempre", () => {
+  for (let i = 0; i < 50; i += 1) {
+    const cifrado = cifrar("token-sensivel");
+    const adulterado = adulterarBytes(cifrado, 3);
+    assert.notEqual(Buffer.from(adulterado.split(":")[3], "base64url").toString("hex"), Buffer.from(cifrado.split(":")[3], "base64url").toString("hex"), "os bytes mudaram");
+    assert.throws(() => decifrar(adulterado));
+    assert.equal(decifrar(cifrado), "token-sensivel", "o original continua válido");
+  }
+});
+
+test("adulteração do iv ou da tag de autenticação também é rejeitada", () => {
+  for (let i = 0; i < 20; i += 1) {
+    const cifrado = cifrar("token-sensivel");
+    assert.throws(() => decifrar(adulterarBytes(cifrado, 1)), "iv adulterado");
+    assert.throws(() => decifrar(adulterarBytes(cifrado, 2)), "tag adulterada");
+  }
 });
 
 test("formato inválido / versão desconhecida é rejeitado", () => {
