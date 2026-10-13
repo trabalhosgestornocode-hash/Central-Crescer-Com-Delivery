@@ -443,7 +443,10 @@ export const mbCancelarSincronizacao = (sessionId) => postJson(`${MB}/${sessionI
 const IFOOD = "/api/v1/integracoes/ifood";
 
 export const ifoodStatus = () => getJson(`${IFOOD}/status`);
-export const ifoodOauthStart = (appType) => postJson(`${IFOOD}/oauth/start`, { appType });
+// `alvo` (opcional) escolhe UMA loja adicional da unidade para a autorização independente (credencial própria): `lojaId` (id da lista do
+// /status — o que a tela usa) ou `merchantId` (operações). Sem `alvo` o corpo é exatamente { appType }: o fluxo da conexão não muda.
+export const ifoodOauthStart = (appType, { lojaId, merchantId } = {}) =>
+  postJson(`${IFOOD}/oauth/start`, { appType, ...(lojaId ? { lojaId } : {}), ...(merchantId ? { merchantId } : {}) });
 export const ifoodOauthComplete = (appType, sessionId, authorizationCode) =>
   postJson(`${IFOOD}/oauth/complete`, { appType, sessionId, authorizationCode });
 export const ifoodMerchants = () => getJson(`${IFOOD}/merchants`);

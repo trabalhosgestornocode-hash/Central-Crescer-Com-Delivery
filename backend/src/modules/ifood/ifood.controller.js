@@ -33,8 +33,9 @@ export const iniciar = asyncHandler(async (req, res) => {
   const appType = val.validarAppType(req.body?.appType);
 
   const merchantId = req.body?.merchantId == null || req.body.merchantId === "" ? null : val.validarMerchantId(req.body.merchantId);
+  const lojaId = req.body?.lojaId == null || req.body.lojaId === "" ? null : val.validarLojaId(req.body.lojaId);
   const data = await authService.iniciarConexao({
-    organizacaoId, unidadeId, appType, usuarioId: req.user.id, merchantId,
+    organizacaoId, unidadeId, appType, usuarioId: req.user.id, merchantId, lojaId,
   });
   res.status(201).json({ data });
 });

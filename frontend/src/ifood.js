@@ -12,6 +12,7 @@
 
 import { el, els, fmtDataHora, fmtMoeda, toast, escapeHtml as esc } from "./utils.js";
 import * as api from "./api.js";
+import { pode } from "./sessao.js";
 import { registrarResetDeContexto } from "./contextoEscopo.js";
 import {
   APP_ROTULO, derivarEstadoIntegracao, acoesDoPainel, prepararSelecaoMerchant, contadorExpiracao,
@@ -20,7 +21,7 @@ import {
   saudeSalesVsEvents, saudeEventsVsSettlements, saudeSettlementsVsReconciliation,
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
   rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
-  validarIdLojaDigitado,
+  validarIdLojaDigitado, derivarLojasAdicionais, AVISO_LOJA_ADICIONAL,
   resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
   FASE_ON_DEMAND_ROTULO, MENSAGEM_ERRO_OD_SEM_MOTIVO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
   itemParaJsonTecnico, derivarHistoricoOnDemand, derivarCompetenciaReconciliation, fmtCompetencia,
@@ -189,12 +190,45 @@ function blocoLoja(e, statusApi) {
 }
 
 /**
+ * Lojas ADICIONAIS da unidade (ex.: Saladas): cada uma mostra a situação do recebimento e da autorização PRÓPRIA, com o botão de
+ * autorizar só para quem pode gerenciar integrações. A loja é escolhida da lista (nunca digitada) e autorizar não ativa o polling.
+ */
+function blocoLojasAdicionais(statusApi, { podeGerenciar = true, aviso = null } = {}) {
+  const lojas = derivarLojasAdicionais(statusApi, { podeGerenciar });
+  if (!lojas.length) return "";
+  return `
+    <div class="ifood-card" id="ifood-lojas-adicionais">
+      <div class="ifood-secao-rotulo">Lojas adicionais</div>
+      ${aviso ? `<div class="ifood-aviso ok" id="ifood-lojas-aviso">${esc(aviso)}</div>` : ""}
+      <p class="ifood-instrucao">Lojas iFood desta unidade com autorização própria. ${esc(AVISO_LOJA_ADICIONAL)}</p>
+      <div class="ifood-lojas-lista">
+        ${lojas.map((l) => `
+          <div class="ifood-loja-item" data-loja-id="${esc(l.id)}">
+            <div class="ifood-loja-item-id">
+              <strong class="ifood-loja-item-nome">${esc(l.nome)}</strong>
+              <span class="mono ifood-merchant-meta">${esc(l.idMascarado)}</span>
+            </div>
+            <div class="ifood-loja-item-estado">
+              <span class="pill ${l.polling.classe}" data-polling>${esc(l.polling.rotulo)}</span>
+              <span class="pill ${l.credencial.classe}" data-credencial>Autorização: ${esc(l.credencial.rotulo)}</span>
+            </div>
+            <div class="ifood-loja-item-acao">
+              ${l.podeAutorizar
+                ? `<button class="btn btn-ghost" data-autorizar-loja="${esc(l.id)}">${esc(l.acaoRotulo)}</button>`
+                : `<span class="ifood-instrucao" data-dica>${esc(l.dica ?? "")}</span>`}
+            </div>
+          </div>`).join("")}
+      </div>
+    </div>`;
+}
+
+/**
  * HTML do painel de status (estado já carregado, sem erro de status). PURO: só lê `statusApi` — sem DOM,
  * sem rede. Usado por pintarPainel() e pelos testes/preview da tela.
  * Hierarquia: status geral -> OPERAÇÃO (Pedidos, Eventos) -> DADOS (Analytics, Financeiro) -> LOJA VINCULADA.
  * "Ver pedidos iFood" só aparece com o Order CONECTADO na unidade.
  */
-export function montarHtmlPainel(statusApi) {
+export function montarHtmlPainel(statusApi, opcoes = {}) {
   const e = derivarEstadoIntegracao(statusApi);
   const acoes = acoesDoPainel(e).map((a) =>
     `<button class="btn ${a.primaria ? "btn-primary" : "btn-ghost"}" id="ifood-acao-${a.id}" data-acao="${a.id}">${esc(a.rotulo)}</button>`);
@@ -220,6 +254,7 @@ export function montarHtmlPainel(statusApi) {
       ${blocoOperacao(statusApi)}
       ${blocoDados(e)}
       ${blocoLoja(e, statusApi)}
+      ${blocoLojasAdicionais(statusApi, opcoes)}
 
       ${e.merchant && statusApi?.order?.conectado ? `
         <div class="ifood-card">
@@ -272,9 +307,12 @@ function pintarPainel() {
     return;
   }
 
-  view.innerHTML = montarHtmlPainel(estado.status);
+  const avisoLoja = estado.avisoLoja ?? null;
+  estado.avisoLoja = null;                       // mostrado uma única vez, ao voltar do assistente
+  view.innerHTML = montarHtmlPainel(estado.status, { podeGerenciar: pode("integracoes.gerenciar"), aviso: avisoLoja });
 
   ligarAcoesDoPainel();
+  for (const b of els("#view [data-autorizar-loja]")) b.addEventListener("click", () => abrirWizardLoja(b.dataset.autorizarLoja));
   el("#ifood-abrir-financeiro")?.addEventListener("click", abrirFinanceiro);
   el("#ifood-abrir-pedidos")?.addEventListener("click", abrirPedidos);
 }
@@ -411,6 +449,16 @@ function primeiraEtapaPendente(modo) {
   return "financial";
 }
 
+// Autorização independente de UMA loja adicional (credencial própria). A loja vem da lista do /status; nunca é digitada. A permissão é
+// conferida aqui (a tela) e de novo no backend (integracoes.gerenciar) — a tela só evita um clique que seria recusado.
+function abrirWizardLoja(lojaId) {
+  if (!pode("integracoes.gerenciar")) return;
+  const loja = derivarLojasAdicionais(estado.status, { podeGerenciar: true }).find((l) => l.id === lojaId && l.podeAutorizar);
+  if (!loja) return;
+  estado.wizard = { etapa: "order_loja", appType: null, sessionId: null, feito: {}, selecao: null, loja: { id: loja.id, nome: loja.nome, idMascarado: loja.idMascarado } };
+  pintarWizard();
+}
+
 function abrirWizard(modo) {
   estado.wizard = { etapa: primeiraEtapaPendente(modo), appType: null, sessionId: null, feito: {}, selecao: null };
   pintarWizard();
@@ -442,7 +490,7 @@ function cabecalhoWizard(tituloEtapa, passo) {
   return `
     <div class="vd-head ifood-head">
       <div class="vd-head-txt">
-        <h2>Conectar iFood ${passo ? `<span class="ifood-passo">Etapa ${passo} de 2</span>` : ""}${badgeHomologacao()}</h2>
+        <h2>${estado.wizard?.loja ? "Autorizar loja iFood" : "Conectar iFood"} ${passo ? `<span class="ifood-passo">Etapa ${passo} de 2</span>` : ""}${badgeHomologacao()}</h2>
         <p>${esc(tituloEtapa)}</p>
       </div>
       <button class="btn btn-ghost" id="ifood-wizard-sair">Voltar ao status</button>
@@ -459,6 +507,7 @@ function pintarWizard() {
   if (w.etapa === "financial") return pintarEtapaOAuth("financial", 2, "Dados financeiros — autorize o aplicativo Financial + Merchant.");
   if (w.etapa === "merchant") return pintarEtapaMerchant();
   if (w.etapa === "order") return pintarEtapaOAuth("order", null, "Pedidos e eventos — autorize o aplicativo de pedidos (Order) do iFood.");
+  if (w.etapa === "order_loja" && w.loja) return pintarEtapaOAuth("order", null, `Autorização da loja adicional ${w.loja.nome} (credencial própria).`);
   if (w.etapa === "loja_manual") return pintarEtapaLojaManual();
   if (w.etapa === "loja_conferir") return pintarEtapaLojaConferir();
   if (w.etapa === "loja_aguardando") return pintarEtapaLojaAguardando();
@@ -600,6 +649,12 @@ function pintarEtapaOAuth(appType, passo, subtitulo) {
       ${cabecalhoWizard(subtitulo, passo)}
       <div class="ifood-card">
         ${w.feito.analytics && appType === "financial" ? `<div class="ifood-aviso ok">Desempenho / Analytics autorizado ✓</div>` : ""}
+        ${w.loja ? `
+          <div class="ifood-loja-selecionada" id="ifood-loja-selecionada">
+            <div class="ifood-secao-rotulo">Loja selecionada</div>
+            <div class="ifood-merchant-nome">${esc(w.loja.nome)} <span class="mono ifood-merchant-meta">${esc(w.loja.idMascarado)}</span></div>
+            <p class="ifood-instrucao">No Portal do Parceiro, entre com a conta <strong>desta loja (${esc(w.loja.nome)})</strong> — não com a da loja principal. ${esc(AVISO_LOJA_ADICIONAL)}</p>
+          </div>` : ""}
         ${!temCodigo ? `
           <p>Gere um código de vínculo e autorize o aplicativo no Portal do Parceiro iFood.</p>
           <button class="btn btn-primary" id="ifood-gerar">Gerar código</button>
@@ -636,7 +691,7 @@ async function gerarCodigo(appType) {
   const btn = el("#ifood-gerar") || el("#ifood-regenerar");
   if (btn) btn.disabled = true;
   try {
-    const { data } = await api.ifoodOauthStart(appType);
+    const { data } = await api.ifoodOauthStart(appType, estado.wizard?.loja ? { lojaId: estado.wizard.loja.id } : undefined);
     estado.wizard.appType = appType;
     estado.wizard.sessionId = data.sessionId;
     estado.wizard.userCode = data.userCode;
@@ -658,6 +713,11 @@ async function concluirAutorizacao(appType) {
     await api.ifoodOauthComplete(appType, estado.wizard.sessionId, code);
     estado.wizard.feito[appType] = true;
     pararContador();
+    if (estado.wizard.loja) {
+      // Loja adicional: nada mais a fazer no assistente. Volta ao painel (que recarrega o status) com a confirmação — o polling NÃO foi ativado.
+      estado.avisoLoja = `${estado.wizard.loja.nome} autorizada. O recebimento de pedidos desta loja continua desligado até a ativação pela equipe da plataforma.`;
+      return sairDoWizard();
+    }
     if (appType === "order") {
       // Pedidos autorizados. Com a loja já validada (unidade que vinculou pela conta Financial) não há mais
       // nada neste assistente. Sem loja validada, segue para informar o ID da loja.

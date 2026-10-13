@@ -122,6 +122,7 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
     conexao, cred: porApp.get(IFOOD_APP_ORDER), merchant, organizacaoId, unidadeId, repo, agora,
     vinculos: deps.vinculos ?? vinculoRepositorio,
   });
+  const lojasAdicionais = order ? await resumirLojasAdicionais({ repo, organizacaoId, unidadeId }) : [];
   const appsComAtencao = [
     ...IFOOD_APP_TYPES.filter((a) => apps[a].status === "reauth_required"),
     ...(order?.erroAtual ? [IFOOD_APP_ORDER] : []),
@@ -133,6 +134,8 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
     merchant,
     apps,
     order,
+    // Lojas adicionais da unidade (117/118): só quando existem — sem elas a resposta é idêntica à de antes.
+    ...(lojasAdicionais.length ? { lojasAdicionais } : {}),
     atencao: { total: appsComAtencao.length, apps: appsComAtencao },
     conectadaEm: conexao.conectada_em ?? null,
     ultimaSincronizacao: conexao.ultima_sincronizacao_em ?? null,   // sempre null nesta fase
@@ -144,6 +147,20 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
     // (IFOOD_FINANCIAL_HOMOLOGATION_UNITS). Só um booleano — selo na área Financial.
     financialHomologacao: usarHomologacaoFinancial(unidadeId),
   };
+}
+
+/**
+ * Lojas adicionais para o painel, SEM segredo: id da linha (usado só para escolher a loja no OAuth), rótulo, ID mascarado, estado do polling
+ * e a situação da credencial PRÓPRIA (`ativa` | `reauth_required` | null = ainda não autorizada / usa a da conexão). Nunca derruba o status.
+ */
+async function resumirLojasAdicionais({ repo, organizacaoId, unidadeId }) {
+  if (typeof repo.listarLojasAdicionaisDaUnidade !== "function") return [];
+  try {
+    const lojas = await repo.listarLojasAdicionaisDaUnidade({ organizacaoId, unidadeId });
+    return (lojas ?? []).map((l) => ({
+      id: l.id, rotulo: l.rotulo ?? null, idMascarado: mascararId(l.merchant_id), estado: l.estado, credencial: l.credencial_status ?? null,
+    }));
+  } catch { return []; }
 }
 
 /** Bloco Order de uma unidade piloto que ainda não autorizou o app (mesma forma de montarStatusOrder). */

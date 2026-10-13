@@ -20,6 +20,11 @@ export function validarSessionId(valor) {
   return v.uuid(valor, "sessionId");
 }
 
+/** lojaId (uuid) de uma loja adicional da unidade — vem da lista do /status, nunca digitado. */
+export function validarLojaId(valor) {
+  return v.uuid(valor, "lojaId");
+}
+
 /**
  * authorizationCode: string opaca fornecida pelo Portal do Parceiro iFood.
  * Só limpa espaços e limita tamanho — o formato exato é do iFood, não nosso.

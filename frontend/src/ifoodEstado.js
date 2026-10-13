@@ -224,10 +224,55 @@ export function mensagemErroAutorizacao(err) {
       return "Este aplicativo iFood ainda não está configurado no sistema. Fale com o suporte da plataforma.";
     case "IFOOD_ORDER_PILOTO_NAO_HABILITADO":
       return "Pedidos e eventos do iFood ainda não estão disponíveis para esta unidade.";
+    case "IFOOD_CREDENCIAL_SEM_COBERTURA":
+      return "A autorização recebida não cobre esta loja. Confira se entrou no Portal do Parceiro com a conta DA LOJA escolhida e gere um novo código. Nada foi alterado: a conexão atual foi mantida.";
+    case "IFOOD_LOJA_NAO_ENCONTRADA":
+      return "Esta loja adicional não está cadastrada nesta unidade. Atualize a página; se continuar, fale com o suporte da plataforma.";
+    case "IFOOD_LOJA_OAUTH_INVALIDO":
+      return "Não foi possível autorizar esta loja agora. Atualize a página e tente novamente.";
     default:
       return err?.message || "Não foi possível concluir a autorização. Gere um novo código e tente novamente.";
   }
 }
+
+/**
+ * Lojas ADICIONAIS da unidade (Saladas etc.) para o painel — PURO. Entrada: `lojasAdicionais` do /status (sem segredo: id da linha, rótulo,
+ * ID mascarado, estado do polling, situação da credencial PRÓPRIA). Só estas lojas podem ser escolhidas para autorizar: nada é digitado.
+ * Autorizar NÃO muda o estado da loja: o recebimento de pedidos continua dependendo da liberação supervisionada da equipe da plataforma.
+ * @param {object} statusApi
+ * @param {{podeGerenciar?: boolean}} [opcoes]
+ */
+export function derivarLojasAdicionais(statusApi, { podeGerenciar = true } = {}) {
+  const lista = Array.isArray(statusApi?.lojasAdicionais) ? statusApi.lojasAdicionais : [];
+  const orderConectado = statusApi?.order?.conectado === true;
+  const POLLING = {
+    pendente: { rotulo: "Aguardando liberação", classe: "warn" },
+    liberada: { rotulo: "Em verificação", classe: "info" },
+    ativa: { rotulo: "Recebendo pedidos", classe: "ok" },
+    bloqueada: { rotulo: "Bloqueada pelo iFood", classe: "bad" },
+  };
+  const CRED = {
+    ativa: { rotulo: "Autorizada", classe: "ok" },
+    reauth_required: { rotulo: "Precisa reautorizar", classe: "bad" },
+  };
+  return lista.filter((l) => l && typeof l.id === "string" && l.estado !== "desativada").map((l) => {
+    const nome = (typeof l.rotulo === "string" && l.rotulo.trim()) || "Loja adicional";
+    const cred = CRED[l.credencial] ?? { rotulo: "Não autorizada", classe: "warn" };
+    const podeAutorizar = podeGerenciar && orderConectado;
+    return {
+      id: l.id, nome, idMascarado: l.idMascarado ?? "—",
+      polling: POLLING[l.estado] ?? { rotulo: "—", classe: "muted" },
+      credencial: cred,
+      podeAutorizar,
+      acaoRotulo: l.credencial ? `Reautorizar ${nome}` : `Autorizar ${nome}`,
+      dica: !podeGerenciar ? "Sem permissão para gerenciar integrações."
+        : !orderConectado ? "Conecte primeiro o app de pedidos desta unidade." : null,
+    };
+  });
+}
+
+/** Texto fixo do assistente de loja adicional: o que acontece (e o que NÃO) ao concluir. */
+export const AVISO_LOJA_ADICIONAL = "Concluir a autorização não ativa o recebimento de pedidos desta loja: a ativação é uma etapa separada, feita pela equipe da plataforma, com acompanhamento.";
 
 /** Aviso exibido ao desconectar — remoção local ≠ revogação no iFood. */
 export function avisoDesconexao() {
