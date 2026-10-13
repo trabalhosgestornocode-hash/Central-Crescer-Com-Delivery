@@ -37,6 +37,8 @@ const CATALOGO = {
     "Não foi possível concluir a autorização. Verifique o código de autorização fornecido pelo iFood e tente novamente, ou gere um novo código."],
   IFOOD_CREDENCIAL_SEM_COBERTURA: [409,
     "A nova autorização do iFood não comprova o acesso a todas as lojas já conectadas desta unidade (ou a credencial mudou durante a troca). Nada foi alterado: a conexão atual foi mantida. Fale com o suporte da plataforma antes de tentar de novo."],
+  IFOOD_LOJA_NAO_ENCONTRADA: [404, "Loja adicional não encontrada nesta unidade (cadastre-a antes de autorizar)."],
+  IFOOD_LOJA_OAUTH_INVALIDO: [409, "A autorização por loja só vale para o app de pedidos (Order) e para a loja desta sessão."],
   IFOOD_USER_CODE_FALHOU: [502,
     "Não foi possível gerar o código de vínculo com o iFood. Tente novamente em alguns minutos."],
   IFOOD_TOKEN_TROCA_FALHOU: [502,

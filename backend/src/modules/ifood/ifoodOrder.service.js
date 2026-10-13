@@ -27,7 +27,8 @@ const intervaloMs = (de, ate) => {
   return Number.isFinite(a) && Number.isFinite(b) ? b - a : null;
 };
 
-const comToken = (token, conexaoId, http, fn) => token.comAccessTokenValido({ conexaoId, appType: IFOOD_APP_ORDER, deps: { http }, fn });
+// `lojaId`: credencial PRÓPRIA da loja adicional (migration 118); sem ela, a da conexão — exatamente como antes.
+const comToken = (token, conexaoId, http, fn, lojaId = null) => token.comAccessTokenValido({ conexaoId, appType: IFOOD_APP_ORDER, deps: { http }, fn, ...(lojaId ? { lojaId } : {}) });
 
 // =====================================================================
 // DETALHES
@@ -56,7 +57,7 @@ export function detalhesDevidos(pedido, agoraMs, cfg = IFOOD_ORDER) {
  *
  * @returns {Promise<{resultado: 'GRAVADO'|'SEM_MUDANCA'|'NAO_ENCONTRADO'|'INVALIDO'|'ERRO', codigo?: string, avisos?: string[]}>}
  */
-export async function buscarEPersistirDetalhes({ pedido, conexaoId = null, repo, token, client = orderClient, http, agora = () => new Date(), log = ifoodLog }) {
+export async function buscarEPersistirDetalhes({ pedido, conexaoId = null, lojaId = null, repo, token, client = orderClient, http, agora = () => new Date(), log = ifoodLog }) {
   const agoraIso = agora().toISOString();
   const tentativas = (pedido.details_tentativas ?? 0) + 1;
   const base = { details_tentativas: tentativas, details_ultima_tentativa_em: agoraIso };
@@ -64,7 +65,7 @@ export async function buscarEPersistirDetalhes({ pedido, conexaoId = null, repo,
 
   let bruto;
   try {
-    bruto = await comToken(token, conexaoId, http, (accessToken) => client.buscarDetalhesPedido({ accessToken, orderId: pedido.order_id, http }));
+    bruto = await comToken(token, conexaoId, http, (accessToken) => client.buscarDetalhesPedido({ accessToken, orderId: pedido.order_id, http }), lojaId);
   } catch (e) {
     const naoEncontrado = e?.codigo === IFOOD_ERROS.IFOOD_PEDIDO_NAO_ENCONTRADO;
     const codigo = e?.codigo ?? "ERRO_DESCONHECIDO";
@@ -122,7 +123,7 @@ export async function processarDetalhesPendentes({
     // A conexão precisa continuar viva E ser da mesma unidade do pedido (tenant nunca vem do payload).
     if (!con || con.organizacao_id !== pedido.organizacao_id || con.unidade_id !== pedido.unidade_id) { out.semConexao += 1; continue; }
     out.tentados += 1;
-    const r = await buscarEPersistirDetalhes({ pedido, conexaoId: con.id, repo, token, client, http, agora, log });
+    const r = await buscarEPersistirDetalhes({ pedido, conexaoId: con.id, lojaId: con.lojaId ?? null, repo, token, client, http, agora, log });
     if (r.resultado === "GRAVADO") unidadesAtualizadas.push({ organizacaoId: pedido.organizacao_id, unidadeId: pedido.unidade_id });
     if (r.resultado === "GRAVADO") out.gravados += 1;
     else if (r.resultado === "SEM_MUDANCA") out.semMudanca += 1;
@@ -198,7 +199,7 @@ export async function confirmarPedido({
     let envio;
     try {
       if (!conexao) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
-      envio = await comToken(token, conexao.id, http, (accessToken) => client.confirmarPedido({ accessToken, orderId, http }));
+      envio = await comToken(token, conexao.id, http, (accessToken) => client.confirmarPedido({ accessToken, orderId, http }), conexao.lojaId);
     } catch (e) {
       const httpStatus = e?.details?.status ?? null;
       await repo.atualizarPedido({

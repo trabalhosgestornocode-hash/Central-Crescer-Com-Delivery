@@ -204,9 +204,9 @@ function precisaRenovar(expiraEmIso) {
  * Persiste um conjunto de tokens (cifrados) para um app da conexão.
  * @param {{conexaoId: string, appType: string, tokens: {accessToken, refreshToken, tokenType, expiraEm}, repo?: typeof repositorio}} p
  */
-export async function salvarTokens({ conexaoId, appType, tokens, repo = repositorio }) {
+export async function salvarTokens({ conexaoId, appType, tokens, repo = repositorio, lojaId = null }) {
   return repo.salvarCredencial({
-    conexaoId, appType,
+    conexaoId, appType, ...(lojaId ? { lojaId } : {}),
     accessTokenCifrado: cifrar(tokens.accessToken),
     // Se o iFood não devolver refreshToken novo, mantém o anterior (não apaga).
     refreshTokenCifrado: tokens.refreshToken ? cifrar(tokens.refreshToken) : undefined,
@@ -223,11 +223,11 @@ export async function salvarTokens({ conexaoId, appType, tokens, repo = reposito
  * @param {{conexaoId: string, appType: string, deps?: {repo, http}}} p
  * @returns {Promise<string>} accessToken em claro (só em memória)
  */
-export async function getValidAccessToken({ conexaoId, appType, deps = {} }) {
+export async function getValidAccessToken({ conexaoId, appType, lojaId = null, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
 
-  const cred = await repo.obterCredencial({ conexaoId, appType });
+  const cred = await repo.obterCredencial({ conexaoId, appType, ...(lojaId ? { lojaId } : {}) });
   if (!cred) throw ifoodErro(IFOOD_ERROS.IFOOD_CREDENCIAL_NAO_ENCONTRADA);
   if (cred.status === "reauth_required") throw ifoodErro(IFOOD_ERROS.IFOOD_REFRESH_FALHOU);
 
@@ -236,7 +236,7 @@ export async function getValidAccessToken({ conexaoId, appType, deps = {} }) {
   }
 
   // Renovação proativa.
-  return renovarEArmazenar({ conexaoId, appType, cred, repo, http });
+  return renovarEArmazenar({ conexaoId, appType, cred, repo, http, lojaId });
 }
 
 // Falha passageira do iFood (rede, timeout, 429, 5xx): o refresh token pode estar
@@ -249,11 +249,11 @@ const CAUSAS_TRANSITORIAS = new Set([IFOOD_ERROS.IFOOD_INDISPONIVEL, IFOOD_ERROS
 const renovacoesEmVoo = new Map();
 
 /** Renova, persiste e devolve o accessToken novo (uma renovação por credencial por vez). */
-function renovarEArmazenar({ conexaoId, appType, cred, repo, http }) {
-  const chave = `${conexaoId}:${appType}`;
+function renovarEArmazenar({ conexaoId, appType, cred, repo, http, lojaId = null }) {
+  const chave = lojaId ? `loja:${lojaId}:${appType}` : `${conexaoId}:${appType}`;   // a credencial própria de uma loja é OUTRA credencial
   const emVoo = renovacoesEmVoo.get(chave);
   if (emVoo) return emVoo;
-  const p = executarRenovacao({ conexaoId, appType, cred, repo, http })
+  const p = executarRenovacao({ conexaoId, appType, cred, repo, http, lojaId })
     .finally(() => renovacoesEmVoo.delete(chave));
   renovacoesEmVoo.set(chave, p);
   return p;
@@ -273,14 +273,36 @@ async function unidadeParaCredencial({ conexaoId, appType, repo }) {
   return unidadeId;
 }
 
-async function executarRenovacao({ conexaoId, appType, cred, repo, http }) {
+async function executarRenovacao({ conexaoId, appType, cred, repo, http, lojaId = null }) {
+  const alvo = lojaId ? { lojaId } : {};   // acrescentado só quando há loja: chamadas da conexão ficam idênticas às de antes
   const refreshToken = cred.refresh_token_cifrado ? decifrar(cred.refresh_token_cifrado) : null;
   // Antes do try: falha ao descobrir a unidade não é "refresh recusado" — não marca reauth.
   const unidadeId = await unidadeParaCredencial({ conexaoId, appType, repo });
   try {
     const tokens = await renovarToken({ appType, refreshToken, unidadeId, http });
-    await salvarTokens({ conexaoId, appType, tokens, repo });
-    ifoodLog("info", "token.renovado", { conexaoId, appType, rotacionado: !!tokens.refreshToken, origemCredencial: fonteDaCredencial(appType, { unidadeId }) });
+    // GRAVAÇÃO CONDICIONAL: só substitui a credencial que ESTA renovação leu. Se uma credencial mais nova entrou nesse meio tempo (outra
+    // instância renovou, ou uma nova autorização OAuth foi concluída), ela é preservada e o resultado desta renovação é descartado.
+    if (typeof repo.atualizarCredencial === "function") {
+      const gravou = await repo.atualizarCredencial({
+        conexaoId, appType, ...alvo,
+        campos: {
+          access_token_cifrado: cifrar(tokens.accessToken), expira_em: tokens.expiraEm, token_type: tokens.tokenType ?? null, status: "ativa",
+          ...(tokens.refreshToken ? { refresh_token_cifrado: cifrar(tokens.refreshToken) } : {}),
+        },
+        seAccessCifradoIgual: cred.access_token_cifrado,
+      });
+      if (!gravou) {
+        const maisNova = await repo.obterCredencial({ conexaoId, appType, ...alvo }).catch(() => null);
+        if (maisNova && maisNova.status === "ativa" && maisNova.access_token_cifrado !== cred.access_token_cifrado && !precisaRenovar(maisNova.expira_em)) {
+          ifoodLog("info", "token.renovacao_descartada_credencial_mais_nova", { conexaoId, appType, ...(lojaId ? { lojaId } : {}) });
+          return decifrar(maisNova.access_token_cifrado);
+        }
+        await salvarTokens({ conexaoId, appType, tokens, repo, ...alvo });   // nada mais novo e utilizável: não perde o refresh rotacionado
+      }
+    } else {
+      await salvarTokens({ conexaoId, appType, tokens, repo, ...alvo });
+    }
+    ifoodLog("info", "token.renovado", { conexaoId, appType, rotacionado: !!tokens.refreshToken, origemCredencial: fonteDaCredencial(appType, { unidadeId }), ...(lojaId ? { lojaId } : {}) });
     return tokens.accessToken;
   } catch (e) {
     const causa = e?.details?.causa ?? e?.codigo ?? null;
@@ -291,7 +313,7 @@ async function executarRenovacao({ conexaoId, appType, cred, repo, http }) {
 
     // Outro processo pode ter renovado primeiro (e o iFood invalidado o refresh que
     // usamos): se a credencial gravada mudou e está ativa, usa a dela.
-    const atual = await repo.obterCredencial({ conexaoId, appType }).catch(() => null);
+    const atual = await repo.obterCredencial({ conexaoId, appType, ...alvo }).catch(() => null);
     if (atual && atual.status === "ativa" && atual.access_token_cifrado !== cred.access_token_cifrado && !precisaRenovar(atual.expira_em)) {
       ifoodLog("info", "token.renovado_por_concorrente", { conexaoId, appType });
       return decifrar(atual.access_token_cifrado);
@@ -299,9 +321,9 @@ async function executarRenovacao({ conexaoId, appType, cred, repo, http }) {
 
     // Só marca reauth se ninguém gravou credencial nova desde a nossa leitura (compare-and-set).
     await repo.atualizarCredencial({
-      conexaoId, appType, campos: { status: "reauth_required" }, seAccessCifradoIgual: cred.access_token_cifrado,
+      conexaoId, appType, ...alvo, campos: { status: "reauth_required" }, seAccessCifradoIgual: cred.access_token_cifrado,
     }).catch(() => {});
-    ifoodLog("warn", "token.reauth_required", { conexaoId, appType, causa: causa ?? e?.message });
+    ifoodLog("warn", "token.reauth_required", { conexaoId, appType, causa: causa ?? e?.message, ...(lojaId ? { lojaId } : {}) });
     throw e instanceof IfoodError ? e : ifoodErro(IFOOD_ERROS.IFOOD_REFRESH_FALHOU);
   }
 }
@@ -319,17 +341,17 @@ export const distributedAuthProvider = Object.freeze({
   modo: MODOS_AUTH.DISTRIBUTED,
   escopoDoToken: "conexao",   // credenciais persistidas POR conexão (unidade)
 
-  getAccessToken({ conexaoId, appType, deps = {} }) {
-    return getValidAccessToken({ conexaoId, appType, deps });
+  getAccessToken({ conexaoId, appType, lojaId = null, deps = {} }) {
+    return getValidAccessToken({ conexaoId, appType, lojaId, deps });
   },
 
   /** Após 401: refresh por refresh_token, persiste o novo par (cifrado). */
-  async renovarAposRejeicao({ conexaoId, appType, deps = {} }) {
+  async renovarAposRejeicao({ conexaoId, appType, lojaId = null, deps = {} }) {
     const repo = deps.repo ?? repositorio;
     const http = deps.http ?? httpClient;
-    const cred = await repo.obterCredencial({ conexaoId, appType });
+    const cred = await repo.obterCredencial({ conexaoId, appType, ...(lojaId ? { lojaId } : {}) });
     if (!cred) throw ifoodErro(IFOOD_ERROS.IFOOD_CREDENCIAL_NAO_ENCONTRADA);
-    return renovarEArmazenar({ conexaoId, appType, cred, repo, http });
+    return renovarEArmazenar({ conexaoId, appType, cred, repo, http, lojaId });
   },
 });
 
@@ -369,22 +391,23 @@ export function provedorDeAutenticacao() {
  *          deps?: {repo?, http?, provider?}}} p
  *   `conexaoId` só é usado pelo provider distribuído (credencial por conexão).
  */
-export async function comAccessTokenValido({ conexaoId, appType, fn, deps = {} }) {
+export async function comAccessTokenValido({ conexaoId, appType, fn, deps = {}, lojaId = null }) {
   const repo = deps.repo ?? repositorio;
   const http = deps.http ?? httpClient;
   const provider = deps.provider ?? provedorDeAutenticacao();
   const depsProvider = { repo, http };
 
-  const token1 = await provider.getAccessToken({ conexaoId, appType, deps: depsProvider });
+  const alvo = lojaId ? { lojaId } : {};   // credencial PRÓPRIA de uma loja adicional (118); sem loja, tudo como antes
+  const token1 = await provider.getAccessToken({ conexaoId, appType, ...alvo, deps: depsProvider });
   try {
     return await fn(token1);
   } catch (e) {
     if (!(e instanceof IfoodError) || e.codigo !== IFOOD_ERROS.IFOOD_TOKEN_EXPIRADO) throw e;
 
     // 401 mesmo com token "válido" pelo relógio: renova uma vez e tenta de novo.
-    ifoodLog("warn", "token.retry_apos_401", { conexaoId, appType, modo: provider.modo });
+    ifoodLog("warn", "token.retry_apos_401", { conexaoId, appType, modo: provider.modo, ...alvo });
     const token2 = await provider.renovarAposRejeicao({
-      conexaoId, appType, deps: depsProvider, tokenRejeitado: token1,
+      conexaoId, appType, ...alvo, deps: depsProvider, tokenRejeitado: token1,
     });
     return fn(token2);   // segunda e ÚLTIMA tentativa
   }

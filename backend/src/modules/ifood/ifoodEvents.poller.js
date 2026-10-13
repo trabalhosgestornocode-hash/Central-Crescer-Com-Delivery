@@ -57,6 +57,9 @@ export function montarGrupos(conexoes, escopo, tamanho = IFOOD_EVENTS.maxMerchan
   return conexoes.map((c) => ({ conexaoId: c.id, merchantIds: merchantsDe(c) }));
 }
 
+// Pausa (memória) de uma loja com credencial PRÓPRIA que recebeu 429: ela não volta ao polling por este tempo e NUNCA encerra o ciclo da Sanduíches.
+const PAUSA_LOJA_RATE_LIMIT_MS = 120_000;
+
 // Mensagem de erro para log: além do "Bearer ***" de mensagemSegura, remove qualquer header de autorização inteiro.
 const erroParaLog = (e) => mensagemSegura(e).replace(/authorization\s*[:=]\s*(bearer\s+)?\S+/gi, "[header removido]");
 
@@ -95,6 +98,10 @@ export function criarPoller({
   // Lojas ADICIONAIS do ciclo (merchant -> linha de ifood_conexao_lojas) e bloqueios em MEMÓRIA: se gravar o bloqueio no banco falhar, a loja
   // recusada NÃO volta ao polling neste processo (o 403 não se repete a cada 30 s). O banco é a fonte persistente.
   let lojasExtrasDoCiclo = new Map();
+  // Lojas adicionais com credencial PRÓPRIA (migration 118): cada uma é um grupo de polling seu, depois dos grupos das conexões (a Sanduíches
+  // é sempre a primeira). `lojasEmPausa`: lojaId -> instante (ms) até o qual ela não é consultada (429 do iFood).
+  let gruposProprios = [];
+  const lojasEmPausa = new Map();
   // merchant -> carimbo da liberação (liberada_em) vigente quando foi bloqueada: uma NOVA liberação supervisionada muda o carimbo e vale sem reiniciar.
   const lojasBloqueadasEmMemoria = new Map();
   let avisouLojasIndisponiveis = false;
@@ -116,7 +123,7 @@ export function criarPoller({
       ? autorizadas.has(grupo.conexaoId)
       : merchantIds.length > 0 && merchantIds.every((m) => merchantsAutorizados.has(m));
     if (!dentro) throw ifoodErro(IFOOD_ERROS.IFOOD_ORDER_PILOTO_NAO_HABILITADO);
-    return token.comAccessTokenValido({ conexaoId: grupo.conexaoId, appType, deps: { http }, fn });
+    return token.comAccessTokenValido({ conexaoId: grupo.conexaoId, appType, deps: { http }, fn, ...(grupo.lojaId ? { lojaId: grupo.lojaId } : {}) });
   };
 
   /**
@@ -125,7 +132,7 @@ export function criarPoller({
    * Dedupe: merchant igual ao da principal, de outra conexão ou já bloqueado em memória é ignorado. Loja `liberada` conta a tentativa ANTES
    * de entrar (atômico no banco); sem tentativas, o banco a bloqueia e ela não entra.
    */
-  async function resolverLojasExtras(aptas, porMerchant) {
+  async function resolverLojasExtras(aptas, porMerchant, { escopo = "conexao", ignoradas = [] } = {}) {
     const porConexao = new Map();
     if (typeof repo.listarLojasExtrasParaPolling !== "function" || aptas.length === 0) return porConexao;
     let linhas;
@@ -146,6 +153,19 @@ export function criarPoller({
       if (con.organizacao_id !== l.organizacao_id || con.unidade_id !== l.unidade_id) continue;   // tenant da loja = tenant da conexão
       if (merchant === con.merchant_id || porMerchant.has(merchant)) continue;
       if (lojasBloqueadasEmMemoria.has(merchant) && lojasBloqueadasEmMemoria.get(merchant) === (l.liberada_em ?? null)) continue;
+      // CREDENCIAL PRÓPRIA (118): a loja só é consultada com o token DELA — nunca cai para o da conexão (que não a cobre = 403 = infração).
+      // Sem credencial ativa (reauth_required) ou em pausa por 429, fica parada ANTES de contar qualquer tentativa de verificação.
+      const propria = escopo === "conexao" && l.credencial_propria === true;
+      if (propria && l.credencial_status !== "ativa") {
+        const ignorada = { conexaoId: con.id, lojaId: l.id, merchant: mascararId(merchant), motivo: "reauth_required", em: agora().toISOString() };
+        ignoradas.push(ignorada);
+        log("warn", "events.loja_ignorada", ignorada);
+        continue;
+      }
+      if (propria && (lojasEmPausa.get(l.id) ?? 0) > agora().getTime()) {
+        log("info", "events.loja_em_pausa", { lojaId: l.id, merchant: mascararId(merchant) });
+        continue;
+      }
       if (l.estado === "liberada") {
         let r;
         try {
@@ -159,8 +179,13 @@ export function criarPoller({
           continue;
         }
       }
-      porConexao.set(con.id, [...(porConexao.get(con.id) ?? []), merchant]);
-      porMerchant.set(merchant, con);                       // tenant dos eventos e dos detalhes: SEMPRE a conexão
+      if (propria) {
+        gruposProprios.push({ conexaoId: con.id, lojaId: l.id, merchantIds: [merchant] });
+        porMerchant.set(merchant, { ...con, lojaId: l.id });   // tenant dos eventos/detalhes: a conexão; o token dos detalhes/ações: o da loja
+      } else {
+        porConexao.set(con.id, [...(porConexao.get(con.id) ?? []), merchant]);
+        porMerchant.set(merchant, con);                       // tenant dos eventos e dos detalhes: SEMPRE a conexão
+      }
       merchantsAutorizados.add(merchant);
       lojasExtrasDoCiclo.set(merchant, l);
     }
@@ -218,6 +243,7 @@ export function criarPoller({
     merchantsAutorizados = new Set();
     merchantsForaDoPiloto = new Set();
     lojasExtrasDoCiclo = new Map();
+    gruposProprios = [];
 
     // Eventos persistidos que ficaram sem processar (queda entre persistir e processar) — só das unidades do piloto.
     const reproc = await reprocessarPendentes({ repo, agora, log, unidades: piloto })
@@ -248,8 +274,14 @@ export function criarPoller({
       log("warn", "events.conexao_ignorada", ignorada);
       return false;
     });
-    const extrasPorConexao = await resolverLojasExtras(aptas, porMerchant);
-    const grupos = montarGrupos(aptas, escopo, undefined, extrasPorConexao);
+    const extrasPorConexao = await resolverLojasExtras(aptas, porMerchant, { escopo, ignoradas: conexoesIgnoradas });
+    // Conexões primeiro (a Sanduíches é o grupo prioritário), depois as lojas com credencial própria. Um merchant nunca está em dois grupos.
+    const usados = new Set();
+    const grupos = [...montarGrupos(aptas, escopo, undefined, extrasPorConexao), ...gruposProprios].map((g) => {
+      const merchantIds = g.merchantIds.filter((m) => !usados.has(m));
+      merchantIds.forEach((m) => usados.add(m));
+      return { ...g, merchantIds };
+    }).filter((g) => g.merchantIds.length > 0);
 
     // `grupos`: conexões (distribuído) ou lotes de merchants (centralizado) tentados neste ciclo.
     const total = { grupos: grupos.length, polls: 0, eventos: 0, novos: 0, reentregas: 0, acks: 0 };
@@ -305,7 +337,9 @@ export function criarPoller({
         break;
       } catch (e) {
         if (e?.codigo === IFOOD_ERROS.IFOOD_RATE_LIMITED) {
-          log("warn", "events.rate_limited", { polls: total.polls });
+          log("warn", "events.rate_limited", { polls: total.polls, ...(grupo.lojaId ? { lojaId: grupo.lojaId } : {}) });
+          // 429 de uma loja com credencial própria é falha DELA: pausa a loja e segue — nunca encerra o ciclo (os detalhes da Sanduíches seguem).
+          if (grupo.lojaId) { lojasEmPausa.set(grupo.lojaId, agora().getTime() + PAUSA_LOJA_RATE_LIMIT_MS); throw e; }
           return { estado: "RATE_LIMITED" };
         }
         // 403: o token não acessa alguns merchants. Tira SÓ eles e tenta de novo uma vez.

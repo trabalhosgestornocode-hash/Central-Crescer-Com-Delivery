@@ -20,7 +20,8 @@ import { interpretarDisputa, interpretarSettlement } from "./ifoodHandshake.pars
 import { classificarFalhaDeAcao, mensagemSegura, sanitizarParaAuditoria } from "./ifoodAcoes.util.js";
 
 const ms = (iso) => (iso ? Date.parse(iso) : NaN);
-const comToken = (token, conexaoId, http, fn) => token.comAccessTokenValido({ conexaoId, appType: IFOOD_APP_ORDER, deps: { http }, fn });
+// `lojaId`: credencial PRÓPRIA da loja adicional (migration 118); sem ela, a da conexão — exatamente como antes.
+const comToken = (token, conexaoId, http, fn, lojaId = null) => token.comAccessTokenValido({ conexaoId, appType: IFOOD_APP_ORDER, deps: { http }, fn, ...(lojaId ? { lojaId } : {}) });
 const ABERTAS = new Set(["ABERTA", "RESPOSTA_FALHOU"]);
 
 // =====================================================================
@@ -236,7 +237,7 @@ export async function responderDisputa({
 
     let envio;
     try {
-      envio = await comToken(token, conexao.id, http, enviar);
+      envio = await comToken(token, conexao.id, http, enviar, conexao.lojaId);
     } catch (e) {
       const tDepois = agora().toISOString();
       const httpStatus = e?.details?.status ?? null;

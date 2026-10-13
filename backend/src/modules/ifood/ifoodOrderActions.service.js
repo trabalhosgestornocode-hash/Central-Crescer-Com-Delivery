@@ -30,7 +30,8 @@ export { avaliarElegibilidade };
 
 const S = STATUS_PEDIDO;
 const ms = (iso) => (iso ? Date.parse(iso) : NaN);
-const comToken = (token, conexaoId, http, fn) => token.comAccessTokenValido({ conexaoId, appType: IFOOD_APP_ORDER, deps: { http }, fn });
+// `lojaId`: credencial PRÓPRIA da loja adicional (migration 118); sem ela, a da conexão — exatamente como antes.
+const comToken = (token, conexaoId, http, fn, lojaId = null) => token.comAccessTokenValido({ conexaoId, appType: IFOOD_APP_ORDER, deps: { http }, fn, ...(lojaId ? { lojaId } : {}) });
 
 const res = (resultado, acao, pedido, extra = {}) => ({
   resultado, acao, statusOficial: pedido?.status_oficial ?? null, actionState: pedido?.action_state ?? null, oficial: false, ...extra,
@@ -42,7 +43,7 @@ export async function listarMotivosCancelamento({ organizacaoId, unidadeId, orde
   if (!pedido) throw ifoodErro(IFOOD_ERROS.IFOOD_PEDIDO_LOCAL_NAO_ENCONTRADO);
   const conexao = await repo.obterConexaoAtivaDoMerchant({ organizacaoId, unidadeId, merchantId: pedido.merchant_id });
   if (!conexao) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
-  return comToken(token, conexao.id, http, (accessToken) => client.listarMotivosCancelamento({ accessToken, orderId, http }));
+  return comToken(token, conexao.id, http, (accessToken) => client.listarMotivosCancelamento({ accessToken, orderId, http }), conexao.lojaId);
 }
 
 async function executarAcao({
@@ -97,7 +98,7 @@ async function executarAcao({
     if (acao === "cancel") {
       const codigo = String(motivo ?? "").trim();
       if (!codigo) throw ifoodErro(IFOOD_ERROS.IFOOD_MOTIVO_CANCELAMENTO_INVALIDO, { detalhes: { motivo: "sem_motivo" } });
-      const lista = await comToken(token, conexao.id, http, (accessToken) => client.listarMotivosCancelamento({ accessToken, orderId, http }));
+      const lista = await comToken(token, conexao.id, http, (accessToken) => client.listarMotivosCancelamento({ accessToken, orderId, http }), conexao.lojaId);
       motivoOficial = lista.find((r) => r.code === codigo) ?? null;
       if (!motivoOficial) {
         throw ifoodErro(IFOOD_ERROS.IFOOD_MOTIVO_CANCELAMENTO_INVALIDO, { detalhes: { motivo: lista.length ? "fora_da_lista_oficial" : "sem_politica_de_cancelamento" } });
@@ -135,7 +136,7 @@ async function executarAcao({
 
     let envio;
     try {
-      envio = await comToken(token, conexao.id, http, enviar);
+      envio = await comToken(token, conexao.id, http, enviar, conexao.lojaId);
     } catch (e) {
       const tDepois = agora().toISOString();
       const httpStatus = e?.details?.status ?? null;
