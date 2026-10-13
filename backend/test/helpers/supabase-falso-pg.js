@@ -149,6 +149,15 @@ export async function iniciarSupabaseFalso({ pgUrl, usuarios, aoAuthAdmin = null
         return json(res, 200, { id: alvo.id, email: alvo.email, last_sign_in_at: "2026-10-10T12:00:00Z", app_metadata: {}, user_metadata: {} });
       }
 
+      // ---- PostgREST: RPC (funções do schema chamadas com argumentos nomeados; devolve o valor como JSON) ----
+      const rpc = u.pathname.match(/^\/rest\/v1\/rpc\/([a-z_][a-z0-9_]*)$/);
+      if (rpc && req.method === "POST") {
+        const argumentos = Object.entries(dados ?? {}).map(([k, v]) => `${ident(k)} := ${typeof v === "number" || typeof v === "boolean" ? v : lit(v)}`).join(", ");
+        const r = await consultar(`select coalesce(to_jsonb(${ident(rpc[1])}(${argumentos})), 'null'::jsonb)`);
+        if (!r.ok) return erroPg(res, r);
+        return json(res, 200, JSON.parse(r.out.trim().split("\n").pop().trim()));
+      }
+
       // ---- PostgREST ----
       const m = u.pathname.match(/^\/rest\/v1\/([a-z_][a-z0-9_]*)$/);
       if (!m) return json(res, 404, { message: "rota desconhecida" });

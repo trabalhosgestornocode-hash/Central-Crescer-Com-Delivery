@@ -308,6 +308,10 @@
 .cko-ped.cko-nivel--atencao .cko-ped-vida { color: var(--cko-atencao); }
 .cko-ped-alerta { color: var(--cko-critico); font-weight: 700; white-space: normal !important; }
 .cko-ped-agendado { color: var(--cko-suave); font-weight: 600; }
+/* Origem do pedido quando a unidade tem mais de uma loja iFood (ex.: Sanduíches / Saladas). */
+.cko-ped-loja { display: inline-block; width: max-content; max-width: 100%; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor;
+  font-weight: 700; letter-spacing: .02em; color: var(--cko-suave); }
+.cko-tabela th .cko-ped-loja { margin-left: 8px; font-size: .78em; vertical-align: middle; }
 /* Paginador (só aparece no Modo Televisão, com mais de uma página): página atual, total de páginas e o
    total da lista inteira. As setas trocam a página à mão (teclado, ou movimento reduzido sem virada automática). */
 .cko-paginacao { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: auto; flex: none; }

@@ -206,6 +206,12 @@ export function textoVida(p) {
   return p.governadoPelaVida ? `Vida do pedido em ${p.vida.cronometro}: ${ROTULO_NIVEL[p.vida.nivel].toLowerCase()}` : "";
 }
 
+/** Origem do pedido (Sanduíches/Saladas…). Só existe quando a unidade tem mais de uma loja iFood; com uma só, nada é desenhado. */
+export function seloLoja(p) {
+  const rotulo = p?.loja?.rotulo;
+  return rotulo ? `<span class="cko-ped-loja" data-loja>${escapeHtml(rotulo)}</span>` : "";
+}
+
 export function linhaPedidoAtivo(p) {
   const e = p.daEtapa;
   return `
@@ -213,6 +219,7 @@ export function linhaPedidoAtivo(p) {
       ${faixa(true)}
       <div class="cko-ped-id">
         <strong>${escapeHtml(rotuloPedido(p.displayId))}</strong>
+        ${seloLoja(p)}
         <span>Recebido ${fmtHoraCurta(p.recebidoEm)}</span>
         ${p.semConclusao ? '<span class="cko-ped-alerta">Aberto há mais de 4 h sem conclusão</span>' : p.agendado ? '<span class="cko-ped-agendado">Agendado</span>' : ""}
       </div>
@@ -269,7 +276,7 @@ export function painelUltimosPedidos(resumo) {
     const cancelado = etapa.passo === -1;
     return `
       <tr class="${cancelado ? "cko-tr-cancelado" : ""}">
-        <th scope="row">${escapeHtml(rotuloPedido(p.displayId))}</th>
+        <th scope="row">${escapeHtml(rotuloPedido(p.displayId))}${seloLoja(p)}</th>
         <td>${fmtHoraCurta(p.recebidoEm)}</td>
         <td><span class="cko-etq${cancelado ? " cko-etq--cancelado" : ativo ? " cko-etq--andamento" : ""}">${escapeHtml(etapa.rotulo)}</span></td>
         ${cancelado ? '<td class="cko-td-tempo cko-td-vazio" colspan="3">Fora das médias</td>' : `

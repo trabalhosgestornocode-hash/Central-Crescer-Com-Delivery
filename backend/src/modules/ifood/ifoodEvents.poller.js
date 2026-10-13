@@ -25,6 +25,13 @@
 //      (o loop aplica backoff — mesmo comportamento de antes com uma única conexão).
 //   Globais de propósito (param o ciclo inteiro): 429 (throttling é do app, não da loja) e lease perdido.
 //
+// LOJAS ADICIONAIS (migration 117): uma conexão pode ter, além da loja principal (ifood_conexoes.merchant_id), outras lojas da MESMA
+//   unidade e credencial (ex.: Sanduíches + Saladas). Elas entram no MESMO polling da conexão (um pedido, um header com a lista) e o tenant
+//   continua vindo da conexão. Só `ativa`/`liberada` são consultadas; `pendente`, `bloqueada` e `desativada` NUNCA.
+//   Consultar um merchant NÃO autorizado é infração no iFood, então o 403 BLOQUEIA a loja de forma PERSISTENTE (banco) e em memória: ela não
+//   volta ao polling nem depois de reiniciar, até uma nova liberação supervisionada. A falha de uma loja adicional nunca derruba a principal:
+//   o 403 tira só a loja recusada e o mesmo ciclo segue com as demais. Sem a tabela/linhas, o comportamento é IDÊNTICO ao de uma loja só.
+//
 // PILOTO (IFOOD_ORDER_PILOT_UNITS): o poller só enxerga conexões cuja UNIDADE está na lista — nos dois modos
 //   (distribuído e centralizado). Fail-closed: lista vazia/ausente = nenhuma loja é consultada, nenhum token é
 //   pedido/renovado e nenhum ACK sai. O critério é sempre `unidade_id` da conexão (nunca organização/merchant).
@@ -41,12 +48,13 @@ import { processarDetalhesPendentes } from "./ifoodOrder.service.js";
 import { unidadeNoPilotoOrder } from "./ifoodOrderPiloto.js";
 
 /** Grupos de polling conforme o escopo do token. */
-export function montarGrupos(conexoes, escopo, tamanho = IFOOD_EVENTS.maxMerchantsPorPolling) {
+export function montarGrupos(conexoes, escopo, tamanho = IFOOD_EVENTS.maxMerchantsPorPolling, extrasPorConexao = new Map()) {
+  const merchantsDe = (c) => [c.merchant_id, ...(extrasPorConexao.get(c.id) ?? [])];
   if (escopo === "app") {
-    return eventsClient.dividirMerchantsEmLotes(conexoes.map((c) => c.merchant_id), tamanho)
+    return eventsClient.dividirMerchantsEmLotes(conexoes.flatMap(merchantsDe), tamanho)
       .map((merchantIds) => ({ conexaoId: null, merchantIds }));
   }
-  return conexoes.map((c) => ({ conexaoId: c.id, merchantIds: [c.merchant_id] }));
+  return conexoes.map((c) => ({ conexaoId: c.id, merchantIds: merchantsDe(c) }));
 }
 
 // Mensagem de erro para log: além do "Bearer ***" de mensagemSegura, remove qualquer header de autorização inteiro.
@@ -84,6 +92,12 @@ export function criarPoller({
   let autorizadas = new Set();
   let merchantsAutorizados = new Set();
   let merchantsForaDoPiloto = new Set();   // merchants de conexões vivas cuja unidade NÃO está no piloto
+  // Lojas ADICIONAIS do ciclo (merchant -> linha de ifood_conexao_lojas) e bloqueios em MEMÓRIA: se gravar o bloqueio no banco falhar, a loja
+  // recusada NÃO volta ao polling neste processo (o 403 não se repete a cada 30 s). O banco é a fonte persistente.
+  let lojasExtrasDoCiclo = new Map();
+  // merchant -> carimbo da liberação (liberada_em) vigente quando foi bloqueada: uma NOVA liberação supervisionada muda o carimbo e vale sem reiniciar.
+  const lojasBloqueadasEmMemoria = new Map();
+  let avisouLojasIndisponiveis = false;
   // `lease`: última leitura do lease (titular e vencimento) — só observabilidade; quem decide é o banco.
   const info = { ultimoCiclo: null, ultimoEstado: null, geracao: null, lease: null };
 
@@ -104,6 +118,83 @@ export function criarPoller({
     if (!dentro) throw ifoodErro(IFOOD_ERROS.IFOOD_ORDER_PILOTO_NAO_HABILITADO);
     return token.comAccessTokenValido({ conexaoId: grupo.conexaoId, appType, deps: { http }, fn });
   };
+
+  /**
+   * Lojas adicionais das conexões APTAS deste ciclo (já dentro do piloto e com credencial utilizável). Devolve Map(conexaoId -> merchants).
+   * NUNCA lança: qualquer falha (tabela ainda inexistente, banco) = nenhuma loja adicional, e a loja principal segue como sempre.
+   * Dedupe: merchant igual ao da principal, de outra conexão ou já bloqueado em memória é ignorado. Loja `liberada` conta a tentativa ANTES
+   * de entrar (atômico no banco); sem tentativas, o banco a bloqueia e ela não entra.
+   */
+  async function resolverLojasExtras(aptas, porMerchant) {
+    const porConexao = new Map();
+    if (typeof repo.listarLojasExtrasParaPolling !== "function" || aptas.length === 0) return porConexao;
+    let linhas;
+    try {
+      linhas = await repo.listarLojasExtrasParaPolling({ conexaoIds: aptas.map((c) => c.id) });
+    } catch (e) {
+      if (!avisouLojasIndisponiveis) {
+        avisouLojasIndisponiveis = true;
+        log("warn", "events.lojas_extras_indisponiveis", { erro: String(e?.message ?? e).slice(0, 160) });
+      }
+      return porConexao;
+    }
+    const porId = new Map(aptas.map((c) => [c.id, c]));
+    for (const l of linhas ?? []) {
+      const con = porId.get(l.conexao_id);
+      const merchant = String(l.merchant_id ?? "").toLowerCase();
+      if (!con || !merchant || !["ativa", "liberada"].includes(l.estado)) continue;
+      if (con.organizacao_id !== l.organizacao_id || con.unidade_id !== l.unidade_id) continue;   // tenant da loja = tenant da conexão
+      if (merchant === con.merchant_id || porMerchant.has(merchant)) continue;
+      if (lojasBloqueadasEmMemoria.has(merchant) && lojasBloqueadasEmMemoria.get(merchant) === (l.liberada_em ?? null)) continue;
+      if (l.estado === "liberada") {
+        let r;
+        try {
+          r = await repo.iniciarVerificacaoLoja({ id: l.id, max: IFOOD_EVENTS.lojaExtraMaxVerificacoes });
+        } catch (e) {
+          log("warn", "events.loja_extra_verificacao_indisponivel", { merchant: mascararId(merchant), erro: String(e?.message ?? e).slice(0, 160) });
+          continue;   // sem conseguir contar a tentativa, NÃO consulta (não arrisca repetir uma infração)
+        }
+        if (r !== "ok") {
+          log("warn", "events.loja_extra_nao_consultada", { merchant: mascararId(merchant), motivo: r });
+          continue;
+        }
+      }
+      porConexao.set(con.id, [...(porConexao.get(con.id) ?? []), merchant]);
+      porMerchant.set(merchant, con);                       // tenant dos eventos e dos detalhes: SEMPRE a conexão
+      merchantsAutorizados.add(merchant);
+      lojasExtrasDoCiclo.set(merchant, l);
+    }
+    return porConexao;
+  }
+
+  /** O iFood recusou estas lojas ADICIONAIS (403): bloqueio persistente + em memória; nunca mais consultadas sem nova liberação. */
+  async function bloquearLojasRecusadas(recusados) {
+    for (const m of recusados) {
+      const merchant = String(m).toLowerCase();
+      const linha = lojasExtrasDoCiclo.get(merchant);
+      if (!linha) continue;                                  // a loja principal segue o comportamento de sempre
+      lojasBloqueadasEmMemoria.set(merchant, linha.liberada_em ?? null);
+      try {
+        await repo.bloquearLoja({ id: linha.id, motivo: "SEM_AUTORIZACAO" });
+        log("warn", "events.loja_extra_bloqueada", { merchant: mascararId(merchant), motivo: "SEM_AUTORIZACAO", estadoAnterior: linha.estado });
+      } catch (e) {
+        log("error", "events.loja_extra_bloqueio_nao_gravado", { merchant: mascararId(merchant), erro: String(e?.message ?? e).slice(0, 160) });
+      }
+    }
+  }
+
+  /** Consulta aceita (sem 403): as lojas `liberada` que estavam nela passam a `ativa`. Best-effort: nunca derruba o ciclo. */
+  async function confirmarLojasLiberadas(merchantIds) {
+    for (const merchant of merchantIds) {
+      const linha = lojasExtrasDoCiclo.get(merchant);
+      if (!linha || linha.estado !== "liberada") continue;
+      try {
+        if (await repo.marcarLojaAtiva({ id: linha.id })) log("info", "events.loja_extra_ativada", { merchant: mascararId(merchant) });
+      } catch (e) {
+        log("warn", "events.loja_extra_ativacao_nao_gravada", { merchant: mascararId(merchant), erro: String(e?.message ?? e).slice(0, 160) });
+      }
+    }
+  }
 
   async function pollGrupo(grupo, merchantIds) {
     return comToken(grupo, merchantIds, (accessToken) => client.buscarEventos({ accessToken, merchantIds, http }));
@@ -126,6 +217,7 @@ export function criarPoller({
     autorizadas = new Set();
     merchantsAutorizados = new Set();
     merchantsForaDoPiloto = new Set();
+    lojasExtrasDoCiclo = new Map();
 
     // Eventos persistidos que ficaram sem processar (queda entre persistir e processar) — só das unidades do piloto.
     const reproc = await reprocessarPendentes({ repo, agora, log, unidades: piloto })
@@ -156,7 +248,8 @@ export function criarPoller({
       log("warn", "events.conexao_ignorada", ignorada);
       return false;
     });
-    const grupos = montarGrupos(aptas, escopo);
+    const extrasPorConexao = await resolverLojasExtras(aptas, porMerchant);
+    const grupos = montarGrupos(aptas, escopo, undefined, extrasPorConexao);
 
     // `grupos`: conexões (distribuído) ou lotes de merchants (centralizado) tentados neste ciclo.
     const total = { grupos: grupos.length, polls: 0, eventos: 0, novos: 0, reentregas: 0, acks: 0 };
@@ -219,6 +312,7 @@ export function criarPoller({
         const nao = e?.codigo === IFOOD_ERROS.IFOOD_MERCHANT_SEM_PERMISSAO ? e.details?.unauthorizedMerchants : null;
         if (tentativa === 1 && Array.isArray(nao) && nao.length) {
           log("warn", "events.merchants_sem_permissao", { merchants: nao.map(mascararId) });
+          await bloquearLojasRecusadas(nao);
           merchantIds = merchantIds.filter((m) => !nao.includes(m));
           if (merchantIds.length === 0) { eventos = []; break; }
           continue;
@@ -226,6 +320,7 @@ export function criarPoller({
         throw e;
       }
     }
+    await confirmarLojasLiberadas(merchantIds);
     if (!eventos || eventos.length === 0) return null;   // 204: nada a fazer, nada a reconhecer
 
     // Defesa: o iFood só deveria devolver os merchants pedidos. Se vier evento de uma loja NOSSA que está fora
