@@ -21,6 +21,7 @@ import { IFOOD_ROTAS, IFOOD_OAUTH, IFOOD_APP_ORDER } from "./ifood.constants.js"
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
 import * as tokenService from "./ifoodToken.service.js";
+import { gravarCredencialComProtecao } from "./ifoodCredencialProtecao.js";
 
 // Política de ambiente (config), não dependência injetável: sempre o tokenService real. `order` exige a
 // unidade no piloto — checado AQUI, antes de qualquer chamada ao iFood, no início E na conclusão do OAuth.
@@ -132,10 +133,13 @@ export async function concluirAutorizacao({
   }
 
   const conexao = await repo.obterOuCriarConexao({ organizacaoId, unidadeId, criadoPor: usuarioId });
-  await token.salvarTokens({ conexaoId: conexao.id, appType, tokens, repo });
+  const gravacao = await gravarCredencialComProtecao({ conexao, appType, tokens, repo, token, organizacaoId, unidadeId, sessaoId });
   await repo.fecharSessaoOAuth({ organizacaoId, unidadeId, sessaoId, status: "authorized" });
 
-  ifoodLog("info", "oauth.concluido", { organizacaoId, unidadeId, appType, conexaoId: conexao.id });
+  ifoodLog("info", "oauth.concluido", {
+    organizacaoId, unidadeId, appType, conexaoId: conexao.id,
+    credencialSubstituida: gravacao.substituida, lojasNovasNoToken: gravacao.novasLojas?.length ?? 0,
+  });
 
   return { appType, status: "authorized", conexaoStatus: conexao.status };
 }

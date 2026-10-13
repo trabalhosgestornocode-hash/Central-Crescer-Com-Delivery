@@ -71,6 +71,7 @@ describe("OAuth Order sem loja vinculada", () => {
       },
       async reivindicarSessaoOAuth() { return true; },
       async fecharSessaoOAuth({ status }) { estado.sessao.status = status; },
+      async obterCredencial() { return null; },   // primeira conexão: ainda não há credencial Order a proteger
       async obterOuCriarConexao({ organizacaoId, unidadeId: u }) { estado.conexao ??= { id: "con-nova", organizacao_id: organizacaoId, unidade_id: u, status: "pendente", merchant_id: null }; return estado.conexao; },
     };
     const http = { async postForm(rota, corpo) { estado.posts.push({ rota, corpo }); return { userCode: "ABCD-EFGH", authorizationCodeVerifier: "verifier-de-teste", verificationUrl: "https://portal.exemplo/codigo", verificationUrlComplete: "https://portal.exemplo/codigo?c=ABCD-EFGH", expiresIn: 600 }; } };
