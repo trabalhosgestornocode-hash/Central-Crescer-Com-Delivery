@@ -28,6 +28,7 @@ import {
 import { montarSimuladorPreco } from "./dashboardExecutivoSimulador.js";
 import { indicadoresRentabilidadeLiberados, indicadoresBloqueadosHtml, ligarBloqueioIndicadores } from "./dashboardExecutivoBloqueio.js";
 import { icon } from "./icons.js";
+import { fmtServicosPromocoes } from "./sinalServicos.js";
 import { botaoContextualHtml, botaoDiagnosticoHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
 import { planoAcaoHtml, fmtPp } from "./dashboardExecutivoPlano.js";
 // Formatadores de 2 casas — SÓ para a tabela de Indicadores de Rentabilidade
@@ -761,7 +762,7 @@ function cardsPrincipais(cards, modeloPeriodo = null) {
       cards.novosClientes?.valor != null ? "Acumulado no período selecionado" : "Dados não informados",
       "Quantidade acumulada de novos clientes identificados no período selecionado (Desempenho — indicador operacional)."),
     cardDef("Taxas e Comissões", fmtMoeda(cards.taxasComissoes.valor), `${fmtPct(cards.taxasComissoes.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s1.chave]}">${s1.label}</span>`, "Comissão iFood + taxa de transação de pagamento online.", "", metaBarraHtml(cards.taxasComissoes)),
-    cardDef("Serviços e Promoções", fmtMoeda(cards.servicosPromocoes.valor), `${fmtPct(cards.servicosPromocoes.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s2.chave]}">${s2.label}</span>`, "Custo de campanhas e promoções ativas no iFood.", "", metaBarraHtml(cards.servicosPromocoes)),
+    cardDef("Serviços e Promoções", fmtServicosPromocoes(cards.servicosPromocoes.valor), `${fmtPct(cards.servicosPromocoes.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s2.chave]}">${s2.label}</span>`, "Custo de campanhas e promoções ativas no iFood.", "", metaBarraHtml(cards.servicosPromocoes)),
     cards.taxasEntregadores?.naoAplicavel ? "" : cardDef("Taxas de Entregadores", fmtMoeda(cards.taxasEntregadores?.valor), `${fmtPct(cards.taxasEntregadores?.percentual)} das vendas · <span class="pill ${CLASSE_STATUS[s4.chave]}">${s4.label}</span>`, (modeloPeriodo?.misto ? "Repasse aos entregadores parceiros — apurado só nos dias de Marketplace do período (o % é sobre o faturamento desses dias)." : "Repasse aos entregadores parceiros — só se aplica ao modelo logístico Marketplace."), "", metaBarraHtml(cards.taxasEntregadores ?? {})),
     cardDef("Ajustes a favor", fmtMoeda(cards.ajustesFavor?.valor), `${fmtPct(cards.ajustesFavor?.percentual)} das vendas`, "Créditos, reembolsos e correções financeiras a favor da loja.", "ajuste-favor"),
     cardDef("Ajustes contra", fmtMoeda(cards.ajustesContra?.valor), `${fmtPct(cards.ajustesContra?.percentual)} das vendas`, "Débitos, descontos e correções financeiras contra a loja."),

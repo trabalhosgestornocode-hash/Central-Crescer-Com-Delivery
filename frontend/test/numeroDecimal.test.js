@@ -98,8 +98,12 @@ test("formularios aplicam mascara apenas aos campos monetarios", async () => {
   const { readFile } = await import("node:fs/promises");
   const diario = await readFile(new URL("../src/dashboardExecutivoForm.js", import.meta.url), "utf8");
   const mensal = await readFile(new URL("../src/dashboardExecutivoMensal.js", import.meta.url), "utf8");
-  for (const id of ["dex-valorbruto", "dex-vifood", "dex-taxas", "dex-servicos", "dex-entregadores", "dex-aj-favor", "dex-aj-contra"])
+  for (const id of ["dex-valorbruto", "dex-vifood", "dex-taxas", "dex-entregadores", "dex-aj-favor", "dex-aj-contra"])
     assert.match(diario, new RegExp(`data-moeda[^>]*id="${id}"`), id);
+  // Serviços e promoções: o input (com data-moeda) vem do seletor de sinal.
+  const sinal = await readFile(new URL("../src/sinalServicos.js", import.meta.url), "utf8");
+  assert.match(diario, /campoServicosHtml\(\{[^}]*atributosInput: 'id="dex-servicos"'/);
+  assert.match(sinal, /data-moeda \$\{atributosInput\}/);
   assert.match(mensal, /data-moeda id="lm-valor"/);
   assert.match(mensal, /data-moeda id="lm-ed-valor"/);
   assert.doesNotMatch(diario, /data-moeda[^>]*id="dex-(qtd|novos)"/);

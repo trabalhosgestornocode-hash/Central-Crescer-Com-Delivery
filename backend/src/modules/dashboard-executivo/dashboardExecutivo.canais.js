@@ -26,6 +26,7 @@ import * as v from "../../shared/validar.js";
 import {
   situacaoOperou, ticketMedio, percentual, totalDeducoes, receitaLiquida,
   ultimoDesempenhoConhecido, snapshotFinanceiroMaisRecente, desempenhoParaTicketMedio,
+  LIMITES_SERVICOS_PROMOCOES,
 } from "./dashboardExecutivo.calc.js";
 import { avaliarQuedaAcumulado, ultimoValorConciliadoAntesDe } from "./dashboardExecutivo.confiabilidade.js";
 
@@ -284,7 +285,11 @@ export function normalizarCanais(canaisBody, ctx) {
       const n = v.numeroOpcionalNulo(b[chave], rotulo(chave), { min: 0, max: 1e9 });
       return n != null && CAMPOS_INTEIROS.has(chave) ? Math.trunc(n) : n;
     };
-    const financeiro = (chave) => (exigir ? v.numero(b[chave], rotulo(chave), { min: 0, max: 1e9 }) : opcional(chave));
+    // Serviços e promoções é o único campo com sinal (negativo = crédito à loja).
+    const limites = (chave) => (chave === "servicosPromocoes" ? LIMITES_SERVICOS_PROMOCOES : { min: 0, max: 1e9 });
+    const financeiro = (chave) => (exigir
+      ? v.numero(b[chave], rotulo(chave), limites(chave))
+      : (chave === "servicosPromocoes" ? v.numeroOpcionalNulo(b[chave], rotulo(chave), limites(chave)) : opcional(chave)));
 
     const desempenho = situacaoCanal === SITUACAO_CANAL.SEM_VENDAS
       ? desempenhoRepetido(canal.id)

@@ -123,6 +123,17 @@ export function deltaFinanceiro(atual, anterior) {
 }
 
 /**
+ * Faixa aceita em "Serviços e promoções" — o ÚNICO campo financeiro com
+ * sinal (migration 119). A coluna continua significando CUSTO: positivo =
+ * dedução (como sempre), negativo = crédito a favor da loja (seletor "+" no
+ * formulário). O backend nunca inverte o sinal — grava o que recebe; quem
+ * converte (+)/(−) da tela para este número é só `frontend/src/sinalServicos.js`.
+ * Com isso `totalDeducoes`/`receitaLiquida` funcionam sem mudança: um
+ * crédito reduz as deduções e aumenta a receita líquida.
+ */
+export const LIMITES_SERVICOS_PROMOCOES = Object.freeze({ min: -1e9, max: 1e9 });
+
+/**
  * Soma as deduções que EFETIVAMENTE reduzem a receita: taxas e comissões,
  * serviços e promoções, taxas de entregadores e AJUSTES CONTRA A LOJA
  * (débitos/descontos). Ajuste A FAVOR da loja (crédito/reembolso) NUNCA entra

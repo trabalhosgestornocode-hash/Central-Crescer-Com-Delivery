@@ -5284,3 +5284,43 @@ tr.dex-linha-na { opacity: .65; }
   .dex-tut-pontos { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .dex-tut-overlay, .dex-tut-overlay .modal { animation: none; } }
+
+/* ===================== Dashboard iFood — seletor de sinal (+)/(−) de Serviços e promoções =====================
+   (−) custo/desconto = vermelho (padrão)  ·  (+) crédito a favor da loja = verde. O campo herda o .cfg-campo de sempre;
+   só a borda/fundo ganham a cor do sinal. Ver sinalServicos.js. */
+.dex-sinal-campo { --sinal-cor: var(--bad); --sinal-bg: var(--bad-bg); --sinal-anel: rgba(219,59,59,.16); }
+.dex-sinal-campo[data-sinal="+"] { --sinal-cor: var(--ok); --sinal-bg: var(--ok-bg); --sinal-anel: rgba(14,157,87,.16); }
+.dex-sinal-linha { display: flex; align-items: stretch; gap: 8px; }
+.dex-sinal-valor { position: relative; flex: 1; min-width: 0; display: flex; }
+.dex-sinal-valor input { flex: 1; min-width: 0; width: 100%; padding-left: 30px; }
+.cfg-campo.dex-sinal-campo .dex-sinal-valor input,
+[data-theme="dark"] .modal .dex-sinal-campo .dex-sinal-valor input {
+  border-color: color-mix(in srgb, var(--sinal-cor) 45%, var(--linha));
+  background: color-mix(in srgb, var(--sinal-bg) 55%, var(--campo-bg));
+  color: var(--texto); font-variant-numeric: tabular-nums;
+  transition: border-color var(--t), background-color var(--t), box-shadow var(--t);
+}
+.cfg-campo.dex-sinal-campo .dex-sinal-valor input:focus { border-color: var(--sinal-cor); box-shadow: 0 0 0 3px var(--sinal-anel); }
+.dex-sinal-prefixo {
+  position: absolute; left: 11px; top: 50%; transform: translateY(-50%); pointer-events: none;
+  font-size: 16px; font-weight: 800; line-height: 1; color: var(--sinal-cor); transition: color var(--t);
+}
+.dex-sinal { display: inline-flex; flex-shrink: 0; padding: 3px; gap: 3px; border: 1.5px solid var(--linha); border-radius: 10px; background: var(--campo-bg); }
+.dex-sinal-btn {
+  min-width: 38px; min-height: 34px; padding: 0 10px; border: 0; border-radius: 7px; cursor: pointer;
+  background: transparent; color: var(--cinza); font-family: inherit; font-size: 17px; font-weight: 700; line-height: 1;
+  transition: background-color var(--t), color var(--t), box-shadow var(--t);
+}
+.dex-sinal-btn:hover { color: var(--texto); background: var(--superficie-2); }
+.dex-sinal-btn:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+.dex-sinal-btn[data-sinal-btn="+"][aria-pressed="true"] { background: var(--ok); color: #fff; box-shadow: 0 2px 6px rgba(14,157,87,.30); }
+.dex-sinal-btn[data-sinal-btn="-"][aria-pressed="true"] { background: var(--bad); color: #fff; box-shadow: 0 2px 6px rgba(219,59,59,.30); }
+[data-theme="dark"] .dex-sinal-campo { --sinal-bg: rgba(219,59,59,.12); }
+[data-theme="dark"] .dex-sinal-campo[data-sinal="+"] { --sinal-bg: rgba(14,157,87,.14); }
+[data-theme="dark"] .dex-sinal-btn:hover { background: #1e2925; }
+@media (max-width: 480px) {
+  .dex-sinal-btn { min-width: 42px; min-height: 38px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dex-sinal-btn, .dex-sinal-prefixo, .cfg-campo.dex-sinal-campo .dex-sinal-valor input { transition: none; }
+}

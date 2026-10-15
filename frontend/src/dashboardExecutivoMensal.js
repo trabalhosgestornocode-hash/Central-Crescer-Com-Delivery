@@ -36,6 +36,7 @@ import {
 } from "./api.js";
 import { icon } from "./icons.js";
 import { aplicarMascaraMoeda, formatarMoedaBRL, numeroDecimal } from "./numeroDecimal.js";
+import { SINAL_CUSTO, sinalDoArmazenado, paraArmazenado, campoServicosHtml, ligarSeletorSinal, fmtServicosPromocoes } from "./sinalServicos.js";
 
 const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
 const PASSOS = ["periodo", "desempenho", "financeiro", "conferencia"];
@@ -79,6 +80,37 @@ const campoExtra = (campo) => CAMPOS_EXTRAS.find((c) => c.campo === campo);
 const valorMoedaInput = (valor) => escapeHtml(formatarMoedaBRL(valor));
 const camposVisiveis = () => CAMPOS_EXTRAS.filter((c) => !(c.ocultoSeFullService && lm.modeloLogistico === "full_service"));
 const camposDoGrupo = (grupo) => camposVisiveis().filter((c) => c.grupo === grupo);
+// Serviços e promoções do mês é o único extra com sinal: `extras[...]` guarda
+// o valor GRAVADO (negativo = crédito) e o sinal da tela fica em `sinalServicos`
+// do estado — conversão só em sinalServicos.js.
+const CAMPO_SERVICOS = "servicosPromocoesTotal";
+
+/** Input de um campo extra (criação e edição). */
+function inputExtraHtml(c, extras, sinalServicos) {
+  if (c.campo === CAMPO_SERVICOS) {
+    return campoServicosHtml({ rotulo: c.label, valorArmazenado: extras[c.campo], sinal: sinalServicos, atributosInput: `data-extra="${CAMPO_SERVICOS}"` });
+  }
+  return `
+    <label class="cfg-campo"><span>${c.label}</span>
+      <input type="${c.tipo === "int" ? "number" : "text"}" inputmode="${c.tipo === "int" ? "numeric" : "decimal"}" min="0" step="${c.tipo === "int" ? "1" : "0.01"}" data-extra="${c.campo}" ${c.tipo === "money" ? "data-moeda" : ""} value="${c.tipo === "money" ? valorMoedaInput(extras[c.campo]) : (extras[c.campo] ?? "")}" placeholder="${c.tipo === "int" ? "Não informado" : "R$ 0,00"}"></label>`;
+}
+
+/** Liga os inputs extras de `estado` (`lm` na criação, `lm.edicao` na edição). */
+function ligarInputsExtras(m, estado) {
+  const extras = estado.extras;
+  m.querySelectorAll("[data-extra]").forEach((input) => {
+    const campo = input.dataset.extra;
+    if (campo === CAMPO_SERVICOS) {
+      const gravar = () => { extras[campo] = paraArmazenado(input.value, estado.sinalServicos); };
+      aplicarMascaraMoeda(input, { aoAlterar: gravar });
+      ligarSeletorSinal(input.closest(".dex-sinal-campo"), { aoAlterarSinal: (sinal) => { estado.sinalServicos = sinal; gravar(); } });
+    } else if (campoExtra(campo)?.tipo === "money") {
+      aplicarMascaraMoeda(input, { aoAlterar: (valor) => { extras[campo] = valor; atualizarTicketMedioPreview(m, extras); } });
+    } else {
+      input.addEventListener("input", (e) => { extras[campo] = e.target.value; atualizarTicketMedioPreview(m, extras); });
+    }
+  });
+}
 
 /**
  * @param {{unidadeId: string|null, mes: number, ano: number, modeloLogistico?: string, onSalvo: () => void, modoInicial?: 'ver'|'editar'|'excluir'}} p
@@ -88,7 +120,7 @@ export async function abrirLancamentoMensalModal({ unidadeId, mes, ano, modeloLo
   // por isso o estado só é atribuído DEPOIS de abrir o overlay novo, nunca
   // antes (mesma pegadinha documentada em dashboardExecutivoForm.js).
   const m = abrirOverlay(`<div class="estado"><div class="spinner"></div>Carregando…</div>`);
-  lm = { unidadeId, mes, ano, modeloLogistico, valor: "", extras: {}, passo: 1, onSalvo, lote: null, edicao: null };
+  lm = { unidadeId, mes, ano, modeloLogistico, valor: "", extras: {}, sinalServicos: SINAL_CUSTO, passo: 1, onSalvo, lote: null, edicao: null };
   try {
     const { data } = await dashExecLancamentoMensal({ unidadeId: unidadeId || undefined, mes, ano });
     if (data.existe) {
@@ -135,9 +167,7 @@ function anosDisponiveis() {
 }
 
 function extrasInputsHtml(grupo) {
-  return camposDoGrupo(grupo).map((c) => `
-    <label class="cfg-campo"><span>${c.label}</span>
-      <input type="${c.tipo === "int" ? "number" : "text"}" inputmode="${c.tipo === "int" ? "numeric" : "decimal"}" min="0" step="${c.tipo === "int" ? "1" : "0.01"}" data-extra="${c.campo}" ${c.tipo === "money" ? "data-moeda" : ""} value="${c.tipo === "money" ? valorMoedaInput(lm.extras[c.campo]) : (lm.extras[c.campo] ?? "")}" placeholder="${c.tipo === "int" ? "Não informado" : "R$ 0,00"}"></label>`).join("");
+  return camposDoGrupo(grupo).map((c) => inputExtraHtml(c, lm.extras, lm.sinalServicos)).join("");
 }
 
 // Ticket médio do mês = valor bruto de vendas ÷ quantidade de pedidos —
@@ -165,14 +195,7 @@ function atualizarTicketMedioPreview(m, extras) {
   campo.value = valor == null ? "—" : fmtMoeda(valor);
 }
 function wireExtrasInputs(m) {
-  m.querySelectorAll("[data-extra]").forEach((input) => {
-    const campo = input.dataset.extra;
-    if (campoExtra(campo)?.tipo === "money") {
-      aplicarMascaraMoeda(input, { aoAlterar: (valor) => { lm.extras[campo] = valor; atualizarTicketMedioPreview(m, lm.extras); } });
-    } else {
-      input.addEventListener("input", (e) => { lm.extras[campo] = e.target.value; atualizarTicketMedioPreview(m, lm.extras); });
-    }
-  });
+  ligarInputsExtras(m, lm);
 }
 
 // PASSO 1 — Período (mês/ano, igual já era antes do stepper existir)
@@ -254,7 +277,8 @@ function extrasSaoValidos(extras) {
     const valor = extras[campo];
     if (valor === "" || valor == null) return true;
     const numero = tipo === "money" ? numeroDecimal(valor) : Number(valor);
-    return Number.isFinite(numero) && numero >= 0 && (tipo !== "int" || Number.isInteger(numero));
+    // Serviços e promoções aceita crédito (negativo, seletor "+").
+    return Number.isFinite(numero) && (numero >= 0 || campo === CAMPO_SERVICOS) && (tipo !== "int" || Number.isInteger(numero));
   });
 }
 
@@ -279,7 +303,8 @@ async function avancarParaConferencia(m) {
 /** Uma linha "rótulo -> valor formatado (ou 'Não informado')" pra um campo extra — usada na Conferência e no Gerenciamento, único formatador pros dois. */
 function linhaExtraResumo(c, valorBruto) {
   const vazio = valorBruto === "" || valorBruto == null;
-  const html = vazio ? `<span class="dex-lm-nao-informado">Não informado</span>` : (c.tipo === "money" ? fmtMoeda(numeroDecimal(valorBruto)) : String(Number(valorBruto)));
+  const fmt = c.campo === CAMPO_SERVICOS ? fmtServicosPromocoes : fmtMoeda;
+  const html = vazio ? `<span class="dex-lm-nao-informado">Não informado</span>` : (c.tipo === "money" ? fmt(numeroDecimal(valorBruto)) : String(Number(valorBruto)));
   return linhaResumo(ROTULO_EXTRA[c.campo], html);
 }
 /** Mesmo formatador "valor ou Não informado" acima, mas pro Ticket Médio (item 1/7 do pedido: nunca R$ 0,00 quando falta um dos dois lados). */
@@ -402,12 +427,11 @@ function renderEdicao(m) {
     lm.edicao = {
       valorTotalMensal: lote.valorTotalMensal,
       extras: Object.fromEntries(CAMPOS_EXTRAS.map((c) => [c.campo, lote.extras[c.campo] ?? ""])),
+      sinalServicos: sinalDoArmazenado(lote.extras[CAMPO_SERVICOS]),
     };
   }
   const ed = lm.edicao;
-  const inputsExtras = (grupo) => camposDoGrupo(grupo).map((c) => `
-    <label class="cfg-campo"><span>${c.label}</span>
-      <input type="${c.tipo === "int" ? "number" : "text"}" inputmode="${c.tipo === "int" ? "numeric" : "decimal"}" min="0" step="${c.tipo === "int" ? "1" : "0.01"}" data-extra="${c.campo}" ${c.tipo === "money" ? "data-moeda" : ""} value="${c.tipo === "money" ? valorMoedaInput(ed.extras[c.campo]) : ed.extras[c.campo]}" placeholder="${c.tipo === "int" ? "Não informado" : "R$ 0,00"}"></label>`).join("");
+  const inputsExtras = (grupo) => camposDoGrupo(grupo).map((c) => inputExtraHtml(c, ed.extras, ed.sinalServicos)).join("");
   const ticket = ticketMedioPreview(ed.extras.valorVendasBrutoTotal, ed.extras.qtdVendasTotal);
   m.innerHTML = `
     <button class="modal-close" aria-label="Fechar">×</button>
@@ -434,14 +458,7 @@ function renderEdicao(m) {
 }
 
 function wireExtrasInputsEdicao(m, ed) {
-  m.querySelectorAll("[data-extra]").forEach((input) => {
-    const campo = input.dataset.extra;
-    if (campoExtra(campo)?.tipo === "money") {
-      aplicarMascaraMoeda(input, { aoAlterar: (valor) => { ed.extras[campo] = valor; atualizarTicketMedioPreview(m, ed.extras); } });
-    } else {
-      input.addEventListener("input", (e) => { ed.extras[campo] = e.target.value; atualizarTicketMedioPreview(m, ed.extras); });
-    }
-  });
+  ligarInputsExtras(m, ed);
 }
 
 /** Só entra no patch o que MUDOU em relação ao valor salvo (`lm.lote`) — chave ausente = "não editei", preserva o que já estava lá. */

@@ -10,6 +10,9 @@ import {
 } from "./api.js";
 import { icon } from "./icons.js";
 import { aplicarMascaraMoeda, formatarMoedaBRL, numeroDecimal, numeroDecimalOuIndefinido } from "./numeroDecimal.js";
+import {
+  SINAL_CUSTO, sinalDoArmazenado, paraArmazenado, campoServicosHtml, ligarSeletorSinal, fmtServicosPromocoes,
+} from "./sinalServicos.js";
 // Dia MULTICANAL (Checkpoint E): só entra em ação quando o GET por data traz o
 // bloco `multicanal` — dia padrão segue exatamente o fluxo de sempre.
 import {
@@ -50,6 +53,9 @@ function camposPadrao() {
     qtdVendas: "", valorVendasBruto: "", novosClientes: "",
     valorVendasIfood: "", taxasComissoes: "", servicosPromocoes: "", taxasEntregadores: "",
     ajustesFavorLoja: "", ajustesContraLoja: "",
+    // Sinal escolhido no seletor (+)/(−). `servicosPromocoes` guarda sempre o
+    // valor GRAVADO (negativo = crédito) — ver sinalServicos.js.
+    servicosSinal: SINAL_CUSTO,
   };
 }
 
@@ -64,6 +70,7 @@ function camposDoLancamento(l) {
     valorVendasIfood: l.valorVendasIfood ?? "", taxasComissoes: l.taxasComissoes ?? "", servicosPromocoes: l.servicosPromocoes ?? "",
     taxasEntregadores: l.taxasEntregadores ?? "",
     ajustesFavorLoja: l.ajustesFavorLoja ?? "", ajustesContraLoja: l.ajustesContraLoja ?? "",
+    servicosSinal: sinalDoArmazenado(l.servicosPromocoes),
   };
 }
 
@@ -482,7 +489,7 @@ function passoFinanceiro() {
     <div class="cfg-form-grid">
       <label class="cfg-campo"><span>Valor das vendas no financeiro do iFood (R$) *</span><input type="text" inputmode="decimal" data-moeda id="dex-vifood" value="${valorMoedaInput(c.valorVendasIfood)}" placeholder="R$ 0,00"></label>
       <label class="cfg-campo"><span>Taxas e comissões (R$) *</span><input type="text" inputmode="decimal" data-moeda id="dex-taxas" value="${valorMoedaInput(c.taxasComissoes)}" placeholder="R$ 0,00"></label>
-      <label class="cfg-campo"><span>Serviços e promoções (R$) *</span><input type="text" inputmode="decimal" data-moeda id="dex-servicos" value="${valorMoedaInput(c.servicosPromocoes)}" placeholder="R$ 0,00"></label>
+      ${campoServicosHtml({ rotulo: "Serviços e promoções (R$) *", valorArmazenado: c.servicosPromocoes, sinal: c.servicosSinal, atributosInput: 'id="dex-servicos"' })}
       ${mostrarEntreg
         ? `<label class="cfg-campo"><span>Taxas de entregadores da loja (R$) *</span><input type="text" inputmode="decimal" data-moeda id="dex-entregadores" value="${valorMoedaInput(c.taxasEntregadores)}" placeholder="R$ 0,00"></label>`
         : `<p class="dex-form-info dex-form-na">${icon("truck", { size: 13 })} Este modelo (Full Service) não usa entregador próprio — a entrega é feita pelo parceiro do iFood, então não há "taxas de entregadores da loja" a lançar.</p>`}
@@ -575,7 +582,7 @@ function passoConferencia() {
       ${linha("Ticket médio", fmtMoeda(ticketMedioPreview(c)))}
       ${linha("Valor das vendas (iFood)", fmtMoeda(numeroDecimal(c.valorVendasIfood)))}
       ${linha("Taxas e comissões", `${fmtMoeda(numeroDecimal(c.taxasComissoes))} (${fmtPct(calc.pctTaxas)})`)}
-      ${linha("Serviços e promoções", `${fmtMoeda(numeroDecimal(c.servicosPromocoes))} (${fmtPct(calc.pctServicos)})`)}
+      ${linha("Serviços e promoções", `${fmtServicosPromocoes(numeroDecimal(c.servicosPromocoes))} (${fmtPct(calc.pctServicos)})`)}
       ${mostraEntregadores() ? linha("Taxas de entregadores", `${fmtMoeda(numeroDecimal(c.taxasEntregadores))} (${fmtPct(calc.pctEntregadores)})`) : ""}
       ${linha("Ajustes a favor da loja", fmtMoeda(numeroDecimal(c.ajustesFavorLoja)))}
       ${linha("Ajustes contra a loja", fmtMoeda(numeroDecimal(c.ajustesContraLoja)))}
@@ -678,7 +685,7 @@ function wirePasso(m, chave) {
   }
   if (chave === "financeiro" && situacaoOperou(fm.campos.situacao)) {
     const campos = [
-      "dex-vifood:valorVendasIfood", "dex-taxas:taxasComissoes", "dex-servicos:servicosPromocoes",
+      "dex-vifood:valorVendasIfood", "dex-taxas:taxasComissoes",
       "dex-entregadores:taxasEntregadores", "dex-aj-favor:ajustesFavorLoja", "dex-aj-contra:ajustesContraLoja",
     ];
     campos.forEach((par) => {
@@ -690,6 +697,17 @@ function wirePasso(m, chave) {
           descartarConfirmacoesDeQueda();
         },
       });
+    });
+    // Serviços e promoções: o input tem só o absoluto; o sinal vem do seletor.
+    const inputServicos = m.querySelector("#dex-servicos");
+    const atualizarServicos = () => {
+      fm.campos.servicosPromocoes = paraArmazenado(inputServicos.value, fm.campos.servicosSinal);
+      atualizarPreviewFinanceiro(m);
+      descartarConfirmacoesDeQueda();
+    };
+    aplicarMascaraMoeda(inputServicos, { aoAlterar: atualizarServicos });
+    ligarSeletorSinal(inputServicos?.closest(".dex-sinal-campo"), {
+      aoAlterarSinal: (sinal) => { fm.campos.servicosSinal = sinal; atualizarServicos(); },
     });
   }
   if (chave === "conferencia") {
@@ -762,6 +780,7 @@ function validarPassoAtual(m) {
   // true (ver passosAtivos) — chegar aqui já implica que os campos existem
   // no DOM e são esperados preenchidos, exatamente como antes.
   if (chave === "financeiro" && situacaoOperou(c.situacao)) {
+    const INDICE_SERVICOS = 2;
     const obrigatorios = [c.valorVendasIfood, c.taxasComissoes, c.servicosPromocoes];
     if (mostraEntregadores()) obrigatorios.push(c.taxasEntregadores);
     else c.taxasEntregadores = c.taxasEntregadores || 0; // Full Service: campo nem aparece, garante 0 no cálculo/envio
@@ -773,7 +792,9 @@ function validarPassoAtual(m) {
       || ajustes.some(([, valor]) => valor !== "" && !Number.isFinite(numeroDecimal(valor)))) {
       toast("Informe valores financeiros válidos."); return false;
     }
-    if (obrigatorios.some((valor) => numeroDecimal(valor) < 0)
+    // Serviços e promoções pode ser negativo (crédito escolhido no seletor "+").
+    const semSinal = obrigatorios.filter((_, i) => i !== INDICE_SERVICOS);
+    if (semSinal.some((valor) => numeroDecimal(valor) < 0)
       || ajustes.some(([, valor]) => valor !== "" && numeroDecimal(valor) < 0)) {
       toast("Os valores financeiros não podem ser negativos."); return false;
     }
