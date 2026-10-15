@@ -16,7 +16,9 @@ import {
 import {
   ESCOPO_ENTREGADORES, SITUACAO_CANAL, normalizarCanais, consolidarCanais,
 } from "../src/modules/dashboard-executivo/dashboardExecutivo.canais.js";
-import { avaliarQuedaAcumulado } from "../src/modules/dashboard-executivo/dashboardExecutivo.confiabilidade.js";
+import {
+  avaliarQuedaAcumulado, caminharSequenciaAcumulada, STATUS_CONCILIACAO,
+} from "../src/modules/dashboard-executivo/dashboardExecutivo.confiabilidade.js";
 
 const OPCOES = { exigirFinanceiro: true, desempenhoAnterior: null };
 const BASE = {
@@ -79,13 +81,37 @@ describe("consequências financeiras", () => {
     assert.equal(statusIndicadorRentabilidade(-5, meta).chave, "dentro_da_meta");
   });
 
-  test("validação de queda do acumulado continua valendo (regra financeira preservada)", () => {
-    const sinal = avaliarQuedaAcumulado({
-      campo: "servicosPromocoes", rotulo: "Serviços e Promoções", valorNovo: -100,
-      ultimoConhecido: { valor: 200, data: "2026-09-01" },
-    });
+});
+
+describe("regra de acumulado — crédito é bom, nunca queda", () => {
+  const ultimo = { valor: 200, data: "2026-09-01" };
+
+  test("Serviços: custo que vira crédito ou crédito que cresce não gera aviso de queda", () => {
+    for (const [anterior, novo] of [[200, -100], [-50, -100], [200, 120]]) {
+      assert.equal(avaliarQuedaAcumulado({ campo: "servicosPromocoes", rotulo: "Serviços e Promoções", valorNovo: novo, ultimoConhecido: { ...ultimo, valor: anterior } }), null);
+    }
+  });
+
+  test("os outros campos continuam com a regra de sempre", () => {
+    const sinal = avaliarQuedaAcumulado({ campo: "taxasComissoes", rotulo: "Taxas e Comissões", valorNovo: 100, ultimoConhecido: ultimo });
     assert.equal(sinal?.nivel, "material");
-    assert.equal(sinal.diferenca, -300);
+  });
+
+  test("finalizar com crédito depois de um custo maior não pede confirmação nem justificativa", () => {
+    const financeiroAnterior = { porCampo: { servicosPromocoes: ultimo }, linhasDoMes: [], dataIso: "2026-09-02" };
+    const d = norm({ servicosPromocoes: -100 }, { ...OPCOES, financeiroAnterior });
+    assert.equal(d.servicosPromocoes, -100);
+  });
+
+  test("caminhada do mês: todo dia de Serviços é conciliado e vale o último valor (inclusive crédito)", () => {
+    const linhas = [["2026-09-01", 200, 300], ["2026-09-02", -100, 150], ["2026-09-03", -300, 400]].map(([data, servicos, taxas]) => ({
+      data_lancamento: data, situacao: "normal", servicos_promocoes: servicos, taxas_comissoes: taxas,
+    }));
+    const servicos = caminharSequenciaAcumulada(linhas, "servicos_promocoes");
+    assert.ok([...servicos.values()].every((p) => p.status === STATUS_CONCILIACAO.CONCILIADO));
+    assert.deepEqual(servicos.get("2026-09-03").ultimoValido, { valor: -300, data: "2026-09-03" });
+    // Taxas: a queda de 300 -> 150 continua não conciliável (regra preservada).
+    assert.equal(caminharSequenciaAcumulada(linhas, "taxas_comissoes").get("2026-09-02").status, STATUS_CONCILIACAO.NAO_CONCILIAVEL);
   });
 });
 

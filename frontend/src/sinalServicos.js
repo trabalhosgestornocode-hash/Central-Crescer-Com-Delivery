@@ -14,6 +14,7 @@
 // `paraArmazenado` sempre parte do absoluto, chamá-la de novo sobre um valor
 // já convertido nunca inverte o sinal duas vezes.
 import { escapeHtml, fmtMoeda } from "./utils.js";
+import { icon } from "./icons.js";
 import { formatarMoedaBRL, numeroDecimal } from "./numeroDecimal.js";
 
 export const SINAL_CUSTO = "-";
@@ -54,6 +55,19 @@ export function fmtServicosPromocoes(valor) {
   const n = vazio(valor) ? Number.NaN : numeroDecimal(valor);
   if (Number.isFinite(n) && n < 0) return `+${fmtMoeda(Math.abs(n))} (crédito)`;
   return fmtMoeda(valor);
+}
+
+/**
+ * Crédito em Serviços e promoções é BOM para a loja — nunca vira alerta de
+ * queda (ver campoSemRegraDeQueda no backend). Na Conferência aparece só este
+ * parabéns leve. `nome` (opcional) identifica o canal num dia multicanal.
+ * Valor zero, positivo (custo) ou vazio -> "".
+ */
+export function parabensServicosHtml(valor, nome = null) {
+  const n = vazio(valor) ? Number.NaN : numeroDecimal(valor);
+  if (!(Number.isFinite(n) && n < 0)) return "";
+  const onde = nome ? ` em ${escapeHtml(nome)}` : "";
+  return `<p class="dex-parabens" role="status">${icon("award", { size: 15 })}<span><b>Parabéns!</b> Serviços e promoções ficou a favor da loja${onde}: <b>${escapeHtml(fmtMoeda(Math.abs(n)))}</b> de crédito no acumulado do mês.</span></p>`;
 }
 
 /**

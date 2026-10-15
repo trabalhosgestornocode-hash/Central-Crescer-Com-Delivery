@@ -45,6 +45,17 @@ export const LIMIAR_QUEDA_IGNORAVEL_REAIS = 1;
 /** Acima disto (R$), uma queda de acumulado é MATERIAL — exige confirmação reforçada + justificativa (ver `avaliarQuedaAcumulado`). */
 export const LIMIAR_QUEDA_MATERIAL_REAIS = 50;
 
+/**
+ * Serviços e promoções tem SINAL (migration 119: negativo = crédito a favor
+ * da loja) — o acumulado líquido do mês pode cair legitimamente quando entra
+ * um crédito, e isso é BOM para a loja (decisão do usuário, 2026-10-15). Por
+ * isso este campo fica fora da regra de queda: todo valor informado é
+ * conciliado (vale o último) e nenhuma queda vira aviso/justificativa. O
+ * formulário mostra um parabéns quando o valor fica a favor da loja.
+ */
+const CAMPOS_SEM_REGRA_DE_QUEDA = new Set(["servicos_promocoes", "servicosPromocoes"]);
+export const campoSemRegraDeQueda = (campoOuColuna) => CAMPOS_SEM_REGRA_DE_QUEDA.has(campoOuColuna);
+
 /** Um valor "não passa perto de zero" quando é maior que isto — separa reset/zeragem (regra B) de queda parcial (regra A). */
 const LIMIAR_ZERO = 0.01;
 
@@ -93,6 +104,7 @@ function linhasElegiveis(linhas) {
 export function caminharSequenciaAcumulada(linhas, coluna) {
   const porData = new Map();
   let ultimoValido = null; // {valor, data}
+  const semRegraDeQueda = campoSemRegraDeQueda(coluna);
   for (const row of linhasElegiveis(linhas)) {
     const bruto = row[coluna];
     if (bruto == null) {
@@ -103,7 +115,7 @@ export function caminharSequenciaAcumulada(linhas, coluna) {
     // Uma queda de até `LIMIAR_QUEDA_IGNORAVEL_REAIS` é tratada como ruído/
     // arredondamento (a mesma régua usada no aviso preventivo, ver
     // `avaliarQuedaAcumulado`) — nunca degrada o status do dia sozinha.
-    if (ultimoValido == null || valor >= ultimoValido.valor - LIMIAR_QUEDA_IGNORAVEL_REAIS) {
+    if (semRegraDeQueda || ultimoValido == null || valor >= ultimoValido.valor - LIMIAR_QUEDA_IGNORAVEL_REAIS) {
       const novoUltimo = { valor, data: row.data_lancamento };
       porData.set(row.data_lancamento, { valor, status: STATUS_CONCILIACAO.CONCILIADO, motivo: null, ultimoValido: novoUltimo, detalhe: null });
       ultimoValido = novoUltimo;
@@ -298,7 +310,7 @@ export function ultimoValorConciliadoAntesDe(linhasDoMes, coluna, antesDeDataIso
  * @param {{campo: string, rotulo: string, valorNovo: number, ultimoConhecido: {valor:number, data:string}|null}} p
  */
 export function avaliarQuedaAcumulado({ campo, rotulo, valorNovo, ultimoConhecido }) {
-  if (!ultimoConhecido || valorNovo == null) return null;
+  if (!ultimoConhecido || valorNovo == null || campoSemRegraDeQueda(campo)) return null;
   const diferenca = Number(valorNovo) - ultimoConhecido.valor;
   if (diferenca >= -LIMIAR_QUEDA_IGNORAVEL_REAIS) return null;
   const nivel = Math.abs(diferenca) > LIMIAR_QUEDA_MATERIAL_REAIS ? "material" : "leve";

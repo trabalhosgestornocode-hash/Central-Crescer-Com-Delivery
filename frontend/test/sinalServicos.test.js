@@ -100,8 +100,17 @@ describe("formulário diário", () => {
     p.avancar();
     assert.equal(p.etapa(), "4 4 Conferência", `não avançou: ${p.toast()}`);
     assert.match(p.corpo(), /\+R\$\s?50,00 \(crédito\)/);
+    assert.match(p.corpo(), /class="dex-parabens"[\s\S]*Parabéns![\s\S]*a favor da loja/, "crédito ganha um parabéns leve");
+    assert.doesNotMatch(p.corpo(), /dex-avisos/, "e nenhum alerta");
     const { body } = await p.finalizar();
     assert.equal(body.servicosPromocoes, -50);
+  });
+
+  test("custo (−) não mostra parabéns", async () => {
+    await ateFinanceiro();
+    preencher("50,00");
+    p.avancar();
+    assert.doesNotMatch(p.corpo(), /dex-parabens/);
   });
 
   test("trocar o sinal depois de digitar não acumula inversões (+ → − → + = negativo)", async () => {
@@ -175,15 +184,16 @@ describe("formulário Sanduíches + Saladas (por canal)", () => {
     botao("+").click();
     aba(S).click();
     assert.equal(sinalAtivo(), "-", "o outro canal continua em (−)");
-    p.digitar("#dex-mc-vifood", "500,00"); p.digitar("#dex-mc-taxas", "50,00"); p.digitar("#dex-mc-servicos", "20,00");
+    p.digitar("#dex-mc-vifood", "500,00"); p.digitar("#dex-mc-taxas", "50,00"); p.digitar("#dex-mc-servicos", "100,00");
     p.digitar("#dex-mc-entregadores-unidade", "0,00");
     aba(N).click();
     assert.equal(sinalAtivo(), "+", "voltar à aba recupera o sinal do canal");
     p.avancar();
     assert.match(p.etapa(), /Conferência/, `não avançou: ${p.toast()}`);
+    assert.match(p.corpo(), /Parabéns!<\/b> Serviços e promoções ficou a favor da loja em Loja Norte/, "consolidado é custo: parabeniza o canal com crédito");
     const { body } = await p.finalizar();
     const porCanal = Object.fromEntries(body.canais.map((c) => [c.canalId, c.servicosPromocoes]));
-    assert.deepEqual(porCanal, { [N]: -60, [S]: 20 });
+    assert.deepEqual(porCanal, { [N]: -60, [S]: 100 });
   });
 
   test("dia salvo com crédito num canal abre esse canal em (+)", async () => {

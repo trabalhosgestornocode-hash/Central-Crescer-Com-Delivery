@@ -11,7 +11,7 @@ import {
 import { icon } from "./icons.js";
 import { aplicarMascaraMoeda, formatarMoedaBRL, numeroDecimal, numeroDecimalOuIndefinido } from "./numeroDecimal.js";
 import {
-  SINAL_CUSTO, sinalDoArmazenado, paraArmazenado, campoServicosHtml, ligarSeletorSinal, fmtServicosPromocoes,
+  SINAL_CUSTO, sinalDoArmazenado, paraArmazenado, campoServicosHtml, ligarSeletorSinal, fmtServicosPromocoes, parabensServicosHtml,
 } from "./sinalServicos.js";
 // Dia MULTICANAL (Checkpoint E): só entra em ação quando o GET por data traz o
 // bloco `multicanal` — dia padrão segue exatamente o fluxo de sempre.
@@ -589,6 +589,7 @@ function passoConferencia() {
       ${linha("Total de deduções", `${fmtMoeda(calc.totalDed)} (${fmtPct(calc.pctTotal)})`)}
       ${linha("Receita líquida", fmtMoeda(calc.receita))}
     </div>
+    ${parabensServicosHtml(c.servicosPromocoes)}
     ${avisos.length ? `
       <div class="dex-avisos">
         <b>${icon("alert-triangle", { size: 13 })} Inconsistências encontradas:</b>
@@ -608,6 +609,7 @@ function conferenciaMulticanal(c) {
     ${fm.mostrarFinanceiro ? "" : `<p class="dex-form-info">${icon("banknote", { size: 13 })} Financeiro ainda não disponível para esta data — o iFood só consolida com 1 dia
       de atraso. Você pode finalizar este dia normalmente com os dados acima; quando esta data virar "ontem", volte
       aqui para completar o Financeiro (o registro atual não precisa ser desfeito).</p>`}
+    ${fm.mostrarFinanceiro ? parabensMulticanal(c) : ""}
     ${avisos.length ? `
       <div class="dex-avisos">
         <b>${icon("alert-triangle", { size: 13 })} Inconsistências encontradas:</b>
@@ -616,6 +618,15 @@ function conferenciaMulticanal(c) {
       </div>` : ""}
     ${blocoQuedaMaterial()}
     ${fm.modoCorrecao ? campoMotivoCorrecao() : ""}`;
+}
+
+/** Parabéns pelo crédito: no consolidado da unidade; se o consolidado ainda é custo, por canal que ficou a favor. */
+function parabensMulticanal(c) {
+  const unidade = parabensServicosHtml(c.servicosPromocoes);
+  if (unidade) return unidade;
+  return fm.mc.canais
+    .filter((canal) => canal.situacaoCanal !== "nao_informado")
+    .map((canal) => parabensServicosHtml(canal.campos.servicosPromocoes, canal.nome)).join("");
 }
 
 /**
