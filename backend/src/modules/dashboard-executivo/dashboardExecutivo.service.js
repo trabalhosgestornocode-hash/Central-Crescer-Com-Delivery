@@ -15,6 +15,7 @@ import {
   inconsistencias, STATUS_DIA, indicadorAplicavel, classificarCamposExtrasMensal, statusIndicadorRentabilidade,
   totalDeducoesIndicador, metasComProtecaoPrecificacao, saldoMeta,
   distribuirValorMensal, distribuirQuantidadeMensal, recalcularDistribuicaoMensal,
+  LIMITES_SERVICOS_PROMOCOES,
 } from "./dashboardExecutivo.calc.js";
 import {
   montarLinhaDoTempo, modeloNaData, segmentosDoPeriodo, estadoDoPeriodo, rotuloDoModelo, modelosDasDatas, descreverPeriodo, trocasDeLinhas,
@@ -1267,12 +1268,13 @@ export function normalizarDadosLancamento(body, { exigirFinanceiro, desempenhoAn
   const valorVendasBruto = v.numeroOpcionalNulo(b.valorVendasBruto, "Valor bruto das vendas", { min: 0 });
   const novosClientesRaw = v.numeroOpcionalNulo(b.novosClientes, "Novos clientes", { min: 0 });
   const novosClientes = novosClientesRaw == null ? null : Math.trunc(novosClientesRaw);
-  const numFinanceiro = (valor, campo) => exigirFinanceiroDeVerdade
-    ? v.numero(valor, campo, { min: 0 })
-    : v.numeroOpcionalNulo(valor, campo, { min: 0 });
+  const numFinanceiro = (valor, campo, limites = { min: 0 }) => exigirFinanceiroDeVerdade
+    ? v.numero(valor, campo, limites)
+    : v.numeroOpcionalNulo(valor, campo, limites);
   const valorVendasIfood = numFinanceiro(b.valorVendasIfood, "Valor das vendas (iFood)");
   const taxasComissoes = numFinanceiro(b.taxasComissoes, "Taxas e comissões");
-  const servicosPromocoes = numFinanceiro(b.servicosPromocoes, "Serviços e promoções");
+  // Único campo com sinal: negativo = crédito a favor da loja (ver LIMITES_SERVICOS_PROMOCOES).
+  const servicosPromocoes = numFinanceiro(b.servicosPromocoes, "Serviços e promoções", LIMITES_SERVICOS_PROMOCOES);
   // No Full Service o campo não existe (o formulário nem o exibe): opcional, nunca exigido.
   const taxasEntregadoresAplicavel = !modeloNaDataLancamento || indicadorAplicavel(modeloNaDataLancamento, "taxas_entregadores");
   const taxasEntregadores = taxasEntregadoresAplicavel
@@ -1900,13 +1902,16 @@ const CAMPOS_EXTRAS_MENSAL = [
   ["ajustesContraLojaTotal", "Ajustes contra a loja no mês"],
 ];
 
-function validarEntradaLancamentoMensal({ mesRaw, anoRaw, valorRaw, extrasRaw }) {
+// Serviços e promoções do mês aceita crédito (negativo); os demais extras não.
+const limitesExtraMensal = (campo) => (campo === "servicosPromocoesTotal" ? LIMITES_SERVICOS_PROMOCOES : { min: 0 });
+
+export function validarEntradaLancamentoMensal({ mesRaw, anoRaw, valorRaw, extrasRaw }) {
   const mes = v.numero(mesRaw, "Mês", { min: 1, max: 12 });
   const ano = v.numero(anoRaw, "Ano", { min: 2000, max: 2100 });
   const valorTotalMensal = v.numero(valorRaw, "Faturamento total do mês", { min: 0.01 });
   const extras = {};
   for (const [campo, rotulo] of CAMPOS_EXTRAS_MENSAL) {
-    extras[campo] = v.numeroOpcionalNulo(extrasRaw?.[campo], rotulo, { min: 0 });
+    extras[campo] = v.numeroOpcionalNulo(extrasRaw?.[campo], rotulo, limitesExtraMensal(campo));
   }
   return { mes, ano, valorTotalMensal, extras };
 }
@@ -2232,7 +2237,7 @@ export async function atualizarLancamentoMensal({ organizacaoId, unidadeIdSessao
   }
   const patchExtras = {};
   for (const [campo, rotulo] of CAMPOS_EXTRAS_MENSAL) {
-    if (campoInformado(b, campo)) patchExtras[campo] = v.numeroOpcionalNulo(b[campo], rotulo, { min: 0 });
+    if (campoInformado(b, campo)) patchExtras[campo] = v.numeroOpcionalNulo(b[campo], rotulo, limitesExtraMensal(campo));
   }
   if (Object.keys(patchExtras).length) patch.extras = patchExtras;
 

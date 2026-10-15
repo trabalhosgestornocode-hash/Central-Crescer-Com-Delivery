@@ -93,7 +93,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 117 = lojas ADICIONAIS por conexão (várias lojas iFood na mesma unidade; Sanduíches + Saladas).
       "117_ifood_conexao_lojas.sql", "117_rollback.sql",
       // 118 = credencial OAuth PRÓPRIA por loja adicional + loja-alvo da sessão OAuth (credenciais independentes por merchant).
-      "118_ifood_loja_credenciais.sql", "118_rollback.sql"];
+      "118_ifood_loja_credenciais.sql", "118_rollback.sql",
+      // 119 = Serviços e promoções com sinal no Dashboard iFood (remove só o CHECK >= 0; negativo = crédito à loja).
+      "119_servicos_promocoes_sinal.sql", "119_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

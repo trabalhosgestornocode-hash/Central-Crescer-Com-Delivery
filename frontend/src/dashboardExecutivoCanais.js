@@ -20,6 +20,7 @@
 import { escapeHtml, fmtMoeda, fmtPct } from "./utils.js";
 import { icon } from "./icons.js";
 import { aplicarMascaraMoeda, formatarMoedaBRL, numeroDecimal, numeroDecimalOuIndefinido } from "./numeroDecimal.js";
+import { sinalDoArmazenado, paraArmazenado, campoServicosHtml, ligarSeletorSinal, fmtServicosPromocoes } from "./sinalServicos.js";
 
 export const SITUACOES_CANAL = [
   ["com_vendas", "Com vendas"],
@@ -43,6 +44,7 @@ const numeroDoCampo = (campo, v) => (vazio(v) ? null : (CAMPOS_INTEIROS.has(camp
 const fmtDataBr = (iso) => (iso ? iso.split("-").reverse().join("/") : "—");
 const naoInformado = '<span class="dex-mc-ni">Não informado</span>';
 const moedaOuNi = (v) => (v == null ? naoInformado : escapeHtml(fmtMoeda(v)));
+const servicosOuNi = (v) => (v == null ? naoInformado : escapeHtml(fmtServicosPromocoes(v)));
 const numeroOuNi = (v) => (v == null ? naoInformado : escapeHtml(String(v)));
 
 // ---------------------------------------------------------------------------
@@ -67,6 +69,9 @@ export function criarEstadoMulticanal(bloco) {
         nome: c.nome,
         situacaoCanal: v?.situacaoCanal ?? (diaNovo ? "com_vendas" : null),
         campos: Object.fromEntries([...CAMPOS_DESEMPENHO, ...CAMPOS_FINANCEIRO].map((k) => [k, paraCampo(v?.[k])])),
+        // Seletor (+)/(−) de Serviços e promoções; `campos.servicosPromocoes`
+        // guarda sempre o valor GRAVADO (negativo = crédito) — ver sinalServicos.js.
+        sinalServicos: sinalDoArmazenado(v?.servicosPromocoes),
       };
     }),
     anteriores: new Map((bloco.anteriores ?? []).map((a) => [a.canalId, a])),
@@ -100,7 +105,10 @@ export function definirSituacaoCanal(mc, canalId, situacao) {
     if (fin) {
       for (const k of CAMPOS_FINANCEIRO) {
         if (k === "taxasEntregadores" && !entregadoresNoCanal(mc)) continue;
-        if (vazio(canal.campos[k]) && fin[k] != null) canal.campos[k] = fin[k];
+        if (vazio(canal.campos[k]) && fin[k] != null) {
+          canal.campos[k] = fin[k];
+          if (k === "servicosPromocoes") canal.sinalServicos = sinalDoArmazenado(fin[k]);
+        }
       }
     }
   }
@@ -225,7 +233,9 @@ export function financeiroMulticanalCompleto(mc) {
 export function validarEtapaMulticanal(mc, etapa, { mostrarFinanceiro = true } = {}) {
   const semSituacao = mc.canais.find((c) => !c.situacaoCanal);
   if (semSituacao) return `Informe a situação do canal "${semSituacao.nome}".`;
-  const invalido = (k, v) => !vazio(v) && (CAMPOS_INTEIROS.has(k) ? !(Number(v) >= 0) : !(numeroDoCampo(k, v) >= 0));
+  const invalido = (k, v) => !vazio(v) && (CAMPOS_INTEIROS.has(k) ? !(Number(v) >= 0)
+    // Serviços e promoções aceita crédito (negativo); só precisa ser um número.
+    : k === "servicosPromocoes" ? !Number.isFinite(numeroDoCampo(k, v)) : !(numeroDoCampo(k, v) >= 0));
   if (etapa === "desempenho") {
     for (const c of mc.canais.filter((x) => x.situacaoCanal === "com_vendas")) {
       if (CAMPOS_DESEMPENHO.some((k) => invalido(k, c.campos[k]))) return `Valores de desempenho inválidos no canal "${c.nome}".`;
@@ -411,12 +421,12 @@ export function htmlFinanceiroMulticanal(mc, { inicioBr, fimBr }) {
       <div class="cfg-form-grid">
         ${campo("dex-mc-vifood", "valorVendasIfood", "Valor das vendas no financeiro do iFood (R$)", true)}
         ${campo("dex-mc-taxas", "taxasComissoes", "Taxas e comissões (R$)", true)}
-        ${campo("dex-mc-servicos", "servicosPromocoes", "Serviços e promoções (R$)", true)}
+        ${campoServicosHtml({ rotulo: "Serviços e promoções (R$) *", valorArmazenado: c.servicosPromocoes, sinal: canal.sinalServicos, atributosInput: 'id="dex-mc-servicos" data-campo="servicosPromocoes"' })}
         ${entregadoresNoCanal(mc) ? campo("dex-mc-entregadores", "taxasEntregadores", `Taxas de entregadores — ${escapeHtml(canal.nome)} (R$)`, true) : ""}
         ${campo("dex-mc-aj-favor", "ajustesFavorLoja", "Ajustes a favor da loja (R$)", false, "Créditos, reembolsos ou correções que aumentam o valor recebido pela loja.")}
         ${campo("dex-mc-aj-contra", "ajustesContraLoja", "Ajustes contra a loja (R$)", false, "Débitos, descontos ou correções que reduzem o valor recebido pela loja.")}
       </div>
-      ${fin ? `<p class="dex-mc-anterior">Último extrato de ${escapeHtml(canal.nome)} (${fmtDataBr(fin.dataReferencia)}): vendas ${escapeHtml(fmtMoeda(fin.valorVendasIfood))} · taxas ${escapeHtml(fmtMoeda(fin.taxasComissoes))} · serviços ${escapeHtml(fmtMoeda(fin.servicosPromocoes))}</p>` : ""}`;
+      ${fin ? `<p class="dex-mc-anterior">Último extrato de ${escapeHtml(canal.nome)} (${fmtDataBr(fin.dataReferencia)}): vendas ${escapeHtml(fmtMoeda(fin.valorVendasIfood))} · taxas ${escapeHtml(fmtMoeda(fin.taxasComissoes))} · serviços ${escapeHtml(fmtServicosPromocoes(fin.servicosPromocoes))}</p>` : ""}`;
   }
   const logistica = entregadoresNaUnidade(mc) ? `
     <section class="dex-mc-logistica" aria-label="Operação logística da unidade">
@@ -457,7 +467,7 @@ export function htmlConsolidadoFinanceiro(mc) {
 const ROTULO_SITUACAO = { com_vendas: "Com vendas", sem_vendas: "Sem vendas", nao_informado: "Não informado" };
 const linhaConf = (rotulo, valorHtml) => `<div class="dex-conf-item"><span>${rotulo}</span><b>${valorHtml}</b></div>`;
 const pctOuNi = (v) => (v == null ? naoInformado : escapeHtml(fmtPct(v)));
-const moedaComPct = (v, pctV) => (v == null ? naoInformado : `${escapeHtml(fmtMoeda(v))} <small class="dex-mc-pct">(${pctV == null ? "—" : escapeHtml(fmtPct(pctV))})</small>`);
+const moedaComPct = (v, pctV, fmt = fmtMoeda) => (v == null ? naoInformado : `${escapeHtml(fmt(v))} <small class="dex-mc-pct">(${pctV == null ? "—" : escapeHtml(fmtPct(pctV))})</small>`);
 
 /**
  * @param {{mostrarFinanceiro: boolean}} opts — sem Financeiro (dia que não é D-1) mostra só o Desempenho.
@@ -476,7 +486,7 @@ export function htmlConferenciaMulticanal(mc, { mostrarFinanceiro }) {
           ${mostrarFinanceiro ? `
           ${linhaConf("Financeiro Oficial", moedaOuNi(fin("valorVendasIfood")))}
           ${linhaConf("Taxas e Comissões", moedaOuNi(fin("taxasComissoes")))}
-          ${linhaConf("Serviços e Promoções", moedaOuNi(fin("servicosPromocoes")))}
+          ${linhaConf("Serviços e Promoções", servicosOuNi(fin("servicosPromocoes")))}
           ${linhaConf("Ajustes a favor", moedaOuNi(fin("ajustesFavorLoja")))}
           ${linhaConf("Ajustes contra", moedaOuNi(fin("ajustesContraLoja")))}` : ""}
         </div>
@@ -496,7 +506,7 @@ export function htmlConferenciaMulticanal(mc, { mostrarFinanceiro }) {
   const consolidadoFin = mostrarFinanceiro ? `
           ${linhaConf("Financeiro Oficial", moedaOuNi(p.valorVendasIfood))}
           ${linhaConf("Taxas e Comissões", moedaComPct(p.taxasComissoes, p.pctTaxas))}
-          ${linhaConf("Serviços e Promoções", moedaComPct(p.servicosPromocoes, p.pctServicos))}
+          ${linhaConf("Serviços e Promoções", moedaComPct(p.servicosPromocoes, p.pctServicos, fmtServicosPromocoes))}
           ${mc.entregadoresAplicavel ? linhaConf("Taxa de entregadores", moedaComPct(p.taxasEntregadores, p.pctEntregadores)) : ""}
           ${linhaConf("Ajustes a favor", moedaOuNi(p.ajustesFavorLoja))}
           ${linhaConf("Ajustes contra", moedaOuNi(p.ajustesContraLoja))}
@@ -593,7 +603,12 @@ export function ligarCanais(m, mc, etapa, ctx) {
     for (const input of m.querySelectorAll("#dex-mc-painel [data-campo]")) {
       const chave = input.dataset.campo;
       if (input.disabled) continue;
-      if ("moeda" in input.dataset) {
+      if (chave === "servicosPromocoes") {
+        // Input só com o absoluto; o sinal do canal vem do seletor (+)/(−).
+        const gravar = () => { definirCampoCanal(mc, canal.canalId, chave, paraArmazenado(input.value, canal.sinalServicos)); aoMudar(etapa === "financeiro")(); };
+        aplicarMascaraMoeda(input, { aoAlterar: gravar });
+        ligarSeletorSinal(input.closest(".dex-sinal-campo"), { aoAlterarSinal: (sinal) => { canal.sinalServicos = sinal; gravar(); } });
+      } else if ("moeda" in input.dataset) {
         aplicarMascaraMoeda(input, { aoAlterar: (valor) => { definirCampoCanal(mc, canal.canalId, chave, valor); aoMudar(etapa === "financeiro")(); } });
       } else {
         input.addEventListener("input", (e) => { definirCampoCanal(mc, canal.canalId, chave, e.target.value); aoMudar(false)(); });
