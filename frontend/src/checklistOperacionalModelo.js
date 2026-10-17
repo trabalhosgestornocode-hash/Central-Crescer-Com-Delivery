@@ -6,13 +6,12 @@
 // formato `ResumoChecklist` abaixo: trocar a origem dos dados não exige
 // reescrever a tela.
 //
-// Definições de tempo (auditoria do Checkpoint A — nunca somar preparo +
-// entrega para obter a vida: há trechos de espera entre eles):
-//   preparo  = confirmação (CFM) → pronto (RTP); sem RTP, até a saída (DSP),
-//              marcado como APROXIMADO
-//   entrega  = saída (DSP) → conclusão (CON)   — a validar no piloto
-//   vida     = recebimento (PLC) → conclusão (CON), medida DIRETA
-//   decomposição da vida = confirmação + preparo + espera + entrega
+// Definições de tempo (Etapa 2 — as mesmas do backend, checklistOperacional.calc.js; só pedidos DELIVERY):
+//   preparo  = chegada (PLC) → saída para entrega (DSP). O "pronto" (RTP) NÃO encerra o preparo.
+//   entrega  = saída (DSP) → conclusão registrada pelo iFood (CON)
+//   vida     = chegada (PLC) → conclusão (CON) = preparo + entrega
+//   decomposição da vida = preparo + entrega (dois trechos que não se sobrepõem)
+// Retirada (TAKEOUT) não tem saída (DSP): aparece no painel, sem meta e sem duração.
 //
 // Um TEMPO (menor é melhor) tem DUAS classificações, conforme a etapa ainda corre ou já terminou:
 //
@@ -62,7 +61,11 @@
  * }} ResumoChecklist
  */
 
-/** Exemplos de partida (nunca metas universais — cada unidade configura as suas). */
+/**
+ * Exemplos de partida (nunca metas universais — cada unidade configura as suas).
+ * ATENÇÃO: o 12 min do preparo foi pensado para a definição ANTIGA (confirmação → pronto). Com a definição nova
+ * (chegada → saída) ele NÃO é uma referência adequada; a nova meta depende de aprovação e fica de fora desta etapa.
+ */
 export const METAS_EXEMPLO = Object.freeze({
   preparo: Object.freeze({ meta: 12, avisoPct: 80 }),
   entrega: Object.freeze({ meta: 35, avisoPct: 80 }),
@@ -224,7 +227,28 @@ export function etapaDoStatus(status) {
   return ETAPA_POR_STATUS[status] ?? { passo: 0, rotulo: "Status desconhecido" };
 }
 
-const EM_PREPARO = new Set(["CONFIRMED", "SEPARATION_STARTED", "SEPARATION_ENDED"]);
+/** Antes do despacho o pedido ainda está no PREPARO — inclusive "pronto aguardando o entregador". */
+const ATE_O_DESPACHO = new Set(["PLACED", "CONFIRMED", "SEPARATION_STARTED", "SEPARATION_ENDED", "READY_TO_PICKUP"]);
+
+/**
+ * REFERÊNCIA ESTATÍSTICA — NÃO é meta. É o p75 observado dos tempos novos (preparo PLC→DSP, entrega DSP→CON, vida PLC→CON)
+ * nas entregas concluídas de UMA unidade (Subway Saci, 17/10/2026; n = 1.223 / 1.215 / 1.222). Serve de ponto de partida
+ * PROPOSTO: só entra numa tela se a pessoa clicar em "Usar referência observada" e aplicar; nunca substitui meta existente
+ * nem vira padrão de outras unidades. Três coisas distintas: meta (o limite que a unidade escolhe, `meta`), limite de alerta
+ * (`avisoPct`: a partir de quanto da meta o pedido em andamento fica "próximo") e esta referência (só informativa).
+ */
+export const REFERENCIA_P75 = Object.freeze({
+  preparo: Object.freeze({ meta: 16.3, avisoPct: 80 }),
+  entrega: Object.freeze({ meta: 12.6, avisoPct: 80 }),
+  vida: Object.freeze({ meta: 28.1, avisoPct: 80 }),
+});
+export const REFERENCIA_P75_INFO = Object.freeze({
+  percentil: 75, observadoEm: "2026-10-17", amostras: Object.freeze({ preparo: 1223, entrega: 1215, vida: 1222 }),
+  texto: "Referência observada (p75) em uma unidade, 7 dias: 16,3 / 12,6 / 28,1 min. É só um ponto de partida; a meta é da unidade.",
+});
+
+/** Retirada não tem saída para entrega: nenhuma meta de tempo a acompanha (o pedido continua visível). */
+export const semMetaDeTempo = (pedido) => pedido.agendado === true || pedido.tipo === "TAKEOUT";
 
 export const NOME_INDICADOR = Object.freeze({ preparo: "Preparo", entrega: "Entrega", vida: "Vida do pedido" });
 
@@ -250,17 +274,17 @@ function contador(desde, limite, agora) {
 }
 
 /**
- * Qual meta acompanha o pedido AGORA: preparo (desde a confirmação) enquanto
- * está em preparo, entrega (desde a saída) depois de despachado; nas esperas
- * sem meta própria (aguardando confirmação, pronto aguardando entregador) ou
- * sem o carimbo oficial, a vida do pedido (desde o recebimento).
+ * Qual meta acompanha o pedido AGORA: preparo (desde a chegada) até o despacho — inclusive enquanto o pedido está
+ * pronto esperando o entregador —, entrega (desde a saída) depois de despachado. Status fora do trilho conhecido:
+ * a vida do pedido (desde a chegada).
  */
 export function indicadorDaEtapa(pedido) {
+  if (pedido.tipo === "TAKEOUT") return { chave: null, desde: null };
   if (pedido.status === "DISPATCHED" && pedido.despachadoEm) return { chave: "entrega", desde: pedido.despachadoEm };
-  // Agendado: confirmação e recebimento acontecem horas antes do preparo — preparo e vida não são cronometrados
+  // Agendado: a chegada acontece horas antes do preparo — preparo e vida não são cronometrados
   // (as médias do servidor também o excluem). Só a entrega, depois da saída, tem meta.
   if (pedido.agendado) return { chave: null, desde: null };
-  if (EM_PREPARO.has(pedido.status) && pedido.confirmadoEm) return { chave: "preparo", desde: pedido.confirmadoEm };
+  if (ATE_O_DESPACHO.has(pedido.status) && pedido.recebidoEm) return { chave: "preparo", desde: pedido.recebidoEm };
   return { chave: "vida", desde: pedido.recebidoEm };
 }
 
@@ -272,10 +296,10 @@ export function derivarPedidoAtivo(pedido, metas, agora) {
   const { chave, desde } = indicadorDaEtapa(pedido);
   const daEtapa = contador(desde, chave ? metas?.[chave] : null, agora);
   const vida = chave === "vida" ? daEtapa
-    : pedido.agendado ? contador(null, null, agora)
+    : semMetaDeTempo(pedido) ? contador(null, null, agora)
       : contador(pedido.recebidoEm, metas?.vida, agora);
   // O pedido assume o PIOR entre a meta da etapa e a vida total (um pedido pode
-  // estar dentro do preparo e já fora da vida, se esperou muito para ser confirmado).
+  // estar dentro do preparo e já fora da vida, se o preparo e a espera pelo despacho se alongaram).
   const governa = ORDEM_NIVEL[vida.nivel] > ORDEM_NIVEL[daEtapa.nivel] ? vida : daEtapa;
   return {
     ...pedido,
@@ -314,7 +338,7 @@ export function emAcompanhamento(chave, resumo, agora) {
   // contador "Agora" dos cards — senão um pedido sem conclusão congelaria o card o dia inteiro.
   const candidatos = (resumo.pedidosAtivos ?? [])
     .filter((p) => !p.semConclusao)
-    .map((p) => ({ p, alvo: chave === "vida" ? (p.agendado ? { chave: null } : { chave: "vida", desde: p.recebidoEm }) : indicadorDaEtapa(p) }))
+    .map((p) => ({ p, alvo: chave === "vida" ? (semMetaDeTempo(p) ? { chave: null } : { chave: "vida", desde: p.recebidoEm }) : indicadorDaEtapa(p) }))
     .filter(({ alvo }) => alvo.chave === chave)
     .map(({ p, alvo }) => ({ p, c: contador(alvo.desde, metas?.[chave], agora) }))
     .filter(({ c }) => c.decorridoMin != null);
@@ -336,6 +360,7 @@ export function derivarIndicador(indicador, limite) {
     disponivel: indicador?.disponivel !== false,
     motivo: indicador?.motivo ?? null,
     mediaAproximada: indicador?.mediaAproximada === true,
+    conjunto: indicador?.conjunto ?? null,
     ultimoMin: ultimo && finito(ultimo.min) ? ultimo.min : null,
     ultimoNivel: classificarFinal(ultimo?.min, limite),
     ultimoAproximado: ultimo?.aproximado === true,
@@ -372,14 +397,13 @@ export function estadoDoCard(chave, resumo, agora) {
 }
 
 /**
- * Trechos da vida do último pedido, em proporção. Só soma os trechos medidos;
- * `lacunaMin` é a diferença entre a vida medida direto e a soma (dado faltante),
- * nunca preenchida com estimativa.
+ * Trechos da vida do último pedido, em proporção: preparo (chegada → saída) e entrega (saída → conclusão). Os dois não
+ * se sobrepõem e somam a vida. Só soma os trechos medidos; `lacunaMin` é a diferença entre a vida medida direto e a
+ * soma (dado faltante), nunca preenchida com estimativa. `detalhePreparo` (confirmação / até o pronto / espera pelo
+ * despacho) é INFORMATIVO e fica fora da barra.
  */
 export function derivarDecomposicao(decomposicao, vidaMin) {
-  const chaves = [
-    ["confirmacao", "Confirmação"], ["preparo", "Preparo"], ["espera", "Espera do entregador"], ["entrega", "Entrega"],
-  ];
+  const chaves = [["preparo", "Preparo"], ["entrega", "Entrega"]];
   if (!decomposicao) return null;
   const trechos = chaves.map(([chave, rotulo]) => ({ chave, rotulo, min: finito(decomposicao[chave]) ? decomposicao[chave] : null }));
   const soma = trechos.reduce((s, t) => s + (t.min ?? 0), 0);
@@ -390,6 +414,7 @@ export function derivarDecomposicao(decomposicao, vidaMin) {
     trechos: trechos.map((t) => ({ ...t, pct: t.min == null ? 0 : (t.min / base) * 100 })),
     lacunaMin: lacunaMin && lacunaMin >= 0.1 ? lacunaMin : 0,
     incompleta: trechos.some((t) => t.min == null),
+    detalhePreparo: decomposicao.detalhePreparo ?? null,
   };
 }
 

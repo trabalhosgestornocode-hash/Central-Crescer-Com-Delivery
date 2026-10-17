@@ -97,7 +97,7 @@ function montarMenu() {
     // módulo, a página do Checklist mostra "sem acesso" — nunca um menu vazio nem outra tela).
     const exibicao = ehPerfilExibicao(state.sessao);
     const itens = MENU.filter((m) => m.secao === secao
-      && (exibicao ? itemPermitidoAoPerfil(m, state.sessao) : (!m.modulo || temModulo(m.modulo))));
+      && (exibicao ? itemPermitidoAoPerfil(m, state.sessao) : (!m.modulo || temModulo(m.modulo) || (m.moduloTransicao && temModulo(m.moduloTransicao)))));
     if (!itens.length) return "";
     return `<li class="menu-secao">${secao}</li>` + itens.map((m) => {
       const logo = (m.integ && INTEGRACOES_LOGOS[m.integ]) || m.logo;

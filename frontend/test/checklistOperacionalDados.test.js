@@ -49,6 +49,24 @@ describe("estados exigidos da tela", () => {
     assert.doesNotMatch(html, /cko-nivel-txt--\w+" title="[^"]*">(<span[^>]*>≈<\/span>)?\d+,\d min/);
   });
 
+  test("unidade SEM integração iFood (modo sem_integracao): abre normalmente, avisa com clareza e não mostra número nenhum", () => {
+    const dados = { ...resposta({ integracao: { estado: "nao_ativada", motivo: "sem_loja_vinculada", mensagem: "Esta unidade ainda não tem uma loja iFood vinculada à Central." } }), modo: "sem_integracao" };
+    const aviso = avisoDe(dados);
+    assert.equal(aviso.tom, "neutro");
+    assert.equal(aviso.titulo, "Unidade sem integração com o iFood");
+    assert.match(aviso.texto, /Nenhum número é estimado/);
+    const html = montarTela(adaptar(dados), AGORA);
+    assert.match(html, /Unidade sem integração com o iFood\./);
+    assert.doesNotMatch(html, /undefined|NaN/);
+    assert.doesNotMatch(html, /cko-nivel-txt--\w+" title="[^"]*">(<span[^>]*>≈<\/span>)?\d+,\d min/);
+    assert.match(html, /Nenhum pedido em andamento agora/);
+  });
+
+  test("modo integrado com recebimento desligado continua com o aviso de integração não ativada (não é 'sem integração')", () => {
+    const dados = { ...resposta({ integracao: { estado: "nao_ativada", motivo: "recebimento_desligado", mensagem: "O recebimento ainda não foi ativado." } }), modo: "integrado" };
+    assert.equal(avisoDe(dados).titulo, "Integração não ativada");
+  });
+
   test("integração ativa sem pedidos: 'Nenhum pedido registrado no período' e selo Ao vivo", () => {
     const html = montarTela(adaptar(resposta()), AGORA);
     assert.match(html, /Nenhum pedido registrado no período\./);
@@ -60,7 +78,7 @@ describe("estados exigidos da tela", () => {
     const html = montarTela(r, AGORA);
     assert.match(html, /Dados desatualizados\./);
     assert.match(html, /cko-selo--atencao/);
-    assert.match(html, /10,0 min/);
+    assert.match(html, /15,0 min/);   // preparo = chegada (−60) → saída (−45)
   });
 
   test("timestamps insuficientes: 'Indicador indisponível' com o motivo, nunca zero", () => {
@@ -75,13 +93,15 @@ describe("estados exigidos da tela", () => {
     const r = marcarFalha(adaptar(resposta({ pedidos: [linha()] })), new Error("rede"));
     assert.equal(r.conexao.estado, "indisponivel");
     assert.equal(r.aviso.titulo, "Dados desatualizados");
-    assert.equal(r.indicadores.preparo.mediaDia, 10);
+    assert.equal(r.indicadores.preparo.mediaDia, 15);
     assert.equal(marcarFalha(resumoCarregando({ unidade: UNIDADE, metas: METAS_EXEMPLO }), new Error("x")).aviso.titulo, "Sem conexão");
   });
 
   test("403 vira 'Sem acesso', não 'sem conexão'", () => {
     const e = Object.assign(new Error("proibido"), { status: 403 });
-    assert.equal(marcarFalha(adaptar(resposta()), e).aviso.titulo, "Sem acesso");
+    const aviso = marcarFalha(adaptar(resposta()), e).aviso;
+    assert.equal(aviso.titulo, "Sem acesso");
+    assert.match(aviso.texto, /Checklist Operacional/);   // não diz mais "pedidos iFood": o módulo é independente do iFood
   });
 
   test("sem resposta por 3 intervalos: a tela se declara desatualizada sozinha", () => {
@@ -101,7 +121,7 @@ describe("estados exigidos da tela", () => {
 describe("compatibilidade com o contrato do backend", () => {
   const pedidos = [
     linha({ display_id: "4517" }),
-    linha({ display_id: "4520", ready_event_at: null }),                                                     // preparo aproximado
+    linha({ display_id: "4520", ready_event_at: null }),                                                     // sem RTP: o preparo é o mesmo (o RTP não participa)
     linha({ display_id: "4530", status_oficial: "CONFIRMED", placed_event_created_at: iso(6), confirmed_event_at: iso(5), ready_event_at: null, dispatch_event_at: null }),
     linha({ display_id: "4400", status_oficial: "DISPATCHED", placed_event_created_at: iso(300) }),            // preso → alerta
   ];
@@ -159,18 +179,19 @@ describe("compatibilidade com o contrato do backend", () => {
   test("o pedido em preparo vira contador vivo no card de preparo", () => {
     const e = estadoDoCard("preparo", r, AGORA);
     assert.equal(e.vivo.pedido.displayId, "4530");
-    assert.equal(e.vivo.cronometro, "05:00");
+    assert.equal(e.vivo.cronometro, "06:00");   // o preparo conta desde a CHEGADA (−6 min), não desde a confirmação
   });
 
-  test("média com aproximação mostra '≈' e a quantidade de pedidos", () => {
+  test("média do preparo mostra a quantidade de pedidos e NÃO é aproximada; o preso (255 min até a saída) é descartado e contado", () => {
     const html = cardTempo("preparo", r, AGORA);
-    // 3 pedidos: o "preso" (sem conclusão) foi preparado de verdade (CFM→RTP), então conta no preparo.
-    assert.match(html, /Média hoje <small class="cko-hoje-amostras">3 pedidos<\/small>/);
-    assert.match(html, /≈<\/span>11,3 min/);
+    assert.match(html, /Média hoje <small class="cko-hoje-amostras">2 pedidos<\/small>/);
+    assert.match(html, /15,0 min/);
+    assert.doesNotMatch(html, /≈/);
+    assert.equal(r.indicadores.preparo.descartados, 1);
   });
 
   test("entrega é sempre marcada como aproximada, com a causa", () => {
-    assert.match(cardTempo("entrega", r, AGORA), /conclusão do iFood ainda não foi validada/);
+    assert.match(cardTempo("entrega", r, AGORA), /Conclusão registrada pelo iFood/);
   });
 
   test("pedido sem conclusão aparece no card de status (crítico), nunca escondido", () => {

@@ -467,6 +467,22 @@ export function requireModulo(moduloId) {
 }
 
 /**
+ * Exige QUALQUER um dos módulos informados. Só para TRANSIÇÃO de um módulo para outro (a sessão congela os módulos por até
+ * 8 h, então uma sessão aberta antes da migration ainda não traz o módulo novo). Mesmo bypass de impersonação do `requireModulo`.
+ * @param {...string} moduloIds
+ */
+export function requireAlgumModulo(...moduloIds) {
+  return (req, _res, next) => {
+    if (!req.acesso) return next(ApiError.forbidden("Contexto de empresa não definido."));
+    if (req.acesso.impersonando) return next();
+    if (!moduloIds.some((id) => req.acesso.modulos.includes(id))) {
+      return next(ApiError.forbidden(`Módulo "${rotuloModulo(moduloIds[0])}" não contratado por esta empresa.`));
+    }
+    next();
+  };
+}
+
+/**
  * Exige QUALQUER um dos papéis de vínculo informados.
  * Preferir `requirePermissao` — o papel é mais grosseiro e mais frágil a
  * mudanças de nomenclatura. Existe para regras que são de fato "por cargo".

@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireContexto, exigirSenhaDefinitiva, requireModulo } from "./middlewares/auth.js";
+import { requireContexto, exigirSenhaDefinitiva, requireModulo, requireAlgumModulo } from "./middlewares/auth.js";
 import { restringirPerfilExibicao } from "./middlewares/perfilExibicao.js";
 import { MODULOS } from "./shared/modulos.js";
 import { produtosRouter } from "./modules/produtos/produtos.routes.js";
@@ -85,9 +85,11 @@ tenant.use("/realtime", realtimeRouter);   // idem — credencial de canal Realt
 tenant.use("/vendas", requireModulo(MODULOS.SALES), vendasRouter);
 tenant.use("/integracoes/martin-brower", requireModulo(MODULOS.MARTIN_BROWER), martinBrowerRouter);
 tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
-// Checklist Operacional: lê os pedidos iFood da unidade — módulo `ifood` e permissão `checklist.visualizar`
-// (ou integracoes.ver, enquanto existirem sessões antigas — ver o router). Nunca mais aberto que o dado que mostra.
-tenant.use("/checklist-operacional", requireModulo(MODULOS.IFOOD), checklistOperacionalRouter);
+// Checklist Operacional: módulo PRÓPRIO `checklist_operacional` (independe de ter integração iFood) e permissão
+// `checklist.visualizar` (ou integracoes.ver, enquanto existirem sessões antigas — ver o router). O módulo `ifood`
+// continua aceito SÓ na transição: a sessão congela os módulos por até 8 h, e as sessões abertas antes da migration 121
+// ainda não trazem o módulo novo. Depois de ≥ 8 h do deploy dá para tirar o `MODULOS.IFOOD` (mesmo "OU" do router).
+tenant.use("/checklist-operacional", requireAlgumModulo(MODULOS.CHECKLIST_OPERACIONAL, MODULOS.IFOOD), checklistOperacionalRouter);
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);
 // Seção "INTELIGÊNCIA" do menu (Agente Crescer · Relatórios · Integrações).
 // `inteligencia` é o gate-pai: sem ele, NADA da área responde. O catálogo de
