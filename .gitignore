@@ -57,3 +57,7 @@ docs/gestao-financeira/privado/
 docs/gestao-financeira/**/*.xlsx
 docs/gestao-financeira/**/*.xls
 backend/test/fixtures-financeiras-reais/
+
+# QA visual: capturas locais
+backend/testes-seguros/qa-visual/shots/
+backend/testes-seguros/qa-visual/resultado.json
