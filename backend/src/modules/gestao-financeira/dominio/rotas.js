@@ -63,7 +63,7 @@ export function criarDominioRouter({ exigirPermissao, deps = undefined }) {
   r.post("/importacoes/:id/confirmar", ...h(ACAO.CONFIGURAR, (c, q) => imp.confirmarImportacao(c, q.params.id, q.body, d)));
 
   // trilha de auditoria
-  r.get("/auditoria", ...h(ACAO.EDITAR, (c, q) => repositorio.listarAuditoria(c, { entidade: q.query.entidade, entidadeId: q.query.entidadeId }, d?.db)));
+  r.get("/auditoria", ...h(ACAO.EDITAR, (c, q) => (d?.repo ?? repositorio).listarAuditoria(c, { entidade: q.query.entidade, entidadeId: q.query.entidadeId }, d?.db)));
 
   return r;
 }

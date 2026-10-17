@@ -75,3 +75,41 @@ if (esperadoPath) {
   }
   process.exit(falhas ? 1 : 0);
 }
+
+// ---- comparação com as abas derivadas (ANALISE CATEGORIAS e DRE GERENCIAL) ----
+{
+  const { montarDre, rankingCategorias } = await import("../src/financeiro-calculos/relatorios.js");
+  const cats = new Map();
+  const ent = lancamentos.map((l) => {
+    const id = `${l.cat}`;
+    if (l.papel && !cats.has(id)) cats.set(id, { id, nome: id, papel: l.papel });
+    return { ...l, categoriaId: l.papel ? id : null, data: "2026-09-01" };
+  });
+  const rank = rankingCategorias(ent, cats);
+  const aba = XLSX.utils.sheet_to_json(wb.Sheets["ANALISE CATEGORIAS"], { header: 1, defval: null });
+  let divergencias = 0;
+  let somaAba = 0;
+  for (const l of aba) {
+    if (l?.[2] === "TOTAL CUSTOS + DESPESAS + TRIBUTOS") { somaAba = paraCentavos(l[3]); continue; }
+    if (!l || typeof l[3] !== "number" || !l[2] || l[0] === "Origem") continue;
+    const mine = rank.itens.find((i) => i.nome === l[2]);
+    const esperado = paraCentavos(l[3]);
+    if (!mine || mine.centavos !== esperado) { divergencias++; console.log("DIVERGE categoria", l[2], "planilha", esperado, "motor", mine?.centavos); }
+  }
+  console.log(divergencias === 0 ? "OK   análise de categorias: todas as categorias conferem" : `FALHA análise de categorias: ${divergencias} divergência(s)`);
+  console.log(rank.totalCentavos === somaAba ? "OK   total custos+despesas+tributos confere" : `FALHA total ${rank.totalCentavos} x ${somaAba}`, formatarCentavos(rank.totalCentavos));
+  const dre = montarDre(ent, cats);
+  const aDre = XLSX.utils.sheet_to_json(wb.Sheets["DRE GERENCIAL"], { header: 1, defval: null });
+  const val = (rot) => aDre.find((l) => String(l?.[0] ?? "").trim() === rot)?.[1];
+  const par = [["Receita bruta", "receita"], ["(-) Custos variáveis (CMV)", "custos"], ["(-) Despesas variáveis", "desp_variaveis"], ["(-) Tributos", "tributos"], ["Margem de Contribuição", "margem_contribuicao"], ["(-) Despesas fixas", "desp_fixas"], ["(-) Despesas com pessoal", "pessoal"], ["(-) Despesas financeiras", "desp_financeiras"], ["Resultado Gerencial", "resultado"]];
+  for (const [rot, id] of par) {
+    const ok = paraCentavos(val(rot)) === dre.linhas.find((x) => x.id === id).centavos;
+    console.log(ok ? "OK  " : "FALHA", "DRE", rot);
+    if (!ok) divergencias++;
+  }
+  const tarifa = dre.linhas.find((x) => x.id === "custos").detalhes.find((d) => d.nome === "TARIFA VENDAS");
+  console.log(paraCentavos(val("(-) Tarifas/taxas sobre vendas")) === tarifa?.centavos ? "OK   detalhe tarifas sobre vendas" : "FALHA detalhe tarifas");
+  const mlAba = aDre.find((l) => l?.[0] === "Margem Líquida")?.[1];
+  console.log("margem líquida: planilha", mlAba, "→ motor", formatarBps(dre.linhas.find((x) => x.id === "margem_liquida").bps), "(planilha formatava como moeda: I-1)");
+  if (divergencias) process.exitCode = 1;
+}
