@@ -65,9 +65,15 @@ export function derivarEstadoIntegracao({ conexao, credencialOrder, observabilid
   return est("nao_ativada", "recebimento_desligado", base);
 }
 
-/** PURA: a unidade tem integração iFood configurada? Sem loja vinculada ou sem credencial de pedidos = `sem_integracao`. */
-export function derivarModo(integracao) {
-  return integracao?.estado === "nao_ativada" && ["sem_loja_vinculada", "sem_credencial_order"].includes(integracao.motivo)
+/**
+ * PURA: a unidade tem integração iFood? `sem_integracao` SÓ quando não há loja vinculada E não existe nenhum pedido persistido para mostrar.
+ * Loja vinculada sem credencial de pedidos (ex.: autorização revogada) é `integrado` — a tela mostra o motivo específico ("a loja não autorizou…"),
+ * não "vincule a loja". Unidade que já teve pedidos também segue `integrado`: os números existentes não podem ser chamados de "sem número".
+ * @param {{estado?: string, motivo?: string}} integracao
+ * @param {{temPedidos?: boolean}} [opc]
+ */
+export function derivarModo(integracao, { temPedidos = false } = {}) {
+  return integracao?.estado === "nao_ativada" && integracao.motivo === "sem_loja_vinculada" && !temPedidos
     ? "sem_integracao" : "integrado";
 }
 
@@ -135,7 +141,7 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
     origem: "api",
     servidorEm: new Date(agoraMs).toISOString(),
     atualizarEmS: INTERVALO_ATUALIZACAO_S,
-    modo: derivarModo(integracao),
+    modo: derivarModo(integracao, { temPedidos: resumo.contagemDia.recebidos > 0 || resumo.contagemDia.emAndamento > 0 }),
     integracao: { ...integracao, pilotoOrder: piloto(unidadeId) === true },
     semPedidosNoDia: resumo.contagemDia.recebidos === 0 && resumo.contagemDia.emAndamento === 0,
     ...resumo,

@@ -12,11 +12,11 @@ Branch `feat/checklist-universal-tempos` (worktree `crescer-checklist-universal`
 | Menu (`frontend/src/config.js`) | `modulo: "ifood"` | `modulo: "checklist_operacional"` + `moduloTransicao: "ifood"` |
 | Permissão | `checklist.visualizar` (ou `integracoes.ver`) | **inalterada** |
 | Catálogo (`backend/src/shared/modulos.js`) | — | `MODULOS.CHECKLIST_OPERACIONAL`, ordem 17, categoria `operacao` |
-| Banco | — | `database/migrations/121_checklist_operacional_modulo.sql` (+ `121_rollback.sql`) |
+| Banco | — | `database/migrations/123_checklist_operacional_modulo.sql` (+ `123_rollback.sql`; ver §10.1) |
 
 - O `OU ifood` existe só na **transição**: a sessão congela os módulos por até 8 h, então sessões abertas antes da migration não trazem o módulo novo. A remoção de `MODULOS.IFOOD` do gate e de `moduloTransicao` do menu NÃO é automática por tempo: só depois das verificações do §8.5.
 - A migration **só** dá o módulo novo a quem já tem `ifood` (empresa e unidade — o acesso efetivo é a interseção das duas tabelas). **Nenhuma outra empresa é habilitada**: o SuperAdmin libera pela tela de Acessos (o catálogo é data-driven).
-- Número 121: **conflito** com a trilha financeira (ver §8.4). Preservada em desenvolvimento só até a ordem definitiva ser validada; o número provável é ≥ 123.
+- Número da migration: **123** (a trilha financeira ocupa 120–122); sujeito a reconciliação no merge — ver §10.1.
 
 ### 1.2 Modo sem integração (modo mínimo "a")
 - O backend já tolerava unidade sem conexão. Novo campo aditivo `modo` (`integrado` | `sem_integracao`); `VERSAO_CONTRATO` segue 1.
@@ -66,12 +66,12 @@ Branch `feat/checklist-universal-tempos` (worktree `crescer-checklist-universal`
 
 ## 5. Implantação (somente quando aprovado) e rollback
 1. Merge na `main` (PR) — com os previews de PR desligados (conferir `get_service` antes).
-2. **Migration 121** no Supabase (SQL Editor): idempotente, só catálogo + vínculos de quem já tem `ifood`. Verificação no fim do arquivo (esperado: 4 empresas e suas unidades; hoje as org com `ifood` são 4).
+2. **Migration 123** no Supabase (SQL Editor): idempotente, só catálogo + vínculos de quem já tem `ifood`. Verificação no fim do arquivo (esperado: 4 empresas e suas unidades; hoje as org com `ifood` são 4). Plano completo em `docs/checklist-universal-plano-implantacao.md`.
 3. Deploy do backend (`crescercomdelivery`); como o frontend também muda, o deploy manual cobre os dois.
 4. Habilitação gradual: Saci (já coberta) → uma empresa piloto sem iFood, pela tela de Acessos → demais.
 5. Remoção do `OU ifood`: NÃO por tempo — só depois das verificações do §8.5.
 
-**Rollback**: reverter o deploy (código) — as fórmulas voltam sozinhas, pois nada é gravado; depois, se necessário, `121_rollback.sql` (apaga só `checklist_operacional`; quem tem `ifood` continua com acesso enquanto o `OU ifood` existir). Se o `OU ifood` já foi removido, voltar o código **antes** do rollback SQL.
+**Rollback**: reverter o deploy (código) — as fórmulas voltam sozinhas, pois nada é gravado; depois, se necessário, `123_rollback.sql` (apaga só `checklist_operacional`; quem tem `ifood` continua com acesso enquanto o `OU ifood` existir). Se o `OU ifood` já foi removido, voltar o código **antes** do rollback SQL.
 
 ## 6. Critérios de homologação
 - 18/25/43 no cenário D e identidade por pedido nos dados reais (já demonstrado).
@@ -84,7 +84,7 @@ Branch `feat/checklist-universal-tempos` (worktree `crescer-checklist-universal`
 1. Metas novas (§4).
 2. Vida e a identidade: hoje a vida inclui pedidos sem DSP e as 5 entregas com CON tardio; se quiser a identidade também nas médias, a vida só entraria quando preparo e entrega forem válidos.
 3. Reconciliar os 3 `CONCLUDED` sem `status_oficial_em` a partir de `ifood_eventos` (altera dados — exige aprovação).
-4. Numeração da migration (121) e momento de remover o `OU ifood`.
+4. Reconfirmar a numeração (123) no merge e o momento de remover o `OU ifood`.
 
 ## 8. Revisão complementar (17/10/2026)
 
@@ -119,7 +119,7 @@ São **4**, não 3 (3 entregas + 1 retirada), todos da Subway Saci de 10/10/2026
 - **Correção proposta (NÃO implementada):** em `decidirTransicao`, aceitar o evento oficial quando o estado é igual **e** `status_oficial_em` está vazio (só para preencher o horário, via o compare-and-set já existente). Corrige casos futuros; os 4 existentes só se corrigem com reprocessamento ou `UPDATE` pontual, que altera dado de produção e exige autorização (e o rollback da reconciliação aborta se o horário deixar de ser nulo — alinhar antes).
 - **Testes de regressão:** movidos para o plano separado (§9.3); o rascunho não faz parte deste PR.
 
-### 8.4 Numeração das migrations
+### 8.4 Numeração das migrations (histórico — superado pelo §10.1: a migration agora é a 123)
 
 | Onde | Migrations ≥ 120 |
 |---|---|
@@ -149,7 +149,7 @@ Ver o relatório do checkpoint (categorias: introduzidas pela branch × main × 
 
 ## 9. Resolução dos bloqueios pré-PR (17/10/2026)
 
-### 9.1 Migration: numeração e dependências da trilha financeira
+### 9.1 Migration: numeração e dependências da trilha financeira (histórico — superado pelo §10.1)
 Inspeção (todas as branches locais e remotas, `git ls-tree`, worktrees e a pasta de coordenação dos agentes; **nenhum arquivo financeiro foi tocado**):
 
 | Branch / fonte | Estado |
@@ -187,3 +187,44 @@ Indicadores (preparo PLC→DSP, entrega DSP→CON, vida total PLC→CON, vida de
 - **Intermitência por carga** (não por defeito): rodando backend e frontend ao mesmo tempo, 3 testes de navegador do Checklist estouraram tempo; em série, passam.
 - **Regressões introduzidas pela branch:** nenhuma ao final. Houve duas no caminho, ambas corrigidas: travas de numeração 088/103 e a rolagem da TV 1280×720.
 - **A suíte global NÃO está totalmente verde.**
+
+## 10. Homologação pré-merge (Checkpoint F, 17/10/2026)
+
+### 10.1 Migration definitiva: 123
+- Estado verificado em 17/10 (fetch de todas as branches): `origin/main` = `8d32196`, última migration 119; **a financeira não está integrada à `main`**. `integracao/gestao-financeira` (`f2b1a40`) tem 120 e 121 em `database/migrations/` e a 122 só como proposta em `docs/gestao-financeira/proposta-122/`; nenhuma migration ≥ 123 existe ou está planejada em nenhuma branch.
+- Como a trilha financeira reservou 120–122, a migration do Checklist foi renomeada para **`123_checklist_operacional_modulo.sql`** (+ `123_rollback.sql`), atualizando texto interno, comentários (`routes.js`, `config.js`, `modulos.js`), as duas travas de numeração (088/103: agora listam só a 123) e o teste do módulo (que descobre o arquivo pelo nome).
+- **Continua sujeita a reconciliação no merge**: número = maior existente em `main` + 1. Sem dependência de dados com a financeira.
+- Dry-run anterior (121 → 123 em cópia descartável) e a suíte atual confirmam que a renumeração não quebra nada.
+
+### 10.2 Segurança e isolamento — Postgres REAL e descartável
+Cluster local novo (PostgreSQL 17, porta 55411, vazio, fora do projeto). O teste recusa banco que não seja local e não vazio. Suíte `backend/test/checklist-operacional-pg.test.js` (pula sozinha sem `CHECKLIST_PG_URL`): **13/13 passam**.
+- Aplica as migrations REAIS 101/102/103 (`ifood_pedidos`/`ifood_eventos`) e a do módulo, sobre tabelas mínimas com a mesma DDL da base; roda o **repositório e o service reais** do Checklist por um adaptador que executa SQL de verdade (o PostgREST não existe nesse ambiente — limitação: o adaptador é meu; a fidelidade dos filtros foi conferida por **mutação**: retirar o filtro de unidade do repositório faz 2 testes falharem).
+- Isolamento: unidade integrada vê só os próprios pedidos; **mesma empresa, outra unidade (sem integração) não vê nada**; outra empresa vê só os seus; **acesso cruzado** (par org+unidade trocado, em 4 combinações) devolve vazio; escopo ausente é recusado; abertos antigos contam só na unidade dona.
+- **RLS**: `anon` e `authenticated` (com privilégios padrão, como no Supabase) veem 0 linhas e não conseguem inserir em `ifood_pedidos`; `service_role` lê.
+- **Migration em dados existentes**: antes sem o módulo; aplicar dá o módulo SÓ a quem tinha `ifood` (empresa e unidade), nada a ninguém mais; o acesso efetivo (empresa ∩ unidade) ganha A1 e B1, **não** ganha a unidade órfã (empresa sem `ifood`); idempotente; rollback remove só o módulo novo (ifood e demais intactos), é idempotente e reaplicável; não toca pedidos.
+- HTTP (sem banco; auth/módulo/permissão reais): o módulo novo sozinho abre; o `ifood` sozinho (sessão antiga) abre; **sessão da TV** antiga (só `ifood`) abre; nenhum dos dois = 403; módulo sem permissão = 403; unidade/empresa na query ou em cabeçalhos são ignoradas (tenant só do contexto; o controller não lê query/corpo/params/headers); POST/PUT/PATCH/DELETE em `/resumo` = 404.
+- **Banco de testes do projeto (Supabase de teste)**: continua indisponível (25 testes de backend pulam por "alvo não confirmado como teste"). O substituto acima é um Postgres descartável; **não** cobre PostgREST nem as políticas RLS por usuário do Supabase (o Checklist lê só pelo backend com `service_role`).
+
+### 10.3 Regressão dos indicadores
+Mantidas as definições (preparo PLC→DSP; entrega DSP→CON; vida total PLC→CON; vida decomposta PLC+DSP+CON). Cobertas por `checklist-operacional-calc` (43), `-medias` (12), pelo teste em Postgres real (preparo 15 + entrega 25 = vida 40; retirada sem tempos; teste/agendado fora), pelos testes de modelo/tela do frontend e pela suíte de navegador (cronômetros, decomposição, diálogo p75, TV/Tablet). Nenhuma alteração na máquina de estados do iFood.
+
+### 10.4 Plano de implantação
+`docs/checklist-universal-plano-implantacao.md` (pré-condições, ordem das migrations, backup/rollback, sequência do deploy, validação da Saci, piloto sem iFood, isolamento, ativação gradual, monitoramento, critérios de interromper/reverter). **Não executado.**
+
+### 10.5 Revisão automatizada do PR (code-review, nível alto) — 8 achados e destino
+| # | Achado | Destino |
+|---|---|---|
+| 1 | O `OU ifood` nunca expira; tirar `checklist_operacional` de uma empresa com `ifood` não revoga o acesso | **Aceito e documentado** (gate transitório pedido; remoção só em etapa própria — §8.5). O toggle do módulo novo só fecha empresas sem `ifood` enquanto o `OU` existir |
+| 2 | Numeração 121 colide com a financeira | **Corrigido**: migration agora é **123** (§10.1); sujeita a reconciliação no merge |
+| 3 | `modo` virava `sem_integracao` com loja vinculada sem credencial ou com pedidos existentes | **Corrigido**: `sem_integracao` só com `sem_loja_vinculada` E sem nenhum pedido a mostrar; teste novo |
+| 4 | Cronômetro do preparo para pedido sem `tipo`/sem PLC | **Mantido de propósito** (é alerta em tempo real, não média; esconder o relógio de um pedido em andamento seria pior); comentário no código |
+| 5 | `REFERENCIA_P75` embute dado de uma unidade e é oferecida a todas | **Mantido por decisão** (referência opcional, só preenche o formulário, rotulada "em uma unidade, 7 dias"); risco residual registrado |
+| 6 | `agregarEntrega` usava elegibilidade diferente da dos outros indicadores | **Corrigido**: os três filtram `order_type === "DELIVERY"` |
+| 7 | Medições repetidas por pedido e `foraDosTempos` recalculado 3× | **Corrigido**: calculado uma vez e reaproveitado |
+| 8 | `requireAlgumModulo` duplicava `requireModulo`; mensagem citava só o 1º módulo | **Corrigido**: `requireModulo(id)` = `requireAlgumModulo(id)`; mensagem lista todos ("A" ou "B") |
+
+### 10.6 Resultado final dos testes (rodada do Checkpoint F)
+- **Backend** (`test/*.test.js`, com `CHECKLIST_PG_URL` apontando para o Postgres descartável): 5.353 testes — 5.325 passam, **3 falham** (as mesmas da `main`: "distribuições recompõem mês…" e "selecionarPerfil" ×2), 25 pulados (banco de teste do projeto não confirmado). A suíte nova em Postgres real (13/13) roda dentro desse total.
+- **Frontend** (série, Playwright + Chrome): 1.593 testes — 1.578 passam, **4 falham** (`iFood — pedidos sem Financial, no navegador`, também falham na `main`), 11 pulados (Playwright de outros módulos).
+- Autenticação/permissões/módulos/Checklist (subconjunto, após as correções): 168/168.
+- **Nenhuma regressão introduzida por esta branch. A suíte global NÃO está totalmente verde.**

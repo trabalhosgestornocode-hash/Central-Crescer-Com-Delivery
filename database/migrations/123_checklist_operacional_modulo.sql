@@ -1,5 +1,5 @@
 -- =====================================================================
--- 121 — Módulo próprio `checklist_operacional` (Checklist Operacional independente do módulo `ifood`)
+-- 123 — Módulo próprio `checklist_operacional` (Checklist Operacional independente do módulo `ifood`)
 -- =====================================================================
 -- OBJETIVO
 --   O Checklist Operacional exigia o módulo `ifood` (mesmo sem usar a API: ele só lê `ifood_pedidos`). Esta migration
@@ -17,7 +17,9 @@
 -- backend aceita `checklist_operacional` OU `ifood` durante a transição (routes.js).
 --
 -- PRÉ-REQUISITOS: migration 030 (modulos, organizacao_modulos) e 034 (unidade_modulos).
--- IDEMPOTENTE. ROLLBACK: 121_rollback.sql.
+-- NUMERAÇÃO: a trilha financeira (branch integracao/gestao-financeira, ainda não integrada à main) ocupa 120, 121 e a planejada 122; o 123 é
+-- o próximo livre e só é definitivo se continuar livre no merge (maior número existente em main + 1). Sem dependência de dados com ela.
+-- IDEMPOTENTE. ROLLBACK: 123_rollback.sql.
 -- =====================================================================
 
 begin;

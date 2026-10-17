@@ -456,14 +456,7 @@ export function requireAlgumaPermissao(...permissoes) {
  * @param {string} moduloId
  */
 export function requireModulo(moduloId) {
-  return (req, _res, next) => {
-    if (!req.acesso) return next(ApiError.forbidden("Contexto de empresa não definido."));
-    if (req.acesso.impersonando) return next();
-    if (!req.acesso.modulos.includes(moduloId)) {
-      return next(ApiError.forbidden(`Módulo "${rotuloModulo(moduloId)}" não contratado por esta empresa.`));
-    }
-    next();
-  };
+  return requireAlgumModulo(moduloId);
 }
 
 /**
@@ -476,7 +469,8 @@ export function requireAlgumModulo(...moduloIds) {
     if (!req.acesso) return next(ApiError.forbidden("Contexto de empresa não definido."));
     if (req.acesso.impersonando) return next();
     if (!moduloIds.some((id) => req.acesso.modulos.includes(id))) {
-      return next(ApiError.forbidden(`Módulo "${rotuloModulo(moduloIds[0])}" não contratado por esta empresa.`));
+      const nomes = moduloIds.map((id) => `"${rotuloModulo(id)}"`).join(" ou ");
+      return next(ApiError.forbidden(`Módulo ${nomes} não contratado por esta empresa.`));
     }
     next();
   };

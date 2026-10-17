@@ -173,9 +173,15 @@ describe("resumo do service", () => {
     assert.equal(r.lojas, undefined, "sem lojas adicionais a resposta não ganha o campo");
   });
 
-  test("conexão sem credencial de pedidos: também sem_integracao; com credencial (mesmo parada): integrado", async () => {
+  test("conexão com loja mas SEM credencial de pedidos: integrado (o motivo específico aparece); com credencial (mesmo parada): integrado", async () => {
     const semCred = await resumoCom({ ifood: ifoodRepoFalso({ credenciais: [] }) });
-    assert.equal(semCred.r.modo, "sem_integracao");
+    assert.equal(semCred.r.modo, "integrado");
+    assert.equal(semCred.r.integracao.motivo, "sem_credencial_order");
+    // Sem loja vinculada MAS com pedidos persistidos (já houve conexão): os números existem, então não é "sem integração".
+    const comPedidos = await resumoCom({ ifood: ifoodRepoFalso({ conexao: null }), linhas: [linha(UN_A)] });
+    assert.equal(comPedidos.r.modo, "integrado");
+    assert.equal(service.derivarModo({ estado: "nao_ativada", motivo: "sem_loja_vinculada" }), "sem_integracao");
+    assert.equal(service.derivarModo({ estado: "nao_ativada", motivo: "sem_loja_vinculada" }, { temPedidos: true }), "integrado");
     assert.equal(service.derivarModo({ estado: "nao_ativada", motivo: "recebimento_desligado" }), "integrado");
     assert.equal(service.derivarModo({ estado: "desatualizado", motivo: "recebimento_parado" }), "integrado");
     assert.equal((await resumoCom()).r.modo, "integrado");
@@ -361,6 +367,12 @@ describe("HTTP — permissões do Checklist", async () => {
     assert.equal(r.status, 400);
   });
 
+  test("sessão da TV (perfil de exibição) aberta ANTES da migration — só o módulo ifood — continua abrindo; com o módulo novo também; sem nenhum, 403", async () => {
+    assert.equal((await chamar(server, "/api/v1/resumo", h("display_operator", { "x-teste-modulos": MODULOS.IFOOD }))).status, 400);
+    assert.equal((await chamar(server, "/api/v1/resumo", h("display_operator", { "x-teste-modulos": MODULOS.CHECKLIST_OPERACIONAL }))).status, 400);
+    assert.equal((await chamar(server, "/api/v1/resumo", h("display_operator", { "x-teste-modulos": "dashboard" }))).status, 403);
+  });
+
   test("o módulo NÃO substitui a permissão: com módulo, sem checklist.visualizar nem integracoes.ver, 403", async () => {
     const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-modulos": MODULOS.CHECKLIST_OPERACIONAL, "x-teste-sem": "integracoes.ver,checklist.visualizar" }));
     assert.equal(r.status, 403);
@@ -389,6 +401,31 @@ describe("HTTP — permissões do Checklist", async () => {
   test("sessão aberta ANTES da mudança (só integracoes.ver, sem a permissão nova) continua abrindo o Checklist", async () => {
     const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-sem": "checklist.visualizar" }));
     assert.equal(r.status, 400);
+  });
+
+  test("o tenant vem SÓ do contexto: unidade/empresa na query ou em cabeçalhos são ignoradas (sem unidade no contexto = 400, nunca a do pedido)", async () => {
+    const qs = `?unidadeId=${UN_B}&organizacaoId=99999999-9999-4999-8999-999999999999&unidade_id=${UN_B}`;
+    const r = await chamar(server, `/api/v1/resumo${qs}`, h("unit_manager", { "x-unidade-id": UN_B, "x-organizacao-id": ORG, "x-teste-unidade": UN_B }));
+    assert.equal(r.status, 400);
+    assert.ok(!JSON.stringify(r.json).match(/pedido|merchant|order/i));
+  });
+
+  test("o controller não lê query, corpo, parâmetros nem cabeçalhos (só req.tenant)", () => {
+    const fonte = readFileSync(path.join(AQUI, "../src/modules/checklist-operacional/checklistOperacional.controller.js"), "utf8");
+    const codigo = fonte.replace(/^\s*\/\/.*$/gm, "");
+    assert.doesNotMatch(codigo, /req\.(query|body|params|headers)/);
+    assert.match(codigo, /req\.tenant/);
+  });
+
+  test("métodos de escrita não existem: POST/PUT/DELETE em /resumo = 404", async () => {
+    const { port } = server.address();
+    for (const method of ["POST", "PUT", "DELETE", "PATCH"]) {
+      const status = await new Promise((resolve, reject) => {
+        const rq = http.request({ host: "127.0.0.1", port, path: "/api/v1/resumo", method, headers: h("unit_manager") }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode)); });
+        rq.on("error", reject); rq.end();
+      });
+      assert.equal(status, 404, method);
+    }
   });
 
   test("só GET /resumo existe — nenhuma rota de escrita", () => {

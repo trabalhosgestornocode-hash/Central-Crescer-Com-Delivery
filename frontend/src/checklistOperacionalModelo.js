@@ -279,6 +279,9 @@ function contador(desde, limite, agora) {
  * a vida do pedido (desde a chegada).
  */
 export function indicadorDaEtapa(pedido) {
+  // O cronômetro é ALERTA em tempo real, não duração medida: pedido com tipo ainda desconhecido (detalhes do iFood pendentes) ou sem PLC
+  // (recebidoEm vem do createdAt) continua cronometrado como entrega — esconder o relógio de um pedido em andamento seria pior que mostrá-lo.
+  // Só as MÉDIAS (backend) exigem DELIVERY com PLC; aqui só retirada e agendado ficam sem meta.
   if (pedido.tipo === "TAKEOUT") return { chave: null, desde: null };
   if (pedido.status === "DISPATCHED" && pedido.despachadoEm) return { chave: "entrega", desde: pedido.despachadoEm };
   // Agendado: a chegada acontece horas antes do preparo — preparo e vida não são cronometrados

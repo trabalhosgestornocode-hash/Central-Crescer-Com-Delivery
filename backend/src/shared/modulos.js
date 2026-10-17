@@ -34,7 +34,7 @@ export const MODULOS = {
   // recusam — mesmo com `agente_ia` habilitado (dupla autorização no /agente).
   INTELIGENCIA: "inteligencia",
   // Painel operacional (TV/HDMI) da unidade. Independe do módulo `ifood`: sem integração o painel abre com aviso
-  // informativo; com integração mostra os pedidos. Migration 121.
+  // informativo; com integração mostra os pedidos. Migration 123.
   CHECKLIST_OPERACIONAL: "checklist_operacional",
 };
 

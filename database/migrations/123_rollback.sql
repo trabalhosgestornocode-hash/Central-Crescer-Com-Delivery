@@ -1,4 +1,4 @@
--- Rollback da 121 — remove o módulo `checklist_operacional` (catálogo + vínculos de empresa e de unidade).
+-- Rollback da 123 — remove o módulo `checklist_operacional` (catálogo + vínculos de empresa e de unidade).
 --
 -- ANTES: confirme que o backend/frontend publicados NÃO dependem mais do módulo novo (o gate do Checklist aceita
 -- `checklist_operacional` OU `ifood` na transição; se o `OU ifood` já foi removido, volte o código ANTES de rodar isto,

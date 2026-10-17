@@ -38,9 +38,8 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
     "118_ifood_loja_credenciais.sql", "118_rollback.sql",
     // 119 = Serviços e promoções com sinal no Dashboard iFood (remove só o CHECK >= 0; negativo = crédito à loja).
     "119_servicos_promocoes_sinal.sql", "119_rollback.sql",
-    // 121 = módulo próprio checklist_operacional (catálogo + vínculos de quem já tem ifood); sem tocar as ações do pedido.
-    "121_checklist_operacional_modulo.sql", "121_rollback.sql",
-    // Número definitivo ainda a validar (a trilha financeira ocupa 120–122): proposta 123. Aceito os dois para a renumeração não quebrar a trava.
+    // 123 = módulo próprio checklist_operacional (catálogo + vínculos de quem já tem ifood); sem tocar as ações do pedido.
+    // A trilha financeira ocupa 120–122 (ainda não integrada à main); o 123 só é definitivo se continuar livre no merge.
     "123_checklist_operacional_modulo.sql", "123_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);

@@ -210,14 +210,15 @@ function indicadorVazio(extra = {}) {
 
 /** Quantos pedidos reais (não cancelados) do dia ficaram fora dos tempos por não serem DELIVERY, e por quê. */
 function foraDosTempos(doDia) {
-  const reais = doDia.filter((p) => p.status_oficial !== "CANCELLED");
-  return {
-    retiradas: reais.filter((p) => p.order_type && p.order_type !== "DELIVERY").length,
-    semDetalhes: reais.filter((p) => !p.order_type).length,
-  };
+  let retiradas = 0; let semDetalhes = 0;
+  for (const p of doDia) {
+    if (p.status_oficial === "CANCELLED") continue;
+    if (!p.order_type) semDetalhes += 1; else if (p.order_type !== "DELIVERY") retiradas += 1;
+  }
+  return { retiradas, semDetalhes };
 }
 
-function agregarPreparo(doDia) {
+function agregarPreparo(doDia, fora) {
   const naoCancelados = doDia.filter((p) => p.status_oficial !== "CANCELLED");
   const agendadosExcluidos = naoCancelados.filter(agendado).length;
   const elegiveis = naoCancelados.filter((p) => !agendado(p) && p.order_type === "DELIVERY");
@@ -225,7 +226,6 @@ function agregarPreparo(doDia) {
   const ok = med.filter((x) => x.m.min != null);
   const descartados = med.filter((x) => x.m.motivo === "inconsistente").length;
   const semChegada = med.filter((x) => x.m.motivo === "carimbo_ausente").length;
-  const fora = foraDosTempos(doDia);
   const criterio = "Chegada (PLC) até a saída para entrega (DSP). O pedido pronto não encerra o preparo.";
   const conjunto = "Entregas não canceladas e não agendadas, com chegada e saída válidas (inclui as já despachadas e ainda não concluídas).";
   if (!ok.length) {
@@ -249,13 +249,13 @@ function agregarPreparo(doDia) {
   };
 }
 
-function agregarEntrega(doDia) {
-  const concluidos = doDia.filter((p) => p.status_oficial === "CONCLUDED" && p.order_type);
+function agregarEntrega(doDia, fora) {
+  // Mesma elegibilidade dos outros dois: só DELIVERY (retirada e pedido sem detalhes ficam fora e são contados à parte).
+  const concluidos = doDia.filter((p) => p.status_oficial === "CONCLUDED" && p.order_type === "DELIVERY");
   const med = concluidos.map((p) => ({ p, m: medirEntrega(p) }));
   const ok = med.filter((x) => x.m.min != null);
   const semSaida = med.filter((x) => x.m.motivo === "sem_saida").length;
   const descartados = med.filter((x) => x.m.motivo === "inconsistente").length;
-  const fora = foraDosTempos(doDia);
   const semDetalhes = doDia.filter((p) => p.status_oficial === "CONCLUDED" && !p.order_type).length;
   const criterio = "Saída (DSP) até a conclusão registrada pelo iFood (CON). O CON não garante, por si, a entrega ao cliente. Só pedidos de entrega.";
   const conjunto = "Entregas concluídas (agendadas incluídas), com saída e conclusão válidas.";
@@ -289,7 +289,7 @@ function agregarEntrega(doDia) {
   };
 }
 
-function agregarVida(doDia) {
+function agregarVida(doDia, fora) {
   const todosConcluidos = doDia.filter((p) => p.status_oficial === "CONCLUDED");
   const agendadosExcluidos = todosConcluidos.filter(agendado).length;
   const concluidos = todosConcluidos.filter((p) => !agendado(p) && p.order_type === "DELIVERY");
@@ -297,7 +297,6 @@ function agregarVida(doDia) {
   const ok = med.filter((x) => x.m.min != null);
   const descartados = med.filter((x) => x.m.motivo === "inconsistente").length;
   const semChegada = med.filter((x) => x.m.motivo === "carimbo_ausente").length;
-  const fora = foraDosTempos(doDia);
   const criterio = "Chegada (PLC) até a conclusão registrada pelo iFood (CON). Só pedidos de entrega.";
   const conjunto = "Entregas concluídas e não agendadas, com chegada e conclusão válidas — mesmo sem o evento de saída (vida TOTAL).";
   const conjuntoDecomposta = "Subconjunto da vida total com chegada, saída e conclusão válidas: aqui preparo + entrega = vida.";
@@ -314,13 +313,13 @@ function agregarVida(doDia) {
   const dec = decompor(u.p);
   const arr = (v) => (v == null ? null : arred(v));
   // Vida DECOMPOSTA: só os pedidos com preparo e entrega válidos (PLC, DSP e CON). Mesmo conjunto nos três números.
-  const completos = ok.filter((x) => medirPreparo(x.p).min != null && medirEntrega(x.p).min != null);
+  const completos = ok.map((x) => ({ ...x, prep: medirPreparo(x.p).min, entr: medirEntrega(x.p).min })).filter((x) => x.prep != null && x.entr != null);
   const decomposta = completos.length
     ? {
       amostras: completos.length, conjunto: conjuntoDecomposta,
       mediaDia: media(completos.map((x) => x.m.min)),
-      preparoMediaDia: media(completos.map((x) => medirPreparo(x.p).min)),
-      entregaMediaDia: media(completos.map((x) => medirEntrega(x.p).min)),
+      preparoMediaDia: media(completos.map((x) => x.prep)),
+      entregaMediaDia: media(completos.map((x) => x.entr)),
       semSaida: ok.length - completos.length,   // vida total sem DSP/entrega válida: ficam só na vida total
     }
     : { ...vazia, semSaida: ok.length };
@@ -414,7 +413,7 @@ export function montarResumo({ pedidos, agoraMs, fuso = FUSO_NEGOCIO, viradaHora
 
   return {
     diaOperacional: { data: dia.data, inicio: new Date(dia.inicioMs).toISOString(), fim: new Date(dia.fimMs).toISOString(), fuso, viradaHora },
-    indicadores: { preparo: agregarPreparo(doDia), entrega: agregarEntrega(doDia), vida: agregarVida(doDia) },
+    indicadores: (() => { const fora = foraDosTempos(doDia); return { preparo: agregarPreparo(doDia, fora), entrega: agregarEntrega(doDia, fora), vida: agregarVida(doDia, fora) }; })(),
     pedidosAtivos: ativos.sort((a, b) => (ms(a.recebidoEm) || Infinity) - (ms(b.recebidoEm) || Infinity)),
     ultimosPedidos: [...doDia].sort((a, b) => referencia(b) - referencia(a)).slice(0, LIMITE_ULTIMOS).map(paraRecente),
     contagemDia: {

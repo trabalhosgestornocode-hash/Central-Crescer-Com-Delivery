@@ -1,4 +1,4 @@
-// Checklist Operacional — módulo PRÓPRIO `checklist_operacional` (migration 121): catálogo, migration e rollback.
+// Checklist Operacional — módulo PRÓPRIO `checklist_operacional` (migration 123): catálogo, migration e rollback.
 //
 // Sem banco e sem rede. Prova que: o catálogo do código e o da migration dizem a mesma coisa; a migration só dá o
 // módulo a quem JÁ tem `ifood` (nunca "a todas"); o rollback desfaz tudo; e o acesso efetivo continua sendo
@@ -19,7 +19,7 @@ process.env.SUPABASE_ANON_KEY ??= "teste";
 const { MODULOS, CATALOGO_MODULOS, validarModulos, interseccaoModulos, rotuloModulo } = await import("../src/shared/modulos.js");
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
-// O número da migration é PROVISÓRIO (121; proposta 123 — ver docs/checklist-universal-e-tempos.md §8.4). O teste descobre o par
+// O número da migration (123) só é definitivo se continuar livre no merge (a trilha financeira ocupa 120–122; ver docs/checklist-universal-e-tempos.md). O teste descobre o par
 // pelo nome, então a renumeração não quebra nada: arquivo `<n>_checklist_operacional_modulo.sql` + `<n>_rollback.sql`.
 const MIGRATIONS = path.join(AQUI, "../../database/migrations");
 const NOME = readdirSync(MIGRATIONS).filter((f) => /^\d+_checklist_operacional_modulo\.sql$/.test(f));
@@ -57,7 +57,7 @@ describe("catálogo do módulo", () => {
   });
 });
 
-describe("migration 121", () => {
+describe("migration 123", () => {
   const sql = semComentarios(MIGRATION);
 
   test("insere o MESMO módulo do catálogo do código (id, nome, categoria, ordem)", () => {
@@ -84,7 +84,7 @@ describe("migration 121", () => {
   });
 });
 
-describe("rollback 121", () => {
+describe("rollback 123", () => {
   const sql = semComentarios(ROLLBACK);
 
   test("remove vínculos de unidade, de empresa e o item do catálogo — só deste módulo", () => {

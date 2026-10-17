@@ -52,7 +52,7 @@ export const MENU = [
   { id: "insumos",       label: "Insumos",         icon: "tag", logo: "/assets/menu-insumos.png", tipo: "insumos",     secao: "OPERAÇÃO", modulo: "ingredients" },
   { id: "estoque",       label: "Estoque",         icon: "package", logo: "/assets/menu-estoque.png", tipo: "construcao",  secao: "OPERAÇÃO", modulo: "inventory" },
   { id: "vendas",        label: "Vendas",          icon: "receipt", logo: "/assets/menu-vendas.png", tipo: "vendas",      secao: "OPERAÇÃO", modulo: "sales" },
-  // Checklist Operacional — módulo PRÓPRIO (`checklist_operacional`, migration 121), independente de ter integração
+  // Checklist Operacional — módulo PRÓPRIO (`checklist_operacional`, migration 123), independente de ter integração
   // iFood. `moduloTransicao`: o módulo `ifood` segue abrindo o item enquanto houver sessão aberta antes da migration
   // (a sessão congela os módulos por até 8 h) — a MESMA régua do backend (routes.js). Remover depois de ≥ 8 h do deploy.
   { id: "checklist-operacional", label: "Checklist Operacional", icon: "activity", logo: "/assets/menu-checklist-operacional.png", tipo: "checklist-operacional", secao: "OPERAÇÃO", modulo: "checklist_operacional", moduloTransicao: "ifood" },
