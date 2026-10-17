@@ -1,0 +1,106 @@
+// INTEGRAÇÃO Agente 1 (gate) × Agente 2 (domínio) — HTTP real em loopback, repositório em memória, dados sintéticos.
+// Prova a combinação que cada agente só testou com o outro lado injetado: o gate REAL (requireFinanceiro +
+// autorizarAcaoFinanceira) protegendo as rotas REAIS do domínio.
+import { test, describe } from "node:test";
+import assert from "node:assert/strict";
+import express from "express";
+import { requireFinanceiro, autorizarAcaoFinanceira } from "../src/middlewares/financeiro.js";
+import { errorHandler } from "../src/middlewares/errorHandler.js";
+
+const { criarDominioRouter } = await import("../src/modules/gestao-financeira/dominio/rotas.js");
+const { gestaoFinanceiraRouter } = await import("../src/modules/gestao-financeira/index.js");
+const { criarRepoMemoria } = await import("./financeiro/helpers/repoMemoria.js");
+
+const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const ORG_A = U(1), UNI_A = U(2), ORG_B = U(3), UNI_B = U(4), PERFIL = U(5), USUARIO = U(6);
+
+/** Cenário por header: o "tenant" que o requireContexto real preencheria. */
+function montar({ concessao, impersonando = false, papel = "organization_admin", moduloEmpresa = true, moduloUnidade = true, org = ORG_A, uni = UNI_A }) {
+  const repo = criarRepoMemoria();
+  const leitor = {
+    moduloEmpresa: async () => moduloEmpresa, moduloUnidade: async () => moduloUnidade,
+    concessao: async () => (typeof concessao === "function" ? concessao() : concessao),
+  };
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = { id: USUARIO };
+    req.tenant = { organizacaoId: org, unidadeId: uni };
+    req.acesso = { perfilId: PERFIL, papel, impersonando };
+    next();
+  });
+  app.use("/fin", requireFinanceiro(leitor), criarDominioRouter({ autorizar: autorizarAcaoFinanceira, deps: { repo, db: undefined } }));
+  app.use("/status", requireFinanceiro(leitor), gestaoFinanceiraRouter);   // o /status real do Agente 1
+  app.use(errorHandler);
+  return { app, repo };
+}
+
+async function servir(cfg, fn) {
+  const { app, repo } = montar(cfg);
+  const srv = await new Promise((res) => { const s = app.listen(0, "127.0.0.1", () => res(s)); });
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  const chamar = async (metodo, caminho, corpo) => {
+    const r = await fetch(base + caminho, { method: metodo, headers: { "Content-Type": "application/json" }, ...(corpo ? { body: JSON.stringify(corpo) } : {}) });
+    return { status: r.status, json: await r.json().catch(() => ({})) };
+  };
+  try { return await fn(chamar, repo); } finally { srv.close(); }
+}
+const conc = (nivel, o = {}) => ({ organizacao_id: ORG_A, unidade_id: UNI_A, nivel, somente_financeiro: false, revogada_em: null, expira_em: null, ...o });
+const codigo = (r) => r.json?.details?.codigo ?? r.json?.codigo;
+
+describe("gate real + domínio real", () => {
+  test("administrador SEM concessão não lê o plano de contas (403 FINANCEIRO_SEM_CONCESSAO)", () =>
+    servir({ concessao: null }, async (c) => { const r = await c("GET", "/fin/plano-contas"); assert.equal(r.status, 403); assert.equal(codigo(r), "FINANCEIRO_SEM_CONCESSAO"); }));
+
+  test("leitura: lê (200, envelope {data}) mas não lança nem configura (403 PERMISSAO_INSUFICIENTE)", () =>
+    servir({ concessao: conc("leitura") }, async (c) => {
+      const ler = await c("GET", "/fin/plano-contas"); assert.equal(ler.status, 200); assert.ok(Array.isArray(ler.json.data));
+      const lanc = await c("POST", "/fin/lancamentos", {}); assert.equal(lanc.status, 403); assert.equal(codigo(lanc), "FINANCEIRO_PERMISSAO_INSUFICIENTE");
+      const cfg = await c("POST", "/fin/contas", { nome: "caixa" }); assert.equal(cfg.status, 403);
+    }));
+
+  test("operador não configura; gestor configura (cria conta) e a conta fica na organização/unidade do GATE, não do corpo", () =>
+    servir({ concessao: conc("operador") }, async (c) => {
+      assert.equal((await c("POST", "/fin/contas", { nome: "banco x" })).status, 403);
+    }).then(() => servir({ concessao: conc("gestor") }, async (c, repo) => {
+      const r = await c("POST", "/fin/contas", { nome: "Banco QA", tipoConta: "banco", organizacaoId: ORG_B, unidadeId: UNI_B, organizacao_id: ORG_B });
+      assert.equal(r.status, 201);
+      const gravada = repo._t.contas[0];
+      assert.equal(gravada.organizacao_id, ORG_A); assert.equal(gravada.unidade_id, UNI_A);
+    })));
+
+  test("impersonação é bloqueada em TODAS as rotas do domínio, inclusive leitura", () =>
+    servir({ concessao: conc("gestor"), impersonando: true }, async (c) => {
+      for (const [m, p] of [["GET", "/fin/plano-contas"], ["GET", "/fin/contas"], ["POST", "/fin/contas"]]) {
+        const r = await c(m, p, m === "POST" ? { nome: "x" } : undefined);
+        assert.equal(r.status, 403, p); assert.equal(codigo(r), "FINANCEIRO_BLOQUEADO_IMPERSONACAO");
+      }
+    }));
+
+  test("perfil de exibição nunca acessa, mesmo com concessão gravada", () =>
+    servir({ concessao: conc("gestor"), papel: "display_operator" }, async (c) => { assert.equal((await c("GET", "/fin/contas")).status, 403); }));
+
+  test("concessão de OUTRA organização/unidade não vale; módulo desligado bloqueia", async () => {
+    await servir({ concessao: conc("gestor", { organizacao_id: ORG_B, unidade_id: UNI_B }) }, async (c) => assert.equal((await c("GET", "/fin/contas")).status, 403));
+    await servir({ concessao: conc("gestor"), moduloUnidade: false }, async (c) => { const r = await c("GET", "/fin/contas"); assert.equal(codigo(r), "FINANCEIRO_NAO_HABILITADO"); });
+  });
+
+  test("concessão expirada e revogação imediata (próxima requisição já nega)", async () => {
+    await servir({ concessao: conc("gestor", { expira_em: "2020-01-01T00:00:00Z" }) }, async (c) => assert.equal((await c("GET", "/fin/contas")).status, 403));
+    let atual = conc("gestor");
+    await servir({ concessao: () => atual }, async (c) => {
+      assert.equal((await c("GET", "/fin/contas")).status, 200);
+      atual = null;                                          // revogada entre duas requisições
+      assert.equal((await c("GET", "/fin/contas")).status, 403);
+    });
+  });
+
+  test("erro ao consultar a concessão => 500, nunca libera", () =>
+    servir({ concessao: () => { throw new Error("db fora"); } }, async (c) => assert.equal((await c("GET", "/fin/contas")).status, 500)));
+
+  test("/status real (Agente 1) e o domínio coexistem sob o mesmo gate", () =>
+    servir({ concessao: conc("operador") }, async (c) => {
+      const r = await c("GET", "/status/status");
+      assert.equal(r.status, 200); assert.deepEqual(r.json.data.permissoes, ["gestao_financeira.ver", "gestao_financeira.lancar"]);
+    }));
+});
