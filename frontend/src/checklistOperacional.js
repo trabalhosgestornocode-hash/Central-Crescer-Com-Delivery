@@ -71,7 +71,7 @@ import { registrarInteresse, statusCanal } from "./realtime/realtimeBus.js";
 import { EVENTOS_IFOOD_PEDIDOS, RESINCRONIZACAO, topicoUnidade } from "./realtime/realtimeEvents.js";
 import { criarSincronizador, avisoDaMinhaUnidade, textoModoAtualizacao } from "./checklistOperacionalSincronizacao.js";
 import {
-  METAS_EXEMPLO, ROTULO_NIVEL, TETO_REGUA, estadoDoCard, derivarPedidoAtivo, ordenarPorUrgencia,
+  METAS_EXEMPLO, REFERENCIA_P75, ROTULO_NIVEL, TETO_REGUA, estadoDoCard, derivarPedidoAtivo, ordenarPorUrgencia,
   derivarStatusOperacao, validarMetas, rotuloPedido,
 } from "./checklistOperacionalModelo.js";
 import { amostraDemonstracao } from "./checklistOperacionalAmostra.js";
@@ -239,7 +239,7 @@ function encerrarPorFaltaDeAcesso() {
   const unidade = state.sessao?.unidade;
   encerrarModo();
   if (unidade?.id && state.rota === "checklist-operacional") {
-    desenharSelecao(unidade, null, { aviso: "Este perfil não tem mais acesso aos pedidos iFood desta unidade. Fale com o responsável pela Central." });
+    desenharSelecao(unidade, null, { aviso: "Este perfil não tem mais acesso ao Checklist Operacional desta unidade. Fale com o responsável pela Central." });
   }
 }
 
@@ -689,6 +689,8 @@ function preencherMetas(dlg, metas, erros = {}) {
   });
   dlg.querySelector('[data-acao="metas-cancelar"]').addEventListener("click", () => dlg.close());
   dlg.querySelector('[data-acao="metas-exemplo"]').addEventListener("click", () => preencherMetas(dlg, clonarMetas(METAS_EXEMPLO)));
+  // Só PREENCHE o formulário; a meta da tela só muda se a pessoa aplicar. Nunca grava nada nem toca em outra unidade.
+  dlg.querySelector('[data-acao="metas-referencia"]').addEventListener("click", () => preencherMetas(dlg, clonarMetas(REFERENCIA_P75)));
 }
 
 /** Mantém o que a pessoa digitou ao reexibir o formulário com erro. */

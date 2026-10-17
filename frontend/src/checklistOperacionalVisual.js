@@ -20,7 +20,7 @@ import {
   ROTULO_NIVEL, ROTULO_NIVEL_FINAL, ROTULO_SATISFACAO, PASSOS, SELO_CONEXAO, TETO_REGUA,
   fmtMin, fmtHoraCurta, fmtIdade, fmtCronometro, rotuloPedido, etapaDoStatus, classificarFinal,
   estadoDoCard, derivarDecomposicao, derivarPedidoAtivo, ordenarPorUrgencia,
-  derivarStatusOperacao, derivarAvaliacoes,
+  derivarStatusOperacao, derivarAvaliacoes, REFERENCIA_P75_INFO,
 } from "./checklistOperacionalModelo.js";
 
 /**
@@ -59,9 +59,9 @@ export function regua(razao, avisoPct) {
 // ---------------------------------------------------------------------------
 
 const DEFINICAO = {
-  preparo: "Da confirmação até o pedido ficar pronto",
-  entrega: "Da saída até a conclusão do pedido",
-  vida: "Do recebimento até a conclusão",
+  preparo: "Da chegada do pedido até a saída para entrega",
+  entrega: "Da saída até a conclusão registrada pelo iFood",
+  vida: "Da chegada até a conclusão",
 };
 const TITULO = { preparo: "Tempo de preparo", entrega: "Tempo de entrega", vida: "Vida do pedido" };
 const NA_ETAPA = { preparo: "em preparo", entrega: "em entrega", vida: "em andamento" };
@@ -95,8 +95,8 @@ function zonaAgora(chave, e) {
 
 /** Por que um número é aproximado (o "≈" sempre explica a sua causa). */
 const MOTIVO_APROXIMADO = {
-  preparo: "Aproximado: sem o evento de pronto, medido até a saída do pedido",
-  entrega: "Aproximado: a conclusão do iFood ainda não foi validada como entrega ao cliente",
+  preparo: "Aproximado",
+  entrega: "Conclusão registrada pelo iFood: não confirma, por si só, a entrega ao cliente",
   vida: "Aproximado",
 };
 
@@ -117,10 +117,18 @@ function zonaHoje(e, chave) {
   const amostras = h.mediaMin == null ? "" : ` <small class="cko-hoje-amostras">${h.amostras} ${h.amostras === 1 ? "pedido" : "pedidos"}</small>`;
   return `
     <dl class="cko-hoje">
-      <div><dt>Média hoje${amostras}</dt>${valor(h.mediaMin, h.mediaNivel, h.mediaAproximada)}</div>
+      <div><dt${h.conjunto ? ` title="${escapeHtml(h.conjunto)}"` : ""}>Média hoje${amostras}</dt>${valor(h.mediaMin, h.mediaNivel, h.mediaAproximada)}</div>
       <div><dt>${chave === "entrega" ? "Última medição" : "Último concluído"}</dt>${valor(h.ultimoMin, h.ultimoNivel, h.ultimoAproximado)}</div>
       ${meta}
     </dl>`;
+}
+
+/** Vida DECOMPOSTA: média só dos pedidos com chegada, saída e conclusão — o único conjunto em que preparo + entrega = vida. */
+function blocoDecomposta(d) {
+  if (!d || !(d.amostras > 0)) return "";
+  const n = `${d.amostras} ${d.amostras === 1 ? "pedido" : "pedidos"}`;
+  return `
+    <p class="cko-decomp-nota" data-vida-decomposta title="${escapeHtml(d.conjunto ?? "")}">Com os 3 horários (${n}): ${fmtMin(d.preparoMediaDia)} + ${fmtMin(d.entregaMediaDia)} = ${fmtMin(d.mediaDia)} min</p>`;
 }
 
 function blocoDecomposicao(decomposicao, vidaMin) {
@@ -129,14 +137,19 @@ function blocoDecomposicao(decomposicao, vidaMin) {
   const barras = d.trechos.filter((t) => t.min != null).map((t) =>
     `<span class="cko-decomp-seg cko-decomp-seg--${t.chave}" style="flex-grow:${t.min}" title="${escapeHtml(`${t.rotulo}: ${fmtMin(t.min)} min`)}"></span>`).join("")
     + (d.lacunaMin ? `<span class="cko-decomp-seg cko-decomp-seg--lacuna" style="flex-grow:${d.lacunaMin}" title="Trecho sem medição"></span>` : "");
+  const dp = d.detalhePreparo;
+  const detalhe = dp
+    ? `<p class="cko-decomp-nota" title="Dentro do preparo: confirmação, até o pronto e espera pelo despacho (informativo)">Preparo: confirmação ${fmtMin(dp.confirmacao)} · até o pronto ${fmtMin(dp.ateOPronto)} · espera ${fmtMin(dp.esperaPeloDespacho)}</p>`
+    : "";
   const legenda = d.trechos.map((t) =>
     `<li><i class="cko-decomp-cor cko-decomp-seg--${t.chave}"></i>${t.rotulo} <b>${t.min == null ? "—" : fmtMin(t.min)}</b></li>`).join("");
   return `
     <div class="cko-decomp">
-      <p class="cko-decomp-rot">Último concluído por trecho, em minutos</p>
+      <p class="cko-decomp-rot" title="Preparo + entrega = vida, no último pedido concluído">Último concluído por trecho, em minutos</p>
       <div class="cko-decomp-barra" aria-hidden="true">${barras}</div>
       <ul class="cko-decomp-legenda">${legenda}</ul>
-      ${d.incompleta || d.lacunaMin ? '<p class="cko-decomp-nota">Há trechos sem medição neste pedido. A vida é medida direto, do recebimento à conclusão.</p>' : ""}
+      ${detalhe}
+      ${d.incompleta || d.lacunaMin ? '<p class="cko-decomp-nota">Há trechos sem medição neste pedido. A vida é medida direto, da chegada à conclusão.</p>' : ""}
     </div>`;
 }
 
@@ -154,6 +167,7 @@ export function cardTempo(chave, resumo, agora) {
       </header>
       ${zonaAgora(chave, e)}
       ${zonaHoje(e, chave)}
+      ${chave === "vida" ? blocoDecomposta(resumo.indicadores?.vida?.decomposta) : ""}
       ${chave === "vida" ? blocoDecomposicao(resumo.indicadores?.vida?.decomposicao, e.hoje.ultimoMin) : ""}
     </article>`;
 }
@@ -221,7 +235,7 @@ export function linhaPedidoAtivo(p) {
         <strong>${escapeHtml(rotuloPedido(p.displayId))}</strong>
         ${seloLoja(p)}
         <span>Recebido ${fmtHoraCurta(p.recebidoEm)}</span>
-        ${p.semConclusao ? '<span class="cko-ped-alerta">Aberto há mais de 4 h sem conclusão</span>' : p.agendado ? '<span class="cko-ped-agendado">Agendado</span>' : ""}
+        ${p.semConclusao ? '<span class="cko-ped-alerta">Aberto há mais de 4 h sem conclusão</span>' : p.agendado ? '<span class="cko-ped-agendado">Agendado</span>' : p.tipo === "TAKEOUT" ? '<span class="cko-ped-agendado">Retirada</span>' : ""}
       </div>
       <div class="cko-ped-etapa">
         <span class="cko-ped-etapa-rot">${escapeHtml(p.etapa.rotulo)}</span>
@@ -229,7 +243,7 @@ export function linhaPedidoAtivo(p) {
       </div>
       <div class="cko-ped-meta">
         ${regua(e.razao, e.avisoPct)}
-        <span>${p.indicador ? `${META_DA_ETAPA[p.indicador]} ${fmtCronometro(e.meta)}` : "Agendado: sem meta de preparo"}</span>
+        <span>${p.indicador ? `${META_DA_ETAPA[p.indicador]} ${fmtCronometro(e.meta)}` : p.tipo === "TAKEOUT" ? "Retirada: sem meta de tempo" : "Agendado: sem meta de preparo"}</span>
       </div>
       <div class="cko-ped-tempo">
         <span class="cko-crono cko-crono--${e.nivel}" data-crono>${e.cronometro}</span>
@@ -261,7 +275,7 @@ export function painelPedidosAtivos(resumo, agora) {
 // Últimos pedidos (tempos ENCERRADOS: cor do estado, sem animação)
 // ---------------------------------------------------------------------------
 
-function celulaTempo(min, limite, { emAndamento = false, aproximado = false } = {}) {
+function celulaTempo(min, limite, { emAndamento = false, aproximado = false } = {}) {   // aproximado: só a entrega usa
   if (min == null) return `<td class="cko-td-tempo cko-td-vazio">${emAndamento ? "em curso" : "—"}</td>`;
   const n = classificarFinal(min, limite);   // tempo ENCERRADO: dentro ou acima da meta — nunca "próximo"
   return `<td class="cko-td-tempo cko-nivel-txt--${n}" title="${ROTULO_NIVEL_FINAL[n]}">${aproximado ? '<span title="Aproximado">≈</span>' : ""}${fmtMin(min)}</td>`;
@@ -279,8 +293,9 @@ export function painelUltimosPedidos(resumo) {
         <th scope="row">${escapeHtml(rotuloPedido(p.displayId))}${seloLoja(p)}</th>
         <td>${fmtHoraCurta(p.recebidoEm)}</td>
         <td><span class="cko-etq${cancelado ? " cko-etq--cancelado" : ativo ? " cko-etq--andamento" : ""}">${escapeHtml(etapa.rotulo)}</span></td>
-        ${cancelado ? '<td class="cko-td-tempo cko-td-vazio" colspan="3">Fora das médias</td>' : `
-        ${celulaTempo(p.preparoMin, m.preparo, { emAndamento: ativo && etapa.passo < 2, aproximado: p.preparoAproximado })}
+        ${cancelado ? '<td class="cko-td-tempo cko-td-vazio" colspan="3">Fora das médias</td>'
+          : p.tipo === "TAKEOUT" ? '<td class="cko-td-tempo cko-td-vazio" colspan="3" title="A retirada não tem saída para entrega: não há tempos medidos">Retirada: sem tempos</td>' : `
+        ${celulaTempo(p.preparoMin, m.preparo, { emAndamento: ativo && etapa.passo < 3 })}
         ${celulaTempo(p.entregaMin, m.entrega, { emAndamento: ativo && etapa.passo === 3 })}
         ${celulaTempo(p.vidaMin, m.vida, { emAndamento: ativo })}`}
       </tr>`;
@@ -477,6 +492,7 @@ export function dialogoMetas(metas, { erros = {}, demonstracao = true } = {}) {
       <header>
         <h2 id="cko-t-metas">Metas da unidade</h2>
         <p>Pedido em andamento: abaixo do aviso, dentro da meta; do aviso até a meta, próximo da meta; depois da meta, atrasado. Etapa concluída: dentro da meta até a meta, acima da meta depois dela.</p>
+        <p class="cko-metas-ref" data-referencia>${escapeHtml(REFERENCIA_P75_INFO.texto)}</p>
         ${demonstracao
           ? '<p class="cko-metas-demo">Metas de demonstração: valem só nesta tela e não são salvas.</p>'
           : '<p class="cko-metas-demo">Metas desta tela: valem só neste aparelho até recarregar e ainda não são salvas para a unidade.</p>'}
@@ -486,6 +502,7 @@ export function dialogoMetas(metas, { erros = {}, demonstracao = true } = {}) {
       ${grupo("vida")}
       <footer>
         <button type="button" class="cko-btn cko-btn--sutil" data-acao="metas-exemplo">Restaurar exemplo</button>
+        <button type="button" class="cko-btn cko-btn--sutil" data-acao="metas-referencia" title="${escapeHtml(REFERENCIA_P75_INFO.texto)}">Usar referência observada (p75)</button>
         <span></span>
         <button type="button" class="cko-btn cko-btn--sutil" data-acao="metas-cancelar">Cancelar</button>
         <button type="submit" class="cko-btn cko-btn--primario" value="aplicar">Aplicar metas</button>

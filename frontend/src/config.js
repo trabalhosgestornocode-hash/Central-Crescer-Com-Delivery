@@ -52,10 +52,10 @@ export const MENU = [
   { id: "insumos",       label: "Insumos",         icon: "tag", logo: "/assets/menu-insumos.png", tipo: "insumos",     secao: "OPERAÇÃO", modulo: "ingredients" },
   { id: "estoque",       label: "Estoque",         icon: "package", logo: "/assets/menu-estoque.png", tipo: "construcao",  secao: "OPERAÇÃO", modulo: "inventory" },
   { id: "vendas",        label: "Vendas",          icon: "receipt", logo: "/assets/menu-vendas.png", tipo: "vendas",      secao: "OPERAÇÃO", modulo: "sales" },
-  // Checklist Operacional — mostra os pedidos iFood da unidade, então segue a
-  // MESMA régua do backend (/checklist-operacional: módulo `ifood` +
-  // integracoes.ver). Um módulo próprio exigiria migration.
-  { id: "checklist-operacional", label: "Checklist Operacional", icon: "activity", logo: "/assets/menu-checklist-operacional.png", tipo: "checklist-operacional", secao: "OPERAÇÃO", modulo: "ifood" },
+  // Checklist Operacional — módulo PRÓPRIO (`checklist_operacional`, migration 123), independente de ter integração
+  // iFood. `moduloTransicao`: o módulo `ifood` segue abrindo o item enquanto houver sessão aberta antes da migration
+  // (a sessão congela os módulos por até 8 h) — a MESMA régua do backend (routes.js). Remoção só em etapa própria, depois das verificações do §8.5 do documento.
+  { id: "checklist-operacional", label: "Checklist Operacional", icon: "activity", logo: "/assets/menu-checklist-operacional.png", tipo: "checklist-operacional", secao: "OPERAÇÃO", modulo: "checklist_operacional", moduloTransicao: "ifood" },
   { id: "dashboard-executivo", label: "Dashboard iFood", icon: "trending-up", logo: "/assets/menu-dashboard-ifood.png", tipo: "dashboard-executivo", secao: "OPERAÇÃO", modulo: "ifood_dashboard" },
   { id: "bonificacao-mensal", label: "Bonificação Mensal", icon: "award", logo: "/assets/menu-bonificacao-mensal.png", tipo: "bonificacao-mensal", secao: "OPERAÇÃO", modulo: "monthly_bonus" },
   { id: "parser-food-delivery", label: "Parser Food Delivery", icon: "truck", logo: "/assets/menu-parser-food-delivery.png", tipo: "parser-food-delivery", secao: "OPERAÇÃO", modulo: "parser_food_delivery" },

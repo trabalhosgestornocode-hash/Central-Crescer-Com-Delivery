@@ -17,6 +17,10 @@ const indicadorVazio = () => ({ disponivel: true, motivo: null, ultimo: null, me
 /** Aviso da faixa a partir do estado da integração e do dia. */
 export function avisoDe(dados) {
   const i = dados?.integracao ?? {};
+  // Unidade sem loja iFood vinculada: o Checklist abre normalmente, sem números — nada é inventado.
+  if (dados?.modo === "sem_integracao") {
+    return { tom: "neutro", titulo: "Unidade sem integração com o iFood", texto: "Os pedidos, os tempos e as médias aparecem aqui quando a loja desta unidade for conectada ao iFood. Nenhum número é estimado enquanto isso." };
+  }
   if (i.estado === "nao_ativada") return { tom: "neutro", titulo: "Integração não ativada", texto: i.mensagem ?? null };
   if (i.estado === "desatualizado") return { tom: "atencao", titulo: "Dados desatualizados", texto: i.mensagem ?? null };
   if (dados?.semPedidosNoDia) return { tom: "neutro", titulo: "Nenhum pedido registrado no período", texto: "Os indicadores aparecem com o primeiro pedido do dia operacional." };
@@ -86,7 +90,7 @@ export function marcarFalha(resumo, erro) {
     ...resumo,
     conexao: { ...resumo.conexao, estado: "indisponivel" },
     aviso: semPermissao
-      ? { tom: "critico", titulo: "Sem acesso", texto: "Este perfil não tem permissão para ver os pedidos iFood desta unidade." }
+      ? { tom: "critico", titulo: "Sem acesso", texto: "Este perfil não tem permissão para ver o Checklist Operacional desta unidade, ou a empresa não tem o módulo habilitado." }
       : {
         tom: "critico",
         titulo: resumo.recebidoEmMs ? "Dados desatualizados" : "Sem conexão",

@@ -456,11 +456,21 @@ export function requireAlgumaPermissao(...permissoes) {
  * @param {string} moduloId
  */
 export function requireModulo(moduloId) {
+  return requireAlgumModulo(moduloId);
+}
+
+/**
+ * Exige QUALQUER um dos módulos informados. Só para TRANSIÇÃO de um módulo para outro (a sessão congela os módulos por até
+ * 8 h, então uma sessão aberta antes da migration ainda não traz o módulo novo). Mesmo bypass de impersonação do `requireModulo`.
+ * @param {...string} moduloIds
+ */
+export function requireAlgumModulo(...moduloIds) {
   return (req, _res, next) => {
     if (!req.acesso) return next(ApiError.forbidden("Contexto de empresa não definido."));
     if (req.acesso.impersonando) return next();
-    if (!req.acesso.modulos.includes(moduloId)) {
-      return next(ApiError.forbidden(`Módulo "${rotuloModulo(moduloId)}" não contratado por esta empresa.`));
+    if (!moduloIds.some((id) => req.acesso.modulos.includes(id))) {
+      const nomes = moduloIds.map((id) => `"${rotuloModulo(id)}"`).join(" ou ");
+      return next(ApiError.forbidden(`Módulo ${nomes} não contratado por esta empresa.`));
     }
     next();
   };

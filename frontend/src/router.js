@@ -32,7 +32,7 @@ const acessivel = (item) => {
   if (ehPerfilExibicao(state.sessao)) return itemPermitidoAoPerfil(item, state.sessao);
   const gateSecao = SECAO_MODULO[item.secao];
   if (gateSecao && !temModulo(gateSecao)) return false;
-  return !item.modulo || temModulo(item.modulo);
+  return !item.modulo || temModulo(item.modulo) || Boolean(item.moduloTransicao && temModulo(item.moduloTransicao));
 };
 
 /**

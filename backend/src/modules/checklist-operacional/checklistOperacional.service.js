@@ -12,6 +12,10 @@
 //   desatualizado  havia recebimento, mas parou (lease vencido) ou a credencial pede nova autorização
 //   ao_vivo        o poller renovou o lease há pouco
 // Os pedidos já persistidos aparecem em QUALQUER estado — o selo diz se eles ainda refletem a operação.
+//
+// MODO (aditivo, para a tela): `sem_integracao` = a unidade não tem loja iFood vinculada (nem credencial de pedidos);
+// o Checklist abre normalmente, sem pedidos e sem erro, com um aviso informativo. `integrado` = há vínculo (mesmo que o
+// recebimento esteja parado ou desligado — isso é o `estado`). Nada aqui chama o iFood.
 
 import * as repo from "./checklistOperacional.repository.js";
 import * as ifoodRepo from "../ifood/ifood.repository.js";
@@ -59,6 +63,18 @@ export function derivarEstadoIntegracao({ conexao, credencialOrder, observabilid
   }
   if (ultimoEventoEm) return est("desatualizado", "recebimento_parado", { ...base, ultimaSincronizacao: ultimoEventoEm });
   return est("nao_ativada", "recebimento_desligado", base);
+}
+
+/**
+ * PURA: a unidade tem integração iFood? `sem_integracao` SÓ quando não há loja vinculada E não existe nenhum pedido persistido para mostrar.
+ * Loja vinculada sem credencial de pedidos (ex.: autorização revogada) é `integrado` — a tela mostra o motivo específico ("a loja não autorizou…"),
+ * não "vincule a loja". Unidade que já teve pedidos também segue `integrado`: os números existentes não podem ser chamados de "sem número".
+ * @param {{estado?: string, motivo?: string}} integracao
+ * @param {{temPedidos?: boolean}} [opc]
+ */
+export function derivarModo(integracao, { temPedidos = false } = {}) {
+  return integracao?.estado === "nao_ativada" && integracao.motivo === "sem_loja_vinculada" && !temPedidos
+    ? "sem_integracao" : "integrado";
 }
 
 /**
@@ -125,6 +141,7 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
     origem: "api",
     servidorEm: new Date(agoraMs).toISOString(),
     atualizarEmS: INTERVALO_ATUALIZACAO_S,
+    modo: derivarModo(integracao, { temPedidos: resumo.contagemDia.recebidos > 0 || resumo.contagemDia.emAndamento > 0 }),
     integracao: { ...integracao, pilotoOrder: piloto(unidadeId) === true },
     semPedidosNoDia: resumo.contagemDia.recebidos === 0 && resumo.contagemDia.emAndamento === 0,
     ...resumo,

@@ -99,13 +99,30 @@ describe("formatação", () => {
 });
 
 describe("contadores vivos por etapa", () => {
-  test("cada etapa acompanha sua própria meta, a partir do carimbo oficial", () => {
-    assert.deepEqual(indicadorDaEtapa({ status: "SEPARATION_STARTED", confirmadoEm: "c", recebidoEm: "r" }), { chave: "preparo", desde: "c" });
+  test("cada etapa acompanha sua própria meta: preparo desde a CHEGADA até o despacho; entrega desde a saída", () => {
+    assert.deepEqual(indicadorDaEtapa({ status: "PLACED", recebidoEm: "r" }), { chave: "preparo", desde: "r" });
+    assert.deepEqual(indicadorDaEtapa({ status: "SEPARATION_STARTED", confirmadoEm: "c", recebidoEm: "r" }), { chave: "preparo", desde: "r" });
     assert.deepEqual(indicadorDaEtapa({ status: "DISPATCHED", despachadoEm: "d", recebidoEm: "r" }), { chave: "entrega", desde: "d" });
-    assert.deepEqual(indicadorDaEtapa({ status: "PLACED", recebidoEm: "r" }), { chave: "vida", desde: "r" });
-    assert.deepEqual(indicadorDaEtapa({ status: "READY_TO_PICKUP", confirmadoEm: "c", recebidoEm: "r" }), { chave: "vida", desde: "r" });
-    // sem o carimbo, nunca inventa o início da etapa: cai para a vida
-    assert.deepEqual(indicadorDaEtapa({ status: "CONFIRMED", recebidoEm: "r" }), { chave: "vida", desde: "r" });
+  });
+  test("pedido PRONTO aguardando o entregador continua no preparo (o pronto não encerra a etapa)", () => {
+    assert.deepEqual(indicadorDaEtapa({ status: "READY_TO_PICKUP", confirmadoEm: "c", recebidoEm: "r" }), { chave: "preparo", desde: "r" });
+    const p = derivarPedidoAtivo({ id: "p", recebidoEm: ha(15), status: "READY_TO_PICKUP", confirmadoEm: ha(14) }, METAS_EXEMPLO, AGORA);
+    assert.equal(p.indicador, "preparo");
+    assert.equal(p.daEtapa.cronometro, "15:00");   // conta desde a chegada, não desde o pronto
+  });
+  test("despachado sem o carimbo de saída não inventa o início da entrega: cai para a vida", () => {
+    assert.deepEqual(indicadorDaEtapa({ status: "DISPATCHED", recebidoEm: "r" }), { chave: "vida", desde: "r" });
+  });
+  test("RETIRADA e AGENDADO não têm meta de tempo (continuam visíveis, sem duração inventada)", () => {
+    for (const extra of [{ tipo: "TAKEOUT" }, { agendado: true }]) {
+      const p = derivarPedidoAtivo({ id: "t", recebidoEm: ha(30), status: "READY_TO_PICKUP", ...extra }, METAS_EXEMPLO, AGORA);
+      assert.equal(p.indicador, null);
+      assert.equal(p.nivel, "neutro");
+      assert.equal(p.vida.nivel, "neutro");
+    }
+    const r = { ...amostraDemonstracao({ agora: AGORA }), pedidosAtivos: [{ id: "t", displayId: "9", recebidoEm: ha(30), status: "READY_TO_PICKUP", tipo: "TAKEOUT" }] };
+    assert.equal(emAcompanhamento("preparo", r, AGORA), null);
+    assert.equal(emAcompanhamento("vida", r, AGORA), null);
   });
   test("pedido assume o pior entre a etapa e a vida, e avisa quando é pela vida", () => {
     const p = derivarPedidoAtivo({ id: "a", displayId: "1", recebidoEm: ha(40), status: "DISPATCHED", despachadoEm: ha(10) }, METAS_EXEMPLO, AGORA);
@@ -121,7 +138,7 @@ describe("contadores vivos por etapa", () => {
     assert.equal(fora.nivel, "critico");
     assert.equal(fora.pulso, null);
     const dentro = derivarPedidoAtivo({ id: "c", recebidoEm: ha(5), status: "CONFIRMED", confirmadoEm: ha(4) }, METAS_EXEMPLO, AGORA);
-    assert.deepEqual(dentro.pulso, ritmoPulso(4 / 12));
+    assert.deepEqual(dentro.pulso, ritmoPulso(5 / 12));   // o preparo conta desde a chegada
   });
   test("urgência: fora, depois próximo, depois dentro; no mesmo estado, o mais antigo — ordem estável no tempo", () => {
     const base = [
@@ -140,8 +157,8 @@ describe("cards: 'agora' (vivo) x 'hoje' (encerrado)", () => {
   const r = amostraDemonstracao({ agora: AGORA });
   test("cada card acompanha o pedido há mais tempo na sua etapa", () => {
     const prep = emAcompanhamento("preparo", r, AGORA);
-    assert.equal(prep.pedido.displayId, "4528");
-    assert.equal(prep.quantidade, 3);
+    assert.equal(prep.pedido.displayId, "4526");   // pronto aguardando o entregador há 19,5 min: ainda é preparo
+    assert.equal(prep.quantidade, 5);
     assert.equal(emAcompanhamento("entrega", r, AGORA).pedido.displayId, "4522");
     assert.equal(emAcompanhamento("vida", r, AGORA).quantidade, 6);
   });
@@ -160,13 +177,23 @@ describe("cards: 'agora' (vivo) x 'hoje' (encerrado)", () => {
   });
   test("números do dia mantêm seu próprio estado", () => {
     const h = derivarIndicador(r.indicadores.preparo, r.metas.preparo);
-    assert.equal(h.mediaNivel, "ok");      // 9,1 / 12
-    assert.equal(h.ultimoNivel, "critico"); // 12,4 / 12
+    assert.equal(h.mediaNivel, "ok");      // 11,4 / 12
+    assert.equal(h.ultimoNivel, "critico"); // 18,7 / 12
   });
-  test("vida = medida direta; trechos faltantes viram lacuna, nunca estimativa", () => {
-    const parcial = derivarDecomposicao({ confirmacao: 1, preparo: 10, espera: null, entrega: 25 }, 41);
+  test("vida = preparo + entrega: dois trechos sem sobreposição; trecho faltante vira lacuna, nunca estimativa", () => {
+    const cheia = derivarDecomposicao({ preparo: 15, entrega: 25 }, 40);
+    assert.deepEqual(cheia.trechos.map((t) => t.chave), ["preparo", "entrega"]);
+    assert.equal(cheia.incompleta, false);
+    assert.equal(cheia.lacunaMin, 0);
+    assert.equal(Math.round(cheia.trechos.reduce((s, t) => s + t.pct, 0)), 100);
+    const parcial = derivarDecomposicao({ preparo: null, entrega: 25 }, 41);
     assert.equal(parcial.incompleta, true);
-    assert.equal(parcial.lacunaMin, 5);
+    assert.equal(parcial.lacunaMin, 16);
+  });
+  test("o detalhe do preparo (confirmação / até o pronto / espera) é informativo e fica fora da barra", () => {
+    const d = derivarDecomposicao({ preparo: 15, entrega: 25, detalhePreparo: { confirmacao: 1, ateOPronto: 10, esperaPeloDespacho: 4 } }, 40);
+    assert.equal(d.trechos.length, 2);
+    assert.deepEqual(d.detalhePreparo, { confirmacao: 1, ateOPronto: 10, esperaPeloDespacho: 4 });
   });
 });
 
@@ -174,8 +201,8 @@ describe("status da operação", () => {
   test("o pior entre médias e pedidos, com o motivo escrito", () => {
     const s = derivarStatusOperacao(amostraDemonstracao({ agora: AGORA }), AGORA);
     assert.equal(s.nivel, "critico");
-    assert.equal(s.fora, 1);
-    assert.ok(s.motivos.includes("1 pedido em andamento atrasado"));
+    assert.equal(s.fora, 2);   // 4526 (pronto há 19,5 min) e 4528 (13,6 min), ambos ainda no preparo
+    assert.ok(s.motivos.includes("2 pedidos em andamento atrasados"));
     // Média CONCLUÍDA abaixo da meta é "dentro" — nunca "próxima": o amarelo é só de pedido em andamento.
     assert.ok(!s.motivos.some((m) => /média.*próxim/i.test(m)), s.motivos.join(" | "));
     assert.ok(s.medias.every(([, n]) => n !== "atencao"));
@@ -241,7 +268,7 @@ describe("componentes visuais", () => {
   test("card com pedido vivo tem anel de pulso e contador; sem pedido, nem um nem outro", () => {
     const vivo = cardTempo("preparo", r, AGORA);
     assert.match(vivo, /data-pulso/);
-    assert.match(vivo, /data-agora-crono>12:54</);
+    assert.match(vivo, /data-agora-crono>19:30</);
     assert.match(vivo, /data-estado-rot>Atrasado</);
     const parado = cardTempo("entrega", { ...r, pedidosAtivos: [] }, AGORA);
     assert.doesNotMatch(parado, /data-pulso|data-agora-crono/);
@@ -251,12 +278,12 @@ describe("componentes visuais", () => {
     const p = derivarPedidoAtivo(r.pedidosAtivos.find((x) => x.id === "d-4528"), r.metas, AGORA);
     const html = linhaPedidoAtivo(p);
     assert.match(html, /Meta do preparo 12:00/);
-    assert.match(html, /passou 00:54/);
+    assert.match(html, /passou 01:35/);   // preparo desde a chegada (13:36 de cronômetro)
     assert.match(html, /cko-crono--critico/);
   });
   test("tempos encerrados não pulsam (tabela e 'hoje')", () => {
     assert.doesNotMatch(painelUltimosPedidos(r), /data-pulso/);
-    assert.match(painelUltimosPedidos(r), /cko-nivel-txt--critico[^>]*>12,4/);
+    assert.match(painelUltimosPedidos(r), /cko-nivel-txt--critico[^>]*>18,7/);
   });
   test("cancelado fica fora das médias", () => {
     assert.match(painelUltimosPedidos(r), /cko-tr-cancelado[\s\S]*?Fora das médias/);
@@ -270,7 +297,7 @@ describe("componentes visuais", () => {
     assert.match(telaSemUnidade(), /Escolha uma unidade/);
   });
   test("card de status expõe assinatura para o tique não redesenhar à toa", () => {
-    assert.match(cardStatus(r, AGORA), /data-assinatura="critico\|6\|1\|/);
+    assert.match(cardStatus(r, AGORA), /data-assinatura="critico\|6\|2\|/);
   });
   test("diálogo de metas pede meta e aviso por indicador", () => {
     const html = dialogoMetas(METAS_EXEMPLO, { erros: { vidaAviso: "Use um valor entre 50% e 99% da meta." } });
@@ -309,8 +336,14 @@ describe("menu, rota e ciclo de vida", () => {
     assert.match(fonte, /if \(demonstracaoPedida\(\)\) \{\s*\n\s*estado\.resumo = amostraDemonstracao\(/);
     assert.doesNotMatch(ler("../src/checklistOperacionalDados.js"), /amostraDemonstracao|checklistOperacionalAmostra/);
   });
-  test("menu segue a régua do backend: módulo ifood (não o do Dashboard iFood)", () => {
-    assert.equal(MENU.find((m) => m.id === "checklist-operacional").modulo, "ifood");
+  test("menu segue a régua do backend: módulo próprio do Checklist; o iFood só na transição (não o do Dashboard iFood)", () => {
+    const item = MENU.find((m) => m.id === "checklist-operacional");
+    assert.equal(item.modulo, "checklist_operacional");
+    assert.equal(item.moduloTransicao, "ifood");
+  });
+  test("retirada na tabela de últimos pedidos: visível, sem durações inventadas", () => {
+    const html = painelUltimosPedidos({ ...amostraDemonstracao({ agora: AGORA }) });
+    assert.match(html, /Retirada: sem tempos/);
   });
   test("contadores usam o relógio do servidor; resposta antiga de outro contexto é descartada", () => {
     const fonte = ler("../src/checklistOperacional.js");
@@ -323,5 +356,74 @@ describe("menu, rota e ciclo de vida", () => {
     assert.match(fonte, /prefers-reduced-motion: reduce/);
     assert.match(fonte, /updatePlaybackRate/);
     assert.match(ler("../src/checklistOperacional.css"), /@media \(prefers-reduced-motion: reduce\)/);
+  });
+});
+
+describe("metas × referência estatística × limite de alerta", async () => {
+  const M = await import("../src/checklistOperacionalModelo.js");
+  const V = await import("../src/checklistOperacionalVisual.js");
+
+  test("a referência observada (p75) é um conjunto À PARTE: as metas de exemplo existentes NÃO foram substituídas", () => {
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(M.METAS_EXEMPLO).map(([k, v]) => [k, v.meta])),
+      { preparo: 12, entrega: 35, vida: 45 },
+    );
+    assert.deepEqual(
+      Object.fromEntries(Object.entries(M.REFERENCIA_P75).map(([k, v]) => [k, v.meta])),
+      { preparo: 16.3, entrega: 12.6, vida: 28.1 },
+    );
+    assert.equal(M.REFERENCIA_P75_INFO.percentil, 75);
+    assert.ok(Object.isFrozen(M.REFERENCIA_P75) && Object.isFrozen(M.METAS_EXEMPLO));
+  });
+
+  test("meta (limite) e limite de alerta (aviso %) são campos distintos; a referência é outra coisa e só preenche o formulário", () => {
+    const html = V.dialogoMetas(M.METAS_EXEMPLO, { demonstracao: false });
+    assert.match(html, /name="preparoMeta"/);
+    assert.match(html, /name="preparoAviso"/);
+    assert.match(html, /data-acao="metas-referencia"/);
+    assert.match(html, /data-referencia/);
+    assert.match(html, /não são salvas para a unidade/);
+    // O formulário aberto com a referência mostra 16,3 — mas a tela só muda ao aplicar.
+    assert.match(V.dialogoMetas(M.REFERENCIA_P75, { demonstracao: false }), /name="preparoMeta"[^>]*value="16,3"/);
+  });
+
+  test("a referência passa pela MESMA validação das metas (aviso 50–99%, meta obrigatória)", () => {
+    const campos = { preparoMeta: "16,3", preparoAviso: "80", entregaMeta: "12,6", entregaAviso: "80", vidaMeta: "28,1", vidaAviso: "80" };
+    const r = M.validarMetas(campos);
+    assert.deepEqual(r.erros ?? {}, {});
+    assert.deepEqual(r.metas.preparo, { meta: 16.3, avisoPct: 80 });
+  });
+
+  test("o controlador aplica a referência SEM gravar nada (nada de storage/fetch) e só preenche o diálogo", () => {
+    const fonte = ler("../src/checklistOperacional.js");
+    assert.match(fonte, /data-acao="metas-referencia"\]'\)\.addEventListener\("click", \(\) => preencherMetas\(dlg, clonarMetas\(REFERENCIA_P75\)\)\)/);
+    assert.match(fonte, /estado\.metas \?\?= clonarMetas\(METAS_EXEMPLO\)/);   // o padrão da tela continua o exemplo
+    assert.doesNotMatch(fonte, /localStorage|sessionStorage/);
+  });
+
+  test("com a referência aplicada, a classificação usa a meta nova (16,3) e o aviso de 80%", () => {
+    assert.equal(M.classificar(13, M.REFERENCIA_P75.preparo), "ok");        // 13/16,3 = 80% → ainda abaixo do aviso? (79,8%)
+    assert.equal(M.classificar(14, M.REFERENCIA_P75.preparo), "atencao");
+    assert.equal(M.classificar(17, M.REFERENCIA_P75.preparo), "critico");
+  });
+});
+
+describe("vida total × decomposta na tela", async () => {
+  const M = await import("../src/checklistOperacionalModelo.js");
+  const V = await import("../src/checklistOperacionalVisual.js");
+  const base = amostraDemonstracao({ agora: AGORA });
+  const comDecomposta = (d) => ({ ...base, indicadores: { ...base.indicadores, vida: { ...base.indicadores.vida, conjunto: "Conjunto da vida total.", decomposta: d } } });
+
+  test("mostra o conjunto decomposto (com a própria amostra) separado da média da vida total", () => {
+    const html = V.cardTempo("vida", comDecomposta({ amostras: 31, conjunto: "Subconjunto…", mediaDia: 24.3, preparoMediaDia: 14.2, entregaMediaDia: 10.1, semSaida: 4 }), AGORA);
+    assert.match(html, /Com os 3 horários \(31 pedidos\): 14,2 \+ 10,1 = 24,3 min/);
+    assert.match(html, /Média hoje <small class="cko-hoje-amostras">35 pedidos<\/small>/);   // amostra da vida TOTAL, à parte
+    assert.match(html, /title="Conjunto da vida total\."/);
+  });
+
+  test("sem pedidos com os 3 horários, o bloco simplesmente não aparece (nada inventado)", () => {
+    assert.doesNotMatch(V.cardTempo("vida", comDecomposta({ amostras: 0, mediaDia: null }), AGORA), /Com os 3 horários/);
+    assert.doesNotMatch(V.cardTempo("vida", base, AGORA), /Com os 3 horários/);
+    assert.doesNotMatch(V.cardTempo("preparo", comDecomposta({ amostras: 5, mediaDia: 24, preparoMediaDia: 14, entregaMediaDia: 10 }), AGORA), /Com os 3 horários/);
   });
 });
