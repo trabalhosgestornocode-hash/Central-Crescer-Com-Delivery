@@ -104,7 +104,7 @@ test("rotas: com o gate negando, TODAS as rotas devolvem 403 e nenhum serviço �
   let tocou = 0;
   const deps = { repo: new Proxy({}, { get: () => () => { tocou++; return Promise.resolve([]); } }), db: undefined };
   const negar = () => (_req, _res, next) => next(ApiError.forbidden("negado"));
-  const router = criarDominioRouter({ exigirPermissao: negar, deps });
+  const router = criarDominioRouter({ autorizar: negar, deps });
   const rotas = router.stack.filter((l) => l.route).flatMap((l) => Object.keys(l.route.methods).map((m) => [m.toUpperCase(), l.route.path]));
   assert.ok(rotas.length >= 30, `rotas registradas: ${rotas.length}`);
   const { base, fechar } = await servir(router);
@@ -120,7 +120,7 @@ test("rotas: com o gate negando, TODAS as rotas devolvem 403 e nenhum serviço �
 test("rotas: cada rota exige a ação mínima esperada (leitura só VER; escrita nunca VER)", () => {
   const acoes = [];
   const gravador = (acao) => { acoes.push(acao); return (_q, _s, n) => n(); };
-  const router = criarDominioRouter({ exigirPermissao: gravador, deps: { repo: {} } });
+  const router = criarDominioRouter({ autorizar: gravador, deps: { repo: {} } });
   const porRota = router.stack.filter((l) => l.route).map((l) => ({ metodos: Object.keys(l.route.methods), path: l.route.path }));
   assert.equal(acoes.length, porRota.length);
   porRota.forEach((r, i) => {
@@ -138,7 +138,7 @@ test("rotas: contexto vem do gate; org/unidade no corpo são ignorados", async (
     inserirLancamento: async (ctx, l) => { visto.push({ ctx, l }); return { id: U(40), ...l }; },
   } };
   const gate = () => (req, _res, next) => { req.financeiro = { organizacaoId: CTX.organizacaoId, unidadeId: CTX.unidadeId, permissoes: [] }; req.user = { id: CTX.usuarioId }; next(); };
-  const { base, fechar } = await servir(criarDominioRouter({ exigirPermissao: gate, deps }));
+  const { base, fechar } = await servir(criarDominioRouter({ autorizar: gate, deps }));
   try {
     const r = await fetch(`${base}/lancamentos`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
       organizacaoId: OUTRO.organizacaoId, unidadeId: OUTRO.unidadeId, contaId: U(5), categoriaId: U(6), descricao: "Teste", sentido: "saida", valor: "10,50", dataMovimento: "2026-09-02" }) });

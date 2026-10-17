@@ -4,4 +4,4 @@
 import { autorizarAcaoFinanceira } from "../../../middlewares/financeiro.js";
 import { criarDominioRouter } from "./rotas.js";
 
-export const dominioRouter = criarDominioRouter({ exigirPermissao: autorizarAcaoFinanceira });
+export const dominioRouter = criarDominioRouter({ autorizar: autorizarAcaoFinanceira });

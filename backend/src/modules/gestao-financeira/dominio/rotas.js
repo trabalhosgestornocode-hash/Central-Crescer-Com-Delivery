@@ -1,4 +1,4 @@
-// Rotas do domínio financeiro. O router NÃO decide acesso: recebe `exigirPermissao(acao)` do Agente 1 (gate sem bypass) por
+// Rotas do domínio financeiro. O router NÃO decide acesso: recebe `autorizar(acao)` do Agente 1 (gate sem bypass) por
 // injeção, e cada rota declara a ação mínima. Contexto (org/unidade/usuário) vem SÓ de req.financeiro/req.user — nunca do corpo.
 // Resposta: { data }. Erros: ApiError → errorHandler global.
 import { Router } from "express";
@@ -11,11 +11,11 @@ import * as imp from "./importacao.service.js";
 import * as repositorio from "./repositorio.js";
 import { uuid } from "./validacao.js";
 
-export function criarDominioRouter({ exigirPermissao, deps = undefined }) {
-  if (typeof exigirPermissao !== "function") throw new Error("exigirPermissao (gate do Agente 1) é obrigatório");
+export function criarDominioRouter({ autorizar, deps = undefined }) {
+  if (typeof autorizar !== "function") throw new Error("autorizar (gate do Agente 1) é obrigatório");
   const r = Router();
   const d = deps; // injeção opcional para testes
-  const h = (acao, fn, { status = 200 } = {}) => [exigirPermissao(acao), asyncHandler(async (req, res) => {
+  const h = (acao, fn, { status = 200 } = {}) => [autorizar(acao), asyncHandler(async (req, res) => {
     const data = await fn(contextoDe(req), req);
     res.set("Cache-Control", "no-store");
     res.status(status).json({ data });

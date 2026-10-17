@@ -48,7 +48,7 @@ async function ambiente() {
     if (!perms.includes(acao)) return next(Object.assign(new Error("Permissão financeira insuficiente."), { statusCode: 403 }));
     next();
   };
-  app.use("/fin", criarDominioRouter({ exigirPermissao: gate, deps: { repo, db: undefined } }));
+  app.use("/fin", criarDominioRouter({ autorizar: gate, deps: { repo, db: undefined } }));
   app.use((err, _req, res, _next) => res.status(err.statusCode || 500).json({ error: err.message, details: err.details }));
   const srv = await new Promise((ok) => { const s = app.listen(0, "127.0.0.1", () => ok(s)); });
   const base = `http://127.0.0.1:${srv.address().port}/fin`;
