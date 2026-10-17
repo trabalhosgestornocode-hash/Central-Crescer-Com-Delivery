@@ -1,14 +1,20 @@
 -- =====================================================================
--- PROVISÓRIO (NÃO EXECUTÁVEL PELO PIPELINE) — Gestão Financeira: domínio (Agente 2)
+-- MIGRATION 121 — Gestão Financeira: domínio (Agente 2) — PROPOSTA INTEGRADA
 -- =====================================================================
--- Fica FORA de database/migrations de propósito. Vira `121_*.sql` (ou o número que o Agente 1 definir) só depois de:
---   1) numeração coordenada com o Agente 1 (a 120 é dele: módulo, concessões, RLS de concessões);
---   2) execução em PostgreSQL DESCARTÁVEL (scripts em backend/testes-financeiro-pg) e revisão humana.
--- NUNCA aplicar em produção a partir deste arquivo.
+-- ⚠️  NÃO APLICAR EM PRODUÇÃO NEM EM BANCO REMOTO SEM APROVAÇÃO EXPLÍCITA E IDENTIDADE DESCARTÁVEL COMPROVADA.
+-- Origem: SQL provisório do Agente 2 (docs/…/sql-provisorio), promovido na integração: o CORPO é o do Agente 2; o integrador
+-- só acrescentou a transação (`begin`/`commit`, `lock_timeout`) e a PÓS-CONDIÇÃO de segurança no fim (no padrão da 120).
 --
--- Modelo: dinheiro em centavos (bigint), regime de caixa, isolamento por organização + unidade DENTRO do banco
--- (gatilhos conferem que conta/categoria/unidade pertencem ao mesmo tenant), RLS ligada SEM policies (só o backend, via
--- service_role, e sempre filtrando org+unidade), sem DELETE para o service_role (cancelamento é status), auditoria imutável.
+-- ORDEM: aplicar DEPOIS da 120 (fundação/concessões). Nenhum objeto da 121 referencia a 120 (são independentes no banco), mas a
+-- autorização de acesso vive no backend (gate + concessão); sem a 120 não há como conceder acesso a estas tabelas.
+-- ROLLBACK: 121_rollback.sql ANTES de 120_rollback.sql. Recusa se houver dados.
+--
+-- Modelo: dinheiro em centavos (bigint), regime de caixa, isolamento por organização + unidade DENTRO do banco (gatilhos conferem
+-- que conta/categoria/unidade pertencem ao mesmo tenant), RLS ligada SEM policies (só o backend, via service_role, sempre filtrando
+-- org+unidade), sem DELETE direto para o service_role (cancelamento é status), auditoria imutável.
+-- =====================================================================
+begin;
+set local lock_timeout = '5s';
 
 -- ---------------------------------------------------------------------
 -- Plano de contas (por organização). O `papel` decide a participação nos cálculos.
@@ -410,3 +416,28 @@ begin
   end loop;
 end $$;
 -- Nota: o dono da função fin_desvincular_transferencia (quem aplica a migration) precisa de DELETE em fin_transferencias; revisar na homologação.
+
+-- ---------------------------------------------------------------------
+-- PÓS-CONDIÇÃO (falha segura, adicionada na integração): sem acesso direto, sem policy, RLS ligado em TODAS as tabelas.
+-- ---------------------------------------------------------------------
+do $$
+declare t text; r text; n int;
+begin
+  foreach t in array array['fin_plano_contas','fin_contas','fin_saldos_abertura','fin_lancamentos','fin_transferencias','fin_periodos','fin_importacoes','fin_auditoria'] loop
+    if not (select relrowsecurity from pg_class where oid = ('public.' || t)::regclass) then
+      raise exception 'MIGRATION 121 abortada: RLS desligado em %.', t;
+    end if;
+    foreach r in array array['anon', 'authenticated'] loop
+      if exists (select 1 from pg_roles where rolname = r) and has_any_column_privilege(r, ('public.' || t)::regclass, 'select,insert,update,references') then
+        raise exception 'MIGRATION 121 abortada: % ainda tem acesso a % (grant herdado/default privileges). Nada foi aplicado.', r, t;
+      end if;
+    end loop;
+    select count(*) into n from pg_policies where schemaname = 'public' and tablename = t;
+    if n > 0 then raise exception 'MIGRATION 121 abortada: % possui % policy(ies); o desenho exige zero.', t, n; end if;
+    if exists (select 1 from pg_roles where rolname = 'service_role') and has_table_privilege('service_role', ('public.' || t)::regclass, 'delete') then
+      raise exception 'MIGRATION 121 abortada: service_role tem DELETE em %.', t;
+    end if;
+  end loop;
+end $$;
+
+commit;

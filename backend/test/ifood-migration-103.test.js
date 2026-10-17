@@ -39,7 +39,9 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
     // 119 = Serviços e promoções com sinal no Dashboard iFood (remove só o CHECK >= 0; negativo = crédito à loja).
     "119_servicos_promocoes_sinal.sql", "119_rollback.sql",
     // 120 = fundação do Dashboard Financeiro (módulo gestao_financeira, concessões explícitas, auditoria; RLS sem policies).
-    "120_gestao_financeira_fundacao.sql", "120_rollback.sql"]);
+    "120_gestao_financeira_fundacao.sql", "120_rollback.sql",
+    // 121 = domínio financeiro (Agente 2): fin_* backend-only, RLS sem policies, auditoria imutável.
+    "121_gestao_financeira_dominio.sql", "121_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });

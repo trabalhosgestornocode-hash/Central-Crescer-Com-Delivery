@@ -10,7 +10,7 @@ PORT="${FIN_PG_PORT:-54329}"
 PSQL="${PSQL:-psql}"
 DB="fin_descartavel_$$"
 AQUI="$(cd "$(dirname "$0")" && pwd)"
-SQL="$AQUI/../../docs/gestao-financeira/sql-provisorio/121_gestao_financeira_dominio.provisorio.sql"
+SQL="$AQUI/../../database/migrations/121_gestao_financeira_dominio.sql"
 run() { "$PSQL" -h "$HOST" -p "$PORT" -U postgres -v ON_ERROR_STOP=1 -q "$@"; }
 run -d postgres -c "create database $DB"
 trap 'run -d postgres -c "drop database if exists $DB" >/dev/null' EXIT
@@ -19,6 +19,6 @@ run -d "$DB" -f "$SQL"
 run -d "$DB" -f "$SQL"   # idempotência: segunda aplicação não pode falhar
 run -d "$DB" -f "$AQUI/10_dominio.test.sql"
 # rollback seguro: aplica após os testes (banco vazio, pois os testes fazem rollback) e reaplica
-run -d "$DB" -f "$AQUI/../../docs/gestao-financeira/sql-provisorio/121_rollback.provisorio.sql"
+run -d "$DB" -f "$AQUI/../../database/migrations/121_rollback.sql"
 run -d "$DB" -f "$SQL"
 echo "rollback + reaplicacao OK"

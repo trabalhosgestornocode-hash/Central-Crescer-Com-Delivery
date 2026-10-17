@@ -1,4 +1,6 @@
--- PROVISÓRIO — rollback do domínio financeiro. Recusa se houver DADOS (lançamentos, saldos, importações confirmadas, períodos).
+begin;
+set local lock_timeout = '5s';
+-- Rollback da 121 — domínio financeiro. Rodar ANTES do rollback da 120. Recusa se houver DADOS (lançamentos, saldos, importações confirmadas, períodos).
 -- Para descartar dados de verdade, é uma operação supervisionada e com backup — nunca automática. Checagem e remoção no MESMO bloco.
 do $$
 begin
@@ -26,3 +28,5 @@ begin
   drop function if exists fin_validar_escopo();
   drop function if exists fin_touch_updated_at();
 end $$;
+
+commit;
