@@ -45,7 +45,21 @@ export async function atualizarConta(ctx, id, b, deps = padrao) {
   if (b?.canalReferencia !== undefined) campos.canal_referencia = canalDe(b.canalReferencia);
   if (b?.ativo !== undefined) { if (typeof b.ativo !== "boolean") throw bad("ativo inválido."); campos.ativo = b.ativo; }
   if (!Object.keys(campos).length) throw bad("Nada para atualizar.");
-  return deps.repo.atualizarConta(exigirContexto(ctx), uuid(id, "id"), campos, deps.db);
+  const c = exigirContexto(ctx);
+  const contaId = uuid(id, "id");
+  // tipo e canal da conta mudam a conciliação RETROATIVAMENTE: não podem mudar se a conta tem movimento em mês fechado
+  if (campos.tipo_conta !== undefined || campos.canal_referencia !== undefined) {
+    const atual = (await deps.repo.listarContas(c, deps.db)).find((x) => x.id === contaId);
+    const mudou = atual && ((campos.tipo_conta !== undefined && campos.tipo_conta !== atual.tipo_conta) || (campos.canal_referencia !== undefined && (campos.canal_referencia ?? null) !== (atual.canal_referencia ?? null)));
+    if (mudou) {
+      const fechados = new Set((await deps.repo.listarPeriodos(c, deps.db)).filter((p) => p.status === "fechado").map((p) => String(p.mes).slice(0, 7)));
+      const lancs = fechados.size ? await deps.repo.listarTodosLancamentos(c, {}, deps.db) : [];
+      if (lancs.some((l) => l.conta_id === contaId && fechados.has(String(l.data_movimento).slice(0, 7)))) {
+        throw bad("Esta conta tem movimento em mês fechado: tipo e canal não podem mudar, pois alterariam a conciliação já fechada.", "CONTA_COM_MOVIMENTO_FECHADO");
+      }
+    }
+  }
+  return deps.repo.atualizarConta(c, contaId, campos, deps.db);
 }
 
 export async function listarAberturas(ctx, deps = padrao) {

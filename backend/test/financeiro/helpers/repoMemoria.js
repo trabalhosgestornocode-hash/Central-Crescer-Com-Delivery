@@ -44,7 +44,7 @@ export function criarRepoMemoria() {
     async atualizarCategoria(ctx, id, campos) {
       const c = exigirContexto(ctx); const n = t.plano.find((x) => x.id === id && noOrg(c)(x));
       if (!n) throw ApiError.notFound("Categoria não encontrada.");
-      if (campos.papel && campos.papel !== n.papel && t.lanc.some((l) => l.categoria_id === id)) erro("categoria ja possui lancamentos; crie outra categoria e reclassifique com auditoria", "FIN_PAPEL_EM_USO");
+      if (campos.papel && campos.papel !== n.papel && t.lanc.some((l) => l.categoria_id === id)) regra("fin_papel_em_uso");
       const antes = { ...n }; Object.assign(n, campos); audita(c, "fin_plano_contas.update", "fin_plano_contas", antes, { ...n }); return { ...n };
     },
     async listarContas(ctx) { const c = exigirContexto(ctx); return t.contas.filter(noTen(c)).map((x) => ({ ...x })); },
@@ -215,9 +215,9 @@ export function criarRepoMemoria() {
       if (!x) return null; garantirPeriodo(c, x.data);
       const antes = { ...x }; Object.assign(x, { status: "cancelada", cancelada_por: c.usuarioId, cancelada_em: agora(), motivo_cancelamento: motivo }); audita(c, "fin_referencias.update", "fin_referencias", antes, { ...x }); return { ...x };
     },
-    async listarResolucoes(ctx, { mes, incluirRevogadas = false } = {}) {
+    async listarResolucoes(ctx, { mes, de, ate, incluirRevogadas = false } = {}) {
       const c = exigirContexto(ctx);
-      return t.resol.filter((x) => noTen(c)(x) && (!mes || x.chave.startsWith(mes)) && (incluirRevogadas || x.status === "vigente")).map((x) => ({ ...x }));
+      return t.resol.filter((x) => noTen(c)(x) && (!mes || x.chave.startsWith(mes)) && (!de || x.chave >= de) && (!ate || x.chave <= ate) && (incluirRevogadas || x.status === "vigente")).map((x) => ({ ...x }));
     },
     async inserirResolucao(ctx, r) {
       const c = exigirContexto(ctx); garantirPeriodo(c, r.chave);

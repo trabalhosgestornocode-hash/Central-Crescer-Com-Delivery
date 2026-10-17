@@ -38,10 +38,12 @@ export async function cancelarReferencia(ctxIn, id, motivo, db = supabase) {
   return data;
 }
 
-export async function listarResolucoes(ctxIn, { mes, incluirRevogadas = false } = {}, db = supabase) {
+export async function listarResolucoes(ctxIn, { mes, de, ate, incluirRevogadas = false } = {}, db = supabase) {
   const ctx = exigirContexto(ctxIn);
   let q = unid(db.from("fin_conciliacao_resolucoes").select("*"), ctx);
   if (mes) q = q.gte("chave", `${mes}-01`).lte("chave", fimDoMes(mes));
+  if (de) q = q.gte("chave", de);
+  if (ate) q = q.lte("chave", ate);
   if (!incluirRevogadas) q = q.eq("status", "vigente");
   const { data, error } = await q.order("created_at").limit(5000);
   falha(error);
