@@ -88,7 +88,7 @@ export function criarDominioRouter({ autorizar, deps = undefined }) {
   r.post("/periodos/abrir", ...h(ACAO.FECHAR, (c, q) => per.abrir(c, q.body, d), { status: 201 }));
   r.get("/periodos/:mes/pre-fechamento", ...h(ACAO.VER, (c, q) => per.preFechamento(c, q.params.mes, d)));
   r.post("/periodos/:mes/fechar", ...h(ACAO.FECHAR, (c, q) => per.fechar(c, q.params.mes, q.body, d)));
-  r.post("/periodos/:mes/reabrir", ...h(ACAO.REABRIR, (c, q) => per.reabrir(c, q.params.mes, q.body, d)));
+  // NÃO existe rota de reabertura (LD-009/A5): nenhum bypass por HTTP. O serviço `reabrir` segue fail-closed para uso futuro, em migration/rota próprias.
 
   // relatórios tabulares e exportações (B9): mesmo motor e mesmas fontes; contexto só do gate; unidade fora do contexto → 403
   r.get("/relatorios/tabelas/catalogo", ...h(ACAO.VER, (c) => tab.catalogo(c)));

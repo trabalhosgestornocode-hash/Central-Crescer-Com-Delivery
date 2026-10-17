@@ -289,7 +289,7 @@ export function criarRepoMemoria() {
     async concederExcecaoFechamentoRpc(ctx, { mes, justificativa, validadeDias, pendenciasConciliacao, mfaEvidencia }) {
       const c = exigirContexto(ctx);
       const idade = Date.now() - Date.parse(mfaEvidencia?.em ?? "");
-      if (mfaEvidencia?.aal !== "aal2" || !(idade <= 15 * 60000 && idade >= -60000)) regra("fin_excecao_mfa_invalida");
+      if (mfaEvidencia?.aal !== "aal2" || !(idade <= 10 * 60000 && idade >= -60000)) regra("fin_excecao_mfa_invalida");
       if (String(justificativa ?? "").trim().length < 20) regra("fin_excecao_justificativa_obrigatoria");
       if (!(validadeDias >= 1 && validadeDias <= 30)) regra("fin_excecao_validade_invalida");
       const pend = t.lanc.filter((l) => noTen(c)(l) && l.data_movimento.startsWith(mes) && l.status !== "cancelado" && (l.classificacao_pendente || !l.categoria_id));

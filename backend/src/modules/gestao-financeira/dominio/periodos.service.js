@@ -100,6 +100,25 @@ export async function reabrir(ctx, mes, b, deps = padrao) {
   return resumoPeriodo(await deps.repo.reabrirPeriodoRpc(c, { mes: mesAno(mes), versao: inteiro(b?.versao, "versao", { min: 1 }), motivo }, deps.db));
 }
 
+export const JANELA_MFA_MS = 10 * 60 * 1000;      // decisão do usuário (LD-009): MFA recente = 10 minutos
+const TOLERANCIA_FUTURO_MS = 60 * 1000;
+const CHAVES_MFA = new Set(["aal", "em", "metodo", "sessao_ref"]);
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
+/**
+ * Evidência de MFA fornecida pela plataforma (Agente 1). Lista FECHADA de chaves: aal (= "aal2"), em (ISO-8601 UTC do 2º fator efetivo), metodo
+ * (totp|webauthn|phone, opcional), sessao_ref (sha256 hex do session_id, opcional). NUNCA JWT/segredo/session_id cru. O banco revalida tudo.
+ */
+export function validarEvidenciaMfa(m, agora = Date.now()) {
+  const falhar = () => bad("A exceção exige verificação MFA (AAL2) recente, com a evidência no formato permitido.", "MFA_OBRIGATORIO");
+  if (!m || typeof m !== "object" || Array.isArray(m)) throw falhar();
+  if (Object.keys(m).some((k) => !CHAVES_MFA.has(k)) || m.aal !== "aal2" || typeof m.em !== "string" || !ISO_UTC.test(m.em)) throw falhar();
+  if ("metodo" in m && !["totp", "webauthn", "phone"].includes(m.metodo)) throw falhar();
+  if ("sessao_ref" in m && !(typeof m.sessao_ref === "string" && /^[0-9a-f]{64}$/.test(m.sessao_ref))) throw falhar();
+  const idade = agora - Date.parse(m.em);
+  if (!(idade <= JANELA_MFA_MS && idade >= -TOLERANCIA_FUTURO_MS)) throw falhar();
+  return { ...m };
+}
+
 /**
  * Compatibilidade de contrato (pedido do Agente 1): NÃO existe política geral. `GET` devolve sempre "bloqueado"; `PUT` NUNCA liga
  * (403 `POLITICA_EXCEPCIONAL_DESABILITADA`); "desligar" é no-op idempotente. Nada é gravado.
@@ -125,9 +144,7 @@ export async function concederExcecaoFechamento(ctx, mes, b, deps = padrao) {
   const justificativa = texto(b?.justificativa, "justificativa", { max: 2000 });
   if (justificativa.length < 20) throw bad("Informe a justificativa da exceção (mínimo 20 caracteres).", "JUSTIFICATIVA_OBRIGATORIA");
   const validadeDias = inteiro(b?.validadeDias, "validadeDias", { min: 1, max: 30 });
-  // evidência de MFA recente (AAL2 + instante) fornecida pela plataforma (Agente 1); o banco revalida (AAL2, <= 15 min)
-  const m = b?.mfaEvidencia;
-  if (!m || typeof m !== "object" || m.aal !== "aal2" || !m.em) throw bad("A exceção exige verificação MFA (AAL2) recente.", "MFA_OBRIGATORIO");
+  const mfaEvidencia = validarEvidenciaMfa(b?.mfaEvidencia);
   const x = await prepararMes(c, mesAno(mes), deps);
-  return resumoExcecao(await deps.repo.concederExcecaoFechamentoRpc(c, { mes: mesAno(mes), justificativa, validadeDias, pendenciasConciliacao: x.pendencias.conciliacao, mfaEvidencia: { aal: m.aal, em: m.em } }, deps.db));
+  return resumoExcecao(await deps.repo.concederExcecaoFechamentoRpc(c, { mes: mesAno(mes), justificativa, validadeDias, pendenciasConciliacao: x.pendencias.conciliacao, mfaEvidencia }, deps.db));
 }

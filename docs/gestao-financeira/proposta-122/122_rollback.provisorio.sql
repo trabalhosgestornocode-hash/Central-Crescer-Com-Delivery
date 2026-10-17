@@ -123,6 +123,7 @@ drop function if exists fin_fechar_periodo(uuid,uuid,uuid,date,int,text,jsonb,in
 drop function if exists fin_abrir_periodo(uuid,uuid,uuid,date);
 drop function if exists fin_fingerprint_periodo(uuid,uuid,date);
 drop table if exists fin_excecoes_fechamento cascade;
+drop function if exists fin_mfa_evidencia_valida(jsonb);
 drop function if exists fin_excecoes_fechamento_guarda();
 drop table if exists fin_sangria_excecoes, fin_conciliacao_resolucoes, fin_referencias cascade;
 drop function if exists fin_guarda_periodo_data();

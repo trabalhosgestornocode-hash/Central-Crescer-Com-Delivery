@@ -35,7 +35,8 @@ async function ambiente({ reaberturaHabilitada = false } = {}) {
     if (!perms.includes(acao)) return next(Object.assign(new Error("Permissão financeira insuficiente."), { statusCode: 403, details: { codigo: "FINANCEIRO_PERMISSAO_INSUFICIENTE" } }));
     next();
   };
-  app.use("/fin", criarDominioRouter({ autorizar: gate, deps: { repo, db: undefined, reaberturaHabilitada, agora: () => "2026-10-01T12:00:00.000Z" } }));
+  const router = criarDominioRouter({ autorizar: gate, deps: { repo, db: undefined, reaberturaHabilitada, agora: () => "2026-10-01T12:00:00.000Z" } });
+  app.use("/fin", router);
   app.use((err, _req, res, _next) => res.status(err.statusCode || 500).json({ error: err.message, details: err.details }));
   const srv = await new Promise((ok) => { const s = app.listen(0, "127.0.0.1", () => ok(s)); });
   const base = `http://127.0.0.1:${srv.address().port}/fin`;
@@ -43,7 +44,7 @@ async function ambiente({ reaberturaHabilitada = false } = {}) {
     const r = await fetch(base + caminho, { method: metodo, headers: { "content-type": "application/json", "x-t": tenant, ...(perms ? { "x-perms": perms.join(",") } : {}) }, body: corpo ? JSON.stringify(corpo) : undefined });
     return { status: r.status, corpo: await r.json().catch(() => null) };
   };
-  return { repo, chamar, fechar: () => new Promise((ok) => srv.close(ok)) };
+  return { repo, router, chamar, fechar: () => new Promise((ok) => srv.close(ok)) };
 }
 
 /** Cenário sintético: contas, plano e lançamentos do mês 2026-09. */
@@ -348,35 +349,36 @@ test("períodos: sem pendências fecha sem política; mês vazio e mês inválid
   } finally { await a.fechar(); }
 });
 
-test("reabertura: nenhum nível a concede e o serviço segue desativado (fail-closed) mesmo com a permissão; quando habilitada exige motivo e versão", async () => {
+test("reabertura: NÃO existe rota HTTP (404 para qualquer permissão) nem no catálogo de rotas; o serviço segue fail-closed e, habilitado, exige motivo e versão", async () => {
   const fechado = async (a) => {
     await semear(a);
     const pre = (await a.chamar("GET", "/periodos/2026-09/pre-fechamento")).corpo.data;
     return (await a.chamar("POST", "/periodos/2026-09/fechar", { confirmo: true, versao: pre.periodo.versao, fingerprint: pre.fingerprint })).corpo.data;
   };
-  let a = await ambiente();
+  const a = await ambiente({ reaberturaHabilitada: true });                 // mesmo "habilitada" no serviço, a rota não existe
   try {
     const f = await fechado(a);
     assert.equal(f.status, "fechado");
-    const gestor = await a.chamar("POST", "/periodos/2026-09/reabrir", { motivo: "correcao aprovada pela diretoria", versao: f.versao });
-    assert.equal(gestor.status, 403);                                       // sem o nível `reabrir`
-    const comPerm = await a.chamar("POST", "/periodos/2026-09/reabrir", { motivo: "correcao aprovada pela diretoria", versao: f.versao }, { perms: [...NIVEL.gestor, ...P("reabrir")] });
-    assert.equal(comPerm.status, 403);
-    assert.equal(comPerm.corpo.details.codigo, "REABERTURA_NAO_HABILITADA");
+    for (const perms of [NIVEL.gestor, [...NIVEL.gestor, ...P("reabrir")], [...NIVEL.gestor, ...P("reabrir", "excluir")]]) {
+      for (const metodo of ["POST", "PUT", "PATCH", "DELETE"]) {
+        const r = await a.chamar(metodo, "/periodos/2026-09/reabrir", { motivo: "correcao aprovada pela diretoria", versao: f.versao }, { perms });
+        assert.equal(r.status, 404, `${metodo} /reabrir deveria ser 404`);
+      }
+    }
+    // catálogo de rotas: nenhuma rota do domínio menciona reabertura
+    const caminhos = a.router.stack.filter((l) => l.route).map((l) => `${Object.keys(l.route.methods).join(",")} ${l.route.path}`);
+    assert.ok(caminhos.length > 30);
+    assert.deepEqual(caminhos.filter((c) => /reabr|reopen/i.test(c)), []);
     assert.equal(a.repo._t.per.find((p) => p.mes === "2026-09-01").status, "fechado");
-  } finally { await a.fechar(); }
-  a = await ambiente({ reaberturaHabilitada: true });
-  try {
-    const f = await fechado(a);
-    const perms = [...NIVEL.gestor, ...P("reabrir")];
-    assert.equal((await a.chamar("POST", "/periodos/2026-09/reabrir", { motivo: "curto", versao: f.versao }, { perms })).status, 400);
-    assert.equal((await a.chamar("POST", "/periodos/2026-09/reabrir", { motivo: "correcao aprovada pela diretoria", versao: f.versao + 5 }, { perms })).status, 409);
-    const r = await a.chamar("POST", "/periodos/2026-09/reabrir", { motivo: "correcao aprovada pela diretoria", versao: f.versao }, { perms });
-    assert.equal(r.status, 200);
-    assert.equal(r.corpo.data.status, "reaberto");
-    assert.match(r.corpo.data.motivoReabertura, /correcao/);
-    const caixa = a.repo._t.contas.find((c) => c.nome === "CAIXA");
-    assert.equal((await a.chamar("POST", "/lancamentos", { contaId: caixa.id, descricao: "pos-reabertura", sentido: "saida", valor: "1,00", dataMovimento: "2026-09-21" })).status, 201);
+    // serviço (para uso futuro, quando houver política/rota próprias): fail-closed sem a flag; com a flag exige motivo e versão
+    const ctx = { organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3), permissoes: [] };
+    await assert.rejects(() => perSvc.reabrir(ctx, "2026-09", { motivo: "correcao aprovada pela diretoria", versao: f.versao }, { repo: a.repo }), (e) => e.details?.codigo === "REABERTURA_NAO_HABILITADA");
+    const dx = { repo: a.repo, reaberturaHabilitada: true };
+    await assert.rejects(() => perSvc.reabrir(ctx, "2026-09", { motivo: "curto", versao: f.versao }, dx), (e) => e.statusCode === 400);
+    await assert.rejects(() => perSvc.reabrir(ctx, "2026-09", { motivo: "correcao aprovada pela diretoria", versao: f.versao + 5 }, dx), (e) => e.statusCode === 409);
+    const r = await perSvc.reabrir(ctx, "2026-09", { motivo: "correcao aprovada pela diretoria", versao: f.versao }, dx);
+    assert.equal(r.status, "reaberto");
+    assert.match(r.motivoReabertura, /correcao/);
     const h = (await a.chamar("GET", "/auditoria?entidade=fin_periodos")).corpo.data;
     assert.ok(h.some((x) => x.antes?.status === "fechado" && x.depois?.status === "reaberto"));
   } finally { await a.fechar(); }
@@ -499,7 +501,7 @@ test("permissões por nível em todas as rotas novas: leitura só consulta; oper
         else assert.equal(r.status, 403, `${nivel} NÃO deveria alcançar ${m} ${p}`);
       }
     }
-    assert.equal((await a.chamar("POST", "/periodos/2026-09/reabrir", { motivo: "motivo valido e longo", versao: 1 }, { perms: NIVEL.gestor })).status, 403);
+    assert.equal((await a.chamar("POST", "/periodos/2026-09/reabrir", { motivo: "motivo valido e longo", versao: 1 }, { perms: NIVEL.gestor })).status, 404);   // sem rota (LD-009/A5)
   } finally { await a.fechar(); }
 });
 
@@ -562,4 +564,20 @@ test("regressão do motor: os indicadores continuam idênticos com cancelamentos
     assert.deepEqual(ig.violacoesPares, []);
     assert.equal(ig.ponteFecha, true);
   } finally { await a.fechar(); }
+});
+
+test("evidência de MFA da exceção: janela de 10 min, lista fechada de chaves, nada com cara de token (LD-009 A1/A2)", () => {
+  const agora = Date.parse("2026-10-17T14:00:00.000Z");
+  const iso = (ms) => new Date(agora + ms).toISOString();
+  const ok = (m) => perSvc.validarEvidenciaMfa(m, agora);
+  const nok = (m) => assert.throws(() => ok(m), (e) => e.statusCode === 400 && e.details?.codigo === "MFA_OBRIGATORIO");
+  assert.equal(perSvc.JANELA_MFA_MS, 600000);
+  assert.deepEqual(ok({ aal: "aal2", em: iso(-600000) }), { aal: "aal2", em: iso(-600000) });          // 10 min exatos: aceita
+  nok({ aal: "aal2", em: iso(-601000) });                                                               // 10 min + 1 s: recusa
+  ok({ aal: "aal2", em: iso(60000) }); nok({ aal: "aal2", em: iso(61000) });                           // futuro: tolerância de 60 s
+  const sha = "a".repeat(64);
+  ok({ aal: "aal2", em: iso(-1000), metodo: "totp", sessao_ref: sha }); ok({ aal: "aal2", em: iso(-1000), metodo: "webauthn" });
+  for (const ruim of [undefined, null, "x", [], {}, { aal: "aal1", em: iso(0) }, { aal: "aal2" }, { aal: "aal2", em: Date.now() }, { aal: "aal2", em: "hoje" },
+    { aal: "aal2", em: iso(0), extra: "x" }, { aal: "aal2", em: iso(0), jwt: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.assinaturaassinatura" },
+    { aal: "aal2", em: iso(0), metodo: "sms" }, { aal: "aal2", em: iso(0), sessao_ref: "0f3c2a77-aaaa-bbbb-cccc-1234567890ab" }, { aal: "aal2", em: iso(0), sessao_ref: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.assinaturaassinatura" }]) nok(ruim);
 });

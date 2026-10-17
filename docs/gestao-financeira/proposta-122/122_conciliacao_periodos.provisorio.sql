@@ -81,6 +81,19 @@ create unique index if not exists ux_fin_sangria_excecao_ativa on fin_sangria_ex
 -- concedida em caráter excepcional por SuperAdmin (fora do domínio; a função de concessão NÃO é executável pelo service_role até a validação do MFA):
 -- justificada, auditada, com as pendências IDENTIFICADAS no ato, de validade curta (≤ 30 dias), de USO ÚNICO, nunca permanente. Conceder não altera,
 -- apaga nem reclassifica nenhuma pendência. `fin_fechar_periodo` só consome exceção ativa que cubra TODAS as pendências do mês.
+-- Evidência de MFA (A2/LD-009): lista FECHADA de chaves {aal, em, metodo, sessao_ref}. `em` = instante efetivo do 2º fator em ISO-8601 UTC (ex.: 2026-10-17T13:40:00Z).
+-- `sessao_ref` = sha256 hex (64) do session_id — NUNCA o valor cru. Nenhum valor pode ter cara de JWT/segredo: o formato exato de cada chave já o impede, e a
+-- checagem explícita abaixo recusa também qualquer texto com três segmentos base64url ou iniciado em "eyJ" (para que nem por erro um token entre no banco/auditoria).
+create or replace function fin_mfa_evidencia_valida(j jsonb) returns boolean language sql immutable as $$
+  select coalesce(jsonb_typeof(j) = 'object'
+     and not exists (select 1 from jsonb_object_keys(j) k where k not in ('aal', 'em', 'metodo', 'sessao_ref'))
+     and j->>'aal' = 'aal2'
+     and jsonb_typeof(j->'em') = 'string' and (j->>'em') ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$'
+     and (not j ? 'metodo' or (jsonb_typeof(j->'metodo') = 'string' and j->>'metodo' in ('totp', 'webauthn', 'phone')))
+     and (not j ? 'sessao_ref' or (jsonb_typeof(j->'sessao_ref') = 'string' and j->>'sessao_ref' ~ '^[0-9a-f]{64}$'))
+     and not exists (select 1 from jsonb_each_text(j) e where e.value ~ '^eyJ' or e.value ~ '^[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$'), false)   -- coalesce: qualquer NULL (chave ausente) é inválido
+$$;
+
 create table if not exists fin_excecoes_fechamento (
   id uuid primary key default gen_random_uuid(),
   organizacao_id uuid not null references organizacoes(id) on delete restrict,
@@ -91,7 +104,7 @@ create table if not exists fin_excecoes_fechamento (
   pendencias_conciliacao int not null default 0 check (pendencias_conciliacao >= 0),
   quantidade int not null check (quantidade > 0 or pendencias_conciliacao > 0),
   aprovada_por uuid not null,                                  -- SuperAdmin (auth.users.id; sem FK para sobreviver à conta)
-  mfa_evidencia jsonb not null check (jsonb_typeof(mfa_evidencia) = 'object' and mfa_evidencia->>'aal' = 'aal2' and (mfa_evidencia->>'em') is not null),   -- carimbo/AAL fornecido pela plataforma (Agente 1); sem MFA não há exceção
+  mfa_evidencia jsonb not null check (fin_mfa_evidencia_valida(mfa_evidencia)),   -- carimbo/AAL fornecido pela plataforma (Agente 1); sem MFA não há exceção
   aprovada_em timestamptz not null default now(),
   expira_em timestamptz not null,
   status text not null default 'ativa' check (status in ('ativa','consumida','revogada')),
@@ -258,11 +271,15 @@ begin
      where e.organizacao_id = p_org and e.unidade_id = p_unidade and e.mes = p_mes and e.status = 'ativa' and e.expira_em > now();
     if not found then raise exception 'fin_periodo_pendencias: % pendencia(s) impedem o fechamento', n_pend using errcode = '23514'; end if;
     if p_reconheco_pendencias is not true then raise exception 'fin_periodo_pendencias_nao_reconhecidas: % pendencia(s)', n_pend using errcode = '23514'; end if;
-    -- a exceção cobre SÓ o que foi identificado no ato da concessão: qualquer pendência nova de lançamento (ou mais pendências de conciliação) a invalida
+    -- a exceção cobre SÓ o que foi identificado no ato da concessão, comparado por CONJUNTO (id + motivos), não por quantidade: pendência nova — mesmo que outra tenha sido
+    -- resolvida e o total seja igual — ou motivo novo numa pendência coberta invalida a cobertura. LIMITAÇÃO: pendências de CONCILIAÇÃO só têm contagem (não há id estável);
+    -- vale `atual <= coberto`, então trocar uma por outra de conciliação não é detectável.
     select count(*) into descobertas from fin_lancamentos l
      where l.organizacao_id = p_org and l.unidade_id = p_unidade and l.data_movimento >= p_mes and l.data_movimento < (p_mes + interval '1 month')::date
        and l.status <> 'cancelado' and (l.classificacao_pendente or l.categoria_id is null)
-       and not exists (select 1 from jsonb_array_elements(ex.pendencias) x where x->>'id' = l.id::text);
+       and not exists (select 1 from jsonb_array_elements(ex.pendencias) x
+                        where x->>'id' = l.id::text
+                          and l.revisao_motivos <@ coalesce((select array_agg(m) from jsonb_array_elements_text(case when jsonb_typeof(x->'motivos') = 'array' then x->'motivos' else '[]'::jsonb end) m), '{}'::text[]));
     if descobertas > 0 or coalesce(p_pendencias_conciliacao, 0) > ex.pendencias_conciliacao then
       raise exception 'fin_periodo_excecao_insuficiente: ha pendencia nao coberta pela excecao concedida' using errcode = '23514';
     end if;
@@ -582,10 +599,10 @@ begin
   if length(v_just) < 20 then raise exception 'fin_excecao_justificativa_obrigatoria: minimo 20 caracteres' using errcode = '23514'; end if;
   if p_validade_dias is null or p_validade_dias < 1 or p_validade_dias > 30 then raise exception 'fin_excecao_validade_invalida: 1 a 30 dias' using errcode = '23514'; end if;
   if v_conc < 0 then raise exception 'fin_excecao_pendencias_invalidas' using errcode = '23514'; end if;
-  -- MFA RECENTE: a plataforma entrega a evidência (AAL2 + instante da verificação); aqui só se exige que exista, seja AAL2 e tenha <= 15 min. A prova do MFA é do Agente 1.
-  if p_mfa is null or jsonb_typeof(p_mfa) <> 'object' or p_mfa->>'aal' is distinct from 'aal2' or (p_mfa->>'em') is null
-     or (p_mfa->>'em')::timestamptz < now() - interval '15 minutes' or (p_mfa->>'em')::timestamptz > now() + interval '1 minute' then
-    raise exception 'fin_excecao_mfa_invalida: exige verificacao MFA (AAL2) recente' using errcode = '23514';
+  -- MFA RECENTE: a plataforma entrega a evidência (AAL2 + instante efetivo do 2º fator); aqui se exige formato válido e <= 10 min (60 s de tolerância no futuro). A prova do MFA é do Agente 1.
+  if p_mfa is null or not fin_mfa_evidencia_valida(p_mfa) then raise exception 'fin_excecao_mfa_invalida: evidencia ausente ou fora do formato permitido' using errcode = '23514'; end if;
+  if (p_mfa->>'em')::timestamptz < now() - interval '10 minutes' or (p_mfa->>'em')::timestamptz > now() + interval '1 minute' then
+    raise exception 'fin_excecao_mfa_invalida: exige verificacao MFA (AAL2) recente (ate 10 minutos)' using errcode = '23514';
   end if;
   insert into fin_periodos (organizacao_id, unidade_id, mes, status) values (p_org, p_unidade, p_mes, 'aberto') on conflict (unidade_id, mes) do nothing;
   select * into v_per from fin_periodos where unidade_id = p_unidade and mes = p_mes and organizacao_id = p_org for update;
