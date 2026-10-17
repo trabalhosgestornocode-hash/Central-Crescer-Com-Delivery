@@ -89,3 +89,13 @@ Ambiente: projeto Supabase **novo, descartável e separado de produção**, cria
 
 ## F. MFA / concessões (inalterado — ver seções anteriores)
 - [ ] AAL2 e 2º fator ≤ 10 min; revogação imediata; flag `FINANCEIRO_CONCESSOES_HABILITADAS` só depois de tudo aprovado por escrito.
+
+## G. Exceção de fechamento (LD-007, 122 de `cd35699`) — a repetir no Supabase DESCARTÁVEL
+Pré-requisito: nada disto roda em produção. Todos os itens abaixo já passaram no PostgreSQL local (`docs/gestao-financeira/10-validacao-ld007-excecao-de-fechamento.md`); o T3 prova o que o local não prova.
+- [ ] **Evento real de MFA:** `amr[].timestamp` do JWT é o do segundo fator efetivo (TOTP), **não** o da criação da sessão; um refresh de token **não** o renova; unidade em **segundos**. Só com isso a janela de **10 min** (`shared/mfaRecente.js`, `JANELA_MFA_RECENTE_MS`) é comprovada.
+- [ ] **Evidência montada no servidor** a partir do JWT verificado (`aal`, `em` ISO-8601 UTC, `metodo`, `sessao_ref = sha256(session_id)`); `mfaEvidencia` vinda do corpo da requisição é ignorada/recusada; nenhum JWT/segredo chega ao banco nem à auditoria.
+- [ ] Papéis reais do Supabase: `service_role` **sem** EXECUTE em `fin_conceder_excecao_fechamento`, `fin_revogar_excecao_fechamento`, `fin_reabrir_periodo`, validadores puros; `anon`/`authenticated` sem EXECUTE em nenhuma função `fin_*` mutante; PostgREST não expõe os validadores como RPC.
+- [ ] Repetir `adversarial122.sql` + `adversarial122_complemento.sql` + `adversarial122_concorrencia.sh` (em `backend/testes-seguros/pg/`) sobre o esquema real: S0–S11 sem FALHA (exceto S11, que **deve** continuar mostrando R-1 até a mitigação).
+- [ ] **R-1 (completude da conciliação):** mitigação M1 (recalcular pendências de conciliação no banco + teste de paridade JS×SQL) implementada **ou** aceite formal do usuário. Sem isto o fechamento em produção permanece bloqueado.
+- [ ] O-1: `drop function if exists` das assinaturas antigas (`fin_fechar_periodo(...,int,boolean)`, `fin_conceder_excecao_fechamento(...,int,...,jsonb)`) no início da 122; confirmar que não restam sobrecargas.
+- [ ] Endpoint de plataforma da exceção (meu): SuperAdmin + AAL2 recente (≤ 10 min) + motivo + auditoria + flag desligada; grant a papel específico em migration própria (nunca ao `service_role`), com revisão cruzada.

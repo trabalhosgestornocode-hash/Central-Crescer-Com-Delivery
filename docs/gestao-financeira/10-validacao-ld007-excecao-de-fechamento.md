@@ -1,0 +1,42 @@
+# 10 — Validação independente de LD-007 (exceção de fechamento) — commit `cd35699`
+
+Data: 2026-10-17 · Integração: merge de `cd35699` (Agente 2) sobre `962ba6d`. Nada publicado; sem migration remota; `FINANCEIRO_CONCESSOES_HABILITADAS` desligada; fluxo da exceção **bloqueado**.
+
+## 1. Método
+Commit exportado com `git archive` (não a árvore de trabalho do Agente 2). PostgreSQL 17 local descartável (`MARCADOR_DESCARTAVEL`), 120 e 121 exatamente como na integração, 122 = `cd35699`, privilégios estilo Supabase (dono não-superusuário, default privileges ALL, `service_role` BYPASSRLS). Os testes do Agente 2 foram reexecutados, mas **não** foram a base da decisão: as provas abaixo são minhas (`backend/testes-seguros/pg/adversarial122.sql`, `adversarial122_complemento.sql`).
+
+## 2. Resultado das provas
+| Grupo | Provas | Resultado |
+|---|---|---|
+| Ciclo 120→121→122→122→rollback→reaplica→…→rollback 120→reaplica | 19 passos | OK |
+| Privilégios (anon/authenticated/service_role) | simulação padrão | OK (única falha era o meu probe com a assinatura antiga; corrigido) |
+| S0 EXECUTE | `service_role` não concede/revoga/reabre; validadores puros sem EXECUTE; escrita direta em `fin_excecoes_fechamento` negada; `anon`/`authenticated` sem fechar/conceder | OK |
+| S1–S4 pendência nova / **substituída (mesmo total)** / sem reconhecer | recusadas (`fin_periodo_excecao_insuficiente`); exceção segue `ativa`, período `aberto` | OK |
+| S5 **resolvida antes do fechamento** (subconjunto) | fecha; exceção `consumida` 1×; `excecaoFechamentoId` no snapshot; 2º fechamento `fin_periodo_ja_fechado`; consumir sem flag recusado; reativar exceção consumida negado | OK |
+| S6 exceção **vencida** | não vale (`fin_periodo_pendencias`) | OK |
+| S7 **MFA** (22 casos) | 9 min 50 s aceita; 10 min 5 s, 15 min, +120 s, aal1, sem `em`, chave extra, `sessao_ref` cru/63 hex/maiúscula, JWT em `metodo`, `metodo` desconhecido, `em` sem fuso/numérico/data impossível, MFA nulo, validade 31 d, justificativa curta, ids malformados/repetidos, sem pendência: **todos recusados**; CHECK da tabela também barra JWT e ids ruins com os gatilhos desligados | OK |
+| S8 outra unidade/organização | exceção da unidade A não vale para A2 no mesmo mês; org B + unidade A recusado (`fin_escopo_invalido`); revogar com tenant trocado devolve `false` | OK |
+| S9 **fechar/reabrir por SQL direto** | UPDATE e INSERT `fechado` (service_role) barrados; flag de outro período não autoriza; flag não vaza; reabrir por UPDATE barrado até para o **dono**; `fin_reabrir_periodo` sem EXECUTE e, mesmo pelo dono, barrada pelo gatilho; snapshot imutável; DELETE de período negado | OK |
+| S10 **falha na transação** | fechar + erro na mesma transação ⇒ exceção `ativa` e período `aberto`; depois o fechamento legítimo funciona e consome 1× | OK |
+| Concorrência (duas sessões) | fechamento duplo: só um fecha, o outro recebe `fin_periodo_ja_fechado`; lançamento pendente novo durante o fechamento espera e é recusado (`fin_periodo_fechado`); exceção consumida 1×; suíte do Agente 2 (fechamento, cancelamento, exceção) OK | OK |
+| Rollback com dados | recusado, nada removido (5 exceções preservadas); rollback restaura as funções da 121 | OK |
+| Auditoria | `fin_auditoria` registra insert/update de `fin_excecoes_fechamento` e `fin_periodos` | OK |
+| Assinaturas | todos os chamadores (`repositorio.periodos.js`) usam `p_pendencias_conciliacao_ids text[]`; nenhum uso da forma antiga | OK |
+
+Regressões após o merge: domínio+fundação 233/233; backend T1 5386 ok · 3 falhas conhecidas (Novos Clientes; `selecionarPerfil` ×2) · 25 pulados · 0 violações de isolamento; frontend 1530 ok · 0 falhas · 11 pulados; QA visual no Chrome real 56/56; B9 compatível (exportações 9/9).
+
+## 3. Achados
+- **R-1 (média, risco residual ABERTO) — completude da conciliação.** O banco **não consegue** verificar que a lista de ids de pendências de conciliação recebida representa todas as pendências relevantes: a conciliação é calculada na aplicação (`conciliar()` em JS). A impressão digital cobre as **entradas** (lançamentos, referências, resoluções, aberturas) que o backend viu, mas não o **resultado derivado**. Prova (S11): com uma referência de venda de R$ 1.000,00 e nenhum recebimento no mês, `fin_fechar_periodo` com `p_pendencias_conciliacao_ids = '{}'` **fechou o mês sem exceção**, declarando 0 pendências. O problema afeta **qualquer fechamento** (não só o excepcional) e a cobertura da exceção. Exploração exige backend defeituoso ou comprometido (mesmo nível de confiança do `service_role`); exposição atual **nula** (módulo desabilitado, sem dados reais).
+  - **Mitigação M1 (recomendada, do Agente 2):** função SQL `fin_conciliacao_pendencias_ids(org, unidade, mes) returns text[]` que recalcula as pendências no banco a partir de `fin_lancamentos` (+papel da categoria, tipo da conta), `fin_referencias`, `fin_conciliacao_resolucoes`, `fin_sangria_excecoes` — a lógica de `conciliacao.js` é aritmética por dia/mês e portável —, e `fin_fechar_periodo`/`fin_conceder_excecao_fechamento` passam a **usar o conjunto calculado pelo banco** (o parâmetro vira conferência: divergência ⇒ recusa). Exige **teste de paridade** JS×SQL sobre as mesmas fixtures (para impedir deriva) e novas provas adversariais.
+  - **Mitigação M2 (provisória/compensatória):** manter o módulo e o fechamento desabilitados em produção; registrar no snapshot os ids declarados; auditoria de comparação periódica (job de verificação que recalcula em JS e compara com o snapshot).
+  - **Classificação:** severidade **média** (integridade do fechamento), probabilidade **baixa**, exposição atual **nula**. **Bloqueia** a habilitação do fechamento em produção até M1 ou aceite formal do usuário.
+- **O-1 (baixa) — assinaturas antigas permanecem em bancos já atualizados.** Atualizando in loco de `7913b11` para `cd35699`, ficam sobrecargas: `fin_fechar_periodo(..., integer, boolean)` com EXECUTE para o `service_role` e `fin_conceder_excecao_fechamento(..., integer, ..., jsonb)` (sem EXECUTE). A sobrecarga antiga não consegue fechar (o gatilho exige a flag que ela não define no caminho limpo), então é inerte, mas é superfície morta. Em bancos novos (120→121→122) **não existe**. Pedido: `drop function if exists` das assinaturas antigas no início da 122 (a 122 nunca foi aplicada fora de ambientes descartáveis).
+- **O-2 (informativo) — evidência de MFA nunca do cliente.** `concederExcecaoFechamento` aceita `b.mfaEvidencia`. Hoje não há rota. Requisito para o meu endpoint de plataforma: a evidência será montada **no servidor** a partir do JWT verificado (`req.user.aal`, `req.user.mfaEm`), com `sessao_ref = sha256(session_id)`; qualquer `mfaEvidencia` vinda do corpo da requisição será ignorada/recusada. Só funciona depois do T3.
+- **O-3 (informativo) — limite honesto das travas.** Fechar/reabrir/consumir usam flag local de transação: protegem contra código e API, **não** contra SQL bruto de quem já controla o `service_role` (que pode definir a flag). É o mesmo limite aceito para a reabertura (F-A).
+- **O-4 (UX, trivial).** A tela de Períodos não explica mais por que não há "Reabrir" num mês fechado (o texto foi removido junto com a rota). O QA visual foi ajustado.
+- A comparação por **conjunto/subconjunto** (decisão do Agente 2) está correta e é melhor que igualdade de hash: resolver uma pendência coberta é permitido; trocar ou criar nova é recusado. O `pendencias_hash` é só auditoria.
+
+## 4. Decisão
+- **LD-007: VALIDADA com ressalva.** Validado: janela de 10 min, evidência fechada sem JWT/segredo, `sessao_ref` por hash, identidade estável das pendências, cobertura por subconjunto, bloqueio de pendência nova/substituída, uso único (inclusive sob concorrência), vencimento, escopo por unidade/organização, auditoria, fechamento só pela função, reabertura desabilitada, restrições de EXECUTE, rollback e reaplicação.
+- **Não declaro o fluxo excepcional (nem o fechamento) seguro para produção** enquanto R-1 estiver aberto. O fluxo permanece bloqueado: sem rota HTTP, sem EXECUTE para `service_role`, flag de concessões desligada.
+- **A 122 continua em `proposta-122/` (não promovida).** Pré-requisitos para promover como migration: (1) M1 (ou aceite formal de R-1 pelo usuário) e O-1; (2) T3 no Supabase descartável (inclui `amr.timestamp`); (3) nova revisão cruzada do HEAD final; (4) `begin/commit`, `lock_timeout` e pós-condição como na 121.

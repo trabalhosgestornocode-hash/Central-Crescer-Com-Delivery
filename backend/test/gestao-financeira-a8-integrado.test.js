@@ -229,12 +229,14 @@ describe("fechamento mensal (B8)", () => {
     assert.equal(repo._t.lanc.length, 1);
     assert.equal(JSON.stringify(repo._t.per.find((x) => x.mes === `${MES}-01`).snapshot), snap, "snapshot intacto");
   }));
-  test("REABERTURA permanece DESABILITADA: nenhum nível a concede (403) e o período continua fechado", async () => {
+  test("REABERTURA sem caminho HTTP (LD-009/A5): a rota não existe (404) para qualquer nível e o período continua fechado", async () => {
     for (const nivel of ["gestor", "operador", "leitura"]) {
       await servir({ nivel }, async (c, repo) => {
         await semearMes(repo); repo.fecharPeriodo(ctxDe(), MES);
-        const r = await c("POST", `/fin/periodos/${MES}/reabrir`, { versao: 2, motivo: "Preciso corrigir um lançamento" });
-        assert.equal(r.status, 403); assert.equal(codigo(r), "FINANCEIRO_PERMISSAO_INSUFICIENTE", nivel);
+        for (const metodo of ["POST", "PUT", "PATCH", "DELETE"]) {
+          const r = await c(metodo, `/fin/periodos/${MES}/reabrir`, { versao: 2, motivo: "Preciso corrigir um lançamento" });
+          assert.equal(r.status, 404, `${nivel} ${metodo}`);
+        }
         assert.equal(repo._t.per.find((x) => x.mes === `${MES}-01`).status, "fechado");
       });
     }

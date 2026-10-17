@@ -156,7 +156,7 @@ await api("/qa/cenario?nome=financeiro"); await api("/qa/nivel?n=gestor");
 
   await irPara(page, "fin-periodos");
   t = await texto(page);
-  checar("períodos: mês fechado mostra snapshot e NÃO oferece reabrir (texto explicativo, sem botão)", /Fechado/.test(t) && (await botoes(page)).some((x) => /Ver snapshot/.test(x)) && !(await botoes(page)).some((x) => /^Reabrir/.test(x)) && /Reabrir exige autorização específica/.test(t));
+  checar("períodos: mês fechado mostra snapshot e NÃO oferece reabrir (sem botão; a tela não tem caminho de reabertura)", /Fechado/.test(t) && (await botoes(page)).some((x) => /Ver snapshot/.test(x)) && !(await botoes(page)).some((x) => /^Reabrir/.test(x)));
   await foto(page, "41-periodos");
   await page.locator('#view tr:has-text("outubro/2026") button:has-text("Pré-fechamento")').first().click(); await page.waitForTimeout(1500);
   t = await texto(page);

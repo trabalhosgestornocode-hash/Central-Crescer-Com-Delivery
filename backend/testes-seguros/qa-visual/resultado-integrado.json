@@ -201,7 +201,7 @@
       "d": "Informar referências | Importar arquivo | Classificar | Cancelar | Aprovar exceção | Ver auditoria das classificações"
     },
     {
-      "nome": "períodos: mês fechado mostra snapshot e NÃO oferece reabrir (texto explicativo, sem botão)",
+      "nome": "períodos: mês fechado mostra snapshot e NÃO oferece reabrir (sem botão; a tela não tem caminho de reabertura)",
       "ok": true,
       "d": ""
     },

@@ -90,7 +90,7 @@ tenta authenticated "select * from gestao_financeira_concessoes" neg "authentica
 tenta authenticated "insert into gestao_financeira_concessoes_auditoria(concessao_id,organizacao_id,unidade_id,perfil_id,evento) values (gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'concedida')" neg "authenticated: INSERT na auditoria de concessões negado"
 tenta anon "select nextval('fin_auditoria_id_seq')" neg "anon: nextval da sequência de auditoria negado"
 tenta authenticated "select nextval('gestao_financeira_concessoes_auditoria_id_seq')" neg "authenticated: nextval da sequência da auditoria de concessões negado"
-tenta anon "select fin_fechar_periodo(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),date '2026-01-01',1,'x','{}',0,false)" neg "anon: EXECUTE de fin_fechar_periodo negado"
+tenta anon "select fin_fechar_periodo(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),date '2026-01-01',1,'x','{}',array[]::text[],false)" neg "anon: EXECUTE de fin_fechar_periodo negado"
 tenta authenticated "select fin_cancelar_transferencia(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'motivo longo o bastante')" neg "authenticated: EXECUTE de fin_cancelar_transferencia negado"
 tenta service_role "delete from fin_lancamentos" neg "service_role: DELETE em fin_lancamentos negado"
 tenta service_role "truncate fin_lancamentos" neg "service_role: TRUNCATE em fin_lancamentos negado"
