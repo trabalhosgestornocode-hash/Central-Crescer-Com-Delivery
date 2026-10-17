@@ -9,7 +9,6 @@ const padrao = { repo: repositorio, db: undefined };
 export const INDISPONIVEIS = Object.freeze([
   { id: "regras-classificacao", titulo: "Regras de classificação automática", motivo: "Depende de decisão empresarial. Hoje nenhum lançamento é classificado sozinho: pendências exigem classificação manual autorizada e justificativa." },
   { id: "reabertura-periodos", titulo: "Reabertura de períodos fechados", motivo: "Indisponível. A política recomendada é autorização administrativa excepcional, com permissão separada e MFA recente, a ser homologada pela fundação de segurança antes de qualquer habilitação." },
-  { id: "aprovacao-fechamento-pendencias", titulo: "Fechar período com pendências", motivo: "Bloqueado por padrão. Só pode ser ligado por aprovação explícita registrada (tela Períodos).", somenteInformativo: true },
 ]);
 
 export async function resumo(ctx, deps = padrao) {

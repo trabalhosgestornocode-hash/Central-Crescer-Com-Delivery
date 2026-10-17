@@ -1,12 +1,14 @@
 /* Páginas internas do Dashboard Financeiro (Agente 2). Usa os tokens do design system da Central (--card, --linha, --texto…).
    Cores de série validadas (skill dataviz): claro #2F77C4 / #C9741A; escuro #4F8FD6 / #C87A2A. */
-.fin-pg { --fin-entrada: #2F77C4; --fin-saida: #C9741A; display: grid; gap: 18px; max-width: 1180px; }
+.fin-pg { --fin-entrada: #2F77C4; --fin-saida: #C9741A; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; max-width: 1180px; }
 [data-theme="dark"] .fin-pg { --fin-entrada: #4F8FD6; --fin-saida: #C87A2A; }
 
 .fin-cab { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .fin-cab h2 { margin: 0; font-size: 22px; letter-spacing: -.2px; }
 .fin-sub { margin: 4px 0 0; color: var(--muted); font-size: 13.5px; max-width: 70ch; }
 .fin-cab-acoes { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.fin-cab > div, .fin-cab-acoes { min-width: 0; max-width: 100%; }
+.fin-cab-acoes .fin-badge { white-space: normal; }
 
 .fin-campo { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); min-width: 0; }
 .fin-campo--inline { grid-auto-flow: row; }
