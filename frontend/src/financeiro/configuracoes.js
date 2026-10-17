@@ -48,7 +48,7 @@ export async function render(container, ctx) {
       { rotulo: "Situação", render: (x) => (x.ativa ? badge("Ativa", "ok") : badge("Desativada", "muted")) },
       { rotulo: "", render: (x) => (pode && x.ativa ? `<button class="btn btn-ghost btn-sm" data-exc-off="${x.id}">Desativar</button>` : "") },
     ], linhas: exc, vazio: "Nenhuma exceção aprovada: todas as saídas de caixa físico entram no confronto de sangrias." });
-    const pol = r.politicaFechamento;
+    const fc = r.fechamentoComPendencias;
     corpo.innerHTML = `
       ${alertaAbertura}
       <div class="fin-card"><h3>Contas financeiras</h3>${contas}${pode ? `<p><button class="btn btn-primary btn-sm" data-nova-conta>Nova conta</button></p>` : ""}
@@ -58,10 +58,10 @@ export async function render(container, ctx) {
       <div class="fin-card"><h3>Conciliação</h3>
         <p>${badge(`${r.conciliacao.contasComCanal} conta(s) com canal vinculado`, "info")} ${r.conciliacao.contasSemCanal ? badge(`${r.conciliacao.contasSemCanal} sem canal`, "muted") : ""}</p>
         <h4>Exceções de sangria (aprovadas)</h4>${excl}${pode ? `<p><button class="btn btn-ghost btn-sm" data-exc-nova>Aprovar exceção</button></p>` : ""}</div>
-      <div class="fin-card"><h3>Política de pendências</h3>
-        <p>Fechar período com pendências: ${pol.permiteFecharComPendencias ? badge("Permitido (aprovado)", "warn") : badge("Bloqueado (padrão)", "ok")}
+      <div class="fin-card"><h3>Fechamento com pendências</h3>
+        <p>Fechar período com pendências: ${badge("Bloqueado", "ok")} · Exceções ativas: <strong>${fc.excecoesAtivas}</strong>
         · Lançamentos pendentes de classificação agora: <strong>${r.pendencias.classificacao}</strong></p>
-        <p class="fin-sub">A aprovação e a retirada dessa política são feitas na tela Períodos, com justificativa registrada.</p></div>
+        <p class="fin-sub">Não há política geral. A única via é uma exceção por unidade e competência, aprovada por SuperAdmin (justificada, auditada, de uso único); indisponível até a validação do MFA. As exceções existentes aparecem na tela Períodos.</p></div>
       <div class="fin-card"><h3>Indisponível ou pendente de decisão</h3>
         ${r.indisponiveis.map((x) => `<div class="fin-alerta" role="status"><div>${badge(x.somenteInformativo ? "Informativo" : "Indisponível", "muted")} <strong>${esc(x.titulo)}</strong><br>${esc(x.motivo)}</div></div>`).join("")}</div>`;
     ligar(r, exc);

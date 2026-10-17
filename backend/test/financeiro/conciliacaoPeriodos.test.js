@@ -10,6 +10,7 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = "teste-local-nao-e-segredo";
 process.env.SUPABASE_ANON_KEY = "teste-local-nao-e-segredo";
 const { criarDominioRouter } = await import("../../src/modules/gestao-financeira/dominio/rotas.js");
 const { criarRepoMemoria } = await import("./helpers/repoMemoria.js");
+const perSvc = await import("../../src/modules/gestao-financeira/dominio/periodos.service.js");
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const P = (...a) => a.map((x) => `gestao_financeira.${x}`);
@@ -20,6 +21,7 @@ const NIVEL = {
   gestor: P("ver", "lancar", "editar", "conciliar", "cancelar", "fechar", "configurar"),
 };
 
+const CTX_A = { organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3), permissoes: [] };
 async function ambiente({ reaberturaHabilitada = false } = {}) {
   const repo = criarRepoMemoria();
   const app = express();
@@ -211,7 +213,7 @@ test("pendências históricas preservadas: motivos de revisão, duplicata legít
   } finally { await a.fechar(); }
 });
 
-test("períodos: fechamento bloqueado por padrão com pendências; política só com aprovação; snapshot; mês fechado imutável; conflito 409", async () => {
+test("períodos: fechamento bloqueado com pendências; só EXCEÇÃO por competência (SuperAdmin, desabilitada) libera; snapshot; mês fechado imutável; conflito 409", async () => {
   const a = await ambiente();
   try {
     const s = await semear(a);
@@ -221,8 +223,13 @@ test("períodos: fechamento bloqueado por padrão com pendências; política só
     const pre = (await a.chamar("GET", "/periodos/2026-09/pre-fechamento")).corpo.data;
     assert.equal(pre.avaliacao.pode, false);
     assert.equal(pre.pendencias.lancamentos, 1);
-    assert.equal(pre.politica.permiteFecharComPendencias, false);
+    assert.equal(pre.excecao, null);
     assert.equal(pre.periodo.status, "aberto");
+    // GET de pré-fechamento é SOMENTE LEITURA: não cria linha de período
+    const qtdPer = a.repo._t.per.length;
+    const vazio = (await a.chamar("GET", "/periodos/2027-05/pre-fechamento")).corpo.data;
+    assert.equal(vazio.periodo.id, null); assert.equal(vazio.periodo.status, "aberto"); assert.equal(vazio.periodo.versao, 1);
+    assert.equal(a.repo._t.per.length, qtdPer, "GET criou período");
     const corpo = (o) => ({ confirmo: true, versao: pre.periodo.versao, fingerprint: pre.fingerprint, ...o });
     // permissões: só gestor (fechar)
     assert.equal((await a.chamar("POST", "/periodos/2026-09/fechar", corpo(), { perms: NIVEL.operador })).status, 403);
@@ -231,17 +238,37 @@ test("períodos: fechamento bloqueado por padrão com pendências; política só
     assert.equal(bloq.status, 400);
     assert.match(bloq.corpo.error, /pendência/i);
     assert.doesNotMatch(bloq.corpo.error, /fin_|tenant|unidade_id/);
-    // política: exige `configurar`, nota e confirmação; desligada por padrão
-    assert.equal((await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "aprovado em ata", confirmoAprovacao: true }, { perms: NIVEL.operador })).status, 403);
-    assert.equal((await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "curta", confirmoAprovacao: true })).status, 400);
-    assert.equal((await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "aprovado pela diretoria em ata 12", confirmoAprovacao: false })).status, 400);
-    assert.equal((await a.chamar("GET", "/periodos/politica")).corpo.data.permiteFecharComPendencias, false);
-    const ap = await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "aprovado pela diretoria em ata 12", confirmoAprovacao: true });
-    assert.equal(ap.status, 200);
-    assert.ok(ap.corpo.data.aprovadoEm && ap.corpo.data.aprovadoPor);
-    // com a política aprovada ainda é preciso RECONHECER as pendências
-    const semRec = await a.chamar("POST", "/periodos/2026-09/fechar", corpo());
+    // NÃO existe política geral: nem gestor consegue flexibilizar o controle (as rotas deixaram de existir)
+    assert.equal((await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "aprovado pela diretoria em ata 12", confirmoAprovacao: true })).status, 404);
+    assert.equal((await a.chamar("GET", "/periodos/politica")).status, 404);
+    assert.equal((await a.chamar("GET", "/configuracoes")).corpo.data.fechamentoComPendencias.habilitada, false);
+    // a concessão da exceção é fail-closed (desabilitada por padrão) e não tem rota HTTP
+    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa longa o bastante", validadeDias: 7 }, { repo: a.repo }), (e) => e.details?.codigo === "EXCECAO_FECHAMENTO_NAO_HABILITADA");
+    assert.equal((await a.chamar("POST", "/periodos/2026-09/excecao", { justificativa: "justificativa longa o bastante", validadeDias: 7 })).status, 404);
+    // (simula a aprovação futura de SuperAdmin, já habilitada) — validações da concessão
+    const dx = { repo: a.repo, excecaoFechamentoHabilitada: true, agora: () => "2026-10-01T12:00:00.000Z" };
+    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "curta", validadeDias: 7 }, dx), (e) => e.statusCode === 400);
+    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa longa o bastante", validadeDias: 31 }, dx), (e) => e.statusCode === 400);
+    const exc = await perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa: aguardando comprovante do fornecedor", validadeDias: 7 }, dx);
+    assert.equal(exc.status, "ativa"); assert.equal(exc.quantidade, 1); assert.equal(exc.pendencias.length, 1);
+    assert.equal(a.repo._t.lanc.filter((l) => l.classificacao_pendente || !l.categoria_id).length, 1, "a concessão alterou pendências");
+    const preEx = (await a.chamar("GET", "/periodos/2026-09/pre-fechamento")).corpo.data;
+    assert.equal(preEx.excecao.id, exc.id); assert.equal(preEx.avaliacao.pode, true); assert.equal(preEx.avaliacao.exigeReconhecimento, true);
+    // com a exceção ainda é preciso RECONHECER as pendências
+    const semRec = await a.chamar("POST", "/periodos/2026-09/fechar", { confirmo: true, versao: preEx.periodo.versao, fingerprint: preEx.fingerprint });
     assert.equal(semRec.status, 400);
+    // pendência NOVA depois da aprovação não é coberta
+    await a.chamar("POST", "/lancamentos", { contaId: s.caixa.id, descricao: "outra sem categoria", sentido: "saida", valor: "2,00", dataMovimento: "2026-09-13" });
+    const preNovo = (await a.chamar("GET", "/periodos/2026-09/pre-fechamento")).corpo.data;
+    assert.equal(preNovo.avaliacao.pode, false);
+    assert.equal(preNovo.avaliacao.bloqueios[0].codigo, "EXCECAO_INSUFICIENTE");
+    const insuf = await a.chamar("POST", "/periodos/2026-09/fechar", { confirmo: true, versao: preNovo.periodo.versao, fingerprint: preNovo.fingerprint, reconhecoPendencias: true });
+    assert.equal(insuf.status, 400);
+    assert.match(insuf.corpo.error, /não cobre/i);
+    assert.equal(insuf.corpo.details.codigo, "FIN_PERIODO_EXCECAO_INSUFICIENTE");
+    assert.equal(a.repo._t.exf[0].status, "ativa", "exceção gasta em tentativa que falhou");
+    const nova = a.repo._t.lanc.find((l) => l.descricao === "outra sem categoria");
+    assert.equal((await a.chamar("POST", `/lancamentos/${nova.id}/cancelar`, { motivo: "lancamento de teste cancelado" })).status, 200);
     // concorrência: alteração depois da pré-visualização → 409 e nada fecha
     await s.l(s.banco, "VENDAS", "entrada", "1,00", "2026-09-12");
     const conf = await a.chamar("POST", "/periodos/2026-09/fechar", corpo({ reconhecoPendencias: true }));
@@ -280,7 +307,13 @@ test("períodos: fechamento bloqueado por padrão com pendências; política só
     // listagem
     const lista = (await a.chamar("GET", "/periodos")).corpo.data;
     assert.equal(lista.periodos.find((p) => p.mes === "2026-09").status, "fechado");
-    assert.equal(lista.politica.permiteFecharComPendencias, true);
+    assert.equal(lista.excecoes.length, 1); assert.equal(lista.excecoes[0].status, "consumida"); assert.equal(lista.excecaoFechamentoHabilitada, false);
+    assert.equal(snap.excecaoFechamentoId, lista.excecoes[0].id);
+    assert.equal(lista.politica, undefined);
+    // uso único: nova pendência em outro mês não herda a exceção consumida
+    await a.chamar("POST", "/lancamentos", { contaId: s.caixa.id, descricao: "pendente em outubro", sentido: "saida", valor: "3,00", dataMovimento: "2026-10-05" });
+    const preOut = (await a.chamar("GET", "/periodos/2026-10/pre-fechamento")).corpo.data;
+    assert.equal(preOut.avaliacao.pode, false); assert.equal(preOut.excecao, null);
   } finally { await a.fechar(); }
 });
 
@@ -447,7 +480,6 @@ test("permissões por nível em todas as rotas novas: leitura só consulta; oper
       ["POST", "/conciliacao/referencias", { itens: [ref("2026-10-05", "venda", "1,00")] }, ["gestor"]],
       ["POST", "/conciliacao/excecoes-sangria", { categoriaId: s.cat.ALUGUEL.id, motivo: "motivo valido e longo" }, ["gestor"]],
       ["POST", "/periodos/abrir", { mes: "2026-12" }, ["gestor"]],
-      ["PUT", "/periodos/politica", { permiteFecharComPendencias: false }, ["gestor"]],
       ["POST", `/transferencias/${s.parId}/cancelar`, { motivo: "cancelamento de teste do par" }, ["gestor"]],
     ];
     for (const [m, p, b, quem] of rotas) {

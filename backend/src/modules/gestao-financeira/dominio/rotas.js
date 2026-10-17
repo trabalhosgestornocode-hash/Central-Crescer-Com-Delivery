@@ -83,8 +83,6 @@ export function criarDominioRouter({ autorizar, deps = undefined }) {
 
   // períodos (B8): fechar exige `fechar`; reabrir exige `reabrir` (nenhum nível a concede) E o serviço segue desativado por padrão
   r.get("/periodos", ...h(ACAO.VER, (c) => per.listar(c, d)));
-  r.get("/periodos/politica", ...h(ACAO.VER, (c) => per.obterPolitica(c, d)));
-  r.put("/periodos/politica", ...h(ACAO.CONFIGURAR, (c, q) => per.definirPolitica(c, q.body, d)));
   r.post("/periodos/abrir", ...h(ACAO.FECHAR, (c, q) => per.abrir(c, q.body, d), { status: 201 }));
   r.get("/periodos/:mes/pre-fechamento", ...h(ACAO.VER, (c, q) => per.preFechamento(c, q.params.mes, d)));
   r.post("/periodos/:mes/fechar", ...h(ACAO.FECHAR, (c, q) => per.fechar(c, q.params.mes, q.body, d)));

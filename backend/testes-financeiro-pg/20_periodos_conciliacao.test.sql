@@ -67,7 +67,18 @@ begin
   begin perform fin_reabrir_periodo(c.org1, c.u1, c.usr, '2026-09-01', 999, 'motivo suficientemente longo'); exception when sqlstate '23514' then ok2 := true; end;
   begin perform fin_reabrir_periodo(c.org1, c.u1, c.usr, '2026-10-01', 1, 'motivo suficientemente longo'); exception when sqlstate '23514' then ok3 := true; end;
   if not (ok1 and ok2 and ok3) then raise exception 'FALHA 2e: reabertura aceitou entrada invalida (% % %)', ok1, ok2, ok3; end if;
+  -- REABERTURA DESABILITADA NO BANCO: mesmo a função (executada pelo dono) é barrada pelo gatilho enquanto a flag não for autorizada
+  ok1 := false;
+  begin perform fin_reabrir_periodo(c.org1, c.u1, c.usr, '2026-09-01', (per->>'versao')::int, 'correcao de classificacao aprovada'); exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_reabertura_desabilitada%'); end;
+  if not ok1 then raise exception 'FALHA 2e2: reabertura funcionou sem a flag de autorizacao'; end if;
+  ok1 := false;
+  begin update fin_periodos set status = 'reaberto', reaberto_por = c.usr, reaberto_em = now(), motivo_reabertura = 'tentativa direta de reabertura' where unidade_id = c.u1 and mes = '2026-09-01'; exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_reabertura_desabilitada%'); end;
+  if not ok1 then raise exception 'FALHA 2e3: UPDATE direto reabriu o mes'; end if;
+  if has_function_privilege('service_role', 'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)', 'execute') then raise exception 'FALHA 2e4: service_role executa a reabertura'; end if;
+  -- Comportamento FUTURO (só quando a política for aprovada e a função passar a setar a flag): aqui a flag é setada à mão para provar que o resto do fluxo funciona.
+  perform set_config('fin.reabertura_autorizada', (select id::text from fin_periodos where unidade_id = c.u1 and mes = '2026-09-01'), true);
   per := fin_reabrir_periodo(c.org1, c.u1, c.usr, '2026-09-01', (per->>'versao')::int, 'correcao de classificacao aprovada');
+  perform set_config('fin.reabertura_autorizada', '', true);
   if per->>'status' <> 'reaberto' or per->>'reaberto_por' is null or per->>'motivo_reabertura' is null then raise exception 'FALHA 2f: %', per; end if;
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 7, '2026-09-04');   -- reaberto aceita escrita
   select count(*) into n from fin_auditoria where entidade = 'fin_periodos' and acao = 'fin_periodos.update';
@@ -107,15 +118,101 @@ begin
   begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-01-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2027-01-01'), '{}', 2, false);
   exception when sqlstate '23514' then ok2 := (sqlerrm like 'fin_periodo_pendencias:%'); end;
   if not (ok1 and ok2) then raise exception 'FALHA 4a: fechou com pendencias (% %)', ok1, ok2; end if;
-  -- política não pode ser ligada sem aprovação registrada
-  begin insert into fin_config (organizacao_id, unidade_id, permite_fechar_com_pendencias) values (c.org1, c.u1, true); exception when check_violation then ok3 := true; end;
-  if not ok3 then raise exception 'FALHA 4b: politica ligada sem aprovacao'; end if;
-  insert into fin_config (organizacao_id, unidade_id, permite_fechar_com_pendencias, aprovado_por, aprovado_em, nota_aprovacao) values (c.org1, c.u1, true, c.usr, now(), 'aprovado pela diretoria em ata 123');
-  ok1 := false;
-  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 0, false); exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_periodo_pendencias_nao_reconhecidas%'); end;
-  if not ok1 then raise exception 'FALHA 4c: fechou com pendencias sem reconhecimento'; end if;
+  -- NÃO existe política geral: a tabela fin_config não existe mais
+  if to_regclass('public.fin_config') is not null then raise exception 'FALHA 4b: fin_config nao deveria existir'; end if;
+end $$;
+
+-- 4') EXCEÇÃO por unidade + competência (LD-007): concedida só por função (SuperAdmin), uso único, cobre só o que foi identificado no ato
+do $$
+declare c ctx; v int; fp text; ok boolean; per jsonb; ex jsonb; novo uuid; ex2 jsonb; n int; msg text;
+begin
+  select * into c from ctx;
+  -- 4b) validações da concessão
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'curta', 7, 0); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_justificativa_obrigatoria%'); end;
+  if not ok then raise exception 'FALHA 4b1: aceitou justificativa curta'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 31, 0); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_validade_invalida%'); end;
+  if not ok then raise exception 'FALHA 4b2: aceitou validade > 30 dias (excecao permanente)'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 0, 0); exception when sqlstate '23514' then ok := true; end;
+  if not ok then raise exception 'FALHA 4b3: aceitou validade 0'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, null, '2026-12-01', 'justificativa suficientemente longa', 7, 0); exception when sqlstate '23514' then ok := true; end;
+  if not ok then raise exception 'FALHA 4b4: aceitou sem responsavel'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-02-01', 'justificativa suficientemente longa', 7, 0); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_sem_pendencias%'); end;
+  if not ok then raise exception 'FALHA 4b5: concedeu excecao sem pendencia'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u3, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, 1); exception when sqlstate '23514' then ok := true; end;   -- unidade de outra organização
+  if not ok then raise exception 'FALHA 4b6: concedeu excecao para unidade de outra organizacao'; end if;
+  -- 4c) ninguém escreve na tabela por fora das funções
+  ok := false; begin insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, quantidade, aprovada_por, expira_em)
+    values (c.org1, c.u1, '2026-12-01', 'justificativa suficientemente longa', '[{"id":"x"}]', 1, c.usr, now() + interval '3 days'); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_via_funcao%'); end;
+  if not ok then raise exception 'FALHA 4c1: INSERT direto aceito'; end if;
+  -- 4d) concede (nada nas pendências muda) e prova que as pendências foram IDENTIFICADAS
+  select count(*) into n from fin_lancamentos where unidade_id = c.u1 and data_movimento >= '2026-12-01' and data_movimento < '2027-01-01' and classificacao_pendente;
+  ex := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa: aguardando extrato do banco para classificar', 7, 0);
+  if ex->>'status' <> 'ativa' or (ex->>'quantidade')::int <> 1 or jsonb_array_length(ex->'pendencias') <> 1 or (ex->'pendencias'->0->>'id') is null then raise exception 'FALHA 4d1: %', ex; end if;
+  if (select count(*) from fin_lancamentos where unidade_id = c.u1 and data_movimento >= '2026-12-01' and data_movimento < '2027-01-01' and classificacao_pendente) <> n then raise exception 'FALHA 4d2: conceder alterou pendencias'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'segunda excecao para o mesmo mes e unidade', 7, 0); exception when unique_violation then ok := true; end;
+  if not ok then raise exception 'FALHA 4d3: duas excecoes ativas para a mesma competencia'; end if;
+  -- imutável: conteúdo, apagar, reclassificar
+  ok := false; begin update fin_excecoes_fechamento set justificativa = 'justificativa alterada depois de concedida' where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;
+  if not ok then raise exception 'FALHA 4d4: justificativa mutavel'; end if;
+  ok := false; begin update fin_excecoes_fechamento set expira_em = expira_em + interval '20 days' where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;
+  if not ok then raise exception 'FALHA 4d5: validade prorrogavel por UPDATE'; end if;
+  ok := false; begin update fin_excecoes_fechamento set status = 'consumida', consumida_por = c.usr, consumida_em = now() where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;
+  if not ok then raise exception 'FALHA 4d6: consumo por UPDATE direto'; end if;
+  ok := false; begin delete from fin_excecoes_fechamento where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;
+  if not ok then raise exception 'FALHA 4d7: excecao apagavel'; end if;
+  -- consumir fora do fechamento é recusado
+  ok := false; begin perform fin_consumir_excecao_fechamento((ex->>'id')::uuid, c.usr); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_via_funcao%'); end;
+  if not ok then raise exception 'FALHA 4d8: consumo fora do fechamento'; end if;
+  -- 4e) fechar exige reconhecimento mesmo com exceção
+  v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
+  fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01');
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 0, false); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_pendencias_nao_reconhecidas%'); end;
+  if not ok then raise exception 'FALHA 4e1: fechou com excecao sem reconhecimento'; end if;
+  -- 4f) pendência NOVA depois da concessão invalida a cobertura
+  novo := pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 3, '2026-12-05', true);
+  fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01'); v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 0, true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
+  if not ok then raise exception 'FALHA 4f1: pendencia nova coberta pela excecao antiga'; end if;
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 5, true); exception when sqlstate '23514' then ok := true; end;   -- mais pendências de conciliação que as identificadas
+  if not ok then raise exception 'FALHA 4f2: pendencia de conciliacao nova coberta'; end if;
+  if (select status from fin_excecoes_fechamento where id = (ex->>'id')::uuid) <> 'ativa' then raise exception 'FALHA 4f3: excecao gasta em tentativa que falhou'; end if;
+  update fin_lancamentos set status = 'cancelado' where id = novo;
+  -- 4g) outra unidade / outro mês não são cobertos pela exceção de u1/2026-12
+  insert into fin_contas (organizacao_id, unidade_id, nome, tipo_conta) values (c.org1, c.u2, 'BANCO', 'banco') on conflict do nothing;
+  perform pg_temp.lanc(c.u2, 'BANCO', 'VENDAS', 'entrada', 1, '2026-12-02', true);
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u2, c.usr, '2026-12-01', (fin_abrir_periodo(c.org1, c.u2, c.usr, '2026-12-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u2, '2026-12-01'), '{}', 0, true);
+  exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_pendencias:%'); end;
+  if not ok then raise exception 'FALHA 4g1: excecao de outra unidade valeu'; end if;
+  -- 4h) fecha com a exceção: consumida, uso único, snapshot com o id e as pendências
+  fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01'); v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
   per := fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 0, true);
-  if (per->'snapshot'->>'pendenciasNoFechamento')::int <> 1 or (per->'snapshot'->>'politicaPermitiaPendencias')::boolean is not true then raise exception 'FALHA 4d: %', per; end if;
+  if per->>'status' <> 'fechado' or (per->'snapshot'->>'pendenciasNoFechamento')::int <> 1 or per->'snapshot'->>'excecaoFechamentoId' <> ex->>'id' then raise exception 'FALHA 4h1: %', per; end if;
+  if per->'snapshot' ? 'politicaPermitiaPendencias' then raise exception 'FALHA 4h2: snapshot ainda menciona politica'; end if;
+  if (select status from fin_excecoes_fechamento where id = (ex->>'id')::uuid) <> 'consumida' then raise exception 'FALHA 4h3: excecao nao consumida'; end if;
+  if not exists (select 1 from fin_auditoria where entidade = 'fin_excecoes_fechamento' and acao = 'fin_excecoes_fechamento.insert') or
+     not exists (select 1 from fin_auditoria where entidade = 'fin_excecoes_fechamento' and acao = 'fin_excecoes_fechamento.update') then raise exception 'FALHA 4h4: concessao/consumo sem auditoria'; end if;
+  ok := false; begin perform fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex->>'id')::uuid, 'tentando revogar excecao ja consumida'); exception when sqlstate '23514' then ok := true; end;
+  if not ok then raise exception 'FALHA 4h5: revogou excecao consumida'; end if;
+  -- 4i) revogação: motivo obrigatório; depois o fechamento volta a ser impedido
+  perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-03-02', true);
+  ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa: pendencia aguardando comprovante', 5, 0);
+  ok := false; begin perform fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'curto'); exception when sqlstate '23514' then ok := true; end;
+  if not ok then raise exception 'FALHA 4i1: revogou sem motivo'; end if;
+  if not fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'concedida por engano, revogada') then raise exception 'FALHA 4i2'; end if;
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-03-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-03-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2027-03-01'), '{}', 0, true);
+  exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_pendencias:%'); end;
+  if not ok then raise exception 'FALHA 4i3: fechou com excecao revogada'; end if;
+  if fin_revogar_excecao_fechamento(c.org2, c.u3, c.usr, (ex2->>'id')::uuid, 'tenant errado tentando revogar') then raise exception 'FALHA 4i4: revogou de outro tenant'; end if;
+  -- 4j) service_role (o backend) NÃO conceda, NÃO revoga, NÃO escreve na tabela — só lê
+  set local role service_role;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa suficientemente longa', 7, 0); exception when insufficient_privilege then ok := true; end;
+  if not ok then reset role; raise exception 'FALHA 4j1: service_role concede excecao'; end if;
+  ok := false; begin perform fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'tentativa de revogar sem privilegio'); exception when insufficient_privilege then ok := true; end;
+  if not ok then reset role; raise exception 'FALHA 4j2: service_role revoga excecao'; end if;
+  ok := false; begin update fin_excecoes_fechamento set status = 'consumida'; exception when insufficient_privilege then ok := true; end;
+  if not ok then reset role; raise exception 'FALHA 4j3: service_role escreve na tabela'; end if;
+  perform 1 from fin_excecoes_fechamento limit 1;   -- leitura funciona
+  reset role;
 end $$;
 
 -- 5) referências, resoluções e aberturas: isolamento, validações e mês fechado
@@ -169,6 +266,24 @@ begin
   perform fin_confirmar_importacao(c.org1, c.u2, c.usr, imp);
   select revisao_motivos into m from fin_lancamentos where chave_origem = 'm1#1' and unidade_id = c.u2;
   if m is distinct from array['a_identificar','sem_papel'] then raise exception 'FALHA 7: motivos %', m; end if;
+end $$;
+
+-- 8) F-B: lançamento só aceita importação do MESMO tenant (organização + unidade); manual (importacao_id nulo) segue livre
+do $$
+declare c ctx; imp_ok uuid; imp_outra_unidade uuid; imp_outra_org uuid; ok1 boolean := false; ok2 boolean := false; conta uuid;
+begin
+  select * into c from ctx;
+  insert into fin_importacoes (organizacao_id, unidade_id, arquivo_hash, criado_por, previa) values (c.org1, c.u1, 'h-ok', c.usr, '{}') returning id into imp_ok;
+  insert into fin_importacoes (organizacao_id, unidade_id, arquivo_hash, criado_por, previa) values (c.org1, c.u2, 'h-u2', c.usr, '{}') returning id into imp_outra_unidade;
+  insert into fin_importacoes (organizacao_id, unidade_id, arquivo_hash, criado_por, previa) values (c.org2, c.u3, 'h-o2', c.usr, '{}') returning id into imp_outra_org;
+  select id into conta from fin_contas where unidade_id = c.u1 and nome = 'BANCO';
+  insert into fin_lancamentos (organizacao_id, unidade_id, conta_id, descricao, sentido, valor_centavos, data_movimento, classificacao_pendente, importacao_id) values (c.org1, c.u1, conta, 'ok', 'entrada', 1, '2027-04-02', true, imp_ok);
+  begin insert into fin_lancamentos (organizacao_id, unidade_id, conta_id, descricao, sentido, valor_centavos, data_movimento, classificacao_pendente, importacao_id) values (c.org1, c.u1, conta, 'x', 'entrada', 1, '2027-04-03', true, imp_outra_unidade);
+  exception when foreign_key_violation then ok1 := true; end;
+  begin insert into fin_lancamentos (organizacao_id, unidade_id, conta_id, descricao, sentido, valor_centavos, data_movimento, classificacao_pendente, importacao_id) values (c.org1, c.u1, conta, 'x', 'entrada', 1, '2027-04-03', true, imp_outra_org);
+  exception when foreign_key_violation then ok2 := true; end;
+  if not (ok1 and ok2) then raise exception 'FALHA 8: importacao de outro tenant aceita (% %)', ok1, ok2; end if;
+  insert into fin_lancamentos (organizacao_id, unidade_id, conta_id, descricao, sentido, valor_centavos, data_movimento, classificacao_pendente) values (c.org1, c.u1, conta, 'manual', 'entrada', 1, '2027-04-04', true);
 end $$;
 
 rollback;

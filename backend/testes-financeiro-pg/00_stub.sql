@@ -9,3 +9,5 @@ end $$;
 alter role service_role bypassrls;
 create table if not exists organizacoes (id uuid primary key default gen_random_uuid(), nome text not null);
 create table if not exists unidades (id uuid primary key default gen_random_uuid(), organizacao_id uuid not null references organizacoes(id), nome text not null);
+-- No Supabase o service_role já lê as tabelas de tenant (default privileges); o stub precisa refletir isso.
+grant select on organizacoes, unidades to service_role;

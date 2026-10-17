@@ -503,11 +503,14 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
     } finally { await sem.fechar(); }
   });
 
-  test("períodos: pré-fechamento bloqueado por pendências; política aprovada + reconhecimento; snapshot; mês fechado recusa lançamento com mensagem amigável", async () => {
+  test("períodos: pré-fechamento bloqueado por pendências; sem política nem botão de exceção; exceção de SuperAdmin + reconhecimento; snapshot; mês fechado recusa lançamento com mensagem amigável", async () => {
+    // no banco a linha do período nasce com o primeiro lançamento do mês (gatilho); o repositório de teste semeia sem passar por ele
+    await repo.abrirPeriodoRpc({ organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3) }, "2026-09");
     const { p, erros, fechar } = await abrir("periodos");
     try {
       await p.locator(".fin-tabela").waitFor();
-      assert.match(await p.locator("#view").innerText(), /Bloqueado \(padrão\)/);
+      assert.match(await p.locator("#view").innerText(), /Fechamento com pendências[\s\S]*Bloqueado[\s\S]*SuperAdmin[\s\S]*MFA/);
+      assert.equal(await p.locator("[data-politica]").count(), 0, "o gestor não flexibiliza o controle: não existe botão de política");
       assert.equal(await p.locator("[data-reabrir]").count(), 0, "nenhum nível tem reabrir: o botão nem aparece");
       await p.locator('[data-pre^="2026-09"]').first().click();
       const dlg = p.locator("dialog.fin-dialogo");
@@ -516,14 +519,10 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
       assert.equal(await dlg.locator('button[type="submit"]').isDisabled(), true);
       await captura(p, "90-periodos-bloqueado");
       await dlg.locator("[data-cancelar]").click();
-      // política: aprovar com justificativa e confirmação explícitas
-      await p.locator("[data-politica]").click();
-      const dp = p.locator("dialog.fin-dialogo");
-      await dp.locator('textarea[name="notaAprovacao"]').fill("aprovado pela diretoria em ata numero 12");
-      await dp.locator('input[name="confirmoAprovacao"]').check();
-      await dp.locator('button[type="submit"]').click();
-      await dp.waitFor({ state: "detached" });
-      await p.locator("text=Permitido (aprovado)").waitFor();
+      // a exceção é aprovada FORA da tela (SuperAdmin, após a validação do MFA); aqui simulamos o registro dela e redesenhamos a tela
+      await repo.concederExcecaoFechamentoRpc({ organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3) }, { mes: "2026-09", justificativa: "excecao sintetica: aguardando comprovantes do mes", validadeDias: 5, pendenciasConciliacao: 99 });
+      await p.evaluate(async (perms) => { const m = await import("/src/financeiro/periodos.js"); await m.render(document.querySelector("#view"), { permissoes: perms, nivel: "gestor" }); }, TODAS);
+      await p.locator("text=Ativa").first().waitFor();
       // agora o fechamento exige RECONHECER as pendências
       await p.locator('[data-pre^="2026-09"]').first().click();
       const d2 = p.locator("dialog.fin-dialogo");
@@ -565,7 +564,7 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
       await d.locator("[data-cancelar]").click();
     } finally { await f.fechar(); }
     const m = await abrir("periodos", { viewport: CELULAR });
-    try { await m.p.locator(".fin-tabela").waitFor(); await captura(m.p, "92-periodos-celular"); await semEstouro(m.p, "períodos celular"); } finally { await m.fechar(); }
+    try { await m.p.locator(".fin-tabela").first().waitFor(); await captura(m.p, "92-periodos-celular"); await semEstouro(m.p, "períodos celular"); } finally { await m.fechar(); }
     assert.deepEqual(m.erros, []);
   });
 
@@ -577,10 +576,10 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
       const t = await p.locator("#view").innerText();
       assert.match(t, /Saldo de abertura desconhecido em \d+ conta/);
       assert.match(t, /parciais; nunca assumimos zero|parciais/);
-      assert.match(t, /Contas financeiras/); assert.match(t, /Plano de contas/); assert.match(t, /Exceções de sangria/); assert.match(t, /Política de pendências/);
+      assert.match(t, /Contas financeiras/); assert.match(t, /Plano de contas/); assert.match(t, /Exceções de sangria/); assert.match(t, /Fechamento com pendências/);
       assert.match(t, /Indisponível ou pendente de decisão/);
       assert.match(t, /Regras de classificação automática/); assert.match(t, /Reabertura de períodos fechados/); assert.match(t, /MFA recente/);
-      assert.match(t, /Bloqueado \(padrão\)|Permitido \(aprovado\)/);
+      assert.match(t, /Bloqueado/); assert.match(t, /Não há política geral/); assert.doesNotMatch(t, /Permitido \(aprovado\)/);
       // nenhum controle para o que está indisponível
       const indisp = await p.locator(".fin-card", { hasText: "Indisponível ou pendente de decisão" }).locator("button, input, select").count();
       assert.equal(indisp, 0);

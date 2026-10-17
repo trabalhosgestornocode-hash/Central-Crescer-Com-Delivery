@@ -8,7 +8,7 @@ import { falha } from "../../../src/modules/gestao-financeira/dominio/repositori
 import { createHash } from "node:crypto";
 
 export function criarRepoMemoria() {
-  const t = { plano: [], contas: [], aberturas: [], lanc: [], transf: [], per: [], imp: [], aud: [], refs: [], resol: [], exc: [], cfg: [] };
+  const t = { plano: [], contas: [], aberturas: [], lanc: [], transf: [], per: [], imp: [], aud: [], refs: [], resol: [], exc: [], exf: [] };
   const agora = () => new Date().toISOString();
   const noOrg = (c) => (x) => x.organizacao_id === c.organizacaoId;
   const noTen = (c) => (x) => x.organizacao_id === c.organizacaoId && x.unidade_id === c.unidadeId;
@@ -251,16 +251,24 @@ export function criarRepoMemoria() {
     },
     async fingerprintPeriodoRpc(ctx, mes) { return impressao(exigirContexto(ctx), mes); },
     async fecharPeriodoRpc(ctx, { mes, versao, fingerprint, snapshot, pendenciasConciliacao, reconhecoPendencias }) {
-      const c = exigirContexto(ctx); const p = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === `${mes}-01` && x.organizacao_id === c.organizacaoId);
-      if (!p) regra("fin_periodo_nao_encontrado", "P0002");
+      const c = exigirContexto(ctx); let p = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === `${mes}-01` && x.organizacao_id === c.organizacaoId);
+      if (!p) { p = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, mes: `${mes}-01`, status: "aberto", versao: 1, snapshot: null }; t.per.push(p); }   // como no banco: cria sob trava
       if (p.status === "fechado") regra("fin_periodo_ja_fechado");
       if (p.versao !== versao) regra("fin_periodo_conflito_versao: o periodo mudou");
       if (impressao(c, mes) !== fingerprint) regra("fin_periodo_conflito_dados: ha dados alterados");
-      const pend = t.lanc.filter((l) => noTen(c)(l) && l.data_movimento.startsWith(mes) && l.status !== "cancelado" && (l.classificacao_pendente || !l.categoria_id)).length + (pendenciasConciliacao ?? 0);
-      const permite = t.cfg.find((x) => x.unidade_id === c.unidadeId)?.permite_fechar_com_pendencias === true;
-      if (pend > 0) { if (!permite) regra(`fin_periodo_pendencias: ${pend} pendencia(s)`); if (reconhecoPendencias !== true) regra("fin_periodo_pendencias_nao_reconhecidas"); }
+      const pendentes = t.lanc.filter((l) => noTen(c)(l) && l.data_movimento.startsWith(mes) && l.status !== "cancelado" && (l.classificacao_pendente || !l.categoria_id));
+      const pend = pendentes.length + (pendenciasConciliacao ?? 0);
+      let exc = null;
+      if (pend > 0) {
+        exc = t.exf.find((e) => e.unidade_id === c.unidadeId && e.organizacao_id === c.organizacaoId && e.mes === `${mes}-01` && e.status === "ativa" && Date.parse(e.expira_em) > Date.parse(agora()));
+        if (!exc) regra(`fin_periodo_pendencias: ${pend} pendencia(s)`);
+        if (reconhecoPendencias !== true) regra("fin_periodo_pendencias_nao_reconhecidas");
+        const ids = new Set(exc.pendencias.map((x) => x.id));
+        if (pendentes.some((l) => !ids.has(l.id)) || (pendenciasConciliacao ?? 0) > exc.pendencias_conciliacao) regra("fin_periodo_excecao_insuficiente: ha pendencia nao coberta");
+        Object.assign(exc, { status: "consumida", consumida_por: c.usuarioId, consumida_em: agora() });          // uso único
+      }
       const antes = { ...p };
-      Object.assign(p, { status: "fechado", fechado_por: c.usuarioId, fechado_em: agora(), versao: p.versao + 1, snapshot: { ...snapshot, pendenciasNoFechamento: pend, fingerprint, politicaPermitiaPendencias: permite } });
+      Object.assign(p, { status: "fechado", fechado_por: c.usuarioId, fechado_em: agora(), versao: p.versao + 1, snapshot: { ...snapshot, pendenciasNoFechamento: pend, fingerprint, excecaoFechamentoId: exc?.id ?? null } });
       audita(c, "fin_periodos.update", "fin_periodos", antes, { ...p }); return { ...p };
     },
     async reabrirPeriodoRpc(ctx, { mes, versao, motivo }) {
@@ -272,13 +280,22 @@ export function criarRepoMemoria() {
       const antes = { ...p }; Object.assign(p, { status: "reaberto", reaberto_por: c.usuarioId, reaberto_em: agora(), motivo_reabertura: motivo.trim(), versao: p.versao + 1 });
       audita(c, "fin_periodos.update", "fin_periodos", antes, { ...p }); return { ...p };
     },
-    async obterConfig(ctx) { const c = exigirContexto(ctx); const x = t.cfg.find((y) => y.unidade_id === c.unidadeId && y.organizacao_id === c.organizacaoId); return x ? { ...x } : null; },
-    async gravarConfig(ctx, cfg) {
+    async obterPeriodo(ctx, mes) { const c = exigirContexto(ctx); const x = t.per.find((p) => p.unidade_id === c.unidadeId && p.organizacao_id === c.organizacaoId && p.mes === `${mes}-01`); return x ? { ...x } : null; },
+    async listarExcecoesFechamento(ctx, { mes, apenasAtivas = false } = {}) {
       const c = exigirContexto(ctx);
-      if (cfg.permite_fechar_com_pendencias && !(cfg.aprovado_por && cfg.aprovado_em && String(cfg.nota_aprovacao ?? "").trim().length >= 10)) erro("Operação recusada.", "23514");
-      let x = t.cfg.find((y) => y.unidade_id === c.unidadeId); const antes = x ? { ...x } : null;
-      if (x) Object.assign(x, cfg); else { x = { id: randomUUID(), ...cfg, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId }; t.cfg.push(x); }
-      audita(c, antes ? "fin_config.update" : "fin_config.insert", "fin_config", antes, { ...x }); return { ...x };
+      return t.exf.filter((e) => noTen(c)(e) && (!mes || e.mes === `${mes}-01`) && (!apenasAtivas || e.status === "ativa")).map((e) => structuredClone(e));
+    },
+    // Simula a função DEFINER do banco (SuperAdmin). Só existe no repositório de teste; o service_role real NÃO tem EXECUTE.
+    async concederExcecaoFechamentoRpc(ctx, { mes, justificativa, validadeDias, pendenciasConciliacao }) {
+      const c = exigirContexto(ctx);
+      if (String(justificativa ?? "").trim().length < 20) regra("fin_excecao_justificativa_obrigatoria");
+      if (!(validadeDias >= 1 && validadeDias <= 30)) regra("fin_excecao_validade_invalida");
+      const pend = t.lanc.filter((l) => noTen(c)(l) && l.data_movimento.startsWith(mes) && l.status !== "cancelado" && (l.classificacao_pendente || !l.categoria_id));
+      if (pend.length === 0 && !(pendenciasConciliacao > 0)) regra("fin_excecao_sem_pendencias");
+      if (t.exf.some((e) => e.unidade_id === c.unidadeId && e.mes === `${mes}-01` && e.status === "ativa")) erro("duplicado", "23505");
+      const e = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, mes: `${mes}-01`, justificativa: justificativa.trim(), pendencias: pend.map((l) => ({ id: l.id, motivos: l.revisao_motivos ?? [] })),
+        pendencias_conciliacao: pendenciasConciliacao ?? 0, quantidade: pend.length, aprovada_por: c.usuarioId, aprovada_em: agora(), expira_em: new Date(Date.parse(agora()) + validadeDias * 86400000).toISOString(), status: "ativa" };
+      t.exf.push(e); audita(c, "fin_excecoes_fechamento.insert", "fin_excecoes_fechamento", null, structuredClone(e)); return structuredClone(e);
     },
     fecharPeriodo(ctx, ym) { const c = exigirContexto(ctx); const ex = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === `${ym}-01`); if (ex) Object.assign(ex, { status: "fechado", snapshot: {}, versao: ex.versao + 1 }); else t.per.push({ id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, status: "fechado", mes: `${ym}-01`, versao: 1, snapshot: {} }); },
   };

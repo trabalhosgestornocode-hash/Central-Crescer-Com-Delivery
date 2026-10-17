@@ -1,4 +1,4 @@
-// Períodos financeiros (B8): abrir, pré-fechar, fechar (snapshot), reabrir e política. Autorização por ação (fechar/reabrir/configurar) vem
+// Períodos financeiros (B8): abrir, pré-fechar, fechar (snapshot), reabrir (desabilitada) e exceção de fechamento (desabilitada). Autorização por ação (fechar/reabrir/configurar) vem
 // do gate do Agente 1 nas rotas — aqui não há permissões próprias. A decisão final e a proteção de mês fechado são do banco (trava + impressão).
 import * as repositorio from "./repositorio.js";
 import { exigirContexto } from "./contexto.js";
@@ -21,10 +21,16 @@ const resumoPeriodo = (p) => ({
 
 export async function listar(ctx, deps = padrao) {
   const c = exigirContexto(ctx);
-  const [ps, cfg] = await Promise.all([deps.repo.listarPeriodos(c, deps.db), deps.repo.obterConfig(c, deps.db)]);
-  return { periodos: ps.map(resumoPeriodo), politica: politicaDe(cfg) };
+  const [ps, ex] = await Promise.all([deps.repo.listarPeriodos(c, deps.db), deps.repo.listarExcecoesFechamento(c, {}, deps.db)]);
+  return { periodos: ps.map(resumoPeriodo), excecoes: ex.map(resumoExcecao), excecaoFechamentoHabilitada: deps.excecaoFechamentoHabilitada === true };
 }
-const politicaDe = (cfg) => ({ permiteFecharComPendencias: cfg?.permite_fechar_com_pendencias === true, aprovadoEm: cfg?.aprovado_em ?? null, aprovadoPor: cfg?.aprovado_por ?? null, notaAprovacao: cfg?.nota_aprovacao ?? null });
+/** Exceção para exibição: o gestor vê por que existe (justificativa) e QUAIS pendências cobre (ids e motivos, sem valores). */
+export const resumoExcecao = (e) => ({
+  id: e.id, mes: String(e.mes).slice(0, 7), status: e.status, quantidade: e.quantidade, pendenciasConciliacao: e.pendencias_conciliacao ?? 0,
+  justificativa: e.justificativa, aprovadaPor: e.aprovada_por, aprovadaEm: e.aprovada_em, expiraEm: e.expira_em,
+  consumidaEm: e.consumida_em ?? null, revogadaEm: e.revogada_em ?? null, motivoRevogacao: e.motivo_revogacao ?? null,
+  pendencias: (e.pendencias ?? []).map((p) => ({ id: p.id, motivos: p.motivos ?? [] })),
+});
 
 export async function abrir(ctx, b, deps = padrao) {
   const c = exigirContexto(ctx);
@@ -33,7 +39,8 @@ export async function abrir(ctx, b, deps = padrao) {
 
 /** Lê o mês e monta tudo o que o fechamento usaria. A impressão é obtida ANTES da leitura (qualquer escrita depois será detectada). */
 async function prepararMes(c, mes, deps) {
-  const periodo = await deps.repo.abrirPeriodoRpc(c, mes, deps.db);               // garante a linha (idempotente) e traz status/versão
+  // SOMENTE LEITURA: não cria linha de período (o banco cria sob trava ao fechar; mês sem linha = aberto, versão 1).
+  const periodo = (await deps.repo.obterPeriodo(c, mes, deps.db)) ?? { id: null, mes: `${mes}-01`, status: "aberto", versao: 1, snapshot: null };
   const fingerprint = await deps.repo.fingerprintPeriodoRpc(c, mes, deps.db);
   const p = { de: primeiroDia(mes), ate: ultimoDia(mes) };
   const base = await carregarBase(c, p, deps);
@@ -43,12 +50,14 @@ async function prepararMes(c, mes, deps) {
   const dre = montarDre(comAb, base.categoriasPorId);
   const saldos = saldosPorConta(base.contas.filter((x) => x.ativo), new Map(base.aberturas.map((a) => [a.conta_id, Number(a.valor_centavos)])), aposAbertura(mov, base.aberturas));
   const conc = await calcularMes(c, mes, deps);
-  const pendLanc = base.lancs.filter((l) => l.status !== "cancelado" && (l.classificacao_pendente || !l.categoria_id)).length;
-  const cfg = await deps.repo.obterConfig(c, deps.db);
-  const politica = politicaDe(cfg);
-  const avaliacao = avaliarFechamento({ status: periodo.status, pendenciasLancamentos: pendLanc, pendenciasConciliacao: conc.resultado.resumo.pendenciasAbertas, politicaPermitePendencias: politica.permiteFecharComPendencias });
+  const pendentes = base.lancs.filter((l) => l.status !== "cancelado" && (l.classificacao_pendente || !l.categoria_id));
+  const pendLanc = pendentes.length;
+  const agora = Date.parse((deps.agora ?? padrao.agora)());
+  const ativa = (await deps.repo.listarExcecoesFechamento(c, { mes, apenasAtivas: true }, deps.db)).find((e) => Date.parse(e.expira_em) > agora) ?? null;
+  const excecao = ativa ? { id: ativa.id, expiraEm: ativa.expira_em, pendenciasIds: (ativa.pendencias ?? []).map((p) => p.id), pendenciasConciliacao: ativa.pendencias_conciliacao ?? 0 } : null;
+  const avaliacao = avaliarFechamento({ status: periodo.status, pendenciasLancamentos: pendLanc, pendenciasLancamentosIds: pendentes.map((l) => l.id), pendenciasConciliacao: conc.resultado.resumo.pendenciasAbertas, excecao });
   const pendencias = { lancamentos: pendLanc, conciliacao: conc.resultado.resumo.pendenciasAbertas, total: pendLanc + conc.resultado.resumo.pendenciasAbertas };
-  return { periodo, fingerprint, apuracao, dre, saldos, conciliacao: conc.resultado, pendencias, politica, avaliacao, vazio: base.lancs.length === 0 };
+  return { periodo, fingerprint, apuracao, dre, saldos, conciliacao: conc.resultado, pendencias, excecao: ativa ? resumoExcecao(ativa) : null, avaliacao, vazio: base.lancs.length === 0 };
 }
 
 export async function preFechamento(ctx, mes, deps = padrao) {
@@ -56,7 +65,7 @@ export async function preFechamento(ctx, mes, deps = padrao) {
   const m = mesAno(mes);
   const x = await prepararMes(c, m, deps);
   return {
-    mes: m, periodo: resumoPeriodo(x.periodo), fingerprint: x.fingerprint, vazio: x.vazio, politica: x.politica, avaliacao: x.avaliacao, pendencias: x.pendencias,
+    mes: m, periodo: resumoPeriodo(x.periodo), fingerprint: x.fingerprint, vazio: x.vazio, excecao: x.excecao, avaliacao: x.avaliacao, pendencias: x.pendencias,
     resumo: { indicadores: { receitaOperacional: x.apuracao.receitaOperacional, resultadoGerencial: x.apuracao.resultadoGerencial, margemLiquidaBps: x.apuracao.margemLiquidaBps, variacaoCaixa: x.apuracao.variacaoCaixa, saldoFinal: x.apuracao.saldoFinal, parcial: x.apuracao.parcial },
       saldoFinalParcial: x.saldos.parcial, conciliacao: x.conciliacao.resumo },
   };
@@ -64,7 +73,7 @@ export async function preFechamento(ctx, mes, deps = padrao) {
 
 /**
  * Fecha o mês. Exige `fingerprint` e `versao` da pré-visualização que a pessoa revisou. Recusa: confirmação ausente, conteúdo alterado desde então
- * (409), período já fechado, pendências sem política aprovada ou sem reconhecimento explícito. Tudo ou nada no banco.
+ * (409), período já fechado, pendências sem exceção que cubra todas elas (ou sem reconhecimento explícito). Tudo ou nada no banco.
  */
 export async function fechar(ctx, mes, b, deps = padrao) {
   const c = exigirContexto(ctx);
@@ -92,16 +101,16 @@ export async function reabrir(ctx, mes, b, deps = padrao) {
 }
 
 /**
- * Política "permitir fechar com pendências". Padrão: NÃO. Ligar exige aprovação explícita (nota ≥ 10 caracteres + quem aprovou/quando).
- * Desligar é sempre permitido. O banco também recusa ligar sem aprovação registrada.
+ * Concessão da exceção de fechamento (LD-007). FAIL-CLOSED: desabilitada por padrão e SEM rota — depende da validação do MFA e da ligação do
+ * SuperAdmin pela fundação de segurança (Agente 1). Mesmo habilitada aqui, o banco só deixa executar quem tiver EXECUTE na função DEFINER
+ * (o service_role não tem). Não altera, apaga nem reclassifica nenhuma pendência.
  */
-export async function definirPolitica(ctx, b, deps = padrao) {
+export async function concederExcecaoFechamento(ctx, mes, b, deps = padrao) {
   const c = exigirContexto(ctx);
-  if (typeof b?.permiteFecharComPendencias !== "boolean") throw bad("permiteFecharComPendencias deve ser verdadeiro ou falso.", "ENTRADA_INVALIDA");
-  if (!b.permiteFecharComPendencias) return politicaDe(await deps.repo.gravarConfig(c, { permite_fechar_com_pendencias: false, aprovado_por: null, aprovado_em: null, nota_aprovacao: null }, deps.db));
-  const nota = texto(b?.notaAprovacao, "notaAprovacao", { max: 1000 });
-  if (nota.length < 10) throw bad("A aprovação exige uma nota explícita (mínimo 10 caracteres).", "APROVACAO_SEM_NOTA");
-  if (b?.confirmoAprovacao !== true) throw bad("Confirmação explícita da aprovação ausente.", "CONFIRMACAO_AUSENTE");
-  return politicaDe(await deps.repo.gravarConfig(c, { permite_fechar_com_pendencias: true, aprovado_por: c.usuarioId, aprovado_em: (deps.agora ?? padrao.agora)(), nota_aprovacao: nota }, deps.db));
+  if (deps.excecaoFechamentoHabilitada !== true) throw ApiError.forbidden("A exceção de fechamento ainda não foi habilitada. Aguarde a validação do MFA e a aprovação da política.", { codigo: "EXCECAO_FECHAMENTO_NAO_HABILITADA" });
+  const justificativa = texto(b?.justificativa, "justificativa", { max: 2000 });
+  if (justificativa.length < 20) throw bad("Informe a justificativa da exceção (mínimo 20 caracteres).", "JUSTIFICATIVA_OBRIGATORIA");
+  const validadeDias = inteiro(b?.validadeDias, "validadeDias", { min: 1, max: 30 });
+  const x = await prepararMes(c, mesAno(mes), deps);
+  return resumoExcecao(await deps.repo.concederExcecaoFechamentoRpc(c, { mes: mesAno(mes), justificativa, validadeDias, pendenciasConciliacao: x.pendencias.conciliacao }, deps.db));
 }
-export async function obterPolitica(ctx, deps = padrao) { return politicaDe(await deps.repo.obterConfig(exigirContexto(ctx), deps.db)); }

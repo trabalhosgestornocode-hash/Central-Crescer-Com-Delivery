@@ -11,6 +11,10 @@ process.env.SUPABASE_ANON_KEY = "teste-local-nao-e-segredo";
 const { criarDominioRouter } = await import("../../src/modules/gestao-financeira/dominio/rotas.js");
 const { criarRepoMemoria } = await import("./helpers/repoMemoria.js");
 const tab = await import("../../src/modules/gestao-financeira/dominio/tabelas.service.js");
+const perSvc = await import("../../src/modules/gestao-financeira/dominio/periodos.service.js");
+/** Simula a exceção futura de SuperAdmin (concessão real está desabilitada e sem rota) para os testes que fecham meses com pendências sintéticas. */
+const liberarExcecao = (a, mes) => perSvc.concederExcecaoFechamento({ organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3), permissoes: [] }, mes,
+  { justificativa: "excecao sintetica de teste para fechar o mes", validadeDias: 5 }, { repo: a.repo, excecaoFechamentoHabilitada: true, agora: () => "2026-10-01T12:00:00.000Z" });
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const P = (...a) => a.map((x) => `gestao_financeira.${x}`);
@@ -207,8 +211,8 @@ test("análise de categorias, histórico de conciliações e situação dos per�
     assert.equal(hist.linhas[0].situacao, "Revogada"); assert.equal(hist.linhas[0].classificacao, "Diferença de prazo"); assert.match(hist.linhas[0].motivoRevogacao, /engano/);
     assert.equal((await a.chamar("GET", "/relatorios/tabelas/conciliacoes?de=2026-10-01&ate=2026-10-31")).corpo.data.linhas.length, 0);
     // períodos: fechado mostra o resultado congelado
+    await liberarExcecao(a, "2026-09");
     const pre = (await a.chamar("GET", "/periodos/2026-09/pre-fechamento")).corpo.data;
-    await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "aprovado pela diretoria em ata 1", confirmoAprovacao: true });
     const f = await a.chamar("POST", "/periodos/2026-09/fechar", { confirmo: true, versao: pre.periodo.versao, fingerprint: pre.fingerprint, reconhecoPendencias: true });
     assert.equal(f.status, 200);
     const per = (await a.chamar("GET", "/relatorios/tabelas/periodos?de=2026-09-01&ate=2026-10-31")).corpo.data;
@@ -364,7 +368,9 @@ test("configurações: mostra só o que o domínio suporta; abertura desconhecid
     assert.ok(vendas.lancamentos >= 3); assert.equal(vendas.podeTrocarPapel, false);
     const sem = d.categorias.find((x) => x.nome === "ENTRE CONTAS");
     assert.ok(sem.lancamentos >= 2);
-    assert.equal(d.politicaFechamento.permiteFecharComPendencias, false);
+    assert.equal(d.politicaFechamento, undefined);
+    assert.deepEqual(d.fechamentoComPendencias, { modo: "excecao_por_competencia", habilitada: false, excecoesAtivas: 0, competenciasComExcecao: [] });
+    assert.ok(d.indisponiveis.some((x) => x.id === "excecao-fechamento" && /MFA/.test(x.motivo) && /SuperAdmin/.test(x.motivo)));
     assert.ok(d.indisponiveis.some((x) => x.id === "reabertura-periodos" && /MFA recente/.test(x.motivo)));
     assert.ok(d.indisponiveis.some((x) => x.id === "regras-classificacao" && /decisão empresarial/.test(x.motivo)));
     assert.equal(d.conciliacao.contasSemCanal, 2);
@@ -385,8 +391,7 @@ test("configurações: regras históricas protegidas — papel de categoria em u
     // antes de fechar, o canal da conta pode mudar
     assert.equal((await a.chamar("PATCH", `/contas/${s.banco.id}`, { canalReferencia: "stone" })).status, 200);
     assert.equal(a.repo._t.contas.find((x) => x.id === s.banco.id).canal_referencia, "STONE");
-    // fecha setembro (política aprovada para ignorar as pendências sintéticas)
-    await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "aprovado em ata de teste 1", confirmoAprovacao: true });
+    // fecha setembro (este cenário não tem pendências: nenhuma exceção é necessária)
     const pre = (await a.chamar("GET", "/periodos/2026-09/pre-fechamento")).corpo.data;
     const f = await a.chamar("POST", "/periodos/2026-09/fechar", { confirmo: true, versao: pre.periodo.versao, fingerprint: pre.fingerprint, reconhecoPendencias: true });
     assert.equal(f.status, 200);
@@ -403,8 +408,7 @@ test("configurações: regras históricas protegidas — papel de categoria em u
     // lançamento em mês fechado continua protegido (nada a configurar muda isso)
     const cx = a.repo._t.contas.find((x) => x.nome === "CAIXA");
     assert.equal((await a.chamar("POST", "/lancamentos", { contaId: cx.id, descricao: "novo", sentido: "saida", valor: "1,00", dataMovimento: "2026-09-25" })).status, 400);
-    // permissões de escrita das configurações seguem as rotas: operador não altera contas/plano/política
+    // permissões de escrita das configurações seguem as rotas: operador não altera contas/plano
     assert.equal((await a.chamar("PATCH", `/contas/${s.caixa.id}`, { nome: "X" }, { perms: NIVEL.operador })).status, 403);
-    assert.equal((await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: false }, { perms: NIVEL.operador })).status, 403);
   } finally { await a.fechar(); }
 });

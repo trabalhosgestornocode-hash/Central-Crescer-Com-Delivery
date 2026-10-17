@@ -1,8 +1,9 @@
-// Períodos — abertura, pré-fechamento, fechamento (snapshot imutável), política e reabertura controlada.
-// O fechamento com pendências está BLOQUEADO por padrão; só com política aprovada e reconhecimento explícito. A reabertura depende de uma
+// Períodos — abertura, pré-fechamento, fechamento (snapshot imutável) e reabertura controlada.
+// Fechar com pendências NÃO é uma política que o gestor liga: só por EXCEÇÃO por unidade e competência, aprovada por SuperAdmin (uso único), e com
+// reconhecimento explícito. Esta tela apenas MOSTRA a exceção — não há botão para pedir/conceder. A reabertura depende de uma
 // autorização que nenhum nível possui nesta versão: a tela só oferece o botão a quem tiver `reabrir`, e o servidor decide (fail-closed).
 import { fin } from "./api.js";
-import { moeda, pct, rotuloMes, podeAcao, ACAO, ACAO_FECHAMENTO, ROTULO_STATUS_PERIODO } from "./modelo.js";
+import { moeda, pct, rotuloMes, podeAcao, ACAO_FECHAMENTO, ROTULO_STATUS_PERIODO } from "./modelo.js";
 import { garantirCss, cabecalho, tabela, badge, carregarEm, dialogo, campo, aviso, esc, estado } from "./ui.js";
 
 export async function render(container, ctx) {
@@ -11,7 +12,7 @@ export async function render(container, ctx) {
   const raiz = document.createElement("section");
   raiz.className = "fin-pg";
   container.appendChild(raiz);
-  const pFechar = podeAcao(ctx, ACAO_FECHAMENTO.FECHAR), pReabrir = podeAcao(ctx, ACAO_FECHAMENTO.REABRIR), pConfigurar = podeAcao(ctx, ACAO.CONFIGURAR);
+  const pFechar = podeAcao(ctx, ACAO_FECHAMENTO.FECHAR), pReabrir = podeAcao(ctx, ACAO_FECHAMENTO.REABRIR);
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
@@ -23,11 +24,18 @@ export async function render(container, ctx) {
     carregarEm(corpo, () => fin.get("/periodos"), pintar);
   }
 
-  function pintar({ periodos, politica }) {
-    const pol = `<div class="fin-card"><h3>Política: fechar com pendências</h3>
-      <p>${politica.permiteFecharComPendencias ? badge("Permitido (aprovado)", "warn") : badge("Bloqueado (padrão)", "ok")}
-      ${politica.permiteFecharComPendencias ? ` Aprovada em ${esc(new Date(politica.aprovadoEm).toLocaleString("pt-BR"))}: ${esc(politica.notaAprovacao ?? "")}` : " Enquanto não for aprovada explicitamente, nenhum mês é fechado com pendências."}</p>
-      ${pConfigurar ? `<button class="btn btn-ghost btn-sm" data-politica>${politica.permiteFecharComPendencias ? "Voltar ao padrão (bloquear)" : "Aprovar fechamento com pendências"}</button>` : ""}</div>`;
+  const ROTULO_EXCECAO = { ativa: ["Ativa", "warn"], consumida: ["Usada", "muted"], revogada: ["Revogada", "muted"] };
+  function pintar({ periodos, excecoes = [] }) {
+    const exc = excecoes.length ? tabela({ colunas: [
+      { rotulo: "Mês", render: (e) => esc(rotuloMes(e.mes)) },
+      { rotulo: "Situação", render: (e) => { const [r, t] = ROTULO_EXCECAO[e.status] ?? [e.status, "muted"]; return badge(r, t); } },
+      { rotulo: "Pendências cobertas", num: true, render: (e) => String(e.quantidade + e.pendenciasConciliacao) },
+      { rotulo: "Validade", render: (e) => esc(new Date(e.expiraEm).toLocaleDateString("pt-BR")) },
+      { rotulo: "Justificativa", render: (e) => `<small>${esc(e.justificativa)}</small>` },
+    ], linhas: excecoes, vazio: "" }).replace('class="fin-tabela"', 'class="fin-tabela fin-tabela--cartao"') : "";
+    const pol = `<div class="fin-card"><h3>Fechamento com pendências</h3>
+      <p>${badge("Bloqueado", "ok")} O gestor fecha períodos sem pendências impeditivas. Fechar com pendências só é possível por uma <strong>exceção por unidade e competência</strong>,
+      aprovada excepcionalmente por SuperAdmin: justificada, auditada, de uso único e nunca permanente. Esse fluxo está indisponível até a validação do MFA.</p>${exc}</div>`;
     const tb = tabela({ colunas: [
       { rotulo: "Mês", render: (p) => `${esc(rotuloMes(p.mes))}` },
       { rotulo: "Situação", render: (p) => { const s = ROTULO_STATUS_PERIODO[p.status] ?? { rotulo: p.status, tom: "muted" }; return badge(s.rotulo, s.tom); } },
@@ -42,20 +50,6 @@ export async function render(container, ctx) {
     corpo.innerHTML = `${pol}<div class="fin-card"><h3>Meses</h3>${tb}</div>
       <p class="fin-sub">Reabrir exige autorização específica que ainda não foi concedida a nenhum nível; sem ela a operação é recusada pelo servidor.</p>`;
 
-    corpo.querySelector("[data-politica]")?.addEventListener("click", () => {
-      if (politica.permiteFecharComPendencias) {
-        dialogo({ titulo: "Voltar ao padrão", enviar: "Bloquear fechamento com pendências", corpo: "<p>O fechamento com pendências volta a ser bloqueado.</p>",
-          aoEnviar: async () => { await fin.put("/periodos/politica", { permiteFecharComPendencias: false }); aviso("Política restaurada."); carregar(); } });
-        return;
-      }
-      dialogo({
-        titulo: "Aprovar fechamento com pendências", enviar: "Registrar aprovação",
-        corpo: `<p class="fin-sub">Decisão de negócio. Fica registrada com quem aprovou e quando. Mesmo aprovada, cada fechamento exige reconhecer as pendências existentes.</p>
-          <label class="fin-campo"><span>Justificativa da aprovação (mín. 10 caracteres) *</span><textarea name="notaAprovacao" rows="3" required minlength="10" maxlength="1000"></textarea></label>
-          <label><input type="checkbox" name="confirmoAprovacao" required> Confirmo que esta política foi aprovada pela empresa.</label>`,
-        aoEnviar: async (d) => { await fin.put("/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: d.get("notaAprovacao"), confirmoAprovacao: true }); aviso("Política aprovada."); carregar(); },
-      });
-    });
     corpo.querySelectorAll("[data-pre]").forEach((b) => b.addEventListener("click", () => preFechamento(b.dataset.pre)));
     corpo.querySelectorAll("[data-snap]").forEach((b) => b.addEventListener("click", () => snapshot(periodos.find((p) => p.mes === b.dataset.snap))));
     corpo.querySelectorAll("[data-reabrir]").forEach((b) => b.addEventListener("click", () => {
@@ -84,7 +78,7 @@ export async function render(container, ctx) {
           <article class="fin-kpi"><span class="fin-kpi-rot">Variação do caixa</span><strong class="fin-kpi-val">${moeda(i.variacaoCaixa, { sinal: true })}</strong></article></div>
         <p>Pendências: <strong>${x.pendencias.lancamentos}</strong> de classificação · <strong>${x.pendencias.conciliacao}</strong> de conciliação. ${i.parcial ? badge("Indicadores parciais", "warn") : ""} ${x.resumo.saldoFinalParcial ? badge("Saldos parciais", "warn") : ""}</p>
         ${x.avaliacao.bloqueios.map((b) => `<div class="fin-alerta fin-alerta--bad" role="alert">${esc(b.texto)}</div>`).join("")}
-        ${x.avaliacao.exigeReconhecimento ? `<label><input type="checkbox" name="reconheco"> Reconheço as ${x.pendencias.total} pendência(s) e quero fechar assim mesmo (política aprovada).</label>` : ""}
+        ${x.avaliacao.exigeReconhecimento ? `<label><input type="checkbox" name="reconheco"> Reconheço as ${x.pendencias.total} pendência(s) e quero fechar assim mesmo (exceção aprovada).</label>` : ""}
         <label><input type="checkbox" name="confirmo" required> Confirmo o fechamento de ${esc(rotuloMes(mes))}: o snapshot ficará imutável.</label>
         <p class="fin-sub">Se algo mudar no mês enquanto esta janela estiver aberta, o fechamento será recusado e você precisará recarregar.</p>`;
       dlg._fechar = async () => {

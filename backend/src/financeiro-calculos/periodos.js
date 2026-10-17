@@ -33,12 +33,27 @@ export function montarSnapshot({ mes, apuracao: a, dre, saldos, conciliacao, pen
   };
 }
 
-/** Decide se o mês pode ser fechado AGORA (a decisão final é do banco, sob trava). */
-export function avaliarFechamento({ status, pendenciasLancamentos, pendenciasConciliacao, politicaPermitePendencias }) {
+/**
+ * Decide se o mês pode ser fechado AGORA (a decisão final é do banco, sob trava). NÃO existe política geral de "fechar com pendências":
+ * a única via é uma EXCEÇÃO por unidade + competência (concedida por SuperAdmin), que cobre SÓ as pendências identificadas no ato da concessão.
+ * `excecao` = { id, expiraEm, pendenciasIds: [...], pendenciasConciliacao } da exceção ATIVA e vigente (ou null/undefined).
+ */
+export function avaliarFechamento({ status, pendenciasLancamentos, pendenciasLancamentosIds = [], pendenciasConciliacao, excecao = null }) {
   const bloqueios = [];
   if (status === "fechado") bloqueios.push({ codigo: "JA_FECHADO", texto: "O período já está fechado." });
   const total = pendenciasLancamentos + pendenciasConciliacao;
   const comPendencias = total > 0;
-  if (comPendencias && !politicaPermitePendencias) bloqueios.push({ codigo: "PENDENCIAS_IMPEDEM", texto: `${total} pendência(s) impedem o fechamento (a política de fechar com pendências não foi aprovada).` });
-  return { pode: bloqueios.length === 0, exigeReconhecimento: comPendencias && politicaPermitePendencias === true, pendenciasTotal: total, bloqueios };
+  let cobertura = null;
+  if (comPendencias) {
+    if (!excecao) {
+      bloqueios.push({ codigo: "PENDENCIAS_IMPEDEM", texto: `${total} pendência(s) impedem o fechamento. Resolva-as; fechar com pendências só é possível com uma exceção excepcional, aprovada por SuperAdmin para esta unidade e competência.` });
+    } else {
+      const cobertos = new Set((excecao.pendenciasIds ?? []).map(String));
+      const naoCobertas = pendenciasLancamentosIds.filter((id) => !cobertos.has(String(id))).length;
+      const conciliacaoAcima = Math.max(0, pendenciasConciliacao - (excecao.pendenciasConciliacao ?? 0));
+      cobertura = { excecaoId: excecao.id, expiraEm: excecao.expiraEm ?? null, naoCobertas: naoCobertas + conciliacaoAcima };
+      if (cobertura.naoCobertas > 0) bloqueios.push({ codigo: "EXCECAO_INSUFICIENTE", texto: `A exceção concedida não cobre ${cobertura.naoCobertas} pendência(s) surgida(s) depois da aprovação. Resolva-as ou peça uma nova exceção.` });
+    }
+  }
+  return { pode: bloqueios.length === 0, exigeReconhecimento: comPendencias && cobertura !== null && cobertura.naoCobertas === 0, pendenciasTotal: total, bloqueios, excecao: cobertura };
 }
