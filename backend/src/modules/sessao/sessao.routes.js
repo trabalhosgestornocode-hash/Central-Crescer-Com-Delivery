@@ -51,6 +51,10 @@ sessaoRouter.post("/mfa/evento", exigirSenhaDefinitiva, controller.mfaEvento);
 // `atual` exige contexto (é o que ele descreve).
 sessaoRouter.get("/atual", exigirSenhaDefinitiva, requireContexto, controller.atual);
 
+// `setores`: quais setores (financeiro/operacional) o PERFIL pode usar na unidade atual. Derivado no servidor a cada
+// chamada; é só para a UI desenhar a escolha — nunca autoriza nada.
+sessaoRouter.get("/setores", exigirSenhaDefinitiva, requireContexto, controller.setores);
+
 // `unidades` também exige contexto — alimenta o seletor global do topbar
 // (item 4/10 do pedido: fonte única para trocar de unidade sem sair da
 // empresa), inclusive quando já se está em "Todas as unidades".

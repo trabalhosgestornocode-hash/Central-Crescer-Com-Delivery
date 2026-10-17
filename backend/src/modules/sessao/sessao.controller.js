@@ -4,6 +4,8 @@ import { renovarContexto } from "./sessao.renovacao.service.js";
 import * as perfilService from "./perfil.service.js";
 import * as v from "../../shared/validar.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
+import { resolverAcessoFinanceiro } from "../../middlewares/financeiro.js";
+import { calcularSetores } from "../../shared/setores.js";
 
 /** Origem da requisição — usada na auditoria e gravada na sessão. */
 function origem(req) {
@@ -168,4 +170,10 @@ export const novaSenha = asyncHandler(async (req, res) => {
     usuario: req.user, senha: body.senha, ...origem(req),
   });
   res.json({ data });
+});
+
+// GET /api/v1/sessao/setores — setores autorizados para o perfil na unidade do contexto atual.
+export const setores = asyncHandler(async (req, res) => {
+  const fin = await resolverAcessoFinanceiro(req.acesso, req.tenant);
+  res.json({ data: { setores: calcularSetores({ permissoes: req.acesso.permissoes, impersonando: req.acesso.impersonando, financeiroOk: fin.ok }) } });
 });
