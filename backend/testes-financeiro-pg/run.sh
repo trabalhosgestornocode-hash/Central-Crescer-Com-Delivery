@@ -25,6 +25,12 @@ run -d "$DB" -f "$AQUI/20_periodos_conciliacao.test.sql"
 run -d "$DB" -f "$AQUI/25_cancelamento_par.test.sql"
 export HOST PORT PSQL DB
 bash "$AQUI/30_concorrencia.sh"
+# idempotência COM DADOS: o teste de concorrência deixou dados committados; reaplicar 121 e 122 não pode alterar nem perder nada
+CONTA_ANTES=$(run -d "$DB" -t -A -c "select (select count(*) from fin_lancamentos)||'/'||(select count(*) from fin_transferencias)||'/'||(select count(*) from fin_periodos)||'/'||(select count(*) from fin_auditoria)")
+run -d "$DB" -f "$SQL"; run -d "$DB" -f "$SQL2"
+CONTA_DEPOIS=$(run -d "$DB" -t -A -c "select (select count(*) from fin_lancamentos)||'/'||(select count(*) from fin_transferencias)||'/'||(select count(*) from fin_periodos)||'/'||(select count(*) from fin_auditoria)")
+[ "$CONTA_ANTES" = "$CONTA_DEPOIS" ] || { echo "FALHA: reaplicar com dados mudou contagens ($CONTA_ANTES -> $CONTA_DEPOIS)"; exit 1; }
+echo "reaplicacao com dados existentes OK ($CONTA_DEPOIS)"
 # rollback seguro: o teste de concorrência deixou dados COMMITADOS => o rollback deve RECUSAR (e nada ser removido)
 if run -d "$DB" -f "$AQUI/../../docs/gestao-financeira/sql-provisorio/122_rollback.provisorio.sql" 2>/dev/null; then echo "FALHA: rollback do 122 nao recusou com dados"; exit 1; fi
 echo "rollback com dados recusado (ok)"
