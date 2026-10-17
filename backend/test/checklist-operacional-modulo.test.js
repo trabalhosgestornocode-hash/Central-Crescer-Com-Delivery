@@ -36,6 +36,9 @@ describe("catálogo do módulo", () => {
     assert.ok(m, "módulo no catálogo");
     assert.equal(m.nome, "Checklist Operacional");
     assert.equal(m.categoria, "operacao");
+    // Ordem 18: a 17 é da trilha financeira (`gestao_financeira`), que ainda não foi integrada. O Checklist não a usa para não alterar a migration dela.
+    assert.equal(m.ordem, 18);
+    assert.deepEqual(CATALOGO_MODULOS.map((x) => x.ordem).sort((a, b) => a - b), [...new Set(CATALOGO_MODULOS.map((x) => x.ordem))].sort((a, b) => a - b), "nenhuma ordem repetida no catálogo");
     assert.equal(CATALOGO_MODULOS.filter((x) => x.ordem === m.ordem).length, 1, "ordem não repete");
     assert.equal(new Set(CATALOGO_MODULOS.map((x) => x.id)).size, CATALOGO_MODULOS.length, "ids únicos");
   });

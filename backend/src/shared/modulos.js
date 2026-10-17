@@ -63,7 +63,7 @@ export const CATALOGO_MODULOS = [
   // depender de uma categoria/grupo novo nos checklists de Acessos (empresa e
   // unidade). Aparece no grupo "Operação", ao lado do Agente Crescer.
   { id: MODULOS.INTELIGENCIA, nome: "Inteligência (seção)", categoria: "operacao", ordem: 16 },
-  { id: MODULOS.CHECKLIST_OPERACIONAL, nome: "Checklist Operacional", categoria: "operacao", ordem: 17 },
+  { id: MODULOS.CHECKLIST_OPERACIONAL, nome: "Checklist Operacional", categoria: "operacao", ordem: 18 },
 ];
 
 const IDS_VALIDOS = new Set(CATALOGO_MODULOS.map((m) => m.id));

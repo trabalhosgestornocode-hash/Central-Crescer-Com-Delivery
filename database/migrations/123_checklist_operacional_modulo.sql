@@ -25,7 +25,7 @@
 begin;
 
 insert into modulos (id, nome, categoria, ordem) values
-  ('checklist_operacional', 'Checklist Operacional', 'operacao', 17)
+  ('checklist_operacional', 'Checklist Operacional', 'operacao', 18)
 on conflict (id) do update set nome = excluded.nome, categoria = excluded.categoria, ordem = excluded.ordem;
 
 -- Empresas que já têm `ifood`.

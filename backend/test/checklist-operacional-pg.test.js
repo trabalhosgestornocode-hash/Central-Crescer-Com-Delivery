@@ -241,7 +241,7 @@ describe("Checklist Operacional — Postgres real e descartável", { skip: PULAR
     test("aplica: catálogo + vínculos SÓ de quem já tem ifood (empresa e unidade); nada além", () => {
       const antesOrg = total("organizacao_modulos"); const antesUn = total("unidade_modulos");
       const r = aplicar(NOME); assert.equal(r.ok, true, r.err);
-      assert.equal(ok("select nome || '|' || categoria || '|' || ordem from modulos where id = 'checklist_operacional'"), "Checklist Operacional|operacao|17");
+      assert.equal(ok("select nome || '|' || categoria || '|' || ordem from modulos where id = 'checklist_operacional'"), "Checklist Operacional|operacao|18");
       assert.equal(orgsCom("checklist_operacional"), orgsCom("ifood"), "empresas: exatamente as que têm ifood (A e B)");
       assert.equal(unisCom("checklist_operacional"), unisCom("ifood"), "unidades: exatamente as que têm ifood");
       assert.equal(total("organizacao_modulos") - antesOrg, 2);

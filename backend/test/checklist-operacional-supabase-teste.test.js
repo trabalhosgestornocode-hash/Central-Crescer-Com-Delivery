@@ -146,7 +146,7 @@ describe("Checklist Operacional — Supabase de TESTE (PostgREST e RLS reais)", 
       const tem = (lista, id) => lista.some((r) => (r.organizacao_id ?? r.unidade_id) === id && r.modulo_id === "checklist_operacional");
       assert.deepEqual([tem(orgs, A), tem(orgs, B), tem(unis, A1), tem(unis, A2), tem(unis, B1)], [true, false, true, false, false]);
       const { data: cat } = await admin.from("modulos").select("nome, categoria, ordem").eq("id", "checklist_operacional").single();
-      assert.deepEqual(cat, { nome: "Checklist Operacional", categoria: "operacao", ordem: 17 });
+      assert.deepEqual(cat, { nome: "Checklist Operacional", categoria: "operacao", ordem: 18 });
       aplicar(NOME);                                            // idempotente
       aplicar(ROLL);
       assert.deepEqual((await admin.from("modulos").select("id").eq("id", "checklist_operacional")).data, []);

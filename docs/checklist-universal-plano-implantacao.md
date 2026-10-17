@@ -25,7 +25,7 @@ Cada migration é independente das demais deste plano; a regra é numeração ú
 2. Trilha financeira (120 → 121 → 122), **somente se já integrada à `main`** — fora do escopo deste plano; não a aplique por causa dele.
 3. **123_checklist_operacional_modulo.sql** (este PR).
 Aplicação: Supabase → SQL Editor, o arquivo inteiro, uma vez. Verificação imediata (consultas no fim do arquivo):
-- 1 linha em `modulos` (`checklist_operacional | Checklist Operacional | operacao | 17`);
+- 1 linha em `modulos` (`checklist_operacional | Checklist Operacional | operacao | 18`);
 - `organizacao_modulos` com o módulo novo = nº de empresas com `ifood` (hoje 4: a da Saci, Empresa Teste, Ideal Mall, Açaí no Grau Saci);
 - `unidade_modulos` com o módulo novo = nº de unidades com `ifood`;
 - nenhuma empresa/unidade sem `ifood` com o módulo novo.
@@ -90,3 +90,19 @@ O catálogo exibido na tela de Acessos vem do **código** (`CATALOGO_MODULOS`), 
 
 ## 11. O que este plano NÃO inclui
 Remoção do gate `OU ifood`; correção dos 4 pedidos `CONCLUDED` sem horário e da máquina de estados iFood (plano próprio); metas por unidade persistidas; qualquer alteração em credenciais, conexões ou tokens do iFood.
+
+## 12. Checklist operacional definitivo (pré-implantação) — nada abaixo foi executado
+Marcar cada item com data e responsável antes de iniciar. Qualquer "não" adia a publicação.
+| # | Item | Responsável | Estado |
+|---|---|---|---|
+| 1 | **Número da migration reconfirmado no dia**: maior número existente em `main` + trilhas financeiras integradas + 1 (candidato 123; hoje a `main` está na 119 e a financeira ocupa 120–122). Se mudar: renomear migration e rollback, comentários e travas 088/103. | quem aplica a migration | pendente |
+| 2 | **Ordem do catálogo = 18** em código, migration e testes (a 17 é da financeira). | — | **feito** neste PR |
+| 3 | **Backup de produção**: exportar `modulos`, `organizacao_modulos`, `unidade_modulos` (CSV) e confirmar PITR/backups automáticos no painel do Supabase; refazer o snapshot se o estado mudou. | responsável pelo banco | pendente |
+| 4 | **Linha de base da Subway Saci** do dia (módulos, conexão iFood, poller, contagens e indicadores) antes da migration. | quem executa | pendente |
+| 5 | **Monitoramento dos logs do Render** (build, `live`, `Subway Saci API rodando`, `iFood Events: embarcado ATIVO`, `events.lease_de_outro` transitório, erros e 5xx em `/checklist-operacional/resumo`) por pessoa com acesso ao serviço; o `/health` não substitui os logs. | a designar | **pendente (sem acesso hoje)** |
+| 6 | **Homologação visual da TV da Saci** na resolução real da TV, com alguém na loja. | a designar | pendente |
+| 7 | **Plano de rollback** conhecido por quem decide: código primeiro, banco depois; exportar os vínculos antes do rollback do banco (ele remove também os do piloto e das ondas). | quem decide reverter | pendente |
+| 8 | **Janela de baixo movimento** (manhã de dia útil; evitar sábado/pico). | você | pendente |
+| 9 | **Comunicação ao responsável da unidade piloto** antes de habilitar (o que é, que abrirá sem pedidos, que pode ser desligado), com a autorização da empresa. | você | pendente |
+| 10 | Ninguém usa a tela de Acessos entre a migration e o deploy; reaplicar a migration (idempotente) depois do deploy. | quem executa | pendente |
+| 11 | PR #47 revisado e fora de Draft por decisão do responsável; ordem com a financeira definida (Checklist primeiro). | você | pendente |

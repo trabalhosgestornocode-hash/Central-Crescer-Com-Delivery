@@ -11,7 +11,7 @@ Branch `feat/checklist-universal-tempos` (worktree `crescer-checklist-universal`
 | Gate da rota `/checklist-operacional` (`backend/src/routes.js`) | `requireModulo(IFOOD)` | `requireAlgumModulo(CHECKLIST_OPERACIONAL, IFOOD)` |
 | Menu (`frontend/src/config.js`) | `modulo: "ifood"` | `modulo: "checklist_operacional"` + `moduloTransicao: "ifood"` |
 | Permissão | `checklist.visualizar` (ou `integracoes.ver`) | **inalterada** |
-| Catálogo (`backend/src/shared/modulos.js`) | — | `MODULOS.CHECKLIST_OPERACIONAL`, ordem 17, categoria `operacao` |
+| Catálogo (`backend/src/shared/modulos.js`) | — | `MODULOS.CHECKLIST_OPERACIONAL`, ordem 18, categoria `operacao` |
 | Banco | — | `database/migrations/123_checklist_operacional_modulo.sql` (+ `123_rollback.sql`; ver §10.1) |
 
 - O `OU ifood` existe só na **transição**: a sessão congela os módulos por até 8 h, então sessões abertas antes da migration não trazem o módulo novo. A remoção de `MODULOS.IFOOD` do gate e de `moduloTransicao` do menu NÃO é automática por tempo: só depois das verificações do §8.5.
