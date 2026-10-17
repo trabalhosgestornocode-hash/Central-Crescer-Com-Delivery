@@ -1,0 +1,76 @@
+// Administração de concessões financeiras (SuperAdmin). Todo acesso passa por service_role e por validações explícitas;
+// o banco repete as regras críticas por trigger (migration 120): unidade da organização, perfil ativo e vinculado,
+// autoconcessão proibida, motivo mínimo, uma concessão ativa por perfil+unidade.
+import { supabase } from "../../config/supabase.js";
+import { ApiError } from "../../shared/ApiError.js";
+import { auditar, ACOES } from "../../shared/auditoria.js";
+import { garantirSemAutoconcessao, validarNovaConcessao, validarRevogacao } from "./concessoes.dominio.js";
+
+const COLUNAS = "id, organizacao_id, unidade_id, perfil_id, nivel, somente_financeiro, concedida_por, motivo, concedida_em, expira_em, revogada_em, revogada_por, motivo_revogacao";
+
+function origem(req) {
+  return { ip: req.ip ?? null, userAgent: req.header?.("user-agent") ?? null };
+}
+
+/** Erros de regra vindos dos triggers viram 400 legível; o resto vira 500 genérico (sem vazar SQL). */
+function traduzir(error) {
+  if (!error) return null;
+  if (error.code === "23505") return ApiError.badRequest("Este perfil já tem uma concessão ativa nesta unidade.", { codigo: "CONCESSAO_JA_ATIVA" });
+  if (/Concessão financeira|autoconcessão/i.test(error.message || "")) return ApiError.badRequest(error.message);
+  if (error.code === "23514") return ApiError.badRequest("Dados da concessão inválidos (nível, motivo ou expiração).");
+  return ApiError.internal("Falha ao gravar a concessão.");
+}
+
+export async function listar({ unidadeId, perfilId, incluirRevogadas = false } = {}) {
+  let q = supabase.from("gestao_financeira_concessoes").select(COLUNAS).order("concedida_em", { ascending: false }).limit(200);
+  if (unidadeId) q = q.eq("unidade_id", unidadeId);
+  if (perfilId) q = q.eq("perfil_id", perfilId);
+  if (!incluirRevogadas) q = q.is("revogada_em", null);
+  const { data, error } = await q;
+  if (error) throw ApiError.internal("Falha ao listar concessões.");
+  return data ?? [];
+}
+
+export async function conceder(req) {
+  const dados = validarNovaConcessao(req.body, req.user.id);
+
+  const { data: perfil, error: ePerfil } = await supabase
+    .from("perfis_operacionais").select("id, conta_id, ativo").eq("id", dados.perfil_id).maybeSingle();
+  if (ePerfil) throw ApiError.internal("Falha ao consultar o perfil.");
+  garantirSemAutoconcessao(perfil?.conta_id, req.user.id);
+  if (perfil.ativo !== true) throw ApiError.badRequest("Perfil inativo.");
+
+  const { data: unidade, error: eUni } = await supabase
+    .from("unidades").select("id, organizacao_id").eq("id", dados.unidade_id).maybeSingle();
+  if (eUni) throw ApiError.internal("Falha ao consultar a unidade.");
+  if (!unidade || unidade.organizacao_id !== dados.organizacao_id) throw ApiError.badRequest("A unidade não pertence à empresa informada.");
+
+  const { data, error } = await supabase.from("gestao_financeira_concessoes").insert(dados).select(COLUNAS).single();
+  if (error) throw traduzir(error);
+
+  await auditar({
+    atorId: req.user.id, atorEmail: req.user.email, acao: ACOES.FINANCEIRO_CONCESSAO_CONCEDIDA,
+    entidade: "gestao_financeira_concessoes", entidadeId: data.id, organizacaoId: dados.organizacao_id,
+    detalhes: { unidade_id: dados.unidade_id, perfil_id: dados.perfil_id, nivel: dados.nivel, somente_financeiro: dados.somente_financeiro, expira_em: dados.expira_em, motivo: dados.motivo },
+    ...origem(req),
+  });
+  return data;
+}
+
+export async function revogar(req, id) {
+  const { motivo } = validarRevogacao(req.body);
+  const { data, error } = await supabase.from("gestao_financeira_concessoes")
+    .update({ revogada_em: new Date().toISOString(), revogada_por: req.user.id, motivo_revogacao: motivo })
+    .eq("id", id).is("revogada_em", null).select(COLUNAS).maybeSingle();
+  if (error) throw traduzir(error);
+  if (!data) throw ApiError.notFound("Concessão não encontrada ou já revogada.");
+
+  // Efeito imediato: o gate financeiro relê a concessão a cada requisição. NENHUMA sessão operacional é encerrada.
+  await auditar({
+    atorId: req.user.id, atorEmail: req.user.email, acao: ACOES.FINANCEIRO_CONCESSAO_REVOGADA,
+    entidade: "gestao_financeira_concessoes", entidadeId: data.id, organizacaoId: data.organizacao_id,
+    detalhes: { unidade_id: data.unidade_id, perfil_id: data.perfil_id, motivo },
+    ...origem(req),
+  });
+  return data;
+}

@@ -33,6 +33,7 @@ const { inteligenciaRouter } = await import("../../src/modules/inteligencia/inte
 const { unidadeRouter } = await import("../../src/modules/unidade/unidade.routes.js");
 const { realtimeRouter } = await import("../../src/modules/realtime/realtime.routes.js");
 const { checklistOperacionalRouter } = await import("../../src/modules/checklist-operacional/checklistOperacional.routes.js");
+const { gestaoFinanceiraRouter } = await import("../../src/modules/gestao-financeira/index.js");
 
 /** Os routers montados dentro do `tenant` de routes.js (prefixo -> router). A trava de cobertura abaixo confere. */
 export const MONTAGENS_TENANT = [
@@ -42,6 +43,7 @@ export const MONTAGENS_TENANT = [
   ["/integracoes/martin-brower", martinBrowerRouter], ["/integracoes/ifood", ifoodRouter],
   ["/checklist-operacional", checklistOperacionalRouter], ["/parser-food-delivery", parserFoodDeliveryRouter],
   ["/inteligencia", inteligenciaRouter], ["/agente", agenteRouter],
+  ["/gestao-financeira", gestaoFinanceiraRouter],
 ];
 
 /**

@@ -67,7 +67,7 @@ export function requireFinanceiro(leitor = leitorPadrao) {
  * Exige uma permissão financeira por rota. Sem bypass.
  * @param {string} permissao
  */
-export function exigirPermissaoFinanceira(permissao) {
+export function autorizarAcaoFinanceira(permissao) {
   return (req, _res, next) => {
     if (!req.financeiro?.permissoes?.includes(permissao)) {
       return next(ApiError.forbidden("Permissão financeira insuficiente.", { codigo: "FINANCEIRO_PERMISSAO_INSUFICIENTE" }));

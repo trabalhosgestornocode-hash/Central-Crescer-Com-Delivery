@@ -3,6 +3,7 @@ import * as c from "./plataforma.controller.js";
 import { requireSuperadmin, exigirMfaSeExigido } from "../../middlewares/auth.js";
 import { limiteDeTaxa } from "../../shared/rateLimit.js";
 import { RATE_LIMIT } from "../../config/limites.js";
+import { concessoesRouter } from "../gestao-financeira/concessoes.routes.js";
 
 // API do Painel SuperAdmin.
 //
@@ -24,6 +25,9 @@ plataformaRouter.use(exigirMfaSeExigido("superadmin"));
 // Rede contra script descontrolado no painel (já restrito a SuperAdmin).
 // Folgado — operações em lote são legítimas aqui.
 plataformaRouter.use(limiteDeTaxa({ escopo: "plataforma", ...RATE_LIMIT.plataforma }));
+
+// ---- Concessões do Dashboard Financeiro (escritas bloqueadas até a prova de MFA — ver concessoes.routes.js)
+plataformaRouter.use("/gestao-financeira/concessoes", concessoesRouter);
 
 // ---- Dashboard Global
 plataformaRouter.get("/dashboard", c.obterDashboard);

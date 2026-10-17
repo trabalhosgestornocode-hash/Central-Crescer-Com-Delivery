@@ -55,7 +55,7 @@ test("erro de leitura propaga (o middleware responde 500, nunca libera)", async 
 });
 
 import { calcularSetores } from "../src/shared/setores.js";
-import { requireFinanceiro, exigirPermissaoFinanceira } from "../src/middlewares/financeiro.js";
+import { requireFinanceiro, autorizarAcaoFinanceira } from "../src/middlewares/financeiro.js";
 
 const OPS = ["dashboard.ver", "produtos.ver"];
 const MODS = ["dashboard", "ifood_dashboard"];
@@ -126,9 +126,9 @@ test("middleware: sem concessão => 403 com código; com concessão => passa e p
   assert.deepEqual(ok.financeiro.permissoes, [PERM_FIN.VER, PERM_FIN.LANCAR]);
   assert.equal(ok.financeiro.organizacaoId, "o1");
 });
-test("exigirPermissaoFinanceira: leitura não lança; ausência de req.financeiro falha fechada", async () => {
+test("autorizarAcaoFinanceira: leitura não lança; ausência de req.financeiro falha fechada", async () => {
   const leit = { financeiro: { permissoes: [PERM_FIN.VER] } };
-  assert.equal((await rodar(exigirPermissaoFinanceira(PERM_FIN.LANCAR), leit)).statusCode, 403);
-  assert.equal(await rodar(exigirPermissaoFinanceira(PERM_FIN.VER), leit), undefined);
-  assert.equal((await rodar(exigirPermissaoFinanceira(PERM_FIN.VER), {})).statusCode, 403);
+  assert.equal((await rodar(autorizarAcaoFinanceira(PERM_FIN.LANCAR), leit)).statusCode, 403);
+  assert.equal(await rodar(autorizarAcaoFinanceira(PERM_FIN.VER), leit), undefined);
+  assert.equal((await rodar(autorizarAcaoFinanceira(PERM_FIN.VER), {})).statusCode, 403);
 });

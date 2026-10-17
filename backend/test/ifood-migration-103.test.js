@@ -37,7 +37,9 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
     // 118 = credencial OAuth PRÓPRIA por loja adicional + loja-alvo da sessão OAuth (credenciais independentes por merchant).
     "118_ifood_loja_credenciais.sql", "118_rollback.sql",
     // 119 = Serviços e promoções com sinal no Dashboard iFood (remove só o CHECK >= 0; negativo = crédito à loja).
-    "119_servicos_promocoes_sinal.sql", "119_rollback.sql"]);
+    "119_servicos_promocoes_sinal.sql", "119_rollback.sql",
+    // 120 = fundação do Dashboard Financeiro (módulo gestao_financeira, concessões explícitas, auditoria; RLS sem policies).
+    "120_gestao_financeira_fundacao.sql", "120_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });
