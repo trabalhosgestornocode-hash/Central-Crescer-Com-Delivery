@@ -9,7 +9,7 @@ Saneado: sem dados reais. Complementa `00-contrato-agente1-agente2.md` (v1). Nad
 | 1 | `modules/gestao-financeira/index.js` | `import { dominioRouter } from "./dominio/index.js"` e `gestaoFinanceiraRouter.use(dominioRouter)` | `dominio/index.js` já exporta `dominioRouter = criarDominioRouter({ autorizar: autorizarAcaoFinanceira })` |
 | 2 | `app.js` | `app.use("/api/v1/gestao-financeira/importacoes/previa", express.json({ limit: "8mb" }))` **antes** do `express.json()` global | A prévia envia o .xlsx em base64 (até 5 MB → ~6,7 MB). Com o limite global de 1 MB, só planilhas ≲ 700 KB passam |
 | 3 | `GET /gestao-financeira/status` | O roteador do front lê `(await http.get(...)).data`; o handler atual responde sem o envelope `{ data }` | Conferir na integração (as páginas do Agente 2 usam sempre `{ data }`) |
-| 4 | `shared/gestaoFinanceira.permissoes.js` | A matriz `gestor` **não inclui `excluir` nem `reabrir`** | Cancelar lançamento exige `excluir` (rota `POST /lancamentos/:id/cancelar`); enquanto a matriz não for validada ninguém cancela pela UI |
+| 4 | `shared/gestaoFinanceira.permissoes.js` | Matriz A7.1 (A1): cancelar lançamento exige `cancelar` (gestor); `excluir` e `reabrir` sem nível | Sincronizado nesta branch (LD-003) |
 | 5 | `database/migrations/` | Numerar e mover `docs/gestao-financeira/sql-provisorio/121_*.provisorio.sql` e `121_rollback.provisorio.sql` | Só depois de homologação em PostgreSQL descartável (ver §5) |
 | 6 | `frontend/src/config.js` / menu | Itens `conciliacao`, `periodos`, `relatorios`, `configuracoes` seguem "Em construção" (não entregues; ver §4) | Nada a fazer: o roteador já mostra o estado honesto |
 
@@ -26,7 +26,7 @@ Todas as rotas passam por `autorizar(acao)` injetado (nenhuma rota existe sem ga
 | `editar` | `PATCH /lancamentos/:id`, `GET /auditoria` |
 | `conciliar` | `POST /transferencias/vincular`, `POST /transferencias/:id/desvincular`, `POST /importacoes/:id/pares`, `POST /importacoes/:id/alteracoes` |
 | `configurar` | plano de contas (POST/PATCH), contas (POST/PATCH), `PUT /aberturas`, **`POST /importacoes/:id/confirmar`** |
-| `excluir` | `POST /lancamentos/:id/cancelar` |
+| `cancelar` | `POST /lancamentos/:id/cancelar` |
 | `fechar` / `reabrir` | reservadas para B8 (períodos); ainda sem rotas |
 
 Contexto: `organizacaoId`/`unidadeId` vêm **só** de `req.financeiro`; o autor de `req.user.id`. Corpo/query com ids de tenant são ignorados.

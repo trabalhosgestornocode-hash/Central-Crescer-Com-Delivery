@@ -38,7 +38,7 @@ export function criarDominioRouter({ autorizar, deps = undefined }) {
   r.get("/lancamentos", ...h(ACAO.VER, (c, q) => lanc.listarLancamentos(c, q.query, d)));
   r.post("/lancamentos", ...h(ACAO.LANCAR, (c, q) => lanc.criarLancamento(c, q.body, d), { status: 201 }));
   r.patch("/lancamentos/:id", ...h(ACAO.EDITAR, (c, q) => lanc.atualizarLancamento(c, q.params.id, q.body, d)));
-  r.post("/lancamentos/:id/cancelar", ...h(ACAO.EXCLUIR, (c, q) => lanc.cancelarLancamento(c, q.params.id, q.body, d)));
+  r.post("/lancamentos/:id/cancelar", ...h(ACAO.CANCELAR, (c, q) => lanc.cancelarLancamento(c, q.params.id, q.body, d)));
 
   // transferências
   r.get("/transferencias", ...h(ACAO.VER, (c) => lanc.listarTransferencias(c, d)));

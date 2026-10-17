@@ -74,7 +74,7 @@ export const nivelAlerta = (a) => (a.nivel === "erro" ? "bad" : "warn");
 export const podeAcao = (ctx, acao) => (ctx?.permissoes ?? []).includes(acao);
 export const ACAO = Object.freeze({
   VER: "gestao_financeira.ver", LANCAR: "gestao_financeira.lancar", EDITAR: "gestao_financeira.editar", CONCILIAR: "gestao_financeira.conciliar",
-  CONFIGURAR: "gestao_financeira.configurar", EXCLUIR: "gestao_financeira.excluir",
+  CONFIGURAR: "gestao_financeira.configurar", CANCELAR: "gestao_financeira.cancelar", EXCLUIR: "gestao_financeira.excluir",
 });
 
 /** Motivos de revisão da importação → rótulo curto. */

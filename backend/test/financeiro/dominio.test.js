@@ -128,7 +128,7 @@ test("rotas: cada rota exige a ação mínima esperada (leitura só VER; escrita
     if (escrita) assert.notEqual(acoes[i], "gestao_financeira.ver", `${r.metodos} ${r.path} não pode exigir só 'ver'`);
   });
   assert.equal(acoes[porRota.findIndex((r) => r.path === "/importacoes/:id/confirmar")], "gestao_financeira.configurar");
-  assert.equal(acoes[porRota.findIndex((r) => r.path === "/lancamentos/:id/cancelar")], "gestao_financeira.excluir");
+  assert.equal(acoes[porRota.findIndex((r) => r.path === "/lancamentos/:id/cancelar")], "gestao_financeira.cancelar");
 });
 
 test("rotas: contexto vem do gate; org/unidade no corpo são ignorados", async () => {

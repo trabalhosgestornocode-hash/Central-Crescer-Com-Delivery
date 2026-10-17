@@ -32,7 +32,7 @@ const PAGINA = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><m
 const MIME = { ".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".png": "image/png", ".svg": "image/svg+xml", ".json": "application/json" };
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const TODAS = ["ver", "lancar", "editar", "conciliar", "fechar", "configurar", "excluir"].map((a) => `gestao_financeira.${a}`);
+const TODAS = ["ver", "lancar", "editar", "conciliar", "fechar", "configurar", "cancelar"].map((a) => `gestao_financeira.${a}`);
 const serial = (iso) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000) + 25569;
 
 let servidor, base, navegador, repo, planilhaB64, planilhaXlsxBuf;

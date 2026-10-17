@@ -9,6 +9,7 @@ export const ACAO = Object.freeze({
   CONCILIAR: "gestao_financeira.conciliar",
   FECHAR: "gestao_financeira.fechar",
   REABRIR: "gestao_financeira.reabrir",
+  CANCELAR: "gestao_financeira.cancelar",
   EXCLUIR: "gestao_financeira.excluir",
   CONFIGURAR: "gestao_financeira.configurar",
 });
