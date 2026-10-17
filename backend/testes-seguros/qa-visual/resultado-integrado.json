@@ -1,0 +1,225 @@
+{
+  "res": [
+    {
+      "nome": "financeiro-only: entra direto na Visão Geral",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Visão Geral\": implementada (não é 'Em construção')",
+      "ok": true,
+      "d": "Visão Geral Regime de caixa: recebimentos líquidos e pagamentos efetivos. Não é"
+    },
+    {
+      "nome": "página \"Visão Geral\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Fluxo de Caixa\": implementada (não é 'Em construção')",
+      "ok": true,
+      "d": "Fluxo de Caixa Livro-caixa único. Nada é excluído: lançamentos incorretos são c"
+    },
+    {
+      "nome": "página \"Fluxo de Caixa\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Contas Financeiras\": implementada (não é 'Em construção')",
+      "ok": true,
+      "d": "Contas Financeiras Conta é ONDE o dinheiro está. Meio de pagamento e canal de v"
+    },
+    {
+      "nome": "página \"Contas Financeiras\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Conciliação\": 'Em construção' (inexistente)",
+      "ok": true,
+      "d": "Conciliação — em construção Esta área do Dashboard Financeiro ainda não está di"
+    },
+    {
+      "nome": "página \"Conciliação\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"DRE Gerencial\": implementada (não é 'Em construção')",
+      "ok": true,
+      "d": "DRE Gerencial Regime de caixa: receita = recebimentos líquidos; custos = compra"
+    },
+    {
+      "nome": "página \"DRE Gerencial\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Indicadores\": implementada (não é 'Em construção')",
+      "ok": true,
+      "d": "Indicadores Todo número é recalculado dos lançamentos. A fórmula e a origem est"
+    },
+    {
+      "nome": "página \"Indicadores\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Análise de Categorias\": implementada (não é 'Em construção')",
+      "ok": true,
+      "d": "Análise de Categorias O que mais pesa nas saídas operacionais. Fora desta análi"
+    },
+    {
+      "nome": "página \"Análise de Categorias\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Plano de Contas\": implementada (não é 'Em construção')",
+      "ok": true,
+      "d": "Plano de Contas Tipo → natureza → categoria. O papel define se a categoria é re"
+    },
+    {
+      "nome": "página \"Plano de Contas\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Períodos\": 'Em construção' (inexistente)",
+      "ok": true,
+      "d": "Períodos — em construção Esta área do Dashboard Financeiro ainda não está dispo"
+    },
+    {
+      "nome": "página \"Períodos\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Importação\": implementada (não é 'Em construção')",
+      "ok": true,
+      "d": "Importação do livro-caixa Só a aba do fluxo é importada (as abas por conta são "
+    },
+    {
+      "nome": "página \"Importação\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Relatórios\": 'Em construção' (inexistente)",
+      "ok": true,
+      "d": "Relatórios — em construção Esta área do Dashboard Financeiro ainda não está dis"
+    },
+    {
+      "nome": "página \"Relatórios\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "página \"Configurações Financeiras\": 'Em construção' (inexistente)",
+      "ok": true,
+      "d": "Configurações Financeiras — em construção Esta área do Dashboard Financeiro ain"
+    },
+    {
+      "nome": "página \"Configurações Financeiras\": sem 'undefined/NaN/[object' e sem erro de script",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "mobile: nenhuma das 12 páginas gera rolagem horizontal da PÁGINA",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "tema escuro aplicado nas páginas financeiras",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "leitura: contas/plano sem botões de criar/salvar",
+      "ok": true,
+      "d": "contas=0 plano=0"
+    },
+    {
+      "nome": "leitura: importação informa falta de permissão (não oferece upload)",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "ambos: pergunta o setor",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "ambos: financeiro abre a Visão Geral com dados",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "troca de unidade: setores recalculados (volta a perguntar o setor)",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "unidade sem dados: estado vazio explícito (não mostra números inventados)",
+      "ok": true,
+      "d": "Visão Geral Regime de caixa: recebimentos líquidos e pagamentos efetivos. Não é uma DRE de competência. Mês Sem lançam"
+    },
+    {
+      "nome": "erro de API (500): a página informa o erro (não fica em branco nem quebra)",
+      "ok": true,
+      "d": "Não foi possível confirmar seu acesso financeiro agora. Tente novamente em instantes."
+    },
+    {
+      "nome": "alternador: financeiro → operacional",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "alternador: operacional → financeiro",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "revogação: a próxima navegação financeira cai no operacional (backend negou)",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "URL direta (operacional): /contas, /relatorios e /status => 403 FINANCEIRO_SEM_CONCESSAO",
+      "ok": true,
+      "d": "[{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"},{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"},{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"}]"
+    },
+    {
+      "nome": "URL direta (nenhum): /contas, /relatorios e /status => 403 FINANCEIRO_SEM_CONCESSAO",
+      "ok": true,
+      "d": "[{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"},{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"},{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"}]"
+    },
+    {
+      "nome": "URL direta (impersonacao): /contas, /relatorios e /status => 403 FINANCEIRO_BLOQUEADO_IMPERSONACAO",
+      "ok": true,
+      "d": "[{\"s\":403,\"c\":\"FINANCEIRO_BLOQUEADO_IMPERSONACAO\"},{\"s\":403,\"c\":\"FINANCEIRO_BLOQUEADO_IMPERSONACAO\"},{\"s\":403,\"c\":\"FINANCEIRO_BLOQUEADO_IMPERSONACAO\"}]"
+    },
+    {
+      "nome": "URL direta (exibicao): /contas, /relatorios e /status => 403 FINANCEIRO_SEM_CONCESSAO",
+      "ok": true,
+      "d": "[{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"},{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"},{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"}]"
+    },
+    {
+      "nome": "URL direta (financeiro): /contas, /relatorios e /status => 200",
+      "ok": true,
+      "d": "[{\"s\":200},{\"s\":200},{\"s\":200}]"
+    },
+    {
+      "nome": "URL direta (ambos): /contas, /relatorios e /status => 200",
+      "ok": true,
+      "d": "[{\"s\":200},{\"s\":200},{\"s\":200}]"
+    },
+    {
+      "nome": "URL direta (revogado): 403 imediato",
+      "ok": true,
+      "d": "{\"s\":403,\"c\":\"FINANCEIRO_SEM_CONCESSAO\"}"
+    }
+  ],
+  "erros": []
+}
