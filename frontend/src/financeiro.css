@@ -40,3 +40,6 @@
 /* Painel SuperAdmin: aviso de escrita bloqueada */
 .fin-adm-bloqueio { border-left: 4px solid var(--warn, #c48a12); background: var(--warn-bg, #fff7e0); padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }
 .adm-subtitulo { font-size: 15px; font-weight: 700; margin: 22px 0 8px; }
+
+#setor-vazio { text-align: center; padding: 8px 0 18px; }
+#setor-vazio h3 { margin: 0 0 6px; }

@@ -501,8 +501,8 @@ function ligarSetores() {
     if (card && !card.hidden) { card.disabled = true; escolherSetor(card.dataset.setor); }
   });
   el("#btn-setor")?.addEventListener("click", () => escolherSetor(el("#btn-setor").dataset.destino));
-  for (const id of ["#setor-trocar", "#setor-trocar-vazio"]) el(id)?.addEventListener("click", voltarParaSelecao);
-  for (const id of ["#setor-sair", "#setor-sair-vazio"]) el(id)?.addEventListener("click", sairDeTudo);
+  el("#setor-trocar")?.addEventListener("click", voltarParaSelecao);
+  el("#setor-sair")?.addEventListener("click", sairDeTudo);
   document.addEventListener("app:setor-perdido", aoPerderAcessoFinanceiro);
 }
 

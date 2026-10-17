@@ -22,6 +22,8 @@
     "worker:comunicacao": "node src/worker-comunicacao/index.js",
     "dev:worker:comunicacao": "node --watch --env-file=.env src/worker-comunicacao/index.js",
     "test": "node --experimental-vm-modules --env-file-if-exists=.env --test test/",
+    "test:seguro": "node testes-seguros/executar.mjs",
+    "test:seguro:provas": "node testes-seguros/executar.mjs --provas",
     "test:isolation": "node --env-file-if-exists=.env.test --test test/isolamento-tenant.test.js",
     "test:isolation:mb": "node --env-file-if-exists=.env.test --test test/isolamento-martinbrower.test.js",
     "test:isolation:all": "node --env-file-if-exists=.env.test --test test/isolamento-tenant.test.js test/isolamento-martinbrower.test.js",
