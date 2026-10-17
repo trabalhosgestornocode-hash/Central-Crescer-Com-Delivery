@@ -24,11 +24,11 @@ export async function fingerprintPeriodoRpc(ctxIn, mes, db = supabase) {
   falha(error);
   return data;
 }
-export async function fecharPeriodoRpc(ctxIn, { mes, versao, fingerprint, snapshot, pendenciasConciliacao, reconhecoPendencias }, db = supabase) {
+export async function fecharPeriodoRpc(ctxIn, { mes, versao, fingerprint, snapshot, pendenciasConciliacaoIds, reconhecoPendencias }, db = supabase) {
   const ctx = exigirContexto(ctxIn);
   const { data, error } = await db.rpc("fin_fechar_periodo", {
     p_org: ctx.organizacaoId, p_unidade: ctx.unidadeId, p_usuario: ctx.usuarioId, p_mes: dia1(mes), p_versao: versao, p_fingerprint: fingerprint,
-    p_snapshot: snapshot, p_pendencias_conciliacao: pendenciasConciliacao, p_reconheco_pendencias: reconhecoPendencias === true,
+    p_snapshot: snapshot, p_pendencias_conciliacao_ids: pendenciasConciliacaoIds ?? [], p_reconheco_pendencias: reconhecoPendencias === true,
   });
   falha(error);
   return data;
@@ -59,11 +59,11 @@ export async function listarExcecoesFechamento(ctxIn, { mes, apenasAtivas = fals
   return data ?? [];
 }
 // DESABILITADAS por padrão: o service_role NÃO tem EXECUTE nestas funções até a validação do MFA e a ligação do SuperAdmin (Agente 1).
-export async function concederExcecaoFechamentoRpc(ctxIn, { mes, justificativa, validadeDias, pendenciasConciliacao, mfaEvidencia }, db = supabase) {
+export async function concederExcecaoFechamentoRpc(ctxIn, { mes, justificativa, validadeDias, pendenciasConciliacaoIds, mfaEvidencia }, db = supabase) {
   const ctx = exigirContexto(ctxIn);
   const { data, error } = await db.rpc("fin_conceder_excecao_fechamento", {
     p_org: ctx.organizacaoId, p_unidade: ctx.unidadeId, p_superadmin: ctx.usuarioId, p_mes: dia1(mes), p_justificativa: justificativa,
-    p_validade_dias: validadeDias, p_pendencias_conciliacao: pendenciasConciliacao, p_mfa: mfaEvidencia,
+    p_validade_dias: validadeDias, p_pendencias_conciliacao_ids: pendenciasConciliacaoIds ?? [], p_mfa: mfaEvidencia,
   });
   falha(error);
   return data;

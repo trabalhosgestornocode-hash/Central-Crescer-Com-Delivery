@@ -581,3 +581,15 @@ test("evidência de MFA da exceção: janela de 10 min, lista fechada de chaves,
     { aal: "aal2", em: iso(0), extra: "x" }, { aal: "aal2", em: iso(0), jwt: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.assinaturaassinatura" },
     { aal: "aal2", em: iso(0), metodo: "sms" }, { aal: "aal2", em: iso(0), sessao_ref: "0f3c2a77-aaaa-bbbb-cccc-1234567890ab" }, { aal: "aal2", em: iso(0), sessao_ref: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.assinaturaassinatura" }]) nok(ruim);
 });
+
+test("avaliarFechamento: pendências de conciliação comparadas por IDENTIDADE (escopo:chave), não por quantidade (LD-009 A3)", async () => {
+  const { avaliarFechamento } = await import("../../src/financeiro-calculos/periodos.js");
+  const exc = { id: "e1", pendenciasIds: ["l1"], pendenciasConciliacaoIds: ["ponte_mensal:2026-09-01", "caixa_dia:2026-09-03"] };
+  const base = { status: "aberto", pendenciasLancamentos: 1, pendenciasLancamentosIds: ["l1"], excecao: exc };
+  const av = (ids) => avaliarFechamento({ ...base, pendenciasConciliacao: ids.length, pendenciasConciliacaoIds: ids });
+  assert.equal(av(["ponte_mensal:2026-09-01", "caixa_dia:2026-09-03"]).pode, true);                 // igual ao coberto
+  assert.equal(av(["caixa_dia:2026-09-03"]).pode, true);                                             // resolver uma é permitido (subconjunto)
+  const troca = av(["ponte_mensal:2026-09-01", "caixa_dia:2026-09-04"]);                            // mesmo total, uma trocada
+  assert.equal(troca.pode, false); assert.equal(troca.bloqueios[0].codigo, "EXCECAO_INSUFICIENTE"); assert.equal(troca.excecao.naoCobertas, 1);
+  assert.equal(av(["ponte_mensal:2026-09-01", "caixa_dia:2026-09-03", "sangria_dia:2026-09-03"]).pode, false);   // nova além das cobertas
+});

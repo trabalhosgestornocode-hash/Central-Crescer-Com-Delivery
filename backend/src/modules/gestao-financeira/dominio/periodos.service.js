@@ -26,7 +26,7 @@ export async function listar(ctx, deps = padrao) {
 }
 /** Exceção para exibição: o gestor vê por que existe (justificativa) e QUAIS pendências cobre (ids e motivos, sem valores). */
 export const resumoExcecao = (e) => ({
-  id: e.id, mes: String(e.mes).slice(0, 7), status: e.status, quantidade: e.quantidade, pendenciasConciliacao: e.pendencias_conciliacao ?? 0,
+  id: e.id, mes: String(e.mes).slice(0, 7), status: e.status, quantidade: e.quantidade, pendenciasConciliacao: (e.pendencias_conciliacao_ids ?? []).length, pendenciasConciliacaoIds: e.pendencias_conciliacao_ids ?? [],
   justificativa: e.justificativa, aprovadaPor: e.aprovada_por, aprovadaEm: e.aprovada_em, expiraEm: e.expira_em,
   consumidaEm: e.consumida_em ?? null, revogadaEm: e.revogada_em ?? null, motivoRevogacao: e.motivo_revogacao ?? null,
   pendencias: (e.pendencias ?? []).map((p) => ({ id: p.id, motivos: p.motivos ?? [] })),
@@ -54,9 +54,9 @@ async function prepararMes(c, mes, deps) {
   const pendLanc = pendentes.length;
   const agora = Date.parse((deps.agora ?? padrao.agora)());
   const ativa = (await deps.repo.listarExcecoesFechamento(c, { mes, apenasAtivas: true }, deps.db)).find((e) => Date.parse(e.expira_em) > agora) ?? null;
-  const excecao = ativa ? { id: ativa.id, expiraEm: ativa.expira_em, pendenciasIds: (ativa.pendencias ?? []).map((p) => p.id), pendenciasConciliacao: ativa.pendencias_conciliacao ?? 0 } : null;
-  const avaliacao = avaliarFechamento({ status: periodo.status, pendenciasLancamentos: pendLanc, pendenciasLancamentosIds: pendentes.map((l) => l.id), pendenciasConciliacao: conc.resultado.resumo.pendenciasAbertas, excecao });
-  const pendencias = { lancamentos: pendLanc, conciliacao: conc.resultado.resumo.pendenciasAbertas, total: pendLanc + conc.resultado.resumo.pendenciasAbertas };
+  const excecao = ativa ? { id: ativa.id, expiraEm: ativa.expira_em, pendenciasIds: (ativa.pendencias ?? []).map((p) => p.id), pendenciasConciliacaoIds: ativa.pendencias_conciliacao_ids ?? [] } : null;
+  const avaliacao = avaliarFechamento({ status: periodo.status, pendenciasLancamentos: pendLanc, pendenciasLancamentosIds: pendentes.map((l) => l.id), pendenciasConciliacao: conc.resultado.resumo.pendenciasAbertas, pendenciasConciliacaoIds: conc.resultado.resumo.pendenciasAbertasIds, excecao });
+  const pendencias = { lancamentos: pendLanc, conciliacao: conc.resultado.resumo.pendenciasAbertas, conciliacaoIds: conc.resultado.resumo.pendenciasAbertasIds, total: pendLanc + conc.resultado.resumo.pendenciasAbertas };
   return { periodo, fingerprint, apuracao, dre, saldos, conciliacao: conc.resultado, pendencias, excecao: ativa ? resumoExcecao(ativa) : null, avaliacao, vazio: base.lancs.length === 0 };
 }
 
@@ -86,7 +86,7 @@ export async function fechar(ctx, mes, b, deps = padrao) {
   if (x.periodo.versao !== versao) throw new ApiError(409, MENSAGENS.FIN_PERIODO_CONFLITO_VERSAO, { codigo: "FIN_PERIODO_CONFLITO_VERSAO" });
   if (x.fingerprint !== b.fingerprint) throw new ApiError(409, MENSAGENS.FIN_PERIODO_CONFLITO_DADOS, { codigo: "FIN_PERIODO_CONFLITO_DADOS" });
   const snapshot = montarSnapshot({ mes: m, apuracao: x.apuracao, dre: x.dre, saldos: x.saldos, conciliacao: x.conciliacao, pendencias: x.pendencias, geradoEm: (deps.agora ?? padrao.agora)() });
-  const r = await deps.repo.fecharPeriodoRpc(c, { mes: m, versao, fingerprint: x.fingerprint, snapshot, pendenciasConciliacao: x.pendencias.conciliacao, reconhecoPendencias: b?.reconhecoPendencias === true }, deps.db);
+  const r = await deps.repo.fecharPeriodoRpc(c, { mes: m, versao, fingerprint: x.fingerprint, snapshot, pendenciasConciliacaoIds: x.pendencias.conciliacaoIds, reconhecoPendencias: b?.reconhecoPendencias === true }, deps.db);
   return resumoPeriodo(r);
 }
 
@@ -146,5 +146,5 @@ export async function concederExcecaoFechamento(ctx, mes, b, deps = padrao) {
   const validadeDias = inteiro(b?.validadeDias, "validadeDias", { min: 1, max: 30 });
   const mfaEvidencia = validarEvidenciaMfa(b?.mfaEvidencia);
   const x = await prepararMes(c, mesAno(mes), deps);
-  return resumoExcecao(await deps.repo.concederExcecaoFechamentoRpc(c, { mes: mesAno(mes), justificativa, validadeDias, pendenciasConciliacao: x.pendencias.conciliacao, mfaEvidencia }, deps.db));
+  return resumoExcecao(await deps.repo.concederExcecaoFechamentoRpc(c, { mes: mesAno(mes), justificativa, validadeDias, pendenciasConciliacaoIds: x.pendencias.conciliacaoIds, mfaEvidencia }, deps.db));
 }

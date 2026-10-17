@@ -58,10 +58,10 @@ begin
   if not (ok1 and ok2 and ok3) then raise exception 'FALHA 2a: % % %', ok1, ok2, ok3; end if;
   if pg_temp.pernas(par) is distinct from array['realizado','realizado'] then raise exception 'FALHA 2b: algo mudou apesar das recusas'; end if;
   -- mês fechado: nada muda (as DUAS pernas continuam ativas)
-  perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-08-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2026-08-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2026-08-01'), '{}', 0, false);
+  perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-08-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2026-08-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2026-08-01'), '{}', '{}'::text[], false);
   -- cria a segunda perna no mês seguinte via inserção direta para simular par entre meses, depois fecha um dos meses
   par := pg_temp.novo_par(c.u2, '2026-10-05');
-  perform fin_fechar_periodo(c.org1, c.u2, c.usr, '2026-10-01', (fin_abrir_periodo(c.org1, c.u2, c.usr, '2026-10-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u2, '2026-10-01'), '{}', 0, false);
+  perform fin_fechar_periodo(c.org1, c.u2, c.usr, '2026-10-01', (fin_abrir_periodo(c.org1, c.u2, c.usr, '2026-10-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u2, '2026-10-01'), '{}', '{}'::text[], false);
   begin perform fin_cancelar_transferencia(c.org1, c.u2, c.usr, par, 'motivo suficientemente longo'); exception when sqlstate '23514' then ok4 := (sqlerrm like 'fin_periodo_fechado%'); end;
   if not ok4 then raise exception 'FALHA 2c: cancelou par em mes fechado'; end if;
   if pg_temp.pernas(par) is distinct from array['realizado','realizado'] then raise exception 'FALHA 2d: perna alterada em mes fechado'; end if;
