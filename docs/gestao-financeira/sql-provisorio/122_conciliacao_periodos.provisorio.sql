@@ -104,6 +104,7 @@ begin
 end $$;
 
 create or replace function fin_lancamentos_guarda() returns trigger language plpgsql as $$
+declare v_par uuid;
 begin
   if tg_op = 'UPDATE' then
     if new.organizacao_id is distinct from old.organizacao_id or new.unidade_id is distinct from old.unidade_id
@@ -111,11 +112,17 @@ begin
        or new.importacao_id is distinct from old.importacao_id or new.criado_por is distinct from old.criado_por then
       raise exception 'fin_campo_imutavel' using errcode = '23514';
     end if;
-    if (new.valor_centavos is distinct from old.valor_centavos or new.sentido is distinct from old.sentido
-        or new.conta_id is distinct from old.conta_id or new.data_movimento is distinct from old.data_movimento
-        or new.status is distinct from old.status)
-       and exists (select 1 from fin_transferencias t where t.lancamento_saida_id = old.id or t.lancamento_entrada_id = old.id) then
-      raise exception 'fin_transferencia_vinculada: desvincule o par antes de alterar este lancamento' using errcode = '23514';
+    -- Perna de transferência VINCULADA: valor/sentido/conta/data/CATEGORIA só mudam desvinculando o par (achado da revisão da 121: a categoria
+    -- podia sair de "transferência" e deixar o par inconsistente). O STATUS só muda pelo cancelamento ATÔMICO do par (flag local da função).
+    select t.id into v_par from fin_transferencias t where t.lancamento_saida_id = old.id or t.lancamento_entrada_id = old.id;
+    if v_par is not null then
+      if new.valor_centavos is distinct from old.valor_centavos or new.sentido is distinct from old.sentido or new.conta_id is distinct from old.conta_id
+         or new.data_movimento is distinct from old.data_movimento or new.categoria_id is distinct from old.categoria_id then
+        raise exception 'fin_transferencia_vinculada: desvincule o par antes de alterar este lancamento' using errcode = '23514';
+      end if;
+      if new.status is distinct from old.status and coalesce(current_setting('fin.cancelando_par', true), '') <> v_par::text then
+        raise exception 'fin_transferencia_vinculada: use o cancelamento da transferencia inteira' using errcode = '23514';
+      end if;
     end if;
     if date_trunc('month', old.data_movimento) <> date_trunc('month', new.data_movimento) then
       perform fin_periodo_travar_e_checar(old.organizacao_id, old.unidade_id, old.data_movimento);
@@ -334,4 +341,151 @@ begin
     end loop;
     if exists (select 1 from pg_roles where rolname = 'service_role') then execute format('grant execute on function %s to service_role', t); end if;
   end loop;
+end $$;
+
+-- =====================================================================
+-- CANCELAMENTO ATÔMICO DE TRANSFERÊNCIA + CORREÇÕES DA REVISÃO FORMAL DA 121
+-- =====================================================================
+-- Três operações, três regras (nenhuma apaga nada):
+--   1) Cancelar lançamento isolado  → perna VINCULADA é recusada pelo banco (use 2 ou 3).
+--   2) Desvincular par incorreto    → fin_desvincular_transferencia_motivada (motivo obrigatório; as pernas ficam ATIVAS e PENDENTES).
+--   3) Cancelar transferência inteira → fin_cancelar_transferencia (motivo; as DUAS pernas e o par, na mesma transação, ou nada).
+
+alter table fin_transferencias add column if not exists status text not null default 'vinculada';
+alter table fin_transferencias add column if not exists cancelada_por uuid;
+alter table fin_transferencias add column if not exists cancelada_em timestamptz;
+alter table fin_transferencias add column if not exists motivo_cancelamento text;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'fin_transferencias_status_check') then
+    alter table fin_transferencias add constraint fin_transferencias_status_check check (status in ('vinculada','cancelada'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'fin_transferencias_cancelamento_check') then
+    alter table fin_transferencias add constraint fin_transferencias_cancelamento_check
+      check (status <> 'cancelada' or (cancelada_por is not null and cancelada_em is not null and length(btrim(coalesce(motivo_cancelamento, ''))) >= 10));
+  end if;
+  -- achado da revisão: importacao_id sem FK permitia apontar para importação de outro tenant
+  if not exists (select 1 from pg_constraint where conname = 'fin_lancamentos_importacao_fk') then
+    alter table fin_lancamentos add constraint fin_lancamentos_importacao_fk foreign key (importacao_id) references fin_importacoes(id) on delete restrict not valid;
+    alter table fin_lancamentos validate constraint fin_lancamentos_importacao_fk;
+  end if;
+end $$;
+
+-- O par só muda de 'vinculada' para 'cancelada' (e depois fica imutável); pernas/tenant nunca mudam.
+create or replace function fin_transferencias_guarda() returns trigger language plpgsql as $$
+begin
+  if new.organizacao_id is distinct from old.organizacao_id or new.unidade_id is distinct from old.unidade_id
+     or new.lancamento_saida_id is distinct from old.lancamento_saida_id or new.lancamento_entrada_id is distinct from old.lancamento_entrada_id then
+    raise exception 'fin_campo_imutavel' using errcode = '23514';
+  end if;
+  if old.status = 'cancelada' and new.status is distinct from old.status then raise exception 'fin_transferencia_cancelada_imutavel' using errcode = '23514'; end if;
+  if old.status = 'cancelada' and (new.motivo_cancelamento is distinct from old.motivo_cancelamento or new.cancelada_em is distinct from old.cancelada_em) then
+    raise exception 'fin_transferencia_cancelada_imutavel' using errcode = '23514';
+  end if;
+  if new.status = 'cancelada' and old.status <> 'cancelada' and coalesce(current_setting('fin.cancelando_par', true), '') <> old.id::text then
+    raise exception 'fin_transferencia_vinculada: use o cancelamento da transferencia inteira' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_fin_transferencias_guarda on fin_transferencias;
+create trigger trg_fin_transferencias_guarda before update on fin_transferencias for each row execute function fin_transferencias_guarda();
+
+-- Rede de segurança NO COMMIT: as duas pernas de um par sempre terminam com o MESMO status (cancelamento parcial é impossível,
+-- mesmo que alguém contorne a flag da função).
+create or replace function fin_par_status_consistente() returns trigger language plpgsql as $$
+declare v_outro text;
+begin
+  select l2.status into v_outro
+    from fin_transferencias t join fin_lancamentos l2 on l2.id = case when t.lancamento_saida_id = new.id then t.lancamento_entrada_id else t.lancamento_saida_id end
+   where new.id in (t.lancamento_saida_id, t.lancamento_entrada_id);
+  if found and v_outro is distinct from new.status then
+    raise exception 'fin_transferencia_parcial: as duas pernas do par precisam ter o mesmo status' using errcode = '23514';
+  end if;
+  return null;
+end $$;
+drop trigger if exists trg_fin_par_status_consistente on fin_lancamentos;
+create constraint trigger trg_fin_par_status_consistente after update of status on fin_lancamentos
+  deferrable initially deferred for each row execute function fin_par_status_consistente();
+
+-- Cancela a transferência INTEIRA. Ordem de travas: par → pernas (por id) → período (via gatilho). Idempotente.
+create or replace function fin_cancelar_transferencia(p_org uuid, p_unidade uuid, p_usuario uuid, p_transferencia uuid, p_motivo text)
+returns jsonb language plpgsql as $$
+declare t fin_transferencias; ls fin_lancamentos; le fin_lancamentos; v_motivo text := btrim(coalesce(p_motivo, ''));
+begin
+  if length(v_motivo) < 10 then raise exception 'fin_transferencia_motivo_obrigatorio: informe o motivo (minimo 10 caracteres)' using errcode = '23514'; end if;
+  select * into t from fin_transferencias where id = p_transferencia and organizacao_id = p_org and unidade_id = p_unidade for update;
+  if not found then raise exception 'fin_transferencia_nao_encontrada' using errcode = 'P0002'; end if;
+  perform 1 from fin_lancamentos where id in (t.lancamento_saida_id, t.lancamento_entrada_id) order by id for update;
+  select * into ls from fin_lancamentos where id = t.lancamento_saida_id;
+  select * into le from fin_lancamentos where id = t.lancamento_entrada_id;
+  if t.status = 'cancelada' then
+    if ls.status = 'cancelado' and le.status = 'cancelado' then
+      return jsonb_build_object('id', t.id, 'status', 'cancelada', 'jaCancelada', true, 'lancamentos', jsonb_build_array(ls.id, le.id));   -- idempotente
+    end if;
+    raise exception 'fin_transferencia_estado_inconsistente' using errcode = '23514';
+  end if;
+  if ls.status = 'cancelado' or le.status = 'cancelado' then raise exception 'fin_transferencia_estado_inconsistente: ha perna ja cancelada isoladamente' using errcode = '23514'; end if;
+  if ls.status <> 'realizado' or le.status <> 'realizado' then raise exception 'fin_transferencia_nao_cancelavel: as duas pernas precisam estar realizadas' using errcode = '23514'; end if;
+  perform fin_periodo_travar_e_checar(ls.organizacao_id, ls.unidade_id, ls.data_movimento);      -- meses das duas pernas precisam estar abertos
+  perform fin_periodo_travar_e_checar(le.organizacao_id, le.unidade_id, le.data_movimento);
+  perform set_config('fin.cancelando_par', t.id::text, true);                                     -- vale só nesta transação
+  update fin_transferencias set status = 'cancelada', cancelada_por = p_usuario, cancelada_em = now(), motivo_cancelamento = v_motivo where id = t.id;
+  update fin_lancamentos set status = 'cancelado', atualizado_por = p_usuario,
+         nota_revisao = case when nota_revisao is null or nota_revisao = '' then 'Transferencia cancelada: ' || v_motivo else nota_revisao || ' | Transferencia cancelada: ' || v_motivo end
+   where id in (ls.id, le.id);
+  perform set_config('fin.cancelando_par', '', true);
+  return jsonb_build_object('id', t.id, 'status', 'cancelada', 'jaCancelada', false, 'lancamentos', jsonb_build_array(ls.id, le.id));
+end $$;
+
+-- Desvincula (par incorreto) COM motivo, só de par ATIVO. As pernas continuam ativas e voltam a pendentes; o motivo fica na nota de ambas (auditada).
+create or replace function fin_desvincular_transferencia_motivada(p_org uuid, p_unidade uuid, p_usuario uuid, p_transferencia uuid, p_motivo text)
+returns boolean language plpgsql security definer set search_path = public, pg_temp as $$
+declare t fin_transferencias; v_motivo text := btrim(coalesce(p_motivo, ''));
+begin
+  if length(v_motivo) < 10 then raise exception 'fin_transferencia_motivo_obrigatorio: informe o motivo (minimo 10 caracteres)' using errcode = '23514'; end if;
+  select * into t from fin_transferencias where id = p_transferencia and organizacao_id = p_org and unidade_id = p_unidade for update;
+  if not found then return false; end if;
+  if t.status <> 'vinculada' then raise exception 'fin_transferencia_cancelada_imutavel: transferencia cancelada nao pode ser desvinculada' using errcode = '23514'; end if;
+  perform 1 from fin_lancamentos where id in (t.lancamento_saida_id, t.lancamento_entrada_id) order by id for update;
+  if exists (select 1 from fin_lancamentos where id in (t.lancamento_saida_id, t.lancamento_entrada_id) and status <> 'realizado') then
+    raise exception 'fin_transferencia_estado_inconsistente' using errcode = '23514';
+  end if;
+  delete from fin_transferencias where id = t.id;
+  update fin_lancamentos set classificacao_pendente = true, atualizado_por = p_usuario,
+         nota_revisao = case when nota_revisao is null or nota_revisao = '' then 'Par desfeito: ' || v_motivo else nota_revisao || ' | Par desfeito: ' || v_motivo end,
+         revisao_motivos = case when 'transferencia_sem_contraparte' = any(revisao_motivos) then revisao_motivos else array_append(revisao_motivos, 'transferencia_sem_contraparte') end
+   where id in (t.lancamento_saida_id, t.lancamento_entrada_id);
+  return true;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- Privilégios das novas funções + endurecimento apontado pela revisão da 121
+-- ---------------------------------------------------------------------
+do $$
+declare f text; r text;
+begin
+  foreach f in array array['fin_cancelar_transferencia(uuid,uuid,uuid,uuid,text)','fin_desvincular_transferencia_motivada(uuid,uuid,uuid,uuid,text)'] loop
+    execute format('revoke all on function %s from public', f);
+    foreach r in array array['anon','authenticated'] loop
+      if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on function %s from %I', f, r); end if;
+    end loop;
+    if exists (select 1 from pg_roles where rolname = 'service_role') then execute format('grant execute on function %s to service_role', f); end if;
+  end loop;
+  -- desvínculo SEM motivo (121) deixa de ser chamável pelo backend: a regra própria exige motivo
+  revoke all on function fin_desvincular_transferencia(uuid,uuid,uuid,uuid) from public;
+  foreach r in array array['anon','authenticated','service_role'] loop
+    if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on function fin_desvincular_transferencia(uuid,uuid,uuid,uuid) from %I', r); end if;
+  end loop;
+  -- funções de gatilho não são para ninguém chamar (paridade com a 120): sem EXECUTE para PUBLIC/anon/authenticated
+  foreach f in array array['fin_touch_updated_at()','fin_validar_escopo()','fin_lancamentos_guarda()','fin_plano_contas_guarda()','fin_transferencias_validar()','fin_auditar()',
+                           'fin_auditoria_imutavel()','fin_guarda_periodo_data()','fin_periodos_guarda()','fin_transferencias_guarda()','fin_par_status_consistente()'] loop
+    execute format('revoke all on function %s from public', f);
+    foreach r in array array['anon','authenticated'] loop
+      if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on function %s from %I', f, r); end if;
+    end loop;
+  end loop;
+  -- a sequência da auditoria não deve ser alcançável por papéis públicos (Supabase concede por default privileges)
+  foreach r in array array['anon','authenticated'] loop
+    if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on sequence fin_auditoria_id_seq from %I', r); end if;
+  end loop;
+  revoke all on sequence fin_auditoria_id_seq from public;
 end $$;

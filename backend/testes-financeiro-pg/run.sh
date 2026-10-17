@@ -22,6 +22,7 @@ run -d "$DB" -f "$SQL2"
 run -d "$DB" -f "$SQL2"  # idempotência do 122
 run -d "$DB" -f "$AQUI/10_dominio.test.sql"
 run -d "$DB" -f "$AQUI/20_periodos_conciliacao.test.sql"
+run -d "$DB" -f "$AQUI/25_cancelamento_par.test.sql"
 export HOST PORT PSQL DB
 bash "$AQUI/30_concorrencia.sh"
 # rollback seguro: o teste de concorrência deixou dados COMMITADOS => o rollback deve RECUSAR (e nada ser removido)
