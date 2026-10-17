@@ -106,12 +106,14 @@ end $$;
 
 -- 2) Remove o que a 122 criou.
 drop trigger if exists trg_fin_periodos_bloqueia_reabertura on fin_periodos;
+drop trigger if exists trg_fin_periodos_bloqueia_fechamento_direto on fin_periodos;
+drop function if exists fin_periodos_bloqueia_fechamento_direto();
 drop trigger if exists trg_fin_par_status_consistente on fin_lancamentos;
 drop trigger if exists trg_fin_transferencias_guarda on fin_transferencias;
 drop trigger if exists trg_fin_saldos_periodo on fin_saldos_abertura;
 drop trigger if exists trg_fin_periodos_guarda on fin_periodos;
 drop function if exists fin_periodos_bloqueia_reabertura();
-drop function if exists fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int,jsonb);
+drop function if exists fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,text[],jsonb);
 drop function if exists fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text);
 drop function if exists fin_consumir_excecao_fechamento(uuid,uuid);
 drop function if exists fin_cancelar_transferencia(uuid,uuid,uuid,uuid,text);
@@ -119,10 +121,12 @@ drop function if exists fin_desvincular_transferencia_motivada(uuid,uuid,uuid,uu
 drop function if exists fin_par_status_consistente();
 drop function if exists fin_transferencias_guarda();
 drop function if exists fin_reabrir_periodo(uuid,uuid,uuid,date,int,text);
-drop function if exists fin_fechar_periodo(uuid,uuid,uuid,date,int,text,jsonb,int,boolean);
+drop function if exists fin_fechar_periodo(uuid,uuid,uuid,date,int,text,jsonb,text[],boolean);
 drop function if exists fin_abrir_periodo(uuid,uuid,uuid,date);
 drop function if exists fin_fingerprint_periodo(uuid,uuid,date);
 drop table if exists fin_excecoes_fechamento cascade;
+drop function if exists fin_mfa_evidencia_valida(jsonb);
+drop function if exists fin_ids_conciliacao_validos(text[]);
 drop function if exists fin_excecoes_fechamento_guarda();
 drop table if exists fin_sangria_excecoes, fin_conciliacao_resolucoes, fin_referencias cascade;
 drop function if exists fin_guarda_periodo_data();

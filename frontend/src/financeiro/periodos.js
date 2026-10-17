@@ -1,7 +1,7 @@
-// Períodos — abertura, pré-fechamento, fechamento (snapshot imutável) e reabertura controlada.
+// Períodos — abertura, pré-fechamento, fechamento (snapshot imutável) (a reabertura está desabilitada).
 // Fechar com pendências NÃO é uma política que o gestor liga: só por EXCEÇÃO por unidade e competência, aprovada por SuperAdmin (uso único), e com
-// reconhecimento explícito. Esta tela apenas MOSTRA a exceção — não há botão para pedir/conceder. A reabertura depende de uma
-// autorização que nenhum nível possui nesta versão: a tela só oferece o botão a quem tiver `reabrir`, e o servidor decide (fail-closed).
+// reconhecimento explícito. Esta tela apenas MOSTRA a exceção — não há botão para pedir/conceder.
+// A reabertura NÃO existe nesta versão (nem botão nem rota): fica desabilitada até a política de autorização ser aprovada.
 import { fin } from "./api.js";
 import { moeda, pct, rotuloMes, podeAcao, ACAO_FECHAMENTO, ROTULO_STATUS_PERIODO } from "./modelo.js";
 import { garantirCss, cabecalho, tabela, badge, carregarEm, dialogo, campo, aviso, esc, estado } from "./ui.js";
@@ -12,7 +12,7 @@ export async function render(container, ctx) {
   const raiz = document.createElement("section");
   raiz.className = "fin-pg";
   container.appendChild(raiz);
-  const pFechar = podeAcao(ctx, ACAO_FECHAMENTO.FECHAR), pReabrir = podeAcao(ctx, ACAO_FECHAMENTO.REABRIR);
+  const pFechar = podeAcao(ctx, ACAO_FECHAMENTO.FECHAR);
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
@@ -45,22 +45,13 @@ export async function render(container, ctx) {
       { rotulo: "", render: (p) => `<div class="fin-linha-acoes">
         ${p.status !== "fechado" ? `<button class="btn btn-ghost btn-sm" data-pre="${esc(p.mes)}">Pré-fechamento</button>` : ""}
         ${p.status === "fechado" ? `<button class="btn btn-ghost btn-sm" data-snap="${esc(p.mes)}">Ver snapshot</button>` : ""}
-        ${p.status === "fechado" && pReabrir ? `<button class="btn btn-ghost btn-sm" data-reabrir="${esc(p.mes)}|${p.versao}">Reabrir</button>` : ""}</div>` },
+      </div>` },
     ], linhas: periodos, vazio: "Nenhum período ainda. Os meses aparecem ao registrar lançamentos ou ao abrir um período." }).replace('class="fin-tabela"', 'class="fin-tabela fin-tabela--cartao"');
     corpo.innerHTML = `${pol}<div class="fin-card"><h3>Meses</h3>${tb}</div>
-      <p class="fin-sub">Reabrir exige autorização específica que ainda não foi concedida a nenhum nível; sem ela a operação é recusada pelo servidor.</p>`;
+      <p class="fin-sub">A reabertura de períodos fechados está desabilitada: não há botão nem rota até a política de autorização ser aprovada.</p>`;
 
     corpo.querySelectorAll("[data-pre]").forEach((b) => b.addEventListener("click", () => preFechamento(b.dataset.pre)));
     corpo.querySelectorAll("[data-snap]").forEach((b) => b.addEventListener("click", () => snapshot(periodos.find((p) => p.mes === b.dataset.snap))));
-    corpo.querySelectorAll("[data-reabrir]").forEach((b) => b.addEventListener("click", () => {
-      const [mes, versao] = b.dataset.reabrir.split("|");
-      dialogo({
-        titulo: `Reabrir ${rotuloMes(mes)}`, enviar: "Reabrir período", perigo: true,
-        corpo: `<p>O mês volta a aceitar alterações. A reabertura fica na auditoria e o snapshot anterior é preservado no histórico.</p>
-          <label class="fin-campo"><span>Motivo (mín. 10 caracteres) *</span><textarea name="motivo" rows="3" required minlength="10" maxlength="1000"></textarea></label>`,
-        aoEnviar: async (d) => { await fin.post(`/periodos/${mes}/reabrir`, { motivo: d.get("motivo"), versao: Number(versao) }); aviso("Período reaberto."); carregar(); },
-      });
-    }));
   }
 
   async function preFechamento(mes) {

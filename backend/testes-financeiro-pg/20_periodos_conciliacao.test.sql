@@ -27,7 +27,7 @@ begin
   return v_id;
 end $$;
 
-create function pg_temp.mfa() returns jsonb language sql as $$ select jsonb_build_object('aal', 'aal2', 'em', now()) $$;
+create function pg_temp.mfa(p_idade interval default interval '0') returns jsonb language sql as $$ select jsonb_build_object('aal', 'aal2', 'em', to_char((now() - p_idade) at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')) $$;
 
 -- 1) abrir período é idempotente; mês inválido recusado; outro tenant não enxerga
 do $$
@@ -51,7 +51,7 @@ begin
   select * into c from ctx;
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 100000, '2026-09-02');
   fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-09-01');
-  per := fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-09-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2026-09-01')->>'versao')::int, fp, '{"resultado": 100000}', 0, false);
+  per := fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-09-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2026-09-01')->>'versao')::int, fp, '{"resultado": 100000}', '{}'::text[], false);
   if per->>'status' <> 'fechado' or per->>'fechado_por' is null or per->'snapshot'->>'resultado' <> '100000' then raise exception 'FALHA 2a: %', per; end if;
   if (per->'snapshot'->>'fingerprint') <> fp then raise exception 'FALHA 2a2: fingerprint nao gravado'; end if;
   begin perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2026-09-03'); exception when sqlstate '23514' then ok1 := true; end;
@@ -61,6 +61,18 @@ begin
   if not ok3 then raise exception 'FALHA 2c: snapshot mutavel'; end if;
   begin update fin_periodos set status = 'aberto' where unidade_id = c.u1 and mes = '2026-09-01'; exception when sqlstate '23514' then ok4 := true; end;
   if not ok4 then raise exception 'FALHA 2d: reabriu sem a funcao'; end if;
+  -- F-D: ninguém fecha por UPDATE/INSERT direto (contornaria exceção, fingerprint e versão), nem mês limpo nem com pendência
+  perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-09-02', true);
+  ok1 := false; begin update fin_periodos set status = 'fechado', fechado_por = c.usr, fechado_em = now(), snapshot = '{"x":1}' where unidade_id = c.u1 and mes = '2027-09-01'; exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_fechamento_via_funcao%'); end;
+  ok2 := false; begin insert into fin_periodos (organizacao_id, unidade_id, mes, status, fechado_por, fechado_em, snapshot) values (c.org1, c.u1, '2027-10-01', 'fechado', c.usr, now(), '{"x":1}'); exception when sqlstate '23514' then ok2 := (sqlerrm like 'fin_fechamento_via_funcao%'); end;
+  if not (ok1 and ok2) then raise exception 'FALHA 2i (F-D): fechamento direto aceito (% %)', ok1, ok2; end if;
+  -- uma flag de OUTRO período não autoriza
+  perform set_config('fin.fechando_periodo', gen_random_uuid()::text, true);
+  ok1 := false; begin update fin_periodos set status = 'fechado', fechado_por = c.usr, fechado_em = now(), snapshot = '{"x":1}' where unidade_id = c.u1 and mes = '2027-09-01'; exception when sqlstate '23514' then ok1 := true; end;
+  perform set_config('fin.fechando_periodo', '', true);
+  if not ok1 then raise exception 'FALHA 2j (F-D): flag de outro periodo autorizou'; end if;
+  -- fechamento legítimo (mês limpo) segue funcionando, e a flag não vaza para a sessão
+  if current_setting('fin.fechando_periodo', true) <> '' then raise exception 'FALHA 2k: flag vazou'; end if;
   -- outro mês da mesma unidade segue aberto
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 5, '2026-10-02');
   -- reabertura exige motivo, versão correta e período fechado
@@ -98,9 +110,9 @@ begin
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1000, '2026-11-02');
   fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-11-01');
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 2000, '2026-11-03');   -- alteração depois da impressão
-  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-11-01', (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-11-01'), fp, '{}', 0, false);
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-11-01', (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-11-01'), fp, '{}', '{}'::text[], false);
   exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_periodo_conflito_dados%'); end;
-  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-11-01', v + 50, fin_fingerprint_periodo(c.org1, c.u1, '2026-11-01'), '{}', 0, false);
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-11-01', v + 50, fin_fingerprint_periodo(c.org1, c.u1, '2026-11-01'), '{}', '{}'::text[], false);
   exception when sqlstate '23514' then ok2 := (sqlerrm like 'fin_periodo_conflito_versao%'); end;
   if not (ok1 and ok2) then raise exception 'FALHA 3: conflitos nao detectados (% %)', ok1, ok2; end if;
   if (select status from fin_periodos where unidade_id = c.u1 and mes = '2026-11-01') <> 'aberto' then raise exception 'FALHA 3b: fechou apesar do conflito'; end if;
@@ -114,10 +126,10 @@ begin
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1000, '2026-12-02', true);
   v := (fin_abrir_periodo(c.org1, c.u1, c.usr, '2026-12-01')->>'versao')::int;
   fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01');
-  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 0, true); exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_periodo_pendencias:%'); end;
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', '{}'::text[], true); exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_periodo_pendencias:%'); end;
   -- pendência da conciliação (informada pelo backend) também impede
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-01-02');
-  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-01-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2027-01-01'), '{}', 2, false);
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-01-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2027-01-01'), '{}', array['caixa_dia:2030-01-01', 'caixa_dia:2030-01-02'], false);
   exception when sqlstate '23514' then ok2 := (sqlerrm like 'fin_periodo_pendencias:%'); end;
   if not (ok1 and ok2) then raise exception 'FALHA 4a: fechou com pendencias (% %)', ok1, ok2; end if;
   -- NÃO existe política geral: a tabela fin_config não existe mais
@@ -130,38 +142,63 @@ declare c ctx; v int; fp text; ok boolean; per jsonb; ex jsonb; novo uuid; ex2 j
 begin
   select * into c from ctx;
   -- 4b) validações da concessão
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'curta', 7, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_justificativa_obrigatoria%'); end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'curta', 7, '{}'::text[], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_justificativa_obrigatoria%'); end;
   if not ok then raise exception 'FALHA 4b1: aceitou justificativa curta'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 31, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_validade_invalida%'); end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 31, '{}'::text[], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_validade_invalida%'); end;
   if not ok then raise exception 'FALHA 4b2: aceitou validade > 30 dias (excecao permanente)'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 0, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 0, '{}'::text[], pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;
   if not ok then raise exception 'FALHA 4b3: aceitou validade 0'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, null, '2026-12-01', 'justificativa suficientemente longa', 7, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, null, '2026-12-01', 'justificativa suficientemente longa', 7, '{}'::text[], pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;
   if not ok then raise exception 'FALHA 4b4: aceitou sem responsavel'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-02-01', 'justificativa suficientemente longa', 7, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_sem_pendencias%'); end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-02-01', 'justificativa suficientemente longa', 7, '{}'::text[], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_sem_pendencias%'); end;
   if not ok then raise exception 'FALHA 4b5: concedeu excecao sem pendencia'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u3, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, 1, pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;   -- unidade de outra organização
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u3, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, array['caixa_dia:2030-01-01'], pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;   -- unidade de outra organização
   if not ok then raise exception 'FALHA 4b6: concedeu excecao para unidade de outra organizacao'; end if;
-  -- sem MFA recente (AAL2) não há exceção: ausente, AAL1, vencido (>15 min) ou do futuro
-  foreach msg in array array['null', '{"aal":"aal1","em":"now"}', '{"aal":"aal2","em":"old"}', '{"aal":"aal2","em":"future"}', '{"aal":"aal2"}'] loop
+  -- JANELA DE 10 MIN (decisão do usuário, LD-009): 9 min 59 s aceita; 10 min 1 s recusa; futuro além de 60 s recusa; sem MFA/AAL1/sem 'em' recusa
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, '{}'::text[], pg_temp.mfa(interval '10 minutes 1 second')); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_mfa_invalida%'); end;
+  if not ok then raise exception 'FALHA 4b7: aceitou MFA com mais de 10 min'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, '{}'::text[], pg_temp.mfa(interval '-61 seconds')); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_mfa_invalida%'); end;
+  if not ok then raise exception 'FALHA 4b8: aceitou MFA do futuro'; end if;
+  foreach msg in array array['null', '{"aal":"aal1","em":"2026-10-17T13:40:00Z"}', '{"aal":"aal2"}', '{"aal":"aal2","em":1760000000000}', '{"aal":"aal2","em":"hoje"}'] loop
     ok := false;
-    begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, 0,
-            case msg when 'null' then null
-                     else replace(replace(replace(msg, '"now"', '"' || now()::text || '"'), '"old"', '"' || (now() - interval '2 hours')::text || '"'), '"future"', '"' || (now() + interval '2 hours')::text || '"')::jsonb end);
+    begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, '{}'::text[], case msg when 'null' then null else msg::jsonb end);
     exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_mfa_invalida%'); end;
-    if not ok then raise exception 'FALHA 4b7: concedeu excecao sem MFA recente (%)', msg; end if;
+    if not ok then raise exception 'FALHA 4b9: concedeu excecao sem MFA valido (%)', msg; end if;
   end loop;
+  -- lista FECHADA de chaves e nada com cara de token: chave extra, jwt em qualquer lugar, sessao_ref cru, metodo desconhecido
+  foreach msg in array array[
+      'x1|"extra":"valor"',
+      'x2|"metodo":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.assinaturaassinatura"',
+      'x3|"sessao_ref":"0f3c2a77-aaaa-bbbb-cccc-1234567890ab"',
+      'x4|"sessao_ref":"abc.def.ghi"',
+      'x5|"metodo":"sms"',
+      'x6|"jwt":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.assinaturaassinatura"'] loop
+    ok := false;
+    begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, '{}'::text[],
+            (replace(pg_temp.mfa()::text, '}', ',' || split_part(msg, '|', 2) || '}'))::jsonb);
+    exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_mfa_invalida%'); end;
+    if not ok then raise exception 'FALHA 4b10: evidencia fora da lista permitida aceita (%)', split_part(msg, '|', 1); end if;
+  end loop;
+  -- o CHECK da tabela recusa o mesmo, mesmo contornando a função (dono + flag)
+  ok := false;
+  begin
+    perform set_config('fin.excecao_op', 'conceder', true);
+    insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, pendencias_hash, quantidade, aprovada_por, mfa_evidencia, expira_em)
+    values (c.org1, c.u1, '2026-12-01', 'justificativa suficientemente longa', '[{"id":"x"}]', repeat('0', 64), 1, c.usr, '{"aal":"aal2","em":"2026-10-17T13:40:00Z","token":"abc"}', now() + interval '3 days');
+  exception when check_violation then ok := true; end;
+  perform set_config('fin.excecao_op', '', true);
+  if not ok then raise exception 'FALHA 4b11: CHECK da evidencia nao barrou chave extra'; end if;
   -- 4c) ninguém escreve na tabela por fora das funções
-  ok := false; begin insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, quantidade, aprovada_por, expira_em)
-    values (c.org1, c.u1, '2026-12-01', 'justificativa suficientemente longa', '[{"id":"x"}]', 1, c.usr, now() + interval '3 days'); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_via_funcao%'); end;
+  ok := false; begin insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, pendencias_hash, quantidade, aprovada_por, expira_em)
+    values (c.org1, c.u1, '2026-12-01', 'justificativa suficientemente longa', '[{"id":"x"}]', repeat('0', 64), 1, c.usr, now() + interval '3 days'); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_via_funcao%'); end;
   if not ok then raise exception 'FALHA 4c1: INSERT direto aceito'; end if;
   -- 4d) concede (nada nas pendências muda) e prova que as pendências foram IDENTIFICADAS
   select count(*) into n from fin_lancamentos where unidade_id = c.u1 and data_movimento >= '2026-12-01' and data_movimento < '2027-01-01' and classificacao_pendente;
-  ex := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa: aguardando extrato do banco para classificar', 7, 0, pg_temp.mfa());
+  ex := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa: aguardando extrato do banco para classificar', 7, '{}'::text[], pg_temp.mfa(interval '9 minutes 59 seconds') || jsonb_build_object('metodo', 'totp', 'sessao_ref', encode(sha256(convert_to('sessao-sintetica', 'UTF8')), 'hex')));
   if ex->>'status' <> 'ativa' or (ex->>'quantidade')::int <> 1 or jsonb_array_length(ex->'pendencias') <> 1 or (ex->'pendencias'->0->>'id') is null then raise exception 'FALHA 4d1: %', ex; end if;
-if ex->'mfa_evidencia'->>'aal' <> 'aal2' or ex->>'aprovada_por' is null or (ex->>'expira_em')::timestamptz > now() + interval '7 days 1 minute' then raise exception 'FALHA 4d1b: evidencia de MFA/aprovador/validade ausentes'; end if;  ok := false; begin update fin_excecoes_fechamento set mfa_evidencia = '{"aal":"aal2","em":"2020-01-01T00:00:00Z"}' where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;  if not ok then raise exception 'FALHA 4d1c: evidencia de MFA mutavel'; end if;
+if ex->'mfa_evidencia'->>'aal' <> 'aal2' or ex->'mfa_evidencia'->>'metodo' <> 'totp' or length(ex->'mfa_evidencia'->>'sessao_ref') <> 64 or ex->>'aprovada_por' is null or (ex->>'expira_em')::timestamptz > now() + interval '7 days 1 minute' or (ex->>'expira_em')::timestamptz < now() + interval '6 days' then raise exception 'FALHA 4d1b: evidencia de MFA/aprovador/validade ausentes'; end if;  ok := false; begin update fin_excecoes_fechamento set mfa_evidencia = '{"aal":"aal2","em":"2020-01-01T00:00:00Z"}' where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;  if not ok then raise exception 'FALHA 4d1c: evidencia de MFA mutavel'; end if;
   if (select count(*) from fin_lancamentos where unidade_id = c.u1 and data_movimento >= '2026-12-01' and data_movimento < '2027-01-01' and classificacao_pendente) <> n then raise exception 'FALHA 4d2: conceder alterou pendencias'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'segunda excecao para o mesmo mes e unidade', 7, 0, pg_temp.mfa()); exception when unique_violation then ok := true; end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'segunda excecao para o mesmo mes e unidade', 7, '{}'::text[], pg_temp.mfa()); exception when unique_violation then ok := true; end;
   if not ok then raise exception 'FALHA 4d3: duas excecoes ativas para a mesma competencia'; end if;
   -- imutável: conteúdo, apagar, reclassificar
   ok := false; begin update fin_excecoes_fechamento set justificativa = 'justificativa alterada depois de concedida' where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;
@@ -178,26 +215,45 @@ if ex->'mfa_evidencia'->>'aal' <> 'aal2' or ex->>'aprovada_por' is null or (ex->
   -- 4e) fechar exige reconhecimento mesmo com exceção
   v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
   fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01');
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 0, false); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_pendencias_nao_reconhecidas%'); end;
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', '{}'::text[], false); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_pendencias_nao_reconhecidas%'); end;
   if not ok then raise exception 'FALHA 4e1: fechou com excecao sem reconhecimento'; end if;
   -- 4f) pendência NOVA depois da concessão invalida a cobertura
   novo := pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 3, '2026-12-05', true);
   fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01'); v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 0, true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', '{}'::text[], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
   if not ok then raise exception 'FALHA 4f1: pendencia nova coberta pela excecao antiga'; end if;
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 5, true); exception when sqlstate '23514' then ok := true; end;   -- mais pendências de conciliação que as identificadas
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', array['caixa_dia:2030-01-01', 'caixa_dia:2030-01-02', 'caixa_dia:2030-01-03', 'caixa_dia:2030-01-04', 'caixa_dia:2030-01-05'], true); exception when sqlstate '23514' then ok := true; end;   -- mais pendências de conciliação que as identificadas
   if not ok then raise exception 'FALHA 4f2: pendencia de conciliacao nova coberta'; end if;
   if (select status from fin_excecoes_fechamento where id = (ex->>'id')::uuid) <> 'ativa' then raise exception 'FALHA 4f3: excecao gasta em tentativa que falhou'; end if;
   update fin_lancamentos set status = 'cancelado' where id = novo;
+  -- 4f') TROCA 1-por-1: a pendência coberta é RESOLVIDA e outra NOVA surge, com o MESMO total ⇒ recusa (conjunto de ids, não quantidade); a exceção segue ativa
+  update fin_lancamentos set classificacao_pendente = false, categoria_id = (select id from fin_plano_contas where organizacao_id = c.org1 and nome = 'VENDAS')
+   where unidade_id = c.u1 and data_movimento >= '2026-12-01' and data_movimento < '2027-01-01' and status <> 'cancelado' and id = ((ex->'pendencias'->0)->>'id')::uuid;
+  novo := pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 4, '2026-12-06', true);
+  fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01'); v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', '{}'::text[], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
+  if not ok then raise exception 'FALHA 4f4: troca 1-por-1 foi coberta por quantidade igual'; end if;
+  if (select status from fin_excecoes_fechamento where id = (ex->>'id')::uuid) <> 'ativa' then raise exception 'FALHA 4f5: excecao gasta na tentativa recusada'; end if;
+  -- restaura o cenário: a pendência original volta e a nova é cancelada
+  update fin_lancamentos set classificacao_pendente = true where id = ((ex->'pendencias'->0)->>'id')::uuid;
+  update fin_lancamentos set status = 'cancelado' where id = novo;
+  -- motivo NOVO numa pendência coberta também invalida (ids iguais, motivos diferentes)
+  update fin_lancamentos set revisao_motivos = array['motivo_novo_depois_da_excecao'] where id = ((ex->'pendencias'->0)->>'id')::uuid;
+  fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01'); v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', '{}'::text[], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
+  if not ok then raise exception 'FALHA 4f6: motivo novo nao invalidou a cobertura'; end if;
+  update fin_lancamentos set revisao_motivos = '{}' where id = ((ex->'pendencias'->0)->>'id')::uuid;
+  -- revogável depois da pendência nova, e a nova exceção precisa recobrir tudo (ver 4i)
+  
   -- 4g) outra unidade / outro mês não são cobertos pela exceção de u1/2026-12
   insert into fin_contas (organizacao_id, unidade_id, nome, tipo_conta) values (c.org1, c.u2, 'BANCO', 'banco') on conflict do nothing;
   perform pg_temp.lanc(c.u2, 'BANCO', 'VENDAS', 'entrada', 1, '2026-12-02', true);
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u2, c.usr, '2026-12-01', (fin_abrir_periodo(c.org1, c.u2, c.usr, '2026-12-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u2, '2026-12-01'), '{}', 0, true);
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u2, c.usr, '2026-12-01', (fin_abrir_periodo(c.org1, c.u2, c.usr, '2026-12-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u2, '2026-12-01'), '{}', '{}'::text[], true);
   exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_pendencias:%'); end;
   if not ok then raise exception 'FALHA 4g1: excecao de outra unidade valeu'; end if;
   -- 4h) fecha com a exceção: consumida, uso único, snapshot com o id e as pendências
   fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01'); v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
-  per := fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', 0, true);
+  per := fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', '{}'::text[], true);
   if per->>'status' <> 'fechado' or (per->'snapshot'->>'pendenciasNoFechamento')::int <> 1 or per->'snapshot'->>'excecaoFechamentoId' <> ex->>'id' then raise exception 'FALHA 4h1: %', per; end if;
   if per->'snapshot' ? 'politicaPermitiaPendencias' then raise exception 'FALHA 4h2: snapshot ainda menciona politica'; end if;
   if (select status from fin_excecoes_fechamento where id = (ex->>'id')::uuid) <> 'consumida' then raise exception 'FALHA 4h3: excecao nao consumida'; end if;
@@ -207,17 +263,55 @@ if ex->'mfa_evidencia'->>'aal' <> 'aal2' or ex->>'aprovada_por' is null or (ex->
   if not ok then raise exception 'FALHA 4h5: revogou excecao consumida'; end if;
   -- 4i) revogação: motivo obrigatório; depois o fechamento volta a ser impedido
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-03-02', true);
-  ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa: pendencia aguardando comprovante', 5, 0, pg_temp.mfa());
+  ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa: pendencia aguardando comprovante', 5, '{}'::text[], pg_temp.mfa());
   ok := false; begin perform fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'curto'); exception when sqlstate '23514' then ok := true; end;
   if not ok then raise exception 'FALHA 4i1: revogou sem motivo'; end if;
   if not fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'concedida por engano, revogada') then raise exception 'FALHA 4i2'; end if;
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-03-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-03-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2027-03-01'), '{}', 0, true);
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-03-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-03-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2027-03-01'), '{}', '{}'::text[], true);
   exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_pendencias:%'); end;
   if not ok then raise exception 'FALHA 4i3: fechou com excecao revogada'; end if;
   if fin_revogar_excecao_fechamento(c.org2, c.u3, c.usr, (ex2->>'id')::uuid, 'tenant errado tentando revogar') then raise exception 'FALHA 4i4: revogou de outro tenant'; end if;
+  -- 4i') exceção VENCIDA não vale no fechamento: ainda 'ativa' na tabela, mas expira_em no passado ⇒ comporta-se como sem exceção
+  perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-06-02', true);
+  perform set_config('fin.excecao_op', 'conceder', true);
+  insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, pendencias_hash, quantidade, aprovada_por, mfa_evidencia, aprovada_em, expira_em)
+  select c.org1, c.u1, '2027-06-01', 'excecao sintetica ja vencida para teste', jsonb_build_array(jsonb_build_object('id', l.id, 'motivos', '[]'::jsonb)), repeat('0', 64), 1, c.usr,
+         pg_temp.mfa(), now() - interval '5 days', now() - interval '1 day' from fin_lancamentos l where l.unidade_id = c.u1 and l.data_movimento = '2027-06-02' and l.classificacao_pendente;
+  perform set_config('fin.excecao_op', '', true);
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-06-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-06-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2027-06-01'), '{}', '{}'::text[], true);
+  exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_pendencias:%'); end;
+  if not ok then raise exception 'FALHA 4i5: excecao vencida valeu no fechamento'; end if;
+  if (select status from fin_excecoes_fechamento where mes = '2027-06-01' and unidade_id = c.u1) <> 'ativa' then raise exception 'FALHA 4i6: vencida foi consumida'; end if;
+  -- uma nova concessão substitui a vencida (a vencida fica registrada como revogada)
+  ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-06-01', 'justificativa: nova excecao apos vencimento da anterior', 5, '{}'::text[], pg_temp.mfa());
+  if (select count(*) from fin_excecoes_fechamento where mes = '2027-06-01' and unidade_id = c.u1 and status = 'revogada') <> 1 then raise exception 'FALHA 4i7: vencida nao foi encerrada'; end if;
+
+  -- 4k) PENDÊNCIAS DE CONCILIAÇÃO com id estável ("escopo:chave"): conjunto, não contagem; resolver é permitido; trocar 1-por-1 ou criar nova é recusado
+  perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-08-02', true);
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa suficientemente longa', 7, array['ponte_mensal:agosto'], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_pendencias_invalidas%'); end;
+  if not ok then raise exception 'FALHA 4k0: aceitou id de conciliacao em formato invalido'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa suficientemente longa', 7, array['caixa_dia:2027-08-03', 'caixa_dia:2027-08-03'], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_pendencias_invalidas%'); end;
+  if not ok then raise exception 'FALHA 4k0b: aceitou ids repetidos'; end if;
+  ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa: pendencias de conciliacao conhecidas do mes', 7, array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-03'], pg_temp.mfa());
+  if jsonb_array_length(ex2->'pendencias_conciliacao_ids') <> 2 or (ex2->>'pendencias_hash') !~ '^[0-9a-f]{64}$' then raise exception 'FALHA 4k1: %', ex2; end if;
+  v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2027-08-01'); fp := fin_fingerprint_periodo(c.org1, c.u1, '2027-08-01');
+  -- troca 1-por-1 na conciliação: mesmo total (2), um id diferente ⇒ recusa; a exceção segue ativa
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-04'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
+  if not ok then raise exception 'FALHA 4k2: troca 1-por-1 de pendencia de conciliacao passou'; end if;
+  -- uma pendência de conciliação NOVA além das cobertas ⇒ recusa
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-03', 'sangria_dia:2027-08-03'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
+  if not ok then raise exception 'FALHA 4k3: pendencia de conciliacao nova coberta'; end if;
+  -- ids inválidos no fechamento
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['qualquer coisa'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_pendencia_conciliacao_invalida%'); end;
+  if not ok then raise exception 'FALHA 4k4: aceitou id invalido no fechamento'; end if;
+  if (select status from fin_excecoes_fechamento where id = (ex2->>'id')::uuid) <> 'ativa' then raise exception 'FALHA 4k5: excecao gasta em tentativa recusada'; end if;
+  -- resolver uma das pendências de conciliação (subconjunto) é permitido e consome a exceção
+  per := fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['caixa_dia:2027-08-03'], true);
+  if per->>'status' <> 'fechado' or (per->'snapshot'->>'pendenciasNoFechamento')::int <> 2 or per->'snapshot'->>'excecaoFechamentoId' <> ex2->>'id' then raise exception 'FALHA 4k6: %', per; end if;
+
   -- 4j) service_role (o backend) NÃO conceda, NÃO revoga, NÃO escreve na tabela — só lê
   set local role service_role;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa suficientemente longa', 7, 0, pg_temp.mfa()); exception when insufficient_privilege then ok := true; end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa suficientemente longa', 7, '{}'::text[], pg_temp.mfa()); exception when insufficient_privilege then ok := true; end;
   if not ok then reset role; raise exception 'FALHA 4j1: service_role concede excecao'; end if;
   ok := false; begin perform fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'tentativa de revogar sem privilegio'); exception when insufficient_privilege then ok := true; end;
   if not ok then reset role; raise exception 'FALHA 4j2: service_role revoga excecao'; end if;
@@ -244,7 +338,7 @@ begin
   if not (ok5 and ok6) then raise exception 'FALHA 5b: % %', ok5, ok6; end if;
   insert into fin_conciliacao_resolucoes (organizacao_id, unidade_id, escopo, chave, classificacao, valor_centavos, diferenca_no_momento_centavos, nota, criado_por) values (c.org1, c.u1, 'ponte_mensal', '2026-10-01', 'prazo', -13101, -13101, 'vendas de fim de mes recebidas depois', c.usr);
   -- mês fechado bloqueia referência, resolução e abertura
-  perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-10-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2026-10-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2026-10-01'), '{}', 0, false);
+  perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-10-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2026-10-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2026-10-01'), '{}', '{}'::text[], false);
   ok1 := false; ok2 := false; ok3 := false;
   begin insert into fin_referencias (organizacao_id, unidade_id, data, tipo, valor_centavos, fonte) values (c.org1, c.u1, '2026-10-06', 'venda', 1, 'manual'); exception when sqlstate '23514' then ok1 := true; end;
   begin insert into fin_conciliacao_resolucoes (organizacao_id, unidade_id, escopo, chave, classificacao, valor_centavos, diferenca_no_momento_centavos, nota) values (c.org1, c.u1, 'caixa_dia', '2026-10-06', 'ajuste', 5, 5, 'nota valida'); exception when sqlstate '23514' then ok2 := true; end;

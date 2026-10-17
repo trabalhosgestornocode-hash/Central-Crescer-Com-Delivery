@@ -26,7 +26,7 @@ sleep 1
 # Sessão B: tenta fechar com a impressão antiga. Deve BLOQUEAR até A terminar e então falhar por conflito de dados.
 INI=$(date +%s)
 set +e
-SAIDA=$(q -c "select fin_fechar_periodo('$ORG','$UNI','$USR','2027-03-01',$VERSAO,'$FP','{}'::jsonb,0,false);" 2>&1)
+SAIDA=$(q -c "select fin_fechar_periodo('$ORG','$UNI','$USR','2027-03-01',$VERSAO,'$FP','{}'::jsonb,'{}'::text[],false);" 2>&1)
 COD=$?
 set -e
 FIM=$(date +%s)
@@ -39,7 +39,7 @@ echo "$SAIDA" | grep -q "fin_periodo_conflito_dados" || { echo "FALHA: erro ines
 # Retentativa com a impressão atual: fecha, e a escrita concorrente está incluída no mês
 FP2=$(q -c "select fin_fingerprint_periodo('$ORG','$UNI','2027-03-01');")
 V2=$(q -c "select versao from fin_periodos where unidade_id='$UNI' and mes='2027-03-01';")
-q -c "select fin_fechar_periodo('$ORG','$UNI','$USR','2027-03-01',$V2,'$FP2','{}'::jsonb,0,false);" >/dev/null
+q -c "select fin_fechar_periodo('$ORG','$UNI','$USR','2027-03-01',$V2,'$FP2','{}'::jsonb,'{}'::text[],false);" >/dev/null
 [ "$(q -c "select count(*) from fin_lancamentos where unidade_id='$UNI' and data_movimento >= '2027-03-01' and data_movimento < '2027-04-01';")" = "2" ] || { echo "FALHA: contagem apos fechamento"; exit 1; }
 echo "CONCORRENCIA OK (fechamento esperou ${INI}->${FIM}, conflito detectado, retentativa fechou)"
 
@@ -93,8 +93,27 @@ espera_min $INI $FIM
 # E) rollback integral: fecha o mês DEPOIS de criar o par; o cancelamento falha e as duas pernas seguem ativas
 PAR=$(novo_par 5 06)
 FPE=$(q -c "select fin_fingerprint_periodo('$ORG','$UNI','2027-06-01');"); VE=$(q -c "select versao from fin_periodos where unidade_id='$UNI' and mes='2027-06-01';")
-q -c "select fin_fechar_periodo('$ORG','$UNI','$USR','2027-06-01',$VE,'$FPE','{}'::jsonb,0,false);" >/dev/null
+q -c "select fin_fechar_periodo('$ORG','$UNI','$USR','2027-06-01',$VE,'$FPE','{}'::jsonb,'{}'::text[],false);" >/dev/null
 set +e; RES=$(q -c "select fin_cancelar_transferencia('$ORG','$UNI','$USR','$PAR','tentando cancelar em mes fechado');" 2>&1); COD=$?; set -e
 [ $COD -ne 0 ] && echo "$RES" | grep -q "fin_periodo_fechado" || { echo "FALHA E: deveria recusar por periodo fechado: $RES"; exit 1; }
 [ "$(estados "$PAR")" = "realizado,realizado" ] && [ "$(q -c "select status from fin_transferencias where id='$PAR';")" = "vinculada" ] || { echo "FALHA E: algo mudou apesar da recusa"; exit 1; }
 echo "CONCORRENCIA DO CANCELAMENTO OK (A: idempotente, B: desvinculo recusado, C: cancelar apos desvinculo, D: edicao preservada, E: rollback integral)"
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Concorrência da EXCEÇÃO DE FECHAMENTO (LD-009/A4): duas sessões reais fecham o MESMO (unidade, mês) com a MESMA exceção de uso único.
+# Esperado: só UMA fecha e consome; a outra espera e é recusada (período já fechado); a exceção fica consumida UMA vez.
+# ---------------------------------------------------------------------------------------------------------------------
+q -c "insert into fin_lancamentos (organizacao_id, unidade_id, conta_id, categoria_id, descricao, sentido, valor_centavos, data_movimento, classificacao_pendente) values ('$ORG','$UNI','$CONTA','$CAT','pendente conc','entrada',700,'2027-07-02', true);" >/dev/null
+EXC=$(q -c "select (fin_conceder_excecao_fechamento('$ORG','$UNI','$USR','2027-07-01','justificativa da excecao para teste de corrida',5,'{}'::text[], jsonb_build_object('aal','aal2','em', to_char(now() at time zone 'utc','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'))))->>'id';")
+VX=$(q -c "select versao from fin_periodos where unidade_id='$UNI' and mes='2027-07-01';")
+FPX=$(q -c "select fin_fingerprint_periodo('$ORG','$UNI','2027-07-01');")
+( q -c "begin; select fin_fechar_periodo('$ORG','$UNI','$USR','2027-07-01',$VX,'$FPX','{}'::jsonb,'{}'::text[],true); select pg_sleep(3); commit;" >/dev/null ) &
+PA=$!; sleep 1; INI=$(date +%s)
+set +e; RES=$(q -c "select fin_fechar_periodo('$ORG','$UNI','$USR','2027-07-01',$VX,'$FPX','{}'::jsonb,'{}'::text[],true);" 2>&1); COD=$?; set -e
+FIM=$(date +%s); wait $PA
+[ $COD -ne 0 ] && echo "$RES" | grep -q "fin_periodo_ja_fechado" || { echo "FALHA X: a segunda sessao deveria ser recusada por periodo ja fechado: $RES"; exit 1; }
+[ $((FIM-INI)) -ge 2 ] || { echo "FALHA X: a segunda sessao nao esperou ($((FIM-INI))s)"; exit 1; }
+[ "$(q -c "select status || '/' || (consumida_por is not null)::text from fin_excecoes_fechamento where id='$EXC';")" = "consumida/true" ] || { echo "FALHA X: excecao nao ficou consumida"; exit 1; }
+[ "$(q -c "select count(*) from fin_excecoes_fechamento where unidade_id='$UNI' and mes='2027-07-01' and status='consumida';")" = "1" ] || { echo "FALHA X: excecao consumida mais de uma vez"; exit 1; }
+[ "$(q -c "select snapshot->>'excecaoFechamentoId' from fin_periodos where unidade_id='$UNI' and mes='2027-07-01';")" = "$EXC" ] || { echo "FALHA X: snapshot sem o id da excecao"; exit 1; }
+echo "CONCORRENCIA DA EXCECAO OK (duas sessoes, uso unico: so uma fechou e consumiu; a outra esperou e foi recusada)"

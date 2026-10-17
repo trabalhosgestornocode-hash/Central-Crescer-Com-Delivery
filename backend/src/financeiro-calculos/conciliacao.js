@@ -118,6 +118,12 @@ export function conciliar({ mes, lancamentos, contas, referencias, excecoesSangr
     resumo: {
       contagemPorEstado: contagem,
       pendenciasAbertas: itens.filter((i) => aberto(i.estado)).length,
+      // identidade ESTÁVEL de cada pendência aberta ("escopo:chave"), usada pela exceção de fechamento para comparar CONJUNTOS, não quantidades
+      pendenciasAbertasIds: [
+        ...(aberto(ponte.estado) ? [`${ESCOPO.PONTE}:${ponte.chave}`] : []),
+        ...caixaDias.filter((d) => aberto(d.estado)).map((d) => `${ESCOPO.CAIXA}:${d.chave}`),
+        ...sangriaDias.filter((d) => aberto(d.estado)).map((d) => `${ESCOPO.SANGRIA}:${d.chave}`),
+      ].sort(),
       semReferencia: ponte.estado === ESTADO.SEM_REFERENCIA && !refs.length,
       referenciasNoMes: refs.length,
     },

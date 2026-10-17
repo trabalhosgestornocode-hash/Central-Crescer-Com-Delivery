@@ -36,9 +36,9 @@ export function montarSnapshot({ mes, apuracao: a, dre, saldos, conciliacao, pen
 /**
  * Decide se o mês pode ser fechado AGORA (a decisão final é do banco, sob trava). NÃO existe política geral de "fechar com pendências":
  * a única via é uma EXCEÇÃO por unidade + competência (concedida por SuperAdmin), que cobre SÓ as pendências identificadas no ato da concessão.
- * `excecao` = { id, expiraEm, pendenciasIds: [...], pendenciasConciliacao } da exceção ATIVA e vigente (ou null/undefined).
+ * `excecao` = { id, expiraEm, pendenciasIds: [...], pendenciasConciliacaoIds: [...] } da exceção ATIVA e vigente (ou null/undefined).
  */
-export function avaliarFechamento({ status, pendenciasLancamentos, pendenciasLancamentosIds = [], pendenciasConciliacao, excecao = null }) {
+export function avaliarFechamento({ status, pendenciasLancamentos, pendenciasLancamentosIds = [], pendenciasConciliacao, pendenciasConciliacaoIds = [], excecao = null }) {
   const bloqueios = [];
   if (status === "fechado") bloqueios.push({ codigo: "JA_FECHADO", texto: "O período já está fechado." });
   const total = pendenciasLancamentos + pendenciasConciliacao;
@@ -50,7 +50,8 @@ export function avaliarFechamento({ status, pendenciasLancamentos, pendenciasLan
     } else {
       const cobertos = new Set((excecao.pendenciasIds ?? []).map(String));
       const naoCobertas = pendenciasLancamentosIds.filter((id) => !cobertos.has(String(id))).length;
-      const conciliacaoAcima = Math.max(0, pendenciasConciliacao - (excecao.pendenciasConciliacao ?? 0));
+      const cobertasConc = new Set((excecao.pendenciasConciliacaoIds ?? []).map(String));
+      const conciliacaoAcima = pendenciasConciliacaoIds.filter((id) => !cobertasConc.has(String(id))).length;
       cobertura = { excecaoId: excecao.id, expiraEm: excecao.expiraEm ?? null, naoCobertas: naoCobertas + conciliacaoAcima };
       if (cobertura.naoCobertas > 0) bloqueios.push({ codigo: "EXCECAO_INSUFICIENTE", texto: `A exceção concedida não cobre ${cobertura.naoCobertas} pendência(s) surgida(s) depois da aprovação. Resolva-as ou peça uma nova exceção.` });
     }
