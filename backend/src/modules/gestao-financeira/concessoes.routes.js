@@ -18,6 +18,24 @@ export function exigirLiberacaoDeConcessoes(req, _res, next) {
   return next(new ApiError(r.status, r.mensagem, { codigo: r.codigo }));
 }
 
+// Estado da liberação para a interface (botões desabilitados quando bloqueado). Não executa nada.
+concessoesRouter.get("/estado", (req, res) => {
+  const r = avaliarLiberacaoDeConcessoes(req.user);
+  res.json({ data: r.ok ? { escritaLiberada: true } : { escritaLiberada: false, codigo: r.codigo, mensagem: r.mensagem } });
+});
+
+concessoesRouter.get("/perfis", asyncHandler(async (req, res) => {
+  res.json({ data: await service.perfisElegiveis({ unidadeId: v.uuid(req.query.unidadeId, "Unidade"), atorId: req.user.id }) });
+}));
+
+concessoesRouter.get("/auditoria", asyncHandler(async (req, res) => {
+  res.json({ data: await service.auditoria({
+    unidadeId: v.uuidOpcional(req.query.unidadeId, "Unidade") ?? undefined,
+    perfilId: v.uuidOpcional(req.query.perfilId, "Perfil") ?? undefined,
+    concessaoId: v.uuidOpcional(req.query.concessaoId, "Concessão") ?? undefined,
+  }) });
+}));
+
 concessoesRouter.get("/", asyncHandler(async (req, res) => {
   res.json({ data: await service.listar({
     unidadeId: v.uuidOpcional(req.query.unidadeId, "Unidade") ?? undefined,

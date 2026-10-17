@@ -4,7 +4,9 @@
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
-import { garantirSemAutoconcessao, validarNovaConcessao, validarRevogacao } from "./concessoes.dominio.js";
+import {
+  garantirSemAutoconcessao, validarNovaConcessao, validarRevogacao, situacaoDaConcessao, montarPerfisElegiveis,
+} from "./concessoes.dominio.js";
 
 const COLUNAS = "id, organizacao_id, unidade_id, perfil_id, nivel, somente_financeiro, concedida_por, motivo, concedida_em, expira_em, revogada_em, revogada_por, motivo_revogacao";
 
@@ -28,6 +30,55 @@ export async function listar({ unidadeId, perfilId, incluirRevogadas = false } =
   if (!incluirRevogadas) q = q.is("revogada_em", null);
   const { data, error } = await q;
   if (error) throw ApiError.internal("Falha ao listar concessões.");
+  const linhas = data ?? [];
+
+  // Nome/e-mail do perfil para a tela (somente leitura).
+  const ids = [...new Set(linhas.map((c) => c.perfil_id))];
+  const nomes = {};
+  if (ids.length) {
+    const { data: perfis } = await supabase.from("perfis_operacionais").select("id, nome, conta_id").in("id", ids);
+    const contas = [...new Set((perfis ?? []).map((p) => p.conta_id))];
+    const { data: cs } = contas.length ? await supabase.from("perfis").select("id, nome, email").in("id", contas) : { data: [] };
+    const porConta = Object.fromEntries((cs ?? []).map((c) => [c.id, c]));
+    for (const p of perfis ?? []) nomes[p.id] = { nome: p.nome ?? porConta[p.conta_id]?.nome ?? null, email: porConta[p.conta_id]?.email ?? null };
+  }
+  const agora = Date.now();
+  return linhas.map((c) => ({ ...c, situacao: situacaoDaConcessao(c, agora), perfil_nome: nomes[c.perfil_id]?.nome ?? null, perfil_email: nomes[c.perfil_id]?.email ?? null }));
+}
+
+/** Perfis elegíveis a receber concessão na unidade (nunca o de exibição; a própria conta vem marcada). */
+export async function perfisElegiveis({ unidadeId, atorId }) {
+  const { data: unidade, error: eU } = await supabase.from("unidades").select("id, organizacao_id").eq("id", unidadeId).maybeSingle();
+  if (eU) throw ApiError.internal("Falha ao consultar a unidade.");
+  if (!unidade) throw ApiError.notFound("Unidade não encontrada.");
+  const [vu, ve] = await Promise.all([
+    supabase.from("usuarios_unidades").select("usuario_id, papel, ativo").eq("unidade_id", unidadeId),
+    supabase.from("usuarios_organizacoes").select("usuario_id, papel, ativo").eq("organizacao_id", unidade.organizacao_id),
+  ]);
+  if (vu.error || ve.error) throw ApiError.internal("Falha ao consultar os vínculos.");
+  const contasIds = [...new Set([...(vu.data ?? []), ...(ve.data ?? [])].map((v) => v.usuario_id))];
+  if (!contasIds.length) return [];
+  const [perfis, contas] = await Promise.all([
+    supabase.from("perfis_operacionais").select("id, conta_id, nome").in("conta_id", contasIds).eq("ativo", true),
+    supabase.from("perfis").select("id, nome, email").in("id", contasIds),
+  ]);
+  if (perfis.error || contas.error) throw ApiError.internal("Falha ao consultar os perfis.");
+  return montarPerfisElegiveis({
+    perfis: perfis.data ?? [], contas: Object.fromEntries((contas.data ?? []).map((c) => [c.id, c])),
+    vinculosUnidade: vu.data ?? [], vinculosEmpresa: ve.data ?? [],
+  }, atorId);
+}
+
+/** Histórico de auditoria das concessões (trilha append-only da migration 120). */
+export async function auditoria({ unidadeId, perfilId, concessaoId } = {}) {
+  let q = supabase.from("gestao_financeira_concessoes_auditoria")
+    .select("id, concessao_id, organizacao_id, unidade_id, perfil_id, evento, nivel, ator_id, motivo, ocorreu_em")
+    .order("ocorreu_em", { ascending: false }).limit(200);
+  if (unidadeId) q = q.eq("unidade_id", unidadeId);
+  if (perfilId) q = q.eq("perfil_id", perfilId);
+  if (concessaoId) q = q.eq("concessao_id", concessaoId);
+  const { data, error } = await q;
+  if (error) throw ApiError.internal("Falha ao consultar a auditoria.");
   return data ?? [];
 }
 

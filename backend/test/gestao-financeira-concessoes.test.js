@@ -88,3 +88,27 @@ describe("validação da concessão", () => {
     assert.equal(validarRevogacao({ motivo: "Mudou de função na empresa" }).motivo, "Mudou de função na empresa");
   });
 });
+
+import { situacaoDaConcessao, montarPerfisElegiveis } from "../src/modules/gestao-financeira/concessoes.dominio.js";
+describe("situação e elegibilidade (tela do SuperAdmin)", () => {
+  test("revogada vence expirada; expirada vence ativa", () => {
+    const agora = Date.parse("2026-06-01T00:00:00Z");
+    assert.equal(situacaoDaConcessao({ revogada_em: "2026-01-01", expira_em: "2020-01-01" }, agora), "revogada");
+    assert.equal(situacaoDaConcessao({ expira_em: "2026-05-01T00:00:00Z" }, agora), "expirada");
+    assert.equal(situacaoDaConcessao({ expira_em: "2026-07-01T00:00:00Z" }, agora), "ativa");
+    assert.equal(situacaoDaConcessao({}, agora), "ativa");
+  });
+  test("elegíveis: só perfil ativo com vínculo ativo; exibição fora; própria conta marcada", () => {
+    const r = montarPerfisElegiveis({
+      perfis: [{ id: "p1", conta_id: "c1", nome: "Ana" }, { id: "p2", conta_id: "c2", nome: "TV" }, { id: "p3", conta_id: "c3", nome: "Sem vínculo" }, { id: "p4", conta_id: "c4", nome: "Eu" }, { id: "p5", conta_id: "c5", nome: "Inativo" }],
+      contas: { c1: { email: "ana@x" }, c4: { email: "eu@x" } },
+      vinculosUnidade: [{ usuario_id: "c1", papel: null, ativo: true }, { usuario_id: "c2", papel: "display_operator", ativo: true }, { usuario_id: "c5", papel: "viewer", ativo: false }],
+      vinculosEmpresa: [{ usuario_id: "c4", papel: "organization_admin", ativo: true }],
+    }, "c4");
+    assert.deepEqual(r.map((p) => [p.id, p.propria]), [["p1", false], ["p4", true]]);
+  });
+  test("conta só com vínculo de exibição não é elegível", () => {
+    const r = montarPerfisElegiveis({ perfis: [{ id: "p", conta_id: "c", nome: "TV" }], contas: {}, vinculosUnidade: [{ usuario_id: "c", papel: "display_operator", ativo: true }], vinculosEmpresa: [] }, "x");
+    assert.deepEqual(r, []);
+  });
+});

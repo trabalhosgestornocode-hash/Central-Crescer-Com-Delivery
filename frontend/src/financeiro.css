@@ -36,3 +36,7 @@
 
 /* O atributo hidden precisa vencer o display dos componentes acima. */
 .setor-card[hidden], .setor-cards[hidden], .btn-setor[hidden], #setor-vazio[hidden] { display: none !important; }
+
+/* Painel SuperAdmin: aviso de escrita bloqueada */
+.fin-adm-bloqueio { border-left: 4px solid var(--warn, #c48a12); background: var(--warn-bg, #fff7e0); padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }
+.adm-subtitulo { font-size: 15px; font-weight: 700; margin: 22px 0 8px; }

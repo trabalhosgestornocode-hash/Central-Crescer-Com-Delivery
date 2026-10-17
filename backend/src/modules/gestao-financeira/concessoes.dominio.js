@@ -67,3 +67,35 @@ export function validarRevogacao(body) {
   const b = v.corpo(body);
   return { motivo: v.texto(b.motivo, "Motivo", { min: MOTIVO_MIN, max: 500 }) };
 }
+
+/**
+ * Situação de uma concessão para a administração. Revogada vence expirada; expirada vence ativa.
+ * @param {{revogada_em?:string|null, expira_em?:string|null}} c
+ * @param {number} [agora]
+ * @returns {'ativa'|'expirada'|'revogada'}
+ */
+export function situacaoDaConcessao(c, agora = Date.now()) {
+  if (c?.revogada_em) return "revogada";
+  if (c?.expira_em && new Date(c.expira_em).getTime() <= agora) return "expirada";
+  return "ativa";
+}
+
+/**
+ * Perfis que PODEM receber concessão numa unidade: perfil ativo, conta com vínculo ativo na unidade ou na empresa,
+ * nunca o perfil de exibição. Marca os da própria conta do SuperAdmin (a autoconcessão é proibida).
+ * @param {{perfis: Array<{id:string, conta_id:string, nome:string|null}>, contas: Record<string,{nome?:string|null,email?:string|null}>,
+ *          vinculosUnidade: Array<{usuario_id:string, papel:string|null, ativo:boolean}>,
+ *          vinculosEmpresa: Array<{usuario_id:string, papel:string|null, ativo:boolean}>}} dados
+ * @param {string} atorId
+ */
+export function montarPerfisElegiveis({ perfis, contas, vinculosUnidade, vinculosEmpresa }, atorId) {
+  const ok = (v) => v.ativo === true && v.papel !== "display_operator";
+  const contasComVinculo = new Set([...vinculosUnidade, ...vinculosEmpresa].filter(ok).map((v) => v.usuario_id));
+  return perfis
+    .filter((p) => contasComVinculo.has(p.conta_id))
+    .map((p) => ({
+      id: p.id, nome: p.nome ?? contas[p.conta_id]?.nome ?? "—", email: contas[p.conta_id]?.email ?? null,
+      propria: p.conta_id === atorId,
+    }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+}
