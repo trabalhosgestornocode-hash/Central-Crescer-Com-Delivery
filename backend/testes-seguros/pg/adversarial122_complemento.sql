@@ -1,9 +1,4 @@
 -- Complemento das provas adversariais: S7v/S7w (CHECK sem gatilhos), S8a e S10 corrigidos. Rodar DEPOIS de adversarial122.sql no mesmo banco 'sim'.
--- S7v: contornando os gatilhos (só superusuário de teste), o CHECK da tabela ainda barra JWT na evidência
-set session_replication_role = replica;
-select pg_temp.exp('S7v CHECK da tabela barra evidência com JWT (gatilhos desligados)', $q$ insert into fin_excecoes_fechamento(organizacao_id,unidade_id,mes,justificativa,pendencias,pendencias_hash,quantidade,aprovada_por,mfa_evidencia,expira_em) values ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','2027-09-01','justificativa longa o bastante aqui','[{"id":"x"}]',repeat('a',64),1,gen_random_uuid(),'{"aal":"aal2","em":"2027-01-01T00:00:00Z","metodo":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijk"}',now()+interval '1 day') $q$, 'violates check');
-select pg_temp.exp('S7w CHECK barra ids de conciliação malformados (gatilhos desligados)', $q$ insert into fin_excecoes_fechamento(organizacao_id,unidade_id,mes,justificativa,pendencias,pendencias_conciliacao_ids,pendencias_hash,quantidade,aprovada_por,mfa_evidencia,expira_em) values ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','2027-09-01','justificativa longa o bastante aqui','[]','{lixo}',repeat('a',64),0,gen_random_uuid(),'{"aal":"aal2","em":"2027-01-01T00:00:00Z"}',now()+interval '1 day') $q$, 'violates check');
-set session_replication_role = origin;
 
 create or replace function pg_temp.exp(label text, stmt text, esperado text) returns void language plpgsql as $$
 declare estado text := 'ok'; msg text := '';
@@ -12,6 +7,12 @@ begin
   if (esperado = 'ok' and estado = 'ok') or (esperado = 'erro' and estado <> 'ok') or (esperado not in ('ok','erro') and msg like '%' || esperado || '%') then raise notice 'PASS  % [%]', label, case when estado = 'ok' then 'ok' else left(msg, 90) end;
   else raise notice 'FALHA % (esperado %, veio % %)', label, esperado, estado, left(msg, 140); end if;
 end $$;
+
+-- S7v: contornando os gatilhos (só superusuário de teste), o CHECK da tabela ainda barra JWT na evidência
+set session_replication_role = replica;
+select pg_temp.exp('S7v CHECK da tabela barra evidência com JWT (gatilhos desligados)', $q$ insert into fin_excecoes_fechamento(organizacao_id,unidade_id,mes,justificativa,pendencias,pendencias_hash,quantidade,aprovada_por,mfa_evidencia,expira_em) values ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','2027-09-01','justificativa longa o bastante aqui','[{"id":"x"}]',repeat('a',64),1,gen_random_uuid(),'{"aal":"aal2","em":"2027-01-01T00:00:00Z","metodo":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijk"}',now()+interval '1 day') $q$, 'violates check');
+select pg_temp.exp('S7w CHECK barra ids de conciliação malformados (gatilhos desligados)', $q$ insert into fin_excecoes_fechamento(organizacao_id,unidade_id,mes,justificativa,pendencias,pendencias_conciliacao_ids,pendencias_hash,quantidade,aprovada_por,mfa_evidencia,expira_em) values ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','2027-09-01','justificativa longa o bastante aqui','[]','{lixo}',repeat('a',64),0,gen_random_uuid(),'{"aal":"aal2","em":"2027-01-01T00:00:00Z"}',now()+interval '1 day') $q$, 'violates check');
+set session_replication_role = origin;
 create or replace function pg_temp.fechar(p_uni uuid, p_mes date, p_ids text[], p_rec boolean) returns jsonb language plpgsql as $$
 declare v int; fp text; o uuid := '00000000-0000-0000-0000-0000000000a1';
 begin v := (fin_abrir_periodo(o, p_uni, '00000000-0000-0000-0000-000000000999', p_mes)->>'versao')::int; fp := fin_fingerprint_periodo(o, p_uni, p_mes);

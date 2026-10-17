@@ -181,10 +181,35 @@ set role service_role;
 reset role;
 select 'S10c após o erro', pg_temp.estado_exc(:'U','2027-10-01') as excecao, (select status from fin_periodos where unidade_id = :'U' and mes = '2027-10-01') as periodo;
 
-\echo '=== S11. completude da conciliação (R-1): o banco NÃO recalcula as pendências de conciliação ==='
--- mês com referência de venda de R$ 1.000,00 + taxa de R$ 100,00 e SEM nenhum recebimento: a conciliação (JS) aponta ponte_mensal:2027-11-01 ABERTA (venda sozinha seria sem_referencia, não pendência)
+\echo '=== S11. R-1 / M1: o BANCO determina as pendências de conciliação; lista omitida/fabricada/extra NÃO fecha ==='
+-- mês com venda de R$ 1.000,00 + taxa de R$ 100,00 e SEM recebimento: o motor JS aponta ponte_mensal:2027-11-01 ABERTA (venda sozinha seria sem_referencia, não pendência)
 set role service_role;
 insert into fin_referencias(organizacao_id,unidade_id,data,tipo,canal,valor_centavos,fonte) values (:'O',:'U','2027-11-10','venda',null,100000,'manual'),(:'O',:'U','2027-11-10','taxa','STONE',10000,'manual');
-select pg_temp.exp('S11a fechar com ids de conciliação OMITIDOS (lista vazia), sem exceção', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01','{}',false) $q$, 'ok');
+select pg_temp.exp('S11a O BANCO calcula a ponte aberta', $q$ do $d$ begin if fin_conciliacao_pendencias_ids('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','2027-11-01') <> array['ponte_mensal:2027-11-01'] then raise exception 'conjunto inesperado'; end if; end $d$ $q$, 'ok');
+select pg_temp.exp('S11b lista OMITIDA (R-1) é RECUSADA', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01','{}',false) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11c lista OMITIDA com reconhecimento também', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01','{}',true) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11d lista FABRICADA recusada', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['caixa_dia:2030-01-01'], true) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11e lista com id EXTRA recusada', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['ponte_mensal:2027-11-01','caixa_dia:2027-11-02'], true) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11f lista com id REPETIDO recusada', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['ponte_mensal:2027-11-01','ponte_mensal:2027-11-01'], true) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11g lista com NULO recusada', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['ponte_mensal:2027-11-01', null], true) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11h lista CORRETA, sem exceção: pendência impede', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['ponte_mensal:2027-11-01'], true) $q$, 'fin_periodo_pendencias');
 reset role;
-select 'S11b mês fechado com divergência de conciliação não declarada', status, snapshot->>'pendenciasNoFechamento' as pend_declaradas from fin_periodos where unidade_id = :'U' and mes = '2027-11-01';
+select 'S11i mês segue ABERTO após todas as tentativas', status from fin_periodos where unidade_id = :'U' and mes = '2027-11-01';
+-- concessão: lista omitida/fabricada não vira evidência de cobertura
+set role dono_sim;
+select pg_temp.exp('S11j conceder com lista OMITIDA é recusado', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-11-01','{}', pg_temp.mfa(30)) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11k conceder com lista FABRICADA é recusado', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['caixa_dia:2030-01-01'], pg_temp.mfa(30)) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11l conceder com a lista CORRETA registra o conjunto do banco', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['ponte_mensal:2027-11-01'], pg_temp.mfa(30)) $q$, 'ok');
+reset role;
+select 'S11m evidência registrada pelo banco', pendencias_conciliacao_ids, quantidade from fin_excecoes_fechamento where unidade_id = :'U' and mes = '2027-11-01';
+-- com a exceção, a mesma lista OMITIDA continua recusada (a exceção não "perdoa" lista incompleta)
+set role service_role;
+select pg_temp.exp('S11n exceção ativa + lista OMITIDA: recusado', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01','{}',true) $q$, 'fin_conciliacao_divergente');
+select pg_temp.exp('S11o exceção ativa + lista correta + reconhecimento: fecha', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['ponte_mensal:2027-11-01'], true) $q$, 'ok');
+reset role;
+select 'S11p fechado com a exceção consumida', (select status from fin_periodos where unidade_id = :'U' and mes = '2027-11-01') as periodo, pg_temp.estado_exc(:'U','2027-11-01') as excecao;
+
+\echo '=== S12. privilégios da função autoritativa ==='
+select 'S12a service_role executa', has_function_privilege('service_role','fin_conciliacao_pendencias_ids(uuid,uuid,date)','execute');
+select 'S12b anon/authenticated NÃO executam', has_function_privilege('anon','fin_conciliacao_pendencias_ids(uuid,uuid,date)','execute') or has_function_privilege('authenticated','fin_conciliacao_pendencias_ids(uuid,uuid,date)','execute') as alguem_executa;
+select 'S12c STABLE / search_path fixo / invoker', p.provolatile, p.proconfig, p.prosecdef from pg_proc p where p.oid = 'fin_conciliacao_pendencias_ids(uuid,uuid,date)'::regprocedure;

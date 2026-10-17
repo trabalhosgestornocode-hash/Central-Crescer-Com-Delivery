@@ -122,6 +122,9 @@ drop function if exists fin_par_status_consistente();
 drop function if exists fin_transferencias_guarda();
 drop function if exists fin_reabrir_periodo(uuid,uuid,uuid,date,int,text);
 drop function if exists fin_fechar_periodo(uuid,uuid,uuid,date,int,text,jsonb,text[],boolean);
+drop function if exists fin_fechar_periodo(uuid,uuid,uuid,date,integer,text,jsonb,integer,boolean);          -- (bancos vindos de rascunhos anteriores: O-1)
+drop function if exists fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,integer,integer,jsonb);   -- idem
+drop function if exists fin_conciliacao_pendencias_ids(uuid,uuid,date);
 drop function if exists fin_abrir_periodo(uuid,uuid,uuid,date);
 drop function if exists fin_fingerprint_periodo(uuid,uuid,date);
 drop table if exists fin_excecoes_fechamento cascade;

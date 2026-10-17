@@ -20,6 +20,7 @@ export const MENSAGENS = Object.freeze({
   FIN_REABERTURA_DESABILITADA: "A reabertura de períodos ainda não foi habilitada.",
   FIN_PERIODO_PENDENCIAS_NAO_RECONHECIDAS: "Há pendências no período: confirme que você as reconhece para fechar.",
   FIN_PERIODO_CONFLITO_DADOS: "Os dados do mês mudaram desde a pré-visualização. Recarregue e confira antes de fechar.",
+  FIN_CONCILIACAO_DIVERGENTE: "A conciliação do mês foi recalculada pelo banco e não confere com a pré-visualização. Nada foi fechado: recarregue o pré-fechamento e confira as pendências.",
   FIN_PERIODO_CONFLITO_VERSAO: "O período foi alterado por outra operação. Recarregue a tela e tente novamente.",
   FIN_PERIODO_MOTIVO_OBRIGATORIO: "Informe o motivo (mínimo de 10 caracteres).",
   FIN_PERIODO_TRANSICAO_INVALIDA: "Esta mudança de situação do período não é permitida.",
@@ -50,7 +51,7 @@ export const falha = (error) => {
   const codigo = (/^(fin_[a-z_]+)/.exec(msg)?.[1] ?? "INTEGRIDADE").toUpperCase();
   const m = MENSAGENS[codigo];
   const texto = typeof m === "function" ? m(msg) : (m ?? GENERICA);
-  if (/^fin_periodo_conflito/.test(msg)) throw new ApiError(409, texto, { codigo });
+  if (/^fin_(periodo_conflito|conciliacao_divergente)/.test(msg)) throw new ApiError(409, texto, { codigo });   // M1: divergência banco × aplicação = conflito de estado (recarregar), nunca fecha
   if (NAO_ENCONTRADO.has(codigo)) throw ApiError.notFound("Registro não encontrado.", { codigo });
   if (error.code === "23505") throw ApiError.badRequest("Registro duplicado.", { codigo: "DUPLICADO" });
   if (error.code === "P0002") throw ApiError.notFound("Registro não encontrado.", { codigo: codigo === "INTEGRIDADE" ? "NAO_ENCONTRADO" : codigo });

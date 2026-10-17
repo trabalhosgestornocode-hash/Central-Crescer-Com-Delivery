@@ -120,18 +120,29 @@ end $$;
 
 -- 4) pendências impedem o fechamento; política só vale aprovada e com reconhecimento explícito
 do $$
-declare c ctx; v int; fp text; ok1 boolean := false; ok2 boolean := false; ok3 boolean := false; per jsonb;
+declare c ctx; v int; fp text; ok1 boolean := false; ok2 boolean := false; ok3 boolean := false; ok4 boolean := false; ok5 boolean := false; ok6 boolean := false; per jsonb;
 begin
   select * into c from ctx;
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1000, '2026-12-02', true);
   v := (fin_abrir_periodo(c.org1, c.u1, c.usr, '2026-12-01')->>'versao')::int;
   fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01');
   begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', '{}'::text[], true); exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_periodo_pendencias:%'); end;
-  -- pendência da conciliação (informada pelo backend) também impede
+  -- M1 (LD-011/LD-012): a pendência de conciliação é determinada pelo BANCO. Venda + taxa informadas e (quase) nenhum recebimento ⇒ ponte_mensal aberta.
+  -- (Antes da M1 este teste aceitava ids FABRICADOS pelo backend como se fossem pendências — exatamente o defeito R-1.)
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-01-02');
-  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-01-01')->>'versao')::int, fin_fingerprint_periodo(c.org1, c.u1, '2027-01-01'), '{}', array['caixa_dia:2030-01-01', 'caixa_dia:2030-01-02'], false);
-  exception when sqlstate '23514' then ok2 := (sqlerrm like 'fin_periodo_pendencias:%'); end;
-  if not (ok1 and ok2) then raise exception 'FALHA 4a: fechou com pendencias (% %)', ok1, ok2; end if;
+  insert into fin_referencias (organizacao_id, unidade_id, data, tipo, canal, valor_centavos, fonte) values (c.org1, c.u1, '2027-01-10', 'venda', null, 100000, 'manual'), (c.org1, c.u1, '2027-01-10', 'taxa', 'STONE', 10000, 'manual');
+  if fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-01-01') <> array['ponte_mensal:2027-01-01'] then raise exception 'FALHA 4a0: o banco nao calculou a ponte aberta (%)', fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-01-01'); end if;
+  v := (fin_abrir_periodo(c.org1, c.u1, c.usr, '2027-01-01')->>'versao')::int; fp := fin_fingerprint_periodo(c.org1, c.u1, '2027-01-01');
+  -- lista CORRETA, sem exceção ⇒ pendências impedem
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', v, fp, '{}', array['ponte_mensal:2027-01-01'], false); exception when sqlstate '23514' then ok2 := (sqlerrm like 'fin_periodo_pendencias:%'); end;
+  -- R-1: lista OMITIDA (a aplicação 'esquece' a pendência) ⇒ o banco recusa por divergência; o mês NÃO fecha
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', v, fp, '{}', '{}'::text[], false); exception when sqlstate '23514' then ok3 := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  -- lista FABRICADA (ids que o banco não reconhece) e lista com id EXTRA ⇒ divergência
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', v, fp, '{}', array['caixa_dia:2030-01-01', 'caixa_dia:2030-01-02'], false); exception when sqlstate '23514' then ok4 := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', v, fp, '{}', array['ponte_mensal:2027-01-01', 'caixa_dia:2027-01-05'], true); exception when sqlstate '23514' then ok5 := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-01-01', v, fp, '{}', array['ponte_mensal:2027-01-01', 'ponte_mensal:2027-01-01'], true); exception when sqlstate '23514' then ok6 := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  if (select status from fin_periodos where unidade_id = c.u1 and mes = '2027-01-01') <> 'aberto' then raise exception 'FALHA 4a1: o mes fechou com lista de conciliacao incorreta'; end if;
+  if not (ok2 and ok3 and ok4 and ok5 and ok6) then raise exception 'FALHA 4a: conciliacao (correta/omitida/fabricada/extra/repetida): % % % % %', ok2, ok3, ok4, ok5, ok6; end if;
   -- NÃO existe política geral: a tabela fin_config não existe mais
   if to_regclass('public.fin_config') is not null then raise exception 'FALHA 4b: fin_config nao deveria existir'; end if;
 end $$;
@@ -222,7 +233,7 @@ if ex->'mfa_evidencia'->>'aal' <> 'aal2' or ex->'mfa_evidencia'->>'metodo' <> 't
   fp := fin_fingerprint_periodo(c.org1, c.u1, '2026-12-01'); v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2026-12-01');
   ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', '{}'::text[], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
   if not ok then raise exception 'FALHA 4f1: pendencia nova coberta pela excecao antiga'; end if;
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', array['caixa_dia:2030-01-01', 'caixa_dia:2030-01-02', 'caixa_dia:2030-01-03', 'caixa_dia:2030-01-04', 'caixa_dia:2030-01-05'], true); exception when sqlstate '23514' then ok := true; end;   -- mais pendências de conciliação que as identificadas
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2026-12-01', v, fp, '{}', array['caixa_dia:2030-01-01', 'caixa_dia:2030-01-02', 'caixa_dia:2030-01-03', 'caixa_dia:2030-01-04', 'caixa_dia:2030-01-05'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_conciliacao_divergente%'); end;   -- mais pendências de conciliação que as identificadas
   if not ok then raise exception 'FALHA 4f2: pendencia de conciliacao nova coberta'; end if;
   if (select status from fin_excecoes_fechamento where id = (ex->>'id')::uuid) <> 'ativa' then raise exception 'FALHA 4f3: excecao gasta em tentativa que falhou'; end if;
   update fin_lancamentos set status = 'cancelado' where id = novo;
@@ -286,28 +297,55 @@ if ex->'mfa_evidencia'->>'aal' <> 'aal2' or ex->'mfa_evidencia'->>'metodo' <> 't
   ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-06-01', 'justificativa: nova excecao apos vencimento da anterior', 5, '{}'::text[], pg_temp.mfa());
   if (select count(*) from fin_excecoes_fechamento where mes = '2027-06-01' and unidade_id = c.u1 and status = 'revogada') <> 1 then raise exception 'FALHA 4i7: vencida nao foi encerrada'; end if;
 
-  -- 4k) PENDÊNCIAS DE CONCILIAÇÃO com id estável ("escopo:chave"): conjunto, não contagem; resolver é permitido; trocar 1-por-1 ou criar nova é recusado
+  -- 4k) PENDÊNCIAS DE CONCILIAÇÃO (M1): o conjunto vem do BANCO. Cenário real: ponte aberta (venda+taxa) + caixa do dia 03 aberto (dinheiro 1.000 x recebido 700).
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-08-02', true);
+  perform pg_temp.lanc(c.u1, 'CAIXA', 'VENDAS', 'entrada', 700, '2027-08-03');
+  insert into fin_referencias (organizacao_id, unidade_id, data, tipo, canal, valor_centavos, fonte) values
+    (c.org1, c.u1, '2027-08-01', 'venda', null, 50000, 'manual'), (c.org1, c.u1, '2027-08-01', 'taxa', 'STONE', 5000, 'manual'), (c.org1, c.u1, '2027-08-03', 'dinheiro', null, 1000, 'manual');
+  if fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-08-01') <> array['caixa_dia:2027-08-03', 'ponte_mensal:2027-08-01'] then raise exception 'FALHA 4k00: conjunto do banco inesperado (%)', fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-08-01'); end if;
   ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa suficientemente longa', 7, array['ponte_mensal:agosto'], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_pendencias_invalidas%'); end;
   if not ok then raise exception 'FALHA 4k0: aceitou id de conciliacao em formato invalido'; end if;
   ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa suficientemente longa', 7, array['caixa_dia:2027-08-03', 'caixa_dia:2027-08-03'], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_pendencias_invalidas%'); end;
   if not ok then raise exception 'FALHA 4k0b: aceitou ids repetidos'; end if;
+  -- M1: a concessão NÃO aceita lista incompleta/fabricada/vazia como evidência — registra o conjunto do BANCO e recusa divergência
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa suficientemente longa', 7, array['ponte_mensal:2027-08-01'], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  if not ok then raise exception 'FALHA 4k0c: concedeu com lista incompleta de conciliacao'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa suficientemente longa', 7, '{}'::text[], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  if not ok then raise exception 'FALHA 4k0d: concedeu com lista vazia apesar de haver pendencia de conciliacao'; end if;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa suficientemente longa', 7, array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-03', 'sangria_dia:2027-08-03'], pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  if not ok then raise exception 'FALHA 4k0e: concedeu com id extra (fabricado)'; end if;
   ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-08-01', 'justificativa: pendencias de conciliacao conhecidas do mes', 7, array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-03'], pg_temp.mfa());
   if jsonb_array_length(ex2->'pendencias_conciliacao_ids') <> 2 or (ex2->>'pendencias_hash') !~ '^[0-9a-f]{64}$' then raise exception 'FALHA 4k1: %', ex2; end if;
   v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2027-08-01'); fp := fin_fingerprint_periodo(c.org1, c.u1, '2027-08-01');
-  -- troca 1-por-1 na conciliação: mesmo total (2), um id diferente ⇒ recusa; a exceção segue ativa
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-04'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
-  if not ok then raise exception 'FALHA 4k2: troca 1-por-1 de pendencia de conciliacao passou'; end if;
-  -- uma pendência de conciliação NOVA além das cobertas ⇒ recusa
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-03', 'sangria_dia:2027-08-03'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
-  if not ok then raise exception 'FALHA 4k3: pendencia de conciliacao nova coberta'; end if;
-  -- ids inválidos no fechamento
-  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['qualquer coisa'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_pendencia_conciliacao_invalida%'); end;
+  -- lista fabricada com o mesmo total (troca 1-por-1 DECLARADA pela aplicação) ⇒ divergência do banco; a exceção segue ativa
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-04'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  if not ok then raise exception 'FALHA 4k2: lista de conciliacao trocada foi aceita'; end if;
+  -- lista vazia (omitida) ⇒ divergência; extra ⇒ divergência; inválida ⇒ divergência
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', '{}'::text[], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  if not ok then raise exception 'FALHA 4k3: fechou com a lista de conciliacao omitida'; end if;
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['ponte_mensal:2027-08-01', 'caixa_dia:2027-08-03', 'sangria_dia:2027-08-03'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_conciliacao_divergente%'); end;
+  if not ok then raise exception 'FALHA 4k3b: id extra aceito'; end if;
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['qualquer coisa'], true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_conciliacao_divergente%'); end;
   if not ok then raise exception 'FALHA 4k4: aceitou id invalido no fechamento'; end if;
-  if (select status from fin_excecoes_fechamento where id = (ex2->>'id')::uuid) <> 'ativa' then raise exception 'FALHA 4k5: excecao gasta em tentativa recusada'; end if;
-  -- resolver uma das pendências de conciliação (subconjunto) é permitido e consome a exceção
-  per := fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['caixa_dia:2027-08-03'], true);
-  if per->>'status' <> 'fechado' or (per->'snapshot'->>'pendenciasNoFechamento')::int <> 2 or per->'snapshot'->>'excecaoFechamentoId' <> ex2->>'id' then raise exception 'FALHA 4k6: %', per; end if;
+  -- pendência de conciliação REAL e NOVA depois da concessão (nova referência de dinheiro no dia 04 com diferença) ⇒ lista CORRETA do banco, mas a cobertura não alcança
+  perform pg_temp.lanc(c.u1, 'CAIXA', 'VENDAS', 'entrada', 100, '2027-08-04');
+  insert into fin_referencias (organizacao_id, unidade_id, data, tipo, canal, valor_centavos, fonte) values (c.org1, c.u1, '2027-08-04', 'dinheiro', null, 90, 'manual');
+  v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2027-08-01'); fp := fin_fingerprint_periodo(c.org1, c.u1, '2027-08-01');
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-08-01'), true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
+  if not ok then raise exception 'FALHA 4k5: pendencia de conciliacao nova coberta pela excecao antiga'; end if;
+  -- TROCA 1-por-1 REAL: o dia 03 é resolvido (resolução vigente igual à diferença) e o dia 04 é novo: mesmo total (2) que o coberto, mas conjunto diferente ⇒ recusa
+  insert into fin_conciliacao_resolucoes (organizacao_id, unidade_id, escopo, chave, classificacao, valor_centavos, diferenca_no_momento_centavos, nota, criado_por) values (c.org1, c.u1, 'caixa_dia', '2027-08-03', 'ajuste', -300, -300, 'diferenca explicada para o teste', c.usr);
+  if fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-08-01') <> array['caixa_dia:2027-08-04', 'ponte_mensal:2027-08-01'] then raise exception 'FALHA 4k6a: conjunto apos resolucao (%)', fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-08-01'); end if;
+  v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2027-08-01'); fp := fin_fingerprint_periodo(c.org1, c.u1, '2027-08-01');
+  ok := false; begin perform fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-08-01'), true); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_periodo_excecao_insuficiente%'); end;
+  if not ok then raise exception 'FALHA 4k6: troca 1-por-1 real (mesmo total) foi coberta'; end if;
+  if (select status from fin_excecoes_fechamento where id = (ex2->>'id')::uuid) <> 'ativa' then raise exception 'FALHA 4k7: excecao gasta em tentativa recusada'; end if;
+  -- a referência nova é cancelada (com motivo): o conjunto do banco volta a ser SUBCONJUNTO do coberto (só a ponte) ⇒ resolver pendência coberta é permitido e consome a exceção
+  update fin_referencias set status = 'cancelada', motivo_cancelamento = 'referencia lancada por engano (teste)' where unidade_id = c.u1 and data = '2027-08-04' and tipo = 'dinheiro';
+  v := (select versao from fin_periodos where unidade_id = c.u1 and mes = '2027-08-01'); fp := fin_fingerprint_periodo(c.org1, c.u1, '2027-08-01');
+  if fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-08-01') <> array['ponte_mensal:2027-08-01'] then raise exception 'FALHA 4k8a: conjunto final (%)', fin_conciliacao_pendencias_ids(c.org1, c.u1, '2027-08-01'); end if;
+  per := fin_fechar_periodo(c.org1, c.u1, c.usr, '2027-08-01', v, fp, '{}', array['ponte_mensal:2027-08-01'], true);
+  if per->>'status' <> 'fechado' or (per->'snapshot'->>'pendenciasNoFechamento')::int <> 2 or per->'snapshot'->>'excecaoFechamentoId' <> ex2->>'id' or per->'snapshot'->'pendenciasConciliacaoIds' <> '["ponte_mensal:2027-08-01"]'::jsonb then raise exception 'FALHA 4k8: %', per; end if;
 
   -- 4j) service_role (o backend) NÃO conceda, NÃO revoga, NÃO escreve na tabela — só lê
   set local role service_role;

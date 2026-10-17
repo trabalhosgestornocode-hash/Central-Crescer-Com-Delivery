@@ -32,9 +32,12 @@ function psql(sql, { quiet = true } = {}) {
 const dd = psql("show data_directory");
 if (!dd.replaceAll("\\", "/").includes(CLUSTER.replaceAll("\\", "/"))) { console.error("cluster inesperado"); process.exit(2); }
 
-const uuid = (a, b) => `00000000-0000-4000-${String(a).padStart(4, "0")}-${String(b).padStart(12, "0")}`;
+// NONCE por execução: o script pode rodar várias vezes no mesmo banco sem colidir (as categorias usam ids fixos, `on conflict do nothing`).
+const NONCE = (Date.now() % 0xffffffff).toString(16).padStart(8, "0");
+const uuidFixo = (a, b) => `00000000-0000-4000-${String(a).padStart(4, "0")}-${String(b).padStart(12, "0")}`;
+const uuid = (a, b) => `${NONCE}-0000-4000-${String(a).padStart(4, "0")}-${String(b).padStart(12, "0")}`;
 const ORG = "00000000-0000-0000-0000-0000000000a1";
-const CAT = { receita: uuid(1, 1), despesa: uuid(1, 2), custo: uuid(1, 3), transf: uuid(1, 4), saldo: uuid(1, 5) };
+const CAT = { receita: uuidFixo(1, 1), despesa: uuidFixo(1, 2), custo: uuidFixo(1, 3), transf: uuidFixo(1, 4), saldo: uuidFixo(1, 5) };
 const PAPEL = { [CAT.receita]: "receita_operacional", [CAT.despesa]: "despesa_fixa", [CAT.custo]: "custo_variavel", [CAT.transf]: "transferencia", [CAT.saldo]: "saldo_anterior" };
 const q = (v) => (v === null || v === undefined ? "null" : `'${String(v).replaceAll("'", "''")}'`);
 
@@ -61,6 +64,14 @@ const fixos = [
   base("lançamento PREVISTO e CANCELADO não contam", { lancs: [{ conta: 0, cat: "receita", sentido: "entrada", valor: 7000, dia: 4, status: "previsto" }, { conta: 0, cat: "receita", sentido: "entrada", valor: 9000, dia: 4, status: "cancelado" }], refs: [{ tipo: "dinheiro", canal: null, valor: 100, dia: 4, status: "ativa" }] }),
   base("saldo_anterior e categoria nula ficam fora do fluxo", { lancs: [{ conta: 0, cat: "saldo", sentido: "entrada", valor: 7000, dia: 4, status: "realizado" }, { conta: 0, cat: null, sentido: "entrada", valor: 800, dia: 4, status: "realizado" }], refs: [{ tipo: "dinheiro", canal: null, valor: 0, dia: 4, status: "ativa" }] }),
   base("referência de outro mês não entra", { refs: [{ tipo: "venda", canal: null, valor: 100000, dia: 10, status: "ativa", mesOffset: -1 }, { tipo: "taxa", canal: "STONE", valor: 10000, dia: 10, status: "ativa" }] }),
+  base("PREVISTO muda o resultado (dinheiro exato só com o realizado)", { lancs: [{ conta: 0, cat: "receita", sentido: "entrada", valor: 7000, dia: 4, status: "realizado" }, { conta: 0, cat: "receita", sentido: "entrada", valor: 500, dia: 4, status: "previsto" }], refs: [{ tipo: "dinheiro", canal: null, valor: 7000, dia: 4, status: "ativa" }] }),
+  base("CANCELADO muda o resultado", { lancs: [{ conta: 0, cat: "receita", sentido: "entrada", valor: 7000, dia: 4, status: "realizado" }, { conta: 0, cat: "receita", sentido: "entrada", valor: 500, dia: 4, status: "cancelado" }], refs: [{ tipo: "dinheiro", canal: null, valor: 7000, dia: 4, status: "ativa" }] }),
+  base("exceção de sangria muda o resultado (sangria exata só sem a categoria excepcionada)", { lancs: [{ conta: 0, cat: "despesa", sentido: "saida", valor: 3000, dia: 6, status: "realizado" }, { conta: 0, cat: "custo", sentido: "saida", valor: 2000, dia: 6, status: "realizado" }], refs: [{ tipo: "sangria", canal: null, valor: 2000, dia: 6, status: "ativa" }], excecoesSangria: ["despesa"] }),
+  base("saída de categoria saldo_anterior em caixa não conta na sangria", { lancs: [{ conta: 0, cat: "saldo", sentido: "saida", valor: 900, dia: 6, status: "realizado" }, { conta: 0, cat: "despesa", sentido: "saida", valor: 3000, dia: 6, status: "realizado" }], refs: [{ tipo: "sangria", canal: null, valor: 3000, dia: 6, status: "ativa" }] }),
+  base("referência CANCELADA não pode fechar a diferença", { lancs: [{ conta: 0, cat: "receita", sentido: "entrada", valor: 7000, dia: 4, status: "realizado" }], refs: [{ tipo: "dinheiro", canal: null, valor: 7000, dia: 4, status: "cancelada" }, { tipo: "dinheiro", canal: null, valor: 6000, dia: 4, status: "ativa" }] }),
+  base("resolução REVOGADA não fecha a diferença do caixa", { lancs: [{ conta: 0, cat: "receita", sentido: "entrada", valor: 7000, dia: 4, status: "realizado" }], refs: [{ tipo: "dinheiro", canal: null, valor: 6000, dia: 4, status: "ativa" }], resols: [{ escopo: "caixa_dia", dia: 4, valor: 1000, status: "revogada" }] }),
+  base("venda + taxa ZERO informada (taxa 0 ≠ ausente)", { refs: [{ tipo: "venda", canal: null, valor: 5000, dia: 2, status: "ativa" }, { tipo: "taxa", canal: "STONE", valor: 0, dia: 2, status: "ativa" }] }),
+  base("receita em conta que NÃO é caixa_fisico não entra no caixa", { lancs: [{ conta: 1, cat: "receita", sentido: "entrada", valor: 7000, dia: 4, status: "realizado" }], refs: [{ tipo: "dinheiro", canal: null, valor: 7000, dia: 4, status: "ativa" }] }),
   base("vários itens abertos juntos (ponte + 2 caixas + 2 sangrias)", {
     lancs: [{ conta: 0, cat: "receita", sentido: "entrada", valor: 1000, dia: 2, status: "realizado" }, { conta: 0, cat: "receita", sentido: "entrada", valor: 1000, dia: 3, status: "realizado" }, { conta: 0, cat: "despesa", sentido: "saida", valor: 500, dia: 8, status: "realizado" }, { conta: 0, cat: "custo", sentido: "saida", valor: 700, dia: 9, status: "realizado" }],
     refs: [{ tipo: "venda", canal: null, valor: 50000, dia: 1, status: "ativa" }, { tipo: "taxa", canal: "IFOOD", valor: 5000, dia: 1, status: "ativa" }, { tipo: "dinheiro", canal: null, valor: 1200, dia: 2, status: "ativa" }, { tipo: "dinheiro", canal: null, valor: 900, dia: 3, status: "ativa" }, { tipo: "sangria", canal: null, valor: 100, dia: 8, status: "ativa" }, { tipo: "sangria", canal: null, valor: 100, dia: 9, status: "ativa" }],
@@ -76,6 +87,44 @@ function aleatorio(rnd, i) {
   return { nome: `aleatório ${i}`, mes: "2030-01", contas, lancs, refs, resols, excecoesSangria: rnd() < 0.3 ? [pick(["despesa", "custo"])] : [] };
 }
 
+const dataDeSc = (sc, dia, off = 0) => { const [a, m] = sc.mes.split("-").map(Number); return new Date(Date.UTC(a, m - 1 + off, dia)).toISOString().slice(0, 10); };
+/** Oráculo JS: os MESMOS filtros do serviço (referências ativas do mês, resoluções vigentes, lançamentos de qualquer status — o motor filtra). */
+function rodar(sc) {
+  const noMes = (d) => d.slice(0, 7) === sc.mes;
+  return conciliar({
+    mes: sc.mes,
+    lancamentos: sc.lancs.map((l, i) => ({ id: `l${i}`, contaId: `c${l.conta}`, sentido: l.sentido, valorCentavos: l.valor, papel: l.cat ? PAPEL[CAT[l.cat]] : null, status: l.status, categoriaId: l.cat ? CAT[l.cat] : null, data: dataDeSc(sc, l.dia) })),
+    contas: sc.contas.map((c, i) => ({ id: `c${i}`, nome: `C${i}`, tipo_conta: c.tipo, canal_referencia: c.canal })),
+    referencias: sc.refs.filter((r) => r.status === "ativa").map((r, i) => ({ id: `r${i}`, data: dataDeSc(sc, r.dia, r.mesOffset ?? 0), tipo: r.tipo, canal: r.canal, valorCentavos: r.valor })).filter((r) => noMes(r.data)),
+    excecoesSangria: new Set(sc.excecoesSangria.map((k) => CAT[k])),
+    resolucoes: sc.resols.filter((r) => r.status === "vigente").map((r, i) => ({ id: `x${i}`, escopo: r.escopo, chave: dataDeSc(sc, r.dia), classificacao: "ajuste", valorCentavos: r.valor, nota: "n" })),
+  });
+}
+/** Cenário "apertado": referências e resoluções construídas A PARTIR do fluxo real, para que diferenças de ZERO (e resoluções exatas/parciais) sejam comuns — é aí que
+ * um desvio sutil do SQL (status, exceção, revogada, cancelada, saldo_anterior…) muda o resultado. */
+function apertar(sc, rnd) {
+  const pick = (xs) => xs[Math.floor(rnd() * xs.length)];
+  const r0 = rodar({ ...sc, refs: [], resols: [] });
+  const refs = [...sc.refs]; const resols = [...sc.resols];
+  for (const d of r0.caixaDias) {
+    const dia = Number(d.data.slice(8)); const k = rnd();
+    if (k < 0.45) refs.push({ tipo: "dinheiro", canal: null, valor: Math.max(0, d.fluxoCentavos), dia, status: "ativa" });
+    else if (k < 0.8) { const delta = pick([-300, -50, 70, 900]); refs.push({ tipo: "dinheiro", canal: null, valor: Math.max(0, d.fluxoCentavos + delta), dia, status: "ativa" }); const q = rnd(); if (q < 0.35) resols.push({ escopo: "caixa_dia", dia, valor: -delta, status: pick(["vigente", "vigente", "revogada"]) }); else if (q < 0.5) resols.push({ escopo: "caixa_dia", dia, valor: -Math.trunc(delta / 2) || 1, status: "vigente" }); }
+    if (rnd() < 0.12) refs.push({ tipo: "dinheiro", canal: null, valor: Math.max(0, d.fluxoCentavos), dia, status: "cancelada" });
+  }
+  for (const d of r0.sangriaDias) {
+    const dia = Number(d.data.slice(8)); const k = rnd();
+    if (k < 0.45) refs.push({ tipo: "sangria", canal: null, valor: Math.max(0, d.fluxoCentavos), dia, status: "ativa" });
+    else if (k < 0.8) { const delta = pick([-200, 40, 500]); refs.push({ tipo: "sangria", canal: null, valor: Math.max(0, d.fluxoCentavos + delta), dia, status: "ativa" }); if (rnd() < 0.4) resols.push({ escopo: "sangria_dia", dia, valor: -delta, status: pick(["vigente", "revogada"]) }); }
+  }
+  if (rnd() < 0.8) { // ponte
+    const taxa = pick([0, 0, 1500, 4000]); const delta = pick([0, 0, 0, -250, 800]);
+    refs.push({ tipo: "venda", canal: null, valor: Math.max(0, r0.ponte.recebidoCentavos + taxa + delta), dia: 1, status: "ativa" });
+    if (rnd() < 0.9) refs.push({ tipo: "taxa", canal: "STONE", valor: taxa, dia: 1, status: "ativa" });
+    if (delta !== 0 && rnd() < 0.5) resols.push({ escopo: "ponte_mensal", dia: 1, valor: rnd() < 0.5 ? delta : Math.trunc(delta / 2) || 1, status: pick(["vigente", "revogada"]) });
+  }
+  return { ...sc, refs, resols };
+}
 let n = 0;
 function materializar(sc) {
   n += 1;
@@ -91,16 +140,7 @@ function materializar(sc) {
   sc.resols.forEach((r, i) => sql.push(`insert into fin_conciliacao_resolucoes(id, organizacao_id, unidade_id, escopo, chave, classificacao, valor_centavos, diferenca_no_momento_centavos, nota, status, motivo_revogacao) values (${q(ids.res(i))}, ${q(ORG)}, ${q(unidade)}, ${q(r.escopo)}, ${q(dataDe(r.dia))}, 'ajuste', ${r.valor}, ${r.valor}, 'nota de teste', ${q(r.status)}, ${r.status === "revogada" ? "'x'" : "null"});`));
   sc.excecoesSangria.forEach((k, i) => sql.push(`insert into fin_sangria_excecoes(id, organizacao_id, unidade_id, categoria_id, motivo, aprovada_por) values (${q(ids.exc(i))}, ${q(ORG)}, ${q(unidade)}, ${q(CAT[k])}, 'motivo teste', ${q(uuid(0, 1))});`));
   sql.push(`set session_replication_role = origin;`);
-  // oráculo JS: mesmos dados lidos com os mesmos filtros do serviço (referências ativas do mês, resoluções vigentes do mês, exceções ativas)
-  const noMes = (d) => d.slice(0, 7) === sc.mes;
-  const oraculo = conciliar({
-    mes: sc.mes,
-    lancamentos: sc.lancs.map((l, i) => ({ id: ids.lanc(i), contaId: ids.conta(l.conta), sentido: l.sentido, valorCentavos: l.valor, papel: l.cat ? PAPEL[CAT[l.cat]] : null, status: l.status, categoriaId: l.cat ? CAT[l.cat] : null, data: dataDe(l.dia) })),
-    contas: sc.contas.map((c, i) => ({ id: ids.conta(i), nome: `C${i}`, tipo_conta: c.tipo, canal_referencia: c.canal })),
-    referencias: sc.refs.map((r, i) => ({ id: ids.ref(i), data: dataDe(r.dia, r.mesOffset ?? 0), tipo: r.tipo, canal: r.canal, valorCentavos: r.valor, status: r.status })).filter((r, i) => sc.refs[i].status === "ativa" && noMes(r.data)),
-    excecoesSangria: new Set(sc.excecoesSangria.map((k) => CAT[k])),
-    resolucoes: sc.resols.map((r, i) => ({ id: ids.res(i), escopo: r.escopo, chave: dataDe(r.dia), classificacao: "ajuste", valorCentavos: r.valor, nota: "n", status: r.status })).filter((r, i) => sc.resols[i].status === "vigente"),
-  }).resumo.pendenciasAbertasIds;
+  const oraculo = rodar(sc).resumo.pendenciasAbertasIds;
   return { unidade, mes0, sql: sql.join("\n"), esperado: [...oraculo].sort() };
 }
 
@@ -113,7 +153,10 @@ psql([`insert into fin_plano_contas(id, organizacao_id, tipo, natureza, nome, pa
   `(${q(CAT.saldo)}, ${q(ORG)}, 'RECEITA', 'SALDO ANTERIOR', 'M1 SALDO', 'saldo_anterior') on conflict (id) do nothing;`].join("\n"));
 
 const rnd = prng(SEMENTE);
-const cenarios = [...fixos, ...Array.from({ length: ALEATORIOS }, (_, i) => aleatorio(rnd, i + 1))];
+const comMuitoFluxo = (rnd, i) => { const sc = aleatorio(rnd, i); sc.contas[0] = { tipo: "caixa_fisico", canal: null }; sc.excecoesSangria = rnd() < 0.5 ? ["despesa"] : []; return sc; };
+const cenarios = [...fixos,
+  ...Array.from({ length: ALEATORIOS }, (_, i) => aleatorio(rnd, i + 1)),
+  ...Array.from({ length: ALEATORIOS }, (_, i) => { const sc = apertar(comMuitoFluxo(rnd, i + 1), rnd); return { ...sc, nome: `apertado ${i + 1}` }; })];
 let ok = 0; const falhas = []; let comPendencia = 0;
 for (const sc of cenarios) {
   const m = materializar(sc);

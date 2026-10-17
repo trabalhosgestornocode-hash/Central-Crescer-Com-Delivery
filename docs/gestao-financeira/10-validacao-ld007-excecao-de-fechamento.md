@@ -36,7 +36,7 @@ Regressões após o merge: domínio+fundação 233/233; backend T1 5386 ok · 3 
 - **O-4 (UX, trivial).** A tela de Períodos não explica mais por que não há "Reabrir" num mês fechado (o texto foi removido junto com a rota). O QA visual foi ajustado.
 - A comparação por **conjunto/subconjunto** (decisão do Agente 2) está correta e é melhor que igualdade de hash: resolver uma pendência coberta é permitido; trocar ou criar nova é recusado. O `pendencias_hash` é só auditoria.
 
-## 3.1 Decisão do usuário sobre R-1 (LD-011)
+## 3.1 Decisão do usuário sobre R-1 (LD-011) — IMPLEMENTADA pelo Agente 1 (LD-013), AGUARDANDO REVISÃO INDEPENDENTE: ver `11-m1-o1-conciliacao-autoritativa.md`
 **R-1 NÃO é aceito: a M1 é obrigatória.** O Agente 2 recebeu a missão de fazer o banco determinar sozinho as pendências de conciliação. A 122 e a O-1 ficam sem promoção até eu revisar e validar a M1 e a remoção das assinaturas obsoletas. Critérios de aceite e provas prontas para quando a M1 chegar:
 - `backend/testes-seguros/pg/parity_m1.mjs` — **paridade JS×SQL** (18 cenários de borda determinísticos + N aleatórios com semente), contra a função `fin_conciliacao_pendencias_ids(org, unidade, mes) returns text[]` (nome configurável em `M1_FN`). Autoteste do harness feito com função-esqueleto: 168 cenários, 126 com pendência aberta no oráculo, nenhuma falha de INSERT.
 - `adversarial122.sql` S11 deve **passar a falhar o fechamento**: com ids omitidos ou incompletos o banco recusa (conjunto do banco ≠ declarado); a lista da aplicação passa a ser só conferência.

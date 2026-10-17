@@ -5,6 +5,13 @@
 -- Validado só em PostgreSQL DESCARTÁVEL (backend/testes-financeiro-pg). NUNCA aplicar em produção a partir deste arquivo.
 
 -- ---------------------------------------------------------------------
+-- O-1 (LD-011): remove ASSINATURAS OBSOLETAS de rascunhos anteriores desta migration. `create or replace` com tipos de argumento diferentes cria uma
+-- SOBRECARGA e a antiga fica executável (com os privilégios da época). Só remove o que ESTA migration já definiu em rascunhos; nenhuma função da 120/121.
+-- ---------------------------------------------------------------------
+drop function if exists fin_fechar_periodo(uuid, uuid, uuid, date, integer, text, jsonb, integer, boolean);                -- rascunhos: contagem em vez de ids
+drop function if exists fin_conceder_excecao_fechamento(uuid, uuid, uuid, date, text, integer, integer, jsonb);              -- rascunhos: contagem em vez de ids
+
+-- ---------------------------------------------------------------------
 -- Colunas novas nas tabelas do domínio
 -- ---------------------------------------------------------------------
 -- Motivos de revisão preservados da importação (a_identificar, valor_por_formula, identica_no_arquivo, ...). Códigos, não texto livre.
@@ -242,6 +249,80 @@ create or replace function fin_fingerprint_periodo(p_org uuid, p_unidade uuid, p
               from fin_saldos_abertura a where a.organizacao_id = p_org and a.unidade_id = p_unidade and a.data_referencia >= p_mes and a.data_referencia < (p_mes + interval '1 month')::date), ''))
 $$;
 
+-- ---------------------------------------------------------------------
+-- M1 (LD-011/LD-012; R-1): o BANCO determina, sozinho, as pendências de CONCILIAÇÃO do mês. Só usa dados persistidos (nada vem da aplicação) e
+-- reproduz `conciliar()` (backend/src/financeiro-calculos/conciliacao.js) para o conjunto de itens ABERTOS (pendente_identificacao / parcialmente_resolvido):
+--   • lançamentos do mês com status 'realizado', excluída a categoria de papel 'saldo_anterior' (categoria nula passa, como no motor);
+--   • ponte mensal  'ponte_mensal:AAAA-MM-01' : vendas(ref) − recebido(receita_operacional, líquido) − taxas(ref); só existe com venda E taxa informadas
+--                                               (sem uma delas = sem_referencia, que NÃO é pendência — ausência nunca vira zero);
+--   • caixa por dia 'caixa_dia:AAAA-MM-DD'     : receita líquida em contas 'caixa_fisico' − referência 'dinheiro' do dia (dia com lançamento OU referência);
+--   • sangria por dia 'sangria_dia:AAAA-MM-DD' : saídas de contas 'caixa_fisico' (exceto categorias com exceção de sangria ATIVA) − referência 'sangria' do dia;
+--   • referências ATIVAS do mês; resoluções VIGENTES (chave = dia ou 1º do mês). Diferença 0 = conciliado; diferença ≠ 0 sem resolução = pendente;
+--     com resoluções cuja soma ≠ diferença = parcial; soma = diferença = resolvido. Itens abertos = pendente ∪ parcial.
+-- STABLE, sem escrita, search_path fixo. EXECUTE só para o service_role (fin_fechar_periodo roda como service_role e precisa dela). Qualquer mudança
+-- aqui exige o teste de paridade JS×SQL (backend/testes-seguros/pg/parity_m1.mjs) — a regra existe nos dois lugares e NÃO pode divergir.
+-- ---------------------------------------------------------------------
+create or replace function fin_conciliacao_pendencias_ids(p_org uuid, p_unidade uuid, p_mes date) returns text[]
+language sql stable set search_path = public, pg_temp as $$
+  with mes as (
+    select date_trunc('month', p_mes)::date as ini, (date_trunc('month', p_mes) + interval '1 month')::date as fim
+  ),
+  ls as (
+    select l.data_movimento as d, l.sentido, l.valor_centavos as v, l.categoria_id, c.papel, k.tipo_conta
+      from fin_lancamentos l
+      join mes on l.data_movimento >= mes.ini and l.data_movimento < mes.fim
+      left join fin_plano_contas c on c.id = l.categoria_id
+      left join fin_contas k on k.id = l.conta_id and k.organizacao_id = l.organizacao_id and k.unidade_id = l.unidade_id
+     where l.organizacao_id = p_org and l.unidade_id = p_unidade and l.status = 'realizado' and coalesce(c.papel, '') <> 'saldo_anterior'
+  ),
+  refs as (
+    select r.data as d, r.tipo, r.valor_centavos as v
+      from fin_referencias r
+      join mes on r.data >= mes.ini and r.data < mes.fim
+     where r.organizacao_id = p_org and r.unidade_id = p_unidade and r.status = 'ativa'
+  ),
+  res as (
+    select x.escopo, x.chave, count(*) as n, sum(x.valor_centavos) as soma
+      from fin_conciliacao_resolucoes x
+      join mes on x.chave >= mes.ini and x.chave < mes.fim
+     where x.organizacao_id = p_org and x.unidade_id = p_unidade and x.status = 'vigente'
+     group by x.escopo, x.chave
+  ),
+  exc as (
+    select e.categoria_id from fin_sangria_excecoes e where e.organizacao_id = p_org and e.unidade_id = p_unidade and e.ativa
+  ),
+  total as (
+    select (select sum(v) from refs where tipo = 'venda') as vendas,
+           (select sum(v) from refs where tipo = 'taxa') as taxas,
+           (select coalesce(sum(case sentido when 'entrada' then v else -v end), 0) from ls where papel = 'receita_operacional') as recebido
+  ),
+  -- agregações por dia (uma passada em ls/refs; evita varreduras repetidas com 50 mil+ lançamentos no mês)
+  fluxo_caixa as (
+    select d, sum(case sentido when 'entrada' then v else -v end) as s
+      from ls where papel = 'receita_operacional' and tipo_conta = 'caixa_fisico' group by d
+  ),
+  ref_dinheiro as (select d, sum(v) as s from refs where tipo = 'dinheiro' group by d),
+  fluxo_sangria as (
+    select d, coalesce(sum(v) filter (where not (categoria_id is not null and categoria_id in (select categoria_id from exc))), 0) as s
+      from ls where sentido = 'saida' and tipo_conta = 'caixa_fisico' group by d
+  ),
+  ref_sangria as (select d, sum(v) as s from refs where tipo = 'sangria' group by d),
+  itens as (
+    select 'ponte_mensal'::text as escopo, mes.ini as chave, (t.vendas - t.recebido - t.taxas) as dif
+      from total t, mes where t.vendas is not null and t.taxas is not null
+    union all
+    select 'caixa_dia', coalesce(f.d, r.d), case when r.d is not null then coalesce(f.s, 0) - r.s end
+      from fluxo_caixa f full join ref_dinheiro r on r.d = f.d
+    union all
+    select 'sangria_dia', coalesce(f.d, r.d), case when r.d is not null then coalesce(f.s, 0) - r.s end
+      from fluxo_sangria f full join ref_sangria r on r.d = f.d
+  )
+  select coalesce(array_agg(i.escopo || ':' || to_char(i.chave, 'YYYY-MM-DD') order by i.escopo || ':' || to_char(i.chave, 'YYYY-MM-DD') collate "C"), '{}'::text[])
+    from itens i
+    left join res on res.escopo = i.escopo and res.chave = i.chave
+   where i.dif is not null and i.dif <> 0 and not (coalesce(res.n, 0) > 0 and i.dif = res.soma)
+$$;
+
 create or replace function fin_abrir_periodo(p_org uuid, p_unidade uuid, p_usuario uuid, p_mes date) returns jsonb language plpgsql as $$
 declare v fin_periodos;
 begin
@@ -255,11 +336,12 @@ end $$;
 -- Fecha o mês: tudo ou nada. Falha se: já fechado; versão desatualizada; conteúdo mudou desde a impressão que gerou o snapshot;
 -- há pendências impeditivas SEM exceção ativa (unidade+competência, concedida por SuperAdmin) que cubra TODAS elas — e, havendo exceção, o chamador
 -- precisa reconhecer as pendências. A exceção é de USO ÚNICO e é consumida no mesmo ato. Não existe política geral que o gestor possa ligar.
+-- As pendências de conciliação vêm do BANCO (M1); o parâmetro p_pendencias_conciliacao_ids é conferência (divergência => fin_conciliacao_divergente).
 create or replace function fin_fechar_periodo(
   p_org uuid, p_unidade uuid, p_usuario uuid, p_mes date, p_versao int, p_fingerprint text, p_snapshot jsonb,
   p_pendencias_conciliacao_ids text[], p_reconheco_pendencias boolean
-) returns jsonb language plpgsql as $$
-declare v fin_periodos; n_pend int; ex fin_excecoes_fechamento; v_exc uuid; descobertas int;
+) returns jsonb language plpgsql set search_path = public, pg_temp as $$   -- search_path fixo: as chamadas internas (fin_conciliacao_pendencias_ids, fin_consumir_...) não podem ser sombreadas
+declare v fin_periodos; n_pend int; ex fin_excecoes_fechamento; v_exc uuid; descobertas int; v_conc text[];
 begin
   if p_mes <> date_trunc('month', p_mes)::date then raise exception 'fin_periodo_mes_invalido' using errcode = '23514'; end if;
   insert into fin_periodos (organizacao_id, unidade_id, mes, status) values (p_org, p_unidade, p_mes, 'aberto') on conflict (unidade_id, mes) do nothing;
@@ -273,12 +355,14 @@ begin
   select count(*) into n_pend from fin_lancamentos l
    where l.organizacao_id = p_org and l.unidade_id = p_unidade and l.data_movimento >= p_mes and l.data_movimento < (p_mes + interval '1 month')::date
      and l.status <> 'cancelado' and (l.classificacao_pendente or l.categoria_id is null);
-  -- (validação inline: esta função roda como service_role, que NÃO tem EXECUTE no validador puro)
-  if exists (select 1 from unnest(coalesce(p_pendencias_conciliacao_ids, '{}'::text[])) i where i is null or i !~ '^(ponte_mensal|caixa_dia|sangria_dia):\d{4}-\d{2}-\d{2}$')
-     or cardinality(coalesce(p_pendencias_conciliacao_ids, '{}'::text[])) <> (select count(distinct i) from unnest(coalesce(p_pendencias_conciliacao_ids, '{}'::text[])) i) then
-    raise exception 'fin_pendencia_conciliacao_invalida: ids invalidos ou repetidos' using errcode = '23514';
+  -- M1 (R-1): as pendências de CONCILIAÇÃO são determinadas pelo BANCO (fin_conciliacao_pendencias_ids), sob a trava do período. A lista da aplicação
+  -- é só CONFERÊNCIA: precisa ser IGUAL ao conjunto do banco (mesmos ids, sem repetição, sem nulos). Omitida, incompleta, extra ou repetida => recusa.
+  v_conc := fin_conciliacao_pendencias_ids(p_org, p_unidade, p_mes);
+  if (select coalesce(array_agg(i order by i collate "C"), '{}'::text[]) from unnest(coalesce(p_pendencias_conciliacao_ids, '{}'::text[])) i) is distinct from v_conc then
+    raise exception 'fin_conciliacao_divergente: a lista de pendencias de conciliacao informada difere da calculada pelo banco (informada=%, banco=%)',
+      cardinality(coalesce(p_pendencias_conciliacao_ids, '{}'::text[])), cardinality(v_conc) using errcode = '23514';
   end if;
-  n_pend := n_pend + cardinality(coalesce(p_pendencias_conciliacao_ids, '{}'::text[]));
+  n_pend := n_pend + cardinality(v_conc);
   if n_pend > 0 then
     select * into ex from fin_excecoes_fechamento e
      where e.organizacao_id = p_org and e.unidade_id = p_unidade and e.mes = p_mes and e.status = 'ativa' and e.expira_em > now();
@@ -293,7 +377,7 @@ begin
        and not exists (select 1 from jsonb_array_elements(ex.pendencias) x
                         where x->>'id' = l.id::text
                           and l.revisao_motivos <@ coalesce((select array_agg(m) from jsonb_array_elements_text(case when jsonb_typeof(x->'motivos') = 'array' then x->'motivos' else '[]'::jsonb end) m), '{}'::text[]));
-    if descobertas > 0 or not (coalesce(p_pendencias_conciliacao_ids, '{}'::text[]) <@ ex.pendencias_conciliacao_ids) then
+    if descobertas > 0 or not (v_conc <@ ex.pendencias_conciliacao_ids) then
       raise exception 'fin_periodo_excecao_insuficiente: ha pendencia nao coberta pela excecao concedida' using errcode = '23514';
     end if;
     perform set_config('fin.fechando_periodo', v.id::text, true);          -- só vale nesta transação; autoriza o consumo da exceção
@@ -302,7 +386,7 @@ begin
   end if;
   perform set_config('fin.fechando_periodo', v.id::text, true);            -- F-D: SÓ esta função leva um período a 'fechado' (gatilho abaixo), em todos os caminhos
   update fin_periodos set status = 'fechado', fechado_por = p_usuario, fechado_em = now(),
-         snapshot = coalesce(p_snapshot, '{}'::jsonb) || jsonb_build_object('pendenciasNoFechamento', n_pend, 'fingerprint', p_fingerprint, 'excecaoFechamentoId', v_exc)
+         snapshot = coalesce(p_snapshot, '{}'::jsonb) || jsonb_build_object('pendenciasNoFechamento', n_pend, 'pendenciasConciliacaoIds', to_jsonb(v_conc), 'fingerprint', p_fingerprint, 'excecaoFechamentoId', v_exc)
    where id = v.id returning * into v;
   perform set_config('fin.fechando_periodo', '', true);
   return to_jsonb(v);
@@ -619,7 +703,7 @@ create trigger trg_fin_excecoes_fechamento_guarda before insert or update or del
 create or replace function fin_conceder_excecao_fechamento(
   p_org uuid, p_unidade uuid, p_superadmin uuid, p_mes date, p_justificativa text, p_validade_dias int, p_pendencias_conciliacao_ids text[], p_mfa jsonb
 ) returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
-declare v_per fin_periodos; v_pend jsonb; v_qtd int; v_conc_ids text[] := coalesce(p_pendencias_conciliacao_ids, '{}'::text[]); v_hash text; v_just text := btrim(coalesce(p_justificativa, '')); r fin_excecoes_fechamento;
+declare v_per fin_periodos; v_pend jsonb; v_qtd int; v_conc_ids text[] := coalesce(p_pendencias_conciliacao_ids, '{}'::text[]); v_calc text[]; v_hash text; v_just text := btrim(coalesce(p_justificativa, '')); r fin_excecoes_fechamento;
 begin
   if p_mes <> date_trunc('month', p_mes)::date then raise exception 'fin_periodo_mes_invalido' using errcode = '23514'; end if;
   if p_superadmin is null then raise exception 'fin_excecao_responsavel_obrigatorio' using errcode = '23514'; end if;
@@ -635,6 +719,12 @@ begin
   select * into v_per from fin_periodos where unidade_id = p_unidade and mes = p_mes and organizacao_id = p_org for update;
   if not found then raise exception 'fin_periodo_nao_encontrado' using errcode = 'P0002'; end if;
   if v_per.status = 'fechado' then raise exception 'fin_periodo_ja_fechado' using errcode = '23514'; end if;
+  -- M1: o conjunto REGISTRADO é o calculado pelo banco; a lista da aplicação é só conferência (divergente => recusa), nunca evidência de cobertura.
+  v_calc := fin_conciliacao_pendencias_ids(p_org, p_unidade, p_mes);
+  if (select coalesce(array_agg(i order by i collate "C"), '{}'::text[]) from unnest(v_conc_ids) i) is distinct from v_calc then
+    raise exception 'fin_conciliacao_divergente: a lista de pendencias de conciliacao informada difere da calculada pelo banco (informada=%, banco=%)', cardinality(v_conc_ids), cardinality(v_calc) using errcode = '23514';
+  end if;
+  v_conc_ids := v_calc;
   select coalesce(jsonb_agg(jsonb_build_object('id', l.id, 'motivos', to_jsonb(l.revisao_motivos)) order by l.id), '[]'::jsonb), count(*)::int into v_pend, v_qtd
     from fin_lancamentos l
    where l.organizacao_id = p_org and l.unidade_id = p_unidade and l.data_movimento >= p_mes and l.data_movimento < (p_mes + interval '1 month')::date
@@ -687,7 +777,7 @@ do $$
 declare f text; r text;
 begin
   foreach f in array array['fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,text[],jsonb)','fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)',
-                           'fin_consumir_excecao_fechamento(uuid,uuid)','fin_excecoes_fechamento_guarda()','fin_periodos_bloqueia_fechamento_direto()','fin_mfa_evidencia_valida(jsonb)','fin_ids_conciliacao_validos(text[])','fin_periodos_bloqueia_reabertura()',
+                           'fin_consumir_excecao_fechamento(uuid,uuid)','fin_conciliacao_pendencias_ids(uuid,uuid,date)','fin_excecoes_fechamento_guarda()','fin_periodos_bloqueia_fechamento_direto()','fin_mfa_evidencia_valida(jsonb)','fin_ids_conciliacao_validos(text[])','fin_periodos_bloqueia_reabertura()',
                            'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)'] loop
     execute format('revoke all on function %s from public', f);
     foreach r in array array['anon','authenticated','service_role'] loop
@@ -697,6 +787,8 @@ begin
   -- fin_fechar_periodo roda como service_role (invoker) e precisa consumir a exceção: único EXECUTE concedido, protegido pela flag do período
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     grant execute on function fin_consumir_excecao_fechamento(uuid,uuid) to service_role;
+    -- M1: fin_fechar_periodo (invoker = service_role) chama a função autoritativa; ela só lê (STABLE) e não é chamável por anon/authenticated
+    grant execute on function fin_conciliacao_pendencias_ids(uuid,uuid,date) to service_role;
   end if;
 end $$;
 
@@ -712,5 +804,12 @@ begin
     if has_function_privilege('service_role', 'fin_mfa_evidencia_valida(jsonb)', 'execute') or has_function_privilege('anon', 'fin_mfa_evidencia_valida(jsonb)', 'execute') or has_function_privilege('authenticated', 'fin_mfa_evidencia_valida(jsonb)', 'execute')
        or has_function_privilege('service_role', 'fin_ids_conciliacao_validos(text[])', 'execute') then raise exception '122 abortada: validadores puros expostos como RPC.'; end if;
     if has_table_privilege('service_role', 'fin_excecoes_fechamento', 'insert') or has_table_privilege('service_role', 'fin_excecoes_fechamento', 'update') then raise exception '122 abortada: service_role escreve em fin_excecoes_fechamento.'; end if;
+    if not has_function_privilege('service_role', 'fin_conciliacao_pendencias_ids(uuid,uuid,date)', 'execute') then raise exception '122 abortada: service_role nao executa a funcao autoritativa de pendencias de conciliacao (M1).'; end if;
+    if has_function_privilege('anon', 'fin_conciliacao_pendencias_ids(uuid,uuid,date)', 'execute') or has_function_privilege('authenticated', 'fin_conciliacao_pendencias_ids(uuid,uuid,date)', 'execute') then raise exception '122 abortada: funcao de pendencias de conciliacao exposta a anon/authenticated.'; end if;
+    -- O-1: nenhuma sobrecarga obsoleta pode restar
+    if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'fin_fechar_periodo' and p.oid <> 'fin_fechar_periodo(uuid,uuid,uuid,date,integer,text,jsonb,text[],boolean)'::regprocedure)
+       or exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'fin_conceder_excecao_fechamento' and p.oid <> 'fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,integer,text[],jsonb)'::regprocedure) then
+      raise exception '122 abortada: restam assinaturas obsoletas de fin_fechar_periodo / fin_conceder_excecao_fechamento (O-1).';
+    end if;
   end if;
 end $$;
