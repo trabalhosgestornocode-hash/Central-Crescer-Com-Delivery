@@ -1,0 +1,38 @@
+/* Seleção de setor, alternador do topbar e estados do setor Financeiro (Agente 1).
+   As páginas internas do financeiro (Agente 2) ficam em frontend/src/financeiro/ e trazem o próprio CSS. */
+
+.setor-cards {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px;
+  margin: 8px auto 22px; max-width: 760px;
+}
+.setor-card {
+  position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left;
+  padding: 26px 24px; min-height: 190px; cursor: pointer; font: inherit; color: var(--texto);
+  background: var(--card); border: 1.5px solid var(--linha); border-radius: var(--raio); box-shadow: var(--sombra-sm);
+  transition: transform var(--t), box-shadow var(--t), border-color var(--t);
+}
+.setor-card:hover:not(:disabled), .setor-card:focus-visible { transform: translateY(-2px); box-shadow: var(--sombra-md); border-color: var(--vermelho); outline: none; }
+.setor-card:disabled { opacity: .65; cursor: progress; }
+.setor-card-ic { display: inline-flex; width: 46px; height: 46px; align-items: center; justify-content: center; border-radius: 12px; background: var(--vermelho-tint); color: var(--vermelho); }
+.setor-card-ic svg { width: 26px; height: 26px; }
+.setor-card-nome { font-size: 18px; font-weight: 750; }
+.setor-card-desc { font-size: 13.5px; color: var(--muted); line-height: 1.4; }
+.setor-card-tag { display: none; position: absolute; top: 14px; right: 14px; font-size: 11px; font-weight: 650; padding: 3px 9px; border-radius: 20px; background: var(--muted-bg); color: var(--muted); }
+.setor-card--sugerido .setor-card-tag { display: inline-block; }
+
+.setor-acoes { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.btn-setor { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+
+.fin-estado { padding: 28px 8px; color: var(--muted); }
+.fin-estado--vazio { max-width: 520px; margin: 40px auto; text-align: center; background: var(--card); border: 1px dashed var(--linha); border-radius: var(--raio); padding: 36px 24px; }
+.fin-estado--vazio h3 { margin: 0 0 6px; color: var(--texto); font-size: 17px; }
+.fin-estado--vazio p { margin: 0; }
+
+@media (max-width: 640px) {
+  .setor-cards { grid-template-columns: 1fr; gap: 12px; }
+  .setor-card { min-height: 0; padding: 20px 18px; }
+  .btn-setor span { max-width: 112px; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* O atributo hidden precisa vencer o display dos componentes acima. */
+.setor-card[hidden], .setor-cards[hidden], .btn-setor[hidden], #setor-vazio[hidden] { display: none !important; }

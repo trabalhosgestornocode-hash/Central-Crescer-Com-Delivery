@@ -1,5 +1,7 @@
 import { state } from "./state.js";
 import { MENU, SECAO_MODULO } from "./config.js";
+import { MENU_FINANCEIRO } from "./financeiroMenu.js";
+import { renderPaginaFinanceira } from "./financeiroRoteador.js";
 import { el, els, toast } from "./utils.js";
 import { temModulo } from "./sessao.js";
 import * as views from "./views.js";
@@ -28,7 +30,13 @@ import { ehPerfilExibicao, itemPermitidoAoPerfil, rotaInicialDoPerfil } from "./
  * o backend; sem o módulo, a própria página do Checklist mostra "sem acesso". Isso também evita o laço de
  * redirecionamento: a rota de saída existe mesmo sem módulo.
  */
+const noFinanceiro = () => state.sessao.setor === "financeiro";
+/** Menu do setor em uso. O financeiro NUNCA se mistura com o operacional. */
+const menuAtivo = () => (noFinanceiro() ? MENU_FINANCEIRO : MENU);
+
 const acessivel = (item) => {
+  if (item.tipo === "financeiro") return noFinanceiro(); // a autorização real é do backend (status checado a cada página)
+  if (noFinanceiro()) return false;
   if (ehPerfilExibicao(state.sessao)) return itemPermitidoAoPerfil(item, state.sessao);
   const gateSecao = SECAO_MODULO[item.secao];
   if (gateSecao && !temModulo(gateSecao)) return false;
@@ -42,13 +50,15 @@ const acessivel = (item) => {
  * uma rota de saída: nunca cai num loop de redirecionamento.
  */
 export function primeiraRotaAcessivel() {
+  if (noFinanceiro()) return MENU_FINANCEIRO[0].id;
   return rotaInicialDoPerfil(state.sessao) ?? MENU.find(acessivel)?.id ?? "configuracoes";
 }
 
 // Navega para uma rota da sidebar
 export function irPara(rotaId) {
-  const alvo = MENU.find((m) => m.id === rotaId) || MENU[0];
-  const item = acessivel(alvo) ? alvo : (MENU.find((m) => m.id === primeiraRotaAcessivel()) ?? MENU[0]);
+  const menu = menuAtivo();
+  const alvo = menu.find((m) => m.id === rotaId) || menu[0];
+  const item = acessivel(alvo) ? alvo : (menu.find((m) => m.id === primeiraRotaAcessivel()) ?? menu[0]);
   state.rota = item.id;
   el("#page-title").textContent = item.label;
   els("#menu li").forEach((li) => li.classList.toggle("ativo", li.dataset.rota === item.id));
@@ -63,7 +73,7 @@ export function renderRotaAtual() {
   // que travou não tenha passado pelo próprio fechar(). Sem isso, um overlay
   // esquecido travado deixava a rolagem presa até o F5.
   resetScrollLock();
-  const item = MENU.find((m) => m.id === state.rota) || MENU[0];
+  const item = menuAtivo().find((m) => m.id === state.rota) || menuAtivo()[0];
 
   // Defesa em profundidade: o menu já esconde o que a empresa não contratou
   // (montarMenu, em app.js), mas um estado inconsistente (módulo revogado com
@@ -77,6 +87,9 @@ export function renderRotaAtual() {
   }
 
   switch (item.tipo) {
+    case "financeiro":
+      renderPaginaFinanceira(item.id, { aoPerderAcesso: () => document.dispatchEvent(new CustomEvent("app:setor-perdido")) });
+      break;
     case "pagina":
       if (item.id === "produtos") views.renderProdutos();
       else views.renderDashboard();

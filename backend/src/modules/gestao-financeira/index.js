@@ -6,5 +6,5 @@ import { exigirPermissaoFinanceira } from "../../middlewares/financeiro.js";
 export const gestaoFinanceiraRouter = Router();
 
 gestaoFinanceiraRouter.get("/status", exigirPermissaoFinanceira(PERM_FIN.VER), (req, res) => {
-  res.json({ habilitado: true, nivel: req.financeiro.nivel, permissoes: req.financeiro.permissoes });
+  res.json({ data: { habilitado: true, nivel: req.financeiro.nivel, permissoes: req.financeiro.permissoes } });
 });

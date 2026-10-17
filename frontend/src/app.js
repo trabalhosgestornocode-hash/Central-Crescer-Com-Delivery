@@ -24,8 +24,10 @@ import {
   restaurarContexto, encerrarContexto, aplicarContexto,
   precisaDefinirSenha, definirNovaSenha, temModulo,
   listarUnidadesContexto, trocarUnidadeDoContexto,
-  carregarPerfis, selecionarPerfil, limparPerfilPendente,
+  carregarPerfis, selecionarPerfil, limparPerfilPendente, carregarSetores,
 } from "./sessao.js";
+import { SETOR, SETOR_ROTULO, decidirSetor, chaveDoContexto, lerPreferencia, gravarPreferencia } from "./setores.js";
+import { MENU_FINANCEIRO, SECAO_FINANCEIRO } from "./financeiroMenu.js";
 import {
   montarSelecaoPerfil, abrirPinDoPerfil, setErroPin, setPinCarregando,
   fecharPinDoPerfil, mostrarSemPerfil,
@@ -85,6 +87,21 @@ function registrarAcoesDoAgente() {
 
 // ---------- sidebar ----------
 function montarMenu() {
+  // Setor FINANCEIRO: menu próprio (financeiroMenu.js). O operacional abaixo fica intacto.
+  const noFinanceiro = state.sessao.setor === SETOR.FINANCEIRO;
+  const filtros = document.querySelector(".global-filtros");
+  if (filtros) filtros.style.display = noFinanceiro ? "none" : "";
+  if (noFinanceiro) {
+    el("#menu").innerHTML = `<li class="menu-secao">${SECAO_FINANCEIRO}</li>` + MENU_FINANCEIRO.map((m) => `
+      <li data-rota="${m.id}">
+        <span class="m-icon">${icon(m.icon, { size: 18 })}</span>
+        <span class="m-label">${m.label}</span>
+      </li>`).join("");
+    els("#menu li[data-rota]").forEach((li) => li.addEventListener("click", () => irPara(li.dataset.rota)));
+    // Sem Agente Crescer, atualização de CMV nem alertas operacionais no setor financeiro.
+    for (const id of ["#btn-agente", "#btn-refresh", "#btn-notif"]) { const n = el(id); if (n) n.hidden = true; }
+    return;
+  }
   el("#menu").innerHTML = SECOES.map((secao) => {
     // Gate-pai da seção: sem o módulo dela (ex.: `inteligencia`), a seção
     // inteira some — título e todos os itens — sem deixar divisor órfão.
@@ -239,7 +256,7 @@ async function carregar() {
 }
 
 // ---------- troca de telas ----------
-const TELAS = { login: "#login-screen", senha: "#senha-screen", selecaoPerfil: "#selecao-perfil-screen", selecao: "#selecao-screen", app: "#app", admin: "#admin", painelAdm: "#painel-adm-screen" };
+const TELAS = { login: "#login-screen", senha: "#senha-screen", selecaoPerfil: "#selecao-perfil-screen", selecao: "#selecao-screen", setor: "#setor-screen", app: "#app", admin: "#admin", painelAdm: "#painel-adm-screen" };
 
 /** Mostra uma tela e esconde as outras. Estado de tela é exclusivo por design. */
 function mostrarTela(qual) {
@@ -332,8 +349,27 @@ async function mostrarApp({ rotaInicial } = {}) {
     }
   }
 
+  // SETOR (Financeiro × Operacional). Consultado a cada entrada no shell — inclusive troca de unidade — porque a
+  // autorização é recalculada no servidor. Aqui só decidimos a NAVEGAÇÃO; o backend recusa o que não for autorizado.
+  const decisao = await resolverSetor();
+  if (contextoMudou(g)) return;
+  if (decisao.acao === "escolher" || decisao.acao === "bloqueado") { mostrarSetor(decisao); return; }
+  state.sessao.setor = decisao.setor;
+  state.sessao.setores = decisao.setores;
+  state.sessao.setorContexto = chaveDoContexto(state.sessao);
+  atualizarAlternadorDeSetor();
+
   mostrarTela("app");
   atualizarCabecalho();
+
+  // Setor FINANCEIRO: shell sem nenhuma carga operacional (tabelas, CMV, Agente). As telas vêm do roteador financeiro.
+  if (decisao.setor === SETOR.FINANCEIRO) {
+    limparComparacaoSalva();
+    montarMenu();
+    iniciarRelogio();
+    irPara(rotaInicial && String(rotaInicial).startsWith("fin-") ? rotaInicial : primeiraRotaAcessivel());
+    return;
+  }
 
   // Perfil de EXIBIÇÃO (computador da TV): shell mínimo, direto no Checklist. Nada de tabelas comerciais, metas de
   // CMV, carga de CMV nem painel do Agente — o backend recusaria (403) e não há tela para isso. A entrada vale para
@@ -386,6 +422,88 @@ async function mostrarApp({ rotaInicial } = {}) {
   if (temModulo("inteligencia") && temModulo("agente_ia")) montarPainelGlobal();
   irPara(rotaInicial ?? primeiraRotaAcessivel());
   return carregar();
+}
+
+// ---------- setor: Financeiro × Operacional ----------
+/** Consulta os setores autorizados e decide: entrar direto, perguntar ou bloquear. */
+async function resolverSetor() {
+  const sessao = state.sessao;
+  const exibicao = ehPerfilExibicao(sessao);
+  const semConsulta = exibicao || sessao.impersonando;
+  const setores = semConsulta ? null : await carregarSetores();
+  const mesmoContexto = sessao.setorContexto === chaveDoContexto(sessao);
+  return decidirSetor({
+    setores, exibicao, impersonando: !!sessao.impersonando,
+    setorAtual: mesmoContexto ? sessao.setor : null,
+  });
+}
+
+/** Tela "Em qual setor você quer prosseguir?" (ou o aviso de nenhum setor autorizado). */
+function mostrarSetor(decisao) {
+  state.sessao.setor = null;
+  state.sessao.setores = decisao.setores;
+  mostrarTela("setor");
+  const { usuario, empresa, unidade } = state.sessao;
+  el("#setor-nome").textContent = usuario?.nome || usuario?.email || "—";
+  el("#setor-contexto").textContent = unidade?.nome ? `${empresa?.nome} · ${unidade.nome}` : (empresa?.nome ?? "");
+  const vazio = decisao.acao === "bloqueado";
+  el("#setor-cards").hidden = vazio;
+  el("#setor-vazio").hidden = !vazio;
+  el("#setor-titulo").textContent = vazio ? "Nenhum setor disponível para você aqui" : "Em qual setor você quer prosseguir?";
+  const preferido = lerPreferencia(usuario?.id);
+  for (const card of els("#setor-cards .setor-card")) {
+    card.hidden = !decisao.setores.includes(card.dataset.setor);
+    card.classList.toggle("setor-card--sugerido", card.dataset.setor === preferido);
+    card.disabled = false;
+  }
+  el("#setor-cards .setor-card:not([hidden])")?.focus({ preventScroll: true });
+}
+
+/** Registra a escolha (só navegação) e reentra no shell — que reconfere os setores no servidor. */
+function escolherSetor(setor) {
+  if (!state.sessao.setores.includes(setor)) return;
+  state.sessao.setor = setor;
+  state.sessao.setorContexto = chaveDoContexto(state.sessao);
+  gravarPreferencia(state.sessao.usuario?.id, setor);
+  mostrarApp();
+}
+
+/** Alternador do topbar: só aparece quando os DOIS setores estão autorizados. */
+function atualizarAlternadorDeSetor() {
+  const btn = el("#btn-setor");
+  if (!btn) return;
+  const { setor, setores } = state.sessao;
+  const outro = setor === SETOR.FINANCEIRO ? SETOR.OPERACIONAL : SETOR.FINANCEIRO;
+  btn.hidden = !(setores.length > 1 && setores.includes(outro));
+  btn.dataset.destino = outro;
+  el("#btn-setor-rotulo").textContent = SETOR_ROTULO[outro] ?? "";
+  btn.title = `Ir para o ${SETOR_ROTULO[outro] ?? ""}`;
+}
+
+let perdaDeSetorEmAndamento = false;
+/** O backend negou o financeiro (revogação/expiração/módulo desligado): recalcula e sai do setor na hora. */
+async function aoPerderAcessoFinanceiro() {
+  if (perdaDeSetorEmAndamento) return;
+  perdaDeSetorEmAndamento = true;
+  try {
+    state.sessao.setor = null;
+    state.sessao.setorContexto = null;
+    toast("Seu acesso ao Dashboard Financeiro não está mais disponível.");
+    await mostrarApp();
+  } finally {
+    perdaDeSetorEmAndamento = false;
+  }
+}
+
+function ligarSetores() {
+  el("#setor-cards")?.addEventListener("click", (ev) => {
+    const card = ev.target.closest(".setor-card");
+    if (card && !card.hidden) { card.disabled = true; escolherSetor(card.dataset.setor); }
+  });
+  el("#btn-setor")?.addEventListener("click", () => escolherSetor(el("#btn-setor").dataset.destino));
+  for (const id of ["#setor-trocar", "#setor-trocar-vazio"]) el(id)?.addEventListener("click", voltarParaSelecao);
+  for (const id of ["#setor-sair", "#setor-sair-vazio"]) el(id)?.addEventListener("click", sairDeTudo);
+  document.addEventListener("app:setor-perdido", aoPerderAcessoFinanceiro);
 }
 
 // ---------- tela: seleção de unidade ----------
@@ -750,6 +868,7 @@ function ligarMenuUsuario(chipSel, menuSel) {
 
 // ---------- eventos globais ----------
 function wireEventos() {
+  ligarSetores();
   el("#login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const erroBox = el("#login-erro");
