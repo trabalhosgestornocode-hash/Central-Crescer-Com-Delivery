@@ -175,5 +175,8 @@ export const novaSenha = asyncHandler(async (req, res) => {
 // GET /api/v1/sessao/setores — setores autorizados para o perfil na unidade do contexto atual.
 export const setores = asyncHandler(async (req, res) => {
   const fin = await resolverAcessoFinanceiro(req.acesso, req.tenant);
-  res.json({ data: { setores: calcularSetores({ permissoes: req.acesso.permissoes, impersonando: req.acesso.impersonando, financeiroOk: fin.ok }) } });
+  res.json({ data: { setores: calcularSetores({
+    permissoes: req.acesso.permissoes, modulos: req.acesso.modulos, impersonando: req.acesso.impersonando,
+    financeiroOk: fin.ok, somenteFinanceiro: fin.ok && fin.somenteFinanceiro,
+  }) } });
 });

@@ -23,7 +23,7 @@ export const leitorPadrao = {
   },
   async concessao(perfilId, orgId, unidadeId) {
     const { data, error } = await supabase.from("gestao_financeira_concessoes")
-      .select("organizacao_id, unidade_id, nivel, revogada_em, expira_em")
+      .select("organizacao_id, unidade_id, nivel, somente_financeiro, revogada_em, expira_em")
       .eq("perfil_id", perfilId).eq("organizacao_id", orgId).eq("unidade_id", unidadeId).is("revogada_em", null)
       .maybeSingle();
     if (error) throw error;
@@ -33,18 +33,20 @@ export const leitorPadrao = {
 
 /**
  * Resolve o acesso financeiro do contexto. `leitor` é injetável para testes sem banco.
- * @returns {Promise<{ok:true, nivel:string, permissoes:string[]}|{ok:false, codigo:string}>}
+ * @returns {Promise<{ok:true, nivel:string, permissoes:string[], somenteFinanceiro:boolean}|{ok:false, codigo:string}>}
  */
 export async function resolverAcessoFinanceiro(acesso, tenant, leitor = leitorPadrao, agora = Date.now()) {
   if (!acesso || !tenant?.organizacaoId) return { ok: false, codigo: "FINANCEIRO_SEM_CONCESSAO" };
   if (acesso.impersonando) return { ok: false, codigo: "FINANCEIRO_BLOQUEADO_IMPERSONACAO" };
+  // Perfil de exibição (TV da loja) nunca enxerga o financeiro, mesmo que alguém grave uma concessão para ele.
+  if (acesso.papel === "display_operator") return { ok: false, codigo: "FINANCEIRO_SEM_CONCESSAO" };
   if (!acesso.perfilId || !tenant.unidadeId) return { ok: false, codigo: "FINANCEIRO_SEM_CONCESSAO" };
   if (!(await leitor.moduloEmpresa(tenant.organizacaoId)) || !(await leitor.moduloUnidade(tenant.unidadeId))) {
     return { ok: false, codigo: "FINANCEIRO_NAO_HABILITADO" };
   }
   const c = await leitor.concessao(acesso.perfilId, tenant.organizacaoId, tenant.unidadeId);
   if (!concessaoVigente(c, tenant, agora)) return { ok: false, codigo: "FINANCEIRO_SEM_CONCESSAO" };
-  return { ok: true, nivel: c.nivel, permissoes: permissoesDoNivelFinanceiro(c.nivel) };
+  return { ok: true, nivel: c.nivel, permissoes: permissoesDoNivelFinanceiro(c.nivel), somenteFinanceiro: c.somente_financeiro === true };
 }
 
 /** Gate da montagem de `/gestao-financeira`. Preenche `req.financeiro`. */
@@ -53,7 +55,7 @@ export function requireFinanceiro(leitor = leitorPadrao) {
     try {
       const r = await resolverAcessoFinanceiro(req.acesso, req.tenant, leitor);
       if (!r.ok) return next(ApiError.forbidden("Acesso ao Dashboard Financeiro não autorizado.", { codigo: r.codigo }));
-      req.financeiro = { nivel: r.nivel, permissoes: r.permissoes, organizacaoId: req.tenant.organizacaoId, unidadeId: req.tenant.unidadeId };
+      req.financeiro = { nivel: r.nivel, permissoes: r.permissoes, somenteFinanceiro: r.somenteFinanceiro, organizacaoId: req.tenant.organizacaoId, unidadeId: req.tenant.unidadeId };
       next();
     } catch {
       next(ApiError.internal("Falha ao validar o acesso financeiro."));

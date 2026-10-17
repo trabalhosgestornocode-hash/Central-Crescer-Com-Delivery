@@ -51,6 +51,8 @@ create table if not exists public.gestao_financeira_concessoes (
   unidade_id       uuid not null references public.unidades(id) on delete cascade,
   perfil_id        uuid not null references public.perfis_operacionais(id) on delete cascade,
   nivel            text not null check (nivel in ('leitura', 'operador', 'gestor')),
+  -- true: a pessoa entra DIRETO no setor financeiro (sem escolha de setor). Afeta só a navegação — não remove papéis operacionais.
+  somente_financeiro boolean not null default false,
   concedida_por    uuid not null,                       -- auth.users.id do SuperAdmin; sem FK (sobrevive à exclusão da conta)
   motivo           text not null check (length(btrim(motivo)) >= 10),
   concedida_em     timestamptz not null default now(),
@@ -104,6 +106,9 @@ create trigger trg_gfca_imutavel before update or delete on public.gestao_financ
 drop trigger if exists trg_gfca_sem_truncate on public.gestao_financeira_concessoes_auditoria;
 create trigger trg_gfca_sem_truncate before truncate on public.gestao_financeira_concessoes_auditoria
   for each statement execute function public.gfc_auditoria_imutavel();
+
+-- (idempotência em bancos que já receberam uma versão anterior da tabela)
+alter table public.gestao_financeira_concessoes add column if not exists somente_financeiro boolean not null default false;
 
 -- 4) Integridade -------------------------------------------------------------
 create or replace function public.gfc_validar() returns trigger
