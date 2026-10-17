@@ -106,6 +106,8 @@ end $$;
 
 -- 2) Remove o que a 122 criou.
 drop trigger if exists trg_fin_periodos_bloqueia_reabertura on fin_periodos;
+drop trigger if exists trg_fin_periodos_bloqueia_fechamento_direto on fin_periodos;
+drop function if exists fin_periodos_bloqueia_fechamento_direto();
 drop trigger if exists trg_fin_par_status_consistente on fin_lancamentos;
 drop trigger if exists trg_fin_transferencias_guarda on fin_transferencias;
 drop trigger if exists trg_fin_saldos_periodo on fin_saldos_abertura;

@@ -107,3 +107,4 @@ CSS sob demanda (`financeiro-paginas.css`), tema escuro via `[data-theme="dark"]
 **Testes B9:** backend `test/financeiro/exportacao.test.js` (8) e `relatoriosExportacoes.test.js` (14); navegador real `frontend/test/financeiro.browser.test.js` (17; downloads reais de CSV/XLSX, mobile, tema escuro).
 
 - **Reabertura:** não existe rota HTTP (`POST /periodos/:mes/reabrir` foi removida: 404 para qualquer permissão); no banco continua sem EXECUTE, com gatilho e pós-condição. O serviço `reabrir` permanece fail-closed, só para uso futuro.
+- **Fechamento só pela função (F-D):** gatilho `trg_fin_periodos_bloqueia_fechamento_direto` — INSERT/UPDATE direto que leve um período a `fechado` é recusado (`fin_fechamento_via_funcao`); só `fin_fechar_periodo`, que define a flag local com o id do período em todos os caminhos. Mesmo limite honesto da trava de reabertura (defende contra API/backend; não contra SQL bruto como `service_role`).

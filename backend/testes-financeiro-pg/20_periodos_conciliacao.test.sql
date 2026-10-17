@@ -61,6 +61,18 @@ begin
   if not ok3 then raise exception 'FALHA 2c: snapshot mutavel'; end if;
   begin update fin_periodos set status = 'aberto' where unidade_id = c.u1 and mes = '2026-09-01'; exception when sqlstate '23514' then ok4 := true; end;
   if not ok4 then raise exception 'FALHA 2d: reabriu sem a funcao'; end if;
+  -- F-D: ninguém fecha por UPDATE/INSERT direto (contornaria exceção, fingerprint e versão), nem mês limpo nem com pendência
+  perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-09-02', true);
+  ok1 := false; begin update fin_periodos set status = 'fechado', fechado_por = c.usr, fechado_em = now(), snapshot = '{"x":1}' where unidade_id = c.u1 and mes = '2027-09-01'; exception when sqlstate '23514' then ok1 := (sqlerrm like 'fin_fechamento_via_funcao%'); end;
+  ok2 := false; begin insert into fin_periodos (organizacao_id, unidade_id, mes, status, fechado_por, fechado_em, snapshot) values (c.org1, c.u1, '2027-10-01', 'fechado', c.usr, now(), '{"x":1}'); exception when sqlstate '23514' then ok2 := (sqlerrm like 'fin_fechamento_via_funcao%'); end;
+  if not (ok1 and ok2) then raise exception 'FALHA 2i (F-D): fechamento direto aceito (% %)', ok1, ok2; end if;
+  -- uma flag de OUTRO período não autoriza
+  perform set_config('fin.fechando_periodo', gen_random_uuid()::text, true);
+  ok1 := false; begin update fin_periodos set status = 'fechado', fechado_por = c.usr, fechado_em = now(), snapshot = '{"x":1}' where unidade_id = c.u1 and mes = '2027-09-01'; exception when sqlstate '23514' then ok1 := true; end;
+  perform set_config('fin.fechando_periodo', '', true);
+  if not ok1 then raise exception 'FALHA 2j (F-D): flag de outro periodo autorizou'; end if;
+  -- fechamento legítimo (mês limpo) segue funcionando, e a flag não vaza para a sessão
+  if current_setting('fin.fechando_periodo', true) <> '' then raise exception 'FALHA 2k: flag vazou'; end if;
   -- outro mês da mesma unidade segue aberto
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 5, '2026-10-02');
   -- reabertura exige motivo, versão correta e período fechado

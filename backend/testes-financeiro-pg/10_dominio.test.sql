@@ -79,7 +79,9 @@ declare c ctx; a uuid; cat uuid; ok boolean := false; ok2 boolean := false; n in
 begin
   select * into c from ctx; select id into a from fin_contas where unidade_id = c.u1 and nome = 'A';
   select id into cat from fin_plano_contas where organizacao_id = c.org1 and papel = 'receita_operacional';
-  insert into fin_periodos (organizacao_id, unidade_id, mes, status) values (c.org1, c.u1, '2026-08-01', 'fechado');
+  perform set_config('fin.fechando_periodo', '00000000-0000-4000-8000-0000000000f1', true);   -- fixture: período já fechado (o gatilho F-D da 122 só admite via função ou flag)
+  insert into fin_periodos (id, organizacao_id, unidade_id, mes, status) values ('00000000-0000-4000-8000-0000000000f1', c.org1, c.u1, '2026-08-01', 'fechado');
+  perform set_config('fin.fechando_periodo', '', true);
   begin insert into fin_lancamentos (organizacao_id, unidade_id, conta_id, categoria_id, descricao, sentido, valor_centavos, data_movimento)
         values (c.org1, c.u1, a, cat, 'x', 'entrada', 10, '2026-08-15'); exception when sqlstate '23514' then ok := true; end;
   if not ok then raise exception 'FALHA 5a: escreveu em mes fechado'; end if;

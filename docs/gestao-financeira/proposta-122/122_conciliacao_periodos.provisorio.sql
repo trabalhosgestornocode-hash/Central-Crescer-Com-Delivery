@@ -298,12 +298,13 @@ begin
     end if;
     perform set_config('fin.fechando_periodo', v.id::text, true);          -- só vale nesta transação; autoriza o consumo da exceção
     perform fin_consumir_excecao_fechamento(ex.id, p_usuario);
-    perform set_config('fin.fechando_periodo', '', true);
     v_exc := ex.id;
   end if;
+  perform set_config('fin.fechando_periodo', v.id::text, true);            -- F-D: SÓ esta função leva um período a 'fechado' (gatilho abaixo), em todos os caminhos
   update fin_periodos set status = 'fechado', fechado_por = p_usuario, fechado_em = now(),
          snapshot = coalesce(p_snapshot, '{}'::jsonb) || jsonb_build_object('pendenciasNoFechamento', n_pend, 'fingerprint', p_fingerprint, 'excecaoFechamentoId', v_exc)
    where id = v.id returning * into v;
+  perform set_config('fin.fechando_periodo', '', true);
   return to_jsonb(v);
 end $$;
 
@@ -574,6 +575,19 @@ end $$;
 drop trigger if exists trg_fin_periodos_bloqueia_reabertura on fin_periodos;
 create trigger trg_fin_periodos_bloqueia_reabertura before update on fin_periodos for each row execute function fin_periodos_bloqueia_reabertura();
 
+-- F-D (achado do Agente 1, LD-010): ninguém leva um período a 'fechado' por UPDATE/INSERT direto — isso contornaria exceção, fingerprint e versão. Só fin_fechar_periodo,
+-- que define a flag local com o id do período. Mesmo limite honesto da trava de reabertura: defende contra a API/backend, não contra SQL bruto que já seja service_role.
+create or replace function fin_periodos_bloqueia_fechamento_direto() returns trigger language plpgsql as $$
+begin
+  if new.status = 'fechado' and (tg_op = 'INSERT' or old.status is distinct from 'fechado')
+     and coalesce(current_setting('fin.fechando_periodo', true), '') <> new.id::text then
+    raise exception 'fin_fechamento_via_funcao: o periodo so pode ser fechado pela funcao de fechamento' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_fin_periodos_bloqueia_fechamento_direto on fin_periodos;
+create trigger trg_fin_periodos_bloqueia_fechamento_direto before insert or update on fin_periodos for each row execute function fin_periodos_bloqueia_fechamento_direto();
+
 -- =====================================================================
 -- EXCEÇÃO DE FECHAMENTO COM PENDÊNCIAS (LD-007) — por unidade + competência, SuperAdmin, uso único, desabilitada por padrão
 -- =====================================================================
@@ -673,7 +687,7 @@ do $$
 declare f text; r text;
 begin
   foreach f in array array['fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,text[],jsonb)','fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)',
-                           'fin_consumir_excecao_fechamento(uuid,uuid)','fin_excecoes_fechamento_guarda()','fin_mfa_evidencia_valida(jsonb)','fin_ids_conciliacao_validos(text[])','fin_periodos_bloqueia_reabertura()',
+                           'fin_consumir_excecao_fechamento(uuid,uuid)','fin_excecoes_fechamento_guarda()','fin_periodos_bloqueia_fechamento_direto()','fin_mfa_evidencia_valida(jsonb)','fin_ids_conciliacao_validos(text[])','fin_periodos_bloqueia_reabertura()',
                            'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)'] loop
     execute format('revoke all on function %s from public', f);
     foreach r in array array['anon','authenticated','service_role'] loop
@@ -693,6 +707,7 @@ begin
     if has_function_privilege('service_role', 'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)', 'execute') then raise exception '122 abortada: service_role ainda executa fin_reabrir_periodo.'; end if;
     if has_function_privilege('service_role', 'fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,text[],jsonb)', 'execute') then raise exception '122 abortada: service_role executa conceder excecao.'; end if;
     if has_function_privilege('service_role', 'fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)', 'execute') then raise exception '122 abortada: service_role executa revogar excecao.'; end if;
+    if not exists (select 1 from pg_trigger where tgname = 'trg_fin_periodos_bloqueia_fechamento_direto' and tgrelid = 'fin_periodos'::regclass and tgenabled = 'O') then raise exception '122 abortada: gatilho de fechamento direto ausente.'; end if;
     if not exists (select 1 from pg_trigger where tgname = 'trg_fin_periodos_bloqueia_reabertura' and tgrelid = 'fin_periodos'::regclass and tgenabled = 'O') then raise exception '122 abortada: gatilho de reabertura desabilitada ausente.'; end if;
     if has_function_privilege('service_role', 'fin_mfa_evidencia_valida(jsonb)', 'execute') or has_function_privilege('anon', 'fin_mfa_evidencia_valida(jsonb)', 'execute') or has_function_privilege('authenticated', 'fin_mfa_evidencia_valida(jsonb)', 'execute')
        or has_function_privilege('service_role', 'fin_ids_conciliacao_validos(text[])', 'execute') then raise exception '122 abortada: validadores puros expostos como RPC.'; end if;
