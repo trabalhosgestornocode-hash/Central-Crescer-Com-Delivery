@@ -74,7 +74,7 @@ export const nivelAlerta = (a) => (a.nivel === "erro" ? "bad" : "warn");
 export const podeAcao = (ctx, acao) => (ctx?.permissoes ?? []).includes(acao);
 export const ACAO = Object.freeze({
   VER: "gestao_financeira.ver", LANCAR: "gestao_financeira.lancar", EDITAR: "gestao_financeira.editar", CONCILIAR: "gestao_financeira.conciliar",
-  FECHAR: "gestao_financeira.fechar", REABRIR: "gestao_financeira.reabrir", CONFIGURAR: "gestao_financeira.configurar", CANCELAR: "gestao_financeira.cancelar", EXCLUIR: "gestao_financeira.excluir",
+  CONFIGURAR: "gestao_financeira.configurar", CANCELAR: "gestao_financeira.cancelar", EXCLUIR: "gestao_financeira.excluir",
 });
 
 /** Motivos de revisão da importação → rótulo curto. */
@@ -104,3 +104,6 @@ export const ROTULO_STATUS_PERIODO = Object.freeze({ aberto: { rotulo: "Aberto",
 export const primeiroDiaDoMes = (ym) => ym + "-01";
 /** Texto de valor digitado (pt-BR) → string aceita pelo servidor; vazio continua vazio (ausente nunca vira zero). */
 export const valorDigitado = (v) => String(v ?? "").trim();
+
+/** Ações de fechamento (separadas de ACAO para não tocar a linha mantida em sincronia com a matriz do Agente 1). */
+export const ACAO_FECHAMENTO = Object.freeze({ FECHAR: "gestao_financeira.fechar", REABRIR: "gestao_financeira.reabrir" });

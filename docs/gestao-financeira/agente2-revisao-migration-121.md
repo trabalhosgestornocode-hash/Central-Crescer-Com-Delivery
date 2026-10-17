@@ -27,7 +27,7 @@ Idêntico, exceto: cabeçalho, `begin;`/`set local lock_timeout = '5s'`, pós-co
 ## Compatibilidade com a 120
 Sem objetos em comum (120: `gfc_*`, `gestao_financeira_concessoes*`, `modulos`; 121: `fin_*`). Ordem 120 → 121 aplicada e 121 reaplicada sobre a 120; a suíte do domínio (`10_dominio.test.sql`) passa sobre a 121 integrada. A 121 não referencia a 120 (acesso é decidido no backend).
 
-## Achados e correções (todos no `122_conciliacao_periodos.provisorio.sql`)
+## Achados e correções (todos no `proposta-122/122_conciliacao_periodos.provisorio.sql`)
 | # | Severidade | Achado na 121 integrada | Correção / prova |
 |---|---|---|---|
 | R5 | **Média** (alcançável pela API) | Perna de transferência **vinculada** podia trocar de **categoria** (`PATCH /lancamentos/:id` com `categoriaId`) saindo de "transferência" e deixando o par inconsistente. Reproduzido na 121 integrada. | `fin_lancamentos_guarda` passa a recusar mudança de valor/sentido/conta/data/**categoria** em perna vinculada. Sondagem R5 passa com o 122; `25_cancelamento_par.test.sql` bloco 3c. |

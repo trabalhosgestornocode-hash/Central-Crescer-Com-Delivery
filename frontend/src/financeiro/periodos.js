@@ -2,7 +2,7 @@
 // O fechamento com pendências está BLOQUEADO por padrão; só com política aprovada e reconhecimento explícito. A reabertura depende de uma
 // autorização que nenhum nível possui nesta versão: a tela só oferece o botão a quem tiver `reabrir`, e o servidor decide (fail-closed).
 import { fin } from "./api.js";
-import { moeda, pct, dataBr, rotuloMes, podeAcao, ACAO, ROTULO_STATUS_PERIODO } from "./modelo.js";
+import { moeda, pct, rotuloMes, podeAcao, ACAO, ACAO_FECHAMENTO, ROTULO_STATUS_PERIODO } from "./modelo.js";
 import { garantirCss, cabecalho, tabela, badge, carregarEm, dialogo, campo, aviso, esc, estado } from "./ui.js";
 
 export async function render(container, ctx) {
@@ -11,7 +11,7 @@ export async function render(container, ctx) {
   const raiz = document.createElement("section");
   raiz.className = "fin-pg";
   container.appendChild(raiz);
-  const pFechar = podeAcao(ctx, ACAO.FECHAR), pReabrir = podeAcao(ctx, ACAO.REABRIR), pConfigurar = podeAcao(ctx, ACAO.CONFIGURAR);
+  const pFechar = podeAcao(ctx, ACAO_FECHAMENTO.FECHAR), pReabrir = podeAcao(ctx, ACAO_FECHAMENTO.REABRIR), pConfigurar = podeAcao(ctx, ACAO.CONFIGURAR);
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({

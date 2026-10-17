@@ -8,9 +8,11 @@ import { fileURLToPath } from "node:url";
 
 const aqui = fileURLToPath(new URL(".", import.meta.url));
 const dominio = join(aqui, "..", "..", "src", "modules", "gestao-financeira", "dominio");
-const sqlDir = join(aqui, "..", "..", "..", "docs", "gestao-financeira", "sql-provisorio");
-
-const sql = readdirSync(sqlDir).filter((f) => /^12[12]_.*provisorio\.sql$/.test(f) && !f.includes("rollback")).map((f) => readFileSync(join(sqlDir, f), "utf8")).join("\n");
+const raizRepo = join(aqui, "..", "..", "..");
+// 121 (provisória ou promovida em database/migrations) + 122 (proposta); rollbacks ignorados
+const dirs = ["docs/gestao-financeira/sql-provisorio", "docs/gestao-financeira/proposta-122", "database/migrations"].map((d) => join(raizRepo, d));
+const arquivos = dirs.flatMap((d) => { try { return readdirSync(d).filter((f) => /^12[12]_.*\.sql$/.test(f) && !f.includes("rollback")).map((f) => join(d, f)); } catch { return []; } });
+const sql = arquivos.map((f) => readFileSync(f, "utf8")).join("\n");
 const funcoes = new Map();
 for (const m of sql.matchAll(/create or replace function (fin_[a-z_]+)\(([\s\S]*?)\)\s*returns/g)) {
   funcoes.set(m[1], [...m[2].matchAll(/\b(p_[a-z_]+)\s+[a-z]/g)].map((x) => x[1]).sort());
