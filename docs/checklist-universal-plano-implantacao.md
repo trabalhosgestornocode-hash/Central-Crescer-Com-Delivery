@@ -59,16 +59,19 @@ O catálogo exibido na tela de Acessos vem do **código** (`CATALOGO_MODULOS`), 
 5. Conferir que os pedidos de retirada aparecem sem tempos ("Retirada: sem tempos") e que o poller do iFood segue ao vivo (selo e `ultimo_evento_em` avançando).
 6. Logs do Render: nenhum erro novo em `/api/v1/checklist-operacional/resumo`.
 
-## 6. Piloto: uma empresa SEM iFood
-1. Escolher **uma** empresa e uma unidade (decisão sua). Habilitar `checklist_operacional` pela tela de Acessos nos **dois níveis** (empresa e unidade) — o acesso efetivo é a interseção.
-2. Garantir que o usuário piloto tenha `checklist.visualizar` (papéis que já abriam o Checklist a têm) e **selecione o contexto de novo** (a sessão congela os módulos).
-3. Esperado: menu "Checklist Operacional" visível; a tela abre com "Unidade sem integração com o iFood", sem números, sem erro de console; TV 1280×720 sem rolagem.
-4. Esperado: nenhuma chamada ao iFood por causa dessa unidade; módulo `ifood` continua ausente nela.
+## 6. Piloto principal: Subway North Shopping (Fortaleza/CE) — vínculo iFood sem credencial de pedidos
+**Identificação (leitura em produção, 17/10/2026):** a única unidade com "North" ou "Fortaleza" no cadastro é **"Subway North Shopping"** (Fortaleza/CE), id `6a417349-2ece-4e85-9e7f-884391aecd90`, ativa, `eh_teste = false`. Ela pertence à **mesma empresa da Subway Saci** (Grupo Jailton e Vanessa) e é a mesma unidade antes chamada "North Shopping (teste)". O cadastro não tem CNPJ, responsável nem e-mail.
+**iFood:** módulo `ifood` na empresa e na unidade; conexão ativa com loja vinculada (loja de teste no iFood); credencial `financial` ativa (expirou em 08/10) e **sem credencial de pedidos (`order`)** — nunca recebeu pedidos (0 pedidos, 0 eventos).
+**Classificação (decisão do responsável, Checkpoint K):** **piloto de unidade com vínculo iFood, mas sem credencial de pedidos autorizada**, e unidade piloto principal do Checklist. **Não** é piloto "sem iFood". Não se modifica a conexão iFood, não se solicitam novas credenciais e não se criam pedidos artificiais.
+**Não há habilitação a fazer:** a unidade já tem `ifood` nos dois níveis, então a migration lhe dá o módulo novo automaticamente (uma das 7 unidades do backfill). Permissão necessária: `checklist.visualizar` (papéis `organization_admin`, `operations`, `finance`, `unit_manager`, `viewer` e `display_operator`); os vínculos da empresa valem para as duas unidades.
+**Esperado na tela:** o aviso "Integração não ativada — A loja não autorizou o aplicativo de pedidos da Central." (modo integrado, estado `nao_ativada`, motivo `sem_credencial_order`), sem números, sem pedidos e sem erro de console; **não** o aviso "Unidade sem integração com o iFood".
+**Valida:** acesso ao Checklist; seleção da unidade; permissões; isolamento entre North Shopping e Subway Saci; o estado de integração não ativada; ausência de pedidos e de indicadores fictícios; e a compatibilidade com o módulo independente.
+**A North Shopping NÃO substitui o teste de uma unidade realmente desconectada do iFood. Pendência obrigatória antes de liberar o módulo para todas as empresas:** uma unidade **realmente desconectada** (sem módulo `ifood`, sem conexão) acessando o Checklist só pelo módulo novo e vendo "Unidade sem integração com o iFood". Hoje isso só está provado em testes automáticos. Será um **piloto separado**, com uma unidade autorizada e sem conexão iFood. **Essa segunda unidade não é escolhida nem ativada automaticamente**: a escolha e a autorização são do responsável.
 
 ## 7. Verificação de isolamento (antes de ampliar)
-1. Piloto não vê pedidos da Saci nem de outra empresa (a lista de pedidos fica vazia).
+1. A North não vê pedidos da Saci (mesma empresa, outra unidade) nem de outra empresa; a Saci não vê a North.
 2. Usuário da Saci continua vendo só os pedidos da Saci.
-3. Usuário do piloto sem `checklist.visualizar` recebe 403; empresa sem o módulo (nem `ifood`) recebe 403.
+3. Usuário sem `checklist.visualizar` recebe 403; empresa sem o módulo (nem `ifood`) recebe 403.
 4. Consulta de leitura confirma que `checklist_operacional` está só nas empresas/unidades pretendidas.
 5. `checklist-operacional-pg.test.js` (Postgres descartável) permanece verde com a versão publicada.
 
@@ -86,7 +89,7 @@ O catálogo exibido na tela de Acessos vem do **código** (`CATALOGO_MODULOS`), 
 ## 10. Critérios objetivos para interromper ou reverter
 **Interromper a ativação** (não avançar de onda) se qualquer um ocorrer: um 403 inesperado em usuário que já usava o Checklist; um erro de console recorrente na tela; uma unidade vendo dado de outra; contagens da Saci diferentes das anotadas; TV cortada ou com rolagem.
 **Reverter imediatamente** (§3) se: qualquer vazamento entre empresas/unidades; a Saci perder o acesso ao Checklist; 5xx persistente (> 5 min) em `/checklist-operacional/resumo`; queda do poller do iFood atribuível ao deploy; migration com resultado de verificação diferente do esperado.
-**Rollback parcial**: para desligar o piloto sem reverter nada, retirar `checklist_operacional` da empresa/unidade piloto pela tela de Acessos (a Saci continua por `ifood`).
+**Rollback parcial**: para uma empresa SEM iFood habilitada depois, retirar `checklist_operacional` da empresa/unidade pela tela de Acessos. A North (e a Saci) têm `ifood` e continuam abrindo pelo gate `OU ifood`.
 
 ## 11. O que este plano NÃO inclui
 Remoção do gate `OU ifood`; correção dos 4 pedidos `CONCLUDED` sem horário e da máquina de estados iFood (plano próprio); metas por unidade persistidas; qualquer alteração em credenciais, conexões ou tokens do iFood.
@@ -103,6 +106,7 @@ Marcar cada item com data e responsável antes de iniciar. Qualquer "não" adia 
 | 6 | **Homologação visual da TV da Saci** na resolução real da TV, com alguém na loja. | a designar | pendente |
 | 7 | **Plano de rollback** conhecido por quem decide: código primeiro, banco depois; exportar os vínculos antes do rollback do banco (ele remove também os do piloto e das ondas). | quem decide reverter | pendente |
 | 8 | **Janela de baixo movimento** (manhã de dia útil; evitar sábado/pico). | você | pendente |
-| 9 | **Comunicação ao responsável da unidade piloto** antes de habilitar (o que é, que abrirá sem pedidos, que pode ser desligado), com a autorização da empresa. | você | pendente |
+| 9 | **Piloto Subway North Shopping** (unidade confirmada pelo responsável: Fortaleza/CE, empresa Grupo Jailton e Vanessa): **designar quem a acompanhará** (o cadastro não tem responsável) e **comunicar os responsáveis pela unidade** sobre o que esperar (abre sem pedidos, aviso "Integração não ativada"). Nada a habilitar: o acesso vem da migration. Não mexer na conexão iFood, não pedir credenciais, não criar pedidos. | você | pendente |
+| 9b | **Validação posterior com uma unidade realmente desconectada** (sem `ifood`), autorizada, antes de universalizar o acesso às demais lojas. | você | pendente |
 | 10 | Ninguém usa a tela de Acessos entre a migration e o deploy; reaplicar a migration (idempotente) depois do deploy. | quem executa | pendente |
 | 11 | PR #47 revisado e fora de Draft por decisão do responsável; ordem com a financeira definida (Checklist primeiro). | você | pendente |
