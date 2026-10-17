@@ -307,17 +307,23 @@ declare v_par uuid;
 begin
   insert into fin_transferencias (organizacao_id, unidade_id, lancamento_saida_id, lancamento_entrada_id, criado_por)
   values (p_org, p_unidade, p_saida, p_entrada, p_usuario) returning id into v_par;
+  -- par confirmado por pessoa autorizada: as duas pernas deixam de ser "transferência sem contraparte"
+  update fin_lancamentos set classificacao_pendente = false, atualizado_por = p_usuario where id in (p_saida, p_entrada);
   return v_par;
 end $$;
 
 -- Desfaz o vínculo (as pernas permanecem como lançamentos; nada é excluído).
 create or replace function fin_desvincular_transferencia(p_org uuid, p_unidade uuid, p_usuario uuid, p_transferencia uuid)
 returns boolean language plpgsql security definer set search_path = public, pg_temp as $$
+declare v_s uuid; v_e uuid;
 begin
   -- Único DELETE do domínio: só por esta função (SECURITY DEFINER, escopo org+unidade conferido) e auditado pelo gatilho.
   -- O service_role não tem DELETE direto em nenhuma tabela.
-  delete from fin_transferencias where id = p_transferencia and organizacao_id = p_org and unidade_id = p_unidade;
-  return found;
+  delete from fin_transferencias where id = p_transferencia and organizacao_id = p_org and unidade_id = p_unidade
+    returning lancamento_saida_id, lancamento_entrada_id into v_s, v_e;
+  if v_s is null then return false; end if;
+  update fin_lancamentos set classificacao_pendente = true, atualizado_por = p_usuario where id in (v_s, v_e);
+  return true;
 end $$;
 
 -- Confirmação da importação: tudo ou nada. Idempotente por chave_origem; reconfirmar devolve o resumo anterior.

@@ -147,5 +147,22 @@ begin
   if not ok then raise exception 'FALHA 8a: aceitou papel inventado'; end if;
 end $$;
 
+-- 9) vincular limpa a pendência das pernas; desvincular restaura e nada é excluído
+do $$
+declare c ctx; a uuid; b uuid; cat uuid; s uuid; e uuid; par uuid;
+begin
+  select * into c from ctx;
+  select id into a from fin_contas where unidade_id = c.u1 and nome = 'A';
+  select id into b from fin_contas where unidade_id = c.u1 and nome = 'B';
+  select id into cat from fin_plano_contas where organizacao_id = c.org1 and papel = 'transferencia';
+  insert into fin_lancamentos (organizacao_id, unidade_id, conta_id, categoria_id, descricao, sentido, valor_centavos, data_movimento, classificacao_pendente) values (c.org1, c.u1, a, cat, 's', 'saida', 321, '2026-09-10', true) returning id into s;
+  insert into fin_lancamentos (organizacao_id, unidade_id, conta_id, categoria_id, descricao, sentido, valor_centavos, data_movimento, classificacao_pendente) values (c.org1, c.u1, b, cat, 'e', 'entrada', 321, '2026-09-10', true) returning id into e;
+  par := fin_vincular_transferencia(c.org1, c.u1, c.usr, s, e);
+  if (select count(*) from fin_lancamentos where id in (s, e) and classificacao_pendente) <> 0 then raise exception 'FALHA 9a: pendencia nao limpa'; end if;
+  if not fin_desvincular_transferencia(c.org1, c.u1, c.usr, par) then raise exception 'FALHA 9b'; end if;
+  if (select count(*) from fin_lancamentos where id in (s, e) and classificacao_pendente) <> 2 then raise exception 'FALHA 9c: pendencia nao restaurada'; end if;
+  if fin_desvincular_transferencia(c.org2, c.u3, c.usr, par) then raise exception 'FALHA 9d'; end if;
+end $$;
+
 rollback;
 \echo 'TODOS OS TESTES SQL PASSARAM'
