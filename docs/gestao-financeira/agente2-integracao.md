@@ -1,4 +1,4 @@
-# Agente 2 — Contrato de integração (B3–B8)
+# Agente 2 — Contrato de integração (B3–B9)
 
 Saneado: sem dados reais. Complementa `00-contrato-agente1-agente2.md`. Nada aqui altera arquivos exclusivos do Agente 1. Revisão formal da 121: `agente2-revisao-migration-121.md`.
 
@@ -62,7 +62,7 @@ Arquivos em `frontend/src/financeiro/<pagina>.js`, cada um exporta `render(conta
 | `pagina` (menu A1) | Estado |
 |---|---|
 | `visao-geral`, `fluxo-de-caixa`, `contas`, `dre`, `indicadores`, `categorias`, `plano-de-contas`, `importacao`, **`conciliacao`**, **`periodos`** | **entregues** |
-| `relatorios`, `configuracoes` | não entregues (B9 exportação) |
+| **`relatorios`**, **`configuracoes`** | **entregues (B9)** |
 
 CSS sob demanda (`financeiro-paginas.css`), tema escuro via `[data-theme="dark"]`.
 
@@ -79,3 +79,28 @@ CSS sob demanda (`financeiro-paginas.css`), tema escuro via `[data-theme="dark"]
 - Frontend: `node --test frontend/test/financeiroModelo.test.js`; navegador real: `frontend/test/financeiro.browser.test.js` (14 testes; `FIN_PLAYWRIGHT_PATH`, `FIN_BROWSER_CHANNEL`).
 - PostgreSQL descartável: `backend/testes-financeiro-pg/run.sh`.
 - Homologação histórica LOCAL (planilha real, fora do Git): `backend/scripts/financeiro-homologacao-local.mjs` e `financeiro-previa-local.mjs`.
+
+## 7. B9 — Relatórios, exportações e configurações (sem migration nova)
+
+**Sem migration nova e sem arquivo do Agente 1 alterado.** Depende apenas do 122 já proposto (B7/B8) para `revisao_motivos`, `canal_referencia` etc. (histórico de conciliações usa `fin_conciliacao_resolucoes`; situação dos períodos usa `fin_periodos`).
+
+**Rotas (todas atrás de `autorizar`, ação `ver`; contexto só de `req.financeiro`):**
+- `GET /relatorios/tabelas/catalogo` → 7 relatórios: `movimentacoes`, `dre`, `fluxo-caixa`, `movimentacao-conta`, `categorias`, `conciliacoes`, `periodos` (cada um com a lista de filtros aceitos).
+- `GET /relatorios/tabelas/:id?de&ate&contaId&categoriaId&tipo&status&agrupar&transferencias` → `{ id, titulo, colunas[{id,rotulo,tipo}], linhas[], totais?, total, truncado, meta{ regime:"caixa", periodo, filtros[], parcial, avisos[], geradoEm } }` (tela limitada a 2.000 linhas).
+- `GET /relatorios/tabelas/:id/exportar?formato=csv|xlsx&…` → arquivo completo (limite 50.000 linhas → 400 `EXPORTACAO_GRANDE`). Cabeçalhos: `Content-Disposition: attachment` com nome ASCII gerado pelo servidor, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`.
+- `GET /configuracoes` → visão consolidada (contas, categorias com `podeTrocarPapel`, aberturas desconhecidas, política de fechamento, itens indisponíveis). Escritas continuam nos endpoints próprios, cada um com a sua permissão (`configurar`).
+- `unidadeId` informado diferente da unidade do contexto → **403** `UNIDADE_FORA_DO_CONTEXTO`; `contaId`/`categoriaId` de outra unidade/organização → 400 “não encontrado”.
+
+**Sem segundo motor:** DRE = `montarDre`; categorias = `rankingCategorias`; fluxo = `serieMovimento`; contas = `movimentoPorConta` + `saldosPorConta`; conciliações/períodos = os mesmos serviços de B7/B8. Testes comparam as tabelas com os endpoints do dashboard (valores idênticos).
+
+**Exportação segura (`financeiro-calculos/exportacao.js`):** centavos inteiros → texto decimal exato (sem float; ida e volta provada com 20 mil valores); valor ausente = célula vazia (nunca 0,00); neutralização de fórmula (`=`, `+`, `-`, `@`, tab, CR/LF, mesmo após espaços/invisíveis) em CSV **e** XLSX (nenhuma célula XLSX tem fórmula); CSV BR (BOM UTF-8, `;`, vírgula decimal, `dd/mm/aaaa`, CRLF); XLSX com abas `Dados` (pronta para tabela dinâmica) e `Informações`. Rastreabilidade em todo arquivo: relatório, regime de caixa, período, filtros, **dados parciais** (com avisos), nº de linhas, data de geração e **código de verificação** (SHA-256 do conteúdo). Sem segredos, sem ids internos de segurança, sem usuário.
+
+**PDF: não implementado.** O repositório não tem biblioteca de PDF adequada e testável com segurança; CSV e XLSX cobrem o pedido. Pode ser feito depois com decisão de dependência.
+
+**Configurações — o que é real:** contas (nome, ativo, tipo, canal), abertura de saldo (inclusive as desconhecidas), categorias (nome/ativo; papel só se sem lançamentos), exceções de sangria, leitura da política de pendências. **Protegido:** papel de categoria em uso (banco) e tipo/canal de conta com movimento em **mês fechado** (serviço; mensagem `CONTA_COM_MOVIMENTO_FECHADO`). **Indisponível/pendente (sem controle):** regras de classificação automática (decisão empresarial) e reabertura de períodos (permissão separada + MFA recente, homologação do Agente 1).
+
+**Observação operacional:** contas criadas pela importação nascem com tipo `outra`; a conciliação do caixa físico só reconhece `caixa_fisico`. A tela pede “Defina o tipo” — fazer **antes** de fechar o mês (depois, tipo/canal ficam travados).
+
+**Riscos/limites conhecidos:** não há trilha de auditoria de *quem exportou o quê* (exigiria tabela/função nova → migration coordenada com o Agente 1; hoje a rastreabilidade é do arquivo, via código de verificação); a proteção de tipo/canal de conta é de serviço (um gatilho de banco equivalente poderia entrar numa próxima migration).
+
+**Testes B9:** backend `test/financeiro/exportacao.test.js` (8) e `relatoriosExportacoes.test.js` (14); navegador real `frontend/test/financeiro.browser.test.js` (17; downloads reais de CSV/XLSX, mobile, tema escuro).
