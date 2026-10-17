@@ -69,7 +69,7 @@ function pintar(alvo, mes, g, ind, cats, anterior) {
       { rotulo: "Detalhe", render: (c) => `<small>${esc(descreverSaldo(c).detalhe)}</small>` },
     ],
     linhas: g.saldosPorConta.contas, vazio: "Nenhuma conta cadastrada.",
-  });
+  }).replace('class="fin-tabela"', 'class="fin-tabela fin-tabela--cartao"');
   const mov = tabela({
     colunas: [
       { rotulo: "Conta", render: (c) => esc(c.nome) },
@@ -79,7 +79,7 @@ function pintar(alvo, mes, g, ind, cats, anterior) {
       { rotulo: "Variação", num: true, render: (c) => moeda(c.variacao, { sinal: true }) },
     ],
     linhas: g.movimentoPorConta, vazio: "Sem movimento.",
-  });
+  }).replace('class="fin-tabela"', 'class="fin-tabela fin-tabela--cartao"');
   const pend = g.pendencias;
 
   alvo.innerHTML = `
