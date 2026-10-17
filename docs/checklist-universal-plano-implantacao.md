@@ -44,6 +44,13 @@ Tempo estimado: migration e rollback de banco < 1 min; deploy do serviço ~30 s 
 4. TVs/abas já abertas com JavaScript antigo continuam funcionando (gate `OU ifood`); recarregar quando conveniente.
 5. Não há migration automática no deploy; o worker de comunicação e o poller do iFood não são alterados.
 
+### 4.1 Janela entre a migration e o deploy (analisada no Checkpoint G)
+O catálogo exibido na tela de Acessos vem do **código** (`CATALOGO_MODULOS`), não da tabela `modulos`; já os vínculos vêm das tabelas. Consequências:
+- **Migration aplicada, código antigo ainda no ar** (janela de minutos): o acesso de ninguém muda (o código antigo só conhece `ifood`). Único efeito: se o SuperAdmin **salvar os módulos de uma das 4 empresas que ganharam o vínculo** pela tela antiga, o cálculo de diferença (`definirModulosEmpresa`/`definirModulosUnidade`) enxerga `checklist_operacional` como "a remover" e apaga o vínculo novo daquela empresa/unidade. O acesso continua por `ifood`. **Mitigação:** não mexer na tela de Acessos entre a migration e o deploy e **reaplicar a migration (idempotente) depois do deploy** — ela devolve o vínculo a quem tem `ifood`. A verificação do §2 já pega a diferença.
+- **Código novo no ar sem a migration**: tudo funciona (gate `OU ifood`), mas habilitar o módulo novo pela tela de Acessos **falha** (chave estrangeira `modulo_id → modulos(id)` sem a linha do catálogo). Por isso a ordem recomendada é migration → merge/deploy, e nenhuma habilitação (piloto, ondas) antes de confirmar a migration.
+- **Rollback do banco depois de habilitações**: `123_rollback.sql` remove TODOS os vínculos do módulo novo, inclusive os do piloto e das ondas. Quem só tem o módulo novo (empresas sem iFood) perde o Checklist; quem tem `ifood` não. Antes de usá-lo, listar os vínculos existentes (consulta) para poder reabilitar.
+- **Sessões**: continuam congeladas por até 8 h; quem abriu antes da migration entra por `ifood` (ou, para empresas do piloto, precisa selecionar o contexto de novo).
+
 ## 5. Validação inicial da Subway Saci (primeira meia hora)
 1. Abrir o Checklist na TV da Saci (Modo Televisão): carrega, selo "Ao vivo", sem erros visíveis.
 2. Conferir: os três cards com definições novas ("Da chegada…até a saída"), amostras ao lado das médias, a linha "Com os 3 horários (n pedidos)" e a decomposição em dois trechos.

@@ -88,7 +88,8 @@ tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
 // Checklist Operacional: módulo PRÓPRIO `checklist_operacional` (independe de ter integração iFood) e permissão
 // `checklist.visualizar` (ou integracoes.ver, enquanto existirem sessões antigas — ver o router). O módulo `ifood`
 // continua aceito SÓ na transição: a sessão congela os módulos por até 8 h, e as sessões abertas antes da migration 123
-// ainda não trazem o módulo novo. Depois de ≥ 8 h do deploy dá para tirar o `MODULOS.IFOOD` (mesmo "OU" do router).
+// ainda não trazem o módulo novo. A remoção do `MODULOS.IFOOD` NÃO é automática por tempo: só em etapa própria, depois de verificar acessos migrados,
+// sessões (inclusive a TV) e rollback (docs/checklist-universal-e-tempos.md §8.5).
 tenant.use("/checklist-operacional", requireAlgumModulo(MODULOS.CHECKLIST_OPERACIONAL, MODULOS.IFOOD), checklistOperacionalRouter);
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);
 // Seção "INTELIGÊNCIA" do menu (Agente Crescer · Relatórios · Integrações).

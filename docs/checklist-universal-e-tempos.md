@@ -228,3 +228,18 @@ Mantidas as definições (preparo PLC→DSP; entrega DSP→CON; vida total PLC�
 - **Frontend** (série, Playwright + Chrome): 1.593 testes — 1.578 passam, **4 falham** (`iFood — pedidos sem Financial, no navegador`, também falham na `main`), 11 pulados (Playwright de outros módulos).
 - Autenticação/permissões/módulos/Checklist (subconjunto, após as correções): 168/168.
 - **Nenhuma regressão introduzida por esta branch. A suíte global NÃO está totalmente verde.**
+
+### 10.7 Checkpoint G — Supabase de TESTE e classificação das falhas
+- **Banco de testes do projeto, comprovadamente isolado** (só leitura para a prova): projeto Supabase **distinto** do de produção (host/ref e chaves diferentes), marcado como descartável em `.env.test`, `.env.test-integracao` e `.env.test-http`; 17 empresas com nomes fictícios (`__P05_FIXTURE__`, `ISO A isotest_…`, "descartável"), **nenhum nome igual ao de produção** (o único id coincidente é o id padrão `0000…0001`, com nome de fixture); schema com as colunas do Checklist; `anon` lê 0 linhas de `ifood_pedidos`/`organizacao_modulos` (RLS). As credenciais ficaram na pasta principal e foram lidas por `--env-file`; nada foi copiado para o worktree.
+- **Suíte nova `checklist-operacional-supabase-teste.test.js` (6/6)**, com PostgREST e RLS reais: unidade integrada; mesma empresa sem integração; outra empresa; acesso cruzado; `anon` não lê nem escreve; e a **migration 123 aplicada no Postgres real do Supabase de teste** (só a empresa/unidade fictícia com `ifood` ganhou; idempotente; rollback; reaplicação) e **desfeita** ao final. Verificado depois: o projeto de teste voltou exatamente ao estado anterior (17/14/17/17/16/10 linhas em empresas/unidades/vínculos/catálogo/pedidos; nenhum resíduo `__CHECKLIST_ISO__`). Pula sozinha sem Supabase descartável confirmado.
+- Achado de ambiente: passar o SQL por `psql -c` no Windows quebra a codificação dos comentários em UTF-8 (não é defeito da migration); o teste aplica o **arquivo** (`psql -f`).
+- **Suítes de isolamento existentes** (`isolamento-tenant`, `isolamento-martinbrower`) no mesmo projeto: **51/51**.
+- **Lista `test:integracao`** (bonificação, parser FD, agente, dashboard): 42 passam, 27 falham — **idênticas na `origin/main`** (mesmos 36 `not ok`, diff vazio): defasagem de schema do projeto de teste (ex.: `parser_fd_pedidos.distancia_raio_km` ausente), sem relação com o Checklist.
+- **O que continua NÃO verificado**: RLS por **usuário autenticado** do Supabase (JWT de papéis reais) para as tabelas novas — o Checklist só lê pelo backend com `service_role`; comportamento real do Render/Vercel; carga/volume; a tela em dispositivos reais de TV.
+
+#### Classificação das 7 falhas globais (reproduzidas numa extração limpa da `origin/main`)
+| Falha | Causa | Natureza | Risco para a implantação |
+|---|---|---|---|
+| "distribuições recompõem mês sem diário…" (`performance-calc`) | assertiva de cálculo de desempenho (`esperado ~, obtido 10`) | defeito/expectativa preexistente, módulo Performance | nenhum (não toca Checklist/gate/módulos) |
+| `selecionarPerfil (Fase C)` ×2 (`sessao-perfil`) | `fetch failed`: o teste precisa do Supabase; com o projeto de teste acessível passa **35/35** na `main` e na branch | **ambiente** (não é defeito) | nenhum |
+| `iFood — pedidos sem Financial, no navegador` ×4 | reproduz na `main` mesmo com `IFOOD_PLAYWRIGHT_PATH` (erro de objeto nulo na tela do painel iFood) | defeito/expectativa preexistente, painel iFood | **baixo/indireto**: é o painel de validação de loja iFood, que o deploy não altera; já está em produção como está |
