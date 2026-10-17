@@ -161,6 +161,7 @@ function repoFalso(extra = {}) {
   const gravados = [];
   return { gravados, deps: { db: undefined, repo: {
     listarPlanoContas: async () => cats, listarContas: async () => contas,
+    listarTransferencias: async () => [],
     inserirLancamento: async (_c, l) => { gravados.push(l); return { id: U(50), ...l }; },
     obterLancamento: async () => null, atualizarLancamento: async (_c, id, campos) => { gravados.push({ id, ...campos }); return { id, ...campos }; },
     criarTransferenciaRpc: async (_c, p) => { gravados.push(p); return U(60); },

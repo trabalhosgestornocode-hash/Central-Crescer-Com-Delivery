@@ -8,6 +8,8 @@ import * as cadastros from "./cadastros.service.js";
 import * as lanc from "./lancamentos.service.js";
 import * as rel from "./relatorios.service.js";
 import * as imp from "./importacao.service.js";
+import * as conc from "./conciliacao.service.js";
+import * as per from "./periodos.service.js";
 import * as repositorio from "./repositorio.js";
 import { uuid } from "./validacao.js";
 
@@ -44,7 +46,8 @@ export function criarDominioRouter({ autorizar, deps = undefined }) {
   r.get("/transferencias", ...h(ACAO.VER, (c) => lanc.listarTransferencias(c, d)));
   r.post("/transferencias", ...h(ACAO.LANCAR, (c, q) => lanc.criarTransferencia(c, q.body, d), { status: 201 }));
   r.post("/transferencias/vincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.vincularTransferencia(c, q.body, d), { status: 201 }));
-  r.post("/transferencias/:id/desvincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.desvincularTransferencia(c, q.params.id, d)));
+  r.post("/transferencias/:id/desvincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.desvincularTransferencia(c, q.params.id, q.body, d)));
+  r.post("/transferencias/:id/cancelar", ...h(ACAO.CANCELAR, (c, q) => lanc.cancelarTransferencia(c, q.params.id, q.body, d)));
 
   // relatórios (sempre recalculados)
   r.get("/relatorios/visao-geral", ...h(ACAO.VER, (c, q) => rel.visaoGeral(c, q.query, d)));
@@ -61,6 +64,29 @@ export function criarDominioRouter({ autorizar, deps = undefined }) {
   r.post("/importacoes/:id/alteracoes", ...h(ACAO.CONCILIAR, (c, q) => imp.aceitarAlteracoes(c, q.params.id, q.body, d)));
   r.post("/importacoes/:id/cancelar", ...h(ACAO.LANCAR, (c, q) => imp.cancelarImportacao(c, q.params.id, d)));
   r.post("/importacoes/:id/confirmar", ...h(ACAO.CONFIGURAR, (c, q) => imp.confirmarImportacao(c, q.params.id, q.body, d)));
+
+  // conciliação (B7): venda realizada ≠ recebimento efetivo; classificação manual autorizada; nada inventado
+  r.get("/conciliacao/resumo", ...h(ACAO.VER, (c, q) => conc.resumo(c, q.query, d)));
+  r.get("/conciliacao/pendencias", ...h(ACAO.VER, (c, q) => conc.pendencias(c, q.query, d)));
+  r.get("/conciliacao/referencias", ...h(ACAO.VER, (c, q) => conc.listarReferencias(c, q.query, d)));
+  r.post("/conciliacao/referencias", ...h(ACAO.CONCILIAR, (c, q) => conc.registrarReferencias(c, q.body, d), { status: 201 }));
+  r.post("/conciliacao/referencias/importar", ...h(ACAO.CONCILIAR, (c, q) => conc.importarReferencias(c, q.body, d)));
+  r.post("/conciliacao/referencias/:id/cancelar", ...h(ACAO.CONCILIAR, (c, q) => conc.cancelarReferencia(c, q.params.id, q.body, d)));
+  r.post("/conciliacao/resolucoes", ...h(ACAO.CONCILIAR, (c, q) => conc.classificar(c, q.body, d), { status: 201 }));
+  r.post("/conciliacao/resolucoes/:id/revogar", ...h(ACAO.CONCILIAR, (c, q) => conc.revogarClassificacao(c, q.params.id, q.body, d)));
+  r.get("/conciliacao/excecoes-sangria", ...h(ACAO.VER, (c) => conc.listarExcecoes(c, d)));
+  r.post("/conciliacao/excecoes-sangria", ...h(ACAO.CONFIGURAR, (c, q) => conc.aprovarExcecao(c, q.body, d), { status: 201 }));
+  r.post("/conciliacao/excecoes-sangria/:id/desativar", ...h(ACAO.CONFIGURAR, (c, q) => conc.desativarExcecao(c, q.params.id, q.body, d)));
+  r.post("/conciliacao/pendencias/:id/resolver", ...h(ACAO.CONCILIAR, (c, q) => conc.resolverPendencia(c, q.params.id, q.body, d)));
+
+  // períodos (B8): fechar exige `fechar`; reabrir exige `reabrir` (nenhum nível a concede) E o serviço segue desativado por padrão
+  r.get("/periodos", ...h(ACAO.VER, (c) => per.listar(c, d)));
+  r.get("/periodos/politica", ...h(ACAO.VER, (c) => per.obterPolitica(c, d)));
+  r.put("/periodos/politica", ...h(ACAO.CONFIGURAR, (c, q) => per.definirPolitica(c, q.body, d)));
+  r.post("/periodos/abrir", ...h(ACAO.FECHAR, (c, q) => per.abrir(c, q.body, d), { status: 201 }));
+  r.get("/periodos/:mes/pre-fechamento", ...h(ACAO.VER, (c, q) => per.preFechamento(c, q.params.mes, d)));
+  r.post("/periodos/:mes/fechar", ...h(ACAO.FECHAR, (c, q) => per.fechar(c, q.params.mes, q.body, d)));
+  r.post("/periodos/:mes/reabrir", ...h(ACAO.REABRIR, (c, q) => per.reabrir(c, q.params.mes, q.body, d)));
 
   // trilha de auditoria
   r.get("/auditoria", ...h(ACAO.EDITAR, (c, q) => (d?.repo ?? repositorio).listarAuditoria(c, { entidade: q.query.entidade, entidadeId: q.query.entidadeId }, d?.db)));

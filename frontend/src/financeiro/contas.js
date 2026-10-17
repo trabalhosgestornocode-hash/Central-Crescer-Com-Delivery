@@ -35,29 +35,42 @@ export async function render(container, ctx) {
     const saldoDe = (id) => g.saldosPorConta.contas.find((c) => c.contaId === id);
     const tb = tabela({
       colunas: [
-        { rotulo: "Conta", render: (c) => `${esc(c.nome)}<br><small>${esc(ROTULO_TIPO_CONTA[c.tipo_conta] ?? c.tipo_conta)}${c.ativo ? "" : " · inativa"}</small>` },
+        { rotulo: "Conta", render: (c) => `${esc(c.nome)}<br><small>${esc(ROTULO_TIPO_CONTA[c.tipo_conta] ?? c.tipo_conta)}${c.canal_referencia ? ` · canal ${esc(c.canal_referencia)}` : ""}${c.ativo ? "" : " · inativa"}</small>` },
         { rotulo: "Abertura", num: true, render: (c) => { const s = saldoDe(c.id); return s?.aberturaCentavos != null ? moeda(s.aberturaCentavos) : badge("Desconhecida", "warn"); } },
         { rotulo: "Variação", num: true, render: (c) => moeda(saldoDe(c.id)?.variacao ?? 0, { sinal: true }) },
         { rotulo: "Saldo calculado", num: true, render: (c) => { const s = saldoDe(c.id); if (!s) return "—"; const d = descreverSaldo(s); return d.parcial ? `${badge("Parcial", "warn")}<br><small>${moeda(s.saldoSemAberturaCentavos)} de movimento</small>` : moeda(s.saldoCentavos); } },
-        { rotulo: "", render: (c) => `<div class="fin-linha-acoes"><button class="btn btn-ghost btn-sm" data-extrato="${c.id}">Extrato</button>${pode(ACAO.CONFIGURAR) ? `<button class="btn btn-ghost btn-sm" data-abertura="${c.id}">Abertura</button>` : ""}</div>` },
+        { rotulo: "", render: (c) => `<div class="fin-linha-acoes"><button class="btn btn-ghost btn-sm" data-extrato="${c.id}">Extrato</button>${pode(ACAO.CONFIGURAR) ? `<button class="btn btn-ghost btn-sm" data-abertura="${c.id}">Abertura</button><button class="btn btn-ghost btn-sm" data-canal="${c.id}">Canal</button>` : ""}</div>` },
       ],
       linhas: contas,
     }).replace('class="fin-tabela"', 'class="fin-tabela fin-tabela--cartao"');
     const total = g.saldosPorConta.totalCentavos;
     const trTabela = tabela({
       colunas: [
-        { rotulo: "Criada em", render: (t) => esc(new Date(t.created_at).toLocaleDateString("pt-BR")) },
-        { rotulo: "Origem", render: (t) => badge(t.origem === "importacao" ? "Importada" : "Manual", "muted") },
-        { rotulo: "", render: (t) => (pode(ACAO.CONCILIAR) ? `<button class="btn btn-ghost btn-sm" data-desvincular="${t.id}">Desvincular</button>` : "") },
+        { rotulo: "Data", render: (t) => dataBr(t.data) },
+        { rotulo: "Transferência", render: (t) => `${esc(t.contaOrigem ?? "?")} → ${esc(t.contaDestino ?? "?")}<br><small>${esc(t.descricao ?? "")}</small>` },
+        { rotulo: "Valor", num: true, render: (t) => moeda(t.valorCentavos) },
+        { rotulo: "Situação", render: (t) => (t.status === "cancelada" ? `${badge("Cancelada", "bad")}<br><small>${esc(t.motivo_cancelamento ?? "")}</small>` : badge(t.origem === "importacao" ? "Vinculada (importada)" : "Vinculada", "ok")) },
+        { rotulo: "", render: (t) => (t.status === "vinculada" ? `<div class="fin-linha-acoes">
+          ${pode(ACAO.CANCELAR) ? `<button class="btn btn-ghost btn-sm" data-cancelar-par="${t.id}">Cancelar transferência</button>` : ""}
+          ${pode(ACAO.CONCILIAR) ? `<button class="btn btn-ghost btn-sm" data-desvincular="${t.id}">Desvincular</button>` : ""}</div>` : "") },
       ],
       linhas: transf.slice(0, 30), vazio: "Nenhuma transferência vinculada ainda.",
-    });
+    }).replace('class="fin-tabela"', 'class="fin-tabela fin-tabela--cartao"');
     corpo.innerHTML = `
       <div class="fin-card"><h3>Saldos — ${esc(rotuloMes(mes))}</h3>${tb}
         <p class="fin-sub">${total == null ? "Total consolidado indisponível: há contas com abertura desconhecida. " : `Total consolidado calculado: ${esc(moeda(total))}. `}${esc(g.saldosPorConta.rotulo)}</p></div>
       <div class="fin-card"><h3>Transferências vinculadas (últimas ${Math.min(30, transf.length)})</h3>${trTabela}</div>`;
     corpo.querySelectorAll("[data-extrato]").forEach((b) => b.addEventListener("click", () => extrato(b.dataset.extrato)));
+    corpo.querySelectorAll("[data-canal]").forEach((b) => b.addEventListener("click", () => {
+      const conta = contas.find((x) => x.id === b.dataset.canal);
+      dialogo({
+        titulo: `Canal de venda de ${conta.nome}`, enviar: "Gravar",
+        corpo: `<p class="fin-sub">Vínculo explícito (ex.: STONE) usado na Conciliação para comparar vendas do canal com o recebido da conta. Deixe vazio para desvincular.</p>${campo("Canal", "canalReferencia", { valor: conta.canal_referencia ?? "" })}`,
+        aoEnviar: async (d) => { await fin.patch(`/contas/${conta.id}`, { canalReferencia: d.get("canalReferencia") ?? "" }); aviso("Canal atualizado."); carregar(); },
+      });
+    }));
     corpo.querySelectorAll("[data-abertura]").forEach((b) => b.addEventListener("click", () => abertura(b.dataset.abertura, aberturas)));
+    corpo.querySelectorAll("[data-cancelar-par]").forEach((b) => b.addEventListener("click", () => cancelarPar(b.dataset.cancelarPar)));
     corpo.querySelectorAll("[data-desvincular]").forEach((b) => b.addEventListener("click", () => desvincular(b.dataset.desvincular)));
   }
 
@@ -86,11 +99,21 @@ export async function render(container, ctx) {
     });
   }
 
+  const campoMotivo = `<label class="fin-campo"><span>Motivo (mín. 10 caracteres) *</span><textarea name="motivo" rows="3" required minlength="10" maxlength="1000"></textarea></label>`;
+  /** Desvincular = pareamento INCORRETO. As duas pernas continuam ATIVAS e voltam a pendentes. Não cancela nada. */
   function desvincular(id) {
     dialogo({
       titulo: "Desvincular transferência", enviar: "Desvincular", perigo: true,
-      corpo: "<p>As duas pernas permanecem como lançamentos e voltam a ficar pendentes. Nada é excluído.</p>",
-      aoEnviar: async () => { await fin.post(`/transferencias/${id}/desvincular`, {}); aviso("Transferência desvinculada."); carregar(); },
+      corpo: `<p>Use quando o <strong>pareamento</strong> está errado. As duas pernas continuam como lançamentos <strong>ativos</strong> e voltam a ficar pendentes. Para anular a transferência, use «Cancelar transferência».</p>${campoMotivo}`,
+      aoEnviar: async (d) => { await fin.post(`/transferencias/${id}/desvincular`, { motivo: d.get("motivo") }); aviso("Transferência desvinculada."); carregar(); },
+    });
+  }
+  /** Cancelar a transferência INTEIRA: as duas pernas e o par, juntos (ou nenhum). Nada é excluído. */
+  function cancelarPar(id) {
+    dialogo({
+      titulo: "Cancelar transferência", enviar: "Cancelar transferência", perigo: true,
+      corpo: `<p>As <strong>duas pernas</strong> e o par serão cancelados juntos, na mesma operação; nada é apagado e o motivo fica na auditoria. Se algum dos meses estiver fechado, nada será alterado.</p>${campoMotivo}`,
+      aoEnviar: async (d) => { const r = await fin.post(`/transferencias/${id}/cancelar`, { motivo: d.get("motivo") }); aviso(r.jaCancelada ? "A transferência já estava cancelada." : "Transferência cancelada."); carregar(); },
     });
   }
 

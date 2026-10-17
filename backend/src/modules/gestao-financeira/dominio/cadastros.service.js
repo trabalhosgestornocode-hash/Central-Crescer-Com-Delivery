@@ -6,6 +6,7 @@ import { paraCentavos } from "../../../financeiro-calculos/dinheiro.js";
 import { PAPEL } from "../../../financeiro-calculos/planoContas.js";
 
 const padrao = { repo: repositorio, db: undefined };
+const canalDe = (v) => (typeof v === "string" && v.trim() ? v.trim().toUpperCase().slice(0, 40) : null);
 const TIPOS_CONTA = ["banco", "adquirente", "caixa_fisico", "carteira_plataforma", "outra"];
 
 export async function listarPlanoContas(ctx, deps = padrao) {
@@ -34,13 +35,14 @@ export async function listarContas(ctx, deps = padrao) {
 }
 export async function criarConta(ctx, b, deps = padrao) {
   return deps.repo.inserirConta(exigirContexto(ctx), {
-    nome: texto(b?.nome, "nome", { max: 80 }).toUpperCase(), tipo_conta: enumerado(b?.tipoConta ?? "outra", "tipoConta", TIPOS_CONTA),
+    nome: texto(b?.nome, "nome", { max: 80 }).toUpperCase(), tipo_conta: enumerado(b?.tipoConta ?? "outra", "tipoConta", TIPOS_CONTA), canal_referencia: canalDe(b?.canalReferencia),
   }, deps.db);
 }
 export async function atualizarConta(ctx, id, b, deps = padrao) {
   const campos = {};
   if (b?.nome !== undefined) campos.nome = texto(b.nome, "nome", { max: 80 }).toUpperCase();
   if (b?.tipoConta !== undefined) campos.tipo_conta = enumerado(b.tipoConta, "tipoConta", TIPOS_CONTA);
+  if (b?.canalReferencia !== undefined) campos.canal_referencia = canalDe(b.canalReferencia);
   if (b?.ativo !== undefined) { if (typeof b.ativo !== "boolean") throw bad("ativo inválido."); campos.ativo = b.ativo; }
   if (!Object.keys(campos).length) throw bad("Nada para atualizar.");
   return deps.repo.atualizarConta(exigirContexto(ctx), uuid(id, "id"), campos, deps.db);

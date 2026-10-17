@@ -4,6 +4,7 @@ import * as repositorio from "./repositorio.js";
 import { exigirContexto } from "./contexto.js";
 import { texto, uuid, enumerado, data, valorPositivo, bad, periodo } from "./validacao.js";
 import { PAPEL } from "../../../financeiro-calculos/planoContas.js";
+import { ApiError } from "../../../shared/ApiError.js";
 
 const padrao = { repo: repositorio, db: undefined };
 
@@ -91,6 +92,22 @@ export async function atualizarLancamento(ctx, id, b, deps = padrao) {
   return deps.repo.atualizarLancamento(c, id, campos, deps.db);
 }
 
+/**
+ * Cancelar lançamento ISOLADO. Perna de transferência VINCULADA não pode ser cancelada sozinha (nem desvinculando para depois cancelar só uma):
+ * use "Cancelar transferência" (par inteiro) ou "Desvincular" (pareamento errado, pernas seguem ativas). Perna SEM par (movimento externo)
+ * só é cancelada com confirmação explícita, para não "sumir" metade de uma transferência por engano.
+ */
+async function exigirPernaIsolada(c, atual, b, deps) {
+  const pares = await deps.repo.listarTransferencias(c, deps.db);
+  if (pares.some((p) => p.lancamento_saida_id === atual.id || p.lancamento_entrada_id === atual.id)) {
+    throw bad("Este lançamento faz parte de uma transferência vinculada. Use «Cancelar transferência» para cancelar as duas pernas, ou «Desvincular» se o pareamento estiver errado.", "FIN_TRANSFERENCIA_VINCULADA");
+  }
+  const cat = atual.categoria_id ? (await deps.repo.listarPlanoContas(c, deps.db)).find((x) => x.id === atual.categoria_id) : null;
+  if (cat?.papel === PAPEL.TRANSFERENCIA && b?.confirmoPernaIsolada !== true) {
+    throw bad("Esta é uma perna de transferência sem par. Confirme que deseja cancelar só esta perna (confirmoPernaIsolada).", "PERNA_ISOLADA_SEM_CONFIRMACAO");
+  }
+}
+
 /** Cancelamento (nunca exclusão): exige motivo; pernas de transferência vinculada precisam ser desvinculadas antes (banco). */
 export async function cancelarLancamento(ctx, id, b, deps = padrao) {
   const c = exigirContexto(ctx);
@@ -98,12 +115,21 @@ export async function cancelarLancamento(ctx, id, b, deps = padrao) {
   const atual = await deps.repo.obterLancamento(c, uuid(id, "id"), deps.db);
   if (!atual) throw bad("Lançamento não encontrado.", "LANCAMENTO_INEXISTENTE");
   if (atual.status === "cancelado") return atual;
+  await exigirPernaIsolada(c, atual, b, deps);
   return deps.repo.atualizarLancamento(c, id, { status: "cancelado", nota_revisao: atual.nota_revisao ? `${atual.nota_revisao} | Cancelado: ${motivo}` : `Cancelado: ${motivo}` }, deps.db);
 }
 
 // ---- transferências ----
+/** Pares com os dados das duas pernas (valor, data, contas, motivo do cancelamento) para a tela; mantém os campos originais da linha. */
 export async function listarTransferencias(ctx, deps = padrao) {
-  return deps.repo.listarTransferencias(exigirContexto(ctx), deps.db);
+  const c = exigirContexto(ctx);
+  const [pares, lancs, contas] = await Promise.all([deps.repo.listarTransferencias(c, deps.db), deps.repo.listarTodosLancamentos(c, {}, deps.db), deps.repo.listarContas(c, deps.db)]);
+  const lPorId = new Map(lancs.map((l) => [l.id, l]));
+  const nome = new Map(contas.map((x) => [x.id, x.nome]));
+  return pares.map((t) => {
+    const s = lPorId.get(t.lancamento_saida_id), e = lPorId.get(t.lancamento_entrada_id);
+    return { ...t, status: t.status ?? "vinculada", data: s?.data_movimento ?? null, valorCentavos: s ? Number(s.valor_centavos) : null, contaOrigem: nome.get(s?.conta_id) ?? null, contaDestino: nome.get(e?.conta_id) ?? null, descricao: s?.descricao ?? null };
+  });
 }
 export async function criarTransferencia(ctx, b, deps = padrao) {
   const c = exigirContexto(ctx);
@@ -131,8 +157,18 @@ export async function vincularTransferencia(ctx, b, deps = padrao) {
   const id = await deps.repo.vincularTransferenciaRpc(exigirContexto(ctx), uuid(b?.saidaId, "saidaId"), uuid(b?.entradaId, "entradaId"), deps.db);
   return { id };
 }
-export async function desvincularTransferencia(ctx, id, deps = padrao) {
-  const ok = await deps.repo.desvincularTransferenciaRpc(exigirContexto(ctx), uuid(id, "id"), deps.db);
-  if (!ok) throw bad("Transferência não encontrada.", "TRANSFERENCIA_INEXISTENTE");
+/** Desvincular pareamento INCORRETO: motivo obrigatório; as duas pernas continuam ATIVAS e voltam a pendentes. Não cancela nada. */
+export async function desvincularTransferencia(ctx, id, b, deps = padrao) {
+  const motivo = texto(b?.motivo, "motivo", { max: 1000 });
+  if (motivo.length < 10) throw bad("Informe o motivo (mínimo de 10 caracteres).", "MOTIVO_OBRIGATORIO");
+  const ok = await deps.repo.desvincularTransferenciaRpc(exigirContexto(ctx), uuid(id, "id"), motivo, deps.db);
+  if (!ok) throw ApiError.notFound("Transferência não encontrada.");
   return { desvinculada: true };
+}
+
+/** Cancelar a TRANSFERÊNCIA INTEIRA (par + duas pernas), atômico, com motivo e auditoria; idempotente. */
+export async function cancelarTransferencia(ctx, id, b, deps = padrao) {
+  const motivo = texto(b?.motivo, "motivo", { max: 1000 });
+  if (motivo.length < 10) throw bad("Informe o motivo (mínimo de 10 caracteres).", "MOTIVO_OBRIGATORIO");
+  return deps.repo.cancelarTransferenciaRpc(exigirContexto(ctx), uuid(id, "id"), motivo, deps.db);
 }
