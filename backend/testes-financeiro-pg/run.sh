@@ -17,8 +17,23 @@ trap 'run -d postgres -c "drop database if exists $DB" >/dev/null' EXIT
 run -d "$DB" -f "$AQUI/00_stub.sql"
 run -d "$DB" -f "$SQL"
 run -d "$DB" -f "$SQL"   # idempotência: segunda aplicação não pode falhar
+SQL2="$AQUI/../../docs/gestao-financeira/sql-provisorio/122_conciliacao_periodos.provisorio.sql"
+run -d "$DB" -f "$SQL2"
+run -d "$DB" -f "$SQL2"  # idempotência do 122
 run -d "$DB" -f "$AQUI/10_dominio.test.sql"
-# rollback seguro: aplica após os testes (banco vazio, pois os testes fazem rollback) e reaplica
-run -d "$DB" -f "$AQUI/../../docs/gestao-financeira/sql-provisorio/121_rollback.provisorio.sql"
-run -d "$DB" -f "$SQL"
-echo "rollback + reaplicacao OK"
+run -d "$DB" -f "$AQUI/20_periodos_conciliacao.test.sql"
+export HOST PORT PSQL DB
+bash "$AQUI/30_concorrencia.sh"
+# rollback seguro: o teste de concorrência deixou dados COMMITADOS => o rollback deve RECUSAR (e nada ser removido)
+if run -d "$DB" -f "$AQUI/../../docs/gestao-financeira/sql-provisorio/122_rollback.provisorio.sql" 2>/dev/null; then echo "FALHA: rollback do 122 nao recusou com dados"; exit 1; fi
+echo "rollback com dados recusado (ok)"
+# banco novo e vazio: aplica 121+122, faz rollback 122, reaplica 121 (restaura funcoes) e 122; depois rollback 122+121
+VAZIO="${DB}_v"
+run -d postgres -c "create database $VAZIO"
+trap 'run -d postgres -c "drop database if exists $DB" >/dev/null; run -d postgres -c "drop database if exists ${DB}_v" >/dev/null' EXIT
+run -d "$VAZIO" -f "$AQUI/00_stub.sql"; run -d "$VAZIO" -f "$SQL"; run -d "$VAZIO" -f "$SQL2"
+run -d "$VAZIO" -f "$AQUI/../../docs/gestao-financeira/sql-provisorio/122_rollback.provisorio.sql"
+run -d "$VAZIO" -f "$SQL"; run -d "$VAZIO" -f "$SQL2"
+run -d "$VAZIO" -f "$AQUI/../../docs/gestao-financeira/sql-provisorio/122_rollback.provisorio.sql"
+run -d "$VAZIO" -f "$AQUI/../../docs/gestao-financeira/sql-provisorio/121_rollback.provisorio.sql"
+echo "rollback 122/121 em banco vazio OK"
