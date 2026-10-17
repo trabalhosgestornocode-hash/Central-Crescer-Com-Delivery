@@ -27,6 +27,8 @@ begin
   return v_id;
 end $$;
 
+create function pg_temp.mfa() returns jsonb language sql as $$ select jsonb_build_object('aal', 'aal2', 'em', now()) $$;
+
 -- 1) abrir período é idempotente; mês inválido recusado; outro tenant não enxerga
 do $$
 declare c ctx; a jsonb; b jsonb; ok boolean := false;
@@ -128,28 +130,38 @@ declare c ctx; v int; fp text; ok boolean; per jsonb; ex jsonb; novo uuid; ex2 j
 begin
   select * into c from ctx;
   -- 4b) validações da concessão
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'curta', 7, 0); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_justificativa_obrigatoria%'); end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'curta', 7, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_justificativa_obrigatoria%'); end;
   if not ok then raise exception 'FALHA 4b1: aceitou justificativa curta'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 31, 0); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_validade_invalida%'); end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 31, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_validade_invalida%'); end;
   if not ok then raise exception 'FALHA 4b2: aceitou validade > 30 dias (excecao permanente)'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 0, 0); exception when sqlstate '23514' then ok := true; end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 0, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;
   if not ok then raise exception 'FALHA 4b3: aceitou validade 0'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, null, '2026-12-01', 'justificativa suficientemente longa', 7, 0); exception when sqlstate '23514' then ok := true; end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, null, '2026-12-01', 'justificativa suficientemente longa', 7, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;
   if not ok then raise exception 'FALHA 4b4: aceitou sem responsavel'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-02-01', 'justificativa suficientemente longa', 7, 0); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_sem_pendencias%'); end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-02-01', 'justificativa suficientemente longa', 7, 0, pg_temp.mfa()); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_sem_pendencias%'); end;
   if not ok then raise exception 'FALHA 4b5: concedeu excecao sem pendencia'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u3, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, 1); exception when sqlstate '23514' then ok := true; end;   -- unidade de outra organização
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u3, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, 1, pg_temp.mfa()); exception when sqlstate '23514' then ok := true; end;   -- unidade de outra organização
   if not ok then raise exception 'FALHA 4b6: concedeu excecao para unidade de outra organizacao'; end if;
+  -- sem MFA recente (AAL2) não há exceção: ausente, AAL1, vencido (>15 min) ou do futuro
+  foreach msg in array array['null', '{"aal":"aal1","em":"now"}', '{"aal":"aal2","em":"old"}', '{"aal":"aal2","em":"future"}', '{"aal":"aal2"}'] loop
+    ok := false;
+    begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa suficientemente longa', 7, 0,
+            case msg when 'null' then null
+                     else replace(replace(replace(msg, '"now"', '"' || now()::text || '"'), '"old"', '"' || (now() - interval '2 hours')::text || '"'), '"future"', '"' || (now() + interval '2 hours')::text || '"')::jsonb end);
+    exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_mfa_invalida%'); end;
+    if not ok then raise exception 'FALHA 4b7: concedeu excecao sem MFA recente (%)', msg; end if;
+  end loop;
   -- 4c) ninguém escreve na tabela por fora das funções
   ok := false; begin insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, quantidade, aprovada_por, expira_em)
     values (c.org1, c.u1, '2026-12-01', 'justificativa suficientemente longa', '[{"id":"x"}]', 1, c.usr, now() + interval '3 days'); exception when sqlstate '23514' then ok := (sqlerrm like 'fin_excecao_via_funcao%'); end;
   if not ok then raise exception 'FALHA 4c1: INSERT direto aceito'; end if;
   -- 4d) concede (nada nas pendências muda) e prova que as pendências foram IDENTIFICADAS
   select count(*) into n from fin_lancamentos where unidade_id = c.u1 and data_movimento >= '2026-12-01' and data_movimento < '2027-01-01' and classificacao_pendente;
-  ex := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa: aguardando extrato do banco para classificar', 7, 0);
+  ex := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'justificativa: aguardando extrato do banco para classificar', 7, 0, pg_temp.mfa());
   if ex->>'status' <> 'ativa' or (ex->>'quantidade')::int <> 1 or jsonb_array_length(ex->'pendencias') <> 1 or (ex->'pendencias'->0->>'id') is null then raise exception 'FALHA 4d1: %', ex; end if;
+if ex->'mfa_evidencia'->>'aal' <> 'aal2' or ex->>'aprovada_por' is null or (ex->>'expira_em')::timestamptz > now() + interval '7 days 1 minute' then raise exception 'FALHA 4d1b: evidencia de MFA/aprovador/validade ausentes'; end if;  ok := false; begin update fin_excecoes_fechamento set mfa_evidencia = '{"aal":"aal2","em":"2020-01-01T00:00:00Z"}' where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;  if not ok then raise exception 'FALHA 4d1c: evidencia de MFA mutavel'; end if;
   if (select count(*) from fin_lancamentos where unidade_id = c.u1 and data_movimento >= '2026-12-01' and data_movimento < '2027-01-01' and classificacao_pendente) <> n then raise exception 'FALHA 4d2: conceder alterou pendencias'; end if;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'segunda excecao para o mesmo mes e unidade', 7, 0); exception when unique_violation then ok := true; end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2026-12-01', 'segunda excecao para o mesmo mes e unidade', 7, 0, pg_temp.mfa()); exception when unique_violation then ok := true; end;
   if not ok then raise exception 'FALHA 4d3: duas excecoes ativas para a mesma competencia'; end if;
   -- imutável: conteúdo, apagar, reclassificar
   ok := false; begin update fin_excecoes_fechamento set justificativa = 'justificativa alterada depois de concedida' where id = (ex->>'id')::uuid; exception when sqlstate '23514' then ok := true; end;
@@ -195,7 +207,7 @@ begin
   if not ok then raise exception 'FALHA 4h5: revogou excecao consumida'; end if;
   -- 4i) revogação: motivo obrigatório; depois o fechamento volta a ser impedido
   perform pg_temp.lanc(c.u1, 'BANCO', 'VENDAS', 'entrada', 1, '2027-03-02', true);
-  ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa: pendencia aguardando comprovante', 5, 0);
+  ex2 := fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa: pendencia aguardando comprovante', 5, 0, pg_temp.mfa());
   ok := false; begin perform fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'curto'); exception when sqlstate '23514' then ok := true; end;
   if not ok then raise exception 'FALHA 4i1: revogou sem motivo'; end if;
   if not fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'concedida por engano, revogada') then raise exception 'FALHA 4i2'; end if;
@@ -205,7 +217,7 @@ begin
   if fin_revogar_excecao_fechamento(c.org2, c.u3, c.usr, (ex2->>'id')::uuid, 'tenant errado tentando revogar') then raise exception 'FALHA 4i4: revogou de outro tenant'; end if;
   -- 4j) service_role (o backend) NÃO conceda, NÃO revoga, NÃO escreve na tabela — só lê
   set local role service_role;
-  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa suficientemente longa', 7, 0); exception when insufficient_privilege then ok := true; end;
+  ok := false; begin perform fin_conceder_excecao_fechamento(c.org1, c.u1, c.usr, '2027-03-01', 'justificativa suficientemente longa', 7, 0, pg_temp.mfa()); exception when insufficient_privilege then ok := true; end;
   if not ok then reset role; raise exception 'FALHA 4j1: service_role concede excecao'; end if;
   ok := false; begin perform fin_revogar_excecao_fechamento(c.org1, c.u1, c.usr, (ex2->>'id')::uuid, 'tentativa de revogar sem privilegio'); exception when insufficient_privilege then ok := true; end;
   if not ok then reset role; raise exception 'FALHA 4j2: service_role revoga excecao'; end if;

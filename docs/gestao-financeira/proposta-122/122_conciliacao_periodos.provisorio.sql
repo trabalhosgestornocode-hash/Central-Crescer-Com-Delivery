@@ -91,6 +91,7 @@ create table if not exists fin_excecoes_fechamento (
   pendencias_conciliacao int not null default 0 check (pendencias_conciliacao >= 0),
   quantidade int not null check (quantidade > 0 or pendencias_conciliacao > 0),
   aprovada_por uuid not null,                                  -- SuperAdmin (auth.users.id; sem FK para sobreviver à conta)
+  mfa_evidencia jsonb not null check (jsonb_typeof(mfa_evidencia) = 'object' and mfa_evidencia->>'aal' = 'aal2' and (mfa_evidencia->>'em') is not null),   -- carimbo/AAL fornecido pela plataforma (Agente 1); sem MFA não há exceção
   aprovada_em timestamptz not null default now(),
   expira_em timestamptz not null,
   status text not null default 'ativa' check (status in ('ativa','consumida','revogada')),
@@ -558,7 +559,7 @@ begin
   if new.id is distinct from old.id or new.organizacao_id is distinct from old.organizacao_id or new.unidade_id is distinct from old.unidade_id
      or new.mes is distinct from old.mes or new.justificativa is distinct from old.justificativa or new.pendencias is distinct from old.pendencias
      or new.pendencias_conciliacao is distinct from old.pendencias_conciliacao or new.quantidade is distinct from old.quantidade
-     or new.aprovada_por is distinct from old.aprovada_por or new.aprovada_em is distinct from old.aprovada_em or new.expira_em is distinct from old.expira_em then
+     or new.aprovada_por is distinct from old.aprovada_por or new.mfa_evidencia is distinct from old.mfa_evidencia or new.aprovada_em is distinct from old.aprovada_em or new.expira_em is distinct from old.expira_em then
     raise exception 'fin_excecao_imutavel: conteudo da excecao nao pode ser alterado (nem pendencias apagadas ou reclassificadas)' using errcode = '23514';
   end if;
   if old.status <> 'ativa' then raise exception 'fin_excecao_imutavel: excecao ja encerrada' using errcode = '23514'; end if;
@@ -572,7 +573,7 @@ create trigger trg_fin_excecoes_fechamento_guarda before insert or update or del
 
 -- CONCEDE. Não altera, apaga nem reclassifica nenhuma pendência: só as REGISTRA (ids + motivos) no ato. Sem EXECUTE para o service_role.
 create or replace function fin_conceder_excecao_fechamento(
-  p_org uuid, p_unidade uuid, p_superadmin uuid, p_mes date, p_justificativa text, p_validade_dias int, p_pendencias_conciliacao int
+  p_org uuid, p_unidade uuid, p_superadmin uuid, p_mes date, p_justificativa text, p_validade_dias int, p_pendencias_conciliacao int, p_mfa jsonb
 ) returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
 declare v_per fin_periodos; v_pend jsonb; v_qtd int; v_conc int := coalesce(p_pendencias_conciliacao, 0); v_just text := btrim(coalesce(p_justificativa, '')); r fin_excecoes_fechamento;
 begin
@@ -581,6 +582,11 @@ begin
   if length(v_just) < 20 then raise exception 'fin_excecao_justificativa_obrigatoria: minimo 20 caracteres' using errcode = '23514'; end if;
   if p_validade_dias is null or p_validade_dias < 1 or p_validade_dias > 30 then raise exception 'fin_excecao_validade_invalida: 1 a 30 dias' using errcode = '23514'; end if;
   if v_conc < 0 then raise exception 'fin_excecao_pendencias_invalidas' using errcode = '23514'; end if;
+  -- MFA RECENTE: a plataforma entrega a evidência (AAL2 + instante da verificação); aqui só se exige que exista, seja AAL2 e tenha <= 15 min. A prova do MFA é do Agente 1.
+  if p_mfa is null or jsonb_typeof(p_mfa) <> 'object' or p_mfa->>'aal' is distinct from 'aal2' or (p_mfa->>'em') is null
+     or (p_mfa->>'em')::timestamptz < now() - interval '15 minutes' or (p_mfa->>'em')::timestamptz > now() + interval '1 minute' then
+    raise exception 'fin_excecao_mfa_invalida: exige verificacao MFA (AAL2) recente' using errcode = '23514';
+  end if;
   insert into fin_periodos (organizacao_id, unidade_id, mes, status) values (p_org, p_unidade, p_mes, 'aberto') on conflict (unidade_id, mes) do nothing;
   select * into v_per from fin_periodos where unidade_id = p_unidade and mes = p_mes and organizacao_id = p_org for update;
   if not found then raise exception 'fin_periodo_nao_encontrado' using errcode = 'P0002'; end if;
@@ -595,8 +601,8 @@ begin
   update fin_excecoes_fechamento set status = 'revogada', revogada_por = p_superadmin, revogada_em = now(), motivo_revogacao = 'Excecao vencida sem uso, substituida por nova concessao'
    where unidade_id = p_unidade and mes = p_mes and status = 'ativa' and expira_em <= now();
   perform set_config('fin.excecao_op', 'conceder', true);
-  insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, pendencias_conciliacao, quantidade, aprovada_por, expira_em)
-  values (p_org, p_unidade, p_mes, v_just, v_pend, v_conc, v_qtd, p_superadmin, now() + make_interval(days => p_validade_dias)) returning * into r;
+  insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, pendencias_conciliacao, quantidade, aprovada_por, mfa_evidencia, expira_em)
+  values (p_org, p_unidade, p_mes, v_just, v_pend, v_conc, v_qtd, p_superadmin, p_mfa, now() + make_interval(days => p_validade_dias)) returning * into r;
   perform set_config('fin.excecao_op', '', true);
   return to_jsonb(r);
 end $$;
@@ -634,7 +640,7 @@ end $$;
 do $$
 declare f text; r text;
 begin
-  foreach f in array array['fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int)','fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)',
+  foreach f in array array['fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int,jsonb)','fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)',
                            'fin_consumir_excecao_fechamento(uuid,uuid)','fin_excecoes_fechamento_guarda()','fin_periodos_bloqueia_reabertura()',
                            'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)'] loop
     execute format('revoke all on function %s from public', f);
@@ -653,8 +659,9 @@ do $$
 begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     if has_function_privilege('service_role', 'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)', 'execute') then raise exception '122 abortada: service_role ainda executa fin_reabrir_periodo.'; end if;
-    if has_function_privilege('service_role', 'fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int)', 'execute') then raise exception '122 abortada: service_role executa conceder excecao.'; end if;
+    if has_function_privilege('service_role', 'fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int,jsonb)', 'execute') then raise exception '122 abortada: service_role executa conceder excecao.'; end if;
     if has_function_privilege('service_role', 'fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)', 'execute') then raise exception '122 abortada: service_role executa revogar excecao.'; end if;
+    if not exists (select 1 from pg_trigger where tgname = 'trg_fin_periodos_bloqueia_reabertura' and tgrelid = 'fin_periodos'::regclass and tgenabled = 'O') then raise exception '122 abortada: gatilho de reabertura desabilitada ausente.'; end if;
     if has_table_privilege('service_role', 'fin_excecoes_fechamento', 'insert') or has_table_privilege('service_role', 'fin_excecoes_fechamento', 'update') then raise exception '122 abortada: service_role escreve em fin_excecoes_fechamento.'; end if;
   end if;
 end $$;

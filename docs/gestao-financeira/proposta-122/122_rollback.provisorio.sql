@@ -111,7 +111,7 @@ drop trigger if exists trg_fin_transferencias_guarda on fin_transferencias;
 drop trigger if exists trg_fin_saldos_periodo on fin_saldos_abertura;
 drop trigger if exists trg_fin_periodos_guarda on fin_periodos;
 drop function if exists fin_periodos_bloqueia_reabertura();
-drop function if exists fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int);
+drop function if exists fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int,jsonb);
 drop function if exists fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text);
 drop function if exists fin_consumir_excecao_fechamento(uuid,uuid);
 drop function if exists fin_cancelar_transferencia(uuid,uuid,uuid,uuid,text);

@@ -520,7 +520,7 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
       await captura(p, "90-periodos-bloqueado");
       await dlg.locator("[data-cancelar]").click();
       // a exceção é aprovada FORA da tela (SuperAdmin, após a validação do MFA); aqui simulamos o registro dela e redesenhamos a tela
-      await repo.concederExcecaoFechamentoRpc({ organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3) }, { mes: "2026-09", justificativa: "excecao sintetica: aguardando comprovantes do mes", validadeDias: 5, pendenciasConciliacao: 99 });
+      await repo.concederExcecaoFechamentoRpc({ organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3) }, { mes: "2026-09", justificativa: "excecao sintetica: aguardando comprovantes do mes", validadeDias: 5, pendenciasConciliacao: 99, mfaEvidencia: { aal: "aal2", em: new Date().toISOString() } });
       await p.evaluate(async (perms) => { const m = await import("/src/financeiro/periodos.js"); await m.render(document.querySelector("#view"), { permissoes: perms, nivel: "gestor" }); }, TODAS);
       await p.locator("text=Ativa").first().waitFor();
       // agora o fechamento exige RECONHECER as pendências

@@ -286,15 +286,17 @@ export function criarRepoMemoria() {
       return t.exf.filter((e) => noTen(c)(e) && (!mes || e.mes === `${mes}-01`) && (!apenasAtivas || e.status === "ativa")).map((e) => structuredClone(e));
     },
     // Simula a função DEFINER do banco (SuperAdmin). Só existe no repositório de teste; o service_role real NÃO tem EXECUTE.
-    async concederExcecaoFechamentoRpc(ctx, { mes, justificativa, validadeDias, pendenciasConciliacao }) {
+    async concederExcecaoFechamentoRpc(ctx, { mes, justificativa, validadeDias, pendenciasConciliacao, mfaEvidencia }) {
       const c = exigirContexto(ctx);
+      const idade = Date.now() - Date.parse(mfaEvidencia?.em ?? "");
+      if (mfaEvidencia?.aal !== "aal2" || !(idade <= 15 * 60000 && idade >= -60000)) regra("fin_excecao_mfa_invalida");
       if (String(justificativa ?? "").trim().length < 20) regra("fin_excecao_justificativa_obrigatoria");
       if (!(validadeDias >= 1 && validadeDias <= 30)) regra("fin_excecao_validade_invalida");
       const pend = t.lanc.filter((l) => noTen(c)(l) && l.data_movimento.startsWith(mes) && l.status !== "cancelado" && (l.classificacao_pendente || !l.categoria_id));
       if (pend.length === 0 && !(pendenciasConciliacao > 0)) regra("fin_excecao_sem_pendencias");
       if (t.exf.some((e) => e.unidade_id === c.unidadeId && e.mes === `${mes}-01` && e.status === "ativa")) erro("duplicado", "23505");
       const e = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, mes: `${mes}-01`, justificativa: justificativa.trim(), pendencias: pend.map((l) => ({ id: l.id, motivos: l.revisao_motivos ?? [] })),
-        pendencias_conciliacao: pendenciasConciliacao ?? 0, quantidade: pend.length, aprovada_por: c.usuarioId, aprovada_em: agora(), expira_em: new Date(Date.parse(agora()) + validadeDias * 86400000).toISOString(), status: "ativa" };
+        pendencias_conciliacao: pendenciasConciliacao ?? 0, quantidade: pend.length, aprovada_por: c.usuarioId, mfa_evidencia: { ...mfaEvidencia }, aprovada_em: agora(), expira_em: new Date(Date.parse(agora()) + validadeDias * 86400000).toISOString(), status: "ativa" };
       t.exf.push(e); audita(c, "fin_excecoes_fechamento.insert", "fin_excecoes_fechamento", null, structuredClone(e)); return structuredClone(e);
     },
     fecharPeriodo(ctx, ym) { const c = exigirContexto(ctx); const ex = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === `${ym}-01`); if (ex) Object.assign(ex, { status: "fechado", snapshot: {}, versao: ex.versao + 1 }); else t.per.push({ id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, status: "fechado", mes: `${ym}-01`, versao: 1, snapshot: {} }); },

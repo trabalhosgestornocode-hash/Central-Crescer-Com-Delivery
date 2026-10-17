@@ -14,8 +14,9 @@ const tab = await import("../../src/modules/gestao-financeira/dominio/tabelas.se
 const perSvc = await import("../../src/modules/gestao-financeira/dominio/periodos.service.js");
 /** Simula a exceção futura de SuperAdmin (concessão real está desabilitada e sem rota) para os testes que fecham meses com pendências sintéticas. */
 const liberarExcecao = (a, mes) => perSvc.concederExcecaoFechamento({ organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3), permissoes: [] }, mes,
-  { justificativa: "excecao sintetica de teste para fechar o mes", validadeDias: 5 }, { repo: a.repo, excecaoFechamentoHabilitada: true, agora: () => "2026-10-01T12:00:00.000Z" });
+  { justificativa: "excecao sintetica de teste para fechar o mes", validadeDias: 5, mfaEvidencia: MFA() }, { repo: a.repo, excecaoFechamentoHabilitada: true, agora: () => "2026-10-01T12:00:00.000Z" });
 
+const MFA = () => ({ aal: "aal2", em: new Date().toISOString() });
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const P = (...a) => a.map((x) => `gestao_financeira.${x}`);
 const NIVEL = { leitura: P("ver"), operador: P("ver", "lancar", "editar"), gestor: P("ver", "lancar", "editar", "conciliar", "cancelar", "fechar", "configurar") };

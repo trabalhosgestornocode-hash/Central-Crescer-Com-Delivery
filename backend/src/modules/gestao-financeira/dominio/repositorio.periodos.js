@@ -59,11 +59,11 @@ export async function listarExcecoesFechamento(ctxIn, { mes, apenasAtivas = fals
   return data ?? [];
 }
 // DESABILITADAS por padrão: o service_role NÃO tem EXECUTE nestas funções até a validação do MFA e a ligação do SuperAdmin (Agente 1).
-export async function concederExcecaoFechamentoRpc(ctxIn, { mes, justificativa, validadeDias, pendenciasConciliacao }, db = supabase) {
+export async function concederExcecaoFechamentoRpc(ctxIn, { mes, justificativa, validadeDias, pendenciasConciliacao, mfaEvidencia }, db = supabase) {
   const ctx = exigirContexto(ctxIn);
   const { data, error } = await db.rpc("fin_conceder_excecao_fechamento", {
     p_org: ctx.organizacaoId, p_unidade: ctx.unidadeId, p_superadmin: ctx.usuarioId, p_mes: dia1(mes), p_justificativa: justificativa,
-    p_validade_dias: validadeDias, p_pendencias_conciliacao: pendenciasConciliacao,
+    p_validade_dias: validadeDias, p_pendencias_conciliacao: pendenciasConciliacao, p_mfa: mfaEvidencia,
   });
   falha(error);
   return data;

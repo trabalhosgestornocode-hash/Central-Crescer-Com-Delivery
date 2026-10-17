@@ -12,6 +12,7 @@ const { criarDominioRouter } = await import("../../src/modules/gestao-financeira
 const { criarRepoMemoria } = await import("./helpers/repoMemoria.js");
 const perSvc = await import("../../src/modules/gestao-financeira/dominio/periodos.service.js");
 
+const MFA = () => ({ aal: "aal2", em: new Date().toISOString() });
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const P = (...a) => a.map((x) => `gestao_financeira.${x}`);
 // Matriz A7.1 (contrato com o Agente 1): reabrir e excluir não pertencem a nenhum nível.
@@ -238,18 +239,26 @@ test("períodos: fechamento bloqueado com pendências; só EXCEÇÃO por compet�
     assert.equal(bloq.status, 400);
     assert.match(bloq.corpo.error, /pendência/i);
     assert.doesNotMatch(bloq.corpo.error, /fin_|tenant|unidade_id/);
-    // NÃO existe política geral: nem gestor consegue flexibilizar o controle (as rotas deixaram de existir)
-    assert.equal((await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "aprovado pela diretoria em ata 12", confirmoAprovacao: true })).status, 404);
-    assert.equal((await a.chamar("GET", "/periodos/politica")).status, 404);
+    // NÃO existe política geral: o gestor não consegue LIGAR nada (403 fail-closed com código próprio); desligar é no-op; a leitura sempre diz "bloqueado"
+    const lig = await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "aprovado pela diretoria em ata 12", confirmoAprovacao: true });
+    assert.equal(lig.status, 403); assert.equal(lig.corpo.details.codigo, "POLITICA_EXCEPCIONAL_DESABILITADA");
+    assert.equal((await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: true }, { perms: NIVEL.operador })).status, 403);
+    assert.equal((await a.chamar("PUT", "/periodos/politica", { permiteFecharComPendencias: false })).status, 200);
+    assert.deepEqual((await a.chamar("GET", "/periodos/politica")).corpo.data, { modo: "excecao_por_competencia", permiteFecharComPendencias: false, excecaoFechamentoHabilitada: false });
+    assert.equal(a.repo._t.exf.length, 0, "o PUT gravou alguma coisa");
     assert.equal((await a.chamar("GET", "/configuracoes")).corpo.data.fechamentoComPendencias.habilitada, false);
     // a concessão da exceção é fail-closed (desabilitada por padrão) e não tem rota HTTP
-    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa longa o bastante", validadeDias: 7 }, { repo: a.repo }), (e) => e.details?.codigo === "EXCECAO_FECHAMENTO_NAO_HABILITADA");
-    assert.equal((await a.chamar("POST", "/periodos/2026-09/excecao", { justificativa: "justificativa longa o bastante", validadeDias: 7 })).status, 404);
+    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa longa o bastante", validadeDias: 7, mfaEvidencia: MFA() }, { repo: a.repo }), (e) => e.details?.codigo === "EXCECAO_FECHAMENTO_NAO_HABILITADA");
+    assert.equal((await a.chamar("POST", "/periodos/2026-09/excecao", { justificativa: "justificativa longa o bastante", validadeDias: 7, mfaEvidencia: MFA() })).status, 404);
     // (simula a aprovação futura de SuperAdmin, já habilitada) — validações da concessão
     const dx = { repo: a.repo, excecaoFechamentoHabilitada: true, agora: () => "2026-10-01T12:00:00.000Z" };
-    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "curta", validadeDias: 7 }, dx), (e) => e.statusCode === 400);
-    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa longa o bastante", validadeDias: 31 }, dx), (e) => e.statusCode === 400);
-    const exc = await perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa: aguardando comprovante do fornecedor", validadeDias: 7 }, dx);
+    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "curta", validadeDias: 7, mfaEvidencia: MFA() }, dx), (e) => e.statusCode === 400);
+    await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa longa o bastante", validadeDias: 31, mfaEvidencia: MFA() }, dx), (e) => e.statusCode === 400);
+    // sem MFA recente (AAL2) não há exceção: ausente, AAL1 ou vencida
+    for (const m of [undefined, { aal: "aal1", em: new Date().toISOString() }, { aal: "aal2", em: new Date(Date.now() - 3600_000).toISOString() }]) {
+      await assert.rejects(() => perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa longa o bastante", validadeDias: 7, mfaEvidencia: m }, dx), (e) => e.statusCode === 400);
+    }
+    const exc = await perSvc.concederExcecaoFechamento(CTX_A, "2026-09", { justificativa: "justificativa: aguardando comprovante do fornecedor", validadeDias: 7, mfaEvidencia: MFA() }, dx);
     assert.equal(exc.status, "ativa"); assert.equal(exc.quantidade, 1); assert.equal(exc.pendencias.length, 1);
     assert.equal(a.repo._t.lanc.filter((l) => l.classificacao_pendente || !l.categoria_id).length, 1, "a concessão alterou pendências");
     const preEx = (await a.chamar("GET", "/periodos/2026-09/pre-fechamento")).corpo.data;
@@ -480,6 +489,7 @@ test("permissões por nível em todas as rotas novas: leitura só consulta; oper
       ["POST", "/conciliacao/referencias", { itens: [ref("2026-10-05", "venda", "1,00")] }, ["gestor"]],
       ["POST", "/conciliacao/excecoes-sangria", { categoriaId: s.cat.ALUGUEL.id, motivo: "motivo valido e longo" }, ["gestor"]],
       ["POST", "/periodos/abrir", { mes: "2026-12" }, ["gestor"]],
+      ["PUT", "/periodos/politica", { permiteFecharComPendencias: false }, ["gestor"]],
       ["POST", `/transferencias/${s.parId}/cancelar`, { motivo: "cancelamento de teste do par" }, ["gestor"]],
     ];
     for (const [m, p, b, quem] of rotas) {

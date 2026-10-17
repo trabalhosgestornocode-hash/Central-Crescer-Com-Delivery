@@ -101,6 +101,20 @@ export async function reabrir(ctx, mes, b, deps = padrao) {
 }
 
 /**
+ * Compatibilidade de contrato (pedido do Agente 1): NÃO existe política geral. `GET` devolve sempre "bloqueado"; `PUT` NUNCA liga
+ * (403 `POLITICA_EXCEPCIONAL_DESABILITADA`); "desligar" é no-op idempotente. Nada é gravado.
+ */
+export async function obterPolitica(ctx) {
+  exigirContexto(ctx);
+  return { modo: "excecao_por_competencia", permiteFecharComPendencias: false, excecaoFechamentoHabilitada: false };
+}
+export async function definirPolitica(ctx, b) {
+  exigirContexto(ctx);
+  if (b?.permiteFecharComPendencias === false) return obterPolitica(ctx);
+  throw ApiError.forbidden("O gestor não pode permitir o fechamento com pendências. A única via é uma exceção por unidade e competência, aprovada por SuperAdmin, indisponível até a validação do MFA.", { codigo: "POLITICA_EXCEPCIONAL_DESABILITADA" });
+}
+
+/**
  * Concessão da exceção de fechamento (LD-007). FAIL-CLOSED: desabilitada por padrão e SEM rota — depende da validação do MFA e da ligação do
  * SuperAdmin pela fundação de segurança (Agente 1). Mesmo habilitada aqui, o banco só deixa executar quem tiver EXECUTE na função DEFINER
  * (o service_role não tem). Não altera, apaga nem reclassifica nenhuma pendência.
@@ -111,6 +125,9 @@ export async function concederExcecaoFechamento(ctx, mes, b, deps = padrao) {
   const justificativa = texto(b?.justificativa, "justificativa", { max: 2000 });
   if (justificativa.length < 20) throw bad("Informe a justificativa da exceção (mínimo 20 caracteres).", "JUSTIFICATIVA_OBRIGATORIA");
   const validadeDias = inteiro(b?.validadeDias, "validadeDias", { min: 1, max: 30 });
+  // evidência de MFA recente (AAL2 + instante) fornecida pela plataforma (Agente 1); o banco revalida (AAL2, <= 15 min)
+  const m = b?.mfaEvidencia;
+  if (!m || typeof m !== "object" || m.aal !== "aal2" || !m.em) throw bad("A exceção exige verificação MFA (AAL2) recente.", "MFA_OBRIGATORIO");
   const x = await prepararMes(c, mesAno(mes), deps);
-  return resumoExcecao(await deps.repo.concederExcecaoFechamentoRpc(c, { mes: mesAno(mes), justificativa, validadeDias, pendenciasConciliacao: x.pendencias.conciliacao }, deps.db));
+  return resumoExcecao(await deps.repo.concederExcecaoFechamentoRpc(c, { mes: mesAno(mes), justificativa, validadeDias, pendenciasConciliacao: x.pendencias.conciliacao, mfaEvidencia: { aal: m.aal, em: m.em } }, deps.db));
 }
