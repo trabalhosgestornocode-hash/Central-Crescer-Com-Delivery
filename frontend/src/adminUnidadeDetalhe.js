@@ -255,6 +255,7 @@ const CORPOS = {
       ${adormecidos.length ? `<div class="adm-aviso">${adormecidos.length} módulo(s) ficaram indisponíveis porque a empresa não os tem mais — a preferência da unidade continua guardada e volta sozinha se a empresa reganhar o módulo.</div>` : ""}
       ${grupo("operacao", "Operação")}
       ${grupo("integracao", "Integrações")}
+      ${grupo("financeiro", "Financeiro (acesso por concessão explícita)")}
       <div class="adm-secao-acoes adm-secao-acoes--fim">
         <button class="btn btn-primary btn-sm" id="ud-salvar-acessos" type="button">Salvar acessos</button>
       </div>`;

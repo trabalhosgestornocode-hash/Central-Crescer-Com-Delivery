@@ -51,3 +51,13 @@ graphify-out/
 # Central de Performance — dumps de catálogo do pré-flight da 078 (1,4 MB,
 # regeneráveis por backend/scripts/validar-performance-schema-completo.mjs)
 docs/performance-validacao-banco/consolidado-*.json
+
+# Gestão financeira: material privado/real (repo público)
+docs/gestao-financeira/privado/
+docs/gestao-financeira/**/*.xlsx
+docs/gestao-financeira/**/*.xls
+backend/test/fixtures-financeiras-reais/
+
+# QA visual: capturas locais
+backend/testes-seguros/qa-visual/shots/
+backend/testes-seguros/qa-visual/resultado.json

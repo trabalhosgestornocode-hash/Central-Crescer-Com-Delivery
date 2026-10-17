@@ -214,6 +214,10 @@ export const ACOES = {
   WHATSAPP_CONEXAO_FALHOU: "WHATSAPP_CONEXAO_FALHOU",
   WHATSAPP_IDENTIDADE_DEFINIDA: "WHATSAPP_IDENTIDADE_DEFINIDA",
   WHATSAPP_CONEXAO_RECONCILIADA: "WHATSAPP_CONEXAO_RECONCILIADA",
+
+  // Dashboard Financeiro — concessões explícitas por perfil+unidade (migration 120). `detalhes` guarda ids, nível e motivo; nunca valor financeiro.
+  FINANCEIRO_CONCESSAO_CONCEDIDA: "financeiro.concessao_concedida",
+  FINANCEIRO_CONCESSAO_REVOGADA: "financeiro.concessao_revogada",
 };
 
 /**

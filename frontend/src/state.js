@@ -46,6 +46,10 @@ export const state = {
     permissoes: [],
     modulos: [],
     impersonando: false,
+    // Setor em uso (Financeiro × Operacional). Preferência de navegação — NUNCA autorização (ver setores.js).
+    setor: null,
+    setores: [],
+    setorContexto: null, // chave do contexto em que `setor` foi escolhido (setores.js#chaveDoContexto)
   },
 
   // navegação

@@ -33,12 +33,14 @@ export const MODULOS = {
   // Integrações). Sem ele a seção inteira some e os endpoints ligados a ela
   // recusam — mesmo com `agente_ia` habilitado (dupla autorização no /agente).
   INTELIGENCIA: "inteligencia",
+  // Dashboard Financeiro (migration 120). Nasce desabilitado; o acesso real também exige concessão explícita por perfil.
+  GESTAO_FINANCEIRA: "gestao_financeira",
 };
 
 /**
  * Catálogo completo — espelha o seed da migration 030. `categoria` alimenta
  * o agrupamento do checklist de módulos no painel (OPERAÇÃO/INTEGRAÇÕES).
- * @type {Array<{id: string, nome: string, categoria: 'operacao'|'integracao', ordem: number}>}
+ * @type {Array<{id: string, nome: string, categoria: 'operacao'|'integracao'|'financeiro', ordem: number}>}
  */
 export const CATALOGO_MODULOS = [
   { id: MODULOS.DASHBOARD, nome: "Dashboard", categoria: "operacao", ordem: 1 },
@@ -60,6 +62,7 @@ export const CATALOGO_MODULOS = [
   // depender de uma categoria/grupo novo nos checklists de Acessos (empresa e
   // unidade). Aparece no grupo "Operação", ao lado do Agente Crescer.
   { id: MODULOS.INTELIGENCIA, nome: "Inteligência (seção)", categoria: "operacao", ordem: 16 },
+  { id: MODULOS.GESTAO_FINANCEIRA, nome: "Gestão Financeira", categoria: "financeiro", ordem: 17 },
 ];
 
 const IDS_VALIDOS = new Set(CATALOGO_MODULOS.map((m) => m.id));

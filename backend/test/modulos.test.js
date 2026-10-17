@@ -29,8 +29,12 @@ describe("catálogo de módulos", () => {
     assert.equal(new Set(ids).size, ids.length);
   });
 
-  test("categoria de todo módulo é operacao ou integracao", () => {
-    for (const m of CATALOGO_MODULOS) assert.ok(["operacao", "integracao"].includes(m.categoria), m.id);
+  test("categoria de todo módulo é operacao, integracao ou financeiro (migration 120)", () => {
+    for (const m of CATALOGO_MODULOS) assert.ok(["operacao", "integracao", "financeiro"].includes(m.categoria), m.id);
+  });
+
+  test("`gestao_financeira` é a única entrada de categoria financeiro", () => {
+    assert.deepEqual(CATALOGO_MODULOS.filter((m) => m.categoria === "financeiro").map((m) => m.id), ["gestao_financeira"]);
   });
 
   test("`inteligencia` está no catálogo (gate-pai da seção do menu)", () => {
