@@ -120,8 +120,12 @@ async function abrir(pagina, { viewport = DESKTOP, escuro = false, permissoes = 
 }
 const captura = async (p, nome) => { if (CAPTURAS) await p.screenshot({ path: resolve(CAPTURAS, `${nome}.png`), fullPage: true }); };
 async function semEstouro(p, rotulo) {
-  const r = await p.evaluate(() => ({ largura: document.documentElement.clientWidth, rolagem: document.documentElement.scrollWidth }));
-  assert.ok(r.rolagem <= r.largura + 1, `${rotulo}: rolagem horizontal (${r.rolagem} > ${r.largura})`);
+  const r = await p.evaluate(() => {
+    const largura = document.documentElement.clientWidth;
+    const fora = [...document.querySelectorAll("#view *")].filter((n) => n.offsetParent !== null && n.getBoundingClientRect().right > largura + 1).slice(0, 4).map((n) => `${n.tagName.toLowerCase()}.${n.className || ""}[${(n.textContent || "").trim().slice(0, 24)}]=${Math.round(n.getBoundingClientRect().right)}`);
+    return { largura, rolagem: document.documentElement.scrollWidth, fora };
+  });
+  assert.ok(r.rolagem <= r.largura + 1, `${rotulo}: rolagem horizontal (${r.rolagem} > ${r.largura}) ${r.fora.join(" | ")}`);
 }
 
 describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR }, () => {
@@ -411,11 +415,102 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
     assert.deepEqual(erros, []);
   });
 
-  test("períodos: pré-fechamento bloqueado por pendências; política aprovada + reconhecimento; snapshot; mês fechado recusa lançamento com mensagem amigável", async () => {
+  test("relatórios: 7 relatórios, filtros, estado vazio, dados parciais, unidade do contexto; exporta CSV e XLSX seguros (download real)", async () => {
+    const XLSXn = reqBackend("xlsx");
+    const ctxA = { organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3) };
+    const banco = repo._t.contas.find((c) => c.nome === "BANCO");
+    await repo.inserirLancamento(ctxA, { conta_id: banco.id, categoria_id: null, descricao: "=HYPERLINK(\"http://evil.example\",\"clique\")", sentido: "saida", valor_centavos: 123, data_movimento: "2026-09-23", status: "realizado", classificacao_pendente: true });
+    const { p, erros, fechar } = await abrir("relatorios");
+    try {
+      await p.locator("[data-rel]").first().waitFor();
+      assert.equal(await p.locator("[data-rel]").count(), 7);
+      const t0 = await p.locator("#view").innerText();
+      assert.match(t0, /Unidade: unidade do contexto atual/);
+      assert.match(t0, /Regime de caixa/);
+      await p.locator('table[data-relatorio="movimentacoes"]').waitFor();
+      assert.match(t0 + await p.locator("#view").innerText(), /Dados parciais/);                 // há lançamentos sem classificação
+      await captura(p, "100-relatorios-movimentacoes");
+      await semEstouro(p, "relatórios desktop");
+      // filtros: tipo = saídas
+      await p.locator('select[name="tipo"]').selectOption("saida");
+      await p.locator('[data-filtros] button[type="submit"]').click();
+      await p.waitForFunction(() => !/<td[^>]*data-rot="Entrada \(R\$\)"[^>]*>R\$/.test(document.querySelector("table[data-relatorio]")?.innerHTML ?? "") );
+      // DRE do mesmo motor
+      await p.locator('[data-rel="dre"]').click();
+      await p.locator('table[data-relatorio="dre"]').waitFor();
+      const dreTxt = await p.locator("#view").innerText();
+      assert.match(dreTxt, /Margem de contribuição/); assert.match(dreTxt, /Detalhe \(já incluído na linha acima\)/);
+      assert.match(dreTxt, /Margem líquida/);
+      // todos os 7 relatórios geram sem erro
+      for (const id of ["fluxo-caixa", "movimentacao-conta", "categorias", "conciliacoes", "periodos"]) {
+        await p.locator(`[data-rel="${id}"]`).click();
+        await p.locator(`table[data-relatorio="${id}"], .fin-estado--vazio`).first().waitFor();
+      }
+      await captura(p, "101-relatorios-periodos");
+      // estado vazio honesto: período sem dados
+      await p.locator('[data-rel="movimentacoes"]').click();
+      await p.locator('input[name="de"]').fill("2025-01-01"); await p.locator('input[name="ate"]').fill("2025-01-31");
+      await p.locator('[data-filtros] button[type="submit"]').click();
+      await p.locator(".fin-estado--vazio").waitFor();
+      assert.match(await p.locator("#view").innerText(), /Nenhum valor é inventado/);
+      // exporta CSV (download real) com o período de setembro
+      await p.locator('input[name="de"]').fill("2026-09-01"); await p.locator('input[name="ate"]').fill("2026-09-30");
+      await p.locator('select[name="tipo"]').selectOption("");
+      const [dlCsv] = await Promise.all([p.waitForEvent("download"), p.locator('[data-exportar="csv"]').click()]);
+      assert.match(dlCsv.suggestedFilename(), /^movimentacoes_2026-09-01_2026-09-30_\d{12}\.csv$/);
+      const csv = readFileSync(await dlCsv.path(), "utf8");
+      assert.equal(csv.charCodeAt(0), 0xfeff);
+      assert.match(csv, /Regime;"Regime de caixa/); assert.match(csv, /Período;01\/09\/2026 a 30\/09\/2026/); assert.match(csv, /Situação dos dados;PARCIAL/);
+      assert.match(csv, /Código de verificação;/);
+      assert.match(csv, /'=HYPERLINK/);
+      for (const linha of csv.replace("﻿", "").split("\r\n").filter(Boolean)) assert.doesNotMatch(linha, /^[=+@]/);
+      // exporta XLSX (download real): sem fórmulas, moeda numérica
+      const [dlX] = await Promise.all([p.waitForEvent("download"), p.locator('[data-exportar="xlsx"]').click()]);
+      const wb = XLSXn.read(readFileSync(await dlX.path()), { type: "buffer" });
+      assert.deepEqual(wb.SheetNames, ["Dados", "Informações"]);
+      const dados = wb.Sheets.Dados;
+      assert.ok(Object.keys(dados).filter((k) => !k.startsWith("!")).every((k) => dados[k].f === undefined));
+      const textos = Object.keys(dados).filter((k) => !k.startsWith("!") && dados[k].t === "s").map((k) => dados[k].v);
+      assert.ok(textos.some((v) => v.startsWith("'=HYPERLINK")));
+      assert.ok(textos.every((v) => !/^[=+@]/.test(v)));
+      assert.ok(Object.keys(dados).some((k) => dados[k].t === "n" && Math.round(dados[k].v * 100) === 123));
+    } finally { await fechar(); }
+    assert.deepEqual(erros, []);
+    for (const [nome, viewport, escuro] of [["celular", CELULAR, false], ["escuro", DESKTOP, true]]) {
+      const m = await abrir("relatorios", { viewport, escuro });
+      try {
+        await m.p.locator('table[data-relatorio="movimentacoes"]').waitFor();
+        await captura(m.p, `102-relatorios-${nome}`);
+        await semEstouro(m.p, `relatórios ${nome}`);
+        if (escuro) assert.equal((await m.p.evaluate(() => getComputedStyle(document.querySelector(".fin-pg")).getPropertyValue("--fin-entrada").trim())).toLowerCase(), "#4f8fd6");
+      } finally { await m.fechar(); }
+      assert.deepEqual(m.erros, []);
+    }
+  });
+
+  test("relatórios: somente leitura exporta (ver); sem permissão de ver, a API recusa e a tela mostra erro claro", async () => {
+    const leitura = await abrir("relatorios", { permissoes: ["gestao_financeira.ver"] });
+    try {
+      await leitura.p.locator('[data-exportar="csv"]').waitFor();
+      const [dl] = await Promise.all([leitura.p.waitForEvent("download"), leitura.p.locator('[data-exportar="csv"]').click()]);
+      assert.match(dl.suggestedFilename(), /\.csv$/);
+    } finally { await leitura.fechar(); }
+    assert.deepEqual(leitura.erros, []);
+    const sem = await abrir("relatorios", { permissoes: [] });
+    try {
+      await sem.p.locator(".fin-estado--erro").waitFor();
+      assert.doesNotMatch(await sem.p.locator("#view").innerText(), /fin_[a-z_]{4,}|organizacao_id|violates/i);
+    } finally { await sem.fechar(); }
+  });
+
+  test("períodos: pré-fechamento bloqueado por pendências; sem política nem botão de exceção; exceção de SuperAdmin + reconhecimento; snapshot; mês fechado recusa lançamento com mensagem amigável", async () => {
+    // no banco a linha do período nasce com o primeiro lançamento do mês (gatilho); o repositório de teste semeia sem passar por ele
+    await repo.abrirPeriodoRpc({ organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3) }, "2026-09");
     const { p, erros, fechar } = await abrir("periodos");
     try {
       await p.locator(".fin-tabela").waitFor();
-      assert.match(await p.locator("#view").innerText(), /Bloqueado \(padrão\)/);
+      assert.match(await p.locator("#view").innerText(), /Fechamento com pendências[\s\S]*Bloqueado[\s\S]*SuperAdmin[\s\S]*MFA/);
+      assert.equal(await p.locator("[data-politica]").count(), 0, "o gestor não flexibiliza o controle: não existe botão de política");
       assert.equal(await p.locator("[data-reabrir]").count(), 0, "nenhum nível tem reabrir: o botão nem aparece");
       await p.locator('[data-pre^="2026-09"]').first().click();
       const dlg = p.locator("dialog.fin-dialogo");
@@ -424,14 +519,10 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
       assert.equal(await dlg.locator('button[type="submit"]').isDisabled(), true);
       await captura(p, "90-periodos-bloqueado");
       await dlg.locator("[data-cancelar]").click();
-      // política: aprovar com justificativa e confirmação explícitas
-      await p.locator("[data-politica]").click();
-      const dp = p.locator("dialog.fin-dialogo");
-      await dp.locator('textarea[name="notaAprovacao"]').fill("aprovado pela diretoria em ata numero 12");
-      await dp.locator('input[name="confirmoAprovacao"]').check();
-      await dp.locator('button[type="submit"]').click();
-      await dp.waitFor({ state: "detached" });
-      await p.locator("text=Permitido (aprovado)").waitFor();
+      // a exceção é aprovada FORA da tela (SuperAdmin, após a validação do MFA); aqui simulamos o registro dela e redesenhamos a tela
+      await repo.concederExcecaoFechamentoRpc({ organizacaoId: U(1), unidadeId: U(2), usuarioId: U(3) }, { mes: "2026-09", justificativa: "excecao sintetica: aguardando comprovantes do mes", validadeDias: 5, pendenciasConciliacao: 99, mfaEvidencia: { aal: "aal2", em: new Date().toISOString() } });
+      await p.evaluate(async (perms) => { const m = await import("/src/financeiro/periodos.js"); await m.render(document.querySelector("#view"), { permissoes: perms, nivel: "gestor" }); }, TODAS);
+      await p.locator("text=Ativa").first().waitFor();
       // agora o fechamento exige RECONHECER as pendências
       await p.locator('[data-pre^="2026-09"]').first().click();
       const d2 = p.locator("dialog.fin-dialogo");
@@ -473,8 +564,62 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
       await d.locator("[data-cancelar]").click();
     } finally { await f.fechar(); }
     const m = await abrir("periodos", { viewport: CELULAR });
-    try { await m.p.locator(".fin-tabela").waitFor(); await captura(m.p, "92-periodos-celular"); await semEstouro(m.p, "períodos celular"); } finally { await m.fechar(); }
+    try { await m.p.locator(".fin-tabela").first().waitFor(); await captura(m.p, "92-periodos-celular"); await semEstouro(m.p, "períodos celular"); } finally { await m.fechar(); }
     assert.deepEqual(m.erros, []);
+  });
+
+
+  test("configurações: só o que o domínio suporta; abertura desconhecida; regras históricas protegidas após o fechamento; itens indisponíveis sem controle de enfeite", async () => {
+    const { p, erros, fechar } = await abrir("configuracoes");
+    try {
+      await p.locator(".fin-card").first().waitFor();
+      const t = await p.locator("#view").innerText();
+      assert.match(t, /Saldo de abertura desconhecido em \d+ conta/);
+      assert.match(t, /parciais; nunca assumimos zero|parciais/);
+      assert.match(t, /Contas financeiras/); assert.match(t, /Plano de contas/); assert.match(t, /Exceções de sangria/); assert.match(t, /Fechamento com pendências/);
+      assert.match(t, /Indisponível ou pendente de decisão/);
+      assert.match(t, /Regras de classificação automática/); assert.match(t, /Reabertura de períodos fechados/); assert.match(t, /MFA recente/);
+      assert.match(t, /Bloqueado/); assert.match(t, /Não há política geral/); assert.doesNotMatch(t, /Permitido \(aprovado\)/);
+      // nenhum controle para o que está indisponível
+      const indisp = await p.locator(".fin-card", { hasText: "Indisponível ou pendente de decisão" }).locator("button, input, select").count();
+      assert.equal(indisp, 0);
+      await captura(p, "110-configuracoes");
+      await semEstouro(p, "configurações desktop");
+      // setembro está fechado (teste anterior): tipo/canal travados nas contas com movimento fechado; papel fixo em categorias usadas
+      await p.locator("tr", { hasText: "em mês fechado" }).first().locator("[data-conta]").click();
+      const dlg = p.locator("dialog.fin-dialogo");
+      assert.match(await dlg.innerText(), /Tipo e canal travados/);
+      assert.equal(await dlg.locator('select[name="tipoConta"]').count(), 0);
+      await dlg.locator("[data-cancelar]").click();
+      await p.locator("tr", { hasText: "fixo:" }).first().locator("[data-cat]").click();
+      const d2 = p.locator("dialog.fin-dialogo");
+      assert.match(await d2.innerText(), /Papel fixo/);
+      assert.equal(await d2.locator('select[name="papel"]').count(), 0);
+      await d2.locator("[data-cancelar]").click();
+      // informar abertura de uma conta com abertura desconhecida (funcionalidade real)
+      await p.locator('[data-abertura]', { hasText: "Informar abertura" }).first().click();
+      const d3 = p.locator("dialog.fin-dialogo");
+      await d3.locator('input[name="dataReferencia"]').fill("2026-10-01");
+      await d3.locator('input[name="valor"]').fill("250,00");
+      await d3.locator('button[type="submit"]').click();
+      await d3.waitFor({ state: "detached" });
+      await p.locator(".fin-alerta", { hasText: /abertura desconhecido|Todas as contas ativas/ }).first().waitFor();
+      assert.ok(repo._t.aberturas.some((a) => a.valor_centavos === 25000 && a.origem === "manual"));
+    } finally { await fechar(); }
+    assert.deepEqual(erros, []);
+    for (const [nome, viewport, escuro] of [["celular", CELULAR, false], ["escuro", DESKTOP, true]]) {
+      const m = await abrir("configuracoes", { viewport, escuro });
+      try { await m.p.locator(".fin-card").first().waitFor(); await captura(m.p, `111-configuracoes-${nome}`); await semEstouro(m.p, `configurações ${nome}`); } finally { await m.fechar(); }
+      assert.deepEqual(m.erros, []);
+    }
+    // somente leitura: nenhum botão de escrita
+    const leitura = await abrir("configuracoes", { permissoes: ["gestao_financeira.ver"] });
+    try {
+      await leitura.p.locator(".fin-card").first().waitFor();
+      assert.equal(await leitura.p.locator("[data-nova-conta], [data-nova-cat], [data-conta], [data-cat], [data-abertura], [data-exc-nova], [data-exc-off]").count(), 0);
+      assert.match(await leitura.p.locator("#view").innerText(), /Somente leitura/);
+    } finally { await leitura.fechar(); }
+    assert.deepEqual(leitura.erros, []);
   });
 
 });

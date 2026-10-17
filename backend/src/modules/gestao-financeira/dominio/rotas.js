@@ -10,6 +10,8 @@ import * as rel from "./relatorios.service.js";
 import * as imp from "./importacao.service.js";
 import * as conc from "./conciliacao.service.js";
 import * as per from "./periodos.service.js";
+import * as tab from "./tabelas.service.js";
+import * as cfg from "./configuracoes.service.js";
 import * as repositorio from "./repositorio.js";
 import { uuid } from "./validacao.js";
 
@@ -81,12 +83,26 @@ export function criarDominioRouter({ autorizar, deps = undefined }) {
 
   // períodos (B8): fechar exige `fechar`; reabrir exige `reabrir` (nenhum nível a concede) E o serviço segue desativado por padrão
   r.get("/periodos", ...h(ACAO.VER, (c) => per.listar(c, d)));
-  r.get("/periodos/politica", ...h(ACAO.VER, (c) => per.obterPolitica(c, d)));
-  r.put("/periodos/politica", ...h(ACAO.CONFIGURAR, (c, q) => per.definirPolitica(c, q.body, d)));
+  r.get("/periodos/politica", ...h(ACAO.VER, (c) => per.obterPolitica(c)));
+  r.put("/periodos/politica", ...h(ACAO.CONFIGURAR, (c, q) => per.definirPolitica(c, q.body)));
   r.post("/periodos/abrir", ...h(ACAO.FECHAR, (c, q) => per.abrir(c, q.body, d), { status: 201 }));
   r.get("/periodos/:mes/pre-fechamento", ...h(ACAO.VER, (c, q) => per.preFechamento(c, q.params.mes, d)));
   r.post("/periodos/:mes/fechar", ...h(ACAO.FECHAR, (c, q) => per.fechar(c, q.params.mes, q.body, d)));
   r.post("/periodos/:mes/reabrir", ...h(ACAO.REABRIR, (c, q) => per.reabrir(c, q.params.mes, q.body, d)));
+
+  // relatórios tabulares e exportações (B9): mesmo motor e mesmas fontes; contexto só do gate; unidade fora do contexto → 403
+  r.get("/relatorios/tabelas/catalogo", ...h(ACAO.VER, (c) => tab.catalogo(c)));
+  r.get("/relatorios/tabelas/:id", ...h(ACAO.VER, (c, q) => tab.gerar(c, q.params.id, q.query, d)));
+  r.get("/relatorios/tabelas/:id/exportar", autorizar(ACAO.VER), asyncHandler(async (req, res) => {
+    const arq = await tab.exportar(contextoDe(req), req.params.id, req.query.formato, req.query, d);
+    res.set({
+      "Content-Type": arq.tipo, "Content-Disposition": `attachment; filename="${arq.nome}"`, "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Linhas": String(arq.linhas),
+    });
+    res.send(arq.conteudo);
+  }));
+
+  // configurações financeiras: visão consolidada do que o domínio suporta (escritas usam os endpoints próprios)
+  r.get("/configuracoes", ...h(ACAO.VER, (c) => cfg.resumo(c, d)));
 
   // trilha de auditoria
   r.get("/auditoria", ...h(ACAO.EDITAR, (c, q) => (d?.repo ?? repositorio).listarAuditoria(c, { entidade: q.query.entidade, entidadeId: q.query.entidadeId }, d?.db)));

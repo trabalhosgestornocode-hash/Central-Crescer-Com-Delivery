@@ -77,18 +77,35 @@ create table if not exists fin_sangria_excecoes (
 );
 create unique index if not exists ux_fin_sangria_excecao_ativa on fin_sangria_excecoes (unidade_id, categoria_id) where ativa;
 
--- Política de fechamento por unidade. Padrão: NÃO permite fechar com pendências. Mudar exige aprovação explícita registrada.
-create table if not exists fin_config (
+-- Fechamento com pendências: NÃO existe política geral (o gestor não flexibiliza o controle). A ÚNICA via é a EXCEÇÃO POR UNIDADE E COMPETÊNCIA,
+-- concedida em caráter excepcional por SuperAdmin (fora do domínio; a função de concessão NÃO é executável pelo service_role até a validação do MFA):
+-- justificada, auditada, com as pendências IDENTIFICADAS no ato, de validade curta (≤ 30 dias), de USO ÚNICO, nunca permanente. Conceder não altera,
+-- apaga nem reclassifica nenhuma pendência. `fin_fechar_periodo` só consome exceção ativa que cubra TODAS as pendências do mês.
+create table if not exists fin_excecoes_fechamento (
   id uuid primary key default gen_random_uuid(),
   organizacao_id uuid not null references organizacoes(id) on delete restrict,
   unidade_id uuid not null references unidades(id) on delete restrict,
-  permite_fechar_com_pendencias boolean not null default false,
-  aprovado_por uuid, aprovado_em timestamptz, nota_aprovacao text,
+  mes date not null check (mes = date_trunc('month', mes)::date),
+  justificativa text not null check (length(btrim(justificativa)) >= 20),
+  pendencias jsonb not null,                                   -- [{ "id": <lancamento>, "motivos": [...] }, ...] identificadas no ato
+  pendencias_conciliacao int not null default 0 check (pendencias_conciliacao >= 0),
+  quantidade int not null check (quantidade > 0 or pendencias_conciliacao > 0),
+  aprovada_por uuid not null,                                  -- SuperAdmin (auth.users.id; sem FK para sobreviver à conta)
+  mfa_evidencia jsonb not null check (jsonb_typeof(mfa_evidencia) = 'object' and mfa_evidencia->>'aal' = 'aal2' and (mfa_evidencia->>'em') is not null),   -- carimbo/AAL fornecido pela plataforma (Agente 1); sem MFA não há exceção
+  aprovada_em timestamptz not null default now(),
+  expira_em timestamptz not null,
+  status text not null default 'ativa' check (status in ('ativa','consumida','revogada')),
+  consumida_por uuid, consumida_em timestamptz,
+  revogada_por uuid, revogada_em timestamptz, motivo_revogacao text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (unidade_id),
-  check (permite_fechar_com_pendencias = false or (aprovado_por is not null and aprovado_em is not null and nota_aprovacao is not null and length(btrim(nota_aprovacao)) >= 10))
+  check (expira_em > aprovada_em and expira_em <= aprovada_em + interval '30 days'),
+  check (jsonb_typeof(pendencias) = 'array' and jsonb_array_length(pendencias) = quantidade),
+  check (status <> 'consumida' or (consumida_por is not null and consumida_em is not null)),
+  check (status <> 'revogada' or (revogada_por is not null and revogada_em is not null and length(btrim(coalesce(motivo_revogacao, ''))) >= 10))
 );
+create unique index if not exists ux_fin_excecao_fechamento_ativa on fin_excecoes_fechamento (unidade_id, mes) where status = 'ativa';
+create index if not exists ix_fin_excecao_fechamento_tenant on fin_excecoes_fechamento (organizacao_id, unidade_id, mes);
 
 -- ---------------------------------------------------------------------
 -- Guardas
@@ -169,7 +186,7 @@ create trigger trg_fin_periodos_guarda before update on fin_periodos for each ro
 do $$
 declare t text;
 begin
-  foreach t in array array['fin_referencias','fin_conciliacao_resolucoes','fin_sangria_excecoes','fin_config'] loop
+  foreach t in array array['fin_referencias','fin_conciliacao_resolucoes','fin_sangria_excecoes','fin_excecoes_fechamento'] loop
     execute format('drop trigger if exists trg_%1$s_auditar on %1$s', t);
     execute format('create trigger trg_%1$s_auditar after insert or update or delete on %1$s for each row execute function fin_auditar()', t);
     execute format('drop trigger if exists trg_%1$s_upd on %1$s', t);
@@ -215,12 +232,13 @@ begin
 end $$;
 
 -- Fecha o mês: tudo ou nada. Falha se: já fechado; versão desatualizada; conteúdo mudou desde a impressão que gerou o snapshot;
--- há pendências impeditivas e a política (aprovada) não permite — e, se permite, o chamador precisa reconhecê-las explicitamente.
+-- há pendências impeditivas SEM exceção ativa (unidade+competência, concedida por SuperAdmin) que cubra TODAS elas — e, havendo exceção, o chamador
+-- precisa reconhecer as pendências. A exceção é de USO ÚNICO e é consumida no mesmo ato. Não existe política geral que o gestor possa ligar.
 create or replace function fin_fechar_periodo(
   p_org uuid, p_unidade uuid, p_usuario uuid, p_mes date, p_versao int, p_fingerprint text, p_snapshot jsonb,
   p_pendencias_conciliacao int, p_reconheco_pendencias boolean
 ) returns jsonb language plpgsql as $$
-declare v fin_periodos; n_pend int; permite boolean := false;
+declare v fin_periodos; n_pend int; ex fin_excecoes_fechamento; v_exc uuid; descobertas int;
 begin
   if p_mes <> date_trunc('month', p_mes)::date then raise exception 'fin_periodo_mes_invalido' using errcode = '23514'; end if;
   insert into fin_periodos (organizacao_id, unidade_id, mes, status) values (p_org, p_unidade, p_mes, 'aberto') on conflict (unidade_id, mes) do nothing;
@@ -236,13 +254,25 @@ begin
      and l.status <> 'cancelado' and (l.classificacao_pendente or l.categoria_id is null);
   n_pend := n_pend + coalesce(p_pendencias_conciliacao, 0);
   if n_pend > 0 then
-    select c.permite_fechar_com_pendencias into permite from fin_config c where c.unidade_id = p_unidade and c.organizacao_id = p_org;
-    permite := coalesce(permite, false);
-    if not permite then raise exception 'fin_periodo_pendencias: % pendencia(s) impedem o fechamento', n_pend using errcode = '23514'; end if;
+    select * into ex from fin_excecoes_fechamento e
+     where e.organizacao_id = p_org and e.unidade_id = p_unidade and e.mes = p_mes and e.status = 'ativa' and e.expira_em > now();
+    if not found then raise exception 'fin_periodo_pendencias: % pendencia(s) impedem o fechamento', n_pend using errcode = '23514'; end if;
     if p_reconheco_pendencias is not true then raise exception 'fin_periodo_pendencias_nao_reconhecidas: % pendencia(s)', n_pend using errcode = '23514'; end if;
+    -- a exceção cobre SÓ o que foi identificado no ato da concessão: qualquer pendência nova de lançamento (ou mais pendências de conciliação) a invalida
+    select count(*) into descobertas from fin_lancamentos l
+     where l.organizacao_id = p_org and l.unidade_id = p_unidade and l.data_movimento >= p_mes and l.data_movimento < (p_mes + interval '1 month')::date
+       and l.status <> 'cancelado' and (l.classificacao_pendente or l.categoria_id is null)
+       and not exists (select 1 from jsonb_array_elements(ex.pendencias) x where x->>'id' = l.id::text);
+    if descobertas > 0 or coalesce(p_pendencias_conciliacao, 0) > ex.pendencias_conciliacao then
+      raise exception 'fin_periodo_excecao_insuficiente: ha pendencia nao coberta pela excecao concedida' using errcode = '23514';
+    end if;
+    perform set_config('fin.fechando_periodo', v.id::text, true);          -- só vale nesta transação; autoriza o consumo da exceção
+    perform fin_consumir_excecao_fechamento(ex.id, p_usuario);
+    perform set_config('fin.fechando_periodo', '', true);
+    v_exc := ex.id;
   end if;
   update fin_periodos set status = 'fechado', fechado_por = p_usuario, fechado_em = now(),
-         snapshot = coalesce(p_snapshot, '{}'::jsonb) || jsonb_build_object('pendenciasNoFechamento', n_pend, 'fingerprint', p_fingerprint, 'politicaPermitiaPendencias', permite)
+         snapshot = coalesce(p_snapshot, '{}'::jsonb) || jsonb_build_object('pendenciasNoFechamento', n_pend, 'fingerprint', p_fingerprint, 'excecaoFechamentoId', v_exc)
    where id = v.id returning * into v;
   return to_jsonb(v);
 end $$;
@@ -321,7 +351,7 @@ end $$;
 do $$
 declare t text; r text;
 begin
-  foreach t in array array['fin_referencias','fin_conciliacao_resolucoes','fin_sangria_excecoes','fin_config'] loop
+  foreach t in array array['fin_referencias','fin_conciliacao_resolucoes','fin_sangria_excecoes','fin_excecoes_fechamento'] loop
     execute format('alter table %I enable row level security', t);
     execute format('revoke all on table %I from public', t);
     foreach r in array array['anon','authenticated'] loop
@@ -329,11 +359,13 @@ begin
     end loop;
     if exists (select 1 from pg_roles where rolname = 'service_role') then
       execute format('revoke all on table %I from service_role', t);
-      execute format('grant select, insert, update on table %I to service_role', t);
+      if t = 'fin_excecoes_fechamento' then execute format('grant select on table %I to service_role', t);   -- só leitura: escrita só pelas funções DEFINER
+      else execute format('grant select, insert, update on table %I to service_role', t); end if;
     end if;
   end loop;
+  -- fin_reabrir_periodo NÃO entra aqui: reabertura desabilitada (sem EXECUTE para ninguém além do dono) até a política ser aprovada.
   foreach t in array array['fin_fingerprint_periodo(uuid,uuid,date)','fin_abrir_periodo(uuid,uuid,uuid,date)',
-      'fin_fechar_periodo(uuid,uuid,uuid,date,int,text,jsonb,int,boolean)','fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)',
+      'fin_fechar_periodo(uuid,uuid,uuid,date,int,text,jsonb,int,boolean)',
       'fin_periodo_travar_e_checar(uuid,uuid,date)','fin_confirmar_importacao(uuid,uuid,uuid,uuid)'] loop
     execute format('revoke all on function %s from public', t);
     foreach r in array array['anon','authenticated'] loop
@@ -363,10 +395,15 @@ do $$ begin
     alter table fin_transferencias add constraint fin_transferencias_cancelamento_check
       check (status <> 'cancelada' or (cancelada_por is not null and cancelada_em is not null and length(btrim(coalesce(motivo_cancelamento, ''))) >= 10));
   end if;
-  -- achado da revisão: importacao_id sem FK permitia apontar para importação de outro tenant
-  if not exists (select 1 from pg_constraint where conname = 'fin_lancamentos_importacao_fk') then
-    alter table fin_lancamentos add constraint fin_lancamentos_importacao_fk foreign key (importacao_id) references fin_importacoes(id) on delete restrict not valid;
-    alter table fin_lancamentos validate constraint fin_lancamentos_importacao_fk;
+  -- achado da revisão (F-B, endurecimento do Agente 1 incorporado): importacao_id precisa ser de uma importação do MESMO tenant.
+  -- FK composta (organizacao_id, unidade_id, importacao_id); MATCH SIMPLE → lançamento manual (importacao_id nulo) não é afetado.
+  if not exists (select 1 from pg_constraint where conname = 'fin_importacoes_tenant_uk') then
+    alter table fin_importacoes add constraint fin_importacoes_tenant_uk unique (organizacao_id, unidade_id, id);
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'fin_lancamentos_importacao_tenant_fk') then
+    alter table fin_lancamentos add constraint fin_lancamentos_importacao_tenant_fk
+      foreign key (organizacao_id, unidade_id, importacao_id) references fin_importacoes (organizacao_id, unidade_id, id) on delete restrict not valid;
+    alter table fin_lancamentos validate constraint fin_lancamentos_importacao_tenant_fk;
   end if;
 end $$;
 
@@ -488,4 +525,143 @@ begin
     if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on sequence fin_auditoria_id_seq from %I', r); end if;
   end loop;
   revoke all on sequence fin_auditoria_id_seq from public;
+end $$;
+
+-- =====================================================================
+-- REABERTURA DESABILITADA NO BANCO (F-A — endurecimento do Agente 1, incorporado à 122; a 122b deixa de existir como arquivo à parte)
+-- =====================================================================
+-- Limite honesto: a trava usa flag local de transação (como fin.cancelando_par). Defende contra o backend/API; NÃO defende contra quem já tem SQL
+-- bruto como service_role. Para HABILITAR no futuro (após aprovação da política): fin_reabrir_periodo passa a executar
+--   perform set_config('fin.reabertura_autorizada', v.id::text, true);  antes do UPDATE, e o EXECUTE volta ao service_role.
+create or replace function fin_periodos_bloqueia_reabertura() returns trigger language plpgsql as $$
+begin
+  if old.status = 'fechado' and new.status is distinct from 'fechado'
+     and coalesce(current_setting('fin.reabertura_autorizada', true), '') <> old.id::text then
+    raise exception 'fin_reabertura_desabilitada: a reabertura de periodo ainda nao foi habilitada' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_fin_periodos_bloqueia_reabertura on fin_periodos;
+create trigger trg_fin_periodos_bloqueia_reabertura before update on fin_periodos for each row execute function fin_periodos_bloqueia_reabertura();
+
+-- =====================================================================
+-- EXCEÇÃO DE FECHAMENTO COM PENDÊNCIAS (LD-007) — por unidade + competência, SuperAdmin, uso único, desabilitada por padrão
+-- =====================================================================
+-- Toda escrita na tabela passa por uma das três funções abaixo (flag local `fin.excecao_op`); ninguém altera/apaga linha diretamente.
+create or replace function fin_excecoes_fechamento_guarda() returns trigger language plpgsql as $$
+declare op text := coalesce(current_setting('fin.excecao_op', true), '');
+begin
+  if tg_op = 'DELETE' then raise exception 'fin_excecao_imutavel: excecao nao pode ser apagada' using errcode = '23514'; end if;
+  if tg_op = 'INSERT' then
+    if op <> 'conceder' then raise exception 'fin_excecao_via_funcao: use a concessao autorizada' using errcode = '23514'; end if;
+    return new;
+  end if;
+  if new.id is distinct from old.id or new.organizacao_id is distinct from old.organizacao_id or new.unidade_id is distinct from old.unidade_id
+     or new.mes is distinct from old.mes or new.justificativa is distinct from old.justificativa or new.pendencias is distinct from old.pendencias
+     or new.pendencias_conciliacao is distinct from old.pendencias_conciliacao or new.quantidade is distinct from old.quantidade
+     or new.aprovada_por is distinct from old.aprovada_por or new.mfa_evidencia is distinct from old.mfa_evidencia or new.aprovada_em is distinct from old.aprovada_em or new.expira_em is distinct from old.expira_em then
+    raise exception 'fin_excecao_imutavel: conteudo da excecao nao pode ser alterado (nem pendencias apagadas ou reclassificadas)' using errcode = '23514';
+  end if;
+  if old.status <> 'ativa' then raise exception 'fin_excecao_imutavel: excecao ja encerrada' using errcode = '23514'; end if;
+  if new.status = 'consumida' and op = 'consumir' then return new; end if;
+  if new.status = 'revogada' and op = 'revogar' then return new; end if;
+  raise exception 'fin_excecao_via_funcao: transicao nao autorizada' using errcode = '23514';
+end $$;
+drop trigger if exists trg_fin_excecoes_fechamento_guarda on fin_excecoes_fechamento;
+create trigger trg_fin_excecoes_fechamento_guarda before insert or update or delete on fin_excecoes_fechamento
+  for each row execute function fin_excecoes_fechamento_guarda();
+
+-- CONCEDE. Não altera, apaga nem reclassifica nenhuma pendência: só as REGISTRA (ids + motivos) no ato. Sem EXECUTE para o service_role.
+create or replace function fin_conceder_excecao_fechamento(
+  p_org uuid, p_unidade uuid, p_superadmin uuid, p_mes date, p_justificativa text, p_validade_dias int, p_pendencias_conciliacao int, p_mfa jsonb
+) returns jsonb language plpgsql security definer set search_path = public, pg_temp as $$
+declare v_per fin_periodos; v_pend jsonb; v_qtd int; v_conc int := coalesce(p_pendencias_conciliacao, 0); v_just text := btrim(coalesce(p_justificativa, '')); r fin_excecoes_fechamento;
+begin
+  if p_mes <> date_trunc('month', p_mes)::date then raise exception 'fin_periodo_mes_invalido' using errcode = '23514'; end if;
+  if p_superadmin is null then raise exception 'fin_excecao_responsavel_obrigatorio' using errcode = '23514'; end if;
+  if length(v_just) < 20 then raise exception 'fin_excecao_justificativa_obrigatoria: minimo 20 caracteres' using errcode = '23514'; end if;
+  if p_validade_dias is null or p_validade_dias < 1 or p_validade_dias > 30 then raise exception 'fin_excecao_validade_invalida: 1 a 30 dias' using errcode = '23514'; end if;
+  if v_conc < 0 then raise exception 'fin_excecao_pendencias_invalidas' using errcode = '23514'; end if;
+  -- MFA RECENTE: a plataforma entrega a evidência (AAL2 + instante da verificação); aqui só se exige que exista, seja AAL2 e tenha <= 15 min. A prova do MFA é do Agente 1.
+  if p_mfa is null or jsonb_typeof(p_mfa) <> 'object' or p_mfa->>'aal' is distinct from 'aal2' or (p_mfa->>'em') is null
+     or (p_mfa->>'em')::timestamptz < now() - interval '15 minutes' or (p_mfa->>'em')::timestamptz > now() + interval '1 minute' then
+    raise exception 'fin_excecao_mfa_invalida: exige verificacao MFA (AAL2) recente' using errcode = '23514';
+  end if;
+  insert into fin_periodos (organizacao_id, unidade_id, mes, status) values (p_org, p_unidade, p_mes, 'aberto') on conflict (unidade_id, mes) do nothing;
+  select * into v_per from fin_periodos where unidade_id = p_unidade and mes = p_mes and organizacao_id = p_org for update;
+  if not found then raise exception 'fin_periodo_nao_encontrado' using errcode = 'P0002'; end if;
+  if v_per.status = 'fechado' then raise exception 'fin_periodo_ja_fechado' using errcode = '23514'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object('id', l.id, 'motivos', to_jsonb(l.revisao_motivos)) order by l.id), '[]'::jsonb), count(*)::int into v_pend, v_qtd
+    from fin_lancamentos l
+   where l.organizacao_id = p_org and l.unidade_id = p_unidade and l.data_movimento >= p_mes and l.data_movimento < (p_mes + interval '1 month')::date
+     and l.status <> 'cancelado' and (l.classificacao_pendente or l.categoria_id is null);
+  if v_qtd = 0 and v_conc = 0 then raise exception 'fin_excecao_sem_pendencias: nao ha pendencia a excepcionar' using errcode = '23514'; end if;
+  -- exceção anterior vencida e não usada deixa de ocupar a vaga (registro preservado como revogada)
+  perform set_config('fin.excecao_op', 'revogar', true);
+  update fin_excecoes_fechamento set status = 'revogada', revogada_por = p_superadmin, revogada_em = now(), motivo_revogacao = 'Excecao vencida sem uso, substituida por nova concessao'
+   where unidade_id = p_unidade and mes = p_mes and status = 'ativa' and expira_em <= now();
+  perform set_config('fin.excecao_op', 'conceder', true);
+  insert into fin_excecoes_fechamento (organizacao_id, unidade_id, mes, justificativa, pendencias, pendencias_conciliacao, quantidade, aprovada_por, mfa_evidencia, expira_em)
+  values (p_org, p_unidade, p_mes, v_just, v_pend, v_conc, v_qtd, p_superadmin, p_mfa, now() + make_interval(days => p_validade_dias)) returning * into r;
+  perform set_config('fin.excecao_op', '', true);
+  return to_jsonb(r);
+end $$;
+
+create or replace function fin_revogar_excecao_fechamento(p_org uuid, p_unidade uuid, p_superadmin uuid, p_excecao uuid, p_motivo text)
+returns boolean language plpgsql security definer set search_path = public, pg_temp as $$
+declare r fin_excecoes_fechamento; v_motivo text := btrim(coalesce(p_motivo, ''));
+begin
+  if length(v_motivo) < 10 then raise exception 'fin_excecao_motivo_obrigatorio: minimo 10 caracteres' using errcode = '23514'; end if;
+  select * into r from fin_excecoes_fechamento where id = p_excecao and organizacao_id = p_org and unidade_id = p_unidade for update;
+  if not found then return false; end if;
+  if r.status <> 'ativa' then raise exception 'fin_excecao_imutavel: excecao ja encerrada' using errcode = '23514'; end if;
+  perform set_config('fin.excecao_op', 'revogar', true);
+  update fin_excecoes_fechamento set status = 'revogada', revogada_por = p_superadmin, revogada_em = now(), motivo_revogacao = v_motivo where id = r.id;
+  perform set_config('fin.excecao_op', '', true);
+  return true;
+end $$;
+
+-- CONSOME (uso único). Só dentro de fin_fechar_periodo do MESMO período (flag local com o id do período); exceção deve estar ativa e vigente.
+create or replace function fin_consumir_excecao_fechamento(p_excecao uuid, p_usuario uuid)
+returns void language plpgsql security definer set search_path = public, pg_temp as $$
+declare r fin_excecoes_fechamento; v_per uuid;
+begin
+  select * into r from fin_excecoes_fechamento where id = p_excecao for update;
+  if not found or r.status <> 'ativa' or r.expira_em <= now() then raise exception 'fin_periodo_excecao_insuficiente: excecao inexistente, vencida ou ja usada' using errcode = '23514'; end if;
+  select id into v_per from fin_periodos where organizacao_id = r.organizacao_id and unidade_id = r.unidade_id and mes = r.mes;
+  if coalesce(current_setting('fin.fechando_periodo', true), '') <> v_per::text then raise exception 'fin_excecao_via_funcao: consumo so no fechamento do proprio periodo' using errcode = '23514'; end if;
+  perform set_config('fin.excecao_op', 'consumir', true);
+  update fin_excecoes_fechamento set status = 'consumida', consumida_por = p_usuario, consumida_em = now() where id = r.id;
+  perform set_config('fin.excecao_op', '', true);
+end $$;
+
+-- Privilégios: conceder/revogar NÃO são executáveis pelo service_role (bloqueadas até a validação do MFA e a ligação do SuperAdmin pelo Agente 1);
+-- consumir é chamada só por fin_fechar_periodo; reabrir também sem EXECUTE (reabertura desabilitada).
+do $$
+declare f text; r text;
+begin
+  foreach f in array array['fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int,jsonb)','fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)',
+                           'fin_consumir_excecao_fechamento(uuid,uuid)','fin_excecoes_fechamento_guarda()','fin_periodos_bloqueia_reabertura()',
+                           'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)'] loop
+    execute format('revoke all on function %s from public', f);
+    foreach r in array array['anon','authenticated','service_role'] loop
+      if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on function %s from %I', f, r); end if;
+    end loop;
+  end loop;
+  -- fin_fechar_periodo roda como service_role (invoker) e precisa consumir a exceção: único EXECUTE concedido, protegido pela flag do período
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function fin_consumir_excecao_fechamento(uuid,uuid) to service_role;
+  end if;
+end $$;
+
+-- PÓS-CONDIÇÃO
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    if has_function_privilege('service_role', 'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)', 'execute') then raise exception '122 abortada: service_role ainda executa fin_reabrir_periodo.'; end if;
+    if has_function_privilege('service_role', 'fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,int,jsonb)', 'execute') then raise exception '122 abortada: service_role executa conceder excecao.'; end if;
+    if has_function_privilege('service_role', 'fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)', 'execute') then raise exception '122 abortada: service_role executa revogar excecao.'; end if;
+    if not exists (select 1 from pg_trigger where tgname = 'trg_fin_periodos_bloqueia_reabertura' and tgrelid = 'fin_periodos'::regclass and tgenabled = 'O') then raise exception '122 abortada: gatilho de reabertura desabilitada ausente.'; end if;
+    if has_table_privilege('service_role', 'fin_excecoes_fechamento', 'insert') or has_table_privilege('service_role', 'fin_excecoes_fechamento', 'update') then raise exception '122 abortada: service_role escreve em fin_excecoes_fechamento.'; end if;
+  end if;
 end $$;

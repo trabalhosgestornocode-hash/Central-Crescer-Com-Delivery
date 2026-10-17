@@ -1,4 +1,4 @@
-# Agente 2 — Contrato de integração (B3–B8)
+# Agente 2 — Contrato de integração (B3–B9)
 
 Saneado: sem dados reais. Complementa `00-contrato-agente1-agente2.md`. Nada aqui altera arquivos exclusivos do Agente 1. Revisão formal da 121: `agente2-revisao-migration-121.md`.
 
@@ -51,9 +51,10 @@ Dinheiro **sempre em centavos inteiros** (entrada aceita string pt-BR/en, até 2
 - Exceções de sangria: dado aprovado (categoria + motivo, quem/quando), nunca nome fixo no código.
 
 **Períodos (B8):**
-- `GET /periodos` → meses + `politica`; `GET /periodos/:mes/pre-fechamento` → `fingerprint`, `periodo.versao`, `avaliacao{pode, exigeReconhecimento, bloqueios[]}`, `pendencias`, `resumo`.
+- `GET /periodos` → meses + `excecoes` (de fechamento) + `excecaoFechamentoHabilitada` (sempre `false` até o MFA); `GET /periodos/:mes/pre-fechamento` → `fingerprint`, `periodo.versao`, `excecao` (ativa ou `null`), `avaliacao{pode, exigeReconhecimento, bloqueios[], excecao}`, `pendencias`, `resumo`.
 - `POST /periodos/:mes/fechar { confirmo:true, versao, fingerprint, reconhecoPendencias? }` — **409** (`FIN_PERIODO_CONFLITO_DADOS|VERSAO`) se o mês mudou depois da pré-visualização; fechamento com pendências **bloqueado por padrão**; snapshot imutável (regime de caixa; `saldosConciliadosComExtrato:false`).
-- `PUT /periodos/politica { permiteFecharComPendencias, notaAprovacao≥10, confirmoAprovacao }`: padrão **desligado**; ligar exige aprovação registrada (quem/quando/nota) e cada fechamento ainda exige reconhecimento.
+- **Política geral inexistente (LD-007).** `PUT /periodos/politica` NUNCA liga (403 `POLITICA_EXCEPCIONAL_DESABILITADA`; `{permiteFecharComPendencias:false}` é no-op) e `GET` devolve sempre bloqueado; nada é gravado e `fin_config` deixou de existir. Não há política que o gestor possa ligar: o gestor fecha períodos sem pendências impeditivas. A única via com pendências é a **exceção por unidade + competência** (`fin_excecoes_fechamento`), concedida por SuperAdmin: justificativa ≥ 20 caracteres, evidência de MFA (AAL2, ≤ 15 min, fornecida pela plataforma), pendências IDENTIFICADAS no ato (ids + motivos), validade ≤ 30 dias, **uso único**, nunca permanente, sem alterar/apagar/reclassificar pendência; pendência surgida depois invalida a cobertura. `fin_conceder_excecao_fechamento` / `fin_revogar_excecao_fechamento` (DEFINER) **não têm EXECUTE para o service_role** — ficam bloqueadas até a validação do MFA e a ligação do SuperAdmin pelo Agente 1. O serviço `concederExcecaoFechamento` é fail-closed (`deps.excecaoFechamentoHabilitada === true`) e **não tem rota HTTP**.
+- `GET /periodos/:mes/pre-fechamento` é **somente leitura** (não cria linha de período; mês sem linha = `aberto`, versão 1).
 
 ## 4. Telas (contrato de montagem)
 
@@ -62,13 +63,13 @@ Arquivos em `frontend/src/financeiro/<pagina>.js`, cada um exporta `render(conta
 | `pagina` (menu A1) | Estado |
 |---|---|
 | `visao-geral`, `fluxo-de-caixa`, `contas`, `dre`, `indicadores`, `categorias`, `plano-de-contas`, `importacao`, **`conciliacao`**, **`periodos`** | **entregues** |
-| `relatorios`, `configuracoes` | não entregues (B9 exportação) |
+| **`relatorios`**, **`configuracoes`** | **entregues (B9)** |
 
 CSS sob demanda (`financeiro-paginas.css`), tema escuro via `[data-theme="dark"]`.
 
 ## 5. Banco
 
-- `sql-provisorio/121_*` (já promovida pelo A1) e **`122_conciliacao_periodos.provisorio.sql` + `122_rollback.provisorio.sql`** (NÃO executáveis pelo pipeline). O 122: tabelas `fin_referencias`, `fin_conciliacao_resolucoes`, `fin_sangria_excecoes`, `fin_config`; colunas `revisao_motivos`, `canal_referencia`, `versao`, `status` do par; funções `fin_abrir_periodo`, `fin_fechar_periodo`, `fin_reabrir_periodo`, `fin_fingerprint_periodo`, `fin_cancelar_transferencia`, `fin_desvincular_transferencia_motivada`; trava de período com `FOR SHARE`/`FOR UPDATE`; rede de segurança no COMMIT contra cancelamento parcial; **correções da revisão da 121** (R5–R10).
+- `sql-provisorio/121_*` (já promovida pelo A1) e **`122_conciliacao_periodos.provisorio.sql` + `122_rollback.provisorio.sql`** (NÃO executáveis pelo pipeline). A 122 é **ÚNICA** (incorpora o endurecimento 122b do Agente 1: gatilho que mantém a reabertura desabilitada no banco, `fin_reabrir_periodo` sem EXECUTE, FK composta de importação por tenant) e o rollback **se auto-restaura** ao estado da 121 (não é preciso reaplicar a 121). O 122: tabelas `fin_referencias`, `fin_conciliacao_resolucoes`, `fin_sangria_excecoes`, `fin_excecoes_fechamento` (substitui a antiga `fin_config`, que nunca chegou a produção); colunas `revisao_motivos`, `canal_referencia`, `versao`, `status` do par; funções `fin_abrir_periodo`, `fin_fechar_periodo`, `fin_reabrir_periodo`, `fin_fingerprint_periodo`, `fin_cancelar_transferencia`, `fin_desvincular_transferencia_motivada`; trava de período com `FOR SHARE`/`FOR UPDATE`; rede de segurança no COMMIT contra cancelamento parcial; **correções da revisão da 121** (R5–R10).
 - Validado em PostgreSQL 17 **temporário local** (`backend/testes-financeiro-pg/run.sh`, `FIN_PG_DESCARTAVEL=1`, só loopback): aplica 121+122 duas vezes e **com dados existentes**, testes de domínio/períodos/cancelamento, **concorrência real com duas sessões** (fechamento × escrita; 5 cenários do cancelamento), rollbacks (recusa com dados; vazio sobe/desce). Revisão da 121 integrada: `revisao_migration.sh`.
 - RLS ligada sem policies (sem FORCE — ver revisão: FORCE quebraria a auditoria com dono sem `BYPASSRLS`); `service_role` sem DELETE; o desvínculo sem motivo da 121 perde o EXECUTE no 122.
 - Pendente de ambiente real e descartável (BL-02/BL-04): `service_role` com `BYPASSRLS`, dono das funções, default privileges de sequências.
@@ -79,3 +80,28 @@ CSS sob demanda (`financeiro-paginas.css`), tema escuro via `[data-theme="dark"]
 - Frontend: `node --test frontend/test/financeiroModelo.test.js`; navegador real: `frontend/test/financeiro.browser.test.js` (14 testes; `FIN_PLAYWRIGHT_PATH`, `FIN_BROWSER_CHANNEL`).
 - PostgreSQL descartável: `backend/testes-financeiro-pg/run.sh`.
 - Homologação histórica LOCAL (planilha real, fora do Git): `backend/scripts/financeiro-homologacao-local.mjs` e `financeiro-previa-local.mjs`.
+
+## 7. B9 — Relatórios, exportações e configurações (sem migration nova)
+
+**Sem migration nova e sem arquivo do Agente 1 alterado.** Depende apenas do 122 já proposto (B7/B8) para `revisao_motivos`, `canal_referencia` etc. (histórico de conciliações usa `fin_conciliacao_resolucoes`; situação dos períodos usa `fin_periodos`).
+
+**Rotas (todas atrás de `autorizar`, ação `ver`; contexto só de `req.financeiro`):**
+- `GET /relatorios/tabelas/catalogo` → 7 relatórios: `movimentacoes`, `dre`, `fluxo-caixa`, `movimentacao-conta`, `categorias`, `conciliacoes`, `periodos` (cada um com a lista de filtros aceitos).
+- `GET /relatorios/tabelas/:id?de&ate&contaId&categoriaId&tipo&status&agrupar&transferencias` → `{ id, titulo, colunas[{id,rotulo,tipo}], linhas[], totais?, total, truncado, meta{ regime:"caixa", periodo, filtros[], parcial, avisos[], geradoEm } }` (tela limitada a 2.000 linhas).
+- `GET /relatorios/tabelas/:id/exportar?formato=csv|xlsx&…` → arquivo completo (limite 50.000 linhas → 400 `EXPORTACAO_GRANDE`). Cabeçalhos: `Content-Disposition: attachment` com nome ASCII gerado pelo servidor, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`.
+- `GET /configuracoes` → visão consolidada (contas, categorias com `podeTrocarPapel`, aberturas desconhecidas, política de fechamento, itens indisponíveis). Escritas continuam nos endpoints próprios, cada um com a sua permissão (`configurar`).
+- `unidadeId` informado diferente da unidade do contexto → **403** `UNIDADE_FORA_DO_CONTEXTO`; `contaId`/`categoriaId` de outra unidade/organização → 400 “não encontrado”.
+
+**Sem segundo motor:** DRE = `montarDre`; categorias = `rankingCategorias`; fluxo = `serieMovimento`; contas = `movimentoPorConta` + `saldosPorConta`; conciliações/períodos = os mesmos serviços de B7/B8. Testes comparam as tabelas com os endpoints do dashboard (valores idênticos).
+
+**Exportação segura (`financeiro-calculos/exportacao.js`):** centavos inteiros → texto decimal exato (sem float; ida e volta provada com 20 mil valores); valor ausente = célula vazia (nunca 0,00); neutralização de fórmula (`=`, `+`, `-`, `@`, tab, CR/LF, mesmo após espaços/invisíveis) em CSV **e** XLSX (nenhuma célula XLSX tem fórmula); CSV BR (BOM UTF-8, `;`, vírgula decimal, `dd/mm/aaaa`, CRLF); XLSX com abas `Dados` (pronta para tabela dinâmica) e `Informações`. Rastreabilidade em todo arquivo: relatório, regime de caixa, período, filtros, **dados parciais** (com avisos), nº de linhas, data de geração e **código de verificação** (SHA-256 do conteúdo). Sem segredos, sem ids internos de segurança, sem usuário.
+
+**PDF: não implementado.** O repositório não tem biblioteca de PDF adequada e testável com segurança; CSV e XLSX cobrem o pedido. Pode ser feito depois com decisão de dependência.
+
+**Configurações — o que é real:** contas (nome, ativo, tipo, canal), abertura de saldo (inclusive as desconhecidas), categorias (nome/ativo; papel só se sem lançamentos), exceções de sangria, leitura da política de pendências. **Protegido:** papel de categoria em uso (banco) e tipo/canal de conta com movimento em **mês fechado** (serviço; mensagem `CONTA_COM_MOVIMENTO_FECHADO`). **Indisponível/pendente (sem controle):** regras de classificação automática (decisão empresarial) e reabertura de períodos (permissão separada + MFA recente, homologação do Agente 1).
+
+**Observação operacional:** contas criadas pela importação nascem com tipo `outra`; a conciliação do caixa físico só reconhece `caixa_fisico`. A tela pede “Defina o tipo” — fazer **antes** de fechar o mês (depois, tipo/canal ficam travados).
+
+**Riscos/limites conhecidos:** não há trilha de auditoria de *quem exportou o quê* (exigiria tabela/função nova → migration coordenada com o Agente 1; hoje a rastreabilidade é do arquivo, via código de verificação); a proteção de tipo/canal de conta é de serviço (um gatilho de banco equivalente poderia entrar numa próxima migration).
+
+**Testes B9:** backend `test/financeiro/exportacao.test.js` (8) e `relatoriosExportacoes.test.js` (14); navegador real `frontend/test/financeiro.browser.test.js` (17; downloads reais de CSV/XLSX, mobile, tema escuro).

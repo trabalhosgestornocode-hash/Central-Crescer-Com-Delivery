@@ -106,9 +106,9 @@
       "d": ""
     },
     {
-      "nome": "página \"Relatórios\": 'Em construção' (inexistente)",
+      "nome": "página \"Relatórios\": implementada (não é 'Em construção')",
       "ok": true,
-      "d": "Relatórios — em construção Esta área do Dashboard Financeiro ainda não está dis"
+      "d": "Relatórios Tabelas e exportações no regime de caixa, com os mesmos cálculos do "
     },
     {
       "nome": "página \"Relatórios\": sem 'undefined/NaN/[object' e sem erro de script",
@@ -116,9 +116,9 @@
       "d": ""
     },
     {
-      "nome": "página \"Configurações Financeiras\": 'Em construção' (inexistente)",
+      "nome": "página \"Configurações Financeiras\": implementada (não é 'Em construção')",
       "ok": true,
-      "d": "Configurações Financeiras — em construção Esta área do Dashboard Financeiro ain"
+      "d": "Configurações Financeiras Contas, categorias e regras de conciliação desta unid"
     },
     {
       "nome": "página \"Configurações Financeiras\": sem 'undefined/NaN/[object' e sem erro de script",
@@ -208,7 +208,7 @@
     {
       "nome": "pré-fechamento de mês com pendências: mostra as pendências e o botão 'Fechar período' está DESABILITADO (política padrão)",
       "ok": true,
-      "d": "Períodos Fechar um mês congela o snapshot dos resultados e bloqueia lançamentos, referências e classificações naquele mês. Abrir período Política: fechar com  | Abrir período | Aprovar fechamento com pendências | Pré-fechamento | Ver snapshot"
+      "d": "Períodos Fechar um mês congela o snapshot dos resultados e bloqueia lançamentos, referências e classificações naquele mês. Abrir período Fechamento com pendên | Abrir período | Pré-fechamento | Ver snapshot"
     },
     {
       "nome": "períodos (leitura): consulta e snapshot, sem abrir/aprovar política/fechar",

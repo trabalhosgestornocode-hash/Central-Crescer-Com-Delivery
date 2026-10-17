@@ -18,7 +18,7 @@ const PAGINAS = [
   ["fin-visao-geral", "Visão Geral", true], ["fin-fluxo-de-caixa", "Fluxo de Caixa", true], ["fin-contas", "Contas Financeiras", true],
   ["fin-conciliacao", "Conciliação", true], ["fin-dre", "DRE Gerencial", true], ["fin-indicadores", "Indicadores", true],
   ["fin-categorias", "Análise de Categorias", true], ["fin-plano-de-contas", "Plano de Contas", true], ["fin-periodos", "Períodos", true],
-  ["fin-importacao", "Importação", true], ["fin-relatorios", "Relatórios", false], ["fin-configuracoes", "Configurações Financeiras", false],
+  ["fin-importacao", "Importação", true], ["fin-relatorios", "Relatórios", true], ["fin-configuracoes", "Configurações Financeiras", true],
 ];
 
 const nav = await chromium.launch({ executablePath: process.env.QA_CHROME || "C:/Program Files/Google/Chrome/Application/chrome.exe", headless: true });

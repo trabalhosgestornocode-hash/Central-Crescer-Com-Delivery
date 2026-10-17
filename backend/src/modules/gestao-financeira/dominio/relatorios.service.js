@@ -167,4 +167,4 @@ export const _paraTeste = { entradaMotor, abrirMapa };
 export { enumerado };
 
 // Reutilizados pelo fechamento mensal (mesma fonte de verdade dos relatórios).
-export { carregar as carregarBase, aposAbertura, contasSemAbertura };
+export { carregar as carregarBase, aposAbertura, contasSemAbertura, abrirMapa };

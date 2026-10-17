@@ -252,11 +252,18 @@ describe("fechamento mensal (B8)", () => {
     });
     await servir({ concessao: null }, async (c) => assert.equal(codigo(await c("POST", `/fin/periodos/${MES}/fechar`, { confirmo: true, versao: 1, fingerprint: "x" })), "FINANCEIRO_SEM_CONCESSAO"));
   });
-  test("política de pendências: mudar exige `configurar` (operador → 403); ligar exige nota e confirmação", async () => {
-    await servir({ nivel: "operador" }, async (c) => assert.equal((await c("PUT", "/fin/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "Aprovado pela diretoria hoje", confirmoAprovacao: true })).status, 403));
+  test("política de pendências (LD-008): ninguém liga; desligar é no-op; GET fixo; reabertura sem caminho HTTP aberto", async () => {
+    await servir({ nivel: "operador" }, async (c) => assert.equal((await c("PUT", "/fin/periodos/politica", { permiteFecharComPendencias: true })).status, 403));
     await servir({ nivel: "gestor" }, async (c) => {
-      assert.equal((await c("PUT", "/fin/periodos/politica", { permiteFecharComPendencias: true })).status, 400);
-      assert.equal((await c("PUT", "/fin/periodos/politica", { permiteFecharComPendencias: true, notaAprovacao: "curta", confirmoAprovacao: true })).status, 400);
+      for (const corpo of [{ permiteFecharComPendencias: true }, { permiteFecharComPendencias: true, notaAprovacao: "Aprovado pela diretoria hoje", confirmoAprovacao: true }]) {
+        const r = await c("PUT", "/fin/periodos/politica", corpo);
+        assert.equal(r.status, 403); assert.equal(codigo(r), "POLITICA_EXCEPCIONAL_DESABILITADA");
+      }
+      assert.equal((await c("PUT", "/fin/periodos/politica", { permiteFecharComPendencias: false })).status, 200);
+      const g = await c("GET", "/fin/periodos/politica");
+      assert.equal(g.status, 200); assert.equal(g.json.data.permiteFecharComPendencias, false); assert.equal(g.json.data.excecaoFechamentoHabilitada, false);
+      const reab = await c("POST", `/fin/periodos/${MES}/reabrir`, { motivo: "tentativa de reabrir periodo fechado", versao: 1 });
+      assert.ok([403, 404].includes(reab.status), `reabertura deve falhar fechada, veio ${reab.status}`);
     });
   });
 });
