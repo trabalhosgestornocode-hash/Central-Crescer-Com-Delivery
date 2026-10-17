@@ -55,7 +55,7 @@ export async function render(container, ctx) {
     const acoes = (l) => `<div class="fin-linha-acoes">
       ${quemPode(ACAO.EDITAR) && l.status !== "cancelado" ? `<button class="btn btn-ghost btn-sm" data-editar="${l.id}">Editar</button>` : ""}
       ${quemPode(ACAO.EDITAR) ? `<button class="btn btn-ghost btn-sm" data-hist="${l.id}">Histórico</button>` : ""}
-      ${quemPode(ACAO.EXCLUIR) && l.status !== "cancelado" ? `<button class="btn btn-ghost btn-sm" data-cancelar="${l.id}">Cancelar</button>` : ""}</div>`;
+      ${quemPode(ACAO.CANCELAR) && l.status !== "cancelado" ? `<button class="btn btn-ghost btn-sm" data-cancelar="${l.id}">Cancelar</button>` : ""}</div>`;
     const t = tabela({
       colunas: [
         { rotulo: "Data", render: (l) => dataBr(l.data_movimento) },

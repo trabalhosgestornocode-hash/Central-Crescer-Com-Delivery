@@ -101,6 +101,6 @@ describe("gate real + domínio real", () => {
   test("/status real (Agente 1) e o domínio coexistem sob o mesmo gate", () =>
     servir({ concessao: conc("operador") }, async (c) => {
       const r = await c("GET", "/status/status");
-      assert.equal(r.status, 200); assert.deepEqual(r.json.data.permissoes, ["gestao_financeira.ver", "gestao_financeira.lancar"]);
+      assert.equal(r.status, 200); assert.deepEqual(r.json.data.permissoes, ["gestao_financeira.ver", "gestao_financeira.lancar", "gestao_financeira.editar"]);
     }));
 });

@@ -19,7 +19,7 @@ test("organization_admin NÃO herda permissões financeiras", () => {
 test("concessão válida libera conforme o nível", async () => {
   const r = await resolverAcessoFinanceiro(acesso(), T, leitor());
   assert.equal(r.ok, true);
-  assert.deepEqual(r.permissoes, [PERM_FIN.VER, PERM_FIN.LANCAR]);
+  assert.deepEqual(r.permissoes, [PERM_FIN.VER, PERM_FIN.LANCAR, PERM_FIN.EDITAR]);
 });
 
 test("admin sem concessão é barrado", async () => {
@@ -123,7 +123,7 @@ test("middleware: sem concessão => 403 com código; com concessão => passa e p
   assert.equal(negado.statusCode, 403); assert.equal(negado.details.codigo, "FINANCEIRO_SEM_CONCESSAO");
   const ok = reqDe();
   assert.equal(await rodar(requireFinanceiro(leitor()), ok), undefined);
-  assert.deepEqual(ok.financeiro.permissoes, [PERM_FIN.VER, PERM_FIN.LANCAR]);
+  assert.deepEqual(ok.financeiro.permissoes, [PERM_FIN.VER, PERM_FIN.LANCAR, PERM_FIN.EDITAR]);
   assert.equal(ok.financeiro.organizacaoId, "o1");
 });
 test("autorizarAcaoFinanceira: leitura não lança; ausência de req.financeiro falha fechada", async () => {

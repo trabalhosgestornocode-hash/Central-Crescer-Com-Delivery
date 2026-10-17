@@ -15,8 +15,9 @@ As permissões financeiras ficam em `backend/src/shared/gestaoFinanceira.permiss
 
 ## Níveis de concessão → permissões (proposta; a matriz final é validada antes de liberar escrita)
 - `leitura`: `ver`
-- `operador`: `ver, lancar`
-- `gestor`: `ver, lancar, editar, conciliar, fechar, configurar` (`reabrir` e `excluir` só após validação da matriz)
+- `operador`: `ver, lancar, editar`
+- `gestor`: `ver, lancar, editar, conciliar, cancelar, fechar, configurar`
+- **A7.1:** `cancelar` é independente de `excluir`; `reabrir` e `excluir` **não são concedidos a nenhum nível** (ver `07-permissao-cancelar-e-revisao-121.md`).
 
 ## Unidade e tenant
 O backend NUNCA aceita organização/unidade do cliente. Ambas vêm do Context Token → `sessoes_contexto` (`req.tenant`). Cada requisição financeira relê a concessão no banco.

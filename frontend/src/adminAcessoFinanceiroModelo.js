@@ -6,8 +6,8 @@ export const MOTIVO_MIN = 10;
 
 export const NIVEIS = Object.freeze([
   { valor: "leitura", rotulo: "Leitura", descricao: "Consulta os relatórios financeiros autorizados." },
-  { valor: "operador", rotulo: "Operador", descricao: "Consulta e realiza lançamentos financeiros." },
-  { valor: "gestor", rotulo: "Gestor financeiro", descricao: "Lança, edita, concilia, fecha períodos e configura (reabrir e excluir dependem da matriz final)." },
+  { valor: "operador", rotulo: "Operador", descricao: "Consulta, cria e edita lançamentos." },
+  { valor: "gestor", rotulo: "Gestor financeiro", descricao: "Tudo do operador, mais conciliar, cancelar lançamentos, configurar o plano de contas e fechar períodos. Reabrir período e excluir não são concedidos." },
 ]);
 export const NIVEL_ROTULO = Object.freeze(Object.fromEntries(NIVEIS.map((n) => [n.valor, n.rotulo])));
 

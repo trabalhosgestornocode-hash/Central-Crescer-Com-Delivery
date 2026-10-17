@@ -12,7 +12,7 @@ const { criarDominioRouter } = await import("../../src/modules/gestao-financeira
 const { criarRepoMemoria } = await import("./helpers/repoMemoria.js");
 
 const U = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const TODAS = ["ver", "lancar", "editar", "conciliar", "fechar", "configurar", "excluir"].map((a) => `gestao_financeira.${a}`);
+const TODAS = ["ver", "lancar", "editar", "conciliar", "fechar", "configurar", "cancelar"].map((a) => `gestao_financeira.${a}`);
 const serial = (iso) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000) + 25569;
 
 function planilha(ordem = (x) => x) {

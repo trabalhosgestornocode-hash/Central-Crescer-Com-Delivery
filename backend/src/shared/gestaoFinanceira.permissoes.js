@@ -13,6 +13,10 @@ export const PERM_FIN = Object.freeze({
   EDITAR: "gestao_financeira.editar",
   CONCILIAR: "gestao_financeira.conciliar",
   FECHAR: "gestao_financeira.fechar",
+  // Cancelar = transição LÓGICA de status (com motivo, auditada, nunca apaga). Independente de EXCLUIR.
+  CANCELAR: "gestao_financeira.cancelar",
+  // REABRIR e EXCLUIR existem no catálogo, mas NENHUM nível as concede nesta versão (reabertura: só após homologação
+  // específica; exclusão física: nunca). Ficam declaradas para que uma rota futura as exija explicitamente.
   REABRIR: "gestao_financeira.reabrir",
   EXCLUIR: "gestao_financeira.excluir",
   CONFIGURAR: "gestao_financeira.configurar",
@@ -20,12 +24,16 @@ export const PERM_FIN = Object.freeze({
 
 export const NIVEIS_FINANCEIRO = Object.freeze(["leitura", "operador", "gestor"]);
 
-// Matriz PROVISÓRIA: reabrir/excluir ficam de fora até a validação da matriz final.
+// Matriz (decisão A7.1). Leitura consulta; operador consulta, cria e edita; gestor soma conciliar, cancelar, fechar e configurar.
+// Sem nível: REABRIR (aguarda homologação específica) e EXCLUIR (exclusão física não existe nesta versão).
 const POR_NIVEL = Object.freeze({
   leitura: [PERM_FIN.VER],
-  operador: [PERM_FIN.VER, PERM_FIN.LANCAR],
-  gestor: [PERM_FIN.VER, PERM_FIN.LANCAR, PERM_FIN.EDITAR, PERM_FIN.CONCILIAR, PERM_FIN.FECHAR, PERM_FIN.CONFIGURAR],
+  operador: [PERM_FIN.VER, PERM_FIN.LANCAR, PERM_FIN.EDITAR],
+  gestor: [PERM_FIN.VER, PERM_FIN.LANCAR, PERM_FIN.EDITAR, PERM_FIN.CONCILIAR, PERM_FIN.CANCELAR, PERM_FIN.FECHAR, PERM_FIN.CONFIGURAR],
 });
+
+/** Todas as permissões do catálogo financeiro (para testes/guardas). */
+export const PERMISSOES_FINANCEIRAS = Object.freeze(Object.values(PERM_FIN));
 
 /**
  * Nível desconhecido ou ausente => nenhuma permissão (falha fechada).
