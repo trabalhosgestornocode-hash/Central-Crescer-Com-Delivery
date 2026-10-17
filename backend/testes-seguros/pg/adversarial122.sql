@@ -1,4 +1,4 @@
--- NOTA: S7v, S8a e S10b deste arquivo tinham defeito de ROTEIRO (não da 122) e foram substituídos em adversarial122_complemento.sql. S11 PROVA o risco residual R-1 (fechamento sem ids de conciliação).
+-- NOTA: S7v, S8a e S10b foram movidos (corrigidos) para adversarial122_complemento.sql, que roda DEPOIS deste. S11 PROVA o risco residual R-1 (fechamento sem ids de conciliação).
 -- Provas ADVERSARIAIS (Agente 1) da exceção de fechamento e do fechamento/reabertura diretos na 122 (cd35699).
 -- Banco "sim": 120+121+122 aplicadas COMO dono_sim (não-superusuário) com default privileges do Supabase simulados. Dados sintéticos.
 -- Papéis: service_role = backend; dono_sim = simula o FUTURO papel de plataforma que poderá conceder (hoje ninguém tem EXECUTE).
@@ -145,12 +145,10 @@ select pg_temp.exp('S7t ids de conciliação repetidos recusados', $q$ select pg
 select pg_temp.exp('S7u sem nenhuma pendência recusa conceder', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-07-01','{}', pg_temp.mfa(30)) $q$, 'fin_excecao_sem_pendencias');
 reset role;
 -- CHECK da tabela barra mesmo contornando a função (superusuário desliga só os gatilhos de teste)
-select pg_temp.exp('S7v CHECK da tabela recusa evidência com JWT mesmo sem a função', $q$ insert into fin_excecoes_fechamento(organizacao_id,unidade_id,mes,justificativa,pendencias,pendencias_hash,quantidade,aprovada_por,mfa_evidencia,expira_em) values ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','2027-09-01','justificativa longa o bastante aqui','[{"id":"x"}]',repeat('a',64),1,gen_random_uuid(),'{"aal":"aal2","em":"2027-01-01T00:00:00Z","metodo":"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghijk"}',now()+interval '1 day') $q$, 'violates check');
 
 \echo '=== S8. unidade/organização erradas ==='
 set role service_role;
 select pg_temp.pend('00000000-0000-0000-0000-00000000c801', :'U2', '00000000-0000-0000-0000-0000000000e4', '2027-08-05');
-select pg_temp.exp('S8a exceção de OUTRA unidade (mesmo mês) não vale', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a3','2027-05-01','{}',true) $q$, 'erro');
 select pg_temp.exp('S8b fechar usando org B com unidade da org A', $q$ select fin_fechar_periodo('00000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-0000000000a2','00000000-0000-0000-0000-000000000999','2027-08-01',1,'x','{}',array[]::text[],true) $q$, 'erro');
 reset role;
 set role dono_sim;
@@ -180,14 +178,13 @@ reset role;
 set role service_role; select pg_temp.pend('00000000-0000-0000-0000-00000000ca01', :'U', :'CONTA', '2027-10-05'); reset role;
 set role dono_sim; select pg_temp.exp('S10a concede', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-10-01','{}', pg_temp.mfa(20)) $q$, 'ok'); reset role;
 set role service_role;
-select pg_temp.exp('S10b fecha e depois falha na mesma transação (subtransação desfeita)', $q$ begin perform pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-10-01','{}',true); raise exception 'falha_simulada'; end $q$, 'falha_simulada');
 reset role;
 select 'S10c após o erro', pg_temp.estado_exc(:'U','2027-10-01') as excecao, (select status from fin_periodos where unidade_id = :'U' and mes = '2027-10-01') as periodo;
 
 \echo '=== S11. completude da conciliação (R-1): o banco NÃO recalcula as pendências de conciliação ==='
--- mês com referência de venda de R$ 1.000,00 e SEM nenhum recebimento: a conciliação (JS) apontaria ponte_mensal aberta
+-- mês com referência de venda de R$ 1.000,00 + taxa de R$ 100,00 e SEM nenhum recebimento: a conciliação (JS) aponta ponte_mensal:2027-11-01 ABERTA (venda sozinha seria sem_referencia, não pendência)
 set role service_role;
-insert into fin_referencias(organizacao_id,unidade_id,data,tipo,valor_centavos,fonte) values (:'O',:'U','2027-11-10','venda',100000,'manual');
+insert into fin_referencias(organizacao_id,unidade_id,data,tipo,canal,valor_centavos,fonte) values (:'O',:'U','2027-11-10','venda',null,100000,'manual'),(:'O',:'U','2027-11-10','taxa','STONE',10000,'manual');
 select pg_temp.exp('S11a fechar com ids de conciliação OMITIDOS (lista vazia), sem exceção', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-11-01','{}',false) $q$, 'ok');
 reset role;
 select 'S11b mês fechado com divergência de conciliação não declarada', status, snapshot->>'pendenciasNoFechamento' as pend_declaradas from fin_periodos where unidade_id = :'U' and mes = '2027-11-01';
