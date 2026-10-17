@@ -192,14 +192,22 @@ alter table public.gestao_financeira_concessoes_auditoria enable row level secur
 alter table public.gestao_financeira_concessoes_auditoria force row level security;
 
 -- Nenhuma policy é criada aqui (e nenhuma deve ser): anon/authenticated não têm caminho direto.
+-- ATENÇÃO (achado da simulação de privilégios do Supabase, A8): o Supabase concede ALL a anon/authenticated/service_role em TODO objeto
+-- novo de `public` por default privileges. Revogar só de public/anon/authenticated deixava service_role com DELETE/TRUNCATE nas concessões e
+-- as sequências utilizáveis por anon/authenticated. Por isso revogamos TUDO primeiro e só então concedemos o mínimo.
 revoke all on table public.gestao_financeira_concessoes from public, anon, authenticated;
 revoke all on table public.gestao_financeira_concessoes_auditoria from public, anon, authenticated;
+revoke all on sequence public.gestao_financeira_concessoes_auditoria_id_seq from public, anon, authenticated;
 revoke all on function public.gfc_validar(), public.gfc_auditar(), public.gfc_auditoria_imutavel() from public, anon, authenticated;
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
+    revoke all on table public.gestao_financeira_concessoes from service_role;
+    revoke all on table public.gestao_financeira_concessoes_auditoria from service_role;
+    revoke all on sequence public.gestao_financeira_concessoes_auditoria_id_seq from service_role;
+    revoke all on function public.gfc_validar(), public.gfc_auditar(), public.gfc_auditoria_imutavel() from service_role;   -- gatilhos: ninguém os chama
     grant select, insert, update on public.gestao_financeira_concessoes to service_role;      -- sem DELETE: revoga-se, não se apaga
     grant select, insert on public.gestao_financeira_concessoes_auditoria to service_role;
-    grant usage, select on all sequences in schema public to service_role;
+    grant usage on sequence public.gestao_financeira_concessoes_auditoria_id_seq to service_role;   -- só a sequência da trilha (o INSERT de auditoria roda como o invocador)
   end if;
 end $$;
 
@@ -215,6 +223,17 @@ begin
     end loop;
     select count(*) into n from pg_policies where schemaname = 'public' and tablename = t;
     if n > 0 then raise exception 'MIGRATION 120 abortada: % possui % policy(ies); o desenho exige zero.', t, n; end if;
+    if exists (select 1 from pg_roles where rolname = 'service_role')
+       and (has_table_privilege('service_role', ('public.' || t)::regclass, 'delete') or has_table_privilege('service_role', ('public.' || t)::regclass, 'truncate')
+            or has_table_privilege('service_role', ('public.' || t)::regclass, 'references') or has_table_privilege('service_role', ('public.' || t)::regclass, 'trigger')) then
+      raise exception 'MIGRATION 120 abortada: service_role tem DELETE/TRUNCATE/REFERENCES/TRIGGER em % (default privileges). Nada foi aplicado.', t;
+    end if;
+  end loop;
+  foreach r in array array['anon', 'authenticated'] loop
+    if exists (select 1 from pg_roles where rolname = r)
+       and has_sequence_privilege(r, 'public.gestao_financeira_concessoes_auditoria_id_seq', 'usage,select,update') then
+      raise exception 'MIGRATION 120 abortada: % alcança a sequência da auditoria de concessões. Nada foi aplicado.', r;
+    end if;
   end loop;
   if exists (select 1 from public.organizacao_modulos where modulo_id = 'gestao_financeira')
      or exists (select 1 from public.unidade_modulos where modulo_id = 'gestao_financeira') then

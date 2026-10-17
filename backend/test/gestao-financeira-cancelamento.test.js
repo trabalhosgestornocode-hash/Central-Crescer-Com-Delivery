@@ -121,7 +121,7 @@ describe("cancelamento por nível (HTTP, gate + domínio reais)", () => {
   test("gestor em período FECHADO: cancelamento comum recusado e nada muda", () =>
     servir({ nivel: "gestor" }, async (c, repo) => {
       const id = await semear(repo, { data: "2026-09-10" });
-      repo._t.per.push({ unidade_id: UNI, status: "fechado", mes: "2026-09-01" });
+      repo.fecharPeriodo(ctxDe(), "2026-09");   // helper do repositório em memória (mesma regra do banco: mês fechado é intocável)
       const r = await c("POST", `/fin/lancamentos/${id}/cancelar`, { motivo: "Correção" });
       assert.ok(r.status >= 400, `status ${r.status}`);
       assert.equal(repo._t.lanc[0].status, "realizado");
