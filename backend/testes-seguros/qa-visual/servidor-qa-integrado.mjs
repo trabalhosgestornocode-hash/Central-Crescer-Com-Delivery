@@ -14,6 +14,8 @@ import { errorHandler } from "../../src/middlewares/errorHandler.js";
 import { criarDominioRouter } from "../../src/modules/gestao-financeira/dominio/rotas.js";
 import * as cadastros from "../../src/modules/gestao-financeira/dominio/cadastros.service.js";
 import * as lanc from "../../src/modules/gestao-financeira/dominio/lancamentos.service.js";
+import * as conc from "../../src/modules/gestao-financeira/dominio/conciliacao.service.js";
+import * as per from "../../src/modules/gestao-financeira/dominio/periodos.service.js";
 import { criarRepoMemoria } from "../../test/financeiro/helpers/repoMemoria.js";
 
 const aqui = path.dirname(fileURLToPath(import.meta.url));
@@ -63,7 +65,22 @@ async function semear() {
   await lanc.criarTransferencia(ctxA, { contaOrigemId: adq, contaDestinoId: banco, valor: 12000, data: iso(mes(-1)), descricao: "Repasse adquirente → banco" }, deps);
   await lanc.criarLancamento(ctxA, { contaId: banco, descricao: "PIX NÃO IDENTIFICADO", sentido: "entrada", valor: 230, dataMovimento: iso(mes(0)) <= hojeIso ? iso(mes(0)) : hojeIso }, deps); // sem categoria => classificação pendente
 }
+/** Conciliação e períodos sintéticos: canal vinculado EXPLICITAMENTE, um mês consistente (e FECHADO), um mês com diferença (pendente de identificação). */
+async function semearConciliacao() {
+  const hoje = new Date(); const mesDe = (off) => { const d = new Date(Date.UTC(hoje.getUTCFullYear(), hoje.getUTCMonth() + off, 1)); return d.toISOString().slice(0, 7); };
+  const [adq] = (await cadastros.listarContas(ctxA, deps)).filter((c) => c.nome === "ADQUIRENTE");
+  await cadastros.atualizarConta(ctxA, adq.id, { canalReferencia: "STONE" }, deps);
+  for (const [off, extra] of [[-2, 0], [-1, 800]]) {
+    const mes = mesDe(off);
+    const { resultado } = await conc.calcularMes(ctxA, mes, deps);
+    const recebido = resultado.ponte.recebidoCentavos / 100; const taxa = 1500;
+    await conc.registrarReferencias(ctxA, { itens: [{ data: `${mes}-28`, tipo: "venda", canal: "STONE", valor: recebido + taxa + extra }, { data: `${mes}-28`, tipo: "taxa", canal: "STONE", valor: taxa }] }, deps);
+  }
+  const m2 = mesDe(-2); const pre = await per.preFechamento(ctxA, m2, deps);
+  if (pre.avaliacao.pode) await per.fechar(ctxA, m2, { confirmo: true, versao: pre.periodo.versao, fingerprint: pre.fingerprint }, deps);
+}
 await semear();
+await semearConciliacao();
 
 // ---------------- sessão falsa + gate/domínio reais ----------------
 const concessao = () => {

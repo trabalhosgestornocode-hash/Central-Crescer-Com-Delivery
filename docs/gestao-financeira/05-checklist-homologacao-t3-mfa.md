@@ -52,3 +52,40 @@ permanece desligada** e conceder/revogar só existem como procedimento de emerg�
 
 ## Não faz parte deste checklist
 Aplicar migrations em produção, habilitar usuários reais, `push`/`merge`/deploy — todos exigem autorização própria.
+
+---
+
+# Atualização A8 — as TRÊS migrations (120, 121, 122) no Supabase descartável
+
+Ambiente: projeto Supabase **novo, descartável e separado de produção**, criado só com autorização. Nada abaixo foi feito. Tudo o que está marcado "(sim local)" já foi provado em PostgreSQL local com os privilégios do Supabase **simulados** (dono não-superusuário, *default privileges* concedendo ALL a anon/authenticated/service_role, `service_role` com BYPASSRLS) — por isso o que resta aqui é **confirmar que o Supabase real se comporta como a simulação**. Qualquer divergência é **bloqueante**.
+
+## A. Papéis, dono e atributos (bloqueante)
+- [ ] `select rolname, rolsuper, rolbypassrls from pg_roles where rolname in ('postgres','service_role','anon','authenticated','authenticator')`: **`service_role` tem BYPASSRLS** (as tabelas da 120 usam `FORCE RLS`; sem bypass o backend ficaria bloqueado) e `anon`/`authenticated` **não** têm.
+- [ ] Dono real das tabelas e funções criadas pelas migrations (`pg_get_userbyid(relowner/proowner)`) e se esse dono tem BYPASSRLS. A 121/122 **não** usam `FORCE RLS` de propósito (os gatilhos `SECURITY DEFINER` dependem de o dono não ser filtrado pela RLS); a 120 usa `FORCE` (seus gatilhos rodam como invocador `service_role`).
+- [ ] `select * from pg_default_acl` — listar os *default privileges* do projeto e conferir que são os que a simulação assumiu (ALL para anon/authenticated/service_role em tabelas, funções e sequências do `public`).
+
+## B. Privilégios efetivos após aplicar 120 → 121 → 122 (rodar as mesmas consultas de `backend/testes-seguros/pg/sim_supabase.sh`)
+- [ ] `anon`/`authenticated`: nenhum dos 7 privilégios em nenhuma tabela `fin_*` / `gestao_financeira_*` (sim local ✔).
+- [ ] `service_role`: sem DELETE/TRUNCATE/REFERENCES/TRIGGER; `fin_auditoria` e `gestao_financeira_concessoes_auditoria` só por gatilho/insert mínimo (sim local ✔ após a correção da 120 feita no A8).
+- [ ] **Sequências**: `fin_auditoria_id_seq` e `gestao_financeira_concessoes_auditoria_id_seq` sem USAGE/SELECT/UPDATE para anon/authenticated (sim local ✔; a 120 original falhava aqui).
+- [ ] **Funções**: nenhuma `fin_*`/`gfc_*` executável por anon/authenticated (incluindo gatilho); RPCs com EXECUTE só para `service_role` (sim local ✔).
+- [ ] `SECURITY DEFINER`: `fin_auditar`, `fin_desvincular_transferencia`, `fin_desvincular_transferencia_motivada` com `search_path = public, pg_temp`; confirmar dono e que `fin_desvincular_transferencia` (sem motivo) não é executável por ninguém além do dono.
+
+## C. Acesso direto pela API pública (REST / GraphQL / Realtime) — só o Supabase real prova
+- [ ] Com a chave **anon** e com um **JWT authenticated**: GET/POST/PATCH/DELETE em `/rest/v1/<cada tabela fin_* e gestao_financeira_*>` → negado (401/403/permission denied), nunca 200 com linhas.
+- [ ] `/rest/v1/rpc/<cada função fin_*>` como anon/authenticated → negado; como service_role (somente pelo backend) → funciona.
+- [ ] `pg_graphql`: introspecção como anon/authenticated **não lista** as tabelas/funções financeiras.
+- [ ] Publicação Realtime (`supabase_realtime`) **não** inclui as tabelas financeiras.
+- [ ] `get_advisors` (segurança e desempenho): nenhum alerta novo ligado a estas tabelas/funções.
+
+## D. Reabertura de período e cancelamento (comportamento no banco)
+- [ ] Decidir e aplicar a proposta **122b** (ou equivalente do Agente 2): com ela, `UPDATE fechado→reaberto` pelo `service_role` falha e `fin_reabrir_periodo` não é executável. **Sem a 122b isto é uma brecha aberta** (sim local: o `service_role` reabre um mês fechado por UPDATE direto).
+- [ ] Cancelamento atômico do par e rede de segurança no COMMIT (`fin_transferencia_parcial`); desvínculo exige motivo; mês fechado recusa (sim local ✔).
+- [ ] Concorrência real (duas sessões) no Postgres do Supabase: rodar `backend/testes-financeiro-pg/30_concorrencia.sh` contra o descartável.
+
+## E. Aplicação e rollback no descartável
+- [ ] 120 → 121 → 122 aplicam; cada uma reaplicada é idempotente; **nunca aplicar a 121 sozinha** (as correções R5–R10 estão na 122).
+- [ ] Rollback **122 → (reaplicar 121) → 121 → 120**: o rollback da 122 deixa as escritas falhando (função de trava removida) até a 121 ser reaplicada — executar os dois passos juntos; o rollback da 121 recusa se houver QUALQUER linha (inclusive as linhas `aberto` de `fin_periodos` criadas automaticamente) — limpeza supervisionada.
+
+## F. MFA / concessões (inalterado — ver seções anteriores)
+- [ ] AAL2 e 2º fator ≤ 10 min; revogação imediata; flag `FINANCEIRO_CONCESSOES_HABILITADAS` só depois de tudo aprovado por escrito.

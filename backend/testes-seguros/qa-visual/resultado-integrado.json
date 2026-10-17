@@ -36,9 +36,9 @@
       "d": ""
     },
     {
-      "nome": "página \"Conciliação\": 'Em construção' (inexistente)",
+      "nome": "página \"Conciliação\": implementada (não é 'Em construção')",
       "ok": true,
-      "d": "Conciliação — em construção Esta área do Dashboard Financeiro ainda não está di"
+      "d": "Conciliação Vendas realizadas (referência externa) × recebimentos efetivos do l"
     },
     {
       "nome": "página \"Conciliação\": sem 'undefined/NaN/[object' e sem erro de script",
@@ -86,9 +86,9 @@
       "d": ""
     },
     {
-      "nome": "página \"Períodos\": 'Em construção' (inexistente)",
+      "nome": "página \"Períodos\": implementada (não é 'Em construção')",
       "ok": true,
-      "d": "Períodos — em construção Esta área do Dashboard Financeiro ainda não está dispo"
+      "d": "Períodos Fechar um mês congela o snapshot dos resultados e bloqueia lançamentos"
     },
     {
       "nome": "página \"Períodos\": sem 'undefined/NaN/[object' e sem erro de script",
@@ -184,6 +184,66 @@
       "nome": "revogação: a próxima navegação financeira cai no operacional (backend negou)",
       "ok": true,
       "d": ""
+    },
+    {
+      "nome": "conciliação (mês sem referência): 'Sem referência' e nada presumido (sem números inventados)",
+      "ok": true,
+      "d": "Conciliação Vendas realizadas (referência externa) × recebimentos efetivos do livro-caixa. Sem referência informada, nada é calculado nem presumido. Mês Infor"
+    },
+    {
+      "nome": "conciliação (mês com diferença): residual R$ 800,00 fica 'pendente de identificação' — NUNCA explicado como prazo sozinho",
+      "ok": true,
+      "d": "Conciliação Vendas realizadas (referência externa) × recebimentos efetivos do livro-caixa. Sem referência informada, nada é calculado nem presumido. Mês Informar referências Importar arquivo Regime de caixa · setembro"
+    },
+    {
+      "nome": "conciliação (gestor): ações de registrar referência e classificar disponíveis",
+      "ok": true,
+      "d": "Informar referências | Importar arquivo | Classificar | Cancelar | Aprovar exceção | Ver auditoria das classificações"
+    },
+    {
+      "nome": "períodos: mês fechado mostra snapshot e NÃO oferece reabrir (texto explicativo, sem botão)",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "pré-fechamento de mês com pendências: mostra as pendências e o botão 'Fechar período' está DESABILITADO (política padrão)",
+      "ok": true,
+      "d": "Períodos Fechar um mês congela o snapshot dos resultados e bloqueia lançamentos, referências e classificações naquele mês. Abrir período Política: fechar com  | Abrir período | Aprovar fechamento com pendências | Pré-fechamento | Ver snapshot"
+    },
+    {
+      "nome": "períodos (leitura): consulta e snapshot, sem abrir/aprovar política/fechar",
+      "ok": true,
+      "d": "Pré-fechamento | Ver snapshot"
+    },
+    {
+      "nome": "contas (leitura): sem cancelar/desvincular transferência",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "contas (operador): pode transferir, mas NÃO cancela nem desvincula transferência (exige cancelar/conciliar)",
+      "ok": true,
+      "d": "Transferir | Extrato"
+    },
+    {
+      "nome": "contas (gestor): oferece cancelar e desvincular transferência",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "cancelar transferência: o diálogo exige MOTIVO e explica que nada é excluído",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "motivo curto: continua sem cancelar (a transferência segue vinculada)",
+      "ok": true,
+      "d": ""
+    },
+    {
+      "nome": "cancelar transferência com motivo: o par aparece como cancelado (preservado, não excluído)",
+      "ok": true,
+      "d": "Contas Financeiras Conta é ONDE o dinheiro está. Meio de pagamento e canal de venda são dimensões à parte. Mês Nova conta Transferir Saldos — outubro/2026 Conta Abertura Variação Saldo calculado BANCO PRINCIPAL Banco R$ 15.000,00 −R$ 73.990,00 −R$ 58.990,00 Extrato Abertura Canal ADQUIRENTE Adq"
     },
     {
       "nome": "URL direta (operacional): /contas, /relatorios e /status => 403 FINANCEIRO_SEM_CONCESSAO",

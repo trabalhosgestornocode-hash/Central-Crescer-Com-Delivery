@@ -16,8 +16,8 @@ const api = (p) => fetch(BASE + p).then((r) => r.json());
 // [rota, rótulo, implementada pelo Agente 2?]
 const PAGINAS = [
   ["fin-visao-geral", "Visão Geral", true], ["fin-fluxo-de-caixa", "Fluxo de Caixa", true], ["fin-contas", "Contas Financeiras", true],
-  ["fin-conciliacao", "Conciliação", false], ["fin-dre", "DRE Gerencial", true], ["fin-indicadores", "Indicadores", true],
-  ["fin-categorias", "Análise de Categorias", true], ["fin-plano-de-contas", "Plano de Contas", true], ["fin-periodos", "Períodos", false],
+  ["fin-conciliacao", "Conciliação", true], ["fin-dre", "DRE Gerencial", true], ["fin-indicadores", "Indicadores", true],
+  ["fin-categorias", "Análise de Categorias", true], ["fin-plano-de-contas", "Plano de Contas", true], ["fin-periodos", "Períodos", true],
   ["fin-importacao", "Importação", true], ["fin-relatorios", "Relatórios", false], ["fin-configuracoes", "Configurações Financeiras", false],
 ];
 
@@ -134,6 +134,71 @@ await api("/qa/cenario?nome=ambos");
   await page.waitForTimeout(800);
   checar("revogação: a próxima navegação financeira cai no operacional (backend negou)", (await secoes(page)).includes("OPERAÇÃO") && !(await secoes(page)).includes("FINANCEIRO"));
   await foto(page, "37-revogado");
+  await ctx.close();
+}
+
+
+// ---------- 5b. A8: conciliação, períodos, reabertura e cancelamento de transferência pela tela ----------
+const mesAnt = (() => { const d = new Date(); d.setUTCMonth(d.getUTCMonth() - 1); return d.toISOString().slice(0, 7); })();
+const botoes = async (page) => [...new Set(await page.$$eval("#view button", (b) => b.map((x) => x.textContent.trim().replace(/\s+/g, " ")).filter(Boolean)))];
+await api("/qa/cenario?nome=financeiro"); await api("/qa/nivel?n=gestor");
+{
+  const { ctx, page } = await nova(); await abrir(page);
+  await irPara(page, "fin-conciliacao");
+  let t = await texto(page);
+  checar("conciliação (mês sem referência): 'Sem referência' e nada presumido (sem números inventados)", /Sem referência/.test(t) && /Não inventamos dados ausentes/.test(t) && !/R\$\s*0,00\s*\(=\)\s*Diferença/.test(t), t.slice(0, 160).replace(/\s+/g, " "));
+  await page.locator("#fin-mes").fill(mesAnt); await page.locator("#fin-mes").dispatchEvent("change"); await page.waitForTimeout(1200);
+  t = await texto(page);
+  checar("conciliação (mês com diferença): residual R$ 800,00 fica 'pendente de identificação' — NUNCA explicado como prazo sozinho", /800,00/.test(t) && /(pendente|identific)/i.test(t) && /nunca é presumido|Residual/i.test(t), t.slice(0, 220).replace(/\s+/g, " "));
+  await foto(page, "40-conciliacao-pendente");
+  const b = await botoes(page);
+  checar("conciliação (gestor): ações de registrar referência e classificar disponíveis", b.some((x) => /Informar referências/.test(x)) && b.some((x) => /Classificar/.test(x)), b.join(" | "));
+
+  await irPara(page, "fin-periodos");
+  t = await texto(page);
+  checar("períodos: mês fechado mostra snapshot e NÃO oferece reabrir (texto explicativo, sem botão)", /Fechado/.test(t) && (await botoes(page)).some((x) => /Ver snapshot/.test(x)) && !(await botoes(page)).some((x) => /^Reabrir/.test(x)) && /Reabrir exige autorização específica/.test(t));
+  await foto(page, "41-periodos");
+  await page.locator('#view tr:has-text("outubro/2026") button:has-text("Pré-fechamento")').first().click(); await page.waitForTimeout(1500);
+  t = await texto(page);
+  const bb = await botoes(page);
+  checar("pré-fechamento de mês com pendências: mostra as pendências e o botão 'Fechar período' está DESABILITADO (política padrão)", /pendên/i.test(t) && (await page.locator('button:has-text("Fechar período")').first().isDisabled()), `${t.slice(0, 160).replace(/\s+/g, " ")} | ${bb.join(" | ")}`);
+  await foto(page, "42-pre-fechamento-bloqueado");
+  await ctx.close();
+}
+await api("/qa/nivel?n=leitura");
+{
+  const { ctx, page } = await nova(); await abrir(page);
+  await irPara(page, "fin-periodos");
+  const b = await botoes(page);
+  checar("períodos (leitura): consulta e snapshot, sem abrir/aprovar política/fechar", !b.some((x) => /Abrir período|Aprovar fechamento/.test(x)) && b.some((x) => /Pré-fechamento/.test(x)), b.join(" | "));
+  await irPara(page, "fin-contas");
+  checar("contas (leitura): sem cancelar/desvincular transferência", !(await botoes(page)).some((x) => /Cancelar transferência|Desvincular/.test(x)));
+  await ctx.close();
+}
+await api("/qa/nivel?n=operador");
+{
+  const { ctx, page } = await nova(); await abrir(page);
+  await irPara(page, "fin-contas");
+  const b = await botoes(page);
+  checar("contas (operador): pode transferir, mas NÃO cancela nem desvincula transferência (exige cancelar/conciliar)", b.some((x) => /Transferir/.test(x)) && !b.some((x) => /Cancelar transferência|Desvincular/.test(x)), b.join(" | "));
+  await ctx.close();
+}
+await api("/qa/nivel?n=gestor");
+{
+  const { ctx, page } = await nova(); await abrir(page);
+  await irPara(page, "fin-contas");
+  checar("contas (gestor): oferece cancelar e desvincular transferência", (await botoes(page)).some((x) => /Cancelar transferência/.test(x)) && (await botoes(page)).some((x) => /Desvincular/.test(x)));
+  await page.locator('#view button:has-text("Cancelar transferência")').first().click(); await page.waitForTimeout(600);
+  checar("cancelar transferência: o diálogo exige MOTIVO e explica que nada é excluído", (await page.locator('textarea[name="motivo"]').count()) === 1 && /não é excluíd|nao e excluid|cancelad/i.test(await page.locator("body").innerText()));
+  await foto(page, "43-cancelar-transferencia-dialogo");
+  await page.locator('textarea[name="motivo"]').fill("curto");
+  await page.locator('form button[type="submit"], .fin-dialogo button.btn-primary, [role="dialog"] button.btn-primary, dialog button.btn-primary').last().click().catch(() => {}); await page.waitForTimeout(900);
+  checar("motivo curto: continua sem cancelar (a transferência segue vinculada)", !(await texto(page)).match(/Cancelada/i) || (await page.locator('textarea[name="motivo"]').count()) === 1);
+  await page.locator('textarea[name="motivo"]').fill("Repasse lançado em duplicidade").catch(() => {});
+  await page.locator('form button[type="submit"], .fin-dialogo button.btn-primary, [role="dialog"] button.btn-primary, dialog button.btn-primary').last().click().catch(() => {}); await page.waitForTimeout(1500);
+  const apos = await texto(page);
+  checar("cancelar transferência com motivo: o par aparece como cancelado (preservado, não excluído)", /Cancelada/i.test(apos), apos.slice(0, 300).replace(/\s+/g, " "));
+  await foto(page, "44-transferencia-cancelada");
   await ctx.close();
 }
 
