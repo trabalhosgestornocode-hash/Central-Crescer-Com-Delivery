@@ -4,15 +4,34 @@
 import { randomUUID } from "node:crypto";
 import { ApiError } from "../../../src/shared/ApiError.js";
 import { exigirContexto } from "../../../src/modules/gestao-financeira/dominio/contexto.js";
+import { falha } from "../../../src/modules/gestao-financeira/dominio/repositorio.util.js";
+import { createHash } from "node:crypto";
 
 export function criarRepoMemoria() {
-  const t = { plano: [], contas: [], aberturas: [], lanc: [], transf: [], per: [], imp: [], aud: [] };
+  const t = { plano: [], contas: [], aberturas: [], lanc: [], transf: [], per: [], imp: [], aud: [], refs: [], resol: [], exc: [], cfg: [] };
   const agora = () => new Date().toISOString();
   const noOrg = (c) => (x) => x.organizacao_id === c.organizacaoId;
   const noTen = (c) => (x) => x.organizacao_id === c.organizacaoId && x.unidade_id === c.unidadeId;
   const audita = (c, acao, entidade, antes, depois) => t.aud.push({ id: t.aud.length + 1, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, ator_id: c.usuarioId, acao, entidade, entidade_id: (depois ?? antes).id, antes, depois, created_at: agora() });
   const erro = (m, codigo) => { throw ApiError.badRequest(m, { codigo }); };
   const periodoFechado = (c, data) => t.per.some((p) => p.unidade_id === c.unidadeId && p.status === "fechado" && p.mes === `${data.slice(0, 7)}-01`);
+  // mesma regra do banco: qualquer escrita datada garante a linha do período (aberto) e recusa mês fechado
+  const garantirPeriodo = (c, data) => {
+    const mes = `${data.slice(0, 7)}-01`;
+    let p = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === mes);
+    if (!p) { p = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, mes, status: "aberto", versao: 1, snapshot: null }; t.per.push(p); }
+    if (p.status === "fechado") regra("fin_periodo_fechado");
+    return p;
+  };
+  const regra = (codigo, code = "23514") => falha({ code, message: codigo });
+  const par = (c, id) => t.transf.find((x) => x.id === id && noTen(c)(x));
+  const parDaPerna = (lid) => t.transf.find((x) => x.lancamento_saida_id === lid || x.lancamento_entrada_id === lid);
+  const impressao = (c, mes) => createHash("sha256").update(JSON.stringify([
+    t.lanc.filter((l) => noTen(c)(l) && l.data_movimento.startsWith(mes)).map((l) => [l.id, l.valor_centavos, l.sentido, l.status, l.categoria_id, l.conta_id, l.classificacao_pendente]).sort(),
+    t.refs.filter((r) => noTen(c)(r) && r.data.startsWith(mes)).map((r) => [r.id, r.valor_centavos, r.status, r.tipo, r.canal]).sort(),
+    t.resol.filter((r) => noTen(c)(r) && r.chave.startsWith(mes)).map((r) => [r.id, r.valor_centavos, r.status]).sort(),
+    t.aberturas.filter((a) => noTen(c)(a) && a.data_referencia.startsWith(mes)).map((a) => [a.id, a.valor_centavos]).sort(),
+  ])).digest("hex");
 
   const r = {
     _t: t,
@@ -42,6 +61,7 @@ export function criarRepoMemoria() {
     async gravarAbertura(ctx, a) {
       const c = exigirContexto(ctx);
       if (!t.contas.some((x) => x.id === a.conta_id && noTen(c)(x))) erro("conta de outro tenant", "FIN_ESCOPO_INVALIDO");
+      garantirPeriodo(c, a.data_referencia);
       let n = t.aberturas.find((x) => x.conta_id === a.conta_id && x.data_referencia === a.data_referencia);
       if (n) Object.assign(n, a); else { n = { id: randomUUID(), ...a, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, origem: "manual" }; t.aberturas.push(n); }
       return { ...n };
@@ -63,14 +83,21 @@ export function criarRepoMemoria() {
       const c = exigirContexto(ctx);
       if (!t.contas.some((x) => x.id === l.conta_id && noTen(c)(x))) erro("conta de outro tenant", "FIN_ESCOPO_INVALIDO");
       if (l.categoria_id && !t.plano.some((x) => x.id === l.categoria_id && noOrg(c)(x))) erro("categoria de outra organizacao", "FIN_ESCOPO_INVALIDO");
-      if (periodoFechado(c, l.data_movimento)) erro("periodo fechado", "FIN_PERIODO_FECHADO");
-      const n = { id: randomUUID(), ...l, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, origem: "manual", created_at: agora(), updated_at: agora() };
+      garantirPeriodo(c, l.data_movimento);
+      const n = { id: randomUUID(), revisao_motivos: [], ...l, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, origem: "manual", created_at: agora(), updated_at: agora() };
       t.lanc.push(n); audita(c, "fin_lancamentos.insert", "fin_lancamentos", null, n); return { ...n };
     },
     async atualizarLancamento(ctx, id, campos) {
       const c = exigirContexto(ctx); const n = t.lanc.find((x) => x.id === id && noTen(c)(x));
       if (!n) throw ApiError.notFound("Lançamento não encontrado.");
-      if (periodoFechado(c, n.data_movimento)) erro("periodo fechado", "FIN_PERIODO_FECHADO");
+      garantirPeriodo(c, n.data_movimento);
+      if (campos.data_movimento) garantirPeriodo(c, campos.data_movimento);
+      const pr = parDaPerna(n.id);
+      if (pr) {
+        const mudou = (k) => k in campos && campos[k] !== n[k];
+        if (["valor_centavos", "sentido", "conta_id", "data_movimento", "categoria_id"].some(mudou)) regra("fin_transferencia_vinculada");
+        if (mudou("status")) regra("fin_transferencia_vinculada");
+      }
       const antes = { ...n }; Object.assign(n, campos, { updated_at: agora() }); audita(c, "fin_lancamentos.update", "fin_lancamentos", antes, { ...n }); return { ...n };
     },
     async listarTransferencias(ctx) { const c = exigirContexto(ctx); return t.transf.filter(noTen(c)).map((x) => ({ ...x })); },
@@ -78,18 +105,55 @@ export function criarRepoMemoria() {
       const c = exigirContexto(ctx);
       const mk = (conta, sentido) => r.inserirLancamento(c, { conta_id: conta, categoria_id: p.categoriaId, descricao: p.descricao, sentido, valor_centavos: p.valorCentavos, data_movimento: p.data, status: "realizado", classificacao_pendente: false });
       const s = await mk(p.contaOrigemId, "saida"); const e = await mk(p.contaDestinoId, "entrada");
-      const n = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, lancamento_saida_id: s.id, lancamento_entrada_id: e.id, origem: "manual", created_at: agora() };
-      t.transf.push(n); return n.id;
+      const n = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, lancamento_saida_id: s.id, lancamento_entrada_id: e.id, origem: "manual", status: "vinculada", created_at: agora() };
+      t.transf.push(n); audita(c, "fin_transferencias.insert", "fin_transferencias", null, n); return n.id;
     },
     async vincularTransferenciaRpc(ctx, saidaId, entradaId) {
       const c = exigirContexto(ctx); const s = t.lanc.find((x) => x.id === saidaId && noTen(c)(x)); const e = t.lanc.find((x) => x.id === entradaId && noTen(c)(x));
       if (!s || !e || s.sentido !== "saida" || e.sentido !== "entrada" || s.valor_centavos !== e.valor_centavos || s.conta_id === e.conta_id) erro("par invalido", "FIN_PAR_INVALIDO");
-      const n = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, lancamento_saida_id: saidaId, lancamento_entrada_id: entradaId, origem: "manual", created_at: agora() };
-      t.transf.push(n); s.classificacao_pendente = false; e.classificacao_pendente = false; return n.id;
+      const n = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, lancamento_saida_id: saidaId, lancamento_entrada_id: entradaId, origem: "manual", status: "vinculada", created_at: agora() };
+      t.transf.push(n); s.classificacao_pendente = false; e.classificacao_pendente = false; audita(c, "fin_transferencias.insert", "fin_transferencias", null, n); return n.id;
     },
-    async desvincularTransferenciaRpc(ctx, id) {
-      const c = exigirContexto(ctx); const i = t.transf.findIndex((x) => x.id === id && noTen(c)(x)); if (i < 0) return false;
-      const [p] = t.transf.splice(i, 1); for (const l of t.lanc) if ([p.lancamento_saida_id, p.lancamento_entrada_id].includes(l.id)) l.classificacao_pendente = true; return true;
+    async desvincularTransferenciaRpc(ctx, id, motivo) {
+      const c = exigirContexto(ctx);
+      if (String(motivo ?? "").trim().length < 10) regra("fin_transferencia_motivo_obrigatorio");
+      const p = par(c, id); if (!p) return false;
+      if (p.status !== "vinculada") regra("fin_transferencia_cancelada_imutavel");
+      const pernas = t.lanc.filter((l) => l.id === p.lancamento_saida_id || l.id === p.lancamento_entrada_id);
+      if (pernas.some((l) => l.status !== "realizado")) regra("fin_transferencia_estado_inconsistente");
+      t.transf.splice(t.transf.indexOf(p), 1); audita(c, "fin_transferencias.delete", "fin_transferencias", { ...p }, null);
+      for (const l of pernas) {
+        const antes = { ...l };
+        l.classificacao_pendente = true; l.atualizado_por = c.usuarioId;
+        l.nota_revisao = l.nota_revisao ? `${l.nota_revisao} | Par desfeito: ${motivo.trim()}` : `Par desfeito: ${motivo.trim()}`;
+        if (!l.revisao_motivos.includes("transferencia_sem_contraparte")) l.revisao_motivos = [...l.revisao_motivos, "transferencia_sem_contraparte"];
+        audita(c, "fin_lancamentos.update", "fin_lancamentos", antes, { ...l });
+      }
+      return true;
+    },
+    /** Tudo ou nada: valida TUDO antes de mudar qualquer coisa (como a transação do banco). Idempotente. */
+    async cancelarTransferenciaRpc(ctx, id, motivo) {
+      const c = exigirContexto(ctx);
+      const m = String(motivo ?? "").trim();
+      if (m.length < 10) regra("fin_transferencia_motivo_obrigatorio");
+      const p = par(c, id); if (!p) regra("fin_transferencia_nao_encontrada", "P0002");
+      const pernas = [p.lancamento_saida_id, p.lancamento_entrada_id].map((x) => t.lanc.find((l) => l.id === x));
+      if (p.status === "cancelada") {
+        if (pernas.every((l) => l.status === "cancelado")) return { id: p.id, status: "cancelada", jaCancelada: true, lancamentos: pernas.map((l) => l.id) };
+        regra("fin_transferencia_estado_inconsistente");
+      }
+      if (pernas.some((l) => l.status === "cancelado")) regra("fin_transferencia_estado_inconsistente");
+      if (pernas.some((l) => l.status !== "realizado")) regra("fin_transferencia_nao_cancelavel");
+      for (const l of pernas) garantirPeriodo(c, l.data_movimento);          // qualquer mês fechado → recusa ANTES de mudar algo
+      const antesPar = { ...p };
+      Object.assign(p, { status: "cancelada", cancelada_por: c.usuarioId, cancelada_em: agora(), motivo_cancelamento: m });
+      audita(c, "fin_transferencias.update", "fin_transferencias", antesPar, { ...p });
+      for (const l of pernas) {
+        const antes = { ...l };
+        Object.assign(l, { status: "cancelado", atualizado_por: c.usuarioId, nota_revisao: l.nota_revisao ? `${l.nota_revisao} | Transferencia cancelada: ${m}` : `Transferencia cancelada: ${m}`, updated_at: agora() });
+        audita(c, "fin_lancamentos.update", "fin_lancamentos", antes, { ...l });
+      }
+      return { id: p.id, status: "cancelada", jaCancelada: false, lancamentos: pernas.map((l) => l.id) };
     },
     async inserirImportacao(ctx, i) { const c = exigirContexto(ctx); const n = { id: randomUUID(), status: "previa", ...i, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, created_at: agora() }; t.imp.push(n); return { ...n }; },
     async obterImportacao(ctx, id) { const c = exigirContexto(ctx); const x = t.imp.find((y) => y.id === id && noTen(c)(y)); return x ? structuredClone(x) : null; },
@@ -118,9 +182,9 @@ export function criarRepoMemoria() {
         let gravados = 0, dup = 0;
         for (const l of (p.lancamentos ?? []).filter((x) => x.importar !== false)) {
           if (t.lanc.some((k) => noTen(c)(k) && k.chave_origem === l.chave)) { dup++; continue; }
-          if (periodoFechado(c, l.data)) erro("periodo fechado", "FIN_PERIODO_FECHADO");
+          garantirPeriodo(c, l.data);
           const cat = l.categoria ? t.plano.find((k) => noOrg(c)(k) && k.tipo === l.categoria.tipo && k.natureza === l.categoria.natureza && k.nome === l.categoria.nome) : null;
-          t.lanc.push({ id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, conta_id: conta(l.conta).id, categoria_id: cat?.id ?? null, descricao: l.descricao, sentido: l.sentido, valor_centavos: l.valor_centavos, data_movimento: l.data, status: "realizado", origem: "importacao", importacao_id: id, chave_origem: l.chave, classificacao_pendente: Boolean(l.pendente) || !cat, nota_revisao: l.nota ?? null, created_at: agora(), updated_at: agora() });
+          t.lanc.push({ id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, conta_id: conta(l.conta).id, categoria_id: cat?.id ?? null, descricao: l.descricao, sentido: l.sentido, valor_centavos: l.valor_centavos, data_movimento: l.data, status: "realizado", origem: "importacao", importacao_id: id, chave_origem: l.chave, classificacao_pendente: Boolean(l.pendente) || !cat, nota_revisao: l.nota ?? null, revisao_motivos: l.motivos ?? [], created_at: agora(), updated_at: agora() });
           gravados++;
         }
         let pares = 0;
@@ -133,7 +197,90 @@ export function criarRepoMemoria() {
       } catch (e) { Object.assign(t, snap); throw e; }
     },
     async listarAuditoria(ctx, { entidade, entidadeId } = {}) { const c = exigirContexto(ctx); return t.aud.filter((a) => noTen(c)(a) || (a.organizacao_id === c.organizacaoId && !a.unidade_id)).filter((a) => (!entidade || a.entidade === entidade) && (!entidadeId || a.entidade_id === entidadeId)).reverse(); },
-    fecharPeriodo(ctx, ym) { const c = exigirContexto(ctx); t.per.push({ unidade_id: c.unidadeId, status: "fechado", mes: `${ym}-01` }); },
+    // ---- B7: referências, classificações manuais, exceções de sangria ----
+    async listarReferencias(ctx, { mes, incluirCanceladas = false } = {}) {
+      const c = exigirContexto(ctx);
+      return t.refs.filter((x) => noTen(c)(x) && (!mes || x.data.startsWith(mes)) && (incluirCanceladas || x.status === "ativa")).map((x) => ({ ...x }));
+    },
+    async inserirReferencias(ctx, itens) {
+      const c = exigirContexto(ctx);
+      const existentes = new Set(t.refs.filter(noTen(c)).map((x) => x.chave_origem).filter(Boolean));
+      const novos = itens.filter((i) => !i.chave_origem || !existentes.has(i.chave_origem));
+      for (const i of novos) garantirPeriodo(c, i.data);
+      for (const i of novos) t.refs.push({ id: randomUUID(), status: "ativa", ...i, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, criado_por: c.usuarioId, created_at: agora() });
+      return { gravados: novos.length, ignorados: itens.length - novos.length };
+    },
+    async cancelarReferencia(ctx, id, motivo) {
+      const c = exigirContexto(ctx); const x = t.refs.find((y) => y.id === id && noTen(c)(y) && y.status === "ativa");
+      if (!x) return null; garantirPeriodo(c, x.data);
+      const antes = { ...x }; Object.assign(x, { status: "cancelada", cancelada_por: c.usuarioId, cancelada_em: agora(), motivo_cancelamento: motivo }); audita(c, "fin_referencias.update", "fin_referencias", antes, { ...x }); return { ...x };
+    },
+    async listarResolucoes(ctx, { mes, incluirRevogadas = false } = {}) {
+      const c = exigirContexto(ctx);
+      return t.resol.filter((x) => noTen(c)(x) && (!mes || x.chave.startsWith(mes)) && (incluirRevogadas || x.status === "vigente")).map((x) => ({ ...x }));
+    },
+    async inserirResolucao(ctx, r) {
+      const c = exigirContexto(ctx); garantirPeriodo(c, r.chave);
+      const n = { id: randomUUID(), status: "vigente", ...r, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, criado_por: c.usuarioId, created_at: agora() };
+      t.resol.push(n); audita(c, "fin_conciliacao_resolucoes.insert", "fin_conciliacao_resolucoes", null, n); return { ...n };
+    },
+    async revogarResolucao(ctx, id, motivo) {
+      const c = exigirContexto(ctx); const x = t.resol.find((y) => y.id === id && noTen(c)(y) && y.status === "vigente");
+      if (!x) return null; garantirPeriodo(c, x.chave);
+      const antes = { ...x }; Object.assign(x, { status: "revogada", revogada_por: c.usuarioId, revogada_em: agora(), motivo_revogacao: motivo }); audita(c, "fin_conciliacao_resolucoes.update", "fin_conciliacao_resolucoes", antes, { ...x }); return { ...x };
+    },
+    async listarExcecoesSangria(ctx, { apenasAtivas = false } = {}) { const c = exigirContexto(ctx); return t.exc.filter((x) => noTen(c)(x) && (!apenasAtivas || x.ativa)).map((x) => ({ ...x })); },
+    async inserirExcecaoSangria(ctx, e) {
+      const c = exigirContexto(ctx);
+      if (!t.plano.some((x) => x.id === e.categoria_id && noOrg(c)(x))) regra("fin_escopo_invalido");
+      if (t.exc.some((x) => noTen(c)(x) && x.categoria_id === e.categoria_id && x.ativa)) erro("Registro duplicado.", "DUPLICADO");
+      const n = { id: randomUUID(), ativa: true, ...e, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, aprovada_por: c.usuarioId, aprovada_em: agora() };
+      t.exc.push(n); audita(c, "fin_sangria_excecoes.insert", "fin_sangria_excecoes", null, n); return { ...n };
+    },
+    async desativarExcecaoSangria(ctx, id, motivo) {
+      const c = exigirContexto(ctx); const x = t.exc.find((y) => y.id === id && noTen(c)(y) && y.ativa);
+      if (!x) return null; const antes = { ...x }; Object.assign(x, { ativa: false, desativada_por: c.usuarioId, desativada_em: agora(), motivo_desativacao: motivo }); audita(c, "fin_sangria_excecoes.update", "fin_sangria_excecoes", antes, { ...x }); return { ...x };
+    },
+    // ---- B8: períodos e política ----
+    async listarPeriodos(ctx) { const c = exigirContexto(ctx); return t.per.filter(noTen(c)).sort((a, b) => b.mes.localeCompare(a.mes)).map((x) => ({ ...x })); },
+    async abrirPeriodoRpc(ctx, mes) {
+      const c = exigirContexto(ctx); const dia = `${mes}-01`;
+      let p = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === dia);
+      if (!p) { p = { id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, mes: dia, status: "aberto", versao: 1, snapshot: null }; t.per.push(p); audita(c, "fin_periodos.insert", "fin_periodos", null, { ...p }); }
+      return { ...p };
+    },
+    async fingerprintPeriodoRpc(ctx, mes) { return impressao(exigirContexto(ctx), mes); },
+    async fecharPeriodoRpc(ctx, { mes, versao, fingerprint, snapshot, pendenciasConciliacao, reconhecoPendencias }) {
+      const c = exigirContexto(ctx); const p = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === `${mes}-01` && x.organizacao_id === c.organizacaoId);
+      if (!p) regra("fin_periodo_nao_encontrado", "P0002");
+      if (p.status === "fechado") regra("fin_periodo_ja_fechado");
+      if (p.versao !== versao) regra("fin_periodo_conflito_versao: o periodo mudou");
+      if (impressao(c, mes) !== fingerprint) regra("fin_periodo_conflito_dados: ha dados alterados");
+      const pend = t.lanc.filter((l) => noTen(c)(l) && l.data_movimento.startsWith(mes) && l.status !== "cancelado" && (l.classificacao_pendente || !l.categoria_id)).length + (pendenciasConciliacao ?? 0);
+      const permite = t.cfg.find((x) => x.unidade_id === c.unidadeId)?.permite_fechar_com_pendencias === true;
+      if (pend > 0) { if (!permite) regra(`fin_periodo_pendencias: ${pend} pendencia(s)`); if (reconhecoPendencias !== true) regra("fin_periodo_pendencias_nao_reconhecidas"); }
+      const antes = { ...p };
+      Object.assign(p, { status: "fechado", fechado_por: c.usuarioId, fechado_em: agora(), versao: p.versao + 1, snapshot: { ...snapshot, pendenciasNoFechamento: pend, fingerprint, politicaPermitiaPendencias: permite } });
+      audita(c, "fin_periodos.update", "fin_periodos", antes, { ...p }); return { ...p };
+    },
+    async reabrirPeriodoRpc(ctx, { mes, versao, motivo }) {
+      const c = exigirContexto(ctx); const p = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === `${mes}-01` && x.organizacao_id === c.organizacaoId);
+      if (String(motivo ?? "").trim().length < 10) regra("fin_periodo_motivo_obrigatorio");
+      if (!p) regra("fin_periodo_nao_encontrado", "P0002");
+      if (p.status !== "fechado") regra("fin_periodo_nao_fechado");
+      if (p.versao !== versao) regra("fin_periodo_conflito_versao: o periodo mudou");
+      const antes = { ...p }; Object.assign(p, { status: "reaberto", reaberto_por: c.usuarioId, reaberto_em: agora(), motivo_reabertura: motivo.trim(), versao: p.versao + 1 });
+      audita(c, "fin_periodos.update", "fin_periodos", antes, { ...p }); return { ...p };
+    },
+    async obterConfig(ctx) { const c = exigirContexto(ctx); const x = t.cfg.find((y) => y.unidade_id === c.unidadeId && y.organizacao_id === c.organizacaoId); return x ? { ...x } : null; },
+    async gravarConfig(ctx, cfg) {
+      const c = exigirContexto(ctx);
+      if (cfg.permite_fechar_com_pendencias && !(cfg.aprovado_por && cfg.aprovado_em && String(cfg.nota_aprovacao ?? "").trim().length >= 10)) erro("Operação recusada.", "23514");
+      let x = t.cfg.find((y) => y.unidade_id === c.unidadeId); const antes = x ? { ...x } : null;
+      if (x) Object.assign(x, cfg); else { x = { id: randomUUID(), ...cfg, organizacao_id: c.organizacaoId, unidade_id: c.unidadeId }; t.cfg.push(x); }
+      audita(c, antes ? "fin_config.update" : "fin_config.insert", "fin_config", antes, { ...x }); return { ...x };
+    },
+    fecharPeriodo(ctx, ym) { const c = exigirContexto(ctx); const ex = t.per.find((x) => x.unidade_id === c.unidadeId && x.mes === `${ym}-01`); if (ex) Object.assign(ex, { status: "fechado", snapshot: {}, versao: ex.versao + 1 }); else t.per.push({ id: randomUUID(), organizacao_id: c.organizacaoId, unidade_id: c.unidadeId, status: "fechado", mes: `${ym}-01`, versao: 1, snapshot: {} }); },
   };
   return r;
 }

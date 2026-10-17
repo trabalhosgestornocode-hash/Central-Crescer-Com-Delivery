@@ -5,20 +5,7 @@ import { supabase } from "../../../config/supabase.js";
 import { ApiError } from "../../../shared/ApiError.js";
 import { exigirContexto } from "./contexto.js";
 
-const PAGINA = 1000; // teto do PostgREST por requisição
-
-const falha = (error) => {
-  if (!error) return;
-  const msg = String(error.message ?? "");
-  if (error.code === "23505") throw ApiError.badRequest("Registro duplicado.", { codigo: "DUPLICADO" });
-  if (error.code === "23514" || error.code === "23502" || error.code === "23503" || error.code === "P0002") {
-    throw ApiError.badRequest(msg.replace(/^fin_[a-z_]+:?\s*/i, "") || "Operação recusada pela regra de integridade.", { codigo: (/^(fin_[a-z_]+)/.exec(msg)?.[1] ?? "INTEGRIDADE").toUpperCase() });
-  }
-  throw ApiError.internal("Falha ao acessar os dados financeiros.");
-};
-
-const org = (q, ctx) => q.eq("organizacao_id", ctx.organizacaoId);
-const unid = (q, ctx) => q.eq("organizacao_id", ctx.organizacaoId).eq("unidade_id", ctx.unidadeId);
+import { falha, org, unid, PAGINA } from "./repositorio.util.js";
 
 // ---- plano de contas (por organização) ----
 export async function listarPlanoContas(ctxIn, db = supabase) {
@@ -101,7 +88,7 @@ export async function listarTodosLancamentos(ctxIn, { de, ate } = {}, db = supab
   const ctx = exigirContexto(ctxIn);
   const todos = [];
   for (let desde = 0; ; desde += PAGINA) {
-    let q = unid(db.from("fin_lancamentos").select("id, conta_id, categoria_id, sentido, valor_centavos, data_movimento, status, classificacao_pendente, descricao"), ctx);
+    let q = unid(db.from("fin_lancamentos").select("id, conta_id, categoria_id, sentido, valor_centavos, data_movimento, status, classificacao_pendente, descricao, revisao_motivos, nota_revisao, origem"), ctx);
     if (de) q = q.gte("data_movimento", de);
     if (ate) q = q.lte("data_movimento", ate);
     const { data, error } = await q.order("data_movimento").order("id").range(desde, desde + PAGINA - 1);
@@ -153,11 +140,19 @@ export async function vincularTransferenciaRpc(ctxIn, saidaId, entradaId, db = s
   falha(error);
   return data;
 }
-export async function desvincularTransferenciaRpc(ctxIn, id, db = supabase) {
+/** Desvínculo MOTIVADO (122): só par ativo; as pernas continuam ativas e voltam a pendentes. */
+export async function desvincularTransferenciaRpc(ctxIn, id, motivo, db = supabase) {
   const ctx = exigirContexto(ctxIn);
-  const { data, error } = await db.rpc("fin_desvincular_transferencia", { p_org: ctx.organizacaoId, p_unidade: ctx.unidadeId, p_usuario: ctx.usuarioId, p_transferencia: id });
+  const { data, error } = await db.rpc("fin_desvincular_transferencia_motivada", { p_org: ctx.organizacaoId, p_unidade: ctx.unidadeId, p_usuario: ctx.usuarioId, p_transferencia: id, p_motivo: motivo });
   falha(error);
   return data === true;
+}
+/** Cancela a transferência INTEIRA (par + duas pernas) numa única transação; idempotente. */
+export async function cancelarTransferenciaRpc(ctxIn, id, motivo, db = supabase) {
+  const ctx = exigirContexto(ctxIn);
+  const { data, error } = await db.rpc("fin_cancelar_transferencia", { p_org: ctx.organizacaoId, p_unidade: ctx.unidadeId, p_usuario: ctx.usuarioId, p_transferencia: id, p_motivo: motivo });
+  falha(error);
+  return data;
 }
 
 // ---- importações ----
@@ -219,3 +214,6 @@ export async function listarAuditoria(ctxIn, { entidade, entidadeId, limite = 10
   falha(error);
   return data ?? [];
 }
+
+export * from "./repositorio.conciliacao.js";
+export * from "./repositorio.periodos.js";

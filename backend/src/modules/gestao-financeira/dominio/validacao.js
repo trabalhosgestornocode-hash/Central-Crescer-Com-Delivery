@@ -48,3 +48,13 @@ export const periodo = (q) => {
 };
 export const papel = (v) => enumerado(v, "papel", PAPEIS);
 export { bad };
+
+export function mesAno(v, campo = "mes") {
+  if (typeof v !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(v)) throw bad(`${campo} inválido (use AAAA-MM).`);
+  return v;
+}
+export function inteiro(v, campo, { min = 0, max = 1_000_000 } = {}) {
+  const n = typeof v === "string" && /^-?\d+$/.test(v) ? Number(v) : v;
+  if (!Number.isSafeInteger(n) || n < min || n > max) throw bad(`${campo} inválido.`);
+  return n;
+}
