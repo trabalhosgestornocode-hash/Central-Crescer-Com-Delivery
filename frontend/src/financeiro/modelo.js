@@ -74,7 +74,7 @@ export const nivelAlerta = (a) => (a.nivel === "erro" ? "bad" : "warn");
 export const podeAcao = (ctx, acao) => (ctx?.permissoes ?? []).includes(acao);
 export const ACAO = Object.freeze({
   VER: "gestao_financeira.ver", LANCAR: "gestao_financeira.lancar", EDITAR: "gestao_financeira.editar", CONCILIAR: "gestao_financeira.conciliar",
-  CONFIGURAR: "gestao_financeira.configurar", CANCELAR: "gestao_financeira.cancelar", EXCLUIR: "gestao_financeira.excluir",
+  FECHAR: "gestao_financeira.fechar", REABRIR: "gestao_financeira.reabrir", CONFIGURAR: "gestao_financeira.configurar", CANCELAR: "gestao_financeira.cancelar", EXCLUIR: "gestao_financeira.excluir",
 });
 
 /** Motivos de revisão da importação → rótulo curto. */
@@ -90,3 +90,17 @@ export async function arquivoParaBase64(file) {
   for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
   return btoa(bin);
 }
+
+/** Estados da conciliação → rótulo e tom. `sem_referencia` NUNCA é tratado como conciliado. */
+export const ESTADO_CONCILIACAO = Object.freeze({
+  sem_referencia: { rotulo: "Sem referência", tom: "muted" }, conciliado: { rotulo: "Conciliado", tom: "ok" },
+  pendente_identificacao: { rotulo: "Pendente de identificação", tom: "warn" }, parcialmente_resolvido: { rotulo: "Parcialmente classificado", tom: "warn" },
+  resolvido: { rotulo: "Classificado", tom: "info" }, sem_vinculo_canal: { rotulo: "Conta sem canal vinculado", tom: "muted" },
+});
+export const ROTULO_CLASSIFICACAO = Object.freeze({ prazo: "Diferença de prazo", taxa: "Taxa", ajuste: "Ajuste", estorno: "Estorno", divergencia: "Divergência", outros: "Outros motivos" });
+export const ROTULO_TIPO_REFERENCIA = Object.freeze({ venda: "Vendas (realizadas)", taxa: "Taxas", sangria: "Sangrias", dinheiro: "Caixa em espécie" });
+export const ROTULO_STATUS_PERIODO = Object.freeze({ aberto: { rotulo: "Aberto", tom: "ok" }, fechado: { rotulo: "Fechado", tom: "info" }, reaberto: { rotulo: "Reaberto", tom: "warn" } });
+/** Primeiro dia do mês (chave da ponte mensal). */
+export const primeiroDiaDoMes = (ym) => ym + "-01";
+/** Texto de valor digitado (pt-BR) → string aceita pelo servidor; vazio continua vazio (ausente nunca vira zero). */
+export const valorDigitado = (v) => String(v ?? "").trim();

@@ -334,4 +334,147 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
     } finally { await fechar(); }
     assert.deepEqual(erros.filter((e) => !/500/.test(e)), []);
   });
+
+  test("conciliação: sem referência nada é inventado; com vendas e taxas o residual fica PENDENTE e só uma classificação manual o explica", async () => {
+    const { p, erros, fechar } = await abrir("conciliacao");
+    try {
+      await p.locator(".fin-regime").waitFor();
+      const t0 = await p.locator("#view").innerText();
+      assert.match(t0, /Nenhuma referência informada para setembro\/2026/);
+      assert.match(t0, /Não inventamos dados ausentes/);
+      await captura(p, "70-conciliacao-vazia");
+      const informar = async (tipo, valor, canal) => {
+        await p.locator("[data-ref]").click();
+        const dlg = p.locator("dialog.fin-dialogo");
+        await dlg.locator('select[name="tipo"]').selectOption(tipo);
+        await dlg.locator('input[name="data"]').fill("2026-09-30");
+        await dlg.locator('input[name="valor"]').fill(valor);
+        if (canal) await dlg.locator('input[name="canal"]').fill(canal);
+        await dlg.locator('button[type="submit"]').click();
+        await dlg.waitFor({ state: "detached" });
+        await p.locator(".fin-regime").waitFor();
+      };
+      await informar("venda", "100.000,00");
+      await p.locator("text=falta informar").first().waitFor();           // sem taxas informadas o residual não é calculado
+      assert.match(await p.locator("#view").innerText(), /taxas/);
+      await informar("taxa", "50,00", "stone");
+      const t1 = await p.locator("#view").innerText();
+      assert.match(t1, /pendente de identificação, NÃO presumido como prazo/);
+      assert.match(t1, /Pendente de identificação/);
+      assert.equal(repo._t.resol.length, 0, "nenhuma classificação foi criada sozinha");
+      await captura(p, "71-conciliacao-pendente");
+      await semEstouro(p, "conciliação desktop");
+      // classificação manual: nota obrigatória, e vira "Classificado" só quando explica TODO o residual
+      await p.locator('[data-classificar^="ponte_mensal"]').click();
+      const dlg = p.locator("dialog.fin-dialogo");
+      await dlg.locator('select[name="classificacao"]').selectOption("prazo");
+      await dlg.locator('textarea[name="nota"]').fill("vendas do fim do mes recebidas no mes seguinte");
+      await dlg.locator('button[type="submit"]').click();
+      await dlg.waitFor({ state: "detached" });
+      await p.locator("text=Classificado").first().waitFor();
+      assert.equal(repo._t.resol.length, 1);
+      assert.equal(repo._t.resol[0].classificacao, "prazo");
+      await p.locator("[data-historico]").click();
+      await p.locator("dialog.fin-dialogo .fin-tabela").waitFor();
+      assert.match(await p.locator("dialog.fin-dialogo").innerText(), /insert/);
+      await p.locator("dialog.fin-dialogo [data-cancelar]").click();
+      await captura(p, "72-conciliacao-classificada");
+    } finally { await fechar(); }
+    assert.deepEqual(erros, []);
+    const m = await abrir("conciliacao", { viewport: CELULAR });
+    try { await m.p.locator(".fin-regime").waitFor(); await captura(m.p, "73-conciliacao-celular"); await semEstouro(m.p, "conciliação celular"); } finally { await m.fechar(); }
+    assert.deepEqual(m.erros, []);
+  });
+
+  test("cancelar TRANSFERÊNCIA INTEIRA pela tela: motivo obrigatório, as duas pernas juntas, e a perna vinculada não cancela sozinha", async () => {
+    const { p, erros, fechar } = await abrir("contas");
+    try {
+      await p.locator("[data-cancelar-par]").first().waitFor();
+      assert.equal(await p.locator("[data-desvincular]").count() > 0, true);
+      await captura(p, "80-contas-transferencias");
+      await p.locator("[data-cancelar-par]").first().click();
+      const dlg = p.locator("dialog.fin-dialogo");
+      assert.match(await dlg.innerText(), /duas pernas/);
+      await dlg.locator('textarea[name="motivo"]').fill("curto");
+      await dlg.locator('button[type="submit"]').click();       // validação do navegador (minlength) impede o envio
+      assert.equal(await dlg.count(), 1);
+      await dlg.locator('textarea[name="motivo"]').fill("lancada em duplicidade pelo operador");
+      await dlg.locator('button[type="submit"]').click();
+      await dlg.waitFor({ state: "detached" });
+      await p.locator("text=Cancelada").first().waitFor();
+      const par = repo._t.transf.find((x) => x.status === "cancelada");
+      assert.ok(par);
+      const pernas = repo._t.lanc.filter((l) => [par.lancamento_saida_id, par.lancamento_entrada_id].includes(l.id));
+      assert.deepEqual(pernas.map((l) => l.status), ["cancelado", "cancelado"]);
+      await captura(p, "81-transferencia-cancelada");
+    } finally { await fechar(); }
+    assert.deepEqual(erros, []);
+  });
+
+  test("períodos: pré-fechamento bloqueado por pendências; política aprovada + reconhecimento; snapshot; mês fechado recusa lançamento com mensagem amigável", async () => {
+    const { p, erros, fechar } = await abrir("periodos");
+    try {
+      await p.locator(".fin-tabela").waitFor();
+      assert.match(await p.locator("#view").innerText(), /Bloqueado \(padrão\)/);
+      assert.equal(await p.locator("[data-reabrir]").count(), 0, "nenhum nível tem reabrir: o botão nem aparece");
+      await p.locator('[data-pre^="2026-09"]').first().click();
+      const dlg = p.locator("dialog.fin-dialogo");
+      await dlg.locator(".fin-kpis").waitFor();
+      assert.match(await dlg.innerText(), /pendência\(s\) impedem o fechamento/);
+      assert.equal(await dlg.locator('button[type="submit"]').isDisabled(), true);
+      await captura(p, "90-periodos-bloqueado");
+      await dlg.locator("[data-cancelar]").click();
+      // política: aprovar com justificativa e confirmação explícitas
+      await p.locator("[data-politica]").click();
+      const dp = p.locator("dialog.fin-dialogo");
+      await dp.locator('textarea[name="notaAprovacao"]').fill("aprovado pela diretoria em ata numero 12");
+      await dp.locator('input[name="confirmoAprovacao"]').check();
+      await dp.locator('button[type="submit"]').click();
+      await dp.waitFor({ state: "detached" });
+      await p.locator("text=Permitido (aprovado)").waitFor();
+      // agora o fechamento exige RECONHECER as pendências
+      await p.locator('[data-pre^="2026-09"]').first().click();
+      const d2 = p.locator("dialog.fin-dialogo");
+      await d2.locator('input[name="reconheco"]').waitFor();
+      if (process.env.FIN_DEBUG) console.log("DBG2", JSON.stringify(await d2.innerText()));
+      assert.equal(await d2.locator('button[type="submit"]').isDisabled(), false);
+      await d2.locator('input[name="reconheco"]').check();
+      await d2.locator('input[name="confirmo"]').check();
+      await d2.locator('button[type="submit"]').click();
+      await d2.waitFor({ state: "detached" });
+      await p.locator("text=Fechado").first().waitFor();
+      const per = repo._t.per.find((x) => x.mes === "2026-09-01");
+      assert.equal(per.status, "fechado");
+      assert.equal(per.snapshot.regime, "caixa");
+      assert.ok(per.snapshot.pendenciasNoFechamento > 0);
+      await p.locator("[data-snap]").first().click();
+      assert.match(await p.locator("dialog.fin-dialogo").innerText(), /imutável|congelados/);
+      await p.locator("dialog.fin-dialogo [data-cancelar]").click();
+      await captura(p, "91-periodos-fechado");
+      await semEstouro(p, "períodos desktop");
+    } finally { await fechar(); }
+    assert.deepEqual(erros, []);
+    // mês fechado: o Fluxo recusa lançamento novo com mensagem amigável (sem detalhes internos)
+    const f = await abrir("fluxo-de-caixa");
+    try {
+      await f.p.locator(".fin-tabela").first().waitFor();
+      await f.p.locator("[data-novo]").click();
+      const d = f.p.locator("dialog.fin-dialogo");
+      await d.locator('select[name="contaId"]').selectOption({ label: "BANCO" });
+      await d.locator('select[name="sentido"]').selectOption("saida");
+      await d.locator('input[name="descricao"]').fill("lancamento em mes fechado");
+      await d.locator('input[name="valor"]').fill("1,00");
+      await d.locator('input[name="dataMovimento"]').fill("2026-09-22");
+      await d.locator('button[type="submit"]').click();
+      await d.locator(".fin-form-erro:not([hidden])").waitFor();
+      const msg = await d.locator(".fin-form-erro").innerText();
+      assert.match(msg, /mês está fechado/i);
+      assert.doesNotMatch(msg, /fin_|23514|trigger|constraint/i);
+      await d.locator("[data-cancelar]").click();
+    } finally { await f.fechar(); }
+    const m = await abrir("periodos", { viewport: CELULAR });
+    try { await m.p.locator(".fin-tabela").waitFor(); await captura(m.p, "92-periodos-celular"); await semEstouro(m.p, "períodos celular"); } finally { await m.fechar(); }
+    assert.deepEqual(m.erros, []);
+  });
+
 });

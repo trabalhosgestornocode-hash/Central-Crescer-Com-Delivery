@@ -120,8 +120,16 @@ export async function cancelarLancamento(ctx, id, b, deps = padrao) {
 }
 
 // ---- transferências ----
+/** Pares com os dados das duas pernas (valor, data, contas, motivo do cancelamento) para a tela; mantém os campos originais da linha. */
 export async function listarTransferencias(ctx, deps = padrao) {
-  return deps.repo.listarTransferencias(exigirContexto(ctx), deps.db);
+  const c = exigirContexto(ctx);
+  const [pares, lancs, contas] = await Promise.all([deps.repo.listarTransferencias(c, deps.db), deps.repo.listarTodosLancamentos(c, {}, deps.db), deps.repo.listarContas(c, deps.db)]);
+  const lPorId = new Map(lancs.map((l) => [l.id, l]));
+  const nome = new Map(contas.map((x) => [x.id, x.nome]));
+  return pares.map((t) => {
+    const s = lPorId.get(t.lancamento_saida_id), e = lPorId.get(t.lancamento_entrada_id);
+    return { ...t, status: t.status ?? "vinculada", data: s?.data_movimento ?? null, valorCentavos: s ? Number(s.valor_centavos) : null, contaOrigem: nome.get(s?.conta_id) ?? null, contaDestino: nome.get(e?.conta_id) ?? null, descricao: s?.descricao ?? null };
+  });
 }
 export async function criarTransferencia(ctx, b, deps = padrao) {
   const c = exigirContexto(ctx);
