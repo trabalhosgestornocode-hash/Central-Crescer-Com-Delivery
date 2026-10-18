@@ -80,6 +80,7 @@ function repoOAuth(unidadeDaSessao) {
     async obterSessaoOAuth() { return { id: "sess-1", unidade_id: unidadeDaSessao, app_type: "financial", status: "pending", expira_em: daquiA(300_000), authorization_code_verifier_cifrado: cifrar("verifier-ficticio") }; },
     async reivindicarSessaoOAuth() { return true; },
     async fecharSessaoOAuth() { return true; },
+    async obterConexaoViva() { return null; },
     async obterOuCriarConexao() { return { id: "conx-1", status: "pendente" }; },
     async salvarCredencial(a) { estado.credencial = a; return a; },
     async obterCredencial() { return estado.credencial; },
@@ -282,7 +283,7 @@ describe("rota POST /oauth/start: só req.tenant decide (body/query não alteram
   before(() => definir());
   supabase.from = () => {
     const q = {
-      insert: (linha) => { q._linha = linha; return q; }, select: () => q, eq: () => q, lt: () => q, update: () => q, in: () => q,
+      insert: (linha) => { q._linha = linha; return q; }, select: () => q, eq: () => q, neq: () => q, order: () => q, lt: () => q, update: () => q, in: () => q,
       single: async () => ({ data: { id: "sess-r", ...(q._linha ?? {}) }, error: null }),
       maybeSingle: async () => ({ data: null, error: null }),
       then: (ok, err) => Promise.resolve({ data: [], error: null }).then(ok, err),

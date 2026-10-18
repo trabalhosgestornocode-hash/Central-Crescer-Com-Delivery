@@ -99,7 +99,12 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 120 = fundação do Dashboard Financeiro (módulo gestao_financeira, concessões explícitas, auditoria; RLS sem policies).
       "120_gestao_financeira_fundacao.sql", "120_rollback.sql",
       // 121 = domínio financeiro (Agente 2): fin_* backend-only, RLS sem policies, auditoria imutável.
-      "121_gestao_financeira_dominio.sql", "121_rollback.sql"];
+      "121_gestao_financeira_dominio.sql", "121_rollback.sql",
+      // 123 = módulo próprio checklist_operacional (catálogo + vínculos de quem já tem ifood); sem tocar a mensageria.
+      // A trilha financeira ocupa 120–122 (ainda não integrada à main); o 123 só é definitivo se continuar livre no merge.
+      "123_checklist_operacional_modulo.sql", "123_rollback.sql",
+      // 124/125 = finalidade por conexão iFood e remoção (separada) do índice "uma conexão por unidade"; sem tocar a mensageria.
+      "124_ifood_conexao_finalidade.sql", "124_rollback.sql", "125_ifood_conexao_remove_indice_unidade.sql", "125_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

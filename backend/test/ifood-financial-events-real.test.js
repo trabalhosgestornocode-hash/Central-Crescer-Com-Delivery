@@ -329,7 +329,7 @@ describe("read-only, PII, isolamento", () => {
     await chamar({ homologacao: false }, f, repo, TENANT_B);
     assert.ok(f.chamadas[0].url.includes(MERCHANT_A) && f.chamadas[0].headers.Authorization === "Bearer AT-A");
     assert.ok(f.chamadas[1].url.includes(MERCHANT_B) && f.chamadas[1].headers.Authorization === "Bearer AT-B");
-    assert.deepEqual(chamadas.filter((c) => c.nome === "obterConexaoViva").map((c) => c.args[0]), [TENANT_A, TENANT_B]);
+    assert.deepEqual(chamadas.filter((c) => c.nome === "obterConexaoViva").map((c) => c.args[0]), [{ ...TENANT_A, finalidade: "financeiro_homologacao" }, { ...TENANT_B, finalidade: "financeiro_homologacao" }]);
     const f2 = ok200([]);
     await assert.rejects(() => chamar({ homologacao: false }, f2, repo, { organizacaoId: "org-A", unidadeId: "uni-B" }), (e) => e.codigo === IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
     assert.equal(f2.chamadas.length, 0);
@@ -351,6 +351,7 @@ describe("rotas GET /financial/events e /financial/sales", async () => {
       insert: () => { escritas.push(tabela); return q; }, update: () => { escritas.push(tabela); return q; },
       upsert: () => { escritas.push(tabela); return q; }, delete: () => { escritas.push(tabela); return q; },
       maybeSingle: async () => ({ data: linha, error: null }), single: async () => ({ data: linha, error: null }),
+      order: () => q, then: (ok, err) => Promise.resolve({ data: linha ? [linha] : [], error: null }).then(ok, err),   // leitura de LISTA (conexões vivas)
     };
     return q;
   };

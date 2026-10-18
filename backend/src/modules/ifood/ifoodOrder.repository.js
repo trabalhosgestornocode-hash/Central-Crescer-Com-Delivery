@@ -28,9 +28,16 @@ export async function obterPedidoDoTenant({ organizacaoId, unidadeId, orderId })
  * traz `lojaId` — quem chama usa o token da loja, nunca o da conexão. Sem `lojaId`: credencial da conexão, como sempre.
  */
 export async function obterConexaoAtivaDoMerchant({ organizacaoId, unidadeId, merchantId }) {
-  const principal = ok(await supabase.from(T.conexoes).select("id, organizacao_id, unidade_id, merchant_id")
-    .eq("status", "ativa").eq("merchant_id", merchantId)
-    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).maybeSingle());
+  // O merchant de uma conexão `financeiro_homologacao` (loja de teste) nunca resolve token de pedidos. Sem a coluna (124 ausente): como antes.
+  const consultaPrincipal = (comFinalidade) => {
+    const q = supabase.from(T.conexoes).select("id, organizacao_id, unidade_id, merchant_id")
+      .eq("status", "ativa").eq("merchant_id", merchantId)
+      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId);
+    return (comFinalidade ? q.neq("finalidade", "financeiro_homologacao") : q).maybeSingle();
+  };
+  let rPrincipal = await consultaPrincipal(true);
+  if (rPrincipal.error && (rPrincipal.error.code === "42703" || /finalidade/i.test(rPrincipal.error.message ?? ""))) rPrincipal = await consultaPrincipal(false);
+  const principal = ok(rPrincipal);
   if (principal) return principal;
 
   const { data: loja, error } = await supabase.from("ifood_conexao_lojas").select("id, conexao_id")

@@ -190,12 +190,12 @@ describe("vida do pedido", () => {
   });
 
   test("em andamento, a vida continua sendo um alerta preventivo do tempo total", () => {
-    // Em preparo há 5 min (preparo verde), mas recebido há 40 min: a vida (45) está próxima.
-    const pedido = { id: "v1", displayId: "V1", status: "CONFIRMED", recebidoEm: ha(40), confirmadoEm: ha(5) };
+    // Despachado há 5 min (entrega verde), mas recebido há 40 min: a vida (45) está próxima.
+    const pedido = { id: "v1", displayId: "V1", status: "DISPATCHED", recebidoEm: ha(40), despachadoEm: ha(5) };
     const p = derivarPedidoAtivo(pedido, METAS_EXEMPLO, AGORA);
     assert.deepEqual([p.daEtapa.nivel, p.vida.nivel, p.nivel, p.governadoPelaVida], ["ok", "atencao", "atencao", true]);
     const r = resumo({ ativos: [pedido] });
-    assert.deepEqual([rotuloDoCard(cardTempo("vida", r, AGORA)), rotuloDoCard(cardTempo("preparo", r, AGORA))], ["Próximo da meta", "Dentro da meta"]);
+    assert.deepEqual([rotuloDoCard(cardTempo("vida", r, AGORA)), rotuloDoCard(cardTempo("entrega", r, AGORA))], ["Próximo da meta", "Dentro da meta"]);
     const estourou = derivarPedidoAtivo({ ...pedido, recebidoEm: ha(46) }, METAS_EXEMPLO, AGORA);
     assert.deepEqual([estourou.vida.nivel, ROTULO_NIVEL[estourou.vida.nivel]], ["critico", "Atrasado"]);
   });
@@ -272,15 +272,15 @@ describe("status da operação", () => {
 describe("10. mudanças de estado recebidas do iFood", () => {
   test("o mesmo pedido, de recebido a concluído: cada etapa com a classificação certa", () => {
     const base = { id: "x", displayId: "7756" };
-    // PLACED: ainda sem etapa própria — acompanha a vida.
+    // PLACED: o preparo já corre desde a chegada.
     let p = derivarPedidoAtivo({ ...base, status: "PLACED", recebidoEm: ha(1) }, METAS_EXEMPLO, AGORA);
-    assert.deepEqual([p.indicador, p.nivel], ["vida", "ok"]);
+    assert.deepEqual([p.indicador, p.nivel], ["preparo", "ok"]);
     // CONFIRMED há 10 min: preparo em andamento, alerta preventivo.
     p = derivarPedidoAtivo({ ...base, status: "CONFIRMED", recebidoEm: ha(11), confirmadoEm: ha(10) }, METAS_EXEMPLO, AGORA);
     assert.deepEqual([p.indicador, p.daEtapa.nivel, ROTULO_NIVEL[p.daEtapa.nivel]], ["preparo", "atencao", "Próximo da meta"]);
-    // READY_TO_PICKUP: espera do entregador não tem meta própria — volta a ser a vida.
+    // READY_TO_PICKUP: o pronto NÃO encerra o preparo — a espera do entregador continua contando (13 min > meta de 12).
     p = derivarPedidoAtivo({ ...base, status: "READY_TO_PICKUP", recebidoEm: ha(13), confirmadoEm: ha(12) }, METAS_EXEMPLO, AGORA);
-    assert.deepEqual([p.indicador, p.nivel], ["vida", "ok"]);
+    assert.deepEqual([p.indicador, p.nivel], ["preparo", "critico"]);
     // DISPATCHED há 2 min: entrega em andamento; o preparo (11 min) virou resultado final verde.
     const despachado = { ...base, status: "DISPATCHED", recebidoEm: ha(14), confirmadoEm: ha(13), despachadoEm: ha(2) };
     p = derivarPedidoAtivo(despachado, METAS_EXEMPLO, AGORA);
@@ -294,7 +294,7 @@ describe("10. mudanças de estado recebidas do iFood", () => {
   });
 
   test("retirada (sem entrega): preparo concluído é classificado pelo final; não ganha alerta de entrega", () => {
-    const pronto = { id: "t", displayId: "1034", status: "READY_TO_PICKUP", recebidoEm: ha(12), confirmadoEm: ha(11) };
+    const pronto = { id: "t", displayId: "1034", status: "READY_TO_PICKUP", recebidoEm: ha(12), confirmadoEm: ha(11), tipo: "TAKEOUT" };
     const r = resumo({ ativos: [pronto], preparo: indicador(10, 10, 1) });
     assert.equal(emAcompanhamento("entrega", r, AGORA), null);
     assert.equal(emAcompanhamento("preparo", r, AGORA), null);

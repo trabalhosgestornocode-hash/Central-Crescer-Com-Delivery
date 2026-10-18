@@ -15,7 +15,7 @@ const AGORA = Date.parse("2026-10-09T15:00:00.000Z");
 const iso = (minAntes) => new Date(AGORA - minAntes * 60_000).toISOString();
 
 let seq = 0;
-/** Pedido concluído "normal": PLC −60, CFM −59, RTP −49 (preparo 10), DSP −45, CON −20 (entrega 25, vida 40). */
+/** Pedido concluído "normal": PLC −60, CFM −59, RTP −49, DSP −45 (preparo 15), CON −20 (entrega 25, vida 40 = 15 + 25). */
 function pedido(over = {}) {
   seq += 1;
   return {
@@ -60,22 +60,43 @@ describe("dia operacional no fuso do negócio", () => {
 });
 
 describe("os três tempos", () => {
-  test("preparo exato: CFM → RTP", () => {
+  test("preparo = chegada (PLC) → despacho (DSP); o pronto (RTP) NÃO encerra o preparo", () => {
     const m = medirPreparo(pedido());
-    assert.equal(m.min, 10);
-    assert.equal(m.aproximado, false);
-    assert.equal(m.fim, "RTP");
+    assert.equal(m.min, 15);
+    // Mesmo sem RTP o preparo é o mesmo número — o RTP não participa da conta.
+    assert.equal(medirPreparo(pedido({ ready_event_at: null })).min, 15);
+    // Pronto cedo e entregador demorando: a espera continua dentro do preparo.
+    assert.equal(medirPreparo(pedido({ ready_event_at: iso(58) })).min, 15);
   });
 
-  test("preparo só com despacho: APROXIMADO, nunca exato", () => {
-    const m = medirPreparo(pedido({ ready_event_at: null }));
-    assert.equal(m.min, 14);
-    assert.equal(m.aproximado, true);
-    assert.equal(m.fim, "DSP");
+  test("Cenário D: chegou 12:00, pronto 12:12, despacho 12:18, conclusão 12:43 → 18 / 25 / 43", () => {
+    const t = (hhmm) => `2026-10-09T${hhmm}:00.000Z`;
+    const p = pedido({ placed_event_created_at: t("12:00"), confirmed_event_at: t("12:01"), ready_event_at: t("12:12"), dispatch_event_at: t("12:18"), status_oficial_em: t("12:43") });
+    assert.equal(medirPreparo(p).min, 18);
+    assert.equal(medirEntrega(p).min, 25);
+    assert.equal(medirVida(p).min, 43);
+    assert.equal(medirPreparo(p).min + medirEntrega(p).min, medirVida(p).min);
   });
 
-  test("preparo sem confirmação: indisponível (não usa o recebimento no lugar)", () => {
-    assert.equal(medirPreparo(pedido({ confirmed_event_at: null })).min, null);
+  test("sem a chegada (PLC) não há preparo nem vida — o createdAt do pedido NÃO substitui", () => {
+    const p = pedido({ placed_event_created_at: null, order_created_at: iso(70) });
+    assert.equal(medirPreparo(p).motivo, "carimbo_ausente");
+    assert.equal(medirVida(p).motivo, "carimbo_ausente");
+    assert.equal(recebidoEm(p), iso(70));   // exibição/janela do dia continuam podendo usar o createdAt
+  });
+
+  test("sem despacho (DSP) o preparo não é medido nem inventado", () => {
+    assert.equal(medirPreparo(pedido({ dispatch_event_at: null })).motivo, "sem_saida");
+  });
+
+  test("RETIRADA (sem DSP) e pedido sem detalhes ficam fora dos três tempos", () => {
+    const tk = pedido({ order_type: "TAKEOUT", dispatch_event_at: null, delivery_by: null });
+    assert.equal(medirPreparo(tk).motivo, "nao_delivery");
+    assert.equal(medirEntrega(tk).motivo, "nao_delivery");
+    assert.equal(medirVida(tk).motivo, "nao_delivery");
+    const sd = pedido({ order_type: null });
+    assert.equal(medirPreparo(sd).motivo, "sem_detalhes");
+    assert.equal(medirVida(sd).motivo, "sem_detalhes");
   });
 
   test("entrega: DSP → CON, só DELIVERY, com a modalidade", () => {
@@ -92,13 +113,13 @@ describe("os três tempos", () => {
     assert.equal(medirEntrega(pedido({ order_type: null })).motivo, "sem_detalhes");
   });
 
-  test("vida: recebimento (PLC) → conclusão (CON), medida direta", () => {
-    assert.equal(medirVida(pedido()).min, 40);
+  test("vida: chegada (PLC) → conclusão (CON) = preparo + entrega", () => {
+    const p = pedido();
+    assert.equal(medirVida(p).min, 40);
+    assert.equal(medirPreparo(p).min + medirEntrega(p).min, medirVida(p).min);
   });
 
-  test("vida sem PLC usa o createdAt oficial do pedido; sem nenhum dos dois, indisponível", () => {
-    assert.equal(medirVida(pedido({ placed_event_created_at: null, order_created_at: iso(70) })).min, 50);
-    assert.equal(medirVida(pedido({ placed_event_created_at: null, order_created_at: null })).min, null);
+  test("sem nenhum horário de chegada, recebidoEm é null", () => {
     assert.equal(recebidoEm(pedido({ placed_event_created_at: null, order_created_at: null })), null);
   });
 
@@ -109,20 +130,42 @@ describe("os três tempos", () => {
     assert.equal(medirEntrega(p).min, null);
   });
 
-  test("decomposição: trecho sem os dois carimbos fica null, nunca estimado", () => {
-    assert.deepEqual(decompor(pedido()), { confirmacao: 1, preparo: 10, espera: 4, entrega: 25 });
-    const d = decompor(pedido({ ready_event_at: null }));
-    assert.equal(d.preparo, null);
-    assert.equal(d.espera, null);
+  test("decomposição: preparo + entrega (sem sobreposição); o detalhe do preparo é informativo", () => {
+    const d = decompor(pedido());
+    assert.equal(d.preparo, 15);
     assert.equal(d.entrega, 25);
+    assert.equal(d.preparo + d.entrega, 40);
+    // Partição do próprio preparo: confirmação + até o pronto + espera pelo despacho.
+    assert.deepEqual(d.detalhePreparo, { confirmacao: 1, ateOPronto: 10, esperaPeloDespacho: 4 });
+    const s = d.detalhePreparo;
+    assert.equal(s.confirmacao + s.ateOPronto + s.esperaPeloDespacho, d.preparo);
+  });
+
+  test("decomposição: sem o despacho os trechos ficam null (nunca estimados); sem RTP ou com RTP fora de ordem não há detalhe", () => {
+    const sem = decompor(pedido({ dispatch_event_at: null }));
+    assert.equal(sem.preparo, null);
+    assert.equal(sem.entrega, null);
+    const semRtp = decompor(pedido({ ready_event_at: null }));
+    assert.equal(semRtp.preparo, 15);
+    assert.equal(semRtp.detalhePreparo, null);
+    const foraDeOrdem = decompor(pedido({ ready_event_at: iso(40) }));
+    assert.equal(foraDeOrdem.preparo, 15);
+    assert.equal(foraDeOrdem.detalhePreparo, null);
   });
 });
 
 describe("eventos fora de ordem e carimbos inválidos", () => {
-  test("pronto ANTES da confirmação: descartado e contado, nunca negativo", () => {
-    const r = montarResumo({ pedidos: [pedido({ ready_event_at: iso(70) })], agoraMs: AGORA });
+  test("despacho ANTES da chegada: descartado e contado, nunca negativo", () => {
+    const r = montarResumo({ pedidos: [pedido({ dispatch_event_at: iso(70) })], agoraMs: AGORA });
     assert.equal(r.indicadores.preparo.amostras, 0);
     assert.equal(r.indicadores.preparo.descartados, 1);
+  });
+
+  test("pronto (RTP) fora de ordem NÃO afeta o preparo", () => {
+    const r = montarResumo({ pedidos: [pedido({ ready_event_at: iso(70) }), pedido({ ready_event_at: iso(10) })], agoraMs: AGORA });
+    assert.equal(r.indicadores.preparo.amostras, 2);
+    assert.equal(r.indicadores.preparo.mediaDia, 15);
+    assert.equal(r.indicadores.preparo.descartados, 0);
   });
 
   test("saída depois da conclusão: entrega descartada", () => {
@@ -152,31 +195,44 @@ describe("eventos fora de ordem e carimbos inválidos", () => {
 describe("médias e amostras", () => {
   test("média só dos elegíveis, com a quantidade de pedidos", () => {
     const pedidos = [
-      pedido(),                                                                       // preparo 10, entrega 25, vida 40
-      pedido({ confirmed_event_at: iso(58), ready_event_at: iso(44), dispatch_event_at: iso(40), status_oficial_em: iso(10) }), // 14, 30, 50
+      pedido(),                                                                       // preparo 15, entrega 25, vida 40
+      pedido({ confirmed_event_at: iso(58), ready_event_at: iso(44), dispatch_event_at: iso(40), status_oficial_em: iso(10) }), // 20, 30, 50
       pedido({ status_oficial: "CANCELLED", status_oficial_em: iso(30), cancel_event_at: iso(30) }),  // fora de tudo
     ];
     const r = montarResumo({ pedidos, agoraMs: AGORA });
-    assert.equal(r.indicadores.preparo.mediaDia, 12);
+    assert.equal(r.indicadores.preparo.mediaDia, 17.5);
     assert.equal(r.indicadores.preparo.amostras, 2);
     assert.equal(r.indicadores.entrega.mediaDia, 27.5);
     assert.equal(r.indicadores.vida.mediaDia, 45);
+    // Mesmo conjunto de pedidos nos três: a média da vida é a soma das médias dos trechos.
+    assert.equal(r.indicadores.preparo.mediaDia + r.indicadores.entrega.mediaDia, r.indicadores.vida.mediaDia);
     assert.equal(r.indicadores.vida.amostras, 2);
     assert.equal(r.contagemDia.cancelados, 1);
     assert.equal(r.contagemDia.concluidos, 2);
   });
 
-  test("média com preparo aproximado é sinalizada e separa exatas de aproximadas", () => {
-    const r = montarResumo({ pedidos: [pedido(), pedido({ ready_event_at: null })], agoraMs: AGORA });
-    const p = r.indicadores.preparo;
-    assert.equal(p.amostrasExatas, 1);
-    assert.equal(p.amostrasAproximadas, 1);
-    assert.equal(p.mediaAproximada, true);
-    assert.equal(p.mediaDia, 12);
+  test("retirada e pedido sem detalhes ficam fora das médias de tempo e são contados à parte", () => {
+    const pedidos = [pedido(), pedido({ order_type: "TAKEOUT", dispatch_event_at: null, delivery_by: null, status_oficial_em: iso(5) }), pedido({ order_type: null })];
+    const r = montarResumo({ pedidos, agoraMs: AGORA });
+    for (const k of ["preparo", "entrega", "vida"]) assert.equal(r.indicadores[k].amostras, 1, k);
+    assert.equal(r.indicadores.vida.mediaDia, 40);
+    assert.equal(r.indicadores.preparo.retiradas, 1);
+    assert.equal(r.indicadores.preparo.semDetalhes, 1);
+    assert.equal(r.contagemDia.recebidos, 3);   // a retirada continua contada como pedido recebido
+    assert.equal(r.contagemDia.concluidos, 3);
+  });
+
+  test("a retirada aparece em 'últimos pedidos' sem nenhuma duração inventada", () => {
+    const r = montarResumo({ pedidos: [pedido({ order_type: "TAKEOUT", dispatch_event_at: null, delivery_by: null })], agoraMs: AGORA });
+    const linha = r.ultimosPedidos[0];
+    assert.equal(linha.tipo, "TAKEOUT");
+    assert.equal(linha.preparoMin, null);
+    assert.equal(linha.entregaMin, null);
+    assert.equal(linha.vidaMin, null);
   });
 
   test("último = o que terminou por último, com o número curto do pedido", () => {
-    const r = montarResumo({ pedidos: [pedido({ display_id: "A" }), pedido({ display_id: "B", ready_event_at: iso(40), dispatch_event_at: iso(35), status_oficial_em: iso(5) })], agoraMs: AGORA });
+    const r = montarResumo({ pedidos: [pedido({ display_id: "A" }), pedido({ display_id: "B", dispatch_event_at: iso(35), status_oficial_em: iso(5) })], agoraMs: AGORA });
     assert.equal(r.indicadores.preparo.ultimo.displayId, "B");
     assert.equal(r.indicadores.vida.ultimo.displayId, "B");
   });
@@ -186,7 +242,7 @@ describe("médias e amostras", () => {
     const e = r.indicadores.entrega;
     assert.deepEqual(e.porModalidade, { IFOOD: { mediaDia: 25, amostras: 1 }, MERCHANT: { mediaDia: 30, amostras: 1 } });
     assert.equal(e.aproximado, true);
-    assert.match(e.criterio, /não foi validada/);
+    assert.match(e.criterio, /conclusão registrada pelo iFood/);
   });
 
   test("pedido de teste e agendado ficam fora das médias", () => {

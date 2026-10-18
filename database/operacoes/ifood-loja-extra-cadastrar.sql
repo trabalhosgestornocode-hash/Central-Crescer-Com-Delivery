@@ -24,7 +24,8 @@ select count(*) = 1 as ok
 \if :ok
   insert into ifood_conexao_lojas (conexao_id, organizacao_id, unidade_id, merchant_id, rotulo)
   select c.id, c.organizacao_id, c.unidade_id, :'merchant', nullif(btrim(:'rotulo'), '')
-    from ifood_conexoes c where c.unidade_id = :'unidade'::uuid and c.status = 'ativa';
+    from ifood_conexoes c where c.unidade_id = :'unidade'::uuid and c.status = 'ativa'
+     and exists (select 1 from ifood_credenciais k where k.conexao_id = c.id and k.app_type = 'order' and k.status = 'ativa');   -- só a conexão de PEDIDOS (nunca a financeira de homologação)
   insert into plataforma_auditoria (ator_tipo, acao, entidade, entidade_id, organizacao_id, detalhes)
   select 'sistema', 'ifood.loja_extra_cadastrada', 'ifood_conexao_loja', l.id::text, l.organizacao_id,
          jsonb_build_object('estado', 'pendente', 'rotulo', l.rotulo, 'unidade_id', l.unidade_id, 'consulta_ao_ifood', false)

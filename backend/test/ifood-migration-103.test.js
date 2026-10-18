@@ -41,7 +41,13 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
     // 120 = fundação do Dashboard Financeiro (módulo gestao_financeira, concessões explícitas, auditoria; RLS sem policies).
     "120_gestao_financeira_fundacao.sql", "120_rollback.sql",
     // 121 = domínio financeiro (Agente 2): fin_* backend-only, RLS sem policies, auditoria imutável.
-    "121_gestao_financeira_dominio.sql", "121_rollback.sql"]);
+    "121_gestao_financeira_dominio.sql", "121_rollback.sql",
+    // 123 = módulo próprio checklist_operacional (catálogo + vínculos de quem já tem ifood); sem tocar as ações do pedido.
+    // A trilha financeira ocupa 120–122 (ainda não integrada à main); o 123 só é definitivo se continuar livre no merge.
+    "123_checklist_operacional_modulo.sql", "123_rollback.sql",
+    // 124 = FINALIDADE/AMBIENTE por conexão (Financial de homologação + Order de produção na mesma unidade); 125 = remove o índice
+    // "uma conexão viva por unidade" (etapa separada, só depois de o código novo estar homologado).
+    "124_ifood_conexao_finalidade.sql", "124_rollback.sql", "125_ifood_conexao_remove_indice_unidade.sql", "125_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });

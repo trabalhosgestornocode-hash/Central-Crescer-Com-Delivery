@@ -6,6 +6,7 @@
 // `respostasPolling` é a fila de respostas da consulta de eventos; nada sai para a rede.
 
 import { ifoodErro, IFOOD_ERROS } from "../../src/modules/ifood/ifood.errors.js";
+import { escolherConexao, ambienteDaFinalidade } from "../../src/modules/ifood/ifoodFinalidade.js";
 
 export const SACI = "00000000-0000-0000-0000-0000000000a1";          // unidade do piloto
 export const NORTH = "00000000-0000-0000-0000-0000000000b2";         // mesma organização, FORA do piloto, usa Financial
@@ -29,9 +30,18 @@ export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false
 
   const repo = {
     conexoes, credenciais,
-    async obterConexaoViva({ organizacaoId, unidadeId }) {
-      const c = conexoes.find((x) => x.organizacao_id === organizacaoId && x.unidade_id === unidadeId && viva(x));
+    // Mesma semântica do repositório real: seleção por finalidade (ou a única legada); sem finalidade, mais de uma = ambígua.
+    async listarConexoesVivas({ organizacaoId, unidadeId }) {
+      return conexoes.filter((x) => x.organizacao_id === organizacaoId && x.unidade_id === unidadeId && viva(x)).map((c) => ({ ...c }));
+    },
+    async obterConexaoViva({ organizacaoId, unidadeId, finalidade = null }) {
+      const c = escolherConexao(conexoes.filter((x) => x.organizacao_id === organizacaoId && x.unidade_id === unidadeId && viva(x)), finalidade);
       return c ? { ...c } : null;
+    },
+    async obterConexaoDoTenant({ organizacaoId, unidadeId, conexaoId }) {
+      const c = conexoes.find((x) => x.id === conexaoId && x.organizacao_id === organizacaoId && x.unidade_id === unidadeId);
+      if (!c) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
+      return { ...c };
     },
     async obterCredencial({ conexaoId, appType }) {
       const k = credenciais.find((x) => x.conexao_id === conexaoId && x.app_type === appType);
@@ -112,8 +122,8 @@ export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false
   const deps = { repo, vinculos, token, client, http: {}, agora: () => new Date(relogio.ms), log: (nivel, evento, dados) => logs.push({ nivel, evento, dados }) };
 
   /** Conexão criada pelo OAuth: `pendente`, sem merchant. */
-  const conectar = ({ unidadeId = SACI, organizacaoId = ORG, apps = ["order"], merchantId = null, status = merchantId ? "ativa" : "pendente", id } = {}) => {
-    const c = { id: id ?? `con-${(seq += 1)}`, organizacao_id: organizacaoId, unidade_id: unidadeId, merchant_id: merchantId, merchant_nome: null, merchant_razao_social: null, status, conectada_em: null, ultimo_erro: null };
+  const conectar = ({ unidadeId = SACI, organizacaoId = ORG, apps = ["order"], merchantId = null, status = merchantId ? "ativa" : "pendente", id, finalidade } = {}) => {
+    const c = { id: id ?? `con-${(seq += 1)}`, organizacao_id: organizacaoId, unidade_id: unidadeId, merchant_id: merchantId, ...(finalidade ? { finalidade, ambiente: ambienteDaFinalidade(finalidade) } : {}), merchant_nome: null, merchant_razao_social: null, status, conectada_em: null, ultimo_erro: null };
     conexoes.push(c);
     for (const a of apps) credenciais.push({ conexao_id: c.id, app_type: a, status: "ativa", expira_em: new Date(relogio.ms + 3 * 3_600_000).toISOString(), atualizado_em: new Date(relogio.ms).toISOString() });
     return c;

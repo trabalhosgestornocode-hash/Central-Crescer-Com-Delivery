@@ -113,7 +113,7 @@ describe("paridade absoluta entre Televisão e Tablet", () => {
       assert.match(html, /Últimos pedidos/);
       assert.match(html, /Aberto há mais de 4 h sem conclusão/);  // alerta crítico do pedido parado
       assert.match(html, /Avaliações ainda não conectadas/);      // Review não homologado: indisponível nos dois
-      assert.match(html, /a conclusão do iFood ainda não foi validada como entrega ao cliente/); // entrega aproximada
+      assert.match(html, /Conclusão registrada pelo iFood: não confirma, por si só, a entrega ao cliente/); // entrega: conclusão do iFood
       assert.match(html, /Ao vivo/);
     }
     // Os números que aparecem (minutos, contadores, horários) são os mesmos, na mesma ordem.

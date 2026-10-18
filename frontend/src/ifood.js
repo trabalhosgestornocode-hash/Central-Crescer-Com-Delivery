@@ -21,7 +21,7 @@ import {
   saudeSalesVsEvents, saudeEventsVsSettlements, saudeSettlementsVsReconciliation,
   montarEvidenciaHomologacao, montarExportacaoJson, montarExportacaoHtml, rotuloImpactoRepasse,
   rotuloStatusPedido, rotuloTipoPedido, ORDER_ROTULO, EVENTS_ROTULO, derivarEstadoOrder, derivarEstadoEvents, textoAtencao,
-  validarIdLojaDigitado, derivarLojasAdicionais, AVISO_LOJA_ADICIONAL,
+  validarIdLojaDigitado, derivarLojasAdicionais, AVISO_LOJA_ADICIONAL, montarCartoesConexao,
   resumirPagamentosVenda, rotuloMetodoPagamento, rotuloResponsavelPagamento, rotuloTipoPagamento, classificarLancamentosVenda,
   FASE_ON_DEMAND_ROTULO, MENSAGEM_ERRO_OD_SEM_MOTIVO, mascararRequestId, TEXTO_FONTE_ON_DEMAND, TEXTO_AMOSTRA_HOMOLOGACAO,
   itemParaJsonTecnico, derivarHistoricoOnDemand, derivarCompetenciaReconciliation, fmtCompetencia,
@@ -158,6 +158,30 @@ function blocoOperacao(statusApi) {
     </div>`;
 }
 
+// CONEXÕES da unidade — só quando há conexões separadas (Financial de homologação + Order de produção): um cartão por conexão, cada um com
+// a SUA situação e a SUA ação de desconectar (nunca "desconectar tudo"). Sem `conexoes` no status a tela é a de sempre.
+function blocoConexoes(statusApi, { podeGerenciar = true } = {}) {
+  const cartoes = montarCartoesConexao(statusApi);
+  if (!cartoes.length) return "";
+  return `
+    <div class="ifood-card" id="ifood-conexoes">
+      <div class="ifood-secao-rotulo">Conexões desta unidade</div>
+      <p class="ifood-instrucao">Cada conexão é independente: autorizar, reconectar ou desconectar uma delas não altera a outra.</p>
+      <div class="ifood-conexoes-lista">
+        ${cartoes.map((c) => `
+          <div class="ifood-conexao-item" id="ifood-conexao-${esc(c.finalidade)}" data-conexao-id="${esc(c.id)}" data-finalidade="${esc(c.finalidade)}">
+            <div class="ifood-app-linha">
+              <span class="ifood-app-nome">${esc(c.titulo)}${c.selo ? ` <span class="pill muted" data-selo>${esc(c.selo)}</span>` : ""}</span>
+              <span class="pill ${c.status.classe}" data-status-conexao>${esc(c.status.rotulo)}</span>
+            </div>
+            <div class="ifood-merchant-meta" data-merchant-conexao>Loja: <span class="mono">${esc(c.merchant)}</span></div>
+            ${c.credenciais.map((k) => `<div class="ifood-app-linha"><span class="ifood-app-nome">${esc(k.app)}</span><span class="pill ${k.classe}">${esc(k.rotulo)}</span></div>`).join("")}
+            ${podeGerenciar ? `<div class="ifood-acoes"><button class="btn btn-ghost" data-desconectar-conexao="${esc(c.id)}">Desconectar esta conexão (${esc(c.titulo)})</button></div>` : ""}
+          </div>`).join("")}
+      </div>
+    </div>`;
+}
+
 // DADOS — Desempenho (Analytics) e Financeiro, como antes (assistente próprio).
 function blocoDados(e) {
   return `
@@ -176,7 +200,7 @@ function blocoLoja(e, statusApi) {
   const ultimoEvento = statusApi?.order?.ultimoEvento ?? null;
   return `
     <div class="ifood-card" id="ifood-loja">
-      <div class="ifood-secao-rotulo">Loja iFood vinculada</div>
+      <div class="ifood-secao-rotulo">${statusApi?.conexoes?.some((c) => c.finalidade === "financeiro_homologacao") ? "Loja do Financial (homologação)" : "Loja iFood vinculada"}</div>
       ${m ? `
         <div class="ifood-merchant">
           <div class="ifood-merchant-nome">${esc(m.nome || "—")}</div>
@@ -251,6 +275,7 @@ export function montarHtmlPainel(statusApi, opcoes = {}) {
         <div class="ifood-acoes">${acoes.join("") || '<span class="ifood-tudo-ok">Integração conectada.</span>'}</div>
       </div>
 
+      ${blocoConexoes(statusApi, opcoes)}
       ${blocoOperacao(statusApi)}
       ${blocoDados(e)}
       ${blocoLoja(e, statusApi)}
@@ -313,6 +338,7 @@ function pintarPainel() {
 
   ligarAcoesDoPainel();
   for (const b of els("#view [data-autorizar-loja]")) b.addEventListener("click", () => abrirWizardLoja(b.dataset.autorizarLoja));
+  for (const b of els("#view [data-desconectar-conexao]")) b.addEventListener("click", () => desconectarConexao(b.dataset.desconectarConexao));
   el("#ifood-abrir-financeiro")?.addEventListener("click", abrirFinanceiro);
   el("#ifood-abrir-pedidos")?.addEventListener("click", abrirPedidos);
 }
@@ -856,6 +882,22 @@ async function desconectar() {
   try {
     await api.ifoodDesconectar();
     toast("Integração iFood desconectada localmente. Para revogação total, remova o acesso também no Portal do Parceiro iFood.");
+  } catch (e) {
+    toast(e.message || "Não foi possível desconectar.");
+  }
+  carregarStatus();
+}
+
+// Desconecta UMA conexão (a do cartão clicado). A confirmação nomeia a conexão; o servidor reconfere que ela é desta unidade.
+async function desconectarConexao(conexaoId) {
+  const cartao = montarCartoesConexao(estado.status).find((c) => c.id === conexaoId);
+  if (!cartao) return;
+  if (!window.confirm(cartao.confirmacaoDesconectar)) return;
+  const btn = el(`#view [data-desconectar-conexao="${conexaoId}"]`);
+  if (btn) btn.disabled = true;
+  try {
+    await api.ifoodDesconectar(conexaoId);
+    toast(`Conexão "${cartao.titulo}" desconectada localmente. As outras conexões da unidade não foram alteradas.`);
   } catch (e) {
     toast(e.message || "Não foi possível desconectar.");
   }

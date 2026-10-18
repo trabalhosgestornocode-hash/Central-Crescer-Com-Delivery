@@ -22,6 +22,8 @@ import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
 import * as tokenService from "./ifoodToken.service.js";
 import { gravarCredencialComProtecao } from "./ifoodCredencialProtecao.js";
+import { FINALIDADES, finalidadeDoApp } from "./ifoodFinalidade.js";
+import { destinoDoOAuth } from "./ifoodConexaoDestino.js";
 
 // Política de ambiente (config), não dependência injetável: sempre o tokenService real. `order` exige a
 // unidade no piloto — checado AQUI, antes de qualquer chamada ao iFood, no início E na conclusão do OAuth.
@@ -59,6 +61,8 @@ export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuari
   validarAppType(appType, unidadeId);
   // Antes de qualquer chamada ao iFood: a loja-alvo existe nesta unidade (e a conexão da unidade está viva).
   const loja = await resolverLojaAlvo({ repo, organizacaoId, unidadeId, appType, merchantId, lojaId });
+  // Destino da autorização (conexão da finalidade do app) conferido ANTES do userCode: ambiguidade/rotulagem pendente falham sem chamar o iFood.
+  if (!loja) await destinoDoOAuth({ repo, organizacaoId, unidadeId, appType });
   // Unidade do TENANT (req.tenant, via controller) — decide o app de teste no Financial
   // por unidade. Lança IFOOD_APP_SEM_CREDENCIAL se faltar ENV (sem fallback de app).
   const credencial = token.credenciaisDoApp(appType, { unidadeId });
@@ -92,6 +96,7 @@ export async function iniciarConexao({ organizacaoId, unidadeId, appType, usuari
     verificationUrl: resp?.verificationUrl ?? null,
     verificationUrlComplete: resp?.verificationUrlComplete ?? null,
     expiraEm, criadoPor: usuarioId, ...(loja ? { lojaId: loja.id } : {}),
+    finalidade: loja ? FINALIDADES.PEDIDOS_PRODUCAO : finalidadeDoApp(appType),
   });
 
   ifoodLog("info", "oauth.iniciado", { organizacaoId, unidadeId, appType, sessionId: sessao.id, expiraEm, origemCredencial, ...(loja ? { lojaAlvo: true } : {}) });
@@ -129,6 +134,12 @@ export async function concluirAutorizacao({
     throw ifoodErro(IFOOD_ERROS.IFOOD_OAUTH_SESSAO_EXPIRADA);
   }
 
+  // A sessão só conclui na conexão da finalidade para a qual nasceu (sessões anteriores à 124 não têm finalidade: valem pela do app).
+  if (sessao.finalidade && sessao.finalidade !== finalidadeDoApp(appType)) {
+    await repo.fecharSessaoOAuth({ organizacaoId, unidadeId, sessaoId, status: "failed" });
+    throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_OAUTH_INVALIDO);
+  }
+
   const verifier = decifrar(sessao.authorization_code_verifier_cifrado);
   if (!verifier) throw ifoodErro(IFOOD_ERROS.IFOOD_OAUTH_SESSAO_JA_USADA);
 
@@ -140,7 +151,7 @@ export async function concluirAutorizacao({
       if (appType !== IFOOD_APP_ORDER) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_OAUTH_INVALIDO);
       loja = await repo.obterLojaAdicionalDaUnidade({ organizacaoId, unidadeId, lojaId: sessao.loja_id });
       if (!loja) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_NAO_ENCONTRADA);
-      conexaoDaLoja = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+      conexaoDaLoja = await repo.obterConexaoViva({ organizacaoId, unidadeId, finalidade: FINALIDADES.PEDIDOS_PRODUCAO });
       if (!conexaoDaLoja) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
       if (loja.conexao_id !== conexaoDaLoja.id) throw ifoodErro(IFOOD_ERROS.IFOOD_LOJA_OAUTH_INVALIDO);
     } catch (e) {
@@ -165,7 +176,16 @@ export async function concluirAutorizacao({
   }
 
   // Loja-alvo: NUNCA cria nem altera a conexão da unidade; só a credencial própria da loja.
-  const conexao = conexaoDaLoja ?? await repo.obterOuCriarConexao({ organizacaoId, unidadeId, criadoPor: usuarioId });
+  let conexao = conexaoDaLoja;
+  if (!conexao) {
+    const destino = await destinoDoOAuth({ repo, organizacaoId, unidadeId, appType }).catch(async (e) => {
+      await repo.fecharSessaoOAuth({ organizacaoId, unidadeId, sessaoId, status: "failed" });   // o código já foi trocado: não deixa a sessão aberta
+      throw e;
+    });
+    conexao = destino.acao === "usar"
+      ? destino.conexao
+      : await repo.obterOuCriarConexao({ organizacaoId, unidadeId, criadoPor: usuarioId, finalidade: destino.finalidade });
+  }
   const gravacao = await gravarCredencialComProtecao({ conexao, appType, tokens, repo, token, organizacaoId, unidadeId, sessaoId, loja });
   await repo.fecharSessaoOAuth({ organizacaoId, unidadeId, sessaoId, status: "authorized" });
 

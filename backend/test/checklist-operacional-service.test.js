@@ -20,7 +20,7 @@ const { default: express } = await import("express");
 const service = await import("../src/modules/checklist-operacional/checklistOperacional.service.js");
 const repoChecklist = await import("../src/modules/checklist-operacional/checklistOperacional.repository.js");
 const { checklistOperacionalRouter } = await import("../src/modules/checklist-operacional/checklistOperacional.routes.js");
-const { requireAuth, requireModulo } = await import("../src/middlewares/auth.js");
+const { requireAuth, requireAlgumModulo } = await import("../src/middlewares/auth.js");
 const { errorHandler } = await import("../src/middlewares/errorHandler.js");
 const { MODULOS } = await import("../src/shared/modulos.js");
 const { permissoesDoPapel } = await import("../src/shared/permissoes.js");
@@ -157,6 +157,52 @@ describe("resumo do service", () => {
     assert.equal(ifood.chamadas.some(([k]) => k === "obs"), false, "sem conexão não consulta observabilidade");
   });
 
+  test("unidade SEM integração iFood: modo sem_integracao, nenhuma chamada obrigatória ao iFood, nada inventado", async () => {
+    const ifood = ifoodRepoFalso({ conexao: null });
+    const { r } = await resumoCom({ ifood });
+    assert.equal(r.modo, "sem_integracao");
+    assert.equal(r.semPedidosNoDia, true);
+    assert.deepEqual(ifood.chamadas.map(([k]) => k), ["conexao"], "só consulta o vínculo local; nem credencial nem observabilidade");
+    assert.equal(r.pedidosAtivos.length, 0);
+    assert.equal(r.ultimosPedidos.length, 0);
+    for (const k of ["preparo", "entrega", "vida"]) {
+      assert.equal(r.indicadores[k].mediaDia, null, k);
+      assert.equal(r.indicadores[k].ultimo, null, k);
+      assert.equal(r.indicadores[k].amostras, 0, k);
+    }
+    assert.equal(r.lojas, undefined, "sem lojas adicionais a resposta não ganha o campo");
+  });
+
+  test("conexão com loja mas SEM credencial de pedidos: integrado (o motivo específico aparece); com credencial (mesmo parada): integrado", async () => {
+    const semCred = await resumoCom({ ifood: ifoodRepoFalso({ credenciais: [] }) });
+    assert.equal(semCred.r.modo, "integrado");
+    assert.equal(semCred.r.integracao.motivo, "sem_credencial_order");
+    // Sem loja vinculada MAS com pedidos persistidos (já houve conexão): os números existem, então não é "sem integração".
+    const comPedidos = await resumoCom({ ifood: ifoodRepoFalso({ conexao: null }), linhas: [linha(UN_A)] });
+    assert.equal(comPedidos.r.modo, "integrado");
+    assert.equal(service.derivarModo({ estado: "nao_ativada", motivo: "sem_loja_vinculada" }), "sem_integracao");
+    assert.equal(service.derivarModo({ estado: "nao_ativada", motivo: "sem_loja_vinculada" }, { temPedidos: true }), "integrado");
+    assert.equal(service.derivarModo({ estado: "nao_ativada", motivo: "recebimento_desligado" }), "integrado");
+    assert.equal(service.derivarModo({ estado: "desatualizado", motivo: "recebimento_parado" }), "integrado");
+    assert.equal((await resumoCom()).r.modo, "integrado");
+  });
+
+  test("duas unidades da MESMA empresa: a sem integração não enxerga os pedidos da integrada (consultas sempre por org + unidade)", async () => {
+    const linhas = [linha(UN_A, { order_id: "so-da-A" })];
+    const A = await resumoCom({ linhas, unidade: UN_A });
+    const B = await resumoCom({ linhas, unidade: UN_B, ifood: ifoodRepoFalso({ conexao: null }) });
+    assert.equal(A.r.modo, "integrado");
+    assert.equal(A.r.contagemDia.recebidos, 1);
+    assert.equal(B.r.modo, "sem_integracao");
+    assert.equal(B.r.contagemDia.recebidos, 0);
+    assert.equal(B.r.ultimosPedidos.length, 0);
+    for (const f of B.db.filtros) {
+      if (f[0] === "eq" && f[1] === "unidade_id") assert.equal(f[2], UN_B);
+    }
+    assert.ok(B.db.filtros.some((f) => f[0] === "eq" && f[1] === "unidade_id" && f[2] === UN_B));
+    assert.ok(B.db.filtros.some((f) => f[0] === "eq" && f[1] === "organizacao_id" && f[2] === ORG));
+  });
+
   test("integração ativa sem pedidos: ao vivo + sem pedidos no dia (estados distintos)", async () => {
     const { r } = await resumoCom();
     assert.equal(r.integracao.estado, "ao_vivo");
@@ -199,6 +245,39 @@ describe("resumo do service", () => {
   });
 });
 
+describe("multi-conexão iFood: o Checklist consulta SÓ a conexão de pedidos", () => {
+  const agoraMs = AGORA.getTime();
+  const financeira = { id: "c-fin", status: "ativa", merchant_id: "m-teste", finalidade: "financeiro_homologacao" };
+
+  test("unidade só com o Financial de homologação: integração de pedidos NÃO ativada (e não \"sem integração com o iFood\")", () => {
+    const e = service.derivarEstadoIntegracao({ conexao: null, outraConexaoViva: true, agoraMs });
+    assert.equal(e.estado, "nao_ativada");
+    assert.equal(e.motivo, "sem_credencial_order");
+    assert.equal(service.derivarModo(e, { temPedidos: false }), "integrado");
+    // sem NENHUMA conexão continua sendo "sem loja vinculada" (comportamento anterior)
+    assert.equal(service.derivarEstadoIntegracao({ conexao: null, agoraMs }).motivo, "sem_loja_vinculada");
+  });
+
+  test("obterResumo pede a conexão de finalidade pedidos_producao; a financeira de teste não a substitui nem aparece como loja", async () => {
+    const ifood = { ...ifoodRepoFalso({ conexao: null }), listarConexoesVivas: async () => [financeira] };
+    const { r } = await resumoCom({ unidade: UN_B, ifood });
+    assert.deepEqual(ifood.chamadas.find(([k]) => k === "conexao")[1], { organizacaoId: ORG, unidadeId: UN_B, finalidade: "pedidos_producao" });
+    assert.equal(r.integracao.estado, "nao_ativada");
+    assert.equal(r.integracao.motivo, "sem_credencial_order");
+    assert.equal(r.modo, "integrado");
+    assert.ok(!ifood.chamadas.some(([k]) => k === "obs"), "não consulta observabilidade do merchant de teste");
+  });
+
+  test("com a conexão de pedidos ativa ao lado da financeira, o Checklist usa a de pedidos (merchant dela)", async () => {
+    const pedidos = { id: "c-ped", status: "ativa", merchant_id: "m-real", finalidade: "pedidos_producao" };
+    const ifood = { ...ifoodRepoFalso({ conexao: pedidos }), listarConexoesVivas: async () => [financeira, pedidos] };
+    const { r } = await resumoCom({ unidade: UN_B, ifood });
+    assert.equal(r.integracao.estado, "ao_vivo");
+    assert.equal(ifood.chamadas.find(([k]) => k === "obs")[1].merchantId, "m-real");
+    assert.equal(ifood.chamadas.find(([k]) => k === "credenciais")[1].conexaoId, "c-ped");
+  });
+});
+
 describe("isolamento entre unidades", () => {
   const linhas = [linha(UN_A), linha(UN_A, { status_oficial: "CONFIRMED", ready_event_at: null, dispatch_event_at: null, placed_event_created_at: iso(3) }), linha(UN_B), linha(UN_B), linha(UN_B)];
 
@@ -221,7 +300,7 @@ describe("isolamento entre unidades", () => {
     const ifood = ifoodRepoFalso();
     await resumoCom({ unidade: UN_B, ifood });
     const [, arg] = ifood.chamadas.find(([k]) => k === "conexao");
-    assert.deepEqual(arg, { organizacaoId: ORG, unidadeId: UN_B });
+    assert.deepEqual(arg, { organizacaoId: ORG, unidadeId: UN_B, finalidade: "pedidos_producao" });   // só a conexão de pedidos
     const [, obs] = ifood.chamadas.find(([k]) => k === "obs");
     assert.equal(obs.merchantId, "m-1"); // o da conexão da própria unidade
   });
@@ -272,7 +351,7 @@ function montarApp() {
   }, (req, _res, next) => {
     const papel = req.headers["x-teste-papel"];
     if (papel) {
-      const modulos = String(req.headers["x-teste-modulos"] ?? MODULOS.IFOOD).split(",").filter(Boolean);
+      const modulos = String(req.headers["x-teste-modulos"] ?? MODULOS.CHECKLIST_OPERACIONAL).split(",").filter(Boolean);
       // `x-teste-sem`: retira permissões do papel (lista separada por vírgula; prova o 403 de PERMISSÃO, não só o de módulo).
       const sem = String(req.headers["x-teste-sem"] ?? "").split(",").filter(Boolean);
       const permissoes = permissoesDoPapel(papel).filter((p) => !sem.includes(p));
@@ -280,7 +359,7 @@ function montarApp() {
       req.tenant = { organizacaoId: ORG, unidadeId: null }; // sem unidade: o controller para ANTES de qualquer banco
     }
     next();
-  }, requireModulo(MODULOS.IFOOD), checklistOperacionalRouter);
+  }, requireAlgumModulo(MODULOS.CHECKLIST_OPERACIONAL, MODULOS.IFOOD), checklistOperacionalRouter);   // a MESMA régua de routes.js
   app.use(errorHandler);
   return app;
 }
@@ -305,8 +384,30 @@ describe("HTTP — permissões do Checklist", async () => {
     assert.equal((await chamar(server, "/api/v1/resumo")).status, 401);
   });
 
-  test("empresa sem o módulo iFood: 403 (o Dashboard iFood sozinho não basta)", async () => {
+  test("empresa sem o módulo do Checklist nem o iFood: 403 (o Dashboard iFood sozinho não basta)", async () => {
     const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-modulos": MODULOS.IFOOD_DASHBOARD }));
+    assert.equal(r.status, 403);
+    assert.equal((await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-modulos": "dashboard,products_cmv" }))).status, 403);
+  });
+
+  test("o módulo checklist_operacional SOZINHO abre o Checklist, sem o módulo iFood (empresa sem integração)", async () => {
+    const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-modulos": MODULOS.CHECKLIST_OPERACIONAL }));
+    assert.equal(r.status, 400);   // passou módulo e permissão; para no "selecione a unidade"
+  });
+
+  test("transição: sessão aberta antes da migration (só o módulo ifood) continua abrindo o Checklist", async () => {
+    const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-modulos": MODULOS.IFOOD }));
+    assert.equal(r.status, 400);
+  });
+
+  test("sessão da TV (perfil de exibição) aberta ANTES da migration — só o módulo ifood — continua abrindo; com o módulo novo também; sem nenhum, 403", async () => {
+    assert.equal((await chamar(server, "/api/v1/resumo", h("display_operator", { "x-teste-modulos": MODULOS.IFOOD }))).status, 400);
+    assert.equal((await chamar(server, "/api/v1/resumo", h("display_operator", { "x-teste-modulos": MODULOS.CHECKLIST_OPERACIONAL }))).status, 400);
+    assert.equal((await chamar(server, "/api/v1/resumo", h("display_operator", { "x-teste-modulos": "dashboard" }))).status, 403);
+  });
+
+  test("o módulo NÃO substitui a permissão: com módulo, sem checklist.visualizar nem integracoes.ver, 403", async () => {
+    const r = await chamar(server, "/api/v1/resumo", h("unit_manager", { "x-teste-modulos": MODULOS.CHECKLIST_OPERACIONAL, "x-teste-sem": "integracoes.ver,checklist.visualizar" }));
     assert.equal(r.status, 403);
   });
 
@@ -335,14 +436,39 @@ describe("HTTP — permissões do Checklist", async () => {
     assert.equal(r.status, 400);
   });
 
+  test("o tenant vem SÓ do contexto: unidade/empresa na query ou em cabeçalhos são ignoradas (sem unidade no contexto = 400, nunca a do pedido)", async () => {
+    const qs = `?unidadeId=${UN_B}&organizacaoId=99999999-9999-4999-8999-999999999999&unidade_id=${UN_B}`;
+    const r = await chamar(server, `/api/v1/resumo${qs}`, h("unit_manager", { "x-unidade-id": UN_B, "x-organizacao-id": ORG, "x-teste-unidade": UN_B }));
+    assert.equal(r.status, 400);
+    assert.ok(!JSON.stringify(r.json).match(/pedido|merchant|order/i));
+  });
+
+  test("o controller não lê query, corpo, parâmetros nem cabeçalhos (só req.tenant)", () => {
+    const fonte = readFileSync(path.join(AQUI, "../src/modules/checklist-operacional/checklistOperacional.controller.js"), "utf8");
+    const codigo = fonte.replace(/^\s*\/\/.*$/gm, "");
+    assert.doesNotMatch(codigo, /req\.(query|body|params|headers)/);
+    assert.match(codigo, /req\.tenant/);
+  });
+
+  test("métodos de escrita não existem: POST/PUT/DELETE em /resumo = 404", async () => {
+    const { port } = server.address();
+    for (const method of ["POST", "PUT", "DELETE", "PATCH"]) {
+      const status = await new Promise((resolve, reject) => {
+        const rq = http.request({ host: "127.0.0.1", port, path: "/api/v1/resumo", method, headers: h("unit_manager") }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode)); });
+        rq.on("error", reject); rq.end();
+      });
+      assert.equal(status, 404, method);
+    }
+  });
+
   test("só GET /resumo existe — nenhuma rota de escrita", () => {
     const rotas = checklistOperacionalRouter.stack.filter((l) => l.route).flatMap((l) => Object.keys(l.route.methods).map((m) => `${m.toUpperCase()} ${l.route.path}`));
     assert.deepEqual(rotas, ["GET /resumo"]);
   });
 
-  test("routes.js monta o Checklist depois do gate de contexto, com requireModulo(IFOOD)", () => {
+  test("routes.js monta o Checklist depois do gate de contexto, com o módulo próprio (e o iFood só na transição)", () => {
     const ROUTES = readFileSync(path.join(AQUI, "../src/routes.js"), "utf8");
-    assert.match(ROUTES, /tenant\.use\(\s*["']\/checklist-operacional["']\s*,\s*requireModulo\(MODULOS\.IFOOD\)\s*,\s*checklistOperacionalRouter\s*\)/);
+    assert.match(ROUTES, /tenant\.use\(\s*["']\/checklist-operacional["']\s*,\s*requireAlgumModulo\(MODULOS\.CHECKLIST_OPERACIONAL,\s*MODULOS\.IFOOD\)\s*,\s*checklistOperacionalRouter\s*\)/);
     assert.ok(ROUTES.indexOf("tenant.use(requireContexto)") < ROUTES.indexOf('tenant.use("/checklist-operacional"'));
   });
 });

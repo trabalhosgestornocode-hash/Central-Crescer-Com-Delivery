@@ -45,6 +45,7 @@ function repoFalso() {
   const estado = { sessao: null };
   return {
     estado,
+    async obterConexaoViva() { return null; },
     async expirarSessoesVencidas() { return []; },
     async criarSessaoOAuth(args) {
       estado.sessao = { id: "sess-1", status: "pending", app_type: args.appType, expira_em: args.expiraEm };

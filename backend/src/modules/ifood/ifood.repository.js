@@ -15,6 +15,7 @@ import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { ifoodErro, IFOOD_ERROS } from "./ifood.errors.js";
 import { IFOOD_EVENTS } from "./ifood.constants.js";
+import { escolherConexao, ambienteDaFinalidade, FINALIDADES } from "./ifoodFinalidade.js";
 
 const T = {
   conexoes: "ifood_conexoes",
@@ -41,10 +42,10 @@ const ok = (res) => {
 
 export async function criarSessaoOAuth({
   organizacaoId, unidadeId, appType, userCode, verifierCifrado,
-  verificationUrl, verificationUrlComplete, expiraEm, criadoPor, lojaId = null,
+  verificationUrl, verificationUrlComplete, expiraEm, criadoPor, lojaId = null, finalidade = null,
 }) {
   exigirTenant(organizacaoId, unidadeId);
-  return ok(await supabase.from(T.sessoes).insert({
+  const linha = {
     organizacao_id: organizacaoId, unidade_id: unidadeId, app_type: appType,
     ...(lojaId ? { loja_id: lojaId } : {}),   // só quando há loja-alvo: sem a coluna (migration 118 ausente) o fluxo da conexão segue igual
     user_code: userCode,
@@ -52,7 +53,14 @@ export async function criarSessaoOAuth({
     verification_url: verificationUrl ?? null,
     verification_url_complete: verificationUrlComplete ?? null,
     expira_em: expiraEm, status: "pending", criado_por: criadoPor ?? null,
-  }).select().single());
+  };
+  // A sessão carrega a finalidade da conexão-alvo (migration 124). Código no ar antes da migration (coluna ausente): grava sem ela —
+  // a reautorização da Saci nunca pode depender da ordem de publicação.
+  const comFinalidade = await supabase.from(T.sessoes).insert(finalidade ? { ...linha, finalidade } : linha).select().single();
+  if (finalidade && comFinalidade.error && (comFinalidade.error.code === "PGRST204" || comFinalidade.error.code === "42703" || /finalidade/i.test(comFinalidade.error.message ?? ""))) {
+    return ok(await supabase.from(T.sessoes).insert(linha).select().single());
+  }
+  return ok(comFinalidade);
 }
 
 /** Sessão OAuth pelo id, já conferindo tenant + appType. */
@@ -99,12 +107,14 @@ export async function fecharSessaoOAuth({ organizacaoId, unidadeId, sessaoId, st
 
 /** Cancela (marca 'failed' + anula verifier) toda sessão OAuth ainda pending
  *  da unidade — usado na desconexão local. */
-export async function cancelarSessoesPendentes({ organizacaoId, unidadeId }) {
+export async function cancelarSessoesPendentes({ organizacaoId, unidadeId, appTypes = null }) {
   exigirTenant(organizacaoId, unidadeId);
-  return ok(await supabase.from(T.sessoes)
+  // `appTypes`: só as sessões dos apps da conexão que está sendo desconectada — a autorização em curso da OUTRA conexão da unidade não é tocada.
+  let q = supabase.from(T.sessoes)
     .update({ status: "failed", authorization_code_verifier_cifrado: null, verifier_consumido_em: new Date().toISOString() })
-    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("status", "pending")
-    .select("id"));
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("status", "pending");
+  if (Array.isArray(appTypes)) q = q.in("app_type", appTypes);
+  return ok(await q.select("id"));
 }
 
 /** Expira em lote as sessões pending já vencidas desta unidade (higiene). */
@@ -121,13 +131,24 @@ export async function expirarSessoesVencidas({ organizacaoId, unidadeId }) {
 // CONEXÃO (vínculo unidade <-> loja iFood)
 // =====================================================================
 
-/** A conexão viva (não revogada) da unidade, se existir. */
-export async function obterConexaoViva({ organizacaoId, unidadeId }) {
+/**
+ * TODAS as conexões vivas (não revogadas) da unidade, em ordem ESTÁVEL (criação, depois id), definida aqui em código — só para listar
+ * e exibir; a ESCOLHA de uma conexão nunca depende desta ordem (ver escolherConexao).
+ */
+export async function listarConexoesVivas({ organizacaoId, unidadeId }) {
   exigirTenant(organizacaoId, unidadeId);
-  return ok(await supabase.from(T.conexoes).select("*")
+  const linhas = ok(await supabase.from(T.conexoes).select("*")
     .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
-    .neq("status", "revogada")
-    .maybeSingle());
+    .neq("status", "revogada")) ?? [];
+  return [...linhas].sort((x, y) => String(x.criado_em ?? "").localeCompare(String(y.criado_em ?? "")) || String(x.id).localeCompare(String(y.id)));
+}
+
+/**
+ * A conexão viva da unidade PARA UMA FINALIDADE (ver ifoodFinalidade.js): a de finalidade exata, ou a legada quando é a única.
+ * Sem `finalidade`: a única conexão viva; havendo mais de uma lança IFOOD_CONEXAO_AMBIGUA (nunca escolhe por ordem de registro).
+ */
+export async function obterConexaoViva({ organizacaoId, unidadeId, finalidade = null }) {
+  return escolherConexao(await listarConexoesVivas({ organizacaoId, unidadeId }), finalidade);
 }
 
 /** Conexão por id, conferindo tenant. Lança se não pertencer. */
@@ -141,19 +162,30 @@ export async function obterConexaoDoTenant({ organizacaoId, unidadeId, conexaoId
 }
 
 /** Cria a conexão 'pendente' (sem merchant ainda). */
-export async function criarConexao({ organizacaoId, unidadeId, criadoPor }) {
+export async function criarConexao({ organizacaoId, unidadeId, criadoPor, finalidade = null }) {
   exigirTenant(organizacaoId, unidadeId);
+  // Finalidade/ambiente só vão no INSERT quando há finalidade explícita (sem ela a linha nasce `legado`, como antes da 124).
   return ok(await supabase.from(T.conexoes).insert({
     organizacao_id: organizacaoId, unidade_id: unidadeId,
     status: "pendente", criado_por: criadoPor ?? null,
+    ...(finalidade && finalidade !== FINALIDADES.LEGADO ? { finalidade, ambiente: ambienteDaFinalidade(finalidade) } : {}),
   }).select().single());
 }
 
-/** Garante que existe uma conexão viva para a unidade e a devolve. */
-export async function obterOuCriarConexao({ organizacaoId, unidadeId, criadoPor }) {
-  const existente = await obterConexaoViva({ organizacaoId, unidadeId });
+/** Garante que existe uma conexão viva da FINALIDADE para a unidade e a devolve (cria só a dessa finalidade; nunca toca nas outras). */
+export async function obterOuCriarConexao({ organizacaoId, unidadeId, criadoPor, finalidade = null }) {
+  const existente = await obterConexaoViva({ organizacaoId, unidadeId, finalidade });
   if (existente) return existente;
-  return criarConexao({ organizacaoId, unidadeId, criadoPor });
+  try {
+    return await criarConexao({ organizacaoId, unidadeId, criadoPor, finalidade });
+  } catch (e) {
+    // Duas autorizações simultâneas da mesma finalidade: o índice único barra a 2ª — usa a conexão que a 1ª criou.
+    if (/uq_ifood_conexao_unidade/.test(String(e?.message ?? ""))) {
+      const criada = await obterConexaoViva({ organizacaoId, unidadeId, finalidade });
+      if (criada) return criada;
+    }
+    throw e;
+  }
 }
 
 export async function atualizarConexao({ organizacaoId, unidadeId, conexaoId, campos }) {

@@ -12,6 +12,10 @@
 //   desatualizado  havia recebimento, mas parou (lease vencido) ou a credencial pede nova autorização
 //   ao_vivo        o poller renovou o lease há pouco
 // Os pedidos já persistidos aparecem em QUALQUER estado — o selo diz se eles ainda refletem a operação.
+//
+// MODO (aditivo, para a tela): `sem_integracao` = a unidade não tem loja iFood vinculada (nem credencial de pedidos);
+// o Checklist abre normalmente, sem pedidos e sem erro, com um aviso informativo. `integrado` = há vínculo (mesmo que o
+// recebimento esteja parado ou desligado — isso é o `estado`). Nada aqui chama o iFood.
 
 import * as repo from "./checklistOperacional.repository.js";
 import * as ifoodRepo from "../ifood/ifood.repository.js";
@@ -39,11 +43,14 @@ const est = (estado, motivo, extra = {}) => ({ estado, motivo, mensagem: motivo 
 
 /**
  * PURA: estado da integração da unidade.
- * @param {{conexao: object|null, credencialOrder: object|null, observabilidade: object|null, agoraMs: number}} p
+ * `outraConexaoViva`: a unidade TEM conexão iFood, mas não a de pedidos (ex.: só o Financial de homologação) — a integração de pedidos
+ * está "não ativada" (a loja não autorizou o app de pedidos), e NÃO "sem integração com o iFood".
+ * @param {{conexao: object|null, credencialOrder: object|null, observabilidade: object|null, agoraMs: number, outraConexaoViva?: boolean}} p
  */
-export function derivarEstadoIntegracao({ conexao, credencialOrder, observabilidade, agoraMs }) {
+export function derivarEstadoIntegracao({ conexao, credencialOrder, observabilidade, agoraMs, outraConexaoViva = false }) {
   const ultimoEventoEm = observabilidade?.ultimoEvento ?? null;
   const base = { ultimaSincronizacao: null, ultimoEventoEm };
+  if (!conexao && outraConexaoViva) return est("nao_ativada", "sem_credencial_order", base);
   if (!conexao || !conexao.merchant_id || !["ativa", "reauth_required"].includes(conexao.status)) return est("nao_ativada", "sem_loja_vinculada", base);
   if (!credencialOrder) return est("nao_ativada", "sem_credencial_order", base);
   if (conexao.status === "reauth_required" || credencialOrder.status === "reauth_required") {
@@ -62,6 +69,18 @@ export function derivarEstadoIntegracao({ conexao, credencialOrder, observabilid
 }
 
 /**
+ * PURA: a unidade tem integração iFood? `sem_integracao` SÓ quando não há loja vinculada E não existe nenhum pedido persistido para mostrar.
+ * Loja vinculada sem credencial de pedidos (ex.: autorização revogada) é `integrado` — a tela mostra o motivo específico ("a loja não autorizou…"),
+ * não "vincule a loja". Unidade que já teve pedidos também segue `integrado`: os números existentes não podem ser chamados de "sem número".
+ * @param {{estado?: string, motivo?: string}} integracao
+ * @param {{temPedidos?: boolean}} [opc]
+ */
+export function derivarModo(integracao, { temPedidos = false } = {}) {
+  return integracao?.estado === "nao_ativada" && integracao.motivo === "sem_loja_vinculada" && !temPedidos
+    ? "sem_integracao" : "integrado";
+}
+
+/**
  * @param {{organizacaoId: string, unidadeId: string, agora?: () => Date,
  *          deps?: {repo?: object, ifoodRepo?: object, pilotoOrder?: (unidadeId: string) => boolean, env?: object}}} p
  */
@@ -72,7 +91,8 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
   const realtimeLigado = checklistRealtimeHabilitado(deps.env ?? process.env);
   const agoraMs = agora().getTime();
 
-  const conexao = await ir.obterConexaoViva({ organizacaoId, unidadeId });
+  // O Checklist consulta SÓ a conexão operacional (pedidos). Uma conexão financeira de homologação na unidade nunca a substitui nem a bloqueia.
+  const conexao = await ir.obterConexaoViva({ organizacaoId, unidadeId, finalidade: "pedidos_producao" });
   let credencialOrder = null;
   let observabilidade = null;
   if (conexao?.id) {
@@ -82,7 +102,9 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
       observabilidade = await ir.obterObservabilidadeOrder({ organizacaoId, unidadeId, merchantId: conexao.merchant_id });
     }
   }
-  const integracao = derivarEstadoIntegracao({ conexao, credencialOrder, observabilidade, agoraMs });
+  const outraConexaoViva = !conexao && typeof ir.listarConexoesVivas === "function"
+    ? ((await ir.listarConexoesVivas({ organizacaoId, unidadeId })) ?? []).length > 0 : false;
+  const integracao = derivarEstadoIntegracao({ conexao, credencialOrder, observabilidade, agoraMs, outraConexaoViva });
 
   // Janela: o dia operacional inteiro + a folga do "sem conclusão" (pedido de ontem ainda aberto aparece como alerta).
   const dia = diaOperacional(agoraMs);
@@ -125,6 +147,7 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
     origem: "api",
     servidorEm: new Date(agoraMs).toISOString(),
     atualizarEmS: INTERVALO_ATUALIZACAO_S,
+    modo: derivarModo(integracao, { temPedidos: resumo.contagemDia.recebidos > 0 || resumo.contagemDia.emAndamento > 0 }),
     integracao: { ...integracao, pilotoOrder: piloto(unidadeId) === true },
     semPedidosNoDia: resumo.contagemDia.recebidos === 0 && resumo.contagemDia.emAndamento === 0,
     ...resumo,

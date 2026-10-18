@@ -111,6 +111,7 @@ function repoFalso() {
     async obterSessaoOAuth() { anota("obterSessao"); return estado.sessao ? { ...estado.sessao } : null; },
     async reivindicarSessaoOAuth() { anota("reivindicar"); return { id: "sess-1" }; },
     async fecharSessaoOAuth({ status }) { anota("fechar"); estado.sessao = { ...estado.sessao, status }; return estado.sessao; },
+    async obterConexaoViva() { return null; },
     async obterOuCriarConexao() { anota("conexao"); return { id: "conx-1", status: "ativa" }; },
     async salvarCredencial(a) { anota("salvarCredencial"); estado.credenciais.push(a); return a; },
     async obterCredencial() { return null; },   // primeira conexão: ainda não há credencial Order a proteger

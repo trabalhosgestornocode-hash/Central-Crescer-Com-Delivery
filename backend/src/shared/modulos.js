@@ -33,6 +33,9 @@ export const MODULOS = {
   // Integrações). Sem ele a seção inteira some e os endpoints ligados a ela
   // recusam — mesmo com `agente_ia` habilitado (dupla autorização no /agente).
   INTELIGENCIA: "inteligencia",
+  // Painel operacional (TV/HDMI) da unidade. Independe do módulo `ifood`: sem integração o painel abre com aviso
+  // informativo; com integração mostra os pedidos. Migration 123.
+  CHECKLIST_OPERACIONAL: "checklist_operacional",
   // Dashboard Financeiro (migration 120). Nasce desabilitado; o acesso real também exige concessão explícita por perfil.
   GESTAO_FINANCEIRA: "gestao_financeira",
 };
@@ -63,6 +66,7 @@ export const CATALOGO_MODULOS = [
   // unidade). Aparece no grupo "Operação", ao lado do Agente Crescer.
   { id: MODULOS.INTELIGENCIA, nome: "Inteligência (seção)", categoria: "operacao", ordem: 16 },
   { id: MODULOS.GESTAO_FINANCEIRA, nome: "Gestão Financeira", categoria: "financeiro", ordem: 17 },
+  { id: MODULOS.CHECKLIST_OPERACIONAL, nome: "Checklist Operacional", categoria: "operacao", ordem: 18 },
 ];
 
 const IDS_VALIDOS = new Set(CATALOGO_MODULOS.map((m) => m.id));

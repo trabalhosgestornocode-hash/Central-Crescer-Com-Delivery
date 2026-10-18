@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireContexto, exigirSenhaDefinitiva, requireModulo } from "./middlewares/auth.js";
+import { requireContexto, exigirSenhaDefinitiva, requireModulo, requireAlgumModulo } from "./middlewares/auth.js";
 import { requireFinanceiro } from "./middlewares/financeiro.js";
 import { gestaoFinanceiraRouter } from "./modules/gestao-financeira/index.js";
 import { restringirPerfilExibicao } from "./middlewares/perfilExibicao.js";
@@ -87,9 +87,12 @@ tenant.use("/realtime", realtimeRouter);   // idem — credencial de canal Realt
 tenant.use("/vendas", requireModulo(MODULOS.SALES), vendasRouter);
 tenant.use("/integracoes/martin-brower", requireModulo(MODULOS.MARTIN_BROWER), martinBrowerRouter);
 tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
-// Checklist Operacional: lê os pedidos iFood da unidade — módulo `ifood` e permissão `checklist.visualizar`
-// (ou integracoes.ver, enquanto existirem sessões antigas — ver o router). Nunca mais aberto que o dado que mostra.
-tenant.use("/checklist-operacional", requireModulo(MODULOS.IFOOD), checklistOperacionalRouter);
+// Checklist Operacional: módulo PRÓPRIO `checklist_operacional` (independe de ter integração iFood) e permissão
+// `checklist.visualizar` (ou integracoes.ver, enquanto existirem sessões antigas — ver o router). O módulo `ifood`
+// continua aceito SÓ na transição: a sessão congela os módulos por até 8 h, e as sessões abertas antes da migration 123
+// ainda não trazem o módulo novo. A remoção do `MODULOS.IFOOD` NÃO é automática por tempo: só em etapa própria, depois de verificar acessos migrados,
+// sessões (inclusive a TV) e rollback (docs/checklist-universal-e-tempos.md §8.5).
+tenant.use("/checklist-operacional", requireAlgumModulo(MODULOS.CHECKLIST_OPERACIONAL, MODULOS.IFOOD), checklistOperacionalRouter);
 // Dashboard Financeiro: gate PRÓPRIO (módulo empresa + módulo unidade + concessão explícita do perfil, relida a cada
 // requisição; sem bypass de impersonação). NÃO usar requireModulo/requirePermissao aqui — ambos bypassam.
 tenant.use("/gestao-financeira", requireFinanceiro(), gestaoFinanceiraRouter);

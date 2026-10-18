@@ -25,6 +25,7 @@ import { estaEmHomologacaoIfood, orderLiberadoParaUnidade, validacaoMerchantManu
 import * as vinculoRepositorio from "./ifoodMerchantVinculo.repository.js";
 import { resumirVinculo, MOTIVOS } from "./ifoodMerchantVinculo.service.js";
 import { usarHomologacaoFinancial } from "./ifoodFinancialHomologacao.js";
+import { FINALIDADES, finalidadeDaLinha } from "./ifoodFinalidade.js";
 
 /**
  * Vincula um merchant do iFood à unidade do contexto.
@@ -39,7 +40,7 @@ export async function vincularMerchant({ organizacaoId, unidadeId, merchantId, u
 
   // 1) Precisa de uma conexão viva (criada no /oauth/complete). Sem ela, não
   //    há token financial para validar nada.
-  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId, finalidade: FINALIDADES.FINANCEIRO_HOMOLOGACAO });
   if (!conexao) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
 
   // 2) REVALIDA na API (token financial). Aqui 401/403/404/reauth_required já
@@ -79,7 +80,12 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
   const repo = deps.repo ?? repositorio;
   const agora = deps.agora ?? (() => new Date());
 
-  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+  // Duas conexões independentes possíveis: a do Financial (visão principal) e a de pedidos (bloco `order`). Unidade com uma só (legado) = igual a antes.
+  const fin = await repo.obterConexaoViva({ organizacaoId, unidadeId, finalidade: FINALIDADES.FINANCEIRO_HOMOLOGACAO });
+  const ped = await repo.obterConexaoViva({ organizacaoId, unidadeId, finalidade: FINALIDADES.PEDIDOS_PRODUCAO });
+  const conexao = fin ?? ped;
+  // Conexão financeira exclusiva (rotulada) sem conexão de pedidos: o bloco Order NUNCA usa a loja de teste dela.
+  const conexaoOrder = ped ?? (fin && finalidadeDaLinha(fin) === FINALIDADES.FINANCEIRO_HOMOLOGACAO ? null : conexao);
 
   const appsVazio = Object.fromEntries(IFOOD_APP_TYPES.map((a) => [a, { conectado: false, status: null, expiraEm: null }]));
 
@@ -114,14 +120,20 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
   const financialOk = apps[IFOOD_APPS.FINANCIAL]?.conectado === true;
   // Status GERAL: só analytics/financial. A credencial `order` tem estado próprio (bloco `order`) e nunca o contamina.
   const algumReauth = credenciais.some((c) => IFOOD_APP_TYPES.includes(c.app_type) && c.status === "reauth_required");
-  const merchant = conexao.merchant_id
-    ? { idMascarado: mascararId(conexao.merchant_id), nome: conexao.merchant_nome ?? null, razaoSocial: conexao.merchant_razao_social ?? null }
-    : null;
+  const merchant = merchantDe(conexao);
 
-  const order = await montarStatusOrder({
-    conexao, cred: porApp.get(IFOOD_APP_ORDER), merchant, organizacaoId, unidadeId, repo, agora,
-    vinculos: deps.vinculos ?? vinculoRepositorio,
-  });
+  let order;
+  if (!conexaoOrder) {
+    order = orderLiberadoParaUnidade(unidadeId) ? statusOrderSemCredencial() : null;
+  } else {
+    const separada = conexaoOrder.id !== conexao.id;
+    const credOrder = separada ? (await repo.listarCredenciaisDaConexao({ conexaoId: conexaoOrder.id })).find((c) => c.app_type === IFOOD_APP_ORDER) : porApp.get(IFOOD_APP_ORDER);
+    order = await montarStatusOrder({
+      conexao: conexaoOrder, cred: credOrder, merchant: separada ? merchantDe(conexaoOrder) : merchant,
+      organizacaoId, unidadeId, repo, agora, vinculos: deps.vinculos ?? vinculoRepositorio,
+    });
+  }
+  const conexoes = await resumirConexoes({ repo, organizacaoId, unidadeId, conexao, conexaoOrder, credenciais, order });
   const lojasAdicionais = order ? await resumirLojasAdicionais({ repo, organizacaoId, unidadeId }) : [];
   const appsComAtencao = [
     ...IFOOD_APP_TYPES.filter((a) => apps[a].status === "reauth_required"),
@@ -136,6 +148,8 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
     order,
     // Lojas adicionais da unidade (117/118): só quando existem — sem elas a resposta é idêntica à de antes.
     ...(lojasAdicionais.length ? { lojasAdicionais } : {}),
+    // Conexões da unidade, cada uma com identidade própria (só quando há mais de uma ou alguma já foi classificada; senão a resposta é a de antes).
+    ...(conexoes ? { conexoes } : {}),
     atencao: { total: appsComAtencao.length, apps: appsComAtencao },
     conectadaEm: conexao.conectada_em ?? null,
     ultimaSincronizacao: conexao.ultima_sincronizacao_em ?? null,   // sempre null nesta fase
@@ -147,6 +161,34 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
     // (IFOOD_FINANCIAL_HOMOLOGATION_UNITS). Só um booleano — selo na área Financial.
     financialHomologacao: usarHomologacaoFinancial(unidadeId),
   };
+}
+
+function merchantDe(conexao) {
+  return conexao?.merchant_id
+    ? { idMascarado: mascararId(conexao.merchant_id), nome: conexao.merchant_nome ?? null, razaoSocial: conexao.merchant_razao_social ?? null }
+    : null;
+}
+
+/**
+ * Resumo POR CONEXÃO (sem token, sem segredo, merchant mascarado) para a tela mostrar cada conexão separada, com a ação própria.
+ * `id` é o identificador da conexão DESTE tenant (a desconexão o reconfere no servidor). null quando a unidade tem só uma conexão legada.
+ */
+async function resumirConexoes({ repo, organizacaoId, unidadeId, conexao, conexaoOrder, credenciais, order }) {
+  const lista = [conexao, conexaoOrder].filter(Boolean).filter((c, i, a) => a.findIndex((x) => x.id === c.id) === i);
+  if (lista.length < 2 && lista.every((c) => finalidadeDaLinha(c) === FINALIDADES.LEGADO)) return null;
+  return Promise.all(lista.map(async (c) => {
+    const creds = c.id === conexao.id ? credenciais : await repo.listarCredenciaisDaConexao({ conexaoId: c.id });
+    return {
+      id: c.id,
+      finalidade: finalidadeDaLinha(c),
+      ambiente: c.ambiente ?? "nao_informado",
+      status: creds.some((x) => x.status === "reauth_required") ? "reauth_required" : c.status,
+      merchant: merchantDe(c),
+      credenciais: Object.fromEntries(creds.map((x) => [x.app_type, { status: x.status, expiraEm: x.expira_em ?? null }])),
+      conectadaEm: c.conectada_em ?? null,
+      ...(c.id === conexaoOrder?.id && order ? { pedidos: true } : {}),
+    };
+  }));
 }
 
 /**
@@ -255,15 +297,27 @@ async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unida
  * Idempotente: sem conexão viva, responde ok sem erro.
  * @returns {Promise<{ok: true, jaDesconectado: boolean, revogacaoNoIfood: 'manual_no_portal'}>}
  */
-export async function desconectar({ organizacaoId, unidadeId, usuarioId, deps = {} }) {
+export async function desconectar({ organizacaoId, unidadeId, usuarioId, conexaoId = null, deps = {} }) {
   const repo = deps.repo ?? repositorio;
 
-  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
-  await repo.cancelarSessoesPendentes({ organizacaoId, unidadeId }).catch(() => {});
+  // Afeta SOMENTE a conexão escolhida. Sem `conexaoId`: a única viva da unidade; com mais de uma, recusa (nunca "desconecta tudo").
+  let conexao;
+  if (conexaoId) {
+    conexao = await repo.obterConexaoDoTenant({ organizacaoId, unidadeId, conexaoId });
+    if (conexao.status === "revogada") conexao = null;
+  } else {
+    conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });   // lança IFOOD_CONEXAO_AMBIGUA se houver mais de uma
+  }
 
   if (!conexao) {
     return { ok: true, jaDesconectado: true, revogacaoNoIfood: "manual_no_portal" };
   }
+
+  // Só as autorizações em curso dos apps DESTA conexão (a da outra finalidade segue intacta).
+  const fin = finalidadeDaLinha(conexao);
+  const appTypes = fin === FINALIDADES.PEDIDOS_PRODUCAO ? [IFOOD_APP_ORDER]
+    : fin === FINALIDADES.FINANCEIRO_HOMOLOGACAO ? IFOOD_APP_TYPES : null;
+  await repo.cancelarSessoesPendentes({ organizacaoId, unidadeId, ...(appTypes ? { appTypes } : {}) }).catch(() => {});
 
   // Vínculo manual em aberto (loja informada, ainda não validada): encerra junto, para liberar o merchant.
   // Nunca impede a desconexão (inclusive se a migration 116 ainda não existir).
@@ -277,7 +331,7 @@ export async function desconectar({ organizacaoId, unidadeId, usuarioId, deps = 
     campos: { status: "revogada", ultimo_erro: null },
   });
 
-  ifoodLog("info", "conexao.desconectada_localmente", { organizacaoId, unidadeId, conexaoId: conexao.id, por: usuarioId });
+  ifoodLog("info", "conexao.desconectada_localmente", { organizacaoId, unidadeId, conexaoId: conexao.id, finalidade: fin, por: usuarioId });
 
   return { ok: true, jaDesconectado: false, revogacaoNoIfood: "manual_no_portal" };
 }
