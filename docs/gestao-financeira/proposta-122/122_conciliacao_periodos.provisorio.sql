@@ -246,8 +246,65 @@ create or replace function fin_fingerprint_periodo(p_org uuid, p_unidade uuid, p
               from fin_conciliacao_resolucoes x where x.organizacao_id = p_org and x.unidade_id = p_unidade and x.chave >= p_mes and x.chave < (p_mes + interval '1 month')::date), '')
     || '#' ||
     coalesce((select string_agg(a.id::text || ':' || a.valor_centavos, '|' order by a.id)
-              from fin_saldos_abertura a where a.organizacao_id = p_org and a.unidade_id = p_unidade and a.data_referencia >= p_mes and a.data_referencia < (p_mes + interval '1 month')::date), ''))
+              from fin_saldos_abertura a where a.organizacao_id = p_org and a.unidade_id = p_unidade and a.data_referencia >= p_mes and a.data_referencia < (p_mes + interval '1 month')::date), '')
+    || '#' ||
+    -- F-1 (LD, checkpoint F-1/F-2): ENTRADAS DA REGRA de conciliação. (a) tipo e canal das contas COM MOVIMENTO no mês; (b) exceções de sangria ATIVAS cuja categoria tem saída no mês.
+    -- Mudar qualquer uma entre a prévia e o fechamento muda a impressão => fin_periodo_conflito_dados (409). Determinístico: ordenado por id; só o que pode afetar ESTE mês.
+    coalesce((select string_agg(k.id::text || ':' || k.tipo_conta || ':' || coalesce(k.canal_referencia, '-'), '|' order by k.id)
+              from fin_contas k where k.organizacao_id = p_org and k.unidade_id = p_unidade
+                and exists (select 1 from fin_lancamentos l where l.conta_id = k.id and l.data_movimento >= p_mes and l.data_movimento < (p_mes + interval '1 month')::date)), '')
+    || '#' ||
+    coalesce((select string_agg(e.id::text || ':' || e.categoria_id::text, '|' order by e.id)
+              from fin_sangria_excecoes e where e.organizacao_id = p_org and e.unidade_id = p_unidade and e.ativa
+                and exists (select 1 from fin_lancamentos l where l.organizacao_id = p_org and l.unidade_id = p_unidade and l.categoria_id = e.categoria_id and l.sentido = 'saida'
+                              and l.data_movimento >= p_mes and l.data_movimento < (p_mes + interval '1 month')::date)), ''))
 $$;
+
+-- ---------------------------------------------------------------------
+-- F-1: o que a conciliação USA além dos lançamentos também respeita a trava do período.
+--  • fin_contas.tipo_conta / canal_referencia: mudar com movimento em mês FECHADO é recusado (integridade do fechado — antes só a aplicação checava);
+--    nos meses abertos o gatilho toma a trava (FOR SHARE) dos meses com movimento, serializando com o fechamento (FOR UPDATE).
+--  • fin_sangria_excecoes: criar/alterar/apagar toma a trava dos meses em que a categoria tem saída (serializa com o fechamento; mês já fechado NÃO é recusado: é
+--    configuração da unidade e o snapshot é imutável — a visão ao vivo de mês fechado reflete a regra atual, risco residual documentado).
+-- Ordem determinística (mês crescente) => sem deadlock entre gatilhos; só o fechamento pega FOR UPDATE, em UM mês.
+-- ---------------------------------------------------------------------
+create or replace function fin_periodo_travar(p_org uuid, p_unidade uuid, p_mes date) returns text language plpgsql as $$
+declare v_status text;
+begin
+  insert into fin_periodos (organizacao_id, unidade_id, mes, status) values (p_org, p_unidade, p_mes, 'aberto') on conflict (unidade_id, mes) do nothing;
+  select status into v_status from fin_periodos where unidade_id = p_unidade and mes = p_mes for share;
+  return v_status;
+end $$;
+
+create or replace function fin_contas_regra_conciliacao_trava() returns trigger language plpgsql as $$
+declare m date;
+begin
+  if new.tipo_conta is distinct from old.tipo_conta or new.canal_referencia is distinct from old.canal_referencia then
+    for m in select distinct date_trunc('month', l.data_movimento)::date as mes from fin_lancamentos l where l.conta_id = new.id order by 1 loop
+      if fin_periodo_travar(new.organizacao_id, new.unidade_id, m) = 'fechado' then
+        raise exception 'fin_periodo_fechado: tipo e canal da conta nao mudam com movimento em mes fechado' using errcode = '23514';
+      end if;
+    end loop;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_fin_contas_regra_conciliacao on fin_contas;
+create trigger trg_fin_contas_regra_conciliacao before update of tipo_conta, canal_referencia on fin_contas for each row execute function fin_contas_regra_conciliacao_trava();
+
+create or replace function fin_sangria_excecoes_regra_trava() returns trigger language plpgsql as $$
+declare m date; cats uuid[] := '{}'; r fin_sangria_excecoes;
+begin
+  if tg_op in ('UPDATE', 'DELETE') then cats := cats || old.categoria_id; end if;
+  if tg_op in ('INSERT', 'UPDATE') then cats := cats || new.categoria_id; end if;
+  r := case when tg_op = 'DELETE' then old else new end;
+  for m in select distinct date_trunc('month', l.data_movimento)::date as mes from fin_lancamentos l
+            where l.organizacao_id = r.organizacao_id and l.unidade_id = r.unidade_id and l.categoria_id = any (cats) and l.sentido = 'saida' order by 1 loop
+    perform fin_periodo_travar(r.organizacao_id, r.unidade_id, m);
+  end loop;
+  return r;
+end $$;
+drop trigger if exists trg_fin_sangria_excecoes_regra on fin_sangria_excecoes;
+create trigger trg_fin_sangria_excecoes_regra before insert or update or delete on fin_sangria_excecoes for each row execute function fin_sangria_excecoes_regra_trava();
 
 -- ---------------------------------------------------------------------
 -- M1 (LD-011/LD-012; R-1): o BANCO determina, sozinho, as pendências de CONCILIAÇÃO do mês. Só usa dados persistidos (nada vem da aplicação) e
@@ -481,7 +538,7 @@ begin
   -- fin_reabrir_periodo NÃO entra aqui: reabertura desabilitada (sem EXECUTE para ninguém além do dono) até a política ser aprovada.
   foreach t in array array['fin_fingerprint_periodo(uuid,uuid,date)','fin_abrir_periodo(uuid,uuid,uuid,date)',
       'fin_fechar_periodo(uuid,uuid,uuid,date,int,text,jsonb,text[],boolean)',
-      'fin_periodo_travar_e_checar(uuid,uuid,date)','fin_confirmar_importacao(uuid,uuid,uuid,uuid)'] loop
+      'fin_periodo_travar_e_checar(uuid,uuid,date)','fin_periodo_travar(uuid,uuid,date)','fin_confirmar_importacao(uuid,uuid,uuid,uuid)'] loop
     execute format('revoke all on function %s from public', t);
     foreach r in array array['anon','authenticated'] loop
       if exists (select 1 from pg_roles where rolname = r) then execute format('revoke all on function %s from %I', t, r); end if;
@@ -777,7 +834,7 @@ do $$
 declare f text; r text;
 begin
   foreach f in array array['fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,int,text[],jsonb)','fin_revogar_excecao_fechamento(uuid,uuid,uuid,uuid,text)',
-                           'fin_consumir_excecao_fechamento(uuid,uuid)','fin_conciliacao_pendencias_ids(uuid,uuid,date)','fin_excecoes_fechamento_guarda()','fin_periodos_bloqueia_fechamento_direto()','fin_mfa_evidencia_valida(jsonb)','fin_ids_conciliacao_validos(text[])','fin_periodos_bloqueia_reabertura()',
+                           'fin_consumir_excecao_fechamento(uuid,uuid)','fin_conciliacao_pendencias_ids(uuid,uuid,date)','fin_contas_regra_conciliacao_trava()','fin_sangria_excecoes_regra_trava()','fin_excecoes_fechamento_guarda()','fin_periodos_bloqueia_fechamento_direto()','fin_mfa_evidencia_valida(jsonb)','fin_ids_conciliacao_validos(text[])','fin_periodos_bloqueia_reabertura()',
                            'fin_reabrir_periodo(uuid,uuid,uuid,date,int,text)'] loop
     execute format('revoke all on function %s from public', f);
     foreach r in array array['anon','authenticated','service_role'] loop
@@ -806,6 +863,12 @@ begin
     if has_table_privilege('service_role', 'fin_excecoes_fechamento', 'insert') or has_table_privilege('service_role', 'fin_excecoes_fechamento', 'update') then raise exception '122 abortada: service_role escreve em fin_excecoes_fechamento.'; end if;
     if not has_function_privilege('service_role', 'fin_conciliacao_pendencias_ids(uuid,uuid,date)', 'execute') then raise exception '122 abortada: service_role nao executa a funcao autoritativa de pendencias de conciliacao (M1).'; end if;
     if has_function_privilege('anon', 'fin_conciliacao_pendencias_ids(uuid,uuid,date)', 'execute') or has_function_privilege('authenticated', 'fin_conciliacao_pendencias_ids(uuid,uuid,date)', 'execute') then raise exception '122 abortada: funcao de pendencias de conciliacao exposta a anon/authenticated.'; end if;
+    -- F-1: as entradas da regra de conciliação têm gatilho de trava
+    if not exists (select 1 from pg_trigger where tgname = 'trg_fin_contas_regra_conciliacao' and tgrelid = 'fin_contas'::regclass and tgenabled = 'O')
+       or not exists (select 1 from pg_trigger where tgname = 'trg_fin_sangria_excecoes_regra' and tgrelid = 'fin_sangria_excecoes'::regclass and tgenabled = 'O') then
+      raise exception '122 abortada: gatilhos de trava das entradas da conciliacao (F-1) ausentes ou desabilitados.';
+    end if;
+    if has_function_privilege('anon', 'fin_periodo_travar(uuid,uuid,date)', 'execute') or has_function_privilege('authenticated', 'fin_periodo_travar(uuid,uuid,date)', 'execute') then raise exception '122 abortada: fin_periodo_travar exposta a anon/authenticated.'; end if;
     -- O-1: nenhuma sobrecarga obsoleta pode restar
     if exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'fin_fechar_periodo' and p.oid <> 'fin_fechar_periodo(uuid,uuid,uuid,date,integer,text,jsonb,text[],boolean)'::regprocedure)
        or exists (select 1 from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'fin_conceder_excecao_fechamento' and p.oid <> 'fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,integer,text[],jsonb)'::regprocedure) then

@@ -40,8 +40,11 @@
 
 .fin-alertas { display: grid; gap: 8px; }
 .fin-alerta { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--raio-sm); border: 1px solid var(--linha); background: var(--card); font-size: 13.5px; }
-.fin-alerta--warn { border-color: var(--warn); background: var(--warn-bg); }
-.fin-alerta--bad { border-color: var(--bad); background: var(--bad-bg); }
+.fin-alerta--warn { border-color: var(--warn); background: var(--warn-bg); color: #3d2a05; }   /* --warn-bg/--bad-bg são CLAROS nos dois temas: o texto precisa ser escuro (no tema escuro herdava texto claro = ilegível) */
+.fin-alerta--bad { border-color: var(--bad); background: var(--bad-bg); color: #4a1111; }
+.fin-alerta--acao { flex-wrap: wrap; align-items: center; }
+.fin-alerta--acao > span { flex: 1 1 220px; min-width: 0; }
+.fin-alerta--acao > .btn { flex: 0 0 auto; max-width: 100%; }
 
 .fin-tabela-wrap { overflow-x: auto; border: 1px solid var(--linha); border-radius: var(--raio-sm); }
 .fin-tabela { width: 100%; border-collapse: collapse; font-size: 13.5px; background: var(--card); }

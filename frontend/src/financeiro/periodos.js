@@ -56,12 +56,18 @@ export async function render(container, ctx) {
 
   async function preFechamento(mes) {
     const dlg = dialogo({ titulo: `Pré-fechamento de ${rotuloMes(mes)}`, enviar: "Fechar período", corpo: estado.carregando(), aoEnviar: async () => { await dlg._fechar(); } });
+    const botao = () => dlg.querySelector('[type="submit"]');
+    const corpoEl = () => dlg.querySelector(".fin-form-corpo");
+    /** F-2: conflitos em que os DADOS mudaram (impressão digital/versão) ou o banco recalculou a conciliação de forma diferente. */
+    const DADOS_MUDARAM = new Set(["FIN_PERIODO_CONFLITO_DADOS", "FIN_PERIODO_CONFLITO_VERSAO", "FIN_CONCILIACAO_DIVERGENTE"]);
+    /** (Re)carrega a prévia. A impressão digital anterior é DESCARTADA antes de qualquer nova leitura; só depois da leitura nova a confirmação pode voltar. */
+    async function atualizar() {
+      dlg._previa = null; botao().disabled = true; dlg.querySelector(".fin-form-erro").hidden = true; corpoEl().innerHTML = estado.carregando();
     try {
       const x = await fin.get(`/periodos/${mes}/pre-fechamento`);
       const i = x.resumo.indicadores;
-      const botao = dlg.querySelector('[type="submit"]');
       const podeFechar = x.avaliacao.pode && pFechar && !x.vazio;
-      botao.disabled = !podeFechar;
+      botao().disabled = !podeFechar;
       dlg.querySelector(".fin-form-corpo").innerHTML = `
         ${x.vazio ? `<div class="fin-alerta fin-alerta--warn">Sem lançamentos neste mês.</div>` : ""}
         <div class="fin-kpis"><article class="fin-kpi"><span class="fin-kpi-rot">Receita recebida</span><strong class="fin-kpi-val">${moeda(i.receitaOperacional)}</strong></article>
@@ -72,12 +78,35 @@ export async function render(container, ctx) {
         ${x.avaliacao.exigeReconhecimento ? `<label><input type="checkbox" name="reconheco"> Reconheço as ${x.pendencias.total} pendência(s) e quero fechar assim mesmo (exceção aprovada).</label>` : ""}
         <label><input type="checkbox" name="confirmo" required> Confirmo o fechamento de ${esc(rotuloMes(mes))}: o snapshot ficará imutável.</label>
         <p class="fin-sub">Se algo mudar no mês enquanto esta janela estiver aberta, o fechamento será recusado e você precisará recarregar.</p>`;
-      dlg._fechar = async () => {
-        const f = dlg.querySelector("form");
+      dlg._previa = x;   // impressão digital e versão DESTA leitura (a única que pode ser enviada)
+    } catch (e) { corpoEl().innerHTML = estado.erro(e.message); botao().disabled = true; }
+    }
+
+    /** 409 por mudança de dados: invalida a prévia, desabilita a confirmação e oferece "Atualizar pré-fechamento". */
+    function invalidar() {
+      dlg._previa = null; botao().disabled = true;
+      corpoEl().querySelector("[data-mudou]")?.remove();
+      corpoEl().insertAdjacentHTML("afterbegin", `<div class="fin-alerta fin-alerta--bad fin-alerta--acao" role="alert" data-mudou>
+        <span><strong>Os dados financeiros deste mês mudaram</strong> desde a pré-visualização (lançamentos, contas, referências ou regras da conciliação). Nada foi fechado. Atualize o pré-fechamento, confira os números e confirme de novo.</span>
+        <button type="button" class="btn btn-primary btn-sm" data-atualizar>Atualizar pré-fechamento</button></div>`);
+      const b = corpoEl().querySelector("[data-atualizar]");
+      b.addEventListener("click", atualizar);
+      b.focus();
+    }
+
+    dlg._fechar = async () => {
+      const x = dlg._previa;
+      if (!x) throw Object.assign(new Error("Atualize o pré-fechamento antes de confirmar."), { bloquearReenvio: true });
+      const f = dlg.querySelector("form");
+      try {
         await fin.post(`/periodos/${mes}/fechar`, { confirmo: f.confirmo.checked, versao: x.periodo.versao, fingerprint: x.fingerprint, reconhecoPendencias: f.reconheco?.checked === true });
-        aviso("Período fechado."); carregar();
-      };
-    } catch (e) { dlg.querySelector(".fin-form-corpo").innerHTML = estado.erro(e.message); dlg.querySelector('[type="submit"]').disabled = true; }
+      } catch (e) {
+        if (e?.status === 409 && DADOS_MUDARAM.has(e.codigo)) { invalidar(); throw Object.assign(new Error("Fechamento recusado: os dados mudaram. Nada foi fechado."), { bloquearReenvio: true }); }
+        throw e;
+      }
+      aviso("Período fechado."); carregar();
+    };
+    atualizar();
   }
 
   async function snapshot(p) {

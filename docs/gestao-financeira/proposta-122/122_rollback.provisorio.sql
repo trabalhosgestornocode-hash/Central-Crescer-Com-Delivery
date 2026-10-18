@@ -106,6 +106,8 @@ end $$;
 
 -- 2) Remove o que a 122 criou.
 drop trigger if exists trg_fin_periodos_bloqueia_reabertura on fin_periodos;
+drop trigger if exists trg_fin_contas_regra_conciliacao on fin_contas;
+drop function if exists fin_contas_regra_conciliacao_trava();
 drop trigger if exists trg_fin_periodos_bloqueia_fechamento_direto on fin_periodos;
 drop function if exists fin_periodos_bloqueia_fechamento_direto();
 drop trigger if exists trg_fin_par_status_consistente on fin_lancamentos;
@@ -125,6 +127,8 @@ drop function if exists fin_fechar_periodo(uuid,uuid,uuid,date,int,text,jsonb,te
 drop function if exists fin_fechar_periodo(uuid,uuid,uuid,date,integer,text,jsonb,integer,boolean);          -- (bancos vindos de rascunhos anteriores: O-1)
 drop function if exists fin_conceder_excecao_fechamento(uuid,uuid,uuid,date,text,integer,integer,jsonb);   -- idem
 drop function if exists fin_conciliacao_pendencias_ids(uuid,uuid,date);
+drop function if exists fin_sangria_excecoes_regra_trava() cascade;
+drop function if exists fin_periodo_travar(uuid,uuid,date);
 drop function if exists fin_abrir_periodo(uuid,uuid,uuid,date);
 drop function if exists fin_fingerprint_periodo(uuid,uuid,date);
 drop table if exists fin_excecoes_fechamento cascade;

@@ -112,7 +112,7 @@ export function dialogo({ titulo, corpo, enviar = "Salvar", aoEnviar, perigo = f
     const btn = form.querySelector('[type="submit"]');
     btn.disabled = true; erro.hidden = true;
     try { await aoEnviar(new FormData(form), dlg); fechar(); }
-    catch (err) { erro.textContent = err?.message || "Não foi possível concluir."; erro.hidden = false; btn.disabled = false; }
+    catch (err) { erro.textContent = err?.message || "Não foi possível concluir."; erro.hidden = false; btn.disabled = err?.bloquearReenvio === true; }   // bloquearReenvio: a tela precisa ser atualizada antes de reenviar (ex.: 409 de dados)
   });
   dlg.showModal();
   dlg.querySelector("input, select, textarea")?.focus();

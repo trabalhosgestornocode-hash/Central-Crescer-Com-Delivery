@@ -110,6 +110,18 @@ app.all("/qa/nivel", (q, r) => { estado.nivel = String(q.query.n ?? "gestor"); r
 app.all("/qa/revogar", (_q, r) => { estado.revogado = true; r.json(estado); });
 app.all("/qa/vazio", (q, r) => { estado.vazio = q.query.on === "1"; r.json(estado); });
 app.all("/qa/falha", (q, r) => { estado.falha = q.query.on === "1"; r.json(estado); });
+// F-2 (somente QA): um mês ABERTO e LIMPO (sem pendências) para exercitar o pré-fechamento, e uma mudança REAL de dados entre a prévia e o fechamento
+// (muda a impressão digital => o domínio responde 409 FIN_PERIODO_CONFLITO_DADOS de verdade, não simulado).
+const lancQa = async (descricao, valor) => {
+  const cats = await cadastros.listarPlanoContas(ctxA, deps); const contas = await cadastros.listarContas(ctxA, deps);
+  const rec = cats.find((c) => c.papel === "receita_operacional"); const banco = contas.find((c) => c.nome === "BANCO PRINCIPAL");
+  const h = new Date(); const d = new Date(Date.UTC(h.getUTCFullYear(), h.getUTCMonth() + (estado.qaOff ?? -3), estado.qaSeq = (estado.qaSeq ?? 9) + 1));
+  await lanc.criarLancamento(ctxA, { contaId: banco.id, categoriaId: rec.id, descricao, sentido: "entrada", valor, dataMovimento: iso(d), status: "realizado" }, deps);
+  return iso(d).slice(0, 7);
+};
+app.all("/qa/novo-mes", (_q, r) => { estado.qaOff = (estado.qaOff ?? -3) - 1; estado.mesLimpo = null; r.json(estado); });
+app.all("/qa/mes-limpo", async (_q, r) => { if (!estado.mesLimpo) estado.mesLimpo = await lancQa("Venda do mês limpo (QA)", 1000); r.json({ mes: estado.mesLimpo }); });
+app.all("/qa/mudar-dados", async (_q, r) => { if (!estado.mesLimpo) estado.mesLimpo = await lancQa("Venda do mês limpo (QA)", 1000); await lancQa("Lançamento feito por outra pessoa (QA)", 77); r.json({ mes: estado.mesLimpo, mudou: true }); });
 app.get("/qa/estado", (_q, r) => r.json(estado));
 app.get(["/", "/index.html"], (_q, r) => r.type("html").send(readFileSync(path.join(frontend, "index.html"), "utf8").replace(/<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2"><\/script>/, '<script src="/qa/supabase-stub.js"></script>')));
 
