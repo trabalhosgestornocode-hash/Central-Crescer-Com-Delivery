@@ -4,10 +4,12 @@
 # concorrentes ao fechamento esperam a trava; 409 não consome exceção; nova prévia destrava; operações legítimas não são bloqueadas; mês fechado é preservado.
 # Uso:  PG_CLUSTER_DIR=C:/Users/ponte/pg-descartavel bash backend/testes-seguros/pg/sim_supabase.sh && bash backend/testes-seguros/pg/f1_concorrencia.sh
 export PATH="/c/Program Files/PostgreSQL/17/bin:$PATH" PGCLIENTENCODING=UTF8
-H="-h 127.0.0.1 -p 54321 -U postgres -d sim"
+# local: banco "sim". T3 (Supabase DESCARTÁVEL): exporte T3_PSQL_CONN="postgresql://postgres:<senha-url-encoded>@<host>:5432/postgres" e T3_CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL
+if [ -n "$T3_PSQL_CONN" ]; then [ "$T3_CONFIRMO" = "ESTE_PROJETO_E_DESCARTAVEL" ] || { echo "defina T3_CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL"; exit 2; }; H="$T3_PSQL_CONN"; else H="-h 127.0.0.1 -p 54321 -U postgres -d sim"; fi
+O_PADRAO=00000000-0000-0000-0000-0000000000a1
 P="psql $H -q -tA -v ON_ERROR_STOP=0"
 T="${TMPDIR:-/tmp}/f1"; mkdir -p "$T"
-O=00000000-0000-0000-0000-0000000000a1; USR=00000000-0000-0000-0000-000000000999; SA=00000000-0000-0000-0000-000000000888
+O="${T3_ORG_ID:-$O_PADRAO}"; USR=00000000-0000-0000-0000-000000000999; SA=00000000-0000-0000-0000-000000000888
 REC=00000000-0000-4000-f100-0000000000c1; DESP=00000000-0000-4000-f100-0000000000c2; OUTRA=00000000-0000-4000-f100-0000000000c3
 FALHOU=""; ok() { echo "PASS  $1"; }; bad() { echo "FALHA $1"; FALHOU=1; }
 now_ms() { echo $(( $(date +%s%N) / 1000000 )); }
@@ -86,7 +88,7 @@ echo "=== 5. 409 não consome a exceção; repetição com nova prévia funciona
 M=2032-05-01; novo_cenario $M
 $P -c "set role service_role; insert into fin_lancamentos(organizacao_id,unidade_id,conta_id,categoria_id,descricao,sentido,valor_centavos,data_movimento,classificacao_pendente) values ('$O','$U','$CB',null,'pendente','entrada',100,'${M%-01}-10',true)" >/dev/null
 MFA="jsonb_build_object('aal','aal2','em', to_char(now() at time zone 'utc' - interval '30 seconds','YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'))"
-$P -c "set role dono_sim; select 1 from (select fin_conceder_excecao_fechamento('$O','$U','$SA','$M','Justificativa suficientemente longa para o teste',7,'{}',$MFA)) x" >/dev/null
+$P -c "set role ${T3_DONO_ROLE:-dono_sim}; select 1 from (select fin_conceder_excecao_fechamento('$O','$U','$SA','$M','Justificativa suficientemente longa para o teste',7,'{}',$MFA)) x" >/dev/null
 PV=$(previa $U $M)
 $P -c "set role service_role; update fin_contas set canal_referencia='IFOOD' where id='$CB'" >/dev/null
 R5=$($P -c "set role service_role; select fin_fechar_periodo('$O','$U','$USR','$M',${PV%%|*},'${PV##*|}','{}',array[]::text[],true)->>'status'" 2>&1 | head -1)

@@ -1,4 +1,6 @@
 -- NOTA: S7v, S8a e S10b foram movidos (corrigidos) para adversarial122_complemento.sql, que roda DEPOIS deste. S11 PROVA o risco residual R-1 (fechamento sem ids de conciliação).
+-- papel DONO das funções: local = dono_sim; no Supabase descartável use -v DONO=<dono real>
+\if :{?DONO} \else \set DONO dono_sim \endif
 -- Provas ADVERSARIAIS (Agente 1) da exceção de fechamento e do fechamento/reabertura diretos na 122 (cd35699).
 -- Banco "sim": 120+121+122 aplicadas COMO dono_sim (não-superusuário) com default privileges do Supabase simulados. Dados sintéticos.
 -- Papéis: service_role = backend; dono_sim = simula o FUTURO papel de plataforma que poderá conceder (hoje ninguém tem EXECUTE).
@@ -77,7 +79,7 @@ select pg_temp.pend('00000000-0000-0000-0000-00000000c101', :'U', :'CONTA', '202
 select pg_temp.pend('00000000-0000-0000-0000-00000000c102', :'U', :'CONTA', '2027-01-06');
 select pg_temp.exp('S1 sem exceção: fechar com pendência é recusado', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-01-01','{}',true) $q$, 'fin_periodo_pendencias');
 reset role;
-set role dono_sim;
+set role :"DONO";
 select pg_temp.exp('S2 concede com MFA de 30 s', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-01-01','{}', pg_temp.mfa(30)) $q$, 'ok');
 reset role;
 select 'S2b evidência/ids gravados', mfa_evidencia ? 'sessao_ref' as tem_ref, mfa_evidencia::text ~ 'eyJ' as tem_jwt, quantidade, pendencias_hash ~ '^[0-9a-f]{64}$' as hash_ok, aprovada_por from fin_excecoes_fechamento where unidade_id = :'U' and mes = '2027-01-01';
@@ -96,7 +98,7 @@ set role service_role;
 select pg_temp.pend('00000000-0000-0000-0000-00000000c301', :'U', :'CONTA', '2027-03-05');
 select pg_temp.pend('00000000-0000-0000-0000-00000000c302', :'U', :'CONTA', '2027-03-06');
 reset role;
-set role dono_sim; select pg_temp.exp('S5a concede', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-03-01','{}', pg_temp.mfa(60)) $q$, 'ok'); reset role;
+set role :"DONO"; select pg_temp.exp('S5a concede', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-03-01','{}', pg_temp.mfa(60)) $q$, 'ok'); reset role;
 set role service_role;
 update fin_lancamentos set categoria_id = :'CAT', classificacao_pendente = false, nota_revisao = 'resolvida antes do fechamento' where id = '00000000-0000-0000-0000-00000000c301';
 select pg_temp.exp('S5b fecha com 1 pendência restante (coberta)', $q$ select pg_temp.fechar('00000000-0000-0000-0000-0000000000a2','2027-03-01','{}',true) $q$, 'ok');
@@ -109,7 +111,7 @@ select 'S5f exceção consumida exatamente 1x e vinculada ao snapshot', e.status
 
 \echo '=== S6. exceção VENCIDA (mês 2027-04): data retroagida só por superusuário de teste ==='
 set role service_role; select pg_temp.pend('00000000-0000-0000-0000-00000000c401', :'U', :'CONTA', '2027-04-05'); reset role;
-set role dono_sim; select pg_temp.exp('S6a concede', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-04-01','{}', pg_temp.mfa(10)) $q$, 'ok'); reset role;
+set role :"DONO"; select pg_temp.exp('S6a concede', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-04-01','{}', pg_temp.mfa(10)) $q$, 'ok'); reset role;
 set session_replication_role = replica;
 update fin_excecoes_fechamento set aprovada_em = now() - interval '3 days', expira_em = now() - interval '1 day' where unidade_id = :'U' and mes = '2027-04-01';
 set session_replication_role = origin;
@@ -118,11 +120,11 @@ select pg_temp.exp('S6b exceção vencida não vale', $q$ select pg_temp.fechar(
 reset role;
 
 \echo '=== S7. MFA: fronteira de 10 min, formato e conteúdo proibido ==='
-set role dono_sim;
+set role :"DONO";
 select pg_temp.pend('00000000-0000-0000-0000-00000000c501', :'U', :'CONTA', '2027-05-05');
 select pg_temp.exp('S7a MFA há 9 min 50 s aceita', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-05-01','{}', pg_temp.mfa(590)) $q$, 'ok');
 reset role;
-set role dono_sim;
+set role :"DONO";
 select pg_temp.exp('S7b MFA há 10 min 5 s recusada', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-06-01','{}', pg_temp.mfa(605)) $q$, 'fin_excecao_mfa_invalida');
 select pg_temp.exp('S7c MFA há 15 min recusada', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-06-01','{}', pg_temp.mfa(900)) $q$, 'fin_excecao_mfa_invalida');
 select pg_temp.exp('S7d MFA no futuro (+120 s) recusada', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-06-01','{}', pg_temp.mfa(-120)) $q$, 'fin_excecao_mfa_invalida');
@@ -151,7 +153,7 @@ set role service_role;
 select pg_temp.pend('00000000-0000-0000-0000-00000000c801', :'U2', '00000000-0000-0000-0000-0000000000e4', '2027-08-05');
 select pg_temp.exp('S8b fechar usando org B com unidade da org A', $q$ select fin_fechar_periodo('00000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-0000000000a2','00000000-0000-0000-0000-000000000999','2027-08-01',1,'x','{}',array[]::text[],true) $q$, 'erro');
 reset role;
-set role dono_sim;
+set role :"DONO";
 select pg_temp.exp('S8c conceder com org B para unidade da org A', $q$ select fin_conceder_excecao_fechamento('00000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-0000000000a2','00000000-0000-0000-0000-000000000888','2027-08-01','justificativa longa o bastante aqui',7,'{}', pg_temp.mfa(30)) $q$, 'erro');
 select pg_temp.exp('S8d revogar exceção de A informando org/unidade B (retorna false)', $q$ do $d$ begin if fin_revogar_excecao_fechamento('00000000-0000-0000-0000-0000000000b1','00000000-0000-0000-0000-0000000000b2','00000000-0000-0000-0000-000000000888',(select id from fin_excecoes_fechamento where unidade_id='00000000-0000-0000-0000-0000000000a2' and mes='2027-05-01'),'motivo longo o bastante') then raise exception 'REVOGOU DE OUTRO TENANT'; end if; end $d$ $q$, 'ok');
 reset role;
@@ -169,14 +171,14 @@ select pg_temp.exp('S9g alterar snapshot do fechado', $q$ update fin_periodos se
 select pg_temp.exp('S9h DELETE do período', $q$ delete from fin_periodos where unidade_id='00000000-0000-0000-0000-0000000000a2' and mes='2027-03-01' $q$, 'permission denied');
 select pg_temp.exp('S9i lançamento em mês fechado', $q$ insert into fin_lancamentos(organizacao_id,unidade_id,conta_id,categoria_id,descricao,sentido,valor_centavos,data_movimento) values ('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','00000000-0000-0000-0000-0000000000e1','00000000-0000-0000-0000-0000000000f1','x','entrada',1,'2027-03-20') $q$, 'fin_periodo_fechado');
 reset role;
-set role dono_sim;
+set role :"DONO";
 select pg_temp.exp('S9j até o DONO não reabre por UPDATE', $q$ update fin_periodos set status='aberto' where unidade_id='00000000-0000-0000-0000-0000000000a2' and mes='2027-03-01' $q$, 'fin_reabertura_desabilitada');
 select pg_temp.exp('S9k dono executando fin_reabrir_periodo é barrado pelo gatilho', $q$ select fin_reabrir_periodo('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','00000000-0000-0000-0000-000000000999','2027-03-01',(select versao from fin_periodos where unidade_id='00000000-0000-0000-0000-0000000000a2' and mes='2027-03-01'),'motivo longo o bastante') $q$, 'fin_reabertura_desabilitada');
 reset role;
 
 \echo '=== S10. falha na transação: fechamento + erro depois => nada consumido, período aberto (mês 2027-10) ==='
 set role service_role; select pg_temp.pend('00000000-0000-0000-0000-00000000ca01', :'U', :'CONTA', '2027-10-05'); reset role;
-set role dono_sim; select pg_temp.exp('S10a concede', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-10-01','{}', pg_temp.mfa(20)) $q$, 'ok'); reset role;
+set role :"DONO"; select pg_temp.exp('S10a concede', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-10-01','{}', pg_temp.mfa(20)) $q$, 'ok'); reset role;
 set role service_role;
 reset role;
 select 'S10c após o erro', pg_temp.estado_exc(:'U','2027-10-01') as excecao, (select status from fin_periodos where unidade_id = :'U' and mes = '2027-10-01') as periodo;
@@ -196,7 +198,7 @@ select pg_temp.exp('S11h lista CORRETA, sem exceção: pendência impede', $q$ s
 reset role;
 select 'S11i mês segue ABERTO após todas as tentativas', status from fin_periodos where unidade_id = :'U' and mes = '2027-11-01';
 -- concessão: lista omitida/fabricada não vira evidência de cobertura
-set role dono_sim;
+set role :"DONO";
 select pg_temp.exp('S11j conceder com lista OMITIDA é recusado', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-11-01','{}', pg_temp.mfa(30)) $q$, 'fin_conciliacao_divergente');
 select pg_temp.exp('S11k conceder com lista FABRICADA é recusado', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['caixa_dia:2030-01-01'], pg_temp.mfa(30)) $q$, 'fin_conciliacao_divergente');
 select pg_temp.exp('S11l conceder com a lista CORRETA registra o conjunto do banco', $q$ select pg_temp.conceder('00000000-0000-0000-0000-0000000000a2','2027-11-01', array['ponte_mensal:2027-11-01'], pg_temp.mfa(30)) $q$, 'ok');

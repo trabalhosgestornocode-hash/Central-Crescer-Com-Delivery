@@ -1,4 +1,6 @@
 -- Complemento das provas adversariais: S7v/S7w (CHECK sem gatilhos), S8a e S10 corrigidos. Rodar DEPOIS de adversarial122.sql no mesmo banco 'sim'.
+-- papel DONO das funções: local = dono_sim; no Supabase descartável use -v DONO=<dono real>
+\if :{?DONO} \else \set DONO dono_sim \endif
 
 create or replace function pg_temp.exp(label text, stmt text, esperado text) returns void language plpgsql as $$
 declare estado text := 'ok'; msg text := '';
@@ -23,7 +25,7 @@ insert into fin_lancamentos(id,organizacao_id,unidade_id,conta_id,categoria_id,d
  ('00000000-0000-0000-0000-00000000d001','00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','00000000-0000-0000-0000-0000000000e1',null,'pend A','entrada',100,'2028-02-05',true),
  ('00000000-0000-0000-0000-00000000d002','00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a3','00000000-0000-0000-0000-0000000000e4',null,'pend A2','entrada',100,'2028-02-05',true);
 reset role;
-set role dono_sim;
+set role :"DONO";
 select (fin_conceder_excecao_fechamento('00000000-0000-0000-0000-0000000000a1','00000000-0000-0000-0000-0000000000a2','00000000-0000-0000-0000-000000000888','2028-02-01','Justificativa suficientemente longa para o teste',7,'{}', pg_temp.mfa())) is not null as concedida_so_para_unidade_A;
 reset role;
 set role service_role;

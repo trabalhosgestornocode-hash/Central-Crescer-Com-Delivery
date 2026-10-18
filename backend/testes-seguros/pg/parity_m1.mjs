@@ -23,14 +23,19 @@ const DB = process.env.M1_DB || "sim";
 const arg = (n, d) => Number((process.argv.find((a) => a.startsWith(`--${n}=`)) ?? `--${n}=${d}`).split("=")[1]);
 const ALEATORIOS = arg("aleatorios", 120); const SEMENTE = arg("semente", 7);
 
-if (!CLUSTER || !existsSync(path.join(CLUSTER, "MARCADOR_DESCARTAVEL"))) { console.error("defina PG_CLUSTER_DIR de um cluster DESCARTÁVEL (arquivo MARCADOR_DESCARTAVEL)"); process.exit(2); }
+// Modo T3 (Supabase DESCARTÁVEL): M1_CONN=postgresql://... e M1_CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL. Sem eles, exige o cluster local com MARCADOR_DESCARTAVEL.
+const CONN = process.env.M1_CONN;
+if (CONN && process.env.M1_CONFIRMO !== "ESTE_PROJETO_E_DESCARTAVEL") { console.error("defina M1_CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL"); process.exit(2); }
+if (!CONN && (!CLUSTER || !existsSync(path.join(CLUSTER, "MARCADOR_DESCARTAVEL")))) { console.error("defina PG_CLUSTER_DIR de um cluster DESCARTÁVEL (arquivo MARCADOR_DESCARTAVEL)"); process.exit(2); }
 function psql(sql, { quiet = true } = {}) {
-  const r = spawnSync(PSQL, ["-h", "127.0.0.1", "-p", PORT, "-U", "postgres", "-d", DB, "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1"], { input: sql, encoding: "utf8", env: { ...process.env, PGCLIENTENCODING: "UTF8" } });
+  const r = spawnSync(PSQL, [...(CONN ? [CONN] : ["-h", "127.0.0.1", "-p", PORT, "-U", "postgres", "-d", DB]), "-q", "-t", "-A", "-v", "ON_ERROR_STOP=1"], { input: sql, encoding: "utf8", env: { ...process.env, PGCLIENTENCODING: "UTF8" } });
   if (r.status !== 0) throw new Error((r.stderr || "").trim().split("\n").slice(0, 3).join(" | "));
   return (r.stdout || "").trim();
 }
-const dd = psql("show data_directory");
-if (!dd.replaceAll("\\", "/").includes(CLUSTER.replaceAll("\\", "/"))) { console.error("cluster inesperado"); process.exit(2); }
+if (!CONN) {
+  const dd = psql("show data_directory");
+  if (!dd.replaceAll("\\", "/").includes(CLUSTER.replaceAll("\\", "/"))) { console.error("cluster inesperado"); process.exit(2); }
+}
 
 // NONCE por execução: o script pode rodar várias vezes no mesmo banco sem colidir (as categorias usam ids fixos, `on conflict do nothing`).
 const NONCE = (Date.now() % 0xffffffff).toString(16).padStart(8, "0");
