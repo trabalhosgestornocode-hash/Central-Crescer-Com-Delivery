@@ -34,7 +34,7 @@ describe("credencial própria por loja (118) — Postgres descartável, schema r
 
   before(() => {
     b = criarBancoDescartavel("loja_cred");
-    falhas = construirSchemaReal(b.url);
+    falhas = construirSchemaReal(b.url, { ate: 123 });   // estes testes são das migrations 117/118: a 125 remove de propósito o índice "uma conexão por unidade" (testada em ifood-multi-conexao-pg)
     q(`insert into organizacoes (id, nome) values ('${ORG}', 'Org A'), ('${ORG2}', 'Org B');
        insert into unidades (id, nome, organizacao_id) values ('${UN_A}', 'Subway Saci — Matriz', '${ORG}'), ('${UN_B}', 'Outra loja', '${ORG2}');
        insert into ifood_conexoes (id, organizacao_id, unidade_id, merchant_id, status) values

@@ -174,7 +174,7 @@ test("[19] isolamento multi-tenant: cada tenant consulta só o próprio merchant
   assert.ok(f.chamadas[0].url.includes(MERCHANT_A) && f.chamadas[0].headers.Authorization === "Bearer AT-A");
   assert.ok(f.chamadas[1].url.includes(MERCHANT_B) && f.chamadas[1].headers.Authorization === "Bearer AT-B");
   const conexoesPedidas = chamadas.filter((c) => c.nome === "obterConexaoViva").map((c) => c.args[0]);
-  assert.deepEqual(conexoesPedidas, [TENANT_A, TENANT_B]);
+  assert.deepEqual(conexoesPedidas, [{ ...TENANT_A, finalidade: "financeiro_homologacao" }, { ...TENANT_B, finalidade: "financeiro_homologacao" }]);
 });
 
 // ---------------------------------------------------------------------------

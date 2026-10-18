@@ -113,6 +113,7 @@ function repoFalso() {
     },
     async reivindicarSessaoOAuth() { return { id: "sess-1" }; },
     async fecharSessaoOAuth({ status }) { estado.sessao = { ...estado.sessao, status }; return estado.sessao; },
+    async obterConexaoViva() { return null; },   // sem conexão viva: o destino do OAuth é decidido pelo repositório real (ifoodConexaoDestino)
     async obterOuCriarConexao() { return { id: "conx-1", status: "ativa" }; },
     async salvarCredencial(a) { estado.credenciais.push(a); return a; },
     async obterCredencial() { return null; },   // primeira conexão: ainda não há credencial Order a proteger

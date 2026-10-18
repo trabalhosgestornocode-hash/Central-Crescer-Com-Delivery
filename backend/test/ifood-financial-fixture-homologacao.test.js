@@ -180,6 +180,7 @@ describe("rotas: query/body/header do navegador NÃO ativam a aceitação da fix
     const q = {
       select: () => q, eq: () => q, neq: () => q, in: () => q, order: () => q, limit: () => q,
       maybeSingle: async () => ({ data: dado(), error: null }), single: async () => ({ data: dado(), error: null }),
+      then: (ok, err) => Promise.resolve({ data: dado() ? [dado()] : [], error: null }).then(ok, err),   // leitura de LISTA (conexões vivas da unidade)
     };
     const dado = () => (tabela === "ifood_conexoes"
       ? { id: "conx-1", organizacao_id: "org-1", unidade_id: tenantAtual.unidadeId, status: "ativa", merchant_id: MERCHANT_CONEXAO }

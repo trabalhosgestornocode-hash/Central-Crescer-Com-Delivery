@@ -245,6 +245,39 @@ describe("resumo do service", () => {
   });
 });
 
+describe("multi-conexão iFood: o Checklist consulta SÓ a conexão de pedidos", () => {
+  const agoraMs = AGORA.getTime();
+  const financeira = { id: "c-fin", status: "ativa", merchant_id: "m-teste", finalidade: "financeiro_homologacao" };
+
+  test("unidade só com o Financial de homologação: integração de pedidos NÃO ativada (e não \"sem integração com o iFood\")", () => {
+    const e = service.derivarEstadoIntegracao({ conexao: null, outraConexaoViva: true, agoraMs });
+    assert.equal(e.estado, "nao_ativada");
+    assert.equal(e.motivo, "sem_credencial_order");
+    assert.equal(service.derivarModo(e, { temPedidos: false }), "integrado");
+    // sem NENHUMA conexão continua sendo "sem loja vinculada" (comportamento anterior)
+    assert.equal(service.derivarEstadoIntegracao({ conexao: null, agoraMs }).motivo, "sem_loja_vinculada");
+  });
+
+  test("obterResumo pede a conexão de finalidade pedidos_producao; a financeira de teste não a substitui nem aparece como loja", async () => {
+    const ifood = { ...ifoodRepoFalso({ conexao: null }), listarConexoesVivas: async () => [financeira] };
+    const { r } = await resumoCom({ unidade: UN_B, ifood });
+    assert.deepEqual(ifood.chamadas.find(([k]) => k === "conexao")[1], { organizacaoId: ORG, unidadeId: UN_B, finalidade: "pedidos_producao" });
+    assert.equal(r.integracao.estado, "nao_ativada");
+    assert.equal(r.integracao.motivo, "sem_credencial_order");
+    assert.equal(r.modo, "integrado");
+    assert.ok(!ifood.chamadas.some(([k]) => k === "obs"), "não consulta observabilidade do merchant de teste");
+  });
+
+  test("com a conexão de pedidos ativa ao lado da financeira, o Checklist usa a de pedidos (merchant dela)", async () => {
+    const pedidos = { id: "c-ped", status: "ativa", merchant_id: "m-real", finalidade: "pedidos_producao" };
+    const ifood = { ...ifoodRepoFalso({ conexao: pedidos }), listarConexoesVivas: async () => [financeira, pedidos] };
+    const { r } = await resumoCom({ unidade: UN_B, ifood });
+    assert.equal(r.integracao.estado, "ao_vivo");
+    assert.equal(ifood.chamadas.find(([k]) => k === "obs")[1].merchantId, "m-real");
+    assert.equal(ifood.chamadas.find(([k]) => k === "credenciais")[1].conexaoId, "c-ped");
+  });
+});
+
 describe("isolamento entre unidades", () => {
   const linhas = [linha(UN_A), linha(UN_A, { status_oficial: "CONFIRMED", ready_event_at: null, dispatch_event_at: null, placed_event_created_at: iso(3) }), linha(UN_B), linha(UN_B), linha(UN_B)];
 
@@ -267,7 +300,7 @@ describe("isolamento entre unidades", () => {
     const ifood = ifoodRepoFalso();
     await resumoCom({ unidade: UN_B, ifood });
     const [, arg] = ifood.chamadas.find(([k]) => k === "conexao");
-    assert.deepEqual(arg, { organizacaoId: ORG, unidadeId: UN_B });
+    assert.deepEqual(arg, { organizacaoId: ORG, unidadeId: UN_B, finalidade: "pedidos_producao" });   // só a conexão de pedidos
     const [, obs] = ifood.chamadas.find(([k]) => k === "obs");
     assert.equal(obs.merchantId, "m-1"); // o da conexão da própria unidade
   });

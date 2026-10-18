@@ -43,11 +43,14 @@ const est = (estado, motivo, extra = {}) => ({ estado, motivo, mensagem: motivo 
 
 /**
  * PURA: estado da integração da unidade.
- * @param {{conexao: object|null, credencialOrder: object|null, observabilidade: object|null, agoraMs: number}} p
+ * `outraConexaoViva`: a unidade TEM conexão iFood, mas não a de pedidos (ex.: só o Financial de homologação) — a integração de pedidos
+ * está "não ativada" (a loja não autorizou o app de pedidos), e NÃO "sem integração com o iFood".
+ * @param {{conexao: object|null, credencialOrder: object|null, observabilidade: object|null, agoraMs: number, outraConexaoViva?: boolean}} p
  */
-export function derivarEstadoIntegracao({ conexao, credencialOrder, observabilidade, agoraMs }) {
+export function derivarEstadoIntegracao({ conexao, credencialOrder, observabilidade, agoraMs, outraConexaoViva = false }) {
   const ultimoEventoEm = observabilidade?.ultimoEvento ?? null;
   const base = { ultimaSincronizacao: null, ultimoEventoEm };
+  if (!conexao && outraConexaoViva) return est("nao_ativada", "sem_credencial_order", base);
   if (!conexao || !conexao.merchant_id || !["ativa", "reauth_required"].includes(conexao.status)) return est("nao_ativada", "sem_loja_vinculada", base);
   if (!credencialOrder) return est("nao_ativada", "sem_credencial_order", base);
   if (conexao.status === "reauth_required" || credencialOrder.status === "reauth_required") {
@@ -88,7 +91,8 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
   const realtimeLigado = checklistRealtimeHabilitado(deps.env ?? process.env);
   const agoraMs = agora().getTime();
 
-  const conexao = await ir.obterConexaoViva({ organizacaoId, unidadeId });
+  // O Checklist consulta SÓ a conexão operacional (pedidos). Uma conexão financeira de homologação na unidade nunca a substitui nem a bloqueia.
+  const conexao = await ir.obterConexaoViva({ organizacaoId, unidadeId, finalidade: "pedidos_producao" });
   let credencialOrder = null;
   let observabilidade = null;
   if (conexao?.id) {
@@ -98,7 +102,9 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
       observabilidade = await ir.obterObservabilidadeOrder({ organizacaoId, unidadeId, merchantId: conexao.merchant_id });
     }
   }
-  const integracao = derivarEstadoIntegracao({ conexao, credencialOrder, observabilidade, agoraMs });
+  const outraConexaoViva = !conexao && typeof ir.listarConexoesVivas === "function"
+    ? ((await ir.listarConexoesVivas({ organizacaoId, unidadeId })) ?? []).length > 0 : false;
+  const integracao = derivarEstadoIntegracao({ conexao, credencialOrder, observabilidade, agoraMs, outraConexaoViva });
 
   // Janela: o dia operacional inteiro + a folga do "sem conclusão" (pedido de ontem ainda aberto aparece como alerta).
   const dia = diaOperacional(agoraMs);

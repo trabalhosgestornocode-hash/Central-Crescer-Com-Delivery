@@ -457,7 +457,8 @@ export const ifoodVincularMerchant = (merchantId) => postJson(`${IFOOD}/merchant
 // (Corrigir o ID = informar de novo: o servidor encerra o anterior.)
 export const ifoodInformarLoja = (merchantId) => postJson(`${IFOOD}/merchants/manual`, { merchantId });
 export const ifoodConferirLoja = (merchantId) => postJson(`${IFOOD}/merchants/manual/conferir`, { merchantId });
-export const ifoodDesconectar = () => delJson(`${IFOOD}/`);
+// Desconecta UMA conexão (`conexaoId` do /status). Sem `conexaoId` só vale para a unidade com uma conexão só (o servidor recusa se houver mais de uma).
+export const ifoodDesconectar = (conexaoId = null) => delJson(`${IFOOD}/${conexaoId ? `?conexaoId=${encodeURIComponent(conexaoId)}` : ""}`);
 // Pedidos iFood da unidade — leitura do banco local (estado oficial vindo dos eventos); não chama o iFood.
 export const ifoodPedidos = () => getJson(`${IFOOD}/pedidos`);
 // Checklist Operacional — resumo do dia da unidade do contexto (só leitura; tenant vem do Context Token).

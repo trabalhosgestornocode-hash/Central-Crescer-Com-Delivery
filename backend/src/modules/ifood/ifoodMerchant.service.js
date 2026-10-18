@@ -23,6 +23,7 @@ import { IFOOD_APPS, IFOOD_HTTP, IFOOD_ROTAS } from "./ifood.constants.js";
 import * as httpClient from "./ifoodHttp.client.js";
 import * as repositorio from "./ifood.repository.js";
 import * as tokenService from "./ifoodToken.service.js";
+import { FINALIDADES } from "./ifoodFinalidade.js";
 
 // A Merchant API pode devolver um array cru OU um envelope. Cobrimos as
 // formas conhecidas sem depender de uma só.
@@ -48,7 +49,7 @@ export function sanitizarMerchant(m) {
 }
 
 async function resolverConexao({ organizacaoId, unidadeId, repo }) {
-  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId, finalidade: FINALIDADES.FINANCEIRO_HOMOLOGACAO });
   if (!conexao) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
   return conexao;
 }

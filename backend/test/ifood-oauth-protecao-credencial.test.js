@@ -104,6 +104,7 @@ describe("concluirAutorizacao com credencial Order existente (OAuth simulado)", 
       async obterSessaoOAuth() { return e.sessao; },
       async reivindicarSessaoOAuth() { return true; },
       async fecharSessaoOAuth({ status }) { e.sessao.status = status; },
+      async obterConexaoViva() { return null; },   // sem conexão viva: o destino do OAuth é decidido pelo repositório real (ifoodConexaoDestino)
       async obterOuCriarConexao() { return conexao; },
       async obterCredencial() { return e.cred; },
       async listarLojasExtrasVivasDaConexao() { if (extras instanceof Error) throw extras; return extras; },

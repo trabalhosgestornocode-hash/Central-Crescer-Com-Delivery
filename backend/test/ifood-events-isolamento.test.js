@@ -230,6 +230,7 @@ function dbGravado(resposta) {
     select(s) { chamadas.push(["select", s]); return builder; },
     eq(c, v) { chamadas.push(["eq", c, v]); return builder; },
     not(c, op, v) { chamadas.push(["not", c, op, v]); return builder; },
+    neq(c, v) { chamadas.push(["neq", c, v]); return builder; },
     then(res, rej) { return Promise.resolve(resposta).then(res, rej); },
   };
   return { chamadas, from(t) { chamadas.push(["from", t]); return builder; } };
@@ -252,6 +253,8 @@ test("repositório: só ativas, com merchant e com credencial ORDER (inner join)
   assert.ok(c.some((x) => x[0] === "not" && x[1] === "merchant_id" && x[2] === "is" && x[3] === null));
   assert.ok(c.some((x) => x[0] === "eq" && x[1] === "ifood_credenciais.app_type" && x[2] === "order"));
   assert.ok(!r.some((x) => "ifood_credenciais" in x), "não devolve a linha de credencial");
+  // Multi-conexão (124): o Financial de homologação jamais entra no polling de pedidos.
+  assert.ok(c.some((x) => x[0] === "neq" && x[1] === "finalidade" && x[2] === "financeiro_homologacao"));
 });
 
 test("repositório: erro do banco sobe (o poller trata como falha do ciclo, com backoff)", async () => {
