@@ -110,9 +110,60 @@ export function derivarEstadoIntegracao(status, { erro = false } = {}) {
     podeVincularMerchant: chave === "merchant_pendente",
     podeTentarNovamente: false,
     precisaReconectar: chave === "reauth",
-    podeDesconectar: chave !== "nao_conectado",
+    // Com conexões separadas (Financial de homologação + Order de produção) NÃO existe "desconectar tudo": cada cartão tem a sua ação.
+    podeDesconectar: chave !== "nao_conectado" && !Array.isArray(s.conexoes),
     conectadaEm: s.conectadaEm ?? null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// CONEXÕES SEPARADAS da unidade (Financial de homologação x Order de produção)
+// ---------------------------------------------------------------------------
+export const ROTULO_CONEXAO = Object.freeze({
+  financeiro_homologacao: { titulo: "Financial — Homologação", selo: "Ambiente de homologação", escopo: "dados financeiros e de desempenho (loja de teste do iFood)" },
+  pedidos_producao: { titulo: "Order/Events — Produção", selo: "Produção", escopo: "pedidos e eventos da loja real" },
+  legado: { titulo: "Integração iFood", selo: null, escopo: "todos os aplicativos desta unidade" },
+});
+const ROTULO_APP_CONEXAO = Object.freeze({ analytics: "Analytics", financial: "Financial", order: "Pedidos (Order)" });
+const STATUS_CONEXAO = Object.freeze({
+  ativa: { rotulo: "Conectada", classe: "ok" },
+  pendente: { rotulo: "Aguardando vincular a loja", classe: "warn" },
+  reauth_required: { rotulo: "Reconexão necessária", classe: "bad" },
+});
+
+/**
+ * Cartões das conexões da unidade (um por conexão), a partir de `status.conexoes`. PURO. Lista vazia = unidade com uma conexão só
+ * (a tela de sempre). Cada cartão tem identidade própria (`id`) e a ação de desconectar afeta SÓ essa conexão.
+ * @returns {Array<{id, finalidade, titulo, selo, escopo, status: {rotulo, classe}, merchant: string, credenciais: Array<{app, rotulo, classe}>, confirmacaoDesconectar: string}>}
+ */
+export function montarCartoesConexao(status) {
+  const lista = Array.isArray(status?.conexoes) ? status.conexoes : [];
+  return lista.filter((c) => c && c.id).map((c) => {
+    const base = ROTULO_CONEXAO[c.finalidade] ?? ROTULO_CONEXAO.legado;
+    const merchant = c.merchant
+      ? `${c.merchant.nome || "Loja iFood"} · ${c.merchant.idMascarado || "—"}`
+      : "Nenhuma loja vinculada";
+    const credenciais = Object.entries(c.credenciais ?? {}).map(([app, k]) => {
+      const e = estadoDeApp({ status: k?.status, conectado: k?.status === "ativa" });
+      return { app: ROTULO_APP_CONEXAO[app] ?? app, rotulo: e.rotulo, classe: e.classe };
+    });
+    return {
+      id: c.id, finalidade: c.finalidade, titulo: base.titulo, selo: base.selo, escopo: base.escopo,
+      status: STATUS_CONEXAO[c.status] ?? { rotulo: "—", classe: "muted" },
+      merchant, credenciais,
+      confirmacaoDesconectar: avisoDesconexaoConexao({ titulo: base.titulo, escopo: base.escopo, merchant, outras: lista.length > 1 }),
+    };
+  });
+}
+
+/** Confirmação da desconexão de UMA conexão: diz qual será afetada e que as outras não são tocadas. */
+export function avisoDesconexaoConexao({ titulo, escopo, merchant, outras }) {
+  return `Desconectar SOMENTE a conexão "${titulo}" (${merchant}).
+
+`
+    + `Isso descarta aqui os tokens desta conexão (${escopo}). `
+    + (outras ? "As outras conexões desta unidade NÃO serão afetadas. " : "")
+    + "A desconexão é local: para revogação total, remova também o aplicativo no Portal do Parceiro iFood (apenas quem autorizou pode revogar por lá).";
 }
 
 /**

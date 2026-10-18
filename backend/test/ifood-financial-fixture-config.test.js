@@ -191,6 +191,7 @@ describe("rotas Sales/Events seguem IFOOD_FINANCIAL_FIXTURE, nunca a query", asy
       insert: () => { escritas.push(tabela); return q; }, update: () => { escritas.push(tabela); return q; },
       upsert: () => { escritas.push(tabela); return q; }, delete: () => { escritas.push(tabela); return q; },
       maybeSingle: async () => ({ data: linha, error: null }), single: async () => ({ data: linha, error: null }),
+      order: () => q, then: (ok, err) => Promise.resolve({ data: linha ? [linha] : [], error: null }).then(ok, err),   // leitura de LISTA (conexões vivas)
     };
     return q;
   };

@@ -47,6 +47,13 @@ const CATALOGO = {
     "Nossa conexão com o iFood expirou. Reconecte sua conta."],
   IFOOD_REFRESH_FALHOU: [401,
     "Nossa conexão com o iFood expirou e não foi possível renová-la. Reconecte sua conta."],
+  // Várias conexões na unidade (finalidades diferentes): nunca se escolhe uma por ordem de registro.
+  IFOOD_CONEXAO_AMBIGUA: [409,
+    "Esta unidade tem mais de uma conexão com o iFood. Informe qual conexão deve ser usada."],
+  IFOOD_CONEXAO_LEGADA_ROTULAR: [409,
+    "A conexão atual desta unidade ainda não foi classificada (financeira de homologação ou pedidos). Peça ao suporte para classificá-la antes de conectar o app de pedidos."],
+  IFOOD_FINALIDADE_NAO_SUPORTADA: [409,
+    "Esta unidade já tem uma conexão de pedidos separada; a conexão financeira de produção ainda não está disponível nesse arranjo."],
   IFOOD_CONEXAO_NAO_ENCONTRADA: [404,
     "Esta loja ainda não tem uma conexão com o iFood."],
   IFOOD_CREDENCIAL_NAO_ENCONTRADA: [404,

@@ -64,6 +64,7 @@ function repoFalso(overrides = {}) {
       estado.sessao = { ...estado.sessao, status, ...(anularVerifier ? { authorization_code_verifier_cifrado: null } : {}) };
       return estado.sessao;
     },
+    async obterConexaoViva() { return null; },   // sem conexão viva: o destino do OAuth é decidido pelo repositório real (ifoodConexaoDestino)
     async obterOuCriarConexao() {
       estado.conexao = estado.conexao ?? { id: "conx-1", status: "pendente" };
       return estado.conexao;

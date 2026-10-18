@@ -38,6 +38,7 @@ import * as solicitacoesModule from "./ifoodFinancial.solicitacoes.js";
 import { usarHomologacaoFinancial } from "./ifoodFinancialHomologacao.js";
 import { conciliarFinancial } from "./ifoodFinancial.reconciliation.js";
 import crypto from "node:crypto";
+import { FINALIDADES } from "./ifoodFinalidade.js";
 
 const RE_DATA = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -99,7 +100,7 @@ function validarPagina(valor) {
 }
 
 async function resolverConexaoComMerchant({ organizacaoId, unidadeId, repo }) {
-  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId, finalidade: FINALIDADES.FINANCEIRO_HOMOLOGACAO });
   if (!conexao) throw ifoodErro(IFOOD_ERROS.IFOOD_CONEXAO_NAO_ENCONTRADA);
   // merchant SEMPRE da conexão da unidade — nunca aceito do chamador (Bloco N).
   if (!conexao.merchant_id) throw ifoodErro(IFOOD_ERROS.IFOOD_FINANCIAL_SEM_MERCHANT);

@@ -149,6 +149,7 @@ describe("rotas: só req.tenant decide — query, body e header do navegador NÃ
       select: () => q, eq: (c, v) => { filtros[c] = v; return q; }, neq: () => q, in: () => q, order: () => q, limit: () => q, gt: () => q, lt: () => q,
       insert: () => q, update: () => q, upsert: () => q, delete: () => q,
       maybeSingle: async () => ({ data: dado(), error: null }), single: async () => ({ data: dado(), error: null }),
+      then: (ok, err) => Promise.resolve({ data: dado() ? [dado()] : [], error: null }).then(ok, err),   // leitura de LISTA (conexões vivas da unidade)
     };
     const dado = () => {
       if (tabela === "ifood_conexoes") return conexaoDe(filtros.unidade_id ?? tenantAtual.unidadeId);

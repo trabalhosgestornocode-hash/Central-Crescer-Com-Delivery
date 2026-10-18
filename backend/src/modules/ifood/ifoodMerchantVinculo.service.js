@@ -34,6 +34,7 @@ import * as vinculoRepositorio from "./ifoodMerchantVinculo.repository.js";
 import * as tokenService from "./ifoodToken.service.js";
 import * as eventsClient from "./ifoodEvents.client.js";
 import * as httpClient from "./ifoodHttp.client.js";
+import { FINALIDADES } from "./ifoodFinalidade.js";
 
 export const VINCULO_MANUAL = Object.freeze({
   maxVerificacoes: 3,                       // consultas de autorização por vínculo
@@ -77,7 +78,7 @@ function dependencias(deps = {}) {
  */
 async function exigirOrderDaUnidade({ organizacaoId, unidadeId, repo, token }) {
   if (!token.orderLiberadoParaUnidade(unidadeId)) throw ifoodErro(IFOOD_ERROS.IFOOD_ORDER_PILOTO_NAO_HABILITADO);
-  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId, finalidade: FINALIDADES.PEDIDOS_PRODUCAO });
   if (!conexao) throw ifoodErro(IFOOD_ERROS.IFOOD_ORDER_NAO_CONECTADO);
   // Defesa em profundidade: a conexão devolvida tem de ser do tenant pedido.
   if (conexao.organizacao_id !== organizacaoId || conexao.unidade_id !== unidadeId) throw ifoodErro(IFOOD_ERROS.IFOOD_ORDER_NAO_CONECTADO);
@@ -180,7 +181,7 @@ export async function confirmarMerchant({ organizacaoId, unidadeId, merchantId, 
 /** Encerra o vínculo em aberto da unidade. Idempotente. Não exige piloto nem credencial (é só limpeza). */
 export async function cancelarMerchantInformado({ organizacaoId, unidadeId, usuarioId, deps }) {
   const { repo, vinculos, log } = dependencias(deps);
-  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId });
+  const conexao = await repo.obterConexaoViva({ organizacaoId, unidadeId, finalidade: FINALIDADES.PEDIDOS_PRODUCAO });
   if (!conexao) return { cancelados: 0 };
   const cancelados = await vinculos.cancelarVinculosAbertos({ organizacaoId, unidadeId, conexaoId: conexao.id, motivo: MOTIVOS.CANCELADO });
   if (cancelados) log("info", "merchant_manual.cancelado", { organizacaoId, unidadeId, conexaoId: conexao.id, por: usuarioId });

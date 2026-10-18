@@ -20,6 +20,11 @@ export function validarSessionId(valor) {
   return v.uuid(valor, "sessionId");
 }
 
+/** conexaoId (uuid) da conexão a desconectar — vem do /status; o servidor reconfere que pertence ao tenant. */
+export function validarConexaoId(valor) {
+  return v.uuid(valor, "conexaoId");
+}
+
 /** lojaId (uuid) de uma loja adicional da unidade — vem da lista do /status, nunca digitado. */
 export function validarLojaId(valor) {
   return v.uuid(valor, "lojaId");

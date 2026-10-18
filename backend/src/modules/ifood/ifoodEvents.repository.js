@@ -38,11 +38,25 @@ function emLotes(lista, tamanho = LOTE) {
  * qual organização/unidade". (uq_ifood_conexao_merchant_vivo garante 1:1.)
  * @returns {Promise<Array<{id, organizacao_id, unidade_id, merchant_id}>>}
  */
-export async function listarConexoesComMerchant() {
-  return ok(await supabase.from(T.conexoes)
-    .select("id, organizacao_id, unidade_id, merchant_id")
-    .eq("status", "ativa")
-    .not("merchant_id", "is", null)) ?? [];
+export async function listarConexoesComMerchant({ db = supabase } = {}) {
+  // O Financial de homologação (loja de teste) NUNCA entra: este mapa alimenta o polling de pedidos no modo centralizado.
+  return ok(await comFiltroDeFinalidade((comColuna) => {
+    const q = db.from(T.conexoes).select("id, organizacao_id, unidade_id, merchant_id")
+      .eq("status", "ativa").not("merchant_id", "is", null);
+    return comColuna ? q.neq("finalidade", FINALIDADE_SO_FINANCEIRO) : q;
+  })) ?? [];
+}
+
+const FINALIDADE_SO_FINANCEIRO = "financeiro_homologacao";
+
+/**
+ * Roda a consulta com o filtro de finalidade (migration 124); se a coluna ainda não existir (código no ar antes da migration — o recebimento
+ * de pedidos da Saci não pode depender da ordem de publicação) repete sem o filtro: sem a coluna não há conexão financeira separada.
+ */
+async function comFiltroDeFinalidade(montar) {
+  const r = await montar(true);
+  if (r?.error && (r.error.code === "42703" || /finalidade/i.test(r.error.message ?? ""))) return montar(false);
+  return r;
 }
 
 /**
@@ -53,11 +67,16 @@ export async function listarConexoesComMerchant() {
  * @returns {Promise<Array<{id, organizacao_id, unidade_id, merchant_id, credencial_order_status}>>}
  */
 export async function listarConexoesElegiveisParaEvents({ db = supabase } = {}) {
-  const linhas = ok(await db.from(T.conexoes)
-    .select("id, organizacao_id, unidade_id, merchant_id, ifood_credenciais!inner(app_type, status)")
-    .eq("status", "ativa")
-    .not("merchant_id", "is", null)
-    .eq("ifood_credenciais.app_type", "order")) ?? [];
+  // Elegível = ativa + merchant + credencial `order` + finalidade que serve pedidos (`pedidos_producao` ou `legado`). A conexão
+  // `financeiro_homologacao` jamais é consultada (o banco também impede que ela tenha credencial `order`).
+  const linhas = ok(await comFiltroDeFinalidade((comColuna) => {
+    const q = db.from(T.conexoes)
+      .select("id, organizacao_id, unidade_id, merchant_id, ifood_credenciais!inner(app_type, status)")
+      .eq("status", "ativa")
+      .not("merchant_id", "is", null)
+      .eq("ifood_credenciais.app_type", "order");
+    return comColuna ? q.neq("finalidade", FINALIDADE_SO_FINANCEIRO) : q;
+  })) ?? [];
   return linhas.map(({ ifood_credenciais: cred, ...c }) => {
     const credOrder = (Array.isArray(cred) ? cred : [cred]).find((x) => x?.app_type === "order");
     return { ...c, credencial_order_status: credOrder?.status ?? null };

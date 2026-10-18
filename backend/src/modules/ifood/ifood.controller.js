@@ -139,7 +139,10 @@ export const status = asyncHandler(async (req, res) => {
 // usuário a remover o acesso também no Portal do Parceiro.
 export const desconectar = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
-  const data = await connectionService.desconectar({ organizacaoId, unidadeId, usuarioId: req.user.id });
+  // Desconexão de UMA conexão: `conexaoId` (corpo ou query). Sem ele, só vale se a unidade tem uma conexão só — com mais de uma o serviço recusa.
+  const bruto = req.body?.conexaoId ?? req.query?.conexaoId;
+  const conexaoId = bruto == null || bruto === "" ? null : val.validarConexaoId(bruto);
+  const data = await connectionService.desconectar({ organizacaoId, unidadeId, usuarioId: req.user.id, conexaoId });
   res.json({ data });
 });
 
