@@ -122,7 +122,7 @@ do $$
 begin
   if to_regclass('ifood_conexao_lojas') is not null then
     execute $f$
-      create or replace function ifood_loja_confere_finalidade() returns trigger
+      create or replace function ifood_conexao_loja_confere_finalidade() returns trigger
       language plpgsql as $b$
       declare v_fin text;
       begin
@@ -135,7 +135,7 @@ begin
       end $b$ $f$;
     execute 'drop trigger if exists trg_ifood_loja_finalidade on ifood_conexao_lojas';
     execute 'create trigger trg_ifood_loja_finalidade before insert or update of conexao_id on ifood_conexao_lojas
-             for each row execute function ifood_loja_confere_finalidade()';
+             for each row execute function ifood_conexao_loja_confere_finalidade()';
   end if;
 end $$;
 
@@ -146,7 +146,7 @@ declare
   v_fn text;
   v_role text;
 begin
-  foreach v_fn in array array['ifood_credencial_confere_finalidade()', 'ifood_conexao_confere_finalidade()', 'ifood_loja_confere_finalidade()'] loop
+  foreach v_fn in array array['ifood_credencial_confere_finalidade()', 'ifood_conexao_confere_finalidade()', 'ifood_conexao_loja_confere_finalidade()'] loop
     if to_regprocedure(v_fn) is not null then
       execute format('revoke all on function %s from public', v_fn);
       foreach v_role in array array['anon', 'authenticated'] loop

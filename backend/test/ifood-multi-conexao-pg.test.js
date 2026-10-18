@@ -101,10 +101,14 @@ describe("múltiplas conexões iFood por unidade (124/125) — Postgres descart�
     });
     test("rotula a conexão de TESTE da North como financeiro_homologacao SEM tocar merchant, status nem credenciais", () => {
       const antes = snapshot();
+      // linha INTEIRA da conexão (todas as colunas, exceto finalidade, ambiente e o carimbo de atualização) e TODAS as credenciais (tokens cifrados inclusos)
+      const inteira = () => q(`select md5((to_jsonb(c) - 'finalidade' - 'ambiente' - 'atualizado_em')::text) from ifood_conexoes c where id = '${CON_NORTH_TESTE}'`) + "/" + q(`select md5(string_agg(k::text, '|' order by app_type)) from ifood_credenciais k where conexao_id = '${CON_NORTH_TESTE}'`);
+      const inteiraAntes = inteira();
       const r = rotular(CON_NORTH_TESTE, "financeiro_homologacao", { confirmo_homologacao: "sim" });
       assert.equal(r.ok, true, r.err);
       assert.equal(fin(CON_NORTH_TESTE), "financeiro_homologacao|homologacao");
       assert.equal(snapshot(), antes, "merchant, status e credenciais idênticos");
+      assert.equal(inteira(), inteiraAntes, "conexão (todas as colunas menos finalidade/ambiente/atualizado_em) e credenciais, tokens inclusos, byte a byte");
       assert.equal(q("select count(*) from plataforma_auditoria where acao = 'ifood.conexao_rotulada'"), "1");
     });
     test("a reversão volta a `legado`; reaplicar a rotulagem funciona", () => {
@@ -197,6 +201,12 @@ describe("múltiplas conexões iFood por unidade (124/125) — Postgres descart�
       assert.equal(aplica("125_rollback.sql").ok, true);
       assert.equal(q("select count(*) from pg_indexes where indexname = 'uq_ifood_conexao_unidade_viva'"), "1");
       assert.equal(desrotular(CON_NORTH_TESTE).ok, true);
+      // sessão OAuth pendente com finalidade: o rollback da 124 espera/recusa (não perde a autorização em curso)
+      q(`insert into ifood_oauth_sessoes (organizacao_id, unidade_id, app_type, user_code, expira_em, finalidade, status) values ('${ORG}', '${UN_NORTH}', 'order', 'ABCD-1234', now() + interval '10 minutes', 'pedidos_producao', 'pending')`);
+      const bloqueado = aplica("124_rollback.sql");
+      assert.equal(bloqueado.ok, false);
+      assert.match(bloqueado.err, /sessao OAuth pendente/);
+      q("update ifood_oauth_sessoes set status = 'failed' where finalidade is not null");
       assert.equal(aplica("124_rollback.sql").ok, true);
       assert.equal(q("select count(*) from information_schema.columns where table_name in ('ifood_conexoes', 'ifood_oauth_sessoes') and column_name in ('finalidade', 'ambiente')"), "0");
       assert.equal(q("select count(*) from pg_trigger where tgname like 'trg_ifood_%finalidade'"), "0");

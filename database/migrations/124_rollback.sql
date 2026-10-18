@@ -35,7 +35,7 @@ begin
 end $$;
 drop function if exists ifood_credencial_confere_finalidade();
 drop function if exists ifood_conexao_confere_finalidade();
-drop function if exists ifood_loja_confere_finalidade();
+drop function if exists ifood_conexao_loja_confere_finalidade();
 
 drop index if exists uq_ifood_conexao_unidade_finalidade_viva;
 alter table ifood_conexoes drop constraint if exists ck_ifood_conexao_finalidade_ambiente;
