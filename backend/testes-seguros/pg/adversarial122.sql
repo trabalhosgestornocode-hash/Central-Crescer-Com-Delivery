@@ -1,5 +1,24 @@
 -- NOTA: S7v, S8a e S10b foram movidos (corrigidos) para adversarial122_complemento.sql, que roda DEPOIS deste. S11 PROVA o risco residual R-1 (fechamento sem ids de conciliação).
 -- papel DONO das funções: local = dono_sim; no Supabase descartável use -v DONO=<dono real>
+-- TRAVA DE AMBIENTE DESCARTÁVEL (cópia INLINE de t3/guarda_descartavel.sql: erro dentro de \ir NÃO encerra o script que incluiu)
+\set ON_ERROR_STOP on
+\if :{?CONFIRMO}
+\else
+  \set CONFIRMO 'ausente'
+\endif
+select (:'CONFIRMO' = 'ESTE_PROJETO_E_DESCARTAVEL') as guarda_confirmado \gset
+\if :guarda_confirmado
+\else
+  do $guarda$ begin raise exception 'RECUSADO: rode com -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL (somente banco/projeto DESCARTAVEL).'; end $guarda$;
+\endif
+do $guarda$
+begin
+  if to_regclass('public.organizacoes') is not null
+     and exists (select 1 from public.organizacoes where id::text not like '00000000-0000-0000-0000-0000000000__') then
+    raise exception 'RECUSADO: ha organizacoes que nao sao de teste neste banco; isto nao parece um ambiente descartavel.';
+  end if;
+end $guarda$;
+-- fim da trava
 \if :{?DONO} \else \set DONO dono_sim \endif
 -- Provas ADVERSARIAIS (Agente 1) da exceção de fechamento e do fechamento/reabertura diretos na 122 (cd35699).
 -- Banco "sim": 120+121+122 aplicadas COMO dono_sim (não-superusuário) com default privileges do Supabase simulados. Dados sintéticos.

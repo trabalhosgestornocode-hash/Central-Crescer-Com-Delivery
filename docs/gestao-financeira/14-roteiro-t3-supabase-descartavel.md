@@ -10,6 +10,8 @@ Escopo congelado: M1 (conciliação autoritativa no banco), O-1 (assinaturas obs
 4. Cada passo grava a saída em `evidencias-t3/AAAA-MM-DD/<passo>.txt` (fora do repositório), com o commit testado (`git rev-parse HEAD`).
 5. Qualquer ✗ interrompe o T3: registrar o achado na Ligação Direta e devolver para correção; **não** alterar expectativa de teste para aprovar.
 
+**Trava dos scripts SQL que escrevem** (`adversarial122*`, `desempenho_m1`, `reproduz_r1`, `seed_descartavel`): exigem `-v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL` e **recusam** qualquer banco que tenha organização com id fora do padrão de teste (`00000000-0000-0000-0000-0000000000xx`); a trava está INLINE em cada arquivo (erro dentro de `\ir` não encerra o script que incluiu — provado). Os scripts shell exigem `T3_CONFIRMO`/`T3_PSQL_CONN` (T3) ou o cluster local com `MARCADOR_DESCARTAVEL`; `parity_m1.mjs` exige `M1_CONFIRMO`; `f3_f4_e2e.mjs` exige `T3_CONFIRMO` e confere URL × ref (ou `T3_MODO=local` + marcador). Nenhum script lê `backend/.env`.
+
 ## 1. Preparação (decisão/ação do responsável pelo projeto)
 | # | Ação | Observação |
 |---|---|---|
@@ -17,7 +19,7 @@ Escopo congelado: M1 (conciliação autoritativa no banco), O-1 (assinaturas obs
 | 1.2 | Reproduzir o esquema BASE do produto (migrations 001–119, **e** 123–125 já existentes na `main`) | ordem: as de `origin/main` na ordem numérica. **120–122 entram depois e ficam "fora de ordem" (123–125 já aplicadas)** — o T3 prova que isso é seguro (item 3.A.5) |
 | 1.3 | Conferir o esquema base: `organizacoes`, `unidades`, `modulos` (com `categoria` ∈ operacao/integracao), `organizacao_modulos`, `unidade_modulos`, `perfis_operacionais` | a 120 depende deles |
 | 1.4 | Conexão de admin (`postgres`) por URI: `export T3_PSQL_CONN="postgresql://postgres:<senha-url-encoded>@<host>:5432/postgres"; export T3_CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL` | senha com caracteres especiais precisa de URL-encode |
-| 1.5 | Semente: `psql "$T3_PSQL_CONN" -f backend/testes-seguros/t3/seed_descartavel.sql` | ajustar colunas NOT NULL do esquema real; manter os ids |
+| 1.5 | Semente: `psql "$T3_PSQL_CONN" -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL -f backend/testes-seguros/t3/seed_descartavel.sql` | ajustar colunas NOT NULL do esquema real; manter os ids |
 | 1.6 | Ferramentas na máquina de teste: `psql` ≥ 14, Node ≥ 20, `backend/node_modules` instalado | |
 
 ## 2. Matriz de cobertura (o que o T3 precisa provar)
@@ -98,8 +100,8 @@ Usa `set role service_role` a partir de `postgres`; o papel `dono_sim` (dono sim
 
 ### 3.G Mês fechado, exceções, MFA, O-1, R-1
 ```bash
-psql "$T3_PSQL_CONN" -f backend/testes-seguros/pg/adversarial122.sql            | tee evidencias/3G-1.txt   # 70 PASS, 0 FALHA
-psql "$T3_PSQL_CONN" -f backend/testes-seguros/pg/adversarial122_complemento.sql | tee evidencias/3G-2.txt   # 5 PASS
+psql "$T3_PSQL_CONN" -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL -f backend/testes-seguros/pg/adversarial122.sql            | tee evidencias/3G-1.txt   # 70 PASS, 0 FALHA
+psql "$T3_PSQL_CONN" -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL -f backend/testes-seguros/pg/adversarial122_complemento.sql | tee evidencias/3G-2.txt   # 5 PASS
 bash backend/testes-seguros/pg/adversarial122_concorrencia.sh                    | tee evidencias/3G-3.txt   # A fecha; B ja_fechado; C fin_periodo_fechado; exceção consumida 1×
 ```
 Pontos que só o ambiente real confirma: (a) `set role anon/authenticated/service_role/dono` — passar o dono real: `psql … -v DONO=<dono> -f adversarial122.sql` (e `-f adversarial122_complemento.sql`), `T3_DONO_ROLE=<dono>` para `adversarial122_concorrencia.sh`; (b) `S0` (EXECUTE) com os papéis reais; (c) **R-1 reproduzido e bloqueado** (S11: lista de conciliação omitida/fabricada/extra/repetida/nula ⇒ `fin_conciliacao_divergente`; mês aberto); (d) O-1: ver verificação 16 do catálogo e rodar a 122 por cima de uma 122 antiga, se houver; (e) reabertura direta e fechamento direto (S9) barrados também para o dono.
@@ -121,8 +123,8 @@ Com um usuário **de teste** com TOTP cadastrado (MFA do Supabase Auth), `T3_JWT
 
 ### 3.J Desempenho
 ```bash
-psql "$T3_PSQL_CONN" -v N=60000  -v ORG=$T3_ORG_ID -f backend/testes-seguros/pg/desempenho_m1.sql
-psql "$T3_PSQL_CONN" -v N=300000 -v ORG=$T3_ORG_ID -f backend/testes-seguros/pg/desempenho_m1.sql
+psql "$T3_PSQL_CONN" -v N=60000  -v ORG=$T3_ORG_ID -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL -f backend/testes-seguros/pg/desempenho_m1.sql
+psql "$T3_PSQL_CONN" -v N=300000 -v ORG=$T3_ORG_ID -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL -f backend/testes-seguros/pg/desempenho_m1.sql
 ```
 Referência local (PG 17, máquina de desenvolvimento): 60 mil ⇒ função ~75–155 ms, fechamento completo ~210–260 ms; 300 mil ⇒ função ~480 ms. Critério T3: fechamento completo **< 2 s com 300 mil**; registrar `explain (analyze, buffers)` da função e confirmar uso do índice `ix_fin_lancamentos_periodo`. Observar também o tempo de retenção da trava (o fechamento segura `FOR UPDATE` no período) com carga concorrente de lançamentos em outro mês (não deve bloquear).
 

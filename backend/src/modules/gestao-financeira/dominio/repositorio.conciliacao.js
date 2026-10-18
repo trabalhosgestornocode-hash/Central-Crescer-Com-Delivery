@@ -2,18 +2,31 @@
 // Sem DELETE: cancelamento/revogação/desativação são mudanças de estado com motivo (e a auditoria guarda antes/depois).
 import { supabase } from "../../../config/supabase.js";
 import { exigirContexto } from "./contexto.js";
-import { falha, unid } from "./repositorio.util.js";
+import { falha, unid, PAGINA } from "./repositorio.util.js";
+
+/** Lê TODAS as linhas em páginas de PAGINA (o PostgREST devolve no máximo esse teto por requisição). Sem isso a lista truncava em silêncio e a
+ * conciliação da aplicação divergia da do banco (F-4: o fechamento era recusado com 409 em meses com muitas referências/resoluções). */
+async function todasAsPaginas(montar) {
+  const out = [];
+  for (let desde = 0; ; desde += PAGINA) {
+    const { data, error } = await montar().range(desde, desde + PAGINA - 1);
+    falha(error);
+    out.push(...(data ?? []));
+    if ((data ?? []).length < PAGINA) break;
+  }
+  return out;
+}
 
 const fimDoMes = (mes) => { const [a, m] = mes.split("-").map(Number); return `${mes}-${String(new Date(Date.UTC(a, m, 0)).getUTCDate()).padStart(2, "0")}`; };
 
 export async function listarReferencias(ctxIn, { mes, incluirCanceladas = false } = {}, db = supabase) {
   const ctx = exigirContexto(ctxIn);
-  let q = unid(db.from("fin_referencias").select("*"), ctx);
-  if (mes) q = q.gte("data", `${mes}-01`).lte("data", fimDoMes(mes));
-  if (!incluirCanceladas) q = q.eq("status", "ativa");
-  const { data, error } = await q.order("data").order("created_at").limit(5000);
-  falha(error);
-  return data ?? [];
+  return todasAsPaginas(() => {
+    let q = unid(db.from("fin_referencias").select("*"), ctx);
+    if (mes) q = q.gte("data", `${mes}-01`).lte("data", fimDoMes(mes));
+    if (!incluirCanceladas) q = q.eq("status", "ativa");
+    return q.order("data").order("created_at").order("id");
+  });
 }
 
 /** Insere só as referências cuja chave ainda não existe (idempotência); devolve contagens. */
@@ -40,14 +53,14 @@ export async function cancelarReferencia(ctxIn, id, motivo, db = supabase) {
 
 export async function listarResolucoes(ctxIn, { mes, de, ate, incluirRevogadas = false } = {}, db = supabase) {
   const ctx = exigirContexto(ctxIn);
-  let q = unid(db.from("fin_conciliacao_resolucoes").select("*"), ctx);
-  if (mes) q = q.gte("chave", `${mes}-01`).lte("chave", fimDoMes(mes));
-  if (de) q = q.gte("chave", de);
-  if (ate) q = q.lte("chave", ate);
-  if (!incluirRevogadas) q = q.eq("status", "vigente");
-  const { data, error } = await q.order("created_at").limit(5000);
-  falha(error);
-  return data ?? [];
+  return todasAsPaginas(() => {
+    let q = unid(db.from("fin_conciliacao_resolucoes").select("*"), ctx);
+    if (mes) q = q.gte("chave", `${mes}-01`).lte("chave", fimDoMes(mes));
+    if (de) q = q.gte("chave", de);
+    if (ate) q = q.lte("chave", ate);
+    if (!incluirRevogadas) q = q.eq("status", "vigente");
+    return q.order("created_at").order("id");
+  });
 }
 export async function inserirResolucao(ctxIn, r, db = supabase) {
   const ctx = exigirContexto(ctxIn);

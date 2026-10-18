@@ -1,5 +1,24 @@
 -- Complemento das provas adversariais: S7v/S7w (CHECK sem gatilhos), S8a e S10 corrigidos. Rodar DEPOIS de adversarial122.sql no mesmo banco 'sim'.
 -- papel DONO das funções: local = dono_sim; no Supabase descartável use -v DONO=<dono real>
+-- TRAVA DE AMBIENTE DESCARTÁVEL (cópia INLINE de t3/guarda_descartavel.sql: erro dentro de \ir NÃO encerra o script que incluiu)
+\set ON_ERROR_STOP on
+\if :{?CONFIRMO}
+\else
+  \set CONFIRMO 'ausente'
+\endif
+select (:'CONFIRMO' = 'ESTE_PROJETO_E_DESCARTAVEL') as guarda_confirmado \gset
+\if :guarda_confirmado
+\else
+  do $guarda$ begin raise exception 'RECUSADO: rode com -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL (somente banco/projeto DESCARTAVEL).'; end $guarda$;
+\endif
+do $guarda$
+begin
+  if to_regclass('public.organizacoes') is not null
+     and exists (select 1 from public.organizacoes where id::text not like '00000000-0000-0000-0000-0000000000__') then
+    raise exception 'RECUSADO: ha organizacoes que nao sao de teste neste banco; isto nao parece um ambiente descartavel.';
+  end if;
+end $guarda$;
+-- fim da trava
 \if :{?DONO} \else \set DONO dono_sim \endif
 
 create or replace function pg_temp.exp(label text, stmt text, esperado text) returns void language plpgsql as $$

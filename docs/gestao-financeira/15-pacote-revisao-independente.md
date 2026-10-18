@@ -66,8 +66,8 @@ git diff cd35699 1d7bcfc -- backend/testes-financeiro-pg backend/test/financeiro
 ```bash
 export PG_CLUSTER_DIR=<cluster descartável com MARCADOR_DESCARTAVEL>
 git show cd35699:docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql > /tmp/122_pre_M1.sql
-P122=/tmp/122_pre_M1.sql bash backend/testes-seguros/pg/sim_supabase.sh && psql -h 127.0.0.1 -p 54321 -U postgres -d sim -q -tA -f backend/testes-seguros/pg/reproduz_r1.sql   # ANTES: imprime "fechado" (mês com ponte aberta fecha com lista vazia, sem exceção)
-bash backend/testes-seguros/pg/sim_supabase.sh && psql -h 127.0.0.1 -p 54321 -U postgres -d sim -q -tA -f backend/testes-seguros/pg/reproduz_r1.sql                       # DEPOIS: ERROR fin_conciliacao_divergente (informada=0, banco=1)
+P122=/tmp/122_pre_M1.sql bash backend/testes-seguros/pg/sim_supabase.sh && psql -h 127.0.0.1 -p 54321 -U postgres -d sim -q -tA -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL -f backend/testes-seguros/pg/reproduz_r1.sql   # ANTES: imprime "fechado" (mês com ponte aberta fecha com lista vazia, sem exceção)
+bash backend/testes-seguros/pg/sim_supabase.sh && psql -h 127.0.0.1 -p 54321 -U postgres -d sim -q -tA -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL -f backend/testes-seguros/pg/reproduz_r1.sql                       # DEPOIS: ERROR fin_conciliacao_divergente (informada=0, banco=1)
 ```
 Para preparar o cluster: `initdb -D <dir> -U postgres -A trust --no-locale -E UTF8 && echo d > <dir>/MARCADOR_DESCARTAVEL && pg_ctl -D <dir> -o "-p 54321 -c listen_addresses=127.0.0.1" start` (porta fixa 54321; exportar `PGCLIENTENCODING=UTF8`).
 

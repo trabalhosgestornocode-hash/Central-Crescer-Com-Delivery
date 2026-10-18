@@ -18,18 +18,28 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 
 const E = process.env;
-const faltam = ["T3_SUPABASE_URL", "T3_SERVICE_ROLE_KEY", "T3_PROJECT_REF", "T3_CONFIRMO", "T3_ORG_ID", "T3_UNIDADE_ID"].filter((k) => !E[k]);
-if (faltam.length) { console.error(`Faltam variáveis: ${faltam.join(", ")}`); process.exit(2); }
-if (E.T3_CONFIRMO !== "ESTE_PROJETO_E_DESCARTAVEL") { console.error("T3_CONFIRMO precisa ser exatamente ESTE_PROJETO_E_DESCARTAVEL"); process.exit(2); }
-if (!E.T3_SUPABASE_URL.includes(E.T3_PROJECT_REF) || !/^https:\/\/[a-z0-9]+\.supabase\.co\/?$/.test(E.T3_SUPABASE_URL)) { console.error("T3_SUPABASE_URL não corresponde a T3_PROJECT_REF (ou formato inesperado)"); process.exit(2); }
-// as camadas da aplicação importam config/supabase.js, que exige estas variáveis: apontam para o projeto DESCARTÁVEL (nunca para o .env)
-process.env.SUPABASE_URL = E.T3_SUPABASE_URL; process.env.SUPABASE_SERVICE_ROLE_KEY = E.T3_SERVICE_ROLE_KEY; process.env.SUPABASE_ANON_KEY = E.T3_SERVICE_ROLE_KEY;
-
 const aqui = path.dirname(fileURLToPath(import.meta.url));
 const backend = path.resolve(aqui, "..", "..");
-const req = createRequire(path.join(backend, "package.json"));
-const { createClient } = req("@supabase/supabase-js");
-const db = createClient(E.T3_SUPABASE_URL, E.T3_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+// MODO LOCAL (T3_MODO=local): o mesmo roteiro contra o PostgreSQL LOCAL DESCARTÁVEL (banco "sim" de sim_supabase.sh), com o cliente
+// `postgrest_local.mjs` (mesma interface do supabase-js, executa como service_role). Exige PG_CLUSTER_DIR com MARCADOR_DESCARTAVEL; nenhuma rede.
+const LOCAL = E.T3_MODO === "local";
+let db;
+if (LOCAL) {
+  process.env.SUPABASE_URL = "http://127.0.0.1:1"; process.env.SUPABASE_SERVICE_ROLE_KEY = "local-ficticia"; process.env.SUPABASE_ANON_KEY = "local-ficticia";
+  E.T3_ORG_ID ??= "00000000-0000-0000-0000-0000000000a1"; E.T3_UNIDADE_ID ??= "00000000-0000-0000-0000-0000000000a2";
+  const { criarClienteLocal } = await import(pathToFileURL(path.join(backend, "testes-seguros", "pg", "postgrest_local.mjs")).href);
+  db = criarClienteLocal();
+} else {
+  const faltam = ["T3_SUPABASE_URL", "T3_SERVICE_ROLE_KEY", "T3_PROJECT_REF", "T3_CONFIRMO", "T3_ORG_ID", "T3_UNIDADE_ID"].filter((k) => !E[k]);
+  if (faltam.length) { console.error(`Faltam variáveis: ${faltam.join(", ")}`); process.exit(2); }
+  if (E.T3_CONFIRMO !== "ESTE_PROJETO_E_DESCARTAVEL") { console.error("T3_CONFIRMO precisa ser exatamente ESTE_PROJETO_E_DESCARTAVEL"); process.exit(2); }
+  if (!E.T3_SUPABASE_URL.includes(E.T3_PROJECT_REF) || !/^https:\/\/[a-z0-9]+\.supabase\.co\/?$/.test(E.T3_SUPABASE_URL)) { console.error("T3_SUPABASE_URL não corresponde a T3_PROJECT_REF (ou formato inesperado)"); process.exit(2); }
+  // as camadas da aplicação importam config/supabase.js, que exige estas variáveis: apontam para o projeto DESCARTÁVEL (nunca para o .env)
+  process.env.SUPABASE_URL = E.T3_SUPABASE_URL; process.env.SUPABASE_SERVICE_ROLE_KEY = E.T3_SERVICE_ROLE_KEY; process.env.SUPABASE_ANON_KEY = E.T3_SERVICE_ROLE_KEY;
+  const req = createRequire(path.join(backend, "package.json"));
+  const { createClient } = req("@supabase/supabase-js");
+  db = createClient(E.T3_SUPABASE_URL, E.T3_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+}
 const imp = (rel) => import(pathToFileURL(path.join(backend, "src", "modules", "gestao-financeira", "dominio", rel)).href);
 const conc = await imp("conciliacao.service.js");
 const per = await imp("periodos.service.js");
@@ -63,12 +73,13 @@ const proximoMes = () => { n += 1; const m = ((n - 1) % 12) + 1; const a = 2040 
 const lanc = (c, M, d, conta, cat, sentido, valor, status = "realizado") => ({ organizacao_id: ORG, unidade_id: UNI, conta_id: contaId[conta], categoria_id: cat ? catId[cat] : null, descricao: `T3 ${c}`, sentido, valor_centavos: valor, data_movimento: M.dia(d), status, classificacao_pendente: !cat });
 const ref = (M, d, tipo, valor, canal = null) => ({ organizacao_id: ORG, unidade_id: UNI, data: M.dia(d), tipo, canal, valor_centavos: valor, fonte: "t3" });
 
-async function comparar(rotulo, M) {
+async function comparar(rotulo, M, { informativo = false } = {}) {
   const app = (await conc.calcularMes(ctx, M.mes, deps)).resultado.resumo.pendenciasAbertasIds;
   const { data, error } = await db.rpc("fin_conciliacao_pendencias_ids", { p_org: ORG, p_unidade: UNI, p_mes: `${M.mes}-01` });
   if (error) { registra(`${rotulo}: rpc do banco`, false, error.message); return null; }
   const a = [...app].sort(), b = [...(data ?? [])].sort();
-  registra(`${rotulo}: aplicação = banco`, JSON.stringify(a) === JSON.stringify(b), `app=${JSON.stringify(a)} banco=${JSON.stringify(b)}`);
+  if (informativo) console.log(`INFO  ${rotulo}: aplicação ${JSON.stringify(a) === JSON.stringify(b) ? "=" : "≠"} banco (app=${JSON.stringify(a)} banco=${JSON.stringify(b)})`);
+  else registra(`${rotulo}: aplicação = banco`, JSON.stringify(a) === JSON.stringify(b), `app=${JSON.stringify(a)} banco=${JSON.stringify(b)}`);
   return { app: a, banco: b };
 }
 
@@ -86,7 +97,7 @@ console.log("== F-3: paridade fim-a-fim (carregamento real da aplicação × fun
 console.log("== F-4: limites de consulta (.limit(5000)) — falha fechada ==");
 async function f4(rotulo, semear) {
   const M = proximoMes(); await semear(M);
-  const r = await comparar(`${rotulo}: comparação`, M);
+  const r = await comparar(`${rotulo}: comparação`, M, { informativo: true });
   if (!r) return;
   const pre = await per.preFechamento(ctx, M.mes, deps);
   let desfecho;
@@ -94,14 +105,16 @@ async function f4(rotulo, semear) {
   catch (e) { desfecho = `${e.status ?? e.statusCode ?? "?"}:${e.details?.codigo ?? e.codigo ?? e.message}`; }
   const { data: p } = await db.from("fin_periodos").select("status").eq("unidade_id", UNI).eq("mes", `${M.mes}-01`).maybeSingle();
   const iguais = JSON.stringify(r.app) === JSON.stringify(r.banco);
-  if (iguais) registra(`${rotulo}: limite não alterou o resultado (ou foi corrigido)`, true, `desfecho=${desfecho}`);
+  // iguais: o banco não vê pendência neste cenário, então o fechamento TEM de concluir (paginação correta)
+  if (iguais) registra(`${rotulo}: app = banco e o mês FECHA (paginação lê todas as linhas)`, desfecho === "fechou" && p?.status === "fechado", `desfecho=${desfecho} status=${p?.status}`);
   else registra(`${rotulo}: DIVERGIU (app≠banco) ⇒ fechamento RECUSADO com 409 e mês aberto`, /409:FIN_CONCILIACAO_DIVERGENTE/.test(desfecho) && p?.status !== "fechado", `desfecho=${desfecho} status=${p?.status}`);
   if (desfecho === "fechou" && !iguais) registra(`${rotulo}: NUNCA fechar com lista incompleta`, false, "fechou com divergência");
 }
 // 5 001 referências de venda de 100 centavos = 500 100 vendidos; taxa 100; recebido 500 000 ⇒ residual 0 no BANCO; a aplicação lê só 5 000 ⇒ vê 100 a menos ⇒ ponte aberta
 await f4("5 001 referências", async (M) => {
   await ins("fin_lancamentos", [lanc("rec", M, 3, "banco", "receita", "entrada", 500000)]);
-  const refs = Array.from({ length: 5001 }, () => ref(M, 5, "venda", 100)); refs.push(ref(M, 5, "taxa", 100, "STONE"));
+  // a taxa fica no dia 1 (ordenação por data): se a aplicação truncar, perde VENDAS (diverge de forma determinística), não a taxa
+  const refs = [ref(M, 1, "taxa", 100, "STONE"), ...Array.from({ length: 5001 }, () => ref(M, 5, "venda", 100))];
   for (let i = 0; i < refs.length; i += 1000) await ins("fin_referencias", refs.slice(i, i + 1000));
 });
 // ponte aberta (residual 5 001) com 5 001 resoluções vigentes de 1 centavo (soma 5 001 ⇒ banco: resolvida); a aplicação lê 5 000 ⇒ parcial ⇒ aberta

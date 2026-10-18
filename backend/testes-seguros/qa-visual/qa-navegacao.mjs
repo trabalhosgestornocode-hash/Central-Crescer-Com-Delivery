@@ -53,7 +53,11 @@ async function limpar(page) { await page.evaluate(() => { sessionStorage.clear()
   checar("financeiro: sem itens operacionais", !itens.some((t) => /Produtos|Insumos|Vendas|Checklist/.test(t)));
   checar("financeiro: alternador oculto (um setor só)", !(await ver(page, "#btn-setor")));
   checar("financeiro: filtros operacionais ocultos", !(await ver(page, ".global-filtros")));
-  checar("financeiro: Visão Geral mostra 'em construção' (não finge funcionalidade)", /em construção/i.test(await page.locator("#view").innerText()));
+  // A Visão Geral já é a tela REAL (Agente 2, integrada no A7+). Este servidor só responde a navegação (sem API do domínio): a tela tem de
+  // mostrar estado de erro/vazio honesto — nunca "em construção" nem números inventados. Os dados reais são cobertos por qa-integrado/qa-jornada.
+  // (este servidor responde `{ data: [] }` a tudo o que não é navegação: a tela recebe um formato que o backend real nunca devolve e mostra o
+  //  estado de erro — o que se exige aqui é NÃO fingir: sem "em construção", sem NaN e sem valores monetários inventados)
+  { const t = await page.locator("#view").innerText(); checar("financeiro: Visão Geral é a tela real (sem 'em construção'), mostra estado de erro honesto e nenhum número inventado sem API", !/em construção/i.test(t) && /Não foi possível|sem dados|vazio/i.test(t) && !/NaN|R\$\s*[1-9]/.test(t), t.slice(0, 160).replace(/\s+/g, " ")); }
   await foto(page, "02-financeiro-desktop");
   await page.locator('#menu li[data-rota="fin-dre"]').click(); await page.waitForTimeout(500);
   checar("financeiro: navegar para DRE altera o título", /DRE/.test(await page.locator("#page-title").innerText()));

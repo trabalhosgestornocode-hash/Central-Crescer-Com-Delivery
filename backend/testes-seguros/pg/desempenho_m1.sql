@@ -3,6 +3,25 @@
 --   (padrão N=60000; ORG padrão = 00000000-0000-0000-0000-0000000000a1, a mesma do ambiente local)
 -- Mede: função autoritativa de conciliação, impressão digital e fechamento completo (mês limpo). Critério de aceite sugerido: fechamento < 2 s com 300 mil.
 -- Observação T3: o insert em massa usa session_replication_role = replica (pula gatilhos); se o papel do projeto não puder, rode sem essa linha (mais lento, mesmo resultado).
+-- TRAVA DE AMBIENTE DESCARTÁVEL (cópia INLINE de t3/guarda_descartavel.sql: erro dentro de \ir NÃO encerra o script que incluiu)
+\set ON_ERROR_STOP on
+\if :{?CONFIRMO}
+\else
+  \set CONFIRMO 'ausente'
+\endif
+select (:'CONFIRMO' = 'ESTE_PROJETO_E_DESCARTAVEL') as guarda_confirmado \gset
+\if :guarda_confirmado
+\else
+  do $guarda$ begin raise exception 'RECUSADO: rode com -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL (somente banco/projeto DESCARTAVEL).'; end $guarda$;
+\endif
+do $guarda$
+begin
+  if to_regclass('public.organizacoes') is not null
+     and exists (select 1 from public.organizacoes where id::text not like '00000000-0000-0000-0000-0000000000__') then
+    raise exception 'RECUSADO: ha organizacoes que nao sao de teste neste banco; isto nao parece um ambiente descartavel.';
+  end if;
+end $guarda$;
+-- fim da trava
 \set ON_ERROR_STOP on
 \if :{?N} \else \set N 60000 \endif
 \if :{?ORG} \else \set ORG '00000000-0000-0000-0000-0000000000a1' \endif

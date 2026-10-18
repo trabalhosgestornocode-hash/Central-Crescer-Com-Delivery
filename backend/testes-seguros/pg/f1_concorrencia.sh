@@ -7,6 +7,10 @@ export PATH="/c/Program Files/PostgreSQL/17/bin:$PATH" PGCLIENTENCODING=UTF8
 # local: banco "sim". T3 (Supabase DESCARTÁVEL): exporte T3_PSQL_CONN="postgresql://postgres:<senha-url-encoded>@<host>:5432/postgres" e T3_CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL
 if [ -n "$T3_PSQL_CONN" ]; then [ "$T3_CONFIRMO" = "ESTE_PROJETO_E_DESCARTAVEL" ] || { echo "defina T3_CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL"; exit 2; }; H="$T3_PSQL_CONN"; else H="-h 127.0.0.1 -p 54321 -U postgres -d sim"; fi
 O_PADRAO=00000000-0000-0000-0000-0000000000a1
+if [ -z "$T3_PSQL_CONN" ]; then   # modo LOCAL: só o cluster DESCARTÁVEL (arquivo MARCADOR_DESCARTAVEL e data_directory conferido)
+  [ -n "$PG_CLUSTER_DIR" ] && [ -f "$PG_CLUSTER_DIR/MARCADOR_DESCARTAVEL" ] || { echo "defina PG_CLUSTER_DIR de um cluster DESCARTÁVEL (MARCADOR_DESCARTAVEL)"; exit 2; }
+  psql -h 127.0.0.1 -p 54321 -U postgres -tAc "show data_directory" | grep -qF "$PG_CLUSTER_DIR" || { echo "cluster inesperado"; exit 2; }
+fi
 P="psql $H -q -tA -v ON_ERROR_STOP=0"
 T="${TMPDIR:-/tmp}/f1"; mkdir -p "$T"
 O="${T3_ORG_ID:-$O_PADRAO}"; USR=00000000-0000-0000-0000-000000000999; SA=00000000-0000-0000-0000-000000000888
