@@ -54,11 +54,12 @@
 .fin-cab-acoes .fin-badge { white-space: normal; }
 
 /* ---------- campos e filtros ---------- */
-.fin-campo { display: grid; gap: 5px; font-size: 12px; font-weight: 600; color: var(--fin-texto-2); min-width: 0; }
+/* minmax(0,1fr) + min-width 0: o <input type="month"> tem largura mínima intrínseca e, no celular, invadia o campo ao lado */
+.fin-campo { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; font-size: 12px; font-weight: 600; color: var(--fin-texto-2); min-width: 0; }
 .fin-campo--inline { grid-auto-flow: row; }
 .fin-campo input, .fin-campo select, .fin-campo textarea {
   font: inherit; font-size: 13.5px; font-weight: 450; color: var(--texto); background: var(--card); border: 1px solid var(--fin-linha-forte); border-radius: 10px;
-  padding: 8px 11px; min-height: 38px; width: 100%; box-sizing: border-box; transition: border-color var(--t), box-shadow var(--t);
+  padding: 8px 11px; min-height: 38px; width: 100%; min-width: 0; box-sizing: border-box; transition: border-color var(--t), box-shadow var(--t);
 }
 .fin-campo textarea { resize: vertical; line-height: 1.45; }
 .fin-campo input[type="file"] { padding: 5px 6px; color: var(--fin-texto-2); cursor: pointer; }
@@ -270,6 +271,17 @@
   .fin-tabela--cartao td::before { content: attr(data-rot); color: var(--fin-texto-3); font-size: 11px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; text-align: left; flex: 0 0 auto; }
   .fin-tabela--cartao td:not([data-rot]), .fin-tabela--cartao td[data-rot=""] { justify-content: flex-end; }
   .fin-tabela--cartao .fin-linha-acoes { flex-wrap: wrap; }
+  /* tabelas largas que ROLAM (DRE, ponte, relatórios): 1ª coluna fixa ao rolar e textos explicativos com largura mínima — antes a coluna
+     "Como é calculada" era espremida, cada linha ficava com 3–4 linhas de altura e a comparação ficava escondida sem pista de rolagem */
+  .fin-tabela-wrap .fin-tabela:not(.fin-tabela--cartao) { width: max-content; min-width: 100%; }
+  .fin-tabela-wrap .fin-tabela:not(.fin-tabela--cartao) td > small:only-child { display: block; min-width: 13rem; max-width: 18rem; white-space: normal; }
+  .fin-tabela-wrap .fin-tabela:not(.fin-tabela--cartao) :is(thead th:first-child, tbody th[scope="row"]) {
+    position: sticky; left: 0; z-index: 2; background: var(--card); min-width: 8.5rem; max-width: 11rem; box-shadow: 1px 0 0 var(--linha);
+  }
+  .fin-tabela-wrap .fin-tabela:not(.fin-tabela--cartao) thead th:first-child { z-index: 3; background: var(--fin-sup); }
+  .fin-tabela-wrap .fin-tabela:not(.fin-tabela--cartao) .fin-tot th[scope="row"] { background: var(--fin-sup); }
+  .fin-tabela-wrap .fin-tabela:not(.fin-tabela--cartao) th, .fin-tabela-wrap .fin-tabela:not(.fin-tabela--cartao) td { padding: 9px 12px; }
+  .fin-tabela-wrap .fin-tabela:not(.fin-tabela--cartao) .fin-det th:first-child { padding-left: 22px; }
 }
 @media (max-width: 420px) { .fin-kpi-val { font-size: 17px; } .fin-kpi-sub { font-size: 12px; } }
 @media (max-width: 380px) { .fin-kpi { padding: 12px; } .fin-kpi-val { font-size: 15.5px; letter-spacing: -.02em; } }

@@ -86,7 +86,7 @@ function pintar(alvo, mes, g, ind, cats, anterior) {
     <p class="fin-regime">${esc(g.regime.rotulo)} · período ${esc(rotuloMes(mes))} · ${g.indicadores.contagem.considerados} lançamento(s) considerados</p>
     ${alertas}
     <div class="fin-kpis">${kpis}</div>
-    <div class="fin-card">${graficoEntradasSaidas(g.serie.map((s) => ({ ...s })), { titulo: "Entradas e saídas por dia (sem transferências internas)", largura: alvo.clientWidth - 42 }) || estado.vazio("Sem movimento operacional no período")}</div>
+    <div class="fin-card" data-grafico-es>${graficoEs(g.serie, alvo.clientWidth - 42)}</div>
     <div class="fin-grade2 fin-grade2--5-7">
       <div class="fin-card"><h3>Saldo por conta</h3>${saldos}<p class="fin-sub">${esc(g.saldosPorConta.rotulo)}</p></div>
       <div class="fin-card"><h3>Movimentação por conta</h3>${mov}</div>
@@ -99,4 +99,26 @@ function pintar(alvo, mes, g, ind, cats, anterior) {
         ${pend.semCategoria ? badge("Indicadores parciais", "warn") : pend.pendentes ? badge("Aguardando confirmação", "info") : badge("Tudo classificado", "ok")}
       </div>
     </div>`;
+  redesenharAoRedimensionar(alvo, g.serie);
+}
+
+const graficoEs = (serie, largura) =>
+  graficoEntradasSaidas(serie.map((s) => ({ ...s })), { titulo: "Entradas e saídas por dia (sem transferências internas)", largura }) || estado.vazio("Sem movimento operacional no período");
+
+// O SVG é desenhado na largura real do cartão; ao redimensionar a janela (ou girar o celular) ele é redesenhado na nova largura.
+function redesenharAoRedimensionar(alvo, serie) {
+  alvo._finRo?.disconnect();
+  const card = alvo.querySelector("[data-grafico-es]");
+  if (!card || !serie.length || typeof ResizeObserver === "undefined") return;
+  const util = () => { const cs = getComputedStyle(card); return card.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); };
+  let ultima = util();
+  const ro = new ResizeObserver(() => {
+    if (!card.isConnected) { ro.disconnect(); return; }
+    const w = util();
+    if (Math.abs(w - ultima) < 16) return;
+    ultima = w;
+    card.innerHTML = graficoEs(serie, w);
+  });
+  ro.observe(card);
+  alvo._finRo = ro;
 }
