@@ -3,6 +3,8 @@
 Data: 2026-10-18 · Base: `integracao/gestao-financeira` @ `1d7bcfc` (+ este checkpoint) · **Nenhum projeto Supabase foi criado ou acessado.** Este documento consolida o roteiro executável; consolida e substitui as seções A–G do `05-checklist-homologacao-t3-mfa.md` (que permanece como histórico).
 Escopo congelado: M1 (conciliação autoritativa no banco), O-1 (assinaturas obsoletas), F-1 (integridade do pré-fechamento), F-2 (invalidação da prévia após 409). **A 122 continua sem promoção.** Nada aqui habilita concessões, o módulo financeiro nem acessos reais.
 
+> **Antes de começar:** pré-voo e ordem exata de aplicação no `18-pre-voo-t3.md` (`preflight_t3.mjs`, `aplicar_estrutura_t3.sh`). Use um projeto **novo e exclusivo** — nunca o de produção (`uqybgauuxcrqzquultfu`) nem o de teste compartilhado (`wiqqsxnysbzhcrzrrean`).
+
 ## 0. Regras de segurança do T3
 1. **Projeto novo, criado só para isto**, sem dados reais, sem integrações, sem usuários reais. Nunca reutilizar produção, homologação com dados, nem o banco local do `backend/.env` (aponta para PRODUÇÃO).
 2. Chaves (`service_role`, senha do banco) ficam **só em variáveis de ambiente do terminal**, nunca em arquivo, commit, chat ou log. Os scripts leem apenas `T3_*`/`M1_*` e exigem `T3_CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL`.
