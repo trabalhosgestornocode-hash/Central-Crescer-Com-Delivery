@@ -178,10 +178,26 @@ begin
 end $$;
 
 -- Tabelas com coluna de data (argumento do gatilho): referências, resoluções, aberturas — mês fechado também é intocável.
+-- D-1 (A2, 2026-10-19): confere o mês ANTIGO e o NOVO. Antes só o NEW era conferido, e um UPDATE da data/chave tirava a linha de um mês
+-- fechado (mudando a impressão digital dele) para um mês aberto. Organização e unidade não mudam (unidade com dado financeiro não se
+-- transfere — 120 §5b). DELETE também é conferido (o service_role nem tem DELETE; isto cobre o dono). Travas em ordem crescente de mês,
+-- para dois movimentos cruzados não se travarem mutuamente.
 create or replace function fin_guarda_periodo_data() returns trigger language plpgsql as $$
-declare j jsonb := to_jsonb(new); v_data date := nullif(j->>tg_argv[0], '')::date;
+declare v_velho date; v_novo date;
 begin
-  if v_data is not null then perform fin_periodo_travar_e_checar(new.organizacao_id, new.unidade_id, v_data); end if;
+  if tg_op <> 'INSERT' then v_velho := nullif(to_jsonb(old)->>tg_argv[0], '')::date; end if;
+  if tg_op <> 'DELETE' then v_novo := nullif(to_jsonb(new)->>tg_argv[0], '')::date; end if;
+  if tg_op = 'UPDATE' and (new.organizacao_id is distinct from old.organizacao_id or new.unidade_id is distinct from old.unidade_id) then
+    raise exception 'fin_campo_imutavel: organizacao e unidade nao mudam' using errcode = '23514';
+  end if;
+  if v_velho is not null and (v_novo is null or date_trunc('month', v_velho) < date_trunc('month', v_novo)) then
+    perform fin_periodo_travar_e_checar(old.organizacao_id, old.unidade_id, v_velho);
+  end if;
+  if v_novo is not null then perform fin_periodo_travar_e_checar(new.organizacao_id, new.unidade_id, v_novo); end if;
+  if v_velho is not null and v_novo is not null and date_trunc('month', v_velho) > date_trunc('month', v_novo) then
+    perform fin_periodo_travar_e_checar(old.organizacao_id, old.unidade_id, v_velho);
+  end if;
+  if tg_op = 'DELETE' then return old; end if;
   return new;
 end $$;
 
@@ -224,11 +240,11 @@ begin
   end loop;
 end $$;
 drop trigger if exists trg_fin_referencias_periodo on fin_referencias;
-create trigger trg_fin_referencias_periodo before insert or update on fin_referencias for each row execute function fin_guarda_periodo_data('data');
+create trigger trg_fin_referencias_periodo before insert or update or delete on fin_referencias for each row execute function fin_guarda_periodo_data('data');
 drop trigger if exists trg_fin_resolucoes_periodo on fin_conciliacao_resolucoes;
-create trigger trg_fin_resolucoes_periodo before insert or update on fin_conciliacao_resolucoes for each row execute function fin_guarda_periodo_data('chave');
+create trigger trg_fin_resolucoes_periodo before insert or update or delete on fin_conciliacao_resolucoes for each row execute function fin_guarda_periodo_data('chave');
 drop trigger if exists trg_fin_saldos_periodo on fin_saldos_abertura;
-create trigger trg_fin_saldos_periodo before insert or update on fin_saldos_abertura for each row execute function fin_guarda_periodo_data('data_referencia');
+create trigger trg_fin_saldos_periodo before insert or update or delete on fin_saldos_abertura for each row execute function fin_guarda_periodo_data('data_referencia');
 
 -- ---------------------------------------------------------------------
 -- Operações de período (atômicas, com controle de concorrência)

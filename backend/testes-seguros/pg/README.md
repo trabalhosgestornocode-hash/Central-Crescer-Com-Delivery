@@ -11,6 +11,8 @@ export PG_CLUSTER_DIR=~/pg-descartavel
 bash backend/testes-seguros/pg/sim_supabase.sh            # privilégios estilo Supabase (dono não-superusuário, default privileges, service_role BYPASSRLS)
 APLICAR_122B=1 bash backend/testes-seguros/pg/sim_supabase.sh   # idem, com a proposta de endurecimento 122b
 psql -h 127.0.0.1 -p 54321 -U postgres -d sim -f backend/testes-seguros/pg/sondagem122.sql   # após o sim: período fechado, transferências, reabertura, FK de importação
+psql -h 127.0.0.1 -p 54321 -U postgres -d sim -v CONFIRMO=ESTE_PROJETO_E_DESCARTAVEL -f backend/testes-seguros/pg/adversarial_d1_periodo_fechado.sql   # D-1: histórico de mês fechado (data/chave/escopo/lote/DELETE); 44 PASS
+#   prova "antes": P122=<122 sem a correção D-1> bash backend/testes-seguros/pg/sim_supabase.sh e o mesmo psql => 25 FALHA
 bash backend/testes-seguros/pg/ciclo_120_121_122.sh        # aplica, idempotência, rollback na ordem inversa, janela do rollback da 122
 bash backend/testes-seguros/pg/transferencia_unidades.sh   # cadeia REAL da origin/main + 120–122: transferência/promoção de unidades × Financeiro (doc 20)
 ```
