@@ -61,3 +61,4 @@ backend/test/fixtures-financeiras-reais/
 # QA visual: capturas locais
 backend/testes-seguros/qa-visual/shots/
 backend/testes-seguros/qa-visual/resultado.json
+backend/testes-seguros/qa-visual/resultado-integrado.json
