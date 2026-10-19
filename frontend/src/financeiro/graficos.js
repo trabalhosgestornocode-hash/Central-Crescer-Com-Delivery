@@ -30,33 +30,35 @@ function barra(x, yBase, w, h, cor, tip) {
  * Entradas × saídas por período (barras agrupadas, UMA escala). serie: [{periodo, entradas, saidas}] em centavos.
  * Inclui legenda e uma visão em tabela (acessibilidade).
  */
-export function graficoEntradasSaidas(serie, { titulo = "Entradas e saídas por dia" } = {}) {
+export function graficoEntradasSaidas(serie, { titulo = "Entradas e saídas por dia", largura = 720 } = {}) {
   if (!serie?.length) return "";
-  const W = 720, H = 280, mE = 56, mD = 12, mT = 12, mB = 34;
+  // `largura` = largura real do contêiner em px: o viewBox acompanha o espaço e o eixo fica em 11px em qualquer tela
+  // (com viewBox fixo o desenho crescia no desktop — eixo de ~16px — e encolhia no celular — eixo de ~5px).
+  const W = Math.max(300, Math.round(largura)), H = W < 520 ? 220 : 260, mE = 52, mD = 8, mT = 12, mB = 30;
   const area = { w: W - mE - mD, h: H - mT - mB };
   const teto = tetoEixo(Math.max(...serie.flatMap((s) => [s.entradas, s.saidas])));
   const y = (c) => (c / teto) * area.h;
   const yBase = mT + area.h;
   const passo = area.w / serie.length;
-  const larg = Math.max(3, Math.min(16, (passo - 6) / 2 - 1));
+  const larg = Math.max(2, Math.min(14, (passo - 6) / 2 - 1));
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => f * teto);
   let svg = `<svg class="fin-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${escapeHtml(titulo)}" preserveAspectRatio="xMidYMid meet">`;
   for (const t of ticks) {
     const yy = yBase - y(t);
     svg += `<line class="fin-grade" x1="${mE}" x2="${W - mD}" y1="${yy}" y2="${yy}"/><text class="fin-eixo" x="${mE - 8}" y="${yy + 4}" text-anchor="end">${moedaCurta(t)}</text>`;
   }
-  const cadaRotulo = Math.ceil(serie.length / 12);
+  const cadaRotulo = Math.ceil(serie.length / Math.max(4, Math.min(12, Math.floor(area.w / 56))));   // ~56px por rótulo de data
   serie.forEach((s, i) => {
     const cx = mE + passo * i + passo / 2;
     svg += barra(cx - larg - 1, yBase, larg, y(s.entradas), "var(--fin-entrada)", `${diaMes(s.periodo)} · Entradas ${moeda(s.entradas)}`);
     svg += barra(cx + 1, yBase, larg, y(s.saidas), "var(--fin-saida)", `${diaMes(s.periodo)} · Saídas ${moeda(s.saidas)}`);
-    if (i % cadaRotulo === 0) svg += `<text class="fin-eixo" x="${cx}" y="${H - 12}" text-anchor="middle">${escapeHtml(diaMes(s.periodo))}</text>`;
+    if (i % cadaRotulo === 0) svg += `<text class="fin-eixo" x="${cx}" y="${H - 10}" text-anchor="middle">${escapeHtml(diaMes(s.periodo))}</text>`;
   });
   svg += `<line class="fin-base" x1="${mE}" x2="${W - mD}" y1="${yBase}" y2="${yBase}"/></svg>`;
   const linhas = serie.map((s) => `<tr><th scope="row">${escapeHtml(diaMes(s.periodo))}</th><td>${moeda(s.entradas)}</td><td>${moeda(s.saidas)}</td><td>${moeda(s.saldo ?? s.entradas - s.saidas, { sinal: true })}</td></tr>`).join("");
   return `<figure class="fin-grafico">
-    <figcaption>${escapeHtml(titulo)}</figcaption>
-    <ul class="fin-legenda" aria-label="Legenda"><li><i class="fin-chip fin-chip--entrada"></i>Entradas</li><li><i class="fin-chip fin-chip--saida"></i>Saídas</li></ul>
+    <figcaption class="fin-grafico-cab"><span>${escapeHtml(titulo)}</span>
+      <ul class="fin-legenda" aria-label="Legenda"><li><i class="fin-chip fin-chip--entrada"></i>Entradas</li><li><i class="fin-chip fin-chip--saida"></i>Saídas</li></ul></figcaption>
     ${svg}
     <details class="fin-tabela-alt"><summary>Ver como tabela</summary><div class="fin-tabela-wrap"><table class="fin-tabela"><thead><tr><th>Período</th><th>Entradas</th><th>Saídas</th><th>Saldo</th></tr></thead><tbody>${linhas}</tbody></table></div></details>
   </figure>`;

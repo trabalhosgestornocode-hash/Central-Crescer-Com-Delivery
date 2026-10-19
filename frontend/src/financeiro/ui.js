@@ -99,7 +99,7 @@ export function dialogo({ titulo, corpo, enviar = "Salvar", aoEnviar, perigo = f
     <div class="fin-form-corpo">${corpo}</div>
     <p class="fin-form-erro" role="alert" hidden></p>
     <div class="fin-form-acoes"><button type="button" class="btn btn-ghost btn-sm" data-cancelar>Cancelar</button>
-      <button type="submit" class="btn ${perigo ? "btn-ghost" : "btn-primary"} btn-sm">${esc(enviar)}</button></div></form>`;
+      <button type="submit" class="btn ${perigo ? "btn-perigo" : "btn-primary"} btn-sm">${esc(enviar)}</button></div></form>`;
   document.body.appendChild(dlg);
   const form = dlg.querySelector("form");
   const erro = dlg.querySelector(".fin-form-erro");

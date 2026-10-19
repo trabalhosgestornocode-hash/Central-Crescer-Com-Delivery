@@ -86,8 +86,8 @@ function pintar(alvo, mes, g, ind, cats, anterior) {
     <p class="fin-regime">${esc(g.regime.rotulo)} · período ${esc(rotuloMes(mes))} · ${g.indicadores.contagem.considerados} lançamento(s) considerados</p>
     ${alertas}
     <div class="fin-kpis">${kpis}</div>
-    <div class="fin-card">${graficoEntradasSaidas(g.serie.map((s) => ({ ...s })), { titulo: "Entradas e saídas por dia (sem transferências internas)" }) || estado.vazio("Sem movimento operacional no período")}</div>
-    <div class="fin-grade2">
+    <div class="fin-card">${graficoEntradasSaidas(g.serie.map((s) => ({ ...s })), { titulo: "Entradas e saídas por dia (sem transferências internas)", largura: alvo.clientWidth - 42 }) || estado.vazio("Sem movimento operacional no período")}</div>
+    <div class="fin-grade2 fin-grade2--5-7">
       <div class="fin-card"><h3>Saldo por conta</h3>${saldos}<p class="fin-sub">${esc(g.saldosPorConta.rotulo)}</p></div>
       <div class="fin-card"><h3>Movimentação por conta</h3>${mov}</div>
     </div>
