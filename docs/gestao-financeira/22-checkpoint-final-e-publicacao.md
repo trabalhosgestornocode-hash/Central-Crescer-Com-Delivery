@@ -21,8 +21,8 @@ Legenda: **PRONTO** · **PRONTO COM RESTRIÇÃO** · **BLOQUEADO**. **Não há h
 | Importação, relatórios e exportações CSV/XLSX | **PRONTO** | jornada (download real), integrado |
 | Compatibilidade organizacional | **PRONTO COM RESTRIÇÃO** | 73/73 (inclui a brecha do UPDATE direto, fechada nesta missão); promoção já quebrada na `main` (pré-existente) |
 | Migrations 120/121 | **PRONTO COM RESTRIÇÃO** | ciclo 18/18, catálogo 23/23, privilégios do Supabase simulados e conferidos contra o banco real de testes (doc 21) |
-| Migration 122 | **BLOQUEADO (promoção)** | tecnicamente pronta na proposta; promover exige autorização (arquivo final com `begin/commit` e `lock_timeout`) |
-| T3 | **BLOQUEADO** | diagnóstico de leitura feito (doc 21); escrita exige as autorizações A1–A6 |
+| Migration 122 | **PRONTO COM RESTRIÇÃO** | promovida em `database/migrations/122_conciliacao_periodos.sql` (corpo = o aplicado no T3; doc 24 §2); produção só com autorização |
+| T3 | **EXECUTADO** (2026-10-19) | A0–A6 no banco de testes compartilhado; evidências e encerramento no doc 24 §6 e §9 |
 | Concessões (acesso pela interface) | **BLOQUEADO (por desenho)** | flag `FINANCEIRO_CONCESSOES_HABILITADAS` desligada até o passo de MFA do T3 |
 | Exceção de fechamento e reabertura | **desabilitadas (decisão)** | catálogo 12: `service_role` sem EXECUTE; sem rota/botão |
 
