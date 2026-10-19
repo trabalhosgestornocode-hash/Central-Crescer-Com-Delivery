@@ -53,6 +53,25 @@ for (const m of MODOS) {
   page.on("pageerror", (e) => erros.push(`${m.nome} PAGEERROR ${String(e.message).slice(0, 140)}`));
   page.on("console", (x) => { if (x.type() === "error" && !/favicon|Failed to load resource/.test(x.text())) erros.push(`${m.nome} console: ${x.text().slice(0, 140)}`); });
   await page.goto(BASE + "/", { waitUntil: "load" }); await page.waitForTimeout(1500);
+  if (m.mobile) {   // gaveta do menu: fechada não pode projetar sombra na tela (antes: faixa cinza de ~48px na borda esquerda)
+    const sombra = () => page.evaluate(() => getComputedStyle(document.querySelector("#sidebar")).boxShadow);
+    const fechada = await sombra();
+    await page.evaluate(() => document.querySelector("#app").classList.add("menu-aberto")); await page.waitForTimeout(400);
+    const aberta = await sombra();
+    await page.evaluate(() => document.querySelector("#app").classList.remove("menu-aberto")); await page.waitForTimeout(400);
+    checar(`${m.nome} gaveta do menu: sem sombra fechada, com sombra aberta`, fechada === "none" && aberta !== "none", JSON.stringify({ fechada, aberta }));
+  }
+  {   // barra superior (fora de #view): seletor de unidade legível nos dois temas (antes 2,5:1 no escuro)
+    const chip = await page.evaluate(() => {
+      const el = document.querySelector(".chip-unidade"); if (!el || !el.checkVisibility()) return null;
+      const rgb = (s) => (s.match(/[\d.]+/g) || []).map(Number);
+      const lum = ([r, g, b]) => { const f = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }; return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b); };
+      let bg = [255, 255, 255]; for (let e = el.parentElement; e; e = e.parentElement) { const c = rgb(getComputedStyle(e).backgroundColor); if (c.length === 3 || (c.length === 4 && c[3] > 0.9)) { bg = c.slice(0, 3); break; } }
+      const t = rgb(getComputedStyle(el).backgroundColor); if (t.length === 4) bg = bg.map((v, i) => v * (1 - t[3]) + t[i] * t[3]);   // tinta translúcida do chip
+      const [a, b] = [lum(rgb(getComputedStyle(el).color)), lum(bg)]; return +((Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)).toFixed(2);
+    });
+    if (chip !== null) checar(`${m.nome} barra superior: seletor de unidade com contraste AA`, chip >= 4.5, String(chip));
+  }
   for (const rota of PAGINAS) {
     // no celular o menu é gaveta: navega pelo próprio roteador (hash), como o clique faria
     if (m.mobile) await page.evaluate((r) => document.querySelector(`#menu li[data-rota="${r}"]`)?.click(), rota);
