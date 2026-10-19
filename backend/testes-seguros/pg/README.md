@@ -12,6 +12,7 @@ bash backend/testes-seguros/pg/sim_supabase.sh            # privilégios estilo 
 APLICAR_122B=1 bash backend/testes-seguros/pg/sim_supabase.sh   # idem, com a proposta de endurecimento 122b
 psql -h 127.0.0.1 -p 54321 -U postgres -d sim -f backend/testes-seguros/pg/sondagem122.sql   # após o sim: período fechado, transferências, reabertura, FK de importação
 bash backend/testes-seguros/pg/ciclo_120_121_122.sh        # aplica, idempotência, rollback na ordem inversa, janela do rollback da 122
+bash backend/testes-seguros/pg/transferencia_unidades.sh   # cadeia REAL da origin/main + 120–122: transferência/promoção de unidades × Financeiro (doc 20)
 ```
 Porta 54321 fixa nos scripts. A suíte do Agente 2 (`backend/testes-financeiro-pg/run.sh`, inclui concorrência real com duas sessões) usa `FIN_PG_DESCARTAVEL=1 FIN_PG_PORT=54321`.
 O que isto NÃO prova (=> T3 no Supabase descartável): atributos reais dos papéis do Supabase, PostgREST/pg_graphql, owner real das tabelas, extensões.

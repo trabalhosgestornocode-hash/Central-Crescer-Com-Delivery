@@ -876,3 +876,23 @@ begin
     end if;
   end if;
 end $$;
+
+-- Transferência de unidades (120 §5b): toda tabela financeira com unidade_id PRECISA estar na lista explícita, senão a varredura genérica de
+-- remapear_organizacao_em_tabelas_de_unidade voltaria a alcançá-la (e a guarda não a contaria). O prefixo aqui só CONFERE a lista; não a substitui.
+do $$
+declare v_fora text;
+begin
+  if to_regprocedure('public.gestao_financeira_tabelas_da_unidade()') is null
+     or to_regprocedure('public.gestao_financeira_verificar_unidade_transferivel(uuid)') is null then
+    raise exception 'MIGRATION 122 abortada: a guarda de transferência da 120 (§5b) não está instalada.';
+  end if;
+  select string_agg(c.relname, ', ' order by c.relname) into v_fora
+    from pg_class c
+   where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p')
+     and (c.relname like 'fin\_%' or c.relname like 'gestao\_financeira\_%')
+     and exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'unidade_id' and a.attnum > 0 and not a.attisdropped)
+     and c.relname::text <> all (public.gestao_financeira_tabelas_da_unidade());
+  if v_fora is not null then
+    raise exception 'MIGRATION 122 abortada: tabelas financeiras fora da lista de transferência da 120 (§5b): %', v_fora;
+  end if;
+end $$;

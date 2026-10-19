@@ -14,3 +14,5 @@ create table modulos(id text primary key, nome text not null, categoria text not
 create table organizacao_modulos(organizacao_id uuid, modulo_id text references modulos(id), primary key(organizacao_id,modulo_id));
 create table unidade_modulos(unidade_id uuid, modulo_id text references modulos(id), primary key(unidade_id,modulo_id));
 insert into modulos values ('dashboard','Dashboard','operacao',1);
+-- Como no Supabase: o service_role lê organizações e altera unidades (o backend já faz isso); os gatilhos de escopo usam FOR SHARE (120 §5b).
+grant select on organizacoes to service_role; grant select, update on unidades to service_role;

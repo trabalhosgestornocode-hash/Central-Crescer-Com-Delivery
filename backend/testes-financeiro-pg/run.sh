@@ -12,11 +12,14 @@ DB="fin_descartavel_$$"
 AQUI="$(cd "$(dirname "$0")" && pwd)"
 # 121: na branch de integracao ela vive em database/migrations; na branch do Agente 2 ainda esta em sql-provisorio
 SQL="$AQUI/../../database/migrations/121_gestao_financeira_dominio.sql"; [ -f "$SQL" ] || SQL="$AQUI/../../docs/gestao-financeira/sql-provisorio/121_gestao_financeira_dominio.provisorio.sql"
+# 120 antes da 121: a 121 exige a guarda de transferência de unidades da 120 (§5b)
+F120="$AQUI/../../database/migrations/120_gestao_financeira_fundacao.sql"
 R121="$AQUI/../../database/migrations/121_rollback.sql"; [ -f "$R121" ] || R121="$AQUI/../../docs/gestao-financeira/sql-provisorio/121_rollback.provisorio.sql"
 run() { "$PSQL" -h "$HOST" -p "$PORT" -U postgres -v ON_ERROR_STOP=1 -q "$@"; }
 run -d postgres -c "create database $DB"
 trap 'run -d postgres -c "drop database if exists $DB" >/dev/null' EXIT
 run -d "$DB" -f "$AQUI/00_stub.sql"
+run -d "$DB" -f "$F120"
 run -d "$DB" -f "$SQL"
 run -d "$DB" -f "$SQL"   # idempotência: segunda aplicação não pode falhar
 SQL2="$AQUI/../../docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql"
@@ -41,8 +44,8 @@ VAZIO="${DB}_v"; REF="${DB}_r"
 run -d postgres -c "create database $VAZIO"; run -d postgres -c "create database $REF"
 trap 'run -d postgres -c "drop database if exists $DB" >/dev/null; run -d postgres -c "drop database if exists ${DB}_v" >/dev/null; run -d postgres -c "drop database if exists ${DB}_r" >/dev/null' EXIT
 RB="$AQUI/../../docs/gestao-financeira/proposta-122/122_rollback.provisorio.sql"
-run -d "$REF" -f "$AQUI/00_stub.sql"; run -d "$REF" -f "$SQL"            # referência: SÓ a 121
-run -d "$VAZIO" -f "$AQUI/00_stub.sql"; run -d "$VAZIO" -f "$SQL"; run -d "$VAZIO" -f "$SQL2"
+run -d "$REF" -f "$AQUI/00_stub.sql"; run -d "$REF" -f "$F120"; run -d "$REF" -f "$SQL"            # referência: SÓ a 121
+run -d "$VAZIO" -f "$AQUI/00_stub.sql"; run -d "$VAZIO" -f "$F120"; run -d "$VAZIO" -f "$SQL"; run -d "$VAZIO" -f "$SQL2"
 # âncora de trava vazia ('aberto', sem dados): não pode impedir o rollback nem o da 121 (LD-006 item 3)
 run -d "$VAZIO" -c "insert into organizacoes (id, nome) values ('00000000-0000-4000-8000-000000000001','O')" -c "insert into unidades (id, organizacao_id, nome) values ('00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000001','U')" -c "select fin_abrir_periodo('00000000-0000-4000-8000-000000000001','00000000-0000-4000-8000-000000000002','00000000-0000-4000-8000-000000000003','2026-09-01') is not null" >/dev/null
 run -d "$VAZIO" -f "$RB"

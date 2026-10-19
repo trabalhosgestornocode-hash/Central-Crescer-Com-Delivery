@@ -169,10 +169,12 @@ create or replace function fin_touch_updated_at() returns trigger language plpgs
 begin new.updated_at := now(); return new; end $$;
 
 -- A unidade pertence à organização informada; conta/categoria/lançamento são do MESMO tenant.
+-- FOR SHARE na unidade: serializa com transferir/promover (que travam a unidade com FOR UPDATE) — ver 120 §5b. Sem ele, um lançamento
+-- concorrente poderia ler a empresa antiga ainda não alterada e gravar com ela enquanto a transferência conclui.
 create or replace function fin_validar_escopo() returns trigger language plpgsql as $$
 declare j jsonb := to_jsonb(new); v_conta uuid := nullif(j->>'conta_id','')::uuid; v_cat uuid := nullif(j->>'categoria_id','')::uuid;
 begin
-  if j ? 'unidade_id' and not exists (select 1 from unidades u where u.id = new.unidade_id and u.organizacao_id = new.organizacao_id) then
+  if j ? 'unidade_id' and not exists (select 1 from unidades u where u.id = new.unidade_id and u.organizacao_id = new.organizacao_id for share) then
     raise exception 'fin_escopo_invalido: unidade nao pertence a organizacao' using errcode = '23514';
   end if;
   if v_conta is not null and not exists (select 1 from fin_contas c where c.id = v_conta and c.organizacao_id = new.organizacao_id and c.unidade_id = new.unidade_id) then
@@ -440,4 +442,28 @@ begin
   end loop;
 end $$;
 
+
+-- Transferência de unidades (120 §5b): toda tabela financeira com unidade_id PRECISA estar na lista explícita, senão a varredura genérica de
+-- remapear_organizacao_em_tabelas_de_unidade voltaria a alcançá-la (e a guarda não a contaria). O prefixo aqui só CONFERE a lista; não a substitui.
+do $$
+declare v_fora text;
+begin
+  if to_regprocedure('public.gestao_financeira_tabelas_da_unidade()') is null
+     or to_regprocedure('public.gestao_financeira_verificar_unidade_transferivel(uuid)') is null then
+    raise exception 'MIGRATION 121 abortada: a guarda de transferência da 120 (§5b) não está instalada.';
+  end if;
+  -- Os gatilhos de escopo leem a unidade com FOR SHARE (exige UPDATE em unidades). O backend já altera unidades com o service_role.
+  if exists (select 1 from pg_roles where rolname = 'service_role') and not has_table_privilege('service_role', 'public.unidades', 'update') then
+    raise exception 'MIGRATION 121 abortada: service_role sem UPDATE em unidades — o FOR SHARE dos gatilhos de escopo recusaria toda escrita financeira.';
+  end if;
+  select string_agg(c.relname, ', ' order by c.relname) into v_fora
+    from pg_class c
+   where c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p')
+     and (c.relname like 'fin\_%' or c.relname like 'gestao\_financeira\_%')
+     and exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'unidade_id' and a.attnum > 0 and not a.attisdropped)
+     and c.relname::text <> all (public.gestao_financeira_tabelas_da_unidade());
+  if v_fora is not null then
+    raise exception 'MIGRATION 121 abortada: tabelas financeiras fora da lista de transferência da 120 (§5b): %', v_fora;
+  end if;
+end $$;
 commit;

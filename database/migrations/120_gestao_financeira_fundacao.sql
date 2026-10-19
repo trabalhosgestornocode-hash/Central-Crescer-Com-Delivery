@@ -16,6 +16,9 @@
 --      PROIBIDA a autoconcessão (quem concede não pode ser a conta dona do perfil); revogação exige motivo.
 --   6. RLS LIGADO e FORÇADO, SEM nenhuma policy; REVOKE ALL de PUBLIC/anon/authenticated. Só o backend (service_role)
 --      acessa — e ele filtra organização+unidade explicitamente.
+--   7. Torna a transferência/promoção de unidades compatível com o Financeiro (seção 5b): guarda explícita que RECUSA mover unidade com
+--      qualquer registro financeiro e substitui remapear_organizacao_em_tabelas_de_unidade (054) para deixar as tabelas financeiras fora da
+--      varredura genérica. Única alteração em objeto compartilhado além do catálogo de módulos; desfeita pelo 120_rollback.sql.
 --
 -- NÃO FAZ: não concede acesso a ninguém; não habilita o módulo em empresa/unidade; não altera dados existentes.
 -- PRÉ-REQUISITOS: 030, 034, 053 (usuarios_organizacoes/usuarios_unidades), 060 (perfis_operacionais), set_updated_at().
@@ -132,7 +135,8 @@ begin
     if new.revogada_em is not null then return new; end if;
   end if;
 
-  select u.organizacao_id into v_org_unidade from public.unidades u where u.id = new.unidade_id;
+  -- FOR SHARE: serializa com transferir/promover (que travam a unidade) — ver 5b.
+  select u.organizacao_id into v_org_unidade from public.unidades u where u.id = new.unidade_id for share;
   if v_org_unidade is null or v_org_unidade <> new.organizacao_id then
     raise exception 'Concessão financeira: a unidade não pertence à organização informada.';
   end if;
@@ -211,6 +215,137 @@ do $$ begin
   end if;
 end $$;
 
+-- 5b) Transferência/promoção de unidades × Financeiro (correção de compatibilidade organizacional) -------------------------
+-- PROBLEMA: `remapear_organizacao_em_tabelas_de_unidade` (054, chamada por transferir_unidade_organizacao e promover_unidade_para_empresa)
+-- faz UPDATE em TODA tabela do public com organizacao_id + unidade_id. Com as tabelas financeiras no banco, ela tentaria UPDATE em
+-- fin_auditoria (o service_role só tem SELECT nela, por desenho) e o PostgreSQL recusa pelo privilégio MESMO sem linha afetada:
+-- `permission denied for table fin_auditoria` em QUALQUER transferência/promoção. Com dados, ainda trocaria a empresa de lançamentos e
+-- da trilha de auditoria (que é imutável).
+-- REGRA: o histórico financeiro pertence à empresa em que foi registrado e NUNCA muda de empresa por um UPDATE genérico.
+--   * unidade SEM nenhuma linha financeira  → transferência/promoção seguem exatamente como antes (as tabelas financeiras ficam fora da varredura);
+--   * unidade COM qualquer linha financeira → recusa com errcode 22023 (o backend devolve 400 com a mensagem), nada é alterado.
+--   "Só configuração" também recusa: criar conta, exceção de sangria, período ou concessão grava auditoria imutável (fin_auditoria /
+--   gestao_financeira_concessoes_auditoria) com a empresa atual — já é histórico. Habilitar o módulo (unidade_modulos) NÃO é tabela financeira:
+--   continua sendo remapeado como sempre (e, na empresa nova, o Financeiro só abre se ela também tiver o módulo e houver concessão).
+-- LISTA EXPLÍCITA (não depende de prefixo): toda tabela financeira com unidade_id. 121/122 conferem, na pós-condição, que nenhuma tabela
+-- financeira nova ficou fora dela. Tabelas ainda não criadas são ignoradas (to_regclass).
+create or replace function public.gestao_financeira_tabelas_da_unidade() returns text[]
+language sql immutable set search_path = pg_catalog, pg_temp as $$
+  select array[
+    'gestao_financeira_concessoes', 'gestao_financeira_concessoes_auditoria',                                     -- 120
+    'fin_contas', 'fin_saldos_abertura', 'fin_lancamentos', 'fin_transferencias', 'fin_periodos', 'fin_importacoes',
+    'fin_auditoria',                                                                                              -- 121
+    'fin_referencias', 'fin_conciliacao_resolucoes', 'fin_sangria_excecoes', 'fin_excecoes_fechamento'            -- 122
+  ]::text[]
+$$;
+
+-- Guarda: recusa se a unidade tiver QUALQUER linha financeira. SECURITY INVOKER de propósito: roda com o papel de quem transfere
+-- (service_role/postgres, que contornam RLS); se esse papel não puder ler alguma tabela por inteiro (sem SELECT ou sujeito a RLS),
+-- FALHA FECHADO em vez de concluir "não há dados".
+-- Concorrência: trava a linha da unidade (FOR UPDATE — a mesma trava que transferir/promover já tomam). Os gatilhos de escopo do
+-- Financeiro leem a unidade com FOR SHARE: um lançamento concorrente ou espera a transferência terminar (e então é recusado, porque a
+-- unidade já é de outra empresa) ou termina antes (e então esta contagem, que usa um snapshot novo, o enxerga e recusa a transferência).
+create or replace function public.gestao_financeira_verificar_unidade_transferivel(p_unidade_id uuid) returns void
+language plpgsql set search_path = public, pg_temp as $$
+declare
+  v_tabela text; v_oid regclass; v_qtd bigint; v_achados text := ''; v_ignora_rls boolean;
+  v_rotulo constant jsonb := jsonb_build_object(
+    'gestao_financeira_concessoes', 'concessões de acesso', 'gestao_financeira_concessoes_auditoria', 'auditoria de concessões',
+    'fin_contas', 'contas', 'fin_saldos_abertura', 'saldos de abertura', 'fin_lancamentos', 'lançamentos',
+    'fin_transferencias', 'transferências', 'fin_periodos', 'períodos', 'fin_importacoes', 'importações',
+    'fin_auditoria', 'auditoria financeira', 'fin_referencias', 'referências de conciliação',
+    'fin_conciliacao_resolucoes', 'resoluções de conciliação', 'fin_sangria_excecoes', 'exceções de sangria',
+    'fin_excecoes_fechamento', 'exceções de fechamento');
+begin
+  if p_unidade_id is null then
+    raise exception 'Unidade não informada.' using errcode = '22023';
+  end if;
+  -- A contagem abaixo precisa de um snapshot NOVO (tirado depois da trava): só READ COMMITTED garante isso dentro da transação.
+  if current_setting('transaction_isolation') <> 'read committed' then
+    raise exception 'Transferência/promoção de unidade exige isolamento READ COMMITTED (atual: %). Nada foi alterado.',
+      current_setting('transaction_isolation') using errcode = '25001';
+  end if;
+  perform 1 from public.unidades where id = p_unidade_id for update;
+  select r.rolsuper or r.rolbypassrls into v_ignora_rls from pg_roles r where r.rolname = current_user;
+  foreach v_tabela in array public.gestao_financeira_tabelas_da_unidade() loop
+    v_oid := to_regclass('public.' || v_tabela);
+    continue when v_oid is null;
+    if not has_table_privilege(current_user, v_oid, 'select')
+       or exists (select 1 from pg_class c where c.oid = v_oid and c.relrowsecurity and not coalesce(v_ignora_rls, false)
+                    and (c.relforcerowsecurity or not pg_has_role(current_user, c.relowner, 'USAGE'))) then
+      raise exception 'Não foi possível verificar o histórico financeiro da unidade (o papel % não lê % por inteiro). Nada foi alterado.',
+        current_user, v_tabela using errcode = '42501';
+    end if;
+    execute format('select count(*) from public.%I where unidade_id = $1', v_tabela) into v_qtd using p_unidade_id;
+    if v_qtd > 0 then
+      v_achados := v_achados || case when v_achados = '' then '' else ', ' end || (v_rotulo ->> v_tabela) || ': ' || v_qtd;
+    end if;
+  end loop;
+  if v_achados <> '' then
+    raise exception 'Esta unidade possui registros no Financeiro (%) e não pode ser transferida nem promovida: o histórico financeiro pertence à empresa atual e não muda de empresa. Nada foi alterado.', v_achados
+      using errcode = '22023';
+  end if;
+end $$;
+
+-- Pré-condição: só substitui a função compartilhada quem a administra (dono ou membro do papel dono); senão aborta sem alterar nada.
+do $$
+declare v_dono oid;
+begin
+  select p.proowner into v_dono from pg_proc p
+   where p.oid = to_regprocedure('public.remapear_organizacao_em_tabelas_de_unidade(uuid,uuid,uuid)');
+  if v_dono is not null and not pg_has_role(current_user, v_dono, 'USAGE') then
+    raise exception 'MIGRATION 120 abortada: a role % não administra remapear_organizacao_em_tabelas_de_unidade (dono: %). Nada foi aplicado.',
+      current_user, pg_get_userbyid(v_dono);
+  end if;
+end $$;
+
+-- Mesma assinatura, mesmo retorno, mesmo SECURITY INVOKER e mesmas exclusões da 054; CREATE OR REPLACE preserva dono e privilégios
+-- (inclusive o fechamento da 115). Diferenças: (1) chama a guarda antes de qualquer UPDATE; (2) as tabelas financeiras ficam FORA da varredura.
+create or replace function public.remapear_organizacao_em_tabelas_de_unidade(
+  p_unidade_id uuid, p_org_antiga_id uuid, p_org_nova_id uuid
+) returns jsonb
+language plpgsql
+as $$
+declare
+  v_tabela text;
+  v_qtd int;
+  v_resultado jsonb := '{}'::jsonb;
+begin
+  perform public.gestao_financeira_verificar_unidade_transferivel(p_unidade_id);
+  for v_tabela in
+    select c1.table_name
+    from information_schema.columns c1
+    join information_schema.columns c2
+      on c2.table_schema = c1.table_schema and c2.table_name = c1.table_name and c2.column_name = 'unidade_id'
+    join information_schema.tables t
+      on t.table_schema = c1.table_schema and t.table_name = c1.table_name and t.table_type = 'BASE TABLE'
+    where c1.table_schema = 'public' and c1.column_name = 'organizacao_id'
+      and c1.table_name not in ('martin_brower_vinculos', 'sessoes_contexto', 'insumo_historico')
+      and c1.table_name::text <> all (public.gestao_financeira_tabelas_da_unidade())
+    order by c1.table_name
+  loop
+    execute format(
+      'update public.%I set organizacao_id = $1 where unidade_id = $2 and organizacao_id = $3',
+      v_tabela
+    ) using p_org_nova_id, p_unidade_id, p_org_antiga_id;
+    get diagnostics v_qtd = row_count;
+    if v_qtd > 0 then
+      v_resultado := v_resultado || jsonb_build_object(v_tabela, v_qtd);
+    end if;
+  end loop;
+  return v_resultado;
+end;
+$$;
+
+revoke all on function public.gestao_financeira_tabelas_da_unidade(), public.gestao_financeira_verificar_unidade_transferivel(uuid)
+  from public, anon, authenticated;
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    -- o service_role chama transferir/promover (invoker) → remapear → guarda: precisa executar as duas.
+    grant execute on function public.gestao_financeira_tabelas_da_unidade(), public.gestao_financeira_verificar_unidade_transferivel(uuid) to service_role;
+  end if;
+end $$;
+
 -- 6) PÓS-CONDIÇÃO (falha segura): nada de acesso direto, nada de policy, módulo desabilitado em todo lugar.
 do $$
 declare t text; r text; n int;
@@ -238,6 +373,17 @@ begin
   if exists (select 1 from public.organizacao_modulos where modulo_id = 'gestao_financeira')
      or exists (select 1 from public.unidade_modulos where modulo_id = 'gestao_financeira') then
     raise exception 'MIGRATION 120 abortada: gestao_financeira deveria nascer desabilitado.';
+  end if;
+  foreach r in array array['anon', 'authenticated'] loop
+    if exists (select 1 from pg_roles where rolname = r)
+       and (has_function_privilege(r, 'public.gestao_financeira_verificar_unidade_transferivel(uuid)', 'execute')
+            or has_function_privilege(r, 'public.gestao_financeira_tabelas_da_unidade()', 'execute')) then
+      raise exception 'MIGRATION 120 abortada: % executa a guarda de transferência financeira.', r;
+    end if;
+  end loop;
+  if pg_get_functiondef('public.remapear_organizacao_em_tabelas_de_unidade(uuid,uuid,uuid)'::regprocedure)
+       not like '%gestao_financeira_verificar_unidade_transferivel%' then
+    raise exception 'MIGRATION 120 abortada: remapear_organizacao_em_tabelas_de_unidade não chama a guarda financeira.';
   end if;
 end $$;
 
