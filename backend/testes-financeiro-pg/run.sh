@@ -22,7 +22,7 @@ run -d "$DB" -f "$AQUI/00_stub.sql"
 run -d "$DB" -f "$F120"
 run -d "$DB" -f "$SQL"
 run -d "$DB" -f "$SQL"   # idempotência: segunda aplicação não pode falhar
-SQL2="$AQUI/../../docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql"
+SQL2="$AQUI/../../database/migrations/122_conciliacao_periodos.sql"
 run -d "$DB" -f "$SQL2"
 run -d "$DB" -f "$SQL2"  # idempotência do 122
 run -d "$DB" -f "$AQUI/10_dominio.test.sql"
@@ -37,13 +37,13 @@ CONTA_DEPOIS=$(run -d "$DB" -t -A -c "select (select count(*) from fin_lancament
 [ "$CONTA_ANTES" = "$CONTA_DEPOIS" ] || { echo "FALHA: reaplicar com dados mudou contagens ($CONTA_ANTES -> $CONTA_DEPOIS)"; exit 1; }
 echo "reaplicacao com dados existentes OK ($CONTA_DEPOIS)"
 # rollback seguro: o teste de concorrência deixou dados COMMITADOS => o rollback deve RECUSAR (e nada ser removido)
-if run -d "$DB" -f "$AQUI/../../docs/gestao-financeira/proposta-122/122_rollback.provisorio.sql" 2>/dev/null; then echo "FALHA: rollback do 122 nao recusou com dados"; exit 1; fi
+if run -d "$DB" -f "$AQUI/../../database/migrations/122_rollback.sql" 2>/dev/null; then echo "FALHA: rollback do 122 nao recusou com dados"; exit 1; fi
 echo "rollback com dados recusado (ok)"
 # banco novo e vazio: aplica 121+122, faz rollback 122 SEM reaplicar a 121 (F-C: o rollback se auto-restaura), reaplica 122; depois rollback 122+121
 VAZIO="${DB}_v"; REF="${DB}_r"
 run -d postgres -c "create database $VAZIO"; run -d postgres -c "create database $REF"
 trap 'run -d postgres -c "drop database if exists $DB" >/dev/null; run -d postgres -c "drop database if exists ${DB}_v" >/dev/null; run -d postgres -c "drop database if exists ${DB}_r" >/dev/null' EXIT
-RB="$AQUI/../../docs/gestao-financeira/proposta-122/122_rollback.provisorio.sql"
+RB="$AQUI/../../database/migrations/122_rollback.sql"
 run -d "$REF" -f "$AQUI/00_stub.sql"; run -d "$REF" -f "$F120"; run -d "$REF" -f "$SQL"            # referência: SÓ a 121
 run -d "$VAZIO" -f "$AQUI/00_stub.sql"; run -d "$VAZIO" -f "$F120"; run -d "$VAZIO" -f "$SQL"; run -d "$VAZIO" -f "$SQL2"
 # âncora de trava vazia ('aberto', sem dados): não pode impedir o rollback nem o da 121 (LD-006 item 3)

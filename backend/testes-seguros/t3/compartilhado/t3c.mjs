@@ -45,7 +45,7 @@ const P = (...p) => path.join(backend, "testes-seguros", ...p);
 const MIGRACOES = [
   { arq: path.join(raiz, "database/migrations/120_gestao_financeira_fundacao.sql"), modo: "propria" },        // begin/commit + lock_timeout próprios
   { arq: path.join(raiz, "database/migrations/121_gestao_financeira_dominio.sql"), modo: "propria" },
-  { arq: path.join(raiz, "docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql"), modo: "single" }, // sem begin/commit
+  { arq: path.join(raiz, "database/migrations/122_conciliacao_periodos.sql"), modo: "propria" },        // promovida: begin/commit + lock_timeout próprios (corpo = o aplicado no T3)
 ];
 const M115 = path.join(raiz, "database/migrations/115_fecha_acesso_direto_residual.sql");
 const PROVAS = {

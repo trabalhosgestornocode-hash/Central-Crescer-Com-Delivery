@@ -22,8 +22,8 @@ if [ "$ETAPA" = base ]; then
 else
   AUT="${T3_AUTORIZO_120_122:-}"
   cp "$RAIZ/database/migrations/120_gestao_financeira_fundacao.sql" "$RAIZ/database/migrations/121_gestao_financeira_dominio.sql" "$TMP/"
-  cp "$RAIZ/docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql" "$TMP/122_conciliacao_periodos.provisorio.sql"
-  LISTA="120_gestao_financeira_fundacao.sql 121_gestao_financeira_dominio.sql 122_conciliacao_periodos.provisorio.sql"
+  cp "$RAIZ/database/migrations/122_conciliacao_periodos.sql" "$TMP/"
+  LISTA="120_gestao_financeira_fundacao.sql 121_gestao_financeira_dominio.sql 122_conciliacao_periodos.sql"
   echo "origem: $(git -C "$RAIZ" branch --show-current) @ $(git -C "$RAIZ" rev-parse --short HEAD)"
 fi
 echo "projeto: ${T3_PROJECT_REF} | etapa: $ETAPA | arquivos: $(echo $LISTA | wc -w)"; for f in $LISTA; do echo "  $f  sha256=$(sha256sum "$TMP/$f" | cut -c1-16)"; done

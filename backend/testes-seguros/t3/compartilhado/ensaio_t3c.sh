@@ -93,7 +93,7 @@ echo "$O" | grep -q "projeto de teste COMPARTILHADO" && ok "O4 preflight_t3.mjs 
 
 # ---------- P) fluxo completo ----------
 O=$(rodar "${ENV[@]}" T3C_AUTORIZO_115=SIM $T3C m115); echo "$O" | grep -q "PASSO OK" && echo "$O" | grep -q "fora da allowlist: sem mudança" && ok "P2 m115 aplicada pelo t3c; nenhum dado mudou" || bad "P2: $O"
-O=$(rodar "${ENV[@]}" T3C_AUTORIZO_MIGRACOES=SIM $T3C migracoes); echo "$O" | grep -q "PASSO OK" && echo "$O" | grep -q "exceto o permitido: modulos" && ok "P3 migracoes 120 → 121 → 122 (122 com --single-transaction); fora da allowlist só 'modulos' mudou" || bad "P3: $O"
+O=$(rodar "${ENV[@]}" T3C_AUTORIZO_MIGRACOES=SIM $T3C migracoes); echo "$O" | grep -q "PASSO OK" && echo "$O" | grep -q "exceto o permitido: modulos" && ok "P3 migracoes 120 → 121 → 122 (cada uma com begin/commit próprio); fora da allowlist só 'modulos' mudou" || bad "P3: $O"
 O=$(psql $H -U postgres -X -q -d t3c_compart -f "$R/backend/testes-seguros/t3/verificacoes_catalogo.sql" 2>&1); NT=$(echo "$O" | grep -cE '\| t\s*$'); NF=$(echo "$O" | grep -cE '\| f\s*$')
 [ "$NF" = "0" ] && [ "$NT" -ge 23 ] && ok "P4 verificacoes_catalogo.sql: $NT × t, 0 × f" || bad "P4: t=$NT f=$NF $(echo "$O" | grep -E '\| f\s*$' | head -3)"
 O=$(rodar "${ENV[@]}" T3C_AUTORIZO_SEMENTE=SIM $T3C semente); echo "$O" | grep -q "PASSO OK" && ok "P5 semente [T3-FIN] (2 empresas, 6 unidades) com conferência da allowlist" || bad "P5: $O"

@@ -42,7 +42,9 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
     "120_gestao_financeira_fundacao.sql", "120_rollback.sql",
     // 121 = domínio financeiro (Agente 2): fin_* backend-only, RLS sem policies, auditoria imutável.
     "121_gestao_financeira_dominio.sql", "121_rollback.sql",
-    // 123 = módulo próprio checklist_operacional (catálogo + vínculos de quem já tem ifood); sem tocar as ações do pedido.
+    // 122 = conciliação e períodos/fechamento do Financeiro (versão validada no T3; corpo = a proposta aplicada lá).
+    "122_conciliacao_periodos.sql", "122_rollback.sql",
+    // 123 =módulo próprio checklist_operacional (catálogo + vínculos de quem já tem ifood); sem tocar as ações do pedido.
     // A trilha financeira ocupa 120–122 (ainda não integrada à main); o 123 só é definitivo se continuar livre no merge.
     "123_checklist_operacional_modulo.sql", "123_rollback.sql",
     // 124 = FINALIDADE/AMBIENTE por conexão (Financial de homologação + Order de produção na mesma unidade); 125 = remove o índice

@@ -1,4 +1,4 @@
--- PROVISÓRIO — rollback da 122 única (conciliação + períodos + cancelamento de transferência + exceção de fechamento + endurecimentos F-A/F-B).
+-- Rollback da 122 única (conciliação + períodos + cancelamento de transferência + exceção de fechamento + endurecimentos F-A/F-B).
 -- AUTO-RESTAURA o estado da 121: recria fin_lancamentos_guarda e fin_confirmar_importacao (versões da 121) e devolve o EXECUTE de
 -- fin_desvincular_transferencia ao service_role. NÃO é preciso reaplicar a 121 depois (F-C do Agente 1). Tudo numa transação: ou volta inteiro, ou nada.
 -- RECUSA se houver DADOS nas estruturas novas. Linhas 'aberto' VAZIAS em fin_periodos (âncoras de trava criadas pela 122, ex.: GET/lançamento em mês vazio)

@@ -33,13 +33,13 @@ N=0; for f in $LISTA; do
 done
 ok "estrut_base: $N migrations de $REF_BASE @ $(git -C "$R" rev-parse --short "$REF_BASE") aplicadas como dono_sim (não-superusuário)"
 fin() { # $1 banco, $2 ref git ou vazio (árvore de trabalho)
-  for f in database/migrations/120_gestao_financeira_fundacao.sql database/migrations/121_gestao_financeira_dominio.sql docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql; do
+  for f in database/migrations/120_gestao_financeira_fundacao.sql database/migrations/121_gestao_financeira_dominio.sql database/migrations/122_conciliacao_periodos.sql; do
     if [ -n "$2" ]; then git -C "$R" show "$2:$f" > "$TMP/x.sql"; else cp "$R/$f" "$TMP/x.sql"; fi
     psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d "$1" -f "$TMP/x.sql" > "$TMP/x.log" 2>&1 || { bad "$1: $(basename $f)"; grep -m3 ERRO "$TMP/x.log"; return 1; }
   done; }
 novo_banco estrut_antes estrut_base; fin estrut_antes "$REF_ANTES" && ok "estrut_antes: 120–122 de $REF_ANTES (antes da correção)"
 novo_banco estrut_fin estrut_base; fin estrut_fin "" && ok "estrut_fin: 120–122 da árvore de trabalho (com a correção)"
-psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_fin -f "$R/docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql" >/dev/null 2>&1 && ok "122 reaplicada (idempotente)" || bad "122 não é idempotente"
+psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_fin -f "$R/database/migrations/122_conciliacao_periodos.sql" >/dev/null 2>&1 && ok "122 reaplicada (idempotente)" || bad "122 não é idempotente"
 
 # Cenário mínimo de transferência (unidade com dados operacionais, sem Financeiro), igual nos três bancos
 CEN="insert into auth.users (id) values ('00000000-0000-0000-0000-00000000a70a') on conflict do nothing;
@@ -138,7 +138,7 @@ grep -q "falha injetada" "$TMP/10c" && [ "$G0" = "$G1" ] && ok "10c falha injeta
 novo_banco estrut_rb estrut_base; fin estrut_rb "" >/dev/null
 R120=$(psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_rb -f "$R/database/migrations/120_rollback.sql" 2>&1)
 echo "$R120" | grep -q "desfaça 122 e 121 antes" && ok "rollback 120 com 121 presente: recusado (a função da 054 quebraria a transferência)" || bad "rollback 120 fora de ordem: $R120"
-psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_rb -f "$R/docs/gestao-financeira/proposta-122/122_rollback.provisorio.sql" >/dev/null 2>&1 \
+psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_rb -f "$R/database/migrations/122_rollback.sql" >/dev/null 2>&1 \
  && psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_rb -f "$R/database/migrations/121_rollback.sql" >/dev/null 2>&1 \
  && psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_rb -f "$R/database/migrations/120_rollback.sql" >/dev/null 2>&1 && ok "rollback 122 → 121 → 120 (sem dados)" || bad "rollback em ordem falhou"
 DEF="select md5(pg_get_functiondef('public.remapear_organizacao_em_tabelas_de_unidade(uuid,uuid,uuid)'::regprocedure)) || ' ' || coalesce(array_to_string(proacl, ','), '') from pg_proc where oid = 'public.remapear_organizacao_em_tabelas_de_unidade(uuid,uuid,uuid)'::regprocedure"

@@ -7,7 +7,7 @@ export PATH="/c/Program Files/PostgreSQL/17/bin:$PATH"; export PGCLIENTENCODING=
 S="$(cd "$(dirname "$0")" && pwd)"
 CLUSTER="${PG_CLUSTER_DIR:?defina PG_CLUSTER_DIR (diretório de dados do cluster DESCARTÁVEL local, com o arquivo MARCADOR_DESCARTAVEL)}"
 R="${REPO:-$(cd "$S/../../.." && pwd)}"
-M="$R/database/migrations"; P122="${P122:-$R/docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql}"; RB122="${RB122:-$R/docs/gestao-financeira/proposta-122/122_rollback.provisorio.sql}"
+M="$R/database/migrations"; P122="${P122:-$R/database/migrations/122_conciliacao_periodos.sql}"; RB122="${RB122:-$R/database/migrations/122_rollback.sql}"
 H="-h 127.0.0.1 -p 54321"; SU="psql $H -U postgres -q -v ON_ERROR_STOP=1"; DONO="psql $H -U dono_sim -q -v ON_ERROR_STOP=1"
 FALHOU=""; ok() { echo "OK    $1"; }; bad() { echo "FALHA $1"; FALHOU=1; }; info() { echo "INFO  $1"; }
 

@@ -1,8 +1,17 @@
 -- =====================================================================
--- PROVISÓRIO (NÃO EXECUTÁVEL PELO PIPELINE) — Conciliação (B7) e Períodos/Fechamento (B8). Depende do 121 provisório.
+-- MIGRATION 122 — Gestão Financeira: conciliação (B7) e períodos/fechamento (B8) — VERSÃO APROVADA NO T3
 -- =====================================================================
--- Fica FORA de database/migrations. Numeração final coordenada com o Agente 1 (sugestão: 122, logo após a do domínio).
--- Validado só em PostgreSQL DESCARTÁVEL (backend/testes-financeiro-pg). NUNCA aplicar em produção a partir deste arquivo.
+-- ⚠️  NÃO APLICAR EM PRODUÇÃO SEM AUTORIZAÇÃO EXPLÍCITA, BACKUP/PITR CONFIRMADO E JANELA COMBINADA.
+-- Origem: docs/gestao-financeira/proposta-122/122_conciliacao_periodos.provisorio.sql (sha256 d2d0f2dc402cb278…), a versão aplicada e
+-- validada (sem revisão independente) no T3 compartilhado de 2026-10-19 (com --single-transaction e lock_timeout=5s). O CORPO abaixo é idêntico byte a byte;
+-- a promoção só acrescentou o envelope transacional (`begin`/`set local lock_timeout`/`commit`), no padrão da 120 e da 121.
+-- Inclui M1 (conciliação autoritativa no banco), O-1 (sem sobrecargas), F-1/F-2 (fechamento com impressão digital e 409),
+-- D-1 (integridade de mês fechado) e F-A/F-B (reabertura bloqueada; importação do mesmo tenant).
+-- ORDEM: depois da 121. ROLLBACK: 122_rollback.sql (recusa com dados) ANTES de 121_rollback.sql.
+
+begin;
+set local lock_timeout = '5s';
+
 
 -- ---------------------------------------------------------------------
 -- O-1 (LD-011): remove ASSINATURAS OBSOLETAS de rascunhos anteriores desta migration. `create or replace` com tipos de argumento diferentes cria uma
@@ -912,3 +921,5 @@ begin
     raise exception 'MIGRATION 122 abortada: tabelas financeiras fora da lista de transferência da 120 (§5b): %', v_fora;
   end if;
 end $$;
+
+commit;

@@ -19,7 +19,7 @@ psql $H -U postgres -tAc "show data_directory" | grep -qF "$CLUSTER" || { echo "
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 q() { psql $H -U postgres -X -tA -d "$1" -c "$2" 2>&1; }
 dono() { psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d "$1" -f "$2" 2>&1; }
-M="$R/database/migrations"; P122="$R/docs/gestao-financeira/proposta-122"
+M="$R/database/migrations"
 
 # ---------- montagem: cadeia da main (como em transferencia_unidades.sh), depois o estado do banco de testes ----------
 psql $H -U postgres -tAc "select 1 from pg_roles where rolname='dono_sim'" | grep -q 1 || {
@@ -107,7 +107,7 @@ echo "$O1" | grep -qi "permission denied\|permissão negada" && echo "$O2" | gre
 O=$(como e115_a "$SR" "select (r - 'unidadeId' - 'novaOrganizacaoId' - 'organizacaoAnteriorId')::text from transferir_unidade_organizacao('$U', '$B', '00000000-0000-0000-0000-00000000a70a') r")
 [ "$(q e115_a "$ESTADO")" = "$B ifood=$B parser=$B" ] && ok "A5 backend (service_role) continua transferindo depois da 115: $O" || bad "A5: $O"
 q e115_a "set role service_role; select transferir_unidade_organizacao('$U', '$A', '00000000-0000-0000-0000-00000000a70a')" >/dev/null
-for f in "$M/120_gestao_financeira_fundacao.sql" "$M/121_gestao_financeira_dominio.sql" "$P122/122_conciliacao_periodos.provisorio.sql"; do
+for f in "$M/120_gestao_financeira_fundacao.sql" "$M/121_gestao_financeira_dominio.sql" "$M/122_conciliacao_periodos.sql"; do
   O=$(dono e115_a "$f") || { bad "A6 $(basename "$f") depois da 115: $(echo "$O" | grep -m2 ERRO)"; break; }
 done; [ -z "$FALHOU" ] && ok "A6 120 → 121 → 122 aplicam depois da 115 (pré e pós-condições da 120 passam)"
 [ "$(q e115_a "$ABERTOS")" = "0/0/5/4" ] && ok "A7 a 120 (create or replace de remapear) preserva o fechamento da 115: 0/0/5/4" || bad "A7: $(q e115_a "$ABERTOS")"
@@ -122,7 +122,7 @@ O=$(como e115_a "$AUTH" "update unidades set nome = nome where id='$U' returning
 
 # ---------- B) sem a 115: 120 → 121 → 122; depois a 115 ----------
 novo_banco e115_b e115_teste
-for f in "$M/120_gestao_financeira_fundacao.sql" "$M/121_gestao_financeira_dominio.sql" "$P122/122_conciliacao_periodos.provisorio.sql"; do
+for f in "$M/120_gestao_financeira_fundacao.sql" "$M/121_gestao_financeira_dominio.sql" "$M/122_conciliacao_periodos.sql"; do
   O=$(dono e115_b "$f") || { bad "B1 $(basename "$f") sem a 115: $(echo "$O" | grep -m2 ERRO)"; break; }
 done; ok "B1 120 → 121 → 122 aplicam SEM a 115 (não dependem dela)"
 [ "$(q e115_b "$ABERTOS")" = "10/8/5/4" ] && ok "B2 a 120 NÃO fecha o que é da 115: anon/authenticated continuam com EXECUTE nas 5 RPCs e SELECT nas 4 views" || bad "B2: $(q e115_b "$ABERTOS")"
