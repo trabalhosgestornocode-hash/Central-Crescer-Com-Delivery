@@ -12,7 +12,10 @@ papeis as (select rolname, rolsuper, rolbypassrls, rolcanlogin from pg_roles whe
 -- funções NÃO-gatilho que o backend (service_role) PRECISA poder executar
 permitidas_service_role(nome) as (values ('fin_abrir_periodo'), ('fin_fechar_periodo'), ('fin_fingerprint_periodo'), ('fin_periodo_travar_e_checar'), ('fin_periodo_travar'),
   ('fin_conciliacao_pendencias_ids'), ('fin_consumir_excecao_fechamento'), ('fin_confirmar_importacao'), ('fin_criar_transferencia'), ('fin_vincular_transferencia'),
-  ('fin_cancelar_transferencia'), ('fin_desvincular_transferencia_motivada')),
+  ('fin_cancelar_transferencia'), ('fin_desvincular_transferencia_motivada'),
+  -- 120 §5b (5233380): remapear_organizacao_em_tabelas_de_unidade é INVOKER e roda como service_role na transferência/promoção de
+  -- unidades; ela chama a guarda, que lê a lista — sem EXECUTE nas duas, toda transferência/promoção falharia (doc 20).
+  ('gestao_financeira_verificar_unidade_transferivel'), ('gestao_financeira_tabelas_da_unidade')),
 -- funções que NINGUÉM além do dono pode executar (reabertura desabilitada; concessão/revogação de exceção bloqueadas até o MFA; validadores puros; gatilhos)
 proibidas_service_role(nome) as (values ('fin_reabrir_periodo'), ('fin_conceder_excecao_fechamento'), ('fin_revogar_excecao_fechamento'), ('fin_mfa_evidencia_valida'), ('fin_ids_conciliacao_validos'),
   ('fin_desvincular_transferencia')),

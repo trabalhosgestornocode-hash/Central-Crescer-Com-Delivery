@@ -73,6 +73,8 @@ begin
 end;
 $$;
 
+drop trigger if exists trg_unidades_guarda_financeiro on public.unidades;
+drop function if exists public.gestao_financeira_unidades_guarda_org();
 drop function if exists public.gestao_financeira_verificar_unidade_transferivel(uuid);
 drop function if exists public.gestao_financeira_tabelas_da_unidade();
 

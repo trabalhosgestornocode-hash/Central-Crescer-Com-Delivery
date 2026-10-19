@@ -144,6 +144,9 @@ psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_rb -f "$R/docs/gestao-fin
 DEF="select md5(pg_get_functiondef('public.remapear_organizacao_em_tabelas_de_unidade(uuid,uuid,uuid)'::regprocedure)) || ' ' || coalesce(array_to_string(proacl, ','), '') from pg_proc where oid = 'public.remapear_organizacao_em_tabelas_de_unidade(uuid,uuid,uuid)'::regprocedure"
 [ "$(q estrut_rb "$DEF")" = "$(q estrut_base "$DEF")" ] && ok "após o rollback, remapear_organizacao_em_tabelas_de_unidade é idêntica à da main (definição e privilégios)" || bad "função restaurada difere da main"
 [ -z "$(q estrut_rb "select proname from pg_proc where proname like 'gestao\\_financeira\\_%'")" ] && ok "guarda e lista removidas pelo rollback" || bad "restaram funções gestao_financeira_*"
+TRG="select coalesce(string_agg(tgname || ':' || tgfoid::regproc::text, ',' order by tgname), '') from pg_trigger where tgrelid = 'public.unidades'::regclass and not tgisinternal"
+[ "$(q estrut_fin "$TRG")" != "$(q estrut_base "$TRG")" ] && [ "$(q estrut_rb "$TRG")" = "$(q estrut_base "$TRG")" ] \
+  && ok "gatilhos de unidades: a 120 acrescenta a guarda e o rollback devolve exatamente os da main" || bad "gatilhos de unidades após o rollback diferem da main"
 fin estrut_rb "" && ok "reaplica 120 → 121 → 122 depois do rollback"
 
 echo; [ -z "$FALHOU" ] && echo "TRANSFERÊNCIA × FINANCEIRO: TUDO OK" || echo "TRANSFERÊNCIA × FINANCEIRO: HÁ FALHAS"

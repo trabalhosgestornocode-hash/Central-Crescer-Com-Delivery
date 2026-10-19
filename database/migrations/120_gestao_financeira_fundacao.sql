@@ -18,7 +18,8 @@
 --      acessa — e ele filtra organização+unidade explicitamente.
 --   7. Torna a transferência/promoção de unidades compatível com o Financeiro (seção 5b): guarda explícita que RECUSA mover unidade com
 --      qualquer registro financeiro e substitui remapear_organizacao_em_tabelas_de_unidade (054) para deixar as tabelas financeiras fora da
---      varredura genérica. Única alteração em objeto compartilhado além do catálogo de módulos; desfeita pelo 120_rollback.sql.
+--      varredura genérica; um gatilho em unidades aplica a mesma guarda a UPDATE direto de organizacao_id. Únicas alterações em objeto
+--      compartilhado além do catálogo de módulos; desfeitas pelo 120_rollback.sql.
 --
 -- NÃO FAZ: não concede acesso a ninguém; não habilita o módulo em empresa/unidade; não altera dados existentes.
 -- PRÉ-REQUISITOS: 030, 034, 053 (usuarios_organizacoes/usuarios_unidades), 060 (perfis_operacionais), set_updated_at().
@@ -346,6 +347,23 @@ do $$ begin
   end if;
 end $$;
 
+-- Gatilho em unidades: um UPDATE GENÉRICO de organizacao_id (fora de transferir/promover, ex.: PostgREST com service_role ou SQL avulso)
+-- também passa pela guarda. Sem ele a unidade mudava de empresa e o histórico financeiro ficava órfão na empresa antiga (A2, 2026-10-19;
+-- transferencia_unidades.sql 8.10–8.13). Só age quando organizacao_id MUDA; transferir/promover chamam a guarda de novo pelo remapear
+-- (idempotente). INVOKER pelo mesmo motivo da guarda: quem não lê as tabelas financeiras por inteiro falha FECHADO.
+create or replace function public.gestao_financeira_unidades_guarda_org() returns trigger
+language plpgsql set search_path = public, pg_temp as $$
+begin
+  if new.organizacao_id is distinct from old.organizacao_id then
+    perform public.gestao_financeira_verificar_unidade_transferivel(new.id);
+  end if;
+  return new;
+end $$;
+revoke all on function public.gestao_financeira_unidades_guarda_org() from public, anon, authenticated;
+drop trigger if exists trg_unidades_guarda_financeiro on public.unidades;
+create trigger trg_unidades_guarda_financeiro before update of organizacao_id on public.unidades
+  for each row execute function public.gestao_financeira_unidades_guarda_org();
+
 -- 6) PÓS-CONDIÇÃO (falha segura): nada de acesso direto, nada de policy, módulo desabilitado em todo lugar.
 do $$
 declare t text; r text; n int;
@@ -384,6 +402,9 @@ begin
   if pg_get_functiondef('public.remapear_organizacao_em_tabelas_de_unidade(uuid,uuid,uuid)'::regprocedure)
        not like '%gestao_financeira_verificar_unidade_transferivel%' then
     raise exception 'MIGRATION 120 abortada: remapear_organizacao_em_tabelas_de_unidade não chama a guarda financeira.';
+  end if;
+  if not exists (select 1 from pg_trigger where tgrelid = 'public.unidades'::regclass and tgname = 'trg_unidades_guarda_financeiro' and tgenabled <> 'D') then
+    raise exception 'MIGRATION 120 abortada: gatilho trg_unidades_guarda_financeiro ausente ou desabilitado em unidades.';
   end if;
 end $$;
 

@@ -254,6 +254,22 @@ reset role;
 select teste_tu.ok(not exists (select 1 from public.fin_contas c join public.unidades u on u.id = c.unidade_id where c.organizacao_id <> u.organizacao_id)
                and not exists (select 1 from public.fin_lancamentos l join public.unidades u on u.id = l.unidade_id where l.organizacao_id <> u.organizacao_id),
   '8.9 nenhuma linha financeira (contas/lançamentos) com empresa diferente da empresa atual da unidade, em todo o banco');
+-- 8.10–8.13 UPDATE GENÉRICO direto em unidades.organizacao_id (sem passar pelas RPCs): o histórico financeiro não pode ficar órfão na
+-- empresa antiga. Antes do gatilho em unidades (A2, 2026-10-19) o UPDATE passava e a unidade ia para B com as linhas financeiras em A.
+set role service_role;
+select teste_tu.espera_erro(format('update public.unidades set organizacao_id = %L where id = %L', current_setting('tu.b8'), current_setting('tu.ua8')),
+  '22023', 'contas: 1', '8.10 UPDATE direto da empresa de uma unidade COM histórico financeiro é recusado');
+reset role;
+select set_config('tu.ux8', teste_tu.unidade(current_setting('tu.a8')::uuid, '8 X sem financeiro')::text, false);
+set role service_role;
+select teste_tu.executa(format('update public.unidades set organizacao_id = %L where id = %L returning jsonb_build_object(''org'', organizacao_id)', current_setting('tu.b8'), current_setting('tu.ux8')),
+  '8.11 UPDATE direto da empresa de unidade SEM histórico financeiro continua permitido');
+select teste_tu.executa(format('update public.unidades set nome = nome where id = %L returning jsonb_build_object(''ok'', true)', current_setting('tu.ua8')),
+  '8.12 UPDATE de outras colunas da unidade com histórico continua permitido');
+reset role;
+select teste_tu.ok((select organizacao_id from public.unidades where id = current_setting('tu.ua8')::uuid) = current_setting('tu.a8')::uuid
+               and (select organizacao_id from public.unidades where id = current_setting('tu.ux8')::uuid) = current_setting('tu.b8')::uuid,
+  '8.13 a unidade com histórico continua na empresa original; a sem histórico mudou');
 
 -- =========================================================================================================
 -- 10b) Falha segura da guarda
