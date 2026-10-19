@@ -75,4 +75,4 @@ Legenda: **PRONTO** · **PRONTO COM RESTRIÇÃO** · **BLOQUEADO**. **Não há h
 1. **T3 não executado** — precisa das autorizações A1–A6 do doc 21 (adaptação das travas, aplicar 120–122, semente, aceitar dados permanentes, usuário de teste com TOTP, encerramento).
 2. **Promoção da 122, PR, merge e deploy** — autorizações separadas.
 3. **Revisão independente ausente** — risco residual declarado; nenhuma área é "homologada".
-4. **Fora do Financeiro (pré-existentes, decisão de outras frentes):** 115 não aplicada no banco de testes (RPCs de estrutura com EXECUTE público); promoção de unidade quebrada (42P10) na `main`; 3 testes de backend e 5 de navegador falhando na `main`.
+4. **Fora do Financeiro (pré-existentes, decisão de outras frentes):** 115 não aplicada no banco de testes (RPCs de estrutura com EXECUTE público e 4 views legíveis sem login — risco e correção no doc 23 §1); promoção de unidade quebrada (42P10) na `main`; 3 testes de backend e 5 de navegador falhando na `main`.
