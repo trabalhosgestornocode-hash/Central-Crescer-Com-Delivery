@@ -1,0 +1,702 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Domine seu Financeiro — Crescer com Delivery</title>
+<meta name="description" content="Guia prático para organizar, acompanhar e entender os resultados do seu delivery.">
+<style>
+/* Identidade: a mesma dos PDFs do Painel Administrativo (frontend/src/painelAdmPdf.js — cssRelatorioPdf):
+   Segoe UI 9pt, vinho #7d0f1c, vermelho #F42433, capa em degradê vinho, cartões com borda lateral, cabeçalho de tabela vinho. */
+@page { size: A4 portrait; margin: 0; }
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font: 400 9.4pt/1.45 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  color: #17181c; background: #fff;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+b, strong { font-weight: 700; }
+p { margin: 0 0 2mm; }
+ul, ol { margin: 0; padding: 0; }
+
+/* ---------- página ---------- */
+.pagina {
+  width: 210mm; height: 297mm; padding: 12mm 14mm 10mm;
+  display: flex; flex-direction: column; overflow: hidden;
+  page-break-after: always; break-after: page; position: relative;
+}
+.pagina:last-child { page-break-after: auto; break-after: auto; }
+.pg-cab, .pg-rod {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 7pt; color: #8a8f97; flex: 0 0 auto;
+}
+.pg-cab { height: 8mm; border-bottom: .5pt solid #e8e9ee; margin-bottom: 5mm; }
+.pg-rod { height: 7mm; border-top: .5pt solid #e8e9ee; margin-top: auto; padding-top: 2mm; }
+.pg-cab b { color: #7d0f1c; }
+.pg-cab img { width: 5.2mm; height: 5.2mm; border-radius: 1.2mm; vertical-align: middle; margin-right: 2mm; }
+.pg-rod .pg-n { font-weight: 700; color: #666b73; }
+.pg-corpo { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 3.6mm; }
+
+/* ---------- capa ---------- */
+.pagina--capa {
+  padding: 24mm 22mm 18mm;
+  background: linear-gradient(160deg, #2a0609 0%, #4a0a10 46%, #7d0f1c 100%);
+  color: #fff;
+}
+.capa-topo { display: flex; align-items: center; gap: 5mm; }
+.capa-logo { width: 16mm; height: 16mm; border-radius: 3.5mm; object-fit: contain; background: #0a0a0c; flex: 0 0 auto; }
+.capa-marca { font-size: 11pt; font-weight: 700; letter-spacing: 3px; text-transform: uppercase; opacity: .85; }
+.capa-faixa { width: 54mm; height: 3.5pt; background: #F42433; border-radius: 2pt; margin: 7mm 0 0; }
+.capa-sobre { font-size: 8.6pt; font-weight: 700; letter-spacing: 2.4px; text-transform: uppercase; opacity: .72; margin: 22mm 0 3mm; }
+.pagina--capa h1 { font-size: 40pt; font-weight: 800; letter-spacing: -1.2pt; line-height: 1.02; margin: 0 0 4mm; }
+.capa-sub { font-size: 12.5pt; opacity: .82; margin: 0 0 9mm; max-width: 140mm; line-height: 1.4; }
+.capa-per {
+  font-size: 12pt; font-weight: 700; margin: 0 0 10mm; padding: 2.6mm 6mm;
+  border-left: 3pt solid #F42433; background: rgba(255,255,255,.07); width: fit-content;
+}
+.capa-tela {
+  margin: 0 -22mm 0 0; border-radius: 3mm 0 0 3mm; overflow: hidden; height: 74mm;
+  box-shadow: 0 6mm 14mm rgba(0,0,0,.45); border: .8pt solid rgba(255,255,255,.18); border-right: 0;
+}
+.capa-tela img { width: 100%; display: block; }
+.capa-nums { display: flex; gap: 14mm; margin: 9mm 0 auto; }
+.capa-nums span { display: flex; flex-direction: column; font-size: 8.6pt; opacity: .8; }
+.capa-nums b { font-size: 24pt; font-weight: 800; opacity: 1; letter-spacing: -1pt; line-height: 1.1; }
+.capa-pe { font-size: 8pt; opacity: .66; line-height: 1.6; margin: 0; border-top: .5pt solid rgba(255,255,255,.2); padding-top: 3mm; }
+
+/* ---------- títulos ---------- */
+.tit { display: flex; align-items: flex-end; gap: 4mm; border-bottom: 1.1pt solid #7d0f1c; padding-bottom: 1.6mm; }
+.tit-n { font-size: 24pt; font-weight: 800; color: #F42433; line-height: .9; letter-spacing: -1pt; }
+.tit h2 { font-size: 17pt; font-weight: 780; color: #7d0f1c; margin: 0; letter-spacing: -.4pt; line-height: 1.1; }
+.lead { font-size: 10.4pt; color: #3b3e45; line-height: 1.45; margin: 0; }
+h3 { font-size: 10.2pt; font-weight: 750; color: #7d0f1c; margin: 0 0 1.6mm; }
+h4 { font-size: 8.4pt; font-weight: 750; letter-spacing: .3pt; text-transform: uppercase; color: #666b73; margin: 0 0 1.4mm; }
+
+/* ---------- grades ---------- */
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; align-items: start; }
+.g-7-5 { display: grid; grid-template-columns: 7fr 5fr; gap: 5mm; align-items: start; }
+.g-5-7 { display: grid; grid-template-columns: 5fr 7fr; gap: 5mm; align-items: start; }
+.g-6-4 { display: grid; grid-template-columns: 6fr 4fr; gap: 5mm; align-items: start; }
+.g3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3.4mm; align-items: stretch; }
+.g4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2.6mm; align-items: stretch; }
+
+/* ---------- figuras ---------- */
+.fig { margin: 0; break-inside: avoid; }
+.fig img { width: 100%; display: block; border-radius: 2mm; border: .6pt solid #e2e4ea; box-shadow: 0 1mm 3mm rgba(23,24,28,.08); }
+.fig figcaption { font-size: 7.2pt; color: #666b73; margin-top: 1.4mm; line-height: 1.35; }
+.fig figcaption b { color: #7d0f1c; }
+
+/* ---------- caixas ---------- */
+.k {
+  border: .7pt solid #e8e9ee; border-left: 2.2pt solid #cfd2d8; border-radius: 1.6mm;
+  padding: 2.4mm 3mm; break-inside: avoid;
+}
+.k-r { display: block; font-size: 6.6pt; font-weight: 750; letter-spacing: .4pt; text-transform: uppercase; color: #666b73; margin-bottom: .6mm; }
+.k p:last-child, .k ul:last-child { margin-bottom: 0; }
+.k--conceito { border-left-color: #7d0f1c; background: #fbf6f6; }
+.k--atencao { border-left-color: #c48a12; background: #fdfaf1; }
+.k--critico { border-left-color: #c0121f; background: #fdf4f4; }
+.k--ok { border-left-color: #0e9d57; background: #f3fbf7; }
+.k--conceito .k-r { color: #7d0f1c; }
+.k--atencao .k-r { color: #8a6208; }
+.k--critico .k-r { color: #c0121f; }
+.k--ok .k-r { color: #0b7a44; }
+.k-tit { font-size: 10.6pt; font-weight: 760; margin: 0 0 1.2mm; }
+
+.lista { list-style: none; }
+.lista li { position: relative; padding-left: 4mm; margin-bottom: 1.3mm; }
+.lista li::before { content: ""; position: absolute; left: .4mm; top: 1.75mm; width: 1.5mm; height: 1.5mm; border-radius: 50%; background: #F42433; }
+.lista--compacta li { margin-bottom: .8mm; }
+
+.passos { list-style: none; counter-reset: p; }
+.passos li { counter-increment: p; position: relative; padding-left: 8mm; margin-bottom: 2.2mm; min-height: 5.6mm; }
+.passos li::before {
+  content: counter(p); position: absolute; left: 0; top: -.2mm; width: 5.6mm; height: 5.6mm; border-radius: 50%;
+  background: #7d0f1c; color: #fff; font-size: 7.6pt; font-weight: 800; display: flex; align-items: center; justify-content: center;
+}
+.passos li b { color: #17181c; }
+
+.badge { display: inline-block; font-size: 7pt; font-weight: 720; padding: .3mm 1.8mm; border-radius: 5pt; white-space: nowrap; vertical-align: .2mm; }
+.badge--atencao { background: #fdf3d9; color: #8a6208; }
+.badge--ok { background: #e2f7ec; color: #0b7a44; }
+.badge--critico { background: #fbe4e6; color: #c0121f; }
+.badge--info { background: #e6effb; color: #1d5fb4; }
+.ui { font-weight: 700; color: #7d0f1c; white-space: nowrap; }
+
+/* ---------- tabelas ---------- */
+table { width: 100%; border-collapse: collapse; font-size: 8pt; table-layout: fixed; }
+th {
+  text-align: left; font-size: 6.6pt; font-weight: 750; letter-spacing: .3pt; text-transform: uppercase;
+  color: #fff; background: #7d0f1c; padding: 1.4mm 2mm; border: 0;
+}
+th:first-child { border-top-left-radius: 1.2mm; } th:last-child { border-top-right-radius: 1.2mm; }
+td { padding: 1.3mm 2mm; border-bottom: .4pt solid #eceef1; vertical-align: top; overflow-wrap: break-word; }
+th.n, td.n { text-align: right; white-space: nowrap; }
+td.c, th.c { text-align: center; }
+tbody tr:nth-child(even) td { background: #fafbfc; }
+tr.tot td { font-weight: 760; background: #f6eeef !important; border-bottom: .8pt solid #7d0f1c; }
+tr.res td { font-weight: 800; color: #7d0f1c; background: #fdf4f4 !important; }
+.sim { color: #0b7a44; font-weight: 800; }
+.nao { color: #b9bdc5; }
+
+/* ---------- mapa das áreas ---------- */
+.mapa { list-style: none; columns: 2; column-gap: 4mm; font-size: 8.2pt; }
+.mapa li { break-inside: avoid; margin-bottom: 1.5mm; line-height: 1.3; }
+.mapa b { display: block; color: #7d0f1c; font-size: 8.4pt; }
+.mapa span { color: #555a62; }
+
+/* ---------- glossário ---------- */
+.gl { border-top: 1.6pt solid #F42433; padding-top: 1.6mm; }
+.gl b { display: block; font-size: 9pt; margin-bottom: .6mm; }
+.gl span { display: block; font-size: 7.8pt; color: #4b4f57; line-height: 1.38; }
+
+/* ---------- equações (identidade de fechamento) ---------- */
+.eq { display: flex; flex-wrap: wrap; align-items: center; gap: 1.6mm; font-size: 8.6pt; margin: 1.2mm 0 2.4mm; }
+.eq i { font-style: normal; background: #fff; border: .7pt solid #e2c9cc; border-radius: 1.4mm; padding: .8mm 2.2mm; font-weight: 650; }
+.eq u { text-decoration: none; font-weight: 800; color: #F42433; font-size: 10pt; }
+.eq i.r { background: #7d0f1c; color: #fff; border-color: #7d0f1c; }
+
+/* ---------- checklist ---------- */
+.ck { border: .7pt solid #e8e9ee; border-top: 3pt solid #7d0f1c; border-radius: 1.6mm; padding: 3mm 3.4mm; }
+.ck h3 { display: flex; justify-content: space-between; align-items: baseline; }
+.ck h3 small { font-size: 7pt; font-weight: 700; color: #8a8f97; text-transform: uppercase; letter-spacing: .4pt; }
+.ck ul { list-style: none; }
+.ck li { position: relative; padding-left: 5.4mm; margin-bottom: 1.6mm; font-size: 8.4pt; line-height: 1.38; }
+.ck li::before { content: ""; position: absolute; left: 0; top: .5mm; width: 3.2mm; height: 3.2mm; border: .9pt solid #7d0f1c; border-radius: .8mm; }
+.ck li em { font-style: normal; color: #666b73; }
+
+.fim { display: flex; align-items: center; gap: 4mm; background: linear-gradient(160deg, #2a0609 0%, #4a0a10 46%, #7d0f1c 100%); color: #fff; border-radius: 2mm; padding: 4mm 5mm; }
+.fim img { width: 13mm; height: 13mm; border-radius: 3mm; background: #0a0a0c; }
+.fim b { display: block; font-size: 11pt; }
+.fim span { font-size: 8.2pt; opacity: .8; }
+</style>
+</head>
+<body>
+
+<!-- ============================== 1. CAPA ============================== -->
+<section class="pagina pagina--capa">
+  <div class="capa-topo"><img class="capa-logo" src="assets/logo-crescer-central.jpeg" alt="Crescer com Delivery"><span class="capa-marca">Crescer com Delivery</span></div>
+  <div class="capa-faixa"></div>
+  <p class="capa-sobre">Guia oficial · Dashboard Financeiro</p>
+  <h1>Domine seu<br>Financeiro</h1>
+  <p class="capa-sub">Guia prático para organizar, acompanhar e entender os resultados do seu delivery.</p>
+  <div class="capa-per">Do lançamento diário ao fechamento do mês</div>
+  <div class="capa-tela"><img src="../capturas/02-visao-geral-kpis.jpg" alt="Visão Geral do Dashboard Financeiro com dados demonstrativos"></div>
+  <div class="capa-nums">
+    <span><b>12</b>áreas explicadas</span>
+    <span><b>3</b>níveis de acesso</span>
+    <span><b>10 min</b>de leitura</span>
+  </div>
+  <p class="capa-pe">Para proprietários, gestores e equipe financeira. Todas as telas deste guia usam dados demonstrativos — nenhum dado real de cliente.</p>
+</section>
+
+<!-- ============================== 2. PRIMEIROS PASSOS ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">01</span><h2>Primeiros passos</h2></div>
+    <p class="lead">O Dashboard Financeiro reúne o dinheiro da unidade em um <b>livro-caixa único</b> e transforma esses lançamentos em indicadores, DRE gerencial, conciliação e relatórios. Nenhum número é digitado na tela: tudo é recalculado a partir dos lançamentos.</p>
+
+    <div class="g-5-7">
+      <div>
+        <h3>Como entrar</h3>
+        <ol class="passos">
+          <li>Entre na Central com seu e-mail e senha.</li>
+          <li>Confira a <b>unidade</b> no topo da tela. Todos os números se referem somente à unidade escolhida; use <span class="ui">Trocar unidade</span> para mudar.</li>
+          <li>Em “Em qual setor você quer prosseguir?”, escolha <span class="ui">Dashboard Financeiro</span>. Se o cartão não aparecer, peça acesso ao administrador (página 9).</li>
+          <li>Navegue pelo menu lateral <b>FINANCEIRO</b>. O botão <span class="ui">Dashboard Operacional</span>, no topo, leva ao outro setor.</li>
+        </ol>
+      </div>
+      <figure class="fig"><img src="../capturas/00-escolha-setor.jpg" alt="Tela de escolha do setor"><figcaption><b>Escolha do setor</b> logo após o login.</figcaption></figure>
+    </div>
+
+    <div class="g-7-5">
+      <figure class="fig"><img src="../capturas/01-navegacao.jpg" alt="Dashboard Financeiro com o menu lateral em destaque"><figcaption><b>Menu FINANCEIRO</b> (em destaque) com as 12 áreas. O campo <b>Mês</b>, presente na maioria das telas, define o período analisado e é mantido enquanto você navega.</figcaption></figure>
+      <div>
+        <h4>As 12 áreas</h4>
+        <ul class="mapa">
+          <li><b>Visão Geral</b><span>resumo do mês</span></li>
+          <li><b>Fluxo de Caixa</b><span>o livro-caixa</span></li>
+          <li><b>Contas Financeiras</b><span>onde o dinheiro está</span></li>
+          <li><b>Conciliação</b><span>vendas × recebido</span></li>
+          <li><b>DRE Gerencial</b><span>resultado do mês</span></li>
+          <li><b>Indicadores</b><span>fórmulas à vista</span></li>
+          <li><b>Análise de Categorias</b><span>o que mais pesa</span></li>
+          <li><b>Plano de Contas</b><span>as categorias</span></li>
+          <li><b>Períodos</b><span>fechamento do mês</span></li>
+          <li><b>Importação</b><span>livro-caixa em .xlsx</span></li>
+          <li><b>Relatórios</b><span>tabelas e exportação</span></li>
+          <li><b>Configurações</b><span>contas e regras</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div>
+      <h4>Quatro termos para ler qualquer tela</h4>
+      <div class="g4">
+        <div class="gl"><b>Regime de caixa</b><span>O dinheiro é contado quando de fato entra ou sai da conta — não no dia da venda ou da compra.</span></div>
+        <div class="gl"><b>Lançamento</b><span>Cada entrada ou saída registrada no livro-caixa, com conta, categoria, valor e data.</span></div>
+        <div class="gl"><b>Conta × Categoria</b><span>Conta é <i>onde</i> o dinheiro está (banco, adquirente, caixa). Categoria é <i>o que</i> ele é (vendas, insumos, aluguel).</span></div>
+        <div class="gl"><b>“Parcial”</b><span>Selo que avisa que falta informação — por exemplo, lançamento sem categoria ou saldo inicial desconhecido. O sistema nunca preenche com zero.</span></div>
+      </div>
+    </div>
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 2 de 10</span></footer>
+</section>
+
+<!-- ============================== 3. VISÃO GERAL ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">02</span><h2>Visão Geral: o mês em uma tela</h2></div>
+    <p class="lead">A primeira tela responde três perguntas: quanto entrou, quanto saiu e qual foi o resultado do mês escolhido. Comece sempre pelos <b>avisos</b> do topo — eles dizem se os números estão completos.</p>
+
+    <div class="g-7-5">
+      <figure class="fig"><img src="../capturas/02-visao-geral-kpis.jpg" alt="Cartões de indicadores da Visão Geral"><figcaption><b>Em destaque:</b> o resultado gerencial (lucro do mês) e a variação do caixa. Os selos <b>Parcial</b> e os avisos amarelos indicam o que ainda falta resolver.</figcaption></figure>
+      <div style="display:flex;flex-direction:column;gap:3mm">
+        <div class="k k--conceito">
+          <span class="k-r">Conceito-chave</span>
+          <p class="k-tit">Lucro não é caixa</p>
+          <p>No exemplo, o resultado foi <b>R$ 11.040,00</b> e o caixa variou <b>+R$ 11.270,00</b>. Os R$ 230,00 de diferença são um PIX ainda sem categoria: o dinheiro entrou, mas só conta no resultado depois de classificado.</p>
+          <p>Empréstimos recebidos ou pagos também mexem no caixa sem ser lucro ou prejuízo. Já a transferência entre suas próprias contas não altera nenhum dos dois.</p>
+        </div>
+        <div class="k k--atencao">
+          <span class="k-r">Saldo calculado ≠ extrato</span>
+          <p>O saldo da tela é calculado a partir dos lançamentos. Ele só vale como saldo conferido depois de comparado com o extrato do banco ou da adquirente.</p>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h3>Como ler cada cartão</h3>
+      <table>
+        <colgroup><col style="width:21%"><col style="width:29%"><col style="width:21%"><col style="width:29%"></colgroup>
+        <thead><tr><th>Cartão</th><th>O que mostra</th><th>Cartão</th><th>O que mostra</th></tr></thead>
+        <tbody>
+          <tr><td><b>Receita recebida</b></td><td>Recebimentos líquidos que entraram nas contas — não as vendas brutas.</td><td><b>Resultado gerencial</b></td><td>Margem de contribuição − despesas fixas, com pessoal e financeiras.</td></tr>
+          <tr><td><b>Custos variáveis</b></td><td>Compras e fretes pagos no mês (não é o CMV consumido).</td><td><b>Ponto de equilíbrio</b></td><td>Receita necessária para cobrir a estrutura do mês.</td></tr>
+          <tr><td><b>Despesas</b></td><td>Variáveis + fixas + pessoal + financeiras.</td><td><b>Variação do caixa</b></td><td>Entradas − saídas do período, sem o saldo anterior.</td></tr>
+          <tr><td><b>Margem de contribuição</b></td><td>Receita − custos variáveis − despesas variáveis − tributos.</td><td><b>Saldo final calculado</b></td><td>Saldo inicial + variação. “Parcial” se alguma conta não tem saldo inicial informado.</td></tr>
+        </tbody>
+      </table>
+      <p style="font-size:7.8pt;color:#666b73;margin-top:1.8mm">Em cada cartão, o link <span class="ui">Fórmula</span> mostra o cálculo e a origem do número. Abaixo dos cartões a tela traz o gráfico de entradas e saídas por dia (sem transferências internas), saldos e movimentação por conta, maiores custos e despesas e as pendências de classificação.</p>
+    </div>
+
+    <div class="g-7-5">
+      <figure class="fig"><img src="../capturas/03-visao-geral-grafico.jpg" alt="Gráfico de entradas e saídas por dia"><figcaption><b>Entradas e saídas por dia.</b> Transferências entre contas próprias ficam fora do gráfico.</figcaption></figure>
+      <div class="k">
+        <span class="k-r">Os avisos do topo</span>
+        <ul class="lista lista--compacta">
+          <li><span class="badge badge--atencao">Amarelo</span> falta algo para o número ficar completo — por exemplo, lançamento pendente ou saldo inicial desconhecido.</li>
+          <li><span class="badge badge--critico">Vermelho</span> há uma inconsistência que impede conferir o mês, como a ponte resultado → caixa que não fecha.</li>
+          <li>Resolva os avisos antes de tirar conclusões dos cartões.</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 3 de 10</span></footer>
+</section>
+
+<!-- ============================== 4. FLUXO DE CAIXA + CONTAS ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">03</span><h2>Fluxo de Caixa e Contas Financeiras</h2></div>
+    <p class="lead">O <b>Fluxo de Caixa</b> é o livro-caixa único da unidade: tudo o que as outras telas mostram nasce daqui. As <b>Contas Financeiras</b> dizem onde esse dinheiro está.</p>
+
+    <div class="g-7-5">
+      <figure class="fig"><img src="../capturas/04-fluxo-de-caixa.jpg" alt="Tela Fluxo de Caixa com filtros e lançamentos"><figcaption><b>Fluxo de Caixa</b> com filtros por mês, conta, tipo, descrição e pendências. Em destaque, os botões para registrar.</figcaption></figure>
+      <div>
+        <h3>Registrar um lançamento</h3>
+        <p>Em <span class="ui">Novo lançamento</span> informe conta, tipo (entrada ou saída), descrição, valor, data do movimento e categoria. Datas de competência e vencimento são opcionais.</p>
+        <ul class="lista">
+          <li><b>Realizado</b> entra no caixa; <b>Previsto</b> fica fora dele até acontecer.</li>
+          <li>Sem categoria, o lançamento fica <span class="badge badge--atencao">Pendente</span> e sai dos indicadores. Use o filtro “Somente pendentes” para zerar a fila.</li>
+          <li><b>Nada é excluído.</b> Um lançamento errado é <b>cancelado com motivo</b>; trocar a categoria exige nota de revisão; toda mudança fica no <span class="ui">Histórico</span>.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="k k--critico">
+      <span class="k-r">Transferência entre contas próprias não é receita</span>
+      <div class="g-6-4" style="align-items:center">
+        <p style="margin:0">Você levou R$ 2.000,00 da <b>adquirente</b> para o <b>banco</b>. Registre com <span class="ui">Nova transferência</span>: o sistema cria um par vinculado — saída de R$ 2.000,00 na origem e entrada de R$ 2.000,00 no destino. O efeito no resultado é <b>zero</b>. Se o valor for lançado como entrada comum com categoria de venda, a receita do mês fica inflada.</p>
+        <table>
+          <thead><tr><th>Conta</th><th class="n">Movimento</th></tr></thead>
+          <tbody>
+            <tr><td>Adquirente</td><td class="n">− R$ 2.000,00</td></tr>
+            <tr><td>Banco</td><td class="n">+ R$ 2.000,00</td></tr>
+            <tr class="tot"><td>Efeito no resultado</td><td class="n">R$ 0,00</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="g-5-7">
+      <div>
+        <h3>Contas Financeiras</h3>
+        <ul class="lista">
+          <li>Tipos: Banco, Adquirente, Caixa físico, Carteira de plataforma ou Outra.</li>
+          <li><b>Saldo de abertura:</b> informe só um valor conhecido (extrato ou contagem). Sem ele, o saldo aparece como <span class="badge badge--atencao">Parcial</span> — nunca é presumido zero.</li>
+          <li><span class="ui">Extrato</span> mostra o extrato interno, calculado dos lançamentos (não é o extrato do banco).</li>
+          <li><span class="ui">Canal</span> liga a conta a um canal de venda (ex.: STONE) para a Conciliação.</li>
+          <li>Transferência registrada errada: <span class="ui">Cancelar transferência</span> anula as duas pernas juntas; <span class="ui">Desvincular</span> serve só quando o pareamento estava incorreto.</li>
+        </ul>
+      </div>
+      <figure class="fig"><img src="../capturas/17-configuracoes.jpg" alt="Contas financeiras com tipo, canal e saldo de abertura"><figcaption><b>Contas da unidade</b> com tipo, canal de venda e saldo de abertura. Duas contas ainda estão com a abertura <b>desconhecida</b> — e o sistema avisa.</figcaption></figure>
+    </div>
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 4 de 10</span></footer>
+</section>
+
+<!-- ============================== 5. DRE / INDICADORES / CATEGORIAS / PLANO ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">04</span><h2>DRE, Indicadores, Categorias e Plano de Contas</h2></div>
+    <p class="lead">Estas quatro telas explicam <b>de onde vem o resultado</b>. Todas leem os mesmos lançamentos e mostram a fórmula de cada número.</p>
+
+    <div class="g-7-5">
+      <figure class="fig"><img src="../capturas/08-dre.jpg" alt="DRE Gerencial com comparação ao mês anterior"><figcaption><b>DRE Gerencial</b> comparada ao mês anterior. A coluna “Como é calculada” explica cada linha. (Linhas de detalhe por categoria ocultadas nesta imagem.)</figcaption></figure>
+      <div>
+        <h3>DRE Gerencial</h3>
+        <p>Demonstração do resultado em <b>regime de caixa</b>: receita = recebimentos líquidos; custos = compras e fretes pagos. Serve para gerir o negócio e <b>não substitui a DRE contábil</b> feita pela contabilidade.</p>
+        <ul class="lista lista--compacta">
+          <li>Compare com o mês anterior no campo <span class="ui">Comparar</span>.</li>
+          <li>As linhas por categoria são detalhe, já incluídas no total acima — não some de novo.</li>
+          <li>A margem líquida é um percentual (resultado ÷ receita).</li>
+        </ul>
+        <h3 style="margin-top:3mm">Indicadores</h3>
+        <p>Cada indicador traz fórmula, origem e situação: <span class="badge badge--ok">Calculado</span> <span class="badge badge--atencao">Parcial</span> ou Indisponível. A <b>ponte resultado → caixa</b> mostra se o resultado explica a variação do caixa “ao centavo”.</p>
+      </div>
+    </div>
+
+    <div class="g2">
+      <div>
+        <h3>Análise de Categorias</h3>
+        <p>Ranking dos custos, despesas e tributos do mês, com % do total e % acumulado. Ficam fora: transferências, saldo anterior e o principal de financiamentos.</p>
+        <figure class="fig"><img src="../capturas/10-categorias.jpg" alt="Gráfico das maiores categorias de custo e despesa"></figure>
+      </div>
+      <div>
+        <h3>Plano de Contas</h3>
+        <p>Organizado em <b>Tipo → Natureza → Categoria</b>. O que decide como a categoria entra nos cálculos é o seu <b>papel</b>:</p>
+        <table>
+          <colgroup><col style="width:42%"><col></colgroup>
+          <thead><tr><th>Papel</th><th>Exemplos</th></tr></thead>
+          <tbody>
+            <tr><td>Receita operacional</td><td>Vendas balcão, repasses</td></tr>
+            <tr><td>Custo variável</td><td>Insumos, fretes de compra</td></tr>
+            <tr><td>Despesa variável · Tributo</td><td>Embalagens · impostos</td></tr>
+            <tr><td>Despesa fixa · com pessoal</td><td>Aluguel · folha</td></tr>
+            <tr><td>Despesa financeira</td><td>Tarifas bancárias</td></tr>
+            <tr><td>Financiamento · Transferência</td><td>Empréstimos · entre contas</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:7.6pt;color:#666b73;margin-top:1.6mm">Categoria com lançamentos não muda de papel: crie outra e reclassifique com motivo. Categorias são desativadas, não apagadas.</p>
+      </div>
+    </div>
+
+    <div class="k k--conceito">
+      <span class="k-r">Exemplo de leitura da DRE (dados demonstrativos)</span>
+      <div class="g2" style="gap:6mm">
+        <p style="margin:0">A receita caiu <b>R$ 13.780,00</b> em relação ao mês anterior, mas o resultado caiu só <b>R$ 780,00</b>. Por quê? Os custos variáveis também caíram (−R$ 5.600,00) e não houve pagamento de folha no mês (−R$ 7.400,00).</p>
+        <p style="margin:0">Leitura correta: a folha não deixou de existir — ela não foi <b>paga</b> neste mês. Em regime de caixa, compare alguns meses seguidos antes de concluir que a margem melhorou.</p>
+      </div>
+    </div>
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 5 de 10</span></footer>
+</section>
+
+<!-- ============================== 6. IMPORTAÇÃO ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">05</span><h2>Importação do livro-caixa</h2></div>
+    <p class="lead">Quem já controla o caixa em planilha pode trazer o livro-caixa (.xlsx) sem digitar lançamento por lançamento. A importação acontece em <b>quatro etapas</b>, e nada é gravado antes da sua confirmação.</p>
+
+    <figure class="fig"><img src="../capturas/12-importacao.jpg" alt="Etapas da importação e envio da planilha"><figcaption><b>Etapa 1:</b> escolha o arquivo e clique em <b>Gerar prévia</b>. Abaixo, a tela lista as importações anteriores e permite retomar uma prévia aberta.</figcaption></figure>
+
+    <div class="g2">
+      <div>
+        <ol class="passos">
+          <li><b>Arquivo.</b> Envie o livro-caixa em .xlsx (até 5 MB). Só a aba do fluxo é lida; as abas por conta são visões do mesmo livro.</li>
+          <li><b>Prévia.</b> Mostra linhas lidas, lançamentos novos, já existentes (ignorados), possíveis alterações, pendências e erros de leitura. A <b>conferência</b> diz se os totais do arquivo batem ao centavo.</li>
+          <li><b>Pares e alterações.</b> O sistema sugere pares de transferência por valor, data e contas. Pares de alta confiança podem ser confirmados em lote; os ambíguos, um a um. Possíveis alterações não entram, a menos que você aceite.</li>
+          <li><b>Confirmação.</b> Marque “Revisei a prévia” e clique em <span class="ui">Confirmar importação</span>. Ao final, um relatório mostra o que foi gravado, o que já existia e as pendências preservadas.</li>
+        </ol>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3mm">
+        <div class="k k--atencao">
+          <span class="k-r">Antes de importar</span>
+          <ul class="lista lista--compacta">
+            <li>O importador lê o <b>modelo de livro-caixa</b> reconhecido pelo sistema. Não é um leitor universal de qualquer planilha ou extrato.</li>
+            <li><b>Erros de leitura</b> ou totais que não conferem <b>bloqueiam</b> a confirmação: corrija o arquivo e gere nova prévia.</li>
+            <li>Reenviar o mesmo conteúdo não duplica, mas <b>evite importar o mesmo mês várias vezes</b> ou versões editadas do arquivo: edições viram “possíveis alterações” e exigem decisão.</li>
+            <li>Lançamentos “a identificar” ou sem categoria entram como <b>pendentes</b>; nada é reclassificado sozinho.</li>
+            <li>Contas sem saldo inicial ficam parciais: informe depois em Contas Financeiras.</li>
+          </ul>
+        </div>
+        <div class="k">
+          <span class="k-r">Quem faz o quê</span>
+          <p style="margin:0"><b>Operador</b> envia o arquivo e gera a prévia. <b>Gestor</b> decide os pares e confirma a importação. <span class="ui">Cancelar prévia</span> descarta tudo sem gravar.</p>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h3>O que fazer com cada resultado da prévia</h3>
+      <table>
+        <colgroup><col style="width:27%"><col></colgroup>
+        <thead><tr><th>Na prévia aparece</th><th>O que fazer</th></tr></thead>
+        <tbody>
+          <tr><td><b>Já existentes (ignorados)</b></td><td>Normal ao reenviar um arquivo: essas linhas já estão no sistema e não são gravadas de novo.</td></tr>
+          <tr><td><b>Possíveis alterações</b></td><td>Compare com o lançamento original. Use “Importar como novo” só se for, de fato, outro lançamento.</td></tr>
+          <tr><td><b>Pendências</b></td><td>Serão gravadas como pendentes. Classifique depois em Fluxo de Caixa (filtro “Somente pendentes”) ou na Conciliação.</td></tr>
+          <tr><td><b>Totais NÃO conferem</b></td><td>Confira o total declarado na planilha e as linhas com fórmula; depois gere uma nova prévia.</td></tr>
+          <tr><td><b>Pares ambíguos</b></td><td>Confirme ou rejeite um a um. Sem par confirmado, o movimento fica pendente.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 6 de 10</span></footer>
+</section>
+
+<!-- ============================== 7. CONCILIAÇÃO ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">06</span><h2>Conciliação: vendas × recebimentos</h2></div>
+    <p class="lead">Conciliar é comparar o que você <b>vendeu</b> — informado por uma fonte externa, como o relatório do PDV, da maquininha ou da plataforma — com o que de fato <b>entrou</b> no livro-caixa. Sem essa referência, a tela não calcula nem presume nada.</p>
+
+    <figure class="fig" style="width:84%;align-self:center"><img src="../capturas/13-conciliacao-ponte.jpg" alt="Ponte do mês: vendas para recebimentos"><figcaption><b>Ponte do mês</b> com referências demonstrativas do canal STONE. Em destaque, o residual que ainda precisa de explicação.</figcaption></figure>
+
+    <div class="g2">
+      <div>
+        <h3>Exemplo passo a passo</h3>
+        <table>
+          <colgroup><col><col style="width:34%"></colgroup>
+          <thead><tr><th>Etapa</th><th class="n">Valor</th></tr></thead>
+          <tbody>
+            <tr><td>Vendas no canal STONE (referência)</td><td class="n">R$ 30.000,00</td></tr>
+            <tr><td>(−) Recebido no livro-caixa</td><td class="n">R$ 28.710,00</td></tr>
+            <tr class="tot"><td>(=) Diferença a explicar</td><td class="n">R$ 1.290,00</td></tr>
+            <tr><td>(−) Taxas STONE (referência)</td><td class="n">R$ 1.050,00</td></tr>
+            <tr class="res"><td>(=) Residual</td><td class="n">R$ 240,00</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:7.8pt;margin-top:1.6mm">O residual de R$ 240,00 fica <b>pendente de identificação</b>. Investigue: um repasse que caiu em outro dia? Um estorno? Uma taxa extra?</p>
+      </div>
+      <div>
+        <h3>Como explicar a diferença</h3>
+        <p>Use <span class="ui">Classificar</span>: escolha o motivo (diferença de prazo, taxa, ajuste, estorno, divergência ou outros), informe o valor explicado — pode ser parcial — e escreva a justificativa. A classificação fica na auditoria e pode ser revogada com motivo.</p>
+        <div class="k k--critico">
+          <span class="k-r">Sem ajustes artificiais</span>
+          <p style="margin:0">Não crie lançamento fictício para “zerar” a diferença e não classifique como prazo sem confirmar. O sistema <b>nunca presume</b> prazo sozinho: um residual em aberto é informação, não erro.</p>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h3>Como informar as referências</h3>
+      <div class="g3">
+        <div class="k"><span class="k-r">Na tela</span><p><span class="ui">Informar referências</span>: tipo (Vendas, Taxas, Sangrias ou Caixa em espécie), data, valor e, se quiser, canal e nota. Valor zero vale como “zero informado”.</p></div>
+        <div class="k"><span class="k-r">Por arquivo</span><p><span class="ui">Importar arquivo</span>: CSV ou XLSX com as colunas DATA, TIPO, VALOR e, opcionais, CANAL e NOTA. O arquivo é validado antes de gravar e reenviá-lo não duplica.</p></div>
+        <div class="k"><span class="k-r">Também na tela</span><p>Conferência de <b>caixa em espécie</b> e <b>sangrias</b> por dia e lista de <b>pendências de identificação</b>: lançamentos pendentes, movimentos com terceiros e possíveis duplicidades.</p></div>
+      </div>
+    </div>
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 7 de 10</span></footer>
+</section>
+
+<!-- ============================== 8. RELATÓRIOS E FECHAMENTO ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">07</span><h2>Relatórios e fechamento do mês</h2></div>
+    <p class="lead">Os <b>Relatórios</b> transformam os lançamentos em tabelas para conferência e arquivo. Os <b>Períodos</b> encerram o mês: depois de fechado, ele não muda mais.</p>
+
+    <div class="g-7-5">
+      <figure class="fig"><img src="../capturas/14-relatorios.jpg" alt="Tela de Relatórios com filtros e resultado"><figcaption><b>Relatórios:</b> escolha a tabela, ajuste os filtros e gere ou exporte.</figcaption></figure>
+      <div>
+        <h3>Sete relatórios prontos</h3>
+        <ul class="lista lista--compacta">
+          <li>Histórico de movimentações</li>
+          <li>Demonstrativo de resultados</li>
+          <li>Fluxo de caixa</li>
+          <li>Movimentação por conta</li>
+          <li>Análise de categorias</li>
+          <li>Histórico de conciliações</li>
+          <li>Situação dos períodos</li>
+        </ul>
+        <p style="margin-top:2mm">Filtros conforme o relatório: período, conta, categoria, tipo, situação, agrupamento por dia ou mês e transferências internas (excluídas por padrão).</p>
+        <p><span class="ui">Exportar CSV</span> e <span class="ui">Exportar XLSX</span> geram arquivos com período, filtros, situação dos dados, data de geração e código de verificação. Os cálculos são os mesmos do dashboard e cobrem só a unidade selecionada.</p>
+      </div>
+    </div>
+
+    <div class="g-5-7">
+      <figure class="fig"><img src="../capturas/16-pre-fechamento.jpg" alt="Janela de pré-fechamento do período"><figcaption><b>Pré-fechamento</b> com pendências: o botão <b>Fechar período</b> fica bloqueado.</figcaption></figure>
+      <div>
+        <h3>Como fechar o mês</h3>
+        <ol class="passos">
+          <li>Em <span class="ui">Períodos</span>, clique em <span class="ui">Pré-fechamento</span> no mês desejado.</li>
+          <li>Confira receita, resultado, variação do caixa e as pendências de classificação e de conciliação. Bloqueios aparecem em vermelho.</li>
+          <li>Sem bloqueios, marque “Confirmo o fechamento” e clique em <span class="ui">Fechar período</span> (perfil Gestor).</li>
+        </ol>
+        <div class="k k--critico">
+          <span class="k-r">Depois de fechado</span>
+          <ul class="lista lista--compacta">
+            <li>Os resultados viram um <b>snapshot imutável</b> (<span class="ui">Ver snapshot</span>), sem recálculo.</li>
+            <li>Lançamentos, referências e classificações daquele mês ficam <b>bloqueados</b>.</li>
+            <li><b>Não há reabertura</b> nesta versão: feche só depois de conferir tudo.</li>
+            <li>Se algo mudar com a janela aberta, o fechamento é recusado: atualize e confira de novo.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 8 de 10</span></footer>
+</section>
+
+<!-- ============================== 9. CONFIGURAÇÕES E ACESSOS ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">08</span><h2>Configurações e acessos</h2></div>
+    <p class="lead">As <b>Configurações Financeiras</b> reúnem as regras da unidade. O <b>acesso</b> de cada pessoa é definido pelo administrador da plataforma em uma única tela.</p>
+
+    <div class="g2">
+      <div>
+        <h3>Configurações Financeiras</h3>
+        <ul class="lista">
+          <li><b>Contas:</b> nome, tipo, canal de venda, situação e saldo de abertura. Tipo e canal ficam travados quando a conta tem movimento em mês fechado.</li>
+          <li><b>Plano de contas:</b> criar e editar categorias e seus papéis.</li>
+          <li><b>Exceções de sangria:</b> categorias aprovadas que saem do confronto de sangrias (ex.: despesa paga em espécie).</li>
+          <li><b>Fechamento com pendências:</b> bloqueado.</li>
+          <li>A tela também lista o que está <b>indisponível</b> nesta versão: classificação automática, reabertura de períodos e exceção de fechamento.</li>
+        </ul>
+        <p style="font-size:7.6pt;color:#666b73;margin-top:1.4mm">Quem não é Gestor vê esta tela somente para leitura. Toda alteração fica registrada.</p>
+      </div>
+      <div>
+        <h3>O que cada nível pode fazer</h3>
+        <table>
+          <colgroup><col><col style="width:17%"><col style="width:18%"><col style="width:15%"></colgroup>
+          <thead><tr><th>Ação</th><th class="c" style="padding:1.4mm .6mm">Visualiz.</th><th class="c" style="padding:1.4mm .6mm">Operador</th><th class="c" style="padding:1.4mm .6mm">Gestor</th></tr></thead>
+          <tbody>
+            <tr><td>Consultar telas e relatórios</td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+            <tr><td>Criar e editar lançamentos e transferências</td><td class="c nao">—</td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+            <tr><td>Enviar planilha e gerar prévia</td><td class="c nao">—</td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+            <tr><td>Conciliar e classificar diferenças</td><td class="c nao">—</td><td class="c nao">—</td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+            <tr><td>Cancelar lançamentos</td><td class="c nao">—</td><td class="c nao">—</td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+            <tr><td>Confirmar importação; configurar contas e plano</td><td class="c nao">—</td><td class="c nao">—</td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+            <tr><td>Fechar períodos</td><td class="c nao">—</td><td class="c nao">—</td><td class="c sim"><svg viewBox="0 0 12 12" width="9" height="9" role="img" aria-label="sim"><path d="M2 6.4 4.8 9 10 3" fill="none" stroke="#0b7a44" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></td></tr>
+          </tbody>
+        </table>
+        <p style="font-size:7.6pt;color:#666b73;margin-top:1.4mm">“Sem acesso”: a pessoa não vê o setor Financeiro.</p>
+      </div>
+    </div>
+
+    <div class="g-6-4">
+      <figure class="fig"><img src="../capturas/18-acesso-financeiro.jpg" alt="Tela Acesso Financeiro do Painel SuperAdmin"><figcaption><b>Painel SuperAdmin → Acesso Financeiro</b>, com pessoas fictícias. Em destaque, a chave do Financeiro e o botão Salvar.</figcaption></figure>
+      <div>
+        <h3>Como liberar o acesso</h3>
+        <ol class="passos">
+          <li>No Painel SuperAdmin, abra <span class="ui">Acesso Financeiro</span>.</li>
+          <li>Escolha a <b>empresa</b> e a <b>unidade</b>.</li>
+          <li>Ligue a chave do <b>Financeiro</b>. Desligada, ninguém vê o setor nessa unidade.</li>
+          <li>Para cada pessoa, escolha <b>Sem acesso, Visualização, Operador ou Gestor</b>.</li>
+          <li>Clique em <span class="ui">Salvar</span>. A tela mostra as alterações não salvas e permite <span class="ui">Descartar</span>.</li>
+        </ol>
+        <div class="k k--conceito">
+          <span class="k-r">Bom saber</span>
+          <ul class="lista lista--compacta">
+            <li>Só quem tem vínculo ativo com a unidade recebe acesso; quem está “sem vínculo” só pode ser removido.</li>
+            <li>Ao salvar, quem estiver usando a unidade precisa entrar de novo.</li>
+            <li>Tudo fica registrado na auditoria. Dê a cada pessoa só o nível de que ela precisa.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 9 de 10</span></footer>
+</section>
+
+<!-- ============================== 10. CHECKLIST ============================== -->
+<section class="pagina">
+  <header class="pg-cab"><span><img src="assets/logo-crescer-central.jpeg" alt=""><b>Crescer com Delivery</b> · Dashboard Financeiro</span><span>Domine seu Financeiro</span></header>
+  <div class="pg-corpo">
+    <div class="tit"><span class="tit-n">09</span><h2>Checklist da rotina financeira</h2></div>
+    <p class="lead">Rotina curta e frequente vale mais que um mutirão no fim do mês. Use esta página como lista de verificação.</p>
+
+    <div class="g3">
+      <div class="ck">
+        <h3>Todo dia <small>5 min</small></h3>
+        <ul>
+          <li>Registrar as entradas e saídas do dia <em>(ou conferir a importação)</em>.</li>
+          <li>Dar categoria a tudo: filtro “Somente pendentes” em Fluxo de Caixa.</li>
+          <li>Usar <b>Nova transferência</b> para movimentos entre contas próprias.</li>
+          <li>Ler os avisos da Visão Geral.</li>
+        </ul>
+      </div>
+      <div class="ck">
+        <h3>Toda semana <small>20 min</small></h3>
+        <ul>
+          <li>Comparar o saldo calculado de cada conta com o extrato do banco e da adquirente.</li>
+          <li>Informar as referências de vendas, taxas, sangrias e espécie.</li>
+          <li>Investigar o residual da conciliação e classificar com justificativa.</li>
+          <li>Resolver as pendências de identificação.</li>
+        </ul>
+      </div>
+      <div class="ck">
+        <h3>Todo mês <small>1 hora</small></h3>
+        <ul>
+          <li>Completar os lançamentos e referências do mês.</li>
+          <li>Revisar a DRE comparando com o mês anterior.</li>
+          <li>Conferir a ponte resultado → caixa em Indicadores.</li>
+          <li>Rodar o pré-fechamento, resolver os bloqueios e fechar o período.</li>
+          <li>Exportar os relatórios (XLSX) para arquivo e para a contabilidade.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="k k--conceito">
+      <span class="k-r">Identidade de fechamento</span>
+      <p class="k-tit">Três contas que precisam bater antes de fechar o mês</p>
+      <h4 style="margin-top:2mm">1 · Saldo de cada conta</h4>
+      <div class="eq"><i>Saldo de abertura</i><u>+</u><i>Entradas</i><u>−</u><i>Saídas</i><u>=</u><i class="r">Saldo final calculado</i><span style="font-size:7.6pt;color:#666b73">… igual ao extrato</span></div>
+      <h4>2 · Resultado e caixa (ponte em Indicadores)</h4>
+      <div class="eq"><i>Resultado gerencial</i><u>+</u><i>Entradas de financiamentos</i><u>−</u><i>Pagamentos de financiamentos</i><u>+</u><i>Transferências líquidas externas</i><u>=</u><i class="r">Variação do caixa</i></div>
+      <h4>3 · Vendas e recebimentos (ponte em Conciliação)</h4>
+      <div class="eq"><i>Vendas (referência)</i><u>−</u><i>Recebido</i><u>−</u><i>Taxas</i><u>=</u><i class="r">Residual</i><span style="font-size:7.6pt;color:#666b73">… zero ou classificado</span></div>
+    </div>
+
+    <div class="g2">
+      <div class="k k--ok">
+        <span class="k-r">O mês está pronto para fechar quando</span>
+        <ul class="lista lista--compacta">
+          <li>não há lançamentos pendentes de classificação;</li>
+          <li>a ponte resultado → caixa “fecha ao centavo”;</li>
+          <li>os saldos não estão parciais e batem com os extratos;</li>
+          <li>o residual da conciliação está zerado ou classificado;</li>
+          <li>o pré-fechamento não mostra bloqueios.</li>
+        </ul>
+      </div>
+      <div class="k k--atencao">
+        <span class="k-r">Erros que mais distorcem o resultado</span>
+        <ul class="lista lista--compacta">
+          <li>Transferência entre contas lançada como venda.</li>
+          <li>Saldo inicial “chutado” como zero.</li>
+          <li>A mesma planilha importada várias vezes, em versões diferentes.</li>
+          <li>Lançamento fictício para “zerar” uma diferença.</li>
+          <li>Fechar o mês sem conferir: não há reabertura.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="fim"><img src="assets/logo-crescer-central.jpeg" alt=""><div><b>Crescer com Delivery</b><span>Dúvidas sobre acesso ou configuração? Fale com o administrador da sua conta.</span></div></div>
+  </div>
+  <footer class="pg-rod"><span>Telas com dados demonstrativos — nenhum dado real de cliente.</span><span class="pg-n">Página 10 de 10</span></footer>
+</section>
+
+</body>
+</html>
