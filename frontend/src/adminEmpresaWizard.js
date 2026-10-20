@@ -184,7 +184,8 @@ const CORPOS = {
       <p class="adm-nota">Marque os módulos que esta empresa contratou. Nada aqui é definitivo — a lista pode ser
       ajustada depois na aba <b>Acessos</b> da empresa.</p>
       ${grupo("operacao", "Operação")}
-      ${grupo("integracao", "Integrações")}`;
+      ${grupo("integracao", "Integrações")}
+      ${grupo("financeiro", "Financeiro (acesso por concessão explícita)")}`;
   },
 
   modelo: () => {

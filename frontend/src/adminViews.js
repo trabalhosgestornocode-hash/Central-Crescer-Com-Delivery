@@ -16,6 +16,7 @@ import { abrirAssistenteNovaEmpresa } from "./adminEmpresaWizard.js";
 import { abrirPaginaEmpresa } from "./adminEmpresaDetalhe.js";
 import { abrirAssistenteNovaUnidade } from "./adminUnidadeWizard.js";
 import { abrirPaginaUnidade } from "./adminUnidadeDetalhe.js";
+import { viewAcessoFinanceiro } from "./adminAcessoFinanceiro.js";
 import {
   num, pct, escapeHtml, fmtMoeda, fmtDataHora, fmtRelativo,
   STATUS_EMPRESA, STATUS_ASSINATURA, STATUS_COBRANCA, SITUACAO, pill,
@@ -31,6 +32,7 @@ export const TELAS_ADMIN = [
   { id: "unidades",      label: "Unidades",               icone: "🏬", secao: "GESTÃO" },
   { id: "usuarios",      label: "Usuários",               icone: "👥", secao: "GESTÃO" },
   { id: "financeiro",    label: "Financeiro do SaaS",     icone: "💰", secao: "GESTÃO" },
+  { id: "acesso-financeiro", label: "Acesso Financeiro",  icone: "🔐", secao: "GESTÃO" },
   { id: "monitoramento", label: "Monitoramento",          icone: "📡", secao: "OPERAÇÃO" },
   { id: "logs",          label: "Logs",                   icone: "📜", secao: "OPERAÇÃO" },
   { id: "auditoria",     label: "Auditoria",              icone: "🔎", secao: "OPERAÇÃO" },
@@ -1212,6 +1214,7 @@ const VIEWS = {
   unidades: viewUnidades,
   usuarios: viewUsuarios,
   financeiro: viewFinanceiro,
+  "acesso-financeiro": viewAcessoFinanceiro,
   monitoramento: viewMonitoramento,
   logs: viewLogs,
   auditoria: viewAuditoria,

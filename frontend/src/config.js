@@ -20,6 +20,8 @@ export const COMISSAO = { balcao: 0, ifood: 0.27, uber: 0.15, app: 0, outro: 0 }
 // Ordem das seções da sidebar
 export const SECOES = ["OPERAÇÃO", "INTEGRAÇÕES", "INTELIGÊNCIA", "SISTEMA"];
 
+// O menu do setor Financeiro vive em financeiroMenu.js (MENU_FINANCEIRO) — contrato com o Agente 2.
+
 // Módulo que faz de GATE-PAI de uma seção inteira do menu. Se a empresa/unidade
 // do contexto não tem o módulo, a seção some por completo (título + todos os
 // itens) e as rotas dela ficam inacessíveis — mesmo que um item interno tenha

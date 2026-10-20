@@ -64,7 +64,8 @@ async function carregarModulosDaEmpresa(organizacaoId) {
   // quiser antes de criar (mesmo espírito da Matriz, que herda automaticamente
   // na criação da empresa). Trocar de empresa redefine para o conjunto da
   // empresa nova, sem sobrar seleção "fantasma" da anterior.
-  estado.modulos = new Set(modulosDaEmpresaSelecionada);
+  // O financeiro NUNCA é herdado por padrão: habilitá-lo numa unidade é escolha explícita (e só vale com concessão ao perfil).
+  estado.modulos = new Set(modulosDaEmpresaSelecionada.filter((id) => id !== "gestao_financeira"));
 }
 
 function renderPasso() {
@@ -80,8 +81,8 @@ function renderPasso() {
 function ligarCorpo(passo) {
   if (passo !== "acessos") return;
   const marcar = (ligado) => {
-    for (const c of document.querySelectorAll(".wiz-modulo")) c.checked = ligado;
-    estado.modulos = new Set(ligado ? modulosDaEmpresaSelecionada : []);
+    for (const c of document.querySelectorAll(".wiz-modulo")) c.checked = ligado && c.value !== "gestao_financeira";
+    estado.modulos = new Set(ligado ? modulosDaEmpresaSelecionada.filter((id) => id !== "gestao_financeira") : []);
   };
   el("#wiz-modulos-todos")?.addEventListener("click", () => marcar(true));
   el("#wiz-modulos-nenhum")?.addEventListener("click", () => marcar(false));
@@ -221,7 +222,8 @@ const CORPOS = {
         <button type="button" class="btn btn-ghost btn-sm" id="wiz-modulos-nenhum">Limpar</button>
       </div>
       ${grupo("operacao", "Operação")}
-      ${grupo("integracao", "Integrações")}`;
+      ${grupo("integracao", "Integrações")}
+      ${grupo("financeiro", "Financeiro (acesso por concessão explícita)")}`;
   },
 
   revisao: () => {

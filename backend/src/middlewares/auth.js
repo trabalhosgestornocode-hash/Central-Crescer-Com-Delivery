@@ -27,6 +27,7 @@ import { temPermissao } from "../shared/permissoes.js";
 import { rotuloModulo } from "../shared/modulos.js";
 import { MFA } from "../config/seguranca.js";
 import { carimboDeAutenticacao } from "../shared/renovacaoExibicao.js";
+import { carimboDeSegundoFator } from "../shared/mfaRecente.js";
 
 /** Nome do header que transporta o Context Token. */
 export const HEADER_CONTEXTO = "x-context-token";
@@ -45,6 +46,7 @@ const STATUS_BLOQUEANTES = new Set(["bloqueada", "suspensa", "cancelada"]);
  * @property {boolean} senhaProvisoria
  * @property {'aal1'|'aal2'|null} aal  nível de garantia de autenticação do JWT (MFA)
  * @property {string[]} amr  métodos usados no login (ex.: ["password","totp"])
+ * @property {number|null} mfaEm  instante (ms) do 2º fator mais recente do JWT; base da exigência de MFA recente (concessões financeiras)
  * @property {boolean} mfaCadastrada  a conta tem ao menos um 2º fator verificado
  */
 
@@ -64,9 +66,9 @@ function lerNivelMfaDoJwt(token) {
     const amr = Array.isArray(payload?.amr)
       ? payload.amr.map((m) => (typeof m === "string" ? m : m?.method)).filter(Boolean)
       : [];
-    return { aal, amr, authEm: carimboDeAutenticacao(payload?.amr) };
+    return { aal, amr, authEm: carimboDeAutenticacao(payload?.amr), mfaEm: carimboDeSegundoFator(payload?.amr) };
   } catch {
-    return { aal: null, amr: [], authEm: null };
+    return { aal: null, amr: [], authEm: null, mfaEm: null };
   }
 }
 
@@ -130,7 +132,7 @@ export async function requireAuth(req, _res, next) {
     // Nível de MFA do JWT (dormente: só é EXIGIDO onde `exigirMfaSeExigido`
     // estiver ligado por env — ver config/seguranca.js#MFA). Exposto sempre
     // para o frontend saber se deve oferecer o cadastro do 2º fator.
-    const { aal, amr, authEm } = lerNivelMfaDoJwt(token);
+    const { aal, amr, authEm, mfaEm } = lerNivelMfaDoJwt(token);
     const mfaCadastrada = Array.isArray(data.user.factors)
       && data.user.factors.some((f) => f?.status === "verified");
 
@@ -144,6 +146,7 @@ export async function requireAuth(req, _res, next) {
       // Instante (ms) da autenticação mais recente do JWT (claim amr[].timestamp); null se o token não traz.
       // Só o perfil de exibição usa (limite absoluto da renovação do contexto) — ver shared/renovacaoExibicao.js.
       authEm,
+      mfaEm,
       mfaCadastrada,
       superadmin: !!superRes.data,
       // Acesso GLOBAL ao Painel Administrativo (monitoramento gerencial

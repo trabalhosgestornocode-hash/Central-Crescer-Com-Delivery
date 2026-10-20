@@ -384,6 +384,21 @@ export async function listarUnidadesContexto() {
   return state.sessao.unidadesDaEmpresa;
 }
 
+/**
+ * Setores que o perfil pode usar NESTE contexto (GET /sessao/setores). Recalculado no servidor a cada chamada —
+ * é só para desenhar a navegação; o backend continua recusando o que não for autorizado.
+ * Devolve null quando não foi possível consultar (o chamador NUNCA trata isso como permissão ao financeiro).
+ * @returns {Promise<string[]|null>}
+ */
+export async function carregarSetores() {
+  try {
+    const { data } = await get("/api/v1/sessao/setores");
+    return Array.isArray(data?.setores) ? data.setores : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Encerra apenas o contexto (mantém o login). Usado por "Trocar unidade". */
 export async function encerrarContexto() {
   try { await post("/api/v1/sessao/encerrar"); } catch { /* ignora */ }

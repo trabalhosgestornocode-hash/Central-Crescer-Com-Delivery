@@ -141,6 +141,14 @@ export const adminApi = {
   filtrosAuditoria: () => get("/auditoria/filtros"),
   impersonacoes: (limite) => get(`/auditoria/impersonacoes${qs({ limite })}`),
 
+  // Acesso ao Dashboard Financeiro (concessões por perfil+unidade). Escritas bloqueadas pelo servidor até a prova de MFA.
+  concessoesEstado: () => get("/gestao-financeira/concessoes/estado"),
+  concessoesLista: (f) => get(`/gestao-financeira/concessoes${qs(f)}`),
+  concessoesPerfis: (unidadeId) => get(`/gestao-financeira/concessoes/perfis${qs({ unidadeId })}`),
+  concessoesAuditoria: (f) => get(`/gestao-financeira/concessoes/auditoria${qs(f)}`),
+  conceder: (dados) => post("/gestao-financeira/concessoes", dados),
+  revogarConcessao: (id, motivo) => post(`/gestao-financeira/concessoes/${id}/revogar`, { motivo }),
+
   // Configurações globais, atualizações e IA
   configuracoes: () => get("/configuracoes"),
   salvarConfiguracoes: (dados) => put("/configuracoes", dados),

@@ -174,6 +174,7 @@ const CORPOS = {
       entra com os módulos novos.</p>
       ${grupo("operacao", "Operação")}
       ${grupo("integracao", "Integrações")}
+      ${grupo("financeiro", "Financeiro (acesso por concessão explícita)")}
       <div class="adm-secao-acoes adm-secao-acoes--fim">
         <button class="btn btn-primary btn-sm" id="ed-salvar-acessos" type="button">Salvar acessos</button>
       </div>`;

@@ -96,7 +96,13 @@ describe("migration 088 — existência, rollback e numeração", () => {
       "118_ifood_loja_credenciais.sql", "118_rollback.sql",
       // 119 = Serviços e promoções com sinal no Dashboard iFood (remove só o CHECK >= 0; negativo = crédito à loja).
       "119_servicos_promocoes_sinal.sql", "119_rollback.sql",
-      // 123 = módulo próprio checklist_operacional (catálogo + vínculos de quem já tem ifood); sem tocar a mensageria.
+      // 120 = fundação do Dashboard Financeiro (módulo gestao_financeira, concessões explícitas, auditoria; RLS sem policies).
+      "120_gestao_financeira_fundacao.sql", "120_rollback.sql",
+      // 121 = domínio financeiro (Agente 2): fin_* backend-only, RLS sem policies, auditoria imutável.
+      "121_gestao_financeira_dominio.sql", "121_rollback.sql",
+      // 122 = conciliação e períodos/fechamento do Financeiro (versão validada no T3; corpo = a proposta aplicada lá).
+      "122_conciliacao_periodos.sql", "122_rollback.sql",
+      // 123 =módulo próprio checklist_operacional (catálogo + vínculos de quem já tem ifood); sem tocar a mensageria.
       // A trilha financeira ocupa 120–122 (ainda não integrada à main); o 123 só é definitivo se continuar livre no merge.
       "123_checklist_operacional_modulo.sql", "123_rollback.sql",
       // 124/125 = finalidade por conexão iFood e remoção (separada) do índice "uma conexão por unidade"; sem tocar a mensageria.

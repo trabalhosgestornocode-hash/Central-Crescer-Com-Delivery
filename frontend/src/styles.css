@@ -712,8 +712,9 @@ body {
 /* ===================== RESPONSIVO ===================== */
 @media (max-width: 900px) {
   .icon-btn { display: block; }
-  .sidebar { position: fixed; left: 0; top: 0; transform: translateX(-100%); transition: transform var(--t-lenta); box-shadow: 8px 0 40px rgba(6,40,25,.35); }
-  .app.menu-aberto .sidebar { transform: translateX(0); }
+  /* sombra só com a gaveta ABERTA: fechada (translateX(-100%)), o deslocamento + desfoque da sombra vazavam ~48px como faixa cinza na borda esquerda */
+  .sidebar { position: fixed; left: 0; top: 0; transform: translateX(-100%); transition: transform var(--t-lenta); box-shadow: none; }
+  .app.menu-aberto .sidebar { transform: translateX(0); box-shadow: 8px 0 40px rgba(6,40,25,.35); }
   .app.menu-aberto .backdrop { display: block; }
   .page-title { font-size: 17px; }
   .content { padding: 16px; }
@@ -1339,6 +1340,8 @@ body {
 [data-theme="dark"] .hist-resumo { background: #14201c; }
 [data-theme="dark"] .modal-close { background: #23302b; color: var(--cinza); }
 [data-theme="dark"] .prod-link { color: #3ce07e; }
+/* seletor de unidade da barra superior: o vermelho escuro da marca (#AE0D1A) dava 2,5:1 sobre o fundo escuro (abaixo do AA 4,5:1) */
+[data-theme="dark"] .chip-unidade { color: #ff8089; background: rgba(244,36,51,.12); box-shadow: inset 0 0 0 1px rgba(244,36,51,.28); }
 
 /* ===================== ACESSIBILIDADE ===================== */
 @media (prefers-reduced-motion: reduce) {

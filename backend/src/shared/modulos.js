@@ -36,12 +36,14 @@ export const MODULOS = {
   // Painel operacional (TV/HDMI) da unidade. Independe do módulo `ifood`: sem integração o painel abre com aviso
   // informativo; com integração mostra os pedidos. Migration 123.
   CHECKLIST_OPERACIONAL: "checklist_operacional",
+  // Dashboard Financeiro (migration 120). Nasce desabilitado; o acesso real também exige concessão explícita por perfil.
+  GESTAO_FINANCEIRA: "gestao_financeira",
 };
 
 /**
  * Catálogo completo — espelha o seed da migration 030. `categoria` alimenta
  * o agrupamento do checklist de módulos no painel (OPERAÇÃO/INTEGRAÇÕES).
- * @type {Array<{id: string, nome: string, categoria: 'operacao'|'integracao', ordem: number}>}
+ * @type {Array<{id: string, nome: string, categoria: 'operacao'|'integracao'|'financeiro', ordem: number}>}
  */
 export const CATALOGO_MODULOS = [
   { id: MODULOS.DASHBOARD, nome: "Dashboard", categoria: "operacao", ordem: 1 },
@@ -63,6 +65,7 @@ export const CATALOGO_MODULOS = [
   // depender de uma categoria/grupo novo nos checklists de Acessos (empresa e
   // unidade). Aparece no grupo "Operação", ao lado do Agente Crescer.
   { id: MODULOS.INTELIGENCIA, nome: "Inteligência (seção)", categoria: "operacao", ordem: 16 },
+  { id: MODULOS.GESTAO_FINANCEIRA, nome: "Gestão Financeira", categoria: "financeiro", ordem: 17 },
   { id: MODULOS.CHECKLIST_OPERACIONAL, nome: "Checklist Operacional", categoria: "operacao", ordem: 18 },
 ];
 

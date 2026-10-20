@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { requireContexto, exigirSenhaDefinitiva, requireModulo, requireAlgumModulo } from "./middlewares/auth.js";
+import { requireFinanceiro } from "./middlewares/financeiro.js";
+import { gestaoFinanceiraRouter } from "./modules/gestao-financeira/index.js";
 import { restringirPerfilExibicao } from "./middlewares/perfilExibicao.js";
 import { MODULOS } from "./shared/modulos.js";
 import { produtosRouter } from "./modules/produtos/produtos.routes.js";
@@ -91,6 +93,9 @@ tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
 // ainda não trazem o módulo novo. A remoção do `MODULOS.IFOOD` NÃO é automática por tempo: só em etapa própria, depois de verificar acessos migrados,
 // sessões (inclusive a TV) e rollback (docs/checklist-universal-e-tempos.md §8.5).
 tenant.use("/checklist-operacional", requireAlgumModulo(MODULOS.CHECKLIST_OPERACIONAL, MODULOS.IFOOD), checklistOperacionalRouter);
+// Dashboard Financeiro: gate PRÓPRIO (módulo empresa + módulo unidade + concessão explícita do perfil, relida a cada
+// requisição; sem bypass de impersonação). NÃO usar requireModulo/requirePermissao aqui — ambos bypassam.
+tenant.use("/gestao-financeira", requireFinanceiro(), gestaoFinanceiraRouter);
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);
 // Seção "INTELIGÊNCIA" do menu (Agente Crescer · Relatórios · Integrações).
 // `inteligencia` é o gate-pai: sem ele, NADA da área responde. O catálogo de

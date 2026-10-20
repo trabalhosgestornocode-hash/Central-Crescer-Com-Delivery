@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="/src/desenvolvimento.css?v=1" />
   <link rel="stylesheet" href="/src/performance.css?v=2" />
   <link rel="stylesheet" href="/src/checklistOperacional.css?v=4" />
+  <link rel="stylesheet" href="/src/financeiro.css?v=1" />
   <link rel="stylesheet" href="/src/central/central.css?v=1" />
   <link rel="stylesheet" href="/src/central/conexao.css?v=1" />
   <link rel="stylesheet" href="/src/central/status.css?v=1" />
@@ -272,6 +273,48 @@
     </div>
   </div>
 
+  <!-- ============= SELEÇÃO DE SETOR (Financeiro × Operacional) =============
+       Aparece depois da unidade, só quando o perfil está autorizado nos DOIS setores (a lista vem do servidor).
+       Escolher aqui é navegação — não concede nenhum privilégio. Sem setor autorizado, mostra o aviso. -->
+  <div id="setor-screen" class="sel-screen" hidden>
+    <div class="sel-wrap sel-wrap--largo">
+      <header class="sel-head">
+        <img class="sel-brand-logo" src="/assets/logo-crescer-central.jpeg" alt="Crescer com Delivery" />
+        <h1 class="sel-titulo" id="setor-titulo">Em qual setor você quer prosseguir?</h1>
+        <p class="sel-sub">Olá, <b id="setor-nome">—</b> · <span id="setor-contexto"></span></p>
+      </header>
+
+      <div id="setor-cards" class="setor-cards" role="group" aria-labelledby="setor-titulo">
+        <button type="button" class="setor-card" data-setor="financeiro">
+          <span class="setor-card-ic" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><rect x="5" y="11" width="3.2" height="7" rx="1"/><rect x="10.4" y="7" width="3.2" height="11" rx="1"/><rect x="15.8" y="13" width="3.2" height="5" rx="1"/><path d="M5 5l5 3 4-3 5 2"/></svg>
+          </span>
+          <span class="setor-card-nome">Dashboard Financeiro</span>
+          <span class="setor-card-desc">Fluxo de caixa, DRE, conciliação e indicadores financeiros.</span>
+          <span class="setor-card-tag">Último usado</span>
+        </button>
+        <button type="button" class="setor-card" data-setor="operacional">
+          <span class="setor-card-ic" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>
+          </span>
+          <span class="setor-card-nome">Dashboard Operacional</span>
+          <span class="setor-card-desc">Produtos, CMV, vendas, iFood, bonificação e operação diária.</span>
+          <span class="setor-card-tag">Último usado</span>
+        </button>
+      </div>
+
+      <div id="setor-vazio" class="sel-vazio" hidden>
+        <h3>Seu acesso não inclui nenhum setor nesta unidade</h3>
+        <p>Escolha outra unidade ou fale com o administrador para liberar o acesso.</p>
+      </div>
+
+      <footer class="setor-acoes">
+        <button type="button" class="btn btn-ghost btn-sm" id="setor-trocar">Trocar unidade</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="setor-sair">Sair</button>
+      </footer>
+    </div>
+  </div>
+
   <!-- ============= DEFINIR SENHA (primeiro acesso) =============
        Aparece quando a conta tem senha provisória (definida por um
        administrador). Bloqueia o resto do sistema até o usuário criar a sua. -->
@@ -362,6 +405,10 @@
             </select>
             <select id="tabela" class="select-sm" title="Tabela de preço"></select>
           </div>
+          <button id="btn-setor" class="btn btn-ghost btn-sm btn-setor" type="button" hidden aria-label="Alternar de setor">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true"><path d="M7 7h13l-3-3"/><path d="M17 17H4l3 3"/></svg>
+            <span id="btn-setor-rotulo">Setor</span>
+          </button>
           <button id="btn-refresh" class="icon-btn2" title="Atualizar dados" aria-label="Atualizar">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
           </button>
