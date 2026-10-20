@@ -72,6 +72,29 @@ function arquivoConferido() {
   const s = createHash("sha256").update(readFileSync(path.join(RAIZ, M126[0]))).digest("hex");
   if (s !== M126[1]) sair(2, `RECUSADO: sha256 de ${M126[0]} = ${s.slice(0, 16)}…, esperado ${M126[1].slice(0, 16)}…`);
 }
+// Somente leitura: onde o SuperAdmin ativo tem vínculo ativo (pré-requisito para receber acesso) e se o Financeiro já
+// está ligado ali. Só nomes de empresa/unidade e booleanos; nenhum identificador de pessoa.
+const SQL_VINCULOS = `
+with sa as (select usuario_id from public.plataforma_admins where ativo),
+v as (
+  select 'empresa' as tipo, o.nome, uo.organizacao_id as org, null::uuid as uni
+    from public.usuarios_organizacoes uo join sa on sa.usuario_id = uo.usuario_id join public.organizacoes o on o.id = uo.organizacao_id where uo.ativo
+  union all
+  select 'unidade', u.nome, u.organizacao_id, u.id
+    from public.usuarios_unidades uu join sa on sa.usuario_id = uu.usuario_id join public.unidades u on u.id = uu.unidade_id where uu.ativo)
+select v.tipo, v.nome,
+       exists (select 1 from public.perfis_operacionais po join sa on sa.usuario_id = po.conta_id where po.ativo) as perfil_ativo,
+       exists (select 1 from public.organizacao_modulos om where om.organizacao_id = v.org and om.modulo_id = 'gestao_financeira') as fin_empresa,
+       case when v.uni is null then null else exists (select 1 from public.unidade_modulos um where um.unidade_id = v.uni and um.modulo_id = 'gestao_financeira') end as fin_unidade
+  from v order by v.tipo, v.nome;`;
+function mostrarVinculos() {
+  const r = psql(["-tA", "-F", "|", "-c", SQL_VINCULOS], { leitura: true });
+  if (r.status !== 0) { console.log(`vínculos do SuperAdmin: leitura falhou (${r.erro.split("\n")[0]})`); return; }
+  const linhas = r.saida.trim() ? r.saida.trim().split(/\r?\n/) : [];
+  if (!linhas.length) { console.log("vínculos do SuperAdmin: NENHUM vínculo ativo — crie um no Painel → Usuários antes de se dar acesso."); return; }
+  console.log("vínculos ativos do SuperAdmin (tipo | nome | perfil ativo | Financeiro na empresa | Financeiro na unidade):");
+  for (const l of linhas) console.log(`  ${l.split("|").map((x) => (x === "t" ? "sim" : x === "f" ? "não" : x || "—")).join(" | ")}`);
+}
 const mostrar = (x) => console.log(`regra da 126 ativa: ${x.regra126 ? "sim" : "não"} | gatilhos em concessões: ${x.gatilhos} | SuperAdmins ativos: ${x.superadminsAtivos} | concessões: ${x.concessoes} (${x.concessoesAtivas} ativas)`);
 
 const passo = process.argv[2];
@@ -81,7 +104,7 @@ console.log(`${ENSAIO ? "ENSAIO LOCAL — " : ""}alvo: ${ENSAIO ? `127.0.0.1:${P
 
 if (passo === "preflight") {
   arquivoConferido();
-  const ident = lerIdent(); const est = lerEstado(); mostrar(est);
+  const ident = lerIdent(); const est = lerEstado(); mostrar(est); mostrarVinculos();
   if (est.superadminsAtivos !== 1) console.log(`ATENÇÃO: ${est.superadminsAtivos} SuperAdmin(s) ativo(s) — esperado 1; confira antes de aplicar.`);
   const f = evid("preflight", `identidade ${ident}\n${JSON.stringify(est)}`);
   console.log(`\nPROD_IDENTIDADE=${ident}\nevidência: ${f}`); process.exit(0);
@@ -91,7 +114,7 @@ const ident = lerIdent();
 if (E.PROD_IDENTIDADE !== ident) sair(2, "RECUSADO: PROD_IDENTIDADE ausente ou diferente da identidade lida agora — rode o preflight e confira o alvo");
 
 if (passo === "verificar") {
-  const est = lerEstado(); mostrar(est); const f = evid("verificar", JSON.stringify(est));
+  const est = lerEstado(); mostrar(est); mostrarVinculos(); const f = evid("verificar", JSON.stringify(est));
   console.log(`evidência: ${f}`); process.exit(est.regra126 ? 0 : 1);
 }
 
