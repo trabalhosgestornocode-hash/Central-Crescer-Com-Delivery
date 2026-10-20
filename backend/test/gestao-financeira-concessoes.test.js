@@ -42,10 +42,10 @@ describe("liberação dos endpoints de concessão (falha fechada)", () => {
   test("flag com valor diferente de 'true' continua bloqueando", () => {
     for (const x of ["1", "TRUE", "yes", ""]) assert.equal(avaliarLiberacaoDeConcessoes(U(), { FINANCEIRO_CONCESSOES_HABILITADAS: x }).ok, false);
   });
-  test("com a flag, ainda exige MFA recente", () => {
-    assert.equal(avaliarLiberacaoDeConcessoes(U({ aal: "aal1" }), ON).codigo, "MFA_REQUERIDA");
-    assert.equal(avaliarLiberacaoDeConcessoes(U({ mfaEm: 1 }), ON).codigo, "REAUTENTICACAO_RECENTE");
-    assert.equal(avaliarLiberacaoDeConcessoes(U(), ON).ok, true);
+  test("com a flag, libera sem MFA específico do Financeiro (chave geral, não exigência por concessão)", () => {
+    assert.equal(avaliarLiberacaoDeConcessoes(U({ aal: "aal1" }), ON).ok, true);
+    assert.equal(avaliarLiberacaoDeConcessoes(U({ mfaEm: 1 }), ON).ok, true);
+    assert.equal(avaliarLiberacaoDeConcessoes({}, ON).ok, true);
   });
   test("middleware: por padrão (sem env) devolve 403 CONCESSOES_BLOQUEADAS e não chama o handler", () => {
     const antes = process.env.FINANCEIRO_CONCESSOES_HABILITADAS;
@@ -77,9 +77,13 @@ describe("validação da concessão", () => {
     const r = validarNovaConcessao({ ...corpoOk(), concedida_por: ID(7), concedidaPor: ID(7) }, ID(9));
     assert.equal(r.concedida_por, ID(9));
   });
-  test("autoconcessão proibida; perfil inexistente => 404", () => {
-    assert.throws(() => garantirSemAutoconcessao(ID(9), ID(9)), (e) => e.statusCode === 403 && e.details.codigo === "AUTOCONCESSAO_PROIBIDA");
-    assert.throws(() => garantirSemAutoconcessao(null, ID(9)), (e) => e.statusCode === 404);
+  test("autoconcessão: só o SuperAdmin define o próprio acesso; qualquer outra conta é recusada; perfil inexistente => 404", () => {
+    const proibida = (e) => e.statusCode === 403 && e.details.codigo === "AUTOCONCESSAO_PROIBIDA";
+    assert.throws(() => garantirSemAutoconcessao(ID(9), ID(9)), proibida);
+    assert.throws(() => garantirSemAutoconcessao(ID(9), ID(9), { superadmin: false }), proibida);
+    assert.throws(() => garantirSemAutoconcessao(ID(9), ID(9), { superadmin: "true" }), proibida);
+    assert.doesNotThrow(() => garantirSemAutoconcessao(ID(9), ID(9), { superadmin: true }));
+    assert.throws(() => garantirSemAutoconcessao(null, ID(9), { superadmin: true }), (e) => e.statusCode === 404);
     assert.doesNotThrow(() => garantirSemAutoconcessao(ID(8), ID(9)));
   });
   test("revogação exige motivo", () => {

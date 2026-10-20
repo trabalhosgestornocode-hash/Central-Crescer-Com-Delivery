@@ -218,6 +218,7 @@ export const ACOES = {
   // Dashboard Financeiro — concessões explícitas por perfil+unidade (migration 120). `detalhes` guarda ids, nível e motivo; nunca valor financeiro.
   FINANCEIRO_CONCESSAO_CONCEDIDA: "financeiro.concessao_concedida",
   FINANCEIRO_CONCESSAO_REVOGADA: "financeiro.concessao_revogada",
+  FINANCEIRO_CONCESSAO_ALTERADA: "financeiro.concessao_alterada",
 };
 
 /**

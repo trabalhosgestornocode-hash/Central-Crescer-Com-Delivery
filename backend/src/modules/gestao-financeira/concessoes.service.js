@@ -1,6 +1,7 @@
 // Administração de concessões financeiras (SuperAdmin). Todo acesso passa por service_role e por validações explícitas;
 // o banco repete as regras críticas por trigger (migration 120): unidade da organização, perfil ativo e vinculado,
-// autoconcessão proibida, motivo mínimo, uma concessão ativa por perfil+unidade.
+// autoconcessão só para o SuperAdmin (126), motivo mínimo, uma concessão ativa por perfil+unidade.
+// A tela de gestão simples por unidade usa acessos.service.js, sobre as mesmas regras.
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import { auditar, ACOES } from "../../shared/auditoria.js";
@@ -88,7 +89,7 @@ export async function conceder(req) {
   const { data: perfil, error: ePerfil } = await supabase
     .from("perfis_operacionais").select("id, conta_id, ativo").eq("id", dados.perfil_id).maybeSingle();
   if (ePerfil) throw ApiError.internal("Falha ao consultar o perfil.");
-  garantirSemAutoconcessao(perfil?.conta_id, req.user.id);
+  garantirSemAutoconcessao(perfil?.conta_id, req.user.id, req.user);
   if (perfil.ativo !== true) throw ApiError.badRequest("Perfil inativo.");
 
   const { data: unidade, error: eUni } = await supabase

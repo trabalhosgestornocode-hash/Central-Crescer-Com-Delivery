@@ -141,7 +141,10 @@ export const adminApi = {
   filtrosAuditoria: () => get("/auditoria/filtros"),
   impersonacoes: (limite) => get(`/auditoria/impersonacoes${qs({ limite })}`),
 
-  // Acesso ao Dashboard Financeiro (concessões por perfil+unidade). Escritas bloqueadas pelo servidor até a prova de MFA.
+  // Acesso ao Dashboard Financeiro (concessões por perfil+unidade). Escritas fechadas pelo servidor enquanto a chave
+  // geral FINANCEIRO_CONCESSOES_HABILITADAS estiver desligada. A tela usa a gestão simples por unidade (duas chamadas).
+  acessosFinanceirosDaUnidade: (unidadeId) => get(`/gestao-financeira/concessoes/unidades/${unidadeId}/acessos`),
+  salvarAcessosFinanceirosDaUnidade: (unidadeId, pedido) => put(`/gestao-financeira/concessoes/unidades/${unidadeId}/acessos`, pedido),
   concessoesEstado: () => get("/gestao-financeira/concessoes/estado"),
   concessoesLista: (f) => get(`/gestao-financeira/concessoes${qs(f)}`),
   concessoesPerfis: (unidadeId) => get(`/gestao-financeira/concessoes/perfis${qs({ unidadeId })}`),

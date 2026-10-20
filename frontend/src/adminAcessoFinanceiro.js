@@ -1,159 +1,135 @@
-// Tela "Acesso Financeiro" do Painel SuperAdmin: concessões do Dashboard Financeiro por perfil+unidade.
-// Usa SÓ os endpoints /plataforma/gestao-financeira/concessoes (nenhuma lógica de concessão própria). Enquanto o servidor
-// disser que as escritas estão bloqueadas (flag + AAL2 recente), conceder/revogar ficam desabilitados e a tela só
-// PREPARA e valida os dados — nunca exibe um sucesso que o servidor não confirmou.
+// Tela "Acesso Financeiro" do Painel SuperAdmin — gestão SIMPLES por unidade:
+// escolher empresa e unidade, ligar/desligar o Financeiro e definir, por usuário, Sem acesso / Visualização / Operador /
+// Gestor. Um botão Salvar grava tudo de uma vez (PUT .../unidades/:id/acessos). Quem valida e audita é o servidor;
+// a tela nunca exibe um sucesso que o servidor não confirmou.
 import { el, toast } from "./utils.js";
 import { adminApi } from "./adminApi.js";
+import { escapeHtml, secao, carregando, erro, selecao } from "./adminUi.js";
 import {
-  escapeHtml, fmtDataHora, pill, secao, tabela, carregando, erro, campo, selecao, area, grade,
-  abrirModal, fecharModal, valor, marcado,
-} from "./adminUi.js";
-import {
-  NIVEIS, NIVEL_ROTULO, SITUACAO_ROTULO, SITUACAO_PILL, EVENTO_ROTULO, situacaoDe, estadoDaEscrita,
-  validarFormularioConcessao, montarCorpoConcessao, podeRevogar, validarMotivoRevogacao,
+  OPCOES_ACESSO, nivelDoSeletor, estadoDaEscrita, mudancas, montarPedido, resumoDoResultado,
 } from "./adminAcessoFinanceiroModelo.js";
 
-const sel = { organizacaoId: "", unidadeId: "", incluirRevogadas: false };
+const sel = { organizacaoId: "", unidadeId: "" };
+/** Estado vindo do servidor (inicial) e o que está na tela (atual). */
+let inicial = null;
+let atual = null;
+let falhas = [];
 const view = () => el("#adm-view");
+const copiaDe = (est) => ({ habilitado: est.habilitado, niveis: Object.fromEntries(est.usuarios.map((u) => [u.id, u.nivel ?? null])) });
 
 export async function viewAcessoFinanceiro() {
   view().innerHTML = carregando();
   try {
-    const [estado, empresas] = await Promise.all([adminApi.concessoesEstado(), adminApi.empresas({})]);
+    const empresas = await adminApi.empresas({});
     const lista = Array.isArray(empresas) ? empresas : (empresas?.empresas ?? empresas?.itens ?? []);
-    const unidades = sel.organizacaoId ? await adminApi.unidadesDaEmpresa(sel.organizacaoId).then((r) => (Array.isArray(r) ? r : (r?.unidades ?? []))) : [];
-    let concessoes = []; let historico = [];
-    if (sel.unidadeId) {
-      [concessoes, historico] = await Promise.all([
-        adminApi.concessoesLista({ unidadeId: sel.unidadeId, incluirRevogadas: sel.incluirRevogadas }),
-        adminApi.concessoesAuditoria({ unidadeId: sel.unidadeId }),
-      ]);
-    }
-    desenhar({ estado: estadoDaEscrita(estado), empresas: lista, unidades, concessoes, historico });
+    const unidades = sel.organizacaoId
+      ? await adminApi.unidadesDaEmpresa(sel.organizacaoId).then((r) => (Array.isArray(r) ? r : (r?.unidades ?? [])))
+      : [];
+    inicial = sel.unidadeId ? await adminApi.acessosFinanceirosDaUnidade(sel.unidadeId) : null;
+    atual = inicial ? copiaDe(inicial) : null;
+    desenhar({ empresas: lista, unidades });
   } catch (e) {
     view().innerHTML = erro("Não foi possível carregar o Acesso Financeiro: " + e.message);
   }
 }
 
-function desenhar({ estado, empresas, unidades, concessoes, historico }) {
-  const aviso = estado.liberada
-    ? `<div class="adm-nota">Escritas liberadas neste ambiente. Cada operação ainda exige verificação em duas etapas recente (até 10 min).</div>`
-    : `<div class="adm-nota fin-adm-bloqueio" role="status"><b>Bloqueado.</b> ${escapeHtml(estado.mensagem)} Você pode consultar e preparar os dados, mas conceder e revogar ficam desabilitados.</div>`;
+function seletorDeAcesso(u, bloqueado) {
+  const valor = atual.niveis[u.id] ?? "";
+  const opcoes = OPCOES_ACESSO
+    .filter((o) => o.valor === null || u.elegivel !== false || o.valor === u.nivel)   // sem vínculo: mostra o atual, só dá para remover
+    .map((o) => `<option value="${escapeHtml(o.valor ?? "")}" ${(o.valor ?? "") === valor ? "selected" : ""}>${escapeHtml(o.rotulo)}</option>`)
+    .join("");
+  return `<select class="fa-nivel" data-perfil="${escapeHtml(u.id)}" aria-label="Acesso de ${escapeHtml(u.nome ?? "usuário")}" ${bloqueado ? "disabled" : ""}>${opcoes}</select>`;
+}
 
+function linhaUsuario(u, bloqueado) {
+  const falha = falhas.find((f) => f.perfilId === u.id);
+  const mudou = (atual.niveis[u.id] ?? null) !== (u.nivel ?? null);
+  return `
+    <li class="fa-usuario${mudou ? " fa-usuario--mudou" : ""}">
+      <div class="fa-usuario-id">
+        <span><b>${escapeHtml(u.nome ?? "—")}</b>${u.propria ? ' <span class="pill info">você</span>' : ""}${u.elegivel === false ? ' <span class="pill warn">sem vínculo</span>' : ""}</span>
+        ${u.email ? `<small>${escapeHtml(u.email)}</small>` : ""}
+        ${falha ? `<small class="fa-falha" role="alert">${escapeHtml(falha.mensagem)}</small>` : ""}
+      </div>
+      ${seletorDeAcesso(u, bloqueado)}
+    </li>`;
+}
+
+function desenhar({ empresas, unidades }) {
   const filtros = `
     <div class="adm-filtros">
       ${selecao({ id: "fa-org", label: "Empresa", valor: sel.organizacaoId, vazio: "Selecione…",
         opcoes: empresas.map((e) => ({ valor: e.id, rotulo: e.nome })) })}
       ${selecao({ id: "fa-uni", label: "Unidade", valor: sel.unidadeId, vazio: sel.organizacaoId ? "Selecione…" : "Escolha a empresa",
         opcoes: unidades.map((u) => ({ valor: u.id, rotulo: u.nome })) })}
-      <label class="adm-campo adm-campo--check"><span>&nbsp;</span>
-        <span><input type="checkbox" id="fa-rev" ${sel.incluirRevogadas ? "checked" : ""} /> Incluir revogadas</span></label>
-      <div class="adm-filtros-acoes">
-        <button class="btn btn-primary btn-sm" data-fin-acao="nova" ${sel.unidadeId ? "" : "disabled"}>Preparar concessão</button>
-      </div>
     </div>`;
 
-  const linhas = concessoes.map((c) => {
-    const s = situacaoDe(c);
-    return [
-      `<b>${escapeHtml(c.perfil_nome ?? "—")}</b><br><small>${escapeHtml(c.perfil_email ?? "")}</small>`,
-      escapeHtml(NIVEL_ROTULO[c.nivel] ?? c.nivel) + (c.somente_financeiro ? ' <span class="pill info">só financeiro</span>' : ""),
-      `<span class="pill ${SITUACAO_PILL[s]}">${SITUACAO_ROTULO[s]}</span>`,
-      `${escapeHtml(fmtDataHora(c.concedida_em))}${c.expira_em ? `<br><small>expira ${escapeHtml(fmtDataHora(c.expira_em))}</small>` : ""}`,
-      `<small>${escapeHtml(c.motivo ?? "")}</small>${c.motivo_revogacao ? `<br><small><b>Revogação:</b> ${escapeHtml(c.motivo_revogacao)}</small>` : ""}`,
-      podeRevogar(c) ? `<button class="btn btn-ghost btn-sm" data-fin-acao="revogar" data-id="${escapeHtml(c.id)}" data-nome="${escapeHtml(c.perfil_nome ?? "")}">Preparar revogação</button>` : "—",
-    ];
-  });
-
-  const eventos = historico.map((h) => [
-    escapeHtml(fmtDataHora(h.ocorreu_em)),
-    escapeHtml(EVENTO_ROTULO[h.evento] ?? h.evento),
-    escapeHtml(NIVEL_ROTULO[h.nivel] ?? h.nivel ?? "—"),
-    `<small>${escapeHtml(String(h.perfil_id).slice(0, 8))}…</small>`,
-    `<small>${escapeHtml(h.motivo ?? "—")}</small>`,
-  ]);
+  let corpo = '<p class="adm-nota">Escolha a empresa e a unidade.</p>';
+  if (inicial) {
+    const escrita = estadoDaEscrita(inicial);
+    const bloqueado = !escrita.liberada;
+    const m = mudancas(inicial, atual);
+    const legenda = OPCOES_ACESSO.filter((o) => o.valor).map((o) => `<li><b>${escapeHtml(o.rotulo)}</b> — ${escapeHtml(o.descricao)}</li>`).join("");
+    corpo = `
+      ${bloqueado ? `<div class="adm-nota fin-adm-bloqueio" role="status"><b>Gravação desligada.</b> ${escapeHtml(escrita.mensagem)}</div>` : ""}
+      <div class="fa-cartao">
+        <label class="fa-chave">
+          <input type="checkbox" id="fa-ligado" role="switch" ${atual.habilitado ? "checked" : ""} ${bloqueado ? "disabled" : ""} />
+          <span class="fa-chave-trilho" aria-hidden="true"></span>
+          <span class="fa-chave-texto"><b>Financeiro ${atual.habilitado ? "ligado" : "desligado"}</b> em ${escapeHtml(inicial.unidade.nome)}</span>
+        </label>
+        <p class="adm-nota">${atual.habilitado
+          ? "Só quem tiver acesso abaixo vê o setor Financeiro."
+          : "Ninguém vê o setor Financeiro nesta unidade, mesmo com acesso marcado abaixo."}${m.moduloMudou ? " Ao salvar, quem estiver usando a unidade precisará entrar de novo." : ""}</p>
+      </div>
+      <details class="fa-legenda"><summary>O que cada nível pode fazer</summary><ul>${legenda}</ul></details>
+      ${inicial.usuarios.length
+        ? `<ul class="fa-usuarios">${inicial.usuarios.map((u) => linhaUsuario(u, bloqueado)).join("")}</ul>`
+        : '<div class="estado-mini">Nenhum usuário com vínculo ativo nesta unidade ou empresa.</div>'}
+      <div class="fa-barra">
+        <span id="fa-contagem">${m.total ? `${m.total} alteração(ões) não salva(s)` : "Nenhuma alteração"}</span>
+        <div class="fa-barra-acoes">
+          <button class="btn btn-ghost btn-sm" id="fa-descartar" ${m.total ? "" : "disabled"}>Descartar</button>
+          <button class="btn btn-primary" id="fa-salvar" ${m.total && !bloqueado ? "" : "disabled"}>Salvar</button>
+        </div>
+      </div>`;
+  }
 
   view().innerHTML = secao({
     titulo: "Acesso ao Dashboard Financeiro",
-    nota: "Concessão explícita por perfil e unidade. Papel de administrador não concede acesso. Revogar vale na próxima requisição e não encerra a sessão operacional.",
-    corpo: `<div id="fa-raiz">${aviso}${filtros}
-      ${sel.unidadeId ? tabela({ colunas: ["Perfil", "Nível", "Situação", "Concedida", "Motivo", "Ações"], linhas, vazio: "Nenhuma concessão para esta unidade." })
-        : '<p class="adm-nota">Escolha a empresa e a unidade para ver as concessões.</p>'}
-      ${sel.unidadeId ? `<h3 class="adm-subtitulo">Histórico de auditoria</h3>${tabela({ colunas: ["Quando", "Evento", "Nível", "Perfil", "Motivo"], linhas: eventos, vazio: "Sem eventos registrados." })}` : ""}
-    </div>`,
+    nota: "Ligue o Financeiro na unidade e escolha quem pode acessar. Tudo fica registrado na auditoria.",
+    corpo: `<div id="fa-raiz">${filtros}${corpo}</div>`,
   });
-  ligar(estado);
+  ligar({ empresas, unidades });
 }
 
-function ligar(estado) {
+function ligar(ctx) {
   const raiz = el("#fa-raiz");
-  raiz.querySelector("#fa-org")?.addEventListener("change", (e) => { sel.organizacaoId = e.target.value; sel.unidadeId = ""; viewAcessoFinanceiro(); });
-  raiz.querySelector("#fa-uni")?.addEventListener("change", (e) => { sel.unidadeId = e.target.value; viewAcessoFinanceiro(); });
-  raiz.querySelector("#fa-rev")?.addEventListener("change", (e) => { sel.incluirRevogadas = e.target.checked; viewAcessoFinanceiro(); });
-  raiz.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-fin-acao]");
-    if (!b || b.disabled) return;
-    if (b.dataset.finAcao === "nova") abrirPreparoDeConcessao(estado);
-    if (b.dataset.finAcao === "revogar") abrirPreparoDeRevogacao(estado, b.dataset.id, b.dataset.nome);
+  raiz.querySelector("#fa-org")?.addEventListener("change", (e) => { sel.organizacaoId = e.target.value; sel.unidadeId = ""; falhas = []; viewAcessoFinanceiro(); });
+  raiz.querySelector("#fa-uni")?.addEventListener("change", (e) => { sel.unidadeId = e.target.value; falhas = []; viewAcessoFinanceiro(); });
+  if (!inicial) return;
+  raiz.querySelector("#fa-ligado")?.addEventListener("change", (e) => { atual.habilitado = e.target.checked; desenhar(ctx); el("#fa-ligado")?.focus(); });
+  raiz.querySelectorAll(".fa-nivel").forEach((s) => s.addEventListener("change", (e) => {
+    const perfil = e.target.dataset.perfil;
+    atual.niveis[perfil] = nivelDoSeletor(e.target.value || null);
+    desenhar(ctx);
+    el(`.fa-nivel[data-perfil="${CSS.escape(perfil)}"]`)?.focus();
+  }));
+  raiz.querySelector("#fa-descartar")?.addEventListener("click", () => { atual = copiaDe(inicial); falhas = []; desenhar(ctx); });
+  raiz.querySelector("#fa-salvar")?.addEventListener("click", async (e) => {
+    const botao = e.currentTarget;
+    botao.disabled = true; botao.textContent = "Salvando…";
+    try {
+      const r = await adminApi.salvarAcessosFinanceirosDaUnidade(sel.unidadeId, montarPedido(inicial, atual));
+      toast(resumoDoResultado(r));
+      falhas = r?.falhas ?? [];
+      inicial = r?.estado ?? inicial;
+      atual = copiaDe(inicial);
+      desenhar(ctx);
+    } catch (err) {
+      toast("Não foi possível salvar: " + err.message);
+      botao.disabled = false; botao.textContent = "Salvar";
+    }
   });
 }
-
-async function abrirPreparoDeConcessao(estado) {
-  let perfis = [];
-  try { perfis = await adminApi.concessoesPerfis(sel.unidadeId); } catch (e) { toast("Erro: " + e.message); return; }
-  const bloqueio = estado.liberada ? "" : `<div class="adm-nota fin-adm-bloqueio"><b>Gravação bloqueada.</b> ${escapeHtml(estado.mensagem)}</div>`;
-  const corpo = bloqueio + grade(
-    selecao({ id: "fa-perfil", label: "Perfil", vazio: "Selecione…",
-      opcoes: perfis.map((p) => ({ valor: p.id, rotulo: `${p.nome}${p.email ? ` — ${p.email}` : ""}${p.propria ? " (sua própria conta)" : ""}` })) }) +
-    selecao({ id: "fa-nivel", label: "Nível de acesso", vazio: "Selecione…", opcoes: NIVEIS.map((n) => ({ valor: n.valor, rotulo: n.rotulo })) }) +
-    campo({ id: "fa-exp", label: "Expira em (opcional)", tipo: "date" }) +
-    `<label class="adm-campo adm-campo--check"><span>&nbsp;</span><span><input type="checkbox" id="fa-sofin" /> Entra direto no financeiro (sem escolha de setor)</span></label>` +
-    area({ id: "fa-motivo", label: "Motivo (fica na auditoria)", linhas: 3 }),
-  ) + `<div id="fa-prev" class="adm-nota" aria-live="polite"></div>`;
-
-  const ler = () => ({ perfilId: valor("fa-perfil"), nivel: valor("fa-nivel"), motivo: valor("fa-motivo"), expiraEm: valor("fa-exp"), somenteFinanceiro: marcado("fa-sofin") });
-  const atualizarPrevia = () => {
-    const v = validarFormularioConcessao(ler(), { perfis });
-    const f = ler();
-    el("#fa-prev").innerHTML = v.ok
-      ? `Pronta para conceder <b>${escapeHtml(NIVEL_ROTULO[f.nivel])}</b>${f.expiraEm ? ` até ${escapeHtml(f.expiraEm)}` : ""}.${estado.liberada ? "" : " <b>Nada será gravado: a escrita está bloqueada.</b>"}`
-      : v.erros.map((x) => `• ${escapeHtml(x)}`).join("<br>");
-  };
-
-  abrirModal({
-    titulo: "Preparar concessão financeira", corpo, confirmar: "Conceder",
-    // Sem botão de confirmar quando bloqueado: não há caminho para "simular" sucesso.
-    aoConfirmar: estado.liberada ? async () => {
-      const v = validarFormularioConcessao(ler(), { perfis });
-      if (!v.ok) throw new Error(v.erros.join(" "));
-      const org = sel.organizacaoId;
-      await adminApi.conceder(montarCorpoConcessao({ organizacaoId: org, unidadeId: sel.unidadeId, ...ler() }));
-      toast("Concessão registrada.");
-      viewAcessoFinanceiro();
-    } : null,
-  });
-  for (const id of ["fa-perfil", "fa-nivel", "fa-exp", "fa-motivo", "fa-sofin"]) {
-    el(`#${id}`)?.addEventListener("input", atualizarPrevia);
-    el(`#${id}`)?.addEventListener("change", atualizarPrevia);
-  }
-  atualizarPrevia();
-}
-
-function abrirPreparoDeRevogacao(estado, id, nome) {
-  const bloqueio = estado.liberada ? "" : `<div class="adm-nota fin-adm-bloqueio"><b>Revogação bloqueada.</b> ${escapeHtml(estado.mensagem)} Em emergência, siga o procedimento documentado (docs/gestao-financeira/03-revogacao-emergencial.md).</div>`;
-  abrirModal({
-    titulo: `Preparar revogação — ${nome || "perfil"}`,
-    corpo: bloqueio + `<p class="adm-nota">O acesso financeiro deixa de valer na próxima requisição. A sessão operacional não é encerrada.</p>` +
-      area({ id: "fa-motivo-rev", label: "Motivo da revogação (fica na auditoria)", linhas: 3 }),
-    confirmar: "Revogar", perigo: true,
-    aoConfirmar: estado.liberada ? async () => {
-      const v = validarMotivoRevogacao(valor("fa-motivo-rev"));
-      if (!v.ok) throw new Error(v.erros.join(" "));
-      await adminApi.revogarConcessao(id, valor("fa-motivo-rev"));
-      toast("Concessão revogada.");
-      viewAcessoFinanceiro();
-    } : null,
-  });
-}
-
-export { fecharModal };
