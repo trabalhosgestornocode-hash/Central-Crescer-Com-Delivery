@@ -18,6 +18,8 @@ import * as financialService from "./ifoodFinancial.service.js";
 import * as pedidosLeitura from "./ifoodPedidosLeitura.service.js";
 import * as val from "./ifood.validators.js";
 import { resumoEventsParaStatus } from "./ifoodEventsEstado.js";
+import * as autoatendimentoService from "./ifoodOrderAutoatendimento.service.js";
+import { auditar, ACOES } from "../../shared/auditoria.js";
 
 function tenant(req) {
   const { organizacaoId, unidadeId } = req.tenant ?? {};
@@ -128,6 +130,18 @@ export const validarMerchantManual = asyncHandler(async (req, res) => {
 
 // Status da integração da unidade — analytics e financial separados. `eventosRecebimento`: estado do
 // recebimento de eventos NESTA instância (só estado e horários; nada que agregue outras lojas).
+// Autoatendimento do app Order: "Verificar novamente" (sem corpo) ou a escolha da loja (`ref` opaco, vindo do /status — o merchant
+// nunca trafega). Tenant SEMPRE do contexto; a loja só pode ser uma das lojas do token desta conexão (o serviço confere).
+export const ativarPedidos = asyncHandler(async (req, res) => {
+  const { organizacaoId, unidadeId } = tenant(req);
+  const bruto = req.body?.ref;
+  const ref = bruto == null || bruto === "" ? null : String(bruto).trim().toLowerCase();
+  if (ref !== null && !/^[0-9a-f]{16}$/.test(ref)) throw ApiError.badRequest("Loja inválida.");
+  const ativacao = await autoatendimentoService.ativar({ organizacaoId, unidadeId, usuarioId: req.user.id, ref });
+  const data = await connectionService.obterStatus({ organizacaoId, unidadeId });
+  res.json({ data: { ...data, eventosRecebimento: resumoEventsParaStatus(), ativacao } });
+});
+
 export const status = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = tenant(req);
   const data = await connectionService.obterStatus({ organizacaoId, unidadeId });
@@ -142,7 +156,14 @@ export const desconectar = asyncHandler(async (req, res) => {
   // Desconexão de UMA conexão: `conexaoId` (corpo ou query). Sem ele, só vale se a unidade tem uma conexão só — com mais de uma o serviço recusa.
   const bruto = req.body?.conexaoId ?? req.query?.conexaoId;
   const conexaoId = bruto == null || bruto === "" ? null : val.validarConexaoId(bruto);
-  const data = await connectionService.desconectar({ organizacaoId, unidadeId, usuarioId: req.user.id, conexaoId });
+  const { conexaoId: desconectada, finalidade, pedidos, ...data } = await connectionService.desconectar({ organizacaoId, unidadeId, usuarioId: req.user.id, conexaoId });
+  // Trilha da plataforma: quem desconectou os PEDIDOS da unidade (conexão de pedidos/legado). Nunca impede a resposta.
+  if (desconectada && pedidos) {
+    await auditar({
+      atorId: req.user.id, atorEmail: req.user.email ?? null, acao: ACOES.IFOOD_PEDIDOS_DESCONECTADOS, entidade: "ifood_conexao",
+      entidadeId: desconectada, organizacaoId, detalhes: { unidadeId, finalidade },
+    }).catch(() => {});
+  }
   res.json({ data });
 });
 

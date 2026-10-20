@@ -73,15 +73,45 @@ export function validacaoMerchantManualHabilitada() {
 }
 
 /**
+ * O autoatendimento do app Order está ligado neste ambiente? (IFOOD_ORDER_SELF_SERVICE_ENABLED=true). Fail-closed.
+ * Ligado, a liberação deixa de ser a lista do piloto: vale o módulo `ifood` da unidade (gate da rota) + a permissão
+ * `integracoes.gerenciar` + a loja PROVADA pelo token e verificada no iFood (ifoodOrderAutoatendimento.service.js).
+ */
+export function autoatendimentoOrderHabilitado() {
+  return config.ifood?.orderAutoatendimento === true;
+}
+
+/**
  * O app Order está liberado PARA ESTA UNIDADE? Exige as duas coisas:
  *   1. o app existe neste ambiente (appTypesDoOAuth inclui `order` — credenciais ou homologação);
- *   2. a unidade está no piloto (IFOOD_ORDER_PILOT_UNITS). Vale também em homologação: fail-closed.
+ *   2. a unidade está no piloto (IFOOD_ORDER_PILOT_UNITS) OU o autoatendimento está ligado. Fail-closed.
  * As credenciais sozinhas NUNCA liberam o Order. Não tem relação com o Events (outra flag).
  * @param {string|null|undefined} unidadeId SEMPRE de req.tenant (contexto validado no servidor)
  */
 export function orderLiberadoParaUnidade(unidadeId) {
   if (!appTypesDoOAuth().includes(IFOOD_APP_ORDER)) return false;
+  if (autoatendimentoOrderHabilitado() && typeof unidadeId === "string" && unidadeId) return true;
   return unidadeNoPilotoOrder(config.ifood?.orderPilotoUnidades, unidadeId);
+}
+
+/**
+ * ESCOPO do poller de Events: as unidades do piloto + (com o autoatendimento ligado e credencial por conexão) as unidades
+ * cuja loja passou pela ativação — vínculo `validado` cuja conexão está `ativa` com o MESMO merchant.
+ * Nunca "todas as conexões": uma conexão com credencial `order` mas sem ativação concluída continua fora.
+ * Falha ao ler o banco = só o piloto (o recebimento das lojas do piloto nunca depende desta consulta).
+ * @param {{listarAtivadas?: () => Promise<string[]>, log?: Function}} [opc]
+ * @returns {Promise<string[]>}
+ */
+export async function unidadesOrderNoEscopo({ listarAtivadas, log } = {}) {
+  const piloto = unidadesPilotoOrder();
+  if (!autoatendimentoOrderHabilitado() || escopoDoToken() !== "conexao" || typeof listarAtivadas !== "function") return piloto;
+  try {
+    const ativadas = (await listarAtivadas()) ?? [];
+    return [...new Set([...piloto, ...ativadas.map((u) => String(u).toLowerCase())])];
+  } catch (e) {
+    log?.("warn", "events.escopo_autoatendimento_indisponivel", { erro: String(e?.message ?? e).slice(0, 200) });
+    return piloto;
+  }
 }
 
 /**

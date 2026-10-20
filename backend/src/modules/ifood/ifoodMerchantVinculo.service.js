@@ -43,6 +43,14 @@ export const VINCULO_MANUAL = Object.freeze({
   validadeVerificacaoMs: 24 * 3_600_000,    // a checagem de autorização vale por 24 h para a validação final
 });
 
+/**
+ * Modo AUTOATENDIMENTO (ifoodOrderAutoatendimento.service.js): a loja não foi digitada, foi PROVADA pelo token Order que o próprio iFood
+ * emitiu nesta autorização (claim `merchant_scope` com order+events). Essa prova substitui a conferência visual e as duas declarações
+ * da validação manual. É um Symbol de propósito: só código do servidor o passa — nunca chega por corpo de requisição.
+ * Liberado por IFOOD_ORDER_SELF_SERVICE_ENABLED (não pela flag da janela acompanhada).
+ */
+export const MODO_AUTOATENDIMENTO = Symbol("ifood.order.autoatendimento");
+
 export const MOTIVOS = Object.freeze({
   SEM_AUTORIZACAO: "SEM_AUTORIZACAO",
   MERCHANT_JA_VINCULADO: "MERCHANT_JA_VINCULADO",
@@ -199,9 +207,9 @@ export async function cancelarMerchantInformado({ organizacaoId, unidadeId, usua
  *   * qualquer outra falha -> nada muda no estado (a tentativa conta); o erro sobe.
  * Nunca grava evento, nunca reconhece (ACK), nunca promove a conexão.
  */
-export async function verificarAutorizacao({ organizacaoId, unidadeId, usuarioId, deps }) {
+export async function verificarAutorizacao({ organizacaoId, unidadeId, usuarioId, modo = null, deps }) {
   const { repo, vinculos, token, client, http, agora, log } = dependencias(deps);
-  if (!token.validacaoMerchantManualHabilitada()) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
+  if (!(modo === MODO_AUTOATENDIMENTO ? token.autoatendimentoOrderHabilitado?.() === true : token.validacaoMerchantManualHabilitada())) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
   const conexao = await exigirOrderDaUnidade({ organizacaoId, unidadeId, repo, token });
 
   const aberto = await vinculos.obterVinculoAberto({ organizacaoId, unidadeId, conexaoId: conexao.id });
@@ -262,12 +270,13 @@ export async function verificarAutorizacao({ organizacaoId, unidadeId, usuarioId
  * Não chama o iFood.
  */
 export async function concluirValidacao({
-  organizacaoId, unidadeId, merchantId, evidenciaPortalParceiro, confirmacaoOperacional, usuarioId, deps,
+  organizacaoId, unidadeId, merchantId, evidenciaPortalParceiro, confirmacaoOperacional, usuarioId, modo = null, deps,
 }) {
   const { repo, vinculos, token, agora, log } = dependencias(deps);
-  if (!token.validacaoMerchantManualHabilitada()) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
+  if (!(modo === MODO_AUTOATENDIMENTO ? token.autoatendimentoOrderHabilitado?.() === true : token.validacaoMerchantManualHabilitada())) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
   const id = normalizarMerchantId(merchantId);
-  if (evidenciaPortalParceiro !== true || confirmacaoOperacional !== true) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_SEM_EVIDENCIA);
+  // Autoatendimento: a evidência é o token (ver MODO_AUTOATENDIMENTO) + a verificação de autorização exigida logo abaixo.
+  if (modo !== MODO_AUTOATENDIMENTO && (evidenciaPortalParceiro !== true || confirmacaoOperacional !== true)) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_SEM_EVIDENCIA);
   const conexao = await exigirOrderDaUnidade({ organizacaoId, unidadeId, repo, token });
 
   const aberto = await vinculos.obterVinculoAberto({ organizacaoId, unidadeId, conexaoId: conexao.id });
@@ -303,6 +312,6 @@ export async function concluirValidacao({
     organizacaoId, unidadeId, id: aberto.id, seEstado: "aguardando_validacao",
     campos: { estado: "validado", validado_por: usuarioId ?? null, validado_em: quando },
   });
-  log("info", "merchant_manual.validado", { organizacaoId, unidadeId, conexaoId: conexao.id, merchantId: mascararId(id), por: usuarioId });
+  log("info", modo === MODO_AUTOATENDIMENTO ? "order_autoatendimento.validado" : "merchant_manual.validado", { organizacaoId, unidadeId, conexaoId: conexao.id, merchantId: mascararId(id), por: usuarioId });
   return { vinculo: resumirVinculo(validado ?? { ...aberto, estado: "validado", validado_em: quando }) };
 }

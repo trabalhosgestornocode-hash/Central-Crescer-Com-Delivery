@@ -123,6 +123,10 @@ export const config = {
     // Desligada por padrão: só com IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED=true, em janela acompanhada.
     // Informar e conferir o ID da loja NÃO dependem desta flag (não chamam o iFood).
     orderMerchantValidacao: process.env.IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED === "true",
+    // AUTOATENDIMENTO do app Order (ifoodOrderAutoatendimento.service.js): com IFOOD_ORDER_SELF_SERVICE_ENABLED=true, qualquer unidade
+    // com o módulo `ifood` conecta os pedidos sozinha (OAuth -> loja provada pelo token -> verificação isolada -> polling), sem entrar
+    // em IFOOD_ORDER_PILOT_UNITS. Uma flag ÚNICA do ambiente (nunca por unidade). Desligada por padrão: só o piloto, como antes.
+    orderAutoatendimento: process.env.IFOOD_ORDER_SELF_SERVICE_ENABLED === "true",
     // Aplicativo distribuído de teste — só usado quando `homologacao` é true.
     test: {
       clientId: process.env.IFOOD_TEST_CLIENT_ID || null,

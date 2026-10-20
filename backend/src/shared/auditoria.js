@@ -115,6 +115,11 @@ export const ACOES = {
   IFOOD_DIA_DESBLOQUEADO: "dashboard_ifood.dia_desbloqueado",
   IFOOD_DIA_DESBLOQUEIO_REVOGADO: "dashboard_ifood.dia_desbloqueio_revogado",
 
+  // Autoatendimento do app Order do iFood (ifoodOrderAutoatendimento.service.js): quem conectou/desconectou os pedidos da unidade.
+  IFOOD_PEDIDOS_CONECTADOS: "ifood.pedidos_conectados",
+  IFOOD_PEDIDOS_ATIVACAO_PENDENTE: "ifood.pedidos_ativacao_pendente",
+  IFOOD_PEDIDOS_DESCONECTADOS: "ifood.pedidos_desconectados",
+
   // configuração global
   CONFIG_ALTERADA: "config.alterada",
 

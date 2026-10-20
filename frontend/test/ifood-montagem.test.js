@@ -61,8 +61,10 @@ describe("frontend — iFood ligado de ponta a ponta", () => {
     const api = ler("api.js");
     const nomes = [...api.matchAll(/export const (ifood[A-Za-z]+)/g)].map((m) => m[1]);
     const suspeitos = nomes.filter((n) => /Order|Pedido|Polling|Ack|Confirm|Dispatch|Ready|Cancel|Handshake/i.test(n));
-    assert.deepEqual(suspeitos, ["ifoodPedidos"]);
+    assert.deepEqual(suspeitos, ["ifoodAtivarPedidos", "ifoodPedidos"]);
     assert.match(api, /export const ifoodPedidos = \(\) => getJson\(/, "ifoodPedidos é só GET, sem parâmetros");
+    // Autoatendimento: ativa a CONEXÃO de pedidos da unidade (não opera pedido). Só a rota de ativação, só o `ref` opaco da loja.
+    assert.match(api, /export const ifoodAtivarPedidos = \(ref = null\) => postJson\(`\$\{IFOOD\}\/pedidos\/ativacao`, ref \? \{ ref \} : \{\}\);/);
   });
 
   test("ifood.js: nunca lê ou grava token/secret/verifier em localStorage", () => {

@@ -582,6 +582,8 @@ const ERROS_DE_EVENTOS = new Set(["WORKER_INATIVO", "EVENTOS_COM_FALHA"]);
  *   podeConectar: boolean }}
  */
 export function derivarEstadoOrder(order) {
+  // Autoatendimento (flag do servidor): os estados da ativação substituem as etapas manuais da loja.
+  if (order?.autoatendimento?.habilitado === true) return estadoOrderAutoatendimento(order);
   if (!order) {
     return { disponivel: false, chave: "indisponivel", rotulo: "Ainda não disponível para esta unidade", classe: "muted", linhas: [], erro: null, podeConectar: false };
   }
@@ -603,6 +605,48 @@ export function derivarEstadoOrder(order) {
       ["Último pedido recebido", order.ultimoPedido ?? null, "data"],
     ],
   };
+}
+
+/** Motivos do autoatendimento que só uma NOVA autorização no iFood resolve (o botão reabre o assistente). */
+const MOTIVOS_RECONECTAR = new Set(["REAUTORIZAR", "SEM_LOJA_NO_TOKEN", "SEM_AUTORIZACAO", "LOJA_DE_OUTRA_UNIDADE"]);
+
+/**
+ * Bloco `order` com `autoatendimento` -> card "Pedidos / Order" nos estados da conexão automática:
+ *   nao_conectado   "Não conectado"                    -> botão "Conectar pedidos iFood"
+ *   validando_loja  "Validando loja"                   -> "Verificar novamente"
+ *   acao_necessaria "Ação necessária" + mensagem       -> escolher a loja | reconectar | verificar
+ *   conectado       "Conectado — recebendo pedidos" (recebimento ao vivo) ou "Conectado"
+ * `acaoAuto`: 'verificar' | 'escolher' | 'reconectar' | null. Nunca mostra o merchant inteiro (só o mascarado do servidor).
+ */
+function estadoOrderAutoatendimento(order) {
+  const a = order.autoatendimento;
+  const linhasBase = [["Última autenticação", order.ultimaAutenticacao ?? null, "data"]];
+  const linhaLoja = a.lojaMascarada ? [["Loja", a.lojaMascarada, "texto"]] : [];
+  const base = { disponivel: true, podeConectar: false, erro: null, autoatendimento: true, acaoAuto: null, opcoes: [], rotuloConectar: "Conectar pedidos iFood" };
+  if (order.status === "reauth_required" || (a.estado === "acao_necessaria" && a.motivo === "REAUTORIZAR")) {
+    return { ...base, chave: "reauth", rotulo: "Ação necessária", classe: "bad", linhas: [], podeConectar: true, rotuloConectar: "Reconectar pedidos iFood",
+      erro: { codigo: "REAUTORIZAR", mensagem: a.mensagem ?? "A autorização do app de pedidos expirou. Reconecte." } };
+  }
+  if (a.estado === "conectado") {
+    const erroOrder = order.erroAtual && !ERROS_DE_EVENTOS.has(order.erroAtual.codigo) ? order.erroAtual : null;
+    const recebendo = order.worker?.ativo === true;
+    return { ...base, chave: "conectado", rotulo: recebendo ? "Conectado — recebendo pedidos" : "Conectado", classe: "ok", erro: erroOrder,
+      linhas: [...linhasBase, ...linhaLoja, ["Último pedido recebido", order.ultimoPedido ?? null, "data"]] };
+  }
+  if (a.estado === "validando_loja") {
+    return { ...base, chave: "validando_loja", rotulo: "Validando loja", classe: "info", lojaPendente: true, acaoAuto: a.podeVerificar === false ? null : "verificar",
+      linhas: [...linhasBase, ...linhaLoja],
+      instrucao: a.mensagem ?? "Estamos confirmando com o iFood a loja autorizada. Os pedidos começam a chegar assim que a loja for confirmada." };
+  }
+  if (a.estado === "acao_necessaria") {
+    const escolher = a.motivo === "VARIAS_LOJAS" && Array.isArray(a.opcoes) && a.opcoes.length > 0;
+    const reconectar = MOTIVOS_RECONECTAR.has(a.motivo);
+    return { ...base, chave: "acao_necessaria", rotulo: "Ação necessária", classe: "bad", lojaPendente: true, linhas: [...linhasBase, ...linhaLoja],
+      acaoAuto: escolher ? "escolher" : reconectar ? "reconectar" : "verificar", opcoes: escolher ? a.opcoes : [],
+      podeConectar: reconectar, rotuloConectar: "Reconectar pedidos iFood",
+      erro: { codigo: a.motivo ?? "ACAO_NECESSARIA", mensagem: a.mensagem ?? "A conexão dos pedidos precisa de uma ação." }, instrucao: null };
+  }
+  return { ...base, chave: "nao_conectado", rotulo: "Não conectado", classe: "muted", linhas: [], podeConectar: order.configurado === true };
 }
 
 /** Motivo da rejeição do vínculo manual da loja, em linguagem de gestor. */

@@ -18,9 +18,10 @@ export const GESTOR = "user-gestor";
 // ---------------------------------------------------------------------------
 // Fakes em memória (espelham a semântica do banco: tenant em toda consulta, índices únicos, CAS)
 // ---------------------------------------------------------------------------
-export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false, agoraMs = Date.parse("2026-10-10T15:00:00Z") } = {}) {
+export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false, autoatendimento = false, agoraMs = Date.parse("2026-10-10T15:00:00Z") } = {}) {
   const conexoes = [];
   const credenciais = [];
+  const lojasExtras = [];   // migration 117 (lojas adicionais): { conexao_id, merchant_id, estado }
   const linhas = [];
   const chamadas = { token: [], polling: [], ack: [], definirMerchant: 0 };
   const relogio = { ms: agoraMs };
@@ -29,7 +30,7 @@ export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false
   const aberto = (v) => v.estado === "informado" || v.estado === "aguardando_validacao";
 
   const repo = {
-    conexoes, credenciais,
+    conexoes, credenciais, lojasExtras,
     // Mesma semântica do repositório real: seleção por finalidade (ou a única legada); sem finalidade, mais de uma = ambígua.
     async listarConexoesVivas({ organizacaoId, unidadeId }) {
       return conexoes.filter((x) => x.organizacao_id === organizacaoId && x.unidade_id === unidadeId && viva(x)).map((c) => ({ ...c }));
@@ -51,6 +52,10 @@ export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false
     async conexaoVivaDoMerchant({ merchantId }) {
       const c = conexoes.find((x) => x.merchant_id === merchantId && viva(x));
       return c ? { id: c.id, organizacao_id: c.organizacao_id, unidade_id: c.unidade_id, status: c.status, merchant_id: c.merchant_id } : null;
+    },
+    async lojaAdicionalVivaDoMerchant({ merchantId }) {
+      const l = lojasExtras.find((x) => x.merchant_id === merchantId && x.estado !== "desativada");
+      return l ? { id: l.id ?? "loja-extra", conexao_id: l.conexao_id } : null;
     },
     async definirMerchantDaConexao({ organizacaoId, unidadeId, conexaoId, merchantId, nome, razaoSocial }) {
       chamadas.definirMerchant += 1;
@@ -102,10 +107,11 @@ export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false
     },
   };
 
-  const cfg = { piloto: new Set(piloto), validacao };
+  const cfg = { piloto: new Set(piloto), validacao, autoatendimento };
   const token = {
-    orderLiberadoParaUnidade: (u) => cfg.piloto.has(u),
+    orderLiberadoParaUnidade: (u) => cfg.autoatendimento || cfg.piloto.has(u),   // espelha o real: a flag do autoatendimento libera qualquer unidade
     validacaoMerchantManualHabilitada: () => cfg.validacao,
+    autoatendimentoOrderHabilitado: () => cfg.autoatendimento,
     async comAccessTokenValido({ conexaoId, appType, fn }) { chamadas.token.push({ conexaoId, appType }); return fn("token-order-de-teste"); },
   };
   const respostasPolling = [];
@@ -129,5 +135,5 @@ export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false
     return c;
   };
   const p = (extra = {}) => ({ organizacaoId: ORG, unidadeId: SACI, usuarioId: GESTOR, deps, ...extra });
-  return { repo, vinculos, token, client, deps, cfg, chamadas, logs, relogio, respostasPolling, conectar, p, linhas, conexoes, credenciais };
+  return { repo, vinculos, token, client, deps, cfg, chamadas, logs, relogio, respostasPolling, conectar, p, linhas, conexoes, credenciais, lojasExtras };
 }

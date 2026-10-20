@@ -123,15 +123,22 @@ const linhasInfo = (linhas) => linhas.map((l) => `<div class="ifood-info-linha">
 function blocoOperacao(statusApi) {
   const o = derivarEstadoOrder(statusApi?.order);
   const ev = derivarEstadoEvents(statusApi?.eventosRecebimento, statusApi?.order);
+  const rotuloConectar = o.autoatendimento ? o.rotuloConectar : o.chave === "reauth" ? "Reconectar pedidos" : "Conectar pedidos";
   const botaoOrder = o.podeConectar
-    ? `<button class="btn btn-ghost" id="ifood-acao-conectar_order" data-acao="conectar_order">${o.chave === "reauth" ? "Reconectar pedidos" : "Conectar pedidos"}</button>`
+    ? `<button class="btn ${o.autoatendimento && o.chave === "nao_conectado" ? "btn-primary" : "btn-ghost"}" id="ifood-acao-conectar_order" data-acao="conectar_order">${esc(rotuloConectar)}</button>`
     : "";
-  const acoesLoja = o.acaoLoja === "informar"
+  // Autoatendimento: verificar de novo / escolher a loja (refs opacos do servidor). A loja nunca é digitada.
+  const acoesAuto = o.acaoAuto === "verificar"
+    ? `<button class="btn btn-primary" id="ifood-acao-verificar_pedidos" data-acao="verificar_pedidos">Verificar novamente</button>`
+    : o.acaoAuto === "escolher"
+      ? o.opcoes.map((op, i) => `<button class="btn btn-ghost" id="ifood-acao-escolher_loja_${i}" data-acao="escolher_loja" data-ref="${esc(op.ref)}">Usar a loja ${esc(op.idMascarado)}</button>`).join("")
+      : "";
+  const acoesLoja = acoesAuto || (o.acaoLoja === "informar"
     ? `<button class="btn btn-primary" id="ifood-acao-informar_loja" data-acao="informar_loja">${o.chave === "loja_rejeitada" ? "Informar o ID da loja novamente" : "Informar o ID da loja"}</button>`
     : o.acaoLoja === "conferir"
       ? `<button class="btn btn-primary" id="ifood-acao-conferir_loja" data-acao="conferir_loja">Conferir o ID da loja</button>
          <button class="btn btn-ghost" id="ifood-acao-corrigir_loja" data-acao="informar_loja">Corrigir o ID</button>`
-      : "";
+      : "");
   const blocoLojaPendente = o.lojaPendente
     ? `${o.instrucao ? `<p class="ifood-instrucao" id="ifood-order-loja-instrucao">${esc(o.instrucao)}</p>` : ""}
        ${acoesLoja ? `<div class="ifood-acoes" id="ifood-order-loja-acoes">${acoesLoja}</div>` : ""}`
@@ -443,13 +450,33 @@ function ligarAcoesDoPainel() {
     // Unidade só com o app de pedidos: informar / conferir o ID da loja (Portal do Parceiro).
     informar_loja: () => abrirWizard("loja_manual"),
     conferir_loja: () => abrirWizard("loja_conferir"),
+    // Autoatendimento: nova verificação da loja (a escolha entre as lojas do token é ligada abaixo, com o `ref` do botão).
+    verificar_pedidos: () => ativarPedidos(null),
     // Loja pendente: vai DIRETO para a seleção de loja (GET /merchants ->
     // escolher -> POST /merchants/link). Não refaz OAuth.
     vincular: () => abrirWizard("merchant"),
     desconectar,
   };
   for (const b of els("#view [data-acao]")) {
-    b.addEventListener("click", () => handlers[b.dataset.acao]?.());
+    if (b.dataset.acao === "escolher_loja") b.addEventListener("click", () => ativarPedidos(b.dataset.ref ?? null));
+    else b.addEventListener("click", () => handlers[b.dataset.acao]?.());
+  }
+}
+
+// Autoatendimento do app Order: um clique, um pedido ao servidor (os botões ficam desabilitados até a resposta — duplo clique não duplica).
+async function ativarPedidos(ref) {
+  if (!pode("integracoes.gerenciar")) return;
+  const botoes = () => els("#view [data-acao=verificar_pedidos], #view [data-acao=escolher_loja]");
+  for (const b of botoes()) b.disabled = true;
+  try {
+    const { data } = await api.ifoodAtivarPedidos(ref);
+    estado.status = data;
+    estado.statusErro = null;
+    pintarPainel();
+  } catch (e) {
+    for (const b of botoes()) b.disabled = false;
+    const aviso = el("#ifood-order-loja-instrucao") ?? el("#ifood-order-status");
+    aviso?.insertAdjacentHTML("afterend", `<div class="ifood-aviso bad" id="ifood-order-ativacao-erro">${esc(e?.message || "Não foi possível verificar a loja agora. Tente novamente em alguns minutos.")}</div>`);
   }
 }
 
@@ -532,7 +559,11 @@ function pintarWizard() {
   if (w.etapa === "analytics") return pintarEtapaOAuth("analytics", 1, "Dados de desempenho — autorize o aplicativo de Analytics.");
   if (w.etapa === "financial") return pintarEtapaOAuth("financial", 2, "Dados financeiros — autorize o aplicativo Financial + Merchant.");
   if (w.etapa === "merchant") return pintarEtapaMerchant();
-  if (w.etapa === "order") return pintarEtapaOAuth("order", null, "Pedidos e eventos — autorize o aplicativo de pedidos (Order) do iFood.");
+  if (w.etapa === "order") {
+    return pintarEtapaOAuth("order", null, estado.status?.order?.autoatendimento?.habilitado === true
+      ? "Aguardando autorização — autorize a loja desta unidade no iFood com o código abaixo. Depois a Central confirma a loja sozinha."
+      : "Pedidos e eventos — autorize o aplicativo de pedidos (Order) do iFood.");
+  }
   if (w.etapa === "order_loja" && w.loja) return pintarEtapaOAuth("order", null, `Autorização da loja adicional ${w.loja.nome} (credencial própria).`);
   if (w.etapa === "loja_manual") return pintarEtapaLojaManual();
   if (w.etapa === "loja_conferir") return pintarEtapaLojaConferir();
@@ -742,6 +773,10 @@ async function concluirAutorizacao(appType) {
     if (estado.wizard.loja) {
       // Loja adicional: nada mais a fazer no assistente. Volta ao painel (que recarrega o status) com a confirmação — o polling NÃO foi ativado.
       estado.avisoLoja = `${estado.wizard.loja.nome} autorizada. O recebimento de pedidos desta loja continua desligado até a ativação pela equipe da plataforma.`;
+      return sairDoWizard();
+    }
+    if (appType === "order" && estado.status?.order?.autoatendimento?.habilitado === true) {
+      // Autoatendimento: o servidor já identificou, verificou e (se deu) ativou a loja. Volta ao painel, que mostra o estado.
       return sairDoWizard();
     }
     if (appType === "order") {
