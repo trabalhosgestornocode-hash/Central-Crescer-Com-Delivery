@@ -41,5 +41,38 @@
 .fin-adm-bloqueio { border-left: 4px solid var(--warn, #c48a12); background: var(--warn-bg, #fff7e0); padding: 10px 14px; border-radius: 8px; margin-bottom: 12px; }
 .adm-subtitulo { font-size: 15px; font-weight: 700; margin: 22px 0 8px; }
 
+/* Painel SuperAdmin: gestão simples de acessos do Financeiro (uma unidade por vez) */
+.fa-cartao { background: var(--superficie-2); border: 1px solid var(--linha); border-radius: var(--raio-sm); padding: 14px 16px; margin-bottom: 12px; }
+.fa-cartao .adm-nota { margin: 8px 0 0; }
+.fa-chave { display: flex; align-items: center; gap: 12px; cursor: pointer; min-height: 44px; position: relative; }
+.fa-chave input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.fa-chave-trilho { flex: none; width: 46px; height: 26px; border-radius: 999px; background: var(--cinza-claro); position: relative; transition: background var(--t); }
+.fa-chave-trilho::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; box-shadow: var(--sombra-sm); transition: transform var(--t); }
+.fa-chave input:checked + .fa-chave-trilho { background: var(--ok); }
+.fa-chave input:checked + .fa-chave-trilho::after { transform: translateX(20px); }
+.fa-chave input:focus-visible + .fa-chave-trilho { outline: 2px solid var(--info); outline-offset: 2px; }
+.fa-chave input:disabled + .fa-chave-trilho { opacity: .5; }
+.fa-chave-texto { font-size: 15px; }
+.fa-legenda { margin: 0 0 12px; font-size: 13px; color: var(--cinza); }
+.fa-legenda summary { cursor: pointer; font-weight: 600; color: var(--texto); padding: 6px 0; }
+.fa-legenda ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+.fa-usuarios { list-style: none; margin: 0; padding: 0; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--card); }
+.fa-usuario { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--linha); }
+.fa-usuario:first-child { border-top: 0; }
+.fa-usuario--mudou { background: var(--info-bg); }
+.fa-usuario-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fa-usuario-id small { color: var(--cinza); overflow-wrap: anywhere; }
+.fa-usuario-id .fa-falha { color: var(--bad); }
+.fa-nivel { flex: none; width: 170px; min-height: 40px; padding: 6px 10px; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--campo-bg); color: var(--texto); font: inherit; }
+.fa-barra { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px 0; background: var(--card); border-top: 1px solid var(--linha); }
+.fa-barra-acoes { display: flex; gap: 8px; }
+#fa-contagem { font-size: 13px; color: var(--cinza); }
+@media (max-width: 560px) {
+  .fa-usuario { flex-direction: column; align-items: stretch; }
+  .fa-nivel { width: 100%; }
+  .fa-barra { flex-direction: column; align-items: stretch; }
+  .fa-barra-acoes { justify-content: flex-end; }
+}
+
 #setor-vazio { text-align: center; padding: 8px 0 18px; }
 #setor-vazio h3 { margin: 0 0 6px; }

@@ -28,6 +28,14 @@ run -d "$DB" -f "$SQL2"  # idempotência do 122
 run -d "$DB" -f "$AQUI/10_dominio.test.sql"
 run -d "$DB" -f "$AQUI/20_periodos_conciliacao.test.sql"
 run -d "$DB" -f "$AQUI/25_cancelamento_par.test.sql"
+# 126: autoconcessão só do SuperAdmin ativo. Idempotente; o rollback volta à regra da 120 (nem o SuperAdmin se concede).
+M126="$AQUI/../../database/migrations/126_financeiro_autoconcessao_superadmin.sql"
+run -d "$DB" -f "$M126"; run -d "$DB" -f "$M126"
+run -d "$DB" -f "$AQUI/50_autoconcessao_126.test.sql"
+run -d "$DB" -f "$AQUI/../../database/migrations/126_rollback.sql"
+if run -d "$DB" -f "$AQUI/50_autoconcessao_126.test.sql" >/dev/null 2>&1; then echo "FALHA: depois do rollback da 126 o SuperAdmin ainda se autoconcede"; exit 1; fi
+echo "rollback da 126 restaura a proibição da 120 (ok)"
+run -d "$DB" -f "$M126"
 export HOST PORT PSQL DB
 bash "$AQUI/30_concorrencia.sh"
 # idempotência COM DADOS: o teste de concorrência deixou dados committados; reaplicar 121 e 122 não pode alterar nem perder nada

@@ -1,4 +1,5 @@
-// QA visual da tela "Acesso Financeiro" (SuperAdmin) — backend FALSO, dados fictícios, loopback.
+// QA visual da tela "Acesso Financeiro" (SuperAdmin, gestão simples por unidade) — backend FALSO, dados fictícios, loopback.
+// Rodar: node servidor-qa.mjs <porta>  e depois  QA_PORTA=<porta> QA_MODULOS=<pasta com playwright-core> node qa-admin.mjs
 import { createRequire } from "node:module";
 // ESM ignora NODE_PATH: o playwright-core fica FORA do repositório; QA_MODULOS aponta para a pasta que contém node_modules.
 const { chromium } = createRequire(`${process.env.QA_MODULOS || process.cwd()}/`)("playwright-core");
@@ -7,8 +8,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const aqui = path.dirname(fileURLToPath(import.meta.url));
-const SHOTS = path.join(aqui, "shots");   // ignorado pelo git mkdirSync(SHOTS, { recursive: true });
-const BASE = "http://127.0.0.1:4173";
+const SHOTS = path.join(aqui, "shots");   // ignorado pelo git
+mkdirSync(SHOTS, { recursive: true });
+const BASE = `http://127.0.0.1:${process.env.QA_PORTA || 4173}`;
 const res = [];
 const checar = (nome, ok, d = "") => res.push({ nome, ok: !!ok, d });
 const api = (p) => fetch(BASE + p).then((r) => r.json());
@@ -17,79 +19,91 @@ const nav = await chromium.launch({ executablePath: process.env.QA_CHROME || "C:
 const ctx = await nav.newContext({ viewport: { width: 1366, height: 900 } });
 const page = await ctx.newPage();
 const ver = (s) => page.locator(s).first().isVisible().catch(() => false);
-const foto = (n) => page.screenshot({ path: path.join(SHOTS, `${n}.png`) });
+const foto = (p, n) => p.screenshot({ path: path.join(SHOTS, `${n}.png`), fullPage: true });
+const texto = () => page.locator("#adm-view").innerText();
+const nivel = (perfil) => page.locator(`.fa-nivel[data-perfil="${perfil}"]`);
 
+async function abrirTela(p) {
+  await p.goto(BASE + "/", { waitUntil: "load" }); await p.waitForTimeout(1500);
+  // No celular o menu lateral rola na horizontal; o clique vai direto no item.
+  await p.locator('#adm-menu li[data-tela="acesso-financeiro"]').first().evaluate((li) => li.click()); await p.waitForTimeout(800);
+  await p.selectOption("#fa-org", "org-qa"); await p.waitForTimeout(700);
+  await p.selectOption("#fa-uni", "uni-a"); await p.waitForTimeout(900);
+}
+
+// --- GRAVAÇÃO DESLIGADA (flag de rollout)
 await api("/qa/cenario?nome=superadmin"); await api("/qa/escrita?on=0");
 await page.goto(BASE + "/", { waitUntil: "load" }); await page.waitForTimeout(1500);
 checar("superadmin: abre o painel SuperAdmin", await ver("#admin"));
-await page.locator('#adm-menu li[data-tela="acesso-financeiro"]').first().click();
-await page.waitForTimeout(800);
-checar("aba 'Acesso Financeiro' existe e abre", /Acesso ao Dashboard Financeiro/.test(await page.locator("#adm-view").innerText()));
-checar("aviso de BLOQUEIO visível (flag/MFA)", /Bloqueado\./.test(await page.locator("#adm-view").innerText()));
-await foto("20-admin-acesso-financeiro-inicial");
-
+await page.locator('#adm-menu li[data-tela="acesso-financeiro"]').first().click(); await page.waitForTimeout(800);
+checar("aba 'Acesso Financeiro' abre e pede empresa e unidade", /Acesso ao Dashboard Financeiro/.test(await texto()) && /Escolha a empresa e a unidade/.test(await texto()));
 await page.selectOption("#fa-org", "org-qa"); await page.waitForTimeout(700);
 await page.selectOption("#fa-uni", "uni-a"); await page.waitForTimeout(900);
-let texto = await page.locator("#adm-view").innerText();
-checar("lista: concessão ativa e expirada aparecem; revogada oculta por padrão", /Marina Souza/.test(texto) && /Paulo Lima/.test(texto) && !/Rita Alves/.test(texto));
-checar("lista: pills Ativa/Expirada", /Ativa/.test(texto) && /Expirada/.test(texto));
-checar("lista: 'só financeiro' sinalizado", /só financeiro/.test(texto));
-checar("auditoria: histórico exibido", /Histórico de auditoria/.test(texto) && /Concedida/.test(texto));
-await page.locator("#fa-rev").check(); await page.waitForTimeout(900);
-texto = await page.locator("#adm-view").innerText();
-checar("incluir revogadas: mostra Revogada e o motivo da revogação", /Rita Alves/.test(texto) && /Revogada/.test(texto) && /Mudou de função/.test(texto));
-checar("revogada não oferece 'Preparar revogação'", (await page.locator('[data-fin-acao="revogar"]').count()) === 2);
-await foto("21-admin-acesso-financeiro-lista");
+let t = await texto();
+checar("desligada: aviso 'Gravação desligada.' sem falar de MFA", /Gravação desligada\./.test(t) && !/MFA|duas etapas/i.test(t));
+checar("desligada: chave e seletores travados, Salvar desabilitado",
+  await page.locator("#fa-ligado").isDisabled() && await nivel("perfil-4").isDisabled() && await page.locator("#fa-salvar").isDisabled());
+checar("lista: usuários da unidade, 'você' e 'sem vínculo' sinalizados", /Marina Souza/.test(t) && /Bruno Dias/.test(t) && /você/.test(t) && /sem vínculo/.test(t));
+checar("lista: nível atual de cada um no seletor", (await nivel("perfil-1").inputValue()) === "operador" && (await nivel("perfil-4").inputValue()) === "");
+await foto(page, "20-admin-acesso-financeiro-desligado");
+checar("desligada: nenhuma escrita enviada", (await api("/qa/chamadas")).length === 0);
 
-// --- preparar concessão (BLOQUEADO)
-await page.locator('[data-fin-acao="nova"]').click(); await page.waitForTimeout(700);
-checar("modal (bloqueado): aviso de gravação bloqueada", /Gravação bloqueada/.test(await page.locator("#adm-modal-body").innerText()));
-checar("modal (bloqueado): NÃO existe botão de confirmar", (await page.locator("#adm-modal-ok").count()) === 0);
-await page.selectOption("#fa-perfil", "perfil-su"); await page.waitForTimeout(200);
-checar("autoconcessão: perfil próprio rotulado e recusado na prévia", /sua própria conta/.test(await page.locator("#fa-perfil option:checked").innerText()) && /Autoconcessão/.test(await page.locator("#fa-prev").innerText()));
-await page.selectOption("#fa-perfil", "perfil-4"); await page.selectOption("#fa-nivel", "operador"); await page.fill("#fa-motivo", "curto"); await page.waitForTimeout(200);
-checar("motivo curto: exige 10+ caracteres", /motivo/i.test(await page.locator("#fa-prev").innerText()));
-await page.fill("#fa-motivo", "Contratação de analista financeiro"); await page.waitForTimeout(200);
-checar("dados válidos: prévia diz que NADA será gravado (bloqueado)", /Nada será gravado/.test(await page.locator("#fa-prev").innerText()));
-await foto("22-admin-modal-concessao-bloqueado");
-await page.keyboard.press("Escape"); await page.waitForTimeout(300);
-const ch0 = await api("/qa/chamadas");
-checar("bloqueado: nenhuma chamada de escrita foi feita ao servidor", ch0.length === 0, JSON.stringify(ch0));
-
-// --- preparar revogação (BLOQUEADO)
-await page.locator('[data-fin-acao="revogar"]').first().click(); await page.waitForTimeout(500);
-checar("revogação (bloqueado): aviso + referência ao procedimento de emergência, sem botão Revogar", /Revogação bloqueada/.test(await page.locator("#adm-modal-body").innerText()) && /revogacao-emergencial/.test(await page.locator("#adm-modal-body").innerText()) && (await page.locator("#adm-modal-ok").count()) === 0);
-await foto("23-admin-modal-revogacao-bloqueado");
-await page.keyboard.press("Escape"); await page.waitForTimeout(300);
-
-// --- LIBERADO no mock (só para conferir o corpo enviado)
+// --- GRAVAÇÃO LIBERADA (mock)
 await api("/qa/escrita?on=1");
-await page.selectOption("#fa-uni", ""); await page.selectOption("#fa-uni", "uni-a"); await page.waitForTimeout(900);
-checar("liberado: aviso muda e menciona MFA recente", /Escritas liberadas/.test(await page.locator("#adm-view").innerText()));
-await page.locator('[data-fin-acao="nova"]').click(); await page.waitForTimeout(700);
-checar("liberado: botão Conceder existe", (await page.locator("#adm-modal-ok").count()) === 1);
-await page.selectOption("#fa-perfil", "perfil-4"); await page.selectOption("#fa-nivel", "gestor");
-await page.fill("#fa-exp", "2099-12-31"); await page.locator("#fa-sofin").check(); await page.fill("#fa-motivo", "  Gestor financeiro da unidade  ");
-await page.locator("#adm-modal-ok").click(); await page.waitForTimeout(900);
-const ch = await api("/qa/chamadas");
-const c = ch.find((x) => x.rota === "conceder")?.corpo ?? {};
-checar("corpo enviado: org/unidade/perfil/nível/motivo normalizados", c.organizacaoId === "org-qa" && c.unidadeId === "uni-a" && c.perfilId === "perfil-4" && c.nivel === "gestor" && c.motivo === "Gestor financeiro da unidade", JSON.stringify(c));
-checar("corpo enviado: somenteFinanceiro e expiração ISO", c.somenteFinanceiro === true && /^(2099-12-31|2100-01-01)T/.test(c.expiraEm ?? ""));
-checar("corpo enviado: NÃO leva concedente", !JSON.stringify(c).match(/concedid/i));
-await page.locator('[data-fin-acao="revogar"]').first().click(); await page.waitForTimeout(400);
-await page.fill("#fa-motivo-rev", "Encerramento do contrato"); await page.locator("#adm-modal-ok").click(); await page.waitForTimeout(800);
-const r = (await api("/qa/chamadas")).find((x) => x.rota === "revogar");
-checar("revogação enviada com id e motivo", r?.id === "c-1" && r?.corpo?.motivo === "Encerramento do contrato", JSON.stringify(r));
-await api("/qa/escrita?on=0");
+await page.selectOption("#fa-uni", ""); await page.waitForTimeout(500);
+await page.selectOption("#fa-uni", "uni-a"); await page.waitForTimeout(900);
+checar("liberada: sem aviso de bloqueio, chave habilitada", !/Gravação desligada/.test(await texto()) && !(await page.locator("#fa-ligado").isDisabled()));
+checar("sem mudanças: 'Nenhuma alteração' e Salvar desabilitado", /Nenhuma alteração/.test(await page.locator("#fa-contagem").innerText()) && await page.locator("#fa-salvar").isDisabled());
+checar("sem vínculo: mostra o nível atual e só oferece removê-lo",
+  (await nivel("perfil-ex").inputValue()) === "leitura" && (await nivel("perfil-ex").locator("option").count()) === 2);
 
-// --- mobile
+await page.locator(".fa-chave").click(); await page.waitForTimeout(300);
+checar("chave: liga o Financeiro e avisa que a sessão será renovada", /Financeiro ligado/.test(await texto()) && /entrar de novo/.test(await texto()));
+await nivel("perfil-su").selectOption("gestor"); await page.waitForTimeout(200);
+await nivel("perfil-4").selectOption("leitura"); await page.waitForTimeout(200);
+await nivel("perfil-1").selectOption(""); await page.waitForTimeout(200);
+await nivel("perfil-falha").selectOption("operador"); await page.waitForTimeout(200);
+checar("contagem: 5 alterações não salvas e linhas destacadas",
+  /5 alteração/.test(await page.locator("#fa-contagem").innerText()) && (await page.locator(".fa-usuario--mudou").count()) === 4);
+checar("Salvar habilitado com alterações", !(await page.locator("#fa-salvar").isDisabled()));
+await page.locator("#fa-descartar").click(); await page.waitForTimeout(300);
+checar("Descartar volta ao estado do servidor", /Nenhuma alteração/.test(await page.locator("#fa-contagem").innerText()) && (await nivel("perfil-1").inputValue()) === "operador");
+
+await page.locator(".fa-chave").click(); await page.waitForTimeout(200);
+await nivel("perfil-su").selectOption("gestor"); await nivel("perfil-4").selectOption("leitura");
+await nivel("perfil-1").selectOption(""); await nivel("perfil-falha").selectOption("operador"); await page.waitForTimeout(200);
+await foto(page, "21-admin-acesso-financeiro-alteracoes");
+await page.locator("#fa-salvar").click(); await page.waitForTimeout(1000);
+const put = (await api("/qa/chamadas")).find((x) => x.rota === "acessos");
+const corpo = put?.corpo ?? {};
+checar("pedido: unidade certa, módulo ligado e só quem mudou", put?.id === "uni-a" && corpo.habilitado === true && corpo.acessos?.length === 4, JSON.stringify(put));
+checar("pedido: níveis corretos (Sem acesso vai como null)", JSON.stringify(corpo.acessos) === JSON.stringify([
+  { perfilId: "perfil-su", nivel: "gestor" }, { perfilId: "perfil-1", nivel: null },
+  { perfilId: "perfil-4", nivel: "leitura" }, { perfilId: "perfil-falha", nivel: "operador" },
+]), JSON.stringify(corpo.acessos));
+checar("pedido: NÃO leva concedente, empresa nem motivo", Object.keys(corpo).sort().join() === "acessos,habilitado");
+t = await texto();
+checar("depois de salvar: estado do servidor recarregado", (await nivel("perfil-4").inputValue()) === "leitura" && (await nivel("perfil-su").inputValue()) === "gestor" && /Financeiro ligado/.test(t));
+checar("falha de um usuário aparece na linha dele", /não tem vínculo ativo/.test(await page.locator(".fa-usuario", { hasText: "Caio Teste" }).innerText()));
+await foto(page, "22-admin-acesso-financeiro-salvo");
+
+// --- desligada de novo: o servidor recusa e a tela não finge sucesso
+await nivel("perfil-1").selectOption("leitura"); await api("/qa/escrita?on=0");
+await page.locator("#fa-salvar").click(); await page.waitForTimeout(800);
+checar("servidor recusou: tela mantém a alteração e não mostra sucesso", (await nivel("perfil-1").inputValue()) === "leitura" && !(await page.locator("#fa-salvar").isDisabled()));
+
+// --- celular
+await api("/qa/cenario?nome=superadmin");
 const m = await nav.newContext({ viewport: { width: 390, height: 844 } });
 const pm = await m.newPage();
-await pm.goto(BASE + "/", { waitUntil: "load" }); await pm.waitForTimeout(1500);
+await abrirTela(pm);
 const larg = await pm.evaluate(() => document.documentElement.scrollWidth);
-checar("mobile: painel SuperAdmin sem rolagem horizontal da página", larg <= 392, `scrollWidth=${larg}`);
-await foto("24-admin-mobile-inicial");
+checar("celular: tela sem rolagem horizontal", larg <= 392, `scrollWidth=${larg}`);
+const alturaSel = await pm.locator('.fa-nivel[data-perfil="perfil-4"]').evaluate((e) => e.getBoundingClientRect().height);
+checar("celular: seletor com altura de toque (>= 40px)", alturaSel >= 40, `altura=${alturaSel}`);
+await foto(pm, "23-admin-acesso-financeiro-celular");
 
 await nav.close();
 for (const x of res) console.log(`${x.ok ? "OK   " : "FALHA"} ${x.nome}${!x.ok && x.d ? "  -> " + x.d : ""}`);
 console.log(`\n${res.filter((x) => x.ok).length}/${res.length} verificações OK`);
+process.exitCode = res.every((x) => x.ok) ? 0 : 1;

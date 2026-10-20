@@ -19,6 +19,8 @@ create table if not exists perfis (id uuid primary key);
 create table if not exists perfis_operacionais (id uuid primary key default gen_random_uuid(), conta_id uuid not null references perfis(id), nome text, ativo boolean not null default true);
 create table if not exists usuarios_organizacoes (usuario_id uuid, organizacao_id uuid, ativo boolean default true);
 create table if not exists usuarios_unidades (usuario_id uuid, unidade_id uuid, ativo boolean default true);
+-- 126: autoconcessão só do SuperAdmin ATIVO (mesma fonte de is_platform_superadmin(), migration 015).
+create table if not exists plataforma_admins (usuario_id uuid primary key, ativo boolean not null default true);
 create table if not exists modulos (id text primary key, nome text not null, categoria text not null check (categoria in ('operacao','integracao')), ordem int not null default 0, ativo boolean not null default true);
 create table if not exists organizacao_modulos (organizacao_id uuid, modulo_id text references modulos(id), primary key (organizacao_id, modulo_id));
 create table if not exists unidade_modulos (unidade_id uuid, modulo_id text references modulos(id), primary key (unidade_id, modulo_id));

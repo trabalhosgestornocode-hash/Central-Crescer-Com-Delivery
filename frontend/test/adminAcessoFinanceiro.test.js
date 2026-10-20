@@ -1,71 +1,79 @@
-// Modelo da tela "Acesso Financeiro" do SuperAdmin — puro, sem DOM nem rede.
+// Modelo da tela "Acesso Financeiro" do SuperAdmin (gestão simples por unidade) — puro, sem DOM nem rede.
 // Rodar: node --test frontend/test/adminAcessoFinanceiro.test.js
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import {
-  estadoDaEscrita, validarFormularioConcessao, montarCorpoConcessao, situacaoDe, podeRevogar, validarMotivoRevogacao, NIVEIS,
+  OPCOES_ACESSO, ROTULO_ACESSO, nivelDoSeletor, estadoDaEscrita, mudancas, montarPedido, resumoDoResultado,
 } from "../src/adminAcessoFinanceiroModelo.js";
 import { adminApi } from "../src/adminApi.js";
 
-const perfis = [{ id: "p1", propria: false }, { id: "eu", propria: true }];
-const ok = { perfilId: "p1", nivel: "operador", motivo: "Contratação do analista financeiro" };
+const inicial = {
+  habilitado: false,
+  usuarios: [{ id: "p1", nivel: null }, { id: "p2", nivel: "leitura" }, { id: "eu", nivel: null, propria: true }],
+};
+const copia = () => ({ habilitado: inicial.habilitado, niveis: Object.fromEntries(inicial.usuarios.map((u) => [u.id, u.nivel])) });
+
+describe("opções do seletor", () => {
+  test("quatro opções, na ordem da tela, com os valores do banco", () => {
+    assert.deepEqual(OPCOES_ACESSO.map((o) => o.valor), [null, "leitura", "operador", "gestor"]);
+    assert.deepEqual(OPCOES_ACESSO.map((o) => o.rotulo), ["Sem acesso", "Visualização", "Operador", "Gestor"]);
+    assert.equal(ROTULO_ACESSO.leitura, "Visualização"); assert.equal(ROTULO_ACESSO[""], "Sem acesso");
+  });
+  test("valor do seletor: desconhecido ou vazio vira Sem acesso (falha fechada)", () => {
+    assert.equal(nivelDoSeletor("gestor"), "gestor");
+    for (const x of ["", null, undefined, "admin", "root", "Gestor"]) assert.equal(nivelDoSeletor(x), null);
+  });
+});
 
 describe("estado das escritas (falha fechada)", () => {
   test("só `escritaLiberada === true` libera", () => {
     assert.equal(estadoDaEscrita({ escritaLiberada: true }).liberada, true);
-    for (const x of [undefined, null, {}, { escritaLiberada: "true" }, { escritaLiberada: 1 }, "ok"]) assert.equal(estadoDaEscrita(x).liberada, false);
+    for (const x of [undefined, null, {}, { escritaLiberada: "true" }, { escritaLiberada: 1 }]) assert.equal(estadoDaEscrita(x).liberada, false);
   });
-  test("bloqueado traz código e mensagem do servidor, ou padrões", () => {
-    const e = estadoDaEscrita({ escritaLiberada: false, codigo: "MFA_REQUERIDA", mensagem: "Exige MFA" });
-    assert.deepEqual([e.liberada, e.codigo, e.mensagem], [false, "MFA_REQUERIDA", "Exige MFA"]);
-    assert.equal(estadoDaEscrita(undefined).codigo, "CONCESSOES_BLOQUEADAS");
-  });
-});
-
-describe("formulário de concessão", () => {
-  test("válido", () => assert.deepEqual(validarFormularioConcessao(ok, { perfis }), { ok: true, erros: [] }));
-  test("autoconcessão é recusada na tela (e no servidor)", () => {
-    const r = validarFormularioConcessao({ ...ok, perfilId: "eu" }, { perfis });
-    assert.equal(r.ok, false); assert.match(r.erros[0], /Autoconcessão/);
-  });
-  test("perfil fora da lista de elegíveis, nível inválido, motivo curto e expiração passada", () => {
-    assert.match(validarFormularioConcessao({ ...ok, perfilId: "outro" }, { perfis }).erros[0], /perfil/i);
-    assert.equal(validarFormularioConcessao({ ...ok, nivel: "root" }, { perfis }).ok, false);
-    assert.equal(validarFormularioConcessao({ ...ok, motivo: "curto" }, { perfis }).ok, false);
-    assert.equal(validarFormularioConcessao({ ...ok, expiraEm: "2020-01-01" }, { perfis }).ok, false);
-    assert.equal(validarFormularioConcessao({ ...ok, expiraEm: "2099-01-01" }, { perfis }).ok, true);
-  });
-  test("o corpo enviado nunca leva concedente e normaliza a expiração", () => {
-    const c = montarCorpoConcessao({ organizacaoId: "o", unidadeId: "u", ...ok, motivo: "  Motivo válido aqui  ", expiraEm: "2099-01-01", somenteFinanceiro: true, concedidaPor: "x" });
-    assert.equal(c.motivo, "Motivo válido aqui"); assert.equal(c.somenteFinanceiro, true);
-    assert.ok(!("concedidaPor" in c) && !("concedida_por" in c));
-    assert.match(c.expiraEm, /^2099-01-0\dT/);
-  });
-  test("três níveis oferecidos", () => assert.deepEqual(NIVEIS.map((n) => n.valor), ["leitura", "operador", "gestor"]));
-});
-
-describe("situação e revogação", () => {
-  const agora = Date.parse("2026-06-01T00:00:00Z");
-  test("revogada > expirada > ativa (calculado quando o servidor não envia)", () => {
-    assert.equal(situacaoDe({ revogada_em: "2026-01-01", expira_em: "2020-01-01" }, agora), "revogada");
-    assert.equal(situacaoDe({ expira_em: "2026-05-01T00:00:00Z" }, agora), "expirada");
-    assert.equal(situacaoDe({ expira_em: "2026-07-01T00:00:00Z" }, agora), "ativa");
-    assert.equal(situacaoDe({ situacao: "revogada" }, agora), "revogada");
-  });
-  test("revogada não pode ser revogada de novo; expirada ainda pode (limpa o registro)", () => {
-    assert.equal(podeRevogar({ revogada_em: "2026-01-01" }), false);
-    assert.equal(podeRevogar({ expira_em: "2020-01-01" }), true);
-  });
-  test("motivo da revogação exige 10+ caracteres", () => {
-    assert.equal(validarMotivoRevogacao("curto").ok, false);
-    assert.equal(validarMotivoRevogacao("Mudou de função na empresa").ok, true);
+  test("mensagem do servidor ou padrão; nada de MFA na tela", () => {
+    assert.equal(estadoDaEscrita({ escritaLiberada: false, mensagem: "Desligada" }).mensagem, "Desligada");
+    assert.match(estadoDaEscrita(undefined).mensagem, /desligada/);
+    assert.doesNotMatch(estadoDaEscrita(undefined).mensagem, /MFA|duas etapas/);
   });
 });
 
-describe("cliente HTTP usa SÓ os endpoints existentes", () => {
-  test("métodos presentes", () => {
-    for (const m of ["concessoesEstado", "concessoesLista", "concessoesPerfis", "concessoesAuditoria", "conceder", "revogarConcessao"]) {
-      assert.equal(typeof adminApi[m], "function", m);
-    }
+describe("mudanças e pedido", () => {
+  test("sem mexer: nada a salvar e pedido vazio", () => {
+    const m = mudancas(inicial, copia());
+    assert.equal(m.total, 0);
+    assert.deepEqual(montarPedido(inicial, copia()), { habilitado: false, acessos: [] });
+  });
+  test("ligar o módulo e mudar três usuários = 4 alterações; o pedido só leva quem mudou", () => {
+    const a = copia(); a.habilitado = true; a.niveis.p1 = "operador"; a.niveis.p2 = null; a.niveis.eu = "gestor";
+    const m = mudancas(inicial, a);
+    assert.equal(m.moduloMudou, true); assert.equal(m.total, 4);
+    assert.deepEqual(montarPedido(inicial, a), { habilitado: true, acessos: [
+      { perfilId: "p1", nivel: "operador" }, { perfilId: "p2", nivel: null }, { perfilId: "eu", nivel: "gestor" },
+    ] });
+  });
+  test("voltar ao valor original desfaz a alteração", () => {
+    const a = copia(); a.niveis.p2 = "gestor"; a.niveis.p2 = "leitura";
+    assert.equal(mudancas(inicial, a).total, 0);
+  });
+  test("o pedido nunca leva concedente, empresa nem unidade", () => {
+    const a = copia(); a.niveis.p1 = "leitura";
+    const p = montarPedido(inicial, a);
+    assert.deepEqual(Object.keys(p).sort(), ["acessos", "habilitado"]);
+    assert.deepEqual(Object.keys(p.acessos[0]).sort(), ["nivel", "perfilId"]);
+  });
+});
+
+describe("resumo do que o servidor confirmou", () => {
+  test("descreve módulo, concessões e falhas", () => {
+    assert.equal(resumoDoResultado({ modulo: { unidadeLigada: true }, concedidos: 2, alterados: 1, revogados: 0, falhas: [] }),
+      "Financeiro ligado na unidade · 2 acesso(s) liberado(s) · 1 nível(is) alterado(s).");
+    assert.match(resumoDoResultado({ modulo: {}, revogados: 1, falhas: [{ perfilId: "x" }] }), /1 acesso\(s\) removido\(s\)\. 1 usuário\(s\) não puderam/);
+    assert.equal(resumoDoResultado({ modulo: {} }), "Nada precisou mudar.");
+  });
+});
+
+describe("cliente HTTP", () => {
+  test("gestão simples: leitura e gravação por unidade", () => {
+    for (const m of ["acessosFinanceirosDaUnidade", "salvarAcessosFinanceirosDaUnidade"]) assert.equal(typeof adminApi[m], "function", m);
   });
 });

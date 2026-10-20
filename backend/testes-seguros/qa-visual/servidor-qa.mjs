@@ -16,6 +16,20 @@ const PORTA = Number(process.argv[2]) || 4173;
 
 const estado = { cenario: "ambos", unidade: "uni-a", revogado: false, escritaLiberada: false };
 const chamadas = [];   // corpo das escritas recebidas (só para conferir o que a tela envia)
+// Acessos financeiros da tela simples (uma unidade fictícia): você (SuperAdmin), duas pessoas e uma que falha ao gravar.
+const acessosIniciais = () => ({ habilitado: false, usuarios: [
+  { id: "perfil-su", nome: "Usuária QA", email: "qa@exemplo.invalid", propria: true, nivel: null, elegivel: true },
+  { id: "perfil-1", nome: "Marina Souza", email: "marina@exemplo.invalid", propria: false, nivel: "operador", elegivel: true },
+  { id: "perfil-4", nome: "Bruno Dias", email: "bruno@exemplo.invalid", propria: false, nivel: null, elegivel: true },
+  { id: "perfil-falha", nome: "Caio Teste", email: "caio@exemplo.invalid", propria: false, nivel: null, elegivel: true },
+  { id: "perfil-ex", nome: "Usuário sem vínculo ativo", email: null, propria: false, nivel: "leitura", elegivel: false },
+] });
+let acessos = acessosIniciais();
+const estadoDosAcessos = (unidade) => ({
+  unidade: { id: unidade.id, nome: unidade.nome, organizacaoId: "org-qa" }, habilitado: acessos.habilitado,
+  escritaLiberada: estado.escritaLiberada, mensagem: estado.escritaLiberada ? null : "A administração de acessos financeiros está desligada neste ambiente.",
+  usuarios: acessos.usuarios.map((u) => ({ ...u })),
+});
 
 const UNIDADES = [{ id: "uni-a", nome: "Unidade A (Centro)", ativo: true }, { id: "uni-b", nome: "Unidade B (Norte)", ativo: true }];
 const TODAS = ["dashboard", "products_cmv", "ingredients", "sales", "ifood_dashboard", "monthly_bonus", "ifood", "inteligencia", "agente_ia", "parser_food_delivery"];
@@ -57,7 +71,7 @@ app.get("/api/config", (_q, r) => r.json({ supabaseUrl: "http://127.0.0.1:9", su
 app.get("/qa/supabase-stub.js", (_q, r) => r.type("js").send(readFileSync(path.join(aqui, "supabase-stub.js"))));
 app.all("/qa/cenario", (q, r) => {
   const nome = q.query.nome ?? q.body?.nome;
-  if (nome) { estado.cenario = String(nome); estado.revogado = false; estado.unidade = "uni-a"; chamadas.length = 0; }
+  if (nome) { estado.cenario = String(nome); estado.revogado = false; estado.unidade = "uni-a"; chamadas.length = 0; acessos = acessosIniciais(); }
   r.json(estado);
 });
 app.all("/qa/escrita", (q, r) => { estado.escritaLiberada = q.query.on === "1"; r.json(estado); });
@@ -108,6 +122,27 @@ api.get(P + "/auditoria", (_q, r) => r.json({ data: [
 api.get(P, (q, r) => r.json({ data: q.query.incluirRevogadas === "true" ? concessoes : concessoes.filter((c) => !c.revogada_em) }));
 api.post(P, (q, r) => { chamadas.push({ rota: "conceder", corpo: q.body }); r.status(estado.escritaLiberada ? 201 : 403).json(estado.escritaLiberada ? { data: { id: "c-novo" } } : { error: "bloqueado", details: { codigo: "CONCESSOES_BLOQUEADAS" } }); });
 api.post(P + "/:id/revogar", (q, r) => { chamadas.push({ rota: "revogar", id: q.params.id, corpo: q.body }); r.status(estado.escritaLiberada ? 200 : 403).json(estado.escritaLiberada ? { data: { id: q.params.id } } : { error: "bloqueado", details: { codigo: "CONCESSOES_BLOQUEADAS" } }); });
+// Gestão simples por unidade (tela atual do Acesso Financeiro). Grava em memória só quando a escrita está liberada.
+api.get(P + "/unidades/:id/acessos", (q, r) => {
+  const unidade = UNIDADES.find((u) => u.id === q.params.id);
+  if (!unidade) return r.status(404).json({ error: "Unidade não encontrada." });
+  r.json({ data: estadoDosAcessos(unidade) });
+});
+api.put(P + "/unidades/:id/acessos", (q, r) => {
+  chamadas.push({ rota: "acessos", id: q.params.id, corpo: q.body });
+  if (!estado.escritaLiberada) return r.status(403).json({ error: "A administração de acessos financeiros está desligada neste ambiente.", details: { codigo: "CONCESSOES_BLOQUEADAS" } });
+  const unidade = UNIDADES.find((u) => u.id === q.params.id);
+  const res = { modulo: { unidadeLigada: !acessos.habilitado && q.body.habilitado, unidadeDesligada: acessos.habilitado && !q.body.habilitado }, concedidos: 0, alterados: 0, revogados: 0, inalterados: 0, falhas: [] };
+  acessos.habilitado = q.body.habilitado === true;
+  for (const a of q.body.acessos ?? []) {
+    const u = acessos.usuarios.find((x) => x.id === a.perfilId);
+    if (!u) continue;
+    if (a.perfilId === "perfil-falha" && a.nivel) { res.falhas.push({ perfilId: a.perfilId, mensagem: "Concessão financeira: o perfil não tem vínculo ativo com a unidade/empresa." }); continue; }
+    if (!u.nivel && a.nivel) res.concedidos += 1; else if (u.nivel && !a.nivel) res.revogados += 1; else if (u.nivel !== a.nivel) res.alterados += 1;
+    u.nivel = a.nivel;
+  }
+  r.json({ data: { ...res, estado: estadoDosAcessos(unidade) } });
+});
 api.use((_q, r) => r.json({ data: [] }));       // todo o resto: vazio
 app.use("/api/v1", api);
 

@@ -49,7 +49,8 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
     "123_checklist_operacional_modulo.sql", "123_rollback.sql",
     // 124 = FINALIDADE/AMBIENTE por conexão (Financial de homologação + Order de produção na mesma unidade); 125 = remove o índice
     // "uma conexão viva por unidade" (etapa separada, só depois de o código novo estar homologado).
-    "124_ifood_conexao_finalidade.sql", "124_rollback.sql", "125_ifood_conexao_remove_indice_unidade.sql", "125_rollback.sql"]);
+    "124_ifood_conexao_finalidade.sql", "124_rollback.sql", "125_ifood_conexao_remove_indice_unidade.sql", "125_rollback.sql",
+      "126_financeiro_autoconcessao_superadmin.sql", "126_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });
