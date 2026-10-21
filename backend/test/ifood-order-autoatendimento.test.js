@@ -67,8 +67,8 @@ function ambiente({ ligado = true, canary = [], piloto = [SACI, NORTH] } = {}) {
   const auditoria = [];
   const auditar = async (x) => { auditoria.push(x); };
   /** OAuth Order concluído na unidade: conexão `pendente` sem merchant + credencial com o token emitido. */
-  const autorizar = ({ unidadeId = FEIRA, organizacaoId = ORG_FEIRA, lojas = [M_FEIRA], modulos, status = "ativa", token } = {}) => {
-    const c = a.conectar({ unidadeId, organizacaoId, apps: ["order"], finalidade: "pedidos_producao" });
+  const autorizar = ({ unidadeId = FEIRA, organizacaoId = ORG_FEIRA, lojas = [M_FEIRA], modulos, status = "ativa", token, finalidade = "pedidos_producao" } = {}) => {
+    const c = a.conectar({ unidadeId, organizacaoId, apps: ["order"], ...(finalidade ? { finalidade } : {}) });
     const k = a.credenciais.find((x) => x.conexao_id === c.id && x.app_type === "order");
     k.access_token_cifrado = cifrar(token ?? jwt(lojas, modulos));
     k.status = status;
@@ -669,6 +669,21 @@ describe("revisão — conexão que já tem loja (legado: Analytics/Financial pe
     const svcVinculo = await import("../src/modules/ifood/ifoodMerchantVinculo.service.js");
     const r = await svcVinculo.informarMerchant({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, merchantId: M_FEIRA, usuarioId: GESTOR, deps: a.deps });
     assert.deepEqual([r.jaVinculada, a.linhas.length], [true, 0]);
+  });
+});
+
+describe("pré-voo — caminho real da Feiraguay (unidade sem iFood, fora da homologação Financial)", () => {
+  test("OAuth cria conexão `legado` nova sem loja: ativa, entra no escopo pelo vínculo validado e o status diz Conectado", async () => {
+    const a = ambiente({ canary: [FEIRA] });
+    const c = a.autorizar({ finalidade: null });   // decidirDestinoOAuth: sem conexão viva e sem separação = cria `legado`
+    assert.equal(c.finalidade, undefined, "linha sem finalidade = legado (finalidadeDaLinha)");
+    const r = await a.ativar();
+    assert.equal(r.estado, auto.ESTADOS.CONECTADO);
+    assert.deepEqual([c.merchant_id, c.status], [M_FEIRA, "ativa"]);
+    assert.deepEqual(a.linhas.map((v) => [v.estado, v.conexao_id, v.merchant_id]), [["validado", c.id, M_FEIRA]]);
+    assert.deepEqual(a.chamadas.polling, [[M_FEIRA]]);
+    assert.equal(a.chamadas.ack.length, 0);
+    assert.equal((await a.resumo()).estado, auto.ESTADOS.CONECTADO);
   });
 });
 
