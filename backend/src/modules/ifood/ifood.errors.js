@@ -90,6 +90,11 @@ const CATALOGO = {
     "A validação final da loja ainda não está liberada. Ela é feita em janela acompanhada pelo suporte da plataforma."],
   IFOOD_VALIDACAO_SEM_EVIDENCIA: [400,
     "Para validar a loja, confirme a conferência no Portal do Parceiro e a confirmação operacional."],
+  // Autoatendimento do app Order (ifoodOrderAutoatendimento.service.js).
+  IFOOD_AUTOATENDIMENTO_DESLIGADO: [403,
+    "A conexão automática de pedidos do iFood ainda não está liberada neste ambiente. Fale com o suporte da plataforma."],
+  IFOOD_AUTOATENDIMENTO_LOJA_INVALIDA: [400,
+    "Essa loja não está entre as lojas autorizadas nesta conexão. Atualize a página e escolha uma das lojas listadas."],
 
   // --- Financial (Fase 2 — Homologação) ---
   IFOOD_FINANCIAL_PERIODO_INVALIDO: [400,

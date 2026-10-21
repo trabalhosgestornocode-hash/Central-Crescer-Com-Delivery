@@ -61,6 +61,9 @@ export async function subirServidorOrderOnly({ raizFrontend, pagina }) {
     async reivindicarSessaoOAuth({ sessaoId }) { const s = sessoes.find((x) => x.id === sessaoId); if (s.reivindicada) return false; s.reivindicada = true; return true; },
     async fecharSessaoOAuth({ sessaoId, status }) { const s = sessoes.find((x) => x.id === sessaoId); if (s) s.status = status; },
     async obterConexaoViva(p) { return ambiente.repo.obterConexaoViva(p); },
+    // Proteção da credencial (ifoodCredencialProtecao.js): lê a credencial atual da conexão e as lojas adicionais (aqui nenhuma).
+    async obterCredencial(p) { return ambiente.repo.obterCredencial(p); },
+    async listarLojasExtrasVivasDaConexao() { return []; },
     async obterOuCriarConexao({ organizacaoId, unidadeId }) {
       const viva = await ambiente.repo.obterConexaoViva({ organizacaoId, unidadeId });
       if (viva) return viva;

@@ -43,6 +43,14 @@ export const VINCULO_MANUAL = Object.freeze({
   validadeVerificacaoMs: 24 * 3_600_000,    // a checagem de autorização vale por 24 h para a validação final
 });
 
+/**
+ * Modo AUTOATENDIMENTO (ifoodOrderAutoatendimento.service.js): a loja não foi digitada, foi PROVADA pelo token Order que o próprio iFood
+ * emitiu nesta autorização (claim `merchant_scope` com order+events). Essa prova substitui a conferência visual e as duas declarações
+ * da validação manual. É um Symbol de propósito: só código do servidor o passa — nunca chega por corpo de requisição.
+ * Liberado por IFOOD_ORDER_SELF_SERVICE_ENABLED (não pela flag da janela acompanhada).
+ */
+export const MODO_AUTOATENDIMENTO = Symbol("ifood.order.autoatendimento");
+
 export const MOTIVOS = Object.freeze({
   SEM_AUTORIZACAO: "SEM_AUTORIZACAO",
   MERCHANT_JA_VINCULADO: "MERCHANT_JA_VINCULADO",
@@ -119,14 +127,15 @@ export function resumirVinculo(v) {
  * Repetir com o MESMO ID é seguro (devolve o vínculo em aberto como está); com OUTRO ID, o anterior é
  * cancelado e nasce um novo `informado` (a conferência visual recomeça).
  */
-export async function informarMerchant({ organizacaoId, unidadeId, merchantId, usuarioId, deps }) {
+export async function informarMerchant({ organizacaoId, unidadeId, merchantId, usuarioId, modo = null, deps }) {
   const { repo, vinculos, token, agora, log } = dependencias(deps);
   const id = normalizarMerchantId(merchantId);
   const conexao = await exigirOrderDaUnidade({ organizacaoId, unidadeId, repo, token });
 
   if (conexao.merchant_id) {
-    if (conexao.merchant_id === id) return { vinculo: null, jaVinculada: true };
-    throw ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_JA_VINCULADO);
+    // Autoatendimento: a conexão já tem ESTA loja (Merchant API) mas ainda não está no escopo do Order — o vínculo registra a verificação dela.
+    if (conexao.merchant_id === id && !(modo === MODO_AUTOATENDIMENTO && conexao.status === "ativa")) return { vinculo: null, jaVinculada: true };
+    if (conexao.merchant_id !== id) throw ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_JA_VINCULADO);
   }
   await exigirMerchantLivre({ merchantId: id, conexaoId: conexao.id, repo, vinculos });
 
@@ -199,9 +208,9 @@ export async function cancelarMerchantInformado({ organizacaoId, unidadeId, usua
  *   * qualquer outra falha -> nada muda no estado (a tentativa conta); o erro sobe.
  * Nunca grava evento, nunca reconhece (ACK), nunca promove a conexão.
  */
-export async function verificarAutorizacao({ organizacaoId, unidadeId, usuarioId, deps }) {
+export async function verificarAutorizacao({ organizacaoId, unidadeId, usuarioId, modo = null, deps }) {
   const { repo, vinculos, token, client, http, agora, log } = dependencias(deps);
-  if (!token.validacaoMerchantManualHabilitada()) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
+  if (!(modo === MODO_AUTOATENDIMENTO ? token.autoatendimentoLiberadoParaUnidade?.(unidadeId) === true : token.validacaoMerchantManualHabilitada())) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
   const conexao = await exigirOrderDaUnidade({ organizacaoId, unidadeId, repo, token });
 
   const aberto = await vinculos.obterVinculoAberto({ organizacaoId, unidadeId, conexaoId: conexao.id });
@@ -262,12 +271,13 @@ export async function verificarAutorizacao({ organizacaoId, unidadeId, usuarioId
  * Não chama o iFood.
  */
 export async function concluirValidacao({
-  organizacaoId, unidadeId, merchantId, evidenciaPortalParceiro, confirmacaoOperacional, usuarioId, deps,
+  organizacaoId, unidadeId, merchantId, evidenciaPortalParceiro, confirmacaoOperacional, usuarioId, modo = null, deps,
 }) {
   const { repo, vinculos, token, agora, log } = dependencias(deps);
-  if (!token.validacaoMerchantManualHabilitada()) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
+  if (!(modo === MODO_AUTOATENDIMENTO ? token.autoatendimentoLiberadoParaUnidade?.(unidadeId) === true : token.validacaoMerchantManualHabilitada())) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
   const id = normalizarMerchantId(merchantId);
-  if (evidenciaPortalParceiro !== true || confirmacaoOperacional !== true) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_SEM_EVIDENCIA);
+  // Autoatendimento: a evidência é o token (ver MODO_AUTOATENDIMENTO) + a verificação de autorização exigida logo abaixo.
+  if (modo !== MODO_AUTOATENDIMENTO && (evidenciaPortalParceiro !== true || confirmacaoOperacional !== true)) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_SEM_EVIDENCIA);
   const conexao = await exigirOrderDaUnidade({ organizacaoId, unidadeId, repo, token });
 
   const aberto = await vinculos.obterVinculoAberto({ organizacaoId, unidadeId, conexaoId: conexao.id });
@@ -291,7 +301,10 @@ export async function concluirValidacao({
   const dono = await repo.conexaoVivaDoMerchant({ merchantId: id });
   if (dono && dono.id !== conexao.id) { await rejeitarDuplicado(); throw ifoodErro(IFOOD_ERROS.IFOOD_VINCULO_DUPLICADO); }
 
-  try {
+  // A conexão já tem ESTA loja ativa (autoatendimento de uma conexão cuja loja veio da Merchant API): nada a regravar — nome e razão social
+  // da Merchant API são preservados. Só o vínculo passa a `validado`.
+  const jaComEstaLoja = conexao.merchant_id === id && conexao.status === "ativa";
+  if (!jaComEstaLoja) try {
     // Mesma gravação do fluxo antigo (conexão `ativa`). Nome/razão social ficam vazios: não há Merchant API.
     await repo.definirMerchantDaConexao({ organizacaoId, unidadeId, conexaoId: conexao.id, merchantId: id, nome: null, razaoSocial: null });
   } catch (e) {
@@ -303,6 +316,6 @@ export async function concluirValidacao({
     organizacaoId, unidadeId, id: aberto.id, seEstado: "aguardando_validacao",
     campos: { estado: "validado", validado_por: usuarioId ?? null, validado_em: quando },
   });
-  log("info", "merchant_manual.validado", { organizacaoId, unidadeId, conexaoId: conexao.id, merchantId: mascararId(id), por: usuarioId });
+  log("info", modo === MODO_AUTOATENDIMENTO ? "order_autoatendimento.validado" : "merchant_manual.validado", { organizacaoId, unidadeId, conexaoId: conexao.id, merchantId: mascararId(id), por: usuarioId });
   return { vinculo: resumirVinculo(validado ?? { ...aberto, estado: "validado", validado_em: quando }) };
 }

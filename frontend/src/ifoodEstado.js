@@ -582,6 +582,8 @@ const ERROS_DE_EVENTOS = new Set(["WORKER_INATIVO", "EVENTOS_COM_FALHA"]);
  *   podeConectar: boolean }}
  */
 export function derivarEstadoOrder(order) {
+  // Autoatendimento (flag do servidor): os estados da ativação substituem as etapas manuais da loja.
+  if (order?.autoatendimento?.habilitado === true) return estadoOrderAutoatendimento(order);
   if (!order) {
     return { disponivel: false, chave: "indisponivel", rotulo: "Ainda não disponível para esta unidade", classe: "muted", linhas: [], erro: null, podeConectar: false };
   }
@@ -603,6 +605,59 @@ export function derivarEstadoOrder(order) {
       ["Último pedido recebido", order.ultimoPedido ?? null, "data"],
     ],
   };
+}
+
+/** Motivos do autoatendimento que só uma NOVA autorização no iFood resolve (o botão reabre o assistente). */
+const MOTIVOS_RECONECTAR = new Set(["REAUTORIZAR", "SEM_LOJA_NO_TOKEN", "SEM_AUTORIZACAO", "LOJA_DE_OUTRA_UNIDADE", "LOJA_CONECTADA_FORA_DO_TOKEN", "MUITAS_LOJAS"]);
+/** Motivos em que "Verificar novamente" não resolve (o servidor recusaria): a tela só explica o que fazer. */
+const MOTIVOS_SEM_VERIFICAR = new Set(["TENTATIVAS_ESGOTADAS"]);
+
+/**
+ * Bloco `order` com `autoatendimento` -> card "Pedidos / Order" nos estados da conexão automática:
+ *   nao_conectado   "Não conectado" | "Desconectado"   -> botão "Conectar pedidos iFood"
+ *   validando_loja  "Validando loja"                   -> "Verificar novamente" (ou o horário da próxima verificação)
+ *   acao_necessaria "Ação necessária" + mensagem       -> escolher a loja | reconectar | verificar | desconectar e recomeçar
+ *   conectado       "Conectado — recebendo pedidos" (já chegou pedido: recebimento COMPROVADO) ou
+ *                   "Conectado — aguardando o primeiro pedido" (conexão ativa, recebimento ainda não comprovado)
+ * `acaoAuto`: 'verificar' | 'escolher' | 'reconectar' | null. Nunca mostra o merchant inteiro (só o mascarado do servidor).
+ */
+function estadoOrderAutoatendimento(order) {
+  const a = order.autoatendimento;
+  const linhasBase = [["Última autenticação", order.ultimaAutenticacao ?? null, "data"]];
+  const linhaLoja = a.lojaMascarada ? [["Loja", a.lojaMascarada, "texto"]] : [];
+  const base = { disponivel: true, podeConectar: false, erro: null, autoatendimento: true, acaoAuto: null, opcoes: [], rotuloConectar: "Conectar pedidos iFood" };
+  if (order.status === "reauth_required" || (a.estado === "acao_necessaria" && a.motivo === "REAUTORIZAR")) {
+    return { ...base, chave: "reauth", rotulo: "Ação necessária", classe: "bad", linhas: [], podeConectar: true, rotuloConectar: "Reconectar pedidos iFood",
+      erro: { codigo: "REAUTORIZAR", mensagem: a.mensagem ?? "A autorização do app de pedidos expirou. Reconecte." } };
+  }
+  if (a.estado === "conectado") {
+    const erroOrder = order.erroAtual && !ERROS_DE_EVENTOS.has(order.erroAtual.codigo) ? order.erroAtual : null;
+    // "Recebendo pedidos" só com PROVA (um pedido desta loja já chegou à Central); sem ela, a conexão está ativa e aguarda o primeiro.
+    const comprovado = !!order.ultimoPedido;
+    return { ...base, chave: "conectado", rotulo: comprovado ? "Conectado — recebendo pedidos" : "Conectado — aguardando o primeiro pedido", classe: "ok", erro: erroOrder,
+      recebimentoComprovado: comprovado,
+      instrucao: comprovado ? null : "A conexão está ativa. Assim que o primeiro pedido do iFood chegar, ele aparece no Checklist desta unidade.",
+      linhas: [...linhasBase, ...linhaLoja, ["Último pedido recebido", order.ultimoPedido ?? null, "data"]] };
+  }
+  if (a.estado === "validando_loja") {
+    const proxima = a.proximaVerificacaoEm ? [["Nova verificação a partir de", a.proximaVerificacaoEm, "data"]] : [];
+    return { ...base, chave: "validando_loja", rotulo: "Validando loja", classe: "info", lojaPendente: true, acaoAuto: a.podeVerificar === false ? null : "verificar",
+      linhas: [...linhasBase, ...linhaLoja, ...proxima],
+      instrucao: a.mensagem ?? "Estamos confirmando com o iFood a loja autorizada. Os pedidos começam a chegar assim que a loja for confirmada." };
+  }
+  if (a.estado === "acao_necessaria") {
+    const escolher = a.motivo === "VARIAS_LOJAS" && Array.isArray(a.opcoes) && a.opcoes.length > 0;
+    const reconectar = MOTIVOS_RECONECTAR.has(a.motivo);
+    return { ...base, chave: "acao_necessaria", rotulo: "Ação necessária", classe: "bad", lojaPendente: true, linhas: [...linhasBase, ...linhaLoja],
+      acaoAuto: escolher ? "escolher" : reconectar ? "reconectar" : MOTIVOS_SEM_VERIFICAR.has(a.motivo) ? null : "verificar", opcoes: escolher ? a.opcoes : [],
+      podeConectar: reconectar, rotuloConectar: "Reconectar pedidos iFood",
+      erro: { codigo: a.motivo ?? "ACAO_NECESSARIA", mensagem: a.mensagem ?? "A conexão dos pedidos precisa de uma ação." }, instrucao: null };
+  }
+  // Já teve os pedidos conectados e desconectou (pela Central): "Desconectado", com a data. Reconectar cria uma conexão nova.
+  if (a.desconectadoEm) {
+    return { ...base, chave: "nao_conectado", rotulo: "Desconectado", classe: "muted", linhas: [["Desconectado em", a.desconectadoEm, "data"]], podeConectar: order.configurado === true };
+  }
+  return { ...base, chave: "nao_conectado", rotulo: "Não conectado", classe: "muted", linhas: [], podeConectar: order.configurado === true };
 }
 
 /** Motivo da rejeição do vínculo manual da loja, em linguagem de gestor. */

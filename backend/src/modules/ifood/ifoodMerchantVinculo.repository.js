@@ -97,3 +97,24 @@ export async function cancelarVinculosAbertos({ organizacaoId, unidadeId, conexa
     .in("estado", ESTADOS_ABERTOS).select("id")) ?? [];
   return linhas.length;
 }
+
+/**
+ * Unidades cuja loja passou pela ATIVAÇÃO (autoatendimento): vínculo `validado` de uma conexão `ativa` cujo merchant e unidade são
+ * os MESMOS do vínculo. É o que o autoatendimento soma ao piloto no escopo do poller (ifoodToken.service.js#unidadesOrderNoEscopo,
+ * ligado em worker-ifood/runtime.js). Consulta GLOBAL de propósito (o poller atende todas as empresas), mas devolve só ids de unidade.
+ * Vínculo validado de conexão revogada, ou de um merchant que não é mais o da conexão, NÃO conta.
+ * @returns {Promise<string[]>}
+ */
+export async function listarUnidadesComOrderAtivado({ db = supabase } = {}) {
+  const vinculos = ok(await db.from(TABELA).select("conexao_id, unidade_id, merchant_id").eq("estado", "validado")) ?? [];
+  if (!vinculos.length) return [];
+  const ids = [...new Set(vinculos.map((v) => v.conexao_id))];
+  const conexoes = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    conexoes.push(...(ok(await db.from("ifood_conexoes").select("id, unidade_id, merchant_id").in("id", ids.slice(i, i + 200)).eq("status", "ativa")) ?? []));
+  }
+  const porId = new Map(conexoes.map((c) => [c.id, c]));
+  return [...new Set(vinculos
+    .filter((v) => { const c = porId.get(v.conexao_id); return c && c.merchant_id === v.merchant_id && c.unidade_id === v.unidade_id; })
+    .map((v) => v.unidade_id))];
+}

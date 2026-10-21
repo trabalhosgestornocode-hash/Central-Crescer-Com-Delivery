@@ -27,6 +27,8 @@ export async function montarRuntimeEventsIfood({ env = process.env, cfg }) {
   const tokenService = await import("../modules/ifood/ifoodToken.service.js");
   const repoEvents = await import("../modules/ifood/ifoodEvents.repository.js");
   const repoOrder = await import("../modules/ifood/ifoodOrder.repository.js");
+  // Autoatendimento do Order: as unidades com ativação concluída entram no escopo do poller (só com a flag; ver unidadesOrderNoEscopo).
+  const { listarUnidadesComOrderAtivado } = await import("../modules/ifood/ifoodMerchantVinculo.repository.js");
   const { criarPoller, criarLoopDoPoller } = await import("../modules/ifood/ifoodEvents.poller.js");
   const { MODOS_AUTH } = await import("../modules/ifood/ifoodAuthProvider.js");
   const { centralizadoTestePermitido } = await import("../modules/ifood/ifood.ambienteTeste.js");
@@ -39,7 +41,7 @@ export async function montarRuntimeEventsIfood({ env = process.env, cfg }) {
 
   // Identidade desta instância no lease. Em deploy com duas instâncias, cada uma tem a sua.
   const holder = `${os.hostname()}:${process.pid}:${randomBytes(4).toString("hex")}`;
-  const repo = { ...repoEvents, ...repoOrder };
+  const repo = { ...repoEvents, ...repoOrder, listarUnidadesComOrderAtivado };
   // Order Details (Checkpoint C) exige a migration 102: só liga com IFOOD_ORDER_DETAILS_ENABLED=true.
   const detalhes = env.IFOOD_ORDER_DETAILS_ENABLED === "true" ? {} : null;
   const poller = criarPoller({ repo, token: tokenService, holder, leaseTtlS: cfg.leaseTtlS, detalhes });

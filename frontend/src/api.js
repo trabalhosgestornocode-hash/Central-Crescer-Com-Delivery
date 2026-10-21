@@ -457,6 +457,8 @@ export const ifoodVincularMerchant = (merchantId) => postJson(`${IFOOD}/merchant
 // (Corrigir o ID = informar de novo: o servidor encerra o anterior.)
 export const ifoodInformarLoja = (merchantId) => postJson(`${IFOOD}/merchants/manual`, { merchantId });
 export const ifoodConferirLoja = (merchantId) => postJson(`${IFOOD}/merchants/manual/conferir`, { merchantId });
+// Autoatendimento do app Order: verifica/ativa a loja provada pelo token desta unidade. `ref` (opcional) = loja escolhida (ref opaco do /status).
+export const ifoodAtivarPedidos = (ref = null) => postJson(`${IFOOD}/pedidos/ativacao`, ref ? { ref } : {});
 // Desconecta UMA conexão (`conexaoId` do /status). Sem `conexaoId` só vale para a unidade com uma conexão só (o servidor recusa se houver mais de uma).
 export const ifoodDesconectar = (conexaoId = null) => delJson(`${IFOOD}/${conexaoId ? `?conexaoId=${encodeURIComponent(conexaoId)}` : ""}`);
 // Pedidos iFood da unidade — leitura do banco local (estado oficial vindo dos eventos); não chama o iFood.

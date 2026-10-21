@@ -52,6 +52,11 @@ ifoodRouter.delete("/merchants/manual", gerenciar, limitarVinculoManual, control
 ifoodRouter.post("/merchants/manual/verificar-autorizacao", gerenciar, limitarVinculoManual, controller.verificarAutorizacaoMerchantManual);
 ifoodRouter.post("/merchants/manual/validar", gerenciar, limitarVinculoManual, controller.validarMerchantManual);
 
+// --- Autoatendimento do app Order (IFOOD_ORDER_SELF_SERVICE_ENABLED) ---
+// Verifica/ativa a loja provada pelo token Order desta unidade. Chama o iFood UMA vez por tentativa (consulta isolada, sem ACK);
+// o freio do vínculo (3 consultas, 10 min entre elas) vale além deste limite por usuário.
+ifoodRouter.post("/pedidos/ativacao", gerenciar, limitarVinculoManual, controller.ativarPedidos);
+
 // --- Financial (Fase 2 — Homologação, READ-ONLY) — chama a API externa ---
 const limitarFinancial = limitarPorUsuario({ escopo: "ifood:financial", max: IFOOD_RATE_LIMIT.maxFinancial });
 

@@ -50,6 +50,8 @@ try {
 // Unidades liberadas para o piloto do app Order (fail-closed: vazio = nenhuma). Valor inválido é
 // ignorado e só CONTADO no log — os ids nunca são impressos.
 const ifoodOrderPiloto = parsearUnidadesPiloto(process.env.IFOOD_ORDER_PILOT_UNITS);
+// Liberação GRADUAL do autoatendimento do Order (opcional): com a lista preenchida, só estas unidades. Vazia = todas com o módulo `ifood`.
+const ifoodOrderAutoatendimento = parsearUnidadesPiloto(process.env.IFOOD_ORDER_SELF_SERVICE_UNITS);
 if (ifoodOrderPiloto.ignorados > 0) {
   console.warn(`[config] IFOOD_ORDER_PILOT_UNITS: ${ifoodOrderPiloto.ignorados} valor(es) ignorado(s) (não são UUID de unidade).`);
 }
@@ -123,6 +125,12 @@ export const config = {
     // Desligada por padrão: só com IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED=true, em janela acompanhada.
     // Informar e conferir o ID da loja NÃO dependem desta flag (não chamam o iFood).
     orderMerchantValidacao: process.env.IFOOD_ORDER_MERCHANT_VALIDACAO_ENABLED === "true",
+    // AUTOATENDIMENTO do app Order (ifoodOrderAutoatendimento.service.js): com IFOOD_ORDER_SELF_SERVICE_ENABLED=true, qualquer unidade
+    // com o módulo `ifood` conecta os pedidos sozinha (OAuth -> loja provada pelo token -> verificação isolada -> polling), sem entrar
+    // em IFOOD_ORDER_PILOT_UNITS. Uma flag ÚNICA do ambiente (nunca por unidade). Desligada por padrão: só o piloto, como antes.
+    orderAutoatendimento: process.env.IFOOD_ORDER_SELF_SERVICE_ENABLED === "true",
+    // IFOOD_ORDER_SELF_SERVICE_UNITS: restringe o autoatendimento a estas unidades durante a liberação gradual (homologação). Vazia = sem restrição.
+    orderAutoatendimentoUnidades: ifoodOrderAutoatendimento.unidades,
     // Aplicativo distribuído de teste — só usado quando `homologacao` é true.
     test: {
       clientId: process.env.IFOOD_TEST_CLIENT_ID || null,

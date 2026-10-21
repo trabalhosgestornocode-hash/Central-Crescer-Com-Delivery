@@ -85,9 +85,11 @@ export function criarPoller({
   // Checkpoint C: `detalhes = { client? }` liga o passo "buscar Order Details dos pedidos pendentes" no fim de
   // cada ciclo. Desligado por padrão (o poller de Events continua funcionando sozinho).
   detalhes = null,
-  // Unidades autorizadas (ids normalizados). Padrão: o que o token service lê de IFOOD_ORDER_PILOT_UNITS;
-  // sem essa fonte = lista vazia (fail-closed). Nunca "todas as conexões" por omissão.
-  unidadesPiloto = () => token?.unidadesPilotoOrder?.() ?? [],
+  // Unidades autorizadas (ids normalizados; pode ser assíncrona). Padrão: IFOOD_ORDER_PILOT_UNITS + (autoatendimento ligado) as unidades
+  // com a ativação concluída (token.unidadesOrderNoEscopo); sem essa fonte = só o piloto. Nunca "todas as conexões" por omissão.
+  unidadesPiloto = () => (typeof token?.unidadesOrderNoEscopo === "function"
+    ? token.unidadesOrderNoEscopo({ listarAtivadas: repo?.listarUnidadesComOrderAtivado ? () => repo.listarUnidadesComOrderAtivado() : undefined, log })
+    : token?.unidadesPilotoOrder?.() ?? []),
 }) {
   if (!holder) throw new Error("holder é obrigatório");
   let temLease = false;
@@ -238,7 +240,8 @@ export function criarPoller({
 
     // PILOTO: a lista é lida a cada ciclo (hoje vem do `config`, fixado no boot — mudar a variável só vale depois
     // do restart/deploy). Vazia = nenhuma unidade: o ciclo não chama o iFood, não renova token e não faz ACK.
-    const piloto = (unidadesPiloto() ?? []).map((u) => String(u).toLowerCase());
+    // Autoatendimento: o escopo também inclui as unidades com ativação concluída, lidas do banco a cada ciclo (vale sem restart).
+    const piloto = ((await unidadesPiloto()) ?? []).map((u) => String(u).toLowerCase());
     autorizadas = new Set();
     merchantsAutorizados = new Set();
     merchantsForaDoPiloto = new Set();

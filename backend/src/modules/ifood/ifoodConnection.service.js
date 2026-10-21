@@ -21,7 +21,8 @@ import { ifoodLog, mascararId } from "./ifood.logsafe.js";
 import { IFOOD_APPS, IFOOD_APP_TYPES, IFOOD_APP_ORDER } from "./ifood.constants.js";
 import * as repositorio from "./ifood.repository.js";
 import * as merchantService from "./ifoodMerchant.service.js";
-import { estaEmHomologacaoIfood, orderLiberadoParaUnidade, validacaoMerchantManualHabilitada } from "./ifoodToken.service.js";
+import { estaEmHomologacaoIfood, orderLiberadoParaUnidade, validacaoMerchantManualHabilitada, autoatendimentoLiberadoParaUnidade } from "./ifoodToken.service.js";
+import { resumoParaStatus as resumoAutoatendimento, ESTADOS as ESTADOS_AUTOATENDIMENTO } from "./ifoodOrderAutoatendimento.service.js";
 import * as vinculoRepositorio from "./ifoodMerchantVinculo.repository.js";
 import { resumirVinculo, MOTIVOS } from "./ifoodMerchantVinculo.service.js";
 import { usarHomologacaoFinancial } from "./ifoodFinancialHomologacao.js";
@@ -96,7 +97,7 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
       merchant: null,
       apps: appsVazio,
       // Unidade piloto sem conexão ainda: o Order aparece como "não conectado" (e não como indisponível).
-      order: orderLiberadoParaUnidade(unidadeId) ? statusOrderSemCredencial() : null,
+      order: orderLiberadoParaUnidade(unidadeId) ? await statusOrderSemCredencial({ organizacaoId, unidadeId, repo }) : null,
       atencao: { total: 0, apps: [] },
       conectadaEm: null,
       ultimaSincronizacao: null,
@@ -124,13 +125,13 @@ export async function obterStatus({ organizacaoId, unidadeId, deps = {} }) {
 
   let order;
   if (!conexaoOrder) {
-    order = orderLiberadoParaUnidade(unidadeId) ? statusOrderSemCredencial() : null;
+    order = orderLiberadoParaUnidade(unidadeId) ? await statusOrderSemCredencial({ organizacaoId, unidadeId, repo }) : null;
   } else {
     const separada = conexaoOrder.id !== conexao.id;
     const credOrder = separada ? (await repo.listarCredenciaisDaConexao({ conexaoId: conexaoOrder.id })).find((c) => c.app_type === IFOOD_APP_ORDER) : porApp.get(IFOOD_APP_ORDER);
     order = await montarStatusOrder({
       conexao: conexaoOrder, cred: credOrder, merchant: separada ? merchantDe(conexaoOrder) : merchant,
-      organizacaoId, unidadeId, repo, agora, vinculos: deps.vinculos ?? vinculoRepositorio,
+      organizacaoId, unidadeId, repo, agora, vinculos: deps.vinculos ?? vinculoRepositorio, autoatendimentoDeps: deps.autoatendimentoDeps,
     });
   }
   const conexoes = await resumirConexoes({ repo, organizacaoId, unidadeId, conexao, conexaoOrder, credenciais, order });
@@ -205,13 +206,25 @@ async function resumirLojasAdicionais({ repo, organizacaoId, unidadeId }) {
   } catch { return []; }
 }
 
-/** Bloco Order de uma unidade piloto que ainda não autorizou o app (mesma forma de montarStatusOrder). */
-function statusOrderSemCredencial() {
+/** Quando a conexão de pedidos da unidade foi desconectada pela última vez (só leitura; falha ou repositório sem a função = null). */
+async function ultimaDesconexao({ organizacaoId, unidadeId, repo }) {
+  if (typeof repo?.ultimaConexaoPedidosRevogada !== "function") return null;
+  const c = await repo.ultimaConexaoPedidosRevogada({ organizacaoId, unidadeId }).catch(() => null);
+  return c?.atualizado_em ?? null;
+}
+
+/** Bloco Order de uma unidade liberada que ainda não autorizou o app (mesma forma de montarStatusOrder). */
+async function statusOrderSemCredencial({ organizacaoId, unidadeId, repo }) {
   return {
     configurado: true, conectado: false, status: null, tokenValido: false, expiraEm: null, merchant: null,
     ultimaAutenticacao: null, tokenAtualizadoEm: null, ultimoEvento: null, ultimoAck: null, ultimoPedido: null,
     eventosComFalha: 0, worker: null, observabilidadeDisponivel: false, erroAtual: null,
     lojaValidada: false, lojaInformada: null, validacaoFinalHabilitada: false,
+    // Autoatendimento liberado para a unidade: a tela oferece "Conectar pedidos iFood" (sem a liberação: null, igual a antes).
+    // `desconectadoEm`: a unidade já teve pedidos conectados e desconectou (a tela diz "Desconectado", não "Não conectado").
+    autoatendimento: autoatendimentoLiberadoParaUnidade(unidadeId)
+      ? { habilitado: true, estado: ESTADOS_AUTOATENDIMENTO.NAO_CONECTADO, motivo: null, mensagem: null, desconectadoEm: await ultimaDesconexao({ organizacaoId, unidadeId, repo }) }
+      : null,
   };
 }
 
@@ -222,7 +235,7 @@ function statusOrderSemCredencial() {
  * Credencial já existente (ex.: unidade saiu do piloto) continua visível, para reconectar/desconectar.
  * Os sinais de Events vêm do banco (nunca do iFood); falha ao lê-los não derruba o status.
  */
-async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unidadeId, repo, agora, vinculos }) {
+async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unidadeId, repo, agora, vinculos, autoatendimentoDeps }) {
   const configurado = orderLiberadoParaUnidade(unidadeId);
   if (!configurado && !cred) return null;
   // Loja VALIDADA = merchant gravado na conexão ativa (pela Merchant API no fluxo antigo, ou pela validação
@@ -283,6 +296,10 @@ async function montarStatusOrder({ conexao, cred, merchant, organizacaoId, unida
     lojaInformada,
     // Só um booleano: a etapa de validação final existe neste ambiente (janela acompanhada)?
     validacaoFinalHabilitada: validacaoMerchantManualHabilitada(),
+    // Autoatendimento (flag do ambiente): estado da ativação para a tela. Sem a flag = null. Só leitura; nunca derruba o status.
+    autoatendimento: await resumoAutoatendimento({
+      organizacaoId, unidadeId, conexao, cred: cred ?? null, deps: { repo, vinculos, agora, ...(autoatendimentoDeps ?? {}) },
+    }).catch(() => null),
   };
 }
 
@@ -333,5 +350,5 @@ export async function desconectar({ organizacaoId, unidadeId, usuarioId, conexao
 
   ifoodLog("info", "conexao.desconectada_localmente", { organizacaoId, unidadeId, conexaoId: conexao.id, finalidade: fin, por: usuarioId });
 
-  return { ok: true, jaDesconectado: false, revogacaoNoIfood: "manual_no_portal" };
+  return { ok: true, jaDesconectado: false, revogacaoNoIfood: "manual_no_portal", conexaoId: conexao.id, finalidade: fin, pedidos: fin !== FINALIDADES.FINANCEIRO_HOMOLOGACAO };
 }

@@ -24,6 +24,7 @@ import * as tokenService from "./ifoodToken.service.js";
 import { gravarCredencialComProtecao } from "./ifoodCredencialProtecao.js";
 import { FINALIDADES, finalidadeDoApp } from "./ifoodFinalidade.js";
 import { destinoDoOAuth } from "./ifoodConexaoDestino.js";
+import * as autoatendimento from "./ifoodOrderAutoatendimento.service.js";
 
 // Política de ambiente (config), não dependência injetável: sempre o tokenService real. `order` exige a
 // unidade no piloto — checado AQUI, antes de qualquer chamada ao iFood, no início E na conclusão do OAuth.
@@ -194,5 +195,17 @@ export async function concluirAutorizacao({
     credencialSubstituida: gravacao.substituida, lojasNovasNoToken: gravacao.novasLojas?.length ?? 0, ...(loja ? { lojaAlvo: true } : {}),
   });
 
-  return { appType, status: "authorized", conexaoStatus: conexao.status, ...(loja ? { lojaAlvo: true } : {}) };
+  // AUTOATENDIMENTO (flag do ambiente): pedidos autorizados na conexão da unidade -> identifica a loja pelo token, verifica e ativa.
+  // Nunca derruba a autorização já gravada: qualquer falha vira um estado recuperável ("Verificar novamente" na tela).
+  let ativacao;
+  if (appType === IFOOD_APP_ORDER && !loja && token.autoatendimentoLiberadoParaUnidade?.(unidadeId) === true) {
+    const ativarPedidos = deps.autoatendimento?.ativar ?? autoatendimento.ativar;
+    ativacao = await ativarPedidos({ organizacaoId, unidadeId, usuarioId, ...(deps.autoatendimentoDeps ? { deps: deps.autoatendimentoDeps } : {}) })
+      .catch((e) => {
+        ifoodLog("warn", "order_autoatendimento.falhou_apos_oauth", { organizacaoId, unidadeId, codigo: e?.codigo ?? "ERRO_INTERNO" });
+        return { estado: autoatendimento.ESTADOS.VALIDANDO_LOJA, motivo: autoatendimento.MOTIVOS.VERIFICACAO_FALHOU, mensagem: null };
+      });
+  }
+
+  return { appType, status: "authorized", conexaoStatus: conexao.status, ...(loja ? { lojaAlvo: true } : {}), ...(ativacao ? { ativacao } : {}) };
 }

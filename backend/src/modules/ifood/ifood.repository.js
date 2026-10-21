@@ -266,6 +266,28 @@ export async function obterCredencial({ conexaoId, appType, lojaId = null }) {
 }
 
 /**
+ * Loja ADICIONAL viva (migration 117, estado <> 'desativada') com este merchant, em QUALQUER conexão. Busca global de propósito, como
+ * conexaoVivaDoMerchant: o autoatendimento do Order nunca liga a uma unidade a loja que já é loja adicional de outra.
+ */
+export async function ultimaConexaoPedidosRevogada({ organizacaoId, unidadeId, db = supabase }) {
+  if (!organizacaoId || !unidadeId) return null;
+  const { data, error } = await db.from(T.conexoes).select("id, finalidade, atualizado_em")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("status", "revogada")
+    .neq("finalidade", "financeiro_homologacao")
+    .order("atualizado_em", { ascending: false }).limit(1);
+  if (error) throw ApiError.internal(error.message);
+  return data?.[0] ?? null;
+}
+
+/**
+ * Loja ADICIONAL viva (migration 117) com este merchant em QUALQUER conexão (ver abaixo).
+ */
+export async function lojaAdicionalVivaDoMerchant({ merchantId, db = supabase }) {
+  if (!merchantId) return null;
+  return ok(await db.from(T.lojas).select("id, conexao_id").eq("merchant_id", merchantId).neq("estado", "desativada").maybeSingle());
+}
+
+/**
  * Lojas ADICIONAIS vivas da conexão que o poller consulta (`ativa`/`liberada`; migration 117) — o que uma troca de credencial NÃO pode perder.
  * Sem a tabela (migration ainda não aplicada) = nenhuma loja adicional. Qualquer OUTRO erro SOBE: quem chama (a proteção da credencial)
  * recusa a troca em vez de adivinhar (falha segura).
