@@ -198,7 +198,7 @@ export async function concluirAutorizacao({
   // AUTOATENDIMENTO (flag do ambiente): pedidos autorizados na conexão da unidade -> identifica a loja pelo token, verifica e ativa.
   // Nunca derruba a autorização já gravada: qualquer falha vira um estado recuperável ("Verificar novamente" na tela).
   let ativacao;
-  if (appType === IFOOD_APP_ORDER && !loja && token.autoatendimentoOrderHabilitado?.() === true) {
+  if (appType === IFOOD_APP_ORDER && !loja && token.autoatendimentoLiberadoParaUnidade?.(unidadeId) === true) {
     const ativarPedidos = deps.autoatendimento?.ativar ?? autoatendimento.ativar;
     ativacao = await ativarPedidos({ organizacaoId, unidadeId, usuarioId, ...(deps.autoatendimentoDeps ? { deps: deps.autoatendimentoDeps } : {}) })
       .catch((e) => {

@@ -62,8 +62,8 @@ const jwt = (lojas, modulos = ["order", "events"]) => {
 const sem403 = (ids) => ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_SEM_PERMISSAO, { detalhes: { unauthorizedMerchants: ids } });
 
 /** Ambiente com o autoatendimento LIGADO no token fake + auditoria em memória. */
-function ambiente({ ligado = true } = {}) {
-  const a = criarAmbiente({ piloto: [SACI], autoatendimento: ligado });
+function ambiente({ ligado = true, canary = [], piloto = [SACI, NORTH] } = {}) {
+  const a = criarAmbiente({ piloto, autoatendimento: ligado, canary });
   const auditoria = [];
   const auditar = async (x) => { auditoria.push(x); };
   /** OAuth Order concluído na unidade: conexão `pendente` sem merchant + credencial com o token emitido. */
@@ -105,7 +105,7 @@ describe("1. empresa nova sem iFood", () => {
     try {
       const s = await conexaoSvc.obterStatus({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, deps: { repo: a.repo, vinculos: a.vinculos, agora: a.deps.agora } });
       assert.equal(s.order.configurado, true, "a unidade fora da lista do piloto pode conectar");
-      assert.deepEqual(s.order.autoatendimento, { habilitado: true, estado: "nao_conectado", motivo: null, mensagem: null });
+      assert.deepEqual(s.order.autoatendimento, { habilitado: true, estado: "nao_conectado", motivo: null, mensagem: null, desconectadoEm: null });
     } finally { config.ifood.orderAutoatendimento = false; }
     const s2 = await conexaoSvc.obterStatus({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, deps: { repo: a.repo, vinculos: a.vinculos, agora: a.deps.agora } });
     assert.equal(s2.order, null, "flag desligada: fora do piloto = sem bloco de pedidos (comportamento anterior)");
@@ -291,9 +291,12 @@ describe("7. falha na primeira verificação", () => {
     assert.deepEqual([r1.estado, r1.motivo], [auto.ESTADOS.VALIDANDO_LOJA, auto.MOTIVOS.VERIFICACAO_FALHOU]);
     assert.deepEqual([conexaoDe(a, FEIRA).status, a.linhas[0].estado], ["pendente", "aguardando_validacao"]);
     const s = await a.resumo();
-    assert.deepEqual([s.estado, s.podeVerificar], [auto.ESTADOS.VALIDANDO_LOJA, true]);
-    const r2 = await a.ativar();   // clique imediato: o freio do vínculo segura a 2ª consulta
-    assert.equal(r2.motivo, auto.MOTIVOS.TENTATIVAS_ESGOTADAS);
+    assert.deepEqual([s.estado, s.motivo, s.podeVerificar], [auto.ESTADOS.VALIDANDO_LOJA, auto.MOTIVOS.AGUARDANDO_NOVA_VERIFICACAO, false], "dentro dos 10 min a tela mostra o horário, sem botão");
+    assert.ok(r1.proximaVerificacaoEm && r1.podeVerificar === false, "a tela recebe o horário da próxima verificação");
+    const r2 = await a.ativar();   // clique imediato: o freio do vínculo segura a 2ª consulta — e a tela diz o horário, não "limite"
+    assert.deepEqual([r2.estado, r2.motivo, r2.podeVerificar], [auto.ESTADOS.VALIDANDO_LOJA, auto.MOTIVOS.AGUARDANDO_NOVA_VERIFICACAO, false]);
+    assert.equal(r2.proximaVerificacaoEm, new Date(a.relogio.ms + 10 * 60_000).toISOString());
+    assert.equal((await a.resumo()).motivo, auto.MOTIVOS.AGUARDANDO_NOVA_VERIFICACAO);
     assert.equal(a.chamadas.polling.length, 1);
     a.relogio.ms += 11 * 60_000;
     const r3 = await a.ativar();
@@ -305,7 +308,7 @@ describe("7. falha na primeira verificação", () => {
   test("falha DEPOIS do OAuth nunca derruba a autorização gravada (concluirAutorizacao captura)", () => {
     const fonte = ler("src/modules/ifood/ifoodAuth.service.js");
     assert.match(fonte, /await ativarPedidos\([^\n]*\n\s*\.catch\(/, "a ativação pós-OAuth tem catch");
-    assert.match(fonte, /appType === IFOOD_APP_ORDER && !loja && token\.autoatendimentoOrderHabilitado\?\.\(\) === true/, "só Order, só sem loja-alvo, só com a flag");
+    assert.match(fonte, /appType === IFOOD_APP_ORDER && !loja && token\.autoatendimentoLiberadoParaUnidade\?\.\(unidadeId\) === true/, "só Order, só sem loja-alvo, só com a flag");
   });
 });
 
@@ -588,6 +591,155 @@ describe("16/17. poller: escopo, eventos/ACK e a loja certa", () => {
       const reconhecidos = client.acks.flatMap((x) => x.eventIds).sort();
       assert.deepEqual(reconhecidos, ["e-feira", "e-saci"], "ACK só do que foi gravado, nunca da loja fora do escopo");
     } finally { config.ifood.orderAutoatendimento = false; }
+  });
+});
+
+// ===========================================================================
+// REVISÃO: liberação gradual, conexão que já tem loja, limites e revogação
+// ===========================================================================
+describe("revisão — liberação gradual (IFOOD_ORDER_SELF_SERVICE_UNITS)", () => {
+  test("lista preenchida: só a unidade liberada ativa; outra empresa recebe 403, sem tocar em nada", async () => {
+    const a = ambiente({ canary: [FEIRA] });
+    a.autorizar({ unidadeId: FEIRA, organizacaoId: ORG_FEIRA, lojas: [M_FEIRA] });
+    a.autorizar({ unidadeId: UN_OUTRA_ORG, organizacaoId: OUTRA_ORG, lojas: [M_OUTRA_ORG] });
+    assert.equal((await a.ativar()).estado, auto.ESTADOS.CONECTADO);
+    await assert.rejects(auto.ativar({ organizacaoId: OUTRA_ORG, unidadeId: UN_OUTRA_ORG, deps: a.deps }), (e) => e.codigo === IFOOD_ERROS.IFOOD_AUTOATENDIMENTO_DESLIGADO);
+    assert.equal(await a.resumo(UN_OUTRA_ORG, OUTRA_ORG), null, "fora da liberação: a tela é a de antes");
+    assert.deepEqual(a.chamadas.polling, [[M_FEIRA]]);
+  });
+
+  test("token service real: a lista da liberação gradual restringe status, OAuth e escopo do poller", async () => {
+    const OUTRA = "00000000-0000-0000-0000-0000000000e1";
+    config.ifood.orderAutoatendimento = true;
+    config.ifood.orderAutoatendimentoUnidades = [FEIRA];
+    try {
+      assert.equal(tokenReal.autoatendimentoLiberadoParaUnidade(FEIRA), true);
+      assert.equal(tokenReal.autoatendimentoLiberadoParaUnidade(FEIRA.toUpperCase()), true);
+      assert.equal(tokenReal.autoatendimentoLiberadoParaUnidade(OUTRA), false);
+      assert.equal(tokenReal.orderLiberadoParaUnidade(OUTRA), false, "fora da lista e fora do piloto: sem Order");
+      assert.equal(tokenReal.orderLiberadoParaUnidade(SACI), true, "o piloto continua valendo");
+      const escopo = await tokenReal.unidadesOrderNoEscopo({ listarAtivadas: async () => [FEIRA, OUTRA] });
+      assert.deepEqual(escopo.sort(), [FEIRA, SACI].sort(), "ativada fora da lista sai do escopo no ciclo seguinte");
+      config.ifood.orderAutoatendimentoUnidades = [];
+      assert.equal(tokenReal.autoatendimentoLiberadoParaUnidade(OUTRA), true, "lista vazia = todas (estado final, sem etapa por conexão)");
+      assert.equal(tokenReal.autoatendimentoLiberadoParaUnidade(""), false);
+      assert.equal(tokenReal.autoatendimentoLiberadoParaUnidade(null), false);
+    } finally { config.ifood.orderAutoatendimento = false; config.ifood.orderAutoatendimentoUnidades = []; }
+    assert.equal(tokenReal.autoatendimentoLiberadoParaUnidade(FEIRA), false, "flag desligada vence a lista");
+  });
+});
+
+describe("revisão — conexão que já tem loja (legado: Analytics/Financial pela Merchant API)", () => {
+  /** Conexão `legado` com loja e nome da Merchant API + o Order recém-autorizado nela (o destino do OAuth para unidade sem separação). */
+  const legadaComLoja = (a, { lojasToken = [M_FEIRA] } = {}) => {
+    const c = a.conectar({ unidadeId: FEIRA, organizacaoId: ORG_FEIRA, apps: ["analytics", "order"], merchantId: M_FEIRA });
+    Object.assign(c, { merchant_nome: "Subway Feira (Merchant API)", merchant_razao_social: "Razão Social Ltda" });
+    a.credenciais.find((k) => k.conexao_id === c.id && k.app_type === "order").access_token_cifrado = cifrar(jwt(lojasToken));
+    return c;
+  };
+
+  test("fora do escopo do poller: NÃO diz Conectado antes de verificar; verifica a loja DELA e preserva nome/razão social", async () => {
+    const a = ambiente();
+    const c = legadaComLoja(a);
+    const antes = await a.resumo();
+    assert.deepEqual([antes.estado, antes.podeVerificar], [auto.ESTADOS.VALIDANDO_LOJA, true], "conexão com loja mas sem Order validado não é Conectado");
+    const r = await a.ativar();
+    assert.equal(r.estado, auto.ESTADOS.CONECTADO);
+    assert.deepEqual(a.chamadas.polling, [[M_FEIRA]]);
+    assert.equal(a.chamadas.definirMerchant, 0, "o merchant da conexão não é regravado");
+    assert.deepEqual([c.merchant_id, c.merchant_nome, c.merchant_razao_social, c.status], [M_FEIRA, "Subway Feira (Merchant API)", "Razão Social Ltda", "ativa"]);
+    assert.deepEqual(a.linhas.map((v) => [v.estado, v.merchant_id]), [["validado", M_FEIRA]]);
+    assert.equal((await a.resumo()).estado, auto.ESTADOS.CONECTADO);
+    assert.equal(a.auditoria.at(-1).detalhes.lojaJaExistente, true);
+  });
+
+  test("o token Order cobre OUTRA loja: nunca troca a loja da conexão (LOJA_CONECTADA_FORA_DO_TOKEN)", async () => {
+    const a = ambiente();
+    const c = legadaComLoja(a, { lojasToken: [M_FEIRA_2] });
+    const r = await a.ativar();
+    assert.deepEqual([r.estado, r.motivo], [auto.ESTADOS.ACAO_NECESSARIA, auto.MOTIVOS.LOJA_CONECTADA_FORA_DO_TOKEN]);
+    assert.equal(c.merchant_id, M_FEIRA);
+    assert.deepEqual([a.chamadas.polling.length, a.linhas.length], [0, 0]);
+    assert.equal((await a.resumo()).motivo, auto.MOTIVOS.LOJA_CONECTADA_FORA_DO_TOKEN);
+  });
+
+  test("no fluxo MANUAL nada muda: informar a loja que a conexão já tem continua já vinculada, sem vínculo", async () => {
+    const a = ambiente();
+    legadaComLoja(a);
+    const svcVinculo = await import("../src/modules/ifood/ifoodMerchantVinculo.service.js");
+    const r = await svcVinculo.informarMerchant({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, merchantId: M_FEIRA, usuarioId: GESTOR, deps: a.deps });
+    assert.deepEqual([r.jaVinculada, a.linhas.length], [true, 0]);
+  });
+});
+
+describe("revisão — limites, recuperação e revogação", () => {
+  test("3 verificações sem sucesso: TENTATIVAS_ESGOTADAS com o caminho de recomeço; desconectar e conectar de novo recomeça", async () => {
+    const a = ambiente();
+    const c = a.autorizar();
+    for (let i = 0; i < 3; i += 1) {
+      a.respostasPolling.push(new Error("5xx"));
+      const r = await a.ativar();
+      assert.equal(r.motivo, auto.MOTIVOS.VERIFICACAO_FALHOU);
+      a.relogio.ms += 11 * 60_000;
+    }
+    const esgotado = await a.ativar();
+    assert.deepEqual([esgotado.estado, esgotado.motivo], [auto.ESTADOS.ACAO_NECESSARIA, auto.MOTIVOS.TENTATIVAS_ESGOTADAS]);
+    assert.match(esgotado.mensagem, /Desconectar/);
+    assert.equal(a.chamadas.polling.length, 3, "o limite segura a 4ª consulta");
+    assert.equal((await a.resumo()).motivo, auto.MOTIVOS.TENTATIVAS_ESGOTADAS);
+    c.status = "revogada";                                   // Desconectar: conexão revogada, vínculos cancelados
+    for (const v of a.linhas) if (v.conexao_id === c.id && v.estado === "aguardando_validacao") v.estado = "cancelado";
+    a.autorizar();
+    assert.equal((await a.ativar()).estado, auto.ESTADOS.CONECTADO);
+  });
+
+  test("autorização revogada no iFood depois de conectada (credencial reauth_required): o status leva o estado para a tela pedir reconexão", async () => {
+    const a = ambiente();
+    a.autorizar();
+    await a.ativar();
+    a.credenciais.at(-1).status = "reauth_required";
+    const s = await conexaoSvc.obterStatus({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, deps: { repo: a.repo, vinculos: a.vinculos, agora: a.deps.agora } });
+    assert.equal(s.order.autoatendimento, null, "sem a flag no config real: credencial existente aparece como antes, sem bloco novo");
+    config.ifood.orderAutoatendimento = true;
+    try {
+      const s2 = await conexaoSvc.obterStatus({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, deps: { repo: a.repo, vinculos: a.vinculos, agora: a.deps.agora } });
+      assert.equal(s2.order.status, "reauth_required", "a tela mostra Ação necessária + Reconectar (ver ifoodEstado.js)");
+    } finally { config.ifood.orderAutoatendimento = false; }
+  });
+
+  test("desconectada pela Central: com a liberação o status diz quando (Desconectado), sem mexer em nada", async () => {
+    const a = ambiente();
+    const c = a.autorizar();
+    c.status = "revogada";
+    c.atualizado_em = "2026-10-20T12:00:00.000Z";
+    const s = await conexaoSvc.obterStatus({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, deps: { repo: a.repo, vinculos: a.vinculos, agora: a.deps.agora } });
+    assert.equal(s.order, null, "sem a flag: igual a antes");
+    config.ifood.orderAutoatendimento = true;
+    try {
+      const s2 = await conexaoSvc.obterStatus({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, deps: { repo: a.repo, vinculos: a.vinculos, agora: a.deps.agora } });
+      assert.equal(s2.order.autoatendimento.desconectadoEm, "2026-10-20T12:00:00.000Z");
+    } finally { config.ifood.orderAutoatendimento = false; }
+  });
+
+  test("token com lojas demais: não consulta o banco loja a loja; pede para autorizar só a loja da unidade", async () => {
+    const a = ambiente();
+    const lojas = Array.from({ length: auto.MAX_LOJAS_NO_TOKEN + 1 }, (_, i) => `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    a.autorizar({ lojas });
+    let leituras = 0;
+    const original = a.repo.conexaoVivaDoMerchant;
+    a.repo.conexaoVivaDoMerchant = async (p) => { leituras += 1; return original(p); };
+    const r = await a.ativar();
+    assert.equal(r.motivo, auto.MOTIVOS.MUITAS_LOJAS);
+    assert.deepEqual([leituras, a.chamadas.polling.length], [0, 0]);
+  });
+
+  test("banco lento/fora no status: o resumo vira estado recuperável, nunca derruba o /status nem mostra erro técnico", async () => {
+    const a = ambiente();
+    a.autorizar();
+    const vinculos = { ...a.vinculos, obterUltimoVinculo: async () => { throw new Error("statement timeout"); } };
+    const r = await auto.resumoParaStatus({ organizacaoId: ORG_FEIRA, unidadeId: FEIRA, conexao: a.conexoes[0], cred: { ...a.credenciais[0] }, deps: { ...a.deps, vinculos } });
+    assert.deepEqual([r.estado, r.podeVerificar], [auto.ESTADOS.VALIDANDO_LOJA, true]);
+    assert.ok(!JSON.stringify(r).includes("statement timeout"));
   });
 });
 

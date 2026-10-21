@@ -57,7 +57,7 @@ test("Ação necessária — várias lojas: um botão por loja com ref opaco e i
 });
 
 test("Ação necessária — reautorizar / loja de outra unidade: \"Reconectar pedidos iFood\" e mensagem do servidor", () => {
-  for (const motivo of ["REAUTORIZAR", "SEM_LOJA_NO_TOKEN", "LOJA_DE_OUTRA_UNIDADE", "SEM_AUTORIZACAO"]) {
+  for (const motivo of ["REAUTORIZAR", "SEM_LOJA_NO_TOKEN", "LOJA_DE_OUTRA_UNIDADE", "SEM_AUTORIZACAO", "LOJA_CONECTADA_FORA_DO_TOKEN", "MUITAS_LOJAS"]) {
     const order = { ...orderBase, autoatendimento: auto("acao_necessaria", { motivo, mensagem: `mensagem ${motivo}` }) };
     const o = derivarEstadoOrder(order);
     assert.equal(o.rotulo, "Ação necessária", motivo);
@@ -66,7 +66,10 @@ test("Ação necessária — reautorizar / loja de outra unidade: \"Reconectar p
     assert.equal(o.erro.mensagem, `mensagem ${motivo}`);
   }
   const tentativas = derivarEstadoOrder({ ...orderBase, autoatendimento: auto("acao_necessaria", { motivo: "TENTATIVAS_ESGOTADAS" }) });
-  assert.deepEqual([tentativas.acaoAuto, tentativas.podeConectar], ["verificar", false], "limite de verificações: reconectar não resolve");
+  assert.deepEqual([tentativas.acaoAuto, tentativas.podeConectar], [null, false], "limite atingido: nem verificar nem reconectar resolvem — a mensagem manda desconectar e recomeçar");
+  const html = montarHtmlPainel(status({ ...orderBase, autoatendimento: auto("acao_necessaria", { motivo: "TENTATIVAS_ESGOTADAS", mensagem: "Para recomeçar, clique em \"Desconectar\"" }) }));
+  assert.ok(!html.includes('data-acao="verificar_pedidos"'));
+  assert.match(html, /Para recomeçar/);
 });
 
 test("credencial reauth_required: Ação necessária com reconectar, mesmo sem motivo no bloco", () => {
@@ -74,11 +77,34 @@ test("credencial reauth_required: Ação necessária com reconectar, mesmo sem m
   assert.deepEqual([o.chave, o.rotulo, o.podeConectar, o.rotuloConectar], ["reauth", "Ação necessária", true, "Reconectar pedidos iFood"]);
 });
 
-test("Conectado: \"Conectado — recebendo pedidos\" só com o recebimento ao vivo; senão só \"Conectado\"", () => {
-  const conectado = { ...orderBase, lojaValidada: true, autoatendimento: auto("conectado", { lojaMascarada: MASCARADO }) };
-  assert.equal(derivarEstadoOrder({ ...conectado, worker: { ativo: true } }).rotulo, "Conectado — recebendo pedidos");
-  const parado = derivarEstadoOrder({ ...conectado, worker: { ativo: false } });
-  assert.deepEqual([parado.rotulo, parado.classe, parado.podeConectar, parado.acaoAuto], ["Conectado", "ok", false, null]);
+test("Conectado: \"recebendo pedidos\" só com PROVA (um pedido já chegou); antes disso, \"aguardando o primeiro pedido\"", () => {
+  const conectado = { ...orderBase, lojaValidada: true, worker: { ativo: true }, autoatendimento: auto("conectado", { lojaMascarada: MASCARADO }) };
+  const aguardando = derivarEstadoOrder(conectado);
+  assert.deepEqual([aguardando.rotulo, aguardando.classe, aguardando.recebimentoComprovado, aguardando.podeConectar, aguardando.acaoAuto],
+    ["Conectado — aguardando o primeiro pedido", "ok", false, false, null], "worker ativo NÃO é prova de recebimento");
+  assert.match(montarHtmlPainel(status(conectado)), /id="ifood-order-instrucao"[^>]*>A conexão está ativa/);
+  const comprovado = derivarEstadoOrder({ ...conectado, ultimoPedido: AGORA });
+  assert.deepEqual([comprovado.rotulo, comprovado.recebimentoComprovado], ["Conectado — recebendo pedidos", true]);
+  assert.deepEqual(comprovado.linhas.find((l) => l[0] === "Último pedido recebido"), ["Último pedido recebido", AGORA, "data"]);
+});
+
+test("intervalo de 10 min: mostra o horário da próxima verificação e esconde o botão (sem erro técnico)", () => {
+  const proxima = "2026-10-20T15:10:00.000Z";
+  const order = { ...orderBase, autoatendimento: auto("validando_loja", { motivo: "AGUARDANDO_NOVA_VERIFICACAO", mensagem: "Por segurança, uma nova verificação só fica disponível no horário indicado.", lojaMascarada: MASCARADO, proximaVerificacaoEm: proxima, podeVerificar: false }) };
+  const o = derivarEstadoOrder(order);
+  assert.deepEqual([o.rotulo, o.acaoAuto, o.erro], ["Validando loja", null, null]);
+  assert.deepEqual(o.linhas.find((l) => l[0] === "Nova verificação a partir de"), ["Nova verificação a partir de", proxima, "data"]);
+  assert.match(o.instrucao, /horário indicado/);
+  const html = montarHtmlPainel(status(order));
+  assert.ok(!html.includes('data-acao="verificar_pedidos"'));
+  assert.ok(!/AGUARDANDO_NOVA_VERIFICACAO|TENTATIVAS|429|403/.test(html), "nenhum código técnico na tela");
+});
+
+test("desconectado pela Central: \"Desconectado\" com a data, e o botão para conectar de novo", () => {
+  const order = { ...orderBase, conectado: false, status: null, autoatendimento: auto("nao_conectado", { desconectadoEm: AGORA }) };
+  const o = derivarEstadoOrder(order);
+  assert.deepEqual([o.rotulo, o.podeConectar, o.rotuloConectar], ["Desconectado", true, "Conectar pedidos iFood"]);
+  assert.deepEqual(o.linhas, [["Desconectado em", AGORA, "data"]]);
 });
 
 test("flag desligada (sem `autoatendimento`): a tela continua a do piloto (ID manual)", () => {

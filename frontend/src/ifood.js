@@ -153,6 +153,7 @@ function blocoOperacao(statusApi) {
         </div>
         ${o.erro ? `<div class="ifood-aviso ${o.classe === "bad" ? "bad" : "warn"}" id="ifood-order-erro">${esc(o.erro.mensagem)}</div>` : ""}
         ${linhasInfo(o.linhas)}
+        ${o.autoatendimento && !o.lojaPendente && o.instrucao ? `<p class="ifood-instrucao" id="ifood-order-instrucao">${esc(o.instrucao)}</p>` : ""}
         ${botaoOrder}
         ${blocoLojaPendente}
         <div class="ifood-app-linha" id="ifood-events-status">

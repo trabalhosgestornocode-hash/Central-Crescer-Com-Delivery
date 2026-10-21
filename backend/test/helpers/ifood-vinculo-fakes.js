@@ -18,7 +18,7 @@ export const GESTOR = "user-gestor";
 // ---------------------------------------------------------------------------
 // Fakes em memória (espelham a semântica do banco: tenant em toda consulta, índices únicos, CAS)
 // ---------------------------------------------------------------------------
-export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false, autoatendimento = false, agoraMs = Date.parse("2026-10-10T15:00:00Z") } = {}) {
+export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false, autoatendimento = false, canary = [], agoraMs = Date.parse("2026-10-10T15:00:00Z") } = {}) {
   const conexoes = [];
   const credenciais = [];
   const lojasExtras = [];   // migration 117 (lojas adicionais): { conexao_id, merchant_id, estado }
@@ -52,6 +52,10 @@ export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false
     async conexaoVivaDoMerchant({ merchantId }) {
       const c = conexoes.find((x) => x.merchant_id === merchantId && viva(x));
       return c ? { id: c.id, organizacao_id: c.organizacao_id, unidade_id: c.unidade_id, status: c.status, merchant_id: c.merchant_id } : null;
+    },
+    async ultimaConexaoPedidosRevogada({ organizacaoId, unidadeId }) {
+      const c = conexoes.filter((x) => x.organizacao_id === organizacaoId && x.unidade_id === unidadeId && x.status === "revogada" && x.finalidade !== "financeiro_homologacao").at(-1);
+      return c ? { id: c.id, finalidade: c.finalidade ?? "legado", atualizado_em: c.atualizado_em ?? new Date(relogio.ms).toISOString() } : null;
     },
     async lojaAdicionalVivaDoMerchant({ merchantId }) {
       const l = lojasExtras.find((x) => x.merchant_id === merchantId && x.estado !== "desativada");
@@ -107,9 +111,12 @@ export function criarAmbiente({ piloto = [SACI, UN_OUTRA_ORG], validacao = false
     },
   };
 
-  const cfg = { piloto: new Set(piloto), validacao, autoatendimento };
+  const cfg = { piloto: new Set(piloto), validacao, autoatendimento, canary: [...canary] };
   const token = {
-    orderLiberadoParaUnidade: (u) => cfg.autoatendimento || cfg.piloto.has(u),   // espelha o real: a flag do autoatendimento libera qualquer unidade
+    // Espelham o real: o autoatendimento (flag + lista da liberação gradual, vazia = todas) também libera o Order da unidade.
+    autoatendimentoLiberadoParaUnidade: (u) => cfg.autoatendimento && typeof u === "string" && !!u && (cfg.canary.length === 0 || cfg.canary.includes(u)),
+    orderLiberadoParaUnidade: (u) => token.autoatendimentoLiberadoParaUnidade(u) || cfg.piloto.has(u),
+    unidadesPilotoOrder: () => [...cfg.piloto],
     validacaoMerchantManualHabilitada: () => cfg.validacao,
     autoatendimentoOrderHabilitado: () => cfg.autoatendimento,
     async comAccessTokenValido({ conexaoId, appType, fn }) { chamadas.token.push({ conexaoId, appType }); return fn("token-order-de-teste"); },

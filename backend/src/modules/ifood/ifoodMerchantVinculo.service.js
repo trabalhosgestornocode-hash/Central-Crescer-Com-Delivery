@@ -127,14 +127,15 @@ export function resumirVinculo(v) {
  * Repetir com o MESMO ID é seguro (devolve o vínculo em aberto como está); com OUTRO ID, o anterior é
  * cancelado e nasce um novo `informado` (a conferência visual recomeça).
  */
-export async function informarMerchant({ organizacaoId, unidadeId, merchantId, usuarioId, deps }) {
+export async function informarMerchant({ organizacaoId, unidadeId, merchantId, usuarioId, modo = null, deps }) {
   const { repo, vinculos, token, agora, log } = dependencias(deps);
   const id = normalizarMerchantId(merchantId);
   const conexao = await exigirOrderDaUnidade({ organizacaoId, unidadeId, repo, token });
 
   if (conexao.merchant_id) {
-    if (conexao.merchant_id === id) return { vinculo: null, jaVinculada: true };
-    throw ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_JA_VINCULADO);
+    // Autoatendimento: a conexão já tem ESTA loja (Merchant API) mas ainda não está no escopo do Order — o vínculo registra a verificação dela.
+    if (conexao.merchant_id === id && !(modo === MODO_AUTOATENDIMENTO && conexao.status === "ativa")) return { vinculo: null, jaVinculada: true };
+    if (conexao.merchant_id !== id) throw ifoodErro(IFOOD_ERROS.IFOOD_MERCHANT_JA_VINCULADO);
   }
   await exigirMerchantLivre({ merchantId: id, conexaoId: conexao.id, repo, vinculos });
 
@@ -209,7 +210,7 @@ export async function cancelarMerchantInformado({ organizacaoId, unidadeId, usua
  */
 export async function verificarAutorizacao({ organizacaoId, unidadeId, usuarioId, modo = null, deps }) {
   const { repo, vinculos, token, client, http, agora, log } = dependencias(deps);
-  if (!(modo === MODO_AUTOATENDIMENTO ? token.autoatendimentoOrderHabilitado?.() === true : token.validacaoMerchantManualHabilitada())) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
+  if (!(modo === MODO_AUTOATENDIMENTO ? token.autoatendimentoLiberadoParaUnidade?.(unidadeId) === true : token.validacaoMerchantManualHabilitada())) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
   const conexao = await exigirOrderDaUnidade({ organizacaoId, unidadeId, repo, token });
 
   const aberto = await vinculos.obterVinculoAberto({ organizacaoId, unidadeId, conexaoId: conexao.id });
@@ -273,7 +274,7 @@ export async function concluirValidacao({
   organizacaoId, unidadeId, merchantId, evidenciaPortalParceiro, confirmacaoOperacional, usuarioId, modo = null, deps,
 }) {
   const { repo, vinculos, token, agora, log } = dependencias(deps);
-  if (!(modo === MODO_AUTOATENDIMENTO ? token.autoatendimentoOrderHabilitado?.() === true : token.validacaoMerchantManualHabilitada())) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
+  if (!(modo === MODO_AUTOATENDIMENTO ? token.autoatendimentoLiberadoParaUnidade?.(unidadeId) === true : token.validacaoMerchantManualHabilitada())) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_NAO_HABILITADA);
   const id = normalizarMerchantId(merchantId);
   // Autoatendimento: a evidência é o token (ver MODO_AUTOATENDIMENTO) + a verificação de autorização exigida logo abaixo.
   if (modo !== MODO_AUTOATENDIMENTO && (evidenciaPortalParceiro !== true || confirmacaoOperacional !== true)) throw ifoodErro(IFOOD_ERROS.IFOOD_VALIDACAO_SEM_EVIDENCIA);
@@ -300,7 +301,10 @@ export async function concluirValidacao({
   const dono = await repo.conexaoVivaDoMerchant({ merchantId: id });
   if (dono && dono.id !== conexao.id) { await rejeitarDuplicado(); throw ifoodErro(IFOOD_ERROS.IFOOD_VINCULO_DUPLICADO); }
 
-  try {
+  // A conexão já tem ESTA loja ativa (autoatendimento de uma conexão cuja loja veio da Merchant API): nada a regravar — nome e razão social
+  // da Merchant API são preservados. Só o vínculo passa a `validado`.
+  const jaComEstaLoja = conexao.merchant_id === id && conexao.status === "ativa";
+  if (!jaComEstaLoja) try {
     // Mesma gravação do fluxo antigo (conexão `ativa`). Nome/razão social ficam vazios: não há Merchant API.
     await repo.definirMerchantDaConexao({ organizacaoId, unidadeId, conexaoId: conexao.id, merchantId: id, nome: null, razaoSocial: null });
   } catch (e) {

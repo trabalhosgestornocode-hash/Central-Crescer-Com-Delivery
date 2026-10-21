@@ -82,6 +82,18 @@ export function autoatendimentoOrderHabilitado() {
 }
 
 /**
+ * O autoatendimento vale PARA ESTA UNIDADE? Flag ligada e, durante a liberação gradual, a unidade em IFOOD_ORDER_SELF_SERVICE_UNITS
+ * (lista vazia = todas). É a única decisão usada pela ativação, pelo status e pelo escopo do poller. Fail-closed.
+ * A lista é TEMPORÁRIA (homologação): não é uma etapa por conexão — esvaziada, qualquer unidade com o módulo `ifood` conecta sozinha.
+ * @param {string|null|undefined} unidadeId SEMPRE de req.tenant (ou da conexão persistida)
+ */
+export function autoatendimentoLiberadoParaUnidade(unidadeId) {
+  if (!autoatendimentoOrderHabilitado() || typeof unidadeId !== "string" || !unidadeId) return false;
+  const restritas = config.ifood?.orderAutoatendimentoUnidades ?? [];
+  return restritas.length === 0 || unidadeNoPilotoOrder(restritas, unidadeId);
+}
+
+/**
  * O app Order está liberado PARA ESTA UNIDADE? Exige as duas coisas:
  *   1. o app existe neste ambiente (appTypesDoOAuth inclui `order` — credenciais ou homologação);
  *   2. a unidade está no piloto (IFOOD_ORDER_PILOT_UNITS) OU o autoatendimento está ligado. Fail-closed.
@@ -90,7 +102,7 @@ export function autoatendimentoOrderHabilitado() {
  */
 export function orderLiberadoParaUnidade(unidadeId) {
   if (!appTypesDoOAuth().includes(IFOOD_APP_ORDER)) return false;
-  if (autoatendimentoOrderHabilitado() && typeof unidadeId === "string" && unidadeId) return true;
+  if (autoatendimentoLiberadoParaUnidade(unidadeId)) return true;
   return unidadeNoPilotoOrder(config.ifood?.orderPilotoUnidades, unidadeId);
 }
 
@@ -106,8 +118,9 @@ export async function unidadesOrderNoEscopo({ listarAtivadas, log } = {}) {
   const piloto = unidadesPilotoOrder();
   if (!autoatendimentoOrderHabilitado() || escopoDoToken() !== "conexao" || typeof listarAtivadas !== "function") return piloto;
   try {
-    const ativadas = (await listarAtivadas()) ?? [];
-    return [...new Set([...piloto, ...ativadas.map((u) => String(u).toLowerCase())])];
+    // Ativadas que continuam liberadas (restringir a liberação gradual tira a unidade do escopo no ciclo seguinte; nada é apagado).
+    const ativadas = ((await listarAtivadas()) ?? []).map((u) => String(u).toLowerCase()).filter((u) => autoatendimentoLiberadoParaUnidade(u));
+    return [...new Set([...piloto, ...ativadas])];
   } catch (e) {
     log?.("warn", "events.escopo_autoatendimento_indisponivel", { erro: String(e?.message ?? e).slice(0, 200) });
     return piloto;
