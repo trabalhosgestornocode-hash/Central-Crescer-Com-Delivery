@@ -605,16 +605,9 @@ html:has(.cko--imersivo) { overflow: hidden; }
 /* A regra global de movimento reduzido (.cko *) não alcança a PRÓPRIA raiz. */
 @media (prefers-reduced-motion: reduce) { .cko--imersivo { transition: none; } }
 
-/* Selo do status: cor + ícone + texto (a cor nunca é a única pista) */
-.cko-cab-status { display: inline-flex; align-items: center; } /* dentro de .cko-cab-estado: quebra junto nas telas estreitas */
-.cko-status-selo {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 6px 12px; border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--tom) 55%, transparent);
-  background: color-mix(in srgb, var(--tom) 18%, var(--cko-sup));
-  color: var(--cko-texto); font-weight: 700; font-size: clamp(13px, .85cqi, 16px); white-space: nowrap;
-}
-.cko-status-selo .icon { color: var(--tom); flex: none; }
+/* Ícone do status ao lado do veredito (cor + ícone + texto; a cor nunca é a única pista). Sem altura nova no cabeçalho. */
+.cko-status-icone { display: inline-flex; vertical-align: middle; margin-left: .3em; color: var(--tom); }
+.cko-status-icone svg { width: .7em; height: .7em; }
 
 /* Diálogo de metas: aviso de conflito / falha (a configuração anterior continua valendo) */
 .cko-metas .cko-metas-erro {

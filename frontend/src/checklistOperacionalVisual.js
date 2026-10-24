@@ -188,7 +188,7 @@ export function cardStatus(resumo, agora) {
     <article class="cko-card cko-status cko-nivel--${s.nivel}" data-assinatura="${assinaturaStatus(s)}" data-nivel="${s.nivel}" aria-labelledby="cko-t-status">
       ${faixa(false)}
       <h2 id="cko-t-status">Status da operação</h2>
-      <p class="cko-status-veredito">${s.rotulo}</p>
+      <p class="cko-status-veredito">${s.rotulo}${iconeStatusOperacao(s.nivel)}</p>
       ${motivos}
       <dl class="cko-status-contagem">
         <div><dt>Em andamento</dt><dd>${s.ativos}</dd></div>
@@ -395,17 +395,16 @@ export function textoSincronizacao(conexao, agora) {
 }
 
 /**
- * Selo do status da operação (cor do fundo repetida em TEXTO e ÍCONE — a cor nunca está sozinha). `role="status"`:
- * leitor de tela anuncia a mudança sem roubar o foco.
+ * Ícone do status da operação, ao lado do veredito do card "Status da operação": a cor do fundo dinâmico fica repetida em
+ * TEXTO (o veredito) e ÍCONE — a cor nunca está sozinha — sem ocupar altura nova (a TV de 720p continua sem rolar).
  */
-export function seloStatusOperacao(nivel) {
-  const r = ROTULO_FUNDO[nivel] ?? ROTULO_FUNDO.neutro;
-  return `<span class="cko-status-selo cko-nivel--${nivel in ROTULO_FUNDO ? nivel : "neutro"}" data-status-selo="${nivel}" role="status">${icon(r.icone, { size: 18 })}<span>${r.texto}</span></span>`;
+export function iconeStatusOperacao(nivel) {
+  const n = nivel in ROTULO_FUNDO ? nivel : "neutro";
+  return `<span class="cko-status-icone" data-status-icone="${n}" aria-hidden="true">${icon(ROTULO_FUNDO[n].icone, { size: 28 })}</span>`;
 }
 
-export function cabecalho(resumo, agora, { podeEditarMetas = false, nivelFundo = null } = {}) {
+export function cabecalho(resumo, agora, { podeEditarMetas = false } = {}) {
   const selo = SELO_CONEXAO[resumo.conexao?.estado] ?? SELO_CONEXAO.sem_dados;
-  const nivel = nivelFundo ?? derivarStatusOperacao(resumo, agora).nivel;
   return `
     <header class="cko-cab">
       <div class="cko-cab-id">
@@ -417,9 +416,7 @@ export function cabecalho(resumo, agora, { podeEditarMetas = false, nivelFundo =
       </div>
       <div class="cko-cab-estado">
         <span class="cko-selo cko-selo--${selo.tom}" title="${escapeHtml(selo.dica)}"><i></i>${selo.rotulo}</span>
-        <span class="cko-sinc" data-sinc>${textoSincronizacao(resumo.conexao, agora)}</span>
-        <span class="cko-cab-status" data-slot-selo-status>${seloStatusOperacao(nivel)}</span>
-      </div>
+        <span class="cko-sinc" data-sinc>${textoSincronizacao(resumo.conexao, agora)}</span>      </div>
       <time class="cko-relogio" data-relogio>${new Date(agora).toLocaleTimeString("pt-BR")}</time>
       <div class="cko-cab-acoes">
         ${podeEditarMetas ? `<button type="button" class="cko-btn" data-acao="metas">${icon("sliders-horizontal", { size: 18 })}<span>Metas</span></button>` : ""}

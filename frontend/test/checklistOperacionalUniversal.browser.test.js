@@ -50,7 +50,10 @@ const SEM_INTEGRACAO = () => ({
 });
 const COM_INTEGRACAO = () => ({ ...respostaResumo(AGORA), modo: "integrado" });
 
-const api = { consultas: 0, falhar: false, erro: null, dados: COM_INTEGRACAO };
+// Checklist 2.0: o servidor é a fonte das metas — vêm em todo resumo (com a versão) e PUT /metas grava com a versão que a
+// tela tinha (versão diferente = 409 METAS_CONFLITO), como o backend real (checklistOperacional.service#salvarMetas).
+const METAS_PADRAO = () => ({ origem: "padrao", versao: 0, valores: { preparo: { meta: 12, avisoPct: 80 }, entrega: { meta: 35, avisoPct: 80 }, vida: { meta: 45, avisoPct: 80 } }, atualizadoEm: null, atualizadoPor: null });
+const api = { consultas: 0, falhar: false, erro: null, dados: COM_INTEGRACAO, metas: METAS_PADRAO(), gravacoes: 0 };
 let servidor; let base;
 
 before(async () => {
@@ -65,7 +68,24 @@ before(async () => {
       if (api.falhar) { res.writeHead(503, { "Content-Type": "application/json" }); res.end('{"error":"indisponível"}'); return; }
       if (api.erro) { res.writeHead(api.erro.status, { "Content-Type": "application/json" }); res.end(JSON.stringify(api.erro.corpo)); return; }
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ data: api.dados() }));
+      res.end(JSON.stringify({ data: { ...api.dados(), metas: api.metas } }));
+      return;
+    }
+    if (caminho === "/api/v1/checklist-operacional/metas" && req.method === "PUT") {
+      let corpo = "";
+      req.on("data", (c) => { corpo += c; });
+      req.on("end", () => {
+        const { versao, metas } = JSON.parse(corpo || "{}");
+        res.setHeader("Content-Type", "application/json");
+        if (versao !== api.metas.versao) {
+          res.writeHead(409);
+          res.end(JSON.stringify({ error: "As metas foram alteradas em outro aparelho.", codigo: "METAS_CONFLITO", details: { metas: api.metas } }));
+          return;
+        }
+        api.gravacoes += 1;
+        api.metas = { origem: "unidade", versao: api.metas.versao + 1, valores: metas, atualizadoEm: new Date(AGORA).toISOString(), atualizadoPor: "Gestora" };
+        res.end(JSON.stringify({ data: { resultado: "salvo", metas: api.metas } }));
+      });
       return;
     }
     const arq = resolve(RAIZ, "." + caminho);
@@ -81,7 +101,7 @@ before(async () => {
 });
 after(async () => { if (servidor) await new Promise((r) => servidor.close(r)); });
 
-const zerar = (dados = COM_INTEGRACAO) => Object.assign(api, { consultas: 0, falhar: false, erro: null, dados });
+const zerar = (dados = COM_INTEGRACAO) => Object.assign(api, { consultas: 0, falhar: false, erro: null, dados, metas: METAS_PADRAO(), gravacoes: 0 });
 
 async function abrir(browser, { viewport = { width: 1920, height: 1080 } } = {}) {
   const pagina = await browser.newPage({ viewport });
@@ -255,6 +275,10 @@ describe("Checklist Operacional — universalização e tempos em navegador real
     await dlg.locator('button[type="submit"]').click();
     await assentar(pagina);
     assert.match((await textoVisivel(pagina, '[data-card="preparo"]')).join(" "), /Meta\s*16,3 min/);
+    // Checklist 2.0: aplicar = gravar no servidor UMA vez (versão 0 → 1); o cancelar de antes não gravou nada.
+    assert.equal(api.gravacoes, 1);
+    assert.equal(api.metas.versao, 1);
+    assert.equal(api.metas.valores.preparo.meta, 16.3);
     assert.deepEqual(erros, []);
     await pagina.close();
   });

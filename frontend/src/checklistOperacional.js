@@ -82,7 +82,7 @@ import {
 } from "./checklistOperacionalDados.js";
 import {
   montarTela, conteudoTela, telaSemUnidade, telaSelecaoModos, cardTempo, cardStatus, painelPedidosAtivos, assinaturaStatus,
-  textoSincronizacao, textoQuantidade, textoVida, dialogoMetas, seloStatusOperacao,
+  textoSincronizacao, textoQuantidade, textoVida, dialogoMetas,
 } from "./checklistOperacionalVisual.js";
 import {
   MODOS_EXIBICAO, modoValido, pedirTelaCheia, sairDaTelaCheia, telaCheiaAtiva, avisoTelaCheia,
@@ -471,16 +471,14 @@ function tique() {
 }
 
 /**
- * Fundo dinâmico + selo de status (texto e ícone) do modo aberto. Só mexe no DOM quando o nível EXIBIDO muda — a cor
- * troca por transição CSS (sem transição com movimento reduzido), sem piscar.
+ * Fundo dinâmico do modo aberto (o texto e o ícone do status estão no card "Status da operação"). Só mexe no DOM quando
+ * o nível EXIBIDO muda — a cor troca por transição CSS (sem transição com movimento reduzido), sem piscar.
  */
 function aplicarFundo(raiz, nivel) {
   if (!modoValido(estado.modo)) return;
   estado.fundo = proximoFundo(estado.fundo, nivel, Date.now());
   const exibido = estado.fundo.nivel;
-  if (raiz.dataset.fundo !== exibido) raiz.dataset.fundo = exibido; // a transição é do CSS (camada própria)
-  const slot = raiz.querySelector("[data-slot-selo-status]");
-  if (slot && slot.firstElementChild?.dataset.statusSelo !== exibido) slot.innerHTML = seloStatusOperacao(exibido);
+  if (raiz.dataset.fundo !== exibido) raiz.dataset.fundo = exibido; // a transição é do CSS
 }
 
 function atualizarCard(raiz, chave, resumo, agora) {

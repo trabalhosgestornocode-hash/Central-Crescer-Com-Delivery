@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { METAS_EXEMPLO } from "../src/checklistOperacionalModelo.js";
 import { adaptarResumo, metasDoResumo } from "../src/checklistOperacionalDados.js";
 import { proximoFundo, RETENCAO_MELHORA_MS, ROTULO_FUNDO } from "../src/checklistOperacionalFundo.js";
-import { montarTela, telaSelecaoModos, dialogoMetas, seloStatusOperacao } from "../src/checklistOperacionalVisual.js";
+import { montarTela, telaSelecaoModos, dialogoMetas, iconeStatusOperacao } from "../src/checklistOperacionalVisual.js";
 import { telaDashboard, variacao, textoPeriodo, dialogoRelatorio, SECOES_RELATORIO } from "../src/checklistOperacionalDashboardVisual.js";
 import { graficoEvolucao, graficosDoDashboard, escala } from "../src/checklistOperacionalGraficos.js";
 import { htmlRelatorio, documentoRelatorio, resumoExecutivo } from "../src/checklistOperacionalRelatorio.js";
@@ -149,13 +149,16 @@ describe("fundo dinâmico (TV e Tablet)", () => {
     assert.doesNotMatch(montarTela(r, AGORA, {}), /data-fundo/, "fora dos modos (prévia no app) não há fundo dinâmico");
   });
 
-  test("status também por TEXTO e ÍCONE (nunca só cor), anunciado sem roubar o foco", () => {
+  test("status também por TEXTO e ÍCONE (nunca só cor): ícone ao lado do veredito, sem altura nova no cabeçalho", () => {
     for (const nivel of ["ok", "atencao", "critico", "neutro"]) {
-      const s = seloStatusOperacao(nivel);
-      assert.match(s, new RegExp(`data-status-selo="${nivel}" role="status"><svg class="icon`));
-      assert.ok(s.includes(ROTULO_FUNDO[nivel].texto));
+      assert.match(iconeStatusOperacao(nivel), new RegExp(`data-status-icone="${nivel}" aria-hidden="true"><svg class="icon`));
     }
-    assert.deepEqual(["ok", "atencao", "critico"].map((n) => ROTULO_FUNDO[n].texto), ["Operação dentro da meta", "Operação próxima do limite", "Operação fora da meta"]);
+    assert.equal(iconeStatusOperacao("<x>").includes('data-status-icone="neutro"'), true);
+    const r = adaptarResumo(respostaResumo(AGORA), { unidade: UNIDADE, metas: METAS_EXEMPLO, recebidoEmMs: AGORA });
+    const html = montarTela(r, AGORA, { modo: "tv" });
+    // O veredito continua começando pelo texto (o ícone vem DEPOIS) e o cabeçalho não ganhou elemento novo.
+    assert.match(html, /<p class="cko-status-veredito">(Dentro da meta|Fora da meta|Próximo da meta|Atenção|Sem medições hoje)<span class="cko-status-icone" data-status-icone="(ok|atencao|critico|neutro)" aria-hidden="true">/);
+    assert.doesNotMatch(html, /cko-status-selo|data-slot-selo-status/);
   });
 
   test("CSS: fundo nos três estados só nos modos, transição suave, nada anima com movimento reduzido, superfícies intactas", () => {
@@ -163,7 +166,7 @@ describe("fundo dinâmico (TV e Tablet)", () => {
     for (const n of ["ok", "atencao", "critico", "neutro"]) assert.match(css, new RegExp(`\\.cko--imersivo\\[data-fundo="${n}"\\]`));
     // Cor sólida na própria raiz (mesmo custo de pintura de antes em repouso); transição só na troca de estado.
     assert.match(css, /\.cko--imersivo \{ background-color: var\(--cko-fundo-tom, var\(--cko-fundo\)\); transition: background-color 900ms ease; \}/);
-    const bloco = css.slice(css.indexOf("FUNDO DINÂMICO"), css.indexOf("Selo do status"));
+    const bloco = css.slice(css.indexOf("FUNDO DINÂMICO"), css.indexOf("Ícone do status"));
     assert.doesNotMatch(bloco, /gradient\(|box-shadow:|::before \{/, "sem gradiente, sombra ou camada extra");
     assert.match(bloco, /@media \(prefers-reduced-motion: reduce\) \{ \.cko--imersivo \{ transition: none; \} \}/, "a regra global não alcança a própria raiz");
     assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\n  \.cko \*, \.cko \*::before, \.cko \*::after \{ animation: none !important; transition: none !important; \}/);
