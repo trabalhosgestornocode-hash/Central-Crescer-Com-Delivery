@@ -75,7 +75,8 @@ function ordem(u) {
   const o = u.searchParams.get("order"); if (!o) return "";
   return ` order by ${o.split(",").map((p) => { const [c, d] = p.split("."); return `${ident(c)}${d === "desc" ? " desc" : ""}`; }).join(", ")}`;
 }
-const limite = (u) => (u.searchParams.get("limit") ? ` limit ${Number(u.searchParams.get("limit"))}` : "");
+const limite = (u) => (u.searchParams.get("limit") ? ` limit ${Number(u.searchParams.get("limit"))}` : "")
+  + (u.searchParams.get("offset") ? ` offset ${Number(u.searchParams.get("offset"))}` : ""); // `.range(a, b)` do supabase-js
 
 const fkDe = (rel) => ({ unidades: "unidade_id", organizacoes: "organizacao_id", perfis_operacionais: "perfil_id", planos: "plano_id" }[rel]);
 
@@ -153,7 +154,11 @@ export async function iniciarSupabaseFalso({ pgUrl, usuarios, aoAuthAdmin = null
       const rpc = u.pathname.match(/^\/rest\/v1\/rpc\/([a-z_][a-z0-9_]*)$/);
       if (rpc && req.method === "POST") {
         const argumentos = Object.entries(dados ?? {}).map(([k, v]) => `${ident(k)} := ${typeof v === "number" || typeof v === "boolean" ? v : lit(v)}`).join(", ");
-        const r = await consultar(`select coalesce(to_jsonb(${ident(rpc[1])}(${argumentos})), 'null'::jsonb)`);
+        // Função que devolve CONJUNTO (RETURNS TABLE / SETOF): o PostgREST responde um array de linhas.
+        const conjunto = await consultar(`select coalesce(bool_or(proretset), false) from pg_proc where proname = ${lit(rpc[1])}`);
+        const r = conjunto.ok && conjunto.out.trim().split("\n").pop().trim() === "t"
+          ? await consultar(`select coalesce(json_agg(to_jsonb(x)), '[]'::json) from ${ident(rpc[1])}(${argumentos}) x`)
+          : await consultar(`select coalesce(to_jsonb(${ident(rpc[1])}(${argumentos})), 'null'::jsonb)`);
         if (!r.ok) return erroPg(res, r);
         return json(res, 200, JSON.parse(r.out.trim().split("\n").pop().trim()));
       }
