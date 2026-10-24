@@ -465,6 +465,26 @@ export const ifoodDesconectar = (conexaoId = null) => delJson(`${IFOOD}/${conexa
 export const ifoodPedidos = () => getJson(`${IFOOD}/pedidos`);
 // Checklist Operacional — resumo do dia da unidade do contexto (só leitura; tenant vem do Context Token).
 export const obterResumoChecklist = () => getJson("/api/v1/checklist-operacional/resumo");
+// Metas da unidade (fonte única no servidor). `versao` = a que a tela tinha: outra versão no servidor = 409 METAS_CONFLITO.
+const CHECKLIST = "/api/v1/checklist-operacional";
+export const obterMetasChecklist = () => getJson(`${CHECKLIST}/metas`);
+export async function salvarMetasChecklist({ versao, metas, origem }) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${CHECKLIST}/metas`, {
+    method: "PUT", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify({ versao, metas, ...(origem ? { origem } : {}) }),
+  });
+  return tratar(r, g);
+}
+export const obterHistoricoMetasChecklist = () => getJson(`${CHECKLIST}/metas/historico`);
+// Dashboard Operacional: período/etapa são só FILTRO (a unidade vem do contexto). O Excel é o MESMO cálculo.
+export const obterDashboardChecklist = (filtro) => getJson(`${CHECKLIST}/dashboard${qs(filtro)}`);
+export async function exportarDashboardChecklistExcel(filtro) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${CHECKLIST}/dashboard/exportar.xlsx${qs(filtro)}`, { headers: await comAuth() });
+  if (!r.ok) return tratar(r, g);
+  const nomeArquivo = (r.headers.get("content-disposition") || "").match(/filename="([A-Za-z0-9._-]+)"/)?.[1] ?? "Checklist-Operacional.xlsx";
+  return { blob: await r.blob(), nomeArquivo };
+}
 
 // Financial (Fase 2 — Homologação, só leitura). merchantId NUNCA é enviado
 // daqui — o backend resolve sempre da conexão da unidade.

@@ -22,6 +22,7 @@ import * as parserCancelamentosTool from "./tools/parserCancelamentos.tool.js";
 import * as parserCancelamentoTool from "./tools/parserCancelamento.tool.js";
 import * as navegacaoTool from "./tools/navegacao.tool.js";
 import * as evolucaoDiariaFinanceiroTool from "./tools/evolucaoDiariaFinanceiro.tool.js";
+import * as checklistOperacionalTool from "./tools/checklistOperacional.tool.js";
 
 /** Nome da tool de navegação (Etapa F.1) — única exceção ao "Consultou": nunca é fonte de dado, ver agente.service.js. */
 export const NOME_TOOL_NAVEGACAO = navegacaoTool.definicao.name;
@@ -47,6 +48,11 @@ export const NOME_TOOL_NAVEGACAO = navegacaoTool.definicao.name;
  * }>}
  */
 export const REGISTRO = [
+  {
+    definicao: checklistOperacionalTool.definicao, executar: checklistOperacionalTool.executar,
+    access: { module: MODULOS.CHECKLIST_OPERACIONAL, permission: PERMISSOES.CHECKLIST_VISUALIZAR },
+    mode: "read", risk: "low",
+  },
   {
     definicao: dashboardExecutivoTool.definicao, executar: dashboardExecutivoTool.executar,
     access: { module: MODULOS.IFOOD_DASHBOARD, permission: PERMISSOES.DASHBOARD_EXECUTIVO_VER },

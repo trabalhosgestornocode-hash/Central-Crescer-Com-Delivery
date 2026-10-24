@@ -1,0 +1,140 @@
+/* =========================================================================
+   Checklist Operacional — DASHBOARD OPERACIONAL (dentro da Central, tema claro/escuro da Central)
+   Prefixo único `ckd-`. Cores dos gráficos: categóricas por ETAPA em ordem fixa (validadas — skill de visualização:
+   faixa de luminosidade, separação para daltonismo e contraste nos dois temas) e status reservado (dentro / atrasado),
+   sempre com rótulo. Tema escuro com passos próprios, não inversão.
+   ========================================================================= */
+.ckd {
+  --ckd-s1: #2a78d6; --ckd-s2: #eb6834; --ckd-s3: #1baf7a;
+  --ckd-bom: #0ca30c; --ckd-ruim: #d03b3b; --ckd-neutro: #b9bcc4;
+  position: relative;
+  max-width: 1280px; margin: 0 auto; padding: 4px 0 32px;
+  display: grid; gap: 18px; color: var(--texto);
+}
+:root[data-theme="dark"] .ckd { --ckd-s1: #3987e5; --ckd-s2: #d95926; --ckd-s3: #199e70; --ckd-bom: #22b14c; --ckd-ruim: #e66767; --ckd-neutro: #56605c; }
+
+.ckd-cab { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.ckd-cab h1 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+.ckd-cab h1 .icon { color: var(--verde); }
+.ckd-cab p { margin: 4px 0 0; color: var(--cinza); }
+.ckd-acoes { display: flex; flex-wrap: wrap; gap: 8px; }
+.ckd-acoes .btn, .ckd-filtros .btn { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; }
+
+.ckd-filtros {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px;
+  padding: 14px 16px; border-radius: var(--raio); background: var(--card); border: 1px solid var(--linha); box-shadow: var(--sombra);
+}
+.ckd-campo { display: grid; gap: 4px; font-size: 12px; font-weight: 700; color: var(--cinza); text-transform: uppercase; letter-spacing: .04em; }
+.ckd-campo[hidden] { display: none; }
+.ckd-campo select, .ckd-campo input, .ckd-campo output {
+  min-height: 42px; padding: 8px 12px; border: 1.5px solid var(--linha); border-radius: 10px;
+  background: var(--campo-bg, var(--card)); color: var(--texto); font: 600 14px/1.2 Inter, system-ui, sans-serif; text-transform: none; letter-spacing: 0;
+}
+.ckd-campo output { display: inline-flex; align-items: center; gap: 6px; background: var(--superficie-2); }
+
+.ckd-erro, .ckd-carregando { margin: 0; padding: 11px 15px; border-radius: 11px; font-weight: 600; font-size: 14px; }
+.ckd-erro { background: var(--bad-bg); color: var(--bad); border: 1px solid rgba(219, 59, 59, .2); }
+.ckd-carregando { background: var(--superficie-2); color: var(--cinza); }
+
+.ckd-avisos-topo { padding: 10px 14px; border-radius: 11px; background: var(--warn-bg); color: var(--texto); font-size: 14px; }
+.ckd-avisos-topo summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 700; }
+.ckd-avisos-topo ul { margin: 8px 0 0; padding-left: 22px; display: grid; gap: 4px; }
+
+.ckd-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.ckd-kpi { display: grid; gap: 4px; align-content: start; padding: 14px 16px; border-radius: var(--raio); background: var(--card); border: 1px solid var(--linha); box-shadow: var(--sombra); }
+.ckd-kpi h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12.5px; font-weight: 700; color: var(--cinza); }
+.ckd-kpi-valor { margin: 0; font-size: 30px; font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.ckd-kpi-valor small { margin-left: 4px; font-size: 14px; font-weight: 700; color: var(--cinza); }
+.ckd-kpi-sub { margin: 0; font-size: 12.5px; color: var(--cinza); }
+.ckd-delta { display: inline-flex; align-items: center; gap: 5px; margin: 2px 0 0; font-size: 12.5px; font-weight: 700; color: var(--cinza); }
+.ckd-delta--melhor { color: var(--ok); }
+.ckd-delta--pior { color: var(--bad); }
+
+.ckd-graficos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.ckd-grafico { margin: 0; padding: 14px 16px; border-radius: var(--raio); background: var(--card); border: 1px solid var(--linha); box-shadow: var(--sombra); min-width: 0; }
+.ckd-grafico figcaption { display: grid; gap: 2px; margin-bottom: 8px; }
+.ckd-grafico figcaption b { font-size: 15px; }
+.ckd-grafico figcaption span { font-size: 12.5px; color: var(--cinza); }
+.ckd-grafico svg { display: block; width: 100%; height: auto; overflow: visible; }
+.ckd-grafico-vazio { margin: 24px 0; text-align: center; color: var(--cinza); }
+.ckd-grade { stroke: var(--linha); stroke-width: 1; }
+.ckd-eixo { fill: var(--cinza); font: 500 11px Inter, system-ui, sans-serif; }
+.ckd-linha { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ckd-ponto { stroke: var(--card); stroke-width: 2; }
+.ckd-ref { stroke: var(--cinza); stroke-width: 1.5; stroke-dasharray: 5 5; }
+.ckd-rotulo { fill: var(--texto); font: 700 11px Inter, system-ui, sans-serif; }
+.ckd-rotulo--ref { fill: var(--cinza); }
+.ckd-rotulo--dentro { fill: #fff; }
+.ckd-alvo { fill: transparent; }
+.ckd-alvo:hover { fill: color-mix(in srgb, var(--texto) 6%, transparent); }
+.ckd-legenda { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 8px 0 0; padding: 0; list-style: none; font-size: 12.5px; color: var(--texto); }
+.ckd-legenda i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 3px; vertical-align: -1px; }
+.ckd-tabela-grafico { margin-top: 8px; font-size: 13px; }
+.ckd-tabela-grafico summary { cursor: pointer; color: var(--cinza); font-weight: 600; }
+.ckd-tabela-grafico table { width: 100%; margin-top: 6px; border-collapse: collapse; }
+.ckd-tabela-grafico th, .ckd-tabela-grafico td { padding: 4px 8px; border-bottom: 1px solid var(--linha); text-align: left; }
+
+.ckd-tooltip {
+  position: absolute; left: 0; top: 0; z-index: 5; max-width: 320px; pointer-events: none;
+  padding: 8px 10px; border-radius: 9px; background: var(--texto); color: var(--card); font-size: 12.5px; font-weight: 600; box-shadow: var(--sombra-md);
+}
+
+.ckd-bloco { padding: 16px 18px; border-radius: var(--raio); background: var(--card); border: 1px solid var(--linha); box-shadow: var(--sombra); display: grid; gap: 10px; min-width: 0; }
+.ckd-bloco > *, .ckd-analise, .ckd-analise > *, .ckd-evidencia { min-width: 0; } /* tabelas largas rolam dentro do bloco, nunca a página */
+.ckd-bloco h2 { margin: 0; font-size: 18px; font-weight: 800; }
+.ckd-nota { margin: 0; color: var(--cinza); font-size: 13px; line-height: 1.5; }
+.ckd-vazio { margin: 0; color: var(--cinza); }
+.ckd-tabela-wrap { overflow-x: auto; }
+.ckd-tabela { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ckd-tabela th, .ckd-tabela td { padding: 8px 10px; border-bottom: 1px solid var(--linha); text-align: left; vertical-align: top; }
+.ckd-tabela thead th { background: var(--superficie-2); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--cinza); }
+.ckd-tabela--mini { font-size: 13px; }
+.ckd-marca { display: inline-block; width: 10px; height: 10px; margin-right: 8px; border-radius: 3px; }
+
+.ckd-analise { display: grid; gap: 8px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--linha); border-left: 4px solid var(--cinza); background: var(--superficie-2); }
+.ckd-analise--alta { border-left-color: var(--bad); }
+.ckd-analise--media { border-left-color: var(--warn); }
+.ckd-analise header { display: grid; gap: 4px; }
+.ckd-analise h3 { margin: 0; font-size: 16px; }
+.ckd-sev { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--cinza); }
+.ckd-analise--alta .ckd-sev { color: var(--bad); }
+.ckd-analise--media .ckd-sev { color: var(--warn); }
+.ckd-analise dl { display: grid; gap: 6px; margin: 0; }
+.ckd-analise dl div { display: grid; grid-template-columns: 130px 1fr; gap: 10px; }
+.ckd-analise dt { font-weight: 700; color: var(--cinza); font-size: 13px; }
+.ckd-analise dd { margin: 0; font-size: 14px; line-height: 1.5; }
+.ckd-hipotese dd { font-style: italic; }
+.ckd-evidencia summary { cursor: pointer; font-weight: 700; font-size: 13px; color: var(--cinza); }
+.ckd-evidencia ul { margin: 6px 0 0; padding-left: 20px; color: var(--cinza); }
+
+.ckd-qualidade { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 16px; margin: 0; }
+.ckd-qualidade dt { font-size: 12.5px; color: var(--cinza); }
+.ckd-qualidade dd { margin: 2px 0 0; font-weight: 800; font-size: 16px; }
+.ckd-avisos { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 13.5px; }
+.ckd-avisos li { display: flex; gap: 8px; align-items: flex-start; }
+.ckd-avisos .icon { flex: none; margin-top: 2px; color: var(--cinza); }
+.ckd-definicoes summary { cursor: pointer; list-style: none; }
+.ckd-definicoes summary h2 { display: inline; }
+.ckd-rodape { margin: 0; color: var(--cinza); font-size: 12.5px; }
+
+.ckd-dialogo { width: min(560px, calc(100vw - 32px)); padding: 0; border: 0; border-radius: var(--raio-lg); background: var(--card); color: var(--texto); box-shadow: var(--sombra-md); }
+.ckd-dialogo::backdrop { background: rgba(10, 12, 16, .55); }
+.ckd-rel { display: grid; gap: 12px; padding: 20px 22px; }
+.ckd-rel h2 { margin: 0; font-size: 20px; }
+.ckd-rel p { margin: 0; color: var(--cinza); }
+.ckd-rel fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; margin: 0; padding: 0; border: 0; }
+.ckd-rel label { display: flex; gap: 8px; align-items: center; min-height: 32px; font-size: 14px; }
+.ckd-rel-erro { color: var(--bad) !important; font-weight: 700; }
+.ckd-rel footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.ckd-rel footer .btn { display: inline-flex; align-items: center; gap: 8px; min-height: 42px; }
+
+.ckd-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (max-width: 900px) { .ckd-graficos { grid-template-columns: 1fr; } }
+@media (max-width: 600px) {
+  .ckd-filtros { padding: 12px; }
+  .ckd-campo, .ckd-filtros .btn { flex: 1 1 100%; }
+  .ckd-analise dl div { grid-template-columns: 1fr; gap: 2px; }
+  .ckd-rel fieldset { grid-template-columns: 1fr; }
+  .ckd-kpi-valor { font-size: 26px; }
+}

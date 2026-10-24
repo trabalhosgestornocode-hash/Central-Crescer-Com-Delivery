@@ -79,3 +79,132 @@ export async function obterNomesDasLojas({ organizacaoId, unidadeId, merchantIds
   }
   return nomes;
 }
+
+// ---------------------------------------------------------------------------
+// Metas da unidade (migration 127). Leitura direta; escrita SÓ pela função do banco (versão + histórico juntos).
+// ---------------------------------------------------------------------------
+
+const COLUNAS_METAS = [
+  "unidade_id", "versao", "preparo_meta_min", "preparo_aviso_pct", "entrega_meta_min", "entrega_aviso_pct",
+  "vida_meta_min", "vida_aviso_pct", "atualizado_em", "atualizado_por_nome",
+].join(", ");
+
+/** Erro de "migration ainda não aplicada" (tabela ou função ausente no schema). */
+export const objetoAusente = (error) =>
+  ["42P01", "42883", "PGRST202", "PGRST205"].includes(error?.code)
+  || /relation .* does not exist|could not find the (table|function)|schema cache/i.test(error?.message ?? "");
+
+function erroDeMetas(error) {
+  if (objetoAusente(error)) {
+    const e = new ApiError(503, "As metas da unidade ainda não podem ser salvas neste ambiente (migration 127 pendente).");
+    e.codigo = "METAS_INDISPONIVEIS";
+    return e;
+  }
+  return ApiError.internal(error.message);
+}
+
+/** Linha de metas da unidade, ou null (a unidade ainda não salvou). Lança 503 METAS_INDISPONIVEIS sem a migration. */
+export async function obterMetas({ organizacaoId, unidadeId, db = supabase }) {
+  if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente na consulta de metas do Checklist.");
+  const { data, error } = await db.from("checklist_metas").select(COLUNAS_METAS)
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).maybeSingle();
+  if (error) throw erroDeMetas(error);
+  return data ?? null;
+}
+
+/**
+ * Grava uma nova versão (ou acusa conflito). Devolve a linha da função:
+ * `{ resultado: 'salvo'|'sem_alteracao'|'conflito', versao_atual, metas_atual, atualizado_em_atual, atualizado_por_atual }`.
+ */
+export async function salvarMetas({ organizacaoId, unidadeId, versaoEsperada, metas, origem, autor, db = supabase }) {
+  if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente ao salvar metas do Checklist.");
+  const { data, error } = await db.rpc("checklist_metas_salvar", {
+    p_organizacao_id: organizacaoId,
+    p_unidade_id: unidadeId,
+    p_versao_esperada: versaoEsperada,
+    p_preparo_meta: metas.preparo.meta, p_preparo_aviso: metas.preparo.avisoPct,
+    p_entrega_meta: metas.entrega.meta, p_entrega_aviso: metas.entrega.avisoPct,
+    p_vida_meta: metas.vida.meta, p_vida_aviso: metas.vida.avisoPct,
+    p_origem: origem,
+    p_perfil_id: autor?.perfilId ?? null,
+    p_usuario_id: autor?.usuarioId ?? null,
+    p_nome: autor?.nome ?? null,
+    p_impersonado_por: autor?.impersonadoPor ?? null,
+  });
+  if (error) throw erroDeMetas(error);
+  return Array.isArray(data) ? data[0] ?? null : data ?? null;
+}
+
+/** Histórico de alterações (mais recente primeiro). Sem ids de usuário na resposta: só o nome gravado na hora. */
+export async function listarHistoricoMetas({ organizacaoId, unidadeId, limite = 50, db = supabase }) {
+  if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente no histórico de metas do Checklist.");
+  const { data, error } = await db.from("checklist_metas_historico")
+    .select("versao, anterior, novo, origem, alterado_em, alterado_por_nome, impersonado_por")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+    .order("versao", { ascending: false }).limit(limite);
+  if (error) throw erroDeMetas(error);
+  return data ?? [];
+}
+
+/** Todas as versões até `ateIso` (ordem crescente) — a linha do tempo usada para avaliar pedidos passados. */
+export async function listarVersoesMetas({ organizacaoId, unidadeId, ateIso, db = supabase }) {
+  if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente no histórico de metas do Checklist.");
+  const { data, error } = await db.from("checklist_metas_historico").select("versao, novo, alterado_em")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+    .lte("alterado_em", ateIso).order("versao", { ascending: true }).limit(5000);
+  if (error) throw erroDeMetas(error);
+  return data ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Pedidos de um PERÍODO (Dashboard Operacional). Mesma lista positiva de colunas do resumo ao vivo.
+// ---------------------------------------------------------------------------
+
+/** Página da consulta (o PostgREST limita cada resposta) e teto do período inteiro. */
+export const PAGINA_PERIODO = 1000;
+export const LIMITE_LINHAS_PERIODO = 60_000;
+
+/**
+ * Pedidos do tenant com `criado_em` em [desdeIso, ateIso). A janela já vem com folga: o DIA de cada pedido é decidido
+ * no cálculo pelo carimbo oficial de recebimento, nunca por `criado_em`. Paginado por `criado_em` + `order_id`
+ * (ordem total e estável: nenhum pedido aparece duas vezes nem some entre páginas).
+ * Acima de LIMITE_LINHAS_PERIODO lança 422 (indicador calculado sobre parte do período seria enganoso).
+ */
+export async function listarPedidosDoPeriodo({ organizacaoId, unidadeId, desdeIso, ateIso, db = supabase }) {
+  if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente na consulta do Dashboard Operacional.");
+  const linhas = [];
+  for (let inicio = 0; ; inicio += PAGINA_PERIODO) {
+    const { data, error } = await db.from("ifood_pedidos").select(COLUNAS_PEDIDO_CHECKLIST)
+      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+      .gte("criado_em", desdeIso).lt("criado_em", ateIso)
+      .order("criado_em", { ascending: true }).order("order_id", { ascending: true })
+      .range(inicio, inicio + PAGINA_PERIODO - 1);
+    if (error) throw ApiError.internal(error.message);
+    linhas.push(...(data ?? []));
+    if (linhas.length > LIMITE_LINHAS_PERIODO) {
+      const e = new ApiError(422, "Pedidos demais neste período para calcular com segurança. Escolha um intervalo menor.");
+      e.codigo = "PERIODO_GRANDE_DEMAIS";
+      throw e;
+    }
+    if (!data || data.length < PAGINA_PERIODO) break;
+  }
+  return linhas;
+}
+
+/** Primeiro pedido registrado da unidade (cobertura: antes disso não há dado — nada é inferido). */
+export async function obterPrimeiroPedidoEm({ organizacaoId, unidadeId, db = supabase }) {
+  if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente na consulta do Dashboard Operacional.");
+  const { data, error } = await db.from("ifood_pedidos").select("criado_em")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+    .order("criado_em", { ascending: true }).limit(1);
+  if (error) throw ApiError.internal(error.message);
+  return data?.[0]?.criado_em ?? null;
+}
+
+/** Nome da unidade (só para o cabeçalho dos relatórios), sempre conferindo a organização. */
+export async function obterNomeUnidade({ organizacaoId, unidadeId, db = supabase }) {
+  if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente na consulta da unidade.");
+  const { data, error } = await db.from("unidades").select("nome").eq("id", unidadeId).eq("organizacao_id", organizacaoId).maybeSingle();
+  if (error) throw ApiError.internal(error.message);
+  return data?.nome ?? null;
+}

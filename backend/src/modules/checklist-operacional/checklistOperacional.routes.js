@@ -15,8 +15,18 @@ import * as controller from "./checklistOperacional.controller.js";
 
 export const checklistOperacionalRouter = Router();
 
-checklistOperacionalRouter.get(
-  "/resumo",
-  requireAlgumaPermissao(PERMISSOES.CHECKLIST_VISUALIZAR, PERMISSOES.INTEGRACOES_VER),
-  controller.resumo,
-);
+const visualizar = requireAlgumaPermissao(PERMISSOES.CHECKLIST_VISUALIZAR, PERMISSOES.INTEGRACOES_VER);
+// Editar metas: a MESMA régua que a tela já usava para mostrar o botão "Metas" (organization_admin e unit_manager).
+// O perfil de exibição não tem nenhuma das duas — e o middleware dele nega qualquer rota fora da lista (só /resumo).
+const gerenciarMetas = requireAlgumaPermissao(PERMISSOES.CONFIG_GERENCIAR, PERMISSOES.INTEGRACOES_GERENCIAR);
+
+checklistOperacionalRouter.get("/resumo", visualizar, controller.resumo);
+
+// Metas da unidade (migration 127): leitura, gravação versionada e histórico de alterações.
+checklistOperacionalRouter.get("/metas", visualizar, controller.obterMetas);
+checklistOperacionalRouter.put("/metas", gerenciarMetas, controller.salvarMetas);
+checklistOperacionalRouter.get("/metas/historico", gerenciarMetas, controller.historicoMetas);
+
+// Dashboard Operacional (histórico) e o relatório em Excel do MESMO cálculo.
+checklistOperacionalRouter.get("/dashboard", visualizar, controller.dashboard);
+checklistOperacionalRouter.get("/dashboard/exportar.xlsx", visualizar, controller.exportarExcel);

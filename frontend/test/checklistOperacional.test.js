@@ -319,9 +319,9 @@ describe("menu, rota e ciclo de vida", () => {
     assert.match(ler("../src/router.js"), /case "checklist-operacional":\s*\n\s*renderChecklistOperacional\(\);/);
     assert.match(ler("../index.html"), /checklistOperacional\.css/);
   });
-  test("o controlador só LÊ o resumo do backend: nada de escrita, storage ou fetch direto", () => {
+  test("o controlador só LÊ o resumo e grava SÓ as metas (pela api.js): nada de storage ou fetch direto", () => {
     const fonte = ler("../src/checklistOperacional.js");
-    assert.match(fonte, /import \{ obterResumoChecklist \} from "\.\/api\.js"/);
+    assert.match(fonte, /import \{ obterResumoChecklist, salvarMetasChecklist \} from "\.\/api\.js"/);
     assert.doesNotMatch(fonte, /\bhttp\.|fetch\(|localStorage|sessionStorage|post\w*\(|delJson|putJson/);
     assert.match(ler("../src/api.js"), /obterResumoChecklist = \(\) => getJson\("\/api\/v1\/checklist-operacional\/resumo"\)/);
   });
@@ -382,7 +382,8 @@ describe("metas × referência estatística × limite de alerta", async () => {
     assert.match(html, /name="preparoAviso"/);
     assert.match(html, /data-acao="metas-referencia"/);
     assert.match(html, /data-referencia/);
-    assert.match(html, /não são salvas para a unidade/);
+    // Checklist 2.0: as metas agora SÃO salvas para a unidade (servidor); a referência continua só preenchendo o formulário.
+    assert.match(html, /Pedido em andamento é reavaliado na hora pela meta nova/);
     // O formulário aberto com a referência mostra 16,3 — mas a tela só muda ao aplicar.
     assert.match(V.dialogoMetas(M.REFERENCIA_P75, { demonstracao: false }), /name="preparoMeta"[^>]*value="16,3"/);
   });

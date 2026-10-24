@@ -443,11 +443,18 @@ describe("HTTP — permissões do Checklist", async () => {
     assert.ok(!JSON.stringify(r.json).match(/pedido|merchant|order/i));
   });
 
-  test("o controller não lê query, corpo, parâmetros nem cabeçalhos (só req.tenant)", () => {
+  test("o tenant vem SÓ de req.tenant: /resumo não lê query, corpo, parâmetros nem cabeçalhos; as rotas 2.0 leem só filtro/metas", () => {
     const fonte = readFileSync(path.join(AQUI, "../src/modules/checklist-operacional/checklistOperacional.controller.js"), "utf8");
     const codigo = fonte.replace(/^\s*\/\/.*$/gm, "");
-    assert.doesNotMatch(codigo, /req\.(query|body|params|headers)/);
+    // O handler do resumo (a tela de parede) continua sem ler NADA da requisição além do contexto.
+    const resumo = codigo.slice(codigo.indexOf("export const resumo"), codigo.indexOf("});", codigo.indexOf("export const resumo")));
+    assert.doesNotMatch(resumo, /req\.(query|body|params|headers)/);
     assert.match(codigo, /req\.tenant/);
+    // Checklist 2.0: query = só os filtros conhecidos; corpo = só as metas (o service valida e ignora qualquer id).
+    // Nenhum id de unidade/empresa vem de query, corpo, parâmetros ou cabeçalhos.
+    assert.doesNotMatch(codigo, /req\.(query|body)\??\.?\[?["']?(unidade|organizacao|org|empresa|tenant)/i);
+    assert.doesNotMatch(codigo, /req\.(params|headers)|req\.header\(/);
+    assert.match(codigo, /\["periodo", "inicio", "fim", "etapa"\]/);
   });
 
   test("métodos de escrita não existem: POST/PUT/DELETE em /resumo = 404", async () => {
@@ -461,9 +468,9 @@ describe("HTTP — permissões do Checklist", async () => {
     }
   });
 
-  test("só GET /resumo existe — nenhuma rota de escrita", () => {
+  test("rotas do Checklist 2.0: a única escrita é PUT /metas (pedidos continuam só leitura)", () => {
     const rotas = checklistOperacionalRouter.stack.filter((l) => l.route).flatMap((l) => Object.keys(l.route.methods).map((m) => `${m.toUpperCase()} ${l.route.path}`));
-    assert.deepEqual(rotas, ["GET /resumo"]);
+    assert.deepEqual(rotas, ["GET /resumo", "GET /metas", "PUT /metas", "GET /metas/historico", "GET /dashboard", "GET /dashboard/exportar.xlsx"]);
   });
 
   test("routes.js monta o Checklist depois do gate de contexto, com o módulo próprio (e o iFood só na transição)", () => {

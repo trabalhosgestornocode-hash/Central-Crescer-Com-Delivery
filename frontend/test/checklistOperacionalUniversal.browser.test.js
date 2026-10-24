@@ -50,11 +50,18 @@ const SEM_INTEGRACAO = () => ({
 });
 const COM_INTEGRACAO = () => ({ ...respostaResumo(AGORA), modo: "integrado" });
 
-const api = { consultas: 0, falhar: false, erro: null, dados: COM_INTEGRACAO };
+// Checklist 2.0: o servidor é a fonte das metas — vêm em todo resumo (com a versão) e PUT /metas grava com a versão que a
+// tela tinha (versão diferente = 409 METAS_CONFLITO), como o backend real (checklistOperacional.service#salvarMetas).
+const METAS_PADRAO = () => ({ origem: "padrao", versao: 0, valores: { preparo: { meta: 12, avisoPct: 80 }, entrega: { meta: 35, avisoPct: 80 }, vida: { meta: 45, avisoPct: 80 } }, atualizadoEm: null, atualizadoPor: null });
+const api = { consultas: 0, falhar: false, erro: null, dados: COM_INTEGRACAO, metas: METAS_PADRAO(), gravacoes: 0 };
 let servidor; let base;
 
+// Dashboard Operacional servido com os MÓDULOS PUROS do backend (o mesmo cálculo da API), sobre os pedidos da fixture.
+let backend = null;
 before(async () => {
   if (PULAR) return;
+  const b = (m) => import(new URL(`../../backend/src/modules/checklist-operacional/${m}`, import.meta.url));
+  backend = { ind: await b("checklistOperacional.indicadores.js"), per: await b("checklistOperacional.periodos.js"), metas: await b("checklistOperacional.metas.js"), an: await b("checklistOperacional.analises.js") };
   servidor = createServer((req, res) => {
     const caminho = new URL(req.url, "http://x").pathname;
     if (caminho === "/") { res.setHeader("Content-Type", "text/html; charset=utf-8"); res.end(PAGINA); return; }
@@ -65,7 +72,36 @@ before(async () => {
       if (api.falhar) { res.writeHead(503, { "Content-Type": "application/json" }); res.end('{"error":"indisponível"}'); return; }
       if (api.erro) { res.writeHead(api.erro.status, { "Content-Type": "application/json" }); res.end(JSON.stringify(api.erro.corpo)); return; }
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ data: api.dados() }));
+      res.end(JSON.stringify({ data: { ...api.dados(), metas: api.metas } }));
+      return;
+    }
+    if (caminho === "/api/v1/checklist-operacional/dashboard") {
+      api.consultasDashboard = (api.consultasDashboard ?? 0) + 1;
+      const q = new URL(req.url, "http://x").searchParams;
+      const periodo = backend.per.resolverPeriodo({ periodo: q.get("periodo") || "hoje", inicio: q.get("inicio"), fim: q.get("fim"), agoraMs: AGORA });
+      // A versão salva vale desde ontem (os pedidos de hoje são avaliados por ela); sem versão salva, nenhuma meta vigente.
+      const lt = api.metas.versao ? backend.metas.linhaDoTempoDasMetas([{ versao: api.metas.versao, alterado_em: new Date(AGORA - 86_400_000).toISOString(), novo: api.metas.valores }]) : [];
+      const d = backend.ind.montarDashboard({ pedidos: pedidosDoDia(AGORA), periodo, linhaDoTempo: lt, etapa: q.get("etapa") || "todas" });
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ data: { versao: 1, servidorEm: new Date(AGORA).toISOString(), ...backend.ind.paraResposta(d), analises: backend.an.gerarAnalises(d) } }));
+      return;
+    }
+    if (caminho === "/api/v1/checklist-operacional/metas" && req.method === "PUT") {
+      let corpo = "";
+      req.on("data", (c) => { corpo += c; });
+      req.on("end", () => {
+        const { versao, metas } = JSON.parse(corpo || "{}");
+        res.setHeader("Content-Type", "application/json");
+        if (api.falharGravacao) { res.writeHead(503); res.end('{"error":"indisponível"}'); return; }
+        if (versao !== api.metas.versao) {
+          res.writeHead(409);
+          res.end(JSON.stringify({ error: "As metas foram alteradas em outro aparelho.", codigo: "METAS_CONFLITO", details: { metas: api.metas } }));
+          return;
+        }
+        api.gravacoes += 1;
+        api.metas = { origem: "unidade", versao: api.metas.versao + 1, valores: metas, atualizadoEm: new Date(AGORA).toISOString(), atualizadoPor: "Gestora" };
+        res.end(JSON.stringify({ data: { resultado: "salvo", metas: api.metas } }));
+      });
       return;
     }
     const arq = resolve(RAIZ, "." + caminho);
@@ -81,7 +117,7 @@ before(async () => {
 });
 after(async () => { if (servidor) await new Promise((r) => servidor.close(r)); });
 
-const zerar = (dados = COM_INTEGRACAO) => Object.assign(api, { consultas: 0, falhar: false, erro: null, dados });
+const zerar = (dados = COM_INTEGRACAO) => Object.assign(api, { consultas: 0, falhar: false, erro: null, dados, metas: METAS_PADRAO(), gravacoes: 0, falharGravacao: false });
 
 async function abrir(browser, { viewport = { width: 1920, height: 1080 } } = {}) {
   const pagina = await browser.newPage({ viewport });
@@ -255,6 +291,10 @@ describe("Checklist Operacional — universalização e tempos em navegador real
     await dlg.locator('button[type="submit"]').click();
     await assentar(pagina);
     assert.match((await textoVisivel(pagina, '[data-card="preparo"]')).join(" "), /Meta\s*16,3 min/);
+    // Checklist 2.0: aplicar = gravar no servidor UMA vez (versão 0 → 1); o cancelar de antes não gravou nada.
+    assert.equal(api.gravacoes, 1);
+    assert.equal(api.metas.versao, 1);
+    assert.equal(api.metas.valores.preparo.meta, 16.3);
     assert.deepEqual(erros, []);
     await pagina.close();
   });
@@ -270,5 +310,175 @@ describe("Checklist Operacional — universalização e tempos em navegador real
       assert.deepEqual(erros, [], `${w}x${h}`);
       await pagina.close();
     }
+  });
+});
+
+// =====================================================================================================================
+// Checklist 2.0 — metas sincronizadas e fundo dinâmico, no NAVEGADOR REAL, com várias telas no MESMO servidor.
+// =====================================================================================================================
+describe("Checklist 2.0 — sincronização de metas e fundo dinâmico (navegador real)", { skip: PULAR, timeout: 300_000 }, () => {
+  let browser;
+  before(async () => { browser = await chromium.launch({ headless: true, ...(CANAL ? { channel: CANAL } : {}) }); });
+  after(async () => { await browser?.close(); });
+
+  /** Só o pedido 4111 (CONFIRMED, chegou há 9 min): nenhum alerta do servidor, o nível vem só da meta. */
+  const UM_ATIVO = () => ({ ...respostaResumo(AGORA, { pedidos: pedidosDoDia(AGORA).filter((p) => p.display_id === "4111") }), modo: "integrado" });
+  const metaPreparo = async (pagina) => (await textoVisivel(pagina, '[data-card="preparo"]')).join(" ");
+  async function salvarPeloDialogo(pagina, preparo) {
+    await pagina.locator('[data-acao="metas"]').click();
+    const dlg = pagina.locator("dialog[open]").first();
+    await dlg.waitFor();
+    await dlg.locator('input[name="preparoMeta"]').fill(String(preparo));
+    await dlg.locator('button[type="submit"]').click();
+    await assentar(pagina);
+    return dlg;
+  }
+  const putDireto = (versao, preparo) => fetch(`${base}/api/v1/checklist-operacional/metas`, {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ versao, metas: { preparo: { meta: preparo, avisoPct: 80 }, entrega: { meta: 35, avisoPct: 80 }, vida: { meta: 45, avisoPct: 80 } } }),
+  });
+  const avisoRealtime = (pagina, unidadeId, versao) => pagina.evaluate(async ({ org, uni, v }) => {
+    const bus = await import("/src/realtime/realtimeBus.js");
+    bus.receberEvento({ tipo: "checklist_metas.atualizadas", organizacaoId: org, unidadeId: uni, versao: v });
+  }, { org: ORG, uni: unidadeId, v: versao });
+
+  test("Tablet salva → a TV recebe pelo polling; outro aparelho salva → a TV recebe pelo aviso do Realtime (sem esperar 30 s)", async () => {
+    zerar();
+    const tv = await abrir(browser);
+    const tablet = await abrir(browser, { viewport: { width: 1024, height: 768 } });
+    await iniciarModo(tv.pagina, "tv");
+    await iniciarModo(tablet.pagina, "tablet");
+    assert.match(await metaPreparo(tv.pagina), /Meta\s*12,0 min/);
+    await salvarPeloDialogo(tablet.pagina, 20);
+    assert.match(await metaPreparo(tablet.pagina), /Meta\s*20,0 min/, "o tablet aplica na hora");
+    assert.deepEqual([api.gravacoes, api.metas.versao], [1, 1]);
+    assert.match(await metaPreparo(tv.pagina), /Meta\s*12,0 min/, "a TV ainda não consultou");
+    await tv.pagina.clock.runFor(31_000);
+    await assentar(tv.pagina);
+    assert.match(await metaPreparo(tv.pagina), /Meta\s*20,0 min/, "polling de segurança trouxe a versão nova");
+    // Terceiro aparelho grava; a TV recebe o aviso do Realtime (o mesmo tipo que o backend publica) e consulta já.
+    assert.equal((await putDireto(1, 18)).status, 200);
+    await avisoRealtime(tv.pagina, UNIDADE.id, 2);
+    await tv.pagina.clock.runFor(2_000);
+    await assentar(tv.pagina);
+    assert.match(await metaPreparo(tv.pagina), /Meta\s*18,0 min/, "o aviso antecipou a consulta");
+    // Aviso de OUTRA unidade é ignorado.
+    const antes = api.consultas;
+    await avisoRealtime(tv.pagina, "outra-unidade", 9);
+    await tv.pagina.clock.runFor(2_000);
+    await assentar(tv.pagina);
+    assert.equal(api.consultas, antes);
+    assert.deepEqual([...tv.erros, ...tablet.erros], []);
+    await tv.pagina.close(); await tablet.pagina.close();
+  });
+
+  test("edição simultânea na tela: quem salva com versão velha vê o aviso de conflito e os valores ATUAIS no formulário", async () => {
+    zerar();
+    const { pagina, erros } = await abrir(browser);
+    await iniciarModo(pagina, "tablet");
+    assert.equal((await putDireto(0, 25)).status, 200, "outro aparelho salvou primeiro (v1)");
+    const dlg = await salvarPeloDialogo(pagina, 15); // esta tela ainda tem a versão 0
+    assert.match(await dlg.locator("[data-metas-aviso]").textContent(), /alteradas em outro aparelho/);
+    assert.equal(await dlg.locator('input[name="preparoMeta"]').inputValue(), "25", "o formulário passa a mostrar o valor do servidor");
+    assert.equal(api.metas.valores.preparo.meta, 25, "nada foi sobrescrito");
+    await dlg.locator('input[name="preparoMeta"]').fill("15");
+    await dlg.locator('button[type="submit"]').click();
+    await assentar(pagina);
+    assert.deepEqual([api.metas.versao, api.metas.valores.preparo.meta], [2, 15]);
+    assert.match(await metaPreparo(pagina), /Meta\s*15,0 min/);
+    assert.deepEqual(erros, []);
+    await pagina.close();
+  });
+
+  test("falha ao gravar (sem conexão): aviso escrito, a meta anterior continua valendo; quando volta, grava", async () => {
+    zerar();
+    const { pagina, erros } = await abrir(browser);
+    await iniciarModo(pagina, "tablet");
+    api.falharGravacao = true;
+    const dlg = await salvarPeloDialogo(pagina, 30);
+    assert.match(await dlg.locator("[data-metas-aviso]").textContent(), /Não foi possível salvar|não podem ser salvas/);
+    await dlg.locator('[data-acao="metas-cancelar"]').click();
+    assert.match(await metaPreparo(pagina), /Meta\s*12,0 min/, "a última configuração válida continua valendo");
+    api.falharGravacao = false;
+    await salvarPeloDialogo(pagina, 30);
+    assert.match(await metaPreparo(pagina), /Meta\s*30,0 min/);
+    assert.equal(api.metas.versao, 1);
+    assert.deepEqual(erros.filter((e) => !/503/.test(e)), []);
+    await pagina.close();
+  });
+
+  test("fundo da área operacional acompanha o status: 30 → verde, 10 → amarelo, 8 → vermelho (cores diferentes, texto e ícone)", async () => {
+    zerar(UM_ATIVO);
+    const { pagina, erros } = await abrir(browser, { viewport: { width: 1280, height: 720 } });
+    await iniciarModo(pagina, "tv");
+    const leituras = [];
+    for (const [preparo, versao] of [[30, 0], [10, 1], [8, 2]]) {
+      assert.equal((await putDireto(versao, preparo)).status, 200);
+      await avisoRealtime(pagina, UNIDADE.id, versao + 1);
+      await pagina.clock.runFor(2_000);
+      await assentar(pagina);
+      await new Promise((r) => setTimeout(r, 1_000)); // transição de 900 ms terminar
+      leituras.push(await pagina.evaluate(() => {
+        const r = document.querySelector("[data-cko]");
+        return { fundo: r.dataset.fundo, cor: getComputedStyle(r).backgroundColor, icone: r.querySelector("[data-status-icone]")?.dataset.statusIcone };
+      }));
+    }
+    assert.deepEqual(leituras.map((l) => l.fundo), ["ok", "atencao", "critico"], JSON.stringify(leituras));
+    assert.deepEqual(leituras.map((l) => l.icone), ["ok", "atencao", "critico"]);
+    assert.equal(new Set(leituras.map((l) => l.cor)).size, 3, "três cores de fundo diferentes");
+    assert.ok(await semRolagemHorizontal(pagina));
+    assert.ok(await pagina.evaluate(() => { const r = document.querySelector("[data-cko]"); return r.scrollHeight <= r.clientHeight + 1; }), "TV 1280×720 sem rolagem");
+    await foto(pagina, "checklist2-fundo-critico");
+    assert.deepEqual(erros, []);
+    await pagina.close();
+  });
+
+  test("movimento reduzido: a troca de fundo é instantânea (sem transição)", async () => {
+    zerar(UM_ATIVO);
+    const pagina = await browser.newPage({ viewport: { width: 1280, height: 720 }, reducedMotion: "reduce" });
+    await pagina.clock.install({ time: AGORA });
+    await pagina.clock.pauseAt(AGORA);
+    await pagina.goto(base + "/");
+    await pagina.evaluate(async ({ org, unidade }) => {
+      const { state } = await import("/src/state.js");
+      Object.assign(state.sessao, { empresa: { id: org, nome: "E" }, unidade, permissoes: ["checklist.visualizar"], modulos: ["checklist_operacional"] });
+      state.rota = "checklist-operacional";
+      (await import("/src/checklistOperacional.js")).renderChecklistOperacional();
+    }, { org: ORG, unidade: UNIDADE });
+    await iniciarModo(pagina, "tv");
+    const t = await pagina.evaluate(() => getComputedStyle(document.querySelector("[data-cko]")).transitionDuration);
+    // A regra global da Central (styles.css) força .001ms com movimento reduzido: troca instantânea na prática.
+    assert.ok(parseFloat(t) <= 0.001, `duração da transição: ${t}`);
+    await pagina.close();
+  });
+});
+
+describe("Checklist 2.0 — Dashboard Operacional recarrega quando as metas mudam (navegador real)", { skip: PULAR, timeout: 300_000 }, () => {
+  let browser;
+  before(async () => { browser = await chromium.launch({ headless: true, ...(CANAL ? { channel: CANAL } : {}) }); });
+  after(async () => { await browser?.close(); });
+
+  test("Dashboard aberto: outro aparelho salva a meta → o aviso do Realtime recarrega os números (no máximo 1 consulta a cada 15 s)", async () => {
+    zerar();
+    api.consultasDashboard = 0;
+    const { pagina, erros } = await abrir(browser);
+    await pagina.locator('[data-acao="abrir-dashboard"]').click();
+    await pagina.waitForFunction(() => document.querySelector("[data-ckd]") && !document.querySelector(".ckd-carregando"));
+    assert.equal(api.consultasDashboard, 1);
+    assert.match((await textoVisivel(pagina, "#ckd-t-metas + p + *, .ckd-bloco")).join(" "), /Nenhuma meta salva para a unidade/);
+    const r = await fetch(`${base}/api/v1/checklist-operacional/metas`, { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ versao: 0, metas: { preparo: { meta: 22, avisoPct: 80 }, entrega: { meta: 35, avisoPct: 80 }, vida: { meta: 45, avisoPct: 80 } } }) });
+    assert.equal(r.status, 200);
+    await pagina.evaluate(async ({ org, uni }) => {
+      const bus = await import("/src/realtime/realtimeBus.js");
+      bus.receberEvento({ tipo: "checklist_metas.atualizadas", organizacaoId: org, unidadeId: uni, versao: 1 });
+    }, { org: ORG, uni: UNIDADE.id });
+    await pagina.clock.runFor(16_000);
+    await assentar(pagina);
+    await pagina.waitForFunction(() => !document.querySelector(".ckd-carregando"));
+    assert.equal(api.consultasDashboard, 2, "recarregou uma vez");
+    assert.match((await textoVisivel(pagina, ".ckd-bloco")).join(" "), /22 min/, "metas aplicáveis atualizadas");
+    assert.deepEqual(erros, []);
+    await pagina.close();
   });
 });

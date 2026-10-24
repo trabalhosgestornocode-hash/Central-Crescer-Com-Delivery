@@ -584,3 +584,56 @@ html:has(.cko--imersivo) { overflow: hidden; }
   .ckm-opcao { transition: none; }
   .ckm-opcao:hover, .ckm-opcao:focus-within { transform: none; }
 }
+
+/* =========================================================================
+   Checklist 2.0 — FUNDO DINÂMICO (só Televisão e Tablet)
+   A área operacional inteira toma o tom do status agregado (o mesmo do card
+   "Status da operação"). O tom é discreto (mistura com o fundo da marca) para
+   cards, pedidos e botões continuarem com o contraste deles: só o fundo muda,
+   as superfícies não. Troca por transição de cor (sem piscar); com movimento
+   reduzido a troca é instantânea (regra de movimento reduzido abaixo). O estado também está no
+   selo do cabeçalho, com texto e ícone.
+   ========================================================================= */
+/* O tom é a própria cor SÓLIDA de fundo da raiz (o mesmo fundo que ela já pintava, na cor do estado): sem
+   gradiente, sombra ou camada extra. Em repouso o custo de pintura é o mesmo de antes; só durante a troca de estado
+   (rara) há transição de cor. Movimento reduzido: sem transição (regra abaixo). */
+.cko--imersivo { background-color: var(--cko-fundo-tom, var(--cko-fundo)); transition: background-color 900ms ease; }
+.cko--imersivo[data-fundo="ok"] { --cko-fundo-tom: color-mix(in srgb, var(--cko-ok) 14%, var(--cko-fundo)); }
+.cko--imersivo[data-fundo="atencao"] { --cko-fundo-tom: color-mix(in srgb, var(--cko-atencao) 16%, var(--cko-fundo)); }
+.cko--imersivo[data-fundo="critico"] { --cko-fundo-tom: color-mix(in srgb, var(--cko-critico) 20%, var(--cko-fundo)); }
+.cko--imersivo[data-fundo="neutro"] { --cko-fundo-tom: var(--cko-fundo); }
+/* A regra global de movimento reduzido (.cko *) não alcança a PRÓPRIA raiz. */
+@media (prefers-reduced-motion: reduce) { .cko--imersivo { transition: none; } }
+
+/* Ícone do status ao lado do veredito (cor + ícone + texto; a cor nunca é a única pista). Sem altura nova no cabeçalho. */
+.cko-status-icone { display: inline-flex; vertical-align: middle; margin-left: .3em; color: var(--tom); }
+.cko-status-icone svg { width: .7em; height: .7em; }
+
+/* Diálogo de metas: aviso de conflito / falha (a configuração anterior continua valendo) */
+.cko-metas .cko-metas-erro {
+  padding: 10px 12px; border-radius: 10px; border-left: 3px solid var(--cko-critico);
+  background: color-mix(in srgb, var(--cko-critico) 12%, transparent); color: var(--cko-texto); font-weight: 600;
+}
+.cko-metas .cko-metas-erro:focus { outline: 2px solid var(--cko-critico); outline-offset: 2px; }
+
+/* ---------- Seleção: terceira opção (Dashboard Operacional) ---------- */
+.ckm-opcoes--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ckm-opcao-dash {
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 18px 20px 22px; border-radius: var(--raio-lg);
+  background: var(--card); border: 1px solid var(--linha); box-shadow: var(--sombra);
+  transition: transform var(--t), box-shadow var(--t), border-color var(--t);
+}
+.ckm-opcao-dash:hover, .ckm-opcao-dash:focus-within { transform: translateY(-2px); box-shadow: var(--sombra-md); border-color: var(--vermelho-tint-borda); }
+.ckm-opcao-dash h2 { display: flex; align-items: center; gap: 10px; margin: 4px 0 0; font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+.ckm-icone-dash { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; background: var(--vermelho-tint); color: var(--verde); flex: none; }
+:root[data-theme="dark"] .ckm-icone-dash { background: rgba(216, 19, 36, .16); color: #ff6b76; }
+.ckm-aparelho--dash { width: 232px; aspect-ratio: 16 / 10; }
+.ckm-tela--dash { display: flex; align-items: flex-end; gap: 7px; padding: 12px 14px; }
+.ckm-barra { flex: 1; height: var(--h); border-radius: 3px 3px 0 0; background: linear-gradient(#ff4d5a, #d81324); opacity: .85; }
+@media (max-width: 1080px) { .ckm-opcoes--3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .ckm-opcoes--3 { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) {
+  .ckm-opcao-dash { transition: none; }
+  .ckm-opcao-dash:hover, .ckm-opcao-dash:focus-within { transform: none; }
+}

@@ -383,7 +383,8 @@ describe("dado real depois do aviso", () => {
 describe("encaixe no controlador", () => {
   const fonte = ler("../src/checklistOperacional.js");
   test("assina o aviso e a resincronização pelo bus, com o filtro de organização + unidade", () => {
-    assert.match(fonte, /registrarInteresse\(\{\s*\n\s*eventos: \[EVENTOS_IFOOD_PEDIDOS\.ESTADO_ATUALIZADO, RESINCRONIZACAO\]/);
+    // Checklist 2.0: metas alteradas em outro aparelho também antecipam a MESMA consulta do resumo.
+    assert.match(fonte, /registrarInteresse\(\{\s*\n\s*eventos: \[EVENTOS_IFOOD_PEDIDOS\.ESTADO_ATUALIZADO, RESINCRONIZACAO, EVENTOS_CHECKLIST\.METAS_ATUALIZADAS\]/);
     assert.match(fonte, /avisoDaMinhaUnidade\(evento, \{ organizacaoId: state\.sessao\?\.empresa\?\.id, unidadeId: state\.sessao\?\.unidade\?\.id \}\)/);
     assert.match(fonte, /aoReceber: \(\) => estado\.sincronizador\?\.avisar\(\)/);
   });

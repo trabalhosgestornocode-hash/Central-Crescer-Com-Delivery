@@ -65,10 +65,12 @@ import { state } from "./state.js";
 import { el } from "./utils.js";
 import { pode } from "./sessao.js";
 import { icon } from "./icons.js";
-import { obterResumoChecklist } from "./api.js";
+import { obterResumoChecklist, salvarMetasChecklist } from "./api.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./contextoEscopo.js";
 import { registrarInteresse, statusCanal } from "./realtime/realtimeBus.js";
-import { EVENTOS_IFOOD_PEDIDOS, RESINCRONIZACAO, topicoUnidade } from "./realtime/realtimeEvents.js";
+import { EVENTOS_IFOOD_PEDIDOS, EVENTOS_CHECKLIST, RESINCRONIZACAO, topicoUnidade } from "./realtime/realtimeEvents.js";
+import { proximoFundo } from "./checklistOperacionalFundo.js";
+import { abrirDashboardOperacional, encerrarDashboardOperacional, dashboardNaTela } from "./checklistOperacionalDashboard.js";
 import { criarSincronizador, avisoDaMinhaUnidade, textoModoAtualizacao } from "./checklistOperacionalSincronizacao.js";
 import {
   METAS_EXEMPLO, REFERENCIA_P75, ROTULO_NIVEL, TETO_REGUA, estadoDoCard, derivarPedidoAtivo, ordenarPorUrgencia,
@@ -95,7 +97,9 @@ const clonarMetas = (m) => JSON.parse(JSON.stringify(m));
 
 const estado = {
   resumo: null,
-  metas: null,      // metas desta TELA (memória da aba; nunca enviadas ao servidor — persistir exige migration)
+  metas: null,      // metas VIGENTES: vêm do servidor em cada resumo (fonte única); reserva = última válida desta tela
+  metasInfo: null,  // origem/versão das metas (a versão vai no PUT: controle de edição simultânea)
+  fundo: null,      // estado do fundo dinâmico (proximoFundo): piora na hora, melhora só estável
   tique: null,
   raiz: null,
   observador: null, // ResizeObserver: refaz o encaixe das listas quando a área muda (tela cheia, rotação do tablet)
@@ -108,6 +112,7 @@ const estado = {
   paginas: new Map(), // painel ("ativos" | "ultimos" | "avaliacoes") -> índice da página visível (só TV)
   proximaPaginaEm: null, // Date.now() em que as páginas viram; null = ciclo parado
   restaurarFoco: null, // desfaz o `inert` aplicado ao resto da Central
+  dashboardAberto: false, // terceira opção aberta (redesenho da rota volta a ela)
 };
 
 registrarResetDeContexto(() => {
@@ -115,7 +120,11 @@ registrarResetDeContexto(() => {
   estado.modo = null; // outra unidade/empresa: volta à seleção
   estado.resumo = null;
   estado.metas = null;
+  estado.metasInfo = null;
+  estado.fundo = null;
   estado.assinatura = "";
+  estado.dashboardAberto = false;
+  encerrarDashboardOperacional();
 });
 
 // Fim da sessão (ver cabeçalho): registrado UMA vez, como o aviso do Realtime. Fechado, não faz nada.
@@ -128,8 +137,9 @@ if (typeof document !== "undefined") {
 // Aviso do Realtime: registrado UMA vez; só age com a tela aberta, em dado real, e se o aviso for da
 // organização + unidade do contexto ATUAL. O manager já descarta mensagens de contexto antigo; aqui é a
 // segunda trava (nunca confia só no canal).
+// Metas alteradas em outro aparelho da unidade: a mesma consulta do resumo traz os valores novos (e a versão).
 registrarInteresse({
-  eventos: [EVENTOS_IFOOD_PEDIDOS.ESTADO_ATUALIZADO, RESINCRONIZACAO],
+  eventos: [EVENTOS_IFOOD_PEDIDOS.ESTADO_ATUALIZADO, RESINCRONIZACAO, EVENTOS_CHECKLIST.METAS_ATUALIZADAS],
   relevante: (evento) => state.rota === "checklist-operacional" && estado.sincronizador?.ativo === true
     && avisoDaMinhaUnidade(evento, { organizacaoId: state.sessao?.empresa?.id, unidadeId: state.sessao?.unidade?.id }),
   aoReceber: () => estado.sincronizador?.avisar(),
@@ -170,7 +180,19 @@ export function renderChecklistOperacional() {
   }
   estado.metas ??= clonarMetas(METAS_EXEMPLO);
   if (modoValido(estado.modo)) abrirModo(estado.modo); // redesenho da rota com um modo aberto: continua nele
+  else if (estado.dashboardAberto && dashboardNaTela()) abrirDashboard(); // redesenho com o Dashboard aberto: continua nele
   else desenharSelecao(unidade);
+}
+
+/** Terceira opção: Dashboard Operacional (histórico), dentro da Central — sem tela cheia, sem tique. */
+function abrirDashboard() {
+  parar();
+  estado.modo = null;
+  estado.dashboardAberto = true;
+  abrirDashboardOperacional({
+    view: el("#view"),
+    voltar: () => { estado.dashboardAberto = false; encerrarDashboardOperacional(); const u = state.sessao?.unidade; if (u?.id) desenharSelecao(u, null); },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +205,7 @@ function desenharSelecao(unidade, focarModo = null, { aviso = null } = {}) {
   view.innerHTML = telaSelecaoModos({ unidadeNome: unidade.nome, demonstracao: demonstracaoPedida(), aviso });
   const pagina = view.querySelector("[data-ckm]");
   pagina.addEventListener("click", (ev) => {
+    if (ev.target.closest('[data-acao="abrir-dashboard"]')) { abrirDashboard(); return; }
     const modo = ev.target.closest('[data-acao="iniciar-modo"]')?.dataset.modo;
     if (modoValido(modo)) iniciarModo(modo);
   });
@@ -223,6 +246,7 @@ function abrirModo(modo) {
  * Idempotente; com o Checklist fechado não faz nada.
  */
 function encerrarModo() {
+  if (estado.dashboardAberto) { estado.dashboardAberto = false; encerrarDashboardOperacional({ remover: true }); }
   if (!estado.raiz && !estado.modo && !estado.sincronizador) return;
   const raiz = estado.raiz;
   sairDaTelaCheia(); // pedido com a raiz ainda no DOM; removê-la também encerra a tela cheia
@@ -269,6 +293,11 @@ function criarSincronizadorDaTela(unidade) {
       const novo = adaptarResumo(data, { unidade, metas: estado.metas, recebidoEmMs: Date.now() });
       const assinatura = assinaturaDados(data);
       const mudouVisivel = assinatura !== estado.assinatura || estado.resumo?.conexao?.estado !== novo.conexao.estado;
+      // Metas: o servidor é a fonte. Versão nova (salva aqui ou em outro aparelho) → fundo reavaliado na hora.
+      const versaoAntes = estado.metasInfo?.versao;
+      estado.metas = novo.metas;
+      estado.metasInfo = novo.metasInfo;
+      if (versaoAntes !== novo.metasInfo.versao) estado.fundo = null;
       estado.resumo = novo;
       estado.assinatura = assinatura;
       sinc.definirIntervalo(novo.atualizarEmS * 1000);
@@ -305,8 +334,10 @@ function aoVoltarVisivel() {
 }
 
 function desenhar() {
-  const opcoes = { podeEditarMetas: podeEditarMetas(), modo: estado.modo };
   const agora = agoraServidor();
+  // Abertura e meta nova chegam com `estado.fundo = null` → aplicado na hora; dado novo segue a regra (piora já, melhora estável).
+  estado.fundo = proximoFundo(estado.fundo, derivarStatusOperacao(estado.resumo, agora).nivel, Date.now());
+  const opcoes = { podeEditarMetas: podeEditarMetas(), modo: estado.modo, nivelFundo: estado.fundo.nivel };
   if (estado.raiz?.isConnected) {
     // Redesenho DENTRO da raiz: a tela cheia (presa ao elemento raiz) continua ativa, e o foco volta
     // para o mesmo controle (o botão antigo some com o innerHTML).
@@ -423,10 +454,11 @@ function tique() {
   for (const chave of CHAVES) atualizarCard(raiz, chave, resumo, agora);
   atualizarPedidos(raiz, resumo, agora);
 
+  const s = derivarStatusOperacao(resumo, agora);
+  aplicarFundo(raiz, s.nivel);
   const slot = raiz.querySelector("[data-slot-status]");
   const atual = slot?.firstElementChild;
   if (slot && atual) {
-    const s = derivarStatusOperacao(resumo, agora);
     if (atual.dataset.assinatura !== assinaturaStatus(s)) {
       const nivelAnterior = atual.dataset.nivel;
       slot.innerHTML = cardStatus(resumo, agora);
@@ -436,6 +468,17 @@ function tique() {
     }
   }
   if (paginando()) virarPaginasNoTempo(raiz);
+}
+
+/**
+ * Fundo dinâmico do modo aberto (o texto e o ícone do status estão no card "Status da operação"). Só mexe no DOM quando
+ * o nível EXIBIDO muda — a cor troca por transição CSS (sem transição com movimento reduzido), sem piscar.
+ */
+function aplicarFundo(raiz, nivel) {
+  if (!modoValido(estado.modo)) return;
+  estado.fundo = proximoFundo(estado.fundo, nivel, Date.now());
+  const exibido = estado.fundo.nivel;
+  if (raiz.dataset.fundo !== exibido) raiz.dataset.fundo = exibido; // a transição é do CSS
 }
 
 function atualizarCard(raiz, chave, resumo, agora) {
@@ -670,10 +713,24 @@ function abrirMetas() {
   dlg.showModal();
 }
 
-function preencherMetas(dlg, metas, erros = {}) {
-  dlg.innerHTML = dialogoMetas(metas, { erros, demonstracao: estado.resumo?.origem === "demonstracao" });
+/** Erro do PUT → texto do diálogo. A configuração anterior continua valendo em qualquer caso. */
+function textoFalhaMetas(erro) {
+  if (erro?.codigo === "METAS_CONFLITO") {
+    const m = erro.details?.metas;
+    const quem = m?.atualizadoPor ? ` por ${m.atualizadoPor}` : "";
+    return `As metas foram alteradas em outro aparelho${quem} enquanto você editava. Os valores atuais foram carregados abaixo: revise e salve de novo.`;
+  }
+  if (erro?.status === 403) return "Este perfil não pode alterar as metas da unidade.";
+  if (erro?.codigo === "METAS_INDISPONIVEIS") return "As metas ainda não podem ser salvas neste ambiente. Nada foi alterado.";
+  if (erro?.status === 400) return erro.message || "Metas inválidas.";
+  return "Não foi possível salvar agora (sem conexão com a Central). Nada foi alterado: as metas anteriores continuam valendo.";
+}
+
+function preencherMetas(dlg, metas, erros = {}, { aviso = null, salvando = false } = {}) {
+  const demonstracao = estado.resumo?.origem === "demonstracao";
+  dlg.innerHTML = dialogoMetas(metas, { erros, demonstracao, info: estado.metasInfo, aviso, salvando });
   const form = dlg.querySelector("form");
-  form.addEventListener("submit", (ev) => {
+  form.addEventListener("submit", async (ev) => {
     ev.preventDefault();
     const campos = Object.fromEntries(new FormData(form).entries());
     const r = validarMetas(campos);
@@ -682,10 +739,44 @@ function preencherMetas(dlg, metas, erros = {}) {
       dlg.querySelector('[aria-invalid="true"]')?.focus();
       return;
     }
-    dlg.close();
-    estado.metas = r.metas;
-    estado.resumo = { ...estado.resumo, metas: r.metas };
-    desenhar();
+    if (demonstracao) {
+      // Demonstração: só nesta tela, nada vai ao servidor.
+      dlg.close();
+      estado.metas = r.metas;
+      estado.resumo = { ...estado.resumo, metas: r.metas };
+      estado.fundo = null;
+      desenhar();
+      return;
+    }
+    // Real: grava no servidor com a versão que a tela tinha. Só aplica depois da confirmação.
+    const g = geracaoContexto();
+    preencherMetas(dlg, r.metas, {}, { salvando: true });
+    try {
+      const { data } = await salvarMetasChecklist({ versao: estado.metasInfo?.versao ?? 0, metas: r.metas });
+      if (contextoMudou(g) || !estado.raiz?.isConnected) return;
+      estado.metas = data.metas.valores;
+      estado.metasInfo = { origem: "unidade", versao: data.metas.versao, atualizadoEm: data.metas.atualizadoEm, atualizadoPor: data.metas.atualizadoPor };
+      estado.resumo = { ...estado.resumo, metas: estado.metas, metasInfo: estado.metasInfo };
+      estado.fundo = null;
+      estado.assinatura = ""; // o próximo resumo (que já traz a versão nova) redesenha normalmente
+      dlg.close();
+      desenhar(); // meta nova vale na hora (pedidos em andamento reavaliados)
+      estado.sincronizador?.agora(); // reconcilia com o servidor
+    } catch (erro) {
+      if (contextoMudou(g) || !estado.raiz?.isConnected) return;
+      if (erro?.codigo === "METAS_CONFLITO" && erro.details?.metas?.valores) {
+        // Outro aparelho venceu: a tela passa a mostrar o valor do servidor e a versão dele; a pessoa decide de novo.
+        const m = erro.details.metas;
+        estado.metas = m.valores;
+        estado.metasInfo = { origem: "unidade", versao: m.versao, atualizadoEm: m.atualizadoEm, atualizadoPor: m.atualizadoPor };
+        estado.resumo = { ...estado.resumo, metas: estado.metas, metasInfo: estado.metasInfo };
+        estado.fundo = null;
+        preencherMetas(dlg, clonarMetas(m.valores), {}, { aviso: textoFalhaMetas(erro) });
+      } else {
+        preencherMetas(dlg, r.metas, {}, { aviso: textoFalhaMetas(erro) }); // mantém o que foi digitado; nada mudou
+      }
+      dlg.querySelector("[data-metas-aviso]")?.focus?.();
+    }
   });
   dlg.querySelector('[data-acao="metas-cancelar"]').addEventListener("click", () => dlg.close());
   dlg.querySelector('[data-acao="metas-exemplo"]').addEventListener("click", () => preencherMetas(dlg, clonarMetas(METAS_EXEMPLO)));
