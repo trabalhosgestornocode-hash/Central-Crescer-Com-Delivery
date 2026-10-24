@@ -192,7 +192,7 @@ function preparoAnormal(d, ctx) {
       pedidos: pedidosAtrasados(ctx.itens, ["preparo"], (i) => datas.has(i.data)),
     },
     hipotese: null,
-    recomendacao: "Verificar nesses dias a montagem da linha, reposição de insumos e o tempo até marcar o pedido como pronto no iFood.",
+    recomendacao: "Verificar nesses dias a montagem da linha, reposição de insumos e o tempo até o despacho (o preparo vai da chegada à saída do pedido).",
   };
 }
 
@@ -214,7 +214,7 @@ function concentracaoPorEtapa(d, ctx) {
     ocorrencias: maior.atrasos,
     evidencias: { etapas: atrasos, pedidos: pedidosAtrasados(ctx.itens, [maior.etapa]) },
     hipotese: maior.etapa === "vida"
-      ? "A vida do pedido inclui as esperas entre etapas (confirmação e espera do entregador): o atraso pode estar fora do preparo e da entrega. Não comprovado."
+      ? "A vida do pedido é a soma do preparo com a entrega: o atraso pode vir de qualquer um dos dois trechos. Não comprovado."
       : null,
     recomendacao: `Priorizar a etapa de ${NOME_ETAPA[maior.etapa].toLowerCase()} na revisão do processo.`,
   };

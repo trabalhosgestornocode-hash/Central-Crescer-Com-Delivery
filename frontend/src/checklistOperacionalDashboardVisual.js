@@ -71,7 +71,7 @@ export function kpis(d) {
     const x = r.porEtapa[e];
     t.push(tile({
       rotulo: `${NOME_ETAPA[e]} — mediana`, valor: num(x.mediana), unidade: x.mediana == null ? "" : "min", icone: "clock",
-      sub: `média ${num(x.media)} · P90 ${num(x.p90)} min · ${num(x.amostras, 0)} medições${x.aproximadas ? ` (${x.aproximadas} aprox.)` : ""}`,
+      sub: `média ${num(x.media)} · P90 ${num(x.p90)} min · ${num(x.amostras, 0)} medições`,
       delta: variacao(c.porEtapa[e].mediana.diferenca),
     }));
   }
@@ -108,7 +108,7 @@ export function tabelaEtapas(d) {
         <thead><tr><th scope="col">Etapa</th><th scope="col">Medições</th><th scope="col">Média (min)</th><th scope="col">Mediana (min)</th><th scope="col">P90 (min)</th><th scope="col">Dentro da meta</th><th scope="col">Atrasos</th><th scope="col">Maior atraso</th><th scope="col">Sem meta vigente</th></tr></thead>
         <tbody>${linhas}</tbody>
       </table></div>
-      <p class="ckd-nota">Entrega é aproximada (saída até a conclusão no iFood). Preparo sem o evento "pronto" é medido até a saída e marcado como aproximado.</p>
+      <p class="ckd-nota">Só pedidos de entrega entram nos tempos. Preparo: chegada até a saída do pedido. Entrega: saída até a conclusão registrada pelo iFood. Vida: chegada até a conclusão.</p>
     </section>`;
 }
 
@@ -178,7 +178,7 @@ export function tabelaAtrasos(d, limite = 50) {
       <h2 id="ckd-t-atr">Atrasos e ocorrências</h2>
       <p class="ckd-nota">${a.total} ${a.total === 1 ? "atraso" : "atrasos"} no período; mostrando os ${itens.length} maiores. A lista completa sai no Excel${a.truncado ? " (até 500)" : ""}.</p>
       <div class="ckd-tabela-wrap"><table class="ckd-tabela"><thead><tr><th scope="col">Pedido</th><th scope="col">Recebido</th><th scope="col">Etapa</th><th scope="col">Duração</th><th scope="col">Meta</th><th scope="col">Acima</th></tr></thead>
-      <tbody>${itens.map((x) => `<tr><th scope="row">${x.displayId ? `#${escapeHtml(x.displayId)}` : "sem número"}</th><td>${horaBr(x.recebidoEm)}</td><td>${NOME_ETAPA[x.etapa]}${x.aproximado ? " (aprox.)" : ""}</td><td>${num(x.duracaoMin)} min</td><td>${num(x.metaMin)} min</td><td>+${num(x.excedenteMin)} min</td></tr>`).join("")}</tbody></table></div>
+      <tbody>${itens.map((x) => `<tr><th scope="row">${x.displayId ? `#${escapeHtml(x.displayId)}` : "sem número"}</th><td>${horaBr(x.recebidoEm)}</td><td>${NOME_ETAPA[x.etapa]}</td><td>${num(x.duracaoMin)} min</td><td>${num(x.metaMin)} min</td><td>+${num(x.excedenteMin)} min</td></tr>`).join("")}</tbody></table></div>
     </section>`;
 }
 

@@ -6,8 +6,9 @@
 // deles recalcula nada.
 //
 // MEDIÇÕES: as MESMAS do resumo ao vivo (medirPreparo / medirEntrega / medirVida de checklistOperacional.calc.js),
-// com as mesmas elegibilidades (teste fora de tudo; cancelado fora das durações; agendado fora de preparo e vida;
-// entrega só DELIVERY concluído). Duração inconsistente é descartada e CONTADA — nunca corrigida.
+// com as mesmas elegibilidades ("Etapa 2": só DELIVERY; preparo = chegada PLC → despacho DSP; entrega = DSP → conclusão;
+// vida = PLC → conclusão; teste fora de tudo; cancelado fora das durações; agendado fora de preparo e vida). Duração
+// inconsistente é descartada e CONTADA — nunca corrigida.
 //
 // META DE CADA PEDIDO: a vigente no RECEBIMENTO do pedido (histórico versionado). Pedido recebido antes da primeira
 // meta salva fica "sem meta vigente": entra nos tempos, mas não no % dentro da meta (nem no denominador). Assim mudar a
@@ -39,7 +40,7 @@ export const DEFINICOES = Object.freeze({
     nome: "Tempo médio", unidade: "min",
     definicao: "Média aritmética das durações válidas da etapa.",
     formula: "Σ durações ÷ amostras", denominador: "amostras válidas da etapa",
-    ausentes: "Sem os dois carimbos da etapa o pedido não entra. Duração ≤ 0 ou acima do teto é descartada e contada.",
+    ausentes: "Só pedidos de entrega (DELIVERY) entram; retirada fica fora. Sem os dois carimbos da etapa o pedido não entra. Duração ≤ 0 ou acima do teto é descartada e contada.",
   },
   mediana: {
     nome: "Tempo mediano", unidade: "min",
@@ -144,27 +145,28 @@ const agendado = (p) => p.order_timing === "SCHEDULED";
 /** Medição de UMA etapa do pedido, com a meta vigente. `null` quando a etapa não se aplica ao pedido. */
 function medirEtapa(etapa, p, meta) {
   const cancelado = p.status_oficial === "CANCELLED";
+  // Mesma régua do resumo ao vivo (calc.js, "Etapa 2"): só DELIVERY entra nos tempos. Retirada não se aplica (null);
+  // pedido sem os detalhes do iFood é dado ausente (contado em `semCarimbo`).
+  if (p.order_type && p.order_type !== "DELIVERY") return null;
   let m;
   if (etapa === "preparo") {
     if (cancelado || agendado(p)) return null;
     m = medirPreparo(p);
-    if (m.motivo === "sem_fim") return null; // ainda não terminou o preparo: não é ausência de dado
+    // Ainda não despachado e em andamento: o preparo não terminou — não é ausência de dado.
+    if (m.motivo === "sem_saida" && p.status_oficial !== "CONCLUDED") return null;
   } else if (etapa === "entrega") {
     if (p.status_oficial !== "CONCLUDED") return null;
     m = medirEntrega(p);
-    if (m.motivo === "nao_delivery") return null;
   } else {
     if (p.status_oficial !== "CONCLUDED" || agendado(p)) return null;
     m = medirVida(p);
   }
-  if (m.min == null) return { min: null, motivo: m.motivo, aproximado: false };
+  if (m.min == null) return { min: null, motivo: m.motivo };
   const limite = meta?.valores?.[etapa]?.meta ?? null;
   const avaliado = limite != null;
   return {
     min: m.min,
     motivo: null,
-    aproximado: etapa === "entrega" ? true : m.aproximado === true,
-    exatoPreparo: etapa === "preparo" && m.aproximado !== true,
     meta: limite,
     versaoMeta: meta?.versao ?? null,
     avaliado,
@@ -219,7 +221,6 @@ function agregarEtapa(itens, etapa) {
     semMetaVigente: validas.length - avaliadas.length,
     descartados: medidas.filter((x) => x.m.motivo === "inconsistente").length,
     semCarimbo: medidas.filter((x) => x.m.motivo && x.m.motivo !== "inconsistente").length,
-    aproximadas: validas.filter((x) => x.m.aproximado).length,
     maiorAtraso: maior ? {
       excedenteMin: arred(maior.m.min - maior.m.meta), duracaoMin: arred(maior.m.min), metaMin: maior.m.meta,
       displayId: maior.i.p.display_id ?? null, recebidoEm: new Date(maior.i.t).toISOString(), id: chaveOpaca(maior.i.p.order_id),
@@ -319,7 +320,7 @@ function evidenciasDeAtraso(itens, etapas) {
       lista.push({
         id: chaveOpaca(i.p.order_id), displayId: i.p.display_id ?? null, recebidoEm: new Date(i.t).toISOString(),
         data: i.data, hora: i.hora, etapa: e, duracaoMin: arred(m.min), metaMin: m.meta, excedenteMin: arred(m.min - m.meta),
-        versaoMeta: m.versaoMeta, aproximado: m.aproximado,
+        versaoMeta: m.versaoMeta,
       });
     }
   }
@@ -416,7 +417,7 @@ export function montarDashboard({ pedidos, pedidosAnterior = null, periodo, linh
       inicioSemMeta: metas.inicioSemMeta,
       porEtapa: Object.fromEntries(etapas.map((e) => {
         const x = atual.porEtapa[e];
-        return [e, { esperadas: x.esperadas, validas: x.amostras, descartados: x.descartados, semCarimbo: x.semCarimbo, aproximadas: x.aproximadas, semMetaVigente: x.semMetaVigente }];
+        return [e, { esperadas: x.esperadas, validas: x.amostras, descartados: x.descartados, semCarimbo: x.semCarimbo, semMetaVigente: x.semMetaVigente }];
       })),
       avisos: avisosDeQualidade({ atual, etapas, diasSemCobertura, metas, semMetaVigente, parcial: periodo.parcial }),
     },
@@ -434,10 +435,7 @@ function avisosDeQualidade({ atual, etapas, diasSemCobertura, metas, semMetaVige
   if (metas.inicioSemMeta) avisos.push("Parte do período não tinha meta salva para a unidade: esses pedidos não entram no % dentro da meta.");
   if (semMetaVigente) avisos.push(`${semMetaVigente} ${semMetaVigente === 1 ? "medição ficou" : "medições ficaram"} sem meta vigente.`);
   if (atual.semDetalhes) avisos.push(`${atual.semDetalhes} ${atual.semDetalhes === 1 ? "pedido sem" : "pedidos sem"} detalhes do iFood (tipo de pedido): a entrega deles não é medida.`);
-  if (etapas.includes("preparo") && atual.porEtapa.preparo.aproximadas) {
-    avisos.push(`${atual.porEtapa.preparo.aproximadas} preparos medidos até a saída (sem o evento "pronto"): incluem a espera do entregador.`);
-  }
-  if (etapas.includes("entrega")) avisos.push("Entrega é aproximada: saída até a conclusão no iFood (a conclusão pode ser registrada depois da entrega).");
+  if (etapas.includes("entrega")) avisos.push("Entrega vai da saída até a conclusão registrada pelo iFood.");
   for (const e of etapas) {
     const x = atual.porEtapa[e];
     if (x.descartados) avisos.push(`${NOME_ETAPA[e]}: ${x.descartados} ${x.descartados === 1 ? "duração inconsistente descartada" : "durações inconsistentes descartadas"}.`);

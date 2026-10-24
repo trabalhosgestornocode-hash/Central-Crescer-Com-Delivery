@@ -80,11 +80,11 @@ const SECAO = {
   },
   etapas(ctx) {
     const d = ctx.dashboard;
-    const linhas = [...cabecalho(ctx), ["Etapa", "Amostras", "Média (min)", "Mediana (min)", "P90 (min)", "Mínimo", "Máximo", "Avaliadas", "Dentro da meta", "% dentro", "Atrasos", "% atrasos", "Maior atraso (min acima)", "Pedido do maior atraso", "Sem meta vigente", "Descartadas", "Aproximadas"]];
+    const linhas = [...cabecalho(ctx), ["Etapa", "Amostras", "Média (min)", "Mediana (min)", "P90 (min)", "Mínimo", "Máximo", "Avaliadas", "Dentro da meta", "% dentro", "Atrasos", "% atrasos", "Maior atraso (min acima)", "Pedido do maior atraso", "Sem meta vigente", "Descartadas"]];
     for (const e of d.etapas) {
       const x = d.resumo.porEtapa[e];
       linhas.push([NOME_ETAPA[e], x.amostras, v(x.media), v(x.mediana), v(x.p90), v(x.minimo), v(x.maximo), x.avaliadas, x.dentro, v(x.pctDentro), x.atrasos, v(x.pctAtraso),
-        v(x.maiorAtraso?.excedenteMin), x.maiorAtraso?.displayId ? `#${x.maiorAtraso.displayId}` : "", x.semMetaVigente, x.descartados, x.aproximadas]);
+        v(x.maiorAtraso?.excedenteMin), x.maiorAtraso?.displayId ? `#${x.maiorAtraso.displayId}` : "", x.semMetaVigente, x.descartados]);
     }
     return aba(linhas, [16, 10, 11, 12, 10, 9, 9, 10, 13, 9, 9, 10, 20, 18, 15, 12, 12]);
   },
@@ -130,9 +130,9 @@ const SECAO = {
   atrasos(ctx) {
     const a = ctx.dashboard.atrasos;
     const linhas = [...cabecalho(ctx), [`${a.total} atrasos no período${a.truncado ? ` (listados os ${a.itens.length} maiores)` : ""}`], [],
-      ["Pedido", "Recebido em", "Etapa", "Duração (min)", "Meta (min)", "Acima da meta (min)", "Versão da meta", "Aproximado"]];
+      ["Pedido", "Recebido em", "Etapa", "Duração (min)", "Meta (min)", "Acima da meta (min)", "Versão da meta"]];
     for (const x of a.itens) {
-      linhas.push([x.displayId ? `#${x.displayId}` : "sem número", horaLocal(x.recebidoEm, ctx.dashboard.periodo.fuso), NOME_ETAPA[x.etapa], x.duracaoMin, x.metaMin, x.excedenteMin, v(x.versaoMeta), x.aproximado ? "sim" : ""]);
+      linhas.push([x.displayId ? `#${x.displayId}` : "sem número", horaLocal(x.recebidoEm, ctx.dashboard.periodo.fuso), NOME_ETAPA[x.etapa], x.duracaoMin, x.metaMin, x.excedenteMin, v(x.versaoMeta)]);
     }
     return aba(linhas, [14, 20, 16, 14, 11, 18, 14, 11]);
   },
@@ -158,8 +158,8 @@ const SECAO = {
       ["Dias sem cobertura (antes do primeiro pedido)", q.diasSemCobertura], ["Dias sem pedidos", q.diasSemPedidos],
       ["Pedidos de teste (fora de tudo)", q.pedidosTeste], ["Pedidos sem detalhes do iFood", q.pedidosSemDetalhes],
       ["Agendados (fora de preparo e vida)", q.agendados], ["Em andamento no momento da consulta", q.emAndamento],
-      ["Medições sem meta vigente", q.semMetaVigente], [], ["Etapa", "Esperadas", "Válidas", "Descartadas", "Sem carimbo", "Aproximadas", "Sem meta vigente"]];
-    for (const [e, x] of Object.entries(q.porEtapa)) linhas.push([NOME_ETAPA[e], x.esperadas, x.validas, x.descartados, x.semCarimbo, x.aproximadas, x.semMetaVigente]);
+      ["Medições sem meta vigente", q.semMetaVigente], [], ["Etapa", "Esperadas", "Válidas", "Descartadas", "Sem carimbo", "Sem meta vigente"]];
+    for (const [e, x] of Object.entries(q.porEtapa)) linhas.push([NOME_ETAPA[e], x.esperadas, x.validas, x.descartados, x.semCarimbo, x.semMetaVigente]);
     linhas.push([], ["Avisos"]);
     for (const a of q.avisos) linhas.push([a]);
     linhas.push([], ["Cumprimento dos itens do checklist", ctx.dashboard.checklistItens.motivo]);

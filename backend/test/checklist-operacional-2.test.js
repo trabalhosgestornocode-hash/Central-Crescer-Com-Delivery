@@ -39,12 +39,15 @@ const sp = (dia, hh, mm = 0) => new Date(Date.parse(`${dia}T${String(hh).padStar
 const mais = (iso, min) => (iso ? new Date(Date.parse(iso) + min * MIN).toISOString() : null);
 
 let seq = 0;
-/** Pedido entregue com preparo/entrega/vida em minutos a partir do recebimento. */
+/**
+ * Pedido de entrega com os tempos da "Etapa 2" (calc.js): preparo = chegada (PLC) → despacho (DSP); entrega = DSP →
+ * conclusão (CON); vida = preparo + entrega. Confirmação e pronto ficam no meio do preparo (só informativos).
+ */
 function pedido({ recebido, confirma = 1, preparo = 10, espera = 2, entrega = 20, status = "CONCLUDED", tipo = "DELIVERY", agendado = false, teste = false, semRtp = false, id } = {}) {
   seq += 1;
   const cfm = mais(recebido, confirma);
-  const rtp = semRtp ? null : mais(cfm, preparo);
-  const dsp = mais(cfm, preparo + espera);
+  const dsp = mais(recebido, preparo);
+  const rtp = semRtp ? null : mais(dsp, -espera);
   const con = mais(dsp, entrega);
   return {
     order_id: id ?? `o-${seq}`, display_id: String(1000 + seq), status_oficial: status,
@@ -293,7 +296,7 @@ describe("indicadores — cálculo, meta vigente, ausências e deduplicação", 
     assert.ok(semHist.qualidade.avisos.some((a) => /não tinha meta salva/.test(a)));
   });
 
-  test("elegibilidade: teste fora de tudo; cancelado fora das durações; agendado fora de preparo e vida; retirada fora da entrega", () => {
+  test("elegibilidade (Etapa 2): teste fora de tudo; cancelado fora das durações; agendado fora de preparo e vida; retirada fora dos TRÊS tempos", () => {
     const pedidos = [
       pedido({ recebido: sp("2026-10-20", 10) }),
       pedido({ recebido: sp("2026-10-20", 10, 5), teste: true }),
@@ -305,8 +308,9 @@ describe("indicadores — cálculo, meta vigente, ausências e deduplicação", 
     assert.equal(d.resumo.pedidos, 4, "teste não conta");
     assert.equal(d.qualidade.pedidosTeste, 1);
     assert.equal(d.resumo.cancelados, 1);
-    assert.equal(d.resumo.porEtapa.preparo.amostras, 2, "normal + retirada (agendado e cancelado fora)");
-    assert.equal(d.resumo.porEtapa.vida.amostras, 2);
+    assert.equal(d.resumo.pedidos, 4, "a retirada continua contada como pedido acompanhado");
+    assert.equal(d.resumo.porEtapa.preparo.amostras, 1, "só o normal (agendado, cancelado e retirada fora)");
+    assert.equal(d.resumo.porEtapa.vida.amostras, 1, "só o normal (agendado e retirada fora)");
     assert.equal(d.resumo.porEtapa.entrega.amostras, 2, "normal + agendado (retirada e cancelado fora)");
   });
 
@@ -318,12 +322,17 @@ describe("indicadores — cálculo, meta vigente, ausências e deduplicação", 
     assert.equal(d.demandaPorHora[23].pedidos, 1, "23h em SP (não 02h UTC)");
   });
 
-  test("duração inconsistente é descartada e CONTADA; preparo sem 'pronto' é aproximado e avisado", () => {
-    const negativo = { ...pedido({ recebido: sp("2026-10-20", 9) }), ready_event_at: sp("2026-10-20", 8) };
-    const d = ind.montarDashboard({ pedidos: [negativo, pedido({ recebido: sp("2026-10-20", 9, 30), semRtp: true })], periodo, linhaDoTempo: lt, etapa: "preparo" });
-    assert.equal(d.resumo.porEtapa.preparo.descartados, 1);
-    assert.equal(d.resumo.porEtapa.preparo.aproximadas, 1);
-    assert.ok(d.qualidade.avisos.some((a) => /sem o evento "pronto"/.test(a)));
+  test("duração inconsistente é descartada e CONTADA; sem o 'pronto' o preparo continua medido (PLC → DSP); concluído sem DSP é ausência contada", () => {
+    const negativo = { ...pedido({ recebido: sp("2026-10-20", 9) }), dispatch_event_at: sp("2026-10-20", 8) };
+    const semPronto = pedido({ recebido: sp("2026-10-20", 9, 30), semRtp: true });
+    const semSaida = { ...pedido({ recebido: sp("2026-10-20", 9, 40) }), dispatch_event_at: null };
+    const emAndamento = { ...pedido({ recebido: sp("2026-10-20", 9, 50), status: "CONFIRMED" }), dispatch_event_at: null };
+    const d = ind.montarDashboard({ pedidos: [negativo, semPronto, semSaida, emAndamento], periodo, linhaDoTempo: lt, etapa: "preparo" });
+    const pr = d.resumo.porEtapa.preparo;
+    assert.equal(pr.descartados, 1);
+    assert.equal(pr.amostras, 1, "o pronto é só informativo");
+    assert.equal(pr.semCarimbo, 1, "concluído sem despacho: dado ausente, contado");
+    assert.equal(pr.esperadas, 3, "em andamento sem despacho: o preparo ainda não terminou (não entra)");
   });
 
   test("cobertura: dias antes do primeiro pedido da unidade ficam marcados e fora do denominador por dia da semana", () => {
