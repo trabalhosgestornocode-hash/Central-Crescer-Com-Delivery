@@ -82,3 +82,39 @@ Antes do deploy do código as tabelas ficam **vazias** (nada usa as metas ainda)
 
 Pedidos e eventos continuam crescendo e o lease do poller renova; contagens do Financeiro iguais; nenhuma policy nova
 em outras tabelas; advisors do Supabase (segurança/performance) sem alerta novo ligado às duas migrations.
+
+## 9. Resultado da execução em produção (24/10/2026, projeto `uqybgauuxcrqzquultfu`)
+
+Backup atestado pelo responsável antes do início. 127 e 128 executadas pelo responsável no SQL Editor; V0–V3 executadas
+somente leitura via MCP. Nenhuma outra migration, nenhum rollback, nenhum merge ou deploy.
+
+| Etapa | Horário (UTC) | Resultado |
+|---|---|---|
+| V0 (linha de base, `t0`) | 16:44:01 | pedidos 3173 · eventos 35201 · `FALHOU` 0 · lease do poller renovado 16:43:51 · Financeiro: fin_auditoria 585, fin_contas 4, fin_lancamentos 409, fin_plano_contas 36, gestao_financeira_concessoes 2 |
+| 127 | ~16:53 | aplicada (transação única) |
+| V1 | 16:54:22 | 14/14 itens conforme §6.3; impressões digitais de estrutura das demais tabelas iguais ao V0 |
+| 128 | ~16:56 | aplicada fora de transação |
+| V2 | 16:57:13 | `indisvalid`/`indisready`/`indislive` = t; definição exata; 200 kB; plano do período "hoje" (unidade com 2489 pedidos): `Index Scan using idx_ifood_pedidos_tenant_criado` com a condição completa + Incremental Sort |
+| V3 (com `t0` do V0) | 16:57:38 | ver abaixo |
+
+Comparação V0 × V3:
+
+| Item | V0 | V3 | |
+|---|---|---|---|
+| Pedidos até `t0` (contagem / md5 dos ids) | 3173 / `0120c157…5aa` | 3173 / `0120c157…5aa` | igual |
+| Eventos até `t0` (contagem / md5) | 35201 / `4b6bddbd…74c` | 35201 / `4b6bddbd…74c` | igual |
+| Totais (tráfego após `t0`) | 3173 / 35201 | 3177 / 35242 | cresceram — iFood seguiu processando (último evento 16:57:20) |
+| Eventos `FALHOU` | 0 | 0 | igual |
+| Lease do poller | 16:43:51 | 16:57:21 | renovando |
+| Financeiro (5 contagens) | — | — | iguais |
+| md5 colunas / índices / policies / RLS+privilégios / funções (fora do escopo) | `6b238d6a…` / `1e060f2a…` / `dd7c0d03…` / `401ac2f6…` / `676edcdc…` | idem | iguais |
+| Objetos do PR (`checklist_metas`, `checklist_metas_historico`, índice 128) | ausentes | presentes | esperado |
+| Sessões / transação longa | — | 1 sessão, nenhuma longa | ok |
+
+Advisors do Supabase após a execução: segurança — apenas `rls_enabled_no_policy` (INFO) nas duas tabelas novas, que é o
+desenho (acesso só pelo backend com service_role); `checklist_metas_salvar` **não** aparece entre as funções security
+definer executáveis por anon/authenticated. Performance — apenas `unused_index` nos dois índices das tabelas novas (vazias
+até o deploy); nenhum alerta sobre `idx_ifood_pedidos_tenant_criado`.
+
+**Conclusão:** dados preservados, estrutura fora do escopo inalterada, índice válido e usado, processamento iFood e
+Financeiro sem impacto. Rollback não necessário. As tabelas de metas seguem vazias até o deploy do código.
