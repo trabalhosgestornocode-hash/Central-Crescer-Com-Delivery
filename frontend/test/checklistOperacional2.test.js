@@ -24,7 +24,10 @@ import * as ind from "../../backend/src/modules/checklist-operacional/checklistO
 import * as per from "../../backend/src/modules/checklist-operacional/checklistOperacional.periodos.js";
 import { linhaDoTempoDasMetas } from "../../backend/src/modules/checklist-operacional/checklistOperacional.metas.js";
 import { gerarAnalises } from "../../backend/src/modules/checklist-operacional/checklistOperacional.analises.js";
-import { SECOES_RELATORIO as SECOES_BACKEND } from "../../backend/src/modules/checklist-operacional/checklistOperacional.exportar.js";
+// As seções do Excel são lidas como TEXTO: importar o módulo puxaria o pacote `xlsx` do backend, e a suíte do
+// frontend não depende de nada instalado no backend (os demais módulos importados acima não têm dependência).
+const SECOES_BACKEND = [...readFileSync(fileURLToPath(new URL("../../backend/src/modules/checklist-operacional/checklistOperacional.exportar.js", import.meta.url)), "utf8")
+  .matchAll(/\{ id: "(\w+)", rotulo: "/g)].map((m) => ({ id: m[1] }));
 
 const AGORA = Date.parse("2026-10-21T18:00:00.000Z");
 const ler = (rel) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8").replace(/\r\n?/g, "\n");
