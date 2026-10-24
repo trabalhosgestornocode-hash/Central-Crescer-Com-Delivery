@@ -22,7 +22,7 @@ const gerenciarMetas = requireAlgumaPermissao(PERMISSOES.CONFIG_GERENCIAR, PERMI
 
 checklistOperacionalRouter.get("/resumo", visualizar, controller.resumo);
 
-// Metas da unidade (migration 120): leitura, gravação versionada e histórico de alterações.
+// Metas da unidade (migration 127): leitura, gravação versionada e histórico de alterações.
 checklistOperacionalRouter.get("/metas", visualizar, controller.obterMetas);
 checklistOperacionalRouter.put("/metas", gerenciarMetas, controller.salvarMetas);
 checklistOperacionalRouter.get("/metas/historico", gerenciarMetas, controller.historicoMetas);

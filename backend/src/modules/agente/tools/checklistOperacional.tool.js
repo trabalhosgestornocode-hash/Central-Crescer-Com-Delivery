@@ -5,7 +5,8 @@
 // As análises vêm com a natureza separada (fato / hipótese / recomendação); o modelo é instruído a manter a separação
 // e a nunca atribuir causa que os dados não mostram.
 //
-// Tenant SEMPRE do contexto do backend; o modelo controla só o período e a etapa.
+// Tenant SEMPRE do contexto do backend; o modelo controla só o período e a etapa. Módulo: checklist_operacional (migration
+// 123); a execução também aceita ifood enquanto houver sessões abertas antes dela — a mesma regra do gate da API.
 import { MODULOS } from "../../../shared/modulos.js";
 import { PERMISSOES } from "../../../shared/permissoes.js";
 import { garantirAcessoModulo, garantirPermissao } from "../agenteAcesso.js";
@@ -33,7 +34,8 @@ export const definicao = {
  * @param {{organizacaoId: string, unidadeId: string|null, acesso: object}} contexto
  */
 export async function executar(input, { organizacaoId, unidadeId, acesso }, deps = { obterDashboard: checklistService.obterDashboard }) {
-  garantirAcessoModulo(acesso, MODULOS.IFOOD);
+  // Mesma régua do gate da API (routes.js): módulo próprio checklist_operacional OU ifood (sessões abertas antes da 123).
+  garantirAcessoModulo(acesso, acesso?.modulos?.includes(MODULOS.CHECKLIST_OPERACIONAL) ? MODULOS.CHECKLIST_OPERACIONAL : MODULOS.IFOOD);
   garantirPermissao(acesso, PERMISSOES.CHECKLIST_VISUALIZAR);
   if (!unidadeId) return { disponivel: false, motivo: "O Checklist Operacional é por unidade: selecione uma unidade no seletor do topo." };
   const d = await deps.obterDashboard({

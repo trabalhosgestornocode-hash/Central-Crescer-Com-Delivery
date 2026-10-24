@@ -382,7 +382,8 @@ describe("metas × referência estatística × limite de alerta", async () => {
     assert.match(html, /name="preparoAviso"/);
     assert.match(html, /data-acao="metas-referencia"/);
     assert.match(html, /data-referencia/);
-    assert.match(html, /não são salvas para a unidade/);
+    // Checklist 2.0: as metas agora SÃO salvas para a unidade (servidor); a referência continua só preenchendo o formulário.
+    assert.match(html, /Pedido em andamento é reavaliado na hora pela meta nova/);
     // O formulário aberto com a referência mostra 16,3 — mas a tela só muda ao aplicar.
     assert.match(V.dialogoMetas(M.REFERENCIA_P75, { demonstracao: false }), /name="preparoMeta"[^>]*value="16,3"/);
   });

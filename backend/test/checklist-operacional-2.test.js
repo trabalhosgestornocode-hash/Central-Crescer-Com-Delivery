@@ -1,6 +1,6 @@
 // Checklist Operacional 2.0 — metas persistidas, períodos, indicadores históricos, análises, Excel e rotas.
 //
-// Sem banco e sem rede: repositórios falsos injetados (o SQL da migration 120 tem teste próprio em Postgres local:
+// Sem banco e sem rede: repositórios falsos injetados (o SQL da migration 127 tem teste próprio em Postgres local:
 // checklist-metas-migration-pg.test.js). Relógio fixo: quarta-feira 21/10/2026, 15:00 em São Paulo (UTC−3).
 //
 // Rodar: node --experimental-vm-modules --test test/checklist-operacional-2.test.js
@@ -461,7 +461,7 @@ describe("dashboard — service (isolamento e janela)", () => {
     assert.ok(chamadas.every((c) => c.organizacaoId === ORG && c.unidadeId === UN_A));
     assert.equal(d.resumo.pedidos, 1);
     assert.equal(d.resumo.porEtapa.preparo.avaliadas, 0);
-    assert.match(d.qualidade.avisos[0], /migration 120 pendente/);
+    assert.match(d.qualidade.avisos[0], /migration 127 pendente/);
     assert.ok(Array.isArray(d.analises.itens));
     const janela = chamadas.find((c) => c.desdeIso);
     assert.ok(Date.parse(janela.desdeIso) <= Date.parse(sp("2026-10-19", 0)), "janela cobre o comparativo (anteontem)");
@@ -541,5 +541,9 @@ describe("Agente Crescer — tool só-leitura sobre o MESMO cálculo", async () 
     assert.ok(r.analises.length && r.analises.every((a) => "constatacao" in a && "hipotese" in a && "recomendacao" in a));
     assert.equal((await tool.executar({ periodo: "hoje" }, { organizacaoId: ORG, unidadeId: null, acesso })).disponivel, false);
     await assert.rejects(tool.executar({ periodo: "hoje" }, { organizacaoId: ORG, unidadeId: UN_A, acesso: { ...acesso, permissoes: [] } }));
+    // Módulo próprio (migration 123) ou ifood (sessões anteriores a ela) — a mesma régua do gate da API; sem nenhum dos dois, 403.
+    const proprio = { ...acesso, modulos: [MODULOS.CHECKLIST_OPERACIONAL] };
+    assert.equal((await tool.executar({ periodo: "semana" }, { organizacaoId: ORG, unidadeId: UN_A, acesso: proprio }, { obterDashboard: async () => pronto })).disponivel, true);
+    await assert.rejects(tool.executar({ periodo: "hoje" }, { organizacaoId: ORG, unidadeId: UN_A, acesso: { ...acesso, modulos: [MODULOS.IFOOD_DASHBOARD] } }), (e) => e.statusCode === 403);
   });
 });

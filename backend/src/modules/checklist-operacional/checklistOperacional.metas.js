@@ -1,6 +1,6 @@
 // Checklist Operacional — METAS da unidade (funções puras: validação, formato e meta vigente num instante).
 //
-// Fonte da verdade: `checklist_metas` (migration 120), uma linha por unidade com `versao`. Toda escrita passa por
+// Fonte da verdade: `checklist_metas` (migration 127), uma linha por unidade com `versao`. Toda escrita passa por
 // `checklist_metas_salvar` (compara a versão esperada e grava o histórico na mesma transação). Este módulo não lê nem
 // grava nada: o service chama, os testes chamam direto.
 //
@@ -74,7 +74,7 @@ const copiaPadrao = () => JSON.parse(JSON.stringify(METAS_PADRAO));
 
 /**
  * Formato único das metas na API (resumo, GET e PUT).
- * `origem`: 'unidade' (salvas) | 'padrao' (exemplo; a unidade ainda não salvou) | 'indisponivel' (migration 120 ausente
+ * `origem`: 'unidade' (salvas) | 'padrao' (exemplo; a unidade ainda não salvou) | 'indisponivel' (migration 127 ausente
  * ou falha de leitura — a tela usa o exemplo e avisa; a edição fica bloqueada).
  */
 export function metasDaLinha(linha) {

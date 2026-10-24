@@ -50,7 +50,7 @@ export const NOME_TOOL_NAVEGACAO = navegacaoTool.definicao.name;
 export const REGISTRO = [
   {
     definicao: checklistOperacionalTool.definicao, executar: checklistOperacionalTool.executar,
-    access: { module: MODULOS.IFOOD, permission: PERMISSOES.CHECKLIST_VISUALIZAR },
+    access: { module: MODULOS.CHECKLIST_OPERACIONAL, permission: PERMISSOES.CHECKLIST_VISUALIZAR },
     mode: "read", risk: "low",
   },
   {

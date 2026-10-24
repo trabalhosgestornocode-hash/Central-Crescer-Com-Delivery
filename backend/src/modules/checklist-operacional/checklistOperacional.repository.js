@@ -81,7 +81,7 @@ export async function obterNomesDasLojas({ organizacaoId, unidadeId, merchantIds
 }
 
 // ---------------------------------------------------------------------------
-// Metas da unidade (migration 120). Leitura direta; escrita SÓ pela função do banco (versão + histórico juntos).
+// Metas da unidade (migration 127). Leitura direta; escrita SÓ pela função do banco (versão + histórico juntos).
 // ---------------------------------------------------------------------------
 
 const COLUNAS_METAS = [
@@ -96,7 +96,7 @@ export const objetoAusente = (error) =>
 
 function erroDeMetas(error) {
   if (objetoAusente(error)) {
-    const e = new ApiError(503, "As metas da unidade ainda não podem ser salvas neste ambiente (migration 120 pendente).");
+    const e = new ApiError(503, "As metas da unidade ainda não podem ser salvas neste ambiente (migration 127 pendente).");
     e.codigo = "METAS_INDISPONIVEIS";
     return e;
   }

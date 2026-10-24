@@ -287,7 +287,7 @@ export async function obterDashboard({ organizacaoId, unidadeId, filtro = {}, ag
   ]);
 
   const d = montarDashboard({ pedidos, periodo, linhaDoTempo: linhaDoTempoDasMetas(versoes), etapa, primeiroPedidoEm });
-  if (!metasDisponiveis) d.qualidade.avisos.unshift("As metas da unidade ainda não podem ser lidas neste ambiente (migration 120 pendente): nenhum pedido foi avaliado contra meta.");
+  if (!metasDisponiveis) d.qualidade.avisos.unshift("As metas da unidade ainda não podem ser lidas neste ambiente (migration 127 pendente): nenhum pedido foi avaliado contra meta.");
   const analises = gerarAnalises(d);
   return {
     versao: VERSAO_CONTRATO,

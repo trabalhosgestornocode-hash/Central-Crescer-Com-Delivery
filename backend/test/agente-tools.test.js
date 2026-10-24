@@ -447,10 +447,10 @@ describe("ferramentasDisponiveis — filtro prévio do catálogo (1ª camada de 
     ]);
   });
 
-  test("Checklist Operacional (Checklist 2.0): só com o módulo iFood E checklist.visualizar", () => {
+  test("Checklist Operacional (Checklist 2.0): só com o módulo checklist_operacional E checklist.visualizar", () => {
     const so = (modulos, permissoes) => ferramentasDisponiveis({ modulos, permissoes, impersonando: false }).map((f) => f.name);
-    assert.deepEqual(so([MODULOS.IFOOD], [PERMISSOES.CHECKLIST_VISUALIZAR]), ["consultar_checklist_operacional"]);
-    assert.deepEqual(so([MODULOS.IFOOD], []), []);
+    assert.deepEqual(so([MODULOS.CHECKLIST_OPERACIONAL], [PERMISSOES.CHECKLIST_VISUALIZAR]), ["consultar_checklist_operacional"]);
+    assert.deepEqual(so([MODULOS.CHECKLIST_OPERACIONAL], []), []);
     assert.deepEqual(so([MODULOS.IFOOD_DASHBOARD], [PERMISSOES.CHECKLIST_VISUALIZAR]), []);
   });
 
@@ -462,7 +462,7 @@ describe("ferramentasDisponiveis — filtro prévio do catálogo (1ª camada de 
 
   test("os cinco módulos de dados + Agente IA (sempre presente, ver requireModulo na rota) -> catálogo completo", () => {
     const acesso = {
-      modulos: [MODULOS.IFOOD_DASHBOARD, MODULOS.PRODUTOS_CMV, MODULOS.INGREDIENTS, MODULOS.PARSER_FOOD_DELIVERY, MODULOS.IFOOD, MODULOS.AGENTE_IA],
+      modulos: [MODULOS.IFOOD_DASHBOARD, MODULOS.PRODUTOS_CMV, MODULOS.INGREDIENTS, MODULOS.PARSER_FOOD_DELIVERY, MODULOS.CHECKLIST_OPERACIONAL, MODULOS.AGENTE_IA],
       permissoes: [PERMISSOES.DASHBOARD_EXECUTIVO_VER, PERMISSOES.CMV_VER, PERMISSOES.INSUMOS_VER, PERMISSOES.PARSER_FD_VER, PERMISSOES.CHECKLIST_VISUALIZAR],
       impersonando: false,
     };
