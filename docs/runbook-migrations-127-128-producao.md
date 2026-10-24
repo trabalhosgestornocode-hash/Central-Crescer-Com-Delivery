@@ -29,24 +29,45 @@
 
 No painel do projeto `uqybgauuxcrqzquultfu`: **Database → Backups** — backup de 24/10/2026 com status concluído e horário;
 **Settings → Add-ons** — PITR habilitado ou não (e a janela). Sem PITR, a recuperação é a do backup diário (perde-se o que
-entrou depois dele — por isso o rollback deve ser **localizado**, §5, e nunca restauração completa por um problema do Checklist).
+entrou depois dele — por isso o rollback deve ser **localizado**, §7, e nunca restauração completa por um problema do Checklist).
 
-## 4. Execução
+## 4. Métodos de execução (sem contornar permissões)
 
-1. Registrar a linha de base (consulta do §2) com horário.
-2. **127** — o arquivo inteiro, como está (já tem `begin … commit` e `lock_timeout 5s`). Pode ir pela ferramenta de
-   migrations ou pelo SQL Editor.
-3. Verificar (leitura): 2 tabelas, RLS ligada e **0 policies**; anon/authenticated sem privilégio; service_role só `select`
+| Migration | Método recomendado | Alternativa | Não usar |
+|---|---|---|---|
+| **127** | **SQL Editor** do projeto, papel `postgres`, colando o arquivo inteiro (já tem `begin … commit` e `lock_timeout 5s`) — mesmo método oficial da migration 115 (`docs/runbook-aplicacao-migration-115.md`) | ferramenta de migrations do conector Supabase (`apply_migration`), **só se** você liberar explicitamente essa permissão no Claude Code; registra a versão em `supabase_migrations` | psql com a `DATABASE_URL` de produção pelo Claude (contornaria a trava de permissão) |
+| **128** | **SQL Editor**, executando **só a instrução** `create index concurrently …` (sozinha, sem `begin`); ou `psql "$DATABASE_URL" -c "…"` pelo responsável (autocommit) | — | ferramentas que embrulham o SQL em transação (o Postgres recusa: `cannot run inside a transaction block` — inofensivo, nada é criado) |
+
+## 5. Verificação antes/depois — `database/operacoes/checklist-127-128-verificacao.sql` (somente leitura)
+
+* **V0** imediatamente antes da 127 (anotar `agora` = `t0`); **V1** depois da 127; **V2** depois da 128; **V3** = V0 com o `t0`
+  anotado.
+* **Igualdade obrigatória V0 × V3:** `pedidos_ate_t0`/`_md5`, `eventos_ate_t0`/`_md5` (o conjunto que já existia em `t0` —
+  só identificadores, porque estado muda legitimamente), `financeiro_totais`, e as impressões digitais de estrutura fora do
+  escopo (`estrutura_colunas_md5`, `estrutura_indices_md5`, `politicas_rls_md5`, `rls_e_privilegios_md5`, `funcoes_md5`).
+* **Crescimento esperado:** `pedidos_total`/`eventos_total` ≥ V0, `ultimo_evento` recente, lease do poller renovado,
+  `eventos_falhou` sem salto.
+* **Ensaio do script** (24/10, PostgreSQL 17.11 local, schema real até 126, 500 pedidos/eventos ao longo de 3 semanas +
+  60 novos depois de `t0` + mudança legítima de estado): V1 com todos os valores esperados; V2 `t|t` e o plano do período
+  "hoje" usando `idx_ifood_pedidos_tenant_criado` com as 3 colunas; V3 com **todas as impressões digitais iguais** e totais
+  500 → 560. O plano usa o índice quando o período é uma fração do histórico (o caso do Dashboard); com período que cobre
+  quase tudo, o planejador pode preferir o índice existente por tenant — comportamento correto.
+
+## 6. Execução
+
+1. Registrar a linha de base (V0) com horário.
+2. **127** — o arquivo inteiro, como está (já tem `begin … commit` e `lock_timeout 5s`), pelo método do §4.
+3. Verificar com o **V1** (§5): 2 tabelas, RLS ligada e **0 policies**; anon/authenticated sem privilégio; service_role só `select`
    e `execute` em `checklist_metas_salvar`; 8 CHECKs; FKs `on delete cascade`; gatilhos de tenant e de imutabilidade;
-   nenhuma outra tabela alterada (comparar `pg_class.relnatts`/contagens da linha de base).
+   nenhuma outra tabela alterada (impressões digitais de estrutura do V3 iguais às do V0).
 4. **128** — **fora de transação**: `create index concurrently if not exists idx_ifood_pedidos_tenant_criado on
    ifood_pedidos(organizacao_id, unidade_id, criado_em);` — no SQL Editor, rodar **só esta instrução**. Ferramentas que
    envolvem o SQL em transação recebem `CREATE INDEX CONCURRENTLY cannot run inside a transaction block` (inofensivo: nada
    é criado) — nesse caso, usar o SQL Editor.
-5. Validar: `select indisvalid, indisready from pg_index where indexrelid = 'public.idx_ifood_pedidos_tenant_criado'::regclass;`
-   → `t, t`.
+5. Validar com o **V2**: `indisvalid` e `indisready` = `t, t`, definição exata, plano do período "hoje" usando o índice.
+6. Rodar o **V3** com o `t0` do V0 e comparar (§5). Arquivar V0–V3 com horários.
 
-## 5. Recuperação (proporcional; nunca restaurar o banco inteiro por causa do Checklist)
+## 7. Recuperação (proporcional; nunca restaurar o banco inteiro por causa do Checklist)
 
 | Situação | Ação |
 |---|---|
@@ -57,7 +78,7 @@ entrou depois dele — por isso o rollback deve ser **localizado**, §5, e nunca
 
 Antes do deploy do código as tabelas ficam **vazias** (nada usa as metas ainda): reverter a 127 nesse intervalo não perde dado.
 
-## 6. Pós-validação (leitura)
+## 8. Pós-validação (leitura) — V3 (§5)
 
 Pedidos e eventos continuam crescendo e o lease do poller renova; contagens do Financeiro iguais; nenhuma policy nova
 em outras tabelas; advisors do Supabase (segurança/performance) sem alerta novo ligado às duas migrations.
