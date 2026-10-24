@@ -371,10 +371,10 @@ describe("consultar_dashboard_dia", () => {
 });
 
 describe("catálogo de ferramentas — só leitura", () => {
-  test("expõe exatamente as 12 tools da Fase 1/1.5/2A/Etapa C/Etapa D/Etapa F.1/Etapa H", () => {
+  test("expõe exatamente as 13 tools da Fase 1/1.5/2A/Etapa C/Etapa D/Etapa F.1/Etapa H/Checklist 2.0", () => {
     const nomes = FERRAMENTAS.map((f) => f.name).sort();
     assert.deepEqual(nomes, [
-      "consultar_cancelamento", "consultar_dashboard_dia", "consultar_dashboard_executivo", "consultar_diagnostico",
+      "consultar_cancelamento", "consultar_checklist_operacional", "consultar_dashboard_dia", "consultar_dashboard_executivo", "consultar_diagnostico",
       "consultar_evolucao_diaria_financeiro", "consultar_insumo", "consultar_parser_resumo", "consultar_produto_cmv",
       "listar_cancelamentos", "listar_insumos", "listar_produtos_cmv", "sugerir_navegacao",
     ]);
@@ -447,16 +447,23 @@ describe("ferramentasDisponiveis — filtro prévio do catálogo (1ª camada de 
     ]);
   });
 
+  test("Checklist Operacional (Checklist 2.0): só com o módulo iFood E checklist.visualizar", () => {
+    const so = (modulos, permissoes) => ferramentasDisponiveis({ modulos, permissoes, impersonando: false }).map((f) => f.name);
+    assert.deepEqual(so([MODULOS.IFOOD], [PERMISSOES.CHECKLIST_VISUALIZAR]), ["consultar_checklist_operacional"]);
+    assert.deepEqual(so([MODULOS.IFOOD], []), []);
+    assert.deepEqual(so([MODULOS.IFOOD_DASHBOARD], [PERMISSOES.CHECKLIST_VISUALIZAR]), []);
+  });
+
   test("acesso só com Parser Food Delivery -> só as 3 tools desse módulo aparecem (Etapa D)", () => {
     const acesso = { modulos: [MODULOS.PARSER_FOOD_DELIVERY], permissoes: [PERMISSOES.PARSER_FD_VER], impersonando: false };
     const nomes = ferramentasDisponiveis(acesso).map((f) => f.name).sort();
     assert.deepEqual(nomes, ["consultar_cancelamento", "consultar_parser_resumo", "listar_cancelamentos"]);
   });
 
-  test("os quatro módulos de dados + Agente IA (sempre presente, ver requireModulo na rota) -> catálogo completo", () => {
+  test("os cinco módulos de dados + Agente IA (sempre presente, ver requireModulo na rota) -> catálogo completo", () => {
     const acesso = {
-      modulos: [MODULOS.IFOOD_DASHBOARD, MODULOS.PRODUTOS_CMV, MODULOS.INGREDIENTS, MODULOS.PARSER_FOOD_DELIVERY, MODULOS.AGENTE_IA],
-      permissoes: [PERMISSOES.DASHBOARD_EXECUTIVO_VER, PERMISSOES.CMV_VER, PERMISSOES.INSUMOS_VER, PERMISSOES.PARSER_FD_VER],
+      modulos: [MODULOS.IFOOD_DASHBOARD, MODULOS.PRODUTOS_CMV, MODULOS.INGREDIENTS, MODULOS.PARSER_FOOD_DELIVERY, MODULOS.IFOOD, MODULOS.AGENTE_IA],
+      permissoes: [PERMISSOES.DASHBOARD_EXECUTIVO_VER, PERMISSOES.CMV_VER, PERMISSOES.INSUMOS_VER, PERMISSOES.PARSER_FD_VER, PERMISSOES.CHECKLIST_VISUALIZAR],
       impersonando: false,
     };
     const nomes = ferramentasDisponiveis(acesso).map((f) => f.name).sort();

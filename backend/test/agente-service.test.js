@@ -596,7 +596,7 @@ describe("processarMensagem — catálogo de tools filtrado por acesso (Etapa B)
       organizacaoId: ORG_ID, unidadeId: UNIDADE_ID, acesso, usuario: USUARIO,
       mensagem: "oi", provider, conversas: conversasFake(), uso: usoFake(),
     });
-    assert.equal(provider.chamadas[0].tools.length, 12);
+    assert.equal(provider.chamadas[0].tools.length, 13); // + consultar_checklist_operacional (Checklist 2.0)
   });
 
   test("acesso só com Insumos -> Claude só recebe as tools desse módulo (Etapa C)", async () => {
