@@ -27,6 +27,23 @@ export function avisoDe(dados) {
   return null;
 }
 
+const finitoPositivo = (v) => typeof v === "number" && Number.isFinite(v) && v > 0;
+
+/**
+ * Metas que vieram no resumo (fonte única: o servidor). Valores fora do formato = ignorados (fica o `reserva`, que é a
+ * última configuração válida desta tela). `info` diz de onde vieram, para a tela e o diálogo explicarem.
+ * @returns {{valores: object, info: {origem: 'unidade'|'padrao'|'indisponivel'|'local', versao: number|null, atualizadoEm: string|null, atualizadoPor: string|null, motivo?: string}}}
+ */
+export function metasDoResumo(dados, reserva) {
+  const m = dados?.metas;
+  const ok = m?.valores && ["preparo", "entrega", "vida"].every((k) => finitoPositivo(m.valores[k]?.meta) && finitoPositivo(m.valores[k]?.avisoPct));
+  if (!ok) return { valores: reserva, info: { origem: "local", versao: null, atualizadoEm: null, atualizadoPor: null } };
+  return {
+    valores: m.valores,
+    info: { origem: m.origem ?? "unidade", versao: Number.isInteger(m.versao) ? m.versao : null, atualizadoEm: m.atualizadoEm ?? null, atualizadoPor: m.atualizadoPor ?? null, motivo: m.motivo ?? null },
+  };
+}
+
 /** Tela antes da primeira resposta: nada de número, só "conectando". */
 export function resumoCarregando({ unidade, metas }) {
   return {
@@ -56,11 +73,13 @@ export function resumoCarregando({ unidade, metas }) {
  */
 export function adaptarResumo(dados, { unidade, metas, recebidoEmMs }) {
   const servidor = Date.parse(dados?.servidorEm);
+  const m = metasDoResumo(dados, metas);
   return {
     origem: "api",
     unidade: { id: unidade?.id ?? null, nome: unidade?.nome ?? "Unidade" },
     conexao: { estado: ESTADO_SELO[dados?.integracao?.estado] ?? "sem_dados", ultimaSincronizacao: dados?.integracao?.ultimaSincronizacao ?? null },
-    metas,
+    metas: m.valores,
+    metasInfo: m.info,
     indicadores: {
       preparo: dados?.indicadores?.preparo ?? indicadorVazio(),
       entrega: dados?.indicadores?.entrega ?? indicadorVazio(),

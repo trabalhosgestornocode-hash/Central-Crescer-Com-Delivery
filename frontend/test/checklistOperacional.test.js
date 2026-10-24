@@ -319,9 +319,9 @@ describe("menu, rota e ciclo de vida", () => {
     assert.match(ler("../src/router.js"), /case "checklist-operacional":\s*\n\s*renderChecklistOperacional\(\);/);
     assert.match(ler("../index.html"), /checklistOperacional\.css/);
   });
-  test("o controlador só LÊ o resumo do backend: nada de escrita, storage ou fetch direto", () => {
+  test("o controlador só LÊ o resumo e grava SÓ as metas (pela api.js): nada de storage ou fetch direto", () => {
     const fonte = ler("../src/checklistOperacional.js");
-    assert.match(fonte, /import \{ obterResumoChecklist \} from "\.\/api\.js"/);
+    assert.match(fonte, /import \{ obterResumoChecklist, salvarMetasChecklist \} from "\.\/api\.js"/);
     assert.doesNotMatch(fonte, /\bhttp\.|fetch\(|localStorage|sessionStorage|post\w*\(|delJson|putJson/);
     assert.match(ler("../src/api.js"), /obterResumoChecklist = \(\) => getJson\("\/api\/v1\/checklist-operacional\/resumo"\)/);
   });

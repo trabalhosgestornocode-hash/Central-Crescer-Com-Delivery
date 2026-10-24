@@ -16,6 +16,7 @@
 import { escapeHtml } from "./utils.js";
 import { icon } from "./icons.js";
 import { MODOS_EXIBICAO } from "./checklistOperacionalExibicao.js";
+import { ROTULO_FUNDO } from "./checklistOperacionalFundo.js";
 import {
   ROTULO_NIVEL, ROTULO_NIVEL_FINAL, ROTULO_SATISFACAO, PASSOS, SELO_CONEXAO, TETO_REGUA,
   fmtMin, fmtHoraCurta, fmtIdade, fmtCronometro, rotuloPedido, etapaDoStatus, classificarFinal,
@@ -393,8 +394,18 @@ export function textoSincronizacao(conexao, agora) {
   return `Atualizado às ${hora}${idade ? ` (${idade})` : ""}`;
 }
 
-export function cabecalho(resumo, agora, { podeEditarMetas = false } = {}) {
+/**
+ * Selo do status da operação (cor do fundo repetida em TEXTO e ÍCONE — a cor nunca está sozinha). `role="status"`:
+ * leitor de tela anuncia a mudança sem roubar o foco.
+ */
+export function seloStatusOperacao(nivel) {
+  const r = ROTULO_FUNDO[nivel] ?? ROTULO_FUNDO.neutro;
+  return `<span class="cko-status-selo cko-nivel--${nivel in ROTULO_FUNDO ? nivel : "neutro"}" data-status-selo="${nivel}" role="status">${icon(r.icone, { size: 18 })}<span>${r.texto}</span></span>`;
+}
+
+export function cabecalho(resumo, agora, { podeEditarMetas = false, nivelFundo = null } = {}) {
   const selo = SELO_CONEXAO[resumo.conexao?.estado] ?? SELO_CONEXAO.sem_dados;
+  const nivel = nivelFundo ?? derivarStatusOperacao(resumo, agora).nivel;
   return `
     <header class="cko-cab">
       <div class="cko-cab-id">
@@ -407,6 +418,7 @@ export function cabecalho(resumo, agora, { podeEditarMetas = false } = {}) {
       <div class="cko-cab-estado">
         <span class="cko-selo cko-selo--${selo.tom}" title="${escapeHtml(selo.dica)}"><i></i>${selo.rotulo}</span>
         <span class="cko-sinc" data-sinc>${textoSincronizacao(resumo.conexao, agora)}</span>
+        <span class="cko-cab-status" data-slot-selo-status>${seloStatusOperacao(nivel)}</span>
       </div>
       <time class="cko-relogio" data-relogio>${new Date(agora).toLocaleTimeString("pt-BR")}</time>
       <div class="cko-cab-acoes">
@@ -441,8 +453,10 @@ export function faixaAviso(resumo) {
 export function montarTela(resumo, agora, opcoes = {}) {
   const modo = MODOS_EXIBICAO[opcoes.modo] ? opcoes.modo : null;
   const classes = ["cko", resumo.origem === "demonstracao" ? "cko--demo" : "", modo ? `cko--imersivo cko--${modo}` : ""].filter(Boolean).join(" ");
+  // Fundo dinâmico (só nos modos TV/Tablet): o controlador mantém `data-fundo` atualizado (checklistOperacionalFundo.js).
+  const fundo = modo ? ` data-fundo="${opcoes.nivelFundo ?? derivarStatusOperacao(resumo, agora).nivel}"` : "";
   // No modo, a raiz recebe o foco ao abrir (tabindex -1: focável por script, fora da ordem do Tab).
-  return `<div class="${classes}" data-cko${modo ? ` data-modo="${modo}" tabindex="-1" role="region" aria-label="Checklist Operacional"` : ""}>${conteudoTela(resumo, agora, opcoes)}</div>`;
+  return `<div class="${classes}" data-cko${modo ? ` data-modo="${modo}"${fundo} tabindex="-1" role="region" aria-label="Checklist Operacional"` : ""}>${conteudoTela(resumo, agora, opcoes)}</div>`;
 }
 
 /** Miolo da tela — redesenhado DENTRO da raiz para não derrubar a tela cheia. */
@@ -470,7 +484,19 @@ export function conteudoTela(resumo, agora, opcoes = {}) {
 
 const fmtCampo = (v) => (v == null ? "" : String(v).replace(".", ","));
 
-export function dialogoMetas(metas, { erros = {}, demonstracao = true } = {}) {
+/** Linha "de onde vêm estas metas" do diálogo (real). */
+function origemDasMetas(info) {
+  if (!info) return "";
+  if (info.origem === "indisponivel" || info.origem === "local") {
+    return '<p class="cko-metas-demo" role="note">As metas da unidade não puderam ser lidas do servidor agora. A tela usa os valores de exemplo e <b>não é possível salvar</b> até a conexão voltar.</p>';
+  }
+  if (info.origem === "padrao") return '<p class="cko-metas-demo">Esta unidade ainda não salvou metas: os valores abaixo são o exemplo inicial. Ao salvar, passam a valer em todas as telas da unidade.</p>';
+  const quando = info.atualizadoEm ? new Date(info.atualizadoEm).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" }) : null;
+  return `<p class="cko-metas-demo">Metas salvas da unidade (versão ${escapeHtml(String(info.versao ?? "—"))}${quando ? `, ${escapeHtml(quando)}` : ""}${info.atualizadoPor ? ` por ${escapeHtml(info.atualizadoPor)}` : ""}). Valem na TV, no tablet e no Dashboard da unidade.</p>`;
+}
+
+export function dialogoMetas(metas, { erros = {}, demonstracao = true, info = null, aviso = null, salvando = false } = {}) {
+  const bloqueado = !demonstracao && (info?.origem === "indisponivel" || info?.origem === "local");
   const campo = (nome, rotulo, valor, sufixo) => `
     <label class="cko-campo${erros[nome] ? " cko-campo--erro" : ""}">
       <span>${rotulo}</span>
@@ -495,7 +521,9 @@ export function dialogoMetas(metas, { erros = {}, demonstracao = true } = {}) {
         <p class="cko-metas-ref" data-referencia>${escapeHtml(REFERENCIA_P75_INFO.texto)}</p>
         ${demonstracao
           ? '<p class="cko-metas-demo">Metas de demonstração: valem só nesta tela e não são salvas.</p>'
-          : '<p class="cko-metas-demo">Metas desta tela: valem só neste aparelho até recarregar e ainda não são salvas para a unidade.</p>'}
+          : origemDasMetas(info)}
+        <p class="cko-metas-demo">Pedido em andamento é reavaliado na hora pela meta nova. Os resultados já registrados no Dashboard continuam avaliados pela meta que valia no recebimento de cada pedido.</p>
+        ${aviso ? `<p class="cko-metas-erro" role="alert" tabindex="-1" data-metas-aviso>${escapeHtml(aviso)}</p>` : ""}
       </header>
       ${grupo("preparo")}
       ${grupo("entrega")}
@@ -505,7 +533,7 @@ export function dialogoMetas(metas, { erros = {}, demonstracao = true } = {}) {
         <button type="button" class="cko-btn cko-btn--sutil" data-acao="metas-referencia" title="${escapeHtml(REFERENCIA_P75_INFO.texto)}">Usar referência observada (p75)</button>
         <span></span>
         <button type="button" class="cko-btn cko-btn--sutil" data-acao="metas-cancelar">Cancelar</button>
-        <button type="submit" class="cko-btn cko-btn--primario" value="aplicar">Aplicar metas</button>
+        <button type="submit" class="cko-btn cko-btn--primario" value="aplicar"${bloqueado || salvando ? " disabled" : ""}${salvando ? ' aria-busy="true"' : ""}>${demonstracao ? "Aplicar metas" : salvando ? "Salvando…" : "Salvar metas da unidade"}</button>
       </footer>
     </form>`;
 }
@@ -549,6 +577,24 @@ function opcaoModo(modo) {
 }
 
 /**
+ * Terceira opção: o Dashboard Operacional (histórico). Não é um MODO de exibição (não entra em tela cheia, não tem
+ * tique nem Realtime de pedidos): abre dentro da Central, com filtros de período e etapa. Por isso tem classe e ação
+ * próprias (`ckm-opcao-dash`, `abrir-dashboard`) — os dois modos continuam idênticos entre si.
+ */
+function opcaoDashboard() {
+  return `
+    <article class="ckm-opcao-dash" data-opcao-dashboard aria-labelledby="ckm-t-dash">
+      <div class="ckm-ilustra" aria-hidden="true">
+        <div class="ckm-aparelho ckm-aparelho--dash"><div class="ckm-tela ckm-tela--dash">${[38, 62, 48, 80, 56, 70].map((h) => `<i class="ckm-barra" style="--h:${h}%"></i>`).join("")}</div></div>
+      </div>
+      <h2 id="ckm-t-dash"><span class="ckm-icone-dash">${icon("bar-chart", { size: 22 })}</span>Dashboard Operacional</h2>
+      <p class="ckm-desc">Histórico da unidade: tempos, atrasos, horários de pico e comparação com o período anterior, com análises e relatórios em PDF e Excel.</p>
+      <ul class="ckm-destaques">${["Hoje, ontem, semana, mês ou intervalo", "Análises com evidências", "Relatórios em PDF e Excel"].map((d) => `<li>${icon("check-circle", { size: 16 })}<span>${d}</span></li>`).join("")}</ul>
+      <button type="button" class="btn btn-primary ckm-iniciar" data-acao="abrir-dashboard">${icon("bar-chart", { size: 17 })}<span>Abrir Dashboard Operacional</span></button>
+    </article>`;
+}
+
+/**
  * Página do Checklist no menu: escolha entre Televisão e Tablet. Nenhum dado é consultado aqui — a consulta
  * e o Realtime começam só quando um modo é aberto (e param ao voltar).
  */
@@ -567,9 +613,10 @@ export function telaSelecaoModos({ unidadeNome, demonstracao = false, aviso = nu
         ${demonstracao ? '<span class="ckm-demo">Modo demonstração: dados simulados</span>' : ""}
       </p>
       ${aviso ? `<p class="ckm-aviso" role="alert">${escapeHtml(aviso)}</p>` : ""}
-      <div class="ckm-opcoes">
+      <div class="ckm-opcoes ckm-opcoes--3">
         ${opcaoModo("tv")}
         ${opcaoModo("tablet")}
+        ${opcaoDashboard()}
       </div>
       <p class="ckm-nota">
         Os dois formatos mostram exatamente os mesmos indicadores, alertas e estados, do mesmo resumo da unidade.

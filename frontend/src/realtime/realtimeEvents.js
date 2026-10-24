@@ -27,6 +27,13 @@ export const EVENTOS_IFOOD_PEDIDOS = Object.freeze({
   ESTADO_ATUALIZADO: "ifood_pedido.estado_atualizado",
 });
 
+/** Metas do Checklist Operacional. Espelha EVENTO_METAS_ATUALIZADAS (checklistOperacional.service.js).
+ * Payload: {tipo, organizacaoId, unidadeId, versao, emitidoEm}, SÓ no tópico da unidade — sem os valores: quem recebe
+ * consulta o resumo de novo (TV/Tablet) ou recarrega o Dashboard. */
+export const EVENTOS_CHECKLIST = Object.freeze({
+  METAS_ATUALIZADAS: "checklist_metas.atualizadas",
+});
+
 /**
  * Sinal interno (não vem do servidor) que o RealtimeManager injeta no bus
  * quando um canal RECONECTA depois de já ter estado subscrito (Fase S/T da

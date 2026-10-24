@@ -335,7 +335,7 @@ describe("CSS dos modos", () => {
     assert.match(css, /\.cko--tablet \.cko-btn \{ min-height: 44px;/);
   });
   test("index carrega a versão nova do CSS", () => {
-    assert.match(ler("../index.html"), /checklistOperacional\.css\?v=4/);
+    assert.match(ler("../index.html"), /checklistOperacional\.css\?v=5/);
   });
   test("4K: zoom só onde o navegador o oferece; sem ele, a grade normal da TV", () => {
     assert.match(css, /@supports \(zoom: 2\) \{\s*@media \(min-width: 3000px\) and \(min-height: 1600px\) \{\s*\.cko--tv \{ zoom: 2;/);
