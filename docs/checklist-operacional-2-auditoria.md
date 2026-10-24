@@ -1,5 +1,11 @@
 # Checklist Operacional 2.0 — Fase 1: auditoria e plano técnico
 
+> **Atualização (rebase sobre a `main` atual):** a auditoria abaixo descreve a base original (`8d32196`). Depois dela a `main`
+> recebeu, entre outras: as migrations 120–126 (Financeiro e módulo próprio `checklist_operacional`, 123) e a régua "Etapa 2"
+> do Checklist (só DELIVERY; preparo = chegada PLC → despacho DSP; entrega = DSP → conclusão registrada pelo iFood;
+> vida = PLC → conclusão; sem medição "aproximada"). As migrations desta entrega passaram a ser **127** (metas) e **128**
+> (índice) e o Dashboard segue a régua da `main`. Ver `checklist-operacional-2-entrega.md`.
+>
 > Branch `feat/checklist-operacional-2` (a partir de `main` @ `8d32196`). Auditoria feita só no código e nas migrations;
 > nenhuma consulta à produção. O Graphify citado no `CLAUDE.md` não está instalado nesta máquina (`graphify-out/` não
 > existe), então a navegação foi feita direto nas fontes.
@@ -96,9 +102,9 @@ etapas em níveis diferentes, a cor de fundo é a da pior delas (a mesma regra q
 
 | Fase | Entrega |
 |---|---|
-| 2 | Migration `120_checklist_metas.sql`: `checklist_metas` (1 linha por unidade, `versao`), `checklist_metas_historico` (append-only), função `checklist_metas_salvar` (atômica, compara versão, grava histórico). `GET/PUT /checklist-operacional/metas`, `GET .../metas/historico`. Metas embutidas no `/resumo` (a TV já pode ler, sem rota nova para o perfil de exibição). Evento `checklist_metas.atualizadas` no tópico da unidade. |
+| 2 | Migration `127_checklist_metas.sql` (planejada como 120): `checklist_metas` (1 linha por unidade, `versao`), `checklist_metas_historico` (append-only), função `checklist_metas_salvar` (atômica, compara versão, grava histórico). `GET/PUT /checklist-operacional/metas`, `GET .../metas/historico`. Metas embutidas no `/resumo` (a TV já pode ler, sem rota nova para o perfil de exibição). Evento `checklist_metas.atualizadas` no tópico da unidade. |
 | 3 | Fundo da área operacional (TV/Tablet) pelo status agregado; transição suave, sem transição com movimento reduzido; selo de status com texto + ícone; histerese só na melhora (piora é imediata). |
-| 4 | Terceira opção "Dashboard Operacional"; `GET /checklist-operacional/dashboard` (período, etapa, comparativo); indicadores calculados no backend; gráficos SVG. Migration `121` (índice por período, `CONCURRENTLY`). |
+| 4 | Terceira opção "Dashboard Operacional"; `GET /checklist-operacional/dashboard` (período, etapa, comparativo); indicadores calculados no backend; gráficos SVG. Migration `128` (planejada como 121; índice por período, `CONCURRENTLY`). |
 | 5 | Motor determinístico de análises (`checklistOperacional.analises.js`) — fato / hipótese / recomendação separados, com evidências. Tool só-leitura no Agente Crescer. |
 | 6 | PDF (HTML + impressão) e Excel (`GET .../dashboard/exportar.xlsx`) a partir do **mesmo** payload do dashboard, com seleção de seções. |
 | 8 | Testes `node:test` (backend e frontend). |
