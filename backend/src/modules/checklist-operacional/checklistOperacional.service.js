@@ -23,6 +23,17 @@ import { orderLiberadoParaUnidade } from "../ifood/ifoodToken.service.js";
 import { montarResumo, diaOperacional, LIMITE_ATIVO_MIN } from "./checklistOperacional.calc.js";
 import { anotarOrigem } from "./checklistOperacional.lojas.js";
 import { EVENTO_PEDIDOS_ATUALIZADOS, checklistRealtimeHabilitado } from "../ifood/ifoodPedidosAviso.js";
+import {
+  metasDaLinha, metasIndisponiveis, validarMetasEntrada, resultadoDoSalvar, linhaDoTempoDasMetas,
+} from "./checklistOperacional.metas.js";
+import { resolverPeriodo } from "./checklistOperacional.periodos.js";
+import { montarDashboard, paraResposta, ETAPAS } from "./checklistOperacional.indicadores.js";
+import { gerarAnalises } from "./checklistOperacional.analises.js";
+import { emitirEventoRealtime } from "../realtime/emitirEvento.js";
+import { ApiError } from "../../shared/ApiError.js";
+
+/** Evento de domínio das metas (espelhado em frontend/src/realtime/realtimeEvents.js). Payload: só ids + versão. */
+export const EVENTO_METAS_ATUALIZADAS = "checklist_metas.atualizadas";
 
 export const VERSAO_CONTRATO = 1;
 /** Lease renovado a cada ciclo (30 s). Sem renovação por mais que isto, o recebimento é tratado como parado. */
@@ -91,6 +102,10 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
   const realtimeLigado = checklistRealtimeHabilitado(deps.env ?? process.env);
   const agoraMs = agora().getTime();
 
+  // Metas da unidade: lidas em paralelo e NUNCA derrubam o resumo (sem a migration 127 ou com falha de leitura, a tela
+  // segue com o exemplo e diz por quê).
+  const metasP = carregarMetasParaTela({ repo: r, organizacaoId, unidadeId });
+
   // O Checklist consulta SÓ a conexão operacional (pedidos). Uma conexão financeira de homologação na unidade nunca a substitui nem a bloqueia.
   const conexao = await ir.obterConexaoViva({ organizacaoId, unidadeId, finalidade: "pedidos_producao" });
   let credencialOrder = null;
@@ -153,6 +168,8 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
     ...resumo,
     ...(origemLojas ? { lojas: origemLojas.lojas } : {}),
     avaliacoes: { disponivel: false, motivo: "As avaliações do iFood ainda não estão conectadas à Central." },
+    // Metas da unidade (fonte única: checklist_metas). A tela classifica por elas; `versao` vai no PUT seguinte.
+    metas: await metasP,
     // Realtime: o Events emite este evento SÓ no tópico privado da unidade depois de gravar um pedido; a tela,
     // ao receber (ou ao resincronizar), consulta este endpoint de novo. Payload: só tipo + organização + unidade.
     // Três coisas DIFERENTES, nunca confundidas:
@@ -166,4 +183,122 @@ export async function obterResumo({ organizacaoId, unidadeId, agora = () => new 
       evento: EVENTO_PEDIDOS_ATUALIZADOS,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Metas da unidade
+// ---------------------------------------------------------------------------
+
+/** Para o resumo: nunca lança. Sem migration / falha de leitura = exemplo marcado `indisponivel`. */
+export async function carregarMetasParaTela({ repo: r = repo, organizacaoId, unidadeId }) {
+  try {
+    if (typeof r.obterMetas !== "function") return metasIndisponiveis("leitura_indisponivel");
+    return metasDaLinha(await r.obterMetas({ organizacaoId, unidadeId }));
+  } catch (e) {
+    return metasIndisponiveis(e?.codigo === "METAS_INDISPONIVEIS" ? "migration_pendente" : "falha_leitura");
+  }
+}
+
+/** GET /metas: aqui a falha APARECE (503 sem a migration), diferente do resumo. */
+export async function obterMetas({ organizacaoId, unidadeId, deps = {} }) {
+  const r = deps.repo ?? repo;
+  return metasDaLinha(await r.obterMetas({ organizacaoId, unidadeId }));
+}
+
+/**
+ * PUT /metas. Corpo: `{ versao: number (a que a tela tinha), metas: {preparo, entrega, vida}, origem?: 'migracao_local' }`.
+ * `versao: 0` = "a unidade ainda não tinha metas". Versão diferente da atual → 409 METAS_CONFLITO com o valor atual
+ * (nada é gravado). Sucesso → aviso no tópico da UNIDADE (TV, tablet e Dashboard recarregam pelo resumo).
+ * @param {{organizacaoId: string, unidadeId: string, corpo: object, autor: object, deps?: object}} p
+ */
+export async function salvarMetas({ organizacaoId, unidadeId, corpo, autor, deps = {} }) {
+  const r = deps.repo ?? repo;
+  const emitir = deps.emitir ?? emitirEventoRealtime;
+  const versao = corpo?.versao;
+  if (!Number.isInteger(versao) || versao < 0) throw ApiError.badRequest("Informe a versão das metas que a tela tinha (número inteiro ≥ 0).");
+  const origem = corpo?.origem === "migracao_local" ? "migracao_local" : "interface";
+  if (origem === "migracao_local" && versao !== 0) throw ApiError.badRequest("A migração de metas locais só grava quando a unidade ainda não tem metas salvas.");
+  const v = validarMetasEntrada(corpo?.metas);
+  if (!v.ok) throw ApiError.badRequest("Metas inválidas.", { erros: v.erros });
+
+  const linha = await r.salvarMetas({ organizacaoId, unidadeId, versaoEsperada: versao, metas: v.metas, origem, autor });
+  const res = resultadoDoSalvar(linha);
+  if (res.resultado === "conflito") {
+    const e = new ApiError(409, "As metas foram alteradas em outro aparelho. Confira os valores atuais antes de salvar de novo.", { metas: res.metas });
+    e.codigo = "METAS_CONFLITO";
+    throw e;
+  }
+  if (res.resultado !== "salvo" && res.resultado !== "sem_alteracao") throw ApiError.internal("Resposta inesperada ao salvar as metas.");
+  if (res.resultado === "salvo") {
+    // Depois do commit (a função já retornou). Nunca lança; o polling cobre se o aviso não chegar.
+    Promise.resolve()
+      .then(() => emitir({ tipo: EVENTO_METAS_ATUALIZADAS, organizacaoId, unidadeId, versao: res.metas.versao }, { somenteUnidade: true }))
+      .catch(() => {});
+  }
+  return res;
+}
+
+/** GET /metas/historico — sem ids de pessoa: só o nome gravado na hora e se foi suporte (impersonação). */
+export async function obterHistoricoMetas({ organizacaoId, unidadeId, deps = {} }) {
+  const r = deps.repo ?? repo;
+  const linhas = await r.listarHistoricoMetas({ organizacaoId, unidadeId, limite: 50 });
+  return linhas.map((h) => ({
+    versao: Number(h.versao), anterior: h.anterior ?? null, novo: h.novo, origem: h.origem,
+    alteradoEm: h.alterado_em, alteradoPor: h.alterado_por_nome ?? null, suporte: h.impersonado_por != null,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard Operacional (histórico)
+// ---------------------------------------------------------------------------
+
+export const ETAPAS_FILTRO = Object.freeze(["todas", ...ETAPAS]);
+/** Folgas da janela de leitura por `criado_em` (o dia de cada pedido é decidido pelo recebimento oficial). */
+const FOLGA_ANTES_MS = 3_600_000;        // relógio do banco × carimbo do iFood
+const FOLGA_DEPOIS_MS = 48 * 3_600_000;  // pedido registrado tarde (recebimento parado e retomado)
+
+/**
+ * Indicadores + análises de um período. Sempre do tenant do contexto; nada vem do navegador além do filtro.
+ * @param {{organizacaoId: string, unidadeId: string, filtro: {periodo?: string, inicio?: string, fim?: string, etapa?: string},
+ *          agora?: () => Date, deps?: object}} p
+ */
+export async function obterDashboard({ organizacaoId, unidadeId, filtro = {}, agora = () => new Date(), deps = {} }) {
+  const r = deps.repo ?? repo;
+  const agoraMs = agora().getTime();
+  const periodo = resolverPeriodo({ periodo: filtro.periodo || "hoje", inicio: filtro.inicio, fim: filtro.fim, agoraMs });
+  if (!periodo.ok) { const e = ApiError.badRequest(periodo.mensagem); e.codigo = periodo.codigo; throw e; }
+  const etapa = filtro.etapa || "todas";
+  if (!ETAPAS_FILTRO.includes(etapa)) throw ApiError.badRequest("Etapa inválida. Use todas, preparo, entrega ou vida.");
+
+  const desdeMs = Math.min(periodo.atual.inicioMs, periodo.anterior.inicioMs) - FOLGA_ANTES_MS;
+  const ateMs = Math.min(Math.max(periodo.atual.fimMs, periodo.anterior.fimMs) + FOLGA_DEPOIS_MS, agoraMs + 60_000);
+
+  let versoes = [];
+  let metasDisponiveis = true;
+  try {
+    versoes = await r.listarVersoesMetas({ organizacaoId, unidadeId, ateIso: new Date(periodo.atual.fimMs).toISOString() });
+  } catch (e) {
+    if (e?.codigo !== "METAS_INDISPONIVEIS") throw e;
+    metasDisponiveis = false; // sem a migration: nenhum pedido tem meta vigente (dito na qualidade dos dados)
+  }
+  const [pedidos, primeiroPedidoEm] = await Promise.all([
+    r.listarPedidosDoPeriodo({ organizacaoId, unidadeId, desdeIso: new Date(desdeMs).toISOString(), ateIso: new Date(ateMs).toISOString() }),
+    r.obterPrimeiroPedidoEm({ organizacaoId, unidadeId }),
+  ]);
+
+  const d = montarDashboard({ pedidos, periodo, linhaDoTempo: linhaDoTempoDasMetas(versoes), etapa, primeiroPedidoEm });
+  if (!metasDisponiveis) d.qualidade.avisos.unshift("As metas da unidade ainda não podem ser lidas neste ambiente (migration 120 pendente): nenhum pedido foi avaliado contra meta.");
+  const analises = gerarAnalises(d);
+  return {
+    versao: VERSAO_CONTRATO,
+    servidorEm: new Date(agoraMs).toISOString(),
+    ...paraResposta(d),
+    analises,
+  };
+}
+
+/** Nome da unidade do contexto (cabeçalho do relatório). Nunca lança. */
+export async function nomeDaUnidade({ organizacaoId, unidadeId, deps = {} }) {
+  const r = deps.repo ?? repo;
+  try { return (await r.obterNomeUnidade?.({ organizacaoId, unidadeId })) ?? null; } catch { return null; }
 }

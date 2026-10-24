@@ -68,7 +68,7 @@ const arred = (v) => Math.round(v * 10) / 10;
 // Dia operacional no fuso do negócio
 // ---------------------------------------------------------------------------
 
-function partesNoFuso(t, fuso) {
+export function partesNoFuso(t, fuso) {
   const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
     timeZone: fuso, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit",
   }).formatToParts(new Date(t)).filter((x) => x.type !== "literal").map((x) => [x.type, Number(x.value)]));
@@ -82,7 +82,7 @@ function deslocamento(t, fuso) {
 }
 
 /** Instante UTC de uma hora local (ano, mês, dia, hora) no fuso. Duas passadas cobrem mudança de horário. */
-function instanteLocal(ano, mes, dia, hora, fuso) {
+export function instanteLocal(ano, mes, dia, hora, fuso) {
   const ingenuo = Date.UTC(ano, mes - 1, dia, hora);
   let t = ingenuo - deslocamento(ingenuo, fuso);
   t = ingenuo - deslocamento(t, fuso);
@@ -120,7 +120,7 @@ export const recebidoEm = (p) => p.placed_event_created_at ?? p.order_created_at
 export const concluidoEm = (p) => (p.status_oficial === "CONCLUDED" ? p.status_oficial_em ?? null : null);
 
 /** Instante usado só para colocar o pedido num dia/janela. Sem carimbo oficial, o primeiro evento visto. */
-const referencia = (p) => {
+export const referencia = (p) => {
   for (const c of [recebidoEm(p), p.primeiro_evento_em, p.criado_em]) if (valido(ms(c))) return ms(c);
   return NaN;
 };
