@@ -99,12 +99,21 @@ desfeita (2 linhas fictícias → 0 depois do ROLLBACK). Registrar 132–136 no 
 digital (consulta de `prevoo_136.sql`): colunas `d34b254e…`, ACL/RLS `fa4f73de…`, políticas `a490b04c…`, funções exceto a 136
 `44d40872…`; 134 tabelas (r/p), 146 funções.
 
-## Homologação da migration 136 (30/10/2026, após o push de `bce1875`)
+## Reconciliação do histórico da 136 no teste (execuções registradas)
+
+Duas execuções do MESMO arquivo (`EDITOR_136_aplicar.sql`, SHA-256 `a226a4ae…`), ambas só no teste:
+
+1. **17:43:58Z — 1ª aplicação**, por `psql` (2ª rodada, seção acima; evidências `136-*`). Pré-voo dessa rodada: 136 ainda não aplicada.
+2. **~20:05Z — reaplicação idempotente** pelo SQL Editor (`create or replace`, mesmo conteúdo). Antes dela a função já tinha o hash `10a2368a…`, e continuou igual depois.
+
+Evidência cruzada: o resumo geral das funções do teste mudou entre 17:15Z (`d80ccc6b…`, 136 ausente) e 20:01Z (`9147dcf9…`), compatível com a 1ª aplicação. O evento `unidade.transferida_entre_empresas` de **17:50Z** é o teste de transferência da própria 2ª rodada (massa descartável; a linha de auditoria foi mantida de propósito). **Correção:** a seção abaixo o descreve como "atividade de outra frente" — isso estava errado; não há evidência de atividade de outra frente nessa janela. Nenhum dado de `schema_migrations` do teste foi escrito (continuam 17 linhas, 0 de 132–136).
+
+## Execução 2 da 136 (SQL Editor) (30/10/2026, após o push de `bce1875`)
 
 - Pré-voo: projeto `wiqqsxnysbzhcrzrrean`; D-1, resolvedor, cota, transferência e `claim` com hashes iguais aos de antes; M3 desligada; 17 migrations registradas.
-  **Atividade de outra frente detectada**: `unidade.transferida_entre_empresas` às 17:50 UTC (homologação de transferência/Financeiro) — alterou o conteúdo de `unidades`, não funções nem esquema.
+  O evento `unidade.transferida_entre_empresas` de 17:50 UTC pertence à 2ª rodada (ver reconciliação acima).
 - `EDITOR_136_aplicar.sql` (SHA-256 `a226a4ae…`, conferido no editor, LF, sem `\r`) executado com "Success". O hash da função de gatilho era **igual antes e depois** (`10a2368a…`):
-  a 136 já estava presente no teste (re-aplicação idempotente por `create or replace`).
+  a 136 já estava presente (1ª aplicação às 17:43:58Z, ver reconciliação) — esta foi uma re-aplicação idempotente por `create or replace`.
 - Testes funcionais (bloco desfeito): `authenticated` e `anon` recusados ao gravar fuso/horário (UPDATE e INSERT, `42501`); `authenticated` segue alterando outras colunas;
   sem mudar o valor o UPDATE passa; `service_role` grava; fuso e horário inválidos recusados (`22023`); `anon` não executa o resolvedor nem a função do gatilho; D-1 igual; M3 desligada.
 - Estado final: 0 unidades com fuso, 0 resíduo, RLS de `unidades` ligada, política `rls_unidades_tenant` inalterada, legados e contatos com os mesmos hashes, PostgREST (anon) sem exposição (`postgrest-136.txt`).
