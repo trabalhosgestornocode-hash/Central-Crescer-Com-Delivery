@@ -252,6 +252,26 @@ chk "rollbacks: nenhuma tabela nova sobra" "$(q nt_rb "select count(*) from pg_c
 for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql 136_unidades_fuso_somente_backend.sql; do aplicar nt_rb "$M/$f" || bad "reaplicar após rollback: $f"; done
 ok "132–136 reaplicadas após o rollback"
 
+# ---------- 11. pacote consolidado (gerar_pacote.mjs --transacao): aplica + REGISTRA no histórico, tudo ou nada ----------
+node "$R/backend/testes-seguros/supabase-teste/gerar_pacote.mjs" "$TMP/pac" --transacao > /dev/null || { bad "gerar_pacote"; exit 1; }
+HIST="create schema if not exists supabase_migrations; create table if not exists supabase_migrations.schema_migrations (version text primary key, statements text[], name text, created_by text, idempotency_key text unique, rollback text[]); grant usage on schema supabase_migrations to dono_sim; grant all on supabase_migrations.schema_migrations to dono_sim"
+REG="select count(*) || ':' || string_agg(name, ',' order by version) from supabase_migrations.schema_migrations where name ~ '^13[2-6]_'"
+NOVAS="select count(*) from pg_class where relname in ('usuarios_convites','comunicacao_destinatario_escopos','comunicacao_legado_snapshot','comunicacao_convites','comunicacao_desafios_titular','comunicacao_consentimentos','comunicacao_termos')"
+novo_banco nt_pac nt_main; $SU -d nt_pac -c "$HIST" >/dev/null
+aplicar nt_pac "$TMP/pac/pacote_aplicar.sql" && ok "pacote 132→136 aplicado numa transação (psql -f)" || { bad "pacote_aplicar"; head -5 "$TMP/ap.log"; }
+chk "pacote registra as 5 migrations no histórico, em ordem" "$(q nt_pac "$REG")" "5:132_configuracoes2_fuso_unidade_convites_usuario,133_notificacoes_escopos_snapshot_m3,134_notificacoes_otp_consentimento,135_notificacoes_cotas_categoria,136_unidades_fuso_somente_backend"
+chk "registro guarda o conteúdo ORIGINAL de cada arquivo" "$(q nt_pac "select md5(statements[1]) from supabase_migrations.schema_migrations where name = '136_unidades_fuso_somente_backend'")" "$(tr -d '\r' < "$M/136_unidades_fuso_somente_backend.sql" | md5sum | cut -d' ' -f1)"
+chk "pacote: função da 136 idêntica à das migrations avulsas" "$(q nt_pac "select md5(pg_get_functiondef('unidades_validar_fuso_horario()'::regprocedure))")" "$(q nt_branch "select md5(pg_get_functiondef('unidades_validar_fuso_horario()'::regprocedure))")"
+chk "pacote: agendamento do D-1 idêntico ao das migrations avulsas" "$(q nt_pac "$FN_AG")" "$(q nt_branch "$FN_AG")"
+aplicar nt_pac "$TMP/pac/pacote_aplicar.sql"; chk "pacote reaplicado é RECUSADO pela trava (já registrado)" "$(grep -c 'já registrada' "$TMP/ap.log")" "1"
+chk "e o histórico continua com 5 linhas" "$(q nt_pac "select count(*) from supabase_migrations.schema_migrations where name ~ '^13[2-6]_'")" "5"
+novo_banco nt_pac2 nt_main; $SU -d nt_pac2 -c "$HIST" -c "alter table supabase_migrations.schema_migrations add constraint falha_proposital check (name <> '136_unidades_fuso_somente_backend')" >/dev/null
+aplicar nt_pac2 "$TMP/pac/pacote_aplicar.sql"
+chk "falha no registro desfaz TUDO (nenhuma tabela de 132–135 e nenhum registro)" "$(q nt_pac2 "$NOVAS")/$(q nt_pac2 "select count(*) from supabase_migrations.schema_migrations")" "0/0"
+aplicar nt_pac "$TMP/pac/pacote_reverter.sql" && ok "pacote de reversão 136→132 numa transação" || { bad "pacote_reverter"; head -5 "$TMP/ap.log"; }
+chk "reversão remove o registro e as tabelas novas" "$(q nt_pac "select count(*) from supabase_migrations.schema_migrations")/$(q nt_pac "$NOVAS")" "0/0"
+chk "reversão: agendamento do D-1 idêntico ao da main" "$(q nt_pac "$FN_AG")" "$MD_AG_MAIN"
+
 echo; echo "RESUMO: $N_OK verificações OK, $N_F falha(s)"
-[ "${MANTER_BANCOS:-}" = "1" ] || for b in nt_main nt_branch nt_rb; do $SU -d postgres -c "drop database if exists $b" >/dev/null 2>&1; done   # MANTER_BANCOS=1: inspeção depois
+[ "${MANTER_BANCOS:-}" = "1" ] || for b in nt_main nt_branch nt_rb nt_pac nt_pac2; do $SU -d postgres -c "drop database if exists $b" >/dev/null 2>&1; done   # MANTER_BANCOS=1: inspeção depois
 [ -z "$FALHOU" ] && echo "TUDO OK" || { echo "HÁ FALHAS"; exit 1; }
