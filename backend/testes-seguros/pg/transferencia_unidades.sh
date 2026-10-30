@@ -26,7 +26,7 @@ novo_banco estrut_base
 $SU -d estrut_base -c "grant all on schema public to dono_sim; grant usage on schema public to anon, authenticated, service_role" >/dev/null
 psql $H -U dono_sim -X -q -d estrut_base -c "alter default privileges in schema public grant all on tables to anon, authenticated, service_role; alter default privileges in schema public grant all on sequences to anon, authenticated, service_role; alter default privileges in schema public grant all on functions to anon, authenticated, service_role" >/dev/null
 $SU -d estrut_base -f "$AQUI/stub_supabase_externo.sql" >/dev/null 2>&1 || { bad "stub do Supabase"; exit 1; }
-LISTA=$(git -C "$R" ls-tree --name-only "$REF_BASE" database/migrations/ | sed 's#database/migrations/##' | grep -v rollback | grep -E '^(000_|06[89]_|0[7-9][0-9]_|1[01][0-9]_|12[3-9]_)' | sort)
+LISTA=$(git -C "$R" ls-tree --name-only "$REF_BASE" database/migrations/ | sed 's#database/migrations/##' | grep -v rollback | grep -E '^(000_|06[89]_|0[7-9][0-9]_|1[01][0-9]_|12[3-9]_|1[3-9][0-9]_)' | sort)
 N=0; for f in $LISTA; do
   git -C "$R" show "$REF_BASE:database/migrations/$f" > "$TMP/$f"
   psql $H -U dono_sim -X -q -v ON_ERROR_STOP=1 -d estrut_base -f "$TMP/$f" > "$TMP/$f.log" 2>&1 || { bad "base: $f"; grep -m2 ERRO "$TMP/$f.log"; exit 1; }; N=$((N+1))
