@@ -59,8 +59,8 @@ Templates de autenticação **não aceitam URL** (doc 08), por isso o link do co
 | Uso único | sim | `consumido_em` preenchido de forma atômica (`update … where consumido_em is null and invalidado_em is null and expira_em > now() returning`) |
 | Tentativas | máx. 5 por desafio | contador incrementado **antes** da comparação, na mesma transação; o 5º erro invalida o desafio |
 | Reenvio | mínimo de 60 s | `ultimo_envio_em`; o desafio novo invalida o anterior |
-| Limites adicionais | por telefone (5 desafios/h, 10/dia), por convite (5/dia), por IP (20/h), por unidade (50/dia), por usuário admin (convites: 30/dia) | reaproveitar `shared/rateLimit.js` (memória) **e** contagem no banco (vale entre instâncias). Valores iniciais sujeitos à decisão D-8 |
-| Armazenamento | `HMAC-SHA256(segredo, desafio_id ‖ código)` | segredo `NOTIFICACOES_OTP_SEGREDO` (env nova, ≥ 32 bytes, fora do banco). Nunca o código em claro, nem em log ou auditoria |
+| Limites adicionais (**separados das cotas de notificação**, D-9) | por telefone (5 desafios/h, 10/dia), por convite (5/dia), por IP (20/h), por unidade (50/dia), por usuário admin (convites: 30/dia) | reaproveitar `shared/rateLimit.js` (memória) **e** contagem no banco (vale entre instâncias). Valores iniciais sujeitos à decisão D-8 |
+| Armazenamento | código: `HMAC-SHA256(subchave_otp, desafio_id ‖ código)`; telefone: AES-256-GCM (`telefone_cifrado`) + HMAC (`telefone_hmac`) — **D-4 APROVADA** | subchaves derivadas por HKDF de `NOTIFICACOES_SEGREDO_MESTRE` (env nova, ≥ 32 bytes, fora do banco, separada do iFood). Nunca o código ou o número em claro, nem em log ou auditoria |
 | Comparação | tempo constante | `crypto.timingSafeEqual` sobre buffers de mesmo tamanho |
 | Invalidação | desafios anteriores do mesmo telefone × convite | ao criar um novo; ao consumir; ao revogar o convite |
 | Anti-enumeração | respostas idênticas | "Se o número puder receber, enviaremos um código" + mesmo tempo de resposta. A página de gestão (§5) nunca revela se o número está cadastrado |

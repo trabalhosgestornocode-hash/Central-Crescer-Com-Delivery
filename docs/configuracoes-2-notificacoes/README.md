@@ -14,3 +14,4 @@ Missão **somente de auditoria e planejamento** (30/10/2026): nenhum código fun
 | [08 — Transporte WhatsApp](08-transporte-whatsapp.md) | Gateway atual × plataforma oficial, requisitos da Meta, camada desacoplada, homologação |
 | [09 — Roadmap](09-roadmap-implementacao.md) | Etapas 1–6, agrupamento em uma execução, arquivos, migrations, testes, riscos, aceite, bloqueadores |
 | [10 — Resumo executivo e decisões](10-resumo-executivo-decisoes.md) | Resumo, mapa dos critérios de aceite, riscos, decisões tomadas (preservação dos legados, D-16, D-3) e pendentes separadas em "bloqueiam a implementação" × "antes da ativação real" |
+| [11 — Plano de execução consolidada](11-plano-execucao-consolidada.md) | Plano final das Etapas 1–5 numa execução: invariantes, pré-voo, blocos B1–B7, migrations 132–135, flags, matriz de testes, dependências não resolvidas (DEP-1..9), aceite |

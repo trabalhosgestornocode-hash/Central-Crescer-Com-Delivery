@@ -1,5 +1,7 @@
 # 09 — Roadmap de implementação
 
+> **Plano executável e consolidado: [doc 11](11-plano-execucao-consolidada.md)** (prevalece sobre este roadmap nos detalhes de execução).
+>
 > Numeração de migrations: em 30/10/2026 a última na `main` era a 131 e nenhuma branch usava 132+. **Reconfirmar o próximo número livre no início da execução** (as trilhas do Financeiro também numeram migrations).
 
 ## Agrupamento proposto
@@ -51,7 +53,7 @@
   - colunas novas em `comunicacao_categorias` e seed (`fechamento_operacional_diario` em estado de simulação);
   - `comunicacao_legado_snapshot` (imutável) e a RPC `comunicacao_ativar_selecao_por_escopo`, que grava o snapshot dos legados (`LEGACY_ACTIVE`, só `pendencia_d1`, universo do monitor D-1) e cria os escopos **na transação da ativação**. **A migration não executa a ativação**: ela acontece na Etapa 4/implantação, com autorização (D-16, doc 07 §1). Sem linha no livro-razão; `contatos_whatsapp` e `comunicacao_destinatario_categorias` intocados;
   - pendência "Nenhum destinatário configurado para o Dashboard iFood D-1" e vínculo explícito de legado a unidade nova (só D-1, auditado — doc 06 §4.1);
-  - exclusão do remapeamento (D-11) e gatilho de transferência.
+  - transferência: **D-11 resolvida por desenho** (nenhuma tabela nova com o par `organizacao_id + unidade_id`; doc 06 §4). **Sem** alterar a função de transferência.
 - **Testes:**
   - isolamento (doc 06 §5); transferência (harness `testes-seguros/pg`); resolução do D-1 inalterada antes/depois das migrations (M0 não cria vínculo);
   - **permissões D-3, um caso por linha da matriz do doc 06 §3.2**, nas **três camadas** (interface esconde, API recusa com 403/404, RPC/banco recusa com `42501` mesmo chamada diretamente):
@@ -80,7 +82,7 @@
   - palavra-chave de saída (atrás de flag, só com inbound confiável).
 - **Arquivos:** `notificacoes.titular.routes.js` (público, sem `requireAuth`), `notificacoes.otp.js` (puro: gerar, HMAC, comparar), `notificacoes.consentimento.js`; páginas estáticas mínimas `frontend/titular/` (sem o app inteiro).
 - **Migrations:** `134_notificacoes_otp_consentimento` (`comunicacao_convites`, `comunicacao_desafios_titular`, `comunicacao_consentimentos`, `comunicacao_termos`, RPC atômica de consumo do desafio, imutabilidade do livro-razão).
-- **Env nova:** `NOTIFICACOES_OTP_SEGREDO` (só criada na implantação, com autorização).
+- **Env nova:** `NOTIFICACOES_SEGREDO_MESTRE` (só criada na implantação, com autorização).
 - **Testes:**
   - CSPRNG e distribuição;
   - HMAC e tempo constante;
@@ -145,6 +147,6 @@ Depende de **decisões externas** (D-12, D-13) e de autorização explícita par
 ## Bloqueadores conhecidos
 
 1. **Provedor oficial inexistente.** Sem ele não há OTP real: nenhum destinatário **novo** pode ser ativado e a adesão voluntária dos legados fica indisponível. Os legados continuam recebendo o D-1 normalmente.
-2. **Recriar a 054** (exclusão do remapeamento) toca a função hoje mantida pela frente do Financeiro. É preciso coordenar (D-11).
+2. ~~Recriar a 054~~ — **resolvido (D-11)**: desenho invisível ao remapeamento; a alteração pendente do Financeiro na função (`5233380`) só pode gerar conflito de merge (DEP-1, doc 11 §5).
 3. **Base legal e textos do consentimento** precisam de validação jurídica (D-1).
 4. **Promoção de unidade** continua quebrada pelo 42P10 (outra frente). Os testes de promoção ficam informativos até lá.

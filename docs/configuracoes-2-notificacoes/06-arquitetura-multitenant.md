@@ -8,17 +8,30 @@
 | Destinatário da empresa | `comunicacao_contatos_empresa` (100/104) | **Reaproveita**: nome, papel (`tipo`), ativo, FK composta `(id, organizacao_id)`. `whatsapp_status` passa a ser derivado do estado da Central |
 | Catálogo de categorias | `comunicacao_categorias` (104) | **Estende**: `grupo`, `exige_consentimento`, `estado` (`ATIVA`/`EM_BREVE`/`INTERNA`), `fonte`, `prioridade` |
 | Categorias por destinatário | `comunicacao_destinatario_categorias` (104) | **Mantida** e **intocada**: continua sendo a fonte do D-1 enquanto a nova seleção não for ativada (D-16, regra 12) |
-| **Escopo destinatário × unidade × categoria** | `comunicacao_destinatario_escopos` | **NOVA** (estado **atual**, mutável). Campos:<br>• `(contato_empresa_id, organizacao_id)` com FK composta e `unidade_id` **obrigatório**: sem "todas as unidades" (D-16);<br>• `categoria`, `habilitado`;<br>• **`origem_autorizacao`** (`LEGACY_ACTIVE` \| `CONVITE_OTP`) e **`origem_vinculo`** (`SNAPSHOT_MIGRACAO` \| `INCLUSAO_ADMIN` \| `CONVITE`);<br>• `snapshot_id` (rastreabilidade), `suspenso_em/por/motivo`, `janela`/`silencio` (jsonb validado), `notificar_correcao`.<br>`CHECK`: `LEGACY_ACTIVE` só com `categoria = 'pendencia_d1'`. Único `(contato_empresa_id, unidade_id, categoria)` |
-| **Snapshot dos vínculos legados** (D-16) | `comunicacao_legado_snapshot` | **NOVA, imutável** (trigger de imutabilidade; `service_role` só `SELECT, INSERT`). Uma linha por destinatário × empresa × unidade abrangida pela configuração anterior, gravada **na mesma transação da ativação da nova seleção**. Campos:<br>• `id`, `migracao_id`, `migrado_em`, `contato_empresa_id`, `organizacao_id`, `unidade_id`;<br>• origem: `autorizacao_registrada_em/por` (104) e `contato_whatsapp_id`;<br>• estado de envio no momento: `ativo`, `whatsapp_status`, opt-out, habilitação e envio automático da empresa;<br>• `hash_linha`.<br>É a prova do que a migração reconheceu. Nunca é editada; a mudança posterior fica no escopo + auditoria |
-| **Convite** | `comunicacao_convites` | **NOVA**: `token_hash`, empresa, unidades e categorias pretendidas, `criado_por`, `expira_em`, `status` |
-| **Desafio OTP / sessão do titular** | `comunicacao_desafios_titular` | **NOVA**: `tipo` (`verificacao`/`gestao`), `telefone_e164` (ou hash, decisão D-4), `codigo_hmac`, `tentativas`, `expira_em`, `consumido_em`, `invalidado_em`, `ultimo_envio_em`, `ip_hash` |
-| **Consentimento** | `comunicacao_consentimentos` | **NOVA**, append-only (doc 05 §4.1) |
+| **Escopo destinatário × unidade × categoria** | `comunicacao_destinatario_escopos` | **NOVA** (estado **atual**, mutável). Campos:<br>• `contato_empresa_id` (FK) e **`unidade_escopo_id`** (FK `unidades`) **obrigatório**: sem "todas as unidades" (D-16). **Sem coluna `organizacao_id`**: a empresa é a do destinatário, e um trigger exige que a unidade seja da mesma empresa. Isso a mantém **invisível ao remapeamento da transferência** (D-11, §4);<br>• `categoria`, `habilitado`;<br>• **`origem_autorizacao`** (`LEGACY_ACTIVE` \| `CONVITE_OTP`) e **`origem_vinculo`** (`SNAPSHOT_MIGRACAO` \| `INCLUSAO_ADMIN` \| `CONVITE`);<br>• `snapshot_id` (rastreabilidade), `suspenso_em/por/motivo`, `janela`/`silencio` (jsonb validado), `notificar_correcao`.<br>`CHECK`: `LEGACY_ACTIVE` só com `categoria = 'pendencia_d1'`. Único `(contato_empresa_id, unidade_id, categoria)` |
+| **Snapshot dos vínculos legados** (D-16) | `comunicacao_legado_snapshot` | **NOVA, imutável** (trigger de imutabilidade; `service_role` só `SELECT, INSERT`). Uma linha por destinatário × empresa × unidade abrangida pela configuração anterior, gravada **na mesma transação da ativação da nova seleção**. Campos:<br>• `id`, `migracao_id`, `migrado_em`, `contato_empresa_id`, **`organizacao_na_migracao_id`**, **`unidade_na_migracao_id`**. Os nomes são deliberadamente diferentes de `organizacao_id`/`unidade_id`: o snapshot registra a empresa **da época** e fica fora do remapeamento (D-11);<br>• origem: `autorizacao_registrada_em/por` (104) e `contato_whatsapp_id`;<br>• estado de envio no momento: `ativo`, `whatsapp_status`, opt-out, habilitação e envio automático da empresa;<br>• `hash_linha`.<br>É a prova do que a migração reconheceu. Nunca é editada; a mudança posterior fica no escopo + auditoria |
+| **Convite** | `comunicacao_convites` | **NOVA**: `token_hash`, `organizacao_id`, `unidades_pretendidas` (uuid[]), categorias pretendidas, **`telefone_cifrado` + `telefone_hmac`** (D-4), `criado_por`, `expira_em`, `status` |
+| **Desafio OTP / sessão do titular** | `comunicacao_desafios_titular` | **NOVA**: `tipo` (`verificacao`/`gestao`), **`telefone_cifrado` (AES-256-GCM) + `telefone_hmac`** (D-4: o envio precisa do número, então ele é cifrado, nunca em claro), `codigo_hmac`, `tentativas`, `expira_em`, `consumido_em`, `invalidado_em`, `ultimo_envio_em`, `ip_hmac`, `chave_versao` |
+| **Consentimento** | `comunicacao_consentimentos` | **NOVA**, append-only (doc 05 §4.1). Colunas `organizacao_id` e **`unidade_escopo_id`** (nula = empresa toda), nunca o par `organizacao_id + unidade_id`: o histórico fica na empresa onde foi dado (D-11) |
+| **Convite de usuário** (D-14) | `usuarios_convites` | **NOVA**: `token_hash` (SHA-256 de 32 bytes aleatórios), `organizacao_id`, `unidade_alvo_id` (nula = empresa), `papel`, `email_hmac` + `email_cifrado`, `criado_por`, `expira_em` (72 h), `usado_em`, `revogado_em`. Uso único atômico |
 | **Termos** | `comunicacao_termos` | **NOVA**, versões imutáveis |
-| Fuso/horário da unidade | `unidades.timezone`, `unidades.horario_funcionamento` (jsonb) | **Colunas novas** (sem tabela nova) |
+| Fuso/horário da unidade (D-15) | `unidades.timezone` (IANA validado), `unidades.horario_funcionamento` (jsonb) + `comunicacao_configuracoes['fuso_unidade_corte']` (data de corte) | **Colunas novas** (sem tabela nova). São colunas em `unidades` e não afetam o remapeamento, que atualiza outras tabelas |
 | Mensagens, tentativas, alertas | `comunicacao_mensagens`/`_tentativas`/`_alertas` | **Reaproveita.** Fechamento = `alerta_id null`, `tipo = fechamento_operacional_diario`, `metadados.fonte = {fechamento_id, versao}`, chave única existente (`idempotency_key`) |
 | Simulações do fechamento | `operacional_mensagens_simuladas` (130) | **Reaproveita** como histórico de simulação. O envio real vai para `comunicacao_mensagens` |
 
-Total: **6 tabelas novas** (5 + o snapshot imutável do D-16) e colunas em 2 existentes. As alternativas descartadas (tabela de preferências separada do escopo, tabela de histórico de vínculo) foram absorvidas pelo escopo (com `updated_at` e auditoria) e pelo livro-razão.
+Total: **7 tabelas novas** (escopos, snapshot, convites, desafios, consentimentos, termos, convites de usuário) e colunas em 2 existentes.
+
+**Regra estrutural (D-11):** nenhuma tabela nova tem simultaneamente as colunas `organizacao_id` e `unidade_id`. Um teste estático varre as migrations e o catálogo, e falha se isso acontecer.
+
+**Proteção de números (D-4, APROVADA):**
+- **Formato:** E.164 (`normalizarTelefone` existente).
+- **Armazenamento nas tabelas novas:** `*_cifrado` = AES-256-GCM (IV aleatório + tag, cifragem autenticada), com `chave_versao` para rotação.
+- **Busca, dedupe e limites:** `*_hmac` = HMAC-SHA256.
+- **Chaves:** três subchaves derivadas por HKDF (cifra, HMAC de identificação, HMAC de OTP) a partir de uma env nova, `NOTIFICACOES_SEGREDO_MESTRE`, **separada** de `IFOOD_TOKEN_SECRET`. O módulo `shared/cripto.js` é generalizado para receber a chave por parâmetro, sem mudar o comportamento do iFood.
+- **Descriptografia:** só em `notificacoes.segredos.js`, chamado apenas pelo serviço de envio (OTP) e pelo formulário de edição de quem tem `gerenciar`; há teste arquitetural de imports.
+- **Respostas comuns da API e interface:** só a máscara.
+- **Logs:** número, código e segredos bloqueados pelo logger seguro existente (padrão `worker-comunicacao.logsafe.js`), com varredura nos testes.
+- **Legado:** `contatos_whatsapp` e `comunicacao_contatos_empresa` continuam com o E.164 em claro, **sem mudança destrutiva**; o D-1 depende deles. A cifragem do legado é uma evolução futura, que não faz parte desta execução. As alternativas descartadas (tabela de preferências separada do escopo, tabela de histórico de vínculo) foram absorvidas pelo escopo (com `updated_at` e auditoria) e pelo livro-razão.
 
 ## 2. Segurança no banco (padrão 129/130/131)
 
@@ -28,7 +41,7 @@ Total: **6 tabelas novas** (5 + o snapshot imutável do D-16) e colunas em 2 exi
   - desafios: `SELECT, INSERT` + UPDATE **por coluna** (`tentativas`, `consumido_em`, `invalidado_em`, `ultimo_envio_em`);
   - escopos/convites: CRUD **sem TRUNCATE**.
 - Toda RPC com `SECURITY INVOKER` + `search_path` fixo + EXECUTE só para `service_role`. A exceção é o **consumo do desafio**, que pode ser `SECURITY DEFINER` com validação interna (como `operacional_fechamento_registrar`) para garantir atomicidade.
-- **Coerência de tenant** por trigger: a unidade do escopo pertence à empresa do destinatário (padrão `operacional_validar_tenant`). A FK composta impede um escopo de destinatário de outra empresa.
+- **Coerência de tenant** por trigger: a unidade do escopo pertence à empresa do destinatário (padrão `operacional_validar_tenant`). Como o escopo não tem `organizacao_id` (D-11), o trigger compara `unidades.organizacao_id` com `comunicacao_contatos_empresa.organizacao_id`. A resolução de destinatários repete a condição no `JOIN`, então um escopo nunca vale para unidade de outra empresa, nem depois de uma transferência.
 
 ## 3. Acesso por perfil — **D-3 APROVADA (30/10/2026)**
 
@@ -69,7 +82,7 @@ A interface **não** é fonte de segurança: tudo vale no backend **e** no banco
 
 | Restrição | Backend | Banco |
 |---|---|---|
-| Sem acesso entre empresas | `req.tenant.organizacaoId` em toda consulta; ids de outra empresa → 404 | FK composta `(contato_empresa_id, organizacao_id)` + trigger de coerência unidade ↔ empresa |
+| Sem acesso entre empresas | `req.tenant.organizacaoId` em toda consulta; ids de outra empresa → 404 | FK para o destinatário + trigger de coerência (unidade do escopo ∈ empresa do destinatário) + condição repetida no `JOIN` da resolução |
 | Sem acesso indevido entre unidades | vínculo de **unidade** na sessão → filtro obrigatório `unidade_id = vínculo`; rotas aceitam só ids (nunca organização/unidade vindos do navegador) | RPCs de escrita recebem `p_unidade_permitida` (nulo só para vínculo de empresa) e recusam escopo fora dela (`42501`) |
 | Número compartilhado não afeta outras unidades | o gerente edita só **escopos** da unidade; nome/papel só se o destinatário for exclusivo da unidade; o número é imutável no lugar | `comunicacao_contatos_empresa.telefone_e164` sem UPDATE para `service_role` após verificado (trigger); `contatos_whatsapp` (global) nunca é escrito por rota de gestor |
 | Ninguém consente pelo titular nem reativa revogação | não existe rota de gestor que grave `CONCEDIDO` | `INSERT` de `CONCEDIDO` só pela RPC do titular, que exige desafio OTP consumido **e** `termo_hash` vigente; a RPC de gestor só aceita `acao = 'REVOGADO'` |
@@ -97,20 +110,35 @@ A interface **não** é fonte de segurança: tudo vale no backend **e** no banco
 - **Múltiplos perfis do mesmo usuário:** a permissão vem do vínculo da sessão (`sessoes_contexto.permissoes`), como hoje. Trocar de empresa troca o escopo, e `carregarProtegido` evita mistura na tela.
 - **Titular sem conta:** as rotas públicas `/notificacoes/convite/*` e `/notificacoes/gerenciar/*` ficam **fora** do `requireAuth`. Elas são protegidas por token de convite (hash) ou desafio consumido, com rate limit próprio e resposta anti-enumeração. Não recebem nem devolvem dados da unidade além de nome da empresa, unidades e categorias.
 
-## 4. Transferência e promoção de unidade
+## 4. Transferência e promoção de unidade — **D-11 APROVADA, resolvida sem alterar a função de transferência**
 
-- **Ponto crítico:** `remapear_organizacao_em_tabelas_de_unidade` (054, versão atual em produção) atualiza `organizacao_id` de **toda** tabela com `organizacao_id + unidade_id`, exceto as listadas em `gestao_financeira_tabelas_da_unidade()` e em três nomes fixos.
-- `comunicacao_destinatario_escopos` teria `organizacao_id + unidade_id`. Por isso:
-  1. O remapeamento tentaria mover o escopo para a nova empresa, e a **FK composta** com `comunicacao_contatos_empresa (id, organizacao_id)` falharia, quebrando a transferência inteira (o mesmo tipo de defeito que a 131 corrigiu).
-  2. Mesmo sem a FK, mover o escopo **transportaria a autorização** dada por uma empresa para outra, o que é proibido pela missão.
-- **Desenho:**
-  - Excluir as tabelas novas do remapeamento: estender a lista de exclusão com uma função própria, `comunicacao_tabelas_fora_do_remapeamento()`, chamada pela 054 da mesma forma que a do Financeiro (exige recriar a 054; **decisão D-11**, com coordenação com a frente do Financeiro, dona da versão atual).
-  - Na transferência, um gatilho em `unidades` (troca de `organizacao_id`) **suspende** os escopos da unidade (`suspenso_motivo = 'TRANSFERENCIA_DE_EMPRESA'`) e cancela mensagens agendadas dela.
-  - A nova empresa precisa convidar de novo. Consentimentos são **por empresa** e não migram.
-  - Histórico (`comunicacao_mensagens`/`alertas`) continua sendo remapeado como hoje, sem mudança de comportamento.
-- **Promoção de unidade a empresa:** mesmo tratamento. Ela ainda falha por outro defeito preexistente (42P10), que é da frente do Financeiro.
-- **Revogação de vínculo / desativação de usuário:** não afeta destinatários (doc 05 §6). Desativar a **unidade** (`unidades.ativo = false`) suspende os escopos dela.
-- **Snapshot do D-16 na transferência:** `comunicacao_legado_snapshot` também entra na lista de exclusão do remapeamento. Por ser imutável, o remapeamento quebraria a transferência; além disso, o snapshot registra o que valia **na empresa de origem** e deve continuar assim. O escopo legado da unidade transferida é suspenso pelo gatilho (acima), e a nova empresa não herda o legado.
+- **Versão vigente:** `remapear_organizacao_em_tabelas_de_unidade` está na `main` (migration 120, Financeiro) e em produção (lida em 30/10). Ela atualiza `organizacao_id` de **toda** tabela base do `public` que tenha **as duas** colunas `organizacao_id` e `unidade_id` (`120_gestao_financeira_fundacao.sql:315-323`), exceto `gestao_financeira_tabelas_da_unidade()` e três nomes fixos.
+- **A função não está estabilizada.** Há uma alteração **pendente e não aprovada** da frente do Financeiro que reescreve a migration 120 e essa mesma função (`integracao/gestao-financeira` `5233380`, doc 20 do Financeiro; memória do projeto). Pela condição da D-11, **modificá-la fica bloqueado**: não recriamos, não estendemos e não sobrescrevemos.
+- **Desenho que dispensa modificar a função:** as tabelas novas são **invisíveis ao remapeamento por construção**. Nenhuma tem o par `organizacao_id + unidade_id` (doc 06 §1):
+
+  | Tabela | Colunas de tenant | Efeito na transferência |
+  |---|---|---|
+  | `comunicacao_destinatario_escopos` | `contato_empresa_id`, `unidade_escopo_id` | não é remapeada; o escopo continua apontando para o destinatário da empresa **antiga** |
+  | `comunicacao_legado_snapshot` | `organizacao_na_migracao_id`, `unidade_na_migracao_id` | não é remapeada; o histórico imutável fica intacto |
+  | `comunicacao_consentimentos` | `organizacao_id`, `unidade_escopo_id` | não é remapeada; o consentimento fica na empresa onde foi dado |
+  | `comunicacao_convites` | `organizacao_id`, `unidades_pretendidas[]` | não é remapeada |
+  | `comunicacao_desafios_titular` | (nenhuma de tenant direta) | — |
+  | `usuarios_convites` | `organizacao_id`, `unidade_alvo_id` | não é remapeada; o convite pendente perde a validade (a unidade não é mais da empresa, conferido no aceite) |
+
+- **Sem transporte de autorização entre organizações:**
+  - Depois da transferência, a unidade pertence à empresa B, mas o escopo aponta para um destinatário da empresa A. A resolução exige `unidades.organizacao_id = comunicacao_contatos_empresa.organizacao_id` no `JOIN`, então **o escopo deixa de valer sozinho**.
+  - A policy existente (`vinculoValido`) bloqueia as mensagens já agendadas no JIT.
+  - A Central mostra o escopo como "Suspenso: unidade transferida para outra empresa", um estado **derivado**, sem gatilho em `unidades`.
+  - A empresa B começa do zero, com convites e consentimentos próprios.
+- **Histórico** (`comunicacao_mensagens`/`alertas`): continua sendo remapeado como hoje, sem mudança de comportamento.
+- **Promoção de unidade a empresa:** mesmo raciocínio. Ela ainda falha por outro defeito preexistente (42P10), que é da frente do Financeiro.
+- **Se a função se estabilizar no futuro**, nada precisa mudar aqui: o desenho não depende da lista de exclusão.
+- **Provas obrigatórias** (harness `backend/testes-seguros/pg`, cadeia real da `main`):
+  - teste estático: nenhuma tabela nova tem o par de colunas;
+  - transferência de unidade **com** escopos, snapshot, consentimentos e convites presentes: a transferência conclui; as linhas novas ficam intocadas (hash antes = depois); a resolução da empresa B não enxerga nada da A, e a da A não envia para a unidade transferida;
+  - privilégios mínimos (`anon`/`authenticated` sem nada) e isolamento;
+  - comparação com a 131: a transferência continua passando (53 verificações do `transferencia_unidades.sh`).
+- **Revogação de vínculo / desativação de usuário:** não afeta destinatários (doc 05 §6). Unidade desativada: a resolução também exige `unidades.ativo` (mesmo universo do monitor).
 
 ## 4.1 Unidades criadas depois da migração (D-16, APROVADA)
 
@@ -127,7 +155,7 @@ A interface **não** é fonte de segurança: tudo vale no backend **e** no banco
 ## 5. Testes de isolamento exigidos (Etapa 5)
 
 1. Usuário de unidade A1 não lista, não altera e não convida em A2. Usuário da empresa B não vê nada de A (404).
-2. Escopo com unidade de outra empresa é recusado pelo banco (FK composta + trigger).
+2. Escopo com unidade de outra empresa é recusado pelo banco (trigger de coerência; condição repetida na resolução).
 3. `anon`/`authenticated` sem privilégio em todas as tabelas novas (PostgREST real, como no doc 04 do Dashboard 2.0).
 4. A transferência de unidade com escopos funciona (sem FK quebrada), suspende os escopos e não move consentimentos. Provar no harness `testes-seguros/pg` com a cadeia real da `main`.
 5. As rotas públicas do titular: anti-enumeração (mesma resposta e tempo), limites, replay, concorrência no consumo do OTP (duas sessões reais no Postgres).
