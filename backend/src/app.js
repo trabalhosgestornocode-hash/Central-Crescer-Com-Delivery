@@ -5,6 +5,7 @@ import morgan from "morgan";
 import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "./config/env.js";
+import { titularRouter } from "./modules/notificacoes/notificacoes.routes.js";
 import { requireAuth } from "./middlewares/auth.js";
 import { notFound } from "./middlewares/notFound.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
@@ -100,6 +101,9 @@ export function createApp() {
   );
 
   // 🔒 A PARTIR DAQUI: toda rota de dados exige autenticação real (JWT do Supabase).
+  // Central de Notificações — rotas PÚBLICAS do titular (sem conta): fora do requireAuth, com limite por IP e só POST.
+  app.use("/api/publico/notificacoes", titularRouter);
+
   app.use("/api/v1", requireAuth);
   // Teto grosseiro de requisições por CONTA autenticada — barra abuso/automação
   // sem atrapalhar uso normal (limite generoso, ajustável por env). Limites

@@ -110,3 +110,35 @@ export function mascarar(valor) {
 export function _resetarChaveCache() {
   chaveCache = null;
 }
+
+/**
+ * Cifra autenticada GENÉRICA (AES-256-GCM) com chave própria e AAD — para domínios que não são o iFood (ex.: números de
+ * notificação, D-4). Não toca `cifrar`/`decifrar` acima (iFood). Formato: "k<versao>:iv:tag:ct". O AAD amarra o texto cifrado
+ * ao seu uso (ex.: "telefone"): um valor cifrado para um campo não decifra em outro.
+ * @param {Buffer} chave 32 bytes
+ * @param {{ versao?: number }} [opcoes]
+ */
+export function criarCifraAutenticada(chave, { versao = 1 } = {}) {
+  if (!Buffer.isBuffer(chave) || chave.length !== 32) throw new TypeError("criarCifraAutenticada: chave de 32 bytes obrigatória.");
+  const prefixo = `k${versao}`;
+  return {
+    versao,
+    cifrar(texto, aad) {
+      if (typeof texto !== "string" || !texto) throw new TypeError("cifrar: texto obrigatório.");
+      if (typeof aad !== "string" || !aad) throw new TypeError("cifrar: AAD obrigatório.");
+      const iv = crypto.randomBytes(IV_BYTES);
+      const c = crypto.createCipheriv(ALGORITMO, chave, iv);
+      c.setAAD(Buffer.from(aad, "utf8"));
+      const ct = Buffer.concat([c.update(texto, "utf8"), c.final()]);
+      return `${prefixo}:${b64u(iv)}:${b64u(c.getAuthTag())}:${b64u(ct)}`;
+    },
+    decifrar(cifrado, aad) {
+      const partes = String(cifrado ?? "").split(":");
+      if (partes.length !== 4 || partes[0] !== prefixo) throw new Error("Texto cifrado em formato inválido ou versão de chave diferente.");
+      const d = crypto.createDecipheriv(ALGORITMO, chave, deB64u(partes[1]));
+      d.setAAD(Buffer.from(aad, "utf8"));
+      d.setAuthTag(deB64u(partes[2]));
+      return Buffer.concat([d.update(deB64u(partes[3])), d.final()]).toString("utf8");
+    },
+  };
+}

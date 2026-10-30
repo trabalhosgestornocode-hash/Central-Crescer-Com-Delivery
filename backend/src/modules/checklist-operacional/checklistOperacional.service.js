@@ -27,6 +27,7 @@ import {
   metasDaLinha, metasIndisponiveis, validarMetasEntrada, resultadoDoSalvar, linhaDoTempoDasMetas,
 } from "./checklistOperacional.metas.js";
 import { resolverPeriodo } from "./checklistOperacional.periodos.js";
+import { resolverPeriodoDaUnidade } from "./checklistOperacional.fuso.js";
 import { montarDashboard, paraResposta, ETAPAS } from "./checklistOperacional.indicadores.js";
 import { gerarAnalises } from "./checklistOperacional.analises.js";
 import { emitirEventoRealtime } from "../realtime/emitirEvento.js";
@@ -265,7 +266,9 @@ const FOLGA_DEPOIS_MS = 48 * 3_600_000;  // pedido registrado tarde (recebimento
 export async function obterDashboard({ organizacaoId, unidadeId, filtro = {}, agora = () => new Date(), deps = {} }) {
   const r = deps.repo ?? repo;
   const agoraMs = agora().getTime();
-  const periodo = resolverPeriodo({ periodo: filtro.periodo || "hoje", inicio: filtro.inicio, fim: filtro.fim, agoraMs });
+  // D-15: o fuso do período vem da regra única (corte desligado = fuso da plataforma, idêntico ao anterior)
+  const fusoUnidade = await fusoDaUnidade(r, { organizacaoId, unidadeId });
+  const { periodo, fuso, origem: fusoOrigem } = resolverPeriodoDaUnidade({ filtro, agoraMs, fusoUnidade });
   if (!periodo.ok) { const e = ApiError.badRequest(periodo.mensagem); e.codigo = periodo.codigo; throw e; }
   const etapa = filtro.etapa || "todas";
   if (!ETAPAS_FILTRO.includes(etapa)) throw ApiError.badRequest("Etapa inválida. Use todas, preparo, entrega ou vida.");
@@ -286,7 +289,8 @@ export async function obterDashboard({ organizacaoId, unidadeId, filtro = {}, ag
     r.obterPrimeiroPedidoEm({ organizacaoId, unidadeId }),
   ]);
 
-  const d = montarDashboard({ pedidos, periodo, linhaDoTempo: linhaDoTempoDasMetas(versoes), etapa, primeiroPedidoEm });
+  const d = montarDashboard({ pedidos, periodo, linhaDoTempo: linhaDoTempoDasMetas(versoes), etapa, primeiroPedidoEm, fuso });
+  d.periodo.fusoOrigem = fusoOrigem;
   if (!metasDisponiveis) d.qualidade.avisos.unshift("As metas da unidade ainda não podem ser lidas neste ambiente (migration 127 pendente): nenhum pedido foi avaliado contra meta.");
   const analises = gerarAnalises(d);
   return {
@@ -295,6 +299,12 @@ export async function obterDashboard({ organizacaoId, unidadeId, filtro = {}, ag
     ...paraResposta(d),
     analises,
   };
+}
+
+/** Fuso IANA da unidade (D-15) — repositório sem a função (testes antigos) ou sem a coluna = null. Nunca lança. */
+export async function fusoDaUnidade(r, { organizacaoId, unidadeId }) {
+  if (typeof r?.obterFusoDaUnidade !== "function") return null;
+  try { return (await r.obterFusoDaUnidade({ organizacaoId, unidadeId })) ?? null; } catch { return null; }
 }
 
 /** Nome da unidade do contexto (cabeçalho do relatório). Nunca lança. */

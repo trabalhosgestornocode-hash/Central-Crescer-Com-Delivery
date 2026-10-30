@@ -10,6 +10,7 @@
 import { JID_TIPOS_CLIENTE } from "./inbound/inbound.contrato.js";
 import * as rosterRepo from "./comunicacao.roster.js";
 import * as inboxRepo from "./comunicacao.inbox.repo.js";
+import { processarPalavraDeSaida } from "../notificacoes/notificacoes.titular.service.js";
 
 export const DESTINO = Object.freeze({ INBOX: "INBOX", IGNORADO: "IGNORADO" });
 export const MOTIVOS_IGNORADO = Object.freeze([
@@ -56,5 +57,10 @@ export async function processarInbound({ organizacaoId, evento }, deps = {}) {
     tipoConteudo, texto: tipoConteudo === "texto" ? evento.texto : null, recebidoEm: evento.recebidoEm, dias: inboxRepo.retencaoDias(deps.env ?? process.env),
   }, deps);
   contar("_aceitos");
+  // Central de Notificações: "SAIR"/"PARAR"/"STOP" do PRÓPRIO responsável revoga os avisos (todas as empresas) — só com
+  // NOTIFICACOES_PALAVRA_CHAVE_SAIR=true. Nunca derruba o inbound: qualquer falha é ignorada (a mensagem já foi registrada).
+  if (r.inserido && tipoConteudo === "texto") {
+    try { await (deps.palavraDeSaida ?? processarPalavraDeSaida)({ telefoneE164: evento.telefoneE164, texto: evento.texto, env: deps.env ?? process.env }); } catch { /* ignorado */ }
+  }
   return { destino: DESTINO.INBOX, contatoId: contato.contatoId, inserido: r.inserido };
 }

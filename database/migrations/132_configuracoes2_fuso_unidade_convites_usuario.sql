@@ -70,6 +70,7 @@ create table if not exists usuarios_convites (
   nome             text check (nome is null or length(nome) <= 160),
   email_hmac       text not null check (email_hmac ~ '^[0-9a-f]{64}$'),
   email_cifrado    text not null,
+  email_mascarado  text check (email_mascarado is null or email_mascarado ~ '^[^@]{1,3}[*]+@'),   -- só exibição (ex.: an***@x.com)
   chave_versao     integer not null default 1,
   criado_por       uuid,                                                 -- auth.users.id de quem convidou (sem FK: sobrevive à exclusão)
   criado_perfil_id uuid,

@@ -54,6 +54,7 @@ create table if not exists comunicacao_convites (
   tipo_destinatario      text not null default 'operacional' check (tipo_destinatario in ('principal', 'secundario', 'financeiro', 'operacional')),
   telefone_cifrado       text not null,
   telefone_hmac          text not null check (telefone_hmac ~ '^[0-9a-f]{64}$'),
+  telefone_mascarado     text not null check (telefone_mascarado ~ '^[+][0-9]{3}[*]+[0-9]{2}$'),   -- só a máscara (exibição), nunca o número
   chave_versao           integer not null default 1,
   criado_por             uuid,
   criado_perfil_id       uuid,

@@ -13,7 +13,13 @@ const podeGerenciar = requirePermissao(PERMISSOES.USUARIOS_GERENCIAR);
 
 export const usuariosRouter = Router();
 usuariosRouter.get("/papeis", podeVer, controller.papeis);   // antes de qualquer /:id
+usuariosRouter.get("/convites", podeGerenciar, controller.listarConvites);
+usuariosRouter.delete("/convites/:id", podeGerenciar, controller.revogarConvite);
 usuariosRouter.get("/", podeVer, controller.listar);
 usuariosRouter.post("/", podeGerenciar, controller.criar);
 usuariosRouter.patch("/:id", podeGerenciar, controller.atualizar);
 usuariosRouter.delete("/:id", podeGerenciar, controller.excluir);
+
+// D-14 — aceite do convite (autenticado, SEM contexto de empresa: o convidado ainda não tem vínculo). Montado em routes.js.
+export const conviteUsuarioRouter = Router();
+conviteUsuarioRouter.post("/aceitar", controller.aceitarConvite);

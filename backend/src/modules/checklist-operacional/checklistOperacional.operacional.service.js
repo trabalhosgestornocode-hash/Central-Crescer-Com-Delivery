@@ -12,7 +12,10 @@
 import { randomUUID } from "node:crypto";
 import * as repoChecklist from "./checklistOperacional.repository.js";
 import * as repoOperacional from "./checklistOperacional.operacional.repository.js";
-import { obterDashboard } from "./checklistOperacional.service.js";
+import { obterDashboard, fusoDaUnidade } from "./checklistOperacional.service.js";
+import { resolverFuso as regraFuso, resolverPeriodoDaUnidade, hojeDaUnidade, fusoDoInstante } from "./checklistOperacional.fuso.js";
+import { simularNotificacaoFechamento } from "../notificacoes/notificacoes.fechamento.js";
+import * as repoNotificacoes from "../notificacoes/notificacoes.repository.js";
 import { projetarPedido, REGRA_PROJECAO } from "./checklistOperacional.projecao.js";
 import { calcularFechamento, hashDoConteudo, janelaDaCompetencia, STATUS_FECHAMENTO, REGRA_FECHAMENTO } from "./checklistOperacional.fechamento.js";
 import { gerarDiagnostico } from "./checklistOperacional.diagnostico.js";
@@ -21,7 +24,6 @@ import { montarFicha, itemDaLista } from "./checklistOperacional.ficha.js";
 import { gerarMensagem, validarMensagem, chaveSimulacao, criarTransporte, STATUS_SIMULACAO, TRANSPORTE_SIMULADO } from "./checklistOperacional.whatsapp.js";
 import { resolverPeriodo, dataValida, hojeNoFuso } from "./checklistOperacional.periodos.js";
 import { linhaDoTempoDasMetas } from "./checklistOperacional.metas.js";
-import { FUSO_NEGOCIO } from "./checklistOperacional.calc.js";
 import { enviarMensagem } from "../agente/agente.provider.js";
 import { reservarQuotaAgente, registrarUso } from "../agente/agente.uso.service.js";
 import { calcularCustoUso } from "../agente/agente.pricing.js";
@@ -55,11 +57,17 @@ const indisponivel = (e) => {
 };
 
 /**
- * Fuso da unidade. Hoje NÃO existe fuso por unidade no banco: vale o fuso da operação da plataforma (o mesmo do Checklist e do
- * Dashboard). A origem é gravada em cada fechamento para que uma configuração futura por unidade seja rastreável.
+ * Fuso (D-15): regra única em checklistOperacional.fuso.js. Sem argumentos = fuso da plataforma (comportamento anterior).
+ * A origem é gravada em cada fechamento ("unidade" | "padrao_plataforma").
  */
-export function resolverFuso() {
-  return { fuso: FUSO_NEGOCIO, origem: "padrao_plataforma" };
+export function resolverFuso(p = {}) { return regraFuso(p); }
+
+/** Competência de ONTEM da unidade, no fuso que a regra manda usar (agendador). */
+export async function competenciaDeOntem({ organizacaoId, unidadeId, agoraMs, deps = {} }) {
+  const fusoUnidade = await fusoDaUnidade(dep(deps).repo, { organizacaoId, unidadeId });
+  const { hoje } = hojeDaUnidade({ agoraMs, fusoUnidade });
+  const d = new Date(Date.parse(hoje + "T12:00:00Z") - 86_400_000);
+  return d.toISOString().slice(0, 10);
 }
 
 // ------------------------------------------------------------------------------------------------------------------------
@@ -133,7 +141,8 @@ async function metasAte({ organizacaoId, unidadeId, ateIso, repo }) {
 export async function listarPedidos({ organizacaoId, unidadeId, filtro = {}, agora = () => new Date(), deps = {} }) {
   const { repo, op } = dep(deps);
   const agoraMs = agora().getTime();
-  const periodo = resolverPeriodo({ periodo: filtro.periodo || "hoje", inicio: filtro.inicio, fim: filtro.fim, agoraMs });
+  const fusoUnidade = await fusoDaUnidade(repo, { organizacaoId, unidadeId });
+  const { periodo, fuso, origem: fusoOrigem } = resolverPeriodoDaUnidade({ filtro, agoraMs, fusoUnidade });
   if (!periodo.ok) { const e = ApiError.badRequest(periodo.mensagem); e.codigo = periodo.codigo; throw e; }
   const desdeIso = new Date(periodo.atual.inicioMs).toISOString();
   const ateIso = new Date(periodo.atual.fimMs).toISOString();
@@ -143,7 +152,7 @@ export async function listarPedidos({ organizacaoId, unidadeId, filtro = {}, ago
     const doPeriodo = sinc.linhas.filter((p) => { const t = Date.parse(p.plc_em ?? p.pedido_criado_em); return Number.isFinite(t) && t >= periodo.atual.inicioMs && t < periodo.atual.fimMs; });
     const itens = doPeriodo.map((p) => itemDaLista(p, metas)).sort((a, b) => String(b.recebidoEm).localeCompare(String(a.recebidoEm)));
     return {
-      periodo: { inicio: periodo.atual.inicio, fim: periodo.atual.fim, fuso: FUSO_NEGOCIO },
+      periodo: { inicio: periodo.atual.inicio, fim: periodo.atual.fim, fuso, fusoOrigem },
       total: itens.length, itens,
       projecao: { reprojetados: sinc.reprojetados, inalterados: sinc.inalterados, falhas: sinc.falhas },
       servidorEm: new Date(agoraMs).toISOString(),
@@ -172,7 +181,10 @@ export async function obterFicha({ organizacaoId, unidadeId, chave, agora = () =
       op.listarDisputasDoPedido({ organizacaoId, unidadeId, orderId: p.order_id }),
       Promise.resolve(repo.obterNomeUnidade?.({ organizacaoId, unidadeId })).catch(() => null),
     ]);
-    return { ficha: montarFicha({ projecao: p, linhaDoTempoMetas: metas, disputas, unidadeNome }), servidorEm: agora().toISOString() };
+    // D-15: horários exibidos no fuso do dia operacional do pedido (mesma regra do Dashboard e do fechamento)
+    const fusoUnidade = await fusoDaUnidade(repo, { organizacaoId, unidadeId });
+    const { fuso } = fusoDoInstante({ instanteMs: Date.parse(p.plc_em ?? p.pedido_criado_em ?? ""), fusoUnidade });
+    return { ficha: { ...montarFicha({ projecao: p, linhaDoTempoMetas: metas, disputas, unidadeNome }), fuso }, servidorEm: agora().toISOString() };
   } catch (e) { return indisponivel(e); }
 }
 
@@ -188,7 +200,10 @@ export async function obterFicha({ organizacaoId, unidadeId, chave, agora = () =
 export async function gerarFechamento({ organizacaoId, unidadeId, competencia, origem = "manual", geradoPor = null, motivo = null, execucaoId = randomUUID(), agora = () => new Date(), deps = {} }) {
   const { repo, op } = dep(deps);
   const agoraMs = agora().getTime();
-  const { fuso, origem: fusoOrigem } = resolverFuso();
+  if (!dataValida(competencia)) throw ApiError.badRequest("Competência inválida. Use AAAA-MM-DD.");
+  // D-15: a competência decide o fuso (≥ corte e unidade com fuso → fuso da unidade). O Dashboard "C a C" decide igual.
+  const fusoUnidade = await fusoDaUnidade(repo, { organizacaoId, unidadeId });
+  const { fuso, origem: fusoOrigem } = regraFuso({ fusoUnidade, data: competencia });
   const hoje = hojeNoFuso(agoraMs, fuso);
   if (!dataValida(competencia)) throw ApiError.badRequest("Competência inválida. Use AAAA-MM-DD.");
   if (competencia > hoje) throw ApiError.badRequest("A competência não pode ser futura.");
@@ -256,8 +271,26 @@ export async function gerarFechamento({ organizacaoId, unidadeId, competencia, o
       geradoPor, motivo: motivoFinal, fonte, cobertura: f.cobertura, indicadores: f.indicadores, diagnostico, pendencias: f.pendencias, hash,
     });
     const registrado = await op.obterFechamento({ organizacaoId, unidadeId, id: r.id });
-    return { resultado: r.resultado, fechamento: registrado };
+    let notificacoes = null;
+    if (r.resultado === "REGISTRADO") notificacoes = await notificarFechamentoSimulado({ organizacaoId, unidadeId, fechamento: registrado, agoraMs, fuso, deps });
+    return { resultado: r.resultado, fechamento: registrado, notificacoes };
   } catch (e) { return indisponivel(e); }
+}
+
+/**
+ * Central de Notificações (SIMULAÇÃO): depois de uma versão nova CONSOLIDADO/REVISADO, gera o aviso de cada destinatário ATIVO da
+ * categoria `fechamento_operacional_diario` com o MESMO texto da prévia. Nunca lança (o fechamento não depende disso) e só roda
+ * com as dependências reais (produção/teste de integração) ou quando os testes injetam `deps.notificacoes`.
+ */
+async function notificarFechamentoSimulado({ organizacaoId, unidadeId, fechamento, agoraMs, fuso, deps }) {
+  const repoN = deps.notificacoes ?? (deps.op ? null : repoNotificacoes);
+  if (!repoN || !fechamento) return null;
+  try {
+    const previa = await previaWhatsapp({ organizacaoId, unidadeId, id: fechamento.id, deps });
+    const inicioDia = janelaDaCompetencia(hojeNoFuso(agoraMs, fuso), fuso).inicioMs;
+    return await simularNotificacaoFechamento({ organizacaoId, unidadeId, fechamento, mensagem: previa.mensagem,
+      inicioDiaIso: new Date(inicioDia).toISOString(), deps: { repo: repoN, op: dep(deps).op } });
+  } catch { return { simuladas: 0, motivo: "FALHA_NA_SIMULACAO" }; }
 }
 
 export async function listarFechamentos({ organizacaoId, unidadeId, competencia = null, deps = {} }) {

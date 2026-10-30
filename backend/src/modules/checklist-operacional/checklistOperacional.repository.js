@@ -201,6 +201,17 @@ export async function obterPrimeiroPedidoEm({ organizacaoId, unidadeId, db = sup
   return data?.[0]?.criado_em ?? null;
 }
 
+/**
+ * Fuso IANA da unidade (D-15), conferindo a organização. Banco sem a migration 132 (sem a coluna) = null: vale o fuso da
+ * plataforma — comportamento anterior. Nunca lança por isso.
+ */
+export async function obterFusoDaUnidade({ organizacaoId, unidadeId, db = supabase }) {
+  if (!organizacaoId || !unidadeId) return null;
+  const { data, error } = await db.from("unidades").select("timezone").eq("id", unidadeId).eq("organizacao_id", organizacaoId).maybeSingle();
+  if (error) return null;
+  return data?.timezone ?? null;
+}
+
 /** Nome da unidade (só para o cabeçalho dos relatórios), sempre conferindo a organização. */
 export async function obterNomeUnidade({ organizacaoId, unidadeId, db = supabase }) {
   if (!organizacaoId || !unidadeId) throw ApiError.internal("Escopo de tenant ausente na consulta da unidade.");

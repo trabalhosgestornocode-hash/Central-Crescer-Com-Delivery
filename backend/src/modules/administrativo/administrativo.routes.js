@@ -3,6 +3,7 @@ import { performanceRouter } from './performance/performance.routes.js';
 import { desenvolvimentoRouter } from '../desenvolvimento/desenvolvimento.routes.js';
 import * as c from "./administrativo.controller.js";
 import * as cc from "./administrativo.comunicacao.controller.js";
+import { m3Controller } from "../notificacoes/notificacoes.routes.js";
 import { requirePainelAdministrativo, exigirMfaSeExigido } from "../../middlewares/auth.js";
 import { limiteDeTaxa } from "../../shared/rateLimit.js";
 import { RATE_LIMIT } from "../../config/limites.js";
@@ -88,6 +89,10 @@ administrativoRouter.post("/comunicacao/organizacoes/:organizacaoId/consentiment
 administrativoRouter.get("/comunicacao/ativacao", cc.ativacao);
 administrativoRouter.put("/comunicacao/organizacoes/:organizacaoId/habilitacao", cc.habilitacao);
 administrativoRouter.put("/comunicacao/modo", cc.modo);
+// Central de Notificações — ativação M3 (D-16). TRAVADA por env (NOTIFICACOES_M3_ATIVACAO_HABILITADA) + frase de confirmação.
+administrativoRouter.get("/comunicacao/selecao-por-unidade", m3Controller.estado);
+administrativoRouter.post("/comunicacao/selecao-por-unidade/ativar", m3Controller.ativar);
+administrativoRouter.post("/comunicacao/selecao-por-unidade/desativar", m3Controller.desativar);
 administrativoRouter.get("/comunicacao/fila", cc.fila);
 administrativoRouter.get("/comunicacao/historico", cc.historico);
 // H.4-B.5 — Central de Comunicação. Mesmo router (requirePainelAdministrativo): nenhuma rota pública. O envio de teste exige ator humano + confirmação.
