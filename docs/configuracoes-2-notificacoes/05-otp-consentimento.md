@@ -74,12 +74,19 @@ Templates de autenticação **não aceitam URL** (doc 08), por isso o link do co
 
 Cada linha é **um evento**:
 - `id`, `contato_whatsapp_id`, `organizacao_id`, `unidade_id` (nulo = empresa);
-- `categoria`, `acao` (`CONCEDIDO` | `REVOGADO` | `PREFERENCIA_ALTERADA` | `LEGADO_ATESTADO`);
-- `termo_versao`, `termo_hash` (sha256 do texto exibido);
-- `origem` (`link_convite_otp` | `pagina_gestao_otp` | `palavra_chave_inbound` | `pedido_registrado_admin` | `migracao_legado`), `evidencia_id` (desafio/mensagem), `registrado_por` (admin, quando houver);
+- `categoria`, `acao` (`CONCEDIDO` | `REVOGADO` | `PREFERENCIA_ALTERADA`);
+- `termo_versao`, `termo_hash` (sha256 do texto exibido). **Obrigatórios em `CONCEDIDO`; nulos em revogação sem texto exibido**;
+- `origem` (`link_convite_otp` | `pagina_gestao_otp` | `palavra_chave_inbound` | `pedido_registrado_admin`), `evidencia_id` (desafio/mensagem), `registrado_por` (admin, quando houver);
 - `ip_hash`, `user_agent_resumo`, `ocorreu_em`.
 
 O estado atual é a **última** ação por (contato, empresa, categoria). A view/função `comunicacao_consentimento_vigente` alimenta `comunicacao_resolver_destinatarios`.
+
+**Destinatários legados (`LEGACY_ACTIVE`, decisão de 30/10/2026):**
+- **Não ganham nenhuma linha `CONCEDIDO`** no livro-razão: não existe texto exibido, versão, OTP nem aceite do titular, e o livro-razão só registra o que aconteceu de fato.
+- A autorização deles é representada pelo **próprio estado do escopo** (`origem_autorizacao = 'LEGACY_ACTIVE'`), apontando para o que já existe: `autorizacao_registrada_em`/`_por` (104) e a auditoria `COMUNICACAO_DESTINATARIO_AUTORIZADO`.
+- Os campos globais de `contatos_whatsapp` (`verificado`/`consentimento`) **não são alterados** pela migração.
+- Uma **revogação** de legado é gravada normalmente (`REVOGADO`, com a origem real) e tem efeito imediato.
+- Adotar o fluxo novo gera linhas `CONCEDIDO` reais (OTP + texto versionado). Só então o vínculo passa a `ATIVO`.
 
 ### 4.2 Texto versionado (`comunicacao_termos`)
 
@@ -128,6 +135,11 @@ O titular tem **três caminhos**, todos gratuitos:
    - é auditado e o efeito é imediato.
 
 Revogação sempre vence: a policy já bloqueia `OPT_OUT`/`NO_CONSENT` (fail-closed). Uma mensagem já agendada é cancelada no JIT, porque a checagem acontece antes do envio, como hoje.
+
+**Vale igualmente para `LEGACY_ACTIVE`:**
+- O caminho 1 exige OTP, mas só para provar que quem pede é o dono do número. Isso não é OTP retroativo para continuar recebendo.
+- Os caminhos 2 e 3 não exigem OTP.
+- Bloqueios (opt-out existente, suspensão, pausa, empresa desabilitada) continuam valendo como hoje.
 
 ## 6. Riscos específicos
 

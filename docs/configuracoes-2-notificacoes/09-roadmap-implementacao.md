@@ -8,7 +8,7 @@
 |---|---|---|
 | **Execução única A** (uma missão do Claude Code, branch isolada, sem produção) | **1 + 2 + 3 + 4 + 5**, com transporte **`noop`** | compartilham tela, permissões, migrations e testes; tudo é testável em Postgres descartável, no Supabase de teste e no navegador, sem enviar nada. O D-1 real não é tocado (fase M0/M1 do doc 07) |
 | **Implantação A** (com autorização) | migrations + deploy da Execução A; M0 → M1 | a Central fica visível; os novos destinatários entram por convite. **OTP real ainda indisponível**: sem provedor oficial, o convite fica em "aguardando verificação" (ou só a simulação em ambiente de teste) |
-| **Execução B** (outra missão) | **6** (transporte oficial) + regularização M2–M4 | depende de provedor, conta, templates e decisões D-12/D-13 — externo ao código |
+| **Execução B** (outra missão) | **6** (transporte oficial). Com o OTP real disponível, a **adesão voluntária** dos legados (M2) passa a funcionar; não há regularização obrigatória | depende de provedor, conta, templates e decisões D-12/D-13 — externo ao código |
 
 ## Etapa 1 — Configurações 2.0
 
@@ -49,11 +49,14 @@
 - **Migrations:** `133_notificacoes_escopos_categorias`:
   - `comunicacao_destinatario_escopos`;
   - colunas novas em `comunicacao_categorias` e seed (`fechamento_operacional_diario` em estado de simulação);
-  - backfill dos legados (escopo "todas" + `pendencia_d1`);
+  - backfill dos legados como **`LEGACY_ACTIVE`** (só `pendencia_d1`, mesmo alcance de hoje, sem linha no livro-razão, `contatos_whatsapp` intocado — doc 07 §1);
   - exclusão do remapeamento (D-11) e gatilho de transferência.
 - **Testes:** isolamento (doc 06 §5), permissões, backfill sem mudança na resolução do D-1 (comparar `comunicacao_resolver_destinatarios` antes/depois em Postgres real), transferência (harness `testes-seguros/pg`).
 - **Riscos:** quebrar a transferência de unidade (FK composta) → teste obrigatório. Divergência entre Painel ADM e Central → uma só fonte (as mesmas tabelas).
-- **Aceite:** o D-1 envia para exatamente os mesmos destinatários antes e depois (prova automatizada); o cliente gerencia só o próprio escopo.
+- **Aceite:**
+  - a **prova de regressão do doc 07 §1.1** passa por inteiro: mesmos destinatários, mensagens, chaves, conteúdo, horários e cotas do D-1, com a flag desligada e ligada;
+  - os legados ficam `LEGACY_ACTIVE` sem evidência fabricada;
+  - o cliente gerencia só o próprio escopo.
 
 ## Etapa 3 — OTP e consentimento
 
@@ -117,7 +120,7 @@ Depende de **decisões externas** (D-12, D-13) e de autorização explícita par
 
 ## Bloqueadores conhecidos
 
-1. **Provedor oficial inexistente.** Sem ele não há OTP real, e a regularização (M2) não pode ser concluída.
+1. **Provedor oficial inexistente.** Sem ele não há OTP real: nenhum destinatário **novo** pode ser ativado e a adesão voluntária dos legados fica indisponível. Os legados continuam recebendo o D-1 normalmente.
 2. **Recriar a 054** (exclusão do remapeamento) toca a função hoje mantida pela frente do Financeiro. É preciso coordenar (D-11).
 3. **Base legal e textos do consentimento** precisam de validação jurídica (D-1).
 4. **Promoção de unidade** continua quebrada pelo 42P10 (outra frente). Os testes de promoção ficam informativos até lá.

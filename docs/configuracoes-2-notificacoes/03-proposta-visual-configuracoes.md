@@ -39,7 +39,7 @@ Sete categorias, com conteúdo derivado da auditoria (doc 01). Nada é duplicado
 - **Indicadores de pendência** por categoria (ponto/contador). Exemplos:
   - fuso não definido;
   - destinatário aguardando verificação;
-  - consentimento a regularizar;
+  - legado sem categoria nova disponível (convite de adesão opcional);
   - integração desconectada.
 
   O cálculo vem de uma rota única de resumo (doc 09), nunca de N chamadas.

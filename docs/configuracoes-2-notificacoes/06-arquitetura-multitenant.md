@@ -4,11 +4,11 @@
 
 | Entidade | Tabela | Situação |
 |---|---|---|
-| Telefone (posse) | `contatos_whatsapp` (082) | **Reaproveita.** `verificado`/`verificado_em` passam a significar *posse por OTP* depois da regularização. Os campos `consentimento`/`opt_out` globais ficam como **espelho de compatibilidade** (doc 07), e a autoridade passa ao livro-razão |
+| Telefone (posse) | `contatos_whatsapp` (082) | **Reaproveita, sem reescrever o legado.** A posse por OTP fica no desafio consumido (`comunicacao_desafios_titular`), **não** nos campos globais. `verificado`/`consentimento`/`opt_out` continuam alimentando o D-1 dos legados exatamente como hoje; `opt_out` continua bloqueando para todos |
 | Destinatário da empresa | `comunicacao_contatos_empresa` (100/104) | **Reaproveita**: nome, papel (`tipo`), ativo, FK composta `(id, organizacao_id)`. `whatsapp_status` passa a ser derivado do estado da Central |
 | Catálogo de categorias | `comunicacao_categorias` (104) | **Estende**: `grupo`, `exige_consentimento`, `estado` (`ATIVA`/`EM_BREVE`/`INTERNA`), `fonte`, `prioridade` |
 | Categorias por destinatário | `comunicacao_destinatario_categorias` (104) | **Mantida** (compatibilidade do D-1). Backfill para escopos com `unidade_id = null`. Na Etapa 4 a resolução lê os escopos |
-| **Escopo destinatário × unidade × categoria** | `comunicacao_destinatario_escopos` | **NOVA**. `(contato_empresa_id, organizacao_id) → FK composta`, `unidade_id` (nulo = todas), `categoria`, `habilitado`, `suspenso_em/por/motivo`, `janela`/`silencio` (jsonb validado), `notificar_correcao`. Único `NULLS NOT DISTINCT (contato_empresa_id, unidade_id, categoria)` |
+| **Escopo destinatário × unidade × categoria** | `comunicacao_destinatario_escopos` | **NOVA**. `(contato_empresa_id, organizacao_id) → FK composta`, `unidade_id` (nulo = todas), `categoria`, `habilitado`, **`origem_autorizacao` (`LEGACY_ACTIVE` \| `CONVITE_OTP`)**, `suspenso_em/por/motivo`, `janela`/`silencio` (jsonb validado), `notificar_correcao`. `CHECK`: `LEGACY_ACTIVE` só com `categoria = 'pendencia_d1'`. Único `NULLS NOT DISTINCT (contato_empresa_id, unidade_id, categoria)` |
 | **Convite** | `comunicacao_convites` | **NOVA**: `token_hash`, empresa, unidades e categorias pretendidas, `criado_por`, `expira_em`, `status` |
 | **Desafio OTP / sessão do titular** | `comunicacao_desafios_titular` | **NOVA**: `tipo` (`verificacao`/`gestao`), `telefone_e164` (ou hash, decisão D-4), `codigo_hmac`, `tentativas`, `expira_em`, `consumido_em`, `invalidado_em`, `ultimo_envio_em`, `ip_hash` |
 | **Consentimento** | `comunicacao_consentimentos` | **NOVA**, append-only (doc 05 §4.1) |
@@ -35,7 +35,7 @@ Total: **5 tabelas novas** e colunas em 2 existentes. As alternativas descartada
 |---|---|
 | `notificacoes.ver` | organization_admin, unit_manager, finance |
 | `notificacoes.gerenciar` | organization_admin; **unit_manager só nas unidades do seu vínculo** (se aprovado) |
-| Painel ADM (`requirePainelAdministrativo`) | equipe Crescer: visão cross-tenant e regularização assistida |
+| Painel ADM (`requirePainelAdministrativo`) | equipe Crescer: visão cross-tenant e apoio à adesão voluntária dos legados |
 
 - **Escopo de unidade no backend:** toda rota resolve `req.tenant`. Se o vínculo do usuário é de **unidade**, ele só vê e altera escopos daquela unidade e destinatários que tenham escopo nela. Destinatários "todas as unidades" aparecem só leitura para ele.
 - **Múltiplos perfis do mesmo usuário:** a permissão vem do vínculo da sessão (`sessoes_contexto.permissoes`), como hoje. Trocar de empresa troca o escopo, e `carregarProtegido` evita mistura na tela.

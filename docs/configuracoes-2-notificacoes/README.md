@@ -10,7 +10,7 @@ Missão **somente de auditoria e planejamento** (30/10/2026): nenhum código fun
 | [04 — Central de Notificações](04-central-notificacoes.md) | Modelo de destinatário, estados e transições, funcionalidades, categorias, horários/limites/entrega |
 | [05 — OTP e consentimento](05-otp-consentimento.md) | Fluxo convite → OTP → consentimento, parâmetros de segurança, livro-razão, LGPD, revogação pelo titular, riscos |
 | [06 — Arquitetura multi-tenant](06-arquitetura-multitenant.md) | Entidades (reuso × novas), RLS/privilégios, permissões, transferência/promoção, testes de isolamento |
-| [07 — Integração Dashboard iFood e Operacional](07-integracao-dashboard-ifood-operacional.md) | Migração gradual do D-1 (M0–M4), fechamento disparado pela consolidação, futuras fontes |
+| [07 — Integração Dashboard iFood e Operacional](07-integracao-dashboard-ifood-operacional.md) | Preservação dos destinatários (`LEGACY_ACTIVE`, M0–M3) e prova de regressão do D-1, fechamento disparado pela consolidação, futuras fontes |
 | [08 — Transporte WhatsApp](08-transporte-whatsapp.md) | Gateway atual × plataforma oficial, requisitos da Meta, camada desacoplada, homologação |
 | [09 — Roadmap](09-roadmap-implementacao.md) | Etapas 1–6, agrupamento em uma execução, arquivos, migrations, testes, riscos, aceite, bloqueadores |
-| [10 — Resumo executivo e decisões](10-resumo-executivo-decisoes.md) | Resumo, mapa dos critérios de aceite, riscos, 15 decisões para aprovação |
+| [10 — Resumo executivo e decisões](10-resumo-executivo-decisoes.md) | Resumo, mapa dos critérios de aceite, riscos, decisões tomadas e decisões pendentes (D-1..D-16) |

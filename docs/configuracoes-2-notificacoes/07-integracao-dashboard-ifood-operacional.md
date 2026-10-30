@@ -4,19 +4,54 @@
 
 Hoje 38 empresas recebem o D-1 automaticamente, com 41 destinatários "VALIDADO" por atestado do operador. **Nada pode parar.**
 
+> **Decisão aprovada (30/10/2026) — preservação dos destinatários existentes:**
+> - Todos os destinatários ativos são migrados como **`LEGACY_ACTIVE`**: sem exclusão, desativação ou interrupção, e **sem OTP retroativo nem prazo**.
+> - Número, vínculos, preferências e estado de envio são preservados.
+> - Nenhuma evidência de OTP, aceite ou versão de consentimento é registrada onde não existe.
+> - Categorias novas **nunca** são autorizadas automaticamente.
+> - Novos destinatários usam o fluxo novo; os legados podem aderir voluntariamente sem parar de receber.
+> - Revogações e bloqueios valem na hora, para todos.
+
 | Fase | O que muda | O que NÃO muda | Reversão |
 |---|---|---|---|
-| **M0 — Fundação** (com a Etapa 2/3) | tabelas novas; backfill: cada destinatário atual ganha escopo `unidade = todas`, `categoria = pendencia_d1` (copiado de `comunicacao_destinatario_categorias`) e uma linha `LEGADO_ATESTADO` no livro-razão (origem `migracao_legado`, data = `autorizacao_registrada_em`) | `comunicacao_resolver_destinatarios` continua lendo as tabelas antigas; envio idêntico | apagar as tabelas novas (sem efeito no envio) |
-| **M1 — Central visível** | cliente vê destinatários, histórico e estado (`LEGADO_A_REGULARIZAR`); pode adicionar destinatário novo, que entra **pelo fluxo OTP + consentimento** | os legados continuam recebendo D-1; admin da Crescer mantém o Painel ADM | desligar a Central por flag |
-| **M2 — Regularização** | convite de regularização para cada legado (o admin da empresa ou a equipe envia); quem conclui vira `ATIVO` com consentimento real | **o atestado legado só vale para `pendencia_d1`**; nunca é estendido a categoria nova | — |
-| **M3 — Resolução pelos escopos** | `comunicacao_resolver_destinatarios` passa a ler escopos + consentimento vigente; o legado ainda conta como consentimento **só para `pendencia_d1`** até o prazo | o pipeline (fila, policy, reservador, horários, reforço) é o mesmo | recriar a função anterior (corpo guardado no rollback, padrão 100/104) |
-| **M4 — Fim do prazo** (data a decidir, D-2) | `LEGADO_ATESTADO` deixa de valer; quem não regularizou para de receber e aparece como `VERIFICADO_SEM_CONSENTIMENTO` (ou `PENDENTE_VERIFICACAO`) com alerta para o admin | — | prorrogar o prazo (config) |
+| **M0 — Fundação** (Etapa 2/3) | tabelas novas. Backfill: cada destinatário atual com `pendencia_d1` habilitada em `comunicacao_destinatario_categorias` ganha escopo `origem_autorizacao = LEGACY_ACTIVE`, `categoria = pendencia_d1`, com o **mesmo alcance de unidades de hoje** (ver D-16). **Nenhuma** linha no livro-razão de consentimento; `contatos_whatsapp` intocado | `comunicacao_resolver_destinatarios` continua lendo as tabelas antigas; envio idêntico | apagar as tabelas novas (sem efeito no envio) |
+| **M1 — Central visível** | o cliente vê destinatários (legados com o selo "Autorização operacional anterior"), histórico e estado; destinatário **novo** entra **só** pelo fluxo convite → OTP → consentimento → categorias. O Painel ADM deixa de "autorizar" destinatários novos por atestado | os legados continuam recebendo o D-1 exatamente como hoje | desligar a Central por flag |
+| **M2 — Adesão voluntária** (contínua, sem prazo) | o admin pode **oferecer** o fluxo novo a um legado (ex.: para receber o fechamento); o titular conclui OTP + consentimento → `ATIVO` com evidência real; durante o processo o D-1 segue | o legado que não aderir continua `LEGACY_ACTIVE` indefinidamente | — |
+| **M3 — Resolução pelos escopos** (flag, desligada por padrão) | `comunicacao_resolver_destinatarios` passa a ler os escopos: `LEGACY_ACTIVE` vale **só** para `pendencia_d1`; `ATIVO` vale para as categorias consentidas e autorizadas pelo admin | o pipeline (fila, policy, reservador, horários, reforço, chaves) é o mesmo; a prova de regressão (Etapa 5) precede a ativação da flag | desligar a flag, ou recriar a função anterior (corpo guardado no rollback, padrão 100/104) |
 
 Regras de compatibilidade:
-- **Horários:** o D-1 continua com a janela global e o reforço 20–22 h. A janela do destinatário só **restringe**. Na fase M3, o silêncio do destinatário adia o aviso normal, mas não o reforço (o reforço já tem corte 22:30).
+- **Horários:** o D-1 continua com a janela global e o reforço 20–22 h. A janela do destinatário só **restringe** e só vale para quem a configurar. Os legados não têm janela própria, então nada muda para eles.
 - **Histórico:** `comunicacao_mensagens` sem alteração. A Central do cliente lê por empresa/unidade.
-- **Filas, reenvio e limites:** inalterados até a decisão D-9 (cota por categoria).
-- **Cadastros antigos ≠ consentimento para categoria nova:** garantido pela regra "legado só para `pendencia_d1`", e testado.
+- **Filas, reenvio e limites:** inalterados para o D-1 (a decisão D-9 só afeta categorias novas).
+- **Legado ≠ consentimento para categoria nova:** garantido no banco (`CHECK`: `LEGACY_ACTIVE` só com `pendencia_d1`) e na resolução, com teste.
+- **Revogação e bloqueio de legado:** opt-out, suspensão ou revogação têm efeito imediato. A policy já bloqueia no JIT, inclusive mensagens agendadas e o reforço.
+
+### 1.1 Prova de regressão obrigatória (D-1 inalterado)
+
+Rodada em Postgres descartável com a cadeia real da `main` + fixtures sintéticas que reproduzem a forma da produção:
+- 39 empresas, 1 delas com 6 unidades;
+- 41 destinatários (principal/secundário/operacional);
+- 5 números compartilhados entre empresas;
+- habilitações com 3 fusos;
+- opt-out e pausa.
+
+Comparação **antes × depois** de cada migration nova e com a flag M3 desligada **e** ligada:
+
+1. `comunicacao_resolver_destinatarios(org, 'dashboard_ifood_d1')` devolve **o mesmo conjunto** (`contato_empresa_id`, `elegivel`, `motivo`) para todas as empresas.
+2. Um ciclo completo do worker (`executarCiclo` com relógio fixo, transporte fake), em dia útil, sábado, domingo, prazo do reforço e aviso tardio, gera **as mesmas mensagens**:
+   - destinatários;
+   - `idempotency_key`;
+   - `tipo`;
+   - `conteudo` (byte a byte);
+   - `disponivel_em`/`expira_em`;
+   - `metadados.proposito`.
+3. Mesmas decisões da policy (`avaliarEnvio`) e da reserva (`comunicacao_reservar_envio`): cotas, cooldown e limites.
+4. Os legados **não** recebem nenhuma outra categoria; tentar habilitar o fechamento para um legado é recusado pelo banco e pela API.
+5. Opt-out / revogação / suspensão de um legado bloqueiam a mensagem agendada **no mesmo ciclo**.
+6. Nenhuma linha `CONCEDIDO` e nenhum desafio OTP são criados para legados pela migração. Os campos globais de `contatos_whatsapp` ficam idênticos (hash da tabela antes/depois).
+7. Rollback de cada migration devolve o estado anterior idêntico.
+
+Nenhuma alteração na base de produção nem no gateway é feita sem autorização específica.
 
 ## 2. Dashboard Operacional 2.0: fechamento diário
 

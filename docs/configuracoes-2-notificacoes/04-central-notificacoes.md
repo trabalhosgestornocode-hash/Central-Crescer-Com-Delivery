@@ -39,7 +39,7 @@ Os nomes foram validados contra o vocabulário real do sistema. Os bloqueios da 
 | `SUSPENSO` | o administrador da unidade/empresa suspendeu (reversível; o consentimento é preservado) | não |
 | `REVOGADO` | o titular revogou o consentimento (todas as categorias) **ou** registrou opt-out | não; só volta com novo consentimento **do titular** |
 | `EXPIRADO` | convite ou desafio de verificação não concluído no prazo, **ou** verificação de posse mais velha que a política de revalidação (decisão D-6) | não |
-| `LEGADO_A_REGULARIZAR` | **(transição)** destinatário atual cujo consentimento é o atestado do operador (doc 07) | continua recebendo **só** `pendencia_d1` até o prazo de regularização |
+| `LEGACY_ACTIVE` | destinatário que **já recebia o D-1** antes da migração (cadastro e autorização operacional anteriores, pelo Painel ADM). **Decisão aprovada em 30/10/2026** (doc 10, "Decisões tomadas") | **sim, só `pendencia_d1`**, exatamente como hoje, **sem prazo e sem OTP retroativo**. Nenhuma outra categoria sem passar pelo fluxo novo |
 
 Transições:
 
@@ -48,8 +48,18 @@ Transições:
    → (titular aceita categorias) → ATIVO ⇄ SUSPENSO (admin)
    ATIVO → REVOGADO (titular: link de gestão, palavra-chave ou pedido registrado)
    PENDENTE_VERIFICACAO/convite → EXPIRADO (prazo) → (admin reenvia convite) → PENDENTE_VERIFICACAO
-   LEGADO_A_REGULARIZAR → (titular conclui OTP+consentimento) → ATIVO | (prazo vence) → VERIFICADO_SEM_CONSENTIMENTO ou PENDENTE_VERIFICACAO
+
+   (migração) → LEGACY_ACTIVE ⇄ SUSPENSO (admin)                  — continua recebendo o D-1 sem interrupção
+   LEGACY_ACTIVE → REVOGADO (titular ou bloqueio — efeito imediato, inclusive mensagens já agendadas)
+   LEGACY_ACTIVE → (adoção VOLUNTÁRIA: OTP + consentimento) → ATIVO   — o D-1 não para durante o processo
 ```
+
+Regras do `LEGACY_ACTIVE`:
+- Não tem prazo de expiração.
+- Não exige OTP para continuar no D-1.
+- Não ganha categoria nova automaticamente.
+- Não aparece como "verificado por OTP" nem como "consentimento comprovado": a tela mostra **"Autorização operacional anterior (cadastro legado)"**, com a data do registro original.
+- Para receber outra categoria (ex.: fechamento), o titular passa pelo fluxo novo, que pode ser oferecido pelo admin como convite. Concluído, o vínculo vira `ATIVO`.
 
 ## 4. Funcionalidades (usuário autorizado da unidade/empresa)
 
@@ -66,8 +76,8 @@ Transições:
 | Histórico de notificações por unidade/destinatário | `notificacoes.ver` | mensagens, status (enviada/entregue/lida/cancelada com motivo), sem conteúdo integral para quem não gerencia |
 
 **Equipe Crescer (Painel Administrativo):**
-- continua com a visão cross-tenant, o modo global, a conexão, os limites globais, o grupo interno e a regularização assistida;
-- perde a capacidade de "atestar consentimento" depois da regularização (decisão D-7).
+- continua com a visão cross-tenant, o modo global, a conexão, os limites globais, o grupo interno e o apoio à adesão voluntária dos legados;
+- não autoriza destinatário novo por atestado (decisão de 30/10/2026); pode suspender e registrar pedido de revogação do titular (D-7).
 
 ## 5. Categorias e preferências (resumo; detalhes no doc 07)
 
