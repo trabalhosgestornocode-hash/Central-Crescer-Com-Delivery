@@ -13,6 +13,8 @@ import * as repo from "./notificacoes.repository.js";
 export const FRASE_CONFIRMACAO = "ATIVAR SELECAO POR UNIDADE";
 
 const travada = (env) => env.NOTIFICACOES_M3_ATIVACAO_HABILITADA !== "true";
+// 409 (estado do ambiente), não 403: quem chega aqui JÁ foi autorizado pelo Painel Administrativo — a trava é do ambiente.
+const bloqueada = (msg) => new ApiError(409, msg, { codigo: "M3_BLOQUEADA_NO_AMBIENTE" });
 
 export async function estado({ env = process.env, deps = {} } = {}) {
   const s = await (deps.repo ?? repo).estadoSelecao(deps);
@@ -21,7 +23,7 @@ export async function estado({ env = process.env, deps = {} } = {}) {
 }
 
 export async function ativar({ req, corpo, env = process.env, deps = {} }) {
-  if (travada(env)) throw ApiError.forbidden("Ativação M3 bloqueada neste ambiente: exige autorização específica.");
+  if (travada(env)) throw bloqueada("Ativação M3 bloqueada neste ambiente: exige autorização específica.");
   if (corpo?.confirmacao !== FRASE_CONFIRMACAO) throw ApiError.badRequest(`Digite exatamente: ${FRASE_CONFIRMACAO}`);
   const migracaoId = v.uuid(corpo?.migracaoId, "Identificador da migração");
   const elegiveis = await (deps.listarUnidadesElegiveis ?? listarUnidadesElegiveis)({ moduloId: MONITORES.dashboard_ifood.modulo }, deps);
@@ -33,7 +35,7 @@ export async function ativar({ req, corpo, env = process.env, deps = {} }) {
 }
 
 export async function desativar({ req, corpo, env = process.env, deps = {} }) {
-  if (travada(env)) throw ApiError.forbidden("Operação M3 bloqueada neste ambiente: exige autorização específica.");
+  if (travada(env)) throw bloqueada("Operação M3 bloqueada neste ambiente: exige autorização específica.");
   if (corpo?.confirmacao !== "DESATIVAR SELECAO POR UNIDADE") throw ApiError.badRequest("Digite exatamente: DESATIVAR SELECAO POR UNIDADE");
   const r = await (deps.repo ?? repo).desativarSelecao({ ator: req?.perfil?.id ?? null }, deps);
   await (deps.auditar ?? auditar)({ acao: ACOES.NOTIFICACAO_SELECAO_DESATIVADA, atorTipo: "usuario", atorId: req?.user?.id ?? null, entidade: "notificacoes", detalhes: { resultado: r?.resultado } });

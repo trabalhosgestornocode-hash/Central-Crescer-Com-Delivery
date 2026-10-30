@@ -74,8 +74,11 @@ titularRouter.post("/gestao/revogar", asyncHandler(async (req, res) => res.json(
 // ---------------------------------------------------------------------------------------------------------------------------
 // Painel Administrativo (M3) — montadas em administrativo.routes.js (requirePainelAdministrativo + MFA quando exigido)
 // ---------------------------------------------------------------------------------------------------------------------------
+// Mesma seam de teste dos controllers do Painel Administrativo: `app.locals.adminDeps` (banco/env falsos nos testes).
+const adminDeps = (req) => req.app?.locals?.adminDeps;
+const m3Args = (req) => { const d = adminDeps(req); return d ? { deps: d, env: d.env ?? {} } : {}; };
 export const m3Controller = {
-  estado: asyncHandler(async (_req, res) => { semCache(res); res.json({ data: await m3.estado() }); }),
-  ativar: asyncHandler(async (req, res) => res.json({ data: await m3.ativar({ req, corpo: req.body }) })),
-  desativar: asyncHandler(async (req, res) => res.json({ data: await m3.desativar({ req, corpo: req.body }) })),
+  estado: asyncHandler(async (req, res) => { semCache(res); res.json({ data: await m3.estado(m3Args(req)) }); }),
+  ativar: asyncHandler(async (req, res) => res.json({ data: await m3.ativar({ req, corpo: req.body, ...m3Args(req) }) })),
+  desativar: asyncHandler(async (req, res) => res.json({ data: await m3.desativar({ req, corpo: req.body, ...m3Args(req) }) })),
 };

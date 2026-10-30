@@ -31,6 +31,15 @@ const ANTES = {
   viewer: [...LEITURA_ANTES],
 };
 
+/** Acréscimos DELIBERADOS posteriores, um por decisão aprovada (qualquer outro desvio continua falhando).
+ * Configurações 2.0 / D-3: o gestor da unidade administra a Central da própria unidade; o financeiro só consulta. */
+const ACRESCIMOS = {
+  unit_manager: ["notificacoes.ver", "notificacoes.gerenciar"],
+  finance: ["notificacoes.ver"],
+  operations: [],
+  viewer: [],
+};
+
 const ordenar = (a) => [...a].sort();
 
 describe("perfil de exibição — permissões", () => {
@@ -60,9 +69,9 @@ describe("perfil de exibição — permissões", () => {
     assert.deepEqual(ordenar(permissoesDoPapel("papel_que_nao_existe")), ordenar(ANTES.viewer.concat("checklist.visualizar")));
   });
 
-  test("os papéis EXISTENTES não mudaram: exatamente o catálogo anterior + checklist.visualizar", () => {
+  test("os papéis EXISTENTES não mudaram: exatamente o catálogo anterior + checklist.visualizar (+ acréscimos aprovados)", () => {
     for (const [papel, antes] of Object.entries(ANTES)) {
-      assert.deepEqual(ordenar(permissoesDoPapel(papel)), ordenar([...antes, "checklist.visualizar"]), papel);
+      assert.deepEqual(ordenar(permissoesDoPapel(papel)), ordenar([...antes, "checklist.visualizar", ...ACRESCIMOS[papel]]), papel);
     }
     // organization_admin = todas as permissões (as de antes + a nova).
     const admin = permissoesDoPapel("organization_admin");

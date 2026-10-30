@@ -84,10 +84,10 @@ describe("D-14: conceder acesso ou convidar", () => {
 });
 
 describe("M3: travada por padrão, frase de confirmação, universo do monitor", () => {
-  test("sem a env de autorização: 403, nada é chamado", async () => {
+  test("sem a env de autorização: 409 (trava do ambiente, não de permissão), nada é chamado", async () => {
     let chamou = false;
     await assert.rejects(m3.ativar({ req, corpo: { confirmacao: m3.FRASE_CONFIRMACAO, migracaoId: "10000000-0000-4000-8000-000000000001" }, env: {},
-      deps: { repo: { ativarSelecao: async () => { chamou = true; } } } }), (e) => e.statusCode === 403);
+      deps: { repo: { ativarSelecao: async () => { chamou = true; } } } }), (e) => e.statusCode === 409 && e.details?.codigo === "M3_BLOQUEADA_NO_AMBIENTE");
     assert.equal(chamou, false);
   });
   test("com a env: frase errada → 400; certa → universo = função do monitor D-1 (módulo dashboard_ifood)", async () => {
