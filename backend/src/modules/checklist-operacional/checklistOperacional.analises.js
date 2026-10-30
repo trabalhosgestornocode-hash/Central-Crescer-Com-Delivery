@@ -128,29 +128,30 @@ function variacaoEntrePeriodos(d, ctx) {
       ctx.naoAvaliada(`variacao_${e}`, `${NOME_ETAPA[e]}: menos de ${L.compMinAmostras} medições em um dos períodos`);
       continue;
     }
-    const med = c.mediana;
-    const varMed = med.variacaoPct;
-    const mudouMediana = varMed != null && Math.abs(varMed) >= L.compMinVariacaoPct && Math.abs(med.diferenca) >= L.compMinVariacaoMin;
+    // Compara a MÉDIA (o tempo exibido no Dashboard 2.0); a mediana continua calculada, mas não aparece na interface.
+    const med = c.media;
+    const varTempo = med.variacaoPct;
+    const mudouTempo = varTempo != null && Math.abs(varTempo) >= L.compMinVariacaoPct && Math.abs(med.diferenca) >= L.compMinVariacaoMin;
     const pp = c.pctDentro.diferencaPP;
     const mudouMeta = pp != null && Math.abs(pp) >= L.compMinVariacaoPP;
-    if (!mudouMediana && !mudouMeta) continue;
+    if (!mudouTempo && !mudouMeta) continue;
     // Tempo maior = pior; % dentro menor = pior. Sinais opostos = resultado misto.
-    const pioraMed = mudouMediana && med.diferenca > 0;
-    const melhoraMed = mudouMediana && med.diferenca < 0;
+    const pioraTempo = mudouTempo && med.diferenca > 0;
+    const melhoraTempo = mudouTempo && med.diferenca < 0;
     const pioraMeta = mudouMeta && pp < 0;
     const melhoraMeta = mudouMeta && pp > 0;
-    const piora = (pioraMed || pioraMeta) && !(melhoraMed || melhoraMeta);
-    const melhora = (melhoraMed || melhoraMeta) && !(pioraMed || pioraMeta);
+    const piora = (pioraTempo || pioraMeta) && !(melhoraTempo || melhoraMeta);
+    const melhora = (melhoraTempo || melhoraMeta) && !(pioraTempo || pioraMeta);
     const sentido = piora ? "piora" : melhora ? "melhora" : "misto";
     const partes = [];
-    if (mudouMediana) partes.push(`mediana de ${fmt(med.anterior)} para ${fmt(med.atual)} min (${med.variacaoPct > 0 ? "+" : ""}${fmt(med.variacaoPct)}%)`);
+    if (mudouTempo) partes.push(`média de ${fmt(med.anterior)} para ${fmt(med.atual)} min (${med.variacaoPct > 0 ? "+" : ""}${fmt(med.variacaoPct)}%)`);
     if (mudouMeta) partes.push(`dentro da meta de ${fmt(c.pctDentro.anterior)}% para ${fmt(c.pctDentro.atual)}% (${pp > 0 ? "+" : ""}${fmt(pp)} p.p.)`);
     saidas.push({
       tipo: `${sentido}_${e}`,
       titulo: `${sentido === "piora" ? "Piora" : sentido === "melhora" ? "Melhora" : "Variação mista"} em ${NOME_ETAPA[e].toLowerCase()}`,
       severidade: sentido === "piora" ? "media" : "informativa",
       constatacao: `${NOME_ETAPA[e]}: ${partes.join("; ")}, comparado ao período anterior.`,
-      indicador: `${NOME_ETAPA[e]} — mediana e % dentro da meta`,
+      indicador: `${NOME_ETAPA[e]} — tempo médio e % dentro da meta`,
       referencia: `período anterior equivalente (${dataBr(d.periodo.anterior.inicio)} a ${dataBr(d.periodo.anterior.fim)}${d.periodo.anterior.ate ? ", cortado no mesmo horário" : ""})`,
       ocorrencias: c.amostras.atual,
       evidencias: { comparacao: { etapa: e, ...c } },
@@ -183,9 +184,9 @@ function preparoAnormal(d, ctx) {
     tipo: "preparo_anormal",
     titulo: "Aumento anormal do tempo de preparo",
     severidade: "media",
-    constatacao: `${plural(anormais.length, "dia teve", "dias tiveram")} preparo mediano acima do normal do período (${fmt(base)} min; limite ${fmt(limite)} min): ${anormais.slice(0, 5).map((x) => `${dataBr(x.data)} com ${fmt(x.porEtapa.preparo.mediana)} min (${x.porEtapa.preparo.amostras} preparos)`).join("; ")}.`,
-    indicador: "Preparo — mediana diária",
-    referencia: `mediana das medianas diárias (${fmt(base)} min) + ${L.anomFatorMad}× o desvio robusto (mínimo ${L.anomMinExcessoMin} min)`,
+    constatacao: `${plural(anormais.length, "dia teve", "dias tiveram")} preparo típico acima do normal do período (${fmt(base)} min; limite ${fmt(limite)} min): ${anormais.slice(0, 5).map((x) => `${dataBr(x.data)} com ${fmt(x.porEtapa.preparo.mediana)} min (${x.porEtapa.preparo.amostras} preparos)`).join("; ")}.`,
+    indicador: "Preparo — tempo típico do dia",
+    referencia: `padrão do período calculado de forma robusta, sem ser distorcido por um pedido muito lento (${fmt(base)} min) + ${L.anomFatorMad}× o desvio robusto (mínimo ${L.anomMinExcessoMin} min)`,
     ocorrencias: anormais.length,
     evidencias: {
       dias: anormais.map((x) => ({ data: x.data, medianaMin: x.porEtapa.preparo.mediana, amostras: x.porEtapa.preparo.amostras })),

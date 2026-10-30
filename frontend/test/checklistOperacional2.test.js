@@ -197,10 +197,16 @@ describe("seleção: terceira opção", () => {
 // =====================================================================
 describe("Dashboard Operacional — tela", () => {
   const d = payload();
-  const html = telaDashboard({ dados: d, filtro: { periodo: "personalizado", inicio: "2026-10-12", fim: "2026-10-18", etapa: "todas" }, unidadeNome: "Subway <Saci>", carregando: false, erro: null, hoje: "2026-10-21" });
+  // Dashboard 2.0: os blocos ficam em duas abas (Visão Geral e Ocorrências); o teste junta as duas.
+  const tela = (aba) => telaDashboard({ dados: d, filtro: { periodo: "personalizado", inicio: "2026-10-12", fim: "2026-10-18", etapa: "todas" }, unidadeNome: "Subway <Saci>", carregando: false, erro: null, hoje: "2026-10-21", aba });
+  const html = tela("visao") + tela("ocorrencias");
+
+  test("Dashboard 2.0 sem Mediana nem P90 na interface gerencial", () => {
+    assert.doesNotMatch(html, /mediana|P90|mediano/i);
+  });
 
   test("todos os blocos: KPIs, gráficos, análises, etapas, comparativo, atrasos, metas, qualidade, definições", () => {
-    for (const t of ["Pedidos acompanhados", "Preparo — mediana", "Entrega — mediana", "Vida do pedido — mediana", "Pedidos dentro da meta", "Atrasos", "Maior atraso",
+    for (const t of ["Pedidos recebidos", "Pedidos concluídos", "Cancelamentos", "Preparo — tempo médio", "Entrega — tempo médio", "Vida do pedido — tempo médio", "Pedidos dentro da meta", "Atrasos", "Maior atraso",
       "Evolução diária", "Horários de maior demanda", "Pedidos atrasados por horário", "Volume por dia da semana", "Distribuição por status operacional",
       "Inteligência operacional", "Desempenho por etapa", "Comparação com o período anterior", "Atrasos e ocorrências", "Metas aplicáveis",
       "Cobertura e qualidade dos dados", "Como cada indicador é calculado", "Cumprimento dos itens do checklist"]) {
@@ -238,7 +244,8 @@ describe("Dashboard Operacional — tela", () => {
 
   test("dados ausentes: período sem pedidos mostra '—' e motivos, nunca zero inventado", () => {
     const vazio = payload({ inicio: "2026-10-19", fim: "2026-10-19", pedidos: [] });
-    const h = telaDashboard({ dados: vazio, filtro: { periodo: "ontem", etapa: "todas" }, unidadeNome: "U", carregando: false, erro: null, hoje: "2026-10-21" });
+    const telaVazia = (aba) => telaDashboard({ dados: vazio, filtro: { periodo: "ontem", etapa: "todas" }, unidadeNome: "U", carregando: false, erro: null, hoje: "2026-10-21", aba });
+    const h = telaVazia("visao") + telaVazia("ocorrencias");   // Dashboard 2.0: análises ficam na aba Ocorrências
     assert.match(h, /<p class="ckd-kpi-valor">—<\/p>/);
     assert.match(h, /A evolução diária aparece em períodos de 2 dias ou mais/);
     assert.match(h, /Nenhuma análise disparou/);
@@ -273,7 +280,7 @@ describe("Dashboard Operacional — tela", () => {
     assert.match(css, /@media \(max-width: 900px\) \{ \.ckd-graficos \{ grid-template-columns: 1fr; \} \}/);
     assert.match(css, /@media \(max-width: 600px\)/);
     assert.match(css, /:root\[data-theme="dark"\] \.ckd \{ --ckd-s1:/);
-    assert.match(ler("../index.html"), /checklistOperacionalDashboard\.css\?v=2/);
+    assert.match(ler("../index.html"), /checklistOperacionalDashboard\.css\?v=3/);   // v3 = Dashboard 2.0 (abas, ficha, fechamento)
   });
 });
 

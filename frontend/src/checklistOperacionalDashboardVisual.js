@@ -59,20 +59,30 @@ function tile({ rotulo, valor, unidade, sub, delta, icone }) {
     </article>`;
 }
 
+/** Meta vigente no fim do período (referência do cartão; cada pedido continua avaliado pela meta do seu recebimento). */
+const metaAtual = (d, e) => d.metasAplicaveis?.versoes?.at(-1)?.valores?.[e]?.meta ?? null;
+
 export function kpis(d) {
   const r = d.resumo;
   const c = d.comparacao;
   const t = [tile({
-    rotulo: "Pedidos acompanhados", valor: num(r.pedidos, 0), icone: "receipt",
-    sub: `${num(r.concluidos, 0)} concluídos · ${num(r.cancelados, 0)} cancelados`,
+    rotulo: "Pedidos recebidos", valor: num(r.pedidos, 0), icone: "receipt",
+    sub: r.emAndamento ? `${num(r.emAndamento, 0)} em andamento` : "pela chegada no período",
     delta: c.pedidos.diferenca == null ? null : { texto: `${c.pedidos.diferenca >= 0 ? "+" : "−"}${num(Math.abs(c.pedidos.diferenca), 0)} vs. anterior (${num(c.pedidos.anterior, 0)})`, tom: "igual" },
+  }), tile({
+    rotulo: "Pedidos concluídos", valor: num(r.concluidos, 0), icone: "check-circle",
+    sub: `dos ${num(r.pedidos, 0)} recebidos no período`,
+  }), tile({
+    rotulo: "Cancelamentos", valor: num(r.cancelados, 0), icone: "x-circle",
+    sub: r.pedidos ? `${num((r.cancelados / r.pedidos) * 100)}% dos recebidos` : "sem pedidos no período",
   })];
   for (const e of d.etapas) {
     const x = r.porEtapa[e];
+    const meta = metaAtual(d, e);
     t.push(tile({
-      rotulo: `${NOME_ETAPA[e]} — mediana`, valor: num(x.mediana), unidade: x.mediana == null ? "" : "min", icone: "clock",
-      sub: `média ${num(x.media)} · P90 ${num(x.p90)} min · ${num(x.amostras, 0)} medições`,
-      delta: variacao(c.porEtapa[e].mediana.diferenca),
+      rotulo: `${NOME_ETAPA[e]} — tempo médio`, valor: num(x.media), unidade: x.media == null ? "" : "min", icone: "clock",
+      sub: `${meta == null ? "sem meta" : `meta ${num(meta)} min`} · ${num(x.amostras, 0)} pedidos${x.pctDentro == null ? "" : ` · ${num(x.pctDentro)}% dentro`}`,
+      delta: variacao(c.porEtapa[e].media.diferenca),
     }));
   }
   const dentro = d.etapas.length === 1 ? r.porEtapa[d.etapas[0]].pctDentro : r.pctPedidosDentro;
@@ -97,7 +107,7 @@ export function tabelaEtapas(d) {
   const linhas = d.etapas.map((e) => {
     const x = d.resumo.porEtapa[e];
     return `<tr><th scope="row"><i class="ckd-marca" style="background:${COR_ETAPA[e]}"></i>${NOME_ETAPA[e]}</th>
-      <td>${num(x.amostras, 0)}</td><td>${num(x.media)}</td><td>${num(x.mediana)}</td><td>${num(x.p90)}</td>
+      <td>${num(x.amostras, 0)}</td><td>${num(x.media)}</td><td>${metaAtual(d, e) == null ? "—" : num(metaAtual(d, e))}</td>
       <td>${x.pctDentro == null ? "—" : `${num(x.pctDentro)}%`}</td><td>${num(x.atrasos, 0)}${x.pctAtraso == null ? "" : ` (${num(x.pctAtraso)}%)`}</td>
       <td>${x.maiorAtraso ? `+${num(x.maiorAtraso.excedenteMin)} min` : "—"}</td><td>${num(x.semMetaVigente, 0)}</td></tr>`;
   }).join("");
@@ -105,7 +115,7 @@ export function tabelaEtapas(d) {
     <section class="ckd-bloco" aria-labelledby="ckd-t-etapas">
       <h2 id="ckd-t-etapas">Desempenho por etapa</h2>
       <div class="ckd-tabela-wrap"><table class="ckd-tabela">
-        <thead><tr><th scope="col">Etapa</th><th scope="col">Medições</th><th scope="col">Média (min)</th><th scope="col">Mediana (min)</th><th scope="col">P90 (min)</th><th scope="col">Dentro da meta</th><th scope="col">Atrasos</th><th scope="col">Maior atraso</th><th scope="col">Sem meta vigente</th></tr></thead>
+        <thead><tr><th scope="col">Etapa</th><th scope="col">Medições</th><th scope="col">Tempo médio (min)</th><th scope="col">Meta atual (min)</th><th scope="col">Dentro da meta</th><th scope="col">Atrasos</th><th scope="col">Maior atraso</th><th scope="col">Sem meta vigente</th></tr></thead>
         <tbody>${linhas}</tbody>
       </table></div>
       <p class="ckd-nota">Só pedidos de entrega entram nos tempos. Preparo: chegada até a saída do pedido. Entrega: saída até a conclusão registrada pelo iFood. Vida: chegada até a conclusão.</p>
@@ -123,8 +133,7 @@ export function tabelaComparativo(d) {
     `<tr><th scope="row">Pedidos</th><td>${num(c.pedidos.atual, 0)}</td><td>${num(c.pedidos.anterior, 0)}</td><td>${c.pedidos.variacaoPct == null ? "—" : `${c.pedidos.variacaoPct > 0 ? "+" : ""}${num(c.pedidos.variacaoPct)}%`}</td></tr>`,
     linha("% pedidos atrasados", c.pctPedidosAtrasados, { pp: true }),
     ...d.etapas.flatMap((e) => [
-      linha(`${NOME_ETAPA[e]} — mediana (min)`, c.porEtapa[e].mediana),
-      linha(`${NOME_ETAPA[e]} — P90 (min)`, c.porEtapa[e].p90),
+      linha(`${NOME_ETAPA[e]} — tempo médio (min)`, c.porEtapa[e].media),
       linha(`${NOME_ETAPA[e]} — dentro da meta (%)`, c.porEtapa[e].pctDentro, { menorMelhor: false, pp: true }),
     ]),
   ].join("");
@@ -239,42 +248,41 @@ export function filtros(f, { hoje, unidadeNome, carregando }) {
  * Tela inteira do Dashboard.
  * @param {{dados: object|null, filtro: object, unidadeNome: string, carregando: boolean, erro: string|null, hoje: string}} p
  */
-export function telaDashboard({ dados, filtro, unidadeNome, carregando, erro, hoje }) {
+export function telaDashboard({ dados, filtro, unidadeNome, carregando, erro, hoje, aba = "visao", abas = "", conteudoAba = "" }) {
+  // Dashboard 2.0: quatro abas. "Visão Geral" e "Ocorrências" usam o payload do período (`dados`); "Pedidos" e "Fechamentos"
+  // chegam prontos em `conteudoAba` (checklistOperacionalOperacional.js, com os próprios dados). `abas` = navegação.
   const cab = `
     <header class="ckd-cab">
       <div>
         <h1>${icon("bar-chart", { size: 24 })}Dashboard Operacional</h1>
-        <p>${dados ? `${escapeHtml(textoPeriodo(dados.periodo))} · ${dados.etapa === "todas" ? "todas as etapas" : NOME_ETAPA[dados.etapa]}` : "Histórico de tempos da unidade"}</p>
+        <p>${aba === "fechamentos" ? "Fechamento diário da unidade" : dados ? `${escapeHtml(textoPeriodo(dados.periodo))} · ${dados.etapa === "todas" ? "todas as etapas" : NOME_ETAPA[dados.etapa]}` : "Indicadores operacionais da unidade"}</p>
       </div>
       <div class="ckd-acoes">
-        <button type="button" class="btn btn-ghost" data-acao="relatorio"${dados ? "" : " disabled"}>${icon("file-text", { size: 16 })}<span>Relatório PDF / Excel</span></button>
+        ${aba === "fechamentos" ? "" : `<button type="button" class="btn btn-ghost" data-acao="relatorio"${dados ? "" : " disabled"}>${icon("file-text", { size: 16 })}<span>Relatório PDF / Excel</span></button>`}
         <button type="button" class="btn btn-ghost" data-acao="voltar-checklist">${icon("arrow-left", { size: 16 })}<span>Voltar ao Checklist</span></button>
       </div>
     </header>`;
   const status = erro
     ? `<p class="ckd-erro" role="alert">${escapeHtml(erro)}</p>`
     : carregando ? '<p class="ckd-carregando" role="status">Calculando os indicadores do período…</p>' : "";
-  if (!dados) return `<section class="ckd" data-ckd>${cab}${filtros(filtro, { hoje, unidadeNome, carregando })}${status}</section>`;
+  const topo = `${cab}${abas}${aba === "fechamentos" ? "" : filtros(filtro, { hoje, unidadeNome, carregando })}`;
+  const painel = (html) => `<div class="ckd-painel" role="tabpanel" id="ckd-painel-${aba}" aria-labelledby="ckd-aba-${aba}">${html}</div>`;
+  const tooltip = '<div class="ckd-tooltip" data-ckd-tooltip role="tooltip" hidden></div>';
+  if (aba === "pedidos" || aba === "fechamentos") return `<section class="ckd" data-ckd>${topo}${painel(conteudoAba)}${tooltip}</section>`;
+  if (!dados) return `<section class="ckd" data-ckd>${topo}${status}</section>`;
   const g = graficosDoDashboard(dados);
   const avisos = dados.qualidade.avisos.length
     ? `<details class="ckd-avisos-topo"${dados.qualidade.avisos.length <= 2 ? " open" : ""}><summary>${icon("info", { size: 15 })}${dados.qualidade.avisos.length} ${dados.qualidade.avisos.length === 1 ? "observação" : "observações"} sobre os dados deste período</summary><ul>${dados.qualidade.avisos.map((a) => `<li>${escapeHtml(a)}</li>`).join("")}</ul></details>` : "";
+  const conteudo = aba === "ocorrencias"
+    ? `${blocoAnalises(dados.analises)}${tabelaAtrasos(dados)}${blocoQualidade(dados)}${blocoDefinicoes(dados)}`
+    : `${avisos}${kpis(dados)}<div class="ckd-graficos">${g.evolucao}${g.volumeDiario}${g.demandaHora}${g.atrasoHora}${g.semana}${g.distribuicao}</div>${tabelaEtapas(dados)}${tabelaComparativo(dados)}${blocoMetas(dados)}`;
   return `
     <section class="ckd" data-ckd aria-busy="${carregando ? "true" : "false"}">
-      ${cab}
-      ${filtros(filtro, { hoje, unidadeNome, carregando })}
+      ${topo}
       ${status}
-      ${avisos}
-      ${kpis(dados)}
-      <div class="ckd-graficos">${g.evolucao}${g.volumeDiario}${g.demandaHora}${g.atrasoHora}${g.semana}${g.distribuicao}</div>
-      ${blocoAnalises(dados.analises)}
-      ${tabelaEtapas(dados)}
-      ${tabelaComparativo(dados)}
-      ${tabelaAtrasos(dados)}
-      ${blocoMetas(dados)}
-      ${blocoQualidade(dados)}
-      ${blocoDefinicoes(dados)}
+      ${painel(conteudo)}
       <p class="ckd-rodape">Calculado pela Central às ${escapeHtml(horaBr(dados.servidorEm))}. Fuso da operação: ${escapeHtml(dados.periodo.fuso)}.</p>
-      <div class="ckd-tooltip" data-ckd-tooltip role="tooltip" hidden></div>
+      ${tooltip}
     </section>`;
 }
 

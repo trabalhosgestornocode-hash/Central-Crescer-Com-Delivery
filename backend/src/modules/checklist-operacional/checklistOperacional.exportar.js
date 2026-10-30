@@ -80,13 +80,13 @@ const SECAO = {
   },
   etapas(ctx) {
     const d = ctx.dashboard;
-    const linhas = [...cabecalho(ctx), ["Etapa", "Amostras", "Média (min)", "Mediana (min)", "P90 (min)", "Mínimo", "Máximo", "Avaliadas", "Dentro da meta", "% dentro", "Atrasos", "% atrasos", "Maior atraso (min acima)", "Pedido do maior atraso", "Sem meta vigente", "Descartadas"]];
+    const linhas = [...cabecalho(ctx), ["Etapa", "Amostras", "Média (min)", "Mínimo", "Máximo", "Avaliadas", "Dentro da meta", "% dentro", "Atrasos", "% atrasos", "Maior atraso (min acima)", "Pedido do maior atraso", "Sem meta vigente", "Descartadas"]];
     for (const e of d.etapas) {
       const x = d.resumo.porEtapa[e];
-      linhas.push([NOME_ETAPA[e], x.amostras, v(x.media), v(x.mediana), v(x.p90), v(x.minimo), v(x.maximo), x.avaliadas, x.dentro, v(x.pctDentro), x.atrasos, v(x.pctAtraso),
+      linhas.push([NOME_ETAPA[e], x.amostras, v(x.media), v(x.minimo), v(x.maximo), x.avaliadas, x.dentro, v(x.pctDentro), x.atrasos, v(x.pctAtraso),
         v(x.maiorAtraso?.excedenteMin), x.maiorAtraso?.displayId ? `#${x.maiorAtraso.displayId}` : "", x.semMetaVigente, x.descartados]);
     }
-    return aba(linhas, [16, 10, 11, 12, 10, 9, 9, 10, 13, 9, 9, 10, 20, 18, 15, 12, 12]);
+    return aba(linhas, [16, 10, 11, 9, 9, 10, 13, 9, 9, 10, 20, 18, 15, 12, 12]);
   },
   comparativo(ctx) {
     const d = ctx.dashboard;
@@ -98,7 +98,7 @@ const SECAO = {
       ["% pedidos atrasados", v(c.pctPedidosAtrasados.atual), v(c.pctPedidosAtrasados.anterior), v(c.pctPedidosAtrasados.diferencaPP), "p.p."]];
     for (const e of d.etapas) {
       const x = c.porEtapa[e];
-      for (const [k, rot] of [["media", "média (min)"], ["mediana", "mediana (min)"], ["p90", "P90 (min)"]]) {
+      for (const [k, rot] of [["media", "média (min)"]]) {
         linhas.push([`${NOME_ETAPA[e]} — ${rot}`, v(x[k].atual), v(x[k].anterior), v(x[k].diferenca), v(x[k].variacaoPct)]);
       }
       linhas.push([`${NOME_ETAPA[e]} — % dentro da meta`, v(x.pctDentro.atual), v(x.pctDentro.anterior), v(x.pctDentro.diferencaPP), "p.p."]);
@@ -108,11 +108,11 @@ const SECAO = {
   evolucao(ctx) {
     const d = ctx.dashboard;
     const cab = ["Data", "Sem cobertura", "Pedidos", "Concluídos", "Cancelados", "Atrasados", "% atrasados"];
-    for (const e of d.etapas) cab.push(`${NOME_ETAPA[e]} média`, `${NOME_ETAPA[e]} mediana`, `${NOME_ETAPA[e]} P90`, `${NOME_ETAPA[e]} % dentro`);
+    for (const e of d.etapas) cab.push(`${NOME_ETAPA[e]} média`, `${NOME_ETAPA[e]} medições`, `${NOME_ETAPA[e]} % dentro`);
     const linhas = [...cabecalho(ctx), cab];
     for (const x of d.evolucaoDiaria) {
       const l = [dataBr(x.data), x.semCobertura ? "sim" : "", x.pedidos, x.concluidos, x.cancelados, x.pedidosAtrasados, v(x.pctPedidosAtrasados)];
-      for (const e of d.etapas) { const y = x.porEtapa[e]; l.push(v(y.media), v(y.mediana), v(y.p90), v(y.pctDentro)); }
+      for (const e of d.etapas) { const y = x.porEtapa[e]; l.push(v(y.media), y.amostras, v(y.pctDentro)); }
       linhas.push(l);
     }
     return aba(linhas);
@@ -190,3 +190,86 @@ export function gerarExcel(ctx) {
 
 /** `Checklist-Operacional_2026-10-01_a_2026-10-24.xlsx` (só caracteres seguros no header). */
 export const nomeArquivoExcel = (d) => `Checklist-Operacional_${d.periodo.inicio}_a_${d.periodo.fim}.xlsx`;
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Fechamento operacional diário (Dashboard 2.0) — Excel estruturado e rastreável de UMA versão armazenada.
+// Lê SÓ o registro de operacional_fechamentos (os mesmos números da tela, do PDF e da prévia de WhatsApp). Nada é recalculado.
+// ---------------------------------------------------------------------------------------------------------------------------
+
+const ROTULO_STATUS_FECHAMENTO = { PRELIMINAR: "Preliminar", CONSOLIDADO: "Consolidado", REVISADO: "Revisado", INCOMPLETO: "Incompleto" };
+
+function cabecalhoFechamento(f, unidadeNome) {
+  return [
+    ["Crescer com Delivery — Fechamento operacional diário"],
+    ["Unidade", unidadeNome ?? ""],
+    ["Competência", dataBr(f.competencia)],
+    ["Versão", f.versao],
+    ["Situação", ROTULO_STATUS_FECHAMENTO[f.status] ?? f.status],
+    ["Gerado em", horaLocal(f.gerado_em, f.fuso)],
+    ["Fuso", `${f.fuso} (${f.fuso_origem})`],
+    [],
+  ];
+}
+
+const TEMPO = (t) => [t.nome, t.estado === "calculado" ? t.media : "", t.amostras, v(t.meta), v(t.desvioDaMetaMin), v(t.pctDentro), t.atrasos, t.inicio, t.fim, t.populacao, t.estado === "calculado" ? "" : (t.motivo ?? "")];
+
+/** @param {{fechamento: object, unidadeNome?: string|null}} p @returns {Buffer} */
+export function gerarExcelFechamento({ fechamento: f, unidadeNome = null }) {
+  const i = f.indicadores;
+  const cab = cabecalhoFechamento(f, unidadeNome);
+  const wb = XLSX.utils.book_new();
+  const p = i.pedidos;
+  XLSX.utils.book_append_sheet(wb, aba([...cab, ["Indicador", "Valor", "Competência / base"],
+    ["Pedidos recebidos", p.recebidos, "entrada (chegada no dia)"],
+    ["Pedidos concluídos no dia", p.concluidosNoDia, "conclusão no dia"],
+    ["Pedidos cancelados no dia", p.canceladosNoDia, "cancelamento no dia"],
+    ["Recebidos no dia → concluídos", p.coorte.concluidos, "coorte de entrada"],
+    ["Recebidos no dia → cancelados", p.coorte.cancelados, "coorte de entrada"],
+    ["Recebidos no dia → em aberto", p.coorte.emAberto, "coorte de entrada"],
+    ["Tempo médio de preparo (min)", v(i.preparo.media), `${i.preparo.amostras} pedidos`],
+    ["Tempo médio de entrega (min)", v(i.entrega.media), `${i.entrega.amostras} pedidos`],
+    ["Tempo médio de vida (min)", v(i.vida.media), `${i.vida.amostras} pedidos`],
+    ["Pedidos atrasados", i.atrasos.pedidosAtrasados, `de ${i.atrasos.pedidosAvaliados} avaliados`],
+    ["Pedidos atrasados (%)", v(i.atrasos.pct), "pedidos avaliados contra meta"],
+    ["Etapa com mais atrasos", i.atrasos.principalEtapa?.nome ?? "", "não atribui responsável"],
+    ["Cancelamentos (motivo mais frequente)", i.cancelamentos.motivos[0]?.descricao ?? i.cancelamentos.motivos[0]?.codigo ?? "", "cancelamento no dia"],
+    ["Horário de maior movimento", i.movimento.picos[0] ? `${String(i.movimento.picos[0].hora).padStart(2, "0")}h` : "", "entrada"],
+    ["Disputas abertas no dia", i.disputas.abertasNoDia, "abertura"],
+    ["Disputas expiradas no dia", i.disputas.expiradasNoDia, "desfecho"],
+    ["Descontos pagos pela loja (R$)", i.descontos.loja, i.descontos.natureza],
+    ["Clientes novos (pedidos)", i.clientes.novos, i.clientes.definicao],
+    ["Clientes recorrentes (pedidos)", i.clientes.recorrentes, i.clientes.unidadeDeContagem],
+    ["Diagnóstico", f.diagnostico?.texto?.diagnostico ?? f.diagnostico?.principal?.fato ?? "", f.diagnostico?.texto?.origem ?? ""],
+    ["Ação sugerida", f.diagnostico?.texto?.acao ?? f.diagnostico?.principal?.acao ?? "", ""],
+  ], [36, 22, 60]), "Resumo");
+  XLSX.utils.book_append_sheet(wb, aba([...cab, ["Etapa", "Média (min)", "Medições", "Meta (min)", "Média − meta (min)", "% dentro da meta", "Atrasos", "Início", "Fim", "População", "Sem dado"],
+    TEMPO(i.preparo), TEMPO(i.entrega), TEMPO(i.vida)], [14, 12, 10, 10, 16, 14, 9, 22, 30, 60, 30]), "Tempos");
+  const c = i.cancelamentos;
+  XLSX.utils.book_append_sheet(wb, aba([...cab, ["Cancelamentos no dia", c.total], ["Taxa na coorte de entrada (%)", v(c.taxaDaCoortePct)], ["Sem motivo informado", c.semMotivo], [],
+    ["Código", "Descrição oficial", "Quantidade", "%"], ...c.motivos.map((m) => [m.codigo ?? "", m.descricao ?? "", m.quantidade, v(m.pct)]),
+    [], ["Origem", "Quantidade"], ...c.porOrigem.map((o) => [o.origem, o.quantidade]),
+    [], ["Estágio", "Quantidade"], ...c.porEstagio.map((o) => [o.estagio, o.quantidade]), [], [c.observacao]], [16, 50, 12, 8]), "Cancelamentos");
+  XLSX.utils.book_append_sheet(wb, aba([...cab, ["Hora", "Pedidos", "Atrasados"], ...i.movimento.picos.map((h) => [`${String(h.hora).padStart(2, "0")}h`, h.pedidos, h.atrasados])], [8, 10, 10]), "Movimento");
+  const ds = i.disputas;
+  XLSX.utils.book_append_sheet(wb, aba([...cab, ["Abertas no dia", ds.abertasNoDia], ["Expiradas no dia", ds.expiradasNoDia], ["Aceitas no dia", ds.aceitasNoDia],
+    ["Recusadas no dia", ds.recusadasNoDia], ["Respondidas com alternativa no dia", ds.alternativaNoDia], ["Aguardando resposta (na geração)", ds.pendentesAgora], [],
+    ["Tipo", "Abertas"], ...ds.porTipo.map((t) => [t.tipo, t.quantidade]), [], [ds.observacao]], [36, 12]), "Disputas");
+  const de = i.descontos; const cl = i.clientes;
+  XLSX.utils.book_append_sheet(wb, aba([...cab, ["Base", de.base], ["Pedidos na base", de.pedidosNaBase], ["Sem detalhes", de.pedidosSemDetalhes],
+    ["Descontos pagos pela loja (R$)", de.loja], ["Pedidos com desconto da loja", de.pedidosComDescontoLoja], ["Desconto da loja sobre itens (%)", v(de.pctLojaSobreItens)],
+    ["Financiado pelo iFood (R$)", de.ifood], ["Financiado pela rede (R$)", de.rede], ["Financiado por terceiros (R$)", de.externo], ["Natureza", de.natureza], [],
+    ["Clientes — definição", cl.definicao], ["Contagem", cl.unidadeDeContagem], ["Novos", cl.novos], ["Recorrentes", cl.recorrentes], ["Sem informação", cl.semInformacao]], [36, 70]), "Descontos e clientes");
+  const dg = f.diagnostico ?? {};
+  XLSX.utils.book_append_sheet(wb, aba([...cab, ["Redação", dg.texto?.origem ?? "", dg.texto?.motivoFallback ?? ""], [],
+    ["Severidade", "Achado", "Fato", "Referência", "Amostra", "Confiança", "Ação"],
+    ...(dg.achados ?? []).map((a) => [a.severidade, a.titulo, a.fato, a.referencia, v(a.amostra), a.confianca, a.acao ?? ""]),
+    [], ["Não avaliadas"], ...(dg.naoAvaliadas ?? []).map((n) => [n])], [12, 34, 70, 40, 9, 10, 60]), "Diagnóstico");
+  XLSX.utils.book_append_sheet(wb, aba([...cab, ["Identificador da execução", f.execucao_id], ["Origem", f.origem], ["Regra", f.regra_versao],
+    ["Motivo", f.motivo ?? ""], ["Substitui a versão", f.substitui_id ?? ""], ["Hash do conteúdo", f.hash_conteudo], ["Janela", `${f.fonte?.janela?.inicio ?? ""} a ${f.fonte?.janela?.fim ?? ""}`],
+    ["Motivo da situação", f.fonte?.statusMotivo ?? ""], [], ["Pendências"], ...(f.pendencias ?? []).map((p2) => [p2.codigo, p2.mensagem]), [], ["Cobertura"],
+    ...Object.entries(f.cobertura ?? {}).map(([k, x]) => [k, typeof x === "object" ? JSON.stringify(x) : x])], [30, 90]), "Rastreabilidade");
+  wb.Props = { Title: "Fechamento operacional diário", Author: "Crescer com Delivery" };
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+}
+
+export const nomeArquivoFechamento = (f) => `Fechamento-Operacional_${f.competencia}_v${f.versao}.xlsx`;

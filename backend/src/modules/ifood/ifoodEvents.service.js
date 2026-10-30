@@ -124,6 +124,21 @@ export function extrasDeCancelamentoRecusado(pedido, { createdAt }) {
   return extras;
 }
 
+/**
+ * ORDER_PATCHED (OPA): o pedido mudou depois que buscamos os detalhes (achado D-8 da auditoria). Reabre a busca do Order
+ * Details SÓ deste pedido: `details_status` volta a PENDENTE com tentativas zeradas, e o passo de detalhes que já existe
+ * (ifoodOrder.service#processarDetalhesPendentes, ≤10 por ciclo, respeita a retenção de 7 dias) rebusca de forma idempotente
+ * por hash. Não muda estado oficial, consumo nem ACK. Detalhes já lidos DEPOIS desta alteração = nada a fazer.
+ * Banco sem a migration 102 (sem `details_status`) = nada a fazer.
+ */
+export function extrasDePedidoAlterado(pedido, { createdAt }) {
+  if (pedido.details_status !== "OK") return {};
+  const lidoEm = pedido.details_atualizado_em ? Date.parse(pedido.details_atualizado_em) : NaN;
+  const alteradoEm = createdAt ? Date.parse(createdAt) : NaN;
+  if (Number.isFinite(lidoEm) && Number.isFinite(alteradoEm) && lidoEm >= alteradoEm) return {};
+  return { details_status: "PENDENTE", details_tentativas: 0, details_ultima_tentativa_em: null };
+}
+
 export async function aplicarEfeito({ evento, tenant, repo, agora = () => new Date(), log = ifoodLog, recebidoEm = null }) {
   const cls = evento.classificacao ?? classificarCodigo(evento.code);
   if (!cls.conhecido) return { status: "DESCONHECIDO" };
@@ -148,6 +163,12 @@ export async function aplicarEfeito({ evento, tenant, repo, agora = () => new Da
   if (evento.code === "CARF") {                                 // CANCELLATION_REQUEST_FAILED: falha do cancelamento pedido
     const extras = extrasDeCancelamentoRecusado(pedido0, { createdAt: evento.createdAt });
     await repo.registrarEventoNoPedido({ pedido: pedido0, eventoEm: evento.createdAt, extras });
+    return { status: Object.keys(extras).length ? "PROCESSADO" : "IGNORADO" };
+  }
+  if (evento.code === "OPA") {                                  // ORDER_PATCHED: detalhes do pedido precisam ser lidos de novo
+    const extras = extrasDePedidoAlterado(pedido0, { createdAt: evento.createdAt });
+    await repo.registrarEventoNoPedido({ pedido: pedido0, eventoEm: evento.createdAt, extras });
+    if (Object.keys(extras).length) log("info", "events.pedido_alterado_detalhes_reabertos", { orderId: evento.orderId, eventId: evento.eventId });
     return { status: Object.keys(extras).length ? "PROCESSADO" : "IGNORADO" };
   }
   if (!cls.status) {                                            // conhecido, sem efeito de ESTADO (informativo)

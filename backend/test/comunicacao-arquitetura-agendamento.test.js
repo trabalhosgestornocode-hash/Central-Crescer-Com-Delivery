@@ -109,7 +109,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       "124_ifood_conexao_finalidade.sql", "124_rollback.sql", "125_ifood_conexao_remove_indice_unidade.sql", "125_rollback.sql",
       "126_financeiro_autoconcessao_superadmin.sql", "126_rollback.sql",
       // 127 = metas persistidas do Checklist Operacional (tabelas novas + função de escrita); 128 = índice por período em ifood_pedidos.
-      "127_checklist_metas.sql", "127_rollback.sql", "128_ifood_pedidos_indice_periodo.sql", "128_rollback.sql"];
+      "127_checklist_metas.sql", "127_rollback.sql", "128_ifood_pedidos_indice_periodo.sql", "128_rollback.sql",
+      // 129 = privilégios mínimos nas tabelas iFood; 130 = camada operacional, fechamento diário e simulações de WhatsApp (Dashboard 2.0).
+      "129_ifood_privilegios_minimos.sql", "129_rollback.sql", "130_operacional_camada_fechamento.sql", "130_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

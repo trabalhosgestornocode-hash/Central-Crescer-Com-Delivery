@@ -431,7 +431,7 @@ describe("análises — determinísticas, com evidência, sem causa inventada", 
     const a = gerarAnalises(ind.montarDashboard({ pedidos, periodo: sem, linhaDoTempo: lt, etapa: "preparo" }));
     const piora = a.itens.find((x) => x.tipo === "piora_preparo");
     assert.ok(piora, a.itens.map((x) => x.tipo).join(","));
-    assert.match(piora.constatacao, /mediana de 8 para 14 min/);
+    assert.match(piora.constatacao, /média de 8 para 14 min/);   // Dashboard 2.0: a comparação usa o tempo MÉDIO exibido
   });
 });
 

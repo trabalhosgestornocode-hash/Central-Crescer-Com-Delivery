@@ -30,3 +30,17 @@ checklistOperacionalRouter.get("/metas/historico", gerenciarMetas, controller.hi
 // Dashboard Operacional (histórico) e o relatório em Excel do MESMO cálculo.
 checklistOperacionalRouter.get("/dashboard", visualizar, controller.dashboard);
 checklistOperacionalRouter.get("/dashboard/exportar.xlsx", visualizar, controller.exportarExcel);
+
+// Dashboard Operacional 2.0 — Pedidos e Ficha 360° (leitura da camada analítica, sem dado pessoal).
+checklistOperacionalRouter.get("/pedidos", visualizar, controller.pedidos);
+checklistOperacionalRouter.get("/pedidos/:chave", visualizar, controller.fichaPedido);
+
+// Fechamento operacional diário: leitura para quem vê o Dashboard; gerar/revisar só para quem gerencia (mesma régua das metas).
+checklistOperacionalRouter.get("/fechamentos", visualizar, controller.listarFechamentos);
+checklistOperacionalRouter.post("/fechamentos", gerenciarMetas, controller.gerarFechamento);
+checklistOperacionalRouter.get("/fechamentos/:id", visualizar, controller.obterFechamento);
+checklistOperacionalRouter.get("/fechamentos/:id/exportar.xlsx", visualizar, controller.exportarFechamentoExcel);
+
+// WhatsApp do fechamento — SOMENTE prévia e simulação (transporte noop). Nenhuma rota daqui envia mensagem real.
+checklistOperacionalRouter.get("/fechamentos/:id/whatsapp", visualizar, controller.previaWhatsapp);
+checklistOperacionalRouter.post("/fechamentos/:id/whatsapp/simular", gerenciarMetas, controller.simularWhatsapp);

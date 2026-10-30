@@ -63,13 +63,13 @@ const figura = (id, titulo, sub, corpo) => `
 const vazio = (id, titulo, motivo) => figura(id, titulo, null, `<p class="ckd-grafico-vazio">${escapeHtml(motivo)}</p>`);
 
 /**
- * Linhas por dia (mediana de cada etapa). Dia sem medição = lacuna. Com UMA etapa, a meta vigente no fim do período
+ * Linhas por dia (tempo MÉDIO de cada etapa — Dashboard 2.0: mediana e P90 saíram da interface). Dia sem medição = lacuna. Com UMA etapa, a meta vigente no fim do período
  * aparece como referência tracejada (rotulada).
  */
-export function graficoEvolucao(dashboard, { metrica = "mediana" } = {}) {
+export function graficoEvolucao(dashboard, { metrica = "media" } = {}) {
   const dias = dashboard.evolucaoDiaria ?? [];
   const etapas = dashboard.etapas ?? [];
-  const titulo = `Evolução diária — tempo ${metrica === "media" ? "médio" : "mediano"}`;
+  const titulo = "Evolução diária — tempo médio";
   const valores = etapas.flatMap((e) => dias.map((d) => d.porEtapa[e]?.[metrica]).filter((v) => v != null));
   if (dias.length < 2 || !valores.length) return vazio("evolucao", titulo, dias.length < 2 ? "A evolução diária aparece em períodos de 2 dias ou mais." : "Sem medições no período.");
   const metaRef = etapas.length === 1 ? dashboard.metasAplicaveis?.versoes?.at(-1)?.valores?.[etapas[0]]?.meta ?? null : null;

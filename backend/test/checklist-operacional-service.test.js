@@ -453,7 +453,11 @@ describe("HTTP — permissões do Checklist", async () => {
     // Checklist 2.0: query = só os filtros conhecidos; corpo = só as metas (o service valida e ignora qualquer id).
     // Nenhum id de unidade/empresa vem de query, corpo, parâmetros ou cabeçalhos.
     assert.doesNotMatch(codigo, /req\.(query|body)\??\.?\[?["']?(unidade|organizacao|org|empresa|tenant)/i);
-    assert.doesNotMatch(codigo, /req\.(params|headers)|req\.header\(/);
+    assert.doesNotMatch(codigo, /req\.headers|req\.header\(/);
+    // Dashboard 2.0: os ÚNICOS parâmetros de rota são a chave OPACA do pedido e o id do fechamento — nenhum identifica tenant
+    // (o service sempre filtra pelo req.tenant; pedido/fechamento de outra unidade = 404).
+    const params = [...new Set([...codigo.matchAll(/req\.params\??\.?(\w+)/g)].map((m) => m[1]))].sort();
+    assert.deepEqual(params, ["chave", "id"]);
     assert.match(codigo, /\["periodo", "inicio", "fim", "etapa"\]/);
   });
 
@@ -468,9 +472,14 @@ describe("HTTP — permissões do Checklist", async () => {
     }
   });
 
-  test("rotas do Checklist 2.0: a única escrita é PUT /metas (pedidos continuam só leitura)", () => {
+  test("rotas do Checklist 2.0: escritas só em metas, fechamento e SIMULAÇÃO de WhatsApp (pedidos continuam só leitura)", () => {
     const rotas = checklistOperacionalRouter.stack.filter((l) => l.route).flatMap((l) => Object.keys(l.route.methods).map((m) => `${m.toUpperCase()} ${l.route.path}`));
-    assert.deepEqual(rotas, ["GET /resumo", "GET /metas", "PUT /metas", "GET /metas/historico", "GET /dashboard", "GET /dashboard/exportar.xlsx"]);
+    assert.deepEqual(rotas, ["GET /resumo", "GET /metas", "PUT /metas", "GET /metas/historico", "GET /dashboard", "GET /dashboard/exportar.xlsx",
+      "GET /pedidos", "GET /pedidos/:chave", "GET /fechamentos", "POST /fechamentos", "GET /fechamentos/:id", "GET /fechamentos/:id/exportar.xlsx",
+      "GET /fechamentos/:id/whatsapp", "POST /fechamentos/:id/whatsapp/simular"]);
+    const escritas = rotas.filter((r) => !r.startsWith("GET "));
+    assert.deepEqual(escritas, ["PUT /metas", "POST /fechamentos", "POST /fechamentos/:id/whatsapp/simular"]);
+    assert.equal(escritas.some((r) => r.includes("/pedidos")), false, "nenhuma escrita em pedidos");
   });
 
   test("routes.js monta o Checklist depois do gate de contexto, com o módulo próprio (e o iFood só na transição)", () => {
