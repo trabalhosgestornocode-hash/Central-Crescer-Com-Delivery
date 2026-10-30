@@ -189,13 +189,22 @@ Itens que faltam e exigem decisão:
   - repositório sempre filtra organização + unidade;
   - trava dupla no service (uma linha de outro tenant vinda da fonte é recusada, e o fechamento vira INCOMPLETO);
   - chave e id de outra unidade = 404.
-- **Achado preexistente (fora do escopo, reproduzido):** com a 127, `remapear_organizacao_em_tabelas_de_unidade` falha como `service_role` (`permission denied for table checklist_metas`). Transferir ou promover unidade quebra na `main`, e o trigger da 127 também proíbe mudar a organização. Correção proposta: migration que conceda `UPDATE (organizacao_id)` e ajuste os triggers de `checklist_metas` e do histórico para aceitar só essa mudança, como foi feito na 130.
+- **Defeito preexistente corrigido pela 131** (`131_checklist_metas_transferencia_unidade.sql`, sem alterar a 127):
+  - **Causa:** com a 127, `remapear_organizacao_em_tabelas_de_unidade` (054, SECURITY INVOKER) enxerga `checklist_metas` e o histórico em `information_schema` (o `service_role` tem SELECT), mas não tem UPDATE. Resultado: `permission denied for table checklist_metas`, e transferir ou promover **qualquer** unidade é desfeito.
+  - **Correção mínima:** UPDATE **só** na coluna `organizacao_id` das duas tabelas para o `service_role`. Nas metas, o trigger aceita trocar a organização apenas para a organização **atual** da unidade, e a unidade nunca muda. O histórico continua somente inclusão; a única exceção é trocar `organizacao_id` para a organização atual da unidade, com todas as outras colunas idênticas (comparação `to_jsonb(new) - 'organizacao_id' = to_jsonb(old) - 'organizacao_id'`).
+  - **Permanece igual:** `anon`/`authenticated` sem nenhum privilégio; DELETE e INSERT diretos negados; escrita de metas só por `checklist_metas_salvar`.
+  - **Ordem efetiva:** exige a 127 (recusa explícita se ela faltar). Se a 127 for reaplicada depois, reaplique a 131. Rollback: `131_rollback.sql`, que devolve o comportamento da 127, inclusive o defeito.
+  - **Provas** em Postgres descartável com a cadeia real da `main`:
+    - `transferencia_checklist_metas.sh`: 38/38, com o defeito reproduzido na `main` e o controle negativo do rollback;
+    - `transferencia_unidades.sh` com `REF_BASE=HEAD`: 53 verificações, 0 falhas (na `main`: 10 falhas).
+  - **Promoção:** `promover_unidade_para_empresa` ainda falha por **outro** defeito preexistente (42P10 `ON CONFLICT` desde a 063), cuja correção é de outra frente (Financeiro, doc 20) e não foi duplicada aqui.
 
 ## 12. Implantação futura (ordem; cada passo pede autorização)
 
 1. Revisão do PR (sem merge automático).
 2. Migration **129** em produção, com pré-voo (grants atuais) e verificação (consulta no rodapé da migration). Rollback disponível.
 3. Migration **130** (aditiva). Rollback apaga fechamentos e simulações, então exportar antes.
+3a. Migration **131**, sempre depois da 127 (confirmar no pré-voo se a 127 já está aplicada no ambiente). É independente da 129/130 e pode ir antes delas: corrige transferir/promover unidade.
 4. Merge e deploy do backend e do frontend (o CSS subiu para `?v=3`).
 5. Observar: lista de pedidos e ficha (a primeira abertura projeta a janela), gerar fechamento manual de um dia já encerrado e conferir com o Dashboard "ontem".
 6. Só depois, e com decisão: agendamento em produção (exige integrar o agendador ao worker, com as travas trocadas por configuração aprovada), IA no diagnóstico e envio real de WhatsApp (homologação própria).

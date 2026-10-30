@@ -2,7 +2,7 @@
 
 > Branch `feat/dashboard-operacional-2`, worktree `crescer-dashboard-operacional-2`, base `origin/main` `a035750`.
 > Ambiente: testes com variáveis fictícias (sem `.env`, sem rede); Postgres 17 **local e descartável** (porta 55431, cluster no scratchpad); Chrome local via Playwright 1.49.1.
-> **Nenhuma operação de produção:** nenhuma migration em produção, nenhum deploy, nenhum merge, nenhum push, nenhuma consulta ao banco de produção nesta missão, nenhuma mensagem enviada.
+> **Nenhuma operação de produção:** nenhuma migration em produção, nenhum deploy, nenhum merge, nenhum push, nenhuma mensagem enviada. Na homologação final, 129 e 130 foram aplicadas **somente** no Supabase de **teste** (`wiqqsxnysbzhcrzrrean`), depois do pré-voo; ver `04-homologacao-supabase-teste.md`.
 
 ## 1. Resultados dos testes
 
@@ -13,34 +13,82 @@
 | `operacional-diagnostico-whatsapp` | **17/17** | regras e amostra mínima, IA desligada, número inventado/causa/ação fora da biblioteca → fallback, cota, formato pt-BR, mensagem, validação de PII, transporte só `noop`, **teste arquitetural** (nenhum import de provider/gateway/Baileys) |
 | `operacional-integracao` | **9/9** | ORDER_PATCHED reabre detalhes **sem mudar estado oficial nem ACK**; releitura idempotente; agendador travado sem as duas variáveis; ciclo idempotente; permissões HTTP; perfil de exibição só com `/resumo` |
 | `operacional-camada-pg` (Postgres real) | **9/9** | 129 e 130: privilégios, RLS, rollback e reaplicação, RPC, imutabilidade, **concorrência real com duas sessões**, CHECK do transporte, compatibilidade com a transferência de unidade |
-| Frontend (`node --test test/*.test.js`) | **1601 aprovados, 0 falhas, 11 pulados** | inclui `checklistOperacionalDashboard2.test.js` (13) e o ajuste de `checklistOperacional2.test.js`. Os pulados são navegador de outros módulos sem variável de Playwright |
-| Navegador (`*.browser.test.js`, Chrome) | **84 aprovados, 0 falhas, 11 pulados** | Checklist (modos, universal), perfil de exibição, renovação, iFood. **O Checklist ao vivo continua funcionando** |
+| Frontend (`node --test test/*.test.js`, sem Playwright) | **1618 testes: 1601 aprovados, 0 falhas, 17 pulados** | os pulados são os testes de navegador, que exigem variável de Playwright (6 deles são do teste novo) |
+| Navegador (`*.browser.test.js`, Chrome real, um arquivo por vez) | **118 testes: 117 aprovados, 1 falha preexistente** | ver §1.2 |
 | Regressão do backend (Checklist + iFood + Agente) | **1949/1952 → 3 corrigidas** | as 3 falhas eram efeito esperado: a análise passou a comparar média; o teste estático de tenant e o de rotas precisavam conhecer as rotas novas. Atualizados **sem afrouxar** (parâmetros aceitos só `chave` e `id`; escritas listadas explicitamente; `/pedidos` só leitura). Depois: 76/76 nos arquivos afetados |
 | Regressão completa do backend | ver §1.1 | |
-| Travas de numeração de migrations | **43/43** | 129 e 130 registradas |
+| Migration **131** em Postgres descartável (cadeia real da `main`) | **38/38** (`transferencia_checklist_metas.sh`) e **53 verificações, 0 falhas** (`transferencia_unidades.sh`, `REF_BASE=HEAD`; na `main`: 10 falhas) | defeito reproduzido na `main`, corrigido com a 131, compatível com 129/130, isolamento e privilégios mínimos, controle negativo pelo rollback, reaplicação e recusa sem a 127 |
+| Supabase de **teste** (PostgREST + RLS) | **40/40** + `authenticated` **14/14 negados** + transferência real | ver `04-homologacao-supabase-teste.md` |
+| Travas de numeração de migrations | **43/43** | 129, 130 e 131 registradas |
 
-### 1.1 Regressão completa do backend
+### 1.1 Regressão completa do backend: matriz exata
 
-`node --experimental-vm-modules --test test/*.test.js` com ambiente fictício: **5655 testes, 5614 aprovados, 16 falhas, 25 pulados.**
+Comando idêntico nas duas árvores, rodadas **em sequência** (nunca em paralelo), com o mesmo `node_modules` e o `gateway-whatsapp/node_modules` disponível nas duas (junções temporárias):
 
-Para separar o que é desta branch, os arquivos com falha foram rodados **lado a lado na `main` pura** (`a035750`, worktree da auditoria) e nesta branch:
+```
+env -u DATABASE_URL -u OPERACIONAL_PG_URL SUPABASE_URL=http://127.0.0.1:9 SUPABASE_SERVICE_ROLE_KEY=<fictícia> SUPABASE_ANON_KEY=<fictícia> \
+  node --experimental-vm-modules --test --test-timeout=300000 --test-reporter=tap test/*.test.js
+```
 
-| Falha | `main` | esta branch | Conclusão |
-|---|---|---|---|
-| `central-conversas` (lista, não lidas, foto, cursor) | falha | falha | preexistente |
-| `performance-calc` "distribuições recompõem mês…" | falha | falha | preexistente (já registrada na memória do projeto) |
-| `sessao-perfil` "selecionarPerfil (Fase C)" | falha | falha | preexistente (precisa de Supabase) |
-| `whatsapp-retry-allowlist` e `whatsapp-retry-cache-routes` (arquivo inteiro) | falha | falha | ambiente: exigem `gateway-whatsapp/node_modules` |
-| "visão geral" e "destinatários" (Central) | — | passam isoladamente | intermitentes sob carga na rodada completa; **passam** quando rodados sozinhos nesta branch |
+| | esta branch | `main` pura (`a035750`) |
+|---|---|---|
+| Arquivos de teste descobertos | 341 | 336 |
+| Testes descobertos | 5681 | 5612 |
+| Executados (descobertos − pulados) | 5656 | 5587 |
+| Aprovados | **5642** | 5573 |
+| Falhas | **14** | 14 |
+| Pulados (SKIP) | 25 | 25 |
+| Não executados / cancelados | 0 | 0 |
+| Timeout | 0 | 0 |
+| Duração | 162 s | 162 s |
+| **Falhas preexistentes** (iguais nas duas) | 14 | 14 |
+| **Falhas introduzidas pela branch** | **0** | — |
 
-Comparação dos arquivos suspeitos: **138 testes, 125 aprovados, 13 falhas — idênticos nas duas árvores.** Nenhuma falha é causada por esta entrega.
+Os 5 arquivos e os 69 testes a mais são as suítes `operacional-*`, e todos passam. A suíte de Postgres real (`operacional-camada-pg`) aparece como pulada nessa rodada porque exige `OPERACIONAL_PG_URL`. Ela foi rodada à parte num banco descartável novo: **9/9**.
+
+**As 14 falhas preexistentes, com a causa investigada:**
+
+| Falhas | Causa comprovada |
+|---|---|
+| 11 da Central de Comunicação: `central-conversas` (lista, não lidas, foto, cursor) e `central-visao-historico` ("visão geral" ×2, "destinatários" ×1) | **Bomba-relógio no helper de teste, não carga.** Os testes fixam `AGORA = 24/09/2026`, mas `test/helpers/central-fake-db.js` corta a retenção de 30 dias com o relógio real (`Date.now()`). Desde 24/10 os dados sintéticos caem fora da janela. **Prova:** fixando só `Date.now()` em 24/09/2026 (`node --import`), os dois arquivos passam **48/48 nas duas árvores**; sem isso, 37/48 nas duas, inclusive rodando **sozinhos**. A observação anterior ("passam isoladamente") está **corrigida** por esta: a falha é determinística. |
+| `performance-calc` "distribuições recompõem mês…" | Asserção (`10 !== null`) idêntica na `main`. Já registrada como falha conhecida. |
+| `sessao-perfil` "selecionarPerfil (Fase C)" ×2 | `fetch failed`: precisa de um Supabase alcançável, que este ambiente fictício bloqueia de propósito. |
+
+Na rodada anterior, `whatsapp-retry-allowlist` e `whatsapp-retry-cache-routes` falhavam só por falta de `gateway-whatsapp/node_modules`; com a dependência disponível nas duas árvores, **passam nas duas**.
+
+**Correção proposta para a Central (fora do escopo, outra frente):** o helper deve usar o relógio injetado (`deps.agora`/`AGORA`) no corte de retenção, em vez de `Date.now()`. Não foi alterado aqui.
+
+### 1.2 Navegador (Chrome real, Playwright 1.49.1, um arquivo por vez)
+
+| Arquivo | Resultado |
+|---|---|
+| `checklistOperacionalDashboard2.browser.test.js` (**novo**: abas pelo teclado, Ficha 360°, fechamento, Excel/PDF, WhatsApp simulado, perfil só de leitura, celular 390 px) | **6/6** |
+| `checklistOperacionalModos` (Checklist ao vivo e modos) | 40/40 |
+| `checklistOperacionalUniversal` | 13/13 |
+| `financeiro` | 17/17 |
+| `ifood-loja-adicional`, `ifood-multi-conexao`, `ifoodOrderOnly` | 7/7, 3/3, 6/6 |
+| `parserFoodDelivery` | **9/10**. A falha "dia único… drill-down" (`0 !== 2` na linha 104) é **idêntica na `main` pura**, e esta branch não toca o Parser. Preexistente. |
+| `perfilExibicao`, `renovacaoExibicao` | 11/11, 4/4 |
+| `performance` | 1/1 |
+
+O teste novo cobre:
+- as abas pelo teclado (setas e End);
+- a ausência de Mediana/P90;
+- a busca e a Ficha 360° sem nenhum dado pessoal plantado;
+- os 11 indicadores;
+- os mesmos números na tela, na prévia e no Excel baixado de verdade;
+- o PDF pela impressão do navegador;
+- o "copiar", que devolve exatamente o texto armazenado;
+- a simulação, que grava **uma** vez com `transporte=noop` (o teste também prova que nenhuma rota de comunicação ou gateway foi chamada);
+- o perfil sem `configuracoes.gerenciar`, que não gera nem simula;
+- o celular de 390 px, sem rolagem horizontal.
 
 ### Testes NÃO executados (não contam como PASS)
 
-- Suítes `-pg` antigas de outros módulos (exigem cada uma o seu banco descartável).
-- Supabase real (PostgREST + RLS do projeto de teste): a camada nova foi validada em SQL real e com o repositório simulado, **não** pelo PostgREST.
-- Navegador dos módulos Financeiro, Parser e Performance (variáveis próprias, fora do escopo).
-- IA real (Anthropic): a camada foi testada com provider falso; nenhuma chamada paga foi feita.
+- Suítes `-pg` antigas de outros módulos (cada uma exige o seu banco descartável).
+- Migration 131 no Supabase de teste: aquele banco não tem a 127, e a 131 se recusa a rodar sem ela. Provada no Postgres descartável com a cadeia real da `main`.
+- IA real (Anthropic): a camada foi testada com provider falso; nenhuma chamada paga.
+- Comparação com um dia real encerrado (exige leitura de produção).
 
 ## 2. Defeitos encontrados e corrigidos durante a homologação
 
@@ -48,6 +96,8 @@ Comparação dos arquivos suspeitos: **138 testes, 125 aprovados, 13 falhas — 
 2. **Dependência de relógio:** a detecção de "projeção desatualizada" comparava o relógio da aplicação com o do banco. Agora compara banco com banco (`pedidoAtualizadoEm` e último `received_at` vistos).
 3. **Reentrega reprojetava sempre:** o último recebimento passou a considerar todas as linhas recebidas.
 4. **Tela:** numeração dos cartões 2–4, desvio da meta em palavras ("4 min abaixo"), plural de "expirada".
+5. **Foco do teclado nas abas (achado pelo teste de navegador novo):** ao trocar de aba pelas setas, a carga assíncrona redesenhava a tela e devolvia o foco à **primeira** aba, porque o foco era restaurado por `data-acao` e todas as abas compartilham `data-acao="aba"`. Agora a restauração usa o `id` primeiro, depois `name` e por fim `data-acao`. O teste falhava antes da correção (controle negativo) e passa depois.
+6. **Transferir/promover unidade (defeito preexistente da 127):** corrigido pela migration **131**, sem alterar a 127 (`01-arquitetura.md` §11).
 
 ## 3. Exemplo de fechamento com dados sintéticos
 
@@ -135,27 +185,39 @@ As capturas e os geradores ficam fora do repositório (scratchpad `qa-dashboard2
 
 | Risco | Situação |
 |---|---|
-| Transferir ou promover unidade quebra na `main` por causa da 127 (achado preexistente reproduzido) | Fora do escopo; correção proposta em `01-arquitetura.md` §11 |
+| Transferir ou promover unidade quebra na `main` por causa da 127 | **Corrigido pela 131** (provado em PG descartável). Precisa ser aplicada depois da 127 em cada ambiente. |
+| Promover unidade também falha por **outro** defeito preexistente (42P10 `ON CONFLICT`, desde a 063) | Correção na frente do Financeiro (doc 20); não duplicada aqui |
+| Testes da Central falham por bomba-relógio no helper (`Date.now()` × `AGORA` fixo) | Preexistente, outra frente; correção proposta em §1.1 |
 | Fuso por unidade inexistente | Fuso da plataforma, gravado em cada versão |
 | Dia sem nenhum evento vira INCOMPLETO (não há horário de funcionamento para saber se a loja estava fechada) | Comportamento honesto; resolver com horário de funcionamento por unidade |
 | Os 14 OPA antigos ficam com detalhes desatualizados (retenção de 7 dias do iFood) | Marcados na projeção e na ficha |
 | Primeira abertura da lista/ficha num período longo projeta muitos pedidos (lê o JSON uma vez) | Limitada a 3.000 pedidos por janela e a 92 dias; depois disso é incremental |
 | Valores são operacionais | Rotulados em toda tela, Excel, PDF e mensagem |
 | Baileys não oficial | Envio real não implementado; exige homologação própria |
-| Camada não testada pelo PostgREST real | Testar no Supabase de teste antes da produção (pendência abaixo) |
+| Camada pelo PostgREST real | **Homologada no Supabase de teste** (40/40; `04-homologacao-supabase-teste.md`). Metas por meta não foram exercitadas lá (sem a 127). |
 
 ## 8. Pendências de homologação
 
-1. Revisão do código (PR, sem merge automático).
-2. Aplicar 129 e 130 no **Supabase de teste**, rodar a lista/ficha/fechamento pelo PostgREST real e conferir RLS e privilégios pelo catálogo.
-3. Comparar com o Dashboard um fechamento gerado com dados reais de um dia já encerrado (somente leitura).
-4. Decisões: fuso por unidade, prazos de retenção (`03-retencao-anonimizacao.md`), ativação da IA, política e provedor de WhatsApp, correção da 127.
+1. Decisão de publicação: push, PR, revisão e merge (nada foi publicado).
+2. Comparar com o Dashboard um fechamento gerado com dados reais de um dia já encerrado (somente leitura, depois da implantação).
+3. Decisões que continuam provisórias:
+   - fuso da plataforma com a origem gravada;
+   - dia sem eventos = INCOMPLETO;
+   - IA desligada;
+   - WhatsApp só simulado;
+   - retenção proposta e **não** executada;
+   - Checklist ao vivo inalterado.
+4. Supabase de teste: decidir se mantém 129/130 aplicadas (estado atual) ou aplica os rollbacks. Os fechamentos e simulações `[OP2]` ficam lá como evidência.
 5. `graphify update .` no checkout principal depois do merge (o grafo vive lá; o worktree não tem `graphify-out`).
 
 ## 9. Branch, commit e estado
 
 - **Branch:** `feat/dashboard-operacional-2`, só local (sem push, sem PR, sem merge). Worktree: `C:\Users\ponte\OneDrive\Desktop\crescer-dashboard-operacional-2`.
 - **Base:** `origin/main` `a035750`, que não mudou durante a missão.
-- **Commits:** dois sobre a base. O primeiro traz os relatórios da auditoria; o segundo, esta entrega (`git log --oneline a035750..`).
+- **Commits:** quatro sobre a base (`git log --oneline a035750..`), na ordem:
+  1. relatórios da auditoria;
+  2. entrega;
+  3. migration 131;
+  4. homologação final (teste de navegador, correção do foco, script do Supabase de teste e estes documentos).
 - **Fora do repositório:** junções de `node_modules` removidas depois dos testes; Postgres descartável parado; capturas e geradores de QA no scratchpad da sessão.
 - **Outros trabalhos preservados:** o checkout principal (`feat/ifood-servicos-sinal`, com um arquivo não versionado) e os demais worktrees não foram tocados.

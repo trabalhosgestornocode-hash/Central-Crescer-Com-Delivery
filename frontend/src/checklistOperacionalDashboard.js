@@ -157,7 +157,9 @@ function desenhar() {
     }
     return;
   }
-  const foco = est.raiz?.contains(document.activeElement) ? document.activeElement.getAttribute("name") ?? document.activeElement.dataset?.acao : null;
+  // Foco devolvido após o redesenho: id primeiro (as abas compartilham data-acao="aba"), depois name, depois data-acao.
+  const ativo = est.raiz?.contains(document.activeElement) ? document.activeElement : null;
+  const foco = ativo ? { id: ativo.id || null, nome: ativo.getAttribute("name"), acao: ativo.dataset?.acao } : null;
   const conteudoAba = est.aba === "pedidos" ? painelPedidos({ lista: est.pedidos.lista, carregando: est.pedidos.carregando, erro: est.pedidos.erro, busca: est.pedidos.busca })
     : est.aba === "fechamentos" ? painelFechamentos({ ...est.fech, hoje: hojeOperacao(), podeGerar: podeGerarFechamento() }) : "";
   const html = telaDashboard({
@@ -173,7 +175,12 @@ function desenhar() {
     est.raiz = est.view.querySelector("[data-ckd]");
   }
   ligar(est.raiz);
-  if (foco) (est.raiz.querySelector(`[name="${foco}"]`) ?? est.raiz.querySelector(`[data-acao="${foco}"]`))?.focus({ preventScroll: true });
+  if (foco) {
+    const alvo = (foco.id && est.raiz.querySelector(`#${CSS.escape(foco.id)}`))
+      || (foco.nome && est.raiz.querySelector(`[name="${CSS.escape(foco.nome)}"]`))
+      || (foco.acao && est.raiz.querySelector(`[data-acao="${CSS.escape(foco.acao)}"]`));
+    alvo?.focus({ preventScroll: true });
+  }
 }
 
 function lerFormulario(form) {
