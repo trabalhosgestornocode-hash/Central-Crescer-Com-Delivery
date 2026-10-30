@@ -3,8 +3,10 @@
 //   * Conta que JÁ existe na plataforma: recebe só o vínculo com a empresa, como antes (nenhuma senha passa por aqui).
 //   * Conta nova: cria um CONVITE — token de 32 bytes, só o SHA-256 no banco, 72 h, uso único (usuarios_convite_consumir),
 //     e-mail guardado como HMAC + cifrado. O convidado aceita JÁ AUTENTICADO com o mesmo e-mail; só então o vínculo nasce.
-//   * Envio do e-mail: DESLIGADO por padrão (USUARIOS_CONVITE_EMAIL ≠ "supabase"). Ligado, usa o convite do Supabase Auth
-//     (exige SMTP próprio, template e redirect configurados no projeto — dependência DEP-2). Nada de credencial na tela ou no log.
+//   * Envio do e-mail: DESLIGADO por padrão (USUARIOS_CONVITE_EMAIL ≠ "supabase"). Desligado, NENHUM convite é criado (não existe
+//     convite que ninguém consegue ativar): a conta nova é recusada com 409 e a tela orienta usar o Painel SuperAdmin. Ligado, usa o
+//     convite do Supabase Auth (SMTP próprio, template e redirect — DEP-2) com link montado só da origem CONFIÁVEL (APP_URL_PUBLICA);
+//     se o e-mail falhar, o convite é cancelado na hora. Nada de credencial na tela ou no log.
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
@@ -14,6 +16,7 @@ import { garantirPerfilOperacionalInicial, inserirVinculoOrgComPerfil, inserirVi
 import { gerarToken, hashToken, tokenValido } from "../notificacoes/notificacoes.basico.js";
 import { segredosDisponiveis, cifrarEmail, hmacEmail, VERSAO_CHAVE_ATUAL } from "../notificacoes/notificacoes.segredos.js";
 import { contaExistentePorEmail, criarUsuario } from "./usuarios.service.js";
+import { origemParaLinks } from "../../shared/urlPublica.js";
 
 const VALIDADE_MS = 72 * 3_600_000 - 60_000;
 
@@ -27,7 +30,7 @@ export function modoEnvioEmail(env = process.env) {
 }
 
 /** "Conceder acesso": conta existente = vínculo imediato; conta nova = convite por e-mail. */
-export async function concederOuConvidar({ req, organizacaoId, nome, email, papel, unidadeId = null, baseUrl = "", env = process.env, deps = {} }) {
+export async function concederOuConvidar({ req, organizacaoId, nome, email, papel, unidadeId = null, baseUrl = null, env = process.env, deps = {} }) {
   const emailNorm = v.email(email);
   const papelNorm = v.umDe(papel, "Cargo", PAPEIS_VINCULO);
   const nomeNorm = v.textoOpcional(nome, "Nome", { max: 160 }) ?? emailNorm.split("@")[0];
@@ -44,9 +47,13 @@ export async function concederOuConvidar({ req, organizacaoId, nome, email, pape
     return { tipo: "ACESSO_CONCEDIDO", usuario: r };
   }
 
+  if (modoEnvioEmail(env) !== "supabase") {
+    throw new ApiError(409, "Esta pessoa ainda não tem conta e o envio de convites por e-mail não está configurado. Peça ao Administrador da plataforma para criar a conta.", { codigo: "CONVITE_EMAIL_DESLIGADO" });
+  }
   if (!(deps.segredosDisponiveis ? deps.segredosDisponiveis() : segredosDisponiveis())) {
     throw new ApiError(503, "Convites por e-mail ainda não estão habilitados neste ambiente.", { codigo: "CONVITE_INDISPONIVEL" });
   }
+  const origem = baseUrl ?? origemParaLinks({ env, req });   // origem confiável ANTES de gravar qualquer coisa
   const token = gerarToken();
   const linha = {
     token_hash: hashToken(token), organizacao_id: organizacaoId, unidade_alvo_id: unidade, papel: papelNorm, nome: nomeNorm,
@@ -57,14 +64,13 @@ export async function concederOuConvidar({ req, organizacaoId, nome, email, pape
   if (error?.code === "23505") throw new ApiError(409, "Já existe um convite pendente para este e-mail nesta empresa.");
   if (error) throw ApiError.internal(error.message);
 
-  let envio = "DESLIGADO";
-  if (modoEnvioEmail(env) === "supabase") {
-    const { error: e } = await db.auth.admin.inviteUserByEmail(emailNorm, { redirectTo: `${baseUrl}/convite-usuario.html#t=${token}`, data: { nome: nomeNorm } });
-    envio = e ? "FALHOU" : "ENVIADO";
-    await db.from("usuarios_convites").update({ envio_status: envio, envio_tentado_em: new Date().toISOString() }).eq("id", data.id);
-  }
+  const { error: e } = await db.auth.admin.inviteUserByEmail(emailNorm, { redirectTo: `${origem}/convite-usuario.html#t=${token}`, data: { nome: nomeNorm } });
+  const envio = e ? "FALHOU" : "ENVIADO";
+  // Falhou o e-mail: o convite morre aqui (revogado) — nada fica pendente sem como ser ativado; o admin pode tentar de novo.
+  await db.from("usuarios_convites").update({ envio_status: envio, envio_tentado_em: new Date().toISOString(), ...(e ? { revogado_em: new Date().toISOString(), revogado_por: req?.user?.id ?? null } : {}) }).eq("id", data.id);
   await (deps.auditar ?? auditar)({ acao: ACOES.USUARIO_CONVITE_CRIADO, atorTipo: "usuario", atorId: req?.user?.id ?? null, perfilId: req?.perfil?.id ?? null,
     organizacaoId, entidade: "usuario_convite", entidadeId: data.id, detalhes: { email_mascarado: linha.email_mascarado, papel: papelNorm, unidade_id: unidade, envio } });
+  if (e) throw new ApiError(502, "Não foi possível enviar o convite por e-mail agora. Nada ficou pendente: tente de novo.", { codigo: "CONVITE_EMAIL_FALHOU" });
   return { tipo: "CONVITE_CRIADO", convite: { id: data.id, emailMascarado: linha.email_mascarado, papel: papelNorm, papelRotulo: rotuloPapel(papelNorm), expiraEm: data.expira_em, envio } };
 }
 

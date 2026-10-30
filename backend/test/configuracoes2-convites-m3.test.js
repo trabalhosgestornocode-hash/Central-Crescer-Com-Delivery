@@ -37,20 +37,53 @@ describe("D-14: conceder acesso ou convidar", () => {
     assert.equal(r.tipo, "ACESSO_CONCEDIDO");
     assert.equal(chamada.senha, null);
   });
-  test("conta nova: convite com token só como hash, e-mail HMAC+cifrado+máscara, 72 h; envio DESLIGADO por padrão", async () => {
+  test("conta nova com e-mail DESLIGADO (padrão): 409 claro, NENHUM convite criado (nada que ninguém consiga ativar), nenhum e-mail", async () => {
     const supa = supaFalso();
-    const r = await conv.concederOuConvidar({ req, organizacaoId: ORG, nome: "Novo", email: "novo.usuario@x.com", papel: "viewer", env: {},
-      deps: { supabase: supa, contaExistentePorEmail: async () => false, auditar } });
+    await assert.rejects(conv.concederOuConvidar({ req, organizacaoId: ORG, nome: "Novo", email: "novo.usuario@x.com", papel: "viewer", env: {},
+      deps: { supabase: supa, contaExistentePorEmail: async () => false, auditar } }), (e) => e.statusCode === 409 && e.details?.codigo === "CONVITE_EMAIL_DESLIGADO" && /Administrador da plataforma/.test(e.message));
+    assert.equal(supa.st.convites.length, 0);
+    assert.equal(supa.st.convitesInvite.length, 0);
+  });
+  test("conta nova com e-mail ligado: token só como hash, e-mail HMAC+cifrado+máscara, 72 h, ENVIADO", async () => {
+    const supa = supaFalso();
+    const r = await conv.concederOuConvidar({ req, organizacaoId: ORG, nome: "Novo", email: "novo.usuario@x.com", papel: "viewer",
+      env: { USUARIOS_CONVITE_EMAIL: "supabase", APP_URL_PUBLICA: "https://app.exemplo.com" }, deps: { supabase: supa, contaExistentePorEmail: async () => false, auditar } });
     assert.equal(r.tipo, "CONVITE_CRIADO");
-    assert.equal(r.convite.envio, "DESLIGADO");
+    assert.equal(r.convite.envio, "ENVIADO");
+    assert.equal(supa.st.convitesInvite.length, 1);
     const linha = supa.st.convites[0];
     assert.match(linha.token_hash, /^[0-9a-f]{64}$/);
     assert.equal(linha.email_hmac, seg.hmacEmail("novo.usuario@x.com"));
     assert.ok(!JSON.stringify(linha).includes("novo.usuario@x.com"), "e-mail nunca em claro");
     assert.equal(linha.email_mascarado, "no**********@x.com");
     assert.ok(Date.parse(linha.expira_em) - Date.now() <= 72 * 3_600_000);
-    assert.equal(supa.st.convitesInvite.length, 0, "nenhum e-mail real enviado");
     assert.ok(!("senha" in linha) && !JSON.stringify(linha).includes("senha"));
+  });
+  test("falha no envio do e-mail: o convite é REVOGADO na hora (nada pendente) e o admin recebe 502 para tentar de novo", async () => {
+    const supa = supaFalso();
+    supa.auth.admin.inviteUserByEmail = async () => ({ error: { message: "smtp fora" } });
+    await assert.rejects(conv.concederOuConvidar({ req, organizacaoId: ORG, email: "c@x.com", papel: "viewer", env: { USUARIOS_CONVITE_EMAIL: "supabase" }, baseUrl: "https://app",
+      deps: { supabase: supa, contaExistentePorEmail: async () => false, auditar } }), (e) => e.statusCode === 502 && e.details?.codigo === "CONVITE_EMAIL_FALHOU");
+    assert.equal(supa.st.update.envio_status, "FALHOU");
+    assert.ok(supa.st.update.revogado_em, "convite revogado");
+  });
+  test("origem dos links: produção SEM APP_URL_PUBLICA recusa ANTES de gravar; o Host da requisição é ignorado", async () => {
+    const supa = supaFalso();
+    const reqHost = { ...req, protocol: "https", get: () => "atacante.exemplo" };
+    await assert.rejects(conv.concederOuConvidar({ req: reqHost, organizacaoId: ORG, email: "d@x.com", papel: "viewer", env: { USUARIOS_CONVITE_EMAIL: "supabase", NODE_ENV: "production" },
+      deps: { supabase: supa, contaExistentePorEmail: async () => false, auditar } }), (e) => e.statusCode === 503 && e.details?.codigo === "URL_PUBLICA_AUSENTE");
+    assert.equal(supa.st.convites.length, 0, "nada gravado");
+    await conv.concederOuConvidar({ req: reqHost, organizacaoId: ORG, email: "d@x.com", papel: "viewer", env: { USUARIOS_CONVITE_EMAIL: "supabase", NODE_ENV: "production", APP_URL_PUBLICA: "https://app.exemplo.com" },
+      deps: { supabase: supa, contaExistentePorEmail: async () => false, auditar } });
+    assert.match(supa.st.convitesInvite[0][1].redirectTo, /^https:\/\/app\.exemplo\.com\/convite-usuario\.html#t=/);
+    assert.doesNotMatch(supa.st.convitesInvite[0][1].redirectTo, /atacante/);
+  });
+  test("APP_URL_PUBLICA só aceita origem https sem caminho", async () => {
+    const { origemConfigurada } = await import("../src/shared/urlPublica.js");
+    assert.equal(origemConfigurada({ APP_URL_PUBLICA: "https://app.exemplo.com/" }), "https://app.exemplo.com");
+    for (const ruim of ["http://app.exemplo.com", "https://app.exemplo.com/x", "https://app.exemplo.com?a=1", "javascript:alert(1)", "https://u:p@app.exemplo.com"]) {
+      assert.equal(origemConfigurada({ APP_URL_PUBLICA: ruim, NODE_ENV: "production" }), null, ruim);
+    }
   });
   test("envio ligado (supabase): convite do Supabase Auth com o token no FRAGMENTO do redirect", async () => {
     const supa = supaFalso();

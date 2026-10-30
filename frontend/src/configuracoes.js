@@ -738,7 +738,7 @@ function montarUsuarios(root) {
             ${select("Cargo", "nu-perfil", PERFIS, "Operação")}
           </div>
           <div class="cfg-acoes cfg-acoes--start"><button type="button" class="btn btn-primary" id="nu-add">${icon("send", { size: 14 })} Conceder acesso</button></div>
-        `, "Se o e-mail já tiver conta na plataforma, o acesso é concedido na hora (a senha dela não muda). Se não tiver, criamos um convite por e-mail válido por 72 horas: a própria pessoa define a senha.")
+        `, "Se o e-mail já tiver conta na plataforma, o acesso é concedido na hora (a senha dela não muda). Se não tiver, enviamos um convite por e-mail válido por 72 horas e a própria pessoa define a senha — enquanto o envio de e-mail não estiver configurado, a conta nova é criada pelo Administrador da plataforma.")
           + painel("Convites pendentes", convitesHtml)
         : somenteLeitura());
 
@@ -764,12 +764,13 @@ function montarUsuarios(root) {
     btn.disabled = true;
     try {
       const { data } = await criarUsuario({ nome, email, papel });
-      toast(data?.tipo === "CONVITE_CRIADO"
-        ? (data.convite?.envio === "ENVIADO" ? "Convite enviado por e-mail." : "Convite criado. O envio de e-mail ainda está desativado neste ambiente.")
-        : "Acesso concedido — o usuário já pode entrar nesta empresa.");
+      toast(data?.tipo === "CONVITE_CRIADO" ? "Convite enviado por e-mail." : "Acesso concedido — o usuário já pode entrar nesta empresa.");
       carregar();
     } catch (e) {
-      toast("Erro: " + e.message);
+      // 409 CONVITE_EMAIL_DESLIGADO: a explicação vai para o campo (nada foi criado) — não é "erro" do usuário.
+      const alvo = root.querySelector("#nu-email-erro");
+      if (e.status === 409 && alvo) alvo.textContent = e.message;
+      else toast("Erro: " + e.message);
       btn.disabled = false;
     }
   }

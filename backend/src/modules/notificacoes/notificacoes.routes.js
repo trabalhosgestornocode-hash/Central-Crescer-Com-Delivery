@@ -11,12 +11,12 @@ import { limiteDeTaxa, ipCliente } from "../../shared/rateLimit.js";
 import { requirePermissao } from "../../middlewares/auth.js";
 import { PERMISSOES } from "../../shared/permissoes.js";
 import { exigirVer, exigirGerenciar } from "./notificacoes.permissoes.js";
+import { origemParaLinks } from "../../shared/urlPublica.js";
 import * as svc from "./notificacoes.service.js";
 import * as titular from "./notificacoes.titular.service.js";
 import * as m3 from "./notificacoes.m3.js";
 
 const semCache = (res) => res.set("Cache-Control", "no-store");
-const base = (req) => `${req.protocol}://${req.get("host")}`;
 
 export const notificacoesRouter = Router();
 const ver = requirePermissao(PERMISSOES.NOTIFICACOES_VER);
@@ -33,7 +33,7 @@ notificacoesRouter.get("/historico", verOuGerir, asyncHandler(async (req, res) =
 notificacoesRouter.get("/consentimentos", verOuGerir, asyncHandler(async (req, res) => { semCache(res); res.json({ data: await svc.consentimentos({ escopo: exigirVer(req) }) }); }));
 notificacoesRouter.get("/auditoria", gerir, asyncHandler(async (req, res) => { semCache(res); res.json({ data: await svc.auditoria({ escopo: exigirGerenciar(req) }) }); }));
 notificacoesRouter.post("/convites", gerir, asyncHandler(async (req, res) => {
-  semCache(res); res.status(201).json({ data: await svc.criarConvite({ req, escopo: exigirGerenciar(req), corpo: req.body, baseUrl: base(req) }) });
+  semCache(res); res.status(201).json({ data: await svc.criarConvite({ req, escopo: exigirGerenciar(req), corpo: req.body, baseUrl: origemParaLinks({ req }) }) });   // origem confiável ANTES de gravar
 }));
 notificacoesRouter.post("/convites/:id/cancelar", gerir, asyncHandler(async (req, res) => { res.json({ data: await svc.cancelarConvite({ req, escopo: exigirGerenciar(req), id: req.params.id }) }); }));
 notificacoesRouter.post("/destinatarios/:id/suspensao", gerir, asyncHandler(async (req, res) => {

@@ -195,6 +195,10 @@ for i in 1 2 3 4; do R4=$(sr nt_branch "select comunicacao_desafio_verificar('$D
 chk "4 códigos errados → INCORRETO" "$R4" "INCORRETO"
 chk "5ª tentativa errada → BLOQUEADO" "$(sr nt_branch "select comunicacao_desafio_verificar('$D1','$ERR')->>'resultado'")" "BLOQUEADO"
 chk "código certo depois do bloqueio → INVALIDO" "$(sr nt_branch "select comunicacao_desafio_verificar('$D1','$COD')->>'resultado'")" "INVALIDO"
+# gestão anti-enumeração: o backend escolhe o id do desafio ANTES de saber se o número existe (resposta sem esperar o banco)
+IDG=10000000-0000-4000-8000-0000000000d1; HG1=$(printf 'e%.0s' $(seq 64)); HG2=$(printf 'f%.0s' $(seq 64))
+chk "desafio de gestão com o id escolhido pelo backend" "$(sr nt_branch "select comunicacao_desafio_criar('gestao',null,'cifrado','$HG1','$COD',null,true,1,'$IDG')->>'desafio_id'")" "$IDG"
+chk "id de desafio repetido é recusado (chave primária)" "$(sr nt_branch "select comunicacao_desafio_criar('gestao',null,'cifrado','$HG2','$COD',null,true,1,'$IDG')" | grep -c 'duplicate key')" "1"
 q nt_branch "update comunicacao_desafios_titular set ultimo_envio_em = now() - interval '2 minutes'" >/dev/null
 D2=$(sr nt_branch "select comunicacao_desafio_criar('verificacao','$CV','cifrado','$H1','$COD',null,true,1)->>'desafio_id'")
 # concorrência real: duas sessões verificam o MESMO código certo ao mesmo tempo → só uma vence

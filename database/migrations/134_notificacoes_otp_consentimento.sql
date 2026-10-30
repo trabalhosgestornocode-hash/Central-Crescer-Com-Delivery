@@ -186,8 +186,10 @@ create trigger trg_comunicacao_escopo_revogada before insert or update of habili
 -- 5. RPCs do desafio (atômicas)
 -- ---------------------------------------------------------------------------------------------------------------------------
 /** Cria um desafio: intervalo de 60 s, 5/hora e 10/dia por telefone, 20/hora por IP; invalida os anteriores do mesmo alvo. */
+-- p_id: o backend pode escolher o id (gerado ANTES de saber se o número existe) para responder à gestão sem esperar o banco —
+-- assim o tempo de resposta não revela a existência do número (anti-enumeração). Nulo = id gerado aqui.
 create or replace function comunicacao_desafio_criar(p_tipo text, p_convite_id uuid, p_telefone_cifrado text, p_telefone_hmac text,
-  p_codigo_hmac text, p_ip_hmac text, p_simulado boolean, p_chave_versao integer) returns jsonb
+  p_codigo_hmac text, p_ip_hmac text, p_simulado boolean, p_chave_versao integer, p_id uuid default null) returns jsonb
 language plpgsql security invoker set search_path = public as $$
 declare v_ult timestamptz; v_id uuid; c comunicacao_convites;
 begin
@@ -209,8 +211,8 @@ begin
   update comunicacao_desafios_titular set invalidado_em = now()
    where telefone_hmac = p_telefone_hmac and tipo = p_tipo and consumido_em is null and invalidado_em is null
      and (p_convite_id is null or convite_id = p_convite_id);
-  insert into comunicacao_desafios_titular (tipo, convite_id, telefone_cifrado, telefone_hmac, codigo_hmac, chave_versao, expira_em, ip_hmac, simulado)
-  values (p_tipo, p_convite_id, p_telefone_cifrado, p_telefone_hmac, p_codigo_hmac, coalesce(p_chave_versao, 1), now() + interval '5 minutes', p_ip_hmac, coalesce(p_simulado, false))
+  insert into comunicacao_desafios_titular (id, tipo, convite_id, telefone_cifrado, telefone_hmac, codigo_hmac, chave_versao, expira_em, ip_hmac, simulado)
+  values (coalesce(p_id, gen_random_uuid()), p_tipo, p_convite_id, p_telefone_cifrado, p_telefone_hmac, p_codigo_hmac, coalesce(p_chave_versao, 1), now() + interval '5 minutes', p_ip_hmac, coalesce(p_simulado, false))
   returning id into v_id;
   return jsonb_build_object('resultado', 'CRIADO', 'desafio_id', v_id);
 end $$;
@@ -342,7 +344,7 @@ alter table comunicacao_consentimentos enable row level security;
 do $$
 declare papel text; fn text;
   fns constant text[] := array[
-    'comunicacao_consentimento_vigente(uuid,text)', 'comunicacao_desafio_criar(text,uuid,text,text,text,text,boolean,integer)',
+    'comunicacao_consentimento_vigente(uuid,text)', 'comunicacao_desafio_criar(text,uuid,text,text,text,text,boolean,integer,uuid)',
     'comunicacao_desafio_verificar(uuid,text)', 'comunicacao_titular_consentir(uuid,uuid,text[],integer,text,text,text)',
     'comunicacao_revogar(text,uuid[],text[],uuid,text,uuid,uuid,boolean,text)',
     'comunicacao_bloquear_reativacao_revogada()', 'comunicacao_convites_coerencia()'];

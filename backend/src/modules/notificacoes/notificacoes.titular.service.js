@@ -54,13 +54,12 @@ export async function pedirCodigoConvite({ token, ip, deps = {} }) {
   return emitirDesafio({ tipo: "verificacao", conviteId: c.id, telefoneCifrado: c.telefone_cifrado, telefoneHmac: c.telefone_hmac, ip, simulado: cap.simulado, deps });
 }
 
-async function emitirDesafio({ tipo, conviteId = null, telefoneCifrado, telefoneHmac, ip, simulado, deps }) {
+async function emitirDesafio({ tipo, conviteId = null, telefoneCifrado, telefoneHmac, ip, simulado, id = null, provisorio = crypto.randomUUID(), deps }) {
   const r = R(deps);
   const codigo = gerarCodigoOtp();
-  // o HMAC do código é ligado ao id do desafio: geramos o id antes (o banco aceita o informado? não — usamos um id provisório)
-  const provisorio = crypto.randomUUID();
+  // o HMAC do código é ligado a um valor PROVISÓRIO que só o cliente conhece (o mesmo código em outro desafio não confere)
   const criado = await r.criarDesafio({ tipo, conviteId, telefoneCifrado, telefoneHmac, codigoHmac: hmacCodigo(provisorio, codigo),
-    ipHmac: hmacIp(ip), simulado, chaveVersao: VERSAO_CHAVE_ATUAL }, deps);
+    ipHmac: hmacIp(ip), simulado, chaveVersao: VERSAO_CHAVE_ATUAL, id }, deps);
   if (criado?.resultado === "AGUARDE") return { ok: false, motivo: "AGUARDE", segundos: criado.segundos };
   if (criado?.resultado === "LIMITE") return { ok: false, motivo: "LIMITE" };
   if (criado?.resultado !== "CRIADO") return { ok: false, motivo: "INDISPONIVEL" };
@@ -109,25 +108,26 @@ function lerSessao(sessao) {
   return id;
 }
 
-/** Pede código para gerenciar. MESMA resposta e tempo mínimo exista ou não o número (anti-enumeração). */
+/**
+ * Pede código para gerenciar. Anti-enumeração por CONSTRUÇÃO: os identificadores são gerados aqui, a resposta sai na hora (sem
+ * esperar o banco) e é idêntica exista ou não o número. A busca do número e a criação do desafio acontecem DEPOIS, em segundo plano
+ * — o tempo de resposta não depende delas. Falhas do segundo plano não aparecem para quem pediu (log sem número).
+ */
 export async function pedirCodigoGestao({ telefone, ip, deps = {} }) {
-  const inicio = Date.now();
   exigirAmbiente(deps);
   const cap = capacidades(deps.env);
   if (!cap.otp) throw indisponivel();
   const e164 = validarWhatsapp(telefone);
-  let resultado = { ok: true };
-  if (e164) {
-    const existe = (await R(deps).destinatariosDoNumero(e164, deps)).length > 0;
-    if (existe) {
-      const d = await emitirDesafio({ tipo: "gestao", telefoneCifrado: cifrarTelefone(e164), telefoneHmac: hmacTelefone(e164), ip, simulado: cap.simulado, deps });
-      if (d.ok) resultado = { ok: true, desafio: d.desafio, provisorio: d.provisorio };
-    }
-  }
-  const espera = 700 - (Date.now() - inicio);            // piso de tempo: não revela se o número existe
-  if (espera > 0) await new Promise((r) => setTimeout(r, deps.semEspera ? 0 : espera));
-  // desafio/provisório só voltam quando existem; sem eles o cliente mostra a mesma mensagem e o código nunca confere
-  return { ok: true, mensagem: RESPOSTA_GENERICA, desafio: resultado.desafio ?? crypto.randomUUID(), provisorio: resultado.provisorio ?? crypto.randomUUID() };
+  const desafio = crypto.randomUUID();
+  const provisorio = crypto.randomUUID();
+  const processamento = (async () => {
+    if (!e164) return;
+    if (!((await R(deps).destinatariosDoNumero(e164, deps)).length > 0)) return;
+    await emitirDesafio({ tipo: "gestao", telefoneCifrado: cifrarTelefone(e164), telefoneHmac: hmacTelefone(e164), ip, simulado: cap.simulado, id: desafio, provisorio, deps });
+  })().catch((e) => logNotificacoes("warn", "gestao.codigo_falhou", { motivo: e?.message }));
+  const resposta = { ok: true, mensagem: RESPOSTA_GENERICA, desafio, provisorio };
+  Object.defineProperty(resposta, "_processamento", { value: processamento, enumerable: false });   // só testes aguardam; nunca vai no JSON
+  return resposta;
 }
 
 export async function verificarCodigoGestao({ desafio, provisorio, codigo, deps = {} }) {

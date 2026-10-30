@@ -13,8 +13,7 @@ export const listar = asyncHandler(async (req, res) => {
 // D-14: conta existente = vínculo imediato; conta nova = convite por e-mail. Senha vinda da tela é IGNORADA (nunca aceita).
 export const criar = asyncHandler(async (req, res) => {
   const { nome, email, papel, unidadeId } = req.body ?? {};
-  const data = await convites.concederOuConvidar({ req, organizacaoId: req.tenant.organizacaoId, nome, email, papel, unidadeId,
-    baseUrl: `${req.protocol}://${req.get("host")}` });
+  const data = await convites.concederOuConvidar({ req, organizacaoId: req.tenant.organizacaoId, nome, email, papel, unidadeId });
   res.status(201).json({ data });
 });
 

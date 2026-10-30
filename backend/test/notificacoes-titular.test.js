@@ -31,7 +31,7 @@ function montar() {
       if (Date.now() - st.ultimoEnvio < 60_000) return { resultado: "AGUARDE", segundos: 60 };
       st.ultimoEnvio = Date.now();
       st.desafios.forEach((d) => { d.invalidado = true; });
-      const d = { id: randomUUID(), ...p, tentativas: 0, consumido: false, invalidado: false };
+      const d = { ...p, id: p.id ?? randomUUID(), tentativas: 0, consumido: false, invalidado: false };
       st.desafios.push(d);
       return { resultado: "CRIADO", desafio_id: d.id };
     },
@@ -98,29 +98,38 @@ describe("gestão pelo titular (sem conta): anti-enumeração e revogação", ()
   beforeEach(() => envio._limparCaixaSimulada());
   test("número cadastrado e não cadastrado recebem a MESMA resposta (mesmos campos, mesma mensagem)", async () => {
     const { repo } = montar();
-    const a = await titular.pedirCodigoGestao({ telefone: NUM, deps: { repo, auditar: async () => {}, env: ENV_SIM, semEspera: true } });
-    const b = await titular.pedirCodigoGestao({ telefone: "+5511911112222", deps: { repo, auditar: async () => {}, env: ENV_SIM, semEspera: true } });
+    const a = await titular.pedirCodigoGestao({ telefone: NUM, deps: { repo, auditar: async () => {}, env: ENV_SIM } });
+    const b = await titular.pedirCodigoGestao({ telefone: "+5511911112222", deps: { repo, auditar: async () => {}, env: ENV_SIM } });
     assert.deepEqual(Object.keys(a).sort(), Object.keys(b).sort());
     assert.equal(a.mensagem, b.mensagem);
     assert.match(b.desafio, /^[0-9a-f-]{36}$/, "desafio fictício com o mesmo formato");
   });
-  test("piso de tempo: a resposta não é instantânea mesmo sem número cadastrado", async () => {
+  test("tempo NÃO revela o número: a resposta não espera o banco (banco lento de 300 ms) e o processamento roda depois", async () => {
     const { repo } = montar();
-    const t0 = Date.now();
-    await titular.pedirCodigoGestao({ telefone: "+5511911112222", deps: { repo, auditar: async () => {}, env: ENV_SIM } });
-    assert.ok(Date.now() - t0 >= 650);
+    const lento = { ...repo, destinatariosDoNumero: async (e) => { await new Promise((r) => setTimeout(r, 300)); return repo.destinatariosDoNumero(e); } };
+    const medir = async (telefone) => { const t0 = performance.now(); const r = await titular.pedirCodigoGestao({ telefone, deps: { repo: lento, auditar: async () => {}, env: ENV_SIM } }); return [performance.now() - t0, r]; };
+    const [tA, a] = await medir(NUM);
+    const [tB, b] = await medir("+5511911112222");
+    assert.ok(tA < 100 && tB < 100, `respostas imediatas (${tA.toFixed(1)} ms / ${tB.toFixed(1)} ms) — não dependem do banco`);
+    assert.ok(!JSON.stringify(a).includes("_processamento"), "o gancho interno nunca vai na resposta");
+    assert.equal(envio._ultimoCodigoSimulado({ desafioId: a.desafio }), null, "o código ainda não saiu quando a resposta voltou");
+    await a._processamento; await b._processamento;
+    assert.match(envio._ultimoCodigoSimulado({ desafioId: a.desafio }), /^\d{6}$/, "número cadastrado: código entregue depois, no MESMO desafio informado");
+    assert.equal(envio._ultimoCodigoSimulado({ desafioId: b.desafio }), null, "número não cadastrado: nada é entregue");
   });
   test("verificação: código errado e desafio fictício dão a MESMA resposta (NAO_CONFERE)", async () => {
     const { repo } = montar();
-    const a = await titular.pedirCodigoGestao({ telefone: NUM, deps: { repo, auditar: async () => {}, env: ENV_SIM, semEspera: true } });
-    const b = await titular.pedirCodigoGestao({ telefone: "+5511911112222", deps: { repo, auditar: async () => {}, env: ENV_SIM, semEspera: true } });
+    const a = await titular.pedirCodigoGestao({ telefone: NUM, deps: { repo, auditar: async () => {}, env: ENV_SIM } });
+    const b = await titular.pedirCodigoGestao({ telefone: "+5511911112222", deps: { repo, auditar: async () => {}, env: ENV_SIM } });
+    await a._processamento; await b._processamento;
     const ra = await titular.verificarCodigoGestao({ desafio: a.desafio, provisorio: a.provisorio, codigo: "000001", deps: { repo, auditar: async () => {}, env: ENV_SIM } });
     const rb = await titular.verificarCodigoGestao({ desafio: b.desafio, provisorio: b.provisorio, codigo: "000001", deps: { repo, auditar: async () => {}, env: ENV_SIM } });
     assert.deepEqual(ra, rb);
   });
   test("sessão de gestão: código certo → sessão; adulterar a assinatura → 401; outro número → 401", async () => {
     const { repo, st } = montar();
-    const a = await titular.pedirCodigoGestao({ telefone: NUM, deps: { repo, auditar: async () => {}, env: ENV_SIM, semEspera: true } });
+    const a = await titular.pedirCodigoGestao({ telefone: NUM, deps: { repo, auditar: async () => {}, env: ENV_SIM } });
+    await a._processamento;
     const codigo = envio._ultimoCodigoSimulado({ desafioId: a.desafio });
     const v = await titular.verificarCodigoGestao({ desafio: a.desafio, provisorio: a.provisorio, codigo, deps: { repo, auditar: async () => {}, env: ENV_SIM } });
     assert.equal(v.resultado, "VERIFICADO");

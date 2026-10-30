@@ -186,7 +186,7 @@ export const revogar = (p, deps = {}) => rpc(deps, "comunicacao_revogar", {
   p_origem: p.origem, p_evidencia_id: p.evidenciaId ?? null, p_registrado_por: p.registradoPor ?? null, p_sair_de_tudo: !!p.sairDeTudo, p_ip_hmac: p.ipHmac ?? null });
 export const criarDesafio = (p, deps = {}) => rpc(deps, "comunicacao_desafio_criar", {
   p_tipo: p.tipo, p_convite_id: p.conviteId ?? null, p_telefone_cifrado: p.telefoneCifrado, p_telefone_hmac: p.telefoneHmac,
-  p_codigo_hmac: p.codigoHmac, p_ip_hmac: p.ipHmac ?? null, p_simulado: !!p.simulado, p_chave_versao: p.chaveVersao ?? 1 });
+  p_codigo_hmac: p.codigoHmac, p_ip_hmac: p.ipHmac ?? null, p_simulado: !!p.simulado, p_chave_versao: p.chaveVersao ?? 1, p_id: p.id ?? null });
 export const verificarDesafio = (p, deps = {}) => rpc(deps, "comunicacao_desafio_verificar", { p_desafio_id: p.desafioId, p_codigo_hmac: p.codigoHmac });
 export const consentir = (p, deps = {}) => rpc(deps, "comunicacao_titular_consentir", {
   p_convite_id: p.conviteId, p_desafio_id: p.desafioId, p_categorias: p.categorias, p_termo_versao: p.termoVersao,

@@ -98,6 +98,7 @@ function novoCenario() {
   est.unidadeDados = { id: M.fake.UN.A1, nome: "Centro", cnpj: "", endereco: "", cidade: "Belo Horizonte", estado: "MG", responsavel: "", email: "", telefone: "", status: "ativa",
     timezone: null, horarioFuncionamento: null, fusoDisponivel: true, fusoCorte: null };
   est.convitesUsuario = [];
+  est.emailLigado = false;
   est.corpos = [];
 }
 
@@ -142,8 +143,10 @@ before(async () => {
       // ---- usuários (D-14) ----
       if (p === "/api/v1/usuarios" && req.method === "GET") return json(res, 200, { data: [{ id: "u1", nome: "Gestor", email: "gestor@x.com", papel: "organization_admin", ativo: true, gerenciavelAqui: true, unidades: [] }] });
       if (p === "/api/v1/usuarios" && req.method === "POST") {
-        est.convitesUsuario.push({ id: randomUUID(), nome: corpo.nome, papel: corpo.papel, emailMascarado: `${corpo.email.slice(0, 2)}${"*".repeat(8)}@${corpo.email.split("@")[1]}`, envio: "DESLIGADO", expirado: false });
-        return json(res, 201, { data: { tipo: "CONVITE_CRIADO", convite: { envio: "DESLIGADO" } } });
+        // mesmo contrato do backend (usuarios.convites.js): sem e-mail configurado, conta nova = 409 e NADA é criado
+        if (!est.emailLigado) return json(res, 409, { error: "Esta pessoa ainda não tem conta e o envio de convites por e-mail não está configurado. Peça ao Administrador da plataforma para criar a conta.", details: { codigo: "CONVITE_EMAIL_DESLIGADO" } });
+        est.convitesUsuario.push({ id: randomUUID(), nome: corpo.nome, papel: corpo.papel, emailMascarado: `${corpo.email.slice(0, 2)}${"*".repeat(8)}@${corpo.email.split("@")[1]}`, envio: "ENVIADO", expirado: false });
+        return json(res, 201, { data: { tipo: "CONVITE_CRIADO", convite: { envio: "ENVIADO" } } });
       }
       if (p === "/api/v1/usuarios/convites" && req.method === "GET") return json(res, 200, { data: est.convitesUsuario });
       if (p.startsWith("/api/v1/usuarios/convites/") && req.method === "DELETE") { est.convitesUsuario = est.convitesUsuario.filter((c) => c.id !== p.split("/").pop()); return json(res, 200, { data: { revogado: true } }); }
@@ -303,7 +306,7 @@ describe("Configurações 2.0 em navegador real", { timeout: 300_000 }, () => {
     await b.ctx.close();
   });
 
-  test("Usuários e acesso (D-14): sem senha; conceder a e-mail novo cria convite com e-mail mascarado; cancelar por diálogo", OPC, async () => {
+  test("Usuários e acesso (D-14): sem senha; e-mail desligado = explicação e NADA criado; ligado = convite mascarado; cancelar por diálogo", OPC, async () => {
     novoCenario();
     const { ctx, pagina, erros } = await abrir(browser);
     await categoria(pagina, "usuarios-acesso");
@@ -314,7 +317,11 @@ describe("Configurações 2.0 em navegador real", { timeout: 300_000 }, () => {
     await pagina.locator("#nu-nome").fill("Nova Pessoa");
     await pagina.locator("#nu-email").fill("nova.pessoa@empresa.com");
     await pagina.locator("#nu-add").click();
-    await pagina.waitForFunction(() => /Envio de e-mail desativado/.test(document.body.innerText));
+    await pagina.waitForFunction(() => /Administrador da plataforma para criar a conta/.test(document.querySelector("#nu-email-erro")?.textContent ?? ""));
+    assert.match(await texto(pagina), /Nenhum convite pendente/, "nada foi criado");
+    est.emailLigado = true;
+    await pagina.locator("#nu-add").click();
+    await pagina.waitForFunction(() => /E-mail enviado/.test(document.body.innerText));
     const post = est.corpos.find((c) => c.metodo === "POST" && c.p === "/api/v1/usuarios");
     assert.ok(!("senha" in post.corpo), "a tela nunca envia senha");
     assert.match(await texto(pagina), /no\*{8}@empresa\.com/);

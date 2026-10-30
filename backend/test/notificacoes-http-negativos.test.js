@@ -102,6 +102,18 @@ describe("rotas do tenant (D-3)", () => {
     assert.equal((await chamar("POST", `/api/v1/notificacoes/destinatarios/${UN_A}/vincular-unidade`, { unidadeId: UN_B, motivo: "abc" })).status, 403);
     assert.equal((await chamar("GET", `/api/v1/notificacoes/historico?unidadeId=${UN_B}`)).status, 403);
   });
+  test("produção sem APP_URL_PUBLICA: criar convite da Central = 503 ANTES de qualquer gravação; Host forjado não vira link", async () => {
+    const antes = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      sessao = como("organization_admin", UN_A);
+      const r = await fetchOriginal(base + "/api/v1/notificacoes/convites", { method: "POST", headers: { "Content-Type": "application/json", Host: "atacante.exemplo" }, body: JSON.stringify({ ...CONVITE, unidades: [UN_A] }) });
+      const corpo = await r.json();
+      assert.equal(r.status, 503);
+      assert.equal(corpo.details?.codigo ?? corpo.codigo ?? "URL_PUBLICA_AUSENTE", "URL_PUBLICA_AUSENTE");
+      assert.doesNotMatch(JSON.stringify(corpo), /atacante/);
+    } finally { process.env.NODE_ENV = antes; }
+  });
   test("preferências NUNCA reativam: habilitado:true não é aceito como ligar (só restringe)", async () => {
     const { definirPreferencias } = await import("../src/modules/notificacoes/notificacoes.service.js");
     let enviado = null;
