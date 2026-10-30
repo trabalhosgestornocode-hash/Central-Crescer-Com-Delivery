@@ -69,23 +69,34 @@
 |---|---|---|
 | 30/10/2026 | **Preservação dos destinatários existentes** — todos os ativos que recebem o D-1 viram `LEGACY_ACTIVE`: sem exclusão, interrupção, OTP retroativo ou prazo. Número, vínculos, preferências e estado de envio preservados. Nenhuma evidência fabricada. Nenhuma categoria nova automática. Novos destinatários só pelo fluxo novo. Adesão voluntária dos legados. Revogação e bloqueio imediatos para todos. Testes de regressão do D-1. Nada em produção ou no gateway sem autorização específica | docs 04 §3, 05 §4.1 e §5, 06 §1, 07 §1 e §1.1, 09 (Etapa 2 e bloqueadores). **Encerra D-2** (não há prazo) e **resolve D-7** para destinatários novos: o Painel ADM não autoriza novos por atestado |
 | 30/10/2026 | **D-16 APROVADA — escopo de unidades dos legados.** A lista de unidades é congelada num snapshot **imutável** por destinatário × empresa × unidade (data e rastreabilidade). Unidades posteriores não herdam e aparecem como pendência "Nenhum destinatário configurado para o Dashboard iFood D-1". Vínculo explícito de legado a unidade nova só para o D-1, com permissão e auditoria. Inclusão e remoção auditadas. Nenhuma categoria nova automática; adesão só por OTP + consentimento. Revogação e bloqueio antes de qualquer envio, inclusive já enfileirado. Equivalência exata do D-1 antes/depois. Testes com 1 unidade, várias unidades e unidades posteriores. Comportamento anterior preservado até a nova seleção ser homologada e ativada | docs 06 §1 (`comunicacao_legado_snapshot`, escopo com `unidade_id` obrigatório), 06 §4 e §4.1, 07 §1 (M0 sem backfill; **snapshot na transação da ativação M3 = "data da migração"**; universo = o do monitor D-1) e §1.1 (cenários e provas 8–10), 04 §4, 09 (Etapas 2 e 4) |
+| 30/10/2026 | **D-16 — momento do congelamento CONFIRMADO.** A data da migração é a ativação M3. M0 não cria vínculo legado; antes da M3 o D-1 segue integralmente o comportamento anterior. Em M3, snapshot e vínculos são criados atomicamente com a troca da seleção, sobre as unidades efetivamente abrangidas pelo monitor atual. A ativação é idempotente e tem falha segura, sem estado intermediário visível ao D-1. Revogação vale também para mensagens enfileiradas. Snapshot imutável; alterações posteriores em eventos de auditoria separados. **A ativação M3 exige autorização específica** | doc 07 §1.2 (garantias e mecanismo: RPC única, lock consultivo exclusivo × compartilhado, resolução num único comando, equivalência verificada antes do COMMIT, `JA_ATIVADA`, rollback total); doc 09 Etapa 4 (testes e aceite) |
+| 30/10/2026 | **D-3 APROVADA — permissões de gerenciamento.**<br>• Admin da empresa: unidades a que tem acesso, categorias dentro do consentimento, convites, vínculos legados D-1 e auditoria da empresa.<br>• Gerente da unidade: exclusivamente a própria unidade, com convites OTP, categorias autorizadas, vínculo legado só D-1, histórico e auditoria da unidade.<br>• Ninguém consente pelo titular nem reativa revogação.<br>• Sem acesso entre empresas ou entre unidades; número compartilhado não afeta outras unidades.<br>• Validação no backend **e** no banco; auditoria das alterações sensíveis | doc 06 §3.1–3.4 (permissão própria `notificacoes.gerenciar`, matriz ação × papel, garantia em cada camada, auditoria por unidade em `detalhes.unidade_id` **sem coluna nova**, para não quebrar a transferência); doc 04 §4; doc 09 Etapa 2 (testes por linha da matriz, nas três camadas) |
 
-## Decisões que exigem a sua aprovação
+## Decisões pendentes
 
-| # | Decisão | Recomendação |
-|---|---|---|
-| **D-1** | Base legal dos avisos (consentimento × legítimo interesse/contrato) e textos dos termos | consentimento explícito por categoria (atende a política da Meta e a decisão de produto); validação jurídica dos textos |
-| ~~D-2~~ | ~~Prazo da regularização dos legados~~ | **Encerrada em 30/10/2026**: sem prazo, os legados continuam no D-1 |
-| **D-3** | Quem gerencia destinatários: só o admin da empresa, ou também o gerente de unidade (na própria unidade) | org admin + unit_manager restrito às suas unidades; finance só leitura |
-| **D-4** | Exibição do número completo e forma de guardar o telefone no desafio (claro × hash) | sempre mascarado na listagem; completo só na edição para `gerenciar`; desafio guarda o E.164 (necessário para enviar) e apaga em 30 dias |
-| **D-5** | Como o link do convite chega ao titular (presencial/QR/e-mail do admin × template utility) | QR/link exibido ao admin na Etapa A; template utility só depois do opt-in |
-| **D-6** | Revalidação periódica da posse do número (**só para quem passou pelo fluxo novo**; legados não são afetados) | 12 meses, ou após falhas permanentes |
-| **D-7** | O que a equipe Crescer pode fazer pelo Painel ADM sobre destinatários (novos só pelo fluxo novo, já decidido) | manter: suspender, registrar pedido de revogação do titular (com motivo), visão cross-tenant |
-| **D-8** | Valores dos limites de OTP (telefone, IP, unidade, usuário) | os do doc 05 §3, revisados após o piloto |
-| **D-9** | Cota por categoria e resumo agrupado de D-1 multiunidade | cota por categoria (o fechamento não consome a cota do D-1); agrupamento opcional depois da M3 |
-| **D-10** | Retenção (livro-razão, desafios, mensagens) | livro-razão: vínculo + 5 anos; desafios: 30 dias; mensagens: junto com a política geral de retenção ainda pendente |
-| **D-11** | Recriar a 054 para excluir as tabelas de notificação do remapeamento (função hoje alterada pela frente do Financeiro) | sim, coordenado com a frente do Financeiro, com teste no harness |
-| **D-12** | Formato do fechamento no transporte oficial (template utility resumido + detalhe sob demanda × documento PDF) | template resumido com os 5 números principais + "responda DETALHE"; PDF só sob pedido, dentro da janela |
-| **D-13** | Provedor oficial (Cloud API direto × BSP), número dedicado e orçamento mensal | cotar 2 BSPs brasileiros e o Cloud API; número novo dedicado |
-| **D-14** | Usuários: convite por e-mail (o usuário define a senha) em vez de senha definida pelo admin | sim (via Supabase Auth invite) |
-| **D-15** | Fuso e horário por unidade passam a valer também para o Dashboard 2.0 (hoje usa o fuso da plataforma) | sim, com a origem registrada (já previsto no fechamento) |
+D-2 foi encerrada; D-3 e D-16 estão aprovadas. Abaixo, as pendentes separadas pelo que de fato **bloqueia a implementação** (Execução A, Etapas 1–5 em simulação) e pelo que pode ser decidido **antes da ativação real** (implantação, ativação M3 e WhatsApp oficial).
+
+### A. Bloqueiam a implementação (decidir antes de começar)
+
+| # | Decisão | Por que bloqueia | Recomendação |
+|---|---|---|---|
+| **D-11** | Recriar a 054 para excluir as tabelas novas (escopos, snapshot, consentimentos, convites, desafios) do remapeamento da transferência | sem isso, a migration de escopos **quebra a transferência de unidade** (FK composta, snapshot imutável). A 054 atual foi alterada pela frente do Financeiro (a lista `gestao_financeira_tabelas_da_unidade()`), então a mudança precisa de coordenação para não sobrescrever o trabalho de lá | sim, com uma função própria `comunicacao_tabelas_fora_do_remapeamento()` chamada pela 054, mantendo o corpo atual do Financeiro, e prova no harness PG com a cadeia real |
+| **D-9** | Cota por categoria | o fechamento simulado passa pelo mesmo pipeline. Se consumir a cota de `max_por_contato_por_dia = 3`, **altera o D-1** e viola a regra de equivalência | cota por categoria (o D-1 conserva exatamente a regra atual) e transporte `noop` sem consumir cota real. O resumo agrupado de D-1 fica para depois |
+| **D-4** | Exibição do número completo e armazenamento do telefone no desafio OTP | define o esquema de `comunicacao_desafios_titular` e as respostas da API | mascarado sempre na listagem; completo só no formulário para `gerenciar` da unidade; o desafio guarda o E.164 (necessário para enviar) e é apagado em 30 dias |
+| **D-14** | Usuários: convite por e-mail × senha definida pelo admin | define o escopo da seção Usuários da Etapa 1 | convite por e-mail (Supabase Auth invite). Se preferir não mexer agora, a Etapa 1 só corrige a permissão visível e mantém o fluxo atual |
+| **D-15** | Fuso e horário por unidade também no Dashboard 2.0 | a Etapa 1 cria as colunas. Usá-las no fechamento muda a competência dos fechamentos já gerados (hoje no fuso da plataforma, com a origem gravada) | criar as colunas e usar nas notificações; no Dashboard 2.0 só a partir de uma data de corte, com a origem gravada, **sem** reprocessar o histórico |
+
+### B. Podem ser definidas antes da ativação real (não impedem construir e testar em simulação)
+
+| # | Decisão | Quando precisa estar decidida | Recomendação |
+|---|---|---|---|
+| **D-1** | Base legal e textos dos termos | antes do primeiro convite real (a implementação usa uma versão de texto "rascunho" só em simulação) | consentimento explícito por categoria; textos validados juridicamente |
+| **D-5** | Como o link do convite chega ao titular | antes do primeiro convite real (a implementação entrega QR + link copiável; outros canais são acréscimo) | QR/link exibido ao gestor; template utility só depois do opt-in |
+| **D-6** | Revalidação periódica da posse (só para o fluxo novo) | antes de completar 12 meses do primeiro ATIVO | 12 meses, ou após falhas permanentes |
+| **D-7** | Capacidades restantes do Painel ADM (destinatário novo por atestado já está proibido) | antes da implantação | suspender, registrar pedido do titular, visão cross-tenant |
+| **D-8** | Valores dos limites de OTP | antes do primeiro OTP real (os limites são configuráveis) | os do doc 05 §3, revistos após o piloto |
+| **D-10** | Retenção (livro-razão, desafios, mensagens) | antes da implantação (os jobs de limpeza não executam sem decisão) | livro-razão: vínculo + 5 anos; desafios: 30 dias; mensagens: com a política geral |
+| **D-12** | Formato do fechamento no transporte oficial | antes da Etapa 6 | template utility resumido + detalhe sob demanda |
+| **D-13** | Provedor oficial, número dedicado e orçamento | antes da Etapa 6 (sem ele não há OTP real; os legados seguem no D-1 normalmente) | cotar 2 BSPs brasileiros e o Cloud API; número novo dedicado |
+
+**Autorizações específicas (não são decisões de desenho):** aplicar migrations em cada ambiente, publicar (push/PR/merge), deploy, criar a env `NOTIFICACOES_OTP_SEGREDO`, ativar a M3 e ligar qualquer transporte real.

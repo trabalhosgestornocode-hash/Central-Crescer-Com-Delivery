@@ -30,7 +30,7 @@
   - migração idempotente + rollback.
 - **Riscos:** regressão em fluxos existentes (Tabelas Comerciais é chamada pelo Dashboard iFood). **Mitigação:** manter `abrirSecaoConfiguracoes(id)`.
 - **Aceite:** nenhuma funcionalidade some; unit_manager não vê ação que não pode executar; nenhum emoji como ícone; nenhuma rolagem horizontal; foco e anúncios corretos.
-- **Decisões:** D-3 (papéis), D-14 (convite por e-mail em vez de senha definida pelo admin).
+- **Decisões:** D-3 APROVADA (matriz no doc 06 §3.2); pendentes que afetam esta etapa: D-14 (convite por e-mail) e D-15 (uso do fuso da unidade no Dashboard 2.0).
 
 ## Etapa 2 — Central de Notificações (cadastro, escopos, preferências)
 
@@ -52,7 +52,18 @@
   - `comunicacao_legado_snapshot` (imutável) e a RPC `comunicacao_ativar_selecao_por_escopo`, que grava o snapshot dos legados (`LEGACY_ACTIVE`, só `pendencia_d1`, universo do monitor D-1) e cria os escopos **na transação da ativação**. **A migration não executa a ativação**: ela acontece na Etapa 4/implantação, com autorização (D-16, doc 07 §1). Sem linha no livro-razão; `contatos_whatsapp` e `comunicacao_destinatario_categorias` intocados;
   - pendência "Nenhum destinatário configurado para o Dashboard iFood D-1" e vínculo explícito de legado a unidade nova (só D-1, auditado — doc 06 §4.1);
   - exclusão do remapeamento (D-11) e gatilho de transferência.
-- **Testes:** isolamento (doc 06 §5), permissões, backfill sem mudança na resolução do D-1 (comparar `comunicacao_resolver_destinatarios` antes/depois em Postgres real), transferência (harness `testes-seguros/pg`).
+- **Testes:**
+  - isolamento (doc 06 §5); transferência (harness `testes-seguros/pg`); resolução do D-1 inalterada antes/depois das migrations (M0 não cria vínculo);
+  - **permissões D-3, um caso por linha da matriz do doc 06 §3.2**, nas **três camadas** (interface esconde, API recusa com 403/404, RPC/banco recusa com `42501` mesmo chamada diretamente):
+    - admin da empresa A1+A2: gerencia nas duas; não vê nada da empresa B;
+    - gerente de A1: gerencia só A1; não lista, não convida, não suspende e não vincula em A2; ids de A2 → 404;
+    - destinatário com escopo em A1 **e** A2: o gerente de A1 suspende só o escopo de A1 (A2 intacto); não edita nome/número; registrar pedido de revogação afeta só A1;
+    - número compartilhado entre empresas (5 em produção): nenhuma ação de gestor altera `contatos_whatsapp` nem o vínculo em outra empresa;
+    - nenhum papel grava `CONCEDIDO` nem reativa um `REVOGADO` (rota inexistente + RPC recusa);
+    - legado: o gerente vincula legado à **própria** unidade nova só para o D-1; outra categoria → recusa no banco;
+    - finance: só leitura; viewer/operations: nada;
+    - múltiplos perfis do mesmo usuário: a troca de empresa ou unidade troca o escopo; nada vaza entre sessões;
+    - auditoria: toda escrita sensível gera evento com `detalhes.unidade_id`; o gerente lê só a da própria unidade; a resposta não contém IP, user-agent nem número completo.
 - **Riscos:** quebrar a transferência de unidade (FK composta) → teste obrigatório. Divergência entre Painel ADM e Central → uma só fonte (as mesmas tabelas).
 - **Aceite:**
   - a **prova de regressão do doc 07 §1.1** passa por inteiro: mesmos destinatários, mensagens, chaves, conteúdo, horários e cotas do D-1, com a flag desligada e ligada;
@@ -95,10 +106,22 @@
 - **Migrations:** `135_notificacoes_resolucao_escopos` (nova versão de `comunicacao_resolver_destinatarios` com rollback guardando o corpo atual; `comunicacao_categorias.transporte`).
 - **Testes:**
   - com a flag desligada, o D-1 fica idêntico byte a byte (mesmas mensagens e chaves);
+  - **ativação M3 (doc 07 §1.2):**
+    - atomicidade: falha injetada em cada passo → nada gravado, flag desligada, D-1 pelo ramo antigo;
+    - sem estado intermediário: duas sessões reais no Postgres, uma ativando e outra agendando o D-1 ao mesmo tempo; o agendamento vê só antigo ou só novo, e os destinatários são iguais;
+    - idempotência: segunda chamada → `JA_ATIVADA`, sem linhas novas;
+    - equivalência interna: uma divergência plantada → `ROLLBACK`;
+    - universo divergente (unidade inativa, de teste ou de outra empresa no `p_universo`) → recusa;
+    - snapshot imutável;
+    - desligar a flag volta ao comportamento anterior;
+  - cenários D-16: 1 unidade, várias unidades, unidade criada antes e depois da ativação, unidade reativada;
   - com a flag ligada, os mesmos destinatários para os legados;
   - fechamento: uma mensagem por destinatário e versão, nenhuma para PRELIMINAR/INCOMPLETO, cancelamento da versão superada, mesmos números da prévia;
   - teste arquitetural: OTP nunca pelo Baileys.
-- **Aceite:** zero mudança de comportamento real com as flags padrão.
+- **Aceite:**
+  - zero mudança de comportamento real com as flags padrão;
+  - a ativação M3 cumpre todas as garantias do doc 07 §1.2 em Postgres real;
+  - **a ativação não é executada** em nenhum ambiente real sem autorização específica.
 
 ## Etapa 5 — Simulação e homologação
 

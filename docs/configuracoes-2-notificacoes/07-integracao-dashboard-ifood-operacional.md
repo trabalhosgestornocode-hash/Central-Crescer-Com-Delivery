@@ -79,6 +79,24 @@ Comparação **antes × depois** de cada migration nova e, sobretudo, **imediata
 
 Nenhuma alteração na base de produção nem no gateway é feita sem autorização específica.
 
+### 1.2 Ativação M3 — garantias (D-16, momento do congelamento **APROVADO** em 30/10/2026)
+
+A ativação é **uma** chamada da RPC `comunicacao_ativar_selecao_por_escopo(p_migracao_id, p_universo, p_ator)`, disparada só pelo Painel ADM, com confirmação explícita, MFA quando exigido e **autorização específica para cada ambiente**. Nunca é executada por migration, deploy ou agendador.
+
+| Garantia exigida | Como |
+|---|---|
+| **Captura = unidades abrangidas pelo monitor atual** | o backend monta `p_universo` com a **mesma função** do monitor D-1 (`administrativo.repo.js:69-123`, sem critério paralelo) e envia `{unidade_id, organizacao_id}` + hash. A RPC confere no banco que cada unidade existe, está ativa, pertence à empresa e não é de teste; qualquer divergência aborta |
+| **Atômica com a mudança da seleção** | numa só transação: snapshot (`comunicacao_legado_snapshot`) → escopos `LEGACY_ACTIVE` (`origem_vinculo = SNAPSHOT_MIGRACAO`) → flag `comunicacao_configuracoes.selecao_por_escopo = {ligada, migracao_id, ativada_em, ator}` → auditoria `NOTIFICACAO_SELECAO_ATIVADA` (contagens + hash do snapshot) |
+| **O D-1 nunca observa estado intermediário** | (1) `comunicacao_resolver_destinatarios` vira **um único comando SQL** que lê a flag e escolhe o ramo (antigo × escopos) no mesmo snapshot MVCC; (2) as RPCs de agendamento do D-1 tomam `pg_advisory_xact_lock_shared(K)`, e a ativação toma `pg_advisory_xact_lock(K)` exclusivo: nenhum agendamento roda durante a ativação, e todo agendamento vê ou tudo antigo ou tudo novo |
+| **Equivalência verificada dentro da própria transação** | antes do `COMMIT`, a RPC compara, para **todas** as empresas, a resolução pelo ramo antigo com a resolução pelo ramo novo (`contato_empresa_id`, `elegivel`, `motivo`). Qualquer diferença levanta exceção → `ROLLBACK` |
+| **Idempotente** | flag já ligada com o mesmo `migracao_id` → devolve `JA_ATIVADA`, sem efeito. Outro `migracao_id` com a flag ligada → recusa. `UNIQUE (migracao_id, contato_empresa_id, unidade_id)` no snapshot |
+| **Falha segura** | qualquer erro (lock_timeout de 5 s, divergência, constraint) desfaz tudo: a flag continua desligada e o D-1 segue pelo comportamento anterior. Nada fica pela metade |
+| **Snapshot imutável** | trigger recusa UPDATE/DELETE (inclusive `service_role`); fora do remapeamento da transferência (doc 06 §4) |
+| **Alterações posteriores em eventos separados** | inclusão ou remoção de vínculo, suspensão, revogação: escopo + `plataforma_auditoria` (doc 06 §3.4). O snapshot nunca é tocado |
+| **Novas unidades não herdam** | depois da ativação, a resolução só lê escopos com `unidade_id` explícito (doc 06 §4.1) |
+| **Revogação também em mensagens enfileiradas** | o JIT revalida opt-out, consentimento e escopo antes de cada envio (policy fail-closed). Revogar ou suspender após o agendamento cancela no próximo claim, com provider = 0 (prova 9 do §1.1) |
+| **Reversão** | desligar a flag (outra chamada auditada) devolve o comportamento anterior. Snapshot, escopos e auditoria permanecem como registro histórico |
+
 ## 2. Dashboard Operacional 2.0: fechamento diário
 
 Reaproveitamento, sem duplicar cálculo:

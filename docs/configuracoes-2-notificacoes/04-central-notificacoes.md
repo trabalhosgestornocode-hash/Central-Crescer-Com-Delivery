@@ -63,7 +63,7 @@ Regras do `LEGACY_ACTIVE`:
 
 ## 4. Funcionalidades (usuário autorizado da unidade/empresa)
 
-| Ação | Quem (proposta; decisão D-3) | Observação |
+| Ação | Quem (**D-3 APROVADA**: admin da empresa nas unidades com acesso; gerente **só na própria unidade**; matriz completa no doc 06 §3.2) | Observação |
 |---|---|---|
 | Ver destinatários e estado | `notificacoes.ver` (org admin, unit manager, finance) | número mascarado |
 | Ver pendência de unidade sem D-1 | `notificacoes.ver` | texto fixo: **"Nenhum destinatário configurado para o Dashboard iFood D-1"** (D-16) |
@@ -76,6 +76,8 @@ Regras do `LEGACY_ACTIVE`:
 | Ver consentimentos ativos (categoria, versão do texto, data, origem) | `notificacoes.ver` | sem IP e sem dados técnicos |
 | Revogar autorização **administrativa** | `notificacoes.gerenciar` | = suspender/remover. **Revogar o consentimento é ato do titular** (o admin pode registrar um pedido do titular, com motivo e auditoria) |
 | Histórico de notificações por unidade/destinatário | `notificacoes.ver` | mensagens, status (enviada/entregue/lida/cancelada com motivo), sem conteúdo integral para quem não gerencia |
+| Consultar auditoria de notificações | `notificacoes.gerenciar` (admin: empresa; gerente: unidade) | sem IP, user-agent ou número completo (doc 06 §3.4) |
+| Confirmar consentimento ou reativar revogação em nome do titular | **ninguém** | só o titular, por OTP + aceite do texto vigente; garantido no banco (doc 06 §3.3) |
 
 **Equipe Crescer (Painel Administrativo):**
 - continua com a visão cross-tenant, o modo global, a conexão, os limites globais, o grupo interno e o apoio à adesão voluntária dos legados;

@@ -30,15 +30,70 @@ Total: **6 tabelas novas** (5 + o snapshot imutável do D-16) e colunas em 2 exi
 - Toda RPC com `SECURITY INVOKER` + `search_path` fixo + EXECUTE só para `service_role`. A exceção é o **consumo do desafio**, que pode ser `SECURITY DEFINER` com validação interna (como `operacional_fechamento_registrar`) para garantir atomicidade.
 - **Coerência de tenant** por trigger: a unidade do escopo pertence à empresa do destinatário (padrão `operacional_validar_tenant`). A FK composta impede um escopo de destinatário de outra empresa.
 
-## 3. Acesso por perfil
+## 3. Acesso por perfil — **D-3 APROVADA (30/10/2026)**
 
-| Permissão (nova) | Papéis (proposta, decisão D-3) |
+### 3.1 Permissões
+
+| Permissão (nova) | Papéis |
 |---|---|
-| `notificacoes.ver` | organization_admin, unit_manager, finance |
-| `notificacoes.gerenciar` | organization_admin; **unit_manager só nas unidades do seu vínculo** (se aprovado) |
-| Painel ADM (`requirePainelAdministrativo`) | equipe Crescer: visão cross-tenant e apoio à adesão voluntária dos legados |
+| `notificacoes.ver` | organization_admin, unit_manager, finance (finance só leitura) |
+| `notificacoes.gerenciar` | organization_admin (unidades a que tem acesso); **unit_manager (exclusivamente a própria unidade)** |
+| Painel ADM (`requirePainelAdministrativo`) | equipe Crescer: visão cross-tenant, suspensão, registro de pedido do titular, apoio à adesão voluntária. **Não** autoriza destinatário novo por atestado |
 
-- **Escopo de unidade no backend:** toda rota resolve `req.tenant`. Se o vínculo do usuário é de **unidade**, ele só vê e altera escopos daquela unidade e destinatários que tenham escopo nela. Destinatários "todas as unidades" aparecem só leitura para ele.
+Hoje o `unit_manager` não tem `configuracoes.gerenciar` (`permissoes.js`). Por isso `notificacoes.gerenciar` é uma **permissão própria**, que não amplia o que ele altera nas demais seções de Configurações.
+
+### 3.2 Matriz (ação × papel)
+
+Legenda: ✔ permitido · U = só na própria unidade · L = só leitura · ✘ negado.
+
+| Ação | Admin da empresa | Gerente da unidade | Finance | Viewer / Operations | Titular (sem conta) |
+|---|---|---|---|---|---|
+| Ver destinatários, estados e pendências | ✔ (unidades com acesso) | U | L | ✘ | — |
+| Ver número completo | ✔ só no formulário de edição (D-4) | U, idem | ✘ | ✘ | o próprio |
+| Gerar convite (OTP) | ✔ | U | ✘ | ✘ | — |
+| Configurar categorias e horários do escopo | ✔, ≤ consentimento | U, ≤ consentimento | ✘ | ✘ | restringe as próprias |
+| Suspender / reativar escopo | ✔ | U | ✘ | ✘ | — |
+| Remover vínculo com a unidade | ✔ | U | ✘ | ✘ | sai da unidade/empresa |
+| Incluir legado em unidade **nova**, só D-1 | ✔ | U (a unidade dele) | ✘ | ✘ | — |
+| Editar nome/papel do destinatário | ✔ | U **só se o destinatário não tiver escopo em outra unidade** | ✘ | ✘ | — |
+| Trocar o número de um destinatário | ✘ (troca de número = destinatário novo + convite) | ✘ | ✘ | ✘ | — |
+| Registrar pedido de revogação do titular | ✔ (escopo da empresa) | U (efeito só no escopo da unidade) | ✘ | ✘ | revoga tudo pelo link |
+| Confirmar consentimento pelo titular | **✘ para todos** | ✘ | ✘ | ✘ | **só o titular** |
+| Reativar consentimento revogado | **✘ para todos** | ✘ | ✘ | ✘ | **só o titular**, por novo aceite (OTP + texto) |
+| Consultar histórico de mensagens | ✔ | U | L | ✘ | — |
+| Consultar auditoria de notificações | ✔ (escopo da empresa) | U | ✘ | ✘ | — |
+
+### 3.3 Onde cada regra é garantida
+
+A interface **não** é fonte de segurança: tudo vale no backend **e** no banco.
+
+| Restrição | Backend | Banco |
+|---|---|---|
+| Sem acesso entre empresas | `req.tenant.organizacaoId` em toda consulta; ids de outra empresa → 404 | FK composta `(contato_empresa_id, organizacao_id)` + trigger de coerência unidade ↔ empresa |
+| Sem acesso indevido entre unidades | vínculo de **unidade** na sessão → filtro obrigatório `unidade_id = vínculo`; rotas aceitam só ids (nunca organização/unidade vindos do navegador) | RPCs de escrita recebem `p_unidade_permitida` (nulo só para vínculo de empresa) e recusam escopo fora dela (`42501`) |
+| Número compartilhado não afeta outras unidades | o gerente edita só **escopos** da unidade; nome/papel só se o destinatário for exclusivo da unidade; o número é imutável no lugar | `comunicacao_contatos_empresa.telefone_e164` sem UPDATE para `service_role` após verificado (trigger); `contatos_whatsapp` (global) nunca é escrito por rota de gestor |
+| Ninguém consente pelo titular nem reativa revogação | não existe rota de gestor que grave `CONCEDIDO` | `INSERT` de `CONCEDIDO` só pela RPC do titular, que exige desafio OTP consumido **e** `termo_hash` vigente; a RPC de gestor só aceita `acao = 'REVOGADO'` |
+| Legado só D-1 | API recusa outra categoria | `CHECK (origem_autorizacao <> 'LEGACY_ACTIVE' or categoria = 'pendencia_d1')` |
+| Auditoria das alterações sensíveis | `auditar()` em toda escrita (convite, escopo, suspensão, vínculo legado, pedido de revogação) | ver §3.4 |
+
+### 3.4 Auditoria por unidade (sem quebrar a transferência)
+
+- A auditoria vai para `plataforma_auditoria` (020: imutável, sem FK, `organizacao_id` e `perfil_id`), com a **unidade em `detalhes.unidade_id`** e índice de expressão `((detalhes->>'unidade_id'))` para filtro.
+- **Não** se adiciona coluna `unidade_id` à tabela. Uma tabela imutável com `organizacao_id + unidade_id` entraria no remapeamento da transferência (054) e quebraria a transferência inteira, o mesmo defeito da 131.
+- A rota de leitura para gestores (`GET /notificacoes/auditoria`):
+  - filtra por empresa da sessão + entidades de notificação + unidade (quando o vínculo é de unidade);
+  - devolve só data, ação, autor (nome/perfil), alvo mascarado e motivo;
+  - **nunca** devolve IP, user-agent, e-mail de terceiros ou número completo.
+- Eventos:
+  - `NOTIFICACAO_CONVITE_CRIADO`;
+  - `NOTIFICACAO_ESCOPO_ALTERADO`;
+  - `NOTIFICACAO_ESCOPO_SUSPENSO`/`REATIVADO`;
+  - `NOTIFICACAO_VINCULO_INCLUIDO`/`REMOVIDO` (legado D-1);
+  - `NOTIFICACAO_REVOGACAO_REGISTRADA`;
+  - `NOTIFICACAO_SELECAO_ATIVADA` (M3, com contagens e hash do snapshot);
+  - `NOTIFICACAO_DESTINATARIO_EDITADO`.
+
+- **Escopo de unidade no backend:** toda rota resolve `req.tenant`. Se o vínculo do usuário é de **unidade**, ele só vê e altera escopos daquela unidade. Destinatários com escopo também em outras unidades aparecem com o número mascarado e sem as ações que afetariam as outras unidades.
 - **Múltiplos perfis do mesmo usuário:** a permissão vem do vínculo da sessão (`sessoes_contexto.permissoes`), como hoje. Trocar de empresa troca o escopo, e `carregarProtegido` evita mistura na tela.
 - **Titular sem conta:** as rotas públicas `/notificacoes/convite/*` e `/notificacoes/gerenciar/*` ficam **fora** do `requireAuth`. Elas são protegidas por token de convite (hash) ou desafio consumido, com rate limit próprio e resposta anti-enumeração. Não recebem nem devolvem dados da unidade além de nome da empresa, unidades e categorias.
 
