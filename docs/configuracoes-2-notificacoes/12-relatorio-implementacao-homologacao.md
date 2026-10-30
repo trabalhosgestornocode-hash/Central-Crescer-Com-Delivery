@@ -105,3 +105,30 @@ Mesmo ambiente fictício (`SUPABASE_URL=http://127.0.0.1:9`, sem `DATABASE_URL`)
   (`crescer-wt-100`); as demais entradas órfãs ficaram como estavam (sem permissão). Os dois worktrees temporários da main usados para
   comparar (`wt-main-pfd`, `wt-main-crash`) foram removidos; a metadata deles em `.git/worktrees` não pôde ser apagada (permissão), como as
   órfãs antigas. Nenhuma branch, commit ou worktree ativo foi afetado.
+
+## 8. Revisão final do PR #55 (30/10/2026, commit `b5ca1f2`)
+
+**Achados e correções desta revisão:**
+
+| # | Achado | Severidade | Situação |
+|---|---|---|---|
+| R1 | Cifra autenticada aceitava tag GCM truncada (4 bytes) — Node só fixa o tamanho com `authTagLength` | Baixa (exige escrita no banco para explorar) | **Corrigido** + teste |
+| R2 | Faltava teste HTTP das rotas públicas (só POST, 429 por IP, sem cache/referrer) e do D-3 por papel | Lacuna de teste | **Coberto** (`notificacoes-http-negativos.test.js`, 9 testes; recusas não tocam dados e são auditadas) |
+| R3 | Prova do D-1 não cobria idempotência ao reagendar nem a definição da fila | Lacuna de teste | **Coberto** no PostgreSQL (77/77) |
+| R4 | Perfis Financeiro/Consulta/Operação não testados no navegador | Lacuna de teste | **Coberto** com o catálogo real de permissões |
+| R5 | Piso de 700 ms na gestão do titular: se o caminho real passar disso em produção, a existência do número pode vazar pelo tempo | Baixa/média | **Risco residual** — medir na homologação e subir o piso se preciso |
+| R6 | Link de convite montado com `req.protocol`/`Host` | Baixa (`trust proxy` em produção; redirect do e-mail limitado pela lista do Supabase) | Aceito |
+| R7 | Números de quem CONSENTE ficam em `comunicacao_contatos_empresa.telefone_e164` (coluna existente, em claro, como os legados) | Informativo | Modelo atual do D-1; cifra cobre convites e desafios |
+| R8 | 503 "indisponível" das rotas públicas gera stack no log | Ruído (sem dado) | Aceito |
+| R9 | Admin da empresa perde a criação de conta com senha (D-14) até o SMTP; SuperAdmin continua criando | Operacional | Decisão de implantação (doc 14 §1) |
+
+**Verificado e sem achado:** sem `SECURITY DEFINER`; 25 funções com `search_path` fixo; RLS nas 7 tabelas; logs só com ids/contagens;
+tokens nunca na URL; páginas públicas sem script inline e com `textContent`/escape; preview do Vercel protegido por login;
+nenhum preview do Render no PR; aceite de convite funciona para conta sem `perfis`; app inicia sem o segredo; nenhum conflito novo
+com as branches do Financeiro (mesmas contagens que a main) e nenhuma colisão de número de migration.
+
+**Regressão final × main (`9da8210`):** backend 5777 / 5738 ok / **14 falhas = as mesmas 14 da main, 0 só na branch** / 25 pulados;
+frontend 1648 / 0 falhas; navegador 126/127 (a falha `parserFoodDelivery` "dia único" ocorre igual na main); PostgreSQL descartável 77/77.
+
+**Não executado (não classificar como PASS):** homologação no Supabase de teste (bloqueada — doc 14 §4); validação via PostgREST real;
+e-mail real do convite de usuário; medição de latência da gestão do titular; testes em celular físico (feitos em viewport de 390 px).
