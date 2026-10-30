@@ -566,3 +566,29 @@ export const agenteHistorico = (conversationId) => getJson(`/api/v1/agente/conve
 export async function health() {
   return getJson("/health");
 }
+
+// ---------- Central de Notificações (Configurações 2.0) ----------
+// O recorte (empresa/unidade) vem SEMPRE da sessão no servidor (D-3); daqui só saem ids do alvo e as escolhas do gestor.
+const NOTIF = "/api/v1/notificacoes";
+export const notificacoesResumo = () => getJson(`${NOTIF}/resumo`);
+export const notificacoesCategorias = () => getJson(`${NOTIF}/categorias`);
+export const notificacoesDestinatarios = () => getJson(`${NOTIF}/destinatarios`);
+export const notificacoesHistorico = (unidadeId = null) => getJson(`${NOTIF}/historico${unidadeId ? `?unidadeId=${encodeURIComponent(unidadeId)}` : ""}`);
+export const notificacoesConsentimentos = () => getJson(`${NOTIF}/consentimentos`);
+export const notificacoesAuditoria = () => getJson(`${NOTIF}/auditoria`);
+export const notificacoesConvidar = (dados) => postJson(`${NOTIF}/convites`, dados);
+export const notificacoesCancelarConvite = (id) => postJson(`${NOTIF}/convites/${encodeURIComponent(id)}/cancelar`, {});
+export const notificacoesSuspender = (destinatarioId, dados) => postJson(`${NOTIF}/destinatarios/${encodeURIComponent(destinatarioId)}/suspensao`, dados);
+export const notificacoesVincularLegado = (destinatarioId, dados) => postJson(`${NOTIF}/destinatarios/${encodeURIComponent(destinatarioId)}/vincular-unidade`, dados);
+export const notificacoesPedidoRevogacao = (destinatarioId, dados) => postJson(`${NOTIF}/destinatarios/${encodeURIComponent(destinatarioId)}/pedido-revogacao`, dados);
+export async function notificacoesPreferencias(destinatarioId, dados) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${NOTIF}/destinatarios/${encodeURIComponent(destinatarioId)}/preferencias`, {
+    method: "PUT", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify(dados ?? {}),
+  });
+  return tratar(r, g);
+}
+
+// ---------- Usuários: convites por e-mail (D-14) ----------
+export const listarConvitesUsuario = () => getJson(`/api/v1/usuarios/convites`);
+export const revogarConviteUsuario = (id) => delJson(`/api/v1/usuarios/convites/${encodeURIComponent(id)}`);

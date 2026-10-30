@@ -9,6 +9,7 @@ import { escapeHtml } from "./utils.js";
 import { icon } from "./icons.js";
 import { num, dataBr } from "./checklistOperacionalDashboardVisual.js";
 import { cssRelatorio } from "./checklistOperacionalRelatorio.js";
+import { horaNoFuso, dataHoraNoFuso } from "./checklistOperacionalFuso.js";
 
 export const ABAS_DASHBOARD = Object.freeze([
   { id: "visao", rotulo: "Visão Geral e Desempenho", icone: "bar-chart" },
@@ -17,8 +18,9 @@ export const ABAS_DASHBOARD = Object.freeze([
   { id: "fechamentos", rotulo: "Fechamentos e Relatórios", icone: "file-text" },
 ]);
 
-const hora = (iso) => (iso ? new Date(iso).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }) : "—");
-const dataHora = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }) : "—");
+// Horários no fuso da operação informado pelo servidor (D-15).
+const hora = (iso) => horaNoFuso(iso);
+const dataHora = (iso) => dataHoraNoFuso(iso);
 const brl = (v) => (v == null ? "—" : Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }));
 const min = (v) => (v == null ? "—" : `${num(v)} min`);
 const STATUS = { PLACED: "Recebido", CONFIRMED: "Confirmado", READY_TO_PICKUP: "Pronto", DISPATCHED: "Despachado", CONCLUDED: "Concluído", CANCELLED: "Cancelado" };

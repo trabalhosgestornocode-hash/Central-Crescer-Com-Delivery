@@ -1029,6 +1029,9 @@ function wireEventos() {
     atualizarCabecalho();
   });
 
+  // Atalhos de Configurações → módulo dono da configuração. irPara já recusa rota sem acesso (cai na primeira acessível).
+  document.addEventListener("app:navegar", (e) => { if (typeof e.detail?.rota === "string") irPara(e.detail.rota); });
+
   // "Selecionar unidade" dentro do aviso de um módulo bloqueado (item 11) —
   // abre o MESMO seletor global do topbar, nunca um fluxo paralelo (item 10).
   // Se não houver outra unidade pra oferecer (chip desabilitado), avisa em

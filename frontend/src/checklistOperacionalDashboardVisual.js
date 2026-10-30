@@ -6,6 +6,7 @@
 
 import { escapeHtml } from "./utils.js";
 import { icon } from "./icons.js";
+import { dataHoraNoFuso, fusoOperacao } from "./checklistOperacionalFuso.js";
 import { graficosDoDashboard, NOME_ETAPA, COR_ETAPA } from "./checklistOperacionalGraficos.js";
 
 export const PERIODOS_DASHBOARD = Object.freeze([
@@ -27,14 +28,14 @@ export const SECOES_RELATORIO = Object.freeze([
 
 export const num = (v, casas = 1) => (v == null || Number.isNaN(v) ? "—" : Number(v).toLocaleString("pt-BR", { maximumFractionDigits: casas, minimumFractionDigits: 0 }));
 export const dataBr = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "—");
-const horaBr = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short" }) : "—");
+const horaBr = (iso) => dataHoraNoFuso(iso);
 const SEVERIDADE = { alta: "Prioridade alta", media: "Atenção", informativa: "Informativo" };
 
 /** "01/10/2026 a 21/10/2026 (parcial até 15:00)". */
 export function textoPeriodo(p) {
   if (!p) return "—";
   const base = p.inicio === p.fim ? dataBr(p.inicio) : `${dataBr(p.inicio)} a ${dataBr(p.fim)}`;
-  return p.ate ? `${base} (parcial até ${new Date(p.ate).toLocaleTimeString("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" })})` : base;
+  return p.ate ? `${base} (parcial até ${new Date(p.ate).toLocaleTimeString("pt-BR", { timeZone: p.fuso ?? fusoOperacao(), hour: "2-digit", minute: "2-digit" })})` : base;
 }
 
 /**
