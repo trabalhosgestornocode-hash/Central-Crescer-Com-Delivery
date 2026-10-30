@@ -109,3 +109,14 @@ digital (consulta de `prevoo_136.sql`): colunas `d34b254e…`, ACL/RLS `fa4f73de
   sem mudar o valor o UPDATE passa; `service_role` grava; fuso e horário inválidos recusados (`22023`); `anon` não executa o resolvedor nem a função do gatilho; D-1 igual; M3 desligada.
 - Estado final: 0 unidades com fuso, 0 resíduo, RLS de `unidades` ligada, política `rls_unidades_tenant` inalterada, legados e contatos com os mesmos hashes, PostgREST (anon) sem exposição (`postgrest-136.txt`).
 - Limite: a exposição das demais colunas de `unidades` pela política existente continua (pré-existente, produção igual).
+
+## Sequência consolidada de implantação 132–136 em PRODUÇÃO (não executada; cada passo exige autorização própria)
+
+1. **Pré-condições:** PR #55 revisado; `main` ainda em `9da8210` (senão reconferir numeração); fila ativa do D-1 conferida; fora do horário de agendamento do D-1.
+2. **Capturar a impressão digital de produção** (colunas, funções+ACL, gatilhos, políticas, ACL/RLS, config; dados: `comunicacao_destinatario_categorias`, `comunicacao_contatos_empresa`, `contatos_whatsapp`, `unidades`, mensagens). Referências já lidas: 5 hashes de funções do D-1/transferência iguais aos da main; 41 destinatários D-1; 53 unidades; migrations até 131.
+3. **Aplicar 132 → 133 → 134 → 135 → 136**, preferindo `apply_migration` (registra no histórico). Se usar o SQL Editor: forçar LF (`model.setEOL(0)`), colar o arquivo do MESMO commit e conferir o SHA-256 antes de executar. Uma transação por pacote, sem as linhas begin/commit quando via `apply_migration`.
+4. **Validar** (só leitura): `validar_pos_132_135.sql` (agendamento `7b7c0a59…` exato, resolvedor/cota/transferência intactos, RLS 7/7, anon/authenticated sem tabela e sem EXECUTE, D-1 equivalente em TODAS as unidades, legados e fila intocados, M3 ausente) + `validar_postgrest.mjs` com a chave pública + checagens da 136 (gatilho `10a2368a…`, anon/authenticated recusados em fuso/horário).
+5. **Critério de parada:** qualquer item ≠ OK → reverter com os rollbacks na ordem 136→132 (ensaiados) e parar.
+6. **Merge do PR #55** (dispara o deploy). Conferir `/health` e os arquivos novos.
+7. **Variáveis (opcional):** `APP_URL_PUBLICA`, `NOTIFICACOES_SEGREDO_MESTRE`. Nunca em produção: `NOTIFICACOES_OTP_TRANSPORTE`, `NOTIFICACOES_AMBIENTE_ISOLADO`, `NOTIFICACOES_M3_ATIVACAO_HABILITADA`.
+8. **24 h de observação** do D-1; depois, separadamente: SMTP + `USUARIOS_CONVITE_EMAIL`, corte do fuso, provedor oficial/termos, M3.
