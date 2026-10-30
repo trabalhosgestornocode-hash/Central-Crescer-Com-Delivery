@@ -26,7 +26,8 @@ nenhuma migration aplicada, nenhuma variável criada, nenhum push, PR, merge, de
 | `NOTIFICACOES_PALAVRA_CHAVE_SAIR` | ausente → desligada | SAIR/PARAR/STOP no WhatsApp revoga (depende do inbound, hoje parado — ver memória do companion) |
 | `RATE_LIMIT_NOTIFICACOES_TITULAR_MAX` | 40 por 10 min por IP | limite das rotas públicas do titular |
 | `OPERACIONAL_FUSO_UNIDADE_CORTE` | ausente → fuso da plataforma em tudo | data (AAAA-MM-DD) a partir da qual o fuso da unidade vale |
-| `USUARIOS_CONVITE_EMAIL` | ausente → convite criado, e-mail **não** enviado (aviso na tela) | `supabase` usa `auth.admin.inviteUserByEmail` |
+| `USUARIOS_CONVITE_EMAIL` | ausente → conta NOVA recusada com 409 ("peça ao Administrador da plataforma") e **nada é criado**; conta existente recebe o acesso como antes | `supabase` usa `auth.admin.inviteUserByEmail`; falha do e-mail revoga o convite na hora (502) |
+| `APP_URL_PUBLICA` | ausente → em produção, criar link de convite (Central ou usuário) = 503 antes de gravar | origem https confiável dos links; cabeçalhos da requisição nunca viram link em produção |
 
 ## 3. Dependências abertas (DEP)
 

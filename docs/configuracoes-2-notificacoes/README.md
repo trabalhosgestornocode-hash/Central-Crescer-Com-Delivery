@@ -18,3 +18,4 @@ Missão **somente de auditoria e planejamento** (30/10/2026): nenhum código fun
 | [12 — Relatório de implementação e homologação](12-relatorio-implementacao-homologacao.md) | O que foi entregue (blocos A–F), testes, evidências do D-1/segurança/M3/transferência, regressão × main, correções, limitações |
 | [13 — Dependências para produção](13-dependencias-producao.md) | Ordem de implantação, variáveis novas (nenhuma criada), DEP-1..11, garantias do que não muda |
 | [14 — Pré-voo, implantação e recuperação](14-preflight-implantacao-recuperacao.md) | Pré-voo de produção (só leitura), procedimento de implantação, plano de recuperação, estado e procedimento do Supabase de teste |
+| [15 — Homologação consolidada, SMTP e implantação](15-homologacao-consolidada-e-implantacao.md) | Pré-voo do Supabase de teste, pacote em 3 confirmações (ensaiado), SMTP e variáveis, sequência exata de implantação |

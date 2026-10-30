@@ -132,3 +132,16 @@ frontend 1648 / 0 falhas; navegador 126/127 (a falha `parserFoodDelivery` "dia �
 
 **Não executado (não classificar como PASS):** homologação no Supabase de teste (bloqueada — doc 14 §4); validação via PostgREST real;
 e-mail real do convite de usuário; medição de latência da gestão do titular; testes em celular físico (feitos em viewport de 390 px).
+
+## 9. Consolidação (30/10/2026, commit `9269af3`)
+
+| # | Item | Situação |
+|---|---|---|
+| C1 | Origem dos links de convite vinha de `Host`/protocolo da requisição | **Corrigido**: só `APP_URL_PUBLICA` (https, só origem); produção sem ela = 503 antes de gravar |
+| C2 | Gestão do titular: piso de 700 ms podia vazar a existência do número pelo tempo (R5) | **Corrigido por construção**: identificadores gerados antes do banco, resposta imediata e idêntica; processamento depois. Teste com banco lento (300 ms): resposta < 100 ms nos dois casos |
+| C3 | D-14 sem SMTP criava convite impossível de ativar | **Corrigido**: 409 e nada é criado; falha de e-mail revoga o convite na hora (502) |
+| C4 | Tag GCM de 16 bytes | Exigida na cifra nova (`b5ca1f2`). **Pré-existente fora desta frente:** a decifra do iFood (`cripto.js:89`) também não fixa `authTagLength` — sugerido corrigir na frente iFood |
+| C5 | Homologação no Supabase de teste | Pré-voo concluído; **pacote em 3 confirmações ensaiado localmente** (aplicar → validar → reverter com impressão digital idêntica → reaplicar). Não executado no remoto (confirmação interativa) — doc 15 |
+
+**Regressão final × main (`9da8210`):** backend 5782 / 5743 ok / **14 falhas = as mesmas 14 da main, 0 só na branch** / 25 pulados;
+frontend 1648 / 0 falhas; navegador 126/127 (a falha `parserFoodDelivery` "dia único" ocorre igual na main); PostgreSQL descartável **79/79**.
