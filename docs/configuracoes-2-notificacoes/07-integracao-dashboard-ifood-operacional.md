@@ -11,13 +11,22 @@ Hoje 38 empresas recebem o D-1 automaticamente, com 41 destinatários "VALIDADO"
 > - Categorias novas **nunca** são autorizadas automaticamente.
 > - Novos destinatários usam o fluxo novo; os legados podem aderir voluntariamente sem parar de receber.
 > - Revogações e bloqueios valem na hora, para todos.
+>
+> **D-16 APROVADA (30/10/2026) — escopo de unidades dos legados:**
+> - A lista de unidades abrangidas é **congelada** num snapshot imutável por destinatário × empresa × unidade, com data e rastreabilidade.
+> - Unidades criadas depois **não herdam** legados e aparecem como pendência "Nenhum destinatário configurado para o Dashboard iFood D-1".
+> - O admin autorizado pode vincular um legado a uma unidade nova **só para o D-1**, com auditoria.
+> - Nenhuma outra categoria é automática.
+> - O comportamento anterior é preservado até a nova seleção ser homologada e ativada.
+> - **"Data da migração" = ativação da nova seleção (M3)**, para que o snapshot coincida exatamente com o alcance do comportamento anterior. Assim a equivalência é exata (regra 10), sem lacuna entre a regra 3 e a regra 12.
 
 | Fase | O que muda | O que NÃO muda | Reversão |
 |---|---|---|---|
-| **M0 — Fundação** (Etapa 2/3) | tabelas novas. Backfill: cada destinatário atual com `pendencia_d1` habilitada em `comunicacao_destinatario_categorias` ganha escopo `origem_autorizacao = LEGACY_ACTIVE`, `categoria = pendencia_d1`, com o **mesmo alcance de unidades de hoje** (ver D-16). **Nenhuma** linha no livro-razão de consentimento; `contatos_whatsapp` intocado | `comunicacao_resolver_destinatarios` continua lendo as tabelas antigas; envio idêntico | apagar as tabelas novas (sem efeito no envio) |
-| **M1 — Central visível** | o cliente vê destinatários (legados com o selo "Autorização operacional anterior"), histórico e estado; destinatário **novo** entra **só** pelo fluxo convite → OTP → consentimento → categorias. O Painel ADM deixa de "autorizar" destinatários novos por atestado | os legados continuam recebendo o D-1 exatamente como hoje | desligar a Central por flag |
+| **M0 — Fundação** (Etapa 2/3) | **só as tabelas novas**, vazias de legado. Nenhum backfill de escopo ainda (D-16: o snapshot é feito na ativação, M3). **Nenhuma** linha no livro-razão de consentimento; `contatos_whatsapp` e `comunicacao_destinatario_categorias` intocados | `comunicacao_resolver_destinatarios` continua lendo as tabelas antigas; envio idêntico, **inclusive para unidade criada neste período** (regra 12: comportamento anterior até a ativação) | apagar as tabelas novas (sem efeito no envio) |
+| **M1 — Central visível** | o cliente vê os destinatários legados lidos das tabelas antigas, com o selo "Autorização operacional anterior — recebe o D-1 de todas as unidades da empresa (configuração anterior)", além de histórico e estado. Destinatário **novo** entra **só** pelo fluxo convite → OTP → consentimento → categorias. O Painel ADM deixa de "autorizar" destinatários novos por atestado | os legados continuam recebendo o D-1 exatamente como hoje | desligar a Central por flag |
 | **M2 — Adesão voluntária** (contínua, sem prazo) | o admin pode **oferecer** o fluxo novo a um legado (ex.: para receber o fechamento); o titular conclui OTP + consentimento → `ATIVO` com evidência real; durante o processo o D-1 segue | o legado que não aderir continua `LEGACY_ACTIVE` indefinidamente | — |
-| **M3 — Resolução pelos escopos** (flag, desligada por padrão) | `comunicacao_resolver_destinatarios` passa a ler os escopos: `LEGACY_ACTIVE` vale **só** para `pendencia_d1`; `ATIVO` vale para as categorias consentidas e autorizadas pelo admin | o pipeline (fila, policy, reservador, horários, reforço, chaves) é o mesmo; a prova de regressão (Etapa 5) precede a ativação da flag | desligar a flag, ou recriar a função anterior (corpo guardado no rollback, padrão 100/104) |
+| **M3 — Ativação da nova seleção = "data da migração" do D-16** (só depois de homologada e com autorização específica) | numa **única transação** (`comunicacao_ativar_selecao_por_escopo`):<br>1. grava `comunicacao_legado_snapshot`: para cada destinatário ativo com `pendencia_d1` habilitada, uma linha por **unidade ativa da empresa naquele instante** (exatamente o alcance do comportamento anterior);<br>2. cria os escopos `LEGACY_ACTIVE` correspondentes (`origem_vinculo = SNAPSHOT_MIGRACAO`, `snapshot_id`);<br>3. liga a flag.<br>A partir daí `comunicacao_resolver_destinatarios` lê os escopos: `LEGACY_ACTIVE` vale **só** para `pendencia_d1` nas unidades do snapshot e nas incluídas explicitamente; `ATIVO` vale para as categorias consentidas e autorizadas | o pipeline (fila, policy, reservador, horários, reforço, chaves) é o mesmo; a prova de regressão (Etapa 5) precede a ativação | desligar a flag (volta ao comportamento anterior; snapshot e escopos permanecem como registro), ou recriar a função anterior (corpo guardado no rollback, padrão 100/104) |
+| **M3+ — Unidades novas** | unidade criada depois da ativação **não herda** legado; aparece na Central como "Nenhum destinatário configurado para o Dashboard iFood D-1"; o admin pode vincular explicitamente um legado só para o D-1, com motivo e auditoria (doc 06 §4.1) | o D-1 das unidades do snapshot continua idêntico | remover o vínculo (auditado) |
 
 Regras de compatibilidade:
 - **Horários:** o D-1 continua com a janela global e o reforço 20–22 h. A janela do destinatário só **restringe** e só vale para quem a configurar. Os legados não têm janela própria, então nada muda para eles.
@@ -35,7 +44,21 @@ Rodada em Postgres descartável com a cadeia real da `main` + fixtures sintétic
 - habilitações com 3 fusos;
 - opt-out e pausa.
 
-Comparação **antes × depois** de cada migration nova e com a flag M3 desligada **e** ligada:
+**Cenários obrigatórios (D-16, regra 11):**
+- empresa com **1 unidade**;
+- empresa com **várias unidades** (6, como na produção);
+- unidade criada **antes** da ativação: entra no snapshot, equivalência exata;
+- unidade criada **depois** da ativação: não herda, gera a pendência e só recebe após a inclusão explícita auditada;
+- unidade **desativada** ou **de teste** antes da ativação: fica fora do snapshot, exatamente como o comportamento anterior.
+
+**Universo do snapshot** = o mesmo do monitor D-1, ou seja, a função que monta o universo monitorado em `backend/src/modules/administrativo/administrativo.repo.js:69-123`:
+- `unidades.ativo = true`;
+- organização com `status = 'ativa'`;
+- sem `eh_teste`.
+
+A ativação reutiliza essa função, sem critério paralelo, e a prova de equivalência compara contra ela. Uma unidade **reativada** depois da ativação é tratada como unidade nova: não herda, gera pendência e exige vínculo explícito.
+
+Comparação **antes × depois** de cada migration nova e, sobretudo, **imediatamente antes × imediatamente depois da ativação M3** (mesmo relógio, mesmas fixtures):
 
 1. `comunicacao_resolver_destinatarios(org, 'dashboard_ifood_d1')` devolve **o mesmo conjunto** (`contato_empresa_id`, `elegivel`, `motivo`) para todas as empresas.
 2. Um ciclo completo do worker (`executarCiclo` com relógio fixo, transporte fake), em dia útil, sábado, domingo, prazo do reforço e aviso tardio, gera **as mesmas mensagens**:
@@ -50,6 +73,9 @@ Comparação **antes × depois** de cada migration nova e com a flag M3 desligad
 5. Opt-out / revogação / suspensão de um legado bloqueiam a mensagem agendada **no mesmo ciclo**.
 6. Nenhuma linha `CONCEDIDO` e nenhum desafio OTP são criados para legados pela migração. Os campos globais de `contatos_whatsapp` ficam idênticos (hash da tabela antes/depois).
 7. Rollback de cada migration devolve o estado anterior idêntico.
+8. O snapshot tem exatamente uma linha por destinatário × unidade abrangida, é imutável (UPDATE e DELETE recusados, inclusive para o `service_role`), e reexecutar a ativação é idempotente (não duplica linhas).
+9. Uma revogação ou bloqueio registrado **depois** do agendamento e **antes** do envio cancela a mensagem já enfileirada no JIT, para legado e para destinatário novo, com provider = 0.
+10. Toda inclusão ou remoção de vínculo gera auditoria. Tentar vincular legado a outra categoria ou a unidade de outra empresa é recusado.
 
 Nenhuma alteração na base de produção nem no gateway é feita sem autorização específica.
 

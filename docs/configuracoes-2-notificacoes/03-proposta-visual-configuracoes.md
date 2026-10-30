@@ -82,5 +82,5 @@ Destinatários desta unidade (Centro)                     [+ Adicionar destinat�
 ● João (Dono)       ********02   Verificado, sem consentimento → [Reenviar convite]
 ○ Marta (Fin.)      ********07   Suspenso (pela unidade em 12/11)        [⋯]
 ────────────────────────────────────────────────────────────────────────────────
-ⓘ Destinatários da empresa que recebem de TODAS as unidades: 1 (ver)
+ⓘ Até a ativação da nova seleção: legados recebem o D-1 de todas as unidades (configuração anterior). Depois: só as do snapshot + inclusões explícitas
 ```

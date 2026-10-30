@@ -7,8 +7,9 @@
 | Telefone (posse) | `contatos_whatsapp` (082) | **Reaproveita, sem reescrever o legado.** A posse por OTP fica no desafio consumido (`comunicacao_desafios_titular`), **não** nos campos globais. `verificado`/`consentimento`/`opt_out` continuam alimentando o D-1 dos legados exatamente como hoje; `opt_out` continua bloqueando para todos |
 | Destinatário da empresa | `comunicacao_contatos_empresa` (100/104) | **Reaproveita**: nome, papel (`tipo`), ativo, FK composta `(id, organizacao_id)`. `whatsapp_status` passa a ser derivado do estado da Central |
 | Catálogo de categorias | `comunicacao_categorias` (104) | **Estende**: `grupo`, `exige_consentimento`, `estado` (`ATIVA`/`EM_BREVE`/`INTERNA`), `fonte`, `prioridade` |
-| Categorias por destinatário | `comunicacao_destinatario_categorias` (104) | **Mantida** (compatibilidade do D-1). Backfill para escopos com `unidade_id = null`. Na Etapa 4 a resolução lê os escopos |
-| **Escopo destinatário × unidade × categoria** | `comunicacao_destinatario_escopos` | **NOVA**. `(contato_empresa_id, organizacao_id) → FK composta`, `unidade_id` (nulo = todas), `categoria`, `habilitado`, **`origem_autorizacao` (`LEGACY_ACTIVE` \| `CONVITE_OTP`)**, `suspenso_em/por/motivo`, `janela`/`silencio` (jsonb validado), `notificar_correcao`. `CHECK`: `LEGACY_ACTIVE` só com `categoria = 'pendencia_d1'`. Único `NULLS NOT DISTINCT (contato_empresa_id, unidade_id, categoria)` |
+| Categorias por destinatário | `comunicacao_destinatario_categorias` (104) | **Mantida** e **intocada**: continua sendo a fonte do D-1 enquanto a nova seleção não for ativada (D-16, regra 12) |
+| **Escopo destinatário × unidade × categoria** | `comunicacao_destinatario_escopos` | **NOVA** (estado **atual**, mutável). Campos:<br>• `(contato_empresa_id, organizacao_id)` com FK composta e `unidade_id` **obrigatório**: sem "todas as unidades" (D-16);<br>• `categoria`, `habilitado`;<br>• **`origem_autorizacao`** (`LEGACY_ACTIVE` \| `CONVITE_OTP`) e **`origem_vinculo`** (`SNAPSHOT_MIGRACAO` \| `INCLUSAO_ADMIN` \| `CONVITE`);<br>• `snapshot_id` (rastreabilidade), `suspenso_em/por/motivo`, `janela`/`silencio` (jsonb validado), `notificar_correcao`.<br>`CHECK`: `LEGACY_ACTIVE` só com `categoria = 'pendencia_d1'`. Único `(contato_empresa_id, unidade_id, categoria)` |
+| **Snapshot dos vínculos legados** (D-16) | `comunicacao_legado_snapshot` | **NOVA, imutável** (trigger de imutabilidade; `service_role` só `SELECT, INSERT`). Uma linha por destinatário × empresa × unidade abrangida pela configuração anterior, gravada **na mesma transação da ativação da nova seleção**. Campos:<br>• `id`, `migracao_id`, `migrado_em`, `contato_empresa_id`, `organizacao_id`, `unidade_id`;<br>• origem: `autorizacao_registrada_em/por` (104) e `contato_whatsapp_id`;<br>• estado de envio no momento: `ativo`, `whatsapp_status`, opt-out, habilitação e envio automático da empresa;<br>• `hash_linha`.<br>É a prova do que a migração reconheceu. Nunca é editada; a mudança posterior fica no escopo + auditoria |
 | **Convite** | `comunicacao_convites` | **NOVA**: `token_hash`, empresa, unidades e categorias pretendidas, `criado_por`, `expira_em`, `status` |
 | **Desafio OTP / sessão do titular** | `comunicacao_desafios_titular` | **NOVA**: `tipo` (`verificacao`/`gestao`), `telefone_e164` (ou hash, decisão D-4), `codigo_hmac`, `tentativas`, `expira_em`, `consumido_em`, `invalidado_em`, `ultimo_envio_em`, `ip_hash` |
 | **Consentimento** | `comunicacao_consentimentos` | **NOVA**, append-only (doc 05 §4.1) |
@@ -17,7 +18,7 @@
 | Mensagens, tentativas, alertas | `comunicacao_mensagens`/`_tentativas`/`_alertas` | **Reaproveita.** Fechamento = `alerta_id null`, `tipo = fechamento_operacional_diario`, `metadados.fonte = {fechamento_id, versao}`, chave única existente (`idempotency_key`) |
 | Simulações do fechamento | `operacional_mensagens_simuladas` (130) | **Reaproveita** como histórico de simulação. O envio real vai para `comunicacao_mensagens` |
 
-Total: **5 tabelas novas** e colunas em 2 existentes. As alternativas descartadas (tabela de preferências separada do escopo, tabela de histórico de vínculo) foram absorvidas pelo escopo (com `updated_at` e auditoria) e pelo livro-razão.
+Total: **6 tabelas novas** (5 + o snapshot imutável do D-16) e colunas em 2 existentes. As alternativas descartadas (tabela de preferências separada do escopo, tabela de histórico de vínculo) foram absorvidas pelo escopo (com `updated_at` e auditoria) e pelo livro-razão.
 
 ## 2. Segurança no banco (padrão 129/130/131)
 
@@ -54,6 +55,19 @@ Total: **5 tabelas novas** e colunas em 2 existentes. As alternativas descartada
   - Histórico (`comunicacao_mensagens`/`alertas`) continua sendo remapeado como hoje, sem mudança de comportamento.
 - **Promoção de unidade a empresa:** mesmo tratamento. Ela ainda falha por outro defeito preexistente (42P10), que é da frente do Financeiro.
 - **Revogação de vínculo / desativação de usuário:** não afeta destinatários (doc 05 §6). Desativar a **unidade** (`unidades.ativo = false`) suspende os escopos dela.
+- **Snapshot do D-16 na transferência:** `comunicacao_legado_snapshot` também entra na lista de exclusão do remapeamento. Por ser imutável, o remapeamento quebraria a transferência; além disso, o snapshot registra o que valia **na empresa de origem** e deve continuar assim. O escopo legado da unidade transferida é suspenso pelo gatilho (acima), e a nova empresa não herda o legado.
+
+## 4.1 Unidades criadas depois da migração (D-16, APROVADA)
+
+- **Não herdam** destinatários legados: a nova seleção só lê escopos com `unidade_id` explícito.
+- Aparecem na Central como **pendência**: "Nenhum destinatário configurado para o Dashboard iFood D-1". A rota de resumo da Central calcula isso: unidades ativas da empresa sem escopo habilitado de `pendencia_d1`.
+- **Vincular um legado a uma unidade nova** é ação explícita de quem tem `notificacoes.gerenciar` na empresa (ou na unidade, conforme D-3):
+  - cria escopo `LEGACY_ACTIVE`, `categoria = pendencia_d1`, `origem_vinculo = INCLUSAO_ADMIN`;
+  - motivo obrigatório;
+  - auditoria `NOTIFICACAO_VINCULO_INCLUIDO`;
+  - **não** altera o snapshot.
+- Remover vínculo: escopo `habilitado = false` + auditoria `NOTIFICACAO_VINCULO_REMOVIDO`, sem apagar o histórico.
+- Só funciona para destinatário que **já é** `LEGACY_ACTIVE` na mesma empresa, e só para o D-1. Qualquer outra categoria exige o fluxo OTP + consentimento (regras 7 e 8).
 
 ## 5. Testes de isolamento exigidos (Etapa 5)
 

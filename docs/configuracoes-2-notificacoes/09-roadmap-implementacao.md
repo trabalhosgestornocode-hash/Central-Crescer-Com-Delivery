@@ -49,7 +49,8 @@
 - **Migrations:** `133_notificacoes_escopos_categorias`:
   - `comunicacao_destinatario_escopos`;
   - colunas novas em `comunicacao_categorias` e seed (`fechamento_operacional_diario` em estado de simulação);
-  - backfill dos legados como **`LEGACY_ACTIVE`** (só `pendencia_d1`, mesmo alcance de hoje, sem linha no livro-razão, `contatos_whatsapp` intocado — doc 07 §1);
+  - `comunicacao_legado_snapshot` (imutável) e a RPC `comunicacao_ativar_selecao_por_escopo`, que grava o snapshot dos legados (`LEGACY_ACTIVE`, só `pendencia_d1`, universo do monitor D-1) e cria os escopos **na transação da ativação**. **A migration não executa a ativação**: ela acontece na Etapa 4/implantação, com autorização (D-16, doc 07 §1). Sem linha no livro-razão; `contatos_whatsapp` e `comunicacao_destinatario_categorias` intocados;
+  - pendência "Nenhum destinatário configurado para o Dashboard iFood D-1" e vínculo explícito de legado a unidade nova (só D-1, auditado — doc 06 §4.1);
   - exclusão do remapeamento (D-11) e gatilho de transferência.
 - **Testes:** isolamento (doc 06 §5), permissões, backfill sem mudança na resolução do D-1 (comparar `comunicacao_resolver_destinatarios` antes/depois em Postgres real), transferência (harness `testes-seguros/pg`).
 - **Riscos:** quebrar a transferência de unidade (FK composta) → teste obrigatório. Divergência entre Painel ADM e Central → uma só fonte (as mesmas tabelas).

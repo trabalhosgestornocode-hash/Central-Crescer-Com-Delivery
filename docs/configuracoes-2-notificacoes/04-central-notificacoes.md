@@ -66,6 +66,8 @@ Regras do `LEGACY_ACTIVE`:
 | Ação | Quem (proposta; decisão D-3) | Observação |
 |---|---|---|
 | Ver destinatários e estado | `notificacoes.ver` (org admin, unit manager, finance) | número mascarado |
+| Ver pendência de unidade sem D-1 | `notificacoes.ver` | texto fixo: **"Nenhum destinatário configurado para o Dashboard iFood D-1"** (D-16) |
+| Vincular destinatário **legado** a unidade nova (só D-1) | `notificacoes.gerenciar` | motivo obrigatório, auditado; não altera o snapshot; outras categorias só pelo fluxo OTP + consentimento (doc 06 §4.1) |
 | Adicionar destinatário (nome, papel, WhatsApp, unidades, categorias pretendidas) | `notificacoes.gerenciar` | não ativa nada: gera **convite** ao titular |
 | Reenviar convite / solicitar verificação | `notificacoes.gerenciar` | respeita intervalo e limites (doc 05) |
 | Suspender / reativar na unidade | `notificacoes.gerenciar` | não mexe no consentimento |
