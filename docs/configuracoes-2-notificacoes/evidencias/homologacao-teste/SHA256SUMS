@@ -1,0 +1,8 @@
+b22f0d01f50c86bc96d2f51ae3e6725259ffc430e4d8192c9946df19e532e6d4 *EDITOR_aplicar.sql
+a119400b2cd1302a0a85dfdf314012dee047757c00ebfb962f642cb434bd8112 *EDITOR_reverter.sql
+a226a4ae6f54c43e8ebbf175098989360261f0bb196cac14c0b21e2002edb2cf *EDITOR_136_aplicar.sql
+b3f51e69627822a3d544fc61bcb78ba053fc0c3307f1e141fe03a65bdce8198a *EDITOR_136_reverter.sql
+a9d6e5ac43894c1e2440b8cfbfab581e7b8a17f6c89ece413712343202d73e2b *backup-teste-pre-132.json
+f7286d65e5c46b25a40c9938b23389262e3ea0f303e5c192e57e4d173c2791d7 *postgrest-etapa1.txt
+7885cdeed4257fb45126a386bf726747ed522bb10dec8f53110d5fafdacaa731 *postgrest-final.txt
+# EDITOR_aplicar/reverter: 132–135 do commit d30a830 (homologados no teste em 30/10). EDITOR_136_*: pendente de autorização.

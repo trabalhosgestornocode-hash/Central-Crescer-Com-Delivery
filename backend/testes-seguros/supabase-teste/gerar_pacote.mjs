@@ -17,8 +17,8 @@ const saida = resolve(process.argv[2] ?? "pacote-homologacao");
 mkdirSync(saida, { recursive: true });
 
 const APLICAR = ["132_configuracoes2_fuso_unidade_convites_usuario.sql", "133_notificacoes_escopos_snapshot_m3.sql",
-  "134_notificacoes_otp_consentimento.sql", "135_notificacoes_cotas_categoria.sql"];
-const REVERTER = ["135_rollback.sql", "134_rollback.sql", "133_rollback.sql", "132_rollback.sql"];
+  "134_notificacoes_otp_consentimento.sql", "135_notificacoes_cotas_categoria.sql", "136_unidades_fuso_somente_backend.sql"];
+const REVERTER = ["136_rollback.sql", "135_rollback.sql", "134_rollback.sql", "133_rollback.sql", "132_rollback.sql"];
 
 function semTransacao(nome) {
   const linhas = readFileSync(resolve(migrations, nome), "utf8").split(/\r?\n/);

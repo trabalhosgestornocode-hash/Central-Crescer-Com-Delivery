@@ -44,10 +44,10 @@ FN_RES="select md5(pg_get_functiondef('comunicacao_resolver_destinatarios(uuid,t
 MD_AG_MAIN=$(q nt_main "$FN_AG"); MD_RES_MAIN=$(q nt_main "$FN_RES")
 
 novo_banco nt_branch nt_main
-for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql; do
+for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql 136_unidades_fuso_somente_backend.sql; do
   aplicar nt_branch "$M/$f" && ok "nt_branch: $f aplicada" || { bad "nt_branch: $f"; head -5 "$TMP/ap.log"; exit 1; }
 done
-for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql; do
+for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql 136_unidades_fuso_somente_backend.sql; do
   aplicar nt_branch "$M/$f" || bad "reaplicar $f (idempotência)"; done; ok "132–135 reaplicadas: idempotentes"
 chk "resolvedor do D-1 (104) intacto na branch" "$(q nt_branch "$FN_RES")" "$MD_RES_MAIN"
 chk "seleção por escopo nasce DESLIGADA e o snapshot vazio" "$(q nt_branch "select comunicacao_selecao_por_escopo_ligada()::text || '/' || (select count(*) from comunicacao_legado_snapshot) || '/' || (select count(*) from comunicacao_destinatario_escopos)")" "false/0/0"
@@ -220,6 +220,11 @@ chk "função de reserva do D-1 (comunicacao_reservar_envio) intacta" "$(q nt_br
 
 # ---------- 8. D-14 convite de usuário e D-15 fuso ----------
 q nt_branch "update unidades set timezone = 'Lua/Base' where id = '$(UA 1)'" | grep -q "fuso inválido" && ok "fuso IANA inválido recusado" || bad "fuso inválido aceito"
+# 136: o fuso só muda pelo backend — sessão do usuário pelo PostgREST (authenticated/anon) é recusada mesmo se a RLS deixasse
+chk "136: authenticated NÃO grava fuso direto (mesmo sem RLS no caminho)" "$(q nt_branch "begin; alter table unidades disable row level security; set local role authenticated; update unidades set timezone = 'America/Manaus' where id = '$(UA 1)'; rollback;" | grep -c 'só mudam pelo backend')" "1"
+chk "136: anon NÃO grava horário direto" "$(q nt_branch "begin; alter table unidades disable row level security; set local role anon; update unidades set horario_funcionamento = '{}' where id = '$(UA 1)'; rollback;" | grep -c 'só mudam pelo backend')" "1"
+chk "136: authenticated segue podendo mudar OUTRAS colunas (comportamento anterior)" "$(q nt_branch "begin; alter table unidades disable row level security; set local role authenticated; update unidades set nome = nome where id = '$(UA 1)'; rollback;" | grep -c 'só mudam pelo backend')" "0"
+chk "136: service_role (backend) grava o fuso" "$(sr nt_branch "update unidades set timezone = 'America/Manaus' where id = '$(UA 2)' returning timezone" | head -1)" "America/Manaus"
 chk "fuso IANA válido aceito" "$(q nt_branch "update unidades set timezone = 'America/Porto_Velho', horario_funcionamento = '{\"seg\":[{\"inicio\":\"10:00\",\"fim\":\"23:30\"}]}' where id = '$(UA 11)' returning timezone" | head -1)" "America/Porto_Velho"
 TKU=$(printf '2%.0s' {1..64}); EH=$(printf '3%.0s' {1..64})
 sr nt_branch "insert into usuarios_convites (token_hash, organizacao_id, papel, email_hmac, email_cifrado, expira_em) values ('$TKU','$ORG_A','operations','$EH','c', now() + interval '72 hours')" >/dev/null
@@ -240,12 +245,12 @@ chk "e a empresa A não envia mais para a unidade transferida" "$(sr nt_branch "
 
 # ---------- 10. rollbacks ----------
 novo_banco nt_rb nt_main
-for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql; do aplicar nt_rb "$M/$f"; done
-for f in 135_rollback.sql 134_rollback.sql 133_rollback.sql 132_rollback.sql; do aplicar nt_rb "$M/$f" || { bad "rollback $f"; head -3 "$TMP/ap.log"; }; done
-chk "rollbacks 135→132: agendamento do D-1 idêntico ao da main" "$(q nt_rb "$FN_AG")" "$MD_AG_MAIN"
+for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql 136_unidades_fuso_somente_backend.sql; do aplicar nt_rb "$M/$f"; done
+for f in 136_rollback.sql 135_rollback.sql 134_rollback.sql 133_rollback.sql 132_rollback.sql; do aplicar nt_rb "$M/$f" || { bad "rollback $f"; head -3 "$TMP/ap.log"; }; done
+chk "rollbacks 136→132: agendamento do D-1 idêntico ao da main" "$(q nt_rb "$FN_AG")" "$MD_AG_MAIN"
 chk "rollbacks: nenhuma tabela nova sobra" "$(q nt_rb "select count(*) from pg_class where relname in ('usuarios_convites','comunicacao_destinatario_escopos','comunicacao_legado_snapshot','comunicacao_convites','comunicacao_desafios_titular','comunicacao_consentimentos','comunicacao_termos')")" "0"
-for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql; do aplicar nt_rb "$M/$f" || bad "reaplicar após rollback: $f"; done
-ok "132–135 reaplicadas após o rollback"
+for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_escopos_snapshot_m3.sql 134_notificacoes_otp_consentimento.sql 135_notificacoes_cotas_categoria.sql 136_unidades_fuso_somente_backend.sql; do aplicar nt_rb "$M/$f" || bad "reaplicar após rollback: $f"; done
+ok "132–136 reaplicadas após o rollback"
 
 echo; echo "RESUMO: $N_OK verificações OK, $N_F falha(s)"
 [ "${MANTER_BANCOS:-}" = "1" ] || for b in nt_main nt_branch nt_rb; do $SU -d postgres -c "drop database if exists $b" >/dev/null 2>&1; done   # MANTER_BANCOS=1: inspeção depois
