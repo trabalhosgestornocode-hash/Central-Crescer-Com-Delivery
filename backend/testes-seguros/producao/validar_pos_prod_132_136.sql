@@ -19,7 +19,9 @@ select jsonb_build_object(
   'resolver_intacto', (select jsonb_build_object('ok', h = 'accc3bc647599c6a7f6cd99b3afd2a90', 'md5', h) from fn where proname = 'comunicacao_resolver_destinatarios'),
   'cota_d1_intacta', (select jsonb_build_object('ok', h = '0b6386a2369f1f9f3caebfb27c581378', 'md5', h) from fn where proname = 'comunicacao_reservar_envio'),
   'transferencia_intacta', (select jsonb_build_object('ok', h = '31426ffd7848e8455944399caf021075', 'md5', h) from fn where proname = 'remapear_organizacao_em_tabelas_de_unidade'),
-  'transferir_intacta', (select jsonb_build_object('ok', h = '9c522caa1940ae6e3f622cf6a24721b2', 'md5', h) from fn where proname = 'transferir_unidade_organizacao'),
+  -- comparada SEM \r: em produção e no teste o corpo tem \r (aplicação antiga pelo editor no Windows; md5 bruto 9c522caa…), o texto é o mesmo
+  'transferir_intacta', (select jsonb_build_object('ok', md5(replace(d, chr(13), '')) = '961b8416474d439e5d4d58cb9f727afd', 'md5_sem_cr', md5(replace(d, chr(13), '')))
+                         from fn where proname = 'transferir_unidade_organizacao'),
   'tabelas_novas_com_rls', (select jsonb_build_object('ok', count(*) filter (where c.relrowsecurity) = 7, 'n', count(*) filter (where c.relrowsecurity))
                             from novas join pg_class c on c.relname = novas.t join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'),
   'anon_auth_sem_tabela', (select jsonb_build_object('ok', count(*) = 0, 'com_privilegio', coalesce(jsonb_agg(t), '[]'))

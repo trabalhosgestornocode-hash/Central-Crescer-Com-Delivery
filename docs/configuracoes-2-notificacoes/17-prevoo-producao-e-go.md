@@ -75,7 +75,7 @@ depois da validação, para o código novo já estar no ar no lote das 10h, que 
 1. Na janela: repetir o pré-voo (`prevoo_prod_132_136.sql`) e guardar o JSON (linha de base imediata). Parar se houver lock nas
    tabelas-alvo, "idle in transaction" ou SCHEDULED vencendo nos próximos 30 min.
 2. Gerar o pacote de `b76a81a` e conferir SHA-256 e 0 `\r`.
-3. `PGOPTIONS="-c statement_timeout=300000" psql "<conexão direta>" -X -v ON_ERROR_STOP=1 -f pacote_aplicar.sql`.
+3. `PROD_AUTORIZO=SIM PROD_BACKUP_CONFIRMADO=SIM bash backend/testes-seguros/producao/aplicar_prod_132_136.sh aplicar` (com `PROD_CONN` exportada no terminal do operador) — faz 2 a 4 de uma vez (§11).
 4. `validar_pos_prod_132_136.sql` (18/18 `ok`) e de novo `prevoo_prod_132_136.sql`: mesmos hashes de unidades (sem as colunas novas),
    destinatários, contatos, configurações (sem a chave nova) e categoria ativa; fila só com mudanças do worker.
 5. Merge do PR #55 (deploy automático); `/health` e deploy `live` no commit do merge.
@@ -112,3 +112,30 @@ migrations é decisão separada, só se o problema estiver no banco e depois de 
 **GO condicionado** para aplicar as migrations em produção na janela do §5, assim que o backup do dia for confirmado no painel
 (§6). Tudo o que dá para verificar por leitura está conforme: ausência total de 132–136, dependências iguais às homologadas,
 nenhuma sessão ou lock que impeça, linha de base do D-1 registrada e pacote determinístico, atômico e com registro.
+
+## 11. Pré-voo final (30/10/2026, 19:30–19:45 UTC) — sem escrita em produção
+
+| Item | Resultado |
+|---|---|
+| Backup do painel (último backup, horário, retenção, PITR) | **NÃO confirmado** — o painel só abre no navegador autenticado e a extensão não estava conectada; não há token da API de gerenciamento. Pendente de conferência pelo operador |
+| Dump complementar | 2 arquivos `pg_dump -Fc` (sessão só leitura, `--lock-wait-timeout=5s`), cifrados em fluxo com `age` (o dado em claro nunca tocou o disco), em `C:\Users\ponte\backups-prod\pr55-132-136\` — fora do Git e do OneDrive, ACL só do usuário; chave privada em pasta separada com a mesma ACL. `prod-4tabelas-…dump.age` (4 tabelas: estrutura, dados, PK/UNIQUE/FK, índices, gatilhos, RLS, política, permissões) sha256 `577c471c…`; `prod-schema-public-…dump.age` (estrutura de todo o `public`: 140 tabelas, 154 funções, 30 tipos) sha256 `41967d98…` |
+| Restauração do dump | decifrado em memória e restaurado no PostgreSQL local descartável (tipos + 4 tabelas): contagem e hash linha a linha **idênticos** aos de produção nas 4 tabelas (53/1/5/41) |
+| Pacote × commit | regerado de `git archive b76a81a`: `ecbd2aaa…` (178.229 B) e `3f9371a9…` (15.436 B), byte a byte iguais aos do §4; `11ce97a` não altera migrations nem gerador |
+| Histórico | tabela de produção idêntica à do teste (PK `version`, `idempotency_key` única, sem gatilho); maior versão `20261030063708`, nenhuma no futuro, nenhuma 132–136 → as 5 versões (hora da transação + 0…4 s) não colidem; a trava impede duplicar |
+| Worker do D-1 | lote 10h/11h BRT (janelas da configuração; dados após 10:00, envios após 10:30); reforço 20:00–22:00 (corte 22:30), sem domingo. Janela alternativa corrigida para **depois das 22:45** |
+| Render | `/health` 200 (0,64 s), Events ativo; deploy `live` `dep-dbi3mo142hec73f73jlg` = `9da8210`; `autoDeploy` na main |
+
+**Comando de aplicação** (preparado, NÃO executado): `backend/testes-seguros/producao/aplicar_prod_132_136.sh`, no modelo de
+`prod-migrar*.mjs` — conexão só por `PROD_CONN` no terminal do operador; exige `PROD_AUTORIZO=SIM` e `PROD_BACKUP_CONFIRMADO=SIM`;
+regera o pacote de `b76a81a` e confere os SHA-256 e `\r`; pré-voo como portão (nada de 132–136, referências iguais, sem lock/transação
+aberta); `psql -v ON_ERROR_STOP=1 -f` com `statement_timeout` 300 s; validação 18 itens; compara os dados antes × depois. Travas
+testadas (7 recusas sem conectar). Ensaio local na cadeia real da main: aplicar → 18/18 → dados iguais → 5 linhas no histórico →
+reaplicar recusado; cenário A (falha forçada no registro): nada ficou, o script conferiu e relatou.
+
+O ensaio achou que `transferir_unidade_organizacao` tem `\r` no corpo em produção e no teste (texto idêntico ao da main);
+`validar_pos_prod_132_136.sql` passou a compará-la sem `\r` (`961b8416…`, igual nos três ambientes).
+
+**Rollback do backend (cenário C):** Render → serviço `crescercomdelivery` → Events → deploy `9da8210` (`dep-dbi3mo142hec73f73jlg`) →
+*Rollback*; em seguida `git revert -m 1 <merge>` na main para o próximo deploy automático não republicar o código revertido.
+
+**Recomendação:** pronto para pedir a autorização de escrita **assim que o backup do painel for confirmado**; até lá, NO-GO.
