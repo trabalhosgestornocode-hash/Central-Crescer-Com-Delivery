@@ -56,29 +56,46 @@ O conector exige **uma confirmação humana por chamada de escrita** (expira em 
 
 **Variáveis do app (nenhuma criada):**
 
-| Variável | Para quê | Sem ela |
+**Para INICIAR o sistema nenhuma delas é necessária** (revisado em 30/10 no código de `bce1875`): `config/env.js` só exige
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e `SUPABASE_ANON_KEY` (inalterado); as três abaixo são lidas sob demanda
+(`shared/urlPublica.js`, `notificacoes.segredos.js` → `segredosDisponiveis()` nunca lança, `usuarios.convites.js` → `modoEnvioEmail`)
+e, ausentes, só a funcionalidade correspondente fica indisponível (fail-closed). O deploy do merge sobe sem nenhuma variável nova.
+
+| Variável | Necessária para | Sem ela |
 |---|---|---|
-| `APP_URL_PUBLICA` | **nova** — origem https dos links (convite da Central e de usuário); cabeçalhos da requisição nunca são usados em produção | Produção: criar link = 503 antes de gravar |
-| `USUARIOS_CONVITE_EMAIL=supabase` | liga o envio do convite de usuário | Conta nova = 409 "peça ao Administrador da plataforma"; **nada é criado**; conta existente recebe o acesso como antes |
-| `NOTIFICACOES_SEGREDO_MESTRE` | cifra/HMAC da Central e dos convites | Central só consulta; convites indisponíveis |
+| `APP_URL_PUBLICA` | **funcionalidade futura**: montar links (convite da Central e de usuário); cabeçalhos da requisição nunca são usados em produção | Produção: criar link = 503 antes de gravar; o resto funciona |
+| `NOTIFICACOES_SEGREDO_MESTRE` (≥ 32 caracteres) | **funcionalidade futura**: cifra/HMAC da Central e dos convites | Central só consulta; nenhuma escrita (nada guardado em claro); convites de conta nova indisponíveis |
+| `USUARIOS_CONVITE_EMAIL=supabase` + SMTP do Supabase Auth | **funcionalidade futura**: e-mail do convite de usuário (exige as duas acima) | Conta nova = 409 "peça ao Administrador da plataforma"; **nada é criado**; conta existente recebe o acesso como antes |
+| `NOTIFICACOES_OTP_TRANSPORTE`, `NOTIFICACOES_AMBIENTE_ISOLADO`, `NOTIFICACOES_M3_ATIVACAO_HABILITADA` | **nunca em produção** nesta fase | OTP desligado; M3 travada |
 
 **Homologação do e-mail (futura, só no TESTE):** caixa de e-mail controlada; conferir que o redirect preserva `#t=` e que o
 aceite cria o vínculo; nenhuma conta real de cliente.
 
 ## 5. Sequência exata de implantação (cada passo com autorização própria)
 
+Homologação no TESTE: **concluída** para 132–136 (doc 16). Render conferido em 30/10 (só leitura): o serviço `crescercomdelivery`
+(raiz `backend/`) tem `autoDeploy: yes`, gatilho `commit`, branch `main`, health `/health` — **o merge publica na hora**; no ar
+`9da8210` (merge do #54). `gateway-whatsapp`: `autoDeploy: no` (não muda com este PR).
+
 1. **Push** dos commits locais para o PR #55 e revisão do diff atualizado.
-2. **Homologação no TESTE** (§3) — recomendada antes de produção.
-3. **Produção — migrations** (janela fora do agendamento do D-1): `pacote_aplicar.sql` gerado do MESMO commit, numa transação;
-   depois `validar_pos_132_135.sql` adaptado (itens estruturais + D-1 equivalente em todas as unidades; hashes de dados de produção
-   capturados antes).
-4. **Merge** do PR (dispara o deploy do backend + frontend). Conferir `/health` e os arquivos novos servidos.
-5. **Variáveis** (opcional nesta fase): `APP_URL_PUBLICA` e `NOTIFICACOES_SEGREDO_MESTRE`. **Nunca** em produção:
-   `NOTIFICACOES_OTP_TRANSPORTE`, `NOTIFICACOES_AMBIENTE_ISOLADO`, `NOTIFICACOES_M3_ATIVACAO_HABILITADA`.
+2. **Produção — pré-voo só leitura:** identidade (`uqybgauuxcrqzquultfu`), sessões ativas, mensagens das últimas horas, backup do dia,
+   `schema_migrations` sem nenhuma 132–136, `prevoo_136.sql` (impressão digital + hashes de dados de produção capturados).
+3. **Produção — migrations** (janela fora do agendamento do D-1): gerar do MESMO commit
+   `node backend/testes-seguros/supabase-teste/gerar_pacote.mjs <pasta> --transacao` e conferir o SHA-256
+   (`pacote_aplicar.sql` 178.229 B `ecbd2aaa…`; `pacote_reverter.sql` 15.436 B `3f9371a9…` em `bce1875` — determinístico) e 0 `\r`;
+   aplicar com `psql -v ON_ERROR_STOP=1 -f` (uma transação; registra 132–136 no histórico; recusa se já registrado).
+   Ensaio local: 95/95 (inclui aplicar+registrar, trava, falha no registro desfaz tudo, reversão).
+4. **Produção — validação:** `validar_pos_132_135.sql` com os hashes de produção do passo 2, 5 linhas em `schema_migrations`, md5 da
+   função da 136 = `10a2368a…`, D-1 equivalente em todas as unidades. Qualquer divergência → `pacote_reverter.sql` e parar.
+   O código no ar (main) convive com 132–136: não lê as colunas novas e não grava `unidades` com fuso.
+5. **Merge** do PR (deploy automático). Conferir `/health`, o deploy `live` no commit do merge e os arquivos novos servidos.
 6. **Observação de 24 h** do D-1 (quantidade de mensagens e destinatários igual à véspera).
-7. **Depois, separadamente:** SMTP + `USUARIOS_CONVITE_EMAIL`, corte do fuso, provedor oficial/termos, M3.
+7. **Depois, separadamente (cada um com autorização):** `APP_URL_PUBLICA` + `NOTIFICACOES_SEGREDO_MESTRE`; SMTP +
+   `USUARIOS_CONVITE_EMAIL`; corte do fuso; provedor oficial/termos; M3. **Nunca** em produção: `NOTIFICACOES_OTP_TRANSPORTE`,
+   `NOTIFICACOES_AMBIENTE_ISOLADO`, `NOTIFICACOES_M3_ATIVACAO_HABILITADA`.
 
 ## 6. Recuperação
 
-Igual ao doc 14 §3, com o pacote: reverter o código primeiro (o código anterior convive com 132–135); só se necessário,
-`pacote_reverter.sql` numa transação (ensaiado: impressão digital idêntica à de antes). Exportar antes as tabelas novas que tiverem linhas.
+Igual ao doc 14 §3, com o pacote: reverter o código primeiro (o código anterior convive com 132–136); só se necessário,
+`pacote_reverter.sql` numa transação (136→132 e remove as 5 linhas do histórico; ensaiado: impressão digital idêntica à de antes).
+Exportar antes as tabelas novas que tiverem linhas.

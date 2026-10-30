@@ -40,9 +40,61 @@ atualizar `unidades` direto pelo PostgREST. Para as colunas da 132 (fuso/horári
 a migration **136** recusa a escrita por `anon`/`authenticated` (backend e migrations seguem gravando). Provado no PostgreSQL descartável
 (84/84). A exposição das DEMAIS colunas de `unidades` é anterior a esta frente e fica registrada para a frente responsável.
 
-## Estado exato do Supabase de teste ao fim
+## Estado do Supabase de teste ao fim da 1ª rodada (substituído pela seção da 136 abaixo)
 
 132–135 aplicadas (sem `\r`), 136 **não** aplicada. Seleção por unidade desligada, snapshot/escopos/convites/desafios/consentimentos vazios,
 9 categorias (só `pendencia_d1` ativa), nenhuma unidade com fuso. 17 migrations registradas no histórico (a aplicação foi pelo editor,
 que não registra em `schema_migrations`). Impressão digital: colunas `d34b254e…`, funções+ACL `d80ccc6b…`, gatilhos `fc079cd9…`,
 ACL/RLS `fa4f73de…`; 139 tabelas, 146 funções.
+
+## Homologação da 136 no Supabase de TESTE (30/10/2026, 2ª rodada)
+
+Aplicada **só a 136**, sobre 132–135 já homologadas. Produção (`uqybgauuxcrqzquultfu`) não foi tocada.
+
+**Como:** `psql -v ON_ERROR_STOP=1 -f EDITOR_136_aplicar.sql` pela conexão direta do projeto de teste (`DATABASE_TESTE_URL`), por um
+invólucro que só aceita o host `db.wiqqsxnysbzhcrzrrean.supabase.co` e recusa o ref de produção. Antes de executar: SHA-256 do arquivo
+`a226a4ae…` (= blob do commit `bce1875`) e **0** `\r`. Uma transação (`BEGIN … COMMIT`), 17:43:58Z.
+
+**Pré-voo** (`backend/testes-seguros/supabase-teste/prevoo_136.sql`, sessão só leitura): PostgreSQL 17.6, nenhuma outra sessão ativa,
+0 mensagens em 6 h, 136 ainda não aplicada, colunas `d34b254e…` e ACL/RLS `fa4f73de…` **idênticas** às do fim da 1ª rodada,
+`validar_pos_132_135.sql` 14/14. Backup: diário do plano Pro.
+
+### Matriz da 136
+
+| # | Verificação | Como | Resultado |
+|---|---|---|---|
+| 1 | Membro logado não grava fuso/horário (UPDATE, INSERT, escondido junto com outra coluna) | SQL (SET ROLE + JWT) e **PostgREST real** | OK — `42501 unidades: fuso e horário só mudam pelo backend` (HTTP 403) |
+| 1 | anon não lê nem grava `unidades` | SQL e PostgREST real (chave publicável) | OK — 0 linhas / recusado |
+| 2 | Backend (service_role) grava fuso e horário | SQL e PostgREST | OK |
+| 3 | Demais colunas com a permissão anterior (membro grava `nome` da própria unidade; validação da 132 recusa fuso/dia inválidos) | SQL e PostgREST | OK — 1 linha; `22023` |
+| 3 | Fuso enviado sem mudança não é bloqueado | SQL e PostgREST | OK |
+| 4 | Transferência de unidade (`transferir_unidade_organizacao`, service_role) | SQL (desfeito) e PostgREST (massa descartável) | OK — fuso e horário preservados; membro não executa a RPC |
+| 5 | Isolamento: membro não lê nem grava unidade de outra empresa | SQL e PostgREST | OK — 0 linhas |
+| 5 | Tabelas e RPCs novas de 132–135 fechadas para authenticated | PostgREST | OK |
+| 6 | D-1 idêntico | `validar_pos_132_135.sql` | OK — equivalente em todas as unidades; agendamento/resolvedor/cota com o hash de referência |
+| 7 | M3 desligada | idem | OK |
+| 8 | Compatível com 132–135 | validação 14/14 + impressão digital | OK — só o corpo de `unidades_validar_fuso_horario` mudou: md5 `10a2368a…` = o do PostgreSQL descartável; sem `\r`; EXECUTE só do dono |
+| 9 | Nenhum dado alterado | hashes antes/depois | OK — unidades (30), vínculos, mensagens (3), configurações iguais |
+
+SQL: `funcional_136.sql` — 16 verificações num bloco que termina em erro proposital (nada fica gravado), autosselecionando uma unidade
+de empresa com membro ativo e uma de outra empresa. PostgREST: `backend/test/isolamento-unidades-fuso-136-http.test.js` — 15/15, no
+padrão de `isolamento-tenant.test.js` (service_role só no setup e nos 2 itens "backend"; anon com a chave publicável; membro com JWT
+real de login). **Resíduo:** nenhum (empresas, unidades, usuários e perfis do teste removidos; hashes iguais), exceto 1 linha em
+`plataforma_auditoria` (`unidade.transferida_entre_empresas`) — trilha append-only da transferência do teste, mantida de propósito.
+
+Evidências em `evidencias/homologacao-teste/136-*` (pré-voo antes/depois/pós-HTTP, validação 132–135 antes/depois, saída do SQL
+funcional e do PostgREST). Os resultados dos dois caminhos (SQL direto e HTTP) coincidem item a item.
+
+### Histórico de migrations
+
+Pela aplicação direta (editor/psql), **nenhuma** das 132–136 está em `supabase_migrations.schema_migrations` do teste (continuam 17
+linhas; as últimas são 129 e 130). Correção na branch: `gerar_pacote.mjs` agora registra cada migration NA MESMA transação (formato
+das já registradas: `version` = carimbo UTC, `name` = arquivo sem `.sql`, `statements` = conteúdo original) e começa recusando se
+alguma já estiver registrada; o pacote de reversão remove o registro. O formato foi aceito pela tabela real do teste numa transação
+desfeita (2 linhas fictícias → 0 depois do ROLLBACK). Registrar 132–136 no histórico do TESTE é passo separado, não autorizado aqui.
+
+### Estado exato do Supabase de teste ao fim
+
+132–136 aplicadas (sem `\r`), **não** registradas no histórico. Seleção por unidade desligada, nenhuma unidade com fuso. Impressão
+digital (consulta de `prevoo_136.sql`): colunas `d34b254e…`, ACL/RLS `fa4f73de…`, políticas `a490b04c…`, funções exceto a 136
+`44d40872…`; 134 tabelas (r/p), 146 funções.

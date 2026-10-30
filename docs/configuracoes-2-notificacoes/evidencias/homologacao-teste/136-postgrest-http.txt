@@ -1,0 +1,25 @@
+PostgREST REAL do Supabase de TESTE (wiqqsxnysbzhcrzrrean) — 2026-10-30, após a 136.
+node --env-file=backend/.env.test --test test/isolamento-unidades-fuso-136-http.test.js
+anon = chave PUBLICÁVEL; membro = JWT real (login por senha) de usuário descartável vinculado só à empresa A; service_role só no setup e nos 2 itens "backend".
+
+▶ 136 — fuso e horário da unidade só pelo backend (PostgREST real)
+  ✔ anon não lê unidades
+  ✔ anon não grava fuso nem horário
+  ✔ anon não insere unidade com fuso
+  ✔ membro enxerga só as unidades da própria empresa
+  ✔ membro NÃO grava o fuso da própria unidade (42501)
+  ✔ membro NÃO grava o horário da própria unidade (42501)
+  ✔ membro NÃO grava o fuso escondido junto com outra coluna
+  ✔ membro NÃO insere unidade com fuso
+  ✔ DEMAIS colunas: membro segue gravando a própria unidade (permissão anterior, inalterada)
+  ✔ enviar o fuso SEM mudança não é bloqueado
+  ✔ isolamento: membro não lê nem grava unidade de outra empresa
+  ✔ tabelas novas de 132–135 seguem fechadas para o membro
+  ✔ RPCs novas e a transferência não são executáveis pelo membro
+  ✔ backend grava fuso e horário; validação da 132 segue valendo
+  ✔ transferência pelo backend funciona e preserva fuso e horário
+ℹ tests 15 | pass 15 | fail 0 | skipped 0
+
+Resíduo (consulta só leitura depois do teardown): 0 empresas, 0 unidades, 0 usuários Auth, 0 perfis operacionais órfãos;
+hashes de unidades/vínculos/mensagens/configurações IGUAIS aos de antes; 1 linha em plataforma_auditoria
+(unidade.transferida_entre_empresas) — trilha de auditoria append-only da transferência do teste, mantida de propósito.

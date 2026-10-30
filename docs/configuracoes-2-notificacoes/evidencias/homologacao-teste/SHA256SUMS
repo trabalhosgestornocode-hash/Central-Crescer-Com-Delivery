@@ -5,4 +5,11 @@ b3f51e69627822a3d544fc61bcb78ba053fc0c3307f1e141fe03a65bdce8198a *EDITOR_136_rev
 a9d6e5ac43894c1e2440b8cfbfab581e7b8a17f6c89ece413712343202d73e2b *backup-teste-pre-132.json
 f7286d65e5c46b25a40c9938b23389262e3ea0f303e5c192e57e4d173c2791d7 *postgrest-etapa1.txt
 7885cdeed4257fb45126a386bf726747ed522bb10dec8f53110d5fafdacaa731 *postgrest-final.txt
-# EDITOR_aplicar/reverter: 132–135 do commit d30a830 (homologados no teste em 30/10). EDITOR_136_*: pendente de autorização.
+b5a1c69a80dba6c547038e0c0abcb27f5296fc83bc42abe0fca958c42f066567 *136-funcional-sql.txt
+7a608469703e393371546bcbc82996a452825a8e3d5324a3765be2e059d071c5 *136-postgrest-http.txt
+b9086495c404c2c828e2ffa2fe4ea6202e40ae4b591c4761e71e00be2e3e6024 *136-prevoo-antes.json
+b492d6856b2ffc99bd0ada5f97a02765dde5df2b813152433c40c34125825dcc *136-prevoo-depois.json
+deeb1957d09f9089e093efcda99c9fde7ce2c922b5ca56f57dfba9a2ecc3f287 *136-prevoo-pos-http.json
+83c4782e78e061c180ed56d98a087f03eb0903342d488a5e982cd94eb54830b0 *136-validar-132-135-antes.json
+83c4782e78e061c180ed56d98a087f03eb0903342d488a5e982cd94eb54830b0 *136-validar-132-135-depois.json
+# EDITOR_aplicar/reverter: 132–135 do commit d30a830 (homologados no teste em 30/10). EDITOR_136_aplicar: APLICADO no teste em 30/10 17:43:58Z (psql -f, SHA conferido). 136-*: evidências da homologação da 136 (doc 16).

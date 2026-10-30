@@ -141,7 +141,14 @@ e-mail real do convite de usuário; medição de latência da gestão do titular
 | C2 | Gestão do titular: piso de 700 ms podia vazar a existência do número pelo tempo (R5) | **Corrigido por construção**: identificadores gerados antes do banco, resposta imediata e idêntica; processamento depois. Teste com banco lento (300 ms): resposta < 100 ms nos dois casos |
 | C3 | D-14 sem SMTP criava convite impossível de ativar | **Corrigido**: 409 e nada é criado; falha de e-mail revoga o convite na hora (502) |
 | C4 | Tag GCM de 16 bytes | Exigida na cifra nova (`b5ca1f2`). **Pré-existente fora desta frente:** a decifra do iFood (`cripto.js:89`) também não fixa `authTagLength` — sugerido corrigir na frente iFood |
-| C5 | Homologação no Supabase de teste | Pré-voo concluído; **pacote em 3 confirmações ensaiado localmente** (aplicar → validar → reverter com impressão digital idêntica → reaplicar). Não executado no remoto (confirmação interativa) — doc 15 |
+| C5 | Homologação no Supabase de teste | **Concluída** (30/10): 132–135 aplicar → reverter → reaplicar e 136 aplicada; SQL direto e PostgREST real (anon com chave publicável, membro com JWT real) coincidem item a item — doc 16. Pacote de produção passa a registrar 132–136 em `schema_migrations` na mesma transação (ensaio local 95/95) — doc 15 §5 |
 
 **Regressão final × main (`9da8210`):** backend 5782 / 5743 ok / **14 falhas = as mesmas 14 da main, 0 só na branch** / 25 pulados;
 frontend 1648 / 0 falhas; navegador 126/127 (a falha `parserFoodDelivery` "dia único" ocorre igual na main); PostgreSQL descartável **79/79**.
+
+**Regressão do checkpoint da 136 (30/10, mesmo ambiente fictício, `node --test test/*.test.js`, TAP comparado teste a teste × main
+`9da8210` no mesmo instante):** branch 5724 testes / 5681 ok / 17 falhas + 1 cancelado / 25 pulados; main 5633 / 5591 / 16 + 1 / 25.
+**0 falhas só na branch**: as 17 são as mesmas da main (conversas/WhatsApp, checklist, seleção de perfil, retry). Na 1ª execução
+completa, `modelo-logistico-temporal.test.js` caiu com `0xC0000005` (o processo Node do Windows, depois dos 32 subtestes passarem);
+isolado passou 32/32 três vezes na branch e na main — intermitente do ambiente, não regressão. PostgreSQL descartável **95/95**;
+`isolamento-unidades-fuso-136-http.test.js` 15/15 no Supabase de teste (pulado sem `.env.test`).
