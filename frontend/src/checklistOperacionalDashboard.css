@@ -138,3 +138,61 @@
   .ckd-rel fieldset { grid-template-columns: 1fr; }
   .ckd-kpi-valor { font-size: 26px; }
 }
+
+/* =========================================================================
+   Dashboard 2.0 — abas, Pedidos e Ficha 360°, Fechamentos e prévia do WhatsApp (mesmos tokens da Central, claro/escuro)
+   ========================================================================= */
+.ckd-abas { display: flex; gap: 6px; overflow-x: auto; padding: 4px; border-radius: var(--raio); background: var(--superficie-2); scrollbar-width: thin; }
+.ckd-aba { display: inline-flex; align-items: center; gap: 8px; flex: none; min-height: 44px; padding: 8px 14px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--cinza); font: 700 14px/1.2 Inter, system-ui, sans-serif; cursor: pointer; }
+.ckd-aba:hover { color: var(--texto); }
+.ckd-aba--ativa { background: var(--card); color: var(--texto); box-shadow: var(--sombra); }
+.ckd-aba--ativa .icon { color: var(--verde); }
+.ckd-aba:focus-visible, .ckd-link:focus-visible, .ckd-versao:focus-visible { outline: 3px solid var(--verde); outline-offset: 2px; }
+.ckd-painel { display: grid; gap: 18px; }
+
+.ckd-link { padding: 4px 2px; border: 0; background: none; color: var(--texto); font: inherit; font-weight: 800; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; min-height: 32px; }
+.ckd-selo { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; background: var(--superficie-2); color: var(--texto); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.ckd-selo--ruim { background: var(--bad-bg); color: var(--bad); }
+.ckd-selo--aviso { background: var(--warn-bg); color: var(--texto); }
+.ckd-selo--bom { background: color-mix(in srgb, var(--ckd-bom) 14%, transparent); color: var(--ckd-bom); }
+.ckd-etiqueta { padding: 1px 6px; border-radius: 6px; background: var(--superficie-2); color: var(--cinza); font-size: 11.5px; font-weight: 700; }
+.ckd-linha-teste { opacity: .7; }
+.ckd-busca { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; }
+.ckd-busca .ckd-nota { margin: 0 0 8px; }
+.ckd-tabela--pedidos td, .ckd-tabela--pedidos th { white-space: nowrap; }
+.ckd-ok { margin: 0; padding: 10px 14px; border-radius: 11px; background: color-mix(in srgb, var(--ckd-bom) 12%, var(--card)); color: var(--texto); font-weight: 600; }
+.ckd-indisp { color: var(--cinza); }
+
+.ckd-dialogo--ficha { width: min(860px, calc(100vw - 24px)); max-height: calc(100vh - 32px); }
+.ckd-ficha { display: grid; gap: 16px; padding: 18px 20px 20px; }
+.ckd-ficha h3 { margin: 0 0 6px; font-size: 16px; }
+.ckd-ficha section { display: grid; gap: 6px; }
+.ckd-ficha-cab { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.ckd-ficha-cab h2 { margin: 0; font-size: 22px; }
+.ckd-ficha-cab h2 small { font-size: 13px; color: var(--cinza); font-weight: 600; }
+.ckd-ficha-cab p { margin: 4px 0 0; }
+.ckd-sobre { margin: 0; color: var(--cinza); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+.ckd-ficha-rodape { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; color: var(--cinza); }
+.ckd-linha-tempo { margin: 0; padding-left: 0; list-style: none; display: grid; gap: 4px; border-left: 2px solid var(--linha); }
+.ckd-linha-tempo li { position: relative; padding-left: 14px; font-size: 14px; }
+.ckd-linha-tempo li::before { content: ""; position: absolute; left: -5px; top: 7px; width: 8px; height: 8px; border-radius: 50%; background: var(--ckd-s1); }
+.ckd-linha-tempo time { font-variant-numeric: tabular-nums; font-weight: 700; margin-right: 6px; }
+.ckd-itens, .ckd-lista-oc { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; }
+.ckd-itens ul { margin: 2px 0 0; padding-left: 16px; color: var(--cinza); }
+.ckd-avisos--ficha { padding: 10px 12px; border-radius: 10px; background: var(--warn-bg); }
+
+.ckd-campo--largo { flex: 2 1 320px; }
+.ckd-versoes { display: flex; flex-wrap: wrap; gap: 8px; }
+.ckd-versao { min-height: 40px; padding: 6px 12px; border: 1.5px solid var(--linha); border-radius: 10px; background: var(--card); color: var(--texto); font: 600 13px/1.2 Inter, system-ui, sans-serif; cursor: pointer; }
+.ckd-versao--atual { border-color: var(--verde); box-shadow: inset 0 0 0 1px var(--verde); }
+.ckd-fechamento .ckd-kpis { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.ckd-whatsapp { margin: 0; max-height: 420px; overflow: auto; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--linha);
+  background: var(--superficie-2); color: var(--texto); font: 14px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
+
+@media (max-width: 600px) {
+  .ckd-aba span { font-size: 13px; }
+  .ckd-ficha { padding: 14px; }
+  .ckd-ficha-cab h2 { font-size: 19px; }
+  .ckd-dialogo--ficha { width: calc(100vw - 16px); }
+}

@@ -15,6 +15,8 @@
 // meta hoje nunca muda o resultado de ontem.
 //
 // Todo indicador tem definição, fórmula, unidade, denominador e tratamento de ausência em DEFINICOES (vai na resposta).
+// Dashboard 2.0: mediana e P90 continuam calculados em `estatisticas` (as análises robustas e o Agente usam), mas saíram das
+// definições exibidas e de toda a interface gerencial (tela, PDF, Excel, fechamento e WhatsApp).
 
 import { medirPreparo, medirEntrega, medirVida, referencia, chaveOpaca, FUSO_NEGOCIO } from "./checklistOperacional.calc.js";
 import { metaVigenteEm } from "./checklistOperacional.metas.js";
@@ -41,17 +43,6 @@ export const DEFINICOES = Object.freeze({
     definicao: "Média aritmética das durações válidas da etapa.",
     formula: "Σ durações ÷ amostras", denominador: "amostras válidas da etapa",
     ausentes: "Só pedidos de entrega (DELIVERY) entram; retirada fica fora. Sem os dois carimbos da etapa o pedido não entra. Duração ≤ 0 ou acima do teto é descartada e contada.",
-  },
-  mediana: {
-    nome: "Tempo mediano", unidade: "min",
-    definicao: "Valor do meio das durações válidas (metade dos pedidos levou menos que isso).",
-    formula: "percentil 50 (interpolação linear)", denominador: "amostras válidas da etapa", ausentes: "Igual ao tempo médio.",
-  },
-  p90: {
-    nome: "Percentil 90", unidade: "min",
-    definicao: "90% dos pedidos levaram até este tempo.",
-    formula: "percentil 90 por interpolação linear (igual a PERCENTIL.INC do Excel)", denominador: "amostras válidas da etapa",
-    ausentes: "Igual ao tempo médio.",
   },
   pctDentro: {
     nome: "Dentro da meta", unidade: "%",

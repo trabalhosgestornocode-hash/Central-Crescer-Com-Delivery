@@ -4,7 +4,8 @@
 import { asyncHandler } from "../../shared/asyncHandler.js";
 import { ApiError } from "../../shared/ApiError.js";
 import * as service from "./checklistOperacional.service.js";
-import { gerarExcel, secoesPedidas, nomeArquivoExcel } from "./checklistOperacional.exportar.js";
+import { gerarExcel, secoesPedidas, nomeArquivoExcel, gerarExcelFechamento, nomeArquivoFechamento } from "./checklistOperacional.exportar.js";
+import * as operacional from "./checklistOperacional.operacional.service.js";
 
 export const resumo = asyncHandler(async (req, res) => {
   const { organizacaoId, unidadeId } = req.tenant ?? {};
@@ -65,4 +66,68 @@ export const exportarExcel = asyncHandler(async (req, res) => {
     "Content-Disposition": `attachment; filename="${nomeArquivoExcel(d)}"`,
   });
   res.send(buffer);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Dashboard Operacional 2.0 — pedidos e Ficha 360°, fechamento diário e prévia/simulação de WhatsApp.
+// Mesmo princípio: tenant do contexto; do navegador só vêm filtro, chave opaca do pedido, id do fechamento e motivo.
+// ---------------------------------------------------------------------------------------------------------------------------
+
+const quemFez = (req) => (typeof req.user?.id === "string" ? req.user.id : null);   // id, nunca nome/e-mail
+
+export const pedidos = asyncHandler(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ data: await operacional.listarPedidos({ ...unidadeDoContexto(req), filtro: filtroDaQuery(req.query) }) });
+});
+
+export const fichaPedido = asyncHandler(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ data: await operacional.obterFicha({ ...unidadeDoContexto(req), chave: String(req.params.chave ?? "") }) });
+});
+
+export const listarFechamentos = asyncHandler(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const competencia = typeof req.query?.competencia === "string" && req.query.competencia ? req.query.competencia.slice(0, 10) : null;
+  res.json({ data: await operacional.listarFechamentos({ ...unidadeDoContexto(req), competencia }) });
+});
+
+export const gerarFechamento = asyncHandler(async (req, res) => {
+  const corpo = req.body ?? {};
+  const r = await operacional.gerarFechamento({
+    ...unidadeDoContexto(req),
+    competencia: typeof corpo.competencia === "string" ? corpo.competencia.slice(0, 10) : "",
+    origem: corpo.reprocessar === true ? "reprocessamento" : "manual",
+    motivo: typeof corpo.motivo === "string" ? corpo.motivo : null,
+    geradoPor: quemFez(req),
+  });
+  res.set("Cache-Control", "no-store");
+  res.status(r.resultado === "REGISTRADO" ? 201 : 200).json({ data: r });
+});
+
+export const obterFechamento = asyncHandler(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ data: await operacional.obterFechamento({ ...unidadeDoContexto(req), id: String(req.params.id ?? "") }) });
+});
+
+export const exportarFechamentoExcel = asyncHandler(async (req, res) => {
+  const tenant = unidadeDoContexto(req);
+  const f = await operacional.obterFechamento({ ...tenant, id: String(req.params.id ?? "") });
+  const unidadeNome = await service.nomeDaUnidade(tenant);
+  res.set({
+    "Cache-Control": "no-store",
+    "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "Content-Disposition": `attachment; filename="${nomeArquivoFechamento(f)}"`,
+  });
+  res.send(gerarExcelFechamento({ fechamento: f, unidadeNome }));
+});
+
+export const previaWhatsapp = asyncHandler(async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ data: await operacional.previaWhatsapp({ ...unidadeDoContexto(req), id: String(req.params.id ?? "") }) });
+});
+
+export const simularWhatsapp = asyncHandler(async (req, res) => {
+  const r = await operacional.simularWhatsapp({ ...unidadeDoContexto(req), id: String(req.params.id ?? ""), criadoPor: quemFez(req) });
+  res.set("Cache-Control", "no-store");
+  res.status(r.duplicada ? 200 : 201).json({ data: r });
 });

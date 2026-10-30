@@ -21,7 +21,7 @@ export function resumoExecutivo(d) {
   const frases = [`${num(r.pedidos, 0)} pedidos acompanhados (${num(r.concluidos, 0)} concluídos, ${num(r.cancelados, 0)} cancelados).`];
   for (const e of d.etapas) {
     const x = r.porEtapa[e];
-    if (x.amostras) frases.push(`${NOME_ETAPA[e]}: mediana de ${num(x.mediana)} min, P90 de ${num(x.p90)} min${x.pctDentro == null ? "" : `, ${num(x.pctDentro)}% dentro da meta`}.`);
+    if (x.amostras) frases.push(`${NOME_ETAPA[e]}: tempo médio de ${num(x.media)} min em ${num(x.amostras, 0)} pedidos${x.pctDentro == null ? "" : `, ${num(x.pctDentro)}% dentro da meta`}.`);
     else frases.push(`${NOME_ETAPA[e]}: sem medições no período.`);
   }
   if (r.pctPedidosAtrasados != null) frases.push(`${num(r.pedidosAtrasados, 0)} pedidos atrasados (${num(r.pctPedidosAtrasados)}% dos avaliados).`);
@@ -64,7 +64,7 @@ export function htmlRelatorio(d, secoes, { unidadeNome, geradoEm }) {
   return partes.join("");
 }
 
-function cssRelatorio() {
+export function cssRelatorio() {
   return `
   @page { size: A4; margin: 14mm 12mm 16mm; }
   :root { --ckd-s1: #2a78d6; --ckd-s2: #eb6834; --ckd-s3: #1baf7a; --ckd-bom: #0ca30c; --ckd-ruim: #d03b3b; --ckd-neutro: #b9bcc4; --tx: #17181c; --cz: #5b606b; --ln: #e2e4e9; }
@@ -117,6 +117,11 @@ export function documentoRelatorio(d, secoes, meta) {
 
 /** Abre a impressão do navegador ("Salvar como PDF") num iframe isolado. */
 export function gerarPdfDashboard(d, secoes, meta) {
+  return imprimirDocumento(documentoRelatorio(d, secoes, meta));
+}
+
+/** Imprime um documento HTML completo num iframe isolado (mesmo mecanismo para o Dashboard e o Fechamento). */
+export function imprimirDocumento(documento) {
   return new Promise((resolve) => {
     const frame = document.createElement("iframe");
     frame.setAttribute("aria-hidden", "true");
@@ -136,7 +141,7 @@ export function gerarPdfDashboard(d, secoes, meta) {
       if (!img || img.complete) imprimir();
       else { img.addEventListener("load", imprimir, { once: true }); img.addEventListener("error", imprimir, { once: true }); setTimeout(imprimir, 1500); }
     };
-    frame.srcdoc = documentoRelatorio(d, secoes, meta);
+    frame.srcdoc = documento;
   });
 }
 

@@ -478,6 +478,23 @@ export async function salvarMetasChecklist({ versao, metas, origem }) {
 export const obterHistoricoMetasChecklist = () => getJson(`${CHECKLIST}/metas/historico`);
 // Dashboard Operacional: período/etapa são só FILTRO (a unidade vem do contexto). O Excel é o MESMO cálculo.
 export const obterDashboardChecklist = (filtro) => getJson(`${CHECKLIST}/dashboard${qs(filtro)}`);
+// Dashboard Operacional 2.0 — pedidos e Ficha 360° (chave OPACA; o orderId nunca sai do servidor), fechamento diário e
+// WhatsApp SOMENTE simulado. A unidade continua vindo do contexto.
+export const obterPedidosOperacionais = (filtro) => getJson(`${CHECKLIST}/pedidos${qs(filtro)}`);
+export const obterFichaPedido = (chave) => getJson(`${CHECKLIST}/pedidos/${encodeURIComponent(chave)}`);
+export const listarFechamentosOperacionais = (competencia) => getJson(`${CHECKLIST}/fechamentos${qs(competencia ? { competencia } : {})}`);
+export const obterFechamentoOperacional = (id) => getJson(`${CHECKLIST}/fechamentos/${encodeURIComponent(id)}`);
+export const gerarFechamentoOperacional = ({ competencia, motivo, reprocessar }) =>
+  postJson(`${CHECKLIST}/fechamentos`, { competencia, ...(motivo ? { motivo } : {}), ...(reprocessar ? { reprocessar: true } : {}) });
+export const obterPreviaWhatsappFechamento = (id) => getJson(`${CHECKLIST}/fechamentos/${encodeURIComponent(id)}/whatsapp`);
+export const simularWhatsappFechamento = (id) => postJson(`${CHECKLIST}/fechamentos/${encodeURIComponent(id)}/whatsapp/simular`, {});
+export async function exportarFechamentoExcel(id) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${CHECKLIST}/fechamentos/${encodeURIComponent(id)}/exportar.xlsx`, { headers: await comAuth() });
+  if (!r.ok) return tratar(r, g);
+  const nomeArquivo = (r.headers.get("content-disposition") || "").match(/filename="([A-Za-z0-9._-]+)"/)?.[1] ?? "Fechamento-Operacional.xlsx";
+  return { blob: await r.blob(), nomeArquivo };
+}
 export async function exportarDashboardChecklistExcel(filtro) {
   const g = geracaoContexto();
   const r = await fetch(`${API_BASE}${CHECKLIST}/dashboard/exportar.xlsx${qs(filtro)}`, { headers: await comAuth() });
