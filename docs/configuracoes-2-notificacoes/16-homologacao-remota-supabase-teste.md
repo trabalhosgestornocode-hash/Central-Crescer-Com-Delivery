@@ -98,3 +98,14 @@ desfeita (2 linhas fictícias → 0 depois do ROLLBACK). Registrar 132–136 no 
 132–136 aplicadas (sem `\r`), **não** registradas no histórico. Seleção por unidade desligada, nenhuma unidade com fuso. Impressão
 digital (consulta de `prevoo_136.sql`): colunas `d34b254e…`, ACL/RLS `fa4f73de…`, políticas `a490b04c…`, funções exceto a 136
 `44d40872…`; 134 tabelas (r/p), 146 funções.
+
+## Homologação da migration 136 (30/10/2026, após o push de `bce1875`)
+
+- Pré-voo: projeto `wiqqsxnysbzhcrzrrean`; D-1, resolvedor, cota, transferência e `claim` com hashes iguais aos de antes; M3 desligada; 17 migrations registradas.
+  **Atividade de outra frente detectada**: `unidade.transferida_entre_empresas` às 17:50 UTC (homologação de transferência/Financeiro) — alterou o conteúdo de `unidades`, não funções nem esquema.
+- `EDITOR_136_aplicar.sql` (SHA-256 `a226a4ae…`, conferido no editor, LF, sem `\r`) executado com "Success". O hash da função de gatilho era **igual antes e depois** (`10a2368a…`):
+  a 136 já estava presente no teste (re-aplicação idempotente por `create or replace`).
+- Testes funcionais (bloco desfeito): `authenticated` e `anon` recusados ao gravar fuso/horário (UPDATE e INSERT, `42501`); `authenticated` segue alterando outras colunas;
+  sem mudar o valor o UPDATE passa; `service_role` grava; fuso e horário inválidos recusados (`22023`); `anon` não executa o resolvedor nem a função do gatilho; D-1 igual; M3 desligada.
+- Estado final: 0 unidades com fuso, 0 resíduo, RLS de `unidades` ligada, política `rls_unidades_tenant` inalterada, legados e contatos com os mesmos hashes, PostgREST (anon) sem exposição (`postgrest-136.txt`).
+- Limite: a exposição das demais colunas de `unidades` pela política existente continua (pré-existente, produção igual).

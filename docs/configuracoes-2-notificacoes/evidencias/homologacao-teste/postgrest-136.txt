@@ -1,0 +1,14 @@
+OK    GET  usuarios_convites → 401
+OK    GET  comunicacao_legado_snapshot → 401
+OK    GET  comunicacao_destinatario_escopos → 401
+OK    GET  comunicacao_termos → 401
+OK    GET  comunicacao_convites → 401
+OK    GET  comunicacao_desafios_titular → 401
+OK    GET  comunicacao_consentimentos → 401
+OK    RPC  comunicacao_desafio_criar → 401
+OK    RPC  usuarios_convite_consumir → 401
+OK    RPC  comunicacao_revogar → 404
+OK    RPC  comunicacao_ativar_selecao_por_escopo → 404
+OK    RPC  comunicacao_resolver_destinatarios_unidade → 401
+
+Nada novo exposto para anon.

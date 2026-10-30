@@ -13,3 +13,4 @@ deeb1957d09f9089e093efcda99c9fde7ce2c922b5ca56f57dfba9a2ecc3f287 *136-prevoo-pos
 83c4782e78e061c180ed56d98a087f03eb0903342d488a5e982cd94eb54830b0 *136-validar-132-135-antes.json
 83c4782e78e061c180ed56d98a087f03eb0903342d488a5e982cd94eb54830b0 *136-validar-132-135-depois.json
 # EDITOR_aplicar/reverter: 132–135 do commit d30a830 (homologados no teste em 30/10). EDITOR_136_aplicar: APLICADO no teste em 30/10 17:43:58Z (psql -f, SHA conferido). 136-*: evidências da homologação da 136 (doc 16).
+f2efad9bd55e7b5cacb466d54d39997626619bdad8c91601ac8754f4cae85ab7 *postgrest-136.txt
