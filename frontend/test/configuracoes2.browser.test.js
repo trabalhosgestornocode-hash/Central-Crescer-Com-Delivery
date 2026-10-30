@@ -442,6 +442,42 @@ describe("Configurações 2.0 em navegador real", { timeout: 300_000 }, () => {
     await ctx.close();
   });
 
+  test("perfis com o catálogo REAL de permissões: Financeiro só consulta a Central; Consulta e Operação não a veem; ninguém sem gerenciar edita a unidade", OPC, async () => {
+    const { permissoesDoPapel } = await import(new URL("../../backend/src/shared/permissoes.js", import.meta.url));
+    const erros = [];
+    // Financeiro: vê destinatários, sem convidar, sem auditoria, sem suspender; Unidade somente leitura.
+    novoCenario();
+    const fin = await abrir(browser, { papel: "finance", permissoes: permissoesDoPapel("finance") });
+    erros.push(...fin.erros);
+    assert.equal(await fin.pagina.locator("#cfg-corpo-unidade #u-nome").isDisabled(), true);
+    assert.equal(await fin.pagina.locator("#cfg-corpo-unidade [data-salvar]").count(), 0);
+    assert.match(await fin.pagina.locator("#cfg-corpo-unidade").innerText(), /Somente leitura/);
+    await categoria(fin.pagina, "notificacoes");
+    await fin.pagina.locator(".ntf-dest").first().waitFor();
+    assert.equal(await fin.pagina.locator("[data-novo-convite]").count(), 0);
+    assert.equal(await fin.pagina.locator('[data-aba="auditoria"]').count(), 0);
+    await fin.pagina.locator("[data-abrir]").first().click();
+    await fin.pagina.locator(".ntf-dest-corpo").waitFor();
+    assert.equal(await fin.pagina.locator("[data-suspender], [data-revogacao], [data-aderir]").count(), 0, "financeiro não tem ação de gestão");
+    await foto(fin.pagina, "cfg2-perfil-financeiro");
+    await fin.ctx.close();
+    // Consulta e Operação: a Central nem chama a API.
+    for (const papel of ["viewer", "operations"]) {
+      novoCenario();
+      const p = await abrir(browser, { papel, permissoes: permissoesDoPapel(papel) });
+      erros.push(...p.erros);
+      await categoria(p.pagina, "notificacoes");
+      await p.pagina.waitForFunction(() => /não tem acesso às notificações/.test(document.body.innerText));
+      assert.ok(!est.corpos.some((c) => c.p.startsWith("/api/v1/notificacoes")), `${papel}: nenhuma chamada à Central`);
+      await categoria(p.pagina, "unidade-empresa");
+      await p.pagina.locator("#cfg-corpo-unidade #u-nome").waitFor();
+      assert.equal(await p.pagina.locator("#cfg-corpo-unidade #u-nome").isDisabled(), true, `${papel}: unidade somente leitura`);
+      if (papel === "viewer") await foto(p.pagina, "cfg2-perfil-consulta");
+      await p.ctx.close();
+    }
+    assert.deepEqual(erros, []);
+  });
+
   test("celular 390 px: lista de categorias → detalhe → voltar; nenhuma categoria rola na horizontal; tema escuro", OPC, async () => {
     novoCenario();
     const { ctx, pagina, erros } = await abrir(browser, { viewport: { width: 390, height: 844 } });

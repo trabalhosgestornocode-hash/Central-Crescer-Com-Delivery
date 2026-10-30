@@ -5,8 +5,8 @@
 // (busca/dedupe sem o valor em claro) e HMAC de OTP (o código nunca é guardado). Sem a env, a Central fica DESLIGADA
 // (fail-closed): nenhuma rota de escrita funciona — nada é guardado em claro "provisoriamente".
 //
-// DESCRIPTOGRAFIA: só `decifrarTelefone`/`decifrarEmail`, chamados por notificacoes.envio.js (transporte do OTP) e pelos
-// formulários de edição de quem tem `gerenciar` — teste arquitetural em test/notificacoes-arquitetura.test.js.
+// DESCRIPTOGRAFIA: só `decifrarTelefone`, chamado por notificacoes.envio.js (transporte do OTP) e por
+// notificacoes.titular.service.js (consentimento) — teste arquitetural em test/notificacoes-titular.test.js. `decifrarEmail` não tem uso.
 // NUNCA logue a entrada nem a saída destas funções.
 import crypto from "node:crypto";
 import { criarCifraAutenticada } from "../../shared/cripto.js";

@@ -117,6 +117,13 @@ for b in nt_main nt_branch; do ALERTAS $b 2026-11-02 0; AGENDAR $b; done
 F1M=$(q nt_main "$FOTO_MSG"); F1B=$(q nt_branch "$FOTO_MSG")
 chk "D-1 com a seleção desligada: mesmas mensagens (destinatários, chaves, conteúdo, horários, metadados, status) na main e na branch" "$F1B" "$F1M"
 info "mensagens D-1 geradas: ${F1M#*:} (opt-out e categorias fora; 7 empresas×unidades)"
+for b in nt_main nt_branch; do AGENDAR $b; done   # 2ª rodada do agendador: idempotência (mesma chave ⇒ nenhuma linha nova)
+chk "D-1 idempotente: reagendar não cria nem altera mensagens (branch igual à 1ª rodada)" "$(q nt_branch "$FOTO_MSG")" "$F1B"
+chk "D-1 idempotente: main e branch iguais após reagendar" "$(q nt_branch "$FOTO_MSG")" "$(q nt_main "$FOTO_MSG")"
+FILA_DEF="select md5(string_agg(x, ';' order by x)) from (select column_name||':'||data_type||':'||coalesce(column_default,'')||':'||is_nullable x from information_schema.columns where table_schema='public' and table_name='comunicacao_mensagens'
+  union all select 'c:'||pg_get_constraintdef(oid) from pg_constraint where conrelid='public.comunicacao_mensagens'::regclass
+  union all select 't:'||tgname||':'||pg_get_triggerdef(oid) from pg_trigger where tgrelid='public.comunicacao_mensagens'::regclass and not tgisinternal) y"
+chk "fila do D-1 (comunicacao_mensagens): colunas, restrições e gatilhos idênticos aos da main" "$(q nt_branch "$FILA_DEF")" "$(q nt_main "$FILA_DEF")"
 for t in OPT_OUT; do chk "motivo $t idêntico" "$(sr nt_branch "select e->>'motivo' from jsonb_array_elements(comunicacao_resolver_destinatarios_unidade('$ORG_C','$(UA 21)','dashboard_ifood_d1')) e")" "$(sr nt_main "select e->>'motivo' from jsonb_array_elements(comunicacao_resolver_destinatarios('$ORG_C','dashboard_ifood_d1')) e")"; done
 
 # ---------- 2. ativação M3: universo inválido, divergência plantada, atomicidade ----------
@@ -237,5 +244,5 @@ for f in 132_configuracoes2_fuso_unidade_convites_usuario.sql 133_notificacoes_e
 ok "132–135 reaplicadas após o rollback"
 
 echo; echo "RESUMO: $N_OK verificações OK, $N_F falha(s)"
-for b in nt_main nt_branch nt_rb; do $SU -d postgres -c "drop database if exists $b" >/dev/null 2>&1; done
+[ "${MANTER_BANCOS:-}" = "1" ] || for b in nt_main nt_branch nt_rb; do $SU -d postgres -c "drop database if exists $b" >/dev/null 2>&1; done   # MANTER_BANCOS=1: inspeção depois
 [ -z "$FALHOU" ] && echo "TUDO OK" || { echo "HÁ FALHAS"; exit 1; }

@@ -135,9 +135,13 @@ export function criarCifraAutenticada(chave, { versao = 1 } = {}) {
     decifrar(cifrado, aad) {
       const partes = String(cifrado ?? "").split(":");
       if (partes.length !== 4 || partes[0] !== prefixo) throw new Error("Texto cifrado em formato inválido ou versão de chave diferente.");
-      const d = crypto.createDecipheriv(ALGORITMO, chave, deB64u(partes[1]));
+      const iv = deB64u(partes[1]);
+      const tag = deB64u(partes[2]);
+      // Tag e IV com tamanho EXATO: sem isso o GCM aceita tag truncada (4 bytes), enfraquecendo a autenticação.
+      if (iv.length !== IV_BYTES || tag.length !== 16) throw new Error("Texto cifrado em formato inválido.");
+      const d = crypto.createDecipheriv(ALGORITMO, chave, iv, { authTagLength: 16 });
       d.setAAD(Buffer.from(aad, "utf8"));
-      d.setAuthTag(deB64u(partes[2]));
+      d.setAuthTag(tag);
       return Buffer.concat([d.update(deB64u(partes[3])), d.final()]).toString("utf8");
     },
   };

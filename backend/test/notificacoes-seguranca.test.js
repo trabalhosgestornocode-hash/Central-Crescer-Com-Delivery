@@ -35,6 +35,11 @@ describe("cifra autenticada genérica (D-4)", () => {
     const ruim = Buffer.from(ct, "base64url"); ruim[0] ^= 1;
     assert.throws(() => c.decifrar([v, iv, tag, ruim.toString("base64url")].join(":"), "telefone"));
   });
+  test("tag GCM truncada (4 bytes) é recusada — sem aceitar autenticação enfraquecida", () => {
+    const [v, iv, tag, ct] = c.cifrar("+5511912345678", "telefone").split(":");
+    const curta = Buffer.from(tag, "base64url").subarray(0, 4).toString("base64url");
+    assert.throws(() => c.decifrar([v, iv, curta, ct].join(":"), "telefone"), /formato inválido/);
+  });
   test("chave errada não decifra; chave inválida é recusada", () => {
     const outro = cripto.criarCifraAutenticada(crypto.randomBytes(32));
     assert.throws(() => outro.decifrar(c.cifrar("abc", "telefone"), "telefone"));
