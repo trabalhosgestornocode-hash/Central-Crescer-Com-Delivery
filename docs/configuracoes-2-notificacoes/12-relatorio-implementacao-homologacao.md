@@ -152,3 +152,7 @@ frontend 1648 / 0 falhas; navegador 126/127 (a falha `parserFoodDelivery` "dia �
 completa, `modelo-logistico-temporal.test.js` caiu com `0xC0000005` (o processo Node do Windows, depois dos 32 subtestes passarem);
 isolado passou 32/32 três vezes na branch e na main — intermitente do ambiente, não regressão. PostgreSQL descartável **95/95**;
 `isolamento-unidades-fuso-136-http.test.js` 15/15 no Supabase de teste (pulado sem `.env.test`).
+
+**PR #55 atualizado (30/10):** head `b76a81a` (commits `eae756b`, `605f076`, `b76a81a` sobre `bce1875`); contém a main `9da8210`,
+sem conflito; checks Vercel e Vercel Preview Comments = SUCCESS. **Pré-voo de produção (só leitura):** doc 17 — nada de 132–136 em
+produção, dependências iguais às homologadas, sem bloqueios; GO condicionado à confirmação do backup do dia no painel.
