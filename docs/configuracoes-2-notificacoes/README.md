@@ -15,3 +15,5 @@ Missão **somente de auditoria e planejamento** (30/10/2026): nenhum código fun
 | [09 — Roadmap](09-roadmap-implementacao.md) | Etapas 1–6, agrupamento em uma execução, arquivos, migrations, testes, riscos, aceite, bloqueadores |
 | [10 — Resumo executivo e decisões](10-resumo-executivo-decisoes.md) | Resumo, mapa dos critérios de aceite, riscos, decisões tomadas (preservação dos legados, D-16, D-3) e pendentes separadas em "bloqueiam a implementação" × "antes da ativação real" |
 | [11 — Plano de execução consolidada](11-plano-execucao-consolidada.md) | Plano final das Etapas 1–5 numa execução: invariantes, pré-voo, blocos B1–B7, migrations 132–135, flags, matriz de testes, dependências não resolvidas (DEP-1..9), aceite |
+| [12 — Relatório de implementação e homologação](12-relatorio-implementacao-homologacao.md) | O que foi entregue (blocos A–F), testes, evidências do D-1/segurança/M3/transferência, regressão × main, correções, limitações |
+| [13 — Dependências para produção](13-dependencias-producao.md) | Ordem de implantação, variáveis novas (nenhuma criada), DEP-1..11, garantias do que não muda |
