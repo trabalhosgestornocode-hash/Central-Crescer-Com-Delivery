@@ -6,17 +6,23 @@
 //
 // Modos (NOTIFICACOES_OTP_TRANSPORTE):
 //   * "desligado" (padrão, inclusive produção): nenhum código sai — a verificação fica indisponível; nada é verificado.
+//   * "oficial": WhatsApp Cloud API da Meta (notificacoes.whatsappOficial.js), modelo de AUTENTICAÇÃO. Só com NOTIFICACOES_OTP_TRANSPORTE=oficial
+//     E NOTIFICACOES_OTP_OFICIAL_AUTORIZADO=true E credenciais completas. Separado do Baileys. Desligado em produção até a autorização.
 //   * "simulacao": só com NOTIFICACOES_AMBIENTE_ISOLADO=true e NODE_ENV explícito development/test. O código vai para a CAIXA DE
 //     SIMULAÇÃO em memória, legível apenas por gancho de teste (nunca por log nem pela API). Tudo o que deriva dele é marcado
 //     `simulado` no banco e nunca é considerado verificado para envio real.
 import { decifrarTelefone } from "./notificacoes.segredos.js";
 import { ambienteDeDesenvolvimento } from "../../shared/urlPublica.js";
 import { logNotificacoes } from "./notificacoes.basico.js";
+import { configuracaoOficial, enviarCodigoOficial } from "./notificacoes.whatsappOficial.js";
 
 const caixa = [];   // [{ desafioId, telefoneHmac, codigo, em }] — só simulação; nunca exposta pela API
 
 export function modoTransporte(env = process.env) {
   const pedido = String(env.NOTIFICACOES_OTP_TRANSPORTE ?? "desligado").trim().toLowerCase();
+  if (pedido === "oficial") {
+    return env.NOTIFICACOES_OTP_OFICIAL_AUTORIZADO === "true" && configuracaoOficial(env) ? "oficial" : "desligado";   // duas chaves + credenciais
+  }
   if (pedido !== "simulacao") return "desligado";
   // fail-closed: NODE_ENV ausente ≠ desenvolvimento (só development/test explícitos + ambiente isolado liberam a simulação)
   if (!ambienteDeDesenvolvimento(env) || env.NOTIFICACOES_AMBIENTE_ISOLADO !== "true") return "desligado";
@@ -25,7 +31,7 @@ export function modoTransporte(env = process.env) {
 
 export function capacidades(env = process.env) {
   const modo = modoTransporte(env);
-  return { modo, otp: modo === "simulacao", simulado: modo === "simulacao", envioReal: false };
+  return { modo, otp: modo !== "desligado", simulado: modo === "simulacao", envioReal: modo === "oficial" };
 }
 
 /**
@@ -34,6 +40,11 @@ export function capacidades(env = process.env) {
  */
 export async function entregarCodigoOtp(p, { env = process.env } = {}) {
   const modo = modoTransporte(env);
+  if (modo === "oficial") {
+    const r = await enviarCodigoOficial({ desafioId: p.desafioId, para: decifrarTelefone(p.telefoneCifrado), codigo: p.codigo }, { env });
+    logNotificacoes(r.entregue ? "info" : "warn", r.entregue ? "otp.oficial_enviado" : "otp.oficial_falhou", { desafio: p.desafioId, motivo: r.motivo ?? null });
+    return { entregue: r.entregue, simulado: false, motivo: r.motivo ?? null };
+  }
   if (modo !== "simulacao") return { entregue: false, simulado: false, motivo: "TRANSPORTE_DESLIGADO" };
   decifrarTelefone(p.telefoneCifrado);   // prova que o número decifra (o envio real precisará dele); o valor é descartado
   caixa.push({ desafioId: p.desafioId, telefoneHmac: p.telefoneHmac, codigo: p.codigo, em: Date.now() });
