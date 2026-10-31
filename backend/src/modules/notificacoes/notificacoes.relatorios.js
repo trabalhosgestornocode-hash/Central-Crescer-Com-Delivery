@@ -20,23 +20,33 @@ export const CATEGORIA_SEMANAL = "resumo_semanal";
 export const MOTIVO = Object.freeze({
   SEM_MODULO: "SEM_MODULO_CHECKLIST_NA_UNIDADE", SEM_FECHAMENTO_VALIDO: "SEM_FECHAMENTO_VALIDO", SEMANA_INCOMPLETA: "SEMANA_INCOMPLETA",
   SEM_DESTINATARIO: "SEM_DESTINATARIO_AUTORIZADO", MODULOS_INDISPONIVEIS: "MODULOS_INDISPONIVEIS",
-  INTEGRACAO_NAO_ATIVADA: "INTEGRACAO_NAO_ATIVADA", INTEGRACAO_DESCONECTADA: "INTEGRACAO_DESCONECTADA", INTEGRACAO_NAO_VERIFICADA: "INTEGRACAO_NAO_VERIFICADA",
+  INTEGRACAO_INDISPONIVEL_NO_MOMENTO: "INTEGRACAO_INDISPONIVEL_NO_MOMENTO", INTEGRACAO_NAO_ATIVADA: "INTEGRACAO_NAO_ATIVADA", INTEGRACAO_DESCONECTADA: "INTEGRACAO_DESCONECTADA", INTEGRACAO_NAO_VERIFICADA: "INTEGRACAO_NAO_VERIFICADA",
   SEM_PEDIDOS: "SEM_PEDIDOS_NO_PERIODO", DADOS_INSUFICIENTES: "DADOS_INSUFICIENTES",
 });
 
 /**
- * Integração iFood da unidade (saída de `derivarEstadoIntegracao`): `ao_vivo` é o único estado que libera relatório.
- *   nao_ativada   → INTEGRACAO_NAO_ATIVADA (sem loja vinculada, sem credencial Order ou recebimento nunca ligado)
- *   desatualizado → INTEGRACAO_DESCONECTADA (recebimento parou ou a autorização expirou)
- *   ausente/estado desconhecido → INTEGRACAO_NAO_VERIFICADA (fail-closed)
+ * Integração iFood da unidade (saída de `derivarEstadoIntegracao`). O lease do recebimento é o BATIMENTO do coletor (renovado a cada ciclo,
+ * independe de haver pedidos): lease vencido = coletor parado AGORA, não "unidade sem movimento". Por isso:
+ *   ao_vivo                                  → libera
+ *   desatualizado / recebimento_parado       → ADIÁVEL: o dia já FECHADO tem a sua própria prova de cobertura (fechamento CONSOLIDADO com sinal de
+ *                                              recebimento); coletor momentaneamente fora (deploy, reinício, oscilação) só ADIA o envio, não descarta
+ *   desatualizado / reautorizacao_necessaria → bloqueia (INTEGRACAO_DESCONECTADA)
+ *   nao_ativada                              → bloqueia (INTEGRACAO_NAO_ATIVADA)
+ *   ausente/desconhecido                     → bloqueia (INTEGRACAO_NAO_VERIFICADA, fail-closed)
+ * Falha HISTÓRICA de coleta não depende deste estado: aparece na cobertura do fechamento (`semCobertura`/`semSinalDeRecebimento`) → DADOS_INSUFICIENTES.
+ * Ausência legítima de pedidos (integração viva, dado válido, 0 pedidos) é SEM_PEDIDOS — nunca confundida com desconexão.
+ * @returns {{bloqueia: boolean, adiavel: boolean, motivo: string|null}}
  */
-export function motivoDeIntegracao(integracao) {
+export function classificarIntegracao(integracao) {
   const e = integracao?.estado;
-  if (e === "ao_vivo") return null;
-  if (e === "nao_ativada") return MOTIVO.INTEGRACAO_NAO_ATIVADA;
-  if (e === "desatualizado") return MOTIVO.INTEGRACAO_DESCONECTADA;
-  return MOTIVO.INTEGRACAO_NAO_VERIFICADA;
+  if (e === "ao_vivo") return { bloqueia: false, adiavel: false, motivo: null };
+  if (e === "desatualizado" && integracao?.motivo === "recebimento_parado") return { bloqueia: false, adiavel: true, motivo: MOTIVO.INTEGRACAO_INDISPONIVEL_NO_MOMENTO };
+  if (e === "nao_ativada") return { bloqueia: true, adiavel: false, motivo: MOTIVO.INTEGRACAO_NAO_ATIVADA };
+  if (e === "desatualizado") return { bloqueia: true, adiavel: false, motivo: MOTIVO.INTEGRACAO_DESCONECTADA };
+  return { bloqueia: true, adiavel: false, motivo: MOTIVO.INTEGRACAO_NAO_VERIFICADA };
 }
+/** Motivo que BLOQUEIA (null se libera ou só adia). */
+export const motivoDeIntegracao = (integracao) => { const c = classificarIntegracao(integracao); return c.bloqueia ? c.motivo : null; };
 
 /** O fechamento diário prova que o dia tinha cobertura? INCOMPLETO por falta de sinal/cobertura/detalhes = dados insuficientes. */
 const cobertoPorSinal = (f) => !(f?.cobertura?.semCobertura || f?.cobertura?.semSinalDeRecebimento);
@@ -69,11 +79,11 @@ export function destinatariosAutorizados({ categoria, unidadeId, dados, ledger, 
  */
 export function elegibilidadeDiaria({ modulosEfetivos, integracao, fechamento }) {
   if (!temModulo(modulosEfetivos)) return { elegivel: false, motivo: MOTIVO.SEM_MODULO };
-  const mi = motivoDeIntegracao(integracao); if (mi) return { elegivel: false, motivo: mi };
+  const ci = classificarIntegracao(integracao); if (ci.bloqueia) return { elegivel: false, motivo: ci.motivo };
   if (!fechamento || !fechamento.indicadores) return { elegivel: false, motivo: MOTIVO.DADOS_INSUFICIENTES };
   if (!["CONSOLIDADO", "REVISADO"].includes(fechamento.status) || !cobertoPorSinal(fechamento)) return { elegivel: false, motivo: MOTIVO.DADOS_INSUFICIENTES };
   if (!(Number(fechamento.indicadores.pedidos?.recebidos) > 0)) return { elegivel: false, motivo: MOTIVO.SEM_PEDIDOS };
-  return { elegivel: true, motivo: null };
+  return { elegivel: true, motivo: ci.adiavel ? ci.motivo : null, adiar: ci.adiavel };
 }
 
 /**
@@ -82,7 +92,7 @@ export function elegibilidadeDiaria({ modulosEfetivos, integracao, fechamento })
  */
 export function planejarResumoSemanal({ organizacaoId, unidadeId, unidadeNome = null, modulosEfetivos, integracao, versoes, hojeIso, dados, ledger, cotas = {}, segunda = null }) {
   if (!temModulo(modulosEfetivos)) return { elegivel: false, motivo: MOTIVO.SEM_MODULO, linhas: [] };
-  const mi = motivoDeIntegracao(integracao); if (mi) return { elegivel: false, motivo: mi, linhas: [] };
+  const ci = classificarIntegracao(integracao); if (ci.bloqueia) return { elegivel: false, motivo: ci.motivo, linhas: [] };
   const semanaInicio = segunda ?? ultimaSemanaEncerrada(hojeIso);
   const resumo = resumirSemana(semanaInicio, versoes);
   if (resumo.status === STATUS_SEMANA.INCOMPLETA) return { elegivel: false, motivo: MOTIVO.DADOS_INSUFICIENTES, detalhe: MOTIVO.SEMANA_INCOMPLETA, semana: { inicio: resumo.semanaInicio, diasValidos: resumo.diasValidos, diasAusentes: resumo.diasAusentes }, linhas: [] };
@@ -100,5 +110,5 @@ export function planejarResumoSemanal({ organizacaoId, unidadeId, unidadeNome = 
       mensagem, tamanho: mensagem.length, erro: ok ? null : (!validacao.ok ? "VALIDACAO" : (cota.motivo ?? "COTA")),
     };
   });
-  return { elegivel: true, motivo: null, semana: resumo, mensagem, validacao, linhas };
+  return { elegivel: true, motivo: ci.adiavel ? ci.motivo : null, adiar: ci.adiavel, semana: resumo, mensagem, validacao, linhas };
 }

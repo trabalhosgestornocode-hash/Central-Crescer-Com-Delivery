@@ -40,3 +40,12 @@ Motivos distintos (`notificacoes.relatorios.js`), na ordem em que são avaliados
 | `SEM_PEDIDOS_NO_PERIODO` | integração viva, dado válido, mas 0 pedidos reais no dia/semana |
 
 `notificacoes.relatorios.integracao.js`: `lerIntegracaoDaUnidade` e `unidadesComIntegracaoViva` (funil módulo → integração viva). 21 testes (integração ao vivo/parada/reautorização/só Financial/falha de leitura, funil com 4 unidades, diário, semanal). Nada envia, nada grava, D-1 intocado.
+
+## Entrega ponta a ponta (migrations 141/142 — NÃO aplicadas em produção)
+- **Fluxo:** pedidos → indicadores → fechamento (RPC real) → `enfileirarRelatoriosDaUnidade` (diário: fechamento de ontem no fuso da unidade; semanal: segunda-feira local, semana encerrada) → fila própria `operacional_relatorios_envios` → `processarFilaRelatorios` → ponte `comunicacao.relatorios.transporte.js` (gateway Baileys; kill switch + conta confirmada) → auditoria (`notificacao.relatorio_envio`, sem telefone nem texto).
+- **Envio desligado por padrão:** `NOTIFICACOES_RELATORIOS_ENVIO_HABILITADO=true` + lista própria `NOTIFICACOES_RELATORIOS_ALLOWLIST_E164` (obrigatória; `NOTIFICACOES_RELATORIOS_EXIGE_ALLOWLIST=false` só por decisão de disponibilidade geral) + cota `NOTIFICACOES_RELATORIOS_MAX_DIA` (3/destinatário/categoria/dia). Agendador: `NOTIFICACOES_RELATORIOS_AGENDADOR_HABILITADO=true`; **não é ligado no server.js**.
+- **Janela:** 08:00–20:00 locais da unidade (antes aguarda; depois do fim expira — nunca "amanhã").
+- **Recebimento ≤ 120 s:** o lease é o batimento do coletor, não o movimento de pedidos. Coletor parado AGORA ⇒ o relatório do dia já fechado (com cobertura comprovada) **aguarda**; só autorização do iFood expirada / integração não ativada **bloqueiam**; falha histórica de coleta ⇒ `DADOS_INSUFICIENTES` (cobertura do fechamento); dia sem pedidos com integração viva ⇒ `SEM_PEDIDOS`.
+- **Idempotência/duplicidade:** chave única por fechamento+destinatário+propósito (e por semana+hash do resumo); reserva atômica com posse (CAS); posse vencida ⇒ `INCERTO`, **nunca reenvia**; falha pré-envio ⇒ `RETRY` (máx. 3).
+- **142:** devolve `EXECUTE` de `comunicacao_cota_valida(jsonb)` só ao `service_role` (função pura usada em CHECK); anon/authenticated seguem sem acesso.
+- **Provas:** PG descartável 38/38 (`relatorios_141_142.sh`); banco de teste Supabase 5/5 (`notificacoes-relatorios-integracao.test.js`, resíduo aceito documentado); 17 testes de fluxo + 21 de elegibilidade; regressão = 24 falhas da `main`, 0 novas.

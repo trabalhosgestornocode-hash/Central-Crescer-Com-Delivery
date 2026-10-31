@@ -184,6 +184,8 @@ export const ACOES = {
   COMUNICACAO_DESTINATARIO_NUMERO_ALTERADO: "comunicacao.destinatario_numero_alterado_painel_admin",
   COMUNICACAO_DESTINATARIO_AUTORIZADO: "comunicacao.destinatario_autorizado_painel_admin",
   // Central de Notificações (Configurações 2.0). Prefixo "notificacao." = o que o gestor do tenant pode ler (recortado por unidade).
+  NOTIFICACAO_RELATORIO_ENFILEIRADO: "notificacao.relatorio_enfileirado",
+  NOTIFICACAO_RELATORIO_ENVIO: "notificacao.relatorio_envio",
   NOTIFICACAO_CONVITE_CRIADO: "notificacao.convite_criado",
   NOTIFICACAO_CONVITE_CANCELADO: "notificacao.convite_cancelado",
   NOTIFICACAO_ESCOPO_SUSPENSO: "notificacao.escopo_suspenso",

@@ -97,7 +97,9 @@ describe("elegibilidade: só unidades com Checklist Operacional ativo e dados v�
     const motivo = (integracao) => elegibilidadeDiaria({ modulosEfetivos: M, integracao, fechamento: f }).motivo;
     assert.equal(motivo({ estado: "nao_ativada", motivo: "sem_loja_vinculada" }), MOTIVO.INTEGRACAO_NAO_ATIVADA);
     assert.equal(motivo({ estado: "nao_ativada", motivo: "sem_credencial_order" }), MOTIVO.INTEGRACAO_NAO_ATIVADA);
-    assert.equal(motivo({ estado: "desatualizado", motivo: "recebimento_parado" }), MOTIVO.INTEGRACAO_DESCONECTADA);
+    assert.equal(motivo({ estado: "desatualizado", motivo: "recebimento_parado" }), MOTIVO.INTEGRACAO_INDISPONIVEL_NO_MOMENTO, "coletor parado AGORA só ADIA (elegivel + adiar), não bloqueia");
+    assert.equal(elegibilidadeDiaria({ modulosEfetivos: M, integracao: { estado: "desatualizado", motivo: "recebimento_parado" }, fechamento: f }).elegivel, true);
+    assert.equal(motivo({ estado: "desatualizado" }), MOTIVO.INTEGRACAO_DESCONECTADA);
     assert.equal(motivo({ estado: "desatualizado", motivo: "reautorizacao_necessaria" }), MOTIVO.INTEGRACAO_DESCONECTADA);
     assert.equal(motivo(undefined), MOTIVO.INTEGRACAO_NAO_VERIFICADA); assert.equal(motivo({ estado: "xyz" }), MOTIVO.INTEGRACAO_NAO_VERIFICADA);
     assert.equal(motivoDeIntegracao(VIVA), null);
@@ -174,8 +176,8 @@ describe("leitura da integração real (conexão de pedidos, credencial Order, r
       obterObservabilidadeOrder: async ({ unidadeId }) => (unidadeId === "uParada" ? { ...vivo, lease: { atualizadoEm: "2026-11-02T10:00:00Z", leaseAte: "2026-11-02T10:01:00Z" } } : vivo),
     });
     const r = await unidadesComIntegracaoViva(un, { agora: () => AGORA, deps: { modulosDe, ifoodRepo } });
-    assert.deepEqual(r.elegiveis.map((u) => u.unidadeId), ["uOK"]);
-    assert.deepEqual(Object.fromEntries(r.recusadas.map((u) => [u.unidadeId, u.motivo])), { uSemModulo: MOTIVO.SEM_MODULO, uSemLoja: MOTIVO.INTEGRACAO_NAO_ATIVADA, uParada: MOTIVO.INTEGRACAO_DESCONECTADA });
+    assert.deepEqual(r.elegiveis.map((u) => u.unidadeId), ["uOK", "uParada"], "coletor parado agora segue no funil (o envio aguarda), sem descartar");
+    assert.deepEqual(Object.fromEntries(r.recusadas.map((u) => [u.unidadeId, u.motivo])), { uSemModulo: MOTIVO.SEM_MODULO, uSemLoja: MOTIVO.INTEGRACAO_NAO_ATIVADA, });
   });
 });
 
