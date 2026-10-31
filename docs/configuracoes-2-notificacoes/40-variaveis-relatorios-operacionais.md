@@ -27,3 +27,9 @@ Maior volume e projeção já populada. Passos (cada um com autorização): term
 
 ## Verificar a versão publicada
 `GET /health` passa a trazer `versao` (7 primeiros hex do commit do deploy, `RENDER_GIT_COMMIT`) a partir do PR #69.
+
+## Estado em 31/10/2026
+- Publicado e confirmado pelo `/health`: `versao = 879919b` (inclui #67 `8417bcf` e #69). Migrations 141 e 142 aplicadas em produção.
+- Relatórios **desligados**: nenhuma variável `NOTIFICACOES_RELATORIOS_*` definida no Render; sem destinatário com escopo nas categorias de relatório; categorias `fechamento_operacional_diario` e `resumo_semanal` inativas.
+- Unidade inicial do piloto: **Subway Saci — Matriz** (valor do id fica só no painel do Render, em `NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO`).
+- Bloqueio para o 1º envio real: termo v2 aprovado + convite/OTP do destinatário (consentimento real) + as variáveis acima.
