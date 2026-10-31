@@ -10,7 +10,7 @@ process.env.SUPABASE_ANON_KEY ??= "ficticio_anon_key_0123456789abcdef0123";
 
 const { janelaDeEnvio, enfileirarRelatoriosDaUnidade } = await import("../src/modules/notificacoes/notificacoes.relatorios.servico.js");
 const { processarFilaRelatorios, relatoriosEnvioHabilitado } = await import("../src/modules/notificacoes/notificacoes.relatorios.envio.js");
-const { criarAgendadorRelatorios, executarCicloRelatorios, agendadorRelatoriosPermitido } = await import("../src/modules/notificacoes/notificacoes.relatorios.agendador.js");
+const { criarAgendadorRelatorios, executarCicloRelatorios, agendadorRelatoriosPermitido, unidadesPiloto } = await import("../src/modules/notificacoes/notificacoes.relatorios.agendador.js");
 const { classificarIntegracao, elegibilidadeDiaria, MOTIVO } = await import("../src/modules/notificacoes/notificacoes.relatorios.js");
 const { criarWhatsAppService } = await import("../src/modules/comunicacao/whatsapp.service.js");
 const { criarFakeProvider } = await import("../src/modules/comunicacao/providers/fake.provider.js");
@@ -212,5 +212,25 @@ describe("agendador", () => {
     } });
     assert.deepEqual(visto.gerar, ["uOK"]); assert.deepEqual(visto.enfileirar, ["uOK"]);
     assert.deepEqual(r.recusadas, [{ unidadeId: "uSem", motivo: MOTIVO.INTEGRACAO_NAO_ATIVADA }]); assert.equal(r.envio.desligado, true);
+  });
+});
+
+describe("piloto por unidade", () => {
+  const U1 = "6a417349-2ece-4e85-9e7f-884391aecd90"; const U2 = "00000000-0000-0000-0000-0000000000a1";
+  test("lista válida restringe; ausente = todas; inválida = NENHUMA (fail-closed)", () => {
+    assert.equal(unidadesPiloto({}), null);
+    assert.deepEqual([...unidadesPiloto({ NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO: U2 })], [U2]);
+    assert.deepEqual([...unidadesPiloto({ NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO: `${U1}, ${U2}` })].sort(), [U2, U1].sort());
+    assert.equal(unidadesPiloto({ NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO: `${U1},nao-e-uuid` }).size, 0);
+  });
+  test("o ciclo só enxerga as unidades do piloto (geração e enfileiramento)", async () => {
+    const visto = [];
+    await executarCicloRelatorios({ agora: AGORA, env: { NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO: U2 }, deps: {
+      candidatas: async () => [{ organizacaoId: "o", unidadeId: U1 }, { organizacaoId: "o", unidadeId: U2 }],
+      funil: async (c) => { visto.push(c.map((u) => u.unidadeId)); return { elegiveis: c.map((u) => ({ ...u, integracao: VIVA })), recusadas: [] }; },
+      gerar: async () => [], enfileirar: async (u) => ({ unidadeId: u.unidadeId }), despachar: async () => ({ desligado: true }) } });
+    assert.deepEqual(visto, [[U2]]);
+    const nenhuma = []; await executarCicloRelatorios({ agora: AGORA, env: { NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO: "lixo" }, deps: { candidatas: async () => [{ organizacaoId: "o", unidadeId: U1 }], funil: async (c) => { nenhuma.push(c.length); return { elegiveis: [], recusadas: [] }; }, gerar: async () => [], despachar: async () => ({}) } });
+    assert.deepEqual(nenhuma, [0]);
   });
 });
