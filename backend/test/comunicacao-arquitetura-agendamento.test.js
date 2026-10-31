@@ -115,7 +115,7 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 131 = correção da transferência/promoção de unidades quebrada pela 127 (UPDATE só de organizacao_id em checklist_metas).
       "131_checklist_metas_transferencia_unidade.sql", "131_rollback.sql",
       "132_configuracoes2_fuso_unidade_convites_usuario.sql", "132_rollback.sql", "133_notificacoes_escopos_snapshot_m3.sql", "133_rollback.sql",
-      "134_notificacoes_otp_consentimento.sql", "134_rollback.sql", "135_notificacoes_cotas_categoria.sql", "135_rollback.sql", "136_unidades_fuso_somente_backend.sql", "136_rollback.sql", "137_notificacoes_webhook_eventos.sql", "137_rollback.sql", "138_notificacoes_otp_envios.sql", "138_rollback.sql"];
+      "134_notificacoes_otp_consentimento.sql", "134_rollback.sql", "135_notificacoes_cotas_categoria.sql", "135_rollback.sql", "136_unidades_fuso_somente_backend.sql", "136_rollback.sql", "137_notificacoes_webhook_eventos.sql", "137_rollback.sql", "138_notificacoes_otp_envios.sql", "138_rollback.sql", "139_notificacoes_convites_piloto.sql", "139_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

@@ -10,6 +10,7 @@ import express from "express";
 
 process.env.NOTIFICACOES_SEGREDO_MESTRE = "segredo-de-teste-da-central-0123456789abcdef";
 process.env.NOTIFICACOES_CONVITES_HABILITADOS = "true";
+process.env.NOTIFICACOES_CONVITES_EXIGE_PILOTO = "false";
 process.env.RATE_LIMIT_NOTIFICACOES_TITULAR_MAX = "5";
 const { titularRouter, notificacoesRouter } = await import("../src/modules/notificacoes/notificacoes.routes.js");
 const { errorHandler } = await import("../src/middlewares/errorHandler.js");
