@@ -56,7 +56,9 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
       // 129 = privilégios mínimos nas tabelas iFood; 130 = camada operacional, fechamento diário e simulações de WhatsApp (Dashboard 2.0).
       "129_ifood_privilegios_minimos.sql", "129_rollback.sql", "130_operacional_camada_fechamento.sql", "130_rollback.sql",
       // 131 = correção da transferência/promoção de unidades quebrada pela 127 (UPDATE só de organizacao_id em checklist_metas).
-      "131_checklist_metas_transferencia_unidade.sql", "131_rollback.sql"]);
+      "131_checklist_metas_transferencia_unidade.sql", "131_rollback.sql",
+      "132_configuracoes2_fuso_unidade_convites_usuario.sql", "132_rollback.sql", "133_notificacoes_escopos_snapshot_m3.sql", "133_rollback.sql",
+      "134_notificacoes_otp_consentimento.sql", "134_rollback.sql", "135_notificacoes_cotas_categoria.sql", "135_rollback.sql", "136_unidades_fuso_somente_backend.sql", "136_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });

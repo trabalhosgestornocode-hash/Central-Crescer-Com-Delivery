@@ -9,8 +9,7 @@
 // conteúdo não cria versão nova; um dia já consolidado só vira REVISADO se os dados mudarem. Uma unidade com erro nunca impede
 // as outras. NUNCA envia WhatsApp (nem simulado): a simulação é um passo manual na tela.
 
-import { gerarFechamento, resolverFuso } from "./checklistOperacional.operacional.service.js";
-import { hojeNoFuso, somarDias } from "./checklistOperacional.periodos.js";
+import { gerarFechamento, competenciaDeOntem } from "./checklistOperacional.operacional.service.js";
 
 export const INTERVALO_PADRAO_MS = 15 * 60_000;
 
@@ -20,11 +19,12 @@ export function agendamentoPermitido(env = process.env) {
 
 /** Um ciclo: fechamento de ontem para cada unidade. @returns {Promise<Array<{unidadeId, resultado?, status?, versao?, erro?}>>} */
 export async function executarCiclo({ unidades, agora = () => new Date(), gerar = gerarFechamento, deps = {} }) {
-  const { fuso } = resolverFuso();
-  const ontem = somarDias(hojeNoFuso(agora().getTime(), fuso), -1);
   const out = [];
   for (const u of unidades ?? []) {
+    // D-15: "ontem" de CADA unidade, no fuso que a regra manda usar (sem corte = fuso da plataforma, igual ao anterior)
+    let ontem = null;
     try {
+      ontem = await competenciaDeOntem({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, agoraMs: agora().getTime(), deps });
       const r = await gerar({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, competencia: ontem, origem: "agendado", geradoPor: "agendador", agora, deps });
       out.push({ unidadeId: u.unidadeId, competencia: ontem, resultado: r.resultado, status: r.fechamento?.status, versao: r.fechamento?.versao });
     } catch (e) {

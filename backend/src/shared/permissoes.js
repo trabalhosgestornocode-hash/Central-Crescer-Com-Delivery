@@ -98,6 +98,11 @@ export const PERMISSOES = {
   // (`display_operator`, computador ligado à TV): ele tem ESTA permissão e nenhuma outra. Todos os papéis
   // que já abriam o Checklist (via integracoes.ver) a recebem junto com a leitura, então ninguém perde acesso.
   CHECKLIST_VISUALIZAR: "checklist.visualizar",
+  // Central de Notificações (D-3): ver destinatários/histórico/consentimentos e GERENCIAR (convidar, suspender, escopos).
+  // organization_admin gerencia a empresa inteira; unit_manager gerencia SÓ a unidade do contexto (notificacoes.permissoes.js);
+  // finance só vê. Nenhum papel confirma consentimento pelo titular — isso não é permissão de ninguém.
+  NOTIFICACOES_VER: "notificacoes.ver",
+  NOTIFICACOES_GERENCIAR: "notificacoes.gerenciar",
 };
 
 const P = PERMISSOES;
@@ -116,11 +121,11 @@ const POR_PAPEL = {
   unit_manager: [
     ...LEITURA,
     P.PRODUTOS_EDITAR, P.INSUMOS_EDITAR, P.VENDAS_IMPORTAR, P.VENDAS_EDITAR,
-    P.INTEGRACOES_GERENCIAR, P.USUARIOS_VER, P.CONFIG_VER,
+    P.INTEGRACOES_GERENCIAR, P.USUARIOS_VER, P.CONFIG_VER, P.NOTIFICACOES_VER, P.NOTIFICACOES_GERENCIAR,
     P.DASHBOARD_EXECUTIVO_LANCAR, P.BONIFICACAO_MENSAL_LANCAR, P.PARSER_FD_IMPORTAR, P.PARSER_FD_CLASSIFICAR,
   ],
 
-  finance: [...LEITURA, P.FINANCEIRO_VER, P.CONFIG_VER, P.DASHBOARD_EXECUTIVO_LANCAR, P.DASHBOARD_EXECUTIVO_CORRIGIR, P.DASHBOARD_EXECUTIVO_CONFIGURAR, P.DASHBOARD_EXECUTIVO_RESETAR_TESTE, P.BONIFICACAO_MENSAL_LANCAR, P.PARSER_FD_IMPORTAR, P.PARSER_FD_CLASSIFICAR],
+  finance: [...LEITURA, P.FINANCEIRO_VER, P.CONFIG_VER, P.NOTIFICACOES_VER, P.DASHBOARD_EXECUTIVO_LANCAR, P.DASHBOARD_EXECUTIVO_CORRIGIR, P.DASHBOARD_EXECUTIVO_CONFIGURAR, P.DASHBOARD_EXECUTIVO_RESETAR_TESTE, P.BONIFICACAO_MENSAL_LANCAR, P.PARSER_FD_IMPORTAR, P.PARSER_FD_CLASSIFICAR],
 
   operations: [...LEITURA, P.PRODUTOS_EDITAR, P.INSUMOS_EDITAR, P.VENDAS_IMPORTAR, P.DASHBOARD_EXECUTIVO_LANCAR, P.DASHBOARD_EXECUTIVO_CORRIGIR, P.DASHBOARD_EXECUTIVO_CONFIGURAR, P.DASHBOARD_EXECUTIVO_RESETAR_TESTE, P.BONIFICACAO_MENSAL_LANCAR, P.PARSER_FD_IMPORTAR, P.PARSER_FD_CLASSIFICAR],
 

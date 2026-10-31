@@ -183,6 +183,23 @@ export const ACOES = {
   COMUNICACAO_DESTINATARIO_DESATIVADO: "comunicacao.destinatario_desativado_painel_admin",
   COMUNICACAO_DESTINATARIO_NUMERO_ALTERADO: "comunicacao.destinatario_numero_alterado_painel_admin",
   COMUNICACAO_DESTINATARIO_AUTORIZADO: "comunicacao.destinatario_autorizado_painel_admin",
+  // Central de Notificações (Configurações 2.0). Prefixo "notificacao." = o que o gestor do tenant pode ler (recortado por unidade).
+  NOTIFICACAO_CONVITE_CRIADO: "notificacao.convite_criado",
+  NOTIFICACAO_CONVITE_CANCELADO: "notificacao.convite_cancelado",
+  NOTIFICACAO_ESCOPO_SUSPENSO: "notificacao.escopo_suspenso",
+  NOTIFICACAO_ESCOPO_REATIVADO: "notificacao.escopo_reativado",
+  NOTIFICACAO_ESCOPO_ALTERADO: "notificacao.escopo_alterado",
+  NOTIFICACAO_VINCULO_INCLUIDO: "notificacao.vinculo_legado_incluido",
+  NOTIFICACAO_REVOGACAO_REGISTRADA: "notificacao.revogacao_registrada",
+  NOTIFICACAO_TITULAR_VERIFICOU: "notificacao.titular_verificou_numero",
+  NOTIFICACAO_TITULAR_CONSENTIU: "notificacao.titular_consentiu",
+  NOTIFICACAO_TITULAR_REVOGOU: "notificacao.titular_revogou",
+  NOTIFICACAO_SELECAO_ATIVADA: "notificacao.selecao_por_escopo_ativada",
+  NOTIFICACAO_SELECAO_DESATIVADA: "notificacao.selecao_por_escopo_desativada",
+  // Convite de usuário por e-mail (D-14): nunca grava token, e-mail completo nem senha.
+  USUARIO_CONVITE_CRIADO: "usuario.convite_criado",
+  USUARIO_CONVITE_ACEITO: "usuario.convite_aceito",
+  USUARIO_CONVITE_REVOGADO: "usuario.convite_revogado",
   COMUNICACAO_CATEGORIA_HABILITADA: "comunicacao.categoria_habilitada_painel_admin",
   COMUNICACAO_CATEGORIA_DESABILITADA: "comunicacao.categoria_desabilitada_painel_admin",
   // Ciclo de vida da MENSAGEM automática, além de envio_permitido/bloqueado/falhou: criação/agendamento e descarte por idempotência.

@@ -17,6 +17,7 @@
 // simulado: nenhuma ação desta tela envia mensagem.
 
 import { state } from "./state.js";
+import { diaNoFuso, definirFusoOperacao } from "./checklistOperacionalFuso.js";
 import {
   obterDashboardChecklist, exportarDashboardChecklistExcel, obterPedidosOperacionais, obterFichaPedido, listarFechamentosOperacionais,
   obterFechamentoOperacional, gerarFechamentoOperacional, obterPreviaWhatsappFechamento, simularWhatsappFechamento, exportarFechamentoExcel,
@@ -48,7 +49,7 @@ const est = {
 };
 
 /** Data de hoje (AAAA-MM-DD) no fuso da operação. */
-export const hojeOperacao = (agora = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(agora);
+export const hojeOperacao = (agora = new Date()) => diaNoFuso(agora);
 /** Ontem (AAAA-MM-DD) no fuso da operação — competência padrão do fechamento. */
 export const ontemOperacao = (agora = new Date()) => hojeOperacao(new Date(agora.getTime() - 86_400_000));
 /** Quem gera/revisa fechamento e registra simulação (mesma régua das metas; o backend confere de novo). */
@@ -120,6 +121,7 @@ export function encerrarDashboardOperacional({ remover = false } = {}) {
   est.aplicado = null;
   est.pedidos.lista = null;
   est.fech = { ...est.fech, lista: null, atual: null, previa: null };
+  definirFusoOperacao(null);
 }
 
 async function carregar(filtro) {
@@ -134,6 +136,7 @@ async function carregar(filtro) {
     const { data } = await obterDashboardChecklist(paraConsulta(filtro));
     if (seq !== est.seq || contextoMudou(g) || !dashboardNaTela()) return;
     est.dados = data;
+    definirFusoOperacao(data?.periodo?.fuso);
     est.aplicado = { ...filtro };
     salvarFiltro(filtro);
     if (est.aba === "pedidos") carregarPedidos();
@@ -367,6 +370,7 @@ function abrirFicha(chave) {
   obterFichaPedido(chave).then(({ data }) => {
     if (seq !== est.ficha.seq || contextoMudou(g)) return;
     est.ficha.dados = data.ficha;
+    if (data.ficha?.fuso) definirFusoOperacao(data.ficha.fuso);
   }).catch((erro) => {
     if (seq !== est.ficha.seq || contextoMudou(g)) return;
     est.ficha.erro = mensagemDeErro(erro, "Não foi possível abrir a ficha agora.");

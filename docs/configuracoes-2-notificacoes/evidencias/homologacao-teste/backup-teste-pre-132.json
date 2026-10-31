@@ -1,0 +1,14 @@
+{
+  "capturado_em": "2026-10-30T16:21:49Z",
+  "projeto": "wiqqsxnysbzhcrzrrean (teste-multiempresarial)",
+  "funcao_agendar_md5": "f37bf6e1e459864ffa61a39a1712df64 (= corpo da 104 da main; restaurado por 133_rollback.sql)",
+  "impressao_digital": { "colunas": "d486de29fe78f7a4dedca432cd703aff", "funcoes": "4a9dc2dadd47522cbd2b47cb44ee1c2e", "gatilhos": "37cb1fd1295a29cd18b920c352b8d250",
+    "politicas": "c6eacacc84ca00f3f5a660ce5c682e95", "acl_rls": "59d2e13e405bf96101f82a2bddbf0695", "config": "f5ee7cc776dc4bb6d57d43e6dd4786b5", "migrations_registradas": 17 },
+  "dados": { "categorias": "a86917e0655f54b8ed37b2e53e7b2a2c:1", "dest_categorias": "da42b07d9473fc7ed64203626b154f3e:2", "unidades": "9d39449f33bacb82212719222a1f2e38:30",
+    "contatos_empresa": "0aae55a5d35cfad5bafe302ee55fbba8:3", "contatos_whatsapp": "806f6d693ebe6091606e37e88dd40416:50", "mensagens": 3 },
+  "categorias": [{ "codigo": "pendencia_d1", "rotulo": "Pendência D-1", "tipo_alerta": "dashboard_ifood_d1", "ativo": true }],
+  "configuracoes_chaves": ["cooldowns_horas", "destinatarios", "disponibilidade_ifood", "janelas", "limites", "modo"],
+  "colunas_categorias": ["ativo", "codigo", "created_at", "descricao", "rotulo", "tipo_alerta"],
+  "colunas_unidades_sem_timezone": true,
+  "backup_plataforma": "plano Pro da organização (backups diários automáticos) — restauração total é o último recurso"
+}

@@ -19,6 +19,7 @@ import * as v from "../../shared/validar.js";
 import { auditarReq, ACOES } from "../../shared/auditoria.js";
 import { identidadeOperacional } from "../../shared/identidade.js";
 import { resolverTabelasComerciaisUnidade, normalizarCanalTabela, catalogoTabelasComerciais } from "../../shared/tabelaComercial.js";
+import { fusoValido, lerCorteFuso } from "../checklist-operacional/checklistOperacional.fuso.js";
 
 // Defaults OFICIAIS do sistema para "Metas e Limites de CMV" quando a unidade
 // ainda não tem linha em `unidade_config`. Espelham `CMV_LIMITES` de
@@ -34,6 +35,48 @@ export const DEFAULTS_METAS_CMV = Object.freeze({
 
 // Colunas de "Dados da Unidade" que o tenant pode LER e (a maioria) editar.
 const COLUNAS_DADOS = "id, nome, cnpj, endereco, telefone, responsavel, email, cidade, estado, ativo";
+// D-15 (migration 132). Banco sem as colunas = lê/edita só o restante (a tela mostra "indisponível"), nunca quebra.
+const COLUNAS_FUSO = ", timezone, horario_funcionamento";
+const RE_COLUNA_AUSENTE = /timezone|horario_funcionamento|does not exist|schema cache|could not find/i;
+const DIAS = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"];
+const HHMM = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+
+/** Valida o horário de funcionamento: {seg:[{inicio,fim}], …} com até 3 faixas por dia (fim < início = vira a meia-noite). */
+export function validarHorario(h) {
+  if (h == null) return null;
+  if (typeof h !== "object" || Array.isArray(h)) throw ApiError.badRequest("Horário de funcionamento inválido.");
+  const saida = {};
+  for (const [dia, faixas] of Object.entries(h)) {
+    if (!DIAS.includes(dia)) throw ApiError.badRequest("Dia inválido no horário de funcionamento.");
+    if (!Array.isArray(faixas) || faixas.length > 3) throw ApiError.badRequest("Cada dia aceita de 0 a 3 faixas.");
+    saida[dia] = faixas.map((x) => {
+      if (!HHMM.test(x?.inicio ?? "") || !HHMM.test(x?.fim ?? "") || x.inicio === x.fim) throw ApiError.badRequest("Use HH:MM nas faixas, com início diferente do fim.");
+      return { inicio: x.inicio, fim: x.fim };
+    });
+  }
+  return saida;
+}
+
+async function lerDadosUnidade(db, unidadeId) {
+  let r = await db.from("unidades").select(COLUNAS_DADOS + COLUNAS_FUSO).eq("id", unidadeId).maybeSingle();
+  if (r.error && RE_COLUNA_AUSENTE.test(r.error.message || "")) {
+    r = await db.from("unidades").select(COLUNAS_DADOS).eq("id", unidadeId).maybeSingle();
+    if (r.data) r.data.__semFuso = true;
+  }
+  return r;
+}
+
+function saidaDados(data) {
+  return {
+    id: data.id, nome: data.nome ?? null, cnpj: data.cnpj ?? null, endereco: data.endereco ?? null, telefone: data.telefone ?? null,
+    responsavel: data.responsavel ?? null, email: data.email ?? null, cidade: data.cidade ?? null, estado: data.estado ?? null,
+    // status é READ-ONLY no tenant (ativar/desativar só o SuperAdmin faz).
+    status: data.ativo ? "ativa" : "inativa", statusEditavel: false,
+    // D-15: fuso e horário (null = fuso da plataforma). `fusoCorte` = data a partir da qual o fuso da unidade vale (null = desligado).
+    timezone: data.timezone ?? null, horarioFuncionamento: data.horario_funcionamento ?? null,
+    fusoDisponivel: !data.__semFuso, fusoCorte: lerCorteFuso(),
+  };
+}
 
 /**
  * Tabela comercial oficial da unidade (balcão + iFood) — a mesma fonte que
@@ -118,24 +161,10 @@ export async function obterDados({ unidadeId }, deps = {}) {
   const db = deps.supabase ?? supabase;
   if (!unidadeId) throw ApiError.badRequest("Selecione uma unidade para ver os dados da loja.");
 
-  const { data, error } = await db.from("unidades").select(COLUNAS_DADOS).eq("id", unidadeId).maybeSingle();
+  const { data, error } = await lerDadosUnidade(db, unidadeId);
   if (error) throw ApiError.internal(error.message);
   if (!data) throw ApiError.notFound("Unidade não encontrada.");
-
-  return {
-    id: data.id,
-    nome: data.nome ?? null,
-    cnpj: data.cnpj ?? null,
-    endereco: data.endereco ?? null,
-    telefone: data.telefone ?? null,
-    responsavel: data.responsavel ?? null,
-    email: data.email ?? null,
-    cidade: data.cidade ?? null,
-    estado: data.estado ?? null,
-    // status é READ-ONLY no tenant (ativar/desativar só o SuperAdmin faz).
-    status: data.ativo ? "ativa" : "inativa",
-    statusEditavel: false,
-  };
+  return saidaDados(data);
 }
 
 /**
@@ -160,11 +189,19 @@ export async function atualizarDados(req, body, deps = {}) {
   if (body.email !== undefined)       patch.email = v.emailOpcional(body.email, "E-mail da loja");
   if (body.cidade !== undefined)      patch.cidade = v.textoOpcional(body.cidade, "Cidade", { max: 120 });
   if (body.estado !== undefined)      patch.estado = v.textoOpcional(body.estado, "Estado (UF)", { max: 2 })?.toUpperCase() ?? null;
+  if (body.timezone !== undefined) {
+    if (body.timezone !== null && body.timezone !== "" && !fusoValido(body.timezone)) throw ApiError.badRequest("Fuso horário inválido. Escolha um da lista (ex.: America/Sao_Paulo).");
+    patch.timezone = body.timezone || null;
+  }
+  if (body.horarioFuncionamento !== undefined) patch.horario_funcionamento = validarHorario(body.horarioFuncionamento);
 
   if (!Object.keys(patch).length) throw ApiError.badRequest("Nada para atualizar.");
 
+  const temFuso = "timezone" in patch || "horario_funcionamento" in patch;
   const { data, error } = await db.from("unidades")
-    .update(patch).eq("id", unidadeId).select(COLUNAS_DADOS).maybeSingle();
+    .update(patch).eq("id", unidadeId).select(COLUNAS_DADOS + (temFuso ? COLUNAS_FUSO : "")).maybeSingle();
+  if (error && temFuso && RE_COLUNA_AUSENTE.test(error.message || "")) throw ApiError.badRequest("Fuso e horário ainda não estão disponíveis neste ambiente.");
+  if (error && /fuso inválido|faixa inválida|dia inválido|0 a 3 faixas|objeto/i.test(error.message || "")) throw ApiError.badRequest(error.message);
   if (error) throw ApiError.internal(error.message);
   if (!data) throw ApiError.notFound("Unidade não encontrada.");
 
@@ -173,19 +210,8 @@ export async function atualizarDados(req, body, deps = {}) {
     detalhes: { unidade: data.nome, campos: Object.keys(patch), origem: "tenant" },
   });
 
-  return {
-    id: data.id,
-    nome: data.nome ?? null,
-    cnpj: data.cnpj ?? null,
-    endereco: data.endereco ?? null,
-    telefone: data.telefone ?? null,
-    responsavel: data.responsavel ?? null,
-    email: data.email ?? null,
-    cidade: data.cidade ?? null,
-    estado: data.estado ?? null,
-    status: data.ativo ? "ativa" : "inativa",
-    statusEditavel: false,
-  };
+  if (!temFuso) { const relido = await lerDadosUnidade(db, unidadeId); return saidaDados(relido.data ?? data); }
+  return saidaDados(data);
 }
 
 // =====================================================================

@@ -1,0 +1,10 @@
+# Subtest: Configurações 2.0 em navegador real
+    ok 1 - desktop: 7 categorias com teclado; Unidade valida, mostra estado de salvamento e grava fuso + horário
+    ok 2 - sair com alteração não salva pede confirmação em diálogo acessível (sem confirm())
+    ok 3 - Metas e operação: atalhos navegam pelo shell; deep-link de Tabelas Comerciais mostra só a seção
+    ok 4 - Usuários e acesso (D-14): sem senha; e-mail desligado = explicação e NADA criado; ligado = convite mascarado; cancelar por diálogo
+    ok 5 - Central (admin): simulação explícita, legado preservado, pendência; convite → link único → titular verifica e consente
+    ok 6 - gestão do titular: anti-enumeração na tela; com o código, vê e para de receber
+    ok 7 - gerente de unidade: vê só a própria unidade; o convite fica preso à unidade dele; sem auditoria da empresa toda
+    ok 8 - perfis com o catálogo REAL de permissões: Financeiro só consulta a Central; Consulta e Operação não a veem; ninguém sem gerenciar edita a unidade
+    ok 9 - celular 390 px: lista de categorias → detalhe → voltar; nenhuma categoria rola na horizontal; tema escuro

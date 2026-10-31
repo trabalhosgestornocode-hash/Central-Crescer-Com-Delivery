@@ -10,7 +10,7 @@ import { cmvRouter } from "./modules/cmv/cmv.routes.js";
 import { dashboardRouter } from "./modules/dashboard/dashboard.routes.js";
 import { dashboardExecutivoRouter } from "./modules/dashboard-executivo/dashboardExecutivo.routes.js";
 import { bonificacaoMensalRouter } from "./modules/bonificacao-mensal/bonificacaoMensal.routes.js";
-import { usuariosRouter } from "./modules/usuarios/usuarios.routes.js";
+import { usuariosRouter, conviteUsuarioRouter } from "./modules/usuarios/usuarios.routes.js";
 import { vendasRouter } from "./modules/vendas/vendas.routes.js";
 import { contextoRouter } from "./modules/contexto/contexto.routes.js";
 import { sessaoRouter } from "./modules/sessao/sessao.routes.js";
@@ -24,6 +24,7 @@ import { inteligenciaRouter } from "./modules/inteligencia/inteligencia.routes.j
 import { unidadeRouter } from "./modules/unidade/unidade.routes.js";
 import { realtimeRouter } from "./modules/realtime/realtime.routes.js";
 import { checklistOperacionalRouter } from "./modules/checklist-operacional/checklistOperacional.routes.js";
+import { notificacoesRouter } from "./modules/notificacoes/notificacoes.routes.js";
 
 // Todas as rotas daqui já passaram por `requireAuth` (aplicado em app.js).
 // O que este arquivo decide é a SEGUNDA camada, e ela divide a API em mundos
@@ -55,6 +56,7 @@ router.use(exigirSenhaDefinitiva);
 
 // --- 2. Painel SuperAdmin (o próprio router exige superadmin).
 router.use("/plataforma", plataformaRouter);
+router.use("/convites-usuario", conviteUsuarioRouter);   // D-14: aceite do convite (autenticado, sem contexto)
 
 // --- 2b. Painel Administrativo da Crescer (GERENCIAL, cross-tenant). O próprio
 //     router exige `requirePainelAdministrativo` (SuperAdmin passa por bypass).
@@ -84,6 +86,7 @@ tenant.use("/bonificacao-mensal", requireModulo(MODULOS.MONTHLY_BONUS), bonifica
 tenant.use("/usuarios", usuariosRouter);   // infraestrutura do tenant, não um módulo contratável
 tenant.use("/unidade", unidadeRouter);     // idem — config real da unidade (tabelas comerciais)
 tenant.use("/realtime", realtimeRouter);   // idem — credencial de canal Realtime do contexto atual
+tenant.use("/notificacoes", notificacoesRouter);   // idem — Central de Notificações (D-3: recorte por unidade no service e no banco)
 tenant.use("/vendas", requireModulo(MODULOS.SALES), vendasRouter);
 tenant.use("/integracoes/martin-brower", requireModulo(MODULOS.MARTIN_BROWER), martinBrowerRouter);
 tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);

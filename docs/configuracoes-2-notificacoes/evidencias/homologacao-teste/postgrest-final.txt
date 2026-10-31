@@ -1,0 +1,17 @@
+PostgREST (role anon, JWT legado) — estado final após reaplicação, 2026-10-30T17:15:29Z
+controle tabela inexistente: 404 "code":"PGRST205"
+GET usuarios_convites                  401 "code":"42501"
+GET comunicacao_legado_snapshot        401 "code":"42501"
+GET comunicacao_destinatario_escopos   401 "code":"42501"
+GET comunicacao_termos                 401 "code":"42501"
+GET comunicacao_convites               401 "code":"42501"
+GET comunicacao_desafios_titular       401 "code":"42501"
+GET comunicacao_consentimentos         401 "code":"42501"
+RPC comunicacao_desafio_criar                  404 "code":"PGRST202"
+RPC usuarios_convite_consumir                  404 "code":"PGRST202"
+RPC comunicacao_resolver_destinatarios_unidade 404 "code":"PGRST202"
+RPC comunicacao_titular_consentir              404 "code":"PGRST202"
+RPC comunicacao_escopo_suspender               404 "code":"PGRST202"
+RPC comunicacao_revogar                        404 "code":"PGRST202"
+RPC comunicacao_ativar_selecao_por_escopo      404 "code":"PGRST202"
+PATCH unidades.timezone (anon) 204 (sem corpo)

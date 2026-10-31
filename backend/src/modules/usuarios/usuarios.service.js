@@ -293,6 +293,11 @@ export async function excluirUsuario({ organizacaoId, id, solicitanteId, solicit
   return { id: usuarioId, acessoRemovido: true, contaPreservada: true, sessoesRevogadas };
 }
 
+/** D-14: já existe conta com este e-mail? (decide entre conceder acesso e convidar). */
+export async function contaExistentePorEmail(email) {
+  return !!(await acharContaPorEmail(String(email).trim().toLowerCase()));
+}
+
 /**
  * Acha a conta pelo e-mail olhando os DOIS lugares onde ele mora.
  *

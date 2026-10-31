@@ -8,6 +8,7 @@
 // Privacidade: só número curto do pedido e horários (o payload já não tem cliente, merchant nem orderId).
 
 import { escapeHtml } from "./utils.js";
+import { FUSO_PADRAO } from "./checklistOperacionalFuso.js";
 import { graficosDoDashboard, NOME_ETAPA } from "./checklistOperacionalGraficos.js";
 import {
   kpis, tabelaEtapas, tabelaComparativo, tabelaAtrasos, blocoAnalises, blocoMetas, blocoQualidade, textoPeriodo, SECOES_RELATORIO, num,
@@ -44,7 +45,7 @@ export function htmlRelatorio(d, secoes, { unidadeNome, geradoEm }) {
         <p class="pdf-marca">Crescer com Delivery · Checklist Operacional</p>
         <h1>Relatório operacional — ${escapeHtml(unidadeNome ?? "Unidade")}</h1>
         <p>Período: <b>${escapeHtml(textoPeriodo(d.periodo))}</b> · Etapa: <b>${d.etapa === "todas" ? "todas" : NOME_ETAPA[d.etapa]}</b></p>
-        <p>Comparado com ${escapeHtml(textoPeriodo(d.periodo.anterior))} · Gerado em ${escapeHtml(new Date(geradoEm).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" }))}</p>
+        <p>Comparado com ${escapeHtml(textoPeriodo(d.periodo.anterior))} · Gerado em ${escapeHtml(new Date(geradoEm).toLocaleString("pt-BR", { timeZone: d.periodo.fuso ?? FUSO_PADRAO }))}</p>
       </div>
     </header>`);
   if (tem("resumo")) partes.push(secao("Resumo executivo", `<ul class="pdf-resumo">${resumoExecutivo(d).map((f) => `<li>${escapeHtml(f)}</li>`).join("")}</ul>${kpis(d)}`));
