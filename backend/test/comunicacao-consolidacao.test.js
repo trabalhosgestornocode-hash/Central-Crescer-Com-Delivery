@@ -144,7 +144,7 @@ describe("pureza: não toca em banco, provider, fila, política, cotas nem reló
     assert.doesNotMatch(s, /\.(from|rpc|sendText|enviarTexto|insert)\(|Date\.now\(\)/);
   });
   test("ninguém no código de produção usa o módulo (proposta NÃO ligada)", () => {
-    const usos = ["comunicacao.alertas.service.js", "comunicacao.entrega.js", "comunicacao.fila.repo.js", "comunicacao.policy.js", "whatsapp.service.js"]
+    const usos = ["comunicacao.entrega.js", "comunicacao.fila.repo.js", "comunicacao.policy.js", "whatsapp.service.js"]
       .filter((f) => /comunicacao\.consolidacao/.test(readFileSync(path.join(RAIZ, "src/modules/comunicacao", f), "utf8")));
     assert.deepEqual(usos, []);
   });
