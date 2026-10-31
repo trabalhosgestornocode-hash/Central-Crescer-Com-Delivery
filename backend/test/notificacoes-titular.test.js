@@ -153,7 +153,7 @@ describe("palavra de saída no WhatsApp", () => {
   test("desligada por padrão; ligada, revoga tudo do número (origem palavra_chave_inbound)", async () => {
     const { repo, st } = montar();
     assert.equal((await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env: {}, deps: { repo } })).aplicado, false);
-    const r = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env: { NOTIFICACOES_PALAVRA_CHAVE_SAIR: "true" }, deps: { repo, auditar: async () => {} } });
+    const r = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", recebidoEm: new Date().toISOString(), env: { NOTIFICACOES_PALAVRA_CHAVE_SAIR: "true" }, deps: { repo, auditar: async () => {} } });
     assert.equal(r.aplicado, true);
     assert.deepEqual([st.revogacoes[0].origem, st.revogacoes[0].sairDeTudo], ["palavra_chave_inbound", true]);
   });

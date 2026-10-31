@@ -54,6 +54,10 @@ cfg "insert into comunicacao_configuracoes (chave, valor) values ('convites_unid
 chk "valor que não é array: NINGUÉM" "$(conv $P1 "$(ARR $U1)" | grep -c 'CONVITE_UNIDADE_FORA_DO_PILOTO')" "1"
 cfg "insert into comunicacao_configuracoes (chave, valor) values ('convites_unidades_piloto', '[\"$U1\",\"nao-e-uuid\"]')"
 chk "elemento que não é uuid: NINGUÉM (nem U1)" "$(conv $P1 "$(ARR $U1)" | grep -c 'CONVITE_UNIDADE_FORA_DO_PILOTO')" "1"
+cfg "insert into comunicacao_configuracoes (chave, valor) values ('convites_unidades_piloto', '[\"$U1\", null]')"
+chk "elemento null no array: NINGUÉM (antes: <> ALL com NULL deixava passar)" "$(conv $P1 "$(ARR $U2)" | grep -c 'CONVITE_UNIDADE_FORA_DO_PILOTO')" "1"
+cfg "insert into comunicacao_configuracoes (chave, valor) values ('convites_unidades_piloto', '[\"$U1\", 7]')"
+chk "elemento numérico no array: NINGUÉM" "$(conv $P1 "$(ARR $U1)" | grep -c 'CONVITE_UNIDADE_FORA_DO_PILOTO')" "1"
 cfg "insert into comunicacao_configuracoes (chave, valor) values ('convites_unidades_piloto', '[\"$U1\"]')"
 ID1="$(conv $P1 "$(ARR $U1)" | head -1)"
 chk "UPDATE de convite existente NÃO é barrado (só INSERT)" "$(sr "update comunicacao_convites set status='CANCELADO', cancelado_em=now() where id='$ID1' returning status")" "CANCELADO

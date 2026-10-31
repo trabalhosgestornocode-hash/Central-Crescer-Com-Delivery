@@ -20,7 +20,11 @@ declare v_cfg jsonb; v_ids uuid[];
 begin
   select valor into v_cfg from comunicacao_configuracoes where chave = 'convites_unidades_piloto';
   if not found then return new; end if;                                  -- sem piloto configurado: sem restrição (o backend decide)
+  -- fail-closed: precisa ser array e TODOS os elementos strings (um null/número/objeto viraria NULL no array e faria "<> all" dar NULL = trava aberta)
   if jsonb_typeof(v_cfg) <> 'array' then
+    raise exception 'CONVITE_UNIDADE_FORA_DO_PILOTO' using errcode = '42501';
+  end if;
+  if exists (select 1 from jsonb_array_elements(v_cfg) e where jsonb_typeof(e) <> 'string') then
     raise exception 'CONVITE_UNIDADE_FORA_DO_PILOTO' using errcode = '42501';
   end if;
   begin

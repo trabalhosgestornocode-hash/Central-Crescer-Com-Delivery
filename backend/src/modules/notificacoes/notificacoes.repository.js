@@ -224,10 +224,11 @@ export async function jaSaiuDeTudo(contatosEmpresaIds, deps = {}) {
   const optOut = await db(deps).from("contatos_whatsapp").select("id, opt_out").in("id", wa);
   if (optOut.error) falha(optOut.error, "opt-out da saída");
   if ((optOut.data ?? []).length !== wa.length || (optOut.data ?? []).some((x) => x.opt_out !== true)) return false;
-  const cat = await db(deps).from("comunicacao_destinatario_categorias").select("contato_empresa_id").in("contato_empresa_id", contatosEmpresaIds).eq("habilitado", true).limit(1);
+  const [cat, esc] = await Promise.all([
+    db(deps).from("comunicacao_destinatario_categorias").select("contato_empresa_id").in("contato_empresa_id", contatosEmpresaIds).eq("habilitado", true).limit(1),
+    db(deps).from("comunicacao_destinatario_escopos").select("contato_empresa_id").in("contato_empresa_id", contatosEmpresaIds).eq("habilitado", true).limit(1),
+  ]);
   if (cat.error) falha(cat.error, "categorias da saída");
-  if ((cat.data ?? []).length) return false;
-  const esc = await db(deps).from("comunicacao_destinatario_escopos").select("contato_empresa_id").in("contato_empresa_id", contatosEmpresaIds).eq("habilitado", true).limit(1);
   if (esc.error) falha(esc.error, "escopos da saída");
-  return !(esc.data ?? []).length;
+  return !(cat.data ?? []).length && !(esc.data ?? []).length;
 }

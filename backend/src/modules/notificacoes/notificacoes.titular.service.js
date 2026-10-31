@@ -218,30 +218,30 @@ export function ehPalavraDeSaida(texto) {
   const t = String(texto ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase().replace(/[.!]+$/, "");
   return PALAVRAS_SAIDA.has(t);
 }
-export async function processarPalavraDeSaida({ telefoneE164, texto, recebidoEm = null, env = process.env, agora = Date.now, deps = {} }) {
+export async function processarPalavraDeSaida({ telefoneE164, texto, recebidoEm = null, mensagemId = null, env = process.env, agora = Date.now, deps = {} }) {
   if (env.NOTIFICACOES_PALAVRA_CHAVE_SAIR !== "true" || !ehPalavraDeSaida(texto)) return { aplicado: false };
   if (!(deps.segredosDisponiveis ? deps.segredosDisponiveis() : segredosDisponiveis())) return { aplicado: false, motivo: "SEM_SEGREDO" };
-  if (recebidoEm !== null) {
-    const t = new Date(recebidoEm).getTime();
-    if (!Number.isFinite(t) || agora() - t > JANELA_SAIDA_MS || t - agora() > 5 * 60_000) return { aplicado: false, motivo: "MENSAGEM_FORA_DA_JANELA" };
-  }
+  // FAIL-CLOSED: sem o instante da mensagem (ausente/nulo/inválido) não há como provar que o SAIR é recente — não revoga.
+  const tMsg = recebidoEm === null || recebidoEm === undefined ? NaN : new Date(recebidoEm).getTime();
+  if (!Number.isFinite(tMsg) || agora() - tMsg > JANELA_SAIDA_MS || tMsg - agora() > 5 * 60_000) return { aplicado: false, motivo: "MENSAGEM_FORA_DA_JANELA" };
   const numero = validarWhatsapp(telefoneE164);
   if (!numero) return { aplicado: false };
   const lista = await R(deps).destinatariosDoNumero(numero, deps);
   if (!lista.length) return { aplicado: false };
   const hmac = hmacTelefone(numero);
   if (agora() - (ultimaSaida.get(hmac) ?? 0) < INTERVALO_SAIDA_MS) return { aplicado: false, motivo: "AGUARDE" };
-  ultimaSaida.set(hmac, agora());
-  if (ultimaSaida.size > 5000) for (const k of [...ultimaSaida.keys()].slice(0, 1000)) ultimaSaida.delete(k);
   if (await R(deps).jaSaiuDeTudo(lista.map((x) => x.id), deps)) return { aplicado: false, motivo: "JA_SAIU" };
   const r = await R(deps).revogar({ telefoneHmac: hmac, contatosEmpresa: lista.map((x) => x.id), categorias: null, origem: "palavra_chave_inbound", sairDeTudo: true }, deps);
+  // o carimbo de "aguarde" só vale DEPOIS da revogação ter dado certo: uma falha transitória não pode travar a próxima tentativa do titular
+  ultimaSaida.set(hmac, agora());
+  if (ultimaSaida.size > 5000) for (const k of [...ultimaSaida.keys()].slice(0, 1000)) ultimaSaida.delete(k);
   for (const org of new Set(lista.map((x) => x.organizacao_id))) {
     await (deps.auditar ?? auditar)({ acao: ACOES.NOTIFICACAO_TITULAR_REVOGOU, atorTipo: "sistema", organizacaoId: org, entidade: "notificacoes",
       detalhes: { origem: "palavra_chave", categorias: "todas", sair_de_tudo: true, registros: lista.filter((x) => x.organizacao_id === org).length } });
   }
   let confirmacao = "NAO_ENVIADA";
   try {
-    const c = await (deps.enviarConfirmacaoSaida ?? enviarConfirmacaoSaida)({ telefoneE164: numero, chave: `${hmac.slice(0, 24)}:${new Date(agora()).toISOString().slice(0, 10)}` }, { env });
+    const c = await (deps.enviarConfirmacaoSaida ?? enviarConfirmacaoSaida)({ telefoneE164: numero, chave: `${hmac.slice(0, 24)}:${mensagemId ? crypto.createHash("sha256").update(String(mensagemId)).digest("hex").slice(0, 16) : new Date(agora()).toISOString().slice(0, 13).replace(/[^0-9]/g, "")}` }, { env });
     confirmacao = c?.enviada ? "ENVIADA" : (c?.motivo ?? "NAO_ENVIADA");
   } catch { confirmacao = "ERRO_INESPERADO"; }
   logNotificacoes("info", "titular.saiu_por_palavra", { empresas: new Set(lista.map((x) => x.organizacao_id)).size, confirmacao });

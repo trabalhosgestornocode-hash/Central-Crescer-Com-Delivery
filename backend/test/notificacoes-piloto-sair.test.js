@@ -122,7 +122,8 @@ describe("SAIR: revogação pelo WhatsApp (isolamento, idempotência, confirmaç
     return { st, repo, deps };
   }
   const agora = Date.now();
-  const roda = (m, extra = {}) => titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env: ON, agora: () => agora, deps: m.deps, ...extra });
+  const recente = new Date(agora - 1_000).toISOString();
+  const roda = (m, extra = {}) => titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", recebidoEm: recente, env: ON, agora: () => agora, deps: m.deps, ...extra });
 
   test("desligada por padrão; só palavra exata ('cancelar' e frases não revogam)", async () => {
     const m = montar();
@@ -132,7 +133,7 @@ describe("SAIR: revogação pelo WhatsApp (isolamento, idempotência, confirmaç
   });
   test("mensagem antiga (>48 h), futura ou sem data válida não revoga; recente revoga", async () => {
     const m = montar();
-    for (const quando of [new Date(agora - 49 * 3_600_000).toISOString(), new Date(agora + 3_600_000).toISOString(), "ontem", NaN]) {
+    for (const quando of [new Date(agora - 49 * 3_600_000).toISOString(), new Date(agora + 3_600_000).toISOString(), "ontem", NaN, null, undefined, 0]) {
       assert.deepEqual([(await roda(m, { recebidoEm: quando })).aplicado, (await roda(m, { recebidoEm: quando })).motivo], [false, "MENSAGEM_FORA_DA_JANELA"], String(quando));
     }
     assert.equal(m.st.revogacoes.length, 0);
@@ -178,24 +179,45 @@ describe("SAIR: revogação pelo WhatsApp (isolamento, idempotência, confirmaç
     const env = { ...ON, ...BAILEYS, NOTIFICACOES_SAIR_CONFIRMACAO: "true" };
     const via = (e) => (a, b) => envio.enviarConfirmacaoSaida(a, { env: b.env, enviar: (x, o) => otp.enviarConfirmacaoSaidaBaileys(x, { ...o, obterServico: async () => e }) });
     const m2 = montar(); m2.deps.enviarConfirmacaoSaida = via(servico);
-    const r2 = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "Sair.", env, agora: () => agora, deps: m2.deps });
+    const r2 = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "Sair.", recebidoEm: recente, env, agora: () => agora, deps: m2.deps });
     assert.deepEqual([r2.aplicado, r2.confirmacao, provider.mensagensEnviadas.length], [true, "ENVIADA", 1]);
     assert.match(provider.mensagensEnviadas[0].texto, /não receberá mais avisos/);
     const m3 = montar(); const quebrado = { enviarTexto: async () => { throw new Error("socket hang up"); } }; m3.deps.enviarConfirmacaoSaida = via(quebrado);
-    const r3 = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env, agora: () => agora, deps: m3.deps });
+    const r3 = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", recebidoEm: recente, env, agora: () => agora, deps: m3.deps });
     assert.deepEqual([r3.aplicado, r3.confirmacao], [true, "ENTREGA_INCERTA"]);
     assert.equal(m3.st.revogacoes.length, 1);
     const m4 = montar(); m4.deps.enviarConfirmacaoSaida = async () => { throw new Error("falha inesperada"); };
-    assert.deepEqual([(await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env, agora: () => agora, deps: m4.deps })).confirmacao], ["ERRO_INESPERADO"]);
+    assert.deepEqual([(await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", recebidoEm: recente, env, agora: () => agora, deps: m4.deps })).confirmacao], ["ERRO_INESPERADO"]);
   });
   test("confirmação exige o transporte baileys autorizado (sem ele, nada sai mesmo com a flag)", async () => {
     let n = 0;
     const r = await envio.enviarConfirmacaoSaida({ telefoneE164: NUM, chave: "abcdef012345:2026-10-31" }, { env: { NOTIFICACOES_SAIR_CONFIRMACAO: "true" }, enviar: async () => { n++; return { enviada: true }; } });
     assert.deepEqual([r.enviada, r.motivo, n], [false, "TRANSPORTE_DESLIGADO", 0]);
   });
-  test("o inbox repassa o instante da mensagem ao tratamento do SAIR", () => {
+  test("falha transitória na revogação NÃO trava a próxima tentativa (o carimbo de aguarde só vale depois do sucesso)", async () => {
+    const m = montar(); const original = m.repo.revogar; let primeira = true;
+    m.repo.revogar = async (p) => { if (primeira) { primeira = false; throw new Error("banco indisponível"); } return original(p); };
+    await assert.rejects(roda(m));                                    // o inbox engole a exceção; aqui ela aparece
+    const de_novo = await roda(m);                                    // mesma hora: NÃO pode ser AGUARDE
+    assert.deepEqual([de_novo.aplicado, m.st.revogacoes.length], [true, 1]);
+  });
+  test("sem o instante da mensagem (ausente/nulo) o SAIR não revoga (fail-closed)", async () => {
+    const m = montar();
+    for (const recebidoEm of [undefined, null]) assert.equal((await roda(m, { recebidoEm })).motivo, "MENSAGEM_FORA_DA_JANELA");
+    assert.equal(m.st.revogacoes.length, 0);
+  });
+  test("a chave da confirmação é POR MENSAGEM (sair, voltar e sair de novo no mesmo dia gera confirmações distintas) e é válida", async () => {
+    const chaves = [];
+    for (const id of ["wamid.A", "wamid.B", "wamid.A"]) {
+      const m = montar(); m.deps.enviarConfirmacaoSaida = async (a) => { chaves.push(a.chave); return { enviada: true }; };
+      await roda(m, { mensagemId: id });
+    }
+    assert.ok(chaves[0] !== chaves[1] && chaves[0] === chaves[2], "mesma mensagem = mesma chave; mensagens diferentes = chaves diferentes");
+    for (const c of chaves) assert.match(c, /^[0-9a-f]{24}:[0-9a-f]{16}$/);
+  });
+  test("o inbox repassa o instante e o id da mensagem ao tratamento do SAIR", () => {
     const s = readFileSync(path.join(RAIZ, "src/modules/comunicacao/comunicacao.inbox.service.js"), "utf8");
-    assert.match(s, /processarPalavraDeSaida\)\(\{[^}]*recebidoEm: evento\.recebidoEm/);
+    assert.match(s, /processarPalavraDeSaida\)\(\{[^}]*recebidoEm: evento\.recebidoEm[^}]*mensagemId: evento\.providerMessageId/);
   });
 });
 
@@ -245,7 +267,7 @@ describe("FLUXO COMPLETO em ambiente isolado: convite → OTP (Baileys simulado)
     // 5) SAIR pelo WhatsApp: revoga, confirma uma vez e audita
     titular._limparSaidas();
     dps.enviarConfirmacaoSaida = (a, b) => envio.enviarConfirmacaoSaida(a, { env: b.env, enviar: (x, o) => otp.enviarConfirmacaoSaidaBaileys(x, { ...o, obterServico: async () => servico }) });
-    const s = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "sair", env: dps.env, deps: dps });
+    const s = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "sair", recebidoEm: new Date().toISOString(), mensagemId: "wamid.FLUXO", env: dps.env, deps: dps });
     assert.deepEqual([s.aplicado, s.confirmacao, revogou.origem], [true, "ENVIADA", "palavra_chave_inbound"]);
     assert.equal(provider.mensagensEnviadas.length, 2, "1 OTP + 1 confirmação; nada mais saiu");
     // 6) auditoria da jornada: sem número, sem código
@@ -253,5 +275,38 @@ describe("FLUXO COMPLETO em ambiente isolado: convite → OTP (Baileys simulado)
     for (const a of ["notificacao.convite_criado", "notificacao.titular_verificou_numero", "notificacao.titular_consentiu", "notificacao.titular_revogou"]) assert.ok(acoes.includes(a), a);
     const tudo = JSON.stringify(audit);
     assert.ok(!tudo.includes(codigo) && !tudo.includes("91234") && !tudo.includes(NUM), "auditoria sem código nem número");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+describe("PADRÃO DE PRODUÇÃO (nenhuma variável nova definida): nada muda", () => {
+  const PROD = { NODE_ENV: "production" };
+  test("convites: desligados (503) — e, se ligados sem piloto, ninguém convida (403): nenhuma gravação nos dois casos", async () => {
+    const { repo, db } = cenario();
+    const base = { req: reqFalso, escopo: escopoAdmin(), corpo: { nome: "C", telefone: "(11) 98888-7777", unidades: [UN.A1], categorias: ["fechamento_operacional_diario"] }, baseUrl: "https://app" };
+    await assert.rejects(svc.criarConvite({ ...base, deps: { repo, auditar: async () => {}, env: PROD } }), (e) => e.statusCode === 503 && JSON.stringify(e).includes("CONVITES_DESLIGADOS"));
+    await assert.rejects(svc.criarConvite({ ...base, deps: { repo, auditar: async () => {}, env: { ...PROD, NOTIFICACOES_CONVITES_HABILITADOS: "true" } } }), (e) => e.statusCode === 403 && JSON.stringify(e).includes("PILOTO_NAO_CONFIGURADO"));
+    assert.equal(db.convites.length, 0);
+  });
+  test("OTP desligado: nada é pedido nem enviado; baileys só com as duas chaves e, mesmo assim, sem lista nada sai", async () => {
+    assert.equal(envio.modoTransporte(PROD), "desligado");
+    assert.equal(envio.modoTransporte({ ...PROD, ...GW }), "desligado");
+    const antes = envio.capacidades(PROD);
+    assert.deepEqual(antes, { modo: "desligado", otp: false, simulado: false, envioReal: false });
+    const r = await otp.enviarOtpBaileys({ desafioId: "d", telefoneE164: NUM, codigo: "123456" }, { env: { ...BAILEYS, NOTIFICACOES_OTP_BAILEYS_ALLOWLIST_E164: undefined }, repo: { reservarEnvioOtp: async () => { throw new Error("não pode chegar ao banco"); } }, obterServico: async () => { throw new Error("não pode chamar o gateway"); } });
+    assert.deepEqual([r.entregue, r.motivo], [false, "ALLOWLIST_OBRIGATORIA"]);
+  });
+  test("SAIR: sem a flag nada é lido, revogado nem confirmado — mesmo com texto exato e número cadastrado", async () => {
+    titular._limparSaidas();
+    const chamadas = [];
+    const repo = new Proxy({}, { get: (_, nome) => async () => { chamadas.push(String(nome)); return []; } });
+    const r = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env: PROD, deps: { repo, auditar: async () => chamadas.push("auditar"), enviarConfirmacaoSaida: async () => chamadas.push("confirmar") } });
+    assert.deepEqual([r.aplicado, chamadas.length], [false, 0]);
+    const c = await envio.enviarConfirmacaoSaida({ telefoneE164: NUM, chave: "abcdef012345:2026-10-31" }, { env: PROD, enviar: async () => { chamadas.push("enviar"); return { enviada: true }; } });
+    assert.deepEqual([c.enviada, c.motivo, chamadas.length], [false, "CONFIRMACAO_DESLIGADA", 0]);
+  });
+  test("a lista de palavras só diminuiu (nada novo passa a revogar): SAIR, PARAR, STOP, DESCADASTRAR", () => {
+    for (const t of ["SAIR", "PARAR", "STOP", "DESCADASTRAR"]) assert.equal(titular.ehPalavraDeSaida(t), true, t);
+    for (const t of ["CANCELAR", "cancelar pedido", "sair da fila", "não"]) assert.equal(titular.ehPalavraDeSaida(t), false, t);
   });
 });
