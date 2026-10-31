@@ -64,7 +64,12 @@ async function emitirDesafio({ tipo, conviteId = null, telefoneCifrado, telefone
   if (criado?.resultado === "LIMITE") return { ok: false, motivo: "LIMITE" };
   if (criado?.resultado !== "CRIADO") return { ok: false, motivo: "INDISPONIVEL" };
   const entrega = await (deps.entregarCodigoOtp ?? entregarCodigoOtp)({ desafioId: criado.desafio_id, telefoneCifrado, telefoneHmac, codigo, provisorio }, { env: deps.env });
-  if (!entrega.entregue) return { ok: false, motivo: "INDISPONIVEL" };
+  if (!entrega.entregue) {
+    // cota própria do OTP / prioridade do D-1: o titular só precisa aguardar (nada foi enviado e nenhum dado sensível é revelado)
+    if (entrega.motivo === "PRIORIDADE_D1" || entrega.motivo === "SATURADO") return { ok: false, motivo: "AGUARDE", segundos: 60 };
+    if (entrega.motivo === "LIMITE_OTP") return { ok: false, motivo: "LIMITE" };
+    return { ok: false, motivo: "INDISPONIVEL" };
+  }
   return { ok: true, desafio: criado.desafio_id, provisorio, expiraEmSegundos: 300, reenvioEmSegundos: 60 };
 }
 
