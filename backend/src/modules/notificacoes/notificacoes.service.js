@@ -25,6 +25,13 @@ const exigirSegredos = (deps) => {
     throw new ApiError(503, "A Central de Notificações ainda não está habilitada neste ambiente.", { codigo: "NOTIFICACOES_INDISPONIVEL" });
   }
 };
+// Criar convites fica DESLIGADO até a verificação real (OTP) estar funcional: exige NOTIFICACOES_CONVITES_HABILITADOS=true, ou o
+// transporte de simulação (homologação isolada). Ter o segredo mestre configurado NÃO basta. Revogação não passa por esta trava.
+const exigirConvitesHabilitados = (deps) => {
+  const env = deps?.env ?? process.env;
+  if (env.NOTIFICACOES_CONVITES_HABILITADOS === "true" || capacidades(env).simulado) return;
+  throw new ApiError(503, "A criação de convites ainda não está habilitada neste ambiente.", { codigo: "CONVITES_DESLIGADOS" });
+};
 const quem = (req) => ({ contaId: req?.user?.id ?? null, perfilId: req?.perfil?.id ?? req?.acesso?.perfilId ?? null, nome: req?.perfil?.nome ?? null, email: req?.user?.email ?? null });
 
 async function registrar(req, acao, { organizacaoId, unidadeId = null, entidadeId = null, detalhes = {} }, deps = {}) {
@@ -150,6 +157,7 @@ export async function listarCategorias({ deps = {} } = {}) {
 // Convite (o gestor convida; o titular verifica e consente)
 // ---------------------------------------------------------------------------------------------------------------------------
 export async function criarConvite({ req, escopo, corpo, baseUrl = "", deps = {} }) {
+  exigirConvitesHabilitados(deps);
   exigirSegredos(deps);
   const r = R(deps);
   const nome = v.texto(corpo?.nome, "Nome", { min: 1, max: 120 });

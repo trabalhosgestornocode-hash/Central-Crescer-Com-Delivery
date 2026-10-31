@@ -149,3 +149,19 @@ describe("consentimento real exige termo aprovado", () => {
     }
   });
 });
+
+describe("criar convites: desligado por padrão, mesmo com o segredo mestre configurado", () => {
+  test("sem NOTIFICACOES_CONVITES_HABILITADOS (e fora da simulação) → 503 CONVITES_DESLIGADOS antes de qualquer leitura/gravação", async () => {
+    const svc = await import("../src/modules/notificacoes/notificacoes.service.js");
+    const repo = new Proxy({}, { get: () => { throw new Error("o banco não pode ser tocado"); } });
+    for (const env of [{}, { NODE_ENV: "production" }, OFICIAL, { NOTIFICACOES_CONVITES_HABILITADOS: "false" }]) {
+      await assert.rejects(svc.criarConvite({ req: {}, escopo: {}, corpo: {}, baseUrl: "https://x", deps: { repo, env, segredosDisponiveis: () => true } }),
+        (e) => e.statusCode === 503 && JSON.stringify(e).includes("CONVITES_DESLIGADOS"));
+    }
+  });
+  test("a trava não vale para o pedido de revogação (o titular sempre pode sair)", async () => {
+    const svc = await import("../src/modules/notificacoes/notificacoes.service.js");
+    await assert.rejects(svc.registrarPedidoRevogacao({ req: {}, escopo: {}, destinatarioId: "x", corpo: {}, deps: { env: {}, segredosDisponiveis: () => false } }),
+      (e) => !JSON.stringify(e).includes("CONVITES_DESLIGADOS"));
+  });
+});
