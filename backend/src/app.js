@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { config } from "./config/env.js";
 import { titularRouter } from "./modules/notificacoes/notificacoes.routes.js";
+import { montarWebhookWhatsapp } from "./modules/notificacoes/notificacoes.webhookWhatsapp.js";
 import { requireAuth } from "./middlewares/auth.js";
 import { notFound } from "./middlewares/notFound.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
@@ -45,6 +46,9 @@ export function createApp() {
   // (ver whatsappGateway.bootstrap.js).
   const whatsappGateway = montarWhatsappGatewayRouter();
   if (whatsappGateway) app.use(whatsappGateway.path, whatsappGateway.router);
+  // Webhook de status da Meta (Cloud API oficial): corpo CRU p/ a assinatura; só existe com WHATSAPP_CLOUD_APP_SECRET.
+  const webhookWhatsapp = montarWebhookWhatsapp();
+  if (webhookWhatsapp) app.use(webhookWhatsapp.path, webhookWhatsapp.router);
 
   // Limites de corpo POR ROTA. O teto de 30 MB existe apenas onde é
   // necessário (relatórios do SW em base64) em vez de valer para a API toda.
