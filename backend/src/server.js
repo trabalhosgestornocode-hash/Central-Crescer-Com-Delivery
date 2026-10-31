@@ -6,6 +6,7 @@ import { iniciarWorkerComunicacaoEmbutido, pararWorkerComunicacaoEmbutido } from
 import { workerLog } from "./worker-comunicacao/worker-comunicacao.logsafe.js";
 import { iniciarPurgaPeriodica } from "./modules/comunicacao/comunicacao.inbox.retencao.js";
 import { iniciarEventsIfoodEmbutido, pararEventsIfoodEmbutido } from "./worker-ifood/embedded.js";
+import { iniciarRelatoriosOperacionaisEmbutido, pararRelatoriosOperacionaisEmbutido } from "./worker-comunicacao/relatorios.embedded.js";
 import { totalUnidadesHomologacaoFinancial } from "./modules/ifood/ifoodFinancialHomologacao.js";
 import { iniciarServidorHttp } from "./servidor.lifecycle.js";
 import { avaliarEfeitosExternos } from "./ambiente/efeitosExternos.js";
@@ -70,10 +71,17 @@ iniciarServidorHttp({
         ? "   iFood Events: embarcado ATIVO"
         : `   iFood Events: embarcado ${r.estado === "disabled" ? "DESABILITADO" : "NÃO INICIADO"} (${r.motivo})`);
     });
+
+    // Relatórios operacionais (diário + semanal): só com NOTIFICACOES_RELATORIOS_AGENDADOR_HABILITADO=true (padrão: desligado) e guarda de efeitos externos.
+    // O envio real tem trava própria (NOTIFICACOES_RELATORIOS_ENVIO_HABILITADO + lista de números). Nunca derruba a subida.
+    iniciarRelatoriosOperacionaisEmbutido({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados) }).then((r) => {
+      console.log(r.habilitado ? "   Relatórios operacionais: agendador ATIVO" : `   Relatórios operacionais: agendador DESABILITADO (${r.motivo})`);
+    });
   },
   antesDeFechar: [
     () => purgaInbox.parar(),
     (sinal) => pararWorkerComunicacaoEmbutido(sinal),
     (sinal) => pararEventsIfoodEmbutido(sinal),
+    (sinal) => pararRelatoriosOperacionaisEmbutido(sinal),
   ],
 });

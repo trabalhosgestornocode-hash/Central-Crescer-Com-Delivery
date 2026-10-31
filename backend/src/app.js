@@ -93,10 +93,13 @@ export function createApp() {
     },
   }));
 
+  // Versão publicada: o Render injeta RENDER_GIT_COMMIT (sha público do repositório). Só os 7 primeiros hex; ausente fora do Render.
+  const versaoPublicada = () => { const c = String(process.env.RENDER_GIT_COMMIT ?? "").trim().toLowerCase(); return /^[0-9a-f]{7,40}$/.test(c) ? { versao: c.slice(0, 7) } : {}; };
+
   // Saúde do WEB SERVICE: sempre 200 enquanto o processo responde. `ifoodEvents` é só o estado do subsistema
   // embarcado (disabled/starting/active/waiting_lease/degraded/stopping) — Events degradado NUNCA vira 5xx aqui.
   app.get("/health", (_req, res) =>
-    res.json({ ok: true, service: "subway-saci", ts: new Date().toISOString(), csp: cspEmModoBloqueio ? "enforce" : "report-only", ifoodEvents: lerEstadoEvents().estado })
+    res.json({ ok: true, service: "subway-saci", ts: new Date().toISOString(), csp: cspEmModoBloqueio ? "enforce" : "report-only", ifoodEvents: lerEstadoEvents().estado, ...versaoPublicada() })
   );
 
   // Config pública para o frontend inicializar o Supabase Auth (chave anon é pública por design)

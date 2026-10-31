@@ -15,12 +15,27 @@ import { unidadesCandidatas } from "./notificacoes.relatorios.repository.js";
 export const INTERVALO_PADRAO_MS = 15 * 60_000;
 export const agendadorRelatoriosPermitido = (env = process.env) => String(env?.NOTIFICACOES_RELATORIOS_AGENDADOR_HABILITADO ?? "").trim().toLowerCase() === "true";
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * PILOTO por unidade: NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO (ids de unidade, separados por vírgula). Definida ⇒ SÓ essas unidades entram no ciclo
+ * (inclusive a geração do fechamento); valor inválido/vazio-com-vírgulas ⇒ NENHUMA (fail-closed). Ausente ⇒ todas as elegíveis (disponibilidade geral).
+ * @returns {Set<string>|null}
+ */
+export function unidadesPiloto(env = process.env) {
+  const bruto = String(env?.NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO ?? "").trim();
+  if (!bruto) return null;
+  const ids = bruto.split(",").map((x) => x.trim());
+  return new Set(ids.every((x) => UUID.test(x)) ? ids.map((x) => x.toLowerCase()) : []);
+}
+
 /**
  * Um ciclo completo.
  * @param {{agora?: () => Date, env?: object, deps?: {candidatas?: Function, funil?: Function, gerar?: Function, enfileirar?: Function, despachar?: Function, [k: string]: any}}} p
  */
 export async function executarCicloRelatorios({ agora = () => new Date(), env = process.env, deps = {} } = {}) {
-  const candidatas = await (deps.candidatas ?? unidadesCandidatas)(deps.repoDeps ?? {});
+  const piloto = unidadesPiloto(env);
+  const todas = await (deps.candidatas ?? unidadesCandidatas)(deps.repoDeps ?? {});
+  const candidatas = piloto ? todas.filter((u) => piloto.has(String(u.unidadeId).toLowerCase())) : todas;
   const { elegiveis, recusadas } = await (deps.funil ?? ((u) => unidadesComIntegracaoViva(u, { agora, deps: deps.integracaoDeps ?? {} })))(candidatas);
   // (1) fechamento de ontem de cada unidade elegível (nunca de unidade sem integração: não há o que fechar)
   const geracao = await (deps.gerar ?? gerarFechamentosDeOntem)({ unidades: elegiveis.map((u) => ({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId })), agora, deps: deps.opDeps ?? {} });
