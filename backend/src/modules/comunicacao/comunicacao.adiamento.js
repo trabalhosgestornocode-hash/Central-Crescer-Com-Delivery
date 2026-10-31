@@ -84,3 +84,23 @@ export function calcularDisponivelEm({ motivo, agora, adiamentoMs, timezone = nu
     throw e;
   }
 }
+
+/** O que fazer com um bloqueio depois de calculado o próximo instante. */
+export const DESTINO_DO_ADIAMENTO = Object.freeze({ ADIAR: "ADIAR", EXPIRAR: "EXPIRAR", BLOQUEAR: "BLOQUEAR" });
+
+/**
+ * Um adiamento TRANSITÓRIO nunca pode apontar para o dia em que a mensagem JÁ VENCEU (`expira_em`): reagendá-la para depois do vencimento
+ * só a deixa "agendada" por dias para ser cancelada como EXPIRADA no fim (o worker e o banco cancelam qualquer mensagem vencida). Nesse
+ * caso ela encerra AGORA como CANCELLED/EXPIRADA — o MESMO resultado final, sem a ilusão de entrega futura. NÃO muda a política de envio
+ * (cotas, janelas, cooldown, destinatários): só a transição de estado de uma mensagem que de qualquer forma não seria enviada.
+ * O reforço/aviso tardio mantém a regra anterior (sem próximo instante também expira).
+ * @param {{transitorio: boolean, disponivelEm: Date|null, expiraEm: (Date|string|null), reforcoOuTardio?: boolean}} p
+ * @returns {"ADIAR"|"EXPIRAR"|"BLOQUEAR"}
+ */
+export function decidirDestinoDoAdiamento({ transitorio, disponivelEm, expiraEm, reforcoOuTardio = false }) {
+  if (!transitorio) return DESTINO_DO_ADIAMENTO.BLOQUEAR;
+  const venc = expiraEm ? new Date(expiraEm).getTime() : null;
+  if (reforcoOuTardio && (!disponivelEm || (venc !== null && disponivelEm.getTime() >= venc))) return DESTINO_DO_ADIAMENTO.EXPIRAR;
+  if (!reforcoOuTardio && disponivelEm && venc !== null && Number.isFinite(venc) && disponivelEm.getTime() >= venc) return DESTINO_DO_ADIAMENTO.EXPIRAR;
+  return DESTINO_DO_ADIAMENTO.ADIAR;
+}

@@ -51,7 +51,7 @@ import {
   chaveIdempotenciaDestinatario, ORIGEM, PROPOSITO, MOTIVO_REFORCO, MOTIVO_TARDIO, ehAvisoTardio, dataLocalIso,
 } from "./comunicacao.reforco.js";
 import { partesLocais } from "./comunicacao.horario.js";
-import { calcularDisponivelEm, chaveDeJitter, MOTIVO_DA_RESERVA } from "./comunicacao.adiamento.js";
+import { calcularDisponivelEm, chaveDeJitter, MOTIVO_DA_RESERVA, decidirDestinoDoAdiamento, DESTINO_DO_ADIAMENTO } from "./comunicacao.adiamento.js";
 import {
   TIPOS_ALERTA, STATUS_ALERTA, STATUS_MENSAGEM, SEVERIDADE, CLASSIFICACAO_ERRO, MODOS,
   RESULTADO_FINAL_ENVIO, RESULTADO_RESERVA, DESTINO_SEM_ENVIO, MOTIVO_EXPIRADA, MOTIVOS_BLOQUEIO, bloqueioEhTransitorio,
@@ -758,9 +758,11 @@ export async function processarJobReivindicado(job, {
         jitterMaxMs: await obterJitterMaxMs(deps),
       });
     }
-    // REFORÇO: um adiamento nunca o empurra para depois do cutoff (expira_em = 22:30 locais) nem para outro dia:
-    // se o novo horário estouraria, ele EXPIRA (CANCELLED/EXPIRADA) em vez de virar cobrança velha.
-    const expiraReforco = transitorio && (ehReforco || ehTardio) && (!disponivelEm || (job.expira_em && disponivelEm.getTime() >= new Date(job.expira_em).getTime()));
+    // Um adiamento nunca empurra a mensagem para depois do próprio vencimento (expira_em): se o novo horário estouraria, ela EXPIRA
+    // (CANCELLED/EXPIRADA) em vez de ficar "agendada" para um dia em que já estará vencida. Reforço/tardio: cutoff 22:30 locais, mesma regra.
+    const destinoAdiamento = decidirDestinoDoAdiamento({ transitorio, disponivelEm, expiraEm: job.expira_em, reforcoOuTardio: ehReforco || ehTardio });
+    const expiraNoAdiamento = destinoAdiamento === DESTINO_DO_ADIAMENTO.EXPIRAR;
+    const expiraReforco = expiraNoAdiamento;
     const r = await filaRepo.encerrarProcessamento({
       ...claim, destino: expiraReforco ? DESTINO_SEM_ENVIO.CANCELLED : (transitorio ? DESTINO_SEM_ENVIO.SCHEDULED : DESTINO_SEM_ENVIO.BLOCKED),
       motivo: expiraReforco ? MOTIVO_EXPIRADA : motivo, disponivelEm: expiraReforco ? null : disponivelEm,
@@ -770,9 +772,10 @@ export async function processarJobReivindicado(job, {
     await auditar({
       acao: ACOES.COMUNICACAO_ENVIO_BLOQUEADO, atorTipo: "sistema", organizacaoId: job.organizacao_id,
       entidade: "comunicacao_mensagens", entidadeId: job.id,
-      detalhes: { motivo, tipo: job.tipo, transitorio, statusResultante: r.status, disponivelEm: r.disponivel_em ?? null, destinatarioId: job.contato_empresa_id ?? null },
+      detalhes: { motivo, tipo: job.tipo, transitorio, statusResultante: r.status, disponivelEm: r.disponivel_em ?? null, destinatarioId: job.contato_empresa_id ?? null,
+        ...(expiraNoAdiamento ? { expirouNoAdiamento: true, proximoInstanteCalculado: disponivelEm ? disponivelEm.toISOString() : null, expiraEm: job.expira_em ?? null } : {}) },
     });
-    if (expiraReforco) return { id: job.id, resultado: "CANCELADO_REFORCO_EXPIRADO", motivo };
+    if (expiraNoAdiamento) return { id: job.id, resultado: (ehReforco || ehTardio) ? "CANCELADO_REFORCO_EXPIRADO" : "CANCELADO_EXPIRADO_NO_ADIAMENTO", motivo };
     if (transitorio) return { id: job.id, resultado: "ADIADO", motivo, disponivelEm: r.disponivel_em ?? null };
     // DUPLICATE = OUTRA mensagem do mesmo evento já saiu/pode ter saído (SENT ou DELIVERY_UNKNOWN): o evento NÃO está
     // "bloqueado", só esta segunda linha — o alerta não pode mudar de estado por causa dela.
