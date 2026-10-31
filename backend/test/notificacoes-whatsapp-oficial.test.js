@@ -134,3 +134,18 @@ describe("webhook: assinatura, handshake e idempotência", () => {
     assert.deepEqual(ofi.extrairStatus(null), []);
   });
 });
+
+describe("consentimento real exige termo aprovado", () => {
+  test("termo rascunho (ou ausente) fora da simulação → 409 TERMO_NAO_APROVADO e nada é gravado", async () => {
+    const tit = await import("../src/modules/notificacoes/notificacoes.titular.service.js");
+    const token = "a".repeat(43);
+    for (const termo of [{ versao: 1, rascunho: true }, null]) {
+      let gravou = false;
+      const convite = { id: "c1", organizacao_id: "o1", status: "VERIFICADO", expira_em: new Date(Date.now() + 3600e3).toISOString(), unidades_pretendidas: ["u1"] };
+      const repo = { obterConvitePorToken: async () => convite, termoVigente: async () => termo, consentir: async () => { gravou = true; return {}; } };
+      await assert.rejects(tit.consentirConvite({ token, desafio: "d", categorias: [], termoVersao: 1, ip: "1.1.1.1", deps: { env: OFICIAL, repo } }),
+        (e) => e.statusCode === 409 && JSON.stringify(e).includes("TERMO_NAO_APROVADO"));
+      assert.equal(gravou, false);
+    }
+  });
+});

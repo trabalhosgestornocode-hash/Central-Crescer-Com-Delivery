@@ -21,5 +21,5 @@ Nada foi contratado, configurado ou enviado. DNS não foi alterado.
 
 ## 3. Termo de consentimento — versão técnica final
 O mecanismo já existe (migration 134): `comunicacao_termos` **imutável** (trigger bloqueia update/delete), versão inteira, `hash = sha256(texto)` verificado por CHECK, `rascunho` boolean; cada consentimento no livro-razão grava `termo_versao` + `termo_hash` + data + categoria + IP/origem (prova do aceite) e a revogação é um novo registro (histórico preservado). A v1 é rascunho de simulação.
-**Para publicar a versão jurídica:** inserir a linha `versao = 2` com `rascunho = false` **somente após aprovação** (nenhuma migration insere o texto; é um ato de dados com revisão). Enquanto não houver termo não-rascunho, a verificação real não registra consentimento. Nenhum consentimento real foi registrado.
+**Para publicar a versão jurídica:** inserir a linha `versao = 2` com `rascunho = false` **somente após aprovação** (nenhuma migration insere o texto; é um ato de dados com revisão). Trava adicionada nesta branch (`consentirConvite`): fora da simulação, com termo rascunho ou ausente, o consentimento é recusado com 409 `TERMO_NAO_APROVADO` e nada é gravado (teste incluído). Antes desta trava `rascunho` só era repassado à tela. Nenhum consentimento real foi registrado.
 Texto pendente de revisão: doc 22 §4.
