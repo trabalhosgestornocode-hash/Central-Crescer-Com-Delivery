@@ -85,6 +85,11 @@ export async function verificarCodigoConvite({ token, desafio, provisorio, codig
 export async function consentirConvite({ token, desafio, categorias, termoVersao, ip, userAgent, deps = {} }) {
   exigirAmbiente(deps);
   const c = await conviteDoToken(token, deps);
+  // Consentimento REAL só com termo aprovado (rascunho = só simulação). Nenhuma versão jurídica inserida → recusa, nada é gravado.
+  if (!capacidades(deps.env).simulado) {
+    const t = await R(deps).termoVigente(deps);
+    if (!t || t.rascunho !== false) throw new ApiError(409, "O termo de consentimento ainda não foi aprovado.", { codigo: "TERMO_NAO_APROVADO" });
+  }
   const lista = Array.isArray(categorias) ? [...new Set(categorias.map(String))] : [];
   const r = await R(deps).consentir({ conviteId: c.id, desafioId: desafio, categorias: lista, termoVersao: Number(termoVersao),
     telefoneE164: decifrarTelefone(c.telefone_cifrado), ipHmac: hmacIp(ip), userAgent: resumirUa(userAgent) }, deps);
