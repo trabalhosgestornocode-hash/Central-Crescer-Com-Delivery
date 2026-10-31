@@ -1,38 +1,25 @@
-# 37 — D-1: integração da consolidação por telefone com o lote (DESLIGADA, não conectada ao worker)
+# 37 — D-1: consolidação por telefone conectada ao pipeline (flag DESLIGADA; migration 140 preparada, não aplicada)
 
-Branch `feat/d1-consolidacao-integracao`, empilhada sobre o PR #64 (`proto/d1-consolidacao-por-telefone`). **Nada muda em produção**: cotas globais, `processarJobReivindicado` e o envio atual não foram tocados; nenhum código de produção importa o módulo (teste). Com a flag `COMUNICACAO_CONSOLIDACAO_POR_TELEFONE` ausente/`false`, `processarLoteConsolidado` devolve `null` sem chamar porta alguma.
+PR #66 (empilhado no #64, atualizado com a `main`). Com `COMUNICACAO_CONSOLIDACAO_POR_TELEFONE` ausente/`false` o envio é o de hoje: o único código novo no caminho é `if (consolidacaoLigada(process.env))` em `processarProximoLote` e um hook `preparoDeEnvio = null` em `processarJobReivindicado` (a chamada de reserva virou a closure `reservar()` com os mesmos parâmetros; nenhum limite, política ou texto mudou).
 
-## 1. O que foi construído
-`comunicacao.consolidacao.integracao.js` — o **protocolo** de um lote já reivindicado, por telefone (`job.contato_id`), contra portas que espelham as fases reais do pipeline:
+## Como funciona (flag ligada)
+1. Jobs reivindicados do mesmo telefone (`contato_id`) formam um grupo; telefone sem par segue o fluxo individual.
+2. Cada job passa por **todos os portões de hoje** (TTL, alerta, política, janela, duplicidade, reforço/tardio) e **de novo imediatamente antes de reservar** (revogação, opt-out, pausa e categoria valem até o último instante). Barrado/adiado/cancelado = resultado de hoje, fica fora do texto.
+3. **Reserva atômica por mensagem física**, com a chave da consolidação (migration 140): as linhas da mesma chave contam **uma** vez no teto de 3/dia por telefone e nas taxas por minuto. Cooldown, limite por organização e teto global (3) inalterados.
+4. **Um envio** ao gateway por mensagem (relatórios completos, título `*empresa — unidade*`, chave `cons:<hash>`); depois `SENT` por componente com o mesmo provider id.
+5. Falha: pré-envio provada ⇒ retry de cada componente (classificação de hoje); dúvida ⇒ `DELIVERY_UNKNOWN`, nunca reenvio; falha ao gravar `SENT` não reenvia.
 
-`avaliar` (portões, sem efeito) → `relerEstado` (autorização atual) → `reservar` (capacidade atômica; nasce o attempt) → `enviar` (um envio por mensagem) → `finalizar`.
-
-O texto só contém blocos que passaram pelas três primeiras etapas. Telefone com um único job (ou sem contato) segue o fluxo individual de hoje sem tocar nenhuma porta.
-
-## 2. Provas (15 testes + propriedade)
-| Pedido | Prova |
+## Evidências
+| Prova | Resultado |
 |---|---|
-| Flag desligada = nada muda | `null` e zero chamadas às portas; nenhum arquivo de produção referencia a consolidação; o módulo só importa `comunicacao.consolidacao.js` |
-| 7 destinatários multiempresa | um envio com os 7 relatórios completos (título `*empresa — unidade*` + conteúdo byte a byte); os 7 `SENT` com o mesmo provider id |
-| Nenhum relatório omitido | **conservação**: 300 cenários aleatórios (semente fixa) — todo job termina em exatamente um destino; componente em uma única mensagem; conteúdo completo; excluído/barrado/não reservado nunca aparece em texto algum |
-| Autorização revalidada no envio | revogado, categoria desabilitada, opt-out, empresa desabilitada/pausada entre agendar e enviar ⇒ sem reserva, sem texto, sem finalização |
-| Falhas | pré-envio provado ⇒ `RETRY` para cada componente (volta ao fluxo individual); dúvida (timeout/5xx) ⇒ todos `DELIVERY_UNKNOWN`, **uma** chamada só, nunca reenvio; falha ao finalizar um componente não reenvia nem derruba os outros; falha ao reler estado ⇒ o job volta ao individual; falha de reserva ⇒ fora do texto; um telefone falhar não afeta outro |
-| Tamanho | não cabe numa mensagem ⇒ várias, ids disjuntos, chaves distintas, nada cortado, nenhuma passa de 4096 |
+| Migration 140 no PostgreSQL descartável (`testes-seguros/pg/consolidacao_140.sh`): chave nula idêntica à 104; 7 componentes = 1 vaga; 4ª mensagem física barrada; cooldown/minuto; **concorrência** (7 paralelas da mesma chave, 8 individuais, 2 grupos + 4 individuais: nunca >3 físicas, grupos nunca pela metade); rollback restaura o corpo da 104 (md5 igual); reaplicação | **27/27** |
+| Adaptador contra o **gateway simulado** (`comunicacao-consolidacao-pipeline.test.js`): 7 relatórios completos em 1 envio, mesmos parâmetros da reserva, SENT com mesmo provider id, revogação na releitura, teto/limites, falha pré-envio/ambígua/desconectado, dois workers (cada relatório sai uma vez), nome indisponível (fail-closed), relatório gigante | 16/16 |
+| Coordenador + propriedade de conservação (300 cenários), coordenador, orquestrador, puro | 48/48 |
+| Regressão do backend (ambiente fictício) vs `main` | 5929 testes, **24 falhas = as mesmas da `main`**, 0 novas |
 
-Regressão do backend com ambiente fictício: 5887 testes, 24 falhas — as **mesmas 24** da `main` (nenhuma em consolidação).
+## Limites do que foi provado
+- O pipeline completo com banco (suítes `comunicacao-*-integracao`) só roda no projeto de teste, sem credenciais nesta máquina: **não foi executado**; a equivalência com a flag desligada se apoia na diff mínima + 125 testes estruturais/unitários do pipeline verdes.
+- Dois workers com posse velha sobre os mesmos jobs não duplicam relatório (CAS da reserva), mas podem dividir o grupo em duas mensagens com a mesma chave (conta uma vaga). Os claims são exclusivos; é o caso de lease vencido.
 
-## 3. Decisão material: o teto por telefone (não alterado)
-O teste mostra os dois comportamentos sobre o mesmo pipeline falso:
-- **Semântica atual** (cada componente reservado conta no teto de 3/dia): só 3 dos 7 reservam; 4 ficam `NAO_RESERVADO (RATE_LIMIT_DIA)`. Ou seja, **consolidar sem decidir o teto não resolve o problema do D-1**.
-- **Mensagem consolidada conta uma vez**: os 7 saem juntos; o telefone consome 1 do teto.
-
-Mudar o significado de `max_por_contato_por_dia` é decisão de política e **não foi feita**; o teto global (3) segue intacto.
-
-## 4. O que falta para um adaptador de produção (todas dependem de autorização específica)
-1. **Extrair** os portões e o snapshot de política de `processarJobReivindicado` para uma função reutilizável (`avaliar`), mantendo o caminho individual **idêntico byte a byte** com a flag desligada. Os testes do pipeline são de integração com banco (não rodam localmente): exigem o projeto de teste para provar a equivalência.
-2. **Decidir o teto** (seção 3) e como `reservarEnvio` conta a consolidada (`ctx.consolidado`).
-3. **Estados dos componentes absorvidos**: `SENT` com o mesmo provider id e `consolidadaEm = chave` (coluna/metadata a definir).
-4. Dry-run no D-1 e teste no projeto de teste antes de qualquer envio real; validar o formato do texto com as empresas.
-
-## 5. Arquivos
-`backend/src/modules/comunicacao/comunicacao.consolidacao.integracao.js`; `backend/test/comunicacao-consolidacao-integracao.test.js`.
+## Ordem segura de implantação (depende de autorização)
+Merge #65 → #64 → #66 (deploy inerte) → migration 140 (aditiva; rollback pronto) → conferir `/health` → ligar a flag **só depois**, com acompanhamento do D-1. Com a flag ligada e a 140 ausente, a reserva falha fechada (nada é enviado; os jobs voltam pelo lease).

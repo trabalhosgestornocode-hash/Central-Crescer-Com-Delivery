@@ -180,7 +180,7 @@ export async function iniciarEnvio({ id, worker, claimGeracao, leaseSegundos = 9
  * @param {{id: string, worker: string, claimGeracao: number, leaseSegundos?: number, cooldownHoras: number|null, maxPorContatoDia: number, maxPorMinuto: number, maxPorMinutoOrganizacao: number, maxPorOrganizacaoDia?: number|null, inicioDia: Date}} params
  * @returns {Promise<{resultado: keyof typeof RESULTADO_RESERVA, mensagem?: object}>}
  */
-export async function reservarEnvio({ id, worker, claimGeracao, leaseSegundos = 90, cooldownHoras, maxPorContatoDia, maxPorMinuto, maxPorMinutoOrganizacao, maxPorOrganizacaoDia = null, inicioDia }, deps = {}) {
+export async function reservarEnvio({ id, worker, claimGeracao, leaseSegundos = 90, cooldownHoras, maxPorContatoDia, maxPorMinuto, maxPorMinutoOrganizacao, maxPorOrganizacaoDia = null, inicioDia, consolidacaoChave }, deps = {}) {
   const db = deps.supabase ?? supabase;
   const { data, error } = await db.rpc("comunicacao_reservar_envio", {
     p_id: id, p_worker: worker, p_claim_geracao: claimGeracao, p_lease_segundos: leaseSegundos,
@@ -188,6 +188,8 @@ export async function reservarEnvio({ id, worker, claimGeracao, leaseSegundos = 
     p_max_por_minuto_org: maxPorMinutoOrganizacao,
     p_inicio_dia: inicioDia.toISOString(),
     p_max_por_org_dia: maxPorOrganizacaoDia,
+    // só vai ao banco quando a consolidação por telefone informa a chave (migration 140); sem ela o payload é idêntico ao de sempre
+    ...(consolidacaoChave ? { p_consolidacao_chave: consolidacaoChave } : {}),
   });
   if (error) throw ApiError.internal(error.message);
   // resposta desconhecida = NÃO iniciado (fail-closed): nunca "provavelmente ok".

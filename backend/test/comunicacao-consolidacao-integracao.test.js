@@ -53,11 +53,13 @@ describe("desligada por padrão", () => {
     assert.deepEqual(w.chamadas, []);
     assert.equal(consolidacaoLigada({}), false);
   });
-  test("ninguém no código de produção usa a integração; o módulo só importa a consolidação pura", () => {
-    const usos = ["comunicacao.alertas.service.js", "comunicacao.entrega.js", "comunicacao.fila.repo.js", "comunicacao.policy.js", "whatsapp.service.js", "comunicacao.manual.js"]
-      .filter((f) => /consolidacao/.test(readFileSync(path.join(RAIZ, "src/modules/comunicacao", f), "utf8")));
-    assert.deepEqual(usos, []);
-    const src = readFileSync(path.join(RAIZ, "src/modules/comunicacao/comunicacao.consolidacao.integracao.js"), "utf8");
+  test("a única ligação ao envio é o hook `preparoDeEnvio` + a flag em processarProximoLote; o módulo puro continua sem importar banco/provider", () => {
+    const dir = path.join(RAIZ, "src/modules/comunicacao");
+    const usam = ["comunicacao.entrega.js", "comunicacao.policy.js", "whatsapp.service.js", "comunicacao.manual.js"].filter((f) => /consolidacao/.test(readFileSync(path.join(dir, f), "utf8")));
+    assert.deepEqual(usam, []);
+    const svc = readFileSync(path.join(dir, "comunicacao.alertas.service.js"), "utf8");
+    assert.deepEqual([...new Set([...svc.matchAll(/comunicacao.consolidacao.[a-z]+.js|consolidacaoLigada/g)].map((m) => m[0]))].sort(), ["comunicacao.consolidacao.integracao.js", "comunicacao.consolidacao.pipeline.js", "consolidacaoLigada"]);
+    const src = readFileSync(path.join(dir, "comunicacao.consolidacao.integracao.js"), "utf8");
     assert.deepEqual([...src.matchAll(/^import .* from "(.*)";/gm)].map((m) => m[1]), ["./comunicacao.consolidacao.js"]);
   });
 });

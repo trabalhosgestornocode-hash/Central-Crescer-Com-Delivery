@@ -51,6 +51,7 @@ import {
   chaveIdempotenciaDestinatario, ORIGEM, PROPOSITO, MOTIVO_REFORCO, MOTIVO_TARDIO, ehAvisoTardio, dataLocalIso,
 } from "./comunicacao.reforco.js";
 import { partesLocais } from "./comunicacao.horario.js";
+import { consolidacaoLigada } from "./comunicacao.consolidacao.integracao.js";
 import { calcularDisponivelEm, chaveDeJitter, MOTIVO_DA_RESERVA, decidirDestinoDoAdiamento, DESTINO_DO_ADIAMENTO } from "./comunicacao.adiamento.js";
 import {
   TIPOS_ALERTA, STATUS_ALERTA, STATUS_MENSAGEM, SEVERIDADE, CLASSIFICACAO_ERRO, MODOS,
@@ -528,9 +529,24 @@ export async function processarProximoLote({
   const verificar = verificarPendenciaAindaExiste ?? (async (alerta) => pendenciaExisteNoSnapshot(await obterSnapshot(), alerta));
 
   const resultados = [];
-  for (const job of jobs) {
+  const opcoesDoJob = { whatsAppService, agora, adiamentoMs, verificarPendenciaAindaExiste: verificar, resolverHabilitacao };
+  // CONSOLIDAÇÃO POR TELEFONE (flag COMUNICACAO_CONSOLIDACAO_POR_TELEFONE, desligada por padrão): grupos do mesmo telefone saem numa mensagem só;
+  // o que ela não cobre (telefone sem par, falha do próprio adaptador) segue o fluxo individual abaixo, sem alteração.
+  let restantes = jobs;
+  if (consolidacaoLigada(process.env)) {
     try {
-      resultados.push(await processarJobReivindicado(job, { whatsAppService, agora, adiamentoMs, verificarPendenciaAindaExiste: verificar, resolverHabilitacao }, deps));
+      const { processarLoteComConsolidacao } = await import("./comunicacao.consolidacao.pipeline.js");
+      const c = await processarLoteComConsolidacao({ jobs, opcoes: opcoesDoJob, deps });
+      resultados.push(...c.resultados); restantes = c.individuais;
+    } catch (e) {
+      // falha do adaptador: o que já foi reservado/enviado está em SENDING/SENT (o claim por CAS impede reenvio); o resto segue individual
+      console.error("[comunicacao] consolidação por telefone falhou; seguindo o fluxo individual:", sanitizarErro(e));
+      const feitos = new Set(resultados.map((r) => r.id)); restantes = jobs.filter((j) => !feitos.has(j.id));
+    }
+  }
+  for (const job of restantes) {
+    try {
+      resultados.push(await processarJobReivindicado(job, opcoesDoJob, deps));
     } catch (e) {
       // Um job com erro interno NÃO derruba o lote nem é reenviado às cegas:
       // se estava antes de SENDING, o lease expira e ele é reivindicado de
@@ -600,6 +616,7 @@ async function cancelarPorExpiracao(job, claim, deps, { linhaJaCancelada = false
 export async function processarJobReivindicado(job, {
   whatsAppService, agora = new Date(), adiamentoMs = ADIAMENTO_PADRAO_MS,
   verificarPendenciaAindaExiste = pendenciaAindaExisteAoVivo, resolverHabilitacao = resolverHabilitacaoEmpresa,
+  preparoDeEnvio = null,
 }, deps = {}) {
   const claim = { id: job.id, worker: job.claimed_by, claimGeracao: job.claim_geracao };
 
@@ -788,12 +805,8 @@ export async function processarJobReivindicado(job, {
   const decisao = avaliarEnvio(snapshot);
   if (!decisao.allowed) return adiarOuBloquear(decisao.reason);
 
-  // RESERVA ATÔMICA + PROCESSING -> SENDING ANTES da chamada externa, com CAS: aqui NASCE o
-  // attempt. É o rastro durável que distingue "nunca tentei" (PROCESSING) de "estava tentando
-  // quando morri" (SENDING) — e a PROVA de que este worker ainda é o dono do claim e de que a
-  // capacidade (cooldown/cota diária/taxa por minuto) foi consumida sem corrida. Sem INICIADO,
-  // o provider NÃO é chamado.
-  const reserva = await filaRepo.reservarEnvio({
+  // Reserva atômica (a mesma chamada, com os mesmos parâmetros, para o envio individual e para a consolidação por telefone).
+  const reservar = (extra = {}) => filaRepo.reservarEnvio({
     ...claim, leaseSegundos: LEASE_ENVIO_SEGUNDOS,
     // reforço: cooldown normal (8h/4h) NÃO vale — o espaçamento próprio (>= 2h) já foi provado no JIT acima; cota diária e por minuto seguem valendo.
     // COOLDOWN POR DESTINATÁRIO; a empresa pode ter o seu (minutos), senão o padrão global por severidade.
@@ -805,7 +818,18 @@ export async function processarJobReivindicado(job, {
     // LIMITE POR ORGANIZAÇÃO / dia — a empresa toda (todos os destinatários somados), separado do limite por destinatário acima.
     maxPorOrganizacaoDia: habilitacao?.limiteDiarioOrg ?? numeroOuPadrao(limites?.max_por_organizacao_por_dia, LIMITE_ORGANIZACAO_DIA_PADRAO),
     inicioDia: inicioDoDiaLocal(agora, habilitacao.timezone), // a política já provou timezone válido
+    ...extra, // só a consolidação por telefone usa (consolidacaoChave); o envio individual chama sem nada
   }, deps);
+  // Consolidação por telefone (comunicacao.consolidacao.pipeline.js; flag desligada por padrão): o chamador PARA aqui, com todos os portões
+  // já aprovados, para reservar/enviar o grupo do telefone. Sem `preparoDeEnvio` (o caso de hoje) esta linha não faz nada.
+  if (preparoDeEnvio) return preparoDeEnvio({ job, claim, contato, alerta, habilitacao, reservar, adiarOuBloquear, cancelarPorExpiracao: (opcoes) => cancelarPorExpiracao(job, claim, deps, opcoes), posseSemEfeito: POSSE_PERDIDA(job) });
+
+  // RESERVA ATÔMICA + PROCESSING -> SENDING ANTES da chamada externa, com CAS: aqui NASCE o
+  // attempt. É o rastro durável que distingue "nunca tentei" (PROCESSING) de "estava tentando
+  // quando morri" (SENDING) — e a PROVA de que este worker ainda é o dono do claim e de que a
+  // capacidade (cooldown/cota diária/taxa por minuto) foi consumida sem corrida. Sem INICIADO,
+  // o provider NÃO é chamado.
+  const reserva = await reservar();
 
   if (reserva.resultado === RESULTADO_RESERVA.POSSE_PERDIDA) return POSSE_PERDIDA(job);
   if (reserva.resultado === RESULTADO_RESERVA.EXPIRADA) return cancelarPorExpiracao(job, claim, deps, { linhaJaCancelada: true });
@@ -850,7 +874,7 @@ export async function processarJobReivindicado(job, {
 }
 
 /** Falha do provider: classifica e grava com CAS do ATTEMPT. NUNCA faz retry a partir de INCERTO. */
-async function resolverFalhaDeEnvio(job, attempt, e, deps) {
+export async function resolverFalhaDeEnvio(job, attempt, e, deps) {
   const classificacao = classificarErroEnvio(e);
   const erroSanitizado = sanitizarErro(e);
 

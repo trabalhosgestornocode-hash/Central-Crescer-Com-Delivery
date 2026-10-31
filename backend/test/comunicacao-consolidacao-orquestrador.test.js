@@ -28,11 +28,11 @@ function mundo({ estados = {}, falhaEnvio = null, falhaFinalizar = new Set(), fa
 const roda = (w, itens, extra = {}) => enviarConsolidado({ itens, lerEstado: w.lerEstado, enviar: w.enviar, finalizar: w.finalizar, agora: () => new Date("2026-11-02T14:00:00Z"), ...extra });
 
 describe("desligada por padrão", () => {
-  test("a flag só liga com 'true' explícito; nada no código de produção usa o orquestrador", () => {
+  test("a flag só liga com 'true' explícito; o orquestrador não é usado pelo envio (a integração usa o coordenador, ver comunicacao-consolidacao-integracao.test.js)", () => {
     for (const v of [undefined, "", "false", "1", "sim", null]) assert.equal(consolidacaoLigada({ COMUNICACAO_CONSOLIDACAO_POR_TELEFONE: v }), false, String(v));
     assert.equal(consolidacaoLigada({}), false);
     assert.equal(consolidacaoLigada({ COMUNICACAO_CONSOLIDACAO_POR_TELEFONE: " TRUE " }), true);
-    const usos = ["comunicacao.alertas.service.js", "comunicacao.entrega.js", "comunicacao.fila.repo.js", "comunicacao.policy.js", "whatsapp.service.js", "comunicacao.manual.js"]
+    const usos = ["comunicacao.entrega.js", "comunicacao.policy.js", "whatsapp.service.js", "comunicacao.manual.js"]
       .filter((f) => /consolidacao/.test(readFileSync(path.join(RAIZ, "src/modules/comunicacao", f), "utf8")));
     assert.deepEqual(usos, []);
     const src = readFileSync(path.join(RAIZ, "src/modules/comunicacao/comunicacao.consolidacao.orquestrador.js"), "utf8");

@@ -20,9 +20,10 @@ export const consolidacaoLigada = (env = process.env) => String(env?.COMUNICACAO
 
 export const DESTINO = Object.freeze({
   ENVIADO: "ENVIADO", TERMINAL_NA_AVALIACAO: "TERMINAL_NA_AVALIACAO", EXCLUIDO_POR_AUTORIZACAO: "EXCLUIDO_POR_AUTORIZACAO",
-  NAO_RESERVADO: "NAO_RESERVADO", DEVOLVIDO_AO_FLUXO_INDIVIDUAL: "DEVOLVIDO_AO_FLUXO_INDIVIDUAL", INCERTO: "INCERTO", ERRO_INTERNO: "ERRO_INTERNO",
+  NAO_RESERVADO: "NAO_RESERVADO", FALHA_DEFINITIVA: "FALHA_DEFINITIVA", DEVOLVIDO_AO_FLUXO_INDIVIDUAL: "DEVOLVIDO_AO_FLUXO_INDIVIDUAL", INCERTO: "INCERTO", ERRO_INTERNO: "ERRO_INTERNO",
 });
 const preEnvio = (e) => e?.preEnvio === true && !e?._timeout;
+const classificarPadrao = (e) => (preEnvio(e) ? "RETRY" : "DELIVERY_UNKNOWN");
 const telefoneDe = (job) => job?.contato_id ?? null;
 
 /**
@@ -31,15 +32,16 @@ const telefoneDe = (job) => job?.contato_id ?? null;
  *   portas: {
  *     avaliar: (job) => Promise<{pronto: true, item: object} | {pronto: false, resultado: string}>,   // portões reais; terminal/adiado já gravado pelo pipeline
  *     relerEstado: (item) => Promise<object>,                                                          // autorização ATUAL do bloco
- *     reservar: (job, ctx: {consolidado: boolean, blocos: number}) => Promise<{iniciado: true, tentativa: number} | {iniciado: false, resultado: string}>,
+ *     reservar: (job, ctx: {consolidado: boolean, blocos: number, chave: (string|null)}) => Promise<{iniciado: true, tentativa: number} | {iniciado: false, resultado: string}>,
  *     enviar: (p: {contatoWhatsappId: string, texto: string, idempotencyKey: string, ids: string[]}) => Promise<{providerMessageId: (string|null)}>,
- *     finalizar: (job, tentativa: number, r: {resultado: ("SENT"|"RETRY"|"DELIVERY_UNKNOWN"), providerMessageId?: string, consolidadaEm?: string}) => Promise<void>,
+ *     finalizar: (job, tentativa: number, r: {resultado: ("SENT"|"RETRY"|"FAILED"|"DELIVERY_UNKNOWN"), erro?: Error, providerMessageId?: string, consolidadaEm?: string}) => Promise<void>,
  *   }
  * }} p
  * @returns {Promise<null | {destinos: Map<string, {destino: string, detalhe?: any}>, mensagens: Array<{chave: string, ids: string[], providerMessageId: (string|null)}>, individuais: object[]}>}
  */
 export async function processarLoteConsolidado({ jobs, env = process.env, maxCaracteres = LIMITE_PADRAO, agora = () => new Date(), portas }) {
-  if (!consolidacaoLigada(env)) return null;                           // DESLIGADA: nenhuma porta é tocada
+  if (!consolidacaoLigada(env)) return null;
+  const classificar = portas?.classificarFalha ?? classificarPadrao;   // "RETRY" (pré-envio provado) | "FAILED" (definitiva) | "DELIVERY_UNKNOWN" (dúvida)                           // DESLIGADA: nenhuma porta é tocada
   const destinos = new Map(); const mensagens = []; const individuais = [];
   const marca = (id, destino, detalhe) => destinos.set(String(id), { destino, ...(detalhe === undefined ? {} : { detalhe }) });
 
@@ -68,33 +70,39 @@ export async function processarLoteConsolidado({ jobs, env = process.env, maxCar
     const fora = new Set(excl1.map((e) => e.id));
     for (const e of excl1) marca(e.id, DESTINO.EXCLUIDO_POR_AUTORIZACAO, e.motivo);
     const autorizados = frescos.filter((f) => !fora.has(f.id));
-    // 3) RESERVA de cada componente autorizado ANTES de montar o texto (quem não reservar não entra; o pipeline já adiou/barrou)
-    const reservados = []; const fichas = new Map();
-    for (const f of autorizados) {
-      try {
-        const r = await portas.reservar(f.__job, { consolidado: autorizados.length > 1, blocos: autorizados.length });
-        if (r.iniciado) { reservados.push(f); fichas.set(f.id, r.tentativa); } else marca(f.id, DESTINO.NAO_RESERVADO, r.resultado);
-      } catch { marca(f.id, DESTINO.ERRO_INTERNO); }
-    }
-    // 4) texto SÓ com quem passou pelas três etapas; um envio por mensagem consolidada
-    const { mensagens: msgs, excluidos: excl2 } = consolidarPorTelefone(reservados.map((r) => ({ ...r, estado: undefined, autorizado: true })), { maxCaracteres, agora: agora() });
-    for (const e of excl2) {           // reservou mas não cabe/é inválido: nunca se perde — volta para reenvio individual pelo pipeline
-      const f = reservados.find((r) => r.id === e.id);
-      try { await portas.finalizar(f.__job, fichas.get(f.id), { resultado: "RETRY" }); marca(f.id, DESTINO.DEVOLVIDO_AO_FLUXO_INDIVIDUAL, e.motivo); } catch { marca(f.id, DESTINO.ERRO_INTERNO); }
-    }
-    const porId = new Map(reservados.map((r) => [r.id, r]));
-    for (const m of msgs) {
-      const unico = m.blocos === 1;
-      const idempotencyKey = unico ? (porId.get(m.ids[0]).idempotencyKey ?? m.ids[0]) : `cons:${m.chave}`;
-      let r; let falha = null;
-      try { r = await portas.enviar({ contatoWhatsappId: m.contatoWhatsappId, texto: m.texto, idempotencyKey, ids: m.ids }); } catch (e) { falha = e; }
-      const resultado = falha ? (preEnvio(falha) ? "RETRY" : "DELIVERY_UNKNOWN") : "SENT";
-      for (const id of m.ids) {
-        const f = porId.get(id);
-        try { await portas.finalizar(f.__job, fichas.get(id), { resultado, providerMessageId: r?.providerMessageId ?? undefined, consolidadaEm: unico ? undefined : m.chave }); } catch { /* já enviado: registrar, jamais reenviar */ }
-        marca(id, resultado === "SENT" ? DESTINO.ENVIADO : resultado === "RETRY" ? DESTINO.DEVOLVIDO_AO_FLUXO_INDIVIDUAL : DESTINO.INCERTO, resultado === "SENT" ? { chave: m.chave } : resultado);
+    // 3) RESERVA de cada componente autorizado ANTES de montar o texto, MENSAGEM A MENSAGEM: todos os componentes de uma mensagem física levam a
+    //    mesma chave, para o banco contá-los como UMA mensagem no teto do telefone (migration 140). Quem não reservar não entra no texto.
+    const { mensagens: planejadas } = consolidarPorTelefone(autorizados.map((f) => ({ ...f, estado: undefined, autorizado: true })), { maxCaracteres, agora: agora() });
+    const porIdAutorizado = new Map(autorizados.map((f) => [f.id, f]));
+    for (const plano of planejadas) {
+      const reservados = []; const fichas = new Map();
+      for (const id of plano.ids) {
+        const f = porIdAutorizado.get(id);
+        try {
+          const r = await portas.reservar(f.__job, { consolidado: plano.blocos > 1, blocos: plano.blocos, chave: plano.blocos > 1 ? plano.chave : null });
+          if (r.iniciado) { reservados.push(f); fichas.set(f.id, r.tentativa); } else marca(f.id, DESTINO.NAO_RESERVADO, r.resultado);
+        } catch { marca(f.id, DESTINO.ERRO_INTERNO); }
       }
-      if (!falha) mensagens.push({ chave: m.chave, ids: m.ids, providerMessageId: r?.providerMessageId ?? null });
+      // 4) texto SÓ com quem passou pelas três etapas; um envio por mensagem consolidada
+      const { mensagens: msgs, excluidos: excl2 } = consolidarPorTelefone(reservados.map((r) => ({ ...r, estado: undefined, autorizado: true })), { maxCaracteres, agora: agora() });
+      for (const e of excl2) {           // reservou mas não cabe/é inválido: nunca se perde — volta para reenvio individual pelo pipeline
+        const f = reservados.find((r) => r.id === e.id);
+        try { await portas.finalizar(f.__job, fichas.get(f.id), { resultado: "RETRY" }); marca(f.id, DESTINO.DEVOLVIDO_AO_FLUXO_INDIVIDUAL, e.motivo); } catch { marca(f.id, DESTINO.ERRO_INTERNO); }
+      }
+      const porId = new Map(reservados.map((r) => [r.id, r]));
+      for (const m of msgs) {
+        const unico = m.blocos === 1;
+        const idempotencyKey = unico ? (porId.get(m.ids[0]).idempotencyKey ?? m.ids[0]) : `cons:${m.chave}`;
+        let r; let falha = null;
+        try { r = await portas.enviar({ contatoWhatsappId: m.contatoWhatsappId, texto: m.texto, idempotencyKey, ids: m.ids }); } catch (e) { falha = e; }
+        const resultado = falha ? classificar(falha) : "SENT";
+        for (const id of m.ids) {
+          const f = porId.get(id);
+          try { await portas.finalizar(f.__job, fichas.get(id), { resultado, erro: falha ?? undefined, providerMessageId: r?.providerMessageId ?? undefined, consolidadaEm: unico ? undefined : m.chave }); } catch { /* já enviado: registrar, jamais reenviar */ }
+          marca(id, resultado === "SENT" ? DESTINO.ENVIADO : resultado === "RETRY" ? DESTINO.DEVOLVIDO_AO_FLUXO_INDIVIDUAL : resultado === "FAILED" ? DESTINO.FALHA_DEFINITIVA : DESTINO.INCERTO, resultado === "SENT" ? { chave: m.chave } : resultado);
+        }
+        if (!falha) mensagens.push({ chave: m.chave, ids: m.ids, providerMessageId: r?.providerMessageId ?? null });
+      }
     }
   }
   return { destinos, mensagens, individuais };
