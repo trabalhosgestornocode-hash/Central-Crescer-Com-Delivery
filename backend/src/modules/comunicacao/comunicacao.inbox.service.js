@@ -60,7 +60,7 @@ export async function processarInbound({ organizacaoId, evento }, deps = {}) {
   // Central de Notificações: "SAIR"/"PARAR"/"STOP" do PRÓPRIO responsável revoga os avisos (todas as empresas) — só com
   // NOTIFICACOES_PALAVRA_CHAVE_SAIR=true. Nunca derruba o inbound: qualquer falha é ignorada (a mensagem já foi registrada).
   if (r.inserido && tipoConteudo === "texto") {
-    try { await (deps.palavraDeSaida ?? processarPalavraDeSaida)({ telefoneE164: evento.telefoneE164, texto: evento.texto, env: deps.env ?? process.env }); } catch { /* ignorado */ }
+    try { await (deps.palavraDeSaida ?? processarPalavraDeSaida)({ telefoneE164: evento.telefoneE164, texto: evento.texto, recebidoEm: evento.recebidoEm, env: deps.env ?? process.env }); } catch { /* ignorado */ }
   }
   return { destino: DESTINO.INBOX, contatoId: contato.contatoId, inserido: r.inserido };
 }

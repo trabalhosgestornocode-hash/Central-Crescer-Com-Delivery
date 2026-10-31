@@ -32,6 +32,21 @@ const exigirConvitesHabilitados = (deps) => {
   if (env.NOTIFICACOES_CONVITES_HABILITADOS === "true" || capacidades(env).simulado) return;
   throw new ApiError(503, "A criação de convites ainda não está habilitada neste ambiente.", { codigo: "CONVITES_DESLIGADOS" });
 };
+// PILOTO por unidade (fail-closed): enquanto NOTIFICACOES_CONVITES_EXIGE_PILOTO não for "false", só se convida para unidades listadas na chave
+// convites_unidades_piloto (a mesma fonte do gatilho do banco, migration 139). Chave ausente = piloto não configurado = ninguém.
+async function exigirUnidadeDoPiloto(unidades, deps) {
+  const env = deps?.env ?? process.env;
+  const exige = String(env.NOTIFICACOES_CONVITES_EXIGE_PILOTO ?? "true").trim().toLowerCase() !== "false";
+  const piloto = await R(deps).unidadesDoPiloto(deps);
+  if (piloto === null) {
+    if (exige) throw new ApiError(403, "O piloto de convites ainda não foi configurado para nenhuma unidade.", { codigo: "PILOTO_NAO_CONFIGURADO" });
+    return;
+  }
+  const liberadas = new Set(piloto);
+  if (unidades.some((u) => !liberadas.has(String(u).toLowerCase()))) {
+    throw new ApiError(403, "Esta unidade ainda não faz parte do piloto de convites.", { codigo: "UNIDADE_FORA_DO_PILOTO" });
+  }
+}
 const quem = (req) => ({ contaId: req?.user?.id ?? null, perfilId: req?.perfil?.id ?? req?.acesso?.perfilId ?? null, nome: req?.perfil?.nome ?? null, email: req?.user?.email ?? null });
 
 async function registrar(req, acao, { organizacaoId, unidadeId = null, entidadeId = null, detalhes = {} }, deps = {}) {
@@ -167,6 +182,7 @@ export async function criarConvite({ req, escopo, corpo, baseUrl = "", deps = {}
   for (const u of unidades) if (!unidadeNoAlcance(escopo, u)) throw ApiError.forbidden("Você só pode convidar para a sua unidade.");
   // Origem confiável dos links: depois das validações puras (permissão/alcance/formato) e ANTES de qualquer leitura ou gravação.
   const base = typeof baseUrl === "function" ? baseUrl() : baseUrl;
+  await exigirUnidadeDoPiloto(unidades, deps);
   const categorias = [...new Set(Array.isArray(corpo?.categorias) ? corpo.categorias.map(String) : [])];
   const disponiveis = new Set((await r.listarCategorias(deps)).filter((c) => c.estado === "ATIVA" || c.estado === "SIMULACAO").map((c) => c.codigo));
   if (!categorias.length || categorias.some((c) => !disponiveis.has(c))) throw ApiError.badRequest("Escolha categorias disponíveis.");

@@ -201,3 +201,33 @@ export async function estadoSelecao(deps = {}) {
   if (error) falha(error, "seleção");
   return data?.valor ?? { ligada: false };
 }
+
+/** Unidades do piloto de convites (chave convites_unidades_piloto de comunicacao_configuracoes). null = chave ausente (sem piloto). Formato inválido = [] (fail-closed). */
+export async function unidadesDoPiloto(deps = {}) {
+  const { data, error } = await db(deps).from("comunicacao_configuracoes").select("valor").eq("chave", "convites_unidades_piloto").maybeSingle();
+  if (error) falha(error, "piloto de convites");
+  if (!data) return null;
+  const v = data.valor;
+  if (!Array.isArray(v)) return [];
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return v.every((x) => typeof x === "string" && UUID.test(x)) ? v.map((x) => x.toLowerCase()) : [];
+}
+
+/** O número já saiu de tudo? (todos os contatos de WhatsApp em opt_out e nenhuma categoria/escopo habilitado) — evita repetir a revogação e a confirmação. */
+export async function jaSaiuDeTudo(contatosEmpresaIds, deps = {}) {
+  if (!contatosEmpresaIds.length) return true;
+  const ce = await db(deps).from("comunicacao_contatos_empresa").select("id, contato_whatsapp_id").in("id", contatosEmpresaIds);
+  if (ce.error) falha(ce.error, "contatos da saída");
+  const linhas = ce.data ?? [];
+  if (linhas.length !== contatosEmpresaIds.length || linhas.some((x) => !x.contato_whatsapp_id)) return false;   // registro sem contato de WhatsApp: ainda há o que revogar
+  const wa = [...new Set(linhas.map((x) => x.contato_whatsapp_id))];
+  const optOut = await db(deps).from("contatos_whatsapp").select("id, opt_out").in("id", wa);
+  if (optOut.error) falha(optOut.error, "opt-out da saída");
+  if ((optOut.data ?? []).length !== wa.length || (optOut.data ?? []).some((x) => x.opt_out !== true)) return false;
+  const cat = await db(deps).from("comunicacao_destinatario_categorias").select("contato_empresa_id").in("contato_empresa_id", contatosEmpresaIds).eq("habilitado", true).limit(1);
+  if (cat.error) falha(cat.error, "categorias da saída");
+  if ((cat.data ?? []).length) return false;
+  const esc = await db(deps).from("comunicacao_destinatario_escopos").select("contato_empresa_id").in("contato_empresa_id", contatosEmpresaIds).eq("habilitado", true).limit(1);
+  if (esc.error) falha(esc.error, "escopos da saída");
+  return !(esc.data ?? []).length;
+}

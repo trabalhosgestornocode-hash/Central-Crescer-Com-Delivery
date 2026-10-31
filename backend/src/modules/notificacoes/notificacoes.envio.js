@@ -18,7 +18,7 @@ import { decifrarTelefone } from "./notificacoes.segredos.js";
 import { ambienteDeDesenvolvimento } from "../../shared/urlPublica.js";
 import { logNotificacoes } from "./notificacoes.basico.js";
 import { configuracaoOficial, enviarCodigoOficial } from "./notificacoes.whatsappOficial.js";
-import { enviarOtpBaileys } from "../comunicacao/comunicacao.otp.js";
+import { enviarOtpBaileys, enviarConfirmacaoSaidaBaileys } from "../comunicacao/comunicacao.otp.js";
 
 const caixa = [];   // [{ desafioId, telefoneHmac, codigo, em }] — só simulação; nunca exposta pela API
 
@@ -75,3 +75,17 @@ export function _ultimoCodigoSimulado({ desafioId, telefoneHmac } = {}) {
   return null;
 }
 export function _limparCaixaSimulada() { caixa.length = 0; }
+
+/**
+ * Confirmação ao titular depois do SAIR. DESLIGADA por padrão: exige NOTIFICACOES_SAIR_CONFIRMACAO=true E o transporte baileys autorizado
+ * (mesmas chaves e mesma lista obrigatória do OTP). Nunca lança; só motivo de vocabulário fixo; sem número no log.
+ * @returns {Promise<{enviada: boolean, motivo: string|null}>}
+ */
+export async function enviarConfirmacaoSaida({ telefoneE164, chave }, { env = process.env, enviar = enviarConfirmacaoSaidaBaileys } = {}) {
+  if (String(env.NOTIFICACOES_SAIR_CONFIRMACAO ?? "") !== "true") return { enviada: false, motivo: "CONFIRMACAO_DESLIGADA" };
+  if (modoTransporte(env) !== "baileys") return { enviada: false, motivo: "TRANSPORTE_DESLIGADO" };
+  let r;
+  try { r = await enviar({ telefoneE164, chave }, { env }); } catch { r = { enviada: false, motivo: "ERRO_INESPERADO" }; }
+  logNotificacoes(r.enviada ? "info" : "warn", r.enviada ? "saida.confirmacao_enviada" : "saida.confirmacao_nao_enviada", { motivo: r.motivo ?? null });
+  return r;
+}

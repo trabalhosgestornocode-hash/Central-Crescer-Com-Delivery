@@ -49,6 +49,7 @@ function montar() {
     obterDesafio: async (id) => { const d = st.desafios.find((x) => x.id === id); return d ? { id: d.id, tipo: d.tipo, telefone_hmac: d.telefoneHmac, consumido_em: d.consumido_em ?? null } : null; },
     listarDestinatarios: async () => ({ destinatarios: st.destinatarios, categoriasLegadas: [{ contato_empresa_id: "ce-1", categoria: "pendencia_d1", habilitado: true }], escopos: [], contatos: [] }),
     revogar: async (p) => { st.revogacoes.push(p); return { resultado: "REVOGADO", mensagens_canceladas: 2 }; },
+    jaSaiuDeTudo: async () => false,
   };
   return { st, repo, token };
 }
@@ -146,13 +147,13 @@ describe("gestão pelo titular (sem conta): anti-enumeração e revogação", ()
 
 describe("palavra de saída no WhatsApp", () => {
   test("reconhece SAIR/PARAR/STOP (com acento, pontuação, minúsculas); ignora frases", () => {
-    for (const t of ["SAIR", "sair", "Sair.", "PARAR!", "stop", "Descadastrar"]) assert.equal(titular.ehPalavraDeSaida(t), true, t);
-    for (const t of ["vou sair mais cedo", "ok", "", null]) assert.equal(titular.ehPalavraDeSaida(t), false, String(t));
+    for (const t of ["SAIR", "sair", "Sair.", "PARAR!", "stop", "Descadastrar", "Sáir "]) assert.equal(titular.ehPalavraDeSaida(t), true, t);
+    for (const t of ["vou sair mais cedo", "não quero sair", "cancelar", "ok", "", null]) assert.equal(titular.ehPalavraDeSaida(t), false, String(t));
   });
   test("desligada por padrão; ligada, revoga tudo do número (origem palavra_chave_inbound)", async () => {
     const { repo, st } = montar();
     assert.equal((await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env: {}, deps: { repo } })).aplicado, false);
-    const r = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env: { NOTIFICACOES_PALAVRA_CHAVE_SAIR: "true" }, deps: { repo } });
+    const r = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", env: { NOTIFICACOES_PALAVRA_CHAVE_SAIR: "true" }, deps: { repo, auditar: async () => {} } });
     assert.equal(r.aplicado, true);
     assert.deepEqual([st.revogacoes[0].origem, st.revogacoes[0].sairDeTudo], ["palavra_chave_inbound", true]);
   });
