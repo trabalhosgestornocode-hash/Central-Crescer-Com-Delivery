@@ -104,7 +104,8 @@ export function montarCentralNotificacoes(root, ctx) {
     const itens = [];
     if (r.disponivel === false) itens.push(["warn", "A Central ainda não está habilitada neste ambiente: dá para consultar, mas convites e revogações registradas ficam indisponíveis."]);
     if (r.transporte?.simulado) itens.push(["info", "Modo de simulação: os códigos de verificação NÃO são enviados por WhatsApp. Nenhum número convidado aqui está verificado de verdade."]);
-    else if (r.transporte && !r.transporte.envioReal) itens.push(["info", "O envio de códigos de verificação ainda está desligado: convites podem ser criados, mas o titular não recebe o código."]);
+    // Central indisponível: o aviso acima já diz que convites não funcionam — não repetir uma frase que o contradiz.
+    else if (r.disponivel !== false && r.transporte && !r.transporte.envioReal) itens.push(["info", "O envio de códigos de verificação ainda está desligado: convites podem ser criados, mas o titular não recebe o código."]);
     itens.push(["info", r.selecaoPorEscopo
       ? "Seleção por unidade ATIVA: cada destinatário recebe o D-1 só das unidades vinculadas."
       : "Até a ativação da seleção por unidade, quem já recebia o Dashboard iFood D-1 continua recebendo de todas as unidades da empresa, como antes."]);

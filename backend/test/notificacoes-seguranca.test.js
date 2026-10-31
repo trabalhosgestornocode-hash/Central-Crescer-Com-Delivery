@@ -184,3 +184,19 @@ describe("arquitetura", () => {
     assert.doesNotMatch(titular, /return\s*\{[^}]*\bcodigo\b\s*[,}]/, "nenhum retorno com o código");
   });
 });
+
+describe("fail-closed: NODE_ENV ausente conta como produção", () => {
+  test("sem NODE_ENV a simulação de OTP continua DESLIGADA, mesmo com ambiente isolado declarado", () => {
+    assert.equal(envio.modoTransporte({ NOTIFICACOES_OTP_TRANSPORTE: "simulacao", NOTIFICACOES_AMBIENTE_ISOLADO: "true" }), "desligado");
+    assert.equal(envio.modoTransporte({ NOTIFICACOES_OTP_TRANSPORTE: "simulacao", NOTIFICACOES_AMBIENTE_ISOLADO: "true", NODE_ENV: "staging" }), "desligado");
+    assert.equal(envio.modoTransporte({ NOTIFICACOES_OTP_TRANSPORTE: "simulacao", NOTIFICACOES_AMBIENTE_ISOLADO: "true", NODE_ENV: "test" }), "simulacao");
+  });
+  test("sem NODE_ENV os links de convite NÃO usam o Host da requisição (503 sem APP_URL_PUBLICA)", async () => {
+    const { origemParaLinks } = await import("../src/shared/urlPublica.js");
+    const req = { protocol: "https", get: () => "atacante.exemplo" };
+    assert.throws(() => origemParaLinks({ env: {}, req }), (e) => e.statusCode === 503);
+    assert.throws(() => origemParaLinks({ env: { NODE_ENV: "staging" }, req }), (e) => e.statusCode === 503);
+    assert.equal(origemParaLinks({ env: { NODE_ENV: "development" }, req }), "https://atacante.exemplo");   // só dev explícito
+    assert.equal(origemParaLinks({ env: { APP_URL_PUBLICA: "https://app.exemplo.com" }, req }), "https://app.exemplo.com");
+  });
+});

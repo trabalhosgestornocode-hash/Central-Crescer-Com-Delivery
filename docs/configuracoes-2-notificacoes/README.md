@@ -23,3 +23,5 @@ Missão **somente de auditoria e planejamento** (30/10/2026): nenhum código fun
 | [17 — Pré-voo de produção e GO/NO-GO](17-prevoo-producao-e-go.md) | Pré-voo só leitura de produção, linha de base do D-1, pacote 132–136 (hashes), janela, procedimento, recuperação A/B/C, riscos e recomendação |
 | [18 — Reconciliação final e matriz GO/NO-GO](18-reconciliacao-final-e-matriz-go-nogo.md) | Estado do repositório, pacote 132–136 e hashes, backup do painel, Render, janela, comparação antes/depois, recuperação e condições de interrupção |
 | [19 — Janela 01/11 (runbook)](19-janela-01-11-runbook.md) | Condições obrigatórias × estado, cronograma 07:00–07:45 BRT, interrupção e recuperação; Render confirmado no painel |
+| [20 — Matriz final pós-implantação](20-matriz-final-pos-implantacao.md) | PASS/BLOQUEADO/PENDENTE por funcionalidade, correções e regressão |
+| [21 — SMTP e WhatsApp oficial](21-smtp-convites-e-whatsapp-oficial.md) | Preparação dos convites por e-mail (template pt-BR, plano de homologação) e do OTP oficial (requisitos, custos a conferir) |

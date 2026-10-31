@@ -153,6 +153,18 @@ describe("Central de Notificações — tela", () => {
     assert.match(h, /data-novo-convite/);
   });
 
+  test("Central indisponível (sem segredo): os avisos não se contradizem", async () => {
+    entrar(["notificacoes.ver", "notificacoes.gerenciar"]);
+    RESPOSTAS["/api/v1/notificacoes/resumo"] = { data: { ...RESPOSTAS["/api/v1/notificacoes/resumo"].data, disponivel: false, transporte: { modo: "desligado", simulado: false, envioReal: false } } };
+    try {
+      const root = elementoFake();
+      montarCentralNotificacoes(root, { confirmarDialogo: async () => false, carregarProtegido: (fn) => fn() });
+      await esperar(); await esperar();
+      assert.match(root.innerHTML, /ainda não está habilitada/);
+      assert.doesNotMatch(root.innerHTML, /convites podem ser criados/);
+    } finally { RESPOSTAS["/api/v1/notificacoes/resumo"].data.disponivel = true; }
+  });
+
   test("sem permissão de gestão: nada de convidar e sem aba de auditoria", async () => {
     entrar(["notificacoes.ver"]);
     const root = elementoFake();
