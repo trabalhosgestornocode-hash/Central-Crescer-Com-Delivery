@@ -23,3 +23,20 @@ Escopo: o D-1 do Dashboard iFood (pendências de lançamento) **não é tocado**
 2. **Agendamento**: ligar o agendador ao worker com filtro de módulo (travas hoje por duas variáveis de ambiente) e disparar o semanal na segunda.
 3. **Transporte real (Baileys)**: reutilizar `whatsapp.service#enviarTexto` pela Central (kill switch + conta confirmada, como o OTP), com cota por categoria (135), allowlist e idempotência — sem passar pela fila do D-1.
 4. **Fuso por unidade**, **termo v2 aprovado** (consentimento real), **ativar as categorias** e **M3** (escopo por unidade para legados): continuam desligados.
+
+## Correção de critério: "unidade ativa" = integração iFood REAL (implementado)
+O módulo Checklist habilitado é só permissão de acesso. Em produção (somente leitura): **8 unidades têm o módulo; só 1 tem conexão de pedidos ativa e pedidos reais projetados**. O critério anterior selecionaria 8.
+
+Como o sistema já identifica (reaproveitado, sem duplicar): conexão de PEDIDOS (`ifood_conexoes`, finalidade `pedidos_producao`; conexão só de Financial não conta) → credencial `order` → lease do recebimento renovado há ≤ 120 s e último evento da loja (`derivarEstadoIntegracao`, do Checklist). Vínculo pedido↔unidade: `operacional_pedidos`/`ifood_pedidos` por organização + unidade (trigger de tenant); pedidos de teste ficam fora. Disponibilidade dos indicadores: status e `cobertura` do fechamento (`semCobertura`, `semSinalDeRecebimento`, detalhes, projeção).
+
+Motivos distintos (`notificacoes.relatorios.js`), na ordem em que são avaliados:
+| Motivo | Quando |
+|---|---|
+| `SEM_MODULO_CHECKLIST_NA_UNIDADE` | módulo inativo na empresa ou na unidade |
+| `INTEGRACAO_NAO_ATIVADA` | sem loja vinculada, sem credencial Order, ou recebimento nunca ligado |
+| `INTEGRACAO_DESCONECTADA` | recebimento parado (lease vencido) ou autorização expirada |
+| `INTEGRACAO_NAO_VERIFICADA` | falha ao ler (fail-closed) |
+| `DADOS_INSUFICIENTES` | fechamento ausente/PRELIMINAR/INCOMPLETO, sem sinal de recebimento ou cobertura; semana com < 5 de 7 dias válidos |
+| `SEM_PEDIDOS_NO_PERIODO` | integração viva, dado válido, mas 0 pedidos reais no dia/semana |
+
+`notificacoes.relatorios.integracao.js`: `lerIntegracaoDaUnidade` e `unidadesComIntegracaoViva` (funil módulo → integração viva). 21 testes (integração ao vivo/parada/reautorização/só Financial/falha de leitura, funil com 4 unidades, diário, semanal). Nada envia, nada grava, D-1 intocado.

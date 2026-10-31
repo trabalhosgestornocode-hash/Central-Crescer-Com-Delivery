@@ -4,7 +4,10 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { segundaDaSemana, diasDaSemana, ultimaSemanaEncerrada, resumirSemana, gerarMensagemSemanal, validarMensagemSemanal, fechamentosValidosDaSemana, STATUS_SEMANA } from "../src/modules/checklist-operacional/checklistOperacional.semanal.js";
-import { filtrarUnidadesComChecklist, elegibilidadeDiaria, planejarResumoSemanal, destinatariosAutorizados, MOTIVO, CATEGORIA_SEMANAL } from "../src/modules/notificacoes/notificacoes.relatorios.js";
+import { filtrarUnidadesComChecklist, elegibilidadeDiaria, planejarResumoSemanal, destinatariosAutorizados, motivoDeIntegracao, MOTIVO, CATEGORIA_SEMANAL } from "../src/modules/notificacoes/notificacoes.relatorios.js";
+import { lerIntegracaoDaUnidade, unidadesComIntegracaoViva } from "../src/modules/notificacoes/notificacoes.relatorios.integracao.js";
+
+const VIVA = { estado: "ao_vivo", motivo: null };
 
 const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SEG = "2026-10-26";   // segunda-feira
@@ -82,12 +85,29 @@ describe("elegibilidade: só unidades com Checklist Operacional ativo e dados v�
     assert.deepEqual(r.elegiveis.map((u) => u.unidadeId), ["u1"]);
     assert.deepEqual(r.recusadas.map((u) => [u.unidadeId, u.motivo]), [["u2", MOTIVO.SEM_MODULO], ["u3", MOTIVO.MODULOS_INDISPONIVEIS]]);
   });
-  test("diário: exige módulo E fechamento CONSOLIDADO/REVISADO", () => {
-    const f = dia(SEG);
-    assert.equal(elegibilidadeDiaria({ modulosEfetivos: ["checklist_operacional"], fechamento: f }).elegivel, true);
-    assert.equal(elegibilidadeDiaria({ modulosEfetivos: ["ifood"], fechamento: f }).motivo, MOTIVO.SEM_MODULO);
-    for (const status of ["PRELIMINAR", "INCOMPLETO"]) assert.equal(elegibilidadeDiaria({ modulosEfetivos: ["checklist_operacional"], fechamento: { ...f, status } }).motivo, MOTIVO.SEM_FECHAMENTO_VALIDO);
-    assert.equal(elegibilidadeDiaria({ modulosEfetivos: ["checklist_operacional"], fechamento: null }).elegivel, false);
+  test("diário: exige módulo, integração AO VIVO, fechamento CONSOLIDADO/REVISADO e pedidos reais", () => {
+    const f = dia(SEG); const M = ["checklist_operacional"];
+    assert.equal(elegibilidadeDiaria({ modulosEfetivos: M, integracao: VIVA, fechamento: f }).elegivel, true);
+    assert.equal(elegibilidadeDiaria({ modulosEfetivos: ["ifood"], integracao: VIVA, fechamento: f }).motivo, MOTIVO.SEM_MODULO);
+    for (const status of ["PRELIMINAR", "INCOMPLETO"]) assert.equal(elegibilidadeDiaria({ modulosEfetivos: M, integracao: VIVA, fechamento: { ...f, status } }).motivo, MOTIVO.DADOS_INSUFICIENTES);
+    assert.equal(elegibilidadeDiaria({ modulosEfetivos: M, integracao: VIVA, fechamento: null }).motivo, MOTIVO.DADOS_INSUFICIENTES);
+  });
+  test("o módulo habilitado NÃO basta: integração desconectada, não ativada ou não verificada bloqueia, com motivos DISTINTOS", () => {
+    const f = dia(SEG); const M = ["checklist_operacional"];
+    const motivo = (integracao) => elegibilidadeDiaria({ modulosEfetivos: M, integracao, fechamento: f }).motivo;
+    assert.equal(motivo({ estado: "nao_ativada", motivo: "sem_loja_vinculada" }), MOTIVO.INTEGRACAO_NAO_ATIVADA);
+    assert.equal(motivo({ estado: "nao_ativada", motivo: "sem_credencial_order" }), MOTIVO.INTEGRACAO_NAO_ATIVADA);
+    assert.equal(motivo({ estado: "desatualizado", motivo: "recebimento_parado" }), MOTIVO.INTEGRACAO_DESCONECTADA);
+    assert.equal(motivo({ estado: "desatualizado", motivo: "reautorizacao_necessaria" }), MOTIVO.INTEGRACAO_DESCONECTADA);
+    assert.equal(motivo(undefined), MOTIVO.INTEGRACAO_NAO_VERIFICADA); assert.equal(motivo({ estado: "xyz" }), MOTIVO.INTEGRACAO_NAO_VERIFICADA);
+    assert.equal(motivoDeIntegracao(VIVA), null);
+  });
+  test("integração viva mas SEM PEDIDOS no dia (com sinal de recebimento) é 'sem pedidos' — diferente de dados insuficientes", () => {
+    const zero = dia(SEG); zero.indicadores.pedidos = { recebidos: 0, concluidosNoDia: 0, canceladosNoDia: 0 };
+    assert.equal(elegibilidadeDiaria({ modulosEfetivos: ["checklist_operacional"], integracao: VIVA, fechamento: zero }).motivo, MOTIVO.SEM_PEDIDOS);
+    const semSinal = { ...zero, cobertura: { semSinalDeRecebimento: true } };
+    assert.equal(elegibilidadeDiaria({ modulosEfetivos: ["checklist_operacional"], integracao: VIVA, fechamento: semSinal }).motivo, MOTIVO.DADOS_INSUFICIENTES);
+    assert.equal(elegibilidadeDiaria({ modulosEfetivos: ["checklist_operacional"], integracao: VIVA, fechamento: { ...dia(SEG), cobertura: { semCobertura: true } } }).motivo, MOTIVO.DADOS_INSUFICIENTES);
   });
 });
 
@@ -100,30 +120,74 @@ describe("destinatários e periodicidade do resumo semanal", () => {
     assert.deepEqual(destinatariosAutorizados({ categoria: CATEGORIA_SEMANAL, unidadeId: "u1", dados, ledger }).map((e) => e.contato_empresa_id), ["d1"]);
   });
   test("plano da semana: um item por destinatário, idempotente por semana+versão, BLOQUEADO sem cota; nada é enviado nem gravado", () => {
-    const p = planejarResumoSemanal({ organizacaoId: "o1", unidadeId: "u1", modulosEfetivos: ["checklist_operacional"], versoes: semana(7), hojeIso: "2026-11-02", dados, ledger, cotas: { d1: { disponivel: true } } });
+    const p = planejarResumoSemanal({ organizacaoId: "o1", unidadeId: "u1", modulosEfetivos: ["checklist_operacional"], integracao: VIVA, versoes: semana(7), hojeIso: "2026-11-02", dados, ledger, cotas: { d1: { disponivel: true } } });
     assert.equal(p.elegivel, true); assert.equal(p.linhas.length, 1);
     assert.deepEqual([p.linhas[0].status, p.linhas[0].transporte], ["SIMULATED", "noop"]);
     assert.match(p.linhas[0].chave_idempotencia, /^wa:sem:u1:2026-10-26:d1:[0-9a-f]{32}$/);
-    const sem = planejarResumoSemanal({ organizacaoId: "o1", unidadeId: "u1", modulosEfetivos: ["checklist_operacional"], versoes: semana(7), hojeIso: "2026-11-02", dados, ledger, cotas: {} });
+    const sem = planejarResumoSemanal({ organizacaoId: "o1", unidadeId: "u1", modulosEfetivos: ["checklist_operacional"], integracao: VIVA, versoes: semana(7), hojeIso: "2026-11-02", dados, ledger, cotas: {} });
     assert.equal(sem.linhas[0].status, "BLOCKED");
   });
   test("recusas: sem módulo, semana incompleta, sem destinatário", () => {
-    const base = { organizacaoId: "o1", unidadeId: "u1", versoes: semana(7), hojeIso: "2026-11-02", dados, ledger };
+    const base = { organizacaoId: "o1", unidadeId: "u1", integracao: VIVA, versoes: semana(7), hojeIso: "2026-11-02", dados, ledger };
     assert.equal(planejarResumoSemanal({ ...base, modulosEfetivos: ["ifood"] }).motivo, MOTIVO.SEM_MODULO);
-    assert.equal(planejarResumoSemanal({ ...base, modulosEfetivos: ["checklist_operacional"], versoes: semana(3) }).motivo, MOTIVO.SEMANA_INCOMPLETA);
+    assert.equal(planejarResumoSemanal({ ...base, modulosEfetivos: ["checklist_operacional"], versoes: semana(3) }).motivo, MOTIVO.DADOS_INSUFICIENTES);
+    assert.equal(planejarResumoSemanal({ ...base, modulosEfetivos: ["checklist_operacional"], integracao: { estado: "desatualizado" } }).motivo, MOTIVO.INTEGRACAO_DESCONECTADA);
+    assert.equal(planejarResumoSemanal({ ...base, modulosEfetivos: ["checklist_operacional"], integracao: undefined }).motivo, MOTIVO.INTEGRACAO_NAO_VERIFICADA);
+    const zeros = semana(7).map((f) => ({ ...f, indicadores: { ...f.indicadores, pedidos: { recebidos: 0, concluidosNoDia: 0, canceladosNoDia: 0 } } }));
+    assert.equal(planejarResumoSemanal({ ...base, modulosEfetivos: ["checklist_operacional"], versoes: zeros }).motivo, MOTIVO.SEM_PEDIDOS);
     assert.equal(planejarResumoSemanal({ ...base, modulosEfetivos: ["checklist_operacional"], unidadeId: "u7" }).motivo, MOTIVO.SEM_DESTINATARIO);
+  });
+});
+
+describe("leitura da integração real (conexão de pedidos, credencial Order, recebimento)", () => {
+  const AGORA = new Date("2026-11-02T12:00:00Z");
+  const vivo = { disponivel: true, ultimoEvento: "2026-11-02T11:59:50Z", lease: { atualizadoEm: "2026-11-02T11:59:40Z", leaseAte: "2026-11-02T12:00:30Z" } };
+  const repoIfood = (over = {}) => ({
+    obterConexaoViva: async () => ({ id: "c1", merchant_id: "m1", status: "ativa" }),
+    listarCredenciaisDaConexao: async () => [{ app_type: "order", status: "ativa" }],
+    obterObservabilidadeOrder: async () => vivo, listarConexoesVivas: async () => [], ...over,
+  });
+  const ler = (over) => lerIntegracaoDaUnidade({ organizacaoId: "o1", unidadeId: "u1", agora: () => AGORA, deps: { ifoodRepo: repoIfood(over) } });
+  test("loja vinculada + credencial Order + lease renovado há pouco = ao_vivo", async () => { assert.equal((await ler()).estado, "ao_vivo"); });
+  test("sem loja vinculada, sem credencial Order, só conexão Financial: nao_ativada", async () => {
+    assert.equal((await ler({ obterConexaoViva: async () => null })).motivo, "sem_loja_vinculada");
+    assert.equal((await ler({ listarCredenciaisDaConexao: async () => [] })).motivo, "sem_credencial_order");
+    const so = await ler({ obterConexaoViva: async () => null, listarConexoesVivas: async () => [{ id: "fin" }] });
+    assert.deepEqual([so.estado, so.motivo], ["nao_ativada", "sem_credencial_order"]);
+  });
+  test("recebimento parado (lease vencido) ou reautorização: desatualizado; nunca ao_vivo", async () => {
+    const parado = await ler({ obterObservabilidadeOrder: async () => ({ ...vivo, lease: { atualizadoEm: "2026-11-02T11:50:00Z", leaseAte: "2026-11-02T11:51:00Z" } }) });
+    assert.deepEqual([parado.estado, parado.motivo], ["desatualizado", "recebimento_parado"]);
+    const reauth = await ler({ obterConexaoViva: async () => ({ id: "c1", merchant_id: "m1", status: "reauth_required" }) });
+    assert.equal(reauth.estado, "desatualizado");
+  });
+  test("falha ao ler o banco = null (não verificada, fail-closed) e a unidade é recusada com esse motivo", async () => {
+    assert.equal(await ler({ obterConexaoViva: async () => { throw new Error("x"); } }), null);
+    const r = await unidadesComIntegracaoViva([{ organizacaoId: "o1", unidadeId: "u1" }], { agora: () => AGORA, deps: { modulosDe: async () => ["checklist_operacional"], ifoodRepo: repoIfood({ obterConexaoViva: async () => { throw new Error("x"); } }) } });
+    assert.deepEqual(r.recusadas.map((u) => u.motivo), [MOTIVO.INTEGRACAO_NAO_VERIFICADA]);
+  });
+  test("funil: módulo + integração viva; cada recusa com motivo próprio", async () => {
+    const un = [{ organizacaoId: "o1", unidadeId: "uOK" }, { organizacaoId: "o1", unidadeId: "uSemModulo" }, { organizacaoId: "o1", unidadeId: "uSemLoja" }, { organizacaoId: "o1", unidadeId: "uParada" }];
+    const modulosDe = async (_o, u) => (u === "uSemModulo" ? ["ifood"] : ["checklist_operacional"]);
+    const ifoodRepo = repoIfood({
+      obterConexaoViva: async ({ unidadeId }) => (unidadeId === "uSemLoja" ? null : { id: "c", merchant_id: "m", status: "ativa" }),
+      obterObservabilidadeOrder: async ({ unidadeId }) => (unidadeId === "uParada" ? { ...vivo, lease: { atualizadoEm: "2026-11-02T10:00:00Z", leaseAte: "2026-11-02T10:01:00Z" } } : vivo),
+    });
+    const r = await unidadesComIntegracaoViva(un, { agora: () => AGORA, deps: { modulosDe, ifoodRepo } });
+    assert.deepEqual(r.elegiveis.map((u) => u.unidadeId), ["uOK"]);
+    assert.deepEqual(Object.fromEntries(r.recusadas.map((u) => [u.unidadeId, u.motivo])), { uSemModulo: MOTIVO.SEM_MODULO, uSemLoja: MOTIVO.INTEGRACAO_NAO_ATIVADA, uParada: MOTIVO.INTEGRACAO_DESCONECTADA });
   });
 });
 
 describe("preservação do D-1 do Dashboard iFood e pureza", () => {
   test("os módulos novos não importam banco, provider, Baileys, fila do D-1 nem cotas", () => {
-    for (const f of ["src/modules/checklist-operacional/checklistOperacional.semanal.js", "src/modules/notificacoes/notificacoes.relatorios.js"]) {
+    for (const f of ["src/modules/checklist-operacional/checklistOperacional.semanal.js", "src/modules/notificacoes/notificacoes.relatorios.js", "src/modules/notificacoes/notificacoes.relatorios.integracao.js"]) {
       const src = readFileSync(path.join(RAIZ, f), "utf8");
       assert.doesNotMatch(src, /^import .*(supabase|whatsapp\.service|provider|baileys|fila\.repo|alertas\.service|comunicacao\.policy)/im, f);
     }
   });
   test("a categoria do D-1 (dashboard_ifood_d1 / pendencia_d1) não aparece nos módulos novos", () => {
-    for (const f of ["src/modules/checklist-operacional/checklistOperacional.semanal.js", "src/modules/notificacoes/notificacoes.relatorios.js"]) {
+    for (const f of ["src/modules/checklist-operacional/checklistOperacional.semanal.js", "src/modules/notificacoes/notificacoes.relatorios.js", "src/modules/notificacoes/notificacoes.relatorios.integracao.js"]) {
       assert.doesNotMatch(readFileSync(path.join(RAIZ, f), "utf8"), /pendencia_d1|dashboard_ifood_d1/, f);
     }
   });
