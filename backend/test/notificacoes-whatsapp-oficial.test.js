@@ -134,3 +134,34 @@ describe("webhook: assinatura, handshake e idempotência", () => {
     assert.deepEqual(ofi.extrairStatus(null), []);
   });
 });
+
+describe("consentimento real exige termo aprovado", () => {
+  test("termo rascunho (ou ausente) fora da simulação → 409 TERMO_NAO_APROVADO e nada é gravado", async () => {
+    const tit = await import("../src/modules/notificacoes/notificacoes.titular.service.js");
+    const token = "a".repeat(43);
+    for (const termo of [{ versao: 1, rascunho: true }, null]) {
+      let gravou = false;
+      const convite = { id: "c1", organizacao_id: "o1", status: "VERIFICADO", expira_em: new Date(Date.now() + 3600e3).toISOString(), unidades_pretendidas: ["u1"] };
+      const repo = { obterConvitePorToken: async () => convite, termoVigente: async () => termo, consentir: async () => { gravou = true; return {}; } };
+      await assert.rejects(tit.consentirConvite({ token, desafio: "d", categorias: [], termoVersao: 1, ip: "1.1.1.1", deps: { env: OFICIAL, repo } }),
+        (e) => e.statusCode === 409 && JSON.stringify(e).includes("TERMO_NAO_APROVADO"));
+      assert.equal(gravou, false);
+    }
+  });
+});
+
+describe("criar convites: desligado por padrão, mesmo com o segredo mestre configurado", () => {
+  test("sem NOTIFICACOES_CONVITES_HABILITADOS (e fora da simulação) → 503 CONVITES_DESLIGADOS antes de qualquer leitura/gravação", async () => {
+    const svc = await import("../src/modules/notificacoes/notificacoes.service.js");
+    const repo = new Proxy({}, { get: () => { throw new Error("o banco não pode ser tocado"); } });
+    for (const env of [{}, { NODE_ENV: "production" }, OFICIAL, { NOTIFICACOES_CONVITES_HABILITADOS: "false" }]) {
+      await assert.rejects(svc.criarConvite({ req: {}, escopo: {}, corpo: {}, baseUrl: "https://x", deps: { repo, env, segredosDisponiveis: () => true } }),
+        (e) => e.statusCode === 503 && JSON.stringify(e).includes("CONVITES_DESLIGADOS"));
+    }
+  });
+  test("a trava não vale para o pedido de revogação (o titular sempre pode sair)", async () => {
+    const svc = await import("../src/modules/notificacoes/notificacoes.service.js");
+    await assert.rejects(svc.registrarPedidoRevogacao({ req: {}, escopo: {}, destinatarioId: "x", corpo: {}, deps: { env: {}, segredosDisponiveis: () => false } }),
+      (e) => !JSON.stringify(e).includes("CONVITES_DESLIGADOS"));
+  });
+});
