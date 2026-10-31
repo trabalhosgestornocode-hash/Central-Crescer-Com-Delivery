@@ -8,6 +8,7 @@
 --      Guarda a mensagem, o motivo e o id do provider. NUNCA guarda telefone (resolvido no envio, a partir do cadastro autorizado).
 --   3. operacional_relatorio_reservar / _finalizar — transições atômicas (advisory lock por destinatário; cota diária própria por
 --      destinatário e categoria; só reserva dentro de [disponivel_em, expira_em)).
+-- As RPCs são SECURITY DEFINER (as mudanças de estado só passam por elas; o service_role não tem UPDATE direto nas tabelas), executáveis só por service_role.
 -- Segurança: RLS ligado sem policy; nenhum grant a anon/authenticated; service_role com o mínimo (+ UPDATE só em organizacao_id,
 -- exigido por remapear_organizacao_em_tabelas_de_unidade na transferência de unidade, como na 130). Aditiva; não altera dados.
 -- Rollback: 141_rollback.sql (apaga resumos e itens da fila: exportar antes).
@@ -81,7 +82,7 @@ create trigger trg_operacional_relatorios_tenant before insert or update on oper
 create or replace function operacional_relatorio_reservar(
   p_id uuid, p_worker text, p_lease_segundos integer, p_inicio_dia timestamptz, p_max_por_destinatario_dia integer default null
 ) returns jsonb
-language plpgsql security invoker set search_path = public as $$
+language plpgsql security definer set search_path = public as $$
 declare m operacional_relatorios_envios; n integer; r operacional_relatorios_envios;
 begin
   select * into m from operacional_relatorios_envios where id = p_id;
@@ -120,7 +121,7 @@ end $$;
 create or replace function operacional_relatorio_finalizar(
   p_id uuid, p_worker text, p_resultado text, p_provider_message_id text default null, p_motivo text default null, p_retry_apos_segundos integer default null
 ) returns jsonb
-language plpgsql security invoker set search_path = public as $$
+language plpgsql security definer set search_path = public as $$
 declare r operacional_relatorios_envios;
 begin
   if p_resultado not in ('ENVIADO', 'FALHOU', 'INCERTO', 'BLOQUEADO', 'RETRY') then return jsonb_build_object('resultado', 'RESULTADO_INVALIDO'); end if;
@@ -152,6 +153,9 @@ begin
     end if;
   end loop;
   if exists (select 1 from pg_roles where rolname = 'service_role') then
+    -- o Supabase concede ALL ao service_role por padrão em tabelas novas: tira tudo e devolve só o necessário (fila somente-inclusão; mudanças só pelas RPCs)
+    revoke all on table operacional_resumos_semanais from service_role;
+    revoke all on table operacional_relatorios_envios from service_role;
     grant select, insert on table operacional_resumos_semanais to service_role;
     grant update (organizacao_id) on table operacional_resumos_semanais to service_role;
     grant select, insert on table operacional_relatorios_envios to service_role;
