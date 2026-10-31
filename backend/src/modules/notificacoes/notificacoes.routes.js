@@ -33,7 +33,7 @@ notificacoesRouter.get("/historico", verOuGerir, asyncHandler(async (req, res) =
 notificacoesRouter.get("/consentimentos", verOuGerir, asyncHandler(async (req, res) => { semCache(res); res.json({ data: await svc.consentimentos({ escopo: exigirVer(req) }) }); }));
 notificacoesRouter.get("/auditoria", gerir, asyncHandler(async (req, res) => { semCache(res); res.json({ data: await svc.auditoria({ escopo: exigirGerenciar(req) }) }); }));
 notificacoesRouter.post("/convites", gerir, asyncHandler(async (req, res) => {
-  semCache(res); res.status(201).json({ data: await svc.criarConvite({ req, escopo: exigirGerenciar(req), corpo: req.body, baseUrl: origemParaLinks({ req }) }) });   // origem confiável ANTES de gravar
+  semCache(res); res.status(201).json({ data: await svc.criarConvite({ req, escopo: exigirGerenciar(req), corpo: req.body, baseUrl: () => origemParaLinks({ req }) }) });   // origem confiável, resolvida DEPOIS das checagens de permissão e ANTES de gravar
 }));
 notificacoesRouter.post("/convites/:id/cancelar", gerir, asyncHandler(async (req, res) => { res.json({ data: await svc.cancelarConvite({ req, escopo: exigirGerenciar(req), id: req.params.id }) }); }));
 notificacoesRouter.post("/destinatarios/:id/suspensao", gerir, asyncHandler(async (req, res) => {

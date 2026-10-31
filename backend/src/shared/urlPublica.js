@@ -5,6 +5,9 @@
 // responde "indisponível"); fora de produção (desenvolvimento/testes) cai na origem da própria requisição.
 import { ApiError } from "./ApiError.js";
 
+/** Fail-closed: só `development`/`test` EXPLÍCITOS liberam atalhos de desenvolvimento. NODE_ENV ausente conta como produção. */
+export const ambienteDeDesenvolvimento = (env = process.env) => ["development", "test"].includes(String(env.NODE_ENV ?? "").trim());
+
 /** Origem configurada válida (`https://host[:porta]`) ou null. */
 export function origemConfigurada(env = process.env) {
   const bruto = String(env.APP_URL_PUBLICA ?? "").trim();
@@ -12,7 +15,7 @@ export function origemConfigurada(env = process.env) {
   let u;
   try { u = new URL(bruto); } catch { return null; }
   const local = u.hostname === "localhost" || u.hostname === "127.0.0.1";
-  if (u.protocol !== "https:" && !(local && env.NODE_ENV !== "production")) return null;
+  if (u.protocol !== "https:" && !(local && ambienteDeDesenvolvimento(env))) return null;
   if ((u.pathname && u.pathname !== "/") || u.search || u.hash || u.username || u.password) return null;
   return u.origin;
 }
@@ -24,7 +27,7 @@ export function origemConfigurada(env = process.env) {
 export function origemParaLinks({ env = process.env, req = null } = {}) {
   const conf = origemConfigurada(env);
   if (conf) return conf;
-  if (env.NODE_ENV === "production") {
+  if (!ambienteDeDesenvolvimento(env)) {
     throw new ApiError(503, "Links de convite indisponíveis: a URL pública da plataforma não está configurada.", { codigo: "URL_PUBLICA_AUSENTE" });
   }
   return req ? `${req.protocol}://${req.get("host")}` : "";

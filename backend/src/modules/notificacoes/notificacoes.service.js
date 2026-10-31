@@ -157,6 +157,8 @@ export async function criarConvite({ req, escopo, corpo, baseUrl = "", deps = {}
   const unidades = [...new Set(Array.isArray(corpo?.unidades) ? corpo.unidades.map((u) => v.uuid(u, "Unidade")) : [])];
   if (!unidades.length || unidades.length > 50) throw ApiError.badRequest("Escolha ao menos uma unidade.");
   for (const u of unidades) if (!unidadeNoAlcance(escopo, u)) throw ApiError.forbidden("Você só pode convidar para a sua unidade.");
+  // Origem confiável dos links: depois das validações puras (permissão/alcance/formato) e ANTES de qualquer leitura ou gravação.
+  const base = typeof baseUrl === "function" ? baseUrl() : baseUrl;
   const categorias = [...new Set(Array.isArray(corpo?.categorias) ? corpo.categorias.map(String) : [])];
   const disponiveis = new Set((await r.listarCategorias(deps)).filter((c) => c.estado === "ATIVA" || c.estado === "SIMULACAO").map((c) => c.codigo));
   if (!categorias.length || categorias.some((c) => !disponiveis.has(c))) throw ApiError.badRequest("Escolha categorias disponíveis.");
@@ -192,7 +194,7 @@ export async function criarConvite({ req, escopo, corpo, baseUrl = "", deps = {}
   await registrar(req, ACOES.NOTIFICACAO_CONVITE_CRIADO, { organizacaoId: escopo.organizacaoId, unidadeId: unidades[0], entidadeId: linha.id,
     detalhes: { unidades, categorias, telefone_mascarado: mascarar(e164), adesao_de_legado: !!contatoEmpresaId } }, deps);
   // O token vai no FRAGMENTO (#): navegadores não o enviam ao servidor nem a logs de acesso. Mostrado UMA vez ao gestor.
-  return { id: linha.id, link: `${baseUrl}/notificacoes/convite.html#t=${token}`, expiraEm: linha.expira_em, telefoneMascarado: mascarar(e164) };
+  return { id: linha.id, link: `${base}/notificacoes/convite.html#t=${token}`, expiraEm: linha.expira_em, telefoneMascarado: mascarar(e164) };
 }
 
 export async function cancelarConvite({ req, escopo, id, deps = {} }) {

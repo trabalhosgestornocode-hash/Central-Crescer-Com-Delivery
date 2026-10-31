@@ -6,10 +6,11 @@
 //
 // Modos (NOTIFICACOES_OTP_TRANSPORTE):
 //   * "desligado" (padrão, inclusive produção): nenhum código sai — a verificação fica indisponível; nada é verificado.
-//   * "simulacao": só com NOTIFICACOES_AMBIENTE_ISOLADO=true e NODE_ENV !== "production". O código vai para a CAIXA DE
+//   * "simulacao": só com NOTIFICACOES_AMBIENTE_ISOLADO=true e NODE_ENV explícito development/test. O código vai para a CAIXA DE
 //     SIMULAÇÃO em memória, legível apenas por gancho de teste (nunca por log nem pela API). Tudo o que deriva dele é marcado
 //     `simulado` no banco e nunca é considerado verificado para envio real.
 import { decifrarTelefone } from "./notificacoes.segredos.js";
+import { ambienteDeDesenvolvimento } from "../../shared/urlPublica.js";
 import { logNotificacoes } from "./notificacoes.basico.js";
 
 const caixa = [];   // [{ desafioId, telefoneHmac, codigo, em }] — só simulação; nunca exposta pela API
@@ -17,7 +18,8 @@ const caixa = [];   // [{ desafioId, telefoneHmac, codigo, em }] — só simula�
 export function modoTransporte(env = process.env) {
   const pedido = String(env.NOTIFICACOES_OTP_TRANSPORTE ?? "desligado").trim().toLowerCase();
   if (pedido !== "simulacao") return "desligado";
-  if (env.NODE_ENV === "production" || env.NOTIFICACOES_AMBIENTE_ISOLADO !== "true") return "desligado";
+  // fail-closed: NODE_ENV ausente ≠ desenvolvimento (só development/test explícitos + ambiente isolado liberam a simulação)
+  if (!ambienteDeDesenvolvimento(env) || env.NOTIFICACOES_AMBIENTE_ISOLADO !== "true") return "desligado";
   return "simulacao";
 }
 

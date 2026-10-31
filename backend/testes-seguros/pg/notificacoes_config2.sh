@@ -213,6 +213,31 @@ chk "livro-razão: 1 CONCEDIDO com termo, hash e evidência (desafio), marcado S
 chk "novo destinatário NÃO entra no D-1 legado (NAO_VALIDADO; contatos_whatsapp intocado)" "$(sr nt_branch "select e->>'motivo' from jsonb_array_elements(comunicacao_resolver_destinatarios('$ORG_A','dashboard_ifood_d1')) e where e->>'nome'='Nova'")/$(q nt_branch "select count(*) from contatos_whatsapp")" "WHATSAPP_NAO_VALIDADO/4"
 chk "escopo CONVITE_OTP criado como verificação SIMULADA" "$(q nt_branch "select count(*) from comunicacao_destinatario_escopos where origem_autorizacao='CONVITE_OTP' and verificacao_simulada")" "1"
 
+# ---------- 6b. expiração, convite vencido/cancelado e limites ----------
+H3=$(printf '3%.0s' {1..64}); H4=$(printf '4%.0s' {1..64}); IPX=$(printf '7%.0s' {1..64}); CODB=$(printf '8%.0s' {1..64})
+conv() { sr nt_branch "insert into comunicacao_convites (token_hash, organizacao_id, unidades_pretendidas, categorias_pretendidas, nome, telefone_cifrado, telefone_hmac, telefone_mascarado, expira_em, simulado) values ('$1','$ORG_A', array['$(UA 1)']::uuid[], array['pendencia_d1'], 'Exp', 'cifrado', '$2', '+551********11', now() + interval '72 hours', true) returning id" | head -1; }
+CV3=$(conv $(printf '5%.0s' {1..64}) $H3)
+DA=$(sr nt_branch "select comunicacao_desafio_criar('verificacao','$CV3','cifrado','$H3','$COD',null,true,1)->>'desafio_id'")
+# o CHECK exige expira_em > criado_em: o desafio "nasceu" há 6 min e venceu há 1 min
+q nt_branch "update comunicacao_desafios_titular set criado_em = now() - interval '6 minutes', expira_em = now() - interval '90 seconds' where id = '$DA'" | grep -q ERROR && bad "preparo do código vencido falhou"
+chk "código vencido (5 min) → EXPIRADO, mesmo com o código certo" "$(sr nt_branch "select comunicacao_desafio_verificar('$DA','$COD')->>'resultado'")" "EXPIRADO"
+q nt_branch "update comunicacao_desafios_titular set ultimo_envio_em = now() - interval '2 minutes' where telefone_hmac = '$H3'" >/dev/null
+DB=$(sr nt_branch "select comunicacao_desafio_criar('verificacao','$CV3','cifrado','$H3','$CODB',null,true,1)->>'desafio_id'")
+chk "novo código invalida o anterior e a validade é de 5 minutos" "$(q nt_branch "select (select invalidado_em is not null from comunicacao_desafios_titular where id='$DA') || '/' || (select expira_em - criado_em <= interval '5 minutes 1 second' from comunicacao_desafios_titular where id='$DB')")" "true/true"
+chk "verificação feita, mas convite vence antes do consentimento → recusado (nada criado)" "$(q nt_branch "select comunicacao_desafio_verificar('$DB','$CODB')->>'resultado'" >/dev/null; q nt_branch "begin; set local session_replication_role = replica; update comunicacao_convites set criado_em = now() - interval '72 hours', expira_em = now() - interval '1 hour' where id = '$CV3'; commit;" >/dev/null; sr nt_branch "select comunicacao_titular_consentir('$CV3','$DB', array['pendencia_d1'], 1, '+5511900000011', null, 'teste')->>'resultado'")" "CONVITE_INVALIDO"
+chk "preparo: o convite ficou de fato vencido (expira_em no passado)" "$(q nt_branch "select expira_em < now() from comunicacao_convites where id = '$CV3'")" "t"
+CV4=$(conv $(printf '6%.0s' {1..64}) $H4)
+q nt_branch "update comunicacao_convites set status = 'CANCELADO' where id = '$CV4'" >/dev/null
+chk "convite cancelado não gera código" "$(sr nt_branch "select comunicacao_desafio_criar('verificacao','$CV4','cifrado','$H4','$COD',null,true,1)->>'resultado'")" "CONVITE_INVALIDO"
+# limite por número: 5 códigos na última hora
+H5=$(printf '9%.0s' {1..64}); CV5=$(conv $(printf 'a%.0s' {1..64}) $H5)
+q nt_branch "insert into comunicacao_desafios_titular (tipo, convite_id, telefone_cifrado, telefone_hmac, codigo_hmac, expira_em, ultimo_envio_em, criado_em, simulado) select 'verificacao', '$CV5', 'c', '$H5', '$COD', now() - interval '25 minutes', now() - interval '30 minutes', now() - interval '30 minutes', true from generate_series(1,5)" | grep -q ERROR && bad "preparo do limite por número falhou"
+chk "6º código na mesma hora para o mesmo número → LIMITE" "$(sr nt_branch "select comunicacao_desafio_criar('verificacao','$CV5','cifrado','$H5','$COD',null,true,1)->>'resultado'")" "LIMITE"
+# limite por IP: 20 códigos/h vindos do mesmo IP (números diferentes)
+q nt_branch "insert into comunicacao_desafios_titular (tipo, telefone_cifrado, telefone_hmac, codigo_hmac, expira_em, ultimo_envio_em, criado_em, ip_hmac, simulado) select 'gestao', 'c', md5(g::text)||md5(g::text), '$COD', now() - interval '15 minutes', now() - interval '20 minutes', now() - interval '20 minutes', '$IPX', true from generate_series(1,20) g" | grep -q ERROR && bad "preparo do limite por IP falhou"
+chk "21º código na mesma hora do mesmo IP (números diferentes) → LIMITE" "$(sr nt_branch "select comunicacao_desafio_criar('gestao',null,'cifrado','$(printf 'a1%.0s' {1..32})','$COD','$IPX',true,1)->>'resultado'")" "LIMITE"
+chk "IP diferente não é afetado pelo limite do outro" "$(sr nt_branch "select comunicacao_desafio_criar('gestao',null,'cifrado','$(printf 'b2%.0s' {1..32})','$COD','$(printf '6%.0s' {1..64})',true,1)->>'resultado'")" "CRIADO"
+
 # ---------- 7. cotas por categoria (D-9) ----------
 chk "D-1 sem cota própria (regra atual intacta); fechamento com cota própria" "$(q nt_branch "select (cota is null)::text from comunicacao_categorias where codigo='pendencia_d1'")/$(q nt_branch "select cota->>'por_destinatario_dia' from comunicacao_categorias where codigo='fechamento_operacional_diario'")" "true/2"
 chk "cota da categoria nova disponível (simulações não contam)" "$(sr nt_branch "select comunicacao_cota_categoria_disponivel('fechamento_operacional_diario','$(CE 1)','$(UA 1)','$ORG_A', now() - interval '1 day')->>'disponivel'")" "true"
