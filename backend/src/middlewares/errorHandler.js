@@ -78,6 +78,12 @@ export function errorHandler(err, req, res, _next) {
   // Evento de segurança (assíncrono, não bloqueia a resposta).
   registrarEventoSeguranca(req, err);
 
+  // Indisponibilidade INTENCIONAL (ApiError 503 com código de negócio, ex.: OTP desligado): mensagem e código são nossos e seguros — não
+  // são uma falha. Sem isto o 503 intencional ficava indistinguível de um erro real ("Erro interno" genérico, sem código).
+  if (status === 503 && err.details?.codigo && /^[A-Z0-9_]{1,40}$/.test(String(err.details.codigo))) {
+    return res.status(503).json({ error: err.message, codigo: err.details.codigo });
+  }
+
   if (status >= 500) {
     console.error("[erro]", { rota: `${req.method} ${req.path}`, mensagem: err.message, stack: err.stack });
     return res.status(status).json({
