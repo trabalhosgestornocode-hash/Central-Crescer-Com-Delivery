@@ -23,7 +23,7 @@ const { errorHandler } = await import("../src/middlewares/errorHandler.js");
 const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src");
 const NUM = "+5511912345678";
 const GW = { WHATSAPP_GATEWAY_URL: "http://127.0.0.1:9", WHATSAPP_GATEWAY_SECRET: "segredo-gateway-ficticio" };
-const BAILEYS = { NOTIFICACOES_OTP_TRANSPORTE: "baileys", NOTIFICACOES_OTP_BAILEYS_AUTORIZADO: "true", NODE_ENV: "production", ...GW };
+const BAILEYS = { NOTIFICACOES_OTP_TRANSPORTE: "baileys", NOTIFICACOES_OTP_BAILEYS_AUTORIZADO: "true", NODE_ENV: "production", NOTIFICACOES_OTP_BAILEYS_ALLOWLIST_E164: "+5511912345678", ...GW };
 
 /** Reservas em memória com a MESMA semântica do banco (dedupe por desafio, estado final imutável). */
 function repoFalso({ resultado = "RESERVADO", falhaReserva = false } = {}) {

@@ -9,7 +9,7 @@ const { permissoesDoPapel, PERMISSOES } = await import("../src/shared/permissoes
 const { cenario, escopoAdmin, escopoGerente, reqFalso, ORG_A, ORG_B, UN, CE } = await import("./helpers/notificacoes-fake.js");
 
 const auditados = [];
-const deps = (repo, extra = {}) => ({ repo, auditar: async (e) => auditados.push(e), env: { NOTIFICACOES_CONVITES_HABILITADOS: "true" }, ...extra });
+const deps = (repo, extra = {}) => ({ repo, auditar: async (e) => auditados.push(e), env: { NOTIFICACOES_CONVITES_HABILITADOS: "true", NOTIFICACOES_CONVITES_EXIGE_PILOTO: "false" }, ...extra });
 const req = (papel, unidadeId = null, org = ORG_A) => ({ tenant: { organizacaoId: org, unidadeId }, acesso: { papel, permissoes: permissoesDoPapel(papel) } });
 
 describe("D-3: matriz de permissões", () => {

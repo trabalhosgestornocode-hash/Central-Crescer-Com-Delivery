@@ -42,6 +42,18 @@ export function servicoDoAmbiente(env = process.env) {
   return servicoDoProcesso;
 }
 
+/** A lista é OBRIGATÓRIA por padrão (fail-closed): só NOTIFICACOES_OTP_BAILEYS_EXIGE_ALLOWLIST=false (disponibilidade geral, decisão própria) a dispensa. */
+export const exigeAllowlist = (env = process.env) => String(env.NOTIFICACOES_OTP_BAILEYS_EXIGE_ALLOWLIST ?? "true").trim().toLowerCase() !== "false";
+/** Toda saída da Central pelo Baileys passa por aqui: lista obrigatória e número dentro dela. Devolve o motivo da recusa ou null. */
+function recusaPorLista(telefoneE164, env) {
+  const autorizados = listaAutorizada(env);
+  if (exigeAllowlist(env) && (!autorizados || autorizados.size === 0)) return "ALLOWLIST_OBRIGATORIA";
+  if (autorizados && !autorizados.has(telefoneE164)) return "FORA_DA_LISTA_AUTORIZADA";
+  return null;
+}
+
+export const textoConfirmacaoSaida = () => "Crescer com Delivery: pronto, você não receberá mais avisos neste número. Se foi engano, fale com o responsável da sua empresa.";
+
 export const textoOtp = (codigo) => `Crescer com Delivery: seu código de verificação é ${codigo}. Vale por 5 minutos. Não compartilhe com ninguém.`;
 
 const comTimeout = (p, ms) => new Promise((resolve, reject) => {
@@ -64,8 +76,8 @@ export function classificarFalha(e) {
  */
 export async function enviarOtpBaileys({ desafioId, telefoneE164, codigo }, { env = process.env, repo = { reservarEnvioOtp, registrarResultadoOtp }, obterServico = () => servicoDoAmbiente(env), log = () => {}, timeoutMs = PADRAO.timeoutMs } = {}) {
   if (!/^\d{6}$/.test(String(codigo)) || !/^\+[1-9]\d{7,14}$/.test(String(telefoneE164))) return { entregue: false, motivo: "DADOS_INVALIDOS" };
-  const autorizados = listaAutorizada(env);
-  if (autorizados && !autorizados.has(telefoneE164)) return { entregue: false, motivo: "FORA_DA_LISTA_AUTORIZADA" };
+  const recusa = recusaPorLista(telefoneE164, env);
+  if (recusa) return { entregue: false, motivo: recusa };
 
   let reserva;
   try { reserva = await repo.reservarEnvioOtp({ desafioId, ...limitesDoAmbiente(env) }); }
@@ -89,5 +101,25 @@ export async function enviarOtpBaileys({ desafioId, telefoneE164, codigo }, { en
     await fechar(c.status, c.motivo);
     // INCERTO: a mensagem PODE ter saído — o desafio segue válido; o titular espera e, se preciso, pede outro (limites no banco).
     return c.incerta ? { entregue: true, incerta: true, motivo: c.motivo } : { entregue: false, motivo: c.motivo };
+  }
+}
+
+/**
+ * Confirmação ao titular depois do SAIR (uma mensagem curta). Mesmos gates de qualquer envio (kill switch, conta confirmada, lista obrigatória);
+ * sem reserva de cota: o chamador só chama na PRIMEIRA saída efetiva do número. Nunca lança, nunca repete, nunca loga o número.
+ * @returns {Promise<{enviada: boolean, motivo: string|null}>}
+ */
+export async function enviarConfirmacaoSaidaBaileys({ telefoneE164, chave }, { env = process.env, obterServico = () => servicoDoAmbiente(env), timeoutMs = PADRAO.timeoutMs } = {}) {
+  if (!/^\+[1-9]\d{7,14}$/.test(String(telefoneE164)) || !/^[A-Za-z0-9:_-]{8,80}$/.test(String(chave))) return { enviada: false, motivo: "DADOS_INVALIDOS" };
+  const recusa = recusaPorLista(telefoneE164, env);
+  if (recusa) return { enviada: false, motivo: recusa };
+  let servico;
+  try { servico = await obterServico(); } catch { servico = null; }
+  if (!servico) return { enviada: false, motivo: "GATEWAY_NAO_CONFIGURADO" };
+  try {
+    await comTimeout(servico.enviarTexto({ telefoneE164, texto: textoConfirmacaoSaida(), idempotencyKey: `saida:${chave}` }), timeoutMs);
+    return { enviada: true, motivo: null };
+  } catch (e) {
+    return { enviada: false, motivo: classificarFalha(e).motivo };   // INCERTO também NÃO reenvia
   }
 }

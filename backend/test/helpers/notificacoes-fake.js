@@ -55,6 +55,7 @@ export function cenario({ selecaoLigada = false } = {}) {
       .sort((a, b) => String(b.ocorreu_em).localeCompare(String(a.ocorreu_em))),
     listarConvites: async ({ organizacaoId }) => db.convites.filter((c) => c.organizacao_id === organizacaoId),
     contarConvitesRecentes: async () => ({ porUsuario: db.contagemUsuario ?? 0, porUnidade: db.contagemUnidade ?? 0 }),
+    unidadesDoPiloto: async () => (db.piloto === undefined ? null : db.piloto.map((x) => String(x).toLowerCase())),
     inserirConvite: async (linha) => { const c = { id: randomUUID(), status: "PENDENTE", criado_em: new Date().toISOString(), ...linha }; db.convites.push(c); return { id: c.id, expira_em: c.expira_em }; },
     cancelarConvite: async ({ organizacaoId, id }) => { const c = db.convites.find((x) => x.id === id && x.organizacao_id === organizacaoId && ["PENDENTE", "VERIFICADO"].includes(x.status)); if (!c) return null; c.status = "CANCELADO"; return c; },
     obterDestinatario: async ({ organizacaoId, id }) => db.destinatarios.find((d) => d.id === id && d.organizacao_id === organizacaoId) ?? null,

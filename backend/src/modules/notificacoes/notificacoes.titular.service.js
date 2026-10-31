@@ -10,7 +10,7 @@ import { auditar, ACOES } from "../../shared/auditoria.js";
 import * as repo from "./notificacoes.repository.js";
 import { validarWhatsapp, gerarCodigoOtp, hashToken, tokenValido, codigoValido, SESSAO_GESTAO_MS, logNotificacoes } from "./notificacoes.basico.js";
 import { segredosDisponiveis, cifrarTelefone, decifrarTelefone, hmacTelefone, hmacCodigo, hmacIp, compararSeguro, VERSAO_CHAVE_ATUAL } from "./notificacoes.segredos.js";
-import { entregarCodigoOtp, capacidades } from "./notificacoes.envio.js";
+import { entregarCodigoOtp, capacidades, enviarConfirmacaoSaida } from "./notificacoes.envio.js";
 
 const R = (deps) => deps?.repo ?? repo;
 const RESPOSTA_GENERICA = "Se este número estiver cadastrado para receber avisos, enviamos um código de 6 dígitos para ele no WhatsApp.";
@@ -200,20 +200,50 @@ export async function revogarComoTitular({ sessao, e164, organizacaoId = null, c
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// Palavra-chave de saída no WhatsApp (SAIR/PARAR/STOP) — atrás de flag; usa o mesmo caminho de revogação
+// Palavra-chave de saída no WhatsApp (SAIR/PARAR/STOP/DESCADASTRAR) — atrás de flag (NOTIFICACOES_PALAVRA_CHAVE_SAIR, desligada por padrão).
+// Usa o MESMO caminho de revogação da página de gestão. Blindagens contra revogação indevida:
+//   * palavra EXATA (a mensagem inteira; "cancelar" saiu da lista por ser ambígua num canal de operação);
+//   * só de um número que já é destinatário cadastrado (e o inbox só repassa chat direto de contato autorizado);
+//   * mensagem recente (≤ 48 h): um SAIR antigo reprocessado depois de um novo consentimento não pode revogá-lo;
+//   * idempotente: se o número já saiu de tudo, nada é gravado nem confirmado; e no máximo 1 processamento por número a cada 10 min.
+// Efeito: revoga todas as empresas que cadastraram ESTE número (e só ele) + opt-out do contato; auditoria por empresa (sem número);
+// confirmação ao titular só com NOTIFICACOES_SAIR_CONFIRMACAO=true (ver envio.js).
 // ---------------------------------------------------------------------------------------------------------------------------
-const PALAVRAS_SAIDA = new Set(["SAIR", "PARAR", "STOP", "CANCELAR", "DESCADASTRAR"]);
+const PALAVRAS_SAIDA = new Set(["SAIR", "PARAR", "STOP", "DESCADASTRAR"]);
+export const JANELA_SAIDA_MS = 48 * 3_600_000;
+export const INTERVALO_SAIDA_MS = 10 * 60_000;
+const ultimaSaida = new Map();   // telefoneHmac → instante (memória do processo; o dedupe forte é "já saiu de tudo", no banco)
+export function _limparSaidas() { ultimaSaida.clear(); }
 export function ehPalavraDeSaida(texto) {
   const t = String(texto ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase().replace(/[.!]+$/, "");
   return PALAVRAS_SAIDA.has(t);
 }
-export async function processarPalavraDeSaida({ telefoneE164, texto, env = process.env, deps = {} }) {
+export async function processarPalavraDeSaida({ telefoneE164, texto, recebidoEm = null, mensagemId = null, env = process.env, agora = Date.now, deps = {} }) {
   if (env.NOTIFICACOES_PALAVRA_CHAVE_SAIR !== "true" || !ehPalavraDeSaida(texto)) return { aplicado: false };
   if (!(deps.segredosDisponiveis ? deps.segredosDisponiveis() : segredosDisponiveis())) return { aplicado: false, motivo: "SEM_SEGREDO" };
+  // FAIL-CLOSED: sem o instante da mensagem (ausente/nulo/inválido) não há como provar que o SAIR é recente — não revoga.
+  const tMsg = recebidoEm === null || recebidoEm === undefined ? NaN : new Date(recebidoEm).getTime();
+  if (!Number.isFinite(tMsg) || agora() - tMsg > JANELA_SAIDA_MS || tMsg - agora() > 5 * 60_000) return { aplicado: false, motivo: "MENSAGEM_FORA_DA_JANELA" };
   const numero = validarWhatsapp(telefoneE164);
   if (!numero) return { aplicado: false };
   const lista = await R(deps).destinatariosDoNumero(numero, deps);
   if (!lista.length) return { aplicado: false };
-  const r = await R(deps).revogar({ telefoneHmac: hmacTelefone(numero), contatosEmpresa: lista.map((x) => x.id), categorias: null, origem: "palavra_chave_inbound", sairDeTudo: true }, deps);
-  return { aplicado: true, mensagensCanceladas: r?.mensagens_canceladas ?? 0 };
+  const hmac = hmacTelefone(numero);
+  if (agora() - (ultimaSaida.get(hmac) ?? 0) < INTERVALO_SAIDA_MS) return { aplicado: false, motivo: "AGUARDE" };
+  if (await R(deps).jaSaiuDeTudo(lista.map((x) => x.id), deps)) return { aplicado: false, motivo: "JA_SAIU" };
+  const r = await R(deps).revogar({ telefoneHmac: hmac, contatosEmpresa: lista.map((x) => x.id), categorias: null, origem: "palavra_chave_inbound", sairDeTudo: true }, deps);
+  // o carimbo de "aguarde" só vale DEPOIS da revogação ter dado certo: uma falha transitória não pode travar a próxima tentativa do titular
+  ultimaSaida.set(hmac, agora());
+  if (ultimaSaida.size > 5000) for (const k of [...ultimaSaida.keys()].slice(0, 1000)) ultimaSaida.delete(k);
+  for (const org of new Set(lista.map((x) => x.organizacao_id))) {
+    await (deps.auditar ?? auditar)({ acao: ACOES.NOTIFICACAO_TITULAR_REVOGOU, atorTipo: "sistema", organizacaoId: org, entidade: "notificacoes",
+      detalhes: { origem: "palavra_chave", categorias: "todas", sair_de_tudo: true, registros: lista.filter((x) => x.organizacao_id === org).length } });
+  }
+  let confirmacao = "NAO_ENVIADA";
+  try {
+    const c = await (deps.enviarConfirmacaoSaida ?? enviarConfirmacaoSaida)({ telefoneE164: numero, chave: `${hmac.slice(0, 24)}:${mensagemId ? crypto.createHash("sha256").update(String(mensagemId)).digest("hex").slice(0, 16) : new Date(agora()).toISOString().slice(0, 13).replace(/[^0-9]/g, "")}` }, { env });
+    confirmacao = c?.enviada ? "ENVIADA" : (c?.motivo ?? "NAO_ENVIADA");
+  } catch { confirmacao = "ERRO_INESPERADO"; }
+  logNotificacoes("info", "titular.saiu_por_palavra", { empresas: new Set(lista.map((x) => x.organizacao_id)).size, confirmacao });
+  return { aplicado: true, mensagensCanceladas: r?.mensagens_canceladas ?? 0, confirmacao };
 }
