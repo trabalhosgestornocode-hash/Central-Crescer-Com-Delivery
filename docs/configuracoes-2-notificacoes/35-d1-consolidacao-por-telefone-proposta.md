@@ -1,4 +1,4 @@
-# 35 — D-1: proposta de consolidação de avisos por telefone (NÃO ligada)
+# 35 — D-1: consolidação de avisos por telefone (PR próprio, DESLIGADA e não conectada ao envio)
 
 Branch isolada `proto/d1-consolidacao-por-telefone` (a partir da `main`). **Nada é ativado em produção**: o módulo é puro, nenhum código de produção o importa (teste), e cotas, política e envio atuais seguem exatamente como estão até uma futura autorização de mudança. Contexto e recomendação: doc 32 (PR #63).
 
@@ -29,5 +29,13 @@ Um mesmo responsável está cadastrado em **7 empresas** (o banco só admite o m
 5. **Texto:** validar o formato (título, separação) com as empresas; e se mensagens individuais continuarão para quem prefere.
 6. Testes de integração com o banco de teste do projeto e dry-run no D-1 antes de qualquer envio real.
 
-## 5. Arquivos
-`backend/src/modules/comunicacao/comunicacao.consolidacao.js` (puro), `backend/test/comunicacao-consolidacao.test.js` (18 testes), `backend/testes-seguros/pg/consolidacao_d1.sh` (16 verificações).
+## 5. Orquestrador (autorizado a evoluir; continua desligado)
+`comunicacao.consolidacao.orquestrador.js` define a ordem segura, tudo por **injeção** (nenhum import de banco/provider/fila/política/cotas) e **não é chamado** por nenhum código de produção:
+1. relê o **estado de cada bloco na hora do envio** (revogação, opt-out, pausa, desabilitação, escopo posteriores valem; falha ao ler = bloco fora e devolvido ao fluxo individual);
+2. consolida só o que ainda está autorizado; **um envio por mensagem**, chave `cons:<hash dos ids>` (bloco único mantém a chave e o texto originais);
+3. **todos os componentes terminam juntos**: enviado ⇒ `SENT` com o mesmo provider id (falha ao finalizar um registra e **nunca reenvia**); falha **provada pré-envio** ⇒ nada finalizado e os ids **voltam** ao fluxo individual (nenhum aviso se perde); **dúvida** (timeout/5xx) ⇒ todos `DELIVERY_UNKNOWN` e **nunca reenvio**;
+4. um grupo (telefone) falhar não impede os outros. Flag `COMUNICACAO_CONSOLIDACAO_POR_TELEFONE` (**desligada**; só `true` liga).
+15 testes: 7 destinatários no mesmo telefone, telefones diferentes, bloco único, revogação/opt-out/pausa/escopo entre agendar e enviar, falha de leitura do estado, falha pré-envio, incerta, falha ao finalizar, divisão por tamanho, idempotência, ordem de entrada, entrada vazia e ausência de uso em produção.
+
+## 6. Arquivos
+`backend/src/modules/comunicacao/comunicacao.consolidacao.js` (puro), `comunicacao.consolidacao.orquestrador.js` + `comunicacao-consolidacao-orquestrador.test.js` (15), `backend/test/comunicacao-consolidacao.test.js` (18 testes), `backend/testes-seguros/pg/consolidacao_d1.sh` (16 verificações).
