@@ -1,40 +1,40 @@
-# 34 — Proposta consolidada de implantação: PRs #61, #62 e #63
+# 34 — Matriz GO/NO-GO e plano de ativação: PRs #61, #62, #63 e a proposta de consolidação
 
-Estado em 31/10/2026. **Nada foi mergeado, implantado ou aplicado em produção por esta proposta.** Cada passo abaixo pede a sua autorização própria.
+Estado em 31/10/2026 13:40 BRT. **Nada foi mergeado, implantado ou aplicado em produção.** Cada passo abaixo pede a sua autorização expressa. Sem dado pessoal neste documento (o gerente do piloto é identificado por ID interno no relatório da conversa; o número de teste só entra no Render).
 
-## 1. O que cada PR contém
-| PR | Conteúdo | Código de produção? | Migration | Evidências finais |
+## 1. Matriz GO/NO-GO
+| # | Item | Veredito | Evidência | Condição / o que falta |
 |---|---|---|---|---|
-| **#61** | docs 28–29, 33, 34 e matriz do termo (só documentação; sem dado pessoal) | não | não | 5 arquivos de `docs/`, checks verdes |
-| **#63** | guarda de vencimento no adiamento do D-1 (`decidirDestinoDoAdiamento`): mensagem cujo próximo horário passaria do `expira_em` encerra no ato como `CANCELLED/EXPIRADA` | sim (2 arquivos, ~30 linhas) | **não** | backend 5839 testes / 24 falhas já existentes / **0 novas**; 11 testes novos; PG 11/11; diff de produção revisado: não toca cotas, destinatários, horários nem mensagens existentes |
-| **#62** | trava de convites por unidade (backend + gatilho), allowlist obrigatória, SAIR endurecido (+ confirmação opcional), docs 30–31 | sim | **139** (não aplicada) | ver §3 |
+| 1 | **PR #61** (docs) | **GO** | 5 arquivos só de `docs/`; varredura de dado pessoal limpa; `MERGEABLE/CLEAN` | autorização de merge |
+| 2 | **PR #63** (D-1: não reagendar além do vencimento) | **GO** | diff de produção = 1 função pura + seu uso; sem migration; backend 5839 testes / 24 falhas já existentes / **0 novas**; 11 testes novos; PG 11/11 (`rate_limit_d1.sh`) | autorização de merge; reversão por `git revert`; **não** altera cota, destinatários, horários nem reabre mensagens |
+| 3 | **Migration 139 em produção** | **GO técnico** (aguarda sua autorização) | pacote íntegro (SHA-256), pré-voo OK, backup físico do dia, validador 10/10, PG 25/25, Supabase de teste, rollback testado — **doc 36** | autorização expressa; **não** liga piloto, convites nem SAIR |
+| 4 | **PR #62** (piloto, allowlist, SAIR + 139) | **NO-GO até a 139 estar aplicada e validada**; depois **GO** | regressão 5854 testes / 24 já existentes / **0 novas**; frontend 1649/0; revisão de código aplicada; com tudo desligado nada muda (teste do padrão de produção) | ordem: 139 → validar → merge do #62 |
+| 5 | **Piloto Subway Saci — Matriz** | **NO-GO** | unidade e gerente (`unit_manager`) identificados; allowlist com o número homologado (só no Render) | (a) você confirmar o gerente; (b) **autorização do titular** do número; (c) **termo v2 aprovado** (doc 33: JUR-1, 2, 4, 5, 7 bloqueiam) |
+| 6 | **SAIR real + confirmação** | **NO-GO** | implementados e testados, desligados | JUR-6 (palavras, prazo, texto) e sua autorização para `NOTIFICACOES_PALAVRA_CHAVE_SAIR`/`_SAIR_CONFIRMACAO` |
+| 7 | **Consolidação por telefone** (branch `proto/d1-consolidacao-por-telefone`, doc 35) | **NO-GO para produção** (proposta homologada em isolamento) | módulo puro, 18 testes, PG 16/16; nenhum código de produção o usa; cotas e envio atuais intactos | decisão sua + PR próprio que liga no envio (muda formato/quantidade de mensagens) |
+| 8 | OTP permanente, convites reais, M3, corte do fuso | **NO-GO / permanecem desligados** | — | decisões próprias, fora desta entrega |
 
-## 2. Ordem recomendada
-1. **Mergear #61** (docs; sem efeito).
-2. **Mergear #63** → deploy automático (≈ 2–3 min até `ifoodEvents` voltar a `active`). Sem migration. Verificação: `/health`; no próximo lote do D-1, mensagens barradas por `RATE_LIMIT_DIA` aparecem como `CANCELLED/EXPIRADA` **na hora** (e a lista de "agendadas para o futuro" deixa de crescer); entregas iguais às de hoje. Reversão: `git revert` do merge → redeploy.
-3. **Aplicar a migration 139** em produção (mesmo ritual da 137/138: pré-voo somente leitura, backup físico do dia, SHA-256 do arquivo, aplicação isolada, validação, comparação da linha de base). SHA-256 `fa0a0288…b056`; função `a79b1619…`; gatilho `BEFORE INSERT` habilitado; sem a chave `convites_unidades_piloto` o gatilho **não tem efeito**. Reversão: `139_rollback.sql`.
-4. **Mergear #62** → deploy. Com **todas as variáveis desligadas** (o estado atual) nada muda: convites seguem 503 `CONVITES_DESLIGADOS`, OTP desligado, SAIR desligado (teste "padrão de produção" cobre). A produção não define hoje `NOTIFICACOES_OTP_TRANSPORTE=baileys`, então a **allowlist obrigatória** não tira nada do ar.
-(#62 pode ir antes da 139 sem dano — o backend só consulta a chave quando os convites estão ligados —, mas a ordem acima mantém a defesa do banco pronta primeiro.)
+## 2. Ordem recomendada dos merges e da 139
+1. **#61** (docs).
+2. **#63** → deploy (≈ 2–3 min até `ifoodEvents` voltar a `active`). Verificar `/health` e, no próximo lote do D-1, que mensagens barradas por `RATE_LIMIT_DIA` aparecem como `CANCELLED/EXPIRADA` na hora; entregas iguais às de hoje. Reversão: `git revert`.
+3. **Migration 139** (ritual do doc 36: pré-voo, SHA-256, backup, aplicação isolada, validador 10/10, comparação da linha de base; sem rollback automático).
+4. **#62** → deploy. Tudo desligado ⇒ convites seguem 503 `CONVITES_DESLIGADOS`; OTP e SAIR desligados; a produção **não define** `NOTIFICACOES_OTP_TRANSPORTE=baileys`, então a allowlist obrigatória não tira nada do ar.
+(#62 antes da 139 não causaria dano — o backend só lê a chave quando os convites estão ligados —, mas a regra aqui é 139 validada primeiro.)
 
-## 3. Testes do #62 (versão final, após a revisão de código)
-- Backend: regressão completa comparada à `main` (ver o PR; 24 falhas já existentes, 0 novas) e frontend 1649/0.
-- Migration 139: PostgreSQL descartável **25/25** (chave ausente; piloto [U1]; unidade fora; mistura; vazio; objeto; não-uuid; **`null` e número no array**; UPDATE livre; privilégios; revogação do SAIR isolada por número; rollback e rollback idempotente) e **Supabase de teste** (aplicada; hash idêntico ao do banco descartável; todos os formatos inválidos recusados; transação desfeita, sem resíduo).
-- Fluxo completo isolado: convite → OTP (Baileys simulado, 1 envio) → verificação → termo aprovado → categorias → SAIR → auditoria sem número nem código.
-- **Revisão de código** (medium) aplicada: corrigidos o `null` no array do piloto, o carimbo de "aguarde" antes da revogação, o `recebidoEm` ausente (agora fail-closed) e a chave da confirmação (por mensagem). Limitações conhecidas e aceitas: o "aguarde" de 10 min é por processo (a proteção forte é "já saiu de tudo", sem lock entre duas instâncias — pior caso: uma auditoria e uma confirmação a mais).
+## 3. Plano de ativação do piloto (cada passo com autorização própria; reversão = desfazer o passo)
+**Pré-requisitos:** itens 1–4 acima concluídos; termo v2 aprovado (JUR bloqueantes resolvidos); você confirma o gerente; o titular autoriza o número.
+1. **Publicar o termo v2** (inserir `versao = 2`, `rascunho = false`; imutável; correção = versão 3).
+2. **Ligar a trava de unidade:** `insert into comunicacao_configuracoes (chave, valor) values ('convites_unidades_piloto', '["00000000-0000-0000-0000-0000000000a1"]')` (Subway Saci — Matriz). Reversão: apagar a chave (o backend continua exigindo piloto por padrão).
+3. **Render, num único salvamento:** `NOTIFICACOES_OTP_TRANSPORTE=baileys`, `NOTIFICACOES_OTP_BAILEYS_AUTORIZADO=true`, `NOTIFICACOES_OTP_BAILEYS_ALLOWLIST_E164=<número homologado>`, `NOTIFICACOES_OTP_MAX_HORA=5`, `NOTIFICACOES_OTP_MAX_DIA=10`, `NOTIFICACOES_CONVITES_HABILITADOS=true`; e, só se o JUR-6 estiver aprovado, `NOTIFICACOES_PALAVRA_CHAVE_SAIR=true` e `NOTIFICACOES_SAIR_CONFIRMACAO=true`. Reversão: remover as variáveis.
+4. **Execução com o gerente autorizado (`unit_manager` da unidade):** convidar o número de teste → código → verificação → termo → categorias → 1 notificação autorizada → testar SAIR → conferir auditoria, reservas e que **uma tentativa de convite para outra unidade dá 403**.
+**Critérios de sucesso:** 0 `FALHOU/INCERTO` inesperados; hash dos 41 destinatários e a fila do D-1 idênticos; nenhum convite fora da unidade; SAIR revoga só o número testado.
 
-## 4. Piloto — Subway Saci — Matriz (nada ativado)
-- Unidade inicial: **Subway Saci — Matriz**, id `00000000-0000-0000-0000-0000000000a1` (ativa; não é de teste).
-- **Gerente autorizado:** o perfil `unit_manager` vinculado a essa unidade (identificado por **ID interno no relatório da conversa**, não neste repositório público). Falta a **sua confirmação** de que é ele.
-- **Allowlist:** o número de teste já usado em 31/10 (valor só no Render, no passo de ativação; não consta de nenhum arquivo).
-- **Pré-condições para ativar:** (a) titular confirma a autorização do número; (b) **termo v2 aprovado e publicado** (doc 33); (c) 139 aplicada e #62 no ar.
-- **Ativação (um passo por vez, cada um com autorização):** inserir `convites_unidades_piloto = ["<id da unidade>"]` → publicar o termo → no Render: `NOTIFICACOES_OTP_TRANSPORTE=baileys`, `NOTIFICACOES_OTP_BAILEYS_AUTORIZADO=true`, `NOTIFICACOES_OTP_BAILEYS_ALLOWLIST_E164=<número>`, tetos baixos (`_MAX_HORA`, `_MAX_DIA`), `NOTIFICACOES_CONVITES_HABILITADOS=true` (e SAIR: `NOTIFICACOES_PALAVRA_CHAVE_SAIR`, `NOTIFICACOES_SAIR_CONFIRMACAO`, se o jurídico aprovar JUR-6). Reversão: remover as variáveis e a chave.
+## 4. RATE_LIMIT — recomendação final (doc 32) e consolidação (doc 35)
+**Consolidar por telefone.** Os vínculos duplicados são **legítimos** (um responsável, 7 lojas = 7 empresas distintas; o banco só admite o mesmo telefone uma vez por empresa); limite específico por contato multiempresa exige tabela de exceções e ainda envia 7 mensagens; o teto global **não foi alterado**. A proposta (módulo puro, invariantes provadas) está isolada na branch `proto/d1-consolidacao-por-telefone`; ligá-la é um PR próprio com decisões listadas no doc 35 §4.
 
-## 5. RATE_LIMIT — recomendação final (doc 32)
-**Consolidar por telefone**, preservando isolamento e autorização por empresa/unidade. Os vínculos duplicados **não são indevidos** (um mesmo responsável com 7 lojas, cada loja uma empresa); o limite específico por contato multiempresa exige tabela de exceções e ainda envia 7 mensagens. O teto global **não** foi alterado. A consolidação está como protótipo puro e testado em `proto/d1-consolidacao-por-telefone` (fora do #63); ligá-la é um PR próprio que muda formato e quantidade das mensagens — **decisão material sua** (validar o texto com as empresas).
-
-## 6. Decisões que faltam (consolidadas)
-1. Autorizar o merge do #61, #63 e #62 (um a um, na ordem do §2) e a aplicação da 139.
-2. Confirmar o **gerente autorizado** do piloto e a **autorização do titular** do número de teste.
-3. Jurídico: JUR-1, 2, 4, 5 e 7 (bloqueiam) + textos 3, 6 e 8; depois, autorizar a publicação do termo.
-4. RATE_LIMIT: aprovar o desenvolvimento da consolidação por telefone (ou escolher outra opção do doc 32).
+## 5. Decisões materiais que faltam
+1. Autorizar os merges #61 → #63 → (139) → #62 e a aplicação da 139.
+2. Confirmar o gerente do piloto e a autorização do titular do número de teste.
+3. Jurídico: JUR-1, 2, 4, 5, 7 + textos 3, 6 e 8; depois autorizar a publicação do termo.
+4. Consolidação por telefone: aprovar o desenvolvimento do PR que a liga (ou escolher outra opção do doc 32).
 5. Ativação do piloto, depois de 2 e 3.
