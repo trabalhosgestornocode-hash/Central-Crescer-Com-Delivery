@@ -148,7 +148,9 @@ function telaConsentimento(c) {
         </fieldset>
         ${termo ? `<details class="tt-termo" open><summary>Termo de autorização (versão ${esc(termo.versao)})</summary>
           ${termo.rascunho ? aviso("Texto em revisão jurídica — usado só em simulação.", "simulacao") : ""}
-          <div class="tt-termo-texto">${esc(termo.texto).replace(/\n/g, "<br>")}</div></details>` : aviso("Termo indisponível no momento.", "erro")}
+          <div class="tt-termo-texto">${esc(termo.texto).replace(/\n/g, "<br>")}</div>
+          <p class="tt-politica">${c.politicaPrivacidadeUrl ? `<a href="${esc(c.politicaPrivacidadeUrl)}" target="_blank" rel="noopener noreferrer">Política de Privacidade</a>` : "<small>Política de Privacidade: link ainda não publicado.</small>"}</p></details>
+        <label class="tt-check"><input type="checkbox" id="tt-concordo" /> <span>Li e concordo com o termo.</span></label>` : aviso("Termo indisponível no momento.", "erro")}
         <small class="tt-erro" id="tt-consent-erro" role="alert"></small>
         <div class="tt-acoes">
           <button type="submit" class="tt-btn" ${termo ? "" : "disabled"}>Autorizar os avisos marcados</button>
@@ -161,7 +163,7 @@ function telaConsentimento(c) {
     raiz.querySelectorAll("button").forEach((b) => { b.disabled = true; });
     try {
       const s = estado();
-      const r = await chamar("/convite/consentir", { token: s.token, desafio: s.desafio, categorias, termoVersao: termo.versao });
+      const r = await chamar("/convite/consentir", { token: s.token, desafio: s.desafio, categorias, termoVersao: termo.versao, concordo: categorias.length > 0 && raiz.querySelector("#tt-concordo")?.checked === true });
       const fim = {
         CONSENTIDO: ["ok", "Pronto! Os avisos marcados foram autorizados. Você pode parar de receber quando quiser."],
         RECUSADO_PELO_TITULAR: ["ok", "Tudo certo: você não receberá esses avisos."],
@@ -180,6 +182,7 @@ function telaConsentimento(c) {
     ev.preventDefault();
     const marcadas = [...raiz.querySelectorAll('input[name="cat"]:checked')].map((i) => i.value);
     if (!marcadas.length) return erroNa("#tt-consent-erro", "Marque ao menos um aviso, ou use “Não quero receber”.");
+    if (!raiz.querySelector("#tt-concordo")?.checked) return erroNa("#tt-consent-erro", "Marque “Li e concordo com o termo.” para autorizar.");
     enviar(marcadas);
   });
   raiz.querySelector("#tt-recusar").addEventListener("click", () => enviar([]));

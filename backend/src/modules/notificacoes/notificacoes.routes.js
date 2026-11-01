@@ -62,7 +62,7 @@ titularRouter.post("/convite/codigo", asyncHandler(async (req, res) => res.json(
 titularRouter.post("/convite/verificar", asyncHandler(async (req, res) => res.json({ data: await titular.verificarCodigoConvite({
   token: b(req).token, desafio: b(req).desafio, provisorio: b(req).provisorio, codigo: b(req).codigo }) })));
 titularRouter.post("/convite/consentir", asyncHandler(async (req, res) => res.json({ data: await titular.consentirConvite({
-  token: b(req).token, desafio: b(req).desafio, categorias: b(req).categorias, termoVersao: b(req).termoVersao, ip: ipCliente(req), userAgent: req.get("user-agent") }) })));
+  token: b(req).token, desafio: b(req).desafio, categorias: b(req).categorias, termoVersao: b(req).termoVersao, concordo: b(req).concordo === true, ip: ipCliente(req), userAgent: req.get("user-agent") }) })));
 titularRouter.post("/gestao/codigo", asyncHandler(async (req, res) => res.json({ data: await titular.pedirCodigoGestao({ telefone: b(req).telefone, ip: ipCliente(req) }) })));
 titularRouter.post("/gestao/verificar", asyncHandler(async (req, res) => res.json({ data: await titular.verificarCodigoGestao({
   desafio: b(req).desafio, provisorio: b(req).provisorio, codigo: b(req).codigo }) })));

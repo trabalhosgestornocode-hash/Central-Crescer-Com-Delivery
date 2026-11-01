@@ -33,3 +33,9 @@ Maior volume e projeção já populada. Passos (cada um com autorização): term
 - Relatórios **desligados**: nenhuma variável `NOTIFICACOES_RELATORIOS_*` definida no Render; sem destinatário com escopo nas categorias de relatório; categorias `fechamento_operacional_diario` e `resumo_semanal` inativas.
 - Unidade inicial do piloto: **Subway Saci — Matriz** (valor do id fica só no painel do Render, em `NOTIFICACOES_RELATORIOS_UNIDADES_PILOTO`).
 - Bloqueio para o 1º envio real: termo v2 aprovado + convite/OTP do destinatário (consentimento real) + as variáveis acima.
+
+## Semântica de `NOTIFICACOES_RELATORIOS_MAX_DIA` (verificada no banco)
+A cota conta por **destinatário + categoria + dia**. O diário (`fechamento_operacional_diario`) e o semanal (`resumo_semanal`) **não se bloqueiam** (provado: com limite 1, um de cada passa; um segundo diário é barrado). Recomendado: `2` (permite o aviso inicial + 1 correção `REVISADO` do diário). Para o 1º dia da homologação pode-se usar `1`.
+
+## Variáveis do convite/OTP/termo (também desligadas hoje)
+`NOTIFICACOES_CONVITES_HABILITADOS`, `NOTIFICACOES_OTP_TRANSPORTE=baileys`, `NOTIFICACOES_OTP_BAILEYS_AUTORIZADO=true`, `NOTIFICACOES_OTP_BAILEYS_ALLOWLIST_E164` (lista do **OTP**, separada da dos relatórios), `NOTIFICACOES_CONVITES_EXIGE_PILOTO` (padrão exige), `NOTIFICACOES_POLITICA_PRIVACIDADE_URL` (https; sem ela a tela diz que o link ainda não foi publicado). Chave de dados `convites_unidades_piloto` (ids das duas unidades) trava convites por unidade também no banco.

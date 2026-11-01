@@ -77,6 +77,16 @@ rm -rf "$CONC"
 chk "resumo semanal: insert + mesmo (unidade, semana, hash) não duplica" "$(q "insert into operacional_resumos_semanais (organizacao_id, unidade_id, semana_inicio, status, dias_validos, hash_conteudo, indicadores, mensagem) values ('$O','$UN','2026-10-26','COMPLETA',7,'hash-teste-1','{}','m')" | head -c 10)/$(q "insert into operacional_resumos_semanais (organizacao_id, unidade_id, semana_inicio, status, dias_validos, hash_conteudo, indicadores, mensagem) values ('$O','$UN','2026-10-26','COMPLETA',7,'hash-teste-1','{}','m')" | grep -c 'uq_operacional_resumo_semanal')" "INSERT 0 1/1"
 chk "resumo semanal com menos de 5 dias válidos é barrado (CHECK)" "$(q "insert into operacional_resumos_semanais (organizacao_id, unidade_id, semana_inicio, status, dias_validos, hash_conteudo, indicadores, mensagem) values ('$O','$UN','2026-10-19','PARCIAL',4,'hash-teste-2','{}','m')" | grep -c 'dias_validos')" "1"
 
+# MAX_DIA conta por destinatário E categoria: o diário e o semanal NÃO se bloqueiam (segunda-feira: um de cada com limite 1)
+CE3=$(U 9606); semear "insert into comunicacao_contatos_empresa (id, organizacao_id, nome, telefone_e164, tipo, whatsapp_status, whatsapp_validado_em, ativo) values ('$CE3','$O','d3','+5511966660003','operacional','VALIDADO',now(),true)"
+RS=$(q "select id from operacional_resumos_semanais where hash_conteudo='hash-teste-1' limit 1")
+q "insert into operacional_relatorios_envios (id, organizacao_id, unidade_id, tipo, categoria, referencia, resumo_semanal_id, contato_empresa_id, chave_idempotencia, mensagem, tamanho, expira_em, disponivel_em) values ('$(U 9801)','$O','$UN','semanal','resumo_semanal','2026-10-26','$RS','$CE3','chave-sem-9801','msg',3, now() + interval '6 hours', now() - interval '1 minute')" >/dev/null
+ENQ 9802 $CE3 >/dev/null
+chk "cota 1/dia: o DIÁRIO e o SEMANAL do mesmo destinatário passam juntos (categorias diferentes)" "$(RES 9802 w1 1) $(RES 9801 w1 1)" "INICIADO INICIADO"
+FIN 9802 w1 ENVIADO "'wamid.d'" >/dev/null; FIN 9801 w1 ENVIADO "'wamid.s'" >/dev/null
+ENQ 9803 $CE3 >/dev/null
+chk "cota 1/dia: um SEGUNDO diário do mesmo destinatário é barrado (COTA_DIA)" "$(RES 9803 w1 1)" "COTA_DIA"
+
 # transferência de unidade: a função de remapeamento enxerga as tabelas novas e consegue atualizá-las
 chk "service_role pode atualizar SÓ organizacao_id (transferência de unidade)" "$(PGOPTIONS='-c lc_messages=C' psql $H -U postgres -X -tA -d $DB -c "select grantee||':'||string_agg(column_name,',') from information_schema.column_privileges where table_name='operacional_relatorios_envios' and privilege_type='UPDATE' and grantee='service_role' group by grantee")" "service_role:organizacao_id"
 
