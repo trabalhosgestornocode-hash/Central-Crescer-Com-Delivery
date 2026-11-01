@@ -28,3 +28,20 @@ Não há prazo de guarda pós-revogação nem rotina de expurgo do telefone cifr
 3. Variáveis do convite/OTP (`NOTIFICACOES_CONVITES_HABILITADOS`, `NOTIFICACOES_OTP_TRANSPORTE=baileys`, `NOTIFICACOES_OTP_BAILEYS_AUTORIZADO=true`, `NOTIFICACOES_OTP_BAILEYS_ALLOWLIST_E164`).
 4. Gestor autorizado cria **um** convite (adesão voluntária do cadastro legado existente; as duas unidades; as duas categorias) → o titular recebe **um** OTP, confirma, lê o termo, marca categorias e "Li e concordo".
 5. Variáveis dos relatórios (`UNIDADES_PILOTO`, `ALLOWLIST_E164`, `MAX_DIA`, `SEMANAL_HABILITADO` conforme decisão) → `AGENDADOR_HABILITADO` → `ENVIO_HABILITADO`.
+
+## 5. Prazo de retenção de 2 anos — o que exige (validado em 01/11/2026)
+- **Hoje não existe exclusão automática** do registro de consentimento, dos convites/desafios, da fila e dos resumos de relatórios, nem do cadastro de destinatário: tudo é somente inclusão ou sem rotina de descarte (o consentimento é protegido por trigger contra update/delete). O único descarte automático comprovado é o do texto de mensagens recebidas (30 dias).
+- **Nada vence antes de 2028:** o sistema não tem nenhum consentimento (0), convite (0) ou escopo (0), e os dados mais antigos de comunicação são de set–out/2026. Para o piloto **não há adequação técnica bloqueante**.
+- **Adequação necessária antes do primeiro vencimento (≈ out/2028):** rotina de expurgo (função `security definer`, executável só pelo `service_role`, que remove em lote o que passou de 2 anos **contados do cancelamento ou do encerramento do serviço**, com exceção controlada às travas de imutabilidade e auditoria da própria exclusão). O marco inicial do prazo (cancelamento/encerramento) é uma definição **jurídica**: o texto da Política usa essa leitura e precisa ser confirmado.
+- **Texto da Política**: afirma o prazo e a eliminação, **sem** dizer que é automática; o compromisso técnico acima fica registrado com data.
+
+## 6. Pendências jurídicas restantes (status)
+| Item | Status |
+|---|---|
+| JUR-1 controlador × operador | identidade do responsável informada; falta confirmar o **papel** (controlador/operador) de cada parte |
+| JUR-2 base legal por categoria | Política declara consentimento (art. 7º, I); falta o jurídico ratificar |
+| JUR-4 retenção | prazo informado (2 anos); falta confirmar o **marco inicial** |
+| JUR-5 compartilhamento / transferência internacional | Política declara só os fatos (nuvem parcialmente fora do Brasil; WhatsApp); falta a hipótese do art. 33 |
+| JUR-7 encarregado | contato informado (WhatsApp); falta confirmar se é o encarregado e o nome |
+| JUR-6 SAIR | não se aplica ao piloto (SAIR desligado) |
+**A v3 só é publicada após a aprovação.**
