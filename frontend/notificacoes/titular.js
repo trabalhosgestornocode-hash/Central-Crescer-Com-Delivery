@@ -153,7 +153,7 @@ function telaConsentimento(c) {
         <label class="tt-check"><input type="checkbox" id="tt-concordo" /> <span>Li e concordo com o termo.</span></label>` : aviso("Termo indisponível no momento.", "erro")}
         <small class="tt-erro" id="tt-consent-erro" role="alert"></small>
         <div class="tt-acoes">
-          <button type="submit" class="tt-btn" ${termo ? "" : "disabled"}>Autorizar os avisos marcados</button>
+          <button type="submit" class="tt-btn" ${termo ? "" : "disabled"}>Confirmar</button>
           <button type="button" class="tt-btn tt-btn--sec" id="tt-recusar" ${termo ? "" : "disabled"}>Não quero receber</button>
         </div>
       </form>

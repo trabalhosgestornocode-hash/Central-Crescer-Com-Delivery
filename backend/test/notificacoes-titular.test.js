@@ -260,3 +260,18 @@ describe("termo v3 (aprovar antes de aplicar)", () => {
     assert.match(ler("docs/configuracoes-2-notificacoes/termo-v3-APROVAR-ANTES-DE-APLICAR.sql"), /NÃO APLICAR antes de/);
   });
 });
+
+describe("tela de aceite simplificada", () => {
+  test("botão principal 'Confirmar'; nada pré-marcado; sem campos jurídicos nem perguntas extras na tela de aceite", async () => {
+    const { readFileSync } = await import("node:fs"); const path = await import("node:path"); const { fileURLToPath } = await import("node:url");
+    const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const js = readFileSync(path.join(RAIZ, "frontend/notificacoes/titular.js"), "utf8");
+    const tela = js.slice(js.indexOf("function telaConsentimento"), js.indexOf("// GESTÃO"));
+    assert.match(tela, /class="tt-btn"[^>]*>Confirmar<\/button>/);
+    assert.doesNotMatch(tela, /Autorizar os avisos marcados/);
+    assert.doesNotMatch(tela, /type="checkbox"[^>]*\bchecked\b/);
+    assert.doesNotMatch(tela, /<input[^>]*type="(text|tel|email)"|CNPJ|raz[aã]o social|assinatura|contrato/i, "sem formulários nem dados jurídicos na tela");
+    assert.equal((tela.match(/type="checkbox"/g) ?? []).length, 2, "uma caixa por categoria (template) + 'Li e concordo'");
+    assert.match(tela, /Li e concordo com o termo\./);
+  });
+});
