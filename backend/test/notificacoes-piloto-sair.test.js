@@ -261,7 +261,7 @@ describe("FLUXO COMPLETO em ambiente isolado: convite → OTP (Baileys simulado)
     assert.equal((await titular.verificarCodigoConvite({ token, desafio: pedido.desafio, provisorio: pedido.provisorio, codigo, deps: dps })).resultado, "VERIFICADO");
     assert.equal(consent.length, 0, "verificar ≠ consentir");
     // 4) aceita o termo APROVADO e escolhe categorias → consentimento real (livro-razão)
-    const c = await titular.consentirConvite({ token, desafio: pedido.desafio, categorias: ["fechamento_operacional_diario"], termoVersao: 2, ip: "1.2.3.4", userAgent: "teste", deps: dps });
+    const c = await titular.consentirConvite({ token, desafio: pedido.desafio, categorias: ["fechamento_operacional_diario"], concordo: true, termoVersao: 2, ip: "1.2.3.4", userAgent: "teste", deps: dps });
     assert.equal(c.resultado, "CONSENTIDO");
     assert.equal(consent.length, 1);
     // 5) SAIR pelo WhatsApp: revoga, confirma uma vez e audita

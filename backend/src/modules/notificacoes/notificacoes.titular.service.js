@@ -28,6 +28,12 @@ async function conviteDoToken(token, deps) {
   return c;
 }
 
+/** Link da Política de Privacidade: só URL https configurada (NOTIFICACOES_POLITICA_PRIVACIDADE_URL); sem ela o titular vê o aviso de que o link ainda não foi publicado. Nunca inventado. */
+export function urlPoliticaPrivacidade(env = process.env) {
+  const u = String(env?.NOTIFICACOES_POLITICA_PRIVACIDADE_URL ?? "").trim();
+  return /^https:\/\/[^\s<>"']+$/.test(u) ? u : null;
+}
+
 /** O que o titular vê ao abrir o convite: empresa, unidades, categorias e o termo vigente — nenhum dado operacional. */
 export async function abrirConvite({ token, deps = {} }) {
   exigirAmbiente(deps);
@@ -40,6 +46,7 @@ export async function abrirConvite({ token, deps = {} }) {
     unidades: nomes.unidades.map((u) => u.nome),
     categorias: c.categorias_pretendidas.map((k) => ({ codigo: k, rotulo: rot.get(k)?.rotulo ?? k, descricao: rot.get(k)?.descricao ?? null, simulacao: rot.get(k)?.estado === "SIMULACAO" })),
     termo: termo ? { versao: termo.versao, texto: termo.texto.replaceAll("{empresa}", nomes.empresa), rascunho: termo.rascunho } : null,
+    politicaPrivacidadeUrl: urlPoliticaPrivacidade(deps.env ?? process.env),
     verificacaoDisponivel: capacidades(deps.env).otp, simulacao: capacidades(deps.env).simulado, expiraEm: c.expira_em,
   };
 }
@@ -87,7 +94,7 @@ export async function verificarCodigoConvite({ token, desafio, provisorio, codig
 }
 
 /** O titular escolhe as categorias e aceita o termo. Sem nenhuma marcada = recusa (registrada, nada é criado). */
-export async function consentirConvite({ token, desafio, categorias, termoVersao, ip, userAgent, deps = {} }) {
+export async function consentirConvite({ token, desafio, categorias, termoVersao, concordo = false, ip, userAgent, deps = {} }) {
   exigirAmbiente(deps);
   const c = await conviteDoToken(token, deps);
   // Consentimento REAL só com termo aprovado (rascunho = só simulação). Nenhuma versão jurídica inserida → recusa, nada é gravado.
@@ -96,6 +103,8 @@ export async function consentirConvite({ token, desafio, categorias, termoVersao
     if (!t || t.rascunho !== false) throw new ApiError(409, "O termo de consentimento ainda não foi aprovado.", { codigo: "TERMO_NAO_APROVADO" });
   }
   const lista = Array.isArray(categorias) ? [...new Set(categorias.map(String))] : [];
+  // Aceitar exige a declaração EXPLÍCITA "Li e concordo com o termo" (caixa desmarcada por padrão na tela). Recusar (nenhuma categoria) não exige.
+  if (lista.length > 0 && concordo !== true) throw new ApiError(400, "Marque “Li e concordo com o termo” para autorizar.", { codigo: "CONCORDO_OBRIGATORIO" });
   const r = await R(deps).consentir({ conviteId: c.id, desafioId: desafio, categorias: lista, termoVersao: Number(termoVersao),
     telefoneE164: decifrarTelefone(c.telefone_cifrado), ipHmac: hmacIp(ip), userAgent: resumirUa(userAgent) }, deps);
   if (r?.resultado === "CONSENTIDO" || r?.resultado === "RECUSADO_PELO_TITULAR") {

@@ -85,7 +85,7 @@ describe("convite → OTP → consentimento", () => {
   test("consentimento é ATO SEPARADO: só as categorias que o titular marcou; vazio = recusa; o número vai decifrado só ao banco", async () => {
     const { repo, token, st } = montar();
     st.convite.status = "VERIFICADO";
-    await titular.consentirConvite({ token, desafio: "d-1", categorias: ["fechamento_operacional_diario"], termoVersao: 1, ip: "1.2.3.4", userAgent: "Mozilla/5.0 <script>", deps: { repo, auditar: async () => {}, env: ENV_SIM } });
+    await titular.consentirConvite({ token, desafio: "d-1", categorias: ["fechamento_operacional_diario"], concordo: true, termoVersao: 1, ip: "1.2.3.4", userAgent: "Mozilla/5.0 <script>", deps: { repo, auditar: async () => {}, env: ENV_SIM } });
     assert.deepEqual(st.consentidos[0].categorias, ["fechamento_operacional_diario"]);
     assert.equal(st.consentidos[0].telefoneE164, NUM);
     assert.match(st.consentidos[0].ipHmac, /^[0-9a-f]{64}$/, "IP só como HMAC");
@@ -156,5 +156,68 @@ describe("palavra de saída no WhatsApp", () => {
     const r = await titular.processarPalavraDeSaida({ telefoneE164: NUM, texto: "SAIR", recebidoEm: new Date().toISOString(), env: { NOTIFICACOES_PALAVRA_CHAVE_SAIR: "true" }, deps: { repo, auditar: async () => {} } });
     assert.equal(r.aplicado, true);
     assert.deepEqual([st.revogacoes[0].origem, st.revogacoes[0].sairDeTudo], ["palavra_chave_inbound", true]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Termo v2 (rascunho): aceite explícito, Política de Privacidade, texto escolhido e nenhuma categoria pré-marcada
+// ---------------------------------------------------------------------------------------------------------------------------
+describe("termo v2 — aceite explícito e Política de Privacidade", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = await import("node:path");
+  const { fileURLToPath } = await import("node:url");
+  const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const dps = (repo, env = ENV_SIM) => ({ repo, auditar: async () => {}, env });
+
+  test("aceitar SEM 'Li e concordo' é recusado (400 CONCORDO_OBRIGATORIO); com ele passa; recusar (sem categorias) não exige", async () => {
+    const { repo, token, st } = montar(); st.convite.status = "VERIFICADO";
+    await assert.rejects(titular.consentirConvite({ token, desafio: "d-1", categorias: ["fechamento_operacional_diario"], termoVersao: 1, deps: dps(repo) }), (e) => e.statusCode === 400 && e.details?.codigo === "CONCORDO_OBRIGATORIO");
+    await assert.rejects(titular.consentirConvite({ token, desafio: "d-1", categorias: ["fechamento_operacional_diario"], concordo: "true", termoVersao: 1, deps: dps(repo) }), (e) => e.details?.codigo === "CONCORDO_OBRIGATORIO", "só o booleano true vale");
+    assert.equal(st.consentidos.length, 0, "nada é registrado sem a declaração");
+    assert.equal((await titular.consentirConvite({ token, desafio: "d-1", categorias: ["fechamento_operacional_diario"], concordo: true, termoVersao: 1, deps: dps(repo) })).resultado, "CONSENTIDO");
+    assert.equal((await titular.consentirConvite({ token, desafio: "d-1", categorias: [], termoVersao: 1, deps: dps(repo) })).resultado, "RECUSADO_PELO_TITULAR");
+  });
+  test("termo em RASCUNHO continua barrando o consentimento REAL (409), mesmo com 'concordo'", async () => {
+    const { repo, token, st } = montar(); st.convite.status = "VERIFICADO";
+    const real = { NOTIFICACOES_OTP_TRANSPORTE: "baileys", NOTIFICACOES_OTP_BAILEYS_AUTORIZADO: "true" };
+    await assert.rejects(titular.consentirConvite({ token, desafio: "d-1", categorias: ["fechamento_operacional_diario"], concordo: true, termoVersao: 1, deps: dps(repo, real) }), (e) => e.statusCode === 409 && e.details?.codigo === "TERMO_NAO_APROVADO");
+    assert.equal(st.consentidos.length, 0);
+  });
+  test("a tela do convite traz o link da Política só quando há URL https configurada (nunca inventada)", async () => {
+    const { repo, token } = montar();
+    const sem = await titular.abrirConvite({ token, deps: dps(repo) }); assert.equal(sem.politicaPrivacidadeUrl, null);
+    assert.equal(titular.urlPoliticaPrivacidade({ NOTIFICACOES_POLITICA_PRIVACIDADE_URL: "http://inseguro.exemplo/p" }), null);
+    assert.equal(titular.urlPoliticaPrivacidade({ NOTIFICACOES_POLITICA_PRIVACIDADE_URL: "javascript:alert(1)" }), null);
+    assert.equal(titular.urlPoliticaPrivacidade({ NOTIFICACOES_POLITICA_PRIVACIDADE_URL: "https://exemplo.com.br/privacidade" }), "https://exemplo.com.br/privacidade");
+    const com = await titular.abrirConvite({ token, deps: dps(repo, { ...ENV_SIM, NOTIFICACOES_POLITICA_PRIVACIDADE_URL: "https://exemplo.com.br/privacidade" }) });
+    assert.equal(com.politicaPrivacidadeUrl, "https://exemplo.com.br/privacidade");
+  });
+  test("a rota repassa 'concordo' só como booleano true", () => {
+    assert.match(readFileSync(path.join(RAIZ, "backend/src/modules/notificacoes/notificacoes.routes.js"), "utf8"), /concordo: b\(req\)\.concordo === true/);
+  });
+  test("tela: nenhuma categoria e nem o 'Li e concordo' vêm marcados; botão envia 'concordo'; link da Política", () => {
+    const src = readFileSync(path.join(RAIZ, "frontend/notificacoes/titular.js"), "utf8");
+    assert.doesNotMatch(src, /type="checkbox"[^>]*\bchecked\b/, "nenhum checkbox pré-marcado");
+    assert.match(src, /id="tt-concordo"/); assert.match(src, /Li e concordo com o termo\./); assert.match(src, /Pol[ií]tica de Privacidade/);
+    assert.match(src, /concordo: categorias\.length > 0 && raiz\.querySelector\("#tt-concordo"\)\?\.checked === true/);
+    assert.match(src, /if \(!raiz\.querySelector\("#tt-concordo"\)\?\.checked\) return erroNa/);
+  });
+  test("migration 143: texto escolhido na íntegra, versão 2 em RASCUNHO, sem dados legais inventados e sem aprovar nada", () => {
+    const sql = readFileSync(path.join(RAIZ, "database/migrations/143_termo_v2_rascunho_e_categorias_relatorios.sql"), "utf8").replace(/\r\n/g, "\n");
+    const texto = /\$termo\$([\s\S]*?)\$termo\$/.exec(sql)[1];
+    assert.equal(texto, [
+      "Autorização de Notificações — Crescer com Delivery", "",
+      "Ao aceitar, você autoriza o recebimento de notificações pelo WhatsApp referentes às unidades às quais possui acesso.", "",
+      "Você poderá escolher receber:", "- Relatório Operacional Diário.", "- Resumo Operacional Semanal.", "",
+      "Seu número será confirmado por código de segurança. Utilizaremos seus dados apenas para gerenciar as comunicações, conforme nossa Política de Privacidade.", "",
+      "Você poderá cancelar o recebimento a qualquer momento pelas configurações do sistema ou pelo canal de cancelamento disponibilizado.", "",
+      "[PENDENTE DE VERIFICAÇÃO JURÍDICA: identificação da empresa responsável e contato de privacidade]", "",
+      "Ao aceitar, confirmo que li e autorizo o recebimento das categorias selecionadas."].join("\n"));
+    assert.doesNotMatch(texto, /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|@/, "sem CNPJ nem e-mail inventados");
+    assert.match(sql, /select 2, t, encode\(sha256\(convert_to\(t, 'UTF8'\)\), 'hex'\), true/, "versão 2, hash = sha256 do texto, rascunho = true");
+    assert.match(sql, /o termo v2 não pode nascer aprovado/, "a própria migration aborta se a v2 estiver aprovada");
+    assert.doesNotMatch(sql, /insert into comunicacao_(consentimentos|destinatario_escopos|convites)/i, "a migration não cria consentimento, escopo nem convite");
+    const codigo = sql.split("\n").filter((l) => !l.trim().startsWith("--")).join("\n");
+    assert.doesNotMatch(codigo, /ativo\s*=\s*true/i, "as categorias continuam invisíveis ao resolvedor do D-1");
   });
 });
