@@ -98,11 +98,11 @@ describe("relatórios operacionais — banco de teste + gateway simulado", { ski
     if (!org) return t.skip("migration 141 não aplicada no banco alvo");
     for (let i = 0; i < 7; i++) { const c = dia(SEGUNDA_SEMANA, i); if (c !== DOMINGO) await fecharDia(c, i); }
     const deps = { relatorios: repoRelogioReal(), notificacoes: notifFake() };
-    const enf = await enfileirarRelatoriosDaUnidade(unidade(), { agora: AGORA, deps });
+    const enf = await enfileirarRelatoriosDaUnidade(unidade(), { env: { NOTIFICACOES_RELATORIOS_SEMANAL_HABILITADO: "true" }, agora: AGORA, deps });
     assert.equal(enf.semanal.enfileirados, 1, JSON.stringify(enf.semanal));
     const { data: res } = await supabase.from("operacional_resumos_semanais").select("*").eq("unidade_id", un).eq("semana_inicio", SEGUNDA_SEMANA);
     assert.equal(res.length, 1); assert.equal(res[0].status, "COMPLETA"); assert.equal(res[0].dias_validos, 7); assert.ok(res[0].indicadores.pedidos.recebidos > 0);
-    await enfileirarRelatoriosDaUnidade(unidade(), { agora: AGORA, deps });
+    await enfileirarRelatoriosDaUnidade(unidade(), { env: { NOTIFICACOES_RELATORIOS_SEMANAL_HABILITADO: "true" }, agora: AGORA, deps });
     assert.equal((await supabase.from("operacional_resumos_semanais").select("id").eq("unidade_id", un).eq("semana_inicio", SEGUNDA_SEMANA)).data.length, 1, "resumo idempotente");
     const { data: fila } = await supabase.from("operacional_relatorios_envios").select("*").eq("resumo_semanal_id", res[0].id); assert.equal(fila.length, 1);
 

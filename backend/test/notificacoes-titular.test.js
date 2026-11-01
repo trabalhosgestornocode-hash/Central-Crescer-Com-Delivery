@@ -221,3 +221,42 @@ describe("termo v2 — aceite explícito e Política de Privacidade", async () =
     assert.doesNotMatch(codigo, /ativo\s*=\s*true/i, "as categorias continuam invisíveis ao resolvedor do D-1");
   });
 });
+
+describe("Política de Privacidade — publicada só com dados verificados", () => {
+  const COMPLETO = { NOTIFICACOES_POLITICA_CONTROLADOR: "Empresa Exemplo Ltda — CNPJ 00.000.000/0001-00", NOTIFICACOES_POLITICA_CONTATO: "privacidade@exemplo.com.br", NOTIFICACOES_POLITICA_RETENCAO: "Guardamos o registro do consentimento enquanto durar a relação e pelo prazo legal.", NOTIFICACOES_POLITICA_ATUALIZADA_EM: "2026-11-02" };
+  test("sem os quatro dados verificados NÃO está publicada e não oferece link; com eles publica e o termo ganha o link interno", () => {
+    assert.deepEqual(titular.politicaPrivacidade({}), { publicada: false });
+    for (const k of Object.keys(COMPLETO)) { const parcial = { ...COMPLETO }; delete parcial[k]; assert.equal(titular.politicaPrivacidade(parcial).publicada, false, `sem ${k}`); assert.equal(titular.urlPoliticaPrivacidade(parcial), null); }
+    assert.equal(titular.politicaPrivacidade({ ...COMPLETO, NOTIFICACOES_POLITICA_ATUALIZADA_EM: "ontem" }).publicada, false, "data inválida");
+    const p = titular.politicaPrivacidade(COMPLETO); assert.equal(p.publicada, true); assert.equal(p.contato, "privacidade@exemplo.com.br");
+    assert.equal(titular.urlPoliticaPrivacidade(COMPLETO), "/notificacoes/privacidade.html");
+    assert.equal(titular.urlPoliticaPrivacidade({ ...COMPLETO, NOTIFICACOES_POLITICA_PRIVACIDADE_URL: "https://exemplo.com.br/p" }), "https://exemplo.com.br/p", "URL https configurada tem prioridade");
+  });
+  test("a resposta da rota nunca traz o texto bruto com caracteres de controle e corta tamanhos", () => {
+    const p = titular.politicaPrivacidade({ ...COMPLETO, NOTIFICACOES_POLITICA_CONTROLADOR: `A\u0000B\n${"x".repeat(500)}` });
+    assert.ok(!/[\u0000-\u001f]/.test(p.controlador)); assert.ok(p.controlador.length <= 300);
+  });
+  test("página: sem dados verificados mostra 'em publicação'; o texto fixo não inventa identidade, retenção ou contato", async () => {
+    const { readFileSync } = await import("node:fs"); const path = await import("node:path"); const { fileURLToPath } = await import("node:url");
+    const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const js = readFileSync(path.join(RAIZ, "frontend/notificacoes/privacidade.js"), "utf8");
+    assert.match(js, /Política em publicação/); assert.match(js, /p\.controlador/); assert.match(js, /p\.retencao/); assert.match(js, /p\.contato/);
+    assert.doesNotMatch(js, /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|@[a-z0-9-]+\.[a-z]{2,}/i, "sem CNPJ nem e-mail embutidos");
+    const rotas = readFileSync(path.join(RAIZ, "backend/src/modules/notificacoes/notificacoes.routes.js"), "utf8");
+    assert.match(rotas, /titularRouter\.post\("\/politica-privacidade"/);
+  });
+});
+
+describe("termo v3 (aprovar antes de aplicar)", () => {
+  test("o texto da v3 é EXATAMENTE o aprovado para apresentação (= v2 sem o marcador jurídico), fora da pasta de migrations", async () => {
+    const { readFileSync, existsSync } = await import("node:fs"); const path = await import("node:path"); const { fileURLToPath } = await import("node:url");
+    const RAIZ = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const ler = (p) => readFileSync(path.join(RAIZ, p), "utf8").replace(/\r\n/g, "\n");
+    const v2 = /\$termo\$([\s\S]*?)\$termo\$/.exec(ler("database/migrations/143_termo_v2_rascunho_e_categorias_relatorios.sql"))[1];
+    const v3 = /\$termo\$([\s\S]*?)\$termo\$/.exec(ler("docs/configuracoes-2-notificacoes/termo-v3-APROVAR-ANTES-DE-APLICAR.sql"))[1];
+    assert.equal(v3, v2.replace("[PENDENTE DE VERIFICAÇÃO JURÍDICA: identificação da empresa responsável e contato de privacidade]\n\n", ""));
+    assert.doesNotMatch(v3, /PENDENTE|CNPJ|\d{2}\.\d{3}\.\d{3}|@/);
+    assert.equal(existsSync(path.join(RAIZ, "database/migrations/144_termo_v3.sql")), false, "a v3 não está na pasta de migrations");
+    assert.match(ler("docs/configuracoes-2-notificacoes/termo-v3-APROVAR-ANTES-DE-APLICAR.sql"), /NÃO APLICAR antes de/);
+  });
+});

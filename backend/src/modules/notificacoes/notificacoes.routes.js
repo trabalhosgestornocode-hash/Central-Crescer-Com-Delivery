@@ -61,6 +61,7 @@ titularRouter.post("/convite/abrir", asyncHandler(async (req, res) => res.json({
 titularRouter.post("/convite/codigo", asyncHandler(async (req, res) => res.json({ data: await titular.pedirCodigoConvite({ token: b(req).token, ip: ipCliente(req) }) })));
 titularRouter.post("/convite/verificar", asyncHandler(async (req, res) => res.json({ data: await titular.verificarCodigoConvite({
   token: b(req).token, desafio: b(req).desafio, provisorio: b(req).provisorio, codigo: b(req).codigo }) })));
+titularRouter.post("/politica-privacidade", asyncHandler(async (_req, res) => res.json({ data: titular.politicaPrivacidade() })));   // POST como as demais rotas públicas (nenhuma usa GET)
 titularRouter.post("/convite/consentir", asyncHandler(async (req, res) => res.json({ data: await titular.consentirConvite({
   token: b(req).token, desafio: b(req).desafio, categorias: b(req).categorias, termoVersao: b(req).termoVersao, concordo: b(req).concordo === true, ip: ipCliente(req), userAgent: req.get("user-agent") }) })));
 titularRouter.post("/gestao/codigo", asyncHandler(async (req, res) => res.json({ data: await titular.pedirCodigoGestao({ telefone: b(req).telefone, ip: ipCliente(req) }) })));
