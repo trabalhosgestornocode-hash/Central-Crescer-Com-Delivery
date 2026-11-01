@@ -43,7 +43,10 @@ const ultimaVersaoPorDia = (rows) => { const m = new Map(); for (const r of rows
  * @param {{organizacaoId: string, unidadeId: string, unidadeNome?: string, fusoUnidade?: string|null, integracao: object, modulosEfetivos: string[]}} u
  * @param {{agora?: () => Date, deps?: {relatorios?: object, notificacoes?: object, auditar?: Function}}} p
  */
-export async function enfileirarRelatoriosDaUnidade(u, { agora = () => new Date(), deps = {} } = {}) {
+/** O semanal fica PREPARADO mas DESLIGADO por padrão: só NOTIFICACOES_RELATORIOS_SEMANAL_HABILITADO=true o enfileira (o diário não depende dele). */
+export const semanalHabilitado = (env = process.env) => String(env?.NOTIFICACOES_RELATORIOS_SEMANAL_HABILITADO ?? "").trim().toLowerCase() === "true";
+
+export async function enfileirarRelatoriosDaUnidade(u, { agora = () => new Date(), deps = {}, env = process.env } = {}) {
   const R = deps.relatorios ?? repoPadrao; const N = deps.notificacoes ?? notifPadrao;
   const agoraMs = agora().getTime();
   const { hoje, fuso } = hojeDaUnidade({ agoraMs, fusoUnidade: u.fusoUnidade });
@@ -77,6 +80,7 @@ export async function enfileirarRelatoriosDaUnidade(u, { agora = () => new Date(
   }
 
   // ---------- semanal (segunda-feira local; semana encerrada) ----------
+  if (!semanalHabilitado(env)) { saida.semanal.motivo = "SEMANAL_DESLIGADO"; return saida; }
   if (segundaDaSemana(hoje) !== hoje) { saida.semanal.motivo = "NAO_E_SEGUNDA"; return saida; }
   const segunda = ultimaSemanaEncerrada(hoje); const dias = diasDaSemana(segunda);
   const versoes = await R.fechamentosEntre({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, de: dias[0], ate: dias[6] });

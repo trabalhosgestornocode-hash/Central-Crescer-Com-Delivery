@@ -42,7 +42,7 @@ export async function executarCicloRelatorios({ agora = () => new Date(), env = 
   // (2) enfileiramento
   const enfileirados = [];
   for (const u of elegiveis) {
-    try { enfileirados.push(await (deps.enfileirar ?? enfileirarRelatoriosDaUnidade)({ ...u, modulosEfetivos: u.modulosEfetivos ?? ["checklist_operacional"] }, { agora, deps: deps.servicoDeps ?? {} })); }
+    try { enfileirados.push(await (deps.enfileirar ?? enfileirarRelatoriosDaUnidade)({ ...u, modulosEfetivos: u.modulosEfetivos ?? ["checklist_operacional"] }, { agora, deps: deps.servicoDeps ?? {}, env })); }
     catch (e) { enfileirados.push({ unidadeId: u.unidadeId, erro: String(e?.message ?? e).slice(0, 200) }); }
   }
   // (3) despacho (desligado por padrão: devolve { desligado: true })

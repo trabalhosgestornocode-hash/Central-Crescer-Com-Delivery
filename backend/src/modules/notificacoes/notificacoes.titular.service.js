@@ -28,10 +28,26 @@ async function conviteDoToken(token, deps) {
   return c;
 }
 
-/** Link da Política de Privacidade: só URL https configurada (NOTIFICACOES_POLITICA_PRIVACIDADE_URL); sem ela o titular vê o aviso de que o link ainda não foi publicado. Nunca inventado. */
+/**
+ * POLÍTICA DE PRIVACIDADE (página pública /notificacoes/privacidade.html). O texto fixo descreve só FATOS do sistema; os dados que dependem de
+ * verificação do responsável vêm de variáveis (nada é inventado): controlador (razão social + CNPJ), canal de contato de privacidade, política de
+ * retenção e data da versão. Sem as quatro, a política NÃO é considerada publicada e nenhum link é oferecido no termo.
+ */
+const limpar = (v, max) => String(v ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, max);
+export function politicaPrivacidade(env = process.env) {
+  const controlador = limpar(env?.NOTIFICACOES_POLITICA_CONTROLADOR, 300);
+  const contato = limpar(env?.NOTIFICACOES_POLITICA_CONTATO, 200);
+  const retencao = limpar(env?.NOTIFICACOES_POLITICA_RETENCAO, 600);
+  const atualizadaEm = /^\d{4}-\d{2}-\d{2}$/.test(String(env?.NOTIFICACOES_POLITICA_ATUALIZADA_EM ?? "").trim()) ? String(env.NOTIFICACOES_POLITICA_ATUALIZADA_EM).trim() : null;
+  const publicada = Boolean(controlador && contato && retencao && atualizadaEm);
+  return publicada ? { publicada, controlador, contato, retencao, atualizadaEm } : { publicada: false };
+}
+
+/** Link da Política mostrado no termo: a URL https configurada (NOTIFICACOES_POLITICA_PRIVACIDADE_URL) ou, com a política publicada, a página interna. Nunca inventado. */
 export function urlPoliticaPrivacidade(env = process.env) {
   const u = String(env?.NOTIFICACOES_POLITICA_PRIVACIDADE_URL ?? "").trim();
-  return /^https:\/\/[^\s<>"']+$/.test(u) ? u : null;
+  if (/^https:\/\/[^\s<>"']+$/.test(u)) return u;
+  return politicaPrivacidade(env).publicada ? "/notificacoes/privacidade.html" : null;
 }
 
 /** O que o titular vê ao abrir o convite: empresa, unidades, categorias e o termo vigente — nenhum dado operacional. */

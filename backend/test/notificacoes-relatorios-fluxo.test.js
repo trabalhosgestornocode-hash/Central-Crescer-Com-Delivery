@@ -18,6 +18,7 @@ const { criarFakeProvider } = await import("../src/modules/comunicacao/providers
 const TEL = "+5511977770001";
 const ENV_ON = { NOTIFICACOES_RELATORIOS_ENVIO_HABILITADO: "true", NOTIFICACOES_RELATORIOS_ALLOWLIST_E164: TEL };
 const VIVA = { estado: "ao_vivo", motivo: null };
+const SEMANAL_ON = { NOTIFICACOES_RELATORIOS_SEMANAL_HABILITADO: "true" };
 const AGORA = () => new Date("2026-10-28T12:00:00.000Z");          // 09:00 em São Paulo
 const fech = (competencia, over = {}) => ({ id: `f-${competencia}`, competencia, versao: 1, status: "CONSOLIDADO", hash_conteudo: "h", cobertura: {}, diagnostico: { principal: { fato: "x", acao: "y" } },
   indicadores: { pedidos: { recebidos: 40, concluidosNoDia: 38, canceladosNoDia: 2 }, preparo: { estado: "calculado", nome: "Preparo", media: 12, amostras: 30, meta: 15 }, entrega: { estado: "indisponivel", nome: "Entrega" }, vida: { estado: "indisponivel", nome: "Vida" },
@@ -88,7 +89,7 @@ describe("enfileiramento diário e semanal", () => {
   test("DIÁRIO: um item por destinatário autorizado, com chave por fechamento; repetir o ciclo não duplica", async () => {
     const R = repoMemoria({ fechamentos: [fech("2026-10-27")] });
     const a = await enfileirarRelatoriosDaUnidade(unidade(), { agora: AGORA, deps: { relatorios: R, notificacoes: notifFake() } });
-    assert.equal(a.diario.enfileirados, 1); assert.equal(a.semanal.motivo, "NAO_E_SEGUNDA");
+    assert.equal(a.diario.enfileirados, 1); assert.equal(a.semanal.motivo, "SEMANAL_DESLIGADO", "semanal desligado por padrão");
     const it = [...R.itens.values()][0]; assert.equal(it.chave_idempotencia, "wa:rel:diario:f-2026-10-27:d1:inicial"); assert.equal(it.referencia, "2026-10-27");
     const b = await enfileirarRelatoriosDaUnidade(unidade(), { agora: AGORA, deps: { relatorios: R, notificacoes: notifFake() } });
     assert.equal(b.diario.enfileirados, 0); assert.equal(R.itens.size, 1);
@@ -112,15 +113,15 @@ describe("enfileiramento diário e semanal", () => {
     const dias = ["2026-10-26", "2026-10-27", "2026-10-28", "2026-10-29", "2026-10-30", "2026-10-31", "2026-11-01"].map((c) => fech(c));
     const seg = () => new Date("2026-11-02T13:00:00.000Z");                         // segunda 10:00 em SP
     const R = repoMemoria({ fechamentos: dias });
-    const a = await enfileirarRelatoriosDaUnidade(unidade(), { agora: seg, deps: { relatorios: R, notificacoes: notifFake() } });
+    const a = await enfileirarRelatoriosDaUnidade(unidade(), { env: SEMANAL_ON, agora: seg, deps: { relatorios: R, notificacoes: notifFake() } });
     assert.equal(a.semanal.enfileirados, 1); const it = [...R.itens.values()].find((i) => i.tipo === "semanal");
     assert.equal(it.referencia, "2026-10-26"); assert.match(it.chave_idempotencia, /^wa:sem:u1:2026-10-26:d1:/);
-    assert.equal((await enfileirarRelatoriosDaUnidade(unidade(), { agora: seg, deps: { relatorios: R, notificacoes: notifFake() } })).semanal.enfileirados, 0);
+    assert.equal((await enfileirarRelatoriosDaUnidade(unidade(), { env: SEMANAL_ON, agora: seg, deps: { relatorios: R, notificacoes: notifFake() } })).semanal.enfileirados, 0);
     // domingo à noite em SP ainda é domingo (UTC já é segunda): NÃO gera
     const domingoNoite = () => new Date("2026-11-02T01:30:00.000Z");
-    assert.equal((await enfileirarRelatoriosDaUnidade(unidade(), { agora: domingoNoite, deps: { relatorios: repoMemoria({ fechamentos: dias }), notificacoes: notifFake() } })).semanal.motivo, "NAO_E_SEGUNDA");
+    assert.equal((await enfileirarRelatoriosDaUnidade(unidade(), { env: SEMANAL_ON, agora: domingoNoite, deps: { relatorios: repoMemoria({ fechamentos: dias }), notificacoes: notifFake() } })).semanal.motivo, "NAO_E_SEGUNDA");
     // semana com poucos dias válidos: dados insuficientes, nada enfileirado
-    const poucos = await enfileirarRelatoriosDaUnidade(unidade(), { agora: seg, deps: { relatorios: repoMemoria({ fechamentos: dias.slice(0, 3) }), notificacoes: notifFake() } });
+    const poucos = await enfileirarRelatoriosDaUnidade(unidade(), { env: SEMANAL_ON, agora: seg, deps: { relatorios: repoMemoria({ fechamentos: dias.slice(0, 3) }), notificacoes: notifFake() } });
     assert.deepEqual([poucos.semanal.enfileirados, poucos.semanal.motivo], [0, MOTIVO.DADOS_INSUFICIENTES]);
   });
 });
