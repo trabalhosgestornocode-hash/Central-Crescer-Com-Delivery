@@ -55,13 +55,36 @@ describe("resumo semanal a partir dos fechamentos armazenados", () => {
     assert.equal(gerarMensagemSemanal({ resumo: r4 }), null);
     const r5 = resumirSemana(SEG, semana(5)); assert.equal(r5.status, STATUS_SEMANA.PARCIAL); assert.deepEqual(r5.diasAusentes, ["2026-10-31", "2026-11-01"]);
     const m = gerarMensagemSemanal({ resumo: r5, unidadeNome: "Unidade X" });
-    assert.match(m, /SEMANA PARCIAL \(5\/7 dias; sem fechamento válido: Sáb 31\/10, Dom 01\/11\)/);
+    assert.ok(m.includes("26/10 a 01/11/2026 | Semana parcial\nCobertura: 5 de 7 dias com fechamento válido (sem fechamento: Sáb 31/10, Dom 01/11)"));
+    assert.ok(m.includes("• 2 dia(s) sem fechamento válido: os totais cobrem 5 de 7 dias."));
+  });
+  test("identidade visual, CHAMADOS, pico mais frequente e clientes por pedido (sem dupla contagem)", () => {
+    const v = semana(7).map((f, k) => ({ ...f, indicadores: { ...f.indicadores, movimento: { picos: [{ hora: k < 4 ? 20 : 12, pedidos: 15 }] },
+      clientes: { base: 100, novos: 40, recorrentes: 60, semInformacao: 0 }, disputas: { abertasNoDia: 1, expiradasNoDia: k === 0 ? 1 : 0 } } }));
+    const r = resumirSemana(SEG, v);
+    assert.deepEqual(r.indicadores.horarioDePico, { hora: 20, dias: 4, diasComDado: 7 });
+    assert.equal(r.indicadores.clientes.novos + r.indicadores.clientes.recorrentes, r.indicadores.pedidos.recebidos);
+    const m = gerarMensagemSemanal({ resumo: r, unidadeNome: "Subway North Shopping" });
+    for (const s of ["*CRESCER COM DELIVERY*", "*RESUMO OPERACIONAL SEMANAL*", "*Subway North Shopping*", "26/10 a 01/11/2026 | Semana completa", "Cobertura: 7 de 7 dias com fechamento válido",
+      "*RESUMO DA SEMANA*", "_Médias ponderadas pelo número de pedidos_", "• Horário de pico mais frequente: 20h às 21h (maior pico em 4 de 7 dias)", "• Pedidos de clientes novos: 280",
+      "*CHAMADOS*\n• Abertos na semana: 7\n• Com prazo expirado: 1", "• Um chamado atingiu o prazo de expiração.", "*RECOMENDAÇÕES*", "_Crescer com Delivery | Inteligência operacional_"]) assert.ok(m.includes(s), s);
+    assert.doesNotMatch(m, /disput|sem resposta/i);
+  });
+  test("pior caso semanal (todos os pontos, motivos longos, 2 dias ausentes, nome longo) cabe no limite", () => {
+    const longo = "Motivo oficial de cancelamento com descrição bem longa";
+    const v = semana(5).map((f) => ({ ...f, indicadores: { ...f.indicadores, pedidos: { recebidos: 100, concluidosNoDia: 60, canceladosNoDia: 40 }, atrasos: { pedidosAvaliados: 100, pedidosAtrasados: 70 },
+      cancelamentos: { total: 40, motivos: [{ descricao: `${longo} A`, quantidade: 30 }, { descricao: `${longo} B`, quantidade: 10 }] }, disputas: { abertasNoDia: 5, expiradasNoDia: 5 },
+      movimento: { picos: [{ hora: 20, pedidos: 30 }] }, clientes: { base: 100, novos: 50, recorrentes: 50 } } }));
+    const r = resumirSemana(SEG, v);
+    const m = gerarMensagemSemanal({ resumo: r, unidadeNome: "Subway Saci — Matriz Unidade com Nome Bem Comprido" });
+    assert.ok(m.length <= 1500, `tamanho ${m.length}`);
+    assert.deepEqual(validarMensagemSemanal(m, r).problemas, []);
   });
   test("tempo sem amostra fica 'não disponível' (nunca zero) e dado de outra semana é ignorado", () => {
     const v = semana(7); for (const f of v) f.indicadores.entrega = { estado: "indisponivel" };
     const r = resumirSemana(SEG, [...v, dia("2026-10-19")]);
     assert.equal(r.indicadores.entrega.estado, "indisponivel");
-    assert.match(gerarMensagemSemanal({ resumo: r }), /Entrega: não disponível/);
+    assert.match(gerarMensagemSemanal({ resumo: r }), /Tempo médio de entrega: não disponível/);
     assert.equal(r.indicadores.pedidos.recebidos, 700);
   });
   test("mensagem objetiva e válida: ≤ 1500, sem dado pessoal, com a situação; texto fora do padrão é barrado", () => {

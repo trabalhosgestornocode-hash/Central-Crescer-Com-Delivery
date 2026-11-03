@@ -146,7 +146,7 @@ describe("despacho pelo gateway simulado", () => {
     const r = await rodar(R, { servico, aud });
     assert.deepEqual(r.resultados.map((x) => x.resultado), ["ENVIADO"]);
     assert.equal(provider.mensagensEnviadas.length, 1); assert.equal(provider.mensagensEnviadas[0].telefoneE164, TEL);
-    assert.match(provider.mensagensEnviadas[0].texto, /Fechamento operacional/); assert.equal(provider.mensagensEnviadas[0].idempotencyKey, "wa:rel:diario:f-2026-10-27:d1:inicial");
+    assert.match(provider.mensagensEnviadas[0].texto, /RELATÓRIO OPERACIONAL DIÁRIO/); assert.equal(provider.mensagensEnviadas[0].idempotencyKey, "wa:rel:diario:f-2026-10-27:d1:inicial");
     assert.ok([...R.itens.values()][0].provider_message_id);
     assert.equal(aud.length, 1); assert.doesNotMatch(JSON.stringify(aud), /\+55|Fechamento operacional/);
     await rodar(R, { servico }); assert.equal(provider.mensagensEnviadas.length, 1);
