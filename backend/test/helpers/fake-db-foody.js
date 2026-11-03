@@ -1,46 +1,79 @@
 // Banco FALSO em memória com a API mínima do supabase-js usada por foody.repository.js. Simula as travas da migration 144:
 // tenant (unidade pertence à organização), unicidade (unidade_id, foody_uid) e a função foody_fechamento_registrar.
+// Da 145: tabelas de destino/decisão e a unicidade GLOBAL de linha ativa por (conexao_id, foody_uid) — escrita que deixaria um
+// uid ativo em dois tenants é recusada (23505) e desfeita, como o índice uq_foody_pedidos_conexao_uid_ativo faria.
 // Registra cada chamada para os testes conferirem os filtros de organização/unidade.
 import { randomUUID } from "node:crypto";
 
 export function criarFakeDb({ unidades = {} } = {}) {
-  const tabelas = { foody_conexoes: [], foody_sync_execucoes: [], foody_pedidos: [], foody_fechamentos_logisticos: [] };
+  const tabelas = { foody_conexoes: [], foody_sync_execucoes: [], foody_pedidos: [], foody_fechamentos_logisticos: [],
+    foody_conexao_destinos: [], foody_triagem_decisoes: [] };
   const chamadas = [];
+  let seqCarimbo = 0;
   const validarTenant = (t, linha) => {
     if (unidades[linha.unidade_id] !== linha.organizacao_id) {
       const e = new Error(`${t}: a unidade ${linha.unidade_id} não pertence à organização ${linha.organizacao_id}`); e.code = "42501"; throw e;
     }
   };
 
+  const unicoAtivoViolado = () => {
+    const vistos = new Set();
+    for (const r of tabelas.foody_pedidos) {
+      if (r.roteamento_ativo === false || !r.conexao_id) continue;
+      const k = `${r.conexao_id}|${r.foody_uid}`;
+      if (vistos.has(k)) return true;
+      vistos.add(k);
+    }
+    return false;
+  };
+  const comUnicidade = (tabela, fn) => {
+    if (tabela !== "foody_pedidos") return fn();
+    const antes = tabelas.foody_pedidos.map((r) => ({ ...r }));
+    const r = fn();
+    if (unicoAtivoViolado()) {
+      tabelas.foody_pedidos.splice(0, tabelas.foody_pedidos.length, ...antes);
+      throw Object.assign(new Error("uq_foody_pedidos_conexao_uid_ativo"), { code: "23505" });
+    }
+    return r;
+  };
+
   function builder(tabela) {
-    const st = { tabela, op: "select", filtros: [], cols: "*", ordem: null, faixa: null, lim: null, modo: "lista", valor: null, opcoes: null };
+    const st = { tabela, op: "select", filtros: [], cols: "*", ordem: null, faixa: null, lim: null, modo: "lista", valor: null, opcoes: null, retornar: false };
     const casa = (r) => st.filtros.every(([tipo, k, v]) => (tipo === "eq" ? r[k] === v : v.includes(r[k])));
     const executar = () => {
       chamadas.push({ tabela, op: st.op, filtros: st.filtros.map(([t, k, v]) => [t, k, v]), valor: st.valor });
       const linhas = tabelas[tabela];
       try {
         if (st.op === "insert") {
-          const novas = (Array.isArray(st.valor) ? st.valor : [st.valor]).map((v) => ({ id: randomUUID(), ...v }));
+          // Como o default now() do banco: carimbo estritamente crescente (a ordem por iniciado_em é a ordem de inserção).
+          const carimbo = tabela === "foody_sync_execucoes" ? { iniciado_em: new Date(Date.UTC(2026, 0, 1) + ++seqCarimbo).toISOString() } : {};
+          const novas = (Array.isArray(st.valor) ? st.valor : [st.valor]).map((v) => ({ id: randomUUID(), ...carimbo, ...v }));
           for (const n of novas) validarTenant(tabela, n);
           linhas.push(...novas);
           return { data: st.modo === "lista" ? novas : novas[0], error: null };
         }
         if (st.op === "upsert") {
-          for (const v of st.valor) {
-            validarTenant(tabela, v);
-            const i = linhas.findIndex((r) => r.unidade_id === v.unidade_id && r.foody_uid === v.foody_uid);
-            if (i >= 0) linhas[i] = { ...linhas[i], ...v }; else linhas.push({ id: randomUUID(), ...v });
-          }
+          comUnicidade(tabela, () => {
+            for (const v of st.valor) {
+              validarTenant(tabela, v);
+              const i = linhas.findIndex((r) => r.unidade_id === v.unidade_id && r.foody_uid === v.foody_uid);
+              if (i >= 0) linhas[i] = { ...linhas[i], ...v }; else linhas.push({ id: randomUUID(), roteamento_ativo: true, ...v });
+            }
+          });
           return { data: null, error: null };
         }
         if (st.op === "update") {
-          for (const r of linhas.filter(casa)) {
-            const novo = { ...r, ...st.valor };
-            validarTenant(tabela, novo);
-            if (novo.unidade_id !== r.unidade_id) throw Object.assign(new Error("unidade não muda"), { code: "42501" });
-            Object.assign(r, st.valor);
-          }
-          return { data: null, error: null };
+          const alteradas = comUnicidade(tabela, () => {
+            const lista = linhas.filter(casa);
+            for (const r of lista) {
+              const novo = { ...r, ...st.valor };
+              validarTenant(tabela, novo);
+              if (novo.unidade_id !== r.unidade_id) throw Object.assign(new Error("unidade não muda"), { code: "42501" });
+              Object.assign(r, st.valor);
+            }
+            return lista;
+          });
+          return { data: st.retornar ? alteradas.map((r) => ({ ...r })) : null, error: null };
         }
         let res = linhas.filter(casa);
         if (st.ordem) {
@@ -58,7 +91,7 @@ export function criarFakeDb({ unidades = {} } = {}) {
       }
     };
     const b = {
-      select(cols = "*") { if (st.op === "select") st.cols = cols; return b; },
+      select(cols = "*") { if (st.op === "select") st.cols = cols; else st.retornar = true; return b; },
       eq(k, v) { st.filtros.push(["eq", k, v]); return b; },
       in(k, v) { st.filtros.push(["in", k, v]); return b; },
       order(k, { ascending = true } = {}) { st.ordem = [k, ascending]; return b; },

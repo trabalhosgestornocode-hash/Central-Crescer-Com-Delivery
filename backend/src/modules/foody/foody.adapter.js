@@ -18,6 +18,7 @@ import {
   STATUS_FOODY_PARA_SITUACAO, FORMA_PAGAMENTO, RAZAO_CANCELAMENTO, ENTREGADOR_TIPO, COURIER_TYPE_PROPRIO,
 } from "./foody.constants.js";
 import { paraParede } from "./foody.periodo.js";
+import { classificarPedidoCompartilhado, linhasParaTriagem, RESULTADO_TRIAGEM } from "./foody.classificacao.js";
 
 const texto = (v, max) => {
   if (v == null) return null;
@@ -54,6 +55,15 @@ const CAMPOS_CONTEUDO = [
   "data_finalizado", "data_cancelado", "prazo_entrega", "cancelamento_razao", "cancelamento_justificativa",
 ];
 
+/** Campos extras do hash no modo COMPARTILHADO (145): mudar destino, motivo de triagem ou versão do catálogo regrava a linha. */
+const CAMPOS_CONTEUDO_COMPARTILHADO = [...CAMPOS_CONTEUDO, "destino_id", "triagem_motivo", "catalogo_versao"];
+
+/** Hash de conteúdo da linha. Modo da unidade (144) = exatamente o hash de sempre; modo compartilhado inclui os campos da 145. */
+export function hashConteudoPedido(registro, { compartilhado = false } = {}) {
+  const campos = compartilhado ? CAMPOS_CONTEUDO_COMPARTILHADO : CAMPOS_CONTEUDO;
+  return sha256(jsonEstavel(Object.fromEntries(campos.map((k) => [k, registro[k] ?? null]))));
+}
+
 /** Operação identificada que NÃO é a da unidade dona da conta (hoje: Açaí no Grau). Dúvida não conta como outra operação. */
 export const ehOutraOperacao = (operacao) => operacao !== OPERACAO.SUBWAY && operacao !== OPERACAO.REVISAO_NECESSARIA;
 
@@ -62,7 +72,7 @@ export const CAMPOS_COMERCIAIS_OUTRA_OPERACAO = Object.freeze([
   "detalhes_pedido", "valor_total", "taxa_entrega", "forma_pagamento", "cancelamento_razao", "cancelamento_justificativa",
 ]);
 
-function minimizarOutraOperacao(registro) {
+export function minimizarOutraOperacao(registro) {
   for (const k of CAMPOS_COMERCIAIS_OUTRA_OPERACAO) registro[k] = null;
   // O motivo do classificador cita os produtos encontrados (dado comercial da outra organização): fica só o rótulo.
   registro.operacao_motivo = "Pedido de outra operação despachado por esta conta: só o mínimo logístico é guardado.";
@@ -71,9 +81,11 @@ function minimizarOutraOperacao(registro) {
 /**
  * Pedido cru da API → registro saneado. Devolve { registro } ou { erro } (pedido malformado vira pendência, nunca exceção).
  * @param {object} o pedido como veio da API
- * @param {{ hashEntregador: (nome:string)=>string|null }} deps
+ * @param {{ hashEntregador: (nome:string)=>string|null, compartilhado?: boolean }} deps
+ *   compartilhado = conexão com destino ATIVO (145): a operação vem da classificação ESTRITA (catálogo versionado; item
+ *   desconhecido = triagem) e NADA é minimizado aqui — quem decide destino e minimização é foody.roteamento.js, antes de gravar.
  */
-export function sanearPedidoApi(o, { hashEntregador }) {
+export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, catalogo = undefined }) {
   if (!o || typeof o !== "object") return { erro: "PEDIDO_INVALIDO" };
   const uid = texto(o.uid, 80);
   const numeroPedido = texto(o.id, 40);
@@ -85,7 +97,7 @@ export function sanearPedidoApi(o, { hashEntregador }) {
   const nome = o.courier && typeof o.courier.courierName === "string" ? o.courier.courierName.trim() : "";
   const tipo = classificarTipoEntregador(o.courier);
   const detalhes = texto(o.orderDetails, 4000);
-  const op = classificarOperacao({ detalhesPedido: detalhes });
+  const op = compartilhado ? classificacaoCompartilhada(detalhes, catalogo) : classificarOperacao({ detalhesPedido: detalhes });
 
   const registro = {
     foody_uid: uid,
@@ -120,9 +132,28 @@ export function sanearPedidoApi(o, { hashEntregador }) {
     cancelamento_justificativa: texto(o.cancellationText, 300),
   };
   if (registro.entregador_presente && !registro.entregador_hash) return { erro: "HASH_ENTREGADOR_FALHOU", uid };
+  if (compartilhado) {
+    registro.triagem_motivo = op.triagemMotivo;
+    registro.catalogo_versao = op.catalogoVersao;
+    // Só as linhas sem atribuição segura — é o que a linha de triagem pode guardar (o roteamento descarta o resto).
+    if (op.triagemMotivo) Object.defineProperty(registro, "linhasTriagem", { value: linhasParaTriagem(detalhes, { catalogo }), enumerable: false });
+    return { registro }; // sem fonte_hash: o roteamento minimiza conforme o destino e calcula o hash da linha final
+  }
   if (ehOutraOperacao(registro.operacao)) minimizarOutraOperacao(registro);
-  registro.fonte_hash = sha256(jsonEstavel(Object.fromEntries(CAMPOS_CONTEUDO.map((k) => [k, registro[k]]))));
+  registro.fonte_hash = hashConteudoPedido(registro);
   return { registro };
+}
+
+/** Classificação estrita → {operacao, motivo} no formato do adaptador. O motivo NUNCA cita produto (só contagens). */
+function classificacaoCompartilhada(detalhes, catalogo) {
+  const c = classificarPedidoCompartilhado(detalhes, catalogo ? { catalogo } : {});
+  const evid = `${c.linhas} linha(s): ${c.evidencias.catalogo} por catálogo, ${c.evidencias.termo} por termo validado, ${c.desconhecidas} desconhecida(s)`;
+  return {
+    operacao: c.operacao,
+    motivo: c.operacao === RESULTADO_TRIAGEM ? `Triagem (${c.motivo}) — catálogo ${c.catalogoVersao}; ${evid}.` : `Catálogo ${c.catalogoVersao}; ${evid}.`,
+    triagemMotivo: c.operacao === RESULTADO_TRIAGEM ? c.motivo : null,
+    catalogoVersao: c.catalogoVersao,
+  };
 }
 
 /**

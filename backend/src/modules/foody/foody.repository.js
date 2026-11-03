@@ -3,6 +3,8 @@
 //
 // ISOLAMENTO: TODA leitura e escrita filtra por organizacao_id E unidade_id; toda linha gravada recebe os dois do contexto
 // da execução (nunca do payload da API). O banco reforça com triggers de tenant (migration 144).
+// CONEXÃO COMPARTILHADA (145): as leituras "da conexão" filtram por conexao_id e CONFEREM que cada linha devolvida está num
+// tenant autorizado (titular ou destino da própria conexão) — linha de qualquer outro tenant aborta a operação.
 
 const LOTE = 200;
 const PAGINA_LEITURA = 1000;
@@ -14,6 +16,14 @@ const falha = (operacao, error) => new FoodyRepoErro("BANCO", `${operacao}: ${er
 
 function exigirTenant({ organizacaoId, unidadeId }) {
   if (!organizacaoId || !unidadeId) throw new FoodyRepoErro("TENANT_AUSENTE", "organização e unidade são obrigatórias.");
+}
+const chave = (org, uni) => `${org}|${uni}`;
+function exigirTenantsPermitidos(linhas, permitidos, operacao) {
+  for (const r of linhas) {
+    if (!permitidos.has(chave(r.organizacao_id, r.unidade_id))) {
+      throw new FoodyRepoErro("TENANT_DIVERGENTE", `${operacao}: linha da conexão fora dos tenants autorizados.`);
+    }
+  }
 }
 
 export function criarRepositorioFoody(db) {
@@ -55,11 +65,11 @@ export function criarRepositorioFoody(db) {
     },
 
     /** uid → { fonte_hash, primeira_execucao_id } dos pedidos já gravados desta unidade. */
-    async carregarExistentes(t, uids) {
+    async carregarExistentes(t, uids, colunas = "foody_uid, fonte_hash, primeira_execucao_id") {
       exigirTenant(t);
       const mapa = new Map();
       for (let i = 0; i < uids.length; i += LOTE) {
-        const { data, error } = await db.from("foody_pedidos").select("foody_uid, fonte_hash, primeira_execucao_id")
+        const { data, error } = await db.from("foody_pedidos").select(colunas)
           .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).in("foody_uid", uids.slice(i, i + LOTE));
         if (error) throw falha("carregarExistentes", error);
         for (const r of data ?? []) mapa.set(r.foody_uid, r);
@@ -97,6 +107,187 @@ export function criarRepositorioFoody(db) {
         if (!data || data.length < PAGINA_LEITURA) break;
       }
       return todos;
+    },
+
+    // ------------------------------------------------------------------ conexão compartilhada (145)
+
+    /** Destinos (todos os estados) da conexão da unidade titular `t`. */
+    async listarDestinosDaConexao(t, conexaoId) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_conexao_destinos")
+        .select("id, conexao_id, organizacao_id, unidade_id, operacao, estado, organizacao_titular_id")
+        .eq("conexao_id", conexaoId).eq("organizacao_titular_id", t.organizacaoId);
+      if (error) throw falha("listarDestinosDaConexao", error);
+      return data ?? [];
+    },
+
+    /** uid → linha ATIVA do pedido na conexão (em qualquer tenant autorizado). */
+    async carregarAtivosDaConexao(conexaoId, uids, permitidos) {
+      const mapa = new Map();
+      for (let i = 0; i < uids.length; i += LOTE) {
+        const { data, error } = await db.from("foody_pedidos")
+          .select("foody_uid, organizacao_id, unidade_id, destino_id, operacao, fonte_hash, primeira_execucao_id")
+          .eq("conexao_id", conexaoId).eq("roteamento_ativo", true).in("foody_uid", uids.slice(i, i + LOTE));
+        if (error) throw falha("carregarAtivosDaConexao", error);
+        exigirTenantsPermitidos(data ?? [], permitidos, "carregarAtivosDaConexao");
+        for (const r of data ?? []) {
+          // Invariante da 145 (índice único global): um uid ativo em DOIS tenants nunca é "consertado" em silêncio.
+          if (mapa.has(r.foody_uid)) throw new FoodyRepoErro("INTEGRIDADE", "carregarAtivosDaConexao: pedido ativo em dois tenants.");
+          mapa.set(r.foody_uid, r);
+        }
+      }
+      return mapa;
+    },
+
+    /** uids ATIVOS da conexão na competência (todos os tenants autorizados) — base dos "ausentes na API". */
+    async listarUidsAtivosDaConexao(conexaoId, competencia, permitidos) {
+      const todos = [];
+      for (let de = 0; ; de += PAGINA_LEITURA) {
+        const { data, error } = await db.from("foody_pedidos").select("foody_uid, organizacao_id, unidade_id")
+          .eq("conexao_id", conexaoId).eq("roteamento_ativo", true).eq("competencia", competencia)
+          .order("foody_uid", { ascending: true }).range(de, de + PAGINA_LEITURA - 1);
+        if (error) throw falha("listarUidsAtivosDaConexao", error);
+        exigirTenantsPermitidos(data ?? [], permitidos, "listarUidsAtivosDaConexao");
+        todos.push(...(data ?? []).map((r) => r.foody_uid));
+        if (!data || data.length < PAGINA_LEITURA) break;
+      }
+      return todos;
+    },
+
+    /** Desativa (sem apagar) as linhas de `uids` no tenant `t`: deixam de ser a linha ativa e perdem o dado comercial. */
+    async desativarPedidos(t, conexaoId, uids, motivo, camposZerados) {
+      exigirTenant(t);
+      if (!/^[A-Z_]{2,40}$/.test(String(motivo))) throw new FoodyRepoErro("MOTIVO_INVALIDO", "motivo de desativação inválido.");
+      const valores = { roteamento_ativo: false, roteamento_motivo: motivo, atualizado_em: new Date().toISOString() };
+      for (const k of camposZerados) valores[k] = null;
+      for (let i = 0; i < uids.length; i += LOTE) {
+        const { error } = await db.from("foody_pedidos").update(valores)
+          .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId)
+          .in("foody_uid", uids.slice(i, i + LOTE));
+        if (error) throw falha("desativarPedidos", error);
+      }
+    },
+
+    /** uid → última decisão de triagem (somente inclusão; vale a mais recente). Tenant = titular da conexão. */
+    async listarDecisoesTriagem(t, conexaoId, uids) {
+      exigirTenant(t);
+      const mapa = new Map();
+      for (let i = 0; i < uids.length; i += LOTE) {
+        const { data, error } = await db.from("foody_triagem_decisoes")
+          .select("foody_uid, operacao_decidida, decidido_em, decidido_por, catalogo_versao")
+          .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId)
+          .in("foody_uid", uids.slice(i, i + LOTE));
+        if (error) throw falha("listarDecisoesTriagem", error);
+        for (const r of data ?? []) {
+          const ant = mapa.get(r.foody_uid);
+          if (!ant || String(r.decidido_em) > String(ant.decidido_em)) mapa.set(r.foody_uid, r);
+        }
+      }
+      return mapa;
+    },
+
+    // ------------------------------------------------------------------ vínculo e triagem (serviço de compartilhamento)
+    // Leituras por id: quem chama (foody.compartilhamento.service.js) confere a organização do ator contra a linha devolvida.
+
+    async obterConexaoPorId(conexaoId) {
+      const { data, error } = await db.from("foody_conexoes").select("id, organizacao_id, unidade_id, status").eq("id", conexaoId).maybeSingle();
+      if (error) throw falha("obterConexaoPorId", error);
+      return data ?? null;
+    },
+
+    async obterDestino(destinoId) {
+      const { data, error } = await db.from("foody_conexao_destinos")
+        .select("id, conexao_id, organizacao_id, unidade_id, operacao, estado, organizacao_titular_id, aprovado_titular_por")
+        .eq("id", destinoId).maybeSingle();
+      if (error) throw falha("obterDestino", error);
+      return data ?? null;
+    },
+
+    async inserirDestino(linha) {
+      const { data, error } = await db.from("foody_conexao_destinos").insert(linha).select("id, estado").single();
+      if (error) throw falha("inserirDestino", error);
+      return data;
+    },
+
+    /** Atualiza o destino SÓ se ele ainda estiver no estado esperado (corrida entre duas aprovações/revogações). */
+    async atualizarDestino(destino, estadoEsperado, campos) {
+      const { data, error } = await db.from("foody_conexao_destinos").update(campos)
+        .eq("id", destino.id).eq("conexao_id", destino.conexao_id).eq("organizacao_id", destino.organizacao_id)
+        .eq("unidade_id", destino.unidade_id).eq("estado", estadoEsperado).select("id, estado");
+      if (error) throw falha("atualizarDestino", error);
+      return (data ?? [])[0] ?? null;
+    },
+
+    /** Linha ATIVA de um uid na conexão (qualquer tenant autorizado). */
+    async obterPedidoAtivoDaConexao(conexaoId, foodyUid, permitidos) {
+      const { data, error } = await db.from("foody_pedidos").select("foody_uid, organizacao_id, unidade_id, operacao, destino_id, competencia")
+        .eq("conexao_id", conexaoId).eq("roteamento_ativo", true).eq("foody_uid", foodyUid);
+      if (error) throw falha("obterPedidoAtivoDaConexao", error);
+      exigirTenantsPermitidos(data ?? [], permitidos, "obterPedidoAtivoDaConexao");
+      return (data ?? [])[0] ?? null;
+    },
+
+    /** Pedidos em TRIAGEM (ativos) da conexão numa competência — só na titular; sem dado comercial (a linha não tem). */
+    async listarTriagem(t, conexaoId, competencia) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_pedidos")
+        .select("foody_uid, numero_pedido, competencia, data_hora, detalhes_pedido, operacao_motivo, triagem_motivo, catalogo_versao, situacao")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId)
+        .eq("operacao", "triagem").eq("roteamento_ativo", true).eq("competencia", competencia)
+        .order("foody_uid", { ascending: true }).range(0, PAGINA_LEITURA - 1);
+      if (error) throw falha("listarTriagem", error);
+      return data ?? [];
+    },
+
+    async inserirDecisaoTriagem(t, linha) {
+      exigirTenant(t);
+      if (linha.organizacao_id !== t.organizacaoId || linha.unidade_id !== t.unidadeId) {
+        throw new FoodyRepoErro("TENANT_DIVERGENTE", "decisão de triagem fora do tenant da conexão.");
+      }
+      const { data, error } = await db.from("foody_triagem_decisoes").insert(linha).select("id, decidido_em").single();
+      if (error) throw falha("inserirDecisaoTriagem", error);
+      return data;
+    },
+
+    /** Resultado do fechamento de cada organização a partir da execução (pendência durável do ciclo compartilhado). */
+    async registrarFechamentosDaExecucao(t, execucaoId, fechamentos, pendentes) {
+      exigirTenant(t);
+      const { error } = await db.from("foody_sync_execucoes").update({ fechamentos, fechamentos_pendentes: pendentes })
+        .eq("id", execucaoId).eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId);
+      if (error) throw falha("registrarFechamentosDaExecucao", error);
+    },
+
+    /**
+     * Competências da titular `t` (desde `desde`) cujo ciclo compartilhado NÃO terminou: a última execução concluída deixou
+     * fechamento pendente, ou há pedido em triagem com decisão ainda não aplicada. Devolve [{ competencia, motivo }].
+     */
+    async listarCompetenciasParaReconciliar(t, desde) {
+      exigirTenant(t);
+      const out = new Map();
+      const { data: execs, error } = await db.from("foody_sync_execucoes").select("competencia, fechamentos_pendentes, iniciado_em, status")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("status", "CONCLUIDA")
+        .order("iniciado_em", { ascending: false }).range(0, PAGINA_LEITURA - 1);
+      if (error) throw falha("listarCompetenciasParaReconciliar", error);
+      const vistas = new Set();
+      for (const e of execs ?? []) {
+        const c = String(e.competencia).slice(0, 10);
+        if (c < desde || vistas.has(c)) continue;
+        vistas.add(c); // só a ÚLTIMA execução de cada dia decide
+        if (Number(e.fechamentos_pendentes) > 0) out.set(c, "FECHAMENTO_PENDENTE");
+      }
+      const { data: tri, error: e2 } = await db.from("foody_pedidos").select("foody_uid, competencia, conexao_id")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("operacao", "triagem").eq("roteamento_ativo", true)
+        .range(0, PAGINA_LEITURA - 1);
+      if (e2) throw falha("listarCompetenciasParaReconciliar", e2);
+      const triagem = (tri ?? []).filter((r) => String(r.competencia).slice(0, 10) >= desde);
+      if (triagem.length) {
+        const { data: decs, error: e3 } = await db.from("foody_triagem_decisoes").select("foody_uid")
+          .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).in("foody_uid", triagem.map((r) => r.foody_uid));
+        if (e3) throw falha("listarCompetenciasParaReconciliar", e3);
+        const decididos = new Set((decs ?? []).map((d) => d.foody_uid));
+        for (const r of triagem) if (decididos.has(r.foody_uid)) out.set(String(r.competencia).slice(0, 10), out.get(String(r.competencia).slice(0, 10)) ?? "DECISAO_DE_TRIAGEM");
+      }
+      return [...out].sort(([a], [b]) => (a < b ? -1 : 1)).map(([competencia, motivo]) => ({ competencia, motivo }));
     },
 
     async ultimoFechamento(t, competencia) {

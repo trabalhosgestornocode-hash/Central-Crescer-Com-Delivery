@@ -64,5 +64,7 @@ export const ORIGEM = Object.freeze({ MANUAL: "manual", AGENDADO: "agendado", RE
 export const FLAG_HABILITADO = "FOODY_CENTRAL_ENABLED";
 export const FLAG_AGENDADOR = "FOODY_CENTRAL_AGENDADOR_ENABLED";
 export const FLAG_UNIDADES = "FOODY_CENTRAL_UNIDADES";
+/** Conexão COMPARTILHADA (migration 145): distribuição por operação para destinos ATIVOS. Desligada = comportamento da 144. */
+export const FLAG_COMPARTILHAMENTO = "FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED";
 /** Segredo (≥ 32 caracteres) do qual derivam a chave do token e a chave do HMAC do entregador. Nunca vai ao banco. */
 export const ENV_SEGREDO = "FOODY_CENTRAL_SECRET";
