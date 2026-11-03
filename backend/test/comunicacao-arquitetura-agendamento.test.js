@@ -119,7 +119,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 144 = camada central Foody (piloto em sombra): tabelas foody_* novas, sem tocar a comunicação, o outbox nem o claim.
       "144_foody_camada_central.sql", "144_rollback.sql",
       // 145 = conexão Foody compartilhada (aditiva sobre a 144, só foody_*), sem tocar a comunicação, o outbox nem o claim.
-      "145_foody_conexao_compartilhada.sql", "145_rollback.sql"];
+      "145_foody_conexao_compartilhada.sql", "145_rollback.sql",
+      // 146 = administração da conexão Foody pela tela (aditiva sobre a 145, só foody_*), sem tocar a comunicação, o outbox nem o claim.
+      "146_foody_conexao_administracao.sql", "146_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

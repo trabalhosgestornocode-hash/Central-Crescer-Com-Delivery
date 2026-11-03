@@ -22,7 +22,7 @@ const ADM_T = "a1000000-0000-4000-8000-000000000001", ADM_D = "a2000000-0000-400
 const OPS_T = "a3000000-0000-4000-8000-000000000003";
 const D = "2026-10-25";
 const AGORA = () => new Date("2026-10-26T15:00:00Z");
-const ENV = { FOODY_CENTRAL_ENABLED: "true", FOODY_CENTRAL_UNIDADES: UNI_T, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "true" };
+const ENV = { FOODY_CENTRAL_ENABLED: "true", FOODY_CENTRAL_UNIDADES: UNI_T, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "true", FOODY_CENTRAL_ADMIN_ENABLED: "true" };
 const ator = (perfilId, organizacaoId) => ({ perfilId, papel: "organization_admin", impersonando: false, organizacaoId });
 
 describe("conexão compartilhada ponta a ponta — Postgres real", { skip: motivoPular, timeout: 900_000 }, () => {
@@ -66,7 +66,7 @@ describe("conexão compartilhada ponta a ponta — Postgres real", { skip: motiv
     assert.equal(error, null); conexaoId = data.id;
     // Quem NÃO é admin no banco é recusado mesmo que o ator diga que é (defesa em profundidade).
     await assert.rejects(proporDestino({ ator: ator(OPS_T, ORG_T), conexaoId, destino: { organizacaoId: ORG_D, unidadeId: UNI_D, operacao: "acai_no_grau" } }, svc()),
-      (e) => /organization_admin da organização titular/.test(e.message));
+      (e) => e.codigo === "SEM_PERMISSAO" && /Administrador ativo da organização/.test(e.message));
     const p = await proporDestino({ ator: ator(ADM_T, ORG_T), conexaoId, destino: { organizacaoId: ORG_D, unidadeId: UNI_D, operacao: "acai_no_grau" } }, svc());
     assert.equal(p.estado, "PENDENTE");
     // Sem a aprovação do destino nada é distribuído: a sync segue a regra da 144 (Açaí mínimo na titular).

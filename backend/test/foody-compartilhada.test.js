@@ -21,7 +21,7 @@ const UNI_C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const D = "2026-10-25";
 const AGORA = () => new Date("2026-10-26T15:00:00Z");
 const seguranca = criarSegurancaFoody(SEGREDO_TESTE);
-const ENV = { FOODY_CENTRAL_ENABLED: "true", FOODY_CENTRAL_UNIDADES: UNI_A, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "true" };
+const ENV = { FOODY_CENTRAL_ENABLED: "true", FOODY_CENTRAL_UNIDADES: UNI_A, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "true", FOODY_CENTRAL_ADMIN_ENABLED: "true" };
 const CX = `cx-${UNI_A}`;
 
 const SUB = "1x Sub Frango Teriyaki 15cm";               // linha de catálogo Subway
@@ -283,7 +283,11 @@ describe("aprovação dupla e decisões de triagem (serviço)", () => {
     await assert.rejects(proporDestino({ ator: admT, conexaoId: CX, destino: { organizacaoId: ORG_A, unidadeId: UNI_A, operacao: "acai_no_grau" } }, svc()),
       (e) => e.codigo === "DESTINO_INVALIDO");
     await assert.rejects(proporDestino({ ator: admT, conexaoId: CX, destino: { organizacaoId: ORG_C, unidadeId: UNI_C, operacao: "acai_no_grau" } },
-      svc({ ...ENV, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "" })), (e) => e.codigo === "DESLIGADO");
+      svc({ ...ENV, FOODY_CENTRAL_ADMIN_ENABLED: "" })), (e) => e.codigo === "DESLIGADO");
+    // Administração e sincronização são SEPARADAS: com a sync inteira desligada, a administração continua (e não coleta nada).
+    const soAdmin = { FOODY_CENTRAL_ADMIN_ENABLED: "true" };
+    await assert.rejects(proporDestino({ ator: admT, conexaoId: CX, destino: { organizacaoId: ORG_C, unidadeId: UNI_C, operacao: "subway" } }, svc(soAdmin)),
+      (e) => e.codigo === "OPERACAO_INVALIDA", "passa da flag com só a administração ligada");
     const p = await proporDestino({ ator: admT, conexaoId: CX, destino: { organizacaoId: ORG_C, unidadeId: UNI_C, operacao: "acai_no_grau" } }, svc());
     const d = db.tabelas.foody_conexao_destinos[0];
     assert.deepEqual([p.estado, d.estado, d.aprovado_titular_por, d.aprovado_destino_por ?? null, d.organizacao_titular_id], ["PENDENTE", "PENDENTE", PERFIL_T, null, ORG_A]);

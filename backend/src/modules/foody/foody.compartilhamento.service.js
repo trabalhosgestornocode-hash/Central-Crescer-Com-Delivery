@@ -9,8 +9,8 @@
 //      na próxima sincronização). Pedido FORA da triagem só pode ser reclassificado pelo admin da organização que hoje o detém
 //      (ninguém puxa para si um pedido já atribuído à outra empresa).
 // Superadmin em IMPERSONAÇÃO não aprova, não revoga e não decide: a decisão é da própria empresa.
-// Nada aqui é ligado a rota HTTP nesta fase (há teste de arquitetura); tudo exige a flag de compartilhamento.
-import { compartilhamentoPermitido } from "./foody.flags.js";
+// Exposto por rota autenticada em modules/foody-admin (146); tudo exige a flag de ADMINISTRAÇÃO, exceto revogar.
+import { administracaoPermitida } from "./foody.flags.js";
 import { OPERACAO_COMPARTILHADA, RESULTADO_TRIAGEM, CATALOGO_VERSAO } from "./foody.classificacao.js";
 import { chaveTenant } from "./foody.roteamento.js";
 
@@ -39,8 +39,10 @@ export function ehAdminDaOrganizacao(ator, organizacaoId) {
     && organizacaoId && ator.organizacaoId === organizacaoId);
 }
 
+// Administrar o vínculo e a triagem depende só da flag de ADMINISTRAÇÃO (146) — nunca da de sincronização: aprovar um destino
+// não coleta pedido nenhum; a distribuição só acontece quando a sync (outra flag) rodar.
 function exigirFlag(env) {
-  if (!compartilhamentoPermitido(env)) throw erro("DESLIGADO", "conexão compartilhada desligada.");
+  if (!administracaoPermitida(env)) throw erro("DESLIGADO", "administração da integração Foody desligada.");
 }
 function motivoValido(m) {
   const s = String(m ?? "").trim();
@@ -122,10 +124,38 @@ export async function listarTriagem({ ator, conexaoId, competencia }, { env = pr
   const ctx = await contextoDaConexao(conexaoId, repo);
   if (organizacoesDoAtor(ator, ctx).size === 0) throw erro("SEM_PERMISSAO", "só organization_admin de uma organização do vínculo vê a triagem.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(competencia ?? ""))) throw erro("COMPETENCIA_INVALIDA", "competência inválida.");
-  return (await repo.listarTriagem(ctx.titular, ctx.conexao.id, competencia)).map((r) => ({
-    foodyUid: r.foody_uid, numeroPedido: r.numero_pedido, competencia: r.competencia, dataHora: r.data_hora, situacao: r.situacao,
-    motivo: r.triagem_motivo, resumo: r.operacao_motivo, catalogoVersao: r.catalogo_versao,
-    linhasSemEvidencia: String(r.detalhes_pedido ?? "").split(/\n/).filter(Boolean),
+  const linhas = await repo.listarTriagem(ctx.titular, ctx.conexao.id, competencia);
+  // Decisão já registrada e ainda não aplicada (vale na próxima sincronização): a tela mostra, sem esconder o pedido.
+  const decisoes = linhas.length && repo.listarDecisoesTriagem
+    ? await repo.listarDecisoesTriagem(ctx.titular, ctx.conexao.id, linhas.map((r) => r.foody_uid)) : new Map();
+  return linhas.map((r) => {
+    const d = decisoes.get(r.foody_uid);
+    return {
+      foodyUid: r.foody_uid, numeroPedido: r.numero_pedido, competencia: r.competencia, dataHora: r.data_hora, situacao: r.situacao,
+      motivo: r.triagem_motivo, resumo: r.operacao_motivo, catalogoVersao: r.catalogo_versao,
+      linhasSemEvidencia: String(r.detalhes_pedido ?? "").split(/\n/).filter(Boolean),
+      decisaoPendente: d ? { operacao: d.operacao_decidida, decididoEm: d.decidido_em, porVoce: d.decidido_por === ator.perfilId } : null,
+    };
+  });
+}
+
+/** Dias com pedido em triagem nos últimos `dias` (só contagem por dia). Admin de uma organização do vínculo. */
+export async function listarDiasDeTriagem({ ator, conexaoId, dias = 35 }, { env = process.env, repo, agora = () => new Date() }) {
+  exigirFlag(env);
+  const ctx = await contextoDaConexao(conexaoId, repo);
+  if (organizacoesDoAtor(ator, ctx).size === 0) throw erro("SEM_PERMISSAO", "só organization_admin de uma organização do vínculo vê a triagem.");
+  const desde = new Date(agora().getTime() - Math.min(Math.max(1, dias), 90) * 86_400_000).toISOString().slice(0, 10);
+  return repo.listarDiasComTriagem(ctx.titular, ctx.conexao.id, desde);
+}
+
+/** Histórico das decisões de triagem (somente inclusão). Quem decidiu aparece só como "você" ou "outro administrador". */
+export async function historicoDeDecisoes({ ator, conexaoId }, { env = process.env, repo }) {
+  exigirFlag(env);
+  const ctx = await contextoDaConexao(conexaoId, repo);
+  if (organizacoesDoAtor(ator, ctx).size === 0) throw erro("SEM_PERMISSAO", "só organization_admin de uma organização do vínculo vê o histórico.");
+  return (await repo.listarHistoricoDecisoes(ctx.titular, ctx.conexao.id)).map((d) => ({
+    id: d.id, foodyUid: d.foody_uid, operacao: d.operacao_decidida, motivo: d.motivo, decididoEm: d.decidido_em,
+    catalogoVersao: d.catalogo_versao, porVoce: d.decidido_por === ator.perfilId,
   }));
 }
 

@@ -14,6 +14,40 @@ export class FoodyRepoErro extends Error {
 }
 const falha = (operacao, error) => new FoodyRepoErro("BANCO", `${operacao}: ${error?.code ?? ""} ${String(error?.message ?? "").slice(0, 160)}`.trim());
 
+// Códigos estáveis devolvidos pelo banco nas regras da 146 ("foody_conexao_administrar: CODIGO — texto" / "foody_conexoes: CODIGO —").
+const CODIGOS_ADMIN = ["SEM_PERMISSAO", "UNIDADE_FORA_DA_ORGANIZACAO", "ACAO_INVALIDA", "TOKEN_INVALIDO", "MOTIVO_INVALIDO", "SEM_CONEXAO",
+  "CONEXAO_EXISTENTE", "CONEXAO_REVOGADA", "CONTA_JA_CONECTADA", "DESTINO_VIVO", "COMPARTILHAMENTO_VIVO", "TRANSICAO_INVALIDA"];
+function erroAdministracao(operacao, error) {
+  const msg = String(error?.message ?? "");
+  const codigo = CODIGOS_ADMIN.find((c) => msg.includes(`: ${c} `) || msg.endsWith(`: ${c}`))
+    ?? (/uq_foody_conexoes_conta_ativa/.test(msg) ? "CONTA_JA_CONECTADA" : null)
+    ?? (/uq_foody_conexoes_unidade/.test(msg) ? "CONEXAO_EXISTENTE" : null);
+  if (codigo) {
+    const texto = msg.split(" — ").slice(1).join(" — ").trim() || codigo;
+    return new FoodyRepoErro(codigo, texto.slice(0, 200));
+  }
+  return falha(operacao, error);
+}
+// Recusas do banco no vínculo e na triagem (145) → código estável para a tela explicar o motivo (sem eco de SQL).
+const RECUSAS_VINCULO = [
+  [/já tem conexão Foody própria/, "DESTINO_COM_CONEXAO_PROPRIA", "a unidade de destino já tem conexão Foody própria (seria contagem dupla)."],
+  [/uq_foody_destino_conexao_operacao/, "VINCULO_EXISTENTE", "esta conexão já tem um compartilhamento vivo para essa operação."],
+  [/uq_foody_destino_unidade_operacao/, "DESTINO_JA_VINCULADO", "a unidade de destino já recebe essa operação de outra conexão."],
+  [/ato separado/, "ATO_SEPARADO", "a aprovação do destino precisa ser um ato separado da proposta."],
+  [/conexão não está ATIVA/, "CONEXAO_INATIVA", "a conexão precisa estar ATIVA para o destino aprovar."],
+  [/exige organization_admin|só organization_admin/, "SEM_PERMISSAO", "só um Administrador ativo da organização pode fazer isso."],
+  [/revogado é definitivo|transição .* não permitida/, "ESTADO_INVALIDO", "o compartilhamento mudou de estado; recarregue."],
+];
+function erroVinculo(operacao, error) {
+  const msg = String(error?.message ?? "");
+  const achado = RECUSAS_VINCULO.find(([re]) => re.test(msg));
+  return achado ? new FoodyRepoErro(achado[1], achado[2]) : falha(operacao, error);
+}
+/** Colunas da conexão que podem sair para a tela: NUNCA o token cifrado. */
+const COLUNAS_CONEXAO_TELA = "id, organizacao_id, unidade_id, status, token_impressao, ponto_coleta_esperado, ultimo_erro_codigo, ultima_sync_em, criado_em, atualizado_em";
+const COLUNAS_DESTINO_TELA = "id, conexao_id, organizacao_id, unidade_id, operacao, estado, organizacao_titular_id, aprovado_titular_por, aprovado_titular_em, "
+  + "aprovado_destino_por, aprovado_destino_em, revogado_por, revogado_em, revogado_motivo, criado_em";
+
 function exigirTenant({ organizacaoId, unidadeId }) {
   if (!organizacaoId || !unidadeId) throw new FoodyRepoErro("TENANT_AUSENTE", "organização e unidade são obrigatórias.");
 }
@@ -205,7 +239,7 @@ export function criarRepositorioFoody(db) {
 
     async inserirDestino(linha) {
       const { data, error } = await db.from("foody_conexao_destinos").insert(linha).select("id, estado").single();
-      if (error) throw falha("inserirDestino", error);
+      if (error) throw erroVinculo("inserirDestino", error);
       return data;
     },
 
@@ -214,7 +248,7 @@ export function criarRepositorioFoody(db) {
       const { data, error } = await db.from("foody_conexao_destinos").update(campos)
         .eq("id", destino.id).eq("conexao_id", destino.conexao_id).eq("organizacao_id", destino.organizacao_id)
         .eq("unidade_id", destino.unidade_id).eq("estado", estadoEsperado).select("id, estado");
-      if (error) throw falha("atualizarDestino", error);
+      if (error) throw erroVinculo("atualizarDestino", error);
       return (data ?? [])[0] ?? null;
     },
 
@@ -245,7 +279,7 @@ export function criarRepositorioFoody(db) {
         throw new FoodyRepoErro("TENANT_DIVERGENTE", "decisão de triagem fora do tenant da conexão.");
       }
       const { data, error } = await db.from("foody_triagem_decisoes").insert(linha).select("id, decidido_em").single();
-      if (error) throw falha("inserirDecisaoTriagem", error);
+      if (error) throw erroVinculo("inserirDecisaoTriagem", error);
       return data;
     },
 
@@ -288,6 +322,97 @@ export function criarRepositorioFoody(db) {
         for (const r of triagem) if (decididos.has(r.foody_uid)) out.set(String(r.competencia).slice(0, 10), out.get(String(r.competencia).slice(0, 10)) ?? "DECISAO_DE_TRIAGEM");
       }
       return [...out].sort(([a], [b]) => (a < b ? -1 : 1)).map(([competencia, motivo]) => ({ competencia, motivo }));
+    },
+
+    // ------------------------------------------------------------------ administração pela tela (146)
+    // Escrita SÓ pela função do banco (admin conferido em usuarios_organizacoes no momento da ação + evento na mesma transação).
+
+    async administrarConexao(t, { acao, ator, tokenCifrado = null, tokenImpressao = null, pontoColeta = null, motivo = null }) {
+      exigirTenant(t);
+      const { data, error } = await db.rpc("foody_conexao_administrar", {
+        p_acao: acao, p_organizacao_id: t.organizacaoId, p_unidade_id: t.unidadeId, p_ator: ator,
+        p_token_cifrado: tokenCifrado, p_token_impressao: tokenImpressao, p_ponto_coleta: pontoColeta, p_motivo: motivo,
+      });
+      if (error) throw erroAdministracao("administrarConexao", error);
+      const linha = Array.isArray(data) ? data[0] : data;
+      return { resultado: linha?.resultado ?? null, conexaoId: linha?.conexao_id ?? null, status: linha?.status ?? null, evento: linha?.evento ?? null };
+    },
+
+    /** Conexão da unidade para a tela — sem o token cifrado. */
+    async obterConexaoParaTela(t) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_conexoes").select(COLUNAS_CONEXAO_TELA)
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).maybeSingle();
+      if (error) throw falha("obterConexaoParaTela", error);
+      return data ?? null;
+    },
+
+    /** Destinos da conexão da titular (todos os estados, para o histórico do vínculo). */
+    async listarDestinosDaTitular(t, conexaoId) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_conexao_destinos").select(COLUNAS_DESTINO_TELA)
+        .eq("conexao_id", conexaoId).eq("organizacao_titular_id", t.organizacaoId)
+        .order("criado_em", { ascending: false }).range(0, 49);
+      if (error) throw falha("listarDestinosDaTitular", error);
+      return data ?? [];
+    },
+
+    /** Vínculos em que a organização (e, se houver, a unidade) do contexto é o DESTINO. */
+    async listarDestinosDaOrganizacao(organizacaoId, unidadeId = null) {
+      if (!organizacaoId) throw new FoodyRepoErro("TENANT_AUSENTE", "organização obrigatória.");
+      let q = db.from("foody_conexao_destinos").select(COLUNAS_DESTINO_TELA).eq("organizacao_id", organizacaoId);
+      if (unidadeId) q = q.eq("unidade_id", unidadeId);
+      const { data, error } = await q.order("criado_em", { ascending: false }).range(0, 49);
+      if (error) throw falha("listarDestinosDaOrganizacao", error);
+      return data ?? [];
+    },
+
+    /** Auditoria da conexão no tenant (só os eventos gravados no próprio tenant). */
+    async listarEventosDaConexao(t, limite = 50) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_conexoes_eventos")
+        .select("id, conexao_id, evento, ator_perfil_id, status_anterior, status_novo, token_impressao, motivo, criado_em")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId)
+        .order("criado_em", { ascending: false }).range(0, Math.min(Math.max(1, limite), 100) - 1);
+      if (error) throw falha("listarEventosDaConexao", error);
+      return data ?? [];
+    },
+
+    /** Auditoria do vínculo gravada no tenant (145: cada organização só tem os eventos do próprio lado). */
+    async listarEventosDeDestinos(organizacaoId, unidadeId, limite = 50) {
+      if (!organizacaoId || !unidadeId) throw new FoodyRepoErro("TENANT_AUSENTE", "organização e unidade são obrigatórias.");
+      const { data, error } = await db.from("foody_destinos_eventos")
+        .select("id, destino_id, evento, ator_perfil_id, ator_organizacao_id, motivo, criado_em")
+        .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+        .order("criado_em", { ascending: false }).range(0, Math.min(Math.max(1, limite), 100) - 1);
+      if (error) throw falha("listarEventosDeDestinos", error);
+      return data ?? [];
+    },
+
+    /** Dias com pedido em TRIAGEM (ativo) na titular, desde `desde` — só contagem por dia. */
+    async listarDiasComTriagem(t, conexaoId, desde) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_pedidos").select("competencia")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId)
+        .eq("operacao", "triagem").eq("roteamento_ativo", true).range(0, PAGINA_LEITURA - 1);
+      if (error) throw falha("listarDiasComTriagem", error);
+      const contagem = new Map();
+      for (const r of data ?? []) {
+        const c = String(r.competencia).slice(0, 10);
+        if (c >= desde) contagem.set(c, (contagem.get(c) ?? 0) + 1);
+      }
+      return [...contagem].sort(([a], [b]) => (a < b ? 1 : -1)).map(([competencia, quantidade]) => ({ competencia, quantidade }));
+    },
+
+    /** Histórico das decisões de triagem da conexão (somente inclusão), mais recentes primeiro. */
+    async listarHistoricoDecisoes(t, conexaoId, limite = 100) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_triagem_decisoes")
+        .select("id, foody_uid, operacao_decidida, motivo, decidido_por, decidido_em, catalogo_versao")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId)
+        .order("decidido_em", { ascending: false }).range(0, Math.min(Math.max(1, limite), 200) - 1);
+      if (error) throw falha("listarHistoricoDecisoes", error);
+      return data ?? [];
     },
 
     async ultimoFechamento(t, competencia) {

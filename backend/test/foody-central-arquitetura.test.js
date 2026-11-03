@@ -6,7 +6,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, dirname, relative } from "node:path";
+import { join, dirname, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -66,7 +66,7 @@ describe("módulo foody — só leitura na API", () => {
     for (const p of doModulo) {
       const s = semComentarios(readFileSync(p, "utf8"));
       for (const [, t] of s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)) assert.match(t, /^foody_/, `${relative(RAIZ, p)}: ${t}`);
-      for (const [, r] of s.matchAll(/\.rpc\(\s*["'`]([\w.]+)["'`]/g)) assert.equal(r, "foody_fechamento_registrar");
+      for (const [, r] of s.matchAll(/\.rpc\(\s*["'`]([\w.]+)["'`]/g)) assert.ok(["foody_fechamento_registrar", "foody_conexao_administrar"].includes(r), r);
     }
   });
   test("nenhum console.* direto (todo log passa por foodyLog)", () => {
@@ -76,13 +76,39 @@ describe("módulo foody — só leitura na API", () => {
   });
 });
 
-describe("nenhum consumidor nesta fase", () => {
-  // Única exceção: o gerador OFFLINE do catálogo versionado (145), que só LÊ o histórico e escreve um arquivo local para PR.
+describe("consumidores controlados", () => {
+  // Exceções, e SÓ elas: o gerador OFFLINE do catálogo (145) e a camada de ADMINISTRAÇÃO pela tela (146, modules/foody-admin).
+  // `sep` no fim: "modules/foody-admin" começa com "modules/foody" e não pode passar por dentro do módulo.
   const GERADOR_CATALOGO = join(RAIZ, "scripts", "foody-gerar-catalogo.mjs");
-  test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline do catálogo)", () => {
-    const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO));
-    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
+  const ADMIN = join(RAIZ, "src", "modules", "foody-admin");
+  const doAdmin = arquivos(ADMIN);
+  test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline e a camada foody-admin)", () => {
+    const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO + sep));
+    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && !p.startsWith(ADMIN + sep)
+      && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(culpados.map((p) => relative(RAIZ, p)), []);
+  });
+  test("a administração NÃO coleta pedidos: não importa sync, agendador, cliente HTTP, fechamento nem adapter", () => {
+    assert.ok(doAdmin.length >= 2, "camada foody-admin existe");
+    const camadas = [...doAdmin, join(MODULO, "foody.administracao.service.js"), join(MODULO, "foody.compartilhamento.service.js")];
+    for (const p of camadas) {
+      const imports = [...readFileSync(p, "utf8").matchAll(/(?:import|from)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]);
+      for (const i of imports) assert.doesNotMatch(i, /foody\.(sync|agendador|client|fechamento)|whatsapp|notifica|comunicacao/i, `${relative(RAIZ, p)} importa ${i}`);
+      const s = semComentarios(readFileSync(p, "utf8"));
+      assert.doesNotMatch(s, /\bfetch\(|setInterval|setTimeout|sincronizar|executarCiclo/, relative(RAIZ, p));
+    }
+  });
+  test("só routes.js monta a camada foody-admin, e só no tenant", () => {
+    const quem = arquivos(join(RAIZ, "src")).filter((p) => !p.startsWith(ADMIN + sep) && /from\s+["'][^"']*foody-admin\//.test(readFileSync(p, "utf8")));
+    assert.deepEqual(quem.map((p) => relative(RAIZ, p).split(sep).join("/")), ["src/routes.js"]);
+    assert.match(readFileSync(join(RAIZ, "src", "routes.js"), "utf8"), /^tenant\.use\("\/integracoes\/foody", foodyAdminRouter\);$/m);
+  });
+  test("a camada foody-admin só escreve via serviço do módulo (sem insert/update/upsert/delete/rpc direto)", () => {
+    for (const p of doAdmin) {
+      const s = semComentarios(readFileSync(p, "utf8"));
+      assert.doesNotMatch(s, /\.(insert|update|upsert|delete|rpc)\(/, relative(RAIZ, p));
+      for (const [, t] of s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)) assert.ok(["organizacoes", "unidades", "usuarios_organizacoes"].includes(t), `${relative(RAIZ, p)}: ${t}`);
+    }
   });
   test("o gerador do catálogo só faz SELECT e só importa gerador/classificação", () => {
     const s = semComentarios(readFileSync(GERADOR_CATALOGO, "utf8"));
@@ -103,10 +129,10 @@ describe("migration 144 — estático", () => {
   const sql = readFileSync(join(MIGRATIONS, "144_foody_camada_central.sql"), "utf8");
   const rb = readFileSync(join(MIGRATIONS, "144_rollback.sql"), "utf8");
   const corpo = sql.split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join("\n");
-  test("não há outra 144; posteriores só as conhecidas (145 = conexão compartilhada, aditiva)", () => {
+  test("não há outra 144; posteriores só as conhecidas (145 = conexão compartilhada; 146 = administração; aditivas)", () => {
     const arqs = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && !/rollback/i.test(f));
     assert.equal(arqs.filter((f) => f.startsWith("144")).length, 1);
-    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "144").sort(), ["145_foody_conexao_compartilhada.sql"]);
+    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "144").sort(), ["145_foody_conexao_compartilhada.sql", "146_foody_conexao_administracao.sql"]);
   });
   test("transação com lock_timeout; só CREATE de objetos foody_*; não altera nem apaga nada existente", () => {
     assert.match(corpo, /^\s*begin;\s*\nset local lock_timeout = '5s';/m); assert.match(corpo, /commit;\s*$/);

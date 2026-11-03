@@ -62,7 +62,9 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
       // 144 = camada central Foody (piloto em sombra): tabelas foody_* novas, sem tocar o domínio iFood.
       "144_foody_camada_central.sql", "144_rollback.sql",
       // 145 = conexão Foody compartilhada (aditiva sobre a 144, só foody_*), sem tocar o domínio iFood.
-      "145_foody_conexao_compartilhada.sql", "145_rollback.sql"]);
+      "145_foody_conexao_compartilhada.sql", "145_rollback.sql",
+      // 146 = administração da conexão Foody pela tela (aditiva sobre a 145, só foody_*), sem tocar o domínio iFood.
+      "146_foody_conexao_administracao.sql", "146_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });
