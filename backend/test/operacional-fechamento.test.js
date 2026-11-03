@@ -281,9 +281,10 @@ describe("WhatsApp — SOMENTE simulação", () => {
     assert.equal(p.status, "READY_FOR_REVIEW");
     assert.equal(p.envioReal, false);
     assert.equal(p.transporte, "noop");
-    for (const s of ["*CRESCER COM DELIVERY*", "*PEDIDOS*", "*TEMPOS (médias)*", "*ATRASOS*", "*MOVIMENTO*", "*CANCELAMENTOS*", "*DISPUTAS*", "*DESCONTOS*", "*CLIENTES*", "*DIAGNÓSTICO*", "*AÇÃO RECOMENDADA*"]) assert.ok(p.mensagem.includes(s), s);
-    assert.ok(p.mensagem.includes("CONSOLIDADO"));
-    assert.ok(p.mensagem.includes("Recebidos: 35"));
+    for (const s of ["*CRESCER COM DELIVERY*", "*RELATÓRIO OPERACIONAL DIÁRIO*", "*RESUMO DO DIA*", "*DESEMPENHO OPERACIONAL*", "*MOVIMENTO*", "*CLIENTES*", "*INDICADORES FINANCEIROS*", "*CHAMADOS*", "*PONTOS DE ATENÇÃO*", "*RECOMENDAÇÃO*"]) assert.ok(p.mensagem.includes(s), s);
+    assert.ok(p.mensagem.includes("Fechamento consolidado"));
+    assert.ok(p.mensagem.includes("• Pedidos recebidos: 35"));
+    assert.doesNotMatch(p.mensagem, /disput/i);
     assert.ok(p.mensagem.length <= 1500, `${p.mensagem.length}`);
     assert.equal(p.mensagem.includes("RELATÓRIO COMPLETO"), false, "sem URL configurada, nenhum link");
     for (const v of Object.values(PII)) assert.equal(p.mensagem.includes(v), false, v);

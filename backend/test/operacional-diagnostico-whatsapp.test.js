@@ -123,16 +123,78 @@ describe("mensagem de WhatsApp (simulação)", () => {
 
   test("estrutura completa, situação, sem métrica inventada e dentro do limite", () => {
     const m = gerarMensagem({ fechamento: f, unidadeNome: "Unidade X" });
-    for (const s of ["*CRESCER COM DELIVERY*", "Fechamento operacional", "Unidade X · 27/10/2026 · v1", "*CONSOLIDADO*", "*PEDIDOS*", "*TEMPOS (médias)*", "*ATRASOS*", "*MOVIMENTO*", "*CANCELAMENTOS*", "*DISPUTAS*", "*DESCONTOS*", "*CLIENTES*", "*DIAGNÓSTICO*", "*AÇÃO RECOMENDADA*"]) assert.ok(m.includes(s), s);
-    assert.ok(m.includes("Preparo: 24 min (meta 20 min; 20 pedidos) ⚠️ +4"));
-    assert.ok(m.includes("Entrega: 12 min (meta 15 min; 20 pedidos) ✅"));
+    for (const s of ["*CRESCER COM DELIVERY*", "*RELATÓRIO OPERACIONAL DIÁRIO*", "*Unidade X*", "27/10/2026 | Fechamento consolidado", "*RESUMO DO DIA*", "*DESEMPENHO OPERACIONAL*", "*MOVIMENTO*", "*CLIENTES*", "*INDICADORES FINANCEIROS*", "*CHAMADOS*", "*PONTOS DE ATENÇÃO*", "*RECOMENDAÇÃO*", "_Crescer com Delivery | Inteligência operacional_"]) assert.ok(m.includes(s), s);
+    assert.ok(m.includes("• Tempo médio de preparo: 24 min (meta 20 min)"));
+    assert.ok(m.includes("• Tempo médio de entrega: 12 min (meta 15 min)"));
+    assert.ok(m.includes("• Pedidos acima da meta: 14 de 30 (46,7%)"));
+    assert.ok(m.includes("• Maior pico: 19h às 20h — 10 pedidos"));
+    assert.ok(m.includes("• Cancelamentos: 4 (O pedido está duplicado: 3; O pedido está atrasado: 1)"));
+    assert.ok(m.includes("• Abertos no dia: 2\n• Com prazo expirado: 1"));
+    assert.ok(m.includes("• Descontos financiados pela loja: R$ 310,50\n• Pedidos com desconto: 9"));
+    assert.ok(m.includes("• Novos: 12\n• Recorrentes: 27\n• Sem informação: 1"));
     assert.ok(m.length <= LIMITE_CARACTERES);
     assert.equal(validarMensagem(m, { fechamento: f }).ok, true);
   });
 
+  test("modelo aprovado: dados do relatório real reproduzem o layout linha a linha", () => {
+    const t = (media) => ({ estado: "calculado", media, meta: null, amostras: 70 });
+    const real = { status: "CONSOLIDADO", competencia: "2026-11-01", versao: 1, indicadores: {
+      pedidos: { recebidos: 78, concluidosNoDia: 78, canceladosNoDia: 0 }, preparo: t(36.1), entrega: t(17.5), vida: t(53.5),
+      atrasos: { pedidosAvaliados: 0, pedidosAtrasados: 0, pct: null }, cancelamentos: { total: 0, motivos: [] },
+      movimento: { picos: [{ hora: 20, pedidos: 14 }, { hora: 19, pedidos: 13 }] },
+      disputas: { abertasNoDia: 1, expiradasNoDia: 1, pendentesAgora: 0 }, descontos: { pedidosNaBase: 78, loja: 531.87, pedidosComDescontoLoja: 73 },
+      clientes: { base: 78, novos: 30, recorrentes: 48, semInformacao: 0 } },
+      diagnostico: { achados: [{ codigo: "DISPUTAS_EXPIRADAS", titulo: "Disputas expiradas sem resposta" }], principal: { codigo: "DISPUTAS_EXPIRADAS", acao: ACOES.DISPUTAS_EXPIRADAS } } };
+    assert.equal(gerarMensagem({ fechamento: real, unidadeNome: "Subway North Shopping" }), [
+      "*CRESCER COM DELIVERY*", "*RELATÓRIO OPERACIONAL DIÁRIO*", "", "*Subway North Shopping*", "01/11/2026 | Fechamento consolidado", "",
+      "*RESUMO DO DIA*", "• Pedidos recebidos: 78", "• Pedidos concluídos: 78", "• Cancelamentos: 0", "",
+      "*DESEMPENHO OPERACIONAL*", "• Tempo médio de preparo: 36,1 min", "• Tempo médio de entrega: 17,5 min", "• Tempo total do pedido: 53,5 min", "",
+      "*MOVIMENTO*", "• Maior pico: 20h às 21h — 14 pedidos", "• Segundo pico: 19h às 20h — 13 pedidos", "",
+      "*CLIENTES*", "• Novos: 30", "• Recorrentes: 48", "",
+      "*INDICADORES FINANCEIROS*", "• Descontos financiados pela loja: R$ 531,87", "• Pedidos com desconto: 73", "",
+      "*CHAMADOS*", "• Abertos no dia: 1", "• Com prazo expirado: 1", "",
+      "*PONTOS DE ATENÇÃO*", "• Um chamado atingiu o prazo de expiração.", "• Metas de tempo não configuradas.", "",
+      "*RECOMENDAÇÃO*", "Reforce o acompanhamento da Plataforma de Negociação do iFood, especialmente nos horários de maior movimento, para evitar chamados com prazo expirado.", "",
+      "_Crescer com Delivery | Inteligência operacional_",
+    ].join("\n"));
+  });
+
+  test("CHAMADOS no lugar do termo interno; expiração não vira 'sem resposta'", () => {
+    const diag = gerarDiagnostico(f);
+    const m = gerarMensagem({ fechamento: { ...f, diagnostico: { ...diag, texto: { acao: "Responder as disputas abertas." } } } });
+    assert.doesNotMatch(m, /disput/i);
+    assert.doesNotMatch(m, /sem resposta/i);
+    assert.ok(m.includes("• Um chamado atingiu o prazo de expiração."));
+    const pend = gerarMensagem({ fechamento: { ...f, indicadores: { ...f.indicadores, disputas: { abertasNoDia: 3, expiradasNoDia: 2, pendentesAgora: 2 } }, diagnostico: { principal: { codigo: "DISPUTAS_PENDENTES", acao: ACOES.DISPUTAS_PENDENTES } } } });
+    assert.ok(pend.includes("• 2 chamados aguardam resposta dentro do prazo.") && pend.includes("• 2 chamados atingiram o prazo de expiração."));
+    assert.ok(pend.includes("Responda os chamados abertos no Gestor de Pedidos do iFood antes do vencimento do prazo."));
+    assert.ok(validarMensagem("Disputas abertas: 1", {}).problemas.some((p) => p.codigo === "TERMO_INTERNO"));
+  });
+
+  test("metas não configuradas viram ponto de atenção; sem desvio é dito explicitamente", () => {
+    const semMeta = (n) => ({ nome: n, estado: "calculado", media: 30, meta: null, amostras: 10 });
+    const ind = { ...f.indicadores, preparo: semMeta("Preparo"), entrega: semMeta("Entrega"), vida: semMeta("Vida"), atrasos: { pedidosAvaliados: 0, pedidosAtrasados: 0 }, disputas: { abertasNoDia: 0, expiradasNoDia: 0, pendentesAgora: 0 } };
+    const m = gerarMensagem({ fechamento: { ...f, indicadores: ind, diagnostico: { principal: { codigo: "SEM_DESVIO", acao: ACOES.SEM_DESVIO } } } });
+    assert.ok(m.includes("*PONTOS DE ATENÇÃO*\n• Metas de tempo não configuradas."));
+    assert.ok(!m.includes("Pedidos acima da meta"));
+    const ok = gerarMensagem({ fechamento: { ...f, indicadores: { ...f.indicadores, disputas: { abertasNoDia: 0, expiradasNoDia: 0 } }, diagnostico: { achados: [], principal: { acao: ACOES.SEM_DESVIO } } } });
+    assert.ok(ok.includes("• Nenhum desvio relevante identificado com os dados disponíveis."));
+  });
+
+  test("pior caso (todos os achados, link e nome longo) cabe no limite e o nome não quebra o negrito", () => {
+    const diag = gerarDiagnostico(f);
+    const m = gerarMensagem({ fechamento: { ...f, diagnostico: diag, indicadores: { ...f.indicadores, disputas: { abertasNoDia: 9, expiradasNoDia: 9, pendentesAgora: 9 } } },
+      unidadeNome: "Subway *North* Shopping _Unidade_ ".repeat(3), link: `https://app.exemplo.com/relatorio/${"x".repeat(60)}` });
+    assert.ok(m.length <= LIMITE_CARACTERES, `tamanho ${m.length}`);
+    assert.equal(validarMensagem(m, { fechamento: f }).ok, true);
+    const linhaNome = m.split("\n")[3];
+    assert.equal((linhaNome.match(/\*/g) ?? []).length, 2);
+    assert.equal(linhaNome.includes("_"), false);
+  });
+
   test("indicador indisponível aparece como 'não disponível' (nunca zero)", () => {
     const sem = { ...f, indicadores: { ...f.indicadores, entrega: { nome: "Entrega", estado: "indisponivel", media: null } } };
-    assert.ok(gerarMensagem({ fechamento: sem }).includes("Entrega: não disponível"));
+    assert.ok(gerarMensagem({ fechamento: sem }).includes("• Tempo médio de entrega: não disponível"));
   });
 
   test("situação PRELIMINAR / REVISADO / INCOMPLETO informada", () => {
