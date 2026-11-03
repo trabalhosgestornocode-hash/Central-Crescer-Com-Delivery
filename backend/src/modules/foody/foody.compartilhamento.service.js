@@ -112,13 +112,21 @@ function organizacoesDoAtor(ator, ctx) {
   return new Set(orgs.filter((o) => ehAdminDaOrganizacao(ator, o)));
 }
 
-/** Lista a triagem de uma competência (admin de uma organização do vínculo). Sem dado comercial: a linha de triagem não tem. */
+/**
+ * Lista a triagem de uma competência (admin de uma organização do vínculo). Sem dado comercial: a linha de triagem não tem
+ * valor, pagamento nem cancelamento, e dos itens só guarda as linhas SEM atribuição segura — os itens já reconhecidos aparecem
+ * apenas como contagem (no resumo), para nenhuma empresa ver o pedido da outra.
+ */
 export async function listarTriagem({ ator, conexaoId, competencia }, { env = process.env, repo }) {
   exigirFlag(env);
   const ctx = await contextoDaConexao(conexaoId, repo);
   if (organizacoesDoAtor(ator, ctx).size === 0) throw erro("SEM_PERMISSAO", "só organization_admin de uma organização do vínculo vê a triagem.");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(competencia ?? ""))) throw erro("COMPETENCIA_INVALIDA", "competência inválida.");
-  return repo.listarTriagem(ctx.titular, ctx.conexao.id, competencia);
+  return (await repo.listarTriagem(ctx.titular, ctx.conexao.id, competencia)).map((r) => ({
+    foodyUid: r.foody_uid, numeroPedido: r.numero_pedido, competencia: r.competencia, dataHora: r.data_hora, situacao: r.situacao,
+    motivo: r.triagem_motivo, resumo: r.operacao_motivo, catalogoVersao: r.catalogo_versao,
+    linhasSemEvidencia: String(r.detalhes_pedido ?? "").split(/\n/).filter(Boolean),
+  }));
 }
 
 /** 4. Decisão de triagem (somente inclusão). */
@@ -138,8 +146,11 @@ export async function decidirTriagem({ ator, conexaoId, foodyUid, operacao, moti
   if (atual.operacao !== RESULTADO_TRIAGEM && !minhas.has(atual.organizacao_id)) {
     throw erro("SEM_PERMISSAO", "pedido já atribuído a outra organização: só ela pode reclassificá-lo.");
   }
-  return repo.inserirDecisaoTriagem(ctx.titular, {
+  const r = await repo.inserirDecisaoTriagem(ctx.titular, {
     conexao_id: ctx.conexao.id, organizacao_id: ctx.titular.organizacaoId, unidade_id: ctx.titular.unidadeId, foody_uid: uid,
     operacao_decidida: operacao, decidido_por: ator.perfilId, motivo: texto, catalogo_versao: CATALOGO_VERSAO,
   });
+  // A decisão NÃO move dado agora: vale na próxima sincronização da competência (D-1..D-3 no ciclo normal; dia congelado pela
+  // reconciliação do agendador, como reprocessamento com motivo). Os fechamentos ganham nova versão; o histórico fica.
+  return { ...r, competencia: String(atual.competencia ?? "").slice(0, 10) || null, aplicacao: "PROXIMA_SINCRONIZACAO" };
 }

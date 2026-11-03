@@ -56,6 +56,8 @@ alter table foody_pedidos drop column if exists roteamento_ativo;
 alter table foody_pedidos drop column if exists destino_id;
 alter table foody_pedidos drop column if exists conexao_id;
 
+alter table foody_sync_execucoes drop column if exists fechamentos_pendentes;
+alter table foody_sync_execucoes drop column if exists fechamentos;
 alter table foody_sync_execucoes drop column if exists catalogo_versao;
 alter table foody_sync_execucoes drop column if exists distribuicao;
 alter table foody_sync_execucoes drop column if exists pedidos_triagem;

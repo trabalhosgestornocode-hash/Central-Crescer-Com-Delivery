@@ -15,6 +15,7 @@ const ORG_X = "33333333-3333-4333-8333-333333333333", UNI_X = "eeeeeeee-eeee-4ee
 const CON = "c0000000-0000-4000-8000-00000000000a", EXEC = "e0000000-0000-4000-8000-00000000000a";
 const ADM_T = "a1000000-0000-4000-8000-000000000001", ADM_D = "a2000000-0000-4000-8000-000000000002";
 const OPS_T = "a3000000-0000-4000-8000-000000000003", ADM_X = "a4000000-0000-4000-8000-000000000004";
+const ADM_TD = "a5000000-0000-4000-8000-000000000005";   // organization_admin LEGÍTIMO das duas organizações
 const H = "a".repeat(64);
 
 describe("migration 145 — conexão compartilhada, Postgres real", { skip: motivoPular, timeout: 600_000 }, () => {
@@ -41,12 +42,13 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
       ok(`insert into organizacoes (id, nome) values ('${org}', 'org ${org.slice(0, 4)}');`);
       ok(`insert into unidades (id, organizacao_id, nome) values ('${uni}', '${org}', 'unidade ${uni.slice(0, 4)}');`);
     }
-    for (const [id, org, papel] of [[ADM_T, ORG_T, "organization_admin"], [ADM_D, ORG_D, "organization_admin"], [OPS_T, ORG_T, "operations"], [ADM_X, ORG_X, "organization_admin"]]) {
+    for (const [id, org, papel] of [[ADM_T, ORG_T, "organization_admin"], [ADM_D, ORG_D, "organization_admin"], [OPS_T, ORG_T, "operations"], [ADM_X, ORG_X, "organization_admin"], [ADM_TD, ORG_T, "organization_admin"]]) {
       ok(`insert into auth.users (id, email) values ('${id}', 'u${id.slice(0, 4)}@teste.invalid');
         insert into perfis (id, nome, email) values ('${id}', 'perfil ${id.slice(0, 4)}', 'u${id.slice(0, 4)}@teste.invalid');
         insert into perfis_operacionais (id, conta_id, nome) values ('${id}', '${id}', 'perfil ${id.slice(0, 4)}');
         insert into usuarios_organizacoes (usuario_id, perfil_id, organizacao_id, papel) values ('${id}', '${id}', '${org}', '${papel}');`);
     }
+    ok(`insert into usuarios_organizacoes (usuario_id, perfil_id, organizacao_id, papel) values ('${ADM_TD}', '${ADM_TD}', '${ORG_D}', 'organization_admin');`);
     // O admin do destino também é membro (não admin) da titular — caso real: as mesmas pessoas nas duas empresas.
     ok(`insert into usuarios_organizacoes (usuario_id, perfil_id, organizacao_id, papel) values ('${ADM_D}', '${ADM_D}', '${ORG_T}', 'operations');`);
     ok(`insert into foody_conexoes (id, organizacao_id, unidade_id, status, token_cifrado, token_impressao) values
@@ -86,10 +88,14 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
     falha(`update foody_conexao_destinos set unidade_id = '${UNI_X}' where id = '${id}';`, /não mudam/);
   });
 
-  test("auditoria: eventos gerados pelo banco, na ordem; service_role não forja nem apaga evento", () => {
+  test("auditoria: eventos gerados pelo banco, cada um no tenant de quem agiu; ativação nos dois; service_role não forja nem apaga", () => {
     const id = destinoId();
-    assert.equal(ok(`select string_agg(evento || ':' || coalesce(left(ator_perfil_id::text, 4), '-'), ',' order by criado_em, evento)
-      from foody_destinos_eventos where destino_id = '${id}';`), "APROVADO_TITULAR:a100,PROPOSTO:a100,APROVADO_DESTINO:a200,ATIVADO:a200");
+    // evento:ator:tenant(unidade):organização em nome da qual agiu
+    assert.equal(ok(`select string_agg(evento || ':' || coalesce(left(ator_perfil_id::text, 4), '-') || ':' || left(unidade_id::text, 4) || ':'
+      || coalesce(left(ator_organizacao_id::text, 4), '-'), ',' order by criado_em, evento, unidade_id) from foody_destinos_eventos where destino_id = '${id}';`),
+      "APROVADO_TITULAR:a100:aaaa:1111,PROPOSTO:a100:aaaa:1111,APROVADO_DESTINO:a200:dddd:2222,ATIVADO:a200:aaaa:2222,ATIVADO:a200:dddd:2222");
+    // Isolamento: nenhum evento fora do tenant da própria unidade.
+    assert.equal(um(`select count(*) from foody_destinos_eventos e join unidades u on u.id = e.unidade_id where u.organizacao_id <> e.organizacao_id;`), "0");
     const forjar = comoUsuario(b.url, null, `insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento) values ('${id}', '${ORG_D}', '${UNI_D}', 'ATIVADO');`, { papel: "service_role" });
     assert.equal(forjar.ok, false); assert.match(forjar.err, /permission denied|permissão negada/);
     // Privilégios efetivos (RLS sem policy faria um DELETE "passar" com 0 linhas — por isso a checagem é do privilégio).
@@ -200,6 +206,34 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
     ok(`update foody_conexoes set status = 'ATIVA' where id = '${CON}';`);
   });
 
+  test("mesma pessoa pelas duas organizações: só com o papel LEGÍTIMO nas duas e em atos (transações) separados", () => {
+    const ins = (por, quando = "now()") => `insert into foody_conexao_destinos (conexao_id, organizacao_id, unidade_id, operacao, estado, organizacao_titular_id,
+      aprovado_titular_por, aprovado_titular_em) values ('${CON}', '${ORG_D}', '${UNI_D}', 'acai_no_grau', 'PENDENTE', '${ORG_T}', '${por}', ${quando});`;
+    const aprovar = (por, quando = "now()") => `update foody_conexao_destinos set aprovado_destino_por = '${por}', aprovado_destino_em = ${quando}, estado = 'ATIVO'
+      where conexao_id = '${CON}' and estado = 'PENDENTE';`;
+    // Proposta + aprovação do destino na MESMA transação: recusada (não é um segundo ato).
+    falha(`begin; ${ins(ADM_TD)} ${aprovar(ADM_TD)} commit;`, /ato separado/);
+    assert.equal(um(`select count(*) from foody_conexao_destinos where conexao_id = '${CON}' and estado <> 'REVOGADO';`), "0");
+    // Carimbo do cliente é ignorado: o banco grava a hora real de cada ato.
+    ok(ins(ADM_TD, "'2020-01-01T00:00:00Z'"));
+    assert.equal(um(`select extract(year from aprovado_titular_em) from foody_conexao_destinos where conexao_id = '${CON}' and estado = 'PENDENTE';`), "2026");
+    // Admin de UMA só das organizações não completa a outra parte.
+    falha(aprovar(ADM_T), /organization_admin da organização de destino/);
+    ok(aprovar(ADM_TD, "'2020-01-01T00:00:00Z'"));
+    const id = destinoId();
+    assert.equal(um(`select (aprovado_destino_em > aprovado_titular_em)::text || ':' || extract(year from aprovado_destino_em) from foody_conexao_destinos where id = '${id}';`), "true:2026");
+    assert.equal(ok(`select string_agg(evento || ':' || left(unidade_id::text, 4) || ':' || left(ator_organizacao_id::text, 4), ',' order by criado_em, evento, unidade_id)
+      from foody_destinos_eventos where destino_id = '${id}' and ator_perfil_id = '${ADM_TD}';`),
+      "APROVADO_TITULAR:aaaa:1111,PROPOSTO:aaaa:1111,APROVADO_DESTINO:dddd:2222,ATIVADO:aaaa:2222,ATIVADO:dddd:2222");
+    assert.equal(um(`select count(*) from foody_destinos_eventos where destino_id = '${id}' and evento = 'ATIVADO' and motivo like 'Mesma pessoa%';`), "2");
+    ok(`update foody_conexao_destinos set estado = 'REVOGADO', revogado_em = now(), revogado_motivo = 'fim do teste', revogado_por = '${ADM_TD}' where id = '${id}';`);
+    // Papel perdido depois: a mesma pessoa não aprova mais por aquela organização.
+    ok(`update usuarios_organizacoes set papel = 'operations' where perfil_id = '${ADM_TD}' and organizacao_id = '${ORG_D}';`);
+    ok(ins(ADM_T));
+    falha(aprovar(ADM_TD), /organization_admin da organização de destino/);
+    ok(`update foody_conexao_destinos set estado = 'REVOGADO', revogado_em = now(), revogado_motivo = 'fim do teste', revogado_por = '${ADM_T}' where conexao_id = '${CON}' and estado = 'PENDENTE';`);
+  });
+
   test("rollback 145: recusa com dado compartilhado; limpo, volta à 144 (regras originais) e reaplica", () => {
     const rb = () => psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_rollback.sql") });
     const r = rb();
@@ -214,6 +248,8 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
     assert.equal(um(`select count(*) from pg_tables where tablename in ('foody_conexao_destinos', 'foody_destinos_eventos', 'foody_triagem_decisoes');`), "0");
     assert.equal(um(`select count(*) from information_schema.columns where table_name = 'foody_pedidos' and column_name in ('destino_id', 'conexao_id', 'roteamento_ativo');`), "0");
     assert.equal(um(`select count(*) from foody_pedidos where foody_uid = 's144';`), "1");   // dado da 144 preservado
+    assert.equal(um(`select count(*) from information_schema.columns where table_name = 'foody_sync_execucoes'
+      and column_name in ('catalogo_versao', 'fechamentos', 'fechamentos_pendentes');`), "0");
     // Regras da 144 de volta: 'triagem' não existe e Açaí completo continua proibido.
     falha(`insert into foody_pedidos (organizacao_id, unidade_id, foody_uid, numero_pedido, competencia, data_hora, status_foody, situacao, operacao,
       entregador_presente, entregador_tipo, fonte_hash, primeira_execucao_id, ultima_execucao_id)
@@ -222,6 +258,8 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
     const r3 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_foody_conexao_compartilhada.sql") });
     assert.equal(r3.ok, true, r3.err);
     assert.equal(um(`select count(*) from pg_tables where tablename like 'foody_%';`), "7");
+    assert.equal(um(`select count(*) from information_schema.columns where table_name = 'foody_sync_execucoes'
+      and column_name in ('catalogo_versao', 'fechamentos', 'fechamentos_pendentes');`), "3");
     // Pedido gravado no formato da 144 ganha a conexão da própria execução ao reaplicar (entra na unicidade global).
     assert.equal(um(`select conexao_id from foody_pedidos where foody_uid = 's144';`), CON);
   });

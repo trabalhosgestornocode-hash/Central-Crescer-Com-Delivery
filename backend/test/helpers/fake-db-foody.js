@@ -9,6 +9,7 @@ export function criarFakeDb({ unidades = {} } = {}) {
   const tabelas = { foody_conexoes: [], foody_sync_execucoes: [], foody_pedidos: [], foody_fechamentos_logisticos: [],
     foody_conexao_destinos: [], foody_triagem_decisoes: [] };
   const chamadas = [];
+  let seqCarimbo = 0;
   const validarTenant = (t, linha) => {
     if (unidades[linha.unidade_id] !== linha.organizacao_id) {
       const e = new Error(`${t}: a unidade ${linha.unidade_id} não pertence à organização ${linha.organizacao_id}`); e.code = "42501"; throw e;
@@ -44,7 +45,9 @@ export function criarFakeDb({ unidades = {} } = {}) {
       const linhas = tabelas[tabela];
       try {
         if (st.op === "insert") {
-          const novas = (Array.isArray(st.valor) ? st.valor : [st.valor]).map((v) => ({ id: randomUUID(), ...v }));
+          // Como o default now() do banco: carimbo estritamente crescente (a ordem por iniciado_em é a ordem de inserção).
+          const carimbo = tabela === "foody_sync_execucoes" ? { iniciado_em: new Date(Date.UTC(2026, 0, 1) + ++seqCarimbo).toISOString() } : {};
+          const novas = (Array.isArray(st.valor) ? st.valor : [st.valor]).map((v) => ({ id: randomUUID(), ...carimbo, ...v }));
           for (const n of novas) validarTenant(tabela, n);
           linhas.push(...novas);
           return { data: st.modo === "lista" ? novas : novas[0], error: null };

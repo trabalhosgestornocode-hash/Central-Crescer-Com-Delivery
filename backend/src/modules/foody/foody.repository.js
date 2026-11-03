@@ -220,7 +220,7 @@ export function criarRepositorioFoody(db) {
 
     /** Linha ATIVA de um uid na conexão (qualquer tenant autorizado). */
     async obterPedidoAtivoDaConexao(conexaoId, foodyUid, permitidos) {
-      const { data, error } = await db.from("foody_pedidos").select("foody_uid, organizacao_id, unidade_id, operacao, destino_id")
+      const { data, error } = await db.from("foody_pedidos").select("foody_uid, organizacao_id, unidade_id, operacao, destino_id, competencia")
         .eq("conexao_id", conexaoId).eq("roteamento_ativo", true).eq("foody_uid", foodyUid);
       if (error) throw falha("obterPedidoAtivoDaConexao", error);
       exigirTenantsPermitidos(data ?? [], permitidos, "obterPedidoAtivoDaConexao");
@@ -231,7 +231,7 @@ export function criarRepositorioFoody(db) {
     async listarTriagem(t, conexaoId, competencia) {
       exigirTenant(t);
       const { data, error } = await db.from("foody_pedidos")
-        .select("foody_uid, numero_pedido, competencia, data_hora, detalhes_pedido, triagem_motivo, catalogo_versao, situacao")
+        .select("foody_uid, numero_pedido, competencia, data_hora, detalhes_pedido, operacao_motivo, triagem_motivo, catalogo_versao, situacao")
         .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId)
         .eq("operacao", "triagem").eq("roteamento_ativo", true).eq("competencia", competencia)
         .order("foody_uid", { ascending: true }).range(0, PAGINA_LEITURA - 1);
@@ -247,6 +247,47 @@ export function criarRepositorioFoody(db) {
       const { data, error } = await db.from("foody_triagem_decisoes").insert(linha).select("id, decidido_em").single();
       if (error) throw falha("inserirDecisaoTriagem", error);
       return data;
+    },
+
+    /** Resultado do fechamento de cada organização a partir da execução (pendência durável do ciclo compartilhado). */
+    async registrarFechamentosDaExecucao(t, execucaoId, fechamentos, pendentes) {
+      exigirTenant(t);
+      const { error } = await db.from("foody_sync_execucoes").update({ fechamentos, fechamentos_pendentes: pendentes })
+        .eq("id", execucaoId).eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId);
+      if (error) throw falha("registrarFechamentosDaExecucao", error);
+    },
+
+    /**
+     * Competências da titular `t` (desde `desde`) cujo ciclo compartilhado NÃO terminou: a última execução concluída deixou
+     * fechamento pendente, ou há pedido em triagem com decisão ainda não aplicada. Devolve [{ competencia, motivo }].
+     */
+    async listarCompetenciasParaReconciliar(t, desde) {
+      exigirTenant(t);
+      const out = new Map();
+      const { data: execs, error } = await db.from("foody_sync_execucoes").select("competencia, fechamentos_pendentes, iniciado_em, status")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("status", "CONCLUIDA")
+        .order("iniciado_em", { ascending: false }).range(0, PAGINA_LEITURA - 1);
+      if (error) throw falha("listarCompetenciasParaReconciliar", error);
+      const vistas = new Set();
+      for (const e of execs ?? []) {
+        const c = String(e.competencia).slice(0, 10);
+        if (c < desde || vistas.has(c)) continue;
+        vistas.add(c); // só a ÚLTIMA execução de cada dia decide
+        if (Number(e.fechamentos_pendentes) > 0) out.set(c, "FECHAMENTO_PENDENTE");
+      }
+      const { data: tri, error: e2 } = await db.from("foody_pedidos").select("foody_uid, competencia, conexao_id")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("operacao", "triagem").eq("roteamento_ativo", true)
+        .range(0, PAGINA_LEITURA - 1);
+      if (e2) throw falha("listarCompetenciasParaReconciliar", e2);
+      const triagem = (tri ?? []).filter((r) => String(r.competencia).slice(0, 10) >= desde);
+      if (triagem.length) {
+        const { data: decs, error: e3 } = await db.from("foody_triagem_decisoes").select("foody_uid")
+          .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).in("foody_uid", triagem.map((r) => r.foody_uid));
+        if (e3) throw falha("listarCompetenciasParaReconciliar", e3);
+        const decididos = new Set((decs ?? []).map((d) => d.foody_uid));
+        for (const r of triagem) if (decididos.has(r.foody_uid)) out.set(String(r.competencia).slice(0, 10), out.get(String(r.competencia).slice(0, 10)) ?? "DECISAO_DE_TRIAGEM");
+      }
+      return [...out].sort(([a], [b]) => (a < b ? -1 : 1)).map(([competencia, motivo]) => ({ competencia, motivo }));
     },
 
     async ultimoFechamento(t, competencia) {

@@ -72,6 +72,20 @@ export function operacoesPorTermo(linhaNormalizada) {
 }
 
 /**
+ * Linhas SEM atribuição segura (nenhuma evidência, ou evidência das duas operações na mesma linha), já normalizadas.
+ * É o ÚNICO texto de itens que a linha de TRIAGEM guarda e mostra: as linhas conhecidas (que revelariam o pedido da outra
+ * empresa) nunca ficam na triagem — aparecem só como contagem por operação.
+ */
+export function linhasParaTriagem(detalhes, opcoes = {}) {
+  const indice = opcoes.catalogo ? criarIndice(opcoes.catalogo) : INDICE_PADRAO;
+  return linhasDoPedido(detalhes).filter((l) => {
+    const ops = new Set(operacoesPorTermo(l));
+    if (indice.has(l)) ops.add(indice.get(l));
+    return ops.size !== 1;
+  });
+}
+
+/**
  * @param {string|null} detalhes texto `orderDetails` do pedido
  * @param {{catalogo?: object}} [opcoes] catálogo alternativo (só testes/avaliação)
  * @returns {{ operacao: 'subway'|'acai_no_grau'|'triagem', motivo: string|null, linhas: number, desconhecidas: number,

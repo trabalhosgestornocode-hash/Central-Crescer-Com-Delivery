@@ -38,6 +38,7 @@ export class FoodySyncErro extends Error {
 export async function sincronizarCompetencia(pedido, deps) {
   const { organizacaoId, unidadeId, competencia, origem = ORIGEM.MANUAL, motivo = null } = pedido ?? {};
   const { env = process.env, repo, seguranca, criarCliente = criarClienteFoody, agora = () => new Date(), log = foodyLog } = deps ?? {};
+  const catalogo = deps?.catalogo ?? CATALOGO_OPERACAO; // alternativo só em teste/avaliação; produção usa o versionado
   const t = { organizacaoId, unidadeId };
 
   if (!unidadePermitida(env, unidadeId)) throw new FoodySyncErro("DESLIGADO", "camada central Foody desligada para esta unidade.");
@@ -94,7 +95,7 @@ export async function sincronizarCompetencia(pedido, deps) {
     const esperado = conexao.ponto_coleta_esperado ? normalizarNome(conexao.ponto_coleta_esperado) : null;
     const registros = [];
     for (const o of pedidos) {
-      const r = sanearPedidoApi(o, { hashEntregador: seguranca.hashEntregador, compartilhado });
+      const r = sanearPedidoApi(o, { hashEntregador: seguranca.hashEntregador, compartilhado, catalogo: deps?.catalogo });
       if (r.erro) { errosSaneamento[r.erro] = (errosSaneamento[r.erro] || 0) + 1; continue; }
       if (r.registro.competencia !== competencia) { foraJanela++; continue; }
       if (esperado && normalizarNome(r.registro.ponto_coleta) !== esperado) {
@@ -159,13 +160,13 @@ export async function sincronizarCompetencia(pedido, deps) {
       resumo.compartilhamento = {
         titular: { organizacaoId, unidadeId },
         destinos: destinosAtivos.map((d) => ({ destinoId: d.id, organizacaoId: d.organizacao_id, unidadeId: d.unidade_id, operacao: d.operacao })),
-        distribuicao, catalogoVersao: compartilhado ? CATALOGO_OPERACAO.versao : null,
+        distribuicao, catalogoVersao: compartilhado ? catalogo.versao : null,
       };
     }
     await repo.concluirExecucao(t, execucaoId, {
       status: "CONCLUIDA", paginas: cobertura.paginas, pedidos_recebidos: cobertura.recebidos, pedidos_unicos: cobertura.unicos,
       pedidos_fora_janela: foraJanela, pedidos_ponto_divergente: pontoDivergente, inseridos, atualizados, inalterados,
-      ...(porConexao ? { pedidos_triagem: distribuicao.triagem, distribuicao, catalogo_versao: compartilhado ? CATALOGO_OPERACAO.versao : null } : {}),
+      ...(porConexao ? { pedidos_triagem: distribuicao.triagem, distribuicao, catalogo_versao: compartilhado ? catalogo.versao : null } : {}),
     });
     await repo.marcarConexao(t, conexao.id, { ultimo_erro_codigo: null, ultima_sync_em: agoraIso });
     log("info", "foody.sync.fim", { unidade: unidadeId, competencia, execucaoId, ...resumo.contagens, completa: resumo.cobertura.completa }, { segredos });
@@ -225,6 +226,8 @@ async function distribuirPelaConexao({ t, conexao, registros, destinosTodos, ind
       inalterados++;
       continue;
     } else if (ativo) {
+      // Mesmo tenant, operação diferente (ex.: triagem → Subway por nova versão do catálogo ou decisão): também é reclassificação.
+      if (ativo.operacao !== linha.operacao) distribuicao.reclassificados++;
       atualizados++;
     } else {
       inseridos++; // pode reativar uma linha antiga do mesmo tenant: o upsert reaproveita a linha

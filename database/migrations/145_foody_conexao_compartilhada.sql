@@ -130,6 +130,19 @@ begin
     end if;
   end if;
 
+  -- Carimbo de tempo das aprovações é do BANCO (não do cliente), gravado uma vez.
+  if new.aprovado_titular_por is not null and (tg_op = 'INSERT' or old.aprovado_titular_por is null) then
+    new.aprovado_titular_em := now();
+  end if;
+  if new.aprovado_destino_por is not null and (tg_op = 'INSERT' or old.aprovado_destino_por is null) then
+    -- ATOS SEPARADOS: a aprovação do destino nunca vem na mesma transação da aprovação da titular (vale também quando a mesma
+    -- pessoa é organization_admin legítima das duas organizações: são dois atos, cada um no contexto da sua organização).
+    if tg_op = 'UPDATE' and old.aprovado_titular_em is not null and old.aprovado_titular_em >= now() then
+      raise exception 'foody_conexao_destinos: a aprovação do destino é um ato separado da aprovação da titular' using errcode = '42501';
+    end if;
+    new.aprovado_destino_em := now();
+  end if;
+
   -- Quem aprova: organization_admin ATIVO da organização certa, conferido NO MOMENTO da aprovação.
   if new.aprovado_titular_por is not null and (tg_op = 'INSERT' or old.aprovado_titular_por is null)
      and not foody_eh_admin_da_organizacao(new.aprovado_titular_por, new.organizacao_titular_id) then
@@ -184,39 +197,53 @@ create table if not exists foody_destinos_eventos (
   unidade_id uuid not null references unidades(id) on delete cascade,
   evento text not null check (evento in ('PROPOSTO', 'APROVADO_TITULAR', 'APROVADO_DESTINO', 'ATIVADO', 'REVOGADO')),
   ator_perfil_id uuid,                                          -- null = automático (transferência/revogação da conexão)
+  ator_organizacao_id uuid references organizacoes(id) on delete set null,  -- organização em nome da qual o ator agiu
   motivo text check (motivo is null or length(motivo) <= 300),
   criado_em timestamptz not null default now()
 );
 create index if not exists idx_foody_destinos_eventos on foody_destinos_eventos(destino_id, criado_em);
 
 -- SECURITY DEFINER: o service_role NÃO tem INSERT em foody_destinos_eventos (a trilha só nasce por aqui, não dá para forjar).
+-- Trilhas INDEPENDENTES: cada organização tem os próprios eventos no próprio tenant. Os atos da titular (proposta e aprovação da
+-- titular) ficam no tenant da titular; a aprovação do destino fica no tenant do destino; ATIVADO e REVOGADO ficam nos dois.
+-- Mesma pessoa aprovando pelas duas organizações aparece como DOIS eventos, cada um com a organização em nome da qual agiu.
 create or replace function foody_destino_auditar() returns trigger
 language plpgsql security definer set search_path = public as $$
+declare
+  uni_titular uuid;
+  org_titular uuid;
+  mesmo text;
 begin
+  -- Tenant ATUAL da conexão (não a foto da proposta): numa transferência da titular, o evento nasce já no tenant novo.
+  select c.unidade_id, c.organizacao_id into uni_titular, org_titular from foody_conexoes c where c.id = new.conexao_id;
   if tg_op = 'INSERT' then
-    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id)
-      values (new.id, new.organizacao_id, new.unidade_id, 'PROPOSTO', new.aprovado_titular_por);
+    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id, ator_organizacao_id)
+      values (new.id, org_titular, uni_titular, 'PROPOSTO', new.aprovado_titular_por, new.organizacao_titular_id);
     if new.aprovado_titular_por is not null then
-      insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id)
-        values (new.id, new.organizacao_id, new.unidade_id, 'APROVADO_TITULAR', new.aprovado_titular_por);
+      insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id, ator_organizacao_id)
+        values (new.id, org_titular, uni_titular, 'APROVADO_TITULAR', new.aprovado_titular_por, new.organizacao_titular_id);
     end if;
     return null;
   end if;
   if old.aprovado_titular_por is null and new.aprovado_titular_por is not null then
-    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id)
-      values (new.id, new.organizacao_id, new.unidade_id, 'APROVADO_TITULAR', new.aprovado_titular_por);
+    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id, ator_organizacao_id)
+      values (new.id, org_titular, uni_titular, 'APROVADO_TITULAR', new.aprovado_titular_por, new.organizacao_titular_id);
   end if;
   if old.aprovado_destino_por is null and new.aprovado_destino_por is not null then
-    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id)
-      values (new.id, new.organizacao_id, new.unidade_id, 'APROVADO_DESTINO', new.aprovado_destino_por);
+    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id, ator_organizacao_id)
+      values (new.id, new.organizacao_id, new.unidade_id, 'APROVADO_DESTINO', new.aprovado_destino_por, new.organizacao_id);
   end if;
   if old.estado <> 'ATIVO' and new.estado = 'ATIVO' then
-    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id)
-      values (new.id, new.organizacao_id, new.unidade_id, 'ATIVADO', new.aprovado_destino_por);
+    mesmo := case when new.aprovado_titular_por = new.aprovado_destino_por
+      then 'Mesma pessoa aprovou pelas duas organizações, em atos separados.' end;
+    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id, ator_organizacao_id, motivo)
+      values (new.id, org_titular, uni_titular, 'ATIVADO', new.aprovado_destino_por, new.organizacao_id, mesmo),
+             (new.id, new.organizacao_id, new.unidade_id, 'ATIVADO', new.aprovado_destino_por, new.organizacao_id, mesmo);
   end if;
   if old.estado <> 'REVOGADO' and new.estado = 'REVOGADO' then
-    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id, motivo)
-      values (new.id, new.organizacao_id, new.unidade_id, 'REVOGADO', new.revogado_por, new.revogado_motivo);
+    insert into foody_destinos_eventos (destino_id, organizacao_id, unidade_id, evento, ator_perfil_id, ator_organizacao_id, motivo)
+      values (new.id, org_titular, uni_titular, 'REVOGADO', new.revogado_por, null, new.revogado_motivo),
+             (new.id, new.organizacao_id, new.unidade_id, 'REVOGADO', new.revogado_por, null, new.revogado_motivo);
   end if;
   return null;
 end $$;
@@ -351,6 +378,10 @@ end $$;
 alter table foody_sync_execucoes add column if not exists pedidos_triagem integer not null default 0 check (pedidos_triagem >= 0);
 alter table foody_sync_execucoes add column if not exists distribuicao jsonb not null default '{}'::jsonb;
 alter table foody_sync_execucoes add column if not exists catalogo_versao text check (catalogo_versao is null or length(catalogo_versao) <= 40);
+-- Resultado do fechamento de CADA organização gerado a partir desta execução (só códigos). Enquanto houver fechamento pendente,
+-- o ciclo compartilhado da competência NÃO está concluído — o agendador volta a ele (reconciliação), mesmo fora de D-1..D-3.
+alter table foody_sync_execucoes add column if not exists fechamentos jsonb not null default '{}'::jsonb;
+alter table foody_sync_execucoes add column if not exists fechamentos_pendentes integer not null default 0 check (fechamentos_pendentes >= 0);
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 5. Fechamento de unidade DESTINO: só com destino ATIVO no momento da gravação

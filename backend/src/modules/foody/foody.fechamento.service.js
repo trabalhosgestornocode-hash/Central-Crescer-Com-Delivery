@@ -12,6 +12,22 @@ import { foodyLog } from "./foody.seguranca.js";
 import { FoodySyncErro, sincronizarCompetencia } from "./foody.sync.service.js";
 
 const MOTIVO_REPROCESSO = "Dados da API Foody mudaram dentro da janela de reprocessamento.";
+const MOTIVO_RECLASSIFICACAO = "Pedidos mudaram de organização (decisão de triagem, vínculo ou nova versão do catálogo).";
+
+/**
+ * Cobertura que vai para o fechamento de um DESTINO: a prova de completude da conexão, SEM o que é da titular (volume total
+ * de pedidos da conta, páginas, nomes de ponto de coleta, detalhes de erro). Só códigos; quantidade apenas da triagem.
+ */
+export function coberturaParaDestino(cobertura) {
+  return {
+    completa: cobertura?.completa === true,
+    janelaInicio: cobertura?.janelaInicio ?? null, janelaFim: cobertura?.janelaFim ?? null,
+    paginas: null, pedidosUnicos: null,
+    triagemPendente: cobertura?.triagemPendente ?? 0,
+    pendencias: (cobertura?.pendencias ?? []).map((p) => (p.codigo === "TRIAGEM_PENDENTE"
+      ? { codigo: p.codigo, quantidade: p.quantidade } : { codigo: p.codigo, origem: "conexao" })),
+  };
+}
 
 /**
  * Decide o status da nova versão: um dia já CONSOLIDADO cujo conteúdo mudou vira CORRIGIDO (com motivo); INCOMPLETO fica
@@ -48,9 +64,11 @@ export async function gerarFechamentoLogistico(pedido, deps) {
   const compartilhado = (comp?.destinos?.length ?? 0) > 0;
   const operacao = destino ? destino.operacao : "subway";
   const pedidos = await repo.listarPedidosDaCompetencia(t, competencia);
-  const calc = calcularFechamentoLogistico(pedidos, { competencia, cobertura: sync.cobertura, operacao, compartilhado });
+  const cobertura = destino ? coberturaParaDestino(sync.cobertura) : sync.cobertura;
+  const calc = calcularFechamentoLogistico(pedidos, { competencia, cobertura, operacao, compartilhado });
   const ultimo = await repo.ultimoFechamento(t, competencia);
-  const { status, motivo: motivoFinal } = decidirStatus(calc, ultimo, motivo);
+  const motivoPadrao = motivo ?? (comp?.distribuicao?.reclassificados ? MOTIVO_RECLASSIFICACAO : null);
+  const { status, motivo: motivoFinal } = decidirStatus(calc, ultimo, motivoPadrao);
 
   const r = await repo.registrarFechamento(t, {
     competencia, status, estadoValores: calc.estadoValores, execucaoId, syncExecucaoId: sync.execucaoId,
@@ -63,18 +81,37 @@ export async function gerarFechamentoLogistico(pedido, deps) {
   return { ...r, estadoValores: calc.estadoValores, pendencias: calc.pendencias, indicadores: calc.indicadores, outrasOperacoes: calc.outrasOperacoes };
 }
 
-/** Sincroniza e fecha uma competência (o que o agendador chama por unidade TITULAR). Destinos ativos fecham em seguida. */
+/**
+ * Sincroniza e fecha uma competência (o que o agendador chama por unidade TITULAR). TODOS os fechamentos são tentados — o da
+ * titular e o de cada destino ativo — e o resultado de cada um fica gravado na execução (foody_sync_execucoes.fechamentos).
+ * Qualquer fechamento que falhe deixa a competência PENDENTE (`concluido: false`, fechamentos_pendentes > 0): o ciclo
+ * compartilhado não é dado como concluído e o agendador volta a ela. Falha da titular é relançada depois de tentar os destinos.
+ */
 export async function sincronizarEFechar(pedido, deps) {
   const sync = await sincronizarCompetencia(pedido, deps);
-  const fechamento = await gerarFechamentoLogistico({ ...pedido, sync }, deps);
+  const comp = sync.compartilhamento ?? null;
+  let fechamento = null, erroTitular = null;
+  try { fechamento = await gerarFechamentoLogistico({ ...pedido, sync }, deps); } catch (e) { erroTitular = e; }
   const fechamentosDestino = [];
-  for (const d of sync.compartilhamento?.destinos ?? []) {
+  for (const d of comp?.destinos ?? []) {
     try {
       const f = await gerarFechamentoLogistico({ ...pedido, execucaoId: undefined, organizacaoId: d.organizacaoId, unidadeId: d.unidadeId, sync }, deps);
       fechamentosDestino.push({ unidadeId: d.unidadeId, operacao: d.operacao, resultado: f.resultado, status: f.status, versao: f.versao, estadoValores: f.estadoValores });
     } catch (e) {
-      fechamentosDestino.push({ unidadeId: d.unidadeId, operacao: d.operacao, erro: String(e?.codigo ?? "ERRO_INTERNO") });
+      fechamentosDestino.push({ unidadeId: d.unidadeId, operacao: d.operacao, erro: /^[A-Z_]{2,40}$/.test(String(e?.codigo)) ? e.codigo : "ERRO_INTERNO" });
     }
   }
-  return { sync, fechamento, fechamentosDestino };
+  const pendentes = [
+    ...(erroTitular ? [{ unidadeId: pedido.unidadeId, operacao: "subway", erro: /^[A-Z_]{2,40}$/.test(String(erroTitular?.codigo)) ? erroTitular.codigo : "ERRO_INTERNO" }] : []),
+    ...fechamentosDestino.filter((x) => x.erro),
+  ];
+  if (comp) {
+    const registro = { [pedido.unidadeId]: erroTitular ? `ERRO:${pendentes[0].erro}` : fechamento.resultado };
+    for (const x of fechamentosDestino) registro[x.unidadeId] = x.erro ? `ERRO:${x.erro}` : x.resultado;
+    // Melhor esforço: se nem isto gravar, o `concluido:false` devolvido abaixo continua sinalizando a pendência ao agendador.
+    try { await deps.repo.registrarFechamentosDaExecucao({ organizacaoId: pedido.organizacaoId, unidadeId: pedido.unidadeId }, sync.execucaoId, registro, pendentes.length); }
+    catch { /* a pendência continua no retorno */ }
+  }
+  if (erroTitular) { erroTitular.fechamentosPendentes = pendentes; throw erroTitular; }
+  return { sync, fechamento, fechamentosDestino, concluido: pendentes.length === 0, pendentes };
 }

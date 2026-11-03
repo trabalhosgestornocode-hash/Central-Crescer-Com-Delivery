@@ -82,6 +82,54 @@ Com parâmetros mais rígidos (mínimo 3 ocorrências / 3 dias), a cobertura cai
 
 Superadmin em **impersonação não conta** para nenhuma dessas ações. O banco confere tudo de novo, lendo `usuarios_organizacoes` no momento da escrita. Toda mudança do vínculo gera um evento imutável em `foody_destinos_eventos`.
 
+**Mesma pessoa pelas duas organizações.** É permitido, mas só quando ela é organization_admin **legítima** das duas no momento de cada ato. Mesmo assim:
+- são **dois atos** separados, cada um no contexto da sua organização. O serviço exige o contexto da organização certa em cada passo. O banco recusa a aprovação do destino na mesma transação da proposta ("ato separado");
+- o banco grava os carimbos `aprovado_*_em` com a própria hora, e o carimbo enviado pelo cliente é ignorado;
+- a auditoria é **por tenant**:
+  - `PROPOSTO` e `APROVADO_TITULAR` ficam na titular;
+  - `APROVADO_DESTINO` fica no destino;
+  - `ATIVADO` e `REVOGADO` ficam nos dois.
+
+  Cada evento traz `ator_organizacao_id`, a organização em nome da qual a pessoa agiu. Quando é a mesma pessoa, o `ATIVADO` registra isso no motivo;
+- se a pessoa perde o papel numa das organizações, perde também o poder de agir por ela.
+
+## 4.1 Privacidade da triagem e do fechamento do destino
+
+- **Linha de triagem.** Fica na titular e não traz nenhum dado comercial: valor, taxa, pagamento e cancelamento ficam vazios. Dos itens, guarda **só as linhas sem atribuição segura**, que são as desconhecidas ou as que têm evidência das duas empresas na mesma linha. Os itens já reconhecidos de qualquer empresa nunca ficam na triagem: aparecem só como contagem no resumo (`operacao_motivo`). No pedido misto (`CONFLITO`), os itens ficam vazios.
+- **Listagem.** `listarTriagem` devolve `foodyUid`, número, data, situação, motivo, resumo, versão do catálogo e `linhasSemEvidencia`. Nada além disso.
+- **Fechamento do destino.** A cobertura vem saneada (`coberturaParaDestino`):
+  - sem o volume total da conta (`pedidosUnicos` e `paginas` vazios);
+  - sem nomes de ponto de coleta;
+  - sem o detalhe dos erros;
+  - as pendências da conexão aparecem só como `{codigo, origem: "conexao"}`.
+
+  O status de cobertura incompleta continua valendo. A titular, dona da conta, mantém a cobertura completa.
+
+## 4.2 Integridade do ciclo compartilhado
+
+- `sincronizarEFechar` tenta **todos** os fechamentos, da titular e de cada destino, mesmo que um deles falhe. O resultado por unidade (`REGISTRADO`, `SEM_MUDANCA` ou `ERRO:<código>`) e o número de pendentes ficam gravados na execução (`foody_sync_execucoes.fechamentos` e `fechamentos_pendentes`).
+- Destino que falha → `concluido: false` e `pendentes`. No agendador, a entrada sai com `erro: "FECHAMENTO_PENDENTE"`: o ciclo **não** conta como sucesso.
+- Titular que falha → os destinos são tentados mesmo assim, e o erro sobe com `fechamentosPendentes`.
+- **Reconciliação.** Só roda com a flag de compartilhamento ligada. O agendador também reprocessa os dias **congelados** dos últimos 35 dias em dois casos:
+  - a última execução do dia deixou fechamento pendente;
+  - existe decisão de triagem para pedido ainda em triagem.
+
+  Esse reprocessamento usa `origem = reprocessamento` e motivo. Os dias D-1..D-3 não se repetem. A pendência some quando a última execução do dia fecha sem erro.
+
+## 4.3 Evolução do catálogo
+
+1. **Produto novo.** Uma linha que não está no catálogo nem traz um termo validado leva o pedido à triagem (`ITEM_DESCONHECIDO`). Só essa linha fica visível na triagem.
+2. **Resolução.** Há dois caminhos:
+   - **decisão de triagem**, que vale para aquele pedido;
+   - **nova versão do catálogo**, gerada pelo `scripts/foody-gerar-catalogo.mjs`, revisada no diff e com o novo hash fixado no teste. Ela vale para os pedidos sincronizados dali em diante.
+3. **Atualização dos fechamentos.**
+   - A sync seguinte grava a linha de novo:
+     - no mesmo tenant, ela é atualizada;
+     - em outro tenant, a antiga é desativada (`RECLASSIFICADO`, mínima) e há uma única linha ativa, garantida pelo índice global.
+   - Os fechamentos ganham **nova versão** `CORRIGIDO`, com o motivo de reclassificação. As versões anteriores nunca mudam.
+   - Cada pedido e cada execução registram a `catalogo_versao`.
+4. **Histórico.** Uma versão nova de catálogo **não** reabre dia congelado. Só a decisão de triagem, ou um reprocessamento manual com motivo, aplica uma mudança a dia congelado.
+
 **Rotas e tela:** não fazem parte deste PR. O teste de arquitetura proíbe consumidores do módulo nesta fase. Expor o serviço em rota autenticada é a próxima etapa, com GO próprio.
 
 ## 5. Migration 145 (aditiva sobre a 144)
@@ -93,7 +141,8 @@ Tabelas novas:
 
 Colunas novas:
 - em `foody_pedidos`: `conexao_id`, `destino_id`, `roteamento_ativo`, `roteamento_motivo`, `triagem_motivo` e `catalogo_versao`;
-- em `foody_sync_execucoes`: contagem de triagem, distribuição (só contagens) e versão do catálogo.
+- em `foody_sync_execucoes`: contagem de triagem, distribuição (só contagens), versão do catálogo, `fechamentos` (resultado por unidade) e `fechamentos_pendentes`;
+- em `foody_destinos_eventos`: `ator_organizacao_id`.
 
 O RLS está ligado, sem policy, e não há grant a anon nem a authenticated. O service_role não tem DELETE.
 
@@ -110,8 +159,22 @@ CHECKLIST_PERFIL_PG_URL=postgresql://postgres@127.0.0.1:<porta>/postgres \
 ```
 
 - `foody-compartilhada.test.js`: distribuição, o ajuste obrigatório de segurança, um uid ativo, revogação, isolamento, fechamentos independentes e o serviço de aprovação/triagem. Usa banco falso com a unicidade global simulada.
+- `foody-compartilhada-revisao.test.js`: regressões da revisão final, nos quatro pontos:
+  - privacidade da triagem e do fechamento do destino;
+  - fechamento pendente e reconciliação;
+  - mesma pessoa pelas duas organizações;
+  - evolução do catálogo, com versões de fechamento e sem duplicidade.
 - `foody-compartilhada-catalogo.test.js`: regressão do catálogo (versão e hash fixados, congelado, uma operação por linha, sem texto livre), casos de borda e o gerador.
-- `foody-compartilhada-migration-pg.test.js`: regras da 145 no Postgres real (aprovação, auditoria, unicidade, triagem, fechamento do destino, revogação, transferência, rollback).
+- `foody-compartilhada-migration-pg.test.js`: regras da 145 no Postgres real. Cobre:
+  - aprovação;
+  - auditoria por tenant;
+  - mesma pessoa em transações separadas;
+  - unicidade;
+  - triagem;
+  - fechamento do destino;
+  - revogação;
+  - transferência;
+  - rollback.
 - `foody-compartilhada-e2e-pg.test.js`: o repositório, a sync, o fechamento e o serviço **reais** rodando contra o Postgres real, por um cliente mínimo compatível com o supabase-js (`helpers/pg-supabase-mini.js`).
 
 ## 7. Para ligar (cada passo com GO próprio)

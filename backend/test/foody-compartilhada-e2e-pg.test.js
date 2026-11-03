@@ -74,7 +74,11 @@ describe("conexão compartilhada ponta a ponta — Postgres real", { skip: motiv
     assert.equal(ativo("c1"), `${UNI_T}|${ORG_T}|acai_no_grau|-`);
     const a = await aprovarDestino({ ator: ator(ADM_D, ORG_D), destinoId: p.id }, svc());
     assert.equal(a.estado, "ATIVO");
-    assert.equal(q(`select string_agg(evento, ',' order by evento) from foody_destinos_eventos;`), "APROVADO_DESTINO,APROVADO_TITULAR,ATIVADO,PROPOSTO");
+    assert.equal(q(`select string_agg(evento, ',' order by evento) from foody_destinos_eventos;`), "APROVADO_DESTINO,APROVADO_TITULAR,ATIVADO,ATIVADO,PROPOSTO");
+    // Cada evento no tenant de quem agiu; a ativação fica registrada nas duas organizações.
+    assert.equal(q(`select string_agg(evento || '@' || organizacao_id, ',' order by evento, organizacao_id) from foody_destinos_eventos where evento <> 'ATIVADO';`),
+      `APROVADO_DESTINO@${ORG_D},APROVADO_TITULAR@${ORG_T},PROPOSTO@${ORG_T}`);
+    assert.equal(q(`select count(distinct organizacao_id) from foody_destinos_eventos where evento = 'ATIVADO';`), "2");
   });
 
   test("distribuição real: Subway na titular, Açaí no destino (completo), triagem na titular sem valor; 2 fechamentos PROVISÓRIOS", async () => {

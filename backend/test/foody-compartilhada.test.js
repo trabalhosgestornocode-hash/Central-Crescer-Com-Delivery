@@ -311,8 +311,8 @@ describe("aprovação dupla e decisões de triagem (serviço)", () => {
     db.tabelas.foody_conexao_destinos.push(destino());
     await sync();
     const lista = await listarTriagem({ ator: admC, conexaoId: CX, competencia: D }, svc());
-    assert.deepEqual(lista.map((x) => x.foody_uid), ["t1"]);
-    assert.ok(lista.every((x) => !("valor_total" in x) && !("forma_pagamento" in x)));
+    assert.deepEqual(lista.map((x) => x.foodyUid), ["t1"]);
+    assert.ok(lista.every((x) => !("valor_total" in x) && !("forma_pagamento" in x) && !("valorTotal" in x)));
     await assert.rejects(listarTriagem({ ator: { ...admT, organizacaoId: ORG_B }, conexaoId: CX, competencia: D }, svc()), (e) => e.codigo === "SEM_PERMISSAO");
     // Destino puxando para si um pedido Subway: recusado.
     await assert.rejects(decidirTriagem({ ator: admC, conexaoId: CX, foodyUid: "s1", operacao: "acai_no_grau", motivo: "é nosso" }, svc()),

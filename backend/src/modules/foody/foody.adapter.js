@@ -18,7 +18,7 @@ import {
   STATUS_FOODY_PARA_SITUACAO, FORMA_PAGAMENTO, RAZAO_CANCELAMENTO, ENTREGADOR_TIPO, COURIER_TYPE_PROPRIO,
 } from "./foody.constants.js";
 import { paraParede } from "./foody.periodo.js";
-import { classificarPedidoCompartilhado, RESULTADO_TRIAGEM } from "./foody.classificacao.js";
+import { classificarPedidoCompartilhado, linhasParaTriagem, RESULTADO_TRIAGEM } from "./foody.classificacao.js";
 
 const texto = (v, max) => {
   if (v == null) return null;
@@ -85,7 +85,7 @@ export function minimizarOutraOperacao(registro) {
  *   compartilhado = conexão com destino ATIVO (145): a operação vem da classificação ESTRITA (catálogo versionado; item
  *   desconhecido = triagem) e NADA é minimizado aqui — quem decide destino e minimização é foody.roteamento.js, antes de gravar.
  */
-export function sanearPedidoApi(o, { hashEntregador, compartilhado = false }) {
+export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, catalogo = undefined }) {
   if (!o || typeof o !== "object") return { erro: "PEDIDO_INVALIDO" };
   const uid = texto(o.uid, 80);
   const numeroPedido = texto(o.id, 40);
@@ -97,7 +97,7 @@ export function sanearPedidoApi(o, { hashEntregador, compartilhado = false }) {
   const nome = o.courier && typeof o.courier.courierName === "string" ? o.courier.courierName.trim() : "";
   const tipo = classificarTipoEntregador(o.courier);
   const detalhes = texto(o.orderDetails, 4000);
-  const op = compartilhado ? classificacaoCompartilhada(detalhes) : classificarOperacao({ detalhesPedido: detalhes });
+  const op = compartilhado ? classificacaoCompartilhada(detalhes, catalogo) : classificarOperacao({ detalhesPedido: detalhes });
 
   const registro = {
     foody_uid: uid,
@@ -135,6 +135,8 @@ export function sanearPedidoApi(o, { hashEntregador, compartilhado = false }) {
   if (compartilhado) {
     registro.triagem_motivo = op.triagemMotivo;
     registro.catalogo_versao = op.catalogoVersao;
+    // Só as linhas sem atribuição segura — é o que a linha de triagem pode guardar (o roteamento descarta o resto).
+    if (op.triagemMotivo) Object.defineProperty(registro, "linhasTriagem", { value: linhasParaTriagem(detalhes, { catalogo }), enumerable: false });
     return { registro }; // sem fonte_hash: o roteamento minimiza conforme o destino e calcula o hash da linha final
   }
   if (ehOutraOperacao(registro.operacao)) minimizarOutraOperacao(registro);
@@ -143,8 +145,8 @@ export function sanearPedidoApi(o, { hashEntregador, compartilhado = false }) {
 }
 
 /** Classificação estrita → {operacao, motivo} no formato do adaptador. O motivo NUNCA cita produto (só contagens). */
-function classificacaoCompartilhada(detalhes) {
-  const c = classificarPedidoCompartilhado(detalhes);
+function classificacaoCompartilhada(detalhes, catalogo) {
+  const c = classificarPedidoCompartilhado(detalhes, catalogo ? { catalogo } : {});
   const evid = `${c.linhas} linha(s): ${c.evidencias.catalogo} por catálogo, ${c.evidencias.termo} por termo validado, ${c.desconhecidas} desconhecida(s)`;
   return {
     operacao: c.operacao,

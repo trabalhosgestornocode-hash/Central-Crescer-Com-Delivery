@@ -5,8 +5,9 @@
 //   * subway (titular)                       → unidade TITULAR, dados completos, sem destino;
 //   * outra operação COM destino ATIVO       → unidade/organização do DESTINO, dados completos, destino_id;
 //   * outra operação SEM destino ATIVO       → unidade TITULAR, só o mínimo logístico (regra F1 da 144);
-//   * triagem                                → unidade TITULAR, SEM dado comercial (valor, taxa, pagamento, cancelamento);
-//                                              mantém os itens (detalhes), que são o que o administrador precisa para decidir.
+//   * triagem                                → unidade TITULAR, SEM dado comercial (valor, taxa, pagamento, cancelamento) e
+//                                              SÓ com as linhas sem atribuição segura: os itens já reconhecidos (que revelariam
+//                                              o pedido da outra empresa) nunca ficam na triagem — viram contagem no motivo.
 // O tenant de destino vem SEMPRE da linha de foody_conexao_destinos (aprovada pelas duas organizações), nunca do pedido.
 import { minimizarOutraOperacao, hashConteudoPedido } from "./foody.adapter.js";
 import { OPERACAO_COMPARTILHADA, RESULTADO_TRIAGEM } from "./foody.classificacao.js";
@@ -53,6 +54,8 @@ export function rotearPedido(registro, { titular, destinos, decisao = null }) {
   if (linha.operacao === RESULTADO_TRIAGEM) {
     rota = ROTA.TRIAGEM;
     for (const k of CAMPOS_COMERCIAIS_TRIAGEM) linha[k] = null;
+    const soDesconhecidas = registro.linhasTriagem ?? [];
+    linha.detalhes_pedido = soDesconhecidas.length ? soDesconhecidas.join("\n").slice(0, 4000) : null;
     linha.triagem_motivo ??= "SEM_EVIDENCIA";
   } else {
     linha.triagem_motivo = null;
