@@ -12,7 +12,7 @@
 //   * operação em dúvida (revisao_necessaria) fica fora dos totais e vira pendência;
 //   * taxa prevista de pedido SEM entregador (a API preenche courierFee mesmo assim) não entra em nada — só é contada;
 //   * estados de valor: brutas = SINCRONIZADO; válidas = PROVISORIO enquanto houver decisão pendente; custo real = não disponível.
-import { OPERACAO } from "../parser-food-delivery/parserFoodDelivery.operacao.js";
+import { OPERACAO, classificarOperacao } from "../parser-food-delivery/parserFoodDelivery.operacao.js";
 import {
   ehCancelado, temEntregador, resolverStatusConciliacao, resumoConciliacao, agruparPorEntregador, STATUS_CONCILIACAO,
 } from "../parser-food-delivery/parserFoodDelivery.calc.js";
@@ -106,6 +106,13 @@ export function calcularFechamentoLogistico(registros, { competencia, cobertura 
   if (total.canceladosRevisao > 0) pendencias.push({ codigo: "CANCELAMENTO_EM_REVISAO", quantidade: total.canceladosRevisao });
   if (naoClassificados.length > 0) pendencias.push({ codigo: "ENTREGADOR_NAO_CLASSIFICADO", quantidade: naoClassificados.length, taxasValidas: naoClassificado.taxasValidas });
   if (emDuvida.length > 0) pendencias.push({ codigo: "OPERACAO_EM_DUVIDA", quantidade: emDuvida.length });
+  // Regra do Parser: sem termo de NENHUMA operação, o pedido é da principal (Subway). Uma operação nova/desconhecida cairia aqui —
+  // por isso é contado e exposto (com as taxas), em vez de ficar invisível. Informativo: não muda o estado (paridade com o Parser).
+  const porPadrao = elegiveis.filter((p) => classificarOperacao({ detalhesPedido: p.detalhesPedido }).termosEncontrados.length === 0);
+  if (porPadrao.length > 0) {
+    pendencias.push({ codigo: "OPERACAO_POR_PADRAO", quantidade: porPadrao.length, informativa: true,
+      taxasBrutas: arred(porPadrao.reduce((s, p) => s + (Number(p.taxaEntregador) || 0), 0)) });
+  }
   const situacoesDesconhecidas = pedidos.filter((p) => !SITUACOES_CONHECIDAS.has(p.situacao)).length;
   if (situacoesDesconhecidas > 0) pendencias.push({ codigo: "STATUS_DESCONHECIDO", quantidade: situacoesDesconhecidas });
   const taxaSemDado = processados.filter((p) => p.taxaEntregador == null).length;
@@ -131,6 +138,7 @@ export function calcularFechamentoLogistico(registros, { competencia, cobertura 
       semEntregador: semEntregador.length,
       taxasPrevistasSemEntregador: arred(semEntregador.reduce((s, p) => s + (Number(p.taxaEntregador) || 0), 0)), // informativo
       elegiveis: elegiveis.length,
+      elegiveisSemEvidenciaDeOperacao: porPadrao.length,
       total,
       proprio,
       naoClassificado,

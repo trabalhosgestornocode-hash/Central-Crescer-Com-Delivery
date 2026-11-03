@@ -164,7 +164,8 @@ describe("deduplicação e idempotência", () => {
     assert.equal(db.tabelas.foody_pedidos.length, 3);
   });
   test("uid repetido na mesma resposta (fronteira de página) conta uma vez", async () => {
-    const l = api.dados.get(TOKEN_TESTE); l.push(structuredClone(l[0]));
+    // A API ordena por data: a repetição da fronteira vem colada ao original (mesma data), nunca fora de ordem.
+    const l = api.dados.get(TOKEN_TESTE); l.splice(1, 0, structuredClone(l[0]));
     const r = await sync();
     assert.equal(r.contagens.recebidos, 4); assert.equal(r.contagens.unicos, 3); assert.equal(db.tabelas.foody_pedidos.length, 3);
   });
@@ -174,6 +175,36 @@ describe("deduplicação e idempotência", () => {
     const r = await sync();
     assert.equal(db.tabelas.foody_pedidos.length, 3);
     assert.deepEqual(r.cobertura.pendencias.find((p) => p.codigo === "PEDIDO_AUSENTE_NA_API"), { codigo: "PEDIDO_AUSENTE_NA_API", quantidade: 1 });
+    // REGRESSÃO F4: o pedido sumido continuaria nos totais — o dia não pode sair como consolidado.
+    assert.equal(r.cobertura.completa, false);
+    const f = await gerarFechamentoLogistico({ organizacaoId: ORG_A, unidadeId: UNI_A, competencia: D, sync: r }, deps());
+    assert.equal(f.status, "INCOMPLETO"); assert.equal(f.estadoValores, "PROVISORIO");
+  });
+  test("REGRESSÃO F4: dia sem nenhum pedido nunca vira 'consolidado com zero'", async () => {
+    api.dados.set(TOKEN_TESTE, []);
+    const r = await sync();
+    assert.equal(r.cobertura.completa, false);
+    assert.ok(r.cobertura.pendencias.some((p) => p.codigo === "SEM_PEDIDOS_NA_JANELA"));
+    const f = await gerarFechamentoLogistico({ organizacaoId: ORG_A, unidadeId: UNI_A, competencia: D, sync: r }, deps());
+    assert.equal(f.status, "INCOMPLETO");
+  });
+  test("REGRESSÃO F4: página da API fora da ordem de data é recusada e nada é gravado", async () => {
+    const l = api.dados.get(TOKEN_TESTE); [l[0], l[2]] = [l[2], l[0]];
+    await assert.rejects(sync(), (e) => e.codigo === "ORDENACAO_INESPERADA");
+    assert.equal(db.tabelas.foody_pedidos.length, 0);
+    assert.equal(db.tabelas.foody_sync_execucoes.at(-1).status, "FALHOU");
+  });
+  test("REGRESSÃO F1: pedido do Açaí fica no tenant da conta só com o mínimo logístico (sem dado comercial da outra organização)", async () => {
+    api.dados.get(TOKEN_TESTE)[2] = pedidoApi({ uid: "a3", entregador: "B", courierFee: 10, orderDetails: "Açaí Premium 500ml", orderTotal: 37.9,
+      deliveryFee: 6, paymentMethod: "card", status: "cancelled", cancellationReason: "other", cancellationText: "cliente desistiu",
+      cancelledDate: `${D}T13:30:00-03:00`, date: `${D}T13:00:00-03:00` });
+    await sync();
+    const a = db.tabelas.foody_pedidos.find((x) => x.foody_uid === "a3");
+    for (const k of ["detalhes_pedido", "valor_total", "taxa_entrega", "forma_pagamento", "cancelamento_razao", "cancelamento_justificativa"]) assert.equal(a[k], null, k);
+    assert.doesNotMatch(JSON.stringify(a), /Açaí Premium|37\.9|desistiu/);
+    assert.equal(a.taxa_entregador, 10); assert.equal(a.situacao, "Cancelado"); assert.equal(a.operacao, "acai_no_grau");
+    // O pedido Subway da mesma conta continua completo.
+    assert.ok(db.tabelas.foody_pedidos.find((x) => x.foody_uid === "a1").detalhes_pedido);
   });
   test("pedido malformado: cobertura incompleta, demais pedidos gravados", async () => {
     api.dados.get(TOKEN_TESTE).push({ uid: "sem-data", id: "1" });

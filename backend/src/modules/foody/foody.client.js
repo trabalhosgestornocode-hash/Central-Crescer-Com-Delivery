@@ -13,7 +13,7 @@ import {
 import { redigir } from "./foody.seguranca.js";
 
 export class FoodyApiErro extends Error {
-  /** @param {string} codigo AUTENTICACAO | NAO_ENCONTRADO | LIMITE_REQUISICOES | SERVIDOR | REDE | TIMEOUT | RESPOSTA_INVALIDA | PAGINACAO_SEM_PROGRESSO | LIMITE_PAGINAS | HTTP_INESPERADO */
+  /** @param {string} codigo AUTENTICACAO | NAO_ENCONTRADO | LIMITE_REQUISICOES | SERVIDOR | REDE | TIMEOUT | RESPOSTA_INVALIDA | ORDENACAO_INESPERADA | PAGINACAO_SEM_PROGRESSO | LIMITE_PAGINAS | HTTP_INESPERADO */
   constructor(codigo, mensagem, { status = null } = {}) {
     super(mensagem); this.name = "FoodyApiErro"; this.codigo = codigo; this.status = status;
   }
@@ -98,6 +98,13 @@ export function criarClienteFoody({
       if (paginas >= maxPaginas) throw new FoodyApiErro("LIMITE_PAGINAS", `mais de ${maxPaginas} páginas na mesma janela.`);
       const lote = await get(`/orders?startDate=${encodeURIComponent(cursor)}&endDate=${encodeURIComponent(fim)}`);
       paginas++; recebidos += lote.length;
+      // A paginação por cursor de data só é segura se a página vier ordenada por `date`; fora de ordem = recusa (nunca pula pedido).
+      for (let i = 1; i < lote.length; i++) {
+        const a = Date.parse(lote[i - 1]?.date), b = Date.parse(lote[i]?.date);
+        if (Number.isFinite(a) && Number.isFinite(b) && b < a) {
+          throw new FoodyApiErro("ORDENACAO_INESPERADA", "API Foody devolveu página fora da ordem de data — cobertura não garantida.");
+        }
+      }
       for (const o of lote) {
         const uid = o && typeof o.uid === "string" && o.uid.trim() ? o.uid.trim() : null;
         if (!uid) { semUid++; continue; }

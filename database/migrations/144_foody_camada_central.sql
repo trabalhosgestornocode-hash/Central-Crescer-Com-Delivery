@@ -25,6 +25,13 @@ set local lock_timeout = '5s';
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- Tenant: a unidade pertence à organização; a unidade de um registro nunca muda.
+--
+-- A pertença unidade ∈ organização é conferida no FIM DA TRANSAÇÃO (constraint trigger DEFERRABLE INITIALLY DEFERRED), contra o
+-- estado de `unidades` naquele momento. Motivo: as duas operações que mudam a empresa de uma unidade fazem os passos em ORDENS
+-- OPOSTAS — transferir_unidade_organizacao atualiza `unidades` e depois remapeia as tabelas; promover_unidade_para_empresa remapeia
+-- as tabelas e só depois atualiza `unidades`. Uma checagem imediata quebraria a promoção; a checagem no commit aceita as duas e
+-- continua recusando qualquer linha que termine a transação apontando para uma organização que não é a da unidade.
+-- A imutabilidade da unidade é imediata (BEFORE), em foody_unidade_imutavel.
 -- ---------------------------------------------------------------------------------------------------------------------------
 create or replace function foody_validar_tenant() returns trigger
 language plpgsql set search_path = public as $$
@@ -33,7 +40,13 @@ begin
     raise exception '%: a unidade % não pertence à organização %', tg_table_name, new.unidade_id, new.organizacao_id
       using errcode = '42501';
   end if;
-  if tg_op = 'UPDATE' and new.unidade_id is distinct from old.unidade_id then
+  return null;
+end $$;
+
+create or replace function foody_unidade_imutavel() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if new.unidade_id is distinct from old.unidade_id then
     raise exception '%: a unidade de um registro não muda', tg_table_name using errcode = '42501';
   end if;
   return new;
@@ -75,10 +88,16 @@ create table if not exists foody_conexoes (
   constraint uq_foody_conexoes_unidade unique (unidade_id)
 );
 create index if not exists idx_foody_conexoes_tenant on foody_conexoes(organizacao_id, unidade_id);
+-- Uma CONTA Foody (mesmo token) só pode estar ligada a UMA unidade não revogada. Sem isso, a mesma conta conectada à Subway e ao
+-- Açaí (organizações diferentes) duplicaria cada pedido nas duas e gravaria dados de uma organização no tenant da outra.
+create unique index if not exists uq_foody_conexoes_conta_ativa on foody_conexoes(token_impressao) where status <> 'REVOGADA';
 
 drop trigger if exists trg_foody_conexoes_tenant on foody_conexoes;
-create trigger trg_foody_conexoes_tenant before insert or update on foody_conexoes
-  for each row execute function foody_validar_tenant();
+create constraint trigger trg_foody_conexoes_tenant after insert or update on foody_conexoes
+  deferrable initially deferred for each row execute function foody_validar_tenant();
+drop trigger if exists trg_foody_conexoes_tenant_unidade on foody_conexoes;
+create trigger trg_foody_conexoes_tenant_unidade before update on foody_conexoes
+  for each row execute function foody_unidade_imutavel();
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 2. Execuções de sincronização (prova de cobertura)
@@ -110,8 +129,11 @@ create table if not exists foody_sync_execucoes (
 create index if not exists idx_foody_sync_tenant on foody_sync_execucoes(organizacao_id, unidade_id, competencia desc, iniciado_em desc);
 
 drop trigger if exists trg_foody_sync_tenant on foody_sync_execucoes;
-create trigger trg_foody_sync_tenant before insert or update on foody_sync_execucoes
-  for each row execute function foody_validar_tenant();
+create constraint trigger trg_foody_sync_tenant after insert or update on foody_sync_execucoes
+  deferrable initially deferred for each row execute function foody_validar_tenant();
+drop trigger if exists trg_foody_sync_tenant_unidade on foody_sync_execucoes;
+create trigger trg_foody_sync_tenant_unidade before update on foody_sync_execucoes
+  for each row execute function foody_unidade_imutavel();
 
 -- A conexão usada pertence à mesma unidade da execução (a organização é garantida pela trigger de tenant; ver acima).
 create or replace function foody_validar_conexao_execucao() returns trigger
@@ -168,6 +190,11 @@ create table if not exists foody_pedidos (
   sincronizado_em timestamptz not null default now(),
   atualizado_em timestamptz not null default now(),
   constraint uq_foody_pedidos_uid unique (unidade_id, foody_uid),
+  -- Pedido de OUTRA operação (outra organização, despachado por esta conta): só o mínimo logístico. Dados comerciais proibidos.
+  constraint ck_foody_pedidos_outra_operacao_minima check (
+    operacao in ('subway', 'revisao_necessaria')
+    or (detalhes_pedido is null and valor_total is null and taxa_entrega is null and forma_pagamento is null
+        and cancelamento_razao is null and cancelamento_justificativa is null)),
   constraint ck_foody_pedidos_entregador check (
     (entregador_presente and entregador_hash is not null and entregador_tipo <> 'sem_entregador')
     or (not entregador_presente and entregador_hash is null and entregador_tipo = 'sem_entregador'))
@@ -175,8 +202,11 @@ create table if not exists foody_pedidos (
 create index if not exists idx_foody_pedidos_competencia on foody_pedidos(organizacao_id, unidade_id, competencia);
 
 drop trigger if exists trg_foody_pedidos_tenant on foody_pedidos;
-create trigger trg_foody_pedidos_tenant before insert or update on foody_pedidos
-  for each row execute function foody_validar_tenant();
+create constraint trigger trg_foody_pedidos_tenant after insert or update on foody_pedidos
+  deferrable initially deferred for each row execute function foody_validar_tenant();
+drop trigger if exists trg_foody_pedidos_tenant_unidade on foody_pedidos;
+create trigger trg_foody_pedidos_tenant_unidade before update on foody_pedidos
+  for each row execute function foody_unidade_imutavel();
 drop trigger if exists trg_foody_pedidos_exec1 on foody_pedidos;
 create trigger trg_foody_pedidos_exec1 before insert or update on foody_pedidos
   for each row execute function foody_validar_vinculo_execucao('primeira_execucao_id');
@@ -214,8 +244,11 @@ create table if not exists foody_fechamentos_logisticos (
 create index if not exists idx_foody_fech_tenant on foody_fechamentos_logisticos(organizacao_id, unidade_id, competencia desc, versao desc);
 
 drop trigger if exists trg_foody_fech_tenant on foody_fechamentos_logisticos;
-create trigger trg_foody_fech_tenant before insert or update on foody_fechamentos_logisticos
-  for each row execute function foody_validar_tenant();
+create constraint trigger trg_foody_fech_tenant after insert or update on foody_fechamentos_logisticos
+  deferrable initially deferred for each row execute function foody_validar_tenant();
+drop trigger if exists trg_foody_fech_tenant_unidade on foody_fechamentos_logisticos;
+create trigger trg_foody_fech_tenant_unidade before update on foody_fechamentos_logisticos
+  for each row execute function foody_unidade_imutavel();
 drop trigger if exists trg_foody_fech_exec on foody_fechamentos_logisticos;
 create trigger trg_foody_fech_exec before insert or update on foody_fechamentos_logisticos
   for each row execute function foody_validar_vinculo_execucao('sync_execucao_id');
@@ -331,7 +364,7 @@ begin
         execute format('revoke all on table %I from %s', t, papel);
       end loop;
       foreach f in array array[fn_registrar, 'foody_validar_tenant()', 'foody_validar_vinculo_execucao()',
-                               'foody_validar_conexao_execucao()', 'foody_registro_imutavel()'] loop
+                               'foody_validar_conexao_execucao()', 'foody_registro_imutavel()', 'foody_unidade_imutavel()'] loop
         execute format('revoke all on function %s from %s', f, papel);
       end loop;
     end if;
@@ -350,4 +383,5 @@ begin
   end if;
 end $$;
 
+notify pgrst, 'reload schema';
 commit;

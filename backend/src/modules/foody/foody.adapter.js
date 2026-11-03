@@ -5,8 +5,15 @@
 //
 // A operação é decidida pela MESMA função do Parser (classificarOperacao, sobre "Detalhes do pedido"), e o pedido adaptado
 // tem exatamente os nomes de campo que o Parser usa — por isso o cálculo reaproveita o Parser sem duplicar regra.
+//
+// ISOLAMENTO ENTRE ORGANIZAÇÕES: a mesma conta Foody despacha pedidos de outra organização (ex.: Açaí no Grau, despachado pela
+// conta da Subway Saci). Esses pedidos ficam no tenant da unidade dona da conta só no MÍNIMO LOGÍSTICO que a unidade tem direito
+// a ver — o próprio entregador, a taxa paga a ele, as datas da entrega e a situação. Os dados COMERCIAIS da outra organização
+// (produtos, valor do pedido, taxa cobrada do cliente, forma de pagamento, motivo/justificativa em texto livre) NUNCA são
+// gravados. O banco reforça com o CHECK ck_foody_pedidos_outra_operacao_minima (migration 144).
+// Pedido em dúvida (revisao_necessaria) mantém os detalhes, porque pode ser da própria unidade e precisa de revisão humana.
 import { createHash } from "node:crypto";
-import { classificarOperacao } from "../parser-food-delivery/parserFoodDelivery.operacao.js";
+import { classificarOperacao, OPERACAO } from "../parser-food-delivery/parserFoodDelivery.operacao.js";
 import {
   STATUS_FOODY_PARA_SITUACAO, FORMA_PAGAMENTO, RAZAO_CANCELAMENTO, ENTREGADOR_TIPO, COURIER_TYPE_PROPRIO,
 } from "./foody.constants.js";
@@ -46,6 +53,20 @@ const CAMPOS_CONTEUDO = [
   "entregador_tipo_bruto", "ponto_coleta", "data_aceito", "data_pronto", "data_despachado", "data_coletado", "data_entregue",
   "data_finalizado", "data_cancelado", "prazo_entrega", "cancelamento_razao", "cancelamento_justificativa",
 ];
+
+/** Operação identificada que NÃO é a da unidade dona da conta (hoje: Açaí no Grau). Dúvida não conta como outra operação. */
+export const ehOutraOperacao = (operacao) => operacao !== OPERACAO.SUBWAY && operacao !== OPERACAO.REVISAO_NECESSARIA;
+
+/** Dados comerciais da outra organização que NUNCA são gravados no tenant da unidade dona da conta. */
+export const CAMPOS_COMERCIAIS_OUTRA_OPERACAO = Object.freeze([
+  "detalhes_pedido", "valor_total", "taxa_entrega", "forma_pagamento", "cancelamento_razao", "cancelamento_justificativa",
+]);
+
+function minimizarOutraOperacao(registro) {
+  for (const k of CAMPOS_COMERCIAIS_OUTRA_OPERACAO) registro[k] = null;
+  // O motivo do classificador cita os produtos encontrados (dado comercial da outra organização): fica só o rótulo.
+  registro.operacao_motivo = "Pedido de outra operação despachado por esta conta: só o mínimo logístico é guardado.";
+}
 
 /**
  * Pedido cru da API → registro saneado. Devolve { registro } ou { erro } (pedido malformado vira pendência, nunca exceção).
@@ -99,6 +120,7 @@ export function sanearPedidoApi(o, { hashEntregador }) {
     cancelamento_justificativa: texto(o.cancellationText, 300),
   };
   if (registro.entregador_presente && !registro.entregador_hash) return { erro: "HASH_ENTREGADOR_FALHOU", uid };
+  if (ehOutraOperacao(registro.operacao)) minimizarOutraOperacao(registro);
   registro.fonte_hash = sha256(jsonEstavel(Object.fromEntries(CAMPOS_CONTEUDO.map((k) => [k, registro[k]]))));
   return { registro };
 }

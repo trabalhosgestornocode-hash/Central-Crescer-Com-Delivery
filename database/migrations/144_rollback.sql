@@ -13,6 +13,7 @@ drop table if exists public.foody_pedidos;
 drop table if exists public.foody_sync_execucoes;
 drop table if exists public.foody_conexoes;
 drop function if exists public.foody_registro_imutavel();
+drop function if exists public.foody_unidade_imutavel();
 drop function if exists public.foody_validar_conexao_execucao();
 drop function if exists public.foody_validar_vinculo_execucao();
 drop function if exists public.foody_validar_tenant();

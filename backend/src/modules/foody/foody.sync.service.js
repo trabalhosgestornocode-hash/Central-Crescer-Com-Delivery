@@ -108,12 +108,15 @@ export async function sincronizarCompetencia(pedido, deps) {
     // Ponto de coleta divergente NUNCA é perda silenciosa: o pedido não é gravado nesta unidade (pode ser de outra loja da
     // mesma conta), mas a cobertura do dia passa a INCOMPLETA — o fechamento sai INCOMPLETO/PROVISORIO, com os nomes vistos.
     if (pontoDivergente) pendencias.push({ codigo: "PONTO_COLETA_DIVERGENTE", quantidade: pontoDivergente, pontosVistos: [...pontosDivergentes] });
+    // Ausente: o pedido gravado continuaria nos totais sem estar mais na API — o dia não pode sair como consolidado.
     if (ausentes) pendencias.push({ codigo: "PEDIDO_AUSENTE_NA_API", quantidade: ausentes });
+    // Nenhum pedido no dia: pode ser loja fechada, mas também conta/janela errada. Nunca vira "consolidado com zero".
+    if (cobertura.unicos === 0) pendencias.push({ codigo: "SEM_PEDIDOS_NA_JANELA", quantidade: 0 });
 
     const resumo = {
       execucaoId, competencia, origem,
       cobertura: {
-        completa: totalErros === 0 && cobertura.semUid === 0 && pontoDivergente === 0,
+        completa: totalErros === 0 && cobertura.semUid === 0 && pontoDivergente === 0 && ausentes === 0 && cobertura.unicos > 0,
         janelaInicio: janela.inicio, janelaFim: janela.fim, paginas: cobertura.paginas, pedidosUnicos: cobertura.unicos,
         pendencias,
       },

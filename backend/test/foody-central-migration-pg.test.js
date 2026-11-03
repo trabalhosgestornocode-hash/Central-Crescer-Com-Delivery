@@ -31,7 +31,7 @@ describe("migration 144 — Postgres real", { skip: motivoPular, timeout: 600_00
     insUni(UNI_A, ORG_A); insUni(UNI_B, ORG_B);
     ok(`insert into foody_conexoes (id, organizacao_id, unidade_id, status, token_cifrado, token_impressao) values
       ('c0000000-0000-4000-8000-00000000000a', '${ORG_A}', '${UNI_A}', 'ATIVA', 'k1:x:y:z', '0123456789ab'),
-      ('c0000000-0000-4000-8000-00000000000b', '${ORG_B}', '${UNI_B}', 'ATIVA', 'k1:x:y:z', '0123456789ab');`);
+      ('c0000000-0000-4000-8000-00000000000b', '${ORG_B}', '${UNI_B}', 'ATIVA', 'k1:x:y:z', 'bbbbbbbbbbbb');`);
     ok(`insert into foody_sync_execucoes (id, organizacao_id, unidade_id, conexao_id, competencia, janela_inicio, janela_fim, origem, regra_versao) values
       ('e0000000-0000-4000-8000-00000000000a', '${ORG_A}', '${UNI_A}', 'c0000000-0000-4000-8000-00000000000a', '2026-10-25', '2026-10-25T03:00Z', '2026-10-26T03:00Z', 'manual', 1),
       ('e0000000-0000-4000-8000-00000000000b', '${ORG_B}', '${UNI_B}', 'c0000000-0000-4000-8000-00000000000b', '2026-10-25', '2026-10-25T03:00Z', '2026-10-26T03:00Z', 'manual', 1);`);
@@ -68,6 +68,28 @@ describe("migration 144 — Postgres real", { skip: motivoPular, timeout: 600_00
     falha(`insert into foody_conexoes (organizacao_id, unidade_id, token_cifrado, token_impressao) values ('${ORG_A}', '${UNI_A}', 'tok_em_claro', '0123456789ab');`, /token_cifrado/);
     falha(`insert into foody_conexoes (organizacao_id, unidade_id, token_cifrado, token_impressao) values ('${ORG_A}', '${UNI_A}', 'k1:a:b:c', '0123456789ab');`, /uq_foody_conexoes_unidade/);
   });
+  test("REGRESSÃO F3: a MESMA conta Foody (mesmo token) não fica ativa em duas unidades/organizações; revogada libera", () => {
+    ok(`insert into organizacoes (id, nome) values ('33333333-3333-4333-8333-333333333333', 'org acai teste');
+        insert into unidades (id, organizacao_id, nome) values ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', '33333333-3333-4333-8333-333333333333', 'unidade acai teste');`);
+    const conectar = (status) => `insert into foody_conexoes (organizacao_id, unidade_id, status, token_cifrado, token_impressao)
+      values ('33333333-3333-4333-8333-333333333333', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', '${status}', 'k1:a:b:c', '0123456789ab');`;
+    falha(conectar("PAUSADA"), /uq_foody_conexoes_conta_ativa/);
+    falha(conectar("ATIVA"), /uq_foody_conexoes_conta_ativa/);
+    ok(conectar("REVOGADA"));
+  });
+  test("REGRESSÃO F1: pedido de OUTRA operação não pode carregar dados comerciais (só o mínimo logístico)", () => {
+    const acai = (extra) => `insert into foody_pedidos (organizacao_id, unidade_id, foody_uid, numero_pedido, competencia, data_hora, status_foody, situacao,
+      operacao, entregador_presente, entregador_hash, entregador_tipo, taxa_entregador, fonte_hash, primeira_execucao_id, ultima_execucao_id ${extra.cols})
+      values ('${ORG_A}', '${UNI_A}', '${extra.uid}', '9', '2026-10-25', '2026-10-25T12:00:00', 'closed', 'Finalizado', 'acai_no_grau', true,
+      '0123456789abcdef', 'proprio', 10, '${H}', 'e0000000-0000-4000-8000-00000000000a', 'e0000000-0000-4000-8000-00000000000a' ${extra.vals});`;
+    for (const [col, val] of [["detalhes_pedido", "'Açaí 500ml'"], ["valor_total", "50"], ["taxa_entrega", "5"], ["forma_pagamento", "'Cartão'"],
+      ["cancelamento_razao", "'Outros'"], ["cancelamento_justificativa", "'x'"]]) {
+      falha(acai({ uid: `ac-${col}`, cols: `, ${col}`, vals: `, ${val}` }), /ck_foody_pedidos_outra_operacao_minima/);
+    }
+    ok(acai({ uid: "ac-ok", cols: "", vals: "" }));
+    // Pedido da própria operação e pedido em dúvida mantêm os detalhes.
+    ok(pedido({ uid: "sw-det" }));
+  });
   test("registrar: REGISTRADO → SEM_MUDANCA → JA_REGISTRADO → CORRIGIDO exige motivo; não volta a PRELIMINAR", () => {
     assert.equal(ok(registrar({ exec: "'f0000000-0000-4000-8000-000000000001'" })).split("\n").pop(), "REGISTRADO|1|CONSOLIDADO");
     assert.equal(ok(registrar()).split("\n").pop(), "SEM_MUDANCA|1|CONSOLIDADO");
@@ -96,6 +118,24 @@ describe("migration 144 — Postgres real", { skip: motivoPular, timeout: 600_00
     assert.equal(comoUsuario(b.url, null, `delete from foody_conexoes;`, { papel: "service_role" }).ok, false);
     assert.equal(comoUsuario(b.url, null, registrar({ hash: "d".repeat(64) }), { papel: "service_role" }).ok, true);
     assert.equal(ok(`select count(*) from pg_policies where tablename like 'foody_%';`), "0");
+  });
+  test("REGRESSÃO F2: tenant conferido no COMMIT — linha que termina a transação na organização errada é recusada", () => {
+    falha(`update foody_pedidos set organizacao_id = '${ORG_B}' where unidade_id = '${UNI_A}';`, /não pertence/);
+    falha(`begin; update foody_pedidos set organizacao_id = '${ORG_B}' where unidade_id = '${UNI_A}'; commit;`, /não pertence/);
+    assert.equal(ok(`select count(*) from foody_pedidos where unidade_id = '${UNI_A}' and organizacao_id = '${ORG_B}';`), "0");
+  });
+  test("REGRESSÃO F2: ordem da PROMOÇÃO (remapeia as tabelas ANTES de mover a unidade) é aceita", () => {
+    const NOVA = "44444444-4444-4444-8444-444444444444";
+    const antes = Number(ok(`select count(*) from foody_pedidos where unidade_id = '${UNI_B}';`));
+    assert.ok(antes > 0, "precisa de pedidos na unidade B para o teste valer");
+    ok(`begin;
+        insert into organizacoes (id, nome) values ('${NOVA}', 'org promovida teste');
+        select remapear_organizacao_em_tabelas_de_unidade('${UNI_B}', '${ORG_B}', '${NOVA}');
+        update unidades set organizacao_id = '${NOVA}' where id = '${UNI_B}';
+        commit;`);
+    assert.equal(ok(`select count(*) from foody_pedidos where unidade_id = '${UNI_B}' and organizacao_id = '${NOVA}';`), String(antes));
+    assert.equal(ok(`select count(*) from foody_conexoes where unidade_id = '${UNI_B}' and organizacao_id <> '${NOVA}';`), "0");
+    assert.equal(ok(`select count(*) from foody_sync_execucoes where unidade_id = '${UNI_B}' and organizacao_id <> '${NOVA}';`), "0");
   });
   test("transferência de unidade (remapear_organizacao_em_tabelas_de_unidade) continua funcionando com as tabelas foody_*", () => {
     const existe = ok(`select count(*) from pg_proc where proname = 'remapear_organizacao_em_tabelas_de_unidade';`);

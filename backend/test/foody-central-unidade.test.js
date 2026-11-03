@@ -291,3 +291,57 @@ describe("fechamento logístico (regras do Parser + decisões aprovadas)", () =>
     assert.equal(decidirStatus({ status: "INCOMPLETO", hash: "h1" }, { status: "CONSOLIDADO", hash_conteudo: "h0" }).status, "INCOMPLETO");
   });
 });
+
+describe("revisão de segurança — regressões F1/F4/F5 e integridade financeira", () => {
+  const D = "2026-10-25";
+  const dia = (h) => `${D}T${h}-03:00`;
+  test("F1: outra operação perde os dados comerciais; dúvida e Subway mantêm os detalhes", () => {
+    const acai = sanear(pedidoApi({ orderDetails: "Açaí Premium 500ml", orderTotal: 40, deliveryFee: 6, paymentMethod: "money", cancellationText: "x", cancellationReason: "other" }));
+    assert.equal(acai.operacao, "acai_no_grau");
+    for (const k of ["detalhes_pedido", "valor_total", "taxa_entrega", "forma_pagamento", "cancelamento_razao", "cancelamento_justificativa"]) assert.equal(acai[k], null, k);
+    assert.doesNotMatch(acai.operacao_motivo, /açaí|acai|premium/i);
+    assert.equal(acai.taxa_entregador, 10);
+    const duvida = sanear(pedidoApi({ orderDetails: "1x Sub 15cm + 1x Açaí 300ml", orderTotal: 40 }));
+    assert.equal(duvida.operacao, "revisao_necessaria"); assert.ok(duvida.detalhes_pedido); assert.equal(duvida.valor_total, 40);
+    assert.ok(sanear(pedidoApi({})).detalhes_pedido);
+  });
+  test("F4: página fora da ordem de data é recusada pelo cliente", async () => {
+    const pag = [pedidoApi({ uid: "o1", date: dia("12:00:00") }), pedidoApi({ uid: "o2", date: dia("11:00:00") })];
+    const c = criarClienteFoody({ token: TOKEN_TESTE, fetch: async () => ({ ok: true, status: 200, json: async () => pag }), esperar: async () => {} });
+    await assert.rejects(c.listarPedidos(janelaDoDia(D)), (e) => e.codigo === "ORDENACAO_INESPERADA");
+  });
+  test("F5: Subway por padrão (sem termo de nenhuma operação) é contado e exposto, sem alterar o estado (paridade com o Parser)", () => {
+    const r = [
+      pedidoApi({ entregador: "A", courierFee: 10, orderDetails: "1x Sub Frango 15cm", date: dia("11:00:00") }),
+      pedidoApi({ entregador: "A", courierFee: 7, orderDetails: "2x Cookie gotas de chocolate", date: dia("12:00:00") }),
+    ].map(sanear);
+    const f = calcularFechamentoLogistico(r, { competencia: D, cobertura: COB_OK });
+    assert.equal(f.indicadores.subway.elegiveisSemEvidenciaDeOperacao, 1);
+    assert.deepEqual(f.pendencias, [{ codigo: "OPERACAO_POR_PADRAO", quantidade: 1, informativa: true, taxasBrutas: 7 }]);
+    assert.equal(f.estadoValores, "SINCRONIZADO");
+    assert.equal(f.indicadores.subway.total.taxasValidas, 17, "continua somado à Subway, como no Parser");
+  });
+  test("integridade: cada pedido cai em exatamente UM grupo; Subway = próprio + não classificado; outra operação fora dos totais", () => {
+    const r = [
+      pedidoApi({ entregador: "A", courierFee: 10, date: dia("10:00:00") }),
+      pedidoApi({ entregador: "C", courierType: "external", courierFee: 15, date: dia("10:10:00") }),
+      pedidoApi({ entregador: null, courierFee: 7, date: dia("10:20:00") }),
+      pedidoApi({ entregador: "A", courierFee: 11, orderDetails: "Açaí 300ml", date: dia("10:30:00") }),
+      pedidoApi({ entregador: null, courierFee: 4, orderDetails: "Açaí 500ml", date: dia("10:40:00") }),
+      pedidoApi({ entregador: "A", courierFee: 6, orderDetails: "1x Sub + 1x Açaí", date: dia("10:50:00") }),
+      pedidoApi({ entregador: "A", courierFee: 9, status: "cancelled", acceptanceDate: dia("11:00:00"), cancelledDate: dia("11:05:00"), date: dia("11:00:00") }),
+    ].map(sanear);
+    const f = calcularFechamentoLogistico(r, { competencia: D, cobertura: COB_OK });
+    const s = f.indicadores.subway, o = f.outrasOperacoes.acai_no_grau;
+    assert.equal(s.pedidos + f.indicadores.operacaoEmDuvida.pedidos + o.pedidos, f.indicadores.pedidosNaConta);
+    assert.equal(s.elegiveis + s.semEntregador, s.pedidos);
+    assert.equal(s.proprio.pedidos + s.naoClassificado.pedidos, s.elegiveis);
+    assert.equal(s.proprio.taxasBrutas + s.naoClassificado.taxasBrutas, s.total.taxasBrutas);
+    assert.equal(s.proprio.taxasValidas + s.naoClassificado.taxasValidas, s.total.taxasValidas);
+    assert.equal(s.total.taxasBrutas, 34); assert.equal(s.total.taxasValidas, 25); assert.equal(s.custoLogisticoProprio, 10);
+    assert.equal(o.taxasIdentificadas, 11, "só quem tinha entregador; a taxa prevista sem entregador (4) não entra");
+    assert.equal(o.somadoAoCustoDaUnidade, false);
+    const somaEntregadores = s.entregadores.reduce((x, e) => x + e.taxasValidas, 0);
+    assert.equal(Math.round(somaEntregadores * 100) / 100, s.proprio.taxasValidas);
+  });
+});
