@@ -77,10 +77,19 @@ describe("módulo foody — só leitura na API", () => {
 });
 
 describe("nenhum consumidor nesta fase", () => {
-  test("nenhum arquivo fora do módulo importa modules/foody", () => {
+  // Única exceção: o gerador OFFLINE do catálogo versionado (145), que só LÊ o histórico e escreve um arquivo local para PR.
+  const GERADOR_CATALOGO = join(RAIZ, "scripts", "foody-gerar-catalogo.mjs");
+  test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline do catálogo)", () => {
     const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO));
-    const culpados = fora.filter((p) => /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
+    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(culpados.map((p) => relative(RAIZ, p)), []);
+  });
+  test("o gerador do catálogo só faz SELECT e só importa gerador/classificação", () => {
+    const s = semComentarios(readFileSync(GERADOR_CATALOGO, "utf8"));
+    assert.doesNotMatch(s, /\.(insert|update|upsert|delete|rpc)\(/);
+    assert.deepEqual([...s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)].map((m) => m[1]), ["parser_fd_pedidos"]);
+    const daCamada = [...s.matchAll(/from\s+["']([^"']*modules\/foody\/[^"']+)["']/g)].map((m) => m[1]).sort();
+    assert.deepEqual(daCamada, ["../src/modules/foody/foody.catalogo.gerador.js", "../src/modules/foody/foody.classificacao.js"]);
   });
   test("server.js não menciona a camada Foody", () => {
     assert.doesNotMatch(readFileSync(join(RAIZ, "src", "server.js"), "utf8"), /foody/i);
@@ -94,10 +103,10 @@ describe("migration 144 — estático", () => {
   const sql = readFileSync(join(MIGRATIONS, "144_foody_camada_central.sql"), "utf8");
   const rb = readFileSync(join(MIGRATIONS, "144_rollback.sql"), "utf8");
   const corpo = sql.split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join("\n");
-  test("é a migration de maior número e não há outra 144", () => {
-    const nums = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && !/rollback/i.test(f)).map((f) => f.slice(0, 3));
-    assert.equal(nums.filter((n) => n === "144").length, 1);
-    assert.equal(nums.sort().at(-1), "144");
+  test("não há outra 144; posteriores só as conhecidas (145 = conexão compartilhada, aditiva)", () => {
+    const arqs = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && !/rollback/i.test(f));
+    assert.equal(arqs.filter((f) => f.startsWith("144")).length, 1);
+    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "144").sort(), ["145_foody_conexao_compartilhada.sql"]);
   });
   test("transação com lock_timeout; só CREATE de objetos foody_*; não altera nem apaga nada existente", () => {
     assert.match(corpo, /^\s*begin;\s*\nset local lock_timeout = '5s';/m); assert.match(corpo, /commit;\s*$/);

@@ -10,8 +10,20 @@ set local lock_timeout = '5s';
 drop function if exists public.foody_fechamento_registrar(uuid, uuid, date, text, text, uuid, uuid, integer, text, text, text, jsonb, jsonb, jsonb, jsonb, text);
 drop table if exists public.foody_fechamentos_logisticos;
 drop table if exists public.foody_pedidos;
+-- Objetos da 145 (conexão compartilhada), se estiver aplicada: este rollback remove a camada INTEIRA.
+drop table if exists public.foody_triagem_decisoes;
+drop table if exists public.foody_destinos_eventos;
+drop table if exists public.foody_conexao_destinos;
 drop table if exists public.foody_sync_execucoes;
 drop table if exists public.foody_conexoes;
+-- Funções da 145 (depois das tabelas que as usam em triggers).
+drop function if exists public.foody_triagem_decisao_validar();
+drop function if exists public.foody_fech_exigir_destino_ativo();
+drop function if exists public.foody_pedido_validar_destino();
+drop function if exists public.foody_destino_auditar();
+drop function if exists public.foody_conexao_revogar_destinos();
+drop function if exists public.foody_destino_validar();
+drop function if exists public.foody_eh_admin_da_organizacao(uuid, uuid);
 drop function if exists public.foody_registro_imutavel();
 drop function if exists public.foody_unidade_imutavel();
 drop function if exists public.foody_validar_conexao_execucao();

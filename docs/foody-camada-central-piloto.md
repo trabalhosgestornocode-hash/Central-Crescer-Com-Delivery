@@ -128,6 +128,10 @@ Paridade local, com os pedidos reais saneados da validação (sem PII, fora do r
 - **Testes com Postgres real:** os arquivos que montam o schema real (que agora inclui a 144) mantêm só as 2 falhas que também ocorrem sem a 144 (Dashboard × Excel × PDF e a lista de rotas do perfil de exibição); o restante passa.
 - **Testes existentes alterados:** só dois, `comunicacao-arquitetura-agendamento.test.js` e `ifood-migration-103.test.js`. Eles mantêm a lista das migrations conhecidas, e a 144 foi registrada nelas, como as 140–143 fizeram.
 
+## 4.1 Conexão compartilhada (migration 145)
+
+Ampliação para o caso real da conta Foody da Subway Saci, que também despacha os pedidos do Açaí no Grau Saci (OUTRA organização). Documento completo: [`foody-conexao-compartilhada.md`](foody-conexao-compartilhada.md). Com a flag `FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED` desligada, ou sem destino na conexão, tudo nesta página continua valendo sem mudança.
+
 ## 5. Fora do escopo desta fase
 
 - consumidores: Parser, Dashboard, Checklist, Performance, Agente, WhatsApp;
