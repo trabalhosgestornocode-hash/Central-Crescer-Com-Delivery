@@ -40,7 +40,8 @@ Situação em 04/11/2026: **tudo inerte**. Nenhum PR foi mergeado ou publicado. 
 | D3 | Versão nova da Foody não gera mensagem corretiva; a fotografia mostra a versão | idem | PASS |
 | D4 | Limite de 1500 caracteres e validação: o bloco nunca bloqueia o relatório | idem | PASS |
 | D5 | Nenhum envio real (só o texto enfileirado muda; o envio tem as próprias travas) | idem (estrutural) | PASS |
-| E1 | Regressão do backend (Foody, Parser, Agente, notificações, Checklist, comunicação) | execução serial (ver PR #82) | ver PR |
+| E1 | Regressão do backend (Foody, Parser, Agente, notificações, Checklist, comunicação, iFood) | execução serial com Postgres local: 3342/3344 (1 falha + 1 pulado) | PASS: a única falha (Checklist 2.0: Excel × PDF, Preparo) falha **igual na `main` limpa** (cd38e4c), não é regressão |
+| E1b | Regressão encontrada e corrigida durante a homologação | listas de migrations conhecidas (088, 103) não tinham a 150 → corrigido no #80 | PASS |
 | E2 | Pedido REAL da Subway/Açaí comparado ao relatório real | — | **NÃO EXECUTADO** (exige sincronização real em produção) |
 
 ## Bloqueios reais de produção
