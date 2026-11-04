@@ -58,6 +58,17 @@ export const STATUS_FECHAMENTO = Object.freeze({
   INCOMPLETO: "INCOMPLETO",
 });
 
+/**
+ * Fechamento DEFINITIVO = cobertura completa (CONSOLIDADO/CORRIGIDO) E nenhum valor provisório (estado SINCRONIZADO, ou os
+ * estados reservados CONCILIADO/CUSTO_REAL). Regra ÚNICA para qualquer consumidor (Parser, relatórios, tela): o status sozinho
+ * não basta — um CORRIGIDO pode carregar pendência nova. PRELIMINAR/INCOMPLETO/PROVISORIO nunca contam como definitivos.
+ */
+export function fechamentoDefinitivo(f) {
+  const status = f?.status;
+  const estado = f?.estado_valores ?? f?.estadoValores;
+  return (status === "CONSOLIDADO" || status === "CORRIGIDO") && (estado === "SINCRONIZADO" || estado === "CONCILIADO" || estado === "CUSTO_REAL");
+}
+
 export const ORIGEM = Object.freeze({ MANUAL: "manual", AGENDADO: "agendado", REPROCESSAMENTO: "reprocessamento" });
 
 /** Feature flags (todas DESLIGADAS se ausentes). */

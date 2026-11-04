@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import { unidadePermitida, compartilhamentoPermitido } from "./foody.flags.js";
 import { calcularFechamentoLogistico } from "./foody.fechamento.calc.js";
-import { STATUS_FECHAMENTO, ORIGEM } from "./foody.constants.js";
+import { STATUS_FECHAMENTO, ESTADO_VALORES, ORIGEM } from "./foody.constants.js";
 import { foodyLog } from "./foody.seguranca.js";
 import { FoodySyncErro, sincronizarCompetencia } from "./foody.sync.service.js";
 
@@ -32,9 +32,16 @@ export function coberturaParaDestino(cobertura) {
 /**
  * Decide o status da nova versão: um dia já CONSOLIDADO cujo conteúdo mudou vira CORRIGIDO (com motivo); INCOMPLETO fica
  * INCOMPLETO. Puro — testável sem banco.
+ *
+ * Pendência que exige decisão (operação em dúvida, triagem, cancelamento em revisão, entregador não classificado, situação
+ * desconhecida, taxa ausente → estado PROVISORIO) NUNCA nasce CONSOLIDADO: fica PRELIMINAR até ser resolvida. Depois de uma
+ * consolidação o banco (147) não aceita voltar a PRELIMINAR — aí a nova versão é CORRIGIDO com estado PROVISORIO, e os
+ * consumidores usam fechamentoDefinitivo() (status E estado), nunca o status sozinho.
  */
 export function decidirStatus(calculado, ultimo, motivoInformado) {
   if (calculado.status === STATUS_FECHAMENTO.INCOMPLETO) return { status: STATUS_FECHAMENTO.INCOMPLETO, motivo: motivoInformado ?? null };
+  const jaConsolidado = ultimo && (ultimo.status === STATUS_FECHAMENTO.CONSOLIDADO || ultimo.status === STATUS_FECHAMENTO.CORRIGIDO);
+  if (!jaConsolidado && calculado.estadoValores === ESTADO_VALORES.PROVISORIO) return { status: STATUS_FECHAMENTO.PRELIMINAR, motivo: motivoInformado ?? null };
   const consolidadoAntes = ultimo && (ultimo.status === STATUS_FECHAMENTO.CONSOLIDADO || ultimo.status === STATUS_FECHAMENTO.CORRIGIDO);
   if (consolidadoAntes && ultimo.hash_conteudo !== calculado.hash) {
     return { status: STATUS_FECHAMENTO.CORRIGIDO, motivo: String(motivoInformado ?? "").trim() || MOTIVO_REPROCESSO };
