@@ -20,11 +20,10 @@ roteamento, fechamento) **não foi alterado**.
   compartilhamento) funciona sempre: desligar algo nunca depende de ligar outra coisa.
 * Fail-closed: só o valor exato `true` liga.
 
-Exemplo para o `.env` (o `.env.example` ainda não foi atualizado neste PR; ver pendências):
+No `backend/.env.example`: `FOODY_CENTRAL_ADMIN_ENABLED=false`.
 
-```
-# FOODY_CENTRAL_ADMIN_ENABLED=false
-```
+Com as migrations ainda não aplicadas (produção logo após o merge), as revogações chegam ao banco e respondem **404
+`NAO_INSTALADA`**: não há nada para revogar, e a resposta nunca é 500 nem traz SQL.
 
 ## 2. Quem pode o quê
 
@@ -82,7 +81,21 @@ a tela usa, **sem ids de perfil**: a autoria aparece como "Você" ou "Outro admi
 * Eventos imutáveis: o UPDATE só altera `organizacao_id` e o DELETE é recusado. RLS ligado, sem policies, nada para `anon`/`authenticated`.
 * Rollback: `146_rollback.sql` é fail-closed se houver eventos. `145_rollback.sql` se recusa enquanto a 146 existir. `144_rollback.sql` remove tudo.
 
-## 6. Ativação (fora deste PR — exige GO próprio)
+## 6. Limitação atual: propostas só entre empresas com administrador em comum
+
+Nesta fase **não há sistema de convites**. A lista de destinos da proposta mostra apenas as empresas em que o **próprio
+administrador que propõe** tem vínculo ativo (qualquer papel). Assim, a tela nunca vira um catálogo das empresas da plataforma,
+e ninguém consegue mandar uma proposta para uma empresa desconhecida digitando um id (resposta `DESTINO_NAO_PERMITIDO`).
+
+Consequências e caminho de uso:
+* Subway Saci → Açaí no Grau Saci: funciona quando quem propõe tem acesso às duas empresas (é o caso de hoje).
+* Se a pessoa da titular não tiver acesso à empresa destino, a lista vem vazia e a tela explica. O Administrador da plataforma
+  inclui a pessoa na empresa destino (com qualquer papel), ou quem já está nas duas faz a proposta.
+* A **aprovação** continua exigindo organization_admin **do destino**, no contexto do destino. Ter acesso à empresa destino (por
+  exemplo, como Operação) permite propor para lá, mas nunca aprovar por ela: o banco recusa.
+* Convite entre empresas sem vínculo comum (código, aceite e expiração) fica para uma fase futura, se necessário.
+
+## 7. Ativação (fora deste PR — exige GO próprio)
 
 1. Backup e aplicar, nesta ordem, **144 → 145 → 146** no Supabase.
 2. Configurar `FOODY_CENTRAL_SECRET` (mínimo de 32 caracteres) no Render.
@@ -90,7 +103,7 @@ a tela usa, **sem ids de perfil**: a autoria aparece como "Você" ou "Outro admi
 4. Cadastrar a conta na unidade titular, propor o compartilhamento e aprová-lo pelo Açaí.
 5. Só depois, numa decisão separada, ligar a sincronização para a unidade (allowlist) e acompanhar o piloto.
 
-## 7. Testes
+## 8. Testes
 
 | Arquivo | O quê |
 |---|---|

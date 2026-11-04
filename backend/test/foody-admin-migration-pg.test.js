@@ -142,6 +142,27 @@ describe("migration 146 — administração da conexão Foody, Postgres real", {
     assert.equal(adm("ATIVAR", { org: ORG_X, uni: UNI_T2, ator: ADM_X }).v, "REGISTRADO|ATIVA|ATIVADA");
   });
 
+  test("transferência REAL (transferir_unidade_organizacao como service_role, como em produção): pausa, revoga vínculo, audita na nova", () => {
+    const UNI_T3 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3", UNI_D2 = "dddddddd-dddd-4ddd-8ddd-ddddddddddd2";
+    ok(`insert into unidades (id, organizacao_id, nome) values ('${UNI_T3}', '${ORG_T}', 'unidade t3'), ('${UNI_D2}', '${ORG_D}', 'unidade d2');`);
+    assert.equal(adm("CADASTRAR", { uni: UNI_T3, imp: "dddddddddddd" }).v, "REGISTRADO|PAUSADA|CADASTRADA");
+    assert.equal(adm("ATIVAR", { uni: UNI_T3 }).v, "REGISTRADO|ATIVA|ATIVADA");
+    const cx = um(`select id from foody_conexoes where unidade_id = '${UNI_T3}';`);
+    ok(`insert into foody_conexao_destinos (conexao_id, organizacao_id, unidade_id, operacao, estado, organizacao_titular_id, aprovado_titular_por, aprovado_titular_em)
+      values ('${cx}', '${ORG_D}', '${UNI_D2}', 'acai_no_grau', 'PENDENTE', '${ORG_T}', '${ADM_T}', now());`);
+    const r = comoUsuario(b.url, null, `select transferir_unidade_organizacao('${UNI_T3}', '${ORG_X}', '${ADM_X}');`, { papel: "service_role" });
+    assert.equal(r.ok, true, `a transferência real não pode quebrar com a 146: ${r.err}`);
+    assert.equal(um(`select organizacao_id || '|' || status from foody_conexoes where id = '${cx}';`), `${ORG_X}|PAUSADA`);
+    assert.equal(um(`select estado from foody_conexao_destinos where conexao_id = '${cx}';`), "REVOGADO");
+    assert.equal(um(`select count(*) from foody_conexoes_eventos where conexao_id = '${cx}' and organizacao_id <> '${ORG_X}';`), "0", "eventos remapeados");
+    assert.equal(um(`select count(*) from foody_conexoes_eventos where conexao_id = '${cx}' and evento = 'PAUSADA_POR_TRANSFERENCIA';`), "1");
+    recusa(adm("ATIVAR", { uni: UNI_T3 }), "UNIDADE_FORA_DA_ORGANIZACAO");
+    // A pausa vale também para a promoção (mesmo caminho genérico) e para a volta: a unidade retorna PAUSADA.
+    const v = comoUsuario(b.url, null, `select transferir_unidade_organizacao('${UNI_T3}', '${ORG_T}', '${ADM_T}');`, { papel: "service_role" });
+    assert.equal(v.ok, true, v.err);
+    assert.equal(um(`select organizacao_id || '|' || status from foody_conexoes where id = '${cx}';`), `${ORG_T}|PAUSADA`);
+  });
+
   test("rollbacks: 146 fail-closed com eventos; limpo sai e é idempotente; 145 recusa com a 146; 146 reaplica", () => {
     const rb146 = () => psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "146_rollback.sql") });
     const r = rb146();
@@ -158,6 +179,27 @@ describe("migration 146 — administração da conexão Foody, Postgres real", {
     const r4 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "146_foody_conexao_administracao.sql") });
     assert.equal(r4.ok, true, r4.err);
     assert.equal(adm("PAUSAR", { org: ORG_X, uni: UNI_T2, ator: ADM_X }).v, "REGISTRADO|PAUSADA|PAUSADA");
+  });
+
+  test("rollback 144 com 145+146 aplicadas: remove a camada INTEIRA (tabelas, funções, triggers) e a cadeia 144→145→146 reaplica", () => {
+    const r = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "144_rollback.sql") });
+    assert.equal(r.ok, true, r.err);
+    assert.equal(um(`select count(*) from pg_tables where schemaname = 'public' and tablename like 'foody\_%';`), "0");
+    assert.equal(um(`select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'foody\_%';`), "0");
+    assert.equal(um(`select count(*) from pg_trigger where tgname like 'trg_foody%';`), "0");
+    assert.equal(um(`select count(*) from unidades where id = '${UNI_T}';`), "1", "nada fora do prefixo foody_ é tocado");
+    for (const m of ["144_foody_camada_central.sql", "145_foody_conexao_compartilhada.sql", "146_foody_conexao_administracao.sql"]) {
+      const a = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, m) }); assert.equal(a.ok, true, `${m}: ${a.err}`);
+    }
+    // Reaplicar a 144 e a 146 é idempotente. (A 145 não é reexecutável — constraint sem "if not exists" — mas falha atômica, sem
+    // efeito; produção aplica cada migration uma vez. Registrado como observação no PR.)
+    const r145 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_foody_conexao_compartilhada.sql") });
+    if (!r145.ok) assert.match(r145.err, /already exists/);
+    assert.equal(um(`select count(*) from pg_tables where schemaname = 'public' and tablename like 'foody\_%';`), "8", "falha da 145 reexecutada não deixa nada pela metade");
+    for (const m of ["144_foody_camada_central.sql", "146_foody_conexao_administracao.sql"]) {
+      const a = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, m) }); assert.equal(a.ok, true, `reaplicar ${m}: ${a.err}`);
+    }
+    assert.equal(adm("CADASTRAR", { imp: IMP1 }).v, "REGISTRADO|PAUSADA|CADASTRADA");
   });
 
   test("146 sem a 145 aplicada: recusa", () => {

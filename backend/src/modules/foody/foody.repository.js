@@ -12,7 +12,9 @@ const PAGINA_LEITURA = 1000;
 export class FoodyRepoErro extends Error {
   constructor(codigo, mensagem) { super(mensagem); this.name = "FoodyRepoErro"; this.codigo = codigo; }
 }
-const falha = (operacao, error) => new FoodyRepoErro("BANCO", `${operacao}: ${error?.code ?? ""} ${String(error?.message ?? "").slice(0, 160)}`.trim());
+// `pgCodigo` (SQLSTATE/PostgREST) fica no erro para quem precisa distinguir "objeto não existe" (migrations ainda não aplicadas).
+const falha = (operacao, error) => Object.assign(
+  new FoodyRepoErro("BANCO", `${operacao}: ${error?.code ?? ""} ${String(error?.message ?? "").slice(0, 160)}`.trim()), { pgCodigo: error?.code ?? null });
 
 // Códigos estáveis devolvidos pelo banco nas regras da 146 ("foody_conexao_administrar: CODIGO — texto" / "foody_conexoes: CODIGO —").
 const CODIGOS_ADMIN = ["SEM_PERMISSAO", "UNIDADE_FORA_DA_ORGANIZACAO", "ACAO_INVALIDA", "TOKEN_INVALIDO", "MOTIVO_INVALIDO", "SEM_CONEXAO",

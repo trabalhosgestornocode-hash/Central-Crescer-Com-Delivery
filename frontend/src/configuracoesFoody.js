@@ -210,7 +210,7 @@ export function montarFoody(root, ctx) {
           <label class="cfg-campo" for="fdy-operacao"><span>Operação</span>
             <select id="fdy-operacao" name="operacao">${(s.operacoesCompartilhaveis ?? []).map((o) => `<option value="${e(o.id)}">${e(o.rotulo)}</option>`).join("")}</select></label>
           <div class="cfg-acoes"><button type="submit" class="btn btn-primary">Propor</button></div></form>`
-          : vazio("Você não tem acesso a outra empresa para propor um compartilhamento.");
+          : vazio("Nenhuma empresa disponível: nesta fase, só dá para propor para empresas em que você também tem acesso. Peça ao Administrador da plataforma para incluir você na empresa destino (ou peça a quem já está nas duas para propor).");
       }
     }
     return painel("Compartilhamento entre empresas", `${itens ? `<ul class="ntf-lista" role="list">${itens}</ul>` : vazio("Nenhum compartilhamento nesta unidade.")}${propor}`,

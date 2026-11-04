@@ -340,3 +340,95 @@ describe("triagem", () => {
     assert.equal((await api("GET", `/conexoes/${cx}/triagem?competencia=04-11-2026`)).json.codigo, "COMPETENCIA_INVALIDA");
   });
 });
+
+describe("revisão final: revogar com a administração DESLIGADA continua seguro", () => {
+  async function cenarioComVinculo() {
+    await cadastrar(); await api("POST", "/conexao/ativar");
+    const id = (await api("POST", "/compartilhamentos", { corpo: { organizacaoId: ORG_D, unidadeId: UNI_D, operacao: "acai_no_grau" } })).json.data.id;
+    await api("POST", `/compartilhamentos/${id}/aprovar`, { como: comoD });
+    env.FOODY_CENTRAL_ADMIN_ENABLED = "false";
+    return id;
+  }
+  test("desligada: só as revogações respondem; aprovar, propor, triagem, estado e cadastro = 404", async () => {
+    const id = await cenarioComVinculo();
+    const cx = db.tabelas.foody_conexoes[0].id;
+    for (const [m, c, como, corpo] of [["GET", "/estado", comoT], ["POST", `/compartilhamentos/${id}/aprovar`, comoD],
+      ["POST", "/compartilhamentos", comoT, { organizacaoId: ORG_D, unidadeId: UNI_D, operacao: "acai_no_grau" }],
+      ["GET", `/conexoes/${cx}/triagem/dias`, comoD], ["POST", `/conexoes/${cx}/triagem/t1/decisao`, comoD, { operacao: "subway", motivo: "conferido" }],
+      ["POST", "/conexao/ativar", comoT], ["POST", "/conexao/pausar", comoT], ["POST", "/conexao/token", comoT, { token: TOKEN2 }]]) {
+      const r = await api(m, c, { como, corpo });
+      assert.equal(r.status, 404, `${m} ${c}`);
+    }
+    assert.equal(db.tabelas.foody_conexoes[0].status, "ATIVA", "nada mudou");
+  });
+  test("desligada: revogar o compartilhamento exige admin do vínculo e motivo; recusa terceira empresa, gestor e impersonação", async () => {
+    const id = await cenarioComVinculo();
+    assert.equal((await api("POST", `/compartilhamentos/${id}/revogar`, { como: comoX, corpo: { motivo: "intruso" } })).status, 403);
+    assert.equal((await api("POST", `/compartilhamentos/${id}/revogar`, { como: { org: ORG_D, unidade: UNI_D, impersonando: "1" }, corpo: { motivo: "suporte" } })).status, 403);
+    assert.equal((await api("POST", `/compartilhamentos/${id}/revogar`, { como: { perfil: GER_T, org: ORG_T, unidade: UNI_T, papel: "unit_manager" }, corpo: { motivo: "gestor" } })).status, 403);
+    assert.equal((await api("POST", `/compartilhamentos/${id}/revogar`, { como: comoD, corpo: {} })).json.codigo, "MOTIVO_INVALIDO");
+    assert.equal(db.tabelas.foody_conexao_destinos[0].estado, "ATIVO", "nenhuma tentativa recusada mudou o vínculo");
+    const r = await api("POST", `/compartilhamentos/${id}/revogar`, { como: comoD, corpo: { motivo: "encerrando pelo destino" } });
+    assert.equal(r.status, 200); assert.equal(r.json.data.estado, "REVOGADO");
+    assert.deepEqual(Object.keys(r.json.data).sort(), ["aprovadoDestinoEm", "aprovadoTitularEm", "conexaoId", "estado", "id", "operacao", "revogadoEm", "revogadoMotivo"]);
+  });
+  test("desligada: revogar a conexão recusa gestor, impersonação e outra empresa; o admin revoga e o vínculo cai junto", async () => {
+    await cenarioComVinculo();
+    assert.equal((await api("POST", "/conexao/revogar", { como: { perfil: GER_T, org: ORG_T, unidade: UNI_T, papel: "unit_manager" }, corpo: { motivo: "gestor" } })).status, 403);
+    assert.equal((await api("POST", "/conexao/revogar", { como: { org: ORG_T, unidade: UNI_T, impersonando: "1" }, corpo: { motivo: "suporte" } })).status, 403);
+    assert.equal((await api("POST", "/conexao/revogar", { como: { perfil: ADM_X, org: ORG_X, unidade: UNI_T }, corpo: { motivo: "intruso" } })).status, 403);
+    assert.equal((await api("POST", "/conexao/revogar", { como: comoD, corpo: { motivo: "destino tenta" } })).json.codigo, "SEM_CONEXAO", "o destino não revoga a conexão da titular");
+    assert.equal(db.tabelas.foody_conexoes[0].status, "ATIVA");
+    const r = await api("POST", "/conexao/revogar", { corpo: { motivo: "encerrando" } });
+    assert.equal(r.json.data.status, "REVOGADA"); assert.equal(db.tabelas.foody_conexao_destinos[0].estado, "REVOGADO");
+    assert.equal(chamadasExternas.length, 0);
+  });
+  test("migrations ainda NÃO aplicadas (produção logo após o merge): revogar responde 404 NAO_INSTALADA, nunca 500 nem SQL", async () => {
+    const erroPg = (code) => ({ data: null, error: { code, message: "Could not find the table 'public.foody_conexao_destinos' in the schema cache" } });
+    const semTabela = {
+      from: () => {
+        const b = { select: () => b, eq: () => b, in: () => b, order: () => b, range: () => b, limit: () => b, update: () => b,
+          maybeSingle: async () => erroPg("PGRST205"), single: async () => erroPg("PGRST205"), then: (ok, ko) => Promise.resolve(erroPg("PGRST205")).then(ok, ko) };
+        return b;
+      },
+      rpc: async () => ({ data: null, error: { code: "PGRST202", message: "Could not find the function public.foody_conexao_administrar" } }),
+    };
+    const app = express(); app.use(express.json());
+    app.use((req, _res, next) => {
+      req.user = { id: `u-nao-instalada-${rodada}` }; req.tenant = { organizacaoId: ORG_T, unidadeId: UNI_T };
+      req.acesso = { perfilId: ADM_T, papel: "organization_admin", permissoes: permissoesDoPapel("organization_admin"), impersonando: false, empresa: { id: ORG_T } };
+      next();
+    });
+    app.use("/f", criarFoodyAdminRouter({ db: semTabela, env: {}, plataforma })); app.use(errorHandler);
+    const s = app.listen(0); await new Promise((r) => s.once("listening", r));
+    try {
+      const u = `http://127.0.0.1:${s.address().port}/f`;
+      const id = "dddddddd-0000-4000-8000-000000000001";
+      for (const [c, corpo] of [["/conexao/revogar", { motivo: "desligando" }], [`/compartilhamentos/${id}/revogar`, { motivo: "desligando" }]]) {
+        const r = await fetchOriginal(u + c, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(corpo) });
+        const t = await r.text();
+        assert.equal(r.status, 404, `${c}: ${t}`); assert.equal(JSON.parse(t).codigo, "NAO_INSTALADA");
+        assert.doesNotMatch(t, /PGRST|schema cache|foody_/);
+      }
+      assert.equal((await fetchOriginal(u + "/estado")).status, 404, "estado: flag desligada");
+    } finally { s.close(); }
+  });
+});
+
+describe("revisão final: nada de token, pessoa ou dado comercial da OUTRA organização", () => {
+  test("o destino vê só nomes do vínculo: sem impressão, ponto de coleta, erro ou eventos da conexão da titular", async () => {
+    await api("POST", "/conexao", { corpo: { token: TOKEN, pontoColetaEsperado: "PONTO-PRIVADO-TITULAR" } });
+    await api("POST", "/conexao/ativar");
+    const id = (await api("POST", "/compartilhamentos", { corpo: { organizacaoId: ORG_D, unidadeId: UNI_D, operacao: "acai_no_grau" } })).json.data.id;
+    await api("POST", `/compartilhamentos/${id}/aprovar`, { como: comoD });
+    db.tabelas.foody_conexoes[0].ultimo_erro_codigo = "ERRO_PRIVADO_T";
+    const impT = (await api("GET", "/estado")).json.data.conexao.impressaoFinal;
+    const eD = await api("GET", "/estado", { como: comoD });
+    assert.equal(eD.json.data.conexao, null);
+    for (const segredo of ["PONTO-PRIVADO-TITULAR", "ERRO_PRIVADO_T", TOKEN, `"impressaoFinal":"${impT}"`]) assert.ok(!eD.texto.includes(segredo), segredo);
+    assert.ok(!eD.json.data.eventos.some((e) => e.tipo === "conexao"), "eventos da conexão da titular ficam na titular");
+    assert.deepEqual(Object.keys(eD.json.data.compartilhamentos[0].titular).sort(), ["organizacao", "unidade"]);
+    const g = await api("GET", "/estado", { como: { perfil: GER_T, org: ORG_T, unidade: UNI_T, papel: "unit_manager" } });
+    assert.ok(!g.texto.includes(TOKEN) && !/token_cifrado|tokenCifrado/.test(g.texto));
+  });
+});

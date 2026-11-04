@@ -225,6 +225,9 @@ describe("Foody Delivery — navegador real", OPC, () => {
     await s.getByRole("tab", { name: /Conexão/ }).click();
     assert.equal(await s.getByLabel("Token da conta Foody").count(), 0);
     assert.match(await s.innerText(), /já recebe pedidos Foody por compartilhamento/);
+    // Nada da conexão da titular aparece para o destino (ponto de coleta, final da conta, token).
+    const tudoD = await pagina.evaluate(() => document.body.innerText + document.documentElement.outerHTML);
+    assert.doesNotMatch(tudoD, /Loja Subway Centro|…[0-9a-f]{4}/); assert.ok(!tudoD.includes(TOKEN));
     await foto(pagina, "foody-390-destino-escuro");
     assert.ok(await semRolagemHorizontal(pagina));
     assert.deepEqual(await auditarA11y(pagina), []);

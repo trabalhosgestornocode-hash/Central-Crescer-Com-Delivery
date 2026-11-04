@@ -36,8 +36,15 @@ const STATUS_POR_CODIGO = {
   SEGREDO_AUSENTE: 503,
 };
 
+// Tabela/função ausente = migrations 144/145/146 ainda não aplicadas neste ambiente. As REVOGAÇÕES não passam pela flag, então
+// chegam ao banco mesmo com tudo desligado: respondem 404 limpo (nada para revogar), nunca 500 nem detalhe de SQL.
+const NAO_INSTALADA = new Set(["42P01", "42883", "PGRST202", "PGRST205"]);
+
 export function erroHttp(e) {
   if (e instanceof ApiError) return e;
+  if (NAO_INSTALADA.has(e?.pgCodigo)) {
+    return Object.assign(ApiError.notFound("integração Foody não instalada neste ambiente."), { codigo: "NAO_INSTALADA" });
+  }
   const codigo = e?.codigo;
   const status = STATUS_POR_CODIGO[codigo];
   if (status && status < 500) return Object.assign(new ApiError(status, String(e.message || "Não foi possível concluir.")), { codigo });
