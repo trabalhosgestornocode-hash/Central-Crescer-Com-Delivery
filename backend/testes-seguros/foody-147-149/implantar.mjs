@@ -140,7 +140,8 @@ export function executar(modo, env = process.env, log = console.log) {
   const { arquivos, sha, md5Arquivos } = gerarPacote();
   for (const [n, t] of Object.entries(arquivos)) writeFileSync(join(evid, n), t);
   const shaDiverge = Object.entries(SHA_ESPERADO).filter(([n, s]) => sha[n] !== s);
-  if (shaDiverge.length && env.FOODY_IGNORAR_SHA !== "1") parar(`SHA-256 do kit diverge do fixado: ${shaDiverge.map(([n]) => `${n}=${sha[n]}`).join(", ")}`);
+  // Sem válvula de escape: kit diferente do revisado nunca roda, em NENHUM alvo (mudou? regenere e fixe o SHA novo via PR).
+  if (shaDiverge.length) parar(`SHA-256 do kit diverge do fixado: ${shaDiverge.map(([n]) => `${n}=${sha[n]}`).join(", ")}`);
   if (modo === "pacote") { log(JSON.stringify({ ok: true, sha, evidencias: evid })); return { sha, evid }; }
 
   const travas = travasDeAlvo(env);

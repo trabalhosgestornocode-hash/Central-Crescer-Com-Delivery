@@ -55,6 +55,8 @@ rollback) e os testes. As 145/146 ficam **livres**: o salto é intencional.
 
 Mudou uma migration 147–149 ou o kit? Regenere, atualize o SHA no PR e rode o ensaio de novo.
 
+Não há válvula de escape: com o SHA divergente o executor para em **qualquer** alvo, inclusive no ensaio local. Homologado no TESTE em 04/11/2026 com `pacote_aplicar.sql` = `feadfd82…` e `pacote_recuperar.sql` = `30f52e64…` (os mesmos fixados).
+
 **Travas de alvo:**
 
 - `FOODY_ALVO=producao|teste|local` + `FOODY_CONN`, só pelo ambiente do operador. A conexão nunca é lida de arquivo, impressa nem gravada; a saída é mascarada.
