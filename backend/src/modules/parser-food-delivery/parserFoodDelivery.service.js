@@ -20,6 +20,7 @@ import { resolverUnidade } from "./parserFoodDelivery.shared.js";
 import { carregarOverridesPorUnidade, aplicarOverridesPersistidos, definirOverride } from "./parserFoodDelivery.overrides.js";
 import { lancamentosDoPeriodo, lancamentosDaImportacao } from "./parserFoodDelivery.lancamentos.js";
 import { comporCustoReal, mesclarEntregadores } from "./parserFoodDelivery.lancamentos.calc.js";
+import { carregarFonteLogistica } from "./parserFoodDelivery.foody.js";
 
 const TABELA_IMPORT = "parser_fd_importacoes";
 const TABELA_PEDIDOS = "parser_fd_pedidos";
@@ -916,8 +917,12 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
   const entregadores = entregadoresParaApi(pedidos);
   const lancamentos = await lancamentosDoPeriodo({ organizacaoId, unidadeId, inicio: periodo.inicio, fimExclusivo: periodo.fimExclusivo });
   const ajustes = anexarAjustesOperacionais({ pedidos, entregadores, resumo, lancamentos });
+  // Fase C (flag FOODY_CENTRAL_PARSER_ENABLED, desligada por padrão): bloco ADICIONAL; null = nada consultado, resposta igual.
+  const fonteLogistica = await carregarFonteLogistica({ db: supabase, organizacaoId, unidadeId, dataInicio, dataFim,
+    pedidosElegiveis: pedidos, todos, resumoPorDia: resumoConciliacao, custoReal: ajustes.resumo.custoReal });
 
   return {
+    ...(fonteLogistica ? { fonteLogistica } : {}),
     periodo: { dataInicio, dataFim }, consolidado: true,
     importacao: { id: null, periodoInicio: dataInicio, periodoFim: dataFim,
       totalPedidos: todos.length, pedidosSubway: filtragem.subway,
