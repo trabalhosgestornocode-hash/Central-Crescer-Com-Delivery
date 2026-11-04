@@ -3,9 +3,11 @@
 // Regra (uma fonte por pedido E por período; nunca as duas somadas):
 //   1. Dia com pedido no Excel importado → fonte = EXCEL. É a fonte oficial: tem nome do entregador (pagamento), distância,
 //      overrides manuais e lançamentos. O fechamento Foody do mesmo dia é ignorado nos totais (vira só conferência).
-//   2. Dia SEM Excel e com fechamento Foody de cobertura completa (CONSOLIDADO/CORRIGIDO) → fonte = FOODY, valores marcados
-//      como do estado do fechamento (SINCRONIZADO/PROVISORIO). Sem nome de entregador: não entra em pagamento nem conciliação.
+//   2. Dia SEM Excel e com fechamento Foody DEFINITIVO (fechamentoDefinitivo: CONSOLIDADO/CORRIGIDO e estado sem valor
+//      provisório) → fonte = FOODY. Sem nome de entregador: não entra em pagamento nem conciliação.
 //   3. Dia sem Excel com fechamento Foody INCOMPLETO → fonte = FOODY_INCOMPLETO: aparece, mas fora dos totais.
+//   3b. Dia sem Excel com fechamento Foody com PENDÊNCIA (PRELIMINAR, ou CORRIGIDO/CONSOLIDADO com estado PROVISORIO) →
+//      fonte = FOODY_PENDENTE: aparece com as pendências, mas fora dos totais (nunca é somado como se fosse fechado).
 //   4. Nada → SEM_DADOS.
 //
 // Quatro grandezas, nunca confundidas:
@@ -15,8 +17,9 @@
 //   * custoRealConciliado    — taxa válida + lançamentos (taxas adicionais/manuais/avulsos) do Parser; existe só para o PERÍODO
 //                              e só quando TODOS os dias com dado vieram do Excel (senão null: seria misturar fontes).
 // Distância: só existe no Excel (complementar); dias FOODY ficam com distanciaDisponivel=false.
-export const FONTE = Object.freeze({ EXCEL: "EXCEL", FOODY: "FOODY", FOODY_INCOMPLETO: "FOODY_INCOMPLETO", SEM_DADOS: "SEM_DADOS" });
-const COMPLETOS = new Set(["CONSOLIDADO", "CORRIGIDO"]);
+import { fechamentoDefinitivo } from "./foody.constants.js";
+
+export const FONTE = Object.freeze({ EXCEL: "EXCEL", FOODY: "FOODY", FOODY_PENDENTE: "FOODY_PENDENTE", FOODY_INCOMPLETO: "FOODY_INCOMPLETO", SEM_DADOS: "SEM_DADOS" });
 
 const arred = (n) => (n == null ? null : Math.round(n * 100) / 100);
 const somarDia = (ymd, n) => { const d = new Date(`${ymd}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
@@ -68,8 +71,10 @@ export function resolverFontePorDia({ de, ate, operacao = "subway", excel, fecha
     }
     if (f) {
       const b = blocoDaOperacao(f.indicadores, operacao);
-      const completo = COMPLETOS.has(f.status);
-      dias.push({ competencia: d, fonte: completo ? FONTE.FOODY : FONTE.FOODY_INCOMPLETO, estadoValores: f.estado_valores ?? f.estadoValores ?? null,
+      const fonte = fechamentoDefinitivo(f) ? FONTE.FOODY : f.status === "INCOMPLETO" ? FONTE.FOODY_INCOMPLETO : FONTE.FOODY_PENDENTE;
+      const pendencias = (Array.isArray(f.pendencias) ? f.pendencias : []).map((p) => p?.codigo).filter(Boolean);
+      dias.push({ competencia: d, fonte, estadoValores: f.estado_valores ?? f.estadoValores ?? null,
+        ...(fonte === FONTE.FOODY ? {} : { pendencias }),
         versao: f.versao, status: f.status, pedidos: b?.total?.pedidos ?? 0, entregues: b?.total?.entregues ?? 0,
         taxaBruta: b?.total?.taxasBrutas ?? null, taxaValida: b?.total?.taxasValidas ?? null,
         custoLogisticoAtribuido: b?.custoLogisticoProprio ?? null, distanciaDisponivel: false, foodyIgnorado: null });
@@ -86,10 +91,11 @@ export function resolverFontePorDia({ de, ate, operacao = "subway", excel, fecha
   const foody = noTotal.filter((x) => x.fonte === FONTE.FOODY);
   return {
     periodo: { de, ate }, operacao,
-    regra: "um dia, uma fonte: Excel quando importado; senão fechamento Foody completo; nunca somados",
+    regra: "um dia, uma fonte: Excel quando importado; senão fechamento Foody definitivo; pendente/incompleto fora do total; nunca somados",
     dias,
     totais: {
-      dias: { excel: contar(FONTE.EXCEL), foody: contar(FONTE.FOODY), foodyIncompleto: contar(FONTE.FOODY_INCOMPLETO), semDados: contar(FONTE.SEM_DADOS) },
+      dias: { excel: contar(FONTE.EXCEL), foody: contar(FONTE.FOODY), foodyPendente: contar(FONTE.FOODY_PENDENTE),
+        foodyIncompleto: contar(FONTE.FOODY_INCOMPLETO), semDados: contar(FONTE.SEM_DADOS) },
       pedidos: noTotal.reduce((s, x) => s + x.pedidos, 0),
       entregues: noTotal.reduce((s, x) => s + x.entregues, 0),
       taxaBruta: soma("taxaBruta"),
@@ -99,6 +105,9 @@ export function resolverFontePorDia({ de, ate, operacao = "subway", excel, fecha
       custoRealConciliado: soExcel && excel?.custoReal ? arred(excel.custoReal.total) : null,
       // dias que tinham as DUAS fontes e contaram uma só (prova de não duplicação)
       diasComAsDuasFontes: dias.filter((x) => x.foodyIgnorado).length,
+      // dias com fechamento Foody que ficaram FORA do total por pendência/incompletude: o período não está fechado
+      diasForaDoTotal: contar(FONTE.FOODY_PENDENTE) + contar(FONTE.FOODY_INCOMPLETO),
+      // nenhum dia provisório entra no total (FOODY_PENDENTE); campo mantido como prova explícita
       valoresProvisorios: foody.some((x) => x.estadoValores !== "SINCRONIZADO" && x.estadoValores !== "CONCILIADO" && x.estadoValores !== "CUSTO_REAL"),
     },
   };

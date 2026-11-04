@@ -27,7 +27,7 @@ export async function carregarFonteLogistica({ db, env = process.env, organizaca
   if (!fonteFoodyNoParserPermitida(env, unidadeId)) return null;
   try {
     const { data, error } = await db.from("foody_fechamentos_logisticos")
-      .select("organizacao_id, unidade_id, competencia, versao, status, estado_valores, indicadores")
+      .select("organizacao_id, unidade_id, competencia, versao, status, estado_valores, indicadores, pendencias")
       .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
       .gte("competencia", dataInicio).lte("competencia", dataFim)
       .order("competencia", { ascending: true }).order("versao", { ascending: false })

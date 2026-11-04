@@ -33,7 +33,8 @@ describe("resolverFontePorDia — um dia, uma fonte", () => {
   test("dia só com Foody completo entra; INCOMPLETO aparece fora do total; sem nada = SEM_DADOS", () => {
     const r = base([fech("2026-11-02", 1, "CONSOLIDADO", T(4, 40, 30)), fech("2026-11-03", 1, "INCOMPLETO", T(9, 90, 90))]);
     assert.deepEqual(r.dias.map((d) => d.fonte), [FONTE.EXCEL, FONTE.FOODY, FONTE.FOODY_INCOMPLETO, FONTE.SEM_DADOS]);
-    assert.deepEqual(r.totais.dias, { excel: 1, foody: 1, foodyIncompleto: 1, semDados: 1 });
+    assert.deepEqual(r.totais.dias, { excel: 1, foody: 1, foodyPendente: 0, foodyIncompleto: 1, semDados: 1 });
+    assert.equal(r.totais.diasForaDoTotal, 1);
     assert.equal(r.totais.pedidos, 3 + 4);
     assert.equal(r.totais.taxaBruta, 23 + 40);
     assert.equal(r.totais.taxaValida, 18 + 30);
@@ -61,11 +62,24 @@ describe("resolverFontePorDia — um dia, uma fonte", () => {
     assert.equal(r.dias[0].fonte, FONTE.EXCEL);
     assert.equal(r.totais.pedidos, 0);
   });
-  test("distância é complemento do Excel; dia Foody marca distanciaDisponivel=false; valores provisórios sinalizados", () => {
-    const r = base([fech("2026-11-02", 1, "CONSOLIDADO", T(4, 40, 30), { estado_valores: "PROVISORIO" })], null, [pedido("2026-11-01", 3, { distanciaRaioKm: 2.5 })]);
+  test("distância é complemento do Excel; dia Foody marca distanciaDisponivel=false", () => {
+    const r = base([fech("2026-11-02", 1, "CONSOLIDADO", T(4, 40, 30))], null, [pedido("2026-11-01", 3, { distanciaRaioKm: 2.5 })]);
     assert.equal(r.dias[0].distanciaDisponivel, true);
     assert.equal(r.dias[1].distanciaDisponivel, false);
-    assert.equal(r.totais.valoresProvisorios, true);
+    assert.equal(r.totais.valoresProvisorios, false);
+  });
+  test("pendência nunca entra no total: PRELIMINAR e CORRIGIDO/PROVISORIO viram FOODY_PENDENTE com os códigos", () => {
+    const r = base([
+      fech("2026-11-02", 1, "PRELIMINAR", T(4, 40, 30), { estado_valores: "PROVISORIO", pendencias: [{ codigo: "TRIAGEM_PENDENTE", quantidade: 2 }] }),
+      fech("2026-11-03", 2, "CORRIGIDO", T(6, 60, 50), { estado_valores: "PROVISORIO", pendencias: [{ codigo: "CANCELAMENTO_EM_REVISAO" }] }),
+      fech("2026-11-04", 1, "CONSOLIDADO", T(1, 10, 10), { estado_valores: "PROVISORIO" }),
+    ]);
+    assert.deepEqual(r.dias.map((d) => d.fonte), [FONTE.EXCEL, FONTE.FOODY_PENDENTE, FONTE.FOODY_PENDENTE, FONTE.FOODY_PENDENTE]);
+    assert.deepEqual(r.dias[1].pendencias, ["TRIAGEM_PENDENTE"]); assert.deepEqual(r.dias[2].pendencias, ["CANCELAMENTO_EM_REVISAO"]);
+    assert.deepEqual(r.totais.dias, { excel: 1, foody: 0, foodyPendente: 3, foodyIncompleto: 0, semDados: 0 });
+    assert.equal(r.totais.pedidos, 3, "só o Excel"); assert.equal(r.totais.taxaBruta, 23); assert.equal(r.totais.diasForaDoTotal, 3);
+    assert.equal(r.totais.valoresProvisorios, false, "nenhum provisório somado");
+    assert.equal(r.totais.custoLogisticoAtribuido, null);
   });
   test("Açaí (tenant destino): usa o bloco da operação gravada no fechamento", () => {
     const r = resolverFontePorDia({ de: "2026-11-02", ate: "2026-11-02", operacao: "acai_no_grau", excel: { pedidosElegiveis: [], todos: [], resumoPorDia: resumoConciliacao },
