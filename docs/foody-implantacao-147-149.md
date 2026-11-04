@@ -83,7 +83,8 @@ Mudou uma migration 147–149 ou o kit? Regenere, atualize o SHA no PR e rode o 
 - **Só em produção:**
   - Subway Saci (`…0000000000a1`) e Açaí no Grau Saci (`4d3b75bd-…`) existem, estão ativas e ficam em organizações **diferentes**;
   - o registro do Termo v3 existe.
-- **Teste e produção:** WAL arquivando (`archive_mode=on`, sem falha depois do último OK, último arquivo há menos de 15 min).
+- **Teste e produção:** WAL arquivando (`archive_mode=on`, sem falha depois do último OK) — **bloqueante** nos dois alvos.
+- **Idade do último WAL arquivado (< 15 min):** **bloqueante em produção**. No **TESTE** é só **aviso** (registrado em `prevoo-portoes.json` → `avisos`): com tráfego baixíssimo o TESTE pode passar horas sem fechar um segmento, e o backup do painel é confirmado pelo operador (`FOODY_BACKUP_CONFIRMADO=SIM`).
 - **Impressão fora do escopo** guardada para comparar depois.
 
 **Pós-verificação (`avaliarPos`):**

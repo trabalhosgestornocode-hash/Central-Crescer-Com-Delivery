@@ -53,7 +53,10 @@ export function travasDeAlvo(env) {
 
 // ------------------------------------------------------------------ portões
 const vazio = (x) => Array.isArray(x) && x.length === 0;
-export function avaliarPrevoo(p, alvo) {
+// `avisos` recebe o que NÃO bloqueia. Única regra: no TESTE (tráfego baixíssimo, o WAL pode passar horas sem fechar um segmento) a
+// IDADE do último WAL arquivado é aviso — o backup do painel é confirmado pelo operador (FOODY_BACKUP_CONFIRMADO=SIM). archive_mode
+// ligado e nenhuma falha depois do último sucesso continuam BLOQUEANTES. Em produção a idade (< 900 s) continua bloqueante.
+export function avaliarPrevoo(p, alvo, avisos = []) {
   const e = [], d = p.dependencias ?? {}, c = p.concorrencia ?? {}, h = p.historico ?? {};
   if (p.identidade?.somente_leitura !== "on") e.push("sessão de pré-voo não está em somente leitura");
   if (p.identidade?.replica) e.push("conectado a uma réplica");
@@ -80,7 +83,7 @@ export function avaliarPrevoo(p, alvo) {
     const w = p.arquivamento_wal ?? {};
     if (w.modo !== "on") e.push("archive_mode desligado");
     if (w.ultima_falha_depois_do_ultimo_ok) e.push("arquivamento de WAL falhando");
-    if (!(w.segundos_desde_ultimo < 900)) e.push(`último WAL arquivado há ${w.segundos_desde_ultimo}s`);
+    if (!(w.segundos_desde_ultimo < 900)) (alvo === "teste" ? avisos : e).push(`último WAL arquivado há ${w.segundos_desde_ultimo}s`);
   }
   return e;
 }
@@ -147,8 +150,8 @@ export function executar(modo, env = process.env, log = console.log) {
   if (modo === "diagnostico") { const d = ler("diagnostico.sql"); guardar("diagnostico.json", d); log(JSON.stringify(d)); return d; }
   if (modo === "prevoo") {
     const p = ler("prevoo.sql"); guardar("prevoo.json", p);
-    const e = avaliarPrevoo(p, env.FOODY_ALVO); guardar("prevoo-portoes.json", e);
-    log(JSON.stringify({ ok: e.length === 0, falhas: e, evidencias: evid })); return { prevoo: p, falhas: e };
+    const avisos = [], e = avaliarPrevoo(p, env.FOODY_ALVO, avisos); guardar("prevoo-portoes.json", { falhas: e, avisos });
+    log(JSON.stringify({ ok: e.length === 0, falhas: e, avisos, evidencias: evid })); return { prevoo: p, falhas: e, avisos };
   }
   if (modo === "validar") {
     const p = ler("posverificacao.sql"), d = ler("diagnostico.sql"); guardar("posverificacao.json", p); guardar("diagnostico.json", d);
@@ -161,7 +164,7 @@ export function executar(modo, env = process.env, log = console.log) {
     const d0 = ler("diagnostico.sql"); guardar("diagnostico-antes.json", d0);
     if (d0.estado !== "AUSENTE") parar(`estado ${d0.estado}: aplicar só a partir de AUSENTE — ${d0.acao}`);
     const p = ler("prevoo.sql"); guardar("prevoo.json", p);
-    const e0 = avaliarPrevoo(p, env.FOODY_ALVO); guardar("prevoo-portoes.json", e0);
+    const avisos0 = [], e0 = avaliarPrevoo(p, env.FOODY_ALVO, avisos0); guardar("prevoo-portoes.json", { falhas: e0, avisos: avisos0 });
     if (e0.length) parar(`pré-voo reprovado: ${e0.join("; ")}`);
     const r = psql(env, { arquivo: join(evid, "pacote_aplicar.sql"), leitura: false }); guardar("aplicacao.log", `${r.saida}\n${r.erro}`);
     if (!r.ok) {
@@ -175,7 +178,7 @@ export function executar(modo, env = process.env, log = console.log) {
     if (d2.assinatura !== pos.assinatura) e2.push("assinatura do diagnóstico ≠ da pós-verificação");
     guardar("posverificacao-portoes.json", e2); guardar("ASSINATURA.txt", `${pos.assinatura}\n`);
     if (e2.length) parar(`APLICADO, mas a pós-verificação reprovou: ${e2.join("; ")}. Não use a camada; avalie a recuperação com FOODY_ASSINATURA=${pos.assinatura}`);
-    log(JSON.stringify({ ok: true, estado: d2.estado, assinatura: pos.assinatura, evidencias: evid }));
+    log(JSON.stringify({ ok: true, estado: d2.estado, assinatura: pos.assinatura, avisos_prevoo: avisos0, evidencias: evid }));
     return { assinatura: pos.assinatura, evid };
   }
   if (modo === "recuperar") {
