@@ -110,3 +110,65 @@ export const opcoesDeDestino = (possiveis) =>
 
 export const dataHora = (iso) => (iso ? new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
 export const dataCurta = (ymd) => { const [a, m, d] = String(ymd ?? "").split("-"); return a && m && d ? `${d}/${m}/${a}` : String(ymd ?? "—"); };
+
+// ---------- Sincronização manual (piloto em sombra) ----------
+export const MAX_DIAS_SYNC = 7;
+const somarDia = (ymd, n) => { const d = new Date(`${ymd}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+/** "Hoje" no fuso de Brasília (as competências são dias de Brasília). */
+export const hojeBrasilia = (agora = new Date()) => new Date(agora.getTime() - 3 * 3600_000).toISOString().slice(0, 10);
+export const ontemBrasilia = (agora = new Date()) => somarDia(hojeBrasilia(agora), -1);
+/** Dia antes do qual a competência está congelada (fora de D-1..D-3): reprocessar exige motivo. */
+export const limiteCongelado = (agora = new Date()) => somarDia(hojeBrasilia(agora), -3);
+
+/** Valida o intervalo e devolve { dias, congelados, erro }. Puro. */
+export function planejarIntervalo(de, ate, { agora = new Date(), motivo = "" } = {}) {
+  const re = /^\d{4}-\d{2}-\d{2}$/;
+  if (!re.test(String(de ?? "")) || !re.test(String(ate ?? ""))) return { erro: "Escolha o primeiro e o último dia." };
+  if (ate < de) return { erro: "O último dia precisa ser igual ou depois do primeiro." };
+  if (ate > ontemBrasilia(agora)) return { erro: "Só dias já encerrados: o último dia pode ser no máximo ontem." };
+  const dias = [];
+  for (let d = de; d <= ate; d = somarDia(d, 1)) { dias.push(d); if (dias.length > MAX_DIAS_SYNC) return { erro: `No máximo ${MAX_DIAS_SYNC} dias por vez.` }; }
+  const congelados = dias.filter((d) => d < limiteCongelado(agora));
+  if (congelados.length && String(motivo ?? "").trim().length < 10) {
+    return { erro: "Há dia anterior aos últimos 3: informe o motivo do reprocessamento (mínimo 10 caracteres).", dias, congelados };
+  }
+  return { dias, congelados, erro: null };
+}
+
+export const STATUS_EXECUCAO = {
+  CONCLUIDA: ["ok", "Concluída"],
+  FALHOU: ["bad", "Falhou"],
+  EM_ANDAMENTO: ["warn", "Em andamento"],
+};
+export const STATUS_FECHAMENTO = { CONSOLIDADO: "Consolidado", CORRIGIDO: "Corrigido", INCOMPLETO: "Incompleto", PRELIMINAR: "Preliminar" };
+export const rotuloFechamento = (f) => {
+  if (!f) return "—";
+  const base = `${STATUS_FECHAMENTO[f.status] ?? f.status} (versão ${f.versao})`;
+  const extras = [f.resultado === "SEM_MUDANCA" ? "sem mudança" : "", f.estadoValores === "PROVISORIO" ? "valores provisórios" : ""].filter(Boolean);
+  return extras.length ? `${base} · ${extras.join(" · ")}` : base;
+};
+export const ORIGEM_EXECUCAO = { manual: "Manual", agendado: "Agendada", reprocessamento: "Reprocessamento" };
+const ERROS_SYNC = {
+  AUTENTICACAO: "A Foody recusou o token da conta.",
+  LIMITE_PEDIDOS: "Dia com pedidos demais para a sincronização manual; nada foi gravado.",
+  LIMITE_PAGINAS: "Dia com páginas demais na Foody; nada foi gravado.",
+  NAO_EXECUTADO: "Não executado (a sincronização parou num dia anterior).",
+  ABANDONADA: "Interrompida (encerrada automaticamente).",
+  CONEXAO_INATIVA: "A conexão não está ativa.",
+  TIMEOUT: "A Foody demorou demais para responder.",
+  LIMITE_REQUISICOES: "A Foody limitou as requisições; tente mais tarde.",
+};
+export const rotuloErroSync = (c) => (c ? ERROS_SYNC[c] ?? `Erro: ${c}` : "");
+/** Uma linha de resultado do dia, em texto curto (contagens e situação, nunca valores). */
+export function resumoDoDia(d) {
+  if (d.erro) return rotuloErroSync(d.erro);
+  const partes = [`${d.contagens?.unicos ?? 0} pedidos`];
+  if (d.distribuicao) {
+    const acai = d.distribuicao.destinos?.acai_no_grau ?? 0;
+    partes.push(`${acai} Açaí`, `${d.distribuicao.triagem ?? 0} em triagem`);
+  }
+  partes.push(`${d.contagens?.inseridos ?? 0} novos`, `${d.contagens?.atualizados ?? 0} atualizados`);
+  if (d.contagens?.pontoDivergente) partes.push(`${d.contagens.pontoDivergente} de outro ponto de coleta (não gravados)`);
+  if (d.cobertura && !d.cobertura.completa) partes.push("cobertura com pendência");
+  return partes.join(" · ");
+}

@@ -37,6 +37,7 @@ const PAGINA = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 </body></html>`;
 
 let servidor, base, db, env, express, chamadasExternas = 0;
+const foodyGets = [];
 // Quem está "logado" no contexto (o servidor de teste monta req.acesso a partir daqui, como requireContexto faria).
 const sessao = { perfil: ADM_T, org: ORG_T, unidade: UNI_T, papel: "organization_admin", impersonando: false };
 
@@ -47,6 +48,9 @@ before(async () => {
   const req = createRequire(new URL("../../backend/package.json", import.meta.url));
   express = req("express");
   const { criarFoodyAdminRouter } = await back("src/modules/foody-admin/foodyAdmin.routes.js");
+  const { criarFoodySyncRouter } = await back("src/modules/foody-admin/foodyAdmin.sync.routes.js");
+  const { criarClienteFoody } = await back("src/modules/foody/foody.client.js");
+  const { pedidoApi } = await back("test/helpers/foody-fixtures.js");
   const { errorHandler } = await back("src/middlewares/errorHandler.js");
   const { permissoesDoPapel } = await back("src/shared/permissoes.js");
   const { criarSegurancaFoody } = await back("src/modules/foody/foody.seguranca.js");
@@ -75,6 +79,20 @@ before(async () => {
       impersonando: sessao.impersonando, empresa: { id: sessao.org, nome: NOMES_ORG[sessao.org], status: "ativa" } };
     next();
   });
+  // API Foody FALSA (só para a sincronização manual): pedidos de ONTEM em Brasília, Subway + Açaí + um item desconhecido.
+  const ontem = new Date(Date.now() - 3 * 3600_000 - 86_400_000).toISOString().slice(0, 10);
+  const pedidosFoody = [
+    pedidoApi({ uid: "b-s1", pontoColeta: "Loja Subway Centro", orderDetails: "1x Sub Frango Teriyaki 15cm", date: `${ontem}T11:00:00-03:00` }),
+    pedidoApi({ uid: "b-a1", pontoColeta: "Loja Subway Centro", orderDetails: "1x Açaí Premium 500ml", date: `${ontem}T12:00:00-03:00` }),
+    pedidoApi({ uid: "b-t1", pontoColeta: "Loja Subway Centro", orderDetails: "1x Produto Novo Misterioso", date: `${ontem}T13:00:00-03:00` }),
+  ];
+  const criarCliente = ({ token, ...r }) => criarClienteFoody({ token, ...r, esperar: async () => {}, fetch: async (url) => {
+    foodyGets.push(String(url));
+    const u = new URL(String(url)); const ini = Date.parse(u.searchParams.get("startDate")), fim = Date.parse(u.searchParams.get("endDate"));
+    return { ok: true, status: 200, json: async () => structuredClone(pedidosFoody.filter((o) => Date.parse(o.date) >= ini && Date.parse(o.date) < fim)) };
+  } });
+  app.use("/api/v1/integracoes/foody/sincronizacoes", criarFoodySyncRouter({ db, env, seguranca: () => criarSegurancaFoody(env.FOODY_CENTRAL_SECRET),
+    criarCliente, auditoria: async () => {} }));
   app.use("/api/v1/integracoes/foody", criarFoodyAdminRouter({ db, env, plataforma, seguranca: () => criarSegurancaFoody(env.FOODY_CENTRAL_SECRET) }));
   app.use("/api", (_q, res) => res.status(404).json({ error: "não encontrado" }));
   app.use(errorHandler);
@@ -262,6 +280,44 @@ describe("Foody Delivery — navegador real", OPC, () => {
     await foto(pagina, "foody-390-triagem");
     assert.deepEqual(erros, []);
     await ctx.close();
+  });
+
+  test("sincronização manual: só a titular vê a aba; desligada informa; ligada sincroniza ontem e mostra contagens (sem valores)", async () => {
+    Object.assign(sessao, { perfil: ADM_D, org: ORG_D, unidade: UNI_D, impersonando: false });
+    let { ctx, pagina, erros } = await abrir(browser);
+    let s = secao(pagina);
+    await s.getByRole("tab", { name: /Conexão/ }).waitFor();
+    assert.equal(await s.getByRole("tab", { name: /Sincronização/ }).count(), 0, "o destino não tem a aba");
+    await ctx.close();
+
+    Object.assign(sessao, { perfil: ADM_T, org: ORG_T, unidade: UNI_T });
+    ({ ctx, pagina, erros } = await abrir(browser));
+    s = secao(pagina);
+    await s.getByRole("tab", { name: /Sincronização/ }).click();
+    await s.getByText(/coleta está desligada no servidor para esta unidade/).waitFor();
+    assert.equal(await s.getByRole("button", { name: /Sincronizar/ }).count(), 0);
+    await ctx.close();
+
+    Object.assign(env, { FOODY_CENTRAL_ENABLED: "true", FOODY_CENTRAL_UNIDADES: UNI_T, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "true" });
+    ({ ctx, pagina, erros } = await abrir(browser));
+    s = secao(pagina);
+    await s.getByRole("tab", { name: /Sincronização/ }).click();
+    await s.getByRole("button", { name: /Sincronizar/ }).click();
+    await pagina.locator("dialog.cfg-dialogo").getByRole("button", { name: "Sincronizar" }).click();
+    await s.getByText(/3 pedidos · 1 Açaí · 1 em triagem/).waitFor();
+    const txt = await s.innerText();
+    assert.match(txt, /Fechamento Açaí no Grau: Consolidado \(versão 1\)/);
+    assert.doesNotMatch(txt, /R\$|\d+,\d{2}\b|taxa|custo/i, "nenhum valor monetário na tela");
+    assert.ok(foodyGets.length >= 1 && foodyGets.every((u) => u.startsWith("https://app.foodydelivery.com/rest/1.2/orders?")));
+    assert.equal(chamadasExternas, 0);
+    assert.ok(db.tabelas.foody_pedidos.some((p) => p.foody_uid === "b-a1" && p.unidade_id === UNI_D && p.roteamento_ativo !== false));
+    await s.getByRole("cell", { name: "Manual" }).first().waitFor();
+    assert.ok(await semRolagemHorizontal(pagina), "sem rolagem horizontal em 390px");
+    assert.deepEqual(await auditarA11y(pagina), []);
+    await foto(pagina, "foody-390-sincronizacao");
+    assert.deepEqual(erros, []);
+    await ctx.close();
+    Object.assign(env, { FOODY_CENTRAL_ENABLED: "false", FOODY_CENTRAL_UNIDADES: "", FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "false" });
   });
 
   test("impersonação: só consulta, nenhum botão de ação; revogar exige motivo no diálogo", async () => {

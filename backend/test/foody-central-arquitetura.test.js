@@ -80,11 +80,15 @@ describe("consumidores controlados", () => {
   // Exceções, e SÓ elas: o gerador OFFLINE do catálogo (148) e a camada de ADMINISTRAÇÃO pela tela (146, modules/foody-admin).
   // `sep` no fim: "modules/foody-admin" começa com "modules/foody" e não pode passar por dentro do módulo.
   const GERADOR_CATALOGO = join(RAIZ, "scripts", "foody-gerar-catalogo.mjs");
+  const PARIDADE = join(RAIZ, "scripts", "foody-paridade.mjs");
   const ADMIN = join(RAIZ, "src", "modules", "foody-admin");
-  const doAdmin = arquivos(ADMIN);
+  // A SINCRONIZAÇÃO MANUAL (piloto em sombra) é o único caminho de coleta fora do módulo: arquivo próprio, separado do router
+  // de administração, e só alcança a coleta via foody.sync.manual.js.
+  const SYNC_ROTAS = join(ADMIN, "foodyAdmin.sync.routes.js");
+  const doAdmin = arquivos(ADMIN).filter((p) => p !== SYNC_ROTAS);
   test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline e a camada foody-admin)", () => {
     const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO + sep));
-    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && !p.startsWith(ADMIN + sep)
+    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== PARIDADE && !p.startsWith(ADMIN + sep)
       && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(culpados.map((p) => relative(RAIZ, p)), []);
   });
@@ -98,10 +102,29 @@ describe("consumidores controlados", () => {
       assert.doesNotMatch(s, /\bfetch\(|setInterval|setTimeout|sincronizar|executarCiclo/, relative(RAIZ, p));
     }
   });
-  test("só routes.js monta a camada foody-admin, e só no tenant", () => {
+  test("só routes.js monta a camada foody-admin, e só no tenant (sincronização ANTES da administração)", () => {
     const quem = arquivos(join(RAIZ, "src")).filter((p) => !p.startsWith(ADMIN + sep) && /from\s+["'][^"']*foody-admin\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(quem.map((p) => relative(RAIZ, p).split(sep).join("/")), ["src/routes.js"]);
-    assert.match(readFileSync(join(RAIZ, "src", "routes.js"), "utf8"), /^tenant\.use\("\/integracoes\/foody", foodyAdminRouter\);$/m);
+    const rotas = readFileSync(join(RAIZ, "src", "routes.js"), "utf8");
+    assert.match(rotas, /^tenant\.use\("\/integracoes\/foody\/sincronizacoes", foodySyncRouter\);\r?\ntenant\.use\("\/integracoes\/foody", foodyAdminRouter\);$/m);
+    assert.equal((rotas.match(/foodySyncRouter/g) ?? []).length, 2, "importado e montado uma única vez");
+  });
+  test("rota de sincronização manual: só alcança a coleta via foody.sync.manual.js; sem agendador, timer, fetch nem escrita direta", () => {
+    const fonte = readFileSync(SYNC_ROTAS, "utf8");
+    const imports = [...fonte.matchAll(/(?:import|from)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]);
+    const doModulo = imports.filter((i) => i.startsWith("../foody/")).sort();
+    assert.deepEqual(doModulo, ["../foody/foody.compartilhamento.service.js", "../foody/foody.constants.js", "../foody/foody.repository.js",
+      "../foody/foody.seguranca.js", "../foody/foody.sync.manual.js"]);
+    for (const i of imports) assert.doesNotMatch(i, /whatsapp|notifica|comunicacao|checklist|agente|parser|dashboard/i, i);
+    const s = semComentarios(fonte);
+    assert.doesNotMatch(s, /fetch\(|setInterval|setTimeout|executarCiclo|criarAgendador|\.(insert|update|upsert|delete|rpc)\(|\.from\(/);
+    assert.match(s, /router\.use\(semCache, semImpersonacao, requirePermissao\(PERMISSOES\.INTEGRACOES_GERENCIAR\)\)/);
+    // O orquestrador manual: flags de administração E de coleta, admin da titular, limites e trava de concorrência.
+    const manual = semComentarios(readFileSync(join(MODULO, "foody.sync.manual.js"), "utf8"));
+    assert.match(manual, /!administracaoPermitida\(env\) \|\| !unidadePermitida\(env, t\.unidadeId\)/);
+    assert.match(manual, /ehAdminDaOrganizacao\(ator, t\.organizacaoId\)/);
+    assert.match(manual, /listarExecucoesEmAndamento/);
+    assert.doesNotMatch(manual, /setInterval|setTimeout|whatsapp|notifica|comunicacao/i);
   });
   test("a camada foody-admin só escreve via serviço do módulo (sem insert/update/upsert/delete/rpc direto)", () => {
     for (const p of doAdmin) {
@@ -109,6 +132,16 @@ describe("consumidores controlados", () => {
       assert.doesNotMatch(s, /\.(insert|update|upsert|delete|rpc)\(/, relative(RAIZ, p));
       for (const [, t] of s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)) assert.ok(["organizacoes", "unidades", "usuarios_organizacoes"].includes(t), `${relative(RAIZ, p)}: ${t}`);
     }
+  });
+  test("o script de paridade é SOMENTE LEITURA: transação read only, só SELECT, só importa o comparador e a consolidação do Parser", () => {
+    const s = semComentarios(readFileSync(PARIDADE, "utf8"));
+    assert.match(s, /begin transaction read only;/); assert.match(s, /\$\{sql\}\\nrollback;\\n`/, "a transação termina em ROLLBACK");
+    assert.doesNotMatch(s, /\b(insert into|update \w+ set|delete from|truncate|alter table|drop |create |grant )/i);
+    assert.doesNotMatch(s, /\.(insert|update|upsert|delete|rpc)\(|config\/supabase|fetch\(/);
+    const imports = [...s.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]).filter((i) => !i.startsWith("node:")).sort();
+    assert.deepEqual(imports, ["../src/modules/foody/foody.paridade.js", "../src/modules/parser-food-delivery/parserFoodDelivery.periodo.js"]);
+    const comparador = semComentarios(readFileSync(join(MODULO, "foody.paridade.js"), "utf8"));
+    assert.doesNotMatch(comparador, /import |\.from\(|fetch\(/, "comparador é puro");
   });
   test("o gerador do catálogo só faz SELECT e só importa gerador/classificação", () => {
     const s = semComentarios(readFileSync(GERADOR_CATALOGO, "utf8"));

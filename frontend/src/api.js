@@ -618,5 +618,14 @@ export const foodyRevogarCompartilhamento = (id, motivo) => postJson(`${FOODY}/c
 export const foodyTriagemDias = (conexaoId) => getJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem/dias`);
 export const foodyTriagem = (conexaoId, competencia) => getJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem?competencia=${encodeURIComponent(competencia)}`);
 export const foodyTriagemDecisoes = (conexaoId) => getJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem/decisoes`);
+// Sincronização MANUAL (piloto em sombra): só a titular; a chave de idempotência evita reenvio duplicado por clique repetido.
+export const foodySincronizacoes = () => getJson(`${FOODY}/sincronizacoes`);
+export async function foodySincronizar({ competencias, motivo = null }, chave) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${FOODY}/sincronizacoes`, {
+    method: "POST", headers: await comAuth({ "Content-Type": "application/json", "Idempotency-Key": chave }), body: JSON.stringify({ competencias, motivo }),
+  });
+  return tratar(r, g);
+}
 export const foodyDecidir = (conexaoId, foodyUid, operacao, motivo) =>
   postJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem/${idFoody(foodyUid)}/decisao`, { operacao, motivo });

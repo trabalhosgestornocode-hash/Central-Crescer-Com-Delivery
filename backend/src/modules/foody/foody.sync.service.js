@@ -85,8 +85,13 @@ export async function sincronizarCompetencia(pedido, deps) {
   log("info", "foody.sync.inicio", { unidade: unidadeId, competencia, origem, execucaoId }, { segredos });
 
   try {
-    const cliente = criarCliente({ token });
+    // Limites opcionais (sincronização MANUAL): menos páginas por dia e teto de pedidos ANTES de gravar qualquer linha.
+    const limites = deps?.limites ?? {};
+    const cliente = criarCliente(Number.isInteger(limites.maxPaginas) && limites.maxPaginas > 0 ? { token, maxPaginas: limites.maxPaginas } : { token });
     const { pedidos, cobertura } = await cliente.listarPedidos(janela);
+    if (Number.isInteger(limites.maxPedidos) && cobertura.unicos > limites.maxPedidos) {
+      throw new FoodySyncErro("LIMITE_PEDIDOS", `mais de ${limites.maxPedidos} pedidos no dia — nada foi gravado.`);
+    }
 
     const errosSaneamento = {};
     let foraJanela = 0, pontoDivergente = 0;

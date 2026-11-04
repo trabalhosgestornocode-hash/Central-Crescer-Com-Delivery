@@ -243,6 +243,10 @@ export const ACOES = {
   FINANCEIRO_CONCESSAO_CONCEDIDA: "financeiro.concessao_concedida",
   FINANCEIRO_CONCESSAO_REVOGADA: "financeiro.concessao_revogada",
   FINANCEIRO_CONCESSAO_ALTERADA: "financeiro.concessao_alterada",
+
+  // Sincronização MANUAL Foody (piloto em sombra). `detalhes` só com unidade, dias, códigos e contagens; nunca token nem valores.
+  FOODY_SYNC_MANUAL_EXECUTADA: "foody.sync_manual_executada",
+  FOODY_SYNC_MANUAL_RECUSADA: "foody.sync_manual_recusada",
 };
 
 /**

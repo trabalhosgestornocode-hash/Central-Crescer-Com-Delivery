@@ -100,6 +100,29 @@ export function criarRepositorioFoody(db) {
       if (error) throw falha("concluirExecucao", error);
     },
 
+    /** Execuções EM_ANDAMENTO da conexão desta unidade (trava de concorrência da sincronização manual/agendada). */
+    async listarExecucoesEmAndamento(t, conexaoId) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_sync_execucoes").select("id, competencia, origem, iniciado_em, organizacao_id, unidade_id")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId).eq("status", "EM_ANDAMENTO")
+        .order("iniciado_em", { ascending: false }).limit(20);
+      if (error) throw falha("listarExecucoesEmAndamento", error);
+      for (const r of data ?? []) if (r.organizacao_id !== t.organizacaoId || r.unidade_id !== t.unidadeId) throw falha("listarExecucoesEmAndamento", { code: "TENANT" });
+      return data ?? [];
+    },
+
+    /** Últimas execuções da unidade (só contagens e códigos; nunca pedidos nem valores). */
+    async listarExecucoesRecentes(t, limite = 20) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_sync_execucoes")
+        .select("id, competencia, origem, status, paginas, pedidos_recebidos, pedidos_unicos, pedidos_fora_janela, pedidos_ponto_divergente, inseridos, atualizados, inalterados, erro_codigo, iniciado_em, concluido_em, fechamentos_pendentes, organizacao_id, unidade_id")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId)
+        .order("iniciado_em", { ascending: false }).limit(Math.min(Math.max(1, limite), 100));
+      if (error) throw falha("listarExecucoesRecentes", error);
+      for (const r of data ?? []) if (r.organizacao_id !== t.organizacaoId || r.unidade_id !== t.unidadeId) throw falha("listarExecucoesRecentes", { code: "TENANT" });
+      return data ?? [];
+    },
+
     /** uid → { fonte_hash, primeira_execucao_id } dos pedidos já gravados desta unidade. */
     async carregarExistentes(t, uids, colunas = "foody_uid, fonte_hash, primeira_execucao_id") {
       exigirTenant(t);
