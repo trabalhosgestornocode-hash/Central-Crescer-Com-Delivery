@@ -1,6 +1,6 @@
 // Feature flags da camada central Foody. Fail-closed: qualquer valor que não seja exatamente "true" = desligado;
 // allowlist vazia = nenhuma unidade.
-import { FLAG_HABILITADO, FLAG_AGENDADOR, FLAG_UNIDADES, FLAG_COMPARTILHAMENTO } from "./foody.constants.js";
+import { FLAG_HABILITADO, FLAG_AGENDADOR, FLAG_UNIDADES, FLAG_COMPARTILHAMENTO, FLAG_ADMINISTRACAO } from "./foody.constants.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ligada = (v) => String(v ?? "").trim().toLowerCase() === "true";
@@ -11,6 +11,7 @@ export function lerFlagsFoody(env = process.env) {
     habilitado: ligada(env[FLAG_HABILITADO]),
     agendadorHabilitado: ligada(env[FLAG_AGENDADOR]),
     compartilhamentoHabilitado: ligada(env[FLAG_COMPARTILHAMENTO]),
+    administracaoHabilitada: ligada(env[FLAG_ADMINISTRACAO]),
     unidades,
   };
 }
@@ -31,4 +32,12 @@ export function agendamentoPermitido(env = process.env) {
 export function compartilhamentoPermitido(env = process.env) {
   const f = lerFlagsFoody(env);
   return f.habilitado && f.compartilhamentoHabilitado;
+}
+
+/**
+ * Administração pela tela (cadastro da conexão, vínculo, triagem). INDEPENDENTE da sincronização: não exige — e não liga —
+ * FOODY_CENTRAL_ENABLED, a allowlist nem o agendador.
+ */
+export function administracaoPermitida(env = process.env) {
+  return lerFlagsFoody(env).administracaoHabilitada;
 }

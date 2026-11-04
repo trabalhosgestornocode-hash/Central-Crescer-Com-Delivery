@@ -25,7 +25,7 @@ const D = "2026-10-25";
 let agoraAtual = new Date("2026-10-26T15:00:00Z");
 const AGORA = () => agoraAtual;
 const seguranca = criarSegurancaFoody(SEGREDO_TESTE);
-const ENV = { FOODY_CENTRAL_ENABLED: "true", FOODY_CENTRAL_UNIDADES: UNI_A, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "true" };
+const ENV = { FOODY_CENTRAL_ENABLED: "true", FOODY_CENTRAL_UNIDADES: UNI_A, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "true", FOODY_CENTRAL_ADMIN_ENABLED: "true" };
 const CX = `cx-${UNI_A}`;
 const SUB = "1x Sub Frango Teriyaki 15cm", ACAI = "1x Açaí Premium 500ml", NOVO = "1x Produto Novo Misterioso";
 
@@ -69,7 +69,7 @@ describe("1. privacidade da triagem", () => {
     const admC = { perfilId: "c1000000-0000-4000-8000-000000000003", papel: "organization_admin", impersonando: false, organizacaoId: ORG_C };
     const l = await listarTriagem({ ator: admC, conexaoId: CX, competencia: D }, { env: ENV, repo });
     assert.deepEqual(l.map((x) => [x.foodyUid, x.linhasSemEvidencia]), [["t1", ["produto novo misterioso"]], ["t2", []]]);
-    for (const x of l) assert.deepEqual(Object.keys(x).sort(), ["catalogoVersao", "competencia", "dataHora", "foodyUid", "linhasSemEvidencia", "motivo", "numeroPedido", "resumo", "situacao"]);
+    for (const x of l) assert.deepEqual(Object.keys(x).sort(), ["catalogoVersao", "competencia", "dataHora", "decisaoPendente", "foodyUid", "linhasSemEvidencia", "motivo", "numeroPedido", "resumo", "situacao"]);
     assert.ok(!JSON.stringify(l).match(/teriyaki|a[cç]a[ií] premium/i));
   });
   test("linhasParaTriagem: só sem evidência ou com evidência das duas na mesma linha", () => {

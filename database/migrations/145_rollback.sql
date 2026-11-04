@@ -12,6 +12,10 @@ set local lock_timeout = '5s';
 do $$
 declare tem boolean;
 begin
+  -- A 146 (administração da conexão) depende da 145: desfaça a 146 primeiro.
+  if to_regclass('public.foody_conexoes_eventos') is not null then
+    raise exception 'rollback 145 recusado: a migration 146 está aplicada. Rode o 146_rollback.sql antes (ou o rollback da 144).' using errcode = '55000';
+  end if;
   -- IFs aninhados: a expressão inteira é preparada de uma vez, e a tabela pode já não existir (rollback idempotente).
   if to_regclass('public.foody_conexao_destinos') is not null then
     if exists (select 1 from foody_conexao_destinos) then

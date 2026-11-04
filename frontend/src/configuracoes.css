@@ -140,6 +140,28 @@
 .ntf-tabela td { padding: 8px; border-bottom: 1px solid var(--linha); vertical-align: top; }
 .ntf-tabela td small { display: block; color: var(--cinza); }
 
+/* ---- Foody Delivery (Integrações) ---- */
+.fdy-dados { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px; margin: 0 0 12px; }
+.fdy-dados > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.fdy-dados dt { font-size: 11.5px; font-weight: 700; color: var(--cinza); text-transform: uppercase; letter-spacing: .3px; }
+.fdy-dados dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.fdy-acoes { flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.fdy-sub { font-size: 14px; margin: 14px 0 8px; }
+.fdy-nota { font-size: 13px; color: var(--cinza); margin: 0; }
+.fdy-detalhe { border: 1px solid var(--linha); border-radius: 11px; padding: 10px 12px; margin-top: 10px; }
+.fdy-detalhe > summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.fdy-detalhe[open] > summary { margin-bottom: 10px; }
+.fdy-detalhe > summary:focus-visible, .fdy button:focus-visible, .fdy input:focus-visible, .fdy select:focus-visible, .fdy textarea:focus-visible,
+.cfg-dialogo textarea:focus-visible { outline: 2px solid var(--verde-vivo); outline-offset: 2px; }
+.fdy-dias { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.fdy-itens { margin: 4px 0 0; padding-left: 18px; font-size: 13.5px; overflow-wrap: anywhere; }
+.fdy-perigo { color: var(--bad); border-color: var(--bad-bg); }
+.fdy-qtd { font-weight: 500; opacity: .9; }
+.fdy-mesma { display: inline-flex; gap: 4px; align-items: center; }
+.fdy-vinculo { align-items: flex-start; }
+.fdy .ntf-registro > span:first-child { overflow-wrap: anywhere; }
+.cfg-dialogo textarea { width: 100%; padding: 8px 10px; border: 1.5px solid var(--linha); border-radius: 9px; background: var(--campo-bg); color: var(--texto); font: inherit; resize: vertical; box-sizing: border-box; }
+
 @media (max-width: 620px) {
   .cfg-horario-dia { grid-template-columns: 1fr 1fr; }
   .cfg-horario-dia .cfg-check { grid-column: 1 / -1; }
@@ -147,4 +169,5 @@
   .cfg-salvar-acoes .btn-primary { flex: 1; }
   .ntf-link { flex-direction: column; }
   .ntf-vinculo-acoes { width: 100%; }
+  .fdy-acoes .btn { flex: 1 1 auto; }
 }

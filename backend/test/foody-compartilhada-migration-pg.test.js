@@ -236,6 +236,10 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
 
   test("rollback 145: recusa com dado compartilhado; limpo, volta à 144 (regras originais) e reaplica", () => {
     const rb = () => psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_rollback.sql") });
+    // A 146 (administração) depende da 145: com ela aplicada a 145 se recusa a sair. Tira a 146 primeiro (sem eventos).
+    ok(`set session_replication_role = replica; delete from foody_conexoes_eventos; set session_replication_role = origin;`);
+    const r146 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "146_rollback.sql") });
+    assert.equal(r146.ok, true, r146.err);
     const r = rb();
     assert.equal(r.ok, false); assert.match(r.err, /rollback 145 recusado/);
     // Banco limpo da 145: só dados no formato da 144.
@@ -258,6 +262,8 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
     const r3 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_foody_conexao_compartilhada.sql") });
     assert.equal(r3.ok, true, r3.err);
     assert.equal(um(`select count(*) from pg_tables where tablename like 'foody_%';`), "7");
+    const r146b = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "146_foody_conexao_administracao.sql") });
+    assert.equal(r146b.ok, true, `146 reaplica sobre a 145 reaplicada: ${r146b.err}`);
     assert.equal(um(`select count(*) from information_schema.columns where table_name = 'foody_sync_execucoes'
       and column_name in ('catalogo_versao', 'fechamentos', 'fechamentos_pendentes');`), "3");
     // Pedido gravado no formato da 144 ganha a conexão da própria execução ao reaplicar (entra na unicidade global).
