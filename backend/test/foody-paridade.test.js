@@ -21,7 +21,7 @@ describe("comparador puro", () => {
         p({ numero_pedido: "102", data_hora: `${D}T13:00:00Z`, situacao: "Cancelado" })] });
     assert.equal(r.resultado, "PARIDADE", JSON.stringify(r.motivos));
     assert.deepEqual(r.contagens, { foody: 3, parser: 3, pareados: 3, soFoody: 0, soParser: 0 });
-    assert.deepEqual(r.somas.taxaEntregador, { foody: 27, parser: 27 });
+    assert.deepEqual(r.somas.taxaEntregador, { foody: 27, parser: 27, diferencaPares: 0, soFoody: 0, soParser: 0 });
     assert.deepEqual(r.porOperacao.foody, { subway: 2, acai_no_grau: 1 });
   });
   test("pedido faltando de cada lado, taxa e situação divergentes, troca Subway↔Açaí: DIVERGENTE com cada motivo", () => {
@@ -31,11 +31,28 @@ describe("comparador puro", () => {
       parser: [p({}), p({ numero_pedido: "201", data_hora: `${D}T14:30:00Z` }), p({ numero_pedido: "300", data_hora: `${D}T15:00:00Z` }),
         p({ numero_pedido: "400", data_hora: `${D}T16:00:00Z` }), p({ numero_pedido: "500", data_hora: `${D}T17:00:00Z` })] });
     assert.equal(r.resultado, "DIVERGENTE");
-    assert.deepEqual(r.motivos, ["PEDIDO_SO_NA_FOODY", "PEDIDO_SO_NO_PARSER", "SITUACAO_DIVERGENTE", "TAXA_DIVERGENTE", "TROCA_DE_OPERACAO"]);
+    assert.deepEqual(r.motivos, ["PEDIDO_SO_NA_FOODY", "PEDIDO_SO_NO_PARSER", "CANCELAMENTO_DIVERGENTE", "TAXA_DIVERGENTE", "TROCA_DE_OPERACAO"]);
     assert.deepEqual(r.divergencias.soFoody.exemplos, ["200"]); assert.deepEqual(r.divergencias.soParser.exemplos, ["201"]);
-    assert.deepEqual(r.divergencias.taxa.exemplos, ["300"]); assert.deepEqual(r.divergencias.situacao.exemplos, ["400"]);
+    assert.deepEqual(r.divergencias.taxa.exemplos, ["300"]); assert.deepEqual(r.divergencias.cancelamento.exemplos, ["400"]);
+    assert.equal(r.divergencias.situacao.quantidade, 0, "cancelamento não se mistura com outra situação");
     assert.deepEqual(r.divergencias.trocaOperacao.exemplos, ["500"]);
     assert.equal(r.divergencias.valor.quantidade, 0, "valor nulo (mínimo) na Foody não é divergência");
+    assert.equal(r.somas.taxaEntregador.diferencaPares, 2); assert.equal(r.somas.taxaEntregador.soFoody, 10); assert.equal(r.somas.taxaEntregador.soParser, 10);
+    assert.deepEqual(r.cancelamentos, { foody: 1, parser: 0, comTaxaFoody: 1, comTaxaParser: 0 });
+    assert.deepEqual(r.limitacoes, ["VALOR_MINIMO_TITULAR"]);
+  });
+  test("taxa ausente na Foody (API sem valor) continua divergência, contada à parte; situação ≠ cancelamento; triagem dos dois lados", () => {
+    const r = compararParidadeDia({ competencia: D,
+      foody: [f({ taxa_entregador: null }), f({ numero_pedido: "2", data_hora: `${D}T12:00:00`, situacao: "Entregue" }),
+        f({ numero_pedido: "3", data_hora: `${D}T13:00:00`, operacao: "triagem" })],
+      parser: [p({}), p({ numero_pedido: "2", data_hora: `${D}T12:00:00Z` }), p({ numero_pedido: "3", data_hora: `${D}T13:00:00Z`, operacao: "revisao_necessaria" })] });
+    assert.deepEqual(r.motivos, ["SITUACAO_DIVERGENTE", "TAXA_DIVERGENTE"]);
+    assert.deepEqual(r.divergencias.taxaAusenteFoody.exemplos, ["100"]); assert.equal(r.somas.taxaEntregador.diferencaPares, -10);
+    assert.deepEqual(r.triagem, { foody: 1, parser: 1 });
+    const s = resumirParidade([r]);
+    assert.equal(s.taxaLogistica.ausenteNaFoody, 1); assert.equal(s.taxaLogistica.diferencaPares, -10); assert.equal(s.cancelamentos.divergentes, 0);
+    assert.deepEqual(s.triagem, { foody: 1, parser: 1 });
+    assert.deepEqual(s.limitacoes.map((x) => x.codigo), ["SEM_DATA_CANCELAMENTO", "SEM_ORIGEM_PEDIDO", "ENTREGADOR_SO_HASH", "VALOR_MINIMO_TITULAR"]);
   });
   test("mesmo número com horário diferente (único no dia): pareia e aponta só a divergência de horário", () => {
     const r = compararParidadeDia({ competencia: D, foody: [f({ data_hora: `${D}T11:05:00` })], parser: [p({})] });

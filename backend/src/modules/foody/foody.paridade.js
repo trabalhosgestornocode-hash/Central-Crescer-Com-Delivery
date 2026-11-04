@@ -10,6 +10,22 @@
 //
 // Critério de aceite do dia (PARIDADE): nenhum pedido só de um lado, situação e taxa do entregador iguais em todos os pares e
 // nenhuma troca Subway ↔ Açaí. Pedido em triagem na Foody não reprova o dia (é pendência humana), mas é contado.
+//
+// Categorias SEPARADAS (nenhuma esconde a outra):
+//   - taxa logística: pares com taxa diferente + soma da diferença (Foody − Parser) + taxa de pedido só de um lado + taxa ausente
+//     na Foody (a API não trouxe valor — continua divergência, não é "zero");
+//   - cancelamento: cancelado num lado e não no outro (CANCELAMENTO_DIVERGENTE) é distinto de outra situação divergente;
+//     contagem de cancelados (e cancelados COM taxa) em cada lado;
+//   - triagem: pedidos em triagem na Foody e em revisão no Parser, contados à parte;
+//   - limitações conhecidas da API (LIMITACOES_API): o que a comparação NÃO consegue provar, sempre declarado no resumo.
+
+/** Limitações conhecidas da API Foody (auditoria 03/11) que a paridade não consegue verificar — vão sempre no resumo. */
+export const LIMITACOES_API = Object.freeze([
+  { codigo: "SEM_DATA_CANCELAMENTO", efeito: "a API não informa quando o pedido foi cancelado: o cancelado entra no dia do pedido" },
+  { codigo: "SEM_ORIGEM_PEDIDO", efeito: "a API não informa o canal de origem: não há conferência por canal" },
+  { codigo: "ENTREGADOR_SO_HASH", efeito: "nome do entregador não é guardado: não há conferência por entregador" },
+  { codigo: "VALOR_MINIMO_TITULAR", efeito: "pedido de outra operação sem destino fica com valor nulo na titular: valor do pedido não é comparado" },
+]);
 
 const AMOSTRA = 10;
 const TOL_CENTAVOS = 0.005;
@@ -18,7 +34,9 @@ const TOL_HORARIO_S = 60;
 export const parede = (v) => (v == null || v === "" ? null : String(v).replace(" ", "T").slice(0, 19));
 const num = (v) => (v == null || v === "" ? null : Number(v));
 const igualValor = (a, b) => (a == null && b == null) || (a != null && b != null && Math.abs(a - b) < TOL_CENTAVOS);
-const soma = (xs, campo) => Math.round(xs.reduce((s, x) => s + (num(x[campo]) ?? 0), 0) * 100) / 100;
+const arred = (v) => Math.round(v * 100) / 100;
+const soma = (xs, campo) => arred(xs.reduce((s, x) => s + (num(x[campo]) ?? 0), 0));
+const CANCELADO = "Cancelado";
 const porChave = (xs, f) => xs.reduce((m, x) => { const k = f(x); m[k] = (m[k] ?? 0) + 1; return m; }, {});
 const segundos = (a, b) => Math.abs(Date.parse(`${a}Z`) - Date.parse(`${b}Z`)) / 1000;
 
@@ -57,11 +75,16 @@ export function compararParidadeDia({ competencia, foody = [], parser = [] }) {
     }
   }
 
-  const div = { situacao: [], taxa: [], valor: [], horario: [], trocaOperacao: [], triagemFoody: [] };
+  const div = { situacao: [], cancelamento: [], taxa: [], taxaAusenteFoody: [], valor: [], horario: [], trocaOperacao: [], triagemFoody: [] };
+  let diferencaTaxaPares = 0;
   for (const [i, j] of pares) {
     const f = F[i], p = P[j];
-    if (f.situacao !== p.situacao) div.situacao.push(f.numero);
-    if (!igualValor(f.taxa, p.taxa)) div.taxa.push(f.numero);
+    if (f.situacao !== p.situacao) ((f.situacao === CANCELADO) !== (p.situacao === CANCELADO) ? div.cancelamento : div.situacao).push(f.numero);
+    if (!igualValor(f.taxa, p.taxa)) {
+      div.taxa.push(f.numero);
+      if (f.taxa == null) div.taxaAusenteFoody.push(f.numero);
+      diferencaTaxaPares += (f.taxa ?? 0) - (p.taxa ?? 0);
+    }
     // Valor do pedido de OUTRA operação fica mínimo na titular (null) quando não há destino: não é divergência.
     if (f.valor != null && !igualValor(f.valor, p.valor)) div.valor.push(f.numero);
     if (f.hora && p.hora && segundos(f.hora, p.hora) > TOL_HORARIO_S) div.horario.push(f.numero);
@@ -73,9 +96,13 @@ export function compararParidadeDia({ competencia, foody = [], parser = [] }) {
   const motivos = [];
   if (soFoody.length) motivos.push("PEDIDO_SO_NA_FOODY");
   if (soParser.length) motivos.push("PEDIDO_SO_NO_PARSER");
+  if (div.cancelamento.length) motivos.push("CANCELAMENTO_DIVERGENTE");
   if (div.situacao.length) motivos.push("SITUACAO_DIVERGENTE");
   if (div.taxa.length) motivos.push("TAXA_DIVERGENTE");
   if (div.trocaOperacao.length) motivos.push("TROCA_DE_OPERACAO");
+  const cancelados = (xs) => xs.filter((x) => x.situacao === CANCELADO);
+  const cancComTaxa = (xs) => cancelados(xs).filter((x) => (x.taxa ?? 0) > TOL_CENTAVOS).length;
+  const sF = [...livresF].map((i) => F[i]), sP = [...livresP].map((j) => P[j]);
   return {
     competencia,
     resultado: motivos.length ? "DIVERGENTE" : "PARIDADE",
@@ -83,9 +110,14 @@ export function compararParidadeDia({ competencia, foody = [], parser = [] }) {
     contagens: { foody: F.length, parser: P.length, pareados: pares.length, soFoody: soFoody.length, soParser: soParser.length },
     porOperacao: { foody: porChave(F, (x) => x.operacao), parser: porChave(P, (x) => x.operacao) },
     porSituacao: { foody: porChave(F, (x) => x.situacao ?? "—"), parser: porChave(P, (x) => x.situacao ?? "—") },
-    somas: { taxaEntregador: { foody: soma(F, "taxa"), parser: soma(P, "taxa") } },
+    somas: { taxaEntregador: { foody: soma(F, "taxa"), parser: soma(P, "taxa"),
+      diferencaPares: arred(diferencaTaxaPares), soFoody: soma(sF, "taxa"), soParser: soma(sP, "taxa") } },
+    cancelamentos: { foody: cancelados(F).length, parser: cancelados(P).length, comTaxaFoody: cancComTaxa(F), comTaxaParser: cancComTaxa(P) },
+    triagem: { foody: F.filter((x) => x.operacao === "triagem").length, parser: P.filter((x) => x.operacao === "triagem").length },
+    limitacoes: F.some((x) => x.valor == null) ? ["VALOR_MINIMO_TITULAR"] : [],
     divergencias: {
-      soFoody: amostra(soFoody), soParser: amostra(soParser), situacao: amostra(div.situacao), taxa: amostra(div.taxa),
+      soFoody: amostra(soFoody), soParser: amostra(soParser), situacao: amostra(div.situacao), cancelamento: amostra(div.cancelamento),
+      taxa: amostra(div.taxa), taxaAusenteFoody: amostra(div.taxaAusenteFoody),
       valor: amostra(div.valor), horario: amostra(div.horario), trocaOperacao: amostra(div.trocaOperacao), triagemFoody: amostra(div.triagemFoody),
     },
   };
@@ -102,5 +134,17 @@ export function resumirParidade(dias) {
       soFoody: t.soFoody + d.contagens.soFoody, soParser: t.soParser + d.contagens.soParser,
       trocaOperacao: t.trocaOperacao + d.divergencias.trocaOperacao.quantidade, triagemFoody: t.triagemFoody + d.divergencias.triagemFoody.quantidade }),
     { foody: 0, parser: 0, pareados: 0, soFoody: 0, soParser: 0, trocaOperacao: 0, triagemFoody: 0 }),
+    taxaLogistica: dias.reduce((t, d) => ({
+      foody: arred(t.foody + d.somas.taxaEntregador.foody), parser: arred(t.parser + d.somas.taxaEntregador.parser),
+      diferencaPares: arred(t.diferencaPares + (d.somas.taxaEntregador.diferencaPares ?? 0)),
+      paresDivergentes: t.paresDivergentes + d.divergencias.taxa.quantidade,
+      ausenteNaFoody: t.ausenteNaFoody + (d.divergencias.taxaAusenteFoody?.quantidade ?? 0) }),
+    { foody: 0, parser: 0, diferencaPares: 0, paresDivergentes: 0, ausenteNaFoody: 0 }),
+    cancelamentos: dias.reduce((t, d) => ({ foody: t.foody + (d.cancelamentos?.foody ?? 0), parser: t.parser + (d.cancelamentos?.parser ?? 0),
+      comTaxaFoody: t.comTaxaFoody + (d.cancelamentos?.comTaxaFoody ?? 0), comTaxaParser: t.comTaxaParser + (d.cancelamentos?.comTaxaParser ?? 0),
+      divergentes: t.divergentes + (d.divergencias.cancelamento?.quantidade ?? 0) }),
+    { foody: 0, parser: 0, comTaxaFoody: 0, comTaxaParser: 0, divergentes: 0 }),
+    triagem: dias.reduce((t, d) => ({ foody: t.foody + (d.triagem?.foody ?? 0), parser: t.parser + (d.triagem?.parser ?? 0) }), { foody: 0, parser: 0 }),
+    limitacoes: LIMITACOES_API,
   };
 }
