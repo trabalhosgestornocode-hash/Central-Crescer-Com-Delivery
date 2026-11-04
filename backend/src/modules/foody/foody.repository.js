@@ -100,11 +100,16 @@ export function criarRepositorioFoody(db) {
       if (error) throw falha("concluirExecucao", error);
     },
 
-    /** Execuções EM_ANDAMENTO da conexão desta unidade (trava de concorrência da sincronização manual/agendada). */
-    async listarExecucoesEmAndamento(t, conexaoId) {
+    /**
+     * Execuções EM_ANDAMENTO desta UNIDADE (trava de concorrência da sincronização manual/agendada). O escopo é a unidade — de
+     * QUALQUER conexão dela, inclusive revogada — porque é o mesmo escopo do índice único da 150: uma órfã de conexão antiga
+     * que não fosse vista aqui nunca seria encerrada e bloquearia a unidade para sempre (23505 → CONCORRENCIA).
+     * `_conexaoId` fica na assinatura só por compatibilidade; não filtra.
+     */
+    async listarExecucoesEmAndamento(t, _conexaoId) {
       exigirTenant(t);
       const { data, error } = await db.from("foody_sync_execucoes").select("id, competencia, origem, iniciado_em, organizacao_id, unidade_id")
-        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId).eq("status", "EM_ANDAMENTO")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("status", "EM_ANDAMENTO")
         .order("iniciado_em", { ascending: false }).limit(20);
       if (error) throw falha("listarExecucoesEmAndamento", error);
       for (const r of data ?? []) if (r.organizacao_id !== t.organizacaoId || r.unidade_id !== t.unidadeId) throw falha("listarExecucoesEmAndamento", { code: "TENANT" });

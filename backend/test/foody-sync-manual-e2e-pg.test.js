@@ -105,6 +105,19 @@ describe("sincronização manual ponta a ponta — Postgres real", { skip: motiv
     assert.equal(q(`select count(*) from foody_sync_execucoes where status = 'EM_ANDAMENTO';`), "0");
   });
 
+  test("trava vê as EM_ANDAMENTO da UNIDADE (mesmo escopo do índice da 150), não só da conexão atual", async () => {
+    // Hoje 147 garante uma conexão por unidade (uq_foody_conexoes_unidade), então os escopos coincidem; o alinhamento é defensivo.
+    assert.equal(q(`select count(*) from pg_constraint where conname = 'uq_foody_conexoes_unidade';`), "1");
+    const cx = q(`select id from foody_conexoes limit 1;`);
+    q(`insert into foody_sync_execucoes (organizacao_id, unidade_id, conexao_id, competencia, janela_inicio, janela_fim, origem, regra_versao, iniciado_em)
+       values ('${ORG_T}', '${UNI_T}', '${cx}', '${D2}', '${D2}T03:00:00Z', '${D1}T03:00:00Z', 'agendado', 1, '2026-11-05T08:00:00Z');`);
+    const vistas = await repo.listarExecucoesEmAndamento({ organizacaoId: ORG_T, unidadeId: UNI_T }, "00000000-0000-4000-8000-000000000000");
+    assert.equal(vistas.length, 1, "conexaoId não filtra");
+    const r = await manual([D1]);
+    assert.equal(r.dias[0].erro, undefined);
+    assert.equal(q(`select count(*) from foody_sync_execucoes where status = 'EM_ANDAMENTO';`), "0");
+  });
+
   test("teto de pedidos: execução FALHOU/LIMITE_PEDIDOS e nenhum pedido novo gravado", async () => {
     const antes = q(`select count(*) from foody_pedidos;`);
     todos.push(pedidoApi({ uid: "novo-limite", date: `${D1}T20:00:00-03:00` }));
