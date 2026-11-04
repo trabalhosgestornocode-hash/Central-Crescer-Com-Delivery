@@ -1,6 +1,6 @@
--- 146 — Camada central Foody: ADMINISTRAÇÃO da conexão pela própria Crescer (tela de Configurações → Integrações).
+-- 149 — Camada central Foody: ADMINISTRAÇÃO da conexão pela própria Crescer (tela de Configurações → Integrações).
 --
--- ADITIVA sobre a 144 + 145 (nenhuma das três está aplicada em produção: sobem juntas, com backup e GO próprio). Não toca
+-- ADITIVA sobre a 147 + 148 (nenhuma das três está aplicada em produção: sobem juntas, com backup e GO próprio). Não toca
 -- tabelas fora do prefixo foody_. Não cria nenhum agendamento e não liga sincronização: administrar a conexão (cadastrar, ativar,
 -- pausar, revogar) NUNCA coleta pedidos — a coleta continua dependendo das flags de sincronização (FOODY_CENTRAL_ENABLED +
 -- allowlist + agendador), que são outra decisão.
@@ -10,23 +10,23 @@
 --      o ator precisa ser organization_admin ATIVO da organização da unidade NO MOMENTO da ação (usuarios_organizacoes), a
 --      unidade precisa pertencer à organização, e cada ação gera um evento imutável em foody_conexoes_eventos (mesma transação).
 --   2. Dupla contagem: a unidade que é DESTINO vivo de um compartilhamento não pode ter conexão Foody própria viva (o inverso
---      a 145 já garante), e o token de uma conexão com compartilhamento vivo não pode ser trocado (seria outra conta debaixo de
---      um vínculo aprovado para a anterior). A mesma conta (impressão do token) segue com UMA conexão viva (144).
+--      a 148 já garante), e o token de uma conexão com compartilhamento vivo não pode ser trocado (seria outra conta debaixo de
+--      um vínculo aprovado para a anterior). A mesma conta (impressão do token) segue com UMA conexão viva (147).
 --   3. Transferência/promoção da unidade titular (organizacao_id muda): a conexão ATIVA volta a PAUSADA (a nova organização
---      decide reativar) e o evento fica registrado; os destinos já caem pela 145.
+--      decide reativar) e o evento fica registrado; os destinos já caem pela 148.
 --   4. Eventos: somente inclusão (UPDATE só de organizacao_id, para a transferência de unidade; DELETE recusado).
 --
 -- SEGURANÇA: RLS ligado, NENHUMA policy, nenhum grant a anon/authenticated. service_role: SELECT nos eventos (+ UPDATE de
 -- organizacao_id, exigido por remapear_organizacao_em_tabelas_de_unidade) e EXECUTE na função. O token NUNCA passa em claro por
 -- aqui: a função recebe o token já cifrado pela aplicação (AES-256-GCM, AAD da unidade) e a impressão (12 hex).
--- Rollback: 146_rollback.sql (fail-closed se houver eventos).
+-- Rollback: 149_rollback.sql (fail-closed se houver eventos).
 
 begin;
 set local lock_timeout = '5s';
 
 do $$ begin
   if to_regclass('public.foody_conexao_destinos') is null or to_regprocedure('public.foody_eh_admin_da_organizacao(uuid, uuid)') is null then
-    raise exception '146: exige as migrations 144 e 145 (camada central Foody + conexão compartilhada)';
+    raise exception '149: exige as migrations 147 e 148 (camada central Foody + conexão compartilhada)';
   end if;
 end $$;
 
@@ -236,7 +236,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------------------------------------------------------
--- 4. RLS e privilégios (mesmo padrão da 144/145)
+-- 4. RLS e privilégios (mesmo padrão da 147/148)
 -- ---------------------------------------------------------------------------------------------------------------------------
 alter table foody_conexoes_eventos enable row level security;
 do $$

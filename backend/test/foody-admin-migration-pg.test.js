@@ -1,4 +1,4 @@
-// Migration 146 (administração da conexão Foody pela tela) num Postgres LOCAL e DESCARTÁVEL, schema real (base + 068..146).
+// Migration 149 (administração da conexão Foody pela tela) num Postgres LOCAL e DESCARTÁVEL, schema real (base + 068..146).
 // Só roda com CHECKLIST_PERFIL_PG_URL apontando para host local; caso contrário é PULADO (não é falha). Dados 100% fictícios.
 //
 //   CHECKLIST_PERFIL_PG_URL=postgresql://postgres@127.0.0.1:55431/postgres node --test test/foody-admin-migration-pg.test.js
@@ -15,7 +15,7 @@ const ADM_T = "a1000000-0000-4000-8000-000000000001", ADM_D = "a2000000-0000-400
 const OPS_T = "a3000000-0000-4000-8000-000000000003", ADM_X = "a4000000-0000-4000-8000-000000000004";
 const IMP1 = "0123456789ab", IMP2 = "ba9876543210", IMP3 = "cccccccccccc";
 
-describe("migration 146 — administração da conexão Foody, Postgres real", { skip: motivoPular, timeout: 600_000 }, () => {
+describe("migration 149 — administração da conexão Foody, Postgres real", { skip: motivoPular, timeout: 600_000 }, () => {
   let b;
   const ok = (texto) => { const r = psqlSync(b.url, texto); assert.equal(r.ok, true, r.err); return r.out.trim(); };
   const um = (texto) => ok(texto).split(/\r?\n/).filter(Boolean).pop();
@@ -31,7 +31,7 @@ describe("migration 146 — administração da conexão Foody, Postgres real", {
     from foody_conexoes_eventos where unidade_id = '${uni}';`).split(/\r?\n/).filter(Boolean).pop() ?? "";
 
   before(() => {
-    b = criarBancoDescartavel("foody146");
+    b = criarBancoDescartavel("foody149");
     assert.deepEqual(construirSchemaReal(b.url), []);
     for (const [org, uni] of [[ORG_T, UNI_T], [ORG_T, UNI_T2], [ORG_D, UNI_D], [ORG_X, UNI_X]]) {
       ok(`insert into organizacoes (id, nome) values ('${org}', 'org ${org.slice(0, 4)}') on conflict do nothing;`);
@@ -115,7 +115,7 @@ describe("migration 146 — administração da conexão Foody, Postgres real", {
     recusa(adm("SUBSTITUIR_TOKEN", { imp: IMP3 }), "COMPARTILHAMENTO_VIVO");
     const direto2 = psqlSync(b.url, `update foody_conexoes set token_impressao = '${IMP3}' where id = '${cx}';`);
     assert.equal(direto2.ok, false); assert.match(direto2.err, /COMPARTILHAMENTO_VIVO/);
-    // Revogar a conexão derruba o vínculo (145) e só então o destino pode ter conexão própria.
+    // Revogar a conexão derruba o vínculo (148) e só então o destino pode ter conexão própria.
     assert.equal(adm("REVOGAR", { motivo: "encerrando" }).v, "REGISTRADO|REVOGADA|REVOGADA");
     assert.equal(um(`select estado from foody_conexao_destinos where conexao_id = '${cx}';`), "REVOGADO");
     assert.equal(adm("CADASTRAR", { org: ORG_D, uni: UNI_D, ator: ADM_D, imp: IMP3 }).v, "REGISTRADO|PAUSADA|CADASTRADA");
@@ -151,7 +151,7 @@ describe("migration 146 — administração da conexão Foody, Postgres real", {
     ok(`insert into foody_conexao_destinos (conexao_id, organizacao_id, unidade_id, operacao, estado, organizacao_titular_id, aprovado_titular_por, aprovado_titular_em)
       values ('${cx}', '${ORG_D}', '${UNI_D2}', 'acai_no_grau', 'PENDENTE', '${ORG_T}', '${ADM_T}', now());`);
     const r = comoUsuario(b.url, null, `select transferir_unidade_organizacao('${UNI_T3}', '${ORG_X}', '${ADM_X}');`, { papel: "service_role" });
-    assert.equal(r.ok, true, `a transferência real não pode quebrar com a 146: ${r.err}`);
+    assert.equal(r.ok, true, `a transferência real não pode quebrar com a 149: ${r.err}`);
     assert.equal(um(`select organizacao_id || '|' || status from foody_conexoes where id = '${cx}';`), `${ORG_X}|PAUSADA`);
     assert.equal(um(`select estado from foody_conexao_destinos where conexao_id = '${cx}';`), "REVOGADO");
     assert.equal(um(`select count(*) from foody_conexoes_eventos where conexao_id = '${cx}' and organizacao_id <> '${ORG_X}';`), "0", "eventos remapeados");
@@ -163,50 +163,50 @@ describe("migration 146 — administração da conexão Foody, Postgres real", {
     assert.equal(um(`select organizacao_id || '|' || status from foody_conexoes where id = '${cx}';`), `${ORG_T}|PAUSADA`);
   });
 
-  test("rollbacks: 146 fail-closed com eventos; limpo sai e é idempotente; 145 recusa com a 146; 146 reaplica", () => {
-    const rb146 = () => psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "146_rollback.sql") });
-    const r = rb146();
-    assert.equal(r.ok, false); assert.match(r.err, /146/);
-    const r145 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_rollback.sql") });
-    assert.equal(r145.ok, false); assert.match(r145.err, /146_rollback/);
+  test("rollbacks: 149 fail-closed com eventos; limpo sai e é idempotente; 148 recusa com a 149; 149 reaplica", () => {
+    const rb149 = () => psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "149_rollback.sql") });
+    const r = rb149();
+    assert.equal(r.ok, false); assert.match(r.err, /149/);
+    const r148 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "148_rollback.sql") });
+    assert.equal(r148.ok, false); assert.match(r148.err, /149_rollback/);
     ok(`set session_replication_role = replica; delete from foody_conexoes_eventos; set session_replication_role = origin;`);
-    const r2 = rb146(); assert.equal(r2.ok, true, r2.err);
+    const r2 = rb149(); assert.equal(r2.ok, true, r2.err);
     assert.equal(um(`select count(*) from pg_tables where tablename = 'foody_conexoes_eventos';`), "0");
     assert.equal(um(`select count(*) from pg_proc where proname in ('foody_conexao_administrar', 'foody_conexao_guardas', 'foody_conexao_auditar_transferencia');`), "0");
     assert.equal(um(`select count(*) from pg_trigger where tgname in ('trg_foody_conexoes_guardas', 'trg_foody_conexoes_auditar_transferencia');`), "0");
     assert.ok(Number(um("select count(*) from foody_conexoes;")) >= 3, "conexões preservadas");
-    const r3 = rb146(); assert.equal(r3.ok, true, `idempotente: ${r3.err}`);
-    const r4 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "146_foody_conexao_administracao.sql") });
+    const r3 = rb149(); assert.equal(r3.ok, true, `idempotente: ${r3.err}`);
+    const r4 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "149_foody_conexao_administracao.sql") });
     assert.equal(r4.ok, true, r4.err);
     assert.equal(adm("PAUSAR", { org: ORG_X, uni: UNI_T2, ator: ADM_X }).v, "REGISTRADO|PAUSADA|PAUSADA");
   });
 
-  test("rollback 144 com 145+146 aplicadas: remove a camada INTEIRA (tabelas, funções, triggers) e a cadeia 144→145→146 reaplica", () => {
-    const r = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "144_rollback.sql") });
+  test("rollback 147 com 148+149 aplicadas: remove a camada INTEIRA (tabelas, funções, triggers) e a cadeia 147→148→149 reaplica", () => {
+    const r = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "147_rollback.sql") });
     assert.equal(r.ok, true, r.err);
     assert.equal(um(`select count(*) from pg_tables where schemaname = 'public' and tablename like 'foody\_%';`), "0");
     assert.equal(um(`select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname like 'foody\_%';`), "0");
     assert.equal(um(`select count(*) from pg_trigger where tgname like 'trg_foody%';`), "0");
     assert.equal(um(`select count(*) from unidades where id = '${UNI_T}';`), "1", "nada fora do prefixo foody_ é tocado");
-    for (const m of ["144_foody_camada_central.sql", "145_foody_conexao_compartilhada.sql", "146_foody_conexao_administracao.sql"]) {
+    for (const m of ["147_foody_camada_central.sql", "148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql"]) {
       const a = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, m) }); assert.equal(a.ok, true, `${m}: ${a.err}`);
     }
-    // Reaplicar a 144 e a 146 é idempotente. (A 145 não é reexecutável — constraint sem "if not exists" — mas falha atômica, sem
+    // Reaplicar a 147 e a 149 é idempotente. (A 148 não é reexecutável — constraint sem "if not exists" — mas falha atômica, sem
     // efeito; produção aplica cada migration uma vez. Registrado como observação no PR.)
-    const r145 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_foody_conexao_compartilhada.sql") });
-    if (!r145.ok) assert.match(r145.err, /already exists/);
-    assert.equal(um(`select count(*) from pg_tables where schemaname = 'public' and tablename like 'foody\_%';`), "8", "falha da 145 reexecutada não deixa nada pela metade");
-    for (const m of ["144_foody_camada_central.sql", "146_foody_conexao_administracao.sql"]) {
+    const r148 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "148_foody_conexao_compartilhada.sql") });
+    if (!r148.ok) assert.match(r148.err, /already exists/);
+    assert.equal(um(`select count(*) from pg_tables where schemaname = 'public' and tablename like 'foody\_%';`), "8", "falha da 148 reexecutada não deixa nada pela metade");
+    for (const m of ["147_foody_camada_central.sql", "149_foody_conexao_administracao.sql"]) {
       const a = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, m) }); assert.equal(a.ok, true, `reaplicar ${m}: ${a.err}`);
     }
     assert.equal(adm("CADASTRAR", { imp: IMP1 }).v, "REGISTRADO|PAUSADA|CADASTRADA");
   });
 
-  test("146 sem a 145 aplicada: recusa", () => {
-    const vazio = criarBancoDescartavel("foody146sem145");
+  test("149 sem a 148 aplicada: recusa", () => {
+    const vazio = criarBancoDescartavel("foody149sem148");
     try {
-      const r = psqlSync(vazio.url, "", { arquivo: join(MIGRATIONS_DIR, "146_foody_conexao_administracao.sql") });
-      assert.equal(r.ok, false); assert.match(r.err, /exige as migrations 144 e 145/);
+      const r = psqlSync(vazio.url, "", { arquivo: join(MIGRATIONS_DIR, "149_foody_conexao_administracao.sql") });
+      assert.equal(r.ok, false); assert.match(r.err, /exige as migrations 147 e 148/);
     } finally { vazio.derrubar?.(); }
   });
 });

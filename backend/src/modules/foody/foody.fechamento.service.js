@@ -1,7 +1,7 @@
 // Fechamento logístico versionado de uma competência, a partir de foody_pedidos (já sincronizados) e da prova de cobertura
 // da sincronização. Grava SÓ em foody_fechamentos_logisticos (via foody_fechamento_registrar). Não envia mensagem, não
 // toca operacional_fechamentos, Checklist, Performance nem Agente.
-// CONEXÃO COMPARTILHADA (145): a MESMA sincronização gera um fechamento INDEPENDENTE por organização — o da titular (Subway) e
+// CONEXÃO COMPARTILHADA (148): a MESMA sincronização gera um fechamento INDEPENDENTE por organização — o da titular (Subway) e
 // um por destino ATIVO (Açaí), cada um no próprio tenant, com a própria operação como principal. Nenhum valor é rateado nem
 // transferido entre eles; erro no fechamento de um destino nunca impede o da titular.
 import { randomUUID } from "node:crypto";

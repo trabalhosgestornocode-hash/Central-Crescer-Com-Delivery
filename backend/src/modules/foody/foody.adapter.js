@@ -10,7 +10,7 @@
 // conta da Subway Saci). Esses pedidos ficam no tenant da unidade dona da conta só no MÍNIMO LOGÍSTICO que a unidade tem direito
 // a ver — o próprio entregador, a taxa paga a ele, as datas da entrega e a situação. Os dados COMERCIAIS da outra organização
 // (produtos, valor do pedido, taxa cobrada do cliente, forma de pagamento, motivo/justificativa em texto livre) NUNCA são
-// gravados. O banco reforça com o CHECK ck_foody_pedidos_outra_operacao_minima (migration 144).
+// gravados. O banco reforça com o CHECK ck_foody_pedidos_outra_operacao_minima (migration 147).
 // Pedido em dúvida (revisao_necessaria) mantém os detalhes, porque pode ser da própria unidade e precisa de revisão humana.
 import { createHash } from "node:crypto";
 import { classificarOperacao, OPERACAO } from "../parser-food-delivery/parserFoodDelivery.operacao.js";
@@ -55,10 +55,10 @@ const CAMPOS_CONTEUDO = [
   "data_finalizado", "data_cancelado", "prazo_entrega", "cancelamento_razao", "cancelamento_justificativa",
 ];
 
-/** Campos extras do hash no modo COMPARTILHADO (145): mudar destino, motivo de triagem ou versão do catálogo regrava a linha. */
+/** Campos extras do hash no modo COMPARTILHADO (148): mudar destino, motivo de triagem ou versão do catálogo regrava a linha. */
 const CAMPOS_CONTEUDO_COMPARTILHADO = [...CAMPOS_CONTEUDO, "destino_id", "triagem_motivo", "catalogo_versao"];
 
-/** Hash de conteúdo da linha. Modo da unidade (144) = exatamente o hash de sempre; modo compartilhado inclui os campos da 145. */
+/** Hash de conteúdo da linha. Modo da unidade (147) = exatamente o hash de sempre; modo compartilhado inclui os campos da 148. */
 export function hashConteudoPedido(registro, { compartilhado = false } = {}) {
   const campos = compartilhado ? CAMPOS_CONTEUDO_COMPARTILHADO : CAMPOS_CONTEUDO;
   return sha256(jsonEstavel(Object.fromEntries(campos.map((k) => [k, registro[k] ?? null]))));
@@ -82,7 +82,7 @@ export function minimizarOutraOperacao(registro) {
  * Pedido cru da API → registro saneado. Devolve { registro } ou { erro } (pedido malformado vira pendência, nunca exceção).
  * @param {object} o pedido como veio da API
  * @param {{ hashEntregador: (nome:string)=>string|null, compartilhado?: boolean }} deps
- *   compartilhado = conexão com destino ATIVO (145): a operação vem da classificação ESTRITA (catálogo versionado; item
+ *   compartilhado = conexão com destino ATIVO (148): a operação vem da classificação ESTRITA (catálogo versionado; item
  *   desconhecido = triagem) e NADA é minimizado aqui — quem decide destino e minimização é foody.roteamento.js, antes de gravar.
  */
 export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, catalogo = undefined }) {

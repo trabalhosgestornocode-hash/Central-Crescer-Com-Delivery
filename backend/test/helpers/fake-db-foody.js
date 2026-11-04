@@ -1,8 +1,8 @@
-// Banco FALSO em memória com a API mínima do supabase-js usada por foody.repository.js. Simula as travas da migration 144:
+// Banco FALSO em memória com a API mínima do supabase-js usada por foody.repository.js. Simula as travas da migration 147:
 // tenant (unidade pertence à organização), unicidade (unidade_id, foody_uid) e a função foody_fechamento_registrar.
-// Da 145: tabelas de destino/decisão e a unicidade GLOBAL de linha ativa por (conexao_id, foody_uid) — escrita que deixaria um
+// Da 148: tabelas de destino/decisão e a unicidade GLOBAL de linha ativa por (conexao_id, foody_uid) — escrita que deixaria um
 // uid ativo em dois tenants é recusada (23505) e desfeita, como o índice uq_foody_pedidos_conexao_uid_ativo faria.
-// Da 146: a função foody_conexao_administrar (admin conferido em `admins`, guardas de dupla contagem, evento por ação) — a versão
+// Da 149: a função foody_conexao_administrar (admin conferido em `admins`, guardas de dupla contagem, evento por ação) — a versão
 // real é exercitada no teste com Postgres; aqui ela só precisa ter o MESMO contrato.
 // Registra cada chamada para os testes conferirem os filtros de organização/unidade.
 import { randomUUID } from "node:crypto";
@@ -135,7 +135,7 @@ export function criarFakeDb({ unidades = {}, admins = [] } = {}) {
     return { data: [{ resultado: "REGISTRADO", fechamento_id: linha.id, versao_registrada: linha.versao, status_registrado: linha.status }], error: null };
   }
 
-  // Mesmo contrato de foody_conexao_administrar (146).
+  // Mesmo contrato de foody_conexao_administrar (149).
   let relogio = 0;
   const agoraIso = () => new Date(Date.UTC(2026, 10, 1) + ++relogio * 1000).toISOString();
   function administrar(p) {
@@ -195,7 +195,7 @@ export function criarFakeDb({ unidades = {}, admins = [] } = {}) {
     const anterior = c.status;
     c.status = novo;
     evento(c, ev, anterior, novo);
-    // 145: conexão revogada derruba os destinos vivos.
+    // 148: conexão revogada derruba os destinos vivos.
     if (novo === "REVOGADA") for (const d of tabelas.foody_conexao_destinos) if (d.conexao_id === c.id && d.estado !== "REVOGADO") Object.assign(d, { estado: "REVOGADO", revogado_motivo: "Conexão revogada.", revogado_em: agoraIso(), revogado_por: null });
     return ok("REGISTRADO", c, novo, ev);
   }

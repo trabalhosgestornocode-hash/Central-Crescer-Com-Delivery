@@ -1,4 +1,4 @@
--- 144 — Camada central Foody (PILOTO EM SOMBRA): conexão por unidade, execuções de sincronização, pedidos saneados e
+-- 147 — Camada central Foody (PILOTO EM SOMBRA): conexão por unidade, execuções de sincronização, pedidos saneados e
 -- fechamento logístico versionado.
 --
 -- ADITIVA: só cria tabelas/funções NOVAS com prefixo foody_. NÃO altera parser_fd_*, operacional_*, checklist, fechamentos,

@@ -1,10 +1,10 @@
-// Roteamento da CONEXÃO COMPARTILHADA (migration 145) — função PURA. Decide, para cada pedido saneado, EM QUAL tenant a linha
+// Roteamento da CONEXÃO COMPARTILHADA (migration 148) — função PURA. Decide, para cada pedido saneado, EM QUAL tenant a linha
 // é gravada e com QUAIS dados. Uma única regra para todo pedido:
 //
 //   operação final = última decisão de triagem do uid (se houver) ?? classificação estrita do catálogo
 //   * subway (titular)                       → unidade TITULAR, dados completos, sem destino;
 //   * outra operação COM destino ATIVO       → unidade/organização do DESTINO, dados completos, destino_id;
-//   * outra operação SEM destino ATIVO       → unidade TITULAR, só o mínimo logístico (regra F1 da 144);
+//   * outra operação SEM destino ATIVO       → unidade TITULAR, só o mínimo logístico (regra F1 da 147);
 //   * triagem                                → unidade TITULAR, SEM dado comercial (valor, taxa, pagamento, cancelamento) e
 //                                              SÓ com as linhas sem atribuição segura: os itens já reconhecidos (que revelariam
 //                                              o pedido da outra empresa) nunca ficam na triagem — viram contagem no motivo.

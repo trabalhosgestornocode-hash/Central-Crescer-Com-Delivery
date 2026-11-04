@@ -2,7 +2,7 @@
 //   * o módulo só emite GET e só fala com a API Foody;
 //   * nenhum código existente importa o módulo (Parser, Dashboard, Checklist, notificações, WhatsApp, Agente, server.js);
 //   * o módulo não importa nada que envie mensagem ou escreva em tabelas existentes;
-//   * a migration 144 é aditiva, com RLS sem policy, sem grant a anon/authenticated e com rollback correspondente.
+//   * a migration 147 é aditiva, com RLS sem policy, sem grant a anon/authenticated e com rollback correspondente.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync, statSync } from "node:fs";
@@ -77,7 +77,7 @@ describe("módulo foody — só leitura na API", () => {
 });
 
 describe("consumidores controlados", () => {
-  // Exceções, e SÓ elas: o gerador OFFLINE do catálogo (145) e a camada de ADMINISTRAÇÃO pela tela (146, modules/foody-admin).
+  // Exceções, e SÓ elas: o gerador OFFLINE do catálogo (148) e a camada de ADMINISTRAÇÃO pela tela (146, modules/foody-admin).
   // `sep` no fim: "modules/foody-admin" começa com "modules/foody" e não pode passar por dentro do módulo.
   const GERADOR_CATALOGO = join(RAIZ, "scripts", "foody-gerar-catalogo.mjs");
   const ADMIN = join(RAIZ, "src", "modules", "foody-admin");
@@ -125,14 +125,23 @@ describe("consumidores controlados", () => {
   });
 });
 
-describe("migration 144 — estático", () => {
-  const sql = readFileSync(join(MIGRATIONS, "144_foody_camada_central.sql"), "utf8");
-  const rb = readFileSync(join(MIGRATIONS, "144_rollback.sql"), "utf8");
+describe("migration 147 — estático", () => {
+  const sql = readFileSync(join(MIGRATIONS, "147_foody_camada_central.sql"), "utf8");
+  const rb = readFileSync(join(MIGRATIONS, "147_rollback.sql"), "utf8");
   const corpo = sql.split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join("\n");
-  test("não há outra 144; posteriores só as conhecidas (145 = conexão compartilhada; 146 = administração; aditivas)", () => {
+  test("não há outra 147; posteriores só as conhecidas (148 = conexão compartilhada; 149 = administração; aditivas)", () => {
     const arqs = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && !/rollback/i.test(f));
-    assert.equal(arqs.filter((f) => f.startsWith("144")).length, 1);
-    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "144").sort(), ["145_foody_conexao_compartilhada.sql", "146_foody_conexao_administracao.sql"]);
+    assert.equal(arqs.filter((f) => f.startsWith("147")).length, 1);
+    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "147").sort(), ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql"]);
+  });
+  test("numeração: 144 é do Termo v3 em produção (fora da pasta); 144–146 não existem no repositório; Foody só em 147–149", () => {
+    const todos = readdirSync(MIGRATIONS);
+    assert.deepEqual(todos.filter((f) => /^14[4-6]_/.test(f)), [], "144 = 144_termo_v3_aprovado_internamente (prod); 145/146 ficam livres");
+    assert.deepEqual(todos.filter((f) => /foody/i.test(f) || /^14[7-9]_/.test(f)).sort(),
+      ["147_foody_camada_central.sql", "147_rollback.sql", "148_foody_conexao_compartilhada.sql", "148_rollback.sql",
+       "149_foody_conexao_administracao.sql", "149_rollback.sql"]);
+    const kit = readFileSync(join(MIGRATIONS, "..", "..", "backend", "testes-seguros", "foody-147-149", "sql_comum.mjs"), "utf8");
+    assert.match(kit, /REGISTRO_TERMO_V3 = "144_termo_v3_aprovado_internamente"/);
   });
   test("transação com lock_timeout; só CREATE de objetos foody_*; não altera nem apaga nada existente", () => {
     assert.match(corpo, /^\s*begin;\s*\nset local lock_timeout = '5s';/m); assert.match(corpo, /commit;\s*$/);
@@ -157,7 +166,7 @@ describe("migration 144 — estático", () => {
     assert.doesNotMatch(corpo, /\b(cliente|customer|telefone|phone|endereco|address|email|cpf|observac|notes|entregador_nome|courier_name|token text)\b/i);
     assert.match(corpo, /token_cifrado text not null check \(token_cifrado ~ '\^k\[0-9\]\+:'\)/);
   });
-  test("rollback remove exatamente o que a 144 cria, em transação", () => {
+  test("rollback remove exatamente o que a 147 cria, em transação", () => {
     assert.match(rb, /begin;[\s\S]*commit;/);
     for (const t of ["foody_conexoes", "foody_sync_execucoes", "foody_pedidos", "foody_fechamentos_logisticos"]) assert.match(rb, new RegExp(`drop table if exists public\\.${t};`));
     for (const f of ["foody_validar_tenant", "foody_validar_vinculo_execucao", "foody_validar_conexao_execucao", "foody_registro_imutavel", "foody_fechamento_registrar"]) {

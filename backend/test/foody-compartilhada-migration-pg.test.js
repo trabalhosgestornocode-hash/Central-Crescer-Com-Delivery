@@ -1,4 +1,4 @@
-// Migration 145 (conexão Foody COMPARTILHADA entre organizações) num Postgres LOCAL e DESCARTÁVEL, schema real (base + 068..145).
+// Migration 148 (conexão Foody COMPARTILHADA entre organizações) num Postgres LOCAL e DESCARTÁVEL, schema real (base + 068..145).
 // Só roda com CHECKLIST_PERFIL_PG_URL apontando para host local; caso contrário é PULADO (não é falha). Dados 100% fictícios.
 //
 //   CHECKLIST_PERFIL_PG_URL=postgresql://postgres@127.0.0.1:55431/postgres node --test test/foody-compartilhada-migration-pg.test.js
@@ -18,7 +18,7 @@ const OPS_T = "a3000000-0000-4000-8000-000000000003", ADM_X = "a4000000-0000-400
 const ADM_TD = "a5000000-0000-4000-8000-000000000005";   // organization_admin LEGÍTIMO das duas organizações
 const H = "a".repeat(64);
 
-describe("migration 145 — conexão compartilhada, Postgres real", { skip: motivoPular, timeout: 600_000 }, () => {
+describe("migration 148 — conexão compartilhada, Postgres real", { skip: motivoPular, timeout: 600_000 }, () => {
   let b;
   const ok = (texto) => { const r = psqlSync(b.url, texto); assert.equal(r.ok, true, r.err); return r.out.trim(); };
   const falha = (texto, padrao) => { const r = psqlSync(b.url, texto); assert.equal(r.ok, false, `deveria falhar: ${texto}`); if (padrao) assert.match(r.err, padrao); return r.err; };
@@ -36,7 +36,7 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
   const destinoId = () => um(`select id from foody_conexao_destinos where conexao_id = '${CON}' and estado <> 'REVOGADO';`);
 
   before(() => {
-    b = criarBancoDescartavel("foody145");
+    b = criarBancoDescartavel("foody148");
     assert.deepEqual(construirSchemaReal(b.url), []);
     for (const [org, uni] of [[ORG_T, UNI_T], [ORG_D, UNI_D], [ORG_X, UNI_X]]) {
       ok(`insert into organizacoes (id, nome) values ('${org}', 'org ${org.slice(0, 4)}');`);
@@ -234,39 +234,39 @@ describe("migration 145 — conexão compartilhada, Postgres real", { skip: moti
     ok(`update foody_conexao_destinos set estado = 'REVOGADO', revogado_em = now(), revogado_motivo = 'fim do teste', revogado_por = '${ADM_T}' where conexao_id = '${CON}' and estado = 'PENDENTE';`);
   });
 
-  test("rollback 145: recusa com dado compartilhado; limpo, volta à 144 (regras originais) e reaplica", () => {
-    const rb = () => psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_rollback.sql") });
-    // A 146 (administração) depende da 145: com ela aplicada a 145 se recusa a sair. Tira a 146 primeiro (sem eventos).
+  test("rollback 148: recusa com dado compartilhado; limpo, volta à 147 (regras originais) e reaplica", () => {
+    const rb = () => psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "148_rollback.sql") });
+    // A 149 (administração) depende da 148: com ela aplicada a 148 se recusa a sair. Tira a 149 primeiro (sem eventos).
     ok(`set session_replication_role = replica; delete from foody_conexoes_eventos; set session_replication_role = origin;`);
-    const r146 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "146_rollback.sql") });
-    assert.equal(r146.ok, true, r146.err);
+    const r149 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "149_rollback.sql") });
+    assert.equal(r149.ok, true, r149.err);
     const r = rb();
-    assert.equal(r.ok, false); assert.match(r.err, /rollback 145 recusado/);
-    // Banco limpo da 145: só dados no formato da 144.
+    assert.equal(r.ok, false); assert.match(r.err, /rollback 148 recusado/);
+    // Banco limpo da 148: só dados no formato da 147.
     ok(`set session_replication_role = replica;
         delete from foody_triagem_decisoes; delete from foody_destinos_eventos; delete from foody_fechamentos_logisticos;
         delete from foody_pedidos; delete from foody_conexao_destinos;
         set session_replication_role = origin;`);
-    ok(pedido({ uid: "s144" }));
+    ok(pedido({ uid: "s147" }));
     const r2 = rb(); assert.equal(r2.ok, true, r2.err);
     assert.equal(um(`select count(*) from pg_tables where tablename in ('foody_conexao_destinos', 'foody_destinos_eventos', 'foody_triagem_decisoes');`), "0");
     assert.equal(um(`select count(*) from information_schema.columns where table_name = 'foody_pedidos' and column_name in ('destino_id', 'conexao_id', 'roteamento_ativo');`), "0");
-    assert.equal(um(`select count(*) from foody_pedidos where foody_uid = 's144';`), "1");   // dado da 144 preservado
+    assert.equal(um(`select count(*) from foody_pedidos where foody_uid = 's147';`), "1");   // dado da 147 preservado
     assert.equal(um(`select count(*) from information_schema.columns where table_name = 'foody_sync_execucoes'
       and column_name in ('catalogo_versao', 'fechamentos', 'fechamentos_pendentes');`), "0");
-    // Regras da 144 de volta: 'triagem' não existe e Açaí completo continua proibido.
+    // Regras da 147 de volta: 'triagem' não existe e Açaí completo continua proibido.
     falha(`insert into foody_pedidos (organizacao_id, unidade_id, foody_uid, numero_pedido, competencia, data_hora, status_foody, situacao, operacao,
       entregador_presente, entregador_tipo, fonte_hash, primeira_execucao_id, ultima_execucao_id)
       values ('${ORG_T}', '${UNI_T}', 'tz', '1', '2026-10-25', '2026-10-25T12:00:00', 'closed', 'Finalizado', 'triagem', false, 'sem_entregador', '${H}', '${EXEC}', '${EXEC}');`, /operacao_check/);
     const r4 = rb(); assert.equal(r4.ok, true, `rollback idempotente: ${r4.err}`);
-    const r3 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "145_foody_conexao_compartilhada.sql") });
+    const r3 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "148_foody_conexao_compartilhada.sql") });
     assert.equal(r3.ok, true, r3.err);
     assert.equal(um(`select count(*) from pg_tables where tablename like 'foody_%';`), "7");
-    const r146b = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "146_foody_conexao_administracao.sql") });
-    assert.equal(r146b.ok, true, `146 reaplica sobre a 145 reaplicada: ${r146b.err}`);
+    const r149b = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "149_foody_conexao_administracao.sql") });
+    assert.equal(r149b.ok, true, `149 reaplica sobre a 148 reaplicada: ${r149b.err}`);
     assert.equal(um(`select count(*) from information_schema.columns where table_name = 'foody_sync_execucoes'
       and column_name in ('catalogo_versao', 'fechamentos', 'fechamentos_pendentes');`), "3");
-    // Pedido gravado no formato da 144 ganha a conexão da própria execução ao reaplicar (entra na unicidade global).
-    assert.equal(um(`select conexao_id from foody_pedidos where foody_uid = 's144';`), CON);
+    // Pedido gravado no formato da 147 ganha a conexão da própria execução ao reaplicar (entra na unicidade global).
+    assert.equal(um(`select conexao_id from foody_pedidos where foody_uid = 's147';`), CON);
   });
 });

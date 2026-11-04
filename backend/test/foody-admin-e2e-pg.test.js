@@ -56,7 +56,7 @@ describe("administração Foody ponta a ponta — HTTP real + Postgres real", { 
   }
 
   before(async () => {
-    b = criarBancoDescartavel("foody146e2e");
+    b = criarBancoDescartavel("foody149e2e");
     assert.deepEqual(construirSchemaReal(b.url), []);
     for (const [org, uni, nome] of [[ORG_T, UNI_T, "Titular"], [ORG_D, UNI_D, "Destino"], [ORG_X, UNI_X, "Terceira"]]) {
       q(`insert into organizacoes (id, nome) values ('${org}', 'Org ${nome}');

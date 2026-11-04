@@ -1,9 +1,9 @@
-# Foody Delivery — administração pela Crescer (migration 146)
+# Foody Delivery — administração pela Crescer (migration 149)
 
 Tela: **Configurações → Integrações → Foody Delivery**. Permite que os administradores da Subway Saci e do Açaí no Grau Saci
 configurem e administrem o compartilhamento da conta Foody sem suporte técnico.
 
-Reaproveita a arquitetura dos PRs #75 (camada central, 144) e #76 (conexão compartilhada, 145). O conector (cliente, sync,
+Reaproveita a arquitetura dos PRs #75 (camada central, 147) e #76 (conexão compartilhada, 148). O conector (cliente, sync,
 roteamento, fechamento) **não foi alterado**.
 
 ## 1. Duas chaves independentes
@@ -63,23 +63,23 @@ a tela usa, **sem ids de perfil**: a autoria aparece como "Você" ou "Outro admi
   (12 hex do sha256). A tela mostra os **4 últimos caracteres da impressão**, nunca o token.
 * Sem o segredo no ambiente: 503 `SEGREDO_AUSENTE`, e nada é gravado.
 
-## 5. Garantias do banco (146)
+## 5. Garantias do banco (149)
 
 * `foody_conexao_administrar(...)`: uma função `SECURITY DEFINER` (só `service_role` executa) com advisory lock por unidade.
   Cada ação gera um evento em `foody_conexoes_eventos`. Repetir o estado atual devolve `SEM_MUDANCA`, sem evento.
 * **Dupla contagem**:
-  * uma conta (impressão) tem só uma conexão viva (144);
+  * uma conta (impressão) tem só uma conexão viva (147);
   * a unidade que é destino vivo não tem conexão própria (trigger em `foody_conexoes`, vale para qualquer escrita);
   * o token não troca com compartilhamento vivo;
-  * um destino vivo por operação (145);
-  * o pedido nunca fica ativo em duas unidades (145).
+  * um destino vivo por operação (148);
+  * o pedido nunca fica ativo em duas unidades (148).
 * **Mudança de organização** (transferência ou promoção da unidade):
   * a conexão ATIVA volta a PAUSADA;
   * o evento `PAUSADA_POR_TRANSFERENCIA` fica na **nova** organização;
-  * os destinos caem (145);
+  * os destinos caem (148);
   * os eventos são remapeados por `remapear_organizacao_em_tabelas_de_unidade`.
 * Eventos imutáveis: o UPDATE só altera `organizacao_id` e o DELETE é recusado. RLS ligado, sem policies, nada para `anon`/`authenticated`.
-* Rollback: `146_rollback.sql` é fail-closed se houver eventos. `145_rollback.sql` se recusa enquanto a 146 existir. `144_rollback.sql` remove tudo.
+* Rollback: `149_rollback.sql` é fail-closed se houver eventos. `148_rollback.sql` se recusa enquanto a 149 existir. `147_rollback.sql` remove tudo.
 
 ## 6. Limitação atual: propostas só entre empresas com administrador em comum
 
@@ -97,7 +97,8 @@ Consequências e caminho de uso:
 
 ## 7. Ativação (fora deste PR — exige GO próprio)
 
-1. Backup e aplicar, nesta ordem, **144 → 145 → 146** no Supabase.
+1. Backup e aplicar **147 → 148 → 149** no Supabase, só pelo pacote atômico e com o procedimento de
+   [foody-implantacao-147-149.md](foody-implantacao-147-149.md) (numeração: a 144 de produção é o Termo v3).
 2. Configurar `FOODY_CENTRAL_SECRET` (mínimo de 32 caracteres) no Render.
 3. Ligar `FOODY_CENTRAL_ADMIN_ENABLED=true`. A tela aparece e nada é coletado.
 4. Cadastrar a conta na unidade titular, propor o compartilhamento e aprová-lo pelo Açaí.
@@ -108,7 +109,7 @@ Consequências e caminho de uso:
 | Arquivo | O quê |
 |---|---|
 | `backend/test/foody-admin.test.js` | HTTP real sobre o banco falso: flags, permissões, impersonação, token, ciclo, dupla contagem, compartilhamento, isolamento, triagem |
-| `backend/test/foody-admin-migration-pg.test.js` | 146 em Postgres descartável: admin no banco, guardas, transferência, imutabilidade, privilégios, rollbacks |
+| `backend/test/foody-admin-migration-pg.test.js` | 149 em Postgres descartável: admin no banco, guardas, transferência, imutabilidade, privilégios, rollbacks |
 | `backend/test/foody-admin-e2e-pg.test.js` | ponta a ponta: tela → banco real → sync com a API falsa → triagem → revogação |
 | `frontend/test/configuracoesFoody.test.js` | regras da tela e contratos do token |
 | `frontend/test/configuracoesFoody.browser.test.js` | Chrome real, rotas reais: 390px sem rolagem, teclado, rótulos, diálogos, tema escuro, seção oculta quando desligada |

@@ -11,7 +11,7 @@
 // marcado com a operação; nunca é roteado para outro tenant.
 //
 // CONEXÃO COMPARTILHADA (145, flag FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED): a coleta continua ÚNICA, na unidade TITULAR.
-//   * flag desligada OU conexão sem nenhum destino → exatamente o comportamento acima (144);
+//   * flag desligada OU conexão sem nenhum destino → exatamente o comportamento acima (147);
 //   * destino ATIVO (aprovado pelas duas organizações) → classificação ESTRITA por catálogo versionado e distribuição por
 //     operação (foody.roteamento.js); item desconhecido = TRIAGEM, nunca Subway por padrão;
 //   * destino que deixou de estar ativo (revogado) → volta a regra da 144, e as linhas que estavam ativas no destino são
@@ -65,7 +65,7 @@ export async function sincronizarCompetencia(pedido, deps) {
   if (impressaoToken(token) !== conexao.token_impressao) throw new FoodySyncErro("TOKEN_DIVERGENTE", "token não confere com a impressão gravada.");
   const segredos = [token];
 
-  // Destinos só são lidos com a flag de compartilhamento ligada; sem ela, nada muda em relação à 144.
+  // Destinos só são lidos com a flag de compartilhamento ligada; sem ela, nada muda em relação à 147.
   const destinosTodos = compartilhamentoPermitido(env) ? await repo.listarDestinosDaConexao(t, conexao.id) : [];
   for (const d of destinosTodos) {
     if (d.conexao_id !== conexao.id || d.organizacao_titular_id !== organizacaoId) {
@@ -185,7 +185,7 @@ export async function sincronizarCompetencia(pedido, deps) {
 }
 
 /**
- * Distribuição pela CONEXÃO (145). Ordem: rotear todos → DESATIVAR as linhas que mudaram de tenant → gravar por tenant.
+ * Distribuição pela CONEXÃO (148). Ordem: rotear todos → DESATIVAR as linhas que mudaram de tenant → gravar por tenant.
  * Devolve só contagens (sem valores).
  */
 async function distribuirPelaConexao({ t, conexao, registros, destinosTodos, indiceDestinos, compartilhado, execucaoId, agoraIso, repo }) {
@@ -206,7 +206,7 @@ async function distribuirPelaConexao({ t, conexao, registros, destinosTodos, ind
       ({ rota, tenant, linha } = rotearPedido(r, { titular: t, destinos: indiceDestinos, decisao }));
       if (decisao) distribuicao.decididosNaTriagem++;
     } else {
-      // Nenhum destino ativo (revogado): regra da 144 na titular — o adaptador já minimizou a outra operação.
+      // Nenhum destino ativo (revogado): regra da 147 na titular — o adaptador já minimizou a outra operação.
       rota = ehOutraOperacao(r.operacao) ? ROTA.MINIMO : ROTA.TITULAR;
       tenant = t;
       linha = { ...r, destino_id: null, triagem_motivo: null, catalogo_versao: null };

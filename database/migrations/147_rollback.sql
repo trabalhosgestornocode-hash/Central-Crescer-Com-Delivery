@@ -1,4 +1,4 @@
--- Rollback da 144 — remove a camada central Foody (piloto em sombra).
+-- Rollback da 147 — remove a camada central Foody (piloto em sombra).
 --
 -- ATENÇÃO: APAGA conexões (tokens cifrados), execuções, pedidos saneados e o histórico de fechamentos logísticos. Exporte antes
 -- se precisar:  copy (select * from foody_fechamentos_logisticos order by unidade_id, competencia, versao) to stdout with csv header;
@@ -10,7 +10,7 @@ set local lock_timeout = '5s';
 drop function if exists public.foody_fechamento_registrar(uuid, uuid, date, text, text, uuid, uuid, integer, text, text, text, jsonb, jsonb, jsonb, jsonb, text);
 drop table if exists public.foody_fechamentos_logisticos;
 drop table if exists public.foody_pedidos;
--- Objetos da 146 (administração da conexão) e da 145 (conexão compartilhada), se aplicadas: este rollback remove a camada INTEIRA.
+-- Objetos da 149 (administração da conexão) e da 148 (conexão compartilhada), se aplicadas: este rollback remove a camada INTEIRA.
 drop function if exists public.foody_conexao_administrar(text, uuid, uuid, uuid, text, text, text, text);
 drop table if exists public.foody_conexoes_eventos;
 drop table if exists public.foody_triagem_decisoes;
@@ -18,7 +18,7 @@ drop table if exists public.foody_destinos_eventos;
 drop table if exists public.foody_conexao_destinos;
 drop table if exists public.foody_sync_execucoes;
 drop table if exists public.foody_conexoes;
--- Funções da 146 e da 145 (depois das tabelas que as usam em triggers).
+-- Funções da 149 e da 148 (depois das tabelas que as usam em triggers).
 drop function if exists public.foody_conexao_auditar_transferencia();
 drop function if exists public.foody_conexao_guardas();
 drop function if exists public.foody_triagem_decisao_validar();
