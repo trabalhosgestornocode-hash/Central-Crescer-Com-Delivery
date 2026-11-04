@@ -13,6 +13,7 @@ import { hojeDaUnidade } from "../checklist-operacional/checklistOperacional.fus
 import { elegibilidadeDiaria, planejarResumoSemanal, destinatariosAutorizados, CATEGORIA_DIARIA, CATEGORIA_SEMANAL, MOTIVO } from "./notificacoes.relatorios.js";
 import * as repoPadrao from "./notificacoes.relatorios.repository.js";
 import * as notifPadrao from "./notificacoes.repository.js";
+import { lerFechamentosFoody, textoComLogistica } from "./notificacoes.relatorios.foody.js";
 
 export const HORA_INICIO_ENVIO = 8;
 export const HORA_FIM_ENVIO = 20;
@@ -55,6 +56,9 @@ export async function enfileirarRelatoriosDaUnidade(u, { agora = () => new Date(
   const saida = { unidadeId: u.unidadeId, diario: { enfileirados: 0, motivo: null }, semanal: { enfileirados: 0, motivo: null } };
   const dados = await N.listarDestinatarios({ organizacaoId: u.organizacaoId });
   const ledger = await N.listarConsentimentos({ organizacaoId: u.organizacaoId, contatoEmpresaIds: dados.destinatarios.map((d) => d.id) });
+  // Fase D (flag FOODY_CENTRAL_RELATORIO_ENABLED, desligada por padrão): bloco logístico Foody por destinatário; null = texto original.
+  const tipoDe = new Map((dados.destinatarios ?? []).map((d) => [d.id, d.tipo ?? null]));
+  const lerFoody = (de, ate) => lerFechamentosFoody({ env, organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, de, ate, ...(deps.lerFoody ? { ler: deps.lerFoody } : {}) });
 
   // ---------- diário ----------
   const fechOntem = ultimaVersaoPorDia(await R.fechamentosEntre({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, de: ontem, ate: ontem })).get(ontem) ?? null;
@@ -69,10 +73,13 @@ export async function enfileirarRelatoriosDaUnidade(u, { agora = () => new Date(
       const alvos = destinatariosAutorizados({ categoria: CATEGORIA_DIARIA, unidadeId: u.unidadeId, dados, ledger, proposito });
       if (!alvos.length) saida.diario.motivo = MOTIVO.SEM_DESTINATARIO;
       else {
+        const foodyDia = await lerFoody(ontem, ontem);
+        const textoDe = (e) => textoComLogistica({ texto, fechamentos: foodyDia, tipoDestinatario: tipoDe.get(e.contato_empresa_id), competencia: ontem,
+          validar: (t) => validarMensagem(t, { fechamento: fechOntem }) });
         saida.diario.enfileirados = await R.enfileirar(alvos.map((e) => ({
           organizacao_id: u.organizacaoId, unidade_id: u.unidadeId, tipo: "diario", categoria: CATEGORIA_DIARIA, referencia: ontem, fechamento_id: fechOntem.id, proposito,
           contato_empresa_id: e.contato_empresa_id, chave_idempotencia: `wa:rel:diario:${fechOntem.id}:${e.contato_empresa_id}:${proposito}`,
-          mensagem: texto, tamanho: texto.length, disponivel_em: disponivelEm.toISOString(), expira_em: expiraEm.toISOString(),
+          ...((m) => ({ mensagem: m, tamanho: m.length }))(textoDe(e)), disponivel_em: disponivelEm.toISOString(), expira_em: expiraEm.toISOString(),
         })), deps);
         saida.diario.adiar = eleg.adiar === true;
       }
@@ -89,9 +96,12 @@ export async function enfileirarRelatoriosDaUnidade(u, { agora = () => new Date(
   if (!plano.elegivel) { saida.semanal.motivo = plano.motivo; return saida; }
   if (!plano.validacao?.ok) { saida.semanal.motivo = "MENSAGEM_INVALIDA"; return saida; }
   const resumoId = await R.registrarResumoSemanal({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, resumo: plano.semana, mensagem: plano.mensagem }, deps);
+  const foodySemana = await lerFoody(dias[0], dias[6]);
+  const textoSemanalDe = (l) => textoComLogistica({ texto: plano.mensagem, fechamentos: foodySemana, tipoDestinatario: tipoDe.get(l.destinatario), dias,
+    validar: (t) => validarMensagemSemanal(t, plano.semana) });
   saida.semanal.enfileirados = await R.enfileirar(plano.linhas.map((l) => ({
     organizacao_id: u.organizacaoId, unidade_id: u.unidadeId, tipo: "semanal", categoria: CATEGORIA_SEMANAL, referencia: segunda, resumo_semanal_id: resumoId, proposito: "inicial",
-    contato_empresa_id: l.destinatario, chave_idempotencia: l.chave_idempotencia, mensagem: plano.mensagem, tamanho: plano.mensagem.length,
+    contato_empresa_id: l.destinatario, chave_idempotencia: l.chave_idempotencia, ...((m) => ({ mensagem: m, tamanho: m.length }))(textoSemanalDe(l)),
     disponivel_em: disponivelEm.toISOString(), expira_em: expiraEm.toISOString(),
   })), deps);
   saida.semanal.adiar = plano.adiar === true;
