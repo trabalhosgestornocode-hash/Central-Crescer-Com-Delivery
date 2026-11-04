@@ -299,3 +299,19 @@ describe("agendador (fail-closed, não ligado ao servidor)", () => {
     assert.equal(a.ativo, false);
   });
 });
+
+describe("migration 150 na aplicação: 23505 ao abrir a execução", () => {
+  test("vira CONCORRENCIA, sem chamar a API e sem gravar pedido", async () => {
+    const abrir = repo.abrirExecucao;
+    repo.abrirExecucao = async () => { throw Object.assign(new Error("dup"), { codigo: "BANCO", pgCodigo: "23505" }); };
+    try {
+      await assert.rejects(sync(), (e) => e.codigo === "CONCORRENCIA");
+      assert.equal(api.chamadas.length, 0);
+      assert.equal(db.tabelas.foody_pedidos?.length ?? 0, 0);
+    } finally { repo.abrirExecucao = abrir; }
+  });
+  test("outro erro de banco segue como erro de banco", async () => {
+    repo.abrirExecucao = async () => { throw Object.assign(new Error("fora"), { codigo: "BANCO", pgCodigo: "08006" }); };
+    await assert.rejects(sync(), (e) => e.codigo === "BANCO");
+  });
+});

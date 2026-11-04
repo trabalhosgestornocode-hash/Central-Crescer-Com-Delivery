@@ -79,9 +79,16 @@ export async function sincronizarCompetencia(pedido, deps) {
   try { indiceDestinos = indexarDestinos(destinosAtivos, t); } catch (e) { throw new FoodySyncErro("DESTINO_INVALIDO", e.message); }
 
   const janela = janelaDoDia(competencia);
-  const execucaoId = await repo.abrirExecucao(t, {
-    conexao_id: conexao.id, competencia, janela_inicio: janela.inicio, janela_fim: janela.fim, origem, regra_versao: FOODY_REGRA_VERSAO,
-  });
+  let execucaoId;
+  try {
+    execucaoId = await repo.abrirExecucao(t, {
+      conexao_id: conexao.id, competencia, janela_inicio: janela.inicio, janela_fim: janela.fim, origem, regra_versao: FOODY_REGRA_VERSAO,
+    });
+  } catch (e) {
+    // 150: índice único parcial — outra coleta desta unidade abriu execução no mesmo instante. Nada foi gravado.
+    if (e?.pgCodigo === "23505") throw new FoodySyncErro("CONCORRENCIA", "já há uma coleta desta unidade em andamento.");
+    throw e;
+  }
   log("info", "foody.sync.inicio", { unidade: unidadeId, competencia, origem, execucaoId }, { segredos });
 
   try {

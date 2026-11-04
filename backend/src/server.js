@@ -7,6 +7,7 @@ import { workerLog } from "./worker-comunicacao/worker-comunicacao.logsafe.js";
 import { iniciarPurgaPeriodica } from "./modules/comunicacao/comunicacao.inbox.retencao.js";
 import { iniciarEventsIfoodEmbutido, pararEventsIfoodEmbutido } from "./worker-ifood/embedded.js";
 import { iniciarRelatoriosOperacionaisEmbutido, pararRelatoriosOperacionaisEmbutido } from "./worker-comunicacao/relatorios.embedded.js";
+import { iniciarFoodyEmbutido, pararFoodyEmbutido } from "./worker-foody/foody.embedded.js";
 import { totalUnidadesHomologacaoFinancial } from "./modules/ifood/ifoodFinancialHomologacao.js";
 import { iniciarServidorHttp } from "./servidor.lifecycle.js";
 import { avaliarEfeitosExternos } from "./ambiente/efeitosExternos.js";
@@ -77,11 +78,18 @@ iniciarServidorHttp({
     iniciarRelatoriosOperacionaisEmbutido({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados) }).then((r) => {
       console.log(r.habilitado ? "   Relatórios operacionais: agendador ATIVO" : `   Relatórios operacionais: agendador DESABILITADO (${r.motivo})`);
     });
+
+    // Coleta Foody agendada (D-1..D-3): só com FOODY_CENTRAL_ENABLED + FOODY_CENTRAL_AGENDADOR_ENABLED + allowlist e guarda de
+    // efeitos externos (padrão: desligada = nada é importado). Primeiro ciclo 3 min depois do boot. Nunca envia mensagem.
+    iniciarFoodyEmbutido({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados) }).then((r) => {
+      console.log(r.habilitado ? "   Foody: agendador ATIVO" : `   Foody: agendador DESABILITADO (${r.motivo})`);
+    });
   },
   antesDeFechar: [
     () => purgaInbox.parar(),
     (sinal) => pararWorkerComunicacaoEmbutido(sinal),
     (sinal) => pararEventsIfoodEmbutido(sinal),
     (sinal) => pararRelatoriosOperacionaisEmbutido(sinal),
+    (sinal) => pararFoodyEmbutido(sinal),
   ],
 });

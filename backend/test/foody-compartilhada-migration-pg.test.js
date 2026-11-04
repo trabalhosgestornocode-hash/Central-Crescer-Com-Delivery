@@ -131,8 +131,9 @@ describe("migration 148 — conexão compartilhada, Postgres real", { skip: moti
     falha(`update foody_pedidos set roteamento_ativo = false, roteamento_motivo = 'REROTEADO' where foody_uid = 'a1';`, /ck_foody_pedidos_inativo_minimo/);
     ok(`update foody_pedidos set roteamento_ativo = false, roteamento_motivo = 'REROTEADO', detalhes_pedido = null, valor_total = null where foody_uid = 'a1';`);
     // Linha desativada não recebe dado novo sem reativação (sync fora do modo compartilhado falharia alto, não em silêncio).
-    ok(`insert into foody_sync_execucoes (id, organizacao_id, unidade_id, conexao_id, competencia, janela_inicio, janela_fim, origem, regra_versao)
-      values ('e0000000-0000-4000-8000-00000000000b', '${ORG_T}', '${UNI_T}', '${CON}', '2026-10-25', '2026-10-25T03:00Z', '2026-10-26T03:00Z', 'manual', 1);`);
+    // (150: uma única EM_ANDAMENTO por unidade — a segunda execução do cenário já nasce encerrada.)
+    ok(`insert into foody_sync_execucoes (id, organizacao_id, unidade_id, conexao_id, competencia, janela_inicio, janela_fim, origem, regra_versao, status, erro_codigo, concluido_em)
+      values ('e0000000-0000-4000-8000-00000000000b', '${ORG_T}', '${UNI_T}', '${CON}', '2026-10-25', '2026-10-25T03:00Z', '2026-10-26T03:00Z', 'manual', 1, 'FALHOU', 'TESTE', now());`);
     falha(`update foody_pedidos set ultima_execucao_id = 'e0000000-0000-4000-8000-00000000000b' where foody_uid = 'a1' and not roteamento_ativo;`,
       /só quando reativada/);
     // Agora pode ficar ativo na titular (decisão de triagem → Subway).
