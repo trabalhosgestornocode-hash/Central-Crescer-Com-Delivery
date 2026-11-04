@@ -116,6 +116,20 @@ export function criarRepositorioFoody(db) {
       return data ?? [];
     },
 
+    /**
+     * Agendador: tenants (organização + unidade) das conexões ATIVAS cujas unidades estão na allowlist. Só ids e status —
+     * nunca o token. A allowlist vem validada (uuid) de foody.flags.js.
+     */
+    async listarConexoesAtivasDaAllowlist(unidadeIds) {
+      const ids = [...new Set([...(unidadeIds ?? [])].map((x) => String(x).toLowerCase()))];
+      if (!ids.length) return [];
+      const { data, error } = await db.from("foody_conexoes").select("organizacao_id, unidade_id, status")
+        .in("unidade_id", ids).eq("status", "ATIVA").limit(ids.length);
+      if (error) throw falha("listarConexoesAtivasDaAllowlist", error);
+      return (data ?? []).filter((r) => r.status === "ATIVA" && ids.includes(String(r.unidade_id).toLowerCase()))
+        .map((r) => ({ organizacaoId: r.organizacao_id, unidadeId: r.unidade_id }));
+    },
+
     /** Últimas execuções da unidade (só contagens e códigos; nunca pedidos nem valores). */
     async listarExecucoesRecentes(t, limite = 20) {
       exigirTenant(t);

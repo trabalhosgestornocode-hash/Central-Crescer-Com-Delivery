@@ -85,10 +85,12 @@ describe("consumidores controlados", () => {
   // A SINCRONIZAÇÃO MANUAL (piloto em sombra) é o único caminho de coleta fora do módulo: arquivo próprio, separado do router
   // de administração, e só alcança a coleta via foody.sync.manual.js.
   const SYNC_ROTAS = join(ADMIN, "foodyAdmin.sync.routes.js");
+  // O AGENDADOR embarcado: ponte única do server.js, com import dinâmico atrás das flags (teste próprio abaixo).
+  const PONTE = join(RAIZ, "src", "worker-foody", "foody.embedded.js");
   const doAdmin = arquivos(ADMIN).filter((p) => p !== SYNC_ROTAS);
   test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline e a camada foody-admin)", () => {
     const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO + sep));
-    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== PARIDADE && !p.startsWith(ADMIN + sep)
+    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== PARIDADE && p !== PONTE && !p.startsWith(ADMIN + sep)
       && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(culpados.map((p) => relative(RAIZ, p)), []);
   });
@@ -123,7 +125,8 @@ describe("consumidores controlados", () => {
     const manual = semComentarios(readFileSync(join(MODULO, "foody.sync.manual.js"), "utf8"));
     assert.match(manual, /!administracaoPermitida\(env\) \|\| !unidadePermitida\(env, t\.unidadeId\)/);
     assert.match(manual, /ehAdminDaOrganizacao\(ator, t\.organizacaoId\)/);
-    assert.match(manual, /listarExecucoesEmAndamento/);
+    assert.match(manual, /reservarUnidade\(/);
+    assert.match(semComentarios(readFileSync(join(MODULO, "foody.trava.js"), "utf8")), /listarExecucoesEmAndamento/);
     assert.doesNotMatch(manual, /setInterval|setTimeout|whatsapp|notifica|comunicacao/i);
   });
   test("a camada foody-admin só escreve via serviço do módulo (sem insert/update/upsert/delete/rpc direto)", () => {
@@ -150,8 +153,26 @@ describe("consumidores controlados", () => {
     const daCamada = [...s.matchAll(/from\s+["']([^"']*modules\/foody\/[^"']+)["']/g)].map((m) => m[1]).sort();
     assert.deepEqual(daCamada, ["../src/modules/foody/foody.catalogo.gerador.js", "../src/modules/foody/foody.classificacao.js"]);
   });
-  test("server.js não menciona a camada Foody", () => {
-    assert.doesNotMatch(readFileSync(join(RAIZ, "src", "server.js"), "utf8"), /foody/i);
+  test("server.js só alcança a camada Foody pela ponte embutida (sem import estático do módulo)", () => {
+    const s = semComentarios(readFileSync(join(RAIZ, "src", "server.js"), "utf8"));
+    const comFoody = s.split(/\r?\n/).filter((l) => /foody/i.test(l)).map((l) => l.trim());
+    assert.deepEqual(comFoody, [
+      'import { iniciarFoodyEmbutido, pararFoodyEmbutido } from "./worker-foody/foody.embedded.js";',
+      "iniciarFoodyEmbutido({ log: (nivel, evento, dados) => workerLog(nivel, evento, dados) }).then((r) => {",
+      'console.log(r.habilitado ? "   Foody: agendador ATIVO" : `   Foody: agendador DESABILITADO (${r.motivo})`);',
+      "(sinal) => pararFoodyEmbutido(sinal),",
+    ]);
+  });
+  test("ponte embutida: estático só flags + guarda de efeitos externos; agendador/repositório/Supabase só por import dinâmico", () => {
+    const s = semComentarios(readFileSync(join(RAIZ, "src", "worker-foody", "foody.embedded.js"), "utf8"));
+    const estaticos = [...s.matchAll(/^import .* from\s+["']([^"']+)["']/gm)].map((m) => m[1]).sort();
+    assert.deepEqual(estaticos, ["../ambiente/efeitosExternos.js", "../modules/foody/foody.flags.js"]);
+    const dinamicos = [...s.matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]).sort();
+    assert.deepEqual(dinamicos, ["../config/supabase.js", "../modules/foody/foody.agendador.js", "../modules/foody/foody.constants.js",
+      "../modules/foody/foody.repository.js", "../modules/foody/foody.seguranca.js"]);
+    assert.doesNotMatch(s, /whatsapp|notifica|comunicacao|process\.on\(|process\.exit|fetch\(/i);
+    // a checagem de flag vem ANTES de qualquer import dinâmico
+    assert.ok(s.indexOf("agendamentoPermitido(env)") < s.indexOf("montar ?? montarPadrao"));
   });
   test("nenhuma tabela existente é lida pelo módulo (parser_fd_*, operacional_*, checklist_*, comunicacao_*)", () => {
     for (const p of doModulo) assert.doesNotMatch(readFileSync(p, "utf8"), /["'`](parser_fd_|operacional_|checklist_|comunicacao_)\w+["'`]/, relative(RAIZ, p));
@@ -162,17 +183,17 @@ describe("migration 147 — estático", () => {
   const sql = readFileSync(join(MIGRATIONS, "147_foody_camada_central.sql"), "utf8");
   const rb = readFileSync(join(MIGRATIONS, "147_rollback.sql"), "utf8");
   const corpo = sql.split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join("\n");
-  test("não há outra 147; posteriores só as conhecidas (148 = conexão compartilhada; 149 = administração; aditivas)", () => {
+  test("não há outra 147; posteriores só as conhecidas (148 = conexão compartilhada; 149 = administração; 150 = uma coleta por unidade; aditivas)", () => {
     const arqs = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && !/rollback/i.test(f));
     assert.equal(arqs.filter((f) => f.startsWith("147")).length, 1);
-    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "147").sort(), ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql"]);
+    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "147").sort(), ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql"]);
   });
-  test("numeração: 144 é do Termo v3 em produção (fora da pasta); 144–146 não existem no repositório; Foody só em 147–149", () => {
+  test("numeração: 144 é do Termo v3 em produção (fora da pasta); 144–146 não existem no repositório; Foody só em 147–150", () => {
     const todos = readdirSync(MIGRATIONS);
     assert.deepEqual(todos.filter((f) => /^14[4-6]_/.test(f)), [], "144 = 144_termo_v3_aprovado_internamente (prod); 145/146 ficam livres");
-    assert.deepEqual(todos.filter((f) => /foody/i.test(f) || /^14[7-9]_/.test(f)).sort(),
+    assert.deepEqual(todos.filter((f) => /foody/i.test(f) || /^(14[7-9]|150)_/.test(f)).sort(),
       ["147_foody_camada_central.sql", "147_rollback.sql", "148_foody_conexao_compartilhada.sql", "148_rollback.sql",
-       "149_foody_conexao_administracao.sql", "149_rollback.sql"]);
+       "149_foody_conexao_administracao.sql", "149_rollback.sql", "150_foody_sync_uma_em_andamento.sql", "150_rollback.sql"]);
     const kit = readFileSync(join(MIGRATIONS, "..", "..", "backend", "testes-seguros", "foody-147-149", "sql_comum.mjs"), "utf8");
     assert.match(kit, /REGISTRO_TERMO_V3 = "144_termo_v3_aprovado_internamente"/);
   });

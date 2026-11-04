@@ -19,6 +19,7 @@ import { sincronizarEFechar } from "./foody.fechamento.service.js";
 import { ehAdminDaOrganizacao } from "./foody.compartilhamento.service.js";
 import { foodyLog } from "./foody.seguranca.js";
 import { ORIGEM } from "./foody.constants.js";
+import { reservarUnidade, UNIDADES_EM_COLETA } from "./foody.trava.js";
 
 export const LIMITES_SYNC_MANUAL = Object.freeze({
   maxDias: 7,
@@ -40,9 +41,9 @@ export class FoodySyncManualErro extends Error {
 }
 const erro = (codigo, mensagem) => new FoodySyncManualErro(codigo, mensagem);
 
-/** Trava em memória por unidade + cache de idempotência. Um por processo (o router cria o seu). */
-export function criarEstadoSyncManual() {
-  return { emCurso: new Set(), respostas: new Map() };
+/** Trava em memória por unidade + cache de idempotência. Por padrão a trava é a do PROCESSO (compartilhada com o agendador). */
+export function criarEstadoSyncManual({ emCurso = UNIDADES_EM_COLETA } = {}) {
+  return { emCurso, respostas: new Map() };
 }
 
 /** Valida e ordena os dias pedidos; decide a origem de cada um. Puro. */
@@ -116,15 +117,15 @@ export async function solicitarSyncManual(pedido, deps) {
   if (conexao.organizacao_id !== t.organizacaoId || conexao.unidade_id !== t.unidadeId) throw erro("TENANT_DIVERGENTE", "conexão de outra unidade.");
   if (conexao.status !== "ATIVA") throw erro("CONEXAO_INATIVA", `a conexão está ${conexao.status}: ative antes de sincronizar.`);
 
-  if (estado.emCurso.has(t.unidadeId)) throw erro("CONCORRENCIA", "já há uma sincronização desta unidade em andamento.");
-  estado.emCurso.add(t.unidadeId);
+  let reserva;
   try {
-    const abertas = await repo.listarExecucoesEmAndamento(t, conexao.id);
-    const recentes = abertas.filter((e) => agoraD.getTime() - Date.parse(e.iniciado_em) < limites.janelaConcorrenciaMs);
-    if (recentes.length) throw erro("CONCORRENCIA", "já há uma sincronização desta unidade em andamento (outra instância ou o agendador).");
-    for (const e of abertas) await repo.concluirExecucao(t, e.id, { status: "FALHOU", erro_codigo: "ABANDONADA" });
-
-    log("info", "foody.sync.manual.inicio", { unidade: t.unidadeId, perfil: ator.perfilId, dias: plano.map((p) => p.competencia), abandonadas: abertas.length });
+    reserva = await reservarUnidade({ t, conexaoId: conexao.id, repo, agora: () => agoraD, emCurso: estado.emCurso, janelaMs: limites.janelaConcorrenciaMs });
+  } catch (e) {
+    if (e?.codigo === "CONCORRENCIA") throw erro("CONCORRENCIA", e.message);
+    throw e;
+  }
+  try {
+    log("info", "foody.sync.manual.inicio", { unidade: t.unidadeId, perfil: ator.perfilId, dias: plano.map((p) => p.competencia), abandonadas: reserva.abandonadas });
     const dias = [];
     let parouEm = null;
     for (const p of plano) {
@@ -153,7 +154,7 @@ export async function solicitarSyncManual(pedido, deps) {
     if (chaveCache) estado.respostas.set(chaveCache, { em: agoraD.getTime(), resposta });
     return resposta;
   } finally {
-    estado.emCurso.delete(t.unidadeId);
+    reserva.liberar();
   }
 }
 
