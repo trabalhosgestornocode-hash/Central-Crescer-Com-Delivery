@@ -89,10 +89,12 @@ describe("consumidores controlados", () => {
   const PONTE = join(RAIZ, "src", "worker-foody", "foody.embedded.js");
   // Fase C: ponte de LEITURA do Parser (só o resolvedor puro foody.fonte.js; teste próprio em foody-fonte.test.js).
   const PONTE_PARSER = join(RAIZ, "src", "modules", "parser-food-delivery", "parserFoodDelivery.foody.js");
+  // Fase D: ponte de LEITURA dos relatórios do Checklist (só o gerador puro foody.mensagem.js; teste em foody-relatorio-logistico.test.js).
+  const PONTE_RELATORIO = join(RAIZ, "src", "modules", "notificacoes", "notificacoes.relatorios.foody.js");
   const doAdmin = arquivos(ADMIN).filter((p) => p !== SYNC_ROTAS);
   test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline e a camada foody-admin)", () => {
     const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO + sep));
-    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== PARIDADE && p !== PONTE && p !== PONTE_PARSER && !p.startsWith(ADMIN + sep)
+    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== PARIDADE && p !== PONTE && p !== PONTE_PARSER && p !== PONTE_RELATORIO && !p.startsWith(ADMIN + sep)
       && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(culpados.map((p) => relative(RAIZ, p)), []);
   });
