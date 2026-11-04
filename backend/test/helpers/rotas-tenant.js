@@ -36,13 +36,15 @@ const { checklistOperacionalRouter } = await import("../../src/modules/checklist
 const { gestaoFinanceiraRouter } = await import("../../src/modules/gestao-financeira/index.js");
 const { notificacoesRouter } = await import("../../src/modules/notificacoes/notificacoes.routes.js");
 const { foodyAdminRouter } = await import("../../src/modules/foody-admin/foodyAdmin.routes.js");
+const { foodySyncRouter } = await import("../../src/modules/foody-admin/foodyAdmin.sync.routes.js");
 
 /** Os routers montados dentro do `tenant` de routes.js (prefixo -> router). A trava de cobertura abaixo confere. */
 export const MONTAGENS_TENANT = [
   ["/produtos", produtosRouter], ["/insumos", insumosRouter], ["/cmv", cmvRouter], ["/dashboard", dashboardRouter],
   ["/dashboard-executivo", dashboardExecutivoRouter], ["/bonificacao-mensal", bonificacaoMensalRouter],
   ["/usuarios", usuariosRouter], ["/unidade", unidadeRouter], ["/realtime", realtimeRouter], ["/notificacoes", notificacoesRouter], ["/vendas", vendasRouter],
-  ["/integracoes/martin-brower", martinBrowerRouter], ["/integracoes/ifood", ifoodRouter], ["/integracoes/foody", foodyAdminRouter],
+  ["/integracoes/martin-brower", martinBrowerRouter], ["/integracoes/ifood", ifoodRouter],
+  ["/integracoes/foody/sincronizacoes", foodySyncRouter], ["/integracoes/foody", foodyAdminRouter],
   ["/checklist-operacional", checklistOperacionalRouter], ["/parser-food-delivery", parserFoodDeliveryRouter],
   ["/inteligencia", inteligenciaRouter], ["/agente", agenteRouter],
   ["/gestao-financeira", gestaoFinanceiraRouter],
