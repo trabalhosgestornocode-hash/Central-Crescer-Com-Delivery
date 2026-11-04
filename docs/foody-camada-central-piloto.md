@@ -8,8 +8,8 @@
 
 | Peça | Arquivo | Papel |
 |---|---|---|
-| Migration aditiva | `database/migrations/144_foody_camada_central.sql` | 4 tabelas `foody_*`, triggers de tenant/vínculo/imutabilidade, função `foody_fechamento_registrar`, RLS sem policy |
-| Rollback | `database/migrations/144_rollback.sql` | remove só objetos `foody_*`; idempotente |
+| Migration aditiva | `database/migrations/147_foody_camada_central.sql` | 4 tabelas `foody_*`, triggers de tenant/vínculo/imutabilidade, função `foody_fechamento_registrar`, RLS sem policy |
+| Rollback | `database/migrations/147_rollback.sql` | remove só objetos `foody_*`; idempotente |
 | Constantes e catálogos | `backend/src/modules/foody/foody.constants.js` | status, pagamento, razão, `courierType`, estados de valor, flags |
 | Flags | `foody.flags.js` | fail-closed: mestre + allowlist; agendador exige as duas + allowlist |
 | Segurança | `foody.seguranca.js` | cifra do token por unidade (AAD), impressão, HMAC do entregador, `foodyLog` com redação |
@@ -102,8 +102,8 @@ As quatro variáveis estão registradas, comentadas e sem valor real, no `backen
 **Riscos residuais (não bloqueiam o merge; tratar antes de ativar):**
 - Excluir uma unidade que tenha fechamento Foody falha **fechado** (a imutabilidade barra o cascade), igual a `operacional_fechamentos` (130). `impactoExclusaoUnidade` ainda não conta as tabelas `foody_*`.
 - Sync manual e agendada do mesmo dia ao mesmo tempo: não há trava na sincronização. O upsert por `uid` e a função de registro (advisory lock) evitam duplicar, mas duas execuções podem disputar a versão. O agendador ainda não é iniciado.
-- O schema de produção pode divergir das migrations do repositório. É obrigatório um pré-voo só leitura (tabelas `unidades`, `organizacoes`, versão de `remapear_organizacao_em_tabelas_de_unidade`) e backup antes de aplicar a 144.
-- `promover_unidade_para_empresa` já falha no `main` por outro motivo (ON CONFLICT 42P10, documentado em `testes-seguros/pg/transferencia_unidades.sh`). Ele não é causado nem agravado pela 144.
+- O schema de produção pode divergir das migrations do repositório. É obrigatório um pré-voo só leitura (tabelas `unidades`, `organizacoes`, versão de `remapear_organizacao_em_tabelas_de_unidade`) e backup antes de aplicar a 147.
+- `promover_unidade_para_empresa` já falha no `main` por outro motivo (ON CONFLICT 42P10, documentado em `testes-seguros/pg/transferencia_unidades.sh`). Ele não é causado nem agravado pela 147.
 
 ## 4. Testes
 
@@ -119,16 +119,16 @@ CHECKLIST_PERFIL_PG_URL=postgresql://postgres@127.0.0.1:55420/postgres node --te
 | `foody-central-unidade.test.js` (35) | flags fail-closed; janela/hora de parede/congelamento; cifra por unidade; HMAC; redação de log; cliente só GET, paginação com dedupe, erro sem token, retentativa; adaptador sem PII; cálculo (próprio × não classificado, Açaí separado, estados, pendências, hash determinístico); revisão final: minimização do Açaí, ordenação da página, Subway por padrão exposto, invariantes de integridade (cada pedido em um só grupo; Subway = próprio + não classificado; outra operação fora dos totais) |
 | `foody-central-sync.test.js` (29) | travas antes de qualquer chamada; isolamento (token de B na conexão de A não decifra, org errada não acha conexão, cada unidade com o próprio token e tenant, filtro de tenant em toda consulta); dedupe/idempotência; pedido ausente vira pendência; ponto de coleta divergente deixa o dia INCOMPLETO, normalização de nome, sem filtro por padrão; dia sem pedidos e pedido ausente nunca consolidados; página fora de ordem recusada sem gravar; Açaí gravado só com o mínimo logístico; falha da API registrada sem token; versionamento REGISTRADO → SEM_MUDANCA → CORRIGIDO; agendador |
 | `foody-central-arquitetura.test.js` (14) | nenhum método HTTP de escrita; host/rota únicos; nenhum import de WhatsApp/notificações/checklist/agente/serviços externos; só tabelas `foody_*`; **nenhum arquivo do sistema importa o módulo**; `server.js` não menciona Foody; migration aditiva, RLS sem policy, sem grant a anon/authenticated; rollback coerente |
-| `foody-central-migration-pg.test.js` (13) | schema real completo + 144 num Postgres local: triggers de tenant e vínculo, unicidade, token cifrado obrigatório, regras da função de registro, imutabilidade, privilégios por papel, **transferência de unidade** com as tabelas `foody_*`, rollback e reaplicação; revisão final: conta Foody ativa em uma só unidade (F3), CHECK do mínimo da outra operação (F1), tenant conferido no commit e promoção de unidade (F2) |
+| `foody-central-migration-pg.test.js` (13) | schema real completo + 147 num Postgres local: triggers de tenant e vínculo, unicidade, token cifrado obrigatório, regras da função de registro, imutabilidade, privilégios por papel, **transferência de unidade** com as tabelas `foody_*`, rollback e reaplicação; revisão final: conta Foody ativa em uma só unidade (F3), CHECK do mínimo da outra operação (F1), tenant conferido no commit e promoção de unidade (F2) |
 
 Paridade local, com os pedidos reais saneados da validação (sem PII, fora do repositório), reexecutada depois da revisão final: 30/30 comparações iguais ao pipeline do Parser, que por sua vez bateu 100% com os relatórios exportados.
 
 **Regressão:**
 - **Suíte completa do backend (após a revisão final):** 6.173 testes; 16 falham e 3 são cancelados, exatamente os mesmos (lista idêntica) do `origin/main` 6ce0c26 limpo, que tem 6.093 testes. Nenhuma falha nova. Rodar com `--experimental-vm-modules`, como o `npm test`.
-- **Testes com Postgres real:** os arquivos que montam o schema real (que agora inclui a 144) mantêm só as 2 falhas que também ocorrem sem a 144 (Dashboard × Excel × PDF e a lista de rotas do perfil de exibição); o restante passa.
-- **Testes existentes alterados:** só dois, `comunicacao-arquitetura-agendamento.test.js` e `ifood-migration-103.test.js`. Eles mantêm a lista das migrations conhecidas, e a 144 foi registrada nelas, como as 140–143 fizeram.
+- **Testes com Postgres real:** os arquivos que montam o schema real (que agora inclui a 147) mantêm só as 2 falhas que também ocorrem sem a 147 (Dashboard × Excel × PDF e a lista de rotas do perfil de exibição); o restante passa.
+- **Testes existentes alterados:** só dois, `comunicacao-arquitetura-agendamento.test.js` e `ifood-migration-103.test.js`. Eles mantêm a lista das migrations conhecidas, e a 147 foi registrada nelas, como as 140–143 fizeram.
 
-## 4.1 Conexão compartilhada (migration 145)
+## 4.1 Conexão compartilhada (migration 148)
 
 Ampliação para o caso real da conta Foody da Subway Saci, que também despacha os pedidos do Açaí no Grau Saci (OUTRA organização). Documento completo: [`foody-conexao-compartilhada.md`](foody-conexao-compartilhada.md). Com a flag `FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED` desligada, ou sem destino na conexão, tudo nesta página continua valendo sem mudança.
 

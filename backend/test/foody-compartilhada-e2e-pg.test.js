@@ -1,5 +1,5 @@
 // Ponta a ponta da conexão COMPARTILHADA contra Postgres LOCAL e DESCARTÁVEL (schema real 068..145): repositório, sincronização,
-// fechamentos e serviço de aprovação/triagem REAIS, com todas as triggers, checks e o índice global da 144/145 valendo.
+// fechamentos e serviço de aprovação/triagem REAIS, com todas as triggers, checks e o índice global da 147/148 valendo.
 // Só a API Foody é falsa. Só roda com CHECKLIST_PERFIL_PG_URL local; senão é PULADO. Dados 100% fictícios.
 //
 //   CHECKLIST_PERFIL_PG_URL=postgresql://postgres@127.0.0.1:55431/postgres node --test test/foody-compartilhada-e2e-pg.test.js
@@ -43,7 +43,7 @@ describe("conexão compartilhada ponta a ponta — Postgres real", { skip: motiv
     from foody_pedidos where foody_uid = '${uid}' and roteamento_ativo;`);
 
   before(() => {
-    b = criarBancoDescartavel("foody145e2e");
+    b = criarBancoDescartavel("foody148e2e");
     assert.deepEqual(construirSchemaReal(b.url), []);
     for (const [org, uni] of [[ORG_T, UNI_T], [ORG_D, UNI_D]]) {
       q(`insert into organizacoes (id, nome) values ('${org}', 'org ${org.slice(0, 4)}');
@@ -69,7 +69,7 @@ describe("conexão compartilhada ponta a ponta — Postgres real", { skip: motiv
       (e) => e.codigo === "SEM_PERMISSAO" && /Administrador ativo da organização/.test(e.message));
     const p = await proporDestino({ ator: ator(ADM_T, ORG_T), conexaoId, destino: { organizacaoId: ORG_D, unidadeId: UNI_D, operacao: "acai_no_grau" } }, svc());
     assert.equal(p.estado, "PENDENTE");
-    // Sem a aprovação do destino nada é distribuído: a sync segue a regra da 144 (Açaí mínimo na titular).
+    // Sem a aprovação do destino nada é distribuído: a sync segue a regra da 147 (Açaí mínimo na titular).
     await ciclo();
     assert.equal(ativo("c1"), `${UNI_T}|${ORG_T}|acai_no_grau|-`);
     const a = await aprovarDestino({ ator: ator(ADM_D, ORG_D), destinoId: p.id }, svc());

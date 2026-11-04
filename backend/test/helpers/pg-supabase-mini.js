@@ -1,5 +1,5 @@
 // Cliente MÍNIMO com a API do supabase-js usada por foody.repository.js, traduzida para SQL e executada via `psql` num Postgres
-// LOCAL e DESCARTÁVEL. Serve para rodar o repositório/serviços REAIS contra o schema real (triggers, checks e índices da 144/145).
+// LOCAL e DESCARTÁVEL. Serve para rodar o repositório/serviços REAIS contra o schema real (triggers, checks e índices da 147/148).
 // Só testes. Nunca aponta para banco remoto (o URL vem de criarBancoDescartavel, que recusa host não local).
 import { psqlSync } from "./pg-descartavel.js";
 

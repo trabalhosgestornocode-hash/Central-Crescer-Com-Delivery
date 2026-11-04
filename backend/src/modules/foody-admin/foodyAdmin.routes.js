@@ -2,7 +2,7 @@
 //   tenant.use("/integracoes/foody", foodyAdminRouter)    (depois de requireContexto + restringirPerfilExibicao)
 //
 // QUEM: permissão `integracoes.gerenciar` para entrar; toda AÇÃO exige organization_admin da organização do contexto, sem
-// impersonação (serviço) — e o banco confere de novo o papel em usuarios_organizacoes no momento de cada escrita (145/146).
+// impersonação (serviço) — e o banco confere de novo o papel em usuarios_organizacoes no momento de cada escrita (148/149).
 // O superadmin em impersonação só CONSULTA o estado (suporte); qualquer escrita dele é recusada aqui e no serviço.
 // FLAG: FOODY_CENTRAL_ADMIN_ENABLED (só a administração). Desligada, tudo responde 404 — menos as REVOGAÇÕES (da conexão e do
 // compartilhamento), que funcionam sempre: desligar nunca depende de ligar algo.
@@ -36,7 +36,7 @@ const STATUS_POR_CODIGO = {
   SEGREDO_AUSENTE: 503,
 };
 
-// Tabela/função ausente = migrations 144/145/146 ainda não aplicadas neste ambiente. As REVOGAÇÕES não passam pela flag, então
+// Tabela/função ausente = migrations 147/148/149 ainda não aplicadas neste ambiente. As REVOGAÇÕES não passam pela flag, então
 // chegam ao banco mesmo com tudo desligado: respondem 404 limpo (nada para revogar), nunca 500 nem detalhe de SQL.
 const NAO_INSTALADA = new Set(["42P01", "42883", "PGRST202", "PGRST205"]);
 

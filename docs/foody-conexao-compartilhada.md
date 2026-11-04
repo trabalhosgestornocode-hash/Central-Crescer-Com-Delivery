@@ -1,6 +1,6 @@
 # Conexão Foody compartilhada (Subway Saci + Açaí no Grau Saci): código local, piloto em sombra
 
-**Status:** código local + migration 145 **não aplicada**. A flag está desligada, não há rota HTTP nem consumidor. Ela é aplicada junto com a 144, com GO próprio.
+**Status:** código local + migration 148 **não aplicada**. A flag está desligada, não há rota HTTP nem consumidor. Ela é aplicada junto com a 144, com GO próprio.
 
 **Problema:** a conta Foody da Subway Saci despacha também os pedidos do Açaí no Grau Saci, que é **outra organização**. A coleta precisa continuar única: uma conexão, um token e uma consulta à API. Depois, os pedidos são distribuídos por operação, sem misturar dados entre as empresas.
 
@@ -8,13 +8,13 @@
 
 | # | Decisão |
 |---|---|
-| 1 | Uma conexão para as duas empresas. A unidade titular é a Subway Saci. A proteção F3 da 144 continua: uma conta (token) tem uma conexão ativa. |
+| 1 | Uma conexão para as duas empresas. A unidade titular é a Subway Saci. A proteção F3 da 147 continua: uma conta (token) tem uma conexão ativa. |
 | 2 | Indicadores por empresa: cada organização tem o próprio fechamento logístico. |
 | 3 | Sem empresa pagadora, sem rateio e sem acerto: só o custo logístico de cada operação, no tenant dela. |
 | 4 | Ambíguo vai para a triagem. **Item desconhecido também vai para a triagem**, mesmo que os outros itens do pedido sejam conhecidos. |
 | 5 | O vínculo exige aprovação explícita e auditável do organization_admin das **duas** organizações. |
 | 6 | Os 2.495 pedidos históricos de Açaí guardados pelo Parser (`parser_fd_pedidos`) **não são lidos pela aplicação, migrados nem alterados**. O gerador offline do catálogo lê o histórico só em `SELECT`. |
-| 7 | Reaproveita a camada da 144 (PR #75). |
+| 7 | Reaproveita a camada da 147 (PR #75). |
 
 ## 2. Fluxo
 
@@ -23,13 +23,13 @@ API Foody (GET, token da titular) ─► saneamento ─► classificação ESTRI
                                                                                                    │
               ┌────────────────────────────┬──────────────────────────────┬────────────────────────┴──────────┐
          subway                      açaí + destino ATIVO            açaí sem destino ativo             triagem
-   unidade TITULAR, completo    unidade DESTINO, completo         TITULAR, só mínimo (regra 144)   TITULAR, sem valor/pagamento
+   unidade TITULAR, completo    unidade DESTINO, completo         TITULAR, só mínimo (regra 147)   TITULAR, sem valor/pagamento
                                        (destino_id)                                               (mantém os itens p/ decidir)
 ```
 
 - Um uid nunca fica **ativo** em dois tenants. Quando a operação muda (por decisão de triagem ou revogação), a linha antiga é **desativada** antes de a nova ser gravada: fica sem dado comercial e com `roteamento_motivo = RECLASSIFICADO`. O banco reforça a regra com `uq_foody_pedidos_conexao_uid_ativo`.
 - **Destino PENDENTE ou sem flag:** comportamento da 144, com o Açaí mínimo na titular.
-- **Destino revogado:** volta à regra da 144. As linhas que estavam ativas no destino são desativadas na próxima sync de cada dia reprocessado.
+- **Destino revogado:** volta à regra da 147. As linhas que estavam ativas no destino são desativadas na próxima sync de cada dia reprocessado.
 - **Fechamentos:** a mesma sync gera um fechamento da titular (Subway) e um por destino ativo (Açaí), cada um no próprio tenant. Triagem pendente na conexão deixa os **dois** PROVISÓRIOS, com a pendência `TRIAGEM_PENDENTE`. Erro no fechamento do destino não impede o da titular.
 
 ## 3. Classificação estrita
@@ -66,10 +66,10 @@ node --env-file=.env scripts/foody-gerar-catalogo.mjs --unidade=<uuid da titular
 
 Com parâmetros mais rígidos (mínimo 3 ocorrências / 3 dias), a cobertura cai cerca de 1 ponto percentual, sem ganho de segurança mensurável. Ficou o padrão 2/2.
 
-**Comparação sobre os 385 pedidos reais saneados**, modo compartilhado contra o da 144:
+**Comparação sobre os 385 pedidos reais saneados**, modo compartilhado contra o da 147:
 - nenhum pedido perdido ou duplicado;
 - 0 divergências de operação;
-- `Subway compartilhado = Subway 144 − Subway que foi para a triagem`;
+- `Subway compartilhado = Subway 147 − Subway que foi para a triagem`;
 - soma das taxas brutas idêntica (R$ 1.587 e R$ 1.230 nos dois dias);
 - nenhum Açaí na titular e nenhum Subway no destino.
 
@@ -132,7 +132,7 @@ Superadmin em **impersonação não conta** para nenhuma dessas ações. O banco
 
 **Rotas e tela:** não fazem parte deste PR. O teste de arquitetura proíbe consumidores do módulo nesta fase. Expor o serviço em rota autenticada é a próxima etapa, com GO próprio.
 
-## 5. Migration 145 (aditiva sobre a 144)
+## 5. Migration 148 (aditiva sobre a 147)
 
 Tabelas novas:
 - `foody_conexao_destinos`: o vínculo, com o estado e as duas aprovações;
@@ -146,7 +146,7 @@ Colunas novas:
 
 O RLS está ligado, sem policy, e não há grant a anon nem a authenticated. O service_role não tem DELETE.
 
-O rollback (`145_rollback.sql`) é **fail-closed**: recusa se já houver vínculo, decisão ou pedido distribuído, e nesse caso aponta para o rollback da 144. Limpo, ele restaura as regras exatas da 144 e é idempotente. O `144_rollback.sql` remove também os objetos da 145.
+O rollback (`148_rollback.sql`) é **fail-closed**: recusa se já houver vínculo, decisão ou pedido distribuído, e nesse caso aponta para o rollback da 147. Limpo, ele restaura as regras exatas da 147 e é idempotente. O `147_rollback.sql` remove também os objetos da 148.
 
 ## 6. Testes
 
@@ -165,7 +165,7 @@ CHECKLIST_PERFIL_PG_URL=postgresql://postgres@127.0.0.1:<porta>/postgres \
   - mesma pessoa pelas duas organizações;
   - evolução do catálogo, com versões de fechamento e sem duplicidade.
 - `foody-compartilhada-catalogo.test.js`: regressão do catálogo (versão e hash fixados, congelado, uma operação por linha, sem texto livre), casos de borda e o gerador.
-- `foody-compartilhada-migration-pg.test.js`: regras da 145 no Postgres real. Cobre:
+- `foody-compartilhada-migration-pg.test.js`: regras da 148 no Postgres real. Cobre:
   - aprovação;
   - auditoria por tenant;
   - mesma pessoa em transações separadas;
@@ -179,10 +179,10 @@ CHECKLIST_PERFIL_PG_URL=postgresql://postgres@127.0.0.1:<porta>/postgres \
 
 ## 7. Para ligar (cada passo com GO próprio)
 
-1. Aplicar 144 + 145 (backup antes).
+1. Aplicar 147 + 148 (backup antes).
 2. Cadastrar a conexão da titular, que nasce PAUSADA. Ativar.
 3. Expor o serviço de vínculo/triagem em rota autenticada, com tela.
 4. O admin da titular propõe e o admin do Açaí aprova.
 5. Ligar `FOODY_CENTRAL_ENABLED`, a allowlist (só a titular) e `FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED` em sombra. Conferir com o Gestor.
 
-**Para desligar:** revogue o destino com a flag ligada e reprocesse D-1..D-3; só depois desligue a flag. Desligar a flag com destino ativo e linhas no destino faz a sync daqueles dias falhar de propósito (fail-closed: índice global e trava de linha desativada da 145), em vez de duplicar ou sumir com pedido.
+**Para desligar:** revogue o destino com a flag ligada e reprocesse D-1..D-3; só depois desligue a flag. Desligar a flag com destino ativo e linhas no destino faz a sync daqueles dias falhar de propósito (fail-closed: índice global e trava de linha desativada da 148), em vez de duplicar ou sumir com pedido.

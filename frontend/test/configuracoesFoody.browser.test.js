@@ -1,5 +1,5 @@
 // Foody Delivery (Configurações → Integrações) em NAVEGADOR REAL (Chrome via Playwright), com as ROTAS REAIS do backend
-// (criarFoodyAdminRouter → serviços → repositório) sobre o banco FALSO com o contrato da 146. Nunca fala com produção,
+// (criarFoodyAdminRouter → serviços → repositório) sobre o banco FALSO com o contrato da 149. Nunca fala com produção,
 // Supabase ou a API Foody: qualquer fetch do servidor para fora seria contado (e o teste exige zero).
 //
 // Rodar:

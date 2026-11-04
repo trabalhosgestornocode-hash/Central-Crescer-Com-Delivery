@@ -1,4 +1,4 @@
-// Migration 144 num Postgres LOCAL e DESCARTÁVEL com o schema REAL do repositório (base + 068..144).
+// Migration 147 num Postgres LOCAL e DESCARTÁVEL com o schema REAL do repositório (base + 068..144).
 // Só roda com CHECKLIST_PERFIL_PG_URL apontando para host local; caso contrário é PULADO (não é falha).
 //
 //   CHECKLIST_PERFIL_PG_URL=postgresql://postgres@127.0.0.1:55420/postgres node --test test/foody-central-migration-pg.test.js
@@ -12,7 +12,7 @@ const ORG_A = "11111111-1111-4111-8111-111111111111", UNI_A = "aaaaaaaa-aaaa-4aa
 const ORG_B = "22222222-2222-4222-8222-222222222222", UNI_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const H = "a".repeat(64), H2 = "b".repeat(64);
 
-describe("migration 144 — Postgres real", { skip: motivoPular, timeout: 600_000 }, () => {
+describe("migration 147 — Postgres real", { skip: motivoPular, timeout: 600_000 }, () => {
   let b;
   const ok = (texto) => { const r = psqlSync(b.url, texto); assert.equal(r.ok, true, r.err); return r.out.trim(); };
   const falha = (texto, padrao) => { const r = psqlSync(b.url, texto); assert.equal(r.ok, false, `deveria falhar: ${texto}`); if (padrao) assert.match(r.err, padrao); };
@@ -22,7 +22,7 @@ describe("migration 144 — Postgres real", { skip: motivoPular, timeout: 600_00
   };
 
   before(() => {
-    b = criarBancoDescartavel("foody144");
+    b = criarBancoDescartavel("foody147");
     assert.deepEqual(construirSchemaReal(b.url), []);
     // Duas organizações/unidades mínimas (só as colunas obrigatórias do schema real).
     const insOrg = (id) => ok(`insert into organizacoes (id, nome) values ('${id}', 'org teste ${id.slice(0, 4)}');`);
@@ -147,19 +147,19 @@ describe("migration 144 — Postgres real", { skip: motivoPular, timeout: 600_00
     assert.equal(ok(`select count(*) from foody_fechamentos_logisticos where unidade_id = '${UNI_A}' and organizacao_id <> '${ORG_B}';`), "0");
     assert.equal(ok(`select count(*) from foody_pedidos where unidade_id = '${UNI_A}' and organizacao_id <> '${ORG_B}';`), "0");
   });
-  test("rollback remove tudo, não toca o resto e a 144 reaplica limpa", () => {
+  test("rollback remove tudo, não toca o resto e a 147 reaplica limpa", () => {
     const antes = ok(`select count(*) from pg_tables where schemaname = 'public' and tablename not like 'foody_%';`);
-    const r = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "144_rollback.sql") });
+    const r = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "147_rollback.sql") });
     assert.equal(r.ok, true, r.err);
     assert.equal(ok(`select count(*) from pg_tables where tablename like 'foody_%';`), "0");
     assert.equal(ok(`select count(*) from pg_proc where proname like 'foody_%';`), "0");
     assert.equal(ok(`select count(*) from pg_tables where schemaname = 'public' and tablename not like 'foody_%';`), antes);
-    const r2 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "144_foody_camada_central.sql") });
+    const r2 = psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "147_foody_camada_central.sql") });
     assert.equal(r2.ok, true, r2.err);
     assert.equal(ok(`select count(*) from pg_tables where tablename like 'foody_%';`), "4");
     // rollback idempotente
-    assert.equal(psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "144_rollback.sql") }).ok, true);
-    assert.equal(psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "144_rollback.sql") }).ok, true);
+    assert.equal(psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "147_rollback.sql") }).ok, true);
+    assert.equal(psqlSync(b.url, "", { arquivo: join(MIGRATIONS_DIR, "147_rollback.sql") }).ok, true);
     void sql;
   });
 });

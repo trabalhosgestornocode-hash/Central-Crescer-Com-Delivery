@@ -14,7 +14,7 @@
 //   * estados de valor: brutas = SINCRONIZADO; válidas = PROVISORIO enquanto houver decisão pendente; custo real = não disponível.
 // CONEXÃO COMPARTILHADA (145, `compartilhado: true`): o mesmo cálculo roda POR TENANT, com a operação daquele tenant como
 // principal (titular = subway; destino = a operação do destino). Linhas desativadas e de TRIAGEM nunca entram nos totais; triagem
-// pendente na conexão deixa o fechamento PROVISÓRIO. Sem `compartilhado`, a saída é idêntica à da 144 (mesmo hash).
+// pendente na conexão deixa o fechamento PROVISÓRIO. Sem `compartilhado`, a saída é idêntica à da 147 (mesmo hash).
 import { OPERACAO, classificarOperacao } from "../parser-food-delivery/parserFoodDelivery.operacao.js";
 import {
   ehCancelado, temEntregador, resolverStatusConciliacao, resumoConciliacao, agruparPorEntregador, STATUS_CONCILIACAO,

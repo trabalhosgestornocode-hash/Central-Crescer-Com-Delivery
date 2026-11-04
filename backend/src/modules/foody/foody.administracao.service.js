@@ -1,4 +1,4 @@
-// ADMINISTRAÇÃO da integração Foody pela tela (migration 146): estado, cadastro seguro da conexão, ativar/pausar/revogar e o
+// ADMINISTRAÇÃO da integração Foody pela tela (migration 149): estado, cadastro seguro da conexão, ativar/pausar/revogar e o
 // compartilhamento entre organizações (proposta restrita às organizações em que o próprio administrador tem vínculo).
 //
 // O QUE ESTE SERVIÇO NUNCA FAZ:
@@ -7,7 +7,7 @@
 //   * devolver o token: ele só entra (corpo do POST), é cifrado aqui com a chave da unidade e vai ao banco cifrado; para a tela sai
 //     no máximo o final da IMPRESSÃO (hash), nunca o token nem o cifrado;
 //   * confiar no papel da sessão sozinho: a sessão congela o papel por até 8 h, então o banco confere de novo (usuarios_organizacoes)
-//     em toda escrita — conexão (146), vínculo e triagem (145);
+//     em toda escrita — conexão (149), vínculo e triagem (148);
 //   * agir em impersonação: o superadmin pode CONSULTAR o estado (suporte), mas não cadastra, aprova, revoga nem decide.
 import { administracaoPermitida, unidadePermitida, agendamentoPermitido, compartilhamentoPermitido } from "./foody.flags.js";
 import { impressaoToken, FoodyConfigErro } from "./foody.seguranca.js";

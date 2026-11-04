@@ -1,4 +1,4 @@
-// Vínculo da CONEXÃO COMPARTILHADA (145) e decisões de TRIAGEM — regras de aplicação. O banco confere tudo de novo (triggers
+// Vínculo da CONEXÃO COMPARTILHADA (148) e decisões de TRIAGEM — regras de aplicação. O banco confere tudo de novo (triggers
 // foody_destino_validar / foody_triagem_decisao_validar, com o papel lido de usuarios_organizacoes no momento da escrita).
 //
 //   1. PROPOR: organization_admin da organização TITULAR propõe o destino (organização + unidade + operação). A proposta já leva
@@ -9,7 +9,7 @@
 //      na próxima sincronização). Pedido FORA da triagem só pode ser reclassificado pelo admin da organização que hoje o detém
 //      (ninguém puxa para si um pedido já atribuído à outra empresa).
 // Superadmin em IMPERSONAÇÃO não aprova, não revoga e não decide: a decisão é da própria empresa.
-// Exposto por rota autenticada em modules/foody-admin (146); tudo exige a flag de ADMINISTRAÇÃO, exceto revogar.
+// Exposto por rota autenticada em modules/foody-admin (149); tudo exige a flag de ADMINISTRAÇÃO, exceto revogar.
 import { administracaoPermitida } from "./foody.flags.js";
 import { OPERACAO_COMPARTILHADA, RESULTADO_TRIAGEM, CATALOGO_VERSAO } from "./foody.classificacao.js";
 import { chaveTenant } from "./foody.roteamento.js";
@@ -39,7 +39,7 @@ export function ehAdminDaOrganizacao(ator, organizacaoId) {
     && organizacaoId && ator.organizacaoId === organizacaoId);
 }
 
-// Administrar o vínculo e a triagem depende só da flag de ADMINISTRAÇÃO (146) — nunca da de sincronização: aprovar um destino
+// Administrar o vínculo e a triagem depende só da flag de ADMINISTRAÇÃO (149) — nunca da de sincronização: aprovar um destino
 // não coleta pedido nenhum; a distribuição só acontece quando a sync (outra flag) rodar.
 function exigirFlag(env) {
   if (!administracaoPermitida(env)) throw erro("DESLIGADO", "administração da integração Foody desligada.");

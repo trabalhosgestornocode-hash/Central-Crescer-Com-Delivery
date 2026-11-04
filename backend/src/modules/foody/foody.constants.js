@@ -64,10 +64,10 @@ export const ORIGEM = Object.freeze({ MANUAL: "manual", AGENDADO: "agendado", RE
 export const FLAG_HABILITADO = "FOODY_CENTRAL_ENABLED";
 export const FLAG_AGENDADOR = "FOODY_CENTRAL_AGENDADOR_ENABLED";
 export const FLAG_UNIDADES = "FOODY_CENTRAL_UNIDADES";
-/** Conexão COMPARTILHADA (migration 145): distribuição por operação para destinos ATIVOS. Desligada = comportamento da 144. */
+/** Conexão COMPARTILHADA (migration 148): distribuição por operação para destinos ATIVOS. Desligada = comportamento da 147. */
 export const FLAG_COMPARTILHAMENTO = "FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED";
 /**
- * ADMINISTRAÇÃO da integração pela tela (146): cadastrar/ativar/pausar/revogar a conexão, propor/aprovar/revogar o
+ * ADMINISTRAÇÃO da integração pela tela (149): cadastrar/ativar/pausar/revogar a conexão, propor/aprovar/revogar o
  * compartilhamento e decidir a triagem. É SEPARADA da sincronização: ligar esta flag não coleta nenhum pedido — a coleta depende
  * só de FOODY_CENTRAL_ENABLED + allowlist (+ agendador), que são outra decisão.
  */

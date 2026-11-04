@@ -91,7 +91,7 @@ tenant.use("/notificacoes", notificacoesRouter);   // idem — Central de Notifi
 tenant.use("/vendas", requireModulo(MODULOS.SALES), vendasRouter);
 tenant.use("/integracoes/martin-brower", requireModulo(MODULOS.MARTIN_BROWER), martinBrowerRouter);
 tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
-// Foody Delivery — ADMINISTRAÇÃO da conexão/compartilhamento/triagem (146). Sem módulo contratável de propósito: a titular
+// Foody Delivery — ADMINISTRAÇÃO da conexão/compartilhamento/triagem (149). Sem módulo contratável de propósito: a titular
 // (Subway) e o destino (Açaí) são empresas diferentes e as duas precisam abrir a tela; quem decide é a flag
 // FOODY_CENTRAL_ADMIN_ENABLED + organization_admin (conferido de novo no banco). Não coleta pedidos (a sync é outra flag).
 tenant.use("/integracoes/foody", foodyAdminRouter);

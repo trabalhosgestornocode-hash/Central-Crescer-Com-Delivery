@@ -2,8 +2,8 @@
 // fake em memória nos testes) — este arquivo NÃO importa config/supabase.js, então importar o módulo não abre conexão.
 //
 // ISOLAMENTO: TODA leitura e escrita filtra por organizacao_id E unidade_id; toda linha gravada recebe os dois do contexto
-// da execução (nunca do payload da API). O banco reforça com triggers de tenant (migration 144).
-// CONEXÃO COMPARTILHADA (145): as leituras "da conexão" filtram por conexao_id e CONFEREM que cada linha devolvida está num
+// da execução (nunca do payload da API). O banco reforça com triggers de tenant (migration 147).
+// CONEXÃO COMPARTILHADA (148): as leituras "da conexão" filtram por conexao_id e CONFEREM que cada linha devolvida está num
 // tenant autorizado (titular ou destino da própria conexão) — linha de qualquer outro tenant aborta a operação.
 
 const LOTE = 200;
@@ -16,7 +16,7 @@ export class FoodyRepoErro extends Error {
 const falha = (operacao, error) => Object.assign(
   new FoodyRepoErro("BANCO", `${operacao}: ${error?.code ?? ""} ${String(error?.message ?? "").slice(0, 160)}`.trim()), { pgCodigo: error?.code ?? null });
 
-// Códigos estáveis devolvidos pelo banco nas regras da 146 ("foody_conexao_administrar: CODIGO — texto" / "foody_conexoes: CODIGO —").
+// Códigos estáveis devolvidos pelo banco nas regras da 149 ("foody_conexao_administrar: CODIGO — texto" / "foody_conexoes: CODIGO —").
 const CODIGOS_ADMIN = ["SEM_PERMISSAO", "UNIDADE_FORA_DA_ORGANIZACAO", "ACAO_INVALIDA", "TOKEN_INVALIDO", "MOTIVO_INVALIDO", "SEM_CONEXAO",
   "CONEXAO_EXISTENTE", "CONEXAO_REVOGADA", "CONTA_JA_CONECTADA", "DESTINO_VIVO", "COMPARTILHAMENTO_VIVO", "TRANSICAO_INVALIDA"];
 function erroAdministracao(operacao, error) {
@@ -30,7 +30,7 @@ function erroAdministracao(operacao, error) {
   }
   return falha(operacao, error);
 }
-// Recusas do banco no vínculo e na triagem (145) → código estável para a tela explicar o motivo (sem eco de SQL).
+// Recusas do banco no vínculo e na triagem (148) → código estável para a tela explicar o motivo (sem eco de SQL).
 const RECUSAS_VINCULO = [
   [/já tem conexão Foody própria/, "DESTINO_COM_CONEXAO_PROPRIA", "a unidade de destino já tem conexão Foody própria (seria contagem dupla)."],
   [/uq_foody_destino_conexao_operacao/, "VINCULO_EXISTENTE", "esta conexão já tem um compartilhamento vivo para essa operação."],
@@ -145,7 +145,7 @@ export function criarRepositorioFoody(db) {
       return todos;
     },
 
-    // ------------------------------------------------------------------ conexão compartilhada (145)
+    // ------------------------------------------------------------------ conexão compartilhada (148)
 
     /** Destinos (todos os estados) da conexão da unidade titular `t`. */
     async listarDestinosDaConexao(t, conexaoId) {
@@ -167,7 +167,7 @@ export function criarRepositorioFoody(db) {
         if (error) throw falha("carregarAtivosDaConexao", error);
         exigirTenantsPermitidos(data ?? [], permitidos, "carregarAtivosDaConexao");
         for (const r of data ?? []) {
-          // Invariante da 145 (índice único global): um uid ativo em DOIS tenants nunca é "consertado" em silêncio.
+          // Invariante da 148 (índice único global): um uid ativo em DOIS tenants nunca é "consertado" em silêncio.
           if (mapa.has(r.foody_uid)) throw new FoodyRepoErro("INTEGRIDADE", "carregarAtivosDaConexao: pedido ativo em dois tenants.");
           mapa.set(r.foody_uid, r);
         }
@@ -326,7 +326,7 @@ export function criarRepositorioFoody(db) {
       return [...out].sort(([a], [b]) => (a < b ? -1 : 1)).map(([competencia, motivo]) => ({ competencia, motivo }));
     },
 
-    // ------------------------------------------------------------------ administração pela tela (146)
+    // ------------------------------------------------------------------ administração pela tela (149)
     // Escrita SÓ pela função do banco (admin conferido em usuarios_organizacoes no momento da ação + evento na mesma transação).
 
     async administrarConexao(t, { acao, ator, tokenCifrado = null, tokenImpressao = null, pontoColeta = null, motivo = null }) {
@@ -380,7 +380,7 @@ export function criarRepositorioFoody(db) {
       return data ?? [];
     },
 
-    /** Auditoria do vínculo gravada no tenant (145: cada organização só tem os eventos do próprio lado). */
+    /** Auditoria do vínculo gravada no tenant (148: cada organização só tem os eventos do próprio lado). */
     async listarEventosDeDestinos(organizacaoId, unidadeId, limite = 50) {
       if (!organizacaoId || !unidadeId) throw new FoodyRepoErro("TENANT_AUSENTE", "organização e unidade são obrigatórias.");
       const { data, error } = await db.from("foody_destinos_eventos")

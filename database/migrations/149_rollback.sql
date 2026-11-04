@@ -1,7 +1,7 @@
--- Rollback da 146 — remove a ADMINISTRAÇÃO da conexão Foody pela tela (volta ao desenho da 145).
+-- Rollback da 149 — remove a ADMINISTRAÇÃO da conexão Foody pela tela (volta ao desenho da 148).
 --
 -- FAIL-CLOSED: se já existir QUALQUER evento de conexão (auditoria de quem cadastrou, ativou, pausou ou revogou), o rollback
--- RECUSA — apagar a trilha esconderia quem mexeu no token. Nesse caso exporte e use o rollback da 144 (remove a camada inteira):
+-- RECUSA — apagar a trilha esconderia quem mexeu no token. Nesse caso exporte e use o rollback da 147 (remove a camada inteira):
 --   copy (select * from foody_conexoes_eventos order by criado_em) to stdout with csv header;
 -- Não mexe em conexões, pedidos, destinos nem fechamentos. Idempotente.
 
@@ -12,7 +12,7 @@ do $$
 begin
   if to_regclass('public.foody_conexoes_eventos') is not null then
     if exists (select 1 from foody_conexoes_eventos) then
-      raise exception 'rollback 146 recusado: existem eventos de administração da conexão (auditoria). Use o rollback da 144.' using errcode = '55000';
+      raise exception 'rollback 149 recusado: existem eventos de administração da conexão (auditoria). Use o rollback da 147.' using errcode = '55000';
     end if;
   end if;
 end $$;

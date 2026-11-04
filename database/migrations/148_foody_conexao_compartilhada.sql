@@ -1,21 +1,21 @@
--- 145 — Camada central Foody: CONEXÃO COMPARTILHADA entre organizações (piloto em SOMBRA).
+-- 148 — Camada central Foody: CONEXÃO COMPARTILHADA entre organizações (piloto em SOMBRA).
 --
 -- Caso real: a conta Foody da Subway Saci (unidade titular da conexão) despacha também os pedidos do Açaí no Grau Saci, que é
 -- OUTRA organização. A coleta continua ÚNICA (uma conexão, um token, uma consulta à API); os pedidos são DISTRIBUÍDOS por
 -- operação:
 --   * operação da titular (Subway)           → unidade titular, dados completos;
 --   * operação com DESTINO ATIVO (Açaí)      → unidade de destino, dados completos (destino_id);
---   * operação sem destino ativo             → unidade titular, só o mínimo logístico (regra da 144);
+--   * operação sem destino ativo             → unidade titular, só o mínimo logístico (regra da 147);
 --   * classificação sem evidência segura     → TRIAGEM (operacao = 'triagem', unidade titular, sem dado comercial).
 --
--- ADITIVA sobre a 144 (que também NÃO está aplicada em produção: as duas sobem juntas, com GO próprio). Não toca tabelas fora do
+-- ADITIVA sobre a 147 (que também NÃO está aplicada em produção: as duas sobem juntas, com GO próprio). Não toca tabelas fora do
 -- prefixo foody_. Os 2.495 pedidos de Açaí que o Parser guarda na Subway (parser_fd_pedidos) NÃO são lidos nem alterados.
 --
 -- REGRAS GARANTIDAS PELO BANCO (além da aplicação):
 --   1. Destino só fica ATIVO com DUAS aprovações: organization_admin ATIVO da organização TITULAR e da organização de DESTINO
 --      (conferido em usuarios_organizacoes no momento da aprovação). Toda mudança gera evento em foody_destinos_eventos
 --      (somente inclusão). Mudança da organização da unidade (transferência/promoção) REVOGA o destino automaticamente.
---   2. A mesma conta (token) continua com UMA conexão ativa (uq_foody_conexoes_conta_ativa, 144) — o compartilhamento é um
+--   2. A mesma conta (token) continua com UMA conexão ativa (uq_foody_conexoes_conta_ativa, 147) — o compartilhamento é um
 --      VÍNCULO da conexão, nunca uma segunda conexão.
 --   3. Um pedido nunca está ATIVO em duas unidades/organizações: índice único (conexao_id, foody_uid) onde roteamento_ativo
 --      (cobre destino, titular e triagem — tudo na mesma tabela).
@@ -24,7 +24,7 @@
 --   5. Registro filho só aponta para execução da própria unidade OU de conexão da qual a unidade é destino.
 --   6. Decisão de triagem: só organization_admin de uma das organizações do vínculo; somente inclusão (auditável).
 --
--- SEGURANÇA: RLS ligado, NENHUMA policy, nenhum grant a anon/authenticated (igual à 144). service_role sem DELETE.
+-- SEGURANÇA: RLS ligado, NENHUMA policy, nenhum grant a anon/authenticated (igual à 147). service_role sem DELETE.
 
 begin;
 set local lock_timeout = '5s';
@@ -278,7 +278,7 @@ alter table foody_pedidos add constraint ck_foody_pedidos_operacao
   check (operacao in ('subway', 'acai_no_grau', 'revisao_necessaria', 'triagem'));
 
 -- Dado comercial: titular (subway/revisão) OU destino da própria operação (validado pela trigger abaixo). Triagem e linha
--- desativada: nunca. A regra da 144 (outra operação sem destino = só o mínimo) continua.
+-- desativada: nunca. A regra da 147 (outra operação sem destino = só o mínimo) continua.
 alter table foody_pedidos drop constraint if exists ck_foody_pedidos_outra_operacao_minima;
 alter table foody_pedidos add constraint ck_foody_pedidos_outra_operacao_minima check (
   (operacao in ('subway', 'revisao_necessaria') and destino_id is null)
@@ -311,7 +311,7 @@ begin
   if new.conexao_id is distinct from exec_conexao then
     raise exception 'foody_pedidos: conexao_id diverge da conexão da execução' using errcode = '42501';
   end if;
-  -- Conexão e uid são fixos; a única transição aceita é nula → conexão da execução (linha gravada pela 144 antes desta migration).
+  -- Conexão e uid são fixos; a única transição aceita é nula → conexão da execução (linha gravada pela 147 antes desta migration).
   if tg_op = 'UPDATE' and ((old.conexao_id is not null and new.conexao_id is distinct from old.conexao_id)
                            or new.foody_uid is distinct from old.foody_uid) then
     raise exception 'foody_pedidos: conexão e uid de um pedido não mudam' using errcode = '42501';
@@ -350,12 +350,12 @@ end $$;
 drop trigger if exists trg_foody_pedidos_valida_destino on foody_pedidos;
 create trigger trg_foody_pedidos_valida_destino before insert or update on foody_pedidos
   for each row execute function foody_pedido_validar_destino();
--- Linhas gravadas pela 144 antes desta migration (se houver) ganham a conexão da própria execução: assim TODO pedido entra na
+-- Linhas gravadas pela 147 antes desta migration (se houver) ganham a conexão da própria execução: assim TODO pedido entra na
 -- unicidade global. Idempotente; não muda dado comercial nem o estado da linha.
 update foody_pedidos p set conexao_id = e.conexao_id
   from foody_sync_execucoes e where p.conexao_id is null and e.id = p.ultima_execucao_id;
 
--- Vínculo com a execução (substitui a versão da 144): mesma unidade OU unidade que é destino da conexão da execução.
+-- Vínculo com a execução (substitui a versão da 147): mesma unidade OU unidade que é destino da conexão da execução.
 -- Aceita destino em qualquer estado aqui (atualizações de transferência de linhas antigas); a exigência de destino ATIVO para
 -- gravar dado novo fica em foody_pedido_validar_destino e em foody_fech_exigir_destino_ativo.
 create or replace function foody_validar_vinculo_execucao() returns trigger
@@ -449,7 +449,7 @@ create trigger trg_foody_triagem_decisao_imutavel before update or delete on foo
   for each row execute function foody_registro_imutavel();
 
 -- ---------------------------------------------------------------------------------------------------------------------------
--- 7. RLS e privilégios (mesmo padrão da 144)
+-- 7. RLS e privilégios (mesmo padrão da 147)
 -- ---------------------------------------------------------------------------------------------------------------------------
 do $$
 declare t text;
@@ -474,7 +474,7 @@ begin
     grant update (organizacao_id) on foody_destinos_eventos to service_role;
     grant select, insert on foody_triagem_decisoes to service_role;
     grant update (organizacao_id) on foody_triagem_decisoes to service_role;
-    -- foody_pedidos/foody_sync_execucoes já têm SELECT/INSERT/UPDATE de tabela (144): as colunas novas herdam.
+    -- foody_pedidos/foody_sync_execucoes já têm SELECT/INSERT/UPDATE de tabela (147): as colunas novas herdam.
   end if;
 end $$;
 

@@ -1,9 +1,9 @@
--- Rollback da 145 — remove a conexão compartilhada e volta a camada Foody ao desenho da 144 (uma unidade por conexão).
+-- Rollback da 148 — remove a conexão compartilhada e volta a camada Foody ao desenho da 147 (uma unidade por conexão).
 --
 -- FAIL-CLOSED: se já existir QUALQUER dado do modo compartilhado (destino, decisão de triagem, pedido em unidade de destino,
 -- pedido em triagem ou pedido desativado por roteamento), o rollback RECUSA — apagar isso perderia a trilha de auditoria e
 -- deixaria pedidos de uma organização sem o vínculo que autorizou a cópia. Nesse caso: revogue os destinos, exporte o que
--- precisar e rode o rollback da 144 (remove a camada inteira). Idempotente quando não há dado compartilhado.
+-- precisar e rode o rollback da 147 (remove a camada inteira). Idempotente quando não há dado compartilhado.
 --   copy (select * from foody_destinos_eventos order by criado_em) to stdout with csv header;
 
 begin;
@@ -12,33 +12,33 @@ set local lock_timeout = '5s';
 do $$
 declare tem boolean;
 begin
-  -- A 146 (administração da conexão) depende da 145: desfaça a 146 primeiro.
+  -- A 149 (administração da conexão) depende da 148: desfaça a 149 primeiro.
   if to_regclass('public.foody_conexoes_eventos') is not null then
-    raise exception 'rollback 145 recusado: a migration 146 está aplicada. Rode o 146_rollback.sql antes (ou o rollback da 144).' using errcode = '55000';
+    raise exception 'rollback 148 recusado: a migration 149 está aplicada. Rode o 149_rollback.sql antes (ou o rollback da 147).' using errcode = '55000';
   end if;
   -- IFs aninhados: a expressão inteira é preparada de uma vez, e a tabela pode já não existir (rollback idempotente).
   if to_regclass('public.foody_conexao_destinos') is not null then
     if exists (select 1 from foody_conexao_destinos) then
-      raise exception 'rollback 145 recusado: existem destinos de compartilhamento (auditoria). Use o rollback da 144.' using errcode = '55000';
+      raise exception 'rollback 148 recusado: existem destinos de compartilhamento (auditoria). Use o rollback da 147.' using errcode = '55000';
     end if;
   end if;
   if to_regclass('public.foody_triagem_decisoes') is not null then
     if exists (select 1 from foody_triagem_decisoes) then
-      raise exception 'rollback 145 recusado: existem decisões de triagem (auditoria). Use o rollback da 144.' using errcode = '55000';
+      raise exception 'rollback 148 recusado: existem decisões de triagem (auditoria). Use o rollback da 147.' using errcode = '55000';
     end if;
   end if;
   if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'foody_pedidos' and column_name = 'destino_id') then
-    -- SQL dinâmico: as colunas só existem com a 145 aplicada.
+    -- SQL dinâmico: as colunas só existem com a 148 aplicada.
     if exists (select 1 from foody_pedidos) then
       execute 'select exists (select 1 from foody_pedidos where destino_id is not null or operacao = ''triagem'' or not roteamento_ativo)' into tem;
       if tem then
-        raise exception 'rollback 145 recusado: existem pedidos distribuídos/triagem. Use o rollback da 144.' using errcode = '55000';
+        raise exception 'rollback 148 recusado: existem pedidos distribuídos/triagem. Use o rollback da 147.' using errcode = '55000';
       end if;
     end if;
   end if;
 end $$;
 
--- Pedidos: triggers, índices, constraints e colunas da 145; volta as constraints da 144.
+-- Pedidos: triggers, índices, constraints e colunas da 148; volta as constraints da 147.
 drop trigger if exists trg_foody_pedidos_valida_destino on foody_pedidos;
 drop index if exists uq_foody_pedidos_conexao_uid_ativo;
 drop index if exists idx_foody_pedidos_conexao_competencia;
@@ -81,7 +81,7 @@ drop function if exists foody_conexao_revogar_destinos();
 drop function if exists foody_destino_validar();
 drop function if exists foody_eh_admin_da_organizacao(uuid, uuid);
 
--- Vínculo com a execução: versão EXATA da 144 (mesma unidade).
+-- Vínculo com a execução: versão EXATA da 147 (mesma unidade).
 create or replace function foody_validar_vinculo_execucao() returns trigger
 language plpgsql set search_path = public as $$
 declare

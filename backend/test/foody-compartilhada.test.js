@@ -1,4 +1,4 @@
-// Conexão Foody COMPARTILHADA (migration 145): distribuição por operação, triagem estrita, isolamento multi-tenant, um uid ativo
+// Conexão Foody COMPARTILHADA (migration 148): distribuição por operação, triagem estrita, isolamento multi-tenant, um uid ativo
 // em um só tenant, fechamentos independentes e o serviço de aprovação dupla / decisão de triagem. Banco FALSO em memória e API
 // FALSA: nenhuma rede, nenhum banco real, nenhum dado real (pedidos sintéticos).
 import { test, describe, beforeEach } from "node:test";
@@ -159,7 +159,7 @@ describe("um pedido nunca ativo em dois tenants", () => {
     await assert.rejects(sync(), (e) => e.codigo === "INTEGRIDADE");
     assert.equal(ativos("s1").length, 2, "nada é desativado nem regravado quando a invariante já está quebrada");
   });
-  test("destino REVOGADO: linhas do destino são desativadas e o Açaí volta à regra da 144 (mínimo na titular)", async () => {
+  test("destino REVOGADO: linhas do destino são desativadas e o Açaí volta à regra da 147 (mínimo na titular)", async () => {
     await sync();
     db.tabelas.foody_conexao_destinos[0].estado = "REVOGADO";
     const r = await sync();
@@ -172,7 +172,7 @@ describe("um pedido nunca ativo em dois tenants", () => {
 });
 
 describe("isolamento e travas", () => {
-  test("flag de compartilhamento DESLIGADA: destinos nem são lidos; comportamento idêntico à 144", async () => {
+  test("flag de compartilhamento DESLIGADA: destinos nem são lidos; comportamento idêntico à 147", async () => {
     const env = { ...ENV, FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED: "false" };
     const r = await sync(env);
     assert.equal(db.chamadas.filter((c) => c.tabela === "foody_conexao_destinos").length, 0);

@@ -1,4 +1,4 @@
-// Administração da integração Foody pela tela (146) — rotas REAIS (criarFoodyAdminRouter) sobre o banco FALSO com o mesmo
+// Administração da integração Foody pela tela (149) — rotas REAIS (criarFoodyAdminRouter) sobre o banco FALSO com o mesmo
 // contrato da função foody_conexao_administrar. A versão real do banco é exercitada em foody-admin-pg.test.js.
 // Cobre: flags (administração ≠ sincronização), permissões, impersonação, proteção do token, ciclo da conexão, dupla contagem,
 // compartilhamento (proposta restrita, dois atos, mesma pessoa), isolamento entre empresas e triagem.

@@ -1,4 +1,4 @@
-// Catálogo VERSIONADO de operação (conexão compartilhada, 145): regressão do conteúdo, regras da classificação estrita e do
+// Catálogo VERSIONADO de operação (conexão compartilhada, 148): regressão do conteúdo, regras da classificação estrita e do
 // gerador offline. Mudar uma linha do catálogo exige gerar nova versão (scripts/foody-gerar-catalogo.mjs) e atualizar o hash
 // fixado aqui — em PR, nunca em produção.
 import { test, describe } from "node:test";
