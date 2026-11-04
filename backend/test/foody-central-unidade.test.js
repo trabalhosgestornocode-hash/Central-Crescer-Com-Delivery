@@ -345,3 +345,19 @@ describe("revisão de segurança — regressões F1/F4/F5 e integridade financei
     assert.equal(Math.round(somaEntregadores * 100) / 100, s.proprio.taxasValidas);
   });
 });
+
+describe("pendência nunca nasce consolidada (revisão integrada)", () => {
+  test("PROVISORIO sem consolidação anterior → PRELIMINAR; resolvido → CONSOLIDADO; após consolidar, mudança com pendência → CORRIGIDO (não volta a PRELIMINAR)", async () => {
+    const { fechamentoDefinitivo } = await import("../src/modules/foody/foody.constants.js");
+    assert.deepEqual(decidirStatus({ status: "CONSOLIDADO", estadoValores: "PROVISORIO", hash: "h1" }, null, null), { status: "PRELIMINAR", motivo: null });
+    assert.equal(decidirStatus({ status: "CONSOLIDADO", estadoValores: "PROVISORIO", hash: "h2" }, { status: "PRELIMINAR", hash_conteudo: "h1" }).status, "PRELIMINAR");
+    assert.equal(decidirStatus({ status: "CONSOLIDADO", estadoValores: "SINCRONIZADO", hash: "h3" }, { status: "PRELIMINAR", hash_conteudo: "h2" }).status, "CONSOLIDADO");
+    assert.equal(decidirStatus({ status: "CONSOLIDADO", estadoValores: "PROVISORIO", hash: "h4" }, { status: "CONSOLIDADO", hash_conteudo: "h3" }).status, "CORRIGIDO");
+    assert.equal(decidirStatus({ status: "INCOMPLETO", estadoValores: "PROVISORIO", hash: "h5" }, null).status, "INCOMPLETO");
+    // consumidores: status E estado
+    assert.equal(fechamentoDefinitivo({ status: "CONSOLIDADO", estado_valores: "SINCRONIZADO" }), true);
+    assert.equal(fechamentoDefinitivo({ status: "CORRIGIDO", estado_valores: "PROVISORIO" }), false, "correção com pendência nova não é definitiva");
+    for (const status of ["PRELIMINAR", "INCOMPLETO"]) assert.equal(fechamentoDefinitivo({ status, estado_valores: "SINCRONIZADO" }), false);
+    assert.equal(fechamentoDefinitivo(null), false);
+  });
+});

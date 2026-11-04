@@ -16,10 +16,17 @@ const lit = (v) => {
 };
 const json = (v) => `'${JSON.stringify(v).replace(/'/g, "''")}'::json`;
 
-export function criarClientePg(url) {
+/**
+ * @param {string} url
+ * @param {{executor?: (sql:string) => Promise<{data:any, error:any}>}} [opcoes] executor ASSÍNCRONO opcional (ex.: uma sessão psql
+ *   única dentro de uma transação que termina em ROLLBACK); sem ele, cada chamada é um `psql` separado (autocommit).
+ */
+export function criarClientePg(url, { executor = null } = {}) {
   const chamadas = [];
+  const aplicar = (r, f) => (r && typeof r.then === "function" ? r.then(f) : f(r));
   function executar(texto) {
     chamadas.push(texto);
+    if (executor) return executor(texto);
     const r = psqlSync(url, `\\set VERBOSITY verbose\n${texto}`);
     if (!r.ok) {
       const m = /ERROR:\s+([0-9A-Z]{5}):\s*([^\n]*)/.exec(r.err);
@@ -53,7 +60,7 @@ export function criarClientePg(url) {
         if (st.ordem) q += ` order by ${id(st.ordem[0])} ${st.ordem[1] ? "asc" : "desc"}`;
         if (st.faixa) q += ` limit ${st.faixa[1] - st.faixa[0] + 1} offset ${st.faixa[0]}`;
         else if (st.lim != null) q += ` limit ${st.lim}`;
-        return finalizar(executar(`select coalesce(jsonb_agg(x), '[]'::jsonb) from (${q}) x;`));
+        return aplicar(executar(`select coalesce(jsonb_agg(x), '[]'::jsonb) from (${q}) x;`), finalizar);
       }
       if (st.op === "insert" || st.op === "upsert") {
         const linhas = Array.isArray(st.valor) ? st.valor : [st.valor];
@@ -64,12 +71,12 @@ export function criarClientePg(url) {
           const alvo = st.opcoes.onConflict.split(",").map((x) => id(x.trim()));
           q += ` on conflict (${alvo.join(", ")}) do update set ${cols.filter((c) => !alvo.includes(c)).map((c) => `${c} = excluded.${c}`).join(", ")}`;
         }
-        return finalizar(executar(`with w as (${q} returning *) select coalesce(jsonb_agg(w), '[]'::jsonb) from w;`));
+        return aplicar(executar(`with w as (${q} returning *) select coalesce(jsonb_agg(w), '[]'::jsonb) from w;`), finalizar);
       }
       if (st.op === "update") {
         const cols = Object.keys(st.valor).map(id);
         const q = `update ${t} set (${cols.join(", ")}) = (select ${cols.join(", ")} from json_populate_record(null::${t}, ${json(st.valor)}))${where()}`;
-        return finalizar(executar(`with w as (${q} returning *) select coalesce(jsonb_agg(w), '[]'::jsonb) from w;`));
+        return aplicar(executar(`with w as (${q} returning *) select coalesce(jsonb_agg(w), '[]'::jsonb) from w;`), finalizar);
       }
       throw new Error(`op ${st.op}`);
     };

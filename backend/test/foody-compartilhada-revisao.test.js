@@ -171,12 +171,13 @@ describe("4. evolução do catálogo e resolução da triagem", () => {
   const catalogoNovo = (extra) => ({ versao: "2026-12-01.1", linhas: {
     subway: [...CATALOGO_OPERACAO.linhas.subway, ...(extra.subway ?? [])],
     acai_no_grau: [...CATALOGO_OPERACAO.linhas.acai_no_grau, ...(extra.acai_no_grau ?? [])] } });
-  test("novo produto entra em triagem; nova versão do catálogo o resolve: mesma linha atualizada, fechamento CORRIGIDO com motivo, v1 preservada", async () => {
+  test("novo produto entra em triagem; nova versão do catálogo o resolve: mesma linha atualizada, v1 PRELIMINAR (triagem pendente) e v2 CONSOLIDADO, v1 preservada", async () => {
     lista = lista.filter((o) => o.uid !== "t2");
     await ciclo();
     assert.equal(ativos("t1")[0].operacao, "triagem");
     const v1 = structuredClone(fech(UNI_A)[0]);
     assert.equal(v1.estado_valores, "PROVISORIO");
+    assert.equal(v1.status, "PRELIMINAR", "pendência de triagem nunca nasce consolidada");
     const r = await ciclo({ catalogo: catalogoNovo({ subway: ["produto novo misterioso"] }) });
     assert.equal(r.sync.compartilhamento.catalogoVersao, "2026-12-01.1");
     assert.equal(r.sync.compartilhamento.distribuicao.reclassificados, 1);
@@ -185,7 +186,7 @@ describe("4. evolução do catálogo e resolução da triagem", () => {
     assert.deepEqual([linhas[0].operacao, linhas[0].valor_total, linhas[0].catalogo_versao], ["subway", 55, "2026-12-01.1"]);
     const [f1, f2] = fech(UNI_A);
     assert.deepEqual(f1, v1, "a versão anterior do fechamento não muda");
-    assert.equal(f2.versao, 2); assert.equal(f2.status, "CORRIGIDO"); assert.match(f2.motivo, /mudaram de organização|catálogo/);
+    assert.equal(f2.versao, 2); assert.equal(f2.status, "CONSOLIDADO", "primeira consolidação: a triagem foi resolvida");
     assert.equal(f2.estado_valores, "SINCRONIZADO");
     assert.equal(fech(UNI_C).length, 2, "o destino também ganha versão (a triagem pendente deixou de existir), sem duplicar");
   });
@@ -212,7 +213,8 @@ describe("4. evolução do catálogo e resolução da triagem", () => {
     await executarCicloFoody({ unidades: [{ organizacaoId: ORG_A, unidadeId: UNI_A }], env: ENV, agora: AGORA, deps: deps() });
     assert.equal(ativos("t1")[0].operacao, "subway");
     assert.equal(fech(UNI_A).length, antes + 1);
-    assert.equal(fech(UNI_A).at(-1).status, "CORRIGIDO");
+    // t2 segue em triagem: a nova versão continua PRELIMINAR (não consolida com pendência aberta).
+    assert.deepEqual([fech(UNI_A).at(-1).status, fech(UNI_A).at(-1).estado_valores], ["PRELIMINAR", "PROVISORIO"]);
     const ex = db.tabelas.foody_sync_execucoes.filter((e) => e.competencia === D).at(-1);
     assert.equal(ex.origem, "reprocessamento");
     // t2 (CONFLITO) segue em triagem sem decisão: o dia não volta para a fila por ele.

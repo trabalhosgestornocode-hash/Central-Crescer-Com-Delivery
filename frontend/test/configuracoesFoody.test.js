@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
   acoesDaConexao, conexoesDaTriagem, opcoesDeDestino, validarToken, validarMotivo, mensagemDeErro, rotuloEvento, rotuloAtor, dataCurta,
+  planejarIntervalo, ontemBrasilia, resumoDoDia, rotuloErroSync, rotuloFechamento,
 } from "../src/configuracoesFoodyModelo.js";
 
 const base = (o = {}) => ({ podeAdministrar: true, impersonando: false, unidade: { nome: "Loja" }, conexao: null, compartilhamentos: [], ...o });
@@ -83,5 +84,39 @@ describe("contratos do módulo (código-fonte)", () => {
   test("404/403 escondem a seção (administração desligada não aparece)", () => {
     assert.match(fonte, /err\?\.status === 404 \|\| err\?\.status === 403/);
     assert.match(fonte, /s\.hidden = true/);
+  });
+});
+
+describe("sincronização manual (piloto em sombra)", () => {
+  const agora = new Date("2026-11-05T12:00:00Z");   // hoje em Brasília = 05/11
+  test("intervalo: até ontem, no máximo 7 dias, ordem certa", () => {
+    assert.deepEqual(planejarIntervalo("2026-11-03", "2026-11-04", { agora }).dias, ["2026-11-03", "2026-11-04"]);
+    assert.match(planejarIntervalo("2026-11-05", "2026-11-05", { agora }).erro, /no máximo ontem/);
+    assert.match(planejarIntervalo("2026-11-04", "2026-11-03", { agora }).erro, /depois do primeiro/);
+    assert.match(planejarIntervalo("2026-10-20", "2026-10-27", { agora, motivo: "conferência do piloto" }).erro, /No máximo 7/);
+    assert.match(planejarIntervalo("", "2026-11-04", { agora }).erro, /Escolha/);
+  });
+  test("dia antes dos últimos 3 exige motivo (mesma regra do servidor)", () => {
+    assert.match(planejarIntervalo("2026-11-01", "2026-11-04", { agora }).erro, /motivo/);
+    const ok = planejarIntervalo("2026-11-01", "2026-11-04", { agora, motivo: "Conferência do piloto" });
+    assert.equal(ok.erro, null); assert.deepEqual(ok.congelados, ["2026-11-01"]);
+    assert.equal(planejarIntervalo("2026-11-02", "2026-11-04", { agora }).erro, null);
+    assert.equal(ontemBrasilia(new Date("2026-11-05T02:00:00Z")), "2026-11-03", "23h de 04/11 em Brasília: ontem é 03/11");
+  });
+  test("resumo do dia: só contagens e situação, nunca valores", () => {
+    const t = resumoDoDia({ contagens: { unicos: 5, inseridos: 5, atualizados: 0 }, distribuicao: { destinos: { acai_no_grau: 1 }, triagem: 1 }, cobertura: { completa: false } });
+    assert.equal(t, "5 pedidos · 1 Açaí · 1 em triagem · 5 novos · 0 atualizados · cobertura com pendência");
+    assert.match(resumoDoDia({ erro: "AUTENTICACAO" }), /recusou o token/);
+    assert.match(resumoDoDia({ contagens: { unicos: 3, inseridos: 0, atualizados: 0, pontoDivergente: 3 }, cobertura: { completa: false } }), /3 de outro ponto de coleta \(não gravados\)/);
+    assert.equal(rotuloErroSync("XYZ"), "Erro: XYZ");
+    assert.equal(rotuloFechamento({ status: "CONSOLIDADO", versao: 2, resultado: "SEM_MUDANCA", estadoValores: "PROVISORIO" }), "Consolidado (versão 2) · sem mudança · valores provisórios");
+  });
+  test("contratos: aba só para admin da titular; chave de idempotência no cabeçalho; nada de valor na tela", () => {
+    const fonte = readFileSync(new URL("../src/configuracoesFoody.js", import.meta.url), "utf8");
+    const api = readFileSync(new URL("../src/api.js", import.meta.url), "utf8");
+    assert.match(fonte, /id !== "sincronizacao" \|\| Boolean\(s\?\.conexao && s\?\.podeAdministrar && !s\?\.impersonando\)/);
+    assert.match(api, /"Idempotency-Key": chave/);
+    const aba = fonte.slice(fonte.indexOf("function abaSincronizacao"), fonte.indexOf("async function carregarSync"));
+    assert.doesNotMatch(aba, /valor|R\$|custo|taxa/i);
   });
 });

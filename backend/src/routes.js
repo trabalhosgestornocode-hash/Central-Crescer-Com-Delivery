@@ -26,6 +26,7 @@ import { realtimeRouter } from "./modules/realtime/realtime.routes.js";
 import { checklistOperacionalRouter } from "./modules/checklist-operacional/checklistOperacional.routes.js";
 import { notificacoesRouter } from "./modules/notificacoes/notificacoes.routes.js";
 import { foodyAdminRouter } from "./modules/foody-admin/foodyAdmin.routes.js";
+import { foodySyncRouter } from "./modules/foody-admin/foodyAdmin.sync.routes.js";
 
 // Todas as rotas daqui já passaram por `requireAuth` (aplicado em app.js).
 // O que este arquivo decide é a SEGUNDA camada, e ela divide a API em mundos
@@ -94,6 +95,7 @@ tenant.use("/integracoes/ifood", requireModulo(MODULOS.IFOOD), ifoodRouter);
 // Foody Delivery — ADMINISTRAÇÃO da conexão/compartilhamento/triagem (149). Sem módulo contratável de propósito: a titular
 // (Subway) e o destino (Açaí) são empresas diferentes e as duas precisam abrir a tela; quem decide é a flag
 // FOODY_CENTRAL_ADMIN_ENABLED + organization_admin (conferido de novo no banco). Não coleta pedidos (a sync é outra flag).
+tenant.use("/integracoes/foody/sincronizacoes", foodySyncRouter);
 tenant.use("/integracoes/foody", foodyAdminRouter);
 // Checklist Operacional: módulo PRÓPRIO `checklist_operacional` (independe de ter integração iFood) e permissão
 // `checklist.visualizar` (ou integracoes.ver, enquanto existirem sessões antigas — ver o router). O módulo `ifood`

@@ -11,18 +11,24 @@ import { icon } from "./icons.js";
 import {
   foodyEstado, foodyCadastrar, foodySubstituirToken, foodyAtivar, foodyPausar, foodyRevogar, foodyPontoColeta, foodyDestinosPossiveis,
   foodyPropor, foodyAprovar, foodyRevogarCompartilhamento, foodyTriagemDias, foodyTriagem, foodyTriagemDecisoes, foodyDecidir,
+  foodySincronizacoes, foodySincronizar,
 } from "./api.js";
 import {
   STATUS_CONEXAO, ESTADO_VINCULO, OPERACOES, rotuloOperacao, rotuloEvento, rotuloMotivoTriagem, rotuloAtor, mensagemDeErro,
   validarToken, validarMotivo, acoesDaConexao, conexoesDaTriagem, opcoesDeDestino, dataHora, dataCurta,
+  planejarIntervalo, ontemBrasilia, rotuloFechamento, STATUS_EXECUCAO, ORIGEM_EXECUCAO, rotuloErroSync, resumoDoDia, MAX_DIAS_SYNC,
 } from "./configuracoesFoodyModelo.js";
 
 const ABAS = [
   ["conexao", "Conexão", "link"],
   ["compartilhamento", "Compartilhamento", "users"],
   ["triagem", "Triagem", "list-checks"],
+  ["sincronizacao", "Sincronização", "refresh"],
   ["auditoria", "Auditoria", "file-text"],
 ];
+/** A aba de sincronização só existe para quem administra a unidade TITULAR (dona da conta). */
+const abasVisiveis = (s) => ABAS.filter(([id]) => id !== "sincronizacao" || Boolean(s?.conexao && s?.podeAdministrar && !s?.impersonando));
+const novaChave = () => `fdy-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 const e = (v) => escapeHtml(v ?? "");
 const pill = ([tom, txt]) => `<span class="pill ${tom}">${e(txt)}</span>`;
 const painel = (titulo, corpo, sub = "") =>
@@ -71,7 +77,8 @@ export function pedirMotivo({ titulo, texto, confirmar = "Confirmar", perigo = f
  */
 export function montarFoody(root, ctx) {
   const { confirmarDialogo, carregarProtegido } = ctx;
-  const st = { estado: null, aba: "conexao", possiveis: null, tri: { conexaoId: null, dias: null, dia: null, pedidos: null, decisoes: null }, ocupado: false };
+  const st = { estado: null, aba: "conexao", possiveis: null, tri: { conexaoId: null, dias: null, dia: null, pedidos: null, decisoes: null }, ocupado: false,
+    sync: { dados: null, resultado: null, chave: null, erro: null } };
   const secao = () => root.closest?.(".cfg2-secao") ?? null;
 
   root.innerHTML = `<div class="cfg-panel"><div class="cfg-panel-body">${carregando("Carregando a integração Foody…")}</div></div>`;
@@ -114,9 +121,11 @@ export function montarFoody(root, ctx) {
   }
 
   function desenhar() {
-    const corpo = { conexao: abaConexao, compartilhamento: abaCompartilhamento, triagem: abaTriagem, auditoria: abaAuditoria }[st.aba]();
+    const abas = abasVisiveis(st.estado);
+    if (!abas.some(([id]) => id === st.aba)) st.aba = "conexao";
+    const corpo = { conexao: abaConexao, compartilhamento: abaCompartilhamento, triagem: abaTriagem, sincronizacao: abaSincronizacao, auditoria: abaAuditoria }[st.aba]();
     root.innerHTML = `<div class="fdy">${avisos()}
-      <div class="ntf-abas" role="tablist" aria-label="Seções da integração Foody">${ABAS.map(([id, rot, ic]) =>
+      <div class="ntf-abas" role="tablist" aria-label="Seções da integração Foody">${abas.map(([id, rot, ic]) =>
         `<button type="button" role="tab" id="fdy-aba-${id}" aria-controls="fdy-painel" aria-selected="${st.aba === id}" tabindex="${st.aba === id ? 0 : -1}"
           class="ntf-aba${st.aba === id ? " ativo" : ""}" data-aba="${id}">${icon(ic, { size: 14 })} ${rot}</button>`).join("")}</div>
       <div class="ntf-painel" id="fdy-painel" role="tabpanel" aria-labelledby="fdy-aba-${st.aba}" tabindex="-1">${corpo}</div>
@@ -259,6 +268,51 @@ export function montarFoody(root, ctx) {
     "Pedidos que o catálogo não conseguiu atribuir com segurança. Mostramos só o necessário para decidir.");
   }
 
+  // ---------- Sincronização manual (piloto em sombra) ----------
+  function abaSincronizacao() {
+    const sy = st.sync;
+    if (sy.dados === null) { queueMicrotask(carregarSync); return painel("Sincronização", carregando("Carregando sincronizações…")); }
+    const d = sy.dados;
+    const ontem = ontemBrasilia();
+    const form = !d.habilitada
+      ? aviso("info", "A coleta está desligada no servidor para esta unidade. Quando o piloto for liberado, a sincronização manual aparece aqui.")
+      : d.conexaoStatus !== "ATIVA" ? aviso("warn", "Ative a conexão para sincronizar.")
+      : `<form class="ntf-form" data-form="sincronizar" novalidate>
+        <p class="fdy-nota">Busca na Foody (somente leitura) os pedidos dos dias escolhidos, distribui por empresa e gera os fechamentos
+          logísticos. Nesta fase é um <b>piloto em sombra</b>: nada aparece no Parser, no Dashboard, no Checklist nem no WhatsApp.</p>
+        <div class="fdy-datas">
+          <label class="cfg-campo" for="fdy-sync-de"><span>Primeiro dia</span><input id="fdy-sync-de" name="de" type="date" max="${e(ontem)}" value="${e(ontem)}" required /></label>
+          <label class="cfg-campo" for="fdy-sync-ate"><span>Último dia</span><input id="fdy-sync-ate" name="ate" type="date" max="${e(ontem)}" value="${e(ontem)}" required /></label>
+        </div>
+        <label class="cfg-campo" for="fdy-sync-motivo"><span>Motivo (obrigatório para dias antes dos últimos 3)</span>
+          <input id="fdy-sync-motivo" name="motivo" maxlength="300" autocomplete="off" aria-describedby="fdy-sync-erro" /></label>
+        <small class="cfg-ajuda">Até ${MAX_DIAS_SYNC} dias por vez; hoje não entra (o dia ainda não terminou).</small>
+        <small class="cfg-erro" id="fdy-sync-erro" role="alert">${e(sy.erro ?? "")}</small>
+        <div class="cfg-acoes"><button type="submit" class="btn btn-primary">${icon("refresh", { size: 14 })} Sincronizar</button></div></form>`;
+    const r = sy.resultado;
+    const fech = (f, rot) => `<small>${e(rot)}: ${e(f.erro ? rotuloErroSync(f.erro) : rotuloFechamento(f))}</small>`;
+    const resultado = r ? `<h4 class="fdy-sub">Resultado${r.repetida ? " (já processado — mesma solicitação)" : ""}</h4>
+      <ul class="ntf-lista" role="list">${r.dias.map((x) => `<li class="ntf-registro"><span><b>${e(dataCurta(x.competencia))}</b>
+        <small>${e(resumoDoDia(x))}</small>
+        ${x.fechamento ? fech(x.fechamento, "Fechamento desta empresa") : ""}
+        ${(x.fechamentosDestino ?? []).map((f) => fech(f, `Fechamento ${rotuloOperacao(f.operacao)}`)).join("")}</span>
+        ${pill(x.erro ? ["bad", "Falhou"] : x.concluido ? ["ok", "Concluído"] : ["warn", "Com pendência"])}</li>`).join("")}</ul>` : "";
+    const hist = d.execucoes?.length ? `<div class="ntf-tabela-wrap"><table class="ntf-tabela"><caption class="sr-only">Execuções de sincronização desta unidade</caption>
+      <thead><tr><th scope="col">Início</th><th scope="col">Dia</th><th scope="col">Origem</th><th scope="col">Situação</th><th scope="col">Pedidos</th><th scope="col">Novos / atualizados</th></tr></thead>
+      <tbody>${d.execucoes.map((x) => `<tr><td>${e(dataHora(x.iniciadoEm))}</td><td>${e(dataCurta(x.competencia))}</td><td>${e(ORIGEM_EXECUCAO[x.origem] ?? x.origem)}</td>
+        <td>${pill(STATUS_EXECUCAO[x.status] ?? ["muted", x.status])}${x.erroCodigo ? ` <small>${e(rotuloErroSync(x.erroCodigo))}</small>` : ""}</td>
+        <td>${e(x.unicos)}</td><td>${e(x.inseridos)} / ${e(x.atualizados)}</td></tr>`).join("")}</tbody></table></div>` : vazio("Nenhuma sincronização registrada nesta unidade.");
+    return painel("Sincronização", `${form}${resultado}<h4 class="fdy-sub">Histórico</h4>${hist}`, "Coleta manual da conta Foody desta unidade (titular).");
+  }
+  async function carregarSync() {
+    try {
+      const r = await carregarProtegido(foodySincronizacoes);
+      if (r === null) return;
+      st.sync.dados = r.data;
+    } catch (err) { st.sync.dados = { habilitada: false, execucoes: [] }; toast(mensagemDeErro(err)); }
+    if (st.aba === "sincronizacao") desenhar();
+  }
+
   // ---------- Auditoria ----------
   function abaAuditoria() {
     const ev = st.estado.eventos ?? [];
@@ -391,6 +445,19 @@ export function montarFoody(root, ctx) {
       const r = await executar(() => foodyPropor({ organizacaoId, unidadeId, operacao }), "Proposta registrada. Falta a aprovação da empresa destino.");
       if (r === true) st.possiveis = null;
       else if (typeof r === "string") erroEm("fdy-destino-erro", r);
+    } else if (tipo === "sincronizar") {
+      const motivo = f.querySelector('[name="motivo"]').value.trim();
+      const plano = planejarIntervalo(f.querySelector('[name="de"]').value, f.querySelector('[name="ate"]').value, { motivo });
+      if (plano.erro) { erroEm("fdy-sync-erro", plano.erro); return; }
+      const ok = await confirmarDialogo({ titulo: `Sincronizar ${plano.dias.length} ${plano.dias.length === 1 ? "dia" : "dias"}?`, confirmar: "Sincronizar",
+        texto: "A Foody é consultada só para leitura. Repetir o mesmo dia não duplica pedidos nem fechamentos." });
+      if (!ok) return;
+      st.sync.chave ??= novaChave();
+      let resposta = null;
+      const r = await executar(async () => { resposta = (await foodySincronizar({ competencias: plano.dias, motivo: motivo || null }, st.sync.chave)).data; },
+        "Sincronização concluída.", { aba: "sincronizacao" });
+      if (r === true) { st.sync = { dados: null, resultado: resposta, chave: null, erro: null }; desenhar(); }
+      else if (typeof r === "string") { st.sync.erro = r; erroEm("fdy-sync-erro", r); }
     } else if (tipo === "decisao") {
       const op = f.querySelector('[name="operacao"]:checked')?.value;
       const campo = f.querySelector('[name="motivo"]');
@@ -407,7 +474,7 @@ export function montarFoody(root, ctx) {
   function aoTeclar(ev) {
     if (!ev.target.closest?.('[role="tablist"]') || (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft" && ev.key !== "Home" && ev.key !== "End")) return;
     ev.preventDefault();
-    const ids = ABAS.map(([id]) => id);
+    const ids = abasVisiveis(st.estado).map(([id]) => id);
     const i = ids.indexOf(st.aba);
     const prox = ev.key === "Home" ? 0 : ev.key === "End" ? ids.length - 1 : (i + (ev.key === "ArrowRight" ? 1 : ids.length - 1)) % ids.length;
     trocarAba(ids[prox], true);
