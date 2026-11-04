@@ -87,10 +87,12 @@ describe("consumidores controlados", () => {
   const SYNC_ROTAS = join(ADMIN, "foodyAdmin.sync.routes.js");
   // O AGENDADOR embarcado: ponte única do server.js, com import dinâmico atrás das flags (teste próprio abaixo).
   const PONTE = join(RAIZ, "src", "worker-foody", "foody.embedded.js");
+  // Fase C: ponte de LEITURA do Parser (só o resolvedor puro foody.fonte.js; teste próprio em foody-fonte.test.js).
+  const PONTE_PARSER = join(RAIZ, "src", "modules", "parser-food-delivery", "parserFoodDelivery.foody.js");
   const doAdmin = arquivos(ADMIN).filter((p) => p !== SYNC_ROTAS);
   test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline e a camada foody-admin)", () => {
     const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO + sep));
-    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== PARIDADE && p !== PONTE && !p.startsWith(ADMIN + sep)
+    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== PARIDADE && p !== PONTE && p !== PONTE_PARSER && !p.startsWith(ADMIN + sep)
       && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(culpados.map((p) => relative(RAIZ, p)), []);
   });
