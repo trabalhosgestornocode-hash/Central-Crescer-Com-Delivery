@@ -25,7 +25,7 @@ export function logisticaFoodyPermitida(env, unidadeId) {
 async function leituraPadrao({ organizacaoId, unidadeId, de, ate }) {
   const { supabase } = await import("../../config/supabase.js");
   const { data, error } = await supabase.from("foody_fechamentos_logisticos")
-    .select("organizacao_id, unidade_id, competencia, versao, status, estado_valores, indicadores")
+    .select("organizacao_id, unidade_id, competencia, versao, status, estado_valores, indicadores, pendencias")
     .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).gte("competencia", de).lte("competencia", ate).limit(500);
   if (error) throw new Error("leitura");
   return data ?? [];

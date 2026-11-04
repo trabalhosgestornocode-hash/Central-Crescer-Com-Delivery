@@ -102,11 +102,36 @@ describe("relatório diário com bloco logístico", () => {
     const longo = "x".repeat(LIMITE_CARACTERES - 20);
     assert.equal(textoComLogistica({ texto: longo, fechamentos: [fechFoody("2026-10-27")], tipoDestinatario: "financeiro", competencia: "2026-10-27", validar: (t) => validarMensagem(t) }), longo);
   });
-  test("fechamento INCOMPLETO aparece como dados incompletos; PROVISORIO sinalizado; sem fechamento do dia = sem bloco", () => {
-    assert.match(linhasLogisticaDiaria({ fechamentos: [fechFoody("2026-10-27", 1, { status: "INCOMPLETO" })], competencia: "2026-10-27" })[0], /dados incompletos/);
-    assert.match(linhasLogisticaDiaria({ fechamentos: [fechFoody("2026-10-27", 1, { estado_valores: "PROVISORIO" })], competencia: "2026-10-27" })[0], /valores provisórios/);
-    assert.equal(linhasLogisticaDiaria({ fechamentos: [fechFoody("2026-10-26")], competencia: "2026-10-27" }), null);
-    assert.equal(linhasLogisticaDiaria({ fechamentos: [fechFoody("2026-10-27", 1, { status: "PRELIMINAR" })], competencia: "2026-10-27" }), null);
+  test("pendência nunca parece fechamento: INCOMPLETO/PRELIMINAR/PROVISORIO = 'não fechado', pendências e SEM R$; sem fechamento = sem bloco", () => {
+    const D = "2026-10-27";
+    const casos = [
+      [{ status: "INCOMPLETO" }, /dados incompletos, não fechado/],
+      [{ status: "PRELIMINAR", estado_valores: "PROVISORIO", pendencias: [{ codigo: "TRIAGEM_PENDENTE", quantidade: 2 }] }, /preliminar com pendências, não fechado/],
+      [{ status: "CORRIGIDO", estado_valores: "PROVISORIO", pendencias: [{ codigo: "A" }, { codigo: "B" }] }, /preliminar com pendências, não fechado/],
+      [{ estado_valores: "PROVISORIO" }, /preliminar com pendências, não fechado/],
+    ];
+    for (const [over, rotulo] of casos) {
+      const l = linhasLogisticaDiaria({ fechamentos: [fechFoody(D, 1, over)], competencia: D, incluirValores: true });
+      assert.match(l[0], rotulo); assert.doesNotMatch(l[0], /sincronizados/);
+      assert.ok(l.some((x) => /^• Pendências em aberto: /.test(x)), JSON.stringify(l));
+      assert.doesNotMatch(l.join("\n"), /R\$ \d/, "nenhum valor em R$ antes do fechamento definitivo");
+      assert.ok(l.includes("• Valores em R$ só após o fechamento definitivo"));
+    }
+    assert.match(linhasLogisticaDiaria({ fechamentos: [fechFoody(D, 1, { status: "CORRIGIDO", estado_valores: "PROVISORIO", pendencias: [{ codigo: "A" }, { codigo: "B" }] })], competencia: D }).join("\n"), /Pendências em aberto: 2/);
+    const ok = linhasLogisticaDiaria({ fechamentos: [fechFoody(D)], competencia: D, incluirValores: true });
+    assert.match(ok[0], /valores sincronizados/); assert.ok(ok.some((x) => /Taxa válida: R\$ 240,50/.test(x)));
+    assert.equal(linhasLogisticaDiaria({ fechamentos: [fechFoody("2026-10-26")], competencia: D }), null);
+    assert.equal(linhasLogisticaDiaria({ fechamentos: [fechFoody(D, 1, { status: "DESCONHECIDO" })], competencia: D }), null);
+  });
+  test("semana: só dias definitivos somam; pendentes declarados fora da soma; só pendentes = bloco sem números", () => {
+    const dias = ["2026-10-26", "2026-10-27", "2026-10-28"];
+    const l = linhasLogisticaSemanal({ dias, incluirValores: true, fechamentos: [fechFoody("2026-10-26"),
+      fechFoody("2026-10-27", 1, { status: "PRELIMINAR", estado_valores: "PROVISORIO" }), fechFoody("2026-10-28", 2, { status: "CORRIGIDO", estado_valores: "PROVISORIO" })] });
+    assert.equal(l[0], "*Logística (Foody)* — 1 de 3 dias fechados");
+    assert.equal(l[1], "• Fora da soma: 2 dias com pendência ou dados incompletos");
+    assert.ok(l.includes("• Entregas: 28 de 30 pedidos com entregador")); assert.ok(l.some((x) => /Taxa válida: R\$ 240,50/.test(x)));
+    const so = linhasLogisticaSemanal({ dias, incluirValores: true, fechamentos: [fechFoody("2026-10-27", 1, { status: "INCOMPLETO" })] });
+    assert.deepEqual(so, ["*Logística (Foody)* — 0 de 3 dias fechados", "• Fora da soma: 1 dia com pendência ou dados incompletos"]);
   });
 });
 
@@ -149,6 +174,9 @@ describe("ponte e permissões", () => {
     assert.deepEqual([...s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)].map((m) => m[1]), ["foody_fechamentos_logisticos"]);
     assert.deepEqual([...s.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]), ["../foody/foody.mensagem.js"]);
     const gerador = readFileSync(join(RAIZ, "src", "modules", "foody", "foody.mensagem.js"), "utf8");
-    assert.doesNotMatch(gerador, /^import /m, "gerador puro");
+    assert.deepEqual([...gerador.matchAll(/^import .* from\s+["']([^"']+)["']/gm)].map((m) => m[1]), ["./foody.constants.js"],
+      "gerador puro: só a regra única fechamentoDefinitivo (constants não importa nada)");
+    const constantes = readFileSync(join(RAIZ, "src", "modules", "foody", "foody.constants.js"), "utf8");
+    assert.doesNotMatch(constantes, /^import /m);
   });
 });
