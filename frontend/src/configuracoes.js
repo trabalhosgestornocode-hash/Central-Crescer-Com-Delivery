@@ -31,6 +31,7 @@ import { pode, definirNovaSenha } from "./sessao.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./contextoEscopo.js";
 import { estadoMfa, iniciarCadastro, confirmarCadastro, removerFator } from "./mfa.js";
 import { montarCentralNotificacoes } from "./configuracoesNotificacoes.js";
+import { montarFoody } from "./configuracoesFoody.js";
 
 // Perfis da UI <-> enum papel_acesso do banco (migration 015). O cargo
 // pertence ao VÍNCULO usuário<->empresa, não ao usuário: o mesmo login pode
@@ -206,14 +207,14 @@ const CATEGORIAS = [
   { id: "metas-operacao", icone: "target", titulo: "Metas e operação", desc: "CMV, metas, Tabelas Comerciais e atalhos dos módulos.", secoes: ["cmv", "precos", "atalhos"] },
   { id: "notificacoes", icone: "bell", titulo: "Notificações", desc: "Quem recebe os avisos, consentimentos e histórico.", secoes: ["notificacoes"] },
   { id: "usuarios-acesso", icone: "users", titulo: "Usuários e acesso", desc: "Equipe, cargos e convites.", secoes: ["usuarios"] },
-  { id: "integracoes", icone: "link", titulo: "Integrações", desc: "Estado das conexões.", secoes: ["integracoes"] },
+  { id: "integracoes", icone: "link", titulo: "Integrações", desc: "Estado das conexões.", secoes: ["integracoes", "foody"] },
   { id: "seguranca-privacidade", icone: "shield-check", titulo: "Segurança e privacidade", desc: "Sua senha, 2FA e privacidade.", secoes: ["seguranca", "privacidade"] },
   { id: "preferencias", icone: "sliders-horizontal", titulo: "Preferências", desc: "Aparência e dados deste dispositivo.", secoes: ["aparencia", "backup"] },
 ];
 const SECAO_TITULO = {
   unidade: "Dados da Unidade", fuso: "Fuso e horário de funcionamento", cmv: "Metas e Limites de CMV", precos: "Tabelas Comerciais",
   atalhos: "Configurações dos módulos", notificacoes: "Central de Notificações", usuarios: "Usuários e Permissões",
-  integracoes: "Integrações", seguranca: "Segurança", privacidade: "Privacidade", aparencia: "Aparência",
+  integracoes: "Integrações", foody: "Foody Delivery", seguranca: "Segurança", privacidade: "Privacidade", aparencia: "Aparência",
   backup: "Configurações deste dispositivo",
 };
 const categoriaDaSecao = (secao) => CATEGORIAS.find((c) => c.secoes.includes(secao)) ?? null;
@@ -951,6 +952,8 @@ const DETALHES = {
   notificacoes: (root) => montarCentralNotificacoes(root, { confirmarDialogo, carregarProtegido }),
   usuarios: (root) => montarUsuarios(root),
   integracoes: (root) => carregarIntegracoes(root),
+  // Some sozinha (a seção inteira) quando a administração Foody está desligada no servidor ou sem permissão.
+  foody: (root) => montarFoody(root, { confirmarDialogo, carregarProtegido }),
   seguranca: (root) => montarSeguranca(root),
   privacidade: (root) => montarPrivacidade(root),
   aparencia: (root) => montarAparencia(root),

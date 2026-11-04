@@ -592,3 +592,31 @@ export async function notificacoesPreferencias(destinatarioId, dados) {
 // ---------- Usuários: convites por e-mail (D-14) ----------
 export const listarConvitesUsuario = () => getJson(`/api/v1/usuarios/convites`);
 export const revogarConviteUsuario = (id) => delJson(`/api/v1/usuarios/convites/${encodeURIComponent(id)}`);
+
+// ---------- Foody Delivery: administração da integração (Configurações → Integrações) ----------
+// Empresa/unidade vêm do Context Token. O token Foody só sai daqui no CORPO de um POST (nunca na URL) e nunca volta.
+// Nenhuma destas chamadas coleta pedidos: a sincronização é outra flag, no servidor.
+const FOODY = "/api/v1/integracoes/foody";
+const idFoody = (v) => encodeURIComponent(String(v ?? ""));
+export const foodyEstado = () => getJson(`${FOODY}/estado`);
+export const foodyCadastrar = (token, pontoColetaEsperado = null) => postJson(`${FOODY}/conexao`, { token, pontoColetaEsperado });
+export const foodySubstituirToken = (token, motivo = null) => postJson(`${FOODY}/conexao/token`, { token, motivo });
+export const foodyAtivar = () => postJson(`${FOODY}/conexao/ativar`, {});
+export const foodyPausar = (motivo = null) => postJson(`${FOODY}/conexao/pausar`, { motivo });
+export const foodyRevogar = (motivo) => postJson(`${FOODY}/conexao/revogar`, { motivo });
+export async function foodyPontoColeta(pontoColetaEsperado) {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}${FOODY}/conexao/ponto-coleta`, {
+    method: "PUT", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify({ pontoColetaEsperado }),
+  });
+  return tratar(r, g);
+}
+export const foodyDestinosPossiveis = () => getJson(`${FOODY}/destinos-possiveis`);
+export const foodyPropor = (dados) => postJson(`${FOODY}/compartilhamentos`, dados);
+export const foodyAprovar = (id) => postJson(`${FOODY}/compartilhamentos/${idFoody(id)}/aprovar`, {});
+export const foodyRevogarCompartilhamento = (id, motivo) => postJson(`${FOODY}/compartilhamentos/${idFoody(id)}/revogar`, { motivo });
+export const foodyTriagemDias = (conexaoId) => getJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem/dias`);
+export const foodyTriagem = (conexaoId, competencia) => getJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem?competencia=${encodeURIComponent(competencia)}`);
+export const foodyTriagemDecisoes = (conexaoId) => getJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem/decisoes`);
+export const foodyDecidir = (conexaoId, foodyUid, operacao, motivo) =>
+  postJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem/${idFoody(foodyUid)}/decisao`, { operacao, motivo });
