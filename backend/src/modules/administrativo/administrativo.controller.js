@@ -58,6 +58,18 @@ export function ping(req, res) {
 export const visaoGeral = asyncHandler(async (req, res) =>
   ok(res, await service.visaoGeral({ hojeIso: hoje(req), mes: req.query.mes }, deps(req))));
 
+// GET /administrativo/visao-geral-rede?mes=&organizacaoId=&unidadeId=&modalidade=&situacao=&busca=
+export const visaoGeralRede = asyncHandler(async (req, res) =>
+  ok(res, await service.visaoGeralRede({
+    mes: req.query.mes,
+    organizacaoId: req.query.organizacaoId,
+    unidadeId: req.query.unidadeId,
+    modalidade: req.query.modalidade,
+    situacao: req.query.situacao,
+    busca: req.query.busca,
+    hojeIso: hoje(req),
+  }, deps(req))));
+
 // GET /administrativo/monitoramento-diario?mes=&data=&organizacaoId=&status=&criticidade=
 export const monitoramentoDiario = asyncHandler(async (req, res) =>
   ok(res, await service.monitoramentoDiario({

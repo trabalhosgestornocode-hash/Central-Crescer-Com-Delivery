@@ -47,6 +47,7 @@ administrativoRouter.use('/performance', performanceRouter);
 // desbloqueios logo abaixo — POST/DELETE que concedem/revogam permissão de
 // lançamento de UM dia, sem tocar em nenhum dado operacional.)
 administrativoRouter.get("/visao-geral", c.visaoGeral);
+administrativoRouter.get("/visao-geral-rede", c.visaoGeralRede);
 administrativoRouter.get("/monitoramento-diario", c.monitoramentoDiario);
 administrativoRouter.get("/pendencias", c.pendencias);
 administrativoRouter.get("/empresas", c.empresas);            // antes de /empresas/:id

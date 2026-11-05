@@ -3501,6 +3501,29 @@ body {
   color: var(--cinza-claro); font-variant-numeric: tabular-nums;
 }
 
+/* --- VISÃO GERAL DA REDE ------------------------------------------------- */
+.padm-filtros-rede {
+  display: flex; flex-wrap: wrap; align-items: end; gap: 10px;
+  margin-bottom: 16px; padding: 12px 14px; background: var(--card);
+  border: 1px solid var(--linha); border-radius: var(--raio-sm); box-shadow: var(--sombra-sm);
+}
+.padm-filtros-rede label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--cinza); font-weight: 600; }
+.padm-filtros-rede select { font: inherit; font-size: 12.5px; padding: 7px 9px; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); min-width: 160px; }
+.padm-filtros-rede .padm-busca { margin: 0; flex: 1 1 220px; }
+.padm-rede-graficos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 780px) { .padm-rede-graficos { grid-template-columns: 1fr; } .padm-filtros-rede select, .padm-filtros-rede .padm-busca { min-width: 0; width: 100%; } }
+.padm-legenda-situacoes { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+.padm-composicao-barra { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--superficie-2); width: 100%; }
+.padm-composicao-barra i { display: block; height: 100%; }
+.padm-ranking-modalidade + .padm-ranking-modalidade { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--linha); }
+.padm-ranking-modalidade h3 { font-size: 13.5px; font-weight: 740; margin: 0 0 10px; }
+.padm-ranking-duplo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.padm-ranking-duplo h4 { font-size: 11px; font-weight: 700; color: var(--cinza); text-transform: uppercase; letter-spacing: .3px; margin: 0 0 6px; }
+.padm-ranking-duplo .padm-rank-lista { background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); box-shadow: var(--sombra-sm); list-style: none; margin: 0; padding: 0; }
+@media (max-width: 780px) { .padm-ranking-duplo { grid-template-columns: 1fr; } }
+.padm-tabela-subtit { font-size: 13px; font-weight: 720; margin: 20px 0 10px; }
+.padm-tabela-compacta td, .padm-tabela-compacta th { padding: 6px 10px; }
+
 @media (max-width: 720px) {
   .padm-fin-faixa, .padm-fin-destaque { gap: 14px; }
   .padm-fin-valor { font-size: 25px; }

@@ -120,6 +120,27 @@ const VISAO_GERAL_FAKE = {
   acaoNecessariaHoje: [], resumoAcao: {}, empresas: [],
 };
 
+/** Visão Geral da Rede — agora a página inicial do Painel Administrativo. */
+const VISAO_GERAL_REDE_FAKE = {
+  monitor: "dashboard_ifood", periodo: YM_ATUAL, mesCorrente: true,
+  filtros: { organizacaoId: null, unidadeId: null, modalidade: null, situacao: null, busca: null },
+  rede: {
+    empresasMonitoradas: 2, unidadesMonitoradas: 3, unidadesEmAtencao: 1, unidadesCriticas: 0,
+    faturamento: 28500, faturamentoAnterior: 27000, variacaoFaturamento: 0.0556,
+    deducoes: 3500, deducoesPct: 12.28, taxasComissoes: 3000, servicosPromocoes: 500,
+    receitaLiquida: 25000, receitaLiquidaAnterior: 24000, variacaoReceitaLiquida: 0.0417,
+    impactoFinanceiroTotalEstimado: 0,
+  },
+  distribuicaoSituacoes: { sem_dados: 0, em_dia: 2, atencao: 1, critica: 0 },
+  composicaoDeducoes: { taxasComissoes: 3000, servicosPromocoes: 500, outrosAjustes: 0 },
+  evolucaoMensal: [],
+  rankingPorModalidade: {
+    marketplace: { melhores: [], atencao: [] },
+    full_service: { melhores: [], atencao: [] },
+  },
+  unidades: [], empresas: [],
+};
+
 /** Fake da API que REGISTRA os argumentos — é assim que provamos o período. */
 const apiFake = (over = {}) => {
   const chamadas = [];
@@ -142,6 +163,7 @@ const apiFake = (over = {}) => {
       rankings: { faturamentoEmpresas: [], faturamentoUnidades: [], conformidadeEmpresas: [], atencaoEmpresas: [] },
     }),
     relatorioEvolucao: reg("relatorioEvolucao", { periodo: YM_ATUAL, serie: [] }),
+    visaoGeralRede: reg("visaoGeralRede", VISAO_GERAL_REDE_FAKE),
     ...over,
   };
 };
@@ -160,15 +182,15 @@ const ganchosFake = () => {
 };
 
 describe("abrirPainelAdministrativo", () => {
-  test("ping 200 -> troca para o shell e renderiza a Visão Geral real", async () => {
+  test("ping 200 -> troca para o shell e renderiza a Visão Geral da Rede real", async () => {
     const g = ganchosFake();
     const ok = await abrirPainelAdministrativo({ ...g, api: apiFake() });
     assert.equal(ok, true);
     assert.deepEqual(g.chamadas.find((c) => c[0] === "mostrarTela"), ["mostrarTela", "painelAdm"]);
-    assert.equal(state.telaPainelAdm, "visao-geral");
-    // A Visão Geral real mostra os cartões de indicador (não mais o placeholder).
-    assert.match(nodes["#padm-view"].innerHTML, /Unidades com pendência/);
-    assert.match(nodes["#padm-view"].innerHTML, /Ação necessária/i);
+    assert.equal(state.telaPainelAdm, "visao-geral-rede");
+    // A Visão Geral da Rede real mostra os cartões de indicador (não mais o placeholder).
+    assert.match(nodes["#padm-view"].innerHTML, /Faturamento bruto/i);
+    assert.match(nodes["#padm-view"].innerHTML, /Unidades em atenção/i);
   });
 
   test("ping 403 -> NÃO abre o shell; chama aoAcessoRevogado", async () => {
@@ -224,7 +246,7 @@ describe("TELAS_PADM", () => {
     // Checkpoint H.3-A: nova aba "comunicacao" logo após "empresas" — mesmo
     // espírito (empresas cross-tenant), sem seletor de período (ver §"comunicacao"
     // na lista de telas sem recorte de período, em painelAdm.js).
-    assert.deepEqual(TELAS_PADM.map((t) => t.id), ["visao-geral", "performance", "diario", "pendencias", "empresas", "comunicacao", "mentorados", "relatorios", "desenvolvimento"]);
+    assert.deepEqual(TELAS_PADM.map((t) => t.id), ["visao-geral-rede", "visao-geral", "performance", "diario", "pendencias", "empresas", "comunicacao", "mentorados", "relatorios", "desenvolvimento"]);
   });
 
   test("irParaPadm abre Relatórios com o período ativo", async () => {
@@ -269,10 +291,10 @@ describe("seletor de período (mês/ano)", () => {
 
   test("2) trocar o período refaz a chamada da API com mes=AAAA-MM", async () => {
     const { api } = await abrir();
-    assert.deepEqual(ultima(api, "visaoGeral"), ["visaoGeral", { mes: YM_ATUAL }]);
+    assert.deepEqual(ultima(api, "visaoGeralRede"), ["visaoGeralRede", { mes: YM_ATUAL }]);
 
     await definirPeriodo(YM_ANTERIOR);
-    assert.deepEqual(ultima(api, "visaoGeral"), ["visaoGeral", { mes: YM_ANTERIOR }]);
+    assert.deepEqual(ultima(api, "visaoGeralRede"), ["visaoGeralRede", { mes: YM_ANTERIOR }]);
     assert.equal(state.painelAdm.periodo.ym, YM_ANTERIOR);
   });
 
@@ -284,7 +306,7 @@ describe("seletor de período (mês/ano)", () => {
     assert.equal(state.painelAdm.periodo.ym, YM_ATUAL);
     await mudarPeriodo(+1);                                  // tentar ir para o futuro
     assert.equal(state.painelAdm.periodo.ym, YM_ATUAL, "nunca navega para um mês futuro");
-    assert.deepEqual(ultima(api, "visaoGeral"), ["visaoGeral", { mes: YM_ATUAL }]);
+    assert.deepEqual(ultima(api, "visaoGeralRede"), ["visaoGeralRede", { mes: YM_ATUAL }]);
   });
 
   test("3) o período persiste ao trocar de aba", async () => {
@@ -331,7 +353,7 @@ describe("seletor de período (mês/ano)", () => {
     assert.match(nodes["#padm-cabecalho"].innerHTML, /Voltar ao mês atual/);
     await irParaMesAtual();
     assert.equal(state.painelAdm.periodo.ym, YM_ATUAL);
-    assert.deepEqual(ultima(api, "visaoGeral"), ["visaoGeral", { mes: YM_ATUAL }]);
+    assert.deepEqual(ultima(api, "visaoGeralRede"), ["visaoGeralRede", { mes: YM_ATUAL }]);
   });
 
   test("o período vive em state.painelAdm.periodo = { ano, mes, ym }", async () => {

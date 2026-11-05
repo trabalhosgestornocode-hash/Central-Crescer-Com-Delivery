@@ -73,6 +73,15 @@ export const painelAdmApi = {
   visaoGeral: ({ mes } = {}) => chamar("/visao-geral" + qs({ mes })),
 
   /**
+   * VISÃO GERAL DA REDE — inteligência financeira cross-tenant (faturamento,
+   * deduções, classificação de atenção EM_DIA/ATENÇÃO/CRÍTICA, rankings por
+   * modalidade). Todos os filtros são resolvidos no SERVIDOR — os indicadores,
+   * gráficos e rankings da resposta já vêm filtrados.
+   * @param {{mes?: string, organizacaoId?: string, unidadeId?: string, modalidade?: string, situacao?: string, busca?: string}} [filtros]
+   */
+  visaoGeralRede: (filtros = {}) => chamar("/visao-geral-rede" + qs(filtros)),
+
+  /**
    * Lista de unidades num dia. Sem `data`, usa o dia de referência do `mes`.
    * Filtros server-side: `mes`, `data` (AAAA-MM-DD, nunca hoje/futuro),
    * `organizacaoId`, `status` (categoria do D-1), `criticidade`.
