@@ -36,24 +36,52 @@ API Foody (GET, token da titular) ─► saneamento ─► classificação ESTRI
 
 Arquivos: `foody.classificacao.js` (regra), `foody.catalogo-operacao.js` (catálogo **gerado**) e `foody.catalogo.gerador.js` (gerador puro).
 
-- O pedido é quebrado em **linhas de item** (produto e complementos), normalizadas: sem quantidade, acento ou caixa, e com tamanhos genéricos.
-- Cada linha precisa de evidência própria, de **uma** operação: a **linha inteira** no catálogo, ou um **termo validado**. Os termos validados são `acai` e `paleta` ("paletas são só do Açaí", confirmado pelo responsável em 03/11/2026) para o Açaí, e `subway` para a Subway.
+- O pedido é quebrado em **linhas de item** (produto e complementos), normalizadas: sem quantidade inicial, acento ou caixa, com tamanhos genéricos e com a quantidade **no meio** da linha trocada por `#x` (`Kit com 9 Cookies 2x Cookie…` e `…3x Cookie…` são a mesma linha de cardápio).
+- Cada linha precisa de evidência própria, de **uma** operação: a **linha inteira** no catálogo, ou um **termo validado**. Os termos validados são `acai` e `paleta` ("paletas são só do Açaí", confirmado pelo responsável em 03/11/2026) para o Açaí, e `subway` e `footlong` (tamanho exclusivo do sanduíche: 1.248 pedidos Subway, 0 do Açaí, 0 em revisão) para a Subway.
 - Linha sem evidência → `triagem / ITEM_DESCONHECIDO`. Evidências de operações diferentes → `triagem / CONFLITO`. Pedido sem linha → `triagem / SEM_EVIDENCIA`.
 - Nunca há casamento por palavra solta: "gotas de chocolate" é cobertura no Açaí e sabor de cookie na Subway.
 
-**Catálogo versionado:** versão `2026-11-03.1`, com 329 linhas Subway e 91 Açaí. O hash `78ee2124…f9f` está fixado no teste.
-- Foi gerado de 15.330 pedidos do Parser da unidade titular (17/08 a 02/11/2026), 15.068 deles rotulados por termo.
-- Nenhuma linha foi vista nas duas operações.
-- Descartes: 200 linhas raras (menos de 2 ocorrências ou de 2 dias) e 9 com cara de texto livre.
+**Catálogo versionado:** versão `2026-11-05.2`, com 296 linhas Subway e 88 Açaí (menos linhas que a `2026-11-05.1` porque as variações de quantidade agora são uma linha só; nenhuma linha antiga deixou de ser coberta). O hash `f3834caa…c548` está fixado no teste.
+
+O gerador tem **duas camadas** e roda **offline**:
+- **Camada 1 — termo do Parser.** Só pedidos que o Parser rotula **por termo** de uma operação treinam. A linha entra se aparece em uma só operação, ≥ 2 vezes em ≥ 2 dias, não parece texto livre e não traz termo da outra. Resultado: 282 Subway e 87 Açaí.
+- **Linhas validadas à mão** (`foody.catalogo-validadas.js`, com evidência e data): 3 Subway do piloto de 02/11 e o suco Mirador (Açaí, confirmado pelo responsável).
+- **Camada 2 — coocorrência ancorada.** Corrige a dependência do termo literal: `Combos no Precinho 30cm 1x Steak Churrasco` nunca traz "sub"/"subway", mas sempre vem junto de itens já conhecidos da Subway. Um pedido é **ancorado** em X quando suas linhas com evidência apontam só para X. Uma linha ainda sem evidência entra em X quando:
+  - aparece em **≥ 3 pedidos ancorados em X, em ≥ 3 dias distintos** (frequência e recorrência);
+  - **nunca** aparece em pedido com evidência da outra operação, nem em pedido que o Parser rotula por termo da outra, nem em revisão (exclusividade histórica);
+  - não parece texto livre e não traz termo da outra operação.
+
+  **Ausência no Açaí não basta:** linha sozinha ou só com itens desconhecidos não tem âncora e segue na triagem (ex.: `Energético Monster` sozinho). Uma rodada só: linhas da camada 2 não ancoram outras. Resultado: +13 Subway, +0 Açaí.
+- **Entrada auditável.** O histórico vem de um arquivo local extraído por sessão **somente leitura** (só importações concluídas da unidade titular), que **não** entra no repositório. O catálogo registra em `origem` o período (17/08 a 02/11/2026), os 15.330 pedidos com itens, o `sha256Entrada` (`3d7e2129…002e`), os parâmetros e a contagem por camada. A mesma entrada gera o mesmo hash.
 - O conteúdo são nomes de produto e complemento do cardápio, sem dado de cliente.
 - **Não aprende em produção:** o catálogo é congelado e o módulo não escreve arquivo. Para mudar, gere uma nova versão e abra um PR:
 
 ```bash
-node --env-file=.env scripts/foody-gerar-catalogo.mjs --unidade=<uuid da titular> --versao=AAAA-MM-DD.N
-# depois: atualizar VERSAO_FIXADA/HASH_FIXADO em test/foody-compartilhada-catalogo.test.js e revisar o diff das linhas
+node scripts/foody-gerar-catalogo.mjs --entrada=<historico.json fora do repo> --versao=AAAA-MM-DD.N [--ate=AAAA-MM-DD]
+# depois: atualizar VERSAO_FIXADA/HASH_FIXADO/SHA_ENTRADA_FIXADO em test/foody-compartilhada-catalogo.test.js e revisar o diff das linhas
 ```
 
-### Cobertura medida (regra estrita, sem dado pessoal: só agregados)
+**Medição da `2026-11-05.2`** (rótulo de referência = operação gravada pelo Parser a partir do Excel):
+
+| Conjunto | Antes (`2026-11-05.1`) | Depois (`2026-11-05.2`) | Trocas Açaí↔Subway |
+|---|---|---|---|
+| Histórico inteiro (15.336 pedidos) | 278 em triagem (98,19%) | 62 em triagem (99,60%) | 0 / 0 |
+| Holdout temporal (treino < 21/10, teste 21/10–02/11, 1.799) | 31 (98,28%) | 11 (99,39%) | 0 / 0 |
+| 31/10 (139) | 6 | 0 | 0 / 0 |
+| 01/11 (118) | 2 | 0 | 0 / 0 |
+| 02/11 (101) | 0 (já com as validadas) | 0 | 0 / 0 |
+
+Matriz antes→depois no histórico: 215 triagem→Subway, 1 triagem→Açaí (o suco Mirador), 62 seguem em triagem; **0 pedido** saiu de uma operação para triagem ou para a outra operação.
+
+**Replay local (31/10, 01/11 e 02/11):** ciclo completo `sincronizarEFechar` num banco falso em memória, com o catálogo
+`2026-11-05.2`. Os pedidos da "API" foram reconstruídos dos registros saneados gravados pela Foody (status, datas, taxas, tipo de
+entregador) e dos itens do Excel, lidos em transação somente leitura. Resultado: **PARIDADE 358/358** com o Excel, 0 só-Foody, 0
+só-Parser, 0 troca; taxa de entregador R$ 3.340,00 = R$ 3.340,00; cancelados 28 = 28 (28 com taxa = 28); triagem 0; os seis
+fechamentos (2 empresas × 3 dias) já nascem `CONSOLIDADO` sem pendência. Em 02/11 os indicadores são idênticos aos da v2 CONSOLIDADO
+de produção. Em 31/10 e 01/11 a diferença contra a v1 PRELIMINAR de produção é exatamente a dos pedidos que estavam em triagem com
+entregador próprio: 31/10 Subway +4 pedidos (+R$ 39) e Açaí +1 (+R$ 8, o suco Mirador); 01/11 Subway +1 (+R$ 8).
+
+### Cobertura medida na versão `2026-11-03.1` (histórico; regra estrita, sem dado pessoal: só agregados)
 
 | Conjunto | Automático | Triagem | Divergência com o Parser |
 |---|---|---|---|
@@ -97,6 +125,15 @@ Superadmin em **impersonação não conta** para nenhuma dessas ações. O banco
 
 - **Linha de triagem.** Fica na titular e não traz nenhum dado comercial: valor, taxa, pagamento e cancelamento ficam vazios. Dos itens, guarda **só as linhas sem atribuição segura**, que são as desconhecidas ou as que têm evidência das duas empresas na mesma linha. Os itens já reconhecidos de qualquer empresa nunca ficam na triagem: aparecem só como contagem no resumo (`operacao_motivo`). No pedido misto (`CONFLITO`), os itens ficam vazios.
 - **Listagem.** `listarTriagem` devolve `foodyUid`, número, data, situação, motivo, resumo, versão do catálogo e `linhasSemEvidencia`. Nada além disso.
+- **Auditoria das decisões.** Cada decisão de triagem gravada pela rota administrativa gera **um** evento `foody.triagem_decidida` em `plataforma_auditoria`, além da linha imutável em `foody_triagem_decisoes`, que continua sendo a fonte da regra:
+  - colunas: `organizacao_id` (organização de quem decidiu), `perfil_id` e `ator_id` do administrador autenticado, `entidade = foody_triagem_decisoes`, `entidade_id` = id da decisão, IP e user agent;
+  - `detalhes`: conexão, organização titular, unidade, `foody_uid`, competência, operação decidida, justificativa, versão do catálogo e horário da decisão;
+  - privacidade: nenhum item do pedido, valor, cliente ou entregador;
+  - **reenvio idêntico** (mesmo pedido, operação, pessoa e justificativa) devolve a decisão existente com `repetida: true`, não grava linha nova e não gera evento; justificativa ou pessoa diferente gera nova decisão e novo evento;
+  - recusa (impersonação, empresa sem vínculo, papel sem permissão, sem justificativa, pedido inexistente) não grava decisão nem evento;
+  - decisões antigas, anteriores à auditoria, seguem válidas e reconhecidas no reenvio. Não há preenchimento retroativo automático; se a MESMA pessoa reenviar a mesma decisão, o evento que faltava é gravado (uma vez).
+  - **Rastro confirmado** (`auditarConfirmado`): até 2 tentativas de gravar o evento. A resposta traz `auditoria`: `REGISTRADA`, `JA_REGISTRADA` (reenvio de decisão já auditada), `PENDENTE` (as tentativas falharam: erro no log; o reenvio idêntico grava o evento sem duplicar a decisão) ou `NAO_VERIFICADA` (não foi possível ler a auditoria no reenvio).
+  - **Concorrência:** decisões do mesmo pedido da mesma conexão são serializadas no processo. Dois ou mais POST idênticos simultâneos gravam UMA decisão e UM evento; os demais voltam como `repetida`. O serviço web roda em instância única; só numa troca de instância (deploy) duas linhas idênticas seriam possíveis — inofensivas (vale a mais recente, mesmo conteúdo).
 - **Fechamento do destino.** A cobertura vem saneada (`coberturaParaDestino`):
   - sem o volume total da conta (`pedidosUnicos` e `paginas` vazios);
   - sem nomes de ponto de coleta;
@@ -129,6 +166,11 @@ Superadmin em **impersonação não conta** para nenhuma dessas ações. O banco
    - Os fechamentos ganham **nova versão** `CORRIGIDO`, com o motivo de reclassificação. As versões anteriores nunca mudam.
    - Cada pedido e cada execução registram a `catalogo_versao`.
 4. **Histórico.** Uma versão nova de catálogo **não** reabre dia congelado. Só a decisão de triagem, ou um reprocessamento manual com motivo, aplica uma mudança a dia congelado.
+
+**Parser (tela):** com `FOODY_CENTRAL_PARSER_ENABLED=true` e a unidade em `FOODY_CENTRAL_PARSER_UNIDADES`, a Visão geral do Parser mostra
+o bloco **Fonte logística por dia** (`frontend/src/parserFoodDeliveryFonte.js`): uma linha por dia com a fonte (Excel, Foody, Foody
+pendente/incompleto), pedidos, entregues, taxa bruta, taxa válida e custo de entregador próprio, com os totais calculados no backend.
+Os cards do Excel não mudam. Período sem Excel e com fechamento Foody mostra só esse bloco (antes: "Sem dados no período").
 
 **Rotas e tela:** não fazem parte deste PR. O teste de arquitetura proíbe consumidores do módulo nesta fase. Expor o serviço em rota autenticada é a próxima etapa, com GO próprio.
 

@@ -13,7 +13,9 @@ import { hojeDaUnidade } from "../checklist-operacional/checklistOperacional.fus
 import { elegibilidadeDiaria, planejarResumoSemanal, destinatariosAutorizados, CATEGORIA_DIARIA, CATEGORIA_SEMANAL, MOTIVO } from "./notificacoes.relatorios.js";
 import * as repoPadrao from "./notificacoes.relatorios.repository.js";
 import * as notifPadrao from "./notificacoes.repository.js";
-import { lerFechamentosFoody, textoComLogistica } from "./notificacoes.relatorios.foody.js";
+// `recebeValores`: lista ÚNICA de papéis com acesso financeiro (principal, financeiro) — a mesma do bloco Foody. Demais papéis
+// (operacional, gerente, secundário, sem papel) recebem o relatório SEM a seção INDICADORES FINANCEIROS e sem R$ (fail-closed).
+import { lerFechamentosFoody, textoComLogistica, recebeValores } from "./notificacoes.relatorios.foody.js";
 
 export const HORA_INICIO_ENVIO = 8;
 export const HORA_FIM_ENVIO = 20;
@@ -67,14 +69,15 @@ export async function enfileirarRelatoriosDaUnidade(u, { agora = () => new Date(
   else {
     const proposito = fechOntem.status === "REVISADO" ? "correcao" : "inicial";
     const texto = gerarMensagem({ fechamento: fechOntem, unidadeNome: u.unidadeNome ?? null });
+    const textoSemFinanceiro = gerarMensagem({ fechamento: fechOntem, unidadeNome: u.unidadeNome ?? null, incluirFinanceiro: false });
     const v = validarMensagem(texto, { fechamento: fechOntem });
-    if (!v.ok) saida.diario.motivo = "MENSAGEM_INVALIDA";
+    if (!v.ok || !validarMensagem(textoSemFinanceiro, { fechamento: fechOntem }).ok) saida.diario.motivo = "MENSAGEM_INVALIDA";
     else {
       const alvos = destinatariosAutorizados({ categoria: CATEGORIA_DIARIA, unidadeId: u.unidadeId, dados, ledger, proposito });
       if (!alvos.length) saida.diario.motivo = MOTIVO.SEM_DESTINATARIO;
       else {
         const foodyDia = await lerFoody(ontem, ontem);
-        const textoDe = (e) => textoComLogistica({ texto, fechamentos: foodyDia, tipoDestinatario: tipoDe.get(e.contato_empresa_id), competencia: ontem,
+        const textoDe = (e) => textoComLogistica({ texto: recebeValores(tipoDe.get(e.contato_empresa_id)) ? texto : textoSemFinanceiro, fechamentos: foodyDia, tipoDestinatario: tipoDe.get(e.contato_empresa_id), competencia: ontem,
           validar: (t) => validarMensagem(t, { fechamento: fechOntem }) });
         saida.diario.enfileirados = await R.enfileirar(alvos.map((e) => ({
           organizacao_id: u.organizacaoId, unidade_id: u.unidadeId, tipo: "diario", categoria: CATEGORIA_DIARIA, referencia: ontem, fechamento_id: fechOntem.id, proposito,
@@ -95,9 +98,11 @@ export async function enfileirarRelatoriosDaUnidade(u, { agora = () => new Date(
     versoes, hojeIso: hoje, segunda, dados, ledger, cotas: {} });
   if (!plano.elegivel) { saida.semanal.motivo = plano.motivo; return saida; }
   if (!plano.validacao?.ok) { saida.semanal.motivo = "MENSAGEM_INVALIDA"; return saida; }
+  const semanalSemFinanceiro = gerarMensagemSemanal({ resumo: plano.semana, unidadeNome: u.unidadeNome ?? null, incluirFinanceiro: false });
+  if (!validarMensagemSemanal(semanalSemFinanceiro, plano.semana).ok) { saida.semanal.motivo = "MENSAGEM_INVALIDA"; return saida; }
   const resumoId = await R.registrarResumoSemanal({ organizacaoId: u.organizacaoId, unidadeId: u.unidadeId, resumo: plano.semana, mensagem: plano.mensagem }, deps);
   const foodySemana = await lerFoody(dias[0], dias[6]);
-  const textoSemanalDe = (l) => textoComLogistica({ texto: plano.mensagem, fechamentos: foodySemana, tipoDestinatario: tipoDe.get(l.destinatario), dias,
+  const textoSemanalDe = (l) => textoComLogistica({ texto: recebeValores(tipoDe.get(l.destinatario)) ? plano.mensagem : semanalSemFinanceiro, fechamentos: foodySemana, tipoDestinatario: tipoDe.get(l.destinatario), dias,
     validar: (t) => validarMensagemSemanal(t, plano.semana) });
   saida.semanal.enfileirados = await R.enfileirar(plano.linhas.map((l) => ({
     organizacao_id: u.organizacaoId, unidade_id: u.unidadeId, tipo: "semanal", categoria: CATEGORIA_SEMANAL, referencia: segunda, resumo_semanal_id: resumoId, proposito: "inicial",

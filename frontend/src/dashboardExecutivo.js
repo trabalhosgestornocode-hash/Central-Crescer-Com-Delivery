@@ -4,6 +4,7 @@
 // tudo o mais é calculado no backend (dashboardExecutivo.calc.js) e só
 // exibido aqui.
 import { el, escapeHtml, toast, fmtMoeda, fmtPct, fmtDataHora } from "./utils.js";
+import { logisticaProprioHtml } from "./dashboardExecutivoLogisticaProprio.js";
 import { state } from "./state.js";
 import { pode } from "./sessao.js";
 import {
@@ -435,7 +436,12 @@ function renderAbaAtual() {
   destruirGraficosDashboardExecutivo();
   if (dex.aba === "visao") return renderVisaoGeral(box);
   if (dex.aba === "lancamentos") return renderLancamentos(box);
-  if (dex.aba === "indicadores") return renderIndicadores(box, dex.dadosMes);
+  if (dex.aba === "indicadores") {
+    renderIndicadores(box, dex.dadosMes);
+    // Bloco informativo Foody (PR #84): só existe se o backend enviou `logisticaProprio` (flag desligada → "" → tela idêntica).
+    box.insertAdjacentHTML("beforeend", logisticaProprioHtml(dex.dadosMes.logisticaProprio));
+    return;
+  }
   if (dex.aba === "historico") return renderHistorico(box);
 }
 

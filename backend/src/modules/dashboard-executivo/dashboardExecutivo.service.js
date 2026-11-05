@@ -1,4 +1,5 @@
 import { carregarPrecosRentabilidade } from "./dashboardExecutivo.precos.service.js";
+import { logisticaProprioOpcional } from "./dashboardExecutivo.logisticaProprio.js";
 import { calcularProtecaoPrecificacao, calcularComparacaoProduto } from "./dashboardExecutivo.rentabilidade.js";
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
@@ -874,7 +875,20 @@ async function obterMesDeUmaUnidade({
     // unidade multicanal ou mês com dia multicanal. Unidade padrão: resposta
     // idêntica à de sempre. Os cards acima continuam vindo do consolidado.
     ...(await composicaoCanaisOpcional({ unidadeId, linhas })),
+    // Logística própria Foody — informativo, atrás de FOODY_CENTRAL_DASHBOARD_ENABLED (desligada: chave ausente, nada consultado).
+    // Nunca entra nos cards, deduções, rentabilidade nem na proteção de preços (ver dashboardExecutivo.logisticaProprio.js).
+    ...(await logisticaProprioOpcional({
+      organizacaoId, unidadeId, de: periodoDoMes(ano, mes).de, ate: periodoDoMes(ano, mes).ate,
+      // `modelo` é o objeto do período (`modelo.modeloLogistico` = marketplace | full_service | misto); só o texto vai ao bloco.
+      modeloLogistico: typeof modelo?.modeloLogistico === "string" ? modelo.modeloLogistico : null,
+    })),
   };
+}
+
+function periodoDoMes(ano, mes) {
+  const mm = String(mes).padStart(2, "0");
+  const ultimo = new Date(Date.UTC(Number(ano), Number(mes), 0)).getUTCDate();
+  return { de: `${ano}-${mm}-01`, ate: `${ano}-${mm}-${String(ultimo).padStart(2, "0")}` };
 }
 
 /** `{ composicaoCanais }` ou `{}` — ver composicaoCanaisDoMes (canais.js). */
