@@ -1,21 +1,8 @@
-// PAINEL ADMINISTRATIVO — motor de ATENÇÃO FINANCEIRA DA REDE (puro, sem I/O).
-//
-// Serve a "Visão Geral da Rede": a central que classifica cada unidade em
-// EM_DIA / ATENCAO / CRITICA / SEM_DADOS a partir do MESMO par (metaIdeal,
-// limite) por modelo logístico que `dashboardExecutivo.calc.js#statusIndicadorRentabilidade`
-// já usa nos 4 cards de rentabilidade do Dashboard iFood e que
-// `administrativo.service.js#lucratividadeSemanal` já usa no ranking semanal.
-// NÃO inventa limite novo: a banda de "crítico" é derivada do PRÓPRIO gap
-// homologado (limite − metaIdeal) — ver `bandaCritica`.
-//
-// NÃO reimplementa faturamento/deduções/receita líquida: isso continua vindo
-// de `administrativo.lucratividade.js#lucratividadeDaUnidade` (que por sua vez
-// delega a `dashboardExecutivo.calc.js`). Este arquivo só soma o que falta:
-// classificação de 4 estados, impacto financeiro estimado, composição das
-// deduções (para o gráfico) e a ordem de prioridade de intervenção.
+// Visão Geral da Rede: situação financeira exclusivamente pelo Total de deduções.
+// Valores e referências vêm dos mesmos motores dos Indicadores de Rentabilidade.
 
 import {
-  snapshotFinanceiroMaisRecente, diaAnterior, totalDeducoes,
+  snapshotFinanceiroMaisRecente, diaAnterior, totalDeducoes, statusIndicadorRentabilidade,
 } from "../dashboard-executivo/dashboardExecutivo.calc.js";
 
 const n = (v) => (v == null ? 0 : Number(v));
@@ -25,19 +12,6 @@ const R2 = (v) => (v == null ? null : Math.round(Number(v) * 100) / 100);
 // CLASSIFICAÇÃO DE 4 ESTADOS
 // ---------------------------------------------------------------------------
 
-/**
- * Tamanho da banda de ATENÇÃO, acima do limite homologado: o mesmo tamanho do
- * gap (limite − metaIdeal) que já define a banda SAUDÁVEL abaixo do limite.
- * Sem metaIdeal cadastrada, usa o próprio limite como banda (crítico só acima
- * do DOBRO do limite) — nunca um número fixo novo, sempre derivado do que já
- * está homologado em `metas_indicadores`.
- * @param {{metaIdeal: number|null, limite: number}} meta
- */
-export function bandaCritica(meta) {
-  if (meta?.limite == null) return null;
-  return meta.metaIdeal != null ? Math.max(0, meta.limite - meta.metaIdeal) : meta.limite;
-}
-
 export const SITUACAO_FINANCEIRA = {
   sem_dados: { chave: "sem_dados", rotulo: "Sem dados" },
   em_dia: { chave: "em_dia", rotulo: "Em dia" },
@@ -45,25 +19,16 @@ export const SITUACAO_FINANCEIRA = {
   critica: { chave: "critica", rotulo: "Crítica" },
 };
 
-/**
- * Classifica a unidade em 4 estados a partir do % de deduções e da meta do
- * modelo. EM_DIA exige estar DENTRO DA META IDEAL — a mesma régua de
- * `statusIndicadorRentabilidade`, que nunca trata "dentro do limite" (sem
- * bater a meta ideal) como equivalente a "dentro da meta": são status
- * diferentes ali, e aqui viram tons diferentes também. Sem `metaIdeal`
- * cadastrada, o próprio `limite` faz esse papel (fallback já existente em
- * `bandaCritica`). Acima da meta ideal, ATENÇÃO até `limite + bandaCritica`;
- * CRÍTICA depois disso — nunca um threshold novo, sempre os 2 valores já
- * homologados em `metas_indicadores`.
- * @param {number|null} deducoesPct @param {{metaIdeal: number|null, limite: number|null}|null} meta
- */
+/** Traduz os estados homologados do indicador para os rótulos financeiros da rede. */
 export function classificarAtencaoFinanceira(deducoesPct, meta) {
-  if (deducoesPct == null || meta?.limite == null) return SITUACAO_FINANCEIRA.sem_dados;
-  const referenciaIdeal = meta.metaIdeal ?? meta.limite;
-  if (deducoesPct <= referenciaIdeal) return SITUACAO_FINANCEIRA.em_dia;
-  const banda = bandaCritica(meta);
-  if (banda != null && deducoesPct > meta.limite + banda) return SITUACAO_FINANCEIRA.critica;
-  return SITUACAO_FINANCEIRA.atencao;
+  if (!Number.isFinite(deducoesPct) || !Number.isFinite(meta?.limite)
+    || (meta.metaIdeal != null && !Number.isFinite(meta.metaIdeal))) return SITUACAO_FINANCEIRA.sem_dados;
+  const status = statusIndicadorRentabilidade(deducoesPct, meta).chave;
+  return ({
+    dentro_da_meta: SITUACAO_FINANCEIRA.em_dia,
+    dentro_do_limite: SITUACAO_FINANCEIRA.atencao,
+    atencao: SITUACAO_FINANCEIRA.critica,
+  })[status] ?? SITUACAO_FINANCEIRA.sem_dados;
 }
 
 /**

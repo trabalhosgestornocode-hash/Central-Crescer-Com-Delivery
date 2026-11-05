@@ -9,6 +9,8 @@
 // organizações, 1..N unidades por lote, 1..N lançamentos por lote) + O(unidades
 // × dias) em memória. NUNCA `for unidade: SELECT`.
 
+import { lerTotalDeducoesRentabilidade } from "../dashboard-executivo/dashboardExecutivo.totalDeducoes.js";
+import { calcularProtecaoPrecificacao } from "../dashboard-executivo/dashboardExecutivo.rentabilidade.js";
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import {
@@ -22,7 +24,7 @@ import {
 } from "./administrativo.monitores.js";
 import {
   listarUnidadesElegiveis, obterOrganizacaoOperacional,
-  carregarLancamentosDaFrota, carregarLancamentosDaUnidade, carregarMetasIndicadores, carregarTrocasModeloDaFrota,
+  carregarLancamentosDaFrota, carregarLancamentosDaUnidade, carregarMetasIndicadores, carregarTrocasModeloDaFrota, carregarPrecosReferenciaDaFrota,
 } from "./administrativo.repo.js";
 import {
   faturamentoDaUnidade, somarFaturamento, coberturaDe,
@@ -39,11 +41,11 @@ import {
   filtrarUnidadesRede, ordenarPrioridadeIntervencao, contagemPorSituacao,
 } from "./administrativo.visaoRede.js";
 import { escolherMetas } from "../dashboard-executivo/dashboardExecutivo.metas.service.js";
-import { statusIndicadorRentabilidade, MODELOS_LOGISTICOS, ROTULO_MODELO } from "../dashboard-executivo/dashboardExecutivo.calc.js";
+import { statusIndicadorRentabilidade, metasComProtecaoPrecificacao, MODELOS_LOGISTICOS, ROTULO_MODELO } from "../dashboard-executivo/dashboardExecutivo.calc.js";
 import {
   montarLinhaDoTempo, segmentosDoPeriodo, estadoDoPeriodo, rotuloDoModelo, trocasDeLinhas,
 } from "../dashboard-executivo/dashboardExecutivo.modeloTemporal.js";
-import { comporMetas } from "../dashboard-executivo/dashboardExecutivo.periodoMisto.js";
+import { comporMetas, dividirFinanceiroPorSegmento, consolidarSegmentos } from "../dashboard-executivo/dashboardExecutivo.periodoMisto.js";
 import { obterMes as obterMesDashboardExecutivo } from "../dashboard-executivo/dashboardExecutivo.service.js";
 import {
   carregarDatasLiberadas, listarDesbloqueios, criarDesbloqueio, revogarDesbloqueio,
@@ -361,6 +363,7 @@ export async function detalheEmpresa({ organizacaoId, hojeIso, mes } = {}, deps 
           unidadeId: u.unidadeId, nome: u.nome,
           faturamento: u.faturamento, deducoes: u.deducoes, deducoesPct: u.deducoesPct,
           meta: u.meta, situacaoFinanceira: u.situacaoFinanceira,
+          totalDeducoesIndicadorPct: u.totalDeducoesIndicadorPct,
           impactoFinanceiroEstimado: u.impactoFinanceiroEstimado, ultimaAtualizacao: u.ultimaAtualizacao,
         })),
       };
@@ -541,6 +544,7 @@ export async function detalheOperacaoUnidade({ unidadeId, mes, hojeIso } = {}, d
       organizacaoId: alvo.organizacaoId, empresaNome: alvo.empresaNome,
     },
     periodo: { mes: numMes, ano, ym: per.periodo, mesCorrente: per.mesCorrente },
+    situacaoFinanceira: classificarAtencaoFinanceira(dashboard.cards?.totalDeducoes?.percentual, dashboard.cards?.totalDeducoes?.meta),
     dashboard,
   };
 }
@@ -1409,12 +1413,13 @@ export async function visaoGeralRede({
   const desdeEvolucao = diasDoMes(mesesEvolucao[0].ano, mesesEvolucao[0].mes)[0];
 
   const orgIds = [...new Set(frotaBase.map((u) => u.organizacaoId))];
-  const [porUnidade, metasLinhas, trocasPorUnidade] = await Promise.all([
+  const [porUnidade, metasLinhas, trocasPorUnidade, precosPorUnidade] = await Promise.all([
     carregarLancamentosDaFrota({
       unidadeIds: frotaBase.map((u) => u.unidadeId), desdeIso: desdeEvolucao, ateIso: fimMes,
     }, deps),
     carregarMetasIndicadores({ organizacaoIds: orgIds }, deps),
     carregarTrocasModeloDaFrota({ unidadeIds: frotaBase.map((u) => u.unidadeId) }, deps),
+    carregarPrecosReferenciaDaFrota({ unidades: frotaBase }, deps),
   ]);
 
   // Só linhas DIÁRIAS entram (ver cabeçalho de administrativo.lucratividade.js).
@@ -1448,20 +1453,27 @@ export async function visaoGeralRede({
       metasLinhas.filter((r) => r.modelo_logistico === m), { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId },
     );
     const modelo = estado.tipo ?? null;
+    const divisao = estado.misto ? dividirFinanceiroPorSegmento(linhasAtual, segmentos) : null;
+    const consolidado = divisao ? consolidarSegmentos(divisao) : null;
+    const indicador = lerTotalDeducoesRentabilidade(linhasAtual, modelo, consolidado);
+    const protecao = calcularProtecaoPrecificacao({ ...precosPorUnidade.get(u.unidadeId), ticketMedioIfood: null }).protecaoPrecificacaoPct;
+    const metasRentabilidade = (m) => metasComProtecaoPrecificacao(metasDoModelo(m), protecao, m).metas;
     let metaDed;
     if (estado.misto) {
-      const partes = segmentos.map((s) => ({
+      const partes = divisao.segmentos.map((s) => ({
         modelo: s.modelo,
-        peso: lucratividadeDaUnidade(linhasAtual, { inicio: s.inicio, fim: s.fim, ateDataIso: fimMes }).faturamento ?? 0,
-        metas: metasDoModelo(s.modelo),
+        peso: s.campos.valorVendasIfood.valorOficial,
+        pesoConciliado: s.campos.valorVendasIfood.status === "conciliado",
+        metas: metasRentabilidade(s.modelo),
       }));
       metaDed = comporMetas(partes, ["total_deducoes"]).total_deducoes ?? null;
     } else {
-      metaDed = modelo ? (metasDoModelo(modelo).total_deducoes ?? null) : null;
+      metaDed = modelo ? (metasRentabilidade(modelo).total_deducoes ?? null) : null;
     }
 
-    const meta = metaDed ? { metaIdeal: R2(metaDed.metaIdeal), limite: R2(metaDed.limite) } : null;
-    const situacaoFinanceira = classificarAtencaoFinanceira(atual.deducoesPct, meta);
+    // Classificar com precisão integral; arredondar apenas os valores apresentados.
+    const meta = metaDed ? { metaIdeal: metaDed.metaIdeal, limite: metaDed.limite } : null;
+    const situacaoFinanceira = classificarAtencaoFinanceira(indicador.percentual, meta);
 
     return {
       unidadeId: u.unidadeId,
@@ -1482,19 +1494,21 @@ export async function visaoGeralRede({
 
       deducoes: R2(atual.deducoes),
       deducoesPct: R2(atual.deducoesPct),
+      totalDeducoesIndicador: indicador.valor,
+      totalDeducoesIndicadorPct: indicador.percentual,
       composicaoDeducoes: {
         taxasComissoes: R2(composicao.taxasComissoes),
         servicosPromocoes: R2(composicao.servicosPromocoes),
         outrosAjustes: R2(composicao.outrosAjustes),
       },
       meta,
-      folgaLimitePp: R2(folgaLimite(atual.deducoesPct, metaDed)),
+      folgaLimitePp: R2(folgaLimite(indicador.percentual, metaDed)),
 
       receitaLiquida: R2(atual.receitaLiquida),
       rentabilidadePct: R2(atual.rentabilidadePct),
 
       situacaoFinanceira,
-      impactoFinanceiroEstimado: impactoFinanceiroEstimado(atual.faturamento, atual.deducoesPct, meta),
+      impactoFinanceiroEstimado: impactoFinanceiroEstimado(atual.faturamento, indicador.percentual, meta),
 
       semDado: atual.semDado,
       _anterior: { faturamento: R2(anterior.faturamento), deducoes: R2(anterior.deducoes), receitaLiquida: R2(anterior.receitaLiquida), semDado: anterior.semDado },
@@ -1557,8 +1571,12 @@ export async function visaoGeralRede({
   for (const modelo of MODELOS_LOGISTICOS) {
     const doModelo = universoTabela.filter((u) => u.modeloLogistico === modelo);
     const melhores = doModelo
-      .filter((u) => u.folgaLimitePp != null)
-      .sort((a, b) => b.folgaLimitePp - a.folgaLimitePp)
+      .filter((u) => u.situacaoFinanceira.chave !== "sem_dados")
+      .sort((a, b) => {
+        const ordem = { em_dia: 0, atencao: 1, critica: 2 };
+        return ordem[a.situacaoFinanceira.chave] - ordem[b.situacaoFinanceira.chave]
+          || b.folgaLimitePp - a.folgaLimitePp;
+      })
       .slice(0, 10).map(linhaDeRanking);
     const atencao = ordenarPrioridadeIntervencao(doModelo.filter((u) => ["atencao", "critica"].includes(u.situacaoFinanceira.chave)))
       .slice(0, 10).map(linhaDeRanking);
@@ -1594,6 +1612,7 @@ export async function visaoGeralRede({
 const linhaDeRanking = (u) => ({
   unidadeId: u.unidadeId, nome: u.nome, empresaNome: u.empresaNome, organizacaoId: u.organizacaoId,
   modeloLogisticoRotulo: u.modeloLogisticoRotulo, faturamento: u.faturamento, deducoesPct: u.deducoesPct,
+  totalDeducoesIndicadorPct: u.totalDeducoesIndicadorPct,
   meta: u.meta, folgaLimitePp: u.folgaLimitePp, situacaoFinanceira: u.situacaoFinanceira,
   impactoFinanceiroEstimado: u.impactoFinanceiroEstimado,
 });

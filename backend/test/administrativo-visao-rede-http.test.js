@@ -63,8 +63,8 @@ function mesCompleto(unidadeId, fatDia, taxasDia, servicosDia = 0) {
 /**
  * Frota de setembro/2026:
  *   JV Loja A  (Grupo JV, MP)  1000/dia fat, deduções 7,5%  -> EM_DIA  (limite MP 15%)
- *   JV Loja B  (Grupo JV, MP)  1000/dia fat, deduções 30%   -> CRÍTICA (limite 15% + banda 3pp = 18%)
- *   Beta Sul   (Beta, FS)       500/dia fat, deduções 27%   -> ATENÇÃO (limite FS 25% + banda 5pp = 30%)
+ *   JV Loja B  (Grupo JV, MP)  1000/dia fat, deduções 30%   -> CRÍTICA (limite 15%)
+ *   Beta Sul   (Beta, FS)       500/dia fat, deduções 23%   -> ATENÇÃO (ideal FS 20% / limite 25%)
  * Metas globais: MP ideal 12% / limite 15% ; FS ideal 20% / limite 25%.
  */
 function cenario() {
@@ -82,7 +82,7 @@ function cenario() {
     lancamentos_financeiros_diarios: [
       ...mesCompleto(UUID("a"), 1000, 75),
       ...mesCompleto(UUID("b"), 1000, 240, 60), // 24% taxas + 6% serviços = 30% deduções totais
-      ...mesCompleto(UUID("c"), 500, 135),      // 27%
+      ...mesCompleto(UUID("c"), 500, 115),      // 23%
     ],
   };
   return st;
@@ -126,7 +126,7 @@ describe("classificação de atenção financeira, por unidade", () => {
 });
 
 describe("rede: percentual consolidado pela SOMA dos valores (nunca média de %)", () => {
-  test("deducoesPct da rede não é a média simples dos 3 percentuais (7,5 / 30 / 27 -> média ingênua 21,5)", async () => {
+  test("deducoesPct da rede não é a média simples dos 3 percentuais (7,5 / 30 / 23 -> média ingênua 20,17)", async () => {
     const r = await rede();
     // faturamento: A=31000(1..30*1000=465000? ver abaixo) — o que importa é
     // que o percentual da rede vem de Σdeduções/Σfaturamento.
@@ -134,7 +134,7 @@ describe("rede: percentual consolidado pela SOMA dos valores (nunca média de %)
     const somaDed = r.unidades.reduce((s, u) => s + u.deducoes, 0);
     const esperado = Math.round((somaDed / somaFat) * 100 * 100) / 100;
     assert.equal(r.rede.deducoesPct, esperado);
-    assert.notEqual(Math.round(r.rede.deducoesPct), 22, "nunca a média simples (21,5 ~ 22) dos 3 percentuais");
+    assert.notEqual(Math.round(r.rede.deducoesPct), 22, "nunca a média simples (20,17) dos 3 percentuais");
   });
 });
 
@@ -249,4 +249,112 @@ describe("detalheEmpresa — bloco financeiro (drill-down a partir da Visão Ger
     const d = await detalheEmpresa({ organizacaoId: UUID("beta"), hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(st) });
     assert.equal(d.financeiro, null);
   });
+});
+
+describe("regressão: rede usa exclusivamente o indicador Total de deduções", () => {
+  const consultar = (st, filtros = {}) => visaoGeralRede({ hojeIso: HOJE, mes: "2026-09", ...filtros }, { supabase: fakeDb(st) });
+  test("quatro estados alimentam cards, distribuição, filtros e rankings com os mesmos badges", async () => {
+    const st = cenario();
+    st.unidades.push(uni(UUID("d"), UUID("beta"), "Sem dados", "full_service"));
+    st.unidade_modulos.push({ unidade_id: UUID("d"), modulo_id: MOD });
+    const r = await consultar(st);
+    assert.deepEqual(r.distribuicaoSituacoes, { em_dia: 1, atencao: 1, critica: 1, sem_dados: 1 });
+    assert.equal(r.rede.unidadesEmAtencao, 1);
+    assert.equal(r.rede.unidadesCriticas, 1);
+    for (const chave of ["em_dia", "atencao", "critica", "sem_dados"]) {
+      const filtrado = await consultar(st, { situacao: chave });
+      assert.equal(filtrado.unidades.length, 1);
+      assert.equal(filtrado.unidades[0].situacaoFinanceira.chave, chave);
+      assert.deepEqual(filtrado.distribuicaoSituacoes, r.distribuicaoSituacoes);
+      for (const bloco of Object.values(filtrado.rankingPorModalidade)) {
+        for (const u of [...bloco.melhores, ...bloco.atencao]) assert.equal(u.situacaoFinanceira.chave, chave);
+      }
+    }
+  });
+  test("logo acima do limite é Crítica, sem a antiga banda adicional", async () => {
+    const st = cenario();
+    st.lancamentos_financeiros_diarios = st.lancamentos_financeiros_diarios.filter((l) => l.unidade_id !== UUID("c"));
+    st.lancamentos_financeiros_diarios.push(...mesCompleto(UUID("c"), 500, 135)); // 27% > 25%
+    const r = await consultar(st);
+    assert.equal(r.unidades.find((u) => u.unidadeId === UUID("c")).situacaoFinanceira.chave, "critica");
+    assert.equal(r.rede.unidadesCriticas, 2);
+    assert.equal(r.rede.unidadesEmAtencao, 0);
+  });
+  test("ajustes de caixa e entregadores Full Service não alteram o indicador", async () => {
+    const st = cenario();
+    for (const l of st.lancamentos_financeiros_diarios) {
+      l.ajustes_contra_loja = 100000;
+      if (l.unidade_id === UUID("c")) l.taxas_entregadores = 100000;
+    }
+    const r = await consultar(st);
+    assert.equal(r.unidades.find((u) => u.unidadeId === UUID("a")).situacaoFinanceira.chave, "em_dia");
+    const c = r.unidades.find((u) => u.unidadeId === UUID("c"));
+    assert.equal(c.totalDeducoesIndicadorPct, 23);
+    assert.equal(c.situacaoFinanceira.chave, "atencao");
+    assert.ok(c.deducoesPct > 100);
+  });
+  test("meta ideal dinâmica usa os mesmos preços e cálculo do Dashboard iFood", async () => {
+    const st = cenario();
+    Object.assign(st.unidades[2], { tabela_balcao: "B", tabela_ifood: "I" });
+    st.produtos = [{ id: "produto-beta", organizacao_id: UUID("beta"), nome: "Churrasco 15cm", tamanho: "15cm", ativo: true }];
+    st.produto_precos = [
+      { produto_id: "produto-beta", canal: "balcao", tabela: "B", preco: 15.2 },
+      { produto_id: "produto-beta", canal: "ifood", tabela: "I", preco: 20 },
+    ];
+    const r = await consultar(st);
+    const c = r.unidades.find((u) => u.unidadeId === UUID("c"));
+    assert.ok(Math.abs(c.meta.metaIdeal - 24) < 1e-10);
+    assert.equal(c.meta.limite, 25);
+    assert.equal(c.situacaoFinanceira.chave, "em_dia"); // 23%, cadastrada=20%, derivada=24%
+    const detalhe = await detalheEmpresa({ organizacaoId: UUID("beta"), hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(st) });
+    assert.deepEqual(detalhe.financeiro.unidades[0].situacaoFinanceira, c.situacaoFinanceira);
+  });
+  test("melhores prioriza situação antes de folga quando as metas são personalizadas", async () => {
+    const st = cenario();
+    st.metas_indicadores.push({ ...metaGlobal("marketplace", 0.05, 0.8), organizacao_id: UUID("jv"), unidade_id: UUID("a") });
+    st.metas_indicadores.push({ ...metaGlobal("marketplace", 0.35, 0.4), organizacao_id: UUID("jv"), unidade_id: UUID("b") });
+    const r = await consultar(st);
+    assert.deepEqual(r.rankingPorModalidade.marketplace.melhores.map((u) => u.situacaoFinanceira.chave), ["em_dia", "atencao"]);
+  });
+});
+
+test("período misto usa parcelas e metas conciliadas de cada modelo", async () => {
+  const st = cenario();
+  st.unidades[0].modelo_logistico_ifood = "full_service";
+  st.unidade_modelo_logistico_historico = [{ unidade_id: UUID("a"), vigencia_inicio: "2026-09-16", modelo_anterior: "marketplace", modelo_novo: "full_service" }];
+  for (const l of st.lancamentos_financeiros_diarios.filter((l) => l.unidade_id === UUID("a"))) {
+    const d = Number(l.data_lancamento.slice(-2));
+    l.taxas_comissoes = d * 100;
+    l.taxas_entregadores = Math.min(d, 15) * 100;
+  }
+  const r = await visaoGeralRede({ hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(st) });
+  const a = r.unidades.find((u) => u.unidadeId === UUID("a"));
+  assert.equal(a.modeloLogistico, "misto");
+  assert.equal(a.totalDeducoesIndicador, 4500); // 3000 taxas + 1500 entregadores MP
+  assert.equal(a.totalDeducoesIndicadorPct, 15);
+  assert.equal(a.meta.metaIdeal, 16); // 50% MP ideal 12 + 50% FS ideal 20
+  assert.equal(a.meta.limite, 20);
+  assert.equal(a.situacaoFinanceira.chave, "em_dia");
+});
+
+test("classificação preserva a precisão da meta ideal cadastrada", async () => {
+  const st = cenario();
+  st.metas_indicadores[0].meta_ideal = 0.07504; // 7,504%, exibível com arredondamento, comparação exata
+  for (const l of st.lancamentos_financeiros_diarios.filter((l) => l.unidade_id === UUID("a"))) {
+    l.taxas_comissoes = l.valor_vendas_ifood * 0.07503;
+  }
+  const r = await visaoGeralRede({ hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(st) });
+  assert.equal(r.unidades.find((u) => u.unidadeId === UUID("a")).situacaoFinanceira.chave, "em_dia");
+});
+
+test("somente ajustes financeiros não fabricam um indicador Total de deduções", async () => {
+  const st = cenario();
+  for (const l of st.lancamentos_financeiros_diarios.filter((l) => l.unidade_id === UUID("a"))) {
+    l.taxas_comissoes = null; l.servicos_promocoes = null; l.taxas_entregadores = null;
+    l.ajustes_contra_loja = 100;
+  }
+  const r = await visaoGeralRede({ hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(st) });
+  const a = r.unidades.find((u) => u.unidadeId === UUID("a"));
+  assert.equal(a.totalDeducoesIndicadorPct, null);
+  assert.equal(a.situacaoFinanceira.chave, "sem_dados");
 });

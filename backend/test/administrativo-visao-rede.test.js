@@ -2,8 +2,7 @@
 //
 // Protege:
 //  1. a classificação de 4 estados (SEM_DADOS/EM_DIA/ATENÇÃO/CRÍTICA), com a
-//     banda de crítico DERIVADA do gap homologado (limite − metaIdeal), nunca
-//     um número novo;
+//     reutilizando o status homologado dos Indicadores de Rentabilidade;
 //  2. o impacto financeiro estimado — só o excedente sobre o LIMITE, nunca
 //     sobre a meta ideal, e nunca negativo;
 //  3. a composição das deduções (taxas/comissões x serviços/promoções) sem
@@ -16,45 +15,26 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  classificarAtencaoFinanceira, bandaCritica, impactoFinanceiroEstimado,
+  classificarAtencaoFinanceira, impactoFinanceiroEstimado,
   composicaoDeducoesDoBloco, somarComposicaoDeducoes,
   filtrarUnidadesRede, ordenarPrioridadeIntervencao, contagemPorSituacao,
 } from "../src/modules/administrativo/administrativo.visaoRede.js";
 
-describe("classificarAtencaoFinanceira — 4 estados, banda crítica derivada do homologado", () => {
-  const meta = { metaIdeal: 20, limite: 28 }; // gap homologado = 8 p.p.
-
-  test("sem dado ou sem meta -> SEM_DADOS", () => {
-    assert.equal(classificarAtencaoFinanceira(null, meta).chave, "sem_dados");
+describe("classificarAtencaoFinanceira — Total de deduções, meta ideal e limite", () => {
+  const meta = { metaIdeal: 20, limite: 28 };
+  for (const [valor, esperado] of [[0, "em_dia"], [15, "em_dia"], [20, "em_dia"], [20.001, "atencao"], [24, "atencao"], [28, "atencao"], [28.001, "critica"], [36, "critica"], [60, "critica"], [null, "sem_dados"], [NaN, "sem_dados"], [Infinity, "sem_dados"]]) {
+    test(`${valor} -> ${esperado}`, () => assert.equal(classificarAtencaoFinanceira(valor, meta).chave, esperado));
+  }
+  test("sem limite ou sem meta -> Sem dados", () => {
     assert.equal(classificarAtencaoFinanceira(25, null).chave, "sem_dados");
     assert.equal(classificarAtencaoFinanceira(25, { metaIdeal: 20, limite: null }).chave, "sem_dados");
   });
-
-  test("dentro da meta IDEAL -> EM_DIA", () => {
-    assert.equal(classificarAtencaoFinanceira(15, meta).chave, "em_dia");  // abaixo da meta ideal
-    assert.equal(classificarAtencaoFinanceira(20, meta).chave, "em_dia"); // exatamente na meta ideal
+  test("sem ideal segue o status homologado Dentro do Limite (Atenção), sem inventar ideal", () => {
+    assert.equal(classificarAtencaoFinanceira(25, { limite: 30 }).chave, "atencao");
+    assert.equal(classificarAtencaoFinanceira(31, { limite: 30 }).chave, "critica");
   });
-
-  test("acima da meta ideal, até limite+gap -> ATENÇÃO (nunca tratado como saudável só por estar dentro do limite)", () => {
-    assert.equal(classificarAtencaoFinanceira(20.5, meta).chave, "atencao"); // já passou da meta ideal
-    assert.equal(classificarAtencaoFinanceira(24, meta).chave, "atencao");  // entre ideal e limite — NÃO é em_dia
-    assert.equal(classificarAtencaoFinanceira(28, meta).chave, "atencao"); // exatamente no limite
-    assert.equal(classificarAtencaoFinanceira(36, meta).chave, "atencao"); // limite(28) + banda(8) = 36, ainda ATENÇÃO
-  });
-
-  test("acima de limite + gap -> CRÍTICA", () => {
-    assert.equal(classificarAtencaoFinanceira(36.1, meta).chave, "critica");
-    assert.equal(classificarAtencaoFinanceira(60, meta).chave, "critica");
-  });
-
-  test("sem metaIdeal cadastrada, o próprio limite faz o papel de referência ideal E de banda (crítico só acima do dobro)", () => {
-    const semIdeal = { metaIdeal: null, limite: 30 };
-    assert.equal(bandaCritica(semIdeal), 30);
-    assert.equal(classificarAtencaoFinanceira(25, semIdeal).chave, "em_dia");
-    assert.equal(classificarAtencaoFinanceira(30, semIdeal).chave, "em_dia"); // exatamente no limite = referência ideal do fallback
-    assert.equal(classificarAtencaoFinanceira(45, semIdeal).chave, "atencao");
-    assert.equal(classificarAtencaoFinanceira(60, semIdeal).chave, "atencao"); // 60 == limite+banda -> ainda ATENÇÃO (fronteira)
-    assert.equal(classificarAtencaoFinanceira(60.1, semIdeal).chave, "critica");
+  test("limite tem precedência mesmo quando a meta ideal dinâmica supera o limite", () => {
+    assert.equal(classificarAtencaoFinanceira(31, { metaIdeal: 35, limite: 30 }).chave, "critica");
   });
 });
 

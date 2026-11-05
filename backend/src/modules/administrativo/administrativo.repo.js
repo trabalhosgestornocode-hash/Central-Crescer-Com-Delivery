@@ -11,6 +11,7 @@
 // é cross-tenant por AUTORIZAÇÃO explícita (`requirePainelAdministrativo`), não
 // por bypass dos middlewares multi-tenant.
 
+import { selecionarProdutoReferencia } from "../dashboard-executivo/dashboardExecutivo.precos.service.js";
 import { supabase } from "../../config/supabase.js";
 import { ApiError } from "../../shared/ApiError.js";
 
@@ -249,4 +250,40 @@ export async function carregarTrocasModeloDaFrota({ unidadeIds }, deps = {}) {
     porUnidade.get(r.unidade_id).push(r);
   }
   return porUnidade;
+}
+
+/** Preços oficiais do produto de referência, em lote e sem carregar fichas de custo.
+ * Mesma seleção do Dashboard iFood; ausência de preço preserva o fallback homologado.
+ */
+export async function carregarPrecosReferenciaDaFrota({ unidades }, deps = {}) {
+  const db = deps.supabase ?? supabase;
+  const resultado = new Map();
+  const orgIds = [...new Set(unidades.map((u) => u.organizacaoId))];
+  for (const lote of emLotes(orgIds)) {
+    const [produtos, configuracoes] = await Promise.all([
+      paginar(() => db.from("produtos").select("id, organizacao_id, nome, tamanho")
+        .in("organizacao_id", lote).eq("ativo", true)
+        .order("id")),
+      paginar(() => db.from("unidades").select("id, organizacao_id, tabela_balcao, tabela_ifood")
+        .in("organizacao_id", lote).order("id")),
+    ]);
+    const porOrg = new Map(lote.map((id) => [id, selecionarProdutoReferencia(produtos.filter((p) => p.organizacao_id === id && /churrasco/i.test(p.nome)))]));
+    const precos = [];
+    for (const ids of emLotes([...porOrg.values()].filter(Boolean).map((p) => p.id))) {
+      precos.push(...await paginar(() => db.from("produto_precos").select("produto_id, canal, tabela, preco")
+        .in("produto_id", ids).order("produto_id").order("canal").order("tabela")));
+    }
+    for (const u of unidades.filter((u) => lote.includes(u.organizacaoId))) {
+      const config = configuracoes.find((c) => c.id === u.unidadeId);
+      const produto = porOrg.get(u.organizacaoId);
+      const preco = (canal) => {
+        const tabela = config?.[`tabela_${canal}`];
+        const row = tabela && produto ? precos.find((p) => p.produto_id === produto.id && p.canal === canal && p.tabela === tabela) : null;
+        const valor = row?.preco == null ? null : Number(row.preco);
+        return Number.isFinite(valor) && valor > 0 ? valor : null;
+      };
+      resultado.set(u.unidadeId, { precoBalcao: preco("balcao"), precoIfood: preco("ifood") });
+    }
+  }
+  return resultado;
 }

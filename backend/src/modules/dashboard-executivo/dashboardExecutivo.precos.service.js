@@ -4,7 +4,6 @@ import * as v from "../../shared/validar.js";
 import { carregarGrafo, resumoProduto } from "../produtos/custo.js";
 import { resolverTabelasComerciaisUnidade } from "../../shared/tabelaComercial.js";
 async function localizarProdutoReferencia(organizacaoId, nomeBusca) {
-  const termo = nomeBusca.replace(/\s+/g, "");
   const { data, error } = await supabase
     .from("produtos")
     .select("id, nome, tamanho, custo_manual, ativo")
@@ -13,14 +12,14 @@ async function localizarProdutoReferencia(organizacaoId, nomeBusca) {
     .ilike("nome", `%${nomeBusca.split(" ")[0]}%`); // 1º termo (ex.: "Churrasco") — filtro amplo, refinado abaixo
   if (error) throw ApiError.internal(error.message);
 
-  const candidatos = data ?? [];
-  const alvo = candidatos.find((p) => p.nome.replace(/\s+/g, "").toLowerCase() === termo.toLowerCase())
+  return selecionarProdutoReferencia(data ?? [], nomeBusca);
+}
+
+export function selecionarProdutoReferencia(candidatos, nomeBusca = "Churrasco 15cm") {
+  const termo = nomeBusca.replace(/\s+/g, "");
+  return candidatos.find((p) => p.nome.replace(/\s+/g, "").toLowerCase() === termo.toLowerCase())
     ?? candidatos.find((p) => p.tamanho === "15cm" && /churrasco/i.test(p.nome))
-    ?? candidatos.find((p) => /15\s*cm/i.test(p.nome));
-  if (!alvo) {
-    return null;
-  }
-  return alvo;
+    ?? candidatos.find((p) => /15\s*cm/i.test(p.nome)) ?? null;
 }
 
 // Chamado após a validação da unidade e organização pelo serviço do Dashboard.
