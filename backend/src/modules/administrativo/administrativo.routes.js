@@ -53,6 +53,7 @@ administrativoRouter.get("/pendencias", c.pendencias);
 administrativoRouter.get("/empresas", c.empresas);            // antes de /empresas/:id
 administrativoRouter.get("/empresas/:organizacaoId", c.detalheEmpresa);
 administrativoRouter.get("/unidades/:unidadeId/calendario", c.calendarioUnidade);
+administrativoRouter.get("/unidades/:unidadeId/dashboard", c.dashboardOperacaoUnidade);
 
 // ---- Comunicação/WhatsApp (Checkpoint H.3-A) — visualização + configuração
 // segura. A ÚNICA escrita (`PUT .../configuracao`) NUNCA habilita envio: o

@@ -81,6 +81,7 @@ const UNI_A = {
   deducoes: 1200, deducoesPct: 10, composicaoDeducoes: { taxasComissoes: 1000, servicosPromocoes: 200, outrosAjustes: 0 },
   meta: { metaIdeal: 1000, limite: 1200 }, folgaLimitePp: 200, impactoFinanceiroEstimado: 0,
   situacaoFinanceira: { chave: "em_dia", rotulo: "Em dia" }, incluiProvisorio: false, provisorio: 0,
+  ultimaAtualizacao: "2026-09-30",
 };
 const UNI_B = {
   organizacaoId: "org-jv", empresaNome: "JV Alimentos", unidadeId: "uni-b", nome: "JV Loja B",
@@ -88,6 +89,7 @@ const UNI_B = {
   deducoes: 1980, deducoesPct: 22, composicaoDeducoes: { taxasComissoes: 1600, servicosPromocoes: 380, outrosAjustes: 0 },
   meta: { metaIdeal: 1000, limite: 1200 }, folgaLimitePp: -1000, impactoFinanceiroEstimado: 720,
   situacaoFinanceira: { chave: "critica", rotulo: "Crítica" }, incluiProvisorio: true, provisorio: 150,
+  ultimaAtualizacao: "2026-09-28",
 };
 const UNI_C = {
   organizacaoId: "org-beta", empresaNome: "Beta Sul", unidadeId: "uni-c", nome: "Beta Centro",
@@ -95,6 +97,7 @@ const UNI_C = {
   deducoes: 1125, deducoesPct: 15, composicaoDeducoes: { taxasComissoes: 900, servicosPromocoes: 225, outrosAjustes: 0 },
   meta: { metaIdeal: 1000, limite: 1300 }, folgaLimitePp: -200, impactoFinanceiroEstimado: 0,
   situacaoFinanceira: { chave: "atencao", rotulo: "Atenção" }, incluiProvisorio: false, provisorio: 0,
+  ultimaAtualizacao: null,
 };
 const EMPRESAS = [
   { organizacaoId: "org-jv", empresaNome: "JV Alimentos", modeloLogistico: "marketplace", unidadesMonitoradas: 2, faturamento: 21000, deducoes: 3180, deducoesPct: 15.14, impactoFinanceiroEstimado: 720, situacaoFinanceira: { chave: "critica", rotulo: "Crítica" } },
@@ -315,10 +318,64 @@ describe("htmlVisaoGeralRede — tabela gerencial", () => {
     assert.ok(!/não finalizados/.test(liA), "JV Loja A sem provisório -> sem selo");
   });
 
+  test("última atualização mostra a data REAL do lançamento mais recente; sem lançamento no mês, mostra — (nunca inventa)", () => {
+    const h = V.htmlVisaoGeralRede(REDE_CHEIA);
+    assert.match(h, /Última atualização/);
+    const liA = /<tr[^>]*data-id="uni-a"[\s\S]*?<\/tr>/.exec(h)[0];
+    const liC = /<tr[^>]*data-id="uni-c"[\s\S]*?<\/tr>/.exec(h)[0];
+    assert.match(liA, /30\/09/, "JV Loja A tem ultimaAtualizacao real -> aparece formatada");
+    assert.match(liC, /<td>—<\/td>/, "Beta Centro sem ultimaAtualizacao -> mostra — , nunca uma data inventada");
+  });
+
   test("sem unidades no recorte (filtro restritivo), mostra placeholder nas duas tabelas", () => {
     const h = V.htmlVisaoGeralRede({ ...REDE_CHEIA, unidades: [], empresas: [] });
     assert.match(h, /Nenhuma empresa no recorte atual/);
     assert.match(h, /Nenhuma unidade no recorte atual/);
+  });
+});
+
+// ===========================================================================
+// Drill-down: htmlDetalheEmpresa ganha um bloco financeiro reaproveitando os
+// MESMOS dados/fórmulas da Visão Geral da Rede, recortados por empresa.
+// ===========================================================================
+describe("htmlDetalheEmpresa — bloco financeiro (drill-down a partir da Visão Geral da Rede)", () => {
+  const DETALHE_BASE = {
+    periodo: "2026-09", mesCorrente: true, d1: "2026-09-14",
+    organizacao: { nome: "JV Alimentos", status: "ativa" }, consolidado: {},
+    unidades: [], pendencias: [],
+  };
+
+  test("com financeiro presente, mostra os 4 cards + uma linha por unidade, reaproveitando chipSituacaoRede", () => {
+    const h = V.htmlDetalheEmpresa({
+      ...DETALHE_BASE,
+      financeiro: {
+        rede: { faturamento: 21000, deducoes: 3180, deducoesPct: 15.14, receitaLiquida: 17820 },
+        unidades: [
+          { unidadeId: "uni-a", nome: "JV Loja A", faturamento: 12000, deducoesPct: 10, situacaoFinanceira: { chave: "em_dia", rotulo: "Em dia" }, impactoFinanceiroEstimado: 0, ultimaAtualizacao: "2026-09-30" },
+          { unidadeId: "uni-b", nome: "JV Loja B", faturamento: 9000, deducoesPct: 22, situacaoFinanceira: { chave: "critica", rotulo: "Crítica" }, impactoFinanceiroEstimado: 720, ultimaAtualizacao: null },
+        ],
+      },
+    });
+    assert.match(h, /Financeiro do mês/);
+    assert.match(h, /R\$\s?21\.000,00/);
+    assert.match(h, /JV Loja A/);
+    assert.match(h, /JV Loja B/);
+    assert.match(h, /padm-chip--critico/);
+    assert.match(h, /impacto estimado R\$\s?720,00/);
+    // unidade sem última atualização real -> "—", nunca uma data inventada
+    const liB = /<li[^>]*data-id="uni-b"[\s\S]*?<\/li>/.exec(h)[0];
+    assert.match(liB, /<b>—<\/b>/);
+  });
+
+  test("sem bloco financeiro (empresa fora do módulo), a seção some por completo — não aparece vazia", () => {
+    const h = V.htmlDetalheEmpresa({ ...DETALHE_BASE, financeiro: null });
+    assert.ok(!/Financeiro do mês/.test(h));
+  });
+
+  test("detalhe antigo (sem a chave financeiro) continua funcionando — compatibilidade retroativa", () => {
+    const h = V.htmlDetalheEmpresa(DETALHE_BASE);
+    assert.ok(!/Financeiro do mês/.test(h));
+    assert.match(h, /JV Alimentos/);
   });
 });
 
@@ -329,6 +386,70 @@ describe("htmlVisaoGeralRede — estado vazio da rede", () => {
     assert.match(h, /Nenhuma unidade monitorada neste recorte/);
     assert.match(h, /data-vr-filtro="organizacaoId"/, "filtros seguem renderizados mesmo sem dado, para o gestor poder limpar o recorte");
     assert.ok(!/Monitoramento por empresa e unidade/.test(h));
+  });
+});
+
+// ===========================================================================
+// htmlDetalheUnidade — Dashboard iFood COMPLETO da unidade (clicar numa
+// empresa/unidade na Visão Geral da Rede não pode abrir só o calendário).
+// Mesmo formato de `dashboardExecutivo.service.js#obterMes`, devolvido por
+// GET /unidades/:id/dashboard.
+// ===========================================================================
+describe("htmlDetalheUnidade — Dashboard iFood completo (admin, somente leitura)", () => {
+  const BASE = {
+    unidade: { unidadeId: "uni-1", unidadeNome: "Alfa Centro", organizacaoId: "org-1", empresaNome: "Alfa" },
+    periodo: { mes: 9, ano: 2026, ym: "2026-09", mesCorrente: true },
+  };
+
+  test("mostra cards do Dashboard iFood + status reais (nunca recalculados) + projeção", () => {
+    const h = V.htmlDetalheUnidade({
+      ...BASE,
+      dashboard: {
+        agregado: false,
+        modeloLogisticoRotulo: "Marketplace",
+        cards: {
+          faturamento: { valor: 30000 },
+          receitaLiquida: { valor: 27000, percentual: 90 },
+          ticketMedio: { valor: 45.5 },
+          novosClientes: { valor: 12 },
+          taxasComissoes: { valor: 2250, percentual: 7.5, status: { chave: "dentro_da_meta", label: "Dentro da Meta" } },
+          servicosPromocoes: { valor: 500, percentual: 1.67, status: { chave: "atencao", label: "Atenção" } },
+          taxasEntregadores: { naoAplicavel: true },
+          totalDeducoes: { valor: 3000, percentual: 10, status: { chave: "dentro_do_limite", label: "Dentro do Limite" } },
+        },
+        desempenhoOperacional: { acumuladoQtdVendas: 500 },
+        projecao: { projecaoMensal: 32000, mediaDiaria: 1000, diasResolvidos: 20, diasPrevistos: 30, confiabilidade: "alta", parcial: true },
+      },
+    });
+    assert.match(h, /Alfa Centro/);
+    assert.match(h, /Alfa/); // chip da empresa
+    assert.match(h, /Dashboard iFood completo/i);
+    assert.match(h, /Marketplace/);
+    assert.match(h, /R\$\s?30\.000,00/); // faturamento
+    assert.match(h, /Dentro da Meta/);
+    assert.match(h, /Atenção/);
+    assert.match(h, /Dentro do Limite/);
+    assert.match(h, /Não se aplica/); // taxas de entregadores, naoAplicavel
+    assert.match(h, /Projeção do mês/);
+    assert.match(h, /R\$\s?32\.000,00/); // projeção mensal
+    // calendário continua acessível, como elemento AUXILIAR (nunca a tela principal)
+    assert.match(h, /data-padm-nav="calendario"/);
+    assert.match(h, /data-id="uni-1"/);
+    // ponto de montagem da tabela de Indicadores de Rentabilidade (reaproveitada, não reconstruída aqui)
+    assert.match(h, /id="padm-unidade-indicadores"/);
+  });
+
+  test("agregado (sem unidade específica) ou sem cards: estado vazio, nunca inventa número", () => {
+    const h = V.htmlDetalheUnidade({ ...BASE, dashboard: { agregado: true } });
+    assert.match(h, /Sem Dashboard iFood para esta unidade/i);
+    assert.ok(!/R\$/.test(h), "nenhum valor monetário inventado no estado vazio");
+    // mesmo sem dashboard, o calendário auxiliar continua oferecido
+    assert.match(h, /Ver calendário de lançamentos/i);
+  });
+
+  test("sem bloco dashboard nenhum (payload incompleto): mesmo tratamento de vazio, sem quebrar", () => {
+    const h = V.htmlDetalheUnidade({ ...BASE, dashboard: null });
+    assert.match(h, /Sem Dashboard iFood para esta unidade/i);
   });
 });
 

@@ -81,7 +81,7 @@ globalThis.requestAnimationFrame ??= (fn) => fn();
 
 const {
   abrirPainelAdministrativo, sairDoPainelAdministrativo, irParaPadm,
-  abrirDetalheEmpresa, abrirCalendarioUnidade, definirPeriodo, irParaMesAtual, mudarPeriodo, periodoDe,
+  abrirDetalheEmpresa, abrirDetalheUnidade, abrirCalendarioUnidade, voltarPadm, definirPeriodo, irParaMesAtual, mudarPeriodo, periodoDe,
 } = await import("../src/painelAdm.js");
 const { TELAS_PADM } = await import("../src/painelAdmViews.js");
 const { state } = await import("../src/state.js");
@@ -141,6 +141,32 @@ const VISAO_GERAL_REDE_FAKE = {
   unidades: [], empresas: [],
 };
 
+/** Dashboard iFood completo de uma unidade (Fase 3) — mesmo formato de `obterMes`. */
+const DASHBOARD_UNIDADE_FAKE = {
+  unidade: { unidadeId: "uni-1", unidadeNome: "Alfa Centro", organizacaoId: "org-1", empresaNome: "Alfa" },
+  periodo: { mes: 9, ano: 2026, ym: YM_ATUAL, mesCorrente: true },
+  dashboard: {
+    agregado: false,
+    modeloLogisticoRotulo: "Marketplace",
+    cards: {
+      faturamento: { valor: 30000 },
+      receitaLiquida: { valor: 27000, percentual: 90 },
+      ticketMedio: { valor: 45.5 },
+      novosClientes: { valor: 12 },
+      taxasComissoes: { valor: 2250, percentual: 7.5, status: { chave: "dentro_da_meta", label: "Dentro da Meta" } },
+      servicosPromocoes: { valor: 500, percentual: 1.67, status: { chave: "atencao", label: "Atenção" } },
+      taxasEntregadores: { naoAplicavel: true },
+      totalDeducoes: { valor: 3000, percentual: 10, status: { chave: "dentro_do_limite", label: "Dentro do Limite" } },
+    },
+    desempenhoOperacional: { acumuladoQtdVendas: 500 },
+    indicadoresRentabilidade: {
+      taxas_comissoes: { atual: 7.5, metaIdeal: 12, limite: 15, status: { chave: "dentro_da_meta", label: "Dentro da Meta" }, saldo: { status: "disponivel", disponivelPp: 4.5, disponivelReais: 1350 } },
+    },
+    graficos: { comparativoPercentuais: [] },
+    projecao: { projecaoMensal: 32000, mediaDiaria: 1000, diasResolvidos: 20, diasPrevistos: 30, confiabilidade: "alta", parcial: true },
+  },
+};
+
 /** Fake da API que REGISTRA os argumentos — é assim que provamos o período. */
 const apiFake = (over = {}) => {
   const chamadas = [];
@@ -154,6 +180,7 @@ const apiFake = (over = {}) => {
     empresas: reg("empresas", { empresas: [] }),
     detalheEmpresa: reg("detalheEmpresa", { organizacao: { nome: "Alfa", status: "ativa" }, consolidado: {}, unidades: [], pendencias: [] }),
     calendarioUnidade: reg("calendarioUnidade", { mes: YM_ATUAL, dataReferencia: `${YM_ATUAL}-15`, dias: [], unidade: {} }),
+    dashboardOperacaoUnidade: reg("dashboardOperacaoUnidade", DASHBOARD_UNIDADE_FAKE),
     relatorioResumo: reg("relatorioResumo", {
       periodo: YM_ATUAL, mesCorrente: true, d1: `${YM_ATUAL}-14`,
       operacao: { empresasMonitoradas: 2, unidadesMonitoradas: 3, empresasComPendencia: 1, unidadesComPendencia: 1, criticas: 0, atencao: 1, emDia: 2 },
@@ -364,5 +391,69 @@ describe("seletor de período (mês/ano)", () => {
     assert.equal(p.ym, YM_ANTERIOR);
     assert.equal(p.ano, Number(YM_ANTERIOR.slice(0, 4)));
     assert.equal(p.mes, Number(YM_ANTERIOR.slice(5, 7)));
+  });
+});
+
+// ===========================================================================
+// DETALHE DA UNIDADE — Dashboard iFood COMPLETO (ajuste: clicar numa unidade
+// na Visão Geral da Rede não pode abrir só o calendário).
+// ===========================================================================
+describe("abrirDetalheUnidade — Dashboard iFood completo (não só o calendário)", () => {
+  const abrir = async (over) => {
+    const g = ganchosFake();
+    const api = apiFake(over);
+    await abrirPainelAdministrativo({ ...g, api });
+    return { g, api };
+  };
+
+  test("clicar na unidade chama /dashboard (nunca só /calendario) e mostra o Dashboard iFood completo", async () => {
+    const { api } = await abrir();
+    await abrirDetalheUnidade("uni-1", "Alfa Centro");
+    assert.deepEqual(ultima(api, "dashboardOperacaoUnidade"), ["dashboardOperacaoUnidade", "uni-1", YM_ATUAL]);
+    assert.ok(!api.chamadas.some((c) => c[0] === "calendarioUnidade"), "não chama o calendário sozinho ao abrir a unidade");
+    const html = nodes["#padm-view"].innerHTML;
+    assert.match(html, /Dashboard iFood completo/i);
+    assert.match(html, /Alfa Centro/);
+    assert.match(html, /Taxas e comiss/i);
+    assert.match(html, /Dentro da Meta|Atenção|Dentro do Limite/);
+    // nunca a tela do calendário (que tem as setas próprias de mês/mês anterior)
+    assert.ok(!/mes-anterior|mes-proximo/.test(html), "a tela de detalhe não é o calendário");
+    assert.equal(nodes["#padm-titulo"].textContent, "Alfa Centro");
+  });
+
+  test("mantém o período ativo (mesma regra das demais telas)", async () => {
+    const { api } = await abrir();
+    await definirPeriodo(YM_ANTERIOR);
+    await abrirDetalheUnidade("uni-1", "Alfa Centro");
+    assert.deepEqual(ultima(api, "dashboardOperacaoUnidade"), ["dashboardOperacaoUnidade", "uni-1", YM_ANTERIOR]);
+  });
+
+  test("o calendário continua acessível como AUXILIAR, e voltar retorna ao detalhe da unidade (nunca à lista)", async () => {
+    const { api } = await abrir();
+    await abrirDetalheUnidade("uni-1", "Alfa Centro");
+    // botão "Ver calendário de lançamentos" embutido no detalhe
+    assert.match(nodes["#padm-view"].innerHTML, /Ver calendário de lançamentos/i);
+
+    await abrirCalendarioUnidade("uni-1", "Alfa Centro");
+    assert.deepEqual(ultima(api, "calendarioUnidade"), ["calendarioUnidade", "uni-1", YM_ATUAL]);
+
+    await voltarPadm();
+    // voltar do calendário retorna ao DETALHE DA UNIDADE (re-busca /dashboard), não à Visão Geral da Rede.
+    assert.deepEqual(ultima(api, "dashboardOperacaoUnidade"), ["dashboardOperacaoUnidade", "uni-1", YM_ATUAL]);
+    assert.equal(nodes["#padm-titulo"].textContent, "Alfa Centro");
+  });
+
+  test("agregado/sem dashboard: mostra estado vazio, nunca inventa números", async () => {
+    const { api } = await abrir({
+      dashboardOperacaoUnidade: async () => ({
+        unidade: { unidadeId: "uni-2", unidadeNome: "Sem Dados", organizacaoId: "org-1", empresaNome: "Alfa" },
+        periodo: { mes: 9, ano: 2026, ym: YM_ATUAL, mesCorrente: true },
+        dashboard: { agregado: true },
+      }),
+    });
+    await abrirDetalheUnidade("uni-2", "Sem Dados");
+    assert.match(nodes["#padm-view"].innerHTML, /Sem Dashboard iFood para esta unidade/i);
+    // o calendário continua oferecido mesmo nesse estado
+    assert.match(nodes["#padm-view"].innerHTML, /Ver calendário de lançamentos/i);
   });
 });

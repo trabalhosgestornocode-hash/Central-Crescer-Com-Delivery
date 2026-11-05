@@ -44,6 +44,7 @@ import {
   montarLinhaDoTempo, segmentosDoPeriodo, estadoDoPeriodo, rotuloDoModelo, trocasDeLinhas,
 } from "../dashboard-executivo/dashboardExecutivo.modeloTemporal.js";
 import { comporMetas } from "../dashboard-executivo/dashboardExecutivo.periodoMisto.js";
+import { obterMes as obterMesDashboardExecutivo } from "../dashboard-executivo/dashboardExecutivo.service.js";
 import {
   carregarDatasLiberadas, listarDesbloqueios, criarDesbloqueio, revogarDesbloqueio,
   obterDesbloqueioAtivoPorId, MOTIVOS_VALIDOS, MOTIVOS_DESBLOQUEIO,
@@ -345,6 +346,27 @@ export async function detalheEmpresa({ organizacaoId, hojeIso, mes } = {}, deps 
   const cons = consolidarOperacao(daEmpresa);
   const resumoEmpresa = consolidarEmpresas(daEmpresa)[0] ?? null;
 
+  // Financeiro (reaproveita 100% a Visão Geral da Rede, só recortada por
+  // empresa) — aditivo: se faltar módulo financeiro para esta empresa, ou o
+  // motor falhar por qualquer razão, o detalhe OPERACIONAL continua
+  // funcionando normalmente (nunca deixa o drill-down quebrar por causa do bloco novo).
+  const financeiro = await (async () => {
+    try {
+      const r = await visaoGeralRede({ hojeIso: hoje, mes, organizacaoId: orgId }, deps);
+      if (!r.rede?.unidadesMonitoradas) return null;
+      return {
+        rede: r.rede,
+        composicaoDeducoes: r.composicaoDeducoes,
+        unidades: r.unidades.map((u) => ({
+          unidadeId: u.unidadeId, nome: u.nome,
+          faturamento: u.faturamento, deducoes: u.deducoes, deducoesPct: u.deducoesPct,
+          meta: u.meta, situacaoFinanceira: u.situacaoFinanceira,
+          impactoFinanceiroEstimado: u.impactoFinanceiroEstimado, ultimaAtualizacao: u.ultimaAtualizacao,
+        })),
+      };
+    } catch { return null; }
+  })();
+
   return {
     monitor: frota.monitor,
     dataReferencia: frota.hojeIso,
@@ -353,6 +375,7 @@ export async function detalheEmpresa({ organizacaoId, hojeIso, mes } = {}, deps 
     d1: frota.referencia,
     organizacao: { organizacaoId: org.organizacaoId, nome: org.nome, status: org.status, criadaEm: org.criadaEm },
     resumo: resumoEmpresa,
+    financeiro,
     consolidado: {
       criticas: cons.criticas, atencao: cons.atencao, emDia: cons.emDia,
       conformidadeD1: cons.d1.taxa, conformidadeMes: cons.conformidadeMes.taxa,
@@ -472,6 +495,53 @@ export async function calendarioUnidade({ unidadeId, mes, hojeIso } = {}, deps =
       liberacaoAtiva: ativaPorData.get(d.data) ?? null,
       liberacoesHistorico: historicoPorData.get(d.data) ?? [],
     })),
+  };
+}
+
+/**
+ * Dashboard iFood COMPLETO de uma unidade (cards, Indicadores de
+ * Rentabilidade, projeção, diagnóstico, evolução) — para o clique em
+ * empresa/unidade na Visão Geral da Rede abrir a MESMA leitura que o
+ * franqueado vê no Dashboard iFood, nunca uma segunda implementação paralela.
+ *
+ * Reaproveita `dashboardExecutivo.service.js#obterMes` POR CHAMADA DIRETA DE
+ * FUNÇÃO (nunca a rota HTTP tenant-scoped, que exige `req.tenant` e não
+ * existe no mundo administrativo) — `unidadeIdSessao: null` evita a checagem
+ * "só a própria unidade da sessão" (não há sessão de unidade aqui) e
+ * `resolverUnidadeAlvo` ainda confere, no servidor, que a unidade pedida
+ * pertence à `organizacaoId` resolvida abaixo — nenhuma regra de acesso é
+ * pulada, só adaptada ao mundo cross-tenant. Zero fórmula, meta ou
+ * classificação de status recalculada aqui: `obterMes` já devolve
+ * `cards`/`indicadoresRentabilidade` prontos (mesma `statusIndicadorRentabilidade`
+ * e `saldoMeta` do Dashboard iFood do tenant).
+ * @param {{unidadeId: string, mes?: string, hojeIso?: string}} params
+ * @param {{supabase?: object, obterMesDashboardExecutivo?: Function}} [deps]
+ */
+export async function detalheOperacaoUnidade({ unidadeId, mes, hojeIso } = {}, deps = {}) {
+  const uniId = v.uuid(unidadeId, "Unidade");
+  const hoje = hojeIso ?? hojeIsoBrasil();
+  const per = alvoDoPeriodo(mes, hoje);
+  const [ano, numMes] = per.periodo.split("-").map(Number);
+
+  // Mesmo universo monitorado do calendário/Visão Geral da Rede — nunca um
+  // escopo de elegibilidade diferente para a mesma unidade.
+  const elegiveis = await listarUnidadesElegiveis({ moduloId: MONITOR.modulo }, deps);
+  const alvo = elegiveis.find((u) => u.unidadeId === uniId);
+  if (!alvo) throw ApiError.notFound("Unidade não encontrada ou fora do monitoramento.");
+
+  const obterMesFn = deps.obterMesDashboardExecutivo ?? obterMesDashboardExecutivo;
+  const dashboard = await obterMesFn({
+    organizacaoId: alvo.organizacaoId, unidadeIdSessao: null, unidadeIdSolicitado: uniId,
+    mes: numMes, ano,
+  });
+
+  return {
+    unidade: {
+      unidadeId: alvo.unidadeId, unidadeNome: alvo.unidadeNome,
+      organizacaoId: alvo.organizacaoId, empresaNome: alvo.empresaNome,
+    },
+    periodo: { mes: numMes, ano, ym: per.periodo, mesCorrente: per.mesCorrente },
+    dashboard,
   };
 }
 
@@ -1357,6 +1427,10 @@ export async function visaoGeralRede({
     const doMes = (ym) => diarias.filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
     const linhasAtual = doMes(per.periodo);
     const linhasAnteriores = doMes(ymDe(antCal.ano, antCal.mes));
+    // Data REAL do lançamento mais recente do mês — nunca inventada; null quando a unidade não tem nenhum lançamento no período.
+    const ultimaAtualizacao = linhasAtual.length
+      ? linhasAtual.reduce((max, r) => (String(r.data_lancamento) > max ? String(r.data_lancamento) : max), String(linhasAtual[0].data_lancamento))
+      : null;
 
     const atual = lucratividadeDaUnidade(linhasAtual, { inicio: inicioMes, fim: fimMes, ateDataIso: fimMes });
     const anterior = lucratividadeDaUnidade(linhasAnteriores, { inicio: inicioMesAnterior, fim: fimMesAnterior, ateDataIso: fimMesAnterior });
@@ -1395,6 +1469,7 @@ export async function visaoGeralRede({
       empresaNome: u.empresaNome,
       organizacaoId: u.organizacaoId,
       cidade: null, // sem coluna de cidade cadastrada hoje — ver limitações no relatório final
+      ultimaAtualizacao,
       modeloLogistico: modelo,
       modeloLogisticoRotulo: modelo ? (ROTULO_MODELO[modelo] ?? modelo) : null,
 

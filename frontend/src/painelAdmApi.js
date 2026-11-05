@@ -115,6 +115,16 @@ export const painelAdmApi = {
   calendarioUnidade: (unidadeId, mes) =>
     chamar(`/unidades/${encodeURIComponent(unidadeId)}/calendario` + qs({ mes })),
 
+  /**
+   * Dashboard iFood COMPLETO de uma unidade (cards + Indicadores de
+   * Rentabilidade) — mesma leitura do tenant, reaproveitada por chamada
+   * direta de serviço no backend (nunca recalculada aqui).
+   * @param {string} unidadeId
+   * @param {string} [mes] AAAA-MM (padrão: mês corrente do backend)
+   */
+  dashboardOperacaoUnidade: (unidadeId, mes) =>
+    chamar(`/unidades/${encodeURIComponent(unidadeId)}/dashboard` + qs({ mes })),
+
   // -- Desbloqueio administrativo de um dia (migration 068) --
   //
   // As ÚNICAS chamadas de ESCRITA do painel. Quem decide se um dia PODE ser

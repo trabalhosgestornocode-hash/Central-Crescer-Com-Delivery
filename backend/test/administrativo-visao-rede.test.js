@@ -30,14 +30,15 @@ describe("classificarAtencaoFinanceira — 4 estados, banda crítica derivada do
     assert.equal(classificarAtencaoFinanceira(25, { metaIdeal: 20, limite: null }).chave, "sem_dados");
   });
 
-  test("dentro do limite (mesmo acima da meta ideal) -> EM_DIA", () => {
+  test("dentro da meta IDEAL -> EM_DIA", () => {
     assert.equal(classificarAtencaoFinanceira(15, meta).chave, "em_dia");  // abaixo da meta ideal
-    assert.equal(classificarAtencaoFinanceira(28, meta).chave, "em_dia"); // exatamente no limite
-    assert.equal(classificarAtencaoFinanceira(24, meta).chave, "em_dia"); // entre ideal e limite
+    assert.equal(classificarAtencaoFinanceira(20, meta).chave, "em_dia"); // exatamente na meta ideal
   });
 
-  test("acima do limite, até +gap p.p. -> ATENÇÃO", () => {
-    assert.equal(classificarAtencaoFinanceira(28.5, meta).chave, "atencao");
+  test("acima da meta ideal, até limite+gap -> ATENÇÃO (nunca tratado como saudável só por estar dentro do limite)", () => {
+    assert.equal(classificarAtencaoFinanceira(20.5, meta).chave, "atencao"); // já passou da meta ideal
+    assert.equal(classificarAtencaoFinanceira(24, meta).chave, "atencao");  // entre ideal e limite — NÃO é em_dia
+    assert.equal(classificarAtencaoFinanceira(28, meta).chave, "atencao"); // exatamente no limite
     assert.equal(classificarAtencaoFinanceira(36, meta).chave, "atencao"); // limite(28) + banda(8) = 36, ainda ATENÇÃO
   });
 
@@ -46,9 +47,11 @@ describe("classificarAtencaoFinanceira — 4 estados, banda crítica derivada do
     assert.equal(classificarAtencaoFinanceira(60, meta).chave, "critica");
   });
 
-  test("sem metaIdeal cadastrada, a banda crítica usa o próprio limite (crítico só acima do dobro)", () => {
+  test("sem metaIdeal cadastrada, o próprio limite faz o papel de referência ideal E de banda (crítico só acima do dobro)", () => {
     const semIdeal = { metaIdeal: null, limite: 30 };
     assert.equal(bandaCritica(semIdeal), 30);
+    assert.equal(classificarAtencaoFinanceira(25, semIdeal).chave, "em_dia");
+    assert.equal(classificarAtencaoFinanceira(30, semIdeal).chave, "em_dia"); // exatamente no limite = referência ideal do fallback
     assert.equal(classificarAtencaoFinanceira(45, semIdeal).chave, "atencao");
     assert.equal(classificarAtencaoFinanceira(60, semIdeal).chave, "atencao"); // 60 == limite+banda -> ainda ATENÇÃO (fronteira)
     assert.equal(classificarAtencaoFinanceira(60.1, semIdeal).chave, "critica");

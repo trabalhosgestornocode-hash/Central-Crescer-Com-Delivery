@@ -47,14 +47,20 @@ export const SITUACAO_FINANCEIRA = {
 
 /**
  * Classifica a unidade em 4 estados a partir do % de deduções e da meta do
- * modelo. `atual <= limite` é sempre EM_DIA (mesma régua do Dashboard iFood:
- * "dentro da meta" e "dentro do limite" não alertam). Acima do limite,
- * ATENÇÃO até `limite + bandaCritica`; CRÍTICA depois disso.
+ * modelo. EM_DIA exige estar DENTRO DA META IDEAL — a mesma régua de
+ * `statusIndicadorRentabilidade`, que nunca trata "dentro do limite" (sem
+ * bater a meta ideal) como equivalente a "dentro da meta": são status
+ * diferentes ali, e aqui viram tons diferentes também. Sem `metaIdeal`
+ * cadastrada, o próprio `limite` faz esse papel (fallback já existente em
+ * `bandaCritica`). Acima da meta ideal, ATENÇÃO até `limite + bandaCritica`;
+ * CRÍTICA depois disso — nunca um threshold novo, sempre os 2 valores já
+ * homologados em `metas_indicadores`.
  * @param {number|null} deducoesPct @param {{metaIdeal: number|null, limite: number|null}|null} meta
  */
 export function classificarAtencaoFinanceira(deducoesPct, meta) {
   if (deducoesPct == null || meta?.limite == null) return SITUACAO_FINANCEIRA.sem_dados;
-  if (deducoesPct <= meta.limite) return SITUACAO_FINANCEIRA.em_dia;
+  const referenciaIdeal = meta.metaIdeal ?? meta.limite;
+  if (deducoesPct <= referenciaIdeal) return SITUACAO_FINANCEIRA.em_dia;
   const banda = bandaCritica(meta);
   if (banda != null && deducoesPct > meta.limite + banda) return SITUACAO_FINANCEIRA.critica;
   return SITUACAO_FINANCEIRA.atencao;

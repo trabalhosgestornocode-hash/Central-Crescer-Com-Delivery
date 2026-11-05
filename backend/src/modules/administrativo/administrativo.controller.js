@@ -100,6 +100,11 @@ export const detalheEmpresa = asyncHandler(async (req, res) =>
 export const calendarioUnidade = asyncHandler(async (req, res) =>
   ok(res, await service.calendarioUnidade({ unidadeId: req.params.unidadeId, mes: req.query.mes, hojeIso: hoje(req) }, deps(req))));
 
+// GET /administrativo/unidades/:unidadeId/dashboard — Dashboard iFood completo
+// da unidade (cards + Indicadores de Rentabilidade), mesma leitura do tenant.
+export const dashboardOperacaoUnidade = asyncHandler(async (req, res) =>
+  ok(res, await service.detalheOperacaoUnidade({ unidadeId: req.params.unidadeId, mes: req.query.mes, hojeIso: hoje(req) }, deps(req))));
+
 // --------------------------------------------------------------- Mentorados
 //
 // Somente leitura. Consolida contas + vínculos empresa/unidade — a mesma

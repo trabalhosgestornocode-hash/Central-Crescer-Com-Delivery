@@ -113,7 +113,13 @@ export async function abrirPainelAdministrativo(opcoes) {
 
   ligarNavegacao({
     abrirEmpresa: abrirDetalheEmpresa,
-    abrirUnidade: abrirCalendarioUnidade,
+    // Clicar numa unidade (Visão Geral da Rede, Empresas, Monitoramento
+    // Diário, Pendências...) abre o Dashboard iFood COMPLETO dela — nunca só
+    // o calendário (bug relatado: "só abre o calendário"). O calendário
+    // continua acessível DE DENTRO do detalhe, como elemento auxiliar (ver
+    // abrirCalendario abaixo).
+    abrirUnidade: abrirDetalheUnidade,
+    abrirCalendario: abrirCalendarioUnidade,
     voltar: voltarPadm,
     irParaTela: irParaPadm,
     mudarPeriodo,
@@ -250,7 +256,21 @@ export function abrirDetalheEmpresa(empresaId, empresaNome) {
   return renderPadmAtual();
 }
 
-/** Empurra o calendário de uma unidade — abre no mês do período ativo. */
+/** Empurra o Dashboard iFood completo de uma unidade — abre no mês do período ativo. */
+export function abrirDetalheUnidade(unidadeId, unidadeNome) {
+  if (!unidadeId) return;
+  const t = topo();
+  const entrada = { tipo: "unidade", unidadeId, unidadeNome };
+  if (t.tipo === "unidade" && t.unidadeId === unidadeId) pilha[pilha.length - 1] = entrada;
+  else pilha.push(entrada);
+  return renderPadmAtual();
+}
+
+/**
+ * Empurra o calendário de uma unidade — abre no mês do período ativo.
+ * Elemento AUXILIAR, acessado de dentro do detalhe completo da unidade
+ * (abrirDetalheUnidade); "voltar" aqui retorna ao detalhe, não à lista.
+ */
 export function abrirCalendarioUnidade(unidadeId, unidadeNome) {
   if (!unidadeId) return;
   const t = topo();
@@ -260,7 +280,7 @@ export function abrirCalendarioUnidade(unidadeId, unidadeNome) {
   return renderPadmAtual();
 }
 
-/** Volta um nível na pilha (calendário → empresa → aba). */
+/** Volta um nível na pilha (calendário → unidade → empresa → aba). */
 export function voltarPadm() {
   if (pilha.length > 1) pilha.pop();
   return renderPadmAtual();
@@ -269,6 +289,7 @@ export function voltarPadm() {
 function tituloDoTopo() {
   const t = topo();
   if (t.tipo === "empresa") return t.empresaNome || "Empresa";
+  if (t.tipo === "unidade") return t.unidadeNome || "Unidade";
   if (t.tipo === "calendario") return t.unidadeNome || "Calendário";
   return TELAS_PADM.find((x) => x.id === t.id)?.label ?? "Painel Administrativo";
 }

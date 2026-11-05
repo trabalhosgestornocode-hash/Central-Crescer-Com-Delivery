@@ -154,6 +154,27 @@ describe("autorização das rotas /administrativo (Express real)", () => {
     assert.equal((await GET(app, `/administrativo/unidades/${uuid("ub")}/calendario?mes=2026-09`)).status, 200);
   });
 
+  // Ajuste (Visão Geral da Rede > detalhe completo da unidade): a rota existe,
+  // exige a MESMA autorização do resto do router (aplicada ao router inteiro)
+  // e chama `obterMes` do Dashboard iFood (dashboard-executivo) por injeção —
+  // nunca o Supabase real num teste.
+  test("GET /unidades/:id/dashboard — 403 sem Painel Administrativo, 200 com, reaproveitando obterMes por DI", async () => {
+    const chamadas = [];
+    const deps = {
+      supabase: fakeDb(estadoComFrota()),
+      obterMesDashboardExecutivo: async (p) => { chamadas.push(p); return { agregado: false, cards: {}, indicadoresRentabilidade: {} }; },
+    };
+    const semAcesso = makeApp({ user: usuarioComum, deps });
+    assert.equal((await GET(semAcesso, `/administrativo/unidades/${uuid("ub")}/dashboard?mes=2026-09`)).status, 403);
+
+    const app = makeApp({ user: usuarioPainel, deps });
+    const r = await GET(app, `/administrativo/unidades/${uuid("ub")}/dashboard?mes=2026-09`);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.data.unidade.unidadeId, uuid("ub"));
+    assert.equal(r.json.data.unidade.organizacaoId, uuid("o2"));
+    assert.deepEqual(chamadas[0], { organizacaoId: uuid("o2"), unidadeIdSessao: null, unidadeIdSolicitado: uuid("ub"), mes: 9, ano: 2026 });
+  });
+
   test("CONTRATO: `organizacoesMonitoradas` é insumo INTERNO da Comunicação — o service o devolve, a rota HTTP NÃO", async () => {
     const deps = { supabase: fakeDb(estadoComFrota()) };
     // service (retorno interno): o snapshot inclui as organizações monitoradas (mesmo as sem pendência)

@@ -10,7 +10,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { visaoGeralRede } from "../src/modules/administrativo/administrativo.service.js";
+import { visaoGeralRede, detalheEmpresa } from "../src/modules/administrativo/administrativo.service.js";
 
 const MOD = "ifood_dashboard";
 const HOJE = "2026-10-05"; // setembro/2026 já fechado (30 dias)
@@ -97,6 +97,20 @@ describe("classificação de atenção financeira, por unidade", () => {
     assert.equal(porNome["JV Loja A"].situacaoFinanceira.chave, "em_dia");
     assert.equal(porNome["JV Loja B"].situacaoFinanceira.chave, "critica");
     assert.equal(porNome["Beta Sul"].situacaoFinanceira.chave, "atencao");
+  });
+
+  test("última atualização é a data REAL do lançamento mais recente do mês (nunca inventada)", async () => {
+    const r = await rede();
+    const a = r.unidades.find((u) => u.nome === "JV Loja A");
+    assert.equal(a.ultimaAtualizacao, "2026-09-30", "mesCompleto() lança até o dia 30 -> essa é a última data real");
+  });
+
+  test("sem nenhum lançamento no mês, última atualização é null (nunca um valor inventado)", async () => {
+    const vazio = cenario();
+    vazio.lancamentos_financeiros_diarios = vazio.lancamentos_financeiros_diarios.filter((l) => l.unidade_id !== UUID("c"));
+    const r = await visaoGeralRede({ hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(vazio) });
+    const beta = r.unidades.find((u) => u.nome === "Beta Sul");
+    assert.equal(beta.ultimaAtualizacao, null);
   });
 
   test("composição das deduções da JV Loja B não perde nem duplica nenhuma parte", async () => {
@@ -196,5 +210,43 @@ describe("frota vazia", () => {
     assert.deepEqual(vazio.unidades, []);
     assert.deepEqual(vazio.empresas, []);
     assert.equal(vazio.rede.faturamento, null);
+  });
+});
+
+// ===========================================================================
+// detalheEmpresa() ganha um bloco `financeiro` — reaproveita 100% a Visão
+// Geral da Rede recortada por empresa (zero fórmula duplicada). Aditivo: o
+// detalhe OPERACIONAL (pendências/conformidade) continua intocado.
+// ===========================================================================
+describe("detalheEmpresa — bloco financeiro (drill-down a partir da Visão Geral da Rede)", () => {
+  test("empresa com dados financeiros: financeiro.rede e financeiro.unidades vêm preenchidos, iguais aos da Visão Geral da Rede", async () => {
+    const d = await detalheEmpresa({ organizacaoId: UUID("jv"), hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(cenario()) });
+    assert.ok(d.financeiro, "empresa JV tem lançamentos financeiros no mês -> bloco financeiro presente");
+    assert.equal(d.financeiro.rede.unidadesMonitoradas, 2, "só as 2 unidades da JV, nunca a rede inteira");
+    const porNome = Object.fromEntries(d.financeiro.unidades.map((u) => [u.nome, u]));
+    assert.equal(porNome["JV Loja A"].situacaoFinanceira.chave, "em_dia");
+    assert.equal(porNome["JV Loja B"].situacaoFinanceira.chave, "critica");
+    assert.equal(porNome["JV Loja A"].ultimaAtualizacao, "2026-09-30");
+    // nada do detalhe OPERACIONAL pré-existente quebrou
+    assert.equal(d.organizacao.nome, "Grupo JV");
+    assert.ok(Array.isArray(d.unidades));
+  });
+
+  test("empresa monitorada financeiramente mas sem nenhum lançamento no mês: unidade aparece SEM_DADOS, nada inventado", async () => {
+    const st = cenario();
+    st.lancamentos_financeiros_diarios = st.lancamentos_financeiros_diarios.filter((l) => l.unidade_id !== UUID("c"));
+    const d = await detalheEmpresa({ organizacaoId: UUID("beta"), hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(st) });
+    assert.ok(d.financeiro, "a empresa continua no módulo financeiro -> bloco presente, só sem dado no período");
+    const beta = d.financeiro.unidades.find((u) => u.nome === "Beta Sul");
+    assert.equal(beta.situacaoFinanceira.chave, "sem_dados");
+    assert.equal(beta.ultimaAtualizacao, null);
+  });
+
+  test("empresa fora do módulo financeiro (sem nenhuma unidade elegível): financeiro vem null, nunca inventado", async () => {
+    const st = cenario();
+    st.unidade_modulos = st.unidade_modulos.filter((m) => m.unidade_id !== UUID("c"));
+    st.organizacao_modulos = st.organizacao_modulos.filter((m) => m.organizacao_id !== UUID("beta"));
+    const d = await detalheEmpresa({ organizacaoId: UUID("beta"), hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(st) });
+    assert.equal(d.financeiro, null);
   });
 });
