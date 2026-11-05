@@ -10,7 +10,8 @@ import ws from "ws";
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { gerarCatalogo } from "../src/modules/foody/foody.catalogo.gerador.js";
+import { gerarCatalogo, incluirValidadas, renderizarCatalogo } from "../src/modules/foody/foody.catalogo.gerador.js";
+import { LINHAS_VALIDADAS } from "../src/modules/foody/foody.catalogo-validadas.js";
 import { TERMOS_VALIDADOS } from "../src/modules/foody/foody.classificacao.js";
 
 const arg = (n) => process.argv.find((a) => a.startsWith(`--${n}=`))?.split("=").slice(1).join("=");
@@ -38,21 +39,18 @@ for (let de = 0; ; de += 1000) {
   }
   if (data.length < 1000) break;
 }
-const cat = gerarCatalogo(pedidos);
+const gerado = gerarCatalogo(pedidos);
+const comValidadas = incluirValidadas(gerado.linhas, LINHAS_VALIDADAS); // as validadas à mão entram sempre (com erro se conflitarem)
+const cat = { ...gerado, linhas: comValidadas.linhas, hash: comValidadas.hash };
 const corpo = {
   versao, hash: cat.hash,
   origem: { fonte: "parser_fd_pedidos (histórico da unidade titular)", periodo: [primeiro, ultimo], pedidos: cat.estatisticas.pedidos,
-    pedidosDeTreino: cat.estatisticas.treino, parametros: cat.parametros, linhasVistasNasDuasOperacoes: cat.estatisticas.linhasVistasNasDuas },
+    pedidosDeTreino: cat.estatisticas.treino, parametros: cat.parametros, linhasVistasNasDuasOperacoes: cat.estatisticas.linhasVistasNasDuas,
+    validadasManualmente: LINHAS_VALIDADAS.length },
   termosValidados: Object.fromEntries(Object.entries(TERMOS_VALIDADOS).map(([op, l]) => [op, l.map((x) => x.termo)])),
   linhas: cat.linhas,
 };
-const js = `// GERADO por scripts/foody-gerar-catalogo.mjs — NÃO editar à mão. Catálogo VERSIONADO de linhas de item por operação.
-// Mudança só por PR: gerar de novo com --versao nova e registrar o hash em test/foody-compartilhada-catalogo.test.js.
-// Conteúdo: nomes de produto/complemento do cardápio (sem dado de cliente).
-const congelar = (o) => Object.freeze(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Object.freeze(v)])));
-const C = ${JSON.stringify(corpo, null, 2)};
-export const CATALOGO_OPERACAO = Object.freeze({ ...C, origem: Object.freeze(C.origem), termosValidados: congelar(C.termosValidados), linhas: congelar(C.linhas) });
-`;
+const js = renderizarCatalogo(corpo);
 writeFileSync(saida, js, "utf8");
 console.log(JSON.stringify({ versao, hash: cat.hash, ...cat.estatisticas, periodo: [primeiro, ultimo] }));
 process.exit(0);

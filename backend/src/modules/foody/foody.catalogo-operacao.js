@@ -1,10 +1,11 @@
-// GERADO por scripts/foody-gerar-catalogo.mjs — NÃO editar à mão. Catálogo VERSIONADO de linhas de item por operação.
-// Mudança só por PR: gerar de novo com --versao nova e registrar o hash em test/foody-compartilhada-catalogo.test.js.
+// GERADO por scripts/foody-gerar-catalogo.mjs / scripts/foody-catalogo-incluir-validadas.mjs — NÃO editar à mão.
+// Catálogo VERSIONADO de linhas de item por operação. Mudança só por PR: gerar de novo com --versao nova e registrar o hash em
+// test/foody-compartilhada-catalogo.test.js. Linhas validadas à mão ficam em foody.catalogo-validadas.js (com a evidência).
 // Conteúdo: nomes de produto/complemento do cardápio (sem dado de cliente).
 const congelar = (o) => Object.freeze(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Object.freeze(v)])));
 const C = {
-  "versao": "2026-11-03.1",
-  "hash": "78ee21241de8674e9ea641d8dabb71dd067559f87ec2dcf5f6171993fa0b5f9f",
+  "versao": "2026-11-05.1",
+  "hash": "d471d07e713b318ada1bfc3347fd8a53dd98e6fbb919313aee79ba19f3aa7209",
   "origem": {
     "fonte": "parser_fd_pedidos (histórico da unidade titular)",
     "periodo": [
@@ -17,7 +18,9 @@ const C = {
       "minimoOcorrencias": 2,
       "minimoDias": 2
     },
-    "linhasVistasNasDuasOperacoes": 0
+    "linhasVistasNasDuasOperacoes": 0,
+    "base": "2026-11-03.1",
+    "validadasManualmente": 3
   },
   "termosValidados": {
     "acai_no_grau": [
@@ -100,6 +103,7 @@ const C = {
       "combo imperdiveis do subway (footlong #cm 1x frango empanado #cm",
       "combo imperdiveis do subway (footlong #cm 1x steak churrasco #cm",
       "combo imperdiveis do subway (footlong #cm 1x sub frango #cm",
+      "combos no precinho #cm 1x frango defumado com cream cheese",
       "combos no precinho (footlong #cm 1x frango",
       "combos no precinho (footlong #cm 1x presunto",
       "combos no precinho (footlong #cm 1x steak churrasco",
@@ -343,6 +347,7 @@ const C = {
       "subs #cm 1x steak churrasco",
       "subs #cm 1x teriyaki",
       "subs #cm 1x vegetariano",
+      "subs #cm 2x b.m.t.",
       "subs #cm 2x frango",
       "subs #cm 2x steak churrasco",
       "suco del valle maracuja",
@@ -353,6 +358,7 @@ const C = {
       "sucos 1x suco del valle maracuja",
       "sucos 1x suco del valle pessego",
       "sucos 1x suco del valle uva",
+      "sucos 2x suco del valle uva",
       "suico",
       "supreme",
       "teryiaki",

@@ -123,3 +123,46 @@ O código não depende da 150: sem ela vale a trava da aplicação (memória + b
 
 ## Regressão
 Preenchida na revisão integrada (ver o relatório no PR #82).
+
+## Resultado do piloto de 02/11/2026 e consolidação
+
+**Piloto (05/11 00:01Z, 1 sincronização manual, sem impersonação): PASS.** 101 pedidos; Subway 67, Açaí 31 (no tenant do Açaí), 3 em
+triagem (`ITEM_DESCONHECIDO`); paridade com o Excel 101/101, taxa R$ 965,00 = R$ 965,00, cancelados 9 = 9, 0 troca de operação.
+Fechamentos Subway e Açaí `PRELIMINAR` v1 (`PROVISORIO`), única pendência `TRIAGEM_PENDENTE` 3. Parser, Checklist, notificações e
+relatórios inalterados. `FOODY_CENTRAL_ENABLED` voltou a `false` logo depois.
+
+**Causa das triagens:** o catálogo gerado só treina com pedidos que trazem termo de operação; os três itens vinham de pedidos sem
+termo ou eram variações raras (`2x` em vez de `1x`). Catálogo `2026-11-05.1` = base gerada `2026-11-03.1` + 3 linhas Subway
+validadas à mão (`foody.catalogo-validadas.js`, com evidência). No histórico inteiro do Parser (15.336 pedidos): 23 pedidos saem da
+triagem para Subway, **0 pedidos do Açaí mudam**; em 02/11 a triagem cai de 3 para 0.
+
+### Consolidar 02/11 (ordem obrigatória; cada passo com GO próprio)
+1. **Decisão humana** (administrador legítimo da titular, aba *Triagem*, dia 02/11): para cada um dos 3 pedidos, operação *Subway* e
+   justificativa. A decisão só grava `foody_triagem_decisoes` (exige só `FOODY_CENTRAL_ADMIN_ENABLED`); **não move dado** — vale na
+   próxima sincronização do dia.
+2. **Catálogo novo só DEPOIS da consolidação.** A versão do catálogo entra no `fonte_hash` de cada pedido: reprocessar com o
+   catálogo `2026-11-05.1` já publicado marcaria os 101 pedidos como atualizados (mesmo conteúdo, hash novo). Reprocessando antes,
+   só os 3 decididos mudam — evidência mais limpa. A decisão humana resolve 02/11 sozinha (tem prioridade sobre o catálogo).
+3. **Reprocessamento único**: `FOODY_CENTRAL_ENABLED=true` (única mudança no Render) → UMA sincronização manual de 02/11 com motivo
+   `consolidação 02/11 após triagem` → `FOODY_CENTRAL_ENABLED=false`. Até 05/11 (D-3) o dia é `REPROCESSAVEL`; a partir de 06/11 fica
+   `CONGELADA` e o motivo (≥ 10 caracteres) passa a ser obrigatório — o procedimento é o mesmo.
+4. **Esperado (catálogo ainda 2026-11-03.1):** execução nova com `inseridos 0`, `atualizados 3`, `inalterados 98`,
+   `decididosNaTriagem 3`, `triagem 0`; fechamento Subway **v2
+   CONSOLIDADO** (`substitui_id` → v1) com 70 pedidos e o fechamento Açaí **v2 CONSOLIDADO** com os mesmos valores da v1 (31 pedidos,
+   R$ 286,00), ambos sem pendência. A v1 PRELIMINAR fica no histórico (nada é apagado). Paridade de novo = PARIDADE.
+5. **Idempotência:** repetir o clique com a mesma solicitação em 15 min devolve a resposta anterior sem chamar a Foody; pedidos são
+   upsert por `foody_uid` + `fonte_hash`; fechamento com o mesmo conteúdo não cria versão; concorrência barrada pelo índice da 150.
+6. **Parar e desligar** se: `inseridos > 0`, triagem ≠ 0 após as decisões, pedido em duas empresas, paridade DIVERGENTE, qualquer
+   escrita fora das tabelas Foody (exceto `plataforma_auditoria`), qualquer envio de WhatsApp.
+
+### Critérios objetivos de cada dia-piloto (todos obrigatórios)
+| Eixo | Critério |
+|---|---|
+| Cobertura | execução `CONCLUIDA`, cobertura completa, `fora_janela 0`, `ponto_divergente 0`, páginas < limite |
+| Pedidos | Foody = Excel por dia (0 só-Foody, 0 só-Parser) |
+| Financeiro | soma de taxa de entregador Foody = Excel, centavo a centavo, por empresa (Subway + triagem = Subway do Excel) |
+| Cancelamentos | quantidade e "com taxa" iguais ao Excel |
+| Classificação | 0 troca de operação; triagem ≤ 3% dos pedidos do dia e todas resolvidas por decisão humana antes da consolidação |
+| Isolamento | 0 pedido ativo em duas organizações; 0 pedido do Açaí na Subway com valor/itens/pagamento/taxa de entrega |
+| Fechamento | definitivo (`CONSOLIDADO`/`CORRIGIDO` + `SINCRONIZADO`) só depois de triagem 0; nada definitivo com pendência |
+| Efeitos | contagens de Parser, Checklist, notificações e relatórios iguais antes/depois; 0 WhatsApp |

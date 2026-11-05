@@ -8,7 +8,7 @@
 //   * não parece texto livre/dado pessoal (filtro abaixo) e não contém termo validado da OUTRA operação.
 import { createHash } from "node:crypto";
 import { classificarOperacao } from "../parser-food-delivery/parserFoodDelivery.operacao.js";
-import { linhasDoPedido, operacoesPorTermo } from "./foody.classificacao.js";
+import { linhasDoPedido, operacoesPorTermo, normalizarLinhaItem } from "./foody.classificacao.js";
 
 const PARECE_TEXTO_LIVRE = /@|\d{5,}|\b(obs|observ\w*|rua|avenida|av|apto|apartamento|bloco|casa|condominio|troco|cpf|cartao|pix|telefone|whats\w*|zap|entregar|entregador|portao|campainha|teste|favor|por favor|obrigad\w*|cliente)\b/;
 
@@ -52,4 +52,40 @@ export function gerarCatalogo(pedidos, { minimoOcorrencias = 2, minimoDias = 2 }
   for (const op of Object.keys(linhas)) linhas[op].sort();
   return { linhas, hash: hashCatalogo(linhas), estatisticas: { ...estat, subway: linhas.subway.length, acai_no_grau: linhas.acai_no_grau.length },
     parametros: { minimoOcorrencias, minimoDias } };
+}
+
+/**
+ * Junta as linhas VALIDADAS À MÃO (foody.catalogo-validadas.js) às linhas geradas. Função PURA; lança erro (nunca ignora) se uma
+ * validada não estiver normalizada, parecer texto livre, trouxer termo da outra operação ou já existir no catálogo da outra.
+ * @param {{subway:string[], acai_no_grau:string[]}} linhas
+ * @param {ReadonlyArray<{operacao:string, linha:string, evidencia:string, validadoEm:string}>} validadas
+ */
+export function incluirValidadas(linhas, validadas) {
+  const saida = Object.fromEntries(Object.entries(linhas).map(([op, l]) => [op, [...l]]));
+  let incluidas = 0, jaPresentes = 0;
+  for (const v of validadas) {
+    const op = v.operacao, l = v.linha;
+    if (!Object.hasOwn(saida, op)) throw new Error(`validada com operação desconhecida: ${op}`);
+    if (normalizarLinhaItem(l) !== l) throw new Error(`validada não normalizada: ${l}`);
+    if (pareceTextoLivre(l)) throw new Error(`validada parece texto livre: ${l}`);
+    if (operacoesPorTermo(l).some((o) => o !== op)) throw new Error(`validada com termo de outra operação: ${l}`);
+    if (!(String(v.evidencia ?? "").length > 20) || !/^\d{4}-\d{2}-\d{2}$/.test(String(v.validadoEm ?? ""))) throw new Error(`validada sem evidência/data: ${l}`);
+    for (const [outra, ls] of Object.entries(saida)) if (outra !== op && ls.includes(l)) throw new Error(`validada já está no catálogo de ${outra}: ${l}`);
+    if (saida[op].includes(l)) { jaPresentes++; continue; }
+    saida[op].push(l); incluidas++;
+  }
+  for (const op of Object.keys(saida)) saida[op].sort();
+  return { linhas: saida, hash: hashCatalogo(saida), incluidas, jaPresentes };
+}
+
+/** Texto do arquivo versionado foody.catalogo-operacao.js (função PURA; quem grava é o script offline). */
+export function renderizarCatalogo(corpo) {
+  return `// GERADO por scripts/foody-gerar-catalogo.mjs / scripts/foody-catalogo-incluir-validadas.mjs — NÃO editar à mão.
+// Catálogo VERSIONADO de linhas de item por operação. Mudança só por PR: gerar de novo com --versao nova e registrar o hash em
+// test/foody-compartilhada-catalogo.test.js. Linhas validadas à mão ficam em foody.catalogo-validadas.js (com a evidência).
+// Conteúdo: nomes de produto/complemento do cardápio (sem dado de cliente).
+const congelar = (o) => Object.freeze(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Object.freeze(v)])));
+const C = ${JSON.stringify(corpo, null, 2)};
+export const CATALOGO_OPERACAO = Object.freeze({ ...C, origem: Object.freeze(C.origem), termosValidados: congelar(C.termosValidados), linhas: congelar(C.linhas) });
+`;
 }
