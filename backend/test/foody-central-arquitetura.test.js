@@ -93,10 +93,12 @@ describe("consumidores controlados", () => {
   const PONTE_PARSER = join(RAIZ, "src", "modules", "parser-food-delivery", "parserFoodDelivery.foody.js");
   // Fase D: ponte de LEITURA dos relatórios do Checklist (só o gerador puro foody.mensagem.js; teste em foody-relatorio-logistico.test.js).
   const PONTE_RELATORIO = join(RAIZ, "src", "modules", "notificacoes", "notificacoes.relatorios.foody.js");
+  // Dashboard Executivo: ponte de LEITURA do bloco informativo de logística própria (só foody.constants.js#fechamentoDefinitivo; teste em dashboard-executivo-logistica-proprio.test.js).
+  const PONTE_DASHBOARD = join(RAIZ, "src", "modules", "dashboard-executivo", "dashboardExecutivo.logisticaProprio.js");
   const doAdmin = arquivos(ADMIN).filter((p) => p !== SYNC_ROTAS);
   test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline e a camada foody-admin)", () => {
     const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO + sep));
-    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== INCLUIR_VALIDADAS && p !== PARIDADE && p !== PONTE && p !== PONTE_PARSER && p !== PONTE_RELATORIO && !p.startsWith(ADMIN + sep)
+    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== INCLUIR_VALIDADAS && p !== PARIDADE && p !== PONTE && p !== PONTE_PARSER && p !== PONTE_RELATORIO && p !== PONTE_DASHBOARD && !p.startsWith(ADMIN + sep)
       && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(culpados.map((p) => relative(RAIZ, p)), []);
   });
