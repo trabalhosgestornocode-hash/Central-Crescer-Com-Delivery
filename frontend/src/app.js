@@ -56,6 +56,7 @@ import { montarSeletorUnidade } from "./seletorUnidade.js";
 import { iniciar as iniciarRealtime } from "./realtime/realtimeManager.js";
 import { ehPerfilExibicao, itemPermitidoAoPerfil, rotaInicialDoPerfil } from "./perfilExibicao.js";
 import { iniciarRenovacaoAutomatica } from "./renovacaoContexto.js";
+import { instalarMenuRetratil } from "./menuLateral.js";
 
 // ---------- Ações de navegação do Agente Crescer (Etapa F.1) ----------
 // Registradas UMA vez, aqui — app.js é o topo do grafo de imports (nada o
@@ -1084,6 +1085,8 @@ function wireEventos() {
   // menu mobile
   el("#btn-menu").addEventListener("click", () => el("#app").classList.toggle("menu-aberto"));
   el("#backdrop").addEventListener("click", () => el("#app").classList.remove("menu-aberto"));
+  // menu lateral retrátil (desktop/tablet ≥ 901 px; abaixo continua a gaveta acima)
+  instalarMenuRetratil({ shell: el("#app"), sidebar: el("#sidebar"), menu: el("#menu"), ancora: el("#sidebar .sidebar-footer"), desktopMin: 901 });
 
   // ações da tabela + clique no nome (delegação — funciona após re-render)
   el("#view").addEventListener("click", (e) => {

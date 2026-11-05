@@ -22,6 +22,7 @@ import {
 } from "./painelAdmViews.js";
 import { MESES } from "./painelAdmUi.js";
 import { resetScrollLock } from "./scrollLock.js";
+import { instalarMenuRetratil } from "./menuLateral.js";
 
 /** @type {{mostrarTela: Function, aoTrocarAmbiente: Function, aoAcessoRevogado: Function, usuario: object}|null} */
 let ganchos = null;
@@ -318,6 +319,7 @@ function ligarEventos() {
   el("#padm-trocar")?.addEventListener("click", sairDoPainelAdministrativo);
   el("#padm-btn-menu")?.addEventListener("click", () => el("#painel-adm-screen")?.classList.toggle("menu-aberto"));
   el("#padm-backdrop")?.addEventListener("click", () => el("#painel-adm-screen")?.classList.remove("menu-aberto"));
+  instalarMenuRetratil({ shell: el("#painel-adm-screen"), sidebar: el("#painel-adm-screen .padm-sidebar"), menu: el("#padm-menu"), desktopMin: 981 });
   // "Tentar de novo" dos estados de erro.
   el("#padm-view")?.addEventListener("click", (e) => {
     if (e.target.closest('[data-padm-acao="recarregar"]')) renderPadmAtual();

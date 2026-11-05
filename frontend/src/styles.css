@@ -5394,3 +5394,93 @@ tr.dex-linha-na { opacity: .65; }
 .dex-lp .dex-lp-linha { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--linha); }
 .dex-lp .dex-lp-valor { text-align: right; white-space: nowrap; }
 .dex-lp .dex-lp-nota { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+
+/* ===================== MENU LATERAL RETRÁTIL (menuLateral.js) =====================
+   Um só conjunto de regras para os três shells: #app (.sidebar), #admin (.adm-sidebar) e
+   #painel-adm-screen (.padm-sidebar). Recolher = trocar a largura da coluna (--sidebar-w) no próprio shell;
+   como a área principal é `flex: 1` (#app) ou a coluna `1fr` do grid (#admin/#painel-adm), ela ocupa o espaço
+   liberado sozinha. Só vale no desktop/tablet paisagem: abaixo dos breakpoints de gaveta (900 / 980 px)
+   o recolhido é ignorado e a gaveta abre completa, como antes. Textos ficam VISUALMENTE ocultos (nunca
+   display:none) para o leitor de tela continuar lendo o nome de cada item. */
+:root { --sidebar-w-recolhido: 68px; }
+.menu, .adm-menu, .padm-menu { overflow-x: hidden; }
+
+.ml-alternar {
+  display: flex; align-items: center; gap: 10px; width: auto; margin: 6px 10px 10px; padding: 9px 12px;
+  border: 0; border-radius: 11px; background: rgba(255,255,255,.06); color: rgba(255,255,255,.72);
+  font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer;
+  transition: background var(--t), color var(--t);
+}
+.ml-alternar:hover { background: rgba(255,255,255,.12); color: #fff; }
+.ml-alternar svg { flex: 0 0 auto; }
+.menu-recolhido .ml-alternar svg { transform: rotate(180deg); }
+.adm-sidebar .ml-alternar, .padm-sidebar .ml-alternar { margin: 10px 0 4px; }
+
+/* foco visível nos itens (antes eram <li> sem foco algum) */
+.menu li[data-rota]:focus-visible, .adm-menu li[data-tela]:focus-visible, .padm-menu li[data-tela]:focus-visible,
+.sidebar .ml-alternar:focus-visible, .adm-sidebar .ml-alternar:focus-visible, .padm-sidebar .ml-alternar:focus-visible {
+  outline: 2px solid rgba(255,255,255,.92); outline-offset: 2px;
+}
+.menu li[data-rota]:focus:not(:focus-visible), .adm-menu li[data-tela]:focus:not(:focus-visible), .padm-menu li[data-tela]:focus:not(:focus-visible) { outline: none; }
+
+/* dica com o nome completo (hover + foco, só recolhido) */
+.ml-dica {
+  position: fixed; z-index: 1000; transform: translateY(-50%); pointer-events: none;
+  max-width: 280px; padding: 6px 10px; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: #15191e; color: #fff; font-size: 12.5px; font-weight: 600; line-height: 1.3;
+  border: 1px solid rgba(255,255,255,.14); box-shadow: 0 8px 22px rgba(0,0,0,.28);
+}
+
+/* aplicação inicial (carregar a página já recolhida) nunca anima */
+.ml-sem-transicao, .ml-sem-transicao * { transition: none !important; }
+@media (prefers-reduced-motion: no-preference) {
+  .sidebar { transition: width var(--t); }
+  .adm, .padm { transition: grid-template-columns var(--t); }
+  .ml-alternar svg { transition: transform var(--t); }
+}
+
+@media (min-width: 901px) {
+  .app.menu-recolhido { --sidebar-w: var(--sidebar-w-recolhido); }
+  .app.menu-recolhido .sidebar-brand { justify-content: center; padding: 18px 0; }
+  .app.menu-recolhido .menu { padding: 12px 8px; }
+  .app.menu-recolhido .menu li[data-rota] { justify-content: center; gap: 0; padding: 10px 0; }
+  .app.menu-recolhido .menu li[data-rota]:hover { transform: none; }
+  .app.menu-recolhido .sidebar-footer { display: none; }
+  .app.menu-recolhido .sidebar .ml-alternar { justify-content: center; margin: 6px 8px 12px; padding: 9px 0; }
+  .app.menu-recolhido .m-logo { max-width: 26px; }
+}
+@media (min-width: 981px) {
+  .adm.menu-recolhido, .padm.menu-recolhido { --sidebar-w: var(--sidebar-w-recolhido); }
+  .adm.menu-recolhido .adm-sidebar, .padm.menu-recolhido .padm-sidebar { padding: 18px 10px; }
+  .adm.menu-recolhido .adm-brand, .padm.menu-recolhido .padm-brand { justify-content: center; gap: 0; padding: 4px 0 18px; }
+  .adm.menu-recolhido .adm-menu li[data-tela], .padm.menu-recolhido .padm-menu li[data-tela] { justify-content: center; gap: 0; padding: 9px 0; }
+  .adm.menu-recolhido .adm-sidebar-foot { display: none; }
+  .adm.menu-recolhido .ml-alternar, .padm.menu-recolhido .ml-alternar { justify-content: center; padding: 9px 0; }
+}
+/* textos: visualmente ocultos (leitores de tela continuam lendo) */
+@media (min-width: 901px) {
+  .app.menu-recolhido .sidebar-brand > span:not(.brand-logo),
+  .app.menu-recolhido .menu li .m-label, .app.menu-recolhido .menu li .m-tag,
+  .app.menu-recolhido .sidebar .ml-alternar-txt {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+    overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
+  /* seção vira um divisor fino; o nome segue disponível ao leitor de tela */
+  .app.menu-recolhido .menu-secao { height: 1px; padding: 0; margin: 10px 10px; background: rgba(255,255,255,.12); font-size: 0; overflow: hidden; }
+  .app.menu-recolhido .menu ul > .menu-secao:first-child { height: 0; margin: 0; }
+}
+@media (min-width: 981px) {
+  .adm.menu-recolhido .adm-brand-txt, .padm.menu-recolhido .padm-brand-txt,
+  .adm.menu-recolhido .adm-menu .m-label, .padm.menu-recolhido .padm-menu .m-label,
+  .adm.menu-recolhido .ml-alternar-txt, .padm.menu-recolhido .ml-alternar-txt {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+    overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
+  .adm.menu-recolhido .adm-menu .menu-secao, .padm.menu-recolhido .padm-menu .menu-secao {
+    height: 1px; padding: 0; margin: 10px 6px; background: rgba(255,255,255,.12); font-size: 0; overflow: hidden;
+  }
+  .adm.menu-recolhido .adm-menu ul > .menu-secao:first-child, .padm.menu-recolhido .padm-menu ul > .menu-secao:first-child { height: 0; margin: 0; }
+}
+/* gaveta (celular/tablet retrato): sem botão de recolher — a gaveta já abre e fecha */
+@media (max-width: 900px) { .sidebar .ml-alternar { display: none; } }
+@media (max-width: 980px) { .adm-sidebar .ml-alternar, .padm-sidebar .ml-alternar { display: none; } }

@@ -32,6 +32,7 @@ import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./cont
 import { estadoMfa, iniciarCadastro, confirmarCadastro, removerFator } from "./mfa.js";
 import { montarCentralNotificacoes } from "./configuracoesNotificacoes.js";
 import { montarFoody } from "./configuracoesFoody.js";
+import { instalarMenuRetratil } from "./menuLateral.js";
 
 // Perfis da UI <-> enum papel_acesso do banco (migration 015). O cargo
 // pertence ao VÍNCULO usuário<->empresa, não ao usuário: o mesmo login pode
@@ -304,6 +305,11 @@ function ligarNavegacao(view, catId) {
     raiz.querySelector(".cfg2-nav-item.ativo")?.focus();
   });
   raiz.querySelector("#cfg-ver-categoria")?.addEventListener("click", () => abrirCategoria(catId));
+  // Navegação de categorias recolhível (só ≥ 900 px; abaixo a lista vira tela própria). Preferência separada da
+  // sidebar global, sem recolhimento automático; as setas continuam sendo tratadas aqui em cima.
+  const nav = raiz.querySelector(".cfg2-nav");
+  instalarMenuRetratil({ shell: raiz, sidebar: nav, menu: nav?.querySelector("ul"), ancora: nav?.querySelector("ul"),
+    chave: "ccd:menu-lateral:configuracoes", tema: "claro", desktopMin: 900, autoRecolher: false, teclas: false });
 }
 
 async function podeSairDaCategoria() {
