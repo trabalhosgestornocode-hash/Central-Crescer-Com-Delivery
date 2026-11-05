@@ -1,0 +1,20 @@
+Regressão após os ajustes encontrados no navegador — 05/11/2026
+Node v20.19.4; banco simulado; sem carregar .env
+SUPABASE_URL=http://127.0.0.1:9; chaves fictícias
+
+Comando: node --experimental-vm-modules --test <arquivos selecionados>
+Seleção:
+- backend/test/administrativo-*.test.js, exceto comunicacao e mentorados
+- backend/test/dashboard-executivo-*.test.js com rentabilidade, periodo-misto, protecao, total-deducoes ou ajustes no nome
+- frontend/test/painelAdm*.test.js
+
+# tests 793
+# suites 194
+# pass 793
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3079.0025
+
+Verificação adicional: git diff --check aprovado.

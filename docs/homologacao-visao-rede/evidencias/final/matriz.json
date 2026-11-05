@@ -1,0 +1,770 @@
+{
+  "fase": "final",
+  "data": "2026-11-05",
+  "navegador": "156.0.8078.80",
+  "total": 30,
+  "pass": 30,
+  "fail": 0,
+  "matriz": [
+    {
+      "nome": "Rede com dados reais de homologação: Sem dados",
+      "origem": "homologação real",
+      "status": "PASS",
+      "detalhe": {
+        "distribuicao": {
+          "sem_dados": 1,
+          "em_dia": 0,
+          "atencao": 0,
+          "critica": 0
+        },
+        "evidencia": "evidencias/final/01-homologacao-real-sem-dados.png"
+      }
+    },
+    {
+      "nome": "Detalhe real da mesma unidade/competência",
+      "origem": "homologação real",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": null,
+          "metaIdeal": 30,
+          "limite": 35,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "sem_dados",
+            "label": "Dados insuficientes"
+          },
+          "saldo": {
+            "disponivelPp": null,
+            "disponivelReais": null,
+            "limiteReais": null,
+            "status": "sem_dados"
+          }
+        },
+        "evidencia": "evidencias/final/02-homologacao-real-detalhe.png"
+      }
+    },
+    {
+      "nome": "Cards e distribuição: quatro estados financeiros",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "distribuicao": {
+          "sem_dados": 1,
+          "em_dia": 4,
+          "atencao": 4,
+          "critica": 2
+        },
+        "evidencia": "evidencias/final/03-rede-completa.png"
+      }
+    },
+    {
+      "nome": "Rankings, ordenação e badges",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "evidencia": "evidencias/final/04-rankings.png"
+      }
+    },
+    {
+      "nome": "Mudança de modalidade tem identificação e ranking próprios",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "evidencia": "evidencias/final/05-ranking-misto.png"
+      }
+    },
+    {
+      "nome": "Filtro financeiro em_dia",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "quantidade": 4,
+        "evidencia": "evidencias/final/06-filtro-em_dia.png"
+      }
+    },
+    {
+      "nome": "Filtro financeiro atencao",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "quantidade": 4,
+        "evidencia": "evidencias/final/06-filtro-atencao.png"
+      }
+    },
+    {
+      "nome": "Filtro financeiro critica",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "quantidade": 2,
+        "evidencia": "evidencias/final/06-filtro-critica.png"
+      }
+    },
+    {
+      "nome": "Filtro financeiro sem_dados",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "quantidade": 1,
+        "evidencia": "evidencias/final/06-filtro-sem_dados.png"
+      }
+    },
+    {
+      "nome": "Filtros por empresa, unidade e modalidade",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "evidencia": "evidencias/final/07-filtro-modalidade.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: FS Acima do Limite",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 27,
+          "metaIdeal": 20,
+          "limite": 25,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "atencao",
+            "label": "Atenção"
+          },
+          "saldo": {
+            "disponivelPp": -2,
+            "disponivelReais": -620,
+            "limiteReais": 7750,
+            "status": "acima_do_limite"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-23.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: FS Dentro da Meta",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 18,
+          "metaIdeal": 20,
+          "limite": 25,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "dentro_da_meta",
+            "label": "Dentro da Meta"
+          },
+          "saldo": {
+            "disponivelPp": 7,
+            "disponivelReais": 2170,
+            "limiteReais": 7750,
+            "status": "disponivel"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-21.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: FS Dentro do Limite",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 23,
+          "metaIdeal": 20,
+          "limite": 25,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "dentro_do_limite",
+            "label": "Dentro do Limite"
+          },
+          "saldo": {
+            "disponivelPp": 2,
+            "disponivelReais": 620,
+            "limiteReais": 7750,
+            "status": "disponivel"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-22.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: FS Meta dinâmica",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 23,
+          "metaIdeal": 24.000000000000004,
+          "limite": 25,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "dentro_da_meta",
+            "label": "Dentro da Meta"
+          },
+          "saldo": {
+            "disponivelPp": 2,
+            "disponivelReais": 620,
+            "limiteReais": 7750,
+            "status": "disponivel"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-24.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: MP Acima do Limite",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 16,
+          "metaIdeal": 12,
+          "limite": 15,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "atencao",
+            "label": "Atenção"
+          },
+          "saldo": {
+            "disponivelPp": -1,
+            "disponivelReais": -310,
+            "limiteReais": 4650,
+            "status": "acima_do_limite"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-13.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: MP Dentro da Meta",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 10,
+          "metaIdeal": 12,
+          "limite": 15,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "dentro_da_meta",
+            "label": "Dentro da Meta"
+          },
+          "saldo": {
+            "disponivelPp": 5,
+            "disponivelReais": 1550,
+            "limiteReais": 4650,
+            "status": "disponivel"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-11.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: MP Dentro do Limite",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 14.000000000000002,
+          "metaIdeal": 12,
+          "limite": 15,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "dentro_do_limite",
+            "label": "Dentro do Limite"
+          },
+          "saldo": {
+            "disponivelPp": 0.9999999999999982,
+            "disponivelReais": 310,
+            "limiteReais": 4650,
+            "status": "disponivel"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-12.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: MP Lançamento mensal",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 10,
+          "metaIdeal": 12,
+          "limite": 15,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "dentro_da_meta",
+            "label": "Dentro da Meta"
+          },
+          "saldo": {
+            "disponivelPp": 5,
+            "disponivelReais": 1550,
+            "limiteReais": 4650,
+            "status": "disponivel"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-16.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: MP Meta personalizada",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 9,
+          "metaIdeal": 8,
+          "limite": 10,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "dentro_do_limite",
+            "label": "Dentro do Limite"
+          },
+          "saldo": {
+            "disponivelPp": 1,
+            "disponivelReais": 310,
+            "limiteReais": 3100,
+            "status": "disponivel"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-15.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: Unidade Mudança de modalidade",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": 20,
+          "metaIdeal": 16.129032258064516,
+          "limite": 20.161290322580644,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "dentro_do_limite",
+            "label": "Dentro do Limite"
+          },
+          "saldo": {
+            "disponivelPp": 0.16129032258064413,
+            "disponivelReais": 50,
+            "limiteReais": 6250,
+            "status": "disponivel"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-25.png"
+      }
+    },
+    {
+      "nome": "Comparação rede × Indicadores: MP Sem dados",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "indicador": {
+          "atual": null,
+          "metaIdeal": 12,
+          "limite": 15,
+          "naoAplicavel": false,
+          "status": {
+            "chave": "sem_dados",
+            "label": "Dados insuficientes"
+          },
+          "saldo": {
+            "disponivelPp": null,
+            "disponivelReais": null,
+            "limiteReais": null,
+            "status": "sem_dados"
+          }
+        },
+        "evidencia": "evidencias/final/08-unidade-14.png"
+      }
+    },
+    {
+      "nome": "Empresa com múltiplas unidades usa pior classificação financeira",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "empresas": [
+          {
+            "nome": "QA Grupo Marketplace",
+            "modelo": "marketplace",
+            "situacao": {
+              "chave": "critica",
+              "rotulo": "Crítica"
+            }
+          },
+          {
+            "nome": "QA Grupo Full Service",
+            "modelo": "full_service",
+            "situacao": {
+              "chave": "critica",
+              "rotulo": "Crítica"
+            }
+          },
+          {
+            "nome": "QA Grupo Full Service",
+            "modelo": "misto",
+            "situacao": {
+              "chave": "atencao",
+              "rotulo": "Atenção"
+            }
+          }
+        ],
+        "evidencia": "evidencias/final/09-empresa-consolidada.png"
+      }
+    },
+    {
+      "nome": "Troca de mês recalcula situação e mantém competência no detalhe",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "evidencia": "evidencias/final/10-troca-mes-setembro.png"
+      }
+    },
+    {
+      "nome": "Troca de ano recalcula os dados do período",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "evidencia": "evidencias/final/11-troca-ano-2025.png"
+      }
+    },
+    {
+      "nome": "Modalidade histórica: setembro Marketplace, outubro misto",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "setembro": {
+          "metaIdeal": 12,
+          "limite": 15
+        },
+        "outubro": {
+          "metaIdeal": 16.129032258064516,
+          "limite": 20.161290322580644
+        }
+      }
+    },
+    {
+      "nome": "Monitoramento Dashboard iFood mantém exclusivamente critérios operacionais",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "financeiroCriticoOperacionalEmDia": "10000000-0000-4000-8000-000000000023",
+        "financeiroEmDiaOperacionalPendente": "10000000-0000-4000-8000-000000000011",
+        "evidencia": "evidencias/final/12-monitoramento-operacional.png"
+      }
+    },
+    {
+      "nome": "Tabela mantém badges acessíveis ao rolar horizontalmente",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "evidencia": "evidencias/final/13-tabela-badges.png"
+      }
+    },
+    {
+      "nome": "Layout móvel e badges",
+      "origem": "controlado",
+      "status": "PASS",
+      "detalhe": {
+        "largura": 390,
+        "evidencia": "evidencias/final/14-mobile.png"
+      }
+    },
+    {
+      "nome": "Sem erros JavaScript na navegação",
+      "origem": "navegador",
+      "status": "PASS"
+    },
+    {
+      "nome": "Nenhuma escrita ou acesso à produção",
+      "origem": "segurança",
+      "status": "PASS",
+      "detalhe": {
+        "leiturasReais": 142,
+        "leiturasEmMemoria": 1930,
+        "escritas": 0
+      }
+    }
+  ],
+  "comparacoes": [
+    {
+      "unidade": "FS Acima do Limite",
+      "competencia": "2026-10",
+      "modelo": "full_service",
+      "percentualRede": 27,
+      "percentualIndicador": 27,
+      "metaRede": {
+        "metaIdeal": 20,
+        "limite": 25
+      },
+      "metaIndicador": {
+        "metaIdeal": 20,
+        "limite": 25
+      },
+      "statusRede": "critica",
+      "statusIndicador": "atencao",
+      "linhaVisivel": [
+        "Total de deduções",
+        "27,00%",
+        "20,00%",
+        "25,00%",
+        "−2,00 p.p. (−R$ 620,00)",
+        "Atenção"
+      ]
+    },
+    {
+      "unidade": "FS Dentro da Meta",
+      "competencia": "2026-10",
+      "modelo": "full_service",
+      "percentualRede": 18,
+      "percentualIndicador": 18,
+      "metaRede": {
+        "metaIdeal": 20,
+        "limite": 25
+      },
+      "metaIndicador": {
+        "metaIdeal": 20,
+        "limite": 25
+      },
+      "statusRede": "em_dia",
+      "statusIndicador": "dentro_da_meta",
+      "linhaVisivel": [
+        "Total de deduções",
+        "18,00%",
+        "20,00%",
+        "25,00%",
+        "7,00 p.p. (R$ 2.170,00)",
+        "Dentro da Meta"
+      ]
+    },
+    {
+      "unidade": "FS Dentro do Limite",
+      "competencia": "2026-10",
+      "modelo": "full_service",
+      "percentualRede": 23,
+      "percentualIndicador": 23,
+      "metaRede": {
+        "metaIdeal": 20,
+        "limite": 25
+      },
+      "metaIndicador": {
+        "metaIdeal": 20,
+        "limite": 25
+      },
+      "statusRede": "atencao",
+      "statusIndicador": "dentro_do_limite",
+      "linhaVisivel": [
+        "Total de deduções",
+        "23,00%",
+        "20,00%",
+        "25,00%",
+        "2,00 p.p. (R$ 620,00)",
+        "Dentro do Limite"
+      ]
+    },
+    {
+      "unidade": "FS Meta dinâmica",
+      "competencia": "2026-10",
+      "modelo": "full_service",
+      "percentualRede": 23,
+      "percentualIndicador": 23,
+      "metaRede": {
+        "metaIdeal": 24.000000000000004,
+        "limite": 25
+      },
+      "metaIndicador": {
+        "metaIdeal": 24.000000000000004,
+        "limite": 25
+      },
+      "statusRede": "em_dia",
+      "statusIndicador": "dentro_da_meta",
+      "linhaVisivel": [
+        "Total de deduções",
+        "23,00%",
+        "24,00%",
+        "25,00%",
+        "2,00 p.p. (R$ 620,00)",
+        "Dentro da Meta"
+      ]
+    },
+    {
+      "unidade": "MP Acima do Limite",
+      "competencia": "2026-10",
+      "modelo": "marketplace",
+      "percentualRede": 16,
+      "percentualIndicador": 16,
+      "metaRede": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "metaIndicador": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "statusRede": "critica",
+      "statusIndicador": "atencao",
+      "linhaVisivel": [
+        "Total de deduções",
+        "16,00%",
+        "12,00%",
+        "15,00%",
+        "−1,00 p.p. (−R$ 310,00)",
+        "Atenção"
+      ]
+    },
+    {
+      "unidade": "MP Dentro da Meta",
+      "competencia": "2026-10",
+      "modelo": "marketplace",
+      "percentualRede": 10,
+      "percentualIndicador": 10,
+      "metaRede": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "metaIndicador": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "statusRede": "em_dia",
+      "statusIndicador": "dentro_da_meta",
+      "linhaVisivel": [
+        "Total de deduções",
+        "10,00%",
+        "12,00%",
+        "15,00%",
+        "5,00 p.p. (R$ 1.550,00)",
+        "Dentro da Meta"
+      ]
+    },
+    {
+      "unidade": "MP Dentro do Limite",
+      "competencia": "2026-10",
+      "modelo": "marketplace",
+      "percentualRede": 14.000000000000002,
+      "percentualIndicador": 14.000000000000002,
+      "metaRede": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "metaIndicador": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "statusRede": "atencao",
+      "statusIndicador": "dentro_do_limite",
+      "linhaVisivel": [
+        "Total de deduções",
+        "14,00%",
+        "12,00%",
+        "15,00%",
+        "1,00 p.p. (R$ 310,00)",
+        "Dentro do Limite"
+      ]
+    },
+    {
+      "unidade": "MP Lançamento mensal",
+      "competencia": "2026-10",
+      "modelo": "marketplace",
+      "percentualRede": 10,
+      "percentualIndicador": 10,
+      "metaRede": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "metaIndicador": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "statusRede": "em_dia",
+      "statusIndicador": "dentro_da_meta",
+      "linhaVisivel": [
+        "Total de deduções",
+        "10,00%",
+        "12,00%",
+        "15,00%",
+        "5,00 p.p. (R$ 1.550,00)",
+        "Dentro da Meta"
+      ]
+    },
+    {
+      "unidade": "MP Meta personalizada",
+      "competencia": "2026-10",
+      "modelo": "marketplace",
+      "percentualRede": 9,
+      "percentualIndicador": 9,
+      "metaRede": {
+        "metaIdeal": 8,
+        "limite": 10
+      },
+      "metaIndicador": {
+        "metaIdeal": 8,
+        "limite": 10
+      },
+      "statusRede": "atencao",
+      "statusIndicador": "dentro_do_limite",
+      "linhaVisivel": [
+        "Total de deduções",
+        "9,00%",
+        "8,00%",
+        "10,00%",
+        "1,00 p.p. (R$ 310,00)",
+        "Dentro do Limite"
+      ]
+    },
+    {
+      "unidade": "Unidade Mudança de modalidade",
+      "competencia": "2026-10",
+      "modelo": "misto",
+      "percentualRede": 20,
+      "percentualIndicador": 20,
+      "metaRede": {
+        "metaIdeal": 16.129032258064516,
+        "limite": 20.161290322580644
+      },
+      "metaIndicador": {
+        "metaIdeal": 16.129032258064516,
+        "limite": 20.161290322580644
+      },
+      "statusRede": "atencao",
+      "statusIndicador": "dentro_do_limite",
+      "linhaVisivel": [
+        "Total de deduções Composição",
+        "20,00%",
+        "16,13%",
+        "20,16%",
+        "0,16 p.p. (R$ 50,00)",
+        "Dentro do Limite"
+      ]
+    },
+    {
+      "unidade": "MP Sem dados",
+      "competencia": "2026-10",
+      "modelo": "marketplace",
+      "percentualRede": null,
+      "percentualIndicador": null,
+      "metaRede": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "metaIndicador": {
+        "metaIdeal": 12,
+        "limite": 15
+      },
+      "statusRede": "sem_dados",
+      "statusIndicador": "sem_dados",
+      "linhaVisivel": [
+        "Total de deduções",
+        "—",
+        "12,00%",
+        "15,00%",
+        "—",
+        "Dados insuficientes"
+      ]
+    }
+  ]
+}

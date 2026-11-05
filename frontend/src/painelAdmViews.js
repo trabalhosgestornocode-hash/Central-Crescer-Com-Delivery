@@ -395,7 +395,7 @@ const SITUACAO_REDE_UI = {
   sem_dados: { classe: "muted", rotulo: "Sem dados" },
 };
 const chipSituacaoRede = (sit) => `<span title="Situação financeira baseada em Total de deduções dos Indicadores de Rentabilidade">${chip(SITUACAO_REDE_UI[sit?.chave] ?? SITUACAO_REDE_UI.sem_dados)}</span>`;
-const ROTULO_MODALIDADE = { marketplace: "Marketplace", full_service: "Full Service" };
+const ROTULO_MODALIDADE = { marketplace: "Marketplace", full_service: "Full Service", misto: "Misto (Marketplace / Full Service)" };
 
 function filtrosVisaoRedeParaApi() {
   const f = {};
@@ -482,6 +482,7 @@ function htmlFiltrosRede(d) {
         ${opt("", viewVisaoRede.modalidade, "Todas")}
         ${opt("marketplace", viewVisaoRede.modalidade, "Marketplace")}
         ${opt("full_service", viewVisaoRede.modalidade, "Full Service")}
+        ${opt("misto", viewVisaoRede.modalidade, "Misto (Marketplace / Full Service)")}
       </select></label>
       <label>Situação financeira<select data-vr-filtro="situacao">
         ${opt("", viewVisaoRede.situacao, "Todas")}

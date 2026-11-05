@@ -358,3 +358,30 @@ test("somente ajustes financeiros não fabricam um indicador Total de deduções
   assert.equal(a.totalDeducoesIndicadorPct, null);
   assert.equal(a.situacaoFinanceira.chave, "sem_dados");
 });
+
+test("lançamento mensal usa o fallback homologado no recorte mensal da rede", async () => {
+  const st = cenario();
+  for (const l of st.lancamentos_financeiros_diarios.filter((l) => l.unidade_id === UUID("a"))) {
+    l.origem_lancamento = "distribuicao_mensal";
+    l.valor_vendas_ifood = 1000; l.taxas_comissoes = 100;
+  }
+  const r = await visaoGeralRede({ hojeIso: HOJE, mes: "2026-09" }, { supabase: fakeDb(st) });
+  const a = r.unidades.find((u) => u.unidadeId === UUID("a"));
+  assert.equal(a.faturamento, 30000);
+  assert.equal(a.deducoes, 3000);
+  assert.equal(a.totalDeducoesIndicadorPct, 10);
+  assert.equal(a.situacaoFinanceira.chave, "em_dia");
+  assert.equal(a.semDado, false);
+  assert.ok(r.rankingPorModalidade.marketplace.melhores.some((u) => u.unidadeId === a.unidadeId));
+});
+
+test("modalidade mista é identificada, filtrada e ranqueada separadamente", async () => {
+  const st = cenario();
+  st.unidades[0].modelo_logistico_ifood = "full_service";
+  st.unidade_modelo_logistico_historico = [{ unidade_id: UUID("a"), vigencia_inicio: "2026-09-16", modelo_anterior: "marketplace", modelo_novo: "full_service" }];
+  const r = await visaoGeralRede({ hojeIso: HOJE, mes: "2026-09", modalidade: "misto" }, { supabase: fakeDb(st) });
+  assert.equal(r.unidades.length, 1);
+  assert.equal(r.unidades[0].modeloLogistico, "misto");
+  assert.equal(r.rankingPorModalidade.misto.melhores.length, 1);
+  assert.equal(r.rankingPorModalidade.misto.melhores[0].unidadeId, UUID("a"));
+});

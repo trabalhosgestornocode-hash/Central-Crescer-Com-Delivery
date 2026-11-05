@@ -36,7 +36,7 @@ import {
   lucratividadeDaUnidade, agregarRede, folgaLimite,
 } from "./administrativo.lucratividade.js";
 import {
-  classificarAtencaoFinanceira, impactoFinanceiroEstimado,
+  classificarAtencaoFinanceira, impactoFinanceiroEstimado, financeiroMensalDaUnidade,
   composicaoDeducoesDoBloco, somarComposicaoDeducoes,
   filtrarUnidadesRede, ordenarPrioridadeIntervencao, contagemPorSituacao,
 } from "./administrativo.visaoRede.js";
@@ -1348,9 +1348,8 @@ function redeVazia() {
 // ATENÇÃO / CRÍTICA / SEM_DADOS) de TODA a frota monitorada, por mês.
 //
 // NENHUMA fórmula nova de faturamento/dedução/receita: tudo vem de
-// `lucratividadeDaUnidade` (o mesmo motor usado pela Lucratividade semanal —
-// aqui chamado com `inicio`/`fim` = o MÊS inteiro em vez de um bloco de 7
-// dias). A classificação de 4 estados e o impacto financeiro estimado vivem
+// `financeiroMensalDaUnidade` (snapshot real ou distribuição mensal, como no
+// Dashboard iFood). A classificação de 4 estados e o impacto financeiro estimado vivem
 // em `administrativo.visaoRede.js`, sobre o MESMO par (metaIdeal, limite) por
 // modelo logístico que o Dashboard iFood já usa.
 const pad2 = (x) => String(x).padStart(2, "0");
@@ -1391,7 +1390,7 @@ export async function visaoGeralRede({
   const per = alvoDoPeriodo(mes, hoje);
   const orgFiltro = organizacaoId ? v.uuid(organizacaoId, "Empresa") : null;
   const uniFiltro = unidadeId ? v.uuid(unidadeId, "Unidade") : null;
-  const modFiltro = modalidade ? v.umDe(modalidade, "Modalidade", MODELOS_LOGISTICOS) : null;
+  const modFiltro = modalidade ? v.umDe(modalidade, "Modalidade", [...MODELOS_LOGISTICOS, "misto"]) : null;
   const sitFiltro = situacao ? v.umDe(situacao, "Situação", ["em_dia", "atencao", "critica", "sem_dados"]) : null;
 
   const frotaBase = await listarUnidadesElegiveis({ moduloId: MONITOR.modulo }, deps);
@@ -1401,7 +1400,6 @@ export async function visaoGeralRede({
   const { inicio: inicioMes, fim: fimMes } = janelaDoMes(ano, numMes, { corrente: per.mesCorrente, dataAlvo: per.dataAlvo });
   const antCal = mesAnterior(ano, numMes);
   const diasMesAnterior = diasDoMes(antCal.ano, antCal.mes);
-  const inicioMesAnterior = diasMesAnterior[0];
   const fimMesAnterior = diaEquivalenteNoMesAnterior(fimMes, diasMesAnterior);
 
   // Janela larga para a EVOLUÇÃO MENSAL (até 6 meses, incluindo o atual) — UMA
@@ -1422,14 +1420,11 @@ export async function visaoGeralRede({
     carregarPrecosReferenciaDaFrota({ unidades: frotaBase }, deps),
   ]);
 
-  // Só linhas DIÁRIAS entram (ver cabeçalho de administrativo.lucratividade.js).
-  const diariasPorUnidade = new Map(frotaBase.map((u) => [
-    u.unidadeId, (porUnidade.get(u.unidadeId) ?? []).filter((r) => r.origem_lancamento !== "distribuicao_mensal"),
-  ]));
-
+  // No recorte mensal, usa as mesmas fontes do Dashboard: snapshot real ou,
+  // na ausência dele, distribuição mensal. Não herda a restrição semanal.
   const unidades = frotaBase.map((u) => {
-    const diarias = diariasPorUnidade.get(u.unidadeId) ?? [];
-    const doMes = (ym) => diarias.filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
+    const linhas = porUnidade.get(u.unidadeId) ?? [];
+    const doMes = (ym) => linhas.filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
     const linhasAtual = doMes(per.periodo);
     const linhasAnteriores = doMes(ymDe(antCal.ano, antCal.mes));
     // Data REAL do lançamento mais recente do mês — nunca inventada; null quando a unidade não tem nenhum lançamento no período.
@@ -1437,8 +1432,8 @@ export async function visaoGeralRede({
       ? linhasAtual.reduce((max, r) => (String(r.data_lancamento) > max ? String(r.data_lancamento) : max), String(linhasAtual[0].data_lancamento))
       : null;
 
-    const atual = lucratividadeDaUnidade(linhasAtual, { inicio: inicioMes, fim: fimMes, ateDataIso: fimMes });
-    const anterior = lucratividadeDaUnidade(linhasAnteriores, { inicio: inicioMesAnterior, fim: fimMesAnterior, ateDataIso: fimMesAnterior });
+    const atual = financeiroMensalDaUnidade(linhasAtual, fimMes);
+    const anterior = financeiroMensalDaUnidade(linhasAnteriores, fimMesAnterior);
     const composicao = composicaoDeducoesDoBloco(linhasAtual, inicioMes, fimMes);
 
     // Modelo VIGENTE no mês (linha do tempo de vigências) — mesmo padrão de
@@ -1549,11 +1544,11 @@ export async function visaoGeralRede({
   // situação, que é do mês corrente), recortando cada mês em memória. ----
   const evolucaoMensal = mesesEvolucao.map(({ ano: a, mes: m }) => {
     const ehCorrente = a === ano && m === numMes;
-    const { inicio, fim } = janelaDoMes(a, m, { corrente: ehCorrente && per.mesCorrente, dataAlvo: per.dataAlvo });
+    const { fim } = janelaDoMes(a, m, { corrente: ehCorrente && per.mesCorrente, dataAlvo: per.dataAlvo });
     const ym = ymDe(a, m);
     const porUnidadeMes = universoCards.map((u) => {
-      const linhas = (diariasPorUnidade.get(u.unidadeId) ?? []).filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
-      return lucratividadeDaUnidade(linhas, { inicio, fim, ateDataIso: fim });
+      const linhas = (porUnidade.get(u.unidadeId) ?? []).filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
+      return financeiroMensalDaUnidade(linhas, fim);
     });
     const agg = agregarRede(porUnidadeMes);
     return {
@@ -1568,7 +1563,7 @@ export async function visaoGeralRede({
 
   // ---- rankings, separados por modalidade (estruturas financeiras diferentes). ----
   const rankingPorModalidade = {};
-  for (const modelo of MODELOS_LOGISTICOS) {
+  for (const modelo of [...MODELOS_LOGISTICOS, ...(universoTabela.some((u) => u.modeloLogistico === "misto") ? ["misto"] : [])]) {
     const doModelo = universoTabela.filter((u) => u.modeloLogistico === modelo);
     const melhores = doModelo
       .filter((u) => u.situacaoFinanceira.chave !== "sem_dados")

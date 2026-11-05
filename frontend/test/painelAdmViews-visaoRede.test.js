@@ -554,3 +554,10 @@ test("detalhe administrativo identifica explicitamente a classificação finance
   assert.match(h, /Crítica/);
   assert.match(h, /Situação baseada em Total de deduções/);
 });
+
+test("modalidade mista aparece com rótulo explícito e opção no filtro", () => {
+  const u = { ...REDE_CHEIA.unidades[0], modeloLogistico: "misto" };
+  const h = V.htmlVisaoGeralRede({ ...REDE_CHEIA, unidades: [u], rankingPorModalidade: { misto: { melhores: [u], atencao: [] } } });
+  assert.match(h, /<option value="misto"/);
+  assert.match(h, /Misto \(Marketplace \/ Full Service\)/);
+});

@@ -43,3 +43,8 @@ Casos adicionados: fronteiras exatas da meta/limite; percentual acima do limite 
 Alterações somente locais; nenhum push, merge, deploy, migração ou alteração de produção. O checkout foi encontrado em `C:/x` (junction para `C:/Users/ponte/OneDrive/Desktop/crescer com delivery`), pois o caminho D: informado não está disponível nesta sessão. Arquivos preexistentes fora deste ajuste foram preservados.
 
 GO técnico para homologação. A validação visual em navegador com dados reais de homologação não foi executada; publicação em produção permanece NO-GO até essa validação e autorização do responsável.
+
+
+## Homologação final em navegador (05/11/2026)
+
+Concluída em Chrome/Playwright: 30 PASS / 0 FAIL, com 793 testes de regressão aprovados após corrigir o fallback de lançamento mensal e a identificação/filtro/ranking de modalidade mista. A homologação real disponível cobre Sem dados; os demais cenários foram completados em memória com os serviços e frontend reais. A decisão anterior foi substituída por **GO técnico para publicação mediante autorização**. Ver [matriz, capturas e limites da homologação](homologacao-visao-rede/README.md).

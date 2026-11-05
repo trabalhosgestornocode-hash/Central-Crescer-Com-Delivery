@@ -1,12 +1,28 @@
 // Visão Geral da Rede: situação financeira exclusivamente pelo Total de deduções.
 // Valores e referências vêm dos mesmos motores dos Indicadores de Rentabilidade.
 
+import { faturamentoDaUnidade } from "./administrativo.financeiro.js";
+import { percentual } from "./administrativo.lucratividade.js";
 import {
   snapshotFinanceiroMaisRecente, diaAnterior, totalDeducoes, statusIndicadorRentabilidade,
 } from "../dashboard-executivo/dashboardExecutivo.calc.js";
 
 const n = (v) => (v == null ? 0 : Number(v));
 const R2 = (v) => (v == null ? null : Math.round(Number(v) * 100) / 100);
+
+/** Leitura MENSAL: snapshots reais têm prioridade; distribuição mensal é o fallback
+ * homologado do Dashboard. O recorte semanal continua exigindo dados diários.
+ */
+export function financeiroMensalDaUnidade(linhas, ateDataIso) {
+  const f = faturamentoDaUnidade(linhas, { ateDataIso });
+  return {
+    faturamento: f.total, confirmado: f.total == null ? null : f.confirmado,
+    provisorio: f.total == null ? null : f.provisorio, incluiProvisorio: f.incluiProvisorio,
+    deducoes: f.deducoes, deducoesPct: percentual(f.deducoes, f.total),
+    receitaLiquida: f.receitaLiquida, rentabilidadePct: percentual(f.receitaLiquida, f.total),
+    semDado: f.total == null,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // CLASSIFICAÇÃO DE 4 ESTADOS
