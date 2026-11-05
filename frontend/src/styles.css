@@ -2682,7 +2682,12 @@ body {
 
 /* ---------- cartões de indicador ---------- */
 .padm-cards {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+  /* auto-fit (não auto-fill) + piso maior: menos cartões por linha, mais espaço
+     para valores grandes (ex.: "R$ 12.500.000,00", medido em 202px a 27px/780
+     — precisa de >=232px de cartão só pro texto, sem folga) nunca serem
+     cortados pelo overflow:hidden do .padm-card — ver .padm-card-valor abaixo.
+     260px dá ~28px de folga sobre o pior caso medido. */
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px; margin-bottom: 18px; align-items: stretch;
 }
 .padm-card {
@@ -2713,7 +2718,13 @@ body {
 .padm-card--critico .padm-card-ic { color: var(--bad); background: var(--bad-bg); }
 .padm-card--atencao .padm-card-ic { color: var(--warn); background: var(--warn-bg); }
 .padm-card--ok .padm-card-ic { color: var(--ok); background: var(--ok-bg); }
-.padm-card-valor { font-size: 27px; font-weight: 780; letter-spacing: -1px; line-height: 1.05; }
+.padm-card-valor {
+  font-size: 27px; font-weight: 780; letter-spacing: -1px; line-height: 1.05;
+  /* nunca corta: se mesmo com o piso de largura acima o valor não couber numa
+     linha (telas muito estreitas, zoom alto), quebra para a 2ª linha em vez
+     de ser cortado pelo overflow:hidden do .padm-card. */
+  overflow-wrap: anywhere; word-break: break-word;
+}
 .padm-card-barra { display: block; height: 4px; border-radius: 999px; background: var(--superficie-2); overflow: hidden; margin-top: 1px; }
 .padm-card-barra i { display: block; height: 100%; border-radius: 999px; background: var(--grad-verde); }
 .padm-card-nota { font-size: 11px; color: var(--cinza); line-height: 1.35; }
@@ -3031,6 +3042,7 @@ body {
 .padm-detalhe-titulo { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; }
 .padm-detalhe-titulo h2 { font-size: 21px; font-weight: 760; letter-spacing: -.5px; }
 .padm-detalhe-sub { font-size: 12.5px; color: var(--cinza); margin-top: 4px; }
+.padm-acoes-aux { margin-bottom: 20px; }
 
 .padm-aviso {
   display: flex; align-items: flex-start; gap: 10px; font-size: 12.5px; line-height: 1.5;
@@ -3500,6 +3512,29 @@ body {
   position: absolute; transform: translateX(-50%); font-size: 9.5px;
   color: var(--cinza-claro); font-variant-numeric: tabular-nums;
 }
+
+/* --- VISÃO GERAL DA REDE ------------------------------------------------- */
+.padm-filtros-rede {
+  display: flex; flex-wrap: wrap; align-items: end; gap: 10px;
+  margin-bottom: 16px; padding: 12px 14px; background: var(--card);
+  border: 1px solid var(--linha); border-radius: var(--raio-sm); box-shadow: var(--sombra-sm);
+}
+.padm-filtros-rede label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--cinza); font-weight: 600; }
+.padm-filtros-rede select { font: inherit; font-size: 12.5px; padding: 7px 9px; border: 1px solid var(--linha); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); min-width: 160px; }
+.padm-filtros-rede .padm-busca { margin: 0; flex: 1 1 220px; }
+.padm-rede-graficos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 780px) { .padm-rede-graficos { grid-template-columns: 1fr; } .padm-filtros-rede select, .padm-filtros-rede .padm-busca { min-width: 0; width: 100%; } }
+.padm-legenda-situacoes { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
+.padm-composicao-barra { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--superficie-2); width: 100%; }
+.padm-composicao-barra i { display: block; height: 100%; }
+.padm-ranking-modalidade + .padm-ranking-modalidade { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--linha); }
+.padm-ranking-modalidade h3 { font-size: 13.5px; font-weight: 740; margin: 0 0 10px; }
+.padm-ranking-duplo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.padm-ranking-duplo h4 { font-size: 11px; font-weight: 700; color: var(--cinza); text-transform: uppercase; letter-spacing: .3px; margin: 0 0 6px; }
+.padm-ranking-duplo .padm-rank-lista { background: var(--card); border: 1px solid var(--linha); border-radius: var(--raio-sm); box-shadow: var(--sombra-sm); list-style: none; margin: 0; padding: 0; }
+@media (max-width: 780px) { .padm-ranking-duplo { grid-template-columns: 1fr; } }
+.padm-tabela-subtit { font-size: 13px; font-weight: 720; margin: 20px 0 10px; }
+.padm-tabela-compacta td, .padm-tabela-compacta th { padding: 6px 10px; }
 
 @media (max-width: 720px) {
   .padm-fin-faixa, .padm-fin-destaque { gap: 14px; }

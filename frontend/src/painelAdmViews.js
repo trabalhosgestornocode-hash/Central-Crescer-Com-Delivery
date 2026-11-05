@@ -40,10 +40,19 @@ import {
   htmlCabecalhoCentral, htmlCardsSaude, htmlSaudeComunicacao, htmlFluxoComunicacao, htmlEmpresasCentral, htmlHistoricoCentral, htmlDetalheMensagem,
   htmlConfiguracoesCentral, htmlDisponibilidadeIfood, htmlResumoEmpresas, chipWhatsappEmpresa, htmlAbaTeste, htmlModalTeste, htmlAbasCentral, testeTerminou,
 } from "./painelAdmCentral.js";
+// Reaproveita a MESMA tabela/gráfico de Indicadores de Rentabilidade do
+// Dashboard iFood do tenant — nunca uma segunda implementação paralela de
+// metas/limite/status. `renderIndicadores` é puro no payload de
+// /unidades/:id/dashboard (mesmo formato de `obterMes`). Vem de um módulo
+// PRÓPRIO (sem a infra de realtime/agente/contexto do tenant) — nunca de
+// dashboardExecutivo.js diretamente, que arrasta dependências tenant-only.
+import { renderIndicadores } from "./dashboardExecutivoIndicadoresTabela.js";
+import { fmtPctRentabilidade } from "./dashboardExecutivoRentabilidade.js";
 
 /** Áreas gerenciais existentes e agenda oficial do desenvolvimento. */
 export const TELAS_PADM = [
-  { id: "visao-geral", label: "Visão Geral",          icone: "target" },
+  { id: "visao-geral-rede", label: "Visão Geral da Rede", icone: "activity" },
+  { id: "visao-geral", label: "Monitoramento Dashboard iFood", icone: "target" },
   { id: 'performance', label: 'Central de Performance', icone: 'target' },
   { id: "diario",      label: "Monitoramento Diário", icone: "calendar" },
   { id: "pendencias",  label: "Pendências",           icone: "alert-triangle" },
@@ -70,6 +79,17 @@ export function resetFiltrosDiario() {
  * é preferência de leitura do gestor, não dado do servidor: nenhuma dessas
  * escolhas refaz chamada de rede — tudo filtra/reagrupa o que já veio.
  */
+/**
+ * Filtros globais da VISÃO GERAL DA REDE — resolvidos no SERVIDOR (cada
+ * indicador/gráfico/ranking da resposta já vem filtrado). Mudar qualquer um
+ * refaz a chamada; `termo` é debatido antes de refazer (ver `ligarVisaoRede`).
+ */
+export const viewVisaoRede = { organizacaoId: "", unidadeId: "", modalidade: "", situacao: "", termo: "" };
+export function resetFiltrosVisaoRede() {
+  viewVisaoRede.organizacaoId = ""; viewVisaoRede.unidadeId = ""; viewVisaoRede.modalidade = "";
+  viewVisaoRede.situacao = ""; viewVisaoRede.termo = "";
+  ultimoDados.visaoRede = null;
+}
 export const viewEmpresas = { filtro: "todas", termo: "" };
 export const viewPendencias = { agrupar: "empresa", filtro: "todas", termo: "" };
 /** Busca (nome/e-mail) da tela "Rede de Associados" — preferência de leitura, não refaz rede.
@@ -102,6 +122,7 @@ export const viewRelatorios = {
 export const secoesPdf = secoesPadrao();
 export function resetSecoesPdf() { Object.assign(secoesPdf, secoesPadrao()); }
 export function resetFiltrosIdentificacao() {
+  resetFiltrosVisaoRede();
   viewEmpresas.filtro = "todas"; viewEmpresas.termo = "";
   viewPendencias.agrupar = "empresa"; viewPendencias.filtro = "todas"; viewPendencias.termo = "";
   viewMentorados.termo = "";
@@ -119,7 +140,7 @@ export function resetFiltrosIdentificacao() {
 // ---------------------------------------------------------------------------
 
 /** Ganchos injetados por painelAdm.js: navegação interna + acesso revogado. */
-let nav = { abrirEmpresa() {}, abrirUnidade() {}, irParaTela() {}, voltar() {}, mudarPeriodo() {}, recarregar() {}, aoAcessoRevogado: null };
+let nav = { abrirEmpresa() {}, abrirUnidade() {}, abrirCalendario() {}, irParaTela() {}, voltar() {}, mudarPeriodo() {}, recarregar() {}, aoAcessoRevogado: null };
 export function ligarNavegacao(ganchos) { nav = { ...nav, ...ganchos }; }
 
 /** Silhueta de carregamento por tipo de tela. */
@@ -129,7 +150,7 @@ const formaDe = (entrada) =>
 
 /**
  * Renderiza uma entrada da pilha de navegação do painel.
- * @param {{tipo: "tela"|"empresa"|"calendario", id?: string, empresaId?: string, empresaNome?: string, unidadeId?: string, unidadeNome?: string}} entrada
+ * @param {{tipo: "tela"|"empresa"|"unidade"|"calendario", id?: string, empresaId?: string, empresaNome?: string, unidadeId?: string, unidadeNome?: string}} entrada
  * @param {{api?: typeof painelAdmApi, mes?: string}} [opts] `mes` = período ativo (AAAA-MM)
  */
 export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral" }, opts = {}) {
@@ -163,6 +184,15 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
         unidadeNome: entrada.unidadeNome ?? dados?.unidade?.unidadeNome,
         motivos: dados?.motivos,
       });
+    } else if (entrada.tipo === "unidade") {
+      const dados = await api.dashboardOperacaoUnidade(entrada.unidadeId, mes);
+      v.innerHTML = htmlDetalheUnidade(dados, entrada);
+      ligarDetalheUnidade(dados, entrada);
+    } else if (entrada.id === "visao-geral-rede") {
+      ultimoDados.apiAtual = api;
+      ultimoDados.visaoRede = await api.visaoGeralRede({ mes, ...filtrosVisaoRedeParaApi() });
+      ultimoDados.mesAtivo = mes ?? null;
+      pintarVisaoRede();
     } else if (entrada.id === "diario") {
       const dados = await api.monitoramentoDiario(filtrosSemVazio(mes));
       v.innerHTML = htmlDiario(dados, filtrosDiario);
@@ -202,6 +232,7 @@ export async function renderViewPadm(entrada = { tipo: "tela", id: "visao-geral"
  * servidor, e o gestor não deve pagar latência para reordenar o que já viu.
  */
 const ultimoDados = {
+  visaoRede: null,
   empresas: null, pendencias: null, relatorio: null, evolucao: null, mesAtivo: null, apiAtual: null,
   lucratividade: null, semanaCarregada: null, mentorados: null,
   comunicacaoApi: null, comunicacaoEmpresas: null, comunicacaoDisponibilidade: null, comunicacaoAtivacao: null, comunicacaoResumo: null, comunicacaoOrgs: null, comunicacaoFila: null, comunicacaoHistorico: null, comunicacaoMensagens: null, comunicacaoConfig: null, comunicacaoTestes: null,
@@ -348,6 +379,335 @@ const filtrosSemVazio = (mes) => {
 };
 
 /** Faixa de contexto do período — repetida no topo de cada tela de dados. */
+// ---------------------------------------------------------------------------
+// VISÃO GERAL DA REDE — central de inteligência financeira cross-tenant.
+// Reaproveita os MESMOS indicadores (faturamento/deduções) e a mesma meta por
+// modelo logístico do Dashboard iFood; o motor mora em
+// `administrativo.visaoRede.js` (backend). Aqui só o CONSTRUTOR PURO de HTML
+// + a orquestração (buscar, filtrar no servidor, repintar).
+// ---------------------------------------------------------------------------
+
+/** 4 estados -> {classe, rotulo} dos chips já estilizados do painel. */
+const SITUACAO_REDE_UI = {
+  em_dia: { classe: "ok", rotulo: "Em dia" },
+  atencao: { classe: "atencao", rotulo: "Atenção" },
+  critica: { classe: "critico", rotulo: "Crítica" },
+  sem_dados: { classe: "muted", rotulo: "Sem dados" },
+};
+const chipSituacaoRede = (sit) => chip(SITUACAO_REDE_UI[sit?.chave] ?? SITUACAO_REDE_UI.sem_dados);
+const ROTULO_MODALIDADE = { marketplace: "Marketplace", full_service: "Full Service" };
+
+function filtrosVisaoRedeParaApi() {
+  const f = {};
+  if (viewVisaoRede.organizacaoId) f.organizacaoId = viewVisaoRede.organizacaoId;
+  if (viewVisaoRede.unidadeId) f.unidadeId = viewVisaoRede.unidadeId;
+  if (viewVisaoRede.modalidade) f.modalidade = viewVisaoRede.modalidade;
+  if (viewVisaoRede.situacao) f.situacao = viewVisaoRede.situacao;
+  if (viewVisaoRede.termo) f.busca = viewVisaoRede.termo;
+  return f;
+}
+
+/** Refaz a chamada ao servidor com os filtros atuais e repinta. Usado por todo select/busca da tela. */
+async function recarregarVisaoRede() {
+  const v = view();
+  if (!v) return;
+  const api = ultimoDados.apiAtual ?? painelAdmApi;
+  v.innerHTML = carregando("painel");
+  try {
+    ultimoDados.visaoRede = await api.visaoGeralRede({ mes: ultimoDados.mesAtivo, ...filtrosVisaoRedeParaApi() });
+    pintarVisaoRede();
+  } catch (e) {
+    if (e && e.status === 403) { nav.aoAcessoRevogado?.(e.message); return; }
+    v.innerHTML = erro(e);
+  }
+}
+
+function pintarVisaoRede() {
+  const v = view();
+  if (!v || !ultimoDados.visaoRede) return;
+  v.innerHTML = htmlVisaoGeralRede(ultimoDados.visaoRede);
+  ligarVisaoRede();
+}
+
+/** Explicação acessível de cada indicador do topo — exigência da Fase 2.1 (cada card explica o que mostra). */
+const AJUDA_CARD_REDE = {
+  faturamento: "Soma do faturamento de todas as unidades monitoradas no período (snapshot acumulado do mês).",
+  taxas: "Taxas e comissões do iFood (inclui taxa de entregadores), somadas de todas as unidades.",
+  servicos: "Serviços e promoções contratados/aplicados no período, somados de todas as unidades.",
+  deducoes: "Taxas/comissões + serviços/promoções + outros ajustes — tudo que reduz o faturamento bruto.",
+  percentual: "Deduções totais ÷ faturamento bruto da rede (nunca a média dos percentuais de cada loja).",
+  receita: "Faturamento bruto menos as deduções totais, mais ajustes a favor da loja.",
+  analisadas: "Unidades com módulo Dashboard iFood ativo e elegíveis no período selecionado.",
+  atencao: "Unidades com deduções acima do limite homologado do seu modelo, dentro da banda de alerta.",
+  criticas: "Unidades com deduções bem acima do limite — a banda de alerta foi excedida.",
+  evolucao: "Variação do faturamento da rede frente ao mesmo intervalo de dias do mês anterior.",
+};
+
+function htmlCardsRede(d) {
+  const r = d.rede ?? {};
+  const tomVar = tomVariacao(r.variacaoFaturamento);
+  return cards([
+    card({ label: "Faturamento bruto da rede", valor: fmtDinheiro(r.faturamento), icone: "banknote", nota: AJUDA_CARD_REDE.faturamento }),
+    card({ label: "Taxas e comissões", valor: fmtDinheiro(r.taxasComissoes), icone: "credit-card", nota: AJUDA_CARD_REDE.taxas }),
+    card({ label: "Serviços e promoções", valor: fmtDinheiro(r.servicosPromocoes), icone: "shopping-cart", nota: AJUDA_CARD_REDE.servicos }),
+    card({ label: "Deduções totais", valor: fmtDinheiro(r.deducoes), icone: "trending-down", nota: AJUDA_CARD_REDE.deducoes }),
+    card({ label: "% de deduções sobre faturamento", valor: fmtPct((r.deducoesPct ?? null) != null ? r.deducoesPct / 100 : null), icone: "pie-chart", nota: AJUDA_CARD_REDE.percentual }),
+    card({ label: "Receita após deduções", valor: fmtDinheiro(r.receitaLiquida), icone: "trending-up", nota: AJUDA_CARD_REDE.receita }),
+    card({ label: "Unidades analisadas", valor: fmtNum(r.unidadesMonitoradas), icone: "store", nota: AJUDA_CARD_REDE.analisadas }),
+    card({ label: "Unidades em atenção", valor: fmtNum(r.unidadesEmAtencao), icone: "alert-triangle", tom: (r.unidadesEmAtencao ?? 0) > 0 ? "atencao" : "neutro", nota: AJUDA_CARD_REDE.atencao }),
+    card({ label: "Unidades críticas", valor: fmtNum(r.unidadesCriticas), icone: "alert-triangle", tom: (r.unidadesCriticas ?? 0) > 0 ? "critico" : "neutro", nota: AJUDA_CARD_REDE.criticas }),
+    card({
+      label: "Evolução vs. mês anterior", valor: r.variacaoFaturamento != null ? `${tomVar.seta} ${fmtVariacao(r.variacaoFaturamento)}` : "—",
+      icone: "activity", tom: tomVar.classe === "ok" ? "ok" : tomVar.classe === "critico" ? "critico" : "neutro", nota: AJUDA_CARD_REDE.evolucao,
+    }),
+  ].join(""));
+}
+
+function htmlFiltrosRede(d) {
+  const empresasUnicas = [...new Map((d.unidades ?? []).map((u) => [u.organizacaoId, u.empresaNome])).entries()];
+  const unidadesDaEmpresa = (d.unidades ?? []).filter((u) => !viewVisaoRede.organizacaoId || u.organizacaoId === viewVisaoRede.organizacaoId);
+  const unidadesUnicas = [...new Map(unidadesDaEmpresa.map((u) => [u.unidadeId, u.nome])).entries()];
+  const opt = (v, atual, rotulo) => `<option value="${escapeHtml(v)}" ${v === atual ? "selected" : ""}>${escapeHtml(rotulo)}</option>`;
+  return `
+    <div class="padm-filtros-rede" role="group" aria-label="Filtros da Visão Geral da Rede">
+      <label>Empresa<select data-vr-filtro="organizacaoId">
+        ${opt("", viewVisaoRede.organizacaoId, "Todas as empresas")}
+        ${empresasUnicas.map(([id, nome]) => opt(id, viewVisaoRede.organizacaoId, nome ?? "—")).join("")}
+      </select></label>
+      <label>Unidade<select data-vr-filtro="unidadeId">
+        ${opt("", viewVisaoRede.unidadeId, "Todas as unidades")}
+        ${unidadesUnicas.map(([id, nome]) => opt(id, viewVisaoRede.unidadeId, nome ?? "—")).join("")}
+      </select></label>
+      <label>Modalidade<select data-vr-filtro="modalidade">
+        ${opt("", viewVisaoRede.modalidade, "Todas")}
+        ${opt("marketplace", viewVisaoRede.modalidade, "Marketplace")}
+        ${opt("full_service", viewVisaoRede.modalidade, "Full Service")}
+      </select></label>
+      <label>Situação<select data-vr-filtro="situacao">
+        ${opt("", viewVisaoRede.situacao, "Todas")}
+        ${opt("em_dia", viewVisaoRede.situacao, "Em dia")}
+        ${opt("atencao", viewVisaoRede.situacao, "Atenção")}
+        ${opt("critica", viewVisaoRede.situacao, "Crítica")}
+        ${opt("sem_dados", viewVisaoRede.situacao, "Sem dados")}
+      </select></label>
+      ${busca("vr-busca", "Buscar empresa ou unidade…", viewVisaoRede.termo)}
+    </div>`;
+}
+
+/** Barra de 4 segmentos (reaproveita a mesma ideia visual de `barraSaude`, com o 4º estado "sem dados"). */
+function barraSituacoesRede(dist) {
+  const total = (dist.em_dia ?? 0) + (dist.atencao ?? 0) + (dist.critica ?? 0) + (dist.sem_dados ?? 0);
+  if (!total) return vazio("Sem unidades no recorte atual", "", { tom: "muted", icone: "pie-chart" });
+  const p = (n) => `${((n / total) * 100).toFixed(2)}%`;
+  return `<span class="padm-saude" role="img" aria-label="${dist.critica} críticas, ${dist.atencao} em atenção, ${dist.em_dia} em dia, ${dist.sem_dados} sem dados">
+    ${dist.critica ? `<i class="padm-saude--critico" style="width:${p(dist.critica)}"></i>` : ""}
+    ${dist.atencao ? `<i class="padm-saude--atencao" style="width:${p(dist.atencao)}"></i>` : ""}
+    ${dist.em_dia ? `<i class="padm-saude--ok" style="width:${p(dist.em_dia)}"></i>` : ""}
+    ${dist.sem_dados ? `<i style="width:${p(dist.sem_dados)};background:var(--padm-cinza,#bbb)"></i>` : ""}
+  </span>`;
+}
+
+function graficoDistribuicaoSituacoes(dist) {
+  return secao({
+    titulo: "Distribuição de situações", icone: "pie-chart",
+    sub: "Quantas unidades estão em dia, em atenção, críticas ou sem dados — no recorte de empresa/unidade/modalidade atual (a situação não se filtra aqui, senão a barra sempre mostraria 100%).",
+    corpo: `
+      ${barraSituacoesRede(dist)}
+      <div class="padm-legenda-situacoes">
+        ${metrica(fmtNum(dist.em_dia), "em dia", "ok")}
+        ${metrica(fmtNum(dist.atencao), "em atenção", dist.atencao ? "atencao" : "")}
+        ${metrica(fmtNum(dist.critica), "críticas", dist.critica ? "critico" : "")}
+        ${metrica(fmtNum(dist.sem_dados), "sem dados", "")}
+      </div>`,
+  });
+}
+
+function graficoComposicaoDeducoes(c) {
+  const taxas = c.taxasComissoes ?? 0, servicos = c.servicosPromocoes ?? 0, outros = c.outrosAjustes ?? 0;
+  const total = taxas + servicos + outros;
+  if (!total) return secao({ titulo: "Composição das deduções", icone: "bar-chart", corpo: vazio("Dados insuficientes no período", "", { tom: "muted" }) });
+  const p = (n) => `${Math.max(0, (n / total) * 100).toFixed(2)}%`;
+  return secao({
+    titulo: "Composição das deduções", icone: "bar-chart",
+    sub: "Taxas/comissões e serviços/promoções, sem dupla contagem — a soma das partes é sempre igual ao total de deduções.",
+    corpo: `
+      <div class="padm-composicao-barra" role="img" aria-label="Taxas e comissões ${fmtDinheiro(taxas)}, serviços e promoções ${fmtDinheiro(servicos)}">
+        <i style="width:${p(taxas)};background:#8a1f2b" title="Taxas e comissões"></i>
+        <i style="width:${p(servicos)};background:#d98c2b" title="Serviços e promoções"></i>
+        ${outros ? `<i style="width:${p(outros)};background:#9aa0a6" title="Outros ajustes"></i>` : ""}
+      </div>
+      <div class="padm-legenda-situacoes">
+        ${metrica(fmtDinheiroCurto(taxas), "taxas e comissões", "")}
+        ${metrica(fmtDinheiroCurto(servicos), "serviços e promoções", "")}
+        ${outros ? metrica(fmtDinheiroCurto(outros), "outros ajustes", "") : ""}
+      </div>`,
+  });
+}
+
+/** Evolução mensal (até 6 meses) — barras de faturamento + tabela com os valores exatos (precisão que o SVG sozinho perderia). */
+function graficoEvolucaoMensal(serie) {
+  const pontos = (serie ?? []).filter((p) => p.unidadesComDado > 0);
+  if (pontos.length < 2) {
+    return secao({ titulo: "Evolução financeira", icone: "trending-up", corpo: vazio("Dados insuficientes para montar a evolução", "É preciso histórico de pelo menos 2 meses com lançamento.", { tom: "muted" }) });
+  }
+  const max = Math.max(...pontos.map((p) => p.faturamento ?? 0), 1);
+  const L = 100 / pontos.length;
+  const rotuloMes = (ym) => { const [, m] = ym.split("-"); return ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"][Number(m) - 1]; };
+  const barras = pontos.map((p, i) => {
+    const alt = Math.max(((p.faturamento ?? 0) / max) * 100, 2);
+    return `<rect x="${(i * L).toFixed(3)}%" y="${(100 - alt).toFixed(3)}" width="${(L * 0.6).toFixed(3)}%" height="${alt.toFixed(3)}" rx="1" class="padm-barra"><title>${escapeHtml(rotuloMes(p.mes))} · ${escapeHtml(fmtDinheiro(p.faturamento))} · deduções ${escapeHtml(fmtPct((p.deducoesPct ?? null) != null ? p.deducoesPct / 100 : null))}</title></rect>`;
+  }).join("");
+  const eixo = pontos.map((p, i) => `<span style="left:${(i * L + L / 2).toFixed(3)}%">${escapeHtml(rotuloMes(p.mes))}</span>`).join("");
+  const linhas = pontos.map((p) => `<tr><td>${escapeHtml(rotuloMes(p.mes))}</td><td>${escapeHtml(fmtDinheiro(p.faturamento))}</td><td>${escapeHtml(fmtDinheiro(p.deducoes))}</td><td>${escapeHtml(fmtPct((p.deducoesPct ?? null) != null ? p.deducoesPct / 100 : null))}</td></tr>`).join("");
+  return secao({
+    titulo: "Evolução financeira", icone: "trending-up",
+    sub: "Comparativo mensal de faturamento e deduções da rede (unidades do recorte atual).",
+    corpo: `
+      <div class="padm-grafico"><svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Evolução mensal do faturamento">${barras}</svg>
+        <div class="padm-grafico-eixo">${eixo}</div>
+      </div>
+      <table class="padm-tabela padm-tabela-compacta">
+        <thead><tr><th>Mês</th><th>Faturamento</th><th>Deduções</th><th>% deduções</th></tr></thead>
+        <tbody>${linhas}</tbody>
+      </table>`,
+  });
+}
+
+function linhaRankingRede(u) {
+  return `
+    <li class="padm-rank" data-padm-nav="unidade" data-id="${escapeHtml(u.unidadeId ?? "")}" data-nome="${escapeHtml(u.nome ?? "")}" tabindex="0" role="button">
+      <span class="padm-rank-id">
+        <b>${escapeHtml(u.nome ?? "—")}</b>
+        <small>${escapeHtml(u.empresaNome ?? "—")}</small>
+      </span>
+      <span class="padm-rank-val">
+        <b>${escapeHtml(fmtDinheiro(u.faturamento))}</b>
+        <small>${escapeHtml(fmtPct((u.deducoesPct ?? null) != null ? u.deducoesPct / 100 : null))} deduções${u.meta ? ` · limite ${escapeHtml(fmtPct(u.meta.limite / 100))}` : ""}</small>
+        ${u.impactoFinanceiroEstimado > 0 ? `<small class="padm-rank-cob">impacto estimado ${escapeHtml(fmtDinheiroCurto(u.impactoFinanceiroEstimado))}</small>` : ""}
+      </span>
+      ${chipSituacaoRede(u.situacaoFinanceira)}
+      <span class="padm-item-ir" aria-hidden="true">›</span>
+    </li>`;
+}
+
+function blocoRankingModalidade(modelo, bloco) {
+  return `
+    <div class="padm-ranking-modalidade">
+      <h3>${escapeHtml(ROTULO_MODALIDADE[modelo] ?? modelo)}</h3>
+      <div class="padm-ranking-duplo">
+        <div>
+          <h4>Melhores desempenhos</h4>
+          ${bloco.melhores.length ? `<ul class="padm-rank-lista">${bloco.melhores.map(linhaRankingRede).join("")}</ul>` : vazio("Sem dados suficientes", "", { tom: "muted" })}
+        </div>
+        <div>
+          <h4>Maior necessidade de atenção</h4>
+          ${bloco.atencao.length ? `<ul class="padm-rank-lista">${bloco.atencao.map(linhaRankingRede).join("")}</ul>` : vazio("Nenhuma loja em atenção ou crítica", "Todas as lojas desta modalidade estão em dia.", { tom: "ok" })}
+        </div>
+      </div>
+    </div>`;
+}
+
+function linhaTabelaEmpresaRede(e) {
+  return `
+    <tr data-padm-nav="empresa" data-id="${escapeHtml(e.organizacaoId ?? "")}" data-nome="${escapeHtml(e.empresaNome ?? "")}" tabindex="0" role="button">
+      <td>${escapeHtml(e.empresaNome ?? "—")}</td>
+      <td>${escapeHtml(ROTULO_MODALIDADE[e.modeloLogistico] ?? "—")}</td>
+      <td>${escapeHtml(fmtNum(e.unidadesMonitoradas))}</td>
+      <td>${escapeHtml(fmtDinheiro(e.faturamento))}</td>
+      <td>${escapeHtml(fmtDinheiro(e.deducoes))}</td>
+      <td>${escapeHtml(fmtPct((e.deducoesPct ?? null) != null ? e.deducoesPct / 100 : null))}</td>
+      <td>${e.impactoFinanceiroEstimado > 0 ? escapeHtml(fmtDinheiro(e.impactoFinanceiroEstimado)) : "—"}</td>
+      <td>${chipSituacaoRede(e.situacaoFinanceira)}</td>
+      <td><span class="padm-item-ir" aria-hidden="true">›</span></td>
+    </tr>`;
+}
+
+function linhaTabelaUnidadeRede(u) {
+  return `
+    <tr data-padm-nav="unidade" data-id="${escapeHtml(u.unidadeId ?? "")}" data-nome="${escapeHtml(u.nome ?? "")}" tabindex="0" role="button">
+      <td>${escapeHtml(u.empresaNome ?? "—")}</td>
+      <td>${escapeHtml(u.nome ?? "—")}</td>
+      <td>${escapeHtml(ROTULO_MODALIDADE[u.modeloLogistico] ?? "—")}</td>
+      <td>${escapeHtml(fmtDinheiro(u.faturamento))}${seloProvisorio({ incluiProvisorio: u.incluiProvisorio, provisorio: u.provisorio })}</td>
+      <td>${escapeHtml(fmtDinheiro(u.composicaoDeducoes?.taxasComissoes))}</td>
+      <td>${escapeHtml(fmtDinheiro(u.composicaoDeducoes?.servicosPromocoes))}</td>
+      <td>${escapeHtml(fmtDinheiro(u.deducoes))}</td>
+      <td>${escapeHtml(fmtPct((u.deducoesPct ?? null) != null ? u.deducoesPct / 100 : null))}</td>
+      <td>${u.meta ? escapeHtml(fmtPct(u.meta.limite / 100)) : "—"}</td>
+      <td>${u.folgaLimitePp != null ? escapeHtml(fmtVariacaoPP(u.folgaLimitePp / 100)) : "—"}</td>
+      <td>${chipSituacaoRede(u.situacaoFinanceira)}</td>
+      <td>${u.ultimaAtualizacao ? escapeHtml(fmtDataCurta(u.ultimaAtualizacao)) : "—"}</td>
+      <td><span class="padm-item-ir" aria-hidden="true">›</span></td>
+    </tr>`;
+}
+
+function htmlTabelaGerencialRede(d) {
+  const empresas = d.empresas ?? [];
+  const unidades = d.unidades ?? [];
+  return secao({
+    titulo: "Monitoramento por empresa e unidade", icone: "clipboard-list",
+    sub: "Linha por empresa × modalidade (soma ponderada das unidades) e, abaixo, cada unidade elegível individualmente. Clique numa linha para ver o detalhe.",
+    corpo: `
+      <div class="padm-tabela-wrap">
+        <table class="padm-tabela">
+          <thead><tr><th>Empresa</th><th>Modalidade</th><th>Unidades</th><th>Faturamento</th><th>Deduções</th><th>% deduções</th><th>Impacto estimado</th><th>Situação</th><th></th></tr></thead>
+          <tbody>${empresas.length ? empresas.map(linhaTabelaEmpresaRede).join("") : `<tr><td colspan="9">${vazio("Nenhuma empresa no recorte atual")}</td></tr>`}</tbody>
+        </table>
+      </div>
+      <h3 class="padm-tabela-subtit">Todas as unidades elegíveis (${fmtNum(unidades.length)})</h3>
+      <div class="padm-tabela-wrap">
+        <table class="padm-tabela">
+          <thead><tr><th>Empresa</th><th>Unidade</th><th>Modalidade</th><th>Faturamento</th><th>Taxas/comissões</th><th>Serviços/promoções</th><th>Deduções totais</th><th>% total</th><th>Referência (limite)</th><th>Desvio</th><th>Situação</th><th>Última atualização</th><th></th></tr></thead>
+          <tbody>${unidades.length ? unidades.map(linhaTabelaUnidadeRede).join("") : `<tr><td colspan="13">${vazio("Nenhuma unidade no recorte atual", "Ajuste os filtros acima.")}</td></tr>`}</tbody>
+        </table>
+      </div>`,
+  });
+}
+
+export function htmlVisaoGeralRede(d) {
+  if (!d || !d.rede || d.rede.unidadesMonitoradas === 0) {
+    return `
+      ${faixaPeriodo(d, "Rede analisada")}
+      ${htmlFiltrosRede(d ?? { unidades: [] })}
+      ${vazio("Nenhuma unidade monitorada neste recorte", "Verifique o período e os filtros selecionados — ou se há empresas com o módulo Dashboard iFood ativo.", { tom: "muted" })}`;
+  }
+  return `
+    ${faixaPeriodo(d, "Rede analisada")}
+    ${htmlFiltrosRede(d)}
+    ${htmlCardsRede(d)}
+    <div class="padm-rede-graficos">
+      ${graficoDistribuicaoSituacoes(d.distribuicaoSituacoes ?? {})}
+      ${graficoComposicaoDeducoes(d.composicaoDeducoes ?? {})}
+    </div>
+    ${graficoEvolucaoMensal(d.evolucaoMensal ?? [])}
+    ${secao({
+      titulo: "Ranking de lojas", icone: "target",
+      sub: "Marketplace e Full Service nunca são comparados diretamente — as estruturas financeiras são diferentes.",
+      corpo: Object.entries(d.rankingPorModalidade ?? {}).map(([modelo, bloco]) => blocoRankingModalidade(modelo, bloco)).join(""),
+    })}
+    ${htmlTabelaGerencialRede(d)}`;
+}
+
+/** Liga os filtros (selects + busca com pequeno debounce) e a navegação da Visão Geral da Rede. */
+let debounceBuscaRede = null;
+function ligarVisaoRede() {
+  ligarNav();
+  els("[data-vr-filtro]").forEach((sel) => sel.addEventListener("change", () => {
+    const campo = sel.dataset.vrFiltro;
+    viewVisaoRede[campo] = sel.value;
+    if (campo === "organizacaoId") viewVisaoRede.unidadeId = ""; // unidade pertence à empresa selecionada
+    recarregarVisaoRede();
+  }));
+  const inputBusca = el("#vr-busca");
+  inputBusca?.addEventListener("input", () => {
+    clearTimeout(debounceBuscaRede);
+    debounceBuscaRede = setTimeout(() => {
+      viewVisaoRede.termo = inputBusca.value;
+      recarregarVisaoRede();
+    }, 350);
+  });
+}
+
 function faixaPeriodo(d, rotulo = "Fechamento monitorado") {
   const ref = d?.d1 ?? d?.referencia;
   const fechado = d?.mesCorrente === false;
@@ -977,8 +1337,146 @@ export function htmlDetalheEmpresa(d) {
     ${faixaPeriodo(d)}
     ${pior}
     ${topo}
+    ${secFinanceiroEmpresa(d?.financeiro)}
     ${secPendentes}
     ${secEmDia}`;
+}
+
+/**
+ * Bloco financeiro do detalhe de empresa — mesmos dados/fórmulas da Visão
+ * Geral da Rede, só recortados por empresa (zero cálculo novo). Some quando
+ * `financeiro` vem null (empresa fora do módulo financeiro) — nunca inventa
+ * um número para preencher a seção.
+ */
+function secFinanceiroEmpresa(fin) {
+  if (!fin) return "";
+  const r = fin.rede ?? {};
+  return secao({
+    titulo: "Financeiro do mês", icone: "banknote",
+    sub: "Mesmos dados e fórmulas da Visão Geral da Rede, recortados para esta empresa.",
+    corpo: `
+      ${cards([
+        card({ label: "Faturamento bruto", valor: fmtDinheiro(r.faturamento), icone: "banknote" }),
+        card({ label: "Deduções totais", valor: fmtDinheiro(r.deducoes), icone: "trending-down" }),
+        card({ label: "% de deduções", valor: fmtPct((r.deducoesPct ?? null) != null ? r.deducoesPct / 100 : null), icone: "pie-chart" }),
+        card({ label: "Receita após deduções", valor: fmtDinheiro(r.receitaLiquida), icone: "trending-up" }),
+      ].join(""))}
+      <ul class="padm-lista">${(fin.unidades ?? []).map(linhaUnidadeFinanceiraDetalhe).join("")}</ul>`,
+  });
+}
+
+function linhaUnidadeFinanceiraDetalhe(u) {
+  return `
+    <li class="padm-item" data-padm-nav="unidade" data-id="${escapeHtml(u.unidadeId ?? "")}" data-nome="${escapeHtml(u.nome ?? "")}" tabindex="0" role="button">
+      <span class="padm-item-txt">
+        <b>${escapeHtml(u.nome ?? "—")}</b>
+        <small>${escapeHtml(fmtDinheiro(u.faturamento))} · ${escapeHtml(fmtPct((u.deducoesPct ?? null) != null ? u.deducoesPct / 100 : null))} deduções</small>
+        ${u.impactoFinanceiroEstimado > 0 ? `<small class="padm-rank-cob">impacto estimado ${escapeHtml(fmtDinheiroCurto(u.impactoFinanceiroEstimado))}</small>` : ""}
+      </span>
+      <span class="padm-item-tags">${chipSituacaoRede(u.situacaoFinanceira)}</span>
+      <span class="padm-item-dados">
+        <span class="padm-dado"><small>últ. atualização</small><b>${u.ultimaAtualizacao ? escapeHtml(fmtDataCurta(u.ultimaAtualizacao)) : "—"}</b></span>
+      </span>
+      <span class="padm-item-ir" aria-hidden="true">›</span>
+    </li>`;
+}
+
+// ===========================================================================
+// 5c. DETALHE DA UNIDADE — Dashboard iFood COMPLETO (admin, somente leitura)
+// ===========================================================================
+//
+// Consome GET /unidades/:id/dashboard, que reaproveita por chamada direta de
+// função o MESMO `dashboardExecutivo.service.js#obterMes` do tenant — os
+// valores, metas, limites e status aqui são EXATAMENTE os que o franqueado
+// vê no Dashboard iFood, nunca recalculados. A tabela de Indicadores de
+// Rentabilidade reaproveita a função de apresentação do próprio Dashboard
+// iFood (`renderIndicadores`, importada de
+// dashboardExecutivoIndicadoresTabela.js) — zero marcação paralela. O
+// calendário continua acessível como elemento AUXILIAR
+// (botão abaixo), nunca a única coisa que o clique abre.
+
+/** Mesmo mapeamento visual de `CLASSE_STATUS` (dashboardExecutivo.js), só
+ * traduzido para o vocabulário de `tom` do card do Painel Administrativo
+ * (ok/atencao/neutro) — é só COR por status, a classificação em si
+ * (chave/label) é a mesma `statusIndicadorRentabilidade` do backend, nunca
+ * recalculada aqui. `card()` escapa `nota` como texto puro (nunca HTML), por
+ * isso o status aqui é só o rótulo — a cor fica a cargo de `tom`. */
+const TOM_CARD_STATUS_INDICADOR = { dentro_da_meta: "ok", dentro_do_limite: "ok", atencao: "atencao", sem_dados: "neutro" };
+
+function cardIndicadorOperacao({ label, valor, percentual, status, naoAplicavel, icone }) {
+  if (naoAplicavel) return card({ label, valor: "Não se aplica", icone, tom: "" });
+  const rotuloStatus = status?.label ?? "Dados insuficientes";
+  const nota = percentual != null ? `${fmtPctRentabilidade(percentual)} do faturamento · ${rotuloStatus}` : rotuloStatus;
+  return card({ label, valor, nota, tom: TOM_CARD_STATUS_INDICADOR[status?.chave] ?? "neutro", icone });
+}
+
+export function htmlDetalheUnidade(d, entrada = {}) {
+  const u = d?.unidade ?? entrada ?? {};
+  const dash = d?.dashboard ?? {};
+  const cabecalho = cabecalhoDetalhe({
+    voltar: "Voltar",
+    titulo: u.unidadeNome ?? entrada.unidadeNome ?? "Unidade",
+    selo: u.empresaNome ? chip({ classe: "muted", rotulo: u.empresaNome }) : "",
+    sub: `Dashboard iFood completo · ${fmtMesLongo(d?.periodo?.ym)}${dash.modeloLogisticoRotulo ? ` · ${dash.modeloLogisticoRotulo}` : ""}`,
+  });
+
+  const auxiliares = `
+    <div class="padm-acoes-aux">
+      <button type="button" class="btn btn-ghost btn-sm" data-padm-nav="calendario"
+        data-id="${escapeHtml(u.unidadeId ?? "")}" data-nome="${escapeHtml(u.unidadeNome ?? "")}">
+        ${icon("calendar", { size: 14 })} Ver calendário de lançamentos
+      </button>
+    </div>`;
+
+  if (dash.agregado || !dash.cards) {
+    return `${cabecalho}${auxiliares}${vazio(
+      "Sem Dashboard iFood para esta unidade",
+      "Esta unidade ainda não tem dados financeiros suficientes para o período selecionado.",
+      { tom: "muted", icone: "info" },
+    )}`;
+  }
+
+  const c = dash.cards;
+  const cardsPrincipais = cards([
+    card({ label: "Faturamento", valor: fmtDinheiro(c.faturamento?.valor), icone: "banknote" }),
+    card({ label: "Receita líquida", valor: fmtDinheiro(c.receitaLiquida?.valor), nota: c.receitaLiquida?.percentual != null ? `${fmtPctRentabilidade(c.receitaLiquida.percentual)} do faturamento` : "", icone: "trending-up" }),
+    card({ label: "Ticket médio", valor: fmtDinheiro(c.ticketMedio?.valor), icone: "receipt" }),
+    card({ label: "Pedidos (iFood)", valor: fmtNum(dash.desempenhoOperacional?.acumuladoQtdVendas), icone: "shopping-cart" }),
+    card({ label: "Novos clientes", valor: fmtNum(c.novosClientes?.valor), icone: "users" }),
+  ].join(""));
+
+  const cardsIndicadores = cards([
+    cardIndicadorOperacao({ label: "Taxas e comissões", valor: fmtDinheiro(c.taxasComissoes?.valor), percentual: c.taxasComissoes?.percentual, status: c.taxasComissoes?.status, icone: "tag" }),
+    cardIndicadorOperacao({ label: "Serviços e promoções", valor: fmtDinheiro(c.servicosPromocoes?.valor), percentual: c.servicosPromocoes?.percentual, status: c.servicosPromocoes?.status, icone: "tag" }),
+    cardIndicadorOperacao({ label: "Taxas de entregadores", valor: fmtDinheiro(c.taxasEntregadores?.valor), percentual: c.taxasEntregadores?.percentual, status: c.taxasEntregadores?.status, naoAplicavel: c.taxasEntregadores?.naoAplicavel, icone: "truck" }),
+    cardIndicadorOperacao({ label: "Total de deduções", valor: fmtDinheiro(c.totalDeducoes?.valor), percentual: c.totalDeducoes?.percentual, status: c.totalDeducoes?.status, icone: "trending-down" }),
+  ].join(""));
+
+  const projecao = dash.projecao ? secao({
+    titulo: "Projeção do mês", icone: "trending-up",
+    sub: `Confiabilidade: ${escapeHtml(dash.projecao.confiabilidade ?? "—")}${dash.projecao.parcial ? " · mês em andamento" : ""}`,
+    corpo: cards([
+      card({ label: "Projeção de faturamento", valor: fmtDinheiro(dash.projecao.projecaoMensal), icone: "trending-up" }),
+      card({ label: "Média diária", valor: fmtDinheiro(dash.projecao.mediaDiaria), icone: "bar-chart" }),
+      card({ label: "Dias resolvidos", valor: `${fmtNum(dash.projecao.diasResolvidos)} / ${fmtNum(dash.projecao.diasPrevistos)}`, icone: "calendar" }),
+    ].join("")),
+  }) : "";
+
+  return `
+    ${cabecalho}
+    ${auxiliares}
+    ${secao({ titulo: "Dashboard iFood do mês", icone: "banknote", corpo: cardsPrincipais })}
+    ${secao({ titulo: "Composição das deduções", icone: "pie-chart", corpo: cardsIndicadores })}
+    ${projecao}
+    <div id="padm-unidade-indicadores"></div>`;
+}
+
+function ligarDetalheUnidade(d) {
+  ligarNav();
+  el('[data-padm-acao="voltar"]')?.addEventListener("click", () => nav.voltar?.());
+  const box = el("#padm-unidade-indicadores");
+  const dash = d?.dashboard;
+  if (box && dash && !dash.agregado && dash.indicadoresRentabilidade) renderIndicadores(box, dash);
 }
 
 /** Linha de unidade no detalhe — mostra a frase operacional, não só o enum. */
@@ -2868,6 +3366,7 @@ function ligarNav() {
       const tipo = n.dataset.padmNav;
       if (tipo === "empresa") nav.abrirEmpresa(n.dataset.id, n.dataset.nome);
       else if (tipo === "unidade") nav.abrirUnidade(n.dataset.id, n.dataset.nome);
+      else if (tipo === "calendario") nav.abrirCalendario(n.dataset.id, n.dataset.nome);
     };
     n.addEventListener("click", ir);
     n.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ir(); } });

@@ -47,11 +47,13 @@ administrativoRouter.use('/performance', performanceRouter);
 // desbloqueios logo abaixo — POST/DELETE que concedem/revogam permissão de
 // lançamento de UM dia, sem tocar em nenhum dado operacional.)
 administrativoRouter.get("/visao-geral", c.visaoGeral);
+administrativoRouter.get("/visao-geral-rede", c.visaoGeralRede);
 administrativoRouter.get("/monitoramento-diario", c.monitoramentoDiario);
 administrativoRouter.get("/pendencias", c.pendencias);
 administrativoRouter.get("/empresas", c.empresas);            // antes de /empresas/:id
 administrativoRouter.get("/empresas/:organizacaoId", c.detalheEmpresa);
 administrativoRouter.get("/unidades/:unidadeId/calendario", c.calendarioUnidade);
+administrativoRouter.get("/unidades/:unidadeId/dashboard", c.dashboardOperacaoUnidade);
 
 // ---- Comunicação/WhatsApp (Checkpoint H.3-A) — visualização + configuração
 // segura. A ÚNICA escrita (`PUT .../configuracao`) NUNCA habilita envio: o

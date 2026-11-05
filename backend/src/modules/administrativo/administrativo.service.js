@@ -33,12 +33,18 @@ import {
   semanaDe, deslocarSemana, primeiroDiaDoMes,
   lucratividadeDaUnidade, agregarRede, folgaLimite,
 } from "./administrativo.lucratividade.js";
+import {
+  classificarAtencaoFinanceira, impactoFinanceiroEstimado,
+  composicaoDeducoesDoBloco, somarComposicaoDeducoes,
+  filtrarUnidadesRede, ordenarPrioridadeIntervencao, contagemPorSituacao,
+} from "./administrativo.visaoRede.js";
 import { escolherMetas } from "../dashboard-executivo/dashboardExecutivo.metas.service.js";
-import { statusIndicadorRentabilidade } from "../dashboard-executivo/dashboardExecutivo.calc.js";
+import { statusIndicadorRentabilidade, MODELOS_LOGISTICOS, ROTULO_MODELO } from "../dashboard-executivo/dashboardExecutivo.calc.js";
 import {
   montarLinhaDoTempo, segmentosDoPeriodo, estadoDoPeriodo, rotuloDoModelo, trocasDeLinhas,
 } from "../dashboard-executivo/dashboardExecutivo.modeloTemporal.js";
 import { comporMetas } from "../dashboard-executivo/dashboardExecutivo.periodoMisto.js";
+import { obterMes as obterMesDashboardExecutivo } from "../dashboard-executivo/dashboardExecutivo.service.js";
 import {
   carregarDatasLiberadas, listarDesbloqueios, criarDesbloqueio, revogarDesbloqueio,
   obterDesbloqueioAtivoPorId, MOTIVOS_VALIDOS, MOTIVOS_DESBLOQUEIO,
@@ -340,6 +346,27 @@ export async function detalheEmpresa({ organizacaoId, hojeIso, mes } = {}, deps 
   const cons = consolidarOperacao(daEmpresa);
   const resumoEmpresa = consolidarEmpresas(daEmpresa)[0] ?? null;
 
+  // Financeiro (reaproveita 100% a Visão Geral da Rede, só recortada por
+  // empresa) — aditivo: se faltar módulo financeiro para esta empresa, ou o
+  // motor falhar por qualquer razão, o detalhe OPERACIONAL continua
+  // funcionando normalmente (nunca deixa o drill-down quebrar por causa do bloco novo).
+  const financeiro = await (async () => {
+    try {
+      const r = await visaoGeralRede({ hojeIso: hoje, mes, organizacaoId: orgId }, deps);
+      if (!r.rede?.unidadesMonitoradas) return null;
+      return {
+        rede: r.rede,
+        composicaoDeducoes: r.composicaoDeducoes,
+        unidades: r.unidades.map((u) => ({
+          unidadeId: u.unidadeId, nome: u.nome,
+          faturamento: u.faturamento, deducoes: u.deducoes, deducoesPct: u.deducoesPct,
+          meta: u.meta, situacaoFinanceira: u.situacaoFinanceira,
+          impactoFinanceiroEstimado: u.impactoFinanceiroEstimado, ultimaAtualizacao: u.ultimaAtualizacao,
+        })),
+      };
+    } catch { return null; }
+  })();
+
   return {
     monitor: frota.monitor,
     dataReferencia: frota.hojeIso,
@@ -348,6 +375,7 @@ export async function detalheEmpresa({ organizacaoId, hojeIso, mes } = {}, deps 
     d1: frota.referencia,
     organizacao: { organizacaoId: org.organizacaoId, nome: org.nome, status: org.status, criadaEm: org.criadaEm },
     resumo: resumoEmpresa,
+    financeiro,
     consolidado: {
       criticas: cons.criticas, atencao: cons.atencao, emDia: cons.emDia,
       conformidadeD1: cons.d1.taxa, conformidadeMes: cons.conformidadeMes.taxa,
@@ -467,6 +495,53 @@ export async function calendarioUnidade({ unidadeId, mes, hojeIso } = {}, deps =
       liberacaoAtiva: ativaPorData.get(d.data) ?? null,
       liberacoesHistorico: historicoPorData.get(d.data) ?? [],
     })),
+  };
+}
+
+/**
+ * Dashboard iFood COMPLETO de uma unidade (cards, Indicadores de
+ * Rentabilidade, projeção, diagnóstico, evolução) — para o clique em
+ * empresa/unidade na Visão Geral da Rede abrir a MESMA leitura que o
+ * franqueado vê no Dashboard iFood, nunca uma segunda implementação paralela.
+ *
+ * Reaproveita `dashboardExecutivo.service.js#obterMes` POR CHAMADA DIRETA DE
+ * FUNÇÃO (nunca a rota HTTP tenant-scoped, que exige `req.tenant` e não
+ * existe no mundo administrativo) — `unidadeIdSessao: null` evita a checagem
+ * "só a própria unidade da sessão" (não há sessão de unidade aqui) e
+ * `resolverUnidadeAlvo` ainda confere, no servidor, que a unidade pedida
+ * pertence à `organizacaoId` resolvida abaixo — nenhuma regra de acesso é
+ * pulada, só adaptada ao mundo cross-tenant. Zero fórmula, meta ou
+ * classificação de status recalculada aqui: `obterMes` já devolve
+ * `cards`/`indicadoresRentabilidade` prontos (mesma `statusIndicadorRentabilidade`
+ * e `saldoMeta` do Dashboard iFood do tenant).
+ * @param {{unidadeId: string, mes?: string, hojeIso?: string}} params
+ * @param {{supabase?: object, obterMesDashboardExecutivo?: Function}} [deps]
+ */
+export async function detalheOperacaoUnidade({ unidadeId, mes, hojeIso } = {}, deps = {}) {
+  const uniId = v.uuid(unidadeId, "Unidade");
+  const hoje = hojeIso ?? hojeIsoBrasil();
+  const per = alvoDoPeriodo(mes, hoje);
+  const [ano, numMes] = per.periodo.split("-").map(Number);
+
+  // Mesmo universo monitorado do calendário/Visão Geral da Rede — nunca um
+  // escopo de elegibilidade diferente para a mesma unidade.
+  const elegiveis = await listarUnidadesElegiveis({ moduloId: MONITOR.modulo }, deps);
+  const alvo = elegiveis.find((u) => u.unidadeId === uniId);
+  if (!alvo) throw ApiError.notFound("Unidade não encontrada ou fora do monitoramento.");
+
+  const obterMesFn = deps.obterMesDashboardExecutivo ?? obterMesDashboardExecutivo;
+  const dashboard = await obterMesFn({
+    organizacaoId: alvo.organizacaoId, unidadeIdSessao: null, unidadeIdSolicitado: uniId,
+    mes: numMes, ano,
+  });
+
+  return {
+    unidade: {
+      unidadeId: alvo.unidadeId, unidadeNome: alvo.unidadeNome,
+      organizacaoId: alvo.organizacaoId, empresaNome: alvo.empresaNome,
+    },
+    periodo: { mes: numMes, ano, ym: per.periodo, mesCorrente: per.mesCorrente },
+    dashboard,
   };
 }
 
@@ -1258,4 +1333,301 @@ function redeVazia() {
     receitaLiquida: null, receitaLiquidaAnterior: null, variacaoReceitaLiquida: null,
     rentabilidadeMediaRede: null, rentabilidadeMediaRedeAnterior: null, variacaoRentabilidadeMediaPp: null,
   };
+}
+
+// ===========================================================================
+// VISÃO GERAL DA REDE — GET /administrativo/visao-geral-rede
+// ===========================================================================
+//
+// Central de inteligência gerencial: faturamento, deduções (taxas/comissões +
+// serviços/promoções) e a classificação de atenção financeira (EM_DIA /
+// ATENÇÃO / CRÍTICA / SEM_DADOS) de TODA a frota monitorada, por mês.
+//
+// NENHUMA fórmula nova de faturamento/dedução/receita: tudo vem de
+// `lucratividadeDaUnidade` (o mesmo motor usado pela Lucratividade semanal —
+// aqui chamado com `inicio`/`fim` = o MÊS inteiro em vez de um bloco de 7
+// dias). A classificação de 4 estados e o impacto financeiro estimado vivem
+// em `administrativo.visaoRede.js`, sobre o MESMO par (metaIdeal, limite) por
+// modelo logístico que o Dashboard iFood já usa.
+const pad2 = (x) => String(x).padStart(2, "0");
+const ymDe = (ano, mes) => `${ano}-${pad2(mes)}`;
+
+/** Recorte [inicio..fim] de um mês-calendário (ano, mes 1-based), cortado em `ateDataIso` quando o mês é o corrente. */
+function janelaDoMes(ano, mes, { corrente, dataAlvo }) {
+  const dias = diasDoMes(ano, mes);
+  return { inicio: dias[0], fim: corrente ? dataAlvo : dias[dias.length - 1] };
+}
+
+function visaoRedeVazia(per) {
+  return {
+    monitor: MONITOR.chave,
+    periodo: per.periodo,
+    mesCorrente: per.mesCorrente,
+    filtros: { organizacaoId: null, unidadeId: null, modalidade: null, situacao: null, busca: null },
+    rede: redeVazia(),
+    distribuicaoSituacoes: { sem_dados: 0, em_dia: 0, atencao: 0, critica: 0 },
+    composicaoDeducoes: { taxasComissoes: null, servicosPromocoes: null, outrosAjustes: null },
+    evolucaoMensal: [],
+    rankingPorModalidade: {
+      marketplace: { melhores: [], atencao: [] },
+      full_service: { melhores: [], atencao: [] },
+    },
+    unidades: [],
+    empresas: [],
+  };
+}
+
+/**
+ * @param {{ mes?: string, organizacaoId?: string, unidadeId?: string, modalidade?: string, situacao?: string, busca?: string, hojeIso?: string }} p
+ */
+export async function visaoGeralRede({
+  hojeIso, mes, organizacaoId, unidadeId, modalidade, situacao, busca,
+} = {}, deps = {}) {
+  const hoje = hojeIso ?? hojeIsoBrasil();
+  const per = alvoDoPeriodo(mes, hoje);
+  const orgFiltro = organizacaoId ? v.uuid(organizacaoId, "Empresa") : null;
+  const uniFiltro = unidadeId ? v.uuid(unidadeId, "Unidade") : null;
+  const modFiltro = modalidade ? v.umDe(modalidade, "Modalidade", MODELOS_LOGISTICOS) : null;
+  const sitFiltro = situacao ? v.umDe(situacao, "Situação", ["em_dia", "atencao", "critica", "sem_dados"]) : null;
+
+  const frotaBase = await listarUnidadesElegiveis({ moduloId: MONITOR.modulo }, deps);
+  if (!frotaBase.length) return visaoRedeVazia(per);
+
+  const [ano, numMes] = per.periodo.split("-").map(Number);
+  const { inicio: inicioMes, fim: fimMes } = janelaDoMes(ano, numMes, { corrente: per.mesCorrente, dataAlvo: per.dataAlvo });
+  const antCal = mesAnterior(ano, numMes);
+  const diasMesAnterior = diasDoMes(antCal.ano, antCal.mes);
+  const inicioMesAnterior = diasMesAnterior[0];
+  const fimMesAnterior = diaEquivalenteNoMesAnterior(fimMes, diasMesAnterior);
+
+  // Janela larga para a EVOLUÇÃO MENSAL (até 6 meses, incluindo o atual) — UMA
+  // query só; o recorte por mês é feito em memória (igual ao bloco semanal).
+  const MESES_EVOLUCAO = 6;
+  const mesesEvolucao = [];
+  { let a = ano, m = numMes;
+    for (let i = 0; i < MESES_EVOLUCAO; i++) { mesesEvolucao.unshift({ ano: a, mes: m }); const p = mesAnterior(a, m); a = p.ano; m = p.mes; } }
+  const desdeEvolucao = diasDoMes(mesesEvolucao[0].ano, mesesEvolucao[0].mes)[0];
+
+  const orgIds = [...new Set(frotaBase.map((u) => u.organizacaoId))];
+  const [porUnidade, metasLinhas, trocasPorUnidade] = await Promise.all([
+    carregarLancamentosDaFrota({
+      unidadeIds: frotaBase.map((u) => u.unidadeId), desdeIso: desdeEvolucao, ateIso: fimMes,
+    }, deps),
+    carregarMetasIndicadores({ organizacaoIds: orgIds }, deps),
+    carregarTrocasModeloDaFrota({ unidadeIds: frotaBase.map((u) => u.unidadeId) }, deps),
+  ]);
+
+  // Só linhas DIÁRIAS entram (ver cabeçalho de administrativo.lucratividade.js).
+  const diariasPorUnidade = new Map(frotaBase.map((u) => [
+    u.unidadeId, (porUnidade.get(u.unidadeId) ?? []).filter((r) => r.origem_lancamento !== "distribuicao_mensal"),
+  ]));
+
+  const unidades = frotaBase.map((u) => {
+    const diarias = diariasPorUnidade.get(u.unidadeId) ?? [];
+    const doMes = (ym) => diarias.filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
+    const linhasAtual = doMes(per.periodo);
+    const linhasAnteriores = doMes(ymDe(antCal.ano, antCal.mes));
+    // Data REAL do lançamento mais recente do mês — nunca inventada; null quando a unidade não tem nenhum lançamento no período.
+    const ultimaAtualizacao = linhasAtual.length
+      ? linhasAtual.reduce((max, r) => (String(r.data_lancamento) > max ? String(r.data_lancamento) : max), String(linhasAtual[0].data_lancamento))
+      : null;
+
+    const atual = lucratividadeDaUnidade(linhasAtual, { inicio: inicioMes, fim: fimMes, ateDataIso: fimMes });
+    const anterior = lucratividadeDaUnidade(linhasAnteriores, { inicio: inicioMesAnterior, fim: fimMesAnterior, ateDataIso: fimMesAnterior });
+    const composicao = composicaoDeducoesDoBloco(linhasAtual, inicioMes, fimMes);
+
+    // Modelo VIGENTE no mês (linha do tempo de vigências) — mesmo padrão de
+    // `lucratividadeSemanal`. Mês que atravessa uma troca = "misto": meta
+    // composta, ponderada pelo faturamento de cada regime.
+    const linhaDoTempo = u.modeloLogistico
+      ? montarLinhaDoTempo({ modeloAtual: u.modeloLogistico, trocas: trocasDeLinhas(trocasPorUnidade.get(u.unidadeId)) })
+      : null;
+    const segmentos = linhaDoTempo && fimMes >= inicioMes ? segmentosDoPeriodo(linhaDoTempo, inicioMes, fimMes) : [];
+    const estado = segmentos.length ? estadoDoPeriodo(segmentos) : { tipo: u.modeloLogistico ?? null, misto: false };
+    const metasDoModelo = (m) => escolherMetas(
+      metasLinhas.filter((r) => r.modelo_logistico === m), { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId },
+    );
+    const modelo = estado.tipo ?? null;
+    let metaDed;
+    if (estado.misto) {
+      const partes = segmentos.map((s) => ({
+        modelo: s.modelo,
+        peso: lucratividadeDaUnidade(linhasAtual, { inicio: s.inicio, fim: s.fim, ateDataIso: fimMes }).faturamento ?? 0,
+        metas: metasDoModelo(s.modelo),
+      }));
+      metaDed = comporMetas(partes, ["total_deducoes"]).total_deducoes ?? null;
+    } else {
+      metaDed = modelo ? (metasDoModelo(modelo).total_deducoes ?? null) : null;
+    }
+
+    const meta = metaDed ? { metaIdeal: R2(metaDed.metaIdeal), limite: R2(metaDed.limite) } : null;
+    const situacaoFinanceira = classificarAtencaoFinanceira(atual.deducoesPct, meta);
+
+    return {
+      unidadeId: u.unidadeId,
+      nome: u.unidadeNome,
+      empresaNome: u.empresaNome,
+      organizacaoId: u.organizacaoId,
+      cidade: null, // sem coluna de cidade cadastrada hoje — ver limitações no relatório final
+      ultimaAtualizacao,
+      modeloLogistico: modelo,
+      modeloLogisticoRotulo: modelo ? (ROTULO_MODELO[modelo] ?? modelo) : null,
+
+      faturamento: R2(atual.faturamento),
+      confirmado: R2(atual.confirmado),
+      provisorio: R2(atual.provisorio),
+      incluiProvisorio: atual.incluiProvisorio,
+      faturamentoAnterior: R2(anterior.faturamento),
+      variacaoFaturamento: variacao(atual.faturamento, anterior.faturamento),
+
+      deducoes: R2(atual.deducoes),
+      deducoesPct: R2(atual.deducoesPct),
+      composicaoDeducoes: {
+        taxasComissoes: R2(composicao.taxasComissoes),
+        servicosPromocoes: R2(composicao.servicosPromocoes),
+        outrosAjustes: R2(composicao.outrosAjustes),
+      },
+      meta,
+      folgaLimitePp: R2(folgaLimite(atual.deducoesPct, metaDed)),
+
+      receitaLiquida: R2(atual.receitaLiquida),
+      rentabilidadePct: R2(atual.rentabilidadePct),
+
+      situacaoFinanceira,
+      impactoFinanceiroEstimado: impactoFinanceiroEstimado(atual.faturamento, atual.deducoesPct, meta),
+
+      semDado: atual.semDado,
+      _anterior: { faturamento: R2(anterior.faturamento), deducoes: R2(anterior.deducoes), receitaLiquida: R2(anterior.receitaLiquida), semDado: anterior.semDado },
+    };
+  });
+
+  // ---- universo dos CARDS/distribuição: empresa+unidade+modalidade, NUNCA a
+  // própria situação (senão a distribuição mostraria sempre 100% num balde). ----
+  const universoCards = filtrarUnidadesRede(unidades, { organizacaoId: orgFiltro, unidadeId: uniFiltro, modalidade: modFiltro });
+  // ---- universo da TABELA/ranking: todos os filtros, inclusive situação. ----
+  const universoTabela = filtrarUnidadesRede(unidades, { organizacaoId: orgFiltro, unidadeId: uniFiltro, modalidade: modFiltro, situacao: sitFiltro, busca });
+
+  const redeAtual = agregarRede(universoCards.map((u) => ({ faturamento: u.faturamento, deducoes: u.deducoes, receitaLiquida: u.receitaLiquida, semDado: u.semDado })));
+  const redeAnterior = agregarRede(universoCards.map((u) => u._anterior));
+  const composicaoRede = somarComposicaoDeducoes(universoCards.map((u) => u.composicaoDeducoes));
+  const distribuicaoSituacoes = contagemPorSituacao(universoCards);
+  const orgIdsCards = new Set(universoCards.map((u) => u.organizacaoId));
+
+  const rede = {
+    empresasMonitoradas: orgIdsCards.size,
+    unidadesMonitoradas: universoCards.length,
+    unidadesEmAtencao: distribuicaoSituacoes.atencao,
+    unidadesCriticas: distribuicaoSituacoes.critica,
+    faturamento: R2(redeAtual.faturamento),
+    faturamentoAnterior: R2(redeAnterior.faturamento),
+    variacaoFaturamento: variacao(redeAtual.faturamento, redeAnterior.faturamento),
+    deducoes: R2(redeAtual.deducoes),
+    deducoesPct: R2(redeAtual.deducoesPct),
+    taxasComissoes: composicaoRede.taxasComissoes,
+    servicosPromocoes: composicaoRede.servicosPromocoes,
+    receitaLiquida: R2(redeAtual.receitaLiquida),
+    receitaLiquidaAnterior: R2(redeAnterior.receitaLiquida),
+    variacaoReceitaLiquida: variacao(redeAtual.receitaLiquida, redeAnterior.receitaLiquida),
+    impactoFinanceiroTotalEstimado: R2(universoCards.reduce((s, u) => s + (u.impactoFinanceiroEstimado ?? 0), 0)),
+  };
+
+  // ---- evolução mensal (até 6 meses) — mesmo universoCards (sem o filtro de
+  // situação, que é do mês corrente), recortando cada mês em memória. ----
+  const evolucaoMensal = mesesEvolucao.map(({ ano: a, mes: m }) => {
+    const ehCorrente = a === ano && m === numMes;
+    const { inicio, fim } = janelaDoMes(a, m, { corrente: ehCorrente && per.mesCorrente, dataAlvo: per.dataAlvo });
+    const ym = ymDe(a, m);
+    const porUnidadeMes = universoCards.map((u) => {
+      const linhas = (diariasPorUnidade.get(u.unidadeId) ?? []).filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
+      return lucratividadeDaUnidade(linhas, { inicio, fim, ateDataIso: fim });
+    });
+    const agg = agregarRede(porUnidadeMes);
+    return {
+      mes: ym,
+      faturamento: R2(agg.faturamento),
+      deducoes: R2(agg.deducoes),
+      deducoesPct: R2(agg.deducoesPct),
+      receitaLiquida: R2(agg.receitaLiquida),
+      unidadesComDado: agg.unidadesComDado,
+    };
+  });
+
+  // ---- rankings, separados por modalidade (estruturas financeiras diferentes). ----
+  const rankingPorModalidade = {};
+  for (const modelo of MODELOS_LOGISTICOS) {
+    const doModelo = universoTabela.filter((u) => u.modeloLogistico === modelo);
+    const melhores = doModelo
+      .filter((u) => u.folgaLimitePp != null)
+      .sort((a, b) => b.folgaLimitePp - a.folgaLimitePp)
+      .slice(0, 10).map(linhaDeRanking);
+    const atencao = ordenarPrioridadeIntervencao(doModelo.filter((u) => ["atencao", "critica"].includes(u.situacaoFinanceira.chave)))
+      .slice(0, 10).map(linhaDeRanking);
+    rankingPorModalidade[modelo] = { melhores, atencao };
+  }
+
+  // ---- tabela gerencial por EMPRESA (consolidada ponderada) + por UNIDADE. ----
+  const empresas = consolidarEmpresasRede(universoTabela);
+
+  for (const u of unidades) delete u._anterior;
+  universoTabela.sort((a, b) => {
+    if (a.faturamento == null && b.faturamento == null) return String(a.nome ?? "").localeCompare(String(b.nome ?? ""), "pt-BR");
+    if (a.faturamento == null) return 1;
+    if (b.faturamento == null) return -1;
+    return b.faturamento - a.faturamento || String(a.nome ?? "").localeCompare(String(b.nome ?? ""), "pt-BR");
+  });
+
+  return {
+    monitor: MONITOR.chave,
+    periodo: per.periodo,
+    mesCorrente: per.mesCorrente,
+    filtros: { organizacaoId: orgFiltro, unidadeId: uniFiltro, modalidade: modFiltro, situacao: sitFiltro, busca: busca || null },
+    rede,
+    distribuicaoSituacoes,
+    composicaoDeducoes: composicaoRede,
+    evolucaoMensal,
+    rankingPorModalidade,
+    unidades: universoTabela,
+    empresas,
+  };
+}
+
+const linhaDeRanking = (u) => ({
+  unidadeId: u.unidadeId, nome: u.nome, empresaNome: u.empresaNome, organizacaoId: u.organizacaoId,
+  modeloLogisticoRotulo: u.modeloLogisticoRotulo, faturamento: u.faturamento, deducoesPct: u.deducoesPct,
+  meta: u.meta, folgaLimitePp: u.folgaLimitePp, situacaoFinanceira: u.situacaoFinanceira,
+  impactoFinanceiroEstimado: u.impactoFinanceiroEstimado,
+});
+
+/**
+ * Consolida a tabela gerencial por EMPRESA × MODALIDADE (nunca cruzando os
+ * dois modelos numa única linha — estruturas financeiras diferentes). O
+ * percentual da linha é recalculado sobre a SOMA dos valores monetários
+ * (`agregarRede`), nunca pela média das unidades. A situação da empresa é a
+ * PIOR situação entre as unidades do grupo (nunca escondida por uma média).
+ */
+function consolidarEmpresasRede(unidades) {
+  const grupos = new Map();
+  for (const u of unidades) {
+    const chave = `${u.organizacaoId}::${u.modeloLogistico ?? "sem_modelo"}`;
+    if (!grupos.has(chave)) grupos.set(chave, []);
+    grupos.get(chave).push(u);
+  }
+  const ORDEM = { critica: 3, atencao: 2, em_dia: 1, sem_dados: 0 };
+  return [...grupos.values()].map((lista) => {
+    const agg = agregarRede(lista.map((u) => ({ faturamento: u.faturamento, deducoes: u.deducoes, receitaLiquida: u.receitaLiquida, semDado: u.semDado })));
+    const pior = lista.reduce((m, u) => (ORDEM[u.situacaoFinanceira.chave] > ORDEM[m.situacaoFinanceira.chave] ? u : m));
+    return {
+      organizacaoId: lista[0].organizacaoId,
+      empresaNome: lista[0].empresaNome,
+      modeloLogistico: lista[0].modeloLogistico,
+      modeloLogisticoRotulo: lista[0].modeloLogisticoRotulo,
+      unidadesMonitoradas: lista.length,
+      faturamento: R2(agg.faturamento),
+      deducoes: R2(agg.deducoes),
+      deducoesPct: R2(agg.deducoesPct),
+      receitaLiquida: R2(agg.receitaLiquida),
+      situacaoFinanceira: pior.situacaoFinanceira,
+      impactoFinanceiroEstimado: R2(lista.reduce((s, u) => s + (u.impactoFinanceiroEstimado ?? 0), 0)),
+    };
+  }).sort((a, b) => (b.faturamento ?? 0) - (a.faturamento ?? 0));
 }

@@ -21,7 +21,7 @@ describe("desligado por padrão", () => {
   });
   test("a aba só acrescenta o bloco depois dos indicadores oficiais e sem tocar neles", () => {
     const src = ler("../src/dashboardExecutivo.js");
-    assert.match(src, /renderIndicadores\(box\);\s*\n\s*\/\/[^\n]*\n\s*box\.insertAdjacentHTML\("beforeend", logisticaProprioHtml\(dex\.dadosMes\.logisticaProprio\)\)/);
+    assert.match(src, /renderIndicadores\(box, dex\.dadosMes\);\s*\n\s*\/\/[^\n]*\n\s*box\.insertAdjacentHTML\("beforeend", logisticaProprioHtml\(dex\.dadosMes\.logisticaProprio\)\)/);
     assert.equal((src.match(/logisticaProprioHtml\(/g) ?? []).length, 1);
   });
   test("módulo é só formatação: sem rede, sem cálculo financeiro", () => {

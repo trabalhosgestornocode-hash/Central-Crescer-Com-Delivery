@@ -81,7 +81,7 @@ globalThis.requestAnimationFrame ??= (fn) => fn();
 
 const {
   abrirPainelAdministrativo, sairDoPainelAdministrativo, irParaPadm,
-  abrirDetalheEmpresa, abrirCalendarioUnidade, definirPeriodo, irParaMesAtual, mudarPeriodo, periodoDe,
+  abrirDetalheEmpresa, abrirDetalheUnidade, abrirCalendarioUnidade, voltarPadm, definirPeriodo, irParaMesAtual, mudarPeriodo, periodoDe,
 } = await import("../src/painelAdm.js");
 const { TELAS_PADM } = await import("../src/painelAdmViews.js");
 const { state } = await import("../src/state.js");
@@ -120,6 +120,53 @@ const VISAO_GERAL_FAKE = {
   acaoNecessariaHoje: [], resumoAcao: {}, empresas: [],
 };
 
+/** Visão Geral da Rede — agora a página inicial do Painel Administrativo. */
+const VISAO_GERAL_REDE_FAKE = {
+  monitor: "dashboard_ifood", periodo: YM_ATUAL, mesCorrente: true,
+  filtros: { organizacaoId: null, unidadeId: null, modalidade: null, situacao: null, busca: null },
+  rede: {
+    empresasMonitoradas: 2, unidadesMonitoradas: 3, unidadesEmAtencao: 1, unidadesCriticas: 0,
+    faturamento: 28500, faturamentoAnterior: 27000, variacaoFaturamento: 0.0556,
+    deducoes: 3500, deducoesPct: 12.28, taxasComissoes: 3000, servicosPromocoes: 500,
+    receitaLiquida: 25000, receitaLiquidaAnterior: 24000, variacaoReceitaLiquida: 0.0417,
+    impactoFinanceiroTotalEstimado: 0,
+  },
+  distribuicaoSituacoes: { sem_dados: 0, em_dia: 2, atencao: 1, critica: 0 },
+  composicaoDeducoes: { taxasComissoes: 3000, servicosPromocoes: 500, outrosAjustes: 0 },
+  evolucaoMensal: [],
+  rankingPorModalidade: {
+    marketplace: { melhores: [], atencao: [] },
+    full_service: { melhores: [], atencao: [] },
+  },
+  unidades: [], empresas: [],
+};
+
+/** Dashboard iFood completo de uma unidade (Fase 3) — mesmo formato de `obterMes`. */
+const DASHBOARD_UNIDADE_FAKE = {
+  unidade: { unidadeId: "uni-1", unidadeNome: "Alfa Centro", organizacaoId: "org-1", empresaNome: "Alfa" },
+  periodo: { mes: 9, ano: 2026, ym: YM_ATUAL, mesCorrente: true },
+  dashboard: {
+    agregado: false,
+    modeloLogisticoRotulo: "Marketplace",
+    cards: {
+      faturamento: { valor: 30000 },
+      receitaLiquida: { valor: 27000, percentual: 90 },
+      ticketMedio: { valor: 45.5 },
+      novosClientes: { valor: 12 },
+      taxasComissoes: { valor: 2250, percentual: 7.5, status: { chave: "dentro_da_meta", label: "Dentro da Meta" } },
+      servicosPromocoes: { valor: 500, percentual: 1.67, status: { chave: "atencao", label: "Atenção" } },
+      taxasEntregadores: { naoAplicavel: true },
+      totalDeducoes: { valor: 3000, percentual: 10, status: { chave: "dentro_do_limite", label: "Dentro do Limite" } },
+    },
+    desempenhoOperacional: { acumuladoQtdVendas: 500 },
+    indicadoresRentabilidade: {
+      taxas_comissoes: { atual: 7.5, metaIdeal: 12, limite: 15, status: { chave: "dentro_da_meta", label: "Dentro da Meta" }, saldo: { status: "disponivel", disponivelPp: 4.5, disponivelReais: 1350 } },
+    },
+    graficos: { comparativoPercentuais: [] },
+    projecao: { projecaoMensal: 32000, mediaDiaria: 1000, diasResolvidos: 20, diasPrevistos: 30, confiabilidade: "alta", parcial: true },
+  },
+};
+
 /** Fake da API que REGISTRA os argumentos — é assim que provamos o período. */
 const apiFake = (over = {}) => {
   const chamadas = [];
@@ -133,6 +180,7 @@ const apiFake = (over = {}) => {
     empresas: reg("empresas", { empresas: [] }),
     detalheEmpresa: reg("detalheEmpresa", { organizacao: { nome: "Alfa", status: "ativa" }, consolidado: {}, unidades: [], pendencias: [] }),
     calendarioUnidade: reg("calendarioUnidade", { mes: YM_ATUAL, dataReferencia: `${YM_ATUAL}-15`, dias: [], unidade: {} }),
+    dashboardOperacaoUnidade: reg("dashboardOperacaoUnidade", DASHBOARD_UNIDADE_FAKE),
     relatorioResumo: reg("relatorioResumo", {
       periodo: YM_ATUAL, mesCorrente: true, d1: `${YM_ATUAL}-14`,
       operacao: { empresasMonitoradas: 2, unidadesMonitoradas: 3, empresasComPendencia: 1, unidadesComPendencia: 1, criticas: 0, atencao: 1, emDia: 2 },
@@ -142,6 +190,7 @@ const apiFake = (over = {}) => {
       rankings: { faturamentoEmpresas: [], faturamentoUnidades: [], conformidadeEmpresas: [], atencaoEmpresas: [] },
     }),
     relatorioEvolucao: reg("relatorioEvolucao", { periodo: YM_ATUAL, serie: [] }),
+    visaoGeralRede: reg("visaoGeralRede", VISAO_GERAL_REDE_FAKE),
     ...over,
   };
 };
@@ -160,15 +209,15 @@ const ganchosFake = () => {
 };
 
 describe("abrirPainelAdministrativo", () => {
-  test("ping 200 -> troca para o shell e renderiza a Visão Geral real", async () => {
+  test("ping 200 -> troca para o shell e renderiza a Visão Geral da Rede real", async () => {
     const g = ganchosFake();
     const ok = await abrirPainelAdministrativo({ ...g, api: apiFake() });
     assert.equal(ok, true);
     assert.deepEqual(g.chamadas.find((c) => c[0] === "mostrarTela"), ["mostrarTela", "painelAdm"]);
-    assert.equal(state.telaPainelAdm, "visao-geral");
-    // A Visão Geral real mostra os cartões de indicador (não mais o placeholder).
-    assert.match(nodes["#padm-view"].innerHTML, /Unidades com pendência/);
-    assert.match(nodes["#padm-view"].innerHTML, /Ação necessária/i);
+    assert.equal(state.telaPainelAdm, "visao-geral-rede");
+    // A Visão Geral da Rede real mostra os cartões de indicador (não mais o placeholder).
+    assert.match(nodes["#padm-view"].innerHTML, /Faturamento bruto/i);
+    assert.match(nodes["#padm-view"].innerHTML, /Unidades em atenção/i);
   });
 
   test("ping 403 -> NÃO abre o shell; chama aoAcessoRevogado", async () => {
@@ -224,7 +273,7 @@ describe("TELAS_PADM", () => {
     // Checkpoint H.3-A: nova aba "comunicacao" logo após "empresas" — mesmo
     // espírito (empresas cross-tenant), sem seletor de período (ver §"comunicacao"
     // na lista de telas sem recorte de período, em painelAdm.js).
-    assert.deepEqual(TELAS_PADM.map((t) => t.id), ["visao-geral", "performance", "diario", "pendencias", "empresas", "comunicacao", "mentorados", "relatorios", "desenvolvimento"]);
+    assert.deepEqual(TELAS_PADM.map((t) => t.id), ["visao-geral-rede", "visao-geral", "performance", "diario", "pendencias", "empresas", "comunicacao", "mentorados", "relatorios", "desenvolvimento"]);
   });
 
   test("irParaPadm abre Relatórios com o período ativo", async () => {
@@ -269,10 +318,10 @@ describe("seletor de período (mês/ano)", () => {
 
   test("2) trocar o período refaz a chamada da API com mes=AAAA-MM", async () => {
     const { api } = await abrir();
-    assert.deepEqual(ultima(api, "visaoGeral"), ["visaoGeral", { mes: YM_ATUAL }]);
+    assert.deepEqual(ultima(api, "visaoGeralRede"), ["visaoGeralRede", { mes: YM_ATUAL }]);
 
     await definirPeriodo(YM_ANTERIOR);
-    assert.deepEqual(ultima(api, "visaoGeral"), ["visaoGeral", { mes: YM_ANTERIOR }]);
+    assert.deepEqual(ultima(api, "visaoGeralRede"), ["visaoGeralRede", { mes: YM_ANTERIOR }]);
     assert.equal(state.painelAdm.periodo.ym, YM_ANTERIOR);
   });
 
@@ -284,7 +333,7 @@ describe("seletor de período (mês/ano)", () => {
     assert.equal(state.painelAdm.periodo.ym, YM_ATUAL);
     await mudarPeriodo(+1);                                  // tentar ir para o futuro
     assert.equal(state.painelAdm.periodo.ym, YM_ATUAL, "nunca navega para um mês futuro");
-    assert.deepEqual(ultima(api, "visaoGeral"), ["visaoGeral", { mes: YM_ATUAL }]);
+    assert.deepEqual(ultima(api, "visaoGeralRede"), ["visaoGeralRede", { mes: YM_ATUAL }]);
   });
 
   test("3) o período persiste ao trocar de aba", async () => {
@@ -331,7 +380,7 @@ describe("seletor de período (mês/ano)", () => {
     assert.match(nodes["#padm-cabecalho"].innerHTML, /Voltar ao mês atual/);
     await irParaMesAtual();
     assert.equal(state.painelAdm.periodo.ym, YM_ATUAL);
-    assert.deepEqual(ultima(api, "visaoGeral"), ["visaoGeral", { mes: YM_ATUAL }]);
+    assert.deepEqual(ultima(api, "visaoGeralRede"), ["visaoGeralRede", { mes: YM_ATUAL }]);
   });
 
   test("o período vive em state.painelAdm.periodo = { ano, mes, ym }", async () => {
@@ -342,5 +391,69 @@ describe("seletor de período (mês/ano)", () => {
     assert.equal(p.ym, YM_ANTERIOR);
     assert.equal(p.ano, Number(YM_ANTERIOR.slice(0, 4)));
     assert.equal(p.mes, Number(YM_ANTERIOR.slice(5, 7)));
+  });
+});
+
+// ===========================================================================
+// DETALHE DA UNIDADE — Dashboard iFood COMPLETO (ajuste: clicar numa unidade
+// na Visão Geral da Rede não pode abrir só o calendário).
+// ===========================================================================
+describe("abrirDetalheUnidade — Dashboard iFood completo (não só o calendário)", () => {
+  const abrir = async (over) => {
+    const g = ganchosFake();
+    const api = apiFake(over);
+    await abrirPainelAdministrativo({ ...g, api });
+    return { g, api };
+  };
+
+  test("clicar na unidade chama /dashboard (nunca só /calendario) e mostra o Dashboard iFood completo", async () => {
+    const { api } = await abrir();
+    await abrirDetalheUnidade("uni-1", "Alfa Centro");
+    assert.deepEqual(ultima(api, "dashboardOperacaoUnidade"), ["dashboardOperacaoUnidade", "uni-1", YM_ATUAL]);
+    assert.ok(!api.chamadas.some((c) => c[0] === "calendarioUnidade"), "não chama o calendário sozinho ao abrir a unidade");
+    const html = nodes["#padm-view"].innerHTML;
+    assert.match(html, /Dashboard iFood completo/i);
+    assert.match(html, /Alfa Centro/);
+    assert.match(html, /Taxas e comiss/i);
+    assert.match(html, /Dentro da Meta|Atenção|Dentro do Limite/);
+    // nunca a tela do calendário (que tem as setas próprias de mês/mês anterior)
+    assert.ok(!/mes-anterior|mes-proximo/.test(html), "a tela de detalhe não é o calendário");
+    assert.equal(nodes["#padm-titulo"].textContent, "Alfa Centro");
+  });
+
+  test("mantém o período ativo (mesma regra das demais telas)", async () => {
+    const { api } = await abrir();
+    await definirPeriodo(YM_ANTERIOR);
+    await abrirDetalheUnidade("uni-1", "Alfa Centro");
+    assert.deepEqual(ultima(api, "dashboardOperacaoUnidade"), ["dashboardOperacaoUnidade", "uni-1", YM_ANTERIOR]);
+  });
+
+  test("o calendário continua acessível como AUXILIAR, e voltar retorna ao detalhe da unidade (nunca à lista)", async () => {
+    const { api } = await abrir();
+    await abrirDetalheUnidade("uni-1", "Alfa Centro");
+    // botão "Ver calendário de lançamentos" embutido no detalhe
+    assert.match(nodes["#padm-view"].innerHTML, /Ver calendário de lançamentos/i);
+
+    await abrirCalendarioUnidade("uni-1", "Alfa Centro");
+    assert.deepEqual(ultima(api, "calendarioUnidade"), ["calendarioUnidade", "uni-1", YM_ATUAL]);
+
+    await voltarPadm();
+    // voltar do calendário retorna ao DETALHE DA UNIDADE (re-busca /dashboard), não à Visão Geral da Rede.
+    assert.deepEqual(ultima(api, "dashboardOperacaoUnidade"), ["dashboardOperacaoUnidade", "uni-1", YM_ATUAL]);
+    assert.equal(nodes["#padm-titulo"].textContent, "Alfa Centro");
+  });
+
+  test("agregado/sem dashboard: mostra estado vazio, nunca inventa números", async () => {
+    const { api } = await abrir({
+      dashboardOperacaoUnidade: async () => ({
+        unidade: { unidadeId: "uni-2", unidadeNome: "Sem Dados", organizacaoId: "org-1", empresaNome: "Alfa" },
+        periodo: { mes: 9, ano: 2026, ym: YM_ATUAL, mesCorrente: true },
+        dashboard: { agregado: true },
+      }),
+    });
+    await abrirDetalheUnidade("uni-2", "Sem Dados");
+    assert.match(nodes["#padm-view"].innerHTML, /Sem Dashboard iFood para esta unidade/i);
+    // o calendário continua oferecido mesmo nesse estado
+    assert.match(nodes["#padm-view"].innerHTML, /Ver calendário de lançamentos/i);
   });
 });
