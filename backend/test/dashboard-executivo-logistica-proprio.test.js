@@ -101,6 +101,11 @@ describe("arquitetura (regras oficiais intocadas)", () => {
     const s = src("src/modules/dashboard-executivo/dashboardExecutivo.service.js");
     assert.equal((s.match(/logisticaProprioOpcional\(/g) ?? []).length, 1);
   });
+  test("o modelo logístico chega ao bloco como TEXTO do período (marketplace | full_service | misto), nunca objeto", () => {
+    const s = src("src/modules/dashboard-executivo/dashboardExecutivo.service.js");
+    assert.match(s, /modeloLogistico: typeof modelo\?\.modeloLogistico === "string" \? modelo\.modeloLogistico : null/);
+    assert.doesNotMatch(s, /typeof modelo === "string"/);
+  });
 });
 
 describe("ponte registrada no portão de arquitetura do Foody", () => {
