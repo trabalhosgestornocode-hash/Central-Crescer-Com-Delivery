@@ -56,14 +56,19 @@ function linhaTempo(etapa, t) {
   return `• ${ROTULO_TEMPO[etapa]}: ${fmt(t.media)} min${t.meta == null ? "" : ` (meta ${fmt(t.meta)} min)`}`;
 }
 
+/** Achados de natureza financeira: só vão a quem recebe INDICADORES FINANCEIROS (`incluirFinanceiro`). */
+export const ACHADOS_FINANCEIROS = Object.freeze(["DESCONTO_LOJA_ELEVADO"]);
+const ehFinanceiro = (a) => ACHADOS_FINANCEIROS.includes(String(a?.codigo ?? ""));
+
 /** Pontos de atenção: chamados (pelos indicadores) + achados do diagnóstico armazenado (exceto os de chamados, já cobertos) + metas. */
-function pontosDeAtencao(i, d) {
+function pontosDeAtencao(i, d, incluirFinanceiro = true) {
   const pontos = [];
   const ds = i.disputas ?? {};
   if (ds.pendentesAgora > 0) pontos.push(pontoChamadosPendentes(ds.pendentesAgora));
   if (ds.expiradasNoDia > 0) pontos.push(pontoChamadosExpirados(ds.expiradasNoDia));
   for (const a of d.achados ?? []) {
     if (!a?.titulo || String(a.codigo ?? "").startsWith("DISPUTAS_") || TERMO_INTERNO_PROIBIDO.test(a.titulo)) continue;
+    if (!incluirFinanceiro && ehFinanceiro(a)) continue;
     pontos.push(`${a.titulo}.`);
   }
   const lista = pontos.slice(0, ETAPAS.every((e) => i[e]?.meta == null) ? MAX_PONTOS - 1 : MAX_PONTOS);
@@ -72,7 +77,12 @@ function pontosDeAtencao(i, d) {
 }
 
 /** Recomendação: a ação do achado principal (biblioteca aprovada); para chamados, o texto com a nomenclatura do cliente. */
-function recomendacao(d) {
+function recomendacao(d, incluirFinanceiro = true) {
+  if (!incluirFinanceiro && ehFinanceiro(d.principal)) {
+    // Achado principal financeiro: usa a ação do primeiro achado não financeiro (nunca cita valor), senão "não disponível".
+    const alt = (d.achados ?? []).find((a) => a?.acao && !ehFinanceiro(a) && !String(a.codigo ?? "").startsWith("DISPUTAS_"));
+    return alt && !TERMO_INTERNO_PROIBIDO.test(alt.acao) ? alt.acao : ND;
+  }
   const codigo = d.principal?.codigo;
   if (codigo && RECOMENDACAO_CHAMADOS[codigo]) return RECOMENDACAO_CHAMADOS[codigo];
   const texto = d.texto?.acao ?? d.principal?.acao ?? null;
@@ -80,10 +90,11 @@ function recomendacao(d) {
 }
 
 /**
- * @param {{fechamento: object, unidadeNome?: string|null, link?: string|null}} p  `fechamento` = linha armazenada
+ * @param {{fechamento: object, unidadeNome?: string|null, link?: string|null, incluirFinanceiro?: boolean}} p  `fechamento` = linha armazenada
  *   (indicadores, diagnostico, status, competencia, versao). `link` só entra se for URL https válida.
+ *   `incluirFinanceiro=false` remove a seção INDICADORES FINANCEIROS inteira (destinatário sem acesso financeiro).
  */
-export function gerarMensagem({ fechamento, unidadeNome = null, link = null }) {
+export function gerarMensagem({ fechamento, unidadeNome = null, link = null, incluirFinanceiro = true }) {
   const i = fechamento.indicadores;
   const d = fechamento.diagnostico ?? {};
   const p = i.pedidos;
@@ -120,20 +131,22 @@ export function gerarMensagem({ fechamento, unidadeNome = null, link = null }) {
       ? [`• Novos: ${cl.novos}`, `• Recorrentes: ${cl.recorrentes}`, ...(cl.semInformacao ? [`• Sem informação: ${cl.semInformacao}`] : [])]
       : [`• ${ND}`]),
     "",
-    "*INDICADORES FINANCEIROS*",
-    ...(de.pedidosNaBase
-      ? [`• Descontos financiados pela loja: ${brl(de.loja)}`, `• Pedidos com desconto: ${de.pedidosComDescontoLoja}`]
-      : [`• Descontos financiados pela loja: ${ND}`]),
-    "",
+    ...(incluirFinanceiro ? [
+      "*INDICADORES FINANCEIROS*",
+      ...(de.pedidosNaBase
+        ? [`• Descontos financiados pela loja: ${brl(de.loja)}`, `• Pedidos com desconto: ${de.pedidosComDescontoLoja}`]
+        : [`• Descontos financiados pela loja: ${ND}`]),
+      "",
+    ] : []),
     "*CHAMADOS*",
     `• Abertos no dia: ${ds.abertasNoDia}`,
     `• Com prazo expirado: ${ds.expiradasNoDia}`,
     "",
     "*PONTOS DE ATENÇÃO*",
-    ...pontosDeAtencao(i, d).map((t) => `• ${t}`),
+    ...pontosDeAtencao(i, d, incluirFinanceiro).map((t) => `• ${t}`),
     "",
     "*RECOMENDAÇÃO*",
-    recomendacao(d),
+    recomendacao(d, incluirFinanceiro),
   ];
   if (typeof link === "string" && /^https:\/\/[^\s]+$/.test(link)) linhas.push("", "*RELATÓRIO COMPLETO*", link);
   linhas.push("", RODAPE);

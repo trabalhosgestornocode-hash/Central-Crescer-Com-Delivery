@@ -879,7 +879,8 @@ async function obterMesDeUmaUnidade({
     // Nunca entra nos cards, deduções, rentabilidade nem na proteção de preços (ver dashboardExecutivo.logisticaProprio.js).
     ...(await logisticaProprioOpcional({
       organizacaoId, unidadeId, de: periodoDoMes(ano, mes).de, ate: periodoDoMes(ano, mes).ate,
-      modeloLogistico: typeof modelo === "string" ? modelo : null,
+      // `modelo` é o objeto do período (`modelo.modeloLogistico` = marketplace | full_service | misto); só o texto vai ao bloco.
+      modeloLogistico: typeof modelo?.modeloLogistico === "string" ? modelo.modeloLogistico : null,
     })),
   };
 }

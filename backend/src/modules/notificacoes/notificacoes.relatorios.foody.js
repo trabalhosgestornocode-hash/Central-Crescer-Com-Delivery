@@ -11,6 +11,8 @@
 //     enfileiramento não gera mensagem corretiva;
 //   * falha de leitura = mensagem original (fail-safe). Nunca envia: só altera o texto que já seria enfileirado.
 import { linhasLogisticaDiaria, linhasLogisticaSemanal, recebeValores } from "../foody/foody.mensagem.js";
+// Reexportado para o enfileiramento decidir, por destinatário, se o texto do Checklist leva INDICADORES FINANCEIROS.
+export { recebeValores };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const FLAG_RELATORIO = "FOODY_CENTRAL_RELATORIO_ENABLED";

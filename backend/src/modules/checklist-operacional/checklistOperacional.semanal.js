@@ -103,7 +103,8 @@ export function resumirSemana(segunda, versoes, { minimoDias = MIN_DIAS_VALIDOS 
 const hashDe = (base, validos) => createHash("sha256").update(JSON.stringify([base.semanaInicio, base.status, validos.map((d) => [d.dia, d.fechamento.id ?? null, d.fechamento.versao ?? null, d.fechamento.hash_conteudo ?? null])])).digest("hex").slice(0, 32);
 
 /** Mensagem do resumo semanal (mesma identidade visual do diário, ≤ 1500). Semana INCOMPLETA NÃO gera mensagem. */
-export function gerarMensagemSemanal({ resumo, unidadeNome = null }) {
+/** `incluirFinanceiro=false` remove a seção INDICADORES FINANCEIROS inteira (destinatário sem acesso financeiro). */
+export function gerarMensagemSemanal({ resumo, unidadeNome = null, incluirFinanceiro = true }) {
   if (!resumo || resumo.status === STATUS_SEMANA.INCOMPLETA || !resumo.indicadores) return null;
   const i = resumo.indicadores;
   const nome = nomeSeguro(unidadeNome);
@@ -119,13 +120,13 @@ export function gerarMensagemSemanal({ resumo, unidadeNome = null }) {
   const variantes = [[2, 3, 5], [0, 3, 5], [0, 2, 5], [0, 1, 4], [0, 1, 3]];
   let texto = null;
   for (const [nMotivos, nRec, nPontos] of variantes) {
-    texto = montarSemanal({ resumo, i, nome, diaBr, tempo, situacao, cobertura, cl, pico, motivos: i.cancelamentos.motivos.slice(0, nMotivos).map((m) => `${m.descricao}: ${m.quantidade}`), pontos: analise.pontos.slice(0, nPontos), recomendacoes: analise.recomendacoes.slice(0, nRec) });
+    texto = montarSemanal({ incluirFinanceiro, resumo, i, nome, diaBr, tempo, situacao, cobertura, cl, pico, motivos: i.cancelamentos.motivos.slice(0, nMotivos).map((m) => `${m.descricao}: ${m.quantidade}`), pontos: analise.pontos.slice(0, nPontos), recomendacoes: analise.recomendacoes.slice(0, nRec) });
     if (texto.length <= LIMITE_CARACTERES) break;
   }
   return texto;
 }
 
-function montarSemanal({ resumo, i, nome, diaBr, tempo, situacao, cobertura, cl, pico, motivos, pontos, recomendacoes }) {
+function montarSemanal({ incluirFinanceiro = true, resumo, i, nome, diaBr, tempo, situacao, cobertura, cl, pico, motivos, pontos, recomendacoes }) {
   const linhas = [
     "*CRESCER COM DELIVERY*", "*RESUMO OPERACIONAL SEMANAL*", "",
     ...(nome ? [`*${nome}*`] : []),
@@ -142,8 +143,8 @@ function montarSemanal({ resumo, i, nome, diaBr, tempo, situacao, cobertura, cl,
     ...(pico ? [`• Horário de pico mais frequente: ${hh(pico.hora)} às ${hh((pico.hora + 1) % 24)} (maior pico em ${pico.dias} de ${pico.diasComDado} dias)`] : []), "",
     "*CLIENTES*",
     ...(cl && cl.novos + cl.recorrentes ? [`• Pedidos de clientes novos: ${cl.novos}`, `• Pedidos de clientes recorrentes: ${cl.recorrentes}`] : [`• ${ND}`]), "",
-    "*INDICADORES FINANCEIROS*",
-    `• Descontos financiados pela loja: ${brl(i.descontosLoja.valor)}`, `• Pedidos com desconto: ${i.descontosLoja.pedidos}`, "",
+    ...(incluirFinanceiro ? ["*INDICADORES FINANCEIROS*",
+      `• Descontos financiados pela loja: ${brl(i.descontosLoja.valor)}`, `• Pedidos com desconto: ${i.descontosLoja.pedidos}`, ""] : []),
     "*CHAMADOS*", `• Abertos na semana: ${i.disputas.abertas}`, `• Com prazo expirado: ${i.disputas.expiradas}`, "",
     "*PONTOS DE ATENÇÃO*", ...pontos.map((t) => `• ${t}`), "",
     "*RECOMENDAÇÕES*", ...recomendacoes.map((t) => `• ${t}`), "",
