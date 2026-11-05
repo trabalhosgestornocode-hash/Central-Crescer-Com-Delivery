@@ -102,3 +102,11 @@ describe("arquitetura (regras oficiais intocadas)", () => {
     assert.equal((s.match(/logisticaProprioOpcional\(/g) ?? []).length, 1);
   });
 });
+
+describe("ponte registrada no portão de arquitetura do Foody", () => {
+  test("importa do módulo Foody APENAS foody.constants.js (sem sync, agendador, cliente ou repositório)", () => {
+    const m = readFileSync(join(RAIZ, "src/modules/dashboard-executivo/dashboardExecutivo.logisticaProprio.js"), "utf8");
+    const imports = [...m.matchAll(/from\s+["']([^"']+)["']/g)].map((x) => x[1]).filter((i) => i.includes("/foody/"));
+    assert.deepEqual(imports, ["../foody/foody.constants.js"]);
+  });
+});
