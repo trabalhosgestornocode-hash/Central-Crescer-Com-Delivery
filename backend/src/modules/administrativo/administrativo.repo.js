@@ -262,7 +262,7 @@ export async function carregarPrecosReferenciaDaFrota({ unidades }, deps = {}) {
   for (const lote of emLotes(orgIds)) {
     const [produtos, configuracoes] = await Promise.all([
       paginar(() => db.from("produtos").select("id, organizacao_id, nome, tamanho")
-        .in("organizacao_id", lote).eq("ativo", true)
+        .in("organizacao_id", lote).eq("ativo", true).ilike("nome", "%Churrasco%")
         .order("id")),
       paginar(() => db.from("unidades").select("id, organizacao_id, tabela_balcao, tabela_ifood")
         .in("organizacao_id", lote).order("id")),

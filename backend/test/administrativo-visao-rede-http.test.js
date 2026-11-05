@@ -21,9 +21,10 @@ const UUID = (l) => {
 
 function fakeDb(estado) {
   function from(tabela) {
-    const ctx = { eq: [], inF: null, gte: null, lte: null };
+    const ctx = { eq: [], inF: null, gte: null, lte: null, ilike: null };
     const casa = (r) =>
       ctx.eq.every(([c, v]) => r[c] === v) &&
+      (!ctx.ilike || String(r[ctx.ilike.col]).toLowerCase().includes(ctx.ilike.v.replaceAll("%", "").toLowerCase())) &&
       (!ctx.inF || ctx.inF.vals.includes(r[ctx.inF.col])) &&
       (ctx.gte == null || r[ctx.gte.col] >= ctx.gte.v) &&
       (ctx.lte == null || r[ctx.lte.col] <= ctx.lte.v);
@@ -32,6 +33,7 @@ function fakeDb(estado) {
       return Promise.resolve(single ? { data: achados[0] ?? null, error: null } : { data: achados, error: null });
     };
     const b = {
+      ilike: (col, v) => (ctx.ilike = { col, v }, b),
       select: () => b, eq: (c, v) => (ctx.eq.push([c, v]), b), in: (c, vals) => ((ctx.inF = { col: c, vals }), b),
       gte: (c, v) => ((ctx.gte = { col: c, v }), b), lte: (c, v) => ((ctx.lte = { col: c, v }), b),
       order: () => b, range: (de, ate) => run(false).then((r) => ({ ...r, data: (r.data ?? []).slice(de, ate + 1) })),
@@ -384,4 +386,28 @@ test("modalidade mista é identificada, filtrada e ranqueada separadamente", asy
   assert.equal(r.unidades[0].modeloLogistico, "misto");
   assert.equal(r.rankingPorModalidade.misto.melhores.length, 1);
   assert.equal(r.rankingPorModalidade.misto.melhores[0].unidadeId, UUID("a"));
+});
+
+test("lookup filtra Churrasco no banco e preserva seleção/fallback sem misturar empresas", async () => {
+  const st = cenario();
+  Object.assign(st.unidades[0], { tabela_balcao: "B", tabela_ifood: "I" });
+  st.produtos = [
+    { id: "errado", organizacao_id: UUID("jv"), nome: "Outro 15cm", ativo: true },
+    { id: "certo", organizacao_id: UUID("jv"), nome: "CHURRASCO 15cm", ativo: true },
+    { id: "outra-empresa", organizacao_id: UUID("beta"), nome: "Churrasco 15cm", ativo: true },
+  ];
+  st.produto_precos = [
+    { produto_id: "certo", canal: "balcao", tabela: "B", preco: 15.2 },
+    { produto_id: "certo", canal: "ifood", tabela: "I", preco: 20 },
+    { produto_id: "errado", canal: "balcao", tabela: "B", preco: 1 },
+  ];
+  const filtros = [];
+  const db = fakeDb(st);
+  const from = db.from;
+  db.from = (t) => { const q = from(t); const ilike = q.ilike; q.ilike = (col, v) => { filtros.push([t, col, v]); return ilike(col, v); }; return q; };
+  const r = await visaoGeralRede({ hojeIso: HOJE, mes: "2026-09" }, { supabase: db });
+  assert.deepEqual(filtros, [["produtos", "nome", "%Churrasco%"]]);
+  const a = r.unidades.find((u) => u.unidadeId === UUID("a"));
+  assert.ok(Math.abs(a.meta.metaIdeal - 25) < 1e-9); // reserva mínima MP = 13 + 12
+  assert.equal(a.situacaoFinanceira.chave, "em_dia");
 });
