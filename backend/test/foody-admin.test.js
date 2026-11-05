@@ -37,6 +37,7 @@ const plataforma = {
 let db, env, servidor, base, chamadasExternas, eventos, rodada = 0;
 const fetchOriginal = globalThis.fetch;
 
+let auditoriaFalha = 0;
 function montar() {
   const app = express();
   app.use(express.json());
@@ -50,7 +51,9 @@ function montar() {
     next();
   });
   app.use("/api/v1/integracoes/foody", criarFoodyAdminRouter({ db, env, plataforma, seguranca: () => criarSegurancaFoody(env.FOODY_CENTRAL_SECRET),
-    agora: () => new Date("2026-11-05T12:00:00Z"), auditoria: async (e) => { eventos.push(structuredClone(e)); } }));
+    agora: () => new Date("2026-11-05T12:00:00Z"),
+    auditoria: async (e) => { if (auditoriaFalha > 0) { auditoriaFalha--; return false; } eventos.push(structuredClone(e)); return true; },
+    auditoriaRegistrada: async (_acao, _entidade, id) => eventos.some((x) => x.entidadeId === id) }));
   app.use(errorHandler);
   return app;
 }
@@ -384,7 +387,31 @@ describe("triagem", () => {
     const h = (await api("GET", `/conexoes/${cx}/triagem/decisoes`)).json.data;
     assert.deepEqual(h.map((x) => [x.foodyUid, x.operacao, x.porVoce]), [["t1", "subway", true]]);
     const r = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { corpo: { operacao: "subway", motivo: "itens da subway" } });
-    assert.deepEqual([r.json.data.repetida, r.json.data.id, db.tabelas.foody_triagem_decisoes.length, eventos.length], [true, "dec-antiga", 1, 0]);
+    assert.deepEqual([r.json.data.repetida, r.json.data.id, db.tabelas.foody_triagem_decisoes.length], [true, "dec-antiga", 1]);
+    assert.deepEqual([r.json.data.auditoria, eventos.length], ["REGISTRADA", 1], "o reenvio pela mesma pessoa completa o rastro que faltava");
+    const r2 = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { corpo: { operacao: "subway", motivo: "itens da subway" } });
+    assert.deepEqual([r2.json.data.auditoria, eventos.length, db.tabelas.foody_triagem_decisoes.length], ["JA_REGISTRADA", 1, 1]);
+  });
+  test("concorrência: dois POST idênticos SIMULTÂNEOS gravam UMA decisão e UM evento (o segundo volta como repetida)", async () => {
+    const cx = await cenario();
+    const corpo = { operacao: "subway", motivo: "Subway conferido no Excel" };
+    const rs = await Promise.all([1, 2, 3].map(() => api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoT, corpo })));
+    assert.deepEqual(rs.map((r) => r.status), [201, 201, 201]);
+    assert.deepEqual(rs.map((r) => r.json.data.repetida).sort(), [false, true, true]);
+    assert.equal(new Set(rs.map((r) => r.json.data.id)).size, 1);
+    assert.deepEqual([db.tabelas.foody_triagem_decisoes.length, eventos.length], [1, 1]);
+  });
+  test("auditoria confiável: falha na gravação do evento → resposta 'PENDENTE' e o reenvio idêntico grava o evento (sem duplicar)", async () => {
+    const cx = await cenario();
+    const corpo = { operacao: "subway", motivo: "Subway conferido no Excel" };
+    auditoriaFalha = 1;
+    const a = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoT, corpo });
+    assert.deepEqual([a.status, a.json.data.auditoria, eventos.length, db.tabelas.foody_triagem_decisoes.length], [201, "PENDENTE", 0, 1]);
+    const b = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoT, corpo });
+    assert.deepEqual([b.json.data.repetida, b.json.data.auditoria, eventos.length, db.tabelas.foody_triagem_decisoes.length], [true, "REGISTRADA", 1, 1]);
+    assert.equal(eventos[0].entidadeId, a.json.data.id);
+    const c = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoT, corpo });
+    assert.deepEqual([c.json.data.auditoria, eventos.length], ["JA_REGISTRADA", 1]);
   });
 });
 

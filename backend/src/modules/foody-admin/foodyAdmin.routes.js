@@ -21,7 +21,7 @@ import { ENV_SEGREDO } from "../foody/foody.constants.js";
 import * as adm from "../foody/foody.administracao.service.js";
 import * as comp from "../foody/foody.compartilhamento.service.js";
 import { criarPlataformaFoody } from "./foodyAdmin.plataforma.js";
-import { auditar, ACOES } from "../../shared/auditoria.js";
+import { auditarConfirmado, eventoAuditoriaExiste, ACOES } from "../../shared/auditoria.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -96,7 +96,7 @@ const uuidParam = (nome) => (req, _res, next) =>
  *   injeção para testes; em produção: supabase (service_role), process.env, relógio real.
  */
 export function criarFoodyAdminRouter({ db = supabase, env = process.env, agora = () => new Date(), plataforma = null, seguranca = null,
-  auditoria = auditar } = {}) {
+  auditoria = auditarConfirmado, auditoriaRegistrada = eventoAuditoriaExiste } = {}) {
   const router = Router();
   const repo = criarRepositorioFoody(db);
   const plat = plataforma ?? criarPlataformaFoody(db);
@@ -147,8 +147,17 @@ export function criarFoodyAdminRouter({ db = supabase, env = process.env, agora 
   router.post("/conexoes/:conexaoId/triagem/:foodyUid/decisao", uuidParam("conexaoId"), h(async (req, c) => {
     const d = await comp.decidirTriagem({
       ator: c.ator, conexaoId: req.params.conexaoId, foodyUid: req.params.foodyUid, operacao: req.body?.operacao, motivo: req.body?.motivo }, deps);
-    if (!d.repetida) await auditoria(eventoDecisaoTriagem(req, c, d));
-    return decisaoParaResposta(d);
+    // Rastro confirmado: decisão nova → evento (com nova tentativa). Reenvio idêntico → só audita se o evento daquela decisão
+    // ainda NÃO existe (cura uma falha anterior sem duplicar). Falha final → log de erro e `auditoria: "PENDENTE"` na resposta.
+    let estado = "REGISTRADA";
+    if (d.repetida) {
+      const existe = await auditoriaRegistrada(ACOES.FOODY_TRIAGEM_DECIDIDA, "foody_triagem_decisoes", d.id);
+      if (existe === true) estado = "JA_REGISTRADA";
+      else if (existe === null) estado = "NAO_VERIFICADA";
+      else estado = (await auditoria(eventoDecisaoTriagem(req, c, d))) === false ? "PENDENTE" : "REGISTRADA";
+    } else if ((await auditoria(eventoDecisaoTriagem(req, c, d))) === false) estado = "PENDENTE";
+    if (estado === "PENDENTE") console.error("[foody] decisão de triagem sem evento de auditoria:", d.id);
+    return { ...decisaoParaResposta(d), auditoria: estado };
   }, 201));
 
   return router;

@@ -19,6 +19,7 @@ import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./cont
 import { botaoContextualHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
 
 import { montarCalendario } from "./parserFoodDeliveryCalendario.js";
+import { fonteLogisticaHtml, temFonteFoody, temDiaSoFoody } from "./parserFoodDeliveryFonte.js";
 import {
   destruirGraficosPfdDashboard, pfdBarraHRanking, pfdBarraTempoPorSituacao, pfdLinhaTempoPorDia, pfdLinhaVidaPedido, pfdRoscaPontualidade,
 } from "./charts.js";
@@ -305,6 +306,12 @@ function renderAbaAtual() {
   // pedidos importados no período (pode haver avulsos/manuais).
   if (pfd.aba === "lancamentos" && pfd.atual) { renderLancamentos(box); atualizarPeriodoNav(); return; }
   if (pfd.atual?.consolidado && pfd.atual.importacao.totalPedidos === 0 && !(pfd.atual.lancamentos?.length)) {
+    // Sem Excel no período, mas com fechamentos Foody: mostra só o bloco de fonte logística (nada do Excel é inventado).
+    if (temFonteFoody(pfd.atual.fonteLogistica)) {
+      box.innerHTML = pfdSecao("layers", "Fonte logística por dia", "Período sem relatório Excel importado — dados do fechamento Foody",
+        fonteLogisticaHtml(pfd.atual.fonteLogistica, { fmtMoeda, escapeHtml }));
+      atualizarPeriodoNav(); return;
+    }
     box.innerHTML = vazio("calendar", "Sem dados no período", "Não existem dados importados para o período selecionado.");
     atualizarPeriodoNav(); return;
   }
@@ -572,6 +579,10 @@ function renderVisaoGeral(box) {
         <div class="pfd-conc-linha pfd-conc-final"><span>Custo total com entregadores</span><b>${fmtMoeda(custoReal.total)}</b></div>
       </div>
       <div class="pfd-secao-acoes"><button class="btn btn-ghost btn-sm" id="pfd-ver-lancamentos">${icon("arrow-right", { size: 14 })} Ver lançamentos</button></div>`) : ""}
+
+    ${temFonteFoody(pfd.atual.fonteLogistica) || pfd.atual.fonteLogistica?.erro ? pfdSecao("layers", "Fonte logística por dia",
+      temDiaSoFoody(pfd.atual.fonteLogistica) ? "Há dias sem Excel cobertos pelo Foody: os cards acima contam só o Excel" : "Excel e Foody, um dia uma fonte",
+      fonteLogisticaHtml(pfd.atual.fonteLogistica, { fmtMoeda, escapeHtml })) : ""}
 
     ${pfdSecao("activity", "Status da análise", "Classificação automática dos cancelamentos do período", `
       <div class="pfd-status-band">

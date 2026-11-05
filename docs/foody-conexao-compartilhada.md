@@ -131,8 +131,9 @@ Superadmin em **impersonação não conta** para nenhuma dessas ações. O banco
   - privacidade: nenhum item do pedido, valor, cliente ou entregador;
   - **reenvio idêntico** (mesmo pedido, operação, pessoa e justificativa) devolve a decisão existente com `repetida: true`, não grava linha nova e não gera evento; justificativa ou pessoa diferente gera nova decisão e novo evento;
   - recusa (impersonação, empresa sem vínculo, papel sem permissão, sem justificativa, pedido inexistente) não grava decisão nem evento;
-  - decisões antigas, anteriores à auditoria, seguem válidas e reconhecidas no reenvio. Não há preenchimento retroativo dos eventos.
-  - A auditoria é *best effort* (`auditar` nunca lança): se a gravação do evento falhar, a decisão continua valendo e o erro vai para o log.
+  - decisões antigas, anteriores à auditoria, seguem válidas e reconhecidas no reenvio. Não há preenchimento retroativo automático; se a MESMA pessoa reenviar a mesma decisão, o evento que faltava é gravado (uma vez).
+  - **Rastro confirmado** (`auditarConfirmado`): até 2 tentativas de gravar o evento. A resposta traz `auditoria`: `REGISTRADA`, `JA_REGISTRADA` (reenvio de decisão já auditada), `PENDENTE` (as tentativas falharam: erro no log; o reenvio idêntico grava o evento sem duplicar a decisão) ou `NAO_VERIFICADA` (não foi possível ler a auditoria no reenvio).
+  - **Concorrência:** decisões do mesmo pedido da mesma conexão são serializadas no processo. Dois ou mais POST idênticos simultâneos gravam UMA decisão e UM evento; os demais voltam como `repetida`. O serviço web roda em instância única; só numa troca de instância (deploy) duas linhas idênticas seriam possíveis — inofensivas (vale a mais recente, mesmo conteúdo).
 - **Fechamento do destino.** A cobertura vem saneada (`coberturaParaDestino`):
   - sem o volume total da conta (`pedidosUnicos` e `paginas` vazios);
   - sem nomes de ponto de coleta;
@@ -165,6 +166,11 @@ Superadmin em **impersonação não conta** para nenhuma dessas ações. O banco
    - Os fechamentos ganham **nova versão** `CORRIGIDO`, com o motivo de reclassificação. As versões anteriores nunca mudam.
    - Cada pedido e cada execução registram a `catalogo_versao`.
 4. **Histórico.** Uma versão nova de catálogo **não** reabre dia congelado. Só a decisão de triagem, ou um reprocessamento manual com motivo, aplica uma mudança a dia congelado.
+
+**Parser (tela):** com `FOODY_CENTRAL_PARSER_ENABLED=true` e a unidade em `FOODY_CENTRAL_PARSER_UNIDADES`, a Visão geral do Parser mostra
+o bloco **Fonte logística por dia** (`frontend/src/parserFoodDeliveryFonte.js`): uma linha por dia com a fonte (Excel, Foody, Foody
+pendente/incompleto), pedidos, entregues, taxa bruta, taxa válida e custo de entregador próprio, com os totais calculados no backend.
+Os cards do Excel não mudam. Período sem Excel e com fechamento Foody mostra só esse bloco (antes: "Sem dados no período").
 
 **Rotas e tela:** não fazem parte deste PR. O teste de arquitetura proíbe consumidores do módulo nesta fase. Expor o serviço em rota autenticada é a próxima etapa, com GO próprio.
 

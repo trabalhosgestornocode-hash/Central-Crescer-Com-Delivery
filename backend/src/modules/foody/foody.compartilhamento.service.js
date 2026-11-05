@@ -159,8 +159,25 @@ export async function historicoDeDecisoes({ ator, conexaoId }, { env = process.e
   }));
 }
 
+// Decisões do MESMO pedido da mesma conexão são serializadas no processo: um duplo clique simultâneo vira uma decisão + um
+// reenvio idêntico (`repetida`), nunca duas linhas. O serviço web roda em instância única; entre instâncias (troca de deploy)
+// o pior caso é uma segunda linha idêntica — inofensiva (vale a mais recente, mesmo conteúdo) e visível no histórico.
+const emAndamento = new Map();
+function serializar(chave, fn) {
+  const anterior = emAndamento.get(chave) ?? Promise.resolve();
+  const atual = anterior.catch(() => {}).then(fn);
+  const fim = atual.catch(() => {});
+  emAndamento.set(chave, fim);
+  fim.then(() => { if (emAndamento.get(chave) === fim) emAndamento.delete(chave); });
+  return atual;
+}
+
 /** 4. Decisão de triagem (somente inclusão). */
-export async function decidirTriagem({ ator, conexaoId, foodyUid, operacao, motivo }, { env = process.env, repo }) {
+export function decidirTriagem(p, deps) {
+  return serializar(`${p?.conexaoId}|${String(p?.foodyUid ?? "").trim()}`, () => decidirTriagemSerial(p, deps));
+}
+
+async function decidirTriagemSerial({ ator, conexaoId, foodyUid, operacao, motivo }, { env = process.env, repo }) {
   exigirFlag(env);
   const ctx = await contextoDaConexao(conexaoId, repo);
   if (ctx.ativos.length === 0) throw erro("SEM_DESTINO_ATIVO", "a conexão não tem destino ativo.");
