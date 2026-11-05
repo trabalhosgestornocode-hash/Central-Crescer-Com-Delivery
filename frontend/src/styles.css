@@ -5336,6 +5336,8 @@ tr.dex-linha-na { opacity: .65; }
 .dex-parabens svg { flex-shrink: 0; margin-top: 1px; color: var(--ok); }
 [data-theme="dark"] .dex-parabens { background: rgba(14,157,87,.14); }
 
-/* Bloco informativo "Entregadores próprios · Foody" (Dashboard Executivo) */
-.dex-lp .dex-lp-aviso, .dex-lp .dex-lp-dias { font-size: 12px; color: var(--muted, #6b7280); margin: 0 0 10px; }
-.dex-lp .dex-lp-nota { font-size: 12px; color: var(--muted, #6b7280); }
+/* Bloco informativo "Entregadores próprios · Foody" (Dashboard Executivo) — linhas empilhadas, sem tabela */
+.dex-lp .dex-lp-aviso, .dex-lp .dex-lp-dias { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+.dex-lp .dex-lp-linha { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--linha); }
+.dex-lp .dex-lp-valor { text-align: right; white-space: nowrap; }
+.dex-lp .dex-lp-nota { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }

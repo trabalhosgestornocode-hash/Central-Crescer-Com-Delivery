@@ -42,7 +42,7 @@ describe("distinção das grandezas", () => {
   test("o que não existe aparece como — com motivo, nunca como R$ 0,00", () => {
     assert.match(html, /Não consta no fechamento Foody/);
     assert.match(html, /Conciliação é feita pelo Parser/);
-    const celulas = [...html.matchAll(/<td class="num">([^<]*)<\/td>/g)].map((m) => m[1]);
+    const celulas = [...html.matchAll(/data-lp-valor>([^<]*)</g)].map((m) => m[1]);
     assert.equal(celulas[2], "—"); assert.equal(celulas[3], "—");
   });
   test("período parcial é declarado", () => {
@@ -56,7 +56,7 @@ describe("dados preliminares nunca viram custo definitivo", () => {
     const html = logisticaProprioHtml({ ...BLOCO, dias: { definitivos: 0, pendentes: 2, incompletos: 0 }, custoAtribuido: null, taxaPrevista: null });
     assert.match(html, /data-logistica-proprio="sem-valor"/);
     assert.match(html, /Nenhum dia com fechamento definitivo/);
-    const celulas = [...html.matchAll(/<td class="num">([^<]*)<\/td>/g)].map((m) => m[1]);
+    const celulas = [...html.matchAll(/data-lp-valor>([^<]*)</g)].map((m) => m[1]);
     assert.ok(celulas.every((c) => c === "—"), celulas.join("|"));
   });
 });
