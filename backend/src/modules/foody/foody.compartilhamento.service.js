@@ -176,11 +176,19 @@ export async function decidirTriagem({ ator, conexaoId, foodyUid, operacao, moti
   if (atual.operacao !== RESULTADO_TRIAGEM && !minhas.has(atual.organizacao_id)) {
     throw erro("SEM_PERMISSAO", "pedido já atribuído a outra organização: só ela pode reclassificá-lo.");
   }
-  const r = await repo.inserirDecisaoTriagem(ctx.titular, {
+  const linha = {
     conexao_id: ctx.conexao.id, organizacao_id: ctx.titular.organizacaoId, unidade_id: ctx.titular.unidadeId, foody_uid: uid,
     operacao_decidida: operacao, decidido_por: ator.perfilId, motivo: texto, catalogo_versao: CATALOGO_VERSAO,
-  });
+  };
+  const extra = { competencia: String(atual.competencia ?? "").slice(0, 10) || null, aplicacao: "PROXIMA_SINCRONIZACAO" };
+  // Reenvio idêntico (mesma pessoa, mesma operação, mesma justificativa sobre a ÚLTIMA decisão do pedido — clique repetido,
+  // retry de rede): devolve a decisão existente, sem nova linha e sem novo evento de auditoria. Decisão diferente = nova linha.
+  const ultima = (await repo.listarDecisoesTriagem(ctx.titular, ctx.conexao.id, [uid])).get(uid) ?? null;
+  if (ultima && ultima.operacao_decidida === operacao && ultima.decidido_por === ator.perfilId && String(ultima.motivo ?? "").trim() === texto) {
+    return { ...linha, id: ultima.id, decidido_em: ultima.decidido_em, catalogo_versao: ultima.catalogo_versao, ...extra, repetida: true };
+  }
+  const r = await repo.inserirDecisaoTriagem(ctx.titular, linha);
   // A decisão NÃO move dado agora: vale na próxima sincronização da competência (D-1..D-3 no ciclo normal; dia congelado pela
   // reconciliação do agendador, como reprocessamento com motivo). Os fechamentos ganham nova versão; o histórico fica.
-  return { ...r, competencia: String(atual.competencia ?? "").slice(0, 10) || null, aplicacao: "PROXIMA_SINCRONIZACAO" };
+  return { ...linha, ...r, ...extra, repetida: false };
 }

@@ -247,6 +247,9 @@ export const ACOES = {
   // Sincronização MANUAL Foody (piloto em sombra). `detalhes` só com unidade, dias, códigos e contagens; nunca token nem valores.
   FOODY_SYNC_MANUAL_EXECUTADA: "foody.sync_manual_executada",
   FOODY_SYNC_MANUAL_RECUSADA: "foody.sync_manual_recusada",
+  // Decisão de triagem Foody (conexão compartilhada). `detalhes`: conexão, titular, uid do pedido, dia, operação, justificativa e
+  // versão do catálogo — nunca itens, valores, pagamento ou dado do cliente. A linha imutável em foody_triagem_decisoes segue a fonte.
+  FOODY_TRIAGEM_DECIDIDA: "foody.triagem_decidida",
 };
 
 /**

@@ -152,10 +152,10 @@ describe("consumidores controlados", () => {
     const comparador = semComentarios(readFileSync(join(MODULO, "foody.paridade.js"), "utf8"));
     assert.doesNotMatch(comparador, /import |\.from\(|fetch\(/, "comparador é puro");
   });
-  test("o gerador do catálogo só faz SELECT e só importa gerador/classificação", () => {
+  test("o gerador do catálogo é OFFLINE (lê só arquivo local: sem banco, sem rede, sem service_role) e só importa gerador/classificação", () => {
     const s = semComentarios(readFileSync(GERADOR_CATALOGO, "utf8"));
+    assert.doesNotMatch(s, /supabase|createClient|service_role|SERVICE_ROLE|psql|fetch\(|\.from\(|process\.env/);
     assert.doesNotMatch(s, /\.(insert|update|upsert|delete|rpc)\(/);
-    assert.deepEqual([...s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)].map((m) => m[1]), ["parser_fd_pedidos"]);
     const daCamada = [...s.matchAll(/from\s+["']([^"']*modules\/foody\/[^"']+)["']/g)].map((m) => m[1]).sort();
     assert.deepEqual(daCamada, ["../src/modules/foody/foody.catalogo-validadas.js", "../src/modules/foody/foody.catalogo.gerador.js",
       "../src/modules/foody/foody.classificacao.js"]);

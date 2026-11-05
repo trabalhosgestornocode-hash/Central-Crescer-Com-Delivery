@@ -155,6 +155,37 @@ triagem para Subway, **0 pedidos do Açaí mudam**; em 02/11 a triagem cai de 3 
 6. **Parar e desligar** se: `inseridos > 0`, triagem ≠ 0 após as decisões, pedido em duas empresas, paridade DIVERGENTE, qualquer
    escrita fora das tabelas Foody (exceto `plataforma_auditoria`), qualquer envio de WhatsApp.
 
+### Rodada 2 e PR #83 ampliado (catálogo `2026-11-05.2` + auditoria das decisões)
+
+**Rodada 2 em produção:** 02/11 v2 `CONSOLIDADO` nas duas empresas (Subway 70, R$ 539; Açaí 31, R$ 249); 31/10 com 6 triagens
+(4,3%, acima do critério de 3%) e 01/11 com 2; paridade 358/358. Os dois dias seguem `PRELIMINAR`.
+
+**Correção estrutural (PR #83, local, sem publicação):**
+- normalização da quantidade no meio da linha (`#x`);
+- termo validado `footlong` para a Subway;
+- camada 2 do gerador (coocorrência ancorada: ≥ 3 pedidos e ≥ 3 dias ancorados, nunca com a outra operação);
+- suco Mirador validado no Açaí;
+- gerador offline (arquivo local, sem banco nem service_role), com o `sha256Entrada` em `origem`.
+
+Detalhes e medição em `docs/foody-conexao-compartilhada.md`.
+
+| Critério | Resultado local |
+|---|---|
+| 0 troca Açaí↔Subway (histórico 15.336, holdout 1.799, 31/10–02/11) | PASS (0 / 0 em todos) |
+| Cobertura histórico | 98,19% → 99,60% (triagem 278 → 62) |
+| Cobertura holdout (treino < 21/10) | 98,28% → 99,39% (triagem 31 → 11) |
+| Itens das triagens de 31/10 e 01/11 | 8/8 com atribuição segura (7 Subway, Mirador no Açaí) |
+| Regressão de classificação | 0 pedido saiu de operação para triagem ou para a outra operação |
+| Replay local 31/10, 01/11, 02/11 | PARIDADE 358/358; taxa R$ 3.340 = R$ 3.340; cancelados 28 = 28; triagem 0; 6 fechamentos `CONSOLIDADO` sem pendência |
+| Decisões de triagem auditadas | evento `foody.triagem_decidida` por decisão nova; reenvio idêntico não duplica; recusas sem evento |
+| Migrations | nenhuma (`plataforma_auditoria.acao` é texto livre; `foody_triagem_decisoes` intocada) |
+
+**Efeito da publicação do catálogo novo:** a versão do catálogo entra no `fonte_hash`, então a próxima sincronização de cada dia
+marca todos os pedidos como atualizados (mesmo conteúdo, hash novo). Em 31/10 e 01/11 isso é o que consolida os dias: com o
+catálogo novo, a triagem vai a 0 e os fechamentos ganham versão nova `CONSOLIDADO`. O 02/11 já consolidado ganharia só uma
+versão nova se o conteúdo mudasse. O replay indica que não muda. Publicar e reprocessar exigem GO próprio. A partir de 05/11, 31/10
+e 01/11 estão `CONGELADA`, e o reprocessamento pede motivo.
+
 ### Critérios objetivos de cada dia-piloto (todos obrigatórios)
 | Eixo | Critério |
 |---|---|

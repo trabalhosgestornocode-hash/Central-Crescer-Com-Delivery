@@ -34,7 +34,7 @@ const plataforma = {
   unidadesDaOrganizacao: async (o) => (UNIS_DA_ORG[o] ?? []).map((u) => ({ id: u, nome: NOMES_UNI[u] })),
 };
 
-let db, env, servidor, base, chamadasExternas, rodada = 0;
+let db, env, servidor, base, chamadasExternas, eventos, rodada = 0;
 const fetchOriginal = globalThis.fetch;
 
 function montar() {
@@ -50,7 +50,7 @@ function montar() {
     next();
   });
   app.use("/api/v1/integracoes/foody", criarFoodyAdminRouter({ db, env, plataforma, seguranca: () => criarSegurancaFoody(env.FOODY_CENTRAL_SECRET),
-    agora: () => new Date("2026-11-05T12:00:00Z") }));
+    agora: () => new Date("2026-11-05T12:00:00Z"), auditoria: async (e) => { eventos.push(structuredClone(e)); } }));
   app.use(errorHandler);
   return app;
 }
@@ -78,7 +78,7 @@ before(async () => {
 });
 after(() => { globalThis.fetch = fetchOriginal; servidor?.close(); });
 beforeEach(async () => {
-  chamadasExternas = []; rodada += 1;
+  chamadasExternas = []; eventos = []; rodada += 1;
   db = criarFakeDb({ unidades: { [UNI_T]: ORG_T, [UNI_T2]: ORG_T, [UNI_D]: ORG_D, [UNI_X]: ORG_X },
     admins: [[ADM_T, ORG_T], [ADM_D, ORG_D], [DUPLO, ORG_T], [DUPLO, ORG_D], [ADM_X, ORG_X]] });
   env = { FOODY_CENTRAL_ADMIN_ENABLED: "true", FOODY_CENTRAL_SECRET: SEGREDO_TESTE };   // SEM nenhuma flag de sincronização
@@ -338,6 +338,53 @@ describe("triagem", () => {
     assert.deepEqual(h.map((x) => [x.foodyUid, x.operacao, x.motivo, x.porVoce]), [["t1", "acai_no_grau", "conferido no Gestor", false]]);
     assert.ok(!JSON.stringify(h).includes(ADM_D), "quem decidiu sai só como 'você' ou 'outro'");
     assert.equal((await api("GET", `/conexoes/${cx}/triagem?competencia=04-11-2026`)).json.codigo, "COMPETENCIA_INVALIDA");
+  });
+  test("auditoria: cada decisão gera UM evento em plataforma_auditoria (org de quem agiu, ator, pedido, decisão, justificativa, hora) sem dado comercial", async () => {
+    const cx = await cenario();
+    const dD = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoD, corpo: { operacao: "acai_no_grau", motivo: "conferido no Gestor" } });
+    const dT = await api("POST", `/conexoes/${cx}/triagem/t3/decisao`, { como: comoT, corpo: { operacao: "subway", motivo: "Subway conferido no Excel" } });
+    assert.equal(eventos.length, 2);
+    const [eD, eT] = eventos;
+    assert.deepEqual([eD.acao, eD.atorTipo, eD.entidade, eD.entidadeId, eD.organizacaoId, eD.perfilId], ["foody.triagem_decidida", "usuario", "foody_triagem_decisoes", dD.json.data.id, ORG_D, ADM_D]);
+    assert.deepEqual(eD.detalhes, { conexao_id: cx, organizacao_titular_id: ORG_T, unidade_id: UNI_T, foody_uid: "t1", competencia: "2026-11-04",
+      operacao_decidida: "acai_no_grau", motivo: "conferido no Gestor", catalogo_versao: eD.detalhes.catalogo_versao, decidido_em: eD.detalhes.decidido_em });
+    assert.ok(eD.detalhes.decidido_em && /^\d{4}-\d{2}-\d{2}\.\d+$/.test(eD.detalhes.catalogo_versao));
+    assert.deepEqual([eT.organizacaoId, eT.perfilId, eT.entidadeId, eT.detalhes.operacao_decidida], [ORG_T, ADM_T, dT.json.data.id, "subway"], "cada empresa audita no próprio tenant");
+    assert.doesNotMatch(JSON.stringify(eventos), /misterioso|valor|pagamento|entregador|token/i, "nada de item, valor ou segredo no evento");
+    const linha = db.tabelas.foody_triagem_decisoes.find((x) => x.id === dD.json.data.id);
+    assert.deepEqual([linha.decidido_por, linha.motivo, linha.operacao_decidida], [ADM_D, "conferido no Gestor", "acai_no_grau"], "a tabela imutável continua sendo a fonte");
+  });
+  test("reenvio idêntico (clique repetido) não duplica linha nem evento; decisão diferente grava e audita de novo", async () => {
+    const cx = await cenario();
+    const corpo = { operacao: "subway", motivo: "Subway conferido no Excel" };
+    const a = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoT, corpo });
+    const b = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoT, corpo: { ...corpo, motivo: "  Subway conferido no Excel " } });
+    assert.deepEqual([a.status, a.json.data.repetida, b.status, b.json.data.repetida, b.json.data.id], [201, false, 201, true, a.json.data.id]);
+    assert.equal(db.tabelas.foody_triagem_decisoes.length, 1); assert.equal(eventos.length, 1);
+    const c = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoT, corpo: { operacao: "subway", motivo: "revisado de novo no Excel" } });
+    const d = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como: comoD, corpo });
+    assert.deepEqual([c.json.data.repetida, d.json.data.repetida], [false, false], "outra justificativa ou outra pessoa = nova decisão");
+    assert.equal(db.tabelas.foody_triagem_decisoes.length, 3); assert.equal(eventos.length, 3);
+  });
+  test("recusadas (impersonação, terceira empresa, gestor, sem justificativa, pedido inexistente) não gravam linha nem evento", async () => {
+    const cx = await cenario();
+    const corpo = { operacao: "subway", motivo: "Subway conferido no Excel" };
+    for (const [como, status] of [[{ org: ORG_T, unidade: UNI_T, impersonando: "1" }, 403], [comoX, 403],
+      [{ perfil: GER_T, org: ORG_T, unidade: UNI_T, papel: "unit_manager" }, 403]]) {
+      assert.equal((await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { como, corpo })).status, status, JSON.stringify(como));
+    }
+    assert.equal((await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { corpo: { operacao: "subway" } })).json.codigo, "MOTIVO_INVALIDO");
+    assert.equal((await api("POST", `/conexoes/${cx}/triagem/nao-existe/decisao`, { corpo })).status, 404);
+    assert.deepEqual([db.tabelas.foody_triagem_decisoes.length, eventos.length], [0, 0]);
+  });
+  test("compatibilidade: decisão antiga (sem evento, como as 3 de 02/11 em produção) segue válida; reenviá-la igual não duplica", async () => {
+    const cx = await cenario();
+    db.tabelas.foody_triagem_decisoes.push({ id: "dec-antiga", conexao_id: cx, organizacao_id: ORG_T, unidade_id: UNI_T, foody_uid: "t1",
+      operacao_decidida: "subway", decidido_por: ADM_T, motivo: "itens da subway", catalogo_versao: "2026-11-03.1", decidido_em: "2026-11-05T00:55:22Z" });
+    const h = (await api("GET", `/conexoes/${cx}/triagem/decisoes`)).json.data;
+    assert.deepEqual(h.map((x) => [x.foodyUid, x.operacao, x.porVoce]), [["t1", "subway", true]]);
+    const r = await api("POST", `/conexoes/${cx}/triagem/t1/decisao`, { corpo: { operacao: "subway", motivo: "itens da subway" } });
+    assert.deepEqual([r.json.data.repetida, r.json.data.id, db.tabelas.foody_triagem_decisoes.length, eventos.length], [true, "dec-antiga", 1, 0]);
   });
 });
 

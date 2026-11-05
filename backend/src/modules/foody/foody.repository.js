@@ -252,7 +252,7 @@ export function criarRepositorioFoody(db) {
       const mapa = new Map();
       for (let i = 0; i < uids.length; i += LOTE) {
         const { data, error } = await db.from("foody_triagem_decisoes")
-          .select("foody_uid, operacao_decidida, decidido_em, decidido_por, catalogo_versao")
+          .select("id, foody_uid, operacao_decidida, decidido_em, decidido_por, motivo, catalogo_versao")
           .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).eq("conexao_id", conexaoId)
           .in("foody_uid", uids.slice(i, i + LOTE));
         if (error) throw falha("listarDecisoesTriagem", error);

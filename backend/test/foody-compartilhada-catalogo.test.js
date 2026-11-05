@@ -10,14 +10,16 @@ import { CATALOGO_OPERACAO } from "../src/modules/foody/foody.catalogo-operacao.
 import {
   classificarPedidoCompartilhado, normalizarLinhaItem, linhasDoPedido, operacoesPorTermo, TERMOS_VALIDADOS, CATALOGO_VERSAO,
 } from "../src/modules/foody/foody.classificacao.js";
-import { gerarCatalogo, hashCatalogo, pareceTextoLivre, incluirValidadas, renderizarCatalogo } from "../src/modules/foody/foody.catalogo.gerador.js";
+import { gerarCatalogo, hashCatalogo, hashEntrada, pareceTextoLivre, incluirValidadas, renderizarCatalogo } from "../src/modules/foody/foody.catalogo.gerador.js";
 import { LINHAS_VALIDADAS } from "../src/modules/foody/foody.catalogo-validadas.js";
 
 const MODULO = join(dirname(fileURLToPath(import.meta.url)), "..", "src", "modules", "foody");
-// 2026-11-05.1 = 2026-11-03.1 (gerado, hash 78ee2124…) + 3 linhas Subway validadas à mão após o piloto de 02/11/2026.
-const VERSAO_FIXADA = "2026-11-05.1";
-const HASH_FIXADO = "d471d07e713b318ada1bfc3347fd8a53dd98e6fbb919313aee79ba19f3aa7209";
-const HASH_BASE_GERADA = "78ee21241de8674e9ea641d8dabb71dd067559f87ec2dcf5f6171993fa0b5f9f";
+// 2026-11-05.2 = gerado OFFLINE do histórico completo do Parser da unidade titular (15.330 pedidos com itens, 17/08–02/11/2026,
+// sha256 da entrada em origem.sha256Entrada) com camada 1 (termo do Parser) + validadas à mão + camada 2 (coocorrência ancorada)
+// e quantidade no meio da linha normalizada ("#x"). Substitui 2026-11-05.1 (d471d07e…).
+const VERSAO_FIXADA = "2026-11-05.2";
+const HASH_FIXADO = "f3834caa9a4fb19fa21c212622fe6ea4723cb578e95a2dc86705e269b639c548";
+const SHA_ENTRADA_FIXADO = "3d7e212940a6572257a26328230f4c97fd51d9a743eb66fa6ac0fc830182e002";
 
 describe("catálogo versionado — regressão", () => {
   test("versão e hash fixados; o hash confere com o conteúdo", () => {
@@ -26,8 +28,8 @@ describe("catálogo versionado — regressão", () => {
     assert.equal(CATALOGO_OPERACAO.hash, HASH_FIXADO);
     assert.equal(hashCatalogo(CATALOGO_OPERACAO.linhas), HASH_FIXADO, "conteúdo mudou sem nova versão");
     assert.deepEqual(Object.keys(CATALOGO_OPERACAO.linhas).sort(), ["acai_no_grau", "subway"]);
-    assert.equal(CATALOGO_OPERACAO.linhas.subway.length, 332);
-    assert.equal(CATALOGO_OPERACAO.linhas.acai_no_grau.length, 91);
+    assert.equal(CATALOGO_OPERACAO.linhas.subway.length, 296);
+    assert.equal(CATALOGO_OPERACAO.linhas.acai_no_grau.length, 88);
   });
   test("congelado: não aprende em execução (nem por mutação nem pela classificação)", () => {
     assert.ok(Object.isFrozen(CATALOGO_OPERACAO) && Object.isFrozen(CATALOGO_OPERACAO.linhas));
@@ -60,7 +62,7 @@ describe("catálogo versionado — regressão", () => {
   });
   test("termos validados: lista curta e com origem; paletas são só do Açaí", () => {
     assert.deepEqual(TERMOS_VALIDADOS.acai_no_grau.map((x) => x.termo), ["acai", "paleta"]);
-    assert.deepEqual(TERMOS_VALIDADOS.subway.map((x) => x.termo), ["subway"]);
+    assert.deepEqual(TERMOS_VALIDADOS.subway.map((x) => x.termo), ["subway", "footlong"]);
     assert.ok([...TERMOS_VALIDADOS.acai_no_grau, ...TERMOS_VALIDADOS.subway].every((x) => x.origem.length > 10));
   });
 });
@@ -126,34 +128,96 @@ describe("gerador offline", () => {
   test("determinístico: mesma entrada (em qualquer ordem) → mesmo hash", () => {
     assert.equal(gerarCatalogo(base).hash, gerarCatalogo([...base].reverse()).hash);
     assert.notEqual(gerarCatalogo(base).hash, gerarCatalogo(base.slice(0, 2)).hash);
+    const e = base.map((p, i) => ({ ...p, id: i }));
+    assert.equal(hashEntrada(e), hashEntrada([...e].reverse()));
+    assert.notEqual(hashEntrada(e), hashEntrada(e.slice(1)));
   });
 });
 
-describe("linhas validadas à mão (catálogo 2026-11-05.1)", () => {
-  const op = (d) => classificarPedidoCompartilhado(d);
-  const semValidadas = () => {
-    const v = new Set(LINHAS_VALIDADAS.map((x) => x.linha));
-    return Object.fromEntries(Object.entries(CATALOGO_OPERACAO.linhas).map(([o, l]) => [o, l.filter((x) => !v.has(x))]));
-  };
-  test("o catálogo é EXATAMENTE a base gerada (78ee2124…) + as validadas; refazer a junção dá o mesmo hash", () => {
-    const base = semValidadas();
-    assert.equal(hashCatalogo(base), HASH_BASE_GERADA);
-    const r = incluirValidadas(base, LINHAS_VALIDADAS);
-    assert.equal(r.incluidas, LINHAS_VALIDADAS.length);
-    assert.equal(r.hash, HASH_FIXADO);
-    assert.equal(CATALOGO_OPERACAO.origem.base, "2026-11-03.1");
-    assert.equal(CATALOGO_OPERACAO.origem.validadasManualmente, LINHAS_VALIDADAS.length);
+describe("gerador offline — camada 2 (coocorrência ancorada)", () => {
+  const ped = (detalhes, dia) => ({ detalhes, dia });
+  const dias = ["2026-10-01", "2026-10-02", "2026-10-03", "2026-10-04"];
+  // camada 1: "alface" (Subway) e "granola" (Açaí) entram por termo.
+  const treino = dias.flatMap((d) => [ped("1x Sub Frango\n1x Alface", d), ped("1x Açaí 500ml\n1x Granola", d)]);
+  const gerar = (extra, o) => gerarCatalogo([...treino, ...extra], o);
+  test("linha sem termo, sempre ancorada em itens da Subway, em >=3 pedidos e >=3 dias → Subway", () => {
+    const c = gerar(dias.slice(0, 3).map((d) => ped("1x Alface\nCombos 30cm 1x Steak", d)));
+    assert.ok(c.linhas.subway.includes("combos #cm #x steak"));
+    assert.equal(c.estatisticas.coocorrencia.subway, 1);
   });
-  test("cada validada: congelada, normalizada, cardápio, com evidência e data, e só da Subway", () => {
+  test("frequência e recorrência: 2 dias ou 2 pedidos não bastam", () => {
+    assert.ok(!gerar(["2026-10-01", "2026-10-01", "2026-10-02"].map((d) => ped("1x Alface\n1x Steak", d))).linhas.subway.includes("steak"));
+    assert.ok(!gerar(dias.slice(0, 2).map((d) => ped("1x Alface\n1x Steak", d))).linhas.subway.includes("steak"));
+  });
+  test("ausência no Açaí NÃO basta: linha sozinha ou só com desconhecidas não entra", () => {
+    const c = gerar([...dias.map((d) => ped("1x Energetico Monster", d)), ...dias.map((d) => ped("1x Cookie X\n1x Novidade", d))]);
+    assert.ok(!c.linhas.subway.includes("energetico monster") && !c.linhas.subway.includes("cookie x"));
+    assert.ok(c.estatisticas.coocorrencia.semAncora >= 3);
+  });
+  test("exclusividade: uma vez junto de item do Açaí (ou em pedido misto) e a linha não entra em nenhuma", () => {
+    const c = gerar([...dias.map((d) => ped("1x Alface\n1x Brownie", d)), ped("1x Granola\n1x Brownie", "2026-10-05")]);
+    assert.ok(!c.linhas.subway.includes("brownie") && !c.linhas.acai_no_grau.includes("brownie"));
+    const m = gerar([...dias.map((d) => ped("1x Alface\n1x Brownie", d)), ped("1x Alface\n1x Granola\n1x Brownie", "2026-10-05")]);
+    assert.ok(!m.linhas.subway.includes("brownie"));
+  });
+  test("texto livre e termo da outra operação nunca entram; uma rodada só (camada 2 não ancora camada 2)", () => {
+    const c = gerar([...dias.map((d) => ped("1x Alface\n1x Entregar no portao", d)), ...dias.map((d) => ped("1x Steak\n1x Molho Novo", d)),
+      ...dias.map((d) => ped("1x Alface\n1x Steak", d))]);
+    assert.ok(!c.linhas.subway.some((l) => l.includes("portao")));
+    assert.ok(c.linhas.subway.includes("steak"));
+    assert.ok(!c.linhas.subway.includes("molho novo"), "ancorada só em linha da camada 2");
+  });
+  test("o lado do Açaí também ancora (simétrico); validadas à mão ancoram; desligável", () => {
+    const c = gerar(dias.slice(0, 3).map((d) => ped("1x Granola\n1x Calda Nova", d)));
+    assert.ok(c.linhas.acai_no_grau.includes("calda nova"));
+    const v = [{ operacao: "subway", linha: "molho especial", validadoEm: "2026-11-05", evidencia: "evidência suficiente para o teste" }];
+    const c2 = gerar(dias.slice(0, 3).map((d) => ped("1x Molho Especial\n1x Pao Novo", d)), { validadas: v });
+    assert.ok(c2.linhas.subway.includes("molho especial") && c2.linhas.subway.includes("pao novo"));
+    assert.ok(!gerar(dias.slice(0, 3).map((d) => ped("1x Granola\n1x Calda Nova", d)), { coocorrencia: false }).linhas.acai_no_grau.includes("calda nova"));
+  });
+});
+
+describe("linhas validadas à mão e origem auditável (catálogo 2026-11-05.2)", () => {
+  const op = (d) => classificarPedidoCompartilhado(d);
+  test("origem reprodutível: hash e contagem da entrada, parâmetros das duas camadas, contagens por camada", () => {
+    const o = CATALOGO_OPERACAO.origem;
+    assert.equal(o.sha256Entrada, SHA_ENTRADA_FIXADO);
+    assert.equal(o.pedidos, 15330);
+    assert.deepEqual(o.periodo, ["2026-08-17", "2026-11-02"]);
+    assert.deepEqual(o.parametros, { minimoOcorrencias: 2, minimoDias: 2, coocorrencia: { minimoPedidos: 3, minimoDias: 3 } });
+    assert.equal(o.validadasManualmente, LINHAS_VALIDADAS.length);
+    assert.deepEqual(o.linhasCoocorrencia, { subway: 13, acai_no_grau: 0 });
+    for (const op2 of ["subway", "acai_no_grau"]) {
+      assert.ok(CATALOGO_OPERACAO.linhas[op2].length <= o.linhasCamada1[op2] + o.linhasCoocorrencia[op2] + LINHAS_VALIDADAS.length);
+    }
+    assert.equal(incluirValidadas(CATALOGO_OPERACAO.linhas, LINHAS_VALIDADAS).incluidas, 0, "todas as validadas já estão no catálogo");
+  });
+  test("cada validada: congelada, normalizada, cardápio, com evidência e data, e fora do catálogo da outra operação", () => {
     assert.ok(Object.isFrozen(LINHAS_VALIDADAS) && LINHAS_VALIDADAS.every(Object.isFrozen));
-    assert.equal(LINHAS_VALIDADAS.length, 3);
+    assert.deepEqual(LINHAS_VALIDADAS.map((v) => v.operacao), ["subway", "subway", "subway", "acai_no_grau"]);
     for (const v of LINHAS_VALIDADAS) {
-      assert.equal(v.operacao, "subway");
       assert.equal(normalizarLinhaItem(v.linha), v.linha);
       assert.ok(!pareceTextoLivre(v.linha));
       assert.ok(v.evidencia.length > 40 && /^\d{4}-\d{2}-\d{2}$/.test(v.validadoEm));
-      assert.ok(!CATALOGO_OPERACAO.linhas.acai_no_grau.includes(v.linha));
+      assert.ok(CATALOGO_OPERACAO.linhas[v.operacao].includes(v.linha));
+      for (const [o, ls] of Object.entries(CATALOGO_OPERACAO.linhas)) if (o !== v.operacao) assert.ok(!ls.includes(v.linha));
     }
+  });
+  test("os itens das triagens de 31/10 e 01/11 (texto bruto como a Foody manda) têm atribuição segura", () => {
+    assert.equal(op("Combos no Precinho 30cm 1x Steak Churrasco\n1x Sub Frango Teriyaki 15cm").operacao, "subway");
+    assert.equal(op("Combos no Precinho 30cm 1x Frango Empanado").operacao, "subway");
+    assert.equal(op("Cookie de Chocolate com Gotas de Chocolate").operacao, "subway");
+    assert.equal(op("Frango Supreme Proteico 2x Frango Supreme Proteico 15cm").operacao, "subway");
+    assert.equal(op("Kit com 9 Cookies 2x Cookie Recheado com Nutella - Novo!").operacao, "subway");
+    assert.equal(op("Combos no Precinho (Footlong 30cm 1x Frango Assado").operacao, "subway", "footlong é termo validado da Subway");
+    assert.equal(op("1x Suco Nectar Maracuja 300ml - Mirador").operacao, "acai_no_grau", "suco Mirador é do Açaí");
+    assert.equal(op("1x Suco Nectar Maracuja 300ml - Mirador\n1x Açaí Premium 500ml").operacao, "acai_no_grau");
+  });
+  test("o que segue na triagem: item novo, linha sem âncora, e mistura das duas operações", () => {
+    assert.equal(op("Energeticos 2x Energetico Inedito Zero").operacao, "triagem");
+    assert.equal(op("1x Suco Nectar Maracuja 300ml - Mirador\n1x Sub Frango Teriyaki 15cm").motivo, "CONFLITO");
+    assert.equal(op("Cookie de Chocolate com Gotas de Chocolate\n1x Açaí Premium 500ml").motivo, "CONFLITO");
+    assert.equal(op("1x Gotas de chocolate").operacao, "acai_no_grau", "a mesma cobertura sozinha continua do Açaí");
   });
   test("as três triagens do piloto de 02/11 viram Subway (texto bruto como a Foody manda)", () => {
     assert.equal(op("Combos no Precinho 30cm 1x Frango Defumado com Cream Cheese").operacao, "subway");
@@ -166,7 +230,8 @@ describe("linhas validadas à mão (catálogo 2026-11-05.1)", () => {
     assert.equal(op("1x Açaí Premium 500ml\nSucos 2x Suco Del Valle Uva").motivo, "CONFLITO");
     assert.equal(op("1x Paleta Morango\nSubs 15cm 2x B.M.T.").motivo, "CONFLITO");
     assert.notEqual(op("1x Suco Nectar Maracuja 300ml - Mirador").operacao, "subway", "suco de outra marca não vira Subway");
-    assert.equal(op("Sucos 3x Suco Del Valle Uva").operacao, "triagem", "variação nova continua indo para a triagem (sem curinga)");
+    assert.equal(op("Sucos 3x Suco Del Valle Uva").operacao, "subway", "só a QUANTIDADE muda (#x); o produto é o mesmo");
+    assert.equal(op("Sucos 3x Suco Del Valle Abacaxi Inedito").operacao, "triagem", "sabor novo continua indo para a triagem (sem curinga)");
   });
   test("incluirValidadas recusa (com erro) linha da outra operação, com termo da outra, texto livre, não normalizada ou sem evidência", () => {
     const base = { subway: ["alface"], acai_no_grau: ["granola"] };
