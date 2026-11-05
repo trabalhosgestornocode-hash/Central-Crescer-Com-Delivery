@@ -247,6 +247,9 @@ export const ACOES = {
   // Sincronização MANUAL Foody (piloto em sombra). `detalhes` só com unidade, dias, códigos e contagens; nunca token nem valores.
   FOODY_SYNC_MANUAL_EXECUTADA: "foody.sync_manual_executada",
   FOODY_SYNC_MANUAL_RECUSADA: "foody.sync_manual_recusada",
+  // Decisão de triagem Foody (conexão compartilhada). `detalhes`: conexão, titular, uid do pedido, dia, operação, justificativa e
+  // versão do catálogo — nunca itens, valores, pagamento ou dado do cliente. A linha imutável em foody_triagem_decisoes segue a fonte.
+  FOODY_TRIAGEM_DECIDIDA: "foody.triagem_decidida",
 };
 
 /**
@@ -299,15 +302,50 @@ export async function auditar(entrada) {
     ip: entrada.ip ?? null,
     user_agent: entrada.userAgent ?? null,
   };
+  await inserirLinhaAuditoria(linha, entrada.acao);
+}
+
+/** Insere a linha; devolve true se gravou. Nunca lança (regra de ouro). */
+async function inserirLinhaAuditoria(linha, acao) {
   try {
     let { error } = await supabase.from("plataforma_auditoria").insert(linha);
     if (error && RE_COLUNA_AUSENTE.test(error.message || "")) {
       const { perfil_id: _semPerfil, ...semColunaNova } = linha;
       ({ error } = await supabase.from("plataforma_auditoria").insert(semColunaNova));
     }
-    if (error) console.error("[auditoria] falha ao registrar:", entrada.acao, error.message);
+    if (error) { console.error("[auditoria] falha ao registrar:", acao, error.message); return false; }
+    return true;
   } catch (e) {
-    console.error("[auditoria] exceção ao registrar:", entrada.acao, e?.message);
+    console.error("[auditoria] exceção ao registrar:", acao, e?.message);
+    return false;
+  }
+}
+
+/**
+ * Variante CONFIRMADA (ações que precisam de rastro garantido, ex.: decisão de triagem Foody): tenta até `tentativas` vezes e
+ * devolve true/false. Continua sem lançar — quem chama decide o que fazer com o false (log, resposta, nova tentativa no reenvio).
+ */
+export async function auditarConfirmado(entrada, { tentativas = 2 } = {}) {
+  const detalhes = entrada.perfilNome ? { ...(entrada.detalhes ?? {}), perfil_nome: entrada.perfilNome } : (entrada.detalhes ?? {});
+  const linha = {
+    ator_id: entrada.atorId ?? null, ator_email: entrada.atorEmail ?? null, perfil_id: entrada.perfilId ?? null,
+    ator_tipo: entrada.atorTipo ?? "usuario", acao: entrada.acao, entidade: entrada.entidade ?? null,
+    entidade_id: entrada.entidadeId != null ? String(entrada.entidadeId) : null, organizacao_id: entrada.organizacaoId ?? null,
+    impersonado_por: entrada.impersonadoPor ?? null, detalhes, ip: entrada.ip ?? null, user_agent: entrada.userAgent ?? null,
+  };
+  for (let i = 0; i < Math.max(1, tentativas); i++) if (await inserirLinhaAuditoria(linha, entrada.acao)) return true;
+  return false;
+}
+
+/** Existe evento `acao` para a entidade? true/false; null se a leitura falhar (quem chama não deve presumir nada). */
+export async function eventoAuditoriaExiste(acao, entidade, entidadeId) {
+  try {
+    const { data, error } = await supabase.from("plataforma_auditoria").select("id")
+      .eq("acao", acao).eq("entidade", entidade).eq("entidade_id", String(entidadeId)).limit(1);
+    if (error) return null;
+    return (data ?? []).length > 0;
+  } catch {
+    return null;
   }
 }
 

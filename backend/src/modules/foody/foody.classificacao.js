@@ -36,15 +36,19 @@ export const TERMOS_VALIDADOS = Object.freeze({
   ]),
   subway: Object.freeze([
     Object.freeze({ termo: "subway", origem: "nome da operação; 0 ocorrências em pedidos Açaí no histórico" }),
+    Object.freeze({ termo: "footlong", origem: "tamanho exclusivo do sanduíche Subway; 1.248 pedidos Subway e 0 do Açaí (nem em revisão) "
+      + "no histórico de 15.336 pedidos (17/08–02/11/2026)" }),
   ]),
 });
 
 const semAcento = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "");
 
-/** Normaliza UMA linha de item: sem quantidade inicial ("2x"), sem acento/caixa, tamanhos/preços genéricos, espaços simples. */
+/** Normaliza UMA linha de item: sem quantidade inicial ("2x"), quantidade no meio da linha vira "#x" ("kit 2x cookie" e
+ * "kit 3x cookie" são a mesma linha de cardápio), sem acento/caixa, tamanhos/preços genéricos, espaços simples. */
 export function normalizarLinhaItem(linha) {
   return semAcento(linha).toLowerCase()
     .replace(/^\s*\d+\s*x\s*/, "")
+    .replace(/\s\d+\s*x\s+/g, " #x ")
     .replace(/\(?\d+\s*(ml|g|cm|l)\)?/g, "#$1")
     .replace(/r\$\s*[\d.,]+/g, "")
     .replace(/\s+/g, " ")

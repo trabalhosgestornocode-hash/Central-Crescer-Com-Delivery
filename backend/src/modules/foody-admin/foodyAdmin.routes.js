@@ -21,6 +21,7 @@ import { ENV_SEGREDO } from "../foody/foody.constants.js";
 import * as adm from "../foody/foody.administracao.service.js";
 import * as comp from "../foody/foody.compartilhamento.service.js";
 import { criarPlataformaFoody } from "./foodyAdmin.plataforma.js";
+import { auditarConfirmado, eventoAuditoriaExiste, ACOES } from "../../shared/auditoria.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -63,8 +64,23 @@ export const vinculoParaResposta = (d) => (d ? {
 } : null);
 export const decisaoParaResposta = (d) => (d ? {
   id: d.id, foodyUid: d.foody_uid, operacao: d.operacao_decidida, motivo: d.motivo, competencia: d.competencia ?? null,
-  decididoEm: d.decidido_em ?? null, aplicacao: d.aplicacao ?? null,
+  decididoEm: d.decidido_em ?? null, aplicacao: d.aplicacao ?? null, repetida: d.repetida === true,
 } : null);
+
+/**
+ * Evento de auditoria da decisão de triagem (plataforma_auditoria). Só identificadores, a decisão e a justificativa: nenhum item,
+ * valor, pagamento ou dado do cliente. `organizacao_id` = organização em nome da qual o administrador agiu (titular ou destino).
+ */
+export function eventoDecisaoTriagem(req, c, d) {
+  return {
+    atorId: req.user?.id ?? null, perfilId: c.ator.perfilId, atorTipo: "usuario", acao: ACOES.FOODY_TRIAGEM_DECIDIDA,
+    entidade: "foody_triagem_decisoes", entidadeId: d.id, organizacaoId: c.tenant.organizacaoId,
+    ip: req.ip ?? null, userAgent: req.headers?.["user-agent"] ?? null,
+    detalhes: { conexao_id: d.conexao_id, organizacao_titular_id: d.organizacao_id, unidade_id: d.unidade_id, foody_uid: d.foody_uid,
+      competencia: d.competencia, operacao_decidida: d.operacao_decidida, motivo: d.motivo, catalogo_versao: d.catalogo_versao,
+      decidido_em: d.decidido_em },
+  };
+}
 
 const semCache = (_req, res, next) => { res.set("Cache-Control", "no-store"); next(); };
 /** Defesa em profundidade: escrita em impersonação nunca chega ao serviço. */
@@ -79,7 +95,8 @@ const uuidParam = (nome) => (req, _res, next) =>
  * @param {{db?: object, env?: object, agora?: () => Date, plataforma?: object, seguranca?: () => object}} [opcoes]
  *   injeção para testes; em produção: supabase (service_role), process.env, relógio real.
  */
-export function criarFoodyAdminRouter({ db = supabase, env = process.env, agora = () => new Date(), plataforma = null, seguranca = null } = {}) {
+export function criarFoodyAdminRouter({ db = supabase, env = process.env, agora = () => new Date(), plataforma = null, seguranca = null,
+  auditoria = auditarConfirmado, auditoriaRegistrada = eventoAuditoriaExiste } = {}) {
   const router = Router();
   const repo = criarRepositorioFoody(db);
   const plat = plataforma ?? criarPlataformaFoody(db);
@@ -125,8 +142,23 @@ export function criarFoodyAdminRouter({ db = supabase, env = process.env, agora 
   router.get("/conexoes/:conexaoId/triagem/decisoes", uuidParam("conexaoId"), h((req, c) => comp.historicoDeDecisoes({ ator: c.ator, conexaoId: req.params.conexaoId }, deps)));
   router.get("/conexoes/:conexaoId/triagem", uuidParam("conexaoId"), h((req, c) => comp.listarTriagem({
     ator: c.ator, conexaoId: req.params.conexaoId, competencia: typeof req.query.competencia === "string" ? req.query.competencia : "" }, deps)));
-  router.post("/conexoes/:conexaoId/triagem/:foodyUid/decisao", uuidParam("conexaoId"), h(async (req, c) => decisaoParaResposta(await comp.decidirTriagem({
-    ator: c.ator, conexaoId: req.params.conexaoId, foodyUid: req.params.foodyUid, operacao: req.body?.operacao, motivo: req.body?.motivo }, deps)), 201));
+  // Decisão: linha imutável em foody_triagem_decisoes (fonte da verdade) + evento em plataforma_auditoria. Reenvio idêntico não
+  // grava de novo nem audita de novo (o serviço devolve `repetida`).
+  router.post("/conexoes/:conexaoId/triagem/:foodyUid/decisao", uuidParam("conexaoId"), h(async (req, c) => {
+    const d = await comp.decidirTriagem({
+      ator: c.ator, conexaoId: req.params.conexaoId, foodyUid: req.params.foodyUid, operacao: req.body?.operacao, motivo: req.body?.motivo }, deps);
+    // Rastro confirmado: decisão nova → evento (com nova tentativa). Reenvio idêntico → só audita se o evento daquela decisão
+    // ainda NÃO existe (cura uma falha anterior sem duplicar). Falha final → log de erro e `auditoria: "PENDENTE"` na resposta.
+    let estado = "REGISTRADA";
+    if (d.repetida) {
+      const existe = await auditoriaRegistrada(ACOES.FOODY_TRIAGEM_DECIDIDA, "foody_triagem_decisoes", d.id);
+      if (existe === true) estado = "JA_REGISTRADA";
+      else if (existe === null) estado = "NAO_VERIFICADA";
+      else estado = (await auditoria(eventoDecisaoTriagem(req, c, d))) === false ? "PENDENTE" : "REGISTRADA";
+    } else if ((await auditoria(eventoDecisaoTriagem(req, c, d))) === false) estado = "PENDENTE";
+    if (estado === "PENDENTE") console.error("[foody] decisão de triagem sem evento de auditoria:", d.id);
+    return { ...decisaoParaResposta(d), auditoria: estado };
+  }, 201));
 
   return router;
 }

@@ -220,4 +220,30 @@ describe("4. evolução do catálogo e resolução da triagem", () => {
     // t2 (CONFLITO) segue em triagem sem decisão: o dia não volta para a fila por ele.
     assert.deepEqual(await repo.listarCompetenciasParaReconciliar({ organizacaoId: ORG_A, unidadeId: UNI_A }, "2026-10-01"), []);
   });
+  test("PROCEDIMENTO de consolidação (piloto 02/11): decisão humana + 1 reprocessamento com o MESMO catálogo → só o decidido muda; v2 CONSOLIDADO nas duas empresas; repetir não cria versão", async () => {
+    lista = lista.filter((o) => o.uid !== "t2");
+    await ciclo();
+    const [a1] = structuredClone(fech(UNI_A)), [c1] = structuredClone(fech(UNI_C));
+    assert.deepEqual([a1.status, c1.status], ["PRELIMINAR", "PRELIMINAR"]);
+    assert.deepEqual(c1.pendencias, [{ codigo: "TRIAGEM_PENDENTE", quantidade: 1 }], "o Açaí só vê a contagem da triagem da conexão");
+    const admA = { perfilId: "a1000000-0000-4000-8000-000000000001", papel: "organization_admin", impersonando: false, organizacaoId: ORG_A };
+    await decidirTriagem({ ator: admA, conexaoId: CX, foodyUid: "t1", operacao: "subway", motivo: "conferido no Excel do dia: Subway" }, { env: ENV, repo });
+    assert.equal(fech(UNI_A).length, 1, "a decisão sozinha não move dado nem gera versão");
+    assert.equal(ativos("t1")[0].operacao, "triagem");
+
+    await ciclo();
+    const ex = db.tabelas.foody_sync_execucoes.filter((e) => e.competencia === D).at(-1);
+    assert.deepEqual([ex.inseridos, ex.atualizados, ex.inalterados, ex.pedidos_triagem, ex.distribuicao.decididosNaTriagem], [0, 1, 2, 0, 1]);
+    assert.deepEqual([ativos("t1").length, ativos("t1")[0].operacao, ativos("t1")[0].unidade_id], [1, "subway", UNI_A]);
+    const [a1b, a2] = fech(UNI_A), [c1b, c2] = fech(UNI_C);
+    assert.deepEqual([a1b, c1b], [a1, c1], "v1 PRELIMINAR preservada nas duas empresas");
+    assert.deepEqual([a2.versao, a2.status, a2.estado_valores, a2.pendencias], [2, "CONSOLIDADO", "SINCRONIZADO", []]);
+    assert.deepEqual([c2.versao, c2.status, c2.estado_valores, c2.pendencias], [2, "CONSOLIDADO", "SINCRONIZADO", []]);
+    assert.deepEqual(c2.indicadores.acai_no_grau.total, c1.indicadores.acai_no_grau.total, "valores do Açaí não mudam: só a pendência some");
+
+    await ciclo();
+    const ex3 = db.tabelas.foody_sync_execucoes.filter((e) => e.competencia === D).at(-1);
+    assert.deepEqual([ex3.inseridos, ex3.atualizados, ex3.inalterados], [0, 0, 3], "repetir é idempotente nos pedidos");
+    assert.deepEqual([fech(UNI_A).length, fech(UNI_C).length], [2, 2], "fechamento com o mesmo conteúdo não ganha versão");
+  });
 });

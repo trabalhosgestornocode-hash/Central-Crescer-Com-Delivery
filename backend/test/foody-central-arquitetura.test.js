@@ -80,6 +80,8 @@ describe("consumidores controlados", () => {
   // Exceções, e SÓ elas: o gerador OFFLINE do catálogo (148) e a camada de ADMINISTRAÇÃO pela tela (146, modules/foody-admin).
   // `sep` no fim: "modules/foody-admin" começa com "modules/foody" e não pode passar por dentro do módulo.
   const GERADOR_CATALOGO = join(RAIZ, "scripts", "foody-gerar-catalogo.mjs");
+  // Nova versão do catálogo só com as linhas validadas à mão: OFFLINE (sem banco, sem rede); teste próprio abaixo.
+  const INCLUIR_VALIDADAS = join(RAIZ, "scripts", "foody-catalogo-incluir-validadas.mjs");
   const PARIDADE = join(RAIZ, "scripts", "foody-paridade.mjs");
   const ADMIN = join(RAIZ, "src", "modules", "foody-admin");
   // A SINCRONIZAÇÃO MANUAL (piloto em sombra) é o único caminho de coleta fora do módulo: arquivo próprio, separado do router
@@ -94,7 +96,7 @@ describe("consumidores controlados", () => {
   const doAdmin = arquivos(ADMIN).filter((p) => p !== SYNC_ROTAS);
   test("nenhum arquivo fora do módulo importa modules/foody (exceto o gerador offline e a camada foody-admin)", () => {
     const fora = [...arquivos(join(RAIZ, "src")), ...arquivos(join(RAIZ, "scripts")).filter(Boolean)].filter((p) => !p.startsWith(MODULO + sep));
-    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== PARIDADE && p !== PONTE && p !== PONTE_PARSER && p !== PONTE_RELATORIO && !p.startsWith(ADMIN + sep)
+    const culpados = fora.filter((p) => p !== GERADOR_CATALOGO && p !== INCLUIR_VALIDADAS && p !== PARIDADE && p !== PONTE && p !== PONTE_PARSER && p !== PONTE_RELATORIO && !p.startsWith(ADMIN + sep)
       && /modules\/foody\/|\/foody\/foody\.|["']\.\.?\/foody\//.test(readFileSync(p, "utf8")));
     assert.deepEqual(culpados.map((p) => relative(RAIZ, p)), []);
   });
@@ -150,12 +152,21 @@ describe("consumidores controlados", () => {
     const comparador = semComentarios(readFileSync(join(MODULO, "foody.paridade.js"), "utf8"));
     assert.doesNotMatch(comparador, /import |\.from\(|fetch\(/, "comparador é puro");
   });
-  test("o gerador do catálogo só faz SELECT e só importa gerador/classificação", () => {
+  test("o gerador do catálogo é OFFLINE (lê só arquivo local: sem banco, sem rede, sem service_role) e só importa gerador/classificação", () => {
     const s = semComentarios(readFileSync(GERADOR_CATALOGO, "utf8"));
+    assert.doesNotMatch(s, /supabase|createClient|service_role|SERVICE_ROLE|psql|fetch\(|\.from\(|process\.env/);
     assert.doesNotMatch(s, /\.(insert|update|upsert|delete|rpc)\(/);
-    assert.deepEqual([...s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)].map((m) => m[1]), ["parser_fd_pedidos"]);
     const daCamada = [...s.matchAll(/from\s+["']([^"']*modules\/foody\/[^"']+)["']/g)].map((m) => m[1]).sort();
-    assert.deepEqual(daCamada, ["../src/modules/foody/foody.catalogo.gerador.js", "../src/modules/foody/foody.classificacao.js"]);
+    assert.deepEqual(daCamada, ["../src/modules/foody/foody.catalogo-validadas.js", "../src/modules/foody/foody.catalogo.gerador.js",
+      "../src/modules/foody/foody.classificacao.js"]);
+  });
+  test("a inclusão de validadas é OFFLINE: sem banco, sem rede; só lê o catálogo/validadas e usa o gerador puro", () => {
+    const s = semComentarios(readFileSync(INCLUIR_VALIDADAS, "utf8"));
+    assert.doesNotMatch(s, /supabase|createClient|psql|pg\b|fetch\(|\.from\(|process\.env/);
+    const imports = [...s.matchAll(/from\s+["']([^"']+)["']/g)].map((m) => m[1]).filter((i) => !i.startsWith("node:")).sort();
+    assert.deepEqual(imports, ["../src/modules/foody/foody.catalogo-operacao.js", "../src/modules/foody/foody.catalogo-validadas.js",
+      "../src/modules/foody/foody.catalogo.gerador.js"]);
+    assert.doesNotMatch(semComentarios(readFileSync(join(MODULO, "foody.catalogo-validadas.js"), "utf8")), /import |\.from\(|fetch\(/, "lista pura");
   });
   test("server.js só alcança a camada Foody pela ponte embutida (sem import estático do módulo)", () => {
     const s = semComentarios(readFileSync(join(RAIZ, "src", "server.js"), "utf8"));
