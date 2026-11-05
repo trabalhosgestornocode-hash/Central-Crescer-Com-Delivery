@@ -2682,7 +2682,12 @@ body {
 
 /* ---------- cartões de indicador ---------- */
 .padm-cards {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
+  /* auto-fit (não auto-fill) + piso maior: menos cartões por linha, mais espaço
+     para valores grandes (ex.: "R$ 12.500.000,00", medido em 202px a 27px/780
+     — precisa de >=232px de cartão só pro texto, sem folga) nunca serem
+     cortados pelo overflow:hidden do .padm-card — ver .padm-card-valor abaixo.
+     260px dá ~28px de folga sobre o pior caso medido. */
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 12px; margin-bottom: 18px; align-items: stretch;
 }
 .padm-card {
@@ -2713,7 +2718,13 @@ body {
 .padm-card--critico .padm-card-ic { color: var(--bad); background: var(--bad-bg); }
 .padm-card--atencao .padm-card-ic { color: var(--warn); background: var(--warn-bg); }
 .padm-card--ok .padm-card-ic { color: var(--ok); background: var(--ok-bg); }
-.padm-card-valor { font-size: 27px; font-weight: 780; letter-spacing: -1px; line-height: 1.05; }
+.padm-card-valor {
+  font-size: 27px; font-weight: 780; letter-spacing: -1px; line-height: 1.05;
+  /* nunca corta: se mesmo com o piso de largura acima o valor não couber numa
+     linha (telas muito estreitas, zoom alto), quebra para a 2ª linha em vez
+     de ser cortado pelo overflow:hidden do .padm-card. */
+  overflow-wrap: anywhere; word-break: break-word;
+}
 .padm-card-barra { display: block; height: 4px; border-radius: 999px; background: var(--superficie-2); overflow: hidden; margin-top: 1px; }
 .padm-card-barra i { display: block; height: 100%; border-radius: 999px; background: var(--grad-verde); }
 .padm-card-nota { font-size: 11px; color: var(--cinza); line-height: 1.35; }
