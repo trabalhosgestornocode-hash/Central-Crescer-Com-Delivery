@@ -166,6 +166,17 @@ body {
   /* No mobile: assinatura centralizada e discreta */
   .dev-credito { left: 50%; right: auto; transform: translateX(-50%); bottom: 16px; --dev-fs: 11px; --dev-op: .38; }
 }
+/* ===================== AVISO DE VERSÃO ANTIGA (ver versaoApp.js) =====================
+   Fixo no topo de TUDO (acima do menu/topbar, até de modais) — some sozinho ao recarregar,
+   então não precisa de botão de fechar nem empurrar o layout por uns segundos. */
+.versao-antiga-aviso {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  padding: 11px 16px; font-size: 13.5px; font-weight: 700; text-align: center;
+  background: var(--warn-bg); color: var(--warn); border-bottom: 1px solid rgba(196,138,18,.35);
+  box-shadow: var(--sombra-md); animation: fadeInUp .25s ease;
+}
+
 /* ===================== APP SHELL ===================== */
 .app { display: flex; min-height: 100vh; }
 .backdrop { display: none; position: fixed; inset: 0; background: rgba(6,40,25,.45); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); z-index: 40; animation: fadeIn .2s; }
@@ -230,7 +241,7 @@ body {
 }
 .user-nome { font-size: 14px; font-weight: 650; }
 
-.content { padding: 24px; max-width: 1340px; width: 100%; animation: fadeIn .25s ease; }
+.content { padding: 24px; max-width: 1340px; width: 100%; margin: 0 auto; animation: fadeIn .25s ease; }
 
 /* ===================== CARDS =====================
    Um card = um número. Fundo branco/off-white sempre — o destaque de um

@@ -57,6 +57,7 @@ import { iniciar as iniciarRealtime } from "./realtime/realtimeManager.js";
 import { ehPerfilExibicao, itemPermitidoAoPerfil, rotaInicialDoPerfil } from "./perfilExibicao.js";
 import { iniciarRenovacaoAutomatica } from "./renovacaoContexto.js";
 import { instalarMenuRetratil } from "./menuLateral.js";
+import { iniciarVerificacaoVersao } from "./versaoApp.js";
 
 // ---------- Ações de navegação do Agente Crescer (Etapa F.1) ----------
 // Registradas UMA vez, aqui — app.js é o topo do grafo de imports (nada o
@@ -1110,6 +1111,8 @@ async function boot() {
   aplicarTemaSalvo();
   wireEventos();
   initTooltips();
+  // Independe de login: mesmo a tela de login pode estar rodando um deploy já superado.
+  iniciarVerificacaoVersao();
   // Só liga os gatilhos (troca de contexto/logout) — a conexão de verdade só
   // acontece quando resetarEscopoDeContexto() disparar pela 1ª vez (dentro de
   // mostrarApp/encaminhar, mais abaixo). Ver realtime/realtimeManager.js.
