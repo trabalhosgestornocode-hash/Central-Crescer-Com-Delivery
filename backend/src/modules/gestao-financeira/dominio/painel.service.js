@@ -7,6 +7,7 @@
 import * as repositorio from "./repositorio.js";
 import * as rel from "./relatorios.service.js";
 import * as obr from "./obrigacoes.service.js";
+import * as f152 from "./f152.service.js";
 import { exigirContexto } from "./contexto.js";
 import { mesAno } from "./validacao.js";
 import { montarDreReferencia } from "../../../financeiro-calculos/dreGerencialReferencia.js";
@@ -31,7 +32,9 @@ async function vendasDoMes(c, mes, deps) {
 export async function dreReferencia(ctx, q, deps = padrao) {
   const c = exigirContexto(ctx);
   const mes = mesAno(q?.mes, "mes");
-  const [plano, obrs, pags, vendas] = await Promise.all([deps.repo.listarPlanoContas(c, deps.db), deps.repo.listarObrigacoes(c, deps.db), deps.repo.listarPagamentos(c, deps.db), vendasDoMes(c, mes, deps)]);
+  const [plano, obrs, pags, vendas, rateios, dividas] = await Promise.all([deps.repo.listarPlanoContas(c, deps.db), deps.repo.listarObrigacoes(c, deps.db), deps.repo.listarPagamentos(c, deps.db), vendasDoMes(c, mes, deps),
+    deps.repo.listarRateios ? f152.rateiosParaDre(c, deps) : [], deps.repo.listarDividas ? f152.listarDividas(c, { mes }, deps) : null]);
+  const temDividaPe = (dividas?.itens ?? []).some((d) => d.entraPeFinanceiro);
   const regras = regrasPadrao(plano);
   const catNome = new Map(plano.map((p) => [p.id, p.nome]));
   const obrPorId = new Map(obrs.map((o) => [o.id, o]));
@@ -39,13 +42,15 @@ export async function dreReferencia(ctx, q, deps = padrao) {
     vendas: { brutoCentavos: vendas.brutoCentavos },
     obrigacoes: obrs.map((o) => ({ chave: o.id, categoria: catNome.get(o.categoria_id), competencia: String(o.competencia).slice(0, 7), valorCentavos: Number(o.valor_original_centavos), status: o.status })),
     pagamentos: pags.map((p) => ({ chave: p.id, obrigacaoChave: p.obrigacao_id, categoria: catNome.get(obrPorId.get(p.obrigacao_id)?.categoria_id), data: String(p.data_pagamento).slice(0, 10), valorCentavos: Number(p.valor_centavos), status: p.status })),
-    rateios: [], parcelasDividaCentavos: null,
+    rateios: rateios.map((r) => ({ ...r, categoria: catNome.get(obrPorId.get(r.obrigacaoChave)?.categoria_id) })),
+    parcelasDividaCentavos: temDividaPe ? dividas.resumo.parcelasPeFinanceiroNoMesCentavos : null,
   } });
   const grupos = Object.entries(GRUPOS).filter(([k]) => k !== "fora").map(([k, rotulo]) => ({ grupo: k, rotulo, linhas: dre.linhas.filter((l) => l.grupo === k).map(({ origens, ...l }) => ({ ...l, parcelas: origens.length, criterio: regras.porCategoria[l.descricao]?.criterio ?? "fonte", motivo: regras.porCategoria[l.descricao]?.motivo ?? "vendas registradas" })) }));
   return {
     mes, regime: dre.regime, versaoRegras: dre.versaoRegras, regrasAprovadas: dre.regrasAprovadas, grupos, indicadores: dre.indicadores,
     regras: Object.entries(regras.porCategoria).map(([categoria, r]) => ({ categoria, grupo: GRUPOS[r.grupo], criterio: r.criterio, motivo: r.motivo })),
-    pendencias: { ...dre.pendencias, categoriasSemRegraNoPlano: regras.semRegra, rateios: "o sistema ainda não registra rateios (dias de consumo/produção): obrigações rateadas entram inteiras na competência", dividas: "sem cadastro de dívidas: PE financeiro indisponível" },
+    pendencias: { ...dre.pendencias, categoriasSemRegraNoPlano: regras.semRegra, rateios: rateios.length ? `${new Set(rateios.map((r) => r.obrigacaoChave)).size} obrigação(ões) rateada(s); ${rateios.filter((r) => r.status === "proposto").length} parcela(s) ainda PROPOSTA(S), pendente(s) de aprovação da contadora` : "nenhum rateio registrado: obrigações que cruzam meses entram inteiras na competência",
+      dividas: temDividaPe ? "PE financeiro com as parcelas (principal + juros) das dívidas marcadas para entrar no PE; encargos já estão nas despesas fixas" : "sem dívidas marcadas para o PE financeiro: PE financeiro indisponível" },
     semContasAPagar: obrs.length === 0,
   };
 }
@@ -80,6 +85,7 @@ export async function painel(ctx, q, deps = padrao) {
   const notaRef = dre.semContasAPagar ? "Sem contas a pagar registradas: custos e despesas por competência ficam incompletos." : "Metodologia gerencial (critério misto por categoria) ainda não aprovada pela contadora.";
   const cx = (id) => caixa.itens.find((x) => x.id === id)?.valor?.centavos ?? null;
   const lista = await obr.listar(c, { mes }, deps);
+  const receber = deps.repo.listarRecebiveis ? await f152.listarRecebiveis(c, { mes }, deps) : null;
   const acrescimoPendente = lista.itens.filter((i) => i.status === "aberta" && (i.pagoCentavos ?? 0) > i.valorOriginalCentavos).reduce((s, i) => s + i.pagoCentavos - i.valorOriginalCentavos, 0);
   const saldos = geral.saldosPorConta;
   return {
@@ -96,7 +102,8 @@ export async function painel(ctx, q, deps = padrao) {
       resultadoCaixa: ind(cx("resultadoGerencial"), { formula: "recebimentos − pagamentos operacionais (regime de caixa)", origem: "Fluxo de Caixa", nota: "Visão de caixa, separada da metodologia gerencial." }),
       saldoDisponivel: ind(saldos?.totalCentavos ?? null, { formula: "saldo de abertura + entradas − saídas, por conta", origem: "Saldos calculados das contas financeiras", estado: saldos?.parcial ? "parcial" : "ok", nota: "Saldo CALCULADO; o saldo informado em extrato/contagem ainda não é registrado no sistema." }),
       contasAPagar: ind(cp.contasPagar.emAbertoCentavos, { formula: "Σ saldo em aberto das contas a pagar (vencidas + a vencer) na data-base", origem: "Contas a Pagar", nota: `Vencido: R$ ${formatarCentavos(cp.contasPagar.vencidoCentavos)} · a vencer: R$ ${formatarCentavos(cp.contasPagar.aVencerCentavos)}` }),
-      contasAReceber: ind(null, { formula: "Σ recebíveis em aberto", origem: "—", estado: "indisponivel", nota: "O sistema ainda não registra contas a receber." }),
+      contasAReceber: receber == null ? ind(null, { formula: "Σ recebíveis em aberto", origem: "—", estado: "indisponivel", nota: "Cadastro de contas a receber indisponível." })
+        : ind(receber.resumo.pendenteCentavos, { formula: "Σ (valor original − recebido) dos recebíveis em aberto", origem: "Contas a Receber", nota: receber.resumo.quantidade ? `${receber.resumo.quantidade} recebível(is); ${receber.resumo.atrasados} atrasado(s)` : "Nenhum recebível registrado." }),
       jurosEncargos: ind((cp.juros?.confirmadoCentavos ?? 0) + (cp.juros?.presumidoCentavos ?? 0) + acrescimoPendente, { formula: "acréscimos confirmados + presumidos (pago acima do original)", origem: "Contas a Pagar / Juros e Encargos", estado: acrescimoPendente > 0 || (cp.juros?.presumidoCentavos ?? 0) > 0 ? "proposta" : "ok",
         nota: `Confirmados: R$ ${formatarCentavos(cp.juros?.confirmadoCentavos ?? 0)} · presumidos: R$ ${formatarCentavos((cp.juros?.presumidoCentavos ?? 0) + acrescimoPendente)} (presumido não é juros até a classificação).` }),
     },

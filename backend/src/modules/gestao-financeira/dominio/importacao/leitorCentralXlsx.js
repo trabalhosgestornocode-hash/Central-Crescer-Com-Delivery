@@ -16,6 +16,9 @@ export const TABELAS = Object.freeze({
   inconsistencias: { aba: "12_BD_INCONSISTENCIAS", exige: ["ID", "TIPO", "DESCRICAO", "STATUS"] },
   saldos: { aba: "05_BD_SALDOS", exige: ["CONTA", "COMPETENCIA", "SALDO INICIAL INFORMADO"] },
   rateios: { aba: "03_BD_RATEIOS", exige: ["ID", "ID OBRIGACAO", "COMPETENCIA", "VALOR"] },
+  dividas: { aba: "09_BD_DIVIDAS", exige: ["ID", "CREDOR", "TIPO", "ENTRA PE FINANCEIRO", "SITUACAO"] },
+  eventosDivida: { aba: "09_BD_EVENTOS_DIVIDA", exige: ["ID", "ID DIVIDA", "DATA", "TIPO EVENTO", "VALOR"] },
+  recebiveis: { aba: "04_BD_RECEBIVEIS", exige: ["ID", "TIPO CONTROLE", "COMPETENCIA", "VALOR LIQUIDO PREVISTO", "VALOR RECEBIDO"] },
 });
 
 /** Data do Excel (serial, Date ou texto ISO/pt-BR) → "AAAA-MM-DD" (sem fuso). */
@@ -68,10 +71,19 @@ export function lerCentralXlsx(buffer) {
       valorCentavos: c0(p.VALOR), idMovimento: txt(p["ID MOVIMENTO"]), cancelado: sim(p.CANCELADO), tipoRegistro: txt(p["TIPO REGISTRO"]),
       situacaoVinculo: txt(p["SITUACAO VINCULO"]),
     })),
-    movimentos: t.movimentos.map((m) => ({ id: txt(m.ID), conta: txt(m.CONTA), data: paraDataISO(m.DATA), entradaCentavos: c0(m.ENTRADA), saidaCentavos: c0(m.SAIDA), refFluxo: txt(m["REF FLUXO"]) })),
+    movimentos: t.movimentos.map((m) => ({ id: txt(m.ID), conta: txt(m.CONTA), data: paraDataISO(m.DATA), entradaCentavos: c0(m.ENTRADA), saidaCentavos: c0(m.SAIDA), refFluxo: txt(m["REF FLUXO"]),
+      categoria: txt(m.CATEGORIA), parTransferencia: txt(m["PAR TRANSFERENCIA"]), descricao: txt(m.DESCRICAO) })),
     fluxo: t.fluxo.map((f) => ({ id: txt(f.ID), conta: txt(f.CONTA), data: paraDataISO(f.DATA), descricao: txt(f.LANCAMENTO), entradaCentavos: c0(f.ENTRADA), saidaCentavos: c0(f.SAIDA) })),
     referencias: t.referencias.map((r) => ({ indicador: txt(r.INDICADOR), valorApresentacao: r["VALOR APRESENTACAO"], valorPlanilha: r["VALOR PLANILHA"], situacao: txt(r.SITUACAO), nota: txt(r.NOTA) })),
     rateios: t.rateios.map((r) => ({ id: txt(r.ID), obrigacaoId: txt(r["ID OBRIGACAO"]), competencia: paraDataISO(r.COMPETENCIA)?.slice(0, 7) ?? null, valorCentavos: c0(r.VALOR), criterio: txt(r.CRITERIO) })),
+    dividas: t.dividas.map((d) => ({ id: txt(d.ID), credor: txt(d.CREDOR), tipo: txt(d.TIPO), valorOriginalCentavos: d["VALOR ORIGINAL"] == null || d["VALOR ORIGINAL"] === "" ? null : c0(d["VALOR ORIGINAL"]),
+      dataContratacao: paraDataISO(d["DATA CONTRATACAO"]), parcelasTotal: Number.isInteger(d["PARCELAS TOTAL"]) ? d["PARCELAS TOTAL"] : null, valorParcelaCentavos: typeof d["VALOR PARCELA"] === "number" ? c0(d["VALOR PARCELA"]) : null,
+      parcelasPagasAntes: Number.isInteger(d["PARCELAS PAGAS ANTES"]) ? d["PARCELAS PAGAS ANTES"] : null, entraPe: sim(d["ENTRA PE FINANCEIRO"]),
+      saldoCentavos: typeof d.SALDO === "number" ? Math.round(d.SALDO * 100) : null, situacao: txt(d.SITUACAO), fonte: txt(d.FONTE), observacao: txt(d.OBSERVACAO) })),
+    eventosDivida: t.eventosDivida.map((e) => ({ id: txt(e.ID), dividaId: txt(e["ID DIVIDA"]), data: paraDataISO(e.DATA), tipo: txt(e["TIPO EVENTO"]), valorCentavos: c0(e.VALOR), idMovimento: txt(e["ID MOVIMENTO"]), observacao: txt(e.OBSERVACAO) })),
+    recebiveis: t.recebiveis.map((r) => ({ id: txt(r.ID), tipo: txt(r["TIPO CONTROLE"]), origem: txt(r["ORIGEM DO RECEBIVEL"]), canal: txt(r.CANAL), competencia: paraDataISO(r.COMPETENCIA)?.slice(0, 7) ?? null,
+      previsao: paraDataISO(r["PREVISAO RECEBIMENTO"]), valorPrevistoCentavos: typeof r["VALOR LIQUIDO PREVISTO"] === "number" ? Math.round(r["VALOR LIQUIDO PREVISTO"] * 100) : null,
+      valorRecebidoCentavos: typeof r["VALOR RECEBIDO"] === "number" ? Math.round(r["VALOR RECEBIDO"] * 100) : null, dataRecebimento: paraDataISO(r["DATA RECEBIMENTO"]), contaDestino: txt(r["CONTA DESTINO"]), status: txt(r.STATUS) })),
     saldos: t.saldos.map((s) => ({ conta: txt(s.CONTA), data: paraDataISO(s.COMPETENCIA), inicialInformadoCentavos: s["SALDO INICIAL INFORMADO"] == null || s["SALDO INICIAL INFORMADO"] === "" ? null : c0(s["SALDO INICIAL INFORMADO"]), fonte: txt(s["FONTE SALDO INICIAL"]) })),
     inconsistencias: t.inconsistencias.map((i) => ({ id: txt(i.ID), tipo: txt(i.TIPO), descricao: txt(i.DESCRICAO), status: txt(i.STATUS), responsavel: txt(i.RESPONSAVEL) })),
   };

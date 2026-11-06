@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { lerCentralXlsx } from "../../src/modules/gestao-financeira/dominio/importacao/leitorCentralXlsx.js";
 import { planejarImportacaoCentral } from "../../src/financeiro-calculos/importacaoCentral.js";
+import { planejarComplementos } from "../../src/financeiro-calculos/importacaoCentral152.js";
 
 const arg = (n) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : undefined; };
 const sair = (c, m) => { (c ? console.error : console.log)(m); process.exit(c); };
@@ -72,7 +73,7 @@ const dpArq = JSON.parse(readFileSync(DP, "utf8"));
 // --proposta-completa (SÓ para ensaio no banco descartável): inclui os itens "a confirmar" e o fornecedor marcador.
 const PROPOSTA = process.argv.includes("--proposta-completa");
 const dePara = { contas: dpArq.contas, categorias: { ...dpArq.categorias, ...(PROPOSTA ? Object.fromEntries(Object.entries(dpArq.categorias_a_confirmar ?? {}).map(([k, v]) => [k, String(v).replace(/\s*\(.*$/, "")])) : {}) },
-  fornecedorAusente: PROPOSTA ? dpArq.fornecedor_ausente_proposto ?? null : dpArq.fornecedor_ausente ?? null, fornecedoresPorId: {} };
+  fornecedorAusente: PROPOSTA ? dpArq.fornecedor_ausente_proposto ?? null : dpArq.fornecedor_ausente ?? null, fornecedoresPorId: {}, mesmoFato: dpArq.mesmoFato ?? [] };
 // --fornecedores <csv ;> : complemento preenchido pela contadora (colunas ID e "Fornecedor (PREENCHER)"); linhas vazias são ignoradas
 const FCSV = arg("fornecedores");
 if (FCSV) {
@@ -107,7 +108,61 @@ const relatorio = (p, rotulo) => {
 console.log(`${APLICAR ? "APLICAR" : "SIMULAÇÃO"} — banco descartável ${DB}`);
 console.log("resumo:", JSON.stringify(plano.resumo));
 console.log("relatório:", relatorio(plano, APLICAR ? "antes" : "simulacao"));
-if (!APLICAR) sair(0, "SIMULAÇÃO: nada foi gravado.");
+// ---------- complementos (migration 152): rateios, dívidas, recebíveis, pernas de transferência do caixa ----------
+function lerSistema152() {
+  const w = `organizacao_id = '${ORG}' and unidade_id = '${UNI}'`;
+  const s = j(`select json_build_object(
+    'obrigacoes', coalesce((select json_agg(json_build_object('chave', chave_origem, 'id', id, 'valorCentavos', valor_original_centavos)) from fin_obrigacoes where ${w} and chave_origem like 'central:%'), '[]'),
+    'rateios', coalesce((select json_agg(chave_origem) from fin_rateios where ${w} and status <> 'cancelado' and chave_origem is not null), '[]'),
+    'dividas', coalesce((select json_agg(chave_origem) from fin_dividas where ${w} and chave_origem is not null), '[]'),
+    'eventos', coalesce((select json_agg(chave_origem) from fin_divida_eventos where ${w} and chave_origem is not null), '[]'),
+    'recebiveis', coalesce((select json_agg(chave_origem) from fin_recebiveis where ${w} and chave_origem is not null), '[]'),
+    'lancamentos', coalesce((select json_agg(chave_origem) from fin_lancamentos where ${w} and chave_origem like 'central:%'), '[]'),
+    'contas', coalesce((select json_agg(json_build_object('id', id, 'nome', nome)) from fin_contas where ${w}), '[]'),
+    'catTransf', (select id from fin_plano_contas where organizacao_id = '${ORG}' and papel = 'transferencia' and ativo order by nome limit 1),
+    'entradas', coalesce((select json_agg(json_build_object('id', l.id, 'conta', c.nome, 'data', l.data_movimento, 'valorCentavos', l.valor_centavos, 'transf', pc.papel = 'transferencia',
+        'semPar', not exists (select 1 from fin_transferencias t where t.status is distinct from 'cancelada' and l.id in (t.lancamento_saida_id, t.lancamento_entrada_id))))
+      from fin_lancamentos l join fin_contas c on c.id = l.conta_id left join fin_plano_contas pc on pc.id = l.categoria_id
+      where l.organizacao_id = '${ORG}' and l.unidade_id = '${UNI}' and l.sentido = 'entrada' and l.status = 'realizado'), '[]')
+  )::text`);
+  return { obrigacoesPorChave: new Map(s.obrigacoes.map((o) => [o.chave, { id: o.id, valorCentavos: Number(o.valorCentavos) }])), rateiosChaves: new Set(s.rateios), dividasChaves: new Set(s.dividas),
+    eventosChaves: new Set(s.eventos), recebiveisChaves: new Set(s.recebiveis), lancamentosChaves: new Set(s.lancamentos), contas: s.contas, categoriaTransferenciaId: s.catTransf,
+    entradasSemPar: s.entradas.filter((e) => e.transf && e.semPar), entradas: s.entradas };
+}
+const planejarComp = () => planejarComplementos({ central, sistema: lerSistema152(), dePara });
+function complementos(aplicar) {
+  const temTabelas = j(`select to_json(to_regclass('public.fin_rateios') is not null)`);
+  if (!temTabelas) { console.log("complementos: migration 152 ausente neste banco — pulado"); return true; }
+  const cp = planejarComp();
+  console.log("complementos (plano):", JSON.stringify(cp.resumo));
+  writeFileSync(path.join(SAIDA, `central-complementos-${aplicar ? "antes" : "simulacao"}-${carimbo}.json`), JSON.stringify(cp, null, 1));
+  if (!aplicar) return true;
+  const sis = lerSistema152();
+  const L = (v) => (v == null ? "null" : `'${String(v).replace(/'/g, "''")}'`);
+  const stm = [];
+  for (const r of cp.rateios.filter((x) => x.situacao === "novo"))
+    stm.push(`select fin_rateio_definir('${ORG}','${UNI}','${IMPORTADOR}','${r.obrigacaoId}',${r.valorElegivelCentavos},${L(r.criterio)},${L(r.justificativa)},${L(r.origemDocumental)},${L(JSON.stringify(r.parcelas))}::jsonb,${L(r.chave)},'importacao');`);
+  for (const d of cp.dividas.filter((x) => x.situacao === "novo"))
+    stm.push(`insert into fin_dividas(organizacao_id,unidade_id,natureza,credor,descricao,valor_original_centavos,data_contratacao,parcelas_total,valor_parcela_centavos,parcelas_pagas_antes,saldo_informado_centavos,saldo_informado_em,documentada,pendencia_documental,entra_pe_financeiro,origem,chave_origem,observacoes,criado_por,atualizado_por) values ('${ORG}','${UNI}',${L(d.natureza)},${L(d.credor)},${L(d.descricao)},${d.valorOriginalCentavos ?? "null"},${L(d.dataContratacao)},${d.parcelasTotal ?? "null"},${d.valorParcelaCentavos ?? "null"},${d.parcelasPagasAntes ?? "null"},${d.saldoInformadoCentavos ?? "null"},${L(d.saldoInformadoEm)},false,${L(d.pendencia)},${d.entraPe},'importacao',${L(d.chave)},${L(d.observacoes)},'${IMPORTADOR}','${IMPORTADOR}') on conflict do nothing;`);
+  for (const e of cp.eventos.filter((x) => x.situacao === "novo"))
+    stm.push(`insert into fin_divida_eventos(organizacao_id,unidade_id,divida_id,data,tipo,principal_centavos,juros_centavos,encargos_centavos,chave_origem,observacao,criado_por,atualizado_por) select '${ORG}','${UNI}',id,${L(e.data)},${L(e.tipo)},${e.principalCentavos},${e.jurosCentavos},${e.encargosCentavos},${L(e.chave)},${L(e.observacao)},'${IMPORTADOR}','${IMPORTADOR}' from fin_dividas where organizacao_id='${ORG}' and unidade_id='${UNI}' and chave_origem=${L(e.dividaChave)} on conflict do nothing;`);
+  for (const r of cp.recebiveis.filter((x) => x.situacao === "novo")) {
+    stm.push(`insert into fin_recebiveis(organizacao_id,unidade_id,origem,contraparte,descricao,competencia,valor_original_centavos,previsao,conta_id,origem_registro,chave_origem,observacoes,criado_por,atualizado_por) values ('${ORG}','${UNI}',${L(r.origem)},${L(r.contraparte)},${L(r.descricao)},${L(r.competencia)},${r.valorOriginalCentavos},${L(r.previsao)},${L(r.contaId)},'importacao',${L(r.chave)},${L(`Situação na Central: ${r.statusCentral}`)},'${IMPORTADOR}','${IMPORTADOR}') on conflict do nothing;`);
+    for (const x of r.recebimentos ?? [])
+      stm.push(`insert into fin_recebimentos(organizacao_id,unidade_id,recebivel_id,data,valor_centavos,conta_id,lancamento_id,observacao,criado_por,atualizado_por) select '${ORG}','${UNI}',id,${L(x.data)},${x.valorCentavos},${L(x.contaId)},${L(x.lancamentoId)},${L(`Central ${x.origem}`)},'${IMPORTADOR}','${IMPORTADOR}' from fin_recebiveis where organizacao_id='${ORG}' and unidade_id='${UNI}' and chave_origem=${L(r.chave)};`);
+  }
+  for (const p of cp.pernas.filter((x) => x.situacao === "novo")) {
+    stm.push(`insert into fin_lancamentos(organizacao_id,unidade_id,conta_id,categoria_id,descricao,sentido,valor_centavos,data_movimento,status,origem,chave_origem,referencia_origem,classificacao_pendente,criado_por,atualizado_por) values ('${ORG}','${UNI}',${L(p.contaId)},${L(sis.categoriaTransferenciaId)},${L(p.descricao)},'saida',${p.valorCentavos},${L(p.data)},'realizado','importacao',${L(p.chave)},${L(`Central 05_BD_MOVIMENTOS ${p.id} (${p.par}) — perna ausente no Fluxo de Caixa`)},true,'${IMPORTADOR}','${IMPORTADOR}');`);
+    stm.push(`select fin_vincular_transferencia('${ORG}','${UNI}','${IMPORTADOR}',(select id from fin_lancamentos where organizacao_id='${ORG}' and unidade_id='${UNI}' and chave_origem=${L(p.chave)}),'${p.entradaId}');`);
+  }
+  if (!stm.length) { console.log("complementos: nada novo a gravar"); return true; }
+  try { psql(["begin isolation level read committed;", "set local lock_timeout = '5s';", "set local role service_role;", ...stm, "commit;"].join("\n")); }
+  catch (e) { console.log(`COMPLEMENTOS: FALHA — transação desfeita.\n${e.message}`); return false; }
+  const dp = planejarComp();
+  console.log("complementos (após gravar):", JSON.stringify(dp.resumo));
+  return ["rateios", "recebiveis", "dividas", "eventos", "pernasCaixa"].reduce((n, k) => n + (dp.resumo[k].novo ?? 0), 0) === 0;
+}
+if (!APLICAR) { complementos(false); sair(0, "SIMULAÇÃO: nada foi gravado."); }
 if (plano.resumo.bloqueiaGravacao) sair(1, "RECUSADO: há registros DIVERGENTES de importação anterior — resolver antes (nada foi gravado).");
 
 const novasO = plano.obrigacoes.filter((o) => o.situacao === "nova");
@@ -160,5 +215,6 @@ console.log("gravado (totais no banco descartável):", saida.split("\n").filter(
 const depois = planejar();
 console.log("replanejamento após gravar:", JSON.stringify(depois.resumo));
 console.log("relatório pós-gravação:", relatorio(depois, "depois"));
-const idem = (depois.resumo.obrigacoes.nova ?? 0) === 0 && (depois.resumo.pagamentos.novo ?? 0) === 0 && depois.vinculos.length === 0 && (depois.resumo.saldosAbertura.novo ?? 0) === 0;
+const compOk = complementos(true);
+const idem = compOk && (depois.resumo.obrigacoes.nova ?? 0) === 0 && (depois.resumo.pagamentos.novo ?? 0) === 0 && depois.vinculos.length === 0 && (depois.resumo.saldosAbertura.novo ?? 0) === 0;
 sair(idem ? 0 : 1, idem ? "IMPORTAÇÃO: OK — repetir não gravaria nada (idempotente)" : "ATENÇÃO: o replanejamento ainda encontra registros novos");

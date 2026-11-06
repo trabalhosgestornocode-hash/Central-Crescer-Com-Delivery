@@ -67,11 +67,25 @@ export const MENSAGENS = Object.freeze({
   FIN2_GRUPO_INVALIDO: "Um vínculo concilia exatamente uma saída do extrato.",
   FIN2_TRANSICAO_INVALIDA: "Esta mudança de situação do vínculo não é permitida.",
   FIN2_VINCULO_ENCERRADO_IMUTAVEL: "Este vínculo foi rejeitado ou revogado e não pode ser alterado.",
+  // 152 — rateios, contas a receber, dívidas
+  FIN2_RATEIO_SOMA_DIVERGENTE: "A soma das competências precisa ser igual ao valor elegível do rateio.",
+  FIN2_RATEIO_VALOR_INVALIDO: "O valor elegível do rateio precisa ser maior que zero e no máximo o valor original da conta.",
+  FIN2_RATEIO_SEM_PARCELAS: "Informe ao menos uma competência de destino.",
+  FIN2_RATEIO_PARCELA_INVALIDA: "Há uma competência ou valor inválido na distribuição.",
+  FIN2_RATEIO_COMPETENCIA_REPETIDA: "A mesma competência aparece mais de uma vez na distribuição.",
+  FIN2_RATEIO_OBRIGACAO_CANCELADA: "Conta cancelada não pode ser rateada.",
+  FIN2_RATEIO_NAO_APROVAVEL: "Este rateio não está proposto (já foi aprovado ou cancelado).",
+  FIN2_RATEIO_VIA_FUNCAO: "Rateios só podem ser alterados pelas ações da tela (definir, aprovar, cancelar).",
+  FIN2_RECEBIMENTO_EXCEDE_RECEBIVEL: "O valor recebido passaria do valor original do recebível.",
+  FIN2_RECEBIMENTO_EXCEDE_ENTRADA: "Os recebimentos vinculados somariam mais que a entrada do extrato escolhida.",
+  FIN2_RECEBIMENTO_LANCAMENTO_INVALIDO: "A entrada do extrato precisa ser uma entrada realizada da mesma conta.",
+  FIN2_RECEBIVEL_CANCELADO: "Este recebível está cancelado.",
+  FIN2_MOTIVO_OBRIGATORIO: "Informe o motivo (mínimo de 5 caracteres).",
   FIN2_DIVERGENCIAS_BLOQUEADORAS: (m) => `Há ${/(\d+)\s*divergencia/.exec(m)?.[1] ?? "algumas"} divergência(s) de contas a pagar ou de conciliação de saídas que impedem o fechamento. Resolva-as antes de fechar.`,
 });
 const GENERICA = "A operação foi recusada pelas regras de integridade financeira. Nada foi alterado.";
 // códigos que indicam "não existe neste contexto" (inclusive de outro tenant) → 404, sem diferenciar o motivo
-const NAO_ENCONTRADO = new Set(["FIN_TRANSFERENCIA_NAO_ENCONTRADA", "FIN_PERIODO_NAO_ENCONTRADO", "FIN_IMPORTACAO_NAO_ENCONTRADA", "FIN2_OBRIGACAO_NAO_ENCONTRADA", "FIN2_VINCULO_NAO_ENCONTRADO"]);
+const NAO_ENCONTRADO = new Set(["FIN_TRANSFERENCIA_NAO_ENCONTRADA", "FIN_PERIODO_NAO_ENCONTRADO", "FIN_IMPORTACAO_NAO_ENCONTRADA", "FIN2_OBRIGACAO_NAO_ENCONTRADA", "FIN2_VINCULO_NAO_ENCONTRADO", "FIN2_RATEIO_INEXISTENTE", "FIN2_OBRIGACAO_INEXISTENTE"]);
 
 /** Traduz erro do banco em ApiError. Conflitos de período (concorrência) → 409; "não encontrado" → 404; regras de integridade → 400. */
 export const falha = (error) => {
