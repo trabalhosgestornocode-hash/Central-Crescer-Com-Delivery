@@ -80,7 +80,7 @@ const UNI_A = {
   modeloLogistico: "marketplace", faturamento: 12000, faturamentoAnterior: 11000, variacaoFaturamento: 0.0909,
   deducoes: 1200, deducoesPct: 10, composicaoDeducoes: { taxasComissoes: 1000, servicosPromocoes: 200, outrosAjustes: 0 },
   meta: { metaIdeal: 1000, limite: 1200 }, folgaLimitePp: 200, impactoFinanceiroEstimado: 0,
-  situacaoFinanceira: { chave: "em_dia", rotulo: "Em dia" }, incluiProvisorio: false, provisorio: 0,
+  situacaoFinanceira: { chave: "em_dia", rotulo: "Saudável" }, incluiProvisorio: false, provisorio: 0,
   ultimaAtualizacao: "2026-09-30",
 };
 const UNI_B = {
@@ -88,7 +88,7 @@ const UNI_B = {
   modeloLogistico: "marketplace", faturamento: 9000, faturamentoAnterior: 9500, variacaoFaturamento: -0.0526,
   deducoes: 1980, deducoesPct: 22, composicaoDeducoes: { taxasComissoes: 1600, servicosPromocoes: 380, outrosAjustes: 0 },
   meta: { metaIdeal: 1000, limite: 1200 }, folgaLimitePp: -1000, impactoFinanceiroEstimado: 720,
-  situacaoFinanceira: { chave: "critica", rotulo: "Crítica" }, incluiProvisorio: true, provisorio: 150,
+  situacaoFinanceira: { chave: "critica", rotulo: "Crítico" }, incluiProvisorio: true, provisorio: 150,
   ultimaAtualizacao: "2026-09-28",
 };
 const UNI_C = {
@@ -100,7 +100,7 @@ const UNI_C = {
   ultimaAtualizacao: null,
 };
 const EMPRESAS = [
-  { organizacaoId: "org-jv", empresaNome: "JV Alimentos", modeloLogistico: "marketplace", unidadesMonitoradas: 2, faturamento: 21000, deducoes: 3180, deducoesPct: 15.14, impactoFinanceiroEstimado: 720, situacaoFinanceira: { chave: "critica", rotulo: "Crítica" } },
+  { organizacaoId: "org-jv", empresaNome: "JV Alimentos", modeloLogistico: "marketplace", unidadesMonitoradas: 2, faturamento: 21000, deducoes: 3180, deducoesPct: 15.14, impactoFinanceiroEstimado: 720, situacaoFinanceira: { chave: "critica", rotulo: "Crítico" } },
   { organizacaoId: "org-beta", empresaNome: "Beta Sul", modeloLogistico: "full_service", unidadesMonitoradas: 1, faturamento: 7500, deducoes: 1125, deducoesPct: 15, impactoFinanceiroEstimado: 0, situacaoFinanceira: { chave: "atencao", rotulo: "Atenção" } },
 ];
 
@@ -289,7 +289,7 @@ describe("htmlVisaoGeralRede — ranking por modalidade", () => {
       ...REDE_CHEIA,
       rankingPorModalidade: { ...REDE_CHEIA.rankingPorModalidade, full_service: { melhores: [UNI_C], atencao: [] } },
     });
-    assert.match(h, /Todas as lojas desta modalidade estão em dia/);
+    assert.match(h, /Não há unidades classificadas em Atenção ou Crítico neste recorte/);
   });
 
   test("linha do ranking mostra o impacto financeiro estimado só quando > 0", () => {
@@ -351,8 +351,8 @@ describe("htmlDetalheEmpresa — bloco financeiro (drill-down a partir da Visão
       financeiro: {
         rede: { faturamento: 21000, deducoes: 3180, deducoesPct: 15.14, receitaLiquida: 17820 },
         unidades: [
-          { unidadeId: "uni-a", nome: "JV Loja A", faturamento: 12000, deducoesPct: 10, situacaoFinanceira: { chave: "em_dia", rotulo: "Em dia" }, impactoFinanceiroEstimado: 0, ultimaAtualizacao: "2026-09-30" },
-          { unidadeId: "uni-b", nome: "JV Loja B", faturamento: 9000, deducoesPct: 22, situacaoFinanceira: { chave: "critica", rotulo: "Crítica" }, impactoFinanceiroEstimado: 720, ultimaAtualizacao: null },
+          { unidadeId: "uni-a", nome: "JV Loja A", faturamento: 12000, deducoesPct: 10, situacaoFinanceira: { chave: "em_dia", rotulo: "Saudável" }, impactoFinanceiroEstimado: 0, ultimaAtualizacao: "2026-09-30" },
+          { unidadeId: "uni-b", nome: "JV Loja B", faturamento: 9000, deducoesPct: 22, situacaoFinanceira: { chave: "critica", rotulo: "Crítico" }, impactoFinanceiroEstimado: 720, ultimaAtualizacao: null },
         ],
       },
     });
@@ -531,11 +531,11 @@ describe("situação financeira explícita em todos os contextos da rede", () =>
     const h = V.htmlVisaoGeralRede(REDE_CHEIA);
     assert.match(h, /Situação financeira<select data-vr-filtro="situacao"/);
     assert.match(h, /Situação baseada em Total de deduções dos Indicadores de Rentabilidade/);
-    assert.match(h, /Crítica acima do limite/);
+    assert.match(h, /Crítico acima do limite/);
     assert.match(h, /pior classificação financeira de suas unidades/);
     assert.ok(!/banda de alerta/.test(h));
   });
-  for (const [chave, rotulo] of [["em_dia", "Em dia"], ["atencao", "Atenção"], ["critica", "Crítica"], ["sem_dados", "Sem dados"]]) {
+  for (const [chave, rotulo] of [["em_dia", "Saudável"], ["atencao", "Atenção"], ["critica", "Crítico"], ["sem_dados", "Sem dados"]]) {
     test(`badges de ranking e tabela: ${rotulo}`, () => {
       const u = { ...REDE_CHEIA.unidades[0], situacaoFinanceira: { chave }, totalDeducoesIndicadorPct: 12.34 };
       const h = V.htmlVisaoGeralRede({ ...REDE_CHEIA, unidades: [u], rankingPorModalidade: { marketplace: { melhores: [u], atencao: [u] } } });
@@ -551,7 +551,7 @@ describe("situação financeira explícita em todos os contextos da rede", () =>
 test("detalhe administrativo identifica explicitamente a classificação financeira", () => {
   const h = V.htmlDetalheUnidade({ situacaoFinanceira: { chave: "critica" } });
   assert.match(h, /Classificação financeira da unidade/);
-  assert.match(h, /Crítica/);
+  assert.match(h, /Crítico/);
   assert.match(h, /Situação baseada em Total de deduções/);
 });
 
@@ -560,4 +560,16 @@ test("modalidade mista aparece com rótulo explícito e opção no filtro", () =
   const h = V.htmlVisaoGeralRede({ ...REDE_CHEIA, unidades: [u], rankingPorModalidade: { misto: { melhores: [u], atencao: [] } } });
   assert.match(h, /<option value="misto"/);
   assert.match(h, /Misto \(Marketplace \/ Full Service\)/);
+});
+
+test("legenda financeira aparece antes dos filtros, inclusive sem unidades", () => {
+  for (const d of [REDE_CHEIA, { rede: { unidadesMonitoradas: 0 }, unidades: [] }]) {
+    const h = V.htmlVisaoGeralRede(d);
+    assert.ok(h.indexOf("data-legenda-financeira") < h.indexOf("data-vr-filtro"));
+    assert.match(h.replace(/<[^>]*>/g, ""), /Saudável: Dentro da Meta/);
+    assert.match(h.replace(/<[^>]*>/g, ""), /Atenção: Acima da Meta/);
+    assert.match(h.replace(/<[^>]*>/g, ""), /Crítico: Acima do Limite/);
+    assert.match(h, /Dados insuficientes para classificar/);
+    assert.doesNotMatch(h, />Em dia</);
+  }
 });
