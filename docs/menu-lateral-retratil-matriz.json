@@ -1,0 +1,402 @@
+[
+  {
+    "shell": "app",
+    "w": 1920,
+    "h": 1080,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 1440,
+    "h": 900,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 1366,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 1024,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 768,
+    "h": 1024,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 390,
+    "h": 844,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 1536,
+    "h": 864,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 1280,
+    "h": 720,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 1093,
+    "h": 614,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "app",
+    "w": 911,
+    "h": 512,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 1920,
+    "h": 1080,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 1440,
+    "h": 900,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 1366,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 1024,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 768,
+    "h": 1024,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 390,
+    "h": 844,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 1536,
+    "h": 864,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 1280,
+    "h": 720,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 1093,
+    "h": 614,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "fin",
+    "w": 911,
+    "h": 512,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 1920,
+    "h": 1080,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 1440,
+    "h": 900,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 1366,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 1024,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 768,
+    "h": 1024,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 390,
+    "h": 844,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 1536,
+    "h": 864,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 1280,
+    "h": 720,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 1093,
+    "h": 614,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "admin",
+    "w": 911,
+    "h": 512,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 1920,
+    "h": 1080,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 1440,
+    "h": 900,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 1366,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 1024,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 768,
+    "h": 1024,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 390,
+    "h": 844,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 1536,
+    "h": 864,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 1280,
+    "h": 720,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 1093,
+    "h": 614,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "padm",
+    "w": 911,
+    "h": 512,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 1920,
+    "h": 1080,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 1440,
+    "h": 900,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 1366,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 1024,
+    "h": 768,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 768,
+    "h": 1024,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 390,
+    "h": 844,
+    "dsf": 1,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 1536,
+    "h": 864,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 1280,
+    "h": 720,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 1093,
+    "h": 614,
+    "dsf": 1.25,
+    "status": "OK",
+    "falhas": []
+  },
+  {
+    "shell": "cfg",
+    "w": 911,
+    "h": 512,
+    "dsf": 1.5,
+    "status": "OK",
+    "falhas": []
+  }
+]
