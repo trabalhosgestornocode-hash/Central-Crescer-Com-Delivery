@@ -17,7 +17,9 @@ export function paraEntradaMotor(lancamentos, categoriasPorId) {
 export function aberturasComoLancamentos(aberturas, de, ate) {
   return aberturas
     .filter((a) => (!de || a.data_referencia >= de) && (!ate || a.data_referencia <= ate))
-    .map((a, i) => ({ id: `abertura-${i}`, contaId: a.conta_id, sentido: SENTIDO.ENTRADA, valorCentavos: Number(a.valor_centavos), papel: PAPEL.SALDO_ANTERIOR, status: STATUS.REALIZADO }));
+    // saldo de abertura NEGATIVO (ex.: conta de plataforma devedora) = "saída" do papel saldo_anterior com o valor absoluto:
+    // o motor só aceita valores >= 0 e calcula saldoAnterior = entradas − saídas do papel (a variação do caixa o exclui).
+    .map((a, i) => { const v = Number(a.valor_centavos); return { id: `abertura-${i}`, contaId: a.conta_id, sentido: v < 0 ? SENTIDO.SAIDA : SENTIDO.ENTRADA, valorCentavos: Math.abs(v), papel: PAPEL.SALDO_ANTERIOR, status: STATUS.REALIZADO }; });
 }
 
 function liquidoDaCategoria(ls, papel) {
