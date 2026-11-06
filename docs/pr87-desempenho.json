@@ -1,0 +1,217 @@
+{
+  "unidades": 46,
+  "lookup": [
+    {
+      "name": "antes",
+      "ms": 2388,
+      "calls": 5,
+      "bytes": 454705,
+      "pares": 29
+    },
+    {
+      "name": "depois",
+      "ms": 642,
+      "calls": 3,
+      "bytes": 112069,
+      "pares": 29
+    },
+    {
+      "name": "antes",
+      "ms": 2311,
+      "calls": 5,
+      "bytes": 454705,
+      "pares": 29
+    },
+    {
+      "name": "depois",
+      "ms": 642,
+      "calls": 3,
+      "bytes": 112069,
+      "pares": 29
+    },
+    {
+      "name": "antes",
+      "ms": 2198,
+      "calls": 5,
+      "bytes": 454705,
+      "pares": 29
+    },
+    {
+      "name": "depois",
+      "ms": 985,
+      "calls": 3,
+      "bytes": 112069,
+      "pares": 29
+    }
+  ],
+  "endpoint": [
+    {
+      "sample": 1,
+      "ms": 4486,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 2,
+      "ms": 4410,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 3,
+      "ms": 4251,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 4,
+      "ms": 4204,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 5,
+      "ms": 4328,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 6,
+      "ms": 4248,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 7,
+      "ms": 3843,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 8,
+      "ms": 4607,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 9,
+      "ms": 4259,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 10,
+      "ms": 4568,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 11,
+      "ms": 4180,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 12,
+      "ms": 4036,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 13,
+      "ms": 4177,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 14,
+      "ms": 4465,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 15,
+      "ms": 4133,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 16,
+      "ms": 4216,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 17,
+      "ms": 4200,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 18,
+      "ms": 4007,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 19,
+      "ms": 3854,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    },
+    {
+      "sample": 20,
+      "ms": 4161,
+      "calls": 16,
+      "bytes": 2362635,
+      "unidades": 46,
+      "status": "ok"
+    }
+  ],
+  "summary": {
+    "samples": 20,
+    "min": 3843,
+    "median": 4210,
+    "p95": 4568,
+    "max": 4607,
+    "errors": 0
+  }
+}

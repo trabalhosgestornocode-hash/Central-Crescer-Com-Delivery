@@ -1,3 +1,4 @@
+import { lerTotalDeducoesRentabilidade } from "./dashboardExecutivo.totalDeducoes.js";
 import { carregarPrecosRentabilidade } from "./dashboardExecutivo.precos.service.js";
 import { logisticaProprioOpcional } from "./dashboardExecutivo.logisticaProprio.js";
 import { calcularProtecaoPrecificacao, calcularComparacaoProduto } from "./dashboardExecutivo.rentabilidade.js";
@@ -504,14 +505,8 @@ async function obterMesDeUmaUnidade({
   // a SOMA em reais dos segmentos, cada um com as parcelas do SEU modelo
   // (consolidarSegmentos) — granular: um componente suspeito num segmento
   // não apaga o total do outro segmento nem os demais indicadores.
-  const totalDed = !misto
-    ? totalDeducoesIndicador(modelo.modeloLogistico, {
-      taxas_comissoes: cardValores.taxasComissoes,
-      servicos_promocoes: cardValores.servicosPromocoes,
-      taxas_entregadores: cardValores.taxasEntregadores,
-    })
-    : consolidado.totalDeducoes.valor;
-  const statusTotalDed = misto ? consolidado.totalDeducoes.status : registroSimples(totalDed).status;
+  const leituraTotalDed = lerTotalDeducoesRentabilidade(linhas, modelo.modeloLogistico, consolidado);
+  const totalDed = leituraTotalDed.valor;
 
   // Um PERCENTUAL só existe quando o SEU campo E a base/faturamento do MESMO
   // recorte estão conciliados — a única propagação de indisponibilidade é
@@ -528,8 +523,7 @@ async function obterMesDeUmaUnidade({
     servicos_promocoes: percentualConciliado("servicosPromocoes", campoFinanceiro("valorVendasIfood").status),
     taxas_entregadores: piorStatus(campoFinanceiro("taxasEntregadores").status, statusBaseEntregadores) === STATUS_CONCILIACAO.CONCILIADO
       ? percentual(cardValores.taxasEntregadores, baseEntregadores) : null,
-    total_deducoes: piorStatus(statusTotalDed, campoFinanceiro("valorVendasIfood").status) === STATUS_CONCILIACAO.CONCILIADO
-      ? percentual(totalDed, base) : null,
+    total_deducoes: leituraTotalDed.percentual,
   };
   // PROTEÇÃO DA PRECIFICAÇÃO — conceito exclusivo do Simulador de Preço.
   // Calculada só a partir dos preços das tabelas; NÃO toca `metas` nem os 4

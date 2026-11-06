@@ -92,3 +92,13 @@ describe("detalheOperacaoUnidade — Dashboard iFood completo da unidade (admin)
     assert.equal(chamadas[0].ano, 2026);
   });
 });
+
+for (const [percentual, esperado] of [[10, "em_dia"], [24, "atencao"], [28.01, "critica"], [null, "sem_dados"]]) {
+  test(`detalhe administrativo usa o indicador do próprio Dashboard: ${esperado}`, async () => {
+    const r = await detalheOperacaoUnidade({ unidadeId: UUID("a"), mes: "2026-09", hojeIso: HOJE }, {
+      supabase: fakeDb(cenario()),
+      obterMesDashboardExecutivo: async () => ({ cards: { totalDeducoes: { percentual, meta: { metaIdeal: 20, limite: 28 } } } }),
+    });
+    assert.equal(r.situacaoFinanceira.chave, esperado);
+  });
+}

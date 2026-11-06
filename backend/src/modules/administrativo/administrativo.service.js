@@ -9,6 +9,8 @@
 // organizações, 1..N unidades por lote, 1..N lançamentos por lote) + O(unidades
 // × dias) em memória. NUNCA `for unidade: SELECT`.
 
+import { lerTotalDeducoesRentabilidade } from "../dashboard-executivo/dashboardExecutivo.totalDeducoes.js";
+import { calcularProtecaoPrecificacao } from "../dashboard-executivo/dashboardExecutivo.rentabilidade.js";
 import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import {
@@ -22,7 +24,7 @@ import {
 } from "./administrativo.monitores.js";
 import {
   listarUnidadesElegiveis, obterOrganizacaoOperacional,
-  carregarLancamentosDaFrota, carregarLancamentosDaUnidade, carregarMetasIndicadores, carregarTrocasModeloDaFrota,
+  carregarLancamentosDaFrota, carregarLancamentosDaUnidade, carregarMetasIndicadores, carregarTrocasModeloDaFrota, carregarPrecosReferenciaDaFrota,
 } from "./administrativo.repo.js";
 import {
   faturamentoDaUnidade, somarFaturamento, coberturaDe,
@@ -34,16 +36,16 @@ import {
   lucratividadeDaUnidade, agregarRede, folgaLimite,
 } from "./administrativo.lucratividade.js";
 import {
-  classificarAtencaoFinanceira, impactoFinanceiroEstimado,
+  classificarAtencaoFinanceira, impactoFinanceiroEstimado, financeiroMensalDaUnidade,
   composicaoDeducoesDoBloco, somarComposicaoDeducoes,
   filtrarUnidadesRede, ordenarPrioridadeIntervencao, contagemPorSituacao,
 } from "./administrativo.visaoRede.js";
 import { escolherMetas } from "../dashboard-executivo/dashboardExecutivo.metas.service.js";
-import { statusIndicadorRentabilidade, MODELOS_LOGISTICOS, ROTULO_MODELO } from "../dashboard-executivo/dashboardExecutivo.calc.js";
+import { statusIndicadorRentabilidade, metasComProtecaoPrecificacao, MODELOS_LOGISTICOS, ROTULO_MODELO } from "../dashboard-executivo/dashboardExecutivo.calc.js";
 import {
   montarLinhaDoTempo, segmentosDoPeriodo, estadoDoPeriodo, rotuloDoModelo, trocasDeLinhas,
 } from "../dashboard-executivo/dashboardExecutivo.modeloTemporal.js";
-import { comporMetas } from "../dashboard-executivo/dashboardExecutivo.periodoMisto.js";
+import { comporMetas, dividirFinanceiroPorSegmento, consolidarSegmentos } from "../dashboard-executivo/dashboardExecutivo.periodoMisto.js";
 import { obterMes as obterMesDashboardExecutivo } from "../dashboard-executivo/dashboardExecutivo.service.js";
 import {
   carregarDatasLiberadas, listarDesbloqueios, criarDesbloqueio, revogarDesbloqueio,
@@ -361,6 +363,7 @@ export async function detalheEmpresa({ organizacaoId, hojeIso, mes } = {}, deps 
           unidadeId: u.unidadeId, nome: u.nome,
           faturamento: u.faturamento, deducoes: u.deducoes, deducoesPct: u.deducoesPct,
           meta: u.meta, situacaoFinanceira: u.situacaoFinanceira,
+          totalDeducoesIndicadorPct: u.totalDeducoesIndicadorPct,
           impactoFinanceiroEstimado: u.impactoFinanceiroEstimado, ultimaAtualizacao: u.ultimaAtualizacao,
         })),
       };
@@ -541,6 +544,7 @@ export async function detalheOperacaoUnidade({ unidadeId, mes, hojeIso } = {}, d
       organizacaoId: alvo.organizacaoId, empresaNome: alvo.empresaNome,
     },
     periodo: { mes: numMes, ano, ym: per.periodo, mesCorrente: per.mesCorrente },
+    situacaoFinanceira: classificarAtencaoFinanceira(dashboard.cards?.totalDeducoes?.percentual, dashboard.cards?.totalDeducoes?.meta),
     dashboard,
   };
 }
@@ -1344,9 +1348,8 @@ function redeVazia() {
 // ATENÇÃO / CRÍTICA / SEM_DADOS) de TODA a frota monitorada, por mês.
 //
 // NENHUMA fórmula nova de faturamento/dedução/receita: tudo vem de
-// `lucratividadeDaUnidade` (o mesmo motor usado pela Lucratividade semanal —
-// aqui chamado com `inicio`/`fim` = o MÊS inteiro em vez de um bloco de 7
-// dias). A classificação de 4 estados e o impacto financeiro estimado vivem
+// `financeiroMensalDaUnidade` (snapshot real ou distribuição mensal, como no
+// Dashboard iFood). A classificação de 4 estados e o impacto financeiro estimado vivem
 // em `administrativo.visaoRede.js`, sobre o MESMO par (metaIdeal, limite) por
 // modelo logístico que o Dashboard iFood já usa.
 const pad2 = (x) => String(x).padStart(2, "0");
@@ -1387,7 +1390,7 @@ export async function visaoGeralRede({
   const per = alvoDoPeriodo(mes, hoje);
   const orgFiltro = organizacaoId ? v.uuid(organizacaoId, "Empresa") : null;
   const uniFiltro = unidadeId ? v.uuid(unidadeId, "Unidade") : null;
-  const modFiltro = modalidade ? v.umDe(modalidade, "Modalidade", MODELOS_LOGISTICOS) : null;
+  const modFiltro = modalidade ? v.umDe(modalidade, "Modalidade", [...MODELOS_LOGISTICOS, "misto"]) : null;
   const sitFiltro = situacao ? v.umDe(situacao, "Situação", ["em_dia", "atencao", "critica", "sem_dados"]) : null;
 
   const frotaBase = await listarUnidadesElegiveis({ moduloId: MONITOR.modulo }, deps);
@@ -1397,7 +1400,6 @@ export async function visaoGeralRede({
   const { inicio: inicioMes, fim: fimMes } = janelaDoMes(ano, numMes, { corrente: per.mesCorrente, dataAlvo: per.dataAlvo });
   const antCal = mesAnterior(ano, numMes);
   const diasMesAnterior = diasDoMes(antCal.ano, antCal.mes);
-  const inicioMesAnterior = diasMesAnterior[0];
   const fimMesAnterior = diaEquivalenteNoMesAnterior(fimMes, diasMesAnterior);
 
   // Janela larga para a EVOLUÇÃO MENSAL (até 6 meses, incluindo o atual) — UMA
@@ -1409,22 +1411,20 @@ export async function visaoGeralRede({
   const desdeEvolucao = diasDoMes(mesesEvolucao[0].ano, mesesEvolucao[0].mes)[0];
 
   const orgIds = [...new Set(frotaBase.map((u) => u.organizacaoId))];
-  const [porUnidade, metasLinhas, trocasPorUnidade] = await Promise.all([
+  const [porUnidade, metasLinhas, trocasPorUnidade, precosPorUnidade] = await Promise.all([
     carregarLancamentosDaFrota({
       unidadeIds: frotaBase.map((u) => u.unidadeId), desdeIso: desdeEvolucao, ateIso: fimMes,
     }, deps),
     carregarMetasIndicadores({ organizacaoIds: orgIds }, deps),
     carregarTrocasModeloDaFrota({ unidadeIds: frotaBase.map((u) => u.unidadeId) }, deps),
+    carregarPrecosReferenciaDaFrota({ unidades: frotaBase }, deps),
   ]);
 
-  // Só linhas DIÁRIAS entram (ver cabeçalho de administrativo.lucratividade.js).
-  const diariasPorUnidade = new Map(frotaBase.map((u) => [
-    u.unidadeId, (porUnidade.get(u.unidadeId) ?? []).filter((r) => r.origem_lancamento !== "distribuicao_mensal"),
-  ]));
-
+  // No recorte mensal, usa as mesmas fontes do Dashboard: snapshot real ou,
+  // na ausência dele, distribuição mensal. Não herda a restrição semanal.
   const unidades = frotaBase.map((u) => {
-    const diarias = diariasPorUnidade.get(u.unidadeId) ?? [];
-    const doMes = (ym) => diarias.filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
+    const linhas = porUnidade.get(u.unidadeId) ?? [];
+    const doMes = (ym) => linhas.filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
     const linhasAtual = doMes(per.periodo);
     const linhasAnteriores = doMes(ymDe(antCal.ano, antCal.mes));
     // Data REAL do lançamento mais recente do mês — nunca inventada; null quando a unidade não tem nenhum lançamento no período.
@@ -1432,8 +1432,8 @@ export async function visaoGeralRede({
       ? linhasAtual.reduce((max, r) => (String(r.data_lancamento) > max ? String(r.data_lancamento) : max), String(linhasAtual[0].data_lancamento))
       : null;
 
-    const atual = lucratividadeDaUnidade(linhasAtual, { inicio: inicioMes, fim: fimMes, ateDataIso: fimMes });
-    const anterior = lucratividadeDaUnidade(linhasAnteriores, { inicio: inicioMesAnterior, fim: fimMesAnterior, ateDataIso: fimMesAnterior });
+    const atual = financeiroMensalDaUnidade(linhasAtual, fimMes);
+    const anterior = financeiroMensalDaUnidade(linhasAnteriores, fimMesAnterior);
     const composicao = composicaoDeducoesDoBloco(linhasAtual, inicioMes, fimMes);
 
     // Modelo VIGENTE no mês (linha do tempo de vigências) — mesmo padrão de
@@ -1448,20 +1448,27 @@ export async function visaoGeralRede({
       metasLinhas.filter((r) => r.modelo_logistico === m), { organizacaoId: u.organizacaoId, unidadeId: u.unidadeId },
     );
     const modelo = estado.tipo ?? null;
+    const divisao = estado.misto ? dividirFinanceiroPorSegmento(linhasAtual, segmentos) : null;
+    const consolidado = divisao ? consolidarSegmentos(divisao) : null;
+    const indicador = lerTotalDeducoesRentabilidade(linhasAtual, modelo, consolidado);
+    const protecao = calcularProtecaoPrecificacao({ ...precosPorUnidade.get(u.unidadeId), ticketMedioIfood: null }).protecaoPrecificacaoPct;
+    const metasRentabilidade = (m) => metasComProtecaoPrecificacao(metasDoModelo(m), protecao, m).metas;
     let metaDed;
     if (estado.misto) {
-      const partes = segmentos.map((s) => ({
+      const partes = divisao.segmentos.map((s) => ({
         modelo: s.modelo,
-        peso: lucratividadeDaUnidade(linhasAtual, { inicio: s.inicio, fim: s.fim, ateDataIso: fimMes }).faturamento ?? 0,
-        metas: metasDoModelo(s.modelo),
+        peso: s.campos.valorVendasIfood.valorOficial,
+        pesoConciliado: s.campos.valorVendasIfood.status === "conciliado",
+        metas: metasRentabilidade(s.modelo),
       }));
       metaDed = comporMetas(partes, ["total_deducoes"]).total_deducoes ?? null;
     } else {
-      metaDed = modelo ? (metasDoModelo(modelo).total_deducoes ?? null) : null;
+      metaDed = modelo ? (metasRentabilidade(modelo).total_deducoes ?? null) : null;
     }
 
-    const meta = metaDed ? { metaIdeal: R2(metaDed.metaIdeal), limite: R2(metaDed.limite) } : null;
-    const situacaoFinanceira = classificarAtencaoFinanceira(atual.deducoesPct, meta);
+    // Classificar com precisão integral; arredondar apenas os valores apresentados.
+    const meta = metaDed ? { metaIdeal: metaDed.metaIdeal, limite: metaDed.limite } : null;
+    const situacaoFinanceira = classificarAtencaoFinanceira(indicador.percentual, meta);
 
     return {
       unidadeId: u.unidadeId,
@@ -1482,19 +1489,21 @@ export async function visaoGeralRede({
 
       deducoes: R2(atual.deducoes),
       deducoesPct: R2(atual.deducoesPct),
+      totalDeducoesIndicador: indicador.valor,
+      totalDeducoesIndicadorPct: indicador.percentual,
       composicaoDeducoes: {
         taxasComissoes: R2(composicao.taxasComissoes),
         servicosPromocoes: R2(composicao.servicosPromocoes),
         outrosAjustes: R2(composicao.outrosAjustes),
       },
       meta,
-      folgaLimitePp: R2(folgaLimite(atual.deducoesPct, metaDed)),
+      folgaLimitePp: R2(folgaLimite(indicador.percentual, metaDed)),
 
       receitaLiquida: R2(atual.receitaLiquida),
       rentabilidadePct: R2(atual.rentabilidadePct),
 
       situacaoFinanceira,
-      impactoFinanceiroEstimado: impactoFinanceiroEstimado(atual.faturamento, atual.deducoesPct, meta),
+      impactoFinanceiroEstimado: impactoFinanceiroEstimado(atual.faturamento, indicador.percentual, meta),
 
       semDado: atual.semDado,
       _anterior: { faturamento: R2(anterior.faturamento), deducoes: R2(anterior.deducoes), receitaLiquida: R2(anterior.receitaLiquida), semDado: anterior.semDado },
@@ -1535,11 +1544,11 @@ export async function visaoGeralRede({
   // situação, que é do mês corrente), recortando cada mês em memória. ----
   const evolucaoMensal = mesesEvolucao.map(({ ano: a, mes: m }) => {
     const ehCorrente = a === ano && m === numMes;
-    const { inicio, fim } = janelaDoMes(a, m, { corrente: ehCorrente && per.mesCorrente, dataAlvo: per.dataAlvo });
+    const { fim } = janelaDoMes(a, m, { corrente: ehCorrente && per.mesCorrente, dataAlvo: per.dataAlvo });
     const ym = ymDe(a, m);
     const porUnidadeMes = universoCards.map((u) => {
-      const linhas = (diariasPorUnidade.get(u.unidadeId) ?? []).filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
-      return lucratividadeDaUnidade(linhas, { inicio, fim, ateDataIso: fim });
+      const linhas = (porUnidade.get(u.unidadeId) ?? []).filter((r) => String(r.data_lancamento).slice(0, 7) === ym);
+      return financeiroMensalDaUnidade(linhas, fim);
     });
     const agg = agregarRede(porUnidadeMes);
     return {
@@ -1554,11 +1563,15 @@ export async function visaoGeralRede({
 
   // ---- rankings, separados por modalidade (estruturas financeiras diferentes). ----
   const rankingPorModalidade = {};
-  for (const modelo of MODELOS_LOGISTICOS) {
+  for (const modelo of [...MODELOS_LOGISTICOS, ...(universoTabela.some((u) => u.modeloLogistico === "misto") ? ["misto"] : [])]) {
     const doModelo = universoTabela.filter((u) => u.modeloLogistico === modelo);
     const melhores = doModelo
-      .filter((u) => u.folgaLimitePp != null)
-      .sort((a, b) => b.folgaLimitePp - a.folgaLimitePp)
+      .filter((u) => u.situacaoFinanceira.chave !== "sem_dados")
+      .sort((a, b) => {
+        const ordem = { em_dia: 0, atencao: 1, critica: 2 };
+        return ordem[a.situacaoFinanceira.chave] - ordem[b.situacaoFinanceira.chave]
+          || b.folgaLimitePp - a.folgaLimitePp;
+      })
       .slice(0, 10).map(linhaDeRanking);
     const atencao = ordenarPrioridadeIntervencao(doModelo.filter((u) => ["atencao", "critica"].includes(u.situacaoFinanceira.chave)))
       .slice(0, 10).map(linhaDeRanking);
@@ -1594,6 +1607,7 @@ export async function visaoGeralRede({
 const linhaDeRanking = (u) => ({
   unidadeId: u.unidadeId, nome: u.nome, empresaNome: u.empresaNome, organizacaoId: u.organizacaoId,
   modeloLogisticoRotulo: u.modeloLogisticoRotulo, faturamento: u.faturamento, deducoesPct: u.deducoesPct,
+  totalDeducoesIndicadorPct: u.totalDeducoesIndicadorPct,
   meta: u.meta, folgaLimitePp: u.folgaLimitePp, situacaoFinanceira: u.situacaoFinanceira,
   impactoFinanceiroEstimado: u.impactoFinanceiroEstimado,
 });

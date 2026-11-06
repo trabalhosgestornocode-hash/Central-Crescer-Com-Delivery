@@ -159,7 +159,7 @@ describe("htmlVisaoGeralRede — cartões", () => {
   test("cada cartão tem uma nota explicando o que mostra (Fase 2.1)", () => {
     const h = V.htmlVisaoGeralRede(REDE_CHEIA);
     assert.match(h, /Deduções totais ÷ faturamento bruto da rede \(nunca a média/);
-    assert.match(h, /deduções acima do limite homologado do seu modelo/);
+    assert.match(h, /Total de deduções acima do limite dos Indicadores de Rentabilidade/);
   });
 });
 
@@ -304,7 +304,7 @@ describe("htmlVisaoGeralRede — ranking por modalidade", () => {
 describe("htmlVisaoGeralRede — tabela gerencial", () => {
   test("uma linha por empresa (consolidado) e uma linha por unidade", () => {
     const h = V.htmlVisaoGeralRede(REDE_CHEIA);
-    assert.match(h, /Monitoramento por empresa e unidade/);
+    assert.match(h, /Situação financeira por empresa e unidade/);
     assert.match(h, /<td>JV Alimentos<\/td>/);
     assert.match(h, /<td>Beta Sul<\/td>/);
     assert.match(h, /Todas as unidades elegíveis \(3\)/);
@@ -385,7 +385,7 @@ describe("htmlVisaoGeralRede — estado vazio da rede", () => {
     const h = V.htmlVisaoGeralRede(REDE_VAZIA);
     assert.match(h, /Nenhuma unidade monitorada neste recorte/);
     assert.match(h, /data-vr-filtro="organizacaoId"/, "filtros seguem renderizados mesmo sem dado, para o gestor poder limpar o recorte");
-    assert.ok(!/Monitoramento por empresa e unidade/.test(h));
+    assert.ok(!/Situação financeira por empresa e unidade/.test(h));
   });
 });
 
@@ -524,4 +524,40 @@ describe("Visão Geral da Rede — filtros server-side (wiring)", () => {
     assert.equal(revogados.length, 1);
     assert.match(revogados[0], /revogado/i);
   });
+});
+
+describe("situação financeira explícita em todos os contextos da rede", () => {
+  test("tooltips, filtro, distribuição e ranking explicam o indicador determinante", () => {
+    const h = V.htmlVisaoGeralRede(REDE_CHEIA);
+    assert.match(h, /Situação financeira<select data-vr-filtro="situacao"/);
+    assert.match(h, /Situação baseada em Total de deduções dos Indicadores de Rentabilidade/);
+    assert.match(h, /Crítica acima do limite/);
+    assert.match(h, /pior classificação financeira de suas unidades/);
+    assert.ok(!/banda de alerta/.test(h));
+  });
+  for (const [chave, rotulo] of [["em_dia", "Em dia"], ["atencao", "Atenção"], ["critica", "Crítica"], ["sem_dados", "Sem dados"]]) {
+    test(`badges de ranking e tabela: ${rotulo}`, () => {
+      const u = { ...REDE_CHEIA.unidades[0], situacaoFinanceira: { chave }, totalDeducoesIndicadorPct: 12.34 };
+      const h = V.htmlVisaoGeralRede({ ...REDE_CHEIA, unidades: [u], rankingPorModalidade: { marketplace: { melhores: [u], atencao: [u] } } });
+      for (const bloco of [h.match(/<li class="padm-rank"[\s\S]*?<\/li>/)?.[0], h.match(/<tr[^>]*data-padm-nav="unidade"[\s\S]*?<\/tr>/)?.[0]]) {
+        assert.ok(bloco.includes(rotulo));
+        assert.match(bloco, /12%/);
+        assert.match(bloco, /title="Situação financeira baseada em Total de deduções/);
+      }
+    });
+  }
+});
+
+test("detalhe administrativo identifica explicitamente a classificação financeira", () => {
+  const h = V.htmlDetalheUnidade({ situacaoFinanceira: { chave: "critica" } });
+  assert.match(h, /Classificação financeira da unidade/);
+  assert.match(h, /Crítica/);
+  assert.match(h, /Situação baseada em Total de deduções/);
+});
+
+test("modalidade mista aparece com rótulo explícito e opção no filtro", () => {
+  const u = { ...REDE_CHEIA.unidades[0], modeloLogistico: "misto" };
+  const h = V.htmlVisaoGeralRede({ ...REDE_CHEIA, unidades: [u], rankingPorModalidade: { misto: { melhores: [u], atencao: [] } } });
+  assert.match(h, /<option value="misto"/);
+  assert.match(h, /Misto \(Marketplace \/ Full Service\)/);
 });

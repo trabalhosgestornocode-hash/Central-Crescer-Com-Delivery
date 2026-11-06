@@ -394,8 +394,8 @@ const SITUACAO_REDE_UI = {
   critica: { classe: "critico", rotulo: "Crítica" },
   sem_dados: { classe: "muted", rotulo: "Sem dados" },
 };
-const chipSituacaoRede = (sit) => chip(SITUACAO_REDE_UI[sit?.chave] ?? SITUACAO_REDE_UI.sem_dados);
-const ROTULO_MODALIDADE = { marketplace: "Marketplace", full_service: "Full Service" };
+const chipSituacaoRede = (sit) => `<span title="Situação financeira baseada em Total de deduções dos Indicadores de Rentabilidade">${chip(SITUACAO_REDE_UI[sit?.chave] ?? SITUACAO_REDE_UI.sem_dados)}</span>`;
+const ROTULO_MODALIDADE = { marketplace: "Marketplace", full_service: "Full Service", misto: "Misto (Marketplace / Full Service)" };
 
 function filtrosVisaoRedeParaApi() {
   const f = {};
@@ -438,8 +438,8 @@ const AJUDA_CARD_REDE = {
   percentual: "Deduções totais ÷ faturamento bruto da rede (nunca a média dos percentuais de cada loja).",
   receita: "Faturamento bruto menos as deduções totais, mais ajustes a favor da loja.",
   analisadas: "Unidades com módulo Dashboard iFood ativo e elegíveis no período selecionado.",
-  atencao: "Unidades com deduções acima do limite homologado do seu modelo, dentro da banda de alerta.",
-  criticas: "Unidades com deduções bem acima do limite — a banda de alerta foi excedida.",
+  atencao: "Unidades com Total de deduções acima da meta ideal e dentro do limite dos Indicadores de Rentabilidade.",
+  criticas: "Unidades com Total de deduções acima do limite dos Indicadores de Rentabilidade.",
   evolucao: "Variação do faturamento da rede frente ao mesmo intervalo de dias do mês anterior.",
 };
 
@@ -482,8 +482,9 @@ function htmlFiltrosRede(d) {
         ${opt("", viewVisaoRede.modalidade, "Todas")}
         ${opt("marketplace", viewVisaoRede.modalidade, "Marketplace")}
         ${opt("full_service", viewVisaoRede.modalidade, "Full Service")}
+        ${opt("misto", viewVisaoRede.modalidade, "Misto (Marketplace / Full Service)")}
       </select></label>
-      <label>Situação<select data-vr-filtro="situacao">
+      <label>Situação financeira<select data-vr-filtro="situacao">
         ${opt("", viewVisaoRede.situacao, "Todas")}
         ${opt("em_dia", viewVisaoRede.situacao, "Em dia")}
         ${opt("atencao", viewVisaoRede.situacao, "Atenção")}
@@ -510,7 +511,7 @@ function barraSituacoesRede(dist) {
 function graficoDistribuicaoSituacoes(dist) {
   return secao({
     titulo: "Distribuição de situações", icone: "pie-chart",
-    sub: "Quantas unidades estão em dia, em atenção, críticas ou sem dados — no recorte de empresa/unidade/modalidade atual (a situação não se filtra aqui, senão a barra sempre mostraria 100%).",
+    sub: "Situação baseada em Total de deduções dos Indicadores de Rentabilidade. Quantas unidades estão em dia, em atenção, críticas ou sem dados — no recorte de empresa/unidade/modalidade atual (a situação não se filtra aqui, senão a barra sempre mostraria 100%).",
     corpo: `
       ${barraSituacoesRede(dist)}
       <div class="padm-legenda-situacoes">
@@ -582,7 +583,7 @@ function linhaRankingRede(u) {
       </span>
       <span class="padm-rank-val">
         <b>${escapeHtml(fmtDinheiro(u.faturamento))}</b>
-        <small>${escapeHtml(fmtPct((u.deducoesPct ?? null) != null ? u.deducoesPct / 100 : null))} deduções${u.meta ? ` · limite ${escapeHtml(fmtPct(u.meta.limite / 100))}` : ""}</small>
+        <small>${escapeHtml(fmtPct(u.totalDeducoesIndicadorPct != null ? u.totalDeducoesIndicadorPct / 100 : null))} Total de deduções${u.meta ? ` · limite ${escapeHtml(fmtPct(u.meta.limite / 100))}` : ""}</small>
         ${u.impactoFinanceiroEstimado > 0 ? `<small class="padm-rank-cob">impacto estimado ${escapeHtml(fmtDinheiroCurto(u.impactoFinanceiroEstimado))}</small>` : ""}
       </span>
       ${chipSituacaoRede(u.situacaoFinanceira)}
@@ -635,6 +636,7 @@ function linhaTabelaUnidadeRede(u) {
       <td>${escapeHtml(fmtPct((u.deducoesPct ?? null) != null ? u.deducoesPct / 100 : null))}</td>
       <td>${u.meta ? escapeHtml(fmtPct(u.meta.limite / 100)) : "—"}</td>
       <td>${u.folgaLimitePp != null ? escapeHtml(fmtVariacaoPP(u.folgaLimitePp / 100)) : "—"}</td>
+      <td>${escapeHtml(fmtPct(u.totalDeducoesIndicadorPct != null ? u.totalDeducoesIndicadorPct / 100 : null))}</td>
       <td>${chipSituacaoRede(u.situacaoFinanceira)}</td>
       <td>${u.ultimaAtualizacao ? escapeHtml(fmtDataCurta(u.ultimaAtualizacao)) : "—"}</td>
       <td><span class="padm-item-ir" aria-hidden="true">›</span></td>
@@ -645,8 +647,8 @@ function htmlTabelaGerencialRede(d) {
   const empresas = d.empresas ?? [];
   const unidades = d.unidades ?? [];
   return secao({
-    titulo: "Monitoramento por empresa e unidade", icone: "clipboard-list",
-    sub: "Linha por empresa × modalidade (soma ponderada das unidades) e, abaixo, cada unidade elegível individualmente. Clique numa linha para ver o detalhe.",
+    titulo: "Situação financeira por empresa e unidade", icone: "clipboard-list",
+    sub: "Valores por empresa × modalidade consolidados pela soma das unidades. Situação da empresa: pior classificação financeira de suas unidades, baseada em Total de deduções. Clique numa linha para ver o detalhe.",
     corpo: `
       <div class="padm-tabela-wrap">
         <table class="padm-tabela">
@@ -657,8 +659,8 @@ function htmlTabelaGerencialRede(d) {
       <h3 class="padm-tabela-subtit">Todas as unidades elegíveis (${fmtNum(unidades.length)})</h3>
       <div class="padm-tabela-wrap">
         <table class="padm-tabela">
-          <thead><tr><th>Empresa</th><th>Unidade</th><th>Modalidade</th><th>Faturamento</th><th>Taxas/comissões</th><th>Serviços/promoções</th><th>Deduções totais</th><th>% total</th><th>Referência (limite)</th><th>Desvio</th><th>Situação</th><th>Última atualização</th><th></th></tr></thead>
-          <tbody>${unidades.length ? unidades.map(linhaTabelaUnidadeRede).join("") : `<tr><td colspan="13">${vazio("Nenhuma unidade no recorte atual", "Ajuste os filtros acima.")}</td></tr>`}</tbody>
+          <thead><tr><th>Empresa</th><th>Unidade</th><th>Modalidade</th><th>Faturamento</th><th>Taxas/comissões</th><th>Serviços/promoções</th><th>Deduções totais</th><th>% total</th><th>Referência (limite)</th><th>Desvio</th><th>Total de deduções (%) do indicador</th><th>Situação financeira</th><th>Última atualização</th><th></th></tr></thead>
+          <tbody>${unidades.length ? unidades.map(linhaTabelaUnidadeRede).join("") : `<tr><td colspan="14">${vazio("Nenhuma unidade no recorte atual", "Ajuste os filtros acima.")}</td></tr>`}</tbody>
         </table>
       </div>`,
   });
@@ -682,7 +684,7 @@ export function htmlVisaoGeralRede(d) {
     ${graficoEvolucaoMensal(d.evolucaoMensal ?? [])}
     ${secao({
       titulo: "Ranking de lojas", icone: "target",
-      sub: "Marketplace e Full Service nunca são comparados diretamente — as estruturas financeiras são diferentes.",
+      sub: "Classificação financeira pelo Total de deduções: Em dia até a meta ideal; Atenção acima da meta ideal e até o limite; Crítica acima do limite. Rankings separados por modalidade.",
       corpo: Object.entries(d.rankingPorModalidade ?? {}).map(([modelo, bloco]) => blocoRankingModalidade(modelo, bloco)).join(""),
     })}
     ${htmlTabelaGerencialRede(d)}`;
@@ -1353,7 +1355,7 @@ function secFinanceiroEmpresa(fin) {
   const r = fin.rede ?? {};
   return secao({
     titulo: "Financeiro do mês", icone: "banknote",
-    sub: "Mesmos dados e fórmulas da Visão Geral da Rede, recortados para esta empresa.",
+    sub: "Mesmos dados e fórmulas da Visão Geral da Rede, recortados para esta empresa. Situação financeira baseada em Total de deduções dos Indicadores de Rentabilidade.",
     corpo: `
       ${cards([
         card({ label: "Faturamento bruto", valor: fmtDinheiro(r.faturamento), icone: "banknote" }),
@@ -1370,7 +1372,7 @@ function linhaUnidadeFinanceiraDetalhe(u) {
     <li class="padm-item" data-padm-nav="unidade" data-id="${escapeHtml(u.unidadeId ?? "")}" data-nome="${escapeHtml(u.nome ?? "")}" tabindex="0" role="button">
       <span class="padm-item-txt">
         <b>${escapeHtml(u.nome ?? "—")}</b>
-        <small>${escapeHtml(fmtDinheiro(u.faturamento))} · ${escapeHtml(fmtPct((u.deducoesPct ?? null) != null ? u.deducoesPct / 100 : null))} deduções</small>
+        <small>${escapeHtml(fmtDinheiro(u.faturamento))} · ${escapeHtml(fmtPct(u.totalDeducoesIndicadorPct != null ? u.totalDeducoesIndicadorPct / 100 : null))} Total de deduções</small>
         ${u.impactoFinanceiroEstimado > 0 ? `<small class="padm-rank-cob">impacto estimado ${escapeHtml(fmtDinheiroCurto(u.impactoFinanceiroEstimado))}</small>` : ""}
       </span>
       <span class="padm-item-tags">${chipSituacaoRede(u.situacaoFinanceira)}</span>
@@ -1421,6 +1423,7 @@ export function htmlDetalheUnidade(d, entrada = {}) {
   });
 
   const auxiliares = `
+    ${d?.situacaoFinanceira ? `<p>Classificação financeira da unidade: ${chipSituacaoRede(d.situacaoFinanceira)} · Situação baseada em Total de deduções dos Indicadores de Rentabilidade.</p>` : ""}
     <div class="padm-acoes-aux">
       <button type="button" class="btn btn-ghost btn-sm" data-padm-nav="calendario"
         data-id="${escapeHtml(u.unidadeId ?? "")}" data-nome="${escapeHtml(u.unidadeNome ?? "")}">
