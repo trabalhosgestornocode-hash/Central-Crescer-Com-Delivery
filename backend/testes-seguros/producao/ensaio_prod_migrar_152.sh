@@ -46,7 +46,7 @@ DEPOIS=$(su_ "select md5(string_agg(t::text,'|' order by t::text)) from (select 
 echo "$OUT" | grep -q "RESULTADO: OK — 152 aplicada" && [ "$ANTES" = "$DEPOIS" ] && pass "P06 aplicar com backup e exportação: 152 criada; contas a pagar da 151 idênticas" || fail P06 "$(echo "$OUT" | tail -3)"
 OUT=$(PROD_IDENTIDADE=$IDENT roda verificar); echo "$OUT" | grep -q "VERIFICAÇÃO: OK — 152 completa" && pass "P07 verificar após a aplicação" || fail P07 "$(echo "$OUT" | tail -3)"
 OUT=$(roda preflight); echo "$OUT" | grep -q "objetos da 152 já existem" && pass "P08 preflight após aplicar recusa reaplicar (objetos já existem)" || fail P08 "$(echo "$OUT" | tail -2)"
-OUT=$(su_ "select gestao_financeira_verificar_unidade_transferivel('$(u 2)');" ); echo "$OUT" | grep -qi "fin_" && pass "P09 guarda de transferência continua barrando a loja com dados" || fail P09 "$OUT"
+OUT=$(su_ "select gestao_financeira_verificar_unidade_transferivel('$(u 2)');" ); echo "$OUT" | grep -q "não pode ser transferida" && pass "P09 guarda de transferência continua barrando a loja com dados" || fail P09 "$OUT"
 su_ "set role service_role; insert into fin_dividas(organizacao_id,unidade_id,natureza,credor) values ('$(u 1)','$(u 2)','propria','Banco');" >/dev/null
 OUT=$(PROD_IDENTIDADE=$IDENT PROD_AUTORIZO_REVERSAO=SIM roda reverter); echo "$OUT" | grep -q "REVERSÃO RECUSADA" && su_ "select to_regclass('fin_dividas') is not null" | grep -q t && pass "P10 reverter com dados da 152 é RECUSADO (nada apagado)" || fail P10 "$(echo "$OUT" | tail -2)"
 
