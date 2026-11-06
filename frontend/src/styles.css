@@ -3524,6 +3524,24 @@ body {
 .padm-filtros-rede .padm-busca { margin: 0; flex: 1 1 220px; }
 .padm-rede-graficos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 780px) { .padm-rede-graficos { grid-template-columns: 1fr; } .padm-filtros-rede select, .padm-filtros-rede .padm-busca { min-width: 0; width: 100%; } }
+/* Guia financeiro: explicação estática, separada dos indicadores e filtros. */
+.padm-finance-guide { margin: 0 0 20px; padding: 22px; background: var(--card); border: 1px solid var(--linha); border-radius: 16px; box-shadow: var(--sombra-sm); }
+.padm-finance-guide-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.padm-finance-guide-symbol { flex: 0 0 42px; height: 42px; display: grid; place-items: center; border-radius: 12px; color: var(--vermelho, #d71938); background: color-mix(in srgb, var(--vermelho, #d71938) 7%, var(--card)); }
+.padm-finance-guide-head > div, .padm-finance-guide-item > div { min-width: 0; flex: 1; }
+.padm-finance-guide-head h3 { margin: 0 0 4px; font-size: 16px; font-weight: 750; line-height: 1.35; letter-spacing: -.2px; }
+.padm-finance-guide-head p { margin: 0; color: var(--cinza); font-size: 12.5px; line-height: 1.6; }
+.padm-finance-guide-head strong { font-weight: 650; }
+.padm-finance-guide-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.padm-finance-guide-item { --guide-color: #64748b; display: flex; align-items: flex-start; gap: 11px; padding: 16px 14px; border: 1px solid color-mix(in srgb, var(--guide-color) 17%, var(--linha)); border-radius: 12px; background: color-mix(in srgb, var(--guide-color) 4%, var(--card)); }
+.padm-finance-guide-item--saudavel { --guide-color: #009b65; }
+.padm-finance-guide-item--atencao { --guide-color: #b77908; }
+.padm-finance-guide-item--critico { --guide-color: #df3549; }
+.padm-finance-guide-icon { display: grid; place-items: center; flex: 0 0 32px; height: 32px; border-radius: 50%; color: var(--guide-color); background: color-mix(in srgb, var(--guide-color) 10%, var(--card)); }
+.padm-finance-guide-item h4 { margin: 1px 0 5px; color: var(--guide-color); font-size: 13px; font-weight: 750; line-height: 1.4; }
+.padm-finance-guide-item p { margin: 0; color: var(--cinza); font-size: 12px; line-height: 1.55; }
+@media (max-width: 1100px) { .padm-finance-guide-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 540px) { .padm-finance-guide { padding: 16px; border-radius: 14px; } .padm-finance-guide-head { align-items: flex-start; } .padm-finance-guide-grid { grid-template-columns: 1fr; gap: 8px; } .padm-finance-guide-item { padding: 13px; } }
 .padm-legenda-situacoes { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 10px; }
 .padm-composicao-barra { display: flex; height: 10px; border-radius: 999px; overflow: hidden; background: var(--superficie-2); width: 100%; }
 .padm-composicao-barra i { display: block; height: 100%; }
