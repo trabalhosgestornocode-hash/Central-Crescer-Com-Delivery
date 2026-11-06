@@ -52,9 +52,13 @@ export function planejarImportacaoCentral({ central, sistema, dePara, tipos = TI
     if (o.cancelado) { excluidas.push({ id: o.id, tipo: o.tipoRegistro, motivo: "cancelada na Central" }); continue; }
     const cat = resolverCat(o.categoria);
     const motivos = [], pendencias = [];
-    const fornecedor = o.fornecedor || fornAusente || "";
-    if (!o.fornecedor && !fornAusente) motivos.push("sem fornecedor");
-    if (!o.fornecedor && fornAusente) pendencias.push("fornecedor não informado na Central: identificar");
+    const complemento = (dePara.fornecedoresPorId ?? {})[o.id]?.trim() || null;   // planilha preenchida pela contadora (não altera a Central)
+    const fornecedor = o.fornecedor || complemento || fornAusente || "";
+    if (!o.fornecedor && !complemento && !fornAusente) motivos.push("sem fornecedor");
+    if (!o.fornecedor && complemento) pendencias.push("fornecedor informado pelo complemento (não consta na Central)");
+    if (!o.fornecedor && !complemento && fornAusente) pendencias.push("fornecedor não informado na Central: identificar");
+    // validação por competência: datas atípicas viram AVISO (não bloqueiam; ficam no relatório)
+    if (o.competencia && o.vencimento && Math.abs(diasEntre(`${o.competencia}-01`, o.vencimento)) > 120) pendencias.push(`vencimento ${o.vencimento} distante da competência ${o.competencia}`);
     if (!cat) motivos.push(`categoria sem de-para aprovado: "${o.categoria}"`);
     else if (!["DESPESA", "CUSTO", "TRIBUTACAO", "TRIBUTAÇÃO", "FINANCIAMENTOS"].includes(sa(cat.tipo))) motivos.push(`categoria do sistema não é de saída: "${cat.nome}" (${cat.tipo})`);
     if (!o.competencia) motivos.push("sem competência");
@@ -168,14 +172,21 @@ export function planejarImportacaoCentral({ central, sistema, dePara, tipos = TI
     reg.situacao = reg.motivos.length ? "bloqueado" : !ex ? "novo" : Number(ex.valorCentavos) === reg.valorCentavos ? "existente" : "divergente";
     saldos.push(reg);
   }
+  // ---------- validação por competência ----------
+  const porCompetencia = {};
+  for (const o of obrigacoes) { const m = o.competencia ?? "sem competência"; const x = (porCompetencia[m] ??= { obrigacoes: 0, valorOriginalCentavos: 0, bloqueadas: 0 }); x.obrigacoes++; x.valorOriginalCentavos += o.valorCentavos; if (o.situacao === "bloqueada") x.bloqueadas++; }
+  const pagamentosAntesDaCompetencia = pagamentos.filter((p) => { const o = obrPorId.get(p.obrigacaoId); return o?.competencia && p.data && diasEntre(`${o.competencia}-01`, p.data) > 62; }).map((p) => p.id);
+  // rateios: o sistema ainda não tem onde guardá-los → relatados, nunca descartados em silêncio
+  const rateiosNaoImportados = (central.rateios ?? []).map((r) => ({ obrigacao: r.obrigacaoId, competencia: r.competencia, valorCentavos: r.valorCentavos, criterio: r.criterio, motivo: "sistema sem tabela de rateios (DRE de referência os recebe como parâmetro)" }));
   const novosFornecedores = [...new Set(obrigacoes.filter((o) => o.situacao === "nova").map((o) => o.fornecedor))].filter((f) => !fornExist.has(sa(f)));
   const cont = (arr, k) => arr.reduce((m, x) => ((m[x[k]] = (m[x[k]] ?? 0) + 1), m), {});
   return {
-    obrigacoes, pagamentos, vinculos, semVinculo, saldos, excluidas, pagamentosExcluidos: pagExcluidos, novosFornecedores,
+    obrigacoes, pagamentos, vinculos, semVinculo, saldos, porCompetencia, pagamentosAntesDaCompetencia, rateiosNaoImportados, excluidas, pagamentosExcluidos: pagExcluidos, novosFornecedores,
     resumo: {
       obrigacoes: cont(obrigacoes, "situacao"), pagamentos: cont(pagamentos, "situacao"), saldosAbertura: cont(saldos, "situacao"),
       vinculos: cont(vinculos, "status"), pagamentosSemVinculo: semVinculo.length,
-      excluidas: excluidas.length, pagamentosExcluidos: pagExcluidos.length, novosFornecedores: novosFornecedores.length,
+      excluidas: excluidas.length, pagamentosExcluidos: pagExcluidos.length, novosFornecedores: novosFornecedores.length, rateiosNaoImportados: rateiosNaoImportados.length,
+      obrigacoesComPendencia: obrigacoes.filter((o) => o.pendencias.length).length,
       valorOriginalNovoCentavos: obrigacoes.filter((o) => o.situacao === "nova").reduce((s, o) => s + o.valorCentavos, 0),
       valorPagoNovoCentavos: pagamentos.filter((p) => p.situacao === "novo").reduce((s, p) => s + p.valorCentavos, 0),
       acrescimoPresumidoCentavos: obrigacoes.reduce((s, o) => s + o.diferencaPresumidaCentavos, 0),

@@ -72,7 +72,15 @@ const dpArq = JSON.parse(readFileSync(DP, "utf8"));
 // --proposta-completa (SÓ para ensaio no banco descartável): inclui os itens "a confirmar" e o fornecedor marcador.
 const PROPOSTA = process.argv.includes("--proposta-completa");
 const dePara = { contas: dpArq.contas, categorias: { ...dpArq.categorias, ...(PROPOSTA ? Object.fromEntries(Object.entries(dpArq.categorias_a_confirmar ?? {}).map(([k, v]) => [k, String(v).replace(/\s*\(.*$/, "")])) : {}) },
-  fornecedorAusente: PROPOSTA ? dpArq.fornecedor_ausente_proposto ?? null : dpArq.fornecedor_ausente ?? null };
+  fornecedorAusente: PROPOSTA ? dpArq.fornecedor_ausente_proposto ?? null : dpArq.fornecedor_ausente ?? null, fornecedoresPorId: {} };
+// --fornecedores <csv ;> : complemento preenchido pela contadora (colunas ID e "Fornecedor (PREENCHER)"); linhas vazias são ignoradas
+const FCSV = arg("fornecedores");
+if (FCSV) {
+  const [cab, ...ls] = readFileSync(FCSV, "utf8").replace(/^\uFEFF/, "").split(/\r?\n/).filter(Boolean).map((l) => l.split(";"));
+  const iId = cab.indexOf("ID"), iF = cab.findIndex((c) => /^Fornecedor/i.test(c));
+  for (const l of ls) if (l[iF]?.trim()) dePara.fornecedoresPorId[l[iId]] = l[iF].trim();
+  console.log("complemento de fornecedores:", Object.keys(dePara.fornecedoresPorId).length);
+}
 if (PROPOSTA) console.log("ATENÇÃO: --proposta-completa usa itens AINDA NÃO APROVADOS (só ensaio local)");
 const planejar = () => {
   const s = lerSistema();

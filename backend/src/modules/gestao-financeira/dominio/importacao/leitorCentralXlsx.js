@@ -15,6 +15,7 @@ export const TABELAS = Object.freeze({
   referencias: { aba: "99_CAD_REFERENCIAS", exige: ["INDICADOR", "VALOR APRESENTACAO", "VALOR PLANILHA", "SITUACAO"] },
   inconsistencias: { aba: "12_BD_INCONSISTENCIAS", exige: ["ID", "TIPO", "DESCRICAO", "STATUS"] },
   saldos: { aba: "05_BD_SALDOS", exige: ["CONTA", "COMPETENCIA", "SALDO INICIAL INFORMADO"] },
+  rateios: { aba: "03_BD_RATEIOS", exige: ["ID", "ID OBRIGACAO", "COMPETENCIA", "VALOR"] },
 });
 
 /** Data do Excel (serial, Date ou texto ISO/pt-BR) → "AAAA-MM-DD" (sem fuso). */
@@ -70,6 +71,7 @@ export function lerCentralXlsx(buffer) {
     movimentos: t.movimentos.map((m) => ({ id: txt(m.ID), conta: txt(m.CONTA), data: paraDataISO(m.DATA), entradaCentavos: c0(m.ENTRADA), saidaCentavos: c0(m.SAIDA), refFluxo: txt(m["REF FLUXO"]) })),
     fluxo: t.fluxo.map((f) => ({ id: txt(f.ID), conta: txt(f.CONTA), data: paraDataISO(f.DATA), descricao: txt(f.LANCAMENTO), entradaCentavos: c0(f.ENTRADA), saidaCentavos: c0(f.SAIDA) })),
     referencias: t.referencias.map((r) => ({ indicador: txt(r.INDICADOR), valorApresentacao: r["VALOR APRESENTACAO"], valorPlanilha: r["VALOR PLANILHA"], situacao: txt(r.SITUACAO), nota: txt(r.NOTA) })),
+    rateios: t.rateios.map((r) => ({ id: txt(r.ID), obrigacaoId: txt(r["ID OBRIGACAO"]), competencia: paraDataISO(r.COMPETENCIA)?.slice(0, 7) ?? null, valorCentavos: c0(r.VALOR), criterio: txt(r.CRITERIO) })),
     saldos: t.saldos.map((s) => ({ conta: txt(s.CONTA), data: paraDataISO(s.COMPETENCIA), inicialInformadoCentavos: s["SALDO INICIAL INFORMADO"] == null || s["SALDO INICIAL INFORMADO"] === "" ? null : c0(s["SALDO INICIAL INFORMADO"]), fonte: txt(s["FONTE SALDO INICIAL"]) })),
     inconsistencias: t.inconsistencias.map((i) => ({ id: txt(i.ID), tipo: txt(i.TIPO), descricao: txt(i.DESCRICAO), status: txt(i.STATUS), responsavel: txt(i.RESPONSAVEL) })),
   };
