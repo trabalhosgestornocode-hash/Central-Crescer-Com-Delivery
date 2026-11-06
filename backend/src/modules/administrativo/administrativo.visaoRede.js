@@ -30,9 +30,9 @@ export function financeiroMensalDaUnidade(linhas, ateDataIso) {
 
 export const SITUACAO_FINANCEIRA = {
   sem_dados: { chave: "sem_dados", rotulo: "Sem dados" },
-  em_dia: { chave: "em_dia", rotulo: "Em dia" },
+  em_dia: { chave: "em_dia", rotulo: "Saudável" },
   atencao: { chave: "atencao", rotulo: "Atenção" },
-  critica: { chave: "critica", rotulo: "Crítica" },
+  critica: { chave: "critica", rotulo: "Crítico" },
 };
 
 /** Traduz os estados homologados do indicador para os rótulos financeiros da rede. */

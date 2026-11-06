@@ -141,3 +141,8 @@ describe("contagemPorSituacao — distribuição para o card e o gráfico", () =
     assert.deepEqual(contagemPorSituacao(unidades), { sem_dados: 0, em_dia: 2, atencao: 0, critica: 1 });
   });
 });
+
+test("rótulos financeiros usam Saudável e Crítico mantendo as chaves existentes", () => {
+  assert.deepEqual(classificarAtencaoFinanceira(10, { metaIdeal: 12, limite: 15 }), { chave: "em_dia", rotulo: "Saudável" });
+  assert.deepEqual(classificarAtencaoFinanceira(16, { metaIdeal: 12, limite: 15 }), { chave: "critica", rotulo: "Crítico" });
+});

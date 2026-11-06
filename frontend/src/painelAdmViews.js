@@ -389,9 +389,9 @@ const filtrosSemVazio = (mes) => {
 
 /** 4 estados -> {classe, rotulo} dos chips já estilizados do painel. */
 const SITUACAO_REDE_UI = {
-  em_dia: { classe: "ok", rotulo: "Em dia" },
+  em_dia: { classe: "ok", rotulo: "Saudável" },
   atencao: { classe: "atencao", rotulo: "Atenção" },
-  critica: { classe: "critico", rotulo: "Crítica" },
+  critica: { classe: "critico", rotulo: "Crítico" },
   sem_dados: { classe: "muted", rotulo: "Sem dados" },
 };
 const chipSituacaoRede = (sit) => `<span title="Situação financeira baseada em Total de deduções dos Indicadores de Rentabilidade">${chip(SITUACAO_REDE_UI[sit?.chave] ?? SITUACAO_REDE_UI.sem_dados)}</span>`;
@@ -486,9 +486,9 @@ function htmlFiltrosRede(d) {
       </select></label>
       <label>Situação financeira<select data-vr-filtro="situacao">
         ${opt("", viewVisaoRede.situacao, "Todas")}
-        ${opt("em_dia", viewVisaoRede.situacao, "Em dia")}
+        ${opt("em_dia", viewVisaoRede.situacao, "Saudável")}
         ${opt("atencao", viewVisaoRede.situacao, "Atenção")}
-        ${opt("critica", viewVisaoRede.situacao, "Crítica")}
+        ${opt("critica", viewVisaoRede.situacao, "Crítico")}
         ${opt("sem_dados", viewVisaoRede.situacao, "Sem dados")}
       </select></label>
       ${busca("vr-busca", "Buscar empresa ou unidade…", viewVisaoRede.termo)}
@@ -500,7 +500,7 @@ function barraSituacoesRede(dist) {
   const total = (dist.em_dia ?? 0) + (dist.atencao ?? 0) + (dist.critica ?? 0) + (dist.sem_dados ?? 0);
   if (!total) return vazio("Sem unidades no recorte atual", "", { tom: "muted", icone: "pie-chart" });
   const p = (n) => `${((n / total) * 100).toFixed(2)}%`;
-  return `<span class="padm-saude" role="img" aria-label="${dist.critica} críticas, ${dist.atencao} em atenção, ${dist.em_dia} em dia, ${dist.sem_dados} sem dados">
+  return `<span class="padm-saude" role="img" aria-label="${dist.critica} críticas, ${dist.atencao} em atenção, ${dist.em_dia} saudáveis, ${dist.sem_dados} sem dados">
     ${dist.critica ? `<i class="padm-saude--critico" style="width:${p(dist.critica)}"></i>` : ""}
     ${dist.atencao ? `<i class="padm-saude--atencao" style="width:${p(dist.atencao)}"></i>` : ""}
     ${dist.em_dia ? `<i class="padm-saude--ok" style="width:${p(dist.em_dia)}"></i>` : ""}
@@ -511,11 +511,11 @@ function barraSituacoesRede(dist) {
 function graficoDistribuicaoSituacoes(dist) {
   return secao({
     titulo: "Distribuição de situações", icone: "pie-chart",
-    sub: "Situação baseada em Total de deduções dos Indicadores de Rentabilidade. Quantas unidades estão em dia, em atenção, críticas ou sem dados — no recorte de empresa/unidade/modalidade atual (a situação não se filtra aqui, senão a barra sempre mostraria 100%).",
+    sub: "Situação baseada em Total de deduções dos Indicadores de Rentabilidade. Quantas unidades estão saudáveis, em atenção, críticas ou sem dados — no recorte de empresa/unidade/modalidade atual (a situação não se filtra aqui, senão a barra sempre mostraria 100%).",
     corpo: `
       ${barraSituacoesRede(dist)}
       <div class="padm-legenda-situacoes">
-        ${metrica(fmtNum(dist.em_dia), "em dia", "ok")}
+        ${metrica(fmtNum(dist.em_dia), "saudáveis", "ok")}
         ${metrica(fmtNum(dist.atencao), "em atenção", dist.atencao ? "atencao" : "")}
         ${metrica(fmtNum(dist.critica), "críticas", dist.critica ? "critico" : "")}
         ${metrica(fmtNum(dist.sem_dados), "sem dados", "")}
@@ -602,7 +602,7 @@ function blocoRankingModalidade(modelo, bloco) {
         </div>
         <div>
           <h4>Maior necessidade de atenção</h4>
-          ${bloco.atencao.length ? `<ul class="padm-rank-lista">${bloco.atencao.map(linhaRankingRede).join("")}</ul>` : vazio("Nenhuma loja em atenção ou crítica", "Todas as lojas desta modalidade estão em dia.", { tom: "ok" })}
+          ${bloco.atencao.length ? `<ul class="padm-rank-lista">${bloco.atencao.map(linhaRankingRede).join("")}</ul>` : vazio("Nenhuma loja em atenção ou crítica", "Não há unidades classificadas em Atenção ou Crítico neste recorte.", { tom: "ok" })}
         </div>
       </div>
     </div>`;
@@ -666,15 +666,30 @@ function htmlTabelaGerencialRede(d) {
   });
 }
 
+function explicacaoSituacaoFinanceiraRede() {
+  return secao({
+    titulo: "Entenda a situação financeira", icone: "info",
+    sub: "Classificação baseada no Total de deduções dos Indicadores de Rentabilidade.",
+    corpo: `<div class="padm-legenda-situacoes" data-legenda-financeira>
+      <span>${chipSituacaoRede({ chave: "em_dia" })}: Dentro da Meta</span>
+      <span>${chipSituacaoRede({ chave: "atencao" })}: Acima da Meta e até o limite.</span>
+      <span>${chipSituacaoRede({ chave: "critica" })}: Acima do Limite</span>
+      <span>${chipSituacaoRede({ chave: "sem_dados" })} Dados insuficientes para classificar.</span>
+    </div>`,
+  });
+}
+
 export function htmlVisaoGeralRede(d) {
   if (!d || !d.rede || d.rede.unidadesMonitoradas === 0) {
     return `
       ${faixaPeriodo(d, "Rede analisada")}
+    ${explicacaoSituacaoFinanceiraRede()}
       ${htmlFiltrosRede(d ?? { unidades: [] })}
       ${vazio("Nenhuma unidade monitorada neste recorte", "Verifique o período e os filtros selecionados — ou se há empresas com o módulo Dashboard iFood ativo.", { tom: "muted" })}`;
   }
   return `
     ${faixaPeriodo(d, "Rede analisada")}
+    ${explicacaoSituacaoFinanceiraRede()}
     ${htmlFiltrosRede(d)}
     ${htmlCardsRede(d)}
     <div class="padm-rede-graficos">
@@ -684,7 +699,7 @@ export function htmlVisaoGeralRede(d) {
     ${graficoEvolucaoMensal(d.evolucaoMensal ?? [])}
     ${secao({
       titulo: "Ranking de lojas", icone: "target",
-      sub: "Classificação financeira pelo Total de deduções: Em dia até a meta ideal; Atenção acima da meta ideal e até o limite; Crítica acima do limite. Rankings separados por modalidade.",
+      sub: "Classificação financeira pelo Total de deduções: Saudável até a meta ideal; Atenção acima da meta ideal e até o limite; Crítico acima do limite. Rankings separados por modalidade.",
       corpo: Object.entries(d.rankingPorModalidade ?? {}).map(([modelo, bloco]) => blocoRankingModalidade(modelo, bloco)).join(""),
     })}
     ${htmlTabelaGerencialRede(d)}`;
