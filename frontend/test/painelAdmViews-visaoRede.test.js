@@ -566,9 +566,9 @@ test("legenda financeira aparece antes dos filtros, inclusive sem unidades", () 
   for (const d of [REDE_CHEIA, { rede: { unidadesMonitoradas: 0 }, unidades: [] }]) {
     const h = V.htmlVisaoGeralRede(d);
     assert.ok(h.indexOf("data-legenda-financeira") < h.indexOf("data-vr-filtro"));
-    assert.match(h.replace(/<[^>]*>/g, ""), /Saudável: Dentro da Meta/);
-    assert.match(h.replace(/<[^>]*>/g, ""), /Atenção: Acima da Meta/);
-    assert.match(h.replace(/<[^>]*>/g, ""), /Crítico: Acima do Limite/);
+    assert.match(h.replace(/<[^>]*>/g, " "), /Saudável\s+Dentro da Meta/);
+    assert.match(h.replace(/<[^>]*>/g, " "), /Atenção\s+Acima da Meta/);
+    assert.match(h.replace(/<[^>]*>/g, " "), /Crítico\s+Acima do Limite/);
     assert.match(h, /Dados insuficientes para classificar/);
     assert.doesNotMatch(h, />Em dia</);
   }

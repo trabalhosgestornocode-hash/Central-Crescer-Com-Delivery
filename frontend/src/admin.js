@@ -12,6 +12,7 @@ import { state } from "./state.js";
 import { el, els, toast } from "./utils.js";
 import { adminApi } from "./adminApi.js";
 import { renderView, TELAS_ADMIN } from "./adminViews.js";
+import { instalarMenuRetratil } from "./menuLateral.js";
 
 /** @type {{mostrarTela: Function, aoEntrarEmEmpresa: Function, aoSair: Function}|null} */
 let ganchos = null;
@@ -102,6 +103,7 @@ function ligarEventos() {
   el("#adm-refresh")?.addEventListener("click", recarregarAdmin);
   el("#adm-btn-menu")?.addEventListener("click", () => el("#admin").classList.toggle("menu-aberto"));
   el("#adm-backdrop")?.addEventListener("click", () => el("#admin").classList.remove("menu-aberto"));
+  instalarMenuRetratil({ shell: el("#admin"), sidebar: el("#adm-sidebar"), menu: el("#adm-menu"), ancora: el("#adm-sidebar .adm-sidebar-foot"), desktopMin: 981 });
 
   // Delegação única para TODAS as ações das views — INCLUSIVE as de dentro do
   // modal. `#adm-modal` é irmão de `#adm-view` no HTML (não filho), então

@@ -171,3 +171,24 @@
   .ntf-vinculo-acoes { width: 100%; }
   .fdy-acoes .btn { flex: 1 1 auto; }
 }
+
+/* ---- navegação de categorias recolhível (menuLateral.js; só ≥ 900 px) ---- */
+.cfg2-nav .ml-alternar {
+  width: 100%; margin: 0 0 4px; padding: 8px 11px; background: transparent; color: var(--cinza);
+  border-bottom: 1px solid var(--linha); border-radius: 10px 10px 0 0; font-size: 12.5px;
+}
+.cfg2-nav .ml-alternar:hover { background: var(--superficie-2); color: var(--texto); }
+.cfg2-nav .ml-alternar:focus-visible { outline: 2px solid var(--verde-vivo); outline-offset: 1px; }
+@media (prefers-reduced-motion: no-preference) { .cfg2 { transition: grid-template-columns var(--t); } }
+@media (min-width: 900px) {
+  .cfg2.menu-recolhido { grid-template-columns: 64px minmax(0, 1fr); }
+  .cfg2.menu-recolhido .cfg2-nav-item { justify-content: center; gap: 0; padding: 10px 0; position: relative; }
+  .cfg2.menu-recolhido .cfg2-nav-item > svg:last-child { display: none; }
+  .cfg2.menu-recolhido .cfg2-badge { position: absolute; top: 3px; right: 3px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; }
+  .cfg2.menu-recolhido .ml-alternar { justify-content: center; padding: 8px 0; }
+  .cfg2.menu-recolhido .cfg2-nav-txt, .cfg2.menu-recolhido .ml-alternar-txt {
+    position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+    overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+  }
+}
+@media (max-width: 899px) { .cfg2-nav .ml-alternar { display: none; } }

@@ -667,16 +667,25 @@ function htmlTabelaGerencialRede(d) {
 }
 
 function explicacaoSituacaoFinanceiraRede() {
-  return secao({
-    titulo: "Entenda a situação financeira", icone: "info",
-    sub: "Classificação baseada no Total de deduções dos Indicadores de Rentabilidade.",
-    corpo: `<div class="padm-legenda-situacoes" data-legenda-financeira>
-      <span>${chipSituacaoRede({ chave: "em_dia" })}: Dentro da Meta</span>
-      <span>${chipSituacaoRede({ chave: "atencao" })}: Acima da Meta e até o limite.</span>
-      <span>${chipSituacaoRede({ chave: "critica" })}: Acima do Limite</span>
-      <span>${chipSituacaoRede({ chave: "sem_dados" })} Dados insuficientes para classificar.</span>
-    </div>`,
-  });
+  const categorias = [
+    { tom: "saudavel", nome: "Saudável", icone: "check-circle", descricao: "Dentro da Meta" },
+    { tom: "atencao", nome: "Atenção", icone: "clock", descricao: "Acima da Meta e até o limite." },
+    { tom: "critico", nome: "Crítico", icone: "alert-triangle", descricao: "Acima do Limite" },
+    { tom: "sem-dados", nome: "Sem dados", icone: "info", descricao: "Dados insuficientes para classificar." },
+  ];
+  return `<section class="padm-finance-guide" aria-labelledby="padm-finance-guide-title" data-legenda-financeira>
+    <header class="padm-finance-guide-head">
+      <span class="padm-finance-guide-symbol" aria-hidden="true">${icon("activity", { size: 20 })}</span>
+      <div><h3 id="padm-finance-guide-title">Entenda a situação financeira</h3>
+      <p>Classificação baseada no <strong>Total de deduções</strong> dos Indicadores de Rentabilidade.</p></div>
+    </header>
+    <div class="padm-finance-guide-grid">${categorias.map((c) => `
+      <div class="padm-finance-guide-item padm-finance-guide-item--${c.tom}">
+        <span class="padm-finance-guide-icon" aria-hidden="true">${icon(c.icone, { size: 18 })}</span>
+        <div><h4>${c.nome}</h4><p>${c.descricao}</p></div>
+      </div>`).join("")}
+    </div>
+  </section>`;
 }
 
 export function htmlVisaoGeralRede(d) {
