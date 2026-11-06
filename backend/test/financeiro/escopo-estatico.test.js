@@ -21,7 +21,7 @@ test("nenhum arquivo do domínio lê organizacao/unidade/usuario de body, query,
 test("só contexto.js lê req.financeiro/req.user; as RPCs recebem p_org/p_unidade/p_usuario apenas do contexto validado", () => {
   const leem = arquivos.filter((p) => /req\??\.(financeiro|user)\b/.test(semComentarios(readFileSync(p, "utf8")))).map((p) => p.slice(raiz.length + 1).replaceAll("\\", "/"));
   assert.deepEqual(leem, ["contexto.js"]);
-  for (const nome of ["repositorio.js", "repositorio.periodos.js", "repositorio.conciliacao.js"]) {
+  for (const nome of ["repositorio.js", "repositorio.periodos.js", "repositorio.conciliacao.js", "repositorio.obrigacoes.js"]) {
     const src = semComentarios(readFileSync(join(raiz, nome), "utf8"));
     for (const m of src.matchAll(/p_(org|unidade|usuario):\s*([^,}\n]+)/g)) assert.match(m[2].trim(), /^ctx\.(organizacaoId|unidadeId|usuarioId)$/, `${nome}: ${m[0]}`);
   }
@@ -30,5 +30,5 @@ test("só contexto.js lê req.financeiro/req.user; as RPCs recebem p_org/p_unida
 test("nenhuma rota DELETE e nenhuma chamada de exclusão física no repositório", () => {
   const rotas = semComentarios(readFileSync(join(raiz, "rotas.js"), "utf8"));
   assert.doesNotMatch(rotas, /\br\.delete\(/);
-  for (const nome of ["repositorio.js", "repositorio.periodos.js", "repositorio.conciliacao.js"]) assert.doesNotMatch(semComentarios(readFileSync(join(raiz, nome), "utf8")), /\.delete\(/);
+  for (const nome of ["repositorio.js", "repositorio.periodos.js", "repositorio.conciliacao.js", "repositorio.obrigacoes.js"]) assert.doesNotMatch(semComentarios(readFileSync(join(raiz, nome), "utf8")), /\.delete\(/);
 });

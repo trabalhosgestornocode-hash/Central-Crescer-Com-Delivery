@@ -6,9 +6,13 @@
 
 export const SECAO_FINANCEIRO = "FINANCEIRO";
 
-/** @type {Array<{id:string,label:string,icon:string,pagina:string,secao:string,tipo:'financeiro'}>} */
+// `fin2: true` = Financeiro 2.0, atrás de FEATURE FLAG do servidor (GET /gestao-financeira/status → financeiro2). Nasce OCULTO no menu.
+/** @type {Array<{id:string,label:string,icon:string,pagina:string,secao:string,tipo:'financeiro',fin2?:boolean}>} */
 export const MENU_FINANCEIRO = [
   { id: "fin-visao-geral",   label: "Visão Geral",             icon: "bar-chart",   pagina: "visao-geral" },
+  { id: "fin-contas-a-pagar", label: "Contas a Pagar",         icon: "wallet",      pagina: "contas-a-pagar", fin2: true },
+  { id: "fin-conciliacao-saidas", label: "Conciliação de Saídas", icon: "list-checks", pagina: "conciliacao-saidas", fin2: true },
+  { id: "fin-juros",         label: "Juros e Encargos",        icon: "calculator",  pagina: "juros", fin2: true },
   { id: "fin-fluxo-de-caixa", label: "Fluxo de Caixa",         icon: "trending-up", pagina: "fluxo-de-caixa" },
   { id: "fin-contas",        label: "Contas Financeiras",      icon: "credit-card", pagina: "contas" },
   { id: "fin-conciliacao",   label: "Conciliação",             icon: "receipt",     pagina: "conciliacao" },

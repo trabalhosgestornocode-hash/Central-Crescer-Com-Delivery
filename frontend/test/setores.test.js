@@ -64,12 +64,12 @@ describe("contexto e preferência", () => {
 });
 
 describe("menu financeiro (contrato com o Agente 2)", () => {
-  test("12 itens na ordem do contrato, ids únicos e prefixo fin-", () => {
+  test("15 itens na ordem do contrato (Financeiro 2.0: contas a pagar, conciliação de saídas, juros), ids únicos e prefixo fin-", () => {
     assert.deepEqual(MENU_FINANCEIRO.map((m) => m.label), [
-      "Visão Geral", "Fluxo de Caixa", "Contas Financeiras", "Conciliação", "DRE Gerencial", "Indicadores",
+      "Visão Geral", "Contas a Pagar", "Conciliação de Saídas", "Juros e Encargos", "Fluxo de Caixa", "Contas Financeiras", "Conciliação", "DRE Gerencial", "Indicadores",
       "Análise de Categorias", "Plano de Contas", "Períodos", "Importação", "Relatórios", "Configurações Financeiras",
     ]);
-    assert.equal(new Set(MENU_FINANCEIRO.map((m) => m.id)).size, 12);
+    assert.equal(new Set(MENU_FINANCEIRO.map((m) => m.id)).size, 15);
     assert.ok(MENU_FINANCEIRO.every((m) => m.id.startsWith("fin-") && m.tipo === "financeiro" && /^[a-z-]+$/.test(m.pagina)));
   });
 });

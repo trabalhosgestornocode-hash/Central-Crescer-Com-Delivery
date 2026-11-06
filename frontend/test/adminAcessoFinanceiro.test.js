@@ -14,13 +14,14 @@ const inicial = {
 const copia = () => ({ habilitado: inicial.habilitado, niveis: Object.fromEntries(inicial.usuarios.map((u) => [u.id, u.nivel])) });
 
 describe("opções do seletor", () => {
-  test("quatro opções, na ordem da tela, com os valores do banco", () => {
-    assert.deepEqual(OPCOES_ACESSO.map((o) => o.valor), [null, "leitura", "operador", "gestor"]);
-    assert.deepEqual(OPCOES_ACESSO.map((o) => o.rotulo), ["Sem acesso", "Visualização", "Operador", "Gestor"]);
+  test("seis opções, na ordem da tela, com os valores do banco (Financeiro 2.0: + contador, + administrador)", () => {
+    assert.deepEqual(OPCOES_ACESSO.map((o) => o.valor), [null, "leitura", "operador", "gestor", "contador", "administrador"]);
+    assert.deepEqual(OPCOES_ACESSO.map((o) => o.rotulo), ["Sem acesso", "Visualização", "Operador", "Gestor", "Contadora", "Administrador financeiro"]);
     assert.equal(ROTULO_ACESSO.leitura, "Visualização"); assert.equal(ROTULO_ACESSO[""], "Sem acesso");
   });
   test("valor do seletor: desconhecido ou vazio vira Sem acesso (falha fechada)", () => {
     assert.equal(nivelDoSeletor("gestor"), "gestor");
+    assert.equal(nivelDoSeletor("contador"), "contador"); assert.equal(nivelDoSeletor("administrador"), "administrador");
     for (const x of ["", null, undefined, "admin", "root", "Gestor"]) assert.equal(nivelDoSeletor(x), null);
   });
 });

@@ -12,6 +12,7 @@ export const ACAO = Object.freeze({
   CANCELAR: "gestao_financeira.cancelar",
   EXCLUIR: "gestao_financeira.excluir",
   CONFIGURAR: "gestao_financeira.configurar",
+  CLASSIFICAR: "gestao_financeira.classificar",
 });
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -23,6 +24,15 @@ export function contextoDe(req) {
   const usuarioId = req?.user?.id;
   if (!f?.organizacaoId || !f?.unidadeId || !usuarioId) throw ApiError.forbidden("Contexto financeiro ausente.", { codigo: "FINANCEIRO_SEM_CONCESSAO" });
   return exigirContexto({ organizacaoId: f.organizacaoId, unidadeId: f.unidadeId, usuarioId });
+}
+
+/**
+ * Permissões financeiras já resolvidas pelo gate (relidas do banco a cada requisição). Só para regras que DEPENDEM de quem age
+ * (ex.: registro feito por quem não pode confirmar nasce PROVISÓRIO). A autorização da rota continua sendo o `autorizar(acao)` do gate.
+ */
+export function permissoesDe(req) {
+  const p = req?.financeiro?.permissoes;
+  return Object.freeze(Array.isArray(p) ? [...p] : []);
 }
 
 export function exigirContexto(ctx) {

@@ -3,7 +3,9 @@
 // Resposta: { data }. Erros: ApiError → errorHandler global.
 import { Router } from "express";
 import { asyncHandler } from "../../../shared/asyncHandler.js";
-import { ACAO, contextoDe } from "./contexto.js";
+import { ACAO, contextoDe, permissoesDe } from "./contexto.js";
+import * as obr from "./obrigacoes.service.js";
+import * as cs from "./conciliacaoSaidas.service.js";
 import * as cadastros from "./cadastros.service.js";
 import * as lanc from "./lancamentos.service.js";
 import * as rel from "./relatorios.service.js";
@@ -14,8 +16,10 @@ import * as tab from "./tabelas.service.js";
 import * as cfg from "./configuracoes.service.js";
 import * as repositorio from "./repositorio.js";
 import { uuid } from "./validacao.js";
+import { financeiro2Habilitado } from "../../../shared/financeiro2.flag.js";
+import { ApiError } from "../../../shared/ApiError.js";
 
-export function criarDominioRouter({ autorizar, deps = undefined }) {
+export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = financeiro2Habilitado }) {
   if (typeof autorizar !== "function") throw new Error("autorizar (gate do Agente 1) é obrigatório");
   const r = Router();
   const d = deps; // injeção opcional para testes
@@ -100,6 +104,35 @@ export function criarDominioRouter({ autorizar, deps = undefined }) {
     });
     res.send(arq.conteudo);
   }));
+
+  // ---- Financeiro 2.0 (migration 151): contas a pagar, acréscimos (juros/multa/tarifa) e conciliação de saídas ----
+  // Quem registra sem poder confirmar (sem `conciliar`) gera registro PROVISÓRIO; classificar o que altera o resultado exige `classificar`.
+  // FEATURE FLAG (fail-closed): fora das organizações em FINANCEIRO_2_ORGANIZACOES, as rotas novas não existem (404 — não revela a função).
+  const so2 = (req, _res, next) => (financeiro2(contextoDe(req).organizacaoId) ? next() : next(ApiError.notFound("Recurso não encontrado.", { codigo: "FINANCEIRO_2_DESABILITADO" })));
+  // (3ª revisão, B-2) permissão ANTES do flag: sem permissão = 403, como nas demais rotas; com permissão e flag desligado = 404
+  const h2 = (acao, fn, o) => { const [aut, ...resto] = h(acao, fn, o); return [aut, so2, ...resto]; };
+  const perms = (q) => ({ permissoes: permissoesDe(q) });
+  r.get("/fornecedores", ...h2(ACAO.VER, (c) => obr.listarFornecedores(c, d)));
+  r.post("/fornecedores", ...h2(ACAO.LANCAR, (c, q) => obr.criarFornecedor(c, q.body, d), { status: 201 }));
+  r.get("/contas-pagar", ...h2(ACAO.VER, (c, q) => obr.listar(c, q.query, d)));
+  r.get("/contas-pagar/resumo", ...h2(ACAO.VER, (c, q) => obr.resumoMes(c, q.query, d)));
+  r.get("/contas-pagar/juros", ...h2(ACAO.VER, (c, q) => obr.painelJuros(c, q.query, d)));
+  r.post("/contas-pagar", ...h2(ACAO.LANCAR, (c, q) => obr.criar(c, q.body, d, perms(q)), { status: 201 }));
+  r.post("/contas-pagar/pagamentos/:id/cancelar", ...h2(ACAO.CANCELAR, (c, q) => obr.cancelarPagamento(c, q.params.id, q.body, d)));
+  r.get("/contas-pagar/:id", ...h2(ACAO.VER, (c, q) => obr.obter(c, q.params.id, d)));
+  r.patch("/contas-pagar/:id", ...h2(ACAO.EDITAR, (c, q) => obr.atualizar(c, q.params.id, q.body, d, perms(q))));
+  r.post("/contas-pagar/:id/pagamentos", ...h2(ACAO.LANCAR, (c, q) => obr.registrarPagamento(c, q.params.id, q.body, d, perms(q)), { status: 201 }));
+  r.post("/contas-pagar/:id/quitar", ...h2(ACAO.CONCILIAR, (c, q) => obr.quitar(c, q.params.id, d)));
+  r.post("/contas-pagar/:id/desfazer-quitacao", ...h2(ACAO.CONCILIAR, (c, q) => obr.desfazerQuitacao(c, q.params.id, q.body, d)));
+  r.post("/contas-pagar/:id/confirmar-registro", ...h2(ACAO.CONCILIAR, (c, q) => obr.confirmarRegistro(c, q.params.id, d)));
+  r.post("/contas-pagar/:id/classificar", ...h2(ACAO.CLASSIFICAR, (c, q) => obr.classificar(c, q.params.id, q.body, d)));
+  r.post("/contas-pagar/:id/cancelar", ...h2(ACAO.CANCELAR, (c, q) => obr.cancelar(c, q.params.id, q.body, d)));
+  r.get("/conciliacao-saidas", ...h2(ACAO.VER, (c, q) => cs.painel(c, q.query, d)));
+  r.post("/conciliacao-saidas/sugerir", ...h2(ACAO.CONCILIAR, (c, q) => cs.sugerir(c, q.body, d)));
+  r.post("/conciliacao-saidas/vincular", ...h2(ACAO.CONCILIAR, (c, q) => cs.vincular(c, q.body, d), { status: 201 }));
+  r.post("/conciliacao-saidas/:grupo/confirmar", ...h2(ACAO.CONCILIAR, (c, q) => cs.confirmar(c, q.params.grupo, q.body, d)));
+  r.post("/conciliacao-saidas/:grupo/rejeitar", ...h2(ACAO.CONCILIAR, (c, q) => cs.rejeitar(c, q.params.grupo, d)));
+  r.post("/conciliacao-saidas/:grupo/revogar", ...h2(ACAO.CONCILIAR, (c, q) => cs.revogar(c, q.params.grupo, q.body, d)));
 
   // configurações financeiras: visão consolidada do que o domínio suporta (escritas usam os endpoints próprios)
   r.get("/configuracoes", ...h(ACAO.VER, (c) => cfg.resumo(c, d)));

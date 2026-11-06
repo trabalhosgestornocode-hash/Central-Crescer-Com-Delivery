@@ -217,3 +217,4 @@ export async function listarAuditoria(ctxIn, { entidade, entidadeId, limite = 10
 
 export * from "./repositorio.conciliacao.js";
 export * from "./repositorio.periodos.js";
+export * from "./repositorio.obrigacoes.js";

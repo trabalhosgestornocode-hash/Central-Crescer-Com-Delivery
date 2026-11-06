@@ -200,10 +200,10 @@ describe("migration 147 — estático", () => {
   const sql = readFileSync(join(MIGRATIONS, "147_foody_camada_central.sql"), "utf8");
   const rb = readFileSync(join(MIGRATIONS, "147_rollback.sql"), "utf8");
   const corpo = sql.split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join("\n");
-  test("não há outra 147; posteriores só as conhecidas (148 = conexão compartilhada; 149 = administração; 150 = uma coleta por unidade; aditivas)", () => {
+  test("não há outra 147; posteriores só as conhecidas (148 = conexão compartilhada; 149 = administração; 150 = uma coleta por unidade; 151 = Financeiro 2.0, fora do Foody; aditivas)", () => {
     const arqs = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && !/rollback/i.test(f));
     assert.equal(arqs.filter((f) => f.startsWith("147")).length, 1);
-    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "147").sort(), ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql"]);
+    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "147").sort(), ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql", "151_financeiro_2_contas_pagar.sql"]);
   });
   test("numeração: 144 é do Termo v3 em produção (fora da pasta); 144–146 não existem no repositório; Foody só em 147–150", () => {
     const todos = readdirSync(MIGRATIONS);

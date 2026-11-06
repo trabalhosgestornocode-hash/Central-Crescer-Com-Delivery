@@ -24,7 +24,7 @@ import {
   restaurarContexto, encerrarContexto, aplicarContexto,
   precisaDefinirSenha, definirNovaSenha, temModulo,
   listarUnidadesContexto, trocarUnidadeDoContexto,
-  carregarPerfis, selecionarPerfil, limparPerfilPendente, carregarSetores,
+  carregarPerfis, selecionarPerfil, limparPerfilPendente, carregarSetores, http,
 } from "./sessao.js";
 import { SETOR, SETOR_ROTULO, decidirSetor, chaveDoContexto, lerPreferencia, gravarPreferencia } from "./setores.js";
 import { MENU_FINANCEIRO, SECAO_FINANCEIRO } from "./financeiroMenu.js";
@@ -95,11 +95,13 @@ function montarMenu() {
   if (filtros) filtros.style.display = noFinanceiro ? "none" : "";
   if (noFinanceiro) {
     el("#menu").innerHTML = `<li class="menu-secao">${SECAO_FINANCEIRO}</li>` + MENU_FINANCEIRO.map((m) => `
-      <li data-rota="${m.id}">
+      <li data-rota="${m.id}"${m.fin2 ? " data-fin2 hidden" : ""}>
         <span class="m-icon">${icon(m.icon, { size: 18 })}</span>
         <span class="m-label">${m.label}</span>
       </li>`).join("");
     els("#menu li[data-rota]").forEach((li) => li.addEventListener("click", () => irPara(li.dataset.rota)));
+    // Financeiro 2.0: os itens só aparecem se o SERVIDOR confirmar o feature flag desta empresa (falha = continuam ocultos).
+    http.get("/api/v1/gestao-financeira/status").then((r) => { if (r?.data?.financeiro2 === true) els("#menu li[data-fin2]").forEach((li) => { li.hidden = false; }); }).catch(() => {});
     // Sem Agente Crescer, atualização de CMV nem alertas operacionais no setor financeiro.
     for (const id of ["#btn-agente", "#btn-refresh", "#btn-notif"]) { const n = el(id); if (n) n.hidden = true; }
     return;
