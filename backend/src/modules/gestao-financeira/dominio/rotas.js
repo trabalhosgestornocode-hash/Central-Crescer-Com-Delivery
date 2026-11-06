@@ -15,6 +15,7 @@ import * as per from "./periodos.service.js";
 import * as tab from "./tabelas.service.js";
 import * as cfg from "./configuracoes.service.js";
 import * as repositorio from "./repositorio.js";
+import * as painelSvc from "./painel.service.js";
 import { uuid } from "./validacao.js";
 import { financeiro2Habilitado } from "../../../shared/financeiro2.flag.js";
 import { ApiError } from "../../../shared/ApiError.js";
@@ -112,6 +113,10 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   // (3ª revisão, B-2) permissão ANTES do flag: sem permissão = 403, como nas demais rotas; com permissão e flag desligado = 404
   const h2 = (acao, fn, o) => { const [aut, ...resto] = h(acao, fn, o); return [aut, so2, ...resto]; };
   const perms = (q) => ({ permissoes: permissoesDe(q) });
+  // Visão Geral 2.0, Receitas e Vendas, DRE gerencial de referência (só leitura; regras propostas, não aprovadas)
+  r.get("/painel", ...h2(ACAO.VER, (c, q) => painelSvc.painel(c, q.query, d)));
+  r.get("/receitas", ...h2(ACAO.VER, (c, q) => painelSvc.receitas(c, q.query, d)));
+  r.get("/dre-referencia", ...h2(ACAO.VER, (c, q) => painelSvc.dreReferencia(c, q.query, d)));
   r.get("/fornecedores", ...h2(ACAO.VER, (c) => obr.listarFornecedores(c, d)));
   r.post("/fornecedores", ...h2(ACAO.LANCAR, (c, q) => obr.criarFornecedor(c, q.body, d), { status: 201 }));
   r.get("/contas-pagar", ...h2(ACAO.VER, (c, q) => obr.listar(c, q.query, d)));

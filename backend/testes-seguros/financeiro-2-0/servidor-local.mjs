@@ -6,7 +6,11 @@
 process.env.SUPABASE_URL = "http://127.0.0.1:9";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "sb_fake_service_role_key_for_tests_0000000";
 process.env.SUPABASE_ANON_KEY = "sb_fake_anon_key_for_tests_00000000000000000";
-process.env.FINANCEIRO_2_ORGANIZACOES = "00000000-0000-4000-8000-000000000001";   // feature flag: só a empresa sintética (/qa/fin2?on=0 desliga)
+// MODO DADOS EXISTENTES (só local): FIN20_BANCO=fin20xxx FIN20_ORG=<uuid> FIN20_UNIDADE=<uuid> FIN20_EMPRESA="nome" → usa o banco descartável já
+// carregado (ex.: cópia local de uma empresa) SEM semear dados sintéticos. Sem essas variáveis, comportamento original (sintético).
+const EXISTENTE = Boolean(process.env.FIN20_ORG && process.env.FIN20_UNIDADE);
+if (EXISTENTE && !/^fin20[a-z0-9_]*$/.test(process.env.FIN20_BANCO ?? "")) { console.error("RECUSADO: modo dados existentes exige FIN20_BANCO=fin20*"); process.exit(2); }
+process.env.FINANCEIRO_2_ORGANIZACOES = EXISTENTE ? process.env.FIN20_ORG : "00000000-0000-4000-8000-000000000001";   // feature flag: só a empresa sintética (/qa/fin2?on=0 desliga)
 const { default: express } = await import("express");
 const path = await import("node:path");
 const { readFileSync } = await import("node:fs");
@@ -31,8 +35,10 @@ const PORTA = Number(process.argv[2]) || 4180;
 const db = criarClienteLocal({ banco: process.env.FIN20_BANCO ?? "fin20app" });
 const deps = { repo: repositorio, db };
 const u = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const ORG = u(1), UNI_C = u(2), UNI_N = u(3), USER = u(6), PERFIL = u(7);
-const UNIDADES = [{ id: UNI_C, nome: "Loja Centro (sintética)", ativo: true }, { id: UNI_N, nome: "Loja Norte (sintética, vazia)", ativo: true }];
+const ORG = EXISTENTE ? process.env.FIN20_ORG : u(1), UNI_C = EXISTENTE ? process.env.FIN20_UNIDADE : u(2), UNI_N = u(3), USER = u(6), PERFIL = u(7);
+const EMPRESA_SINT = "Açaí no Grau (dados SINTÉTICOS)";
+const EMPRESA = EXISTENTE ? `${process.env.FIN20_EMPRESA ?? "Empresa"} (cópia LOCAL)` : EMPRESA_SINT;
+const UNIDADES = EXISTENTE ? [{ id: UNI_C, nome: `${process.env.FIN20_EMPRESA ?? "Unidade"} (cópia local)`, ativo: true }] : [{ id: UNI_C, nome: "Loja Centro (sintética)", ativo: true }, { id: UNI_N, nome: "Loja Norte (sintética, vazia)", ativo: true }];
 const estado = { unidade: UNI_C, nivel: "administrador" };
 const ctxC = { organizacaoId: ORG, unidadeId: UNI_C, usuarioId: USER };
 const PERMS_ADMIN = permissoesDoNivelFinanceiro("administrador"), PERMS_OPER = permissoesDoNivelFinanceiro("operador");
@@ -107,7 +113,7 @@ async function semear() {
   await cs.sugerir(ctxC, { mes: "2026-10" }, deps);                                           // fica SUGERIDO, aguardando confirmação humana
   console.log("[fin20] dados sintéticos semeados (agosto fechado; setembro com divergências; outubro corrente)");
 }
-await semear();
+if (!EXISTENTE) await semear(); else console.log(`[fin20] modo dados existentes: banco ${process.env.FIN20_BANCO}, sem semear`);
 
 // ---------------------------------------------------------------- sessão falsa + gate/domínio reais
 const leitor = { moduloEmpresa: async () => true, moduloUnidade: async () => true,
@@ -116,7 +122,7 @@ const acesso = () => ({ perfilId: PERFIL, impersonando: false, papel: "organizat
 const ROTULO_NIVEL = { administrador: "Administrador financeiro", gestor: "Gerente", contador: "Contadora", operador: "Operador", leitura: "Leitor" };
 function contexto() {
   const un = UNIDADES.find((x) => x.id === estado.unidade) ?? UNIDADES[0]; const a = acesso(); const agora = Date.now();
-  return { contextToken: "local-contexto", empresa: { id: ORG, nome: "Açaí no Grau (dados SINTÉTICOS)", status: "ativa" }, unidade: { id: un.id, nome: un.nome },
+  return { contextToken: "local-contexto", empresa: { id: ORG, nome: EMPRESA, status: "ativa" }, unidade: { id: un.id, nome: un.nome },
     papel: a.papel, papelRotulo: ROTULO_NIVEL[estado.nivel] ?? "—", permissoes: a.permissoes, modulos: a.modulos, impersonando: false,
     perfil: { id: PERFIL, nome: `Pessoa sintética (${ROTULO_NIVEL[estado.nivel]})` }, expiraEm: new Date(agora + 8 * 3600e3).toISOString(), servidorEm: new Date(agora).toISOString() };
 }
@@ -126,13 +132,14 @@ app.get("/api/config", (_q, r) => r.json({ supabaseUrl: "http://127.0.0.1:9", su
 app.get("/qa/supabase-stub.js", (_q, r) => r.type("js").send(readFileSync(path.join(aqui, "..", "qa-visual", "supabase-stub.js"))));
 app.all("/qa/nivel", (q, r) => { const n = String(q.query.n ?? ""); if (ROTULO_NIVEL[n]) estado.nivel = n; r.json(estado); });
 app.all("/qa/unidade", (q, r) => { if (UNIDADES.some((x) => x.id === q.query.id)) estado.unidade = q.query.id; r.json(estado); });
+app.get("/health", (_q, r) => r.json({ ok: true, service: "fin20-local", versao: "local" }));
 app.all("/qa/fin2", (q, r) => { process.env.FINANCEIRO_2_ORGANIZACOES = q.query.on === "0" ? "" : ORG; r.json({ financeiro2: process.env.FINANCEIRO_2_ORGANIZACOES === ORG }); });
 app.get("/qa/estado", (_q, r) => r.json(estado));
 app.get(["/", "/index.html"], (_q, r) => r.type("html").send(readFileSync(path.join(frontend, "index.html"), "utf8").replace(/<script src="https:\/\/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@2"><\/script>/, '<script src="/qa/supabase-stub.js"></script>')));
 const api = express.Router();
 api.get("/me", (_q, r) => r.json({ data: { id: USER, nome: "Pessoa sintética", email: "pessoa@exemplo.invalid", superadmin: false, senhaProvisoria: false } }));
 api.get("/sessao/perfis", (_q, r) => r.json({ data: [{ id: PERFIL, nome: "Pessoa sintética", temPin: false }] }));
-api.get("/sessao/acessos", (_q, r) => r.json({ data: { opcoes: [{ organizacaoId: ORG, unidadeId: UNI_C, empresaNome: "Açaí no Grau (dados SINTÉTICOS)", unidadeNome: UNIDADES[0].nome, papel: "organization_admin", papelRotulo: "Administrador", acessivel: true, cidade: "—" }], superadmin: false, painelAdministrativo: false } }));
+api.get("/sessao/acessos", (_q, r) => r.json({ data: { opcoes: [{ organizacaoId: ORG, unidadeId: UNI_C, empresaNome: EMPRESA, unidadeNome: UNIDADES[0].nome, papel: "organization_admin", papelRotulo: "Administrador", acessivel: true, cidade: "—" }], superadmin: false, painelAdministrativo: false } }));
 api.post("/sessao/selecionar", (_q, r) => r.json({ data: contexto() }));
 api.get("/sessao/atual", (_q, r) => r.json({ data: contexto() }));
 api.get("/sessao/unidades", (_q, r) => r.json({ data: { unidades: UNIDADES } }));
@@ -152,4 +159,4 @@ api.use((_q, r) => r.json({ data: [] }));
 app.use("/api/v1", api);
 app.use("/api/v1", errorHandler);
 app.use(express.static(frontend));
-app.listen(PORTA, "127.0.0.1", () => console.log(`[fin20] http://127.0.0.1:${PORTA}  (gate+domínio REAIS, PostgreSQL descartável, dados sintéticos) — perfil: ${estado.nivel}`));
+app.listen(PORTA, "127.0.0.1", () => console.log(`[fin20] http://127.0.0.1:${PORTA}  (gate+domínio REAIS, PostgreSQL descartável, ${EXISTENTE ? "cópia LOCAL de dados existentes" : "dados sintéticos"}) — perfil: ${estado.nivel}`));

@@ -3,7 +3,7 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { decidirSetor, setoresValidos, chaveDoContexto, lerPreferencia, gravarPreferencia } from "../src/setores.js";
-import { MENU_FINANCEIRO } from "../src/financeiroMenu.js";
+import { MENU_FINANCEIRO, MODULOS_FINANCEIRO } from "../src/financeiroMenu.js";
 
 const memoria = () => { const m = {}; return { getItem: (k) => m[k] ?? null, setItem: (k, v) => { m[k] = v; } }; };
 
@@ -64,12 +64,23 @@ describe("contexto e preferência", () => {
 });
 
 describe("menu financeiro (contrato com o Agente 2)", () => {
-  test("15 itens na ordem do contrato (Financeiro 2.0: contas a pagar, conciliação de saídas, juros), ids únicos e prefixo fin-", () => {
+  test("18 itens: os 15 do contrato na mesma ordem + painel, receitas e DRE de referência (2.0); ids únicos e prefixo fin-", () => {
     assert.deepEqual(MENU_FINANCEIRO.map((m) => m.label), [
       "Visão Geral", "Contas a Pagar", "Conciliação de Saídas", "Juros e Encargos", "Fluxo de Caixa", "Contas Financeiras", "Conciliação", "DRE Gerencial", "Indicadores",
       "Análise de Categorias", "Plano de Contas", "Períodos", "Importação", "Relatórios", "Configurações Financeiras",
+      "Visão Geral", "Receitas e Vendas", "DRE Gerencial de Referência",
     ]);
-    assert.equal(new Set(MENU_FINANCEIRO.map((m) => m.id)).size, 15);
+    assert.equal(new Set(MENU_FINANCEIRO.map((m) => m.id)).size, 18);
     assert.ok(MENU_FINANCEIRO.every((m) => m.id.startsWith("fin-") && m.tipo === "financeiro" && /^[a-z-]+$/.test(m.pagina)));
+  });
+  test("a 1ª rota (entrada do setor) NÃO depende do flag: empresas sem o 2.0 nunca caem numa página indisponível", () => {
+    assert.equal(MENU_FINANCEIRO[0].fin2, undefined);
+    assert.ok(MENU_FINANCEIRO.filter((m) => ["fin-painel", "fin-receitas", "fin-dre-referencia"].includes(m.id)).every((m) => m.fin2 === true));
+  });
+  test("seis módulos cobrem TODAS as telas exatamente uma vez (nenhuma tela removida)", () => {
+    assert.deepEqual(MODULOS_FINANCEIRO.map((g) => g.rotulo), ["Visão Geral", "Receitas e Vendas", "Despesas e Pagamentos", "Caixa e Conciliação", "Custos e Resultados", "Controle e Relatórios"]);
+    const ids = MODULOS_FINANCEIRO.flatMap((g) => g.itens);
+    assert.equal(ids.length, new Set(ids).size);
+    assert.deepEqual([...ids].sort(), MENU_FINANCEIRO.map((m) => m.id).sort());
   });
 });
