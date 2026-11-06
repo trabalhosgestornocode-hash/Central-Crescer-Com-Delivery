@@ -18,7 +18,9 @@ Aberturas positivas e iguais a zero continuam exatamente como antes.
 
 ## Testes
 - `backend/test/financeiro/aberturaNegativa.test.js` (unitário): sinal, saldo anterior, variação, saldo final e saldos por conta.
-- Teste integrado (serviços reais, banco descartável, dados sintéticos, duas organizações; fica na branch do Financeiro 2.0, `testes-seguros/financeiro-2-0/abertura_negativa_integrado.mjs`):
+- Teste integrado `backend/testes-seguros/financeiro-abertura-negativa/abertura_negativa_integrado.mjs` (serviços reais, banco descartável só com as migrations 120–122, dados sintéticos, duas organizações). Para rodar:
+  `PG_CLUSTER_DIR=<cluster descartável> bash backend/testes-seguros/financeiro-abertura-negativa/preparar_banco.sh fin20neg` e depois `node backend/testes-seguros/financeiro-abertura-negativa/abertura_negativa_integrado.mjs`.
+- Resultado:
   - **25/25 com a correção**;
   - **10 falhas sem ela** (no código da `main`).
 - Cobertura do teste integrado:
