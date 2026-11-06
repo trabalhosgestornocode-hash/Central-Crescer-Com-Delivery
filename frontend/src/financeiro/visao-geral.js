@@ -98,8 +98,26 @@ function pintar(alvo, mes, g, ind, cats, anterior) {
         <p class="fin-sub">${pend.semCategoria} sem categoria. Sem categoria ficam fora dos indicadores; pendentes já classificados entram nos números, mas aguardam confirmação. Resolva em Fluxo de Caixa (filtro “Pendentes”).</p>
         ${pend.semCategoria ? badge("Indicadores parciais", "warn") : pend.pendentes ? badge("Aguardando confirmação", "info") : badge("Tudo classificado", "ok")}
       </div>
-    </div>`;
+    </div>
+    <div data-contas-pagar></div>`;
   redesenharAoRedimensionar(alvo, g.serie);
+  pintarContasPagar(alvo.querySelector("[data-contas-pagar]"), mes);
+}
+
+/** Financeiro 2.0: contas a pagar, acréscimos e bloqueios de fechamento do mês. Se a API não responder, o bloco simplesmente não aparece. */
+async function pintarContasPagar(alvo, mes) {
+  if (!alvo) return;
+  try {
+    const r = await fin.get("/contas-pagar/resumo", { mes });
+    if (!alvo.isConnected) return;
+    const c = r.contasPagar, j = r.juros, b = r.bloqueiosFechamento ?? [];
+    alvo.innerHTML = `<div class="fin-card"><h3>Contas a pagar e encargos — ${esc(rotuloMes(mes))}</h3>
+      <div class="fin-kpis">
+        ${kpi({ rotulo: "Contas a pagar em aberto", valor: moeda(c.emAbertoCentavos), sub: c.vencidoCentavos ? `${moeda(c.vencidoCentavos)} vencido` : "Nada vencido", formula: "Σ (original − total pago) das contas abertas", origem: "Contas a Pagar" })}
+        ${kpi({ rotulo: "Juros e acréscimos pagos", valor: moeda(j.totalCentavos), sub: j.presumidoCentavos ? `${moeda(j.presumidoCentavos)} presumidos (sem classificação)` : "Todos classificados", formula: "Σ (total pago − original) das contas quitadas no mês", origem: "Juros de empréstimos não entram aqui" })}
+        ${kpi({ rotulo: "Bloqueios de fechamento", valor: String(b.length), sub: b.length ? `${badge("Resolver antes de fechar", "warn")}` : "Nenhum bloqueio de contas a pagar" })}
+      </div></div>`;
+  } catch { alvo.innerHTML = ""; }
 }
 
 const graficoEs = (serie, largura) =>

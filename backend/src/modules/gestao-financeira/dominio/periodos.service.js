@@ -10,6 +10,7 @@ import { paraEntradaMotor, aberturasComoLancamentos, montarDre } from "../../../
 import { montarSnapshot, avaliarFechamento, primeiroDia, ultimoDia } from "../../../financeiro-calculos/periodos.js";
 import { carregarBase, aposAbertura } from "./relatorios.service.js";
 import { calcularMes } from "./conciliacao.service.js";
+import { financeiro2Habilitado } from "../../../shared/financeiro2.flag.js";
 
 const padrao = { repo: repositorio, db: undefined, agora: () => new Date().toISOString() };
 
@@ -56,6 +57,16 @@ async function prepararMes(c, mes, deps) {
   const ativa = (await deps.repo.listarExcecoesFechamento(c, { mes, apenasAtivas: true }, deps.db)).find((e) => Date.parse(e.expira_em) > agora) ?? null;
   const excecao = ativa ? { id: ativa.id, expiraEm: ativa.expira_em, pendenciasIds: (ativa.pendencias ?? []).map((p) => p.id), pendenciasConciliacaoIds: ativa.pendencias_conciliacao_ids ?? [] } : null;
   const avaliacao = avaliarFechamento({ status: periodo.status, pendenciasLancamentos: pendLanc, pendenciasLancamentosIds: pendentes.map((l) => l.id), pendenciasConciliacao: conc.resultado.resumo.pendenciasAbertas, pendenciasConciliacaoIds: conc.resultado.resumo.pendenciasAbertasIds, excecao });
+  // Financeiro 2.0 (151): divergências BLOQUEADORAS de contas a pagar / conciliação de saídas. O banco é a autoridade (gatilho no fechamento);
+  // aqui só se mostra ANTES da tentativa. Sem exceção possível. Repositório sem a função (dublês antigos) = nenhuma divergência conhecida.
+  // FEATURE FLAG: só consulta a função da 151 para organizações com o Financeiro 2.0 ligado — o fechamento das demais NUNCA depende da 151
+  // (se o código for publicado antes da migration, nada do financeiro anterior quebra). O gatilho do banco continua sendo a autoridade.
+  const comFin2 = (deps.financeiro2 ?? financeiro2Habilitado)(c.organizacaoId);
+  const divergencias = comFin2 && typeof deps.repo.bloqueiosFechamentoRpc === "function" ? await deps.repo.bloqueiosFechamentoRpc(c, `${mes}-01`, deps.db) : [];
+  if (divergencias.length) {
+    avaliacao.bloqueios.push({ codigo: "DIVERGENCIAS_CONTAS_PAGAR", texto: `${divergencias.length} divergência(s) de contas a pagar ou de conciliação de saídas impedem o fechamento (sem exceção possível).`, itens: divergencias });
+    avaliacao.pode = false;
+  }
   const pendencias = { lancamentos: pendLanc, conciliacao: conc.resultado.resumo.pendenciasAbertas, conciliacaoIds: conc.resultado.resumo.pendenciasAbertasIds, total: pendLanc + conc.resultado.resumo.pendenciasAbertas };
   return { periodo, fingerprint, apuracao, dre, saldos, conciliacao: conc.resultado, pendencias, excecao: ativa ? resumoExcecao(ativa) : null, avaliacao, vazio: base.lancs.length === 0 };
 }

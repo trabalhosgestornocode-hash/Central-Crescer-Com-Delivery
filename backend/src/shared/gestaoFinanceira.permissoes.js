@@ -20,16 +20,24 @@ export const PERM_FIN = Object.freeze({
   REABRIR: "gestao_financeira.reabrir",
   EXCLUIR: "gestao_financeira.excluir",
   CONFIGURAR: "gestao_financeira.configurar",
+  // Financeiro 2.0 (decisão 4): confirmar juros, multas, tarifas, descontos e demais classificações que ALTERAM O RESULTADO.
+  CLASSIFICAR: "gestao_financeira.classificar",
 });
 
-export const NIVEIS_FINANCEIRO = Object.freeze(["leitura", "operador", "gestor"]);
+export const NIVEIS_FINANCEIRO = Object.freeze(["leitura", "operador", "gestor", "contador", "administrador"]);
 
-// Matriz (decisão A7.1). Leitura consulta; operador consulta, cria e edita; gestor soma conciliar, cancelar, fechar e configurar.
+// Matriz (decisão A7.1 + GO Financeiro 2.0 de 05/11/2026).
+//   leitura: consulta.  operador: consulta, registra (obrigações/pagamentos — ficam PROVISÓRIOS) e edita.
+//   gestor (Gerente): + conciliar (inclui confirmar quitação e registro provisório), cancelar, fechar e configurar.
+//   contador (Contadora): consulta, edita, concilia, CLASSIFICA e fecha. Não registra nem cancela lançamentos.
+//   administrador: tudo do gestor + CLASSIFICAR.
 // Sem nível: REABRIR (aguarda homologação específica) e EXCLUIR (exclusão física não existe nesta versão).
 const POR_NIVEL = Object.freeze({
   leitura: [PERM_FIN.VER],
   operador: [PERM_FIN.VER, PERM_FIN.LANCAR, PERM_FIN.EDITAR],
   gestor: [PERM_FIN.VER, PERM_FIN.LANCAR, PERM_FIN.EDITAR, PERM_FIN.CONCILIAR, PERM_FIN.CANCELAR, PERM_FIN.FECHAR, PERM_FIN.CONFIGURAR],
+  contador: [PERM_FIN.VER, PERM_FIN.EDITAR, PERM_FIN.CONCILIAR, PERM_FIN.CLASSIFICAR, PERM_FIN.FECHAR],
+  administrador: [PERM_FIN.VER, PERM_FIN.LANCAR, PERM_FIN.EDITAR, PERM_FIN.CONCILIAR, PERM_FIN.CANCELAR, PERM_FIN.FECHAR, PERM_FIN.CONFIGURAR, PERM_FIN.CLASSIFICAR],
 });
 
 /** Todas as permissões do catálogo financeiro (para testes/guardas). */

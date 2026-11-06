@@ -287,3 +287,14 @@
 @media (max-width: 380px) { .fin-kpi { padding: 12px; } .fin-kpi-val { font-size: 15.5px; letter-spacing: -.02em; } }
 @media (max-width: 359px) { .fin-kpis { grid-template-columns: 1fr; } .fin-kpi-val { font-size: 21px; } }
 @media (forced-colors: active) { .fin-bar { stroke: CanvasText; } .fin-hbar-barra { forced-color-adjust: none; background: Highlight; } .fin-badge::before { background: CanvasText; } }
+
+/* ---------- Financeiro 2.0: detalhe de conta e grupos de formulário ---------- */
+.fin-dialogo .fin-dl, .fin-pg .fin-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 10px 0 14px; font-size: 13.5px; }
+.fin-dl dt { color: var(--fin-texto-3); font-weight: 600; }
+.fin-dl dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.fin-dialogo fieldset.fin-form-corpo { border: 1px solid var(--fin-linha-forte); border-radius: 10px; padding: 10px 12px; margin: 6px 0; }
+.fin-dialogo fieldset.fin-form-corpo legend { font-size: 12px; font-weight: 650; color: var(--fin-texto-2); padding: 0 4px; }
+.fin-dialogo h4 { margin: 14px 0 6px; font-size: 13.5px; }
+@media (max-width: 560px) { .fin-dl { grid-template-columns: minmax(0, 1fr); } .fin-dl dd { text-align: left; } }
+.fin-pg .fin-cel { display: block; min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .fin-tabela--cartao td > .fin-cel { flex: 1 1 auto; text-align: right; } }

@@ -24,10 +24,10 @@ import {
   restaurarContexto, encerrarContexto, aplicarContexto,
   precisaDefinirSenha, definirNovaSenha, temModulo,
   listarUnidadesContexto, trocarUnidadeDoContexto,
-  carregarPerfis, selecionarPerfil, limparPerfilPendente, carregarSetores,
+  carregarPerfis, selecionarPerfil, limparPerfilPendente, carregarSetores, http,
 } from "./sessao.js";
 import { SETOR, SETOR_ROTULO, decidirSetor, chaveDoContexto, lerPreferencia, gravarPreferencia } from "./setores.js";
-import { MENU_FINANCEIRO, SECAO_FINANCEIRO } from "./financeiroMenu.js";
+import { MENU_FINANCEIRO, SECAO_FINANCEIRO, MODULOS_FINANCEIRO, ROTULOS_AGRUPADOS } from "./financeiroMenu.js";
 import {
   montarSelecaoPerfil, abrirPinDoPerfil, setErroPin, setPinCarregando,
   fecharPinDoPerfil, mostrarSemPerfil,
@@ -94,12 +94,23 @@ function montarMenu() {
   const filtros = document.querySelector(".global-filtros");
   if (filtros) filtros.style.display = noFinanceiro ? "none" : "";
   if (noFinanceiro) {
-    el("#menu").innerHTML = `<li class="menu-secao">${SECAO_FINANCEIRO}</li>` + MENU_FINANCEIRO.map((m) => `
-      <li data-rota="${m.id}">
+    const itemMenu = (m, rotulo = m.label, oculto = false) => `
+      <li data-rota="${m.id}"${oculto ? " data-fin2 hidden" : ""}>
         <span class="m-icon">${icon(m.icon, { size: 18 })}</span>
-        <span class="m-label">${m.label}</span>
-      </li>`).join("");
-    els("#menu li[data-rota]").forEach((li) => li.addEventListener("click", () => irPara(li.dataset.rota)));
+        <span class="m-label">${rotulo}</span>
+      </li>`;
+    const ligar = () => els("#menu li[data-rota]").forEach((li) => li.addEventListener("click", () => irPara(li.dataset.rota)));
+    el("#menu").innerHTML = `<li class="menu-secao">${SECAO_FINANCEIRO}</li>` + MENU_FINANCEIRO.map((m) => itemMenu(m, m.label, m.fin2)).join("");
+    ligar();
+    // Financeiro 2.0: só se o SERVIDOR confirmar o feature flag desta empresa (falha = menu atual intacto). Ligado → seis módulos.
+    http.get("/api/v1/gestao-financeira/status").then((r) => {
+      if (r?.data?.financeiro2 !== true) return;
+      const porId = new Map(MENU_FINANCEIRO.map((m) => [m.id, m]));
+      el("#menu").innerHTML = MODULOS_FINANCEIRO.map((g) => `<li class="menu-secao">${g.rotulo}</li>` + g.itens.map((id) => porId.get(id)).filter(Boolean).map((m) => itemMenu(m, ROTULOS_AGRUPADOS[m.id] ?? m.label)).join("")).join("");
+      ligar();
+      if (state.rota === MENU_FINANCEIRO[0].id) irPara("fin-painel");   // entrada do setor: abre o painel 2.0
+      else els("#menu li[data-rota]").forEach((li) => li.classList.toggle("ativo", li.dataset.rota === state.rota));
+    }).catch(() => {});
     // Sem Agente Crescer, atualização de CMV nem alertas operacionais no setor financeiro.
     for (const id of ["#btn-agente", "#btn-refresh", "#btn-notif"]) { const n = el(id); if (n) n.hidden = true; }
     return;

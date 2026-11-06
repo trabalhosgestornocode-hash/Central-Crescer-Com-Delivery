@@ -28,6 +28,10 @@ export async function renderPaginaFinanceira(rotaId, { aoPerderAcesso }) {
     return;
   }
   if (state.rota !== rotaNoInicio) return; // o usuário navegou enquanto a consulta rodava
+  if (item.fin2 && status?.financeiro2 !== true) { // feature flag: o servidor decide; a UI nunca abre a página por conta própria
+    alvo.innerHTML = estado(`${escapeHtml(item.label)} — indisponível`, "Esta área ainda não está liberada para a sua empresa.");
+    return;
+  }
 
   let modulo = null;
   try {

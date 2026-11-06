@@ -6,8 +6,10 @@
 export const OPCOES_ACESSO = Object.freeze([
   { valor: null, rotulo: "Sem acesso", descricao: "Não vê o setor Financeiro." },
   { valor: "leitura", rotulo: "Visualização", descricao: "Consulta os relatórios e telas do Financeiro." },
-  { valor: "operador", rotulo: "Operador", descricao: "Consulta, cria e edita lançamentos." },
-  { valor: "gestor", rotulo: "Gestor", descricao: "Tudo do operador, mais conciliar, cancelar lançamentos, configurar o plano de contas e fechar períodos." },
+  { valor: "operador", rotulo: "Operador", descricao: "Consulta, cria e edita lançamentos. Contas a pagar que registra ficam provisórias até um gerente, a contadora ou o administrador confirmar." },
+  { valor: "gestor", rotulo: "Gestor", descricao: "Tudo do operador, mais conciliar e confirmar quitações, cancelar lançamentos, configurar o plano de contas e fechar períodos." },
+  { valor: "contador", rotulo: "Contadora", descricao: "Consulta, edita, concilia, confirma quitações, classifica juros, multas, tarifas e descontos, e fecha períodos. Não registra lançamentos." },
+  { valor: "administrador", rotulo: "Administrador financeiro", descricao: "Tudo do gestor, mais classificar juros, multas, tarifas e descontos (o que altera o resultado)." },
 ]);
 export const ROTULO_ACESSO = Object.freeze(Object.fromEntries(OPCOES_ACESSO.map((o) => [o.valor ?? "", o.rotulo])));
 

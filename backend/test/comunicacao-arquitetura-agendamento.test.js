@@ -123,7 +123,9 @@ describe("migration 088 — existência, rollback e numeração", () => {
       // 149 = administração da conexão Foody pela tela (aditiva sobre a 145, só foody_*), sem tocar a comunicação, o outbox nem o claim.
       "149_foody_conexao_administracao.sql", "149_rollback.sql",
       // 150 = uma coleta Foody por unidade (índice único parcial em foody_sync_execucoes; aditiva).
-      "150_foody_sync_uma_em_andamento.sql", "150_rollback.sql"];
+      "150_foody_sync_uma_em_andamento.sql", "150_rollback.sql",
+      // 151 = Financeiro 2.0 (contas a pagar, acréscimos, conciliação de saídas): só fin_*/gestao_financeira_*, sem tocar a comunicação.
+      "151_financeiro_2_contas_pagar.sql", "151_rollback.sql", "152_financeiro_2_rateios_recebiveis_dividas.sql", "152_rollback.sql"];
     const acima = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 88 && !POSTERIORES_CONHECIDAS.includes(f));
     assert.deepEqual(acima, [], "o D.3-D usa UMA migration (088)");
   });

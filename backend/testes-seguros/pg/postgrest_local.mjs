@@ -29,6 +29,7 @@ function literal(v) {
   if (v === null || v === undefined) return "null";
   if (typeof v === "number") return Number.isFinite(v) ? String(v) : "null";
   if (typeof v === "boolean") return v ? "true" : "false";
+  if (Array.isArray(v) && v.some((x) => x !== null && typeof x === "object")) return texto(JSON.stringify(v));   // lista de objetos = JSON (parâmetro jsonb), como no supabase-js
   if (Array.isArray(v)) return texto(`{${v.map((x) => (x === null ? "NULL" : `"${String(x).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`)).join(",")}}`);   // literal de array (tipo resolvido pelo destino)
   if (typeof v === "object") return texto(JSON.stringify(v));
   return texto(v);
