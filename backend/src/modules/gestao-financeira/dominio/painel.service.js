@@ -82,7 +82,10 @@ export async function painel(ctx, q, deps = padrao) {
   const periodo = { de: `${mes}-01`, ate: fimDoMes(mes) };
   const [dre, rec, caixa, cp, geral] = await Promise.all([dreReferencia(c, { mes }, deps), receitas(c, { mes }, deps), rel.indicadores(c, periodo, deps), obr.resumoMes(c, { mes }, deps), rel.visaoGeral(c, periodo, deps)]);
   const I = dre.indicadores, ref = dre.semContasAPagar ? "parcial" : "proposta";
-  const notaRef = dre.semContasAPagar ? "Sem contas a pagar registradas: custos e despesas por competência ficam incompletos." : "Metodologia gerencial (critério misto por categoria) ainda não aprovada pela contadora.";
+  // Sem contas a pagar, deduções, custos e despesas ficam em ZERO e o "resultado" viraria o faturamento inteiro: número enganoso.
+  // Nesse caso os indicadores gerenciais saem SEM valor (—), com o motivo; nunca um número que pareça completo.
+  const g = (v) => (dre.semContasAPagar ? null : v);
+  const notaRef = dre.semContasAPagar ? "Sem contas a pagar registradas: deduções, custos e despesas ainda não podem ser calculados (importe ou registre as contas do mês)." : "Metodologia gerencial (critério misto por categoria) ainda não aprovada pela contadora.";
   const cx = (id) => caixa.itens.find((x) => x.id === id)?.valor?.centavos ?? null;
   const lista = await obr.listar(c, { mes }, deps);
   const receber = deps.repo.listarRecebiveis ? await f152.listarRecebiveis(c, { mes }, deps) : null;
@@ -92,13 +95,13 @@ export async function painel(ctx, q, deps = padrao) {
     mes, dataBase: cp.dataBase, versaoRegras: dre.versaoRegras, regrasAprovadas: dre.regrasAprovadas,
     indicadores: {
       faturamentoBruto: rec.resumo.faturamentoBruto,
-      faturamentoLiquido: ind(I.faturamentoBruto == null ? null : I.faturamentoLiquido, { formula: "faturamento bruto − deduções (Simples, taxas e tarifas de venda, antecipação)", origem: "DRE gerencial de referência", estado: ref, nota: notaRef }),
+      faturamentoLiquido: ind(I.faturamentoBruto == null ? null : g(I.faturamentoLiquido), { formula: "faturamento bruto − deduções (Simples, taxas e tarifas de venda, antecipação)", origem: "DRE gerencial de referência", estado: ref, nota: notaRef }),
       recebimentos: rec.resumo.recebimentos,
-      custos: ind(I.custosTotais, { formula: "CMV + entregas", origem: "DRE gerencial de referência (contas a pagar)", estado: ref, nota: notaRef }),
-      cmv: ind(I.cmv, { formula: "Σ insumos e descartáveis por competência (valor original)", origem: "DRE gerencial de referência (contas a pagar)", estado: ref, nota: notaRef }),
-      despesas: ind(I.despesasVariaveis + I.despesasFixas, { formula: "despesas variáveis + fixas (pessoal, administrativas, serviços, financeiras), pelo pagamento", origem: "DRE gerencial de referência (pagamentos)", estado: ref, nota: notaRef }),
-      resultadoGerencial: ind(I.faturamentoBruto == null ? null : I.resultadoGerencial, { formula: "margem de contribuição − despesas fixas", origem: "DRE gerencial de referência", estado: ref, nota: notaRef }),
-      margemLiquida: ind(I.margemLiquidaBps, { formula: "resultado gerencial ÷ faturamento bruto", origem: "DRE gerencial de referência", estado: ref, unidade: "bps", nota: notaRef }),
+      custos: ind(g(I.custosTotais), { formula: "CMV + entregas", origem: "DRE gerencial de referência (contas a pagar)", estado: ref, nota: notaRef }),
+      cmv: ind(g(I.cmv), { formula: "Σ insumos e descartáveis por competência (valor original)", origem: "DRE gerencial de referência (contas a pagar)", estado: ref, nota: notaRef }),
+      despesas: ind(g(I.despesasVariaveis + I.despesasFixas), { formula: "despesas variáveis + fixas (pessoal, administrativas, serviços, financeiras), pelo pagamento", origem: "DRE gerencial de referência (pagamentos)", estado: ref, nota: notaRef }),
+      resultadoGerencial: ind(I.faturamentoBruto == null ? null : g(I.resultadoGerencial), { formula: "margem de contribuição − despesas fixas", origem: "DRE gerencial de referência", estado: ref, nota: notaRef }),
+      margemLiquida: ind(g(I.margemLiquidaBps), { formula: "resultado gerencial ÷ faturamento bruto", origem: "DRE gerencial de referência", estado: ref, unidade: "bps", nota: notaRef }),
       resultadoCaixa: ind(cx("resultadoGerencial"), { formula: "recebimentos − pagamentos operacionais (regime de caixa)", origem: "Fluxo de Caixa", nota: "Visão de caixa, separada da metodologia gerencial." }),
       saldoDisponivel: ind(saldos?.totalCentavos ?? null, { formula: "saldo de abertura + entradas − saídas, por conta", origem: "Saldos calculados das contas financeiras", estado: saldos?.parcial ? "parcial" : "ok", nota: "Saldo CALCULADO; o saldo informado em extrato/contagem ainda não é registrado no sistema." }),
       contasAPagar: ind(cp.contasPagar.emAbertoCentavos, { formula: "Σ saldo em aberto das contas a pagar (vencidas + a vencer) na data-base", origem: "Contas a Pagar", nota: `Vencido: R$ ${formatarCentavos(cp.contasPagar.vencidoCentavos)} · a vencer: R$ ${formatarCentavos(cp.contasPagar.aVencerCentavos)}` }),
@@ -109,6 +112,6 @@ export async function painel(ctx, q, deps = padrao) {
     },
     contasPagar: cp.contasPagar, bloqueiosFechamento: cp.bloqueiosFechamento,
     serieVendas: rec.vendas.porDia, saldosPorConta: saldos?.contas ?? [],
-    composicao: dre.grupos.map((g) => ({ grupo: g.rotulo, centavos: g.linhas.reduce((s, l) => s + l.centavos, 0) })),
+    composicao: dre.semContasAPagar ? dre.grupos.filter((x) => x.grupo === "receita").map((x) => ({ grupo: x.rotulo, centavos: x.linhas.reduce((s, l) => s + l.centavos, 0) })) : dre.grupos.map((g) => ({ grupo: g.rotulo, centavos: g.linhas.reduce((s, l) => s + l.centavos, 0) })),
   };
 }

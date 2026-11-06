@@ -72,6 +72,9 @@ test("sem contas a pagar: indicadores gerenciais ficam 'parcial' (nunca completo
   const p = await painel(ctx, { mes: "2026-09" }, deps({ obrigacoes: [], pagamentos: [] }));
   assert.equal(p.indicadores.cmv.estado, "parcial");
   assert.equal(p.indicadores.faturamentoBruto.estado, "ok");
+  // nunca um número enganoso: sem contas a pagar, líquido/custos/despesas/resultado/margem saem SEM valor
+  for (const k of ["faturamentoLiquido", "cmv", "custos", "despesas", "resultadoGerencial", "margemLiquida"]) assert.equal(p.indicadores[k].valorCentavos, null, k);
+  assert.equal(p.indicadores.faturamentoBruto.valorCentavos, 100000);
 });
 
 test("receitas: vendas por dia, taxas por canal e recebimento por conta sem transferências", async () => {
