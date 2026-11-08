@@ -58,9 +58,6 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   r.get("/transferencias", ...h(ACAO.VER, (c) => lanc.listarTransferencias(c, d)));
   r.post("/transferencias", ...h(ACAO.LANCAR, (c, q) => lanc.criarTransferencia(c, q.body, d), { status: 201 }));
   r.post("/transferencias/vincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.vincularTransferencia(c, q.body, d), { status: 201 }));
-  r.get("/transferencias/multiplas", ...h(ACAO.VER, (c) => lanc.listarTransferenciasMultiplas(c, d)));
-  r.post("/transferencias/vincular-multipla", ...h(ACAO.CONCILIAR, (c, q) => lanc.vincularTransferenciaMultipla(c, q.body, d), { status: 201 }));
-  r.post("/transferencias/multiplas/:id/desvincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.desvincularTransferenciaMultipla(c, q.params.id, q.body, d)));
   r.post("/transferencias/:id/desvincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.desvincularTransferencia(c, q.params.id, q.body, d)));
   r.post("/transferencias/:id/cancelar", ...h(ACAO.CANCELAR, (c, q) => lanc.cancelarTransferencia(c, q.params.id, q.body, d)));
 
@@ -126,6 +123,10 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   r.get("/busca", ...h2(ACAO.VER, (c, q) => buscaSvc.buscar(c, q.query, d)));
   // 153: faturamento por canal e ponte painel → base gerencial (ajuste confirmado = decisão de quem classifica)
   // Vendas diárias (SAIPOS): mesma fonte de fin_referencias; editar/atualizar exige `editar`
+  // conciliação 1:N (migration 155): sob a trava da flag como o resto do Financeiro 2.0
+  r.get("/transferencias/multiplas", ...h2(ACAO.VER, (c) => lanc.listarTransferenciasMultiplas(c, d)));
+  r.post("/transferencias/vincular-multipla", ...h2(ACAO.CONCILIAR, (c, q) => lanc.vincularTransferenciaMultipla(c, q.body, d), { status: 201 }));
+  r.post("/transferencias/multiplas/:id/desvincular", ...h2(ACAO.CONCILIAR, (c, q) => lanc.desvincularTransferenciaMultipla(c, q.params.id, q.body, d)));
   r.get("/vendas-diarias", ...h2(ACAO.VER, (c, q) => vdSvc.listar(c, q.query, d)));
   r.get("/vendas-diarias/historico", ...h2(ACAO.VER, (c, q) => vdSvc.historico(c, q.query, d)));
   r.get("/vendas-diarias/dia", ...h2(ACAO.VER, (c, q) => vdSvc.detalhe(c, q.query, d)));
