@@ -33,7 +33,15 @@ const aqui = path.dirname(fileURLToPath(import.meta.url));
 const frontend = path.resolve(aqui, "..", "..", "..", "frontend");
 const PORTA = Number(process.argv[2]) || 4180;
 const db = criarClienteLocal({ banco: process.env.FIN20_BANCO ?? "fin20app" });
-const deps = { repo: repositorio, db };
+// Relatório de vendas por canal (opcional, só local): FIN20_VENDAS_CANAIS=<arquivo.json> com { "AAAA-MM": [{ "origem": "...", "centavos": 123, "pedidos": 0 }] }.
+// Sem o arquivo, a composição por canal fica indisponível (a tela explica o que falta). O arquivo fica FORA do repositório (valores reais).
+const { existsSync } = await import("node:fs");
+const arqCanais = process.env.FIN20_VENDAS_CANAIS;
+const vendasPorCanal = arqCanais && existsSync(arqCanais) ? JSON.parse(readFileSync(arqCanais, "utf8")) : {};
+// Referências oficiais (apresentação da contadora) só para COMPARAR na Central de Conferências: FIN20_REFERENCIAS_OFICIAIS=<arquivo.json> { "AAAA-MM": [{ indicador, rotulo, valorCentavos, fonte }] }. Fora do repositório.
+const arqRefs = process.env.FIN20_REFERENCIAS_OFICIAIS;
+const refsOficiais = arqRefs && existsSync(arqRefs) ? JSON.parse(readFileSync(arqRefs, "utf8")) : {};
+const deps = { repo: { ...repositorio, listarVendasPorCanal: async (_c, { mes }) => vendasPorCanal[mes] ?? [], listarReferenciasOficiais: async (_c, { mes }) => refsOficiais[mes] ?? [] }, db };
 const u = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const ORG = EXISTENTE ? process.env.FIN20_ORG : u(1), UNI_C = EXISTENTE ? process.env.FIN20_UNIDADE : u(2), UNI_N = u(3), USER = u(6), PERFIL = u(7);
 const EMPRESA_SINT = "Açaí no Grau (dados SINTÉTICOS)";
