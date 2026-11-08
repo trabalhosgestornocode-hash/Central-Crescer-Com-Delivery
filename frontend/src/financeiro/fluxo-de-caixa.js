@@ -1,4 +1,5 @@
 // Fluxo de Caixa — lançamentos (fonte única), filtros, formulário, reclassificação com motivo, cancelamento e histórico.
+import { consumirFoco } from "./busca.js";
 import { fin } from "./api.js";
 import { moeda, dataBr, periodoDoMes, rotuloMes, ROTULO_PAPEL, podeAcao, ACAO } from "./modelo.js";
 import { garantirCss, cabecalho, seletorMes, tabela, badge, carregarEm, lerMes, gravarMes, dialogo, campo, selecao, aviso, esc, estado } from "./ui.js";
@@ -11,7 +12,8 @@ export async function render(container, ctx) {
   const raiz = document.createElement("section");
   raiz.className = "fin-pg";
   container.appendChild(raiz);
-  const f = { mes: lerMes(), contaId: "", sentido: "", busca: "", pendente: false, deslocamento: 0 };
+  const foco = consumirFoco();   // vindo da busca financeira: aplica o texto uma única vez
+  const f = { mes: lerMes(), contaId: "", sentido: "", busca: foco?.busca ?? "", pendente: false, deslocamento: 0 };
   let contas = [], cats = [];
   const quemPode = (a) => podeAcao(ctx, a);
 

@@ -1,5 +1,6 @@
 // Contas a Pagar (Financeiro 2.0). Obrigação ≠ pagamento: uma conta aceita vários pagamentos; a diferença (juros/acréscimo ou desconto)
 // só existe quando a conta é QUITADA e é calculada sobre o TOTAL pago. Tudo vem do backend; nada é constante da tela.
+import { consumirFoco } from "./busca.js";
 import { fin } from "./api.js";
 import { moeda, pct, dataBr, rotuloMes, podeAcao } from "./modelo.js";
 import { ACAO_FIN2, SITUACAO_CP, NATUREZA, FILTROS_SITUACAO, OPCOES_ACRESCIMO, OPCOES_A_MENOR, previaDiferenca, acoesDaConta } from "./modeloContasPagar.js";
@@ -19,7 +20,8 @@ export async function render(container, ctx) {
   const perms = ctx?.permissoes ?? [];
   const pode = (a) => podeAcao(ctx, a);
   let mes = lerMes();
-  const filtros = { situacao: "", fornecedorId: "", categoriaId: "", contaId: "", busca: "" };
+  const foco = consumirFoco();   // vindo da busca financeira: aplica o texto (e o mês) uma única vez
+  const filtros = { situacao: "", fornecedorId: "", categoriaId: "", contaId: "", busca: foco?.busca ?? "" };
   raiz.innerHTML = `<div data-topo></div><div data-filtros></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
@@ -106,7 +108,7 @@ export async function render(container, ctx) {
         ? `<div class="fin-alerta fin-alerta--${c.situacao === "quitacao_pendente" ? "warn" : "info"}" role="status">${c.situacao === "quitacao_pendente" ? "O total pago já cobre o valor original. Confirme a quitação para calcular a diferença." : `Pagamento parcial: saldo de ${esc(moeda(c.saldoAbertoCentavos))} em aberto. Não é desconto.`}</div>` : "";
     const pags = tabelaCartao({
       colunas: [
-        { rotulo: "Data", render: (p) => dataBr(p.data) }, { rotulo: "Conta", render: (p) => esc(p.conta ?? "—") },
+        { rotulo: "Data", render: (p) => dataBr(p.data) }, { rotulo: "Conta / origem", render: (p) => p.origemPagamento === "terceiro" ? `${esc(p.terceiro ?? "Terceiro")} <span class="fin-badge fin-badge--info">Pago por terceiro</span>` : p.origemPagamento === "origem_pendente" ? `<span class="fin-badge fin-badge--warn">Origem pendente</span>` : esc(p.conta ?? "—") },
         { rotulo: "Valor", num: true, render: (p) => `${p.status === "ativo" ? moeda(p.valorCentavos) : `<s>${moeda(p.valorCentavos)}</s>`}${p.provisorio && p.status === "ativo" ? `<br>${badge("Provisório", "warn")}` : ""}` },
         { rotulo: "Situação", render: (p) => (p.status !== "ativo" ? `${badge("Cancelado", "muted")}<br><small>${esc(p.motivoCancelamento ?? "")}</small>` : badge(p.conciliacao === "conciliado" ? "Conciliado com o extrato" : p.conciliacao === "em_analise" ? "Vínculo em análise" : "Sem conciliação", p.conciliacao === "conciliado" ? "ok" : p.conciliacao === "em_analise" ? "info" : "warn")) },
         { rotulo: "", render: (p) => (p.status === "ativo" && a.cancelarPagamento && p.conciliacao === "pendente" ? `<button type="button" class="btn btn-ghost btn-sm" data-cancelar-pag="${p.id}">Cancelar</button>` : "") },
@@ -163,11 +165,33 @@ export async function render(container, ctx) {
   }
 
   function formPagamento(c) {
+    const origem = `<label class="fin-campo"><span>Como foi pago</span><select name="origemPagamento" data-origem>
+        <option value="conta">Com uma conta da empresa (padrão)</option><option value="terceiro">Pago por terceiro (ex.: a sócia, com conta pessoal)</option><option value="origem_pendente">Pago, mas de qual conta saiu ainda não se sabe</option></select></label>
+      <div data-bloco-terceiro hidden><label class="fin-campo"><span>Dívida de reembolso *</span><select name="dividaId" data-divida><option value="">Carregando…</option></select><small>O pagamento fica vinculado à dívida; não cria saída bancária da empresa nem muda o custo.</small></label>
+        ${campo("Quem pagou", "terceiro", { extra: 'maxlength="120"' })}</div>
+      <div data-bloco-fonte hidden><label class="fin-campo"><span>Fonte do pagamento * (documento, quem informou, quando)</span><textarea name="observacao" rows="2" maxlength="1000"></textarea><small>Sem conta de saída, a fonte fica escrita. Pagamento sem conta nasce provisório e nunca é conciliado com extrato.</small></label></div>`;
     const dlg = dialogo({
       titulo: `Pagamento — ${c.fornecedor ?? ""}`, enviar: "Registrar pagamento",
-      corpo: `<p class="fin-sub">Original ${esc(moeda(c.valorOriginalCentavos))} · já pago ${esc(moeda(c.pagoCentavos))}</p>${camposPagamento()}${caixaQuitar()}${previa}`,
-      aoEnviar: async (f) => { await fin.post(`/contas-pagar/${c.id}/pagamentos`, { data: f.get("data"), valor: f.get("valor"), contaId: f.get("contaId"), comprovanteRef: f.get("comprovanteRef") || undefined, quitar: f.get("quitar") === "on" }); aviso("Pagamento registrado."); carregar(); },
+      corpo: `<p class="fin-sub">Original ${esc(moeda(c.valorOriginalCentavos))} · já pago ${esc(moeda(c.pagoCentavos))}</p>${origem}${camposPagamento()}${caixaQuitar()}${previa}`,
+      aoEnviar: async (f) => {
+        const o = f.get("origemPagamento") || "conta";
+        const corpo = { data: f.get("data"), valor: f.get("valor"), comprovanteRef: f.get("comprovanteRef") || undefined, quitar: f.get("quitar") === "on", origemPagamento: o };
+        if (o === "conta") corpo.contaId = f.get("contaId"); else corpo.observacao = f.get("observacao");
+        if (o === "terceiro") { corpo.dividaId = f.get("dividaId"); corpo.terceiro = f.get("terceiro") || undefined; }
+        await fin.post(`/contas-pagar/${c.id}/pagamentos`, corpo); aviso(o === "conta" ? "Pagamento registrado." : "Pagamento reconhecido sem saída bancária."); carregar();
+      },
     });
+    const sel = dlg.querySelector("[data-origem]"), conta = dlg.querySelector('[name="contaId"]'), quitar = dlg.querySelector('[name="quitar"]'), bt = dlg.querySelector("[data-bloco-terceiro]"), bf = dlg.querySelector("[data-bloco-fonte]");
+    const aplicar = () => {
+      const o = sel.value;
+      bt.hidden = o !== "terceiro"; bf.hidden = o === "conta"; conta.closest("label").hidden = o !== "conta"; conta.required = o === "conta";
+      dlg.querySelector('[name="observacao"]').required = o !== "conta"; dlg.querySelector("[data-divida]").required = o === "terceiro";
+      if (quitar) { quitar.disabled = o === "origem_pendente"; if (o === "origem_pendente") quitar.checked = false; }
+    };
+    sel.addEventListener("change", aplicar);
+    fin.get("/dividas", {}).then((r) => { const ativas = (r.itens ?? []).filter((d) => d.status === "ativa"); dlg.querySelector("[data-divida]").innerHTML = `<option value="">Escolha a dívida…</option>${ativas.map((d) => `<option value="${esc(d.id)}" data-credor="${esc(d.credor)}">${esc(d.credor)} — ${esc(d.naturezaRotulo ?? d.natureza)}</option>`).join("")}`; }).catch(() => {});
+    dlg.querySelector("[data-divida]").addEventListener("change", (e) => { const t = dlg.querySelector('[name="terceiro"]'); if (!t.value) t.value = e.target.selectedOptions[0]?.dataset.credor ?? ""; });
+    aplicar();
     ligarPrevia(dlg, (c.valorOriginalCentavos / 100).toFixed(2).replace(".", ","), c.pagoCentavos);
   }
 

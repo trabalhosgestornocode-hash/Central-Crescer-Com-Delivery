@@ -1,23 +1,51 @@
-// Visão Geral do Financeiro 2.0 — painel com os indicadores gerenciais e de caixa, cada um com metodologia, origem e ESTADO.
-// Faturamento (vendas registradas) e Recebimentos (entradas no banco/caixa) são SEMPRE indicadores separados.
-// Nada é constante da tela: tudo vem de GET /gestao-financeira/painel.
+// Visão Geral do Financeiro 2.0 — o painel EXPLICA os números. Cada indicador tem ícone (i) (explicação, fórmula, componentes, origem) e o valor
+// abre um painel lateral com a composição até a origem. O faturamento aparece dividido por canal, em duas leituras que não se misturam:
+// o total do painel SAIPOS e a base que alimenta a DRE gerencial, com a ponte (ajustes) entre os dois.
+// Nada é constante da tela: valores e composições vêm de GET /gestao-financeira/painel (composicao[id]).
 import { fin } from "./api.js";
 import { moeda, pct, rotuloMes } from "./modelo.js";
 import { graficoEntradasSaidas, graficoBarrasHorizontais } from "./graficos.js";
-import { garantirCss, cabecalho, seletorMes, kpi, tabela, badge, carregarEm, lerMes, gravarMes, ativarTooltips, esc } from "./ui.js";
+import { garantirCss, cabecalho, seletorMes, tabela, badge, carregarEm, lerMes, gravarMes, ativarTooltips, esc } from "./ui.js";
+import { ativarComposicao, htmlConciliacao } from "./detalhe.js";
+import { botaoInfo, selo, valorDe } from "./detalheHtml.js";
+import { explicacaoDe } from "./explicacoes.js";
+import { montarBusca } from "./busca.js";
+import { abrirCentral, contarPendencias } from "./conferencias.js";
 
-const ESTADO = {
-  ok: null,
-  proposta: ["Metodologia a aprovar", "warn"],
-  parcial: ["Parcial", "warn"],
-  indisponivel: ["Indisponível", "muted"],
-};
+// indicadores cuja pendência é só a regra geral da metodologia (vai no aviso único, não em selos repetidos)
+const PENDENCIA_GERAL = new Set(["faturamentoLiquido", "deducoes", "cmv", "custos", "despesas", "margemContribuicao", "resultadoGerencial", "margemLiquida", "pontoEquilibrio"]);
+const ROTULOS = { totalVendasCanais: "Total de vendas por canal", faturamentoBruto: "Faturamento base da DRE", deducoes: "Deduções", faturamentoLiquido: "Faturamento líquido", cmv: "CMV", entregadores: "Entregadores Próprios", custos: "Custos totais",
+  despesas: "Despesas", margemContribuicao: "Margem de contribuição", resultadoGerencial: "Lucro gerencial", margemLiquida: "Margem líquida", pontoEquilibrio: "Ponto de equilíbrio", saldoDisponivel: "Saldo financeiro", contasAPagar: "Contas a pagar em aberto",
+  contasAReceber: "Contas a receber", jurosEncargos: "Juros e encargos (pagos no mês)", dividas: "Dívidas", recebimentos: "Recebimentos (banco e caixa)" };
 
-export function cartao(rotulo, i, { destaque = false } = {}) {
-  const valor = i.valorCentavos == null ? "—" : i.unidade === "bps" ? pct(i.valorCentavos) : moeda(i.valorCentavos);
-  const e = ESTADO[i.estado];
-  const sub = [e && i.estado === "proposta" ? badge(e[0], e[1]) : "", i.nota ? `<span class="fin-kpi-nota">${esc(i.nota)}</span>` : ""].filter(Boolean).join(" ");
-  return kpi({ rotulo, valor, sub, status: i.estado === "proposta" ? "ok" : i.estado, formula: i.formula, origem: i.origem, destaque });
+const listaCanais = (comp, extra = "") => `<ul class="kpi-canais" aria-label="${esc(extra)}">${comp.componentes.map((c) => `<li><span>${esc(c.rotulo)}${c.situacao === "pendente_contadora" ? ' <abbr title="inclui ajuste estimado, a confirmar">*</abbr>' : ""}</span><span>${valorDe(c.centavos)} <small>${c.pctBrutoBps == null ? "" : pct(c.pctBrutoBps)}</small></span></li>`).join("")}</ul>`;
+
+/** Cartão de indicador. Exportado para teste. `opcoes.geralPendente`: a regra geral está pendente (selo só no aviso único). */
+export function cartao(id, rotulo, comp, { destaque = false, geralPendente = false } = {}) {
+  if (!comp) return "";
+  const un = comp.unidade ?? "moeda";
+  const valor = valorDe(comp.valorCentavos, un);
+  const nome = comp.rotulo ?? rotulo;
+  const pb = un === "moeda" && comp.pctBrutoBps != null && !["faturamentoBruto", "totalVendasCanais"].includes(id) ? `<span class="kpi-pct">${pct(comp.pctBrutoBps)} do faturamento</span>` : "";
+  let corpo = "";
+  if (id === "totalVendasCanais" && comp.componentes?.length) {
+    corpo = `${listaCanais(comp, "Total por canal no painel")}<span class="kpi-nota">Total do painel SAIPOS. A base da DRE é outro número: clique para ver a ponte.</span><button type="button" class="fin-link" data-ir-vendas>Abrir vendas diárias</button>`;
+  } else if (id === "faturamentoBruto" && comp.componentes?.some((c) => c.origemTecnica?.length)) {
+    const cc = comp.canalConferencia;
+    corpo = `${listaCanais(comp, "Base da DRE por canal")}${cc ? `<span class="kpi-ponte">Painel ${valorDe(cc.painelCentavos)} ${cc.ajustesCentavos < 0 ? "−" : "+"} ajustes ${valorDe(Math.abs(cc.ajustesCentavos))} = base ${valorDe(cc.somaCentavos)}</span>` : ""}
+      ${cc && cc.confere === false ? `<span class="kpi-div" role="alert">Divergência: a base por canal difere do bruto oficial em ${valorDe(Math.abs(cc.diferencaCentavos ?? 0))}</span>` : cc?.confere ? '<span class="kpi-ok">Base por canal confere com o bruto oficial</span>' : ""}
+      ${(comp.pendencias ?? []).length ? `<span class="kpi-pend">${esc(comp.pendencias[0])}</span>` : ""}
+      <button type="button" class="fin-link" data-ir-vendas>Abrir vendas diárias</button>`;
+  } else {
+    const faltam = comp.faltam?.length ? comp.faltam[0] : "";
+    const nota = faltam || comp.notas?.[0] || "";
+    corpo = `${pb}${nota ? `<span class="kpi-nota">${esc(nota)}</span>` : ""}`;
+  }
+  const clic = comp.valorCentavos != null || comp.componentes?.length || comp.faltam?.length;
+  const val = clic ? `<button type="button" class="fin-kpi-val fin-valor-link" data-fin-valor="${esc(id)}" aria-label="${esc(nome)}: ${esc(valor)}. Abrir composição">${valor}</button>` : `<strong class="fin-kpi-val">${valor}</strong>`;
+  const mostrarSelo = comp.situacao && comp.situacao !== "confirmado" && !(geralPendente && comp.situacao === "pendente_contadora" && PENDENCIA_GERAL.has(id));
+  return `<article class="fin-kpi${destaque ? " fin-kpi--destaque" : ""}" data-indicador="${esc(id)}">
+    <span class="fin-kpi-rot">${esc(nome)} ${botaoInfo(id, nome)} ${mostrarSelo ? selo(comp.situacao) : ""}</span>${val}${corpo}</article>`;
 }
 
 export async function render(container) {
@@ -27,48 +55,59 @@ export async function render(container) {
   raiz.className = "fin-pg";
   container.appendChild(raiz);
   ativarTooltips(raiz);
+  raiz.addEventListener("click", async (e) => { if (e.target.closest("[data-ir-vendas]")) { const { irPara } = await import("../router.js"); irPara("fin-vendas-diarias"); } });   // a competência escolhida segue (sessionStorage fin:mes)
   const topo = document.createElement("div"), corpo = document.createElement("div");
   corpo.className = "fin-pg";
   raiz.append(topo, corpo);
   let mes = lerMes();
-  const atualizar = () => carregarEm(corpo, () => fin.get("/painel", { mes }), (d) => pintar(corpo, d));
-  topo.innerHTML = cabecalho({ titulo: "Visão Geral", sub: "Indicadores gerenciais e de caixa do mês. Passe pelo ícone de fórmula para ver a metodologia e a origem de cada número.", extra: seletorMes(mes) });
+  let dados = null;
+  ativarComposicao(raiz, () => ({ composicao: dados?.composicao ?? {}, mes, conciliacao: dados?.conciliacaoEntregadores, extraPainel: (c) => (c.id === "custos" || c.id === "cmv" || c.id === "entregadores") && dados?.conciliacaoEntregadores ? htmlConciliacao(dados.conciliacaoEntregadores) : "" }));
+  const atualizar = () => carregarEm(corpo, () => fin.get("/painel", { mes }), (d) => { dados = d; pintar(corpo, d); atualizarAviso(corpo, mes, atualizar); });
+  topo.innerHTML = cabecalho({ titulo: "Visão Geral", sub: "Cada número tem um ícone (i) que explica o que é e como é calculado. Clique no valor para ver de onde ele vem.", extra: `${seletorMes(mes)}<div data-busca></div>` });
+  montarBusca(topo.querySelector("[data-busca]"), { mesAtual: () => mes });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); atualizar(); } });
   atualizar();
 }
 
+async function atualizarAviso(alvo, mes, recarregar) {
+  const el = alvo.querySelector("[data-central-aviso]");
+  if (!el) return;
+  const r = await contarPendencias(mes);
+  if (!r || !alvo.isConnected) return;
+  el.innerHTML = r.total || r.geral ? `<div class="dre-aviso" role="status"><span class="dre-aviso-txt"><span class="dre-pt" aria-hidden="true"></span>${r.total ? `${r.total} conferência(s) pendente(s)` : "Sem conferências individuais pendentes"}${r.geral ? " · metodologia aguardando aprovação da contadora" : ""}</span><button type="button" class="btn btn-ghost btn-sm" data-abrir-central>Abrir central de conferências</button></div>` : "";
+  el.querySelector("[data-abrir-central]")?.addEventListener("click", () => abrirCentral({ mes, aoAlterar: recarregar }));
+}
+
 function pintar(alvo, d) {
-  const I = d.indicadores;
-  const aviso = d.regrasAprovadas ? "" : `<p class="fin-alerta fin-alerta--warn" role="note">Os indicadores marcados com <strong>Metodologia a aprovar</strong> usam a metodologia gerencial proposta (versão ${esc(d.versaoRegras)}), ainda não validada pela contadora. Nenhum número foi ajustado para coincidir com a apresentação.</p>`;
-  const bloqueios = (d.bloqueiosFechamento ?? []).length;
+  const C = d.composicao, geral = !d.regrasAprovadas;
+  const c = (id, o) => cartao(id, ROTULOS[id] ?? id, C[id], { ...o, geralPendente: geral });
+  const rc = d.indicadores.resultadoCaixa;
   alvo.innerHTML = `
-    ${aviso}
-    <h3 class="fin-secao">Vendas e receitas — ${esc(rotuloMes(d.mes))}</h3>
-    <div class="fin-kpis">
-      ${cartao("Faturamento bruto", I.faturamentoBruto, { destaque: true })}
-      ${cartao("Faturamento líquido", I.faturamentoLiquido)}
-      ${cartao("Recebimentos (banco e caixa)", I.recebimentos)}
-      ${cartao("Contas a receber", I.contasAReceber)}
+    <div data-central-aviso></div>
+    <h3 class="fin-secao">Faturamento — ${esc(rotuloMes(d.mes))}</h3>
+    <div class="fin-kpis fin-kpis--2">
+      ${c("totalVendasCanais")}
+      ${c("faturamentoBruto", { destaque: true })}
     </div>
-    <h3 class="fin-secao">Custos, despesas e resultado (gerencial)</h3>
+    <h3 class="fin-secao">Resultado do mês</h3>
     <div class="fin-kpis">
-      ${cartao("CMV", I.cmv)}
-      ${cartao("Custos totais", I.custos)}
-      ${cartao("Despesas", I.despesas)}
-      ${cartao("Resultado gerencial", I.resultadoGerencial, { destaque: true })}
-      ${cartao("Margem líquida", I.margemLiquida)}
+      ${c("faturamentoLiquido")}${c("custos")}${c("despesas")}${c("resultadoGerencial", { destaque: true })}${c("margemLiquida")}
     </div>
     <h3 class="fin-secao">Caixa e obrigações</h3>
     <div class="fin-kpis">
-      ${cartao("Saldo disponível", I.saldoDisponivel)}
-      ${cartao("Resultado de caixa", I.resultadoCaixa)}
-      ${cartao("Contas a pagar em aberto", I.contasAPagar)}
-      ${cartao("Juros e encargos", I.jurosEncargos)}
+      ${c("saldoDisponivel")}${c("contasAPagar")}${c("contasAReceber")}${c("jurosEncargos")}
     </div>
-    ${bloqueios ? `<p class="fin-alerta fin-alerta--warn" role="note">Fechamento do mês bloqueado: ${bloqueios} pendência(s) (ver Períodos).</p>` : ""}
-    <div class="fin-grade-2">
-      <section class="fin-cartao"><h3>Composição gerencial do mês</h3>${graficoBarrasHorizontais(d.composicao.map((c) => ({ rotulo: c.grupo, centavos: c.centavos })), { titulo: "Composição", limite: 8 }) || '<p class="fin-vazio-linha">Sem dados.</p>'}</section>
-      <section class="fin-cartao"><h3>Saldos por conta</h3>${tabela({ colunas: [{ rotulo: "Conta", render: (c) => esc(c.nome) }, { rotulo: "Saldo calculado", num: true, render: (c) => c.saldoCentavos == null ? `${badge("abertura desconhecida", "muted")}` : moeda(c.saldoCentavos) }], linhas: d.saldosPorConta, vazio: "Nenhuma conta." })}</section>
-    </div>
-    <section class="fin-cartao" data-largura>${graficoEntradasSaidas(d.serieVendas.map((v) => ({ periodo: v.data.slice(8, 10), entradas: v.vendaCentavos, saidas: 0 })), { titulo: "Vendas registradas por dia", largura: alvo.clientWidth || 720 }) || '<p class="fin-vazio-linha">Sem vendas registradas no mês.</p>'}</section>`;
+    <details class="fin-mais"><summary>Mais indicadores <small>(deduções, CMV, entregadores, margem de contribuição, ponto de equilíbrio, dívidas, recebimentos)</small></summary>
+      <div class="fin-kpis">
+        ${c("deducoes")}${c("cmv")}${c("entregadores")}${c("margemContribuicao")}${c("pontoEquilibrio")}${c("dividas")}${c("recebimentos")}
+        ${rc ? cartao("resultadoCaixa", "Resultado de caixa", { id: "resultadoCaixa", unidade: "moeda", valorCentavos: rc.valorCentavos, situacao: rc.estado === "ok" ? "confirmado" : rc.estado === "indisponivel" ? "sem_dados" : "parcial", formula: rc.formula, origem: rc.origem, componentes: [], faltam: [], notas: [rc.nota].filter(Boolean) }) : ""}
+      </div></details>
+    <details class="fin-mais"><summary>Gráficos do mês</summary>
+      <div class="fin-grade-2">
+        <section class="fin-cartao"><h3>Composição gerencial do mês</h3>${graficoBarrasHorizontais(d.composicaoGrafico.map((x) => ({ rotulo: x.grupo, centavos: x.centavos })), { titulo: "Composição", limite: 8 }) || '<p class="fin-vazio-linha">Sem dados.</p>'}</section>
+        <section class="fin-cartao"><h3>Saldos por conta</h3>${tabela({ colunas: [{ rotulo: "Conta", render: (x) => esc(x.nome) }, { rotulo: "Saldo calculado", num: true, render: (x) => x.saldoCentavos == null ? `${badge("abertura desconhecida", "muted")}` : moeda(x.saldoCentavos) }], linhas: d.saldosPorConta, vazio: "Nenhuma conta." })}</section>
+      </div>
+      <section class="fin-cartao" data-largura>${graficoEntradasSaidas(d.serieVendas.map((v) => ({ periodo: v.data.slice(8, 10), entradas: v.vendaCentavos, saidas: 0 })), { titulo: "Vendas registradas por dia", largura: alvo.clientWidth || 720 }) || '<p class="fin-vazio-linha">Sem vendas registradas no mês.</p>'}</section>
+    </details>
+    <p class="fin-sub">Glossário rápido: ${["totalVendasCanais", "baseDre", "ajusteVendas", "recebimentos", "cmv", "jurosPresumidos", "conciliacao"].map((k) => `${esc(explicacaoDe(k).nome)} ${botaoInfo(k, explicacaoDe(k).nome, { dado: "glossario" })}`).join(" · ")}</p>`;
 }
