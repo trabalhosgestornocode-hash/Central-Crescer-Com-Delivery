@@ -5,7 +5,7 @@
 import * as repositorio from "./repositorio.js";
 import { exigirContexto, ACAO } from "./contexto.js";
 import { texto, uuid, enumerado, data, valorPositivo, bad, mesAno } from "./validacao.js";
-import { diferenca, situacao, diasAtraso, painelJuros as calcularPainelJuros, ultimoPagamento, NATUREZAS_ACRESCIMO } from "../../../financeiro-calculos/contasPagar.js";
+import { diferenca, situacao, diasAtraso, painelJuros as calcularPainelJuros, jurosDoMes as calcularJurosDoMes, ultimoPagamento, NATUREZAS_ACRESCIMO } from "../../../financeiro-calculos/contasPagar.js";
 import { PAPEL } from "../../../financeiro-calculos/planoContas.js";
 import { ApiError } from "../../../shared/ApiError.js";
 
@@ -40,7 +40,8 @@ function montarItem(o, base, dataBase) {
     status: o.status, provisoria: o.provisoria === true || ativos.some((p) => p.provisorio === true), registroProvisorio: o.provisoria === true, dataQuitacao: o.data_quitacao ?? null, classificacao: o.classificacao_diferenca ?? null,
     observacoes: o.observacoes ?? null, motivoCancelamento: o.motivo_cancelamento ?? null, motivoReversao: o.motivo_reversao ?? null, origem: o.origem, chaveOrigem: o.chave_origem ?? null,
     ...d, situacao: situacao(o, pags, dataBase), diasAtraso: diasAtraso(o, pags, dataBase), ultimoPagamento: ultimoPagamento(pags),
-    pagamentos: pags.map((p) => ({ id: p.id, data: p.data_pagamento, valorCentavos: Number(p.valor_centavos), contaId: p.conta_id, conta: base.contas.get(p.conta_id)?.nome ?? null, status: p.status,
+    pagamentos: pags.map((p) => ({ id: p.id, data: p.data_pagamento, valorCentavos: Number(p.valor_centavos), contaId: p.conta_id ?? null, conta: base.contas.get(p.conta_id)?.nome ?? null, status: p.status,
+      origemPagamento: p.origem_pagamento ?? "conta", terceiro: p.terceiro_nome ?? null, dividaId: p.divida_id ?? null,
       comprovanteRef: p.comprovante_ref ?? null, observacao: p.observacao ?? null, motivoCancelamento: p.motivo_cancelamento ?? null, provisorio: p.provisorio === true,
       conciliacao: p.status !== "ativo" ? null : base.conciliados.has(p.id) ? "conciliado" : base.vinculados.has(p.id) ? "em_analise" : "pendente" })),
     pagamentosConciliados: ativos.filter((p) => base.conciliados.has(p.id)).length, pagamentosAtivos: ativos.length,
@@ -153,12 +154,24 @@ export async function criar(ctx, b, deps = padrao, { permissoes = [] } = {}) {
   return obter(c, o.id, deps);
 }
 
+export const ORIGENS_PAGAMENTO = ["conta", "origem_pendente", "terceiro"];
+/**
+ * Pagamento com a CONTA DA EMPRESA (padrão), com ORIGEM PENDENTE (despesa paga e reconhecida, conta de saída ainda desconhecida) ou PAGO POR TERCEIRO
+ * (vinculado à dívida de reembolso). Origem pendente e terceiro NÃO criam saída bancária e nunca são conciliados com extrato.
+ */
 async function validarPagamento(c, p, deps) {
-  const conta = await contaValida(c, uuid(p?.contaId, "contaId"), deps);
-  return {
-    conta_id: conta.id, data_pagamento: data(p?.data, "data do pagamento"), valor_centavos: valorPositivo(p?.valor, "valor pago"),
-    comprovante_ref: texto(p?.comprovanteRef, "comprovante", { max: 300, obrigatorio: false }), observacao: texto(p?.observacao, "observacao", { max: 1000, obrigatorio: false }),
-  };
+  const origem = enumerado(p?.origemPagamento ?? "conta", "origemPagamento", ORIGENS_PAGAMENTO);
+  const base = { data_pagamento: data(p?.data, "data do pagamento"), valor_centavos: valorPositivo(p?.valor, "valor pago"), comprovante_ref: texto(p?.comprovanteRef, "comprovante", { max: 300, obrigatorio: false }),
+    observacao: texto(p?.observacao, "observacao", { max: 1000, obrigatorio: origem !== "conta" }), origem_pagamento: origem, conta_id: null, terceiro_nome: null, divida_id: null };
+  if (origem !== "conta" && base.observacao.length < 10) throw bad("Sem conta de saída, escreva a fonte do pagamento (mínimo de 10 caracteres): documento, quem informou e quando.", "FONTE_OBRIGATORIA");
+  if (origem === "conta") { base.conta_id = (await contaValida(c, uuid(p?.contaId, "contaId"), deps)).id; return base; }
+  if (origem === "terceiro") {
+    if (!p?.dividaId) throw bad("Escolha a dívida de reembolso (ex.: a da sócia): é o vínculo do pagamento por terceiro.", "DIVIDA_OBRIGATORIA");
+    const div = (await deps.repo.listarDividas(c, deps.db)).find((d) => d.id === uuid(p.dividaId, "dividaId"));
+    if (!div || div.status !== "ativa") throw bad("Escolha uma dívida ativa de reembolso (ex.: a da sócia): é o vínculo do pagamento por terceiro.", "DIVIDA_OBRIGATORIA");
+    base.divida_id = div.id; base.terceiro_nome = texto(p?.terceiro ?? div.credor, "terceiro", { max: 120 });
+  }
+  return base;
 }
 
 /** Edição. Quem não confirma (sem `conciliar`) e altera dado financeiro de conta já confirmada a devolve a PROVISÓRIA (precisa reconfirmação). */
@@ -190,9 +203,11 @@ export async function registrarPagamento(ctx, id, b, deps = padrao, { permissoes
   const c = exigirContexto(ctx);
   const oid = uuid(id, "id");
   if (b?.quitar === true) exigir(permissoes, ACAO.CONCILIAR, "Seu perfil registra o pagamento, mas não confirma a quitação.");
+  if (b?.quitar === true && (b?.origemPagamento ?? "conta") === "origem_pendente") throw bad("Pagamento com origem pendente não quita a conta: identifique primeiro de qual conta ele saiu.", "ORIGEM_PENDENTE_NAO_QUITA");
   if (!(await deps.repo.obterObrigacao(c, oid, deps.db))) throw ApiError.notFound("Conta a pagar não encontrada.");
   // (revisão #5) pagamento registrado por quem não confirma (operador) nasce PROVISÓRIO e bloqueia o fechamento até ser confirmado
-  await deps.repo.inserirPagamento(c, { obrigacao_id: oid, ...(await validarPagamento(c, b, deps)), provisorio: !pode(permissoes, ACAO.CONCILIAR) }, deps.db);
+  const pg = await validarPagamento(c, b, deps);
+  await deps.repo.inserirPagamento(c, { obrigacao_id: oid, ...pg, provisorio: pg.origem_pagamento === "origem_pendente" || !pode(permissoes, ACAO.CONCILIAR) }, deps.db);
   if (b?.quitar === true) await deps.repo.quitarObrigacaoRpc(c, oid, deps.db);
   return obter(c, oid, deps);
 }
@@ -207,8 +222,21 @@ export async function cancelarPagamento(ctx, pagamentoId, b, deps = padrao) {
   return obter(c, p.obrigacao_id, deps);
 }
 
+/** Resolve a ORIGEM PENDENTE de um pagamento: informa a conta de onde saiu (uma vez). Continua provisório até a quitação/confirmação. */
+export async function resolverOrigemPagamento(ctx, pagamentoId, b, deps = padrao) {
+  const c = exigirContexto(ctx);
+  const pid = uuid(pagamentoId, "id");
+  const p = await deps.repo.obterPagamento(c, pid, deps.db);
+  if (!p) throw ApiError.notFound("Pagamento não encontrado.");
+  if (p.origem_pagamento !== "origem_pendente") throw bad("Só pagamento com origem pendente pode ter a conta informada.", "ORIGEM_JA_DEFINIDA");
+  const conta = await contaValida(c, uuid(b?.contaId, "contaId"), deps);
+  await deps.repo.atualizarPagamento(c, pid, { conta_id: conta.id, origem_pagamento: "conta", observacao: `${p.observacao ?? ""} · Conta de saída informada depois: ${conta.nome}.`.slice(0, 1000) }, deps.db);
+  return obter(c, p.obrigacao_id, deps);
+}
+
 export async function quitar(ctx, id, deps = padrao) {
   const c = exigirContexto(ctx); const oid = uuid(id, "id");
+  if ((await deps.repo.listarPagamentos(c, deps.db)).some((p) => p.obrigacao_id === oid && p.status !== "cancelado" && p.origem_pagamento === "origem_pendente")) throw bad("Há pagamento com origem pendente nesta conta: identifique a conta de saída antes de quitar.", "ORIGEM_PENDENTE_NAO_QUITA");
   await deps.repo.quitarObrigacaoRpc(c, oid, deps.db);
   return obter(c, oid, deps);
 }
@@ -221,6 +249,17 @@ export async function desfazerQuitacao(ctx, id, b, deps = padrao) {
 export async function classificar(ctx, id, b, deps = padrao) {
   const c = exigirContexto(ctx); const oid = uuid(id, "id");
   const cl = b?.classificacao === null || b?.classificacao === "" ? null : enumerado(b?.classificacao, "classificacao", [...NATUREZAS_ACRESCIMO, "desconto"]);
+  await deps.repo.classificarObrigacaoRpc(c, oid, cl, deps.db);
+  return obter(c, oid, deps);
+}
+/** Quitar e classificar o acréscimo em UMA decisão (datas efetivas dos pagamentos preservadas; quitação = data do último pagamento). */
+export async function quitarEClassificar(ctx, id, b, deps = padrao, { permissoes = [] } = {}) {
+  exigir(permissoes, ACAO.CONCILIAR, "Quitar e classificar exige também a permissão de confirmar a quitação.");
+  const c = exigirContexto(ctx); const oid = uuid(id, "id");
+  const cl = enumerado(b?.classificacao, "classificacao", NATUREZAS_ACRESCIMO);
+  const m = texto(b?.motivo, "motivo", { max: 300 }); if (m.length < 10) throw bad("Informe o motivo da classificação (mínimo de 10 caracteres).", "MOTIVO_OBRIGATORIO");
+  const atual = await obter(c, oid, deps);
+  if (atual.status === "aberta") await quitar(c, oid, deps);
   await deps.repo.classificarObrigacaoRpc(c, oid, cl, deps.db);
   return obter(c, oid, deps);
 }
@@ -245,6 +284,15 @@ export async function painelJuros(ctx, q, deps = padrao) {
   const itens = base.obrs.filter((o) => o.status === "quitada" && (!de || String(o.data_quitacao).slice(0, 7) >= de) && (!ate || String(o.data_quitacao).slice(0, 7) <= ate))
     .map((o) => ({ obrigacao: o, pagamentos: base.pagsPor.get(o.id) ?? [], fornecedor: base.forn.get(o.fornecedor_id)?.nome, categoria: base.cats.get(o.categoria_id)?.nome }));
   return { de, ate, natureza: "contas_a_pagar", observacao: "Acréscimos de contas pagas (atraso, multa, tarifa). Juros de empréstimos ficam em Empréstimos, com natureza própria.", ...calcularPainelJuros(itens) };
+}
+
+/** Juros e encargos de um mês em duas leituras: pagos no mês × da competência (inclui obrigação ainda aberta com pago acima do original). */
+export async function jurosDoMes(ctx, q, deps = padrao) {
+  const c = exigirContexto(ctx);
+  const mes = mesAno(q?.mes, "mes");
+  const base = await carregar(c, deps);
+  const itens = base.obrs.map((o) => ({ obrigacao: o, pagamentos: base.pagsPor.get(o.id) ?? [], fornecedor: base.forn.get(o.fornecedor_id)?.nome, categoria: base.cats.get(o.categoria_id)?.nome }));
+  return { natureza: "contas_a_pagar", observacao: "Acréscimo = total pago − valor original da obrigação. Pagamento parcial não é desconto. Juros de empréstimos ficam em Dívidas.", ...calcularJurosDoMes(itens, mes) };
 }
 
 /** Resumo para a Visão Geral e o pré-fechamento: contas a pagar + bloqueios de fechamento do mês (do banco). */

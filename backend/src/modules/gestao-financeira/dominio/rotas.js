@@ -16,6 +16,10 @@ import * as tab from "./tabelas.service.js";
 import * as cfg from "./configuracoes.service.js";
 import * as repositorio from "./repositorio.js";
 import * as painelSvc from "./painel.service.js";
+import * as buscaSvc from "./busca.service.js";
+import * as vendasSvc from "./vendasCanal.service.js";
+import * as confSvc from "./conferencias.service.js";
+import * as vdSvc from "./vendasDiarias.service.js";
 import * as f152 from "./f152.service.js";
 import { uuid } from "./validacao.js";
 import { financeiro2Habilitado } from "../../../shared/financeiro2.flag.js";
@@ -54,6 +58,9 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   r.get("/transferencias", ...h(ACAO.VER, (c) => lanc.listarTransferencias(c, d)));
   r.post("/transferencias", ...h(ACAO.LANCAR, (c, q) => lanc.criarTransferencia(c, q.body, d), { status: 201 }));
   r.post("/transferencias/vincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.vincularTransferencia(c, q.body, d), { status: 201 }));
+  r.get("/transferencias/multiplas", ...h(ACAO.VER, (c) => lanc.listarTransferenciasMultiplas(c, d)));
+  r.post("/transferencias/vincular-multipla", ...h(ACAO.CONCILIAR, (c, q) => lanc.vincularTransferenciaMultipla(c, q.body, d), { status: 201 }));
+  r.post("/transferencias/multiplas/:id/desvincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.desvincularTransferenciaMultipla(c, q.params.id, q.body, d)));
   r.post("/transferencias/:id/desvincular", ...h(ACAO.CONCILIAR, (c, q) => lanc.desvincularTransferencia(c, q.params.id, q.body, d)));
   r.post("/transferencias/:id/cancelar", ...h(ACAO.CANCELAR, (c, q) => lanc.cancelarTransferencia(c, q.params.id, q.body, d)));
 
@@ -116,6 +123,25 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   const perms = (q) => ({ permissoes: permissoesDe(q) });
   // Visão Geral 2.0, Receitas e Vendas, DRE gerencial de referência (só leitura; regras propostas, não aprovadas)
   r.get("/painel", ...h2(ACAO.VER, (c, q) => painelSvc.painel(c, q.query, d)));
+  r.get("/busca", ...h2(ACAO.VER, (c, q) => buscaSvc.buscar(c, q.query, d)));
+  // 153: faturamento por canal e ponte painel → base gerencial (ajuste confirmado = decisão de quem classifica)
+  // Vendas diárias (SAIPOS): mesma fonte de fin_referencias; editar/atualizar exige `editar`
+  r.get("/vendas-diarias", ...h2(ACAO.VER, (c, q) => vdSvc.listar(c, q.query, d)));
+  r.get("/vendas-diarias/historico", ...h2(ACAO.VER, (c, q) => vdSvc.historico(c, q.query, d)));
+  r.get("/vendas-diarias/dia", ...h2(ACAO.VER, (c, q) => vdSvc.detalhe(c, q.query, d)));
+  r.post("/vendas-diarias", ...h2(ACAO.LANCAR, (c, q) => vdSvc.registrar(c, q.body, d), { status: 201 }));
+  r.post("/vendas-diarias/importar/previa", ...h2(ACAO.LANCAR, (c, q) => vdSvc.previaImportacao(c, q.body, d)));
+  r.post("/vendas-diarias/importar", ...h2(ACAO.LANCAR, (c, q) => vdSvc.importar(c, q.body, d, perms(q))));
+  r.patch("/vendas-diarias/:data", ...h2(ACAO.LANCAR, (c, q) => vdSvc.editar(c, q.params.data, q.body, d, perms(q))));
+  r.get("/conferencias", ...h2(ACAO.VER, (c, q) => confSvc.listar(c, q.query, d)));
+  r.get("/conferencias/historico", ...h2(ACAO.EDITAR, (c, q) => confSvc.historico(c, q.query, d)));
+  r.get("/vendas-canal", ...h2(ACAO.VER, (c, q) => vendasSvc.listar(c, q.query, d)));
+  r.post("/vendas-canal", ...h2(ACAO.LANCAR, (c, q) => vendasSvc.registrarCanal(c, q.body, d), { status: 201 }));
+  r.post("/vendas-canal/importar", ...h2(ACAO.LANCAR, (c, q) => vendasSvc.importar(c, q.body, d)));
+  r.post("/vendas-canal/:id/cancelar", ...h2(ACAO.EDITAR, (c, q) => vendasSvc.cancelarCanal(c, q.params.id, q.body, d)));
+  r.post("/vendas-ajustes", ...h2(ACAO.LANCAR, (c, q) => vendasSvc.registrarAjuste(c, q.body, d), { status: 201 }));
+  r.post("/vendas-ajustes/:id/confirmar", ...h2(ACAO.CLASSIFICAR, (c, q) => vendasSvc.confirmarAjuste(c, q.params.id, q.body, d)));
+  r.post("/vendas-ajustes/:id/cancelar", ...h2(ACAO.EDITAR, (c, q) => vendasSvc.cancelarAjuste(c, q.params.id, q.body, d)));
   r.get("/receitas", ...h2(ACAO.VER, (c, q) => painelSvc.receitas(c, q.query, d)));
   r.get("/dre-referencia", ...h2(ACAO.VER, (c, q) => painelSvc.dreReferencia(c, q.query, d)));
   // 152: rateios (definir = editar; aprovar = classificar, decisão da contadora), contas a receber e dívidas
@@ -137,6 +163,7 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   r.post("/fornecedores", ...h2(ACAO.LANCAR, (c, q) => obr.criarFornecedor(c, q.body, d), { status: 201 }));
   r.get("/contas-pagar", ...h2(ACAO.VER, (c, q) => obr.listar(c, q.query, d)));
   r.get("/contas-pagar/resumo", ...h2(ACAO.VER, (c, q) => obr.resumoMes(c, q.query, d)));
+  r.get("/contas-pagar/juros-mes", ...h2(ACAO.VER, (c, q) => obr.jurosDoMes(c, q.query, d)));
   r.get("/contas-pagar/juros", ...h2(ACAO.VER, (c, q) => obr.painelJuros(c, q.query, d)));
   r.post("/contas-pagar", ...h2(ACAO.LANCAR, (c, q) => obr.criar(c, q.body, d, perms(q)), { status: 201 }));
   r.post("/contas-pagar/pagamentos/:id/cancelar", ...h2(ACAO.CANCELAR, (c, q) => obr.cancelarPagamento(c, q.params.id, q.body, d)));
@@ -146,6 +173,8 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   r.post("/contas-pagar/:id/quitar", ...h2(ACAO.CONCILIAR, (c, q) => obr.quitar(c, q.params.id, d)));
   r.post("/contas-pagar/:id/desfazer-quitacao", ...h2(ACAO.CONCILIAR, (c, q) => obr.desfazerQuitacao(c, q.params.id, q.body, d)));
   r.post("/contas-pagar/:id/confirmar-registro", ...h2(ACAO.CONCILIAR, (c, q) => obr.confirmarRegistro(c, q.params.id, d)));
+  r.post("/contas-pagar/pagamentos/:pid/origem", ...h2(ACAO.CONCILIAR, (c, q) => obr.resolverOrigemPagamento(c, q.params.pid, q.body, d)));
+  r.post("/contas-pagar/:id/quitar-e-classificar", ...h2(ACAO.CLASSIFICAR, (c, q) => obr.quitarEClassificar(c, q.params.id, q.body, d, perms(q))));
   r.post("/contas-pagar/:id/classificar", ...h2(ACAO.CLASSIFICAR, (c, q) => obr.classificar(c, q.params.id, q.body, d)));
   r.post("/contas-pagar/:id/cancelar", ...h2(ACAO.CANCELAR, (c, q) => obr.cancelar(c, q.params.id, q.body, d)));
   r.get("/conciliacao-saidas", ...h2(ACAO.VER, (c, q) => cs.painel(c, q.query, d)));

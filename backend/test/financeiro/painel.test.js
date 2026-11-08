@@ -65,7 +65,8 @@ test("contas a pagar em aberto e acréscimo presumido (pago acima do original) s
   assert.equal(p.indicadores.contasAPagar.valorCentavos, 30000);
   assert.equal(p.indicadores.jurosEncargos.valorCentavos, 50);
   assert.equal(p.indicadores.jurosEncargos.estado, "proposta");
-  assert.match(p.indicadores.jurosEncargos.nota, /Confirmados: R\$ 0,00/);
+  assert.match(p.indicadores.jurosEncargos.nota, /Pagos no mês: R\$ 0,50/);
+  assert.match(p.indicadores.jurosEncargos.nota, /presumido não é juros até a classificação/);
 });
 
 test("sem contas a pagar: indicadores gerenciais ficam 'parcial' (nunca completos de mentira)", async () => {

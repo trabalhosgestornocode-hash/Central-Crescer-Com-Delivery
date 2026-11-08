@@ -71,7 +71,7 @@ export async function painel(ctx, q, deps = padrao) {
       revogadoEm: v0.revogado_em ?? null, motivoRevogacao: v0.motivo_revogacao ?? null,
     });
   }
-  const pendentes = b.pags.filter((p) => p.status === "ativo" && noMes(p.data_pagamento, b) && (b.alocPag.get(p.id) ?? 0) < Number(p.valor_centavos)).map((p) => descPag(b, p));
+  const pendentes = b.pags.filter((p) => p.status === "ativo" && (p.origem_pagamento ?? "conta") === "conta" && noMes(p.data_pagamento, b) && (b.alocPag.get(p.id) ?? 0) < Number(p.valor_centavos)).map((p) => descPag(b, p));
   const semVinculo = b.saidas.filter((s) => noMes(s.data_movimento, b) && !b.ehTransf(s) && (b.alocSaida.get(s.id) ?? 0) === 0);
   const aIdentificar = semVinculo.filter((s) => s.classificacao_pendente || !s.categoria_id).map((s) => descSaida(b, s));
   const disponiveis = semVinculo.filter((s) => !(s.classificacao_pendente || !s.categoria_id)).map((s) => ({ ...descSaida(b, s), categoria: b.catPor.get(s.categoria_id)?.nome ?? null }));
@@ -88,7 +88,7 @@ export async function sugerir(ctx, q, deps = padrao) {
   const c = exigirContexto(ctx);
   const mes = mesAno(q?.mes, "mes");
   const b = await carregar(c, mes, deps);
-  const pagamentos = b.pags.filter((p) => p.status === "ativo" && (b.alocPag.get(p.id) ?? 0) === 0 && p.data_pagamento >= somaDias(b.de, -TOLERANCIA.dias) && p.data_pagamento <= somaDias(b.ate, TOLERANCIA.dias));
+  const pagamentos = b.pags.filter((p) => p.status === "ativo" && (p.origem_pagamento ?? "conta") === "conta" && (b.alocPag.get(p.id) ?? 0) === 0 && p.data_pagamento >= somaDias(b.de, -TOLERANCIA.dias) && p.data_pagamento <= somaDias(b.ate, TOLERANCIA.dias));
   const saidas = b.saidas.filter((s) => !b.ehTransf(s) && (b.alocSaida.get(s.id) ?? 0) === 0 && (noMes(s.data_movimento, b) || pagamentos.some((p) => noMes(p.data_pagamento, b))));
   const { sugestoes, ambiguos } = sugerirVinculos({ pagamentos, saidas });
   let criadas = 0;
@@ -112,6 +112,7 @@ export async function vincular(ctx, body, deps = padrao) {
   const justificativa = texto(body?.justificativa, "justificativa", { max: 1000, obrigatorio: false });
   const pags = (await deps.repo.listarPagamentos(c, deps.db)).filter((p) => ids.includes(p.id));
   if (pags.length !== ids.length) throw ApiError.notFound("Pagamento não encontrado.");
+  if (pags.some((p) => (p.origem_pagamento ?? "conta") !== "conta")) throw bad("Pagamento com origem pendente ou pago por terceiro não tem saída bancária da empresa: não é conciliado com extrato.", "PAGAMENTO_SEM_SAIDA_BANCARIA");
   const saida = (await deps.repo.listarSaidasExtrato(c, {}, deps.db)).find((s) => s.id === lancamentoId);
   if (!saida) throw ApiError.notFound("Saída do extrato não encontrada.");
   const dif = Number(saida.valor_centavos) - pags.reduce((a, p) => a + Number(p.valor_centavos), 0);

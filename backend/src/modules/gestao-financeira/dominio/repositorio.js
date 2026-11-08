@@ -147,6 +147,27 @@ export async function desvincularTransferenciaRpc(ctxIn, id, motivo, db = supaba
   falha(error);
   return data === true;
 }
+// ---- transferência 1:N (155): UMA saída conciliada com 2–3 entradas; gravação só pelas funções do banco ----
+export async function listarTransferenciasMultiplas(ctxIn, db = supabase) {
+  const ctx = exigirContexto(ctxIn);
+  const [{ data: pais, error: e1 }, { data: filhas, error: e2 }] = await Promise.all([
+    unid(db.from("fin_transferencias_multiplas").select("*"), ctx).order("created_at", { ascending: false }).limit(500),
+    unid(db.from("fin_transferencias_multiplas_entradas").select("*"), ctx).limit(1500)]);
+  falha(e1); falha(e2);
+  return (pais ?? []).map((p) => ({ ...p, entradas: (filhas ?? []).filter((f) => f.multipla_id === p.id) }));
+}
+export async function vincularTransferenciaMultiplaRpc(ctxIn, saidaId, entradaIds, justificativa, db = supabase) {
+  const ctx = exigirContexto(ctxIn);
+  const { data, error } = await db.rpc("fin_vincular_transferencia_multipla", { p_org: ctx.organizacaoId, p_unidade: ctx.unidadeId, p_usuario: ctx.usuarioId, p_saida: saidaId, p_entradas: entradaIds, p_justificativa: justificativa });
+  falha(error);
+  return data;
+}
+export async function desvincularTransferenciaMultiplaRpc(ctxIn, id, motivo, db = supabase) {
+  const ctx = exigirContexto(ctxIn);
+  const { data, error } = await db.rpc("fin_desvincular_transferencia_multipla", { p_org: ctx.organizacaoId, p_unidade: ctx.unidadeId, p_usuario: ctx.usuarioId, p_multipla: id, p_motivo: motivo });
+  falha(error);
+  return data === true;
+}
 /** Cancela a transferência INTEIRA (par + duas pernas) numa única transação; idempotente. */
 export async function cancelarTransferenciaRpc(ctxIn, id, motivo, db = supabase) {
   const ctx = exigirContexto(ctxIn);
@@ -219,3 +240,4 @@ export * from "./repositorio.conciliacao.js";
 export * from "./repositorio.periodos.js";
 export * from "./repositorio.obrigacoes.js";
 export * from "./repositorio.f152.js";
+export * from "./repositorio.vendas.js";

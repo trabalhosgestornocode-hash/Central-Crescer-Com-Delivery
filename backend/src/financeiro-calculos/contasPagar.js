@@ -136,3 +136,55 @@ export function sugerirVinculos({ pagamentos, saidas, tolerancia = TOLERANCIA, m
 
 /** Dentro da tolerância? (decide se a confirmação exige justificativa — a mesma regra que o banco aplica). */
 export const dentroDaTolerancia = (difCentavos, dias, tol = TOLERANCIA) => Math.abs(difCentavos) <= tol.centavos && Math.abs(dias) <= tol.dias;
+
+// ---------------------------------------------------------------- acréscimos por COMPETÊNCIA × pagos no PERÍODO
+/**
+ * Acréscimo presumido de UMA obrigação = max(0, Σ pagamentos ativos − valor original), considerando TODOS os pagamentos vinculados.
+ * O excesso é atribuído ao(s) pagamento(s) que ultrapassam o original, em ordem de data (o pagamento que "cruza" o original e os seguintes),
+ * para saber em que MÊS o acréscimo foi pago. Pagamento parcial (soma < original) NUNCA vira desconto nem acréscimo: é saldo em aberto.
+ * `quitada` informa a situação da obrigação (acréscimo em obrigação ainda aberta é presumido e fica sinalizado).
+ */
+export function acrescimoDaObrigacao(obr, pags) {
+  const orig = n(obr.valor_original_centavos);
+  const lista = [...ativos(pags)].sort((a, b) => String(a.data_pagamento).localeCompare(String(b.data_pagamento)) || String(a.id ?? "").localeCompare(String(b.id ?? "")));
+  const pago = somar(lista.map((p) => n(p.valor_centavos)));
+  const total = Math.max(0, pago - orig);
+  let acumulado = 0;
+  const porPagamento = lista.map((p) => {
+    const antes = Math.max(0, acumulado - orig); acumulado += n(p.valor_centavos); const depois = Math.max(0, acumulado - orig);
+    return { pagamentoId: p.id ?? null, data: String(p.data_pagamento).slice(0, 10), valorPagoCentavos: n(p.valor_centavos), acrescimoCentavos: depois - antes };
+  });
+  const natureza = total > 0 ? (obr.classificacao_diferenca && NATUREZAS_ACRESCIMO.includes(obr.classificacao_diferenca) ? obr.classificacao_diferenca : "presumido") : null;
+  return { valorOriginalCentavos: orig, pagoCentavos: pago, acrescimoCentavos: total, percentualBps: total > 0 ? razaoEmBps(total, orig) : 0, quitada: obr.status === "quitada", natureza,
+    parcialAberta: pago > 0 && pago < orig && obr.status !== "quitada", porPagamento };
+}
+
+/**
+ * Juros e encargos de um MÊS, em duas leituras que não se misturam:
+ *   • pagosNoMes: acréscimo efetivamente PAGO naquele mês (pela data do pagamento);
+ *   • daCompetencia: acréscimo das obrigações cuja competência é aquele mês (pago ou não ainda naquele mês);
+ *   • relacionadas: todas as obrigações envolvidas em qualquer das duas, com os dois números (a soma delas é o "total das duas obrigações").
+ * Juros de empréstimo ficam fora (outra natureza).
+ * @param {Array<{obrigacao:object, pagamentos:object[], fornecedor?:string, categoria?:string}>} itens
+ */
+export function jurosDoMes(itens, mes) {
+  const zero = () => ({ presumido: 0, juros: 0, multa: 0, tarifa: 0, outro: 0 });
+  const pagos = zero(), comp = zero();
+  const relacionadas = [];
+  for (const { obrigacao: o, pagamentos: p, fornecedor, categoria } of itens) {
+    if (o.status === "cancelada") continue;
+    const a = acrescimoDaObrigacao(o, p);
+    if (!(a.acrescimoCentavos > 0)) continue;
+    const pagoNoMes = a.porPagamento.filter((x) => x.data.startsWith(mes)).reduce((s, x) => s + x.acrescimoCentavos, 0);
+    const ehCompetencia = String(o.competencia).slice(0, 7) === mes;
+    if (pagoNoMes === 0 && !ehCompetencia) continue;
+    pagos[a.natureza] += pagoNoMes; if (ehCompetencia) comp[a.natureza] += a.acrescimoCentavos;
+    const datas = a.porPagamento.filter((x) => x.acrescimoCentavos > 0).map((x) => x.data);
+    relacionadas.push({ obrigacaoId: o.id, descricao: o.descricao ?? null, fornecedor: fornecedor ?? null, categoria: categoria ?? null, competencia: String(o.competencia).slice(0, 7), vencimento: String(o.vencimento).slice(0, 10),
+      pagoEm: datas, valorOriginalCentavos: a.valorOriginalCentavos, pagoCentavos: a.pagoCentavos, acrescimoTotalCentavos: a.acrescimoCentavos, percentualBps: a.percentualBps, natureza: a.natureza, quitada: a.quitada,
+      pagoNoMesCentavos: pagoNoMes, daCompetenciaCentavos: ehCompetencia ? a.acrescimoCentavos : 0 });
+  }
+  const resumo = (t) => { const confirmado = t.juros + t.multa + t.tarifa + t.outro; return { presumidoCentavos: t.presumido, confirmadoCentavos: confirmado, totalCentavos: confirmado + t.presumido, jurosCentavos: t.juros, multaCentavos: t.multa, tarifaCentavos: t.tarifa, outroCentavos: t.outro }; };
+  return { mes, pagosNoMes: resumo(pagos), daCompetencia: resumo(comp), totalRelacionadasCentavos: relacionadas.reduce((s, r) => s + r.acrescimoTotalCentavos, 0),
+    relacionadas: relacionadas.sort((a, b) => a.competencia.localeCompare(b.competencia) || b.acrescimoTotalCentavos - a.acrescimoTotalCentavos) };
+}
