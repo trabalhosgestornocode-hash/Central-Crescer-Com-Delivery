@@ -60,12 +60,17 @@ const admGrupo = achar(dre.arvore, "Administrativas");
 // ranking das despesas (a apresentação: 10 maiores, entregas como custo; diárias à parte; contabilidade sem a de 09/2026)
 const folhas = [];
 const colher = (n, dentro) => { if (!n.filhos?.length) { if (dentro) folhas.push({ rotulo: n.rotulo ?? n.nome, v: num(n) }); return; } n.filhos.forEach((f) => colher(f, dentro || /^\(−\) (Custos|Despesas fixas)/.test(n.rotulo ?? ""))); };
-const top10 = (() => {
-  const base = []; const add = (r, v) => v != null && base.push({ r, v });
-  add("Entregas", no("Entregadores Próprios (Motoboys)") ?? no("Entregas"));
-  for (const r of ["SALARIO", "FÉRIAS", "BENEFICIOS", "INSS", "FGTS", "PRESTADOR DE SERVIÇOS", "HONORARIOS ADVOCATICIOS", "ENERGIA", "ALUGUEL", "SISTEMA", "CONTABILIDADE", "MARKETING", "AGUA"]) add(r, no(r));
-  return base.sort((a, b) => b.v - a.v).slice(0, 10);
-})();
+// Ranking das maiores despesas. Duas leituras, ambas calculadas dos mesmos registros:
+//  • "categoria": uma linha por categoria do plano de contas (padrão do sistema);
+//  • "conta": agrupamento da apresentação — cada prestador/contratado do subgrupo Prestação de serviços é uma linha própria (a planilha os separa por "Conta").
+const RANK_CATEGORIAS = ["SALARIO", "FÉRIAS", "BENEFICIOS", "INSS", "FGTS", "PRESTADOR DE SERVIÇOS", "HONORARIOS ADVOCATICIOS", "ENERGIA", "ALUGUEL", "SISTEMA", "CONTABILIDADE", "MARKETING", "AGUA"];
+const PRESTACAO = /^(PRESTADOR|PRESTA[CÇ][AÃ]O|MARKETING)/i;
+const rankingBase = () => { const base = []; const add = (r, v) => v != null && base.push({ r, v }); add("Entregas", no("Entregadores Próprios (Motoboys)") ?? no("Entregas")); for (const r of RANK_CATEGORIAS) add(r, no(r)); return base; };
+const topN = (base) => base.sort((a, b) => b.v - a.v).slice(0, 10);
+const rankingCategoria = topN(rankingBase());
+const rankingConta = topN(rankingBase().flatMap((x) => { if (!PRESTACAO.test(x.r)) return [x]; const porForn = new Map(); for (const p of pagosSet.filter((q) => q.obrigacao.categoria === x.r)) porForn.set(p.obrigacao.fornecedor ?? p.obrigacao.descricao, (porForn.get(p.obrigacao.fornecedor ?? p.obrigacao.descricao) ?? 0) + p.valorCentavos); return porForn.size > 1 ? [...porForn].map(([r, v]) => ({ r: `${x.r}: ${r}`, v })) : [x]; }));
+const top10 = rankingConta;
+
 
 // ------------------------------------------------------------------ catálogo: chave → { v: valor calculado pelo sistema, regra, fonte, pendencia?, nota? }
 const C = {};
@@ -129,7 +134,7 @@ def("juros.total", (C["juros.contab08"].v ?? 0) + (C["juros.contab09"].v ?? 0), 
 // slide 7
 def("naoPlan.total", no("OUTRAS DESPESAS"), "pagamentos não programados", "Contas a Pagar / Fluxo"); def("naoPlan.qtd", naoPlan, "quantidade de pagamentos não programados no mês", "Contas a Pagar / Fluxo");
 // slide 8
-def("top10.total", soma(top10, (x) => x.v), `10 maiores categorias de despesa/entregas: ${top10.map((x) => x.r).join(", ")}`, "DRE", { nota: "o ranking da apresentação usa o nível 'Conta' da planilha; o sistema ordena por categoria", pendencia: null });
+def("top10.total", soma(rankingConta, (x) => x.v), `10 maiores despesas no agrupamento da apresentação (prestadores separados): ${rankingConta.map((x) => x.r).join(", ")}`, "DRE + Contas a Pagar", { nota: "o ranking da apresentação usa o nível 'Conta' da planilha; o sistema ordena por categoria", pendencia: null });
 // slide 10
 const dv = { reforma: /Reforma/i, igor: /Igor/i, santander: /Santander/i, francisca: /Francisca/i, simples: /Federal|Simples/i };
 for (const [k, re] of Object.entries(dv)) def(`div.${k}`, k === "reforma" ? (divida(re)?.noMes.principalCentavos ?? null) : dMes(divida(re)), `parcelas pagas em setembro (principal + juros), ${k}`, "Dívidas e Empréstimos");
@@ -215,30 +220,32 @@ const linhas = ref.itens.map((it) => {
   const tol = it.u === "b" ? 10 : it.u === "n" ? 0 : 1;           // % mostrado com 1 casa; centavos exatos (±1 de arredondamento)
   const confere = sis != null && Math.abs(dif) <= tol;
   const situacao = sis == null ? "SEM CÁLCULO NO SISTEMA" : confere ? "CONFERE" : "DIFERE";
-  const classe = sis == null ? "D" : confere ? (s.pendencia ? "C" : "A") : "D";
+  const naoVerif = new Set(ref.naoVerificavel ?? []).has(it.k) || (sis == null && s?.semDado);
+  const classe = naoVerif ? "N" : sis == null ? "D" : confere ? (s.pendencia ? "C" : "A") : "D";
   return { slide: it.s, chave: it.k, referencia: it.r, apresentacao: it.v, unidade: it.u, sistema: sis, diferenca: dif,
     difPct: it.u === "c" && it.v ? Math.round((dif / Math.abs(it.v)) * 10000) / 100 : null, situacao, classe,
-    regra: s?.regra ?? "—", fonte: s?.fonte ?? "—", pendencia: s?.pendencia ?? s?.semDado ?? null, nota: s?.nota ?? null, motivo: classe === "D" ? (MOTIVO[it.k] ?? "DIFERENÇA SEM EXPLICAÇÃO REGISTRADA") : null };
+    regra: s?.regra ?? "—", fonte: s?.fonte ?? "—", pendencia: s?.pendencia ?? s?.semDado ?? null, nota: s?.nota ?? null, motivo: classe === "D" || classe === "N" ? (MOTIVO[it.k] ?? "DIFERENÇA SEM EXPLICAÇÃO REGISTRADA") : null };
 });
 // percentuais (apresentação: 1 casa decimal sobre o faturamento bruto): conferidos como linhas próprias
 for (const it of ref.itens.filter((x) => x.pct != null && x.u === "c")) {
   const base = linhas.find((l) => l.chave === it.k); const sis = base?.sistema == null ? null : Math.round((base.sistema / bruto) * 1000) * 10;
   const confere = sis != null && sis === it.pct;
   linhas.push({ slide: it.s, chave: it.k + ".pct", referencia: it.r + " — % do bruto", apresentacao: it.pct, unidade: "b", sistema: sis, diferenca: sis == null ? null : sis - it.pct, difPct: null,
-    situacao: sis == null ? "SEM CÁLCULO NO SISTEMA" : confere ? "CONFERE" : "DIFERE", classe: sis == null ? "D" : confere ? (base.classe === "C" ? "C" : base.classe === "D" ? "D" : "A") : "D",
+    situacao: sis == null ? "SEM CÁLCULO NO SISTEMA" : confere ? "CONFERE" : "DIFERE", classe: sis == null ? "D" : confere ? (base.classe === "C" ? "C" : base.classe === "D" || base.classe === "N" ? base.classe : "A") : "D",
     regra: "valor ÷ faturamento bruto, 1 casa decimal", fonte: "calculado", pendencia: base?.pendencia ?? null, nota: null, motivo: confere ? null : (base?.motivo ?? "percentual difere") });
 }
 linhas.sort((a, b) => a.slide - b.slide);
 fs.mkdirSync(SAIDA, { recursive: true });
 const stamp = new Date().toISOString().slice(0, 10);
-fs.writeFileSync(path.join(SAIDA, `matriz-homologacao-${MES}.json`), JSON.stringify({ gerada: new Date().toISOString(), competencia: MES, linhas, top10: top10 }, null, 1));
+fs.writeFileSync(path.join(SAIDA, `matriz-homologacao-${MES}.json`), JSON.stringify({ gerada: new Date().toISOString(), competencia: MES, linhas, rankings: { conta: rankingConta, categoria: rankingCategoria } }, null, 1));
 const esc = (x) => `"${String(x ?? "").replace(/"/g, '""')}"`;
 fs.writeFileSync(path.join(SAIDA, `matriz-homologacao-${MES}.csv`), "﻿" + ["slide;referencia;apresentacao;sistema;diferenca;dif%;situacao;classe;regra;fonte;pendencia"].concat(linhas.map((l) => [l.slide, esc(l.referencia), brl(l.apresentacao, l.unidade), brl(l.sistema, l.unidade), l.diferenca == null ? "" : brl(l.diferenca, l.unidade), l.difPct ?? "", l.situacao, l.classe, esc(l.regra), esc(l.fonte), esc(l.motivo ?? l.pendencia)].join(";"))).join("\n"));
 const n = (f) => linhas.filter(f).length;
 const md = [`# Homologação ${MES} — sistema × apresentação oficial (PRIVADO)`, `Gerada em ${stamp} · ${linhas.length} referências dos 17 slides.`, "",
-  `**A** confere e é homologável: ${n((l) => l.classe === "A")} · **C** confere numericamente mas depende de decisão/aprovação: ${n((l) => l.classe === "C")} · **D** diferença ou sem cálculo: ${n((l) => l.classe === "D")}`, "",
+  `**A — Confere e possui evidência:** ${n((l) => l.classe === "A")} · **C — Confere, aguardando aprovação:** ${n((l) => l.classe === "C")} · **D — Difere, com causa comprovada:** ${n((l) => l.classe === "D")} · **N — Não verificável por ausência de fonte:** ${n((l) => l.classe === "N")}`, "",
   "| Slide | Referência | Apresentação | Sistema | Diferença | Situação | Classe | Observação |", "|---|---|---:|---:|---:|---|:-:|---|"]
   .concat(linhas.map((l) => `| ${l.slide} | ${l.referencia} | ${brl(l.apresentacao, l.unidade)} | ${brl(l.sistema, l.unidade)} | ${l.diferenca == null ? "—" : brl(l.diferenca, l.unidade)} | ${l.situacao} | ${l.classe} | ${l.motivo ?? l.pendencia ?? ""} |`)).join("\n");
 fs.writeFileSync(path.join(SAIDA, `matriz-homologacao-${MES}.md`), md);
-console.log(`A=${n((l) => l.classe === "A")}  C=${n((l) => l.classe === "C")}  D=${n((l) => l.classe === "D")}  total=${linhas.length}`);
-for (const l of linhas.filter((x) => x.classe === "D")) console.log(`D slide ${l.slide} ${l.referencia}: apresentação ${brl(l.apresentacao, l.unidade)} · sistema ${brl(l.sistema, l.unidade)} · dif ${l.diferenca == null ? "—" : brl(l.diferenca, l.unidade)} :: ${String(l.motivo).slice(0, 70)}`);
+console.log(`A=${n((l) => l.classe === "A")}  C=${n((l) => l.classe === "C")}  D=${n((l) => l.classe === "D")}  N=${n((l) => l.classe === "N")}  total=${linhas.length}`);
+console.log(`ranking das 10 maiores despesas — agrupamento da apresentação: ${soma(rankingConta, (x) => x.v)} · por categoria: ${soma(rankingCategoria, (x) => x.v)}`);
+for (const l of linhas.filter((x) => x.classe === "D" || x.classe === "N")) console.log(`D slide ${l.slide} ${l.referencia}: apresentação ${brl(l.apresentacao, l.unidade)} · sistema ${brl(l.sistema, l.unidade)} · dif ${l.diferenca == null ? "—" : brl(l.diferenca, l.unidade)} :: ${String(l.motivo).slice(0, 70)}`);
