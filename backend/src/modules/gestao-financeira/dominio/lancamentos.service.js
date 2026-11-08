@@ -166,6 +166,40 @@ export async function desvincularTransferencia(ctx, id, b, deps = padrao) {
   return { desvinculada: true };
 }
 
+// ---- 1 saída ⇄ 2–3 entradas (migration 155). NUNCA é criada por sugestão: exige quem concilia, a justificativa e a soma exata (conferida também no banco). ----
+export async function vincularTransferenciaMultipla(ctx, b, deps = padrao) {
+  const c = exigirContexto(ctx);
+  const saidaId = uuid(b?.saidaId, "saidaId");
+  if (!Array.isArray(b?.entradaIds)) throw bad("Informe as entradas a conciliar.", "ENTRADAS_OBRIGATORIAS");
+  const entradaIds = b.entradaIds.map((x) => uuid(x, "entradaIds"));
+  if (new Set(entradaIds).size !== entradaIds.length) throw bad("Há entradas repetidas.", "ENTRADAS_REPETIDAS");
+  if (entradaIds.length < 2 || entradaIds.length > 3) throw bad("A conciliação é de uma saída com 2 ou 3 entradas (para uma só, use o vínculo simples).", "QUANTIDADE_ENTRADAS");
+  const justificativa = texto(b?.justificativa, "justificativa", { max: 1000 });
+  if (justificativa.length < 10) throw bad("Informe a justificativa da conciliação (mínimo de 10 caracteres).", "JUSTIFICATIVA_OBRIGATORIA");
+  const [saida, ...entradas] = await Promise.all([saidaId, ...entradaIds].map((id) => deps.repo.obterLancamento(c, id, deps.db)));
+  if (!saida || entradas.some((e) => !e)) throw ApiError.notFound("Lançamento não encontrado nesta unidade.");
+  const soma = entradas.reduce((a, e) => a + Number(e.valor_centavos), 0);
+  if (soma !== Number(saida.valor_centavos)) throw bad(`A soma das entradas (${soma / 100}) precisa ser igual à saída (${Number(saida.valor_centavos) / 100}).`, "SOMA_DIFERENTE");
+  const id = await deps.repo.vincularTransferenciaMultiplaRpc(c, saidaId, entradaIds, justificativa, deps.db).catch((e) => { if (e?.details?.codigo === "DUPLICADO") throw bad("Esta saída ou uma destas entradas já está conciliada. Desfaça a conciliação anterior (com motivo) antes de refazer.", "JA_CONCILIADA"); throw e; });
+  return { id, saidaId, entradaIds, valorCentavos: Number(saida.valor_centavos), aprovadoPor: c.usuarioId };
+}
+/** Conciliações 1:N existentes, com os lançamentos (data, conta, valor) para conferência humana. */
+export async function listarTransferenciasMultiplas(ctx, deps = padrao) {
+  const c = exigirContexto(ctx);
+  const [vinc, contas] = await Promise.all([deps.repo.listarTransferenciasMultiplas(c, deps.db), deps.repo.listarContas(c, deps.db)]);
+  const nome = new Map(contas.map((x) => [x.id, x.nome]));
+  const lanc = async (id) => { const l = await deps.repo.obterLancamento(c, id, deps.db); return l ? { id: l.id, data: String(l.data_movimento).slice(0, 10), conta: nome.get(l.conta_id) ?? "—", valorCentavos: Number(l.valor_centavos), descricao: l.descricao } : { id, data: null, conta: "—", valorCentavos: null, descricao: null }; };
+  return Promise.all(vinc.slice(0, 50).map(async (v) => ({ id: v.id, saida: await lanc(v.lancamento_saida_id), entradas: await Promise.all(v.entradas.map((e) => lanc(e.lancamento_entrada_id))),
+    valorCentavos: Number(v.valor_centavos), justificativa: v.justificativa, aprovadoPor: v.aprovado_por, aprovadoEm: v.aprovado_em })));
+}
+export async function desvincularTransferenciaMultipla(ctx, id, b, deps = padrao) {
+  const motivo = texto(b?.motivo, "motivo", { max: 1000 });
+  if (motivo.length < 10) throw bad("Informe o motivo (mínimo de 10 caracteres).", "MOTIVO_OBRIGATORIO");
+  const ok = await deps.repo.desvincularTransferenciaMultiplaRpc(exigirContexto(ctx), uuid(id, "id"), motivo, deps.db);
+  if (!ok) throw ApiError.notFound("Conciliação não encontrada.");
+  return { desfeita: true };
+}
+
 /** Cancelar a TRANSFERÊNCIA INTEIRA (par + duas pernas), atômico, com motivo e auditoria; idempotente. */
 export async function cancelarTransferencia(ctx, id, b, deps = padrao) {
   const motivo = texto(b?.motivo, "motivo", { max: 1000 });

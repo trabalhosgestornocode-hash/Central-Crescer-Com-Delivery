@@ -20,11 +20,11 @@ psql $H -U postgres -q -d $DB -c "grant all on schema public to dono_sim; grant 
 D="psql $H -U dono_sim -d $DB -q -v ON_ERROR_STOP=1"
 $D -c "alter default privileges in schema public grant all on tables to anon, authenticated, service_role; alter default privileges in schema public grant all on sequences to anon, authenticated, service_role; alter default privileges in schema public grant all on functions to anon, authenticated, service_role" >/dev/null 2>&1
 $D -f "$STUB" >/dev/null 2>&1 || { echo "stub falhou"; exit 1; }
-for f in 120_gestao_financeira_fundacao.sql 121_gestao_financeira_dominio.sql 122_conciliacao_periodos.sql 151_financeiro_2_contas_pagar.sql 152_financeiro_2_rateios_recebiveis_dividas.sql; do
+for f in 120_gestao_financeira_fundacao.sql 121_gestao_financeira_dominio.sql 122_conciliacao_periodos.sql 151_financeiro_2_contas_pagar.sql 152_financeiro_2_rateios_recebiveis_dividas.sql 153_financeiro_2_vendas_por_canal.sql 154_financeiro_2_pagamento_origem.sql 155_financeiro_2_transferencia_multipla.sql; do
   $D -f "$M/$f" >/dev/null 2>"${TMPDIR:-/tmp}/fin20prep.txt" || { echo "falhou $f: $(grep -m2 -E 'ERRO|ERROR' "${TMPDIR:-/tmp}/fin20prep.txt")"; exit 1; }
 done
 u() { printf '00000000-0000-4000-8000-%012d' "$1"; }
 printf '%s\n' "insert into organizacoes(id,nome) values ('$(u 1)','Açaí no Grau (dados SINTÉTICOS)'),('$(u 4)','Outra Empresa (SINTÉTICA)');
 insert into unidades(id,organizacao_id,nome) values ('$(u 2)','$(u 1)','Loja Centro (sintética)'),('$(u 3)','$(u 1)','Loja Norte (sintética)'),('$(u 5)','$(u 4)','Unidade X (sintética)');" \
   | psql $H -U postgres -d $DB -q -v ON_ERROR_STOP=1 -f - >/dev/null || { echo "seed de plataforma falhou"; exit 1; }
-echo "banco $DB pronto (120, 121, 122, 151, 152) — dados de plataforma sintéticos"
+echo "banco $DB pronto (120, 121, 122, 151, 152, 153, 154, 155) — dados de plataforma sintéticos"

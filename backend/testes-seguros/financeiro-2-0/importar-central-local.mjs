@@ -9,7 +9,8 @@
 // Os arquivos de entrada (planilha e de-para) e o relatório ficam FORA do repositório: contêm dados financeiros reais.
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import os from "node:os";
 import path from "node:path";
 import { lerCentralXlsx } from "../../src/modules/gestao-financeira/dominio/importacao/leitorCentralXlsx.js";
 import { planejarImportacaoCentral } from "../../src/financeiro-calculos/importacaoCentral.js";
@@ -24,20 +25,54 @@ const IMPORTADOR = "00000000-0000-4000-8000-0000000c0de1";   // autor sintético
 
 if (!ARQ || !DP || !SAIDA) sair(2, "uso: --central <xlsx> --de-para <json> --org <uuid> --unidade <uuid> --db fin20xxx --saida <pasta> [--aplicar]");
 if (!UUID.test(ORG ?? "") || !UUID.test(UNI ?? "")) sair(2, "RECUSADO: --org e --unidade precisam ser UUIDs");
-if (!/^fin20[a-z0-9_]*$/.test(DB ?? "")) sair(2, "RECUSADO: só bancos descartáveis fin20*");
-const CL = process.env.PG_CLUSTER_DIR;
-if (!CL || !existsSync(path.join(CL, "MARCADOR_DESCARTAVEL"))) sair(2, "RECUSADO: PG_CLUSTER_DIR sem MARCADOR_DESCARTAVEL");
+// ---- destino: banco DESCARTÁVEL (padrão) ou PRODUÇÃO (--producao, com as mesmas travas dos scripts de migration) ----
+const PRODUCAO = process.argv.includes("--producao");
+const REF_PROD = "uqybgauuxcrqzquultfu", REF_TESTE = "wiqqsxnysbzhcrzrrean";
 const PSQL = existsSync("C:/Program Files/PostgreSQL/17/bin/psql.exe") ? "C:/Program Files/PostgreSQL/17/bin/psql.exe" : "psql";
 const AMBIENTE = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^PG/.test(k)));   // nenhum PG* do terminal desvia o destino
 AMBIENTE.PGCLIENTENCODING = "UTF8";
-const psql = (sql, { usuario = "postgres" } = {}) => {
-  const r = spawnSync(PSQL, ["-X", "-h", "127.0.0.1", "-p", "54321", "-U", usuario, "-d", DB, "-v", "ON_ERROR_STOP=1", "-tA", "-q", "-f", "-"],
-    { input: sql, encoding: "utf8", maxBuffer: 256 << 20, env: AMBIENTE });
-  if (r.status !== 0) throw new Error(r.stderr.split("\n").filter((l) => /ERRO|ERROR|DETAIL|DETALHE/.test(l)).slice(0, 4).join("\n") || r.stderr);
-  return r.stdout.trim();
-};
-const dd = psql("show data_directory").replace(/\\/g, "/").toLowerCase();
-if (!dd.startsWith(path.resolve(CL).replace(/\\/g, "/").toLowerCase())) sair(2, "RECUSADO: o servidor em 127.0.0.1:54321 não é o cluster descartável informado");
+const CONN = process.env.PROD_CONN ?? "";
+const ocultar = (t) => String(t ?? "").split(CONN || "\u0000").join("<conexão>");
+let psql;
+if (PRODUCAO) {
+  if (!CONN || CONN.includes(REF_TESTE) || /[#\s]/.test(CONN)) sair(2, "RECUSADO: defina PROD_CONN da PRODUÇÃO (sem '#', espaço ou o projeto de testes)");
+  const estrito = new RegExp(String.raw`^postgres(?:ql)?://(?:postgres@|postgres:[A-Za-z0-9%._~!$'()*+,;=-]+@)db\.${REF_PROD}\.supabase\.co:5432/postgres(?:\?sslmode=(?:require|verify-ca|verify-full))?$`
+    + String.raw`|^postgres(?:ql)?://postgres\.${REF_PROD}(?::[A-Za-z0-9%._~!$'()*+,;=-]+)?@aws-[0-9]+-us-west-2\.pooler\.supabase\.com:5432/postgres(?:\?sslmode=(?:require|verify-ca|verify-full))?$`);
+  if (!estrito.test(CONN)) sair(2, `RECUSADO: PROD_CONN fora do formato exigido (db.${REF_PROD}.supabase.co:5432/postgres)`);
+  // leitura em transação read-only; escrita SÓ no bloco de gravação (sql começando por "begin isolation level read committed") e com --aplicar
+  psql = (sql) => {
+    const escrita = APLICAR && /^begin isolation level read committed;/.test(sql);
+    const env = { ...AMBIENTE, PGAPPNAME: "financeiro-importacao-central", PGOPTIONS: escrita ? "-c statement_timeout=180000" : "-c default_transaction_read_only=on -c statement_timeout=120000" };
+    const r = spawnSync(PSQL, ["-X", "-v", "ON_ERROR_STOP=1", "-tA", "-q", "-f", "-", CONN], { input: sql, encoding: "utf8", maxBuffer: 256 << 20, env });
+    if (r.status !== 0) throw new Error(ocultar(r.stderr.split("\n").filter((l) => /ERRO|ERROR|DETAIL|DETALHE/.test(l)).slice(0, 4).join("\n") || r.stderr));
+    return ocultar(r.stdout.trim());
+  };
+  const ident = JSON.parse(psql(`select to_json(md5((select system_identifier::text from pg_control_system()) || '|' || (select oid::text from pg_database where datname = current_database()) || '|' || current_database()))`));
+  if (process.env.PROD_IDENTIDADE !== ident) sair(2, "RECUSADO: PROD_IDENTIDADE ausente ou diferente da identidade deste banco (rode o preflight)");
+  if (APLICAR) {
+    if (process.env.PROD_AUTORIZO_IMPORTACAO !== "SIM") sair(2, "RECUSADO: gravar em produção exige PROD_AUTORIZO_IMPORTACAO=SIM");
+    const man = path.join(process.env.PROD_EVIDENCIAS || path.join(os.tmpdir(), "evidencias-prod"), process.env.PROD_MANIFESTO || "152-exportacao-manifesto.json");
+    if (!existsSync(man)) sair(2, "RECUSADO: exportação financeira não encontrada (rode 'exportar' antes)");
+    const m = JSON.parse(readFileSync(man, "utf8"));
+    const sha = createHash("sha256").update(readFileSync(m.arquivo)).digest("hex");
+    if (m.sha256 !== process.env.PROD_EXPORTACAO || sha !== m.sha256) sair(2, "RECUSADO: PROD_EXPORTACAO não confere com a exportação (ou o arquivo foi alterado)");
+    if (m.identidade !== ident) sair(2, "RECUSADO: a exportação é de outro banco");
+    if (Date.now() - Date.parse(m.em) > 6 * 3600 * 1000) sair(2, "RECUSADO: exportação com mais de 6 h — exporte de novo antes de gravar");
+  }
+  console.log(`ALVO: PRODUÇÃO ${REF_PROD} (${APLICAR ? "GRAVAÇÃO autorizada" : "simulação, somente leitura"})`);
+} else {
+  if (!/^fin20[a-z0-9_]*$/.test(DB ?? "")) sair(2, "RECUSADO: só bancos descartáveis fin20* (produção exige --producao e as travas)");
+  const CL = process.env.PG_CLUSTER_DIR;
+  if (!CL || !existsSync(path.join(CL, "MARCADOR_DESCARTAVEL"))) sair(2, "RECUSADO: PG_CLUSTER_DIR sem MARCADOR_DESCARTAVEL");
+  psql = (sql, { usuario = "postgres" } = {}) => {
+    const r = spawnSync(PSQL, ["-X", "-h", "127.0.0.1", "-p", "54321", "-U", usuario, "-d", DB, "-v", "ON_ERROR_STOP=1", "-tA", "-q", "-f", "-"],
+      { input: sql, encoding: "utf8", maxBuffer: 256 << 20, env: AMBIENTE });
+    if (r.status !== 0) throw new Error(r.stderr.split("\n").filter((l) => /ERRO|ERROR|DETAIL|DETALHE/.test(l)).slice(0, 4).join("\n") || r.stderr);
+    return r.stdout.trim();
+  };
+  const dd = psql("show data_directory").replace(/\\/g, "/").toLowerCase();
+  if (!dd.startsWith(path.resolve(CL).replace(/\\/g, "/").toLowerCase())) sair(2, "RECUSADO: o servidor em 127.0.0.1:54321 não é o cluster descartável informado");
+}
 
 const j = (sql) => JSON.parse(psql(sql) || "null");
 function lerSistema() {

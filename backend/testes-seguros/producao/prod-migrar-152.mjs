@@ -153,7 +153,7 @@ function avaliarAntes(x) {
   if (x.locksEsperando > 0) m.push(`${x.locksEsperando} trava(s) aguardando: espere e repita o preflight`);
   return m;
 }
-const resumo = (x) => `tabelas fin_* antigas: ${x.tabelasFinAntigas} | objetos 152: ${x.tabelas151.length ? x.tabelas151.join(",") : "nenhum"} | funções compartilhadas: ${x.md5Lista === MD5.antes.lista && x.md5Guarda === MD5.antes.guarda ? "versão da 120" : x.md5Lista === MD5.depois.lista && x.md5Guarda === MD5.depois.guarda ? "versão da 151" : "VERSÃO DESCONHECIDA"} | níveis em uso: ${x.niveisEmUso.join(",") || "—"} | transações longas: ${x.transacoesLongas} | travas aguardando: ${x.locksEsperando}`;
+const resumo = (x) => `tabelas fin_* antigas: ${x.tabelasFinAntigas} | objetos 152: ${x.tabelas151.length ? x.tabelas151.join(",") : "nenhum"} | funções compartilhadas: ${x.md5Lista === MD5.antes.lista && x.md5Guarda === MD5.antes.guarda ? "versão da 151 (antes da 152)" : x.md5Lista === MD5.depois.lista && x.md5Guarda === MD5.depois.guarda ? "versão da 152" : "VERSÃO DESCONHECIDA"} | níveis em uso: ${x.niveisEmUso.join(",") || "—"} | transações longas: ${x.transacoesLongas} | travas aguardando: ${x.locksEsperando}`;
 /** Comparação de conteúdo antes × depois: toda tabela que existia ANTES precisa ter a mesma impressão digital (as da 151 nascem vazias). */
 function compararConteudo(antes, depois) {
   const existentes = Object.keys(antes.impressoes).filter((t) => !TABELAS_151.includes(t));

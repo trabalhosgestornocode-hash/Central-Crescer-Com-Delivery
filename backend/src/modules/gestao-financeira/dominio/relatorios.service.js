@@ -6,18 +6,21 @@ import { periodo, enumerado, bad } from "./validacao.js";
 import { apurar, saldosPorConta, INDICADORES, validarParesTransferencia } from "../../../financeiro-calculos/motor.js";
 import { paraEntradaMotor, aberturasComoLancamentos, montarDre, compararDres, rankingCategorias, serieMovimento, movimentoPorConta } from "../../../financeiro-calculos/relatorios.js";
 import { formatarBps, formatarCentavos } from "../../../financeiro-calculos/dinheiro.js";
+import { planoParaExibicao } from "../../../financeiro-calculos/rotulosCategorias.js";
 
 const padrao = { repo: repositorio, db: undefined };
 
-async function carregar(ctx, { de, ate }, deps) {
+// `exibicao`: usa o nome de EXIBIÇÃO das categorias (ex.: FRETE → Entregadores Próprios). Fechamento de período NÃO usa (snapshot fiel ao gravado).
+async function carregar(ctx, { de, ate }, deps, exibicao = false) {
   const [lancs, cats, contas, aberturas] = await Promise.all([
     deps.repo.listarTodosLancamentos(ctx, { de, ate }, deps.db),
     deps.repo.listarPlanoContas(ctx, deps.db),
     deps.repo.listarContas(ctx, deps.db),
     deps.repo.listarAberturas(ctx, deps.db),
   ]);
-  const categoriasPorId = new Map(cats.map((c) => [c.id, c]));
-  return { lancs, cats, categoriasPorId, contas, aberturas };
+  const catsExib = exibicao ? planoParaExibicao(ctx.organizacaoId, cats, deps.env ?? process.env) : cats;
+  const categoriasPorId = new Map(catsExib.map((c) => [c.id, c]));
+  return { lancs, cats: catsExib, categoriasPorId, contas, aberturas };
 }
 
 /** Entrada do motor para o período: lançamentos classificados + aberturas do período como "saldo anterior". */
@@ -83,13 +86,13 @@ function abrirMapa(aberturas) {
 export async function dre(ctx, q, deps = padrao) {
   const c = exigirContexto(ctx);
   const p = periodo(q);
-  const base = await carregar(c, p, deps);
+  const base = await carregar(c, p, deps, true);
   const { comAberturas } = entradaMotor(base, p);
   const atual = montarDre(comAberturas, base.categoriasPorId);
   let comparacao = null;
   const pc = periodo({ de: q?.compararDe, ate: q?.compararAte });
   if (pc.de || pc.ate) {
-    const base2 = await carregar(c, pc, deps);
+    const base2 = await carregar(c, pc, deps, true);
     const anterior = montarDre(entradaMotor(base2, pc).comAberturas, base2.categoriasPorId);
     comparacao = { periodo: pc, linhas: compararDres(atual, anterior), parcial: anterior.parcial };
   }
@@ -129,7 +132,7 @@ export async function indicadores(ctx, q, deps = padrao) {
 export async function categorias(ctx, q, deps = padrao) {
   const c = exigirContexto(ctx);
   const p = periodo(q);
-  const base = await carregar(c, p, deps);
+  const base = await carregar(c, p, deps, true);
   const { mov } = entradaMotor(base, p);
   return { periodo: p, vazio: base.lancs.length === 0, regime: "caixa", ...rankingCategorias(mov, base.categoriasPorId) };
 }

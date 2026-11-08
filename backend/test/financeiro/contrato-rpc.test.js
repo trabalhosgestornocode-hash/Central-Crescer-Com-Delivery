@@ -1,4 +1,4 @@
-// Contrato repositório ⇄ SQL: toda RPC chamada pelo backend existe nos SQL do domínio (121 + 122) com EXATAMENTE os mesmos parâmetros.
+// Contrato repositório ⇄ SQL: toda RPC chamada pelo backend existe nos SQL do domínio (121 + 122 + 155) com EXATAMENTE os mesmos parâmetros.
 // Evita a divergência silenciosa entre a camada de aplicação e o banco (que só apareceria em homologação).
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,7 +11,7 @@ const dominio = join(aqui, "..", "..", "src", "modules", "gestao-financeira", "d
 const raizRepo = join(aqui, "..", "..", "..");
 // 121 (provisória ou promovida em database/migrations) + 122 (proposta); rollbacks ignorados
 const dirs = ["docs/gestao-financeira/sql-provisorio", "docs/gestao-financeira/proposta-122", "database/migrations"].map((d) => join(raizRepo, d));
-const arquivos = dirs.flatMap((d) => { try { return readdirSync(d).filter((f) => /^12[12]_.*\.sql$/.test(f) && !f.includes("rollback")).map((f) => join(d, f)); } catch { return []; } });
+const arquivos = dirs.flatMap((d) => { try { return readdirSync(d).filter((f) => /^(12[12]|155)_.*\.sql$/.test(f) && !f.includes("rollback")).map((f) => join(d, f)); } catch { return []; } });
 const sql = arquivos.map((f) => readFileSync(f, "utf8")).join("\n");
 const funcoes = new Map();
 for (const m of sql.matchAll(/create or replace function (fin_[a-z_]+)\(([\s\S]*?)\)\s*returns/g)) {

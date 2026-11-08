@@ -203,7 +203,7 @@ describe("migration 147 — estático", () => {
   test("não há outra 147; posteriores só as conhecidas (148 = conexão compartilhada; 149 = administração; 150 = uma coleta por unidade; 151/152 = Financeiro 2.0, fora do Foody; aditivas)", () => {
     const arqs = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && !/rollback/i.test(f));
     assert.equal(arqs.filter((f) => f.startsWith("147")).length, 1);
-    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "147").sort(), ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql", "151_financeiro_2_contas_pagar.sql", "152_financeiro_2_rateios_recebiveis_dividas.sql"]);
+    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "147").sort(), ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql", "151_financeiro_2_contas_pagar.sql", "152_financeiro_2_rateios_recebiveis_dividas.sql", "153_financeiro_2_vendas_por_canal.sql", "154_financeiro_2_pagamento_origem.sql", "155_financeiro_2_transferencia_multipla.sql"]);
   });
   test("numeração: 144 é do Termo v3 em produção (fora da pasta); 144–146 não existem no repositório; Foody só em 147–150", () => {
     const todos = readdirSync(MIGRATIONS);

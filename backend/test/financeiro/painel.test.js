@@ -65,13 +65,17 @@ test("contas a pagar em aberto e acréscimo presumido (pago acima do original) s
   assert.equal(p.indicadores.contasAPagar.valorCentavos, 30000);
   assert.equal(p.indicadores.jurosEncargos.valorCentavos, 50);
   assert.equal(p.indicadores.jurosEncargos.estado, "proposta");
-  assert.match(p.indicadores.jurosEncargos.nota, /Confirmados: R\$ 0,00/);
+  assert.match(p.indicadores.jurosEncargos.nota, /Pagos no mês: R\$ 0,50/);
+  assert.match(p.indicadores.jurosEncargos.nota, /presumido não é juros até a classificação/);
 });
 
 test("sem contas a pagar: indicadores gerenciais ficam 'parcial' (nunca completos de mentira)", async () => {
   const p = await painel(ctx, { mes: "2026-09" }, deps({ obrigacoes: [], pagamentos: [] }));
   assert.equal(p.indicadores.cmv.estado, "parcial");
   assert.equal(p.indicadores.faturamentoBruto.estado, "ok");
+  // nunca um número enganoso: sem contas a pagar, líquido/custos/despesas/resultado/margem saem SEM valor
+  for (const k of ["faturamentoLiquido", "cmv", "custos", "despesas", "resultadoGerencial", "margemLiquida"]) assert.equal(p.indicadores[k].valorCentavos, null, k);
+  assert.equal(p.indicadores.faturamentoBruto.valorCentavos, 100000);
 });
 
 test("receitas: vendas por dia, taxas por canal e recebimento por conta sem transferências", async () => {

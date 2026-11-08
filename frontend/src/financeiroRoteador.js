@@ -43,6 +43,9 @@ export async function renderPaginaFinanceira(rotaId, { aoPerderAcesso }) {
   if (typeof modulo?.render === "function") {
     alvo.innerHTML = "";
     await modulo.render(alvo, { rota: item, nivel: status.nivel, permissoes: status.permissoes ?? [], sessao: state.sessao });
+    if (status?.financeiro2 === true && state.rota === rotaNoInicio) {   // barra global (+ Novo lançamento · Conferências) só no Financeiro 2.0
+      try { (await import("./financeiro/acoesGlobais.js")).montarAcoesGlobais(alvo, { permissoes: status.permissoes ?? [], rotaId: item.id }); } catch { /* a página segue funcionando sem a barra */ }
+    }
     return;
   }
   alvo.innerHTML = estado(`${escapeHtml(item.label)} — em construção`, "Esta área do Dashboard Financeiro ainda não está disponível.");

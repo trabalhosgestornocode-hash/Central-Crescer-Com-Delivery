@@ -1,6 +1,7 @@
 // Relatórios TABULARES (tela Relatórios) e exportações CSV/XLSX. NÃO há segundo motor de indicadores: tudo reaproveita os mesmos cálculos e fontes
 // do domínio homologado (motor.apurar, montarDre, rankingCategorias, serieMovimento, movimentoPorConta, saldosPorConta, conciliação, períodos).
 // Contexto (organização/unidade) vem só do gate; filtro de unidade só aceita a unidade do próprio contexto.
+import { planoParaExibicao } from "../../../financeiro-calculos/rotulosCategorias.js";
 import * as repositorio from "./repositorio.js";
 import { exigirContexto } from "./contexto.js";
 import { periodo, uuid, enumerado, bad } from "./validacao.js";
@@ -71,7 +72,7 @@ async function gerarRelatorio(c, id, q, deps) {
   if (!def) throw ApiError.notFound("Relatório não encontrado.");
   const agora = (deps.agora ?? padrao.agora)();
   const [contasL, catsL] = await Promise.all([deps.repo.listarContas(c, deps.db), deps.repo.listarPlanoContas(c, deps.db)]);
-  const listas = { contas: contasL, cats: catsL };
+  const listas = { contas: contasL, cats: planoParaExibicao(c.organizacaoId, catsL, deps.env ?? process.env) };
   const f = lerFiltros(c, q, listas);
   const per = { de: f.de ?? undefined, ate: f.ate ?? undefined };
   const filtrado = Boolean(f.contaId || f.categoriaId);
@@ -88,7 +89,7 @@ async function gerarRelatorio(c, id, q, deps) {
     return { ...def, colunas: [col("mes", "Mês"), col("situacao", "Situação"), col("versao", "Versão", "inteiro"), col("fechadoEm", "Fechado em", "data"), col("reabertoEm", "Reaberto em", "data"), col("motivoReabertura", "Motivo da reabertura"), col("resultado", "Resultado gerencial no fechamento (R$)", "moeda"), col("pendencias", "Pendências no fechamento", "inteiro")], linhas, meta: metaDe(f, listas, { geradoEm: agora, avisos: linhas.length ? [] : ["Nenhum período registrado no intervalo."] }) };
   }
 
-  const base = await carregarBase(c, per, { repo: deps.repo, db: deps.db });
+  const base = await carregarBase(c, per, { repo: deps.repo, db: deps.db, env: deps.env }, true);
   const lancs = aplicar(base.lancs, f, { usaTipo: id === "movimentacoes" || id === "fluxo-caixa", usaStatus: id === "movimentacoes", usaCategoria: id !== "categorias" });
   const avisosPend = lancs.filter((l) => l.status !== "cancelado" && (!l.categoria_id || l.classificacao_pendente)).length
     ? [`${lancs.filter((l) => l.status !== "cancelado" && (!l.categoria_id || l.classificacao_pendente)).length} lançamento(s) pendentes de classificação neste relatório.`] : [];
@@ -125,7 +126,7 @@ async function gerarRelatorio(c, id, q, deps) {
   if (id === "movimentacao-conta") {
     const contasAlvo = listas.contas.filter((x) => x.ativo && (!f.contaId || x.id === f.contaId));
     const mp = movimentoPorConta(mov, contasAlvo);
-    const ateBase = await carregarBase(c, { de: undefined, ate: per.ate }, { repo: deps.repo, db: deps.db });
+    const ateBase = await carregarBase(c, { de: undefined, ate: per.ate }, { repo: deps.repo, db: deps.db, env: deps.env }, true);
     const movAte = paraEntradaMotor(aplicar(ateBase.lancs, f, { usaTipo: false, usaCategoria: true }), ateBase.categoriasPorId);
     const sal = saldosPorConta(contasAlvo, abrirMapa(base.aberturas), aposAbertura(movAte, base.aberturas));
     const porId = new Map(sal.contas.map((s) => [s.contaId, s]));

@@ -67,7 +67,7 @@ test("103 e 103_rollback existem; nada acima de 103 apareceu junto", () => {
       "149_foody_conexao_administracao.sql", "149_rollback.sql",
       "150_foody_sync_uma_em_andamento.sql", "150_rollback.sql",
       // 151 = Financeiro 2.0 (contas a pagar, acréscimos, conciliação de saídas): só fin_*/gestao_financeira_*, sem tocar o domínio iFood.
-      "151_financeiro_2_contas_pagar.sql", "151_rollback.sql", "152_financeiro_2_rateios_recebiveis_dividas.sql", "152_rollback.sql"]);
+      "151_financeiro_2_contas_pagar.sql", "151_rollback.sql", "152_financeiro_2_rateios_recebiveis_dividas.sql", "152_rollback.sql", "153_financeiro_2_vendas_por_canal.sql", "153_rollback.sql", "154_financeiro_2_pagamento_origem.sql", "154_rollback.sql", "155_financeiro_2_transferencia_multipla.sql", "155_rollback.sql"]);
   const acima = readdirSync(MIG).filter((f) => /^\d{3}_/.test(f) && Number(f.slice(0, 3)) > 103 && !POSTERIORES_CONHECIDAS.has(f));
   assert.deepEqual(acima, []);
 });
