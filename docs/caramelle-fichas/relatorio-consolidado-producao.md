@@ -87,16 +87,23 @@ de reversão **158 → 157**. Ambas são aditivas e idempotentes (aplicadas 2× 
 ### 4.1 Falhas preexistentes do backend (investigadas e separadas)
 Medido em `main` limpo (`9df9b60`): 6.297 testes, **20 falhas**, 1 cancelado. Na branch: ver tabela final abaixo. **Nenhuma falha é da branch**; as da branch são subconjunto das de `main`:
 
-| Grupo | Nº | Causa (evidência) | Ação |
-|---|---:|---|---|
-| Central/Comunicação (`central-conversas`, visão geral, destinatários) | 13 | asserções de roster/não lidas/foto divergem; falham idênticas em `main` | tratar em PR próprio da Comunicação |
-| Guardas de numeração de migration (088, 103, 147) | 3 | asseveram "nada acima de N"/lista fechada de migrations posteriores; já falham com 148–156 em `main` | atualizar as guardas num PR separado (a 157/158 só aumentam a lista) |
-| `sessao-perfil` (`fetch failed`) | 3 | tenta rede real contra `127.0.0.1:9` do ambiente fictício | falha de **ambiente** |
-| `checklist-operacional-service` | 1 | estouro de 120 s (suíte pesada/trava) | investigar à parte |
-| `performance-calc` ("distribuições recompõem mês…") | 1 | falha conhecida de `main` | à parte |
+| Grupo | Causa (evidência) | Ação |
+|---|---|---|
+| Central de Comunicação (conversas, não lidas, foto de perfil, visão geral, destinatários) | asserções de roster/não lidas/foto divergem; falham **idênticas** em `main` limpo | tratar em PR próprio da Comunicação |
+| Guardas de numeração de migration (088, 103, 147) | asseveram "nada acima de N"/lista fechada de migrations posteriores; já falham com 148–156 em `main` (a 157/158 só aumentam a lista) | atualizar as guardas num PR separado |
+| `sessao-perfil` ("fetch failed") | tenta rede real contra `127.0.0.1:9` do ambiente fictício | falha de **ambiente** |
+| `checklist-operacional-service` | estouro de 120 s (suíte pesada/trava) | investigar à parte |
+| `performance-calc` ("distribuições recompõem mês…") | falha conhecida de `main` | à parte |
 Intermitente conhecida (`dashboard-executivo-metas-dinamicas`) oscila entre as medições.
 
-REGRESSAO_FINAL
+**Suíte completa do backend, comparada com `main` limpo (mesma máquina, mesmo ambiente fictício):**
+
+| | Testes | Passam | Falham | Cancelados | Pulados |
+|---|---:|---:|---:|---:|---:|
+| `main` limpo (`9df9b60`) | 6.297 | 6.251 | 20 | 1 | 25 |
+| Esta branch (final) | 6.389 | 6.344 | 19 | 1 | 25 |
+
+**Falhas novas introduzidas pela branch: 0.** As 19 falhas da branch são subconjunto exato das de `main` (29 nomes em comum, comparados por nome); a diferença (`dashboard-executivo-metas-dinamicas`, intermitente conhecida) passou na branch. Os 92 testes a mais são os novos desta entrega.
 
 ## 5. Pendências que dependem da Caramelle
 
