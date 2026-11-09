@@ -26,10 +26,13 @@ const lerNum = (v) => { const n = Number(String(v).replace(",", ".")); return St
 export function abrirSimulador(row, condicoes = null) {
   fechar();
   const custo = Number(row.custo) || 0;
-  const precoAtual = Number(row.preco) || Math.max(custo * 2, 1);
+  // Sem preço atual cadastrado o sistema NÃO inventa um: "Hoje" fica indisponível e o ponto de partida do slider é o preço
+  // que daria CMV de 30% (sugestão explícita, não preço da loja).
+  const precoAtual = Number(row.preco) > 0 ? Number(row.preco) : null;
+  const pontoDePartida = custo > 0 ? Math.ceil(((custo * 100) / 30) * 2) / 2 : 10;
   let canal = CANAIS.includes(row.canal) ? row.canal : "balcao";
-  let preco = precoAtual;
-  const maxPreco = Math.max(Math.ceil(precoAtual * 2), Math.ceil(custo * 3), 10);
+  let preco = precoAtual ?? pontoDePartida;
+  const maxPreco = Math.max(Math.ceil((precoAtual ?? pontoDePartida) * 2), Math.ceil(custo * 3), 10);
 
   overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -54,7 +57,7 @@ export function abrirSimulador(row, condicoes = null) {
 
     <div class="sim-topo">
       <div class="sim-info" title="Custo técnico da ficha: ingredientes e embalagens por unidade vendida. Não inclui mão de obra."><span>Custo (ficha técnica)</span><strong>${fmtMoeda(custo)}</strong></div>
-      <div class="sim-info"><span>Preço atual</span><strong>${fmtMoeda(precoAtual)}</strong></div>
+      <div class="sim-info" ${precoAtual == null ? 'title="Este produto ainda não tem preço de venda cadastrado. O simulador começa no preço que daria CMV de 30%."' : ""}><span>Preço atual</span><strong>${precoAtual == null ? "não cadastrado" : fmtMoeda(precoAtual)}</strong></div>
       <div class="sim-info">
         <span>Canal</span>
         <select id="sim-canal">${opcoesCanal}</select>

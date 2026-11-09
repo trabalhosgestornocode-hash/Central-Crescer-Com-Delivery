@@ -50,7 +50,8 @@ export async function carregarGrafo(organizacaoId) {
   const homologacaoById = new Map(produtos.map((p) => [p.id, p.homologacao]));
   const homologadoCustoById = new Map(produtos.map((p) => [p.id, p.homologado_custo]));
   const homologacaoMotivoById = new Map(produtos.map((p) => [p.id, p.homologacao_motivo]));
-  return { insumoById, nomeProdById, fichaByProd, produtos, rendimentoById, homologacaoById, homologadoCustoById, homologacaoMotivoById };
+  const unidadeRendimentoById = new Map(produtos.map((p) => [p.id, p.unidade_rendimento]));
+  return { insumoById, nomeProdById, fichaByProd, produtos, rendimentoById, homologacaoById, homologadoCustoById, homologacaoMotivoById, unidadeRendimentoById };
 }
 
 /**
@@ -128,6 +129,36 @@ export function custoMaoDeObraUnitario(linhas, rendimento = 1) {
   return total / (Number.isFinite(r) && r > 0 ? r : 1);
 }
 
+/**
+ * Mão de obra de um produto, SEMPRE separada do CMV: a própria (linhas da ficha) + a herdada das preparações usadas
+ * (a planilha soma a MOD da base no custo da ficha que a usa). Null = faltou o custo por minuto em algum ponto.
+ * @param {string} produtoId @param {object} grafo @param {Map<string, Array>} modPorProduto de carregarMaoDeObra()
+ * @returns {{linhas: Array, proprio_lote: number|null, herdado_lote: number|null, total_lote: number|null, custo_unitario: number|null}}
+ */
+export function maoDeObraDoProduto(produtoId, grafo, modPorProduto) {
+  const lote = (pid, prof = 0) => {
+    if (prof > PROF_MAX) return { proprio: null, herdado: null };
+    const linhas = modPorProduto.get(pid) ?? [];
+    const proprio = linhas.every((l) => l.custo_minuto != null && l.custo_minuto !== "")
+      ? linhas.reduce((s, l) => s + (Number(l.minutos) || 0) * Number(l.custo_minuto), 0) : null;
+    let herdado = 0;
+    for (const f of grafo.fichaByProd.get(pid) ?? []) {
+      if (!linhaAtiva(f) || !f.subproduto_id) continue;
+      const sub = lote(f.subproduto_id, prof + 1);
+      const subTotal = sub.proprio == null || sub.herdado == null ? null : sub.proprio + sub.herdado;
+      if (subTotal == null) { herdado = null; break; }
+      herdado += (Number(f.quantidade) || 0) * (subTotal / rendimentoDe(f.subproduto_id, grafo));
+    }
+    return { proprio, herdado };
+  };
+  const { proprio, herdado } = lote(produtoId);
+  const total = proprio == null || herdado == null ? null : proprio + herdado;
+  return {
+    linhas: modPorProduto.get(produtoId) ?? [], proprio_lote: proprio, herdado_lote: herdado, total_lote: total,
+    custo_unitario: total == null ? null : total / rendimentoDe(produtoId, grafo),
+  };
+}
+
 /** Carrega a mão de obra por produto (tabela da migration 157). Só para as telas novas — nunca no caminho legado. */
 export async function carregarMaoDeObra(organizacaoId) {
   const { data, error } = await supabase
@@ -188,9 +219,10 @@ export function componentesDiretos(produtoId, grafo) {
       categoria: null,
       insumo_ativo: true,
       quantidade: Number(f.quantidade),
-      unidade: "un",
+      // preparação usada por peso/volume: a unidade é a do rendimento dela (g, ml…); sem unidade (Subways) segue "un"
+      unidade: grafo.unidadeRendimentoById?.get(f.subproduto_id) ?? "un",
       quantidade_base: Number(f.quantidade),
-      unidade_base: "un",
+      unidade_base: grafo.unidadeRendimentoById?.get(f.subproduto_id) ?? "un",
       custo_unitario_base: custoSub,
       custo_aplicado: Number(f.quantidade) * custoSub,
       observacao: f.observacao ?? null,

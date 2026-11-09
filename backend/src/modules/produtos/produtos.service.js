@@ -5,7 +5,7 @@ import * as v from "../../shared/validar.js";
 import {
   carregarGrafo, componentesDiretos, custoTotalProduto, ingredientesExplodidos,
   produtosAfetadosPorInsumo, produtosAfetadosPorProduto, recalcularCache, resumoProduto, homologacaoEfetiva,
-  carregarMaoDeObra, custoMaoDeObraUnitario, rendimentoDe,
+  carregarMaoDeObra, custoMaoDeObraUnitario, rendimentoDe, maoDeObraDoProduto,
 } from "./custo.js";
 import {
   converterQuantidade, statusFicha, validarComponenteFicha, UNIDADES,
@@ -65,7 +65,47 @@ export async function obterProduto({ organizacaoId, id }) {
     status_ficha: status,
     rendimento: rendimentoDe(produtoId, grafo),
     homologacao_info: await infoHomologacao(produto, grafo),
+    // Catálogo controlado (importado/independente): formação de custo, MOD e pendências. Subways (nao_aplicavel) não recebem.
+    controlado: (produto.homologacao ?? "nao_aplicavel") !== "nao_aplicavel",
+    catalogo: (produto.homologacao ?? "nao_aplicavel") !== "nao_aplicavel" ? await detalheCatalogo({ organizacaoId, produto, grafo, ficha }) : null,
     unidades: UNIDADES,
+  };
+}
+
+/**
+ * Formação de custo, mão de obra e pendências — SÓ para produtos com catálogo controlado (importados/independentes).
+ * Nada é inventado: grupo com algum item sem custo devolve total null.
+ */
+async function detalheCatalogo({ organizacaoId, produto, grafo, ficha }) {
+  const [origemRes, mod] = await Promise.all([
+    supabase.from("catalogo_origem").select("referencia, pendencias").eq("organizacao_id", organizacaoId)
+      .eq("entidade", "produto").eq("entidade_id", produto.id).maybeSingle(),
+    carregarMaoDeObra(organizacaoId).catch(() => new Map()),
+  ]);
+  const origem = origemRes?.data ?? null;
+  const ativos = ficha.filter((c) => c.ativo !== false);
+  // Item sem custo (ausente OU zero) torna o grupo indisponível: somar zero esconderia o dado faltante.
+  const semCusto = (c) => c.custo_aplicado == null || c.custo_unitario_base == null || Number(c.custo_unitario_base) <= 0;
+  const grupo = (fn) => {
+    const l = ativos.filter(fn);
+    return { itens: l.length, total: l.some(semCusto) ? null : l.reduce((s, c) => s + Number(c.custo_aplicado), 0) };
+  };
+  const lote = {
+    ingredientes: grupo((c) => c.tipo === "insumo" && c.categoria !== "embalagem"),
+    preparacoes: grupo((c) => c.tipo === "submontagem"),
+    embalagens: grupo((c) => c.tipo === "insumo" && c.categoria === "embalagem"),
+    total: ativos.some(semCusto) ? null : ativos.reduce((s, c) => s + Number(c.custo_aplicado), 0),
+  };
+  const rend = rendimentoDe(produto.id, grafo);
+  return {
+    categoria: origem?.referencia?.fontes?.[0]?.categoria ?? null,
+    natureza: produto.vendavel === false ? "preparacao" : "produto_final",
+    pendencias: origem?.pendencias ?? [],
+    formacao_custo: {
+      lote, rendimento: rend, unidade_rendimento: produto.unidade_rendimento ?? null,
+      custo_unitario_materiais: lote.total == null ? null : lote.total / rend,
+    },
+    mao_de_obra: maoDeObraDoProduto(produto.id, grafo, mod),
   };
 }
 

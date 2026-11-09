@@ -214,3 +214,74 @@ test("código do PDV: grava, é ÚNICO por empresa (sem diferenciar caixa), pode
   const lista = await svc.listarFichasCatalogo({ organizacaoId: A });
   assert.ok(lista.itens.every((i) => "codigo_pdv" in i));
 });
+
+// ---------------------------------------------------------------- detalhe do produto (o mesmo obterProduto das Subways)
+async function ambienteDetalhe() {
+  const e = await ambiente();
+  const t = e.db.tabelas;
+  t.insumos.push({ id: id(910), organizacao_id: A, nome: "Caixa", tipo: "embalagem", unidade_medida: "un", preco_unitario: 1.2, ativo: true });
+  t.produtos.push(P(5, A, { nome: "Calda", vendavel: false, rendimento: 500, unidade_rendimento: "g" })); // preparação
+  t.ficha_tecnica.push(
+    { id: id(810), produto_id: id(5), insumo_id: id(901), quantidade: 50, ativo: true },    // calda: lote 0,50 => 0,001/g
+    { id: id(811), produto_id: id(1), subproduto_id: id(5), quantidade: 100, ativo: true }, // 100 g de calda => 0,10
+    { id: id(812), produto_id: id(1), insumo_id: id(910), quantidade: 1, ativo: true });    // embalagem 1,20
+  t.ficha_mao_de_obra.push(
+    { organizacao_id: A, produto_id: id(1), funcao: "confeiteira", minutos: 10, custo_minuto: 0.3 },   // própria: 3,00 no lote
+    { organizacao_id: A, produto_id: id(5), funcao: "confeiteira", minutos: 25, custo_minuto: 0.2 },   // calda: 5,00 no lote de 500 g
+    { organizacao_id: B, produto_id: id(3), funcao: "outra", minutos: 99, custo_minuto: 9 });
+  t.produto_precos = [{ produto_id: id(1), canal: "ifood", tabela: "A", preco: 20, desatualizado: false }];
+  return e;
+}
+const detalheDe = (svc, org, n) => svc.obterProduto({ organizacaoId: org, id: id(n) });
+
+test("DETALHE Subway (nao_aplicavel): sem campos de catálogo e com o MESMO custo/ficha de sempre", async () => {
+  const { svc } = await ambienteDetalhe();
+  const d = await detalheDe(svc, A, 4);
+  assert.equal(d.controlado, false); assert.equal(d.catalogo, null);
+  assert.ok(Math.abs(d.custo - 1) < 1e-9);               // 100 g × 0,01 — rendimento 1
+  assert.equal(d.ficha.length, 1); assert.equal(d.ficha[0].nome, "Cenoura");
+  assert.equal(d.homologacao_info.estado, "nao_aplicavel");
+});
+test("DETALHE Caramelle: formação do custo por grupo, rendimento, custo unitário e mão de obra SEPARADA (própria + herdada)", async () => {
+  const { svc } = await ambienteDetalhe();
+  await svc.definirHomologacao({ organizacaoId: A, produtoId: id(1), acao: "reabrir", usuario: ADMIN }).catch(() => {});
+  const d = await detalheDe(svc, A, 1);
+  assert.equal(d.controlado, true);
+  const f = d.catalogo.formacao_custo;
+  assert.ok(Math.abs(f.lote.ingredientes.total - 4) < 1e-9);       // 400 g × 0,01
+  assert.ok(Math.abs(f.lote.preparacoes.total - 0.1) < 1e-9);      // 100 g × (0,50/500)
+  assert.ok(Math.abs(f.lote.embalagens.total - 1.2) < 1e-9);
+  assert.ok(Math.abs(f.lote.total - 5.3) < 1e-9);
+  assert.equal(f.rendimento, 4);
+  assert.ok(Math.abs(f.custo_unitario_materiais - 1.325) < 1e-9);  // 5,30 / 4
+  assert.ok(Math.abs(d.custo - 1.325) < 1e-9);                     // o custo do produto É o unitário (base do CMV)
+  const m = d.catalogo.mao_de_obra;
+  assert.ok(Math.abs(m.proprio_lote - 3) < 1e-9); assert.ok(Math.abs(m.herdado_lote - 100 * (5 / 500)) < 1e-9); // 1,00 herdado da calda
+  assert.ok(Math.abs(m.custo_unitario - 1) < 1e-9);                // (3 + 1) / 4
+  assert.equal(m.linhas.length, 1);
+  assert.ok(!("mao_de_obra" in f) && Math.abs(d.custo - f.custo_unitario_materiais) < 1e-9, "MOD não pode entrar no custo/CMV");
+  assert.equal(d.rendimento, 4); assert.equal(d.catalogo.categoria, "DOCES"); assert.equal(d.catalogo.natureza, "produto_final");
+  assert.equal(d.precos.length, 1);
+});
+test("DETALHE: preparação mostra a unidade do rendimento; produto com insumo sem custo: grupo e unitário null (nada inventado)", async () => {
+  const { svc } = await ambienteDetalhe();
+  const calda = await detalheDe(svc, A, 5);
+  assert.equal(calda.catalogo.natureza, "preparacao"); assert.equal(calda.catalogo.formacao_custo.unidade_rendimento, "g");
+  const inc = await detalheDe(svc, A, 2); // usa insumo sem custo
+  assert.equal(inc.catalogo.formacao_custo.lote.total, null); assert.equal(inc.catalogo.formacao_custo.custo_unitario_materiais, null);
+  assert.equal(inc.catalogo.pendencias[0].codigo, "insumo_sem_custo");
+});
+test("DETALHE: preparação na ficha do pai traz a unidade da preparação (g), nas Subways (sem unidade) segue 'un'", async () => {
+  const { svc } = await ambienteDetalhe();
+  const d = await detalheDe(svc, A, 1);
+  const sub = d.ficha.find((c) => c.tipo === "submontagem");
+  assert.equal(sub.unidade, "g"); assert.equal(sub.unidade_base, "g");
+});
+test("DETALHE ISOLADO: produto/MOD de outra empresa nunca aparecem (404 e nenhum vazamento)", async () => {
+  const { svc } = await ambienteDetalhe();
+  await assert.rejects(() => detalheDe(svc, A, 3), /não encontrado/i);
+  const b = await detalheDe(svc, B, 3);
+  assert.equal(b.catalogo.mao_de_obra.linhas[0].funcao, "outra");
+  const a = await detalheDe(svc, A, 1);
+  assert.ok(!JSON.stringify(a).includes("outra"));
+});
