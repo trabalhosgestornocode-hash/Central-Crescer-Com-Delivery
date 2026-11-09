@@ -39,7 +39,7 @@ export function montarCmvTeorico(containerId, unidadeId, mes, ano, deps = {}) {
     return aviso + `
       <div class="cards ct-cards">
         ${card("CMV teórico", pct(c.cmv), "sobre itens vinculados", "Custo das fichas técnicas ÷ receita dos itens vendidos que foram vinculados a produtos.")}
-        ${card("CMV com ficha homologada", pct(c.cmvHomologado), c.homologadoPct == null ? "nenhuma ficha homologada" : `${Math.round(c.homologadoPct)}% da receita`, "Considera só produtos cuja ficha foi homologada por um administrador.")}
+        ${card("CMV com ficha homologada", pct(c.cmvHomologado), !c.homologadoPct ? "nenhuma ficha homologada" : `${Math.round(c.homologadoPct)}% da receita`, "Considera só produtos cuja ficha foi homologada por um administrador.")}
         ${card("Receita vinculada", c.coberturaPct == null ? "—" : `${Math.round(c.coberturaPct)}%`, `${c.produtosVinculados} produto(s)`, "Parte da receita dos itens vendidos que foi vinculada a produtos do catálogo.")}
         ${card("Sem correspondência", String(c.semCorrespondencia), `${c.fichasIncompletas} com ficha incompleta`, "Itens vendidos que não foram vinculados a um produto, e produtos vinculados cuja ficha está incompleta.")}
       </div>
