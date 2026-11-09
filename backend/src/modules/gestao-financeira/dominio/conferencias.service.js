@@ -6,6 +6,7 @@ import * as repositorio from "./repositorio.js";
 import * as vendas from "./vendasCanal.service.js";
 import * as obr from "./obrigacoes.service.js";
 import * as f152 from "./f152.service.js";
+import { linhaPendenciaDocumental } from "./pendenciasDocumentais.service.js";
 import * as painelSvc from "./painel.service.js";
 import { exigirContexto } from "./contexto.js";
 import { mesAno } from "./validacao.js";
@@ -189,8 +190,19 @@ export async function listar(ctx, q, deps = padrao) {
     for (const x of comparacao) if (x.indicador.startsWith("pontoEquilibrio") && x.diferencaCentavos && Math.abs(x.diferencaCentavos) === derivado && dd.explicacao && !/Sem explicação/.test(dd.explicacao))
       x.explicacao = `Efeito derivado da diferença de despesas (R$ ${(Math.abs(dd.diferencaCentavos) / 100).toFixed(2).replace(".", ",")} ÷ margem de contribuição % = R$ ${(derivado / 100).toFixed(2).replace(".", ",")}).`;
   }
+  // pendências documentais cadastradas à mão (sem movimentação financeira): entram na mesma lista; as confirmadas ficam à parte
+  const docs = deps.repo.listarPendenciasDocumentais ? (await deps.repo.listarPendenciasDocumentais(c, { competencia: `${mes}-01` }, deps.db)).map(linhaPendenciaDocumental) : [];
+  const automaticas = itens.filter((i) => !i.geral && i.valorCentavos != null);
+  for (const x of docs.filter((d) => d.estado !== "confirmado")) {
+    const coincide = x.valorCentavos != null ? automaticas.find((a) => Math.abs(a.valorCentavos) === x.valorCentavos) : null;
+    itens.push({ id: `doc:${x.id}`, tipo: "pendencia_documental", gravidade: "atencao", titulo: x.descricao, descricao: x.motivo, motivo: x.motivo, valorCentavos: x.valorCentavos, evidenciaNecessaria: x.evidenciaNecessaria, responsavel: x.responsavel,
+      status: x.estado, statusRotulo: x.estadoRotulo, observacoes: x.observacoes, documentoReferencia: x.documentoReferencia, relacionadaChave: x.relacionadaChave, docId: x.id, dataReferencia: x.dataReferencia,
+      aviso: coincide ? `Mesmo valor da pendência automática «${coincide.titulo}»: confira se não é o mesmo assunto.` : null,
+      acao: { tipo: "concluir_documental", rotulo: "Concluir com evidência", metodo: "POST", caminho: `/pendencias-documentais/${x.id}/confirmar`, exige: ["evidencia"], permissao: "classificar" } });
+  }
+  const concluidasDocumentais = docs.filter((d) => d.estado === "confirmado");
   const completos = itens.map(completarPendencia);
-  return { mes, periodos, geral: completos.filter((i) => i.geral), pendencias: completos.filter((i) => !i.geral), total: completos.filter((i) => !i.geral).length, comparacao,
+  return { mes, periodos, geral: completos.filter((i) => i.geral), pendencias: completos.filter((i) => !i.geral), total: completos.filter((i) => !i.geral).length, concluidasDocumentais, comparacao,
     resumoComparacao: { total: comparacao.length, conferem: comparacao.filter((x) => x.confere).length, divergentes: comparacao.filter((x) => x.confere === false).length } };
 }
 

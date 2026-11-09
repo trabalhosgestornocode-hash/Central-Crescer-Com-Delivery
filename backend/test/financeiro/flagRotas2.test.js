@@ -11,7 +11,7 @@ const router = criarDominioRouter({ autorizar: passa, deps: { repo: {}, db: unde
 const rotas = router.stack.filter((l) => l.route).map((l) => ({ metodos: Object.keys(l.route.methods).join(","), caminho: l.route.path, camadas: l.route.stack.map((x) => x.handle.name) }));
 const SEM_TRAVA_PERMITIDAS = /^\/(plano-contas|contas|aberturas|lancamentos|transferencias|relatorios|importacoes|conciliacao|periodos|fornecedores|configuracoes|auditoria)(\/|$)/;
 const NOVAS = ["/painel", "/busca", "/receitas", "/dre-referencia", "/conferencias", "/vendas-canal", "/vendas-ajustes", "/vendas-diarias", "/rateios", "/recebiveis", "/recebimentos", "/dividas", "/divida-eventos",
-  "/contas-pagar", "/conciliacao-saidas", "/transferencias/multiplas", "/transferencias/vincular-multipla"];
+  "/contas-pagar", "/conciliacao-saidas", "/transferencias/multiplas", "/transferencias/vincular-multipla", "/pendencias-documentais"];
 
 test("toda rota do Financeiro 2.0 (inclusive a conciliação 1:N) está atrás da flag", () => {
   const novas = rotas.filter((r) => NOVAS.some((p) => r.caminho === p || r.caminho.startsWith(p + "/") || r.caminho.startsWith(p + ":")));

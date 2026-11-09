@@ -4,10 +4,10 @@ import { fin } from "./api.js";
 import { moeda, rotuloMes, dataBr } from "./modelo.js";
 import { abrirPainelHtml } from "./detalhe.js";
 import { esc } from "./detalheHtml.js";
-import { aviso, dialogo, campo } from "./ui.js";
+import { aviso, dialogo, campo, selecao } from "./ui.js";
 
 const ROTULO_TIPO = { ajuste_vendas: "Ajuste de vendas", rateios: "Rateios", juros_presumido: "Acréscimo presumido", conta_sem_pagamento: "Conta sem pagamento", categoria_sem_regra: "Sem regra", divergencia_canais: "Divergência de canais",
-  origem_pendente: "Origem pendente", transferencias_internas: "Transferências internas", classificacao_pendente: "Classificação pendente", pagamento_terceiro: "Pago por terceiro" };
+  origem_pendente: "Origem pendente", transferencias_internas: "Transferências internas", classificacao_pendente: "Classificação pendente", pagamento_terceiro: "Pago por terceiro", pendencia_documental: "Pendência documental" };
 const TOM_STATUS = { pendente: "warn", estimado: "warn", aguardando_comprovacao: "muted" };
 const R = (c) => (c == null ? "—" : moeda(c));
 const ROTULO_STATUS = { um_para_um: ["1 saída ⇄ 1 entrada", "ok"], um_para_varios: ["soma de várias entradas — exige decisão", "warn"], ambiguo: ["ambíguo", "bad"], sem_contrapartida: ["sem contrapartida", "muted"] };
@@ -41,11 +41,52 @@ function htmlAcao(p) {
   return `<form class="cf-acao" data-cf-form data-tipo="${esc(a.tipo)}" novalidate>${campos}<button type="submit" class="btn btn-primary btn-sm">${esc(a.rotulo)}</button></form>`;
 }
 
+const ESTADOS_DOC = [{ valor: "pendente", rotulo: "Pendente" }, { valor: "estimado", rotulo: "Estimado" }, { valor: "aguardando_comprovacao", rotulo: "Aguardando comprovação" }];
+const paraReais = (c) => (c == null ? "" : (c / 100).toFixed(2).replace(".", ","));
+
+/** Detalhes e ações de uma pendência documental (cadastro manual). Concluir (confirmar) usa o formulário padrão da pendência, com evidência. */
+function extrasDoc(p) {
+  if (p.tipo !== "pendencia_documental") return "";
+  return `${p.aviso ? `<p class="fin-alerta fin-alerta--warn" role="note">${esc(p.aviso)}</p>` : ""}
+    ${p.observacoes ? `<p class="fin-sub"><strong>Observações:</strong> ${esc(p.observacoes)}</p>` : ""}
+    ${p.documentoReferencia ? `<p class="fin-sub"><strong>Documento:</strong> ${esc(p.documentoReferencia)}</p>` : ""}
+    ${p.relacionadaChave ? `<p class="fin-sub">Possivelmente relacionada a outra pendência documental: valide antes de tratar como itens independentes.</p>` : ""}
+    <p class="fin-sub">Não cria lançamento, pagamento nem conciliação.
+      <button type="button" class="btn btn-ghost btn-sm" data-doc-editar="${esc(p.docId)}">Editar</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-doc-hist="${esc(p.docId)}">Histórico</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-doc-cancelar="${esc(p.docId)}">Cancelar registro</button></p><div data-doc-hist-corpo="${esc(p.docId)}"></div>`;
+}
+
+function corpoFormDoc(v = {}) {
+  return `${campo("Descrição da pendência", "descricao", { obrig: true, valor: v.descricao ?? "", extra: 'maxlength="300"' })}
+    ${campo("Valor envolvido (se conhecido)", "valor", { valor: paraReais(v.valorCentavos), extra: 'inputmode="decimal" placeholder="ex.: 190,53"' })}
+    ${campo("Competência", "competencia", { tipo: "month", obrig: true, valor: v.competencia ?? "" })}
+    ${campo("Data de referência (opcional)", "dataReferencia", { tipo: "date", valor: v.dataReferencia ?? "" })}
+    ${campo("Motivo da conferência", "motivo", { obrig: true, valor: v.motivo ?? "", extra: 'maxlength="500"' })}
+    ${campo("Evidência necessária", "evidenciaNecessaria", { obrig: true, valor: v.evidenciaNecessaria ?? "", extra: 'maxlength="500"' })}
+    ${campo("Responsável pela conferência", "responsavel", { obrig: true, valor: v.responsavel ?? "", extra: 'maxlength="120"' })}
+    ${selecao("Status", "estado", ESTADOS_DOC, { valor: v.estado ?? "pendente", obrig: true })}
+    ${campo("Documento (nome ou local)", "documentoReferencia", { valor: v.documentoReferencia ?? "", extra: 'maxlength="300"' })}
+    ${campo("Observações", "observacoes", { valor: v.observacoes ?? "", extra: 'maxlength="1000"' })}
+    <p class="fin-sub">Registrar uma pendência não cria movimentação financeira. Para marcar como Confirmado, use “Concluir com evidência” na própria pendência.</p>`;
+}
+const corpoDoc = (f) => ({ descricao: f.get("descricao"), valor: String(f.get("valor") ?? "").trim() || null, competencia: f.get("competencia"), dataReferencia: f.get("dataReferencia") || null, motivo: f.get("motivo"),
+  evidenciaNecessaria: f.get("evidenciaNecessaria"), responsavel: f.get("responsavel"), estado: f.get("estado"), documentoReferencia: String(f.get("documentoReferencia") ?? "").trim() || null, observacoes: String(f.get("observacoes") ?? "").trim() || null });
+
+function htmlDocumentais(pd, concluidas) {
+  const modelos = (pd?.modelos ?? []).filter((m) => !m.cadastrada);
+  return `<section><h4>Pendências documentais</h4>
+    <p class="fin-sub">O que depende de comprovação ou decisão e não é um registro financeiro do sistema. Cada pendência é cadastrada, editada e concluída individualmente, com trilha de auditoria.
+      <button type="button" class="btn btn-primary btn-sm" data-doc-novo>Registrar pendência</button></p>
+    ${modelos.length ? `<details open><summary><strong>Preparadas, ainda não cadastradas (${modelos.length})</strong></summary><ul class="fin-lista">${modelos.map((m) => `<li><strong>${esc(m.descricao)}</strong>${m.valorCentavos != null ? ` · ${R(m.valorCentavos)}` : ""}<br><small>${esc(m.motivo)}</small>${m.relacionadaChave ? "<br><small>Possivelmente relacionada a outra pendência: validar antes de tratar como independente.</small>" : ""}<br><button type="button" class="btn btn-ghost btn-sm" data-doc-modelo="${esc(m.chave)}">Cadastrar esta pendência</button></li>`).join("")}</ul></details>` : ""}
+    ${concluidas?.length ? `<details><summary><strong>Concluídas (${concluidas.length})</strong></summary><ul class="fin-lista">${concluidas.map((x) => `<li>${esc(x.descricao)}${x.valorCentavos != null ? ` · ${R(x.valorCentavos)}` : ""}<br><small>Confirmada em ${esc(dataBr(String(x.confirmacao.em).slice(0, 10)))} · evidência: ${esc(x.confirmacao.evidencia)}${x.documentoReferencia ? ` · documento: ${esc(x.documentoReferencia)}` : ""}</small></li>`).join("")}</ul></details>` : ""}</section>`;
+}
+
 function htmlPendencia(p) {
   const itens = p.tipo === "classificacao_pendente" && (p.itens ?? []).length ? `<ul class="fin-lista">${p.itens.map((x) => `<li>${esc(dataBr(x.data))} · ${esc(x.conta)} · ${x.sentido === "entrada" ? "entrada" : "saída"} <strong>${R(x.valorCentavos)}</strong> — ${esc(x.descricao ?? "")}${x.nota ? `<br><small>${esc(x.nota)}</small>` : ""}</li>`).join("")}</ul>` : "";
   const ficha = p.responsavel ? `<dl class="cf-ficha"><dt>Motivo</dt><dd>${esc(p.motivo ?? p.descricao)}</dd><dt>Evidência necessária</dt><dd>${esc(p.evidenciaNecessaria ?? "")}</dd><dt>Responsável pela conferência</dt><dd>${esc(p.responsavel)}</dd></dl>` : "";
   return `<li class="cf-item" data-pend="${esc(p.id)}"><div class="cf-topo">${badge(ROTULO_TIPO[p.tipo] ?? p.tipo, p.gravidade === "divergencia" ? "bad" : "warn")}${p.status ? badge(p.statusRotulo ?? p.status, TOM_STATUS[p.status] ?? "warn") : ""}${p.valorCentavos != null ? `<strong>${R(p.valorCentavos)}</strong>` : ""}</div>
-    <h4>${esc(p.titulo)}</h4>${p.responsavel ? "" : `<p>${esc(p.descricao)}</p>`}${ficha}${itens}
+    <h4>${esc(p.titulo)}</h4>${p.responsavel ? "" : `<p>${esc(p.descricao)}</p>`}${ficha}${itens}${extrasDoc(p)}
     ${(p.parcelas ?? []).length ? `<p class="fin-sub">Parcelas: ${p.parcelas.map((x) => `${esc(rotuloMes(x.competencia))} ${R(x.valorCentavos)}`).join(" · ")}</p>` : ""}
     ${(p.evidencias ?? []).length ? `<p class="fin-sub"><strong>Evidência:</strong> ${p.evidencias.map(esc).join("; ")}</p>` : ""}
     ${htmlChecklist(p.checklist)}${htmlAcao(p)}</li>`;
@@ -140,9 +181,12 @@ export async function abrirCentral(ctx) {
   const { mes, aoAlterar } = ctx;
   let d;
   try { d = await fin.get("/conferencias", { mes }); } catch (e) { aviso(e.message, "bad"); return; }
+  let pd = null;
+  try { pd = await fin.get("/pendencias-documentais", { mes }); } catch { pd = null; }
   const corpo = `<section><h4>${esc(rotuloMes(mes))}</h4>
       ${d.geral.map((g) => `<p class="fin-alerta fin-alerta--warn" role="note"><strong>${esc(g.titulo)}.</strong> ${esc(g.descricao)}</p>`).join("")}
       <p class="fin-sub">${d.total ? `${d.total} item(ns) aguardam decisão ou evidência.` : "Nenhuma conferência pendente."} Confirmar, aprovar ou classificar é uma decisão registrada com o seu usuário.</p></section>
+    ${htmlDocumentais(pd, d.concluidasDocumentais)}
     <section><h4>Pendências (${d.total})</h4>${d.total ? `<ul class="cf-lista">${d.pendencias.map(htmlPendencia).join("")}</ul>` : '<p class="fin-vazio-linha">Tudo conferido neste mês.</p>'}</section>
     <section><h4>Sistema × apresentação oficial</h4><p class="fin-sub">${d.resumoComparacao.conferem} de ${d.resumoComparacao.total} indicadores conferem. A apresentação é a referência documental; o sistema não é ajustado para coincidir com ela.</p>${htmlComparacao(d.comparacao)}</section>
     ${htmlPeriodos(d.periodos)}
@@ -161,6 +205,33 @@ export async function abrirCentral(ctx) {
     painel.fechar();
     if (item?.tipo === "rateios") abrirRateios(item, ctx); else if (item?.tipo === "transferencias_internas") abrirTransferencias(item, ctx);
   });
+  const recarregar = () => { painel.fechar(); aoAlterar?.(); abrirCentral(ctx); };
+  raiz?.addEventListener("click", async (e) => {
+    const modelo = e.target.closest("[data-doc-modelo]");
+    if (modelo) { modelo.disabled = true; try { await fin.post(`/pendencias-documentais/modelos/${encodeURIComponent(modelo.dataset.docModelo)}`, {}); aviso("Pendência cadastrada (sem movimentação financeira)."); recarregar(); } catch (err) { modelo.disabled = false; aviso(err.message || "Não foi possível cadastrar.", "bad"); } return; }
+    if (e.target.closest("[data-doc-novo]")) {
+      dialogo({ titulo: "Registrar pendência documental", enviar: "Registrar", corpo: corpoFormDoc({ competencia: mes }), aoEnviar: async (f) => { await fin.post("/pendencias-documentais", corpoDoc(f)); aviso("Pendência registrada."); recarregar(); } });
+      return;
+    }
+    const ed = e.target.closest("[data-doc-editar]");
+    if (ed) {
+      const x = (pd?.itens ?? []).find((i) => i.id === ed.dataset.docEditar); if (!x) return;
+      dialogo({ titulo: "Editar pendência documental", enviar: "Salvar", corpo: corpoFormDoc(x), aoEnviar: async (f) => { await fin.patch(`/pendencias-documentais/${x.id}`, corpoDoc(f)); aviso("Pendência atualizada."); recarregar(); } });
+      return;
+    }
+    const ca = e.target.closest("[data-doc-cancelar]");
+    if (ca) {
+      dialogo({ titulo: "Cancelar registro da pendência", enviar: "Cancelar registro", perigo: true, corpo: `<p class="fin-sub">O registro não é apagado: sai da lista e o motivo fica na trilha.</p>${campo("Motivo", "motivo", { obrig: true, extra: 'maxlength="500"' })}`,
+        aoEnviar: async (f) => { await fin.post(`/pendencias-documentais/${ca.dataset.docCancelar}/cancelar`, { motivo: String(f.get("motivo") ?? "").trim() }); aviso("Registro cancelado."); recarregar(); } });
+      return;
+    }
+    const hi = e.target.closest("[data-doc-hist]");
+    if (hi) {
+      const alvo = raiz.querySelector(`[data-doc-hist-corpo="${hi.dataset.docHist}"]`);
+      try { const h = await fin.get(`/pendencias-documentais/${hi.dataset.docHist}/historico`, {}); alvo.innerHTML = h.itens.length ? `<ul class="fin-lista">${h.itens.map((i) => `<li>${esc(dataBr(String(i.em).slice(0, 10)))} · ${esc(i.acao)}</li>`).join("")}</ul>` : '<p class="fin-sub">Sem registros.</p>'; }
+      catch (err) { alvo.innerHTML = `<p class="fin-sub">${esc(err.message ?? "Sem permissão para ver o histórico.")}</p>`; }
+    }
+  });
   raiz?.addEventListener("submit", async (e) => {
     const f = e.target.closest("[data-cf-form]"); if (!f) return;
     e.preventDefault();
@@ -168,7 +239,7 @@ export async function abrirCentral(ctx) {
     const li = f.closest("[data-pend]"), id = li.dataset.pend, p = d.pendencias.find((x) => x.id === id), a = p.acao, fd = new FormData(f);
     const botao = f.querySelector("button[type=submit]"); botao.disabled = true;
     try {
-      const corpoPost = a.tipo === "confirmar_ajuste" ? { evidencia: fd.get("evidencia") } : a.tipo === "classificar_acrescimo" ? { classificacao: fd.get("classificacao"), motivo: fd.get("motivo") } : a.tipo === "resolver_origem" ? { contaId: fd.get("contaId") } : {};
+      const corpoPost = a.tipo === "confirmar_ajuste" || a.tipo === "concluir_documental" ? { evidencia: fd.get("evidencia") } : a.tipo === "classificar_acrescimo" ? { classificacao: fd.get("classificacao"), motivo: fd.get("motivo") } : a.tipo === "resolver_origem" ? { contaId: fd.get("contaId") } : {};
       await fin.post(a.caminho, corpoPost);
       aviso("Decisão registrada.");
       painel.fechar(); aoAlterar?.(); abrirCentral(ctx);

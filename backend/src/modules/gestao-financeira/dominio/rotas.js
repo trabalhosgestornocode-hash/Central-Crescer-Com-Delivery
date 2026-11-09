@@ -19,6 +19,7 @@ import * as painelSvc from "./painel.service.js";
 import * as buscaSvc from "./busca.service.js";
 import * as vendasSvc from "./vendasCanal.service.js";
 import * as confSvc from "./conferencias.service.js";
+import * as pdocSvc from "./pendenciasDocumentais.service.js";
 import * as vdSvc from "./vendasDiarias.service.js";
 import * as f152 from "./f152.service.js";
 import { uuid } from "./validacao.js";
@@ -136,6 +137,15 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   r.patch("/vendas-diarias/:data", ...h2(ACAO.LANCAR, (c, q) => vdSvc.editar(c, q.params.data, q.body, d, perms(q))));
   r.get("/conferencias", ...h2(ACAO.VER, (c, q) => confSvc.listar(c, q.query, d)));
   r.get("/conferencias/historico", ...h2(ACAO.EDITAR, (c, q) => confSvc.historico(c, q.query, d)));
+  // pendências documentais (migration 156): cadastro manual, sem movimentação financeira; confirmar = classificar (decisão com evidência)
+  const dPdoc = { ...d, automaticas: async (c, mes) => (await confSvc.listar(c, { mes }, d)).pendencias.filter((p) => p.tipo !== "pendencia_documental") };
+  r.get("/pendencias-documentais", ...h2(ACAO.VER, (c, q) => pdocSvc.listar(c, q.query, d)));
+  r.post("/pendencias-documentais", ...h2(ACAO.LANCAR, (c, q) => pdocSvc.registrar(c, q.body, dPdoc), { status: 201 }));
+  r.post("/pendencias-documentais/modelos/:chave", ...h2(ACAO.LANCAR, (c, q) => pdocSvc.registrarModelo(c, q.params.chave, q.body, d), { status: 201 }));
+  r.patch("/pendencias-documentais/:id", ...h2(ACAO.EDITAR, (c, q) => pdocSvc.editar(c, q.params.id, q.body, d)));
+  r.post("/pendencias-documentais/:id/confirmar", ...h2(ACAO.CLASSIFICAR, (c, q) => pdocSvc.confirmar(c, q.params.id, q.body, d)));
+  r.post("/pendencias-documentais/:id/cancelar", ...h2(ACAO.EDITAR, (c, q) => pdocSvc.cancelar(c, q.params.id, q.body, d)));
+  r.get("/pendencias-documentais/:id/historico", ...h2(ACAO.EDITAR, (c, q) => pdocSvc.historico(c, q.params.id, d)));
   r.get("/vendas-canal", ...h2(ACAO.VER, (c, q) => vendasSvc.listar(c, q.query, d)));
   r.post("/vendas-canal", ...h2(ACAO.LANCAR, (c, q) => vendasSvc.registrarCanal(c, q.body, d), { status: 201 }));
   r.post("/vendas-canal/importar", ...h2(ACAO.LANCAR, (c, q) => vendasSvc.importar(c, q.body, d)));

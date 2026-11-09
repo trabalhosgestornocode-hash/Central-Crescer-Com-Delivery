@@ -241,3 +241,4 @@ export * from "./repositorio.periodos.js";
 export * from "./repositorio.obrigacoes.js";
 export * from "./repositorio.f152.js";
 export * from "./repositorio.vendas.js";
+export * from "./repositorio.pendencias.js";
