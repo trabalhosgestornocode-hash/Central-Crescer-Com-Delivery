@@ -7,6 +7,8 @@ do $$ begin
   end if;
 end $$;
 
+drop trigger if exists trg_ficha_integridade on ficha_tecnica;
+drop function if exists trg_ficha_integridade();
 drop trigger if exists trg_produto_homologacao on produtos;
 drop trigger if exists trg_ficha_homologacao on ficha_tecnica;
 drop function if exists trg_produto_invalida_homologacao();

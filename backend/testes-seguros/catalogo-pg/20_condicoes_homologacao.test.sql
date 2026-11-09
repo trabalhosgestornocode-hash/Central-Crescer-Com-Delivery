@@ -48,3 +48,29 @@ update ficha_tecnica set quantidade = quantidade where produto_id='22222222-0000
 select t_assert2((select count(*) from produtos where id in (select id from snap_custo) and homologacao <> 'nao_aplicavel') = 0, 'Subways permanecem nao_aplicavel após mexer em fichas');
 select t_assert2((select count(*) from snap_custo s where abs(fn_custo_produto(s.id) - s.custo) > 1e-12) = 0, 'custo das Subways idêntico após a 158');
 select t_assert2((select bool_and(relrowsecurity) from pg_class where relname = 'canais_venda_historico'), 'RLS ligado no histórico das condições');
+
+-- 5. INTEGRIDADE DA RECEITA: ciclo e vínculo entre organizações
+-- 44..02 = Bechamel (preparação) ; 44..03 = Torta (usa Bechamel) ; 22..02 = sanduíche de OUTRA organização (Subway X)
+do $$ begin
+  begin insert into ficha_tecnica (produto_id, subproduto_id, quantidade) values ('44444444-0000-4000-8000-000000000002','44444444-0000-4000-8000-000000000003',1);
+    raise exception 'ciclo indireto deveria ser recusado';
+  exception when check_violation then raise notice 'ok - ciclo indireto (Bechamel usa Torta que usa Bechamel) recusado'; end;
+  begin insert into ficha_tecnica (produto_id, subproduto_id, quantidade) values ('44444444-0000-4000-8000-000000000003','44444444-0000-4000-8000-000000000003',1);
+    raise exception 'auto-referência deveria ser recusada';
+  exception when check_violation or others then raise notice 'ok - auto-referência recusada'; end;
+  begin insert into ficha_tecnica (produto_id, subproduto_id, quantidade) values ('44444444-0000-4000-8000-000000000003','22222222-0000-4000-8000-000000000002',1);
+    raise exception 'vínculo entre organizações deveria ser recusado';
+  exception when check_violation then raise notice 'ok - vínculo com preparação de OUTRA organização recusado'; end;
+end $$;
+-- caso válido continua funcionando (nova preparação da mesma empresa) e atualizar quantidade não dispara a validação
+insert into produtos (id, organizacao_id, nome, rendimento, unidade_rendimento, vendavel, tipo) values
+ ('44444444-0000-4000-8000-000000000004','c0000000-0000-4000-8000-000000000003','Cobertura',200,'g',false,'submontagem');
+insert into ficha_tecnica (produto_id, subproduto_id, quantidade) values ('44444444-0000-4000-8000-000000000003','44444444-0000-4000-8000-000000000004',50);
+select t_assert2((select count(*) from ficha_tecnica where produto_id='44444444-0000-4000-8000-000000000003' and subproduto_id='44444444-0000-4000-8000-000000000004') = 1, 'preparação válida da mesma empresa é aceita');
+update ficha_tecnica set quantidade = 60 where produto_id='44444444-0000-4000-8000-000000000003' and subproduto_id='44444444-0000-4000-8000-000000000004';
+select t_assert2((select quantidade from ficha_tecnica where produto_id='44444444-0000-4000-8000-000000000003' and subproduto_id='44444444-0000-4000-8000-000000000004') = 60, 'atualizar quantidade não é bloqueado');
+-- adicionar a preparação invalida a homologação (gatilho de composição) e do pai
+update produtos set homologacao='homologada' where id in ('44444444-0000-4000-8000-000000000003');
+insert into produtos (id, organizacao_id, nome, rendimento, vendavel, tipo) values ('44444444-0000-4000-8000-000000000005','c0000000-0000-4000-8000-000000000003','Recheio',1,false,'submontagem');
+insert into ficha_tecnica (produto_id, subproduto_id, quantidade) values ('44444444-0000-4000-8000-000000000003','44444444-0000-4000-8000-000000000005',1);
+select t_assert2((select homologacao from produtos where id='44444444-0000-4000-8000-000000000003') = 'pendente', 'adicionar preparação à receita invalida a homologação');

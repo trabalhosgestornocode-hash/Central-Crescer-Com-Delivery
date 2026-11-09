@@ -310,6 +310,24 @@ export function resumoProduto({ produtoId, grafo, precoVenda = null, custoManual
 }
 
 /**
+ * `alvoId` é alcançável a partir de `produtoId` seguindo as submontagens (linhas ativas)? Usado para recusar ciclos:
+ * ao pôr a preparação S na receita de P, recusa se P já é usado (direta/indiretamente) por S.
+ * @param {string} produtoId @param {string} alvoId @param {object} grafo
+ */
+export function dependeDe(produtoId, alvoId, grafo) {
+  const vistos = new Set();
+  const pilha = [produtoId];
+  while (pilha.length) {
+    const atual = pilha.pop();
+    if (atual === alvoId) return true;
+    if (vistos.has(atual)) continue;
+    vistos.add(atual);
+    for (const f of grafo.fichaByProd.get(atual) ?? []) if (f.subproduto_id && linhaAtiva(f)) pilha.push(f.subproduto_id);
+  }
+  return false;
+}
+
+/**
  * Ids dos produtos afetados por um insumo (direta ou indiretamente, via
  * submontagens/combos). Percorre a ficha de baixo para cima até o ponto fixo.
  * @param {string} insumoId @param {object} grafo @returns {string[]}

@@ -260,3 +260,72 @@ test("DETALHE ISOLADO: produto/MOD de outra empresa nunca aparecem (404 e nenhum
   const a = await detalheDe(svc, A, 1);
   assert.ok(!JSON.stringify(a).includes("outra"));
 });
+
+// ---------------------------------------------------------------- adicionar PREPARAÇÃO intermediária à receita
+async function ambientePrep() {
+  const e = await ambiente();
+  const t = e.db.tabelas;
+  t.produtos.push(
+    P(5, A, { nome: "Calda", vendavel: false, rendimento: 500, unidade_rendimento: "g" }),
+    P(6, A, { nome: "Cobertura", vendavel: false, rendimento: 100, unidade_rendimento: "g" }),
+    P(7, B, { nome: "Prep da B", vendavel: false, rendimento: 1 }),
+    P(8, A, { nome: "Prep inativa", vendavel: false, ativo: false }));
+  t.ficha_tecnica.push(
+    { id: id(810), produto_id: id(5), insumo_id: id(901), quantidade: 50, ativo: true },     // Calda: lote 0,50 => 0,001/g
+    { id: id(811), produto_id: id(6), subproduto_id: id(5), quantidade: 100, ativo: true }); // Cobertura usa 100 g de Calda
+  return e;
+}
+const addPrep = (svc, org, pid, dados) => svc.adicionarComponente({ organizacaoId: org, produtoId: id(pid), dados, usuario: ADMIN });
+
+test("PREPARAÇÃO: adiciona à receita, custo = qtd × (lote ÷ rendimento) ÷ rendimento do produto, e registra histórico", async () => {
+  const { db, svc } = await ambientePrep();
+  const antes = (await svc.obterProduto({ organizacaoId: A, id: id(1) })).custo;
+  const r = await addPrep(svc, A, 1, { subproduto_id: id(5), quantidade: 200, unidade: "g" });
+  assert.ok(Math.abs(r.produto.custo - (antes + (200 * 0.001) / 4)) < 1e-9);          // +0,05 por unidade (rendimento 4)
+  const linha = db.tabelas.ficha_tecnica.find((l) => l.produto_id === id(1) && l.subproduto_id === id(5));
+  assert.equal(linha.quantidade, 200); assert.equal(linha.unidade_uso, "g");
+  assert.ok(db.tabelas.produto_historico.some((h) => h.campo === "ficha_preparacao" && /Calda — 200 g/.test(h.valor_novo)));
+  assert.ok(r.produto.ficha.some((c) => c.tipo === "submontagem" && c.unidade === "g"));
+});
+test("PREPARAÇÃO: converte unidade compatível para a do rendimento (0,2 kg => 200 g); recusa incompatível, zero e negativa", async () => {
+  const { db, svc } = await ambientePrep();
+  await addPrep(svc, A, 1, { subproduto_id: id(5), quantidade: 0.2, unidade: "kg" });
+  assert.equal(db.tabelas.ficha_tecnica.find((l) => l.produto_id === id(1) && l.subproduto_id === id(5)).quantidade, 200);
+  await assert.rejects(() => addPrep(svc, A, 2, { subproduto_id: id(5), quantidade: 10, unidade: "ml" }), /incompat/i);
+  await assert.rejects(() => addPrep(svc, A, 2, { subproduto_id: id(5), quantidade: 0, unidade: "g" }), /maior que zero/i);
+  await assert.rejects(() => addPrep(svc, A, 2, { subproduto_id: id(5), quantidade: -3, unidade: "g" }));
+});
+test("PREPARAÇÃO: recusa ciclo (direto, indireto e auto-referência)", async () => {
+  const { db, svc } = await ambientePrep();
+  await assert.rejects(() => addPrep(svc, A, 5, { subproduto_id: id(6), quantidade: 10, unidade: "g" }), /circular/i); // Calda usa Cobertura, que usa Calda
+  await assert.rejects(() => addPrep(svc, A, 5, { subproduto_id: id(5), quantidade: 10, unidade: "g" }), /a si mesma/i);
+  assert.equal(db.tabelas.ficha_tecnica.filter((l) => l.produto_id === id(5) && l.subproduto_id).length, 0);
+});
+test("PREPARAÇÃO ISOLADA: preparação de OUTRA empresa não é encontrada; produto vendido e preparação inativa são recusados", async () => {
+  const { db, svc } = await ambientePrep();
+  const n = db.tabelas.ficha_tecnica.length;
+  await assert.rejects(() => addPrep(svc, A, 1, { subproduto_id: id(7), quantidade: 1 }), /não encontrada nesta empresa/i);
+  await assert.rejects(() => addPrep(svc, A, 1, { subproduto_id: id(2), quantidade: 1 }), /produto vendido/i);
+  await assert.rejects(() => addPrep(svc, A, 1, { subproduto_id: id(8), quantidade: 1 }), /inativa/i);
+  await assert.rejects(() => addPrep(svc, A, 3, { subproduto_id: id(5), quantidade: 1 }), /não encontrado/i); // produto da B pelo contexto A
+  assert.equal(db.tabelas.ficha_tecnica.length, n);
+});
+test("PREPARAÇÃO + HOMOLOGAÇÃO: adicionar muda o custo além da tolerância => a ficha homologada deixa de valer (custo_alterado)", async () => {
+  const { svc } = await ambientePrep();
+  await svc.definirHomologacao({ organizacaoId: A, produtoId: id(1), acao: "homologar", usuario: ADMIN });
+  await addPrep(svc, A, 1, { subproduto_id: id(5), quantidade: 200, unidade: "g" });
+  const it = (await svc.listarFichasCatalogo({ organizacaoId: A })).itens.find((i) => i.id === id(1));
+  assert.equal(it.homologacao, "pendente"); assert.equal(it.homologacao_motivo, "custo_alterado");
+});
+test("PREPARAÇÃO: a lista de produtos expõe rendimento e unidade (para o seletor) e só as da própria empresa", async () => {
+  const { svc } = await ambientePrep();
+  const l = await svc.listarProdutos({ organizacaoId: A, vendavel: false });
+  assert.deepEqual(l.map((p) => p.id).sort(), [id(5), id(6), id(8)].sort());
+  const calda = l.find((p) => p.id === id(5));
+  assert.equal(calda.rendimento, 500); assert.equal(calda.unidade_rendimento, "g");
+});
+test("dependeDe: alcança descendentes, ignora linhas inativas e tolera ciclos pré-existentes", async () => {
+  const { dependeDe } = await import("../src/modules/produtos/custo.js");
+  const g = { fichaByProd: new Map([["a", [{ subproduto_id: "b", ativo: true }]], ["b", [{ subproduto_id: "c", ativo: true }, { subproduto_id: "z", ativo: false }]], ["c", [{ subproduto_id: "a", ativo: true }]]]) };
+  assert.equal(dependeDe("a", "c", g), true); assert.equal(dependeDe("a", "z", g), false); assert.equal(dependeDe("c", "b", g), true);
+});

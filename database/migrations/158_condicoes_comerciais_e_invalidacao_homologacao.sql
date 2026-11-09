@@ -115,3 +115,36 @@ end $$;
 drop trigger if exists trg_produto_homologacao on produtos;
 create trigger trg_produto_homologacao after update of rendimento, custo_manual on produtos
   for each row execute function trg_produto_invalida_homologacao();
+
+-- ---------------------------------------------------------------------
+-- 3. INTEGRIDADE DA RECEITA — preparação na ficha de um produto
+--    * a preparação (subproduto) precisa ser da MESMA organização do produto;
+--    * recusa dependência circular (direta ou indireta).
+--    Vale para QUALQUER caminho de escrita (API, importador, SQL manual). Só valida linhas NOVAS ou que mudem
+--    produto/subproduto — atualizar quantidade não dispara. Não altera nem lê dado existente.
+-- ---------------------------------------------------------------------
+create or replace function trg_ficha_integridade() returns trigger
+language plpgsql set search_path = public as $$
+declare v_org_p uuid; v_org_s uuid;
+begin
+  if new.subproduto_id is null then return new; end if;
+  select organizacao_id into v_org_p from produtos where id = new.produto_id;
+  select organizacao_id into v_org_s from produtos where id = new.subproduto_id;
+  if v_org_p is distinct from v_org_s then
+    raise exception 'Vínculo entre organizações diferentes não é permitido (receita e preparação precisam ser da mesma empresa).' using errcode = '23514';
+  end if;
+  if exists (
+    with recursive d(id) as (
+      select new.subproduto_id
+      union
+      select ft.subproduto_id from ficha_tecnica ft join d on ft.produto_id = d.id where ft.subproduto_id is not null
+    ) select 1 from d where id = new.produto_id
+  ) then
+    raise exception 'Dependência circular entre receitas.' using errcode = '23514';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_ficha_integridade on ficha_tecnica;
+create trigger trg_ficha_integridade before insert or update of produto_id, subproduto_id on ficha_tecnica
+  for each row execute function trg_ficha_integridade();

@@ -276,6 +276,8 @@ export async function vendasExcluirImportacao(id) {
 }
 export const vendasDivergencias = () => getJson(`/api/v1/vendas/divergencias`);
 export const listarProdutosSistema = () => getJson(`/api/v1/produtos?vendavel=true`);
+// Preparações intermediárias (não vendidas) da empresa — seletor de "Adicionar preparação" na ficha.
+export const listarPreparacoes = () => getJson(`/api/v1/produtos?vendavel=false`);
 
 async function postJson(url, body) {
   const g = geracaoContexto();

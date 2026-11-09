@@ -4,7 +4,7 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import {
   carregarGrafo, componentesDiretos, custoTotalProduto, ingredientesExplodidos,
-  produtosAfetadosPorInsumo, produtosAfetadosPorProduto, recalcularCache, resumoProduto, homologacaoEfetiva,
+  produtosAfetadosPorInsumo, produtosAfetadosPorProduto, recalcularCache, resumoProduto, homologacaoEfetiva, dependeDe,
   carregarMaoDeObra, custoMaoDeObraUnitario, rendimentoDe, maoDeObraDoProduto,
 } from "./custo.js";
 import {
@@ -14,14 +14,18 @@ import {
 export async function listarProdutos({ organizacaoId, vendavel, tipo }) {
   let q = supabase
     .from("produtos")
-    .select("id, nome, tipo, tamanho, vendavel, custo_cache, sku, codigo_pdv")
+    .select("*")
     .eq("organizacao_id", organizacaoId)
     .order("nome");
   if (vendavel !== undefined) q = q.eq("vendavel", vendavel);
   if (tipo) q = q.eq("tipo", tipo);
   const { data, error } = await q;
   if (error) throw ApiError.internal(error.message);
-  return data;
+  // Projeção explícita (antes era select de colunas nomeadas); rendimento/unidade só existem após a migration 157.
+  return (data ?? []).map((p) => ({
+    id: p.id, nome: p.nome, tipo: p.tipo, tamanho: p.tamanho, vendavel: p.vendavel, custo_cache: p.custo_cache, sku: p.sku, codigo_pdv: p.codigo_pdv,
+    ...(p.rendimento !== undefined ? { rendimento: p.rendimento, unidade_rendimento: p.unidade_rendimento ?? null } : {}),
+  }));
 }
 
 // Produto + ficha técnica editável + ingredientes explodidos + preços + CMV/margem.
@@ -510,10 +514,64 @@ async function recalcularEObter(organizacaoId, produtoId) {
   return { produto, recalculados };
 }
 
+/**
+ * Adiciona uma PREPARAÇÃO INTERMEDIÁRIA existente (produto não vendável) à receita de um produto.
+ *  * só da MESMA organização (a busca já filtra pela organização do contexto; o banco também recusa vínculo entre empresas);
+ *  * a quantidade é informada na unidade do RENDIMENTO da preparação (g, ml, un…) — outras unidades compatíveis são convertidas;
+ *  * custo = quantidade × custo unitário da preparação (lote ÷ rendimento), recalculado em cascata;
+ *  * recusa dependência circular (direta ou indireta);
+ *  * o gatilho do banco invalida a homologação do produto (e dos que o usam) e o histórico registra a inclusão.
+ */
+async function adicionarPreparacao({ organizacaoId, pid, b, usuario }) {
+  const subId = v.uuid(b.subproduto_id, "Preparação");
+  if (subId === pid) throw ApiError.badRequest("Uma receita não pode usar a si mesma.");
+
+  const { data: sub } = await supabase
+    .from("produtos").select("id, nome, vendavel, ativo, rendimento, unidade_rendimento")
+    .eq("organizacao_id", organizacaoId).eq("id", subId).single();
+  if (!sub) throw ApiError.notFound("Preparação não encontrada nesta empresa.");
+  if (sub.vendavel !== false) throw ApiError.badRequest(`"${sub.nome}" é um produto vendido, não uma preparação intermediária.`);
+  if (sub.ativo === false) throw ApiError.badRequest("Não é possível usar uma preparação inativa.");
+
+  const grafo = await carregarGrafo(organizacaoId);
+  if (dependeDe(subId, pid, grafo)) {
+    throw ApiError.badRequest(`Dependência circular: "${sub.nome}" já usa esta receita (direta ou indiretamente). Remova esse vínculo antes.`);
+  }
+
+  const unidadeSub = sub.unidade_rendimento ?? "un";
+  const unidadeUso = v.umDe(b.unidade ?? unidadeSub, "Unidade utilizada", UNIDADES);
+  const quantidade = v.numero(b.quantidade, "Quantidade utilizada", { min: 0 });
+  const erro = validarComponenteFicha({ quantidade, unidadeUso, unidadeBase: unidadeSub });
+  if (erro) throw ApiError.badRequest(erro);
+  const qtdNaUnidadeDaPreparacao = converterQuantidade(quantidade, unidadeUso, unidadeSub);
+
+  const linha = {
+    produto_id: pid, subproduto_id: subId, quantidade: qtdNaUnidadeDaPreparacao,
+    unidade_uso: unidadeUso, quantidade_informada: quantidade,
+    observacao: v.textoOpcional(b.observacao, "Observação", { max: 300 }), created_by: usuario?.id ?? null,
+  };
+  let res = await supabase.from("ficha_tecnica").insert(linha).select("id").single();
+  if (res.error && RE_COL_FICHA.test(res.error.message)) {
+    res = await supabase.from("ficha_tecnica")
+      .insert({ produto_id: pid, subproduto_id: subId, quantidade: qtdNaUnidadeDaPreparacao, observacao: linha.observacao }).select("id").single();
+  }
+  if (res.error) {
+    if (/duplicate key|unique/i.test(res.error.message)) throw ApiError.badRequest("Esta preparação já está na receita. Edite a quantidade em vez de duplicar.");
+    if (/circular|organiza/i.test(res.error.message)) throw ApiError.badRequest(res.error.message);
+    throw ApiError.badRequest(res.error.message);
+  }
+  await registrarHistorico({
+    organizacaoId, produtoId: pid, usuario,
+    mudancas: [{ campo: "ficha_preparacao", rotulo: "Preparação adicionada à receita", valor_anterior: null, valor_novo: `${sub.nome} — ${quantidade} ${unidadeUso}` }],
+  });
+  return recalcularEObter(organizacaoId, pid);
+}
+
 export async function adicionarComponente({ organizacaoId, produtoId, dados, usuario }) {
   const pid = v.uuid(produtoId, "Produto");
   await garantirProduto(organizacaoId, pid);
   const b = v.corpo(dados);
+  if (b.subproduto_id !== undefined && b.insumo_id === undefined) return adicionarPreparacao({ organizacaoId, pid, b, usuario });
   const insumoId = v.uuid(b.insumo_id, "Insumo");
 
   // Insumo precisa ser DESTA organização e estar ativo.

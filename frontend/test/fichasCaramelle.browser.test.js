@@ -82,6 +82,7 @@ before(async () => {
       const corpo = req.method === "GET" ? null : await lerCorpo(req);
       api.chamadas.push(`${req.method} ${caminho}${u.search}`);
       if (corpo) api.corpos.push({ chamada: `${req.method} ${caminho}`, corpo });
+      let m;
       const papel = PAPEIS[api.papel];
       const ctxOk = () => ({ contextToken: "ctx-1", expiraEm: new Date(Date.now() + 8 * 3600e3).toISOString(), sessionId: "sess-1", perfil: { id: CONTA, nome: "Conta" },
         empresa: { id: ORG, nome: api.empresa === "subway" ? "Subway Teste" : "Caramelle Café", logoUrl: null, status: "ativa" }, unidade: { id: UND.id, nome: UND.nome }, papel: api.papel, papelRotulo: papel.papelRotulo,
@@ -99,12 +100,21 @@ before(async () => {
         if (api.empresa === "subway") return json(res, 200, { data: CMV_SUBWAY, canal: "balcao", tabela: "E", tabelaOficial: "E", comparando: false });
         res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: "Tabela comercial (balcão) não configurada para esta unidade.", codigo: "TABELA_NAO_CONFIGURADA" }));
       }
-      if (caminho === "/api/v1/produtos" && req.method === "GET") return json(res, 200, { data: [] });
+      if (caminho === "/api/v1/produtos" && req.method === "GET") {
+        if (u.searchParams.get("vendavel") === "false") return json(res, 200, { data: [
+          { id: "p2", nome: "Calda de Chocolate", vendavel: false, custo_cache: 0.02, rendimento: 500, unidade_rendimento: "g" },
+          { id: "p5", nome: "Cobertura", vendavel: false, custo_cache: 0.05, rendimento: 200, unidade_rendimento: "g" },
+          { id: "pciclo", nome: "Preparação circular", vendavel: false, custo_cache: 0.01, rendimento: 100, unidade_rendimento: "g" }] });
+        return json(res, 200, { data: [] });
+      }
+      if ((m = caminho.match(/^\/api\/v1\/produtos\/([^/]+)\/ficha$/)) && req.method === "POST") {
+        if (corpo.subproduto_id === "pciclo") { res.writeHead(400, { "Content-Type": "application/json" }); return res.end(JSON.stringify({ error: 'Dependência circular: "Preparação circular" já usa esta receita (direta ou indiretamente). Remova esse vínculo antes.' })); }
+        return json(res, 200, { data: { produto: detalhe(api.fichas.find((x) => x.id === m[1]), api.empresa) } });
+      }
       if (caminho === "/api/v1/produtos/catalogo/fichas") {
         const it = api.empresa === "subway" ? [F({ id: "s1", nome: "Churrasco 15cm", homologacao: "nao_aplicavel", pode_homologar: false })] : api.fichas;
         return json(res, 200, { data: { resumo: { total: it.length }, itens: it } });
       }
-      let m;
       if ((m = caminho.match(/^\/api\/v1\/produtos\/([^/]+)\/homologacao$/)) && req.method === "PATCH") {
         const f = api.fichas.find((x) => x.id === m[1]);
         if (corpo.acao === "homologar") Object.assign(f, { homologacao: "homologada", homologado_por_nome: "Admin", homologado_em: new Date().toISOString(), pode_homologar: false, homologacao_motivo: null });
@@ -315,6 +325,66 @@ describe("Produtos: Subways inalteradas × catálogo da Caramelle, no app real",
       await pagina.fill("#pm-q", "150");
       await Promise.all([pagina.waitForResponse((r) => r.url().includes("/ficha/fi2")), pagina.click("#pm-save")]);
       assert.deepEqual(api.corpos.find((c) => c.chamada === "PATCH /api/v1/produtos/p1/ficha/fi2").corpo, { quantidade: "150", unidade: "g" });
+    } finally { await contexto.close(); }
+  });
+
+  test("CARAMELLE: adicionar PREPARAÇÃO existente à receita no mesmo editor (qtd + unidade compatível); ciclo vem recusado do servidor", async () => {
+    zerar();
+    const { pagina, contexto, erros } = await abrirApp();
+    try {
+      await irParaProdutos(pagina);
+      await abrirProduto(pagina, "Bolo de Cenoura");
+      await pagina.click("#pm-addprep-btn");
+      await pagina.waitForSelector("#pm-p-sel");
+      const ops = await pagina.$$eval("#pm-p-sel option", (o) => o.map((x) => ({ t: x.textContent, d: x.disabled })));
+      assert.ok(ops.some((o) => /Calda de Chocolate.*já na receita/.test(o.t) && o.d), "preparação já usada fica desabilitada");
+      assert.ok(ops.some((o) => /Cobertura/.test(o.t) && !o.d));
+      await pagina.selectOption("#pm-p-sel", "p5");
+      assert.deepEqual(await pagina.$$eval("#pm-p-u option", (o) => o.map((x) => x.value)).then((v) => v.sort()), ["g", "kg"]); // só unidades compatíveis com g
+      await pagina.selectOption("#pm-p-u", "kg");
+      await pagina.fill("#pm-p-q", "0.1");
+      assert.match(await pagina.textContent("#pm-p-prev"), /R\$\s*5,00/); // 100 g × R$ 0,05/g (prévia)
+      await foto(pagina, "06-adicionar-preparacao");
+      await Promise.all([pagina.waitForResponse((r) => r.url().endsWith("/produtos/p1/ficha") && r.request().method() === "POST"), pagina.click("#pm-p-add")]);
+      assert.deepEqual(api.corpos.find((c) => c.chamada === "POST /api/v1/produtos/p1/ficha").corpo, { subproduto_id: "p5", quantidade: "0.1", unidade: "kg" });
+      // ciclo: o servidor recusa e a mensagem aparece no próprio formulário
+      await pagina.waitForSelector("#pm-addprep-btn");
+      await pagina.click("#pm-addprep-btn");
+      await pagina.waitForSelector("#pm-p-sel");
+      await pagina.selectOption("#pm-p-sel", "pciclo");
+      await pagina.fill("#pm-p-q", "10");
+      await pagina.click("#pm-p-add");
+      await pagina.waitForSelector("#pm-p-err:not([hidden])");
+      assert.match(await pagina.textContent("#pm-p-err"), /Dependência circular/);
+      assert.deepEqual(erros, []);
+    } finally { await contexto.close(); }
+  });
+
+  test("PREPARAÇÃO: sem selecionar mostra erro local; Subway e consulta não têm o botão", async () => {
+    zerar();
+    let { pagina, contexto } = await abrirApp();
+    try {
+      await irParaProdutos(pagina);
+      await abrirProduto(pagina, "Bolo de Cenoura");
+      await pagina.click("#pm-addprep-btn");
+      await pagina.click("#pm-p-add");
+      assert.match(await pagina.textContent("#pm-p-err"), /Selecione uma preparação/);
+    } finally { await contexto.close(); }
+    zerar("admin", "subway");
+    ({ pagina, contexto } = await abrirApp());
+    try {
+      await irParaProdutos(pagina);
+      await abrirProduto(pagina, "Churrasco 15cm");
+      assert.equal(await pagina.locator("#pm-addprep-btn").count(), 0);
+      assert.equal(await pagina.locator("#pm-add-btn").count(), 1); // o "Adicionar insumo" das Subways segue igual
+    } finally { await contexto.close(); }
+    zerar("consulta");
+    ({ pagina, contexto } = await abrirApp());
+    try {
+      await irParaProdutos(pagina);
+      await abrirProduto(pagina, "Bolo de Cenoura");
+      await pagina.waitForSelector("#pc-formacao");
+      assert.equal(await pagina.locator("#pm-addprep-btn").count(), 0);
     } finally { await contexto.close(); }
   });
 
