@@ -163,6 +163,8 @@ export function planejarCatalogo(arquivos, { fonte }) {
     num(b.rendimento), normalizarNome(b.unidade_rend),
     b.linhas.map((l) => `${normalizarNome(l.nome)}|${num(l.qtd)}`).sort(),
   ]);
+  const mescladas = []; // registros de preparação absorvidos por outra idêntica (conciliação)
+  const linhasNomeadas = (r) => [...(r.linhas ?? []), ...(r.ingredientes ?? []), ...(r.bases ?? []), ...(r.embalagens ?? [])].length;
   const prepsPorNome = new Map(); // nome normalizado -> [chaves]
   const prepLocal = arquivos.map(() => new Map()); // por arquivo: nome normalizado -> chave (1ª ocorrência = regra do VLOOKUP)
 
@@ -175,6 +177,7 @@ export function planejarCatalogo(arquivos, { fonte }) {
       let chave = existentes.find((c) => produtos.get(c).__sig === sig);
       if (chave) {
         produtos.get(chave).referencia.fontes.push({ arquivo: A.arquivo, categoria: A.categoria, aba: b.aba, mesclado: true });
+        mescladas.push({ onde, chave, linhas: linhasNomeadas(b) });
         aviso("info", "preparacao_mesclada", onde, `${b.nome}: idêntica a ${chave} (mesma composição e rendimento) — cadastro único`);
       } else {
         chave = existentes.length ? `prep:${n}#${existentes.length + 1}` : `prep:${n}`;
@@ -260,20 +263,21 @@ export function planejarCatalogo(arquivos, { fonte }) {
       ? [["ing", b.ingredientes], ["base", b.bases], ["emb", b.embalagens]]
       : [["ing", b.linhas], ["emb", b.embalagens ?? []]];
     const acumulado = new Map(); // "ref|chave" -> linha
+    const lc = (p.__lc = { origem: 0, importadas: 0, somadas: 0, sem_quantidade: 0, nao_encontrada: 0, ciclo: 0 });
     let ordem = 0;
     for (const [area, lista] of grupos) {
       for (const l of lista) {
-        ordem += 1;
+        ordem += 1; lc.origem += 1;
         const q = num(l.qtd);
         if (ehErro(l.valor_emb) || ehErro(l.qtd_emb) || ehErro(l.unit) || ehErro(l.total)) {
           add("linha_com_erro_na_planilha", `${l.nome} (linha ${l.linha}) com erro de fórmula na planilha (${[l.valor_emb, l.qtd_emb].filter(ehErro).join("/") || "#"})`);
         }
         const alvo = resolver(p.__arquivoIdx, l.nome, area);
-        if (!alvo) { add("componente_nao_encontrado", `"${l.nome}" (linha ${l.linha}) não existe no cadastro de ${area === "emb" ? "embalagens" : "ingredientes/preparações"} — linha NÃO importada`); continue; }
-        if (q == null || q <= 0) { add("linha_sem_quantidade", `"${l.nome}" (linha ${l.linha}) sem quantidade — linha NÃO importada`); continue; }
+        if (!alvo) { add("componente_nao_encontrado", `"${l.nome}" (linha ${l.linha}) não existe no cadastro de ${area === "emb" ? "embalagens" : "ingredientes/preparações"} — linha NÃO importada`); lc.nao_encontrada += 1; continue; }
+        if (q == null || q <= 0) { add("linha_sem_quantidade", `"${l.nome}" (linha ${l.linha}) sem quantidade — linha NÃO importada`); lc.sem_quantidade += 1; continue; }
         const k = `${alvo.ref}|${alvo.chave}`;
         if (acumulado.has(k)) {
-          acumulado.get(k).quantidade += q;
+          acumulado.get(k).quantidade += q; lc.somadas += 1;
           add("linha_duplicada_somada", `"${l.nome}" aparece mais de uma vez na ficha — quantidades somadas`);
         } else {
           acumulado.set(k, { ref: alvo.ref, chave: alvo.chave, quantidade: q, ordem, nome_origem: String(l.nome).trim() });
@@ -282,9 +286,10 @@ export function planejarCatalogo(arquivos, { fonte }) {
     }
     // auto-referência (ex.: ficha cujo nome = preparação que ela mesma usa)
     for (const [k, l] of acumulado) {
-      if (l.ref === "produto" && l.chave === p.chave) { acumulado.delete(k); add("ciclo_na_receita", `usa a si mesma ("${l.nome_origem}") — linha removida`); }
+      if (l.ref === "produto" && l.chave === p.chave) { acumulado.delete(k); lc.ciclo += 1; add("ciclo_na_receita", `usa a si mesma ("${l.nome_origem}") — linha removida`); }
     }
     p.linhas = [...acumulado.values()];
+    lc.importadas = p.linhas.length;
     if (!p.linhas.length) add("sem_componentes", "nenhum componente válido importado");
 
     {
@@ -441,6 +446,32 @@ export function planejarCatalogo(arquivos, { fonte }) {
     fichas_pendentes: lista.filter((p) => !p.completa).map((p) => ({ chave: p.chave, nome: p.nome, onde: `${p.referencia.fontes[0].categoria}!${p.referencia.fontes[0].aba}`, bloqueios: p.pendencias.filter((x) => BLOQUEANTES.has(x.codigo)).map((x) => x.codigo) })),
     inconsistencias: inconsist,
     custos_planejados: lista.map((p) => ({ chave: p.chave, custo_unit_ingredientes_embalagens: r4(p.__custoUnit), custo_unit_mao_de_obra: r4(p.__custoMODUnit) })),
+  };
+  // ---- CONCILIAÇÃO: nenhuma receita/linha some sem explicação ----
+  const todos = lista;
+  const fontes = todos.reduce((n, p) => n + p.referencia.fontes.length, 0);
+  const rawLinhas = arquivos.reduce((n, A) => n + A.fichas.reduce((m, r) => m + linhasNomeadas(r), 0) + A.bases.reduce((m, r) => m + linhasNomeadas(r), 0), 0);
+  const proc = todos.reduce((a, p) => ({ origem: a.origem + p.__lc.origem, importadas: a.importadas + p.__lc.importadas, somadas: a.somadas + p.__lc.somadas,
+    sem_quantidade: a.sem_quantidade + p.__lc.sem_quantidade, nao_encontrada: a.nao_encontrada + p.__lc.nao_encontrada, ciclo: a.ciclo + p.__lc.ciclo }), { origem: 0, importadas: 0, somadas: 0, sem_quantidade: 0, nao_encontrada: 0, ciclo: 0 });
+  const linhasMescladas = mescladas.reduce((n, m) => n + m.linhas, 0);
+  const insSemCusto = payload.insumos.filter((i) => i.preco_caixa == null);
+  relatorio.conferencia = {
+    registros_origem: relatorio.totais.registros_origem,
+    produtos_planejados: todos.length,
+    fontes_mapeadas: fontes, // cada registro de origem aparece em exatamente uma `fonte` de algum produto planejado
+    todos_os_registros_mapeados: fontes === relatorio.totais.registros_origem,
+    preparacoes_mescladas: mescladas.map((m) => ({ onde: m.onde, absorvida_por: m.chave, linhas: m.linhas })),
+    diferenca_explicada: relatorio.totais.registros_origem - todos.length === mescladas.length,
+    linhas: {
+      origem_total: rawLinhas, processadas: proc.origem, de_preparacoes_mescladas: linhasMescladas,
+      fecha: rawLinhas === proc.origem + linhasMescladas,
+      importadas: proc.importadas, somadas_em_linha_existente: proc.somadas, descartadas_sem_quantidade: proc.sem_quantidade,
+      descartadas_componente_nao_encontrado: proc.nao_encontrada, descartadas_auto_referencia: proc.ciclo,
+      fecha_processadas: proc.origem === proc.importadas + proc.somadas + proc.sem_quantidade + proc.nao_encontrada + proc.ciclo,
+    },
+    insumos_sem_custo: insSemCusto.map((i) => i.nome),
+    variantes_de_preco: payload.insumos.filter((i) => i.chave.includes("@")).length,
+    preservadas_sem_unificar: payload.insumos.filter((i) => i.chave.includes("@")).every((i) => i.pendencias.some((x) => x.codigo === "valores_divergentes")),
   };
   return { payload, relatorio };
 }

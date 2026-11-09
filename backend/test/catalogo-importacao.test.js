@@ -275,3 +275,32 @@ test("extrairFichas sinaliza aba fora do padrão (rótulos deslocados)", () => {
   XLSX.utils.book_append_sheet(wb, ws, "P1");
   assert.ok(extrairFichas(wb, "DOCES").fichas[0].layout_fora_do_padrao.length > 0);
 });
+
+// ---- conciliação: nenhuma receita/linha some sem explicação ----------------------------------------
+test("CONCILIAÇÃO: todo registro de origem vira (ou é mesclado em) um produto; linhas fecham; descartes são listados", () => {
+  const mk = (cat) => arquivo(cat, {
+    bases: [base("MIX", { aba: "B1", linhas: [comp("LEITE", 100)] }), base("CALDA", { aba: "B2", linhas: [comp("LEITE", 5), comp("FANTASMA", 3), comp("CAFÉ", null)] })],
+    fichas: [ficha("BOLO", { aba: "P1", ingredientes: [comp("LEITE", 10), comp("LEITE", 5, { linha: 7 })], bases: [comp("CALDA", 20, { linha: 26 })] })],
+  });
+  const r = planejarCatalogo([mk("SALGADOS"), mk("DOCES")], { fonte });
+  const c = r.relatorio.conferencia;
+  assert.equal(c.registros_origem, 6);                        // 2 × (2 preparações + 1 ficha)
+  assert.equal(c.fontes_mapeadas, 6); assert.equal(c.todos_os_registros_mapeados, true);
+  assert.equal(c.preparacoes_mescladas.length, 2);            // MIX e CALDA idênticas nos dois arquivos
+  assert.equal(c.produtos_planejados, 4); assert.equal(c.diferenca_explicada, true);
+  assert.equal(c.linhas.fecha, true); assert.equal(c.linhas.fecha_processadas, true);
+  assert.equal(c.linhas.descartadas_componente_nao_encontrado, 1); assert.equal(c.linhas.descartadas_sem_quantidade, 1); // a CALDA repetida foi mesclada: suas linhas contam em "de_preparacoes_mescladas"
+  assert.equal(c.linhas.somadas_em_linha_existente, 2);
+  assert.ok(r.relatorio.fichas_pendentes.some((f) => f.nome === "CALDA"));  // as linhas descartadas bloqueiam a ficha
+});
+test("CONCILIAÇÃO: insumo sem custo continua pendente e variantes de preço são preservadas (nunca unificadas)", () => {
+  const a = arquivo("SALGADOS"); const b = arquivo("DOCES");
+  a.ingredientes.push({ linha: 9, nome: "AGUA", unidade: "GR", qtd_embalagem: 1000, valor: 0 });
+  b.ingredientes[1] = { linha: 3, nome: "CAFÉ", unidade: "GR", qtd_embalagem: 1000, valor: 55 };   // outro preço
+  const r = planejarCatalogo([a, b], { fonte });
+  const c = r.relatorio.conferencia;
+  assert.deepEqual(c.insumos_sem_custo, ["AGUA"]);
+  assert.equal(c.variantes_de_preco, 1); assert.equal(c.preservadas_sem_unificar, true);
+  const cafes = r.payload.insumos.filter((i) => normalizarNome(i.nome).startsWith("CAFE"));
+  assert.deepEqual(cafes.map((i) => i.preco_caixa).sort(), [40, 55]);
+});
