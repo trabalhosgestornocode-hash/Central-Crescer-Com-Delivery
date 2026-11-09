@@ -73,3 +73,31 @@ test("central sem referências oficiais: comparação vazia (não inventa)", asy
   const c = await listar(ctx, { mes: "2026-09" }, deps({ listarReferenciasOficiais: async () => [] }));
   assert.deepEqual(c.comparacao, []); assert.equal(c.resumoComparacao.total, 0);
 });
+
+// ---- Controle de pendências: toda pendência mostra motivo, evidência necessária, responsável e status; nada vira confirmado; sem duplicar ----
+test("pendências: cada uma traz motivo, evidência necessária, responsável e status; o ajuste iFood fica ESTIMADO e sem confirmação", async () => {
+  const c = await listar(ctx, { mes: "2026-09" }, deps());
+  assert.ok(c.pendencias.length >= 3);
+  for (const p of c.pendencias) {
+    assert.ok(p.motivo, `${p.tipo}: motivo`); assert.ok(p.evidenciaNecessaria, `${p.tipo}: evidência necessária`); assert.ok(p.responsavel, `${p.tipo}: responsável`);
+    assert.ok(["pendente", "estimado", "aguardando_comprovacao"].includes(p.status), `${p.tipo}: status ${p.status}`);
+    assert.notEqual(p.status, "confirmado");
+  }
+  const aj = c.pendencias.find((p) => p.tipo === "ajuste_vendas");
+  assert.equal(aj.status, "estimado"); assert.equal(aj.valorCentavos, -100000); assert.match(aj.responsavel, /Portal do Parceiro/);
+  assert.equal(c.pendencias.find((p) => p.tipo === "conta_sem_pagamento").status, "aguardando_comprovacao");
+});
+
+test("pendências: pagamento feito por terceiro e lançamento com classificação pendente entram na central, sem duplicar e sem reclassificar", async () => {
+  const lanc = { id: "l1", conta_id: "k1", categoria_id: "c-rec", sentido: "entrada", valor_centavos: 253600, data_movimento: "2026-09-21", status: "realizado", classificacao_pendente: true, descricao: "Pix recebido", nota_revisao: "1.234,00 a identificar" };
+  const pagT = { id: "p9", obrigacao_id: "o1", conta_id: null, data_pagamento: "2026-09-12", valor_centavos: 663360, status: "ativo", origem_pagamento: "terceiro", terceiro_nome: "Sócia", observacao: "pago pela sócia" };
+  const d = deps({ listarPagamentos: async () => [...PAG, pagT], listarTodosLancamentos: async () => [lanc, { ...lanc, id: "l2", classificacao_pendente: false }, { ...lanc, id: "l3", status: "cancelado" }] });
+  const c = await listar(ctx, { mes: "2026-09" }, d);
+  const t = c.pendencias.filter((p) => p.tipo === "pagamento_terceiro");
+  assert.equal(t.length, 1); assert.equal(t[0].valorCentavos, 663360); assert.equal(t[0].status, "aguardando_comprovacao"); assert.equal(t[0].acao, null, "sem ação de confirmar automática");
+  const k = c.pendencias.filter((p) => p.tipo === "classificacao_pendente");
+  assert.equal(k.length, 1, "uma pendência agrupada, não uma por lançamento"); assert.equal(k[0].itens.length, 1); assert.equal(k[0].itens[0].id, "l1"); assert.equal(k[0].valorCentavos, 253600); assert.equal(k[0].acao, null);
+  const ids = c.pendencias.map((p) => p.id); assert.equal(new Set(ids).size, ids.length, "ids únicos: nenhuma pendência duplicada");
+  const c2 = await listar(ctx, { mes: "2026-09" }, d);
+  assert.deepEqual(c2.pendencias.map((p) => p.id), ids, "listar duas vezes não cria nem some pendência (somente leitura)");
+});

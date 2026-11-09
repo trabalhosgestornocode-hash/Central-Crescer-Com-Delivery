@@ -34,3 +34,10 @@ test("não existe mais o indicador 'Total de vendas por canal' na interface", ()
   assert.match(f.cuidado, /Venda não é dinheiro na conta/);
   assert.match(f.formula, /base gerencial por canal = total do painel \(SAIPOS\) \+ ajustes; coincide com as vendas diárias do mês/);
 });
+
+test("Central de Conferências: sem aprovação em massa de rateios; cada pendência exibe responsável, evidência necessária e status", () => {
+  const src = readFileSync(new URL("../src/financeiro/conferencias.js", import.meta.url), "utf8");
+  assert.doesNotMatch(src, /data-marcar-todos|Marcar todos|Aprovar os marcados/);
+  assert.match(src, /data-aprovar-um/); assert.match(src, /Conferi o documento/);
+  assert.match(src, /Evidência necessária/); assert.match(src, /Responsável pela conferência/); assert.match(src, /classificacao_pendente/); assert.match(src, /pagamento_terceiro/);
+});

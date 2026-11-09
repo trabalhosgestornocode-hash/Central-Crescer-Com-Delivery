@@ -33,6 +33,27 @@ export const checklistIfood = (a, { mes, canal } = {}) => {
     situacao: "estimado, a confirmar no Portal do Parceiro",
   };
 };
+/** Campos que TODA pendência mostra: motivo, documento/evidência necessária, responsável pela conferência e status. Só descreve; nunca confirma nada. */
+export const COMPLEMENTO_PENDENCIA = {
+  ajuste_vendas: { responsavel: "Contadora (iFood: com o Portal do Parceiro)", evidenciaNecessaria: "Relatório do canal com taxa de entrega e descontos do mesmo período e dos mesmos pedidos; a soma deve fechar com o ajuste.", status: "pendente" },
+  rateios: { responsavel: "Contadora", evidenciaNecessaria: "Critério e documento de cada rateio (período de produção ou dias de consumo) e as competências afetadas.", status: "pendente" },
+  juros_presumido: { responsavel: "Contadora", evidenciaNecessaria: "Boleto, extrato ou nota que mostre juros/multa sobre o valor original da conta.", status: "pendente" },
+  conta_sem_pagamento: { responsavel: "Proprietário ou operador financeiro", evidenciaNecessaria: "Comprovante do pagamento com a conta de saída, ou confirmação de que a conta segue em aberto.", status: "aguardando_comprovacao" },
+  categoria_sem_regra: { responsavel: "Contadora", evidenciaNecessaria: "Definição da regra gerencial (critério e grupo da DRE) de cada categoria.", status: "pendente" },
+  divergencia_canais: { responsavel: "Contadora", evidenciaNecessaria: "Relatório de vendas por canal e vendas diárias do mês, para localizar a diferença.", status: "pendente" },
+  origem_pendente: { responsavel: "Proprietário", evidenciaNecessaria: "Comprovante bancário do pagamento (de qual conta o dinheiro saiu).", status: "aguardando_comprovacao" },
+  transferencias_internas: { responsavel: "Contadora ou operador de conciliação", evidenciaNecessaria: "Extrato das duas contas mostrando a saída e a entrada correspondente.", status: "pendente" },
+  classificacao_pendente: { responsavel: "Contadora", evidenciaNecessaria: "Documento que identifique a natureza e a categoria de cada lançamento.", status: "pendente" },
+  pagamento_terceiro: { responsavel: "Proprietário e contadora", evidenciaNecessaria: "Recibo ou comprovante do pagamento feito pelo terceiro e o combinado de reembolso.", status: "aguardando_comprovacao" },
+};
+const STATUS_ROTULO = { pendente: "Pendente", estimado: "Estimado", aguardando_comprovacao: "Aguardando comprovação" };
+/** Completa a pendência sem sobrescrever o que ela já traz (checklist próprio, evidências etc.). Ajuste ainda 'estimado' fica com status ESTIMADO. */
+export function completarPendencia(i) {
+  const base = COMPLEMENTO_PENDENCIA[i.tipo];
+  if (!base) return i;
+  const status = i.tipo === "ajuste_vendas" ? "estimado" : base.status;
+  return { motivo: i.descricao, ...base, status, statusRotulo: STATUS_ROTULO[status], ...i, ...(i.tipo === "ajuste_vendas" ? { status, statusRotulo: STATUS_ROTULO[status] } : {}) };
+}
 const fim = (ym) => { const [a, m] = ym.split("-").map(Number); return `${ym}-${String(new Date(Date.UTC(a, m, 0)).getUTCDate()).padStart(2, "0")}`; };
 
 /** Explica uma diferença só quando ela bate EXATAMENTE com um item (ou a soma de dois) conhecido; senão diz que não há explicação automática. */
@@ -85,6 +106,7 @@ export async function listar(ctx, q, deps = padrao) {
       acao: { tipo: "resolver_origem", rotulo: "Informar a conta de saída", metodo: "POST", caminho: `/contas-pagar/pagamentos/${p.id}/origem`, exige: ["contaId"], permissao: "conciliar" } });
   }
   // transferências internas sem vínculo (ex.: Stone → Unicred): proposta com evidência, sem confirmação automática
+  const idsProposta = new Set();   // lançamentos que já aparecem numa proposta de transferência (não duplicar a pendência)
   if (deps.repo.listarTransferencias) {
     const ini = `${mes}-01`, fimM = fim(mes);
     const lancs = await deps.repo.listarTodosLancamentos(c, { de: ini, ate: `${new Date(Date.parse(fimM) + 5 * 86400000).toISOString().slice(0, 10)}` }, deps.db);
@@ -100,6 +122,7 @@ export async function listar(ctx, q, deps = padrao) {
       const linhas = props.map((x) => ({ saida: desc(x.saida), status: x.status, contrapartidas: x.contrapartidas.map(desc), alternativas: x.alternativas.map((g) => g.map(desc)),
         vincular: x.status === "um_para_um" ? { caminho: "/transferencias/vincular", corpo: { saidaId: x.saida.id, entradaId: x.contrapartidas[0].id } } : null,
         vincularMultipla: x.status === "um_para_varios" ? { caminho: "/transferencias/vincular-multipla", corpo: { saidaId: x.saida.id, entradaIds: x.contrapartidas.map((e) => e.id) }, exigeJustificativa: true } : null }));
+      for (const l of linhas) { idsProposta.add(l.saida.id); l.contrapartidas.forEach((x) => idsProposta.add(x.id)); }
       const cont = (st) => linhas.filter((l) => l.status === st).length;
       const comPar = linhas.filter((l) => l.status !== "sem_contrapartida"), sem = linhas.filter((l) => l.status === "sem_contrapartida");
       const total = comPar.reduce((a, l) => a + l.saida.valorCentavos, 0);
@@ -107,6 +130,19 @@ export async function listar(ctx, q, deps = padrao) {
         descricao: `Proposta de pareamento, nada confirmado: ${cont("um_para_um")} com uma entrada de mesmo valor (vinculável), ${cont("um_para_varios")} em que a soma de 2 a 3 entradas fecha exatamente (vincula-se 1 saída a 2–3 entradas só com decisão humana e justificativa: exige decisão antes de vincular), ${cont("ambiguo")} ambíguas.${sem.length ? ` Outras ${sem.length} saídas parecidas com transferência não têm contrapartida de mesmo valor e ficam fora desta proposta.` : ""}`,
         valorCentavos: total, linhas: comPar, outras: sem, acao: { tipo: "vincular_transferencias", rotulo: "Revisar vínculos", metodo: "TELA", permissao: "conciliar" } });
     }
+  }
+  // pagamento feito por terceiro (ex.: sócia): reconhecido como despesa e dívida, mas sem saída do caixa da empresa; precisa de comprovante e combinado de reembolso
+  for (const p of pags.filter((x) => x.status !== "cancelado" && x.origem_pagamento === "terceiro" && String(x.data_pagamento).slice(0, 7) === mes)) {
+    const o = obrs.find((x) => x.id === p.obrigacao_id);
+    add({ id: `terceiro:${p.id}`, tipo: "pagamento_terceiro", titulo: `Pagamento feito por terceiro — ${o?.descricao ?? "pagamento"}`, descricao: `Pago em ${String(p.data_pagamento).slice(8, 10)}/${String(p.data_pagamento).slice(5, 7)} por ${p.terceiro_nome ?? "terceiro"}. Não saiu do caixa da empresa; o valor segue como dívida até haver comprovante e acordo de reembolso. ${p.observacao ?? ""}`.trim(),
+      valorCentavos: Number(p.valor_centavos), evidencias: p.observacao ? [p.observacao] : [], acao: null });
+  }
+  // lançamentos que o sistema não consegue classificar sozinho (ex.: Pix com parte a identificar): uma pendência só, com a lista; nada é reclassificado aqui
+  if (deps.repo.listarTodosLancamentos) {
+    const doMes = (await deps.repo.listarTodosLancamentos(c, { de: `${mes}-01`, ate: fim(mes) }, deps.db)).filter((l) => l.status !== "cancelado" && l.classificacao_pendente && !idsProposta.has(l.id));
+    const nomeConta = new Map((await deps.repo.listarContas(c, deps.db)).map((x) => [x.id, x.nome]));
+    if (doMes.length) add({ id: "classificacao_pendente", tipo: "classificacao_pendente", titulo: `${doMes.length} lançamento(s) com classificação pendente`, descricao: "Lançamentos marcados como pendentes de classificação ou de identificação de parte do valor. Nenhum foi reclassificado ou conciliado para eliminar a diferença.",
+      valorCentavos: doMes.reduce((a, l) => a + Number(l.valor_centavos), 0), itens: doMes.map((l) => ({ id: l.id, data: String(l.data_movimento).slice(0, 10), conta: nomeConta.get(l.conta_id) ?? "—", sentido: l.sentido, valorCentavos: Number(l.valor_centavos), descricao: l.descricao, nota: l.nota_revisao ?? null })), acao: null });
   }
   // períodos: contas do mês anterior pagas neste mês, e contas deste mês pagas no seguinte (só categorias por COMPETÊNCIA: compras e entregas)
   const regras = regrasPadrao(plano);
@@ -153,7 +189,8 @@ export async function listar(ctx, q, deps = padrao) {
     for (const x of comparacao) if (x.indicador.startsWith("pontoEquilibrio") && x.diferencaCentavos && Math.abs(x.diferencaCentavos) === derivado && dd.explicacao && !/Sem explicação/.test(dd.explicacao))
       x.explicacao = `Efeito derivado da diferença de despesas (R$ ${(Math.abs(dd.diferencaCentavos) / 100).toFixed(2).replace(".", ",")} ÷ margem de contribuição % = R$ ${(derivado / 100).toFixed(2).replace(".", ",")}).`;
   }
-  return { mes, periodos, geral: itens.filter((i) => i.geral), pendencias: itens.filter((i) => !i.geral), total: itens.filter((i) => !i.geral).length, comparacao,
+  const completos = itens.map(completarPendencia);
+  return { mes, periodos, geral: completos.filter((i) => i.geral), pendencias: completos.filter((i) => !i.geral), total: completos.filter((i) => !i.geral).length, comparacao,
     resumoComparacao: { total: comparacao.length, conferem: comparacao.filter((x) => x.confere).length, divergentes: comparacao.filter((x) => x.confere === false).length } };
 }
 

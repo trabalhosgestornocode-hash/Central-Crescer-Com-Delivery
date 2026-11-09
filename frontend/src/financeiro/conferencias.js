@@ -7,7 +7,8 @@ import { esc } from "./detalheHtml.js";
 import { aviso, dialogo, campo } from "./ui.js";
 
 const ROTULO_TIPO = { ajuste_vendas: "Ajuste de vendas", rateios: "Rateios", juros_presumido: "Acréscimo presumido", conta_sem_pagamento: "Conta sem pagamento", categoria_sem_regra: "Sem regra", divergencia_canais: "Divergência de canais",
-  origem_pendente: "Origem pendente", transferencias_internas: "Transferências internas" };
+  origem_pendente: "Origem pendente", transferencias_internas: "Transferências internas", classificacao_pendente: "Classificação pendente", pagamento_terceiro: "Pago por terceiro" };
+const TOM_STATUS = { pendente: "warn", estimado: "warn", aguardando_comprovacao: "muted" };
 const R = (c) => (c == null ? "—" : moeda(c));
 const ROTULO_STATUS = { um_para_um: ["1 saída ⇄ 1 entrada", "ok"], um_para_varios: ["soma de várias entradas — exige decisão", "warn"], ambiguo: ["ambíguo", "bad"], sem_contrapartida: ["sem contrapartida", "muted"] };
 const badge = (t, tom) => `<span class="fin-badge fin-badge--${tom}">${esc(t)}</span>`;
@@ -41,8 +42,10 @@ function htmlAcao(p) {
 }
 
 function htmlPendencia(p) {
-  return `<li class="cf-item" data-pend="${esc(p.id)}"><div class="cf-topo">${badge(ROTULO_TIPO[p.tipo] ?? p.tipo, p.gravidade === "divergencia" ? "bad" : "warn")}${p.valorCentavos != null ? `<strong>${R(p.valorCentavos)}</strong>` : ""}</div>
-    <h4>${esc(p.titulo)}</h4><p>${esc(p.descricao)}</p>
+  const itens = p.tipo === "classificacao_pendente" && (p.itens ?? []).length ? `<ul class="fin-lista">${p.itens.map((x) => `<li>${esc(dataBr(x.data))} · ${esc(x.conta)} · ${x.sentido === "entrada" ? "entrada" : "saída"} <strong>${R(x.valorCentavos)}</strong> — ${esc(x.descricao ?? "")}${x.nota ? `<br><small>${esc(x.nota)}</small>` : ""}</li>`).join("")}</ul>` : "";
+  const ficha = p.responsavel ? `<dl class="cf-ficha"><dt>Motivo</dt><dd>${esc(p.motivo ?? p.descricao)}</dd><dt>Evidência necessária</dt><dd>${esc(p.evidenciaNecessaria ?? "")}</dd><dt>Responsável pela conferência</dt><dd>${esc(p.responsavel)}</dd></dl>` : "";
+  return `<li class="cf-item" data-pend="${esc(p.id)}"><div class="cf-topo">${badge(ROTULO_TIPO[p.tipo] ?? p.tipo, p.gravidade === "divergencia" ? "bad" : "warn")}${p.status ? badge(p.statusRotulo ?? p.status, TOM_STATUS[p.status] ?? "warn") : ""}${p.valorCentavos != null ? `<strong>${R(p.valorCentavos)}</strong>` : ""}</div>
+    <h4>${esc(p.titulo)}</h4>${p.responsavel ? "" : `<p>${esc(p.descricao)}</p>`}${ficha}${itens}
     ${(p.parcelas ?? []).length ? `<p class="fin-sub">Parcelas: ${p.parcelas.map((x) => `${esc(rotuloMes(x.competencia))} ${R(x.valorCentavos)}`).join(" · ")}</p>` : ""}
     ${(p.evidencias ?? []).length ? `<p class="fin-sub"><strong>Evidência:</strong> ${p.evidencias.map(esc).join("; ")}</p>` : ""}
     ${htmlChecklist(p.checklist)}${htmlAcao(p)}</li>`;
@@ -67,28 +70,23 @@ function htmlPeriodos(p) {
 
 // ------------------------------------------------------------------ telas de decisão agrupadas
 function abrirRateios(item, ctx) {
-  const corpo = `<section><p class="fin-sub">Cinco decisões numa tela só. Aprovar muda o rateio de “proposto” para “aprovado” (decisão da contadora, registrada com o seu usuário). Nada é aprovado sem marcar.</p>
-    <div class="fin-tabela-wrap"><table class="fin-tabela fin-tabela--compacta"><thead><tr><th></th><th>Obrigação</th><th class="fin-num">Valor</th><th>Competências</th><th>Critério e evidência</th></tr></thead><tbody>
-    ${item.itens.map((r) => `<tr data-rateio="${esc(r.id)}"><td><input type="checkbox" name="r" value="${esc(r.id)}" aria-label="Aprovar ${esc(r.obrigacao)}"></td>
+  const corpo = `<section><p class="fin-sub">Aprovar muda o rateio de “proposto” para “aprovado” (decisão da contadora, registrada com o seu usuário e o horário). A aprovação é feita um rateio por vez, depois de conferir o documento: não há aprovação em massa.</p>
+    <div class="fin-tabela-wrap"><table class="fin-tabela fin-tabela--compacta"><thead><tr><th>Aprovação</th><th>Obrigação</th><th class="fin-num">Valor</th><th>Competências</th><th>Critério e evidência</th></tr></thead><tbody>
+    ${item.itens.map((r) => `<tr data-rateio="${esc(r.id)}"><td><label class="fin-campo fin-campo--inline"><span><input type="checkbox" name="r" value="${esc(r.id)}" data-validado> Conferi o documento</span></label><button type="button" class="btn btn-primary btn-sm" data-aprovar-um="${esc(r.id)}" aria-label="Aprovar ${esc(r.obrigacao)}">Aprovar este</button></td>
       <td>${esc(r.obrigacao)}<br><small>${esc(r.categoria ?? "")}${r.fornecedor ? ` · ${esc(r.fornecedor)}` : ""} · competência da conta ${esc(r.competenciaObrigacao ?? "—")}</small></td><td class="fin-num">${R(r.valorElegivelCentavos)}</td>
       <td>${r.parcelas.map((p) => `${esc(rotuloMes(p.competencia))}: <strong>${R(p.valorCentavos)}</strong>`).join("<br>")}</td>
       <td><strong>${esc(r.criterio === "producao" ? "período de produção" : r.criterio === "dias_consumo" ? "dias de consumo" : r.criterio)}</strong><br><small>${esc(r.justificativa)}</small><br><small>${r.evidencia ? `Evidência: ${esc(r.evidencia)}` : "Sem documento anexado: a evidência é o critério acima."}</small></td></tr>`).join("")}
     </tbody></table></div>
-    <label class="fin-campo fin-campo--inline"><span><input type="checkbox" data-ciente> Confirmo que os rateios marcados foram validados por quem tem autoridade (contadora)</span></label>
-    <p><button type="button" class="btn btn-ghost btn-sm" data-marcar-todos>Marcar todos</button> <button type="button" class="btn btn-primary btn-sm" data-aprovar>Aprovar os marcados</button></p>
     <p class="fin-sub" data-resultado role="status"></p></section>`;
   const painel = abrirPainelHtml({ titulo: "Aprovação dos rateios", html: corpo, aoFechar: () => abrirCentral(ctx) });
   const raiz = document.querySelector(".fin-pn");
-  raiz.querySelector("[data-marcar-todos]").addEventListener("click", () => raiz.querySelectorAll('input[name="r"]').forEach((c) => { c.checked = true; }));
-  raiz.querySelector("[data-aprovar]").addEventListener("click", async () => {
-    const marcados = [...raiz.querySelectorAll('input[name="r"]:checked')].map((c) => c.value), saida = raiz.querySelector("[data-resultado]");
-    if (!marcados.length) { saida.textContent = "Marque ao menos um rateio."; return; }
-    if (!raiz.querySelector("[data-ciente]").checked) { saida.textContent = "Confirme a validação antes de aprovar."; return; }
-    let ok = 0; const falhas = [];
-    for (const id of marcados) { const r = item.itens.find((x) => x.id === id); try { await fin.post(r.caminhoAprovar, {}); ok++; } catch (e) { falhas.push(`${r.obrigacao}: ${e.message}`); } }
-    saida.textContent = `${ok} aprovado(s).${falhas.length ? ` Falhas: ${falhas.join(" | ")}` : ""}`;
-    aviso(`${ok} rateio(s) aprovado(s).`); ctx.aoAlterar?.();
-    if (!falhas.length) { painel.fechar(); }
+  raiz.addEventListener("click", async (e) => {
+    const bt = e.target.closest("[data-aprovar-um]"); if (!bt) return;
+    const linha = bt.closest("tr"), saida = raiz.querySelector("[data-resultado]"), r = item.itens.find((x) => x.id === bt.dataset.aprovarUm);
+    if (!linha.querySelector("[data-validado]").checked) { saida.textContent = "Marque \"Conferi o documento\" neste rateio antes de aprovar."; return; }
+    bt.disabled = true;
+    try { await fin.post(r.caminhoAprovar, {}); aviso("Rateio aprovado."); ctx.aoAlterar?.(); painel.fechar(); }
+    catch (err) { bt.disabled = false; saida.textContent = `${r.obrigacao}: ${err.message ?? "não foi possível aprovar"}`; }
   });
 }
 
