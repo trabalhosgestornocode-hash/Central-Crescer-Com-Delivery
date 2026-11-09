@@ -48,7 +48,9 @@ export async function carregarGrafo(organizacaoId) {
   }
   const rendimentoById = new Map(produtos.map((p) => [p.id, p.rendimento]));
   const homologacaoById = new Map(produtos.map((p) => [p.id, p.homologacao]));
-  return { insumoById, nomeProdById, fichaByProd, produtos, rendimentoById, homologacaoById };
+  const homologadoCustoById = new Map(produtos.map((p) => [p.id, p.homologado_custo]));
+  const homologacaoMotivoById = new Map(produtos.map((p) => [p.id, p.homologacao_motivo]));
+  return { insumoById, nomeProdById, fichaByProd, produtos, rendimentoById, homologacaoById, homologadoCustoById, homologacaoMotivoById };
 }
 
 /**
@@ -85,6 +87,27 @@ export function custoTotalProduto(produtoId, grafo, prof = 0) {
   }
   // Custo UNITÁRIO: o lote (soma das linhas) dividido pelo que ele rende.
   return total / rendimentoDe(produtoId, grafo);
+}
+
+/** Variação relativa do custo, desde a homologação, que a invalida (mudança de preço de insumo, p.ex.). */
+export const HOMOLOGACAO_TOLERANCIA_CUSTO = 0.005;
+
+/**
+ * Homologação EFETIVA: o estado gravado, a menos que o custo atual tenha se afastado do custo homologado
+ * além da tolerância — aí vale 'pendente' com motivo 'custo_alterado' (composição e rendimento já são
+ * invalidados no banco por gatilho, migration 158). Produtos sem controle ('nao_aplicavel') nunca mudam.
+ * @returns {{estado: string, motivo: string|null}}
+ */
+export function homologacaoEfetiva(produtoId, grafo) {
+  const estado = grafo.homologacaoById?.get(produtoId) ?? "nao_aplicavel";
+  const motivo = grafo.homologacaoMotivoById?.get(produtoId) ?? null;
+  if (estado !== "homologada") return { estado, motivo: estado === "pendente" ? motivo : null };
+  const base = Number(grafo.homologadoCustoById?.get(produtoId));
+  if (Number.isFinite(base) && base > 0) {
+    const atual = custoTotalProduto(produtoId, grafo);
+    if (Math.abs(atual - base) / base > HOMOLOGACAO_TOLERANCIA_CUSTO) return { estado: "pendente", motivo: "custo_alterado" };
+  }
+  return { estado, motivo: null };
 }
 
 /**
@@ -229,7 +252,7 @@ export function resumoProduto({ produtoId, grafo, precoVenda = null, custoManual
   const cmv = status.chave === "insumo_sem_custo" ? null : cmvPct(custo, precoVenda);
 
   // CMV HOMOLOGADO: só existe com ficha íntegra E sem homologação pendente. Nunca um número "provisório" disfarçado.
-  const homologacao = grafo.homologacaoById?.get(produtoId) ?? "nao_aplicavel";
+  const { estado: homologacao, motivo: homologacaoMotivo } = homologacaoEfetiva(produtoId, grafo);
   const fichaIntegra = !["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(status.chave);
   let cmvHomologado = null;
   let motivoSemCmvHomologado = null;
@@ -239,7 +262,7 @@ export function resumoProduto({ produtoId, grafo, precoVenda = null, custoManual
   else cmvHomologado = cmv;
   return {
     rendimento: rendimentoDe(produtoId, grafo),
-    homologacao,
+    homologacao, homologacao_motivo: homologacaoMotivo,
     cmv_homologado_pct: cmvHomologado,
     motivo_sem_cmv_homologado: motivoSemCmvHomologado,
     componentes,

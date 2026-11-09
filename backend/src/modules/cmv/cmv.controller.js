@@ -1,9 +1,18 @@
 import { asyncHandler } from "../../shared/asyncHandler.js";
 import * as service from "./cmv.service.js";
-import { condicoesComerciais } from "./cmv.condicoes.js";
+import { condicoesComerciais, salvarCondicao as salvar, historicoCondicoes } from "./cmv.condicoes.js";
+import { identidadeOperacional } from "../../shared/identidade.js";
 
 export const condicoes = asyncHandler(async (req, res) => {
   res.json({ data: await condicoesComerciais({ organizacaoId: req.tenant.organizacaoId }) });
+});
+
+export const salvarCondicao = asyncHandler(async (req, res) => {
+  res.json({ data: await salvar({ organizacaoId: req.tenant.organizacaoId, body: req.body, usuario: identidadeOperacional(req) }) });
+});
+
+export const condicoesHistorico = asyncHandler(async (req, res) => {
+  res.json({ data: await historicoCondicoes({ organizacaoId: req.tenant.organizacaoId, limite: req.query.limite }) });
 });
 
 // `comparar=true` é o único jeito de sair da tabela oficial: sem ele, `tabela`

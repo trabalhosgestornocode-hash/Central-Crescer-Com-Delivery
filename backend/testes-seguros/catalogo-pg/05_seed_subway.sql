@@ -18,3 +18,4 @@ insert into ficha_tecnica (produto_id, insumo_id, quantidade) values
 insert into ficha_tecnica (produto_id, insumo_id, quantidade, ativo) values   -- linha INATIVA: não pode contar
  ('22222222-0000-4000-8000-000000000003','11111111-0000-4000-8000-000000000001',99,false);
 create table snap_custo as select id, fn_custo_produto(id) as custo from produtos;
+insert into canais_venda (organizacao_id, canal, comissao_pct) values ('a0000000-0000-4000-8000-000000000001','ifood',0.27),('a0000000-0000-4000-8000-000000000001','balcao',0);

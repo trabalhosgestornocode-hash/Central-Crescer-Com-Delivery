@@ -29,6 +29,7 @@ export const mes = asyncHandler(async (req, res) => {
     unidadeIdSolicitado: req.query.unidadeId,
     mes: req.query.mes,
     ano: req.query.ano,
+    produtoId: req.query.produtoId || undefined, // produto escolhido no Simulador (ausente = comportamento legado)
     tabelaBalcao: req.query.tabelaBalcao,
     tabelaIfood: req.query.tabelaIfood,
   });
@@ -204,6 +205,7 @@ export const simuladorPreco = asyncHandler(async (req, res) => {
     canal: req.query.canal,
     tabela: req.query.tabela,
     produto: req.query.produto,
+    produtoId: req.query.produtoId || undefined,
     mes: req.query.mes,
     ano: req.query.ano,
     tabelaBalcao: req.query.tabelaBalcao,

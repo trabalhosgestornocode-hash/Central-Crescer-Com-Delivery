@@ -1,5 +1,6 @@
 import { lerTotalDeducoesRentabilidade } from "./dashboardExecutivo.totalDeducoes.js";
 import { carregarPrecosRentabilidade } from "./dashboardExecutivo.precos.service.js";
+import { escolherDeducoes } from "./dashboardExecutivo.deducoes.js";
 import { logisticaProprioOpcional } from "./dashboardExecutivo.logisticaProprio.js";
 import { calcularProtecaoPrecificacao, calcularComparacaoProduto } from "./dashboardExecutivo.rentabilidade.js";
 import { supabase } from "../../config/supabase.js";
@@ -341,7 +342,7 @@ async function calcularComparativoEPlanoRecuperacao({ unidadeId, ano, mes, hojeI
 // ---------------------------------------------------------------------------
 // GET /dashboard-executivo/mes — payload agregado da página inteira
 // ---------------------------------------------------------------------------
-export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, mes: mesRaw, ano: anoRaw, tabelaBalcao, tabelaIfood }) {
+export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, mes: mesRaw, ano: anoRaw, tabelaBalcao, tabelaIfood, produtoId }) {
   const mes = v.numero(mesRaw, "Mês", { min: 1, max: 12 });
   const ano = v.numero(anoRaw, "Ano", { min: 2000, max: 2100 });
   const unidadeId = await resolverUnidadeAlvo({ organizacaoId, unidadeIdSessao, unidadeIdSolicitado, exigirEspecifica: false });
@@ -365,7 +366,7 @@ export async function obterMes({ organizacaoId, unidadeIdSessao, unidadeIdSolici
     const metasPorSegmento = await Promise.all(segmentos.map(async (s) => ({
       modelo: s.modelo, metas: await resolverMetas({ organizacaoId, unidadeId, modeloLogistico: s.modelo }),
     })));
-    const precos = await carregarPrecosRentabilidade({ organizacaoId, unidadeId, tabelaBalcao, tabelaIfood });
+    const precos = await carregarPrecosRentabilidade({ organizacaoId, unidadeId, tabelaBalcao, tabelaIfood, ...(produtoId ? { produtoId } : {}) });
     return obterMesDeUmaUnidade({
       organizacaoId, unidadeId, mes, ano, hojeIso, modelo, modeloAtual, precos,
       metas: estado.misto ? {} : metasPorSegmento[0].metas, metasPorSegmento, segmentos, estado, linhaDoTempo,
@@ -539,10 +540,15 @@ async function obterMesDeUmaUnidade({
     ticketMedioBase: parTicketMedio
       ? { valorVendasBruto: parTicketMedio.valorVendasBruto, qtdVendas: parTicketMedio.qtdVendas }
       : null,
-    comparacao: calcularComparacaoProduto(precos, {
-      taxasComissoesPct: indicadoresRentabilidade.taxas_comissoes,
-      servicosPromocoesPct: indicadoresRentabilidade.servicos_promocoes,
-    }),
+    // Deduções: as APURADAS no mês (conciliadas) mandam. Só se não houver as duas — e apenas quando o usuário escolheu
+    // o produto — entram as condições comerciais CONFIGURADAS pela empresa, sempre rotuladas como estimativa.
+    ...(() => {
+      const d = escolherDeducoes(indicadoresRentabilidade, precos.deducoesConfiguradas);
+      return {
+        origemDeducoes: d.origem, motivoDeducoesIndisponiveis: d.motivo,
+        comparacao: calcularComparacaoProduto(precos, { taxasComissoesPct: d.taxasComissoesPct, servicosPromocoesPct: d.servicosPromocoesPct }),
+      };
+    })(),
   };
   // META IDEAL de Serviços e Promoções e de Total de Deduções acompanha a
   // Proteção da Precificação — Full Service E Marketplace, cada um com sua

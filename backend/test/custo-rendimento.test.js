@@ -94,3 +94,29 @@ test("mão de obra: indicador à parte; null se faltar custo por minuto (não in
   assert.equal(custoMaoDeObraUnitario([{ minutos: 10, custo_minuto: null }], 2), null);
   assert.equal(custoMaoDeObraUnitario([], 2), 0);
 });
+
+// ---- homologação efetiva (invalidação por custo) -----------------------------------------------
+const { homologacaoEfetiva, HOMOLOGACAO_TOLERANCIA_CUSTO } = await import("../src/modules/produtos/custo.js");
+function gHom(preco, { estado = "homologada", custoHom = 3, motivo = null } = {}) {
+  const g = grafo({ insumos: [ins("a", preco)], fichas: [L("p", { insumo_id: "a", quantidade: 100 })], homologacao: { p: estado } });
+  g.homologadoCustoById = new Map([["p", custoHom]]); g.homologacaoMotivoById = new Map([["p", motivo]]);
+  return g;
+}
+test("homologação efetiva: dentro da tolerância permanece homologada", () => {
+  assert.deepEqual(homologacaoEfetiva("p", gHom(0.03)), { estado: "homologada", motivo: null }); // custo 3,00 = homologado
+  assert.deepEqual(homologacaoEfetiva("p", gHom(0.0301)), { estado: "homologada", motivo: null }); // +0,33% < 0,5%
+});
+test("homologação efetiva: mudança de preço de insumo além de 0,5% invalida (custo_alterado)", () => {
+  assert.equal(HOMOLOGACAO_TOLERANCIA_CUSTO, 0.005);
+  assert.deepEqual(homologacaoEfetiva("p", gHom(0.0320)), { estado: "pendente", motivo: "custo_alterado" });
+  assert.deepEqual(homologacaoEfetiva("p", gHom(0.0250)), { estado: "pendente", motivo: "custo_alterado" }); // para baixo também
+});
+test("homologação efetiva: pendente traz o motivo gravado; nao_aplicavel (Subways) nunca muda", () => {
+  assert.deepEqual(homologacaoEfetiva("p", gHom(0.03, { estado: "pendente", motivo: "composicao_alterada" })), { estado: "pendente", motivo: "composicao_alterada" });
+  assert.deepEqual(homologacaoEfetiva("p", gHom(0.5, { estado: "nao_aplicavel" })), { estado: "nao_aplicavel", motivo: null });
+});
+test("CMV homologado some quando o custo se afasta do homologado", () => {
+  const r = resumoProduto({ produtoId: "p", grafo: gHom(0.05), precoVenda: 20 });
+  assert.equal(r.homologacao, "pendente"); assert.equal(r.homologacao_motivo, "custo_alterado");
+  assert.equal(r.cmv_homologado_pct, null); assert.equal(r.motivo_sem_cmv_homologado, "pendente_homologacao");
+});

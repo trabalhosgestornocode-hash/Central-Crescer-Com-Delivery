@@ -4,7 +4,8 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import {
   carregarGrafo, componentesDiretos, custoTotalProduto, ingredientesExplodidos,
-  produtosAfetadosPorInsumo, produtosAfetadosPorProduto, recalcularCache, resumoProduto,
+  produtosAfetadosPorInsumo, produtosAfetadosPorProduto, recalcularCache, resumoProduto, homologacaoEfetiva,
+  carregarMaoDeObra, custoMaoDeObraUnitario, rendimentoDe,
 } from "./custo.js";
 import {
   converterQuantidade, statusFicha, validarComponenteFicha, UNIDADES,
@@ -62,8 +63,16 @@ export async function obterProduto({ organizacaoId, id }) {
     ingredientes, componentes, ficha, precos,
     qtd_componentes: ficha.length,
     status_ficha: status,
+    rendimento: rendimentoDe(produtoId, grafo),
+    homologacao_info: await infoHomologacao(produto, grafo),
     unidades: UNIDADES,
   };
+}
+
+/** Estado efetivo da homologação + quem homologou (nome) — para a ficha do produto. */
+async function infoHomologacao(produto, grafo) {
+  const ef = homologacaoEfetiva(produto.id, grafo);
+  return { estado: ef.estado, motivo: ef.motivo, homologado_em: ef.estado === "homologada" ? produto.homologado_em ?? null : null, homologado_por_nome: ef.estado === "homologada" ? produto.homologado_por_nome ?? null : null, custo_homologado: ef.estado === "homologada" ? produto.homologado_custo ?? null : null };
 }
 
 // Atualiza campos do produto e/ou preços (upsert por canal/tabela).
@@ -210,21 +219,81 @@ export async function definirHomologacao({ organizacaoId, produtoId, acao, usuar
   if (!p) throw ApiError.notFound("Produto não encontrado");
   if (p.homologacao === "nao_aplicavel" || p.homologacao == null) throw new ApiError(409, `"${p.nome}" não tem controle de homologação (cadastro manual).`);
 
+  const grafo = await carregarGrafo(organizacaoId);
+  const efetiva = homologacaoEfetiva(id, grafo);
+  let custoAgora = null;
   if (acao === "homologar") {
-    const grafo = await carregarGrafo(organizacaoId);
     const res = resumoProduto({ produtoId: id, grafo, precoVenda: null });
     if (["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave)) {
       throw new ApiError(409, `A ficha de "${p.nome}" está incompleta (${res.status_ficha.label}). Complete-a antes de homologar.`, { status_ficha: res.status_ficha });
     }
+    custoAgora = custoTotalProduto(id, grafo); // custo HOMOLOGADO: base da invalidação por mudança de preço
   }
   const novo = acao === "homologar" ? "homologada" : "pendente";
-  if (p.homologacao === novo) return { id, homologacao: novo, alterado: false };
-  const { error: eUp } = await supabase.from("produtos").update({
-    homologacao: novo, homologado_em: acao === "homologar" ? new Date().toISOString() : null, homologado_por: acao === "homologar" ? (usuario?.id ?? null) : null,
-  }).eq("id", id).eq("organizacao_id", organizacaoId);
+  // Já está no estado pedido e o estado é VÁLIDO (nada mudou desde a homologação): nada a fazer.
+  if (efetiva.estado === novo && !(novo === "homologada" && p.homologacao !== "homologada")) return { id, homologacao: novo, alterado: false };
+  const patch = acao === "homologar"
+    ? { homologacao: "homologada", homologacao_motivo: null, homologado_em: new Date().toISOString(), homologado_por: null, homologado_por_nome: usuario?.nome ?? usuario?.email ?? null, homologado_custo: custoAgora }
+    : { homologacao: "pendente", homologacao_motivo: "reaberta_manualmente", homologado_em: null, homologado_por: null, homologado_por_nome: null, homologado_custo: null };
+  const { error: eUp } = await supabase.from("produtos").update(patch).eq("id", id).eq("organizacao_id", organizacaoId);
   if (eUp) throw ApiError.badRequest(eUp.message);
-  await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas: [{ campo: "homologacao", rotulo: "Homologação da ficha", valor_anterior: p.homologacao, valor_novo: novo }] });
+  await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas: [{ campo: "homologacao", rotulo: "Homologação da ficha", valor_anterior: efetiva.estado + (efetiva.motivo ? ` (${efetiva.motivo})` : ""), valor_novo: novo }] });
   return { id, homologacao: novo, alterado: true };
+}
+
+/** Homologa várias fichas de uma vez (cada uma validada individualmente: ficha incompleta é recusada e reportada). */
+export async function homologarLote({ organizacaoId, ids, usuario }) {
+  if (!Array.isArray(ids) || !ids.length) throw ApiError.badRequest("Informe ao menos uma ficha.");
+  if (ids.length > 500) throw ApiError.badRequest("No máximo 500 fichas por vez.");
+  const resultado = { homologadas: [], ja_estavam: [], recusadas: [] };
+  for (const id of [...new Set(ids)]) {
+    try {
+      const r = await definirHomologacao({ organizacaoId, produtoId: id, acao: "homologar", usuario });
+      (r.alterado ? resultado.homologadas : resultado.ja_estavam).push(id);
+    } catch (e) {
+      resultado.recusadas.push({ id, motivo: e.message });
+    }
+  }
+  return resultado;
+}
+
+/**
+ * Catálogo de fichas para a tela da empresa: tudo calculado a partir de UM grafo (sem N+1).
+ * Categoria (Salgados/Doces/Bebidas) vem da origem da carga; produtos manuais ficam sem categoria.
+ */
+export async function listarFichasCatalogo({ organizacaoId }) {
+  const [grafo, origemRes, modRes] = await Promise.all([
+    carregarGrafo(organizacaoId),
+    supabase.from("catalogo_origem").select("entidade_id, referencia, pendencias").eq("organizacao_id", organizacaoId).eq("entidade", "produto"),
+    carregarMaoDeObra(organizacaoId).catch(() => new Map()),
+  ]);
+  const origem = new Map((origemRes.data ?? []).map((o) => [o.entidade_id, o]));
+  const itens = grafo.produtos.map((p) => {
+    const res = resumoProduto({ produtoId: p.id, grafo, precoVenda: null });
+    const o = origem.get(p.id);
+    const mod = custoMaoDeObraUnitario(modRes.get(p.id) ?? [], rendimentoDe(p.id, grafo));
+    const bloqueada = ["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave);
+    return {
+      id: p.id, nome: p.nome, ativo: p.ativo !== false,
+      natureza: p.vendavel === false ? "preparacao" : "produto_final",
+      categoria: o?.referencia?.fontes?.[0]?.categoria ?? null,
+      origem: o ? { arquivo: o.referencia?.fontes?.[0]?.arquivo ?? null, aba: o.referencia?.fontes?.[0]?.aba ?? null } : null,
+      rendimento: res.rendimento, unidade_rendimento: p.unidade_rendimento ?? null,
+      custo_unitario: bloqueada ? null : res.custo_calculado, custo_mao_de_obra_unitario: mod,
+      qtd_componentes: res.qtd_componentes, status_ficha: res.status_ficha, ficha_completa: !bloqueada,
+      homologacao: res.homologacao, homologacao_motivo: res.homologacao_motivo,
+      homologado_em: res.homologacao === "homologada" ? p.homologado_em ?? null : null,
+      homologado_por_nome: res.homologacao === "homologada" ? p.homologado_por_nome ?? null : null,
+      pendencias: o?.pendencias ?? [],
+      pode_homologar: !bloqueada && res.homologacao === "pendente",
+    };
+  }).sort((a, b) => a.nome.localeCompare(b.nome));
+  const resumo = {
+    total: itens.length, produtos_finais: itens.filter((i) => i.natureza === "produto_final").length, preparacoes: itens.filter((i) => i.natureza === "preparacao").length,
+    homologadas: itens.filter((i) => i.homologacao === "homologada").length, pendentes: itens.filter((i) => i.homologacao === "pendente").length,
+    incompletas: itens.filter((i) => !i.ficha_completa).length, prontas_para_homologar: itens.filter((i) => i.pode_homologar).length,
+  };
+  return { resumo, itens };
 }
 
 // Pendências registradas na carga (catalogo_origem): o que precisa de conferência pela empresa.

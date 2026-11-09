@@ -11,7 +11,9 @@ const homologarFicha = requirePermissao(PERMISSOES.CONFIG_GERENCIAR);
 
 produtosRouter.get("/", controller.listar);
 produtosRouter.get("/historico/recentes", controller.historicoRecente); // antes de "/:id"
-produtosRouter.get("/catalogo/pendencias", controller.pendenciasCatalogo); // pendências da carga importada (antes de "/:id")
+produtosRouter.get("/catalogo/pendencias", controller.pendenciasCatalogo);
+produtosRouter.get("/catalogo/fichas", controller.fichasCatalogo); // lista do catálogo (antes de "/:id")
+produtosRouter.post("/catalogo/homologar-lote", homologarFicha, controller.homologarLote); // pendências da carga importada (antes de "/:id")
 produtosRouter.get("/:id", controller.obter);
 produtosRouter.get("/:id/historico", controller.historico);
 produtosRouter.put("/:id", editarProdutos, controller.atualizar);
