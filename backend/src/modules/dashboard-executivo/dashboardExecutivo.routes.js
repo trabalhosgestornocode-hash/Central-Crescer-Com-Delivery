@@ -20,6 +20,8 @@ dashboardExecutivoRouter.get("/unidades", ver, controller.unidades);
 dashboardExecutivoRouter.get("/mes", ver, controller.mes);
 dashboardExecutivoRouter.get("/historico", ver, controller.historico);
 dashboardExecutivoRouter.get("/simulador-preco", ver, controller.simuladorPreco);
+// CMV teórico sobre os itens efetivamente vendidos no iFood (usa as fichas técnicas DA empresa; indisponível/parcial quando faltam dados).
+dashboardExecutivoRouter.get("/cmv-teorico", ver, controller.cmvTeorico);
 dashboardExecutivoRouter.get("/lancamentos/:data", ver, controller.lancamentoPorData);
 dashboardExecutivoRouter.post("/lancamentos", lancar, controller.criarLancamento);
 dashboardExecutivoRouter.put("/lancamentos/:id", lancar, controller.atualizarLancamento);

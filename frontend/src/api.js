@@ -99,6 +99,8 @@ export async function carregarCmv(canal, tabelaComparacao) {
 // Tudo aqui é escopado no servidor por req.tenant.unidadeId (Context Token) —
 // o frontend nunca envia unidade_id. Nada em localStorage.
 export const obterTabelasComerciaisUnidade = () => getJson(`/api/v1/unidade/tabelas-comerciais`);
+// Condições comerciais da EMPRESA (comissão por canal) para o Simulador — nunca um padrão embutido no front.
+export const obterCondicoesComerciais = () => getJson(`/api/v1/cmv/condicoes-comerciais`);
 export async function alterarTabelaComercialUnidade({ canal, novaTabela, motivo }) {
   const g = geracaoContexto();
   const r = await fetch(`${API_BASE}/api/v1/unidade/tabelas-comerciais`, {

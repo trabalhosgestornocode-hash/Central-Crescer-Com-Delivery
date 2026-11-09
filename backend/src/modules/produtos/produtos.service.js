@@ -4,7 +4,7 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import {
   carregarGrafo, componentesDiretos, custoTotalProduto, ingredientesExplodidos,
-  produtosAfetadosPorInsumo, recalcularCache,
+  produtosAfetadosPorInsumo, produtosAfetadosPorProduto, recalcularCache, resumoProduto,
 } from "./custo.js";
 import {
   converterQuantidade, statusFicha, validarComponenteFicha, UNIDADES,
@@ -162,10 +162,89 @@ export async function atualizarProduto({ organizacaoId, id, dados, usuario }) {
     }
   }
 
+  // 3b) Rendimento da receita (migration 157). Só muda quando enviado; altera o custo UNITÁRIO,
+  //     então o cache do produto e de quem o usa como submontagem é recalculado em cascata.
+  if (dados.rendimento !== undefined || dados.unidade_rendimento !== undefined) {
+    const patch = {};
+    if (dados.rendimento !== undefined) {
+      const n = Number(dados.rendimento);
+      if (!Number.isFinite(n) || n <= 0) throw ApiError.badRequest("O rendimento deve ser maior que zero.");
+      patch.rendimento = n;
+    }
+    if (dados.unidade_rendimento !== undefined) {
+      if (dados.unidade_rendimento !== null && dados.unidade_rendimento !== "" && !UNIDADES.includes(dados.unidade_rendimento)) throw ApiError.badRequest("Unidade do rendimento inválida.");
+      patch.unidade_rendimento = dados.unidade_rendimento || null;
+    }
+    const { data: rAntes, error: eR } = await supabase
+      .from("produtos").select("rendimento, unidade_rendimento").eq("id", id).eq("organizacao_id", organizacaoId).single();
+    if (eR) throw ApiError.badRequest("Rendimento indisponível neste ambiente (migration 157 não aplicada).");
+    const { error } = await supabase.from("produtos").update(patch).eq("id", id).eq("organizacao_id", organizacaoId);
+    if (error) throw ApiError.badRequest(error.message);
+    if (patch.rendimento !== undefined && Number(rAntes.rendimento) !== patch.rendimento) {
+      mudancas.push({ campo: "rendimento", rotulo: "Rendimento da receita", valor_anterior: String(rAntes.rendimento), valor_novo: String(patch.rendimento) });
+      const grafo = await carregarGrafo(organizacaoId);
+      await recalcularCache({ organizacaoId, produtoIds: produtosAfetadosPorProduto(id, grafo), grafo });
+    }
+    if (patch.unidade_rendimento !== undefined && (rAntes.unidade_rendimento ?? null) !== patch.unidade_rendimento) {
+      mudancas.push({ campo: "unidade_rendimento", rotulo: "Unidade do rendimento", valor_anterior: rAntes.unidade_rendimento ?? null, valor_novo: patch.unidade_rendimento });
+    }
+  }
+
   // 4) Auditoria (best-effort: nunca derruba o salvar se a tabela não existir)
   await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas });
 
   return obterProduto({ organizacaoId, id });
+}
+
+// ===========================================================================
+// HOMOLOGAÇÃO da ficha (migration 157) — só para produtos de carga importada
+// (homologacao != 'nao_aplicavel'). Subways/cadastro manual não têm esse controle.
+// Homologar exige ficha ÍNTEGRA; reabrir devolve a 'pendente'. Sempre auditado.
+// ===========================================================================
+export async function definirHomologacao({ organizacaoId, produtoId, acao, usuario }) {
+  const id = v.uuid(produtoId, "Produto");
+  if (!["homologar", "reabrir"].includes(acao)) throw ApiError.badRequest('Ação inválida: use "homologar" ou "reabrir".');
+  const { data: p, error } = await supabase
+    .from("produtos").select("id, nome, homologacao").eq("organizacao_id", organizacaoId).eq("id", id).single();
+  if (error && /homologacao|does not exist|schema cache|could not find/i.test(error.message)) throw ApiError.badRequest("Homologação indisponível neste ambiente (migration 157 não aplicada).");
+  if (!p) throw ApiError.notFound("Produto não encontrado");
+  if (p.homologacao === "nao_aplicavel" || p.homologacao == null) throw new ApiError(409, `"${p.nome}" não tem controle de homologação (cadastro manual).`);
+
+  if (acao === "homologar") {
+    const grafo = await carregarGrafo(organizacaoId);
+    const res = resumoProduto({ produtoId: id, grafo, precoVenda: null });
+    if (["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave)) {
+      throw new ApiError(409, `A ficha de "${p.nome}" está incompleta (${res.status_ficha.label}). Complete-a antes de homologar.`, { status_ficha: res.status_ficha });
+    }
+  }
+  const novo = acao === "homologar" ? "homologada" : "pendente";
+  if (p.homologacao === novo) return { id, homologacao: novo, alterado: false };
+  const { error: eUp } = await supabase.from("produtos").update({
+    homologacao: novo, homologado_em: acao === "homologar" ? new Date().toISOString() : null, homologado_por: acao === "homologar" ? (usuario?.id ?? null) : null,
+  }).eq("id", id).eq("organizacao_id", organizacaoId);
+  if (eUp) throw ApiError.badRequest(eUp.message);
+  await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas: [{ campo: "homologacao", rotulo: "Homologação da ficha", valor_anterior: p.homologacao, valor_novo: novo }] });
+  return { id, homologacao: novo, alterado: true };
+}
+
+// Pendências registradas na carga (catalogo_origem): o que precisa de conferência pela empresa.
+export async function listarPendenciasCatalogo({ organizacaoId }) {
+  const { data, error } = await supabase
+    .from("catalogo_origem").select("entidade, entidade_id, chave, referencia, pendencias")
+    .eq("organizacao_id", organizacaoId).neq("pendencias", "[]").limit(3000);
+  if (error) throw ApiError.internal(error.message);
+  const linhas = data ?? [];
+  const ids = (e) => linhas.filter((l) => l.entidade === e).map((l) => l.entidade_id);
+  const [prods, insu] = await Promise.all([
+    ids("produto").length ? supabase.from("produtos").select("id, nome, homologacao").eq("organizacao_id", organizacaoId).in("id", ids("produto")) : { data: [] },
+    ids("insumo").length ? supabase.from("insumos").select("id, nome").eq("organizacao_id", organizacaoId).in("id", ids("insumo")) : { data: [] },
+  ]);
+  const nome = new Map([...(prods.data ?? []), ...(insu.data ?? [])].map((r) => [r.id, r]));
+  const itens = linhas.map((l) => ({
+    entidade: l.entidade, id: l.entidade_id, nome: nome.get(l.entidade_id)?.nome ?? null,
+    homologacao: nome.get(l.entidade_id)?.homologacao ?? null, chave: l.chave, origem: l.referencia?.fontes?.[0] ?? null, pendencias: l.pendencias,
+  })).filter((i) => i.nome);
+  return { total: itens.length, itens };
 }
 
 // Grava as mudanças na tabela de auditoria. Falhas são apenas logadas (best-effort).

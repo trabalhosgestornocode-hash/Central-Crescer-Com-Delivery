@@ -2,6 +2,17 @@ import { asyncHandler } from "../../shared/asyncHandler.js";
 import { identidadeOperacional } from "../../shared/identidade.js";
 import * as service from "./dashboardExecutivo.service.js";
 import { simularPrecoProduto } from "./dashboardExecutivo.simulador.service.js";
+import { cmvTeoricoIfood } from "./cmvTeorico.service.js";
+
+// Escopo SEMPRE pela sessão (organização + unidade do contexto): não aceita unidade/organização na query.
+export const cmvTeorico = asyncHandler(async (req, res) => {
+  const limite = Number(req.query.limiteCmv);
+  const data = await cmvTeoricoIfood({
+    organizacaoId: req.tenant.organizacaoId, unidadeId: req.tenant.unidadeId,
+    de: req.query.de, ate: req.query.ate, limiteCmvPct: Number.isFinite(limite) && limite > 0 ? limite : null,
+  });
+  res.json({ data });
+});
 
 export const unidades = asyncHandler(async (req, res) => {
   const data = await service.listarUnidades({

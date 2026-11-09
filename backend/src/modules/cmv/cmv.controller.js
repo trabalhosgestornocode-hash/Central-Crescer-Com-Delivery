@@ -1,5 +1,10 @@
 import { asyncHandler } from "../../shared/asyncHandler.js";
 import * as service from "./cmv.service.js";
+import { condicoesComerciais } from "./cmv.condicoes.js";
+
+export const condicoes = asyncHandler(async (req, res) => {
+  res.json({ data: await condicoesComerciais({ organizacaoId: req.tenant.organizacaoId }) });
+});
 
 // `comparar=true` é o único jeito de sair da tabela oficial: sem ele, `tabela`
 // na query é ignorada de propósito (evita que um link/bookmark antigo com

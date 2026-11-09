@@ -25,7 +25,9 @@ export async function carregarGrafo(organizacaoId) {
     supabase.from("insumos")
       .select("id, nome, tipo, unidade_medida, preco_unitario, ativo, categoria_id")
       .eq("organizacao_id", organizacaoId),
-    supabase.from("produtos").select("id, nome").eq("organizacao_id", organizacaoId),
+    // `*` (e não colunas nomeadas): rendimento/homologacao são da migration 157 — antes dela
+    // o select continua funcionando e o rendimento cai no padrão 1 (comportamento legado).
+    supabase.from("produtos").select("*").eq("organizacao_id", organizacaoId),
   ]);
   if (insumosRes.error) throw ApiError.internal(insumosRes.error.message);
   if (produtosRes.error) throw ApiError.internal(produtosRes.error.message);
@@ -44,7 +46,19 @@ export async function carregarGrafo(organizacaoId) {
     if (!fichaByProd.has(f.produto_id)) fichaByProd.set(f.produto_id, []);
     fichaByProd.get(f.produto_id).push(f);
   }
-  return { insumoById, nomeProdById, fichaByProd, produtos };
+  const rendimentoById = new Map(produtos.map((p) => [p.id, p.rendimento]));
+  const homologacaoById = new Map(produtos.map((p) => [p.id, p.homologacao]));
+  return { insumoById, nomeProdById, fichaByProd, produtos, rendimentoById, homologacaoById };
+}
+
+/**
+ * Rendimento da receita (quantas unidades — ou g/ml, se for preparação por peso — o lote produz).
+ * Ausente/inválido => 1 (comportamento legado das Subways). Espelha fn_custo_produto (migration 157).
+ * @param {string} produtoId @param {object} grafo @returns {number}
+ */
+export function rendimentoDe(produtoId, grafo) {
+  const r = Number(grafo.rendimentoById?.get(produtoId));
+  return Number.isFinite(r) && r > 0 ? r : 1;
 }
 
 /** Uma linha da ficha está ativa? (coluna nova — default true se ausente). */
@@ -65,10 +79,43 @@ export function custoTotalProduto(produtoId, grafo, prof = 0) {
       const ins = grafo.insumoById.get(f.insumo_id);
       total += qtd * Number(ins?.preco_unitario ?? 0);
     } else if (f.subproduto_id) {
+      // custoTotalProduto(sub) já é o custo POR UNIDADE de rendimento da submontagem.
       total += qtd * custoTotalProduto(f.subproduto_id, grafo, prof + 1);
     }
   }
-  return total;
+  // Custo UNITÁRIO: o lote (soma das linhas) dividido pelo que ele rende.
+  return total / rendimentoDe(produtoId, grafo);
+}
+
+/**
+ * Custo da MÃO DE OBRA por unidade — indicador À PARTE do CMV de ingredientes/embalagens.
+ * Null se faltar o custo por minuto de qualquer função (não inventa valor).
+ * @param {Array<{minutos: number|string, custo_minuto: number|string|null}>} linhas
+ * @param {number} rendimento
+ * @returns {number|null}
+ */
+export function custoMaoDeObraUnitario(linhas, rendimento = 1) {
+  if (!linhas?.length) return 0;
+  let total = 0;
+  for (const l of linhas) {
+    if (l.custo_minuto == null || l.custo_minuto === "") return null;
+    total += (Number(l.minutos) || 0) * Number(l.custo_minuto);
+  }
+  const r = Number(rendimento);
+  return total / (Number.isFinite(r) && r > 0 ? r : 1);
+}
+
+/** Carrega a mão de obra por produto (tabela da migration 157). Só para as telas novas — nunca no caminho legado. */
+export async function carregarMaoDeObra(organizacaoId) {
+  const { data, error } = await supabase
+    .from("ficha_mao_de_obra").select("produto_id, funcao, minutos, custo_minuto").eq("organizacao_id", organizacaoId);
+  if (error) throw ApiError.internal(error.message);
+  const porProduto = new Map();
+  for (const l of data ?? []) {
+    if (!porProduto.has(l.produto_id)) porProduto.set(l.produto_id, []);
+    porProduto.get(l.produto_id).push(l);
+  }
+  return porProduto;
 }
 
 /**
@@ -138,9 +185,10 @@ export function ingredientesExplodidos(produtoId, grafo) {
   const acumulado = new Map(); // insumo_id -> qtd base
   const explode = (pid, mult, prof = 0) => {
     if (prof > PROF_MAX) return;
+    const rend = rendimentoDe(pid, grafo);
     for (const f of grafo.fichaByProd.get(pid) ?? []) {
       if (!linhaAtiva(f)) continue;
-      const q = (Number(f.quantidade) || 0) * mult;
+      const q = ((Number(f.quantidade) || 0) * mult) / rend;
       if (f.insumo_id) acumulado.set(f.insumo_id, (acumulado.get(f.insumo_id) ?? 0) + q);
       else if (f.subproduto_id) explode(f.subproduto_id, q, prof + 1);
     }
@@ -179,7 +227,21 @@ export function resumoProduto({ produtoId, grafo, precoVenda = null, custoManual
   const m = margem(custo, precoVenda);
   // Só apresenta CMV quando a ficha está íntegra — nunca um CMV "falso".
   const cmv = status.chave === "insumo_sem_custo" ? null : cmvPct(custo, precoVenda);
+
+  // CMV HOMOLOGADO: só existe com ficha íntegra E sem homologação pendente. Nunca um número "provisório" disfarçado.
+  const homologacao = grafo.homologacaoById?.get(produtoId) ?? "nao_aplicavel";
+  const fichaIntegra = !["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(status.chave);
+  let cmvHomologado = null;
+  let motivoSemCmvHomologado = null;
+  if (!fichaIntegra) motivoSemCmvHomologado = "ficha_incompleta";
+  else if (homologacao === "pendente") motivoSemCmvHomologado = "pendente_homologacao";
+  else if (!temPreco) motivoSemCmvHomologado = "sem_preco";
+  else cmvHomologado = cmv;
   return {
+    rendimento: rendimentoDe(produtoId, grafo),
+    homologacao,
+    cmv_homologado_pct: cmvHomologado,
+    motivo_sem_cmv_homologado: motivoSemCmvHomologado,
     componentes,
     qtd_componentes: componentes.length,
     custo,
