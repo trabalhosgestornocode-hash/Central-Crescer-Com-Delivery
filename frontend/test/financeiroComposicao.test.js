@@ -146,7 +146,7 @@ test("descrição simples por categoria: o (i) aparece só quando há texto escr
   assert.match(renomeada, /data-fin-glossario="entregadores_proprios"/);
 });
 
-test("glossário novo: total por canal, base da DRE, ajuste de vendas e entregadores explicam sem confundir os dois totais", () => {
-  assert.match(EXPLICACOES.totalVendasCanais.cuidado, /ponte/); assert.match(EXPLICACOES.baseDre.simples, /alimenta a DRE/);
+test("glossário: faturamento bruto gerencial, ajuste de vendas e entregadores; não existe mais um segundo total de vendas concorrente", () => {
+  assert.equal(EXPLICACOES.totalVendasCanais, undefined); assert.equal(EXPLICACOES.baseDre, undefined); assert.match(EXPLICACOES.faturamentoBruto.formula, /painel \(SAIPOS\) \+ ajustes; coincide com as vendas diárias do mês/);
   assert.match(EXPLICACOES.ajusteVendas.simples, /Não é taxa financeira nem dedução/); assert.match(EXPLICACOES.entregadores.simples, /frete de fornecedor/);
 });

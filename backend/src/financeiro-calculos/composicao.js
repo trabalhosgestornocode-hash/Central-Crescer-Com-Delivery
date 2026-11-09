@@ -155,7 +155,7 @@ export function composicaoIndicadores(E) {
     out.totalVendasCanais = montar("totalVendasCanais", pc.painelCentavos, painelNos, { rotulo: "Total de vendas por canal", formula: "soma do total de cada canal no painel (SAIPOS)", origem: "Relatório de vendas por canal (SAIPOS)", situacao: SITUACAO.CONFIRMADO,
       notas: ["É o total do PAINEL. A base usada na DRE gerencial é o faturamento bruto (ver a ponte).", mensal ? "Consolidação mensal por canal (sem detalhe diário)." : null].filter(Boolean), ponte: pc.ponte });
     out.faturamentoBruto = montar("faturamentoBruto", I.faturamentoBruto, gerNos, {
-      rotulo: "Faturamento base da DRE", formula: "base gerencial por canal = total do painel (SAIPOS) + ajustes; coincide com as vendas diárias do mês", origem: "Vendas diárias (total oficial) · Relatório de vendas por canal e ajustes (composição)", alertas, pendencias,
+      rotulo: "Faturamento bruto", formula: "base gerencial por canal = total do painel (SAIPOS) + ajustes; coincide com as vendas diárias do mês", origem: "Vendas diárias (total oficial) · Relatório de vendas por canal e ajustes (composição)", alertas, pendencias,
       notas: [mensal ? "Consolidação mensal por canal (sem detalhe diário); o sistema não distribui o total mensal em dias." : null, vendas.dinheiroCentavos ? `Forma de pagamento não é canal: ${brl(vendas.dinheiroCentavos)} do mês foram recebidos em espécie (dinheiro).` : null,
         "Registros individuais por pedido não estão disponíveis: o relatório traz o total por canal."].filter(Boolean),
       situacao: bruto == null ? SITUACAO.SEM_DADOS : SITUACAO.CONFIRMADO,

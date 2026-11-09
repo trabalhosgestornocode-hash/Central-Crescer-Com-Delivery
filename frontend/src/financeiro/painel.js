@@ -14,7 +14,7 @@ import { abrirCentral, contarPendencias } from "./conferencias.js";
 
 // indicadores cuja pendência é só a regra geral da metodologia (vai no aviso único, não em selos repetidos)
 const PENDENCIA_GERAL = new Set(["faturamentoLiquido", "deducoes", "cmv", "custos", "despesas", "margemContribuicao", "resultadoGerencial", "margemLiquida", "pontoEquilibrio"]);
-const ROTULOS = { totalVendasCanais: "Total de vendas por canal", faturamentoBruto: "Faturamento base da DRE", deducoes: "Deduções", faturamentoLiquido: "Faturamento líquido", cmv: "CMV", entregadores: "Entregadores Próprios", custos: "Custos totais",
+const ROTULOS = { faturamentoBruto: "Faturamento bruto", deducoes: "Deduções", faturamentoLiquido: "Faturamento líquido", cmv: "CMV", entregadores: "Entregadores Próprios", custos: "Custos totais",
   despesas: "Despesas", margemContribuicao: "Margem de contribuição", resultadoGerencial: "Lucro gerencial", margemLiquida: "Margem líquida", pontoEquilibrio: "Ponto de equilíbrio", saldoDisponivel: "Saldo financeiro", contasAPagar: "Contas a pagar em aberto",
   contasAReceber: "Contas a receber", jurosEncargos: "Juros e encargos (pagos no mês)", dividas: "Dívidas", recebimentos: "Recebimentos (banco e caixa)" };
 
@@ -26,16 +26,15 @@ export function cartao(id, rotulo, comp, { destaque = false, geralPendente = fal
   const un = comp.unidade ?? "moeda";
   const valor = valorDe(comp.valorCentavos, un);
   const nome = comp.rotulo ?? rotulo;
-  const pb = un === "moeda" && comp.pctBrutoBps != null && !["faturamentoBruto", "totalVendasCanais"].includes(id) ? `<span class="kpi-pct">${pct(comp.pctBrutoBps)} do faturamento</span>` : "";
+  const pb = un === "moeda" && comp.pctBrutoBps != null && id !== "faturamentoBruto" ? `<span class="kpi-pct">${pct(comp.pctBrutoBps)} do faturamento</span>` : "";
   let corpo = "";
-  if (id === "totalVendasCanais" && comp.componentes?.length) {
-    corpo = `${listaCanais(comp, "Total por canal no painel")}<span class="kpi-nota">Total do painel SAIPOS. A base da DRE é outro número: clique para ver a ponte.</span><button type="button" class="fin-link" data-ir-vendas>Abrir vendas diárias</button>`;
-  } else if (id === "faturamentoBruto" && comp.componentes?.some((c) => c.origemTecnica?.length)) {
+  if (id === "faturamentoBruto" && comp.componentes?.some((c) => c.origemTecnica?.length)) {
+    // Um único faturamento: a base gerencial por canal. O total do painel (SAIPOS) e os ajustes ficam só na composição completa.
     const cc = comp.canalConferencia;
-    corpo = `${listaCanais(comp, "Base da DRE por canal")}${cc ? `<span class="kpi-ponte">Painel ${valorDe(cc.painelCentavos)} ${cc.ajustesCentavos < 0 ? "−" : "+"} ajustes ${valorDe(Math.abs(cc.ajustesCentavos))} = base ${valorDe(cc.somaCentavos)}</span>` : ""}
-      ${cc && cc.confere === false ? `<span class="kpi-div" role="alert">Divergência: a base por canal difere do bruto oficial em ${valorDe(Math.abs(cc.diferencaCentavos ?? 0))}</span>` : cc?.confere ? '<span class="kpi-ok">Base por canal confere com o bruto oficial</span>' : ""}
+    corpo = `${listaCanais(comp, "Faturamento bruto por canal")}
+      ${cc && cc.confere === false ? `<span class="kpi-div" role="alert">Divergência: a base por canal difere do bruto oficial em ${valorDe(Math.abs(cc.diferencaCentavos ?? 0))}</span>` : ""}
       ${(comp.pendencias ?? []).length ? `<span class="kpi-pend">${esc(comp.pendencias[0])}</span>` : ""}
-      <button type="button" class="fin-link" data-ir-vendas>Abrir vendas diárias</button>`;
+      <button type="button" class="fin-link" data-fin-valor="faturamentoBruto">Ver composição completa</button>`;
   } else {
     const faltam = comp.faltam?.length ? comp.faltam[0] : "";
     const nota = faltam || comp.notas?.[0] || "";
@@ -85,8 +84,7 @@ function pintar(alvo, d) {
   alvo.innerHTML = `
     <div data-central-aviso></div>
     <h3 class="fin-secao">Faturamento — ${esc(rotuloMes(d.mes))}</h3>
-    <div class="fin-kpis fin-kpis--2">
-      ${c("totalVendasCanais")}
+    <div class="fin-kpis">
       ${c("faturamentoBruto", { destaque: true })}
     </div>
     <h3 class="fin-secao">Resultado do mês</h3>
@@ -109,5 +107,5 @@ function pintar(alvo, d) {
       </div>
       <section class="fin-cartao" data-largura>${graficoEntradasSaidas(d.serieVendas.map((v) => ({ periodo: v.data.slice(8, 10), entradas: v.vendaCentavos, saidas: 0 })), { titulo: "Vendas registradas por dia", largura: alvo.clientWidth || 720 }) || '<p class="fin-vazio-linha">Sem vendas registradas no mês.</p>'}</section>
     </details>
-    <p class="fin-sub">Glossário rápido: ${["totalVendasCanais", "baseDre", "ajusteVendas", "recebimentos", "cmv", "jurosPresumidos", "conciliacao"].map((k) => `${esc(explicacaoDe(k).nome)} ${botaoInfo(k, explicacaoDe(k).nome, { dado: "glossario" })}`).join(" · ")}</p>`;
+    <p class="fin-sub">Glossário rápido: ${["faturamentoBruto", "ajusteVendas", "recebimentos", "cmv", "jurosPresumidos", "conciliacao"].map((k) => `${esc(explicacaoDe(k).nome)} ${botaoInfo(k, explicacaoDe(k).nome, { dado: "glossario" })}`).join(" · ")}</p>`;
 }

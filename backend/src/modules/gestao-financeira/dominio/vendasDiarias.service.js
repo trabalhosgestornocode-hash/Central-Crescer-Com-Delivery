@@ -82,7 +82,7 @@ export async function listar(ctx, q, deps = padrao) {
       diasRegistrados: linhas.length, diasComVenda: comVenda.length, diasNoMes: diasDoMes(mes), diasSemRegistro: semRegistro, divergentes: linhas.filter((l) => l.situacao === "divergente").length, conferidos: linhas.filter((l) => l.situacao === "conferido").length,
       destinosPendentes: linhas.filter((l) => l.sangria?.destinoPendente).length },
     conferencia: { especie: { informadoCentavos: refCx.reduce((s, d) => s + d.referenciaCentavos, 0), caixaFisicoCentavos: refCx.reduce((s, d) => s + d.fluxoCentavos, 0) }, sangria: { informadoCentavos: refSg.reduce((s, d) => s + d.referenciaCentavos, 0), caixaFisicoCentavos: refSg.reduce((s, d) => s + d.fluxoCentavos, 0) } },
-    integracao: { faturamentoBrutoCentavos: soma("venda"), onde: ["Visão Geral → Faturamento base da DRE", "DRE Gerencial → Faturamento bruto", "Conciliação → ponte de vendas × recebimentos"],
+    integracao: { faturamentoBrutoCentavos: soma("venda"), onde: ["Visão Geral → Faturamento bruto", "DRE Gerencial → Faturamento bruto", "Conciliação → ponte de vendas × recebimentos"],
       regras: ["A venda bruta é o faturamento: não cria recebimento bancário (o que entra no banco vem do extrato, com prazo e taxas).", "O recebimento em espécie é conferido com o caixa físico; não cria movimento.", "A sangria é retirada de dinheiro do caixa com destino; só vira despesa se o gasto for lançado como despesa.", "Sem divisão por canal: o relatório diário não a traz. A divisão por canal é a consolidação mensal (Visão Geral)."] },
   };
 }
