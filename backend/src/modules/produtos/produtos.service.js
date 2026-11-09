@@ -199,6 +199,24 @@ export async function atualizarProduto({ organizacaoId, id, dados, usuario }) {
     }
   }
 
+  // 3c) Código do PDV = código do item no iFood: é o vínculo do CMV teórico com o catálogo. Único por empresa
+  //     (entre produtos), sem diferenciar maiúsculas; vazio remove o vínculo.
+  if (dados.codigo_pdv !== undefined) {
+    const novo = dados.codigo_pdv === null || String(dados.codigo_pdv).trim() === "" ? null : String(dados.codigo_pdv).trim();
+    if (novo !== null && novo.length > 60) throw ApiError.badRequest("O código do PDV deve ter até 60 caracteres.");
+    const { data: atual } = await supabase.from("produtos").select("codigo_pdv").eq("id", id).eq("organizacao_id", organizacaoId).single();
+    if ((atual?.codigo_pdv ?? null) !== novo) {
+      if (novo !== null) {
+        const { data: iguais } = await supabase.from("produtos").select("id, nome, codigo_pdv").eq("organizacao_id", organizacaoId);
+        const repetido = (iguais ?? []).find((p) => p.id !== id && String(p.codigo_pdv ?? "").trim().toUpperCase() === novo.toUpperCase());
+        if (repetido) throw new ApiError(409, `O código "${novo}" já está em uso por "${repetido.nome}". Cada produto precisa de um código próprio para vincular os itens do iFood.`);
+      }
+      const { error } = await supabase.from("produtos").update({ codigo_pdv: novo }).eq("id", id).eq("organizacao_id", organizacaoId);
+      if (error) throw ApiError.badRequest(error.message);
+      mudancas.push({ campo: "codigo_pdv", rotulo: "Código do PDV (iFood)", valor_anterior: atual?.codigo_pdv ?? null, valor_novo: novo });
+    }
+  }
+
   // 4) Auditoria (best-effort: nunca derruba o salvar se a tabela não existir)
   await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas });
 
@@ -274,7 +292,7 @@ export async function listarFichasCatalogo({ organizacaoId }) {
     const mod = custoMaoDeObraUnitario(modRes.get(p.id) ?? [], rendimentoDe(p.id, grafo));
     const bloqueada = ["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave);
     return {
-      id: p.id, nome: p.nome, ativo: p.ativo !== false,
+      id: p.id, nome: p.nome, ativo: p.ativo !== false, codigo_pdv: p.codigo_pdv ?? null,
       natureza: p.vendavel === false ? "preparacao" : "produto_final",
       categoria: o?.referencia?.fontes?.[0]?.categoria ?? null,
       origem: o ? { arquivo: o.referencia?.fontes?.[0]?.arquivo ?? null, aba: o.referencia?.fontes?.[0]?.aba ?? null } : null,

@@ -193,6 +193,14 @@ async function desenharDetalhe(item) {
         <small class="muted">Alterar o rendimento muda o custo e invalida a homologação.</small></div>` : ""}
     </section>
 
+    ${item.natureza === "produto_final" ? `<section class="ft-bloco">
+      <h3>Vínculo com o iFood</h3>
+      <p class="muted">O <b>código do PDV</b> é o mesmo código que o item tem no cardápio do iFood. É por ele que o Dashboard calcula o CMV teórico do que foi vendido. Cada produto precisa de um código próprio.</p>
+      <div class="ft-rend"><label>Código do PDV <input id="ft-pdv" maxlength="60" value="${escapeHtml(item.codigo_pdv ?? "")}" placeholder="ex.: CAP-001" ${podeEditar() ? "" : "disabled"} /></label>
+        ${podeEditar() ? '<button id="ft-pdv-salvar" class="btn btn-ghost btn-sm">Salvar código</button>' : ""}
+        <small class="muted">${item.codigo_pdv ? "Vinculado." : "Sem código: o vínculo só acontece se o nome do item no iFood for idêntico e único."}</small></div>
+    </section>` : ""}
+
     <section class="ft-bloco">
       <h3>Homologação</h3>
       <p>${escapeHtml(s.detalhe)}${motivo && s.classe !== "bad" ? "" : ""}</p>
@@ -223,6 +231,7 @@ async function desenharDetalhe(item) {
   m.querySelector("#ft-homologar")?.addEventListener("click", () => acaoHomologacao(item, "homologar"));
   m.querySelector("#ft-reabrir")?.addEventListener("click", () => acaoHomologacao(item, "reabrir"));
   m.querySelector("#ft-rend-salvar")?.addEventListener("click", () => salvarRendimento(item, m));
+  m.querySelector("#ft-pdv-salvar")?.addEventListener("click", () => salvarCodigoPdv(item, m));
   carregarIngredientes(item, m);
 }
 
@@ -252,6 +261,17 @@ async function acaoHomologacao(item, acao) {
     const novo = dados.itens.find((i) => i.id === item.id);
     if (novo && overlay) await desenharDetalhe(novo);
   } catch (e) { toast(`Não foi possível concluir: ${e.message}`); }
+}
+
+async function salvarCodigoPdv(item, m) {
+  const codigo = m.querySelector("#ft-pdv").value.trim();
+  try {
+    await atualizarProduto(item.id, { codigo_pdv: codigo || null });
+    toast(codigo ? "Código do PDV salvo." : "Vínculo removido.");
+    await carregar();
+    const novo = dados.itens.find((i) => i.id === item.id);
+    if (novo && overlay) await desenharDetalhe(novo);
+  } catch (e) { toast(`Não foi possível salvar: ${e.message}`); }
 }
 
 async function salvarRendimento(item, m) {

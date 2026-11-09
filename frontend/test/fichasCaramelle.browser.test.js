@@ -220,6 +220,34 @@ describe("Fichas técnicas / condições comerciais / simulador / CMV teórico n
     } finally { await contexto.close(); }
   });
 
+  test("vínculo com o iFood: código do PDV salvo pela ficha (produto final) e ausente nas preparações; consulta não edita", async () => {
+    zerar();
+    let { pagina, contexto } = await abrirApp();
+    try {
+      await irParaFichas(pagina);
+      await pagina.click('[data-abrir="p1"]');
+      await pagina.waitForSelector("#ft-pdv");
+      assert.match(await pagina.textContent(".modal-ficha"), /Vínculo com o iFood/);
+      await pagina.fill("#ft-pdv", " CAP-001 ");
+      await pagina.click("#ft-pdv-salvar");
+      await pagina.waitForFunction(() => /Código do PDV salvo|Vinculado/.test(document.body.textContent));
+      assert.deepEqual(api.corpos.find((c) => c.chamada === "PUT /api/v1/produtos/p1").corpo, { codigo_pdv: "CAP-001" });
+      await pagina.keyboard.press("Escape");
+      await pagina.click('[data-abrir="p2"]'); // preparação: não é vendida, não tem vínculo
+      await pagina.waitForSelector(".modal-ficha");
+      assert.equal(await pagina.locator("#ft-pdv").count(), 0);
+    } finally { await contexto.close(); }
+    zerar("consulta");
+    ({ pagina, contexto } = await abrirApp());
+    try {
+      await irParaFichas(pagina);
+      await pagina.click('[data-abrir="p1"]');
+      await pagina.waitForSelector("#ft-pdv");
+      assert.equal(await pagina.locator("#ft-pdv").isDisabled(), true);
+      assert.equal(await pagina.locator("#ft-pdv-salvar").count(), 0);
+    } finally { await contexto.close(); }
+  });
+
   test("homologação em lote (admin) e o papel de consulta NÃO vê botões de homologar nem editar rendimento", async () => {
     zerar();
     let { pagina, contexto } = await abrirApp();

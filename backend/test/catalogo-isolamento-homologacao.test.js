@@ -197,3 +197,20 @@ test("condições comerciais: grava SEMPRE na organização do contexto (ignora 
   assert.deepEqual((await cond.condicoesComerciais({ organizacaoId: B })).canais, []); // a outra empresa não enxerga nada
   await assert.rejects(() => cond.salvarCondicao({ organizacaoId: A, body: { canal: "ifood" }, usuario: ADMIN }), /comissão/i);
 });
+
+test("código do PDV: grava, é ÚNICO por empresa (sem diferenciar caixa), pode repetir em OUTRA empresa e vazio remove o vínculo", async () => {
+  const { db, svc } = await ambiente();
+  db.tabelas.produtos.find((p) => p.id === id(3)).codigo_pdv = "CAP-001"; // empresa B já usa este código
+  await svc.atualizarProduto({ organizacaoId: A, id: id(1), dados: { codigo_pdv: " CAP-001 " }, usuario: ADMIN });
+  assert.equal(T(db, 1).codigo_pdv, "CAP-001");                      // o mesmo código é livre na empresa A
+  assert.equal(db.tabelas.produto_historico.some((h) => h.campo === "codigo_pdv" && h.valor_novo === "CAP-001"), true);
+  await assert.rejects(() => svc.atualizarProduto({ organizacaoId: A, id: id(2), dados: { codigo_pdv: "cap-001" }, usuario: ADMIN }), (e) => e.statusCode === 409 && /já está em uso por "Produto 1"/.test(e.message));
+  assert.equal(T(db, 2).codigo_pdv, undefined);
+  await assert.rejects(() => svc.atualizarProduto({ organizacaoId: A, id: id(1), dados: { codigo_pdv: "x".repeat(61) }, usuario: ADMIN }), /60 caracteres/);
+  await assert.rejects(() => svc.atualizarProduto({ organizacaoId: A, id: id(3), dados: { codigo_pdv: "Z9" }, usuario: ADMIN }), /não encontrado/i); // produto da B, via contexto A
+  await svc.atualizarProduto({ organizacaoId: A, id: id(1), dados: { codigo_pdv: "" }, usuario: ADMIN });
+  assert.equal(T(db, 1).codigo_pdv, null);
+  assert.equal(T(db, 3).codigo_pdv, "CAP-001"); // B intocada
+  const lista = await svc.listarFichasCatalogo({ organizacaoId: A });
+  assert.ok(lista.itens.every((i) => "codigo_pdv" in i));
+});
