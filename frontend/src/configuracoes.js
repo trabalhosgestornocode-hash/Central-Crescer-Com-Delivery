@@ -32,6 +32,7 @@ import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./cont
 import { estadoMfa, iniciarCadastro, confirmarCadastro, removerFator } from "./mfa.js";
 import { montarCentralNotificacoes } from "./configuracoesNotificacoes.js";
 import { montarFoody } from "./configuracoesFoody.js";
+import { montarCondicoesComerciais } from "./condicoesComerciais.js";
 import { instalarMenuRetratil } from "./menuLateral.js";
 
 // Perfis da UI <-> enum papel_acesso do banco (migration 015). O cargo
@@ -205,7 +206,7 @@ const erroCampo = (campoId, mensagem) => Object.assign(new Error(mensagem), { ca
 // ======================= ESTRUTURA (7 categorias) =======================
 const CATEGORIAS = [
   { id: "unidade-empresa", icone: "store", titulo: "Unidade e empresa", desc: "Dados da loja, fuso e horário de funcionamento.", secoes: ["unidade", "fuso"] },
-  { id: "metas-operacao", icone: "target", titulo: "Metas e operação", desc: "CMV, metas, Tabelas Comerciais e atalhos dos módulos.", secoes: ["cmv", "precos", "atalhos"] },
+  { id: "metas-operacao", icone: "target", titulo: "Metas e operação", desc: "CMV, metas, Tabelas Comerciais, condições comerciais por canal e atalhos dos módulos.", secoes: ["cmv", "precos", "condicoes", "atalhos"] },
   { id: "notificacoes", icone: "bell", titulo: "Notificações", desc: "Quem recebe os avisos, consentimentos e histórico.", secoes: ["notificacoes"] },
   { id: "usuarios-acesso", icone: "users", titulo: "Usuários e acesso", desc: "Equipe, cargos e convites.", secoes: ["usuarios"] },
   { id: "integracoes", icone: "link", titulo: "Integrações", desc: "Estado das conexões.", secoes: ["integracoes", "foody"] },
@@ -213,7 +214,7 @@ const CATEGORIAS = [
   { id: "preferencias", icone: "sliders-horizontal", titulo: "Preferências", desc: "Aparência e dados deste dispositivo.", secoes: ["aparencia", "backup"] },
 ];
 const SECAO_TITULO = {
-  unidade: "Dados da Unidade", fuso: "Fuso e horário de funcionamento", cmv: "Metas e Limites de CMV", precos: "Tabelas Comerciais",
+  unidade: "Dados da Unidade", fuso: "Fuso e horário de funcionamento", cmv: "Metas e Limites de CMV", precos: "Tabelas Comerciais", condicoes: "Condições comerciais",
   atalhos: "Configurações dos módulos", notificacoes: "Central de Notificações", usuarios: "Usuários e Permissões",
   integracoes: "Integrações", foody: "Foody Delivery", seguranca: "Segurança", privacidade: "Privacidade", aparencia: "Aparência",
   backup: "Configurações deste dispositivo",
@@ -954,6 +955,8 @@ const DETALHES = {
   fuso: (root) => carregarFuso(root),
   cmv: (root) => carregarMetasCmv(root),
   precos: (root) => carregarTabelasComerciais(root),
+  // Condições comerciais da EMPRESA por canal (comissão, taxas, promoções, entrega…): base do Simulador e do Dashboard iFood.
+  condicoes: (root) => montarCondicoesComerciais(root),
   atalhos: (root) => desenharAtalhos(root),
   notificacoes: (root) => montarCentralNotificacoes(root, { confirmarDialogo, carregarProtegido }),
   usuarios: (root) => montarUsuarios(root),

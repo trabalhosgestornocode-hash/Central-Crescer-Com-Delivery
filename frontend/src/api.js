@@ -162,6 +162,25 @@ export async function atualizarProduto(id, dados) {
   return tratar(r, g);
 }
 
+// ---------- Catálogo de fichas técnicas / homologação (migrations 157–158) ----------
+export const obterFichasCatalogo = () => getJson(`/api/v1/produtos/catalogo/fichas`);
+export const obterPendenciasCatalogo = () => getJson(`/api/v1/produtos/catalogo/pendencias`);
+export const definirHomologacaoFicha = (id, acao) => patchJson(`/api/v1/produtos/${id}/homologacao`, { acao });
+export const homologarFichasEmLote = (ids) => postJson(`/api/v1/produtos/catalogo/homologar-lote`, { ids });
+
+// ---------- Condições comerciais da empresa (canais_venda) ----------
+export const salvarCondicaoComercial = async (dados) => {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}/api/v1/cmv/condicoes-comerciais`, {
+    method: "PUT", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify(dados),
+  });
+  return tratar(r, g);
+};
+export const obterHistoricoCondicoes = () => getJson(`/api/v1/cmv/condicoes-comerciais/historico`);
+
+// ---------- CMV teórico do iFood (itens efetivamente vendidos) ----------
+export const dashExecCmvTeorico = (f) => getJson(`/api/v1/dashboard-executivo/cmv-teorico${qsInsumos(f)}`);
+
 // ---------- Insumos ----------
 function qsInsumos(f = {}) {
   const p = Object.entries(f).filter(([, v]) => v !== undefined && v !== null && v !== "" && v !== "todos")

@@ -53,7 +53,10 @@ export const MENU = [
   { id: "dashboard",     label: "Dashboard",       icon: "bar-chart", logo: "/assets/menu-dashboard.png", tipo: "pagina",      secao: "OPERAÇÃO", modulo: "dashboard" },
   { id: "produtos",      label: "Produtos / CMV",  icon: "grid", logo: "/assets/menu-produtos-cmv.png", tipo: "pagina",      secao: "OPERAÇÃO", modulo: "products_cmv" },
   { id: "insumos",       label: "Insumos",         icon: "tag", logo: "/assets/menu-insumos.png", tipo: "insumos",     secao: "OPERAÇÃO", modulo: "ingredients" },
-  { id: "estoque",       label: "Estoque",         icon: "package", logo: "/assets/menu-estoque.png", tipo: "construcao",  secao: "OPERAÇÃO", modulo: "inventory" },
+  // Fichas Técnicas: catálogo de receitas (produtos finais e preparações) com custo por porção, pendências e homologação.
+  // Mesmo módulo de Produtos/CMV (`products_cmv`) — não é um módulo novo a liberar.
+  { id: "fichas",        label: "Fichas Técnicas", icon: "file-text", tipo: "fichas",       secao: "OPERAÇÃO", modulo: "products_cmv" },
+  { id: "estoque",       label: "Estoque",        icon: "package", logo: "/assets/menu-estoque.png", tipo: "construcao",  secao: "OPERAÇÃO", modulo: "inventory" },
   { id: "vendas",        label: "Vendas",          icon: "receipt", logo: "/assets/menu-vendas.png", tipo: "vendas",      secao: "OPERAÇÃO", modulo: "sales" },
   // Checklist Operacional — módulo PRÓPRIO (`checklist_operacional`, migration 123), independente de ter integração
   // iFood. `moduloTransicao`: o módulo `ifood` segue abrindo o item enquanto houver sessão aberta antes da migration

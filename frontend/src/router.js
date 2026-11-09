@@ -10,6 +10,7 @@ import { renderVendas } from "./vendas.js";
 import { renderMartinBrower } from "./martinbrower.js";
 import { renderIfood } from "./ifood.js";
 import { renderInsumos } from "./insumos.js";
+import { renderFichas } from "./fichasTecnicas.js";
 import { renderDashboardExecutivo } from "./dashboardExecutivo.js";
 import { renderBonificacaoMensal } from "./bonificacaoMensal.js";
 import { renderParserFoodDelivery } from "./parserFoodDelivery.js";
@@ -108,6 +109,9 @@ export function renderRotaAtual() {
       break;
     case "insumos":
       renderInsumos();
+      break;
+    case "fichas":
+      renderFichas();
       break;
     case "dashboard-executivo":
       renderDashboardExecutivo();

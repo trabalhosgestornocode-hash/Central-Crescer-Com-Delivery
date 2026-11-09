@@ -4,11 +4,16 @@ import * as service from "./dashboardExecutivo.service.js";
 import { simularPrecoProduto } from "./dashboardExecutivo.simulador.service.js";
 import { cmvTeoricoIfood } from "./cmvTeorico.service.js";
 
-// Escopo SEMPRE pela sessão (organização + unidade do contexto): não aceita unidade/organização na query.
+// Escopo pela sessão: a unidade pedida passa pela MESMA regra do Dashboard (sessão presa a uma unidade só enxerga
+// a própria; sessão de empresa só enxerga unidades da própria organização). Organização nunca vem da query.
 export const cmvTeorico = asyncHandler(async (req, res) => {
   const limite = Number(req.query.limiteCmv);
+  const unidadeId = await service.resolverUnidadeAlvo({
+    organizacaoId: req.tenant.organizacaoId, unidadeIdSessao: req.tenant.unidadeId,
+    unidadeIdSolicitado: req.query.unidadeId, exigirEspecifica: true,
+  });
   const data = await cmvTeoricoIfood({
-    organizacaoId: req.tenant.organizacaoId, unidadeId: req.tenant.unidadeId,
+    organizacaoId: req.tenant.organizacaoId, unidadeId,
     de: req.query.de, ate: req.query.ate, limiteCmvPct: Number.isFinite(limite) && limite > 0 ? limite : null,
   });
   res.json({ data });
