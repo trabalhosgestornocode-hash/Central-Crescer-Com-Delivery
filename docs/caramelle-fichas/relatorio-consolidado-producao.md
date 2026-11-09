@@ -90,11 +90,11 @@ de reversão **158 → 157**. Ambas são aditivas e idempotentes (aplicadas 2× 
 |---|---|
 | Postgres 17 descartável (`backend/testes-seguros/catalogo-pg/run.sh`): 157+158, regressão das Subways, rendimento, idempotência, isolamento, atomicidade, permissões, RLS, invalidação em cascata, constraints, rollbacks | **50/50** verificações |
 | Carga **real** (payload de 282 produtos) no PG descartável, 2 rodadas | 288 insumos / 282 produtos / 1.375 linhas; 2ª rodada **0 novos**; desvio de custo banco × plano ≤ 0,006% |
-| Backend novos (importador 25, custo/rendimento/homologação efetiva 14, CMV teórico 13, condições 9, proteção generalizada 7, **permissões das rotas 6**, **isolamento + homologação + PDV 11**) | **85/85** |
-| Front puros novos (simulador 10, fichas 7, condições 9, CMV teórico 6) | **32/32** |
-| **Navegador real (Chrome/Playwright)**, app inteiro com API falsa: menu, filtros, detalhe, homologar/reabrir/lote, rendimento, PDV, Condições comerciais (validação + PUT), consulta só lê, **modal do simulador**, painel CMV teórico | **10/10** |
+| Backend novos (importador 25, custo/rendimento/homologação efetiva 14, CMV teórico 13, condições 9, proteção generalizada 7, **permissões das rotas 6**, **isolamento + homologação + PDV + detalhe do produto 16**) | **90/90** |
+| Front puros novos (simulador 10, fichas 7, condições 9, CMV teórico 6, **detalhe do produto/margem por canal 7**) | **39/39** |
+| **Navegador real (Chrome/Playwright)**, app inteiro com API falsa: sem aba Fichas, **Subway inalterada (lista e modal)**, **Caramelle na lista e no mesmo modal** (formação de custo, MOD separada, margem por canal), pendências, homologar/reabrir/lote, rendimento/PDV/ficha, **permissões (consulta não edita nem homologa)**, Condições comerciais, modal do simulador, CMV teórico | **14/14** |
 | Testes de navegador já existentes do app (perfil de exibição, renovação) | 15/15 |
-| Front completo (sem browser) | **1.790/1.790** |
+| Front completo (sem browser) | **1.797/1.797** |
 | Backend completo (`test/*.test.js`) × `main` limpo | ver 4.1 |
 
 ### 4.1 Falhas preexistentes do backend (investigadas e separadas)
@@ -114,9 +114,9 @@ Intermitente conhecida (`dashboard-executivo-metas-dinamicas`) oscila entre as m
 | | Testes | Passam | Falham | Cancelados | Pulados |
 |---|---:|---:|---:|---:|---:|
 | `main` limpo (`9df9b60`) | 6.297 | 6.251 | 20 | 1 | 25 |
-| Esta branch (final) | 6.389 | 6.344 | 19 | 1 | 25 |
+| Esta branch (final) | 6.387 | 6.341 | 20 | 1 | 25 |
 
-**Falhas novas introduzidas pela branch: 0.** As 19 falhas da branch são subconjunto exato das de `main` (29 nomes em comum, comparados por nome); a diferença (`dashboard-executivo-metas-dinamicas`, intermitente conhecida) passou na branch. Os 92 testes a mais são os novos desta entrega.
+**Falhas novas introduzidas pela branch: 0.** O conjunto de falhas da branch é **idêntico** ao de `main` (30 nomes em comum, comparados por nome; nenhum só da branch). A falha intermitente conhecida (`dashboard-executivo-metas-dinamicas`) oscila entre as medições: passou numa e falhou noutra, nos dois lados. Os 90 testes a mais são os novos desta entrega.
 
 ## 5. Pendências que dependem da Caramelle
 
