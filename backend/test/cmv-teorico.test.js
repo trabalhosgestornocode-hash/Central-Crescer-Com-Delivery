@@ -21,8 +21,8 @@ const it = (name, quantity, price, extra = {}) => ({ name, quantity, price, ...e
 const produtos = [
   { id: "cap", nome: "Cappuccino", codigo_pdv: "CAP01", vendavel: true, ativo: true },
   { id: "bolo", nome: "Bolo de Cenoura", codigo_pdv: null, vendavel: true, ativo: true },
-  { id: "tap1", nome: "Tapioca com Ovo", codigo_pdv: null, vendavel: true, ativo: true },
-  { id: "tap2", nome: "Tapioca com Ovo", codigo_pdv: null, vendavel: true, ativo: true },
+  { id: "tap1", nome: "Crepe Simples", codigo_pdv: null, vendavel: true, ativo: true },
+  { id: "tap2", nome: "Crepe Simples", codigo_pdv: null, vendavel: true, ativo: true },
   { id: "inativo", nome: "Antigo", codigo_pdv: "OLD", vendavel: true, ativo: false },
   { id: "prep", nome: "Calda", codigo_pdv: "CALDA", vendavel: false, ativo: true },
 ];
@@ -35,7 +35,7 @@ test("vínculo por evidência: código PDV, nome único; nome repetido => ambíg
   const idx = indexarProdutos(produtos);
   assert.equal(vincularItem({ codigo: "cap01", nome: "qualquer" }, idx).produto.id, "cap");
   assert.equal(vincularItem({ codigo: null, nome: "BOLO DE CENOURA" }, idx).produto.id, "bolo");
-  assert.equal(vincularItem({ codigo: null, nome: "tapioca com ovo" }, idx).motivo, "nome_ambiguo");
+  assert.equal(vincularItem({ codigo: null, nome: "crepe simples" }, idx).motivo, "nome_ambiguo");
   assert.equal(vincularItem({ codigo: "OLD", nome: "Antigo" }, idx).produto, null);
   assert.equal(vincularItem({ codigo: "CALDA", nome: "Calda" }, idx).produto, null);
   assert.equal(vincularItem({ codigo: "XYZ", nome: "Nada" }, idx).motivo, "codigo_nao_cadastrado");
@@ -49,8 +49,8 @@ test("CMV teórico = Σ(qtd × custo) ÷ Σ receita dos itens vinculados", () =>
   perto(cap.preco_medio_praticado, 10); perto(cap.cmv_pct, (1.6 / 20) * 100);
 });
 test("NÃO inventa: itens sem correspondência são listados com quantidade e receita; entram na cobertura, não no CMV", () => {
-  const r = calcularCmvTeorico({ pedidos: [ped(it("Cappuccino", 1, 10, { externalCode: "CAP01" }), it("Item Misterioso", 3, 30, { externalCode: "ZZZ" }), it("Tapioca com Ovo", 1, 8))], produtos, grafo: G() });
-  assert.deepEqual(r.sem_correspondencia.map((s) => [s.nome, s.quantidade, s.receita, s.motivo]), [["Item Misterioso", 3, 30, "codigo_nao_cadastrado"], ["Tapioca com Ovo", 1, 8, "nome_ambiguo"]]);
+  const r = calcularCmvTeorico({ pedidos: [ped(it("Cappuccino", 1, 10, { externalCode: "CAP01" }), it("Item Misterioso", 3, 30, { externalCode: "ZZZ" }), it("Crepe Simples", 1, 8))], produtos, grafo: G() });
+  assert.deepEqual(r.sem_correspondencia.map((s) => [s.nome, s.quantidade, s.receita, s.motivo]), [["Item Misterioso", 3, 30, "codigo_nao_cadastrado"], ["Crepe Simples", 1, 8, "nome_ambiguo"]]);
   perto(r.cobertura.pct_receita_vinculada, (10 / 48) * 100);
   assert.equal(r.parcial, true); // cobertura < 50%
   perto(r.cmv_teorico_pct, 8); // só o vinculado

@@ -51,14 +51,14 @@ test("inferirUnidade: 'L' com 1000 = ml e 'KG' com 1800 = g, SEMPRE com pendênc
   assert.equal(inferirUnidade("", 1).pendencia, "unidade_ausente");
 });
 test("normalizarNome: acento, caixa e espaços", () => {
-  assert.equal(normalizarNome("  Pão  de   Queijo "), "PAO DE QUEIJO");
+  assert.equal(normalizarNome("  Pão  de   Forma "), "PAO DE FORMA");
 });
 
 // ---- insumos ---------------------------------------------------------------------------------
 test("NUNCA inventa preço: preço zero/ausente vira insumo sem custo + pendência", () => {
-  const A = arquivo("DOCES", { ingredientes: [{ linha: 2, nome: "AGUA", unidade: "GR", qtd_embalagem: 1000, valor: 0 }, { linha: 3, nome: "OREGANO", unidade: "", qtd_embalagem: null, valor: null }] });
+  const A = arquivo("DOCES", { ingredientes: [{ linha: 2, nome: "AGUA", unidade: "GR", qtd_embalagem: 1000, valor: 0 }, { linha: 3, nome: "TEMPERO", unidade: "", qtd_embalagem: null, valor: null }] });
   const r = planejarCatalogo([A], { fonte });
-  for (const nome of ["AGUA", "OREGANO"]) {
+  for (const nome of ["AGUA", "TEMPERO"]) {
     const i = r.payload.insumos.find((x) => x.nome === nome);
     assert.equal(i.preco_caixa, null); assert.equal(i.rendimento, null);
     assert.ok(i.pendencias.some((p) => p.codigo === "preco_ausente_ou_zero"));
@@ -102,9 +102,9 @@ test("embalagem entra como insumo tipo 'embalagem' com chave própria (não coli
 
 // ---- fichas, rendimento e preparações --------------------------------------------------------
 test("rendimento da receita vem da planilha e o custo unitário o considera", () => {
-  const A = arquivo("SALGADOS", { fichas: [ficha("EMPADÃO", { rendimento: 8, custo_total: 1, custo_unit: 0.125, ingredientes: [comp("LEITE", 200)] })] });
+  const A = arquivo("SALGADOS", { fichas: [ficha("TORTA SALGADA", { rendimento: 8, custo_total: 1, custo_unit: 0.125, ingredientes: [comp("LEITE", 200)] })] });
   const r = planejarCatalogo([A], { fonte });
-  const p = prod(r, "EMPADÃO");
+  const p = prod(r, "TORTA SALGADA");
   assert.equal(p.rendimento, 8);
   const c = r.relatorio.custos_planejados.find((x) => x.chave === p.chave);
   assert.equal(c.custo_unit_ingredientes_embalagens, 0.125); // 200 g × R$0,005 / 8
@@ -124,19 +124,19 @@ test("preparação aninhada: ficha usa 700 g de uma base que rende 500 g", () =>
 });
 test("produto final NÃO se confunde com ingrediente/preparação: mesmo nome nos dois mundos gera dois registros", () => {
   const A = arquivo("SALGADOS", {
-    bases: [base("PAO DE MANTEIGA", { linhas: [comp("LEITE", 100)] })],
-    fichas: [ficha("PAO DE MANTEIGA", { ingredientes: [comp("LEITE", 100)] })],
+    bases: [base("PAO CASEIRO", { linhas: [comp("LEITE", 100)] })],
+    fichas: [ficha("PAO CASEIRO", { ingredientes: [comp("LEITE", 100)] })],
   });
   const r = planejarCatalogo([A], { fonte });
-  assert.equal(r.payload.produtos.filter((p) => p.nome === "PAO DE MANTEIGA").length, 2);
+  assert.equal(r.payload.produtos.filter((p) => p.nome === "PAO CASEIRO").length, 2);
 });
 test("nomes repetidos com receitas diferentes são PRESERVADOS (chave #n) e sinalizados", () => {
   const A = arquivo("SALGADOS", { fichas: [
-    ficha("TAPIOCA", { aba: "P1", ingredientes: [comp("LEITE", 10)] }),
-    ficha("TAPIOCA", { aba: "P2", ingredientes: [comp("CAFÉ", 20)] }),
+    ficha("CREPE", { aba: "P1", ingredientes: [comp("LEITE", 10)] }),
+    ficha("CREPE", { aba: "P2", ingredientes: [comp("CAFÉ", 20)] }),
   ] });
   const r = planejarCatalogo([A], { fonte });
-  const t = r.payload.produtos.filter((p) => p.nome === "TAPIOCA");
+  const t = r.payload.produtos.filter((p) => p.nome === "CREPE");
   assert.equal(t.length, 2); assert.notEqual(t[0].chave, t[1].chave);
   assert.ok(t[1].pendencias.some((p) => p.codigo === "nome_repetido_na_categoria"));
 });

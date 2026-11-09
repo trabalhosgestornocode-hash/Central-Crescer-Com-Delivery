@@ -12,7 +12,7 @@ As seis decisões aprovadas foram aplicadas como segue.
 | Decisão | Como ficou |
 |---|---|
 | Preservar as variantes dos 29 ingredientes divergentes | Uma variante por arquivo (`NOME` e `NOME (DOCES)`), cada ficha com o custo da própria planilha; pendência `valores_divergentes` visível na ficha |
-| ÁGUA e ORÉGANO pendentes, sem inventar custo | Entram **sem custo**; as fichas que os usam ficam "Incompletas" e não exibem custo nem podem ser homologadas |
+| ÁGUA e TEMPERO pendentes, sem inventar custo | Entram **sem custo**; as fichas que os usam ficam "Incompletas" e não exibem custo nem podem ser homologadas |
 | Não atribuir canal aos preços das planilhas | Preço de venda não é importado (fica só em `referencia`); a empresa cadastra os preços por canal |
 | Condições comerciais configuráveis pela interface | Configurações › Metas e operação › **Condições comerciais** (comissão, taxas, promoções, tributos, responsável/custo de entrega, outras deduções, observação, histórico) |
 | Não alterar silenciosamente as comissões das Subways | A migration 158 **não escreve** em `canais_venda` de ninguém; provado em Postgres (Subway X mantém 27%). Pré-visualização das ausentes: `database/ops/157b_canais_venda_subway_PREVIEW.sql` |
@@ -122,7 +122,7 @@ Intermitente conhecida (`dashboard-executivo-metas-dinamicas`) oscila entre as m
 
 1. Confirmar o **custo vigente** dos 29 insumos com preços diferentes entre os arquivos (hoje há uma variante por arquivo) — basta ajustar o preço
    em Insumos; as duas versões podem ficar com o mesmo valor.
-2. Informar o custo de **ÁGUA** e **ORÉGANO** (e do 3º item sem preço) — destrava 31 fichas diretas + 53 em cascata.
+2. Informar o custo de **ÁGUA** e **TEMPERO** (e do 3º item sem preço) — destrava 31 fichas diretas + 53 em cascata.
 3. Corrigir as fichas com linhas sem quantidade (13), componentes inexistentes (7) e `#N/A` (12), **ou** confirmar que ficam de fora.
 4. Informar as **condições comerciais** por canal (comissão, taxas, promoções, tributos, entrega) e os **preços de venda por canal**.
 5. Informar o **código do PDV** (= código do item no iFood) de cada produto vendido, ou garantir nomes idênticos e únicos.
@@ -170,3 +170,42 @@ contra Supabase de verdade).
 | Dois produtos com o mesmo código do PDV | recusado (409) dentro da empresa |
 | Estoque/Vendas com rendimento | **não habilitar** até `fn_baixa_estoque_venda` considerar o rendimento |
 | Número da migration | reconferir no dia (hoje 157/158 livres em `origin/main`) |
+
+## 10. Finalização antes do PR (rodada 4)
+
+### 10.1 Preparações intermediárias: adicionar à receita (no modal de Produtos)
+Botão **"Adicionar preparação"** ao lado de "Adicionar insumo" (só produtos com catálogo controlado e quem pode editar). Regras no backend (`adicionarComponente` com `subproduto_id`):
+só preparação **da mesma organização** (`vendavel=false`, ativa); quantidade na **unidade do rendimento** da preparação (outras unidades compatíveis são convertidas: 0,2 kg → 200 g;
+incompatível/zero/negativa recusadas); custo = quantidade × custo unitário da preparação (lote ÷ rendimento) ÷ rendimento do produto, recalculado em cascata; **recusa ciclo**
+(direto, indireto e auto-referência); preparação duplicada recusada; histórico (`ficha_preparacao`) registra a inclusão. **No banco (migration 158)** o gatilho `trg_ficha_integridade`
+recusa vínculo entre organizações e dependência circular por **qualquer** caminho de escrita (API, importador, SQL), e o gatilho de composição **invalida a homologação** do produto e dos que o usam.
+
+### 10.2 Homologação em Supabase — resultado e impedimento (reportado exatamente)
+* Projetos visíveis na conta: `Crescer Com Delivery` (**produção — não tocado**), `teste-multiempresarial`, `Atlaz Funil Imobiliário`, `mabruk-acai`, `financeiro-amanda` (estes três são de outros produtos/clientes).
+* **Não há ambiente comprovadamente isolado e autorizado.** O único candidato, `teste-multiempresarial`, tem 30 organizações, 39 unidades, ~28 mil linhas de auditoria e dados operacionais/financeiros aparentemente reais, e uma lista de
+  migrations **parcial** (só as aplicadas pelo editor de migrations; sem as 157/158). Sem confirmação de que é descartável e de que posso escrever nele, **nada foi escrito e nenhum dado foi lido além de metadados** (nomes de tabelas e de migrations).
+  Criar um *branch* de banco do Supabase geraria custo e uma cópia de dados — não está autorizado.
+* **O que foi feito no lugar (verificável):** (a) `backend/testes-seguros/catalogo-pg/cadeia_completa.sh` aplica `schema.sql` + **todas** as migrations do repositório em ordem num Postgres 17 descartável local e confere 157/158: aplicam por cima da cadeia completa; RLS ligado nas 4 tabelas novas;
+  `anon`/`authenticated` sem acesso às tabelas e sem *execute* em `fn_catalogo_importar`; gatilhos esperados em `ficha_tecnica`; `fn_custo_produto` com rendimento; políticas RLS de produtos/insumos/ficha_tecnica/canais_venda presentes.
+  Os erros da cadeia são **preexistentes e não relacionados** (schemas `storage`/`realtime` que só existem no Supabase real, sementes de dados e a cadeia financeira 120–156 que depende de objetos do ambiente real). (b) 56 verificações em PG (`run.sh`).
+* **Pendência para o GO de produção:** repetir `run.sh` + um smoke test de integração (import em organização de teste, abrir produto, simulador, dashboard) num **branch/projeto Supabase de teste que você autorize explicitamente** — o roteiro já está pronto em `backend/testes-seguros/catalogo-pg/`.
+
+### 10.3 Conferência da importação (private: `Documentos\Crescer\caramelle-fichas-simulacao\relatorio.md`)
+| Pergunta | Resultado |
+|---|---|
+| 284 registros × 282 produtos | **284 = 182 fichas + 102 preparações.** 282 = 182 + 100. As **2 preparações a menos** são duplicatas **idênticas** (mesma composição e rendimento) entre DOCES e SALGADOS, mescladas num só cadastro — o que não confere nenhuma receita diferente. Todo registro de origem aparece como `fonte` de exatamente um produto (284 fontes mapeadas). |
+| Nenhuma receita perdida | **Confirmado:** 0 registros sem produto. |
+| Linhas | 1.412 de origem = 1.402 processadas + 10 das preparações mescladas (idênticas). Das 1.402: **1.375 importadas**, 7 somadas (mesmo insumo repetido na ficha), **13 sem quantidade** e **7 componentes inexistentes no cadastro** (20 **não** importadas — cada uma deixa a ficha **bloqueada/pendente** e listada; nada é inventado). |
+| Preparações intermediárias | 100 preservadas como `submontagem` (13 aninhadas), com rendimento e unidade; usadas pelas fichas por vínculo. |
+| Insumos sem custo | 3 permanecem **sem custo** (pendentes) e bloqueiam as fichas que os usam. |
+| Variantes de preço | 19 variantes **preservadas** (`NOME` e `NOME (ARQUIVO)`), cada uma com `valores_divergentes`; nunca unificadas. |
+| Carga repetida | 3 rodadas consecutivas no PG com a trava de integridade ativa: 1ª cria 282/288/1.375; 2ª e 3ª criam **0** e preservam 281 fichas. Importar em outra organização não toca na primeira. |
+
+### 10.4 Regressão (resultados finais desta rodada)
+PG 56 verificações ✔ · backend novos 99/99 (importador 27, custo/rendimento/homologação efetiva 14, CMV teórico 13, condições 9, proteção generalizada 7, permissões 6, isolamento/homologação/PDV/detalhe/**preparações** 23) ·
+front puros novos 39/39 · navegador real **16/16** + 15/15 existentes · front completo **1.797/1.797** · backend completo 6.396 testes, 20 falhas = **conjunto idêntico ao de `main`** (30 nomes em comum; 0 só da branch).
+
+### 10.5 Recomendação — **GO condicionado / NO-GO para ativar em produção**
+* **GO para abrir e revisar o PR / fazer merge após revisão humana:** a mudança é **aditiva**, as migrations não alteram dado existente, as Subways ficam idênticas (testes de unidade, PG e navegador), a regressão não introduz nenhuma falha nova e não há dado privado no diff.
+  Antes do merge, lembrar que o merge pode disparar o deploy do backend; o código tolera banco sem 157/158 (colunas novas opcionais; ações novas respondem erro claro), mas só funciona por completo **depois** das migrations.
+* **NO-GO para a ativação da Caramelle (migrations, importação, habilitar módulos) até:** (1) smoke de integração em ambiente Supabase de teste **autorizado** (10.2); (2) decisão sobre as comissões das Subways (`157b`); (3) decisões do cliente: custo vigente dos insumos com variantes, custo dos 3 insumos sem custo, 20 linhas não importadas, condições comerciais, PDV; (4) backup antes da 157/158.

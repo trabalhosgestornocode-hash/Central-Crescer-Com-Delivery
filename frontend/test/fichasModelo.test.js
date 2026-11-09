@@ -6,22 +6,22 @@ import { filtrarFichas, contarPorCategoria, seloHomologacao, rotuloMotivo, descr
 const F = (o) => ({ id: o.nome, categoria: null, natureza: "produto_final", ficha_completa: true, homologacao: "pendente", pode_homologar: true, pendencias: [], ...o });
 const itens = [
   F({ nome: "Bolo de Cenoura", categoria: "DOCES" }),
-  F({ nome: "Calda de Chocolate", categoria: "DOCES", natureza: "preparacao", unidade_rendimento: "g" }),
-  F({ nome: "Empadão", categoria: "SALGADOS", homologacao: "homologada", pode_homologar: false, homologado_por_nome: "Ana", homologado_em: "2026-11-10" }),
+  F({ nome: "Calda de Frutas", categoria: "DOCES", natureza: "preparacao", unidade_rendimento: "g" }),
+  F({ nome: "Torta Salgada", categoria: "SALGADOS", homologacao: "homologada", pode_homologar: false, homologado_por_nome: "Ana", homologado_em: "2026-11-10" }),
   F({ nome: "Cappuccino", categoria: "BEBIDAS", ficha_completa: false, pode_homologar: false, pendencias: [{ codigo: "insumo_sem_custo" }, { codigo: "unidade_inferida" }] }),
   F({ nome: "Pão de Queijo Manual", categoria: null, homologacao: "nao_aplicavel", pode_homologar: false }),
 ];
 
 test("filtra por categoria (incluindo sem categoria), natureza e situação", () => {
-  assert.deepEqual(filtrarFichas(itens, { categoria: "DOCES" }).map((i) => i.nome), ["Bolo de Cenoura", "Calda de Chocolate"]);
+  assert.deepEqual(filtrarFichas(itens, { categoria: "DOCES" }).map((i) => i.nome), ["Bolo de Cenoura", "Calda de Frutas"]);
   assert.deepEqual(filtrarFichas(itens, { categoria: "sem" }).map((i) => i.nome), ["Pão de Queijo Manual"]);
-  assert.deepEqual(filtrarFichas(itens, { natureza: "preparacao" }).map((i) => i.nome), ["Calda de Chocolate"]);
+  assert.deepEqual(filtrarFichas(itens, { natureza: "preparacao" }).map((i) => i.nome), ["Calda de Frutas"]);
   assert.deepEqual(filtrarFichas(itens, { situacao: "incompletas" }).map((i) => i.nome), ["Cappuccino"]);
-  assert.deepEqual(filtrarFichas(itens, { situacao: "homologadas" }).map((i) => i.nome), ["Empadão"]);
-  assert.deepEqual(filtrarFichas(itens, { situacao: "prontas" }).map((i) => i.nome), ["Bolo de Cenoura", "Calda de Chocolate"]);
+  assert.deepEqual(filtrarFichas(itens, { situacao: "homologadas" }).map((i) => i.nome), ["Torta Salgada"]);
+  assert.deepEqual(filtrarFichas(itens, { situacao: "prontas" }).map((i) => i.nome), ["Bolo de Cenoura", "Calda de Frutas"]);
 });
 test("busca ignora acento e caixa; filtros se combinam", () => {
-  assert.deepEqual(filtrarFichas(itens, { busca: "EMPADAO" }).map((i) => i.nome), ["Empadão"]);
+  assert.deepEqual(filtrarFichas(itens, { busca: "torta salgada" }).map((i) => i.nome), ["Torta Salgada"]);
   assert.deepEqual(filtrarFichas(itens, { busca: "pao", categoria: "SALGADOS" }).map((i) => i.nome), []);
   assert.equal(filtrarFichas(itens, {}).length, 5);
 });
@@ -52,5 +52,5 @@ test("rótulo do custo: por porção para produto final; por g/ml para preparaç
   assert.equal(rotuloCusto(F({ natureza: "preparacao", unidade_rendimento: null })), "por unidade de rendimento");
 });
 test("idsProntos só devolve fichas completas e pendentes", () => {
-  assert.deepEqual(idsProntos(itens), ["Bolo de Cenoura", "Calda de Chocolate"]);
+  assert.deepEqual(idsProntos(itens), ["Bolo de Cenoura", "Calda de Frutas"]);
 });

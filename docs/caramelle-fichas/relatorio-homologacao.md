@@ -19,7 +19,7 @@ os módulos** — falta apenas a linha de habilitação, que é uma escrita em p
 
 | # | Lacuna encontrada | Efeito para a Caramelle | Tratamento |
 |---|---|---|---|
-| 1 | `fn_custo_produto` e `custo.js` assumiam 1 ficha = 1 unidade vendida (sem rendimento) | uma receita de 8 empadões custaria o lote inteiro por unidade | coluna `produtos.rendimento` + função/JS atualizados (migration 157) |
+| 1 | `fn_custo_produto` e `custo.js` assumiam 1 ficha = 1 unidade vendida (sem rendimento) | uma receita de 8 porções custaria o lote inteiro por unidade | coluna `produtos.rendimento` + função/JS atualizados (migration 157) |
 | 2 | Sem mão de obra separada do CMV | risco de misturar MOD com CMV de ingredientes | tabela `ficha_mao_de_obra`, fora de `fn_custo_produto` |
 | 3 | Sem homologação nem rastreabilidade de carga | CMV "oficial" sem conferência | `produtos.homologacao`, `catalogo_origem`, `catalogo_importacoes` |
 | 4 | Simulador do front com `COMISSAO` fixa (iFood 27%, Uber 15%) | **percentuais Subway herdados em silêncio** | comissão vem de `canais_venda` da empresa; sem ela, cálculo **parcial** |
@@ -56,11 +56,11 @@ vendável, `tipo=submontagem`); *produto final* = abas `P*`. Foram achadas **13 
 **Achados que exigem decisão do cliente** (nenhum foi "resolvido" por suposição):
 
 * **29 ingredientes com valor diferente entre os arquivos.** Unificar em silêncio faria receitas de DOCES custarem até ~33% menos.
-  Decisão aplicada: **uma variante por arquivo** (`CREAM CHEESE` e `CREAM CHEESE (DOCES)`), cada ficha mantendo o custo da sua própria
+  Decisão aplicada: **uma variante por arquivo** (`INSUMO X` e `INSUMO X (DOCES)`), cada ficha mantendo o custo da sua própria
   planilha; a empresa consolida depois escolhendo o custo vigente.
 * **Rótulos de unidade pouco confiáveis** (`L` com 1000 = ml; `KG` com 1800 = g). 44 inferências feitas por regra explícita + 2 casos
   ambíguos + 2 sem unidade — **todas viram pendência**, nunca silenciosas.
-* **`ÁGUA`, `OREGANO` e 1 item sem custo** bloqueiam 31 fichas diretamente e outras 53 em cascata (uso de preparação incompleta).
+* **`ÁGUA`, `TEMPERO` e 1 item sem custo** bloqueiam 31 fichas diretamente e outras 53 em cascata (uso de preparação incompleta).
 * 13 linhas sem quantidade, 7 componentes inexistentes no cadastro (nomes digitados diferente), 12 linhas com `#N/A`, 7 ingredientes
   repetidos na mesma ficha (somados), 6 preparações sem unidade de rendimento.
 * **Nomes repetidos preservados** (nenhuma informação eliminada): 3 grupos de fichas e 3 de preparações com mesmo nome e receita
@@ -145,7 +145,7 @@ sessão (só `node --check` de sintaxe + o cálculo puro testado).
 * **Pendente de homologação pelo cliente:** as 282 fichas nascem `pendente`; 176 estão íntegras e podem ser homologadas por um
   administrador, 106 dependem de correções (seção B). CMV "homologado" só existe depois disso.
 * **Falta definir/configurar:** comissão e demais condições comerciais da Caramelle por canal (`canais_venda` — hoje não existe tela de
-  cadastro; ver "Limitações"), preços de venda por canal, vínculo dos itens do iFood (`codigo_pdv`), custo de `ÁGUA`/`OREGANO`.
+  cadastro; ver "Limitações"), preços de venda por canal, vínculo dos itens do iFood (`codigo_pdv`), custo de `ÁGUA`/`TEMPERO`.
 
 ## F. Produção — o que será necessário (nada disso foi feito)
 
@@ -169,7 +169,7 @@ Riscos: (i) 157 mexe em `fn_custo_produto` — mitigado por teste de equivalênc
 | # | Decisão | Opções | Recomendação |
 |---|---|---|---|
 | D1 | Qual é o custo **vigente** dos 29 ingredientes com valores diferentes entre os 3 arquivos | (a) manter uma variante por arquivo e consolidar na UI; (b) o cliente informa a lista vigente; (c) usar o do arquivo mais novo | **(a) agora** (já implementado, nenhum CMV é subestimado), depois **(b)** |
-| D2 | `ÁGUA` e `OREGANO` (e 1 item) sem custo | (a) cliente informa custo (mesmo simbólico, ex. tarifa de água); (b) manter "sem custo" e a ficha pendente | **(a)** — destrava 31 fichas diretas + 53 em cascata |
+| D2 | `ÁGUA` e `TEMPERO` (e 1 item) sem custo | (a) cliente informa custo (mesmo simbólico, ex. tarifa de água); (b) manter "sem custo" e a ficha pendente | **(a)** — destrava 31 fichas diretas + 53 em cascata |
 | D3 | Preço de venda das planilhas (de qual canal?) | (a) cliente informa o canal e importamos em `produto_precos`; (b) cadastrar manualmente | **(a)**, após confirmar o canal |
 | D4 | Condições comerciais da Caramelle (comissão por canal, tributos, taxas, entrega) | cliente envia a tabela; cadastrar em `canais_venda` | cadastrar **somente** o que o cliente validar; sem tela hoje (SQL ou nova tela) |
 | D5 | Subways sem comissão cadastrada: semear? | usar `157b_canais_venda_subway_PREVIEW.sql` (lista antes) | rodar **só a pré-visualização** primeiro |

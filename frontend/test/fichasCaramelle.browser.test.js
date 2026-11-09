@@ -34,8 +34,8 @@ const F = (o) => ({ ativo: true, natureza: "produto_final", categoria: null, ori
   homologado_por_nome: null, pendencias: [], pode_homologar: true, ...o });
 const fichasCaramelle = () => [
   F({ id: "p1", nome: "Bolo de Cenoura", categoria: "DOCES", rendimento: 8, custo_unitario: 3.25, custo_mao_de_obra_unitario: 0.9 }),
-  F({ id: "p2", nome: "Calda de Chocolate", categoria: "DOCES", natureza: "preparacao", unidade_rendimento: "g", rendimento: 500, custo_unitario: 0.02 }),
-  F({ id: "p3", nome: "Empadão de Frango", categoria: "SALGADOS", homologacao: "homologada", homologado_por_nome: "Ana Souza", homologado_em: "2026-11-10T14:00:00Z", pode_homologar: false }),
+  F({ id: "p2", nome: "Calda de Frutas", categoria: "DOCES", natureza: "preparacao", unidade_rendimento: "g", rendimento: 500, custo_unitario: 0.02 }),
+  F({ id: "p3", nome: "Torta de Frango", categoria: "SALGADOS", homologacao: "homologada", homologado_por_nome: "Ana Souza", homologado_em: "2026-11-10T14:00:00Z", pode_homologar: false }),
   F({ id: "p4", nome: "Cappuccino", categoria: "BEBIDAS", custo_unitario: null, ficha_completa: false, pode_homologar: false, status_ficha: { chave: "insumo_sem_custo", ok: false },
     pendencias: [{ codigo: "insumo_sem_custo", detalhe: "insumo(s) sem custo: AGUA" }, { codigo: "unidade_inferida", detalhe: "rótulo L com 1000" }] }),
 ];
@@ -51,7 +51,7 @@ function detalhe(f, empresa) {
     custo: inc ? 0 : f.custo_unitario, custo_calculado: inc ? 0 : f.custo_unitario, qtd_componentes: 3, status_ficha: f.status_ficha.chave === "completa" ? { chave: "completa", label: "Completa" } : { chave: "insumo_sem_custo", label: "Insumo sem custo" },
     ficha: [
       { ficha_id: "fi1", tipo: "insumo", insumo_id: "i1", nome: "Cenoura", categoria: "outro", insumo_ativo: true, quantidade: 400, unidade: "g", unidade_base: "g", custo_unitario_base: 0.006, custo_aplicado: 2.4 },
-      { ficha_id: "fi2", tipo: "submontagem", subproduto_id: "p2", nome: "Calda de Chocolate", categoria: null, insumo_ativo: true, quantidade: 100, unidade: "g", unidade_base: "g", custo_unitario_base: 0.02, custo_aplicado: 2 },
+      { ficha_id: "fi2", tipo: "submontagem", subproduto_id: "p2", nome: "Calda de Frutas", categoria: null, insumo_ativo: true, quantidade: 100, unidade: "g", unidade_base: "g", custo_unitario_base: 0.02, custo_aplicado: 2 },
       { ficha_id: "fi3", tipo: "insumo", insumo_id: "i3", nome: "Caixa kraft", categoria: "embalagem", insumo_ativo: true, quantidade: 1, unidade: "un", unidade_base: "un", custo_unitario_base: 1.2, custo_aplicado: 1.2 },
     ],
     precos: f.id === "p1" ? [{ canal: "ifood", tabela: "A", preco: 20 }, { canal: "uber", tabela: "A", preco: 21 }] : [],
@@ -102,7 +102,7 @@ before(async () => {
       }
       if (caminho === "/api/v1/produtos" && req.method === "GET") {
         if (u.searchParams.get("vendavel") === "false") return json(res, 200, { data: [
-          { id: "p2", nome: "Calda de Chocolate", vendavel: false, custo_cache: 0.02, rendimento: 500, unidade_rendimento: "g" },
+          { id: "p2", nome: "Calda de Frutas", vendavel: false, custo_cache: 0.02, rendimento: 500, unidade_rendimento: "g" },
           { id: "p5", nome: "Cobertura", vendavel: false, custo_cache: 0.05, rendimento: 200, unidade_rendimento: "g" },
           { id: "pciclo", nome: "Preparação circular", vendavel: false, custo_cache: 0.01, rendimento: 100, unidade_rendimento: "g" }] });
         return json(res, 200, { data: [] });
@@ -225,17 +225,17 @@ describe("Produtos: Subways inalteradas × catálogo da Caramelle, no app real",
     try {
       await irParaProdutos(pagina);
       await pagina.waitForSelector("#pc-cat");
-      assert.deepEqual((await nomes(pagina)).sort(), ["Bolo de Cenoura", "Calda de Chocolate", "Cappuccino", "Empadão de Frango"]);
+      assert.deepEqual((await nomes(pagina)).sort(), ["Bolo de Cenoura", "Calda de Frutas", "Cappuccino", "Torta de Frango"]);
       await foto(pagina, "01-produtos-caramelle");
       const corpo = await pagina.textContent("#tbody");
       assert.match(corpo, /Preparação intermediária/); assert.match(corpo, /sem preço de venda/); assert.match(corpo, /indisponível/);
       await pagina.selectOption("#pc-cat", "DOCES");
-      assert.deepEqual((await nomes(pagina)).sort(), ["Bolo de Cenoura", "Calda de Chocolate"]);
+      assert.deepEqual((await nomes(pagina)).sort(), ["Bolo de Cenoura", "Calda de Frutas"]);
       await pagina.selectOption("#pc-cat", "todas");
       await pagina.selectOption("#pc-sit", "incompletas");
       assert.deepEqual(await nomes(pagina), ["Cappuccino"]);
       await pagina.selectOption("#pc-sit", "homologadas");
-      assert.deepEqual(await nomes(pagina), ["Empadão de Frango"]);
+      assert.deepEqual(await nomes(pagina), ["Torta de Frango"]);
       await pagina.selectOption("#pc-sit", "todas");
       await pagina.fill("#f-busca", "calda");
       await pagina.waitForFunction(() => document.querySelectorAll("#tbody .prod-link").length === 1);
@@ -253,7 +253,7 @@ describe("Produtos: Subways inalteradas × catálogo da Caramelle, no app real",
       await pagina.waitForSelector("#pc-margens table");
       await foto(pagina, "02-modal-produto-caramelle");
       const t = await textoModal(pagina);
-      assert.match(t, /Ficha técnica/); assert.match(t, /Cenoura/); assert.match(t, /Calda de Chocolate/); assert.match(t, /Caixa kraft/); assert.match(t, /Preços por canal · CMV/);
+      assert.match(t, /Ficha técnica/); assert.match(t, /Cenoura/); assert.match(t, /Calda de Frutas/); assert.match(t, /Caixa kraft/); assert.match(t, /Preços por canal · CMV/);
       assert.match(t, /Doces/); assert.match(t, /Produto final/);
       const f = (await pagina.textContent("#pc-formacao")).replace(/\s+/g, " ");
       assert.match(f, /Ingredientes/); assert.match(f, /Preparações intermediárias/); assert.match(f, /Embalagens/);
@@ -298,7 +298,7 @@ describe("Produtos: Subways inalteradas × catálogo da Caramelle, no app real",
       await pagina.click("#pc-reabrir");
       await pagina.waitForFunction(() => /homologação foi reaberta/i.test(document.querySelector("#pc-topo")?.textContent ?? ""));
       await pagina.keyboard.press("Escape");
-      await abrirProduto(pagina, "Empadão de Frango");
+      await abrirProduto(pagina, "Torta de Frango");
       assert.match(await pagina.textContent("#pc-topo"), /Homologada por Ana Souza/);
     } finally { await contexto.close(); }
   });
@@ -337,7 +337,7 @@ describe("Produtos: Subways inalteradas × catálogo da Caramelle, no app real",
       await pagina.click("#pm-addprep-btn");
       await pagina.waitForSelector("#pm-p-sel");
       const ops = await pagina.$$eval("#pm-p-sel option", (o) => o.map((x) => ({ t: x.textContent, d: x.disabled })));
-      assert.ok(ops.some((o) => /Calda de Chocolate.*já na receita/.test(o.t) && o.d), "preparação já usada fica desabilitada");
+      assert.ok(ops.some((o) => /Calda de Frutas.*já na receita/.test(o.t) && o.d), "preparação já usada fica desabilitada");
       assert.ok(ops.some((o) => /Cobertura/.test(o.t) && !o.d));
       await pagina.selectOption("#pm-p-sel", "p5");
       assert.deepEqual(await pagina.$$eval("#pm-p-u option", (o) => o.map((x) => x.value)).then((v) => v.sort()), ["g", "kg"]); // só unidades compatíveis com g
@@ -459,7 +459,7 @@ describe("Produtos: Subways inalteradas × catálogo da Caramelle, no app real",
     const { pagina, contexto, erros } = await abrirApp();
     try {
       await irParaProdutos(pagina);
-      await abrirProduto(pagina, "Calda de Chocolate");   // preparação sem preço cadastrado
+      await abrirProduto(pagina, "Calda de Frutas");   // preparação sem preço cadastrado
       await pagina.waitForSelector("#pc-simular");
       await pagina.click("#pc-simular");
       await pagina.waitForSelector(".modal-sim");
