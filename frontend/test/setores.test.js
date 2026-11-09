@@ -64,18 +64,18 @@ describe("contexto e preferência", () => {
 });
 
 describe("menu financeiro (contrato com o Agente 2)", () => {
-  test("21 itens: os 15 do contrato na mesma ordem + painel, receitas, DRE de referência, rateios, contas a receber e dívidas (2.0); ids únicos", () => {
+  test("22 itens: os 15 do contrato na mesma ordem + painel, receitas, vendas diárias (PR 94), DRE de referência, rateios, contas a receber e dívidas (2.0); ids únicos", () => {
     assert.deepEqual(MENU_FINANCEIRO.map((m) => m.label), [
       "Visão Geral", "Contas a Pagar", "Conciliação de Saídas", "Juros e Encargos", "Fluxo de Caixa", "Contas Financeiras", "Conciliação", "DRE Gerencial", "Indicadores",
       "Análise de Categorias", "Plano de Contas", "Períodos", "Importação", "Relatórios", "Configurações Financeiras",
-      "Visão Geral", "Receitas e Vendas", "DRE Gerencial de Referência", "Rateios por Competência", "Contas a Receber", "Dívidas e Empréstimos",
+      "Visão Geral", "Receitas e Vendas", "Vendas Diárias", "DRE Gerencial", "Rateios por Competência", "Contas a Receber", "Dívidas e Empréstimos",
     ]);
-    assert.equal(new Set(MENU_FINANCEIRO.map((m) => m.id)).size, 21);
+    assert.equal(new Set(MENU_FINANCEIRO.map((m) => m.id)).size, 22);
     assert.ok(MENU_FINANCEIRO.every((m) => m.id.startsWith("fin-") && m.tipo === "financeiro" && /^[a-z-]+$/.test(m.pagina)));
   });
   test("a 1ª rota (entrada do setor) NÃO depende do flag: empresas sem o 2.0 nunca caem numa página indisponível", () => {
     assert.equal(MENU_FINANCEIRO[0].fin2, undefined);
-    assert.ok(MENU_FINANCEIRO.filter((m) => ["fin-painel", "fin-receitas", "fin-dre-referencia", "fin-rateios", "fin-contas-a-receber", "fin-dividas"].includes(m.id)).every((m) => m.fin2 === true));
+    assert.ok(MENU_FINANCEIRO.filter((m) => ["fin-painel", "fin-receitas", "fin-vendas-diarias", "fin-dre-referencia", "fin-rateios", "fin-contas-a-receber", "fin-dividas"].includes(m.id)).every((m) => m.fin2 === true));
   });
   test("seis módulos cobrem TODAS as telas exatamente uma vez (nenhuma tela removida)", () => {
     assert.deepEqual(MODULOS_FINANCEIRO.map((g) => g.rotulo), ["Visão Geral", "Receitas e Vendas", "Despesas e Pagamentos", "Caixa e Conciliação", "Custos e Resultados", "Controle e Relatórios"]);
