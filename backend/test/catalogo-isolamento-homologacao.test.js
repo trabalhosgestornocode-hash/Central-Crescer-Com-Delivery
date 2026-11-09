@@ -2,9 +2,7 @@
 // custo.js, cmv.condicoes.js) sobre um banco em memória que REGISTRA toda consulta. Nenhum acesso a banco de verdade.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { SourceTextModule, SyntheticModule } from "node:vm";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { register } from "node:module";
 
 process.env.SUPABASE_URL ??= "http://127.0.0.1:9";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "x".repeat(40);
@@ -42,32 +40,11 @@ function criarBanco(tabelas) {
   return db;
 }
 
-// ---------------------------------------------------------------- carregador de módulos ESM com mock do cliente Supabase
-const SRC = new URL("../src/", import.meta.url);
-function carregador(supabaseFalso) {
-  const cache = new Map();
-  const mockUrl = new URL("config/supabase.js", SRC).href;
-  async function carregar(url) {
-    if (cache.has(url.href)) return cache.get(url.href);
-    const p = (async () => {
-      const m = new SourceTextModule(readFileSync(fileURLToPath(url), "utf8"), { identifier: url.href });
-      await m.link(async (spec) => {
-        if (spec.startsWith(".")) {
-          const alvo = new URL(spec, url);
-          if (alvo.href === mockUrl) { const ns = { supabase: supabaseFalso }; return new SyntheticModule(Object.keys(ns), function () { for (const [k, v] of Object.entries(ns)) this.setExport(k, v); }); }
-          return carregar(alvo);
-        }
-        const ns = await import(spec);
-        return new SyntheticModule(Object.keys(ns), function () { for (const [k, v] of Object.entries(ns)) this.setExport(k, v); });
-      });
-      await m.evaluate();
-      return m;
-    })();
-    cache.set(url.href, p);
-    return p;
-  }
-  return async (rel) => (await carregar(new URL(rel, SRC))).namespace;
-}
+// ---------------------------------------------------------------- serviços reais sobre o banco em memória
+// O hook redireciona só config/supabase.js para `globalThis.__supabaseFalso` (ver helpers/supabase-falso.hooks.mjs).
+register("./helpers/supabase-falso.hooks.mjs", import.meta.url);
+const svcReal = await import("../src/modules/produtos/produtos.service.js");
+const condReal = await import("../src/modules/cmv/cmv.condicoes.js");
 
 // ---------------------------------------------------------------- dados: duas empresas
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"; const B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -97,10 +74,8 @@ function dados() {
 }
 async function ambiente() {
   const db = criarBanco(dados());
-  const carregar = carregador(db);
-  const svc = await carregar("modules/produtos/produtos.service.js");
-  const cond = await carregar("modules/cmv/cmv.condicoes.js");
-  return { db, svc, cond };
+  globalThis.__supabaseFalso = db;
+  return { db, svc: svcReal, cond: condReal };
 }
 const T = (db, n) => db.tabelas.produtos.find((p) => p.id === id(n));
 const ADMIN = { id: "u1", nome: "Admin Teste", email: "admin@x.test" };

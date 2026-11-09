@@ -16,14 +16,27 @@ As seis decisões aprovadas foram aplicadas como segue.
 | Não atribuir canal aos preços das planilhas | Preço de venda não é importado (fica só em `referencia`); a empresa cadastra os preços por canal |
 | Condições comerciais configuráveis pela interface | Configurações › Metas e operação › **Condições comerciais** (comissão, taxas, promoções, tributos, responsável/custo de entrega, outras deduções, observação, histórico) |
 | Não alterar silenciosamente as comissões das Subways | A migration 158 **não escreve** em `canais_venda` de ninguém; provado em Postgres (Subway X mantém 27%). Pré-visualização das ausentes: `database/ops/157b_canais_venda_subway_PREVIEW.sql` |
-| Priorizar pendências, edição e homologação | Nova página **Fichas Técnicas** (itens abaixo) |
+| Priorizar pendências, edição e homologação | Ficha técnica, pendências e homologação **dentro de Produtos** (lista + modal existentes; sem aba nova) |
 
-### Fase A — Fichas Técnicas (página nova, menu OPERAÇÃO, mesmo módulo `products_cmv`)
-Lista todas as fichas; abas **Doces / Salgados / Bebidas / Sem categoria** com contagem; filtro produto final × preparação; filtro por situação
-(prontas, incompletas, pendentes, homologadas); busca sem acento. Mostra **custo por porção** (ou por g/ml nas preparações), rendimento e
-mão de obra **à parte**; ficha incompleta não mostra custo. Detalhe da ficha: custo, rendimento editável, pendências **com causa e ação**,
-ingredientes e custos, vínculo com o iFood (código do PDV), homologação (quem e quando), histórico (reutiliza o modal existente) e o
-editor de ingredientes/quantidades já existente. Administrador homologa uma ficha ou **todas as prontas da lista**.
+### Fase A — Fichas técnicas DENTRO de Produtos (não existe aba nem módulo "Fichas Técnicas")
+> **Ajuste de escopo (09/11):** a aba "Fichas Técnicas" criada na primeira rodada foi **removida** (menu, rota e página). Tudo vive no módulo
+> **Produtos / CMV**, reaproveitando a lista, o modal de produto, o editor de ficha, o histórico e o simulador já existentes.
+
+* **Lista de Produtos:** produtos do catálogo da empresa (importados, `homologacao != nao_aplicavel`) aparecem **na mesma tabela**, mesmo sem preço/tabela
+  comercial (a unidade pode estar sem tabela: o aviso de tabela continua, mas o catálogo é exibido). Filtros extras **só aparecem quando existe catálogo**:
+  categoria (Doces/Salgados/Bebidas) e situação (prontas, incompletas, pendentes, homologadas), mais "Homologar N prontas" (administrador).
+  Distingue produto final × preparação intermediária; custo por porção; selo de homologação. **Empresas sem catálogo (Subways) não recebem nenhuma
+  linha, filtro, botão nem chamada extra** (teste de navegador dedicado).
+* **Modal do produto (o mesmo das Subways):** ao abrir um produto de catálogo, além do que já existia (ficha editável, preços por canal e CMV) aparecem
+  seções novas — *Homologação* (quem/quando/por quê, histórico), *Pendências* com causa e ação, *Formação do custo* (ingredientes, preparações
+  intermediárias, embalagens, custo do lote, **rendimento**, **custo unitário** = base do CMV), **mão de obra separada do CMV** (própria + herdada das
+  preparações), *código do PDV* (vínculo com o iFood), e *Preço de venda · CMV · margem de contribuição por canal* com as **condições comerciais da
+  própria empresa** (sem condições → margem indisponível, nunca assumida; condições incompletas → "parcial" com o que ficou de fora) e botão **Simular preço**.
+  Usuários autorizados editam ingredientes/quantidades (inclusive as **preparações**, na unidade delas), corrigem o rendimento e o PDV e homologam; quem
+  não tem permissão vê tudo mas nada disso é editável.
+* **Produto Subway:** modal e lista **idênticos** ao anterior — sem seções novas, sem busca de condições, mesmo custo/ficha (testes de backend e de navegador).
+* Dados ausentes ficam "—"/"indisponível" com explicação; o simulador, sem preço atual cadastrado, **não inventa** "preço atual" (parte de uma sugestão
+  explícita de CMV 30%).
 
 **Invalidação da homologação** (regra de versionamento adotada):
 * alterar a **composição** da receita (inserir/alterar/remover linha de ficha) ou o **rendimento** ou o **custo manual** → o banco (gatilhos da
@@ -117,7 +130,7 @@ Intermitente conhecida (`dashboard-executivo-metas-dinamicas`) oscila entre as m
 
 ## 6. Prontidão para produção
 
-**Tecnicamente pronta** (código, migrations, testes e relatório) para a ativação **dos módulos Produtos, Insumos, Fichas Técnicas e Simulador**.
+**Tecnicamente pronta** (código, migrations, testes e relatório) para a ativação **dos módulos Produtos (com ficha técnica e homologação), Insumos e Simulador**.
 **Não pronta / fora do escopo:** Estoque e Vendas (a baixa por venda ignora rendimento); comissões das Subways (decisão sua, via pré-visualização);
 CMV teórico só terá números quando os pedidos tiverem o detalhe de itens e os produtos tiverem código do PDV.
 Lacunas conhecidas: não há ferramenta para **mesclar** as variantes de insumo (basta igualar os preços); a proteção de precificação do

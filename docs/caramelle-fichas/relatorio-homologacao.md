@@ -139,7 +139,7 @@ sessão (só `node --check` de sintaxe + o cálculo puro testado).
 
 ## E. Validação da Caramelle
 
-* **Disponível quando habilitada:** Insumos, Produtos/Fichas Técnicas, CMV (Dashboard iFood), Simulador — são os módulos existentes
+* **Disponível quando habilitada:** Insumos, Produtos (com ficha técnica no modal), CMV (Dashboard iFood), Simulador — são os módulos existentes
   (`ingredients`, `products_cmv`, `ifood_dashboard`); a Caramelle os usa com **catálogo próprio e isolado**.
 * **Importado em ambiente de teste:** sim, só em Postgres descartável local. **Nada em produção.**
 * **Pendente de homologação pelo cliente:** as 282 fichas nascem `pendente`; 176 estão íntegras e podem ser homologadas por um
