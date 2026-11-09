@@ -4,7 +4,8 @@ import { ApiError } from "../../shared/ApiError.js";
 import * as v from "../../shared/validar.js";
 import {
   carregarGrafo, componentesDiretos, custoTotalProduto, ingredientesExplodidos,
-  produtosAfetadosPorInsumo, recalcularCache,
+  produtosAfetadosPorInsumo, produtosAfetadosPorProduto, recalcularCache, resumoProduto, homologacaoEfetiva, dependeDe,
+  carregarMaoDeObra, custoMaoDeObraUnitario, rendimentoDe, maoDeObraDoProduto,
 } from "./custo.js";
 import {
   converterQuantidade, statusFicha, validarComponenteFicha, UNIDADES,
@@ -13,14 +14,18 @@ import {
 export async function listarProdutos({ organizacaoId, vendavel, tipo }) {
   let q = supabase
     .from("produtos")
-    .select("id, nome, tipo, tamanho, vendavel, custo_cache, sku, codigo_pdv")
+    .select("*")
     .eq("organizacao_id", organizacaoId)
     .order("nome");
   if (vendavel !== undefined) q = q.eq("vendavel", vendavel);
   if (tipo) q = q.eq("tipo", tipo);
   const { data, error } = await q;
   if (error) throw ApiError.internal(error.message);
-  return data;
+  // Projeção explícita (antes era select de colunas nomeadas); rendimento/unidade só existem após a migration 157.
+  return (data ?? []).map((p) => ({
+    id: p.id, nome: p.nome, tipo: p.tipo, tamanho: p.tamanho, vendavel: p.vendavel, custo_cache: p.custo_cache, sku: p.sku, codigo_pdv: p.codigo_pdv,
+    ...(p.rendimento !== undefined ? { rendimento: p.rendimento, unidade_rendimento: p.unidade_rendimento ?? null } : {}),
+  }));
 }
 
 // Produto + ficha técnica editável + ingredientes explodidos + preços + CMV/margem.
@@ -62,8 +67,56 @@ export async function obterProduto({ organizacaoId, id }) {
     ingredientes, componentes, ficha, precos,
     qtd_componentes: ficha.length,
     status_ficha: status,
+    rendimento: rendimentoDe(produtoId, grafo),
+    homologacao_info: await infoHomologacao(produto, grafo),
+    // Catálogo controlado (importado/independente): formação de custo, MOD e pendências. Subways (nao_aplicavel) não recebem.
+    controlado: (produto.homologacao ?? "nao_aplicavel") !== "nao_aplicavel",
+    catalogo: (produto.homologacao ?? "nao_aplicavel") !== "nao_aplicavel" ? await detalheCatalogo({ organizacaoId, produto, grafo, ficha }) : null,
     unidades: UNIDADES,
   };
+}
+
+/**
+ * Formação de custo, mão de obra e pendências — SÓ para produtos com catálogo controlado (importados/independentes).
+ * Nada é inventado: grupo com algum item sem custo devolve total null.
+ */
+async function detalheCatalogo({ organizacaoId, produto, grafo, ficha }) {
+  const [origemRes, mod] = await Promise.all([
+    supabase.from("catalogo_origem").select("referencia, pendencias").eq("organizacao_id", organizacaoId)
+      .eq("entidade", "produto").eq("entidade_id", produto.id).maybeSingle(),
+    carregarMaoDeObra(organizacaoId).catch(() => new Map()),
+  ]);
+  const origem = origemRes?.data ?? null;
+  const ativos = ficha.filter((c) => c.ativo !== false);
+  // Item sem custo (ausente OU zero) torna o grupo indisponível: somar zero esconderia o dado faltante.
+  const semCusto = (c) => c.custo_aplicado == null || c.custo_unitario_base == null || Number(c.custo_unitario_base) <= 0;
+  const grupo = (fn) => {
+    const l = ativos.filter(fn);
+    return { itens: l.length, total: l.some(semCusto) ? null : l.reduce((s, c) => s + Number(c.custo_aplicado), 0) };
+  };
+  const lote = {
+    ingredientes: grupo((c) => c.tipo === "insumo" && c.categoria !== "embalagem"),
+    preparacoes: grupo((c) => c.tipo === "submontagem"),
+    embalagens: grupo((c) => c.tipo === "insumo" && c.categoria === "embalagem"),
+    total: ativos.some(semCusto) ? null : ativos.reduce((s, c) => s + Number(c.custo_aplicado), 0),
+  };
+  const rend = rendimentoDe(produto.id, grafo);
+  return {
+    categoria: origem?.referencia?.fontes?.[0]?.categoria ?? null,
+    natureza: produto.vendavel === false ? "preparacao" : "produto_final",
+    pendencias: origem?.pendencias ?? [],
+    formacao_custo: {
+      lote, rendimento: rend, unidade_rendimento: produto.unidade_rendimento ?? null,
+      custo_unitario_materiais: lote.total == null ? null : lote.total / rend,
+    },
+    mao_de_obra: maoDeObraDoProduto(produto.id, grafo, mod),
+  };
+}
+
+/** Estado efetivo da homologação + quem homologou (nome) — para a ficha do produto. */
+async function infoHomologacao(produto, grafo) {
+  const ef = homologacaoEfetiva(produto.id, grafo);
+  return { estado: ef.estado, motivo: ef.motivo, homologado_em: ef.estado === "homologada" ? produto.homologado_em ?? null : null, homologado_por_nome: ef.estado === "homologada" ? produto.homologado_por_nome ?? null : null, custo_homologado: ef.estado === "homologada" ? produto.homologado_custo ?? null : null };
 }
 
 // Atualiza campos do produto e/ou preços (upsert por canal/tabela).
@@ -162,10 +215,167 @@ export async function atualizarProduto({ organizacaoId, id, dados, usuario }) {
     }
   }
 
+  // 3b) Rendimento da receita (migration 157). Só muda quando enviado; altera o custo UNITÁRIO,
+  //     então o cache do produto e de quem o usa como submontagem é recalculado em cascata.
+  if (dados.rendimento !== undefined || dados.unidade_rendimento !== undefined) {
+    const patch = {};
+    if (dados.rendimento !== undefined) {
+      const n = Number(dados.rendimento);
+      if (!Number.isFinite(n) || n <= 0) throw ApiError.badRequest("O rendimento deve ser maior que zero.");
+      patch.rendimento = n;
+    }
+    if (dados.unidade_rendimento !== undefined) {
+      if (dados.unidade_rendimento !== null && dados.unidade_rendimento !== "" && !UNIDADES.includes(dados.unidade_rendimento)) throw ApiError.badRequest("Unidade do rendimento inválida.");
+      patch.unidade_rendimento = dados.unidade_rendimento || null;
+    }
+    const { data: rAntes, error: eR } = await supabase
+      .from("produtos").select("rendimento, unidade_rendimento").eq("id", id).eq("organizacao_id", organizacaoId).single();
+    if (eR) throw ApiError.badRequest("Rendimento indisponível neste ambiente (migration 157 não aplicada).");
+    const { error } = await supabase.from("produtos").update(patch).eq("id", id).eq("organizacao_id", organizacaoId);
+    if (error) throw ApiError.badRequest(error.message);
+    if (patch.rendimento !== undefined && Number(rAntes.rendimento) !== patch.rendimento) {
+      mudancas.push({ campo: "rendimento", rotulo: "Rendimento da receita", valor_anterior: String(rAntes.rendimento), valor_novo: String(patch.rendimento) });
+      const grafo = await carregarGrafo(organizacaoId);
+      await recalcularCache({ organizacaoId, produtoIds: produtosAfetadosPorProduto(id, grafo), grafo });
+    }
+    if (patch.unidade_rendimento !== undefined && (rAntes.unidade_rendimento ?? null) !== patch.unidade_rendimento) {
+      mudancas.push({ campo: "unidade_rendimento", rotulo: "Unidade do rendimento", valor_anterior: rAntes.unidade_rendimento ?? null, valor_novo: patch.unidade_rendimento });
+    }
+  }
+
+  // 3c) Código do PDV = código do item no iFood: é o vínculo do CMV teórico com o catálogo. Único por empresa
+  //     (entre produtos), sem diferenciar maiúsculas; vazio remove o vínculo.
+  if (dados.codigo_pdv !== undefined) {
+    const novo = dados.codigo_pdv === null || String(dados.codigo_pdv).trim() === "" ? null : String(dados.codigo_pdv).trim();
+    if (novo !== null && novo.length > 60) throw ApiError.badRequest("O código do PDV deve ter até 60 caracteres.");
+    const { data: atual } = await supabase.from("produtos").select("codigo_pdv").eq("id", id).eq("organizacao_id", organizacaoId).single();
+    if ((atual?.codigo_pdv ?? null) !== novo) {
+      if (novo !== null) {
+        const { data: iguais } = await supabase.from("produtos").select("id, nome, codigo_pdv").eq("organizacao_id", organizacaoId);
+        const repetido = (iguais ?? []).find((p) => p.id !== id && String(p.codigo_pdv ?? "").trim().toUpperCase() === novo.toUpperCase());
+        if (repetido) throw new ApiError(409, `O código "${novo}" já está em uso por "${repetido.nome}". Cada produto precisa de um código próprio para vincular os itens do iFood.`);
+      }
+      const { error } = await supabase.from("produtos").update({ codigo_pdv: novo }).eq("id", id).eq("organizacao_id", organizacaoId);
+      if (error) throw ApiError.badRequest(error.message);
+      mudancas.push({ campo: "codigo_pdv", rotulo: "Código do PDV (iFood)", valor_anterior: atual?.codigo_pdv ?? null, valor_novo: novo });
+    }
+  }
+
   // 4) Auditoria (best-effort: nunca derruba o salvar se a tabela não existir)
   await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas });
 
   return obterProduto({ organizacaoId, id });
+}
+
+// ===========================================================================
+// HOMOLOGAÇÃO da ficha (migration 157) — só para produtos de carga importada
+// (homologacao != 'nao_aplicavel'). Subways/cadastro manual não têm esse controle.
+// Homologar exige ficha ÍNTEGRA; reabrir devolve a 'pendente'. Sempre auditado.
+// ===========================================================================
+export async function definirHomologacao({ organizacaoId, produtoId, acao, usuario }) {
+  const id = v.uuid(produtoId, "Produto");
+  if (!["homologar", "reabrir"].includes(acao)) throw ApiError.badRequest('Ação inválida: use "homologar" ou "reabrir".');
+  const { data: p, error } = await supabase
+    .from("produtos").select("id, nome, homologacao").eq("organizacao_id", organizacaoId).eq("id", id).single();
+  if (error && /homologacao|does not exist|schema cache|could not find/i.test(error.message)) throw ApiError.badRequest("Homologação indisponível neste ambiente (migration 157 não aplicada).");
+  if (!p) throw ApiError.notFound("Produto não encontrado");
+  if (p.homologacao === "nao_aplicavel" || p.homologacao == null) throw new ApiError(409, `"${p.nome}" não tem controle de homologação (cadastro manual).`);
+
+  const grafo = await carregarGrafo(organizacaoId);
+  const efetiva = homologacaoEfetiva(id, grafo);
+  let custoAgora = null;
+  if (acao === "homologar") {
+    const res = resumoProduto({ produtoId: id, grafo, precoVenda: null });
+    if (["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave)) {
+      throw new ApiError(409, `A ficha de "${p.nome}" está incompleta (${res.status_ficha.label}). Complete-a antes de homologar.`, { status_ficha: res.status_ficha });
+    }
+    custoAgora = custoTotalProduto(id, grafo); // custo HOMOLOGADO: base da invalidação por mudança de preço
+  }
+  const novo = acao === "homologar" ? "homologada" : "pendente";
+  // Já está no estado pedido e o estado é VÁLIDO (nada mudou desde a homologação): nada a fazer.
+  if (efetiva.estado === novo && !(novo === "homologada" && p.homologacao !== "homologada")) return { id, homologacao: novo, alterado: false };
+  const patch = acao === "homologar"
+    ? { homologacao: "homologada", homologacao_motivo: null, homologado_em: new Date().toISOString(), homologado_por: null, homologado_por_nome: usuario?.nome ?? usuario?.email ?? null, homologado_custo: custoAgora }
+    : { homologacao: "pendente", homologacao_motivo: "reaberta_manualmente", homologado_em: null, homologado_por: null, homologado_por_nome: null, homologado_custo: null };
+  const { error: eUp } = await supabase.from("produtos").update(patch).eq("id", id).eq("organizacao_id", organizacaoId);
+  if (eUp) throw ApiError.badRequest(eUp.message);
+  await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas: [{ campo: "homologacao", rotulo: "Homologação da ficha", valor_anterior: efetiva.estado + (efetiva.motivo ? ` (${efetiva.motivo})` : ""), valor_novo: novo }] });
+  return { id, homologacao: novo, alterado: true };
+}
+
+/** Homologa várias fichas de uma vez (cada uma validada individualmente: ficha incompleta é recusada e reportada). */
+export async function homologarLote({ organizacaoId, ids, usuario }) {
+  if (!Array.isArray(ids) || !ids.length) throw ApiError.badRequest("Informe ao menos uma ficha.");
+  if (ids.length > 500) throw ApiError.badRequest("No máximo 500 fichas por vez.");
+  const resultado = { homologadas: [], ja_estavam: [], recusadas: [] };
+  for (const id of [...new Set(ids)]) {
+    try {
+      const r = await definirHomologacao({ organizacaoId, produtoId: id, acao: "homologar", usuario });
+      (r.alterado ? resultado.homologadas : resultado.ja_estavam).push(id);
+    } catch (e) {
+      resultado.recusadas.push({ id, motivo: e.message });
+    }
+  }
+  return resultado;
+}
+
+/**
+ * Catálogo de fichas para a tela da empresa: tudo calculado a partir de UM grafo (sem N+1).
+ * Categoria (Salgados/Doces/Bebidas) vem da origem da carga; produtos manuais ficam sem categoria.
+ */
+export async function listarFichasCatalogo({ organizacaoId }) {
+  const [grafo, origemRes, modRes] = await Promise.all([
+    carregarGrafo(organizacaoId),
+    supabase.from("catalogo_origem").select("entidade_id, referencia, pendencias").eq("organizacao_id", organizacaoId).eq("entidade", "produto"),
+    carregarMaoDeObra(organizacaoId).catch(() => new Map()),
+  ]);
+  const origem = new Map((origemRes.data ?? []).map((o) => [o.entidade_id, o]));
+  const itens = grafo.produtos.map((p) => {
+    const res = resumoProduto({ produtoId: p.id, grafo, precoVenda: null });
+    const o = origem.get(p.id);
+    const mod = custoMaoDeObraUnitario(modRes.get(p.id) ?? [], rendimentoDe(p.id, grafo));
+    const bloqueada = ["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave);
+    return {
+      id: p.id, nome: p.nome, ativo: p.ativo !== false, codigo_pdv: p.codigo_pdv ?? null,
+      natureza: p.vendavel === false ? "preparacao" : "produto_final",
+      categoria: o?.referencia?.fontes?.[0]?.categoria ?? null,
+      origem: o ? { arquivo: o.referencia?.fontes?.[0]?.arquivo ?? null, aba: o.referencia?.fontes?.[0]?.aba ?? null } : null,
+      rendimento: res.rendimento, unidade_rendimento: p.unidade_rendimento ?? null,
+      custo_unitario: bloqueada ? null : res.custo_calculado, custo_mao_de_obra_unitario: mod,
+      qtd_componentes: res.qtd_componentes, status_ficha: res.status_ficha, ficha_completa: !bloqueada,
+      homologacao: res.homologacao, homologacao_motivo: res.homologacao_motivo,
+      homologado_em: res.homologacao === "homologada" ? p.homologado_em ?? null : null,
+      homologado_por_nome: res.homologacao === "homologada" ? p.homologado_por_nome ?? null : null,
+      pendencias: o?.pendencias ?? [],
+      pode_homologar: !bloqueada && res.homologacao === "pendente",
+    };
+  }).sort((a, b) => a.nome.localeCompare(b.nome));
+  const resumo = {
+    total: itens.length, produtos_finais: itens.filter((i) => i.natureza === "produto_final").length, preparacoes: itens.filter((i) => i.natureza === "preparacao").length,
+    homologadas: itens.filter((i) => i.homologacao === "homologada").length, pendentes: itens.filter((i) => i.homologacao === "pendente").length,
+    incompletas: itens.filter((i) => !i.ficha_completa).length, prontas_para_homologar: itens.filter((i) => i.pode_homologar).length,
+  };
+  return { resumo, itens };
+}
+
+// Pendências registradas na carga (catalogo_origem): o que precisa de conferência pela empresa.
+export async function listarPendenciasCatalogo({ organizacaoId }) {
+  const { data, error } = await supabase
+    .from("catalogo_origem").select("entidade, entidade_id, chave, referencia, pendencias")
+    .eq("organizacao_id", organizacaoId).neq("pendencias", "[]").limit(3000);
+  if (error) throw ApiError.internal(error.message);
+  const linhas = data ?? [];
+  const ids = (e) => linhas.filter((l) => l.entidade === e).map((l) => l.entidade_id);
+  const [prods, insu] = await Promise.all([
+    ids("produto").length ? supabase.from("produtos").select("id, nome, homologacao").eq("organizacao_id", organizacaoId).in("id", ids("produto")) : { data: [] },
+    ids("insumo").length ? supabase.from("insumos").select("id, nome").eq("organizacao_id", organizacaoId).in("id", ids("insumo")) : { data: [] },
+  ]);
+  const nome = new Map([...(prods.data ?? []), ...(insu.data ?? [])].map((r) => [r.id, r]));
+  const itens = linhas.map((l) => ({
+    entidade: l.entidade, id: l.entidade_id, nome: nome.get(l.entidade_id)?.nome ?? null,
+    homologacao: nome.get(l.entidade_id)?.homologacao ?? null, chave: l.chave, origem: l.referencia?.fontes?.[0] ?? null, pendencias: l.pendencias,
+  })).filter((i) => i.nome);
+  return { total: itens.length, itens };
 }
 
 // Grava as mudanças na tabela de auditoria. Falhas são apenas logadas (best-effort).
@@ -304,10 +514,64 @@ async function recalcularEObter(organizacaoId, produtoId) {
   return { produto, recalculados };
 }
 
+/**
+ * Adiciona uma PREPARAÇÃO INTERMEDIÁRIA existente (produto não vendável) à receita de um produto.
+ *  * só da MESMA organização (a busca já filtra pela organização do contexto; o banco também recusa vínculo entre empresas);
+ *  * a quantidade é informada na unidade do RENDIMENTO da preparação (g, ml, un…) — outras unidades compatíveis são convertidas;
+ *  * custo = quantidade × custo unitário da preparação (lote ÷ rendimento), recalculado em cascata;
+ *  * recusa dependência circular (direta ou indireta);
+ *  * o gatilho do banco invalida a homologação do produto (e dos que o usam) e o histórico registra a inclusão.
+ */
+async function adicionarPreparacao({ organizacaoId, pid, b, usuario }) {
+  const subId = v.uuid(b.subproduto_id, "Preparação");
+  if (subId === pid) throw ApiError.badRequest("Uma receita não pode usar a si mesma.");
+
+  const { data: sub } = await supabase
+    .from("produtos").select("id, nome, vendavel, ativo, rendimento, unidade_rendimento")
+    .eq("organizacao_id", organizacaoId).eq("id", subId).single();
+  if (!sub) throw ApiError.notFound("Preparação não encontrada nesta empresa.");
+  if (sub.vendavel !== false) throw ApiError.badRequest(`"${sub.nome}" é um produto vendido, não uma preparação intermediária.`);
+  if (sub.ativo === false) throw ApiError.badRequest("Não é possível usar uma preparação inativa.");
+
+  const grafo = await carregarGrafo(organizacaoId);
+  if (dependeDe(subId, pid, grafo)) {
+    throw ApiError.badRequest(`Dependência circular: "${sub.nome}" já usa esta receita (direta ou indiretamente). Remova esse vínculo antes.`);
+  }
+
+  const unidadeSub = sub.unidade_rendimento ?? "un";
+  const unidadeUso = v.umDe(b.unidade ?? unidadeSub, "Unidade utilizada", UNIDADES);
+  const quantidade = v.numero(b.quantidade, "Quantidade utilizada", { min: 0 });
+  const erro = validarComponenteFicha({ quantidade, unidadeUso, unidadeBase: unidadeSub });
+  if (erro) throw ApiError.badRequest(erro);
+  const qtdNaUnidadeDaPreparacao = converterQuantidade(quantidade, unidadeUso, unidadeSub);
+
+  const linha = {
+    produto_id: pid, subproduto_id: subId, quantidade: qtdNaUnidadeDaPreparacao,
+    unidade_uso: unidadeUso, quantidade_informada: quantidade,
+    observacao: v.textoOpcional(b.observacao, "Observação", { max: 300 }), created_by: usuario?.id ?? null,
+  };
+  let res = await supabase.from("ficha_tecnica").insert(linha).select("id").single();
+  if (res.error && RE_COL_FICHA.test(res.error.message)) {
+    res = await supabase.from("ficha_tecnica")
+      .insert({ produto_id: pid, subproduto_id: subId, quantidade: qtdNaUnidadeDaPreparacao, observacao: linha.observacao }).select("id").single();
+  }
+  if (res.error) {
+    if (/duplicate key|unique/i.test(res.error.message)) throw ApiError.badRequest("Esta preparação já está na receita. Edite a quantidade em vez de duplicar.");
+    if (/circular|organiza/i.test(res.error.message)) throw ApiError.badRequest(res.error.message);
+    throw ApiError.badRequest(res.error.message);
+  }
+  await registrarHistorico({
+    organizacaoId, produtoId: pid, usuario,
+    mudancas: [{ campo: "ficha_preparacao", rotulo: "Preparação adicionada à receita", valor_anterior: null, valor_novo: `${sub.nome} — ${quantidade} ${unidadeUso}` }],
+  });
+  return recalcularEObter(organizacaoId, pid);
+}
+
 export async function adicionarComponente({ organizacaoId, produtoId, dados, usuario }) {
   const pid = v.uuid(produtoId, "Produto");
   await garantirProduto(organizacaoId, pid);
   const b = v.corpo(dados);
+  if (b.subproduto_id !== undefined && b.insumo_id === undefined) return adicionarPreparacao({ organizacaoId, pid, b, usuario });
   const insumoId = v.uuid(b.insumo_id, "Insumo");
 
   // Insumo precisa ser DESTA organização e estar ativo.

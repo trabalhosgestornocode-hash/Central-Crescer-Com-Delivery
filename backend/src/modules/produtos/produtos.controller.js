@@ -2,6 +2,27 @@ import { asyncHandler } from "../../shared/asyncHandler.js";
 import { identidadeOperacional } from "../../shared/identidade.js";
 import * as service from "./produtos.service.js";
 
+export const pendenciasCatalogo = asyncHandler(async (req, res) => {
+  res.json({ data: await service.listarPendenciasCatalogo({ organizacaoId: req.tenant.organizacaoId }) });
+});
+
+export const fichasCatalogo = asyncHandler(async (req, res) => {
+  res.json({ data: await service.listarFichasCatalogo({ organizacaoId: req.tenant.organizacaoId }) });
+});
+
+export const homologarLote = asyncHandler(async (req, res) => {
+  const data = await service.homologarLote({ organizacaoId: req.tenant.organizacaoId, ids: req.body?.ids, usuario: identidadeOperacional(req) });
+  res.json({ data });
+});
+
+export const homologacao = asyncHandler(async (req, res) => {
+  const data = await service.definirHomologacao({
+    organizacaoId: req.tenant.organizacaoId, produtoId: req.params.id, acao: req.body?.acao,
+    usuario: identidadeOperacional(req),
+  });
+  res.json({ data });
+});
+
 export const listar = asyncHandler(async (req, res) => {
   const { vendavel, tipo } = req.query;
   const data = await service.listarProdutos({

@@ -6,8 +6,9 @@ export const API_BASE = ""; // mesma origem (backend serve o front)
 // Alinhado à planilha de referência: Saudável < 32% · Atenção 32–40% · Crítico ≥ 40%.
 export const CMV_LIMITES = { saudavel: 32, atencao: 40 };
 
-// Comissão por canal (espelha canais_venda no banco) — usada no simulador de preço
-export const COMISSAO = { balcao: 0, ifood: 0.27, uber: 0.15, app: 0, outro: 0 };
+// (removido: COMISSAO fixa por canal — eram percentuais de UMA operação (Subway) usados por todas as
+//  empresas no Simulador. A comissão agora vem de `canais_venda` DA EMPRESA via
+//  GET /api/v1/cmv/condicoes-comerciais; sem configuração, o simulador marca o cálculo como PARCIAL.)
 
 // (removidos nesta fase, por serem taxonomia/dados fixos de UM tenant:
 //   * TABELAS — a lista de tabelas comerciais agora vem do backend, por
@@ -52,7 +53,7 @@ export const MENU = [
   { id: "dashboard",     label: "Dashboard",       icon: "bar-chart", logo: "/assets/menu-dashboard.png", tipo: "pagina",      secao: "OPERAÇÃO", modulo: "dashboard" },
   { id: "produtos",      label: "Produtos / CMV",  icon: "grid", logo: "/assets/menu-produtos-cmv.png", tipo: "pagina",      secao: "OPERAÇÃO", modulo: "products_cmv" },
   { id: "insumos",       label: "Insumos",         icon: "tag", logo: "/assets/menu-insumos.png", tipo: "insumos",     secao: "OPERAÇÃO", modulo: "ingredients" },
-  { id: "estoque",       label: "Estoque",         icon: "package", logo: "/assets/menu-estoque.png", tipo: "construcao",  secao: "OPERAÇÃO", modulo: "inventory" },
+  { id: "estoque",       label: "Estoque",        icon: "package", logo: "/assets/menu-estoque.png", tipo: "construcao",  secao: "OPERAÇÃO", modulo: "inventory" },
   { id: "vendas",        label: "Vendas",          icon: "receipt", logo: "/assets/menu-vendas.png", tipo: "vendas",      secao: "OPERAÇÃO", modulo: "sales" },
   // Checklist Operacional — módulo PRÓPRIO (`checklist_operacional`, migration 123), independente de ter integração
   // iFood. `moduloTransicao`: o módulo `ifood` segue abrindo o item enquanto houver sessão aberta antes da migration

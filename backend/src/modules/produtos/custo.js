@@ -25,7 +25,9 @@ export async function carregarGrafo(organizacaoId) {
     supabase.from("insumos")
       .select("id, nome, tipo, unidade_medida, preco_unitario, ativo, categoria_id")
       .eq("organizacao_id", organizacaoId),
-    supabase.from("produtos").select("id, nome").eq("organizacao_id", organizacaoId),
+    // `*` (e não colunas nomeadas): rendimento/homologacao são da migration 157 — antes dela
+    // o select continua funcionando e o rendimento cai no padrão 1 (comportamento legado).
+    supabase.from("produtos").select("*").eq("organizacao_id", organizacaoId),
   ]);
   if (insumosRes.error) throw ApiError.internal(insumosRes.error.message);
   if (produtosRes.error) throw ApiError.internal(produtosRes.error.message);
@@ -44,7 +46,22 @@ export async function carregarGrafo(organizacaoId) {
     if (!fichaByProd.has(f.produto_id)) fichaByProd.set(f.produto_id, []);
     fichaByProd.get(f.produto_id).push(f);
   }
-  return { insumoById, nomeProdById, fichaByProd, produtos };
+  const rendimentoById = new Map(produtos.map((p) => [p.id, p.rendimento]));
+  const homologacaoById = new Map(produtos.map((p) => [p.id, p.homologacao]));
+  const homologadoCustoById = new Map(produtos.map((p) => [p.id, p.homologado_custo]));
+  const homologacaoMotivoById = new Map(produtos.map((p) => [p.id, p.homologacao_motivo]));
+  const unidadeRendimentoById = new Map(produtos.map((p) => [p.id, p.unidade_rendimento]));
+  return { insumoById, nomeProdById, fichaByProd, produtos, rendimentoById, homologacaoById, homologadoCustoById, homologacaoMotivoById, unidadeRendimentoById };
+}
+
+/**
+ * Rendimento da receita (quantas unidades — ou g/ml, se for preparação por peso — o lote produz).
+ * Ausente/inválido => 1 (comportamento legado das Subways). Espelha fn_custo_produto (migration 157).
+ * @param {string} produtoId @param {object} grafo @returns {number}
+ */
+export function rendimentoDe(produtoId, grafo) {
+  const r = Number(grafo.rendimentoById?.get(produtoId));
+  return Number.isFinite(r) && r > 0 ? r : 1;
 }
 
 /** Uma linha da ficha está ativa? (coluna nova — default true se ausente). */
@@ -65,10 +82,94 @@ export function custoTotalProduto(produtoId, grafo, prof = 0) {
       const ins = grafo.insumoById.get(f.insumo_id);
       total += qtd * Number(ins?.preco_unitario ?? 0);
     } else if (f.subproduto_id) {
+      // custoTotalProduto(sub) já é o custo POR UNIDADE de rendimento da submontagem.
       total += qtd * custoTotalProduto(f.subproduto_id, grafo, prof + 1);
     }
   }
-  return total;
+  // Custo UNITÁRIO: o lote (soma das linhas) dividido pelo que ele rende.
+  return total / rendimentoDe(produtoId, grafo);
+}
+
+/** Variação relativa do custo, desde a homologação, que a invalida (mudança de preço de insumo, p.ex.). */
+export const HOMOLOGACAO_TOLERANCIA_CUSTO = 0.005;
+
+/**
+ * Homologação EFETIVA: o estado gravado, a menos que o custo atual tenha se afastado do custo homologado
+ * além da tolerância — aí vale 'pendente' com motivo 'custo_alterado' (composição e rendimento já são
+ * invalidados no banco por gatilho, migration 158). Produtos sem controle ('nao_aplicavel') nunca mudam.
+ * @returns {{estado: string, motivo: string|null}}
+ */
+export function homologacaoEfetiva(produtoId, grafo) {
+  const estado = grafo.homologacaoById?.get(produtoId) ?? "nao_aplicavel";
+  const motivo = grafo.homologacaoMotivoById?.get(produtoId) ?? null;
+  if (estado !== "homologada") return { estado, motivo: estado === "pendente" ? motivo : null };
+  const base = Number(grafo.homologadoCustoById?.get(produtoId));
+  if (Number.isFinite(base) && base > 0) {
+    const atual = custoTotalProduto(produtoId, grafo);
+    if (Math.abs(atual - base) / base > HOMOLOGACAO_TOLERANCIA_CUSTO) return { estado: "pendente", motivo: "custo_alterado" };
+  }
+  return { estado, motivo: null };
+}
+
+/**
+ * Custo da MÃO DE OBRA por unidade — indicador À PARTE do CMV de ingredientes/embalagens.
+ * Null se faltar o custo por minuto de qualquer função (não inventa valor).
+ * @param {Array<{minutos: number|string, custo_minuto: number|string|null}>} linhas
+ * @param {number} rendimento
+ * @returns {number|null}
+ */
+export function custoMaoDeObraUnitario(linhas, rendimento = 1) {
+  if (!linhas?.length) return 0;
+  let total = 0;
+  for (const l of linhas) {
+    if (l.custo_minuto == null || l.custo_minuto === "") return null;
+    total += (Number(l.minutos) || 0) * Number(l.custo_minuto);
+  }
+  const r = Number(rendimento);
+  return total / (Number.isFinite(r) && r > 0 ? r : 1);
+}
+
+/**
+ * Mão de obra de um produto, SEMPRE separada do CMV: a própria (linhas da ficha) + a herdada das preparações usadas
+ * (a planilha soma a MOD da base no custo da ficha que a usa). Null = faltou o custo por minuto em algum ponto.
+ * @param {string} produtoId @param {object} grafo @param {Map<string, Array>} modPorProduto de carregarMaoDeObra()
+ * @returns {{linhas: Array, proprio_lote: number|null, herdado_lote: number|null, total_lote: number|null, custo_unitario: number|null}}
+ */
+export function maoDeObraDoProduto(produtoId, grafo, modPorProduto) {
+  const lote = (pid, prof = 0) => {
+    if (prof > PROF_MAX) return { proprio: null, herdado: null };
+    const linhas = modPorProduto.get(pid) ?? [];
+    const proprio = linhas.every((l) => l.custo_minuto != null && l.custo_minuto !== "")
+      ? linhas.reduce((s, l) => s + (Number(l.minutos) || 0) * Number(l.custo_minuto), 0) : null;
+    let herdado = 0;
+    for (const f of grafo.fichaByProd.get(pid) ?? []) {
+      if (!linhaAtiva(f) || !f.subproduto_id) continue;
+      const sub = lote(f.subproduto_id, prof + 1);
+      const subTotal = sub.proprio == null || sub.herdado == null ? null : sub.proprio + sub.herdado;
+      if (subTotal == null) { herdado = null; break; }
+      herdado += (Number(f.quantidade) || 0) * (subTotal / rendimentoDe(f.subproduto_id, grafo));
+    }
+    return { proprio, herdado };
+  };
+  const { proprio, herdado } = lote(produtoId);
+  const total = proprio == null || herdado == null ? null : proprio + herdado;
+  return {
+    linhas: modPorProduto.get(produtoId) ?? [], proprio_lote: proprio, herdado_lote: herdado, total_lote: total,
+    custo_unitario: total == null ? null : total / rendimentoDe(produtoId, grafo),
+  };
+}
+
+/** Carrega a mão de obra por produto (tabela da migration 157). Só para as telas novas — nunca no caminho legado. */
+export async function carregarMaoDeObra(organizacaoId) {
+  const { data, error } = await supabase
+    .from("ficha_mao_de_obra").select("produto_id, funcao, minutos, custo_minuto").eq("organizacao_id", organizacaoId);
+  if (error) throw ApiError.internal(error.message);
+  const porProduto = new Map();
+  for (const l of data ?? []) {
+    if (!porProduto.has(l.produto_id)) porProduto.set(l.produto_id, []);
+    porProduto.get(l.produto_id).push(l);
+  }
+  return porProduto;
 }
 
 /**
@@ -118,9 +219,10 @@ export function componentesDiretos(produtoId, grafo) {
       categoria: null,
       insumo_ativo: true,
       quantidade: Number(f.quantidade),
-      unidade: "un",
+      // preparação usada por peso/volume: a unidade é a do rendimento dela (g, ml…); sem unidade (Subways) segue "un"
+      unidade: grafo.unidadeRendimentoById?.get(f.subproduto_id) ?? "un",
       quantidade_base: Number(f.quantidade),
-      unidade_base: "un",
+      unidade_base: grafo.unidadeRendimentoById?.get(f.subproduto_id) ?? "un",
       custo_unitario_base: custoSub,
       custo_aplicado: Number(f.quantidade) * custoSub,
       observacao: f.observacao ?? null,
@@ -138,9 +240,10 @@ export function ingredientesExplodidos(produtoId, grafo) {
   const acumulado = new Map(); // insumo_id -> qtd base
   const explode = (pid, mult, prof = 0) => {
     if (prof > PROF_MAX) return;
+    const rend = rendimentoDe(pid, grafo);
     for (const f of grafo.fichaByProd.get(pid) ?? []) {
       if (!linhaAtiva(f)) continue;
-      const q = (Number(f.quantidade) || 0) * mult;
+      const q = ((Number(f.quantidade) || 0) * mult) / rend;
       if (f.insumo_id) acumulado.set(f.insumo_id, (acumulado.get(f.insumo_id) ?? 0) + q);
       else if (f.subproduto_id) explode(f.subproduto_id, q, prof + 1);
     }
@@ -179,7 +282,21 @@ export function resumoProduto({ produtoId, grafo, precoVenda = null, custoManual
   const m = margem(custo, precoVenda);
   // Só apresenta CMV quando a ficha está íntegra — nunca um CMV "falso".
   const cmv = status.chave === "insumo_sem_custo" ? null : cmvPct(custo, precoVenda);
+
+  // CMV HOMOLOGADO: só existe com ficha íntegra E sem homologação pendente. Nunca um número "provisório" disfarçado.
+  const { estado: homologacao, motivo: homologacaoMotivo } = homologacaoEfetiva(produtoId, grafo);
+  const fichaIntegra = !["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(status.chave);
+  let cmvHomologado = null;
+  let motivoSemCmvHomologado = null;
+  if (!fichaIntegra) motivoSemCmvHomologado = "ficha_incompleta";
+  else if (homologacao === "pendente") motivoSemCmvHomologado = "pendente_homologacao";
+  else if (!temPreco) motivoSemCmvHomologado = "sem_preco";
+  else cmvHomologado = cmv;
   return {
+    rendimento: rendimentoDe(produtoId, grafo),
+    homologacao, homologacao_motivo: homologacaoMotivo,
+    cmv_homologado_pct: cmvHomologado,
+    motivo_sem_cmv_homologado: motivoSemCmvHomologado,
     componentes,
     qtd_componentes: componentes.length,
     custo,
@@ -190,6 +307,24 @@ export function resumoProduto({ produtoId, grafo, precoVenda = null, custoManual
     margem_pct: m.pct,
     status_ficha: status,
   };
+}
+
+/**
+ * `alvoId` é alcançável a partir de `produtoId` seguindo as submontagens (linhas ativas)? Usado para recusar ciclos:
+ * ao pôr a preparação S na receita de P, recusa se P já é usado (direta/indiretamente) por S.
+ * @param {string} produtoId @param {string} alvoId @param {object} grafo
+ */
+export function dependeDe(produtoId, alvoId, grafo) {
+  const vistos = new Set();
+  const pilha = [produtoId];
+  while (pilha.length) {
+    const atual = pilha.pop();
+    if (atual === alvoId) return true;
+    if (vistos.has(atual)) continue;
+    vistos.add(atual);
+    for (const f of grafo.fichaByProd.get(atual) ?? []) if (f.subproduto_id && linhaAtiva(f)) pilha.push(f.subproduto_id);
+  }
+  return false;
 }
 
 /**

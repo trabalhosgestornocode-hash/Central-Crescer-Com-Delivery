@@ -4,7 +4,7 @@ import { abrirProdutoModal } from "./produtoModal.js";
 import { abrirSimulador } from "./simuladorModal.js";
 import { abrirEditarModal } from "./editarModal.js";
 import { abrirHistoricoModal } from "./historicoModal.js";
-import { excluirProduto, atualizarProduto } from "./api.js";
+import { excluirProduto, atualizarProduto, obterCondicoesComerciais } from "./api.js";
 
 // Ações da tabela de produtos. Cada função recebe a linha (produto) correspondente.
 export const acoes = {
@@ -20,8 +20,10 @@ export const acoes = {
     if (row.produto_id) abrirHistoricoModal(row.produto_id, row.nome);
     else toast(`Produto "${row.nome}" sem identificador.`);
   },
-  simular: (row) => {
-    abrirSimulador(row);
+  simular: async (row) => {
+    // Condições comerciais DA EMPRESA. Falha de rede/permissão => simulador abre em modo PARCIAL (sem comissão assumida).
+    const condicoes = await obterCondicoesComerciais().then((r) => r.data ?? null).catch(() => null);
+    abrirSimulador(row, condicoes);
   },
   remover: (row) => {
     if (!row.produto_id) return toast(`Produto "${row.nome}" sem identificador.`);

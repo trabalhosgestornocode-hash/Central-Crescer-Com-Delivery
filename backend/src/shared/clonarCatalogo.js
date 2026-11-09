@@ -84,6 +84,9 @@ export async function clonarCatalogo(db, { origemId, destinoId }) {
       categoria_id: p.categoria_id ? (mapaCategorias.get(p.categoria_id) ?? null) : null,
       tipo: p.tipo, nome: p.nome, sku: p.sku, codigo_pdv: p.codigo_pdv, tamanho: p.tamanho,
       vendavel: p.vendavel, custo_manual: p.custo_manual, imagem_url: p.imagem_url, ativo: p.ativo,
+      // Migration 157: só copia quando a coluna existe na origem (antes dela o insert não pode citar a coluna).
+      // Homologação NÃO é clonada: o destino parte do padrão ('nao_aplicavel'), nunca herda aprovação alheia.
+      ...(p.rendimento !== undefined ? { rendimento: p.rendimento, unidade_rendimento: p.unidade_rendimento ?? null } : {}),
       // custo_cache fica null de propósito — é recalculado ao vivo pela ficha
       // técnica (ver backend/src/modules/produtos/custo.js).
     };

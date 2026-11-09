@@ -99,6 +99,8 @@ export async function carregarCmv(canal, tabelaComparacao) {
 // Tudo aqui é escopado no servidor por req.tenant.unidadeId (Context Token) —
 // o frontend nunca envia unidade_id. Nada em localStorage.
 export const obterTabelasComerciaisUnidade = () => getJson(`/api/v1/unidade/tabelas-comerciais`);
+// Condições comerciais da EMPRESA (comissão por canal) para o Simulador — nunca um padrão embutido no front.
+export const obterCondicoesComerciais = () => getJson(`/api/v1/cmv/condicoes-comerciais`);
 export async function alterarTabelaComercialUnidade({ canal, novaTabela, motivo }) {
   const g = geracaoContexto();
   const r = await fetch(`${API_BASE}/api/v1/unidade/tabelas-comerciais`, {
@@ -159,6 +161,25 @@ export async function atualizarProduto(id, dados) {
   });
   return tratar(r, g);
 }
+
+// ---------- Catálogo de fichas técnicas / homologação (migrations 157–158) ----------
+export const obterFichasCatalogo = () => getJson(`/api/v1/produtos/catalogo/fichas`);
+export const obterPendenciasCatalogo = () => getJson(`/api/v1/produtos/catalogo/pendencias`);
+export const definirHomologacaoFicha = (id, acao) => patchJson(`/api/v1/produtos/${id}/homologacao`, { acao });
+export const homologarFichasEmLote = (ids) => postJson(`/api/v1/produtos/catalogo/homologar-lote`, { ids });
+
+// ---------- Condições comerciais da empresa (canais_venda) ----------
+export const salvarCondicaoComercial = async (dados) => {
+  const g = geracaoContexto();
+  const r = await fetch(`${API_BASE}/api/v1/cmv/condicoes-comerciais`, {
+    method: "PUT", headers: await comAuth({ "Content-Type": "application/json" }), body: JSON.stringify(dados),
+  });
+  return tratar(r, g);
+};
+export const obterHistoricoCondicoes = () => getJson(`/api/v1/cmv/condicoes-comerciais/historico`);
+
+// ---------- CMV teórico do iFood (itens efetivamente vendidos) ----------
+export const dashExecCmvTeorico = (f) => getJson(`/api/v1/dashboard-executivo/cmv-teorico${qsInsumos(f)}`);
 
 // ---------- Insumos ----------
 function qsInsumos(f = {}) {
@@ -255,6 +276,8 @@ export async function vendasExcluirImportacao(id) {
 }
 export const vendasDivergencias = () => getJson(`/api/v1/vendas/divergencias`);
 export const listarProdutosSistema = () => getJson(`/api/v1/produtos?vendavel=true`);
+// Preparações intermediárias (não vendidas) da empresa — seletor de "Adicionar preparação" na ficha.
+export const listarPreparacoes = () => getJson(`/api/v1/produtos?vendavel=false`);
 
 async function postJson(url, body) {
   const g = geracaoContexto();

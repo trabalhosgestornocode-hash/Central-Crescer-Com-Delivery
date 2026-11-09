@@ -7,6 +7,7 @@ import { obterHistoricoRecente, obterCatalogoIntegracoes } from "./api.js";
 import { abrirHistoricoModal, fmtValor } from "./historicoModal.js";
 import { icon } from "./icons.js";
 import { botaoContextualHtml, ligarBotoesContextuais } from "./agentePainel.js";
+import { linhasCatalogoSemPreco, linhaCatalogoHtml, carregarCatalogoProdutos } from "./produtosCatalogo.js";
 
 // ---------- rótulos ----------
 const CAT_LABEL = {
@@ -264,18 +265,22 @@ export function renderTabela() {
   const rc = el("#result-count");
 
   if (state.carregando) { tb.innerHTML = skeleton(6); if (rc) rc.textContent = ""; return; }
-  if (state.erro) { tb.innerHTML = linhaEstado("erro", "alert-triangle", "Falha ao carregar", state.erro); if (rc) rc.textContent = ""; return; }
+  // Catálogo de empresa independente (produtos importados sem preço): vazio para as Subways, então nada muda para elas.
+  const extra = linhasCatalogoSemPreco();
+  // Unidade sem tabela comercial é um estado esperado: quem tem catálogo ainda vê seus produtos (o banner explica a tabela).
+  const erroBloqueia = state.erro && !(extra.length && state.erroCodigo === "TABELA_NAO_CONFIGURADA");
+  if (erroBloqueia) { tb.innerHTML = linhaEstado("erro", "alert-triangle", "Falha ao carregar", state.erro); if (rc) rc.textContent = ""; return; }
 
-  const rows = linhasFiltradas();
-  _linhas = rows;
-  if (rc) rc.textContent = `${rows.length} de ${state.linhas.length} produtos`;
+  const rows = state.erro ? [] : linhasFiltradas();
+  _linhas = [...rows, ...extra];
+  if (rc) rc.textContent = `${_linhas.length} de ${state.linhas.length + extra.length} produtos`;
 
-  if (!rows.length) {
+  if (!_linhas.length) {
     tb.innerHTML = linhaEstado("", "inbox", "Nada encontrado",
       state.linhas.length ? "Ajuste a busca ou os filtros." : "Sem produtos para este canal/tabela.");
     return;
   }
-  tb.innerHTML = rows.map((r, i) => linhaProduto(r, i)).join("");
+  tb.innerHTML = rows.map((r, i) => linhaProduto(r, i)).join("") + extra.map((r, j) => linhaCatalogoHtml(r, rows.length + j)).join("");
 }
 
 export function renderProdutos() {
@@ -296,6 +301,7 @@ export function renderProdutos() {
         <option value="atencao">Atenção</option>
         <option value="critico">Crítico</option>
       </select>
+      <span id="pc-filtros" class="pc-filtros"></span>
       <button id="f-atualizar" class="btn btn-ghost btn-sm">${icon("refresh", { size: 14 })} Atualizar</button>
       <span class="result-count" id="result-count"></span>
       ${botaoContextualHtml("products_cmv_lista")}
@@ -319,6 +325,7 @@ export function renderProdutos() {
   ligarBotoesContextuais(el("#view"));
   ligarBannerTabela(el("#view"));
   renderTabela();
+  carregarCatalogoProdutos(renderTabela); // catálogo de empresa independente (no-op visual para as Subways)
 }
 
 // ======================= INTEGRAÇÕES =======================

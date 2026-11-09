@@ -27,6 +27,7 @@ import {
   montarConciliacao, linhasComparativoIndicadores, linhasComparativoOperacional, notaAmostraPequena,
 } from "./dashboardExecutivoConciliacao.js";
 import { montarSimuladorPreco } from "./dashboardExecutivoSimulador.js";
+import { montarCmvTeorico } from "./cmvTeoricoIfood.js";
 import { icon } from "./icons.js";
 import { fmtServicosPromocoes } from "./sinalServicos.js";
 import { botaoContextualHtml, botaoDiagnosticoHtml, ligarBotoesContextuais, sincronizarContextoPainel } from "./agentePainel.js";
@@ -470,6 +471,7 @@ function renderVisaoGeral(box) {
   const proj = d.projecao;
   box.innerHTML = `
     <div id="dex-sim-container"></div>
+    <div id="dex-cmv-teorico"></div>
     <section class="dex-resumo">
       <h3>${MESES[d.periodo.mes - 1]} de ${d.periodo.ano}</h3>
       <p><b>${r.diasPreenchidos}</b> de <b>${r.totalDias}</b> dias resolvidos · ${r.diasPendentes} pendente(s) · ${fmtPct(r.percentualConclusao)} do mês concluído</p>
@@ -517,6 +519,7 @@ function renderVisaoGeral(box) {
   // agora moram na aba Lançamentos (perto do calendário que elas explicam
   // dia a dia) — ver renderLancamentos.
   montarSimuladorPreco("dex-sim-container", dex.unidadeId, d.periodo.mes, d.periodo.ano, d);
+  montarCmvTeorico("dex-cmv-teorico", dex.unidadeId, d.periodo.mes, d.periodo.ano);
   el("#dex-preencher-primeiro")?.addEventListener("click", () => abrirLancamentoModal({
     data: r.primeiroDiaPendente, unidadeId: dex.unidadeId, modeloLogistico: modeloDaData(d.modeloPeriodo, r.primeiroDiaPendente, d.modeloLogistico), ehTeste: d.ehTeste, onSalvo: carregarConteudo,
   }));
