@@ -17,6 +17,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const FLAG_PEDIDOS = "FOODY_CENTRAL_PARSER_PEDIDOS_ENABLED";
 export const FLAG_PEDIDOS_UNIDADES = "FOODY_CENTRAL_PARSER_PEDIDOS_UNIDADES";
 export const ORIGEM_FOODY_API = "foody_api";
+/** Mesma flag de foody.constants.js#FLAG_ENTREGADOR_NOME (copiada: esta ponte não importa modules/foody). Exige a migration 160. */
+export const FLAG_ENTREGADOR_NOME = "FOODY_CENTRAL_ENTREGADOR_NOME_ENABLED";
+const lerNomeEntregador = (env) => String(env?.[FLAG_ENTREGADOR_NOME] ?? "").trim().toLowerCase() === "true";
 const PAGINA = 1000;
 /** Dia de parede de Brasília (-03:00, sem horário de verão), igual à camada Foody. */
 export const hojeBrasilia = (agora = new Date()) => new Date(agora.getTime() - 3 * 3_600_000).toISOString().slice(0, 10);
@@ -59,8 +62,10 @@ export function linhaFoodyParaParser(r) {
     numero_pedido: r.numero_pedido,
     data_hora: parede(r.data_hora),
     situacao: r.situacao,
-    // Rótulo neutro e estável: a sincronização guarda só o hash do nome (dado pessoal minimizado).
-    entregador: r.entregador_presente && r.entregador_hash ? `Entregador Foody ${String(r.entregador_hash).slice(0, 6)}` : null,
+    // Nome enviado pela Foody (quando guardado — flag + migration 160); senão, rótulo neutro e estável a partir do hash.
+    entregador: !r.entregador_presente ? null
+      : (typeof r.entregador_nome === "string" && r.entregador_nome.trim()) ? r.entregador_nome.trim()
+      : r.entregador_hash ? `Entregador Foody ${String(r.entregador_hash).slice(0, 6)}` : null,
     taxa_entregador: num(r.taxa_entregador),
     valor_total_pedido: num(r.valor_total),
     forma_pagamento: r.forma_pagamento ?? null,
@@ -123,7 +128,7 @@ export async function carregarPedidosFoody({ db, env = process.env, organizacaoI
     let ultimaSincronizacao = null;
     const fim = proximoDia(dataFim);
     for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
-      const { data, error } = await db.from("foody_pedidos").select(COLUNAS)
+      const { data, error } = await db.from("foody_pedidos").select(lerNomeEntregador(env) ? `${COLUNAS}, entregador_nome` : COLUNAS)
         .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
         .gte("data_hora", `${dataInicio}T00:00:00`).lt("data_hora", `${fim}T00:00:00`)
         .order("data_hora", { ascending: true }).order("foody_uid", { ascending: true })

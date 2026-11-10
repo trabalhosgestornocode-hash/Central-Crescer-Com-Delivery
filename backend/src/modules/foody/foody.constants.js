@@ -83,5 +83,11 @@ export const FLAG_COMPARTILHAMENTO = "FOODY_CENTRAL_COMPARTILHAMENTO_ENABLED";
  * só de FOODY_CENTRAL_ENABLED + allowlist (+ agendador), que são outra decisão.
  */
 export const FLAG_ADMINISTRACAO = "FOODY_CENTRAL_ADMIN_ENABLED";
+/**
+ * Guardar o NOME do entregador que a API Foody envia (`courier.courierName`), além do hash. Exige a migration 160.
+ * Desligada (padrão) = só o hash, exatamente como antes. Pedido do proprietário em 10/11/2026: o Parser precisa do nome para
+ * conferir e pagar os entregadores. O nome nunca vai para logs, respostas de sincronização ou prévia.
+ */
+export const FLAG_ENTREGADOR_NOME = "FOODY_CENTRAL_ENTREGADOR_NOME_ENABLED";
 /** Segredo (≥ 32 caracteres) do qual derivam a chave do token e a chave do HMAC do entregador. Nunca vai ao banco. */
 export const ENV_SEGREDO = "FOODY_CENTRAL_SECRET";
