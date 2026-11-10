@@ -5587,3 +5587,26 @@ tr.dex-linha-na { opacity: .65; }
 /* gaveta (celular/tablet retrato): sem botão de recolher — a gaveta já abre e fecha */
 @media (max-width: 900px) { .sidebar .ml-alternar { display: none; } }
 @media (max-width: 980px) { .adm-sidebar .ml-alternar, .padm-sidebar .ml-alternar { display: none; } }
+
+/* Parser — fonte de cada dia (calendário) e recuperação de mês */
+.pfd-cob { display: flex; flex-wrap: wrap; gap: 16px; }
+.pfd-cob-mes { min-width: 0; }
+.pfd-cob-titulo { font-size: 12px; font-weight: 600; margin-bottom: 6px; color: var(--texto-2, inherit); }
+.pfd-cob-grade { display: grid; grid-template-columns: repeat(7, 26px); gap: 3px; }
+.pfd-cob-sem { font-size: 10px; text-align: center; opacity: .6; }
+.pfd-cob-dia { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 22px; border-radius: 5px; font-size: 11px;
+  background: var(--cinza-claro); color: inherit; box-sizing: border-box; }
+.pfd-cob-fora { background: transparent; }
+.pfd-cob-planilha { background: var(--ok); color: #fff; }
+.pfd-cob-foody { background: var(--info); color: #fff; }
+.pfd-cob-provisorio { background: transparent; border: 2px dashed var(--info); }
+.pfd-cob-aberto { background: transparent; border: 1px dashed var(--cinza-claro); }
+.pfd-cob-vazio { background: var(--cinza-claro); opacity: .7; }
+.pfd-cob-triagem { box-shadow: inset 0 -3px 0 var(--warn); }
+.pfd-cob-legenda { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; }
+.pfd-cob-leg { display: inline-flex; align-items: center; gap: 6px; }
+.pfd-cob-leg .pfd-cob-dia { width: 14px; height: 14px; }
+.pfd-cob-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; margin-bottom: 12px;
+  border: 1px solid var(--warn); border-radius: 8px; font-size: 13px; }
+.pfd-cob-ops { margin: 8px 0; padding-left: 18px; font-size: 13px; }
+@media (max-width: 480px) { .pfd-cob-grade { grid-template-columns: repeat(7, minmax(0, 1fr)); } .pfd-cob-dia { width: auto; } }

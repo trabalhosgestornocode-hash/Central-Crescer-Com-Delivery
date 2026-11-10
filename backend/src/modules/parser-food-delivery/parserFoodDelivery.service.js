@@ -21,7 +21,7 @@ import { carregarOverridesPorUnidade, aplicarOverridesPersistidos, definirOverri
 import { lancamentosDoPeriodo, lancamentosDaImportacao } from "./parserFoodDelivery.lancamentos.js";
 import { comporCustoReal, mesclarEntregadores } from "./parserFoodDelivery.lancamentos.calc.js";
 import { carregarFonteLogistica } from "./parserFoodDelivery.foody.js";
-import { carregarPedidosFoody, fonteFoodyParaApi, compararPlanilhaComFoody, ORIGEM_FOODY_API } from "./parserFoodDelivery.foodyPedidos.js";
+import { carregarPedidosFoody, fonteFoodyParaApi, compararPlanilhaComFoody, carregarCoberturaFoody, MAX_DIAS_COBERTURA, ORIGEM_FOODY_API } from "./parserFoodDelivery.foodyPedidos.js";
 
 const TABELA_IMPORT = "parser_fd_importacoes";
 const TABELA_PEDIDOS = "parser_fd_pedidos";
@@ -914,6 +914,20 @@ export async function consultarCancelamento({ organizacaoId, unidadeId, numeroPe
     };
   }
   return explicarCancelamento(escolha.candidato);
+}
+
+/**
+ * Fonte de cada dia do período (calendário do Parser). Só leitura; flag FOODY_CENTRAL_PARSER_PEDIDOS_ENABLED desligada =
+ * { habilitado: false } sem consultar nada (a tela não mostra o calendário).
+ */
+export async function coberturaPeriodo({ organizacaoId, unidadeId, dataInicio, dataFim }) {
+  const periodo = normalizarPeriodo(dataInicio, dataFim);
+  await resolverUnidade({ organizacaoId, unidadeId });
+  const dias = Math.round((Date.parse(periodo.fimExclusivo) - Date.parse(periodo.inicio)) / 86_400_000);
+  if (dias > MAX_DIAS_COBERTURA) throw ApiError.badRequest(`Período longo demais para o calendário (máximo ${MAX_DIAS_COBERTURA} dias).`);
+  const r = await carregarCoberturaFoody({ db: supabase, organizacaoId, unidadeId, dataInicio: periodo.dataInicio, dataFim: periodo.dataFim });
+  if (!r) return { habilitado: false };
+  return { habilitado: true, periodo: { dataInicio, dataFim }, ...r };
 }
 
 /** Consulta operacional, independente do Histórico e do limite de 200 arquivos. */

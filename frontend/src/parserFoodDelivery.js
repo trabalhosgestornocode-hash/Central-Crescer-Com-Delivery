@@ -6,11 +6,12 @@
 // Mesmo esqueleto de bonificacaoMensal.js: abas + estado de módulo próprio,
 // reset ao trocar de unidade (nunca mistura dados entre unidades).
 import { el, escapeHtml, toast, fmtMoeda, fmtMoedaHtml, fmtDataHora, fmtPct } from "./utils.js";
+import { calendarioCoberturaHtml, mesParaRecuperar, bannerRecuperacaoHtml, previaRecuperacaoHtml, lotesDeRecuperacao, rotuloMes } from "./parserFoodDeliveryCobertura.js";
 import { icon } from "./icons.js";
 import { state } from "./state.js";
 import { pode } from "./sessao.js";
 import {
-  pfdPeriodo, pfdImportacoes, pfdImportacaoDetalhe, pfdArquivoImportacao, pfdAlterarClassificacao, pfdExcluirImportacao,
+  pfdPeriodo, pfdCobertura, foodyPreviaMes, foodySincronizar, pfdImportacoes, pfdImportacaoDetalhe, pfdArquivoImportacao, pfdAlterarClassificacao, pfdExcluirImportacao,
   pfdCatalogos, pfdLancamentoExcluir, pfdLancamentoRestaurar,
 } from "./api.js";
 import { abrirImportarFoodDeliveryModal } from "./parserFoodDeliveryImportModal.js";
@@ -312,7 +313,8 @@ function renderAbaAtual() {
         fonteLogisticaHtml(pfd.atual.fonteLogistica, { fmtMoeda, escapeHtml }));
       atualizarPeriodoNav(); return;
     }
-    box.innerHTML = vazio("calendar", "Sem dados no período", "Não existem dados importados para o período selecionado.");
+    box.innerHTML = vazio("calendar", "Sem dados no período", "Não existem dados importados para o período selecionado.") + secaoCoberturaHtml();
+    ligarCobertura();
     atualizarPeriodoNav(); return;
   }
   if (!pfd.atual) {
@@ -359,12 +361,15 @@ async function selecionarPeriodo(chave, custom = {}) {
   fecharPfdDrawer();
   pfd.periodo = { chave, ini, fim };
   pfd.atual = null;
+  pfd.cobertura = null;
   consultando = true; erroConsulta = null;
   renderAbaAtual();
   try {
-    const { data } = await pfdPeriodo(ini, fim);
+    // Cobertura por dia (calendário): falha nunca derruba o Parser; período longo demais = sem calendário.
+    const [{ data }, cob] = await Promise.all([pfdPeriodo(ini, fim), pfdCobertura(ini, fim).then((r) => r.data).catch(() => null)]);
     if (contextoMudou(g) || consulta !== consultaAtual) return;
     pfd.atual = data;
+    pfd.cobertura = cob;
     pfd.filtros = { busca: "", status: "todos", entregador: "todos" };
     pfd.filtrosCancelamentos = { busca: "", status: "todos" };
     pfd.verIgnorados = false;
@@ -522,6 +527,83 @@ export function avisosFonteFoodyHtml(f) {
   return partes.join("");
 }
 
+// ---------------------------------------------------------------------------
+// FONTE DE CADA DIA + "PREENCHER MÊS" (flag FOODY_CENTRAL_PARSER_PEDIDOS_ENABLED; desligada = nada aparece)
+// ---------------------------------------------------------------------------
+function secaoCoberturaHtml() {
+  const cob = pfd.cobertura;
+  if (!cob?.habilitado) return "";
+  const oferta = mesParaRecuperar(cob);
+  return pfdSecao("calendar", "Fonte de cada dia", "Relatório importado, Foody ou sem dados — um dia, uma fonte",
+    `${bannerRecuperacaoHtml(oferta, { escapeHtml, icon })}${calendarioCoberturaHtml(cob, { escapeHtml, fmtDataHora })}`);
+}
+function ligarCobertura() {
+  el("#pfd-preencher-mes")?.addEventListener("click", (e) => abrirRecuperacaoMes(e.currentTarget.dataset.mes));
+}
+
+async function abrirRecuperacaoMes(mes) {
+  const rot = rotuloMes(mes);
+  if (pfd.cobertura?.papel === "destino") {
+    abrirPfdDrawer(`<h3>${icon("calendar", { size: 17 })} Preencher ${escapeHtml(rot)}</h3>
+      <p>A conta Foody desta unidade é <b>compartilhada pela unidade titular</b>. A recuperação é feita na unidade titular, por um
+      Administrador da empresa titular: os pedidos desta unidade chegam por distribuição, com a mesma separação por operação.</p>
+      <p class="pfd-secao-nota">Abra o Parser no contexto da unidade titular e use "Preencher mês" no mesmo mês.</p>`);
+    return;
+  }
+  const g = geracaoContexto();
+  abrirPfdDrawer(`<h3>${icon("calendar", { size: 17 })} Preencher ${escapeHtml(rot)}</h3><div id="pfd-rec-corpo">${skeletonTabela()}
+    <p class="pfd-secao-nota">Consultando a Foody dia a dia (somente leitura). Nada é gravado nesta etapa.</p></div>`);
+  let previa;
+  try { previa = (await foodyPreviaMes(mes)).data; } catch (err) {
+    if (contextoMudou(g)) return;
+    const corpo = el("#pfd-rec-corpo");
+    if (corpo) corpo.innerHTML = `<p class="pfd-secao-nota pfd-secao-nota--warn">${escapeHtml(err.status === 403
+      ? "Só um Administrador da empresa titular da conta Foody pode consultar e recuperar meses."
+      : err.status === 404 ? "A recuperação pela Foody não está disponível para esta unidade." : err.message || "Não foi possível consultar a Foody.")}</p>`;
+    return;
+  }
+  if (contextoMudou(g)) return;
+  const corpo = el("#pfd-rec-corpo");
+  if (!corpo) return;
+  const dias = previa.recuperar ?? [];
+  corpo.innerHTML = `${previaRecuperacaoHtml(previa, { escapeHtml, fmtMoeda })}
+    ${dias.length ? `<form class="ntf-form" id="pfd-rec-form" novalidate>
+      <label class="cfg-campo" for="pfd-rec-motivo"><span>Motivo (fica no histórico da sincronização)</span>
+        <input id="pfd-rec-motivo" name="motivo" maxlength="300" value="${escapeHtml(`Recuperação de ${rot} pelo Parser`)}" required /></label>
+      <small class="cfg-erro" id="pfd-rec-erro" role="alert"></small>
+      <div class="cfg-acoes"><button type="submit" class="btn btn-primary btn-sm">${icon("refresh", { size: 14 })} Gravar ${dias.length} ${dias.length === 1 ? "dia" : "dias"}</button></div>
+    </form>` : `<p class="pfd-secao-nota">Não há dias a gravar neste mês.</p>`}
+    <div id="pfd-rec-progresso"></div>`;
+  el("#pfd-rec-form")?.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const motivo = String(el("#pfd-rec-motivo")?.value ?? "").trim();
+    if (motivo.length < 10) { el("#pfd-rec-erro").textContent = "Informe um motivo com pelo menos 10 caracteres."; return; }
+    if (!confirm(`Gravar os pedidos Foody de ${dias.length} ${dias.length === 1 ? "dia" : "dias"} de ${rot}? Repetir não duplica pedidos.`)) return;
+    ev.currentTarget.querySelector("button[type=submit]").disabled = true;
+    const prog = el("#pfd-rec-progresso");
+    const lotes = lotesDeRecuperacao(dias);
+    const res = { ok: 0, pendencia: 0, falha: 0 };
+    for (const [i, lote] of lotes.entries()) {
+      if (contextoMudou(g)) return;
+      if (prog) prog.innerHTML = `<p class="pfd-secao-nota">Gravando lote ${i + 1} de ${lotes.length}…</p>`;
+      try {
+        const chave = `rec-${mes}-${lote[0]}-${Date.now().toString(36)}`;
+        const r = (await foodySincronizar({ competencias: lote, motivo }, chave)).data;
+        res.ok += r.totais?.concluidos ?? 0; res.pendencia += r.totais?.comPendencia ?? 0; res.falha += r.totais?.falhas ?? 0;
+        if (r.interrompidoPor) break;
+      } catch (err) {
+        res.falha += lote.length;
+        if (prog) prog.innerHTML = `<p class="pfd-secao-nota pfd-secao-nota--warn">${escapeHtml(err.message || "Falha ao gravar.")}</p>`;
+        break;
+      }
+    }
+    if (contextoMudou(g)) return;
+    if (prog) prog.innerHTML = `<p class="pfd-secao-nota">Concluído: ${res.ok} ${res.ok === 1 ? "dia" : "dias"} sem pendência, ${res.pendencia} com pendência, ${res.falha} com falha.
+      Os indicadores do Parser foram atualizados.</p>`;
+    await selecionarPeriodo("custom", { ini: pfd.periodo.ini, fim: pfd.periodo.fim });
+  });
+}
+
 function distribuicaoDoRelatorioHtml() {
   const { importacao, resumo } = pfd.atual;
   const semColunaDetalhes = importacao.colunaDetalhesEncontrada === false;
@@ -616,6 +698,8 @@ function renderVisaoGeral(box) {
       `${totalDist} ${totalDist === 1 ? "pedido encontrado" : "pedidos encontrados"} no período`,
       distribuicaoDoRelatorioHtml())}
 
+    ${secaoCoberturaHtml()}
+
     ${pfdSecao("scale", "Resumo financeiro", "", `
       <div class="pfd-conciliacao">
         <div class="pfd-conc-linha"><span>Taxas encontradas</span><b>${fmtMoeda(resumo.taxasBrutas)}</b></div>
@@ -649,6 +733,7 @@ function renderVisaoGeral(box) {
   el("#pfd-ver-cancelamentos")?.addEventListener("click", () => { pfd.filtrosCancelamentos = { busca: "", status: "todos" }; irParaAba("cancelamentos"); });
   el("#pfd-ver-ignorados-visao")?.addEventListener("click", () => { pfd.verIgnorados = true; irParaAba("pedidos"); });
   el("#pfd-ver-lancamentos")?.addEventListener("click", () => irParaAba("lancamentos"));
+  ligarCobertura();
 }
 
 // ---------------------------------------------------------------------------

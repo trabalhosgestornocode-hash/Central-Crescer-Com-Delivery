@@ -459,6 +459,21 @@ export function criarRepositorioFoody(db) {
       return data ?? [];
     },
 
+    /** Última versão do fechamento de cada dia do intervalo (só status, estado e pendências; sem indicadores). */
+    async fechamentosDoIntervalo(t, de, ate) {
+      exigirTenant(t);
+      const { data, error } = await db.from("foody_fechamentos_logisticos").select("competencia, versao, status, estado_valores, pendencias, organizacao_id, unidade_id")
+        .eq("organizacao_id", t.organizacaoId).eq("unidade_id", t.unidadeId).gte("competencia", de).lte("competencia", ate)
+        .order("competencia", { ascending: true }).order("versao", { ascending: false }).limit(500);
+      if (error) throw falha("fechamentosDoIntervalo", error);
+      const porDia = new Map();
+      for (const r of data ?? []) {
+        if (r.organizacao_id !== t.organizacaoId || r.unidade_id !== t.unidadeId) throw falha("fechamentosDoIntervalo", { code: "TENANT" });
+        if (!porDia.has(r.competencia)) porDia.set(r.competencia, r);
+      }
+      return porDia;
+    },
+
     async ultimoFechamento(t, competencia) {
       exigirTenant(t);
       const { data, error } = await db.from("foody_fechamentos_logisticos").select("id, versao, status, estado_valores, hash_conteudo")

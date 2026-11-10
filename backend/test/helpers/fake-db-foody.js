@@ -43,7 +43,7 @@ export function criarFakeDb({ unidades = {}, admins = [] } = {}) {
 
   function builder(tabela) {
     const st = { tabela, op: "select", filtros: [], cols: "*", ordem: null, faixa: null, lim: null, modo: "lista", valor: null, opcoes: null, retornar: false };
-    const casa = (r) => st.filtros.every(([tipo, k, v]) => (tipo === "eq" ? r[k] === v : v.includes(r[k])));
+    const casa = (r) => st.filtros.every(([tipo, k, v]) => (tipo === "eq" ? r[k] === v : tipo === "gte" ? r[k] >= v : tipo === "lte" ? r[k] <= v : v.includes(r[k])));
     const executar = () => {
       chamadas.push({ tabela, op: st.op, filtros: st.filtros.map(([t, k, v]) => [t, k, v]), valor: st.valor });
       const linhas = tabelas[tabela];
@@ -100,6 +100,8 @@ export function criarFakeDb({ unidades = {}, admins = [] } = {}) {
       select(cols = "*") { if (st.op === "select") st.cols = cols; else st.retornar = true; return b; },
       eq(k, v) { st.filtros.push(["eq", k, v]); return b; },
       in(k, v) { st.filtros.push(["in", k, v]); return b; },
+      gte(k, v) { st.filtros.push(["gte", k, v]); return b; },
+      lte(k, v) { st.filtros.push(["lte", k, v]); return b; },
       order(k, { ascending = true } = {}) { st.ordem = [k, ascending]; return b; },
       range(a, z) { st.faixa = [a, z]; return b; },
       limit(n) { st.lim = n; return b; },

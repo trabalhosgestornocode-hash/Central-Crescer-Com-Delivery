@@ -18,6 +18,8 @@ export const FLAG_PEDIDOS = "FOODY_CENTRAL_PARSER_PEDIDOS_ENABLED";
 export const FLAG_PEDIDOS_UNIDADES = "FOODY_CENTRAL_PARSER_PEDIDOS_UNIDADES";
 export const ORIGEM_FOODY_API = "foody_api";
 const PAGINA = 1000;
+/** Dia de parede de Brasília (-03:00, sem horário de verão), igual à camada Foody. */
+export const hojeBrasilia = (agora = new Date()) => new Date(agora.getTime() - 3 * 3_600_000).toISOString().slice(0, 10);
 const MAX_PAGINAS = 50;
 
 /** Operação gravada pela camada Foody → vocabulário do Parser. Valor desconhecido vira revisão (nunca chute). */
@@ -178,4 +180,111 @@ export function fonteFoodyParaApi({ dataInicio, dataFim, diasFoody, ultimaSincro
     periodoInicio: diasFoody[0] ?? dataInicio, periodoFim: diasFoody[diasFoody.length - 1] ?? dataFim,
     usuarioNome: "Sincronização automática", criadoEm: ultimaSincronizacao, colunaDetalhesEncontrada: true, diasFoody,
   };
+}
+
+// ---------------------------------------------------------------------------
+// COBERTURA POR DIA (calendário do Parser). SOMENTE LEITURA, mesma flag/allowlist. Diz, para cada dia do período, de onde vêm
+// os dados (planilha, Foody ou nenhum), se o dia é provisório, se há pedidos em triagem e quando foi atualizado.
+// "sem_dados" nunca é "dia zerado": é ausência de registro.
+// ---------------------------------------------------------------------------
+export const FONTE_DIA = Object.freeze({ PLANILHA: "planilha", FOODY: "foody", SEM_DADOS: "sem_dados" });
+export const MAX_DIAS_COBERTURA = 93;
+/** Mesma regra de foody.constants.js#fechamentoDefinitivo (copiada: esta ponte não importa modules/foody). */
+const definitivo = (f) => (f?.status === "CONSOLIDADO" || f?.status === "CORRIGIDO")
+  && (f?.estado_valores === "SINCRONIZADO" || f?.estado_valores === "CONCILIADO" || f?.estado_valores === "CUSTO_REAL");
+
+/** Puro: monta os dias a partir das leituras. */
+export function montarCobertura({ dataInicio, dataFim, hoje, importacoes = [], pedidosFoody = [], fechamentos = new Map(), operacaoPropria = "subway" }) {
+  const diasPlanilha = diasCobertosPorPlanilha(importacoes, dataInicio, dataFim);
+  const importadoEm = {};
+  for (const imp of importacoes) {
+    for (const d of diasCobertosPorPlanilha([imp], dataInicio, dataFim)) {
+      if (!importadoEm[d] || String(imp.criado_em) > importadoEm[d]) importadoEm[d] = imp.criado_em ?? null;
+    }
+  }
+  const foody = {};
+  for (const r of pedidosFoody) {
+    const d = String(r.data_hora ?? "").replace(" ", "T").slice(0, 10);
+    const x = (foody[d] ??= { pedidos: 0, proprios: 0, triagem: 0, ultimaSincronizacao: null });
+    x.pedidos++;
+    const op = operacaoFoodyParaParser(r.operacao);
+    if (op === operacaoPropria) x.proprios++;
+    else if (op === "revisao_necessaria") x.triagem++;
+    if (r.sincronizado_em && (!x.ultimaSincronizacao || r.sincronizado_em > x.ultimaSincronizacao)) x.ultimaSincronizacao = r.sincronizado_em;
+  }
+  const dias = [];
+  for (let d = dataInicio, guard = 0; d <= dataFim && guard < 400; d = proximoDia(d), guard++) {
+    const f = fechamentos.get(d) ?? null;
+    const fd = foody[d] ?? null;
+    const triagemFechamento = (Array.isArray(f?.pendencias) ? f.pendencias : []).find((p) => p?.codigo === "TRIAGEM_PENDENTE")?.quantidade ?? 0;
+    const aberto = d >= hoje;
+    const fonte = diasPlanilha.has(d) ? FONTE_DIA.PLANILHA : fd?.pedidos ? FONTE_DIA.FOODY : FONTE_DIA.SEM_DADOS;
+    dias.push({
+      data: d, fonte, aberto,
+      // Provisório: dia da Foody sem fechamento definitivo (ou ainda em curso). Planilha importada é a fonte consolidada do dia.
+      provisorio: fonte === FONTE_DIA.FOODY && (aberto || !definitivo(f)),
+      triagem: Math.max(triagemFechamento, fd?.triagem ?? 0),
+      pedidosFoody: fd?.pedidos ?? 0,
+      fechamento: f ? { status: f.status, estadoValores: f.estado_valores } : null,
+      ultimaAtualizacao: fonte === FONTE_DIA.PLANILHA ? importadoEm[d] ?? null : fd?.ultimaSincronizacao ?? null,
+    });
+  }
+  const conta = (pred) => dias.filter(pred).length;
+  return {
+    dias,
+    totais: {
+      dias: dias.length, planilha: conta((x) => x.fonte === FONTE_DIA.PLANILHA), foody: conta((x) => x.fonte === FONTE_DIA.FOODY),
+      semDados: conta((x) => x.fonte === FONTE_DIA.SEM_DADOS && !x.aberto), abertos: conta((x) => x.aberto),
+      provisorios: conta((x) => x.provisorio), comTriagem: conta((x) => x.triagem > 0),
+    },
+  };
+}
+
+/**
+ * @returns {Promise<null | { papel, operacaoPropria, dias, totais } | { erro }>}  null = flag desligada (nada consultado)
+ */
+export async function carregarCoberturaFoody({ db, env = process.env, organizacaoId, unidadeId, dataInicio, dataFim, agora = new Date() }) {
+  if (!pedidosFoodyNoParserPermitidos(env, unidadeId)) return null;
+  try {
+    const confere = (linhas) => (linhas ?? []).every((r) => r.organizacao_id === organizacaoId && r.unidade_id === unidadeId);
+    const { data: imps, error: e1 } = await db.from("parser_fd_importacoes").select("organizacao_id, unidade_id, periodo_inicio, periodo_fim, criado_em")
+      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("status", "concluida")
+      .lte("periodo_inicio", dataFim).gte("periodo_fim", dataInicio);
+    if (e1) return { erro: "FONTE_FOODY_INDISPONIVEL" };
+    // Papel da unidade na conta Foody: titular (dona da conexão) ou destino ATIVO. Só id/status: nunca o token.
+    const { data: cx, error: e2 } = await db.from("foody_conexoes").select("organizacao_id, unidade_id, status")
+      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId);
+    const { data: dest, error: e3 } = await db.from("foody_conexao_destinos").select("organizacao_id, unidade_id, operacao, estado")
+      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("estado", "ATIVO");
+    const { data: fech, error: e4 } = await db.from("foody_fechamentos_logisticos").select("organizacao_id, unidade_id, competencia, versao, status, estado_valores, pendencias")
+      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).gte("competencia", dataInicio).lte("competencia", dataFim)
+      .order("competencia", { ascending: true }).order("versao", { ascending: false }).limit(2000);
+    if (e2 || e3 || e4) return { erro: "FONTE_FOODY_INDISPONIVEL" };
+    if (![imps, cx, dest, fech].every(confere)) return { erro: "FONTE_FOODY_TENANT_DIVERGENTE" };
+    const operacoes = [...new Set((dest ?? []).map((d) => d.operacao))];
+    if (operacoes.length > 1) return { erro: "FONTE_FOODY_OPERACAO_AMBIGUA" };
+    const operacaoPropria = operacoes.length ? operacaoFoodyParaParser(operacoes[0]) : "subway";
+    const fechamentos = new Map();
+    for (const f of fech ?? []) if (!fechamentos.has(f.competencia)) fechamentos.set(f.competencia, f);
+
+    const pedidosFoody = [];
+    const fim = proximoDia(dataFim);
+    for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
+      const { data, error } = await db.from("foody_pedidos").select("organizacao_id, unidade_id, data_hora, operacao, sincronizado_em, foody_uid")
+        .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
+        .gte("data_hora", `${dataInicio}T00:00:00`).lt("data_hora", `${fim}T00:00:00`)
+        .order("data_hora", { ascending: true }).order("foody_uid", { ascending: true })
+        .range(pagina * PAGINA, pagina * PAGINA + PAGINA - 1);
+      if (error) return { erro: "FONTE_FOODY_INDISPONIVEL" };
+      if (!confere(data)) return { erro: "FONTE_FOODY_TENANT_DIVERGENTE" };
+      pedidosFoody.push(...(data ?? []));
+      if (!data || data.length < PAGINA) break;
+      if (pagina === MAX_PAGINAS - 1) return { erro: "FONTE_FOODY_LIMITE_EXCEDIDO" };
+    }
+    const papel = (cx ?? []).length ? "titular" : operacoes.length ? "destino" : null;
+    return { papel, operacaoPropria,
+      ...montarCobertura({ dataInicio, dataFim, hoje: hojeBrasilia(agora), importacoes: imps ?? [], pedidosFoody, fechamentos, operacaoPropria }) };
+  } catch {
+    return { erro: "FONTE_FOODY_INDISPONIVEL" };
+  }
 }

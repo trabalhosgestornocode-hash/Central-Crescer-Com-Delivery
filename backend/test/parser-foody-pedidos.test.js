@@ -6,7 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   carregarPedidosFoody, pedidosFoodyNoParserPermitidos, diasCobertosPorPlanilha, linhaFoodyParaParser, operacaoFoodyParaParser,
-  fonteFoodyParaApi, ORIGEM_FOODY_API, compararPlanilhaComFoody,
+  fonteFoodyParaApi, ORIGEM_FOODY_API, compararPlanilhaComFoody, montarCobertura, carregarCoberturaFoody, FONTE_DIA,
 } from "../src/modules/parser-food-delivery/parserFoodDelivery.foodyPedidos.js";
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -40,6 +40,7 @@ function dbFalso(tabelas, { erroEm } = {}) {
         lte(c, v) { q.filtros.push(["lte", c, v]); return api; },
         lt(c, v) { q.filtros.push(["lt", c, v]); return api; },
         order() { return api; },
+        limit() { return api; },
         range(a, b) { q.range = [a, b]; return api; },
         then(res, rej) {
           if (erroEm === tabela) return Promise.resolve({ data: null, error: { message: "x" } }).then(res, rej);
@@ -178,11 +179,57 @@ describe("sem perda silenciosa (planilha parcial)", () => {
   });
 });
 
+describe("cobertura por dia (calendário)", () => {
+  const HOJE = "2026-11-10";
+  const fech = (status, estado, pend = []) => ({ status, estado_valores: estado, pendencias: pend });
+  test("planilha prevalece; Foody nos dias sem planilha; sem registro = sem_dados (nunca zero); provisório e triagem marcados", () => {
+    const r = montarCobertura({
+      dataInicio: "2026-11-06", dataFim: "2026-11-10", hoje: HOJE,
+      importacoes: [{ periodo_inicio: "2026-11-06", periodo_fim: "2026-11-06", criado_em: "2026-11-07T10:00:00Z" }],
+      pedidosFoody: [
+        { data_hora: "2026-11-06T12:00:00", operacao: "subway", sincronizado_em: "x" },
+        { data_hora: "2026-11-07T12:00:00", operacao: "subway", sincronizado_em: "2026-11-08T06:00:00Z" },
+        { data_hora: "2026-11-08T12:00:00", operacao: "subway", sincronizado_em: "2026-11-09T06:00:00Z" },
+        { data_hora: "2026-11-08T13:00:00", operacao: "triagem", sincronizado_em: "2026-11-09T06:00:00Z" },
+      ],
+      fechamentos: new Map([["2026-11-07", fech("CONSOLIDADO", "SINCRONIZADO")], ["2026-11-08", fech("PRELIMINAR", "PROVISORIO", [{ codigo: "TRIAGEM_PENDENTE", quantidade: 1 }])]]),
+    });
+    const d = Object.fromEntries(r.dias.map((x) => [x.data, x]));
+    assert.equal(d["2026-11-06"].fonte, FONTE_DIA.PLANILHA);
+    assert.equal(d["2026-11-06"].ultimaAtualizacao, "2026-11-07T10:00:00Z");
+    assert.equal(d["2026-11-07"].fonte, FONTE_DIA.FOODY);
+    assert.equal(d["2026-11-07"].provisorio, false);
+    assert.equal(d["2026-11-08"].provisorio, true);
+    assert.equal(d["2026-11-08"].triagem, 1);
+    assert.equal(d["2026-11-09"].fonte, FONTE_DIA.SEM_DADOS);
+    assert.equal(d["2026-11-09"].pedidosFoody, 0);
+    assert.equal(d["2026-11-10"].aberto, true);
+    assert.deepEqual(r.totais, { dias: 5, planilha: 1, foody: 2, semDados: 1, abertos: 1, provisorios: 1, comTriagem: 1 });
+  });
+  test("flag desligada: null sem consultar; tenant divergente derruba; papel titular/destino", async () => {
+    const db0 = dbFalso({});
+    assert.equal(await carregarCoberturaFoody({ db: db0, env: {}, organizacaoId: ORG, unidadeId: UNI, dataInicio: "2026-11-01", dataFim: "2026-11-02" }), null);
+    assert.equal(db0.chamadas.length, 0);
+    const a = { env: ON, organizacaoId: ORG, unidadeId: UNI, dataInicio: "2026-11-01", dataFim: "2026-11-02", agora: new Date("2026-11-10T12:00:00Z") };
+    assert.deepEqual(await carregarCoberturaFoody({ ...a, db: dbFalso({ foody_pedidos: [{ organizacao_id: OUTRA, unidade_id: UNI, data_hora: "2026-11-01T10:00:00" }] }) }),
+      { erro: "FONTE_FOODY_TENANT_DIVERGENTE" });
+    const t = await carregarCoberturaFoody({ ...a, db: dbFalso({ foody_conexoes: [{ organizacao_id: ORG, unidade_id: UNI, status: "ATIVA" }] }) });
+    assert.equal(t.papel, "titular");
+    assert.equal(t.totais.semDados, 2);
+    const dsts = await carregarCoberturaFoody({ ...a, db: dbFalso({ foody_conexao_destinos: [{ organizacao_id: ORG, unidade_id: UNI, operacao: "acai_no_grau", estado: "ATIVO" }] }) });
+    assert.equal(dsts.papel, "destino");
+    assert.equal(dsts.operacaoPropria, "acai_no_grau");
+  });
+});
+
 describe("estrutural", () => {
   test("ponte só lê (select), nunca grava, não importa modules/foody nem envia mensagens", () => {
     const s = readFileSync(join(RAIZ, "src", "modules", "parser-food-delivery", "parserFoodDelivery.foodyPedidos.js"), "utf8").replace(/\/\/.*$/gm, "");
     assert.doesNotMatch(s, /\.(insert|update|upsert|delete|rpc)\(/);
-    assert.deepEqual([...s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)].map((m) => m[1]).sort(), ["foody_conexao_destinos", "foody_pedidos", "parser_fd_importacoes"]);
+    assert.deepEqual([...new Set([...s.matchAll(/\.from\(\s*["'`]([\w.]+)["'`]/g)].map((m) => m[1]))].sort(),
+      ["foody_conexao_destinos", "foody_conexoes", "foody_fechamentos_logisticos", "foody_pedidos", "parser_fd_importacoes"]);
+    // A conexão é lida só para saber o papel: nunca o token.
+    assert.doesNotMatch(s, /from\("foody_conexoes"\)\.select\("[^"]*token/);
     assert.deepEqual([...s.matchAll(/^import .* from\s+["']([^"']+)["']/gm)].map((m) => m[1]), []);
     assert.doesNotMatch(s, /fetch\(|whatsapp|notifica|comunicacao/i);
     const servico = readFileSync(join(RAIZ, "src", "modules", "parser-food-delivery", "parserFoodDelivery.service.js"), "utf8");

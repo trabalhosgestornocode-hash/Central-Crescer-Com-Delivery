@@ -14,7 +14,10 @@
 //   * DIAS: hoje/futuro recusados; dia CONGELADO (antes de D-3) só como reprocessamento com motivo.
 // NUNCA envia mensagem e não alimenta indicador existente. Respostas só com códigos e contagens (sem valores nem pedidos).
 import { administracaoPermitida, unidadePermitida } from "./foody.flags.js";
-import { validarCompetencia, situacaoCompetencia } from "./foody.periodo.js";
+import { validarCompetencia, situacaoCompetencia, janelaDoDia, somarDias, hojeParede } from "./foody.periodo.js";
+import { criarClienteFoody } from "./foody.client.js";
+import { sanearPedidoApi } from "./foody.adapter.js";
+import { impressaoToken } from "./foody.seguranca.js";
 import { sincronizarEFechar } from "./foody.fechamento.service.js";
 import { ehAdminDaOrganizacao } from "./foody.compartilhamento.service.js";
 import { foodyLog } from "./foody.seguranca.js";
@@ -177,4 +180,135 @@ export async function listarSincronizacoes({ ator, tenant }, { env = process.env
       fechamentosPendentes: e.fechamentos_pendentes ?? 0, iniciadoEm: e.iniciado_em, concluidoEm: e.concluido_em ?? null,
     })),
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// PRÉVIA DE RECUPERAÇÃO DE UM MÊS (Parser › "Preencher mês"). SOMENTE LEITURA: consulta a API Foody (só GET) e o banco e NÃO grava
+// nada (nem execução). A gravação continua sendo a sincronização manual acima, em lotes de até 7 dias, com motivo.
+// ---------------------------------------------------------------------------
+const MES = /^\d{4}-(0[1-9]|1[0-2])$/;
+const STATUS_DEFINITIVO = new Set(["CONSOLIDADO", "CORRIGIDO"]);
+/** Prévia em cache por unidade+mês: repetir em seguida não gasta chamadas da API. */
+export const PREVIA_CACHE_MS = 10 * 60_000;
+export const SITUACAO_DIA = Object.freeze({
+  COMPLETO: "completo",                 // fechamento definitivo no banco: nada a recuperar
+  PROVISORIO: "provisorio",             // fechamento existe com pendência (ex.: triagem): não recuperar; conferir
+  PARCIAL: "parcial",                   // fechamento INCOMPLETO no banco e a origem tem pedidos: pode completar
+  RECUPERAVEL: "recuperavel",           // sem fechamento e a origem devolveu pedidos
+  SEM_PEDIDOS_NA_ORIGEM: "sem_pedidos_na_origem", // consulta válida com zero pedidos (NÃO é "dia zerado" confirmado)
+  INDISPONIVEL: "indisponivel",         // a consulta falhou (código no dia)
+  NAO_CONSULTADO: "nao_consultado",     // consulta interrompida por erro de conta/credencial em dia anterior
+  ABERTO: "aberto",                     // hoje ou futuro: não se recupera
+});
+
+/** Contagens de um dia da API, sem dados pessoais: total, por operação e taxas PREVISTAS de pedidos com entregador. */
+export function resumirDiaDaApi(pedidos, { competencia, hashEntregador, compartilhado, catalogo }) {
+  const r = { pedidos: 0, foraDoDia: 0, malformados: 0, porOperacao: {}, comEntregador: {}, taxasPrevistasCentavos: {} };
+  const vistos = new Set();
+  for (const o of pedidos ?? []) {
+    const s = sanearPedidoApi(o, { hashEntregador, compartilhado, catalogo });
+    if (s.erro) { r.malformados++; continue; }
+    const g = s.registro;
+    if (g.competencia !== competencia) { r.foraDoDia++; continue; }
+    if (vistos.has(g.foody_uid)) continue;
+    vistos.add(g.foody_uid);
+    r.pedidos++;
+    r.porOperacao[g.operacao] = (r.porOperacao[g.operacao] ?? 0) + 1;
+    if (g.entregador_presente) {
+      r.comEntregador[g.operacao] = (r.comEntregador[g.operacao] ?? 0) + 1;
+      if (g.taxa_entregador != null) r.taxasPrevistasCentavos[g.operacao] = (r.taxasPrevistasCentavos[g.operacao] ?? 0) + Math.round(Number(g.taxa_entregador) * 100);
+    }
+  }
+  return r;
+}
+
+/**
+ * @param {{ator, tenant:{organizacaoId, unidadeId}, mes:string}} pedido  mes = "AAAA-MM"
+ * @param {{env?, repo, seguranca, agora?, criarCliente?, estado?, catalogo?}} deps
+ */
+export async function previaRecuperacaoMes(pedido, deps) {
+  const { ator, tenant, mes } = pedido ?? {};
+  const { env = process.env, repo, seguranca, agora = () => new Date(), criarCliente = criarClienteFoody, estado = criarEstadoSyncManual() } = deps ?? {};
+  const t = { organizacaoId: tenant?.organizacaoId ?? null, unidadeId: tenant?.unidadeId ?? null };
+  if (!administracaoPermitida(env) || !unidadePermitida(env, t.unidadeId)) throw erro("DESLIGADO", "sincronização Foody desligada para esta unidade.");
+  if (!ehAdminDaOrganizacao(ator, t.organizacaoId)) throw erro("SEM_PERMISSAO", "só um Administrador da empresa titular (sem impersonação) consulta a recuperação.");
+  if (!UUID.test(String(t.unidadeId ?? ""))) throw erro("SEM_UNIDADE", "selecione a unidade dona da conta Foody.");
+  if (!MES.test(String(mes ?? ""))) throw erro("PARAMETRO_INVALIDO", "mês inválido (use AAAA-MM).");
+
+  const agoraD = agora();
+  const chave = `previa|${t.unidadeId}|${mes}`;
+  for (const [k, v] of estado.respostas) if (agoraD.getTime() - v.em > PREVIA_CACHE_MS) estado.respostas.delete(k);
+  const emCache = estado.respostas.get(chave);
+  if (emCache) return { ...emCache.resposta, emCache: true };
+
+  const conexao = await repo.obterConexao(t);
+  if (!conexao) throw erro("SEM_CONEXAO", "unidade sem conexão Foody.");
+  if (conexao.organizacao_id !== t.organizacaoId || conexao.unidade_id !== t.unidadeId) throw erro("TENANT_DIVERGENTE", "conexão de outra unidade.");
+  if (conexao.status !== "ATIVA") throw erro("CONEXAO_INATIVA", `a conexão está ${conexao.status}.`);
+
+  const inicio = `${mes}-01`;
+  const fim = somarDias(`${somarDias(inicio, 31).slice(0, 7)}-01`, -1);
+  const hoje = hojeParede(agoraD);
+  const dias = [];
+  for (let d = inicio; d <= fim; d = somarDias(d, 1)) dias.push(d);
+
+  const fechamentos = await repo.fechamentosDoIntervalo(t, inicio, fim);
+  const destinos = await repo.listarDestinosDaConexao(t, conexao.id);
+  const compartilhado = destinos.some((x) => x.estado === "ATIVO");
+
+  let cliente = null;
+  const abrirCliente = () => {
+    if (cliente) return cliente;
+    let token;
+    try { token = seguranca.decifrarToken(conexao.token_cifrado, t.unidadeId); } catch { throw erro("TOKEN_INVALIDO", "token não decifra para esta unidade."); }
+    if (impressaoToken(token) !== conexao.token_impressao) throw erro("TOKEN_DIVERGENTE", "token não confere com a impressão gravada.");
+    cliente = criarCliente({ token, maxPaginas: LIMITES_SYNC_MANUAL.maxPaginas });
+    return cliente;
+  };
+
+  const out = [];
+  let parouEm = null;
+  for (const competencia of dias) {
+    if (competencia >= hoje) { out.push({ competencia, situacao: SITUACAO_DIA.ABERTO }); continue; }
+    const f = fechamentos.get(competencia);
+    if (f && STATUS_DEFINITIVO.has(f.status) && f.estado_valores !== "PROVISORIO") { out.push({ competencia, situacao: SITUACAO_DIA.COMPLETO, fechamento: f.status }); continue; }
+    if (f && f.status !== "INCOMPLETO") {
+      out.push({ competencia, situacao: SITUACAO_DIA.PROVISORIO, fechamento: f.status,
+        pendencias: (Array.isArray(f.pendencias) ? f.pendencias : []).map((p) => ({ codigo: p.codigo, quantidade: p.quantidade ?? null })) });
+      continue;
+    }
+    if (parouEm) { out.push({ competencia, situacao: SITUACAO_DIA.NAO_CONSULTADO }); continue; }
+    try {
+      const { pedidos } = await abrirCliente().listarPedidos(janelaDoDia(competencia));
+      const r = resumirDiaDaApi(pedidos, { competencia, hashEntregador: seguranca.hashEntregador, compartilhado, catalogo: deps?.catalogo });
+      out.push({ competencia, situacao: r.pedidos === 0 ? SITUACAO_DIA.SEM_PEDIDOS_NA_ORIGEM : f ? SITUACAO_DIA.PARCIAL : SITUACAO_DIA.RECUPERAVEL,
+        ...(f ? { fechamento: f.status } : {}), origem: r });
+    } catch (e) {
+      const codigo = codigoSeguro(e?.codigo);
+      out.push({ competencia, situacao: SITUACAO_DIA.INDISPONIVEL, erro: codigo });
+      if (PARA_TUDO.has(codigo)) parouEm = codigo;
+    }
+  }
+  const conta = (s) => out.filter((x) => x.situacao === s).length;
+  const soma = (campo) => out.reduce((acc, x) => {
+    for (const [op, n] of Object.entries(x.origem?.[campo] ?? {})) acc[op] = (acc[op] ?? 0) + n;
+    return acc;
+  }, {});
+  const resposta = {
+    mes, unidadeId: t.unidadeId, consultadoEm: agoraD.toISOString(), interrompidoPor: parouEm,
+    dias: out,
+    totais: {
+      dias: out.length, completos: conta(SITUACAO_DIA.COMPLETO), provisorios: conta(SITUACAO_DIA.PROVISORIO),
+      parciais: conta(SITUACAO_DIA.PARCIAL), recuperaveis: conta(SITUACAO_DIA.RECUPERAVEL),
+      semPedidosNaOrigem: conta(SITUACAO_DIA.SEM_PEDIDOS_NA_ORIGEM), indisponiveis: conta(SITUACAO_DIA.INDISPONIVEL) + conta(SITUACAO_DIA.NAO_CONSULTADO),
+      abertos: conta(SITUACAO_DIA.ABERTO),
+      pedidosNaOrigem: out.reduce((a, x) => a + (x.origem?.pedidos ?? 0), 0),
+      porOperacao: soma("porOperacao"), comEntregador: soma("comEntregador"), taxasPrevistasCentavos: soma("taxasPrevistasCentavos"),
+    },
+    // Dias que a sincronização manual pode gravar: recuperáveis e parciais (os congelados exigem motivo).
+    recuperar: out.filter((x) => x.situacao === SITUACAO_DIA.RECUPERAVEL || x.situacao === SITUACAO_DIA.PARCIAL).map((x) => x.competencia),
+  };
+  estado.respostas.set(chave, { em: agoraD.getTime(), resposta });
+  return resposta;
 }
