@@ -114,6 +114,10 @@ export async function carregarPedidosFoody({ db, env = process.env, organizacaoI
 
     // 3) Pedidos sincronizados do intervalo (hora de parede), paginados.
     const linhas = [];
+    // Pedidos Foody da operação própria nos dias que a planilha cobre: não entram (planilha prevalece), mas são CONTADOS
+    // para revelar planilha parcial (ex.: exportada no meio do dia) — nunca uma perda silenciosa.
+    const foodyPropriosEmDiaDePlanilha = {};
+    const foodyTriagemEmDiaDePlanilha = {}; // em triagem: podem ser da operação própria; ampliam a faixa aceitável
     let ultimaSincronizacao = null;
     const fim = proximoDia(dataFim);
     for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
@@ -126,7 +130,12 @@ export async function carregarPedidosFoody({ db, env = process.env, organizacaoI
       for (const r of data ?? []) {
         if (r.organizacao_id !== organizacaoId || r.unidade_id !== unidadeId) return { erro: "FONTE_FOODY_TENANT_DIVERGENTE" };
         const dia = String(r.data_hora).replace(" ", "T").slice(0, 10);
-        if (diasPlanilha.has(dia)) continue; // planilha prevalece
+        if (diasPlanilha.has(dia)) { // planilha prevalece
+          const op = operacaoFoodyParaParser(r.operacao);
+          if (op === operacaoPropria) foodyPropriosEmDiaDePlanilha[dia] = (foodyPropriosEmDiaDePlanilha[dia] ?? 0) + 1;
+          else if (op === "revisao_necessaria") foodyTriagemEmDiaDePlanilha[dia] = (foodyTriagemEmDiaDePlanilha[dia] ?? 0) + 1;
+          continue;
+        }
         linhas.push(linhaFoodyParaParser(r));
         if (r.sincronizado_em && (!ultimaSincronizacao || r.sincronizado_em > ultimaSincronizacao)) ultimaSincronizacao = r.sincronizado_em;
       }
@@ -134,10 +143,31 @@ export async function carregarPedidosFoody({ db, env = process.env, organizacaoI
       if (pagina === MAX_PAGINAS - 1) return { erro: "FONTE_FOODY_LIMITE_EXCEDIDO" };
     }
     const diasFoody = [...new Set(linhas.map((l) => l.data_hora.slice(0, 10)))].sort();
-    return { linhas, operacaoPropria, diasFoody, diasPlanilha: [...diasPlanilha].sort(), ultimaSincronizacao };
+    return { linhas, operacaoPropria, diasFoody, diasPlanilha: [...diasPlanilha].sort(), ultimaSincronizacao, foodyPropriosEmDiaDePlanilha, foodyTriagemEmDiaDePlanilha };
   } catch {
     return { erro: "FONTE_FOODY_INDISPONIVEL" };
   }
+}
+
+/**
+ * Compara, nos dias cobertos por planilha, a quantidade de pedidos da operação própria: planilha × Foody.
+ * Só INFORMA (não troca a fonte: isso muda a metodologia e exige decisão humana).
+ *   PLANILHA_POSSIVELMENTE_PARCIAL: a Foody tem MAIS pedidos que a planilha (ex.: relatório exportado antes do fim do dia).
+ *   FOODY_COM_MENOS_PEDIDOS: a planilha tem mais (ex.: sincronização atrasada ou pedido em triagem).
+ * Faixa aceitável: [foody − tolerância, foody + triagem do dia + tolerância] — pedidos Foody em triagem podem ser da
+ * operação própria, e o catálogo pode divergir do Parser em 1–2 pedidos.
+ */
+export function compararPlanilhaComFoody({ planilhaPorDia, foodyPorDia, triagemPorDia = {}, diasPlanilha, tolerancia = 2 }) {
+  const out = [];
+  for (const dia of diasPlanilha ?? []) {
+    const planilha = planilhaPorDia?.[dia] ?? 0;
+    const foody = foodyPorDia?.[dia] ?? 0;
+    const triagem = triagemPorDia?.[dia] ?? 0;
+    if (foody === 0 && triagem === 0) continue; // sem dado Foody no dia: nada a comparar (antes do início da coleta, por exemplo)
+    if (planilha >= foody - tolerancia && planilha <= foody + triagem + tolerancia) continue;
+    out.push({ dia, planilha, foody, triagem, alerta: planilha < foody ? "PLANILHA_POSSIVELMENTE_PARCIAL" : "FOODY_COM_MENOS_PEDIDOS" });
+  }
+  return out;
 }
 
 /** Entrada sintética para o bloco "fontes" do Parser (só exibição; não existe importação gravada). */

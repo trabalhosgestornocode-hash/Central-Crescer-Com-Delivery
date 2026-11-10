@@ -21,7 +21,7 @@ import { carregarOverridesPorUnidade, aplicarOverridesPersistidos, definirOverri
 import { lancamentosDoPeriodo, lancamentosDaImportacao } from "./parserFoodDelivery.lancamentos.js";
 import { comporCustoReal, mesclarEntregadores } from "./parserFoodDelivery.lancamentos.calc.js";
 import { carregarFonteLogistica } from "./parserFoodDelivery.foody.js";
-import { carregarPedidosFoody, fonteFoodyParaApi, ORIGEM_FOODY_API } from "./parserFoodDelivery.foodyPedidos.js";
+import { carregarPedidosFoody, fonteFoodyParaApi, compararPlanilhaComFoody, ORIGEM_FOODY_API } from "./parserFoodDelivery.foodyPedidos.js";
 
 const TABELA_IMPORT = "parser_fd_importacoes";
 const TABELA_PEDIDOS = "parser_fd_pedidos";
@@ -959,6 +959,11 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
   const todos = aplicarOverridesPersistidos(combinados, overrides);
   const pedidos = todos.filter(elegivel);
   const filtragem = operacaoPropria === OPERACAO.SUBWAY ? resumoFiltragem(todos) : resumoFiltragemOperacaoPropria(todos, operacaoPropria);
+  const divergenciasPlanilha = foodyOk ? compararPlanilhaComFoody({
+    diasPlanilha: foody.diasPlanilha, foodyPorDia: foody.foodyPropriosEmDiaDePlanilha, triagemPorDia: foody.foodyTriagemEmDiaDePlanilha,
+    planilhaPorDia: daPlanilha.filter((p) => p.operacao === operacaoPropria)
+      .reduce((a, p) => { const d = String(p.dataHora || "").slice(0, 10); a[d] = (a[d] ?? 0) + 1; return a; }, {}),
+  }) : [];
   if (foodyOk && foody.linhas.length) fontes.set(ORIGEM_FOODY_API, fonteFoodyParaApi({ dataInicio, dataFim, diasFoody: foody.diasFoody, ultimaSincronizacao: foody.ultimaSincronizacao }));
   const resumo = resumoConciliacao(pedidos);
   const entregadores = entregadoresParaApi(pedidos);
@@ -971,7 +976,7 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
   return {
     ...(fonteLogistica ? { fonteLogistica } : {}),
     ...(foody ? { fonteFoodyPedidos: foody.erro ? { erro: foody.erro }
-      : { operacaoPropria, pedidos: foody.linhas.length, diasFoody: foody.diasFoody, diasPlanilha: foody.diasPlanilha, ultimaSincronizacao: foody.ultimaSincronizacao } } : {}),
+      : { operacaoPropria, pedidos: foody.linhas.length, diasFoody: foody.diasFoody, diasPlanilha: foody.diasPlanilha, ultimaSincronizacao: foody.ultimaSincronizacao, divergenciasPlanilha } } : {}),
     periodo: { dataInicio, dataFim }, consolidado: true,
     importacao: { id: null, periodoInicio: dataInicio, periodoFim: dataFim,
       ...(operacaoPropria !== OPERACAO.SUBWAY ? { operacaoPropria } : {}),

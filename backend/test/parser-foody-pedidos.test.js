@@ -6,7 +6,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   carregarPedidosFoody, pedidosFoodyNoParserPermitidos, diasCobertosPorPlanilha, linhaFoodyParaParser, operacaoFoodyParaParser,
-  fonteFoodyParaApi, ORIGEM_FOODY_API,
+  fonteFoodyParaApi, ORIGEM_FOODY_API, compararPlanilhaComFoody,
 } from "../src/modules/parser-food-delivery/parserFoodDelivery.foodyPedidos.js";
 
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -150,6 +150,31 @@ describe("transformação de linha", () => {
     assert.equal(f.automatica, true);
     assert.equal(f.periodoInicio, "2026-11-08");
     assert.match(f.nomeArquivo, /Foody Delivery — sincronização automática \(1 dia\)/);
+  });
+});
+
+describe("sem perda silenciosa (planilha parcial)", () => {
+  test("pedidos Foody de dia com planilha são contados por operação (próprios e triagem), não descartados às cegas", async () => {
+    const db = dbFalso({
+      parser_fd_importacoes: [{ organizacao_id: ORG, unidade_id: UNI, periodo_inicio: "2026-11-08", periodo_fim: "2026-11-08" }],
+      foody_pedidos: [pedido("a", "2026-11-08T10:00:00"), pedido("b", "2026-11-08T11:00:00"), pedido("c", "2026-11-08T12:00:00", { operacao: "triagem" }),
+        pedido("d", "2026-11-08T13:00:00", { operacao: "acai_no_grau" })],
+    });
+    const r = await carregarPedidosFoody(args(db));
+    assert.equal(r.linhas.length, 0);
+    assert.deepEqual(r.foodyPropriosEmDiaDePlanilha, { "2026-11-08": 2 });
+    assert.deepEqual(r.foodyTriagemEmDiaDePlanilha, { "2026-11-08": 1 });
+  });
+  test("planilha com menos pedidos que a Foody vira alerta de planilha parcial; triagem amplia a faixa aceitável", () => {
+    const base = { diasPlanilha: ["2026-11-08", "2026-11-09", "2026-11-10", "2026-11-11"] };
+    const r = compararPlanilhaComFoody({ ...base,
+      planilhaPorDia: { "2026-11-08": 40, "2026-11-09": 95, "2026-11-10": 100, "2026-11-11": 50 },
+      foodyPorDia: { "2026-11-08": 90, "2026-11-09": 89, "2026-11-10": 90, "2026-11-11": 0 },
+      triagemPorDia: { "2026-11-09": 6, "2026-11-10": 1 } });
+    assert.deepEqual(r, [
+      { dia: "2026-11-08", planilha: 40, foody: 90, triagem: 0, alerta: "PLANILHA_POSSIVELMENTE_PARCIAL" },
+      { dia: "2026-11-10", planilha: 100, foody: 90, triagem: 1, alerta: "FOODY_COM_MENOS_PEDIDOS" },
+    ]);
   });
 });
 

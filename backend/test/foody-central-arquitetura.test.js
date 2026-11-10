@@ -200,10 +200,22 @@ describe("migration 147 — estático", () => {
   const sql = readFileSync(join(MIGRATIONS, "147_foody_camada_central.sql"), "utf8");
   const rb = readFileSync(join(MIGRATIONS, "147_rollback.sql"), "utf8");
   const corpo = sql.split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join("\n");
-  test("não há outra 147; posteriores só as conhecidas (148 = conexão compartilhada; 149 = administração; 150 = uma coleta por unidade; 151/152 = Financeiro 2.0, fora do Foody; aditivas)", () => {
+  test("não há outra 147; posteriores que tocam o Foody são só as conhecidas (148 = conexão compartilhada; 149 = administração; 150 = uma coleta por unidade); as demais não citam foody_", () => {
     const arqs = readdirSync(MIGRATIONS).filter((f) => /^\d{3}_/.test(f) && !/rollback/i.test(f));
     assert.equal(arqs.filter((f) => f.startsWith("147")).length, 1);
-    assert.deepEqual(arqs.filter((f) => f.slice(0, 3) > "147").sort(), ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql", "151_financeiro_2_contas_pagar.sql", "152_financeiro_2_rateios_recebiveis_dividas.sql", "153_financeiro_2_vendas_por_canal.sql", "154_financeiro_2_pagamento_origem.sql", "155_financeiro_2_transferencia_multipla.sql"]);
+    const posteriores = arqs.filter((f) => f.slice(0, 3) > "147").sort();
+    // Numeração única: duas migrations com o mesmo prefixo depois da 147 seriam ordem de aplicação ambígua.
+    const prefixos = posteriores.map((f) => f.slice(0, 3));
+    assert.deepEqual(prefixos.filter((p, i) => prefixos.indexOf(p) !== i), [], "prefixo repetido depois da 147");
+    // Toda migration posterior que mencione o Foody (nome OU conteúdo, fora de comentários) precisa ser uma das conhecidas.
+    // Uma migration nova que toque foody_* reprova aqui e exige revisão explícita deste teste.
+    const semComentario = (f) => readFileSync(join(MIGRATIONS, f), "utf8").split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join("\n");
+    const tocamFoody = posteriores.filter((f) => /foody/i.test(f) || /\bfoody_\w+/i.test(semComentario(f)));
+    assert.deepEqual(tocamFoody, ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql"]);
+    // Nenhuma posterior (inclusive as conhecidas) apaga ou trunca objetos foody_* (aditivas).
+    for (const f of posteriores) {
+      assert.doesNotMatch(semComentario(f), /\b(drop table|truncate)\s+(if exists\s+)?foody_|\bdelete from\s+foody_/i, `${f} apaga dados/objetos do Foody`);
+    }
   });
   test("numeração: 144 é do Termo v3 em produção (fora da pasta); 144–146 não existem no repositório; Foody só em 147–150", () => {
     const todos = readdirSync(MIGRATIONS);

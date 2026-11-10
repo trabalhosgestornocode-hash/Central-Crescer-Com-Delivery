@@ -504,6 +504,24 @@ function distribuicaoBar(itens) {
   return `<div class="pfd-dist-bar">${barras}</div><div class="pfd-dist-legenda">${legenda}</div>`;
 }
 
+/** Avisos da fonte automática Foody (só aparece com a flag ligada no backend). Nunca troca a fonte sozinho. */
+export function avisosFonteFoodyHtml(f) {
+  if (!f) return "";
+  const nota = (txt) => `<p class="pfd-secao-nota pfd-secao-nota--warn">${icon("alert-triangle", { size: 14 })} ${txt}</p>`;
+  if (f.erro) return nota(`Os pedidos automáticos da Foody não puderam ser lidos agora (${escapeHtml(f.erro)}). Os dados abaixo vêm só das planilhas importadas.`);
+  const partes = [];
+  if (f.diasFoody?.length) {
+    partes.push(`<p class="pfd-secao-nota">${icon("refresh", { size: 14 })} ${f.diasFoody.length} ${f.diasFoody.length === 1 ? "dia veio" : "dias vieram"} da sincronização automática Foody (sem planilha importada). Chegada para entrega e distância não existem na API e ficam em branco nesses dias.</p>`);
+  }
+  for (const d of f.divergenciasPlanilha ?? []) {
+    const dia = escapeHtml(d.dia.split("-").reverse().join("/"));
+    partes.push(nota(d.alerta === "PLANILHA_POSSIVELMENTE_PARCIAL"
+      ? `${dia}: a planilha tem ${d.planilha} pedidos e a Foody ${d.foody}. A planilha pode ter sido exportada antes do fim do dia — reimporte o relatório completo. A planilha continua sendo a fonte deste dia.`
+      : `${dia}: a planilha tem ${d.planilha} pedidos e a Foody ${d.foody}${d.triagem ? ` (+${d.triagem} em triagem)` : ""}. Confira a sincronização e a triagem. A planilha continua sendo a fonte deste dia.`));
+  }
+  return partes.join("");
+}
+
 function distribuicaoDoRelatorioHtml() {
   const { importacao, resumo } = pfd.atual;
   const semColunaDetalhes = importacao.colunaDetalhesEncontrada === false;
@@ -518,6 +536,7 @@ function distribuicaoDoRelatorioHtml() {
   return `
     ${distribuicaoBar(itens)}
     ${semColunaDetalhes ? `<p class="pfd-secao-nota pfd-secao-nota--warn">${icon("alert-triangle", { size: 14 })} Este relatório não trouxe a coluna "Detalhes do pedido" — não foi possível separar por operação; todos os pedidos foram considerados Subway Saci.</p>` : ""}
+    ${avisosFonteFoodyHtml(pfd.atual.fonteFoodyPedidos)}
     ${excluidos > 0 ? `<div class="pfd-secao-faixa">
       <span>${excluidos} ${excluidos === 1 ? "pedido foi excluído" : "pedidos foram excluídos"} pelos critérios de elegibilidade.</span>
       <button class="btn btn-ghost btn-sm" id="pfd-ver-ignorados-visao">${icon("eye", { size: 14 })} Ver excluídos</button>
