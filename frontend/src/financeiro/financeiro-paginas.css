@@ -492,3 +492,86 @@ button.dre-chip { cursor: pointer; }
 .fin-link { background: none; border: 0; padding: 0; color: var(--info); cursor: pointer; font: inherit; font-size: 12.5px; text-decoration: underline; text-underline-offset: 3px; text-align: left; }
 .fin-link:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
 @media (max-width: 640px) { .vd-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } .vd-filtros { display: grid; grid-template-columns: minmax(0, 1fr); } .vd-filtros .fin-campo { min-width: 0; width: 100%; } .vd-filtros input, .vd-filtros select { min-width: 0; width: 100%; max-width: 100%; box-sizing: border-box; } .vd-filtros .btn { justify-self: start; } }
+
+/* ===================== Central de Conferências (cf2): cabeçalho, abas, lista compacta e detalhe ===================== */
+.fin-pn--largo { width: min(1040px, 100vw); }
+.fin-badge--muted { background: var(--muted-bg); color: var(--fin-texto-2); }
+.cf2 { padding-top: 6px; }
+.cf2-cab { display: grid; gap: 10px; padding: 6px 0 12px; border-bottom: 1px solid var(--linha); }
+.cf2-cab-linha { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cf2-contexto { margin: 0; font-weight: 640; color: var(--texto); }
+.cf2-mes { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fin-texto-2); }
+.cf2-mes input { font: inherit; padding: 4px 8px; border: 1px solid var(--fin-linha-forte); border-radius: 8px; background: var(--card); color: var(--texto); }
+.cf2-resumo { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.cf2-resumo > div { border: 1px solid var(--linha); border-radius: 10px; padding: 8px 12px; }
+.cf2-resumo dt { font-size: 12px; color: var(--fin-texto-2); }
+.cf2-resumo dd { margin: 2px 0 0; font-size: 20px; font-weight: 720; font-variant-numeric: tabular-nums; }
+.cf2-resumo dd .fin-badge { font-size: 12px; }
+.cf2-abas { display: flex; gap: 2px; border-bottom: 1px solid var(--linha); margin: 10px 0 0; overflow-x: auto; }
+.cf2-abas [role=tab] { font: inherit; font-size: 14px; background: none; border: 0; border-bottom: 2px solid transparent; padding: 10px 12px; color: var(--fin-texto-2); cursor: pointer; white-space: nowrap; }
+.cf2-abas [role=tab][aria-selected=true] { color: var(--texto); border-bottom-color: var(--vermelho, currentColor); font-weight: 650; }
+.cf2-abas [role=tab]:focus-visible, .cf2-aba:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
+.cf2-aba { padding-top: 12px; }
+.cf2-filtros { display: grid; grid-template-columns: minmax(200px, 2fr) repeat(4, minmax(0, 1fr)); gap: 8px; align-items: end; }
+.cf2-filtros label { display: grid; gap: 3px; font-size: 12px; color: var(--fin-texto-2); }
+.cf2-filtros input, .cf2-filtros select { font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--fin-linha-forte); border-radius: 8px; background: var(--card); color: var(--texto); min-width: 0; }
+.cf2-barra { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 10px 0 4px; flex-wrap: wrap; }
+.cf2-contagem { margin: 0; font-size: 12px; color: var(--fin-texto-2); }
+.cf2-grupo { padding: 8px 0 4px; }
+.cf2-grupo h4 { display: flex; align-items: center; gap: 8px; margin: 6px 0 8px; font-size: 14px; color: var(--texto); }
+.cf2-qtd { font-size: 12px; font-weight: 600; color: var(--fin-texto-2); background: var(--muted-bg); border-radius: 20px; padding: 1px 8px; }
+.cf2-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.cf2-item { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "texto valor botao" "meta meta botao"; gap: 4px 14px; align-items: center;
+  border: 1px solid var(--linha); border-radius: 10px; padding: 9px 12px; background: var(--card); }
+.cf2-item-texto { grid-area: texto; min-width: 0; } .cf2-item-valor { grid-area: valor; text-align: right; } .cf2-item-meta { grid-area: meta; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; } .cf2-revisar { grid-area: botao; }
+.cf2-nome { margin: 0; font-size: 14px; font-weight: 640; color: var(--texto); }
+.cf2-motivo { margin: 1px 0 0; font-size: 13px; color: var(--fin-texto-2); }
+.cf2-valor { font-variant-numeric: tabular-nums; font-size: 14px; white-space: nowrap; }
+.cf2-valor-rot { font-size: 12px; color: var(--fin-texto-2); }
+.cf2-resp { font-size: 12px; color: var(--fin-texto-2); }
+.cf2-prio { font-size: 11.5px; padding: 1px 8px; border-radius: 20px; border: 1px solid var(--fin-linha-forte); color: var(--fin-texto-2); }
+.cf2-prio--alta { border-color: var(--bad); color: var(--bad); } .cf2-prio--media { border-color: var(--warn); color: var(--warn); }
+.cf2-item--dispensada { opacity: .8; }
+.cf2-vazio { color: var(--fin-texto-2); font-size: 13px; margin: 4px 0; }
+.cf2-vazio-bloco { text-align: center; padding: 28px 12px; border: 1px dashed var(--fin-linha-forte); border-radius: 10px; margin: 8px 0; }
+.cf2-vazio-bloco h4 { margin: 0 0 6px; font-size: 15px; color: var(--texto); } .cf2-vazio-bloco p { margin: 0 0 8px; color: var(--fin-texto-2); }
+.cf2-relacao { border: 1px solid var(--info); background: var(--info-bg); border-radius: 10px; padding: 10px 12px; margin: 8px 0 12px; font-size: 13px; }
+.cf2-relacao h5 { margin: 0 0 4px; font-size: 13.5px; } .cf2-relacao p { margin: 2px 0; }
+.cf2-dispensadas { margin-top: 12px; } .cf2-dispensadas summary { cursor: pointer; font-size: 13px; color: var(--fin-texto-2); margin-bottom: 6px; }
+.cf2-ref { padding: 10px 0; border-bottom: 1px solid var(--linha); }
+.cf2-ref h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 14px; color: var(--texto); }
+.cf2-explica { margin: 4px 0 0 18px; padding: 0; font-size: 13px; color: var(--fin-texto-2); display: grid; gap: 4px; }
+/* detalhe */
+.cf2-det-cab { margin: 10px 0 6px; }
+.cf2-det-cat { margin: 0; font-size: 12px; color: var(--fin-texto-2); text-transform: uppercase; letter-spacing: .04em; }
+.cf2-det-cab h4 { margin: 2px 0 6px; font-size: 18px; color: var(--texto); outline: none; }
+.cf2-det-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.cf2-destaque { border-left: 4px solid var(--warn); background: var(--warn-bg); padding: 10px 12px; border-radius: 0 8px 8px 0; margin: 8px 0; font-size: 13.5px; }
+.cf2-secoes { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+.cf2-secao { padding: 8px 0; border-bottom: 1px solid var(--linha); font-size: 13.5px; }
+.cf2-secao h5 { display: flex; align-items: center; gap: 8px; margin: 0 0 4px; font-size: 13px; color: var(--fin-texto-2); }
+.cf2-secao p { margin: 2px 0; }
+.cf2-num { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--muted-bg); color: var(--fin-texto-2); font-size: 11px; font-weight: 700; }
+.cf2-ul { margin: 4px 0 0 18px; padding: 0; display: grid; gap: 3px; }
+.cf2-cards { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 8px; }
+.cf2-card { border: 1px solid var(--linha); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px; }
+.cf2-card h6 { margin: 0; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; } .cf2-card p { margin: 0; }
+.cf2-etapa { border: 1px solid var(--linha); border-radius: 10px; padding: 10px 12px; margin: 6px 0; display: grid; gap: 6px; }
+.cf2-etapa h6, .cf2-secao h6 { margin: 6px 0 2px; font-size: 13px; }
+.cf2-form { display: grid; gap: 8px; } .cf2-form textarea, .cf2-form select { width: 100%; }
+.cf2-form > button, .cf2-etapa > button, .cf2-card > button { justify-self: start; width: auto; }
+.cf2-check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; cursor: pointer; }
+.cf2-check input[type=checkbox] { width: 16px; height: 16px; min-width: 16px; margin: 2px 0 0; flex: none; padding: 0; }
+.cf2-aviso { margin: 0; font-size: 13px; color: var(--fin-texto-2); }
+.cf2-acoes { display: flex; flex-wrap: wrap; gap: 6px; }
+.cf2-pares { list-style: none; margin: 4px 0 8px; padding: 0; display: grid; gap: 4px; }
+.cf2-par { border: 1px solid var(--linha); border-radius: 8px; padding: 6px 10px; } .cf2-par summary { cursor: pointer; } .cf2-par-corpo { padding: 6px 0 2px; display: grid; gap: 4px; } .cf2-par-corpo p { margin: 0; }
+.cf2-lanc-det td { background: var(--muted-bg); }
+.cf2-tec { margin-top: 12px; font-size: 13px; color: var(--fin-texto-2); } .cf2-tec summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 760px) {
+  .cf2-resumo { grid-template-columns: 1fr; }
+  .cf2-resumo > div { display: flex; justify-content: space-between; align-items: center; } .cf2-resumo dd { margin: 0; font-size: 17px; }
+  .cf2-filtros { grid-template-columns: 1fr 1fr; } .cf2-busca { grid-column: 1 / -1; }
+  .cf2-item { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "texto valor" "meta meta" "botao botao"; }
+  .cf2-revisar { justify-self: stretch; }
+}

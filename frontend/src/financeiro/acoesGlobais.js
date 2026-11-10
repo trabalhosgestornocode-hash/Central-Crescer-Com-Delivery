@@ -106,7 +106,7 @@ export async function montarAcoesGlobais(alvo, { permissoes, rotaId }) {
   alvo.prepend(barra);
   const recarregar = async () => { const { irPara } = await import("../router.js"); irPara(rotaId); };
   barra.querySelector("[data-novo-lancamento]").addEventListener("click", () => abrirChooser(perms, recarregar));
-  barra.querySelector("[data-central]").addEventListener("click", () => abrirCentral({ mes: lerMes(), aoAlterar: recarregar }));
+  barra.querySelector("[data-central]").addEventListener("click", () => abrirCentral({ mes: lerMes(), aoAlterar: recarregar, permissoes: perms }));
   const r = await contarPendencias(lerMes());
   const c = barra.querySelector("[data-contagem]");
   if (r?.total && c) { c.textContent = String(r.total); c.hidden = false; c.setAttribute("aria-label", `${r.total} pendências`); }

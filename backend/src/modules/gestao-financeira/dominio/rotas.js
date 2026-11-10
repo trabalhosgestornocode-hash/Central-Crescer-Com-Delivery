@@ -141,6 +141,7 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   const dPdoc = { ...d, automaticas: async (c, mes) => (await confSvc.listar(c, { mes }, d)).pendencias.filter((p) => p.tipo !== "pendencia_documental") };
   r.get("/pendencias-documentais", ...h2(ACAO.VER, (c, q) => pdocSvc.listar(c, q.query, d)));
   r.post("/pendencias-documentais", ...h2(ACAO.LANCAR, (c, q) => pdocSvc.registrar(c, q.body, dPdoc), { status: 201 }));
+  r.post("/pendencias-documentais/modelos/:chave/dispensar", ...h2(ACAO.EDITAR, (c, q) => pdocSvc.dispensarModelo(c, q.params.chave, q.body, d)));
   r.post("/pendencias-documentais/modelos/:chave", ...h2(ACAO.LANCAR, (c, q) => pdocSvc.registrarModelo(c, q.params.chave, q.body, d), { status: 201 }));
   r.patch("/pendencias-documentais/:id", ...h2(ACAO.EDITAR, (c, q) => pdocSvc.editar(c, q.params.id, q.body, d)));
   r.post("/pendencias-documentais/:id/confirmar", ...h2(ACAO.CLASSIFICAR, (c, q) => pdocSvc.confirmar(c, q.params.id, q.body, d)));

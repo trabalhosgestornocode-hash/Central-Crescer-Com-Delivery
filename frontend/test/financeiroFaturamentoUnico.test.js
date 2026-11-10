@@ -38,13 +38,13 @@ test("não existe mais o indicador 'Total de vendas por canal' na interface", ()
 test("Central de Conferências: sem aprovação em massa de rateios; cada pendência exibe responsável, evidência necessária e status", () => {
   const src = readFileSync(new URL("../src/financeiro/conferencias.js", import.meta.url), "utf8");
   assert.doesNotMatch(src, /data-marcar-todos|Marcar todos|Aprovar os marcados/);
-  assert.match(src, /data-aprovar-um/); assert.match(src, /Conferi o documento/);
+  assert.match(src, /data-cf2-aprovar/); assert.match(src, /Conferi o documento/);   // um rateio por vez (Central reformulada)
   assert.match(src, /Evidência necessária/); assert.match(src, /Responsável pela conferência/); assert.match(src, /classificacao_pendente/); assert.match(src, /pagamento_terceiro/);
 });
 
 test("Central de Conferências: cadastro manual de pendências documentais (registrar, editar, histórico, concluir com evidência, cancelar) sem criar movimentação", () => {
   const src = readFileSync(new URL("../src/financeiro/conferencias.js", import.meta.url), "utf8");
-  for (const t of ["data-doc-novo", "data-doc-editar", "data-doc-hist", "data-doc-cancelar", "data-doc-modelo", "concluir_documental", "/pendencias-documentais"]) assert.ok(src.includes(t), `falta ${t}`);
+  for (const t of ["data-cf2-doc-novo", 'data-cf2-doc="editar"', "data-cf2-hist", 'data-cf2-doc="cancelar"', "data-cf2-sug-cadastrar", 'data-cf2-doc="confirmar"', "/pendencias-documentais"]) assert.ok(src.includes(t), `falta ${t}`);
   for (const campo of ["Descrição da pendência", "Valor envolvido", "Competência", "Motivo da conferência", "Evidência necessária", "Responsável pela conferência", "Status", "Observações", "Documento"]) assert.ok(src.includes(campo), `campo ${campo}`);
   assert.match(src, /não cria movimentação financeira/i); assert.doesNotMatch(src, /\/lancamentos|\/contas-pagar\/pagamentos/);
 });

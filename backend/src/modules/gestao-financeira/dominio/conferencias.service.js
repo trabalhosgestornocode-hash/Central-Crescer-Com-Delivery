@@ -78,23 +78,26 @@ export async function listar(ctx, q, deps = padrao) {
 
   if (!dre.regrasAprovadas) add({ id: "metodologia", tipo: "metodologia", titulo: "Metodologia gerencial ainda não aprovada pela contadora", descricao: `Regras na versão ${dre.versaoRegras}. Os valores são calculados dos registros e nada foi ajustado para coincidir com a apresentação.`, geral: true, acao: null });
   for (const a of pontes?.pendentes ?? []) add({ id: `ajuste:${a.id}`, tipo: "ajuste_vendas", titulo: `Ajuste de vendas estimado — ${a.canal}`, descricao: `${a.descricao}. Leva o total do painel à base da DRE; ainda não foi confirmado.`, valorCentavos: a.valorCentavos, canal: a.canal,
-    evidencias: a.evidencia ? [a.evidencia] : [], checklist: /ifood/i.test(a.canal) && a.tipo === "estimativa" ? checklistIfood(a, { mes, canal: (pontes?.canais ?? []).find((x) => x.canal === a.canal) }) : null, acao: { tipo: "confirmar_ajuste", rotulo: "Confirmar com evidência", metodo: "POST", caminho: `/vendas-ajustes/${a.id}/confirmar`, exige: ["evidencia"], permissao: "classificar" } });
+    data: null, refs: [a.id], evidencias: a.evidencia ? [a.evidencia] : [], checklist: /ifood/i.test(a.canal) && a.tipo === "estimativa" ? checklistIfood(a, { mes, canal: (pontes?.canais ?? []).find((x) => x.canal === a.canal) }) : null, acao: { tipo: "confirmar_ajuste", rotulo: "Confirmar com evidência", metodo: "POST", caminho: `/vendas-ajustes/${a.id}/confirmar`, exige: ["evidencia"], permissao: "classificar" } });
   const propostos = (rateios.itens ?? []).filter((x) => x.status === "proposto");
   if (propostos.length) add({ id: "rateios", tipo: "rateios", titulo: `Rateios propostos (${propostos.length}) — aprovação da contadora`, descricao: "Distribuem o custo de compras e entregas entre competências. Revise valores, competências, critérios e evidências numa tela única.",
-    valorCentavos: propostos.reduce((x, r) => x + r.valorElegivelCentavos, 0), acao: { tipo: "aprovar_rateios", rotulo: "Revisar e aprovar", metodo: "TELA", permissao: "classificar" },
+    valorCentavos: propostos.reduce((x, r) => x + r.valorElegivelCentavos, 0), data: null, refs: propostos.map((r) => r.id), acao: { tipo: "aprovar_rateios", rotulo: "Revisar e aprovar", metodo: "TELA", permissao: "classificar" },
     itens: propostos.map((r) => ({ id: r.id, obrigacao: r.obrigacao?.descricao ?? "obrigação", fornecedor: r.obrigacao?.fornecedor ?? null, categoria: r.obrigacao?.categoria ?? null, competenciaObrigacao: r.obrigacao?.competencia ?? null, valorOriginalCentavos: r.obrigacao?.valorOriginalCentavos ?? null,
       valorElegivelCentavos: r.valorElegivelCentavos, criterio: r.criterio, justificativa: r.justificativa, evidencia: r.origemDocumental ?? null, parcelas: r.parcelas, caminhoAprovar: `/rateios/${r.id}/aprovar` })) });
   for (const j of juros.relacionadas.filter((x) => x.natureza === "presumido")) {
     const pct = (j.percentualBps / 100).toFixed(2).replace(".", ",");
     add({ id: `juros:${j.obrigacaoId}`, tipo: "juros_presumido", titulo: `Acréscimo presumido — ${j.descricao}`, descricao: `Pago ${brl(j.pagoCentavos)} sobre original ${brl(j.valorOriginalCentavos)} (+${pct}%), em ${j.pagoEm.map((d) => `${d.slice(8, 10)}/${d.slice(5, 7)}`).join(", ")}. Presumido até alguém classificar.${j.quitada ? "" : " A conta ainda não está quitada: quitar e classificar são a mesma decisão."}`,
-      valorCentavos: j.acrescimoTotalCentavos, sugestao: { natureza: "juros", evidencia: "Apresentação da contadora 09/2026, slide 6 (juros por pagamento em atraso).", motivo: `Juros por pagamento em atraso (venc. ${j.vencimento.slice(8, 10)}/${j.vencimento.slice(5, 7)}): pago ${brl(j.pagoCentavos)} sobre ${brl(j.valorOriginalCentavos)}. Apresentação 09/2026, slide 6.` },
+      valorCentavos: j.acrescimoTotalCentavos, data: j.pagoEm[0] ?? null, vencimento: j.vencimento, obrigacaoId: j.obrigacaoId, quitada: !!j.quitada, refs: [j.obrigacaoId],
+      // DUAS decisões separadas: (1) quitar/conciliar a obrigação; (2) classificar a natureza do acréscimo (só depois de quitada — regra da RPC).
+      etapas: { quitar: j.quitada ? null : { caminho: `/contas-pagar/${j.obrigacaoId}/quitar`, permissao: "conciliar" }, classificar: { caminho: `/contas-pagar/${j.obrigacaoId}/classificar`, permissao: "classificar", disponivel: !!j.quitada } },
+      sugestao: { natureza: "juros", evidencia: "Apresentação da contadora 09/2026, slide 6 (juros por pagamento em atraso).", motivo: `Juros por pagamento em atraso (venc. ${j.vencimento.slice(8, 10)}/${j.vencimento.slice(5, 7)}): pago ${brl(j.pagoCentavos)} sobre ${brl(j.valorOriginalCentavos)}. Apresentação 09/2026, slide 6.` },
       acao: { tipo: "classificar_acrescimo", rotulo: j.quitada ? "Aprovar classificação como juros" : "Aprovar: quitar e classificar como juros", metodo: "POST", caminho: j.quitada ? `/contas-pagar/${j.obrigacaoId}/classificar` : `/contas-pagar/${j.obrigacaoId}/quitar-e-classificar`, exige: ["natureza", "motivo"], permissao: j.quitada ? "classificar" : "classificar + conciliar" } });
   }
   const fornNome = new Map(forn.map((f) => [f.id, f.nome])), catPor = new Map(plano.map((p) => [p.id, p]));
   const comPagamento = new Set(pags.filter((p) => p.status !== "cancelado").map((p) => p.obrigacao_id));
   const vencidasSemPagamento = obrs.filter((o) => o.status === "aberta" && !comPagamento.has(o.id) && String(o.vencimento).slice(0, 10) <= fim(mes) && String(o.vencimento).slice(0, 7) >= mes);
   for (const o of vencidasSemPagamento) add({ id: `vencida:${o.id}`, tipo: "conta_sem_pagamento", titulo: `Conta vencida sem pagamento registrado — ${o.descricao}`, descricao: `Venceu em ${String(o.vencimento).slice(8, 10)}/${String(o.vencimento).slice(5, 7)}. Se foi paga, é preciso registrar o pagamento com a conta de saída; o sistema não presume a origem bancária.`,
-    valorCentavos: Number(o.valor_original_centavos), categoria: catPor.get(o.categoria_id)?.nome ?? null, fornecedor: fornNome.get(o.fornecedor_id) ?? null, acao: { tipo: "registrar_pagamento", rotulo: "Registrar pagamento", metodo: "IR", rota: "fin-contas-a-pagar", exige: [], permissao: "lancar" } });
+    valorCentavos: Number(o.valor_original_centavos), data: String(o.vencimento).slice(0, 10), vencimento: String(o.vencimento).slice(0, 10), obrigacaoId: o.id, refs: [o.id], categoria: catPor.get(o.categoria_id)?.nome ?? null, fornecedor: fornNome.get(o.fornecedor_id) ?? null, acao: { tipo: "registrar_pagamento", rotulo: "Registrar pagamento", metodo: "IR", rota: "fin-contas-a-pagar", exige: [], permissao: "lancar" } });
   if ((dre.pendencias.categoriasSemRegraNoPlano ?? []).length) add({ id: "sem_regra", tipo: "categoria_sem_regra", titulo: "Categorias sem regra gerencial", descricao: dre.pendencias.categoriasSemRegraNoPlano.join(", "), acao: null });
   if (pontes && !pontes.baseConfere && pontes.canais.length) add({ id: "base_canais", tipo: "divergencia_canais", gravidade: "divergencia", titulo: "Base por canal difere do faturamento bruto oficial", descricao: `A base gerencial por canal (R$ ${pontes.gerencialCentavos / 100}) difere do bruto oficial.`, valorCentavos: pontes.diferencaBaseCentavos, acao: null });
 
@@ -103,7 +106,7 @@ export async function listar(ctx, q, deps = padrao) {
   for (const p of pags.filter((x) => x.status !== "cancelado" && x.origem_pagamento === "origem_pendente")) {
     const o = obrs.find((x) => x.id === p.obrigacao_id);
     add({ id: `origem:${p.id}`, tipo: "origem_pendente", titulo: `Origem do pagamento pendente — ${o?.descricao ?? "pagamento"}`, descricao: `Pago em ${String(p.data_pagamento).slice(8, 10)}/${String(p.data_pagamento).slice(5, 7)} e reconhecido na despesa. Falta informar de qual conta saiu; até lá não há saída bancária registrada nem conciliação. ${p.observacao ?? ""}`,
-      valorCentavos: Number(p.valor_centavos), evidencias: p.observacao ? [p.observacao] : [], contas: contasLista.filter((x) => x.ativo !== false).map((x) => ({ id: x.id, nome: x.nome })),
+      valorCentavos: Number(p.valor_centavos), data: String(p.data_pagamento).slice(0, 10), obrigacaoId: p.obrigacao_id, refs: [p.obrigacao_id], evidencias: p.observacao ? [p.observacao] : [], contas: contasLista.filter((x) => x.ativo !== false).map((x) => ({ id: x.id, nome: x.nome })),
       acao: { tipo: "resolver_origem", rotulo: "Informar a conta de saída", metodo: "POST", caminho: `/contas-pagar/pagamentos/${p.id}/origem`, exige: ["contaId"], permissao: "conciliar" } });
   }
   // transferências internas sem vínculo (ex.: Stone → Unicred): proposta com evidência, sem confirmação automática
@@ -129,21 +132,24 @@ export async function listar(ctx, q, deps = padrao) {
       const total = comPar.reduce((a, l) => a + l.saida.valorCentavos, 0);
       if (comPar.length) add({ id: "transferencias", tipo: "transferencias_internas", titulo: `${comPar.length} saída(s) de transferência com contrapartida proposta (${brl(total)})`,
         descricao: `Proposta de pareamento, nada confirmado: ${cont("um_para_um")} com uma entrada de mesmo valor (vinculável), ${cont("um_para_varios")} em que a soma de 2 a 3 entradas fecha exatamente (vincula-se 1 saída a 2–3 entradas só com decisão humana e justificativa: exige decisão antes de vincular), ${cont("ambiguo")} ambíguas.${sem.length ? ` Outras ${sem.length} saídas parecidas com transferência não têm contrapartida de mesmo valor e ficam fora desta proposta.` : ""}`,
-        valorCentavos: total, linhas: comPar, outras: sem, acao: { tipo: "vincular_transferencias", rotulo: "Revisar vínculos", metodo: "TELA", permissao: "conciliar" } });
+        valorCentavos: total, data: comPar.map((l) => l.saida.data).sort()[0] ?? null, linhas: comPar, outras: sem, acao: { tipo: "vincular_transferencias", rotulo: "Revisar vínculos", metodo: "TELA", permissao: "conciliar" } });
     }
   }
   // pagamento feito por terceiro (ex.: sócia): reconhecido como despesa e dívida, mas sem saída do caixa da empresa; precisa de comprovante e combinado de reembolso
+  const dividas = deps.repo.listarDividas ? await deps.repo.listarDividas(c, deps.db) : [];
   for (const p of pags.filter((x) => x.status !== "cancelado" && x.origem_pagamento === "terceiro" && String(x.data_pagamento).slice(0, 7) === mes)) {
-    const o = obrs.find((x) => x.id === p.obrigacao_id);
+    const o = obrs.find((x) => x.id === p.obrigacao_id), dv = dividas.find((x) => x.id === p.divida_id);
     add({ id: `terceiro:${p.id}`, tipo: "pagamento_terceiro", titulo: `Pagamento feito por terceiro — ${o?.descricao ?? "pagamento"}`, descricao: `Pago em ${String(p.data_pagamento).slice(8, 10)}/${String(p.data_pagamento).slice(5, 7)} por ${p.terceiro_nome ?? "terceiro"}. Não saiu do caixa da empresa; o valor segue como dívida até haver comprovante e acordo de reembolso. ${p.observacao ?? ""}`.trim(),
-      valorCentavos: Number(p.valor_centavos), evidencias: p.observacao ? [p.observacao] : [], acao: null });
+      valorCentavos: Number(p.valor_centavos), data: String(p.data_pagamento).slice(0, 10), obrigacaoId: p.obrigacao_id, refs: [p.obrigacao_id], terceiroNome: p.terceiro_nome ?? null,
+      obrigacao: o ? { id: o.id, descricao: o.descricao, valorOriginalCentavos: Number(o.valor_original_centavos) } : null,
+      divida: p.divida_id ? { id: p.divida_id, descricao: dv?.descricao ?? dv?.credor ?? null } : null, evidencias: p.observacao ? [p.observacao] : [], acao: null });
   }
   // lançamentos que o sistema não consegue classificar sozinho (ex.: Pix com parte a identificar): uma pendência só, com a lista; nada é reclassificado aqui
   if (deps.repo.listarTodosLancamentos) {
     const doMes = (await deps.repo.listarTodosLancamentos(c, { de: `${mes}-01`, ate: fim(mes) }, deps.db)).filter((l) => l.status !== "cancelado" && l.classificacao_pendente && !idsProposta.has(l.id));
     const nomeConta = new Map((await deps.repo.listarContas(c, deps.db)).map((x) => [x.id, x.nome]));
     if (doMes.length) add({ id: "classificacao_pendente", tipo: "classificacao_pendente", titulo: `${doMes.length} lançamento(s) com classificação pendente`, descricao: "Lançamentos marcados como pendentes de classificação ou de identificação de parte do valor. Nenhum foi reclassificado ou conciliado para eliminar a diferença.",
-      valorCentavos: doMes.reduce((a, l) => a + Number(l.valor_centavos), 0), itens: doMes.map((l) => ({ id: l.id, data: String(l.data_movimento).slice(0, 10), conta: nomeConta.get(l.conta_id) ?? "—", sentido: l.sentido, valorCentavos: Number(l.valor_centavos), descricao: l.descricao, nota: l.nota_revisao ?? null })), acao: null });
+      valorCentavos: doMes.reduce((a, l) => a + Number(l.valor_centavos), 0), data: doMes.map((l) => String(l.data_movimento).slice(0, 10)).sort()[0] ?? null, itens: doMes.map((l) => ({ id: l.id, data: String(l.data_movimento).slice(0, 10), conta: nomeConta.get(l.conta_id) ?? "—", sentido: l.sentido, valorCentavos: Number(l.valor_centavos), descricao: l.descricao, nota: l.nota_revisao ?? null })), acao: null });
   }
   // períodos: contas do mês anterior pagas neste mês, e contas deste mês pagas no seguinte (só categorias por COMPETÊNCIA: compras e entregas)
   const regras = regrasPadrao(plano);
@@ -196,7 +202,7 @@ export async function listar(ctx, q, deps = padrao) {
   for (const x of docs.filter((d) => d.estado !== "confirmado")) {
     const coincide = x.valorCentavos != null ? automaticas.find((a) => Math.abs(a.valorCentavos) === x.valorCentavos) : null;
     itens.push({ id: `doc:${x.id}`, tipo: "pendencia_documental", gravidade: "atencao", titulo: x.descricao, descricao: x.motivo, motivo: x.motivo, valorCentavos: x.valorCentavos, evidenciaNecessaria: x.evidenciaNecessaria, responsavel: x.responsavel,
-      status: x.estado, statusRotulo: x.estadoRotulo, observacoes: x.observacoes, documentoReferencia: x.documentoReferencia, relacionadaChave: x.relacionadaChave, docId: x.id, dataReferencia: x.dataReferencia,
+      status: x.estado, statusRotulo: x.estadoRotulo, observacoes: x.observacoes, documentoReferencia: x.documentoReferencia, relacionadaChave: x.relacionadaChave, docId: x.id, dataReferencia: x.dataReferencia, data: x.dataReferencia ?? null,
       aviso: coincide ? `Mesmo valor da pendência automática «${coincide.titulo}»: confira se não é o mesmo assunto.` : null,
       acao: { tipo: "concluir_documental", rotulo: "Concluir com evidência", metodo: "POST", caminho: `/pendencias-documentais/${x.id}/confirmar`, exige: ["evidencia"], permissao: "classificar" } });
   }

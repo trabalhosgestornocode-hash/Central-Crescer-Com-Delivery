@@ -11,6 +11,12 @@ export async function listarPendenciasDocumentais(ctxIn, { competencia } = {}, d
   const { data, error } = await q.order("created_at").order("id").limit(1000);
   falha(error); return data ?? [];
 }
+/** Registros CANCELADOS com chave de modelo (sugestões dispensadas ou cadastros cancelados). Somente leitura. */
+export async function listarPendenciasDocumentaisCanceladas(ctxIn, db = supabase) {
+  const ctx = exigirContexto(ctxIn);
+  const { data, error } = await unid(db.from("fin_pendencias_documentais").select("*"), ctx).eq("status", "cancelada").not("chave_origem", "is", null).order("cancelado_em").limit(1000);
+  falha(error); return data ?? [];
+}
 export async function buscarPendenciaDocumental(ctxIn, id, db = supabase) {
   const ctx = exigirContexto(ctxIn);
   const { data, error } = await unid(db.from("fin_pendencias_documentais").select("*").eq("id", id), ctx).maybeSingle();
