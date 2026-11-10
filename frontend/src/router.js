@@ -2,6 +2,7 @@ import { state } from "./state.js";
 import { MENU, SECAO_MODULO } from "./config.js";
 import { MENU_FINANCEIRO } from "./financeiroMenu.js";
 import { renderPaginaFinanceira } from "./financeiroRoteador.js";
+import { rotaDeEntrada } from "./financeiroAcesso.js";
 import { el, els, toast } from "./utils.js";
 import { temModulo } from "./sessao.js";
 import * as views from "./views.js";
@@ -50,7 +51,7 @@ const acessivel = (item) => {
  * uma rota de saída: nunca cai num loop de redirecionamento.
  */
 export function primeiraRotaAcessivel() {
-  if (noFinanceiro()) return MENU_FINANCEIRO[0].id;
+  if (noFinanceiro()) return rotaDeEntrada(state.financeiroEstado, null) ?? MENU_FINANCEIRO[0].id; // 2.0 → painel; legado → 1ª do legado
   return rotaInicialDoPerfil(state.sessao) ?? MENU.find(acessivel)?.id ?? "configuracoes";
 }
 

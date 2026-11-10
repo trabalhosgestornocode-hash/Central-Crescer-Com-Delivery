@@ -54,6 +54,9 @@ export const state = {
 
   // navegação
   rota: "dashboard",
+  // Setor financeiro: "loading" | "financeiro_2" | "financeiro_legado" | "access_denied" | "error" (financeiroAcesso.js).
+  // Só vira uma interface depois da resposta do servidor — nunca começa como legado.
+  financeiroEstado: "loading",
   telaAdmin: "dashboard",
 
   // filtros globais — canal é o único filtro "de verdade" aqui.
