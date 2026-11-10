@@ -211,7 +211,8 @@ describe("migration 147 — estático", () => {
     // Uma migration nova que toque foody_* reprova aqui e exige revisão explícita deste teste.
     const semComentario = (f) => readFileSync(join(MIGRATIONS, f), "utf8").split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join("\n");
     const tocamFoody = posteriores.filter((f) => /foody/i.test(f) || /\bfoody_\w+/i.test(semComentario(f)));
-    assert.deepEqual(tocamFoody, ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql"]);
+    // 160 = nome do entregador (coluna anulável em foody_pedidos; teste próprio em foody-entregador-nome.test.js).
+    assert.deepEqual(tocamFoody, ["148_foody_conexao_compartilhada.sql", "149_foody_conexao_administracao.sql", "150_foody_sync_uma_em_andamento.sql", "160_foody_pedidos_entregador_nome.sql"]);
     // Nenhuma posterior (inclusive as conhecidas) apaga ou trunca objetos foody_* (aditivas).
     for (const f of posteriores) {
       assert.doesNotMatch(semComentario(f), /\b(drop table|truncate)\s+(if exists\s+)?foody_|\bdelete from\s+foody_/i, `${f} apaga dados/objetos do Foody`);
@@ -220,9 +221,10 @@ describe("migration 147 — estático", () => {
   test("numeração: 144 é do Termo v3 em produção (fora da pasta); 144–146 não existem no repositório; Foody só em 147–150", () => {
     const todos = readdirSync(MIGRATIONS);
     assert.deepEqual(todos.filter((f) => /^14[4-6]_/.test(f)), [], "144 = 144_termo_v3_aprovado_internamente (prod); 145/146 ficam livres");
-    assert.deepEqual(todos.filter((f) => /foody/i.test(f) || /^(14[7-9]|150)_/.test(f)).sort(),
+    assert.deepEqual(todos.filter((f) => /foody/i.test(f) || /^(14[7-9]|150|160)_/.test(f)).sort(),
       ["147_foody_camada_central.sql", "147_rollback.sql", "148_foody_conexao_compartilhada.sql", "148_rollback.sql",
-       "149_foody_conexao_administracao.sql", "149_rollback.sql", "150_foody_sync_uma_em_andamento.sql", "150_rollback.sql"]);
+       "149_foody_conexao_administracao.sql", "149_rollback.sql", "150_foody_sync_uma_em_andamento.sql", "150_rollback.sql",
+       "160_foody_pedidos_entregador_nome.sql", "160_rollback.sql"]);
     const kit = readFileSync(join(MIGRATIONS, "..", "..", "backend", "testes-seguros", "foody-147-149", "sql_comum.mjs"), "utf8");
     assert.match(kit, /REGISTRO_TERMO_V3 = "144_termo_v3_aprovado_internamente"/);
   });

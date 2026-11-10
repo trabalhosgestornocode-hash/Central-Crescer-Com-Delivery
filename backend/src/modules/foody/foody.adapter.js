@@ -60,7 +60,9 @@ const CAMPOS_CONTEUDO_COMPARTILHADO = [...CAMPOS_CONTEUDO, "destino_id", "triage
 
 /** Hash de conteúdo da linha. Modo da unidade (147) = exatamente o hash de sempre; modo compartilhado inclui os campos da 148. */
 export function hashConteudoPedido(registro, { compartilhado = false } = {}) {
-  const campos = compartilhado ? CAMPOS_CONTEUDO_COMPARTILHADO : CAMPOS_CONTEUDO;
+  // O nome do entregador só entra no hash quando foi guardado (flag ligada): desligada, o hash é idêntico ao anterior.
+  const base = compartilhado ? CAMPOS_CONTEUDO_COMPARTILHADO : CAMPOS_CONTEUDO;
+  const campos = Object.prototype.hasOwnProperty.call(registro ?? {}, "entregador_nome") ? [...base, "entregador_nome"] : base;
   return sha256(jsonEstavel(Object.fromEntries(campos.map((k) => [k, registro[k] ?? null]))));
 }
 
@@ -85,7 +87,7 @@ export function minimizarOutraOperacao(registro) {
  *   compartilhado = conexão com destino ATIVO (148): a operação vem da classificação ESTRITA (catálogo versionado; item
  *   desconhecido = triagem) e NADA é minimizado aqui — quem decide destino e minimização é foody.roteamento.js, antes de gravar.
  */
-export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, catalogo = undefined }) {
+export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, catalogo = undefined, guardarNome = false }) {
   if (!o || typeof o !== "object") return { erro: "PEDIDO_INVALIDO" };
   const uid = texto(o.uid, 80);
   const numeroPedido = texto(o.id, 40);
@@ -132,6 +134,8 @@ export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, cata
     cancelamento_justificativa: texto(o.cancellationText, 300),
   };
   if (registro.entregador_presente && !registro.entregador_hash) return { erro: "HASH_ENTREGADOR_FALHOU", uid };
+  // Nome do entregador (flag FOODY_CENTRAL_ENTREGADOR_NOME_ENABLED + migration 160). Sem entregador = null, nunca texto vazio.
+  if (guardarNome) registro.entregador_nome = registro.entregador_presente ? texto(nome, 120) : null;
   if (compartilhado) {
     registro.triagem_motivo = op.triagemMotivo;
     registro.catalogo_versao = op.catalogoVersao;
