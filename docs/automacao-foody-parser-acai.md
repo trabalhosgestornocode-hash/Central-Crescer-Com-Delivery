@@ -69,10 +69,19 @@ Reconciliação independente: a soma das taxas válidas dos 10 fechamentos logí
 - **Triagem** (já existia: dias, pedidos, itens não reconhecidos, decisão com justificativa e histórico): agora também mostra a unidade da conta e a origem (Foody API). Nenhuma classificação automática sem evidência. Fechamentos com triagem pendente aparecem como "Preliminar · valores provisórios" e, no Parser, os pedidos aparecem como "Operação indefinida".
 - **Limitação:** a saúde aparece na unidade **titular** da conta (Subway). Para a unidade destino (Açaí), o frescor aparece no Parser (`ultimaSincronizacao`).
 
+## 6b. Fonte de cada dia e "Preencher mês" (Parser)
+
+- **Calendário** (`GET /parser-food-delivery/cobertura`, só leitura e sob a mesma flag): cada dia aparece como relatório importado, Foody, Foody provisório (sem fechamento definitivo ou dia em curso), sem dados ou em andamento. Dias com triagem ficam marcados, e a tela mostra a última atualização. "Sem dados" é ausência de registro, nunca dia zerado. Flag desligada: `{ habilitado: false }`, sem nenhuma consulta, e o calendário não aparece.
+- **Dados reais (leitura de 10/11):** Açaí em setembro = 0 de 30 dias com dados; outubro = só 31/10; novembro = 9 de 9 dias encerrados pela Foody, 4 provisórios por triagem. Subway = setembro, outubro e novembro inteiros por relatório.
+- **Preencher mês** (`GET /integracoes/foody/sincronizacoes/previa-mes?mes=AAAA-MM`): consulta a API Foody (**só GET**) **apenas** nos dias sem fechamento definitivo ou provisório. Não grava nada (nem execução), usa cache de 10 min e tem as mesmas travas da sincronização manual (flags, Administrador da empresa titular, sem impersonação). Cada dia sai como completo, provisório (não é regravado), parcial (fechamento INCOMPLETO), recuperável, sem pedidos na origem (zero **não** é tratado como loja fechada), indisponível ou não consultado (a consulta parou por erro de conta, e o dia nunca vira "sem pedidos"). A prévia mostra os pedidos por operação e as taxas **previstas** de pedidos com entregador.
+- **Gravação:** só depois da prévia, com motivo e confirmação, pela sincronização manual **existente** (lotes de até 7 dias; dias congelados como reprocessamento com motivo). É idempotente por `foody_uid` + hash: repetir não duplica. Ao terminar, o Parser recarrega o período.
+- **Unidade destino (Açaí):** a conta Foody pertence à titular. A tela orienta a recuperar pela unidade titular, e os pedidos do Açaí chegam pela distribuição aprovada. Disponibilidade histórica: a validação de 03/11 encontrou pedidos com pelo menos 18 meses. A disponibilidade **de cada dia** só é afirmada depois da prévia real, feita ao clicar no sistema publicado. Nenhuma chamada à API foi feita a partir desta máquina.
+
 ## 7. Testes (branch do PR)
 
-- Backend (Foody, Parser, Dashboard logística, notificações): **659 aprovados, 1 pulado, 0 falhas**. Frontend (Foody, Parser, Dashboard logística): **41 aprovados, 10 pulados (testes de navegador sem Playwright), 0 falhas**.
-- Novos: `parser-foody-pedidos.test.js` (14) e `configuracoesFoodySaude.test.js` (6).
+- Backend (Foody, Parser, Dashboard logística, notificações): **668 aprovados, 1 pulado, 0 falhas**. Frontend (Foody, Parser, Dashboard logística): **48 aprovados, 10 pulados (testes de navegador sem Playwright), 0 falhas**.
+- Novos: `parser-foody-pedidos.test.js` (16), `foody-recuperacao-mes.test.js` (7: travas, classificação por dia, **nada gravado**, sem dado pessoal, dia aberto, falha de conta interrompe, cache), `configuracoesFoodySaude.test.js` (6) e `parserFoodDeliveryCobertura.test.js` (7).
+- Verificação visual: o calendário foi montado com a cobertura **real** do Açaí (01/09–10/11) e a folha de estilos do app. O texto não vem de nenhum mock.
 - O teste "migration 147 — estático" deixou de usar a lista fixa de nomes e passou a verificar regras: prefixo único, só as migrations conhecidas tocam `foody_*` e nenhuma posterior apaga ou trunca `foody_*`. Teste de mutação: uma migration falsa com `delete from foody_pedidos` reprova.
 - Fora desta prova: execução publicada, tela logada e sincronizações consecutivas observadas **depois** da publicação.
 
