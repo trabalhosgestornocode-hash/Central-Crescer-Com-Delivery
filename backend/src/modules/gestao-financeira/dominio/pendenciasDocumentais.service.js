@@ -66,7 +66,38 @@ export async function listar(ctx, q, deps = padrao) {
   const mes = mesAno(q?.mes, "mes");
   const itens = (await deps.repo.listarPendenciasDocumentais(c, { competencia: `${mes}-01` }, deps.db)).map(linha);
   const chaves = new Set((await deps.repo.listarPendenciasDocumentais(c, {}, deps.db)).map((r) => r.chave_origem).filter(Boolean));
-  return { mes, itens, modelos: MODELOS.filter((m) => m.competencia === mes).map((m) => ({ ...m, cadastrada: chaves.has(m.chave) })) };
+  // sugestões DISPENSADAS (com justificativa): registro cancelado com a chave do modelo e o prefixo de dispensa. Nunca apagado.
+  const dispensas = new Map();
+  if (deps.repo.listarPendenciasDocumentaisCanceladas) {
+    for (const r of await deps.repo.listarPendenciasDocumentaisCanceladas(c, deps.db)) {
+      if (!r.chave_origem || !String(r.motivo_cancelamento ?? "").startsWith(PREFIXO_DISPENSA)) continue;
+      const atual = dispensas.get(r.chave_origem);
+      if (!atual || String(r.cancelado_em) > String(atual.em)) dispensas.set(r.chave_origem, { id: r.id, justificativa: String(r.motivo_cancelamento).slice(PREFIXO_DISPENSA.length).trim(), por: r.cancelado_por, em: r.cancelado_em });
+    }
+  }
+  return { mes, itens, modelos: MODELOS.filter((m) => m.competencia === mes).map((m) => ({ ...m, cadastrada: chaves.has(m.chave), dispensada: chaves.has(m.chave) ? null : (dispensas.get(m.chave) ?? null) })) };
+}
+
+/** Prefixo do motivo de cancelamento que identifica uma SUGESTÃO DISPENSADA (sem migration: usa as colunas de cancelamento da 156). */
+export const PREFIXO_DISPENSA = "Sugestão dispensada:";
+
+/**
+ * Dispensa uma sugestão (modelo) com justificativa auditável, SEM cadastrá-la como pendência ativa: grava o registro já cancelado
+ * (status 'cancelada', motivo com o prefixo de dispensa, quem e quando). A trilha (fin_auditar) registra a inserção; nada é apagado,
+ * nenhuma movimentação é criada e a sugestão pode ser cadastrada depois, se surgir evidência (o índice único vale só para ativas).
+ */
+export async function dispensarModelo(ctx, chave, b, deps = padrao) {
+  const c = exigirContexto(ctx);
+  const m = MODELOS.find((x) => x.chave === chave);
+  if (!m) throw bad("Sugestão desconhecida.", "NAO_ENCONTRADO");
+  const justificativa = texto(b?.justificativa, "justificativa", { max: 400 });
+  if (justificativa.length < 10) throw bad("Explique por que a sugestão está sendo dispensada (mínimo de 10 caracteres).", "JUSTIFICATIVA_OBRIGATORIA");
+  const existentes = await deps.repo.listarPendenciasDocumentais(c, {}, deps.db);
+  if (existentes.some((r) => r.chave_origem === m.chave)) throw bad("Esta sugestão já está cadastrada como pendência: trate-a pela própria pendência.", "PENDENCIA_DUPLICADA");
+  const campos = dados({ ...m, valorCentavos: m.valorCentavos });
+  const r = await deps.repo.inserirPendenciaDocumental(c, { ...campos, chave_origem: m.chave, status: "cancelada", motivo_cancelamento: `${PREFIXO_DISPENSA} ${justificativa}`,
+    cancelado_por: c.usuarioId, cancelado_em: (deps.agora ?? padrao.agora)() }, deps.db);
+  return { chave: m.chave, dispensada: { id: r.id, justificativa, por: c.usuarioId, em: r.cancelado_em } };
 }
 
 /** Registra uma pendência. Não cria movimentação. Recusa duplicidade (mesma chave; mesma competência+descrição; ou mesmo valor de uma pendência automática, salvo `confirmaDistinta`). */

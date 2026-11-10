@@ -44,12 +44,12 @@ function abrirPopover(botao, html, fixo) {
 }
 
 /** Painel lateral. `comp` = composição do indicador; `extra` = HTML adicional (ex.: conciliação da categoria). */
-export function abrirPainel(comp, { mes, titulo, extra = "", corpoLivre = null, aoFechar } = {}) {
+export function abrirPainel(comp, { mes, titulo, extra = "", corpoLivre = null, aoFechar, largo = false, aoEscape } = {}) {
   fecharPopover();
   const anterior = document.activeElement;
   const nome = titulo ?? comp.rotulo ?? explicacaoDe(comp.id)?.nome ?? comp.id;
   const fundo = Object.assign(document.createElement("div"), { className: "fin-pn-fundo" });
-  fundo.innerHTML = `<aside class="fin-pn" role="dialog" aria-modal="true" aria-labelledby="fin-pn-titulo" tabindex="-1">
+  fundo.innerHTML = `<aside class="fin-pn${largo ? " fin-pn--largo" : ""}" role="dialog" aria-modal="true" aria-labelledby="fin-pn-titulo" tabindex="-1">
     <header class="fin-pn-cab"><h3 id="fin-pn-titulo">${escHtml(nome)}</h3><button type="button" class="btn btn-ghost btn-sm" data-fin-fechar-painel aria-label="Fechar detalhamento">Fechar ✕</button></header>
     <div class="fin-pn-corpo">${corpoLivre ?? htmlPainel(comp, { mes, extra })}</div></aside>`;
   document.body.appendChild(fundo);
@@ -57,7 +57,7 @@ export function abrirPainel(comp, { mes, titulo, extra = "", corpoLivre = null, 
   const fechar = () => { document.removeEventListener("keydown", tecla, true); fundo.remove(); anterior?.focus?.(); aoFechar?.(); };
   const focaveis = () => [...painel.querySelectorAll('button, [href], input, select, textarea, summary, [tabindex]:not([tabindex="-1"])')].filter((x) => !x.disabled && x.offsetParent !== null);
   const tecla = (e) => {
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); fechar(); return; }
+    if (e.key === "Escape") { if (document.querySelector("dialog[open]")) return; e.preventDefault(); e.stopPropagation(); if (aoEscape?.() === true) return; fechar(); return; }   // diálogo aberto por cima: o Esc é dele; aoEscape → true = consumido (ex.: voltar do detalhe para a lista)
     if (e.key !== "Tab") return;
     const f = focaveis(); if (!f.length) return;
     const primeiro = f[0], ultimo = f[f.length - 1];
@@ -72,8 +72,8 @@ export function abrirPainel(comp, { mes, titulo, extra = "", corpoLivre = null, 
 }
 
 /** Painel lateral com HTML livre (pendências, conciliação…): mesma acessibilidade do painel de composição. */
-export function abrirPainelHtml({ titulo, html, aoFechar }) {
-  return abrirPainel({ id: "__livre__", componentes: [], situacao: "confirmado" }, { titulo, corpoLivre: html, aoFechar });
+export function abrirPainelHtml({ titulo, html, aoFechar, largo = false, aoEscape }) {
+  return abrirPainel({ id: "__livre__", componentes: [], situacao: "confirmado" }, { titulo, corpoLivre: html, aoFechar, largo, aoEscape });
 }
 
 /** Expandir/recolher níveis da árvore (botão ▸), com aria-expanded; delegado, funciona em qualquer container. */
