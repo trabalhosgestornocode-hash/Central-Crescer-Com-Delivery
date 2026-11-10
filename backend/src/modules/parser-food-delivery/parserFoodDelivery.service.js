@@ -21,6 +21,7 @@ import { carregarOverridesPorUnidade, aplicarOverridesPersistidos, definirOverri
 import { lancamentosDoPeriodo, lancamentosDaImportacao } from "./parserFoodDelivery.lancamentos.js";
 import { comporCustoReal, mesclarEntregadores } from "./parserFoodDelivery.lancamentos.calc.js";
 import { carregarFonteLogistica } from "./parserFoodDelivery.foody.js";
+import { carregarPedidosFoody, fonteFoodyParaApi, ORIGEM_FOODY_API } from "./parserFoodDelivery.foodyPedidos.js";
 
 const TABELA_IMPORT = "parser_fd_importacoes";
 const TABELA_PEDIDOS = "parser_fd_pedidos";
@@ -191,6 +192,35 @@ function paraApiPedidoIgnorado(p) {
   return {
     ...base, classificacaoIgnorado: "Sem entregador",
     motivoIgnorado: "Pedido sem nome de entregador atribuído — não entra na conciliação nem nos valores financeiros.",
+  };
+}
+
+/** Igual a paraApiPedidoIgnorado, mas relativo à operação própria da unidade (Subway = comportamento original). */
+function paraApiPedidoIgnoradoOperacao(p, operacaoPropria) {
+  if (operacaoPropria === OPERACAO.SUBWAY) return paraApiPedidoIgnorado(p);
+  const base = paraApiPedido(p);
+  if (base.operacao !== operacaoPropria) {
+    return { ...base, classificacaoIgnorado: rotuloOperacao(base.operacao), motivoIgnorado: base.operacaoMotivo };
+  }
+  return {
+    ...base, classificacaoIgnorado: "Sem entregador",
+    motivoIgnorado: "Pedido sem entregador atribuído — não entra na conciliação nem nos valores financeiros.",
+  };
+}
+
+/**
+ * Filtragem para unidade cuja operação própria NÃO é Subway (ex.: Açaí no Grau como destino Foody).
+ * Mantém as chaves da resposta: `subway` passa a significar "operação própria com entregador" e
+ * `acaiNoGrau` "outras operações", para o frontend continuar funcionando sem mudança de contrato.
+ */
+function resumoFiltragemOperacaoPropria(pedidos, operacaoPropria) {
+  const proprios = pedidos.filter((p) => p.operacao === operacaoPropria);
+  const semEntregador = proprios.filter((p) => !temEntregador(p.entregador)).length;
+  return {
+    subway: proprios.length - semEntregador,
+    semEntregador,
+    acaiNoGrau: pedidos.filter((p) => p.operacao !== operacaoPropria && p.operacao !== OPERACAO.REVISAO_NECESSARIA).length,
+    revisaoNecessaria: pedidos.filter((p) => p.operacao === OPERACAO.REVISAO_NECESSARIA).length,
   };
 }
 
@@ -909,10 +939,27 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
     }
     if (!data || data.length < PAGINA_PEDIDOS) break;
   }
+  // Pedidos Foody sincronizados (flag FOODY_CENTRAL_PARSER_PEDIDOS_ENABLED, desligada por padrão): só nos dias SEM planilha.
+  // null = flag desligada (nada consultado; resposta idêntica). { erro } = segue só com a planilha e avisa.
+  const foody = await carregarPedidosFoody({ db: supabase, organizacaoId, unidadeId, dataInicio: periodo.dataInicio, dataFim: periodo.dataFim });
+  const foodyOk = foody && !foody.erro;
+  const operacaoPropria = foodyOk ? foody.operacaoPropria : OPERACAO.SUBWAY;
+  const elegivel = (p) => p.operacao === operacaoPropria && temEntregador(p.entregador);
+  const doFoody = foodyOk
+    ? foody.linhas.map((l) => {
+      const base = paraApiPedido(l);
+      return { ...paraApiPedido(elegivel(base) ? classificarComMotor(base, new Set()) : base), fonteDados: ORIGEM_FOODY_API };
+    })
+    : [];
   const overrides = await carregarOverridesPorUnidade({ organizacaoId, unidadeId });
-  const todos = aplicarOverridesPersistidos(consolidarPedidosPeriodo(linhas).map(paraApiPedido), overrides);
-  const pedidos = todos.filter(ehElegivelConciliacao);
-  const filtragem = resumoFiltragem(todos);
+  const daPlanilha = consolidarPedidosPeriodo(linhas).map(paraApiPedido);
+  const combinados = doFoody.length
+    ? [...daPlanilha, ...doFoody].sort((a, b) => String(a.dataHora || "").localeCompare(String(b.dataHora || "")))
+    : daPlanilha;
+  const todos = aplicarOverridesPersistidos(combinados, overrides);
+  const pedidos = todos.filter(elegivel);
+  const filtragem = operacaoPropria === OPERACAO.SUBWAY ? resumoFiltragem(todos) : resumoFiltragemOperacaoPropria(todos, operacaoPropria);
+  if (foodyOk && foody.linhas.length) fontes.set(ORIGEM_FOODY_API, fonteFoodyParaApi({ dataInicio, dataFim, diasFoody: foody.diasFoody, ultimaSincronizacao: foody.ultimaSincronizacao }));
   const resumo = resumoConciliacao(pedidos);
   const entregadores = entregadoresParaApi(pedidos);
   const lancamentos = await lancamentosDoPeriodo({ organizacaoId, unidadeId, inicio: periodo.inicio, fimExclusivo: periodo.fimExclusivo });
@@ -923,14 +970,17 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
 
   return {
     ...(fonteLogistica ? { fonteLogistica } : {}),
+    ...(foody ? { fonteFoodyPedidos: foody.erro ? { erro: foody.erro }
+      : { operacaoPropria, pedidos: foody.linhas.length, diasFoody: foody.diasFoody, diasPlanilha: foody.diasPlanilha, ultimaSincronizacao: foody.ultimaSincronizacao } } : {}),
     periodo: { dataInicio, dataFim }, consolidado: true,
     importacao: { id: null, periodoInicio: dataInicio, periodoFim: dataFim,
+      ...(operacaoPropria !== OPERACAO.SUBWAY ? { operacaoPropria } : {}),
       totalPedidos: todos.length, pedidosSubway: filtragem.subway,
       pedidosAcai: filtragem.acaiNoGrau, pedidosRevisao: filtragem.revisaoNecessaria,
       pedidosSemEntregador: filtragem.semEntregador, codigosSemTaxa: [],
       colunaDetalhesEncontrada: [...fontes.values()].every((f) => f.colunaDetalhesEncontrada !== false) },
     resumo: ajustes.resumo, pedidos: ajustes.pedidos,
-    pedidosIgnorados: todos.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado),
+    pedidosIgnorados: todos.filter((p) => !elegivel(p)).map((p) => ({ ...paraApiPedidoIgnoradoOperacao(p, operacaoPropria), ...(p.fonteDados ? { fonteDados: p.fonteDados } : {}) })),
     entregadores: ajustes.entregadores, lancamentos: ajustes.lancamentos,
     fontes: [...fontes.values()], duplicadosSobrepostos: linhas.length - todos.length,
     dashboardOperacional: calcularDashboardOperacional(pedidos),

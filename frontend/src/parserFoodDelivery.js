@@ -508,8 +508,9 @@ function distribuicaoDoRelatorioHtml() {
   const { importacao, resumo } = pfd.atual;
   const semColunaDetalhes = importacao.colunaDetalhesEncontrada === false;
   const itens = [
-    { label: "Subway Saci", valor: importacao.pedidosSubway ?? resumo.totalPedidos, cor: "ok" },
-    { label: "Açaí no Grau", valor: importacao.pedidosAcai ?? 0, cor: "info" },
+    // Unidade cuja operação própria não é Subway (ex.: Açaí como destino Foody): mesmas chaves, rótulos da própria operação.
+    { label: importacao.operacaoPropria === "acai_no_grau" ? "Açaí no Grau" : "Subway Saci", valor: importacao.pedidosSubway ?? resumo.totalPedidos, cor: "ok" },
+    { label: importacao.operacaoPropria === "acai_no_grau" ? "Outras operações" : "Açaí no Grau", valor: importacao.pedidosAcai ?? 0, cor: "info" },
     { label: "Sem entregador", valor: importacao.pedidosSemEntregador ?? 0, cor: "muted" },
     { label: "Operação indefinida", valor: importacao.pedidosRevisao ?? 0, cor: "warn" },
   ];
