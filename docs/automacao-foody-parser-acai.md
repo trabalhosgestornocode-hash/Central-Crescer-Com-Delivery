@@ -56,29 +56,50 @@ Webhook Foody: não existe no projeto e não foi validado na documentação ofic
 
 Reconciliação independente: a soma das taxas válidas dos 10 fechamentos logísticos do Açaí (144+149+249+192+212+173+211+271+333+227) é **R$ 2.161,00**, igual ao Parser. A Subway prova que não houve duplicidade, porque todos os dias com planilha ficaram fora da Foody.
 
-## 5. Testes
+## 5. Sem perda silenciosa, isolamento e outras unidades
 
-- `test/parser-foody-pedidos.test.js` (novo): flag/allowlist, uma fonte por dia, tenant divergente, erros de leitura, operação ambígua, operação própria, campos null e estrutural (só leitura, sem import de `modules/foody`).
-- Regressão Foody + Parser + Dashboard logística: **466/468 aprovados, 1 pulado e 1 falha pré-existente**. A falha está em `foody-central-arquitetura` › "migration 147 — estático": a lista fixa não inclui as migrations 156–158 de outras frentes e não tem relação com esta mudança.
-- Fora do escopo desta prova: execução publicada, dashboard no navegador logado e sincronizações consecutivas observadas **após** a publicação.
+- **Planilha parcial.** Nos dias com planilha, os pedidos Foody da operação própria (e os em triagem) são contados e comparados com a planilha. Fora da faixa `[Foody − 2, Foody + triagem + 2]`, o Parser mostra um alerta (`PLANILHA_POSSIVELMENTE_PARCIAL` ou `FOODY_COM_MENOS_PEDIDOS`). A fonte **não muda sozinha**, porque trocar a fonte é decisão de metodologia. Dado real: em 09/11 a Subway tinha 95 pedidos na planilha × 89 na Foody + 6 em triagem → dentro da faixa e sem alerta. Em 31/10–10/11, nenhum alerta nas duas unidades.
+- **Isolamento.** `organizacaoId` vem da sessão (`tenant(req)`). `resolverUnidade` exige que a unidade pertença à organização **antes** da ponte. A ponte filtra por organização + unidade em todas as consultas e confere cada linha (`FONTE_FOODY_TENANT_DIVERGENTE`). As linhas do Açaí ficam na organização do Açaí, e um usuário da Subway não as alcança.
+- **Outras unidades.** Leitura real com a allowlist contendo **só o Açaí**: a resposta da Subway ficou **idêntica byte a byte** à resposta com a flag desligada (1,69 MB, sem bloco Foody). Açaí em 01–10/11: 241 pedidos e R$ 2.017,00 (= R$ 2.161,00 − R$ 144,00 de 31/10).
 
-## 6. Implantação (exige autorização)
+## 6. Monitoramento e triagem (tela Integrações › Foody)
 
-1. Push da branch, PR e merge na `main` (auto-deploy do backend).
-2. No Render, `crescercomdelivery`: `FOODY_CENTRAL_PARSER_PEDIDOS_ENABLED=true` e `FOODY_CENTRAL_PARSER_PEDIDOS_UNIDADES=<uuid do Açaí no Grau Saci>`. Começar só pelo Açaí; a Subway entra depois, se quiser dispensar a planilha diária.
-3. Validar logado no Parser do Açaí, período "Este mês", e conferir com o fechamento logístico.
-4. **Reversão:** remover a flag (efeito imediato após o restart). Não há migration nem dado gravado.
+- **Saúde da sincronização**, calculada das execuções gravadas: Atualizado / Atrasado (sem sucesso há mais de 7 h) / Com erro (falha depois do último sucesso) / Sem dados na origem / Sincronizando / Conectado — nenhuma execução / Coleta desligada / Conexão inativa / Sem conexão. Credencial válida sozinha **nunca** aparece como "Atualizado".
+- A tela mostra: última execução, último sucesso, atraso, pedidos capturados e persistidos do último sucesso, pendências e falhas. "Sincronizar agora" e o histórico já existiam.
+- **Triagem** (já existia: dias, pedidos, itens não reconhecidos, decisão com justificativa e histórico): agora também mostra a unidade da conta e a origem (Foody API). Nenhuma classificação automática sem evidência. Fechamentos com triagem pendente aparecem como "Preliminar · valores provisórios" e, no Parser, os pedidos aparecem como "Operação indefinida".
+- **Limitação:** a saúde aparece na unidade **titular** da conta (Subway). Para a unidade destino (Açaí), o frescor aparece no Parser (`ultimaSincronizacao`).
 
-Nenhuma migration é necessária.
+## 7. Testes (branch do PR)
 
-## 7. Pendências reais (não declaradas como concluídas)
+- Backend (Foody, Parser, Dashboard logística, notificações): **659 aprovados, 1 pulado, 0 falhas**. Frontend (Foody, Parser, Dashboard logística): **41 aprovados, 10 pulados (testes de navegador sem Playwright), 0 falhas**.
+- Novos: `parser-foody-pedidos.test.js` (14) e `configuracoesFoodySaude.test.js` (6).
+- O teste "migration 147 — estático" deixou de usar a lista fixa de nomes e passou a verificar regras: prefixo único, só as migrations conhecidas tocam `foody_*` e nenhuma posterior apaga ou trunca `foody_*`. Teste de mutação: uma migration falsa com `delete from foody_pedidos` reprova.
+- Fora desta prova: execução publicada, tela logada e sincronizações consecutivas observadas **depois** da publicação.
+
+## 8. Implantação (exige autorização)
+
+1. Push da branch, PR e merge na `main` (auto-deploy do backend). Nenhuma migration é necessária.
+2. No Render (`crescercomdelivery`) → Environment: `FOODY_CENTRAL_PARSER_PEDIDOS_ENABLED=true` e `FOODY_CENTRAL_PARSER_PEDIDOS_UNIDADES=<uuid do Açaí no Grau Saci>`. O uuid conferido está no runbook privado, fora do repositório público.
+3. Homologação logada: Parser do Açaí, período 01–10/11 → 241 pedidos, R$ 2.017,00 e a fonte "Foody Delivery — sincronização automática". Parser da Subway sem mudança.
+4. **Reversão:** remover `FOODY_CENTRAL_PARSER_PEDIDOS_ENABLED` (o Render reinicia). Não há dado gravado nem migration a desfazer.
+
+## 9. Coleta do dia em curso (branch separada `feat/foody-intradiario`, não incluída neste PR)
+
+- Origem `intradiario` e flag própria `FOODY_CENTRAL_INTRADIARIO_ENABLED` (exige também as flags do agendador). Intervalo de 5 a 60 min, padrão 15. Com 1 GET por unidade por rodada, fica muito abaixo do limite documentado de 100 req/min.
+- Só sincroniza **hoje**; **nunca** gera fechamento (o dia fecha na rodada D-1, como antes). A mudança de status atualiza o mesmo pedido pelo hash, sem duplicar.
+- Usa a mesma trava por unidade do ciclo diário: o intradiário **cede** quando o diário está rodando, e o diário **tenta de novo** se encontrar a trava ocupada.
+- Parser: pedido de hoje ainda não encerrado (`closed`/`cancelled`) fica "Em andamento", fora da conciliação e das taxas, com aviso de valores parciais.
+- Exige a **migration 159**, que só amplia o CHECK de `foody_sync_execucoes.origem`. Não foi aplicada. O rollback recusa se houver execução intradiária.
+- 16 testes próprios; regressão de 674 testes; teste de mutação confirmou a trava do fechamento. **Não ativar sem homologação específica.**
+
+## 10. Pendências reais (não declaradas como concluídas)
 
 | Item | Tipo | O que falta |
 |---|---|---|
-| iFood do Açaí | Autenticação humana | Conectar a loja iFood do Açaí na tela de integrações (OAuth/credencial do proprietário). Sem isso, nenhum dado iFood chega |
-| SAIPOS / Anota AI do Açaí | Fonte externa | Não há API autorizada no projeto; segue a importação de arquivo. Para automatizar, é preciso documentação oficial e credencial de cada fornecedor |
-| Dia corrente (D0) | Decisão técnica | O agendador cobre D-1..D-3 a cada 6 h. "Hoje" só aparece no dia seguinte. Incluir D0 muda a coleta e exige aprovação |
-| Triagem pendente | Decisão humana | Pedidos em `TRIAGEM_PENDENTE` (2–6/dia) deixam os fechamentos PRELIMINAR; no Parser aparecem como "Operação indefinida" |
-| Nome do entregador | Decisão de privacidade | A sincronização guarda só o hash; o pagamento por entregador pelo Parser exige decidir se o nome pode ser armazenado |
-| Central de Sincronização (Fase 5) | Não iniciada | A tela de integrações Foody já mostra conexão e execuções; o painel unificado por fonte/unidade com os estados pedidos fica para a próxima etapa |
+| Publicação do Parser + flag do Açaí | Autorização | Merge, flag no Render e homologação logada |
+| iFood do Açaí | Autenticação humana | Ver `docs/ifood-acai-conexao.md` |
+| SAIPOS / Anota AI | Fonte externa | Não há conector nem credencial no projeto; segue a importação de arquivo (ver `docs/ifood-acai-conexao.md`, seção 4) |
+| Dia em curso | Homologação | Branch `feat/foody-intradiario` + migration 159, ambas sem publicação |
+| Triagem pendente | Decisão humana | 2 a 6 pedidos por dia na fila de triagem |
+| Nome do entregador | Decisão de privacidade | A sincronização guarda só o hash; o pagamento por entregador exige decidir se o nome pode ser armazenado |
 | Fechamento de setembro do Açaí (R$ 83.183,38) | Referência | Não usado na sincronização; dados homologados intocados |
