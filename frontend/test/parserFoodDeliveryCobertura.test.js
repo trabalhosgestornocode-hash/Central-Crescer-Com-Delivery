@@ -36,13 +36,21 @@ test("calendário: uma célula por dia, triagem marcada, aviso de que 'sem dados
 
 test("oferta de recuperação: mês do primeiro dia sem dados; nada quando tudo tem dados ou só falta o dia em curso", () => {
   const o = mesParaRecuperar(cob([dia("2026-09-29", "planilha"), dia("2026-09-30", "sem_dados"), dia("2026-10-01", "sem_dados")]));
-  assert.deepEqual(o, { mes: "2026-09", rotulo: "setembro de 2026", semDados: 1, comDados: 1, papel: "titular" });
-  assert.equal(mesParaRecuperar(cob([dia("2026-09-29", "planilha"), dia("2026-09-30", "foody")])), null);
+  assert.deepEqual(o, { mes: "2026-09", rotulo: "setembro de 2026", semDados: 1, semFoody: 2, comDados: 1, papel: "titular" });
+  assert.equal(mesParaRecuperar(cob([dia("2026-09-29", "planilha", { pedidosFoody: 5 }), dia("2026-09-30", "foody", { pedidosFoody: 3 })])), null);
+  // destino: planilha sem Foody não é oferecida (quem recupera é a titular)
+  assert.equal(mesParaRecuperar(cob([dia("2026-09-29", "planilha")], { papel: "destino" })), null);
   assert.equal(mesParaRecuperar(cob([dia("2026-11-10", "sem_dados", { aberto: true })])), null);
   const b = bannerRecuperacaoHtml(o, f);
   assert.match(b, /Setembro de 2026<\/b> — dados incompletos/);
   assert.match(b, /Preencher mês de setembro/);
   assert.match(b, /data-mes="2026-09"/);
+});
+
+test("titular com planilha completa mas sem Foody: oferece recuperar, explicando que a planilha continua sendo a fonte", () => {
+  const o = mesParaRecuperar(cob([dia("2026-09-01", "planilha"), dia("2026-09-02", "planilha"), dia("2026-09-03", "planilha", { pedidosFoody: 80 })]));
+  assert.deepEqual(o, { mes: "2026-09", rotulo: "setembro de 2026", semDados: 0, semFoody: 2, comDados: 3, papel: "titular" });
+  assert.match(bannerRecuperacaoHtml(o, f), /Foody sem pedidos em 2 dias. A planilha continua sendo a fonte desta unidade/);
 });
 
 test("lotes de no máximo 7 dias, ordenados e sem repetição (repetir não duplica)", () => {

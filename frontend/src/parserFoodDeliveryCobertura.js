@@ -61,20 +61,25 @@ export function calendarioCoberturaHtml(cob, { escapeHtml, fmtDataHora }) {
  */
 export function mesParaRecuperar(cob) {
   if (!cob?.habilitado || cob.erro) return null;
-  const semDados = (cob.dias ?? []).filter((d) => d.fonte === "sem_dados" && !d.aberto);
-  if (!semDados.length) return null;
-  const mes = semDados[0].data.slice(0, 7);
+  // Titular da conta Foody: o dia coberto por planilha mas sem pedido Foody também é recuperável — a planilha continua sendo a
+  // fonte DESTA unidade; recuperar alimenta as unidades que compartilham a conta (ex.: Açaí) e o fechamento logístico.
+  const titular = cob.papel === "titular";
+  const faltaFoody = (d) => !d.aberto && (d.fonte === "sem_dados" || (titular && d.fonte === "planilha" && !d.pedidosFoody));
+  const faltam = (cob.dias ?? []).filter(faltaFoody);
+  if (!faltam.length) return null;
+  const mes = faltam[0].data.slice(0, 7);
   const doMes = (cob.dias ?? []).filter((d) => d.data.startsWith(mes) && !d.aberto);
-  return { mes, rotulo: rotuloMes(mes), semDados: semDados.filter((d) => d.data.startsWith(mes)).length,
-    comDados: doMes.filter((d) => d.fonte !== "sem_dados").length, papel: cob.papel ?? null };
+  return { mes, rotulo: rotuloMes(mes), semDados: doMes.filter((d) => d.fonte === "sem_dados").length,
+    semFoody: doMes.filter(faltaFoody).length, comDados: doMes.filter((d) => d.fonte !== "sem_dados").length, papel: cob.papel ?? null };
 }
 
 export function bannerRecuperacaoHtml(oferta, { escapeHtml, icon }) {
   if (!oferta) return "";
   const nome = oferta.rotulo.split(" de ")[0];
   return `<div class="pfd-cob-banner">
-    <span>${icon("calendar", { size: 15 })} <b>${escapeHtml(oferta.rotulo[0].toUpperCase() + oferta.rotulo.slice(1))}</b> — dados incompletos
-      (${oferta.semDados} ${oferta.semDados === 1 ? "dia" : "dias"} sem dados${oferta.comDados ? `, ${oferta.comDados} com dados` : ""}).</span>
+    <span>${icon("calendar", { size: 15 })} <b>${escapeHtml(oferta.rotulo[0].toUpperCase() + oferta.rotulo.slice(1))}</b> — ${oferta.semDados
+      ? `dados incompletos (${oferta.semDados} ${oferta.semDados === 1 ? "dia" : "dias"} sem dados${oferta.comDados ? `, ${oferta.comDados} com dados` : ""}).`
+      : `Foody sem pedidos em ${oferta.semFoody} ${oferta.semFoody === 1 ? "dia" : "dias"}. A planilha continua sendo a fonte desta unidade; recuperar alimenta as unidades que compartilham a conta Foody.`}</span>
     <button class="btn btn-ghost btn-sm" id="pfd-preencher-mes" data-mes="${escapeHtml(oferta.mes)}">${icon("refresh", { size: 14 })} Preencher mês de ${escapeHtml(nome)}</button>
   </div>`;
 }
