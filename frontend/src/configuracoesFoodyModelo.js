@@ -172,3 +172,57 @@ export function resumoDoDia(d) {
   if (d.cobertura && !d.cobertura.completa) partes.push("cobertura com pendência");
   return partes.join(" · ");
 }
+
+// ---------------------------------------------------------------------------
+// SAÚDE DA SINCRONIZAÇÃO — estado explícito a partir das execuções gravadas (nunca da credencial sozinha).
+// ---------------------------------------------------------------------------
+/** Intervalo do agendador (6 h) + margem: sem sucesso nesse prazo = ATRASADO. */
+export const PRAZO_ATRASO_HORAS = 7;
+/** Execução EM_ANDAMENTO mais antiga que isso não é "sincronizando": é execução abandonada. */
+const PRAZO_EM_ANDAMENTO_MS = 60 * 60_000;
+export const SAUDE = {
+  SEM_CONEXAO: ["muted", "Sem conexão"],
+  CONEXAO_INATIVA: ["warn", "Conexão inativa"],
+  COLETA_DESLIGADA: ["muted", "Conectado — coleta desligada"],
+  CONECTADO: ["muted", "Conectado — nenhuma execução ainda"],
+  SINCRONIZANDO: ["warn", "Sincronizando"],
+  COM_ERRO: ["bad", "Com erro"],
+  ATRASADO: ["bad", "Atrasado"],
+  SEM_DADOS_NA_ORIGEM: ["warn", "Sem dados na origem"],
+  ATUALIZADO: ["ok", "Atualizado"],
+};
+
+/**
+ * @param {{habilitada:boolean, conexaoStatus:string|null, execucoes:Array}} d  resposta de GET /integracoes/foody/sincronizacoes
+ * @returns {{estado:string, ultimaExecucao, ultimoSucesso, capturados:number|null, persistidos:number|null,
+ *           falhasRecentes:number, pendencias:number, atrasoHoras:number|null, ultimoErro:string|null}}
+ */
+export function saudeDaIntegracao(d, agora = new Date()) {
+  const execs = [...(d?.execucoes ?? [])].sort((a, b) => String(b.iniciadoEm).localeCompare(String(a.iniciadoEm)));
+  const ultimaExecucao = execs[0] ?? null;
+  const ultimoSucesso = execs.find((x) => x.status === "CONCLUIDA") ?? null;
+  const falhaMaisRecente = execs.find((x) => x.status === "FALHOU") ?? null;
+  const atrasoHoras = ultimoSucesso?.concluidoEm || ultimoSucesso?.iniciadoEm
+    ? Math.max(0, Math.round(((agora.getTime() - Date.parse(ultimoSucesso.concluidoEm ?? ultimoSucesso.iniciadoEm)) / 3_600_000) * 10) / 10)
+    : null;
+  const base = {
+    ultimaExecucao, ultimoSucesso, atrasoHoras,
+    capturados: ultimoSucesso ? Number(ultimoSucesso.unicos ?? 0) : null,
+    persistidos: ultimoSucesso ? Number(ultimoSucesso.inseridos ?? 0) + Number(ultimoSucesso.atualizados ?? 0) + Number(ultimoSucesso.inalterados ?? 0) : null,
+    falhasRecentes: execs.filter((x) => x.status === "FALHOU").length,
+    pendencias: execs.filter((x) => x.status === "CONCLUIDA").slice(0, 3).reduce((s, x) => s + Number(x.fechamentosPendentes ?? 0) + Number(x.pontoDivergente ?? 0), 0),
+    ultimoErro: falhaMaisRecente?.erroCodigo ?? null,
+  };
+  if (!d?.conexaoStatus) return { ...base, estado: "SEM_CONEXAO" };
+  if (d.conexaoStatus !== "ATIVA") return { ...base, estado: "CONEXAO_INATIVA" };
+  if (!d.habilitada) return { ...base, estado: "COLETA_DESLIGADA" };
+  if (ultimaExecucao?.status === "EM_ANDAMENTO" && agora.getTime() - Date.parse(ultimaExecucao.iniciadoEm) < PRAZO_EM_ANDAMENTO_MS) {
+    return { ...base, estado: "SINCRONIZANDO" };
+  }
+  if (!ultimoSucesso) return { ...base, estado: falhaMaisRecente ? "COM_ERRO" : "CONECTADO" };
+  // Falha DEPOIS do último sucesso: o erro é o estado atual (não esconder atrás de um sucesso antigo).
+  if (falhaMaisRecente && String(falhaMaisRecente.iniciadoEm) > String(ultimoSucesso.iniciadoEm)) return { ...base, estado: "COM_ERRO" };
+  if (atrasoHoras != null && atrasoHoras > PRAZO_ATRASO_HORAS) return { ...base, estado: "ATRASADO" };
+  if (Number(ultimoSucesso.unicos ?? 0) === 0) return { ...base, estado: "SEM_DADOS_NA_ORIGEM" };
+  return { ...base, estado: "ATUALIZADO" };
+}

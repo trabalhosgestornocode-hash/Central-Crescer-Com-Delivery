@@ -17,6 +17,7 @@ import {
   STATUS_CONEXAO, ESTADO_VINCULO, OPERACOES, rotuloOperacao, rotuloEvento, rotuloMotivoTriagem, rotuloAtor, mensagemDeErro,
   validarToken, validarMotivo, acoesDaConexao, conexoesDaTriagem, opcoesDeDestino, dataHora, dataCurta,
   planejarIntervalo, ontemBrasilia, rotuloFechamento, STATUS_EXECUCAO, ORIGEM_EXECUCAO, rotuloErroSync, resumoDoDia, MAX_DIAS_SYNC,
+  saudeDaIntegracao, SAUDE,
 } from "./configuracoesFoodyModelo.js";
 
 const ABAS = [
@@ -244,7 +245,8 @@ export function montarFoody(root, ctx) {
     if (st.tri.dia) {
       pedidos = st.tri.pedidos === null ? carregando("Carregando pedidos…") : st.tri.pedidos.length ? `<ul class="ntf-lista" role="list">${st.tri.pedidos.map((p, i) => `
         <li class="ntf-dest fdy-pedido"><div class="ntf-dest-cab"><span class="cfg-user-info"><b>Pedido ${e(p.numeroPedido ?? p.foodyUid)}</b>
-            <small>${e(dataHora(p.dataHora))} · ${e(p.situacao ?? "")} · ${e(rotuloMotivoTriagem(p.motivo))}</small></span>
+            <small>${e(dataHora(p.dataHora))} · ${e(p.situacao ?? "")} · ${e(rotuloMotivoTriagem(p.motivo))}</small>
+            <small>Unidade da conta: ${e(conexoes.find((c) => c.conexaoId === st.tri.conexaoId)?.rotulo ?? "—")} · Origem: Foody Delivery (API, sincronização)</small></span>
           ${p.decisaoPendente ? `<span class="pill ok">Decidido: ${e(rotuloOperacao(p.decisaoPendente.operacao))} (${e(p.decisaoPendente.porVoce ? "você" : "outro administrador")})</span>` : `<span class="pill warn">Aguardando decisão</span>`}</div>
           <div class="ntf-dest-corpo">
             ${p.linhasSemEvidencia?.length ? `<p class="fdy-nota">Itens não reconhecidos:</p><ul class="fdy-itens">${p.linhasSemEvidencia.map((l) => `<li>${e(l)}</li>`).join("")}</ul>` : `<p class="fdy-nota">${e(p.resumo ?? "Sem itens para mostrar.")}</p>`}
@@ -279,7 +281,7 @@ export function montarFoody(root, ctx) {
       : d.conexaoStatus !== "ATIVA" ? aviso("warn", "Ative a conexão para sincronizar.")
       : `<form class="ntf-form" data-form="sincronizar" novalidate>
         <p class="fdy-nota">Busca na Foody (somente leitura) os pedidos dos dias escolhidos, distribui por empresa e gera os fechamentos
-          logísticos. Nesta fase é um <b>piloto em sombra</b>: nada aparece no Parser, no Dashboard, no Checklist nem no WhatsApp.</p>
+          logísticos. O Parser só usa esses pedidos nas unidades liberadas na configuração do servidor (e só nos dias sem planilha importada).</p>
         <div class="fdy-datas">
           <label class="cfg-campo" for="fdy-sync-de"><span>Primeiro dia</span><input id="fdy-sync-de" name="de" type="date" max="${e(ontem)}" value="${e(ontem)}" required /></label>
           <label class="cfg-campo" for="fdy-sync-ate"><span>Último dia</span><input id="fdy-sync-ate" name="ate" type="date" max="${e(ontem)}" value="${e(ontem)}" required /></label>
@@ -302,7 +304,21 @@ export function montarFoody(root, ctx) {
       <tbody>${d.execucoes.map((x) => `<tr><td>${e(dataHora(x.iniciadoEm))}</td><td>${e(dataCurta(x.competencia))}</td><td>${e(ORIGEM_EXECUCAO[x.origem] ?? x.origem)}</td>
         <td>${pill(STATUS_EXECUCAO[x.status] ?? ["muted", x.status])}${x.erroCodigo ? ` <small>${e(rotuloErroSync(x.erroCodigo))}</small>` : ""}</td>
         <td>${e(x.unicos)}</td><td>${e(x.inseridos)} / ${e(x.atualizados)}</td></tr>`).join("")}</tbody></table></div>` : vazio("Nenhuma sincronização registrada nesta unidade.");
-    return painel("Sincronização", `${form}${resultado}<h4 class="fdy-sub">Histórico</h4>${hist}`, "Coleta manual da conta Foody desta unidade (titular).");
+    const sa = saudeDaIntegracao(d);
+    const item = (rot, val) => `<div class="vd-pv-item"><span>${e(rot)}</span><b>${e(val)}</b></div>`;
+    const saude = `<h4 class="fdy-sub">Saúde da sincronização</h4>
+      <p>${pill(SAUDE[sa.estado] ?? ["muted", sa.estado])}${sa.ultimoErro && sa.estado === "COM_ERRO" ? ` <small>${e(rotuloErroSync(sa.ultimoErro))}</small>` : ""}</p>
+      <div class="vd-pv-grid">
+        ${item("Última execução", sa.ultimaExecucao ? dataHora(sa.ultimaExecucao.iniciadoEm) : "—")}
+        ${item("Último sucesso", sa.ultimoSucesso ? dataHora(sa.ultimoSucesso.concluidoEm ?? sa.ultimoSucesso.iniciadoEm) : "—")}
+        ${item("Atraso", sa.atrasoHoras == null ? "—" : `${String(sa.atrasoHoras).replace(".", ",")} h`)}
+        ${item("Pedidos capturados (último sucesso)", sa.capturados ?? "—")}
+        ${item("Pedidos persistidos (último sucesso)", sa.persistidos ?? "—")}
+        ${item("Pendências (3 últimas)", sa.pendencias)}
+        ${item("Falhas (últimas 30)", sa.falhasRecentes)}
+      </div>
+      <small class="cfg-ajuda">"Atualizado" exige uma execução concluída nas últimas 7 h com pedidos recebidos. Credencial válida sozinha não conta.</small>`;
+    return painel("Sincronização", `${saude}${form}${resultado}<h4 class="fdy-sub">Histórico</h4>${hist}`, "Coleta manual da conta Foody desta unidade (titular).");
   }
   async function carregarSync() {
     try {

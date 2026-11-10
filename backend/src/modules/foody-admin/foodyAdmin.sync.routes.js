@@ -18,13 +18,13 @@ import { criarRepositorioFoody } from "../foody/foody.repository.js";
 import { criarSegurancaFoody } from "../foody/foody.seguranca.js";
 import { ENV_SEGREDO } from "../foody/foody.constants.js";
 import { atorDeAcesso } from "../foody/foody.compartilhamento.service.js";
-import { solicitarSyncManual, listarSincronizacoes, criarEstadoSyncManual } from "../foody/foody.sync.manual.js";
+import { solicitarSyncManual, listarSincronizacoes, criarEstadoSyncManual, previaRecuperacaoMes } from "../foody/foody.sync.manual.js";
 
 const STATUS = {
   DESLIGADO: 404, SEM_CONEXAO: 404,
   SEM_PERMISSAO: 403,
   COMPETENCIA_INVALIDA: 400, COMPETENCIA_ABERTA: 400, LIMITE_DIAS: 400, MOTIVO_INVALIDO: 400, PARAMETRO_INVALIDO: 400, SEM_UNIDADE: 400,
-  CONCORRENCIA: 409, CONEXAO_INATIVA: 409,
+  CONCORRENCIA: 409, CONEXAO_INATIVA: 409, TOKEN_INVALIDO: 409, TOKEN_DIVERGENTE: 409,
   SEGREDO_AUSENTE: 503,
 };
 const NAO_INSTALADA = new Set(["42P01", "42883", "PGRST202", "PGRST205"]);
@@ -58,6 +58,16 @@ export function criarFoodySyncRouter({ db = supabase, env = process.env, agora =
 
   router.get("/", asyncHandler(async (req, res) => {
     try { res.json({ data: await listarSincronizacoes(ctx(req), { env, repo }) }); } catch (e) { throw erroHttpSync(e); }
+  }));
+
+  // Prévia do "Preencher mês" (Parser): SOMENTE LEITURA na API Foody (GET) e no banco; nada é gravado. Mesmo orçamento da coleta.
+  router.get("/previa-mes", limite, asyncHandler(async (req, res) => {
+    let s;
+    try { s = seg(); } catch { throw erroHttpSync(Object.assign(new Error("segredo da integração Foody não configurado."), { codigo: "SEGREDO_AUSENTE" })); }
+    try {
+      res.json({ data: await previaRecuperacaoMes({ ...ctx(req), mes: String(req.query?.mes ?? "") },
+        { env, repo, seguranca: s, agora, estado, ...(criarCliente ? { criarCliente } : {}) }) });
+    } catch (e) { throw erroHttpSync(e); }
   }));
 
   router.post("/", limite, asyncHandler(async (req, res) => {

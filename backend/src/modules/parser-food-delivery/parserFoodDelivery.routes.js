@@ -16,6 +16,7 @@ const excluir = requirePermissao(PERMISSOES.PARSER_FD_EXCLUIR);
 const classificar = requirePermissao(PERMISSOES.PARSER_FD_CLASSIFICAR);
 
 parserFoodDeliveryRouter.get("/periodo", ver, controller.periodo);
+parserFoodDeliveryRouter.get("/cobertura", ver, controller.cobertura);
 parserFoodDeliveryRouter.get("/catalogos", ver, controller.catalogos);
 
 // Cadastro mestre de entregadores (item 16 — reusa importar p/ gestão operacional).

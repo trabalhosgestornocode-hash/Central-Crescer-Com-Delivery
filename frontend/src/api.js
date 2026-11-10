@@ -400,6 +400,7 @@ export const bonifFechamentoMensalReabrir = ({ ano, mes, motivo }) => postJson(`
 // ---------- Parser Food Delivery (importação + conciliação de taxas de entregador) ----------
 const PFD = "/api/v1/parser-food-delivery";
 export const pfdPeriodo = (dataInicio, dataFim) => getJson(`${PFD}/periodo${qs({ dataInicio, dataFim })}`);
+export const pfdCobertura = (dataInicio, dataFim) => getJson(`${PFD}/cobertura${qs({ dataInicio, dataFim })}`);
 export const pfdImportacoes = () => getJson(`${PFD}/importacoes`);
 export const pfdImportacaoDetalhe = (id) => getJson(`${PFD}/importacoes/${id}`);
 export const pfdArquivoImportacao = (id) => getJson(`${PFD}/importacoes/${id}/arquivo`);
@@ -643,6 +644,8 @@ export const foodyTriagem = (conexaoId, competencia) => getJson(`${FOODY}/conexo
 export const foodyTriagemDecisoes = (conexaoId) => getJson(`${FOODY}/conexoes/${idFoody(conexaoId)}/triagem/decisoes`);
 // Sincronização MANUAL (piloto em sombra): só a titular; a chave de idempotência evita reenvio duplicado por clique repetido.
 export const foodySincronizacoes = () => getJson(`${FOODY}/sincronizacoes`);
+/** Prévia (somente leitura) da recuperação de um mês: AAAA-MM. */
+export const foodyPreviaMes = (mes) => getJson(`${FOODY}/sincronizacoes/previa-mes${qs({ mes })}`);
 export async function foodySincronizar({ competencias, motivo = null }, chave) {
   const g = geracaoContexto();
   const r = await fetch(`${API_BASE}${FOODY}/sincronizacoes`, {
