@@ -76,3 +76,12 @@
 
 #setor-vazio { text-align: center; padding: 8px 0 18px; }
 #setor-vazio h3 { margin: 0 0 6px; }
+
+/* Carregamento NEUTRO do setor financeiro (estado `loading` — financeiroAcesso.js): sem menu, sem número, sem a cara de
+   nenhuma das duas versões. Só três pontos discretos no centro da área de conteúdo. */
+.fin-carregando { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 40vh; }
+.fin-carregando-ponto { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); opacity: .35; animation: fin-carregando 1s ease-in-out infinite; }
+.fin-carregando-ponto:nth-child(2) { animation-delay: .15s; }
+.fin-carregando-ponto:nth-child(3) { animation-delay: .3s; }
+@keyframes fin-carregando { 0%, 100% { opacity: .2; transform: translateY(0); } 50% { opacity: .7; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .fin-carregando-ponto { animation: none; opacity: .45; } }

@@ -27,7 +27,7 @@ import {
   carregarPerfis, selecionarPerfil, limparPerfilPendente, carregarSetores, http,
 } from "./sessao.js";
 import { SETOR, SETOR_ROTULO, decidirSetor, chaveDoContexto, lerPreferencia, gravarPreferencia } from "./setores.js";
-import { MENU_FINANCEIRO, SECAO_FINANCEIRO, MODULOS_FINANCEIRO, ROTULOS_AGRUPADOS } from "./financeiroMenu.js";
+import { ESTADO_FINANCEIRO, CARREGAMENTO_NEUTRO, menuDoEstado, rotaDeEntrada, resolverAcessoFinanceiro, guardarStatusPreResolvido } from "./financeiroAcesso.js";
 import {
   montarSelecaoPerfil, abrirPinDoPerfil, setErroPin, setPinCarregando,
   fecharPinDoPerfil, mostrarSemPerfil,
@@ -94,23 +94,17 @@ function montarMenu() {
   const filtros = document.querySelector(".global-filtros");
   if (filtros) filtros.style.display = noFinanceiro ? "none" : "";
   if (noFinanceiro) {
-    const itemMenu = (m, rotulo = m.label, oculto = false) => `
-      <li data-rota="${m.id}"${oculto ? " data-fin2 hidden" : ""}>
+    // O menu sai do estado JÁ RESOLVIDO (financeiroAcesso.js). Em `loading`/`error`/`access_denied` fica vazio: nunca se
+    // desenha o menu legado "por enquanto" para trocá-lo pelo 2.0 quando o flag responder (era a troca visual do bug).
+    el("#menu").innerHTML = menuDoEstado(state.financeiroEstado).map((s) => `<li class="menu-secao">${s.secao}</li>` + s.itens.map((m) => `
+      <li data-rota="${m.id}">
         <span class="m-icon">${icon(m.icon, { size: 18 })}</span>
-        <span class="m-label">${rotulo}</span>
-      </li>`;
-    const ligar = () => els("#menu li[data-rota]").forEach((li) => li.addEventListener("click", () => irPara(li.dataset.rota)));
-    el("#menu").innerHTML = `<li class="menu-secao">${SECAO_FINANCEIRO}</li>` + MENU_FINANCEIRO.map((m) => itemMenu(m, m.label, m.fin2)).join("");
-    ligar();
-    // Financeiro 2.0: só se o SERVIDOR confirmar o feature flag desta empresa (falha = menu atual intacto). Ligado → seis módulos.
-    http.get("/api/v1/gestao-financeira/status").then((r) => {
-      if (r?.data?.financeiro2 !== true) return;
-      const porId = new Map(MENU_FINANCEIRO.map((m) => [m.id, m]));
-      el("#menu").innerHTML = MODULOS_FINANCEIRO.map((g) => `<li class="menu-secao">${g.rotulo}</li>` + g.itens.map((id) => porId.get(id)).filter(Boolean).map((m) => itemMenu(m, ROTULOS_AGRUPADOS[m.id] ?? m.label)).join("")).join("");
-      ligar();
-      if (state.rota === MENU_FINANCEIRO[0].id) irPara("fin-painel");   // entrada do setor: abre o painel 2.0
-      else els("#menu li[data-rota]").forEach((li) => li.classList.toggle("ativo", li.dataset.rota === state.rota));
-    }).catch(() => {});
+        <span class="m-label">${m.label}</span>
+      </li>`).join("")).join("");
+    els("#menu li[data-rota]").forEach((li) => {
+      li.addEventListener("click", () => irPara(li.dataset.rota));
+      li.classList.toggle("ativo", li.dataset.rota === state.rota);
+    });
     // Sem Agente Crescer, atualização de CMV nem alertas operacionais no setor financeiro.
     for (const id of ["#btn-agente", "#btn-refresh", "#btn-notif"]) { const n = el(id); if (n) n.hidden = true; }
     return;
@@ -372,16 +366,18 @@ async function mostrarApp({ rotaInicial } = {}) {
   state.sessao.setorContexto = chaveDoContexto(state.sessao);
   atualizarAlternadorDeSetor();
 
+  // Setor FINANCEIRO: o carregamento neutro entra ANTES de o shell aparecer — nem o menu nem a tela anteriores (ou o
+  // legado) ficam visíveis enquanto o acesso é resolvido.
+  if (decisao.setor === SETOR.FINANCEIRO) mostrarCarregamentoFinanceiro();
+
   mostrarTela("app");
   atualizarCabecalho();
 
   // Setor FINANCEIRO: shell sem nenhuma carga operacional (tabelas, CMV, Agente). As telas vêm do roteador financeiro.
   if (decisao.setor === SETOR.FINANCEIRO) {
     limparComparacaoSalva();
-    montarMenu();
     iniciarRelogio();
-    irPara(rotaInicial && String(rotaInicial).startsWith("fin-") ? rotaInicial : primeiraRotaAcessivel());
-    return;
+    return entrarNoFinanceiro(g, rotaInicial);
   }
 
   // Perfil de EXIBIÇÃO (computador da TV): shell mínimo, direto no Checklist. Nada de tabelas comerciais, metas de
@@ -435,6 +431,40 @@ async function mostrarApp({ rotaInicial } = {}) {
   if (temModulo("inteligencia") && temModulo("agente_ia")) montarPainelGlobal();
   irPara(rotaInicial ?? primeiraRotaAcessivel());
   return carregar();
+}
+
+// ---------- setor Financeiro: resolução do acesso ANTES de montar a interface ----------
+/** Estado `loading`: menu vazio + indicador neutro. Nada do Financeiro legado nem do 2.0 é montado aqui. */
+function mostrarCarregamentoFinanceiro() {
+  state.financeiroEstado = ESTADO_FINANCEIRO.LOADING;
+  state.rota = null;
+  montarMenu();
+  el("#page-title").textContent = "Dashboard Financeiro";
+  el("#view").innerHTML = CARREGAMENTO_NEUTRO;
+}
+
+/**
+ * Consulta o status UMA vez e só então monta a interface certa: 2.0 (flag ligado), legado (flag desligado),
+ * recusa (sai do setor) ou erro (com nova tentativa — falha de rede NUNCA vira "flag desligado").
+ */
+async function entrarNoFinanceiro(g, rotaInicial) {
+  mostrarCarregamentoFinanceiro();
+  const acesso = await resolverAcessoFinanceiro(http);
+  if (contextoMudou(g) || state.sessao.setor !== SETOR.FINANCEIRO) return; // trocou de unidade/empresa/setor no meio
+  state.financeiroEstado = acesso.estado;
+  if (acesso.estado === ESTADO_FINANCEIRO.NEGADO) {
+    el("#view").innerHTML = `<div class="fin-estado fin-estado--vazio"><h3>Acesso financeiro indisponível</h3><p>Seu acesso ao Dashboard Financeiro não está mais disponível.</p></div>`;
+    document.dispatchEvent(new CustomEvent("app:setor-perdido"));
+    return;
+  }
+  if (acesso.estado === ESTADO_FINANCEIRO.ERRO) {
+    el("#view").innerHTML = `<div class="fin-estado fin-estado--vazio" role="alert"><h3>Não foi possível abrir o Dashboard Financeiro agora</h3><p>Não conseguimos confirmar seu acesso. Verifique a conexão e tente novamente.</p><p><button type="button" class="btn btn-primary" id="fin-tentar-novamente">Tentar novamente</button></p></div>`;
+    el("#fin-tentar-novamente")?.addEventListener("click", () => { if (!contextoMudou(g)) entrarNoFinanceiro(g, rotaInicial); }, { once: true });
+    return;
+  }
+  guardarStatusPreResolvido(acesso.status, chaveDoContexto(state.sessao)); // a 1ª página reaproveita: sem 2ª consulta igual
+  montarMenu();
+  irPara(rotaDeEntrada(acesso.estado, rotaInicial && String(rotaInicial).startsWith("fin-") ? rotaInicial : null));
 }
 
 // ---------- setor: Financeiro × Operacional ----------
