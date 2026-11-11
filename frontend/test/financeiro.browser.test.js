@@ -81,7 +81,7 @@ before(async () => {
     perms.includes(acao) ? next() : next(Object.assign(new Error("Permissão financeira insuficiente."), { statusCode: 403 }));
   };
   app.get("/api/config", (_req, res) => res.json({ supabaseUrl: "http://127.0.0.1:1", supabaseAnonKey: "teste-local" }));
-  app.use("/api/v1/gestao-financeira", criarDominioRouter({ autorizar: gate, deps: { repo, db: undefined } }));
+  app.use("/api/v1/gestao-financeira", criarDominioRouter({ autorizar: gate, deps: { repo, db: undefined }, financeiro2: () => false }));   // este teste cobre as telas de caixa; o 2.0 (contas a pagar) tem as suas suítes
   app.use((err, _req, res, _next) => res.status(err.statusCode || 500).json({ error: err.message, details: err.details }));
   app.use((req, res) => {
     const url = new URL(req.url, "http://x");

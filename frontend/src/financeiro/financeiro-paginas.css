@@ -688,3 +688,12 @@ button.dre-chip { cursor: pointer; }
 .fin-sec-ref > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 650; font-size: 14px; color: var(--fin-texto-2); }
 .fin-sec-ref[open] > summary { color: var(--texto); }
 .fin-sec-ref > .fin-card { margin-bottom: 12px; }
+
+/* Importar contas a pagar (fin-icp) */
+.fin-icp { width: min(880px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; border-radius: var(--raio-lg); }
+.fin-icp .fin-form { padding: 20px 22px; display: grid; gap: 12px; min-width: 0; }
+.fin-icp h4 { margin: 6px 0 0; font-size: 14px; }
+.fin-icp-map { width: 100%; }
+.fin-icp-map select { width: 100%; min-height: 40px; font-size: 14px; border-radius: var(--raio-sm); }
+.fin-icp .fin-form-acoes { position: sticky; bottom: 0; background: var(--card); padding-top: 10px; }
+@media (max-width: 640px) { .fin-icp .fin-form { padding: 16px; } .fin-icp-map thead { display: none; } .fin-icp-map tr { display: grid; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--linha); } .fin-icp-map td { padding: 0; } .fin-icp-map td.fin-num { text-align: left; } }
