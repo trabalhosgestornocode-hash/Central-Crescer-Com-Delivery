@@ -181,3 +181,25 @@ export function cabecalho(d, pd) {
     metodologia: metod ? { aprovada: false, rotulo: "Aguardando aprovação", texto: metod.descricao } : { aprovada: true, rotulo: "Aprovada", texto: "A metodologia gerencial está aprovada." },
   };
 }
+
+/**
+ * Pares 1:1 que podem ser vinculados EM LOTE (botão "Vincular todos"): só correspondência única (uma saída, uma entrada de mesmo valor),
+ * com a rota de vínculo informada pelo servidor, e nenhuma perna repetida entre os pares (se uma perna aparece em mais de um par, ela
+ * sai do lote e fica para decisão individual). Ambíguos e 1:N nunca entram. A pessoa vê a lista e confirma antes de qualquer gravação.
+ * Devolve { pares: [{ indice, saida, entrada, valorCentavos }], totalCentavos, ficaramFora }.
+ */
+export function paresEmLote(linhas) {
+  const uso = new Map();
+  const conta = (id) => uso.set(id, (uso.get(id) ?? 0) + 1);
+  const cand = [];
+  (linhas ?? []).forEach((l, indice) => {
+    if (l?.status !== "um_para_um" || !l.vincular?.caminho || !l.vincular?.corpo?.saidaId || !l.vincular?.corpo?.entradaId) return;
+    const c = l.contrapartidas?.[0];
+    if (!c || (l.contrapartidas?.length ?? 0) !== 1 || c.valorCentavos !== l.saida?.valorCentavos) return;
+    conta(l.vincular.corpo.saidaId); conta(l.vincular.corpo.entradaId);
+    cand.push({ indice, saida: l.saida, entrada: c, valorCentavos: l.saida.valorCentavos, ids: [l.vincular.corpo.saidaId, l.vincular.corpo.entradaId] });
+  });
+  const pares = cand.filter((p) => p.ids.every((id) => uso.get(id) === 1)).map(({ ids, ...p }) => p);
+  const emUm = (linhas ?? []).filter((l) => l?.status === "um_para_um").length;
+  return { pares, totalCentavos: pares.reduce((a, p) => a + p.valorCentavos, 0), ficaramFora: emUm - pares.length };
+}

@@ -202,6 +202,15 @@ describe("Central de Conferências no navegador (estrutura de setembro/2026)", {
       await p.click('[data-cf2-revisar="transferencias"]');
       assert.deepEqual((await textos(p, ".cf2-secao h6")).filter((t) => /Correspondência|várias/.test(t)), ["Correspondência 1:1 (5)", "Uma saída × várias entradas (6)"]);
       assert.equal(await p.locator("[data-cf2-vincular]").count(), 5); assert.equal(await p.locator("[data-cf2-multipla]").count(), 6);
+      // vínculo em lote: só os 1:1; a lista aparece antes e cancelar não grava nada
+      assert.match(await p.locator("[data-cf2-lote]").innerText(), /Vincular todos os 5 pares 1:1/);
+      await p.click("[data-cf2-lote]");
+      const dlgLote = p.locator("dialog.fin-dialogo");
+      assert.equal(await dlgLote.locator("li").count(), 5);
+      assert.match(await dlgLote.innerText(), /Confira no extrato das duas contas/);
+      const antesLote = api.escritas.length;
+      await dlgLote.locator("[data-cancelar]").click();
+      assert.equal(api.escritas.length, antesLote, "cancelar o lote não grava nada");
       await p.click("[data-cf2-voltar]");
       // lançamentos sem classificação: tabela compacta com Revisar por linha
       await p.click('[data-cf2-revisar="classificacao_pendente"]');
@@ -209,6 +218,20 @@ describe("Central de Conferências no navegador (estrutura de setembro/2026)", {
       await p.click('[data-cf2-lanc="0"]');
       assert.equal(await p.locator("#cf2-lanc-0").isVisible(), true);
       assert.match(await p.locator("#cf2-lanc-0").innerText(), /Evidência necessária/);
+    } finally { await fechar(); }
+  });
+
+  test("vínculo em lote: confirmar vincula os 5 pares 1:1 (uma chamada por par) e os 1:N não são tocados", async () => {
+    zerar();
+    const { p, fechar } = await abrir();
+    try {
+      await esperarLista(p);
+      await p.click('[data-cf2-revisar="transferencias"]');
+      await p.click("[data-cf2-lote]");
+      await p.locator("dialog.fin-dialogo button[type=submit]").click();
+      await p.waitForFunction(() => !document.querySelector("dialog.fin-dialogo"));
+      assert.deepEqual(api.escritas.map((e) => [e.metodo, e.rota]), Array(5).fill(["POST", "/transferencias/vincular"]));
+      assert.equal(new Set(api.escritas.map((e) => e.corpo.saidaId)).size, 5);
     } finally { await fechar(); }
   });
 

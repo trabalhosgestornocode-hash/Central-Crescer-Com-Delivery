@@ -330,12 +330,13 @@ export async function abrirCentral(ctx) {
       const um = p.linhas.filter((l) => l.status === "um_para_um"), varios = p.linhas.filter((l) => l.status === "um_para_varios"), amb = p.linhas.filter((l) => l.status === "ambiguo");
       const c = (x) => `${esc(dataBr(x.data))} · ${esc(x.conta)} · <strong>${R(x.valorCentavos)}</strong>`;
       const idx = (l) => p.linhas.indexOf(l);
+      const lote = M.paresEmLote(p.linhas);
       const det = (l, corpo) => `<li><details class="cf2-par"><summary>${c(l.saida)} <small>${esc(l.saida.descricao ?? "")}</small></summary><div class="cf2-par-corpo">${corpo}</div></details></li>`;
       return {
         aconteceu: par(`Foram encontradas ${p.linhas.length} saídas que parecem transferências entre contas da própria empresa, com entradas correspondentes propostas.`),
         pendente: par("Nenhum vínculo é feito sozinho: cada par precisa ser conferido no extrato das duas contas."),
         conferir: par(`${um.length} com correspondência 1:1 (uma saída, uma entrada de mesmo valor) · ${varios.length} com uma saída e várias entradas${amb.length ? ` · ${amb.length} ambíguas` : ""}.`),
-        relacionados: `<h6>Correspondência 1:1 (${um.length})</h6>${um.length ? `<ul class="cf2-pares">${um.map((l) => det(l, `<p><strong>Saída:</strong> ${c(l.saida)}</p><p><strong>Entrada proposta:</strong> ${c(l.contrapartidas[0])}</p>
+        relacionados: `<h6>Correspondência 1:1 (${um.length})</h6>${lote.pares.length >= 2 ? `<p><button type="button" class="btn btn-primary btn-sm" data-cf2-lote${semPerm(P.CONCILIAR)}>Vincular todos os ${lote.pares.length} pares 1:1</button> <span class="fin-sub">Você vê a lista e confirma antes. ${lote.ficaramFora ? `${lote.ficaramFora} par(es) com perna repetida ficam para decisão individual.` : ""}</span></p>` : ""}${um.length ? `<ul class="cf2-pares">${um.map((l) => det(l, `<p><strong>Saída:</strong> ${c(l.saida)}</p><p><strong>Entrada proposta:</strong> ${c(l.contrapartidas[0])}</p>
               <button type="button" class="btn btn-primary btn-sm" data-cf2-vincular="${idx(l)}"${semPerm(P.CONCILIAR)}>Vincular este par</button>`)).join("")}</ul>` : '<p class="cf2-vazio">Nenhuma.</p>'}
           <h6>Uma saída × várias entradas (${varios.length})</h6>${varios.length ? `<ul class="cf2-pares">${varios.map((l) => { const soma = l.contrapartidas.reduce((a, x) => a + x.valorCentavos, 0); return det(l, `<p><strong>Saída:</strong> ${c(l.saida)}</p>
               <p><strong>Entradas propostas:</strong></p><ul class="cf2-ul">${l.contrapartidas.map((x) => `<li>${c(x)}</li>`).join("")}</ul><p>Soma das entradas ${R(soma)} ${soma === l.saida.valorCentavos ? "= saída" : "≠ saída — não fecha"}</p>
@@ -499,6 +500,24 @@ export async function abrirCentral(ctx) {
     if ((b = t("[data-cf2-vincular]")) && x) {
       const l = x.linhas[Number(b.dataset.cf2Vincular)]; b.disabled = true;
       try { await fin.post(l.vincular.caminho, l.vincular.corpo); await depoisDeAcao("Transferência vinculada."); } catch (err) { b.disabled = false; saida(err?.message ?? "Não foi possível vincular."); }
+      return;
+    }
+    if (t("[data-cf2-lote]") && x) {
+      const lote = M.paresEmLote(x.linhas);
+      if (!lote.pares.length) return;
+      const c = (y) => `${esc(dataBr(y.data))} · ${esc(y.conta)}`;
+      dialogo({ titulo: `Vincular ${lote.pares.length} pares de transferência`, enviar: `Vincular ${lote.pares.length} pares`,
+        corpo: `<p class="fin-sub">Cada par é uma saída e uma entrada de mesmo valor, em contas diferentes. Confira no extrato das duas contas. Os lançamentos continuam como estão; só passam a contar como transferência entre contas. Total: <strong>${R(lote.totalCentavos)}</strong>.</p>
+          <ul class="fin-lista" style="max-height:40vh;overflow:auto">${lote.pares.map((q) => `<li>${R(q.valorCentavos)} · ${c(q.saida)} → ${c(q.entrada)}</li>`).join("")}</ul>`,
+        aoEnviar: async () => {
+          let ok = 0; const falhas = [];
+          for (const q of lote.pares) {
+            const l = x.linhas[q.indice];
+            try { await fin.post(l.vincular.caminho, l.vincular.corpo); ok += 1; } catch (err) { falhas.push(err?.message ?? "falha"); }
+          }
+          if (!ok) throw new Error(`Nenhum par foi vinculado: ${falhas[0] ?? "erro desconhecido"}`);
+          await depoisDeAcao(falhas.length ? `${ok} par(es) vinculado(s); ${falhas.length} não puderam ser vinculados (${falhas[0]}). Eles continuam na lista.` : `${ok} pares vinculados.`);
+        } });
       return;
     }
     if ((b = t("[data-cf2-multipla]")) && x) {
