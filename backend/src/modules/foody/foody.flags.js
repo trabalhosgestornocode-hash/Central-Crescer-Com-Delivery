@@ -1,6 +1,6 @@
 // Feature flags da camada central Foody. Fail-closed: qualquer valor que não seja exatamente "true" = desligado;
 // allowlist vazia = nenhuma unidade.
-import { FLAG_HABILITADO, FLAG_AGENDADOR, FLAG_UNIDADES, FLAG_COMPARTILHAMENTO, FLAG_ADMINISTRACAO, FLAG_ENTREGADOR_NOME } from "./foody.constants.js";
+import { FLAG_HABILITADO, FLAG_AGENDADOR, FLAG_UNIDADES, FLAG_COMPARTILHAMENTO, FLAG_ADMINISTRACAO, FLAG_ENTREGADOR_NOME, FLAG_DISTANCIA } from "./foody.constants.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ligada = (v) => String(v ?? "").trim().toLowerCase() === "true";
@@ -41,6 +41,11 @@ export function compartilhamentoPermitido(env = process.env) {
 /** Guardar o nome do entregador (exige a migration 160). Fail-closed. */
 export function entregadorNomePermitido(env = process.env) {
   return ligada(env[FLAG_ENTREGADOR_NOME]);
+}
+
+/** Guardar a distância em raio calculada das coordenadas (exige a migration 161). Fail-closed. */
+export function distanciaPermitida(env = process.env) {
+  return ligada(env[FLAG_DISTANCIA]);
 }
 
 export function administracaoPermitida(env = process.env) {

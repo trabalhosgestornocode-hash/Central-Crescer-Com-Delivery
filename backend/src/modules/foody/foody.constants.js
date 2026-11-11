@@ -89,5 +89,11 @@ export const FLAG_ADMINISTRACAO = "FOODY_CENTRAL_ADMIN_ENABLED";
  * conferir e pagar os entregadores. O nome nunca vai para logs, respostas de sincronização ou prévia.
  */
 export const FLAG_ENTREGADOR_NOME = "FOODY_CENTRAL_ENTREGADOR_NOME_ENABLED";
+/**
+ * Guardar a DISTÂNCIA EM RAIO (km, linha reta ponto de coleta → ponto de entrega), calculada na coleta a partir das
+ * coordenadas que a API envia (`collectionPoint.coordinates` e `deliveryPoint.coordinates`). Exige a migration 161.
+ * Só o número (km, 2 casas) é guardado — as coordenadas do cliente NUNCA. Desligada (padrão) = exatamente como antes.
+ */
+export const FLAG_DISTANCIA = "FOODY_CENTRAL_DISTANCIA_ENABLED";
 /** Segredo (≥ 32 caracteres) do qual derivam a chave do token e a chave do HMAC do entregador. Nunca vai ao banco. */
 export const ENV_SEGREDO = "FOODY_CENTRAL_SECRET";
