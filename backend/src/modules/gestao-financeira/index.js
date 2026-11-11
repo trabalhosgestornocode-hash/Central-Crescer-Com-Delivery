@@ -8,7 +8,7 @@ import { financeiro2Habilitado } from "../../shared/financeiro2.flag.js";
 export const gestaoFinanceiraRouter = Router();
 
 gestaoFinanceiraRouter.get("/status", autorizarAcaoFinanceira(PERM_FIN.VER), (req, res) => {
-  // financeiro2: feature flag (FINANCEIRO_2_ORGANIZACOES) — o frontend só mostra as telas novas quando o servidor confirma.
+  // financeiro2: padrão para toda organização (chave de emergência FINANCEIRO_2_DESLIGADO_ORGANIZACOES) — o frontend só mostra as telas novas quando o servidor confirma.
   res.json({ data: { habilitado: true, nivel: req.financeiro.nivel, permissoes: req.financeiro.permissoes, financeiro2: financeiro2Habilitado(req.financeiro.organizacaoId) } });
 });
 
