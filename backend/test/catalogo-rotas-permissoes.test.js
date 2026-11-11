@@ -52,13 +52,12 @@ test("editar rendimento (PUT /produtos/:id) exige produtos.editar: consulta e fi
   for (const papel of ["viewer", "finance"]) assert.equal(await chamar(papel, TODOS, "PUT", `/produtos/${ID}`, { rendimento: 2 }), 403);
   for (const papel of ["operations", "organization_admin"]) assert.notEqual(await chamar(papel, TODOS, "PUT", `/produtos/${ID}`, { rendimento: 2 }), 403);
 });
-test("leituras novas liberadas à consulta (catálogo, pendências, condições, histórico) e ao CMV teórico (dashboard_executivo.ver)", async () => {
-  for (const c of ["/produtos/catalogo/fichas", "/produtos/catalogo/pendencias", "/cmv/condicoes-comerciais", "/cmv/condicoes-comerciais/historico", "/dashboard-executivo/cmv-teorico?de=2026-11-01&ate=2026-11-30"]) {
+test("leituras novas liberadas à consulta (catálogo, pendências, condições, histórico)", async () => {
+  for (const c of ["/produtos/catalogo/fichas", "/produtos/catalogo/pendencias", "/cmv/condicoes-comerciais", "/cmv/condicoes-comerciais/historico"]) {
     assert.notEqual(await chamar("viewer", TODOS, "GET", c), 403, `viewer deveria ler ${c}`);
   }
 });
 test("SEM o módulo contratado nada responde: Produtos/CMV e Dashboard iFood são gates da empresa (403)", async () => {
   for (const c of ["/produtos/catalogo/fichas", "/produtos/catalogo/pendencias", "/cmv/condicoes-comerciais"]) assert.equal(await chamar("organization_admin", [MODULOS.IFOOD_DASHBOARD], "GET", c), 403, c);
-  assert.equal(await chamar("organization_admin", [MODULOS.PRODUTOS_CMV], "GET", "/dashboard-executivo/cmv-teorico?de=2026-11-01&ate=2026-11-30"), 403);
   assert.equal(await chamar("organization_admin", [], "PUT", "/cmv/condicoes-comerciais", { canal: "ifood", comissao: 0.1 }), 403);
 });

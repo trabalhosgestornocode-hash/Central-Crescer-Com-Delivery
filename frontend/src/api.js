@@ -179,7 +179,6 @@ export const salvarCondicaoComercial = async (dados) => {
 export const obterHistoricoCondicoes = () => getJson(`/api/v1/cmv/condicoes-comerciais/historico`);
 
 // ---------- CMV teórico do iFood (itens efetivamente vendidos) ----------
-export const dashExecCmvTeorico = (f) => getJson(`/api/v1/dashboard-executivo/cmv-teorico${qsInsumos(f)}`);
 
 // ---------- Insumos ----------
 function qsInsumos(f = {}) {
