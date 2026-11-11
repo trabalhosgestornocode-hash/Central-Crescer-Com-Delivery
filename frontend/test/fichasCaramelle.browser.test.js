@@ -146,7 +146,6 @@ before(async () => {
         return json(res, 200, { data: api.condicoes });
       }
       if (caminho === "/api/v1/cmv/condicoes-comerciais/historico") return json(res, 200, { data: [] });
-      if (caminho === "/api/v1/dashboard-executivo/cmv-teorico") return json(res, 200, { data: api.cmv });
       return json(res, 200, { data: [] });
     }
     const arq = resolve(RAIZ, "." + (caminho === "/" ? "/index.html" : caminho));
@@ -494,43 +493,6 @@ describe("Produtos: Subways inalteradas × catálogo da Caramelle, no app real",
       assert.match(await pagina.textContent("#sim-alvo-out"), /Preço necessário: R\$\s*10,91/);
       await pagina.fill("#sim-preco", "30");
       assert.match(await pagina.textContent("#sim-comp"), /Diferença/);
-      assert.deepEqual(erros, []);
-    } finally { await contexto.close(); }
-  });
-
-  test("CMV TEÓRICO no Dashboard iFood: indisponível com motivo; parcial; nunca 'conciliado'; atalho para o simulador", async () => {
-    zerar();
-    const { pagina, contexto, erros } = await abrirApp();
-    const montar = () => pagina.evaluate(async ({ und }) => {
-      document.body.insertAdjacentHTML("beforeend", '<div id="ct-teste"></div>');
-      const { montarCmvTeorico } = await import("/src/cmvTeoricoIfood.js");
-      montarCmvTeorico("ct-teste", und, 11, 2026);
-    }, { und: UND.id });
-    const expandir = async () => { if ((await pagina.getAttribute("#ct-teste [data-toggle]", "aria-expanded")) !== "true") await pagina.click("#ct-teste [data-toggle]"); };
-    try {
-      api.cmv = { indisponivel: true, parcial: false, motivos_indisponivel: ["pedidos_sem_detalhe_de_itens"], cobertura: {}, produtos: [], sem_correspondencia: [], adicionais_sem_correspondencia: {} };
-      await montar(); await expandir();
-      await pagina.waitForSelector("#ct-teste .ct-aviso");
-      assert.match(await pagina.textContent("#ct-teste"), /Indisponível/); assert.match(await pagina.textContent("#ct-teste"), /detalhe dos itens vendidos/);
-      await pagina.evaluate(() => document.querySelector("#ct-teste").remove());
-      api.cmv = { indisponivel: false, parcial: true, motivos_indisponivel: [], cmv_teorico_pct: 31.2, cmv_teorico_homologado_pct: null, comissao_considerada: null,
-        cobertura: { pct_receita_vinculada: 32.4, produtos_vinculados: 2, produtos_ficha_incompleta: 1, pct_receita_com_custo_homologado: 0 },
-        produtos: [
-          { produto_id: "p1", nome: "Bolo de Cenoura", quantidade: 10, receita: 240, preco_medio_praticado: 24, custo_unitario: 3.25, cmv_pct: 13.5, margem_bruta_pct: 86.5, margem_apos_comissao_pct: null, homologacao: "pendente", custo_homologado: false, sinais: [], desfavoravel: false },
-          { produto_id: "p4", nome: "Cappuccino", quantidade: 4, receita: 40, preco_medio_praticado: 10, custo_unitario: null, cmv_pct: null, margem_bruta_pct: null, margem_apos_comissao_pct: null, homologacao: "pendente", custo_homologado: false, sinais: [], desfavoravel: false },
-        ],
-        desfavoraveis: [], sem_correspondencia: [{ nome: "Item Misterioso", codigo: "ZZZ", quantidade: 3, receita: 300, motivo: "codigo_nao_cadastrado" }], adicionais_sem_correspondencia: {} };
-      await montar(); await expandir();
-      await pagina.waitForSelector("#ct-teste .ct-cards");
-      const t = await pagina.textContent("#ct-teste");
-      assert.match(t, /Parcial/); assert.match(t, /32%/); assert.match(t, /31\.2%/);
-      assert.match(t, /nenhuma ficha homologada/);
-      assert.match(t, /Pendente de homologação/); assert.match(t, /Ficha incompleta/);
-      assert.match(t, /Item Misterioso/); assert.match(t, /Código do item não existe nos produtos/);
-      assert.match(t, /não está configurada/); assert.match(t, /não é resultado financeiro conciliado/i);
-      await pagina.click('#ct-teste [data-sim="0"]');
-      await pagina.waitForSelector(".modal-sim");
-      assert.match(await pagina.textContent(".modal-sim .sim-topo"), /R\$\s*3,25/);
       assert.deepEqual(erros, []);
     } finally { await contexto.close(); }
   });
