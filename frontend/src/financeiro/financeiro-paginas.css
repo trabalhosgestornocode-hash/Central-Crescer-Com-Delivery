@@ -575,3 +575,116 @@ button.dre-chip { cursor: pointer; }
   .cf2-item { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "texto valor" "meta meta" "botao botao"; }
   .cf2-revisar { justify-self: stretch; }
 }
+
+/* ===================== Lançamento rápido (fin-lr) — padrão Crescer com Delivery =====================
+   Tokens do sistema (--vermelho, --raio*, --sombra*, --fin-*), ícones SVG do próprio sistema e vermelho em dose baixa:
+   o destaque fica no botão principal e no foco; as cores de significado (saída, entrada, transferência) ficam só no ícone. */
+.fin-lr { width: min(540px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; border-radius: var(--raio-lg); animation: fin-lr-in .16s ease-out; }
+.fin-lr::backdrop { background: rgba(20, 10, 12, .46); backdrop-filter: blur(2px); }
+@keyframes fin-lr-in { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .fin-lr { animation: none; } }
+.fin-lr-corpo { display: grid; gap: 14px; padding: 22px 24px 0; min-width: 0; }
+.fin-lr-corpo > *, .fin-lr .fin-campo { min-width: 0; max-width: 100%; }
+.fin-lr .fin-campo input, .fin-lr .fin-campo select { width: 100%; box-sizing: border-box; min-height: 44px; font-size: 16px; border-radius: var(--raio-sm); }   /* 16px: o celular não dá zoom ao focar */
+
+/* cabeçalho */
+.fin-lr-cab h3 { margin: 0; font-size: 20px; font-weight: 750; letter-spacing: -.01em; color: var(--texto); }
+.fin-lr-sub { margin: 4px 0 0; font-size: 13.5px; color: var(--fin-texto-2); }
+.fin-lr-cab--form { display: flex; align-items: center; gap: 10px; }
+.fin-lr-cab--form h3 { font-size: 18px; }
+.fin-lr-volta { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; margin-left: -8px; border: 0; border-radius: var(--raio-sm); background: transparent; color: var(--fin-texto-2); cursor: pointer; }
+.fin-lr-volta:hover { background: var(--muted-bg); color: var(--texto); }
+
+/* ícone em quadrado suave (mesmo padrão dos cartões de setor) — a cor indica o significado */
+.fin-lr-ic { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; flex: none; }
+.fin-lr-ic--p { width: 32px; height: 32px; border-radius: 9px; }
+.fin-lr-ic--bad { background: var(--vermelho-tint, #fdf1f1); color: var(--vermelho, #D81324); }
+.fin-lr-ic--ok { background: var(--ok-bg); color: var(--ok); }
+.fin-lr-ic--info { background: var(--info-bg); color: var(--info); }
+
+/* passo 1: três cartões grandes */
+.fin-lr-acoes { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.fin-lr-acao { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 72px; padding: 14px 16px; text-align: left; font: inherit; color: var(--texto); cursor: pointer;
+  background: var(--card); border: 1.5px solid var(--linha); border-radius: var(--raio); box-shadow: var(--sombra-sm); transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
+.fin-lr-acao:hover:not(:disabled), .fin-lr-acao:focus-visible { transform: translateY(-2px); border-color: var(--vermelho, #D81324); box-shadow: var(--sombra-md); outline: none; }
+.fin-lr-acao:focus-visible { box-shadow: var(--fin-foco), var(--sombra-md); }
+.fin-lr-acao:disabled { opacity: .55; cursor: not-allowed; }
+.fin-lr-tx { display: grid; gap: 2px; min-width: 0; flex: 1; } .fin-lr-tx strong { font-size: 16px; font-weight: 700; } .fin-lr-tx small { font-size: 13px; color: var(--fin-texto-2); line-height: 1.35; }
+.fin-lr-seta { color: var(--fin-texto-3); flex: none; display: inline-flex; transition: transform .15s ease, color .15s ease; }
+.fin-lr-acao:hover:not(:disabled) .fin-lr-seta, .fin-lr-acao:focus-visible .fin-lr-seta { transform: translateX(3px); color: var(--vermelho, #D81324); }
+.fin-lr-aviso { margin: 0; padding: 10px 12px; border-radius: var(--raio-sm); background: var(--muted-bg); color: var(--fin-texto-2); font-size: 13px; }
+
+/* seletor segmentado: Já paguei | Vou pagar depois (rádio real, invisível por cima do rótulo: teclado e leitor de tela funcionam) */
+.fin-lr-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; background: var(--muted-bg); border-radius: var(--raio); }
+.fin-lr-seg label { position: relative; display: block; margin: 0; }
+.fin-lr-seg input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.fin-lr-seg label > span { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 6px 10px; border-radius: calc(var(--raio) - 4px); font-size: 14px; font-weight: 650; color: var(--fin-texto-2); text-align: center; transition: background .15s ease, color .15s ease, box-shadow .15s ease; }
+.fin-lr-seg label:has(input:checked) > span { background: var(--card); color: var(--texto); box-shadow: var(--sombra); }
+.fin-lr-seg label:has(input:focus-visible) > span { box-shadow: var(--fin-foco); }
+
+/* data: chips + campo */
+.fin-lr-datas { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fin-lr-datas .btn { min-height: 44px; padding: 0 14px; border-radius: 22px; }
+.fin-lr-datas .btn[aria-pressed=true] { background: var(--vermelho-tint, #fdf1f1); border-color: var(--vermelho, #D81324); color: var(--vermelho, #D81324); font-weight: 700; }
+.fin-lr-datas input[type=date] { flex: 1 1 130px; min-width: 0; }
+
+/* mensagens */
+.fin-lr-erro { color: var(--bad); font-weight: 550; } .fin-lr-erro:empty { display: none; }
+.fin-lr [aria-invalid=true] { border-color: var(--bad); }
+.fin-lr [aria-invalid=true]:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 22%, transparent); }
+.fin-lr-sug { display: flex; align-items: flex-start; gap: 6px; color: var(--fin-texto-2); line-height: 1.4; } .fin-lr-sug:empty { display: none; } .fin-lr-sug svg { flex: none; margin-top: 2px; color: var(--vermelho, #D81324); }
+.fin-lr-mais { border-top: 1px solid var(--linha); padding-top: 10px; display: grid; gap: 10px; }
+.fin-lr-mais summary { color: var(--fin-texto-2); font-weight: 600; }
+
+/* resumo: "Vai registrar…" em cartão */
+.fin-lr-resumo { display: flex; gap: 10px; align-items: flex-start; margin: 0; padding: 12px 14px; border-radius: var(--raio); background: var(--muted-bg); font-size: 13.5px; line-height: 1.5; color: var(--texto); }
+.fin-lr-resumo:empty { display: none; }
+.fin-lr-resumo--pronto { background: var(--ok-bg); box-shadow: inset 3px 0 0 var(--ok); }
+.fin-lr-resumo-ic { color: var(--ok); display: inline-flex; margin-top: 1px; flex: none; }
+.fin-lr-resumo small { color: var(--fin-texto-2); font-size: 12.5px; }
+.fin-lr-faltam { color: var(--fin-texto-2); }
+
+/* rodapé fixo: ação principal à direita, bem visível */
+.fin-lr-rodape { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 0 -24px; padding: 14px 24px 18px; background: var(--card); border-top: 1px solid var(--linha); }
+.fin-lr-rodape .btn-primary { min-width: 140px; min-height: 44px; }
+.fin-lr-rodape .btn-ghost { min-height: 44px; }
+
+[data-theme="dark"] .fin-lr-resumo--pronto { background: color-mix(in srgb, var(--ok) 14%, var(--card)); }
+[data-theme="dark"] .fin-lr-datas .btn[aria-pressed=true] { background: color-mix(in srgb, var(--vermelho, #D81324) 18%, var(--card)); }
+
+@media (max-width: 520px) {
+  .fin-lr { width: 100vw; max-width: 100vw; margin: auto 0 0; border-radius: var(--raio-lg) var(--raio-lg) 0 0; max-height: 94dvh; }   /* no celular abre como folha, de baixo para cima */
+  .fin-lr-corpo { padding: 18px 16px 0; }
+  .fin-lr-rodape { margin: 0 -16px; padding: 12px 16px calc(14px + env(safe-area-inset-bottom)); flex-direction: column; align-items: stretch; }
+  .fin-lr-rodape .btn { width: 100%; }
+  .fin-lr-rodape [data-salvar="fechar"] { order: -2; } .fin-lr-rodape [data-salvar="outro"] { order: -1; }
+}
+.fin-lr-corpo > .fin-lr-rodape { max-width: none; }   /* a linha e o fundo do rodapé vão de ponta a ponta (margem negativa) */
+[data-theme="dark"] .fin-lr-ic--bad { background: color-mix(in srgb, #ff5b64 18%, var(--card)); color: #ff8a91; }
+[data-theme="dark"] .fin-lr-ic--ok { background: color-mix(in srgb, var(--ok) 20%, var(--card)); color: #5fd89b; }
+[data-theme="dark"] .fin-lr-ic--info { background: color-mix(in srgb, var(--info) 22%, var(--card)); color: #8fbdf2; }
+[data-theme="dark"] .fin-lr-datas .btn[aria-pressed=true] { color: #ff9aa0; border-color: #ff7a82; }
+[data-theme="dark"] .fin-lr-sug svg { color: #ff8a91; }
+
+/* ===================== Ajuda "Como usar esta tela" (fin-ajuda) ===================== */
+.fin-ajuda { margin: 10px 0 4px; border: 1px solid var(--linha); border-radius: var(--raio); background: var(--card); box-shadow: var(--sombra-sm); }
+.fin-ajuda > summary { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; cursor: pointer; list-style: none; font-size: 14px; font-weight: 650; color: var(--texto); border-radius: var(--raio); }
+.fin-ajuda > summary::-webkit-details-marker { display: none; }
+.fin-ajuda > summary::after { content: "Recolher"; margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--fin-texto-2); }
+.fin-ajuda:not([open]) > summary::after { content: "Mostrar"; }
+.fin-ajuda > summary:focus-visible { outline: none; box-shadow: var(--fin-foco); }
+.fin-ajuda-ic { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; background: var(--info-bg); color: var(--info); flex: none; }
+.fin-ajuda-corpo { display: grid; gap: 10px; padding: 0 16px 16px; font-size: 14px; line-height: 1.5; color: var(--texto); }
+.fin-ajuda-corpo p, .fin-ajuda-corpo ol, .fin-ajuda-corpo ul, .fin-ajuda-corpo dl { margin: 0; }
+.fin-ajuda-quer { color: var(--fin-texto-2); max-width: 72ch; }
+.fin-ajuda-passos { padding-left: 22px; display: grid; gap: 4px; max-width: 76ch; }
+.fin-ajuda-dicas { padding: 10px 12px 10px 28px; background: var(--muted-bg); border-radius: var(--raio-sm); color: var(--fin-texto-2); font-size: 13.5px; display: grid; gap: 4px; max-width: 76ch; }
+.fin-ajuda-termos { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; font-size: 13px; }
+.fin-ajuda-termos dt { font-weight: 700; } .fin-ajuda-termos dd { margin: 2px 0 0; color: var(--fin-texto-2); }
+@media print { .fin-ajuda { display: none; } }
+
+/* Seção recolhida "Consulta e ajustes": referência que não se usa todo dia */
+.fin-sec-ref { margin-top: 14px; border: 1px dashed var(--linha); border-radius: var(--raio); padding: 0 12px; }
+.fin-sec-ref > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 650; font-size: 14px; color: var(--fin-texto-2); }
+.fin-sec-ref[open] > summary { color: var(--texto); }
+.fin-sec-ref > .fin-card { margin-bottom: 12px; }

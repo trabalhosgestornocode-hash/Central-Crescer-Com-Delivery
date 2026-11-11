@@ -2,7 +2,7 @@
 import { fin } from "./api.js";
 import { moeda, pct, periodoDoMes, rotuloMes, descreverSaldo, variacaoTexto, mesAnterior, nivelAlerta } from "./modelo.js";
 import { graficoEntradasSaidas, graficoBarrasHorizontais } from "./graficos.js";
-import { garantirCss, cabecalho, seletorMes, kpi, tabela, badge, carregarEm, lerMes, gravarMes, ativarTooltips, estado, esc } from "./ui.js";
+import { garantirCss, vazioComPasso, cabecalho, seletorMes, kpi, tabela, badge, carregarEm, lerMes, gravarMes, ativarTooltips, estado, esc } from "./ui.js";
 
 export async function render(container) {
   garantirCss();
@@ -18,7 +18,7 @@ export async function render(container) {
   let mes = lerMes();
 
   const pintarTopo = () => {
-    topo.innerHTML = cabecalho({ titulo: "Visão Geral", sub: "Regime de caixa: recebimentos líquidos e pagamentos efetivos. Não é uma DRE de competência.", extra: seletorMes(mes) });
+    topo.innerHTML = cabecalho({ ajuda: "visao-geral", titulo: "Visão Geral", sub: "Regime de caixa: recebimentos líquidos e pagamentos efetivos. Não é uma DRE de competência.", extra: seletorMes(mes) });
     topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); atualizar(); } });
   };
 
@@ -39,7 +39,8 @@ export async function render(container) {
 
 function pintar(alvo, mes, g, ind, cats, anterior) {
   if (g.vazio) {
-    alvo.innerHTML = estado.vazio(`Sem lançamentos em ${rotuloMes(mes)}`, "Registre lançamentos no Fluxo de Caixa ou importe o livro-caixa. Nenhum número é exibido sem dados reais.");
+    alvo.innerHTML = vazioComPasso(`Sem lançamentos em ${rotuloMes(mes)}`, "Registre lançamentos no Fluxo de Caixa ou importe o livro-caixa. Nenhum número é exibido sem dados reais.", { rotulo: "Ir para o Fluxo de Caixa", atributo: "data-ir-fluxo" });
+    alvo.querySelector("[data-ir-fluxo]")?.addEventListener("click", async () => { const { irPara } = await import("../router.js"); irPara("fin-fluxo-de-caixa"); });
     return;
   }
   const it = Object.fromEntries(ind.itens.map((i) => [i.id, i]));

@@ -31,7 +31,7 @@ export async function render(container, ctx) {
 
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
-    titulo: "Relatórios", sub: "Tabelas e exportações no regime de caixa, com os mesmos cálculos do dashboard. Cada arquivo traz período, filtros, situação dos dados, data de geração e código de verificação.",
+    ajuda: "relatorios", titulo: "Relatórios", sub: "Tabelas e exportações no regime de caixa, com os mesmos cálculos do dashboard. Cada arquivo traz período, filtros, situação dos dados, data de geração e código de verificação.",
     extra: `<span class="fin-badge fin-badge--info" title="Os relatórios cobrem apenas a unidade autorizada no contexto">Unidade: ${esc(nomeUnidade)}</span>`,
   });
   const corpo = raiz.querySelector("[data-corpo]");

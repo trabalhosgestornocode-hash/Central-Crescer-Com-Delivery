@@ -46,4 +46,4 @@ export const MODULOS_FINANCEIRO = Object.freeze([
   { id: "controle", rotulo: "Controle e Relatórios", itens: ["fin-periodos", "fin-importacao", "fin-relatorios", "fin-plano-de-contas", "fin-configuracoes", "fin-dre"] },
 ]);
 /** Rótulos no menu agrupado (a Visão Geral de caixa passa a se chamar Resumo de Caixa ao lado do painel 2.0). */
-export const ROTULOS_AGRUPADOS = Object.freeze({ "fin-visao-geral": "Resumo de Caixa", "fin-dre": "DRE de Caixa (avançado)" });
+export const ROTULOS_AGRUPADOS = Object.freeze({ "fin-visao-geral": "Resumo de Caixa", "fin-dre": "DRE de Caixa (avançado)", "fin-painel": "Painel do Mês" });

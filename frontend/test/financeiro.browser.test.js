@@ -136,6 +136,7 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
       const t = await p.locator("#view").innerText();
       assert.match(t, /Sem lançamentos em setembro\/2026/);
       assert.doesNotMatch(t, /R\$\s*\d/);
+      assert.equal(await p.locator("[data-ir-fluxo]").count(), 1, "o vazio diz qual é o próximo passo");
       await captura(p, "00-vazio");
     } finally { await fechar(); }
     assert.deepEqual(erros, []);
@@ -314,6 +315,48 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
     assert.deepEqual(pl.erros, []);
   });
 
+  test("ajuda \"Como usar esta tela\": aberta na 1ª visita, lembra que foi recolhida, cabe no celular e no tema escuro", async () => {
+    for (const [pagina, viewport, escuro] of [["fluxo-de-caixa", undefined, false], ["visao-geral", { width: 375, height: 812 }, false], ["receitas", undefined, true]]) {
+      const { p, erros, fechar } = await abrir(pagina, { ...(viewport ? { viewport } : {}), escuro });
+      try {
+        const bloco = p.locator("details.fin-ajuda");
+        await bloco.waitFor();
+        assert.equal(await bloco.evaluate((d) => d.open), true, `${pagina}: abre na primeira visita`);
+        assert.match(await bloco.innerText(), /Como usar esta tela/);
+        assert.ok((await bloco.locator("ol li").count()) >= 3, `${pagina}: passos`);
+        await semEstouro(p, `ajuda ${pagina}`);
+        await captura(p, `ajuda-${pagina}${viewport ? "-celular" : ""}${escuro ? "-escuro" : ""}`);
+        await bloco.locator("summary").click();   // recolhe
+        assert.equal(await bloco.evaluate((d) => d.open), false);
+        await p.evaluate(async (nome) => { const m = await import(`/src/financeiro/${nome}.js`); document.querySelector("#view").innerHTML = ""; await m.render(document.querySelector("#view"), { permissoes: [], nivel: "gestor" }); }, pagina);
+        await p.locator("details.fin-ajuda").waitFor();
+        assert.equal(await p.locator("details.fin-ajuda").evaluate((d) => d.open), false, `${pagina}: continua recolhida depois de reabrir a tela`);
+        await p.locator("details.fin-ajuda summary").click();   // reabre
+        assert.equal(await p.locator("details.fin-ajuda").evaluate((d) => d.open), true);
+      } finally { await fechar(); }
+      assert.deepEqual(erros, []);
+    }
+  });
+
+  test("fluxo de caixa: sem resultado nos filtros oferece \"Limpar filtros\"; mês sem dados oferece \"Novo lançamento\"", async () => {
+    const { p, erros, fechar } = await abrir("fluxo-de-caixa");
+    try {
+      await p.locator(".fin-tabela").waitFor();
+      await p.locator('input[name="busca"]').fill("zzz-nada-assim");
+      await p.locator("[data-form-filtros] button[type=submit]").click();
+      await p.locator("[data-limpar-filtros]").waitFor();
+      assert.match(await p.locator("#view").innerText(), /Nenhum lançamento com esses filtros/);
+      await p.locator("[data-limpar-filtros]").click();
+      await p.locator(".fin-tabela").waitFor();
+      assert.equal(await p.locator('input[name="busca"]').inputValue(), "");
+      await p.locator('input[name="mes"]').fill("2030-01");
+      await p.locator("[data-form-filtros] button[type=submit]").click();
+      await p.locator(".fin-estado--vazio [data-novo]").waitFor();
+      assert.match(await p.locator("#view").innerText(), /Registre uma entrada ou uma saída para começar/);
+    } finally { await fechar(); }
+    assert.deepEqual(erros, []);
+  });
+
   test("somente leitura: sem botões de escrita", async () => {
     const { p, erros, fechar } = await abrir("fluxo-de-caixa", { permissoes: ["gestao_financeira.ver"] });
     try {
@@ -378,6 +421,7 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
       await p.locator("text=Classificado").first().waitFor();
       assert.equal(repo._t.resol.length, 1);
       assert.equal(repo._t.resol[0].classificacao, "prazo");
+      await p.locator(".fin-sec-ref > summary").click();   /* consulta e ajustes: recolhido por padrão */
       await p.locator("[data-historico]").click();
       await p.locator("dialog.fin-dialogo .fin-tabela").waitFor();
       assert.match(await p.locator("dialog.fin-dialogo").innerText(), /insert/);
@@ -574,6 +618,7 @@ describe("Dashboard Financeiro no navegador (dados sintéticos)", { skip: PULAR 
     const { p, erros, fechar } = await abrir("configuracoes");
     try {
       await p.locator(".fin-card").first().waitFor();
+      await p.locator(".fin-sec-ref > summary").click();   // regras avançadas: recolhidas por padrão
       const t = await p.locator("#view").innerText();
       assert.match(t, /Saldo de abertura desconhecido em \d+ conta/);
       assert.match(t, /parciais; nunca assumimos zero|parciais/);

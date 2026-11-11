@@ -4,7 +4,7 @@ import { consumirFoco } from "./busca.js";
 import { fin } from "./api.js";
 import { moeda, pct, dataBr, rotuloMes, podeAcao } from "./modelo.js";
 import { ACAO_FIN2, SITUACAO_CP, NATUREZA, FILTROS_SITUACAO, OPCOES_ACRESCIMO, OPCOES_A_MENOR, previaDiferenca, acoesDaConta } from "./modeloContasPagar.js";
-import { garantirCss, cabecalho, seletorMes, kpi, tabela, badge, carregarEm, lerMes, gravarMes, dialogo, campo, selecao, aviso, esc, estado } from "./ui.js";
+import { garantirCss, vazioComPasso, cabecalho, seletorMes, kpi, tabela, badge, carregarEm, lerMes, gravarMes, dialogo, campo, selecao, aviso, esc, estado } from "./ui.js";
 import { tabelaCartao } from "./tabelaCartao.js";
 
 const sit = (s) => SITUACAO_CP[s] ?? { rotulo: s, tom: "muted" };
@@ -25,7 +25,7 @@ export async function render(container, ctx) {
   raiz.innerHTML = `<div data-topo></div><div data-filtros></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
-    titulo: "Contas a Pagar",
+    ajuda: "contas-a-pagar", titulo: "Contas a Pagar",
     sub: "Uma conta pode ter vários pagamentos. A diferença entre o valor pago e o original só é calculada quando a conta é quitada — nunca a partir de um pagamento isolado.",
     extra: `${seletorMes(mes)}${pode(ACAO_FIN2.LANCAR) ? `<button class="btn btn-primary btn-sm" data-nova>Registrar conta / pagamento</button>` : ""}`,
   });
@@ -81,9 +81,12 @@ export async function render(container, ctx) {
       linhas, vazio: filtrosAtivos() ? "Nenhuma conta com esses filtros." : `Nenhuma conta a pagar em ${rotuloMes(mes)}.`,
     }).replace('class="fin-tabela"', 'class="fin-tabela fin-tabela--cartao"');
     corpo.innerHTML = `<div class="fin-kpis">${kpis}</div>${alertas ? `<div class="fin-alertas">${alertas}</div>` : ""}
-      <div class="fin-card"><h3>Contas — ${esc(rotuloMes(mes))}</h3><p class="fin-sub">Do mês: competência no mês, quitadas no mês e as abertas que vencem até o fim do mês (inclusive de meses anteriores).</p>${tb}</div>`;
+      <div class="fin-card"><h3>Contas — ${esc(rotuloMes(mes))}</h3><p class="fin-sub">Do mês: competência no mês, quitadas no mês e as abertas que vencem até o fim do mês (inclusive de meses anteriores).</p>${linhas.length ? tb : vazioContas()}</div>`;
     corpo.querySelectorAll("[data-detalhe]").forEach((b) => b.addEventListener("click", () => detalhe(b.dataset.detalhe)));
   }
+  const vazioContas = () => filtrosAtivos()
+    ? vazioComPasso("Nenhuma conta com esses filtros", "Tire algum filtro para ver as outras contas do mês.", { rotulo: "Limpar filtros", atributo: "data-limpar-filtros" })
+    : vazioComPasso(`Nenhuma conta a pagar em ${rotuloMes(mes)}`, pode(ACAO_FIN2.LANCAR) ? "Registre os boletos e compromissos do mês para acompanhar o que falta pagar e não perder vencimentos." : "Ainda não há contas neste mês.", pode(ACAO_FIN2.LANCAR) ? { rotulo: "Registrar conta / pagamento", atributo: "data-nova" } : {});
   const filtrosAtivos = () => Object.values(filtros).some(Boolean);
 
   // ---------------------------------------------------------------- detalhe e ações
@@ -225,6 +228,7 @@ export async function render(container, ctx) {
   }
 
   raiz.addEventListener("click", async (e) => {
+    if (e.target.closest("[data-limpar-filtros]")) { for (const k of Object.keys(filtros)) filtros[k] = ""; pintarFiltros(); carregar(); return; }
     if (!e.target.closest("[data-nova]")) return;
     try { if (!cad.categorias.length) await cadastros(); } catch (err) { aviso(err.message, "bad"); return; }
     if (!cad.categorias.length) { aviso("Cadastre uma categoria de custo ou despesa no Plano de Contas antes.", "bad"); return; }

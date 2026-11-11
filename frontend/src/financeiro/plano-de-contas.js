@@ -16,7 +16,7 @@ export async function render(container, ctx) {
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
-    titulo: "Plano de Contas", sub: "Tipo → natureza → categoria. O papel define se a categoria é receita, custo, despesa, tributo, financiamento ou transferência nos cálculos.",
+    ajuda: "plano-de-contas", titulo: "Plano de Contas", sub: "A lista de categorias dos seus lançamentos (aluguel, frutas, salário…). O papel de cada uma define onde ela entra nos resultados.",
     extra: pode ? `<button class="btn btn-primary btn-sm" data-nova>Nova categoria</button>` : "",
   });
 

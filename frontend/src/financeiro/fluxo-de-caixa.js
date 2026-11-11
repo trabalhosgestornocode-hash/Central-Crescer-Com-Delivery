@@ -2,7 +2,7 @@
 import { consumirFoco } from "./busca.js";
 import { fin } from "./api.js";
 import { moeda, dataBr, periodoDoMes, rotuloMes, ROTULO_PAPEL, podeAcao, ACAO } from "./modelo.js";
-import { garantirCss, cabecalho, seletorMes, tabela, badge, carregarEm, lerMes, gravarMes, dialogo, campo, selecao, aviso, esc, estado } from "./ui.js";
+import { garantirCss, vazioComPasso, cabecalho, seletorMes, tabela, badge, carregarEm, lerMes, gravarMes, dialogo, campo, selecao, aviso, esc, estado } from "./ui.js";
 
 const POR_PAGINA = 100;
 
@@ -21,7 +21,7 @@ export async function render(container, ctx) {
   const topo = raiz.querySelector("[data-topo]"), filtros = raiz.querySelector("[data-filtros]"), lista = raiz.querySelector("[data-lista]");
 
   topo.innerHTML = cabecalho({
-    titulo: "Fluxo de Caixa", sub: "Livro-caixa único. Nada é excluído: lançamentos incorretos são cancelados com motivo e toda mudança fica no histórico.",
+    ajuda: "fluxo-de-caixa", titulo: "Fluxo de Caixa", sub: "Livro-caixa único. Nada é excluído: lançamentos incorretos são cancelados com motivo e toda mudança fica no histórico.",
     extra: `${quemPode(ACAO.LANCAR) ? `<button class="btn btn-primary btn-sm" data-novo>Novo lançamento</button><button class="btn btn-ghost btn-sm" data-transf>Nova transferência</button>` : ""}`,
   });
 
@@ -51,7 +51,13 @@ export async function render(container, ctx) {
   }
 
   function pintarLista({ itens, total }) {
-    if (!total) { lista.innerHTML = estado.vazio(`Nenhum lançamento em ${rotuloMes(f.mes)}`, "Ajuste os filtros ou registre o primeiro lançamento."); return; }
+    if (!total) {
+      const filtrado = !!(f.contaId || f.sentido || f.busca || f.pendente);
+      lista.innerHTML = filtrado
+        ? vazioComPasso("Nenhum lançamento com esses filtros", "Tire algum filtro para ver os outros lançamentos do mês.", { rotulo: "Limpar filtros", atributo: "data-limpar-filtros" })
+        : vazioComPasso(`Nenhum lançamento em ${rotuloMes(f.mes)}`, quemPode(ACAO.LANCAR) ? "Registre uma entrada ou uma saída para começar. Cada lançamento aparece aqui, na ordem em que aconteceu." : "Ainda não há lançamentos neste mês.", quemPode(ACAO.LANCAR) ? { rotulo: "Novo lançamento", atributo: "data-novo" } : {});
+      return;
+    }
     const ent = itens.filter((l) => l.sentido === "entrada" && l.status === "realizado").reduce((s, l) => s + Number(l.valor_centavos), 0);
     const sai = itens.filter((l) => l.sentido === "saida" && l.status === "realizado").reduce((s, l) => s + Number(l.valor_centavos), 0);
     const acoes = (l) => `<div class="fin-linha-acoes">
@@ -154,6 +160,7 @@ export async function render(container, ctx) {
   raiz.addEventListener("click", (e) => {
     if (e.target.closest("[data-novo]")) novo();
     if (e.target.closest("[data-transf]")) transferencia();
+    if (e.target.closest("[data-limpar-filtros]")) { Object.assign(f, { contaId: "", sentido: "", busca: "", pendente: false, deslocamento: 0 }); pintarFiltros(); carregar(); }
   });
 
   await carregarEm(lista, async () => {

@@ -14,7 +14,7 @@ export async function render(container) {
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const topo = raiz.querySelector("[data-topo]"), corpo = raiz.querySelector("[data-corpo]");
   topo.innerHTML = cabecalho({
-    titulo: "DRE Gerencial", sub: "Regime de caixa: receita = recebimentos líquidos; custos = compras e fretes pagos. Não é DRE contábil de competência.",
+    ajuda: "dre-caixa", titulo: "DRE Gerencial", sub: "Regime de caixa: receita = recebimentos líquidos; custos = compras e fretes pagos. Não é DRE contábil de competência.",
     extra: `${seletorMes(mes)}<label class="fin-campo"><span>Comparar</span><select id="fin-comp"><option value="1">Com o mês anterior</option><option value="0">Sem comparação</option></select></label>`,
   });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); carregar(); } });

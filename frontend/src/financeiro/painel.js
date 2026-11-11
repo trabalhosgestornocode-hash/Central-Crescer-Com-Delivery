@@ -62,7 +62,7 @@ export async function render(container) {
   let dados = null;
   ativarComposicao(raiz, () => ({ composicao: dados?.composicao ?? {}, mes, conciliacao: dados?.conciliacaoEntregadores, extraPainel: (c) => (c.id === "custos" || c.id === "cmv" || c.id === "entregadores") && dados?.conciliacaoEntregadores ? htmlConciliacao(dados.conciliacaoEntregadores) : "" }));
   const atualizar = () => carregarEm(corpo, () => fin.get("/painel", { mes }), (d) => { dados = d; pintar(corpo, d); atualizarAviso(corpo, mes, atualizar); });
-  topo.innerHTML = cabecalho({ titulo: "Visão Geral", sub: "Cada número tem um ícone (i) que explica o que é e como é calculado. Clique no valor para ver de onde ele vem.", extra: `${seletorMes(mes)}<div data-busca></div>` });
+  topo.innerHTML = cabecalho({ ajuda: "painel", titulo: "Painel do Mês", sub: "Cada número tem um ícone (i) que explica o que é e como é calculado. Clique no valor para ver de onde ele vem.", extra: `${seletorMes(mes)}<div data-busca></div>` });
   montarBusca(topo.querySelector("[data-busca]"), { mesAtual: () => mes });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); atualizar(); } });
   atualizar();

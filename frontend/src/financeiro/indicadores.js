@@ -18,7 +18,7 @@ export async function render(container) {
   let mes = lerMes();
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const topo = raiz.querySelector("[data-topo]"), corpo = raiz.querySelector("[data-corpo]");
-  topo.innerHTML = cabecalho({ titulo: "Indicadores", sub: "Todo número é recalculado dos lançamentos. A fórmula e a origem estão sempre à vista.", extra: seletorMes(mes) });
+  topo.innerHTML = cabecalho({ ajuda: "indicadores", titulo: "Indicadores", sub: "Todo número é recalculado dos lançamentos. A fórmula e a origem estão sempre à vista.", extra: seletorMes(mes) });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); carregar(); } });
 
   function carregar() {

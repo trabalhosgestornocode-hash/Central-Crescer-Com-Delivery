@@ -18,7 +18,7 @@ export async function render(container, ctx) {
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const topo = raiz.querySelector("[data-topo]"), corpo = raiz.querySelector("[data-corpo]");
   topo.innerHTML = cabecalho({
-    titulo: "Conciliação", sub: "Vendas realizadas (referência externa) × recebimentos efetivos do livro-caixa. Sem referência informada, nada é calculado nem presumido.",
+    ajuda: "conciliacao", titulo: "Conciliação", sub: "Confere se o dinheiro que entrou bate com o que foi vendido. Sem os valores de vendas informados, nada é calculado nem presumido.",
     extra: `${seletorMes(mes)}${pConciliar ? `<button class="btn btn-primary btn-sm" data-ref>Informar referências</button><button class="btn btn-ghost btn-sm" data-arq>Importar arquivo</button>` : ""}`,
   });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); carregar(); } });
@@ -41,13 +41,13 @@ export async function render(container, ctx) {
     const faltando = pt.faltando?.length ? `<p class="fin-sub">Para calcular o residual falta informar: <strong>${pt.faltando.map(esc).join(" e ")}</strong> (um valor zero explícito vale como “zero informado”).</p>` : "";
     const taxas = pt.taxas.map((t) => `<tr><th scope="row">&nbsp;&nbsp;(−) Taxas ${esc(t.canal)}</th><td class="fin-num">${moeda(t.centavos)}</td></tr>`).join("");
     const resolucoes = pt.resolucoes.length ? `<ul>${pt.resolucoes.map((x) => `<li>${badge(ROTULO_CLASSIFICACAO[x.classificacao] ?? x.classificacao, "info")} ${moeda(x.valorCentavos, { sinal: true })} — ${esc(x.nota)} ${pConciliar ? `<button class="btn btn-ghost btn-sm" data-revogar="${x.id}">Revogar</button>` : ""}</li>`).join("")}</ul>` : "";
-    const ponte = `<div class="fin-card"><h3>Ponte do mês: vendas → recebimentos ${estadoBadge(pt.estado)}</h3>
+    const ponte = `<div class="fin-card"><h3>Vendas × dinheiro recebido no mês ${estadoBadge(pt.estado)}</h3>
       <div class="fin-tabela-wrap"><table class="fin-tabela"><tbody>
         <tr><th scope="row">Vendas realizadas (referência)</th><td class="fin-num">${moeda(pt.vendasCentavos)}</td></tr>
         <tr><th scope="row">(−) Recebido no livro-caixa como receita</th><td class="fin-num">${moeda(pt.recebidoCentavos)}</td></tr>
         <tr class="fin-tot"><th scope="row">(=) Diferença a explicar</th><td class="fin-num">${moeda(pt.diferencaAExplicarCentavos)}</td></tr>
         ${taxas}
-        <tr class="fin-tot"><th scope="row">(=) Residual ${pt.residualCentavos ? "— pendente de identificação, NÃO presumido como prazo" : ""}</th><td class="fin-num">${moeda(pt.residualCentavos)}</td></tr>
+        <tr class="fin-tot"><th scope="row">(=) Sobra sem explicação ${pt.residualCentavos ? "— pendente de identificação, NÃO presumido como prazo (não assumimos que é prazo de repasse)" : ""}</th><td class="fin-num">${moeda(pt.residualCentavos)}</td></tr>
       </tbody></table></div>${faltando}
       <p>${classificar("ponte_mensal", pt.chave, pt.residualCentavos, "ponte do mês")}</p>${resolucoes}
       <p class="fin-sub">${esc(pt.nota)}</p></div>`;
@@ -101,10 +101,13 @@ export async function render(container, ctx) {
       <div class="fin-card"><h3>Caixa em espécie por dia</h3>${caixa}</div>
       <div class="fin-card"><h3>Sangrias por dia</h3>${sang}
         ${ts.referenciaCentavos != null ? `<p class="fin-sub">Total: referência ${moeda(ts.referenciaCentavos)} · livro-caixa ${moeda(ts.fluxoCentavos)} · diferença ${moeda(ts.diferencaCentavos, { sinal: true })}${ts.diasSemReferencia ? ` · ${ts.diasSemReferencia} dia(s) com saída de caixa e sem referência` : ""}</p>` : ""}</div>
-      <div class="fin-card"><h3>Diferenças por conta (informativo)</h3>${porConta}<p class="fin-sub">Cadastre o canal de cada conta (ex.: STONE) em Contas Financeiras para comparar vendas do canal × recebido + taxas.</p></div>
       ${pendHtml}
-      <div class="fin-grade2"><div class="fin-card"><h3>Referências do mês</h3>${refs}</div><div class="fin-card"><h3>Exceções de sangria (aprovadas)</h3>${exc}${pConfigurar ? `<p><button class="btn btn-ghost btn-sm" data-nova-exc>Aprovar exceção</button></p>` : ""}</div></div>
-      <div class="fin-card"><h3>Histórico</h3><p><button class="btn btn-ghost btn-sm" data-historico>Ver auditoria das classificações</button></p></div>`;
+      <div class="fin-card"><h3>Referências do mês</h3>${refs}</div>
+      <details class="fin-sec-ref"><summary>Consulta e ajustes (uso menos frequente)</summary>
+      <div class="fin-card"><h3>Diferenças por conta (informativo)</h3>${porConta}<p class="fin-sub">Cadastre o canal de cada conta (ex.: STONE) em Contas Financeiras para comparar vendas do canal × recebido + taxas.</p></div>
+      <div class="fin-card"><h3>Exceções de sangria (aprovadas)</h3>${exc}${pConfigurar ? `<p><button class="btn btn-ghost btn-sm" data-nova-exc>Aprovar exceção</button></p>` : ""}</div>
+      <div class="fin-card"><h3>Histórico</h3><p><button class="btn btn-ghost btn-sm" data-historico>Ver auditoria das classificações</button></p></div>
+      </details>`;
     ligar(r, pend);
   }
 

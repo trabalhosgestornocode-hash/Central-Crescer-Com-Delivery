@@ -17,7 +17,7 @@ export async function render(container) {
   raiz.append(topo, corpo);
   let mes = lerMes();
   const atualizar = () => carregarEm(corpo, () => fin.get("/receitas", { mes }), (d) => pintar(corpo, d));
-  topo.innerHTML = cabecalho({ titulo: "Receitas e Vendas", sub: "Faturamento é o que foi vendido (Saci); recebimento é o que entrou no banco ou no caixa. A diferença vem de taxas retidas, prazos de repasse e vendas em espécie.", extra: `${seletorMes(mes)}<button type="button" class="btn btn-primary btn-sm" data-ir-vendas>Vendas Diárias</button>` });
+  topo.innerHTML = cabecalho({ ajuda: "receitas", titulo: "Receitas e Vendas", sub: "Faturamento é o que foi vendido (Saci); recebimento é o que entrou no banco ou no caixa. A diferença vem de taxas retidas, prazos de repasse e vendas em espécie.", extra: `${seletorMes(mes)}<button type="button" class="btn btn-primary btn-sm" data-ir-vendas>Vendas Diárias</button>` });
   topo.querySelector("[data-ir-vendas]")?.addEventListener("click", async () => { const { irPara } = await import("../router.js"); irPara("fin-vendas-diarias"); });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); atualizar(); } });
   atualizar();

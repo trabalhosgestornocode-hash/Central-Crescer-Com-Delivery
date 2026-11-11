@@ -22,7 +22,7 @@ export async function render(container, ctx) {
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
-    titulo: "Conciliação de Saídas",
+    ajuda: "conciliacao-saidas", titulo: "Conciliação de Saídas",
     sub: "Cada pagamento registrado é comparado com a saída do extrato da conta usada. O sistema só sugere; a confirmação é sempre de uma pessoa.",
     extra: `${seletorMes(mes)}${pode(ACAO_FIN2.CONCILIAR) ? `<button class="btn btn-ghost btn-sm" data-manual>Vincular manualmente</button><button class="btn btn-primary btn-sm" data-sugerir>Gerar sugestões</button>` : ""}`,
   });
@@ -48,7 +48,7 @@ export async function render(container, ctx) {
         { rotulo: "Regra", render: (g) => `<small>${esc(REGRA_SUGESTAO[g.regra] ?? g.regra)}</small>` },
         { rotulo: "", render: (g) => (pode(ACAO_FIN2.CONCILIAR) ? `<div class="fin-linha-acoes"><button class="btn btn-primary btn-sm" data-confirmar="${g.grupo}">Confirmar</button><button class="btn btn-ghost btn-sm" data-rejeitar="${g.grupo}">Rejeitar</button></div>` : "") },
       ],
-      linhas: abertos, vazio: "Nenhuma sugestão ou divergência aguardando decisão.",
+      linhas: abertos, vazio: "Nada aguardando decisão. Se registrou pagamentos novos, clique em “Gerar sugestões” para compará-los com o extrato.",
     }).replace('class="fin-tabela"', 'class="fin-tabela fin-tabela--cartao"');
     const tbConc = tabelaCartao({
       colunas: [
