@@ -114,7 +114,7 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
 
   // ---- Financeiro 2.0 (migration 151): contas a pagar, acréscimos (juros/multa/tarifa) e conciliação de saídas ----
   // Quem registra sem poder confirmar (sem `conciliar`) gera registro PROVISÓRIO; classificar o que altera o resultado exige `classificar`.
-  // FEATURE FLAG (fail-closed): fora das organizações em FINANCEIRO_2_ORGANIZACOES, as rotas novas não existem (404 — não revela a função).
+  // Financeiro 2.0 é o padrão de toda organização; só a chave de emergência FINANCEIRO_2_DESLIGADO_ORGANIZACOES as tira do ar (as rotas novas passam a responder 404, sem revelar a função).
   const so2 = (req, _res, next) => (financeiro2(contextoDe(req).organizacaoId) ? next() : next(ApiError.notFound("Recurso não encontrado.", { codigo: "FINANCEIRO_2_DESABILITADO" })));
   // (3ª revisão, B-2) permissão ANTES do flag: sem permissão = 403, como nas demais rotas; com permissão e flag desligado = 404
   const h2 = (acao, fn, o) => { const [aut, ...resto] = h(acao, fn, o); return [aut, so2, ...resto]; };

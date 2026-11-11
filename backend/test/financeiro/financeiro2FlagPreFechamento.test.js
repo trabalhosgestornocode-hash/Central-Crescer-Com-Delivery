@@ -32,9 +32,15 @@ test("flag LIGADO: pré-fechamento consulta os bloqueios da 151 (e a falha apare
   assert.equal(x.chamadas(), 1);
 });
 
-test("sem injeção, vale a variável de ambiente (ausente = desligado)", async () => {
-  delete process.env.FINANCEIRO_2_ORGANIZACOES;
-  const x = deps(undefined);
-  await per.preFechamento(CTX, "2026-09", x.d);
-  assert.equal(x.chamadas(), 0);
+test("sem injeção, o 2.0 é o padrão; só a chave de emergência da organização o desliga", async () => {
+  delete process.env.FINANCEIRO_2_DESLIGADO_ORGANIZACOES;
+  const ligado = deps(undefined);
+  await assert.rejects(() => per.preFechamento(CTX, "2026-09", ligado.d), /does not exist/);
+  assert.equal(ligado.chamadas(), 1);
+  process.env.FINANCEIRO_2_DESLIGADO_ORGANIZACOES = CTX.organizacaoId;
+  try {
+    const x = deps(undefined);
+    await per.preFechamento(CTX, "2026-09", x.d);
+    assert.equal(x.chamadas(), 0);
+  } finally { delete process.env.FINANCEIRO_2_DESLIGADO_ORGANIZACOES; }
 });
