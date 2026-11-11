@@ -20,6 +20,11 @@ export const ORIGEM_FOODY_API = "foody_api";
 /** Mesma flag de foody.constants.js#FLAG_ENTREGADOR_NOME (copiada: esta ponte não importa modules/foody). Exige a migration 160. */
 export const FLAG_ENTREGADOR_NOME = "FOODY_CENTRAL_ENTREGADOR_NOME_ENABLED";
 const lerNomeEntregador = (env) => String(env?.[FLAG_ENTREGADOR_NOME] ?? "").trim().toLowerCase() === "true";
+/** Mesma flag de foody.constants.js#FLAG_DISTANCIA (copiada pelo mesmo motivo). Exige a migration 161. */
+export const FLAG_DISTANCIA = "FOODY_CENTRAL_DISTANCIA_ENABLED";
+const lerDistancia = (env) => String(env?.[FLAG_DISTANCIA] ?? "").trim().toLowerCase() === "true";
+/** Colunas opcionais pedidas ao banco conforme as flags (sem a migration, flag desligada não quebra a leitura). */
+const colunasLeitura = (env) => [COLUNAS, ...(lerNomeEntregador(env) ? ["entregador_nome"] : []), ...(lerDistancia(env) ? ["distancia_raio_km"] : [])].join(", ");
 const PAGINA = 1000;
 /** Dia de parede de Brasília (-03:00, sem horário de verão), igual à camada Foody. */
 export const hojeBrasilia = (agora = new Date()) => new Date(agora.getTime() - 3 * 3_600_000).toISOString().slice(0, 10);
@@ -80,7 +85,8 @@ export function linhaFoodyParaParser(r) {
     data_cancelado: parede(r.data_cancelado), prazo_entrega: parede(r.prazo_entrega),
     // Ausentes na API (validado em 03/11/2026): ficam null, nunca zero.
     data_chegada_entrega: null, data_rejeitado: null, razao_rejeicao: null, justificativa_rejeicao: null,
-    distancia_raio_km: null, distancia_rota_km: null,
+    // Raio calculado na coleta das coordenadas (flag + migration 161); rota não existe na API (nem no relatório).
+    distancia_raio_km: num(r.distancia_raio_km), distancia_rota_km: null,
     sem_taxa_informado: false, status_conciliacao: null,
     fonte_dados: ORIGEM_FOODY_API, foody_sincronizado_em: r.sincronizado_em ?? null,
   };
@@ -128,7 +134,7 @@ export async function carregarPedidosFoody({ db, env = process.env, organizacaoI
     let ultimaSincronizacao = null;
     const fim = proximoDia(dataFim);
     for (let pagina = 0; pagina < MAX_PAGINAS; pagina++) {
-      const { data, error } = await db.from("foody_pedidos").select(lerNomeEntregador(env) ? `${COLUNAS}, entregador_nome` : COLUNAS)
+      const { data, error } = await db.from("foody_pedidos").select(colunasLeitura(env))
         .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId)
         .gte("data_hora", `${dataInicio}T00:00:00`).lt("data_hora", `${fim}T00:00:00`)
         .order("data_hora", { ascending: true }).order("foody_uid", { ascending: true })

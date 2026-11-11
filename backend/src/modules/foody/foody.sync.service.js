@@ -18,7 +18,7 @@
 //     DESATIVADAS (sem apagar) antes de a linha nova ser gravada na titular.
 //   Um uid nunca fica ativo em dois tenants: a linha antiga é desativada ANTES da nova ser gravada (o banco reforça com
 //   uq_foody_pedidos_conexao_uid_ativo). Toda leitura "da conexão" confere o tenant de cada linha devolvida.
-import { unidadePermitida, compartilhamentoPermitido, entregadorNomePermitido } from "./foody.flags.js";
+import { unidadePermitida, compartilhamentoPermitido, entregadorNomePermitido, distanciaPermitida } from "./foody.flags.js";
 import { janelaDoDia, validarCompetencia, situacaoCompetencia } from "./foody.periodo.js";
 import { criarClienteFoody, FoodyApiErro } from "./foody.client.js";
 import { sanearPedidoApi, ehOutraOperacao } from "./foody.adapter.js";
@@ -107,7 +107,7 @@ export async function sincronizarCompetencia(pedido, deps) {
     const esperado = conexao.ponto_coleta_esperado ? normalizarNome(conexao.ponto_coleta_esperado) : null;
     const registros = [];
     for (const o of pedidos) {
-      const r = sanearPedidoApi(o, { hashEntregador: seguranca.hashEntregador, compartilhado, catalogo: deps?.catalogo, guardarNome: entregadorNomePermitido(env) });
+      const r = sanearPedidoApi(o, { hashEntregador: seguranca.hashEntregador, compartilhado, catalogo: deps?.catalogo, guardarNome: entregadorNomePermitido(env), guardarDistancia: distanciaPermitida(env) });
       if (r.erro) { errosSaneamento[r.erro] = (errosSaneamento[r.erro] || 0) + 1; continue; }
       if (r.registro.competencia !== competencia) { foraJanela++; continue; }
       if (esperado && normalizarNome(r.registro.ponto_coleta) !== esperado) {

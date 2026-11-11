@@ -126,7 +126,9 @@ const skeletonVisaoGeral = () => `
   <div class="vd-cards">${Array.from({ length: 4 }).map(() => '<div class="vd-skel vd-skel-card"></div>').join("")}</div>
   <div class="vd-skels">${Array.from({ length: 5 }).map(() => '<div class="vd-skel vd-skel-linha"></div>').join("")}</div>`;
 const skeletonTabela = () => `<div class="vd-skels">${Array.from({ length: 8 }).map(() => '<div class="vd-skel vd-skel-linha"></div>').join("")}</div>`;
-const fmtDataBr = (iso) => (iso ? iso.split("-").reverse().join("/") : "—");
+/** Nome da operação própria da unidade aberta (Açaí como destino Foody; sem a marca = Subway, comportamento original). */
+const rotuloOperacaoPropria = (importacao) => (importacao?.operacaoPropria === "acai_no_grau" ? "Açaí no Grau" : "Subway Saci");
+const fmtDataBr = (iso) =>(iso ? iso.split("-").reverse().join("/") : "—");
 const fmtPeriodo = (ini, fim) => (!ini ? "—" : ini === fim ? fmtDataBr(ini) : `${fmtDataBr(ini)} até ${fmtDataBr(fim)}`);
 
 // Rastreia o carregamento em andamento — usado por `abrirParserPedidoPorNumero`/
@@ -609,7 +611,7 @@ function distribuicaoDoRelatorioHtml() {
   const semColunaDetalhes = importacao.colunaDetalhesEncontrada === false;
   const itens = [
     // Unidade cuja operação própria não é Subway (ex.: Açaí como destino Foody): mesmas chaves, rótulos da própria operação.
-    { label: importacao.operacaoPropria === "acai_no_grau" ? "Açaí no Grau" : "Subway Saci", valor: importacao.pedidosSubway ?? resumo.totalPedidos, cor: "ok" },
+    { label: rotuloOperacaoPropria(importacao), valor: importacao.pedidosSubway ?? resumo.totalPedidos, cor: "ok" },
     { label: importacao.operacaoPropria === "acai_no_grau" ? "Outras operações" : "Açaí no Grau", valor: importacao.pedidosAcai ?? 0, cor: "info" },
     { label: "Sem entregador", valor: importacao.pedidosSemEntregador ?? 0, cor: "muted" },
     { label: "Operação indefinida", valor: importacao.pedidosRevisao ?? 0, cor: "warn" },
@@ -975,9 +977,10 @@ function pedidosFiltrados() {
 function renderPedidos(box) {
   const entregadoresUnicos = [...pfd.atual.entregadores].sort((a, b) => a.entregador.localeCompare(b.entregador, "pt-BR"));
   const qtdIgnorados = pfd.atual.pedidosIgnorados?.length || 0;
+  const rotuloPropria = rotuloOperacaoPropria(pfd.atual.importacao);
   box.innerHTML = `
     <div class="ed-acoes" style="justify-content:flex-start;margin-bottom:12px">
-      <button class="btn btn-sm ${pfd.verIgnorados ? "btn-ghost" : "btn-primary"}" id="pfd-toggle-subway">${icon("receipt", { size: 14 })} Pedidos Subway (${pfd.atual.pedidos.length})</button>
+      <button class="btn btn-sm ${pfd.verIgnorados ? "btn-ghost" : "btn-primary"}" id="pfd-toggle-subway">${icon("receipt", { size: 14 })} Pedidos ${escapeHtml(rotuloPropria)} (${pfd.atual.pedidos.length})</button>
       <button class="btn btn-sm ${pfd.verIgnorados ? "btn-primary" : "btn-ghost"}" id="pfd-toggle-ignorados">${icon("eye", { size: 14 })} Pedidos ignorados (${qtdIgnorados})</button>
     </div>
     ${pfd.verIgnorados ? `<div id="pfd-tabela-pedidos"></div>` : `
@@ -1131,7 +1134,7 @@ function renderTabelaIgnorados() {
   const alvo = el("#pfd-tabela-pedidos");
   if (!alvo) return;
   const lista = pfd.atual.pedidosIgnorados || [];
-  if (!lista.length) { alvo.innerHTML = vazio("check-circle", "Nenhum pedido ignorado", "Todos os pedidos deste relatório foram identificados como Subway Saci."); return; }
+  if (!lista.length) { alvo.innerHTML = vazio("check-circle", "Nenhum pedido ignorado", `Todos os pedidos deste período foram identificados como ${rotuloOperacaoPropria(pfd.atual.importacao)} e têm entregador.`); return; }
   alvo.innerHTML = `<div class="tabela-wrap"><table class="grid">
     <thead><tr><th>Código</th><th>Descrição / produtos</th><th>Motivo</th><th>Classificação</th></tr></thead>
     <tbody>${lista.map((p) => {

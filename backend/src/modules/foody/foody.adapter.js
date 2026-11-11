@@ -62,7 +62,8 @@ const CAMPOS_CONTEUDO_COMPARTILHADO = [...CAMPOS_CONTEUDO, "destino_id", "triage
 export function hashConteudoPedido(registro, { compartilhado = false } = {}) {
   // O nome do entregador só entra no hash quando foi guardado (flag ligada): desligada, o hash é idêntico ao anterior.
   const base = compartilhado ? CAMPOS_CONTEUDO_COMPARTILHADO : CAMPOS_CONTEUDO;
-  const campos = Object.prototype.hasOwnProperty.call(registro ?? {}, "entregador_nome") ? [...base, "entregador_nome"] : base;
+  // Idem para a distância (flag FOODY_CENTRAL_DISTANCIA_ENABLED).
+  const campos = [...base, ...CAMPOS_OPCIONAIS.filter((k) => Object.prototype.hasOwnProperty.call(registro ?? {}, k))];
   return sha256(jsonEstavel(Object.fromEntries(campos.map((k) => [k, registro[k] ?? null]))));
 }
 
@@ -73,6 +74,36 @@ export const ehOutraOperacao = (operacao) => operacao !== OPERACAO.SUBWAY && ope
 export const CAMPOS_COMERCIAIS_OUTRA_OPERACAO = Object.freeze([
   "detalhes_pedido", "valor_total", "taxa_entrega", "forma_pagamento", "cancelamento_razao", "cancelamento_justificativa",
 ]);
+
+/** Campos que só entram no hash de conteúdo quando presentes no registro (cada um atrás da sua flag). */
+const CAMPOS_OPCIONAIS = ["entregador_nome", "distancia_raio_km"];
+
+/** Distância máxima plausível (km) entre a loja e o cliente; acima disso é coordenada errada, não entrega. */
+export const DISTANCIA_MAX_KM = 100;
+
+const coordenada = (c) => {
+  if (!c || typeof c !== "object") return null;
+  const lat = Number(c.lat), lng = Number(c.lng);
+  if (c.lat == null || c.lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return null;
+  return { lat, lng };
+};
+
+/**
+ * Distância em RAIO (linha reta, haversine) do ponto de coleta ao ponto de entrega, em km com 2 casas — o mesmo dado que o
+ * relatório Excel chama de "Distância raio (km)". Não é o trajeto percorrido. null quando falta coordenada ou o valor é
+ * implausível (nunca zero inventado).
+ */
+export function distanciaRaioKm(o) {
+  const a = coordenada(o?.collectionPoint?.coordinates), b = coordenada(o?.deliveryPoint?.coordinates);
+  if (!a || !b) return null;
+  const rad = (g) => (g * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  const km = 2 * 6371.0088 * Math.asin(Math.min(1, Math.sqrt(h)));
+  if (!Number.isFinite(km) || km > DISTANCIA_MAX_KM) return null;
+  return Math.round(km * 100) / 100;
+}
 
 export function minimizarOutraOperacao(registro) {
   for (const k of CAMPOS_COMERCIAIS_OUTRA_OPERACAO) registro[k] = null;
@@ -87,7 +118,7 @@ export function minimizarOutraOperacao(registro) {
  *   compartilhado = conexão com destino ATIVO (148): a operação vem da classificação ESTRITA (catálogo versionado; item
  *   desconhecido = triagem) e NADA é minimizado aqui — quem decide destino e minimização é foody.roteamento.js, antes de gravar.
  */
-export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, catalogo = undefined, guardarNome = false }) {
+export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, catalogo = undefined, guardarNome = false, guardarDistancia = false }) {
   if (!o || typeof o !== "object") return { erro: "PEDIDO_INVALIDO" };
   const uid = texto(o.uid, 80);
   const numeroPedido = texto(o.id, 40);
@@ -136,6 +167,8 @@ export function sanearPedidoApi(o, { hashEntregador, compartilhado = false, cata
   if (registro.entregador_presente && !registro.entregador_hash) return { erro: "HASH_ENTREGADOR_FALHOU", uid };
   // Nome do entregador (flag FOODY_CENTRAL_ENTREGADOR_NOME_ENABLED + migration 160). Sem entregador = null, nunca texto vazio.
   if (guardarNome) registro.entregador_nome = registro.entregador_presente ? texto(nome, 120) : null;
+  // Distância em raio (flag FOODY_CENTRAL_DISTANCIA_ENABLED + migration 161): só o km; coordenada ausente/inválida = null.
+  if (guardarDistancia) registro.distancia_raio_km = distanciaRaioKm(o);
   if (compartilhado) {
     registro.triagem_motivo = op.triagemMotivo;
     registro.catalogo_versao = op.catalogoVersao;
@@ -179,7 +212,7 @@ export function paraPedidoParser(r) {
     dataEntregue: r.data_entregue, dataFinalizado: r.data_finalizado, dataCancelado: r.data_cancelado,
     prazoEntrega: r.prazo_entrega, dataChegadaEntrega: null,
     razaoCancelamento: r.cancelamento_razao, justificativaCancelamento: r.cancelamento_justificativa,
-    distanciaRaioKm: null, distanciaRotaKm: null,
+    distanciaRaioKm: r.distancia_raio_km == null ? null : Number(r.distancia_raio_km), distanciaRotaKm: null,
     // Campos próprios da camada central (o Parser ignora):
     operacao: r.operacao, entregadorTipo: r.entregador_tipo, foodyUid: r.foody_uid,
   };

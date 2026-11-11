@@ -16,7 +16,7 @@
 //   * custoLogisticoAtribuido — taxa válida de entregadores PRÓPRIOS (só a Foody distingue o tipo; no Excel = null, não inventado);
 //   * custoRealConciliado    — taxa válida + lançamentos (taxas adicionais/manuais/avulsos) do Parser; existe só para o PERÍODO
 //                              e só quando TODOS os dias com dado vieram do Excel (senão null: seria misturar fontes).
-// Distância: só existe no Excel (complementar); dias FOODY ficam com distanciaDisponivel=false.
+// Distância: Excel ou, com FOODY_CENTRAL_DISTANCIA_ENABLED, o raio calculado na coleta; dias FOODY sem raio ficam com distanciaDisponivel=false.
 import { fechamentoDefinitivo } from "./foody.constants.js";
 
 export const FONTE = Object.freeze({ EXCEL: "EXCEL", FOODY: "FOODY", FOODY_PENDENTE: "FOODY_PENDENTE", FOODY_INCOMPLETO: "FOODY_INCOMPLETO", SEM_DADOS: "SEM_DADOS" });
