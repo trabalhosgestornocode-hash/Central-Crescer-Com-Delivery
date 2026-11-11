@@ -16,7 +16,7 @@ export async function render(container, ctx) {
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
-    titulo: "Períodos", sub: "Fechar um mês congela o snapshot dos resultados e bloqueia lançamentos, referências e classificações naquele mês.",
+    ajuda: "periodos", titulo: "Períodos", sub: "Fechar um mês congela o snapshot dos resultados e bloqueia lançamentos, referências e classificações naquele mês.",
     extra: pFechar ? `<button class="btn btn-ghost btn-sm" data-abrir>Abrir período</button>` : "",
   });
 

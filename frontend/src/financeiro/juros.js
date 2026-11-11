@@ -17,7 +17,7 @@ export async function render(container) {
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
-    titulo: "Juros e Encargos",
+    ajuda: "juros", titulo: "Juros e Encargos",
     sub: "Acréscimos pagos em contas a pagar (atraso, multa, tarifa), calculados sobre o total pago de cada conta quitada. Juros de empréstimos são outra natureza e não entram aqui.",
     extra: `<label class="fin-campo fin-campo--inline" for="fin-de"><span>De</span><input type="month" id="fin-de" value="${esc(de)}"></label><label class="fin-campo fin-campo--inline" for="fin-ate"><span>Até</span><input type="month" id="fin-ate" value="${esc(ate)}"></label>`,
   });

@@ -15,7 +15,7 @@ export async function render(container, ctx) {
   const corpo = raiz.querySelector("[data-corpo]");
   const topo = raiz.querySelector("[data-topo]");
   topo.innerHTML = cabecalho({
-    titulo: "Contas Financeiras", sub: "Conta é ONDE o dinheiro está. Meio de pagamento e canal de venda são dimensões à parte.",
+    ajuda: "contas", titulo: "Contas Financeiras", sub: "Conta é ONDE o dinheiro está. Meio de pagamento e canal de venda são dimensões à parte.",
     extra: `${seletorMes(mes)}${pode(ACAO.CONFIGURAR) ? `<button class="btn btn-ghost btn-sm" data-nova-conta>Nova conta</button>` : ""}${pode(ACAO.LANCAR) ? `<button class="btn btn-primary btn-sm" data-transf>Transferir</button>` : ""}`,
   });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); carregar(); } });

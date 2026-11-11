@@ -5,6 +5,7 @@ import { fin } from "./api.js";
 import { dialogo, campo, selecao, aviso, lerMes, esc } from "./ui.js";
 import { mesDe, rotuloMes } from "./modelo.js";
 import { abrirCentral, contarPendencias } from "./conferencias.js";
+import { abrirLancamentoRapido } from "./lancamentoRapido.js";
 
 const TIPOS = [
   { id: "faturamento", icone: "📈", titulo: "Faturamento / vendas", desc: "Total vendido por canal (balcão, iFood, Anota Aí) em um mês.", onde: "Visão Geral e DRE Gerencial (composição do faturamento)", perm: "lancar" },
@@ -105,7 +106,7 @@ export async function montarAcoesGlobais(alvo, { permissoes, rotaId }) {
     <button type="button" class="btn btn-ghost btn-sm" data-central>Conferências <span class="fin-contagem" data-contagem hidden></span></button>`;
   alvo.prepend(barra);
   const recarregar = async () => { const { irPara } = await import("../router.js"); irPara(rotaId); };
-  barra.querySelector("[data-novo-lancamento]").addEventListener("click", () => abrirChooser(perms, recarregar));
+  barra.querySelector("[data-novo-lancamento]").addEventListener("click", () => abrirLancamentoRapido({ permissoes: perms, aposSalvar: recarregar, aoEscolherOutros: () => abrirChooser(perms, recarregar) }));
   barra.querySelector("[data-central]").addEventListener("click", () => abrirCentral({ mes: lerMes(), aoAlterar: recarregar, permissoes: perms }));
   const r = await contarPendencias(lerMes());
   const c = barra.querySelector("[data-contagem]");

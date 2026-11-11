@@ -21,7 +21,7 @@ export async function render(container) {
   raiz.append(topo, corpo);
   let mes = lerMes();
   const atualizar = () => carregarEm(corpo, () => fin.get("/rateios", { mes }), (d) => pintar(corpo, d, atualizar));
-  topo.innerHTML = cabecalho({ titulo: "Rateios por competência", sub: "Distribui o custo de uma conta entre os meses de consumo ou produção. O pagamento e o extrato não mudam; só o DRE de referência.",
+  topo.innerHTML = cabecalho({ ajuda: "rateios", titulo: "Rateios por competência", sub: "Distribui o custo de uma conta entre os meses de consumo ou produção. O pagamento e o extrato não mudam; só o DRE de referência.",
     extra: `${seletorMes(mes)} <button type="button" class="btn btn-primary btn-sm" data-novo>Novo rateio</button>` });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); atualizar(); } });
   topo.querySelector("[data-novo]").addEventListener("click", async () => { try { abrirNovo(await fin.get("/rateios"), atualizar); } catch (e) { aviso(e.message, "bad"); } });

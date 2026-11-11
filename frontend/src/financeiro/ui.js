@@ -2,6 +2,7 @@
 import { escapeHtml as esc, toast } from "../utils.js";
 import { estado } from "./graficos.js";
 import { mesDe } from "./modelo.js";
+import { blocoAjuda, ouvirAjuda } from "./ajuda.js";
 
 export { esc, estado };
 
@@ -27,8 +28,10 @@ export const aviso = (texto, tipo = "ok") => toast(tipo === "bad" ? `⚠ ${texto
 
 export const badge = (texto, tipo = "muted") => `<span class="fin-badge fin-badge--${tipo}">${esc(texto)}</span>`;
 
-export function cabecalho({ titulo, sub = "", extra = "" }) {
-  return `<header class="fin-cab"><div><h2>${esc(titulo)}</h2>${sub ? `<p class="fin-sub">${esc(sub)}</p>` : ""}</div><div class="fin-cab-acoes">${extra}</div></header>`;
+/** `ajuda`: chave do bloco "Como usar esta tela" (ver ajuda.js); vem logo abaixo do título. */
+export function cabecalho({ titulo, sub = "", extra = "", ajuda = "" }) {
+  if (ajuda) ouvirAjuda();
+  return `<header class="fin-cab"><div><h2>${esc(titulo)}</h2>${sub ? `<p class="fin-sub">${esc(sub)}</p>` : ""}</div><div class="fin-cab-acoes">${extra}</div></header>${ajuda ? blocoAjuda(ajuda) : ""}`;
 }
 
 export const seletorMes = (valor, id = "fin-mes") =>
@@ -46,6 +49,11 @@ export function tabela({ colunas, linhas, vazio = "Nada para mostrar." }) {
   const th = colunas.map((c) => `<th scope="col"${c.num ? ' class="fin-num"' : ""}>${esc(c.rotulo)}</th>`).join("");
   const tr = linhas.map((l) => `<tr>${colunas.map((c) => `<td${c.num ? ' class="fin-num"' : ""}${c.rotulo ? ` data-rot="${esc(c.rotulo)}"` : ""}>${c.render(l)}</td>`).join("")}</tr>`).join("");
   return `<div class="fin-tabela-wrap"><table class="fin-tabela"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
+}
+
+/** Estado vazio com o PRÓXIMO PASSO: texto simples + (opcional) um botão. `atributo` é o data-* que a tela já escuta (ex.: "data-novo"). */
+export function vazioComPasso(titulo, texto, { rotulo = "", atributo = "", primario = true } = {}) {
+  return `<div class="fin-estado fin-estado--vazio"><h3>${esc(titulo)}</h3>${texto ? `<p>${esc(texto)}</p>` : ""}${rotulo ? `<button type="button" class="btn ${primario ? "btn-primary" : "btn-ghost"} btn-sm" ${atributo}>${esc(rotulo)}</button>` : ""}</div>`;
 }
 
 /** Carrega com estados de carregamento/erro (com nova tentativa). `corrida` evita pintar resposta de uma navegação antiga. */

@@ -20,7 +20,7 @@ export async function render(container) {
   raiz.append(topo, corpo);
   let mes = lerMes();
   const atualizar = () => carregarEm(corpo, () => fin.get("/dividas", { mes }), (d) => pintar(corpo, d, atualizar));
-  topo.innerHTML = cabecalho({ titulo: "Dívidas e Empréstimos", sub: "Dívidas próprias, de sócios, entre empresas, de terceiros e parcelamentos — separadas. Saldo desconhecido aparece como desconhecido, nunca como zero.",
+  topo.innerHTML = cabecalho({ ajuda: "dividas", titulo: "Dívidas e Empréstimos", sub: "Dívidas próprias, de sócios, entre empresas, de terceiros e parcelamentos — separadas. Saldo desconhecido aparece como desconhecido, nunca como zero.",
     extra: `${seletorMes(mes)} <button type="button" class="btn btn-primary btn-sm" data-novo>Nova dívida</button>` });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); atualizar(); } });
   topo.querySelector("[data-novo]").addEventListener("click", () => nova(atualizar));

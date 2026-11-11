@@ -17,7 +17,7 @@ export async function render(container, ctx) {
   const pode = podeAcao(ctx, ACAO.CONFIGURAR);
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
-    titulo: "Configurações Financeiras", sub: pode ? "Contas, categorias e regras de conciliação desta unidade. Mudanças ficam auditadas; regras históricas e meses fechados são protegidos." : "Somente leitura: alterar configurações exige a permissão de configuração financeira.",
+    ajuda: "configuracoes", titulo: "Configurações Financeiras", sub: pode ? "Contas, categorias e regras de conciliação desta unidade. Mudanças ficam auditadas; regras históricas e meses fechados são protegidos." : "Somente leitura: alterar configurações exige a permissão de configuração financeira.",
   });
   const corpo = raiz.querySelector("[data-corpo]");
 
@@ -55,6 +55,7 @@ export async function render(container, ctx) {
         <p class="fin-sub">Tipo e canal da conta influenciam a conciliação: ficam travados quando a conta tem movimento em mês fechado.</p></div>
       <div class="fin-card"><h3>Plano de contas</h3>${cats}${pode ? `<p><button class="btn btn-primary btn-sm" data-nova-cat>Nova categoria</button></p>` : ""}
         <p class="fin-sub">O papel decide a participação nos cálculos e não muda enquanto a categoria tiver lançamentos (reclassifique com motivo em outra categoria).</p></div>
+      <details class="fin-sec-ref"><summary>Regras avançadas e itens indisponíveis (uso raro)</summary>
       <div class="fin-card"><h3>Conciliação</h3>
         <p>${badge(`${r.conciliacao.contasComCanal} conta(s) com canal vinculado`, "info")} ${r.conciliacao.contasSemCanal ? badge(`${r.conciliacao.contasSemCanal} sem canal`, "muted") : ""}</p>
         <h4>Exceções de sangria (aprovadas)</h4>${excl}${pode ? `<p><button class="btn btn-ghost btn-sm" data-exc-nova>Aprovar exceção</button></p>` : ""}</div>
@@ -63,7 +64,8 @@ export async function render(container, ctx) {
         · Lançamentos pendentes de classificação agora: <strong>${r.pendencias.classificacao}</strong></p>
         <p class="fin-sub">Não há política geral. A única via é uma exceção por unidade e competência, aprovada por SuperAdmin (justificada, auditada, de uso único); indisponível até a validação do MFA. As exceções existentes aparecem na tela Períodos.</p></div>
       <div class="fin-card"><h3>Indisponível ou pendente de decisão</h3>
-        ${r.indisponiveis.map((x) => `<div class="fin-alerta" role="status"><div>${badge(x.somenteInformativo ? "Informativo" : "Indisponível", "muted")} <strong>${esc(x.titulo)}</strong><br>${esc(x.motivo)}</div></div>`).join("")}</div>`;
+        ${r.indisponiveis.map((x) => `<div class="fin-alerta" role="status"><div>${badge(x.somenteInformativo ? "Informativo" : "Indisponível", "muted")} <strong>${esc(x.titulo)}</strong><br>${esc(x.motivo)}</div></div>`).join("")}</div>
+      </details>`;
     ligar(r, exc);
   }
 

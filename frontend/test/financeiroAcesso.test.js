@@ -65,7 +65,7 @@ describe("menuDoEstado", () => {
     const m = menuDoEstado(E.FINANCEIRO_2);
     assert.deepEqual(m.map((s) => s.secao), ["Visão Geral", "Receitas e Vendas", "Despesas e Pagamentos", "Caixa e Conciliação", "Custos e Resultados", "Controle e Relatórios"]);
     assert.equal(ids(E.FINANCEIRO_2)[0], "fin-painel");
-    assert.equal(m.flatMap((s) => s.itens).find((i) => i.id === "fin-visao-geral").label, "Resumo de Caixa");
+    assert.equal(m.flatMap((s) => s.itens).find((i) => i.id === "fin-visao-geral").label, "Resumo de Caixa"); assert.equal(m.flatMap((s) => s.itens).find((i) => i.id === "fin-painel").label, "Painel do Mês");
   });
   test("legado: exatamente o menu de antes (lista simples, sem nenhum item fin2)", () => {
     const m = menuDoEstado(E.LEGADO);

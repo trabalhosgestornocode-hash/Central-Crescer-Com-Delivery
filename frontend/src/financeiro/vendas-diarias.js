@@ -27,7 +27,7 @@ export async function render(container, ctx) {
   ativarComposicao(raiz, () => ({ composicao: {}, mes }));
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const topo = raiz.querySelector("[data-topo]"), corpo = raiz.querySelector("[data-corpo]");
-  topo.innerHTML = cabecalho({ titulo: "Vendas Diárias", sub: "Registre, importe e confira as vendas de cada dia. A venda bruta é o faturamento; o dinheiro e as sangrias são conferidos com o caixa físico.",
+  topo.innerHTML = cabecalho({ ajuda: "vendas-diarias", titulo: "Vendas Diárias", sub: "Registre, importe e confira as vendas de cada dia. A venda bruta é o faturamento; o dinheiro e as sangrias são conferidos com o caixa físico.",
     extra: `${seletorMes(mes)}${pode(ACAO.LANCAR) ? `<button type="button" class="btn btn-primary btn-sm" data-registrar>+ Registrar venda</button><button type="button" class="btn btn-ghost btn-sm" data-importar>Importar SAIPOS</button>` : ""}` });
   const atualizar = () => carregarEm(corpo, () => fin.get("/vendas-diarias", { mes, ...(filtros.busca ? { busca: filtros.busca } : {}), ...(filtros.situacao ? { situacao: filtros.situacao } : {}) }), (d) => { dados = d; pintar(corpo, d, filtros); });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); atualizar(); } });

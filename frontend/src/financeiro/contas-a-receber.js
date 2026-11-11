@@ -19,7 +19,7 @@ export async function render(container) {
   raiz.append(topo, corpo);
   let mes = lerMes();
   const atualizar = () => carregarEm(corpo, async () => { const [r, contas] = await Promise.all([fin.get("/recebiveis", { mes }), fin.get("/contas")]); return { r, contas }; }, ({ r, contas }) => pintar(corpo, r, contas, mes, atualizar));
-  topo.innerHTML = cabecalho({ titulo: "Contas a Receber", sub: "Valores que a empresa tem a receber (repasses, reembolsos, vendas a prazo). Receber não cria caixa: vincule a entrada que já está no extrato.",
+  topo.innerHTML = cabecalho({ ajuda: "contas-a-receber", titulo: "Contas a Receber", sub: "Valores que a empresa tem a receber (repasses, reembolsos, vendas a prazo). Receber não cria caixa: vincule a entrada que já está no extrato.",
     extra: `${seletorMes(mes)} <button type="button" class="btn btn-primary btn-sm" data-novo>Novo recebível</button>` });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); atualizar(); } });
   topo.querySelector("[data-novo]").addEventListener("click", async () => { try { novo(await fin.get("/contas"), mes, atualizar); } catch (e) { aviso(e.message, "bad"); } });

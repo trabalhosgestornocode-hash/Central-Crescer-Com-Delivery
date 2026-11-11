@@ -18,7 +18,7 @@ export async function render(container, ctx) {
 
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const corpo = raiz.querySelector("[data-corpo]");
-  raiz.querySelector("[data-topo]").innerHTML = cabecalho({ titulo: "Importação do livro-caixa", sub: "Só a aba do fluxo é importada (as abas por conta são visões do mesmo livro). Reimportar não duplica; nada é excluído." });
+  raiz.querySelector("[data-topo]").innerHTML = cabecalho({ ajuda: "importacao", titulo: "Importação do livro-caixa", sub: "Só a aba do fluxo é importada (as abas por conta são visões do mesmo livro). Reimportar não duplica; nada é excluído." });
 
   const passos = (n) => `<ol class="fin-passos" aria-label="Etapas">${PASSOS.map((p, i) => `<li${i === n ? ' aria-current="step"' : ""}>${esc(p)}</li>`).join("")}</ol>`;
 

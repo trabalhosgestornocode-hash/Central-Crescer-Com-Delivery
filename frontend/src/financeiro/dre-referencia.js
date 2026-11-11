@@ -2,6 +2,7 @@
 // Leitura em três camadas: (1) resumo executivo, (2) gráfico de composição do faturamento bruto, (3) árvore expansível até o lançamento.
 // Tudo vem de GET /dre-referencia e os três blocos usam os MESMOS números (resumo/arvore do servidor): nada é recalculado aqui.
 // Avisos gerais ficam num aviso compacto (painel de pendências); a linha só carrega selo quando a pendência é específica dela.
+import { blocoAjuda } from "./ajuda.js";
 import { fin } from "./api.js";
 import { moeda, pct, rotuloMes } from "./modelo.js";
 import { garantirCss, seletorMes, tabela, carregarEm, lerMes, gravarMes, ativarTooltips, esc } from "./ui.js";
@@ -30,7 +31,7 @@ export async function render(container) {
   raiz.innerHTML = `<div data-cab></div><div data-corpo class="dre-corpo"></div>`;
   const cab = raiz.querySelector("[data-cab]"), corpo = raiz.querySelector("[data-corpo]");
   const atualizar = () => carregarEm(corpo, () => fin.get("/dre-referencia", { mes }), (d) => { dados = d; pintarCabecalho(cab, d, mes); pintar(corpo, d); });
-  cab.innerHTML = cabecalho(mes);
+  cab.innerHTML = cabecalho(mes) + blocoAjuda("dre");
   ligarCabecalho(cab, () => dados, (m) => { mes = m; gravarMes(mes); atualizar(); });
   atualizar();
   raiz.addEventListener("click", (e) => {

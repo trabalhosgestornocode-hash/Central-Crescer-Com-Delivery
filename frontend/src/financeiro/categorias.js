@@ -14,7 +14,7 @@ export async function render(container) {
   let mes = lerMes();
   raiz.innerHTML = `<div data-topo></div><div data-corpo class="fin-pg"></div>`;
   const topo = raiz.querySelector("[data-topo]"), corpo = raiz.querySelector("[data-corpo]");
-  topo.innerHTML = cabecalho({ titulo: "Análise de Categorias", sub: "O que mais pesa nas saídas operacionais. Fora desta análise: transferências, saldo anterior e principal de financiamentos.", extra: seletorMes(mes) });
+  topo.innerHTML = cabecalho({ ajuda: "categorias", titulo: "Análise de Categorias", sub: "O que mais pesa nas saídas operacionais. Fora desta análise: transferências, saldo anterior e principal de financiamentos.", extra: seletorMes(mes) });
   topo.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); carregar(); } });
 
   function carregar() {
