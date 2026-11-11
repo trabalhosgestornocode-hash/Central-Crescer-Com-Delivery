@@ -5,6 +5,7 @@ import { Router } from "express";
 import { asyncHandler } from "../../../shared/asyncHandler.js";
 import { ACAO, contextoDe, permissoesDe } from "./contexto.js";
 import * as obr from "./obrigacoes.service.js";
+import * as impCp from "./importacaoContasPagar.service.js";
 import * as cs from "./conciliacaoSaidas.service.js";
 import * as cadastros from "./cadastros.service.js";
 import * as lanc from "./lancamentos.service.js";
@@ -177,6 +178,8 @@ export function criarDominioRouter({ autorizar, deps = undefined, financeiro2 = 
   r.get("/contas-pagar/resumo", ...h2(ACAO.VER, (c, q) => obr.resumoMes(c, q.query, d)));
   r.get("/contas-pagar/juros-mes", ...h2(ACAO.VER, (c, q) => obr.jurosDoMes(c, q.query, d)));
   r.get("/contas-pagar/juros", ...h2(ACAO.VER, (c, q) => obr.painelJuros(c, q.query, d)));
+  r.post("/contas-pagar/importar/previa", ...h2(ACAO.LANCAR, (c, q) => impCp.previaImportacao(c, q.body, d)));
+  r.post("/contas-pagar/importar", ...h2(ACAO.LANCAR, (c, q) => impCp.importar(c, q.body, d, perms(q))));
   r.post("/contas-pagar", ...h2(ACAO.LANCAR, (c, q) => obr.criar(c, q.body, d, perms(q)), { status: 201 }));
   r.post("/contas-pagar/pagamentos/:id/cancelar", ...h2(ACAO.CANCELAR, (c, q) => obr.cancelarPagamento(c, q.params.id, q.body, d)));
   r.get("/contas-pagar/:id", ...h2(ACAO.VER, (c, q) => obr.obter(c, q.params.id, d)));

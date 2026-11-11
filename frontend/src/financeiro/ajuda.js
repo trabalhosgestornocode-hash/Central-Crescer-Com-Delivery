@@ -45,7 +45,7 @@ export const AJUDA = Object.freeze({
       "Use os filtros (situação, fornecedor, categoria, conta) para achar o que precisa. A busca aceita o nome do fornecedor.",
       "Se pagou mais ou menos que o valor original (juros, desconto), o sistema mostra a diferença quando a conta é quitada.",
     ],
-    dicas: ["A conta só entra como “paga” quando você registra o pagamento. Registrar a conta não tira dinheiro do caixa.", "Quer lançar algo rápido? O botão “+ Novo lançamento” no topo da página abre o caminho mais curto."],
+    dicas: ["A conta só entra como “paga” quando você registra o pagamento. Registrar a conta não tira dinheiro do caixa.", "Tem uma planilha com as contas do mês? Use “Importar planilha”: você vê a prévia e confirma antes de gravar; reenviar não duplica.", "Quer lançar algo rápido? O botão “+ Novo lançamento” no topo da página abre o caminho mais curto."],
     termos: ["conta-a-pagar", "competencia", "quitar", "categoria"],
   },
   conciliacao: {

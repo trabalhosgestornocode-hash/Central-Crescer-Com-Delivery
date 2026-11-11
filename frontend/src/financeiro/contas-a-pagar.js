@@ -4,6 +4,7 @@ import { consumirFoco } from "./busca.js";
 import { fin } from "./api.js";
 import { moeda, pct, dataBr, rotuloMes, podeAcao } from "./modelo.js";
 import { ACAO_FIN2, SITUACAO_CP, NATUREZA, FILTROS_SITUACAO, OPCOES_ACRESCIMO, OPCOES_A_MENOR, previaDiferenca, acoesDaConta } from "./modeloContasPagar.js";
+import { abrirImportarContasPagar } from "./importarContasPagar.js";
 import { garantirCss, vazioComPasso, cabecalho, seletorMes, kpi, tabela, badge, carregarEm, lerMes, gravarMes, dialogo, campo, selecao, aviso, esc, estado } from "./ui.js";
 import { tabelaCartao } from "./tabelaCartao.js";
 
@@ -27,7 +28,7 @@ export async function render(container, ctx) {
   raiz.querySelector("[data-topo]").innerHTML = cabecalho({
     ajuda: "contas-a-pagar", titulo: "Contas a Pagar",
     sub: "Uma conta pode ter vários pagamentos. A diferença entre o valor pago e o original só é calculada quando a conta é quitada — nunca a partir de um pagamento isolado.",
-    extra: `${seletorMes(mes)}${pode(ACAO_FIN2.LANCAR) ? `<button class="btn btn-primary btn-sm" data-nova>Registrar conta / pagamento</button>` : ""}`,
+    extra: `${seletorMes(mes)}${pode(ACAO_FIN2.LANCAR) ? `<button class="btn btn-primary btn-sm" data-nova>Registrar conta / pagamento</button><button class="btn btn-ghost btn-sm" data-importar-cp>Importar planilha</button>` : ""}`,
   });
   raiz.querySelector("#fin-mes").addEventListener("change", (e) => { if (e.target.value) { mes = e.target.value; gravarMes(mes); carregar(); } });
 
@@ -228,6 +229,7 @@ export async function render(container, ctx) {
   }
 
   raiz.addEventListener("click", async (e) => {
+    if (e.target.closest("[data-importar-cp]")) { abrirImportarContasPagar({ aoSalvar: () => carregar() }); return; }
     if (e.target.closest("[data-limpar-filtros]")) { for (const k of Object.keys(filtros)) filtros[k] = ""; pintarFiltros(); carregar(); return; }
     if (!e.target.closest("[data-nova]")) return;
     try { if (!cad.categorias.length) await cadastros(); } catch (err) { aviso(err.message, "bad"); return; }

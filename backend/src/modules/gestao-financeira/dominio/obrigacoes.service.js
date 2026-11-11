@@ -138,6 +138,11 @@ const resumoAud = (j) => (j ? { status: j.status, valorOriginalCentavos: j.valor
  * Etapas em sequência (não é uma transação única): se o pagamento for recusado, a conta fica registrada e ABERTA, e o erro é devolvido.
  */
 export async function criar(ctx, b, deps = padrao, { permissoes = [] } = {}) {
+  const o = await criarSemRetorno(ctx, b, deps, { permissoes });
+  return obter(exigirContexto(ctx), o.id, deps);
+}
+/** Mesma criação, sem recarregar a conta completa no fim (usado na importação em lote, para não reler as tabelas a cada título). */
+export async function criarSemRetorno(ctx, b, deps = padrao, { permissoes = [] } = {}) {
   const c = exigirContexto(ctx);
   const quitar = b?.quitar === true;
   if (quitar) exigir(permissoes, ACAO.CONCILIAR, "Seu perfil registra o pagamento, mas não confirma a quitação: um gerente, a contadora ou o administrador confirma.");
@@ -151,7 +156,7 @@ export async function criar(ctx, b, deps = padrao, { permissoes = [] } = {}) {
   }, deps.db);
   if (pag) await deps.repo.inserirPagamento(c, { obrigacao_id: o.id, ...pag, provisorio: !pode(permissoes, ACAO.CONCILIAR) }, deps.db);
   if (pag && quitar) await deps.repo.quitarObrigacaoRpc(c, o.id, deps.db);
-  return obter(c, o.id, deps);
+  return o;
 }
 
 export const ORIGENS_PAGAMENTO = ["conta", "origem_pendente", "terceiro"];
