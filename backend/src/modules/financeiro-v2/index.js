@@ -21,3 +21,4 @@ export * as tempo from "./dominio/tempo.js";
 export { ACAO, autorizar, criarPoliticaDeEscopo, exigirContexto } from "./dominio/contexto.js";
 export { CODIGO, ErroFinanceiro } from "./dominio/erros.js";
 export { INDICADOR, compor } from "./dominio/indicadores.js";
+export { CANAIS_PRINCIPAIS, METODOLOGIA, SITUACAO_INDICADOR, apurar, comoPercentual, participacoes } from "./dominio/apuracao.js";

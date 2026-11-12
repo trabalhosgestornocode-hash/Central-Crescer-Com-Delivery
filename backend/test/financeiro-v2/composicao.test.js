@@ -14,7 +14,9 @@ const venda = (extra) => ({ canal: "BALCAO", dataVenda: "2026-09-02", fonte: { s
 async function base() {
   const m = montar();
   const caixa = await m.nucleo.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa" });
-  return { ...m, n: m.nucleo, caixa };
+  // Documento SINTÉTICO que comprova o ressarcimento de subsídios por terceiros.
+  const { documento } = await m.nucleo.registrarDocumento(c, { origem: "IFOOD", arquivoId: "cofre:sintetico", hashSha256: "a".repeat(64), tipo: "DEMONSTRATIVO_REPASSE", recebidoEm: "2026-10-01" });
+  return { ...m, n: m.nucleo, caixa, doc: documento.id };
 }
 async function importar(n, fonte, tipoRelatorio, conteudo, periodo = PERIODO_SETEMBRO, extra = {}) {
   const r = await n.receberArquivoParaImportacao(c, { fonte, tipoRelatorio, tipoMime: "application/octet-stream", conteudo, ...periodo, ...extra });
@@ -35,12 +37,12 @@ test("1, 2 — venda sem desconto e com desconto da LOJA: receita = bruto própr
 });
 
 test("3, 4 — subsídio integral de TERCEIRO não reduz a receita (vira recebível dele); desconto dividido loja + terceiro", async () => {
-  const { n, caixa } = await base();
-  const r3 = await n.registrarVenda(c, venda({ brutoCentavos: 1000, composicao: { itensCentavos: 1000, descontos: [{ valorCentavos: 1000, financiador: "TERCEIRO", terceiro: "IFOOD" }] }, pagamentos: [], pagamentoParcial: false }));
+  const { n, caixa, doc } = await base();
+  const r3 = await n.registrarVenda(c, venda({ brutoCentavos: 1000, composicao: { itensCentavos: 1000, descontos: [{ valorCentavos: 1000, financiador: "TERCEIRO", terceiro: "IFOOD", documentoId: doc }] }, pagamentos: [], pagamentoParcial: false }));
   assert.equal(r3.recebiveis.length, 1);
   assert.equal(r3.recebiveis[0].processador, "IFOOD");
   assert.equal(r3.recebiveis[0].brutoCentavos, 1000);
-  const r4 = await n.registrarVenda(c, venda({ brutoCentavos: 2000, composicao: { itensCentavos: 2000, descontos: [{ valorCentavos: 200, financiador: "LOJA" }, { valorCentavos: 300, financiador: "TERCEIRO", terceiro: "OUTRO" }] }, pagamentos: [{ forma: "DINHEIRO", valorCentavos: 1500, contaId: caixa.id }] }));
+  const r4 = await n.registrarVenda(c, venda({ brutoCentavos: 2000, composicao: { itensCentavos: 2000, descontos: [{ valorCentavos: 200, financiador: "LOJA" }, { valorCentavos: 300, financiador: "TERCEIRO", terceiro: "OUTRO", documentoId: doc }] }, pagamentos: [{ forma: "DINHEIRO", valorCentavos: 1500, contaId: caixa.id }] }));
   assert.equal(await ind(n, "RECEITA_BRUTA"), 3000);
   assert.equal(await ind(n, "DEDUCOES"), 200); // só o desconto da loja; o subsídio não é dedução nem receita dobrada
   assert.equal(r4.recebiveis[0].brutoCentavos, 300);
@@ -60,8 +62,8 @@ test("5, 6 — pagamento misto e taxa Stone: desconto comercial e taxa de proces
 });
 
 test("7 — iFood com múltiplas deduções: receita própria, promoção da loja, subsídio do iFood, comissão e transação, sem dupla subtração", async () => {
-  const { n } = await base();
-  const r = await n.registrarVenda(c, venda({ canal: "IFOOD", brutoCentavos: 5000, composicao: { itensCentavos: 5000, descontos: [{ valorCentavos: 300, financiador: "LOJA" }, { valorCentavos: 500, financiador: "TERCEIRO", terceiro: "IFOOD" }] }, pagamentos: [{ forma: "OUTRA", processador: "IFOOD", valorCentavos: 4200 }] }));
+  const { n, doc } = await base();
+  const r = await n.registrarVenda(c, venda({ canal: "IFOOD", brutoCentavos: 5000, composicao: { itensCentavos: 5000, descontos: [{ valorCentavos: 300, financiador: "LOJA" }, { valorCentavos: 500, financiador: "TERCEIRO", terceiro: "IFOOD", documentoId: doc }] }, pagamentos: [{ forma: "OUTRA", processador: "IFOOD", valorCentavos: 4200 }] }));
   const pedido = r.recebiveis.find((x) => x.brutoCentavos === 4200);
   await n.registrarAjuste(c, { alvoTipo: "RECEBIVEL", alvoId: pedido.id, valorCentavos: -600, motivo: "Comissão iFood", categoria: "COMISSOES_IFOOD" });
   await n.registrarAjuste(c, { alvoTipo: "RECEBIVEL", alvoId: pedido.id, valorCentavos: -150, motivo: "Transação de pagamento", categoria: "TAXAS_DE_PROCESSAMENTO" });

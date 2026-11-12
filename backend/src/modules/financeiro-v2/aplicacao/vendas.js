@@ -102,15 +102,20 @@ export function operacoesDeVendas(b) {
         });
         // Descontos com efeito PRÓPRIO: da loja → dedução comercial; financiador não comprovado → dedução a classificar.
         const descontos = c.composicao?.descontos ?? [];
-        for (const d of descontos.filter((x) => x.financiador !== "TERCEIRO")) {
+        // Subsídio de terceiro só é DIREITO A RECEBER com documento que comprove o ressarcimento.
+        const comprovado = (d) => d.financiador === "TERCEIRO" && Boolean(d.documentoId);
+        for (const d of descontos.filter(comprovado)) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, d.documentoId, "Documento do subsídio");
+        for (const d of descontos.filter((x) => !comprovado(x))) {
           const cat = d.financiador === "LOJA" ? await b.categoriaLancavel(tx, cx, "DESCONTOS_COMERCIAIS") : await b.categoriaDoSistema(tx, cx, CATEGORIA_DESCONTO_A_CLASSIFICAR);
+          const financiador = d.financiador === "TERCEIRO" ? "TERCEIRO_NAO_COMPROVADO" : d.financiador;
           await b.lancar(tx, cx, cat, {
-            valorCentavos: d.valorCentavos, moeda: c.moeda, descricao: d.descricao ?? `Desconto na venda (${d.financiador.toLowerCase()})`, dataOperacao: c.dataVenda,
-            competencia: c.competencia, fonte: c.fonte, canal: c.canal, origem: { tipo: TIPO.VENDA, id: vendaId, componente: "DESCONTO", financiador: d.financiador },
+            valorCentavos: d.valorCentavos, moeda: c.moeda, descricao: d.descricao ?? `Desconto na venda (${financiador.toLowerCase()})`, dataOperacao: c.dataVenda,
+            competencia: c.competencia, fonte: c.fonte, canal: c.canal,
+            origem: { tipo: TIPO.VENDA, id: vendaId, componente: "DESCONTO", financiador, terceiro: d.terceiro ?? null, documentoId: d.documentoId ?? null },
           });
         }
-        // Subsídio de TERCEIRO: não reduz a receita; o terceiro paga essa parte (recebível dele).
-        const subsidios = descontos.filter((x) => x.financiador === "TERCEIRO").map((d) => ({ forma: "OUTRA", processador: d.terceiro, valorCentavos: d.valorCentavos }));
+        // Subsídio COMPROVADO: não reduz a receita; o terceiro paga essa parte (recebível dele, com o documento).
+        const subsidios = descontos.filter(comprovado).map((d) => ({ forma: "OUTRA", processador: d.terceiro, valorCentavos: d.valorCentavos }));
         const todosPagamentos = [...c.pagamentos, ...subsidios];
         const base = { id: vendaId, canal: c.canal, dataVenda: c.dataVenda, competencia: c.competencia, moeda: c.moeda };
         const criados = [];
@@ -119,7 +124,7 @@ export function operacoesDeVendas(b) {
           ...base, brutoCentavos: c.brutoCentavos, pagamentos: todosPagamentos, pagamentoParcial: c.pagamentoParcial === true, fonte: c.fonte,
           descricao: c.descricao, lancamentoId: lancamento.id, situacao: SITUACAO_VENDA.ATIVA,
           pagoCentavos: somarLista(todosPagamentos, (p) => p.valorCentavos), devolvidoCentavos: 0,
-          descontosCentavos: somarLista(descontos.filter((x) => x.financiador !== "TERCEIRO"), (d) => d.valorCentavos), composicao: c.composicao ?? null,
+          descontosCentavos: somarLista(descontos.filter((x) => !comprovado(x)), (d) => d.valorCentavos), composicao: c.composicao ?? null,
           pagamentoIds: criados.map((x) => x.pagamento.id), chaveIdempotencia: chave, impressao,
         });
         return {

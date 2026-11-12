@@ -72,8 +72,9 @@ function pagamentoDeVenda(p, campo) {
 /**
  * COMPOSIÇÃO ECONÔMICA da venda (opcional; venda sem composição segue o contrato anterior):
  *   receita própria (= brutoCentavos) = itens + acréscimos + serviços da empresa;
- *   descontos: cada um com SEU financiador — LOJA (dedução comercial), TERCEIRO (subsídio: o terceiro paga, vira
- *   recebível dele; não reduz a receita), PENDENTE (financiador não comprovado: dedução a classificar);
+ *   descontos: cada um com SEU financiador — LOJA (dedução comercial), TERCEIRO (subsídio: só com DOCUMENTO que comprove o
+ *   ressarcimento vira recebível do terceiro; sem documento, fica como dedução a classificar — nada de recebível fictício),
+ *   PENDENTE (financiador não comprovado: dedução a classificar);
  *   pagamentos do consumidor = receita − descontos da loja/pendentes − subsídios de terceiros.
  * Valores cobrados em nome de terceiros ainda não têm tratamento (exigem obrigação com o terceiro): são recusados.
  */
@@ -87,13 +88,14 @@ function composicaoDeVenda(e, brutoCentavos) {
     falhar(CODIGO.ENTRADA_INVALIDA, "Valores cobrados em nome de terceiros ainda não têm tratamento (exigem obrigação com o terceiro).", { campo: "composicao.terceirosCentavos" });
   }
   const descontos = exigirLista(e.descontos ?? [], "composicao.descontos", { min: 0, max: 20 }).map((d, i) => {
-    semCamposDesconhecidos(d, ["valorCentavos", "financiador", "terceiro", "descricao"], `composicao.descontos[${i}]`);
+    semCamposDesconhecidos(d, ["valorCentavos", "financiador", "terceiro", "descricao", "documentoId"], `composicao.descontos[${i}]`);
     const financiador = exigirUmDe(d.financiador, FINANCIADOR_DESCONTO, `composicao.descontos[${i}].financiador`);
     if (financiador !== "TERCEIRO" && d.terceiro !== undefined && d.terceiro !== null) falhar(CODIGO.ENTRADA_INVALIDA, "Só desconto de TERCEIRO indica o terceiro.", { campo: `composicao.descontos[${i}].terceiro` });
     return {
       valorCentavos: exigirCentavos(d.valorCentavos, `composicao.descontos[${i}].valorCentavos`, { positivo: true }), financiador,
       terceiro: financiador === "TERCEIRO" ? exigirUmDe(d.terceiro, PROCESSADOR, `composicao.descontos[${i}].terceiro`) : null,
       descricao: exigirTexto(d.descricao, `composicao.descontos[${i}].descricao`, { opcional: true }),
+      documentoId: uuidOpcional(d.documentoId, `composicao.descontos[${i}].documentoId`),
     };
   });
   if (somar(itensCentavos, acrescimosCentavos, servicosCentavos) !== brutoCentavos) {

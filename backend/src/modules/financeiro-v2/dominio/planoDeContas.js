@@ -105,7 +105,7 @@ const ACAITERIA = [
   f("BROWNIES", "Brownies", "INSUMOS"),
   f("MIX", "Mix", "INSUMOS"),
   f("SUCO", "Suco", "INSUMOS"),
-  f("ENTREGADORES_PROPRIOS", "Entregadores próprios", "DESPESAS_COMERCIAIS"),
+  f("ENTREGADORES_PROPRIOS", "Entregadores Próprios (Motoboys)", "DESPESAS_COMERCIAIS"),
   f("COMISSOES_IFOOD", "Comissões iFood", "DESPESAS_COMERCIAIS"),
   f("PROMOCOES_SUBSIDIADAS", "Promoções subsidiadas pela loja", "DEDUCOES_COMERCIAIS"),
   f("TAXAS_STONE", "Taxas Stone", "DESPESAS_RECEBIMENTO_PROCESSAMENTO"),
