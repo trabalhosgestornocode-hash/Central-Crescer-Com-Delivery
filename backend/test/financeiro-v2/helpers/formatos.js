@@ -130,3 +130,25 @@ export function ofx({ inicio = "20260901", fim = "20260930", transacoes, saldo =
   const cab = versao === 2 ? '<?xml version="1.0"?><?OFX OFXHEADER="200" VERSION="220"?>' : "OFXHEADER:100\nDATA:OFXSGML\nVERSION:102\n";
   return new TextEncoder().encode(`${cab}\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKACCTFROM><BANKID>0000\n</BANKACCTFROM>\n<BANKTRANLIST>\n<DTSTART>${inicio}\n<DTEND>${fim}\n${trn}\n</BANKTRANLIST>${saldo !== null ? `\n<LEDGERBAL>\n<BALAMT>${saldo}\n<DTASOF>${saldoEm}\n</LEDGERBAL>` : ""}\n</STMTRS></STMTTRNRS></BANKMSGSRSV1></OFX>\n`);
 }
+
+// ------------------------------------------------------------------------------------------- SAIPOS faturamento por dia (PDF)
+const R = (c) => `${String(Math.trunc(c / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ".")},${String(c % 100).padStart(2, "0")}`;
+/** Dias: [{ data:"dd/mm/aaaa", valor, desconto, qtd }] — composição fechada: itens = valor − entrega(20,00) − acréscimo(1,00) + desconto. */
+export function faturamentoSaiposPdf(dias) {
+  const cab = [
+    { y: 720, partes: [[234, "VEND"], [257, "AS"], [427, "ITENS"]] },
+    { y: 714, partes: [[116, "SEMANA"], [288, "ACUMUL"], [325, "ADO"], [365, "MÉDIO"], [472, "ENTREGA"], [532, "SER"], [549, "VIÇO"], [737, "CANC"]] },
+    { y: 708, partes: [[61, "DATA"], [174, "VEND"], [197, "AS"], [257, "DE"], [435, "DOS"], [589, "ACRÉSCIMOS"], [665, "DESCONTOS"]] },
+    { y: 702, partes: [[116, "DIA DA"], [315, "VALOR"], [363, "TICKE"], [387, "T"], [477, "TAXA DE"], [534, "TAXA DE"]] },
+  ];
+  let acumulado = 0;
+  const linhas = [];
+  dias.forEach((d, i) => {
+    acumulado += d.valor;
+    const y = 600 - i * 28;
+    const itens = d.valor - 2000 - 100 + d.desconto;
+    linhas.push({ y, partes: [[48, d.data], [116, "Dia-"], [199, String(d.qtd ?? 1)], [257, "R$"], [290, `R$ ${R(acumulado)}`], [382, "R$"], [441, "R$"], [477, "R$ 20,00"], [539, "R$ 0,00"], [615, "R$ 1,00"], [677, `R$ ${R(d.desconto)}`]] });
+    linhas.push({ y: y + 13, partes: [[116, "feira"], [234, R(d.valor)], [371, "1,00"], [418, R(itens)]] });
+  });
+  return pdf([["Faturamento por dia", ...cab, ...linhas]]);
+}

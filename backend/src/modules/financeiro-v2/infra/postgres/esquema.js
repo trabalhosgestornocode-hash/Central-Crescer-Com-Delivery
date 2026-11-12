@@ -122,6 +122,18 @@ export const ESQUEMA = Object.freeze({
     dados: c("dados", "json"), original: c("original", "json"), conferencia: c("conferencia"), situacao: c("situacao"),
     substituidoPorImportacaoId: c("substituido_por_importacao_id", "uuid"),
   }),
+  [TIPO.PROPOSTA]: tabela("fv2_proposta", {
+    operacao: c("operacao"), estado: c("estado"), fonte: c("fonte"), tipoRelatorio: c("tipo_relatorio"), importacaoId: c("importacao_id", "uuid"),
+    documentoIds: c("documento_ids", "uuids"), registroIds: c("registro_ids", "uuids"), competencia: c("competencia"), dataOperacao: c("data_operacao", "data"),
+    natureza: c("natureza"), valorCentavos: c("valor_centavos", "centavos"), categoriaSugerida: c("categoria_sugerida"), comando: c("comando", "json"),
+    duplicidades: c("duplicidades", "json"), divergencias: c("divergencias", "json"), confianca: c("confianca"), justificativa: c("justificativa"),
+    efeitos: c("efeitos", "json"), decididoPor: c("decidido_por", "uuid"), decididoEm: c("decidido_em", "instante"), substituidaPorId: c("substituida_por_id", "uuid"),
+  }),
+  [TIPO.DIVERGENCIA_FONTE]: tabela("fv2_divergencia_fonte", {
+    tipo: c("tipo"), periodoInicio: c("periodo_inicio", "data"), periodoFim: c("periodo_fim", "data"), totais: c("totais", "json"),
+    diferencaCentavos: c("diferenca_centavos", "centavos"), porDia: c("por_dia", "json"), atipicos: c("atipicos", "json"), explicacoes: c("explicacoes", "json"),
+    estado: c("estado"), registroIds: c("registro_ids", "uuids"),
+  }),
   [TIPO.CONCESSAO]: tabela("fv2_concessao", {
     usuarioId: c("usuario_id", "uuid"), acoes: c("acoes", "json"), situacao: c("situacao"), concedidoPor: c("concedido_por", "uuid"),
     justificativa: c("justificativa"),

@@ -50,6 +50,7 @@ const f = (codigo, nome, pai, extra = {}) => ({ codigo, nome, pai, aceitaLancame
 
 export const CATEGORIA_DE_VENDA = Object.freeze(Object.fromEntries(Object.values(CANAL).map((c) => [c, `VENDA_${c}`])));
 export const CATEGORIA_DEVOLUCAO = "DEVOLUCOES_E_ESTORNOS";
+export const CATEGORIA_VENDA_AGREGADA = "VENDAS_AGREGADAS_SEM_CANAL";
 
 /** Modelo genérico: serve a qualquer empresa. As categorias `doSistema` são usadas pelo próprio núcleo. */
 const BASE = [
@@ -58,6 +59,8 @@ const BASE = [
   f("VENDA_IFOOD", "Vendas pelo iFood", "RECEITA_OPERACIONAL", { doSistema: true }),
   f("VENDA_ANOTA_AI", "Vendas pelo Anota AI", "RECEITA_OPERACIONAL", { doSistema: true }),
   f("VENDA_OUTRO", "Vendas por outros canais", "RECEITA_OPERACIONAL", { doSistema: true }),
+  // Receita de relatório AGREGADO (total do dia, sem pedido nem canal): nunca é distribuída entre canais por suposição.
+  f(CATEGORIA_VENDA_AGREGADA, "Vendas agregadas por dia (sem canal identificado)", "RECEITA_OPERACIONAL", { doSistema: true }),
   g("DEDUCOES_COMERCIAIS", "Deduções comerciais da receita", C.DEDUCOES_COMERCIAIS),
   f("DESCONTOS_COMERCIAIS", "Descontos comerciais concedidos", "DEDUCOES_COMERCIAIS"),
   f(CATEGORIA_DEVOLUCAO, "Devoluções e estornos a clientes", "DEDUCOES_COMERCIAIS", { doSistema: true }),

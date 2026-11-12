@@ -10,6 +10,7 @@ import { operacoesDeDocumentos } from "./documentos.js";
 import { operacoesEconomicas } from "./economico.js";
 import { operacoesDeImportacao } from "./importacoes.js";
 import { operacoesDeAcesso } from "./acessos.js";
+import { operacoesDeFormacao } from "./formacao.js";
 import { criarRegistroDeFontes } from "../importacao/fontes/index.js";
 import { criarRegistroDeAcessosNegadosMemoria } from "../infra/cofreDisco.js";
 import { operacoesDePlano } from "./plano.js";
@@ -43,6 +44,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeConciliacao(base),
     ...operacoesDeImportacao(base, { cofre, fontes, estabelecimentosDaUnidade, acessosNegados }),
     ...operacoesDeAcesso(base),
+    ...operacoesDeFormacao(base),
     ...operacoesDeCompetencia(base, { repositorio, politica }),
   };
   // Toda operação é assíncrona e falha por rejeição (nunca por exceção síncrona), inclusive erros de validação.

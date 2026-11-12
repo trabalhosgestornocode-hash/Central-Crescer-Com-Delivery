@@ -7,7 +7,7 @@ const enumerar = (...valores) => Object.freeze(Object.fromEntries(valores.map((v
 export const TIPO = enumerar(
   "CONTA", "CONTRAPARTE", "LANCAMENTO", "VENDA", "OBRIGACAO", "RECEBIVEL", "MOVIMENTACAO", "LIQUIDACAO",
   "TRANSFERENCIA", "AJUSTE", "DOCUMENTO", "VINCULO_DOCUMENTAL", "CORRESPONDENCIA", "COMPETENCIA",
-  "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO", "IMPORTACAO", "REGISTRO_FONTE", "CONCESSAO",
+  "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO", "IMPORTACAO", "REGISTRO_FONTE", "CONCESSAO", "PROPOSTA", "DIVERGENCIA_FONTE",
 );
 
 /** Conta financeira = onde o dinheiro DA EMPRESA está. Processadores (Stone, iFood, vales) NÃO são contas: geram recebíveis. */
@@ -93,7 +93,7 @@ export const TIPO_DOCUMENTO = enumerar(
 /** Tipos de registro que podem receber vínculo documental. */
 export const VINCULAVEIS = Object.freeze([
   TIPO.LANCAMENTO, TIPO.VENDA, TIPO.OBRIGACAO, TIPO.RECEBIVEL, TIPO.MOVIMENTACAO, TIPO.LIQUIDACAO, TIPO.TRANSFERENCIA,
-  TIPO.AJUSTE, TIPO.CORRESPONDENCIA, TIPO.COMPETENCIA, TIPO.PAGAMENTO_VENDA, TIPO.ESTORNO, TIPO.IMPORTACAO, TIPO.REGISTRO_FONTE,
+  TIPO.AJUSTE, TIPO.CORRESPONDENCIA, TIPO.COMPETENCIA, TIPO.PAGAMENTO_VENDA, TIPO.ESTORNO, TIPO.IMPORTACAO, TIPO.REGISTRO_FONTE, TIPO.PROPOSTA, TIPO.DIVERGENCIA_FONTE,
 ]);
 
 export const SITUACAO_CORRESPONDENCIA = enumerar("CANDIDATA", "CONFIRMADA", "DIVERGENTE", "REJEITADA", "AGUARDANDO_DOCUMENTO");
@@ -105,7 +105,7 @@ export const CONCILIAVEIS = Object.freeze([TIPO.MOVIMENTACAO, TIPO.RECEBIVEL, TI
  * dinheiro; nenhuma cria efeito financeiro novo. MANUAL = montada por uma pessoa (conta a pagar × pagamento, transferência...).
  */
 export const RELACAO_CORRESPONDENCIA = enumerar(
-  "SAIPOS_X_STONE", "STONE_X_RECEBIMENTO", "RECEBIMENTO_STONE_X_UNICRED", "IFOOD_X_UNICRED", "FOODY_X_UNICRED", "MANUAL",
+  "SAIPOS_X_STONE", "STONE_X_RECEBIMENTO", "RECEBIMENTO_STONE_X_UNICRED", "IFOOD_X_UNICRED", "FOODY_X_UNICRED", "OBRIGACAO_X_MOVIMENTACAO", "MANUAL",
 );
 /** Força da regra que propôs a candidata: FORTE = identificador comum; FRACA = só valor/data (nunca é prova). */
 export const FORCA_CORRESPONDENCIA = enumerar("FORTE", "FRACA");
@@ -122,6 +122,17 @@ export const CONFERENCIA_REGISTRO = enumerar("NAO_CONFERIDO", "CONFERIDO", "DIVE
 export const SITUACAO_REGISTRO_FONTE = enumerar("ATIVO", "SUBSTITUIDO");
 /** Liberação de acesso financeiro_v2.* de um usuário numa unidade. */
 export const SITUACAO_CONCESSAO = enumerar("ATIVA", "REVOGADA");
+
+/**
+ * Formação financeira (Execução 03): registro importado → PROPOSTA → revisão → aplicação autorizada → operação.
+ * Importar nunca cria efeito financeiro; só a aplicação de uma proposta APROVADA cria (uma única vez).
+ */
+export const ESTADO_PROPOSTA = enumerar("PROPOSTA", "AGUARDANDO_EVIDENCIA", "AGUARDANDO_REVISAO", "APROVADA", "APLICADA", "REJEITADA", "SUBSTITUIDA");
+export const OPERACAO_PROPOSTA = enumerar(
+  "VENDA", "VENDA_AGREGADA", "PAGAMENTO_STONE", "OBRIGACAO_ENTREGADOR", "MOVIMENTACAO_BANCARIA",
+);
+export const CONFIANCA = enumerar("ALTA", "MEDIA", "BAIXA");
+export const ESTADO_DIVERGENCIA_FONTE = enumerar("ABERTA", "EXPLICADA_PARCIALMENTE", "RESOLVIDA");
 
 export const ESTADO_COMPETENCIA = enumerar("ABERTA", "FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO");
 

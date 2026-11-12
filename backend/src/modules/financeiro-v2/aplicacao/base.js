@@ -10,17 +10,42 @@ import { hojeEm } from "../dominio/tempo.js";
 export const chaveDaCategoria = (codigo) => `categoria:${codigo}`;
 export const tituloNovo = (valorBaseCentavos) => ({ valorBaseCentavos, liquidadoCentavos: 0, ajustesCentavos: 0, saldoCentavos: valorBaseCentavos, situacao: SITUACAO_TITULO.ABERTA });
 
+/**
+ * Mesma base, mas cada operação roda DENTRO da transação `tx` já aberta (com as mesmas checagens de contexto, escopo e
+ * permissão). Permite compor operações aprovadas (venda, pagamento, ajuste...) numa única transação atômica — usado pela
+ * aplicação de propostas de formação, que precisa criar a operação e marcar a proposta como aplicada juntas.
+ */
+export function baseNaTransacao(b, tx, escopoDaTransacao) {
+  const mesmoEscopo = (ctx) => {
+    if (ctx.organizacaoId !== escopoDaTransacao.organizacaoId || ctx.unidadeId !== escopoDaTransacao.unidadeId) {
+      falhar(CODIGO.ESCOPO_NAO_AUTORIZADO, "Operação composta fora do escopo da transação.");
+    }
+    return ctx;
+  };
+  return {
+    ...b,
+    executar: (ctxBruto, acao, fn) => fn(mesmoEscopo(b.autorizarContexto(ctxBruto, acao)), tx),
+    consultar: (ctxBruto, fn) => fn(mesmoEscopo(b.autorizarContexto(ctxBruto, ACAO.VER)), tx),
+  };
+}
+
 export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
   const agora = () => relogio().toISOString();
   const hoje = () => hojeEm(relogio(), fuso);
   /** Competências em fechamento com pendências já marcadas nesta transação (uma marca por transação). */
   const marcadas = new WeakMap();
 
-  /** Operação de escrita: valida contexto, escopo e permissão ANTES de abrir a transação. */
-  function executar(ctxBruto, acao, fn) {
+  /** Contexto validado + escopo autorizado + permissão da ação. */
+  function autorizarContexto(ctxBruto, acao) {
     const ctx = exigirContexto(ctxBruto);
     politica.exigir(ctx);
     autorizar(ctx, acao);
+    return ctx;
+  }
+
+  /** Operação de escrita: valida contexto, escopo e permissão ANTES de abrir a transação. */
+  function executar(ctxBruto, acao, fn) {
+    const ctx = autorizarContexto(ctxBruto, acao);
     return repositorio.transacao((tx) => fn(ctx, tx), { escopo: ctx });
   }
 
@@ -166,7 +191,7 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
   }
 
   return {
-    gerarId, agora, hoje, executar, consultar, historico, criar, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel,
+    gerarId, agora, hoje, executar, consultar, autorizarContexto, historico, criar, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel,
     chaveDe, jaRegistrado, exigirNaoFutura, categoriaPorCodigo, categoriaLancavel, categoriaDoSistema, lancar, cancelarLancamento, exigirDocumentos,
   };
 }
