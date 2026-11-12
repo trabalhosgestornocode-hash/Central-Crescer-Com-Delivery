@@ -14,8 +14,9 @@
 import { createHash } from "node:crypto";
 import { CODIGO, ErroFinanceiro } from "../dominio/erros.js";
 import { somar } from "../dominio/dinheiro.js";
-import { centavos, dataHora, decodificar, erroDeLinha, localizarCabecalho, rotulo } from "./leitor.js";
+import { centavos, dataHora, decodificar, erroDeLinha, localizarCabecalho, micros, rotulo } from "./leitor.js";
 import { FORMATO, detectarFormato, paraTabelas } from "./formatos/index.js";
+import { compatibilidadeNoFormato } from "./fontes/comum.js";
 
 export const sha256 = (texto) => createHash("sha256").update(texto).digest("hex");
 
@@ -49,6 +50,7 @@ export const DIVERGENCIA = Object.freeze({
   VALOR_A_CLASSIFICAR: "VALOR_A_CLASSIFICAR",
   CONFLITO_COM_IMPORTADO: "CONFLITO_COM_IMPORTADO",
   LEITURA_INCOMPLETA: "LEITURA_INCOMPLETA",
+  PERIODO_DO_DOCUMENTO: "PERIODO_DO_DOCUMENTO",
   ANOMALIA_DE_PLANILHA: "ANOMALIA_DE_PLANILHA",
 });
 
@@ -57,7 +59,7 @@ export const diferenca = (codigo, mensagem, esperadoCentavos, encontradoCentavos
 });
 
 /** Utilitário de conversão de UMA linha: erros são anotados com o número da linha e a linha é descartada. */
-function utilitario(celulas, mapa, numeroLinha, periodo) {
+function utilitario(celulas, mapa, numeroLinha, periodo, cabecalho = []) {
   const erros = [];
   const bruto = (campo) => (campo in mapa ? (celulas[mapa[campo]] ?? "") : "");
   const pegar = (campo, opcional, conv) => {
@@ -81,9 +83,12 @@ function utilitario(celulas, mapa, numeroLinha, periodo) {
     bruto,
     texto: (campo, { opcional = false } = {}) => pegar(campo, opcional, (t) => t),
     valor: (campo, { opcional = false } = {}) => pegar(campo, opcional, (t) => centavos(t, campo)),
+    micros: (campo, { opcional = false } = {}) => pegar(campo, opcional, (t) => micros(t, campo)),
     data: (campo, { opcional = false } = {}) => pegar(campo, opcional, (t) => dataHora(t, campo).data),
     dataHora: (campo, { opcional = false } = {}) => pegar(campo, opcional, (t) => dataHora(t, campo)),
     erro: (codigo, mensagem, campo) => erros.push(erroDeLinha(codigo, mensagem, numeroLinha, campo)),
+    /** Colunas cujo rótulo casa com o padrão (ex.: "Dia - 01/09/2026"): [{ rotulo, texto }]. */
+    colunasPorPadrao: (padrao) => cabecalho.map((h, j) => ({ rotulo: h, texto: celulas[j] ?? "" })).filter((c) => padrao.test(c.rotulo)),
   };
 }
 
@@ -92,11 +97,12 @@ function utilitario(celulas, mapa, numeroLinha, periodo) {
  * @param {{bytes:Uint8Array, adaptador:object, periodo:{inicio:string, fim:string}, estabelecimentosDaUnidade?:string[]|null}} p
  */
 export function analisarArquivo({ bytes, adaptador, periodo, estabelecimentosDaUnidade = null }) {
-  const base = { fonte: adaptador.fonte, tipoRelatorio: adaptador.tipoRelatorio, compatibilidade: adaptador.compatibilidade };
+  const base = { fonte: adaptador.fonte, tipoRelatorio: adaptador.tipoRelatorio, compatibilidade: "SINTETICA" };
   const rejeitar = (erros) => ({ ...base, reconhecido: false, erros, divergencias: [], registros: [], duplicadosNoArquivo: [], controles: {}, estabelecimentos: [] });
 
   if (!bytes.byteLength || !decodificar(bytes.subarray(0, 4096)).trim()) return rejeitar([erroDeLinha(ERRO.ARQUIVO_VAZIO, "Arquivo vazio.", null)]);
   const formato = detectarFormato(bytes);
+  base.compatibilidade = compatibilidadeNoFormato(adaptador, formato);
   const aceitos = adaptador.formatos ?? [FORMATO.CSV, FORMATO.XLSX];
   if (!aceitos.includes(formato)) {
     return rejeitar([erroDeLinha(ERRO.FORMATO_NAO_SUPORTADO, `Formato "${formato}" não é aceito para ${adaptador.descricao} (aceitos: ${aceitos.join(", ")}).`, null)]);
@@ -135,7 +141,7 @@ export function analisarArquivo({ bytes, adaptador, periodo, estabelecimentosDaU
   for (let i = cab.indice + 1; i < linhas.length; i += 1) {
     const celulas = linhas[i];
     if (!celulas.some((c) => c)) continue;
-    const u = utilitario(celulas, cab.mapa, i + 1, periodo);
+    const u = utilitario(celulas, cab.mapa, i + 1, periodo, linhas[cab.indice]);
     if (adaptador.ehTotal?.(u)) {
       const total = adaptador.lerTotal?.(u) ?? null;
       if (total) declarados.push({ ...total, linha: i + 1 });
@@ -145,7 +151,9 @@ export function analisarArquivo({ bytes, adaptador, periodo, estabelecimentosDaU
     const convertido = adaptador.converter(u);
     erros.push(...u.erros);
     if (u.erros.length || !convertido) continue;
-    const original = Object.fromEntries(cabecalho.map((h, j) => [h || `coluna_${j + 1}`, celulas[j] ?? ""]));
+    // Colunas sensíveis (ex.: número de cartão, mesmo mascarado) não são guardadas na cópia da linha.
+    const omitidas = new Set((adaptador.colunasOmitidas ?? []).map(rotulo));
+    const original = Object.fromEntries(cabecalho.map((h, j) => [h || `coluna_${j + 1}`, omitidas.has(rotulo(h)) ? "[omitido]" : (celulas[j] ?? "")]));
     for (const r of [].concat(convertido)) brutos.push({ ...r, linha: i + 1, original });
   }
   if (!brutos.length && !erros.length) erros.push(erroDeLinha(ERRO.ARQUIVO_VAZIO, "O arquivo não tem nenhuma linha de dados.", null));
@@ -201,7 +209,7 @@ export function analisarArquivo({ bytes, adaptador, periodo, estabelecimentosDaU
   const fechamento = adaptador.fechar ? adaptador.fechar(registros, { declarados, periodo }) : { controles: {}, divergencias: [] };
   erros.push(...(fechamento.erros ?? []));
   const divergencias = [...fechamento.divergencias, ...convertido.avisos.map((a) => ({
-    codigo: a.codigo === "LINHA_NAO_INTERPRETADA" ? DIVERGENCIA.LEITURA_INCOMPLETA : DIVERGENCIA.ANOMALIA_DE_PLANILHA, mensagem: a.mensagem, linha: a.linha ?? null,
+    codigo: a.codigo === "LINHA_NAO_INTERPRETADA" ? DIVERGENCIA.LEITURA_INCOMPLETA : a.codigo === "PERIODO_DIVERGENTE" ? DIVERGENCIA.PERIODO_DO_DOCUMENTO : DIVERGENCIA.ANOMALIA_DE_PLANILHA, mensagem: a.mensagem, linha: a.linha ?? null,
   }))];
 
   // Estabelecimento: o arquivo precisa ser DA unidade. Sem cadastro para comparar, a dúvida vira pendência explícita.

@@ -6,68 +6,104 @@
 //   recebível/repasse → relatório de RECEBIMENTOS (comportamento diferente: uma linha por parcela paga, por data de pagamento);
 //   liquidação bancária → só o extrato Unicred comprova (fontes/unicred.js), por conciliação.
 import { somar, subtrair } from "../../dominio/dinheiro.js";
-import { rotulo } from "../leitor.js";
+import { centavosArredondados, centavosExatos, rotulo } from "../leitor.js";
 import { DIVERGENCIA, diferenca } from "../motor.js";
 import { classificarPorPalavras, col, definirFonte } from "./comum.js";
 
 const produtoStone = (t) => classificarPorPalavras(t, [["PIX", ["pix"]], ["DEBITO", ["debito"]], ["CREDITO", ["credito"]], ["VALE", ["voucher", "vale"]]]);
-const situacaoStone = (t) => classificarPorPalavras(t, [["CANCELADA", ["cancel", "estorn", "chargeback"]], ["NEGADA", ["negad", "recusad"]], ["APROVADA", ["aprovad", "autorizad", "capturad", "pag"]]]);
+const situacaoStone = (t) => classificarPorPalavras(t, [["CANCELADA", ["cancel", "estorn", "chargeback"]], ["NEGADA", ["negad", "recusad"]], ["PENDENTE", ["pendent", "em analise", "processando"]], ["APROVADA", ["aprovad", "autorizad", "capturad", "pag"]]]);
 
+/**
+ * Relatório de VENDAS da Stone — layout REAL conferido com a exportação de setembro/2026 (aba "Report", cabeçalho na
+ * 1ª linha, todas as células como texto, valores com 6 casas decimais e descontos negativos). Também aceita os rótulos
+ * do contrato sintético da Execução 02.
+ *   - valores em MILIONÉSIMOS de real: o líquido e os descontos da Stone têm frações de centavo por transação; nada é
+ *     arredondado linha a linha — os totais de conferência é que são levados ao centavo (meio para cima);
+ *   - desconto total = |MDR| + |antecipação| + |desconto unificado| (a Stone informa a taxa do cartão no "unificado" e a
+ *     do Pix no MDR); conferido contra bruto − líquido em cada linha;
+ *   - número do cartão NÃO é guardado (nem mascarado);
+ *   - situação: APROVADA | CANCELADA/NEGADA (rejeitadas) | PENDENTE | NAO_RECONHECIDA.
+ */
 export const STONE_VENDAS = definirFonte({
   fonte: "STONE",
   tipoRelatorio: "STONE_VENDAS",
   tipoDocumento: "RELATORIO_PROCESSADOR",
   descricao: "relatório de vendas (transações) da Stone",
+  formatosHomologados: ["xlsx"],
   colunas: {
-    id: col(["Identificador da transação", "ID da transação", "Stone ID", "Código da transação"]),
-    quando: col(["Data da venda", "Data/Hora da venda", "Data/Hora"]),
-    produto: col(["Produto", "Tipo de produto"]),
+    id: col(["STONE ID", "Identificador da transação", "ID da transação", "Código da transação"]),
+    quando: col(["DATA DA VENDA", "Data/Hora da venda", "Data/Hora"]),
+    produto: col(["PRODUTO", "Tipo de produto"]),
     modalidade: col(["Modalidade", "Parcelamento"], false),
-    bandeira: col(["Bandeira"]),
-    bruto: col(["Valor bruto", "Valor da venda"]),
-    mdr: col(["Desconto de MDR", "Taxa MDR", "MDR"]),
-    antecipacao: col(["Desconto de antecipação", "Taxa de antecipação"], false),
-    liquido: col(["Valor líquido"]),
-    situacao: col(["Status", "Situação"]),
-    stonecode: col(["Stonecode", "Stone Code", "Código do estabelecimento"], false),
-    autorizacao: col(["Autorização", "Código de autorização", "NSU"], false),
+    parcelas: col(["N DE PARCELAS", "Nº de parcelas"], false),
+    bandeira: col(["BANDEIRA"]),
+    bruto: col(["VALOR BRUTO", "Valor da venda"]),
+    mdr: col(["DESCONTO DE MDR", "Taxa MDR", "MDR"]),
+    antecipacao: col(["DESCONTO DE ANTECIPACAO", "Desconto de antecipação", "Taxa de antecipação"], false),
+    unificado: col(["DESCONTO UNIFICADO"], false),
+    liquido: col(["VALOR LIQUIDO"]),
+    situacao: col(["ULTIMO STATUS", "Status", "Situação"]),
+    dataSituacao: col(["DATA DO ULTIMO STATUS"], false),
+    stonecode: col(["STONECODE", "Stone Code", "Código do estabelecimento"], false),
+    autorizacao: col(["CÓDIGO DE AUTORIZAÇÃO", "Código de autorização", "Autorização", "NSU"], false),
+    captura: col(["MEIO DE CAPTURA"], false),
   },
+  colunasOmitidas: ["N DO CARTAO", "Número do cartão"],
   ehTotal: (u) => /^total/.test(rotulo(u.bruto("id"))),
   lerTotal: (u) => ({ valorCentavos: u.valor("bruto") }),
   converter(u) {
     const id = u.texto("id");
     const quando = u.dataHora("quando");
-    const bruto = u.valor("bruto");
-    const mdr = u.valor("mdr");
-    const antecipacao = u.valor("antecipacao", { opcional: true }) ?? 0;
-    const liquido = u.valor("liquido");
+    const bruto = u.micros("bruto");
+    const mdr = u.micros("mdr");
+    const antecipacao = u.micros("antecipacao", { opcional: true }) ?? 0;
+    const unificado = u.micros("unificado", { opcional: true }) ?? 0;
+    const liquido = u.micros("liquido");
     if (u.erros.length) return null;
+    const brutoCentavos = centavosExatos(bruto);
+    if (brutoCentavos === null) { u.erro("VALOR_INVALIDO", "Valor bruto com fração de centavo.", "bruto"); return null; }
     const situacao = situacaoStone(u.bruto("situacao"));
+    const desconto = Math.abs(mdr) + Math.abs(antecipacao) + Math.abs(unificado);
     return {
-      tipoRegistro: "TRANSACAO", idExterno: id, data: quando.data, valorCentavos: bruto,
+      tipoRegistro: "TRANSACAO", idExterno: id, data: quando.data, valorCentavos: brutoCentavos,
       dados: {
         hora: quando.hora, natureza: "VENDA_PROCESSADA", canal: null, produto: produtoStone(u.bruto("produto")), produtoOriginal: u.bruto("produto"),
-        modalidade: u.bruto("modalidade") || null, bandeira: u.bruto("bandeira"), brutoCentavos: bruto, mdrCentavos: mdr,
-        antecipacaoCentavos: antecipacao, taxaInformadaCentavos: somar(mdr, antecipacao), taxaCalculadaCentavos: subtrair(bruto, liquido),
-        liquidoCentavos: liquido, antecipada: antecipacao > 0, situacao: situacao ?? "NAO_RECONHECIDA", situacaoOriginal: u.bruto("situacao"),
-        autorizacao: u.bruto("autorizacao") || null, estabelecimento: u.bruto("stonecode") || null,
+        modalidade: u.bruto("modalidade") || null, parcelas: u.bruto("parcelas") || null, bandeira: u.bruto("bandeira") || null,
+        captura: u.bruto("captura") || null, brutoCentavos,
+        brutoMicros: bruto, liquidoMicros: liquido, mdrMicros: mdr, antecipacaoMicros: antecipacao, unificadoMicros: unificado,
+        descontoInformadoMicros: desconto, descontoCalculadoMicros: bruto - liquido,
+        liquidoCentavos: centavosExatos(liquido) ?? centavosArredondados(liquido), liquidoTemFracaoDeCentavo: centavosExatos(liquido) === null,
+        mdrCentavos: centavosArredondados(Math.abs(mdr)), antecipacaoCentavos: centavosArredondados(Math.abs(antecipacao)),
+        taxaInformadaCentavos: centavosArredondados(desconto), taxaCalculadaCentavos: centavosArredondados(bruto - liquido),
+        antecipada: antecipacao !== 0, situacao: situacao ?? "NAO_RECONHECIDA", situacaoOriginal: u.bruto("situacao"),
+        dataSituacao: u.bruto("dataSituacao") || null, autorizacao: u.bruto("autorizacao") || null, estabelecimento: u.bruto("stonecode") || null,
       },
     };
   },
   fechar(registros) {
     const divergencias = [];
-    let bruto = 0;
-    let taxas = 0;
-    let liquido = 0;
+    const soma = { bruto: 0, liquido: 0, desconto: 0 };
+    const contagem = { APROVADA: 0, REJEITADA: 0, PENDENTE: 0, NAO_RECONHECIDA: 0 };
     for (const r of registros) {
       const d = r.dados;
-      if (d.taxaInformadaCentavos !== d.taxaCalculadaCentavos) {
-        divergencias.push(diferenca(DIVERGENCIA.LINHA_NAO_FECHA, `Transação ${r.idExterno}: taxa informada difere de bruto − líquido.`, d.taxaInformadaCentavos, d.taxaCalculadaCentavos, { linha: r.linha }));
+      if (d.descontoInformadoMicros !== d.descontoCalculadoMicros) {
+        divergencias.push(diferenca(DIVERGENCIA.LINHA_NAO_FECHA, `Transação ${r.idExterno}: descontos informados diferem de bruto − líquido.`, d.taxaInformadaCentavos, d.taxaCalculadaCentavos, { linha: r.linha }));
       }
-      if (d.situacao === "NAO_RECONHECIDA") divergencias.push({ codigo: DIVERGENCIA.VALOR_A_CLASSIFICAR, mensagem: `Transação ${r.idExterno}: situação "${d.situacaoOriginal}" não reconhecida.`, linha: r.linha });
-      if (d.situacao === "APROVADA") { bruto = somar(bruto, d.brutoCentavos); taxas = somar(taxas, d.taxaInformadaCentavos); liquido = somar(liquido, d.liquidoCentavos); }
+      const grupo = d.situacao === "APROVADA" ? "APROVADA" : ["CANCELADA", "NEGADA"].includes(d.situacao) ? "REJEITADA" : d.situacao === "PENDENTE" ? "PENDENTE" : "NAO_RECONHECIDA";
+      contagem[grupo] += 1;
+      if (grupo === "NAO_RECONHECIDA") divergencias.push({ codigo: DIVERGENCIA.VALOR_A_CLASSIFICAR, mensagem: `Transação ${r.idExterno}: situação "${d.situacaoOriginal}" não reconhecida.`, linha: r.linha });
+      if (grupo === "APROVADA") { soma.bruto += d.brutoMicros; soma.liquido += d.liquidoMicros; soma.desconto += d.descontoInformadoMicros; }
     }
-    return { controles: { brutoAprovadoCentavos: bruto, taxasInformadasCentavos: taxas, liquidoAprovadoCentavos: liquido }, divergencias };
+    return {
+      controles: {
+        aprovadas: contagem.APROVADA, rejeitadas: contagem.REJEITADA, pendentes: contagem.PENDENTE, situacaoNaoReconhecida: contagem.NAO_RECONHECIDA,
+        brutoAprovadoCentavos: centavosArredondados(soma.bruto), liquidoAprovadoCentavos: centavosArredondados(soma.liquido),
+        descontosAprovadosCentavos: centavosArredondados(soma.desconto), taxasInformadasCentavos: centavosArredondados(soma.desconto),
+        liquidoAprovadoMicros: soma.liquido, descontosAprovadosMicros: soma.desconto,
+        observacao: "Líquido e descontos somados em milionésimos e levados ao centavo só no total (meio para cima).",
+      },
+      divergencias,
+    };
   },
 });
 

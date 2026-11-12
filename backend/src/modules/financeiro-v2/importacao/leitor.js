@@ -104,3 +104,33 @@ export function dataHora(texto, campo) {
   if (hora && (Number(h[0]) > 23 || Number(h[1]) > 59 || Number(h[2] ?? 0) > 59)) throw new ErroFinanceiro(CODIGO.DATA_INVALIDA, `${campo} tem hora inválida.`, { campo });
   return { data, hora };
 }
+
+/**
+ * Valor com até 6 casas decimais (relatórios de processadora trazem frações de centavo) → MILIONÉSIMOS de real (inteiro).
+ * Aceita "1.234,567891", "-0,940000", "12,5" e o decimal de planilha "0.766034"; recusa o ambíguo "20.005".
+ */
+export function micros(texto, campo) {
+  const t = String(texto ?? "").replace(/\s+/g, "").replace(/^R\$/, "");
+  let m = /^(-)?(\d{1,3}(?:\.\d{3})+|\d{1,12})(?:,(\d{1,6}))?$/.exec(t);
+  let inteiro;
+  let fracao;
+  if (m && !/^-?\d{1,3}\.\d{3}$/.test(t)) { inteiro = m[2].replaceAll(".", ""); fracao = m[3] ?? ""; } else {
+    m = /^(-)?(\d{1,12})\.(\d{1,2}|\d{4,6})$/.exec(t);
+    if (!m) throw new ErroFinanceiro(CODIGO.VALOR_INVALIDO, `${campo} não é um valor válido (até 6 casas decimais).`, { campo });
+    inteiro = m[2];
+    fracao = m[3];
+  }
+  const v = Number(BigInt(inteiro) * 1000000n + BigInt(fracao.padEnd(6, "0")));
+  if (!Number.isSafeInteger(v)) throw new ErroFinanceiro(CODIGO.VALOR_INVALIDO, `${campo} fora do intervalo suportado.`, { campo });
+  return m[1] ? -v : v;
+}
+
+/** Milionésimos → centavos SÓ quando exato (sem fração de centavo); senão null — quem chama decide e documenta. */
+export const centavosExatos = (v) => (v % 10000 === 0 ? v / 10000 : null);
+/** Milionésimos → centavos arredondando meio para cima (usar só em TOTAIS de conferência, nunca em silêncio por linha). */
+export function centavosArredondados(v) {
+  const neg = v < 0;
+  const a = BigInt(Math.abs(v));
+  const c = (a + 5000n) / 10000n;
+  return Number(neg ? -c : c);
+}

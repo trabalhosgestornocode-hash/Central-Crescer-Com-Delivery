@@ -200,8 +200,11 @@ test("SAIPOS totais (diárias e formas): impressão digital inclui o período �
   assert.equal(f1.registros[0].dados.formaPagamento, "DINHEIRO");
 });
 
-test("quadro de compatibilidade: nenhum leitor se declara conferido com amostra real nesta execução", () => {
-  const quadro = fontes.compatibilidade();
-  assert.equal(quadro.length, 9);
-  assert.deepEqual([...new Set(quadro.map((q) => q.compatibilidade))], ["SINTETICA"]);
+test("quadro de compatibilidade: só é 'amostra real' o leitor conferido com arquivo real, e só no formato conferido", () => {
+  const quadro = Object.fromEntries(fontes.compatibilidade().map((q) => [q.tipoRelatorio, q]));
+  assert.equal(Object.keys(quadro).length, 10);
+  assert.deepEqual(Object.values(quadro).filter((q) => q.compatibilidade === "AMOSTRA_REAL").map((q) => `${q.tipoRelatorio}:${q.formatosHomologados.join(",")}`).sort(),
+    ["SAIPOS_FATURAMENTO_POR_DIA:pdf", "SAIPOS_FORMAS_PAGAMENTO:xlsx", "STONE_VENDAS:xlsx", "UNICRED_EXTRATO:pdf"]);
+  // CSV de Stone e OFX/CSV de Unicred continuam sintéticos: a prévia informa a compatibilidade do formato lido.
+  assert.equal(analisar("STONE", "STONE_VENDAS", stoneVendas([{ id: "T-1", quando: "02/09/2026 12:00", bruto: 1000, mdr: 30 }])).compatibilidade, "SINTETICA");
 });

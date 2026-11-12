@@ -139,7 +139,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
         }
         let imp = await b.criar(tx, cx, TIPO.IMPORTACAO, {
           fonte: c.fonte, tipoRelatorio: c.tipoRelatorio, formato: c.tipoMime, documentoId: documento.id, periodoInicio: c.periodoInicio,
-          periodoFim: c.periodoFim, estado: E.RECEBIDO, compatibilidade: adaptador.compatibilidade, previa: null, impressaoPrevia: null, relatorio: null,
+          periodoFim: c.periodoFim, estado: E.RECEBIDO, compatibilidade: "SINTETICA", previa: null, impressaoPrevia: null, relatorio: null,
           substituiImportacaoId: anterior?.id ?? null, substituidaPorId: null, confirmadoPor: null, confirmadoEm: null, justificativa: null,
           chaveIdempotencia: `importacao:${documento.id}:${c.tipoRelatorio}`, impressao: null,
         });
@@ -147,6 +147,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
         const previa = await montarPrevia(tx, cx, imp, adaptador, c.conteudo);
         imp = await b.alterar(tx, cx, TIPO.IMPORTACAO, imp, {
           estado: previa.erros.length ? E.REJEITADO : E.PRONTO_PARA_IMPORTAR, previa: previa.resumo, impressaoPrevia: previa.impressao,
+          compatibilidade: previa.analise.compatibilidade,
         }, EVENTO_HISTORICO.IMPORTACAO);
         return { importacao: imp, previa: previa.resumo, repetido: false };
       });
@@ -282,7 +283,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
         const pedidos = saipos.filter((r) => r.tipoRegistro === "PEDIDO" && !r.dados.cancelado);
         const formas = saipos.filter((r) => r.tipoRegistro === "TOTAL_FORMA");
         const soma = (l) => l.reduce((s, r) => somar(s, r.valorCentavos), 0);
-        const fonteFaturamento = dias.length ? "SAIPOS_VENDAS_DIARIAS" : pedidos.length ? "SAIPOS_VENDAS" : null;
+        const fonteFaturamento = dias.length ? "FATURAMENTO_POR_DIA" : pedidos.length ? "PEDIDOS" : null;
         if (!fonteFaturamento || !formas.length) {
           return { comparavel: false, motivo: "Faltam relatórios do período: é preciso o faturamento e as formas de pagamento importados.", fonteFaturamento, faturamentoCentavos: null, formasDePagamentoCentavos: formas.length ? soma(formas) : null };
         }

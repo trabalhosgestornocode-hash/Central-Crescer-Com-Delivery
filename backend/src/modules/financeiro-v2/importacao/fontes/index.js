@@ -18,6 +18,6 @@ export function criarRegistroDeFontes(fontes = FONTES_PADRAO) {
       return f;
     },
     /** Quadro de compatibilidade (o que foi conferido com amostra real e o que é só contrato sintético). */
-    compatibilidade: () => fontes.map((f) => ({ fonte: f.fonte, tipoRelatorio: f.tipoRelatorio, compatibilidade: f.compatibilidade, descricao: f.descricao })),
+    compatibilidade: () => fontes.map((f) => ({ fonte: f.fonte, tipoRelatorio: f.tipoRelatorio, compatibilidade: f.compatibilidade, formatos: [...f.formatos], formatosHomologados: [...f.formatosHomologados], descricao: f.descricao })),
   });
 }

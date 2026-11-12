@@ -31,4 +31,12 @@ export function formaDePagamento(texto) {
   ]);
 }
 
-export const definirFonte = (def) => Object.freeze({ compatibilidade: COMPATIBILIDADE.SINTETICA, formatos: Object.freeze(["csv", "xlsx"]), ...def });
+/** `formatosHomologados`: formatos conferidos com arquivo REAL. Nos demais formatos o leitor continua SINTÉTICO. */
+export function definirFonte(def) {
+  const formatosHomologados = Object.freeze([...(def.formatosHomologados ?? [])]);
+  return Object.freeze({
+    formatos: Object.freeze(["csv", "xlsx"]), ...def, formatosHomologados,
+    compatibilidade: formatosHomologados.length ? COMPATIBILIDADE.AMOSTRA_REAL : COMPATIBILIDADE.SINTETICA,
+  });
+}
+export const compatibilidadeNoFormato = (adaptador, formato) => (adaptador.formatosHomologados.includes(formato) ? COMPATIBILIDADE.AMOSTRA_REAL : COMPATIBILIDADE.SINTETICA);

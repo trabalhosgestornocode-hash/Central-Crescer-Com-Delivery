@@ -233,7 +233,10 @@ function agruparEmLinhas(frags) {
     const l = linhas.find((x) => Math.abs(x.y - f.y) <= 2);
     if (l) l.partes.push(f); else linhas.push({ y: f.y, partes: [f] });
   }
-  return linhas.map((l) => l.partes.sort((a, b) => a.x - b.x).map((p) => p.texto).join(" ").replace(/\s+/g, " ").trim()).filter(Boolean);
+  return linhas
+    .map((l) => ({ y: l.y, partes: l.partes.sort((a, b) => a.x - b.x).map((p) => ({ x: p.x, texto: p.texto })) }))
+    .map((l) => ({ ...l, texto: l.partes.map((p) => p.texto).join(" ").replace(/\s+/g, " ").trim() }))
+    .filter((l) => l.texto);
 }
 
 /**
@@ -270,9 +273,11 @@ export function lerPdf(bytes) {
       const d = objetos.get(r) ? decodificarStream(objetos.get(r)) : null;
       if (d === null) corrompido = true; else conteudo += `\n${d}`;
     }
-    const linhas = agruparEmLinhas(fragmentosDoConteudo(conteudo, fontes));
+    const detalhe = agruparEmLinhas(fragmentosDoConteudo(conteudo, fontes));
+    const linhas = detalhe.map((l) => l.texto);
     const temImagem = /\/XObject/.test(recursos) && /\bDo\b/.test(conteudo);
-    return { numero: i + 1, linhas, temTexto: linhas.length > 0, temImagem, corrompido };
+    // `posicoes`: cada linha com seus fragmentos e a posição horizontal (para tabelas em que o valor só se resolve pela coluna).
+    return { numero: i + 1, linhas, posicoes: detalhe, temTexto: linhas.length > 0, temImagem, corrompido };
   });
   const semTexto = paginas.filter((p) => !p.temTexto);
   return {

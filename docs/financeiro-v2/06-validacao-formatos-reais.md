@@ -185,3 +185,87 @@ Com os arquivos, a próxima rodada faz:
 - o ajuste dos rótulos de coluna e do layout do PDF à amostra;
 - um teste com amostra sintética da **mesma** estrutura;
 - e só então a reclassificação de cada leitor na matriz.
+
+---
+
+## 10. Retomada da 02B com amostras reais (12/11/2026)
+
+O usuário forneceu as exportações reais de setembro de **Stone, Unicred e SAIPOS**, que foram extraídas para a pasta privada. A análise foi feita localmente, sem enviar nada para fora. A prévia ponta a ponta usou repositório em memória e cofre privado, e **nada foi confirmado**: a receita bruta continuou zero. Os números de conferência e a investigação dia a dia estão **só no relatório privado** (`%LOCALAPPDATA%\fv2-amostras-privadas\relatorios\`). Este documento descreve estrutura e resultado, sem valores.
+
+### 10.1 Layouts reais observados e como foram tratados
+
+**Stone — vendas (XLSX)**
+- Uma aba, cabeçalho na 1ª linha, 18 colunas. **Todas as células são texto.**
+- Valores com **6 casas decimais** e descontos **negativos**. A taxa do cartão vem em "DESCONTO UNIFICADO" e a do Pix em "DESCONTO DE MDR".
+- Como o leitor trata isso:
+  - novo leitor de valores em **milionésimos de real** (`leitor.micros`);
+  - desconto total = |MDR| + |antecipação| + |unificado|, conferido contra bruto − líquido **em cada linha**;
+  - líquido e descontos sem arredondamento por linha; o centavo só no total de conferência (meio para cima);
+  - bruto com fração de centavo é erro;
+  - o **número do cartão (mesmo mascarado) não é guardado** (`colunasOmitidas`);
+  - situação separada em aprovadas, rejeitadas, pendentes e não reconhecidas.
+
+**Unicred — extrato (PDF digital)**
+- Cada movimentação vem em três partes: o início da descrição ("TIPO ( Doc.: N / …") antes da linha "data [-] R$ valor R$ saldo", e o fim da descrição depois dela, até fechar o parêntese. Algumas movimentações vêm numa linha só.
+- O "-" antes do valor indica débito.
+- Saldos:
+  - "Saldo em dd/mm/aaaa" com data anterior ao período é o saldo inicial;
+  - "Saldo no final do período" é o saldo final;
+  - "Saldo atual" (na emissão) fica registrado à parte e nunca substitui o final.
+- O período declarado no extrato é conferido com o da importação (`PERIODO_DO_DOCUMENTO`).
+- Rodapé e cabeçalho de página são ignorados.
+
+**SAIPOS — faturamento por dia (PDF digital)**
+- Tabela em que cada dia ocupa **duas linhas de texto**, e os valores só se resolvem pela **posição horizontal**.
+- O extrator de PDF passou a devolver a posição de cada fragmento (`posicoes`). As âncoras das colunas vêm das palavras do próprio cabeçalho.
+- Conferências:
+  - valor acumulado encadeado dia a dia;
+  - linha TOTAL do relatório (faturamento, descontos e quantidade de vendas) comparada com a soma dos dias;
+  - cobertura dos dias contra o período.
+- A data solta do cabeçalho não vira dia.
+
+**SAIPOS — formas de pagamento (XLSX)**
+- Colunas: forma, valor total, quantidade, % e **uma coluna por dia**.
+- Conferências: total da forma contra a soma dos dias; dias fora do período são erro; cobertura menor que o período vira pendência.
+- **Formas anômalas** viram pendência `VALOR_A_CLASSIFICAR` e nunca são aceitas como venda válida em silêncio:
+  - forma não reconhecida, como "pagamento não cadastrado" ou máquina de outra marca;
+  - forma com natureza de desconto ("voucher … desconto").
+
+**Categorias bancárias sugeridas** (corrigidas com o extrato real): a palavra "Doc." não indica mais transferência; "iFood" numa saída é pagamento à plataforma, não repasse; crédito de adquirente só conta em entrada. Foram incluídas tarifa de conta, seguro e arrecadação. Tudo continua sendo **sugestão**, sem classificação na DRE: crédito não vira faturamento, e liquidação de empréstimo não vira despesa integral.
+
+### 10.2 Compatibilidade por formato
+
+Um leitor só é "amostra real" **no formato conferido** (`formatosHomologados`). A prévia e a importação registram a compatibilidade do formato efetivamente lido. Por exemplo, o CSV da Stone e o OFX da Unicred continuam sintéticos.
+
+### 10.3 Matriz final da Execução 02B
+
+| Leitor | Situação | Base |
+|---|---|---|
+| `STONE_VENDAS` (xlsx) | **Homologado com amostra real** | quantidade, bruto, líquido e descontos reproduzidos; todas as linhas fecham |
+| `UNICRED_EXTRATO` (pdf) | **Homologado com amostra real** | movimentações, saldo inicial, entradas, saídas e saldo final reproduzidos; todos os saldos intermediários encadeiam |
+| `SAIPOS_FATURAMENTO_POR_DIA` (pdf) | **Homologado com amostra real** | total = acumulado = linha TOTAL; descontos e quantidade = TOTAL |
+| `SAIPOS_FORMAS_PAGAMENTO` (xlsx) | **Homologado com amostra real** | total = soma dos dias; relatório de um dia coerente com o mensal |
+| `UNICRED_EXTRATO` (csv, xlsx, ofx) | Somente sintético | sem amostra nesses formatos |
+| `STONE_VENDAS` (csv) | Somente sintético | — |
+| `SAIPOS_VENDAS` (por pedido) | **Bloqueado por documento ausente** | necessário para explicar a diferença faturamento × formas |
+| `SAIPOS_VENDAS_POR_CANAL` | **Bloqueado por documento ausente** | — |
+| `SAIPOS_VENDAS_DIARIAS` (csv/xlsx) | Somente sintético | substituído na prática pelo faturamento por dia em PDF |
+| `STONE_RECEBIMENTOS` | **Bloqueado por documento ausente** | — |
+| `IFOOD_APURACAO` | **Bloqueado por documento ausente** (contrato sintético) | — |
+| `FOODY_ENTREGAS` | **Bloqueado por documento ausente** (contrato sintético) | — |
+
+### 10.4 Divergência SAIPOS (pendência aberta)
+
+O faturamento por dia e o total por formas de pagamento **não coincidem**. A diferença se concentra em parte dos dias, e quase sempre com o faturamento maior.
+
+**Descartados como causa única:** descontos, acréscimos e formas anômalas.
+
+**Hipótese não confirmada:** pedidos sem pagamento registrado, ou com pagamento lançado em outra data.
+
+**Para fechar:** o relatório SAIPOS de vendas **por pedido** do mesmo mês.
+
+Nenhum ajuste foi criado. A comparação continua disponível em `compararRelatoriosSaipos`, que só detecta a diferença.
+
+### 10.5 Testes
+
+O arquivo `formatos-reais.test.js` reproduz, com dados 100% sintéticos, as quatro estruturas reais (Stone XLSX, Unicred PDF, SAIPOS PDF por posição e SAIPOS XLSX por dia), seus casos de erro e o fluxo pelo núcleo. O gerador de PDF dos testes passou a aceitar linhas posicionadas.

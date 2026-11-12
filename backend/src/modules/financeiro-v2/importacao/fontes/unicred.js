@@ -9,15 +9,21 @@ import { classificarPorPalavras, col, definirFonte } from "./comum.js";
 
 export function categoriaBancaria(historico, sentido) {
   const c = classificarPorPalavras(historico, [
-    ["TARIFA", ["tarifa", "cesta de servic", "taxa de manut"]],
+    ["TARIFA", ["tarifa", "cesta de servic", "taxa de manut", "conta pj"]],
+    ["SEGURO", ["seguro"]],
     ["EMPRESTIMO", ["emprestimo", "financiamento", "parcela de credito", "capital de giro"]],
     ["PAGAMENTO_BOLETO", ["boleto", "pagto titulo", "pagamento de titulo", "liquidacao de titulo"]],
+    ["ARRECADACAO_CONVENIO", ["arrecadacao", "convenio"]],
     ["CREDITO_ADQUIRENTE", ["stone", "pagar me", "cielo", "rede adquir"]],
-    ["REPASSE_PLATAFORMA", ["ifood"]],
+    ["PLATAFORMA", ["ifood"]],
     ["PIX", ["pix"]],
-    ["TRANSFERENCIA", ["ted", "transf", "doc "]],
+    ["TRANSFERENCIA", [/\bted\b/, "transf", /\bdoc\b(?!\s*[.:])/]],
   ]);
   if (c === "PIX") return sentido === "ENTRADA" ? "PIX_RECEBIDO" : "PIX_ENVIADO";
+  // iFood só é "repasse" quando o dinheiro ENTRA; saída para o iFood é pagamento (mensalidade, anúncio...).
+  if (c === "PLATAFORMA") return sentido === "ENTRADA" ? "REPASSE_PLATAFORMA" : "PAGAMENTO_PLATAFORMA";
+  // Crédito de adquirente só se ENTRA; o nome sozinho não prova que é repasse da Stone (pode ser crédito da própria empresa).
+  if (c === "CREDITO_ADQUIRENTE" && sentido !== "ENTRADA") return "OUTRO";
   return c ?? "OUTRO";
 }
 
@@ -52,6 +58,7 @@ function dataComAno(ddmm, periodo) {
  * linha de valores sem data herda a data anterior; o que não se encaixa vira aviso (nunca é descartado em silêncio).
  */
 export function tabelaDoPdf(documento, periodo) {
+  if (ehLayoutUnicred(documento)) return tabelaDoPdfUnicred(documento, periodo);
   const linhas = [CABECALHO];
   const avisos = [];
   let ultima = null;
@@ -91,6 +98,87 @@ export function tabelaDoPdf(documento, periodo) {
   return { linhas, avisos };
 }
 
+// ------------------------------------------------------------------------------------------- layout REAL do PDF Unicred
+// Conferido com o extrato de setembro/2026 (layout "Data | Lançamentos | Valor (R$) | Saldo (R$)"):
+//   - movimentação em TRÊS partes: início da descrição ("TIPO ( Doc.: N / ...") ANTES da linha "dd/mm/aaaa [-] R$ v R$ s",
+//     e o fim da descrição DEPOIS dela, até fechar o parêntese; ou numa linha só ("dd/mm/aaaa TIPO ( Doc.: N ) - R$ v R$ s");
+//   - "-" antes de "R$" = débito; o saldo após cada movimentação vem na própria linha;
+//   - cabeçalho: "Período de A a B", "Saldo atual" (posição na EMISSÃO), "Saldo em dd/mm/aaaa:" (saldo na data — antes do
+//     período = saldo inicial); rodapé: "Saldo no final do período" (saldo final), "Saldo atual", bloqueios, lançamentos futuros.
+const R$ = String.raw`R\$\s*(-?\s*[\d.]+,\d{2})`;
+// Descrição curta (preguiçosa) ANTES do sinal: assim o "-" de débito nunca é engolido como texto.
+const LINHA_VALORES = new RegExp(String.raw`^(\d{2}/\d{2}/\d{4})\s+(.*?)\s*(-)?\s*${R$}\s+${R$}$`);
+const CABECALHO_TABELA = /^Data\s+Lan[cç]amentos\s+Valor\s*\(R\$\)\s+Saldo\s*\(R\$\)$/i;
+const RODAPE = /^(CENTRAL DE RELACIONAMENTO|\d{4} \d{3} \d{4} - No exterior)/i;
+const saldoNaData = /^Saldo em (\d{2}\/\d{2}\/\d{4}):?\s+R\$\s*(-?[\d.]+,\d{2})$/i;
+const ddmmaaaa = (t) => `${t.slice(6, 10)}-${t.slice(3, 5)}-${t.slice(0, 2)}`;
+const saldoDe = (t) => t.replace(/\s+/g, "");
+const balanco = (s) => (s.match(/\(/g) ?? []).length - (s.match(/\)/g) ?? []).length;
+
+export function ehLayoutUnicred(documento) {
+  return documento.paginas.some((p) => p.linhas.some((l) => CABECALHO_TABELA.test(l)));
+}
+
+export function tabelaDoPdfUnicred(documento, periodo) {
+  const linhas = [CABECALHO];
+  const avisos = [];
+  let pre = [];
+  let aberto = null;
+  let naTabela = false;
+  let terminou = false;
+  let periodoDoc = null;
+  const fechar = (mov) => { linhas.push(mov.linha); };
+  for (const pagina of documento.paginas) {
+    naTabela = false;
+    for (const texto of pagina.linhas) {
+      const t = texto.trim();
+      const per = /^Per[ií]odo de (\d{2}\/\d{2}\/\d{4}) a (\d{2}\/\d{2}\/\d{4})$/i.exec(t);
+      if (per) { periodoDoc = { inicio: ddmmaaaa(per[1]), fim: ddmmaaaa(per[2]) }; continue; }
+      const sd = saldoNaData.exec(t);
+      if (sd) {
+        const data = ddmmaaaa(sd[1]);
+        const tipo = data < periodo.inicio ? "SALDO ANTERIOR" : data === periodo.fim ? "SALDO FINAL" : "SALDO NA DATA";
+        linhas.push([data, tipo, "", "", saldoDe(sd[2]), "", String(pagina.numero)]);
+        continue;
+      }
+      if (/^Saldo no final do per[ií]odo\s+R\$/i.test(t)) {
+        linhas.push([periodo.fim, "SALDO FINAL", "", "", saldoDe(/R\$\s*(-?[\d.]+,\d{2})/.exec(t)[1]), "", String(pagina.numero)]);
+        terminou = true;
+        continue;
+      }
+      if (/^Saldo atual\s+R\$/i.test(t)) {
+        linhas.push(["", "SALDO ATUAL", "", "", saldoDe(/R\$\s*(-?[\d.]+,\d{2})/.exec(t)[1]), "", String(pagina.numero)]);
+        continue;
+      }
+      if (CABECALHO_TABELA.test(t)) { naTabela = true; pre = []; continue; }
+      if (RODAPE.test(t) || !naTabela || terminou) continue;
+      if (aberto) {
+        aberto.linha[1] = `${aberto.linha[1]} ${t}`;
+        aberto.saldoParenteses += balanco(t);
+        if (aberto.saldoParenteses <= 0) { fechar(aberto); aberto = null; }
+        continue;
+      }
+      const v = LINHA_VALORES.exec(t);
+      if (v) {
+        const descricao = [...pre, v[2] ?? ""].join(" ").replace(/\s+/g, " ").trim();
+        pre = [];
+        const documentoRef = /Doc\.:\s*([^\s)/]+)/.exec(descricao)?.[1] ?? "";
+        const mov = { linha: [ddmmaaaa(v[1]), descricao, documentoRef, `${v[3] ? "-" : ""}${saldoDe(v[4]).replace(/^-/, "")}`, saldoDe(v[5]), "", String(pagina.numero)], saldoParenteses: balanco(descricao) };
+        if (mov.saldoParenteses > 0) aberto = mov; else fechar(mov);
+        continue;
+      }
+      pre.push(t);
+    }
+  }
+  if (aberto) { fechar(aberto); avisos.push({ codigo: "LINHA_NAO_INTERPRETADA", mensagem: "Última movimentação sem fechamento da descrição.", linha: null }); }
+  if (pre.length) avisos.push({ codigo: "LINHA_NAO_INTERPRETADA", mensagem: `${pre.length} linha(s) da tabela sem valor associado.`, linha: null });
+  if (!periodoDoc) avisos.push({ codigo: "LINHA_NAO_INTERPRETADA", mensagem: "O extrato não declara o período.", linha: null });
+  else if (periodoDoc.inicio !== periodo.inicio || periodoDoc.fim !== periodo.fim) {
+    avisos.push({ codigo: "PERIODO_DIVERGENTE", mensagem: `O extrato declara ${periodoDoc.inicio} a ${periodoDoc.fim}; a importação declarou ${periodo.inicio} a ${periodo.fim}.`, linha: null });
+  }
+  return { linhas, avisos };
+}
+
 /** OFX → tabela do extrato. O saldo do OFX só vira saldo FINAL se for da data de fim do período. */
 export function tabelaDoOfx(ofx, periodo) {
   const linhas = [CABECALHO];
@@ -120,6 +208,7 @@ export const UNICRED_EXTRATO = definirFonte({
     pagina: col(["Página"], false),
   },
   formatos: Object.freeze(["csv", "xlsx", "pdf", "ofx"]),
+  formatosHomologados: ["pdf"],
   tabelaDoPdf,
   tabelaDoOfx,
   // Linhas de saldo (anterior/final) não são movimento: viram controle.
@@ -129,6 +218,7 @@ export const UNICRED_EXTRATO = definirFonte({
     const campo = u.bruto("saldo") ? "saldo" : "valor";
     const valor = u.valor(campo);
     if (valor === null) return null;
+    if (/na data/.test(h)) return null;
     if (/anterior|inicial/.test(h)) return { tipo: "SALDO_INICIAL", valorCentavos: valor };
     // "Saldo atual/disponível" é a posição NA DATA DE EMISSÃO (pode ser posterior ao período): nunca substitui o final.
     if (/atual|disponivel/.test(h)) return { tipo: "SALDO_ATUAL", valorCentavos: valor };

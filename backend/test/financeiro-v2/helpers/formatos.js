@@ -94,7 +94,11 @@ export function pdf(paginas, { declararPaginas, imagemSemTexto = false, toUnicod
   for (const linhas of paginas) {
     const conteudo = imagemSemTexto
       ? "q 500 0 0 700 50 50 cm /Im1 Do Q"
-      : linhas.map((l, i) => `BT /F1 9 Tf 40 ${780 - i * 14} Td ${toUnicode ? hex2(l) : pdfTexto(l)} Tj ET`).join("\n");
+      : linhas.map((l, i) => {
+        // Linha simples (texto) ou posicionada: { y, partes: [[x, texto], ...] } — para tabelas que dependem da coluna.
+        if (typeof l === "string") return `BT /F1 9 Tf 40 ${780 - i * 14} Td ${toUnicode ? hex2(l) : pdfTexto(l)} Tj ET`;
+        return l.partes.map(([x, t]) => `BT /F1 9 Tf ${x} ${l.y} Td ${toUnicode ? hex2(t) : pdfTexto(t)} Tj ET`).join("\n");
+      }).join("\n");
     const c = novo(stream("", conteudo));
     const recursos = `<< /Font << /F1 ${fonte} 0 R >>${imagem ? ` /XObject << /Im1 ${imagem} 0 R >>` : ""} >>`;
     kids.push(novo(`<< /Type /Page /Parent ${raiz} 0 R /MediaBox [0 0 595 842] /Resources ${recursos} /Contents ${c} 0 R >>`));
