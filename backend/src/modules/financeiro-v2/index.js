@@ -10,6 +10,7 @@ export { criarAdaptadorDeSessao, criarConcessoesDoRepositorio, criarConcessoesMe
 export { FONTES_PADRAO, criarRegistroDeFontes } from "./importacao/fontes/index.js";
 export { analisarArquivo } from "./importacao/motor.js";
 export { proporCandidatas } from "./importacao/correspondencias.js";
+export { composicaoIfood } from "./importacao/fontes/ifood.js";
 export { METODOS_DO_COFRE, conferirCofre } from "./contratos/cofre.js";
 export { METODOS_DA_TRANSACAO, conferirTransacao, exigirRepositorio } from "./contratos/repositorio.js";
 export * as planoDeContas from "./dominio/planoDeContas.js";

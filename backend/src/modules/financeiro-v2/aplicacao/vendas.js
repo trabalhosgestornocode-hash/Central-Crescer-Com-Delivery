@@ -13,14 +13,15 @@ import {
 } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
-import { CATEGORIA_DE_VENDA, CATEGORIA_DEVOLUCAO } from "../dominio/planoDeContas.js";
+import { CATEGORIA_DE_VENDA, CATEGORIA_DESCONTO_A_CLASSIFICAR, CATEGORIA_DEVOLUCAO } from "../dominio/planoDeContas.js";
 import { competenciaDe } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
 import { validarCancelamentoVenda, validarEstornoDePagamento, validarPagamentoDeVenda, validarVenda } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
 
 const restante = (p) => subtrair(p.valorCentavos, p.estornadoCentavos);
-const pendenteDe = (v) => subtrair(subtrair(v.brutoCentavos, v.devolvidoCentavos), v.pagoCentavos);
+/** Pendente = receita − descontos próprios (loja/pendente) − devolvido − pago. Subsídio de terceiro conta como pago (recebível dele). */
+const pendenteDe = (v) => subtrair(subtrair(subtrair(v.brutoCentavos, v.descontosCentavos ?? 0), v.devolvidoCentavos), v.pagoCentavos);
 const situacaoDoPagamento = (p) => {
   if (p.estornadoCentavos === 0) return SITUACAO_PAGAMENTO.VALIDO;
   return p.estornadoCentavos === p.valorCentavos ? SITUACAO_PAGAMENTO.ESTORNADO : SITUACAO_PAGAMENTO.ESTORNADO_PARCIAL;
@@ -99,13 +100,26 @@ export function operacoesDeVendas(b) {
           valorCentavos: c.brutoCentavos, moeda: c.moeda, descricao: c.descricao ?? `Venda ${c.canal}`, dataOperacao: c.dataVenda,
           competencia: c.competencia, fonte: c.fonte, canal: c.canal, origem: { tipo: TIPO.VENDA, id: vendaId },
         });
+        // Descontos com efeito PRÓPRIO: da loja → dedução comercial; financiador não comprovado → dedução a classificar.
+        const descontos = c.composicao?.descontos ?? [];
+        for (const d of descontos.filter((x) => x.financiador !== "TERCEIRO")) {
+          const cat = d.financiador === "LOJA" ? await b.categoriaLancavel(tx, cx, "DESCONTOS_COMERCIAIS") : await b.categoriaDoSistema(tx, cx, CATEGORIA_DESCONTO_A_CLASSIFICAR);
+          await b.lancar(tx, cx, cat, {
+            valorCentavos: d.valorCentavos, moeda: c.moeda, descricao: d.descricao ?? `Desconto na venda (${d.financiador.toLowerCase()})`, dataOperacao: c.dataVenda,
+            competencia: c.competencia, fonte: c.fonte, canal: c.canal, origem: { tipo: TIPO.VENDA, id: vendaId, componente: "DESCONTO", financiador: d.financiador },
+          });
+        }
+        // Subsídio de TERCEIRO: não reduz a receita; o terceiro paga essa parte (recebível dele).
+        const subsidios = descontos.filter((x) => x.financiador === "TERCEIRO").map((d) => ({ forma: "OUTRA", processador: d.terceiro, valorCentavos: d.valorCentavos }));
+        const todosPagamentos = [...c.pagamentos, ...subsidios];
         const base = { id: vendaId, canal: c.canal, dataVenda: c.dataVenda, competencia: c.competencia, moeda: c.moeda };
         const criados = [];
-        for (const [indice, p] of c.pagamentos.entries()) criados.push(await criarPagamento(tx, cx, base, p, indice));
+        for (const [indice, p] of todosPagamentos.entries()) criados.push(await criarPagamento(tx, cx, base, p, indice));
         const venda = await b.criar(tx, cx, TIPO.VENDA, {
-          ...base, brutoCentavos: c.brutoCentavos, pagamentos: c.pagamentos, pagamentoParcial: c.pagamentoParcial === true, fonte: c.fonte,
+          ...base, brutoCentavos: c.brutoCentavos, pagamentos: todosPagamentos, pagamentoParcial: c.pagamentoParcial === true, fonte: c.fonte,
           descricao: c.descricao, lancamentoId: lancamento.id, situacao: SITUACAO_VENDA.ATIVA,
-          pagoCentavos: somarLista(c.pagamentos, (p) => p.valorCentavos), devolvidoCentavos: 0,
+          pagoCentavos: somarLista(todosPagamentos, (p) => p.valorCentavos), devolvidoCentavos: 0,
+          descontosCentavos: somarLista(descontos.filter((x) => x.financiador !== "TERCEIRO"), (d) => d.valorCentavos), composicao: c.composicao ?? null,
           pagamentoIds: criados.map((x) => x.pagamento.id), chaveIdempotencia: chave, impressao,
         });
         return {
@@ -246,6 +260,9 @@ export function operacoesDeVendas(b) {
         // Devoluções já lançadas desta venda deixam de reduzir receita: a receita inteira foi cancelada.
         const devolucoes = await tx.listar(cx, TIPO.LANCAMENTO, (l) => l.origem?.tipo === TIPO.ESTORNO && l.origem.vendaId === venda.id);
         for (const l of devolucoes) await b.cancelarLancamento(tx, cx, l.id, c.justificativa);
+        // Descontos lançados desta venda também deixam de valer (efeito compensatório completo).
+        const deducoes = await tx.listar(cx, TIPO.LANCAMENTO, (l) => l.origem?.tipo === TIPO.VENDA && l.origem.id === venda.id && l.origem.componente === "DESCONTO" && l.situacao === "ATIVO");
+        for (const l of deducoes) await b.cancelarLancamento(tx, cx, l.id, c.justificativa);
         const cancelada = await b.alterar(tx, cx, TIPO.VENDA, venda, { situacao: SITUACAO_VENDA.CANCELADA, pagoCentavos: 0, devolvidoCentavos: 0 }, EVENTO_HISTORICO.CANCELAMENTO, c.justificativa);
         return { venda: cancelada, lancamento, pagamentos, recebiveis };
       });

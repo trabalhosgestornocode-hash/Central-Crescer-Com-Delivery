@@ -59,6 +59,7 @@ export const ESQUEMA = Object.freeze({
     pagoCentavos: c("pago_centavos", "centavos"), devolvidoCentavos: c("devolvido_centavos", "centavos"), moeda: c("moeda"),
     fonte: c("fonte", "fonte"), descricao: c("descricao"), lancamentoId: c("lancamento_id", "uuid"), situacao: c("situacao"),
     pagamentoParcial: c("pagamento_parcial", "bool"), pagamentos: c("pagamentos", "json"), pagamentoIds: c("pagamento_ids", "uuids"),
+    descontosCentavos: c("descontos_centavos", "centavos"), composicao: c("composicao", "json"),
   }),
   [TIPO.PAGAMENTO_VENDA]: tabela("fv2_pagamento_venda", {
     vendaId: c("venda_id", "uuid"), indice: c("indice", "inteiro"), forma: c("forma"), processador: c("processador"),

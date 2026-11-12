@@ -14,7 +14,8 @@ import { classificarPorPalavras, col, definirFonte } from "./comum.js";
 /** componente → { categoriaSugerida, efeito } . efeito: RESULTADO (entra no resultado) | LIQUIDACAO (é o dinheiro do repasse). */
 export const COMPONENTES_IFOOD = Object.freeze({
   VENDAS: { categoriaSugerida: "VENDA_IFOOD", efeito: "RESULTADO" },
-  TAXA_ADICIONAL_CONSUMIDOR: { categoriaSugerida: "OUTRAS_RECEITAS", efeito: "RESULTADO" },
+  // Pode ser cobrança do iFood em benefício próprio: nunca vira receita da loja automaticamente.
+  TAXA_ADICIONAL_CONSUMIDOR: { categoriaSugerida: null, efeito: "A_CLASSIFICAR" },
   COMISSAO: { categoriaSugerida: "COMISSOES_IFOOD", efeito: "RESULTADO" },
   TRANSACAO_PAGAMENTO: { categoriaSugerida: "TAXAS_DE_PROCESSAMENTO", efeito: "RESULTADO" },
   PROMOCAO_LOJA: { categoriaSugerida: "PROMOCOES_SUBSIDIADAS", efeito: "RESULTADO" },
@@ -103,5 +104,32 @@ export const IFOOD_APURACAO = definirFonte({
     return { controles: { porComponente, composicaoCentavos: composicao, antecipacaoJaIncluidaNaApuracao: true }, divergencias };
   },
 });
+
+/**
+ * Composição GERENCIAL do canal iFood a partir dos componentes da apuração — cada componente entra UMA vez, pela sua
+ * natureza econômica (nada é subtraído duas vezes; antecipação já está dentro da apuração).
+ *   líquido gerencial = vendas próprias − promoções da loja − comissões − transação − serviços − mensalidade − anúncios
+ *                       − antecipação ± ajustes/serviços a classificar   (promoção financiada pelo iFood é só informativa)
+ * Confere com o repasse previsto quando ele existe.
+ * @param {Array<{componente:string, valorCentavos:number}>} componentes valores com o SINAL da apuração
+ */
+export function composicaoIfood(componentes) {
+  const soma = (pred) => componentes.filter((c) => pred(c.componente)).reduce((s, c) => somar(s, c.valorCentavos), 0);
+  const de = (...nomes) => soma((n) => nomes.includes(n));
+  const efeito = (n) => COMPONENTES_IFOOD[n]?.efeito ?? "A_CLASSIFICAR";
+  const r = {
+    vendasProprias: de("VENDAS"), promocoesLoja: de("PROMOCAO_LOJA"), promocoesTerceiros: de("PROMOCAO_IFOOD"), comissoes: de("COMISSAO"),
+    transacaoPagamento: de("TRANSACAO_PAGAMENTO"), servicos: de("ENTREGA_SOB_DEMANDA"), mensalidade: de("MENSALIDADE"), anuncios: de("ANUNCIOS"),
+    antecipacao: de("ANTECIPACAO"), aClassificar: soma((n) => efeito(n) === "A_CLASSIFICAR"), repassePrevisto: componentes.some((c) => c.componente === "REPASSE_PREVISTO") ? de("REPASSE_PREVISTO") : null,
+  };
+  r.liquidoGerencial = soma((n) => !["LIQUIDACAO", "INFORMATIVO"].includes(efeito(n)));
+  r.confereComRepasse = r.repassePrevisto === null ? null : r.repassePrevisto === r.liquidoGerencial;
+  r.porNatureza = {
+    RECEITA: r.vendasProprias, DEDUCAO: r.promocoesLoja,
+    DESPESA: [r.comissoes, r.transacaoPagamento, r.servicos, r.mensalidade, r.anuncios, r.antecipacao].reduce((s, v) => somar(s, v), 0),
+    A_CLASSIFICAR: r.aClassificar,
+  };
+  return r;
+}
 
 export const FONTES_IFOOD = Object.freeze([IFOOD_APURACAO]);

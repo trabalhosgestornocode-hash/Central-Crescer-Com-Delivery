@@ -17,7 +17,7 @@ import {
 } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { somar, subtrair } from "../dominio/dinheiro.js";
-import { CATEGORIA_DE_VENDA, CATEGORIA_VENDA_AGREGADA } from "../dominio/planoDeContas.js";
+import { CATEGORIA_DE_VENDA, CATEGORIA_DESCONTO_A_CLASSIFICAR, CATEGORIA_VENDA_AGREGADA } from "../dominio/planoDeContas.js";
 import { exigirCentavos } from "../dominio/dinheiro.js";
 import { exigirData } from "../dominio/tempo.js";
 import { exigirLista, exigirTexto, exigirUuid, semCamposDesconhecidos, uuidOpcional } from "../dominio/validacao.js";
@@ -68,27 +68,39 @@ export function operacoesDeFormacao(b) {
       else if (d.formaPagamento === "ONLINE_PLATAFORMA" && d.canal === "ANOTA_AI") pagamentos.push({ forma: "OUTRA", processador: "ANOTA_AI", valorCentavos: r.valorCentavos });
       else divergencias.push({ codigo: "PAGAMENTO_A_EVIDENCIAR", mensagem: `Forma "${d.formaOriginal}" sem processador identificado: o pagamento entra quando houver evidência (ex.: transação Stone).` });
       if (!d.canal) divergencias.push({ codigo: "CANAL_NAO_RECONHECIDO", mensagem: `Canal "${d.canalOriginal}" não reconhecido.` });
-      if (d.descontoCentavos) divergencias.push({ codigo: "DESCONTO_NO_PEDIDO", mensagem: "Venda registrada pelo valor cobrado; o desconto do pedido fica rastreado na origem (dedução separada por pedido é pendência do modelo)." });
+      if (d.descontoCentavos) divergencias.push({ codigo: "FINANCIADOR_DO_DESCONTO_NAO_COMPROVADO", mensagem: "A fonte não informa quem financia o desconto: dedução a classificar (nunca presumida da loja)." });
+      if (d.canal === "IFOOD" && d.taxaEntregaCentavos) divergencias.push({ codigo: "TITULARIDADE_DA_TAXA_DE_ENTREGA_A_CONFIRMAR", mensagem: "Taxa de entrega em pedido iFood: confirmar se pertence à loja ou ao iFood antes de tratá-la como receita." });
+      const receitaPropria = somar(d.itensCentavos, d.acrescimoCentavos, d.taxaEntregaCentavos);
+      const composicao = {
+        itensCentavos: d.itensCentavos, acrescimosCentavos: d.acrescimoCentavos, servicosCentavos: d.taxaEntregaCentavos,
+        descontos: d.descontoCentavos ? [{ valorCentavos: d.descontoCentavos, financiador: "PENDENTE", descricao: "Desconto do pedido (financiador não informado pela fonte)" }] : [],
+      };
       saida.push({
-        operacao: OP.VENDA, registro: r, competencia: r.competencia, dataOperacao: r.dataReferencia, natureza: "RECEITA", valorCentavos: r.valorCentavos,
+        operacao: OP.VENDA, registro: r, competencia: r.competencia, dataOperacao: r.dataReferencia, natureza: "RECEITA", valorCentavos: receitaPropria,
         categoriaSugerida: d.canal ? CATEGORIA_DE_VENDA[d.canal] : null,
-        comando: { canal: d.canal, dataVenda: r.dataReferencia, brutoCentavos: r.valorCentavos, pagamentos, ...(pagamentos.length ? {} : { pagamentoParcial: true }), fonte: { sistema: "SAIPOS", idExterno: r.idExterno }, descricao: `Pedido ${r.idExterno}` },
+        comando: { canal: d.canal, dataVenda: r.dataReferencia, brutoCentavos: receitaPropria, composicao, pagamentos, ...(pagamentos.length ? {} : { pagamentoParcial: true }), fonte: { sistema: "SAIPOS", idExterno: r.idExterno }, descricao: `Pedido ${r.idExterno}` },
         extras: { autorizacao: d.autorizacao ?? null }, divergencias,
         confianca: d.canal && pagamentos.length ? CONFIANCA.ALTA : CONFIANCA.MEDIA,
-        estado: d.canal ? E.PROPOSTA : E.AGUARDANDO_REVISAO,
+        estado: d.canal && !(d.canal === "IFOOD" && d.taxaEntregaCentavos) ? E.PROPOSTA : E.AGUARDANDO_REVISAO,
         justificativa: "Pedido do relatório de vendas por pedido: uma venda, um canal, uma receita.",
       });
     }
-    for (const r of registros.filter((x) => x.tipoRegistro === "TOTAL_DIA" && x.dados.acumuladoCentavos !== undefined)) {
+    for (const r of registros.filter((x) => x.tipoRegistro === "TOTAL_DIA")) {
       const d = r.dados;
-      const bruto = somar(d.itensCentavos, d.taxaEntregaCentavos, d.taxaServicoCentavos, d.acrescimosCentavos);
+      // METODOLOGIA: o valor do dia é LÍQUIDO de descontos quando itens + entrega + serviço + acréscimos − descontos = valor
+      // (comprovado na exportação real). Só então a receita bruta é recuperável. Sem os componentes, ou se não fecha, o
+      // significado do valor não está comprovado: o registro fica como CONTROLE, sem efeito econômico.
+      const temComponentes = [d.itensCentavos, d.taxaEntregaCentavos, d.taxaServicoCentavos, d.acrescimosCentavos, d.descontosCentavos].every((v) => Number.isSafeInteger(v));
+      const bruto = temComponentes ? somar(d.itensCentavos, d.taxaEntregaCentavos, d.taxaServicoCentavos, d.acrescimosCentavos) : null;
+      const metodologia = temComponentes && subtrair(bruto, d.descontosCentavos) === r.valorCentavos ? "VALOR_LIQUIDO_COMPOSICAO_COMPROVADA" : "DESCONHECIDA";
       const divergencias = [];
-      if (subtrair(bruto, d.descontosCentavos) !== r.valorCentavos) divergencias.push({ codigo: "COMPOSICAO_NAO_FECHA", mensagem: "Itens + entrega + serviço + acréscimos − descontos não fecha com o valor do dia." });
+      if (metodologia === "DESCONHECIDA") divergencias.push({ codigo: "METODOLOGIA_DESCONHECIDA", mensagem: "Não se comprova se o valor do dia é bruto ou líquido: registro mantido só como controle agregado, sem efeito econômico." });
+      if (temComponentes && d.descontosCentavos) divergencias.push({ codigo: "FINANCIADOR_DO_DESCONTO_NAO_COMPROVADO", mensagem: "Descontos do dia sem financiador informado: dedução a classificar." });
       saida.push({
         operacao: OP.VENDA_AGREGADA, registro: r, competencia: r.competencia, dataOperacao: r.dataReferencia, natureza: "RECEITA", valorCentavos: r.valorCentavos,
         categoriaSugerida: CATEGORIA_VENDA_AGREGADA,
-        comando: { data: r.dataReferencia, receitaBrutaCentavos: bruto, descontosCentavos: d.descontosCentavos, valorCentavos: r.valorCentavos, quantidadeVendas: d.quantidadeVendas },
-        extras: {}, divergencias, confianca: CONFIANCA.MEDIA, estado: divergencias.length ? E.AGUARDANDO_REVISAO : E.PROPOSTA,
+        comando: { data: r.dataReferencia, metodologia, receitaBrutaCentavos: bruto, descontosCentavos: d.descontosCentavos ?? null, valorCentavos: r.valorCentavos, quantidadeVendas: d.quantidadeVendas ?? null },
+        extras: {}, divergencias, confianca: metodologia === "DESCONHECIDA" ? CONFIANCA.BAIXA : CONFIANCA.MEDIA, estado: metodologia === "DESCONHECIDA" ? E.AGUARDANDO_EVIDENCIA : E.PROPOSTA,
         justificativa: "Relatório AGREGADO por dia: vira receita agregada sem canal, pedido ou forma de pagamento; nada é distribuído por suposição.",
       });
     }
@@ -105,7 +117,7 @@ export function operacoesDeFormacao(b) {
         const vendaId = p.efeitos.find((e) => e.tipo === TIPO.VENDA)?.id;
         const venda = vendaId ? await tx.obter(cx, TIPO.VENDA, vendaId) : null;
         if (!venda || venda.situacao !== SITUACAO_VENDA.ATIVA) continue;
-        const pendente = subtrair(venda.brutoCentavos, subtrair(venda.pagoCentavos, venda.devolvidoCentavos));
+        const pendente = subtrair(subtrair(subtrair(venda.brutoCentavos, venda.descontosCentavos ?? 0), venda.devolvidoCentavos), venda.pagoCentavos);
         const porAutorizacao = d.autorizacao && p.autorizacao && p.autorizacao === d.autorizacao;
         if (porAutorizacao && pendente >= r.valorCentavos) candidatas.push({ vendaId, criterio: "AUTORIZACAO", forte: true });
         else if (pendente === r.valorCentavos) candidatas.push({ vendaId, criterio: "VALOR_PENDENTE_IGUAL_MESMO_DIA", forte: false });
@@ -238,8 +250,11 @@ export function operacoesDeFormacao(b) {
         fonte: { sistema: p.fonte, idExterno: `dia:${c.data}` }, canal: null, origem: { tipo: TIPO.PROPOSTA, id: p.id },
       });
       efeitos.push({ tipo: TIPO.LANCAMENTO, id: receita.id });
+      if (c.metodologia !== "VALOR_LIQUIDO_COMPOSICAO_COMPROVADA") falhar(CODIGO.OPERACAO_INVALIDA, "Agregado com metodologia não comprovada não gera efeito econômico.");
       if (c.descontosCentavos > 0) {
-        const deducao = await b.lancar(tx, cx, await b.categoriaLancavel(tx, cx, "DESCONTOS_COMERCIAIS"), {
+        // Financiador dos descontos do dia não é informado: dedução A CLASSIFICAR (nunca presumida da loja). Uma única vez:
+        // a receita é o bruto recuperado, então o valor líquido do relatório não sofre nova dedução.
+        const deducao = await b.lancar(tx, cx, await b.categoriaDoSistema(tx, cx, CATEGORIA_DESCONTO_A_CLASSIFICAR), {
           valorCentavos: c.descontosCentavos, moeda: "BRL", descricao: `Descontos do dia ${c.data} (fonte agregada)`, dataOperacao: c.data, competencia: p.competencia,
           fonte: { sistema: p.fonte, idExterno: `dia:${c.data}:descontos` }, canal: null, origem: { tipo: TIPO.PROPOSTA, id: p.id },
         });
@@ -344,6 +359,40 @@ export function operacoesDeFormacao(b) {
         if (p.operacao !== OP.VENDA_AGREGADA || p.estado !== E.APLICADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só uma venda agregada aplicada pode ser revertida por aqui.");
         for (const e of p.efeitos.filter((x) => x.tipo === TIPO.LANCAMENTO)) await b.cancelarLancamento(tx, cx, e.id, c.justificativa);
         return b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.SUBSTITUIDA }, EVENTO_HISTORICO.SUBSTITUICAO, c.justificativa);
+      });
+    },
+
+    /**
+     * Substituição ATÔMICA do agregado de um dia pelos pedidos do mesmo dia: numa só transação (trava exclusiva do dia),
+     * o efeito agregado é cancelado (não apagado), a proposta agregada fica SUBSTITUÍDA e cada pedido aprovado é aplicado.
+     * Qualquer falha desfaz tudo; uma segunda substituição concorrente encontra o agregado já substituído e é recusada.
+     */
+    substituirAgregadoPorPedidos(ctx, entrada) {
+      semCamposDesconhecidos(entrada, ["propostaAgregadaId", "propostaIds", "justificativa"], "substituicao");
+      const c = {
+        propostaAgregadaId: exigirUuid(entrada.propostaAgregadaId, "propostaAgregadaId"),
+        propostaIds: [...new Set(exigirLista(entrada.propostaIds, "propostaIds", { min: 1, max: 2000 }).map((id, i) => exigirUuid(id, `propostaIds[${i}]`)))],
+        justificativa: exigirTexto(entrada.justificativa, "justificativa", { max: 500 }),
+      };
+      return b.executar(ctx, ACAO.REVISAR, async (cx, tx) => {
+        const previa = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaAgregadaId, "Proposta agregada");
+        await tx.travar(cx, `formacao-dia:${previa.dataOperacao}`, "EXCLUSIVA");
+        const agregada = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaAgregadaId, "Proposta agregada");
+        if (agregada.operacao !== OP.VENDA_AGREGADA || agregada.estado !== E.APLICADA) falhar(CODIGO.TRANSICAO_INVALIDA, "O agregado não está aplicado (já substituído ou nunca aplicado).", { estado: agregada.estado });
+        const pedidos = [];
+        for (const id of c.propostaIds) {
+          const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, id, "Proposta de pedido");
+          if (p.operacao !== OP.VENDA || p.dataOperacao !== agregada.dataOperacao || p.estado !== E.APROVADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só propostas de venda APROVADAS do mesmo dia substituem o agregado.", { propostaId: id });
+          pedidos.push(p);
+        }
+        for (const e of agregada.efeitos.filter((x) => x.tipo === TIPO.LANCAMENTO)) await b.cancelarLancamento(tx, cx, e.id, c.justificativa);
+        const substituida = await b.alterar(tx, cx, TIPO.PROPOSTA, agregada, { estado: E.SUBSTITUIDA }, EVENTO_HISTORICO.SUBSTITUICAO, c.justificativa);
+        const aplicadas = [];
+        for (const p of pedidos) {
+          const efeitos = await aplicar(tx, cx, p);
+          aplicadas.push(await b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.APLICADA, efeitos }, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa));
+        }
+        return { agregada: substituida, pedidos: aplicadas };
       });
     },
 

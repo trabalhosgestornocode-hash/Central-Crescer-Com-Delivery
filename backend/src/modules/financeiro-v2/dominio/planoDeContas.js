@@ -51,6 +51,7 @@ const f = (codigo, nome, pai, extra = {}) => ({ codigo, nome, pai, aceitaLancame
 export const CATEGORIA_DE_VENDA = Object.freeze(Object.fromEntries(Object.values(CANAL).map((c) => [c, `VENDA_${c}`])));
 export const CATEGORIA_DEVOLUCAO = "DEVOLUCOES_E_ESTORNOS";
 export const CATEGORIA_VENDA_AGREGADA = "VENDAS_AGREGADAS_SEM_CANAL";
+export const CATEGORIA_DESCONTO_A_CLASSIFICAR = "DESCONTOS_A_CLASSIFICAR";
 
 /** Modelo genérico: serve a qualquer empresa. As categorias `doSistema` são usadas pelo próprio núcleo. */
 const BASE = [
@@ -64,6 +65,8 @@ const BASE = [
   g("DEDUCOES_COMERCIAIS", "Deduções comerciais da receita", C.DEDUCOES_COMERCIAIS),
   f("DESCONTOS_COMERCIAIS", "Descontos comerciais concedidos", "DEDUCOES_COMERCIAIS"),
   f(CATEGORIA_DEVOLUCAO, "Devoluções e estornos a clientes", "DEDUCOES_COMERCIAIS", { doSistema: true }),
+  // Desconto cujo financiador (loja × terceiro) a fonte não comprova: dedução conservadora, PENDENTE de classificação.
+  f(CATEGORIA_DESCONTO_A_CLASSIFICAR, "Descontos com financiador não comprovado (a classificar)", "DEDUCOES_COMERCIAIS", { doSistema: true }),
   g("CUSTOS_OPERACIONAIS", "Custos operacionais gerenciais", C.CUSTOS_OPERACIONAIS),
   f("INSUMOS", "Insumos", "CUSTOS_OPERACIONAIS"),
   f("EMBALAGENS", "Descartáveis e embalagens", "CUSTOS_OPERACIONAIS"),

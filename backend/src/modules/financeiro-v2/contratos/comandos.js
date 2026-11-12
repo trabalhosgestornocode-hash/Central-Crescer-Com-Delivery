@@ -8,7 +8,7 @@ import {
   TIPO_DOCUMENTO, VINCULAVEIS,
 } from "../dominio/catalogos.js";
 import { MODELO_DE_PLANO } from "../dominio/planoDeContas.js";
-import { MOEDA_PADRAO, exigirCentavos, somarLista } from "../dominio/dinheiro.js";
+import { MOEDA_PADRAO, exigirCentavos, somar, somarLista } from "../dominio/dinheiro.js";
 import { competenciaDe, exigirCompetencia, exigirData } from "../dominio/tempo.js";
 import { exigirInteiro, exigirLista, exigirObjeto, exigirTexto, exigirUmDe, exigirUuid, semCamposDesconhecidos, uuidOpcional } from "../dominio/validacao.js";
 
@@ -69,6 +69,40 @@ function pagamentoDeVenda(p, campo) {
   return saida;
 }
 
+/**
+ * COMPOSIÇÃO ECONÔMICA da venda (opcional; venda sem composição segue o contrato anterior):
+ *   receita própria (= brutoCentavos) = itens + acréscimos + serviços da empresa;
+ *   descontos: cada um com SEU financiador — LOJA (dedução comercial), TERCEIRO (subsídio: o terceiro paga, vira
+ *   recebível dele; não reduz a receita), PENDENTE (financiador não comprovado: dedução a classificar);
+ *   pagamentos do consumidor = receita − descontos da loja/pendentes − subsídios de terceiros.
+ * Valores cobrados em nome de terceiros ainda não têm tratamento (exigem obrigação com o terceiro): são recusados.
+ */
+export const FINANCIADOR_DESCONTO = Object.freeze(["LOJA", "TERCEIRO", "PENDENTE"]);
+function composicaoDeVenda(e, brutoCentavos) {
+  semCamposDesconhecidos(e, ["itensCentavos", "acrescimosCentavos", "servicosCentavos", "terceirosCentavos", "descontos"], "composicao");
+  const itensCentavos = exigirCentavos(e.itensCentavos, "composicao.itensCentavos", { naoNegativo: true });
+  const acrescimosCentavos = exigirCentavos(e.acrescimosCentavos ?? 0, "composicao.acrescimosCentavos", { naoNegativo: true });
+  const servicosCentavos = exigirCentavos(e.servicosCentavos ?? 0, "composicao.servicosCentavos", { naoNegativo: true });
+  if (exigirCentavos(e.terceirosCentavos ?? 0, "composicao.terceirosCentavos", { naoNegativo: true }) > 0) {
+    falhar(CODIGO.ENTRADA_INVALIDA, "Valores cobrados em nome de terceiros ainda não têm tratamento (exigem obrigação com o terceiro).", { campo: "composicao.terceirosCentavos" });
+  }
+  const descontos = exigirLista(e.descontos ?? [], "composicao.descontos", { min: 0, max: 20 }).map((d, i) => {
+    semCamposDesconhecidos(d, ["valorCentavos", "financiador", "terceiro", "descricao"], `composicao.descontos[${i}]`);
+    const financiador = exigirUmDe(d.financiador, FINANCIADOR_DESCONTO, `composicao.descontos[${i}].financiador`);
+    if (financiador !== "TERCEIRO" && d.terceiro !== undefined && d.terceiro !== null) falhar(CODIGO.ENTRADA_INVALIDA, "Só desconto de TERCEIRO indica o terceiro.", { campo: `composicao.descontos[${i}].terceiro` });
+    return {
+      valorCentavos: exigirCentavos(d.valorCentavos, `composicao.descontos[${i}].valorCentavos`, { positivo: true }), financiador,
+      terceiro: financiador === "TERCEIRO" ? exigirUmDe(d.terceiro, PROCESSADOR, `composicao.descontos[${i}].terceiro`) : null,
+      descricao: exigirTexto(d.descricao, `composicao.descontos[${i}].descricao`, { opcional: true }),
+    };
+  });
+  if (somar(itensCentavos, acrescimosCentavos, servicosCentavos) !== brutoCentavos) {
+    falhar(CODIGO.VALOR_INVALIDO, "brutoCentavos deve ser a receita própria: itens + acréscimos + serviços (nunca o valor após descontos).", { campo: "brutoCentavos" });
+  }
+  if (somarLista(descontos, (d) => d.valorCentavos) > brutoCentavos) falhar(CODIGO.VALOR_INVALIDO, "Descontos superam a receita da venda.", { campo: "composicao.descontos" });
+  return { itensCentavos, acrescimosCentavos, servicosCentavos, terceirosCentavos: 0, descontos };
+}
+
 const documentos = (ids, campo = "documentoIds") => [...new Set(exigirLista(ids ?? [], campo, { min: 0, max: 50 }).map((id, i) => exigirUuid(id, `${campo}[${i}]`)))];
 
 export function validarConta(e) {
@@ -82,7 +116,7 @@ export function validarContraparte(e) {
 }
 
 export function validarVenda(e) {
-  semCamposDesconhecidos(e, ["canal", "dataVenda", "competencia", "brutoCentavos", "moeda", "pagamentos", "pagamentoParcial", "fonte", "descricao"], "venda");
+  semCamposDesconhecidos(e, ["canal", "dataVenda", "competencia", "brutoCentavos", "moeda", "pagamentos", "pagamentoParcial", "fonte", "descricao", "composicao"], "venda");
   const dataVenda = exigirData(e.dataVenda, "dataVenda");
   const brutoCentavos = exigirCentavos(e.brutoCentavos, "brutoCentavos", { positivo: true });
   const f = fonte(e.fonte, { obrigatoria: true, exigirId: true });
@@ -90,10 +124,15 @@ export function validarVenda(e) {
     falhar(CODIGO.FONTE_NAO_ORIGINA_VENDA, "Este sistema não origina vendas: seus registros são evidência de pagamento e entram por conciliação.", { sistema: f.sistema });
   }
   const pagamentoParcial = booleano(e.pagamentoParcial, "pagamentoParcial");
-  const pagamentos = exigirLista(e.pagamentos, "pagamentos", { min: pagamentoParcial ? 0 : 1, max: 20 }).map((p, i) => pagamentoDeVenda(p, `pagamentos[${i}]`));
+  // Com composição, a lista pode ficar vazia só quando nada cabe ao consumidor (ex.: subsídio integral de terceiro): a soma abaixo confere.
+  const comComposicao = e.composicao !== undefined && e.composicao !== null;
+  const pagamentos = exigirLista(e.pagamentos, "pagamentos", { min: pagamentoParcial || comComposicao ? 0 : 1, max: 20 }).map((p, i) => pagamentoDeVenda(p, `pagamentos[${i}]`));
   const pago = somarLista(pagamentos, (p) => p.valorCentavos);
-  // Sem declarar pagamento parcial, a soma tem de FECHAR com o bruto: diferença silenciosa esconde erro de importação.
-  if (pago > brutoCentavos || (!pagamentoParcial && pago !== brutoCentavos)) {
+  const composicao = e.composicao === undefined || e.composicao === null ? null : composicaoDeVenda(e.composicao, brutoCentavos);
+  // O consumidor paga a receita menos os descontos (da loja, pendentes e subsídios de terceiros — estes o terceiro paga).
+  const aPagar = brutoCentavos - somarLista(composicao?.descontos ?? [], (d) => d.valorCentavos);
+  // Sem declarar pagamento parcial, a soma tem de FECHAR: diferença silenciosa esconde erro de importação.
+  if (pago > aPagar || (!pagamentoParcial && pago !== aPagar)) {
     falhar(CODIGO.PAGAMENTOS_NAO_FECHAM, "A soma das formas de pagamento deve ser igual ao valor bruto da venda (ou menor, se a venda for declarada com pagamento parcial).");
   }
   return {
@@ -106,6 +145,7 @@ export function validarVenda(e) {
     fonte: f,
     descricao: exigirTexto(e.descricao, "descricao", { opcional: true }),
     ...(pagamentoParcial ? { pagamentoParcial } : {}),
+    ...(composicao ? { composicao } : {}),
   };
 }
 
