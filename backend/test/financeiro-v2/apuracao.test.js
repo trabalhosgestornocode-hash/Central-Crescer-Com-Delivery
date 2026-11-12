@@ -236,3 +236,36 @@ test("sobreposição agregado × pedidos (dados inconsistentes injetados no moto
   assert.equal(ap.indicadores.FATURAMENTO_BRUTO_PROPRIO.situacao, "BLOQUEADO_POR_EVIDENCIA_INSUFICIENTE");
   assert.ok(ap.pendencias.some((x) => x.tipo === "SOBREPOSICAO_AGREGADO_PEDIDOS"));
 });
+
+test("Fase F — decomposição por canal reconcilia com a DRE: sem canal, custos, deduções avulsas, financeiro e ajustes", async () => {
+  const { apurar } = await import("../../src/modules/financeiro-v2/index.js");
+  let i = 0;
+  const l = (natureza, classificacao, valorCentavos, extra = {}) => ({ id: `l${(i += 1)}`, versao: 1, situacao: "ATIVO", competencia: "2026-09", natureza, classificacao, categoria: "X", valorCentavos, dataOperacao: "2026-09-02", ...extra });
+  const lancamentos = [
+    l("RECEITA", "RECEITA_OPERACIONAL", 10000, { canal: "IFOOD", origem: { tipo: "VENDA", id: "v1" } }),
+    l("DESPESA", "DESPESAS_COMERCIAIS", 1200, { canal: "IFOOD" }), // comissão atribuída ao canal
+    l("RECEITA", "RECEITA_OPERACIONAL", 7000, { canal: null, origem: { tipo: "PROPOSTA", id: "p1" }, dataOperacao: "2026-09-03" }), // agregado sem canal
+    l("DEDUCAO", "DEDUCOES_COMERCIAIS", 300, { canal: null, origem: { tipo: "PROPOSTA", id: "p1" } }), // desconto do agregado
+    l("DEDUCAO", "DEDUCOES_COMERCIAIS", 150, { canal: null }), // dedução avulsa, sem origem de venda
+    l("DESPESA", "CUSTOS_OPERACIONAIS", 4000, { canal: null }), // insumos: nunca empurrados para um canal
+    l("DESPESA", "DESPESAS_FINANCEIRAS", 250, { canal: null }),
+    l("RECEITA", "OUTROS_EFEITOS_GERENCIAIS", 90, { canal: null }),
+    l("PATRIMONIAL", "MOVIMENTACOES_PATRIMONIAIS", 9999, { canal: null }),
+  ];
+  const ap = apurar({ lancamentos, categorias: [], vendas: [], propostas: [], obrigacoes: [], movimentacoes: [], recebiveis: [], ajustes: [], competencias: [] }, { competencia: "2026-09", escopo: { organizacaoId: "o", unidadeId: "u" }, apuradoEm: "2026-10-01T00:00:00.000Z" });
+  const resultado = 10000 + 7000 - 300 - 150 - 4000 - 1200 - 250 + 90;
+  assert.equal(ap.indicadores.RESULTADO_GERENCIAL.valorCentavos, resultado);
+  const rec = ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL.reconciliacaoComDre;
+  const canais = Object.fromEntries(ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL.porCanal.map((x) => [x.canal, x.liquidoGerencialCentavos]));
+  assert.equal(canais.IFOOD, 10000 - 1200);
+  assert.equal(canais.NAO_IDENTIFICADO, 7000 - 300); // só a receita agregada e o desconto ligado a ela
+  assert.deepEqual(Object.fromEntries(Object.entries(rec.naoAtribuidos).map(([k, v]) => [k, v.valorCentavos])), { DEDUCOES_COMERCIAIS: -150, CUSTOS_OPERACIONAIS: -4000, RESULTADO_FINANCEIRO: -250, DEMAIS_EFEITOS_GERENCIAIS: 90 });
+  assert.equal(rec.totalReconciliadoCentavos, resultado);
+  assert.equal(rec.reconcilia, true);
+  // Cada R$ 100: componentes (sem subtotais), exato × exibido, diferença de arredondamento explícita.
+  const g = Object.fromEntries(ap.cadaCem.grupos.map((x) => [x.codigo, x]));
+  assert.equal(ap.cadaCem.grupos.reduce((s, x) => s + x.centesimosDePonto, 0), 10000);
+  assert.equal(g.CUSTOS_OPERACIONAIS.exatoMilionesimosDePonto, Number((4000n * 100000000n) / 17000n));
+  assert.equal(g.CUSTOS_OPERACIONAIS.diferencaDeArredondamentoMilionesimos, g.CUSTOS_OPERACIONAIS.centesimosDePonto * 10000 - g.CUSTOS_OPERACIONAIS.exatoMilionesimosDePonto);
+  assert.ok(!ap.cadaCem.grupos.some((x) => ["RECEITA_LIQUIDA_COMERCIAL", "RESULTADO_APOS_CUSTOS"].includes(x.codigo)));
+});

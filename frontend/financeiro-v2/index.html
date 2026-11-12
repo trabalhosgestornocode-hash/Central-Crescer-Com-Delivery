@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Financeiro v2 — demonstração local</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Archivo+Black&display=swap">
+  <link rel="stylesheet" href="fv2.css">
+</head>
+<body>
+  <a class="pular" href="#conteudo">Pular para o conteúdo</a>
+  <div class="faixa-demo" role="note">Ambiente demonstrativo local · dados sintéticos · não publicado</div>
+  <div class="layout">
+    <nav class="navegacao" aria-label="Financeiro v2">
+      <p class="marca">Financeiro <span>v2</span></p>
+      <ul>
+        <li><a href="#/visao-geral" data-rota="visao-geral">Visão Geral</a></li>
+        <li><a href="#/dre" data-rota="dre">DRE Gerencial</a></li>
+        <li><span class="em-breve" aria-disabled="true">Vendas e Recebimentos <small>em construção</small></span></li>
+        <li><span class="em-breve" aria-disabled="true">Contas a Pagar e Receber <small>em construção</small></span></li>
+        <li><span class="em-breve" aria-disabled="true">Caixa e Bancos <small>em construção</small></span></li>
+        <li><span class="em-breve" aria-disabled="true">Importações e Conferências <small>em construção</small></span></li>
+        <li><span class="em-breve" aria-disabled="true">Configurações <small>em construção</small></span></li>
+      </ul>
+    </nav>
+    <div class="principal">
+      <form class="filtros" aria-label="Filtros">
+        <label>Competência <input id="filtro-competencia" type="month" value="2026-09"></label>
+        <label>Unidade <select id="filtro-unidade"></select></label>
+        <label>Sessão (demonstração) <select id="filtro-sessao">
+          <option value="gestor">Gestor com acesso</option>
+          <option value="sem-acesso">Usuário sem concessão</option>
+          <option value="ausente">Sem sessão</option>
+        </select></label>
+      </form>
+      <main id="conteudo" tabindex="-1" aria-live="polite"></main>
+    </div>
+  </div>
+  <div id="painel" class="painel-fundo" hidden>
+    <aside class="painel" role="dialog" aria-modal="true" aria-labelledby="painel-titulo">
+      <div class="painel-conteudo" tabindex="-1"></div>
+    </aside>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

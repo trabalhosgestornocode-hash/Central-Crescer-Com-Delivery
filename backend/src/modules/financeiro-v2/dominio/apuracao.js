@@ -244,8 +244,13 @@ export function apurar(d, p) {
   const faturamentoBruto = { ...linhas.FATURAMENTO_BRUTO_PROPRIO, nome: "Faturamento Bruto Próprio", porCanal, componentesDaReceita: componentesDaReceita(receitas) };
 
   // ---------------------------------------------------------------- líquido gerencial por canal (leitura analítica, sem novos lançamentos)
+  // Atribuição a canal: lançamento com canal → aquele canal. Sem canal: só a RECEITA agregada e as deduções ligadas a
+  // ela (ou a venda sem canal) vão para NAO_IDENTIFICADO; o resto (custos, despesas gerais, financeiro, demais efeitos,
+  // deduções avulsas) é NÃO ATRIBUÍDO — nunca é empurrado para um canal.
+  const doAgregadoOuVenda = (l) => l.origem?.tipo === TIPO.PROPOSTA || l.origem?.tipo === TIPO.VENDA;
+  const canalDe = (l) => (l.canal ? l.canal : (l.natureza === N.RECEITA && l.classificacao === K.RECEITA_OPERACIONAL) || (l.natureza === N.DEDUCAO && doAgregadoOuVenda(l)) ? SEM_CANAL : null);
   const liquidoPorCanal = canais.map((canal) => {
-    const doCanal = ativos.filter((l) => (l.canal ?? SEM_CANAL) === canal && l.natureza !== N.PATRIMONIAL);
+    const doCanal = ativos.filter((l) => canalDe(l) === canal && l.natureza !== N.PATRIMONIAL);
     const brutoC = doCanal.filter(LINHAS[0].filtro).reduce((s, l) => somar(s, l.valorCentavos), 0);
     const deducoesC = doCanal.filter((l) => l.natureza === N.DEDUCAO).reduce((s, l) => somar(s, l.valorCentavos), 0);
     const despesasC = doCanal.filter((l) => l.natureza === N.DESPESA);
@@ -265,9 +270,24 @@ export function apurar(d, p) {
     a.brutoCentavos = somar(a.brutoCentavos, r.valorBaseCentavos); a.ajustesCentavos = somar(a.ajustesCentavos, r.ajustesCentavos);
     a.liquidadoCentavos = somar(a.liquidadoCentavos, r.liquidadoCentavos); a.saldoCentavos = somar(a.saldoCentavos, r.saldoCentavos); a.recebiveis += 1;
   }
+  // Reconciliação com a DRE: Σ líquidos por canal + componentes NÃO ATRIBUÍDOS (por linha da DRE) = resultado gerencial.
+  const naoAtribuidos = {};
+  for (const def of LINHAS) {
+    const lancs = ativos.filter((l) => def.filtro(l) && canalDe(l) === null);
+    const valor = lancs.reduce((s2, l) => somar(s2, def.assinado ? assinado(l) : def.sinal * l.valorCentavos), 0);
+    if (lancs.length) naoAtribuidos[def.codigo] = { valorCentavos: valor, registros: lancs.map((l) => l.id).sort() };
+  }
+  const somaCanais = liquidoPorCanal.reduce((s2, x) => somar(s2, x.liquidoGerencialCentavos ?? 0), 0);
+  const somaNaoAtribuidos = Object.values(naoAtribuidos).reduce((s2, x) => somar(s2, x.valorCentavos), 0);
+  const reconciliacaoComDre = temRegistros ? {
+    somaDosCanaisCentavos: somaCanais, naoAtribuidos, somaNaoAtribuidosCentavos: somaNaoAtribuidos,
+    totalReconciliadoCentavos: somar(somaCanais, somaNaoAtribuidos), resultadoDaDreCentavos: resultado,
+    reconcilia: somar(somaCanais, somaNaoAtribuidos) === resultado,
+    observacao: "A DRE é a referência do resultado. A decomposição por canal reconcilia por canais identificados, sem canal e componentes não atribuídos.",
+  } : null;
   const faturamentoLiquido = indicador("FATURAMENTO_LIQUIDO_GERENCIAL", "Faturamento Líquido Gerencial", "Por canal: bruto próprio − deduções do canal − despesas atribuídas ao canal. Leitura analítica: não é receita nem lançamento.",
     "Σ canal (bruto − deduções − despesas atribuídas)", liquidoPorCanal.reduce((s, c) => somar(s, c.liquidoGerencialCentavos ?? 0), 0), [], {
-      porCanal: liquidoPorCanal,
+      porCanal: liquidoPorCanal, reconciliacaoComDre,
       reconciliacaoComRepasses: { porProcessador: repassesPorProcessador, observacao: "Recebíveis e repasses são apresentados à parte: o líquido gerencial não é o depósito bancário." },
     });
 
@@ -280,9 +300,16 @@ export function apurar(d, p) {
   const cadaCem = {
     baseCentavos: temRegistros ? bruto : null,
     limitacao: !temRegistros ? "Sem registros na competência: valor desconhecido." : bruto <= 0 ? "Faturamento bruto zero: percentuais não se aplicam." : null,
-    grupos: grupos.map(([codigo, valor], i) => ({ codigo, valorCentavos: temRegistros ? valor : null, centesimosDePonto: partes ? partes[i] : null, percentual: partes ? comoPercentual(partes[i]) : null })),
+    grupos: grupos.map(([codigo, valor], i) => {
+      // Exato em milionésimos de ponto percentual (valor × 100.000.000 / bruto, truncado) para mostrar o arredondamento.
+      const exato = partes ? Number((BigInt(valor) * 100000000n) / BigInt(bruto)) : null;
+      return {
+        codigo, valorCentavos: temRegistros ? valor : null, centesimosDePonto: partes ? partes[i] : null, percentual: partes ? comoPercentual(partes[i]) : null,
+        exatoMilionesimosDePonto: exato, diferencaDeArredondamentoMilionesimos: partes ? partes[i] * 10000 - exato : null, acimaDeCem: partes ? Math.abs(partes[i]) > 10000 : false,
+      };
+    }),
     prejuizo: temRegistros && resultado < 0,
-    regra: "Cada grupo = participação no faturamento bruto, arredondada por maior resto; a soma é exatamente 100,00%. Prejuízo aparece como parte negativa.",
+    regra: "Grupos = componentes econômicos (sem subtotais). Participação no faturamento bruto, exibida com 2 casas por maior resto (soma exatamente 100,00%); o exato e a diferença de arredondamento acompanham cada grupo. Prejuízo é parte negativa; nenhum valor é alterado para a barra fechar.",
   };
 
   const fora = ativos.filter((l) => l.natureza === N.PATRIMONIAL);
