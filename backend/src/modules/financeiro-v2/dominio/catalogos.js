@@ -7,6 +7,7 @@ const enumerar = (...valores) => Object.freeze(Object.fromEntries(valores.map((v
 export const TIPO = enumerar(
   "CONTA", "CONTRAPARTE", "LANCAMENTO", "VENDA", "OBRIGACAO", "RECEBIVEL", "MOVIMENTACAO", "LIQUIDACAO",
   "TRANSFERENCIA", "AJUSTE", "DOCUMENTO", "VINCULO_DOCUMENTAL", "CORRESPONDENCIA", "COMPETENCIA",
+  "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO",
 );
 
 /** Conta financeira = onde o dinheiro DA EMPRESA está. Processadores (Stone, iFood, vales) NÃO são contas: geram recebíveis. */
@@ -14,9 +15,37 @@ export const TIPO_CONTA = enumerar("BANCARIA", "CAIXA_FISICO");
 
 export const TIPO_CONTRAPARTE = enumerar("FORNECEDOR", "OPERADORA", "CLIENTE", "PRESTADOR", "OUTRO");
 
-/** Natureza ECONÔMICA (resultado). Não descreve entrada/saída de dinheiro. */
-export const NATUREZA_LANCAMENTO = enumerar("RECEITA", "DEDUCAO", "DESPESA");
+/**
+ * Natureza ECONÔMICA (resultado). Não descreve entrada/saída de dinheiro.
+ * PATRIMONIAL nunca entra no resultado (principal de empréstimo, aporte, retirada, compra de equipamento).
+ */
+export const NATUREZA_LANCAMENTO = enumerar("RECEITA", "DEDUCAO", "DESPESA", "PATRIMONIAL");
 export const SITUACAO_LANCAMENTO = enumerar("ATIVO", "CANCELADO");
+
+/**
+ * Classificações principais do plano de contas gerencial (fixas). As CATEGORIAS são cadastro de cada unidade.
+ * A natureza de um lançamento vem da categoria; a primeira natureza de cada classificação é a padrão.
+ */
+export const CLASSIFICACAO = enumerar(
+  "RECEITA_OPERACIONAL", "DEDUCOES_COMERCIAIS", "CUSTOS_OPERACIONAIS", "DESPESAS_COMERCIAIS",
+  "DESPESAS_RECEBIMENTO_PROCESSAMENTO", "DESPESAS_ADMINISTRATIVAS", "PESSOAL", "MARKETING", "DESPESAS_PLATAFORMAS",
+  "DESPESAS_FINANCEIRAS", "TRIBUTOS", "OUTROS_EFEITOS_GERENCIAIS", "MOVIMENTACOES_PATRIMONIAIS",
+);
+export const NATUREZAS_DA_CLASSIFICACAO = Object.freeze({
+  RECEITA_OPERACIONAL: Object.freeze(["RECEITA"]),
+  DEDUCOES_COMERCIAIS: Object.freeze(["DEDUCAO"]),
+  CUSTOS_OPERACIONAIS: Object.freeze(["DESPESA"]),
+  DESPESAS_COMERCIAIS: Object.freeze(["DESPESA"]),
+  DESPESAS_RECEBIMENTO_PROCESSAMENTO: Object.freeze(["DESPESA"]),
+  DESPESAS_ADMINISTRATIVAS: Object.freeze(["DESPESA"]),
+  PESSOAL: Object.freeze(["DESPESA"]),
+  MARKETING: Object.freeze(["DESPESA"]),
+  DESPESAS_PLATAFORMAS: Object.freeze(["DESPESA"]),
+  DESPESAS_FINANCEIRAS: Object.freeze(["DESPESA"]),
+  TRIBUTOS: Object.freeze(["DESPESA", "DEDUCAO"]),
+  OUTROS_EFEITOS_GERENCIAIS: Object.freeze(["DESPESA", "RECEITA"]),
+  MOVIMENTACOES_PATRIMONIAIS: Object.freeze(["PATRIMONIAL"]),
+});
 
 /** Canal de origem da venda (um por venda). */
 export const CANAL = enumerar("BALCAO", "IFOOD", "ANOTA_AI", "OUTRO");
@@ -33,13 +62,29 @@ export const SISTEMA_FONTE = enumerar("SAIPOS", "IFOOD", "ANOTA_AI", "STONE", "U
  */
 export const SISTEMAS_QUE_ORIGINAM_VENDA = Object.freeze([SISTEMA_FONTE.SAIPOS, SISTEMA_FONTE.IFOOD, SISTEMA_FONTE.ANOTA_AI, SISTEMA_FONTE.MANUAL]);
 
+export const SITUACAO_VENDA = enumerar("ATIVA", "CANCELADA");
+/** Pagamento de venda é registro próprio: uma venda pode ter vários, de formas e processadores diferentes, em datas diferentes. */
+export const SITUACAO_PAGAMENTO = enumerar("VALIDO", "ESTORNADO_PARCIAL", "ESTORNADO", "CANCELADO");
+
 export const SITUACAO_TITULO = enumerar("ABERTA", "PARCIAL", "QUITADA", "CANCELADA");
 export const ALVO_LIQUIDACAO = enumerar("OBRIGACAO", "RECEBIVEL");
-export const SITUACAO_LIQUIDACAO = enumerar("VALIDA", "ESTORNADA");
+export const SITUACAO_LIQUIDACAO = enumerar("VALIDA", "ESTORNADA_PARCIAL", "ESTORNADA");
 
 export const SENTIDO = enumerar("ENTRADA", "SAIDA");
-export const NATUREZA_MOVIMENTACAO = enumerar("PAGAMENTO", "RECEBIMENTO", "TRANSFERENCIA_INTERNA", "OUTRA");
+/** DEVOLUCAO só nasce de um estorno de pagamento de venda (dinheiro que volta ao cliente). */
+export const NATUREZA_MOVIMENTACAO = enumerar("PAGAMENTO", "RECEBIMENTO", "TRANSFERENCIA_INTERNA", "DEVOLUCAO", "OUTRA");
+export const SITUACAO_MOVIMENTACAO = enumerar("VALIDA", "ESTORNADA");
+export const SITUACAO_TRANSFERENCIA = enumerar("VALIDA", "ESTORNADA");
 export const SITUACAO_CONCILIACAO = enumerar("NAO_CONCILIADA", "PARCIAL", "CONCILIADA");
+
+/**
+ * Por que um pagamento de venda é estornado:
+ *  DEVOLUCAO_AO_CLIENTE  → o cliente recebeu o dinheiro de volta: reduz a receita (dedução comercial), sem apagar a venda.
+ *  CORRECAO_DE_PAGAMENTO → o pagamento foi registrado errado (forma/processador): a receita não muda; a venda volta a ter
+ *                          valor pendente, que um novo pagamento completa.
+ */
+export const MOTIVO_ESTORNO = enumerar("DEVOLUCAO_AO_CLIENTE", "CORRECAO_DE_PAGAMENTO");
+export const ALVO_ESTORNO = enumerar("LIQUIDACAO", "PAGAMENTO_VENDA", "MOVIMENTACAO", "TRANSFERENCIA");
 
 export const TIPO_DOCUMENTO = enumerar(
   "EXTRATO_BANCARIO", "RELATORIO_VENDAS", "RELATORIO_PROCESSADOR", "DEMONSTRATIVO_REPASSE", "NOTA_FISCAL", "BOLETO",
@@ -48,7 +93,7 @@ export const TIPO_DOCUMENTO = enumerar(
 /** Tipos de registro que podem receber vínculo documental. */
 export const VINCULAVEIS = Object.freeze([
   TIPO.LANCAMENTO, TIPO.VENDA, TIPO.OBRIGACAO, TIPO.RECEBIVEL, TIPO.MOVIMENTACAO, TIPO.LIQUIDACAO, TIPO.TRANSFERENCIA,
-  TIPO.AJUSTE, TIPO.CORRESPONDENCIA, TIPO.COMPETENCIA,
+  TIPO.AJUSTE, TIPO.CORRESPONDENCIA, TIPO.COMPETENCIA, TIPO.PAGAMENTO_VENDA, TIPO.ESTORNO,
 ]);
 
 export const SITUACAO_CORRESPONDENCIA = enumerar("CANDIDATA", "CONFIRMADA", "DIVERGENTE", "REJEITADA");
@@ -59,5 +104,5 @@ export const ESTADO_COMPETENCIA = enumerar("ABERTA", "FECHAMENTO_PRELIMINAR", "F
 
 export const EVENTO_HISTORICO = enumerar(
   "CRIACAO", "CORRECAO", "RECLASSIFICACAO", "CANCELAMENTO", "LIQUIDACAO", "ESTORNO", "AJUSTE", "CONCILIACAO",
-  "MUDANCA_ESTADO", "SUBSTITUICAO",
+  "MUDANCA_ESTADO", "SUBSTITUICAO", "CORRECAO_EM_FECHAMENTO", "PAGAMENTO",
 );

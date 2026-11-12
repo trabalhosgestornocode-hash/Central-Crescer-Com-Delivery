@@ -3,7 +3,12 @@
 //   ABERTA → FECHAMENTO_PRELIMINAR → FECHAMENTO_COM_PENDENCIAS → FECHAMENTO_HOMOLOGADO
 //                                  ↘────────────────────────────↗
 // Voltar para ABERTA é sempre uma REVISÃO: exige justificativa e fica no histórico. Sair de HOMOLOGADO exige a ação
-// própria de revisão (`financeiro_v2.revisar`). Enquanto HOMOLOGADA, a competência não aceita escrita alguma.
+// própria de revisão (`financeiro_v2.revisar`).
+//
+// Escrita por estado (decisão da Execução 01B):
+//   ABERTA / FECHAMENTO_PRELIMINAR → operações autorizadas, com histórico.
+//   FECHAMENTO_COM_PENDENCIAS      → só correções auditadas: exige `financeiro_v2.corrigir` e deixa marca na competência.
+//   FECHAMENTO_HOMOLOGADO          → bloqueada; reabrir exige permissão de revisão, justificativa e auditoria.
 import { CODIGO, falhar } from "./erros.js";
 import { ESTADO_COMPETENCIA as E } from "./catalogos.js";
 import { ACAO } from "./contexto.js";
@@ -35,3 +40,4 @@ export function acaoDaTransicao(estadoAtual, novoEstado, dados = {}) {
 }
 
 export const aceitaEscrita = (estado) => estado !== E.FECHAMENTO_HOMOLOGADO;
+export const exigeCorrecaoAuditada = (estado) => estado === E.FECHAMENTO_COM_PENDENCIAS;

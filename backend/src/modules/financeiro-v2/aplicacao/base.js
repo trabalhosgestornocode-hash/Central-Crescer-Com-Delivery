@@ -1,28 +1,34 @@
 // Infraestrutura comum das operações: contexto → escopo → permissão → transação, criação/alteração com histórico,
-// guarda de competência homologada e idempotência por origem externa.
+// guarda de competência, idempotência por origem externa e classificação pelo plano de contas.
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { ESTADO_COMPETENCIA, EVENTO_HISTORICO, TIPO } from "../dominio/catalogos.js";
+import { ESTADO_COMPETENCIA, EVENTO_HISTORICO, SITUACAO_LANCAMENTO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO, autorizar, exigirContexto } from "../dominio/contexto.js";
-import { aceitaEscrita } from "../dominio/fechamento.js";
+import { aceitaEscrita, exigeCorrecaoAuditada } from "../dominio/fechamento.js";
+import { cadeiaDoSistema, exigirLancavel, naturezaDaCategoria } from "../dominio/planoDeContas.js";
 import { hojeEm } from "../dominio/tempo.js";
+
+export const chaveDaCategoria = (codigo) => `categoria:${codigo}`;
+export const tituloNovo = (valorBaseCentavos) => ({ valorBaseCentavos, liquidadoCentavos: 0, ajustesCentavos: 0, saldoCentavos: valorBaseCentavos, situacao: SITUACAO_TITULO.ABERTA });
 
 export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
   const agora = () => relogio().toISOString();
   const hoje = () => hojeEm(relogio(), fuso);
+  /** Competências em fechamento com pendências já marcadas nesta transação (uma marca por transação). */
+  const marcadas = new WeakMap();
 
   /** Operação de escrita: valida contexto, escopo e permissão ANTES de abrir a transação. */
   function executar(ctxBruto, acao, fn) {
     const ctx = exigirContexto(ctxBruto);
     politica.exigir(ctx);
     autorizar(ctx, acao);
-    return repositorio.transacao((tx) => fn(ctx, tx));
+    return repositorio.transacao((tx) => fn(ctx, tx), { escopo: ctx });
   }
 
   function consultar(ctxBruto, fn) {
     const ctx = exigirContexto(ctxBruto);
     politica.exigir(ctx);
     autorizar(ctx, ACAO.VER);
-    return repositorio.leitura((tx) => fn(ctx, tx));
+    return repositorio.leitura((tx) => fn(ctx, tx), { escopo: ctx });
   }
 
   async function historico(tx, ctx, registroTipo, registroId, evento, antes, depois, justificativa = null) {
@@ -58,15 +64,29 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
   }
 
   async function competenciaAtual(tx, ctx, competencia) {
-    const [c] = await tx.listar(ctx, TIPO.COMPETENCIA, (x) => x.competencia === competencia);
+    const [c] = await tx.listar(ctx, TIPO.COMPETENCIA, { onde: { competencia } });
     return c ?? null;
   }
 
-  /** Competência homologada não aceita NENHUMA escrita: é preciso revisão explícita (reabertura com justificativa). */
+  /**
+   * Guarda de escrita por estado de fechamento. Toma uma trava COMPARTILHADA da competência: a mudança de estado toma
+   * a trava EXCLUSIVA, então uma escrita nunca "atravessa" uma homologação concorrente.
+   *   homologada               → recusa (reabrir exige revisão formal);
+   *   fechamento com pendências → só com permissão de corrigir, e a correção fica marcada no histórico da competência.
+   */
   async function exigirCompetenciaEditavel(tx, ctx, competencia) {
+    await tx.travar(ctx, `competencia:${competencia}`, "COMPARTILHADA");
     const c = await competenciaAtual(tx, ctx, competencia);
     if (c && !aceitaEscrita(c.estado)) {
       falhar(CODIGO.COMPETENCIA_HOMOLOGADA, "A competência está homologada. Alterações exigem revisão formal com justificativa.", { competencia });
+    }
+    if (c && exigeCorrecaoAuditada(c.estado)) {
+      autorizar(ctx, ACAO.CORRIGIR);
+      const jaMarcadas = marcadas.get(tx) ?? marcadas.set(tx, new Set()).get(tx);
+      if (!jaMarcadas.has(competencia)) {
+        jaMarcadas.add(competencia);
+        await historico(tx, ctx, TIPO.COMPETENCIA, c.id, EVENTO_HISTORICO.CORRECAO_EM_FECHAMENTO, null, { competencia, estado: c.estado }, "Escrita durante fechamento com pendências documentadas.");
+      }
     }
     return c?.estado ?? ESTADO_COMPETENCIA.ABERTA;
   }
@@ -90,5 +110,63 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
     if (data > hoje()) falhar(CODIGO.DATA_INVALIDA, `${campo} não pode estar no futuro.`, { campo });
   }
 
-  return { gerarId, agora, hoje, executar, consultar, historico, criar, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel, chaveDe, jaRegistrado, exigirNaoFutura };
+  // ---------------------------------------------------------------- plano de contas
+
+  const categoriaPorCodigo = (tx, ctx, codigo) => tx.buscarPorChave(ctx, TIPO.CATEGORIA, chaveDaCategoria(codigo));
+
+  /** Categoria informada pelo usuário/importador: precisa EXISTIR no plano da unidade, estar ativa e aceitar lançamento. */
+  async function categoriaLancavel(tx, ctx, codigo) {
+    const categoria = await categoriaPorCodigo(tx, ctx, codigo);
+    if (!categoria) falhar(CODIGO.CATEGORIA_INVALIDA, "Categoria inexistente no plano de contas desta unidade.", { categoria: codigo });
+    return exigirLancavel(categoria);
+  }
+
+  /** Categoria usada pelo próprio núcleo (receita de venda, devolução): criada sob demanda, com suas ascendentes. */
+  async function categoriaDoSistema(tx, ctx, codigo) {
+    let pai = null;
+    let categoria = null;
+    for (const def of cadeiaDoSistema(codigo)) {
+      categoria = await categoriaPorCodigo(tx, ctx, def.codigo);
+      if (!categoria) {
+        const classificacao = pai?.classificacao ?? def.classificacao;
+        categoria = await criar(tx, ctx, TIPO.CATEGORIA, {
+          codigo: def.codigo, nome: def.nome, classificacao, natureza: naturezaDaCategoria(classificacao, def.natureza), paiId: pai?.id ?? null,
+          aceitaLancamento: def.aceitaLancamento, exigeDocumento: def.exigeDocumento === true, ativa: true, doSistema: true,
+          chaveIdempotencia: chaveDaCategoria(def.codigo), impressao: null,
+        });
+      }
+      pai = categoria;
+    }
+    return exigirLancavel(categoria);
+  }
+
+  /**
+   * Cria UM lançamento econômico. Natureza e classificação vêm SEMPRE da categoria — nunca do chamador.
+   * `documentado` informa se há documento junto; categorias que exigem documento (ex.: antecipação) recusam sem ele.
+   */
+  function lancar(tx, ctx, categoria, d, { documentado = false } = {}) {
+    if (categoria.exigeDocumento && !documentado) {
+      falhar(CODIGO.CATEGORIA_INVALIDA, "Esta categoria só aceita lançamento com documento que a comprove.", { categoria: categoria.codigo });
+    }
+    return criar(tx, ctx, TIPO.LANCAMENTO, {
+      situacao: SITUACAO_LANCAMENTO.ATIVO, natureza: categoria.natureza, categoriaId: categoria.id, categoria: categoria.codigo,
+      classificacao: categoria.classificacao, canal: null, retidoNoRepasse: false, fonte: null, ...d,
+    });
+  }
+
+  async function cancelarLancamento(tx, ctx, id, justificativa) {
+    const l = await obterOuFalhar(tx, ctx, TIPO.LANCAMENTO, id, "Lançamento");
+    if (l.situacao !== SITUACAO_LANCAMENTO.ATIVO) return l;
+    await exigirCompetenciaEditavel(tx, ctx, l.competencia);
+    return alterar(tx, ctx, TIPO.LANCAMENTO, l, { situacao: SITUACAO_LANCAMENTO.CANCELADO }, EVENTO_HISTORICO.CANCELAMENTO, justificativa);
+  }
+
+  async function exigirDocumentos(tx, ctx, ids) {
+    for (const id of ids) await obterOuFalhar(tx, ctx, TIPO.DOCUMENTO, id, "Documento");
+  }
+
+  return {
+    gerarId, agora, hoje, executar, consultar, historico, criar, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel,
+    chaveDe, jaRegistrado, exigirNaoFutura, categoriaPorCodigo, categoriaLancavel, categoriaDoSistema, lancar, cancelarLancamento, exigirDocumentos,
+  };
 }

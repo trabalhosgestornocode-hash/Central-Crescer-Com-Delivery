@@ -146,3 +146,28 @@ O que já está pronto para receber as fontes:
 Ordem sugerida: (1) P1 + P2 em banco de teste; (2) cofre de documentos; (3) leitores por fonte que produzem
 **comandos** do núcleo (nunca gravam direto); (4) importação de setembro/2026 em banco de teste e conferência contra
 `02-referencia-setembro.md`.
+
+---
+
+## 9. Atualização — Execução 01B (12/11/2026)
+
+As seções acima registram o estado da Execução 01 e foram mantidas como histórico de decisão. A 01B alterou o seguinte (detalhes em [04-persistencia-e-seguranca.md](04-persistencia-e-seguranca.md)):
+
+| Pendência / decisão | Situação |
+|---|---|
+| P1 Persistência PostgreSQL | **Feita** em banco local isolado: migração `database/financeiro-v2/migracoes/0001_fundacao.sql` e adaptador `infra/postgres/`. **Não aplicada em produção.** |
+| P2 Testes de integração | **Feitos**: integridade referencial, unicidade, RLS, concorrência real, rollback, migrações |
+| P5 Cofre de documentos | **Contrato** e adaptador em memória (arquivos sintéticos). Serviço real pendente |
+| P6 Cancelamentos e estornos | **Feitos**: venda, recebível, pagamento de venda (total/parcial), liquidação (total/parcial), movimentação, transferência, correção de lançamento |
+| P7 Plano de contas | **Feito**: cadastro hierárquico por unidade, 13 classificações, modelos `BASE` e `ACAITERIA` |
+| P3, P4 | Continuam pendentes (sem rota nesta fase) |
+| Decisão 1 — banco de teste | PostgreSQL local (Docker indisponível → binários locais, servidor próprio) |
+| Decisão 3 — fechamento | Aberta e preliminar: operações autorizadas. Com pendências: só correções auditadas (`financeiro_v2.corrigir` + marca no histórico da competência). Homologada: bloqueada |
+| Decisão 4 — taxas | **Corrigida.** Retenções e taxas seguem a natureza econômica da categoria (desconto comercial = dedução; taxa Stone = despesa de recebimento; comissão iFood = despesa comercial; mensalidade = plataforma; anúncios = marketing; antecipação = despesa financeira com documento). Novo indicador `FATURAMENTO_LIQUIDO_GERENCIAL` (visão do canal) lê os mesmos lançamentos sem reduzir o resultado duas vezes |
+
+Mudanças de modelo:
+- **Pagamento de venda** virou registro próprio (`PAGAMENTO_VENDA`), com forma, processador e conta independentes. Dinheiro e Pix direto não geram recebível; podem registrar a entrada na conta ou deixar para a conciliação. A venda pode ser declarada com pagamento parcial e completada depois.
+- `registrarRecebivel` agora recebe `retencoes` (com **categoria**) no lugar de `deducoes` (com tipo livre).
+- Natureza `PATRIMONIAL` (empréstimo, aporte, imobilizado) gera dívida e caixa, mas não resultado.
+- `RECEITA_BRUTA` conta só receita operacional; créditos avulsos vão para `OUTRAS_RECEITAS`.
+- Novas invariantes conferidas em `verificarConservacao`: pagamentos fecham com a venda, venda cancelada sem receita, devolução bate com os lançamentos, pagamento processado ↔ recebível, lançamento sempre classificado.

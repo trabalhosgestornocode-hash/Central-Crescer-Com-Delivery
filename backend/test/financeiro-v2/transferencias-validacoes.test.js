@@ -100,7 +100,7 @@ test("valores e entradas inválidas são recusados sem efeito", async () => {
 
   await rejeita(nucleo.registrarRecebivel(c, { brutoCentavos: 100, competencia: "2026-09" }), CODIGO.ENTRADA_INVALIDA); // sem devedor
   await rejeita(nucleo.registrarRecebivel(c, { processador: "STONE", contraparteId: fornecedor.id, brutoCentavos: 100, competencia: "2026-09" }), CODIGO.ENTRADA_INVALIDA); // dois devedores
-  await rejeita(nucleo.registrarRecebivel(c, { processador: "STONE", brutoCentavos: 100, competencia: "2026-09", deducoes: [{ tipo: "TAXA", valorCentavos: 101 }] }), CODIGO.VALOR_INVALIDO);
+  await rejeita(nucleo.registrarRecebivel(c, { processador: "STONE", brutoCentavos: 100, competencia: "2026-09", retencoes: [{ categoria: "TAXAS_STONE", valorCentavos: 101 }] }), CODIGO.VALOR_INVALIDO);
   await rejeita(nucleo.registrarRecebivel(c, { processador: "BANCO", brutoCentavos: 100, competencia: "2026-09" }), CODIGO.ENTRADA_INVALIDA);
   await rejeita(nucleo.configurarContaFinanceira(c, { tipo: "STONE", nome: "Stone" }), CODIGO.ENTRADA_INVALIDA); // processador não é tipo de conta
   await rejeita(nucleo.configurarContaFinanceira(c, { tipo: "PROCESSADOR", nome: "iFood" }), CODIGO.ENTRADA_INVALIDA);

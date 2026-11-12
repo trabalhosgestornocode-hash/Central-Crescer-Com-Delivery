@@ -85,7 +85,7 @@ test("cada operação exige a permissão própria; sem permissão nada é gravad
     [so(ACAO.VER, ACAO.REGISTRAR), () => nucleo.configurarContaFinanceira(so(ACAO.VER, ACAO.REGISTRAR), { tipo: "BANCARIA", nome: "x" })],
     [so(ACAO.VER, ACAO.REGISTRAR), () => nucleo.corrigirObrigacao(so(ACAO.VER, ACAO.REGISTRAR), { obrigacaoId: ob.id, mudancas: { descricao: "y" }, justificativa: "z" })],
     [so(ACAO.VER, ACAO.CORRIGIR), () => nucleo.cancelarObrigacao(so(ACAO.VER, ACAO.CORRIGIR), { obrigacaoId: ob.id, justificativa: "z" })],
-    [so(ACAO.VER, ACAO.REGISTRAR), () => nucleo.registrarAjuste(so(ACAO.VER, ACAO.REGISTRAR), { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 100, motivo: "juros", categoria: "JUROS" })],
+    [so(ACAO.VER, ACAO.REGISTRAR), () => nucleo.registrarAjuste(so(ACAO.VER, ACAO.REGISTRAR), { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 100, motivo: "juros", categoria: "JUROS_E_TARIFAS_BANCARIAS" })],
     [so(ACAO.VER, ACAO.REGISTRAR), () => nucleo.criarCorrespondenciaCandidata(so(ACAO.VER, ACAO.REGISTRAR), { ladoA: [{ tipo: "MOVIMENTACAO", id: movimentacao.id, valorCentavos: 100000 }], ladoB: [{ tipo: "OBRIGACAO", id: ob.id, valorCentavos: 100000 }] })],
     [so(ACAO.VER, ACAO.REGISTRAR), () => nucleo.alterarEstadoDaCompetencia(so(ACAO.VER, ACAO.REGISTRAR), { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" })],
   ];

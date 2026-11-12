@@ -2,7 +2,7 @@
 // (ex.: um repasse no extrato ↔ vários recebíveis; uma venda ↔ a transação do processador).
 // Nesta execução NÃO há conciliação automática: candidatas são criadas e decididas por uma pessoa responsável.
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { EVENTO_HISTORICO, SITUACAO_CONCILIACAO, SITUACAO_CORRESPONDENCIA as S, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
+import { EVENTO_HISTORICO, SITUACAO_CONCILIACAO, SITUACAO_CORRESPONDENCIA as S, SITUACAO_MOVIMENTACAO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { validarCorrespondencia, validarDecisaoConciliacao } from "../contratos/comandos.js";
@@ -19,7 +19,10 @@ export function operacoesDeConciliacao(b) {
 
   async function carregar(tx, ctx, ref) {
     const r = await b.obterOuFalhar(tx, ctx, ref.tipo, ref.id, "Registro da correspondência");
-    if (r.situacao === SITUACAO_TITULO.CANCELADA) falhar(CODIGO.CONCILIACAO_INVALIDA, "Registro cancelado não pode ser conciliado.");
+    // "CANCELADA" vale para título e venda; movimentação anulada fica "ESTORNADA".
+    if (r.situacao === SITUACAO_TITULO.CANCELADA || r.situacao === SITUACAO_MOVIMENTACAO.ESTORNADA) {
+      falhar(CODIGO.CONCILIACAO_INVALIDA, "Registro cancelado ou estornado não pode ser conciliado.");
+    }
     if (ref.valorCentavos > valorConciliavel(ref.tipo, r)) {
       falhar(CODIGO.CONCILIACAO_INVALIDA, "O valor informado supera o valor do registro.", { tipo: ref.tipo });
     }
@@ -27,7 +30,7 @@ export function operacoesDeConciliacao(b) {
   }
 
   async function jaConfirmado(tx, ctx, ref, ignorarId) {
-    const confirmadas = await tx.listar(ctx, TIPO.CORRESPONDENCIA, (c) => c.situacao === S.CONFIRMADA && c.id !== ignorarId);
+    const confirmadas = await tx.listar(ctx, TIPO.CORRESPONDENCIA, { onde: { situacao: S.CONFIRMADA }, predicado: (c) => c.id !== ignorarId });
     return somarLista(confirmadas.flatMap(refs).filter((r) => r.tipo === ref.tipo && r.id === ref.id), (r) => r.valorCentavos);
   }
 

@@ -19,7 +19,7 @@ const importsDe = (codigo) => [...codigo.matchAll(/(?:import|export)\s[^;]*?from
 
 test("o módulo existe e tem as camadas previstas", () => {
   const nomes = arquivos.map(nome);
-  for (const esperado of ["index.js", "dominio/dinheiro.js", "dominio/contexto.js", "dominio/indicadores.js", "contratos/comandos.js", "contratos/repositorio.js", "aplicacao/nucleo.js", "infra/repositorioMemoria.js"]) {
+  for (const esperado of ["index.js", "dominio/dinheiro.js", "dominio/contexto.js", "dominio/indicadores.js", "dominio/planoDeContas.js", "contratos/comandos.js", "contratos/repositorio.js", "contratos/cofre.js", "aplicacao/nucleo.js", "infra/repositorioMemoria.js", "infra/cofreMemoria.js", "infra/postgres/repositorioPostgres.js", "infra/postgres/destinoSeguro.js"]) {
     assert.ok(nomes.includes(esperado), esperado);
   }
 });
@@ -52,7 +52,9 @@ test("sem acesso a ambiente, rede, banco, HTTP ou ao financeiro antigo", () => {
 
 test("nenhum cálculo monetário usa ponto flutuante", () => {
   const proibido = /parseFloat|toFixed|Math\.(round|floor|ceil|trunc)\s*\([^)]*Centavos|Number\s*\(\s*["'`\w.]*valor|\/\s*100\b|\*\s*100\b|\*\s*0\.\d|\b0\.\d+\b/;
-  const ruins = arquivos.filter((p) => proibido.test(ler(p))).map(nome);
+  // Endereço IPv4 literal (a guarda de destino cita o loopback) não é número com casas decimais.
+  const semEnderecos = (s) => s.replace(/\b\d{1,3}(\.\d{1,3}){3}\b/g, "ENDERECO");
+  const ruins = arquivos.filter((p) => proibido.test(semEnderecos(ler(p)))).map(nome);
   assert.deepEqual(ruins, []);
 });
 

@@ -3,9 +3,11 @@
 // Organização, unidade e usuário NUNCA fazem parte de um comando: vêm do contexto.
 import { CODIGO, falhar } from "../dominio/erros.js";
 import {
-  ALVO_LIQUIDACAO, CANAL, CONCILIAVEIS, ESTADO_COMPETENCIA, FORMA_PAGAMENTO, NATUREZA_MOVIMENTACAO, PROCESSADOR, SENTIDO,
-  SISTEMA_FONTE, SISTEMAS_QUE_ORIGINAM_VENDA, TIPO, TIPO_CONTA, TIPO_CONTRAPARTE, TIPO_DOCUMENTO, VINCULAVEIS,
+  ALVO_LIQUIDACAO, CANAL, CLASSIFICACAO, CONCILIAVEIS, ESTADO_COMPETENCIA, FORMA_PAGAMENTO, MOTIVO_ESTORNO, NATUREZA_LANCAMENTO,
+  NATUREZA_MOVIMENTACAO, PROCESSADOR, SENTIDO, SISTEMA_FONTE, SISTEMAS_QUE_ORIGINAM_VENDA, TIPO, TIPO_CONTA, TIPO_CONTRAPARTE,
+  TIPO_DOCUMENTO, VINCULAVEIS,
 } from "../dominio/catalogos.js";
+import { MODELO_DE_PLANO } from "../dominio/planoDeContas.js";
 import { MOEDA_PADRAO, exigirCentavos, somarLista } from "../dominio/dinheiro.js";
 import { competenciaDe, exigirCompetencia, exigirData } from "../dominio/tempo.js";
 import { exigirInteiro, exigirLista, exigirObjeto, exigirTexto, exigirUmDe, exigirUuid, semCamposDesconhecidos, uuidOpcional } from "../dominio/validacao.js";
@@ -33,6 +35,40 @@ const moeda = (m) => {
   return MOEDA_PADRAO;
 };
 
+const booleano = (v, campo, padrao = false) => {
+  if (v === undefined || v === null) return padrao;
+  if (typeof v !== "boolean") falhar(CODIGO.ENTRADA_INVALIDA, `${campo} deve ser verdadeiro ou falso.`, { campo });
+  return v;
+};
+const dataOpcional = (v, campo) => (v === undefined || v === null ? null : exigirData(v, campo));
+const codigoDeCategoria = (v, campo = "categoria") => {
+  const t = exigirTexto(v, campo, { max: 80 });
+  if (!/^[A-Z][A-Z0-9_]*$/.test(t)) falhar(CODIGO.ENTRADA_INVALIDA, `${campo} deve ser um código em maiúsculas (letras, números e _).`, { campo });
+  return t;
+};
+const justificativa = (v) => exigirTexto(v, "justificativa", { max: 500 });
+
+/**
+ * Um pagamento de venda. Três dimensões independentes: forma (como o cliente pagou), processador (quem fica devendo
+ * o repasse, se houver) e conta (onde o dinheiro entrou, quando entrou direto).
+ *  - com processador → nasce um recebível contra o processador; não existe conta de entrada agora.
+ *  - sem processador → dinheiro/Pix recebido direto: NÃO gera recebível. Com `contaId`, já registra a entrada na conta;
+ *    sem `contaId`, a entrada será reconhecida depois, pelo extrato, via conciliação.
+ */
+function pagamentoDeVenda(p, campo) {
+  semCamposDesconhecidos(p, ["forma", "processador", "valorCentavos", "contaId", "dataPagamento"], campo);
+  const forma = exigirUmDe(p.forma, FORMA_PAGAMENTO, `${campo}.forma`);
+  const processador = p.processador === undefined || p.processador === null ? null : exigirUmDe(p.processador, PROCESSADOR, `${campo}.processador`);
+  if (forma === FORMA_PAGAMENTO.DINHEIRO && processador) falhar(CODIGO.ENTRADA_INVALIDA, "Pagamento em dinheiro não tem processador.", { campo: `${campo}.processador` });
+  const contaId = uuidOpcional(p.contaId, `${campo}.contaId`);
+  if (processador && contaId) falhar(CODIGO.ENTRADA_INVALIDA, "Pagamento com processador não entra direto em conta: o repasse é que entra, depois.", { campo: `${campo}.contaId` });
+  const saida = { forma, processador, valorCentavos: exigirCentavos(p.valorCentavos, `${campo}.valorCentavos`, { positivo: true }) };
+  // Campos opcionais só aparecem quando informados: a impressão de idempotência de quem não os usa continua a mesma.
+  if (contaId) saida.contaId = contaId;
+  if (p.dataPagamento !== undefined && p.dataPagamento !== null) saida.dataPagamento = dataOpcional(p.dataPagamento, `${campo}.dataPagamento`);
+  return saida;
+}
+
 const documentos = (ids, campo = "documentoIds") => [...new Set(exigirLista(ids ?? [], campo, { min: 0, max: 50 }).map((id, i) => exigirUuid(id, `${campo}[${i}]`)))];
 
 export function validarConta(e) {
@@ -46,22 +82,19 @@ export function validarContraparte(e) {
 }
 
 export function validarVenda(e) {
-  semCamposDesconhecidos(e, ["canal", "dataVenda", "competencia", "brutoCentavos", "moeda", "pagamentos", "fonte", "descricao"], "venda");
+  semCamposDesconhecidos(e, ["canal", "dataVenda", "competencia", "brutoCentavos", "moeda", "pagamentos", "pagamentoParcial", "fonte", "descricao"], "venda");
   const dataVenda = exigirData(e.dataVenda, "dataVenda");
   const brutoCentavos = exigirCentavos(e.brutoCentavos, "brutoCentavos", { positivo: true });
   const f = fonte(e.fonte, { obrigatoria: true, exigirId: true });
   if (!SISTEMAS_QUE_ORIGINAM_VENDA.includes(f.sistema)) {
     falhar(CODIGO.FONTE_NAO_ORIGINA_VENDA, "Este sistema não origina vendas: seus registros são evidência de pagamento e entram por conciliação.", { sistema: f.sistema });
   }
-  const pagamentos = exigirLista(e.pagamentos, "pagamentos", { min: 1, max: 20 }).map((p, i) => {
-    semCamposDesconhecidos(p, ["forma", "processador", "valorCentavos"], `pagamentos[${i}]`);
-    const forma = exigirUmDe(p.forma, FORMA_PAGAMENTO, `pagamentos[${i}].forma`);
-    const processador = p.processador === undefined || p.processador === null ? null : exigirUmDe(p.processador, PROCESSADOR, `pagamentos[${i}].processador`);
-    if (forma === FORMA_PAGAMENTO.DINHEIRO && processador) falhar(CODIGO.ENTRADA_INVALIDA, "Pagamento em dinheiro não tem processador.", { campo: `pagamentos[${i}].processador` });
-    return { forma, processador, valorCentavos: exigirCentavos(p.valorCentavos, `pagamentos[${i}].valorCentavos`, { positivo: true }) };
-  });
-  if (somarLista(pagamentos, (p) => p.valorCentavos) !== brutoCentavos) {
-    falhar(CODIGO.PAGAMENTOS_NAO_FECHAM, "A soma das formas de pagamento deve ser igual ao valor bruto da venda.");
+  const pagamentoParcial = booleano(e.pagamentoParcial, "pagamentoParcial");
+  const pagamentos = exigirLista(e.pagamentos, "pagamentos", { min: pagamentoParcial ? 0 : 1, max: 20 }).map((p, i) => pagamentoDeVenda(p, `pagamentos[${i}]`));
+  const pago = somarLista(pagamentos, (p) => p.valorCentavos);
+  // Sem declarar pagamento parcial, a soma tem de FECHAR com o bruto: diferença silenciosa esconde erro de importação.
+  if (pago > brutoCentavos || (!pagamentoParcial && pago !== brutoCentavos)) {
+    falhar(CODIGO.PAGAMENTOS_NAO_FECHAM, "A soma das formas de pagamento deve ser igual ao valor bruto da venda (ou menor, se a venda for declarada com pagamento parcial).");
   }
   return {
     canal: exigirUmDe(e.canal, CANAL, "canal"),
@@ -72,7 +105,67 @@ export function validarVenda(e) {
     pagamentos,
     fonte: f,
     descricao: exigirTexto(e.descricao, "descricao", { opcional: true }),
+    ...(pagamentoParcial ? { pagamentoParcial } : {}),
   };
+}
+
+export function validarPagamentoDeVenda(e) {
+  semCamposDesconhecidos(e, ["vendaId", "forma", "processador", "valorCentavos", "contaId", "dataPagamento", "fonte"], "pagamento");
+  const { vendaId, fonte: f, ...p } = e;
+  return { vendaId: exigirUuid(vendaId, "vendaId"), ...pagamentoDeVenda(p, "pagamento"), fonte: fonte(f) };
+}
+
+export function validarEstornoDePagamento(e) {
+  semCamposDesconhecidos(e, ["pagamentoId", "valorCentavos", "motivo", "justificativa", "contaId", "dataEfetiva", "documentoId"], "estorno");
+  return {
+    pagamentoId: exigirUuid(e.pagamentoId, "pagamentoId"),
+    valorCentavos: e.valorCentavos === undefined || e.valorCentavos === null ? null : exigirCentavos(e.valorCentavos, "valorCentavos", { positivo: true }),
+    motivo: exigirUmDe(e.motivo, MOTIVO_ESTORNO, "motivo"),
+    justificativa: justificativa(e.justificativa),
+    contaId: uuidOpcional(e.contaId, "contaId"),
+    dataEfetiva: dataOpcional(e.dataEfetiva, "dataEfetiva"),
+    documentoId: uuidOpcional(e.documentoId, "documentoId"),
+  };
+}
+
+const cancelamento = (campoId, nome) => (e) => {
+  semCamposDesconhecidos(e, [campoId, "justificativa"], nome);
+  return { [campoId]: exigirUuid(e[campoId], campoId), justificativa: justificativa(e.justificativa) };
+};
+export const validarCancelamentoVenda = cancelamento("vendaId", "cancelamento");
+export const validarCancelamentoRecebivel = cancelamento("recebivelId", "cancelamento");
+export const validarEstornoMovimentacao = cancelamento("movimentacaoId", "estorno");
+export const validarEstornoTransferencia = cancelamento("transferenciaId", "estorno");
+
+export function validarCategoria(e) {
+  semCamposDesconhecidos(e, ["codigo", "nome", "classificacao", "natureza", "paiCodigo", "aceitaLancamento", "exigeDocumento"], "categoria");
+  return {
+    codigo: codigoDeCategoria(e.codigo, "codigo"),
+    nome: exigirTexto(e.nome, "nome", { max: 120 }),
+    // Categoria filha herda a classificação da superior; a raiz precisa informar.
+    classificacao: e.classificacao === undefined || e.classificacao === null ? null : exigirUmDe(e.classificacao, CLASSIFICACAO, "classificacao"),
+    natureza: e.natureza === undefined || e.natureza === null ? null : exigirUmDe(e.natureza, NATUREZA_LANCAMENTO, "natureza"),
+    paiCodigo: e.paiCodigo === undefined || e.paiCodigo === null ? null : codigoDeCategoria(e.paiCodigo, "paiCodigo"),
+    aceitaLancamento: booleano(e.aceitaLancamento, "aceitaLancamento", true),
+    exigeDocumento: booleano(e.exigeDocumento, "exigeDocumento", false),
+  };
+}
+
+export function validarAlteracaoCategoria(e) {
+  semCamposDesconhecidos(e, ["codigo", "mudancas", "justificativa"], "alteracaoDeCategoria");
+  semCamposDesconhecidos(e.mudancas, ["nome", "ativa", "aceitaLancamento", "exigeDocumento"], "mudancas");
+  const mudancas = {};
+  if (e.mudancas.nome !== undefined) mudancas.nome = exigirTexto(e.mudancas.nome, "mudancas.nome", { max: 120 });
+  for (const campo of ["ativa", "aceitaLancamento", "exigeDocumento"]) {
+    if (e.mudancas[campo] !== undefined) mudancas[campo] = booleano(e.mudancas[campo], `mudancas.${campo}`);
+  }
+  if (!Object.keys(mudancas).length) falhar(CODIGO.ENTRADA_INVALIDA, "Nenhuma mudança informada.");
+  return { codigo: codigoDeCategoria(e.codigo, "codigo"), mudancas, justificativa: justificativa(e.justificativa) };
+}
+
+export function validarImplantacaoDePlano(e) {
+  semCamposDesconhecidos(e, ["modelo"], "implantacao");
+  return { modelo: exigirUmDe(e.modelo, Object.keys(MODELO_DE_PLANO), "modelo") };
 }
 
 export function validarObrigacao(e) {
@@ -92,7 +185,7 @@ export function validarObrigacao(e) {
     contraparteId: exigirUuid(e.contraparteId, "contraparteId"),
     valorOriginalCentavos,
     moeda: moeda(e.moeda),
-    categoria: exigirTexto(e.categoria, "categoria", { max: 80 }),
+    categoria: codigoDeCategoria(e.categoria),
     descricao: exigirTexto(e.descricao, "descricao"),
     competencia: exigirCompetencia(e.competencia),
     dataEmissao,
@@ -105,16 +198,22 @@ export function validarObrigacao(e) {
 }
 
 export function validarRecebivel(e) {
-  semCamposDesconhecidos(e, ["processador", "contraparteId", "canal", "vendaId", "brutoCentavos", "moeda", "deducoes", "dataPrevista", "competencia", "descricao", "documentoIds", "fonte"], "recebivel");
+  semCamposDesconhecidos(e, ["processador", "contraparteId", "canal", "vendaId", "brutoCentavos", "moeda", "retencoes", "dataPrevista", "competencia", "descricao", "documentoIds", "fonte"], "recebivel");
   const processador = e.processador === undefined || e.processador === null ? null : exigirUmDe(e.processador, PROCESSADOR, "processador");
   const contraparteId = uuidOpcional(e.contraparteId, "contraparteId");
   if (!processador === !contraparteId) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o devedor: processador OU contraparte (exatamente um).");
   const brutoCentavos = exigirCentavos(e.brutoCentavos, "brutoCentavos", { positivo: true });
-  const deducoes = exigirLista(e.deducoes ?? [], "deducoes", { min: 0, max: 50 }).map((d, i) => {
-    semCamposDesconhecidos(d, ["tipo", "valorCentavos"], `deducoes[${i}]`);
-    return { tipo: exigirTexto(d.tipo, `deducoes[${i}].tipo`, { max: 80 }), valorCentavos: exigirCentavos(d.valorCentavos, `deducoes[${i}].valorCentavos`, { positivo: true }) };
+  // Retenção = o que o processador/canal desconta do repasse. A CATEGORIA de cada uma define a natureza econômica
+  // (dedução comercial, despesa de recebimento, despesa comercial, marketing, encargo financeiro...).
+  const retencoes = exigirLista(e.retencoes ?? [], "retencoes", { min: 0, max: 50 }).map((d, i) => {
+    semCamposDesconhecidos(d, ["categoria", "valorCentavos", "descricao"], `retencoes[${i}]`);
+    return {
+      categoria: codigoDeCategoria(d.categoria, `retencoes[${i}].categoria`),
+      valorCentavos: exigirCentavos(d.valorCentavos, `retencoes[${i}].valorCentavos`, { positivo: true }),
+      descricao: exigirTexto(d.descricao, `retencoes[${i}].descricao`, { opcional: true }),
+    };
   });
-  if (somarLista(deducoes, (d) => d.valorCentavos) > brutoCentavos) falhar(CODIGO.VALOR_INVALIDO, "As deduções não podem superar o valor bruto.", { campo: "deducoes" });
+  if (somarLista(retencoes, (d) => d.valorCentavos) > brutoCentavos) falhar(CODIGO.VALOR_INVALIDO, "As retenções não podem superar o valor bruto.", { campo: "retencoes" });
   return {
     processador,
     contraparteId,
@@ -122,7 +221,7 @@ export function validarRecebivel(e) {
     vendaId: uuidOpcional(e.vendaId, "vendaId"),
     brutoCentavos,
     moeda: moeda(e.moeda),
-    deducoes,
+    retencoes,
     dataPrevista: e.dataPrevista === undefined || e.dataPrevista === null ? null : exigirData(e.dataPrevista, "dataPrevista"),
     competencia: exigirCompetencia(e.competencia),
     descricao: exigirTexto(e.descricao, "descricao", { opcional: true }),
@@ -136,6 +235,9 @@ export function validarMovimentacao(e) {
   const natureza = exigirUmDe(e.natureza, NATUREZA_MOVIMENTACAO, "natureza");
   if (natureza === NATUREZA_MOVIMENTACAO.TRANSFERENCIA_INTERNA) {
     falhar(CODIGO.TRANSFERENCIA_INVALIDA, "Transferência interna só existe como par saída+entrada: use registrarTransferencia.");
+  }
+  if (natureza === NATUREZA_MOVIMENTACAO.DEVOLUCAO) {
+    falhar(CODIGO.ENTRADA_INVALIDA, "Devolução ao cliente nasce do estorno de um pagamento de venda: use estornarPagamentoDeVenda.", { campo: "natureza" });
   }
   const sentido = exigirUmDe(e.sentido, SENTIDO, "sentido");
   if ((natureza === NATUREZA_MOVIMENTACAO.PAGAMENTO && sentido !== SENTIDO.SAIDA) || (natureza === NATUREZA_MOVIMENTACAO.RECEBIMENTO && sentido !== SENTIDO.ENTRADA)) {
@@ -171,8 +273,14 @@ export function validarLiquidacao(e) {
 }
 
 export function validarEstornoLiquidacao(e) {
-  semCamposDesconhecidos(e, ["liquidacaoId", "justificativa"], "estorno");
-  return { liquidacaoId: exigirUuid(e.liquidacaoId, "liquidacaoId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }) };
+  semCamposDesconhecidos(e, ["liquidacaoId", "valorCentavos", "justificativa", "documentoId"], "estorno");
+  return {
+    liquidacaoId: exigirUuid(e.liquidacaoId, "liquidacaoId"),
+    // Sem valor = estorno TOTAL do que ainda está válido. Com valor = estorno parcial.
+    valorCentavos: e.valorCentavos === undefined || e.valorCentavos === null ? null : exigirCentavos(e.valorCentavos, "valorCentavos", { positivo: true }),
+    justificativa: justificativa(e.justificativa),
+    documentoId: uuidOpcional(e.documentoId, "documentoId"),
+  };
 }
 
 export function validarTransferencia(e) {
@@ -198,7 +306,7 @@ export function validarAjuste(e) {
     alvoId: exigirUuid(e.alvoId, "alvoId"),
     valorCentavos: exigirCentavos(e.valorCentavos, "valorCentavos", { naoZero: true }),
     motivo: exigirTexto(e.motivo, "motivo", { max: 500 }),
-    categoria: exigirTexto(e.categoria, "categoria", { max: 80 }),
+    categoria: codigoDeCategoria(e.categoria),
     competencia: e.competencia === undefined || e.competencia === null ? null : exigirCompetencia(e.competencia),
     documentoId: uuidOpcional(e.documentoId, "documentoId"),
   };
@@ -226,7 +334,18 @@ export function validarCancelamentoObrigacao(e) {
 
 export function validarReclassificacao(e) {
   semCamposDesconhecidos(e, ["lancamentoId", "categoria", "justificativa"], "reclassificacao");
-  return { lancamentoId: exigirUuid(e.lancamentoId, "lancamentoId"), categoria: exigirTexto(e.categoria, "categoria", { max: 80 }), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }) };
+  return { lancamentoId: exigirUuid(e.lancamentoId, "lancamentoId"), categoria: codigoDeCategoria(e.categoria), justificativa: justificativa(e.justificativa) };
+}
+
+/** Correção cadastral de lançamento. Valor, competência e natureza NÃO se corrigem aqui: cancela-se e registra-se de novo. */
+export function validarCorrecaoLancamento(e) {
+  semCamposDesconhecidos(e, ["lancamentoId", "mudancas", "justificativa"], "correcao");
+  semCamposDesconhecidos(e.mudancas, ["descricao", "dataOperacao"], "mudancas");
+  const mudancas = {};
+  if (e.mudancas.descricao !== undefined) mudancas.descricao = exigirTexto(e.mudancas.descricao, "mudancas.descricao");
+  if (e.mudancas.dataOperacao !== undefined) mudancas.dataOperacao = exigirData(e.mudancas.dataOperacao, "mudancas.dataOperacao");
+  if (!Object.keys(mudancas).length) falhar(CODIGO.ENTRADA_INVALIDA, "Nenhuma mudança informada.");
+  return { lancamentoId: exigirUuid(e.lancamentoId, "lancamentoId"), mudancas, justificativa: justificativa(e.justificativa) };
 }
 
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -290,8 +409,13 @@ export function validarMudancaDeEstado(e) {
 }
 
 export function validarConsultaComposicao(e) {
-  semCamposDesconhecidos(e, ["indicador", "competencia"], "consulta");
-  return { indicador: exigirTexto(e.indicador, "indicador", { max: 60 }), competencia: exigirCompetencia(e.competencia) };
+  semCamposDesconhecidos(e, ["indicador", "competencia", "canal", "classificacao"], "consulta");
+  return {
+    indicador: exigirTexto(e.indicador, "indicador", { max: 60 }),
+    competencia: exigirCompetencia(e.competencia),
+    canal: e.canal === undefined || e.canal === null ? null : exigirUmDe(e.canal, CANAL, "canal"),
+    classificacao: e.classificacao === undefined || e.classificacao === null ? null : exigirUmDe(e.classificacao, CLASSIFICACAO, "classificacao"),
+  };
 }
 
 export function validarConsultaHistorico(e) {

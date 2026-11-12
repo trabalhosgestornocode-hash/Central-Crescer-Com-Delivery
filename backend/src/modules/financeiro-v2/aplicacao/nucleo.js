@@ -8,6 +8,8 @@ import { operacoesDeCompetencia } from "./competencias.js";
 import { operacoesDeConciliacao } from "./conciliacao.js";
 import { operacoesDeDocumentos } from "./documentos.js";
 import { operacoesEconomicas } from "./economico.js";
+import { operacoesDePlano } from "./plano.js";
+import { operacoesDeVendas } from "./vendas.js";
 
 /**
  * @param {object} deps
@@ -22,7 +24,9 @@ export function criarNucleoFinanceiro({ repositorio, escoposAutorizados, relogio
   const politica = criarPoliticaDeEscopo(escoposAutorizados);
   const base = criarBase({ repositorio, politica, relogio, gerarId, fuso });
   const operacoes = {
+    ...operacoesDePlano(base),
     ...operacoesEconomicas(base),
+    ...operacoesDeVendas(base),
     ...operacoesDeCaixa(base),
     ...operacoesDeDocumentos(base),
     ...operacoesDeConciliacao(base),

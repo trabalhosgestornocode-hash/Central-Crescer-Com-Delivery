@@ -1,8 +1,13 @@
-// Superfície pública do Financeiro v2 (fundação — Execução 01).
+// Superfície pública do Financeiro v2 (fundação — Execuções 01 e 01B).
 // Este módulo NÃO está montado em nenhuma rota e NÃO importa nada de fora da própria pasta.
 export { criarNucleoFinanceiro } from "./aplicacao/nucleo.js";
 export { criarRepositorioMemoria } from "./infra/repositorioMemoria.js";
+export { criarRepositorioPostgres } from "./infra/postgres/repositorioPostgres.js";
+export { comprovarDestinoIsolado, exigirDestinoLocal } from "./infra/postgres/destinoSeguro.js";
+export { criarCofreMemoria } from "./infra/cofreMemoria.js";
+export { METODOS_DO_COFRE, conferirCofre } from "./contratos/cofre.js";
 export { METODOS_DA_TRANSACAO, conferirTransacao, exigirRepositorio } from "./contratos/repositorio.js";
+export * as planoDeContas from "./dominio/planoDeContas.js";
 export * as comandos from "./contratos/comandos.js";
 export * as catalogos from "./dominio/catalogos.js";
 export * as dinheiro from "./dominio/dinheiro.js";

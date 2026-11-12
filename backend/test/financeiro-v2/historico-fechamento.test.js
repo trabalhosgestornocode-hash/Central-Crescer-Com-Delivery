@@ -39,14 +39,14 @@ test("correção concorrente e campos imutáveis são recusados", async () => {
 test("cancelamento é lógico: o registro continua existindo, com motivo, e sai do resultado", async () => {
   const { nucleo, c, banco, fornecedor } = await montarComCadastros();
   const { obrigacoes, lancamento } = await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id, { parcelas: 2 }));
-  await nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: obrigacoes[0].id, valorCentavos: 500, motivo: "Multa", categoria: "MULTA" });
+  await nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: obrigacoes[0].id, valorCentavos: 500, motivo: "Multa", categoria: "JUROS_E_TARIFAS_BANCARIAS" });
   const despesas = async () => (await nucleo.consultarComposicao(c, { indicador: "DESPESAS", competencia: "2026-09" })).totalCentavos;
   assert.equal(await despesas(), 100500);
 
   // Com pagamento vinculado, não cancela.
   const pg = (await nucleo.registrarMovimentacao(c, saida(banco.id, 1000))).movimentacao;
   const { liquidacoes: [liq] } = await nucleo.registrarLiquidacao(c, { movimentacaoId: pg.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: obrigacoes[1].id, valorCentavos: 1000 }] });
-  await rejeita(nucleo.cancelarObrigacao(c, { obrigacaoId: obrigacoes[0].id, justificativa: "Lançada em duplicidade" }), CODIGO.OPERACAO_INVALIDA);
+  await rejeita(nucleo.cancelarObrigacao(c, { obrigacaoId: obrigacoes[0].id, justificativa: "Lançada em duplicidade" }), CODIGO.ESTORNO_EXIGE_COMPENSACAO);
   await nucleo.estornarLiquidacao(c, { liquidacaoId: liq.id, justificativa: "Vínculo indevido" });
 
   await rejeita(nucleo.cancelarObrigacao(c, { obrigacaoId: obrigacoes[0].id }), CODIGO.ENTRADA_INVALIDA); // sem motivo
@@ -79,7 +79,7 @@ test("a porta de persistência não tem exclusão e o histórico só cresce", as
   const repositorio = criarRepositorioMemoria();
   await repositorio.transacao((tx) => {
     assert.deepEqual(conferirTransacao(tx), { faltando: [], indevidos: [], ok: true });
-    assert.deepEqual(Object.keys(tx).sort(), ["anexarHistorico", "atualizar", "buscarPorChave", "inserir", "listar", "listarHistorico", "obter"]);
+    assert.deepEqual(Object.keys(tx).sort(), ["anexarHistorico", "atualizar", "buscarPorChave", "inserir", "listar", "listarHistorico", "obter", "travar"]);
   });
   await assert.rejects(repositorio.leitura((tx) => tx.inserir("CONTA", { id: "x", organizacaoId: ORG_A, unidadeId: UNI_A })), (e) => e.codigo === CODIGO.REPOSITORIO_INVALIDO);
   // Registros devolvidos são imutáveis: mexer no retorno não altera o que está gravado.
@@ -131,10 +131,10 @@ test("competência homologada não sofre alteração silenciosa; revisão é exp
     () => nucleo.registrarTransferencia(c, { contaOrigemId: banco.id, contaDestinoId: caixa.id, valorCentavos: 100, dataEfetiva: "2026-09-30" }),
     () => nucleo.registrarLiquidacao(c, { movimentacaoId: pg.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 100 }] }),
     () => nucleo.estornarLiquidacao(c, { liquidacaoId: liq.id, justificativa: "x" }),
-    () => nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 100, motivo: "juros", categoria: "JUROS" }),
+    () => nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 100, motivo: "juros", categoria: "JUROS_E_TARIFAS_BANCARIAS" }),
     () => nucleo.corrigirObrigacao(c, { obrigacaoId: ob.id, mudancas: { descricao: "x" }, justificativa: "y" }),
     () => nucleo.cancelarObrigacao(c, { obrigacaoId: ob.id, justificativa: "y" }),
-    () => nucleo.reclassificarLancamento(c, { lancamentoId: lancamento.id, categoria: "OUTRA", justificativa: "y" }),
+    () => nucleo.reclassificarLancamento(c, { lancamentoId: lancamento.id, categoria: "OUTRAS_DESPESAS", justificativa: "y" }),
   ];
   for (const t of tentativas) await rejeita(t, CODIGO.COMPETENCIA_HOMOLOGADA);
   const depois = JSON.stringify([await nucleo.consultarRegistros(c, { tipo: "OBRIGACAO" }), await nucleo.consultarRegistros(c, { tipo: "LANCAMENTO" }), await nucleo.consultarRegistros(c, { tipo: "MOVIMENTACAO" }), await nucleo.consultarRegistros(c, { tipo: "LIQUIDACAO" })]);

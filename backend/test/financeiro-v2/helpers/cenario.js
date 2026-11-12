@@ -1,6 +1,11 @@
 // Cenário SINTÉTICO para os testes do Financeiro v2. Nenhum identificador, nome ou valor aqui é real.
+//
+// O mesmo conjunto de testes roda em dois adaptadores de persistência:
+//   padrão                      → memória (rápido, sem dependência externa);
+//   FV2_REPOSITORIO=postgres    → PostgreSQL local isolado (helpers/postgres.js); cada montar() ganha um banco novo.
 import assert from "node:assert/strict";
 import { ACAO, ErroFinanceiro, criarNucleoFinanceiro, criarRepositorioMemoria } from "../../../src/modules/financeiro-v2/index.js";
+import { EM_POSTGRES, repositorioPostgresDeTeste } from "./postgres.js";
 
 export const ORG_A = "aaaaaaaa-0000-4000-8000-000000000001";
 export const UNI_A = "aaaaaaaa-0000-4000-8000-0000000000a1";
@@ -16,14 +21,35 @@ export const ctx = (organizacaoId = ORG_A, unidadeId = UNI_A, permissoes = TODAS
 /** Relógio fixo: 15/10/2026 12:00 em Brasília. */
 export const AGORA = new Date("2026-10-15T15:00:00.000Z");
 
-export function montar({ escopos = [{ organizacaoId: ORG_A, unidadeId: UNI_A }, { organizacaoId: ORG_A, unidadeId: UNI_A2 }, { organizacaoId: ORG_B, unidadeId: UNI_B }], repositorio = criarRepositorioMemoria() } = {}) {
-  const nucleo = criarNucleoFinanceiro({ repositorio, escoposAutorizados: escopos, relogio: () => AGORA });
-  return { nucleo, repositorio };
+export const ESCOPOS_PADRAO = Object.freeze([{ organizacaoId: ORG_A, unidadeId: UNI_A }, { organizacaoId: ORG_A, unidadeId: UNI_A2 }, { organizacaoId: ORG_B, unidadeId: UNI_B }]);
+
+/**
+ * Monta um núcleo sobre o adaptador da rodada.
+ * `plano`: modelo de plano de contas implantado automaticamente em cada escopo no primeiro uso ("ACAITERIA" por padrão).
+ *          Passe `false` para testar o comportamento SEM plano de contas.
+ */
+export function montar({ escopos = ESCOPOS_PADRAO, repositorio, plano = "ACAITERIA", relogio = () => AGORA } = {}) {
+  const repo = repositorio ?? (EM_POSTGRES ? repositorioPostgresDeTeste(escopos) : criarRepositorioMemoria());
+  const real = criarNucleoFinanceiro({ repositorio: repo, escoposAutorizados: escopos, relogio });
+  if (!plano) return { nucleo: real, repositorio: repo };
+  const implantados = new Map();
+  const garantirPlano = (c) => {
+    const chave = `${c?.organizacaoId}|${c?.unidadeId}`.toLowerCase();
+    if (!escopos.some((e) => `${e.organizacaoId}|${e.unidadeId}`.toLowerCase() === chave)) return Promise.resolve();
+    if (!implantados.has(chave)) implantados.set(chave, real.implantarPlanoDeContas(ctx(c.organizacaoId, c.unidadeId), { modelo: plano }));
+    return implantados.get(chave);
+  };
+  // Preparação de cenário (não é regra do núcleo): todo escopo de teste nasce com o plano de contas implantado.
+  const nucleo = Object.freeze(Object.fromEntries(Object.entries(real).map(([nome, op]) => [nome, async (c, ...resto) => {
+    await garantirPlano(c);
+    return op(c, ...resto);
+  }])));
+  return { nucleo, repositorio: repo };
 }
 
 /** Núcleo com conta bancária, caixa físico e um fornecedor no escopo A. */
-export async function montarComCadastros() {
-  const m = montar();
+export async function montarComCadastros(opcoes) {
+  const m = montar(opcoes);
   const c = ctx();
   const banco = await m.nucleo.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco Sintético", instituicao: "Banco Teste" });
   const caixa = await m.nucleo.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa da loja" });
@@ -42,9 +68,12 @@ export const entrada = (contaId, valorCentavos, extra = {}) => ({ contaId, dataE
 export async function rejeita(promessaOuFn, codigo) {
   await assert.rejects(typeof promessaOuFn === "function" ? promessaOuFn : () => promessaOuFn, (e) => {
     assert.ok(e instanceof ErroFinanceiro, `esperava ErroFinanceiro, veio ${e?.name}: ${e?.message}`);
-    assert.equal(e.codigo, codigo);
+    assert.equal(e.codigo, codigo, `${e.codigo}: ${e.message}`);
     return true;
   });
 }
 
 export const sha = (semente) => String(semente).repeat(64).slice(0, 64).replace(/[^0-9a-f]/g, "0");
+
+/** Soma dos lançamentos por registro: prova de que nenhum componente entra duas vezes numa composição. */
+export const semRepeticao = (composicao) => new Set(composicao.itens.map((i) => i.registroId)).size === composicao.itens.length;

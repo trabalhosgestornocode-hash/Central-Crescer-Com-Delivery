@@ -57,7 +57,7 @@ test("vínculo documental só existe entre documento e registro reais do mesmo e
   // Referência a documento inexistente é recusada em qualquer operação que a aceite.
   await rejeita(nucleo.registrarMovimentacao(c, saida(banco.id, 1, { documentoId: fantasma })), CODIGO.NAO_ENCONTRADO);
   await rejeita(nucleo.registrarObrigacao(c, obrigacao(fornecedor.id, { documentoIds: [fantasma] })), CODIGO.NAO_ENCONTRADO);
-  await rejeita(nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: fantasma, valorCentavos: 1, motivo: "m", categoria: "c", documentoId: documento.id }), CODIGO.NAO_ENCONTRADO);
+  await rejeita(nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: fantasma, valorCentavos: 1, motivo: "m", categoria: "JUROS_E_TARIFAS_BANCARIAS", documentoId: documento.id }), CODIGO.NAO_ENCONTRADO);
   // Documento de outra organização não serve de evidência aqui.
   const b = ctx(ORG_B, UNI_B);
   const docB = (await nucleo.registrarDocumento(b, doc("d1"))).documento; // mesmo hash, outro escopo: registro próprio

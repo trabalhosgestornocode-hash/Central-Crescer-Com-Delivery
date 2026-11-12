@@ -2,12 +2,14 @@
 // para o adaptador PostgreSQL. Não é persistência de produção.
 //
 // Atomicidade: cada transação trabalha sobre uma cópia do estado; a cópia só substitui o estado se fn terminar sem erro.
-// Transações são serializadas (uma por vez), então não há leitura suja nem escrita perdida.
+// Transações são serializadas (uma por vez), então não há leitura suja nem escrita perdida — e as travas são triviais.
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { congelar } from "../dominio/validacao.js";
+import { normalizarFiltro } from "../contratos/repositorio.js";
 
 const mesmoEscopo = (r, e) => r.organizacaoId === e.organizacaoId && r.unidadeId === e.unidadeId;
 const copia = (v) => congelar(structuredClone(v));
+const atende = (r, filtro) => Object.entries(filtro.onde).every(([campo, valor]) => r[campo] === valor) && filtro.predicado(r);
 
 function criarTx(estado, { somenteLeitura = false } = {}) {
   const tabela = (tipo) => (estado.registros[tipo] ??= {});
@@ -42,20 +44,25 @@ function criarTx(estado, { somenteLeitura = false } = {}) {
       const r = tabela(tipo)[id];
       return r && mesmoEscopo(r, escopo) ? copia(r) : null;
     },
-    listar(escopo, tipo, predicado = () => true) {
-      return Object.values(tabela(tipo)).filter((r) => mesmoEscopo(r, escopo) && predicado(r)).map(copia);
+    listar(escopo, tipo, filtro) {
+      const f = normalizarFiltro(filtro);
+      return Object.values(tabela(tipo)).filter((r) => mesmoEscopo(r, escopo) && atende(r, f)).map(copia);
     },
     buscarPorChave(escopo, tipo, chave) {
       const r = Object.values(tabela(tipo)).find((x) => mesmoEscopo(x, escopo) && x.chaveIdempotencia === chave);
       return r ? copia(r) : null;
+    },
+    travar() {
+      // Transações em memória já são serializadas: a trava é sempre concedida.
     },
     anexarHistorico(evento) {
       exigirEscrita();
       exigirEscopoDoRegistro(evento);
       estado.historico.push(structuredClone(evento));
     },
-    listarHistorico(escopo, predicado = () => true) {
-      return estado.historico.filter((h) => mesmoEscopo(h, escopo) && predicado(h)).map(copia);
+    listarHistorico(escopo, filtro) {
+      const f = normalizarFiltro(filtro);
+      return estado.historico.filter((h) => mesmoEscopo(h, escopo) && atende(h, f)).map(copia);
     },
   };
 }

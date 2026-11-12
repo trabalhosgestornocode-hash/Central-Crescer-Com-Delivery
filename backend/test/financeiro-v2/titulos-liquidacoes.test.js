@@ -63,13 +63,14 @@ test("obrigação parcelada: uma despesa, N parcelas que somam exatamente o tota
 
 test("recebível com liquidação parcial mantém saldo remanescente", async () => {
   const { nucleo, c, banco } = await montarComCadastros();
-  const { recebivel, lancamentosDeDeducao } = await nucleo.registrarRecebivel(c, {
+  const { recebivel, lancamentosDeRetencao } = await nucleo.registrarRecebivel(c, {
     processador: "IFOOD", canal: "IFOOD", brutoCentavos: 50000, competencia: "2026-09", dataPrevista: "2026-09-25",
-    deducoes: [{ tipo: "COMISSAO", valorCentavos: 6000 }, { tipo: "TAXA_TRANSACAO", valorCentavos: 1600 }],
+    retencoes: [{ categoria: "COMISSOES_IFOOD", valorCentavos: 6000 }, { categoria: "TAXAS_DE_PROCESSAMENTO", valorCentavos: 1600 }],
   });
-  assert.equal(recebivel.valorBaseCentavos, 42400); // líquido esperado = bruto − deduções
+  assert.equal(recebivel.valorBaseCentavos, 42400); // líquido esperado = bruto − retenções
   assert.equal(recebivel.saldoCentavos, 42400);
-  assert.deepEqual(lancamentosDeDeducao.map((l) => [l.natureza, l.valorCentavos, l.categoria]), [["DEDUCAO", 6000, "COMISSAO"], ["DEDUCAO", 1600, "TAXA_TRANSACAO"]]);
+  // Regra corrigida (Execução 01B): retenção é classificada pela natureza econômica — comissão e taxa são DESPESA, não dedução da receita.
+  assert.deepEqual(lancamentosDeRetencao.map((l) => [l.natureza, l.valorCentavos, l.categoria, l.classificacao, l.retidoNoRepasse]), [["DESPESA", 6000, "COMISSOES_IFOOD", "DESPESAS_COMERCIAIS", true], ["DESPESA", 1600, "TAXAS_DE_PROCESSAMENTO", "DESPESAS_RECEBIMENTO_PROCESSAMENTO", true]]);
   assert.equal((await nucleo.consultarComposicao(c, { indicador: "RECEITA_BRUTA", competencia: "2026-09" })).totalCentavos, 0); // recebível avulso não cria receita
 
   const { movimentacao } = await nucleo.registrarMovimentacao(c, entrada(banco.id, 20000));
@@ -103,9 +104,9 @@ test("um repasse vinculado a múltiplos recebíveis", async () => {
     const v = await nucleo.registrarVenda(c, { canal: "BALCAO", dataVenda: `2026-09-0${i + 1}`, brutoCentavos: valor, pagamentos: [{ forma: "DEBITO", processador: "STONE", valorCentavos: valor }], fonte: { sistema: "SAIPOS", idExterno: `PED-${i}` } });
     recebiveis.push(v.recebiveis[0]);
   }
-  // O processador reteve 250 de taxa no terceiro: ajuste documentado, uma única dedução.
-  const aj = await nucleo.registrarAjuste(c, { alvoTipo: "RECEBIVEL", alvoId: recebiveis[2].id, valorCentavos: -250, motivo: "Taxa retida pelo processador", categoria: "TAXA_CARTAO" });
-  assert.deepEqual([aj.lancamento.natureza, aj.lancamento.valorCentavos, aj.alvo.saldoCentavos], ["DEDUCAO", 250, 4725]);
+  // O processador reteve 250 de taxa no terceiro: ajuste documentado, uma única despesa de recebimento.
+  const aj = await nucleo.registrarAjuste(c, { alvoTipo: "RECEBIVEL", alvoId: recebiveis[2].id, valorCentavos: -250, motivo: "Taxa retida pelo processador", categoria: "TAXAS_STONE" });
+  assert.deepEqual([aj.lancamento.natureza, aj.lancamento.classificacao, aj.lancamento.valorCentavos, aj.alvo.saldoCentavos], ["DESPESA", "DESPESAS_RECEBIMENTO_PROCESSAMENTO", 250, 4725]);
 
   const { movimentacao } = await nucleo.registrarMovimentacao(c, entrada(banco.id, 24775)); // 12000 + 8050 + 4725
   const r = await liquidar(nucleo, c, movimentacao.id, ["RECEBIVEL", recebiveis[0].id, 12000], ["RECEBIVEL", recebiveis[1].id, 8050], ["RECEBIVEL", recebiveis[2].id, 4725]);
@@ -113,7 +114,11 @@ test("um repasse vinculado a múltiplos recebíveis", async () => {
   r.titulos.forEach(fecha);
   const total = async (indicador) => (await nucleo.consultarComposicao(c, { indicador, competencia: "2026-09" })).totalCentavos;
   assert.equal(await total("RECEITA_BRUTA"), 25025);
-  assert.equal(await total("DEDUCOES"), 250);
+  // A taxa retida é despesa de recebimento (não dedução da receita) e aparece UMA vez no resultado.
+  assert.equal(await total("DEDUCOES"), 0);
+  assert.equal(await total("RETENCOES_DE_CANAL"), 250);
+  assert.equal(await total("FATURAMENTO_LIQUIDO_GERENCIAL"), 24775);
+  assert.equal(await total("RESULTADO_ECONOMICO"), 24775);
   assert.equal(await total("ENTRADAS_DE_CAIXA"), 24775);
   assert.equal(await total("SALDO_A_RECEBER"), 0);
   assert.deepEqual(await nucleo.verificarConservacao(c), []);
@@ -157,18 +162,18 @@ test("liquidação composta é atômica: se uma parte falha, nada é gravado", a
 test("ajustes documentados entram na conservação: original − liquidações ± ajustes = saldo", async () => {
   const { nucleo, c, banco, fornecedor } = await montarComCadastros();
   const ob = (await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 100000 }))).obrigacoes[0];
-  const juros = await nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 1234, motivo: "Juros por atraso", categoria: "JUROS" });
+  const juros = await nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 1234, motivo: "Juros por atraso", categoria: "JUROS_E_TARIFAS_BANCARIAS" });
   assert.deepEqual([juros.alvo.saldoCentavos, juros.lancamento.natureza, juros.lancamento.valorCentavos], [101234, "DESPESA", 1234]);
-  const desconto = await nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: -234, motivo: "Desconto negociado", categoria: "DESCONTO_OBTIDO" });
+  const desconto = await nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: -234, motivo: "Desconto negociado", categoria: "INSUMOS" }); // abatimento no próprio custo
   assert.deepEqual([desconto.alvo.saldoCentavos, desconto.alvo.ajustesCentavos, desconto.lancamento.valorCentavos], [101000, 1000, -234]);
   const pg = (await nucleo.registrarMovimentacao(c, saida(banco.id, 101000))).movimentacao;
   const r = await liquidar(nucleo, c, pg.id, ["OBRIGACAO", ob.id, 101000]);
   assert.deepEqual([r.titulos[0].situacao, r.titulos[0].saldoCentavos, r.titulos[0].valorBaseCentavos], ["QUITADA", 0, 100000]);
   fecha(r.titulos[0]);
   assert.equal((await nucleo.consultarComposicao(c, { indicador: "DESPESAS", competencia: "2026-09" })).totalCentavos, 101000); // despesa total = o que saiu do caixa
-  await rejeita(nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: -1, motivo: "x", categoria: "y" }), CODIGO.AJUSTE_EXCEDE_SALDO);
-  await rejeita(nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 0, motivo: "x", categoria: "y" }), CODIGO.VALOR_INVALIDO);
-  await rejeita(nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 10, categoria: "y" }), CODIGO.ENTRADA_INVALIDA); // sem motivo
+  await rejeita(nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: -1, motivo: "x", categoria: "INSUMOS" }), CODIGO.AJUSTE_EXCEDE_SALDO);
+  await rejeita(nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 0, motivo: "x", categoria: "INSUMOS" }), CODIGO.VALOR_INVALIDO);
+  await rejeita(nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 10, categoria: "INSUMOS" }), CODIGO.ENTRADA_INVALIDA); // sem motivo
   assert.deepEqual(await nucleo.verificarConservacao(c), []);
 });
 

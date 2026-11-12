@@ -36,6 +36,7 @@ export function operacoesDeDocumentos(b) {
         await b.obterOuFalhar(tx, cx, c.registroTipo, c.registroId, "Registro financeiro");
         const chave = `${c.documentoId}|${c.registroTipo}|${c.registroId}`;
         const existente = await tx.buscarPorChave(cx, TIPO.VINCULO_DOCUMENTAL, chave);
+        // Vínculo é só acréscimo: cancelar ou estornar o registro NÃO remove o documento que o comprova.
         if (existente) return { vinculo: existente, repetido: true };
         return { vinculo: await b.criar(tx, cx, TIPO.VINCULO_DOCUMENTAL, { ...c, chaveIdempotencia: chave }), repetido: false };
       });
