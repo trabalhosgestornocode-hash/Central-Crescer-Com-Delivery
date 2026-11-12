@@ -33,7 +33,7 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
 <section class="card card--destaque" id="card-faturamento-bruto" aria-labelledby="t-fb" data-ordem="1">
   <div class="card-topo"><h2 id="t-fb">Faturamento Bruto Próprio</h2>${selo(fb.situacao)}${explicar("Faturamento Bruto Próprio", "Soma das vendas pelo valor bruto próprio (produtos, acréscimos e serviços da loja), antes de descontos. Não é saldo bancário, depósito, total Stone nem soma de formas de pagamento.")}</div>
   <p class="numero-principal">${valor(fb.valorCentavos)}${zeroConfirmado ? '<span class="nota-zero">zero confirmado</span>' : ""}</p>
-  <ul class="canais" aria-label="Faturamento bruto por canal">${canais.map((c) => `<li class="canal${c.comprovado ? "" : " canal--sem"}"><span class="canal-nome">${esc(nomeCanal(c.canal))}</span>${valor(c.valorCentavos)}<span class="canal-pct">${esc(percentual(c.percentualDoBruto))}</span>${c.comprovado ? "" : `<small>${esc(c.observacao ?? "Canal não comprovado.")}</small>`}</li>`).join("")}</ul>
+  <ul class="canais" aria-label="Faturamento bruto por canal">${canais.map((c) => `<li class="canal${c.comprovado ? "" : " canal--sem"}"><span class="canal-nome">${esc(nomeCanal(c.canal))}</span>${valor(c.valorCentavos)}<span class="canal-pct">${esc(percentual(c.percentualDoBruto))}</span>${c.comprovado ? "" : `<small>${esc(c.observacao ?? "Canal não comprovado.")}</small>`}${(c.valorCentavos ?? 0) !== 0 ? `<a class="botao-link" href="#/vendas-e-recebimentos?aba=vendas&amp;canal=${esc(c.canal)}">Ver vendas<span class="sr"> — ${esc(nomeCanal(c.canal))}</span></a>` : ""}</li>`).join("")}</ul>
   ${pendenciasCurtas(fb.pendencias)}
   ${botaoComposicao("FATURAMENTO_BRUTO_PROPRIO")}
 </section>
@@ -72,6 +72,9 @@ function noArvore(no, nivel = 0) {
     no.canal ? `<span>${esc(nomeCanal(no.canal))}</span>` : "",
     no.situacao === "PENDENTE_DE_CLASSIFICACAO" ? '<span class="selo selo--alerta">Classificação provisória</span>' : "",
     agregado ? '<span class="nota">Valor agregado do relatório diário: não há detalhe por pedido.</span>' : "",
+    // Ligação com Vendas e Recebimentos: receita de venda (ou do agregado do dia) abre o detalhe da operação.
+    no.natureza === "RECEITA" && no.origem?.tipo === "VENDA" ? `<button type="button" class="botao-link" data-detalhe="venda:${esc(no.origem.id)}">Ver venda</button>` : "",
+    agregado && no.referencias?.registroId ? `<button type="button" class="botao-link" data-detalhe="venda:${esc(no.referencias.registroId)}">Ver total do dia</button>` : "",
   ].join("");
   const detalhes = [
     det?.obrigacoes ? `<ul class="mini">${det.obrigacoes.map((o) => `<li>Reconhecido ${esc(moeda(o.valorReconhecidoCentavos))} · Pago ${esc(moeda(o.pagoCentavos))} · Saldo ${esc(moeda(o.saldoCentavos))} · Vencimento ${esc(dataBR(o.vencimento))}</li>`).join("")}</ul>` : "",
@@ -103,9 +106,11 @@ ${barraCadaCem(r.cadaCem)}
     ${l.componentes.length ? "</button>" : "</div>"}
     ${l.componentes.length ? `<div id="dre-${esc(l.codigo)}" hidden>${arvore(l.componentes)}${botaoComposicao(l.codigo)}</div>` : ""}
     ${l.pendencias?.length ? pendenciasCurtas(l.pendencias, 2) : ""}
+    ${l.codigo === "FATURAMENTO_BRUTO_PROPRIO" ? '<a class="botao-link" href="#/vendas-e-recebimentos?aba=vendas">Ver vendas da competência</a>' : l.codigo === "DEDUCOES_COMERCIAIS" ? '<a class="botao-link" href="#/vendas-e-recebimentos?aba=taxas">Ver descontos e taxas</a>' : ""}
   </li>`).join("")}</ol>
   <p class="rodape-dre">${esc(L.RESULTADO_GERENCIAL.observacao ?? "")} Metodologia ${esc(r.dre.metodologia.nome)} (${esc(r.dre.metodologia.versao)}) · apuração ${esc((r.impressao ?? "").slice(0, 12))}</p>
   ${r.dre.foraDoResultado?.patrimoniais?.length ? `<p class="nota">Fora do resultado (patrimonial): ${r.dre.foraDoResultado.patrimoniais.map((p) => esc(moeda(p.valorCentavos))).join(", ")}.</p>` : ""}
+  ${r.dre.foraDoResultado?.aClassificar?.length ? `<p class="aviso aviso--alerta">Fora do resultado até classificar (natureza não comprovada): ${r.dre.foraDoResultado.aClassificar.map((p) => `${esc(p.descricao ?? "despesa")} ${esc(moeda(p.valorCentavos))}`).join(", ")}. Não é presumida despesa.</p>` : ""}
 </section>`;
 }
 

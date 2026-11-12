@@ -49,7 +49,7 @@ export const SITUACOES_TITULO = Object.freeze({
   PAGO: { rotulo: "Pago", classe: "ok", explicacao: "Saldo zerado por pagamentos registrados." },
   VENCIDO: { rotulo: "Vencido", classe: "erro", explicacao: "O vencimento passou e ainda há saldo. Vencer não marca como pago." },
   CANCELADO: { rotulo: "Cancelado", classe: "neutro", explicacao: "Cancelado com histórico; não entra nos totais." },
-  AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA: { rotulo: "Aguardando classificação", classe: "alerta", explicacao: "Lançado em categoria provisória: falta classificar." },
+  AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA: { rotulo: "Aguardando classificação", classe: "alerta", explicacao: "Natureza econômica não comprovada: a dívida existe, mas fica fora da DRE até ser classificada." },
   A_RECEBER: { rotulo: "A receber", classe: "info", explicacao: "Previsão documentada; ainda não venceu." },
   PARCIALMENTE_RECEBIDO: { rotulo: "Parcialmente recebido", classe: "info", explicacao: "Parte já entrou na conta; o saldo continua pendente." },
   RECEBIDO: { rotulo: "Recebido", classe: "ok", explicacao: "Saldo zerado por créditos registrados na conta." },
@@ -96,3 +96,59 @@ export function descricaoLegivel(texto) {
   if (entregas) return `Entregas de ${dataBR(entregas[1])} a ${dataBR(entregas[2])}`;
   return texto.replace(/\b([A-Z]{2,}(?:_[A-Z]+)+)\b/g, (c) => c.toLowerCase().replaceAll("_", " ")).replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, "$3/$2/$1");
 }
+
+// ------------------------------------------------------------------------------------- vendas e recebimentos (Execução 06B)
+export const SITUACOES_VENDA = Object.freeze({
+  AGUARDANDO_PAGAMENTO: { rotulo: "Aguardando pagamento", classe: "alerta", explicacao: "Ainda faltam pagamentos informados para fechar o valor cobrado." },
+  AGUARDANDO_RECEBIMENTO: { rotulo: "Aguardando recebimento", classe: "info", explicacao: "Paga pelo consumidor; o dinheiro ainda não entrou (ou não foi identificado) na conta." },
+  RECEBIDA_SEM_COMPROVACAO: { rotulo: "Recebida sem comprovação", classe: "alerta", explicacao: "O crédito foi registrado, mas sem extrato, conciliação ou contagem de caixa que o comprove." },
+  RECEBIDA_E_COMPROVADA: { rotulo: "Recebida e comprovada", classe: "ok", explicacao: "Todo o valor entrou na conta e o crédito está comprovado." },
+  EM_DIVERGENCIA: { rotulo: "Em divergência", classe: "erro", explicacao: "Há valor que não fecha (pagamento ou recebimento divergente)." },
+  CANCELADA: { rotulo: "Cancelada", classe: "neutro", explicacao: "Cancelada com histórico; fora dos totais." },
+  AGREGADA_SEM_DETALHE: { rotulo: "Agregada (sem pedidos)", classe: "neutro", explicacao: "Total do dia de um relatório agregado: sem pedidos, canal ou forma de pagamento." },
+});
+export const situacaoVenda = (c) => SITUACOES_VENDA[c] ?? { rotulo: "Situação desconhecida", classe: "neutro", explicacao: "" };
+export const CONFIABILIDADES = Object.freeze({
+  DOCUMENTADA: { rotulo: "Documentada", classe: "ok", explicacao: "Veio de relatório importado e sem pendências." },
+  REGISTRADA_SEM_DOCUMENTO: { rotulo: "Registrada sem documento", classe: "info", explicacao: "Registro manual, sem relatório de origem vinculado." },
+  AGREGADA_SEM_DETALHE: { rotulo: "Agregada", classe: "neutro", explicacao: "Total diário: sem granularidade por pedido." },
+  COM_PENDENCIA: { rotulo: "Com pendência", classe: "alerta", explicacao: "Há informação faltando ou provisória (veja as pendências)." },
+});
+export const SITUACOES_RECEBIMENTO = Object.freeze({
+  NAO_RECEBIDO: { rotulo: "Não recebido", classe: "alerta", explicacao: "Nenhum crédito vinculado ainda." },
+  PARCIALMENTE_RECEBIDO: { rotulo: "Parcialmente recebido", classe: "info", explicacao: "Parte foi creditada; há saldo restante." },
+  RECEBIDO_SEM_COMPROVACAO: { rotulo: "Recebido sem comprovação", classe: "alerta", explicacao: "Crédito registrado sem extrato bancário ou conciliação." },
+  RECEBIDO_E_COMPROVADO: { rotulo: "Recebido e comprovado", classe: "ok", explicacao: "Crédito comprovado por extrato ou conciliação." },
+  CANCELADO: { rotulo: "Cancelado", classe: "neutro", explicacao: "Cancelado junto com a venda." },
+});
+export const situacaoRecebimento = (c) => SITUACOES_RECEBIMENTO[c] ?? { rotulo: "—", classe: "neutro", explicacao: "" };
+export const COMPROVACOES = Object.freeze({ CONCILIADA: "Conciliado", EXTRATO_BANCARIO: "Extrato bancário", CONTAGEM_DE_CAIXA: "Contagem de caixa", SEM_COMPROVACAO: "Sem comprovação" });
+export const TIPOS_COMPONENTE = Object.freeze({
+  DESCONTO_DA_LOJA: "Desconto da loja", DESCONTO_FINANCIADOR_NAO_COMPROVADO: "Desconto (financiador não comprovado)", SUBSIDIO_DE_TERCEIRO: "Subsídio de terceiro (comprovado)",
+  DEVOLUCAO: "Devolução ao cliente", TAXA_DE_PROCESSAMENTO: "Taxa de processamento", COMISSAO: "Comissão", ANUNCIO: "Anúncio", MENSALIDADE: "Mensalidade",
+  ENCARGO_FINANCEIRO: "Encargo financeiro (antecipação)", AJUSTE_COMERCIAL: "Ajuste comercial", ESTORNO: "Estorno", OUTRO_AJUSTE: "Outro ajuste",
+});
+export const LINHAS_DRE = Object.freeze({
+  DEDUCOES_COMERCIAIS: "Deduções comerciais", DESPESAS_OPERACIONAIS: "Despesas operacionais", RESULTADO_FINANCEIRO: "Resultado financeiro", CUSTOS_OPERACIONAIS: "Custos operacionais",
+  DEMAIS_EFEITOS_GERENCIAIS: "Demais efeitos", NENHUMA_SUBSIDIO_A_RECEBER: "Fora da DRE (a receber do terceiro)", FORA_ATE_CLASSIFICAR: "Fora da DRE até classificar", FORA_DO_RESULTADO: "Fora do resultado",
+});
+export const ETAPAS = Object.freeze({
+  VENDA_REGISTRADA: "Venda registrada", PAGAMENTO_INFORMADO: "Pagamento informado", TRANSACAO_PROCESSADA: "Transação processada", TAXA_IDENTIFICADA: "Taxa identificada",
+  RECEBIVEL_FORMADO: "Recebível formado", REPASSE_INFORMADO: "Repasse informado", CREDITO_BANCARIO_IDENTIFICADO: "Crédito na conta", CONCILIACAO_CONFIRMADA: "Conciliação confirmada",
+  ESTORNO: "Estorno", CANCELAMENTO: "Cancelamento",
+});
+export const DIVERGENCIAS_VENDA = Object.freeze({
+  VENDA_SEM_PAGAMENTO: "Venda sem pagamento", PAGAMENTO_INCOMPATIVEL: "Pagamento incompatível", TRANSACAO_SEM_PEDIDO: "Transação sem pedido", RECEBIVEL_SEM_REPASSE: "Recebível sem repasse",
+  RECEBIVEL_ATRASADO: "Recebimento atrasado", REPASSE_INFORMADO_SEM_CREDITO: "Repasse sem crédito bancário", CREDITO_SEM_COMPROVACAO_BANCARIA: "Crédito sem comprovação bancária",
+  RECEBIMENTO_DIRETO_NAO_IDENTIFICADO: "Recebimento direto não identificado", TAXA_OU_VALOR_DIVERGENTE: "Taxa ou valor divergente", DESCONTO_SEM_FINANCIADOR: "Desconto sem financiador",
+  VENDA_SEM_CANAL: "Venda sem canal", TOTAIS_DE_RELATORIOS_DIFERENTES: "Relatórios com totais diferentes", SOBREPOSICAO_AGREGADO_PEDIDOS: "Agregado × pedidos no mesmo dia",
+});
+export const FORMAS = Object.freeze({ DINHEIRO: "Dinheiro", PIX: "Pix", DEBITO: "Cartão de débito", CREDITO: "Cartão de crédito", VALE: "Vale", OUTRA: "Não detalhada", DESCONHECIDA: "Desconhecida" });
+export const PENDENCIAS_VENDA = Object.freeze({
+  PAGAMENTO_PENDENTE: "pagamento pendente", DESCONTO_SEM_FINANCIADOR: "desconto sem financiador", FORMA_NAO_DETALHADA: "forma não detalhada", CREDITO_DIRETO_NAO_IDENTIFICADO: "crédito a identificar",
+  EM_DIVERGENCIA: "em divergência", SEM_GRANULARIDADE: "sem pedidos", CANAL_NAO_IDENTIFICADO: "canal não identificado", SEM_DOCUMENTO_DE_ORIGEM: "sem documento de origem",
+});
+export const CATEGORIAS_BANCARIAS = Object.freeze({
+  TARIFA: "Tarifa", SEGURO: "Seguro", EMPRESTIMO: "Empréstimo", PAGAMENTO_BOLETO: "Pagamento de boleto", ARRECADACAO_CONVENIO: "Arrecadação/convênio", CREDITO_ADQUIRENTE: "Crédito de adquirente",
+  REPASSE_PLATAFORMA: "Repasse de plataforma", PAGAMENTO_PLATAFORMA: "Pagamento a plataforma", PIX_RECEBIDO: "Pix recebido", PIX_ENVIADO: "Pix enviado", TRANSFERENCIA: "Transferência", OUTRO: "Outro",
+});

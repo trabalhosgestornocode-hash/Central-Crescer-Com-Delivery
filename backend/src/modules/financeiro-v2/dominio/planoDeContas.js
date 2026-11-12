@@ -52,6 +52,12 @@ export const CATEGORIA_DE_VENDA = Object.freeze(Object.fromEntries(Object.values
 export const CATEGORIA_DEVOLUCAO = "DEVOLUCOES_E_ESTORNOS";
 export const CATEGORIA_VENDA_AGREGADA = "VENDAS_AGREGADAS_SEM_CANAL";
 export const CATEGORIA_DESCONTO_A_CLASSIFICAR = "DESCONTOS_A_CLASSIFICAR";
+/**
+ * Despesa/obrigação cuja natureza econômica AINDA NÃO foi comprovada (boleto sem identificação, saída do extrato que
+ * precisa virar conta). Existe como dívida, mas NÃO entra em nenhuma linha da DRE até ser reclassificada
+ * (Execução 06B, auditoria A.2). "OUTRAS_DESPESAS" é categoria confirmada — não serve de provisória.
+ */
+export const CATEGORIA_DESPESA_A_CLASSIFICAR = "DESPESAS_A_CLASSIFICAR";
 
 /** Modelo genérico: serve a qualquer empresa. As categorias `doSistema` são usadas pelo próprio núcleo. */
 const BASE = [
@@ -90,6 +96,7 @@ const BASE = [
   f("TRIBUTOS_DIVERSOS", "Outros tributos e taxas", "TRIBUTOS"),
   g("OUTROS_EFEITOS_GERENCIAIS", "Outros efeitos gerenciais", C.OUTROS_EFEITOS_GERENCIAIS),
   f("OUTRAS_DESPESAS", "Outras despesas", "OUTROS_EFEITOS_GERENCIAIS"),
+  f(CATEGORIA_DESPESA_A_CLASSIFICAR, "Despesas a classificar (natureza não comprovada)", "OUTROS_EFEITOS_GERENCIAIS", { doSistema: true }),
   f("OUTRAS_RECEITAS", "Outras receitas", "OUTROS_EFEITOS_GERENCIAIS", { natureza: N.RECEITA }),
   f("DESCONTOS_OBTIDOS", "Descontos obtidos de fornecedores", "OUTROS_EFEITOS_GERENCIAIS", { natureza: N.RECEITA }),
   g("MOVIMENTACOES_PATRIMONIAIS", "Movimentações patrimoniais sem impacto direto no resultado", C.MOVIMENTACOES_PATRIMONIAIS),

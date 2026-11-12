@@ -1,4 +1,4 @@
-// AMBIENTE DEMONSTRATIVO LOCAL da interface do Financeiro v2 (Execuções 05 e 06A).
+// AMBIENTE DEMONSTRATIVO LOCAL da interface do Financeiro v2 (Execuções 05, 06A e 06B).
 //
 // - Dados 100% SINTÉTICOS em memória (nenhum banco, nenhum .env, nenhuma rede além de 127.0.0.1).
 // - Sessão SIMULADA pelo seletor do próprio ambiente (cabeçalho x-fv2-demo-sessao), mas passando pelo adaptador de sessão
@@ -6,7 +6,8 @@
 // - Consome SOMENTE as consultas aprovadas do motor (apuração, composição e, desde a 06A, tesouraria: contas a pagar/receber,
 //   caixa e bancos, calendário, fluxo de caixa e resumo financeiro). SOMENTE LEITURA: as escritas da tesouraria (saldo
 //   informado, abertura/operação/fechamento de caixa) existem no núcleo, mas NÃO são expostas aqui — a sessão desta
-//   demonstração é simulada, então uma escrita "funcionando" seria sucesso simulado (ver doc 11).
+//   demonstração é simulada, então uma escrita "funcionando" seria sucesso simulado (ver doc 11). Desde a 06B, também
+//   as consultas de Vendas e Recebimentos (vendas, pagamentos, taxas, recebíveis, divergências e detalhes) — só leitura.
 // - Respostas saem SANITIZADAS: identificadores internos viram referências opacas; documentos aparecem como
 //   "registrado, não acessível nesta versão" (não há link nem caminho de arquivo).
 // NÃO é rota do aplicativo: não é montado em backend/src e não deve ser publicado.
@@ -18,7 +19,10 @@ import { fileURLToPath } from "node:url";
 const aqui = dirname(fileURLToPath(import.meta.url));
 const m = await import(pathToFileURL(join(aqui, "..", "..", "src", "modules", "financeiro-v2", "index.js")));
 const { faturamentoSaiposPdf } = await import(pathToFileURL(join(aqui, "..", "..", "test", "financeiro-v2", "helpers", "formatos.js")));
-const { foodyEntregas } = await import(pathToFileURL(join(aqui, "..", "..", "test", "financeiro-v2", "helpers", "arquivos.js")));
+const { foodyEntregas, saiposFormas, saiposVendas, texto, unicredExtrato } = await import(pathToFileURL(join(aqui, "..", "..", "test", "financeiro-v2", "helpers", "arquivos.js")));
+/** Stone no layout homologado (texto, 6 casas, desconto no "unificado"), em CSV SINTÉTICO. */
+const stoneCsv = (linhas) => texto(["STONE ID;DATA DA VENDA;PRODUTO;BANDEIRA;VALOR BRUTO;VALOR LIQUIDO;DESCONTO DE MDR;DESCONTO DE ANTECIPACAO;DESCONTO UNIFICADO;ULTIMO STATUS;CÓDIGO DE AUTORIZAÇÃO",
+  ...linhas.map((l) => [l.id, l.quando, l.produto ?? "Credito", "Bandeira Demo", l.bruto, l.liquido, "0,000000", "0,000000", l.unificado ?? "0,000000", "Aprovada", l.aut ?? ""].join(";"))].join("\n"));
 
 export const ORG = "aaaaaaaa-0000-4000-8000-000000000001";
 export const UNIDADES = Object.freeze([
@@ -80,6 +84,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   await nucleo.registrarObrigacao(A, { contraparteId: forn.id, valorOriginalCentavos: 118000, categoria: "EMBALAGENS", descricao: "Embalagens (demonstração)", competencia: "2026-09", dataEmissao: "2026-09-04", vencimento: "2026-09-19" });
   await nucleo.registrarObrigacao(A, { contraparteId: forn.id, valorOriginalCentavos: 3200, categoria: "JUROS_E_TARIFAS_BANCARIAS", descricao: "Tarifa bancária (demonstração)", competencia: "2026-09", dataEmissao: "2026-09-10", vencimento: "2026-09-10" });
   await nucleo.registrarMovimentacao(A, { contaId: banco.id, dataEfetiva: "2026-09-21", sentido: "SAIDA", valorCentavos: 15000, natureza: "PAGAMENTO" });
+  await vendasERecebimentos(nucleo, A, { banco, importar });
   await tesouraria(nucleo, A, { caixa, banco, ifoodRecebivel: ifood.recebiveis[0] });
   // Unidade 2: só uma despesa e competência homologada → faturamento ZERO CONFIRMADO.
   const B = c(UNIDADES[1].id);
@@ -98,15 +103,13 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     acesso: { sessionId: `demo-${perfil}`, expiraEm: "2099-01-01T00:00:00.000Z", impersonando: false },
   });
   const ref = (id) => `ref-${createHash("sha256").update(sal + id).digest("hex").slice(0, 10)}`;
-  /** Identificadores internos → referências opacas; documentos → registrados, não acessíveis nesta versão. */
-  const sanitizar = (v) => JSON.parse(JSON.stringify(v, (k, x) => {
-    if (k === "documentoIds" && Array.isArray(x)) return x.map((id) => ({ referencia: ref(id), situacao: "REGISTRADO_NAO_ACESSIVEL" }));
-    return typeof x === "string" ? x.replace(UUID, (u) => ref(u)) : x;
-  }));
-
   const CODIGOS = new Set(["FATURAMENTO_BRUTO_PROPRIO", "FATURAMENTO_LIQUIDO_GERENCIAL", "DEDUCOES_COMERCIAIS", "RECEITA_LIQUIDA_COMERCIAL", "CUSTOS_OPERACIONAIS", "RESULTADO_APOS_CUSTOS", "DESPESAS_OPERACIONAIS", "RESULTADO_FINANCEIRO", "DEMAIS_EFEITOS_GERENCIAIS", "RESULTADO_GERENCIAL"]);
   const reverso = new Map();
   const refDe = (id) => { const r = ref(id); reverso.set(r, id); return r; };
+  /**
+   * Identificadores internos → referências opacas (só as já EMITIDAS voltam a ser ids nos detalhes: não dá para adivinhar
+   * uma referência); documentos → registrados, não acessíveis nesta versão.
+   */
   const sanitizarComRef = (v) => JSON.parse(JSON.stringify(v, (k, x) => {
     if (k === "documentoIds" && Array.isArray(x)) return x.map((id) => ({ referencia: refDe(id), situacao: "REGISTRADO_NAO_ACESSIVEL" }));
     return typeof x === "string" ? x.replace(UUID, (u) => refDe(u)) : x;
@@ -118,6 +121,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     return [k, v.startsWith("ref-") ? reverso.get(v) ?? v : v];
   }));
   const NENHUM = "00000000-0000-4000-8000-000000000000";
+  const FILTRO_VENDAS = ["competencia", "inicio", "fim", "canal", "forma", "processador", "situacao", "valorMinimoCentavos", "valorMaximoCentavos", "identificador", "pagina", "tamanho"];
+  const NUMEROS_VENDAS = ["pagina", "tamanho", "valorMinimoCentavos", "valorMaximoCentavos"];
   const TESOURARIA = {
     "/api/fv2/contas-a-pagar": (ctx, p) => nucleo.consultarContasAPagar(ctx, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
     "/api/fv2/contas-a-receber": (ctx, p) => nucleo.consultarContasAReceber(ctx, filtro(p, ["competencia", "previstoDe", "previstoAte", "processador", "canal", "tipo", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
@@ -126,6 +131,14 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/calendario": (ctx, p) => nucleo.consultarCalendarioFinanceiro(ctx, filtro(p, ["mes"])),
     "/api/fv2/conta-a-pagar": (ctx, p) => nucleo.detalharContaAPagar(ctx, { id: reverso.get(p.id) ?? NENHUM }),
     "/api/fv2/conta-a-receber": (ctx, p) => nucleo.detalharContaAReceber(ctx, { id: reverso.get(p.id) ?? NENHUM }),
+    // Vendas e Recebimentos (06B) — somente leitura.
+    "/api/fv2/vendas": (ctx, p) => nucleo.consultarVendas(ctx, filtro(p, FILTRO_VENDAS, NUMEROS_VENDAS)),
+    "/api/fv2/vendas/pagamentos": (ctx, p) => nucleo.consultarPagamentosDeVendas(ctx, filtro(p, FILTRO_VENDAS, NUMEROS_VENDAS)),
+    "/api/fv2/vendas/taxas": (ctx, p) => nucleo.consultarTaxasEDescontos(ctx, filtro(p, [...FILTRO_VENDAS, "tipoComponente"], NUMEROS_VENDAS)),
+    "/api/fv2/vendas/recebiveis": (ctx, p) => nucleo.consultarRecebiveisERepasses(ctx, filtro(p, [...FILTRO_VENDAS, "recebimento"], NUMEROS_VENDAS)),
+    "/api/fv2/vendas/divergencias": (ctx, p) => nucleo.consultarDivergenciasDeVendas(ctx, filtro(p, [...FILTRO_VENDAS, "codigo"], NUMEROS_VENDAS)),
+    "/api/fv2/venda": (ctx, p) => nucleo.detalharVenda(ctx, { id: reverso.get(p.id) ?? NENHUM }),
+    "/api/fv2/recebimento": (ctx, p) => nucleo.detalharRecebimento(ctx, { id: reverso.get(p.id) ?? NENHUM }),
   };
   /** Tratador puro (testável): caminho + parâmetros + perfil de sessão → { status, corpo }. */
   async function responder(caminho, params, perfil) {
@@ -140,16 +153,16 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       const competencia = params.competencia;
       if (caminho === "/api/fv2/visao-geral") {
         const vg = await nucleo.apurarVisaoGeral(ctx, { competencia });
-        return { status: 200, corpo: sanitizar({ ...vg, financeiro: await nucleo.consultarResumoFinanceiro(ctx, { competencia }) }) };
+        return { status: 200, corpo: sanitizarComRef({ ...vg, financeiro: await nucleo.consultarResumoFinanceiro(ctx, { competencia }) }) };
       }
       if (TESOURARIA[caminho]) return { status: 200, corpo: sanitizarComRef(await TESOURARIA[caminho](ctx, params)) };
       if (caminho === "/api/fv2/dre") {
         const ap = await nucleo.apurarCompetencia(ctx, { competencia });
-        return { status: 200, corpo: sanitizar({ competencia, impressao: ap.impressao, dre: ap.dre, cadaCem: ap.cadaCem, pendencias: ap.pendencias, faturamentoBruto: ap.indicadores.FATURAMENTO_BRUTO_PROPRIO, resultadoGerencial: ap.indicadores.RESULTADO_GERENCIAL, faturamentoLiquidoGerencial: ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL }) };
+        return { status: 200, corpo: sanitizarComRef({ competencia, impressao: ap.impressao, dre: ap.dre, cadaCem: ap.cadaCem, pendencias: ap.pendencias, faturamentoBruto: ap.indicadores.FATURAMENTO_BRUTO_PROPRIO, resultadoGerencial: ap.indicadores.RESULTADO_GERENCIAL, faturamentoLiquidoGerencial: ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL }) };
       }
       if (caminho === "/api/fv2/composicao") {
         if (!CODIGOS.has(params.codigo)) return { status: 400, corpo: { erro: "INDICADOR_DESCONHECIDO", mensagem: "Indicador desconhecido." } };
-        return { status: 200, corpo: sanitizar(await nucleo.composicaoDoIndicador(ctx, { competencia, codigo: params.codigo })) };
+        return { status: 200, corpo: sanitizarComRef(await nucleo.composicaoDoIndicador(ctx, { competencia, codigo: params.codigo })) };
       }
       return { status: 404, corpo: { erro: "NAO_ENCONTRADO", mensagem: "Consulta inexistente." } };
     } catch (e) {
@@ -159,6 +172,48 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     }
   }
   return { responder, unidades: UNIDADES };
+}
+
+/**
+ * Vendas e recebimentos sintéticos (Execução 06B), sobre o mesmo cenário de setembro:
+ *   - pedidos SAIPOS de 03 e 04/09 (sem conta de caixa: o dinheiro fica "a identificar"); P-102 pago pela Stone S-77, cuja
+ *     taxa tem fração de centavo; P-103 ("Múltiplas") completado com dinheiro + débito Stone; S-88 Stone SEM pedido;
+ *   - venda cancelada; segunda venda Anota AI; repasse agrupado Anota AI pelo extrato Unicred de outubro (comprovado);
+ *   - formas de pagamento SAIPOS de 02/09 com total diferente do faturamento agregado do dia → divergência entre relatórios;
+ *   - boleto sem identificação lançado como DESPESA A CLASSIFICAR (fica fora da DRE até ser classificado).
+ */
+async function vendasERecebimentos(nucleo, A, { banco, importar }) {
+  const aplicar = async (p) => { await nucleo.aprovarProposta(A, { propostaId: p.id, justificativa: "Demonstração." }); return nucleo.aplicarProposta(A, { propostaId: p.id }); };
+  const pedidos = await importar("SAIPOS", "SAIPOS_VENDAS", saiposVendas([
+    { pedido: "DEMO-P101", data: "03/09/2026 12:10", canal: "Balcão", itens: 3200, forma: "Dinheiro" },
+    { pedido: "DEMO-P102", data: "03/09/2026 12:40", canal: "Balcão", itens: 4500, forma: "Crédito", autorizacao: "AUT-DEMO-77" },
+    { pedido: "DEMO-P103", data: "04/09/2026 19:05", canal: "Balcão", itens: 6000, forma: "Múltiplas" },
+  ]), { periodoInicio: "2026-09-03", periodoFim: "2026-09-04" });
+  await nucleo.gerarPropostas(A, { importacaoId: pedidos.id });
+  const efeitos = {};
+  for (const p of await nucleo.listarPropostas(A, { operacao: "VENDA" })) efeitos[p.comando.fonte.idExterno] = (await aplicar(p)).efeitos.find((e) => e.tipo === "VENDA").id;
+  const stone = await importar("STONE", "STONE_VENDAS", stoneCsv([
+    { id: "DEMO-S77", quando: "03/09/2026 12:41", bruto: "45,000000", liquido: "43,942500", unificado: "-1,057500", aut: "AUT-DEMO-77" },
+    { id: "DEMO-S88", quando: "04/09/2026 21:15", bruto: "33,000000", liquido: "32,224500", unificado: "-0,775500" },
+  ]), { periodoInicio: "2026-09-03", periodoFim: "2026-09-04" });
+  await nucleo.gerarPropostas(A, { importacaoId: stone.id });
+  const s77 = (await nucleo.listarPropostas(A, { operacao: "PAGAMENTO_STONE" })).find((p) => p.comando.fonte.idExterno === "DEMO-S77");
+  await aplicar(s77);
+  await nucleo.registrarPagamentoDeVenda(A, { vendaId: efeitos["DEMO-P103"], forma: "DINHEIRO", valorCentavos: 2000 });
+  await nucleo.registrarPagamentoDeVenda(A, { vendaId: efeitos["DEMO-P103"], forma: "DEBITO", processador: "STONE", valorCentavos: 4000 });
+  const cancelada = await nucleo.registrarVenda(A, { canal: "BALCAO", dataVenda: "2026-09-09", brutoCentavos: 1500, fonte: { sistema: "MANUAL", idExterno: "DEMO-X1" }, composicao: { itensCentavos: 1500 }, pagamentos: [{ forma: "CREDITO", processador: "STONE", valorCentavos: 1500 }] });
+  await nucleo.cancelarVenda(A, { vendaId: cancelada.venda.id, justificativa: "Pedido lançado em duplicidade (demonstração)." });
+  const anota2 = await nucleo.registrarVenda(A, { canal: "ANOTA_AI", dataVenda: "2026-09-12", brutoCentavos: 42000, fonte: { sistema: "MANUAL", idExterno: "DEMO-A2" }, composicao: { itensCentavos: 42000 }, pagamentos: [{ forma: "PIX", processador: "ANOTA_AI", valorCentavos: 42000 }] });
+  const anota1 = (await nucleo.consultarContasAReceber(A, { processador: "ANOTA_AI" })).itens.find((t) => t.id !== anota2.recebiveis[0].id);
+  const extrato = await importar("UNICRED", "UNICRED_EXTRATO", unicredExtrato({ saldoInicial: 100000, lancamentos: [{ data: "09/10/2026", historico: "CRED ANOTA AI REPASSE SINT", valor: 140000 }] }), { periodoInicio: "2026-10-01", periodoFim: "2026-10-31" });
+  await nucleo.gerarPropostas(A, { importacaoId: extrato.id, contaBancariaId: banco.id });
+  const [mov] = await nucleo.listarPropostas(A, { operacao: "MOVIMENTACAO_BANCARIA" });
+  const credito = (await aplicar(mov)).efeitos.find((e) => e.tipo === "MOVIMENTACAO").id;
+  await nucleo.registrarLiquidacao(A, { movimentacaoId: credito, alocacoes: [{ alvoTipo: "RECEBIVEL", alvoId: anota1.id, valorCentavos: 98000 }, { alvoTipo: "RECEBIVEL", alvoId: anota2.recebiveis[0].id, valorCentavos: 42000 }] });
+  await importar("SAIPOS", "SAIPOS_FORMAS_PAGAMENTO", saiposFormas([["Dinheiro", 4, 100000], ["Crédito", 3, 80000]]), { periodoInicio: "2026-09-02", periodoFim: "2026-09-02" });
+  await nucleo.registrarDivergenciaEntreFontes(A, { periodoInicio: "2026-09-02", periodoFim: "2026-09-02" });
+  const desconhecido = await nucleo.registrarContraparte(A, { tipo: "OUTRO", nome: "Beneficiário a identificar (demonstração)" });
+  await nucleo.registrarObrigacao(A, { contraparteId: desconhecido.id, valorOriginalCentavos: 18990, categoria: "DESPESAS_A_CLASSIFICAR", descricao: "Boleto sem identificação", competencia: "2026-10", dataEmissao: "2026-10-20", vencimento: "2026-11-25" });
 }
 
 /**

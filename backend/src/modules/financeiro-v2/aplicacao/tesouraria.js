@@ -8,7 +8,7 @@ import { ACAO } from "../dominio/contexto.js";
 import { subtrair } from "../dominio/dinheiro.js";
 import { competenciaDe } from "../dominio/tempo.js";
 import {
-  caixaEBancos, calendarioFinanceiro, contasAPagar, contasAReceber, fluxoDeCaixa, preparar, resumoFinanceiro, teoricoDaSessao, tituloAPagar, tituloAReceber,
+  REFERENCIA_SALDO, caixaEBancos, calendarioFinanceiro, contasAPagar, contasAReceber, fluxoDeCaixa, preparar, resumoFinanceiro, teoricoDaSessao, tituloAPagar, tituloAReceber,
 } from "../dominio/tesouraria.js";
 import {
   validarAberturaDeCaixa, validarDetalheDeTitulo, validarFechamentoDeCaixa, validarFiltroAPagar, validarFiltroAReceber, validarFiltroCaixaEBancos,
@@ -28,7 +28,7 @@ export function operacoesDeTesouraria(b) {
       liquidacoes: await l(TIPO.LIQUIDACAO), obrigacoes: await l(TIPO.OBRIGACAO), recebiveis: await l(TIPO.RECEBIVEL), contrapartes: await l(TIPO.CONTRAPARTE),
       lancamentos: await l(TIPO.LANCAMENTO), categorias: await l(TIPO.CATEGORIA), ajustes: await l(TIPO.AJUSTE), correspondencias: await l(TIPO.CORRESPONDENCIA),
       sessoes: await l(TIPO.SESSAO_CAIXA), documentos: await l(TIPO.DOCUMENTO), vinculos: await l(TIPO.VINCULO_DOCUMENTAL), pagamentos: await l(TIPO.PAGAMENTO_VENDA),
-      competencias: await l(TIPO.COMPETENCIA),
+      competencias: await l(TIPO.COMPETENCIA), propostas: await l(TIPO.PROPOSTA),
     };
   }
   const consulta = (validar, calcular) => (ctx, e) => {
@@ -92,19 +92,22 @@ export function operacoesDeTesouraria(b) {
 
     // ------------------------------------------------------------------------------------------------ saldo informado
     /**
-     * Registra o saldo de uma conta no INÍCIO de um dia, como informado por extrato ou contagem. É o ponto de partida do
-     * saldo calculado; um segundo saldo informado não corrige nada: a diferença para o calculado aparece na consulta.
+     * Registra o saldo de uma conta numa data, com REFERÊNCIA explícita: início do dia (antes dos movimentos do dia) ou fim
+     * do dia (depois deles). É o ponto de partida do saldo calculado — só movimentos POSTERIORES à referência se somam a
+     * ele. Um segundo saldo informado não corrige nada: a diferença para o calculado aparece na consulta como divergência.
      */
     registrarSaldoDeConta(ctx, entrada) {
       const c = validarSaldoDeConta(entrada);
       const impressao = JSON.stringify(c);
       return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
-        const chave = `saldo:${c.contaId}:${c.data}`;
+        const chave = c.referencia === REFERENCIA_SALDO.FIM_DO_DIA ? `saldo:${c.contaId}:${c.data}:fim` : `saldo:${c.contaId}:${c.data}`;
         const existente = await b.jaRegistrado(tx, cx, TIPO.SALDO_CONTA, chave, impressao);
         if (existente) return { saldo: existente, repetido: true };
         const conta = await b.obterOuFalhar(tx, cx, TIPO.CONTA, c.contaId, "Conta financeira");
         if (conta.tipo === TIPO_CONTA.CAIXA_FISICO && c.valorCentavos < 0) falhar(CODIGO.VALOR_INVALIDO, "Caixa físico não tem saldo negativo.", { campo: "valorCentavos" });
         b.exigirNaoFutura(c.data, "data");
+        // O fim do dia de hoje ainda não aconteceu: um "saldo final" de hoje deixaria de fora movimentos que ainda virão.
+        if (c.referencia === REFERENCIA_SALDO.FIM_DO_DIA && c.data >= b.hoje()) falhar(CODIGO.DATA_INVALIDA, "Saldo de fim do dia só para dias já encerrados.", { campo: "data" });
         if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
         return { saldo: await b.criar(tx, cx, TIPO.SALDO_CONTA, { ...c, chaveIdempotencia: chave, impressao }), repetido: false };
       });

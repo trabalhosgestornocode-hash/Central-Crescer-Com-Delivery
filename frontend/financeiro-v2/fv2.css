@@ -117,6 +117,19 @@ details.card > summary { cursor: pointer; list-style: none; } details.card > sum
 .cal-num { font-weight: 700; font-size: 13px; } .cal-marcas { display: flex; flex-wrap: wrap; gap: 3px; } .cal-valor { font-size: 11px; color: var(--suave); overflow-wrap: anywhere; }
 .marca-dia { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 99px; font-size: 11px; font-weight: 700; }
 .marca-dia--info { background: var(--info-bg); color: var(--info); } .marca-dia--erro { background: var(--erro-bg); color: var(--erro); } .marca-dia--ok { background: var(--ok-bg); color: var(--ok); } .marca-dia--alerta { background: var(--alerta-bg); color: var(--alerta); }
+/* ---------------------------------------------------------------- vendas e recebimentos (Execução 06B) */
+.abas--botoes { flex-wrap: wrap; } .abas--botoes button { font: inherit; padding: 8px 14px; border-radius: 99px; border: 1px solid var(--linha); color: inherit; background: var(--card); min-height: 40px; cursor: pointer; }
+.abas--botoes button[aria-current="page"] { background: var(--texto); color: var(--card); border-color: var(--texto); }
+.canal .botao-link { justify-self: start; padding: 4px 0; min-height: 32px; font-size: 13px; }
+.linha-tempo { list-style: none; margin: 8px 0 0; padding: 0 0 0 18px; border-left: 2px solid var(--linha); display: grid; gap: 10px; }
+.etapa { position: relative; padding: 2px 0 2px 8px; } .etapa::before { content: ""; position: absolute; left: -26px; top: 6px; width: 12px; height: 12px; border-radius: 50%; background: var(--card); border: 2px solid var(--suave); }
+.etapa--ok::before { background: var(--ok); border-color: var(--ok); } .etapa--alerta::before { border-color: var(--alerta); border-style: dashed; } .etapa--neutro::before { border-color: var(--linha); }
+.etapa-topo { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; } .etapa-texto { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.divergencias { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 12px; } .divergencia { border: 1px solid var(--linha); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+.divergencia h3 { margin: 0; font-size: 15px; flex: 1 1 auto; } .divergencia .ficha dd { overflow-wrap: anywhere; min-width: 0; }
+.tabela th.esquerda { text-align: left; }
+.ligacoes { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 12px; }
+.painel .ficha dd, .painel .lista-simples span { overflow-wrap: anywhere; min-width: 0; }
 @media (max-width: 760px) {
   .filtros-locais { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .filtros-locais .caixa-marcar { grid-column: 1 / -1; }
   .filtros-locais select, .filtros-locais input:not([type="checkbox"]) { width: 100%; min-width: 0; }
@@ -132,5 +145,9 @@ details.card > summary { cursor: pointer; list-style: none; } details.card > sum
   .calendario { gap: 3px; } .cal-dia { min-height: 56px; padding: 4px; } .cal-valor { display: none; } .marca-dia { min-width: 16px; height: 16px; font-size: 10px; padding: 0 3px; }
   .contas { grid-template-columns: minmax(0, 1fr); }
   .navegacao ul { scrollbar-width: thin; }
+  /* Vendas e Recebimentos (06B): abas roláveis e fichas em uma coluna no celular. */
+  .tabela--cartoes td > .cel { display: block; text-align: right; min-width: 0; overflow-wrap: anywhere; } .tabela--cartoes td.esquerda > .cel { text-align: left; }
+  .abas--botoes { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; padding-bottom: 4px; } .abas--botoes button { flex: 0 0 auto; }
+  .ficha { grid-template-columns: minmax(0, 1fr); gap: 2px; } .ficha dd { margin: 0 0 6px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

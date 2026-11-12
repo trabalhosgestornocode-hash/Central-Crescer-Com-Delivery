@@ -24,8 +24,19 @@ export const VINCULO_MOVIMENTO = enumerar(
 );
 export const GRANULARIDADE = enumerar("DIA", "SEMANA", "MES");
 export const SITUACAO_SALDO = enumerar("CALCULADO", "DESCONHECIDO");
-/** Categoria genérica do plano: título nela ainda espera classificação definitiva. */
-export const CATEGORIA_PROVISORIA = "OUTRAS_DESPESAS";
+/**
+ * Referência de um saldo informado (auditoria A.1 da 06B). INICIO_DO_DIA = saldo antes de qualquer movimento do dia
+ * ("saldo anterior" do extrato); FIM_DO_DIA = saldo depois de todos os movimentos do dia ("saldo final"). O saldo de
+ * FIM_DO_DIA já contém os movimentos daquela data: eles NUNCA são somados de novo.
+ */
+export const REFERENCIA_SALDO = enumerar("INICIO_DO_DIA", "FIM_DO_DIA");
+/**
+ * Categoria do sistema para despesa/obrigação de natureza AINDA NÃO comprovada: fica fora da DRE até ser classificada.
+ * (Na 06A, "OUTRAS_DESPESAS" era tratada como provisória aqui, mas a DRE a contava como despesa confirmada — corrigido na 06B.)
+ */
+export const CATEGORIA_PROVISORIA = "DESPESAS_A_CLASSIFICAR";
+/** Classificação econômica exibida, separada da sugestão do banco (que nunca classifica nada). */
+export const CLASSIFICACAO_ECONOMICA = enumerar("CONFIRMADA", "PENDENTE_DE_CLASSIFICACAO", "PATRIMONIAL", "NAO_SE_APLICA");
 
 const indice = (lista) => new Map(lista.map((x) => [x.id, x]));
 const agrupar = (lista, chave) => {
@@ -61,11 +72,14 @@ export function preparar(d) {
     liquidacoesPorAlvo: agrupar(liquidacoes, (q) => q.alvoId), liquidacoesPorMov: agrupar(liquidacoes, (q) => q.movimentacaoId),
     ajustesPorAlvo: agrupar(d.ajustes ?? [], (a) => a.alvoId), docsPorRegistro, divergentes,
     homologadas: new Set((d.competencias ?? []).filter((c) => c.estado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO).map((c) => c.competencia)),
+    // Sugestão do extrato (palavras do histórico) de cada movimentação nascida de proposta bancária. Só SUGESTÃO.
+    categoriaBancariaPorMov: new Map((d.propostas ?? []).flatMap((pr) => (pr.categoriaBancaria
+      ? (pr.efeitos ?? []).filter((e) => e.tipo === TIPO.MOVIMENTACAO).map((e) => [e.id, pr.categoriaBancaria]) : []))),
   };
 }
 
 /** Documentos de um registro: os citados nele + os vinculados. Só referência, tipo e descrição — nunca arquivo ou caminho. */
-function documentosDe(p, tipo, registro) {
+export function documentosDe(p, tipo, registro) {
   const ids = new Set([...(registro.documentoIds ?? []), ...(registro.documentoId ? [registro.documentoId] : [])]);
   for (const v of p.docsPorRegistro.get(`${tipo}:${registro.id}`) ?? []) ids.add(v.documentoId);
   return [...ids].map((id) => {
@@ -111,6 +125,7 @@ export function tituloAPagar(p, o, hoje) {
   const fornecedor = p.contrapartePorId.get(o.contraparteId) ?? null;
   const documentos = documentosDe(p, TIPO.OBRIGACAO, o);
   const provisoria = !lancamento || lancamento.categoria === CATEGORIA_PROVISORIA;
+  const classificacaoEconomica = provisoria ? CLASSIFICACAO_ECONOMICA.PENDENTE_DE_CLASSIFICACAO : lancamento.natureza === "PATRIMONIAL" ? CLASSIFICACAO_ECONOMICA.PATRIMONIAL : CLASSIFICACAO_ECONOMICA.CONFIRMADA;
   const situacao = situacaoAPagar(o, hoje, { provisoria });
   const emAberto = o.situacao !== SITUACAO_TITULO.CANCELADA && o.saldoCentavos > 0;
   const pendencias = [];
@@ -121,6 +136,9 @@ export function tituloAPagar(p, o, hoje) {
     fornecedor: fornecedor ? { id: fornecedor.id, nome: fornecedor.nome, tipo: fornecedor.tipo } : null,
     descricao: o.descricao, categoria: lancamento ? { codigo: lancamento.categoria, nome: categoria?.nome ?? lancamento.categoria } : null,
     classificacao: lancamento?.classificacao ?? null, natureza: lancamento?.natureza ?? null,
+    // Obrigação CONSTITUÍDA (título registrado) — nunca confundir com previsão recorrente estimada.
+    registro: "OBRIGACAO_CONSTITUIDA", classificacaoEconomica,
+    efeitoNaDre: classificacaoEconomica === CLASSIFICACAO_ECONOMICA.CONFIRMADA ? "NA_LINHA_DA_CATEGORIA" : classificacaoEconomica === CLASSIFICACAO_ECONOMICA.PATRIMONIAL ? "FORA_DO_RESULTADO" : "FORA_ATE_CLASSIFICAR",
     competencia: o.competencia, competenciaHomologada: p.homologadas.has(o.competencia), dataEmissao: o.dataEmissao, vencimento: o.vencimento,
     parcela: o.parcela, recorrencia: o.recorrencia ?? null,
     valorOriginalCentavos: o.valorBaseCentavos, ajustesCentavos: o.ajustesCentavos, pagoCentavos: o.liquidadoCentavos, saldoCentavos: o.saldoCentavos,
@@ -255,14 +273,23 @@ export function contasAReceber(d, hoje, filtro = {}) {
 
 // ------------------------------------------------------------------------------------------------------ caixa e bancos
 
-const ancorasDa = (p, contaId) => (p.saldos ?? []).filter((s) => s.contaId === contaId).sort((a, b) => (a.data < b.data ? -1 : 1));
+/**
+ * Ponto do tempo a partir do qual uma âncora vale: o INÍCIO do dia `inicioEfetivo`. Saldo de fim do dia D equivale ao
+ * saldo de início de D+1 — por isso os movimentos de D não entram de novo.
+ */
+export const inicioEfetivoDe = (s) => (s.referencia === REFERENCIA_SALDO.FIM_DO_DIA ? somarDias(s.data, 1) : s.data);
+const ancorasDa = (p, contaId) => (p.saldos ?? []).filter((s) => s.contaId === contaId)
+  .map((s) => ({ ...s, referencia: s.referencia ?? REFERENCIA_SALDO.INICIO_DO_DIA, inicioEfetivo: inicioEfetivoDe(s) }))
+  .sort((a, b) => (a.inicioEfetivo < b.inicioEfetivo ? -1 : a.inicioEfetivo > b.inicioEfetivo ? 1 : a.referencia === REFERENCIA_SALDO.FIM_DO_DIA ? -1 : 1));
 const movimentosDa = (p, contaId) => p.movimentacoes.filter((m) => m.contaId === contaId && valida(m));
+/** Movimentos a partir do início do dia `de` (exclusive do que a âncora já contém) até a véspera de `ate`. */
+const movimentosEntre = (p, contaId, de, ate) => movimentosDa(p, contaId).filter((m) => m.dataEfetiva >= de && m.dataEfetiva < ate);
 
-/** Saldo no INÍCIO do dia: âncora mais recente até a data + movimentações desde a âncora até a véspera. Sem âncora → null. */
+/** Saldo no INÍCIO do dia: âncora mais recente até a data + movimentações POSTERIORES à referência dela até a véspera. Sem âncora → null. */
 export function saldoNoInicioDe(p, contaId, data) {
-  const ancora = ancorasDa(p, contaId).filter((s) => s.data <= data).pop();
+  const ancora = ancorasDa(p, contaId).filter((s) => s.inicioEfetivo <= data).pop();
   if (!ancora) return null;
-  return somar(ancora.valorCentavos, ...movimentosDa(p, contaId).filter((m) => m.dataEfetiva >= ancora.data && m.dataEfetiva < data).map(sinal));
+  return somar(ancora.valorCentavos, ...movimentosEntre(p, contaId, ancora.inicioEfetivo, data).map(sinal));
 }
 /** Saldo no FIM do dia. */
 export const saldoNoFimDe = (p, contaId, data) => saldoNoInicioDe(p, contaId, somarDias(data, 1));
@@ -299,9 +326,13 @@ export function movimentoLegivel(p, m) {
   } else if (valida(m)) {
     pendencias.push("SEM_VINCULO");
   }
+  // Separação (auditoria A.2): a categoria SUGERIDA pelo histórico do banco nunca é classificação econômica. Sem vínculo,
+  // a saída/entrada fica PENDENTE DE CLASSIFICAÇÃO — e fora da DRE — mesmo que a sugestão diga "tarifa" ou "boleto".
+  const classificacaoEconomica = vinculo.tipo === VINCULO_MOVIMENTO.TRANSFERENCIA_INTERNA ? CLASSIFICACAO_ECONOMICA.NAO_SE_APLICA
+    : vinculo.tipo === VINCULO_MOVIMENTO.SEM_VINCULO ? CLASSIFICACAO_ECONOMICA.PENDENTE_DE_CLASSIFICACAO : CLASSIFICACAO_ECONOMICA.CONFIRMADA;
   return {
     id: m.id, data: m.dataEfetiva, conta: conta ? { id: conta.id, nome: conta.nome, tipo: conta.tipo } : null, sentido: m.sentido, valorCentavos: m.valorCentavos,
-    natureza: m.natureza, titulo, descricaoOriginal: m.descricao ?? null, vinculo, naoVinculadoCentavos: liquidacoes.length ? subtrair(m.valorCentavos, m.alocadoCentavos) : null,
+    natureza: m.natureza, titulo, descricaoOriginal: m.descricao ?? null, vinculo, categoriaBancariaSugerida: p.categoriaBancariaPorMov?.get(m.id) ?? null, classificacaoEconomica, naoVinculadoCentavos: liquidacoes.length ? subtrair(m.valorCentavos, m.alocadoCentavos) : null,
     situacao: m.situacao, situacaoConciliacao: m.situacaoConciliacao, documentos: documentosDe(p, TIPO.MOVIMENTACAO, m), fonte: m.fonte?.sistema ?? null, pendencias,
   };
 }
@@ -334,26 +365,35 @@ function contaNoPeriodo(p, conta, inicio, fim, hoje) {
   const saidasCentavos = soma((m) => m.sentido === SENTIDO.SAIDA);
   const saldoInicialCentavos = saldoNoInicioDe(p, conta.id, inicio);
   const ancoras = ancorasDa(p, conta.id);
-  const naoAncorada = ancoras.length === 0 || ancoras[0].data > fim;
   // O saldo final sempre parte do saldo informado mais recente até `fim` (se houver um dentro do período, ele prevalece).
-  const saldoFinalCentavos = naoAncorada ? null : saldoNoFimDe(p, conta.id, fim);
-  // Conciliação de saldos: cada saldo informado depois do primeiro é comparado com o calculado. A diferença é só mostrada.
+  const saldoFinalCentavos = saldoNoFimDe(p, conta.id, fim);
+  // Conciliação de saldos: cada saldo informado depois do primeiro é comparado com o calculado a partir do anterior, só com
+  // os movimentos POSTERIORES à referência do anterior. Lançamento atrasado (registrado depois, com data no intervalo)
+  // entra uma única vez — no intervalo da sua data. A diferença NÃO é ajustada: vira divergência visível.
   const conferenciasDeSaldo = ancoras.slice(1).map((a, i) => {
     const anterior = ancoras[i];
-    const calculado = somar(anterior.valorCentavos, ...movimentosDa(p, conta.id).filter((m) => m.dataEfetiva >= anterior.data && m.dataEfetiva < a.data).map(sinal));
-    return { data: a.data, informadoCentavos: a.valorCentavos, calculadoCentavos: calculado, diferencaCentavos: subtrair(a.valorCentavos, calculado), documentos: documentosDe(p, TIPO.SALDO_CONTA, a) };
+    const movs = movimentosEntre(p, conta.id, anterior.inicioEfetivo, a.inicioEfetivo);
+    const calculado = somar(anterior.valorCentavos, ...movs.map(sinal));
+    const diferenca = subtrair(a.valorCentavos, calculado);
+    return {
+      data: a.data, referencia: a.referencia, anterior: { data: anterior.data, referencia: anterior.referencia, valorCentavos: anterior.valorCentavos },
+      informadoCentavos: a.valorCentavos, calculadoCentavos: calculado, diferencaCentavos: diferenca, movimentosConsiderados: movs.length,
+      situacao: diferenca === 0 ? "CONFERE" : "DIVERGENTE", documentos: documentosDe(p, TIPO.SALDO_CONTA, a),
+    };
   });
+  // Movimentos com data ANTERIOR à primeira referência já estão dentro do saldo informado: nunca são somados a ele.
+  const anterioresAReferencia = ancoras.length ? movimentosDa(p, conta.id).filter((m) => m.dataEfetiva < ancoras[0].inicioEfetivo).length : 0;
   const semVinculo = movs.filter((m) => !m.transferenciaId && !m.pagamentoId && !(p.liquidacoesPorMov.get(m.id) ?? []).length);
   const conc = (sit) => movs.filter((m) => m.situacaoConciliacao === sit).length;
-  const ultima = ancoras.filter((a) => a.data <= fim).pop() ?? null;
+  const ultima = ancoras.filter((a) => a.inicioEfetivo <= somarDias(fim, 1)).pop() ?? null;
   return {
     id: conta.id, nome: conta.nome, tipo: conta.tipo, instituicao: conta.instituicao ?? null, ativa: conta.ativa,
     saldoInicialCentavos, entradasCentavos, saidasCentavos, saldoFinalCentavos,
     transferenciasRecebidasCentavos: soma((m) => m.transferenciaId && m.sentido === SENTIDO.ENTRADA),
     transferenciasEnviadasCentavos: soma((m) => m.transferenciaId && m.sentido === SENTIDO.SAIDA),
     situacaoDoSaldo: saldoFinalCentavos === null ? SITUACAO_SALDO.DESCONHECIDO : SITUACAO_SALDO.CALCULADO,
-    saldoInformado: ultima ? { data: ultima.data, valorCentavos: ultima.valorCentavos, observacao: ultima.observacao ?? null, documentos: documentosDe(p, TIPO.SALDO_CONTA, ultima) } : null,
-    conferenciasDeSaldo, movimentacoes: movs.length,
+    saldoInformado: ultima ? { data: ultima.data, referencia: ultima.referencia, valorCentavos: ultima.valorCentavos, observacao: ultima.observacao ?? null, documentos: documentosDe(p, TIPO.SALDO_CONTA, ultima) } : null,
+    conferenciasDeSaldo, saldosDivergentes: conferenciasDeSaldo.filter((x) => x.situacao === "DIVERGENTE").length, movimentosAnterioresAReferencia: anterioresAReferencia, movimentacoes: movs.length,
     // Diferenças de contagem das sessões FECHADAS no período: só informadas; o saldo da conta não é ajustado por elas.
     diferencasDeCaixaNaoAjustadasCentavos: conta.tipo === TIPO_CONTA.CAIXA_FISICO
       ? somarLista((p.sessoes ?? []).filter((s) => s.contaId === conta.id && s.dataFechamento && s.dataFechamento >= inicio && s.dataFechamento <= fim), (s) => s.diferencaCentavos ?? 0)
@@ -389,7 +429,7 @@ export function caixaEBancos(d, hoje, filtro) {
       saldoBancarioCentavos: saldoDe(tipoDe(TIPO_CONTA.BANCARIA)), saldoCaixaFisicoCentavos: saldoDe(tipoDe(TIPO_CONTA.CAIXA_FISICO)),
       contasSemSaldoInformado: contas.filter((c) => c.situacaoDoSaldo === SITUACAO_SALDO.DESCONHECIDO).map((c) => c.nome),
     },
-    pendencias: { semVinculo: movimentos.filter((m) => m.pendencias.includes("SEM_VINCULO")).length, parcialmenteVinculadas: movimentos.filter((m) => m.pendencias.includes("PARCIALMENTE_VINCULADO")).length },
+    pendencias: { saldosDivergentes: somarLista(contas, (c) => c.saldosDivergentes), semVinculo: movimentos.filter((m) => m.pendencias.includes("SEM_VINCULO")).length, parcialmenteVinculadas: movimentos.filter((m) => m.pendencias.includes("PARCIALMENTE_VINCULADO")).length },
     ...(() => { const pg = paginar(movimentos, filtro.pagina, filtro.tamanho); return { movimentos: pg.itens, paginacao: pg.paginacao }; })(),
   };
 }
@@ -402,13 +442,19 @@ export function caixaEBancos(d, hoje, filtro) {
  * (`semRegistro`), nunca valor previsto.
  */
 export function recorrencias(p, hoje, ate) {
+  // Série = fornecedor + categoria + dia do mês (a descrição NÃO entra: "Aluguel" e "Aluguel de dezembro" são a mesma
+  // série — antes da 06B elas viravam duas séries e a previsão do mês seguinte saía em dobro).
+  const categoriaDe = (o) => p.lancamentoPorId.get(o.lancamentoId)?.categoria ?? "";
   const series = agrupar(p.obrigacoes.filter((o) => o.recorrencia && o.situacao !== SITUACAO_TITULO.CANCELADA && (o.parcela?.total ?? 1) === 1),
-    (o) => `${o.contraparteId}|${p.lancamentoPorId.get(o.lancamentoId)?.categoria ?? ""}|${o.recorrencia.diaDoMes}|${o.descricao}`);
+    (o) => `${o.contraparteId}|${categoriaDe(o)}|${o.recorrencia.diaDoMes}`);
+  // Mês já CONSTITUÍDO = existe qualquer obrigação (recorrente ou não, inclusive cancelada) do mesmo fornecedor e categoria
+  // vencendo nele. Previsão e obrigação constituída nunca convivem no mesmo mês (pode subestimar, nunca duplica).
+  const constituidos = new Set(p.obrigacoes.map((o) => `${o.contraparteId}|${categoriaDe(o)}|${competenciaDe(o.vencimento)}`));
   const previstas = [];
   const semRegistro = [];
   for (const [chave, lista] of series) {
     const ultima = lista.reduce((a, o) => (o.vencimento > a.vencimento ? o : a));
-    const meses = new Set(lista.map((o) => competenciaDe(o.vencimento)));
+    const meses = { has: (mes) => constituidos.has(`${ultima.contraparteId}|${categoriaDe(ultima)}|${mes}`) };
     const fornecedor = p.contrapartePorId.get(ultima.contraparteId)?.nome ?? null;
     let mes = competenciaDe(ultima.vencimento);
     for (let i = 0; i < 36; i += 1) {
@@ -416,7 +462,11 @@ export function recorrencias(p, hoje, ate) {
       const data = diaNoMes(mes, ultima.recorrencia.diaDoMes);
       if (data > ate && data > hoje) break;
       if (meses.has(mes)) continue;
-      const item = { serie: chave, data, valorCentavos: ultima.valorBaseCentavos, fornecedor, descricao: ultima.descricao, baseadoNoVencimento: ultima.vencimento, estimado: true };
+      // ESTIMATIVA: valor = último valor da série. Não é obrigação, não tem documento e não entra em contas a pagar.
+      const item = {
+        serie: chave, data, valorCentavos: ultima.valorBaseCentavos, fornecedor, descricao: ultima.descricao, baseadoNoVencimento: ultima.vencimento,
+        estimado: true, registro: "PREVISAO_RECORRENTE", base: "ULTIMO_VALOR_DA_SERIE", obrigacaoConstituida: false,
+      };
       if (data <= hoje) semRegistro.push(item);
       else previstas.push(item);
     }

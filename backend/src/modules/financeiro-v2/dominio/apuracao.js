@@ -28,8 +28,15 @@ const S = SITUACAO_INDICADOR;
 export const CANAIS_PRINCIPAIS = Object.freeze(["BALCAO", "IFOOD", "ANOTA_AI"]);
 export const SEM_CANAL = "NAO_IDENTIFICADO";
 
+/**
+ * Despesa "a classificar" (natureza econômica não comprovada) NÃO entra em nenhuma linha: fica fora do resultado,
+ * listada à parte e como pendência, até ser reclassificada (auditoria A.2 da Execução 06B).
+ */
+export const CATEGORIA_FORA_ATE_CLASSIFICAR = "DESPESAS_A_CLASSIFICAR";
+const naDre = (l) => l.categoria !== CATEGORIA_FORA_ATE_CLASSIFICAR;
+
 /** Linhas da DRE: classificações (e natureza) que cada linha soma, e o sinal com que entram no resultado. */
-const LINHAS = [
+const LINHAS_BASE = [
   { codigo: "FATURAMENTO_BRUTO_PROPRIO", nome: "(+) Faturamento Bruto Próprio", sinal: 1, filtro: (l) => l.natureza === N.RECEITA && l.classificacao === K.RECEITA_OPERACIONAL },
   { codigo: "DEDUCOES_COMERCIAIS", nome: "(−) Deduções Comerciais", sinal: -1, filtro: (l) => l.natureza === N.DEDUCAO },
   { codigo: "CUSTOS_OPERACIONAIS", nome: "(−) Custos Operacionais Gerenciais", sinal: -1, filtro: (l) => l.natureza === N.DESPESA && l.classificacao === K.CUSTOS_OPERACIONAIS },
@@ -40,6 +47,7 @@ const LINHAS = [
   { codigo: "RESULTADO_FINANCEIRO", nome: "(+/−) Resultado Financeiro", sinal: 1, filtro: (l) => l.classificacao === K.DESPESAS_FINANCEIRAS && [N.RECEITA, N.DESPESA].includes(l.natureza), assinado: true },
   { codigo: "DEMAIS_EFEITOS_GERENCIAIS", nome: "(+/−) Demais Efeitos Gerenciais", sinal: 1, filtro: (l) => l.classificacao === K.OUTROS_EFEITOS_GERENCIAIS && [N.RECEITA, N.DESPESA].includes(l.natureza), assinado: true },
 ];
+const LINHAS = LINHAS_BASE.map((def) => ({ ...def, filtro: (l) => naDre(l) && def.filtro(l) }));
 /** Valor do lançamento com o sinal da sua natureza (só para linhas "assinadas", que misturam receitas e despesas). */
 const assinado = (l) => (l.natureza === N.RECEITA ? l.valorCentavos : -l.valorCentavos);
 
@@ -100,6 +108,9 @@ export function apurar(d, p) {
   const pendencias = [];
   for (const l of ativos.filter((x) => x.categoria === "DESCONTOS_A_CLASSIFICAR")) {
     pendencias.push({ tipo: "DESCONTO_A_CLASSIFICAR", gravidade: "CLASSIFICACAO", afeta: ["DEDUCOES_COMERCIAIS", "RESULTADO_GERENCIAL"], valorCentavos: l.valorCentavos, lancamentoId: l.id, financiador: l.origem?.financiador ?? null, mensagem: "Desconto com financiador não comprovado: dedução provisória (não prova que a loja suporta o desconto)." });
+  }
+  for (const l of ativos.filter((x) => !naDre(x))) {
+    pendencias.push({ tipo: "DESPESA_A_CLASSIFICAR", gravidade: "CLASSIFICACAO", afeta: ["RESULTADO_GERENCIAL"], valorCentavos: l.valorCentavos, lancamentoId: l.id, mensagem: "Despesa com natureza econômica não comprovada: fica FORA do resultado até ser classificada (não é presumida despesa)." });
   }
   const abertas = ["PROPOSTA", "AGUARDANDO_EVIDENCIA", "AGUARDANDO_REVISAO", "APROVADA"];
   for (const pr of d.propostas.filter((x) => x.competencia === comp && abertas.includes(x.estado))) {
@@ -250,7 +261,7 @@ export function apurar(d, p) {
   const doAgregadoOuVenda = (l) => l.origem?.tipo === TIPO.PROPOSTA || l.origem?.tipo === TIPO.VENDA;
   const canalDe = (l) => (l.canal ? l.canal : (l.natureza === N.RECEITA && l.classificacao === K.RECEITA_OPERACIONAL) || (l.natureza === N.DEDUCAO && doAgregadoOuVenda(l)) ? SEM_CANAL : null);
   const liquidoPorCanal = canais.map((canal) => {
-    const doCanal = ativos.filter((l) => canalDe(l) === canal && l.natureza !== N.PATRIMONIAL);
+    const doCanal = ativos.filter((l) => canalDe(l) === canal && l.natureza !== N.PATRIMONIAL && naDre(l));
     const brutoC = doCanal.filter(LINHAS[0].filtro).reduce((s, l) => somar(s, l.valorCentavos), 0);
     const deducoesC = doCanal.filter((l) => l.natureza === N.DEDUCAO).reduce((s, l) => somar(s, l.valorCentavos), 0);
     const despesasC = doCanal.filter((l) => l.natureza === N.DESPESA);
@@ -316,7 +327,11 @@ export function apurar(d, p) {
   const dre = {
     titulo: "DRE Gerencial — Resultado Gerencial Sem Ajuste de Estoque", competencia: comp, metodologia: METODOLOGIA, estadoDaCompetencia: estadoComp,
     linhas: ["FATURAMENTO_BRUTO_PROPRIO", "DEDUCOES_COMERCIAIS", "RECEITA_LIQUIDA_COMERCIAL", "CUSTOS_OPERACIONAIS", "RESULTADO_APOS_CUSTOS", "DESPESAS_OPERACIONAIS", "RESULTADO_FINANCEIRO", "DEMAIS_EFEITOS_GERENCIAIS", "RESULTADO_GERENCIAL"].map((c) => linhas[c]),
-    foraDoResultado: { patrimoniais: fora.map((l) => ({ lancamentoId: l.id, categoria: l.categoria, valorCentavos: l.valorCentavos })), observacao: "Principal de empréstimo, aportes e imobilizado não entram no resultado." },
+    foraDoResultado: {
+      patrimoniais: fora.map((l) => ({ lancamentoId: l.id, categoria: l.categoria, valorCentavos: l.valorCentavos })),
+      aClassificar: ativos.filter((l) => !naDre(l)).map((l) => ({ lancamentoId: l.id, categoria: l.categoria, descricao: l.descricao ?? null, valorCentavos: l.valorCentavos })),
+      observacao: "Principal de empréstimo, aportes e imobilizado não entram no resultado. Despesas a classificar ficam fora até a natureza ser comprovada.",
+    },
   };
   const entradas = [...ativos.map((l) => [TIPO.LANCAMENTO, l.id, l.versao, l.valorCentavos]), ...pendencias.map((x) => ["PENDENCIA", x.tipo, x.valorCentavos ?? null])].sort((a, b) => (`${a[0]}${a[1]}` < `${b[0]}${b[1]}` ? -1 : 1));
   return {

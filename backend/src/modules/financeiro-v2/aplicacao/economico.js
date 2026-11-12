@@ -5,7 +5,7 @@ import { CODIGO, falhar } from "../dominio/erros.js";
 import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, NATUREZA_LANCAMENTO, SITUACAO_LANCAMENTO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { ratear, somarLista, subtrair } from "../dominio/dinheiro.js";
-import { valorDoLancamentoDeAjuste } from "../dominio/planoDeContas.js";
+import { CATEGORIA_DESPESA_A_CLASSIFICAR, valorDoLancamentoDeAjuste } from "../dominio/planoDeContas.js";
 import { somarMeses } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
 import {
@@ -55,7 +55,8 @@ export function operacoesEconomicas(b) {
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
         await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         await b.exigirDocumentos(tx, cx, c.documentoIds);
-        const categoria = await b.categoriaLancavel(tx, cx, c.categoria);
+        // "A classificar" é categoria do sistema: existe mesmo em plano implantado antes dela (criada sob demanda).
+        const categoria = c.categoria === CATEGORIA_DESPESA_A_CLASSIFICAR ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);
         if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
         }

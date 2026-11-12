@@ -2,6 +2,8 @@
 
 Data: 12/11/2026. Branch local `feat/financeiro-v2-contas-caixa-fluxo`, derivada de `df55fb4`.
 
+> **Revisado na Execução 06B (12/11/2026, auditoria da fundação — doc 12, seção 1):** saldo informado agora tem referência (início ou fim do dia); a categoria provisória passou a ser `DESPESAS_A_CLASSIFICAR`, fora da DRE (não mais `OUTRAS_DESPESAS`); séries recorrentes não usam mais a descrição e mês com título constituído nunca recebe previsão. Os trechos abaixo já refletem a revisão.
+
 > Público: só dados sintéticos. Nada foi publicado; nenhuma rota do aplicativo foi criada ou alterada; produção não foi acessada.
 
 ## 1. Diagnóstico (Fase A)
@@ -39,7 +41,7 @@ Campos desconhecidos são recusados. **Organização e unidade vêm do contexto 
 
 | Operação | Permissão | Regra |
 |---|---|---|
-| `registrarSaldoDeConta` | `registrar` | Saldo **informado** (extrato ou contagem) no início de um dia. Idempotente por conta e dia; um valor diferente no mesmo dia é conflito. Caixa físico não aceita saldo negativo. Nunca é reescrito. |
+| `registrarSaldoDeConta` | `registrar` | Saldo **informado** (extrato ou contagem) com referência `INICIO_DO_DIA` (padrão) ou `FIM_DO_DIA` (desde a 06B). Idempotente por conta, dia e referência; um valor diferente no mesmo dia é conflito. Caixa físico não aceita saldo negativo. Nunca é reescrito. |
 | `abrirCaixa` | `registrar` | Só em conta de caixa físico ativa, com uma sessão aberta por caixa. A abertura precisa ser posterior ao último fechamento e cair em competência editável. |
 | `registrarOperacaoDeCaixa` | `registrar` | Entrada, saída, sangria ou suprimento. Sem conta de contrapartida, gera uma **movimentação sem vínculo**, que fica pendente de classificação. Com conta de contrapartida, gera uma **transferência interna** (ex.: depósito no banco). Tudo numa transação. |
 | `fecharCaixa` | `registrar` | Exige `confirmar: true`. Calcula o teórico, que é a abertura mais as movimentações da conta no período. A diferença entre contado e teórico é registrada e, quando diferente de zero, exige justificativa. **Nenhum ajuste automático.** |
@@ -63,7 +65,7 @@ saldo = valor original − pago (liquidações válidas) + ajustes documentados
 1. CANCELADO, se o título foi cancelado;
 2. PAGO, se o saldo é zero;
 3. VENCIDO, se o vencimento é anterior a hoje e ainda há saldo;
-4. AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA, se a categoria é provisória (`OUTRAS_DESPESAS`);
+4. AGUARDANDO_CLASSIFICACAO_OU_EVIDENCIA, se a categoria é provisória (`DESPESAS_A_CLASSIFICAR` desde a 06B — fora da DRE até ser classificada);
 5. PARCIALMENTE_PAGO, se há pagamento parcial;
 6. EM_ABERTO, nos demais casos.
 
@@ -92,7 +94,7 @@ Stone, iFood e Anota AI são **devedores, não contas**. O recebível só aument
 
 ### Recorrências
 
-A série é identificada por fornecedor, categoria, dia do mês e descrição, e projetada a partir da última obrigação real:
+A série é identificada por fornecedor, categoria e dia do mês (desde a 06B, sem a descrição), e projetada a partir da última obrigação real; mês com qualquer título do mesmo fornecedor e categoria nunca recebe previsão:
 
 - o mês que **já tem** a obrigação real não recebe projeção, o que evita duplicidade;
 - mês **passado** sem registro vira alerta (`recorrenciasSemRegistro`), nunca valor previsto;

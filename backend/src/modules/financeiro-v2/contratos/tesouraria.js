@@ -4,7 +4,7 @@ import { CODIGO, falhar } from "../dominio/erros.js";
 import { CANAL, OPERACAO_CAIXA, PROCESSADOR } from "../dominio/catalogos.js";
 import { exigirCentavos } from "../dominio/dinheiro.js";
 import { diasEntre, exigirCompetencia, exigirData } from "../dominio/tempo.js";
-import { GRANULARIDADE, SITUACAO_A_PAGAR, SITUACAO_A_RECEBER, TIPO_DE_RECEBIVEL } from "../dominio/tesouraria.js";
+import { GRANULARIDADE, REFERENCIA_SALDO, SITUACAO_A_PAGAR, SITUACAO_A_RECEBER, TIPO_DE_RECEBIVEL } from "../dominio/tesouraria.js";
 import { exigirInteiro, exigirTexto, exigirUmDe, exigirUuid, semCamposDesconhecidos, uuidOpcional } from "../dominio/validacao.js";
 
 const MAX_DIAS = 400;
@@ -69,11 +69,16 @@ export function validarDetalheDeTitulo(e = {}) {
   return { id: exigirUuid(e.id, "id") };
 }
 
-/** Saldo INFORMADO de uma conta no início do dia (extrato, contagem). Banco pode estar negativo; caixa físico não. */
+/**
+ * Saldo INFORMADO de uma conta (extrato, contagem) com a REFERÊNCIA do momento: INICIO_DO_DIA (padrão — "saldo anterior")
+ * ou FIM_DO_DIA ("saldo final", já inclui os movimentos do dia). Banco pode estar negativo; caixa físico não.
+ */
 export function validarSaldoDeConta(e) {
-  semCamposDesconhecidos(e, ["contaId", "data", "valorCentavos", "documentoId", "observacao"], "saldoDeConta");
+  semCamposDesconhecidos(e, ["contaId", "data", "referencia", "valorCentavos", "documentoId", "observacao"], "saldoDeConta");
   return {
-    contaId: exigirUuid(e.contaId, "contaId"), data: exigirData(e.data, "data"), valorCentavos: exigirCentavos(e.valorCentavos, "valorCentavos"),
+    contaId: exigirUuid(e.contaId, "contaId"), data: exigirData(e.data, "data"),
+    referencia: e.referencia === undefined ? REFERENCIA_SALDO.INICIO_DO_DIA : exigirUmDe(e.referencia, REFERENCIA_SALDO, "referencia"),
+    valorCentavos: exigirCentavos(e.valorCentavos, "valorCentavos"),
     documentoId: uuidOpcional(e.documentoId, "documentoId"), observacao: exigirTexto(e.observacao, "observacao", { max: 300, opcional: true }),
   };
 }
