@@ -83,3 +83,23 @@ export function criarConcessoesMemoria(lista = []) {
     },
   });
 }
+
+/**
+ * Concessões PERSISTIDAS (registros CONCESSAO gravados por aplicacao/acessos.js), lidas escopo a escopo pela porta de
+ * persistência — no PostgreSQL, cada leitura passa pelo RLS do próprio escopo. Só os escopos configurados da organização
+ * da sessão são consultados; nada vem do cliente.
+ * @param {{repositorio:{leitura:Function}, escopos:Array<{organizacaoId:string, unidadeId:string}>}} deps
+ */
+export function criarConcessoesDoRepositorio({ repositorio, escopos }) {
+  const lista = escopos.map((e) => ({ organizacaoId: e.organizacaoId.toLowerCase(), unidadeId: e.unidadeId.toLowerCase() }));
+  return Object.freeze({
+    async listar({ organizacaoId, usuarioId }) {
+      const saida = [];
+      for (const escopo of lista.filter((e) => e.organizacaoId === organizacaoId)) {
+        const c = await repositorio.leitura((tx) => tx.buscarPorChave(escopo, "CONCESSAO", `concessao:${usuarioId}`), { escopo });
+        if (c && c.situacao === "ATIVA" && c.usuarioId === usuarioId) saida.push({ unidadeId: escopo.unidadeId, acoes: [...c.acoes] });
+      }
+      return saida;
+    },
+  });
+}

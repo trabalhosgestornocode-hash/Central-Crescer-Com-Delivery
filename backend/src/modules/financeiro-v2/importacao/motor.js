@@ -14,7 +14,8 @@
 import { createHash } from "node:crypto";
 import { CODIGO, ErroFinanceiro } from "../dominio/erros.js";
 import { somar } from "../dominio/dinheiro.js";
-import { centavos, dataHora, decodificar, erroDeLinha, lerTabela, localizarCabecalho, rotulo } from "./leitor.js";
+import { centavos, dataHora, decodificar, erroDeLinha, localizarCabecalho, rotulo } from "./leitor.js";
+import { FORMATO, detectarFormato, paraTabelas } from "./formatos/index.js";
 
 export const sha256 = (texto) => createHash("sha256").update(texto).digest("hex");
 
@@ -35,6 +36,9 @@ export const ERRO = Object.freeze({
   UNIDADE_INCOMPATIVEL: "UNIDADE_INCOMPATIVEL",
   CONFLITO_NO_ARQUIVO: "CONFLITO_NO_ARQUIVO",
   CATEGORIA_DESCONHECIDA: "CATEGORIA_DESCONHECIDA",
+  FORMATO_NAO_SUPORTADO: "FORMATO_NAO_SUPORTADO",
+  PDF_DIGITALIZADO: "PDF_DIGITALIZADO",
+  PDF_INCOMPLETO: "PDF_INCOMPLETO",
 });
 
 export const DIVERGENCIA = Object.freeze({
@@ -44,6 +48,8 @@ export const DIVERGENCIA = Object.freeze({
   ESTABELECIMENTO_NAO_VERIFICADO: "ESTABELECIMENTO_NAO_VERIFICADO",
   VALOR_A_CLASSIFICAR: "VALOR_A_CLASSIFICAR",
   CONFLITO_COM_IMPORTADO: "CONFLITO_COM_IMPORTADO",
+  LEITURA_INCOMPLETA: "LEITURA_INCOMPLETA",
+  ANOMALIA_DE_PLANILHA: "ANOMALIA_DE_PLANILHA",
 });
 
 export const diferenca = (codigo, mensagem, esperadoCentavos, encontradoCentavos, extra = {}) => ({
@@ -89,10 +95,34 @@ export function analisarArquivo({ bytes, adaptador, periodo, estabelecimentosDaU
   const base = { fonte: adaptador.fonte, tipoRelatorio: adaptador.tipoRelatorio, compatibilidade: adaptador.compatibilidade };
   const rejeitar = (erros) => ({ ...base, reconhecido: false, erros, divergencias: [], registros: [], duplicadosNoArquivo: [], controles: {}, estabelecimentos: [] });
 
-  const texto = decodificar(bytes);
-  if (!texto.trim()) return rejeitar([erroDeLinha(ERRO.ARQUIVO_VAZIO, "Arquivo vazio.", null)]);
-  const { linhas } = lerTabela(texto);
-  const cab = localizarCabecalho(linhas, adaptador.colunas);
+  if (!bytes.byteLength || !decodificar(bytes.subarray(0, 4096)).trim()) return rejeitar([erroDeLinha(ERRO.ARQUIVO_VAZIO, "Arquivo vazio.", null)]);
+  const formato = detectarFormato(bytes);
+  const aceitos = adaptador.formatos ?? [FORMATO.CSV, FORMATO.XLSX];
+  if (!aceitos.includes(formato)) {
+    return rejeitar([erroDeLinha(ERRO.FORMATO_NAO_SUPORTADO, `Formato "${formato}" não é aceito para ${adaptador.descricao} (aceitos: ${aceitos.join(", ")}).`, null)]);
+  }
+  let convertido;
+  try {
+    convertido = paraTabelas(bytes, formato, adaptador, periodo);
+  } catch (e) {
+    if (!(e instanceof ErroFinanceiro)) throw e;
+    return rejeitar([erroDeLinha(ERRO.FORMATO_NAO_RECONHECIDO, e.message, null)]);
+  }
+  const doc = convertido.documento;
+  if (formato === FORMATO.PDF && doc?.digitalizado) {
+    return rejeitar([erroDeLinha(ERRO.PDF_DIGITALIZADO, "PDF digitalizado (imagem sem texto): não há OCR automático. O arquivo foi preservado; envie o PDF digital ou o OFX.", null)]);
+  }
+  if (formato === FORMATO.PDF && doc?.incompleto) {
+    return rejeitar([erroDeLinha(ERRO.PDF_INCOMPLETO, `PDF incompleto: ${doc.paginas.length} página(s) lida(s) de ${doc.paginasDeclaradas ?? "?"} declarada(s) ou página corrompida.`, null)]);
+  }
+  let linhas = [];
+  let cab = { indice: -1, faltando: Object.keys(adaptador.colunas) };
+  let aba = null;
+  for (const t of convertido.tabelas) {
+    const c = localizarCabecalho(t.linhas, adaptador.colunas);
+    if (c.indice >= 0 && !c.faltando.length) { linhas = t.linhas; cab = c; aba = t.nome; break; }
+    if (c.faltando.length < cab.faltando.length) cab = c;
+  }
   if (cab.indice < 0 || cab.faltando.length) {
     return rejeitar([erroDeLinha(ERRO.FORMATO_NAO_RECONHECIDO,
       `O arquivo não tem o formato esperado de ${adaptador.descricao}. Colunas ausentes: ${cab.faltando.join(", ")}.`, null)]);
@@ -170,7 +200,9 @@ export function analisarArquivo({ bytes, adaptador, periodo, estabelecimentosDaU
   }
   const fechamento = adaptador.fechar ? adaptador.fechar(registros, { declarados, periodo }) : { controles: {}, divergencias: [] };
   erros.push(...(fechamento.erros ?? []));
-  const divergencias = [...fechamento.divergencias];
+  const divergencias = [...fechamento.divergencias, ...convertido.avisos.map((a) => ({
+    codigo: a.codigo === "LINHA_NAO_INTERPRETADA" ? DIVERGENCIA.LEITURA_INCOMPLETA : DIVERGENCIA.ANOMALIA_DE_PLANILHA, mensagem: a.mensagem, linha: a.linha ?? null,
+  }))];
 
   // Estabelecimento: o arquivo precisa ser DA unidade. Sem cadastro para comparar, a dúvida vira pendência explícita.
   const estabelecimentos = [...new Set(registros.map((r) => r.dados.estabelecimento).filter(Boolean))].sort();
@@ -184,8 +216,11 @@ export function analisarArquivo({ bytes, adaptador, periodo, estabelecimentosDaU
   }
 
   return {
-    ...base, reconhecido: true, erros, divergencias, registros, duplicadosNoArquivo, estabelecimentos,
-    controles: { linhasLidas: brutos.length, registros: registros.length, porTipo, declarados, ...fechamento.controles },
+    ...base, reconhecido: true, formato, aba, erros, divergencias, registros, duplicadosNoArquivo, estabelecimentos,
+    controles: {
+      linhasLidas: brutos.length, registros: registros.length, porTipo, declarados, ...fechamento.controles,
+      ...(doc?.paginas ? { paginas: doc.paginas.length, paginasDeclaradas: doc.paginasDeclaradas } : {}),
+    },
   };
 }
 

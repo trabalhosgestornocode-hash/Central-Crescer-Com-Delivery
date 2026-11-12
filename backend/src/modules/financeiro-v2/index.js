@@ -6,7 +6,7 @@ export { criarRepositorioPostgres } from "./infra/postgres/repositorioPostgres.j
 export { comprovarDestinoIsolado, exigirDestinoLocal } from "./infra/postgres/destinoSeguro.js";
 export { criarCofreMemoria } from "./infra/cofreMemoria.js";
 export { criarCofreDisco, criarRegistroDeAcessosNegadosEmDisco, criarRegistroDeAcessosNegadosMemoria, exigirPastaPrivada } from "./infra/cofreDisco.js";
-export { criarAdaptadorDeSessao, criarConcessoesMemoria } from "./aplicacao/sessao.js";
+export { criarAdaptadorDeSessao, criarConcessoesDoRepositorio, criarConcessoesMemoria } from "./aplicacao/sessao.js";
 export { FONTES_PADRAO, criarRegistroDeFontes } from "./importacao/fontes/index.js";
 export { analisarArquivo } from "./importacao/motor.js";
 export { proporCandidatas } from "./importacao/correspondencias.js";

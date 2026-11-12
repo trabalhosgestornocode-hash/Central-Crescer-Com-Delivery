@@ -83,6 +83,8 @@ export function centavos(texto, campo) {
   const t = String(texto ?? "").replace(/\s+/g, " ").trim();
   if (!t) throw new ErroFinanceiro(CODIGO.VALOR_INVALIDO, `${campo} vazio.`, { campo });
   if (/^-?\d{1,15}\.\d{1,2}$/.test(t)) return centavosDeTextoBR(t.replace(".", ","), campo);
+  // "20.005" sem vírgula é AMBÍGUO (20 mil e 5? 20 reais e meio centavo de planilha?): nunca se adivinha.
+  if (/^-?\d{1,3}\.\d{3}$/.test(t) || /^-?\d+\.\d{3,}$/.test(t)) throw new ErroFinanceiro(CODIGO.VALOR_INVALIDO, `${campo} ambíguo ou com mais de 2 casas decimais.`, { campo });
   return centavosDeTextoBR(t, campo);
 }
 

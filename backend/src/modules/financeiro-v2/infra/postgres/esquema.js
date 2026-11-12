@@ -122,6 +122,10 @@ export const ESQUEMA = Object.freeze({
     dados: c("dados", "json"), original: c("original", "json"), conferencia: c("conferencia"), situacao: c("situacao"),
     substituidoPorImportacaoId: c("substituido_por_importacao_id", "uuid"),
   }),
+  [TIPO.CONCESSAO]: tabela("fv2_concessao", {
+    usuarioId: c("usuario_id", "uuid"), acoes: c("acoes", "json"), situacao: c("situacao"), concedidoPor: c("concedido_por", "uuid"),
+    justificativa: c("justificativa"),
+  }),
   [TIPO.COMPETENCIA]: tabela("fv2_competencia", {
     competencia: c("competencia"), estado: c("estado"), metodologia: c("metodologia"), pendencias: c("pendencias", "json"),
     revisoes: c("revisoes", "inteiro"), decididoPor: c("decidido_por", "uuid"), decididoEm: c("decidido_em", "instante"),

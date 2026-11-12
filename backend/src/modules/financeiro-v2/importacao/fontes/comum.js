@@ -31,4 +31,4 @@ export function formaDePagamento(texto) {
   ]);
 }
 
-export const definirFonte = (def) => Object.freeze({ compatibilidade: COMPATIBILIDADE.SINTETICA, ...def });
+export const definirFonte = (def) => Object.freeze({ compatibilidade: COMPATIBILIDADE.SINTETICA, formatos: Object.freeze(["csv", "xlsx"]), ...def });

@@ -34,6 +34,76 @@ function valorComSentido(u) {
   return { texto, sentido: sentido ?? "ENTRADA" };
 }
 
+// ------------------------------------------------------------------------------------------- PDF e OFX → tabela
+const CABECALHO = ["Data", "Histórico", "Documento", "Valor", "Saldo", "Identificador", "Página"];
+const VALOR = String.raw`-?\d{1,3}(?:\.\d{3})*,\d{2}(?:\s?[CD]\b|-)?`;
+const FIM_COM_VALORES = new RegExp(String.raw`^(.*?)\s+(${VALOR})(?:\s+(${VALOR}))?$`);
+const RUIDO = /^(p[aá]g(ina)?\.?\s*\d|data\s|hist[oó]rico|extrato|cooperativ|ag[eê]ncia|conta\s|per[ií]odo|cnpj|cpf|lan[cç]amentos|valor\s|saldo\s*\(|total\b|emitido|ouvidoria|sac\b)/i;
+
+function dataComAno(ddmm, periodo) {
+  const [d, m, a] = ddmm.split("/");
+  const ano = a ? (a.length === 2 ? `20${a}` : a) : periodo.inicio.slice(0, 4);
+  return `${ano}-${m}-${d}`;
+}
+
+/**
+ * Linhas de texto do PDF → tabela do extrato. Layout esperado (a confirmar com a amostra real): data no início da linha,
+ * descrição, valor e (opcional) saldo no fim. Descrição quebrada em várias linhas é juntada à movimentação anterior;
+ * linha de valores sem data herda a data anterior; o que não se encaixa vira aviso (nunca é descartado em silêncio).
+ */
+export function tabelaDoPdf(documento, periodo) {
+  const linhas = [CABECALHO];
+  const avisos = [];
+  let ultima = null;
+  let pendente = null;
+  let ultimaData = null;
+  for (const pagina of documento.paginas) {
+    for (const texto of pagina.linhas) {
+      const h = rotulo(texto);
+      const comData = /^(\d{2}\/\d{2}(?:\/\d{2,4})?)\s+(.*)$/.exec(texto);
+      const resto = comData ? comData[2] : texto;
+      const valores = FIM_COM_VALORES.exec(resto);
+      if (/^saldo/.test(rotulo(resto)) || /^saldo/.test(h)) {
+        if (valores) linhas.push([comData ? dataComAno(comData[1], periodo) : periodo.inicio, valores[1].trim(), "", "", (valores[3] ?? valores[2]).trim(), "", String(pagina.numero)]);
+        ultima = null;
+        continue;
+      }
+      if (comData) ultimaData = dataComAno(comData[1], periodo);
+      if (valores && (comData || ultimaData)) {
+        const descricao = [pendente?.descricao, valores[1].trim()].filter(Boolean).join(" ");
+        ultima = [comData ? ultimaData : (pendente?.data ?? ultimaData), descricao, "", valores[2].trim(), (valores[3] ?? "").trim(), "", String(pagina.numero)];
+        linhas.push(ultima);
+        pendente = null;
+        continue;
+      }
+      if (comData && !valores) { pendente = { data: ultimaData, descricao: resto.trim() }; ultima = null; continue; }
+      if (RUIDO.test(texto)) continue;
+      if (ultima) { ultima[1] = `${ultima[1]} ${texto.trim()}`; continue; }
+      if (pendente) { pendente.descricao = `${pendente.descricao} ${texto.trim()}`; continue; }
+      avisos.push({ codigo: "LINHA_NAO_INTERPRETADA", mensagem: `Página ${pagina.numero}: linha não interpretada.`, linha: null });
+    }
+  }
+  if (pendente) avisos.push({ codigo: "LINHA_NAO_INTERPRETADA", mensagem: "Movimentação sem valor ao fim do documento.", linha: null });
+  const declaradas = documento.paginas.flatMap((p) => p.linhas).map((l) => /p[aá]gina\s+\d+\s+de\s+(\d+)/i.exec(l)?.[1]).find(Boolean);
+  if (declaradas && Number(declaradas) !== documento.paginas.length) {
+    avisos.push({ codigo: "LINHA_NAO_INTERPRETADA", mensagem: `O rodapé indica ${declaradas} página(s), o arquivo tem ${documento.paginas.length}.`, linha: null });
+  }
+  return { linhas, avisos };
+}
+
+/** OFX → tabela do extrato. O saldo do OFX só vira saldo FINAL se for da data de fim do período. */
+export function tabelaDoOfx(ofx, periodo) {
+  const linhas = [CABECALHO];
+  for (const t of ofx.transacoes) {
+    linhas.push([t.data ?? "", [t.nome, t.memo].filter(Boolean).join(" — ") || (t.tipo ?? ""), t.documento ?? "", t.valor ?? "", "", t.fitid ?? "", ""]);
+  }
+  if (ofx.saldo?.valor) {
+    const fim = ofx.fim ?? periodo.fim;
+    linhas.push([ofx.saldo.em ?? "", ofx.saldo.em === fim ? "SALDO FINAL" : "SALDO ATUAL", "", "", ofx.saldo.valor, "", ""]);
+  }
+  return { linhas, avisos: [] };
+}
+
 export const UNICRED_EXTRATO = definirFonte({
   fonte: "UNICRED",
   tipoRelatorio: "UNICRED_EXTRATO",
@@ -46,7 +116,12 @@ export const UNICRED_EXTRATO = definirFonte({
     valor: col(["Valor", "Valor (R$)"]),
     tipo: col(["Tipo", "C/D", "D/C"], false),
     saldo: col(["Saldo", "Saldo (R$)"], false),
+    identificador: col(["Identificador", "FITID", "ID da transação"], false),
+    pagina: col(["Página"], false),
   },
+  formatos: Object.freeze(["csv", "xlsx", "pdf", "ofx"]),
+  tabelaDoPdf,
+  tabelaDoOfx,
   // Linhas de saldo (anterior/final) não são movimento: viram controle.
   ehTotal: (u) => /^saldo/.test(rotulo(u.bruto("historico"))),
   lerTotal(u) {
@@ -55,7 +130,9 @@ export const UNICRED_EXTRATO = definirFonte({
     const valor = u.valor(campo);
     if (valor === null) return null;
     if (/anterior|inicial/.test(h)) return { tipo: "SALDO_INICIAL", valorCentavos: valor };
-    if (/final|atual/.test(h)) return { tipo: "SALDO_FINAL", valorCentavos: valor };
+    // "Saldo atual/disponível" é a posição NA DATA DE EMISSÃO (pode ser posterior ao período): nunca substitui o final.
+    if (/atual|disponivel/.test(h)) return { tipo: "SALDO_ATUAL", valorCentavos: valor };
+    if (/final|do periodo/.test(h)) return { tipo: "SALDO_FINAL", valorCentavos: valor };
     return null;
   },
   converter(u) {
@@ -74,10 +151,10 @@ export const UNICRED_EXTRATO = definirFonte({
     }
     if (u.erros.length) return null;
     return {
-      tipoRegistro: "LANCAMENTO_BANCARIO", idExterno: null, data, valorCentavos: valor,
+      tipoRegistro: "LANCAMENTO_BANCARIO", idExterno: u.bruto("identificador") || null, data, valorCentavos: valor,
       dados: {
         sentido, historico, documento: u.bruto("documento") || null, saldoAposCentavos: saldo, categoriaSugerida: categoriaBancaria(historico, sentido),
-        classificacaoConfirmada: false,
+        classificacaoConfirmada: false, pagina: u.bruto("pagina") ? Number(u.bruto("pagina")) : null,
       },
       identidade: { data, historico: rotulo(historico), documento: u.bruto("documento"), valor, sentido, saldo },
     };
@@ -109,6 +186,7 @@ export const UNICRED_EXTRATO = definirFonte({
       controles: {
         saldoInicialCentavos: inicial, entradasCentavos: entradas, saidasCentavos: saidas, saldoFinalCentavos: final, saldoCalculadoCentavos: calculado,
         saldoFecha: calculado !== null && final !== null && calculado === final,
+        saldoAtualCentavos: declarados.find((d) => d.tipo === "SALDO_ATUAL")?.valorCentavos ?? null,
         observacao: "Fechar o saldo comprova só a consistência aritmética do extrato, não a classificação dos movimentos.",
       },
       divergencias,

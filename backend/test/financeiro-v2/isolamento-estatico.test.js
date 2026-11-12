@@ -25,7 +25,12 @@ test("o módulo existe e tem as camadas previstas", () => {
 });
 
 // Exceção única e explícita: o cofre LOCAL em disco precisa do sistema de arquivos (Execução 02).
-const PERMITIDOS_POR_ARQUIVO = Object.freeze({ "infra/cofreDisco.js": ["node:fs", "node:path"] });
+const PERMITIDOS_POR_ARQUIVO = Object.freeze({
+  "infra/cofreDisco.js": ["node:fs", "node:path"],
+  // Leitores próprios de XLSX e PDF (Execução 02B): só descompactação, sem dependência externa.
+  "importacao/formatos/xlsx.js": ["node:zlib"],
+  "importacao/formatos/pdf.js": ["node:zlib"],
+});
 
 test("nenhum arquivo importa algo de fora da pasta do módulo (só node:crypto; node:fs/node:path só no cofre em disco)", () => {
   const ruins = [];

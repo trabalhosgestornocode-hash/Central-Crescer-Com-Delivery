@@ -7,7 +7,7 @@ const enumerar = (...valores) => Object.freeze(Object.fromEntries(valores.map((v
 export const TIPO = enumerar(
   "CONTA", "CONTRAPARTE", "LANCAMENTO", "VENDA", "OBRIGACAO", "RECEBIVEL", "MOVIMENTACAO", "LIQUIDACAO",
   "TRANSFERENCIA", "AJUSTE", "DOCUMENTO", "VINCULO_DOCUMENTAL", "CORRESPONDENCIA", "COMPETENCIA",
-  "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO", "IMPORTACAO", "REGISTRO_FONTE",
+  "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO", "IMPORTACAO", "REGISTRO_FONTE", "CONCESSAO",
 );
 
 /** Conta financeira = onde o dinheiro DA EMPRESA está. Processadores (Stone, iFood, vales) NÃO são contas: geram recebíveis. */
@@ -120,6 +120,8 @@ export const ESTADO_IMPORTACAO = enumerar(
 /** Conferência de cada registro importado — independe do estado da importação. */
 export const CONFERENCIA_REGISTRO = enumerar("NAO_CONFERIDO", "CONFERIDO", "DIVERGENTE");
 export const SITUACAO_REGISTRO_FONTE = enumerar("ATIVO", "SUBSTITUIDO");
+/** Liberação de acesso financeiro_v2.* de um usuário numa unidade. */
+export const SITUACAO_CONCESSAO = enumerar("ATIVA", "REVOGADA");
 
 export const ESTADO_COMPETENCIA = enumerar("ABERTA", "FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO");
 
