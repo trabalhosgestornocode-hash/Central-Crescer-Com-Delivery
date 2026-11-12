@@ -16,6 +16,7 @@ export const ACAO = Object.freeze({
   HOMOLOGAR: "financeiro_v2.homologar",
   REVISAR: "financeiro_v2.revisar",
   CONFIGURAR: "financeiro_v2.configurar",
+  IMPORTAR: "financeiro_v2.importar",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

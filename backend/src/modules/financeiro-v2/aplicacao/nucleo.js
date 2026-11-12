@@ -8,6 +8,9 @@ import { operacoesDeCompetencia } from "./competencias.js";
 import { operacoesDeConciliacao } from "./conciliacao.js";
 import { operacoesDeDocumentos } from "./documentos.js";
 import { operacoesEconomicas } from "./economico.js";
+import { operacoesDeImportacao } from "./importacoes.js";
+import { criarRegistroDeFontes } from "../importacao/fontes/index.js";
+import { criarRegistroDeAcessosNegadosMemoria } from "../infra/cofreDisco.js";
 import { operacoesDePlano } from "./plano.js";
 import { operacoesDeVendas } from "./vendas.js";
 
@@ -18,8 +21,15 @@ import { operacoesDeVendas } from "./vendas.js";
  * @param {() => Date} [deps.relogio]
  * @param {() => string} [deps.gerarId]
  * @param {string} [deps.fuso] fuso da data civil da operação
+ * @param {object} [deps.cofre] cofre PRIVADO de documentos (contratos/cofre.js); sem ele, importações ficam indisponíveis
+ * @param {object} [deps.fontes] registro de adaptadores de fonte (padrão: todos os da Execução 02)
+ * @param {(escopo:object, fonte:string) => string[]|null} [deps.estabelecimentosDaUnidade] códigos de estabelecimento de cada unidade
+ * @param {{registrar:Function}} [deps.acessosNegados] onde registrar tentativas de leitura negadas (padrão: memória)
  */
-export function criarNucleoFinanceiro({ repositorio, escoposAutorizados, relogio = () => new Date(), gerarId = randomUUID, fuso = "America/Sao_Paulo" }) {
+export function criarNucleoFinanceiro({
+  repositorio, escoposAutorizados, relogio = () => new Date(), gerarId = randomUUID, fuso = "America/Sao_Paulo",
+  cofre = null, fontes = criarRegistroDeFontes(), estabelecimentosDaUnidade = null, acessosNegados = criarRegistroDeAcessosNegadosMemoria(),
+}) {
   exigirRepositorio(repositorio);
   const politica = criarPoliticaDeEscopo(escoposAutorizados);
   const base = criarBase({ repositorio, politica, relogio, gerarId, fuso });
@@ -30,6 +40,7 @@ export function criarNucleoFinanceiro({ repositorio, escoposAutorizados, relogio
     ...operacoesDeCaixa(base),
     ...operacoesDeDocumentos(base),
     ...operacoesDeConciliacao(base),
+    ...operacoesDeImportacao(base, { cofre, fontes, estabelecimentosDaUnidade, acessosNegados }),
     ...operacoesDeCompetencia(base, { repositorio, politica }),
   };
   // Toda operação é assíncrona e falha por rejeição (nunca por exceção síncrona), inclusive erros de validação.

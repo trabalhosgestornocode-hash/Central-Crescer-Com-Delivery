@@ -19,16 +19,19 @@ const importsDe = (codigo) => [...codigo.matchAll(/(?:import|export)\s[^;]*?from
 
 test("o módulo existe e tem as camadas previstas", () => {
   const nomes = arquivos.map(nome);
-  for (const esperado of ["index.js", "dominio/dinheiro.js", "dominio/contexto.js", "dominio/indicadores.js", "dominio/planoDeContas.js", "contratos/comandos.js", "contratos/repositorio.js", "contratos/cofre.js", "aplicacao/nucleo.js", "infra/repositorioMemoria.js", "infra/cofreMemoria.js", "infra/postgres/repositorioPostgres.js", "infra/postgres/destinoSeguro.js"]) {
+  for (const esperado of ["index.js", "dominio/dinheiro.js", "dominio/contexto.js", "dominio/indicadores.js", "dominio/planoDeContas.js", "contratos/comandos.js", "contratos/repositorio.js", "contratos/cofre.js", "aplicacao/nucleo.js", "infra/repositorioMemoria.js", "infra/cofreMemoria.js", "infra/postgres/repositorioPostgres.js", "infra/postgres/destinoSeguro.js", "infra/cofreDisco.js", "aplicacao/sessao.js", "aplicacao/importacoes.js", "importacao/motor.js", "importacao/leitor.js", "importacao/correspondencias.js", "contratos/importacao.js"]) {
     assert.ok(nomes.includes(esperado), esperado);
   }
 });
 
-test("nenhum arquivo importa algo de fora da pasta do módulo (só node:crypto é permitido)", () => {
+// Exceção única e explícita: o cofre LOCAL em disco precisa do sistema de arquivos (Execução 02).
+const PERMITIDOS_POR_ARQUIVO = Object.freeze({ "infra/cofreDisco.js": ["node:fs", "node:path"] });
+
+test("nenhum arquivo importa algo de fora da pasta do módulo (só node:crypto; node:fs/node:path só no cofre em disco)", () => {
   const ruins = [];
   for (const p of arquivos) {
     for (const alvo of importsDe(ler(p))) {
-      if (alvo === "node:crypto") continue;
+      if (alvo === "node:crypto" || (PERMITIDOS_POR_ARQUIVO[nome(p)] ?? []).includes(alvo)) continue;
       const interno = alvo.startsWith(".") && resolve(dirname(p), alvo).startsWith(join(raiz, "/"));
       if (!interno) ruins.push(`${nome(p)} → ${alvo}`);
     }

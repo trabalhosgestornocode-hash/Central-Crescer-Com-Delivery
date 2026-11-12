@@ -106,6 +106,21 @@ export const ESQUEMA = Object.freeze({
     ladoA: c("lado_a", "json"), ladoB: c("lado_b", "json"), evidenciaDocumentoIds: c("evidencia_documento_ids", "uuids"), justificativa: c("justificativa"),
     diferencaCentavos: c("diferenca_centavos", "centavos"), situacao: c("situacao"), responsavelId: c("responsavel_id", "uuid"),
     decididoEm: c("decidido_em", "instante"), justificativaDecisao: c("justificativa_decisao"),
+    relacao: c("relacao"), regra: c("regra"), forca: c("forca"),
+  }),
+  [TIPO.IMPORTACAO]: tabela("fv2_importacao", {
+    fonte: c("fonte"), tipoRelatorio: c("tipo_relatorio"), formato: c("formato"), documentoId: c("documento_id", "uuid"),
+    periodoInicio: c("periodo_inicio", "data"), periodoFim: c("periodo_fim", "data"), estado: c("estado"), compatibilidade: c("compatibilidade"),
+    previa: c("previa", "json"), impressaoPrevia: c("impressao_previa"), relatorio: c("relatorio", "json"),
+    substituiImportacaoId: c("substitui_importacao_id", "uuid"), substituidaPorId: c("substituida_por_id", "uuid"),
+    confirmadoPor: c("confirmado_por", "uuid"), confirmadoEm: c("confirmado_em", "instante"), justificativa: c("justificativa"),
+  }),
+  [TIPO.REGISTRO_FONTE]: tabela("fv2_registro_fonte", {
+    importacaoId: c("importacao_id", "uuid"), documentoId: c("documento_id", "uuid"), fonte: c("fonte"), tipoRelatorio: c("tipo_relatorio"),
+    tipoRegistro: c("tipo_registro"), idExterno: c("id_externo"), identificacao: c("identificacao"), linha: c("linha", "inteiro"),
+    dataReferencia: c("data_referencia", "data"), competencia: c("competencia"), valorCentavos: c("valor_centavos", "centavos"),
+    dados: c("dados", "json"), original: c("original", "json"), conferencia: c("conferencia"), situacao: c("situacao"),
+    substituidoPorImportacaoId: c("substituido_por_importacao_id", "uuid"),
   }),
   [TIPO.COMPETENCIA]: tabela("fv2_competencia", {
     competencia: c("competencia"), estado: c("estado"), metodologia: c("metodologia"), pendencias: c("pendencias", "json"),

@@ -2,7 +2,7 @@
 // (ex.: um repasse no extrato ↔ vários recebíveis; uma venda ↔ a transação do processador).
 // Nesta execução NÃO há conciliação automática: candidatas são criadas e decididas por uma pessoa responsável.
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { EVENTO_HISTORICO, SITUACAO_CONCILIACAO, SITUACAO_CORRESPONDENCIA as S, SITUACAO_MOVIMENTACAO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
+import { EVENTO_HISTORICO, RELACAO_CORRESPONDENCIA, SITUACAO_CONCILIACAO, SITUACAO_CORRESPONDENCIA as S, SITUACAO_MOVIMENTACAO, SITUACAO_REGISTRO_FONTE, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { validarCorrespondencia, validarDecisaoConciliacao } from "../contratos/comandos.js";
@@ -11,6 +11,7 @@ import { validarCorrespondencia, validarDecisaoConciliacao } from "../contratos/
 function valorConciliavel(tipo, r) {
   if (tipo === TIPO.MOVIMENTACAO) return r.valorCentavos;
   if (tipo === TIPO.VENDA) return r.brutoCentavos;
+  if (tipo === TIPO.REGISTRO_FONTE) return Math.abs(r.valorCentavos);
   return r.valorBaseCentavos; // OBRIGACAO, RECEBIVEL
 }
 
@@ -20,7 +21,7 @@ export function operacoesDeConciliacao(b) {
   async function carregar(tx, ctx, ref) {
     const r = await b.obterOuFalhar(tx, ctx, ref.tipo, ref.id, "Registro da correspondência");
     // "CANCELADA" vale para título e venda; movimentação anulada fica "ESTORNADA".
-    if (r.situacao === SITUACAO_TITULO.CANCELADA || r.situacao === SITUACAO_MOVIMENTACAO.ESTORNADA) {
+    if (r.situacao === SITUACAO_TITULO.CANCELADA || r.situacao === SITUACAO_MOVIMENTACAO.ESTORNADA || r.situacao === SITUACAO_REGISTRO_FONTE.SUBSTITUIDO) {
       falhar(CODIGO.CONCILIACAO_INVALIDA, "Registro cancelado ou estornado não pode ser conciliado.");
     }
     if (ref.valorCentavos > valorConciliavel(ref.tipo, r)) {
@@ -38,10 +39,25 @@ export function operacoesDeConciliacao(b) {
     const c = validarDecisaoConciliacao(entrada);
     return b.executar(ctx, ACAO.CONCILIAR, async (cx, tx) => {
       const corr = await b.obterOuFalhar(tx, cx, TIPO.CORRESPONDENCIA, c.correspondenciaId, "Correspondência");
-      if (corr.situacao !== S.CANDIDATA) falhar(CODIGO.CONCILIACAO_INVALIDA, "Esta correspondência já foi decidida.", { situacao: corr.situacao });
+      if (corr.situacao !== S.CANDIDATA && corr.situacao !== S.AGUARDANDO_DOCUMENTO) falhar(CODIGO.CONCILIACAO_INVALIDA, "Esta correspondência já foi decidida.", { situacao: corr.situacao });
       const mudancas = await fn(cx, tx, corr, c);
       return b.alterar(tx, cx, TIPO.CORRESPONDENCIA, corr, { ...mudancas, responsavelId: cx.usuarioId, decididoEm: b.agora(), justificativaDecisao: c.justificativa }, EVENTO_HISTORICO.CONCILIACAO, c.justificativa);
     });
+  }
+
+  /**
+   * Candidata proposta por regra automática que disputa um registro com outra candidata em aberto DA MESMA RELAÇÃO é
+   * AMBÍGUA (relações diferentes formam uma cadeia — transação → recebimento → crédito — e não competem entre si):
+   * não se confirma por "escolha da máquina" — as concorrentes precisam ser rejeitadas antes, com justificativa.
+   */
+  async function exigirSemAmbiguidade(tx, ctx, corr) {
+    if (!corr.relacao || corr.relacao === RELACAO_CORRESPONDENCIA.MANUAL) return;
+    const meus = new Set(refs(corr).map((r) => `${r.tipo}:${r.id}`));
+    const abertas = await tx.listar(ctx, TIPO.CORRESPONDENCIA, { onde: { relacao: corr.relacao }, predicado: (x) => x.id !== corr.id && (x.situacao === S.CANDIDATA || x.situacao === S.AGUARDANDO_DOCUMENTO) });
+    const concorrentes = abertas.filter((x) => refs(x).some((r) => meus.has(`${r.tipo}:${r.id}`)));
+    if (concorrentes.length) {
+      falhar(CODIGO.CONCILIACAO_INVALIDA, "Correspondência ambígua: outras candidatas disputam os mesmos registros. Rejeite-as com justificativa antes de confirmar.", { concorrentes: concorrentes.length });
+    }
   }
 
   return {
@@ -52,13 +68,14 @@ export function operacoesDeConciliacao(b) {
         for (const ref of refs(c)) await carregar(tx, cx, ref);
         for (const id of c.evidenciaDocumentoIds) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, id, "Documento de evidência");
         const diferencaCentavos = subtrair(somarLista(c.ladoA, (r) => r.valorCentavos), somarLista(c.ladoB, (r) => r.valorCentavos));
-        return b.criar(tx, cx, TIPO.CORRESPONDENCIA, { ...c, diferencaCentavos, situacao: S.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null });
+        return b.criar(tx, cx, TIPO.CORRESPONDENCIA, { ...c, diferencaCentavos, situacao: S.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null, relacao: RELACAO_CORRESPONDENCIA.MANUAL, regra: null, forca: null });
       });
     },
 
     /** Só confirma quando os lados FECHAM e nenhum registro fica conciliado acima do próprio valor. */
     confirmarConciliacao(ctx, entrada) {
       return decidir(ctx, entrada, async (cx, tx, corr) => {
+        await exigirSemAmbiguidade(tx, cx, corr);
         if (corr.diferencaCentavos !== 0) {
           falhar(CODIGO.CONCILIACAO_INVALIDA, "Os lados não fecham. Registre a divergência em vez de confirmar.", { diferencaCentavos: corr.diferencaCentavos });
         }
@@ -81,6 +98,15 @@ export function operacoesDeConciliacao(b) {
         if (corr.diferencaCentavos === 0) falhar(CODIGO.CONCILIACAO_INVALIDA, "Não há diferença entre os lados.");
         if (!c.justificativa) falhar(CODIGO.CONCILIACAO_INVALIDA, "Divergência exige justificativa.");
         return { situacao: S.DIVERGENTE };
+      });
+    },
+
+    /** Hipótese plausível, mas falta o documento que a comprove: fica parada, com justificativa, até ele chegar. */
+    marcarAguardandoDocumento(ctx, entrada) {
+      return decidir(ctx, entrada, async (_cx, _tx, corr, c) => {
+        if (corr.situacao !== S.CANDIDATA) falhar(CODIGO.CONCILIACAO_INVALIDA, "Só uma candidata pode passar a aguardar documento.");
+        if (!c.justificativa) falhar(CODIGO.CONCILIACAO_INVALIDA, "Informe qual documento falta.");
+        return { situacao: S.AGUARDANDO_DOCUMENTO };
       });
     },
 

@@ -174,3 +174,15 @@ Cada suíte foi rodada duas vezes: com o adaptador em memória e com a mesma su�
 - O papel `fv2_app` e as políticas de RLS foram pensados para conexão direta. O formato da sessão no Supabase (`authenticated`, `service_role`, JWT) ainda não foi desenhado.
 - A trava de competência só existe no adaptador PostgreSQL; em memória as transações já são serializadas.
 - `extras jsonb` guarda campos auxiliares sem coluna própria (ex.: `grupoId` de parcelas já é coluna; `pagamentoIndice` e índices de retenção não). Se algum virar critério de consulta, merece coluna.
+
+## Atualização — Execução 02 (12/11/2026)
+
+- **Lacuna de testes da 01B fechada.** `postgres-trava-repeticao.test.js` força, com barreiras, os cenários em que
+  `FOR UPDATE` e a repetição de transações são necessários: reserva de linha, corrida pela mesma origem e impasse (deadlock).
+  Mutantes conferidos com cópia de segurança: sem `FOR UPDATE` falham os testes 1 e 3; sem repetição falham 2 e 3.
+- Migração `0002_importacoes.sql`: `fv2_importacao` e `fv2_registro_fonte` com o mesmo molde (escopo, RLS forçado,
+  histórico obrigatório, sem DELETE/TRUNCATE, chave de origem única por escopo), conteúdo importado imutável (`FV011`) e
+  máquina de estados da importação no banco (`FV012`). Correspondência ganhou `relacao`, `regra`, `forca`, o estado
+  `AGUARDANDO_DOCUMENTO` e a exigência de evidência para candidatas automáticas.
+- O cofre local em disco (`infra/cofreDisco.js`) implementa os requisitos da seção do cofre para desenvolvimento; o cofre
+  de produção continua pendente (requisitos em `05-importacoes-e-fontes.md`, seção 6).

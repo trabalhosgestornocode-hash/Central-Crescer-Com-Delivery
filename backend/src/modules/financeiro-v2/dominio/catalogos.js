@@ -7,7 +7,7 @@ const enumerar = (...valores) => Object.freeze(Object.fromEntries(valores.map((v
 export const TIPO = enumerar(
   "CONTA", "CONTRAPARTE", "LANCAMENTO", "VENDA", "OBRIGACAO", "RECEBIVEL", "MOVIMENTACAO", "LIQUIDACAO",
   "TRANSFERENCIA", "AJUSTE", "DOCUMENTO", "VINCULO_DOCUMENTAL", "CORRESPONDENCIA", "COMPETENCIA",
-  "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO",
+  "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO", "IMPORTACAO", "REGISTRO_FONTE",
 );
 
 /** Conta financeira = onde o dinheiro DA EMPRESA está. Processadores (Stone, iFood, vales) NÃO são contas: geram recebíveis. */
@@ -93,16 +93,37 @@ export const TIPO_DOCUMENTO = enumerar(
 /** Tipos de registro que podem receber vínculo documental. */
 export const VINCULAVEIS = Object.freeze([
   TIPO.LANCAMENTO, TIPO.VENDA, TIPO.OBRIGACAO, TIPO.RECEBIVEL, TIPO.MOVIMENTACAO, TIPO.LIQUIDACAO, TIPO.TRANSFERENCIA,
-  TIPO.AJUSTE, TIPO.CORRESPONDENCIA, TIPO.COMPETENCIA, TIPO.PAGAMENTO_VENDA, TIPO.ESTORNO,
+  TIPO.AJUSTE, TIPO.CORRESPONDENCIA, TIPO.COMPETENCIA, TIPO.PAGAMENTO_VENDA, TIPO.ESTORNO, TIPO.IMPORTACAO, TIPO.REGISTRO_FONTE,
 ]);
 
-export const SITUACAO_CORRESPONDENCIA = enumerar("CANDIDATA", "CONFIRMADA", "DIVERGENTE", "REJEITADA");
-/** Tipos de registro que podem compor um lado de uma correspondência. */
-export const CONCILIAVEIS = Object.freeze([TIPO.MOVIMENTACAO, TIPO.RECEBIVEL, TIPO.OBRIGACAO, TIPO.VENDA]);
+export const SITUACAO_CORRESPONDENCIA = enumerar("CANDIDATA", "CONFIRMADA", "DIVERGENTE", "REJEITADA", "AGUARDANDO_DOCUMENTO");
+/** Tipos de registro que podem compor um lado de uma correspondência (REGISTRO_FONTE = linha importada, ainda sem efeito financeiro). */
+export const CONCILIAVEIS = Object.freeze([TIPO.MOVIMENTACAO, TIPO.RECEBIVEL, TIPO.OBRIGACAO, TIPO.VENDA, TIPO.REGISTRO_FONTE]);
+
+/**
+ * Relações de conciliação preparadas na Execução 02. Cada uma liga registros de fontes DIFERENTES que descrevem o mesmo
+ * dinheiro; nenhuma cria efeito financeiro novo. MANUAL = montada por uma pessoa (conta a pagar × pagamento, transferência...).
+ */
+export const RELACAO_CORRESPONDENCIA = enumerar(
+  "SAIPOS_X_STONE", "STONE_X_RECEBIMENTO", "RECEBIMENTO_STONE_X_UNICRED", "IFOOD_X_UNICRED", "FOODY_X_UNICRED", "MANUAL",
+);
+/** Força da regra que propôs a candidata: FORTE = identificador comum; FRACA = só valor/data (nunca é prova). */
+export const FORCA_CORRESPONDENCIA = enumerar("FORTE", "FRACA");
+
+/**
+ * Estado de uma IMPORTAÇÃO (o arquivo e seu processamento). NÃO é o estado de conferência dos valores:
+ * importar não confirma, não concilia e não homologa nada.
+ */
+export const ESTADO_IMPORTACAO = enumerar(
+  "RECEBIDO", "EM_VALIDACAO", "PRONTO_PARA_IMPORTAR", "IMPORTADO", "IMPORTADO_COM_PENDENCIAS", "REJEITADO", "SUBSTITUIDO",
+);
+/** Conferência de cada registro importado — independe do estado da importação. */
+export const CONFERENCIA_REGISTRO = enumerar("NAO_CONFERIDO", "CONFERIDO", "DIVERGENTE");
+export const SITUACAO_REGISTRO_FONTE = enumerar("ATIVO", "SUBSTITUIDO");
 
 export const ESTADO_COMPETENCIA = enumerar("ABERTA", "FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO");
 
 export const EVENTO_HISTORICO = enumerar(
   "CRIACAO", "CORRECAO", "RECLASSIFICACAO", "CANCELAMENTO", "LIQUIDACAO", "ESTORNO", "AJUSTE", "CONCILIACAO",
-  "MUDANCA_ESTADO", "SUBSTITUICAO", "CORRECAO_EM_FECHAMENTO", "PAGAMENTO",
+  "MUDANCA_ESTADO", "SUBSTITUICAO", "CORRECAO_EM_FECHAMENTO", "PAGAMENTO", "IMPORTACAO",
 );

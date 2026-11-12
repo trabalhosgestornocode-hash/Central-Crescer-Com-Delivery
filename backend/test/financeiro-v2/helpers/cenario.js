@@ -4,7 +4,7 @@
 //   padrão                      → memória (rápido, sem dependência externa);
 //   FV2_REPOSITORIO=postgres    → PostgreSQL local isolado (helpers/postgres.js); cada montar() ganha um banco novo.
 import assert from "node:assert/strict";
-import { ACAO, ErroFinanceiro, criarNucleoFinanceiro, criarRepositorioMemoria } from "../../../src/modules/financeiro-v2/index.js";
+import { ACAO, ErroFinanceiro, criarCofreMemoria, criarNucleoFinanceiro, criarRegistroDeAcessosNegadosMemoria, criarRepositorioMemoria } from "../../../src/modules/financeiro-v2/index.js";
 import { EM_POSTGRES, repositorioPostgresDeTeste } from "./postgres.js";
 
 export const ORG_A = "aaaaaaaa-0000-4000-8000-000000000001";
@@ -28,10 +28,13 @@ export const ESCOPOS_PADRAO = Object.freeze([{ organizacaoId: ORG_A, unidadeId: 
  * `plano`: modelo de plano de contas implantado automaticamente em cada escopo no primeiro uso ("ACAITERIA" por padrão).
  *          Passe `false` para testar o comportamento SEM plano de contas.
  */
-export function montar({ escopos = ESCOPOS_PADRAO, repositorio, plano = "ACAITERIA", relogio = () => AGORA } = {}) {
+export function montar({
+  escopos = ESCOPOS_PADRAO, repositorio, plano = "ACAITERIA", relogio = () => AGORA,
+  cofre = criarCofreMemoria(), acessosNegados = criarRegistroDeAcessosNegadosMemoria(), estabelecimentosDaUnidade = null,
+} = {}) {
   const repo = repositorio ?? (EM_POSTGRES ? repositorioPostgresDeTeste(escopos) : criarRepositorioMemoria());
-  const real = criarNucleoFinanceiro({ repositorio: repo, escoposAutorizados: escopos, relogio });
-  if (!plano) return { nucleo: real, repositorio: repo };
+  const real = criarNucleoFinanceiro({ repositorio: repo, escoposAutorizados: escopos, relogio, cofre, acessosNegados, estabelecimentosDaUnidade });
+  if (!plano) return { nucleo: real, repositorio: repo, cofre, acessosNegados };
   const implantados = new Map();
   const garantirPlano = (c) => {
     const chave = `${c?.organizacaoId}|${c?.unidadeId}`.toLowerCase();
@@ -44,7 +47,7 @@ export function montar({ escopos = ESCOPOS_PADRAO, repositorio, plano = "ACAITER
     await garantirPlano(c);
     return op(c, ...resto);
   }])));
-  return { nucleo, repositorio: repo };
+  return { nucleo, repositorio: repo, cofre, acessosNegados };
 }
 
 /** Núcleo com conta bancária, caixa físico e um fornecedor no escopo A. */
