@@ -83,4 +83,54 @@ body { margin: 0; background: var(--bg); color: var(--texto); font: 15px/1.5 Int
   .no-alternar, .no-folha { grid-template-columns: 1fr auto; } .no-pct, .no-alternar .selo, .no-folha .selo { grid-column: 1 / -1; text-align: left; }
   .filtros { display: grid; grid-template-columns: 1fr 1fr; } .filtros label:last-child { grid-column: 1 / -1; }
 }
+/* ---------------------------------------------------------------- tesouraria (Execução 06A) */
+.selo--neutro { background: var(--bg); color: var(--suave); border: 1px solid var(--linha); }
+.aviso--alerta { color: var(--alerta); }
+.botao { font: 600 14px Inter, sans-serif; padding: 8px 14px; min-height: 40px; border-radius: 10px; border: 1px solid var(--linha); background: var(--card); color: var(--texto); cursor: pointer; }
+.botao:disabled { opacity: .5; cursor: not-allowed; }
+.abas { display: flex; gap: 6px; margin: 0 0 14px; } .abas a { padding: 8px 14px; border-radius: 99px; border: 1px solid var(--linha); color: inherit; text-decoration: none; background: var(--card); min-height: 40px; display: inline-flex; align-items: center; }
+.abas a[aria-current="page"] { background: var(--texto); color: var(--card); border-color: var(--texto); }
+.filtros-locais { display: flex; flex-wrap: wrap; gap: 10px 12px; align-items: end; margin: 0 0 14px; }
+.filtros-locais label { display: grid; gap: 4px; font-size: 12px; color: var(--suave); min-width: 0; }
+.filtros-locais input, .filtros-locais select { font: inherit; padding: 8px 10px; border: 1px solid var(--linha); border-radius: 10px; background: var(--card); color: var(--texto); min-height: 40px; max-width: 100%; }
+.filtros-locais .caixa-marcar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--texto); min-height: 40px; }
+.filtros-locais .caixa-marcar input { min-height: 0; width: 18px; height: 18px; }
+.resumo { margin-bottom: 14px; } .resumo .card { margin-bottom: 0; }
+.tabela td.esquerda { text-align: left; } .tabela td .nota { font-size: 12px; }
+.tabela tr.estornada { opacity: .6; } .tabela tr.periodo--atual { background: var(--info-bg); }
+.lista-simples { list-style: none; margin: 6px 0 0; padding: 0; } .lista-simples li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--linha); flex-wrap: wrap; }
+.lista-simples li.total { font-weight: 700; } .lista-simples li.atual { background: var(--bg); border-radius: 8px; padding-inline: 6px; }
+.vazio-lista { padding: 12px 0; }
+.paginacao { display: flex; gap: 10px; align-items: center; justify-content: space-between; margin-top: 10px; flex-wrap: wrap; font-size: 13px; }
+details.card > summary { cursor: pointer; list-style: none; } details.card > summary h2.inline { display: inline; font-size: 16px; }
+.contas { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-bottom: 16px; } .contas .card { margin-bottom: 0; }
+.conta h4 { margin: 14px 0 6px; font-size: 14px; }
+.ficha--compacta { font-size: 13px; gap: 4px 12px; margin: 8px 0; }
+.sessoes { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; } .sessao { border: 1px solid var(--linha); border-radius: 12px; padding: 10px 12px; }
+.historico { margin: 6px 0 0; padding-left: 18px; font-size: 13px; } .historico li { margin-bottom: 6px; }
+.cal-nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.legenda--cal { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 10px; }
+.calendario { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin-bottom: 16px; }
+.cal-cab { font-size: 12px; color: var(--suave); text-align: center; padding: 4px 0; }
+.cal-dia { display: grid; align-content: start; gap: 4px; min-height: 84px; padding: 6px; text-align: left; font: inherit; color: inherit; background: var(--card); border: 1px solid var(--linha); border-radius: 10px; cursor: pointer; min-width: 0; }
+.cal-dia--livre { background: transparent; color: var(--suave); } .cal-dia--hoje { border: 2px solid var(--marca); } .cal-dia--sel { outline: 3px solid var(--info); outline-offset: 1px; }
+.cal-num { font-weight: 700; font-size: 13px; } .cal-marcas { display: flex; flex-wrap: wrap; gap: 3px; } .cal-valor { font-size: 11px; color: var(--suave); overflow-wrap: anywhere; }
+.marca-dia { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 99px; font-size: 11px; font-weight: 700; }
+.marca-dia--info { background: var(--info-bg); color: var(--info); } .marca-dia--erro { background: var(--erro-bg); color: var(--erro); } .marca-dia--ok { background: var(--ok-bg); color: var(--ok); } .marca-dia--alerta { background: var(--alerta-bg); color: var(--alerta); }
+@media (max-width: 760px) {
+  .filtros-locais { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .filtros-locais .caixa-marcar { grid-column: 1 / -1; }
+  .filtros-locais select, .filtros-locais input:not([type="checkbox"]) { width: 100%; min-width: 0; }
+  /* Tabelas viram cartões: cada célula mostra seu rótulo. */
+  .tabela--cartoes thead { display: block; position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .tabela--cartoes { position: relative; }
+  .tabela--cartoes, .tabela--cartoes tbody, .tabela--cartoes tr, .tabela--cartoes td { display: block; width: 100%; }
+  .tabela--cartoes tr { border: 1px solid var(--linha); border-radius: 12px; padding: 6px 10px; margin-bottom: 10px; }
+  .tabela--cartoes td { display: flex; justify-content: space-between; gap: 12px; text-align: right; border-bottom: 0; padding: 4px 0; }
+  .tabela--cartoes td::before { content: attr(data-rotulo); color: var(--suave); font-size: 12px; text-align: left; flex: 0 0 auto; }
+  .tabela--cartoes td.esquerda { display: block; text-align: left; } .tabela--cartoes td.esquerda::before { display: block; }
+
+  .calendario { gap: 3px; } .cal-dia { min-height: 56px; padding: 4px; } .cal-valor { display: none; } .marca-dia { min-width: 16px; height: 16px; font-size: 10px; padding: 0 3px; }
+  .contas { grid-template-columns: minmax(0, 1fr); }
+  .navegacao ul { scrollbar-width: thin; }
+}
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

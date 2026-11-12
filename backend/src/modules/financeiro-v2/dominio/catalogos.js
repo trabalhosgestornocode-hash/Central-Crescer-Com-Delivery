@@ -8,6 +8,7 @@ export const TIPO = enumerar(
   "CONTA", "CONTRAPARTE", "LANCAMENTO", "VENDA", "OBRIGACAO", "RECEBIVEL", "MOVIMENTACAO", "LIQUIDACAO",
   "TRANSFERENCIA", "AJUSTE", "DOCUMENTO", "VINCULO_DOCUMENTAL", "CORRESPONDENCIA", "COMPETENCIA",
   "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO", "IMPORTACAO", "REGISTRO_FONTE", "CONCESSAO", "PROPOSTA", "DIVERGENCIA_FONTE",
+  "SALDO_CONTA", "SESSAO_CAIXA",
 );
 
 /** Conta financeira = onde o dinheiro DA EMPRESA está. Processadores (Stone, iFood, vales) NÃO são contas: geram recebíveis. */
@@ -138,5 +139,12 @@ export const ESTADO_COMPETENCIA = enumerar("ABERTA", "FECHAMENTO_PRELIMINAR", "F
 
 export const EVENTO_HISTORICO = enumerar(
   "CRIACAO", "CORRECAO", "RECLASSIFICACAO", "CANCELAMENTO", "LIQUIDACAO", "ESTORNO", "AJUSTE", "CONCILIACAO",
-  "MUDANCA_ESTADO", "SUBSTITUICAO", "CORRECAO_EM_FECHAMENTO", "PAGAMENTO", "IMPORTACAO",
+  "MUDANCA_ESTADO", "SUBSTITUICAO", "CORRECAO_EM_FECHAMENTO", "PAGAMENTO", "IMPORTACAO", "OPERACAO_DE_CAIXA", "FECHAMENTO_DE_CAIXA",
 );
+
+/**
+ * Caixa físico (Execução 06A): a sessão compara o saldo TEÓRICO (abertura + movimentos) com o CONTADO no fechamento.
+ * A diferença fica registrada; nunca vira ajuste automático.
+ */
+export const SITUACAO_SESSAO_CAIXA = enumerar("ABERTA", "FECHADA");
+export const OPERACAO_CAIXA = enumerar("ENTRADA", "SAIDA", "SANGRIA", "SUPRIMENTO");

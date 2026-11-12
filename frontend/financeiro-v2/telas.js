@@ -1,6 +1,7 @@
 // Telas do Financeiro v2 como funções PURAS (dados do motor → HTML escapado). Nenhuma fórmula financeira aqui:
 // valores, subtotais, percentuais e situações chegam prontos do backend e só são apresentados.
-import { CLASSIFICACOES, competencia, dataBR, esc, moeda, nomeCanal, percentual, situacao } from "./formatar.js";
+import { CLASSIFICACOES, competencia, dataBR, descricaoLegivel, esc, moeda, nomeCanal, percentual, situacao } from "./formatar.js";
+import { cardsFinanceirosDaVisaoGeral } from "./telasTesouraria.js";
 
 const selo = (codigo) => { const s = situacao(codigo); return `<span class="selo selo--${s.classe}" title="${esc(s.explicacao)}">${esc(s.rotulo)}</span>`; };
 const valorClasse = (c) => (c === null || c === undefined ? "valor valor--desconhecido" : c < 0 ? "valor valor--negativo" : "valor");
@@ -50,7 +51,7 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   ${cardSec("Resultado Gerencial", valor(res.valorCentavos), selo(res.situacao), "RESULTADO_GERENCIAL", "Sem ajuste de estoque. Não é lucro contábil auditado.")}
   ${cardSec("Custos operacionais", valor(grupos.CUSTOS_OPERACIONAIS ? grupos.CUSTOS_OPERACIONAIS.valorCentavos : null), "", "CUSTOS_OPERACIONAIS")}
   ${cardSec("Despesas operacionais", valor(grupos.DESPESAS_OPERACIONAIS ? grupos.DESPESAS_OPERACIONAIS.valorCentavos : null), "", "DESPESAS_OPERACIONAIS")}
-  ${["Saldo bancário", "Caixa físico", "Contas a pagar", "Contas a receber", "Fluxo de caixa"].map((t) => `<article class="card card--sec card--indisponivel"><h3>${esc(t)}</h3><p class="valor valor--desconhecido">Indisponível nesta versão</p><p class="nota">O contrato de consulta deste indicador ainda não foi implementado; nenhum valor é estimado.</p></article>`).join("")}
+  ${vg.financeiro ? cardsFinanceirosDaVisaoGeral(vg.financeiro) : ["Saldo bancário", "Caixa físico", "Contas a pagar", "Contas a receber", "Fluxo de caixa"].map((t) => `<article class="card card--sec card--indisponivel"><h3>${esc(t)}</h3><p class="valor valor--desconhecido">Indisponível</p><p class="nota">A consulta financeira não respondeu; nenhum valor é estimado.</p></article>`).join("")}
   <article class="card card--sec"><h3>Alertas de conferência</h3>${pendenciasCurtas([...(fb.pendencias ?? []), ...(res.pendencias ?? [])].filter((p, i, a) => a.findIndex((x) => x.mensagem === p.mensagem) === i), 5) || '<p class="nota">Sem alertas.</p>'}</article>
 </section>`;
 }
@@ -78,7 +79,8 @@ function noArvore(no, nivel = 0) {
     det?.composicao ? `<p class="mini">Produtos ${esc(moeda(det.composicao.itensCentavos))} · Acréscimos ${esc(moeda(det.composicao.acrescimosCentavos))} · Serviços ${esc(moeda(det.composicao.servicosCentavos))}${det.composicao.descontos?.length ? ` · Descontos: ${det.composicao.descontos.map((d) => `${esc(moeda(d.valorCentavos))} (${esc(d.financiador.toLowerCase())})`).join(", ")}` : ""}</p>` : "",
     docs.length ? `<p class="mini docs">${docs.map((d) => `<span class="doc" title="Documento registrado, não acessível nesta versão">Documento ${esc(d.referencia ?? d)} — registrado, não acessível nesta versão</span>`).join(" ")}</p>` : "",
   ].join("");
-  const cabeca = `<span class="no-nome">${esc(no.nome)}</span>${valor(no.valorCentavos)}<span class="no-pct">${esc(percentual(no.percentualDoBruto))}</span>`;
+  const legivel = descricaoLegivel(no.nome);
+  const cabeca = `<span class="no-nome"${legivel !== no.nome ? ` title="Original: ${esc(no.nome)}"` : ""}>${esc(legivel)}</span>${valor(no.valorCentavos)}<span class="no-pct">${esc(percentual(no.percentualDoBruto))}</span>`;
   return `<li class="no nivel-${Math.min(nivel, 5)}">${temFilhos ? `<button type="button" class="no-alternar" aria-expanded="false" aria-controls="${id}" data-alternar>${cabeca}</button>` : `<div class="no-folha">${cabeca}</div>`}${extras || detalhes ? `<div class="no-extra">${extras}${detalhes}</div>` : ""}${temFilhos ? `<ul id="${id}" class="nos" hidden>${no.filhos.map((f) => noArvore(f, nivel + 1)).join("")}</ul>` : ""}</li>`;
 }
 export const arvore = (componentes) => `<ul class="nos nos--raiz">${(componentes ?? []).map((n) => noArvore(n)).join("")}</ul>`;

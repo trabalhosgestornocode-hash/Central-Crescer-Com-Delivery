@@ -139,6 +139,15 @@ export const ESQUEMA = Object.freeze({
     usuarioId: c("usuario_id", "uuid"), acoes: c("acoes", "json"), situacao: c("situacao"), concedidoPor: c("concedido_por", "uuid"),
     justificativa: c("justificativa"),
   }),
+  [TIPO.SALDO_CONTA]: tabela("fv2_saldo_conta", {
+    contaId: c("conta_id", "uuid"), data: c("data", "data"), valorCentavos: c("valor_centavos", "centavos"), documentoId: c("documento_id", "uuid"), observacao: c("observacao"),
+  }),
+  [TIPO.SESSAO_CAIXA]: tabela("fv2_sessao_caixa", {
+    contaId: c("conta_id", "uuid"), situacao: c("situacao"), dataAbertura: c("data_abertura", "data"), saldoAberturaCentavos: c("saldo_abertura_centavos", "centavos"),
+    observacao: c("observacao"), operacoes: c("operacoes", "json"), dataFechamento: c("data_fechamento", "data"), entradasCentavos: c("entradas_centavos", "centavos"),
+    saidasCentavos: c("saidas_centavos", "centavos"), teoricoCentavos: c("teorico_centavos", "centavos"), contadoCentavos: c("contado_centavos", "centavos"),
+    diferencaCentavos: c("diferenca_centavos", "centavos"), justificativa: c("justificativa"), fechadoPor: c("fechado_por", "uuid"), fechadoEm: c("fechado_em", "instante"),
+  }),
   [TIPO.COMPETENCIA]: tabela("fv2_competencia", {
     competencia: c("competencia"), estado: c("estado"), metodologia: c("metodologia"), pendencias: c("pendencias", "json"),
     revisoes: c("revisoes", "inteiro"), decididoPor: c("decidido_por", "uuid"), decididoEm: c("decidido_em", "instante"),

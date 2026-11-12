@@ -39,7 +39,8 @@ test("1, 2, 3, 4 — bruto é o 1º card, líquido o 2º; canais separados; sem 
 });
 
 test("5, 6, 7, 8 — desconhecido ≠ zero; zero confirmado; parcial; confirmado", async () => {
-  const out = await get("/api/fv2/visao-geral", { competencia: "2026-10", unidade: U1 });
+  // Mês sem nenhum registro no cenário (desde a 06A, outubro tem contas e deixou de servir para este caso).
+  const out = await get("/api/fv2/visao-geral", { competencia: "2026-12", unidade: U1 });
   const htmlOut = telas.visaoGeral(out.corpo);
   assert.equal(out.corpo.faturamentoBruto.valorCentavos, null);
   assert.ok(htmlOut.includes("Valor desconhecido") && htmlOut.includes("Sem evidência suficiente"));

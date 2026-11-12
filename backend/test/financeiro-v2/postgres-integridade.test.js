@@ -68,7 +68,7 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   assert.deepEqual(tabelas, [
     "fv2_ajuste", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
     "fv2_estorno", "fv2_historico", "fv2_importacao", "fv2_lancamento", "fv2_liquidacao", "fv2_migracao", "fv2_movimentacao", "fv2_obrigacao",
-    "fv2_pagamento_venda", "fv2_proposta", "fv2_recebivel", "fv2_registro_fonte", "fv2_transferencia", "fv2_venda", "fv2_vinculo_documental",
+    "fv2_pagamento_venda", "fv2_proposta", "fv2_recebivel", "fv2_registro_fonte", "fv2_saldo_conta", "fv2_sessao_caixa", "fv2_transferencia", "fv2_venda", "fv2_vinculo_documental",
   ]);
   assert.deepEqual((await dono.query("select nome, sha256 from fv2_migracao order by 1")).rows, listarMigracoes().map((m) => ({ nome: m.nome, sha256: m.sha256 })));
 
@@ -81,7 +81,7 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
 
   // Toda tabela de dados tem RLS ligado E forçado, e nenhuma dá DELETE/TRUNCATE ao papel de aplicação.
   const rls = (await dono.query("select relname, relrowsecurity, relforcerowsecurity from pg_class where relkind = 'r' and relname like 'fv2\\_%' and relname <> 'fv2_migracao'")).rows;
-  assert.equal(rls.length, 24); // 19 da 0001 + 2 da 0002 + fv2_concessao (0003) + fv2_proposta e fv2_divergencia_fonte (0004)
+  assert.equal(rls.length, 26); // 19 da 0001 + 2 da 0002 + fv2_concessao (0003) + fv2_proposta e fv2_divergencia_fonte (0004) + fv2_saldo_conta e fv2_sessao_caixa (0006)
   assert.deepEqual(rls.filter((x) => !x.relrowsecurity || !x.relforcerowsecurity), []);
   const privilegios = (await dono.query("select table_name, privilege_type from information_schema.role_table_grants where grantee = 'fv2_app'")).rows;
   assert.deepEqual(privilegios.filter((x) => ["DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"].includes(x.privilege_type)), []);

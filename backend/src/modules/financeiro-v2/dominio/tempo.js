@@ -50,3 +50,39 @@ export function somarMeses(data, meses) {
 export function hojeEm(instante = new Date(), fuso = "America/Sao_Paulo") {
   return new Intl.DateTimeFormat("en-CA", { timeZone: fuso, year: "numeric", month: "2-digit", day: "2-digit" }).format(instante);
 }
+
+const partes = (data) => exigirData(data).split("-").map(Number);
+const texto = (dt) => `${String(dt.getUTCFullYear()).padStart(4, "0")}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+
+/** Soma dias corridos a uma data civil (aceita negativo). */
+export function somarDias(data, dias) {
+  if (!Number.isSafeInteger(dias)) falhar(CODIGO.DATA_INVALIDA, "Quantidade de dias inválida.");
+  const [a, m, d] = partes(data);
+  return exigirData(texto(new Date(Date.UTC(a, m - 1, d + dias))), "data resultante");
+}
+
+/** 0 = domingo ... 6 = sábado. */
+export function diaDaSemana(data) {
+  const [a, m, d] = partes(data);
+  return new Date(Date.UTC(a, m - 1, d)).getUTCDay();
+}
+
+/** Segunda-feira da semana da data. */
+export const inicioDaSemana = (data) => somarDias(data, -((diaDaSemana(data) + 6) % 7));
+
+export const primeiroDiaDe = (competencia) => `${exigirCompetencia(competencia)}-01`;
+export const ultimoDiaDe = (competencia) => somarDias(somarMeses(primeiroDiaDe(competencia), 1), -1);
+
+/** Dia `dia` do mês da competência, limitado ao último dia existente (31 em fevereiro → 28/29). */
+export function diaNoMes(competencia, dia) {
+  const ultimo = ultimoDiaDe(competencia);
+  const alvo = `${competencia}-${String(dia).padStart(2, "0")}`;
+  return alvo > ultimo ? ultimo : exigirData(alvo);
+}
+
+/** Dias de `inicio` a `fim`, inclusive. */
+export function diasEntre(inicio, fim) {
+  const [a1, m1, d1] = partes(inicio);
+  const [a2, m2, d2] = partes(fim);
+  return Number((BigInt(Date.UTC(a2, m2 - 1, d2)) - BigInt(Date.UTC(a1, m1 - 1, d1))) / 86400000n);
+}
