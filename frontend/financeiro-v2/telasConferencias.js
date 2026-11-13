@@ -1,0 +1,325 @@
+// Central de Conferências (Execução 06C) — funções PURAS: dados das consultas → HTML escapado.
+// Nenhuma fórmula financeira e nenhuma "prévia" própria: prévias, efeitos, pendências e impedimentos chegam prontos do
+// núcleo. Códigos técnicos, hashes e JSON ficam só em seções recolhíveis "Detalhes técnicos".
+// Ações (importar, aprovar, aplicar, conciliar) são formulários que chamam as operações REAIS do núcleo pela demonstração
+// local; aparecem só para quem tem a permissão e sempre exigem confirmação explícita.
+import {
+  CONFIANCAS, EVENTOS, ESTADOS_COMPETENCIA, ESTADOS_IMPORTACAO, ESTADOS_PROPOSTA, FONTES_NOME, LINHAS_DRE, PERMISSOES, SITUACOES_CORRESPONDENCIA, SITUACOES_PENDENCIA,
+  SITUACOES_SECAO, competencia, dataBR, esc, moeda,
+} from "./formatar.js";
+import { documentos, paginacao } from "./telasTesouraria.js";
+
+export const SECOES = Object.freeze([["resumo", "Resumo"], ["pendencias", "Pendências"], ["documentos", "Documentos e importações"], ["propostas", "Propostas para revisão"], ["conciliacoes", "Conciliações"], ["fechamento", "Fechamento mensal"]]);
+const ROTA = "conferencias";
+const valor = (c) => `<span class="${c === null || c === undefined ? "valor valor--desconhecido" : c < 0 ? "valor valor--negativo" : "valor"}">${esc(c === null || c === undefined ? "—" : moeda(c))}</span>`;
+const seloDe = (s) => (s ? `<span class="selo selo--${s.classe}"${s.explicacao ? ` title="${esc(s.explicacao)}"` : ""}>${esc(s.rotulo)}</span>` : "");
+const td = (rotulo, conteudo, classe = "") => `<td data-rotulo="${esc(rotulo)}"${classe ? ` class="${classe}"` : ""}><span class="cel">${conteudo}</span></td>`;
+const opcao = (v, rotulo, atual) => `<option value="${esc(v)}"${v === (atual ?? "") ? " selected" : ""}>${esc(rotulo)}</option>`;
+const nenhum = (texto) => `<p class="nota vazio-lista">${esc(texto)}</p>`;
+const fechar = (titulo) => `<div class="painel-cabeca"><h2 id="painel-titulo">${esc(titulo)}</h2><button type="button" class="botao-fechar" data-fechar-painel aria-label="Fechar">×</button></div>`;
+const botao = (tipo, id, texto) => `<button type="button" class="botao-link" data-detalhe="${esc(tipo)}:${esc(id)}">${esc(texto)}</button>`;
+const tecnico = (obj) => `<details class="tecnico"><summary>Detalhes técnicos</summary><pre>${esc(JSON.stringify(obj, null, 2))}</pre></details>`;
+const fonte = (f) => FONTES_NOME[f] ?? f ?? "—";
+const periodo = (p) => (p ? (p.inicio === p.fim ? dataBR(p.inicio) : `${dataBR(p.inicio)} a ${dataBR(p.fim)}`) : "—");
+const tem = (perm, acao) => (perm ?? []).includes(acao);
+
+/** Formulário de AÇÃO: grava de verdade (pela demonstração local) e por isso exige a caixa de confirmação marcada. */
+function acao({ url, rotulo, campos = "", aviso, recarregar, perigo = false }) {
+  return `<form class="acao${perigo ? " acao--perigo" : ""}" data-acao="${esc(url)}"${recarregar ? ` data-recarregar="${esc(recarregar)}"` : ""}>
+  ${campos}
+  <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> ${esc(aviso)}</label>
+  <button type="submit" class="botao${perigo ? "" : " botao--primario"}">${esc(rotulo)}</button>
+  <p class="resultado-acao" role="status" aria-live="polite"></p>
+</form>`;
+}
+
+// ------------------------------------------------------------------------------------------------------- cabeçalho
+export function central(r, f = {}, ctx = {}) {
+  const secao = f.secao ?? "resumo";
+  const corpo = { resumo, pendencias, documentos: documentosImportados, propostas, conciliacoes, fechamento }[secao] ?? resumo;
+  return `<div class="central"><header class="cabecalho"><div><h1>Importações e Conferências</h1><p class="subtitulo">${esc(competencia(ctx.competencia))} · ${esc(ctx.unidadeNome ?? "")} · posição em ${esc(dataBR(r.dataBase))}</p></div></header>
+<nav class="abas abas--botoes" aria-label="Seções da Central de Conferências">${SECOES.map(([k, t]) => `<button type="button" data-secao="${k}"${k === secao ? ' aria-current="page"' : ""}>${esc(t)}</button>`).join("")}</nav>
+${corpo(r, f, ctx)}</div>`;
+}
+
+// --------------------------------------------------------------------------------------------------------- resumo
+function resumo(r, f, ctx) {
+  const fe = r.fechamento;
+  const p = r.pendencias;
+  const grupos = Object.entries(p.porGrupo);
+  return `<section class="card card--destaque" aria-labelledby="t-situacao">
+  <div class="card-topo"><h2 id="t-situacao">Situação do fechamento</h2>${seloDe(ESTADOS_COMPETENCIA[fe.estado])}</div>
+  <p>${fe.impedimentos ? `<strong class="valor--negativo">${fe.impedimentos} divergência(s) relevante(s) sem justificativa impedem a homologação.</strong>` : "Nenhuma divergência relevante sem justificativa."} ${fe.metodologia ? `Metodologia: ${esc(fe.metodologia)}.` : "Metodologia ainda não registrada."}</p>
+  <p class="nota">${esc(r.materialidade.texto)}</p>
+  <button type="button" class="botao-link" data-secao="fechamento">Ver fechamento mensal</button>
+</section>
+<section class="resumo" aria-label="Contagens da competência">
+  <article class="card card--sec"><h3>Pendências a resolver</h3><p><span class="valor">${p.total}</span></p><p class="nota">${p.bloqueiam} bloqueia(m) a homologação · ${p.informativas} informativa(s). É uma contagem: valores de pendências diferentes não são somados.</p><button type="button" class="botao-link" data-secao="pendencias">Ver pendências</button></article>
+  <article class="card card--sec"><h3>Importações aguardando revisão</h3><p><span class="valor">${r.importacoes.aguardandoRevisao}</span></p><button type="button" class="botao-link" data-secao="documentos">Ver documentos</button></article>
+  <article class="card card--sec"><h3>Propostas pendentes</h3><p><span class="valor">${r.propostas.pendentes}</span></p><p class="nota">Aprovar não registra nada: só a aplicação cria o efeito.</p><button type="button" class="botao-link" data-secao="propostas">Revisar propostas</button></article>
+  <article class="card card--sec"><h3>Conciliações candidatas</h3><p><span class="valor">${r.conciliacoes.candidatas}</span></p><p class="nota">Candidata não é conciliação.</p><button type="button" class="botao-link" data-secao="conciliacoes">Investigar</button></article>
+</section>
+<div class="duas-colunas">
+<section class="card" aria-labelledby="t-certo"><h2 id="t-certo">O que está correto</h2>${r.oQueEstaCorreto.length ? `<ul class="lista-ok">${r.oQueEstaCorreto.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : nenhum("Ainda não há conferência concluída nesta competência.")}</section>
+<section class="card" aria-labelledby="t-falta"><h2 id="t-falta">O que falta conferir</h2>
+  <ul class="lista-simples">${grupos.map(([g, v]) => `<li><span>${esc(v.nome)}${v.bloqueiam ? ' <span class="selo selo--erro">bloqueia</span>' : ""}</span><span>${v.abertas ? `<a class="botao-link" href="#/conferencias?secao=pendencias&amp;grupo=${esc(g)}">${v.abertas} pendência(s)</a>` : '<span class="nota">nenhuma</span>'}</span></li>`).join("")}</ul>
+</section>
+</div>
+<section class="card" aria-labelledby="t-docs"><h2 id="t-docs">Documentos da competência</h2>
+  <ul class="lista-simples">${r.fontes.comDocumento.map((x) => `<li><span>${esc(x.nome)}</span><span class="selo selo--ok">importado (${esc(periodo(x.cobertura))})</span></li>`).join("")}${r.fontes.semDocumento.map((x) => `<li><span>${esc(x.nome)}</span><span class="selo selo--alerta">falta o documento</span></li>`).join("")}</ul>
+</section>
+${r.divergenciasRelevantes.length ? `<section class="card" aria-labelledby="t-div"><h2 id="t-div">O que impede o fechamento</h2><ul class="lista-simples">${r.divergenciasRelevantes.map((x) => `<li><span>${esc(x.mensagem)}</span>${valor(x.valorCentavos)}</li>`).join("")}</ul><p class="nota">A diferença fica registrada até ter explicação com justificativa; nenhum ajuste é criado para fechar valores.</p></section>` : ""}
+<p class="nota">Faturamento da competência pela DRE: ${esc(moeda(r.faturamento.valorCentavos))}. ${esc(r.observacao)}</p>`;
+}
+
+// ----------------------------------------------------------------------------------------------------- pendências
+function pendencias(r, f) {
+  return `<form class="filtros-locais" data-filtro-local="${ROTA}" aria-label="Filtros de pendências">
+  <input type="hidden" name="secao" value="pendencias">
+  <label>Grupo <select name="grupo">${opcao("", "Todos", f.grupo)}${r.grupos.map((g) => opcao(g.grupo, `${g.nome} (${r.contagem.porGrupo[g.grupo].abertas})`, f.grupo)).join("")}</select></label>
+  <label>Situação <select name="situacao">${opcao("", "Todas", f.situacao)}${opcao("A_RESOLVER", "A resolver (sem informativas)", f.situacao)}${Object.entries(SITUACOES_PENDENCIA).map(([k, v]) => opcao(k, v.rotulo, f.situacao)).join("")}</select></label>
+  <button type="submit" class="botao">Aplicar</button>
+</form>
+<p class="nota">${r.contagem.total} pendência(s) a resolver · ${r.contagem.bloqueiam} bloqueia(m) a homologação · cada fato aparece uma única vez, em um grupo.</p>
+${f.grupo === "CUSTOS_E_RATEIOS" ? `<p class="aviso">${esc(r.semMotor.CUSTOS_E_RATEIOS)}</p>` : ""}
+<section class="card" aria-labelledby="t-pend"><h2 id="t-pend" class="sr">Lista de pendências</h2>
+${r.itens.length ? `<ul class="pendencias-lista">${r.itens.map((p) => `<li class="pendencia${p.bloqueia ? " pendencia--bloqueia" : ""}">
+  <div class="pendencia-topo"><strong>${esc(p.titulo)}</strong>${seloDe(SITUACOES_PENDENCIA[p.situacao])}${p.bloqueia ? '<span class="selo selo--erro">bloqueia</span>' : ""}</div>
+  <p class="pendencia-motivo">${esc(p.motivo)}</p>
+  <p class="nota">${esc(p.nomeDoGrupo)}${p.valorCentavos !== null ? ` · impacto ${esc(moeda(p.valorCentavos))}` : ""} · responsável: ${esc(p.responsavel ?? "não atribuído")}${p.outrosMotivos ? ` · +${p.outrosMotivos} motivo(s) ligado(s) ao mesmo fato` : ""}</p>
+  ${botao("pendencia", p.chave, "Revisar")}</li>`).join("")}</ul>` : nenhum("Nenhuma pendência com estes filtros.")}
+${paginacao(r.paginacao, ROTA)}
+</section>`;
+}
+
+export function detalhePendencia(d) {
+  const p = d.pendencia;
+  return `${fechar(p.titulo)}
+<p>${seloDe(SITUACOES_PENDENCIA[p.situacao])} <span class="selo selo--neutro">${esc(p.nomeDoGrupo)}</span>${p.efeitoNoFechamento === "BLOQUEIA" ? ' <span class="selo selo--erro">bloqueia a homologação</span>' : p.efeitoNoFechamento === "NAO_BLOQUEIA" ? ' <span class="selo selo--info">não bloqueia o fechamento</span>' : ""}</p>
+<dl class="ficha">
+  <dt>O que aconteceu</dt><dd>${esc(p.oQueAconteceu)}</dd>
+  <dt>Origem da informação</dt><dd>${esc(fonte(p.origem))}</dd>
+  <dt>Impacto financeiro</dt><dd>${p.valorCentavos !== null ? `${valor(p.valorCentavos)} — ` : ""}${esc(p.impacto)}</dd>
+  <dt>Motivo da pendência</dt><dd>${esc(p.motivo)}</dd>
+  <dt>Responsável</dt><dd>${esc(p.responsavel ?? "Não atribuído")}</dd>
+</dl>
+${p.outrosMotivos.length ? `<h3>Outros motivos sobre o mesmo fato</h3><ul class="mini">${p.outrosMotivos.map((x) => `<li>${esc(x.motivo)}</li>`).join("")}</ul>` : ""}
+<h3>Documentos existentes</h3>${documentos(p.documentosExistentes)}
+<h3>Documentos necessários</h3>${p.documentosNecessarios.length ? `<ul class="mini">${p.documentosNecessarios.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : nenhum("Nenhum documento adicional indicado.")}
+<h3>O que pode ser feito</h3>${p.opcoes.length ? `<ul class="mini">${p.opcoes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : nenhum("Nenhuma ação: registro informativo.")}
+<p class="nota">A pendência só deixa de existir com o documento ou a decisão registrada — nunca por hipótese.</p>
+${ligacaoDaPendencia(p)}
+<h3>Histórico de decisões</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li><strong>${esc(EVENTOS[h.evento] ?? "Alteração registrada")}</strong> · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem decisões registradas.")}
+${p.apontadoPor.length > 1 ? `<p class="nota">Este fato foi apontado por ${p.apontadoPor.length} conferências diferentes e conta uma única vez.</p>` : ""}
+${tecnico({ chave: p.chave, codigo: p.codigo, referencia: p.referencia, apontadoPor: p.apontadoPor, outrosCodigos: p.outrosMotivos.map((x) => x.codigo), ...p.tecnico })}`;
+}
+
+/** Ligação real para o registro da pendência (quando existe uma tela para ele); senão, nada — nunca link falso. */
+function ligacaoDaPendencia(p) {
+  const r = p.referencia;
+  if (!r?.id) return "";
+  const mapa = { PROPOSTA: ["proposta", "Abrir a proposta"], CORRESPONDENCIA: ["correspondencia", "Abrir a correspondência"], IMPORTACAO: ["documento", "Abrir o documento"], VENDA: ["venda", "Abrir a venda"], AGREGADO_DIARIO: ["venda", "Abrir o total do dia"], RECEBIVEL: ["recebimento", "Abrir o ciclo do recebimento"], OBRIGACAO: ["pagar", "Abrir a conta a pagar"] };
+  const alvo = mapa[r.tipo];
+  return alvo ? `<p class="ligacoes">${botao(alvo[0], r.id, alvo[1])}</p>` : "";
+}
+
+// ---------------------------------------------------------------------------------------------- documentos e prévias
+function documentosImportados(r, f, ctx) {
+  return `<form class="filtros-locais" data-filtro-local="${ROTA}" aria-label="Filtros de documentos">
+  <input type="hidden" name="secao" value="documentos">
+  <label>Situação <select name="estado">${opcao("", "Todas", f.estado)}${Object.entries(ESTADOS_IMPORTACAO).map(([k, v]) => opcao(k, v.rotulo, f.estado)).join("")}</select></label>
+  <button type="submit" class="botao">Aplicar</button>
+  ${tem(ctx.permissoes, "financeiro_v2.importar") ? '<button type="button" class="botao botao--primario" data-detalhe="importar:catalogo">Importar arquivo sintético</button>' : '<span class="nota">Importar exige a permissão "importar arquivos".</span>'}
+</form>
+<section class="card" aria-labelledby="t-docs-lista"><h2 id="t-docs-lista" class="sr">Documentos importados</h2>
+${r.itens.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Documentos importados</caption><thead><tr><th scope="col" class="esquerda">Documento</th><th scope="col">Período</th><th scope="col">Recebido</th><th scope="col">Registros</th><th scope="col">Situação</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>
+${r.itens.map((x) => `<tr>${td("Documento", `<strong>${esc(x.relatorio)}</strong><br><span class="nota">${esc(fonte(x.fonte))} · versão ${x.versao}${x.substituiOutra ? " · substitui outra versão" : ""}${x.substituidaPorOutra ? " · substituída" : ""} · ${esc(x.responsavel)}</span><br>${x.compatibilidade.homologado ? '<span class="selo selo--ok">leitor homologado</span>' : '<span class="selo selo--alerta" title="' + esc(x.compatibilidade.texto) + '">leitor não homologado</span>'}`, "esquerda")}${td("Período", esc(periodo(x.periodo)))}${td("Recebido", `${esc(dataBR(x.recebidoEm))}${x.importadoEm ? `<br><span class="nota">importado ${esc(dataBR(x.importadoEm))}</span>` : ""}`)}${td("Registros", `${x.registrosAtivos}${x.divergencias ? `<br><span class="nota">${x.divergencias} divergência(s)</span>` : ""}${x.erros ? `<br><span class="nota valor--negativo">${x.erros} erro(s)</span>` : ""}`)}${td("Situação", seloDe(ESTADOS_IMPORTACAO[x.estado]))}${td("Ações", botao("documento", x.id, "Ver prévia"))}</tr>`).join("")}
+</tbody></table></div>` : nenhum("Nenhum documento importado nesta competência.")}
+${paginacao(r.paginacao, ROTA)}
+</section>
+<details class="card"><summary><h2 class="inline">Leitores e formatos homologados</h2></summary>
+<ul class="lista-simples">${r.compatibilidade.map((x) => `<li><span>${esc(x.relatorio)} (${esc(fonte(x.fonte))})</span><span>${x.homologado ? `<span class="selo selo--ok">homologado: ${esc(x.formatosHomologados.join(", ").toUpperCase())}</span>` : '<span class="selo selo--alerta">sem amostra real conferida</span>'}</span></li>`).join("")}</ul>
+<p class="nota">Outras variantes de arquivo só passam a valer depois de comprovadas com amostra real.</p></details>`;
+}
+
+export function detalheDocumento(d, ctx = {}) {
+  const doc = d.documento;
+  const pv = d.previa;
+  const podeImportar = tem(ctx.permissoes, "financeiro_v2.importar");
+  return `${fechar(`${doc.relatorio} — ${periodo(doc.periodo)}`)}
+<p>${seloDe(ESTADOS_IMPORTACAO[doc.estado])} ${doc.compatibilidade.homologado ? '<span class="selo selo--ok">leitor homologado</span>' : '<span class="selo selo--alerta">leitor não homologado</span>'}</p>
+<dl class="ficha">
+  <dt>Relatório</dt><dd>${esc(doc.relatorio)} · ${esc(fonte(doc.fonte))}</dd>
+  <dt>Período</dt><dd>${esc(periodo(doc.periodo))}</dd>
+  <dt>Recebido em</dt><dd>${esc(dataBR(doc.recebidoEm))} · ${esc(doc.responsavel)}</dd>
+  <dt>Versão</dt><dd>${doc.versao}${doc.substituiOutra ? " (substitui a anterior)" : ""}${doc.substituidaPorOutra ? " (substituída por outra versão)" : ""}</dd>
+</dl>
+<h3>Prévia do motor de importação</h3>
+${pv ? `<ul class="lista-simples">
+  <li><span>Registros válidos (novos)</span><strong>${pv.validos ?? "—"}</strong></li>
+  <li><span>Rejeitados (erros)</span><strong>${pv.rejeitados}</strong></li>
+  <li><span>Duplicados no próprio arquivo</span><strong>${pv.duplicadosNoArquivo}</strong></li>
+  <li><span>Já existentes (importados antes)</span><strong>${pv.jaExistentes}</strong></li>
+  <li><span>Conflitos com o já importado</span><strong>${pv.conflitos}</strong></li>
+  <li><span>Divergências</span><strong>${pv.totalDivergencias}</strong></li>
+</ul>
+${pv.erros.length ? `<h4>Erros</h4><ul class="mini">${pv.erros.slice(0, 20).map((x) => `<li>${esc(x.mensagem ?? x.codigo ?? "Erro de leitura")}</li>`).join("")}</ul>` : ""}
+${pv.divergencias.length ? `<h4>Divergências</h4><ul class="mini">${pv.divergencias.slice(0, 20).map((x) => `<li>${esc(x.mensagem)}</li>`).join("")}</ul>` : ""}
+${totais(pv.controles)}` : nenhum("Ainda sem prévia.")}
+<h3>Limitações</h3><ul class="mini">${d.limitacoes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+${d.relatorio ? `<h3>Resultado da importação</h3><p>${d.relatorio.inseridos} registro(s) gravado(s) · ${d.relatorio.jaImportados} já existente(s) · ${d.relatorio.divergencias} divergência(s). ${esc(d.relatorio.observacao ?? "")}</p>` : ""}
+${Object.keys(d.propostasGeradas).length ? `<p class="nota">Propostas geradas: ${Object.entries(d.propostasGeradas).map(([k, v]) => `${v} ${esc((ESTADOS_PROPOSTA[k]?.rotulo ?? k).toLowerCase())}`).join(", ")}.</p>` : ""}
+${d.acoes.confirmar && podeImportar ? acao({
+    url: "/api/fv2/acoes/importacao/confirmar", rotulo: "Confirmar importação", recarregar: `documento:${doc.id}`,
+    campos: `<input type="hidden" name="importacao" value="${esc(doc.id)}"><input type="hidden" name="impressaoPrevia" value="${esc(d.impressaoPrevia ?? "")}">${d.acoes.exigeAceiteDePendencias ? '<label class="caixa-marcar"><input type="checkbox" name="aceitarPendencias"> Aceito importar com as divergências acima</label><label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>' : ""}`,
+    aviso: "Confirmo que revisei a prévia. Os registros serão gravados sem efeito financeiro (importar ≠ aprovar ≠ aplicar).",
+  }) : ""}
+${d.acoes.confirmar && podeImportar ? acao({ url: "/api/fv2/acoes/importacao/rejeitar", rotulo: "Rejeitar arquivo", recarregar: `documento:${doc.id}`, perigo: true, campos: `<input type="hidden" name="importacao" value="${esc(doc.id)}"><label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>`, aviso: "Confirmo a rejeição deste arquivo." }) : ""}
+${d.acoes.gerarPropostas && tem(ctx.permissoes, "financeiro_v2.registrar") ? acao({ url: "/api/fv2/acoes/propostas/gerar", rotulo: "Gerar propostas para revisão", recarregar: `documento:${doc.id}`, campos: `<input type="hidden" name="importacao" value="${esc(doc.id)}">`, aviso: "Confirmo: propostas são só sugestões; nada entra no financeiro até ser aprovado E aplicado." }) : ""}
+${!podeImportar && d.acoes.confirmar ? `<p class="nota">Confirmar exige a permissão "${esc(PERMISSOES[d.acoes.permissaoExigida])}".</p>` : ""}
+<h3>Histórico</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li>${esc(ESTADOS_IMPORTACAO[h.estado]?.rotulo ?? h.evento)} · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem histórico.")}
+${tecnico({ registrosPorTipo: d.registrosPorTipo, amostra: pv?.amostra ?? [], controles: pv?.controles ?? null })}`;
+}
+
+/** "acumuladoFinalCentavos" → "Acumulado final" (só apresentação do nome do totalizador). */
+const rotuloDoControle = (k) => { const t = k.replace(/Centavos$/, "").replace(/([A-Z])/g, " $1").toLowerCase(); return t.charAt(0).toUpperCase() + t.slice(1); };
+const NOME_CONTROLE = { linhasLidas: "Linhas lidas", totalDeclaradoCentavos: "Total declarado no arquivo", totalCalculadoCentavos: "Total somado das linhas", registros: "Registros" };
+function totais(controles) {
+  if (!controles) return "";
+  const linhas = Object.entries(controles).filter(([, v]) => typeof v === "number" || v === null);
+  if (!linhas.length) return "";
+  return `<h4>Totalizadores do documento</h4><ul class="lista-simples">${linhas.map(([k, v]) => `<li><span>${esc(NOME_CONTROLE[k] ?? rotuloDoControle(k))}</span>${/Centavos$/.test(k) ? valor(v) : `<strong>${esc(v ?? "—")}</strong>`}</li>`).join("")}</ul>`;
+}
+
+/** Passo 1 do fluxo local: escolher um arquivo SINTÉTICO do catálogo e enviá-lo ao cofre (gera a prévia). */
+export function escolherArquivo(c) {
+  return `${fechar("Importar arquivo sintético")}
+<p class="aviso">${esc(c.observacao)}</p>
+<ol class="passos"><li>Escolher o arquivo</li><li>Receber no cofre e validar</li><li>Revisar a prévia</li><li>Confirmar a importação</li></ol>
+${acao({
+    url: "/api/fv2/acoes/importacao/receber", rotulo: "Enviar ao cofre e gerar a prévia", recarregar: "resultado:documento",
+    campos: `<fieldset class="escolha"><legend>Arquivo</legend>${c.arquivos.map((a, i) => `<label class="opcao-arquivo"><input type="radio" name="arquivo" value="${esc(a.id)}"${i === 0 ? " checked" : ""} required> <span><strong>${esc(a.nome)}</strong><br><span class="nota">${esc(fonte(a.fonte))} · ${esc(periodo({ inicio: a.periodoInicio, fim: a.periodoFim }))} · leitor: ${esc(a.leitor)}</span></span></label>`).join("")}</fieldset>`,
+    aviso: "Confirmo o envio deste arquivo sintético ao cofre da demonstração (nada entra no financeiro neste passo).",
+  })}`;
+}
+
+// --------------------------------------------------------------------------------------------------------- propostas
+function propostas(r, f) {
+  return `<form class="filtros-locais" data-filtro-local="${ROTA}" aria-label="Filtros de propostas">
+  <input type="hidden" name="secao" value="propostas">
+  <label>Situação <select name="estado">${opcao("", "Todas", f.estado)}${Object.entries(ESTADOS_PROPOSTA).map(([k, v]) => opcao(k, `${v.rotulo}${r.porEstado[k] ? ` (${r.porEstado[k]})` : ""}`, f.estado)).join("")}</select></label>
+  <button type="submit" class="botao">Aplicar</button>
+</form>
+<p class="nota">Propostas são sugestões formadas a partir dos arquivos importados. Aprovar não grava nada; aplicar uma proposta aprovada cria o efeito uma única vez.</p>
+<section class="card" aria-labelledby="t-prop"><h2 id="t-prop" class="sr">Propostas</h2>
+${r.itens.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Propostas para revisão</caption><thead><tr><th scope="col">Data</th><th scope="col" class="esquerda">Operação</th><th scope="col">Valor</th><th scope="col">Situação</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>
+${r.itens.map((p) => `<tr>${td("Data", esc(dataBR(p.data)))}${td("Operação", `<strong>${esc(p.nome)}</strong><br><span class="nota">${esc(p.origem)} · ${esc(p.natureza)}${p.categoriaSugerida ? ` · sugere ${esc(p.categoriaSugerida.nome)}` : ""}</span>${p.pendencias.length ? `<br><span class="nota valor--negativo">${esc(p.pendencias[0])}</span>` : ""}`, "esquerda")}${td("Valor", valor(p.valorCentavos))}${td("Situação", `${seloDe(ESTADOS_PROPOSTA[p.estado])}<br><span class="nota">${esc(CONFIANCAS[p.confianca] ?? "")} · ${p.documentos.length ? "com documento" : "sem documento"}</span>`)}${td("Ações", botao("proposta", p.id, "Revisar"))}</tr>`).join("")}
+</tbody></table></div>` : nenhum("Nenhuma proposta com estes filtros.")}
+${paginacao(r.paginacao, ROTA)}
+</section>`;
+}
+
+const efeito = (lista, vazio) => (lista.length ? `<ul class="lista-simples">${lista.map((x) => `<li><span>${esc(x.texto)}${x.linha ? `<br><span class="nota">${esc(LINHAS_DRE[x.linha] ?? (x.linha === "FATURAMENTO_BRUTO_PROPRIO" ? "Faturamento bruto próprio" : x.linha))}</span>` : ""}${x.fracao ? `<br><span class="nota">exato R$ ${esc(x.fracao.exatoReais)} → ${esc(moeda(x.fracao.registradoCentavos))} (metade para cima)</span>` : ""}</span>${x.valorCentavos !== null && x.valorCentavos !== undefined ? valor(x.valorCentavos) : ""}</li>`).join("")}</ul>` : nenhum(vazio));
+
+export function detalheProposta(d) {
+  const p = d.proposta;
+  const a = d.autorizacao;
+  return `${fechar(p.nome)}
+<p>${seloDe(ESTADOS_PROPOSTA[p.estado])} <span class="selo selo--neutro">${esc(CONFIANCAS[p.confianca] ?? "")}</span></p>
+<h3>1. O que será registrado</h3><p>${esc(d.oQueSeraRegistrado.texto)}${d.oQueSeraRegistrado.valorCentavos !== null ? ` ${valor(d.oQueSeraRegistrado.valorCentavos)}` : ""}${d.oQueSeraRegistrado.data ? ` <span class="nota">(${esc(dataBR(d.oQueSeraRegistrado.data))})</span>` : ""}</p>
+<h3>2. Por que o sistema sugeriu</h3><p>${esc(d.porQue ?? "—")}</p>
+<h3>3. Documento que sustenta</h3>${documentos(d.documentos)}
+<h3>4. Efeito na DRE</h3>${efeito(d.efeitoNaDre, "Nenhum efeito na DRE.")}
+<h3>5. Efeito em recebíveis ou obrigações</h3>${efeito(d.efeitoEmTitulos, "Nenhum título criado.")}
+<h3>6. Efeito no caixa</h3>${efeito(d.efeitoNoCaixa, "Nenhum movimento de caixa.")}
+<h3>7. Dados pendentes</h3>${d.pendentes.length ? `<ul class="mini">${d.pendentes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : nenhum("Nenhum dado pendente.")}
+<h3>8. Possíveis conflitos</h3>${d.conflitos.length ? `<ul class="mini">${d.conflitos.map((x) => `<li>${esc(x.mensagem)}</li>`).join("")}</ul>` : nenhum("Nenhuma operação existente em conflito.")}
+<h3>9. Autorização exigida</h3>
+<p>Aprovar, aplicar e rejeitar exigem a permissão "${esc(PERMISSOES[a.aprovar.permissao])}". ${a.aprovar.voceTem ? "Você tem esta permissão." : "Você não tem esta permissão: as ações não aparecem."}</p>
+<p class="aviso">${esc(a.observacao)}</p>
+${a.aprovar.disponivel && a.aprovar.voceTem ? acao({ url: "/api/fv2/acoes/propostas/aprovar", rotulo: "Aprovar (não registra nada)", recarregar: `proposta:${p.id}`, campos: `<input type="hidden" name="proposta" value="${esc(p.id)}">${a.aprovar.exigeJustificativa ? '<label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>' : '<label>Justificativa (opcional) <input type="text" name="justificativa" maxlength="300"></label>'}`, aviso: "Confirmo que revisei o efeito acima." }) : ""}
+${a.aplicar.disponivel && a.aplicar.voceTem ? acao({ url: "/api/fv2/acoes/propostas/aplicar", rotulo: "Aplicar: registrar o efeito", recarregar: `proposta:${p.id}`, campos: `<input type="hidden" name="proposta" value="${esc(p.id)}">`, aviso: "Confirmo: o efeito será gravado agora, numa única transação." }) : ""}
+${a.rejeitar.disponivel && a.rejeitar.voceTem ? acao({ url: "/api/fv2/acoes/propostas/rejeitar", rotulo: "Rejeitar proposta", recarregar: `proposta:${p.id}`, perigo: true, campos: `<input type="hidden" name="proposta" value="${esc(p.id)}"><label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>`, aviso: "Confirmo a rejeição." }) : ""}
+<h3>10. Histórico</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li>${esc(ESTADOS_PROPOSTA[h.estado]?.rotulo ?? h.evento)} · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem histórico.")}
+${tecnico(d.tecnico)}`;
+}
+
+// ------------------------------------------------------------------------------------------------------ conciliações
+const lado = (l, titulo) => `<div class="lado"><h4>${esc(titulo)} <span class="nota">(${l.total} registro(s) · ${esc(moeda(l.valorCentavos))})</span></h4><ul class="mini">${l.itens.map((x) => `<li><strong>${esc(x.natureza)}</strong> · ${esc(fonte(x.fonte))} · ${esc(dataBR(x.data))} · ${esc(moeda(x.valorCentavos))}${x.identificador ? `<br>${esc(x.identificador)}` : ""}</li>`).join("")}${l.total > l.itens.length ? `<li>e mais ${l.total - l.itens.length}.</li>` : ""}</ul></div>`;
+
+function conciliacoes(r, f, ctx) {
+  return `<form class="filtros-locais" data-filtro-local="${ROTA}" aria-label="Filtros de conciliações">
+  <input type="hidden" name="secao" value="conciliacoes">
+  <label>Situação <select name="situacao">${opcao("", "Todas", f.situacao)}${Object.entries(SITUACOES_CORRESPONDENCIA).map(([k, v]) => opcao(k, `${v.rotulo}${r.porSituacao[k] ? ` (${r.porSituacao[k]})` : ""}`, f.situacao)).join("")}</select></label>
+  <button type="submit" class="botao">Aplicar</button>
+</form>
+${tem(ctx.permissoes, "financeiro_v2.conciliar") ? acao({ url: "/api/fv2/acoes/conciliacoes/gerar", rotulo: "Procurar candidatas SAIPOS × Stone", recarregar: "lista", campos: `<input type="hidden" name="competencia" value="${esc(ctx.competencia)}">`, aviso: "Confirmo: candidatas são sugestões; nenhuma é confirmada automaticamente." }) : ""}
+<p class="nota">Uma correspondência por valor e data é só candidata. Confirmar exige que os lados fechem e que nenhuma outra candidata dispute os mesmos registros.</p>
+<section class="card" aria-labelledby="t-conc"><h2 id="t-conc" class="sr">Correspondências</h2>
+${r.itens.length ? `<ul class="correspondencias">${r.itens.map((c) => `<li class="correspondencia">
+  <div class="pendencia-topo"><strong>${esc(c.nome)}</strong>${seloDe(SITUACOES_CORRESPONDENCIA[c.situacao])}<span class="selo selo--${c.confiabilidade === "FORTE" ? "ok" : c.confiabilidade === "FRACA" ? "alerta" : "neutro"}">${c.confiabilidade === "FORTE" ? "evidência forte" : c.confiabilidade === "FRACA" ? "só valor e data" : "manual"}</span>${c.ambigua ? '<span class="selo selo--erro">ambígua</span>' : ""}</div>
+  <div class="lados">${lado(c.ladoA, "Lado A")}${lado(c.ladoB, "Lado B")}</div>
+  <p class="nota">Critério: ${esc(c.criterio)} · diferença ${esc(moeda(c.diferencaCentavos))}</p>
+  ${botao("correspondencia", c.id, "Investigar")}</li>`).join("")}</ul>` : nenhum("Nenhuma correspondência nesta competência.")}
+${paginacao(r.paginacao, ROTA)}
+</section>`;
+}
+
+export function detalheCorrespondencia(d) {
+  const c = d.correspondencia;
+  return `${fechar(c.nome)}
+<p>${seloDe(SITUACOES_CORRESPONDENCIA[c.situacao])}${c.ambigua ? ` <span class="selo selo--erro">ambígua: ${c.concorrentes} outra(s) candidata(s) disputam os mesmos registros</span>` : ""}</p>
+<div class="lados">${lado(c.ladoA, "Lado A")}${lado(c.ladoB, "Lado B")}</div>
+<dl class="ficha">
+  <dt>Critério</dt><dd>${esc(c.criterio)}</dd>
+  <dt>Confiabilidade</dt><dd>${esc(c.confiabilidadeTexto)}</dd>
+  <dt>Diferença</dt><dd>${valor(c.diferencaCentavos)}</dd>
+  ${c.decisao ? `<dt>Decisão</dt><dd>${esc(c.decisao)}</dd>` : ""}
+</dl>
+<h3>Evidências</h3>${documentos(c.evidencias)}
+${c.podeConfirmar && c.voceTemPermissao ? acao({ url: "/api/fv2/acoes/conciliacoes/confirmar", rotulo: "Confirmar conciliação", recarregar: `correspondencia:${c.id}`, campos: `<input type="hidden" name="correspondencia" value="${esc(c.id)}"><label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>`, aviso: "Confirmo que as evidências provam o mesmo dinheiro nos dois lados." })
+    : `<p class="nota">${esc(c.motivoDeNaoConfirmar ?? (c.voceTemPermissao ? "" : "Confirmar exige a permissão \"conciliar\"."))}</p>`}
+<h3>Histórico</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li>${esc(SITUACOES_CORRESPONDENCIA[h.situacao]?.rotulo ?? h.evento)} · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem histórico.")}
+${tecnico({ relacao: c.relacao, situacao: c.situacao, confiabilidade: c.confiabilidade, concorrentes: c.concorrentes })}`;
+}
+
+// -------------------------------------------------------------------------------------------------------- fechamento
+function fechamento(r) {
+  return `<section class="card card--destaque" aria-labelledby="t-fech">
+  <div class="card-topo"><h2 id="t-fech">Fechamento de ${esc(competencia(r.competencia))}</h2>${seloDe(ESTADOS_COMPETENCIA[r.estado])}</div>
+  <ol class="etapas-fechamento">${r.etapas.map((e) => `<li class="${e.atual ? "atual" : e.concluida ? "concluida" : ""}"${e.atual ? ' aria-current="step"' : ""}>${esc(ESTADOS_COMPETENCIA[e.estado].rotulo)}</li>`).join("")}</ol>
+  <dl class="ficha">
+    <dt>Metodologia em vigor</dt><dd>${esc(r.metodologia ?? "Ainda não registrada")}</dd>
+    <dt>Responsável</dt><dd>${esc(r.responsavel ?? "Nenhuma decisão registrada")}${r.decididoEm ? ` · ${esc(dataBR(r.decididoEm))}` : ""}</dd>
+    <dt>Revisões</dt><dd>${r.revisoes}</dd>
+  </dl>
+  <p class="${r.homologacao.possivel ? "nota" : "aviso aviso--alerta"}"><strong>Homologação:</strong> ${esc(r.homologacao.motivo)} Nunca é automática.</p>
+  <p class="nota">${esc(r.materialidade.texto)}</p>
+</section>
+<section class="card" aria-labelledby="t-imped"><h2 id="t-imped">Impedimentos de homologação</h2>
+${r.impedimentos.length ? `<ul class="lista-simples">${r.impedimentos.map((x) => `<li><span>${esc(x.mensagem)}</span>${valor(x.valorCentavos)}</li>`).join("")}</ul>` : nenhum("Nenhuma divergência relevante sem justificativa.")}
+${r.exigemDocumentacao ? `<p class="nota">${r.exigemDocumentacao} pendência(s) precisam estar documentadas no fechamento. <a class="botao-link" href="#/conferencias?secao=pendencias&amp;situacao=A_RESOLVER">Ver pendências</a></p>` : ""}
+</section>
+<section class="card" aria-labelledby="t-secoes"><h2 id="t-secoes">Conferência por assunto</h2>
+<ul class="secoes-fechamento">${r.secoes.map((s) => `<li><div class="pendencia-topo"><strong>${esc(s.nome)}</strong>${seloDe(SITUACOES_SECAO[s.situacao])}</div><p class="nota">${esc(s.resumo)}</p></li>`).join("")}</ul>
+</section>
+${r.pendenciasDocumentadas.length ? `<section class="card" aria-labelledby="t-docum"><h2 id="t-docum">Pendências documentadas no fechamento</h2><ul class="mini">${r.pendenciasDocumentadas.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></section>` : ""}
+<section class="card" aria-labelledby="t-hist"><h2 id="t-hist">Histórico de revisões</h2>
+${r.historico.length ? `<ol class="historico">${r.historico.map((h) => `<li><strong>${esc(ESTADOS_COMPETENCIA[h.para]?.rotulo ?? h.para ?? h.evento)}</strong> · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}${h.metodologia && h.para === "FECHAMENTO_HOMOLOGADO" ? ` · metodologia: ${esc(h.metodologia)}` : ""}</li>`).join("")}</ol>` : nenhum("Nenhuma mudança de estado registrada.")}
+<p class="nota">Nesta demonstração o fechamento é só visualizado: mudar o estado exige as permissões de fechar/homologar e a decisão de uma pessoa.</p>
+</section>`;
+}
+
+/** Resultado de uma ação (sucesso ou recusa), sempre com o que realmente aconteceu. */
+export function resultadoDaAcao(r) {
+  if (!r.ok) return `<span class="valor--negativo">Não foi feito: ${esc(r.mensagem)}</span>`;
+  const d = r.dados ?? {};
+  if (d.repetido) return "Nada novo foi gravado: esta operação já tinha sido feita (repetição segura).";
+  if (d.importacao && d.relatorio) return `Importação confirmada: ${d.relatorio.inseridos} registro(s) gravado(s), sem efeito financeiro.`;
+  if (d.importacao) return `Arquivo recebido: ${esc(ESTADOS_IMPORTACAO[d.importacao.estado]?.rotulo ?? d.importacao.estado)}.`;
+  if (d.proposta && d.efeitos) return `Proposta aplicada: ${d.efeitos.length} registro(s) criado(s) numa única transação.`;
+  if (d.criadas !== undefined) return `${d.criadas} criada(s), ${d.existentes ?? 0} já existente(s).`;
+  if (d.estado) return `Feito: ${esc(ESTADOS_PROPOSTA[d.estado]?.rotulo ?? ESTADOS_IMPORTACAO[d.estado]?.rotulo ?? d.estado)}.`;
+  if (d.situacao) return `Feito: ${esc(SITUACOES_CORRESPONDENCIA[d.situacao]?.rotulo ?? d.situacao)}.`;
+  return "Feito.";
+}

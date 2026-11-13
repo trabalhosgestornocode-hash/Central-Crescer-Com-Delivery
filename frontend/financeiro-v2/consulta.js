@@ -21,3 +21,18 @@ export function criarConsultor(fetchFn = (...a) => fetch(...a)) {
     },
   };
 }
+
+/**
+ * Ação mutável da demonstração local (POST JSON). Envia o token CSRF da sessão; nunca reexecuta sozinha e nunca
+ * trata como sucesso uma resposta que não seja 2xx.
+ * @returns {Promise<{ok:true, dados:any} | {ok:false, status:number, erro:string, mensagem:string}>}
+ */
+export async function enviar(url, corpo, cabecalhos = {}, fetchFn = (...a) => fetch(...a)) {
+  try {
+    const r = await fetchFn(url, { method: "POST", headers: { accept: "application/json", "content-type": "application/json", ...cabecalhos }, body: JSON.stringify(corpo), credentials: "same-origin" });
+    const dados = await r.json().catch(() => ({}));
+    return r.ok ? { ok: true, dados } : { ok: false, status: r.status, erro: dados.erro ?? "FALHA", mensagem: dados.mensagem ?? "A ação não foi concluída." };
+  } catch {
+    return { ok: false, status: 0, erro: "SEM_CONEXAO", mensagem: "Sem conexão: nada foi confirmado." };
+  }
+}

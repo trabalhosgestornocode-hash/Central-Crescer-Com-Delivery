@@ -205,7 +205,8 @@ export function operacoesDeFormacao(b) {
       } else contagem.existentes += 1;
       return;
     }
-    const anteriores = (await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: rascunho.operacao } })).filter((p) => p.origemChave === origemChave && p.estado !== E.SUBSTITUIDA && p.estado !== E.REJEITADA);
+    // Só as propostas da MESMA origem (filtro resolvido no banco; antes da 06C eram lidas todas as da operação a cada proposta).
+    const anteriores = (await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: rascunho.operacao, origemChave } })).filter((p) => p.estado !== E.SUBSTITUIDA && p.estado !== E.REJEITADA);
     const duplicidades = [...(rascunho.duplicidades ?? [])];
     let estado = rascunho.estado;
     for (const a of anteriores.filter((x) => x.estado === E.APLICADA)) {
@@ -480,6 +481,7 @@ export function operacoesDeFormacao(b) {
               evidenciaDocumentoIds: [...new Set([m.documentoId, ...(o.documentoIds ?? [])])], justificativa: "Proposta automática (SALDO_IGUAL_A_SAIDA).",
               diferencaCentavos: 0, situacao: SITUACAO_CORRESPONDENCIA.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null,
               relacao: RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO, regra: "SALDO_IGUAL_A_SAIDA", forca: "FRACA", chaveIdempotencia: chave, impressao: null,
+              competencia: [o.competencia, m.dataEfetiva.slice(0, 7)].sort()[0],
             });
             criadas += 1;
           }

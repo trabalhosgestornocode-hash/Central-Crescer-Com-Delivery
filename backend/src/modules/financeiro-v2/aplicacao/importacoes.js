@@ -319,6 +319,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
             justificativa: `Proposta automática (${cand.regra}).`, diferencaCentavos: subtrair(total(cand.ladoA), total(cand.ladoB)),
             situacao: SITUACAO_CORRESPONDENCIA.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null,
             relacao: c.relacao, regra: cand.regra, forca: cand.forca, chaveIdempotencia: chave, impressao: null,
+            competencia: ids.map((id) => porId.get(id).competencia).filter(Boolean).sort()[0] ?? null,
           });
           criadas += 1;
         }

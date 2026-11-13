@@ -15,6 +15,24 @@ const demo = await criarDemo();
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
   const cabecalhos = { "cache-control": "no-store", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer" };
+  if (url.pathname.startsWith("/api/fv2/acoes/")) {
+    // Ações LOCAIS da demonstração (06C): só POST com JSON pequeno, da própria origem, com token CSRF e confirmação explícita.
+    // O corpo nunca é registrado em log.
+    const json = (status, corpo) => res.writeHead(status, { ...cabecalhos, "content-type": "application/json; charset=utf-8" }).end(JSON.stringify(corpo));
+    if (req.method !== "POST") { res.writeHead(405, cabecalhos).end(); return; }
+    const origem = req.headers.origin;
+    if (origem && origem !== `http://127.0.0.1:${PORTA}`) { json(403, { erro: "ORIGEM", mensagem: "Origem não permitida." }); return; }
+    if (!/^application\/json(;|$)/.test(req.headers["content-type"] ?? "")) { json(415, { erro: "TIPO", mensagem: "Envie JSON." }); return; }
+    let bruto = "";
+    let excedeu = false;
+    for await (const parte of req) { bruto += parte; if (bruto.length > 8192) { excedeu = true; break; } }
+    if (excedeu) { json(413, { erro: "TAMANHO", mensagem: "Corpo grande demais." }); return; }
+    let corpo;
+    try { corpo = JSON.parse(bruto || "{}"); } catch { json(400, { erro: "JSON", mensagem: "JSON inválido." }); return; }
+    const r = await demo.agir(url.pathname, corpo, req.headers["x-fv2-demo-sessao"], { csrf: req.headers["x-fv2-csrf"] });
+    json(r.status, r.corpo);
+    return;
+  }
   if (url.pathname.startsWith("/api/fv2/")) {
     if (req.method !== "GET") { res.writeHead(405, cabecalhos).end(); return; }
     const r = await demo.responder(url.pathname, Object.fromEntries(url.searchParams), req.headers["x-fv2-demo-sessao"]);

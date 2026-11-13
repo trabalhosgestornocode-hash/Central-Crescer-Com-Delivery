@@ -10,7 +10,7 @@
 // - Não existe método de exclusão, e o papel de banco da aplicação nem tem esse privilégio.
 import { CODIGO, ErroFinanceiro, falhar } from "../../dominio/erros.js";
 import { congelar } from "../../dominio/validacao.js";
-import { normalizarFiltro } from "../../contratos/repositorio.js";
+import { normalizarConsulta, normalizarFiltro } from "../../contratos/repositorio.js";
 import { ESQUEMA, HISTORICO } from "./esquema.js";
 
 const INSTANTE = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`;
@@ -97,6 +97,37 @@ function condicoes(def, escopo, onde, comExtras) {
     partes.push(col ? `${col.coluna} = $${valores.length}${CONVERSAO[col.tipo]}` : `extras->>'${campo.replace(/[^A-Za-z0-9_]/g, "")}' = $${valores.length}::text`);
   }
   return { sql: partes.join(" and "), valores, comExtras };
+}
+
+/**
+ * Condições de paginar/agregar: escopo + `onde` (como em listar) + faixas (`desde`/`ate`) e listas (`em`). Faixa e ordem só
+ * em colunas mapeadas e comparáveis; `em` também aceita campo de `extras` (comparado como texto).
+ */
+function condicoesDaConsulta(def, escopo, q) {
+  const base = condicoes(def, escopo, q.onde, true);
+  const valores = [...base.valores];
+  const partes = [base.sql];
+  const marca = (v, conv) => { valores.push(v); return `$${valores.length}${conv}`; };
+  const paraBanco = (col, v, campo) => (col.tipo === "centavos" ? centavosParaBanco(v, campo) : v);
+  for (const [chave, op] of [["desde", ">="], ["ate", "<="]]) {
+    for (const [campo, v] of Object.entries(q[chave])) {
+      const col = colunaComparavel(def, campo);
+      partes.push(`${col.coluna} ${op} ${marca(paraBanco(col, v, campo), CONVERSAO[col.tipo])}`);
+    }
+  }
+  for (const [campo, lista] of Object.entries(q.em)) {
+    const col = def.campos[campo];
+    if (!col) { partes.push(`extras->>'${campo.replace(/[^A-Za-z0-9_]/g, "")}' = any(${marca(lista.map(String), "::text[]")})`); continue; }
+    const c = colunaComparavel(def, campo);
+    partes.push(`${c.coluna} = any(${marca(lista.map((v) => paraBanco(c, v, campo)), `${CONVERSAO[c.tipo]}[]`)})`);
+  }
+  return { sql: partes.join(" and "), valores };
+}
+
+function colunaComparavel(def, campo) {
+  const col = def.campos[campo];
+  if (!col || ["json", "uuids", "fonte", "bool"].includes(col.tipo)) falhar(CODIGO.REPOSITORIO_INVALIDO, "Campo sem coluna comparável para faixa, lista ou ordem.", { campo });
+  return col;
 }
 
 /** Erros do banco que significam "perdi uma disputa de concorrência": a operação pode ser refeita do zero. */
@@ -203,6 +234,38 @@ function criarTx(cliente, { somenteLeitura }) {
 
     listarHistorico(escopo, filtro) {
       return selecionar(HISTORICO, escopo, filtro, { comExtras: false });
+    },
+
+    /** Página + total, ambos calculados no banco (LIMIT/OFFSET e COUNT). */
+    async paginar(escopo, tipo, pedido) {
+      const def = definicao(tipo);
+      const q = normalizarConsulta(pedido);
+      const cond = condicoesDaConsulta(def, escopo, q);
+      const ordem = [...q.ordem.map((o) => `${colunaComparavel(def, o.campo).coluna} ${o.desc ? "desc" : "asc"} nulls last`), "seq asc"].join(", ");
+      const n = cond.valores.length;
+      const { rows } = await consulta(`select ${selecao(def, true)} from ${def.tabela} where ${cond.sql} order by ${ordem} limit $${n + 1}::integer offset $${n + 2}::integer`, [...cond.valores, q.limite, q.deslocamento]);
+      const { rows: [contagem] } = await consulta(`select count(*)::int as total from ${def.tabela} where ${cond.sql}`, cond.valores);
+      return { itens: rows.map((linha) => registroDe(def, linha, { comExtras: true })), total: contagem.total };
+    },
+
+    /** Contagem e soma agrupadas, no banco. Independem de qualquer paginação. */
+    async agregar(escopo, tipo, pedido) {
+      const def = definicao(tipo);
+      const q = normalizarConsulta(pedido, { paginada: false });
+      const cond = condicoesDaConsulta(def, escopo, q);
+      let grupo = "null::text";
+      if (q.agruparPor) {
+        const col = def.campos[q.agruparPor];
+        grupo = !col ? `extras->>'${q.agruparPor.replace(/[^A-Za-z0-9_]/g, "")}'` : col.tipo === "data" ? `to_char(${colunaComparavel(def, q.agruparPor).coluna}, 'YYYY-MM-DD')` : `${colunaComparavel(def, q.agruparPor).coluna}::text`;
+      }
+      let soma = "0";
+      if (q.somar) {
+        const col = def.campos[q.somar];
+        if (col?.tipo !== "centavos") falhar(CODIGO.REPOSITORIO_INVALIDO, "Só campos de centavos podem ser somados.", { campo: q.somar });
+        soma = `coalesce(sum(${col.coluna}), 0)`;
+      }
+      const { rows } = await consulta(`select ${grupo} as grupo, count(*)::int as quantidade, (${soma})::text as soma from ${def.tabela} where ${cond.sql} group by 1 order by 1 nulls first`, cond.valores);
+      return rows.map((r) => ({ grupo: r.grupo, quantidade: r.quantidade, somaCentavos: q.somar ? centavosDoBanco(r.soma, q.somar) : null }));
     },
   };
 }

@@ -6,6 +6,13 @@ import { EVENTO_HISTORICO, RELACAO_CORRESPONDENCIA, SITUACAO_CONCILIACAO, SITUAC
 import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { validarCorrespondencia, validarDecisaoConciliacao } from "../contratos/comandos.js";
+import { competenciaDe } from "../dominio/tempo.js";
+
+/** Competência de um registro conciliável (movimentação pela data efetiva; os demais pela própria competência). */
+export function competenciaDoRegistro(tipo, r) {
+  if (tipo === TIPO.MOVIMENTACAO) return r.dataEfetiva ? competenciaDe(r.dataEfetiva) : null;
+  return r.competencia ?? (r.dataReferencia ? competenciaDe(r.dataReferencia) : null);
+}
 
 /** Valor máximo que um registro pode ter conciliado. */
 function valorConciliavel(tipo, r) {
@@ -65,10 +72,13 @@ export function operacoesDeConciliacao(b) {
     criarCorrespondenciaCandidata(ctx, entrada) {
       const c = validarCorrespondencia(entrada);
       return b.executar(ctx, ACAO.CONCILIAR, async (cx, tx) => {
-        for (const ref of refs(c)) await carregar(tx, cx, ref);
+        const registros = [];
+        for (const ref of refs(c)) registros.push([ref.tipo, await carregar(tx, cx, ref)]);
         for (const id of c.evidenciaDocumentoIds) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, id, "Documento de evidência");
         const diferencaCentavos = subtrair(somarLista(c.ladoA, (r) => r.valorCentavos), somarLista(c.ladoB, (r) => r.valorCentavos));
-        return b.criar(tx, cx, TIPO.CORRESPONDENCIA, { ...c, diferencaCentavos, situacao: S.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null, relacao: RELACAO_CORRESPONDENCIA.MANUAL, regra: null, forca: null });
+        // Competência da correspondência = a mais antiga dos registros (filtro da Central de Conferências no banco).
+        const competencia = registros.map(([tipo, r]) => competenciaDoRegistro(tipo, r)).filter(Boolean).sort()[0] ?? null;
+        return b.criar(tx, cx, TIPO.CORRESPONDENCIA, { ...c, diferencaCentavos, situacao: S.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null, relacao: RELACAO_CORRESPONDENCIA.MANUAL, regra: null, forca: null, competencia });
       });
     },
 

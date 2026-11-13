@@ -79,7 +79,8 @@ test("a porta de persistência não tem exclusão e o histórico só cresce", as
   const repositorio = criarRepositorioMemoria();
   await repositorio.transacao((tx) => {
     assert.deepEqual(conferirTransacao(tx), { faltando: [], indevidos: [], ok: true });
-    assert.deepEqual(Object.keys(tx).sort(), ["anexarHistorico", "atualizar", "buscarPorChave", "inserir", "listar", "listarHistorico", "obter", "travar"]);
+    // 06C: `paginar` e `agregar` são leituras (lista paginada e totais no banco); continua não existindo exclusão.
+    assert.deepEqual(Object.keys(tx).sort(), ["agregar", "anexarHistorico", "atualizar", "buscarPorChave", "inserir", "listar", "listarHistorico", "obter", "paginar", "travar"]);
   });
   await assert.rejects(repositorio.leitura((tx) => tx.inserir("CONTA", { id: "x", organizacaoId: ORG_A, unidadeId: UNI_A })), (e) => e.codigo === CODIGO.REPOSITORIO_INVALIDO);
   // Registros devolvidos são imutáveis: mexer no retorno não altera o que está gravado.

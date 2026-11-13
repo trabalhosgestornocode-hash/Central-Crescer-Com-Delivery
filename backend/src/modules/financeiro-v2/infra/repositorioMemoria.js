@@ -5,11 +5,18 @@
 // Transações são serializadas (uma por vez), então não há leitura suja nem escrita perdida — e as travas são triviais.
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { congelar } from "../dominio/validacao.js";
-import { normalizarFiltro } from "../contratos/repositorio.js";
+import { normalizarConsulta, normalizarFiltro } from "../contratos/repositorio.js";
 
 const mesmoEscopo = (r, e) => r.organizacaoId === e.organizacaoId && r.unidadeId === e.unidadeId;
 const copia = (v) => congelar(structuredClone(v));
 const atende = (r, filtro) => Object.entries(filtro.onde).every(([campo, valor]) => r[campo] === valor) && filtro.predicado(r);
+const vazio = (v) => v === null || v === undefined;
+/** Mesma semântica do adaptador PostgreSQL: `onde` nulo = "is null"; faixas inclusivas ignoram nulos; `em` = lista. */
+const atendeConsulta = (r, q) => Object.entries(q.onde).every(([k, v]) => (vazio(v) ? vazio(r[k]) : r[k] === v))
+  && Object.entries(q.desde).every(([k, v]) => !vazio(r[k]) && r[k] >= v)
+  && Object.entries(q.ate).every(([k, v]) => !vazio(r[k]) && r[k] <= v)
+  && Object.entries(q.em).every(([k, lista]) => lista.some((v) => (typeof r[k] === "string" ? r[k] === String(v) : r[k] === v)));
+const comparar = (a, b) => (a === b ? 0 : vazio(a) ? 1 : vazio(b) ? -1 : a < b ? -1 : 1);
 
 function criarTx(estado, { somenteLeitura = false } = {}) {
   const tabela = (tipo) => (estado.registros[tipo] ??= {});
@@ -63,6 +70,30 @@ function criarTx(estado, { somenteLeitura = false } = {}) {
     listarHistorico(escopo, filtro) {
       const f = normalizarFiltro(filtro);
       return estado.historico.filter((h) => mesmoEscopo(h, escopo) && atende(h, f)).map(copia);
+    },
+    paginar(escopo, tipo, consulta) {
+      const q = normalizarConsulta(consulta);
+      const filtrados = Object.values(tabela(tipo)).map((r, i) => [r, i]).filter(([r]) => mesmoEscopo(r, escopo) && atendeConsulta(r, q));
+      filtrados.sort(([a, ia], [b, ib]) => {
+        for (const o of q.ordem) {
+          const c = comparar(a[o.campo], b[o.campo]);
+          if (c) return o.desc && !vazio(a[o.campo]) && !vazio(b[o.campo]) ? -c : c;
+        }
+        return ia - ib;
+      });
+      return { itens: filtrados.slice(q.deslocamento, q.deslocamento + q.limite).map(([r]) => copia(r)), total: filtrados.length };
+    },
+    agregar(escopo, tipo, consulta) {
+      const q = normalizarConsulta(consulta, { paginada: false });
+      const grupos = new Map();
+      for (const r of Object.values(tabela(tipo)).filter((x) => mesmoEscopo(x, escopo) && atendeConsulta(x, q))) {
+        const k = q.agruparPor ? (vazio(r[q.agruparPor]) ? null : String(r[q.agruparPor])) : null;
+        const g = grupos.get(k) ?? { grupo: k, quantidade: 0, somaCentavos: q.somar ? 0 : null };
+        g.quantidade += 1;
+        if (q.somar) g.somaCentavos += r[q.somar] ?? 0;
+        grupos.set(k, g);
+      }
+      return [...grupos.values()].sort((a, b) => comparar(a.grupo ?? "", b.grupo ?? ""));
     },
   };
 }

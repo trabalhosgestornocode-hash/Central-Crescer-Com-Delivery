@@ -1,7 +1,8 @@
 // Aplicação do Financeiro v2 (demonstração local): roteamento por hash, filtros, carregamento sem flash de dados antigos,
 // expansões acessíveis, painel "Ver composição completa" e detalhes de títulos. Nenhum cálculo financeiro: só consome as
 // consultas do motor. Datas de período (início/fim do mês, +30 dias) são só calendário, nunca valores.
-import { criarConsultor } from "./consulta.js";
+import { criarConsultor, enviar } from "./consulta.js";
+import * as conf from "./telasConferencias.js";
 import * as telas from "./telas.js";
 import * as tes from "./telasTesouraria.js";
 import * as ven from "./telasVendas.js";
@@ -17,10 +18,16 @@ const estado = {
   pagina: {}, calendario: null, diaSelecionado: null,
 };
 function filtrosIniciais() {
-  return { "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" } };
+  return { "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" } };
 }
 let focoAntesDoPainel = null;
-const ROTAS = ["visao-geral", "dre", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos"];
+let recarregarAoFechar = false;
+let revisarAoCarregar = null;
+const ROTAS = ["visao-geral", "dre", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias"];
+/** Filtros aceitos na URL da Central (ligações de outras telas). `revisar` abre o painel da pendência indicada. */
+const FILTROS_URL_CONFERENCIAS = ["secao", "grupo", "situacao", "estado"];
+const ENDPOINT_DA_SECAO = { resumo: "conferencias", pendencias: "conferencias/pendencias", documentos: "conferencias/documentos", propostas: "conferencias/propostas", conciliacoes: "conferencias/correspondencias", fechamento: "conferencias/fechamento" };
+const permissoesDaUnidade = () => estado.unidades.find((u) => u.id === estado.unidade)?.permissoes ?? [];
 /** Filtros aceitos na URL de Vendas e Recebimentos (ligação vinda de outras telas). Nada além disso é lido da URL. */
 const FILTROS_URL_VENDAS = ["aba", "canal", "forma", "processador", "situacao", "recebimento", "codigo", "tipoComponente", "identificador"];
 const ENDPOINT_DA_ABA = { vendas: "vendas", pagamentos: "vendas/pagamentos", taxas: "vendas/taxas", recebiveis: "vendas/recebiveis", divergencias: "vendas/divergencias" };
@@ -58,6 +65,11 @@ function consultaDaRota() {
     case "contas-a-receber": return `/api/fv2/contas-a-receber?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, tipo: f.tipo, processador: f.processador, pagina, tamanho: 25 })}`;
     case "caixa-e-bancos": return `/api/fv2/caixa-e-bancos?${qs({ competencia: undefined, inicio: f.inicio || inicioDoMes(estado.competencia), fim: f.fim || fimDoMes(estado.competencia), contaId: f.contaId, pagina, tamanho: 30 })}`;
     case "calendario": return `/api/fv2/calendario?${qs({ competencia: undefined, mes: estado.competencia })}`;
+    case "conferencias": {
+      const secao = ENDPOINT_DA_SECAO[f.secao] ? f.secao : "resumo";
+      const extra = { pendencias: { grupo: f.grupo, situacao: f.situacao, pagina, tamanho: 20 }, documentos: { estado: f.estado, pagina, tamanho: 20 }, propostas: { estado: f.estado, pagina, tamanho: 20 }, conciliacoes: { situacao: f.situacao, pagina, tamanho: 20 } }[secao] ?? {};
+      return `/api/fv2/${ENDPOINT_DA_SECAO[secao]}?${qs(extra)}`;
+    }
     case "vendas-e-recebimentos": {
       const aba = ENDPOINT_DA_ABA[f.aba] ? f.aba : "vendas";
       const comum = { canal: f.canal, forma: ["vendas", "pagamentos"].includes(aba) ? f.forma : undefined, processador: f.processador, pagina, tamanho: 25 };
@@ -86,6 +98,7 @@ function desenhar(dados) {
     case "calendario": estado.calendario = dados; return tes.calendario(dados, { selecionado: estado.diaSelecionado?.startsWith(dados.mes) ? estado.diaSelecionado : null });
     case "fluxo-de-caixa": return tes.fluxoDeCaixa(dados, f);
     case "vendas-e-recebimentos": return ven.vendasERecebimentos(dados, f);
+    case "conferencias": return conf.central(dados, f, { competencia: estado.competencia, unidadeNome: nomeUnidade(), permissoes: permissoesDaUnidade() });
     default: return telas.visaoGeral(dados, { unidadeNome: nomeUnidade() });
   }
 }
@@ -102,6 +115,7 @@ async function carregar() {
     if (!s.ok) { conteudo.innerHTML = mensagemDeErro(s); conteudo.removeAttribute("aria-busy"); return; }
     estado.unidades = s.dados.unidades;
     estado.dataBase = s.dados.dataBase ?? null;
+    estado.csrf = s.dados.csrf ?? null;
     estado.unidade = s.dados.unidades[0]?.id ?? null;
     preencherUnidades();
     if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Financeiro v2."); conteudo.removeAttribute("aria-busy"); return; }
@@ -112,6 +126,12 @@ async function carregar() {
   if (!r.ok) { conteudo.innerHTML = mensagemDeErro(r); return; }
   conteudo.innerHTML = desenhar(r.dados);
   aplicarPesos(conteudo);
+  if (revisarAoCarregar && estado.rota === "conferencias") {
+    // Ligação de outra tela (ex.: Caixa e Bancos → crédito não identificado): abre a pendência; se não existir, o painel diz.
+    const chave = revisarAoCarregar;
+    revisarAoCarregar = null;
+    abrirDetalhe(`pendencia:${chave}`, conteudo);
+  }
 }
 
 function preencherUnidades() {
@@ -135,24 +155,79 @@ async function abrirNoPainel(url, desenhar, origem) {
   painel.querySelector("[data-fechar-painel]")?.focus();
 }
 const abrirPainel = (codigo, origem) => abrirNoPainel(`/api/fv2/composicao?${qs({ codigo })}`, (d) => telas.composicao(d, { unidadeNome: nomeUnidade() }), origem);
+const ctxPainel = () => ({ permissoes: permissoesDaUnidade(), competencia: estado.competencia });
 const DETALHES = {
   pagar: ["conta-a-pagar", (d) => tes.detalheAPagar(d)], receber: ["conta-a-receber", (d) => tes.detalheAReceber(d)],
   venda: ["venda", (d) => ven.detalheDaVenda(d)], recebimento: ["recebimento", (d) => ven.detalheDoRecebimento(d)],
+  documento: ["conferencias/documento", (d) => conf.detalheDocumento(d, ctxPainel())], proposta: ["conferencias/proposta", (d) => conf.detalheProposta(d, ctxPainel())],
+  correspondencia: ["conferencias/correspondencia", (d) => conf.detalheCorrespondencia(d)],
 };
-function abrirDetalhe(chave, origem) {
-  const [tipo, id] = chave.split(":");
+/** URL e desenho do detalhe. A chave é "tipo:resto" — o resto pode conter ":" (chave de pendência). */
+function detalheDe(chave) {
+  const i = chave.indexOf(":");
+  const [tipo, id] = [chave.slice(0, i), chave.slice(i + 1)];
+  if (tipo === "pendencia") return [`/api/fv2/conferencias/pendencia?${qs({ chave: id })}`, (d) => conf.detalhePendencia(d)];
+  if (tipo === "importar") return [`/api/fv2/conferencias/catalogo?${qs({ competencia: undefined })}`, (d) => conf.escolherArquivo(d)];
   const [rota, desenho] = DETALHES[tipo] ?? DETALHES.receber;
-  return abrirNoPainel(`/api/fv2/${rota}?${qs({ competencia: undefined, id })}`, desenho, origem);
+  return [`/api/fv2/${rota}?${qs({ competencia: undefined, id })}`, desenho];
+}
+function abrirDetalhe(chave, origem) {
+  const [url, desenho] = detalheDe(chave);
+  return abrirNoPainel(url, desenho, origem);
 }
 function fecharPainel(restaurarFoco = true) {
   const painel = $("#painel");
   if (!painel || painel.hidden) return;
   painel.hidden = true;
   if (restaurarFoco && focoAntesDoPainel?.isConnected) focoAntesDoPainel?.focus(); // volta ao ponto exato de onde o usuário abriu
+  // Depois de uma ação gravada no painel, a lista da tela é consultada de novo (nunca fica com dado velho). A lista é
+  // redesenhada: o foco volta ao botão equivalente (mesmo destino) ou, se ele não existir mais, ao conteúdo.
+  if (recarregarAoFechar) {
+    recarregarAoFechar = false;
+    const destino = restaurarFoco ? focoAntesDoPainel?.getAttribute?.("data-detalhe") ?? focoAntesDoPainel?.getAttribute?.("data-secao") : null;
+    carregar().then(() => {
+      if (!restaurarFoco) return;
+      const alvo = destino ? [...document.querySelectorAll("#conteudo [data-detalhe], #conteudo [data-secao]")].find((x) => (x.dataset.detalhe ?? x.dataset.secao) === destino) : null;
+      (alvo ?? $("#conteudo")).focus();
+    });
+  }
   focoAntesDoPainel = null;
 }
 
+/**
+ * Executa uma AÇÃO da demonstração (formulário `data-acao`): exige a caixa de confirmação, envia o token CSRF e mostra o
+ * resultado real. Botão desabilitado durante o envio (sem confirmação duplicada por clique repetido).
+ */
+async function executarAcao(form) {
+  const saida = form.querySelector(".resultado-acao");
+  const botao = form.querySelector('button[type="submit"]');
+  const dados = Object.fromEntries(new FormData(form).entries());
+  if (!form.querySelector('[name="confirmar"]')?.checked) { saida.textContent = "Marque a confirmação para continuar."; return; }
+  const corpo = { ...dados, confirmar: true, unidade: estado.unidade };
+  if ("aceitarPendencias" in dados) corpo.aceitarPendencias = true;
+  botao.disabled = true;
+  saida.textContent = "Enviando…";
+  const r = await enviar(form.dataset.acao, corpo, { ...cabecalhos(), "x-fv2-csrf": estado.csrf ?? "" });
+  saida.innerHTML = conf.resultadoDaAcao(r);
+  if (!r.ok) { botao.disabled = false; return; }
+  recarregarAoFechar = true;
+  const proximo = form.dataset.recarregar ?? "";
+  if (proximo === "lista") { recarregarAoFechar = false; carregar(); return; }
+  if (proximo === "resultado:documento" && r.dados.importacao?.id) { abrirDetalhe(`documento:${r.dados.importacao.id}`, form); return; }
+  if (proximo.includes(":")) abrirDetalhe(proximo, form);
+}
+
 function rotear() {
+  aplicarFiltrosDaUrl({ comRevisao: true });
+  for (const a of document.querySelectorAll("[data-rota]")) a.setAttribute("aria-current", a.dataset.rota === estado.rota ? "page" : "false");
+  carregar();
+}
+
+/**
+ * Filtros vindos da URL (ligações de outras telas). Reaplicados também depois de trocar sessão ou unidade, para a tela
+ * nunca mostrar uma seção diferente da que a URL indica. `revisar` só vale na navegação (não reabre ao trocar de sessão).
+ */
+function aplicarFiltrosDaUrl({ comRevisao = false } = {}) {
   const [pedida, consulta = ""] = location.hash.replace(/^#\//, "").split("?");
   estado.rota = ROTAS.includes(pedida) ? pedida : "visao-geral";
   if (estado.rota === "vendas-e-recebimentos" && consulta) {
@@ -161,8 +236,16 @@ function rotear() {
     estado.filtros[estado.rota] = { aba: "vendas", ...Object.fromEntries(FILTROS_URL_VENDAS.filter((k) => p.get(k)).map((k) => [k, p.get(k)])) };
     estado.pagina[estado.rota] = 1;
   }
-  for (const a of document.querySelectorAll("[data-rota]")) a.setAttribute("aria-current", a.dataset.rota === estado.rota ? "page" : "false");
-  carregar();
+  if (estado.rota === "conferencias" && consulta) {
+    const p = new URLSearchParams(consulta);
+    estado.filtros.conferencias = { secao: "resumo", ...Object.fromEntries(FILTROS_URL_CONFERENCIAS.filter((k) => p.get(k)).map((k) => [k, p.get(k)])) };
+    estado.pagina.conferencias = 1;
+    // A ligação pode trazer a competência do registro (ex.: movimento de outro mês): a tela inteira passa a ela.
+    if (/^\d{4}-\d{2}$/.test(p.get("competencia") ?? "")) { estado.competencia = p.get("competencia"); $("#filtro-competencia").value = estado.competencia; }
+    const revisar = /^[A-Z_]+:[A-Za-z0-9_:.-]+$/.test(p.get("revisar") ?? "") ? p.get("revisar") : null;
+    revisarAoCarregar = comRevisao ? revisar : null;
+    if (revisar) estado.filtros.conferencias.secao = "pendencias";
+  }
 }
 
 /** Lê o formulário de filtros locais da tela atual e recarrega (sempre da 1ª página). */
@@ -205,6 +288,13 @@ document.addEventListener("click", (e) => {
     carregar().then(() => document.querySelector(`[data-aba="${aba.dataset.aba}"]`)?.focus());
     return;
   }
+  const secao = e.target.closest("[data-secao]");
+  if (secao) {
+    estado.filtros.conferencias = { secao: secao.dataset.secao };
+    estado.pagina.conferencias = 1;
+    carregar().then(() => document.querySelector(`nav [data-secao="${secao.dataset.secao}"]`)?.focus());
+    return;
+  }
   const comp = e.target.closest("[data-composicao]");
   if (comp) { abrirPainel(comp.dataset.composicao, comp); return; }
   const det = e.target.closest("[data-detalhe]");
@@ -228,13 +318,15 @@ document.addEventListener("change", (e) => {
 });
 document.addEventListener("submit", (e) => {
   e.preventDefault();
+  const acao = e.target.closest("[data-acao]");
+  if (acao) { executarAcao(acao); return; }
   const form = e.target.closest("[data-filtro-local]");
   if (form) aplicarFiltroLocal(form);
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") fecharPainel(); });
 window.addEventListener("hashchange", rotear);
 $("#filtro-competencia").addEventListener("change", (e) => { estado.competencia = e.target.value; estado.pagina = {}; estado.diaSelecionado = null; carregar(); });
-const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; };
+const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; aplicarFiltrosDaUrl(); };
 $("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; reiniciarFiltros(); carregar(); });
 $("#filtro-sessao").addEventListener("change", (e) => { estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; reiniciarFiltros(); carregar(); });
 rotear();

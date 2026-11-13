@@ -11,6 +11,9 @@ import { saldoDe } from "../dominio/titulos.js";
 import { exigirCompetencia } from "../dominio/tempo.js";
 import { exigirUmDe } from "../dominio/validacao.js";
 import { validarConsultaComposicao, validarConsultaHistorico, validarMudancaDeEstado } from "../contratos/comandos.js";
+import { CODIGO, falhar } from "../dominio/erros.js";
+import { impedimentosDeHomologacao } from "../dominio/conferencias.js";
+import { apurarRegistros, carregarRegistros } from "./conferencias.js";
 
 export function operacoesDeCompetencia(b, { repositorio, politica }) {
   return {
@@ -25,6 +28,15 @@ export function operacoesDeCompetencia(b, { repositorio, politica }) {
         const atual = await b.competenciaAtual(tx, ctx, c.competencia);
         const estadoAtual = atual?.estado ?? ESTADO_COMPETENCIA.ABERTA;
         autorizar(ctx, acaoDaTransicao(estadoAtual, c.novoEstado, c));
+        // Execução 06C: homologar exige que NÃO haja divergência relevante sem justificativa (sem política de materialidade,
+        // nenhuma tolerância). Recebíveis em aberto não bloqueiam. A regra vale no núcleo, não só na tela.
+        if (c.novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO) {
+          const d = await carregarRegistros(tx, ctx);
+          const impedimentos = impedimentosDeHomologacao(d, c.competencia, b.hoje(), apurarRegistros(d, c.competencia, { organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId }, b.agora()));
+          if (impedimentos.length) {
+            falhar(CODIGO.HOMOLOGACAO_BLOQUEADA, "Há divergência relevante sem justificativa: a competência não pode ser homologada.", { impedimentos: impedimentos.map((x) => x.codigo) });
+          }
+        }
         const reabertura = c.novoEstado === ESTADO_COMPETENCIA.ABERTA;
         const dados = {
           competencia: c.competencia, estado: c.novoEstado, metodologia: c.metodologia ?? atual?.metodologia ?? null, pendencias: c.pendencias,

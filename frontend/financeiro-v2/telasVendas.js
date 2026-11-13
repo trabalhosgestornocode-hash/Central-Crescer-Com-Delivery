@@ -193,7 +193,22 @@ ${r.creditos.length ? `<ul class="lista-simples">${r.creditos.map((c) => `<li><s
 // ------------------------------------------------------------------------------------------------------- divergências
 function abaDivergencias(r) {
   const ref = (x) => (x.referencia?.tipo === "VENDA" || x.referencia?.tipo === "AGREGADO_DIARIO" ? botaoDetalhe("venda", x.referencia.id, "Ver venda")
-    : x.referencia?.tipo === "RECEBIVEL" ? botaoDetalhe("recebimento", x.referencia.id, "Ver recebível") : "");
+    : x.referencia?.tipo === "RECEBIVEL" ? botaoDetalhe("recebimento", x.referencia.id, "Ver recebível") : "") + naCentral(x);
+  // Mesmo fato na Central de Conferências (pendência e, para transação sem pedido, as correspondências candidatas).
+  const chaveCentral = (x) => {
+    const r = x.referencia ?? {};
+    return ({
+      TRANSACAO_SEM_PEDIDO: `PROPOSTA:${r.id}`, VENDA_SEM_PAGAMENTO: `VENDA:${r.id}:PAGAMENTO`, PAGAMENTO_INCOMPATIVEL: `VENDA:${r.id}:PAGAMENTO`,
+      RECEBIMENTO_DIRETO_NAO_IDENTIFICADO: `VENDA:${r.id}:CREDITO_DIRETO`, RECEBIVEL_SEM_REPASSE: `RECEBIVEL:${r.recebivelId}`, RECEBIVEL_ATRASADO: `RECEBIVEL:${r.recebivelId}`,
+      REPASSE_INFORMADO_SEM_CREDITO: `RECEBIVEL:${r.recebivelId}`, TAXA_OU_VALOR_DIVERGENTE: `RECEBIVEL:${r.recebivelId}`, CREDITO_SEM_COMPROVACAO_BANCARIA: r.movimentacaoId ? `MOVIMENTACAO:${r.movimentacaoId}` : null,
+      TOTAIS_DE_RELATORIOS_DIFERENTES: `DIVERGENCIA_FONTE:${r.id}`, VENDA_SEM_CANAL: `AGREGADO:${r.id}`,
+    })[x.codigo] ?? null;
+  };
+  const naCentral = (x) => {
+    const k = chaveCentral(x);
+    const comp = /^\d{4}-\d{2}$/.test(x.competencia ?? "") ? `competencia=${esc(x.competencia)}&amp;` : "";
+    return `${k && !k.includes("undefined") ? ` <a class="botao-link" href="#/conferencias?${comp}revisar=${esc(k)}">Revisar na Central</a>` : x.codigo === "DESCONTO_SEM_FINANCIADOR" ? ` <a class="botao-link" href="#/conferencias?${comp}secao=pendencias&amp;grupo=CLASSIFICACOES">Ver classificações na Central</a>` : ""}${x.codigo === "TRANSACAO_SEM_PEDIDO" ? ` <a class="botao-link" href="#/conferencias?${comp}secao=conciliacoes">Correspondências candidatas</a>` : ""}`;
+  };
   const situacaoDiv = { ABERTA: ["Aberta", "erro"], EXPLICADA_PARCIALMENTE: ["Explicada em parte", "alerta"], INFORMATIVA: ["Informativa", "neutro"] };
   return `<section class="card" aria-labelledby="t-div"><h2 id="t-div">Divergências de vendas e recebimentos</h2>
 <p class="nota">${r.abertas} em aberto. Nada é resolvido por valores próximos e nenhum ajuste é criado para fechar diferenças.</p>

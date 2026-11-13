@@ -11,7 +11,7 @@
 // - Respostas saem SANITIZADAS: identificadores internos viram referências opacas; documentos aparecem como
 //   "registrado, não acessível nesta versão" (não há link nem caminho de arquivo).
 // NÃO é rota do aplicativo: não é montado em backend/src e não deve ser publicado.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,7 +29,7 @@ export const UNIDADES = Object.freeze([
   { id: "aaaaaaaa-0000-4000-8000-0000000000a1", nome: "Unidade Demonstração (Saci)" },
   { id: "aaaaaaaa-0000-4000-8000-0000000000a2", nome: "Unidade Demonstração 2" },
 ]);
-const USUARIOS = { gestor: "dddddddd-0000-4000-8000-000000000001", leitor: "dddddddd-0000-4000-8000-000000000002" };
+const USUARIOS = { gestor: "dddddddd-0000-4000-8000-000000000001", leitor: "dddddddd-0000-4000-8000-000000000002", operador: "dddddddd-0000-4000-8000-000000000003" };
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 /** Monta o núcleo e o cenário sintético (setembro com pendências, agosto homologado, unidade 2 com zero confirmado). */
@@ -93,12 +93,21 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   await nucleo.alterarEstadoDaCompetencia(B, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
   await nucleo.alterarEstadoDaCompetencia(B, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação da demonstração." });
 
+  await conciliacoesDemo(nucleo, A, { banco });
+  // Fechamento de setembro com pendências DOCUMENTADAS (Execução 06C): a Central mostra o que impede a homologação.
+  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-09", novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: ["Extrato bancário de setembro não importado", "Diferença entre faturamento diário e formas de pagamento de 02/09 sem causa comprovada"], justificativa: "Fechamento da demonstração com pendências documentadas." });
+
   const concessoes = m.criarConcessoesMemoria([
     ...UNIDADES.map((u) => ({ organizacaoId: ORG, usuarioId: USUARIOS.gestor, unidadeId: u.id, acoes: [m.ACAO.VER] })),
+    // Operador da DEMONSTRAÇÃO: pode importar arquivos SINTÉTICOS do catálogo, revisar propostas e conciliar — só na unidade 1.
+    { organizacaoId: ORG, usuarioId: USUARIOS.operador, unidadeId: UNIDADES[0].id, acoes: [m.ACAO.VER, m.ACAO.IMPORTAR, m.ACAO.REGISTRAR, m.ACAO.REVISAR, m.ACAO.CONCILIAR] },
+    { organizacaoId: ORG, usuarioId: USUARIOS.operador, unidadeId: UNIDADES[1].id, acoes: [m.ACAO.VER] },
   ]);
   const sessoes = m.criarAdaptadorDeSessao({ concessoes, relogio });
-  const sessaoDemo = (perfil) => (perfil === "ausente" || !perfil ? null : {
-    user: { id: perfil === "sem-acesso" ? USUARIOS.leitor : USUARIOS.gestor, ativo: true },
+  const PERFIS = { gestor: USUARIOS.gestor, operador: USUARIOS.operador, "sem-acesso": USUARIOS.leitor };
+  const sessaoDemo = (perfil) => (!PERFIS[perfil] ? null : {
+    user: { id: PERFIS[perfil], ativo: true },
     tenant: { organizacaoId: ORG, unidadeId: null },
     acesso: { sessionId: `demo-${perfil}`, expiraEm: "2099-01-01T00:00:00.000Z", impersonando: false },
   });
@@ -139,14 +148,92 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/vendas/divergencias": (ctx, p) => nucleo.consultarDivergenciasDeVendas(ctx, filtro(p, [...FILTRO_VENDAS, "codigo"], NUMEROS_VENDAS)),
     "/api/fv2/venda": (ctx, p) => nucleo.detalharVenda(ctx, { id: reverso.get(p.id) ?? NENHUM }),
     "/api/fv2/recebimento": (ctx, p) => nucleo.detalharRecebimento(ctx, { id: reverso.get(p.id) ?? NENHUM }),
+    // Central de Conferências (06C) — somente leitura.
+    "/api/fv2/conferencias": (ctx, p) => nucleo.consultarCentralDeConferencias(ctx, filtro(p, ["competencia"])),
+    "/api/fv2/conferencias/documentos": (ctx, p) => nucleo.consultarDocumentosImportados(ctx, filtro(p, ["competencia", "fonte", "estado", "pagina", "tamanho"], ["pagina", "tamanho"])),
+    "/api/fv2/conferencias/documento": (ctx, p) => nucleo.detalharImportacao(ctx, { id: reverso.get(p.id) ?? NENHUM }),
+    "/api/fv2/conferencias/propostas": (ctx, p) => nucleo.consultarPropostasParaRevisao(ctx, filtro(p, ["competencia", "estado", "operacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
+    "/api/fv2/conferencias/proposta": (ctx, p) => nucleo.detalharProposta(ctx, { id: reverso.get(p.id) ?? NENHUM }),
+    "/api/fv2/conferencias/correspondencias": (ctx, p) => nucleo.consultarCorrespondencias(ctx, filtro(p, ["competencia", "situacao", "relacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
+    "/api/fv2/conferencias/correspondencia": (ctx, p) => nucleo.detalharCorrespondencia(ctx, { id: reverso.get(p.id) ?? NENHUM }),
+    "/api/fv2/conferencias/pendencias": (ctx, p) => nucleo.consultarPendencias(ctx, filtro(p, ["competencia", "grupo", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
+    // A chave da pendência carrega referências opacas: cada uma volta a ser o id (só as já emitidas).
+    "/api/fv2/conferencias/pendencia": (ctx, p) => nucleo.detalharPendencia(ctx, { competencia: p.competencia, chave: String(p.chave ?? "").split(":").map((x) => (x.startsWith("ref-") ? reverso.get(x) ?? NENHUM : x)).join(":") }),
+    "/api/fv2/conferencias/fechamento": (ctx, p) => nucleo.consultarFechamento(ctx, filtro(p, ["competencia"])),
   };
+  const CATALOGO = catalogoSintetico();
+  // CSRF: token por perfil, derivado de um segredo aleatório deste processo (as ações exigem o cabeçalho x-fv2-csrf).
+  const segredo = randomBytes(32);
+  const tokenDe = (perfil) => createHmac("sha256", segredo).update(`csrf|${perfil}`).digest("hex").slice(0, 40);
+  const tokenConfere = (perfil, token) => {
+    const esperado = Buffer.from(tokenDe(perfil));
+    const recebido = Buffer.from(String(token ?? ""));
+    return recebido.length === esperado.length && timingSafeEqual(recebido, esperado);
+  };
+  const id = (v) => (typeof v === "string" && v.startsWith("ref-") ? reverso.get(v) ?? NENHUM : NENHUM);
+  /** Ações LOCAIS da demonstração: cada uma chama a operação REAL do núcleo (permissão, transação, idempotência, histórico). */
+  const ACOES = {
+    "/api/fv2/acoes/importacao/receber": { campos: ["arquivo"], fazer: (ctx, b) => {
+      const arq = CATALOGO.find((x) => x.id === b.arquivo);
+      if (!arq) throw Object.assign(new Error("Arquivo fora do catálogo sintético da demonstração."), { codigo: m.CODIGO.ENTRADA_INVALIDA });
+      return nucleo.receberArquivoParaImportacao(ctx, { fonte: arq.fonte, tipoRelatorio: arq.tipoRelatorio, tipoMime: "application/octet-stream", conteudo: arq.conteudo(), periodoInicio: arq.periodoInicio, periodoFim: arq.periodoFim, descricao: arq.nome });
+    } },
+    "/api/fv2/acoes/importacao/confirmar": { campos: ["importacao", "impressaoPrevia", "aceitarPendencias", "justificativa"], fazer: (ctx, b) => nucleo.confirmarImportacao(ctx, { importacaoId: id(b.importacao), impressaoPrevia: b.impressaoPrevia, ...(b.aceitarPendencias === true ? { aceitarPendencias: true } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
+    "/api/fv2/acoes/importacao/rejeitar": { campos: ["importacao", "justificativa"], fazer: (ctx, b) => nucleo.rejeitarImportacao(ctx, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
+    "/api/fv2/acoes/propostas/gerar": { campos: ["importacao"], fazer: (ctx, b) => nucleo.gerarPropostas(ctx, { importacaoId: id(b.importacao) }) },
+    "/api/fv2/acoes/propostas/aprovar": { campos: ["proposta", "justificativa"], fazer: (ctx, b) => nucleo.aprovarProposta(ctx, { propostaId: id(b.proposta), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
+    "/api/fv2/acoes/propostas/rejeitar": { campos: ["proposta", "justificativa"], fazer: (ctx, b) => nucleo.rejeitarProposta(ctx, { propostaId: id(b.proposta), justificativa: b.justificativa }) },
+    "/api/fv2/acoes/propostas/aplicar": { campos: ["proposta"], fazer: (ctx, b) => nucleo.aplicarProposta(ctx, { propostaId: id(b.proposta) }) },
+    "/api/fv2/acoes/conciliacoes/confirmar": { campos: ["correspondencia", "justificativa"], fazer: (ctx, b) => nucleo.confirmarConciliacao(ctx, { correspondenciaId: id(b.correspondencia), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
+    "/api/fv2/acoes/conciliacoes/gerar": { campos: ["competencia"], fazer: (ctx, b) => {
+      if (!/^\d{4}-\d{2}$/.test(String(b.competencia ?? ""))) throw Object.assign(new Error("Competência inválida."), { codigo: m.CODIGO.ENTRADA_INVALIDA });
+      const fim = m.tempo.ultimoDiaDe(b.competencia);
+      const hoje = m.tempo.hojeEm(relogio());
+      return nucleo.gerarCandidatasDeConciliacao(ctx, { relacao: "SAIPOS_X_STONE", periodoInicio: `${b.competencia}-01`, periodoFim: fim < hoje ? fim : hoje });
+    } },
+  };
+  const ERROS = () => ({
+    [m.CODIGO.SESSAO_AUSENTE]: 401, [m.CODIGO.SESSAO_INVALIDA]: 401, [m.CODIGO.ESCOPO_NAO_AUTORIZADO]: 403, [m.CODIGO.PERMISSAO_INSUFICIENTE]: 403,
+    [m.CODIGO.ENTRADA_INVALIDA]: 400, [m.CODIGO.DATA_INVALIDA]: 400, [m.CODIGO.VALOR_INVALIDO]: 400, [m.CODIGO.NAO_ENCONTRADO]: 404,
+    [m.CODIGO.TRANSICAO_INVALIDA]: 409, [m.CODIGO.CONCILIACAO_INVALIDA]: 409, [m.CODIGO.CONFLITO_IDEMPOTENCIA]: 409, [m.CODIGO.CONFLITO_VERSAO]: 409,
+    [m.CODIGO.IMPORTACAO_INVALIDA]: 422, [m.CODIGO.HOMOLOGACAO_BLOQUEADA]: 409, [m.CODIGO.COMPETENCIA_HOMOLOGADA]: 409,
+  });
+  /**
+   * Ação mutável da demonstração (POST). Exige: sessão de demonstração explícita, token CSRF do perfil, confirmação humana
+   * (`confirmar: true`), campos conhecidos e a permissão própria da operação (conferida pelo núcleo). Nunca simula sucesso.
+   */
+  async function agir(caminho, corpo, perfil, { csrf } = {}) {
+    try {
+      const acao = ACOES[caminho];
+      if (!acao) return { status: 404, corpo: { erro: "NAO_ENCONTRADO", mensagem: "Ação inexistente." } };
+      if (!PERFIS[perfil]) return { status: 401, corpo: { erro: m.CODIGO.SESSAO_AUSENTE, mensagem: "Sessão ausente." } };
+      if (!tokenConfere(perfil, csrf)) return { status: 403, corpo: { erro: "CSRF", mensagem: "Token de segurança ausente ou inválido. Recarregue a página." } };
+      if (!corpo || typeof corpo !== "object" || Array.isArray(corpo)) return { status: 400, corpo: { erro: m.CODIGO.ENTRADA_INVALIDA, mensagem: "Corpo inválido." } };
+      const desconhecidos = Object.keys(corpo).filter((k) => ![...acao.campos, "unidade", "confirmar"].includes(k));
+      if (desconhecidos.length) return { status: 400, corpo: { erro: m.CODIGO.ENTRADA_INVALIDA, mensagem: "Campos desconhecidos." } };
+      if (corpo.confirmar !== true) return { status: 400, corpo: { erro: "CONFIRMACAO_EXIGIDA", mensagem: "Esta ação grava dados: confirme explicitamente." } };
+      const ctx = await sessoes.contextoPara(sessaoDemo(perfil), { unidadeId: corpo.unidade });
+      return { status: 200, corpo: sanitizarComRef(await acao.fazer(ctx, corpo)) };
+    } catch (e) {
+      const status = e?.codigo ? ERROS()[e.codigo] : null;
+      if (status) return { status, corpo: { erro: e.codigo, mensagem: e.message } };
+      return { status: 500, corpo: { erro: "FALHA_DA_ACAO", mensagem: "A ação não foi concluída. Nada foi gravado parcialmente." } };
+    }
+  }
   /** Tratador puro (testável): caminho + parâmetros + perfil de sessão → { status, corpo }. */
   async function responder(caminho, params, perfil) {
     try {
       const s = sessaoDemo(perfil);
       if (caminho === "/api/fv2/sessao") {
         const unidades = await sessoes.unidadesAutorizadas(s);
-        return { status: 200, corpo: { dataBase: m.tempo.hojeEm(relogio()), unidades: unidades.map((u) => ({ id: u.unidadeId, nome: UNIDADES.find((x) => x.id === u.unidadeId)?.nome ?? "Unidade" })) } };
+        return { status: 200, corpo: {
+          dataBase: m.tempo.hojeEm(relogio()), csrf: s ? tokenDe(perfil) : null,
+          unidades: unidades.map((u) => ({ id: u.unidadeId, nome: UNIDADES.find((x) => x.id === u.unidadeId)?.nome ?? "Unidade", permissoes: u.acoes })),
+        } };
+      }
+      if (caminho === "/api/fv2/conferencias/catalogo") {
+        await sessoes.contextoPara(s, { unidadeId: params.unidade });
+        return { status: 200, corpo: { arquivos: CATALOGO.map(({ conteudo, ...x }) => x), observacao: "Somente arquivos SINTÉTICOS gerados pela demonstração. Envio de arquivos reais não está disponível." } };
       }
       const unidadeId = UNIDADES.find((u) => u.id === params.unidade)?.id ?? params.unidade;
       const ctx = await sessoes.contextoPara(s, { unidadeId });
@@ -171,7 +258,41 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       return { status: 500, corpo: { erro: "FALHA_DA_CONSULTA", mensagem: "Não foi possível consultar agora." } };
     }
   }
-  return { responder, unidades: UNIDADES };
+  return { responder, agir, unidades: UNIDADES };
+}
+
+/**
+ * Correspondências sintéticas (Execução 06C): pedido SAIPOS × transação Stone de setembro (identificador comum) e, em
+ * outubro, conta de energia × saída bancária com comprovante (pronta para confirmar por quem tem permissão).
+ */
+async function conciliacoesDemo(nucleo, A, { banco }) {
+  await nucleo.gerarCandidatasDeConciliacao(A, { relacao: "SAIPOS_X_STONE", periodoInicio: "2026-09-01", periodoFim: "2026-09-30" });
+  const energia = (await nucleo.consultarContasAPagar(A, {})).itens.find((t) => t.fornecedor?.nome?.startsWith("Energia"));
+  const comprovante = (await nucleo.registrarDocumento(A, { origem: "MANUAL", arquivoId: "demo-comprovante-energia", hashSha256: createHash("sha256").update("demo-comprovante-energia").digest("hex"), tipo: "COMPROVANTE", recebidoEm: "2026-10-28", descricao: "Comprovante de pagamento da energia (demonstração)" })).documento.id;
+  const saida = (await nucleo.registrarMovimentacao(A, { contaId: banco.id, dataEfetiva: "2026-10-28", sentido: "SAIDA", valorCentavos: energia.saldoCentavos, natureza: "PAGAMENTO", descricao: "PAG CONCESSIONARIA SINT", documentoId: comprovante })).movimentacao;
+  await nucleo.criarCorrespondenciaCandidata(A, { ladoA: [{ tipo: "OBRIGACAO", id: energia.id, valorCentavos: energia.saldoCentavos }], ladoB: [{ tipo: "MOVIMENTACAO", id: saida.id, valorCentavos: energia.saldoCentavos }], evidenciaDocumentoIds: [comprovante], justificativa: "Mesmo valor; comprovante da concessionária." });
+}
+
+/**
+ * Catálogo de arquivos SINTÉTICOS da demonstração (Execução 06C). Só estes podem ser importados localmente: não existe
+ * envio de arquivo real. Outubro/2026 (competência aberta), para não alterar o cenário conferido de setembro.
+ */
+function catalogoSintetico() {
+  const pedidos = () => saiposVendas([
+    { pedido: "DEMO-O1", data: "01/10/2026 12:10", canal: "Balcão", itens: 2800, forma: "Dinheiro" },
+    { pedido: "DEMO-O2", data: "01/10/2026 12:30", canal: "Balcão", itens: 3600, forma: "Crédito", autorizacao: "AUT-DEMO-O2" },
+    { pedido: "DEMO-O3", data: "01/10/2026 13:00", canal: "Balcão", itens: 1900, forma: "Débito" },
+  ]);
+  return [
+    { id: "pedidos-saipos-0110", nome: "Vendas por pedido do SAIPOS — 01/10 (sintético, CSV)", fonte: "SAIPOS", tipoRelatorio: "SAIPOS_VENDAS", periodoInicio: "2026-10-01", periodoFim: "2026-10-01", leitor: "Não homologado (contrato sintético)", conteudo: pedidos },
+    { id: "pedidos-saipos-0110-copia", nome: "Mesmo arquivo de vendas por pedido (repetido)", fonte: "SAIPOS", tipoRelatorio: "SAIPOS_VENDAS", periodoInicio: "2026-10-01", periodoFim: "2026-10-01", leitor: "Não homologado (contrato sintético)", conteudo: pedidos },
+    { id: "stone-0110", nome: "Vendas da Stone — 01/10 (sintético, CSV)", fonte: "STONE", tipoRelatorio: "STONE_VENDAS", periodoInicio: "2026-10-01", periodoFim: "2026-10-01", leitor: "Homologado em XLSX; este CSV é formato não homologado",
+      conteudo: () => stoneCsv([{ id: "DEMO-SO2", quando: "01/10/2026 12:31", bruto: "36,000000", liquido: "35,154000", unificado: "-0,846000", aut: "AUT-DEMO-O2" }, { id: "DEMO-SO9", quando: "01/10/2026 18:02", bruto: "21,500000", liquido: "21,000000", unificado: "-0,500000" }]) },
+    { id: "faturamento-saipos-0310", nome: "Faturamento diário do SAIPOS — 03/10 (sintético, PDF)", fonte: "SAIPOS", tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", periodoInicio: "2026-10-03", periodoFim: "2026-10-03", leitor: "Homologado (PDF)",
+      conteudo: () => faturamentoSaiposPdf([{ data: "03/10/2026", valor: 96000, desconto: 2400 }]) },
+    { id: "arquivo-incompativel", nome: "Arquivo que não é relatório da Stone (deve ser rejeitado)", fonte: "STONE", tipoRelatorio: "STONE_VENDAS", periodoInicio: "2026-10-02", periodoFim: "2026-10-02", leitor: "—",
+      conteudo: () => texto("planilha qualquer sem as colunas esperadas\n1;2;3") },
+  ];
 }
 
 /**

@@ -8,7 +8,10 @@ const valorClasse = (c) => (c === null || c === undefined ? "valor valor--descon
 const valor = (c) => `<span class="${valorClasse(c)}">${esc(moeda(c))}</span>`;
 const explicar = (titulo, texto) => `<details class="explica"><summary aria-label="Como este valor é calculado: ${esc(titulo)}"><span aria-hidden="true">i</span></summary><p>${esc(texto)}</p></details>`;
 const botaoComposicao = (codigo) => `<button type="button" class="botao-link" data-composicao="${esc(codigo)}">Ver composição completa</button>`;
-const pendenciasCurtas = (lista = [], max = 3) => (lista.length ? `<ul class="pendencias">${lista.slice(0, max).map((p) => `<li>${esc(p.mensagem)}${p.valorCentavos !== undefined && p.valorCentavos !== null ? ` <strong>${esc(moeda(p.valorCentavos))}</strong>` : ""}</li>`).join("")}${lista.length > max ? `<li>e mais ${lista.length - max} pendência(s).</li>` : ""}</ul>` : "");
+/** Chave da pendência na Central de Conferências (o mesmo fato), quando o registro é conhecido; senão, sem ligação. */
+const chaveNaCentral = (p) => (p.lancamentoId ? `LANCAMENTO:${p.lancamentoId}` : p.movimentacaoId ? `MOVIMENTACAO:${p.movimentacaoId}` : p.propostaId ? `PROPOSTA:${p.propostaId}` : p.tipo === "SOBREPOSICAO_AGREGADO_PEDIDOS" && p.data ? `DIA:${p.data}` : null);
+const revisarNaCentral = (p) => { const k = chaveNaCentral(p); return k ? ` <a class="botao-link" href="#/conferencias?revisar=${esc(k)}">Revisar</a>` : ""; };
+const pendenciasCurtas = (lista = [], max = 3) => (lista.length ? `<ul class="pendencias">${lista.slice(0, max).map((p) => `<li>${esc(p.mensagem)}${p.valorCentavos !== undefined && p.valorCentavos !== null ? ` <strong>${esc(moeda(p.valorCentavos))}</strong>` : ""}${revisarNaCentral(p)}</li>`).join("")}${lista.length > max ? `<li>e mais ${lista.length - max} pendência(s).</li>` : ""}</ul>` : "");
 
 // ------------------------------------------------------------------------------------------- estados
 export function estado(tipo, mensagem = "") {
@@ -52,7 +55,7 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   ${cardSec("Custos operacionais", valor(grupos.CUSTOS_OPERACIONAIS ? grupos.CUSTOS_OPERACIONAIS.valorCentavos : null), "", "CUSTOS_OPERACIONAIS")}
   ${cardSec("Despesas operacionais", valor(grupos.DESPESAS_OPERACIONAIS ? grupos.DESPESAS_OPERACIONAIS.valorCentavos : null), "", "DESPESAS_OPERACIONAIS")}
   ${vg.financeiro ? cardsFinanceirosDaVisaoGeral(vg.financeiro) : ["Saldo bancário", "Caixa físico", "Contas a pagar", "Contas a receber", "Fluxo de caixa"].map((t) => `<article class="card card--sec card--indisponivel"><h3>${esc(t)}</h3><p class="valor valor--desconhecido">Indisponível</p><p class="nota">A consulta financeira não respondeu; nenhum valor é estimado.</p></article>`).join("")}
-  <article class="card card--sec"><h3>Alertas de conferência</h3>${pendenciasCurtas([...(fb.pendencias ?? []), ...(res.pendencias ?? [])].filter((p, i, a) => a.findIndex((x) => x.mensagem === p.mensagem) === i), 5) || '<p class="nota">Sem alertas.</p>'}</article>
+  <article class="card card--sec"><h3>Alertas de conferência</h3>${pendenciasCurtas([...(fb.pendencias ?? []), ...(res.pendencias ?? [])].filter((p, i, a) => a.findIndex((x) => x.mensagem === p.mensagem) === i), 5) || '<p class="nota">Sem alertas.</p>'}<a class="botao-link" href="#/conferencias">Abrir a Central de Conferências</a></article>
 </section>`;
 }
 function cardSec(titulo, v, s, codigo, nota = "") {

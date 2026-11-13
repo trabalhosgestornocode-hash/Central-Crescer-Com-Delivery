@@ -152,3 +152,38 @@ export const CATEGORIAS_BANCARIAS = Object.freeze({
   TARIFA: "Tarifa", SEGURO: "Seguro", EMPRESTIMO: "Empréstimo", PAGAMENTO_BOLETO: "Pagamento de boleto", ARRECADACAO_CONVENIO: "Arrecadação/convênio", CREDITO_ADQUIRENTE: "Crédito de adquirente",
   REPASSE_PLATAFORMA: "Repasse de plataforma", PAGAMENTO_PLATAFORMA: "Pagamento a plataforma", PIX_RECEBIDO: "Pix recebido", PIX_ENVIADO: "Pix enviado", TRANSFERENCIA: "Transferência", OUTRO: "Outro",
 });
+
+// ------------------------------------------------------------------------------------- central de conferências (Execução 06C)
+const rotulos = (o) => Object.freeze(Object.fromEntries(Object.entries(o).map(([k, [rotulo, classe, explicacao = ""]]) => [k, { rotulo, classe, explicacao }])));
+export const ESTADOS_IMPORTACAO = rotulos({
+  RECEBIDO: ["Recebido", "info", "Arquivo guardado no cofre."], EM_VALIDACAO: ["Em validação", "info", "O leitor está conferindo o arquivo."],
+  PRONTO_PARA_IMPORTAR: ["Pronto para importar", "alerta", "Prévia gerada: falta a revisão e a confirmação."], IMPORTADO: ["Importado", "ok", "Registros gravados sem efeito financeiro."],
+  IMPORTADO_COM_PENDENCIAS: ["Importado com pendências", "alerta", "Gravado com divergências aceitas e justificadas."], REJEITADO: ["Rejeitado", "erro", "O arquivo não pôde ser lido como o relatório declarado."],
+  SUBSTITUIDO: ["Substituído", "neutro", "Uma versão corrigida passou a valer."],
+});
+export const ESTADOS_PROPOSTA = rotulos({
+  PROPOSTA: ["Para revisar", "info", "Formada a partir do arquivo; ainda sem decisão."], AGUARDANDO_EVIDENCIA: ["Aguardando evidência", "alerta", "Falta documento: não pode ser aprovada assim."],
+  AGUARDANDO_REVISAO: ["Revisão com justificativa", "alerta", "Há dúvida: aprovar exige justificativa."], APROVADA: ["Aprovada (não aplicada)", "info", "Aprovada, mas ainda sem efeito financeiro."],
+  APLICADA: ["Aplicada", "ok", "O efeito foi registrado uma única vez."], REJEITADA: ["Rejeitada", "neutro", "Descartada com justificativa."], SUBSTITUIDA: ["Substituída", "neutro", "Outra proposta passou a valer."],
+});
+export const CONFIANCAS = Object.freeze({ ALTA: "Confiança alta", MEDIA: "Confiança média", BAIXA: "Confiança baixa" });
+export const SITUACOES_CORRESPONDENCIA = rotulos({
+  CANDIDATA: ["Candidata", "info", "Sugestão: ainda não é conciliação."], CONFIRMADA: ["Confirmada", "ok", "Decidida por uma pessoa, com histórico."],
+  REJEITADA: ["Rejeitada", "neutro", "Descartada com justificativa."], DIVERGENTE: ["Divergente", "erro", "Diferença registrada com justificativa."],
+  AGUARDANDO_DOCUMENTO: ["Aguardando documento", "alerta", "Hipótese plausível sem o documento que a comprove."],
+});
+export const SITUACOES_PENDENCIA = rotulos({
+  ABERTA: ["Aberta", "erro", "Precisa ser resolvida ou documentada."], AGUARDANDO_DOCUMENTO: ["Aguardando documento", "alerta", "Falta o documento indicado."],
+  AGUARDANDO_DECISAO: ["Aguardando decisão", "info", "Alguém precisa revisar e decidir."], EXPLICADA_PARCIALMENTE: ["Explicada em parte", "alerta", "Há explicação registrada, sem comprovação completa."],
+  INFORMATIVA: ["Informativa", "neutro", "Registrada para contexto; não precisa de ação."],
+});
+export const ESTADOS_COMPETENCIA = rotulos({
+  ABERTA: ["Competência aberta", "info"], FECHAMENTO_PRELIMINAR: ["Fechamento preliminar", "info"],
+  FECHAMENTO_COM_PENDENCIAS: ["Fechamento com pendências documentadas", "alerta"], FECHAMENTO_HOMOLOGADO: ["Fechamento gerencial homologado", "ok"],
+});
+export const SITUACOES_SECAO = rotulos({ CONFERIDO: ["Conferido", "ok"], PENDENTE: ["Exige documentação", "alerta"], BLOQUEIA: ["Bloqueia a homologação", "erro"], EM_ABERTO_NAO_BLOQUEIA: ["Em aberto (não bloqueia)", "info"] });
+export const FONTES_NOME = Object.freeze({ SAIPOS: "SAIPOS", STONE: "Stone", IFOOD: "iFood", FOODY: "Foody", UNICRED: "Unicred", ANOTA_AI: "Anota AI", MANUAL: "Registro manual" });
+export const PERMISSOES = Object.freeze({
+  "financeiro_v2.ver": "ver", "financeiro_v2.importar": "importar arquivos", "financeiro_v2.registrar": "registrar", "financeiro_v2.revisar": "revisar propostas",
+  "financeiro_v2.conciliar": "conciliar", "financeiro_v2.fechar": "fechar competência", "financeiro_v2.homologar": "homologar", "financeiro_v2.corrigir": "corrigir em fechamento",
+});

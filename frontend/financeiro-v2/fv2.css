@@ -130,6 +130,29 @@ details.card > summary { cursor: pointer; list-style: none; } details.card > sum
 .tabela th.esquerda { text-align: left; }
 .ligacoes { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 12px; }
 .painel .ficha dd, .painel .lista-simples span { overflow-wrap: anywhere; min-width: 0; }
+/* ---------------------------------------------------------------- central de conferências (Execução 06C) */
+.duas-colunas { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; } .duas-colunas .card { margin-bottom: 0; } .duas-colunas { margin-bottom: 16px; }
+.central .card > h2:not(.sr) { font-size: 18px; margin: 0 0 8px; }
+.lista-ok { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; } .lista-ok li::before { content: "✓ "; color: var(--ok); font-weight: 700; }
+.pendencias-lista, .correspondencias, .secoes-fechamento { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.pendencia, .correspondencia, .secoes-fechamento li { border: 1px solid var(--linha); border-radius: 12px; padding: 10px 14px; min-width: 0; }
+.pendencia--bloqueia { border-left: 4px solid var(--erro); }
+.pendencia-topo { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; } .pendencia-topo strong { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.pendencia-motivo { margin: 4px 0 0; font-size: 14px; }
+.lados { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 8px 0; } .lado { min-width: 0; } .lado h4 { margin: 0 0 4px; font-size: 13px; } .lado li { overflow-wrap: anywhere; }
+.etapas-fechamento { list-style: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 0; margin: 12px 0; counter-reset: etapa; }
+.etapas-fechamento li { counter-increment: etapa; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--linha); font-size: 13px; color: var(--suave); }
+.etapas-fechamento li::before { content: counter(etapa) ". "; } .etapas-fechamento li.concluida { color: var(--ok); border-color: var(--ok); } .etapas-fechamento li.atual { background: var(--texto); color: var(--card); border-color: var(--texto); font-weight: 600; }
+.acao { border: 1px solid var(--linha); border-radius: 12px; padding: 12px; margin: 12px 0; display: grid; gap: 8px; background: var(--bg); }
+.acao label { display: grid; gap: 4px; font-size: 13px; } .acao input[type="text"] { font: inherit; padding: 8px 10px; border: 1px solid var(--linha); border-radius: 10px; background: var(--card); color: var(--texto); min-height: 40px; width: 100%; }
+.acao .caixa-marcar { display: flex; align-items: flex-start; gap: 8px; } .acao .caixa-marcar input { margin-top: 3px; width: 18px; height: 18px; flex: 0 0 auto; }
+.acao--perigo { border-color: var(--erro-bg); } .botao--primario { background: var(--marca); color: #fff; border-color: var(--marca); } .acao .botao { justify-self: start; }
+.resultado-acao { margin: 0; font-size: 13px; } .resultado-acao:empty { display: none; }
+.escolha { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; } .escolha legend { font-weight: 600; margin-bottom: 4px; }
+.opcao-arquivo { display: flex !important; gap: 8px; align-items: flex-start; border: 1px solid var(--linha); border-radius: 10px; padding: 8px 10px; background: var(--card); } .opcao-arquivo input { margin-top: 3px; }
+.passos { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-left: 18px; font-size: 13px; color: var(--suave); }
+details.tecnico { margin-top: 16px; } details.tecnico summary { cursor: pointer; color: var(--suave); font-size: 13px; }
+details.tecnico pre { font-size: 11px; background: var(--bg); padding: 10px; border-radius: 8px; overflow-x: auto; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .filtros-locais { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .filtros-locais .caixa-marcar { grid-column: 1 / -1; }
   .filtros-locais select, .filtros-locais input:not([type="checkbox"]) { width: 100%; min-width: 0; }
@@ -145,6 +168,8 @@ details.card > summary { cursor: pointer; list-style: none; } details.card > sum
   .calendario { gap: 3px; } .cal-dia { min-height: 56px; padding: 4px; } .cal-valor { display: none; } .marca-dia { min-width: 16px; height: 16px; font-size: 10px; padding: 0 3px; }
   .contas { grid-template-columns: minmax(0, 1fr); }
   .navegacao ul { scrollbar-width: thin; }
+  /* Central de Conferências (06C): lados da correspondência e etapas empilhados. */
+  .lados { grid-template-columns: minmax(0, 1fr); } .etapas-fechamento li { flex: 1 1 100%; }
   /* Vendas e Recebimentos (06B): abas roláveis e fichas em uma coluna no celular. */
   .tabela--cartoes td > .cel { display: block; text-align: right; min-width: 0; overflow-wrap: anywhere; } .tabela--cartoes td.esquerda > .cel { text-align: left; }
   .abas--botoes { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; padding-bottom: 4px; } .abas--botoes button { flex: 0 0 auto; }

@@ -23,4 +23,5 @@ export { CODIGO, ErroFinanceiro } from "./dominio/erros.js";
 export { INDICADOR, compor } from "./dominio/indicadores.js";
 export * as tesouraria from "./dominio/tesouraria.js";
 export * as vendasRecebimentos from "./dominio/vendasRecebimentos.js";
+export * as conferencias from "./dominio/conferencias.js";
 export { CANAIS_PRINCIPAIS, METODOLOGIA, SITUACAO_INDICADOR, apurar, comoPercentual, participacoes } from "./dominio/apuracao.js";
