@@ -45,13 +45,17 @@ delas também usa a preparação incompleta). Os 36 completos reproduzem o custo
    planilha aberta (própria ou de preparação) e passam a pedir a conferência antes de homologar. Nenhuma está homologada.
 4. **Interface**: categorias de carga fora de Doces/Salgados/Bebidas aparecem no filtro e no detalhe (ex.: "Açaí").
 5. **Ops** (`database/ops/remover_catalogo_modelo_indevido_{PREVIEW,APLICAR,REVERTER,RESTAURAR_ARQUIVO}.sql`): remove o catálogo-modelo
-   das Subways copiado por engano para uma empresa que não é Subway, com travas (venda, PDV, histórico, estoque, compras,
-   tabela oficial), conferência das contagens do PREVIEW, cópia integral em `backup_ops` e reversão exata. Placeholders
+   das Subways copiado por engano para uma empresa que não é Subway. O APLICAR só prossegue se TUDO bater com o PREVIEW:
+   identidade da empresa (id, nome e modelo de origem), contagens por tabela e **impressão digital** (MD5 dos ids) de
+   cada tabela; 15 travas de uso real (vendas, PDV, combos, histórico, mão de obra, estoque, lotes, compras,
+   divergências, Martin Brower, tabela oficial…). Tudo em uma transação com a linha da empresa travada; cópia integral
+   em `backup_ops`; também zera `organizacoes.modelo_origem_id` (senão a aba "Modelo Inicial" poderia reclonar o
+   catálogo assim que a empresa ficasse vazia). REVERTER devolve linhas e `modelo_origem_id`. Placeholders
    `<ORG_ID>`/`<ESPERADO_*>`/`<LOTE>`/`<PASTA>`; só com autorização. `RESTAURAR_ARQUIVO` é a contingência que restaura a
    partir do backup exportado em sessão somente-leitura (um `to_jsonb` por linha, com MD5 conferido no banco) — usa
    `\encoding UTF8` porque o psql do Windows pode assumir WIN1252.
-   Origem do problema: o assistente de criação de empresa clona o catálogo do modelo escolhido; o modelo "Subway Padrão"
-   foi usado também para empresas que não são Subway. Os scripts não mudam esse assistente.
+   Rodar no SQL Editor (UTF-8) ou com `PGCLIENTENCODING=UTF8`: com codificação errada o nome da empresa não confere e o
+   APLICAR recusa (falha segura, testada). Causa e proposta de correção: `proposta-modelo-inicial.md`.
 
 Sem migration. Nada foi alterado em produção.
 
@@ -64,8 +68,11 @@ Sem migration. Nada foi alterado em produção.
   `carga_real.sh <payload.json> <relatorio.json>` (carga real simulada 2× numa empresa fictícia; os JSON ficam fora do
   repositório), `modelo_indevido.sh` (scripts de ops) e `restauracao_backup.sh <pasta_backup> <org> [payload]` (ensaio
   completo de remoção, reversão e restauração pelo arquivo com o backup real).
-- `CATALOGO_PAYLOAD=… CATALOGO_RELATORIO=… node --test backend/test/catalogo-homologacao-carga-real.test.js`: com a carga
-  real, o lote com TODOS os ids homologa só as completas (sem os dados, o teste é pulado).
+- `backend/test/catalogo-homologacao-carga-real.test.js` com dados reais exportados só-leitura (fora do repositório; sem
+  eles os casos são pulados): `CATALOGO_PAYLOAD`/`CATALOGO_RELATORIO` (carga do Jah: lote com todos os ids homologa só as
+  completas; todo produto abre sem preço e sem condições comerciais) e `CATALOGO_TABELAS_DIR`/`CATALOGO_TABELAS_ORG`
+  (tabelas de uma empresa, ex.: Caramelle: oráculo independente — nenhuma ficha com pendência da planilha é homologada,
+  individual ou em lote).
 
 ## Dashboard iFood
 O vínculo produto ↔ item do iFood continua sendo o código do PDV (ou nome idêntico e único) no detalhe do produto.

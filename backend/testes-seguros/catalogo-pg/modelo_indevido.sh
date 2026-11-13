@@ -22,23 +22,12 @@ run -d "$DB" -f "$M/157_catalogo_empresa_rendimento_importacao.sql" >/dev/null 2
 run -d "$DB" -f "$M/158_condicoes_comerciais_e_invalidacao_homologacao.sql" >/dev/null 2>&1
 
 J=e1000000-0000-4000-8000-0000000000e1
-# Tabelas que existem em produção mas não no esquema mínimo deste teste (só o necessário para as travas do script).
-run -d "$DB" >/dev/null 2>&1 <<'SQL'
-create table if not exists sw_produtos_vendidos (id uuid primary key default gen_random_uuid(), produto_id uuid references produtos(id) on delete set null);
-create table if not exists sw_mapeamento_produtos (id uuid primary key default gen_random_uuid(), produto_id uuid references produtos(id) on delete set null);
-create table if not exists vendas_itens (id uuid primary key default gen_random_uuid(), produto_id uuid references produtos(id));
-create table if not exists movimentacoes_estoque (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id));
-create table if not exists pedidos_compra_itens (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id));
-create table if not exists insumo_historico (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete cascade);
-create table if not exists produto_historico (id uuid primary key default gen_random_uuid(), produto_id uuid references produtos(id) on delete cascade);
-create table if not exists sw_combo_componentes (id uuid primary key default gen_random_uuid(), produto_id uuid references produtos(id) on delete cascade);
-create table if not exists estoque (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete cascade);
-create table if not exists lotes (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete cascade);
-create table if not exists divergencias_compra (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete set null);
-create table if not exists martin_brower_vinculos (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete cascade);
-SQL
+MOD=e0000000-0000-4000-8000-00000000a0a0
+. "$AQUI/ops_preencher.sh"
+run -d "$DB" -c "$STUBS_OPS_SQL" >/dev/null 2>&1
 run -d "$DB" >/dev/null 2>&1 <<SQL
-insert into organizacoes (id, nome) values ('$J','Empresa J');
+insert into organizacoes (id, nome, eh_modelo) values ('$MOD','Modelo Padrão', true);
+insert into organizacoes (id, nome, modelo_origem_id) values ('$J','Empresa J — Centro', '$MOD');
 insert into unidades (organizacao_id, nome) values ('$J','Loja J');
 -- cópia do modelo (mesmo instante), com preparação, linha inativa e preços em várias tabelas
 insert into insumos (id, organizacao_id, nome, unidade_medida, preco_unitario, created_at) values
@@ -58,7 +47,8 @@ select fn_catalogo_importar('$J','planilha-j','{"insumos":[{"chave":"ing:POLPA",
 SQL
 snap() { q "select md5(string_agg(x, '|' order by x)) from (
   select to_jsonb(p)::text x from produtos p union all select to_jsonb(i)::text from insumos i
-  union all select to_jsonb(f)::text from ficha_tecnica f union all select to_jsonb(pp)::text from produto_precos pp) t"; }
+  union all select to_jsonb(f)::text from ficha_tecnica f union all select to_jsonb(pp)::text from produto_precos pp
+  union all select id||':'||coalesce(modelo_origem_id::text,'nulo') from organizacoes) t"; }
 outras() { q "select md5(string_agg(x, '|' order by x)) from (
   select to_jsonb(p)::text x from produtos p where organizacao_id <> '$J' union all select to_jsonb(i)::text from insumos i where organizacao_id <> '$J'
   union all select to_jsonb(f)::text from ficha_tecnica f join produtos p on p.id=f.produto_id where p.organizacao_id <> '$J') t"; }
@@ -71,36 +61,47 @@ echo "$PREV" | grep -q "^produtos_a_remover=2$" && echo "$PREV" | grep -q "^insu
 [ "$(echo "$PREV" | grep '^TRAVA_' | grep -cv '=0$')" = "0" ] && ok "PREVIEW: nenhuma trava acionada" || falha "travas"
 [ "$(snap)" = "$ANTES" ] && ok "PREVIEW não altera nada" || falha "preview alterou"
 
-aplicar() { sed -e "s/<ORG_ID>/$J/g" -e "s/<ESPERADO_PRODUTOS>/$1/" -e "s/<ESPERADO_INSUMOS>/$2/" -e "s/<ESPERADO_FICHA>/$3/" -e "s/<ESPERADO_PRECOS>/$4/" \
-  "$OPS/remover_catalogo_modelo_indevido_APLICAR.sql" > "$TMP/aplicar.sql"; run -d "$DB" -tA -F '=' -f "$TMP/aplicar.sql" 2>&1; }
+echo "$PREV" | grep -q "^org_modelo_origem_id=$MOD$" && echo "$PREV" | grep -q "^org_nome=Empresa J — Centro$" && ok "PREVIEW mostra a identidade (nome e modelo de origem)" || falha "identidade no PREVIEW"
+APL="$OPS/remover_catalogo_modelo_indevido_APLICAR.sql"
+aplicar() { preencher_aplicar "$PREV" "$J" "$APL" "$@" > "$TMP/aplicar.sql" || return 9; run -d "$DB" -tA -F '=' -f "$TMP/aplicar.sql" 2>&1; }
+recusa() { local msg="$1" motivo="$2"; shift 2; local out; out="$(aplicar "$@")" && falha "aceitou: $msg"
+  echo "$out" | grep -q "$motivo" || { echo "$out" | tail -3; falha "motivo errado para: $msg"; }
+  [ "$(snap)" = "$ANTES" ] && ok "APLICAR recusado ($msg — \"$motivo\") e nada muda" || falha "alterou: $msg"; }
 
-aplicar 3 2 3 3 >/dev/null && falha "aceitou contagem errada" || true
-[ "$(snap)" = "$ANTES" ] && ok "APLICAR com contagem diferente do PREVIEW é recusado e nada muda" || falha "alterou com contagem errada"
+recusa "contagem diferente do PREVIEW" "Contagem diferente" "ESPERADO_PRODUTOS=3"
+recusa "nome da empresa diferente" "Empresa não confere" "ORG_NOME=Outra Empresa"
+recusa "modelo de origem diferente" "Modelo de origem não confere" "MODELO_ID=$J"
+recusa "ids diferentes dos do PREVIEW" "impressão digital diferente" "IDS_MD5_PRECOS=00000000000000000000000000000000"
+recusa "id de outra empresa" "Empresa não confere" "ORG_ID=a0000000-0000-4000-8000-000000000001"
+( preencher_aplicar "$PREV" "$J" "$APL" "ORG_NOME=<ORG_NOME>" >/dev/null 2>&1 ) && falha "aceitou marcador vazio" || ok "marcador não preenchido é detectado antes de rodar"
 
 q "insert into lotes (id, unidade_id, insumo_id, quantidade) select 'e9000000-0000-4000-8000-000000000001', id, 'e2000000-0000-4000-8000-000000000001', 1 from unidades where organizacao_id='$J'" >/dev/null
-aplicar 2 2 3 3 >/dev/null && falha "aceitou com lote de estoque" || true
+recusa "trava: lote de estoque (tabela em cascata)" "uso real dos itens-modelo"
 q "delete from lotes where id='e9000000-0000-4000-8000-000000000001'" >/dev/null
-[ "$(snap)" = "$ANTES" ] && ok "APLICAR com trava (lote de estoque, tabela em cascata) é recusado e nada muda" || falha "alterou com lote"
 q "update unidades set tabela_balcao='A' where organizacao_id='$J'" >/dev/null
-aplicar 2 2 3 3 >/dev/null && falha "aceitou com tabela oficial configurada" || true
+OUT="$(aplicar)" && falha "aceitou com tabela oficial"; echo "$OUT" | grep -q "uso real dos itens-modelo" || falha "motivo tabela oficial"
 q "update unidades set tabela_balcao=null where organizacao_id='$J'" >/dev/null
-[ "$(snap)" = "$ANTES" ] && ok "APLICAR com trava (tabela oficial em uso) é recusado e nada muda" || falha "alterou com trava"
+[ "$(snap)" = "$ANTES" ] && ok "APLICAR recusado (trava: tabela oficial em uso) e nada muda" || falha "alterou com tabela oficial"
+# produto do modelo editado/adicionado depois do PREVIEW muda a impressão digital
+q "insert into produto_precos (produto_id, canal, tabela, preco) values ('e3000000-0000-4000-8000-000000000001','ifood','Z1',2)" >/dev/null
+OUT="$(aplicar)" && falha "aceitou com preço novo após o PREVIEW"; echo "$OUT" | grep -q "Contagem diferente" && ok "APLICAR recusado: preço criado depois do PREVIEW (contagem)" || falha "motivo preço novo"
+q "delete from produto_precos where produto_id='e3000000-0000-4000-8000-000000000001' and tabela='Z1'" >/dev/null
+[ "$(snap)" = "$ANTES" ] || falha "estado de teste não restaurado"
 
-SAIDA="$(aplicar 2 2 3 3)" || { echo "$SAIDA"; falha "APLICAR"; }
+SAIDA="$(aplicar)" || { echo "$SAIDA"; falha "APLICAR"; }
 LOTE="$(echo "$SAIDA" | grep '^lote de backup' | cut -d= -f2)"
-[ "$(q "select count(*) from produtos where organizacao_id='$J'")" = "1" ] && [ "$(q "select nome from produtos where organizacao_id='$J'")" = "COPO" ] \
-  && [ "$(q "select count(*) from insumos where organizacao_id='$J'")" = "1" ] && ok "APLICAR: sobra só o catálogo da planilha (COPO/POLPA)" || falha "sobrou modelo"
+[ "$(q "select count(*) from produtos where organizacao_id='$J'")" = "1" ] && [ "$(q "select nome from produtos where organizacao_id='$J'")" = "COPO" ]   && [ "$(q "select count(*) from insumos where organizacao_id='$J'")" = "1" ] && ok "APLICAR: sobra só o catálogo da planilha (COPO/POLPA)" || falha "sobrou modelo"
 [ "$(q "select count(*) from produto_precos pp join produtos p on p.id=pp.produto_id where p.organizacao_id='$J'")" = "0" ] && ok "APLICAR: tabelas de preço do modelo removidas" || falha "precos"
 [ "$(q "select count(*) from ficha_tecnica f join produtos p on p.id=f.produto_id where p.organizacao_id='$J'")" = "1" ] && ok "APLICAR: ficha da planilha intacta" || falha "ficha planilha"
+[ "$(q "select coalesce(modelo_origem_id::text,'nulo') from organizacoes where id='$J'")" = "nulo" ] && ok "APLICAR: modelo_origem_id limpo (a aba Modelo Inicial não consegue reclonar)" || falha "modelo_origem_id"
 [ "$(outras)" = "$OUTRAS" ] && ok "APLICAR: outras empresas intactas" || falha "outras empresas"
-[ "$(q "select count(*) from backup_ops.modelo_indevido_produtos where lote='$LOTE'")" = "2" ] && ok "APLICAR: cópia de segurança gravada (lote $LOTE)" || falha "backup"
+[ "$(q "select count(*) from backup_ops.modelo_indevido_produtos where lote='$LOTE'")" = "2" ] && [ "$(q "select modelo_origem_id from backup_ops.modelo_indevido_empresa where lote='$LOTE'")" = "$MOD" ]   && ok "APLICAR: cópia de segurança gravada, inclusive o modelo de origem (lote $LOTE)" || falha "backup"
 [ "$(q "select has_schema_privilege('anon','backup_ops','USAGE')")" = "f" ] && ok "cópia de segurança fora do alcance de anon" || falha "backup exposto"
 
-aplicar 2 2 3 3 >/dev/null && falha "reaplicou" || true
-ok "APLICAR repetido é recusado (nada mais a remover)"
+OUT="$(aplicar)" && falha "reaplicou"; echo "$OUT" | grep -q "Modelo de origem não confere" && ok "APLICAR repetido é recusado (modelo de origem já limpo)" || falha "motivo reaplicar"
 
 sed "s/<LOTE>/$LOTE/g" "$OPS/remover_catalogo_modelo_indevido_REVERTER.sql" > "$TMP/reverter.sql"
 run -d "$DB" -tA -f "$TMP/reverter.sql" >/dev/null || falha "REVERTER"
-[ "$(snap)" = "$ANTES" ] && ok "REVERTER devolve exatamente as mesmas linhas (ids e valores)" || falha "reverter difere"
+[ "$(snap)" = "$ANTES" ] && ok "REVERTER devolve exatamente as mesmas linhas e o modelo_origem_id" || falha "reverter difere"
 run -d "$DB" -tA -f "$TMP/reverter.sql" >/dev/null 2>&1 && falha "reverteu duas vezes" || ok "REVERTER repetido é recusado"
 echo "MODELO INDEVIDO: TODOS OS TESTES PASSARAM"

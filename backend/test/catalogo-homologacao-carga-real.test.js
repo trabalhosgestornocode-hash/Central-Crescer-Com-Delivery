@@ -46,6 +46,8 @@ function criarBanco(tabelas) {
 register("./helpers/supabase-falso.hooks.mjs", import.meta.url);
 const svc = await import("../src/modules/produtos/produtos.service.js");
 const { validarPayload } = await import("../src/modules/catalogo-importacao/catalogo.planejar.js");
+const cond = await import("../src/modules/cmv/cmv.condicoes.js");
+const { margemPorPreco } = await import("../../frontend/src/produtoCatalogoModelo.js");
 
 const ORG = "c0ffee00-0000-4000-8000-000000000001";
 const OUTRA = "c0ffee00-0000-4000-8000-000000000002";
@@ -68,7 +70,7 @@ function bancoDaCarga(payload) {
   insumos.push({ id: "00000000-0000-4000-9999-000000000001", organizacao_id: OUTRA, nome: "X", tipo: "outro", unidade_medida: "g", ativo: true, preco_unitario: 1 });
   produtos.push({ id: "00000000-0000-4000-9999-000000000002", organizacao_id: OUTRA, nome: "Y", tipo: "outro", vendavel: true, ativo: true, rendimento: 1, homologacao: "pendente" });
   ficha_tecnica.push({ id: "f-outra", produto_id: "00000000-0000-4000-9999-000000000002", insumo_id: "00000000-0000-4000-9999-000000000001", quantidade: 1, ativo: true });
-  return { db: criarBanco({ insumos, produtos, ficha_tecnica, catalogo_origem, produto_historico: [], produto_precos: [], ficha_mao_de_obra: [] }), idDe };
+  return { db: criarBanco({ insumos, produtos, ficha_tecnica, catalogo_origem, produto_historico: [], produto_precos: [], ficha_mao_de_obra: [], canais_venda: [], canais_venda_historico: [] }), idDe };
 }
 
 test("CARGA REAL: o lote com TODOS os ids homologa exatamente as fichas completas e recusa todas as incompletas", { skip: PULAR }, async () => {
@@ -93,6 +95,71 @@ test("CARGA REAL: o lote com TODOS os ids homologa exatamente as fichas completa
 
   // e um a um (botão individual): nenhuma incompleta passa
   for (const id of incompletas) await assert.rejects(svc.definirHomologacao({ organizacaoId: ORG, produtoId: id, acao: "homologar", usuario: ADMIN }), (e) => e.statusCode === 409);
+});
+
+// ---------------------------------------------------------------- TABELAS REAIS de uma empresa (ex.: Caramelle)
+// CATALOGO_TABELAS_DIR=<pasta com produtos/insumos/ficha_tecnica/catalogo_origem .jsonl exportados só-leitura>
+// CATALOGO_TABELAS_ORG=<organizacao_id>. Oráculo INDEPENDENTE do código: ficha com pendência da planilha aberta
+// (própria ou de preparação usada, em qualquer nível) NUNCA pode ser homologada — individual ou em lote.
+const DIR = process.env.CATALOGO_TABELAS_DIR; const ORG_T = process.env.CATALOGO_TABELAS_ORG;
+const PULAR_T = !(DIR && ORG_T && existsSync(`${DIR}/produtos.jsonl`)) && "defina CATALOGO_TABELAS_DIR e CATALOGO_TABELAS_ORG (dados fora do repositório)";
+const CARGA_BLOQ = new Set(["linha_sem_quantidade", "componente_nao_encontrado", "linha_com_erro_na_planilha", "custo_planilha_invalido", "sem_rendimento", "layout_inesperado", "ciclo_na_receita"]);
+
+test("CARGA REAL sem preço e sem condições comerciais: todo produto aparece e abre o detalhe; nada é inventado", { skip: PULAR }, async () => {
+  const payload = JSON.parse(readFileSync(PAYLOAD, "utf8"));
+  const rel = JSON.parse(readFileSync(RELATORIO, "utf8"));
+  const { db, idDe } = bancoDaCarga(payload);
+  globalThis.__supabaseFalso = db;
+  const incompletas = new Set(rel.fichas_pendentes.map((f) => idDe.get(f.chave)));
+  const lista = await svc.listarFichasCatalogo({ organizacaoId: ORG });
+  assert.equal(lista.itens.length, payload.produtos.length, "todos os produtos/preparações da carga aparecem no catálogo");
+  assert.ok(lista.itens.every((i) => i.categoria === payload.produtos[0].referencia.fontes[0].categoria), "categoria da carga");
+  const c = await cond.condicoesComerciais({ organizacaoId: ORG });
+  assert.equal(c.canais.length, 0, "sem condições comerciais cadastradas");
+  for (const [chave, id] of idDe) {
+    if (!lista.itens.some((i) => i.id === id)) continue; // insumos
+    const d = await svc.obterProduto({ organizacaoId: ORG, id });
+    assert.equal(d.controlado, true); assert.ok(d.catalogo, `${chave}: detalhe do catálogo`);
+    assert.deepEqual(d.precos, [], "nenhum preço atribuído a balcão/iFood");
+    assert.ok(d.catalogo.formacao_custo && Array.isArray(d.catalogo.pendencias));
+    if (incompletas.has(id)) assert.ok(d.catalogo.bloqueios_carga.proprias > 0 || d.catalogo.bloqueios_carga.preparacoes.length > 0 || d.status_ficha.chave !== "completa");
+    // margem por canal: sem preço não há linha; com um preço hipotético e sem condições => CMV sim, margem NÃO (canal sem condições)
+    assert.deepEqual(margemPorPreco({ precos: d.precos, custo: d.custo, custoDisponivel: true, condicoes: c }), []);
+    const hip = margemPorPreco({ precos: [{ canal: "ifood", preco: 30 }], custo: 10, custoDisponivel: true, condicoes: c })[0];
+    assert.equal(hip.margemPct, null); assert.equal(hip.motivo, "canal_sem_condicoes");
+  }
+  // a origem guarda o preço da planilha SEM canal (nunca vira produto_precos)
+  assert.equal(db.tabelas.produto_precos.length, 0);
+  assert.ok(payload.produtos.some((p) => p.referencia.preco_venda_planilha > 0));
+});
+
+test("TABELAS REAIS: lote com TODOS os ids nunca homologa ficha com pendência da planilha aberta; individual também recusa", { skip: PULAR_T }, async () => {
+  const L = (t) => readFileSync(`${DIR}/${t}.jsonl`, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const tabelas = { produtos: L("produtos"), insumos: L("insumos"), ficha_tecnica: L("ficha_tecnica"), catalogo_origem: L("catalogo_origem"),
+    produto_historico: [], produto_precos: [], ficha_mao_de_obra: [] };
+  const db = criarBanco(tabelas); globalThis.__supabaseFalso = db;
+  // oráculo
+  const aberta = new Set(tabelas.catalogo_origem.filter((o) => (o.pendencias ?? []).some((p) => CARGA_BLOQ.has(p.codigo) && !p.conferida_em)).map((o) => o.entidade_id));
+  const filhos = new Map(); for (const f of tabelas.ficha_tecnica) if (f.subproduto_id && f.ativo !== false) filhos.set(f.produto_id, [...(filhos.get(f.produto_id) ?? []), f.subproduto_id]);
+  const bloqueadaOraculo = (id, vistos = new Set()) => { if (vistos.has(id)) return false; vistos.add(id); return aberta.has(id) || (filhos.get(id) ?? []).some((c) => bloqueadaOraculo(c, vistos)); };
+  const controlados = tabelas.produtos.filter((p) => p.homologacao !== "nao_aplicavel" && p.organizacao_id === ORG_T);
+  const devemSerBarradas = new Set(controlados.filter((p) => bloqueadaOraculo(p.id)).map((p) => p.id));
+  assert.equal(controlados.filter((p) => p.homologacao === "homologada").length, 0, "pré-condição: nenhuma homologada");
+
+  const lista = await svc.listarFichasCatalogo({ organizacaoId: ORG_T });
+  const statusBloq = (i) => ["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(i.status_ficha.chave);
+  const prontasSemTrava = lista.itens.filter((i) => !statusBloq(i) && i.homologacao === "pendente").length; // o que main ofereceria
+  const prontas = lista.itens.filter((i) => i.pode_homologar);
+  for (const i of prontas) assert.ok(!devemSerBarradas.has(i.id), `${i.nome}: tem pendência da planilha e apareceu como pronta`);
+  for (const i of lista.itens.filter((x) => devemSerBarradas.has(x.id))) assert.equal(i.custo_unitario, null, `${i.nome}: custo não pode aparecer`);
+
+  const r = await svc.homologarLote({ organizacaoId: ORG_T, ids: lista.itens.map((i) => i.id), usuario: ADMIN });
+  for (const id of r.homologadas) assert.ok(!devemSerBarradas.has(id), "lote homologou ficha com pendência da planilha");
+  assert.equal(r.homologadas.length, prontas.length, "lote homologa exatamente as prontas");
+  for (const id of devemSerBarradas) assert.equal(db.tabelas.produtos.find((p) => p.id === id).homologacao, "pendente");
+  for (const id of devemSerBarradas) await assert.rejects(svc.definirHomologacao({ organizacaoId: ORG_T, produtoId: id, acao: "homologar", usuario: ADMIN }), (e) => e.statusCode === 409);
+  const novasBarradas = [...devemSerBarradas].filter((id) => { const i = lista.itens.find((x) => x.id === id); return i && !statusBloq(i); }).length;
+  console.log(`# TABELAS REAIS: controladas=${controlados.length} com_pendencia_planilha=${devemSerBarradas.size} prontas_sem_trava(main)=${prontasSemTrava} prontas_com_trava=${prontas.length} barradas_so_pela_trava=${novasBarradas} homologadas_no_lote=${r.homologadas.length}`);
 });
 
 test("a CARGA nunca homologa: payload com homologacao diferente de 'pendente' é recusado antes do banco", () => {

@@ -1,12 +1,12 @@
 -- PRÉ-VISUALIZAÇÃO (somente leitura) — catálogo-modelo copiado por engano para uma empresa.
 --
--- Caso: ao criar a empresa, o catálogo-modelo das Subways (produtos, insumos, fichas e tabelas de preço) foi copiado
--- para uma empresa que NÃO é Subway. Esses itens aparecem em Produtos/Insumos e oferecem tabelas comerciais que não
--- existem na loja. Este script só LISTA o que seria removido e as travas; não altera nada.
+-- Caso: ao criar a empresa, o operador escolheu um "Modelo inicial" (ex.: Subway Padrão) e o catálogo do modelo
+-- (produtos, insumos, fichas e tabelas de preço) foi copiado para uma empresa que NÃO é do mesmo segmento.
+-- Este script só LISTA o que seria removido, as travas e as IMPRESSÕES DIGITAIS (MD5 dos ids) que o APLICAR exige.
 --
 -- Uso: troque <ORG_ID> pelo id da empresa (o cast falha se esquecer) e rode no SQL Editor.
--- Critério do "modelo": criado no MESMO instante da cópia (created_at da carga-modelo), sem origem de importação de
--- planilha (catalogo_origem) e sem homologação. Itens criados depois (pela loja ou por importação) NUNCA entram.
+-- Critério do "modelo": criado no MESMO instante da cópia (o primeiro created_at da empresa em cada tabela), sem
+-- origem de importação de planilha (catalogo_origem) e sem homologação. Itens criados depois NUNCA entram.
 with alvo as (select '<ORG_ID>'::uuid org),
 semente as (
   select (select min(created_at) from produtos, alvo where organizacao_id = alvo.org) p_ts,
@@ -18,13 +18,22 @@ prod as (
 ins as (
   select i.* from insumos i, alvo, semente where i.organizacao_id = alvo.org and i.created_at = semente.i_ts
      and not exists (select 1 from catalogo_origem o where o.entidade = 'insumo' and o.entidade_id = i.id))
-select 'semente_produtos_em' item, (select p_ts::text from semente) valor
+-- IDENTIDADE (copiar para o APLICAR)
+select 'org_nome' item, (select nome from organizacoes, alvo where id = alvo.org) valor
+union all select 'org_modelo_origem_id', coalesce((select modelo_origem_id::text from organizacoes, alvo where id = alvo.org), '—')
+union all select 'semente_produtos_em', (select p_ts::text from semente)
 union all select 'semente_insumos_em', (select i_ts::text from semente)
 union all select 'produtos_a_remover', count(*)::text from prod
 union all select 'insumos_a_remover', count(*)::text from ins
 union all select 'linhas_ficha_a_remover', count(*)::text from ficha_tecnica f where f.produto_id in (select id from prod)
 union all select 'precos_a_remover', count(*)::text from produto_precos pp where pp.produto_id in (select id from prod)
+union all select 'ids_md5_produtos', md5(coalesce(string_agg(id::text, ',' order by id), '')) from prod
+union all select 'ids_md5_insumos', md5(coalesce(string_agg(id::text, ',' order by id), '')) from ins
+union all select 'ids_md5_ficha', md5(coalesce(string_agg(f.id::text, ',' order by f.id), '')) from ficha_tecnica f where f.produto_id in (select id from prod)
+union all select 'ids_md5_precos', md5(coalesce(string_agg(pp.id::text, ',' order by pp.id), '')) from produto_precos pp where pp.produto_id in (select id from prod)
 union all select 'tabelas_de_preco', coalesce(string_agg(distinct pp.canal::text || '/' || pp.tabela, ', '), '—') from produto_precos pp where pp.produto_id in (select id from prod)
+union all select 'produtos_da_empresa_fora_do_modelo', count(*)::text from produtos p, alvo where p.organizacao_id = alvo.org and p.id not in (select id from prod)
+union all select 'insumos_da_empresa_fora_do_modelo', count(*)::text from insumos i, alvo where i.organizacao_id = alvo.org and i.id not in (select id from ins)
 -- TRAVAS: tudo abaixo precisa ser 0 para o APLICAR prosseguir
 union all select 'TRAVA_vendas_itens', count(*)::text from vendas_itens where produto_id in (select id from prod)
 union all select 'TRAVA_produtos_vendidos_pdv', count(*)::text from sw_produtos_vendidos where produto_id in (select id from prod)
