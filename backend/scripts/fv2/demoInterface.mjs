@@ -34,22 +34,30 @@ export const UNIDADES = Object.freeze([
   { id: "aaaaaaaa-0000-4000-8000-0000000000a1", nome: "Unidade Demonstração (Saci)" },
   { id: "aaaaaaaa-0000-4000-8000-0000000000a2", nome: "Unidade Demonstração 2" },
 ]);
-const USUARIOS = { gestor: "dddddddd-0000-4000-8000-000000000001", leitor: "dddddddd-0000-4000-8000-000000000002", operador: "dddddddd-0000-4000-8000-000000000003", administrador: "dddddddd-0000-4000-8000-000000000004" };
+export const USUARIOS = { gestor: "dddddddd-0000-4000-8000-000000000001", leitor: "dddddddd-0000-4000-8000-000000000002", operador: "dddddddd-0000-4000-8000-000000000003", administrador: "dddddddd-0000-4000-8000-000000000004" };
 /** Nomes de EXIBIÇÃO dos usuários sintéticos (nunca pessoas reais). */
 export const NOMES_DEMO = Object.freeze({ [USUARIOS.gestor]: "Gestor (demonstração)", [USUARIOS.leitor]: "Sem acesso (demonstração)", [USUARIOS.operador]: "Operador (demonstração)", [USUARIOS.administrador]: "Administrador (demonstração)", "cccccccc-0000-4000-8000-000000000001": "Carga inicial da demonstração", "eeeeeeee-0000-4000-8000-0000000000e1": "Autoridade sintética da demonstração" });
 const AUTORIDADE_DEMO = "eeeeeeee-0000-4000-8000-0000000000e1";
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 /** Monta o núcleo e o cenário sintético (setembro com pendências, agosto homologado, unidade 2 com zero confirmado). */
-export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z") } = {}) {
+/**
+ * @param {object} [o]
+ * @param {object} [o.repositorio] 08B: persistência injetada (PostgreSQL da homologação); padrão: memória (demonstração)
+ * @param {object} [o.cofre] 08B: cofre injetado (disco da homologação); padrão: memória
+ * @param {boolean} [o.carregar] 08B: false = NÃO carrega o cenário (os dados já estão no banco da homologação)
+ * @param {(chave:string) => object|null} [o.sessaoDoPedido] 08B: sessão AUTENTICADA (gateway) no lugar do perfil de demonstração
+ */
+export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z"), repositorio: repositorioExterno = null, cofre: cofreExterno = null, carregar = true, sessaoDoPedido = null } = {}) {
   const escopos = UNIDADES.map((u) => ({ organizacaoId: ORG, unidadeId: u.id }));
   const sal = randomUUID();
-  const repositorio = m.criarRepositorioMemoria();
-  const cofre = m.criarCofreMemoria();
+  const repositorio = repositorioExterno ?? m.criarRepositorioMemoria();
+  const cofre = cofreExterno ?? m.criarCofreMemoria();
   // Núcleo de CARGA do cenário sintético (sem exigir concessão gravada); depois, o núcleo que ATENDE a demonstração exige.
   let nucleo = m.criarNucleoFinanceiro({ repositorio, escoposAutorizados: escopos, relogio, cofre });
   const tudo = Object.values(m.ACAO);
   const c = (u = UNIDADES[0].id) => ({ organizacaoId: ORG, unidadeId: u, usuarioId: "cccccccc-0000-4000-8000-000000000001", permissoes: tudo });
+  if (carregar) {
   for (const u of UNIDADES) await nucleo.implantarPlanoDeContas(c(u.id), { modelo: "ACAITERIA" });
   const A = c();
   const caixa = await nucleo.configurarContaFinanceira(A, { tipo: "CAIXA_FISICO", nome: "Caixa" });
@@ -124,8 +132,11 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const adm = (u) => ({ organizacaoId: ORG, unidadeId: u, usuarioId: USUARIOS.administrador, permissoes: tudoMenosNada });
   for (const u of UNIDADES) await nucleo.concederAcesso(adm(u.id), { usuarioId: USUARIOS.gestor, acoes: [m.ACAO.VER], justificativa: "Leitura gerencial." });
   // Operador da DEMONSTRAÇÃO: importa arquivos SINTÉTICOS do catálogo, revisa propostas e concilia — só na unidade 1.
-  await nucleo.concederAcesso(adm(UNIDADES[0].id), { usuarioId: USUARIOS.operador, acoes: [m.ACAO.VER, m.ACAO.IMPORTAR, m.ACAO.REGISTRAR, m.ACAO.REVISAR, m.ACAO.CONCILIAR], justificativa: "Operação da conferência." });
+  await nucleo.concederAcesso(adm(UNIDADES[0].id), { usuarioId: USUARIOS.operador, acoes: [m.ACAO.VER, m.ACAO.IMPORTAR, m.ACAO.CONFIRMAR_IMPORTACAO, m.ACAO.REGISTRAR, m.ACAO.REVISAR, m.ACAO.CONCILIAR], justificativa: "Operação da conferência." });
   await nucleo.concederAcesso(adm(UNIDADES[1].id), { usuarioId: USUARIOS.operador, acoes: [m.ACAO.VER], justificativa: "Consulta." });
+  }
+  // 08B: sem carga, o núcleo que ATENDE já nasce exigindo a concessão gravada (os dados vêm do banco da homologação).
+  if (!carregar) nucleo = m.criarNucleoFinanceiro({ repositorio, escoposAutorizados: escopos, relogio, cofre, exigirConcessaoPersistida: true });
   const concessoes = m.criarConcessoesDoRepositorio({ repositorio, escopos });
   const sessoes = m.criarAdaptadorDeSessao({ concessoes, relogio });
   const PERFIS = { gestor: USUARIOS.gestor, operador: USUARIOS.operador, administrador: USUARIOS.administrador, "sem-acesso": USUARIOS.leitor, expirada: USUARIOS.gestor };
@@ -134,6 +145,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     tenant: { organizacaoId: ORG, unidadeId: null },
     acesso: { sessionId: `demo-${perfil}`, expiraEm: perfil === "expirada" ? "2026-11-12T14:00:00.000Z" : "2099-01-01T00:00:00.000Z", impersonando: false },
   });
+  /** 08B: na homologação, a sessão vem do login AUTENTICADO no gateway (chave da sessão do servidor), nunca do cliente. */
+  const sessaoDe = (chave) => (sessaoDoPedido ? sessaoDoPedido(chave) : sessaoDemo(chave));
   /** Usuário sintético escolhido na tela (pelo nome do perfil) → id. Nunca um id livre vindo do cliente. */
   const usuarioDoPerfil = (perfil) => {
     const id = { gestor: USUARIOS.gestor, operador: USUARIOS.operador, administrador: USUARIOS.administrador, "sem-acesso": USUARIOS.leitor }[perfil];
@@ -300,15 +313,15 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     try {
       const acao = ACOES[caminho];
       if (!acao) return { status: 404, corpo: { erro: "NAO_ENCONTRADO", mensagem: "Ação inexistente." } };
-      if (!PERFIS[perfil]) return { status: 401, corpo: { erro: m.CODIGO.SESSAO_AUSENTE, mensagem: "Sessão ausente." } };
+      if (!sessaoDe(perfil)) return { status: 401, corpo: { erro: m.CODIGO.SESSAO_AUSENTE, mensagem: "Sessão ausente." } };
       // 06D: sessão inválida ou expirada é recusada como tal (401) antes de qualquer outra conferência.
-      await sessoes.unidadesAutorizadas(sessaoDemo(perfil));
+      await sessoes.unidadesAutorizadas(sessaoDe(perfil));
       if (!tokenConfere(perfil, csrf)) return { status: 403, corpo: { erro: "CSRF", mensagem: "Token de segurança ausente ou inválido. Recarregue a página." } };
       if (!corpo || typeof corpo !== "object" || Array.isArray(corpo)) return { status: 400, corpo: { erro: m.CODIGO.ENTRADA_INVALIDA, mensagem: "Corpo inválido." } };
       const desconhecidos = Object.keys(corpo).filter((k) => ![...acao.campos, "unidade", "confirmar"].includes(k));
       if (desconhecidos.length) return { status: 400, corpo: { erro: m.CODIGO.ENTRADA_INVALIDA, mensagem: "Campos desconhecidos." } };
       if (corpo.confirmar !== true) return { status: 400, corpo: { erro: "CONFIRMACAO_EXIGIDA", mensagem: "Esta ação grava dados: confirme explicitamente." } };
-      const ctx = await sessoes.contextoPara(sessaoDemo(perfil), { unidadeId: corpo.unidade });
+      const ctx = await sessoes.contextoPara(sessaoDe(perfil), { unidadeId: corpo.unidade });
       return { status: 200, corpo: sanitizarComRef(await acao.fazer(ctx, corpo)) };
     } catch (e) {
       const status = e?.codigo ? ERROS()[e.codigo] : null;
@@ -319,11 +332,12 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   /** Tratador puro (testável): caminho + parâmetros + perfil de sessão → { status, corpo }. */
   async function responder(caminho, params, perfil) {
     try {
-      const s = sessaoDemo(perfil);
+      const s = sessaoDe(perfil);
       if (caminho === "/api/fv2/sessao") {
         const unidades = await sessoes.unidadesAutorizadas(s);
         return { status: 200, corpo: {
           dataBase: m.tempo.hojeEm(relogio()), csrf: s ? tokenDe(perfil) : null,
+          modo: sessaoDoPedido ? "HOMOLOGACAO" : "DEMONSTRACAO", usuario: s ? NOMES_DEMO[s.user.id] ?? s.nome ?? null : null,
           // 06D: pessoas SINTÉTICAS que podem receber acesso (escolhidas pelo perfil; o id nunca vem do cliente).
           pessoasDemo: [["gestor", USUARIOS.gestor], ["operador", USUARIOS.operador], ["administrador", USUARIOS.administrador], ["sem-acesso", USUARIOS.leitor]].map(([perfil, id]) => ({ perfil, nome: NOMES_DEMO[id] })),
           unidades: unidades.map((u) => ({ id: u.unidadeId, nome: UNIDADES.find((x) => x.id === u.unidadeId)?.nome ?? "Unidade", permissoes: u.acoes })),

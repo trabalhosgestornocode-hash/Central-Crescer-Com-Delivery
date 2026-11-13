@@ -93,17 +93,22 @@ test("fluxo local: receber → prévia → confirmar → gerar propostas → apr
   const dp = await ok("/api/fv2/conferencias/proposta", { id: dinheiro.id }, "operador");
   const ph = conf.detalheProposta(dp);
   for (const t of ["1. O que será registrado", "2. Por que", "3. Documento", "4. Efeito na DRE", "5. Efeito em recebíveis", "6. Efeito no caixa", "7. Dados pendentes", "8. Possíveis conflitos", "9. Autorização", "10. Histórico", "Detalhes técnicos"]) assert.ok(ph.includes(t), t);
-  assert.match(ph, /Aprovar \(não registra nada\)/);
+  assert.ok(!/Aprovar \(não registra nada\)/.test(ph), "08B: o operador não vê a decisão de aprovar (não tem `aprovar`)");
+  assert.match(conf.detalheProposta(await ok("/api/fv2/conferencias/proposta", { id: dinheiro.id }, "administrador")), /Aprovar \(não registra nada\)/);
   assert.ok(!ph.includes("Aplicar: registrar o efeito"), "aplicar só aparece depois de aprovar");
   const antes = (await ok("/api/fv2/dre", OUT)).faturamentoBruto.valorCentavos;
   // 11) aprovação negada para o gestor (só leitura).
   assert.equal((await agir("/api/fv2/acoes/propostas/aprovar", { proposta: dinheiro.id }, { perfil: "gestor", token: (await ok("/api/fv2/sessao", {}, "gestor")).csrf })).status, 403);
-  const ap = await agir("/api/fv2/acoes/propostas/aprovar", { proposta: dinheiro.id });
+  // 08B: o operador NÃO aprova nem aplica (ações separadas `aprovar` e `aplicar`); quem decide é quem as tem (administrador).
+  assert.equal((await agir("/api/fv2/acoes/propostas/aprovar", { proposta: dinheiro.id })).status, 403);
+  const adm = { perfil: "administrador", token: (await ok("/api/fv2/sessao", {}, "administrador")).csrf };
+  const ap = await agir("/api/fv2/acoes/propostas/aprovar", { proposta: dinheiro.id }, adm);
   assert.equal(ap.corpo.estado, "APROVADA");
   assert.equal((await ok("/api/fv2/dre", OUT)).faturamentoBruto.valorCentavos, antes, "aprovar não muda a DRE");
-  assert.match(conf.detalheProposta(await ok("/api/fv2/conferencias/proposta", { id: dinheiro.id }, "operador")), /Aplicar: registrar o efeito/);
-  const a1 = await agir("/api/fv2/acoes/propostas/aplicar", { proposta: dinheiro.id });
-  const a2 = await agir("/api/fv2/acoes/propostas/aplicar", { proposta: dinheiro.id });
+  assert.match(conf.detalheProposta(await ok("/api/fv2/conferencias/proposta", { id: dinheiro.id }, "administrador")), /Aplicar: registrar o efeito/);
+  assert.equal((await agir("/api/fv2/acoes/propostas/aplicar", { proposta: dinheiro.id })).status, 403);
+  const a1 = await agir("/api/fv2/acoes/propostas/aplicar", { proposta: dinheiro.id }, adm);
+  const a2 = await agir("/api/fv2/acoes/propostas/aplicar", { proposta: dinheiro.id }, adm);
   assert.deepEqual([a1.status, a1.corpo.repetido, a2.corpo.repetido], [200, false, true]);
   assert.equal((await ok("/api/fv2/dre", OUT)).faturamentoBruto.valorCentavos, (antes ?? 0) + 2800, "aplicar registra uma única vez");
   const hist = (await ok("/api/fv2/conferencias/proposta", { id: dinheiro.id }, "operador")).historico.map((h) => h.estado);

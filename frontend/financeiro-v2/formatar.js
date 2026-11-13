@@ -188,4 +188,7 @@ export const PERMISSOES = Object.freeze({
   "financeiro_v2.conciliar": "conciliar", "financeiro_v2.fechar": "fechar competência", "financeiro_v2.homologar": "homologar", "financeiro_v2.corrigir": "corrigir em fechamento",
   "financeiro_v2.configurar": "configurar", "financeiro_v2.conceder": "conceder acessos", "financeiro_v2.cancelar": "cancelar",
   "financeiro_v2.documentos": "abrir documentos do cofre",
+  // 08B: ações separadas de decisões sensíveis.
+  "financeiro_v2.aprovar": "aprovar ou rejeitar propostas", "financeiro_v2.aplicar": "aplicar propostas aprovadas",
+  "financeiro_v2.revogar": "revogar acessos", "financeiro_v2.confirmar_importacao": "confirmar importações", "financeiro_v2.reabrir": "reabrir competência homologada",
 });

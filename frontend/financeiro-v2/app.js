@@ -34,6 +34,25 @@ const FILTROS_URL_VENDAS = ["aba", "canal", "forma", "processador", "situacao", 
 const ENDPOINT_DA_ABA = { vendas: "vendas", pagamentos: "vendas/pagamentos", taxas: "vendas/taxas", recebiveis: "vendas/recebiveis", divergencias: "vendas/divergencias" };
 
 const cabecalhos = () => ({ "x-fv2-demo-sessao": estado.sessao });
+/** 08B: homologação full stack — esconde o seletor de perfil da demonstração; mostra quem entrou e permite sair. */
+function modoHomologacao(usuario) {
+  const seletor = document.querySelector("#filtro-sessao");
+  if (!seletor || seletor.dataset.homologacao) return;
+  seletor.dataset.homologacao = "1";
+  const rotulo = seletor.closest("label") ?? seletor;
+  rotulo.hidden = true;
+  const quem = document.createElement("span");
+  quem.className = "usuario-logado";
+  quem.textContent = `Usuário: ${usuario ?? "autenticado"}`;
+  const sair = document.createElement("button");
+  sair.type = "button";
+  sair.textContent = "Sair";
+  sair.addEventListener("click", async () => {
+    await fetch("/api/fv2/logout", { method: "POST", headers: { "content-type": "application/json" }, body: "{}", credentials: "same-origin" });
+    window.location.assign("/entrar");
+  });
+  rotulo.after(quem, sair);
+}
 const qs = (extra = {}) => new URLSearchParams(Object.fromEntries(Object.entries({ competencia: estado.competencia, unidade: estado.unidade ?? "", ...extra }).filter(([, v]) => v !== undefined && v !== null && v !== false))).toString();
 const nomeUnidade = () => estado.unidades.find((u) => u.id === estado.unidade)?.nome ?? "";
 
@@ -123,7 +142,10 @@ async function carregar() {
   if (!estado.unidade) {
     const s = await consultor.consultar("/api/fv2/sessao", cabecalhos());
     if (!s) return;
+    // 08B: na homologação full stack, sem sessão autenticada o servidor pede login (nunca há perfil escolhido pelo cliente).
+    if (!s.ok && s.erro === "LOGIN_EXIGIDO") { window.location.assign("/entrar"); return; }
     if (!s.ok) { conteudo.innerHTML = mensagemDeErro(s); conteudo.removeAttribute("aria-busy"); return; }
+    if (s.dados.modo === "HOMOLOGACAO") modoHomologacao(s.dados.usuario);
     estado.unidades = s.dados.unidades;
     estado.dataBase = s.dados.dataBase ?? null;
     estado.csrf = s.dados.csrf ?? null;
