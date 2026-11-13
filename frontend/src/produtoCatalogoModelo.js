@@ -4,13 +4,20 @@ import { simularPreco, COMPONENTES } from "./simulacaoPreco.js";
 
 const BLOQUEIOS = ["sem_componentes", "insumo_sem_custo", "insumo_inativo"];
 
+/** Pendência da planilha ainda não conferida (própria ou de preparação usada): custo pode estar subestimado. */
+export function bloqueioCarga(p) {
+  const b = p?.catalogo?.bloqueios_carga ?? {};
+  return { proprias: Number(b.proprias) || 0, preparacoes: Array.isArray(b.preparacoes) ? b.preparacoes : [],
+    bloqueado: (Number(b.proprias) || 0) > 0 || (Array.isArray(b.preparacoes) && b.preparacoes.length > 0) };
+}
+
 /** Adapta o produto detalhado ao formato que `seloHomologacao` (fichasModelo) entende. */
 export function itemDoProduto(p) {
   const h = p.homologacao_info ?? {};
   return {
     homologacao: h.estado ?? p.homologacao ?? "nao_aplicavel", homologacao_motivo: h.motivo ?? null,
     homologado_por_nome: h.homologado_por_nome ?? null, homologado_em: h.homologado_em ?? null,
-    ficha_completa: !BLOQUEIOS.includes(p.status_ficha?.chave),
+    ficha_completa: !BLOQUEIOS.includes(p.status_ficha?.chave) && !bloqueioCarga(p).bloqueado,
   };
 }
 

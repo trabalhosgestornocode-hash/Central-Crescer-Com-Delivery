@@ -54,3 +54,22 @@ test("rótulo do custo: por porção para produto final; por g/ml para preparaç
 test("idsProntos só devolve fichas completas e pendentes", () => {
   assert.deepEqual(idsProntos(itens), ["Bolo de Cenoura", "Calda de Frutas"]);
 });
+
+// ---- categorias de outra empresa (ex.: açaiteria com categoria ACAI) -------------------------------
+import { opcoesCategoria, rotuloCategoriaFicha } from "../src/fichasModelo.js";
+test("opções de categoria: conhecidas + as presentes na carga (Açaí), sem esconder itens", () => {
+  const ops = opcoesCategoria({ todas: 5, ACAI: 4, sem: 1 });
+  assert.deepEqual(ops.map((o) => o.id), ["todas", "ACAI", "sem"]);
+  assert.equal(ops[1].rotulo, "Açaí");
+  assert.deepEqual(opcoesCategoria({ todas: 2, DOCES: 1, SALGADOS: 1 }).map((o) => o.id), ["todas", "DOCES", "SALGADOS"]);
+  assert.equal(opcoesCategoria({ todas: 1, OUTRA: 1 })[1].rotulo, "Outra");
+  assert.equal(rotuloCategoriaFicha("DOCES"), "Doces");
+  assert.equal(rotuloCategoriaFicha("ACAI"), "Açaí");
+  assert.equal(rotuloCategoriaFicha(null), "—");
+});
+test("novas pendências da carga: textos claros e não bloqueantes", () => {
+  for (const codigo of ["rendimento_sem_unidade", "preco_venda_planilha_ausente", "mesma_receita_de_preparacao"]) {
+    const d = descreverPendencia({ codigo });
+    assert.notEqual(d.texto, codigo); assert.equal(d.bloqueia, false);
+  }
+});

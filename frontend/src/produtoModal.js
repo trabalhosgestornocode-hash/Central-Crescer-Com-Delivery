@@ -6,6 +6,8 @@ import {
   adicionarComponente, atualizarComponente, removerComponente,
 } from "./api.js";
 import { topoCatalogoHtml, formacaoCatalogoHtml, margensCatalogoHtml, ligarCatalogo } from "./produtoCatalogo.js";
+import { itemDoProduto } from "./produtoCatalogoModelo.js";
+import { rotuloCategoriaFicha } from "./fichasModelo.js";
 import { state } from "./state.js";
 import { UNIDADES_BASE, CATEGORIA_INSUMO_ROTULO } from "./config.js";
 import { fmtMoeda, fmtPct, fmtTexto, escapeHtml, statusCmv, toast } from "./utils.js";
@@ -94,7 +96,9 @@ function render(p) {
   const editar = podeEditar();
   const st = p.status_ficha ?? { chave: "sem_componentes", label: "—" };
   const precoRef = (p.precos ?? []).map((x) => Number(x.preco)).filter((n) => n > 0).sort((a, b) => a - b)[0] ?? null;
-  const margemR = precoRef != null ? precoRef - Number(p.custo) : null;
+  // Catálogo controlado com ficha incompleta (status ou pendência da planilha): o custo é PARCIAL — não vira número "válido" nem margem.
+  const custoParcial = p.controlado && !itemDoProduto(p).ficha_completa;
+  const margemR = precoRef != null && !custoParcial ? precoRef - Number(p.custo) : null;
   const margemP = precoRef != null && precoRef > 0 ? (margemR / precoRef) * 100 : null;
 
   const fichaRows = (p.ficha ?? []).length
@@ -103,7 +107,7 @@ function render(p) {
 
   const precoRows = (p.precos ?? []).length
     ? p.precos.map((pr) => {
-        const cmv = st.chave === "insumo_sem_custo" ? null : (pr.preco > 0 ? (Number(p.custo) / Number(pr.preco)) * 100 : null);
+        const cmv = st.chave === "insumo_sem_custo" || custoParcial ? null : (pr.preco > 0 ? (Number(p.custo) / Number(pr.preco)) * 100 : null);
         const s = statusCmv(cmv);
         return `<tr>
           <td>${canalLabel(pr.canal)}</td>
@@ -121,17 +125,17 @@ function render(p) {
       <div class="modal-tags">
         ${p.tamanho ? `<span class="chip">${escapeHtml(p.tamanho)}</span>` : ""}
         <span class="chip">${catLabel(p.tipo)}</span>
-        ${p.controlado && p.catalogo?.categoria ? `<span class="chip">${escapeHtml(p.catalogo.categoria[0] + p.catalogo.categoria.slice(1).toLowerCase())}</span>` : ""}
+        ${p.controlado && p.catalogo?.categoria ? `<span class="chip">${escapeHtml(rotuloCategoriaFicha(p.catalogo.categoria))}</span>` : ""}
         ${p.controlado ? `<span class="chip">${p.catalogo?.natureza === "preparacao" ? "Preparação intermediária" : "Produto final"}</span>` : ""}
         ${p.ativo ? "" : '<span class="pill muted">Inativo</span>'}
-        <span class="pill ${STATUS_CLASSE[st.chave] ?? "muted"}">${escapeHtml(st.label)}</span>
+        ${custoParcial && !["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(st.chave) ? '<span class="pill warn" title="A planilha tinha itens que não foram importados: confira a ficha.">Pendência da planilha</span>' : `<span class="pill ${STATUS_CLASSE[st.chave] ?? "muted"}">${escapeHtml(st.label)}</span>`}
       </div>
       ${botaoContextualHtml("products_cmv_produto")}
     </div>
     ${p.controlado ? topoCatalogoHtml(p) : ""}
 
     <div class="modal-cmv-grid">
-      <div class="modal-custo"><span>${p.controlado ? "Custo unitário" : "Custo total"}</span><strong>${fmtMoeda(p.custo)}</strong></div>
+      <div class="modal-custo"><span>${p.controlado ? "Custo unitário" : "Custo total"}</span><strong>${custoParcial ? `<span class="pill muted" title="Ficha incompleta: o valor calculado (${escapeHtml(fmtMoeda(p.custo))}) é parcial e não deve ser usado.">indisponível</span>` : fmtMoeda(p.custo)}</strong></div>
       <div class="modal-custo"><span>Componentes</span><strong>${p.qtd_componentes ?? 0}</strong></div>
       <div class="modal-custo"><span title="${p.controlado ? "Preço menos custo, sem comissão e demais deduções. A margem de contribuição por canal está mais abaixo." : ""}">${p.controlado ? "Margem bruta (menor preço)" : "Margem (menor preço)"}</span><strong>${margemR == null ? "—" : fmtMoeda(margemR)}${margemP == null ? "" : ` <small>(${fmtPct(margemP)})</small>`}</strong></div>
     </div>

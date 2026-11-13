@@ -2,12 +2,12 @@
 // (ingredientes, preparações, embalagens, rendimento, mão de obra à parte), vínculo com o iFood e margem de contribuição por canal.
 // Só é usado quando `p.controlado` (produtos importados/independentes). Produtos sem controle (Subways) não passam por aqui.
 import { escapeHtml, fmtMoeda, fmtPct, fmtDataHora, toast } from "./utils.js";
-import { atualizarProduto, definirHomologacaoFicha } from "./api.js";
+import { atualizarProduto, definirHomologacaoFicha, conferirPendenciasCargaFicha } from "./api.js";
 import { abrirHistoricoModal } from "./historicoModal.js";
 import { abrirSimulador } from "./simuladorModal.js";
 import { pode } from "./sessao.js";
 import { seloHomologacao, rotuloMotivo, pendenciasDoItem } from "./fichasModelo.js";
-import { itemDoProduto, podeHomologarProduto, margemPorPreco, linhasFormacao, rotuloNaoConsiderado } from "./produtoCatalogoModelo.js";
+import { itemDoProduto, podeHomologarProduto, margemPorPreco, linhasFormacao, rotuloNaoConsiderado, bloqueioCarga } from "./produtoCatalogoModelo.js";
 
 const CANAL = { balcao: "Balcão", ifood: "iFood", uber: "Uber", app: "App", outro: "Outro" };
 const fmtN = (n) => Number(n).toLocaleString("pt-BR", { maximumFractionDigits: 3 });
@@ -21,6 +21,7 @@ export function topoCatalogoHtml(p) {
   const s = seloHomologacao(item, fmtDataHora);
   const motivo = item.homologacao === "pendente" && item.homologacao_motivo ? rotuloMotivo(item.homologacao_motivo) : "";
   const { bloqueantes, avisos } = pendenciasDoItem({ pendencias: p.catalogo?.pendencias ?? [] });
+  const carga = bloqueioCarga(p);
   return `<section class="pc-bloco" id="pc-topo">
     <div class="pc-linha"><b>Homologação</b> <span class="pill ${s.classe}">${s.texto}</span>
       <span class="muted">${escapeHtml(s.detalhe)}</span></div>
@@ -29,8 +30,10 @@ export function topoCatalogoHtml(p) {
       ${podeHomologar() && podeHomologarProduto(p) ? '<button id="pc-homologar" class="btn btn-primary btn-sm">Homologar esta ficha</button>' : ""}
       ${podeHomologar() && item.homologacao === "homologada" ? '<button id="pc-reabrir" class="btn btn-ghost btn-sm">Reabrir homologação</button>' : ""}
       ${!podeHomologar() && podeHomologarProduto(p) ? '<small class="muted">Somente um administrador pode homologar.</small>' : ""}
+      ${podeHomologar() && carga.proprias > 0 ? '<button id="pc-conferir" class="btn btn-ghost btn-sm">Marcar pendências da planilha como conferidas</button>' : ""}
       <button id="pc-historico" class="btn btn-ghost btn-sm">Histórico de alterações</button>
     </div>
+    ${carga.preparacoes.length ? `<p class="ft-aviso">Usa preparação com pendência da planilha ainda não conferida: <b>${escapeHtml(carga.preparacoes.join(", "))}</b>. Confira a preparação antes de homologar este produto.</p>` : ""}
     ${bloqueantes.length || avisos.length ? `<details class="pc-pend" ${bloqueantes.length ? "open" : ""}><summary>Pendências (${bloqueantes.length + avisos.length}) — ${bloqueantes.length} a corrigir, ${avisos.length} para conferir</summary>
       <ul class="ft-pend">
         ${bloqueantes.map((x) => `<li class="bad"><b>${escapeHtml(x.texto)}</b>${x.detalhe ? `<small>${escapeHtml(x.detalhe)}</small>` : ""}<em>${escapeHtml(x.acao)}</em></li>`).join("")}
@@ -47,13 +50,19 @@ export function formacaoCatalogoHtml(p) {
   const un = f.unidade_rendimento ? ` ${escapeHtml(f.unidade_rendimento)}` : "";
   const linhas = linhasFormacao(p.catalogo);
   const sufixo = ehPrep ? `por ${f.unidade_rendimento ? escapeHtml(f.unidade_rendimento) : "unidade de rendimento"}` : "por porção";
+  // Pendência da planilha aberta: os totais abaixo somam só o que foi importado (podem estar abaixo do real).
+  const parcial = bloqueioCarga(p).bloqueado;
+  const unitario = parcial || f.custo_unitario_materiais == null
+    ? `<span class="pill muted"${parcial && f.custo_unitario_materiais != null ? ` title="Parcial: ${escapeHtml(fmtMoeda(f.custo_unitario_materiais))} — não usar até conferir a ficha."` : ""}>indisponível</span>`
+    : fmtMoeda(f.custo_unitario_materiais);
   return `<section class="pc-bloco" id="pc-formacao">
     <div class="modal-sec-titulo">Formação do custo</div>
+    ${parcial ? '<p class="ft-aviso">Valores parciais: a planilha tinha itens que não foram importados. Complete a ficha e marque as pendências como conferidas.</p>' : ""}
     <table class="grid grid-modal pc-form"><tbody>
       ${linhas.map((l) => `<tr><td>${l.rotulo} <small class="muted">(${l.itens} ${l.itens === 1 ? "item" : "itens"})</small></td><td class="num">${moeda(l.total)}</td></tr>`).join("")}
       <tr class="pc-sub"><td>Custo do lote inteiro (sem mão de obra)</td><td class="num">${moeda(f.lote?.total)}</td></tr>
       <tr><td>Rendimento da receita</td><td class="num"><b>${fmtN(f.rendimento ?? 1)}${un}</b></td></tr>
-      <tr class="pc-total"><td>Custo unitário do produto (${sufixo}) — base do CMV</td><td class="num"><b>${f.custo_unitario_materiais == null ? '<span class="pill muted">indisponível</span>' : fmtMoeda(f.custo_unitario_materiais)}</b></td></tr>
+      <tr class="pc-total"><td>Custo unitário do produto (${sufixo}) — base do CMV</td><td class="num"><b>${unitario}</b></td></tr>
     </tbody></table>
     <table class="grid grid-modal pc-form pc-mod"><tbody>
       <tr><td title="A mão de obra é acompanhada à parte e NUNCA entra no CMV.">Mão de obra (separada do CMV) — ${sufixo}</td><td class="num">${mod.custo_unitario == null ? (mod.linhas?.length || mod.herdado_lote ? '<span class="pill muted">sem custo por minuto</span>' : "—") : fmtMoeda(mod.custo_unitario)}</td></tr>
@@ -72,7 +81,8 @@ export function formacaoCatalogoHtml(p) {
 
 /** Preço de venda, canal, CMV e margem de contribuição — nada é calculado sem custo ou sem as condições do canal. */
 export function margensCatalogoHtml(p, condicoes) {
-  const custoOk = p.catalogo?.formacao_custo?.custo_unitario_materiais != null && !["insumo_sem_custo", "sem_componentes", "insumo_inativo"].includes(p.status_ficha?.chave);
+  const custoOk = p.catalogo?.formacao_custo?.custo_unitario_materiais != null && !["insumo_sem_custo", "sem_componentes", "insumo_inativo"].includes(p.status_ficha?.chave)
+    && !bloqueioCarga(p).bloqueado;
   const linhas = margemPorPreco({ precos: p.precos, custo: p.custo, custoDisponivel: custoOk, condicoes });
   const dica = (r) => ({
     ficha_incompleta: "Ficha incompleta: sem custo confiável.",
@@ -106,6 +116,12 @@ export function ligarCatalogo(m, p, { condicoes, recarregar }) {
   m.querySelector("#pc-reabrir")?.addEventListener("click", () => {
     if (!confirm(`Reabrir a homologação de "${p.nome}"? O CMV desta ficha deixa de ser considerado homologado.`)) return;
     rodar(() => definirHomologacaoFicha(p.id, "reabrir"), "Homologação reaberta.");
+  });
+  m.querySelector("#pc-conferir")?.addEventListener("click", () => {
+    if (!confirm(`Marcar as pendências da planilha de "${p.nome}" como conferidas?
+
+Use somente depois de corrigir a ficha aqui no sistema (itens que a planilha não trouxe, quantidades, nomes). Isto não homologa a ficha e fica registrado no histórico com o seu nome.`)) return;
+    rodar(() => conferirPendenciasCargaFicha(p.id), "Pendências da planilha marcadas como conferidas.");
   });
   m.querySelector("#pc-historico")?.addEventListener("click", () => abrirHistoricoModal(p.id, p.nome));
   m.querySelector("#pc-rend-salvar")?.addEventListener("click", () => {

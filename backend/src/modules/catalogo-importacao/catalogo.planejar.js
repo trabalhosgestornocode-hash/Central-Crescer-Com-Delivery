@@ -243,6 +243,16 @@ export function planejarCatalogo(arquivos, { fonte }) {
     return ing ?? prep ?? emb;
   }
 
+  // Sugestão (NUNCA aplicada): nome que só difere por pontuação/espaços de um cadastro existente
+  // (ex.: "AÇÚCAR]" × "AÇÚCAR"). Vai no texto da pendência para o cliente corrigir na origem.
+  const semPontuacao = (s) => normalizarNome(s).replace(/[^A-Z0-9]/g, "");
+  function sugerir(idx, nome) {
+    const alvo = semPontuacao(nome);
+    if (!alvo) return null;
+    const candidatos = [...locais[idx].ing, ...locais[idx].emb, ...prepLocal[idx].keys()].filter((n) => semPontuacao(n) === alvo);
+    return candidatos.length === 1 ? candidatos[0] : null;
+  }
+
   for (const p of produtos.values()) {
     const b = p.__bruto;
     const A = arquivos[p.__arquivoIdx];
@@ -253,6 +263,13 @@ export function planejarCatalogo(arquivos, { fonte }) {
     if (rend != null && rend > 0) p.rendimento = rend; else { p.rendimento = 1; add("sem_rendimento", `rendimento ausente/inválido (${b.rendimento ?? "vazio"}) — assumido 1 apenas para não quebrar o cálculo; ficha fica pendente`); }
     p.unidade_rendimento = p.__final ? null : unidadeRendimento(b.unidade_rend);
     if (!p.__final && !p.unidade_rendimento) add("unidade_rendimento_ausente", `unidade do rendimento da preparação não informada (${b.unidade_rend ?? "vazio"})`);
+    // A ficha final do modelo não tem campo de unidade: rendimento ≠ 1 (ex.: massa a granel que rende 4,5) deixa
+    // o "custo por unidade" dependente de uma unidade que a planilha não diz (kg? litro? porção?). Aviso, não bloqueio.
+    if (p.__final && rend != null && rend !== 1) add("rendimento_sem_unidade", `rende ${rend} — a ficha não diz em que unidade; custo unitário = custo do lote ÷ ${rend}`);
+    if (p.__final) {
+      const pv = num(b.preco_venda);
+      if (pv == null || pv <= 0) add("preco_venda_planilha_ausente", `preço de venda na planilha ${b.preco_venda == null ? "vazio" : `= ${b.preco_venda}`} — sem preço de origem`);
+    }
     if (ehErro(b.custo_total) || (num(b.custo_total) != null && num(b.custo_total) <= 0) || b.custo_total == null) {
       add("custo_planilha_invalido", `custo total na planilha inválido (${b.custo_total ?? "vazio"})`);
     }
@@ -273,7 +290,11 @@ export function planejarCatalogo(arquivos, { fonte }) {
           add("linha_com_erro_na_planilha", `${l.nome} (linha ${l.linha}) com erro de fórmula na planilha (${[l.valor_emb, l.qtd_emb].filter(ehErro).join("/") || "#"})`);
         }
         const alvo = resolver(p.__arquivoIdx, l.nome, area);
-        if (!alvo) { add("componente_nao_encontrado", `"${l.nome}" (linha ${l.linha}) não existe no cadastro de ${area === "emb" ? "embalagens" : "ingredientes/preparações"} — linha NÃO importada`); lc.nao_encontrada += 1; continue; }
+        if (!alvo) {
+          const s = sugerir(p.__arquivoIdx, l.nome);
+          add("componente_nao_encontrado", `"${l.nome}" (linha ${l.linha}) não existe no cadastro de ${area === "emb" ? "embalagens" : "ingredientes/preparações"} — linha NÃO importada${s ? ` (possível erro de digitação de "${s}": corrigir na planilha e reimportar)` : ""}`);
+          lc.nao_encontrada += 1; continue;
+        }
         if (q == null || q <= 0) { add("linha_sem_quantidade", `"${l.nome}" (linha ${l.linha}) sem quantidade — linha NÃO importada`); lc.sem_quantidade += 1; continue; }
         const k = `${alvo.ref}|${alvo.chave}`;
         if (acumulado.has(k)) {
@@ -303,6 +324,23 @@ export function planejarCatalogo(arquivos, { fonte }) {
         if (atual) atual.minutos += minutos; else mods.set(m.nome, { funcao: String(m.nome).trim(), minutos, custo_minuto: cm });
       }
       p.mao_de_obra = [...mods.values()];
+    }
+  }
+
+  // ------------------------------------------------------------------ produto final = preparação (mesma receita)
+  // Ex.: a massa vendida a granel e a preparação usada nos copos com os mesmos insumos/quantidades. Os dois cadastros
+  // são preservados (cada um com seu rendimento); só se avisa — o cliente decide qual é o vigente.
+  {
+    const sigLinhas = (p) => JSON.stringify(p.linhas.map((l) => `${l.ref}|${l.chave}|${l.quantidade}`).sort());
+    const porSig = new Map();
+    for (const p of produtos.values()) if (!p.__final && p.linhas.length) porSig.set(sigLinhas(p), [...(porSig.get(sigLinhas(p)) ?? []), p]);
+    for (const p of produtos.values()) {
+      if (!p.__final || !p.linhas.length) continue;
+      const iguais = porSig.get(sigLinhas(p)) ?? [];
+      if (!iguais.length) continue;
+      const d = `mesma receita da preparação ${iguais.map((x) => `"${x.nome}" (${x.referencia.fontes[0].aba}, rende ${x.rendimento} ${x.unidade_rendimento ?? ""})`.trim()).join(", ")} — conferir qual rendimento vale`;
+      p.pendencias.push({ codigo: "mesma_receita_de_preparacao", detalhe: d });
+      aviso("aviso", "mesma_receita_de_preparacao", `${p.referencia.fontes[0].categoria}!${p.referencia.fontes[0].aba}`, `${p.nome}: ${d}`);
     }
   }
 
@@ -486,6 +524,8 @@ export function validarPayload(payload) {
   for (const i of payload.insumos) if (!UNIDADES_VALIDAS.has(i.unidade_medida)) erros.push(`unidade inválida em ${i.chave}`);
   for (const p of payload.produtos) {
     if (!(p.rendimento > 0)) erros.push(`rendimento inválido em ${p.chave}`);
+    // A carga NUNCA homologa: homologar é ato de quem conferiu a ficha no sistema (produtos.service#definirHomologacao).
+    if ((p.homologacao ?? "pendente") !== "pendente") erros.push(`homologação não permitida na carga em ${p.chave} (${p.homologacao})`);
     const vistos = new Set();
     for (const l of p.linhas) {
       if (!(l.quantidade > 0)) erros.push(`quantidade inválida em ${p.chave}`);
