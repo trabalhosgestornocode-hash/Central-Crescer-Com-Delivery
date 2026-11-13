@@ -118,7 +118,9 @@ test("5, 6, 9, 32–36 — preliminar, com pendências, homologação, reabertur
   assert.equal(repetida.repetido, true);
   assert.equal((await n.consultarVersoesDeFechamento(c, { competencia: SET })).versoes.length, 3);
   // 6: reabrir sem justificativa ou sem confirmação é recusado; 5: com ambos (e permissão de revisar) reabre.
-  const revisor = ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.REVISAR]);
+  // 08B: reabrir homologada exige a ação PRÓPRIA `reabrir` (revisar não basta).
+  await rejeita(n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.REVISAR]), { competencia: SET, novoEstado: "ABERTA", justificativa: "x", confirmar: true }), CODIGO.PERMISSAO_INSUFICIENTE);
+  const revisor = ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.REABRIR]);
   await rejeita(n.alterarEstadoDaCompetencia(revisor, { competencia: SET, novoEstado: "ABERTA", confirmar: true }), CODIGO.TRANSICAO_INVALIDA);
   await rejeita(n.alterarEstadoDaCompetencia(revisor, { competencia: SET, novoEstado: "ABERTA", justificativa: "Nota chegou" }), CODIGO.CONFIRMACAO_EXIGIDA);
   await rejeita(n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.FECHAR, ACAO.HOMOLOGAR]), { competencia: SET, novoEstado: "ABERTA", confirmar: true, justificativa: "x" }), CODIGO.PERMISSAO_INSUFICIENTE);
@@ -229,7 +231,7 @@ test("16–21 — concessões por organização e unidade; escalada e autoconces
   // Provisionamento só existe com a autoridade; aqui não há → o administrador vem do teste 22 (outro núcleo).
   await rejeita(n.provisionarAdministradorInicial({ organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: USUARIO, acoes: [ACAO.VER], justificativa: "x", evidencia: "y", atestado: "z" }), CODIGO.PROVISIONAMENTO_RECUSADO);
   const comAutoridade = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, exigirConcessaoPersistida: true, autoridadeDeProvisionamento: { verificar: async (ato) => ({ ok: ato.atestado === assinar(ato), autoridadeId, nivelAutenticacao: "aal2" }) } });
-  const ato = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: USUARIO, acoes: [ACAO.VER, ACAO.CONCEDER, ACAO.CONCILIAR, ACAO.REVISAR], justificativa: "Primeiro administrador financeiro (sintético).", evidencia: "Ata sintética nº 1" };
+  const ato = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: USUARIO, acoes: [ACAO.VER, ACAO.CONCEDER, ACAO.REVOGAR, ACAO.CONCILIAR, ACAO.REVISAR], justificativa: "Primeiro administrador financeiro (sintético).", evidencia: "Ata sintética nº 1" };
   await comAutoridade.provisionarAdministradorInicial({ ...ato, atestado: assinar(ato) });
   const adm = ctx(ORG_A, UNI_A, ato.acoes);
   // 16, 17: a concessão vale só na unidade A da organização A.

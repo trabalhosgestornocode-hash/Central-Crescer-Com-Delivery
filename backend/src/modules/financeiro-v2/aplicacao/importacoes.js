@@ -171,7 +171,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
     /** Passos 11–14: confirmação autorizada, gravação em UMA transação e relatório da importação. */
     confirmarImportacao(ctx, entrada) {
       const c = validarConfirmacaoDeImportacao(entrada);
-      return b.executar(ctx, ACAO.IMPORTAR, async (cx, tx) => {
+      return b.executar(ctx, ACAO.CONFIRMAR_IMPORTACAO, async (cx, tx) => {
         let imp = await b.obterOuFalhar(tx, cx, TIPO.IMPORTACAO, c.importacaoId, "Importação");
         if (CONCLUIDAS.includes(imp.estado)) return { importacao: imp, relatorio: imp.relatorio, repetido: true };
         if (imp.estado !== E.PRONTO_PARA_IMPORTAR) falhar(CODIGO.TRANSICAO_INVALIDA, "Esta importação não está pronta para ser confirmada.", { estado: imp.estado });
@@ -232,7 +232,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
 
     rejeitarImportacao(ctx, entrada) {
       const c = validarReferenciaDeImportacao(entrada);
-      return b.executar(ctx, ACAO.IMPORTAR, async (cx, tx) => {
+      return b.executar(ctx, ACAO.CONFIRMAR_IMPORTACAO, async (cx, tx) => {
         const imp = await b.obterOuFalhar(tx, cx, TIPO.IMPORTACAO, c.importacaoId, "Importação");
         if (imp.estado !== E.PRONTO_PARA_IMPORTAR) falhar(CODIGO.TRANSICAO_INVALIDA, "Só uma importação pronta pode ser rejeitada.", { estado: imp.estado });
         if (!c.justificativa) falhar(CODIGO.IMPORTACAO_INVALIDA, "Rejeitar exige justificativa.");

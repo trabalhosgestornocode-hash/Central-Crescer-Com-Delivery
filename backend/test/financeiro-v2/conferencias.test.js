@@ -105,7 +105,7 @@ test("8, 9, 10, 11, 12, 13 — propostas: efeito explicado antes de aprovar, dad
   assert.deepEqual(det.efeitoNaDre.map((x) => [x.linha, x.valorCentavos]), [["FATURAMENTO_BRUTO_PROPRIO", 50000]]);
   assert.deepEqual([det.efeitoEmTitulos, det.efeitoNoCaixa], [[], []]);
   assert.match(det.autorizacao.observacao, /Aprovar NÃO registra nada/);
-  assert.deepEqual([det.autorizacao.aprovar.disponivel, det.autorizacao.aprovar.permissao, det.autorizacao.aplicar.disponivel], [true, ACAO.REVISAR, false]);
+  assert.deepEqual([det.autorizacao.aprovar.disponivel, det.autorizacao.aprovar.permissao, det.autorizacao.aplicar.disponivel], [true, ACAO.APROVAR, false]);
   // Dados insuficientes: Stone sem pedido aguarda evidência e não pode ser aprovada.
   const semPedido = lista.itens.find((p) => p.operacao === "PAGAMENTO_STONE" && p.estado === "AGUARDANDO_EVIDENCIA");
   const dsp = await n.detalharProposta(c, { id: semPedido.id });
@@ -242,7 +242,7 @@ test("21, 22, 23, 25 — fechamento: preliminar, com pendências, homologação 
   assert.match(f.homologacao.motivo, /decisão humana/);
   const h = await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Conferência sintética: relatórios e extrato." });
   assert.equal(h.estado, "FECHAMENTO_HOMOLOGADO");
-  await n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.REVISAR]), { ...SET, novoEstado: "ABERTA", confirmar: true, justificativa: "Relatório por pedido chegou: revisão." });
+  await n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.REABRIR]), { ...SET, novoEstado: "ABERTA", confirmar: true, justificativa: "Relatório por pedido chegou: revisão." });
   f = await n.consultarFechamento(c, SET);
   assert.equal(f.revisoes, 1);
   assert.deepEqual(f.historico.map((x) => x.para), ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO", "ABERTA"]);

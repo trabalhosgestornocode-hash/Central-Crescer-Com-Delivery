@@ -150,6 +150,7 @@ const RECUSAS_DE_ACESSO = {
   FV031: [CODIGO.PERMISSAO_INSUFICIENTE, "A autoria da concessão precisa ser a do usuário da sessão."],
   FV032: [CODIGO.PERMISSAO_INSUFICIENTE, "Sem concessão para conceder nesta unidade (conferido no banco)."],
   FV034: [CODIGO.PERMISSAO_INSUFICIENTE, "Não é possível conceder uma ação que você não possui (conferido no banco)."],
+  FV036: [CODIGO.PERMISSAO_INSUFICIENTE, "Sem concessão para revogar nesta unidade (conferido no banco)."],
   FV035: [CODIGO.PROVISIONAMENTO_RECUSADO, "O provisionamento só grava o que foi atestado, numa unidade sem administrador."],
 };
 
@@ -230,8 +231,11 @@ function criarTx(cliente, { somenteLeitura }) {
         ));
       }
       if (rowCount === 1) return;
-      const { rowCount: existe } = await consulta(`select 1 from ${def.tabela} where organizacao_id = $1::uuid and unidade_id = $2::uuid and id = $3::uuid`, [registro.organizacaoId, registro.unidadeId, registro.id]);
-      if (!existe) falhar(CODIGO.NAO_ENCONTRADO, "Registro não encontrado.", { tipo });
+      const { rows: vistos } = await consulta(`select versao from ${def.tabela} where organizacao_id = $1::uuid and unidade_id = $2::uuid and id = $3::uuid`, [registro.organizacaoId, registro.unidadeId, registro.id]);
+      if (!vistos.length) falhar(CODIGO.NAO_ENCONTRADO, "Registro não encontrado.", { tipo });
+      // 08B: a linha existe, é visível e está na versão esperada, mas o UPDATE não a alcançou → a autorização POR AÇÃO do
+      // banco barrou (o RLS barra UPDATE em silêncio). Nunca é sucesso nem disputa a repetir: é acesso negado.
+      if (Number(vistos[0].versao) === versaoEsperada) falhar(CODIGO.PERMISSAO_INSUFICIENTE, "O banco recusou a alteração: a sessão não tem a ação exigida para esta operação.", { tipo });
       throw Object.assign(new ErroFinanceiro(CODIGO.CONFLITO_VERSAO, "O registro foi alterado por outra operação. Recarregue e tente de novo.", { tipo }), { repetivel: true });
     },
 

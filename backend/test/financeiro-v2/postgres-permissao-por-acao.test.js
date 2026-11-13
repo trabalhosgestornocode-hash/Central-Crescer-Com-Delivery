@@ -42,7 +42,8 @@ async function cenario() {
 }
 
 // UPDATE barrado pelo RLS (USING) não dá erro: simplesmente não alcança linha nenhuma. "Nada alterado" é a prova.
-const nadaAlterado = async (p) => assert.equal((await p).rowCount, 0, "nenhuma linha alterada");
+// Bloqueio = nenhuma linha alterada (sem ação de escrita, o RLS nem alcança a linha) OU erro 42501 (tem escrita, não tem a ação).
+const nadaAlterado = async (p) => { try { assert.equal((await p).rowCount, 0, "nenhuma linha alterada"); } catch (e) { if (e.code !== "42501") throw e; } };
 const contraparteNova = (escopo = A) => ["insert into fv2_contraparte (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, tipo, nome) values ($1, $2, $3, 1, now(), $4, now(), $4, 'FORNECEDOR', 'Injetado')", [randomUUID(), escopo.organizacaoId, escopo.unidadeId, U(99)]];
 
 test("08 — cada ação só grava o que lhe cabe NO BANCO (mesma unidade, sessão legítima, SQL direto)", pular, async () => {

@@ -43,10 +43,10 @@ export function operacoesDeAcesso(b, { politica = null, autoridade = null, acess
    * O contexto sozinho não basta: as ações que alguém pode repassar são as que ele tem gravadas E no contexto.
    * (No PostgreSQL a mesma regra é conferida de novo pela função guardada do banco.)
    */
-  async function acoesGravadasDoConcedente(tx, cx) {
+  async function acoesGravadasDoConcedente(tx, cx, acao = ACAO.CONCEDER) {
     const minha = await tx.buscarPorChave(cx, TIPO.CONCESSAO, chave(cx.usuarioId));
-    if (!minha || minha.situacao !== SITUACAO_CONCESSAO.ATIVA || !minha.acoes.includes(ACAO.CONCEDER)) {
-      falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Sem concessão gravada para conceder nesta unidade.");
+    if (!minha || minha.situacao !== SITUACAO_CONCESSAO.ATIVA || !minha.acoes.includes(acao)) {
+      falhar(CODIGO.PERMISSAO_INSUFICIENTE, acao === ACAO.REVOGAR ? "Sem concessão gravada para revogar nesta unidade." : "Sem concessão gravada para conceder nesta unidade.");
     }
     return minha.acoes.filter((a) => cx.permissoes.includes(a));
   }
@@ -75,9 +75,9 @@ export function operacoesDeAcesso(b, { politica = null, autoridade = null, acess
     /** Sem `acoes`, revoga tudo. Revogar não exige possuir a ação (retirar acesso nunca é escalada). */
     revogarAcesso(ctx, entrada) {
       const c = validar(entrada, { acoesObrigatorias: false });
-      return b.executar(ctx, ACAO.CONCEDER, async (cx, tx) => {
+      return b.executar(ctx, ACAO.REVOGAR, async (cx, tx) => {
         exigirNaoProprio(cx, c.usuarioId);
-        await acoesGravadasDoConcedente(tx, cx);
+        await acoesGravadasDoConcedente(tx, cx, ACAO.REVOGAR);
         const atual = await tx.buscarPorChave(cx, TIPO.CONCESSAO, chave(c.usuarioId));
         if (!atual || atual.situacao === SITUACAO_CONCESSAO.REVOGADA) return atual;
         const acoes = c.acoes ? atual.acoes.filter((a) => !c.acoes.includes(a)) : [];
@@ -98,7 +98,7 @@ export function operacoesDeAcesso(b, { politica = null, autoridade = null, acess
      */
     consultarPermissoes(ctx) {
       return b.consultar(ctx, async (cx, tx) => {
-        const podeConceder = cx.permissoes.includes(ACAO.CONCEDER);
+        const podeConceder = cx.permissoes.includes(ACAO.CONCEDER) || cx.permissoes.includes(ACAO.REVOGAR);
         const todas = await tx.listar(cx, TIPO.CONCESSAO);
         const visiveis = podeConceder ? todas : todas.filter((c) => c.usuarioId === cx.usuarioId);
         const itens = [];

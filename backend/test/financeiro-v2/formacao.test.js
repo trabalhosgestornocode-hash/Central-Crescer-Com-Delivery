@@ -283,11 +283,18 @@ test("23, 24, 25 — isolamento, permissões de confirmação e competência hom
   const p1 = (await propostas(n, { operacao: "VENDA" })).find((p) => p.comando.fonte.idExterno === "P-1");
   await rejeita(n.aprovarProposta(ctx(undefined, UNI_A2), { propostaId: p1.id }), CODIGO.NAO_ENCONTRADO);
   await rejeita(n.aprovarProposta(ctx(ORG_B, UNI_B), { propostaId: p1.id }), CODIGO.NAO_ENCONTRADO);
-  const semRevisar = ctx(undefined, undefined, Object.values(ACAO).filter((a) => a !== ACAO.REVISAR));
-  await rejeita(n.aprovarProposta(semRevisar, { propostaId: p1.id }), CODIGO.PERMISSAO_INSUFICIENTE);
-  await n.aprovarProposta(c, { propostaId: p1.id });
-  await rejeita(n.aplicarProposta(semRevisar, { propostaId: p1.id }), CODIGO.PERMISSAO_INSUFICIENTE);
-  const semRegistrar = ctx(undefined, undefined, [ACAO.VER, ACAO.REVISAR]);
+  const semAprovar = ctx(undefined, undefined, Object.values(ACAO).filter((a) => a !== ACAO.APROVAR));
+  await rejeita(n.aprovarProposta(semAprovar, { propostaId: p1.id }), CODIGO.PERMISSAO_INSUFICIENTE);
+  // 08B: aprovar e aplicar são ações SEPARADAS — quem aprova não aplica; quem aplica não aprova.
+  const soAprova = ctx(undefined, undefined, [ACAO.VER, ACAO.APROVAR, ACAO.REGISTRAR]);
+  const soAplica = ctx(undefined, undefined, [ACAO.VER, ACAO.APLICAR, ACAO.REGISTRAR]);
+  await rejeita(n.aplicarProposta(soAplica, { propostaId: p1.id }), CODIGO.TRANSICAO_INVALIDA); // aplicar SEM aprovação válida
+  await rejeita(n.aprovarProposta(soAplica, { propostaId: p1.id }), CODIGO.PERMISSAO_INSUFICIENTE);
+  await n.aprovarProposta(soAprova, { propostaId: p1.id });
+  await rejeita(n.aplicarProposta(soAprova, { propostaId: p1.id }), CODIGO.PERMISSAO_INSUFICIENTE);
+  const semAplicar = ctx(undefined, undefined, Object.values(ACAO).filter((a) => a !== ACAO.APLICAR));
+  await rejeita(n.aplicarProposta(semAplicar, { propostaId: p1.id }), CODIGO.PERMISSAO_INSUFICIENTE);
+  const semRegistrar = ctx(undefined, undefined, [ACAO.VER, ACAO.APLICAR]);
   await rejeita(n.aplicarProposta(semRegistrar, { propostaId: p1.id }), CODIGO.PERMISSAO_INSUFICIENTE); // a operação exige a própria permissão
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
   // 06D: proposta aprovada e ainda não aplicada (resultado incompleto) impede a homologação.

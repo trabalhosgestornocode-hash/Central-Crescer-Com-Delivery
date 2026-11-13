@@ -20,6 +20,13 @@ export const ACAO = Object.freeze({
   CONCEDER: "financeiro_v2.conceder",
   // Execução 06D: abrir/baixar o ARQUIVO de um documento do cofre (ver a ficha continua sendo financeiro_v2.ver).
   DOCUMENTOS: "financeiro_v2.documentos",
+  // Execução 08B — ações SEPARADAS de decisões sensíveis. Nenhuma concessão anterior as recebe automaticamente
+  // (migração restritiva): quem tinha `revisar`, `importar` ou `conceder` precisa de concessão explícita destas.
+  APROVAR: "financeiro_v2.aprovar", // aprovar ou rejeitar proposta
+  APLICAR: "financeiro_v2.aplicar", // aplicar proposta JÁ aprovada
+  REVOGAR: "financeiro_v2.revogar", // revogar permissões (conceder não revoga; revogar não concede)
+  CONFIRMAR_IMPORTACAO: "financeiro_v2.confirmar_importacao", // confirmar ou rejeitar importação revisada
+  REABRIR: "financeiro_v2.reabrir", // reabrir competência homologada (com justificativa)
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

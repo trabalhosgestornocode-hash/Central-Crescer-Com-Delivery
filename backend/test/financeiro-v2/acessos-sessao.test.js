@@ -9,7 +9,7 @@ import { PERIODO_SETEMBRO, saiposVendas } from "./helpers/arquivos.js";
 
 const LEITOR = "dddddddd-0000-4000-8000-000000000001";
 const OPERADOR = "dddddddd-0000-4000-8000-000000000002";
-const ADMIN = ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.IMPORTAR, ACAO.CONCEDER, ACAO.REGISTRAR]); // administrador provisionado
+const ADMIN = ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.IMPORTAR, ACAO.CONCEDER, ACAO.REVOGAR, ACAO.REGISTRAR]); // administrador provisionado
 /** 07B: quem concede precisa ter a concessão GRAVADA — o administrador é provisionado pelo caminho real. */
 const comAdministrador = async (m) => { await provisionarAdministrador(m.repositorio, { acoes: [...ADMIN.permissoes] }); return m; };
 const sessao = (usuarioId, extra = {}) => ({

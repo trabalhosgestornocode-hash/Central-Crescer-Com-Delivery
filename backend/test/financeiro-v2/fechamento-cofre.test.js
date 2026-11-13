@@ -78,7 +78,8 @@ test("homologada bloqueia escrita ordinária; reabrir exige permissão própria,
   await rejeita(estado(nucleo, so(ACAO.VER, ACAO.FECHAR, ACAO.HOMOLOGAR), "ABERTA", { justificativa: "Quero mexer" }), CODIGO.PERMISSAO_INSUFICIENTE);
   await rejeita(estado(nucleo, c, "ABERTA"), CODIGO.TRANSICAO_INVALIDA);
   await rejeita(estado(nucleo, c, "FECHAMENTO_PRELIMINAR"), CODIGO.TRANSICAO_INVALIDA); // homologada só sai por reabertura
-  const revisor = so(ACAO.VER, ACAO.REVISAR);
+  await rejeita(estado(nucleo, so(ACAO.VER, ACAO.REVISAR), "ABERTA", { justificativa: "Revisar não reabre" }), CODIGO.PERMISSAO_INSUFICIENTE); // 08B
+  const revisor = so(ACAO.VER, ACAO.REABRIR);
   const reaberta = await estado(nucleo, revisor, "ABERTA", { justificativa: "Nota fiscal sintética chegou depois da homologação" });
   assert.deepEqual([reaberta.estado, reaberta.revisoes, reaberta.decididoPor], ["ABERTA", 1, revisor.usuarioId]);
   const ultimo = (await eventosDaCompetencia(nucleo, c)).at(-1);

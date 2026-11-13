@@ -308,7 +308,7 @@ export function operacoesDeFormacao(b) {
 
     aprovarProposta(ctx, entrada) {
       const c = validarDecisao(entrada);
-      return b.executar(ctx, ACAO.REVISAR, async (cx, tx) => {
+      return b.executar(ctx, ACAO.APROVAR, async (cx, tx) => {
         const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
         if (p.estado === E.APROVADA) return p;
         if (FINAIS.includes(p.estado)) falhar(CODIGO.TRANSICAO_INVALIDA, "Proposta já decidida.", { estado: p.estado });
@@ -325,7 +325,7 @@ export function operacoesDeFormacao(b) {
 
     rejeitarProposta(ctx, entrada) {
       const c = validarDecisao(entrada, { justificativaObrigatoria: true });
-      return b.executar(ctx, ACAO.REVISAR, async (cx, tx) => {
+      return b.executar(ctx, ACAO.APROVAR, async (cx, tx) => {
         const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
         if (FINAIS.includes(p.estado)) falhar(CODIGO.TRANSICAO_INVALIDA, "Proposta já decidida.", { estado: p.estado });
         return b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.REJEITADA, decididoPor: cx.usuarioId, decididoEm: b.agora() }, EVENTO_HISTORICO.CANCELAMENTO, c.justificativa);
@@ -335,7 +335,7 @@ export function operacoesDeFormacao(b) {
     /** Cria a operação e marca a proposta como aplicada NA MESMA transação. Reaplicar devolve o resultado anterior. */
     aplicarProposta(ctx, entrada) {
       const c = validarDecisao(entrada);
-      return b.executar(ctx, ACAO.REVISAR, async (cx, tx) => {
+      return b.executar(ctx, ACAO.APLICAR, async (cx, tx) => {
         const previa = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
         await tx.travar(cx, `formacao-dia:${previa.dataOperacao}`, "EXCLUSIVA");
         const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");

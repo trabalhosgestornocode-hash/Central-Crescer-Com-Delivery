@@ -69,7 +69,7 @@ test("1, 2 — SQL direto não concede nem revoga: a aplicação não tem INSERT
   await recusa(comToken(tAdm, (cl) => cl.query(`update fv2_concessao set acoes = '["financeiro_v2.ver","financeiro_v2.homologar"]', versao = versao + 1 where id = $1`, [leitor.id])), "42501");
   // 2: revogar pela função guardada SEM ter `conceder` (operador) é recusado no banco.
   const tOp = await token(OPERADOR);
-  await recusa(comToken(tOp, (cl) => cl.query("select fv2_gravar_concessao($1::jsonb, $2)", [linhaDeConcessao({ base: leitor, usuarioId: LEITOR, acoes: [], situacao: "REVOGADA", ator: OPERADOR, versao: leitor.versao + 1 }), leitor.versao])), "FV032");
+  await recusa(comToken(tOp, (cl) => cl.query("select fv2_gravar_concessao($1::jsonb, $2)", [linhaDeConcessao({ base: leitor, usuarioId: LEITOR, acoes: [], situacao: "REVOGADA", ator: OPERADOR, versao: leitor.versao + 1 }), leitor.versao])), "FV036"); // 08B: revogar exige a ação própria `revogar`
   assert.equal((await concessaoDe(LEITOR)).situacao, "ATIVA");
 });
 

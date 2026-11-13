@@ -236,9 +236,9 @@ export function operacoesDeConferencias(b, { fontes }) {
           pendentes: [...(p.divergencias ?? []).map((x) => x.mensagem), ...(estado === ESTADO_PROPOSTA.AGUARDANDO_EVIDENCIA ? ["Falta evidência: a proposta não pode ser aprovada assim."] : [])],
           conflitos,
           autorizacao: {
-            aprovar: { permissao: ACAO.REVISAR, disponivel: [ESTADO_PROPOSTA.PROPOSTA, ESTADO_PROPOSTA.AGUARDANDO_REVISAO].includes(estado) && !(p.operacao === "PAGAMENTO_STONE" && !c.vendaId), exigeJustificativa: estado === ESTADO_PROPOSTA.AGUARDANDO_REVISAO, voceTem: pode(ACAO.REVISAR) },
-            aplicar: { permissao: ACAO.REVISAR, disponivel: estado === ESTADO_PROPOSTA.APROVADA, voceTem: pode(ACAO.REVISAR) },
-            rejeitar: { permissao: ACAO.REVISAR, disponivel: ABERTAS.includes(estado), exigeJustificativa: true, voceTem: pode(ACAO.REVISAR) },
+            aprovar: { permissao: ACAO.APROVAR, disponivel: [ESTADO_PROPOSTA.PROPOSTA, ESTADO_PROPOSTA.AGUARDANDO_REVISAO].includes(estado) && !(p.operacao === "PAGAMENTO_STONE" && !c.vendaId), exigeJustificativa: estado === ESTADO_PROPOSTA.AGUARDANDO_REVISAO, voceTem: pode(ACAO.APROVAR) },
+            aplicar: { permissao: ACAO.APLICAR, disponivel: estado === ESTADO_PROPOSTA.APROVADA, voceTem: pode(ACAO.APLICAR) },
+            rejeitar: { permissao: ACAO.APROVAR, disponivel: ABERTAS.includes(estado), exigeJustificativa: true, voceTem: pode(ACAO.APROVAR) },
             observacao: "Aprovar NÃO registra nada: só a aplicação de uma proposta aprovada cria o efeito, numa única transação e uma única vez.",
           },
           historico,

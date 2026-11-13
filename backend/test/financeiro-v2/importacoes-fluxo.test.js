@@ -48,7 +48,10 @@ test("confirmação exige permissão de importar e a impressão da prévia revis
   await rejeita(nucleo.receberArquivoParaImportacao(semImportar, arquivo(saiposVendas(PEDIDOS))), CODIGO.PERMISSAO_INSUFICIENTE);
   const r = await nucleo.receberArquivoParaImportacao(ctx(), arquivo(saiposVendas(PEDIDOS, { total: 9999 })));
   assert.equal(r.previa.totalDivergencias, 1);
-  await rejeita(nucleo.confirmarImportacao(semImportar, { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia }), CODIGO.PERMISSAO_INSUFICIENTE);
+  const semConfirmar = ctx(undefined, undefined, Object.values(ACAO).filter((a) => a !== ACAO.CONFIRMAR_IMPORTACAO));
+  await rejeita(nucleo.confirmarImportacao(semConfirmar, { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia }), CODIGO.PERMISSAO_INSUFICIENTE);
+  // 08B: importar NÃO confirma — confirmar exige a ação própria.
+  await rejeita(nucleo.confirmarImportacao(ctx(undefined, undefined, [ACAO.VER, ACAO.IMPORTAR]), { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia }), CODIGO.PERMISSAO_INSUFICIENTE);
   await rejeita(nucleo.confirmarImportacao(ctx(), { importacaoId: r.importacao.id, impressaoPrevia: "0".repeat(64) }), CODIGO.IMPORTACAO_INVALIDA);
   await rejeita(confirmar(nucleo, r), CODIGO.IMPORTACAO_INVALIDA); // divergência sem aceite
   await rejeita(confirmar(nucleo, r, { aceitarPendencias: true }), CODIGO.IMPORTACAO_INVALIDA); // aceite sem justificativa

@@ -118,7 +118,7 @@ test("A7 — segunda homologação após revisão: as duas versões continuam re
   const { nucleo: n, c, fornecedor } = await montarComCadastros();
   await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 7000 }));
   const h1 = await homologar(n, c);
-  await n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.REVISAR]), { competencia: SET, novoEstado: "ABERTA", justificativa: "Nota adicional chegou.", confirmar: true });
+  await n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.REABRIR]), { competencia: SET, novoEstado: "ABERTA", justificativa: "Nota adicional chegou.", confirmar: true });
   await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 1500, descricao: "Nota adicional" }));
   const h2 = await homologar(n, c);
   const vs = (await n.consultarVersoesDeFechamento(c, { competencia: SET })).versoes;
