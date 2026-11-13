@@ -39,6 +39,12 @@ begin
        + (select count(*) from movimentacoes_estoque where insumo_id in (select id from _ins))
        + (select count(*) from pedidos_compra_itens where insumo_id in (select id from _ins))
        + (select count(*) from insumo_historico where insumo_id in (select id from _ins))
+       + (select count(*) from sw_combo_componentes where produto_id in (select id from _prod))
+       + (select count(*) from ficha_mao_de_obra where produto_id in (select id from _prod))
+       + (select count(*) from estoque where insumo_id in (select id from _ins))
+       + (select count(*) from lotes where insumo_id in (select id from _ins))
+       + (select count(*) from divergencias_compra where insumo_id in (select id from _ins))
+       + (select count(*) from martin_brower_vinculos where insumo_id in (select id from _ins))
        + (select count(*) from unidades u, _alvo a where u.organizacao_id = a.org and (u.tabela_balcao is not null or u.tabela_ifood is not null))
     into trava;
   if trava <> 0 then raise exception 'Há uso real dos itens-modelo (% referências): nada foi alterado. Rode o PREVIEW.', trava; end if;

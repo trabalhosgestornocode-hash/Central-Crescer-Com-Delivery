@@ -524,6 +524,8 @@ export function validarPayload(payload) {
   for (const i of payload.insumos) if (!UNIDADES_VALIDAS.has(i.unidade_medida)) erros.push(`unidade inválida em ${i.chave}`);
   for (const p of payload.produtos) {
     if (!(p.rendimento > 0)) erros.push(`rendimento inválido em ${p.chave}`);
+    // A carga NUNCA homologa: homologar é ato de quem conferiu a ficha no sistema (produtos.service#definirHomologacao).
+    if ((p.homologacao ?? "pendente") !== "pendente") erros.push(`homologação não permitida na carga em ${p.chave} (${p.homologacao})`);
     const vistos = new Set();
     for (const l of p.linhas) {
       if (!(l.quantidade > 0)) erros.push(`quantidade inválida em ${p.chave}`);

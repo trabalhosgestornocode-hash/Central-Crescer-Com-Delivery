@@ -31,6 +31,11 @@ create table if not exists movimentacoes_estoque (id uuid primary key default ge
 create table if not exists pedidos_compra_itens (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id));
 create table if not exists insumo_historico (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete cascade);
 create table if not exists produto_historico (id uuid primary key default gen_random_uuid(), produto_id uuid references produtos(id) on delete cascade);
+create table if not exists sw_combo_componentes (id uuid primary key default gen_random_uuid(), produto_id uuid references produtos(id) on delete cascade);
+create table if not exists estoque (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete cascade);
+create table if not exists lotes (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete cascade);
+create table if not exists divergencias_compra (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete set null);
+create table if not exists martin_brower_vinculos (id uuid primary key default gen_random_uuid(), insumo_id uuid references insumos(id) on delete cascade);
 SQL
 run -d "$DB" >/dev/null 2>&1 <<SQL
 insert into organizacoes (id, nome) values ('$J','Empresa J');
@@ -72,6 +77,10 @@ aplicar() { sed -e "s/<ORG_ID>/$J/g" -e "s/<ESPERADO_PRODUTOS>/$1/" -e "s/<ESPER
 aplicar 3 2 3 3 >/dev/null && falha "aceitou contagem errada" || true
 [ "$(snap)" = "$ANTES" ] && ok "APLICAR com contagem diferente do PREVIEW é recusado e nada muda" || falha "alterou com contagem errada"
 
+q "insert into lotes (id, unidade_id, insumo_id, quantidade) select 'e9000000-0000-4000-8000-000000000001', id, 'e2000000-0000-4000-8000-000000000001', 1 from unidades where organizacao_id='$J'" >/dev/null
+aplicar 2 2 3 3 >/dev/null && falha "aceitou com lote de estoque" || true
+q "delete from lotes where id='e9000000-0000-4000-8000-000000000001'" >/dev/null
+[ "$(snap)" = "$ANTES" ] && ok "APLICAR com trava (lote de estoque, tabela em cascata) é recusado e nada muda" || falha "alterou com lote"
 q "update unidades set tabela_balcao='A' where organizacao_id='$J'" >/dev/null
 aplicar 2 2 3 3 >/dev/null && falha "aceitou com tabela oficial configurada" || true
 q "update unidades set tabela_balcao=null where organizacao_id='$J'" >/dev/null

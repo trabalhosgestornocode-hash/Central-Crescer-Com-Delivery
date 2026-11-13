@@ -9,8 +9,19 @@ Embalagem, MOD), então o parser e o planejador existentes servem sem mudança d
 Produtos/CMV, Insumos e o MESMO detalhe de produto das Subways e da Caramelle — não existe aba "Fichas Técnicas".
 
 Números da auditoria (planilha original): 42 fichas preenchidas (41 nomes distintos), 2 preparações, 50 ingredientes,
-11 embalagens, nenhuma mão de obra, desperdício sempre 0%. Simulação da carga: 44 registros → 36 completos e 8
-incompletos; as 36 comparáveis reproduzem o custo da planilha sem divergência.
+11 embalagens, nenhuma mão de obra, desperdício sempre 0%.
+
+Como as contagens se relacionam (44 registros = 42 fichas + 2 preparações):
+
+| | Completos | Incompletos | Total |
+|---|---|---|---|
+| Fichas (abas P) | 35 | 7 | 42 |
+| Preparações (abas B) | 1 | 1 | 2 |
+| **Registros** | **36** | **8** | **44** |
+
+Causas das 8 incompletas: 4 fichas com embalagem listada sem quantidade (linhas descartadas); 1 preparação com nome de
+ingrediente digitado errado; 1 ficha com ingrediente que não existe no cadastro; 2 fichas com insumo de custo zero (uma
+delas também usa a preparação incompleta). Os 36 completos reproduzem o custo da planilha sem divergência.
 
 ## Mudanças
 1. **Importador — arquivo único** (`backend/scripts/catalogo-importar-planilhas.mjs`):
@@ -29,11 +40,18 @@ incompletos; as 36 comparáveis reproduzem o custo da planilha sem divergência.
    **"Marcar pendências da planilha como conferidas"** (`POST /produtos/:id/pendencias-carga/conferir`,
    `configuracoes.gerenciar`) — grava quem/quando na origem e no histórico; não homologa sozinho.
    Vale também para a Caramelle (nenhuma ficha dela estava homologada; efeito só preventivo).
+   A carga também **não pode** trazer ficha homologada: `validarPayload` recusa `homologacao` diferente de `pendente`.
+   **Efeito na Caramelle** (medido em produção, só leitura): ~35 das 282 fichas, hoje homologáveis, têm pendência da
+   planilha aberta (própria ou de preparação) e passam a pedir a conferência antes de homologar. Nenhuma está homologada.
 4. **Interface**: categorias de carga fora de Doces/Salgados/Bebidas aparecem no filtro e no detalhe (ex.: "Açaí").
-5. **Ops** (`database/ops/remover_catalogo_modelo_indevido_{PREVIEW,APLICAR,REVERTER}.sql`): remove o catálogo-modelo
+5. **Ops** (`database/ops/remover_catalogo_modelo_indevido_{PREVIEW,APLICAR,REVERTER,RESTAURAR_ARQUIVO}.sql`): remove o catálogo-modelo
    das Subways copiado por engano para uma empresa que não é Subway, com travas (venda, PDV, histórico, estoque, compras,
    tabela oficial), conferência das contagens do PREVIEW, cópia integral em `backup_ops` e reversão exata. Placeholders
-   `<ORG_ID>`/`<ESPERADO_*>`/`<LOTE>`; só com autorização.
+   `<ORG_ID>`/`<ESPERADO_*>`/`<LOTE>`/`<PASTA>`; só com autorização. `RESTAURAR_ARQUIVO` é a contingência que restaura a
+   partir do backup exportado em sessão somente-leitura (um `to_jsonb` por linha, com MD5 conferido no banco) — usa
+   `\encoding UTF8` porque o psql do Windows pode assumir WIN1252.
+   Origem do problema: o assistente de criação de empresa clona o catálogo do modelo escolhido; o modelo "Subway Padrão"
+   foi usado também para empresas que não são Subway. Os scripts não mudam esse assistente.
 
 Sem migration. Nada foi alterado em produção.
 
@@ -44,7 +62,10 @@ Sem migration. Nada foi alterado em produção.
 - `node --test frontend/test/fichasModelo.test.js` e `frontend/test/fichasCaramelle.browser.test.js` (Playwright)
 - Postgres descartável (`CAT_PG_DESCARTAVEL=1`): `backend/testes-seguros/catalogo-pg/run.sh`,
   `carga_real.sh <payload.json> <relatorio.json>` (carga real simulada 2× numa empresa fictícia; os JSON ficam fora do
-  repositório) e `modelo_indevido.sh` (scripts de ops).
+  repositório), `modelo_indevido.sh` (scripts de ops) e `restauracao_backup.sh <pasta_backup> <org> [payload]` (ensaio
+  completo de remoção, reversão e restauração pelo arquivo com o backup real).
+- `CATALOGO_PAYLOAD=… CATALOGO_RELATORIO=… node --test backend/test/catalogo-homologacao-carga-real.test.js`: com a carga
+  real, o lote com TODOS os ids homologa só as completas (sem os dados, o teste é pulado).
 
 ## Dashboard iFood
 O vínculo produto ↔ item do iFood continua sendo o código do PDV (ou nome idêntico e único) no detalhe do produto.

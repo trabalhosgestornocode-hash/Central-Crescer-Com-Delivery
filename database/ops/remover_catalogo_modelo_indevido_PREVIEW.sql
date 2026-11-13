@@ -35,4 +35,10 @@ union all select 'TRAVA_usado_por_ficha_fora_do_modelo', count(*)::text from fic
 union all select 'TRAVA_estoque_movimentos', count(*)::text from movimentacoes_estoque where insumo_id in (select id from ins)
 union all select 'TRAVA_pedidos_compra', count(*)::text from pedidos_compra_itens where insumo_id in (select id from ins)
 union all select 'TRAVA_historico_insumo', count(*)::text from insumo_historico where insumo_id in (select id from ins)
+union all select 'TRAVA_combo', count(*)::text from sw_combo_componentes where produto_id in (select id from prod)
+union all select 'TRAVA_ficha_mao_de_obra', count(*)::text from ficha_mao_de_obra where produto_id in (select id from prod)
+union all select 'TRAVA_estoque', count(*)::text from estoque where insumo_id in (select id from ins)
+union all select 'TRAVA_lotes', count(*)::text from lotes where insumo_id in (select id from ins)
+union all select 'TRAVA_divergencias_compra', count(*)::text from divergencias_compra where insumo_id in (select id from ins)
+union all select 'TRAVA_martin_brower', count(*)::text from martin_brower_vinculos where insumo_id in (select id from ins)
 union all select 'TRAVA_unidade_com_tabela_oficial', count(*)::text from unidades u, alvo where u.organizacao_id = alvo.org and (u.tabela_balcao is not null or u.tabela_ifood is not null);
