@@ -29,7 +29,7 @@ export function baseNaTransacao(b, tx, escopoDaTransacao) {
   };
 }
 
-export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
+export function criarBase({ repositorio, politica, relogio, gerarId, fuso, exigirConcessaoPersistida = false }) {
   const agora = () => relogio().toISOString();
   const hoje = () => hojeEm(relogio(), fuso);
   /** Competências em fechamento com pendências já marcadas nesta transação (uma marca por transação). */
@@ -43,9 +43,35 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
     return ctx;
   }
 
+  /**
+   * Execução 06D — com `exigirConcessaoPersistida`, a permissão do contexto é CONFERIDA de novo contra a concessão gravada,
+   * dentro da MESMA transação da operação. Um contexto montado antes de uma revogação não opera mais: a revogação vale
+   * para a próxima ação, sem esperar a sessão expirar.
+   */
+  async function exigirConcessaoVigente(tx, ctx, acao) {
+    if (!exigirConcessaoPersistida) return;
+    const c = await tx.buscarPorChave(ctx, TIPO.CONCESSAO, `concessao:${ctx.usuarioId}`);
+    if (!c || c.situacao !== "ATIVA" || !c.acoes.includes(acao)) {
+      falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Permissão financeira revogada ou inexistente para esta operação.", { acao });
+    }
+  }
+
   /** Operação de escrita: valida contexto, escopo e permissão ANTES de abrir a transação. */
   function executar(ctxBruto, acao, fn) {
     const ctx = autorizarContexto(ctxBruto, acao);
+    return repositorio.transacao(async (tx) => {
+      await exigirConcessaoVigente(tx, ctx, acao);
+      return fn(ctx, tx);
+    }, { escopo: ctx });
+  }
+
+  /**
+   * 06D — transação do PROVISIONAMENTO do administrador inicial. Usada SOMENTE por provisionarAdministradorInicial, depois
+   * que a autoridade externa atestou o ato e o escopo foi conferido. Não aceita contexto vindo do cliente.
+   */
+  function provisionar(ctxAutoridade, fn) {
+    const ctx = exigirContexto(ctxAutoridade);
+    politica.exigir(ctx);
     return repositorio.transacao((tx) => fn(ctx, tx), { escopo: ctx });
   }
 
@@ -53,7 +79,10 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
     const ctx = exigirContexto(ctxBruto);
     politica.exigir(ctx);
     autorizar(ctx, ACAO.VER);
-    return repositorio.leitura((tx) => fn(ctx, tx), { escopo: ctx });
+    return repositorio.leitura(async (tx) => {
+      await exigirConcessaoVigente(tx, ctx, ACAO.VER);
+      return fn(ctx, tx);
+    }, { escopo: ctx });
   }
 
   async function historico(tx, ctx, registroTipo, registroId, evento, antes, depois, justificativa = null) {
@@ -114,6 +143,41 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
       }
     }
     return c?.estado ?? ESTADO_COMPETENCIA.ABERTA;
+  }
+
+  /**
+   * Execução 06D — política de atualizações que envolvem competências diferentes (ex.: venda de setembro recebida em outubro).
+   *   gravadas      → competências cujos registros ESTA operação altera ou cria: precisam aceitar escrita (homologada recusa);
+   *   referenciadas → competências de registros apenas CITADOS (título liquidado, lado de uma conciliação): se homologadas,
+   *                   a operação segue SÓ se não muda o resultado econômico delas, e deixa a marca
+   *                   ATUALIZACAO_POSTERIOR_AO_FECHAMENTO no histórico da competência (auditável; a versão homologada fica intacta).
+   * Todas as travas (compartilhadas) são tomadas em ORDEM, dentro da MESMA transação da gravação: uma homologação
+   * concorrente (trava exclusiva) espera esta terminar ou acontece antes e é vista aqui — nunca é contornada.
+   * @returns {Promise<string[]>} competências homologadas referenciadas (atualização posterior registrada)
+   */
+  async function exigirCompetenciasDoVinculo(tx, ctx, { gravadas = [], referenciadas = [], motivo }) {
+    const g = [...new Set(gravadas.filter(Boolean))];
+    const r = [...new Set(referenciadas.filter(Boolean))].filter((x) => !g.includes(x));
+    for (const comp of [...g, ...r].sort()) {
+      if (g.includes(comp)) {
+        await exigirCompetenciaEditavel(tx, ctx, comp);
+        continue;
+      }
+      await tx.travar(ctx, `competencia:${comp}`, "COMPARTILHADA");
+    }
+    const posteriores = [];
+    for (const comp of r.sort()) {
+      const c = await competenciaAtual(tx, ctx, comp);
+      if (c && !aceitaEscrita(c.estado)) {
+        posteriores.push(comp);
+        const jaMarcadas = marcadas.get(tx) ?? marcadas.set(tx, new Set()).get(tx);
+        if (!jaMarcadas.has(`posterior:${comp}`)) {
+          jaMarcadas.add(`posterior:${comp}`);
+          await historico(tx, ctx, TIPO.COMPETENCIA, c.id, EVENTO_HISTORICO.ATUALIZACAO_POSTERIOR_AO_FECHAMENTO, null, { competencia: comp, estado: c.estado, revisoes: c.revisoes, motivo }, `Atualização posterior ao fechamento: ${motivo}`);
+        }
+      }
+    }
+    return posteriores;
   }
 
   const chaveDe = (fonte, prefixo = "") => (fonte?.idExterno ? `${prefixo}${fonte.sistema}:${fonte.idExterno}` : null);
@@ -191,7 +255,7 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso }) {
   }
 
   return {
-    gerarId, agora, hoje, executar, consultar, autorizarContexto, historico, criar, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel,
+    gerarId, agora, hoje, executar, consultar, provisionar, autorizarContexto, exigirConcessaoVigente, historico, criar, alterar, obterOuFalhar, competenciaAtual, exigirCompetenciaEditavel, exigirCompetenciasDoVinculo,
     chaveDe, jaRegistrado, exigirNaoFutura, categoriaPorCodigo, categoriaLancavel, categoriaDoSistema, lancar, cancelarLancamento, exigirDocumentos,
   };
 }

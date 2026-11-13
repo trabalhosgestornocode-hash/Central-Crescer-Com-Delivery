@@ -7,11 +7,12 @@
 // TOTAIS vêm de agregações separadas (tx.agregar) — a página nunca muda um total. Pendências e fechamento são leituras
 // DERIVADAS de vários motores (apuração, vendas, tesouraria) e, por isso, montadas a partir dos registros do escopo.
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { ESTADO_COMPETENCIA, ESTADO_IMPORTACAO, ESTADO_PROPOSTA, SITUACAO_CORRESPONDENCIA, SITUACAO_REGISTRO_FONTE, TIPO } from "../dominio/catalogos.js";
+import { ESTADO_COMPETENCIA, ESTADO_IMPORTACAO, ESTADO_PROPOSTA, EVENTO_HISTORICO, SITUACAO_ATRIBUICAO, SITUACAO_CORRESPONDENCIA, SITUACAO_REGISTRO_FONTE, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { apurar } from "../dominio/apuracao.js";
 import { somarLista } from "../dominio/dinheiro.js";
-import { competenciaDe } from "../dominio/tempo.js";
+import { competenciaDe, exigirData } from "../dominio/tempo.js";
+import { exigirTexto, exigirUmDe, exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
 import {
   EFEITO_NO_FECHAMENTO, FONTES_DA_COMPETENCIA, GRUPO, NOME_DA_OPERACAO, NOME_DO_GRUPO, POLITICA_DE_MATERIALIDADE, SITUACAO_PENDENCIA, contagemDePendencias,
   fontesDaCompetencia, impedimentosDeHomologacao, nomeDaRelacao, pendenciasDaCompetencia, periodoDa, situacaoDoFechamento,
@@ -276,7 +277,8 @@ export function operacoesDeConferencias(b, { fontes }) {
         const { pendencias } = await analisar(cx, tx, f.competencia);
         const filtradas = pendencias.filter((x) => (!f.grupo || x.grupo === f.grupo)
           && (!f.situacao || (f.situacao === "A_RESOLVER" ? x.situacao !== SITUACAO_PENDENCIA.INFORMATIVA : x.situacao === f.situacao)));
-        const pg = paginar(filtradas.map(pendenciaCompacta), f.pagina, f.tamanho);
+        const atribuicoes = new Map((await tx.listar(cx, TIPO.ATRIBUICAO_PENDENCIA, { onde: { competencia: f.competencia } })).map((a) => [a.chave, a]));
+        const pg = paginar(filtradas.map((x) => ({ ...pendenciaCompacta(x), atribuicao: atribuicaoLegivel(atribuicoes.get(x.chave), cx) })), f.pagina, f.tamanho);
         return {
           dataBase: b.hoje(), filtro: f, contagem: contagemDePendencias(pendencias), grupos: Object.values(GRUPO).map((g) => ({ grupo: g, nome: NOME_DO_GRUPO[g] })),
           itens: pg.itens, paginacao: pg.paginacao,
@@ -294,7 +296,65 @@ export function operacoesDeConferencias(b, { fontes }) {
         if (!p) falhar(CODIGO.NAO_ENCONTRADO, "Pendência não encontrada nesta competência (pode já ter sido resolvida).");
         const tipoDoHistorico = { PROPOSTA: TIPO.PROPOSTA, MOVIMENTACAO: TIPO.MOVIMENTACAO, OBRIGACAO: TIPO.OBRIGACAO, RECEBIVEL: TIPO.RECEBIVEL, CORRESPONDENCIA: TIPO.CORRESPONDENCIA, IMPORTACAO: TIPO.IMPORTACAO, VENDA: TIPO.VENDA, LANCAMENTO: TIPO.LANCAMENTO, DIVERGENCIA_FONTE: TIPO.DIVERGENCIA_FONTE }[p.referencia?.tipo];
         const historico = tipoDoHistorico && p.referencia.id ? (await tx.listarHistorico(cx, { onde: { registroTipo: tipoDoHistorico, registroId: p.referencia.id } })).map((h) => ({ evento: h.evento, em: h.em, justificativa: h.justificativa ?? null })) : [];
-        return { dataBase: b.hoje(), pendencia: { ...p, nomeDoGrupo: NOME_DO_GRUPO[p.grupo] }, historico };
+        const atrib = await tx.buscarPorChave(cx, TIPO.ATRIBUICAO_PENDENCIA, chaveDaAtribuicao(f.competencia, f.chave));
+        const historicoDaAtribuicao = atrib ? (await tx.listarHistorico(cx, { onde: { registroTipo: TIPO.ATRIBUICAO_PENDENCIA, registroId: atrib.id } })).map((h) => ({
+          evento: h.evento, em: h.em, por: h.usuarioId === cx.usuarioId ? "Você" : "Usuário registrado", justificativa: h.justificativa ?? null,
+          responsavelAntes: h.antes?.responsavelId ?? null, responsavelDepois: h.depois?.responsavelId ?? null, situacaoDepois: h.depois?.situacao ?? null,
+        })) : [];
+        return {
+          dataBase: b.hoje(), pendencia: { ...p, nomeDoGrupo: NOME_DO_GRUPO[p.grupo] }, historico, atribuicao: atribuicaoLegivel(atrib, cx), historicoDaAtribuicao,
+          podeAtribuir: cx.permissoes.includes(ACAO.REVISAR), situacoesDaAtribuicao: Object.values(SITUACAO_ATRIBUICAO),
+        };
+      });
+    },
+
+    /**
+     * Execução 06D — responsável por uma pendência. O responsável é um usuário com acesso ATIVO ao Financeiro v2 desta
+     * unidade (nunca um nome livre nem fictício). Reatribuir exige justificativa. Tudo fica no histórico da atribuição.
+     * Atribuir NÃO resolve a pendência: ela continua aberta até a causa ser tratada.
+     */
+    atribuirResponsavelDePendencia(ctx, e) {
+      semCamposDesconhecidos(e, ["competencia", "chave", "responsavelId", "dataRevisao", "comentario", "justificativa"], "atribuicao");
+      const f = validarDetalheDePendencia({ competencia: e?.competencia, chave: e?.chave });
+      const responsavelId = exigirUuid(e?.responsavelId, "responsavelId").toLowerCase();
+      const dataRevisao = e?.dataRevisao ? exigirData(e.dataRevisao, "dataRevisao") : null;
+      const comentario = exigirTexto(e?.comentario, "comentario", { max: 500, opcional: true });
+      const justificativa = exigirTexto(e?.justificativa, "justificativa", { max: 500, opcional: true });
+      return b.executar(ctx, ACAO.REVISAR, async (cx, tx) => {
+        const { pendencias } = await analisar(cx, tx, f.competencia);
+        if (!pendencias.some((x) => x.chave === f.chave)) falhar(CODIGO.NAO_ENCONTRADO, "Pendência não encontrada nesta competência (pode já ter sido resolvida).");
+        const concessao = await tx.buscarPorChave(cx, TIPO.CONCESSAO, `concessao:${responsavelId}`);
+        if (!concessao || concessao.situacao !== "ATIVA") falhar(CODIGO.ENTRADA_INVALIDA, "O responsável indicado não tem acesso ativo ao Financeiro v2 desta unidade.", { campo: "responsavelId" });
+        const chave = chaveDaAtribuicao(f.competencia, f.chave);
+        const atual = await tx.buscarPorChave(cx, TIPO.ATRIBUICAO_PENDENCIA, chave);
+        const nota = comentario ? [{ texto: comentario, por: cx.usuarioId, em: b.agora() }] : [];
+        if (!atual) {
+          return atribuicaoLegivel(await b.criar(tx, cx, TIPO.ATRIBUICAO_PENDENCIA, {
+            competencia: f.competencia, chave: f.chave, responsavelId, situacao: SITUACAO_ATRIBUICAO.ATRIBUIDA, dataRevisao, comentarios: nota, atribuidoPor: cx.usuarioId,
+            chaveIdempotencia: chave, impressao: null,
+          }, justificativa ?? "Atribuição de responsável."), cx);
+        }
+        if (atual.responsavelId === responsavelId && !comentario && dataRevisao === atual.dataRevisao) return atribuicaoLegivel(atual, cx);
+        if (atual.responsavelId !== responsavelId && !justificativa) falhar(CODIGO.ENTRADA_INVALIDA, "Reatribuir a outro responsável exige justificativa.", { campo: "justificativa" });
+        return atribuicaoLegivel(await b.alterar(tx, cx, TIPO.ATRIBUICAO_PENDENCIA, atual, {
+          responsavelId, dataRevisao: dataRevisao ?? atual.dataRevisao, comentarios: [...atual.comentarios, ...nota], atribuidoPor: cx.usuarioId,
+          situacao: atual.responsavelId !== responsavelId ? SITUACAO_ATRIBUICAO.ATRIBUIDA : atual.situacao,
+        }, EVENTO_HISTORICO.ATRIBUICAO, justificativa ?? "Atualização da atribuição."), cx);
+      });
+    },
+
+    /** Situação do acompanhamento (em análise, aguardando terceiro, concluída) + comentário. Concluir exige comentário. */
+    atualizarAcompanhamentoDePendencia(ctx, e) {
+      semCamposDesconhecidos(e, ["competencia", "chave", "situacao", "comentario", "dataRevisao"], "acompanhamento");
+      const f = validarDetalheDePendencia({ competencia: e?.competencia, chave: e?.chave });
+      const situacao = exigirUmDe(e?.situacao, SITUACAO_ATRIBUICAO, "situacao");
+      const comentario = exigirTexto(e?.comentario, "comentario", { max: 500, opcional: situacao !== SITUACAO_ATRIBUICAO.CONCLUIDA });
+      const dataRevisao = e?.dataRevisao ? exigirData(e.dataRevisao, "dataRevisao") : null;
+      return b.executar(ctx, ACAO.REVISAR, async (cx, tx) => {
+        const atual = await tx.buscarPorChave(cx, TIPO.ATRIBUICAO_PENDENCIA, chaveDaAtribuicao(f.competencia, f.chave));
+        if (!atual) falhar(CODIGO.NAO_ENCONTRADO, "A pendência ainda não tem responsável atribuído.");
+        const nota = comentario ? [{ texto: comentario, por: cx.usuarioId, em: b.agora() }] : [];
+        return atribuicaoLegivel(await b.alterar(tx, cx, TIPO.ATRIBUICAO_PENDENCIA, atual, { situacao, comentarios: [...atual.comentarios, ...nota], dataRevisao: dataRevisao ?? atual.dataRevisao }, EVENTO_HISTORICO.ATRIBUICAO, comentario ?? `Acompanhamento: ${situacao}`), cx);
       });
     },
 
@@ -426,5 +486,16 @@ function pendenciaCompacta(p) {
     chave: p.chave, grupo: p.grupo, nomeDoGrupo: NOME_DO_GRUPO[p.grupo], codigo: p.codigo, titulo: p.titulo, valorCentavos: p.valorCentavos, situacao: p.situacao,
     responsavel: p.responsavel, motivo: p.motivo, efeitoNoFechamento: p.efeitoNoFechamento, bloqueia: p.efeitoNoFechamento === EFEITO_NO_FECHAMENTO.BLOQUEIA,
     competencia: p.competencia ?? (p.data ? competenciaDe(p.data) : null), outrosMotivos: p.outrosMotivos.length, apontadoPor: p.apontadoPor.length,
+  };
+}
+
+/** Chave da atribuição: competência + chave da pendência (o mesmo fato tem um único responsável por competência). */
+const chaveDaAtribuicao = (competencia, chave) => `atribuicao:${competencia}:${chave}`;
+/** Atribuição para a tela, sem expor identificadores de outras pessoas além do necessário. */
+function atribuicaoLegivel(a, cx) {
+  if (!a) return null;
+  return {
+    responsavelId: a.responsavelId, responsavelEhVoce: a.responsavelId === cx.usuarioId, situacao: a.situacao, dataRevisao: a.dataRevisao ?? null,
+    comentarios: (a.comentarios ?? []).map((c) => ({ texto: c.texto, em: c.em, porVoce: c.por === cx.usuarioId })), atualizadoEm: a.atualizadoEm, versao: a.versao,
   };
 }

@@ -131,7 +131,7 @@ test("homologação concorrendo com escritas: nada entra depois da homologação
     const banco = await nucleo.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco" });
     await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
     const escritas = Array.from({ length: 2 * N }, (_, i) => () => nucleo.registrarMovimentacao(c, saida(banco.id, 100 + i)));
-    const homologar = () => nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética" });
+    const homologar = () => nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética" });
     const { ok, falhas } = await simultaneas([...escritas.slice(0, N), homologar, ...escritas.slice(N)]);
     assert.ok(falhas.every((f) => f === CODIGO.COMPETENCIA_HOMOLOGADA));
     assert.equal(await qtd(nucleo, c, "MOVIMENTACAO"), ok.length - 1); // aceita = gravada; recusada não deixa rastro
@@ -170,7 +170,7 @@ test("trava de competência (determinística): homologação espera escritas em 
 
   // Uma escrita "em andamento" (trava compartilhada): a homologação não pode passar por cima dela.
   const soltarEscrita = await segurar("pg_advisory_xact_lock_shared");
-  const homologacao = nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética" });
+  const homologacao = nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética" });
   homologacao.catch(() => {});
   let esperou;
   try { esperou = await aindaEsperando(homologacao); } finally { await soltarEscrita(); } // solta mesmo se a prova falhar
@@ -178,7 +178,7 @@ test("trava de competência (determinística): homologação espera escritas em 
   assert.equal((await homologacao).estado, "FECHAMENTO_HOMOLOGADO");
 
   // Uma decisão de fechamento "em andamento" (trava exclusiva): a escrita espera e, depois, vê o estado novo.
-  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "ABERTA", justificativa: "Teste de trava" });
+  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "ABERTA", confirmar: true, justificativa: "Teste de trava" });
   const soltarDecisao = await segurar("pg_advisory_xact_lock");
   const escrita = nucleo.registrarMovimentacao(c, saida(banco.id, 100));
   escrita.catch(() => {});

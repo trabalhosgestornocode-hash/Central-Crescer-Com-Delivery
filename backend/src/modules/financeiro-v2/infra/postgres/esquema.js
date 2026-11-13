@@ -148,6 +148,21 @@ export const ESQUEMA = Object.freeze({
     saidasCentavos: c("saidas_centavos", "centavos"), teoricoCentavos: c("teorico_centavos", "centavos"), contadoCentavos: c("contado_centavos", "centavos"),
     diferencaCentavos: c("diferenca_centavos", "centavos"), justificativa: c("justificativa"), fechadoPor: c("fechado_por", "uuid"), fechadoEm: c("fechado_em", "instante"),
   }),
+  [TIPO.VERSAO_FECHAMENTO]: tabela("fv2_versao_fechamento", {
+    competencia: c("competencia"), tipo: c("tipo"), numero: c("numero", "inteiro"), revisao: c("revisao", "inteiro"), metodologia: c("metodologia"),
+    metodologiaVersao: c("metodologia_versao"), apuracao: c("apuracao", "json"), pendencias: c("pendencias", "json"), verificacoes: c("verificacoes", "json"),
+    decididoPor: c("decidido_por", "uuid"), decididoEm: c("decidido_em", "instante"), justificativa: c("justificativa"),
+  }),
+  [TIPO.ATRIBUICAO_PENDENCIA]: tabela("fv2_atribuicao_pendencia", {
+    competencia: c("competencia"), chave: c("chave"), responsavelId: c("responsavel_id", "uuid"), situacao: c("situacao"), dataRevisao: c("data_revisao", "data"),
+    comentarios: c("comentarios", "json"), atribuidoPor: c("atribuido_por", "uuid"),
+  }),
+  [TIPO.CANAL_PROCESSADOR]: tabela("fv2_canal_processador", {
+    papel: c("papel"), codigo: c("codigo"), codigoBase: c("codigo_base"), nome: c("nome"), situacao: c("situacao"), observacao: c("observacao"),
+  }),
+  [TIPO.CONFIGURACAO_UNIDADE]: tabela("fv2_configuracao_unidade", {
+    nomeExibicao: c("nome_exibicao"), identificacaoEmpresa: c("identificacao_empresa"), situacao: c("situacao"), observacao: c("observacao"),
+  }),
   [TIPO.COMPETENCIA]: tabela("fv2_competencia", {
     competencia: c("competencia"), estado: c("estado"), metodologia: c("metodologia"), pendencias: c("pendencias", "json"),
     revisoes: c("revisoes", "inteiro"), decididoPor: c("decidido_por", "uuid"), decididoEm: c("decidido_em", "instante"),

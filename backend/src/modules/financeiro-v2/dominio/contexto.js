@@ -18,6 +18,8 @@ export const ACAO = Object.freeze({
   CONFIGURAR: "financeiro_v2.configurar",
   IMPORTAR: "financeiro_v2.importar",
   CONCEDER: "financeiro_v2.conceder",
+  // Execução 06D: abrir/baixar o ARQUIVO de um documento do cofre (ver a ficha continua sendo financeiro_v2.ver).
+  DOCUMENTOS: "financeiro_v2.documentos",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

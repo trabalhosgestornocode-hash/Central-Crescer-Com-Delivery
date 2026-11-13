@@ -1,4 +1,9 @@
-// AMBIENTE DEMONSTRATIVO LOCAL da interface do Financeiro v2 (Execuções 05, 06A e 06B).
+// AMBIENTE DEMONSTRATIVO LOCAL da interface do Financeiro v2 (Execuções 05, 06A, 06B, 06C e 06D).
+//
+// 06D: as permissões da demonstração são CONCESSÕES GRAVADAS (fv2_concessao, em memória), lidas a cada requisição pelo
+// adaptador de sessão e REVALIDADAS em cada operação do núcleo (exigirConcessaoPersistida). O administrador de cada
+// unidade SINTÉTICA é provisionado por uma autoridade SINTÉTICA desta demonstração (chave aleatória do processo, só para a
+// organização fictícia) — ela NÃO existe em produção; lá o provisionamento depende de autoridade real (doc 14).
 //
 // - Dados 100% SINTÉTICOS em memória (nenhum banco, nenhum .env, nenhuma rede além de 127.0.0.1).
 // - Sessão SIMULADA pelo seletor do próprio ambiente (cabeçalho x-fv2-demo-sessao), mas passando pelo adaptador de sessão
@@ -29,14 +34,20 @@ export const UNIDADES = Object.freeze([
   { id: "aaaaaaaa-0000-4000-8000-0000000000a1", nome: "Unidade Demonstração (Saci)" },
   { id: "aaaaaaaa-0000-4000-8000-0000000000a2", nome: "Unidade Demonstração 2" },
 ]);
-const USUARIOS = { gestor: "dddddddd-0000-4000-8000-000000000001", leitor: "dddddddd-0000-4000-8000-000000000002", operador: "dddddddd-0000-4000-8000-000000000003" };
+const USUARIOS = { gestor: "dddddddd-0000-4000-8000-000000000001", leitor: "dddddddd-0000-4000-8000-000000000002", operador: "dddddddd-0000-4000-8000-000000000003", administrador: "dddddddd-0000-4000-8000-000000000004" };
+/** Nomes de EXIBIÇÃO dos usuários sintéticos (nunca pessoas reais). */
+export const NOMES_DEMO = Object.freeze({ [USUARIOS.gestor]: "Gestor (demonstração)", [USUARIOS.leitor]: "Sem acesso (demonstração)", [USUARIOS.operador]: "Operador (demonstração)", [USUARIOS.administrador]: "Administrador (demonstração)", "cccccccc-0000-4000-8000-000000000001": "Carga inicial da demonstração", "eeeeeeee-0000-4000-8000-0000000000e1": "Autoridade sintética da demonstração" });
+const AUTORIDADE_DEMO = "eeeeeeee-0000-4000-8000-0000000000e1";
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
 /** Monta o núcleo e o cenário sintético (setembro com pendências, agosto homologado, unidade 2 com zero confirmado). */
 export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z") } = {}) {
   const escopos = UNIDADES.map((u) => ({ organizacaoId: ORG, unidadeId: u.id }));
   const sal = randomUUID();
-  const nucleo = m.criarNucleoFinanceiro({ repositorio: m.criarRepositorioMemoria(), escoposAutorizados: escopos, relogio, cofre: m.criarCofreMemoria() });
+  const repositorio = m.criarRepositorioMemoria();
+  const cofre = m.criarCofreMemoria();
+  // Núcleo de CARGA do cenário sintético (sem exigir concessão gravada); depois, o núcleo que ATENDE a demonstração exige.
+  let nucleo = m.criarNucleoFinanceiro({ repositorio, escoposAutorizados: escopos, relogio, cofre });
   const tudo = Object.values(m.ACAO);
   const c = (u = UNIDADES[0].id) => ({ organizacaoId: ORG, unidadeId: u, usuarioId: "cccccccc-0000-4000-8000-000000000001", permissoes: tudo });
   for (const u of UNIDADES) await nucleo.implantarPlanoDeContas(c(u.id), { modelo: "ACAITERIA" });
@@ -49,7 +60,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   await venda("BALCAO", "2026-08-10", 380000);
   await nucleo.registrarObrigacao(A, { contraparteId: (await nucleo.registrarContraparte(A, { tipo: "FORNECEDOR", nome: "Fornecedor Demonstração" })).id, valorOriginalCentavos: 120000, categoria: "INSUMOS", descricao: "Insumos (demonstração)", competencia: "2026-08", dataEmissao: "2026-08-05", vencimento: "2026-08-20" });
   await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação da demonstração." });
+  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação da demonstração." });
   // Setembro: canais, taxas, descontos (inclusive a classificar), agregado sem canal, motoboys, saída sem classificação.
   await venda("BALCAO", "2026-09-05", 412350);
   await nucleo.registrarVenda(A, { canal: "BALCAO", dataVenda: "2026-09-06", brutoCentavos: 250000, fonte: { sistema: "MANUAL", idExterno: "DEMO-C1" }, composicao: { itensCentavos: 240000, acrescimosCentavos: 10000, descontos: [{ valorCentavos: 12500, financiador: "LOJA" }] }, pagamentos: [{ forma: "CREDITO", processador: "STONE", valorCentavos: 237500 }] })
@@ -91,26 +102,44 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const f2 = await nucleo.registrarContraparte(B, { tipo: "FORNECEDOR", nome: "Fornecedor (demonstração 2)" });
   await nucleo.registrarObrigacao(B, { contraparteId: f2.id, valorOriginalCentavos: 50000, categoria: "INSUMOS", descricao: "Insumos (demonstração 2)", competencia: "2026-09", dataEmissao: "2026-09-02", vencimento: "2026-09-20" });
   await nucleo.alterarEstadoDaCompetencia(B, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(B, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação da demonstração." });
+  await nucleo.alterarEstadoDaCompetencia(B, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação da demonstração." });
 
   await conciliacoesDemo(nucleo, A, { banco });
   // Fechamento de setembro com pendências DOCUMENTADAS (Execução 06C): a Central mostra o que impede a homologação.
   await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-09", novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: ["Extrato bancário de setembro não importado", "Diferença entre faturamento diário e formas de pagamento de 02/09 sem causa comprovada"], justificativa: "Fechamento da demonstração com pendências documentadas." });
+  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-09", novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Extrato bancário de setembro não importado", impacto: "Pode alterar o resultado da competência (sintético)." }, { descricao: "Diferença entre faturamento diário e formas de pagamento de 02/09 sem causa comprovada", impacto: "Pode alterar o resultado da competência (sintético)." }], justificativa: "Fechamento da demonstração com pendências documentadas." });
 
-  const concessoes = m.criarConcessoesMemoria([
-    ...UNIDADES.map((u) => ({ organizacaoId: ORG, usuarioId: USUARIOS.gestor, unidadeId: u.id, acoes: [m.ACAO.VER] })),
-    // Operador da DEMONSTRAÇÃO: pode importar arquivos SINTÉTICOS do catálogo, revisar propostas e conciliar — só na unidade 1.
-    { organizacaoId: ORG, usuarioId: USUARIOS.operador, unidadeId: UNIDADES[0].id, acoes: [m.ACAO.VER, m.ACAO.IMPORTAR, m.ACAO.REGISTRAR, m.ACAO.REVISAR, m.ACAO.CONCILIAR] },
-    { organizacaoId: ORG, usuarioId: USUARIOS.operador, unidadeId: UNIDADES[1].id, acoes: [m.ACAO.VER] },
-  ]);
+  await documentosDemo(nucleo, A, cofre);
+
+  // ---- 06D: permissões GRAVADAS. Autoridade sintética atesta o administrador de cada unidade; ele concede o resto.
+  const chaveAutoridade = randomBytes(32);
+  const atestar = (ato) => createHmac("sha256", chaveAutoridade).update(JSON.stringify([ato.organizacaoId, ato.unidadeId, ato.usuarioId, [...ato.acoes].sort()])).digest("hex");
+  const autoridade = { verificar: async (ato) => ({ ok: ato.organizacaoId === ORG && ato.atestado === atestar(ato), autoridadeId: AUTORIDADE_DEMO }) };
+  nucleo = m.criarNucleoFinanceiro({ repositorio, escoposAutorizados: escopos, relogio, cofre, exigirConcessaoPersistida: true, autoridadeDeProvisionamento: autoridade });
+  const tudoMenosNada = Object.values(m.ACAO);
+  for (const u of UNIDADES) {
+    const ato = { organizacaoId: ORG, unidadeId: u.id, usuarioId: USUARIOS.administrador, acoes: tudoMenosNada, justificativa: "Administrador financeiro da unidade de demonstração.", evidencia: "Ato sintético da demonstração local" };
+    await nucleo.provisionarAdministradorInicial({ ...ato, atestado: atestar(ato) });
+  }
+  const adm = (u) => ({ organizacaoId: ORG, unidadeId: u, usuarioId: USUARIOS.administrador, permissoes: tudoMenosNada });
+  for (const u of UNIDADES) await nucleo.concederAcesso(adm(u.id), { usuarioId: USUARIOS.gestor, acoes: [m.ACAO.VER], justificativa: "Leitura gerencial." });
+  // Operador da DEMONSTRAÇÃO: importa arquivos SINTÉTICOS do catálogo, revisa propostas e concilia — só na unidade 1.
+  await nucleo.concederAcesso(adm(UNIDADES[0].id), { usuarioId: USUARIOS.operador, acoes: [m.ACAO.VER, m.ACAO.IMPORTAR, m.ACAO.REGISTRAR, m.ACAO.REVISAR, m.ACAO.CONCILIAR], justificativa: "Operação da conferência." });
+  await nucleo.concederAcesso(adm(UNIDADES[1].id), { usuarioId: USUARIOS.operador, acoes: [m.ACAO.VER], justificativa: "Consulta." });
+  const concessoes = m.criarConcessoesDoRepositorio({ repositorio, escopos });
   const sessoes = m.criarAdaptadorDeSessao({ concessoes, relogio });
-  const PERFIS = { gestor: USUARIOS.gestor, operador: USUARIOS.operador, "sem-acesso": USUARIOS.leitor };
+  const PERFIS = { gestor: USUARIOS.gestor, operador: USUARIOS.operador, administrador: USUARIOS.administrador, "sem-acesso": USUARIOS.leitor, expirada: USUARIOS.gestor };
   const sessaoDemo = (perfil) => (!PERFIS[perfil] ? null : {
     user: { id: PERFIS[perfil], ativo: true },
     tenant: { organizacaoId: ORG, unidadeId: null },
-    acesso: { sessionId: `demo-${perfil}`, expiraEm: "2099-01-01T00:00:00.000Z", impersonando: false },
+    acesso: { sessionId: `demo-${perfil}`, expiraEm: perfil === "expirada" ? "2026-11-12T14:00:00.000Z" : "2099-01-01T00:00:00.000Z", impersonando: false },
   });
+  /** Usuário sintético escolhido na tela (pelo nome do perfil) → id. Nunca um id livre vindo do cliente. */
+  const usuarioDoPerfil = (perfil) => {
+    const id = { gestor: USUARIOS.gestor, operador: USUARIOS.operador, administrador: USUARIOS.administrador, "sem-acesso": USUARIOS.leitor }[perfil];
+    if (!id) throw Object.assign(new Error("Pessoa fora da demonstração."), { codigo: m.CODIGO.ENTRADA_INVALIDA });
+    return id;
+  };
   const ref = (id) => `ref-${createHash("sha256").update(sal + id).digest("hex").slice(0, 10)}`;
   const CODIGOS = new Set(["FATURAMENTO_BRUTO_PROPRIO", "FATURAMENTO_LIQUIDO_GERENCIAL", "DEDUCOES_COMERCIAIS", "RECEITA_LIQUIDA_COMERCIAL", "CUSTOS_OPERACIONAIS", "RESULTADO_APOS_CUSTOS", "DESPESAS_OPERACIONAIS", "RESULTADO_FINANCEIRO", "DEMAIS_EFEITOS_GERENCIAIS", "RESULTADO_GERENCIAL"]);
   const reverso = new Map();
@@ -121,6 +150,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
    */
   const sanitizarComRef = (v) => JSON.parse(JSON.stringify(v, (k, x) => {
     if (k === "documentoIds" && Array.isArray(x)) return x.map((id) => ({ referencia: refDe(id), situacao: "REGISTRADO_NAO_ACESSIVEL" }));
+    if (typeof x === "string" && NOMES_DEMO[x]) return NOMES_DEMO[x];
     return typeof x === "string" ? x.replace(UUID, (u) => refDe(u)) : x;
   }));
   /** Parâmetros de texto da URL → filtro do núcleo: vazios saem; referências opacas voltam a ser ids; números viram inteiros. */
@@ -159,7 +189,31 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/conferencias/pendencias": (ctx, p) => nucleo.consultarPendencias(ctx, filtro(p, ["competencia", "grupo", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
     // A chave da pendência carrega referências opacas: cada uma volta a ser o id (só as já emitidas).
     "/api/fv2/conferencias/pendencia": (ctx, p) => nucleo.detalharPendencia(ctx, { competencia: p.competencia, chave: String(p.chave ?? "").split(":").map((x) => (x.startsWith("ref-") ? reverso.get(x) ?? NENHUM : x)).join(":") }),
-    "/api/fv2/conferencias/fechamento": (ctx, p) => nucleo.consultarFechamento(ctx, filtro(p, ["competencia"])),
+    "/api/fv2/conferencias/fechamento": async (ctx, p) => {
+      const f = await nucleo.consultarFechamento(ctx, filtro(p, ["competencia"]));
+      // 06D: prévias das mudanças possíveis a partir do estado atual (as MESMAS regras do núcleo, sem gravar) e versões.
+      const destinos = { ABERTA: ["FECHAMENTO_PRELIMINAR"], FECHAMENTO_PRELIMINAR: ["FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO", "ABERTA"], FECHAMENTO_COM_PENDENCIAS: ["FECHAMENTO_HOMOLOGADO", "FECHAMENTO_PRELIMINAR", "ABERTA"], FECHAMENTO_HOMOLOGADO: ["ABERTA"] }[f.estado] ?? [];
+      const acoes = [];
+      for (const novoEstado of destinos) acoes.push(await nucleo.previaDaMudancaDeEstado(ctx, { competencia: f.competencia, novoEstado }));
+      const versoes = await nucleo.consultarVersoesDeFechamento(ctx, { competencia: f.competencia });
+      return { ...f, acoes, versoes: versoes.versoes };
+    },
+    // 06D — configurações, permissões, documentos, pessoas com acesso (para escolher responsável).
+    "/api/fv2/configuracoes": (ctx) => nucleo.consultarConfiguracoes(ctx),
+    "/api/fv2/configuracoes/plano": (ctx) => nucleo.consultarPlanoDeContas(ctx),
+    "/api/fv2/configuracoes/categoria": (ctx, p) => nucleo.consultarCategoria(ctx, { codigo: String(p.codigo ?? "") }),
+    "/api/fv2/permissoes": (ctx) => nucleo.consultarPermissoes(ctx),
+    "/api/fv2/documentos": (ctx, p) => nucleo.consultarDocumentos(ctx, filtro(p, ["competencia", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
+    "/api/fv2/documento": (ctx, p) => nucleo.detalharDocumento(ctx, { id: reverso.get(p.id) ?? NENHUM }),
+    "/api/fv2/pessoas": async (ctx) => {
+      // Pessoas SINTÉTICAS com acesso ativo nesta unidade (a lista vem das concessões gravadas, não do cliente).
+      const saida = [];
+      for (const [perfil, id] of Object.entries({ gestor: USUARIOS.gestor, operador: USUARIOS.operador, administrador: USUARIOS.administrador })) {
+        const lista = await concessoes.listar({ organizacaoId: ORG, usuarioId: id });
+        if (lista.some((x) => x.unidadeId === ctx.unidadeId)) saida.push({ perfil, nome: NOMES_DEMO[id] });
+      }
+      return { pessoas: saida };
+    },
   };
   const CATALOGO = catalogoSintetico();
   // CSRF: token por perfil, derivado de um segredo aleatório deste processo (as ações exigem o cabeçalho x-fv2-csrf).
@@ -185,6 +239,42 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/acoes/propostas/rejeitar": { campos: ["proposta", "justificativa"], fazer: (ctx, b) => nucleo.rejeitarProposta(ctx, { propostaId: id(b.proposta), justificativa: b.justificativa }) },
     "/api/fv2/acoes/propostas/aplicar": { campos: ["proposta"], fazer: (ctx, b) => nucleo.aplicarProposta(ctx, { propostaId: id(b.proposta) }) },
     "/api/fv2/acoes/conciliacoes/confirmar": { campos: ["correspondencia", "justificativa"], fazer: (ctx, b) => nucleo.confirmarConciliacao(ctx, { correspondenciaId: id(b.correspondencia), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
+    // ---- 06D: fechamento mensal. Pendências documentadas são montadas a partir da Central (núcleo), não do cliente.
+    "/api/fv2/acoes/fechamento/alterar": { campos: ["competencia", "novoEstado", "metodologia", "justificativa", "decisao", "documentacaoFaltante"], fazer: async (ctx, b) => {
+      const pendencias = [];
+      if (b.novoEstado === "FECHAMENTO_COM_PENDENCIAS") {
+        const lista = await nucleo.consultarPendencias(ctx, { competencia: b.competencia, situacao: "A_RESOLVER", tamanho: 100 });
+        for (const x of lista.itens) {
+          pendencias.push({
+            chave: x.chave.slice(0, 200), descricao: String(x.titulo ?? x.motivo ?? "Pendência").slice(0, 500),
+            impacto: x.efeitoNoFechamento === "BLOQUEIA" ? "Bloqueia a homologação até ser resolvida." : x.efeitoNoFechamento === "NAO_BLOQUEIA" ? "Não altera o resultado; acompanhamento." : "Pode alterar o resultado: precisa estar documentada.",
+            ...(x.atribuicao?.responsavelId ? { responsavelId: x.atribuicao.responsavelId } : {}),
+            ...(b.documentacaoFaltante ? { documentacaoFaltante: String(b.documentacaoFaltante).slice(0, 500) } : {}), ...(b.decisao ? { decisao: String(b.decisao).slice(0, 500) } : {}),
+          });
+        }
+      }
+      return nucleo.alterarEstadoDaCompetencia(ctx, {
+        competencia: b.competencia, novoEstado: b.novoEstado, confirmar: true,
+        ...(b.metodologia ? { metodologia: b.metodologia } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}), ...(pendencias.length ? { pendencias } : {}),
+      });
+    } },
+    "/api/fv2/acoes/pendencias/atribuir": { campos: ["competencia", "chave", "responsavel", "dataRevisao", "comentario", "justificativa"], fazer: (ctx, b) => nucleo.atribuirResponsavelDePendencia(ctx, {
+      competencia: b.competencia, chave: String(b.chave ?? "").split(":").map((x) => (x.startsWith("ref-") ? reverso.get(x) ?? NENHUM : x)).join(":"), responsavelId: usuarioDoPerfil(b.responsavel),
+      ...(b.dataRevisao ? { dataRevisao: b.dataRevisao } : {}), ...(b.comentario ? { comentario: b.comentario } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}),
+    }) },
+    "/api/fv2/acoes/pendencias/acompanhar": { campos: ["competencia", "chave", "situacao", "comentario"], fazer: (ctx, b) => nucleo.atualizarAcompanhamentoDePendencia(ctx, {
+      competencia: b.competencia, chave: String(b.chave ?? "").split(":").map((x) => (x.startsWith("ref-") ? reverso.get(x) ?? NENHUM : x)).join(":"), situacao: b.situacao, ...(b.comentario ? { comentario: b.comentario } : {}),
+    }) },
+    // ---- 06D: permissões (usuários SINTÉTICOS, escolhidos pelo perfil; ações marcadas uma a uma).
+    "/api/fv2/acoes/permissoes/conceder": { campos: ["usuario", "justificativa", ...Object.values(m.ACAO).map((a) => `acao_${a.split(".")[1]}`)], fazer: (ctx, b) => nucleo.concederAcesso(ctx, { usuarioId: usuarioDoPerfil(b.usuario), acoes: acoesMarcadas(b), justificativa: b.justificativa }) },
+    "/api/fv2/acoes/permissoes/revogar": { campos: ["usuario", "justificativa", ...Object.values(m.ACAO).map((a) => `acao_${a.split(".")[1]}`)], fazer: (ctx, b) => nucleo.revogarAcesso(ctx, { usuarioId: usuarioDoPerfil(b.usuario), ...(acoesMarcadas(b).length ? { acoes: acoesMarcadas(b) } : {}), justificativa: b.justificativa }) },
+    // ---- 06D: configurações.
+    "/api/fv2/acoes/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], fazer: (ctx, b) => nucleo.configurarUnidade(ctx, semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"])) },
+    "/api/fv2/acoes/configuracoes/canal": { campos: ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"], fazer: (ctx, b) => nucleo.registrarCanalOuProcessador(ctx, semVazios(b, ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"])) },
+    "/api/fv2/acoes/configuracoes/conta": { campos: ["conta", "nome", "ativa", "justificativa"], fazer: (ctx, b) => nucleo.alterarContaFinanceira(ctx, { contaId: id(b.conta), ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}), justificativa: b.justificativa }) },
+    "/api/fv2/acoes/configuracoes/categoria": { campos: ["codigo", "nome", "ativa", "justificativa"], fazer: (ctx, b) => nucleo.alterarCategoria(ctx, { codigo: b.codigo, mudancas: { ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}) }, justificativa: b.justificativa }) },
+    // ---- 06D: integridade de documento (grava o resultado no histórico).
+    "/api/fv2/acoes/documentos/verificar": { campos: ["documento"], fazer: (ctx, b) => nucleo.verificarIntegridadeDoDocumento(ctx, { id: id(b.documento) }) },
     "/api/fv2/acoes/conciliacoes/gerar": { campos: ["competencia"], fazer: (ctx, b) => {
       if (!/^\d{4}-\d{2}$/.test(String(b.competencia ?? ""))) throw Object.assign(new Error("Competência inválida."), { codigo: m.CODIGO.ENTRADA_INVALIDA });
       const fim = m.tempo.ultimoDiaDe(b.competencia);
@@ -197,7 +287,11 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     [m.CODIGO.ENTRADA_INVALIDA]: 400, [m.CODIGO.DATA_INVALIDA]: 400, [m.CODIGO.VALOR_INVALIDO]: 400, [m.CODIGO.NAO_ENCONTRADO]: 404,
     [m.CODIGO.TRANSICAO_INVALIDA]: 409, [m.CODIGO.CONCILIACAO_INVALIDA]: 409, [m.CODIGO.CONFLITO_IDEMPOTENCIA]: 409, [m.CODIGO.CONFLITO_VERSAO]: 409,
     [m.CODIGO.IMPORTACAO_INVALIDA]: 422, [m.CODIGO.HOMOLOGACAO_BLOQUEADA]: 409, [m.CODIGO.COMPETENCIA_HOMOLOGADA]: 409,
+    [m.CODIGO.CONFIRMACAO_EXIGIDA]: 400, [m.CODIGO.CATEGORIA_INVALIDA]: 409, [m.CODIGO.OPERACAO_INVALIDA]: 409, [m.CODIGO.DOCUMENTO_INDISPONIVEL]: 409,
+    [m.CODIGO.DOCUMENTO_ADULTERADO]: 409, [m.CODIGO.COFRE_INDISPONIVEL]: 503,
   });
+  const acoesMarcadas = (b) => Object.values(m.ACAO).filter((a) => b[`acao_${a.split(".")[1]}`] === "on" || b[`acao_${a.split(".")[1]}`] === true);
+  const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !== undefined && b[k] !== "").map((k) => [k, b[k]]));
   /**
    * Ação mutável da demonstração (POST). Exige: sessão de demonstração explícita, token CSRF do perfil, confirmação humana
    * (`confirmar: true`), campos conhecidos e a permissão própria da operação (conferida pelo núcleo). Nunca simula sucesso.
@@ -207,6 +301,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       const acao = ACOES[caminho];
       if (!acao) return { status: 404, corpo: { erro: "NAO_ENCONTRADO", mensagem: "Ação inexistente." } };
       if (!PERFIS[perfil]) return { status: 401, corpo: { erro: m.CODIGO.SESSAO_AUSENTE, mensagem: "Sessão ausente." } };
+      // 06D: sessão inválida ou expirada é recusada como tal (401) antes de qualquer outra conferência.
+      await sessoes.unidadesAutorizadas(sessaoDemo(perfil));
       if (!tokenConfere(perfil, csrf)) return { status: 403, corpo: { erro: "CSRF", mensagem: "Token de segurança ausente ou inválido. Recarregue a página." } };
       if (!corpo || typeof corpo !== "object" || Array.isArray(corpo)) return { status: 400, corpo: { erro: m.CODIGO.ENTRADA_INVALIDA, mensagem: "Corpo inválido." } };
       const desconhecidos = Object.keys(corpo).filter((k) => ![...acao.campos, "unidade", "confirmar"].includes(k));
@@ -228,6 +324,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
         const unidades = await sessoes.unidadesAutorizadas(s);
         return { status: 200, corpo: {
           dataBase: m.tempo.hojeEm(relogio()), csrf: s ? tokenDe(perfil) : null,
+          // 06D: pessoas SINTÉTICAS que podem receber acesso (escolhidas pelo perfil; o id nunca vem do cliente).
+          pessoasDemo: [["gestor", USUARIOS.gestor], ["operador", USUARIOS.operador], ["administrador", USUARIOS.administrador], ["sem-acesso", USUARIOS.leitor]].map(([perfil, id]) => ({ perfil, nome: NOMES_DEMO[id] })),
           unidades: unidades.map((u) => ({ id: u.unidadeId, nome: UNIDADES.find((x) => x.id === u.unidadeId)?.nome ?? "Unidade", permissoes: u.acoes })),
         } };
       }
@@ -238,14 +336,22 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       const unidadeId = UNIDADES.find((u) => u.id === params.unidade)?.id ?? params.unidade;
       const ctx = await sessoes.contextoPara(s, { unidadeId });
       const competencia = params.competencia;
+      if (caminho === "/api/fv2/documentos/arquivo") {
+        // 06D: o ARQUIVO só sai para quem tem financeiro_v2.documentos, revalidado agora; cabeçalhos seguros do núcleo.
+        const finalidade = params.finalidade === "visualizar" ? "VISUALIZAR" : params.finalidade === "baixar" ? "BAIXAR" : null;
+        if (!finalidade) return { status: 400, corpo: { erro: "FINALIDADE", mensagem: "Finalidade inválida." } };
+        const a = await nucleo.obterArquivoDoDocumento(ctx, { id: reverso.get(params.id) ?? NENHUM, finalidade });
+        return { status: 200, binario: Buffer.from(a.conteudo), cabecalhos: a.cabecalhos };
+      }
       if (caminho === "/api/fv2/visao-geral") {
         const vg = await nucleo.apurarVisaoGeral(ctx, { competencia });
-        return { status: 200, corpo: sanitizarComRef({ ...vg, financeiro: await nucleo.consultarResumoFinanceiro(ctx, { competencia }) }) };
+        const situacao = await nucleo.consultarCompetencia(ctx, { competencia });
+        return { status: 200, corpo: sanitizarComRef({ ...vg, financeiro: await nucleo.consultarResumoFinanceiro(ctx, { competencia }), fechamento: { estado: situacao.estado, revisoes: situacao.revisoes } }) };
       }
       if (TESOURARIA[caminho]) return { status: 200, corpo: sanitizarComRef(await TESOURARIA[caminho](ctx, params)) };
       if (caminho === "/api/fv2/dre") {
         const ap = await nucleo.apurarCompetencia(ctx, { competencia });
-        return { status: 200, corpo: sanitizarComRef({ competencia, impressao: ap.impressao, dre: ap.dre, cadaCem: ap.cadaCem, pendencias: ap.pendencias, faturamentoBruto: ap.indicadores.FATURAMENTO_BRUTO_PROPRIO, resultadoGerencial: ap.indicadores.RESULTADO_GERENCIAL, faturamentoLiquidoGerencial: ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL }) };
+        return { status: 200, corpo: sanitizarComRef({ competencia, impressao: ap.impressao, versaoHomologada: ap.versaoHomologada, dre: ap.dre, cadaCem: ap.cadaCem, pendencias: ap.pendencias, faturamentoBruto: ap.indicadores.FATURAMENTO_BRUTO_PROPRIO, resultadoGerencial: ap.indicadores.RESULTADO_GERENCIAL, faturamentoLiquidoGerencial: ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL }) };
       }
       if (caminho === "/api/fv2/composicao") {
         if (!CODIGOS.has(params.codigo)) return { status: 400, corpo: { erro: "INDICADOR_DESCONHECIDO", mensagem: "Indicador desconhecido." } };
@@ -253,7 +359,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       }
       return { status: 404, corpo: { erro: "NAO_ENCONTRADO", mensagem: "Consulta inexistente." } };
     } catch (e) {
-      const mapa = { [m.CODIGO.SESSAO_AUSENTE]: 401, [m.CODIGO.SESSAO_INVALIDA]: 401, [m.CODIGO.ESCOPO_NAO_AUTORIZADO]: 403, [m.CODIGO.PERMISSAO_INSUFICIENTE]: 403, [m.CODIGO.ENTRADA_INVALIDA]: 400, [m.CODIGO.DATA_INVALIDA]: 400, [m.CODIGO.NAO_ENCONTRADO]: 404 };
+      const mapa = { [m.CODIGO.SESSAO_AUSENTE]: 401, [m.CODIGO.SESSAO_INVALIDA]: 401, [m.CODIGO.ESCOPO_NAO_AUTORIZADO]: 403, [m.CODIGO.PERMISSAO_INSUFICIENTE]: 403, [m.CODIGO.ENTRADA_INVALIDA]: 400, [m.CODIGO.DATA_INVALIDA]: 400, [m.CODIGO.NAO_ENCONTRADO]: 404,
+        [m.CODIGO.DOCUMENTO_INDISPONIVEL]: 409, [m.CODIGO.DOCUMENTO_ADULTERADO]: 409, [m.CODIGO.COFRE_INDISPONIVEL]: 503 };
       if (e?.codigo && mapa[e.codigo]) return { status: mapa[e.codigo], corpo: { erro: e.codigo, mensagem: e.message } };
       return { status: 500, corpo: { erro: "FALHA_DA_CONSULTA", mensagem: "Não foi possível consultar agora." } };
     }
@@ -390,4 +497,30 @@ async function tesouraria(nucleo, A, { caixa, banco, ifoodRecebivel }) {
   const s2 = (await nucleo.abrirCaixa(A, { contaId: caixa.id, dataAbertura: "2026-11-11", saldoContadoCentavos: 29000 })).sessao;
   await nucleo.registrarOperacaoDeCaixa(A, { sessaoId: s2.id, operacao: "SUPRIMENTO", valorCentavos: 10000, data: "2026-11-11", descricao: "Troco", contraContaId: banco.id });
   await nucleo.registrarOperacaoDeCaixa(A, { sessaoId: s2.id, operacao: "SANGRIA", valorCentavos: 20000, data: "2026-11-12", descricao: "Depósito no banco", contraContaId: banco.id });
+}
+
+/** Documentos SINTÉTICOS no cofre da demonstração (06D): PDF íntegro com duas versões, PDF com conteúdo ativo e CSV. */
+function pdfSintetico(texto, extra = "") {
+  const conteudo = `BT /F1 12 Tf 72 720 Td (${texto}) Tj ET`;
+  return new TextEncoder().encode(`%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R ${extra} >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length ${conteudo.length} >> stream
+${conteudo}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+trailer << /Root 1 0 R >>
+%%EOF
+`);
+}
+async function documentosDemo(nucleo, A, cofre) {
+  const guardar = async (conteudo, tipoMime, ficha) => {
+    const g = await cofre.guardar(A, { conteudo, tipoMime });
+    return (await nucleo.registrarDocumento(A, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, recebidoEm: "2026-09-30", competencia: "2026-09", ...ficha })).documento;
+  };
+  const v1 = await guardar(pdfSintetico("Comprovante sintetico de pagamento - versao 1"), "application/pdf", { tipo: "COMPROVANTE", descricao: "Comprovante de pagamento (sintético)" });
+  await guardar(pdfSintetico("Comprovante sintetico de pagamento - versao 2 corrigida"), "application/pdf", { tipo: "COMPROVANTE", descricao: "Comprovante de pagamento corrigido (sintético)", substituiId: v1.id });
+  await guardar(pdfSintetico("Nota sintetica", "/OpenAction << /S /JavaScript /JS (app.alert(1)) >>"), "application/pdf", { tipo: "NOTA_FISCAL", descricao: "Nota com conteúdo ativo (sintética): só download" });
+  await guardar(new TextEncoder().encode("data;descricao;valor\n2026-09-01;Exemplo sintetico;10,00\n"), "text/csv", { tipo: "RELATORIO_VENDAS", descricao: "Planilha sintética (CSV): só download" });
 }

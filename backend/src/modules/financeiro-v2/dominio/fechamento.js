@@ -39,5 +39,30 @@ export function acaoDaTransicao(estadoAtual, novoEstado, dados = {}) {
   return acao;
 }
 
+/**
+ * Execução 06D — a mesma regra, sem lançar: para a PRÉVIA da tela (o botão só fica habilitado se o núcleo permitir).
+ * @returns {{acao:string|null, motivos:string[]}}
+ */
+export function avaliarTransicao(estadoAtual, novoEstado, dados = {}) {
+  const acao = TRANSICOES[estadoAtual]?.[novoEstado] ?? null;
+  const motivos = [];
+  if (!acao) motivos.push("Transição de fechamento não permitida a partir do estado atual.");
+  if (novoEstado === E.FECHAMENTO_COM_PENDENCIAS && !(dados.pendencias?.length > 0)) motivos.push("Exige a lista das pendências documentadas.");
+  if (novoEstado === E.FECHAMENTO_HOMOLOGADO && !dados.metodologia) motivos.push("Exige a metodologia aplicada.");
+  if (novoEstado === E.ABERTA && !dados.justificativa) motivos.push("Reabrir exige justificativa.");
+  return { acao, motivos };
+}
+
+/** Transições que gravam ação sensível e exigem confirmação explícita (homologar e reabrir uma homologada). */
+export const exigeConfirmacao = (estadoAtual, novoEstado) => novoEstado === E.FECHAMENTO_HOMOLOGADO || (estadoAtual === E.FECHAMENTO_HOMOLOGADO && novoEstado === E.ABERTA);
+
+/** O que cada estado bloqueia (texto para a tela e para o histórico). */
+export const EFEITO_DO_ESTADO = Object.freeze({
+  [E.ABERTA]: "Operações autorizadas seguem normalmente, com histórico.",
+  [E.FECHAMENTO_PRELIMINAR]: "Indicadores e metodologia ficam registrados numa versão preliminar; ajustes autorizados continuam permitidos.",
+  [E.FECHAMENTO_COM_PENDENCIAS]: "Escritas só como correção auditada (permissão de corrigir), com marca na competência; as pendências ficam documentadas, não resolvidas.",
+  [E.FECHAMENTO_HOMOLOGADO]: "Escritas econômicas ficam bloqueadas no núcleo e no banco; recebimentos e pagamentos posteriores ficam registrados como atualização posterior, sem mudar a versão homologada.",
+});
+
 export const aceitaEscrita = (estado) => estado !== E.FECHAMENTO_HOMOLOGADO;
 export const exigeCorrecaoAuditada = (estado) => estado === E.FECHAMENTO_COM_PENDENCIAS;

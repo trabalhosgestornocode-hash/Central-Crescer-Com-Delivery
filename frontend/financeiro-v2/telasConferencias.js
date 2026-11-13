@@ -35,6 +35,7 @@ function acao({ url, rotulo, campos = "", aviso, recarregar, perigo = false }) {
 
 // ------------------------------------------------------------------------------------------------------- cabeçalho
 export function central(r, f = {}, ctx = {}) {
+  // 06D: as ações de fechamento recebem o contexto (permissões da sessão); a prévia vem do núcleo.
   const secao = f.secao ?? "resumo";
   const corpo = { resumo, pendencias, documentos: documentosImportados, propostas, conciliacoes, fechamento }[secao] ?? resumo;
   return `<div class="central"><header class="cabecalho"><div><h1>Importações e Conferências</h1><p class="subtitulo">${esc(competencia(ctx.competencia))} · ${esc(ctx.unidadeNome ?? "")} · posição em ${esc(dataBR(r.dataBase))}</p></div></header>
@@ -92,7 +93,7 @@ ${paginacao(r.paginacao, ROTA)}
 </section>`;
 }
 
-export function detalhePendencia(d) {
+export function detalhePendencia(d, ctx = {}) {
   const p = d.pendencia;
   return `${fechar(p.titulo)}
 <p>${seloDe(SITUACOES_PENDENCIA[p.situacao])} <span class="selo selo--neutro">${esc(p.nomeDoGrupo)}</span>${p.efeitoNoFechamento === "BLOQUEIA" ? ' <span class="selo selo--erro">bloqueia a homologação</span>' : p.efeitoNoFechamento === "NAO_BLOQUEIA" ? ' <span class="selo selo--info">não bloqueia o fechamento</span>' : ""}</p>
@@ -101,8 +102,9 @@ export function detalhePendencia(d) {
   <dt>Origem da informação</dt><dd>${esc(fonte(p.origem))}</dd>
   <dt>Impacto financeiro</dt><dd>${p.valorCentavos !== null ? `${valor(p.valorCentavos)} — ` : ""}${esc(p.impacto)}</dd>
   <dt>Motivo da pendência</dt><dd>${esc(p.motivo)}</dd>
-  <dt>Responsável</dt><dd>${esc(p.responsavel ?? "Não atribuído")}</dd>
+  <dt>Responsável</dt><dd>${d.atribuicao ? `${esc(d.atribuicao.responsavelId)}${d.atribuicao.responsavelEhVoce ? " (você)" : ""} · ${esc(SITUACOES_ATRIBUICAO[d.atribuicao.situacao] ?? d.atribuicao.situacao)}${d.atribuicao.dataRevisao ? ` · revisar em ${esc(dataBR(d.atribuicao.dataRevisao))}` : ""}` : "Nenhum responsável atribuído"}</dd>
 </dl>
+${responsavelDaPendencia(d, ctx)}
 ${p.outrosMotivos.length ? `<h3>Outros motivos sobre o mesmo fato</h3><ul class="mini">${p.outrosMotivos.map((x) => `<li>${esc(x.motivo)}</li>`).join("")}</ul>` : ""}
 <h3>Documentos existentes</h3>${documentos(p.documentosExistentes)}
 <h3>Documentos necessários</h3>${p.documentosNecessarios.length ? `<ul class="mini">${p.documentosNecessarios.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : nenhum("Nenhum documento adicional indicado.")}
@@ -112,6 +114,27 @@ ${ligacaoDaPendencia(p)}
 <h3>Histórico de decisões</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li><strong>${esc(EVENTOS[h.evento] ?? "Alteração registrada")}</strong> · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem decisões registradas.")}
 ${p.apontadoPor.length > 1 ? `<p class="nota">Este fato foi apontado por ${p.apontadoPor.length} conferências diferentes e conta uma única vez.</p>` : ""}
 ${tecnico({ chave: p.chave, codigo: p.codigo, referencia: p.referencia, apontadoPor: p.apontadoPor, outrosCodigos: p.outrosMotivos.map((x) => x.codigo), ...p.tecnico })}`;
+}
+
+const SITUACOES_ATRIBUICAO = Object.freeze({ ATRIBUIDA: "Atribuída", EM_ANALISE: "Em análise", AGUARDANDO_TERCEIRO: "Aguardando terceiro", CONCLUIDA: "Concluída (aguarda a causa sumir)" });
+
+/** Responsável pela pendência: só pessoas com acesso real à unidade; reatribuir exige justificativa; tudo no histórico. */
+function responsavelDaPendencia(d, ctx) {
+  const pessoas = ctx.pessoas ?? [];
+  const a = d.atribuicao;
+  const historico = d.historicoDaAtribuicao?.length ? `<h4>Histórico da atribuição</h4><ol class="historico">${d.historicoDaAtribuicao.map((h) => `<li><strong>${esc(h.evento === "CRIACAO" ? "Atribuída" : "Atualizada")}</strong> · ${esc(dataBR(h.em))} · ${esc(h.por)}${h.responsavelAntes && h.responsavelAntes !== h.responsavelDepois ? ` · de ${esc(h.responsavelAntes)} para ${esc(h.responsavelDepois)}` : ""}${h.situacaoDepois ? ` · ${esc(SITUACOES_ATRIBUICAO[h.situacaoDepois] ?? h.situacaoDepois)}` : ""}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : "";
+  const comentarios = a?.comentarios?.length ? `<h4>Comentários</h4><ul class="mini">${a.comentarios.map((c) => `<li>${esc(dataBR(c.em))}${c.porVoce ? " (você)" : ""}: ${esc(c.texto)}</li>`).join("")}</ul>` : "";
+  if (!d.podeAtribuir) return `<h3>Responsável</h3>${comentarios}${historico}<p class="nota">Atribuir responsável exige a permissão "revisar propostas".</p>`;
+  if (!pessoas.length) return `<h3>Responsável</h3>${comentarios}${historico}<p class="nota">Nenhuma pessoa com acesso a esta unidade disponível para atribuição.</p>`;
+  const chave = `<input type="hidden" name="competencia" value="${esc(ctx.competencia ?? "")}"><input type="hidden" name="chave" value="${esc(d.pendencia.chave)}">`;
+  return `<h3>Responsável</h3>
+${acao({ url: "/api/fv2/acoes/pendencias/atribuir", rotulo: a ? "Atualizar atribuição" : "Atribuir responsável", aviso: "Confirmo a atribuição (não resolve a pendência).", recarregar: `pendencia:${d.pendencia.chave}`,
+    campos: `${chave}<label>Responsável <select name="responsavel" required>${pessoas.map((x) => `<option value="${esc(x.perfil)}">${esc(x.nome)}</option>`).join("")}</select></label>
+<label>Revisar em <input type="date" name="dataRevisao"></label><label>Comentário <input name="comentario" maxlength="500"></label>
+<label>Justificativa${a ? " (obrigatória para trocar o responsável)" : ""} <input name="justificativa" maxlength="500"></label>` })}
+${a ? acao({ url: "/api/fv2/acoes/pendencias/acompanhar", rotulo: "Registrar acompanhamento", aviso: "Confirmo o registro do acompanhamento.", recarregar: `pendencia:${d.pendencia.chave}`,
+    campos: `${chave}<label>Situação <select name="situacao">${Object.entries(SITUACOES_ATRIBUICAO).map(([k, v]) => `<option value="${esc(k)}"${k === a.situacao ? " selected" : ""}>${esc(v)}</option>`).join("")}</select></label><label>Comentário (obrigatório para concluir) <input name="comentario" maxlength="500"></label>` }) : ""}
+${comentarios}${historico}`;
 }
 
 /** Ligação real para o registro da pendência (quando existe uma tela para ele); senão, nada — nunca link falso. */
@@ -284,7 +307,7 @@ ${tecnico({ relacao: c.relacao, situacao: c.situacao, confiabilidade: c.confiabi
 }
 
 // -------------------------------------------------------------------------------------------------------- fechamento
-function fechamento(r) {
+function fechamento(r, _f, ctx = {}) {
   return `<section class="card card--destaque" aria-labelledby="t-fech">
   <div class="card-topo"><h2 id="t-fech">Fechamento de ${esc(competencia(r.competencia))}</h2>${seloDe(ESTADOS_COMPETENCIA[r.estado])}</div>
   <ol class="etapas-fechamento">${r.etapas.map((e) => `<li class="${e.atual ? "atual" : e.concluida ? "concluida" : ""}"${e.atual ? ' aria-current="step"' : ""}>${esc(ESTADOS_COMPETENCIA[e.estado].rotulo)}</li>`).join("")}</ol>
@@ -303,11 +326,67 @@ ${r.exigemDocumentacao ? `<p class="nota">${r.exigemDocumentacao} pendência(s) 
 <section class="card" aria-labelledby="t-secoes"><h2 id="t-secoes">Conferência por assunto</h2>
 <ul class="secoes-fechamento">${r.secoes.map((s) => `<li><div class="pendencia-topo"><strong>${esc(s.nome)}</strong>${seloDe(SITUACOES_SECAO[s.situacao])}</div><p class="nota">${esc(s.resumo)}</p></li>`).join("")}</ul>
 </section>
-${r.pendenciasDocumentadas.length ? `<section class="card" aria-labelledby="t-docum"><h2 id="t-docum">Pendências documentadas no fechamento</h2><ul class="mini">${r.pendenciasDocumentadas.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></section>` : ""}
+${r.pendenciasDocumentadas.length ? `<section class="card" aria-labelledby="t-docum"><h2 id="t-docum">Pendências documentadas no fechamento</h2><ul class="lista-pendencias-doc">${r.pendenciasDocumentadas.map((x) => `<li><strong>${esc(typeof x === "string" ? x : x.descricao)}</strong>${typeof x === "string" ? "" : `<br><span class="nota">Impacto: ${esc(x.impacto)}${x.responsavelId ? ` · responsável: ${esc(x.responsavelId)}` : " · sem responsável definido"}${x.documentacaoFaltante ? ` · falta: ${esc(x.documentacaoFaltante)}` : ""}${x.decisao ? ` · decisão: ${esc(x.decisao)}` : ""}${x.evidenciaDocumentoIds?.length ? ` · ${x.evidenciaDocumentoIds.length} evidência(s)` : ""}</span>`}</li>`).join("")}</ul><p class="nota">Documentar não resolve: cada pendência continua aberta até a causa ser tratada.</p></section>` : ""}
+${acoesDeFechamento(r, ctx)}
+${versoesDeFechamento(r.versoes ?? [])}
 <section class="card" aria-labelledby="t-hist"><h2 id="t-hist">Histórico de revisões</h2>
 ${r.historico.length ? `<ol class="historico">${r.historico.map((h) => `<li><strong>${esc(ESTADOS_COMPETENCIA[h.para]?.rotulo ?? h.para ?? h.evento)}</strong> · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}${h.metodologia && h.para === "FECHAMENTO_HOMOLOGADO" ? ` · metodologia: ${esc(h.metodologia)}` : ""}</li>`).join("")}</ol>` : nenhum("Nenhuma mudança de estado registrada.")}
-<p class="nota">Nesta demonstração o fechamento é só visualizado: mudar o estado exige as permissões de fechar/homologar e a decisão de uma pessoa.</p>
 </section>`;
+}
+
+const ROTULO_DA_TRANSICAO = Object.freeze({
+  FECHAMENTO_PRELIMINAR: "Iniciar fechamento preliminar", FECHAMENTO_COM_PENDENCIAS: "Registrar fechamento com pendências documentadas",
+  FECHAMENTO_HOMOLOGADO: "Homologar a competência", ABERTA: "Reabrir a competência",
+});
+
+const rotuloDe = (a) => (a.estadoProposto === "FECHAMENTO_PRELIMINAR" && a.estadoAtual === "FECHAMENTO_COM_PENDENCIAS" ? "Voltar ao fechamento preliminar" : ROTULO_DA_TRANSICAO[a.estadoProposto] ?? a.estadoProposto);
+
+/**
+ * Ações de fechamento: cada uma mostra ANTES o estado atual e o proposto, o que passa a ser bloqueado, as pendências, os
+ * impedimentos, a permissão exigida e se precisa de justificativa — tudo calculado pelo NÚCLEO (prévia). O botão só fica
+ * habilitado quando o núcleo permite; mesmo assim a gravação é conferida de novo no servidor.
+ */
+function acoesDeFechamento(r, ctx = {}) {
+  const acoes = r.acoes ?? [];
+  if (!acoes.length) return "";
+  return `<section class="card" aria-labelledby="t-acoes-fech"><h2 id="t-acoes-fech">Ações de fechamento</h2>
+<p class="nota">Toda mudança de estado grava uma versão imutável da apuração e fica no histórico. Nada é homologado automaticamente.</p>
+<div class="acoes-fechamento">${acoes.map((a) => {
+    const reabrir = a.estadoProposto === "ABERTA";
+    const campos = [
+      `<input type="hidden" name="competencia" value="${esc(a.competencia)}"><input type="hidden" name="novoEstado" value="${esc(a.estadoProposto)}">`,
+      a.exigeMetodologia ? `<label>Critério da decisão (metodologia aplicada) <textarea name="metodologia" rows="2" required maxlength="2000"></textarea></label><p class="nota">Metodologia vigente: ${esc(a.metodologiaVigente ?? "não publicada")}.</p>` : "",
+      a.exigePendencias ? `<p class="nota">As pendências a resolver da Central entram na documentação, com o impacto e o responsável já atribuídos.</p><label>Documentação faltante <input name="documentacaoFaltante" maxlength="500"></label><label>Decisão registrada <input name="decisao" maxlength="500"></label>` : "",
+      `<label>Justificativa${a.exigeJustificativa ? " (obrigatória)" : ""} <textarea name="justificativa" rows="2" maxlength="500"${a.exigeJustificativa ? " required" : ""}></textarea></label>`,
+    ].join("");
+    const formulario = a.permitida
+      ? acao({ url: "/api/fv2/acoes/fechamento/alterar", rotulo: rotuloDe(a), campos, aviso: `Confirmo: ${ESTADOS_COMPETENCIA[a.estadoAtual].rotulo} → ${ESTADOS_COMPETENCIA[a.estadoProposto].rotulo}.`, recarregar: "lista", perigo: reabrir || a.estadoProposto === "FECHAMENTO_HOMOLOGADO" })
+      : `<button type="button" class="botao" disabled aria-describedby="bloq-${esc(a.estadoProposto)}">${esc(rotuloDe(a))}</button>`;
+    return `<article class="acao-fechamento" aria-label="${esc(rotuloDe(a))}">
+  <h3>${esc(rotuloDe(a))}</h3>
+  <dl class="ficha ficha--compacta">
+    <dt>Estado atual</dt><dd>${seloDe(ESTADOS_COMPETENCIA[a.estadoAtual])}</dd>
+    <dt>Estado proposto</dt><dd>${seloDe(ESTADOS_COMPETENCIA[a.estadoProposto])}</dd>
+    <dt>O que passa a valer</dt><dd>${esc(a.efeito)}</dd>
+    <dt>Permissão exigida</dt><dd>${esc(PERMISSOES[a.permissaoExigida] ?? a.permissaoExigida ?? "—")}${a.voceTemPermissao ? " · você tem" : " · você NÃO tem"}</dd>
+    <dt>Justificativa</dt><dd>${a.exigeJustificativa ? "Obrigatória" : "Opcional"}${a.exigeConfirmacao ? " · exige confirmação explícita" : ""}</dd>
+    ${a.impedimentos.length ? `<dt>Impedimentos</dt><dd><ul class="mini">${a.impedimentos.map((x) => `<li>${esc(x.mensagem)}</li>`).join("")}</ul></dd>` : ""}
+  </dl>
+  ${a.bloqueios.length ? `<p class="aviso aviso--alerta" id="bloq-${esc(a.estadoProposto)}"><strong>Não disponível:</strong> ${a.bloqueios.map(esc).join(" ")}</p>` : ""}
+  ${formulario}
+</article>`;
+  }).join("")}</div></section>`;
+}
+
+/** Versões de fechamento (retratos imutáveis). A vigente é a homologada em vigor. */
+function versoesDeFechamento(versoes) {
+  if (!versoes.length) return "";
+  const TIPO = { PRELIMINAR: "Preliminar", COM_PENDENCIAS: "Com pendências", HOMOLOGADA: "Homologada" };
+  return `<section class="card" aria-labelledby="t-versoes"><h2 id="t-versoes">Versões do fechamento</h2>
+<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Versões do fechamento</caption><thead><tr><th scope="col" class="esquerda">Versão</th><th scope="col">Faturamento bruto</th><th scope="col">Resultado gerencial</th><th scope="col">Metodologia</th><th scope="col">Decisão</th></tr></thead><tbody>
+${versoes.map((v) => `<tr>${td("Versão", `<strong>nº ${v.numero} · ${esc(TIPO[v.tipo] ?? v.tipo)}</strong>${v.vigente ? ' <span class="selo selo--ok">vigente</span>' : ""}<br><span class="nota">revisão ${v.revisao}${v.justificativa ? ` · ${esc(v.justificativa)}` : ""}</span>`, "esquerda")}${td("Faturamento bruto", valor(v.faturamentoBrutoCentavos))}${td("Resultado gerencial", valor(v.resultadoGerencialCentavos))}${td("Metodologia", esc(v.metodologiaVersao))}${td("Decisão", `${esc(dataBR(v.decididoEm))} · ${esc(v.responsavel)}`)}</tr>`).join("")}
+</tbody></table></div>
+<p class="nota">Versões nunca são alteradas. Reabrir uma competência homologada preserva a versão anterior; a próxima homologação gera outra.</p></section>`;
 }
 
 /** Resultado de uma ação (sucesso ou recusa), sempre com o que realmente aconteceu. */
@@ -318,7 +397,12 @@ export function resultadoDaAcao(r) {
   if (d.importacao && d.relatorio) return `Importação confirmada: ${d.relatorio.inseridos} registro(s) gravado(s), sem efeito financeiro.`;
   if (d.importacao) return `Arquivo recebido: ${esc(ESTADOS_IMPORTACAO[d.importacao.estado]?.rotulo ?? d.importacao.estado)}.`;
   if (d.proposta && d.efeitos) return `Proposta aplicada: ${d.efeitos.length} registro(s) criado(s) numa única transação.`;
-  if (d.criadas !== undefined) return `${d.criadas} criada(s), ${d.existentes ?? 0} já existente(s).`;
+  if (d.criadas !== undefined) return `${d.criadas} criada(s), ${d.existentes ?? 0} já existente(s)${d.bloqueadasPorHomologacao ? `, ${d.bloqueadasPorHomologacao} não criada(s) por competência homologada` : ""}.`;
+  if (d.versao?.tipo) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado]?.rotulo ?? d.estado)}. Versão nº ${d.versao.numero} registrada.`;
+  if (d.estado && ESTADOS_COMPETENCIA[d.estado]) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado].rotulo)}.`;
+  if (d.responsavelId) return "Atribuição registrada no histórico.";
+  if (d.conferido !== undefined) return d.conferido ? "Integridade conferida: o arquivo confere com o hash registrado." : `<span class="valor--negativo">${esc(d.motivo)}</span>`;
+  if (d.acoes && d.usuarioId) return `Permissões atualizadas: ${d.acoes.length} ação(ões) ativa(s).`;
   if (d.estado) return `Feito: ${esc(ESTADOS_PROPOSTA[d.estado]?.rotulo ?? ESTADOS_IMPORTACAO[d.estado]?.rotulo ?? d.estado)}.`;
   if (d.situacao) return `Feito: ${esc(SITUACOES_CORRESPONDENCIA[d.situacao]?.rotulo ?? d.situacao)}.`;
   return "Feito.";

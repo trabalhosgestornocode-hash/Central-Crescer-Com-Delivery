@@ -66,9 +66,9 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   assert.deepEqual(await aplicarMigracoes(dono), []); // segunda vez: nada a fazer
   const tabelas = (await dono.query("select table_name from information_schema.tables where table_schema = 'public' and table_name like 'fv2\\_%' order by 1")).rows.map((r) => r.table_name);
   assert.deepEqual(tabelas, [
-    "fv2_ajuste", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
+    "fv2_ajuste", "fv2_atribuicao_pendencia", "fv2_canal_processador", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_configuracao_unidade", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
     "fv2_estorno", "fv2_historico", "fv2_importacao", "fv2_lancamento", "fv2_liquidacao", "fv2_migracao", "fv2_movimentacao", "fv2_obrigacao",
-    "fv2_pagamento_venda", "fv2_proposta", "fv2_recebivel", "fv2_registro_fonte", "fv2_saldo_conta", "fv2_sessao_caixa", "fv2_transferencia", "fv2_venda", "fv2_vinculo_documental",
+    "fv2_pagamento_venda", "fv2_proposta", "fv2_recebivel", "fv2_registro_fonte", "fv2_saldo_conta", "fv2_sessao_caixa", "fv2_transferencia", "fv2_venda", "fv2_versao_fechamento", "fv2_vinculo_documental",
   ]);
   assert.deepEqual((await dono.query("select nome, sha256 from fv2_migracao order by 1")).rows, listarMigracoes().map((m) => ({ nome: m.nome, sha256: m.sha256 })));
 
@@ -81,7 +81,7 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
 
   // Toda tabela de dados tem RLS ligado E forçado, e nenhuma dá DELETE/TRUNCATE ao papel de aplicação.
   const rls = (await dono.query("select relname, relrowsecurity, relforcerowsecurity from pg_class where relkind = 'r' and relname like 'fv2\\_%' and relname <> 'fv2_migracao'")).rows;
-  assert.equal(rls.length, 26); // 19 da 0001 + 2 da 0002 + fv2_concessao (0003) + fv2_proposta e fv2_divergencia_fonte (0004) + fv2_saldo_conta e fv2_sessao_caixa (0006)
+  assert.equal(rls.length, 30); // 19 da 0001 + 2 da 0002 + concessão (0003) + proposta e divergência (0004) + saldo e sessão de caixa (0006) + versão, atribuição, canal/processador e configuração (0009)
   assert.deepEqual(rls.filter((x) => !x.relrowsecurity || !x.relforcerowsecurity), []);
   const privilegios = (await dono.query("select table_name, privilege_type from information_schema.role_table_grants where grantee = 'fv2_app'")).rows;
   assert.deepEqual(privilegios.filter((x) => ["DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"].includes(x.privilege_type)), []);
@@ -238,7 +238,7 @@ test("competência homologada é protegida também no banco; reabrir sem justifi
   const fornecedor = await nucleo.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "Fornecedor" });
   const { lancamento } = await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id));
   await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Conferência sintética" });
+  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Conferência sintética" });
 
   const movimentacao = (data) => comoAplicacao(pool, A, async (cl) => {
     const id = randomUUID();
@@ -259,5 +259,5 @@ test("competência homologada é protegida também no banco; reabrir sem justifi
   await recusa(mexer("update fv2_competencia set estado = 'ABERTA', revisoes = revisoes + 1, versao = versao + 1 where competencia = '2026-09'"), "FV008"); // sem justificativa
   assert.equal((await nucleo.consultarCompetencia(c, { competencia: "2026-09" })).estado, "FECHAMENTO_HOMOLOGADO");
   // Pelo fluxo correto, com justificativa, reabre.
-  assert.equal((await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "ABERTA", justificativa: "Revisão formal sintética" })).estado, "ABERTA");
+  assert.equal((await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "ABERTA", confirmar: true, justificativa: "Revisão formal sintética" })).estado, "ABERTA");
 });

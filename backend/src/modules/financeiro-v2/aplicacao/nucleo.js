@@ -10,6 +10,8 @@ import { operacoesDeDocumentos } from "./documentos.js";
 import { operacoesEconomicas } from "./economico.js";
 import { operacoesDeImportacao } from "./importacoes.js";
 import { operacoesDeAcesso } from "./acessos.js";
+import { operacoesDeConfiguracao } from "./configuracoes.js";
+import { operacoesDeCofreDocumental } from "./cofreDocumental.js";
 import { operacoesDeFormacao } from "./formacao.js";
 import { operacoesDeApuracao } from "./apuracao.js";
 import { operacoesDeTesouraria } from "./tesouraria.js";
@@ -31,14 +33,18 @@ import { operacoesDeVendas } from "./vendas.js";
  * @param {object} [deps.fontes] registro de adaptadores de fonte (padrão: todos os da Execução 02)
  * @param {(escopo:object, fonte:string) => string[]|null} [deps.estabelecimentosDaUnidade] códigos de estabelecimento de cada unidade
  * @param {{registrar:Function}} [deps.acessosNegados] onde registrar tentativas de leitura negadas (padrão: memória)
+ * @param {boolean} [deps.exigirConcessaoPersistida] 06D: confere a permissão contra a concessão GRAVADA em cada operação
+ * @param {{verificar:(ato:object)=>Promise<{ok:boolean, autoridadeId?:string}>}} [deps.autoridadeDeProvisionamento] 06D: autoridade
+ *        externa, já autenticada, que atesta o administrador inicial de uma unidade (sem ela, o provisionamento é recusado)
  */
 export function criarNucleoFinanceiro({
   repositorio, escoposAutorizados, relogio = () => new Date(), gerarId = randomUUID, fuso = "America/Sao_Paulo",
   cofre = null, fontes = criarRegistroDeFontes(), estabelecimentosDaUnidade = null, acessosNegados = criarRegistroDeAcessosNegadosMemoria(),
+  exigirConcessaoPersistida = false, autoridadeDeProvisionamento = null,
 }) {
   exigirRepositorio(repositorio);
   const politica = criarPoliticaDeEscopo(escoposAutorizados);
-  const base = criarBase({ repositorio, politica, relogio, gerarId, fuso });
+  const base = criarBase({ repositorio, politica, relogio, gerarId, fuso, exigirConcessaoPersistida });
   const operacoes = {
     ...operacoesDePlano(base),
     ...operacoesEconomicas(base),
@@ -47,7 +53,9 @@ export function criarNucleoFinanceiro({
     ...operacoesDeDocumentos(base),
     ...operacoesDeConciliacao(base),
     ...operacoesDeImportacao(base, { cofre, fontes, estabelecimentosDaUnidade, acessosNegados }),
-    ...operacoesDeAcesso(base),
+    ...operacoesDeAcesso(base, { politica, autoridade: autoridadeDeProvisionamento, acessosNegados }),
+    ...operacoesDeConfiguracao(base),
+    ...operacoesDeCofreDocumental(base, { cofre, acessosNegados }),
     ...operacoesDeFormacao(base),
     ...operacoesDeApuracao(base),
     ...operacoesDeTesouraria(base),

@@ -17,10 +17,12 @@ const pendenciasCurtas = (lista = [], max = 3) => (lista.length ? `<ul class="pe
 export function estado(tipo, mensagem = "") {
   const t = {
     carregando: ["Carregando dados da competência…", "carregando"], erro: ["Não foi possível carregar.", "erro"], negado: ["Acesso negado ao Financeiro v2 nesta unidade.", "erro"],
-    "sem-sessao": ["Sessão ausente. Entre novamente para ver o financeiro.", "erro"], vazio: ["Sem dados para esta competência.", "info"],
+    "sem-sessao": ["Sessão ausente ou expirada. Entre novamente para ver o financeiro.", "erro"], vazio: ["Sem dados para esta competência.", "info"],
   }[tipo] ?? ["", "info"];
   return `<div class="estado estado--${t[1]}" role="${tipo === "carregando" ? "status" : "alert"}" ${tipo === "carregando" ? 'aria-busy="true"' : ""}><p>${esc(t[0])}</p>${mensagem ? `<p class="estado-detalhe">${esc(mensagem)}</p>` : ""}${tipo === "carregando" ? '<div class="esqueleto"></div><div class="esqueleto"></div>' : ""}</div>`;
 }
+
+const ESTADO_DA_COMPETENCIA = Object.freeze({ ABERTA: "Competência aberta", FECHAMENTO_PRELIMINAR: "Fechamento preliminar", FECHAMENTO_COM_PENDENCIAS: "Fechamento com pendências documentadas", FECHAMENTO_HOMOLOGADO: "Competência homologada" });
 
 // ------------------------------------------------------------------------------------------- visão geral
 export function visaoGeral(vg, { unidadeNome = "" } = {}) {
@@ -32,7 +34,7 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   const grupos = Object.fromEntries((vg.cadaCem?.grupos ?? []).map((g) => [g.codigo, g]));
   const rec = liq.reconciliacaoComDre;
   return `
-<header class="cabecalho"><div><h1>Visão Geral</h1><p class="subtitulo">${esc(competencia(vg.competencia))} · ${esc(unidadeNome)}</p></div></header>
+<header class="cabecalho"><div><h1>Visão Geral</h1><p class="subtitulo">${esc(competencia(vg.competencia))} · ${esc(unidadeNome)}${vg.fechamento ? ` · <span class="selo selo--${vg.fechamento.estado === "FECHAMENTO_HOMOLOGADO" ? "ok" : vg.fechamento.estado === "ABERTA" ? "info" : "alerta"}" data-estado-competencia="${esc(vg.fechamento.estado)}">${esc(ESTADO_DA_COMPETENCIA[vg.fechamento.estado] ?? vg.fechamento.estado)}</span>` : ""}</p></div></header>
 <section class="card card--destaque" id="card-faturamento-bruto" aria-labelledby="t-fb" data-ordem="1">
   <div class="card-topo"><h2 id="t-fb">Faturamento Bruto Próprio</h2>${selo(fb.situacao)}${explicar("Faturamento Bruto Próprio", "Soma das vendas pelo valor bruto próprio (produtos, acréscimos e serviços da loja), antes de descontos. Não é saldo bancário, depósito, total Stone nem soma de formas de pagamento.")}</div>
   <p class="numero-principal">${valor(fb.valorCentavos)}${zeroConfirmado ? '<span class="nota-zero">zero confirmado</span>' : ""}</p>
@@ -93,11 +95,14 @@ export const arvore = (componentes) => `<ul class="nos nos--raiz">${(componentes
 
 // ------------------------------------------------------------------------------------------- DRE
 export function dre(r, { unidadeNome = "" } = {}) {
-  const linhas = r.dre.linhas;
+  // 06D: competência homologada cuja apuração atual NÃO reproduz o retrato → valores da versão homologada (sem expansões).
+  const usarVersao = r.versaoHomologada && !r.versaoHomologada.reproduz;
+  const linhas = usarVersao ? r.versaoHomologada.apuracao.dre.linhas.map((l) => ({ ...l, componentes: [], pendencias: [] })) : r.dre.linhas;
   const L = Object.fromEntries(linhas.map((l) => [l.codigo, l]));
   const subtotal = (c) => ["RECEITA_LIQUIDA_COMERCIAL", "RESULTADO_APOS_CUSTOS", "RESULTADO_GERENCIAL"].includes(c);
   return `
 <header class="cabecalho"><div><h1>DRE Gerencial</h1><p class="subtitulo">${esc(competencia(r.competencia))} · ${esc(unidadeNome)} · ${esc(r.dre.estadoDaCompetencia === "FECHAMENTO_HOMOLOGADO" ? "competência homologada" : "competência não homologada")}</p></div></header>
+${r.versaoHomologada ? `<p class="${r.versaoHomologada.reproduz ? "nota nota--homologada" : "aviso aviso--alerta"}" data-versao-homologada="${r.versaoHomologada.numero}">Versão homologada nº ${r.versaoHomologada.numero} (${esc(dataBR(r.versaoHomologada.decididoEm))}, metodologia ${esc(r.versaoHomologada.metodologiaVersao)}). ${r.versaoHomologada.reproduz ? "A apuração atual reproduz exatamente esta versão." : "A apuração atual difere da versão homologada: os valores abaixo são os da VERSÃO HOMOLOGADA; a diferença exige revisão formal."}</p>` : ""}
 <section class="resumo" aria-label="Resumo">
   ${["FATURAMENTO_BRUTO_PROPRIO", "RECEITA_LIQUIDA_COMERCIAL", "RESULTADO_GERENCIAL"].map((c) => `<article class="card card--sec"><h3>${esc(L[c].nome.replace(/^\([^)]*\)\s*/, ""))}</h3><p>${valor(L[c].valorCentavos)}</p>${selo(L[c].situacao)}</article>`).join("")}
 </section>

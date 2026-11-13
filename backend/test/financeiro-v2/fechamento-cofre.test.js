@@ -5,7 +5,7 @@ import { ACAO, CODIGO, METODOS_DO_COFRE, conferirCofre, criarCofreMemoria } from
 import { ORG_A, ORG_B, UNI_A, UNI_A2, UNI_B, ctx, montarComCadastros, obrigacao, rejeita, saida } from "./helpers/cenario.js";
 
 const SET = "2026-09";
-const estado = (nucleo, c, novoEstado, extra = {}) => nucleo.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado, ...extra });
+const estado = (nucleo, c, novoEstado, extra = {}) => nucleo.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado, confirmar: true, ...extra });
 const so = (...acoes) => ctx(ORG_A, UNI_A, acoes);
 const eventosDaCompetencia = async (nucleo, c) => {
   const [comp] = (await nucleo.consultarRegistros(c, { tipo: "COMPETENCIA" })).filter((x) => x.competencia === SET);
@@ -30,7 +30,7 @@ test("fechamento com pendências: só correções auditadas — exige permissão
   const { obrigacoes: [ob] } = await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id));
   await estado(nucleo, c, "FECHAMENTO_PRELIMINAR");
   await rejeita(estado(nucleo, c, "FECHAMENTO_COM_PENDENCIAS"), CODIGO.TRANSICAO_INVALIDA); // pendências precisam estar documentadas
-  await estado(nucleo, c, "FECHAMENTO_COM_PENDENCIAS", { pendencias: ["Nota do fornecedor sintético ainda não recebida"] });
+  await estado(nucleo, c, "FECHAMENTO_COM_PENDENCIAS", { pendencias: [{ descricao: "Nota do fornecedor sintético ainda não recebida", impacto: "Pode alterar o resultado da competência (sintético)." }] });
 
   // Quem só registra não escreve mais nesta competência; nada é gravado.
   const operador = so(ACAO.VER, ACAO.REGISTRAR);

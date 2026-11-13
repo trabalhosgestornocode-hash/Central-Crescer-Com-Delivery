@@ -476,12 +476,16 @@ export function operacoesDeFormacao(b) {
           for (const o of abertas.filter((x) => x.saldoCentavos === m.valorCentavos && x.dataEmissao <= m.dataEfetiva)) {
             const chave = `${RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO}|${o.id}|${m.id}`;
             if (await tx.buscarPorChave(cx, TIPO.CORRESPONDENCIA, chave)) continue;
+            // 06D: a competência da conciliação é a mais recente; se homologada, a candidata não nasce.
+            const comps = [o.competencia, m.dataEfetiva.slice(0, 7)].sort();
+            await tx.travar(cx, `competencia:${comps[1]}`, "COMPARTILHADA");
+            if ((await b.competenciaAtual(tx, cx, comps[1]))?.estado === "FECHAMENTO_HOMOLOGADO") continue;
             await b.criar(tx, cx, TIPO.CORRESPONDENCIA, {
               ladoA: [{ tipo: TIPO.OBRIGACAO, id: o.id, valorCentavos: m.valorCentavos }], ladoB: [{ tipo: TIPO.MOVIMENTACAO, id: m.id, valorCentavos: m.valorCentavos }],
               evidenciaDocumentoIds: [...new Set([m.documentoId, ...(o.documentoIds ?? [])])], justificativa: "Proposta automática (SALDO_IGUAL_A_SAIDA).",
               diferencaCentavos: 0, situacao: SITUACAO_CORRESPONDENCIA.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null,
               relacao: RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO, regra: "SALDO_IGUAL_A_SAIDA", forca: "FRACA", chaveIdempotencia: chave, impressao: null,
-              competencia: [o.competencia, m.dataEfetiva.slice(0, 7)].sort()[0],
+              competencia: comps[0], competenciaDaConciliacao: comps[1],
             });
             criadas += 1;
           }

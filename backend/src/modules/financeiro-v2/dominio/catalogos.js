@@ -9,6 +9,7 @@ export const TIPO = enumerar(
   "TRANSFERENCIA", "AJUSTE", "DOCUMENTO", "VINCULO_DOCUMENTAL", "CORRESPONDENCIA", "COMPETENCIA",
   "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO", "IMPORTACAO", "REGISTRO_FONTE", "CONCESSAO", "PROPOSTA", "DIVERGENCIA_FONTE",
   "SALDO_CONTA", "SESSAO_CAIXA",
+  "VERSAO_FECHAMENTO", "ATRIBUICAO_PENDENCIA", "CANAL_PROCESSADOR", "CONFIGURACAO_UNIDADE",
 );
 
 /** Conta financeira = onde o dinheiro DA EMPRESA está. Processadores (Stone, iFood, vales) NÃO são contas: geram recebíveis. */
@@ -140,6 +141,7 @@ export const ESTADO_COMPETENCIA = enumerar("ABERTA", "FECHAMENTO_PRELIMINAR", "F
 export const EVENTO_HISTORICO = enumerar(
   "CRIACAO", "CORRECAO", "RECLASSIFICACAO", "CANCELAMENTO", "LIQUIDACAO", "ESTORNO", "AJUSTE", "CONCILIACAO",
   "MUDANCA_ESTADO", "SUBSTITUICAO", "CORRECAO_EM_FECHAMENTO", "PAGAMENTO", "IMPORTACAO", "OPERACAO_DE_CAIXA", "FECHAMENTO_DE_CAIXA",
+  "ATUALIZACAO_POSTERIOR_AO_FECHAMENTO", "ACESSO_DOCUMENTO", "ATRIBUICAO", "PROVISIONAMENTO", "CONFIGURACAO",
 );
 
 /**
@@ -148,3 +150,17 @@ export const EVENTO_HISTORICO = enumerar(
  */
 export const SITUACAO_SESSAO_CAIXA = enumerar("ABERTA", "FECHADA");
 export const OPERACAO_CAIXA = enumerar("ENTRADA", "SAIDA", "SANGRIA", "SUPRIMENTO");
+
+/**
+ * Execução 06D — versões de fechamento. Cada passagem por um estado de fechamento grava um RETRATO imutável da apuração
+ * (indicadores, DRE e impressão). A versão HOMOLOGADA é a referência oficial da competência: nunca é reescrita; reabrir
+ * cria histórico e a próxima homologação gera outra versão.
+ */
+export const TIPO_VERSAO_FECHAMENTO = enumerar("PRELIMINAR", "COM_PENDENCIAS", "HOMOLOGADA");
+
+/** Responsável por uma pendência da Central de Conferências. */
+export const SITUACAO_ATRIBUICAO = enumerar("ATRIBUIDA", "EM_ANALISE", "AGUARDANDO_TERCEIRO", "CONCLUIDA");
+
+/** Cadastro de canais e processadores DA UNIDADE (06D). Canal, forma de pagamento e processador são papéis distintos. */
+export const PAPEL_COMERCIAL = enumerar("CANAL", "PROCESSADOR");
+export const SITUACAO_CADASTRO = enumerar("ATIVO", "INATIVO");

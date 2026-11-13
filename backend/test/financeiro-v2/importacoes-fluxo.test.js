@@ -232,9 +232,10 @@ test("SAIPOS: faturamento × formas de pagamento — a diferença é detectada e
 
 test("competência homologada não recebe importação confirmada", async () => {
   const { nucleo } = montar();
-  const r = await nucleo.receberArquivoParaImportacao(ctx(), arquivo(saiposVendas(PEDIDOS)));
   await nucleo.alterarEstadoDaCompetencia(ctx(), { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(ctx(), { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética de teste." });
+  await nucleo.alterarEstadoDaCompetencia(ctx(), { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética de teste.", confirmar: true });
+  // Arquivo do período recebido DEPOIS da homologação (06D: importação em validação impediria homologar antes).
+  const r = await nucleo.receberArquivoParaImportacao(ctx(), arquivo(saiposVendas(PEDIDOS)));
   await rejeita(confirmar(nucleo, r), CODIGO.COMPETENCIA_HOMOLOGADA);
   assert.deepEqual(await registros(nucleo, r), []);
 });

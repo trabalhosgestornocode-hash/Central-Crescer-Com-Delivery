@@ -157,7 +157,7 @@ test("competência homologada: cancelar ou estornar ali é recusado, sem efeito"
   const { nucleo, c, caixa } = await montarComCadastros();
   const r = await nucleo.registrarVenda(c, venda({ pagamentos: [{ forma: "DINHEIRO", valorCentavos: 10000, contaId: caixa.id }] }));
   await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Conferência sintética" });
+  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Conferência sintética" });
   await rejeita(nucleo.cancelarVenda(c, { vendaId: r.venda.id, justificativa: "Tarde demais" }), CODIGO.COMPETENCIA_HOMOLOGADA);
   await rejeita(nucleo.estornarPagamentoDeVenda(c, { pagamentoId: r.pagamentos[0].id, motivo: "DEVOLUCAO_AO_CLIENTE", justificativa: "x", dataEfetiva: "2026-09-20" }), CODIGO.COMPETENCIA_HOMOLOGADA);
   await rejeita(nucleo.estornarMovimentacao(c, { movimentacaoId: r.movimentacoes[0].id, justificativa: "x" }), CODIGO.OPERACAO_INVALIDA);

@@ -301,7 +301,7 @@ test("23–25 — isolamento por organização/unidade, permissões de leitura e
   await rejeita(nucleo.consultarFluxoDeCaixa(ctx(ORG_A, UNI_A, ["financeiro_v2.registrar"]), { inicio: "2026-10-01", fim: "2026-10-31" }), CODIGO.PERMISSAO_INSUFICIENTE);
   // Competência homologada: consulta mostra a marca; abrir caixa naquele mês é recusado.
   await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética." });
+  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética." });
   assert.equal((await nucleo.consultarContasAPagar(c, {})).itens[0].competenciaHomologada, true);
   await rejeita(nucleo.abrirCaixa(c, { contaId: caixa.id, dataAbertura: "2026-09-30", saldoContadoCentavos: 0 }), CODIGO.COMPETENCIA_HOMOLOGADA);
 });

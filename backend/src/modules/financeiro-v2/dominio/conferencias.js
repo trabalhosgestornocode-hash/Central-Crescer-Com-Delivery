@@ -13,6 +13,10 @@ import { ESTADO_COMPETENCIA, ESTADO_DIVERGENCIA_FONTE, ESTADO_IMPORTACAO, ESTADO
 import { primeiroDiaDe, ultimoDiaDe } from "./tempo.js";
 import { caixaEBancos, documentosDe, preparar as prepararTesouraria, tituloAPagar } from "./tesouraria.js";
 import { DIVERGENCIA_VENDA } from "./vendasRecebimentos.js";
+import { CATEGORIA_DESCONTO_A_CLASSIFICAR, CATEGORIA_DESPESA_A_CLASSIFICAR } from "./planoDeContas.js";
+
+/** Categorias do sistema que marcam classificação PROVISÓRIA (a definitiva pode mudar o resultado). */
+export const CATEGORIAS_PROVISORIAS = Object.freeze([CATEGORIA_DESCONTO_A_CLASSIFICAR, CATEGORIA_DESPESA_A_CLASSIFICAR]);
 
 const enumerar = (...v) => Object.freeze(Object.fromEntries(v.map((x) => [x, x])));
 
@@ -316,6 +320,27 @@ export function impedimentosDeHomologacao(d, competencia, hoje, apuracao) {
   }
   for (const x of (apuracao?.pendencias ?? []).filter((y) => y.gravidade === "BLOQUEIO" && y.tipo === "SOBREPOSICAO_AGREGADO_PEDIDOS")) {
     lista.push({ codigo: "RECEITA_EM_DUPLICIDADE", mensagem: x.mensagem, valorCentavos: null, referencia: { tipo: "DIA", id: x.data } });
+  }
+  // Execução 06D — verificações que faltavam (sem política de materialidade, tudo que pode alterar o resultado bloqueia).
+  // Divergência de CONCILIAÇÃO registrada e sem resolução comprovada por documento.
+  for (const c of (d.correspondencias ?? []).filter((x) => x.situacao === SITUACAO_CORRESPONDENCIA.DIVERGENTE && !x.resolucao && [x.competencia, x.competenciaDaConciliacao].includes(competencia))) {
+    lista.push({ codigo: "CONCILIACAO_DIVERGENTE_SEM_RESOLUCAO", mensagem: "Conciliação com diferença registrada e sem resolução comprovada por documento.", valorCentavos: Math.abs(c.diferencaCentavos ?? 0), referencia: { tipo: TIPO.CORRESPONDENCIA, id: c.id } });
+  }
+  // Classificação provisória que entra no resultado (descontos sem financiador comprovado, despesas a classificar).
+  const provisorias = (d.lancamentos ?? []).filter((l) => l.situacao === "ATIVO" && l.competencia === competencia && CATEGORIAS_PROVISORIAS.includes(l.categoria));
+  if (provisorias.length) {
+    lista.push({ codigo: "CLASSIFICACAO_PROVISORIA", mensagem: `${provisorias.length} lançamento(s) com classificação provisória: a categoria definitiva pode mudar o resultado.`, valorCentavos: provisorias.reduce((s, l) => s + Math.abs(l.valorCentavos), 0), referencia: { tipo: TIPO.LANCAMENTO, id: provisorias[0].id } });
+  }
+  // Operações importadas ainda não aplicadas nem rejeitadas: o resultado está incompleto.
+  const abertas = [ESTADO_PROPOSTA.PROPOSTA, ESTADO_PROPOSTA.AGUARDANDO_EVIDENCIA, ESTADO_PROPOSTA.AGUARDANDO_REVISAO, ESTADO_PROPOSTA.APROVADA];
+  const propostas = (d.propostas ?? []).filter((x) => x.competencia === competencia && abertas.includes(x.estado));
+  if (propostas.length) {
+    lista.push({ codigo: "OPERACOES_IMPORTADAS_PENDENTES", mensagem: `${propostas.length} operação(ões) importada(s) ainda não aplicada(s) nem rejeitada(s).`, valorCentavos: null, referencia: { tipo: TIPO.PROPOSTA, id: propostas[0].id } });
+  }
+  // Importação do período ainda em validação (não confirmada nem rejeitada).
+  const emValidacao = [ESTADO_IMPORTACAO.RECEBIDO, ESTADO_IMPORTACAO.EM_VALIDACAO, ESTADO_IMPORTACAO.PRONTO_PARA_IMPORTAR];
+  for (const imp of (d.importacoes ?? []).filter((x) => emValidacao.includes(x.estado) && x.periodoInicio && sobrepoe(x.periodoInicio, x.periodoFim, per))) {
+    lista.push({ codigo: "IMPORTACAO_NAO_CONCLUIDA", mensagem: "Importação do período ainda não confirmada nem rejeitada.", valorCentavos: null, referencia: { tipo: TIPO.IMPORTACAO, id: imp.id } });
   }
   return lista;
 }

@@ -186,6 +186,13 @@ test("16, 17 — competência homologada bloqueia; fonte corrigida exige revisã
   assert.equal(nova.estado, "AGUARDANDO_REVISAO");
   assert.equal(await ind(n, "DEDUCOES"), 300); // composição aplicada intacta
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética." });
+  // 06D: com a proposta da fonte retificada ainda em revisão, a homologação é recusada; decide-se antes.
+  await rejeita(n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética.", confirmar: true }), CODIGO.HOMOLOGACAO_BLOQUEADA);
+  await n.rejeitarProposta(c, { propostaId: nova.id, justificativa: "Retificação será tratada em revisão formal." });
+  // O desconto sem financiador comprovado ficou "a classificar" (provisório): classifica-se antes de homologar.
+  for (const l of (await n.consultarRegistros(c, { tipo: "LANCAMENTO" })).filter((x) => x.categoria === "DESCONTOS_A_CLASSIFICAR" && x.situacao === "ATIVO")) {
+    await n.reclassificarLancamento(c, { lancamentoId: l.id, categoria: "DESCONTOS_COMERCIAIS", justificativa: "Desconto concedido pela loja (sintético)." });
+  }
+  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação sintética." });
   await rejeita(n.registrarVenda(c, venda({ brutoCentavos: 1000, composicao: { itensCentavos: 1000, descontos: [{ valorCentavos: 100, financiador: "LOJA" }] }, pagamentos: [{ forma: "DINHEIRO", valorCentavos: 900 }] })), CODIGO.COMPETENCIA_HOMOLOGADA);
 });

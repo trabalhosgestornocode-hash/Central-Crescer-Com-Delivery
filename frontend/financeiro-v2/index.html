@@ -24,7 +24,8 @@
         <li><a href="#/fluxo-de-caixa" data-rota="fluxo-de-caixa">Fluxo de Caixa</a></li>
         <li><a href="#/vendas-e-recebimentos" data-rota="vendas-e-recebimentos">Vendas e Recebimentos</a></li>
         <li><a href="#/conferencias" data-rota="conferencias">Importações e Conferências</a></li>
-        <li><span class="em-breve" aria-disabled="true">Configurações <small>em construção</small></span></li>
+        <li><a href="#/documentos" data-rota="documentos">Documentos</a></li>
+        <li><a href="#/configuracoes" data-rota="configuracoes">Configurações</a></li>
       </ul>
     </nav>
     <div class="principal">
@@ -34,7 +35,9 @@
         <label>Sessão (demonstração) <select id="filtro-sessao">
           <option value="gestor">Gestor com acesso (somente leitura)</option>
           <option value="operador">Operador da demonstração (importa, revisa e concilia)</option>
+          <option value="administrador">Administrador da demonstração (configura, concede, fecha e homologa)</option>
           <option value="sem-acesso">Usuário sem concessão</option>
+          <option value="expirada">Sessão expirada</option>
           <option value="ausente">Sem sessão</option>
         </select></label>
       </form>

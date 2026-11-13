@@ -223,20 +223,26 @@ test("21, 22, 23, 25 — fechamento: preliminar, com pendências, homologação 
   assert.ok(f.impedimentos.some((x) => x.codigo === "DIVERGENCIA_ENTRE_RELATORIOS_SEM_JUSTIFICATIVA" && x.valorCentavos === 10000));
   assert.equal(f.secoes.find((s) => s.codigo === "VENDAS").situacao, "BLOQUEIA");
   await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: ["Diferença entre faturamento e formas de 05/09 em investigação"], justificativa: "Documentando pendências." });
+  await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Diferença entre faturamento e formas de 05/09 em investigação", impacto: "Pode alterar o resultado da competência (sintético)." }], justificativa: "Documentando pendências." });
   f = await n.consultarFechamento(c, SET);
   assert.deepEqual([f.estado, f.pendenciasDocumentadas.length, f.etapas.filter((e) => e.concluida).length], ["FECHAMENTO_COM_PENDENCIAS", 1, 2]);
   // O núcleo recusa a homologação (não só a tela).
-  await rejeita(n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética." }), CODIGO.HOMOLOGACAO_BLOQUEADA);
+  await rejeita(n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética." }), CODIGO.HOMOLOGACAO_BLOQUEADA);
   // Com explicação registrada (justificativa), a divergência deixa de ser "sem justificativa"; continua documentada.
   await n.explicarDivergencia(c, { divergenciaId: divergencia.id, valorCentavos: 10000, explicacao: "Hipótese: pedidos sem forma registrada (a confirmar com o relatório por pedido)." });
+  f = await n.consultarFechamento(c, SET);
+  // 06D: operações importadas ainda não aplicadas nem rejeitadas deixam o resultado incompleto — também bloqueiam.
+  assert.deepEqual(f.impedimentos.map((x) => x.codigo), ["OPERACOES_IMPORTADAS_PENDENTES"]);
+  for (const p of (await n.listarPropostas(c, {})).filter((x) => ["PROPOSTA", "AGUARDANDO_EVIDENCIA", "AGUARDANDO_REVISAO", "APROVADA"].includes(x.estado) && x.competencia === "2026-09")) {
+    await n.rejeitarProposta(c, { propostaId: p.id, justificativa: "Fora do escopo desta conferência sintética." });
+  }
   f = await n.consultarFechamento(c, SET);
   assert.equal(f.impedimentos.length, 0);
   assert.ok(f.exigemDocumentacao > 0);
   assert.match(f.homologacao.motivo, /decisão humana/);
-  const h = await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Conferência sintética: relatórios e extrato." });
+  const h = await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Conferência sintética: relatórios e extrato." });
   assert.equal(h.estado, "FECHAMENTO_HOMOLOGADO");
-  await n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.REVISAR]), { ...SET, novoEstado: "ABERTA", justificativa: "Relatório por pedido chegou: revisão." });
+  await n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.REVISAR]), { ...SET, novoEstado: "ABERTA", confirmar: true, justificativa: "Relatório por pedido chegou: revisão." });
   f = await n.consultarFechamento(c, SET);
   assert.equal(f.revisoes, 1);
   assert.deepEqual(f.historico.map((x) => x.para), ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO", "ABERTA"]);
@@ -250,7 +256,7 @@ test("23 — saldo de conta divergente também bloqueia a homologação; 24 — 
   await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_PRELIMINAR" });
   let f = await n.consultarFechamento(c, SET);
   assert.deepEqual([f.impedimentos.length, f.secoes.find((s) => s.codigo === "RECEBIVEIS").situacao], [0, "EM_ABERTO_NAO_BLOQUEIA"]);
-  assert.equal((await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética." })).estado, "FECHAMENTO_HOMOLOGADO");
+  assert.equal((await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética." })).estado, "FECHAMENTO_HOMOLOGADO");
   // Outubro: saldos informados que não fecham com o movimento → bloqueia.
   const OUT = { competencia: "2026-10" };
   await n.registrarSaldoDeConta(c, { contaId: banco.id, data: "2026-10-01", valorCentavos: 100000 });
@@ -259,7 +265,7 @@ test("23 — saldo de conta divergente também bloqueia a homologação; 24 — 
   await n.alterarEstadoDaCompetencia(c, { ...OUT, novoEstado: "FECHAMENTO_PRELIMINAR" });
   f = await n.consultarFechamento(c, OUT);
   assert.ok(f.impedimentos.some((x) => x.codigo === "SALDO_DE_CONTA_DIVERGENTE" && x.valorCentavos === 1000));
-  await rejeita(n.alterarEstadoDaCompetencia(c, { ...OUT, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética." }), CODIGO.HOMOLOGACAO_BLOQUEADA);
+  await rejeita(n.alterarEstadoDaCompetencia(c, { ...OUT, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética." }), CODIGO.HOMOLOGACAO_BLOQUEADA);
 });
 
 test("Central: abertura com contagens, fontes com e sem documento e o que está correto; nada de soma de pendências", async () => {
@@ -269,7 +275,8 @@ test("Central: abertura com contagens, fontes com e sem documento e o que está 
   assert.ok(r.fontes.comDocumento.some((f) => f.tipoRelatorio === "STONE_VENDAS"));
   assert.ok(r.fontes.semDocumento.some((f) => f.tipoRelatorio === "UNICRED_EXTRATO"));
   assert.ok(r.propostas.pendentes >= 2);
-  assert.equal(r.divergenciasRelevantes.length, 1);
+  // Divergência entre relatórios + (06D) operações importadas ainda não decididas.
+  assert.deepEqual(r.divergenciasRelevantes.map((x) => x.codigo).sort(), ["DIVERGENCIA_ENTRE_RELATORIOS_SEM_JUSTIFICATIVA", "OPERACOES_IMPORTADAS_PENDENTES"]);
   assert.equal(typeof r.pendencias.total, "number");
   assert.ok(!("valorTotalCentavos" in r.pendencias) && !("somaCentavos" in r.pendencias));
   assert.match(r.observacao, /contagem/);

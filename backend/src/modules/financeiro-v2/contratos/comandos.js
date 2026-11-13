@@ -439,14 +439,34 @@ export function validarDecisaoConciliacao(e) {
   return { correspondenciaId: exigirUuid(e.correspondenciaId, "correspondenciaId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500, opcional: true }) };
 }
 
+/**
+ * Pendência DOCUMENTADA no fechamento (Execução 06D). Documentar não resolve: registra o que falta, o impacto e quem cuida.
+ * O responsável, se informado, é conferido no núcleo (precisa ter acesso à unidade) — nunca um nome livre.
+ */
+function pendenciaDocumentada(p, campo) {
+  if (typeof p === "string") falhar(CODIGO.ENTRADA_INVALIDA, `${campo}: descreva a pendência com descrição e impacto (texto solto não é aceito).`, { campo });
+  semCamposDesconhecidos(p, ["chave", "descricao", "impacto", "responsavelId", "evidenciaDocumentoIds", "documentacaoFaltante", "decisao"], campo);
+  return {
+    chave: exigirTexto(p.chave, `${campo}.chave`, { max: 200, opcional: true }),
+    descricao: exigirTexto(p.descricao, `${campo}.descricao`, { max: 500 }),
+    impacto: exigirTexto(p.impacto, `${campo}.impacto`, { max: 500 }),
+    responsavelId: uuidOpcional(p.responsavelId, `${campo}.responsavelId`),
+    evidenciaDocumentoIds: documentos(p.evidenciaDocumentoIds, `${campo}.evidenciaDocumentoIds`),
+    documentacaoFaltante: exigirTexto(p.documentacaoFaltante, `${campo}.documentacaoFaltante`, { max: 500, opcional: true }),
+    decisao: exigirTexto(p.decisao, `${campo}.decisao`, { max: 500, opcional: true }),
+  };
+}
+
 export function validarMudancaDeEstado(e) {
-  semCamposDesconhecidos(e, ["competencia", "novoEstado", "metodologia", "pendencias", "justificativa"], "mudancaDeEstado");
+  semCamposDesconhecidos(e, ["competencia", "novoEstado", "metodologia", "metodologiaVersao", "pendencias", "justificativa", "confirmar"], "mudancaDeEstado");
   return {
     competencia: exigirCompetencia(e.competencia),
     novoEstado: exigirUmDe(e.novoEstado, ESTADO_COMPETENCIA, "novoEstado"),
     metodologia: exigirTexto(e.metodologia, "metodologia", { max: 2000, opcional: true }),
-    pendencias: exigirLista(e.pendencias ?? [], "pendencias", { min: 0, max: 100 }).map((p, i) => exigirTexto(p, `pendencias[${i}]`, { max: 500 })),
+    metodologiaVersao: exigirTexto(e.metodologiaVersao, "metodologiaVersao", { max: 120, opcional: true }),
+    pendencias: exigirLista(e.pendencias ?? [], "pendencias", { min: 0, max: 100 }).map((p, i) => pendenciaDocumentada(p, `pendencias[${i}]`)),
     justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500, opcional: true }),
+    confirmar: e.confirmar === true,
   };
 }
 

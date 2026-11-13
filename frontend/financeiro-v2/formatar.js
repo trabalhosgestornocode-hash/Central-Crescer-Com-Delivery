@@ -186,4 +186,6 @@ export const FONTES_NOME = Object.freeze({ SAIPOS: "SAIPOS", STONE: "Stone", IFO
 export const PERMISSOES = Object.freeze({
   "financeiro_v2.ver": "ver", "financeiro_v2.importar": "importar arquivos", "financeiro_v2.registrar": "registrar", "financeiro_v2.revisar": "revisar propostas",
   "financeiro_v2.conciliar": "conciliar", "financeiro_v2.fechar": "fechar competência", "financeiro_v2.homologar": "homologar", "financeiro_v2.corrigir": "corrigir em fechamento",
+  "financeiro_v2.configurar": "configurar", "financeiro_v2.conceder": "conceder acessos", "financeiro_v2.cancelar": "cancelar",
+  "financeiro_v2.documentos": "abrir documentos do cofre",
 });

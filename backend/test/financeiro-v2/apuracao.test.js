@@ -217,7 +217,7 @@ test("27, 28, 29 — reprodutível, CONFIRMADO só na competência homologada se
   assert.deepEqual(a1.dre.linhas.map((l) => l.valorCentavos), a2.dre.linhas.map((l) => l.valorCentavos));
   assert.equal((await n.composicaoDoIndicador(c, { ...SET, codigo: "FATURAMENTO_BRUTO_PROPRIO" })).valorCentavos, 2500);
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética." });
+  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação sintética." });
   const h = await n.apurarCompetencia(c, SET);
   assert.equal(h.indicadores.RESULTADO_GERENCIAL.situacao, "CONFIRMADO");
   assert.notEqual(h.impressao, undefined);

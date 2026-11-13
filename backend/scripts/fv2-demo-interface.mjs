@@ -36,6 +36,8 @@ createServer(async (req, res) => {
   if (url.pathname.startsWith("/api/fv2/")) {
     if (req.method !== "GET") { res.writeHead(405, cabecalhos).end(); return; }
     const r = await demo.responder(url.pathname, Object.fromEntries(url.searchParams), req.headers["x-fv2-demo-sessao"]);
+    // 06D: arquivo do cofre — bytes com os cabeçalhos seguros definidos pelo núcleo (sandbox, nosniff, sem cache). Nunca em log.
+    if (r.binario) { res.writeHead(r.status, { ...cabecalhos, ...r.cabecalhos }).end(r.binario); return; }
     res.writeHead(r.status, { ...cabecalhos, "content-type": "application/json; charset=utf-8" }).end(JSON.stringify(r.corpo));
     return;
   }
@@ -43,7 +45,7 @@ createServer(async (req, res) => {
   const ext = arquivo.slice(arquivo.lastIndexOf("."));
   if (!arquivo.startsWith(PASTA + sep) || !TIPOS[ext]) { res.writeHead(404, cabecalhos).end("Não encontrado"); return; }
   try {
-    res.writeHead(200, { ...cabecalhos, "content-type": TIPOS[ext], "content-security-policy": "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com" }).end(await readFile(arquivo));
+    res.writeHead(200, { ...cabecalhos, "content-type": TIPOS[ext], "content-security-policy": "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-src blob:; object-src blob:; base-uri 'none'; form-action 'self'" }).end(await readFile(arquivo));
   } catch {
     res.writeHead(404, cabecalhos).end("Não encontrado");
   }

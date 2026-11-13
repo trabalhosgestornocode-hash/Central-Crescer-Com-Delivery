@@ -95,17 +95,21 @@ test("a porta de persistência não tem exclusão e o histórico só cresce", as
 
 test("estados de fechamento seguem a ordem prevista e exigem o que cada um pede", async () => {
   const { nucleo, c } = await montarComCadastros();
-  const mudar = (novoEstado, extra = {}) => nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado, ...extra });
+  const mudar = (novoEstado, extra = {}) => nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado, confirmar: true, ...extra });
   assert.equal((await nucleo.consultarCompetencia(c, { competencia: "2026-09" })).estado, "ABERTA");
   await rejeita(mudar("FECHAMENTO_HOMOLOGADO", { metodologia: "m" }), CODIGO.TRANSICAO_INVALIDA); // não pula etapas
-  await rejeita(mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: ["x"] }), CODIGO.TRANSICAO_INVALIDA);
-  await rejeita(mudar("ABERTA", { justificativa: "já está" }), CODIGO.TRANSICAO_INVALIDA);
+  await rejeita(mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: [{ descricao: "x", impacto: "Pode alterar o resultado da competência (sintético)." }] }), CODIGO.TRANSICAO_INVALIDA);
+  // 06D: pedir o estado em que já está não grava nada (ação repetida sem efeito duplicado).
+  const repetida = await mudar("ABERTA", { justificativa: "já está" });
+  assert.equal(repetida.repetido, true);
   await rejeita(mudar("ENCERRADA"), CODIGO.ENTRADA_INVALIDA);
 
   assert.equal((await mudar("FECHAMENTO_PRELIMINAR")).estado, "FECHAMENTO_PRELIMINAR");
   await rejeita(mudar("FECHAMENTO_COM_PENDENCIAS"), CODIGO.TRANSICAO_INVALIDA); // pendências precisam ser listadas
-  const comPend = await mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: ["Composição do Balcão não conciliada"] });
-  assert.deepEqual(comPend.pendencias, ["Composição do Balcão não conciliada"]);
+  const comPend = await mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: [{ descricao: "Composição do Balcão não conciliada", impacto: "Pode alterar o resultado da competência (sintético)." }] });
+  assert.deepEqual(comPend.pendencias.map((p) => [p.descricao, p.impacto]), [["Composição do Balcão não conciliada", "Pode alterar o resultado da competência (sintético)."]]);
+  // Texto solto não documenta pendência (06D): exige descrição e impacto.
+  await rejeita(mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: ["só um texto"] }), CODIGO.ENTRADA_INVALIDA);
   await rejeita(mudar("FECHAMENTO_HOMOLOGADO"), CODIGO.TRANSICAO_INVALIDA); // sem metodologia
   const homologada = await mudar("FECHAMENTO_HOMOLOGADO", { metodologia: "Regime de competência; conciliação por extrato" });
   assert.deepEqual([homologada.estado, homologada.metodologia, homologada.decididoPor], ["FECHAMENTO_HOMOLOGADO", "Regime de competência; conciliação por extrato", USUARIO]);
@@ -119,7 +123,7 @@ test("competência homologada não sofre alteração silenciosa; revisão é exp
   const { obrigacoes: [ob], lancamento } = await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id));
   const pg = (await nucleo.registrarMovimentacao(c, saida(banco.id, 40000))).movimentacao;
   const { liquidacoes: [liq] } = await nucleo.registrarLiquidacao(c, { movimentacaoId: pg.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 40000 }] });
-  const mudar = (novoEstado, extra = {}) => nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado, ...extra });
+  const mudar = (novoEstado, extra = {}) => nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado, confirmar: true, ...extra });
   await mudar("FECHAMENTO_PRELIMINAR");
   await mudar("FECHAMENTO_HOMOLOGADO", { metodologia: "Metodologia sintética" });
   const retrato = JSON.stringify([await nucleo.consultarRegistros(c, { tipo: "OBRIGACAO" }), await nucleo.consultarRegistros(c, { tipo: "LANCAMENTO" }), await nucleo.consultarRegistros(c, { tipo: "MOVIMENTACAO" }), await nucleo.consultarRegistros(c, { tipo: "LIQUIDACAO" })]);

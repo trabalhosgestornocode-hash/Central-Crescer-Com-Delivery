@@ -290,8 +290,8 @@ test("23, 24, 25 — isolamento, permissões de confirmação e competência hom
   const semRegistrar = ctx(undefined, undefined, [ACAO.VER, ACAO.REVISAR]);
   await rejeita(n.aplicarProposta(semRegistrar, { propostaId: p1.id }), CODIGO.PERMISSAO_INSUFICIENTE); // a operação exige a própria permissão
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética." });
-  await rejeita(n.aplicarProposta(c, { propostaId: p1.id }), CODIGO.COMPETENCIA_HOMOLOGADA);
+  // 06D: proposta aprovada e ainda não aplicada (resultado incompleto) impede a homologação.
+  await rejeita(n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética.", confirmar: true }), CODIGO.HOMOLOGACAO_BLOQUEADA);
   assert.equal((await propostas(n, { operacao: "VENDA" })).find((p) => p.id === p1.id).estado, "APROVADA");
 });
 

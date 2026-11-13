@@ -73,7 +73,12 @@ export function operacoesDeCaixa(b) {
         if (mov.pagamentoId) {
           falhar(CODIGO.LIQUIDACAO_INCOMPATIVEL, "Esta movimentação já representa um pagamento direto de venda (ou sua devolução): não liquida títulos.");
         }
-        await b.exigirCompetenciaEditavel(tx, cx, competenciaDe(mov.dataEfetiva));
+        // 06D: a liquidação é um fato da competência da MOVIMENTAÇÃO (precisa aceitar escrita). O título pode ser de uma
+        // competência anterior já homologada (venda de setembro recebida em outubro): ele só muda a posição financeira
+        // (pago/saldo), nunca o resultado econômico — permitido e registrado como atualização posterior ao fechamento.
+        const compsDosTitulos = [];
+        for (const a of c.alocacoes) compsDosTitulos.push((await tx.obter(cx, tipoDoAlvo(a.alvoTipo), a.alvoId))?.competencia ?? null);
+        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(mov.dataEfetiva)], referenciadas: compsDosTitulos, motivo: "liquidação de título" });
         const total = somarLista(c.alocacoes, (a) => a.valorCentavos);
         if (somar(mov.alocadoCentavos, total) > mov.valorCentavos) {
           falhar(CODIGO.LIQUIDACAO_EXCEDE_MOVIMENTACAO, "O total alocado supera o valor da movimentação.", { disponivelCentavos: subtrair(mov.valorCentavos, mov.alocadoCentavos) });
@@ -106,9 +111,9 @@ export function operacoesDeCaixa(b) {
         if (liq.situacao === SITUACAO_LIQUIDACAO.ESTORNADA || valido === 0) falhar(CODIGO.OPERACAO_INVALIDA, "Liquidação já estornada.");
         const valor = c.valorCentavos ?? valido;
         if (valor > valido) falhar(CODIGO.OPERACAO_INVALIDA, "O estorno supera o valor ainda válido da liquidação.", { validoCentavos: valido });
-        await b.exigirCompetenciaEditavel(tx, cx, competenciaDe(liq.dataEfetiva));
-        if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
         const tipo = tipoDoAlvo(liq.alvoTipo);
+        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(liq.dataEfetiva)], referenciadas: [(await tx.obter(cx, tipo, liq.alvoId))?.competencia ?? null], motivo: "estorno de liquidação" });
+        if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
         const alvo = await b.obterOuFalhar(tx, cx, tipo, liq.alvoId, "Título");
         const mov = await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, liq.movimentacaoId, "Movimentação");
         const estornado = somar(liq.estornadoCentavos ?? 0, valor);

@@ -7,6 +7,8 @@ import { exigirCompetencia } from "../dominio/tempo.js";
 import { semCamposDesconhecidos } from "../dominio/validacao.js";
 import { apurar } from "../dominio/apuracao.js";
 
+/** Impressão (sha256) de uma apuração: depende só das entradas, da metodologia e da competência — nunca do estado nem da hora. */
+export const impressaoDaApuracao = (r, competencia) => createHash("sha256").update(canonico({ entradas: r.entradas, metodologia: r.metodologia, competencia })).digest("hex");
 const canonico = (v) => (Array.isArray(v) ? `[${v.map(canonico).join(",")}]` : v && typeof v === "object" ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canonico(v[k])}`).join(",")}}` : JSON.stringify(v ?? null));
 
 export function operacoesDeApuracao(b) {
@@ -18,7 +20,17 @@ export function operacoesDeApuracao(b) {
       competencias: await listar(TIPO.COMPETENCIA),
     };
     const r = apurar(dados, { competencia, escopo: { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, apuradoEm: b.agora() });
-    return { ...r, impressao: createHash("sha256").update(canonico({ entradas: r.entradas, metodologia: r.metodologia, competencia })).digest("hex") };
+    // 06D: competência homologada → a versão homologada (retrato imutável) acompanha a apuração atual, com a conferência
+    // de reprodutibilidade. A tela apresenta a versão homologada; a atual só aparece como comparação.
+    const impressao = impressaoDaApuracao(r, competencia);
+    const estado = dados.competencias.find((x) => x.competencia === competencia);
+    let versaoHomologada = null;
+    if (estado?.estado === "FECHAMENTO_HOMOLOGADO") {
+      const versoes = await tx.listar(cx, TIPO.VERSAO_FECHAMENTO, { onde: { competencia, tipo: "HOMOLOGADA" } });
+      const v = versoes.sort((a, b) => b.numero - a.numero)[0] ?? null;
+      if (v) versaoHomologada = { numero: v.numero, decididoEm: v.decididoEm, metodologiaVersao: v.metodologiaVersao, impressao: v.impressao, reproduz: v.impressao === impressao, apuracao: v.apuracao };
+    }
+    return { ...r, impressao, versaoHomologada };
   }
   const entrada = (e, extras = []) => {
     semCamposDesconhecidos(e, ["competencia", ...extras], "apuracao");

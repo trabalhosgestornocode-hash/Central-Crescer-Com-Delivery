@@ -298,6 +298,7 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
     },
 
     /** Propõe candidatas de conciliação entre registros importados. Nada é confirmado aqui. */
+    // (competenciaHomologada: ver o final do arquivo)
     gerarCandidatasDeConciliacao(ctx, entrada) {
       const c = validarGeracaoDeCandidatas(entrada);
       return b.executar(ctx, ACAO.CONCILIAR, async (cx, tx) => {
@@ -309,22 +310,34 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
         const porId = new Map(registros.map((r) => [r.id, r]));
         let criadas = 0;
         let existentes = 0;
+        let bloqueadasPorHomologacao = 0;
         for (const cand of candidatas) {
           const ids = [...cand.ladoA, ...cand.ladoB].map((r) => r.id).sort();
           const chave = `${c.relacao}|${sha256(ids.join(","))}`;
           if (await tx.buscarPorChave(cx, TIPO.CORRESPONDENCIA, chave)) { existentes += 1; continue; }
+          // 06D: candidata cuja competência de conciliação (a mais recente dos registros) está homologada NÃO é criada.
+          const comps = ids.map((id) => porId.get(id).competencia).filter(Boolean).sort();
+          if (await competenciaHomologada(tx, cx, comps.at(-1))) { bloqueadasPorHomologacao += 1; continue; }
           const total = (l) => l.reduce((s, r) => somar(s, r.valorCentavos), 0);
           await b.criar(tx, cx, TIPO.CORRESPONDENCIA, {
             ladoA: cand.ladoA, ladoB: cand.ladoB, evidenciaDocumentoIds: [...new Set(ids.map((id) => porId.get(id).documentoId))],
             justificativa: `Proposta automática (${cand.regra}).`, diferencaCentavos: subtrair(total(cand.ladoA), total(cand.ladoB)),
             situacao: SITUACAO_CORRESPONDENCIA.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null,
             relacao: c.relacao, regra: cand.regra, forca: cand.forca, chaveIdempotencia: chave, impressao: null,
-            competencia: ids.map((id) => porId.get(id).competencia).filter(Boolean).sort()[0] ?? null,
+            competencia: comps[0] ?? null, competenciaDaConciliacao: comps.at(-1) ?? null,
           });
           criadas += 1;
         }
-        return { relacao: c.relacao, criadas, existentes, ambiguas: candidatas.filter((x) => x.ambigua).length, semCandidato: semCandidato.length, registrosSemCandidato: semCandidato };
+        return { relacao: c.relacao, criadas, existentes, bloqueadasPorHomologacao, ambiguas: candidatas.filter((x) => x.ambigua).length, semCandidato: semCandidato.length, registrosSemCandidato: semCandidato };
       });
     },
   };
+}
+
+/** 06D: trava compartilhada da competência (mesma transação) e diz se ela está homologada. */
+async function competenciaHomologada(tx, cx, competencia) {
+  if (!competencia) return false;
+  await tx.travar(cx, `competencia:${competencia}`, "COMPARTILHADA");
+  const [c] = await tx.listar(cx, TIPO.COMPETENCIA, { onde: { competencia } });
+  return c?.estado === "FECHAMENTO_HOMOLOGADO";
 }

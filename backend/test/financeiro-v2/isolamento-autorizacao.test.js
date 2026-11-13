@@ -107,9 +107,9 @@ test("homologar e revisar são permissões separadas de fechar", async () => {
   const { nucleo } = montar();
   const fechador = ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.FECHAR]);
   await nucleo.alterarEstadoDaCompetencia(fechador, { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await rejeita(nucleo.alterarEstadoDaCompetencia(fechador, { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "m" }), CODIGO.PERMISSAO_INSUFICIENTE);
-  await nucleo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.HOMOLOGAR]), { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Metodologia sintética" });
-  await rejeita(nucleo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.FECHAR, ACAO.HOMOLOGAR]), { competencia: "2026-08", novoEstado: "ABERTA", justificativa: "erro" }), CODIGO.PERMISSAO_INSUFICIENTE);
+  await rejeita(nucleo.alterarEstadoDaCompetencia(fechador, { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "m" }), CODIGO.PERMISSAO_INSUFICIENTE);
+  await nucleo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.HOMOLOGAR]), { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Metodologia sintética" });
+  await rejeita(nucleo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.FECHAR, ACAO.HOMOLOGAR]), { competencia: "2026-08", novoEstado: "ABERTA", confirmar: true, justificativa: "erro" }), CODIGO.PERMISSAO_INSUFICIENTE);
 });
 
 test("o responsável de cada registro é o usuário do contexto, nunca um dado da entrada", async () => {

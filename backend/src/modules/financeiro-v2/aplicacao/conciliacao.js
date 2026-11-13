@@ -7,6 +7,7 @@ import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { validarCorrespondencia, validarDecisaoConciliacao } from "../contratos/comandos.js";
 import { competenciaDe } from "../dominio/tempo.js";
+import { exigirLista, exigirTexto, exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
 
 /** Competência de um registro conciliável (movimentação pela data efetiva; os demais pela própria competência). */
 export function competenciaDoRegistro(tipo, r) {
@@ -42,13 +43,44 @@ export function operacoesDeConciliacao(b) {
     return somarLista(confirmadas.flatMap(refs).filter((r) => r.tipo === ref.tipo && r.id === ref.id), (r) => r.valorCentavos);
   }
 
-  async function decidir(ctx, entrada, fn) {
+  /**
+   * Execução 06D — competências de uma conciliação. Cada registro tem a SUA competência (venda e despesa pela competência
+   * econômica; movimentação pela data efetiva; título pela competência do fato). A conciliação "acontece" quando o fato
+   * mais recente existe: a competência DA CONCILIAÇÃO é a mais recente entre os registros, e ela precisa aceitar escrita.
+   * Registros de competências anteriores homologadas só são CITADOS (não mudam o resultado delas): a atualização é
+   * permitida e registrada como posterior ao fechamento. Registro que a decisão ALTERA (movimentação conciliada) precisa
+   * estar em competência editável.
+   */
+  async function competenciasDe(tx, cx, lista) {
+    const saida = [];
+    for (const ref of lista) {
+      const r = await tx.obter(cx, ref.tipo, ref.id);
+      saida.push({ tipo: ref.tipo, competencia: r ? competenciaDoRegistro(ref.tipo, r) : null });
+    }
+    return saida;
+  }
+  const maisRecente = (lista) => lista.map((x) => x.competencia).filter(Boolean).sort().at(-1) ?? null;
+
+  async function decidir(ctx, entrada, fn, { alteraMovimentacoes = false } = {}) {
     const c = validarDecisaoConciliacao(entrada);
     return b.executar(ctx, ACAO.CONCILIAR, async (cx, tx) => {
       const corr = await b.obterOuFalhar(tx, cx, TIPO.CORRESPONDENCIA, c.correspondenciaId, "Correspondência");
-      if (corr.situacao !== S.CANDIDATA && corr.situacao !== S.AGUARDANDO_DOCUMENTO) falhar(CODIGO.CONCILIACAO_INVALIDA, "Esta correspondência já foi decidida.", { situacao: corr.situacao });
-      const mudancas = await fn(cx, tx, corr, c);
-      return b.alterar(tx, cx, TIPO.CORRESPONDENCIA, corr, { ...mudancas, responsavelId: cx.usuarioId, decididoEm: b.agora(), justificativaDecisao: c.justificativa }, EVENTO_HISTORICO.CONCILIACAO, c.justificativa);
+      const comps = await competenciasDe(tx, cx, refs(corr));
+      const competenciaDaConciliacao = maisRecente(comps);
+      // Guarda ANTES de qualquer gravação e dentro desta transação (travas tomadas em ordem; homologação concorrente espera).
+      const posteriores = await b.exigirCompetenciasDoVinculo(tx, cx, {
+        gravadas: [competenciaDaConciliacao, ...(alteraMovimentacoes ? comps.filter((x) => x.tipo === TIPO.MOVIMENTACAO).map((x) => x.competencia) : [])],
+        referenciadas: comps.map((x) => x.competencia),
+        motivo: "decisão de conciliação",
+      });
+      // Relido DEPOIS das travas: uma decisão concorrente já confirmada aparece aqui (e a versão do registro também protege).
+      const atual = await b.obterOuFalhar(tx, cx, TIPO.CORRESPONDENCIA, c.correspondenciaId, "Correspondência");
+      if (atual.situacao !== S.CANDIDATA && atual.situacao !== S.AGUARDANDO_DOCUMENTO) falhar(CODIGO.CONCILIACAO_INVALIDA, "Esta correspondência já foi decidida.", { situacao: atual.situacao });
+      const mudancas = await fn(cx, tx, atual, c);
+      return b.alterar(tx, cx, TIPO.CORRESPONDENCIA, atual, {
+        ...mudancas, responsavelId: cx.usuarioId, decididoEm: b.agora(), justificativaDecisao: c.justificativa,
+        competenciaDaConciliacao, posteriorAoFechamento: posteriores,
+      }, EVENTO_HISTORICO.CONCILIACAO, c.justificativa);
     });
   }
 
@@ -74,11 +106,15 @@ export function operacoesDeConciliacao(b) {
       return b.executar(ctx, ACAO.CONCILIAR, async (cx, tx) => {
         const registros = [];
         for (const ref of refs(c)) registros.push([ref.tipo, await carregar(tx, cx, ref)]);
+        // 06D: criar um vínculo de conciliação é escrita na competência da conciliação (a mais recente dos registros).
+        const compsDosRegistros = registros.map(([tipo, r]) => competenciaDoRegistro(tipo, r)).filter(Boolean);
+        const competenciaDaConciliacao = [...compsDosRegistros].sort().at(-1) ?? null;
+        const posteriorAoFechamento = await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDaConciliacao], referenciadas: compsDosRegistros, motivo: "candidata de conciliação" });
         for (const id of c.evidenciaDocumentoIds) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, id, "Documento de evidência");
         const diferencaCentavos = subtrair(somarLista(c.ladoA, (r) => r.valorCentavos), somarLista(c.ladoB, (r) => r.valorCentavos));
         // Competência da correspondência = a mais antiga dos registros (filtro da Central de Conferências no banco).
         const competencia = registros.map(([tipo, r]) => competenciaDoRegistro(tipo, r)).filter(Boolean).sort()[0] ?? null;
-        return b.criar(tx, cx, TIPO.CORRESPONDENCIA, { ...c, diferencaCentavos, situacao: S.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null, relacao: RELACAO_CORRESPONDENCIA.MANUAL, regra: null, forca: null, competencia });
+        return b.criar(tx, cx, TIPO.CORRESPONDENCIA, { ...c, diferencaCentavos, situacao: S.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null, relacao: RELACAO_CORRESPONDENCIA.MANUAL, regra: null, forca: null, competencia, competenciaDaConciliacao, posteriorAoFechamento });
       });
     },
 
@@ -99,7 +135,7 @@ export function operacoesDeConciliacao(b) {
           }
         }
         return { situacao: S.CONFIRMADA };
-      });
+      }, { alteraMovimentacoes: true });
     },
 
     /** Diferença conhecida e NÃO resolvida: fica registrada como divergência, com justificativa obrigatória. */
@@ -117,6 +153,28 @@ export function operacoesDeConciliacao(b) {
         if (corr.situacao !== S.CANDIDATA) falhar(CODIGO.CONCILIACAO_INVALIDA, "Só uma candidata pode passar a aguardar documento.");
         if (!c.justificativa) falhar(CODIGO.CONCILIACAO_INVALIDA, "Informe qual documento falta.");
         return { situacao: S.AGUARDANDO_DOCUMENTO };
+      });
+    },
+
+    /**
+     * Execução 06D — RESOLUÇÃO COMPROVADA de uma divergência de conciliação: a diferença continua registrada (nada é apagado
+     * nem "zerado"), mas fica explicada por documento(s) e justificativa. Só assim a divergência deixa de bloquear a
+     * homologação. Documentar sem evidência NÃO resolve.
+     */
+    resolverDivergenciaDeConciliacao(ctx, entrada) {
+      semCamposDesconhecidos(entrada, ["correspondenciaId", "justificativa", "evidenciaDocumentoIds"], "resolucao");
+      const correspondenciaId = exigirUuid(entrada?.correspondenciaId, "correspondenciaId");
+      const justificativa = exigirTexto(entrada?.justificativa, "justificativa", { max: 500 });
+      const evidencias = [...new Set(exigirLista(entrada?.evidenciaDocumentoIds, "evidenciaDocumentoIds", { min: 1, max: 20 }).map((x, i) => exigirUuid(x, `evidenciaDocumentoIds[${i}]`)))];
+      return b.executar(ctx, ACAO.CONCILIAR, async (cx, tx) => {
+        const corr = await b.obterOuFalhar(tx, cx, TIPO.CORRESPONDENCIA, correspondenciaId, "Correspondência");
+        const comps = await competenciasDe(tx, cx, refs(corr));
+        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [maisRecente(comps)], referenciadas: comps.map((x) => x.competencia), motivo: "resolução de divergência de conciliação" });
+        const atual = await b.obterOuFalhar(tx, cx, TIPO.CORRESPONDENCIA, correspondenciaId, "Correspondência");
+        if (atual.situacao !== S.DIVERGENTE) falhar(CODIGO.CONCILIACAO_INVALIDA, "Só uma divergência registrada pode receber resolução comprovada.");
+        if (atual.resolucao) falhar(CODIGO.CONCILIACAO_INVALIDA, "Esta divergência já tem resolução registrada.");
+        for (const id of evidencias) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, id, "Documento de evidência");
+        return b.alterar(tx, cx, TIPO.CORRESPONDENCIA, atual, { resolucao: { justificativa, evidenciaDocumentoIds: evidencias, por: cx.usuarioId, em: b.agora() } }, EVENTO_HISTORICO.CONCILIACAO, justificativa);
       });
     },
 

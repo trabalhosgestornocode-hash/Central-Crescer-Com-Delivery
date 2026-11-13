@@ -1,23 +1,51 @@
 // Fechamento de competência e consultas (composição, histórico, conservação).
 import {
   ESTADO_COMPETENCIA, EVENTO_HISTORICO, NATUREZA_LANCAMENTO, NATUREZA_MOVIMENTACAO, SENTIDO, SITUACAO_LANCAMENTO,
-  SITUACAO_MOVIMENTACAO, SITUACAO_PAGAMENTO, SITUACAO_TITULO, SITUACAO_TRANSFERENCIA, SITUACAO_VENDA, TIPO,
+  SITUACAO_CONCESSAO, SITUACAO_MOVIMENTACAO, SITUACAO_PAGAMENTO, SITUACAO_TITULO, SITUACAO_TRANSFERENCIA, SITUACAO_VENDA, TIPO, TIPO_VERSAO_FECHAMENTO,
 } from "../dominio/catalogos.js";
-import { autorizar, exigirContexto } from "../dominio/contexto.js";
+import { ACAO, autorizar, exigirContexto } from "../dominio/contexto.js";
 import { somarLista, subtrair } from "../dominio/dinheiro.js";
-import { acaoDaTransicao } from "../dominio/fechamento.js";
+import { EFEITO_DO_ESTADO, acaoDaTransicao, avaliarTransicao, exigeConfirmacao } from "../dominio/fechamento.js";
+import { exigirMetodologiaAplicavel, identificadorDa, metodologiaVigente } from "../dominio/metodologias.js";
+import { impressaoDaApuracao } from "./apuracao.js";
 import { compor } from "../dominio/indicadores.js";
 import { saldoDe } from "../dominio/titulos.js";
 import { exigirCompetencia } from "../dominio/tempo.js";
-import { exigirUmDe } from "../dominio/validacao.js";
+import { exigirUmDe, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { validarConsultaComposicao, validarConsultaHistorico, validarMudancaDeEstado } from "../contratos/comandos.js";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { impedimentosDeHomologacao } from "../dominio/conferencias.js";
 import { apurarRegistros, carregarRegistros } from "./conferencias.js";
 
-export function operacoesDeCompetencia(b, { repositorio, politica }) {
+/** Retrato compacto e imutável da apuração (o que a DRE e a Visão Geral mostram da versão homologada). */
+export function retratoDa(apuracao) {
+  const ind = (x) => (x ? { codigo: x.codigo, nome: x.nome, valorCentavos: x.valorCentavos, situacao: x.situacao, percentualDoBruto: x.percentualDoBruto ?? null } : null);
   return {
-    /** Muda o estado de fechamento. A ação exigida depende da transição (fechar, homologar ou revisar). */
+    metodologia: apuracao.metodologia,
+    indicadores: Object.fromEntries(Object.entries(apuracao.indicadores).map(([k, v]) => [k, ind(v)])),
+    dre: { titulo: apuracao.dre.titulo, linhas: apuracao.dre.linhas.map((l) => ({ codigo: l.codigo, nome: l.nome, valorCentavos: l.valorCentavos, percentualDoBruto: l.percentualDoBruto ?? null, situacao: l.situacao })) },
+    pendencias: apuracao.pendencias.map((p) => ({ tipo: p.tipo, mensagem: p.mensagem, valorCentavos: p.valorCentavos ?? null })),
+  };
+}
+
+export function operacoesDeCompetencia(b, { repositorio, politica }) {
+  /** Responsável de pendência: precisa ser um usuário com acesso ATIVO a esta unidade (nunca um nome livre). */
+  async function exigirResponsavelValido(tx, ctx, usuarioId) {
+    const c = await tx.buscarPorChave(ctx, TIPO.CONCESSAO, `concessao:${usuarioId}`);
+    if (!c || c.situacao !== SITUACAO_CONCESSAO.ATIVA) falhar(CODIGO.ENTRADA_INVALIDA, "O responsável indicado não tem acesso ativo ao Financeiro v2 desta unidade.", { campo: "responsavelId" });
+  }
+
+  return {
+    /**
+     * Muda o estado de fechamento. A ação exigida depende da transição (fechar, homologar ou revisar).
+     * Execução 06D:
+     *   - repetir o MESMO estado não faz nada (sem novo histórico nem nova versão);
+     *   - homologar e reabrir uma homologada exigem `confirmar: true`;
+     *   - cada passagem por um estado de fechamento grava um RETRATO imutável (VERSAO_FECHAMENTO) com indicadores, DRE,
+     *     impressão, metodologia versionada, pendências e verificações — a versão homologada é a referência oficial;
+     *   - homologar confere a metodologia vigente, os impedimentos (sem tolerância) e o responsável (o usuário da sessão);
+     *   - reabrir registra a versão homologada anterior no histórico; nada é sobrescrito.
+     */
     async alterarEstadoDaCompetencia(ctxBruto, entrada) {
       const c = validarMudancaDeEstado(entrada);
       const ctx = exigirContexto(ctxBruto);
@@ -27,24 +55,110 @@ export function operacoesDeCompetencia(b, { repositorio, politica }) {
         await tx.travar(ctx, `competencia:${c.competencia}`, "EXCLUSIVA");
         const atual = await b.competenciaAtual(tx, ctx, c.competencia);
         const estadoAtual = atual?.estado ?? ESTADO_COMPETENCIA.ABERTA;
-        autorizar(ctx, acaoDaTransicao(estadoAtual, c.novoEstado, c));
-        // Execução 06C: homologar exige que NÃO haja divergência relevante sem justificativa (sem política de materialidade,
+        if (estadoAtual === c.novoEstado) {
+          autorizar(ctx, ACAO.VER);
+          return { ...(atual ?? { competencia: c.competencia, estado: estadoAtual }), repetido: true };
+        }
+        const acaoExigida = acaoDaTransicao(estadoAtual, c.novoEstado, c);
+        autorizar(ctx, acaoExigida);
+        await b.exigirConcessaoVigente(tx, ctx, acaoExigida);
+        if (exigeConfirmacao(estadoAtual, c.novoEstado) && !c.confirmar) {
+          falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Esta mudança de estado exige confirmação explícita.", { de: estadoAtual, para: c.novoEstado });
+        }
+        for (const p of c.pendencias) {
+          if (p.responsavelId) await exigirResponsavelValido(tx, ctx, p.responsavelId);
+          for (const id of p.evidenciaDocumentoIds) await b.obterOuFalhar(tx, ctx, TIPO.DOCUMENTO, id, "Documento de evidência");
+        }
+        const d = await carregarRegistros(tx, ctx);
+        const escopo = { organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId };
+        const apuracao = apurarRegistros(d, c.competencia, escopo, b.agora());
+        let metodologiaVersao = null;
+        let impedimentos = [];
+        // Execução 06C/06D: homologar exige que NÃO haja divergência relevante sem resolução (sem política de materialidade,
         // nenhuma tolerância). Recebíveis em aberto não bloqueiam. A regra vale no núcleo, não só na tela.
         if (c.novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO) {
-          const d = await carregarRegistros(tx, ctx);
-          const impedimentos = impedimentosDeHomologacao(d, c.competencia, b.hoje(), apurarRegistros(d, c.competencia, { organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId }, b.agora()));
+          metodologiaVersao = identificadorDa(exigirMetodologiaAplicavel(c.competencia, c.metodologiaVersao));
+          impedimentos = impedimentosDeHomologacao(d, c.competencia, b.hoje(), apuracao);
           if (impedimentos.length) {
-            falhar(CODIGO.HOMOLOGACAO_BLOQUEADA, "Há divergência relevante sem justificativa: a competência não pode ser homologada.", { impedimentos: impedimentos.map((x) => x.codigo) });
+            falhar(CODIGO.HOMOLOGACAO_BLOQUEADA, "Há divergência relevante sem resolução comprovada: a competência não pode ser homologada.", { impedimentos: impedimentos.map((x) => x.codigo) });
           }
         }
         const reabertura = c.novoEstado === ESTADO_COMPETENCIA.ABERTA;
+        const versoes = await tx.listar(ctx, TIPO.VERSAO_FECHAMENTO, { onde: { competencia: c.competencia } });
+        const homologadaAnterior = versoes.filter((v) => v.tipo === TIPO_VERSAO_FECHAMENTO.HOMOLOGADA).sort((a, b2) => b2.numero - a.numero)[0] ?? null;
         const dados = {
           competencia: c.competencia, estado: c.novoEstado, metodologia: c.metodologia ?? atual?.metodologia ?? null, pendencias: c.pendencias,
           revisoes: (atual?.revisoes ?? 0) + (reabertura ? 1 : 0), decididoPor: ctx.usuarioId, decididoEm: b.agora(),
+          versaoHomologadaAnteriorId: reabertura && estadoAtual === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO ? homologadaAnterior?.id ?? null : null,
         };
-        if (!atual) return b.criar(tx, ctx, TIPO.COMPETENCIA, dados, c.justificativa);
-        return b.alterar(tx, ctx, TIPO.COMPETENCIA, atual, dados, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa);
+        const competencia = atual
+          ? await b.alterar(tx, ctx, TIPO.COMPETENCIA, atual, dados, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa)
+          : await b.criar(tx, ctx, TIPO.COMPETENCIA, dados, c.justificativa);
+        const tipoVersao = { [ESTADO_COMPETENCIA.FECHAMENTO_PRELIMINAR]: TIPO_VERSAO_FECHAMENTO.PRELIMINAR, [ESTADO_COMPETENCIA.FECHAMENTO_COM_PENDENCIAS]: TIPO_VERSAO_FECHAMENTO.COM_PENDENCIAS, [ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO]: TIPO_VERSAO_FECHAMENTO.HOMOLOGADA }[c.novoEstado];
+        let versao = null;
+        if (tipoVersao) {
+          versao = await b.criar(tx, ctx, TIPO.VERSAO_FECHAMENTO, {
+            competencia: c.competencia, tipo: tipoVersao, numero: versoes.length + 1, revisao: competencia.revisoes,
+            metodologia: competencia.metodologia, metodologiaVersao: metodologiaVersao ?? identificadorDa(metodologiaVigente(c.competencia)),
+            impressao: impressaoDaApuracao(apuracao, c.competencia), apuracao: retratoDa(apuracao), pendencias: c.pendencias,
+            verificacoes: { impedimentos: impedimentos.map((x) => x.codigo), pendenciasDaApuracao: apuracao.pendencias.length },
+            decididoPor: ctx.usuarioId, decididoEm: b.agora(), justificativa: c.justificativa,
+            chaveIdempotencia: `versao:${c.competencia}:${versoes.length + 1}`,
+          }, c.justificativa);
+        }
+        return { ...competencia, versao: versao ? { id: versao.id, numero: versao.numero, tipo: versao.tipo, impressao: versao.impressao } : null, repetido: false };
       }, { escopo: ctx });
+    },
+
+    /**
+     * PRÉVIA de uma mudança de estado: o que a tela mostra ANTES de qualquer ação (estado atual e proposto, o que será
+     * bloqueado, pendências, impedimentos, permissão e justificativa exigidas). Usa as MESMAS regras do núcleo, sem gravar.
+     */
+    previaDaMudancaDeEstado(ctx, entrada) {
+      semCamposDesconhecidos(entrada, ["competencia", "novoEstado"], "previa");
+      const competencia = exigirCompetencia(entrada?.competencia);
+      const novoEstado = exigirUmDe(entrada?.novoEstado, ESTADO_COMPETENCIA, "novoEstado");
+      return b.consultar(ctx, async (cx, tx) => {
+        const atual = await b.competenciaAtual(tx, cx, competencia);
+        const estadoAtual = atual?.estado ?? ESTADO_COMPETENCIA.ABERTA;
+        const { acao, motivos } = avaliarTransicao(estadoAtual, novoEstado, { pendencias: [1], metodologia: "x", justificativa: "x" });
+        const d = await carregarRegistros(tx, cx);
+        const impedimentos = novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO ? impedimentosDeHomologacao(d, competencia, b.hoje(), apurarRegistros(d, competencia, { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, b.agora())) : [];
+        const temPermissao = acao ? cx.permissoes.includes(acao) : false;
+        const bloqueios = estadoAtual === novoEstado ? ["A competência já está neste estado: nada a fazer."] : [...motivos];
+        if (acao && !temPermissao) bloqueios.push("Você não tem a permissão exigida para esta mudança.");
+        if (impedimentos.length) bloqueios.push("Há divergência relevante sem resolução comprovada: o núcleo recusa a homologação.");
+        let metodologia = null;
+        try { metodologia = identificadorDa(metodologiaVigente(competencia)); } catch { bloqueios.push("Não há metodologia vigente publicada para esta competência."); }
+        return {
+          competencia, estadoAtual, estadoProposto: novoEstado, permitida: bloqueios.length === 0, bloqueios,
+          permissaoExigida: acao, voceTemPermissao: temPermissao,
+          exigeJustificativa: novoEstado === ESTADO_COMPETENCIA.ABERTA, exigeConfirmacao: exigeConfirmacao(estadoAtual, novoEstado),
+          exigePendencias: novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_COM_PENDENCIAS, exigeMetodologia: novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO,
+          metodologiaVigente: metodologia, impedimentos, efeito: EFEITO_DO_ESTADO[novoEstado], efeitoAtual: EFEITO_DO_ESTADO[estadoAtual],
+          pendenciasDocumentadas: atual?.pendencias ?? [],
+        };
+      });
+    },
+
+    /** Versões de fechamento da competência (retratos imutáveis), da mais recente para a mais antiga. */
+    consultarVersoesDeFechamento(ctx, entrada) {
+      semCamposDesconhecidos(entrada, ["competencia"], "versoes");
+      const competencia = exigirCompetencia(entrada?.competencia);
+      return b.consultar(ctx, async (cx, tx) => {
+        const atual = await b.competenciaAtual(tx, cx, competencia);
+        const versoes = (await tx.listar(cx, TIPO.VERSAO_FECHAMENTO, { onde: { competencia } })).sort((a, b2) => b2.numero - a.numero);
+        const vigenteId = atual?.estado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO ? versoes.find((v) => v.tipo === TIPO_VERSAO_FECHAMENTO.HOMOLOGADA)?.id ?? null : null;
+        return {
+          competencia, estado: atual?.estado ?? ESTADO_COMPETENCIA.ABERTA, revisoes: atual?.revisoes ?? 0,
+          versoes: versoes.map((v) => ({
+            id: v.id, numero: v.numero, tipo: v.tipo, revisao: v.revisao, metodologia: v.metodologia, metodologiaVersao: v.metodologiaVersao, impressao: v.impressao,
+            decididoEm: v.decididoEm, responsavel: v.decididoPor === cx.usuarioId ? "Você" : "Usuário registrado na decisão", justificativa: v.justificativa ?? null,
+            pendencias: v.pendencias, verificacoes: v.verificacoes, vigente: v.id === vigenteId,
+            resultadoGerencialCentavos: v.apuracao?.indicadores?.RESULTADO_GERENCIAL?.valorCentavos ?? null, faturamentoBrutoCentavos: v.apuracao?.indicadores?.FATURAMENTO_BRUTO_PROPRIO?.valorCentavos ?? null,
+          })),
+        };
+      });
     },
 
     consultarCompetencia(ctx, entrada) {

@@ -2,6 +2,7 @@
 // expansões acessíveis, painel "Ver composição completa" e detalhes de títulos. Nenhum cálculo financeiro: só consome as
 // consultas do motor. Datas de período (início/fim do mês, +30 dias) são só calendário, nunca valores.
 import { criarConsultor, enviar } from "./consulta.js";
+import * as adm from "./telasAdministracao.js";
 import * as conf from "./telasConferencias.js";
 import * as telas from "./telas.js";
 import * as tes from "./telasTesouraria.js";
@@ -18,12 +19,12 @@ const estado = {
   pagina: {}, calendario: null, diaSelecionado: null,
 };
 function filtrosIniciais() {
-  return { "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" } };
+  return { "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {} };
 }
 let focoAntesDoPainel = null;
 let recarregarAoFechar = false;
 let revisarAoCarregar = null;
-const ROTAS = ["visao-geral", "dre", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias"];
+const ROTAS = ["visao-geral", "dre", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias", "configuracoes", "documentos"];
 /** Filtros aceitos na URL da Central (ligações de outras telas). `revisar` abre o painel da pendência indicada. */
 const FILTROS_URL_CONFERENCIAS = ["secao", "grupo", "situacao", "estado"];
 const ENDPOINT_DA_SECAO = { resumo: "conferencias", pendencias: "conferencias/pendencias", documentos: "conferencias/documentos", propostas: "conferencias/propostas", conciliacoes: "conferencias/correspondencias", fechamento: "conferencias/fechamento" };
@@ -45,7 +46,7 @@ const fimDoMes = (m) => { const [a, mm] = m.split("-").map(Number); return iso(n
 const somarMes = (m, n) => { const [a, mm] = m.split("-").map(Number); const d = new Date(Date.UTC(a, mm - 1 + n, 1)); return iso(d).slice(0, 7); };
 
 function mensagemDeErro(r) {
-  if (r.status === 401) return telas.estado("sem-sessao");
+  if (r.status === 401) return telas.estado("sem-sessao", /expirad/i.test(r.mensagem ?? "") ? "Sua sessão expirou. Entre novamente: nada foi gravado." : "");
   if (r.status === 403) return telas.estado("negado", r.mensagem);
   return telas.estado("erro", r.mensagem);
 }
@@ -61,6 +62,8 @@ function consultaDaRota() {
   const pagina = estado.pagina[estado.rota] ?? 1;
   switch (estado.rota) {
     case "dre": return `/api/fv2/dre?${qs()}`;
+    case "configuracoes": return f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
+    case "documentos": return `/api/fv2/documentos?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, pagina, tamanho: 25 })}`;
     case "contas-a-pagar": return `/api/fv2/contas-a-pagar?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, contraparteId: f.contraparteId, categoria: f.categoria, vencimentoDe: f.vencimentoDe, vencimentoAte: f.vencimentoAte, pagina, tamanho: 25 })}`;
     case "contas-a-receber": return `/api/fv2/contas-a-receber?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, tipo: f.tipo, processador: f.processador, pagina, tamanho: 25 })}`;
     case "caixa-e-bancos": return `/api/fv2/caixa-e-bancos?${qs({ competencia: undefined, inicio: f.inicio || inicioDoMes(estado.competencia), fim: f.fim || fimDoMes(estado.competencia), contaId: f.contaId, pagina, tamanho: 30 })}`;
@@ -92,6 +95,14 @@ function desenhar(dados) {
   const f = estado.filtros[estado.rota] ?? {};
   switch (estado.rota) {
     case "dre": return telas.dre(dados, { unidadeNome: nomeUnidade() });
+    case "configuracoes": {
+      const perm = permissoesDaUnidade();
+      const ctx = { unidadeNome: nomeUnidade(), podeConfigurar: perm.includes("financeiro_v2.configurar"), pessoasDemo: estado.pessoasDemo ?? [] };
+      const corpo = f.secao === "plano" ? { plano: dados, configuracoes: estado.configuracoes } : f.secao === "permissoes" ? { permissoes: dados } : dados;
+      if (!f.secao || !["plano", "permissoes"].includes(f.secao)) estado.configuracoes = dados;
+      return adm.configuracoes(corpo, f, ctx);
+    }
+    case "documentos": return adm.documentos(dados, f);
     case "contas-a-pagar": return tes.contasAPagar(dados, f);
     case "contas-a-receber": return tes.contasAReceber(dados, f);
     case "caixa-e-bancos": if (!f.contaId) f.contas = dados.contas.map((c) => ({ id: c.id, nome: c.nome })); return tes.caixaEBancos(dados, f);
@@ -116,6 +127,8 @@ async function carregar() {
     estado.unidades = s.dados.unidades;
     estado.dataBase = s.dados.dataBase ?? null;
     estado.csrf = s.dados.csrf ?? null;
+    estado.pessoasDemo = s.dados.pessoasDemo ?? [];
+    estado.pessoas = null;
     estado.unidade = s.dados.unidades[0]?.id ?? null;
     preencherUnidades();
     if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Financeiro v2."); conteudo.removeAttribute("aria-busy"); return; }
@@ -159,6 +172,7 @@ const ctxPainel = () => ({ permissoes: permissoesDaUnidade(), competencia: estad
 const DETALHES = {
   pagar: ["conta-a-pagar", (d) => tes.detalheAPagar(d)], receber: ["conta-a-receber", (d) => tes.detalheAReceber(d)],
   venda: ["venda", (d) => ven.detalheDaVenda(d)], recebimento: ["recebimento", (d) => ven.detalheDoRecebimento(d)],
+  "documento-cofre": ["documento", (d) => adm.detalheDocumentoCofre(d)],
   documento: ["conferencias/documento", (d) => conf.detalheDocumento(d, ctxPainel())], proposta: ["conferencias/proposta", (d) => conf.detalheProposta(d, ctxPainel())],
   correspondencia: ["conferencias/correspondencia", (d) => conf.detalheCorrespondencia(d)],
 };
@@ -166,14 +180,58 @@ const DETALHES = {
 function detalheDe(chave) {
   const i = chave.indexOf(":");
   const [tipo, id] = [chave.slice(0, i), chave.slice(i + 1)];
-  if (tipo === "pendencia") return [`/api/fv2/conferencias/pendencia?${qs({ chave: id })}`, (d) => conf.detalhePendencia(d)];
+  if (tipo === "pendencia") return [`/api/fv2/conferencias/pendencia?${qs({ chave: id })}`, (d) => conf.detalhePendencia(d, { pessoas: estado.pessoas ?? [], competencia: estado.competencia })];
+  if (tipo === "categoria") return [`/api/fv2/configuracoes/categoria?${qs({ competencia: undefined, codigo: id })}`, (d) => adm.detalheCategoria(d, { podeConfigurar: permissoesDaUnidade().includes("financeiro_v2.configurar") })];
   if (tipo === "importar") return [`/api/fv2/conferencias/catalogo?${qs({ competencia: undefined })}`, (d) => conf.escolherArquivo(d)];
   const [rota, desenho] = DETALHES[tipo] ?? DETALHES.receber;
   return [`/api/fv2/${rota}?${qs({ competencia: undefined, id })}`, desenho];
 }
-function abrirDetalhe(chave, origem) {
+async function abrirDetalhe(chave, origem) {
+  // Pendência: a lista de pessoas com acesso (para escolher responsável) vem do servidor, uma vez por unidade.
+  if (chave.startsWith("pendencia:") && estado.pessoas === null) {
+    const r = await consultorPainel.consultar(`/api/fv2/pessoas?${qs({ competencia: undefined })}`, cabecalhos());
+    estado.pessoas = r?.ok ? r.dados.pessoas : [];
+  }
   const [url, desenho] = detalheDe(chave);
   return abrirNoPainel(url, desenho, origem);
+}
+
+/**
+ * 06D — arquivo do cofre: pedido com a sessão (cabeçalho), revalidado no servidor. Visualizar: PDF limpo num quadro a
+ * partir de um blob (a CSP da página só permite quadro de blob:); baixar: arquivo salvo com nome neutro. Nada de link
+ * público: a URL do blob só existe nesta aba e é revogada em seguida.
+ */
+let urlDoVisualizador = null;
+async function arquivoDoDocumento(id, finalidade, origem) {
+  const area = document.getElementById("visualizador");
+  if (area) area.textContent = "Carregando o arquivo…";
+  let r;
+  try {
+    r = await fetch(`/api/fv2/documentos/arquivo?${qs({ competencia: undefined, id, finalidade })}`, { headers: cabecalhos(), credentials: "same-origin" });
+  } catch {
+    if (area) area.textContent = "Não foi possível obter o arquivo agora.";
+    return;
+  }
+  if (!r.ok) {
+    const corpo = await r.json().catch(() => ({}));
+    if (area) area.innerHTML = `<p class="aviso aviso--alerta">${esc(corpo.mensagem ?? "Arquivo indisponível.")}</p>`;
+    return;
+  }
+  const blob = await r.blob();
+  if (urlDoVisualizador) URL.revokeObjectURL(urlDoVisualizador);
+  urlDoVisualizador = URL.createObjectURL(blob);
+  if (finalidade === "visualizar") {
+    if (area) area.innerHTML = `<iframe class="quadro-pdf" title="Visualização do documento (somente leitura)" src="${esc(urlDoVisualizador)}"></iframe>`;
+    return;
+  }
+  const a = document.createElement("a");
+  a.href = urlDoVisualizador;
+  a.download = (r.headers.get("content-disposition") ?? "").match(/filename="([^"]+)"/)?.[1] ?? "documento.bin";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  if (area) area.textContent = "Download iniciado.";
+  origem?.focus();
 }
 function fecharPainel(restaurarFoco = true) {
   const painel = $("#painel");
@@ -288,6 +346,16 @@ document.addEventListener("click", (e) => {
     carregar().then(() => document.querySelector(`[data-aba="${aba.dataset.aba}"]`)?.focus());
     return;
   }
+  const secaoConfig = e.target.closest("[data-secao-config]");
+  if (secaoConfig) {
+    estado.filtros.configuracoes = { secao: secaoConfig.dataset.secaoConfig };
+    carregar().then(() => document.querySelector(`[data-secao-config="${secaoConfig.dataset.secaoConfig}"]`)?.focus());
+    return;
+  }
+  const ver = e.target.closest("[data-documento-ver]");
+  if (ver) { arquivoDoDocumento(ver.dataset.documentoVer, "visualizar", ver); return; }
+  const baixar = e.target.closest("[data-documento-baixar]");
+  if (baixar) { arquivoDoDocumento(baixar.dataset.documentoBaixar, "baixar", baixar); return; }
   const secao = e.target.closest("[data-secao]");
   if (secao) {
     estado.filtros.conferencias = { secao: secao.dataset.secao };
@@ -326,7 +394,7 @@ document.addEventListener("submit", (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") fecharPainel(); });
 window.addEventListener("hashchange", rotear);
 $("#filtro-competencia").addEventListener("change", (e) => { estado.competencia = e.target.value; estado.pagina = {}; estado.diaSelecionado = null; carregar(); });
-const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; aplicarFiltrosDaUrl(); };
+const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; estado.pessoas = null; estado.configuracoes = null; aplicarFiltrosDaUrl(); };
 $("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; reiniciarFiltros(); carregar(); });
 $("#filtro-sessao").addEventListener("change", (e) => { estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; reiniciarFiltros(); carregar(); });
 rotear();
