@@ -3,6 +3,9 @@
 //
 //   node scripts/catalogo-importar-planilhas.mjs --salgados <.xlsx> --doces <.xlsx> --bebidas <.xlsx> \
 //        [--fonte caramelle-fichas-v1] [--saida <pasta>]
+//   node scripts/catalogo-importar-planilhas.mjs --planilha <.xlsx> --categoria <RÓTULO> --fonte <id> [--saida <pasta>]
+//        (arquivo único do mesmo modelo "Ficha Técnica 3.2", ex.: outra empresa. --fonte é OBRIGATÓRIA aqui,
+//         para a carga nunca herdar a fonte padrão da Caramelle.)
 //
 // Sem mais nada: LÊ as planilhas, planeja, valida e grava só o relatório (JSON + MD) em --saida.
 // NÃO abre conexão com banco e NÃO precisa de .env.
@@ -34,7 +37,15 @@ function args(argv) {
 
 const a = args(process.argv);
 const entradas = [["SALGADOS", a.salgados], ["DOCES", a.doces], ["BEBIDAS", a.bebidas]].filter(([, p]) => p && p !== true);
-if (!entradas.length) { console.error("Informe ao menos um arquivo: --salgados/--doces/--bebidas <caminho.xlsx>"); process.exit(2); }
+if (a.planilha !== undefined) {
+  const categoria = typeof a.categoria === "string" ? a.categoria.trim().toUpperCase() : "";
+  if (typeof a.planilha !== "string" || !/^[A-Z0-9_]{2,20}$/.test(categoria) || typeof a.fonte !== "string") {
+    console.error("Com --planilha informe também --categoria <RÓTULO, ex.: ACAI> e --fonte <identificador da carga>"); process.exit(2);
+  }
+  if (entradas.length) { console.error("--planilha não se combina com --salgados/--doces/--bebidas"); process.exit(2); }
+  entradas.push([categoria, a.planilha]);
+}
+if (!entradas.length) { console.error("Informe ao menos um arquivo: --salgados/--doces/--bebidas <caminho.xlsx> ou --planilha <caminho.xlsx>"); process.exit(2); }
 
 const fonte = typeof a.fonte === "string" ? a.fonte : "caramelle-fichas-v1";
 const arquivosMeta = [];

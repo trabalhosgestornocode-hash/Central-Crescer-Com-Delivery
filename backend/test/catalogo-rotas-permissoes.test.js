@@ -41,6 +41,7 @@ const SO_ADMIN = [
   ["PUT", "/cmv/condicoes-comerciais", { canal: "ifood", comissao: 0.2 }],
   ["PATCH", `/produtos/${ID}/homologacao`, { acao: "homologar" }],
   ["POST", "/produtos/catalogo/homologar-lote", { ids: [ID] }],
+  ["POST", `/produtos/${ID}/pendencias-carga/conferir`, {}],
 ];
 for (const [metodo, caminho, corpo] of SO_ADMIN) {
   test(`${metodo} ${caminho.replace(ID, ":id")}: consulta, financeiro e operação são RECUSADOS (403); administrador passa da autorização`, async () => {

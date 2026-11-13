@@ -9,6 +9,25 @@ export const CATEGORIAS_FICHA = [
   { id: "sem", rotulo: "Sem categoria" },
 ];
 
+/** Rótulos de categorias de carga que não são as três da Caramelle (a categoria vem do importador, ex.: ACAI). */
+const ROTULOS_EXTRAS = { ACAI: "Açaí" };
+const rotuloLivre = (id) => ROTULOS_EXTRAS[id] ?? (id[0] + id.slice(1).toLowerCase());
+
+/**
+ * Opções do filtro de categoria que TÊM itens: as conhecidas na ordem fixa e, antes de "Sem categoria",
+ * qualquer outra categoria presente na carga (assim outra empresa não fica com itens fora de todo filtro).
+ * @param {Record<string, number>} contagem saída de contarPorCategoria
+ */
+export function opcoesCategoria(contagem = {}) {
+  const conhecidas = new Set(CATEGORIAS_FICHA.map((c) => c.id));
+  const extras = Object.keys(contagem).filter((k) => !conhecidas.has(k) && contagem[k] > 0).sort()
+    .map((id) => ({ id, rotulo: rotuloLivre(id) }));
+  const fixas = CATEGORIAS_FICHA.filter((c) => c.id === "todas" || (c.id !== "sem" && contagem[c.id]));
+  const sem = contagem.sem ? [CATEGORIAS_FICHA.find((c) => c.id === "sem")] : [];
+  return [...fixas, ...extras, ...sem];
+}
+export const rotuloCategoriaFicha = (id) => (id ? (CATEGORIAS_FICHA.find((c) => c.id === id)?.rotulo ?? rotuloLivre(id)) : "—");
+
 export const NATUREZAS = [
   { id: "todas", rotulo: "Produtos e preparações" },
   { id: "produto_final", rotulo: "Produtos finais (vendidos)" },
@@ -59,9 +78,16 @@ const PENDENCIAS = {
   mao_de_obra_sem_custo_minuto: { texto: "Mão de obra sem custo por minuto.", acao: "Informe o custo da mão de obra.", bloqueia: false },
   desperdicio_nao_importado: { texto: "A planilha tinha desperdício percentual, que o sistema ainda não calcula.", acao: "Ajuste as quantidades se necessário.", bloqueia: false },
   custo_difere_da_planilha: { texto: "O custo recalculado difere da planilha original.", acao: "Confira antes de homologar.", bloqueia: false },
+  rendimento_sem_unidade: { texto: "A ficha rende mais de uma unidade, mas a planilha não diz qual (kg, litro, porção…).", acao: "Confirme a unidade antes de usar o custo por unidade.", bloqueia: false },
+  preco_venda_planilha_ausente: { texto: "A planilha não traz preço de venda para este produto.", acao: "Informe o preço do canal (balcão ou iFood) para calcular CMV e margem.", bloqueia: false },
+  mesma_receita_de_preparacao: { texto: "Existe uma preparação com exatamente a mesma receita.", acao: "Confira qual cadastro e qual rendimento valem.", bloqueia: false },
 };
 export function descreverPendencia(p) {
   const base = PENDENCIAS[p?.codigo] ?? { texto: p?.codigo ?? "Pendência", acao: "", bloqueia: false };
+  if (p?.conferida_em) {
+    const quando = String(p.conferida_em).slice(0, 10).split("-").reverse().join("/");
+    return { codigo: p.codigo, texto: base.texto, acao: `Conferida${p.conferida_por ? ` por ${p.conferida_por}` : ""} em ${quando}.`, bloqueia: false, detalhe: p.detalhe ?? null, conferida: true };
+  }
   return { codigo: p?.codigo ?? null, texto: base.texto, acao: base.acao, bloqueia: base.bloqueia, detalhe: p?.detalhe ?? null };
 }
 

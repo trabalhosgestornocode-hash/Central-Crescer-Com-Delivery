@@ -59,7 +59,7 @@ function detalhe(f, empresa) {
     homologacao_info: { estado: f.homologacao, motivo: f.homologacao_motivo, homologado_em: f.homologado_em, homologado_por_nome: f.homologado_por_nome, custo_homologado: null },
     controlado: true,
     catalogo: {
-      categoria: f.categoria, natureza: f.natureza, pendencias: f.pendencias,
+      categoria: f.categoria, natureza: f.natureza, pendencias: f.pendencias, bloqueios_carga: f.bloqueios_carga ?? { proprias: 0, preparacoes: [] },
       formacao_custo: { lote: { ingredientes: { itens: 1, total: 2.4 }, preparacoes: { itens: 1, total: 2 }, embalagens: { itens: 1, total: 1.2 }, total: 5.6 }, rendimento: f.rendimento, unidade_rendimento: f.unidade_rendimento, custo_unitario_materiais: inc ? null : f.custo_unitario },
       mao_de_obra: { linhas: [{ funcao: "confeiteira", minutos: 30, custo_minuto: 0.2795 }], proprio_lote: 8.385, herdado_lote: 0, total_lote: 8.385, custo_unitario: f.custo_mao_de_obra_unitario },
     } };
@@ -120,6 +120,12 @@ before(async () => {
         if (corpo.acao === "homologar") Object.assign(f, { homologacao: "homologada", homologado_por_nome: "Admin", homologado_em: new Date().toISOString(), pode_homologar: false, homologacao_motivo: null });
         else Object.assign(f, { homologacao: "pendente", homologado_por_nome: null, homologado_em: null, pode_homologar: true, homologacao_motivo: "reaberta_manualmente" });
         return json(res, 200, { data: { id: f.id, homologacao: f.homologacao, alterado: true } });
+      }
+      if ((m = caminho.match(/^\/api\/v1\/produtos\/([^/]+)\/pendencias-carga\/conferir$/)) && req.method === "POST") {
+        const f = api.fichas.find((x) => x.id === m[1]);
+        f.pendencias = f.pendencias.map((x) => ({ ...x, conferida_em: "2026-11-13T12:00:00Z", conferida_por: "Admin" }));
+        Object.assign(f, { bloqueios_carga: { proprias: 0, preparacoes: [] }, pode_homologar: true, custo_unitario: 5.6 });
+        return json(res, 200, { data: { id: f.id, conferidas: 1 } });
       }
       if (caminho === "/api/v1/produtos/catalogo/homologar-lote" && req.method === "POST") {
         const ok = [];
@@ -494,6 +500,96 @@ describe("Produtos: Subways inalteradas × catálogo da Caramelle, no app real",
       await pagina.fill("#sim-preco", "30");
       assert.match(await pagina.textContent("#sim-comp"), /Diferença/);
       assert.deepEqual(erros, []);
+    } finally { await contexto.close(); }
+  });
+});
+
+// ---- Catálogo de arquivo único (açaiteria, categoria ACAI) — dados sintéticos ---------------------------------
+const fichasAcai = () => [
+  F({ id: "a1", nome: "Copo Clássico 300", categoria: "ACAI", custo_unitario: 9.5, pendencias: [{ codigo: "preco_venda_planilha_ausente", detalhe: "preço de venda na planilha = 0 — sem preço de origem" }] }),
+  F({ id: "a2", nome: "Massa a Granel", categoria: "ACAI", rendimento: 4.5, custo_unitario: 4.44, pendencias: [{ codigo: "rendimento_sem_unidade", detalhe: "rende 4.5 — a ficha não diz em que unidade" }] }),
+  F({ id: "a3", nome: "Copo Zero", categoria: "ACAI", custo_unitario: null, ficha_completa: false, pode_homologar: false, status_ficha: { chave: "insumo_sem_custo", ok: false },
+    pendencias: [{ codigo: "preparacao_incompleta", detalhe: "usa preparação(ões) com pendência bloqueante: MIX" }] }),
+  F({ id: "a5", nome: "Copo Sem Tampa", categoria: "ACAI", custo_unitario: null, pode_homologar: false, bloqueios_carga: { proprias: 1, preparacoes: [] },
+    pendencias: [{ codigo: "linha_sem_quantidade", detalhe: '"TAMPA" (linha 36) sem quantidade — linha NÃO importada' }] }),
+  F({ id: "a4", nome: "Mix Adoçado", categoria: "ACAI", natureza: "preparacao", unidade_rendimento: "g", rendimento: 600, custo_unitario: null, ficha_completa: false, pode_homologar: false,
+    status_ficha: { chave: "insumo_sem_custo", ok: false }, pendencias: [{ codigo: "componente_nao_encontrado", detalhe: '"ADOÇANTE]" (linha 7) não existe no cadastro — linha NÃO importada (possível erro de digitação de "ADOCANTE")' }] }),
+];
+
+describe("Produtos: catálogo de arquivo único (categoria Açaí), no app real", { skip: PULAR, timeout: 300_000 }, () => {
+  test("lista mostra os produtos com categoria 'Açaí', filtro próprio e só as prontas no lote", async () => {
+    zerar(); api.fichas = fichasAcai();
+    const { pagina, contexto, erros } = await abrirApp();
+    try {
+      await irParaProdutos(pagina);
+      await pagina.waitForSelector("#pc-cat");
+      const ops = await pagina.$$eval("#pc-cat option", (l) => l.map((o) => o.textContent.trim()));
+      assert.deepEqual(ops, ["Todas", "Açaí (5)"]);
+      assert.deepEqual((await nomes(pagina)).sort(), ["Copo Clássico 300", "Copo Sem Tampa", "Copo Zero", "Massa a Granel", "Mix Adoçado"]);
+      const cats = await pagina.$$eval("#tbody tr.pc-linha-catalogo td:first-child", (l) => [...new Set(l.map((x) => x.textContent.trim()))]);
+      assert.deepEqual(cats, ["Açaí"]);
+      assert.match(await pagina.textContent("#pc-lote"), /Homologar 2 prontas/);
+      // incompleta: custo indisponível, nunca um número
+      const linhaZero = pagina.locator("#tbody tr", { hasText: "Copo Zero" });
+      assert.match(await linhaZero.textContent(), /indisponível/);
+      await foto(pagina, "acai-lista");
+      assert.deepEqual(erros, []);
+    } finally { await contexto.close(); }
+  });
+
+  test("detalhe do produto: chip 'Açaí' e pendências explicadas em português", async () => {
+    zerar(); api.fichas = fichasAcai();
+    const { pagina, contexto, erros } = await abrirApp();
+    try {
+      await irParaProdutos(pagina);
+      await abrirProduto(pagina, "Copo Clássico 300");
+      assert.ok((await pagina.$$eval(".modal .chip", (l) => l.map((x) => x.textContent.trim()))).includes("Açaí"));
+      assert.match(await textoModal(pagina), /A planilha não traz preço de venda/);
+      await pagina.keyboard.press("Escape");
+      await pagina.waitForSelector(".modal .modal-head", { state: "detached" }).catch(() => {});
+      await abrirProduto(pagina, "Mix Adoçado");
+      const t = await textoModal(pagina);
+      assert.match(t, /possível erro de digitação/);
+      assert.match(t, /Preparação/i);
+      await foto(pagina, "acai-modal-preparacao");
+      assert.deepEqual(erros, []);
+    } finally { await contexto.close(); }
+  });
+});
+
+describe("Produtos: pendência da planilha (linha descartada) não deixa custo parcial passar por válido", { skip: PULAR, timeout: 300_000 }, () => {
+  test("custo 'indisponível', sem botão de homologar; 'conferir' grava e libera a homologação", async () => {
+    zerar(); api.fichas = fichasAcai();
+    const { pagina, contexto, erros } = await abrirApp();
+    try {
+      await irParaProdutos(pagina);
+      assert.match(await pagina.locator("#tbody tr", { hasText: "Copo Sem Tampa" }).textContent(), /indisponível/);
+      await abrirProduto(pagina, "Copo Sem Tampa");
+      const kpi = await pagina.textContent(".modal .modal-cmv-grid .modal-custo");
+      assert.match(kpi, /indisponível/); assert.doesNotMatch(kpi, /R\$\s*5,60/);
+      assert.equal(await pagina.locator("#pc-homologar").count(), 0, "ficha com linha descartada não pode ser homologada");
+      assert.match(await pagina.textContent(".modal .modal-tags"), /Pendência da planilha/);
+      assert.doesNotMatch(await pagina.textContent(".modal .modal-tags"), /Completa/);
+      assert.match(await pagina.textContent("#pc-formacao"), /Valores parciais/);
+      assert.match(await pagina.textContent("#pc-formacao .pc-total"), /indisponível/);
+      assert.match(await textoModal(pagina), /sem quantidade e não foi importado/);
+      await foto(pagina, "acai-modal-linha-descartada");
+      await aposRedesenho(pagina, "#pc-topo", () => pagina.click("#pc-conferir"));
+      assert.ok(api.chamadas.some((c) => /^POST \/api\/v1\/produtos\/a5\/pendencias-carga\/conferir/.test(c)));
+      assert.equal(await pagina.locator("#pc-conferir").count(), 0);
+      assert.equal(await pagina.locator("#pc-homologar").count(), 1, "depois de conferida, a homologação fica disponível");
+      assert.match(await textoModal(pagina), /Conferida por Admin em 13\/11\/2026/);
+      assert.deepEqual(erros, []);
+    } finally { await contexto.close(); }
+  });
+
+  test("perfil sem administração não vê o botão de conferir", async () => {
+    zerar("consulta"); api.fichas = fichasAcai();
+    const { pagina, contexto } = await abrirApp();
+    try {
+      await irParaProdutos(pagina);
+      await abrirProduto(pagina, "Copo Sem Tampa");
+      assert.equal(await pagina.locator("#pc-conferir").count(), 0);
     } finally { await contexto.close(); }
   });
 });

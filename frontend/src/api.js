@@ -167,6 +167,7 @@ export const obterFichasCatalogo = () => getJson(`/api/v1/produtos/catalogo/fich
 export const obterPendenciasCatalogo = () => getJson(`/api/v1/produtos/catalogo/pendencias`);
 export const definirHomologacaoFicha = (id, acao) => patchJson(`/api/v1/produtos/${id}/homologacao`, { acao });
 export const homologarFichasEmLote = (ids) => postJson(`/api/v1/produtos/catalogo/homologar-lote`, { ids });
+export const conferirPendenciasCargaFicha = (id) => postJson(`/api/v1/produtos/${encodeURIComponent(id)}/pendencias-carga/conferir`, {});
 
 // ---------- Condições comerciais da empresa (canais_venda) ----------
 export const salvarCondicaoComercial = async (dados) => {

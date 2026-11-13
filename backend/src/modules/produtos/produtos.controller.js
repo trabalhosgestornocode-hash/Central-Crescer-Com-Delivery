@@ -15,6 +15,11 @@ export const homologarLote = asyncHandler(async (req, res) => {
   res.json({ data });
 });
 
+export const conferirPendenciasCarga = asyncHandler(async (req, res) => {
+  const data = await service.conferirPendenciasDaCarga({ organizacaoId: req.tenant.organizacaoId, produtoId: req.params.id, usuario: identidadeOperacional(req) });
+  res.json({ data });
+});
+
 export const homologacao = asyncHandler(async (req, res) => {
   const data = await service.definirHomologacao({
     organizacaoId: req.tenant.organizacaoId, produtoId: req.params.id, acao: req.body?.acao,

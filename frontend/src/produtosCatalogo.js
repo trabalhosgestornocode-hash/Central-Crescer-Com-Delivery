@@ -9,7 +9,7 @@ import { obterFichasCatalogo, homologarFichasEmLote } from "./api.js";
 import { acoesTabela } from "./actions.js";
 import { registrarResetDeContexto, geracaoContexto, contextoMudou } from "./contextoEscopo.js";
 import { pode } from "./sessao.js";
-import { CATEGORIAS_FICHA, SITUACOES, filtrarFichas, contarPorCategoria, seloHomologacao, idsProntos, rotuloCusto } from "./fichasModelo.js";
+import { SITUACOES, filtrarFichas, contarPorCategoria, seloHomologacao, idsProntos, rotuloCusto, opcoesCategoria, rotuloCategoriaFicha } from "./fichasModelo.js";
 
 let itens = [];        // fichas controladas da empresa (do servidor)
 let carregado = false;
@@ -36,7 +36,7 @@ export function linhasCatalogoSemPreco() {
   }));
 }
 
-const rotuloCategoria = (c) => (c ? c[0] + c.slice(1).toLowerCase() : "—");
+const rotuloCategoria = rotuloCategoriaFicha;
 
 /** Mesma estrutura de colunas da linha de preço; o que não existe aparece como "—", nunca inventado. */
 export function linhaCatalogoHtml(r, i) {
@@ -66,7 +66,7 @@ function desenharFiltros(onChange) {
   const contagem = contarPorCategoria(itens, { situacao: filtro.situacao });
   const prontos = idsProntos(filtrarFichas(itens, { ...filtro, busca: state.busca ?? "" }));
   alvo.innerHTML = `
-    <select id="pc-cat" aria-label="Categoria do catálogo">${CATEGORIAS_FICHA.filter((c) => c.id === "todas" || contagem[c.id]).map((c) => `<option value="${c.id}">${c.rotulo}${c.id === "todas" ? "" : ` (${contagem[c.id]})`}</option>`).join("")}</select>
+    <select id="pc-cat" aria-label="Categoria do catálogo">${opcoesCategoria(contagem).map((c) => `<option value="${c.id}">${c.rotulo}${c.id === "todas" ? "" : ` (${contagem[c.id]})`}</option>`).join("")}</select>
     <select id="pc-sit" aria-label="Situação da ficha">${SITUACOES.map((c) => `<option value="${c.id}">${c.rotulo}</option>`).join("")}</select>
     ${pode("configuracoes.gerenciar") && prontos.length ? `<button id="pc-lote" class="btn btn-primary btn-sm">Homologar ${prontos.length} pronta${prontos.length === 1 ? "" : "s"}</button>` : ""}`;
   el("#pc-cat").value = filtro.categoria; el("#pc-sit").value = filtro.situacao;

@@ -10,6 +10,17 @@ import {
 import {
   converterQuantidade, statusFicha, validarComponenteFicha, UNIDADES,
 } from "../insumos/insumos.calc.js";
+import { bloqueiosDaCarga, pendenciasCargaAbertas, conferirPendenciasCarga } from "./pendenciasCarga.js";
+
+/** produto_id -> pendências da carga (catalogo_origem). Sem a migration 157 (ou sem carga): mapa vazio. */
+async function pendenciasCargaPorProduto(organizacaoId) {
+  const { data, error } = await supabase.from("catalogo_origem").select("entidade_id, pendencias")
+    .eq("organizacao_id", organizacaoId).eq("entidade", "produto");
+  if (error) return new Map();
+  const mapa = new Map();
+  for (const o of data ?? []) mapa.set(o.entidade_id, [...(mapa.get(o.entidade_id) ?? []), ...(o.pendencias ?? [])]); // mais de uma fonte: soma
+  return mapa;
+}
 
 export async function listarProdutos({ organizacaoId, vendavel, tipo }) {
   let q = supabase
@@ -81,12 +92,14 @@ export async function obterProduto({ organizacaoId, id }) {
  * Nada é inventado: grupo com algum item sem custo devolve total null.
  */
 async function detalheCatalogo({ organizacaoId, produto, grafo, ficha }) {
-  const [origemRes, mod] = await Promise.all([
+  const [origemRes, mod, pendPorProduto] = await Promise.all([
     supabase.from("catalogo_origem").select("referencia, pendencias").eq("organizacao_id", organizacaoId)
       .eq("entidade", "produto").eq("entidade_id", produto.id).maybeSingle(),
     carregarMaoDeObra(organizacaoId).catch(() => new Map()),
+    pendenciasCargaPorProduto(organizacaoId),
   ]);
   const origem = origemRes?.data ?? null;
+  const carga = bloqueiosDaCarga(produto.id, grafo, pendPorProduto);
   const ativos = ficha.filter((c) => c.ativo !== false);
   // Item sem custo (ausente OU zero) torna o grupo indisponível: somar zero esconderia o dado faltante.
   const semCusto = (c) => c.custo_aplicado == null || c.custo_unitario_base == null || Number(c.custo_unitario_base) <= 0;
@@ -105,6 +118,8 @@ async function detalheCatalogo({ organizacaoId, produto, grafo, ficha }) {
     categoria: origem?.referencia?.fontes?.[0]?.categoria ?? null,
     natureza: produto.vendavel === false ? "preparacao" : "produto_final",
     pendencias: origem?.pendencias ?? [],
+    // Linha descartada/nome sem correspondência na planilha: o custo da ficha pode estar SUBESTIMADO até a conferência.
+    bloqueios_carga: { proprias: carga.proprias.length, preparacoes: carga.preparacoes.map((x) => x.nome) },
     formacao_custo: {
       lote, rendimento: rend, unidade_rendimento: produto.unidade_rendimento ?? null,
       custo_unitario_materiais: lote.total == null ? null : lote.total / rend,
@@ -289,6 +304,13 @@ export async function definirHomologacao({ organizacaoId, produtoId, acao, usuar
     if (["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave)) {
       throw new ApiError(409, `A ficha de "${p.nome}" está incompleta (${res.status_ficha.label}). Complete-a antes de homologar.`, { status_ficha: res.status_ficha });
     }
+    const carga = bloqueiosDaCarga(id, grafo, await pendenciasCargaPorProduto(organizacaoId));
+    if (carga.preparacoes.length) {
+      throw new ApiError(409, `"${p.nome}" usa preparação com pendência da planilha ainda não conferida (${carga.preparacoes.map((x) => x.nome).join(", ")}). Confira a preparação primeiro.`, { codigo: "PREPARACAO_COM_PENDENCIA_DA_CARGA" });
+    }
+    if (carga.proprias.length) {
+      throw new ApiError(409, `A ficha de "${p.nome}" tem ${carga.proprias.length} pendência(s) da planilha (item descartado, nome sem correspondência ou custo inválido). Corrija a ficha e marque as pendências como conferidas antes de homologar.`, { codigo: "PENDENCIAS_DA_CARGA" });
+    }
     custoAgora = custoTotalProduto(id, grafo); // custo HOMOLOGADO: base da invalidação por mudança de preço
   }
   const novo = acao === "homologar" ? "homologada" : "pendente";
@@ -301,6 +323,36 @@ export async function definirHomologacao({ organizacaoId, produtoId, acao, usuar
   if (eUp) throw ApiError.badRequest(eUp.message);
   await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas: [{ campo: "homologacao", rotulo: "Homologação da ficha", valor_anterior: efetiva.estado + (efetiva.motivo ? ` (${efetiva.motivo})` : ""), valor_novo: novo }] });
   return { id, homologacao: novo, alterado: true };
+}
+
+/**
+ * Marca como CONFERIDAS as pendências da planilha deste produto (linha descartada, nome sem correspondência,
+ * custo inválido na origem…). É uma declaração de quem conferiu a ficha no sistema — não altera receita nem custo e
+ * não homologa: a homologação continua sendo um passo separado. Sempre auditado (quem/quando, na origem e no histórico).
+ */
+export async function conferirPendenciasDaCarga({ organizacaoId, produtoId, usuario }) {
+  const id = v.uuid(produtoId, "Produto");
+  const { data: p } = await supabase.from("produtos").select("id, nome").eq("organizacao_id", organizacaoId).eq("id", id).maybeSingle();
+  if (!p) throw ApiError.notFound("Produto não encontrado");
+  const { data: origens, error } = await supabase.from("catalogo_origem").select("id, pendencias")
+    .eq("organizacao_id", organizacaoId).eq("entidade", "produto").eq("entidade_id", id);
+  if (error) throw ApiError.internal(error.message);
+  if (!origens?.length) throw new ApiError(409, `"${p.nome}" não veio de carga de planilha: não há pendências da carga para conferir.`);
+  const abertas = origens.flatMap((o) => pendenciasCargaAbertas(o.pendencias));
+  if (!abertas.length) return { id, conferidas: 0 };
+  const quem = usuario?.nome ?? usuario?.email ?? null;
+  const agora = new Date().toISOString();
+  for (const o of origens) {
+    if (!pendenciasCargaAbertas(o.pendencias).length) continue;
+    const { error: eUp } = await supabase.from("catalogo_origem").update({ pendencias: conferirPendenciasCarga(o.pendencias, { quando: agora, quem }), updated_at: agora })
+      .eq("id", o.id).eq("organizacao_id", organizacaoId);
+    if (eUp) throw ApiError.badRequest(eUp.message);
+  }
+  await registrarHistorico({ organizacaoId, produtoId: id, usuario, mudancas: [{
+    campo: "pendencias_carga", rotulo: "Pendências da planilha conferidas",
+    valor_anterior: `${abertas.length} aberta(s): ${[...new Set(abertas.map((x) => x.codigo))].join(", ")}`, valor_novo: "conferidas",
+  }] });
+  return { id, conferidas: abertas.length };
 }
 
 /** Homologa várias fichas de uma vez (cada uma validada individualmente: ficha incompleta é recusada e reportada). */
@@ -330,11 +382,14 @@ export async function listarFichasCatalogo({ organizacaoId }) {
     carregarMaoDeObra(organizacaoId).catch(() => new Map()),
   ]);
   const origem = new Map((origemRes.data ?? []).map((o) => [o.entidade_id, o]));
+  const pendPorProduto = new Map([...origem].map(([id, o]) => [id, o.pendencias ?? []]));
   const itens = grafo.produtos.map((p) => {
     const res = resumoProduto({ produtoId: p.id, grafo, precoVenda: null });
     const o = origem.get(p.id);
     const mod = custoMaoDeObraUnitario(modRes.get(p.id) ?? [], rendimentoDe(p.id, grafo));
-    const bloqueada = ["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave);
+    const carga = bloqueiosDaCarga(p.id, grafo, pendPorProduto);
+    // Ficha incompleta = status dinâmico incompleto OU pendência de carga ainda não conferida (linha descartada etc.).
+    const bloqueada = ["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(res.status_ficha.chave) || carga.bloqueado;
     return {
       id: p.id, nome: p.nome, ativo: p.ativo !== false, codigo_pdv: p.codigo_pdv ?? null,
       natureza: p.vendavel === false ? "preparacao" : "produto_final",
@@ -347,6 +402,7 @@ export async function listarFichasCatalogo({ organizacaoId }) {
       homologado_em: res.homologacao === "homologada" ? p.homologado_em ?? null : null,
       homologado_por_nome: res.homologacao === "homologada" ? p.homologado_por_nome ?? null : null,
       pendencias: o?.pendencias ?? [],
+      bloqueios_carga: { proprias: carga.proprias.length, preparacoes: carga.preparacoes.map((x) => x.nome) },
       pode_homologar: !bloqueada && res.homologacao === "pendente",
     };
   }).sort((a, b) => a.nome.localeCompare(b.nome));

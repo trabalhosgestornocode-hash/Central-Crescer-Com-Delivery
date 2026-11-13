@@ -18,6 +18,7 @@ produtosRouter.get("/:id", controller.obter);
 produtosRouter.get("/:id/historico", controller.historico);
 produtosRouter.put("/:id", editarProdutos, controller.atualizar);
 produtosRouter.patch("/:id/homologacao", homologarFicha, controller.homologacao);
+produtosRouter.post("/:id/pendencias-carga/conferir", homologarFicha, controller.conferirPendenciasCarga); // mesma autoridade de homologar
 produtosRouter.delete("/:id", editarProdutos, controller.remover);
 
 // Ficha técnica editável (escrita exige permissão de edição de produtos).

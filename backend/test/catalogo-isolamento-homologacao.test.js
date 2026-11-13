@@ -329,3 +329,68 @@ test("dependeDe: alcança descendentes, ignora linhas inativas e tolera ciclos p
   const g = { fichaByProd: new Map([["a", [{ subproduto_id: "b", ativo: true }]], ["b", [{ subproduto_id: "c", ativo: true }, { subproduto_id: "z", ativo: false }]], ["c", [{ subproduto_id: "a", ativo: true }]]]) };
   assert.equal(dependeDe("a", "c", g), true); assert.equal(dependeDe("a", "z", g), false); assert.equal(dependeDe("c", "b", g), true);
 });
+
+// ---------------------------------------------------------------- pendências da PLANILHA (linha descartada na carga)
+// A carga descarta a linha sem quantidade / com nome sem correspondência: o que sobra tem custo em tudo e o status
+// dinâmico diz "completa". Sem esta trava o custo SUBESTIMADO seria homologável (inclusive em lote).
+async function ambienteComLinhaDescartada() {
+  const amb = await ambiente();
+  const o = amb.db.tabelas.catalogo_origem.find((x) => x.entidade_id === id(1));
+  o.id = "orig-1";
+  o.pendencias = [{ codigo: "linha_sem_quantidade", detalhe: "COPO (linha 35) sem quantidade — linha NÃO importada" }, { codigo: "preco_venda_planilha_ausente" }];
+  // produto 5 (empresa A) usa o produto 1 como preparação
+  amb.db.tabelas.produtos.push(P(5, A));
+  amb.db.tabelas.ficha_tecnica.push({ id: id(805), produto_id: id(5), subproduto_id: id(1), quantidade: 1, ativo: true });
+  amb.db.tabelas.catalogo_origem.push({ id: "orig-5", organizacao_id: A, entidade: "produto", entidade_id: id(5), referencia: { fontes: [{ categoria: "ACAI", aba: "P5" }] }, pendencias: [] });
+  return amb;
+}
+
+test("PENDÊNCIA DA PLANILHA: lista mostra a ficha como incompleta, sem custo e não 'pronta' — nem quem usa a preparação", async () => {
+  const { svc } = await ambienteComLinhaDescartada();
+  const r = await svc.listarFichasCatalogo({ organizacaoId: A });
+  const p1 = r.itens.find((i) => i.id === id(1)); const p5 = r.itens.find((i) => i.id === id(5));
+  assert.ok(!["sem_componentes", "insumo_sem_custo", "insumo_inativo"].includes(p1.status_ficha.chave), "o status dinâmico sozinho não enxerga a linha descartada");
+  assert.equal(p1.ficha_completa, false); assert.equal(p1.custo_unitario, null); assert.equal(p1.pode_homologar, false);
+  assert.deepEqual(p1.bloqueios_carga, { proprias: 1, preparacoes: [] });
+  assert.equal(p5.pode_homologar, false); assert.deepEqual(p5.bloqueios_carga.preparacoes, ["Produto 1"]);
+});
+
+test("PENDÊNCIA DA PLANILHA: homologar (individual e em lote) é recusado e nada é gravado", async () => {
+  const { db, svc } = await ambienteComLinhaDescartada();
+  await assert.rejects(svc.definirHomologacao({ organizacaoId: A, produtoId: id(1), acao: "homologar", usuario: ADMIN }), (e) => e.statusCode === 409 && /pendência\(s\) da planilha/.test(e.message));
+  await assert.rejects(svc.definirHomologacao({ organizacaoId: A, produtoId: id(5), acao: "homologar", usuario: ADMIN }), (e) => e.statusCode === 409 && /preparação com pendência/.test(e.message));
+  const lote = await svc.homologarLote({ organizacaoId: A, ids: [id(1), id(5)], usuario: ADMIN });
+  assert.deepEqual(lote.homologadas, []); assert.equal(lote.recusadas.length, 2);
+  assert.equal(T(db, 1).homologacao, "pendente"); assert.equal(T(db, 5).homologacao, "pendente");
+});
+
+test("CONFERIR pendências da planilha: grava quem/quando e histórico, só na própria empresa; depois homologa normalmente", async () => {
+  const { db, svc } = await ambienteComLinhaDescartada();
+  await assert.rejects(svc.conferirPendenciasDaCarga({ organizacaoId: B, produtoId: id(1), usuario: ADMIN }), (e) => e.statusCode === 404);
+  const r = await svc.conferirPendenciasDaCarga({ organizacaoId: A, produtoId: id(1), usuario: ADMIN });
+  assert.equal(r.conferidas, 1);
+  const o = db.tabelas.catalogo_origem.find((x) => x.id === "orig-1");
+  const linha = o.pendencias.find((x) => x.codigo === "linha_sem_quantidade");
+  assert.equal(linha.conferida_por, "Admin Teste"); assert.ok(linha.conferida_em);
+  assert.ok(!o.pendencias.find((x) => x.codigo === "preco_venda_planilha_ausente").conferida_em, "aviso não bloqueante fica como está");
+  assert.ok(db.tabelas.produto_historico.some((h) => h.produto_id === id(1) && h.campo === "pendencias_carga"));
+  assert.ok(db.log.filter((l) => l.tabela === "catalogo_origem" && l.op === "update").every((l) => l.filtros.includes("eq:organizacao_id")));
+  assert.equal((await svc.conferirPendenciasDaCarga({ organizacaoId: A, produtoId: id(1), usuario: ADMIN })).conferidas, 0, "repetir não altera nada");
+  const h = await svc.definirHomologacao({ organizacaoId: A, produtoId: id(1), acao: "homologar", usuario: ADMIN });
+  assert.equal(h.homologacao, "homologada");
+  const lista = await svc.listarFichasCatalogo({ organizacaoId: A });
+  assert.equal(lista.itens.find((i) => i.id === id(5)).pode_homologar, true, "quem usa a preparação conferida deixa de ficar bloqueado");
+});
+
+test("CONFERIR: produto sem carga de planilha (Subway/manual) é recusado", async () => {
+  const { svc } = await ambiente();
+  await assert.rejects(svc.conferirPendenciasDaCarga({ organizacaoId: A, produtoId: id(4), usuario: ADMIN }), (e) => e.statusCode === 409);
+});
+
+test("DETALHE: pendência da planilha aberta aparece em catalogo.bloqueios_carga (própria e herdada)", async () => {
+  const { svc } = await ambienteComLinhaDescartada();
+  const d = await svc.obterProduto({ organizacaoId: A, id: id(1) });
+  assert.deepEqual(d.catalogo.bloqueios_carga, { proprias: 1, preparacoes: [] });
+  const d5 = await svc.obterProduto({ organizacaoId: A, id: id(5) });
+  assert.deepEqual(d5.catalogo.bloqueios_carga.preparacoes, ["Produto 1"]);
+});
