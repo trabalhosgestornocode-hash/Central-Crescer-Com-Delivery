@@ -8,7 +8,7 @@
 //     Com FV2_EXIGIR_BANCO=1 ou FV2_REPOSITORIO=postgres, a ausência do banco é FALHA.
 import { randomBytes } from "node:crypto";
 import { after } from "node:test";
-import { criarRepositorioPostgres } from "../../../src/modules/financeiro-v2/index.js";
+import { ACAO, criarRepositorioPostgres } from "../../../src/modules/financeiro-v2/index.js";
 import { abrirPoolSeguro, lerAmbiente, urlDoBanco } from "../../../scripts/fv2/ambiente.mjs";
 
 export const EM_POSTGRES = process.env.FV2_REPOSITORIO === "postgres";
@@ -33,6 +33,14 @@ export const motivoParaPular = () => {
 };
 
 const pools = new Set();
+/** pool da aplicação → emissor de token do banco de teste correspondente (para os testes de SQL cru). */
+const sessaoDoPool = new WeakMap();
+const USUARIO_PADRAO = "cccccccc-0000-4000-8000-000000000001";
+/** Token de sessão de banco para SQL cru no pool da aplicação. Pool desconhecido (ex.: o do dono) → sem sessão. */
+export async function tokenDeTeste(pool, escopo) {
+  const emitir = sessaoDoPool.get(pool);
+  return emitir ? emitir({ usuarioId: USUARIO_PADRAO, ...escopo }) : null;
+}
 export async function abrirPool(url, opcoes) {
   const pool = await abrirPoolSeguro(url, ambiente().marcador, opcoes);
   pools.add(pool);
@@ -54,22 +62,88 @@ export async function criarBancoDeTeste(escopos = [], { vazio = false } = {}) {
   await adm.query(`comment on database ${banco} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
   const urlAdmin = urlDoBanco(a.urlAdmin, banco);
   const urlApp = urlDoBanco(a.urlApp, banco);
+  if (!a.urlAutoridade) throw new Error("Financeiro v2: ambiente sem a credencial da autoridade (rode: node scripts/fv2-banco-teste.mjs iniciar).");
+  const urlAutoridade = urlDoBanco(a.urlAutoridade, banco);
   if (escopos.length) {
     const dono = await abrirPool(urlAdmin, { max: 1 });
     for (const e of escopos) {
       await dono.query("insert into fv2_escopo (organizacao_id, unidade_id, rotulo) values ($1, $2, $3)", [e.organizacaoId, e.unidadeId, "Escopo sintético de teste"]);
     }
   }
-  return { banco, urlApp, urlAdmin };
+  return { banco, urlApp, urlAdmin, urlAutoridade };
+}
+
+/** Autor sintético das concessões-fixture (nunca é um usuário de teste). */
+export const AUTOR_DA_FIXTURE = "f1f1f1f1-0000-4000-8000-0000000000f1";
+
+/**
+ * AUTORIDADE DE SESSÕES de teste (07B): faz o papel do gateway de autenticação, com a credencial PRÓPRIA da autoridade
+ * (nunca a da aplicação). Emite sessões de banco e sessões de provisionamento pelas funções guardadas do banco.
+ *
+ * `espelharContexto` (padrão nos testes gerais): FIXTURE de teste — quando um usuário sintético opera pela primeira vez
+ * numa unidade e ainda NÃO tem concessão gravada, o DONO do banco grava uma concessão com as ações do contexto
+ * confiável do teste (como se ele tivesse sido provisionado antes). Nunca sobrescreve concessão existente: revogações
+ * e concessões feitas pelo teste continuam valendo. Os testes de segurança desligam a fixture.
+ */
+export function criarAutoridadeDeTeste({ urlAutoridade, urlAdmin, espelharContexto = true, validadeSegundos = 3600 }) {
+  let pool;
+  let dono;
+  const autoridade = async () => (pool ??= await abrirPool(urlAutoridade, { max: 4 }));
+  const abrir = async (e) => (await (await autoridade()).query("select fv2_abrir_sessao($1::uuid, $2::uuid, $3::uuid, $4::integer, $5::text) as t", [e.usuarioId, e.organizacaoId, e.unidadeId, validadeSegundos, "teste"])).rows[0].t;
+  async function espelhar(e) {
+    dono ??= await abrirPool(urlAdmin, { max: 1 });
+    await dono.query(`with nova as (
+        insert into fv2_concessao (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por,
+                                   chave_idempotencia, impressao, extras, usuario_id, acoes, situacao, concedido_por, justificativa)
+        select gen_random_uuid(), $1::uuid, $2::uuid, 1, now(), $4::uuid, now(), $4::uuid, 'concessao:' || $3, null, '{}'::jsonb,
+               $3::uuid, $5::jsonb, 'ATIVA', $4::uuid, 'Fixture de teste: espelha o contexto confiável do teste.'
+         where not exists (select 1 from fv2_concessao where organizacao_id = $1::uuid and unidade_id = $2::uuid and usuario_id = $3::uuid)
+        on conflict do nothing
+        returning *)
+      insert into fv2_historico (id, organizacao_id, unidade_id, registro_tipo, registro_id, evento, antes, depois, justificativa, usuario_id, em)
+      select gen_random_uuid(), organizacao_id, unidade_id, 'CONCESSAO', id, 'CRIACAO', null,
+             jsonb_build_object('versao', 1, 'acoes', acoes, 'situacao', situacao), justificativa, concedido_por, now() from nova`,
+    [e.organizacaoId, e.unidadeId, e.usuarioId, AUTOR_DA_FIXTURE, JSON.stringify([...new Set(e.permissoes)].sort())]);
+  }
+  return Object.freeze({
+    autoridade,
+    async emitir(e) {
+      try {
+        return await abrir(e);
+      } catch (erro) {
+        if (erro?.code !== "FV020" || !espelharContexto || !e.permissoes?.length) throw erro;
+        try {
+          await espelhar(e);
+        } catch {
+          throw erro;
+        }
+        return abrir(e);
+      }
+    },
+    async emitirProvisionamento(a) {
+      const { rows } = await (await autoridade()).query(
+        "select fv2_abrir_sessao_de_provisionamento($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::jsonb, $6::text, $7::text, $8::text) as t",
+        [a.atestanteId, a.usuarioId, a.organizacaoId, a.unidadeId, JSON.stringify(a.acoes), a.nivelAutenticacao ?? null, a.justificativa, a.evidencia],
+      );
+      return rows[0].t;
+    },
+  });
 }
 
 /** Repositório PostgreSQL sobre um banco novo. A criação do banco acontece na primeira transação (montar() é síncrono). */
-export function repositorioPostgresDeTeste(escopos) {
+export function repositorioPostgresDeTeste(escopos, { concessoesDeTeste = true } = {}) {
   let pronto;
   const iniciar = () => (pronto ??= (async () => {
-    const { urlApp, urlAdmin, banco } = await criarBancoDeTeste(escopos);
+    const { urlApp, urlAdmin, urlAutoridade, banco } = await criarBancoDeTeste(escopos);
     const pool = await abrirPool(urlApp);
-    return { repo: criarRepositorioPostgres({ pool }), pool, urlApp, urlAdmin, banco, dono: () => abrirPool(urlAdmin, { max: 1 }) };
+    const sessoes = criarAutoridadeDeTeste({ urlAutoridade, urlAdmin, espelharContexto: concessoesDeTeste });
+    sessaoDoPool.set(pool, (e) => sessoes.emitir({ permissoes: Object.values(ACAO), ...e }));
+    return {
+      repo: criarRepositorioPostgres({ pool, sessoes }), pool, sessoes, urlApp, urlAdmin, urlAutoridade, banco,
+      dono: () => abrirPool(urlAdmin, { max: 1 }),
+      /** Token de sessão de banco para SQL cru nos testes (como a aplicação faria). */
+      sessao: (e) => sessoes.emitir({ permissoes: Object.values(ACAO), ...e }),
+    };
   })());
   return Object.freeze({
     transacao: async (fn, opcoes) => (await iniciar()).repo.transacao(fn, opcoes),
@@ -77,6 +151,27 @@ export function repositorioPostgresDeTeste(escopos) {
     /** Acesso direto para os testes de banco (SQL cru como papel de aplicação ou como dono). */
     interno: iniciar,
   });
+}
+
+/**
+ * SQL cru COMO A APLICAÇÃO, dentro de uma transação com a sessão de banco do escopo (token emitido pela autoridade).
+ * `token: null` simula a aplicação sem sessão; um token qualquer simula sessão forjada.
+ */
+export async function comoAplicacao(interno, escopo, fn, { token } = {}) {
+  const t = token === undefined ? await interno.sessao(escopo) : token;
+  const cl = await interno.pool.connect();
+  try {
+    await cl.query("begin");
+    await cl.query("select fv2_assumir_sessao($1)", [t]);
+    const r = await fn(cl);
+    await cl.query("commit");
+    return r;
+  } catch (e) {
+    await cl.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    cl.release();
+  }
 }
 
 // Fecha todas as conexões ao fim de cada arquivo de teste (senão o processo não termina).

@@ -109,6 +109,16 @@ async function iniciar() {
 
   // Banco-modelo: um por conjunto de migrações. Os testes clonam o modelo; nunca escrevem nele.
   const assinatura = listarMigracoes().map((m) => `${m.nome}:${m.sha256}`).join("|");
+  // 07B: papel de LOGIN da autoridade de sessões (o "gateway"), com credencial própria — separada da aplicação.
+  if (!ambiente.urlAutoridade) {
+    const controle = await abrirPoolSeguro(ambiente.urlAdmin, ambiente.marcador, { max: 1 });
+    const senhaAutoridade = randomBytes(24).toString("hex");
+    const { rows } = await controle.query("select 1 from pg_roles where rolname = 'fv2_teste_autoridade'");
+    await controle.query(`${rows.length ? "alter" : "create"} role fv2_teste_autoridade login password '${senhaAutoridade}'`);
+    await controle.end();
+    ambiente = { ...ambiente, urlAutoridade: `postgres://fv2_teste_autoridade:${senhaAutoridade}@${ENDERECO}:${ambiente.porta ?? PORTA}/fv2_teste_controle`, migracoes: null };
+    writeFileSync(arquivoDoAmbiente(), JSON.stringify(ambiente, null, 2), { mode: 0o600 });
+  }
   if (ambiente.migracoes !== assinatura) {
     const controle = await abrirPoolSeguro(ambiente.urlAdmin, ambiente.marcador, { max: 1 });
     const modelo = `fv2_teste_modelo_${randomBytes(4).toString("hex")}`;
@@ -117,6 +127,7 @@ async function iniciar() {
     const noModelo = await abrirPoolSeguro(urlDoBanco(ambiente.urlAdmin, modelo), ambiente.marcador, { max: 1 });
     const aplicadas = await aplicarMigracoes(noModelo);
     await noModelo.query("grant fv2_app to fv2_teste_app");
+    await noModelo.query("grant fv2_autoridade to fv2_teste_autoridade");
     await noModelo.end();
     await controle.end();
     ambiente = { ...ambiente, bancoModelo: modelo, migracoes: assinatura };

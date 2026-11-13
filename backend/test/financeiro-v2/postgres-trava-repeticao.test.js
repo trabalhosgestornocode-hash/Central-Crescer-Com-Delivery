@@ -6,7 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ESCOPOS_PADRAO, ORG_B, UNI_B, ctx, montar, sha } from "./helpers/cenario.js";
 import { PERIODO_SETEMBRO, saiposVendas } from "./helpers/arquivos.js";
-import { motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
+import { motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
 const esperar = (ms) => new Promise((r) => { setTimeout(r, ms); });
@@ -112,7 +112,7 @@ test("0002 no banco: conteúdo importado é imutável, importação não volta d
     const cl = await cliente.connect();
     try {
       await cl.query("begin");
-      await cl.query("select set_config('fv2.organizacao_id', $1, true), set_config('fv2.unidade_id', $2, true)", [escopo.organizacaoId, escopo.unidadeId]);
+      await cl.query("select fv2_assumir_sessao($1)", [await tokenDeTeste(cliente, escopo)]);
       const res = await cl.query(sql, valores);
       await cl.query("commit");
       return res;

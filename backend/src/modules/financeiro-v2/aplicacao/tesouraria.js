@@ -19,7 +19,8 @@ import { operacoesDeCaixa } from "./caixa.js";
 
 const ROTULO = Object.freeze({ ENTRADA: "Entrada de dinheiro", SAIDA: "Saída de dinheiro", SANGRIA: "Sangria", SUPRIMENTO: "Suprimento" });
 
-export function operacoesDeTesouraria(b) {
+/** @param {{cargaCompleta?: boolean}} [opcoes] cargaCompleta: SÓ para testes de equivalência (referência: lê tudo, como antes da 07B) */
+export function operacoesDeTesouraria(b, { cargaCompleta = false } = {}) {
   /** Registros do escopo usados pelas consultas. O repositório já filtra por organização + unidade. */
   async function carregar(cx, tx) {
     const l = (tipo) => tx.listar(cx, tipo);
@@ -31,10 +32,59 @@ export function operacoesDeTesouraria(b) {
       competencias: await l(TIPO.COMPETENCIA), propostas: await l(TIPO.PROPOSTA),
     };
   }
-  const consulta = (validar, calcular) => (ctx, e) => {
+  const consulta = (validar, calcular, carregador = carregar) => (ctx, e) => {
     const filtro = validar(e);
-    return b.consultar(ctx, async (cx, tx) => calcular(await carregar(cx, tx), b.hoje(), filtro));
+    return b.consultar(ctx, async (cx, tx) => calcular(await (cargaCompleta ? carregar : carregador)(cx, tx), b.hoje(), filtro));
   };
+
+  // ------------------------------------------------------------------------------------------------- 07B: carga dirigida
+  // Contas a pagar/receber carregavam TODAS as tabelas do histórico (vendas, pagamentos, propostas...). Agora cada tela
+  // lê só as tabelas que usa e, nelas, só as linhas ligadas aos títulos (filtro por id NO BANCO, paginado). As MESMAS
+  // funções de dominio/tesouraria.js calculam o resultado — a equivalência com a carga completa é provada em teste.
+  const unicos = (lista) => [...new Set(lista.filter(Boolean))];
+  async function ligados(cx, tx, tipo, campo, ids) {
+    if (!ids.length) return [];
+    const saida = [];
+    for (let i = 0; i < ids.length; i += 200) { // o contrato da porta aceita até 200 valores em `em`
+      const lote = ids.slice(i, i + 200);
+      for (let deslocamento = 0; ; deslocamento += 500) {
+        const pg = await tx.paginar(cx, tipo, { em: { [campo]: lote }, limite: 500, deslocamento });
+        saida.push(...pg.itens);
+        if (deslocamento + pg.itens.length >= pg.total || !pg.itens.length) break;
+      }
+    }
+    return saida;
+  }
+  /** Liquidações dos títulos, as movimentações que as pagaram e as OUTRAS liquidações dessas mesmas movimentações. */
+  async function pagamentosDosTitulos(cx, tx, ids) {
+    const diretas = await ligados(cx, tx, TIPO.LIQUIDACAO, "alvoId", ids);
+    const movIds = unicos(diretas.map((q) => q.movimentacaoId));
+    return { liquidacoes: await ligados(cx, tx, TIPO.LIQUIDACAO, "movimentacaoId", movIds), movimentacoes: await ligados(cx, tx, TIPO.MOVIMENTACAO, "id", movIds) };
+  }
+  async function documentosDosRegistros(cx, tx, registros) {
+    const vinculos = await ligados(cx, tx, TIPO.VINCULO_DOCUMENTAL, "registroId", unicos(registros.map((r) => r.id)));
+    const ids = unicos([...vinculos.map((v) => v.documentoId), ...registros.flatMap((r) => [...(r.documentoIds ?? []), r.documentoId])]);
+    return { vinculos, documentos: await ligados(cx, tx, TIPO.DOCUMENTO, "id", ids) };
+  }
+  const cadastros = async (cx, tx) => ({
+    contas: await tx.listar(cx, TIPO.CONTA), contrapartes: await tx.listar(cx, TIPO.CONTRAPARTE),
+    categorias: await tx.listar(cx, TIPO.CATEGORIA), competencias: await tx.listar(cx, TIPO.COMPETENCIA),
+  });
+  async function carregarContasAPagar(cx, tx) {
+    const obrigacoes = await tx.listar(cx, TIPO.OBRIGACAO);
+    const { liquidacoes, movimentacoes } = await pagamentosDosTitulos(cx, tx, obrigacoes.map((o) => o.id));
+    const lancamentos = await ligados(cx, tx, TIPO.LANCAMENTO, "id", unicos(obrigacoes.map((o) => o.lancamentoId)));
+    return { ...(await cadastros(cx, tx)), obrigacoes, liquidacoes, movimentacoes, lancamentos, ...(await documentosDosRegistros(cx, tx, [...obrigacoes, ...movimentacoes])) };
+  }
+  async function carregarContasAReceber(cx, tx) {
+    const recebiveis = await tx.listar(cx, TIPO.RECEBIVEL);
+    const ids = recebiveis.map((r) => r.id);
+    const { liquidacoes, movimentacoes } = await pagamentosDosTitulos(cx, tx, ids);
+    const ajustes = await ligados(cx, tx, TIPO.AJUSTE, "alvoId", ids);
+    const lancamentos = await ligados(cx, tx, TIPO.LANCAMENTO, "id", unicos(ajustes.map((a) => a.lancamentoId)));
+    const correspondencias = await tx.listar(cx, TIPO.CORRESPONDENCIA, { onde: { situacao: "DIVERGENTE" } });
+    return { ...(await cadastros(cx, tx)), recebiveis, liquidacoes, movimentacoes, ajustes, lancamentos, correspondencias, ...(await documentosDosRegistros(cx, tx, [...recebiveis, ...movimentacoes])) };
+  }
 
   /** Histórico de um registro em linguagem de gestão: o que mudou no saldo e na situação, quando e por quê. */
   async function historicoDe(cx, tx, tipo, id) {
@@ -54,8 +104,8 @@ export function operacoesDeTesouraria(b) {
 
   return {
     // ----------------------------------------------------------------------------------------------------- consultas
-    consultarContasAPagar: consulta(validarFiltroAPagar, contasAPagar),
-    consultarContasAReceber: consulta(validarFiltroAReceber, contasAReceber),
+    consultarContasAPagar: consulta(validarFiltroAPagar, contasAPagar, carregarContasAPagar),
+    consultarContasAReceber: consulta(validarFiltroAReceber, contasAReceber, carregarContasAReceber),
     consultarCaixaEBancos: consulta(validarFiltroCaixaEBancos, caixaEBancos),
     consultarFluxoDeCaixa: consulta(validarFiltroFluxo, fluxoDeCaixa),
     consultarCalendarioFinanceiro: consulta(validarFiltroCalendario, calendarioFinanceiro),

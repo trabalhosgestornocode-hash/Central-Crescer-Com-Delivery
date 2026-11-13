@@ -7,7 +7,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACAO, CODIGO, criarCofreDisco, criarCofreMemoria, criarNucleoFinanceiro, criarRegistroDeAcessosNegadosMemoria } from "../../src/modules/financeiro-v2/index.js";
-import { AGORA, ESCOPOS_PADRAO, ORG_A, ORG_B, OUTRO_USUARIO, UNI_A, UNI_A2, UNI_B, USUARIO, ctx, entrada, montar, montarComCadastros, obrigacao, rejeita, saida, sha } from "./helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ORG_A, ORG_B, OUTRO_USUARIO, UNI_A, UNI_A2, UNI_B, USUARIO, ctx, entrada, montar, montarComCadastros, obrigacao, provisionarAdministrador, rejeita, saida, sha } from "./helpers/cenario.js";
 
 const SET = "2026-09";
 const OUT = "2026-10";
@@ -221,14 +221,14 @@ test("13, 14, 15 — canais, processadores e contas financeiras", async () => {
 
 // ---------------------------------------------------------------------------------------------------- Fase D
 test("16–21 — concessões por organização e unidade; escalada e autoconcessão negadas; revogação vale na próxima ação", async () => {
-  const { repositorio } = montar();
+  const { repositorio } = montar({ concessoesDeTeste: false }); // 07B: nenhuma concessão-fixture — só as gravadas pelo teste
   const n = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, exigirConcessaoPersistida: true });
   const autoridadeId = "eeeeeeee-0000-4000-8000-000000000001";
   const chaveAutoridade = randomBytes(32);
   const assinar = (ato) => createHmac("sha256", chaveAutoridade).update(JSON.stringify([ato.organizacaoId, ato.unidadeId, ato.usuarioId, [...ato.acoes].sort()])).digest("hex");
   // Provisionamento só existe com a autoridade; aqui não há → o administrador vem do teste 22 (outro núcleo).
   await rejeita(n.provisionarAdministradorInicial({ organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: USUARIO, acoes: [ACAO.VER], justificativa: "x", evidencia: "y", atestado: "z" }), CODIGO.PROVISIONAMENTO_RECUSADO);
-  const comAutoridade = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, exigirConcessaoPersistida: true, autoridadeDeProvisionamento: { verificar: async (ato) => ({ ok: ato.atestado === assinar(ato), autoridadeId }) } });
+  const comAutoridade = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, exigirConcessaoPersistida: true, autoridadeDeProvisionamento: { verificar: async (ato) => ({ ok: ato.atestado === assinar(ato), autoridadeId, nivelAutenticacao: "aal2" }) } });
   const ato = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: USUARIO, acoes: [ACAO.VER, ACAO.CONCEDER, ACAO.CONCILIAR, ACAO.REVISAR], justificativa: "Primeiro administrador financeiro (sintético).", evidencia: "Ata sintética nº 1" };
   await comAutoridade.provisionarAdministradorInicial({ ...ato, atestado: assinar(ato) });
   const adm = ctx(ORG_A, UNI_A, ato.acoes);
@@ -263,7 +263,7 @@ test("22 — provisionamento inicial: só com autoridade atestando, uma vez por 
   const autoridadeId = "eeeeeeee-0000-4000-8000-000000000001";
   const chave = randomBytes(32);
   const assinar = (ato) => createHmac("sha256", chave).update(JSON.stringify([ato.organizacaoId, ato.unidadeId, ato.usuarioId, [...ato.acoes].sort()])).digest("hex");
-  const n = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, autoridadeDeProvisionamento: { verificar: async (ato) => ({ ok: ato.atestado === assinar(ato), autoridadeId }) } });
+  const n = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, autoridadeDeProvisionamento: { verificar: async (ato) => ({ ok: ato.atestado === assinar(ato), autoridadeId, nivelAutenticacao: "aal2" }) } });
   const ato = { organizacaoId: ORG_A, unidadeId: UNI_A2, usuarioId: USUARIO, acoes: [ACAO.VER, ACAO.CONCEDER], justificativa: "Administrador inicial (sintético).", evidencia: "Ata sintética nº 2" };
   await rejeita(n.provisionarAdministradorInicial({ ...ato, atestado: "forjado" }), CODIGO.PROVISIONAMENTO_RECUSADO);
   await rejeita(n.provisionarAdministradorInicial({ ...ato, acoes: [ACAO.VER, ACAO.CONCEDER, "superadmin"], atestado: "x" }), CODIGO.ENTRADA_INVALIDA);
@@ -278,7 +278,9 @@ test("22 — provisionamento inicial: só com autoridade atestando, uma vez por 
 });
 
 test("23, 24 — responsável por pendência: usuário com acesso real, reatribuição justificada, histórico", async () => {
-  const { nucleo: n, c, banco } = await montarComCadastros();
+  const m = montar();
+  await provisionarAdministrador(m.repositorio); // 07B: quem concede precisa ter a concessão gravada
+  const { nucleo: n, c, banco } = await montarComCadastros({ repositorio: m.repositorio });
   await n.registrarMovimentacao(c, saida(banco.id, 1234, { natureza: "OUTRA", dataEfetiva: "2026-09-12" }));
   const p = (await n.consultarPendencias(c, { competencia: SET })).itens[0];
   assert.ok(p, "há pendência no cenário");

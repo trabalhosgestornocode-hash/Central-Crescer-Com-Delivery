@@ -34,13 +34,15 @@ import { operacoesDeVendas } from "./vendas.js";
  * @param {(escopo:object, fonte:string) => string[]|null} [deps.estabelecimentosDaUnidade] códigos de estabelecimento de cada unidade
  * @param {{registrar:Function}} [deps.acessosNegados] onde registrar tentativas de leitura negadas (padrão: memória)
  * @param {boolean} [deps.exigirConcessaoPersistida] 06D: confere a permissão contra a concessão GRAVADA em cada operação
- * @param {{verificar:(ato:object)=>Promise<{ok:boolean, autoridadeId?:string}>}} [deps.autoridadeDeProvisionamento] 06D: autoridade
- *        externa, já autenticada, que atesta o administrador inicial de uma unidade (sem ela, o provisionamento é recusado)
+ * @param {{verificar:(ato:object)=>Promise<{ok:boolean, autoridadeId?:string, nivelAutenticacao?:string}>}} [deps.autoridadeDeProvisionamento]
+ *        06D/07B: autoridade externa, já autenticada (aal2), que atesta o administrador inicial de uma unidade
+ * @param {boolean} [deps.cargaCompletaDeReferencia] 07B — SOMENTE testes de equivalência: as telas otimizadas voltam a
+ *        ler o histórico inteiro, para comparar o resultado com a carga dirigida
  */
 export function criarNucleoFinanceiro({
   repositorio, escoposAutorizados, relogio = () => new Date(), gerarId = randomUUID, fuso = "America/Sao_Paulo",
   cofre = null, fontes = criarRegistroDeFontes(), estabelecimentosDaUnidade = null, acessosNegados = criarRegistroDeAcessosNegadosMemoria(),
-  exigirConcessaoPersistida = false, autoridadeDeProvisionamento = null,
+  exigirConcessaoPersistida = false, autoridadeDeProvisionamento = null, cargaCompletaDeReferencia = false,
 }) {
   exigirRepositorio(repositorio);
   const politica = criarPoliticaDeEscopo(escoposAutorizados);
@@ -58,7 +60,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeCofreDocumental(base, { cofre, acessosNegados }),
     ...operacoesDeFormacao(base),
     ...operacoesDeApuracao(base),
-    ...operacoesDeTesouraria(base),
+    ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia }),
     ...operacoesDeVendasERecebimentos(base),
     ...operacoesDeConferencias(base, { fontes }),
     ...operacoesDeCompetencia(base, { repositorio, politica }),

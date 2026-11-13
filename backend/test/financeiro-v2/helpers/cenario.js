@@ -4,6 +4,7 @@
 //   padrão                      → memória (rápido, sem dependência externa);
 //   FV2_REPOSITORIO=postgres    → PostgreSQL local isolado (helpers/postgres.js); cada montar() ganha um banco novo.
 import assert from "node:assert/strict";
+import { createHmac, randomBytes } from "node:crypto";
 import { ACAO, ErroFinanceiro, criarCofreMemoria, criarNucleoFinanceiro, criarRegistroDeAcessosNegadosMemoria, criarRepositorioMemoria } from "../../../src/modules/financeiro-v2/index.js";
 import { EM_POSTGRES, repositorioPostgresDeTeste } from "./postgres.js";
 
@@ -31,8 +32,9 @@ export const ESCOPOS_PADRAO = Object.freeze([{ organizacaoId: ORG_A, unidadeId: 
 export function montar({
   escopos = ESCOPOS_PADRAO, repositorio, plano = "ACAITERIA", relogio = () => AGORA,
   cofre = criarCofreMemoria(), acessosNegados = criarRegistroDeAcessosNegadosMemoria(), estabelecimentosDaUnidade = null,
+  concessoesDeTeste = true,
 } = {}) {
-  const repo = repositorio ?? (EM_POSTGRES ? repositorioPostgresDeTeste(escopos) : criarRepositorioMemoria());
+  const repo = repositorio ?? (EM_POSTGRES ? repositorioPostgresDeTeste(escopos, { concessoesDeTeste }) : criarRepositorioMemoria());
   const real = criarNucleoFinanceiro({ repositorio: repo, escoposAutorizados: escopos, relogio, cofre, acessosNegados, estabelecimentosDaUnidade });
   if (!plano) return { nucleo: real, repositorio: repo, cofre, acessosNegados };
   const implantados = new Map();
@@ -44,10 +46,29 @@ export function montar({
   };
   // Preparação de cenário (não é regra do núcleo): todo escopo de teste nasce com o plano de contas implantado.
   const nucleo = Object.freeze(Object.fromEntries(Object.entries(real).map(([nome, op]) => [nome, async (c, ...resto) => {
-    await garantirPlano(c);
+    if (nome !== "provisionarAdministradorInicial") await garantirPlano(c);
     return op(c, ...resto);
   }])));
   return { nucleo, repositorio: repo, cofre, acessosNegados };
+}
+
+/** Autoridade de provisionamento SINTÉTICA (07B): atesta com HMAC de uma chave do teste e declara MFA (aal2). */
+export const ATESTANTE = "eeeeeeee-0000-4000-8000-000000000001";
+export function autoridadeSintetica({ nivelAutenticacao = "aal2", autoridadeId = ATESTANTE } = {}) {
+  const chave = randomBytes(32);
+  const assinar = (ato) => createHmac("sha256", chave).update(JSON.stringify([ato.organizacaoId, ato.unidadeId, ato.usuarioId, [...ato.acoes].sort()])).digest("hex");
+  return { assinar, verificar: async (ato) => ({ ok: ato.atestado === assinar(ato), autoridadeId, nivelAutenticacao }) };
+}
+
+/**
+ * Provisiona o ADMINISTRADOR INICIAL pelo caminho real (autoridade atestando), para os testes de concessão: quem concede
+ * precisa ter a concessão GRAVADA (07B). Funciona nos dois adaptadores.
+ */
+export async function provisionarAdministrador(repositorio, { organizacaoId = ORG_A, unidadeId = UNI_A, usuarioId = USUARIO, acoes = TODAS, escopos = ESCOPOS_PADRAO, nivelAutenticacao = "aal2" } = {}) {
+  const autoridade = autoridadeSintetica({ nivelAutenticacao });
+  const n = criarNucleoFinanceiro({ repositorio, escoposAutorizados: escopos, relogio: () => AGORA, autoridadeDeProvisionamento: autoridade });
+  const ato = { organizacaoId, unidadeId, usuarioId, acoes, justificativa: "Administrador inicial sintético.", evidencia: "Ato sintético de teste" };
+  return n.provisionarAdministradorInicial({ ...ato, atestado: autoridade.assinar(ato) });
 }
 
 /** Núcleo com conta bancária, caixa físico e um fornecedor no escopo A. */

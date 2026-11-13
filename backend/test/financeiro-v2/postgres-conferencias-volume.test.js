@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { criarRepositorioPostgres } from "../../src/modules/financeiro-v2/index.js";
 import { ESCOPOS_PADRAO, ctx, montar } from "./helpers/cenario.js";
-import { abrirPool, criarBancoDeTeste, motivoParaPular } from "./helpers/postgres.js";
+import { abrirPool, criarAutoridadeDeTeste, criarBancoDeTeste, motivoParaPular } from "./helpers/postgres.js";
 import { saiposVendas } from "./helpers/arquivos.js";
 
 const pular = { skip: motivoParaPular(), timeout: 600000 };
@@ -13,7 +13,7 @@ const MESES = ["2026-06", "2026-07", "2026-08", "2026-09"];
 const POR_DIA = 10;
 
 test("volume de 4 meses: lista de propostas e documentos paginada no banco, totais exatos e independentes da página", pular, async () => {
-  const { urlApp } = await criarBancoDeTeste(ESCOPOS_PADRAO);
+  const { urlApp, urlAdmin, urlAutoridade } = await criarBancoDeTeste(ESCOPOS_PADRAO);
   const pool = await abrirPool(urlApp);
   const leituras = [];
   let espiando = false;
@@ -31,7 +31,7 @@ test("volume de 4 meses: lista de propostas e documentos paginada no banco, tota
       };
     },
   };
-  const { nucleo: n } = montar({ repositorio: criarRepositorioPostgres({ pool: espiao }), relogio: () => new Date("2026-10-15T15:00:00Z") });
+  const { nucleo: n } = montar({ repositorio: criarRepositorioPostgres({ pool: espiao, sessoes: criarAutoridadeDeTeste({ urlAutoridade, urlAdmin }) }), relogio: () => new Date("2026-10-15T15:00:00Z") });
   const c = ctx();
   for (const mes of MESES) {
     const dias = new Date(Date.UTC(Number(mes.slice(0, 4)), Number(mes.slice(5)), 0)).getUTCDate();

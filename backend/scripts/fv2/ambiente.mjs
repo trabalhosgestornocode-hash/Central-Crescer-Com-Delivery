@@ -26,6 +26,7 @@ export function lerAmbiente() {
   const a = JSON.parse(readFileSync(arquivoDoAmbiente(), "utf8"));
   exigirDestinoLocal(a.urlAdmin);
   exigirDestinoLocal(a.urlApp);
+  if (a.urlAutoridade) exigirDestinoLocal(a.urlAutoridade);
   return a;
 }
 

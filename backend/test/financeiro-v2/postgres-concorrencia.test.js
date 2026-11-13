@@ -4,7 +4,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CODIGO, ErroFinanceiro } from "../../src/modules/financeiro-v2/index.js";
 import { ESCOPOS_PADRAO, ctx, entrada, montar, obrigacao, saida } from "./helpers/cenario.js";
-import { motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
+import { motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
 
@@ -139,7 +139,7 @@ test("homologação concorrendo com escritas: nada entra depois da homologação
     const cliente = await pool.connect();
     try {
       await cliente.query("begin");
-      await cliente.query("select set_config('fv2.organizacao_id', $1, true), set_config('fv2.unidade_id', $2, true)", [c.organizacaoId, c.unidadeId]);
+      await cliente.query("select fv2_assumir_sessao($1)", [await tokenDeTeste(pool, c)]);
       const { rows } = await cliente.query(`select registro_tipo, evento, depois->>'estado' as estado from fv2_historico
         where (registro_tipo = 'MOVIMENTACAO' and evento = 'CRIACAO') or (registro_tipo = 'COMPETENCIA' and depois->>'estado' = 'FECHAMENTO_HOMOLOGADO') order by seq`);
       await cliente.query("rollback");

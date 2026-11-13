@@ -3,7 +3,8 @@
 // - Não importa driver: recebe um `pool` compatível com node-postgres ({ connect() → { query(texto, valores), release() } }).
 //   Quem monta decide a conexão — e é obrigado a passar pela guarda de destino (destinoSeguro.js) antes.
 // - Nenhuma fórmula financeira aqui: o adaptador grava o que o núcleo calculou; o banco confere (restrições e gatilhos).
-// - Cada transação declara o escopo na sessão; as políticas de RLS do banco isolam organização + unidade.
+// - Cada transação declara um TOKEN de sessão de banco emitido pela autoridade (07B). Organização, unidade e usuário vêm
+//   do registro dessa sessão no banco — a aplicação não escolhe escopo por variável. O RLS isola organização + unidade.
 // - Concorrência: `obter` dentro de transação reserva a linha (FOR UPDATE); toda alteração confere a versão; disputas
 //   perdidas (linha alterada por outro, chave única já gravada, deadlock) fazem a operação inteira ser REEXECUTADA sobre
 //   o estado novo — daí sai o resultado correto: registro repetido devolvido, saldo insuficiente recusado, etc.
@@ -130,13 +131,32 @@ function colunaComparavel(def, campo) {
   return col;
 }
 
+/** Registro de concessão como objeto coluna → valor, para a função guardada do banco (jsonb_populate_record). */
+function concessaoParaBanco(def, registro) {
+  const linha = {};
+  for (const [campo, { coluna }] of Object.entries(def.campos)) linha[coluna] = registro[campo] ?? null;
+  linha.extras = Object.fromEntries(Object.entries(registro).filter(([k, v]) => !(k in def.campos) && v !== undefined));
+  return linha;
+}
+
 /** Erros do banco que significam "perdi uma disputa de concorrência": a operação pode ser refeita do zero. */
 const DISPUTA = new Set(["23505", "40001", "40P01"]);
 const SQLSTATE_DO_DOMINIO = { FV001: CODIGO.COMPETENCIA_HOMOLOGADA };
+/** 07B: recusas de concessão e de sessão decididas NO BANCO. */
+const RECUSAS_DE_ACESSO = {
+  FV020: [CODIGO.PERMISSAO_INSUFICIENTE, "Sem concessão ativa do Financeiro v2 nesta unidade (conferido no banco)."],
+  FV021: [CODIGO.PROVISIONAMENTO_RECUSADO, "O banco recusou o provisionamento inicial."],
+  FV030: [CODIGO.PERMISSAO_INSUFICIENTE, "Ninguém concede nem revoga o próprio acesso (conferido no banco)."],
+  FV031: [CODIGO.PERMISSAO_INSUFICIENTE, "A autoria da concessão precisa ser a do usuário da sessão."],
+  FV032: [CODIGO.PERMISSAO_INSUFICIENTE, "Sem concessão para conceder nesta unidade (conferido no banco)."],
+  FV034: [CODIGO.PERMISSAO_INSUFICIENTE, "Não é possível conceder uma ação que você não possui (conferido no banco)."],
+  FV035: [CODIGO.PROVISIONAMENTO_RECUSADO, "O provisionamento só grava o que foi atestado, numa unidade sem administrador."],
+};
 
 function traduzir(e) {
   if (e instanceof ErroFinanceiro || typeof e?.code !== "string") return e;
   const detalhes = { sqlstate: e.code, restricao: e.constraint ?? null, tabela: e.table ?? null };
+  if (RECUSAS_DE_ACESSO[e.code]) return new ErroFinanceiro(RECUSAS_DE_ACESSO[e.code][0], RECUSAS_DE_ACESSO[e.code][1], detalhes);
   if (e.code === "23505") {
     const chave = /chave_uq$/.test(e.constraint ?? "");
     return Object.assign(new ErroFinanceiro(chave ? CODIGO.CONFLITO_IDEMPOTENCIA : CODIGO.INTEGRIDADE_VIOLADA, chave ? "Já existe um registro com a mesma origem externa." : "Registro duplicado recusado pelo banco.", detalhes), { repetivel: true });
@@ -182,6 +202,11 @@ function criarTx(cliente, { somenteLeitura }) {
       exigirEscrita();
       exigirEscopoDoRegistro(registro);
       const def = definicao(tipo);
+      // 07B: concessão só pela função guardada do banco (a aplicação não tem INSERT/UPDATE na tabela).
+      if (tipo === "CONCESSAO") {
+        await consulta("select fv2_gravar_concessao($1::jsonb, null) as n", [JSON.stringify(concessaoParaBanco(def, registro))]);
+        return;
+      }
       const g = gravacaoDe(def, registro, { comExtras: true });
       await consulta(`insert into ${def.tabela} (${g.colunas.join(", ")}) values (${g.marcas.join(", ")})`, g.valores);
     },
@@ -191,13 +216,19 @@ function criarTx(cliente, { somenteLeitura }) {
       exigirEscopoDoRegistro(registro);
       const def = definicao(tipo);
       if (registro.versao !== versaoEsperada + 1) falhar(CODIGO.CONFLITO_VERSAO, "O registro foi alterado por outra operação. Recarregue e tente de novo.", { tipo });
-      const g = gravacaoDe(def, registro, { comExtras: true, semImutaveis: true });
-      const n = g.valores.length;
-      const atribuicoes = g.colunas.map((coluna, i) => `${coluna} = ${g.marcas[i]}`);
-      const { rowCount } = await consulta(
-        `update ${def.tabela} set ${atribuicoes.join(", ")} where organizacao_id = $${n + 1}::uuid and unidade_id = $${n + 2}::uuid and id = $${n + 3}::uuid and versao = $${n + 4}::integer`,
-        [...g.valores, registro.organizacaoId, registro.unidadeId, registro.id, versaoEsperada],
-      );
+      let rowCount;
+      if (tipo === "CONCESSAO") {
+        const { rows: [r] } = await consulta("select fv2_gravar_concessao($1::jsonb, $2::integer) as n", [JSON.stringify(concessaoParaBanco(def, registro)), versaoEsperada]);
+        rowCount = r.n;
+      } else {
+        const g = gravacaoDe(def, registro, { comExtras: true, semImutaveis: true });
+        const n = g.valores.length;
+        const atribuicoes = g.colunas.map((coluna, i) => `${coluna} = ${g.marcas[i]}`);
+        ({ rowCount } = await consulta(
+          `update ${def.tabela} set ${atribuicoes.join(", ")} where organizacao_id = $${n + 1}::uuid and unidade_id = $${n + 2}::uuid and id = $${n + 3}::uuid and versao = $${n + 4}::integer`,
+          [...g.valores, registro.organizacaoId, registro.unidadeId, registro.id, versaoEsperada],
+        ));
+      }
       if (rowCount === 1) return;
       const { rowCount: existe } = await consulta(`select 1 from ${def.tabela} where organizacao_id = $1::uuid and unidade_id = $2::uuid and id = $3::uuid`, [registro.organizacaoId, registro.unidadeId, registro.id]);
       if (!existe) falhar(CODIGO.NAO_ENCONTRADO, "Registro não encontrado.", { tipo });
@@ -273,10 +304,55 @@ function criarTx(cliente, { somenteLeitura }) {
 /**
  * @param {object} deps
  * @param {{connect: () => Promise<{query: Function, release: Function}>}} deps.pool conexões JÁ conferidas pela guarda de destino
+ * @param {{emitir: (escopo:{organizacaoId:string, unidadeId:string, usuarioId:string}) => Promise<string>,
+ *          emitirProvisionamento?: (ato:object) => Promise<string>}} deps.sessoes
+ *        AUTORIDADE de sessões (07B): emite o token de sessão de banco de um usuário numa unidade. Fica FORA da aplicação
+ *        (credencial própria). Sem ela não há transação: a aplicação não escolhe escopo por variável.
  * @param {number} [deps.tentativas] quantas vezes uma transação é refeita ao perder uma disputa de concorrência
+ * @param {number} [deps.reusoDoTokenMs] por quanto tempo um token emitido é reaproveitado antes de pedir outro
  */
-export function criarRepositorioPostgres({ pool, tentativas = 5 }) {
+export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoDoTokenMs = 5 * 60 * 1000, relogio = () => Date.now() }) {
   if (!pool || typeof pool.connect !== "function") falhar(CODIGO.REPOSITORIO_INVALIDO, "O adaptador PostgreSQL exige um pool de conexões.");
+  if (!sessoes || typeof sessoes.emitir !== "function") falhar(CODIGO.REPOSITORIO_INVALIDO, "O adaptador PostgreSQL exige a autoridade de sessões de banco.");
+
+  /** Tokens já emitidos, por usuário + unidade (só em memória do processo; o banco guarda apenas o hash). */
+  const tokens = new Map();
+  const chaveDoToken = (e) => `${e.usuarioId}|${e.organizacaoId}|${e.unidadeId}`;
+  async function emitir(e) {
+    try {
+      return await sessoes.emitir({ organizacaoId: e.organizacaoId, unidadeId: e.unidadeId, usuarioId: e.usuarioId, permissoes: e.permissoes ?? [] });
+    } catch (erro) {
+      throw traduzir(erro);
+    }
+  }
+  function tokenDe(e, { renovar = false } = {}) {
+    const k = chaveDoToken(e);
+    const guardado = tokens.get(k);
+    if (!renovar && guardado && guardado.ate > relogio()) return guardado.promessa;
+    const promessa = emitir(e);
+    tokens.set(k, { promessa, ate: relogio() + reusoDoTokenMs });
+    promessa.catch(() => { if (tokens.get(k)?.promessa === promessa) tokens.set(k, { promessa, ate: 0 }); }); // recusa não fica guardada
+    return promessa;
+  }
+
+  /** Declara o token na transação e confere, NO BANCO, que ele é deste usuário nesta unidade. */
+  async function assumir(cliente, e, token) {
+    const { rows: [v] } = await cliente.query("select usuario_id::text as u, organizacao_id::text as o, unidade_id::text as n from fv2_assumir_sessao($1)", [token]);
+    return v?.u === e.usuarioId && v?.o === e.organizacaoId && v?.n === e.unidadeId;
+  }
+  async function declararSessao(cliente, e, provisionamento, reiniciar = null) {
+    if (provisionamento) {
+      if (await assumir(cliente, e, await provisionamento())) return;
+      falhar(CODIGO.PROVISIONAMENTO_RECUSADO, "A sessão de provisionamento não foi aceita pelo banco.");
+    }
+    if (await assumir(cliente, e, await tokenDe(e))) return;
+    // Token expirado ou revogado (concessão alterada, logout): pede outro uma vez. Sem concessão, a autoridade recusa.
+    const novo = await tokenDe(e, { renovar: true });
+    // Leitura em retrato fixo (repeatable read) não enxergaria a sessão recém-emitida: recomeça a transação.
+    if (reiniciar) await reiniciar();
+    if (await assumir(cliente, e, novo)) return;
+    falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Sessão de banco recusada para este usuário nesta unidade.");
+  }
 
   async function comCliente(fn) {
     const cliente = await pool.connect();
@@ -289,18 +365,24 @@ export function criarRepositorioPostgres({ pool, tentativas = 5 }) {
 
   function exigirEscopo(opcoes) {
     const e = opcoes?.escopo;
-    // Sem escopo declarado não há transação: no banco, sessão sem escopo não enxerga nem grava linha alguma.
-    if (!e?.organizacaoId || !e?.unidadeId) falhar(CODIGO.REPOSITORIO_INVALIDO, "Toda transação do Financeiro v2 declara organização e unidade.");
+    // Sem escopo e usuário declarados não há transação: no banco, sem sessão válida, nada é visto nem gravado.
+    if (!e?.organizacaoId || !e?.unidadeId || !e?.usuarioId) falhar(CODIGO.REPOSITORIO_INVALIDO, "Toda transação do Financeiro v2 declara organização, unidade e usuário.");
     return e;
   }
 
-  const declararEscopo = (cliente, e) => cliente.query("select set_config('fv2.organizacao_id', $1, true), set_config('fv2.unidade_id', $2, true)", [e.organizacaoId, e.unidadeId]);
+  /** Provisionamento inicial: UMA sessão especial por chamada (reaproveitada nas novas tentativas da mesma chamada). */
+  function sessaoDeProvisionamento(ato) {
+    if (!ato) return null;
+    if (typeof sessoes.emitirProvisionamento !== "function") falhar(CODIGO.PROVISIONAMENTO_RECUSADO, "Não há autoridade de provisionamento no banco.");
+    let promessa;
+    return () => (promessa ??= sessoes.emitirProvisionamento(ato).catch((erro) => { throw traduzir(erro); }));
+  }
 
-  async function umaTentativa(fn, escopo) {
+  async function umaTentativa(fn, escopo, provisionamento) {
     return comCliente(async (cliente) => {
       await cliente.query("begin");
       try {
-        await declararEscopo(cliente, escopo);
+        await declararSessao(cliente, escopo, provisionamento);
         const resultado = await fn(criarTx(cliente, { somenteLeitura: false }));
         await cliente.query("commit"); // as conferências adiadas (integridade, conservação, histórico) rodam aqui
         return resultado;
@@ -317,9 +399,10 @@ export function criarRepositorioPostgres({ pool, tentativas = 5 }) {
 
   async function transacao(fn, opcoes) {
     const escopo = exigirEscopo(opcoes);
+    const provisionamento = sessaoDeProvisionamento(opcoes.provisionamento);
     for (let tentativa = 1; ; tentativa += 1) {
       try {
-        return await umaTentativa(fn, escopo);
+        return await umaTentativa(fn, escopo, provisionamento);
       } catch (e) {
         if (!(e?.repetivel || DISPUTA.has(e?.code)) || tentativa >= tentativas) throw e;
         await esperar(5 * tentativa);
@@ -330,9 +413,10 @@ export function criarRepositorioPostgres({ pool, tentativas = 5 }) {
   function leitura(fn, opcoes) {
     const escopo = exigirEscopo(opcoes);
     return comCliente(async (cliente) => {
-      await cliente.query("begin transaction isolation level repeatable read read only");
+      const iniciar = () => cliente.query("begin transaction isolation level repeatable read read only");
+      await iniciar();
       try {
-        await declararEscopo(cliente, escopo);
+        await declararSessao(cliente, escopo, null, async () => { await cliente.query("rollback"); await iniciar(); });
         return await fn(criarTx(cliente, { somenteLeitura: true }));
       } catch (e) {
         throw traduzir(e);

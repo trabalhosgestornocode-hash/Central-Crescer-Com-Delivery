@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ESCOPOS_PADRAO, ORG_A, UNI_A, ctx, montar } from "./helpers/cenario.js";
-import { motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
+import { motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
 const A = { organizacaoId: ORG_A, unidadeId: UNI_A };
@@ -13,7 +13,7 @@ async function comoAplicacao(pool, fn) {
   const cliente = await pool.connect();
   try {
     await cliente.query("begin");
-    await cliente.query("select set_config('fv2.organizacao_id', $1, true), set_config('fv2.unidade_id', $2, true)", [A.organizacaoId, A.unidadeId]);
+    await cliente.query("select fv2_assumir_sessao($1)", [await tokenDeTeste(pool, A)]);
     const r = await fn(cliente);
     await cliente.query("commit");
     return r;

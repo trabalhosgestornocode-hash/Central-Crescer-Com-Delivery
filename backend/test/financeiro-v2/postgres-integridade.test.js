@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { CODIGO } from "../../src/modules/financeiro-v2/index.js";
 import { PASTA_DE_MIGRACOES, aplicarMigracoes, listarMigracoes } from "../../scripts/fv2/ambiente.mjs";
 import { ESCOPOS_PADRAO, ORG_A, ORG_B, UNI_A, UNI_B, USUARIO, ctx, montar, obrigacao, rejeita, saida, sha } from "./helpers/cenario.js";
-import { abrirPool, criarBancoDeTeste, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
+import { abrirPool, criarBancoDeTeste, motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
 const A = { organizacaoId: ORG_A, unidadeId: UNI_A };
@@ -30,7 +30,7 @@ async function comoAplicacao(pool, escopo, fn) {
   const cliente = await pool.connect();
   try {
     await cliente.query("begin");
-    if (escopo) await cliente.query("select set_config('fv2.organizacao_id', $1, true), set_config('fv2.unidade_id', $2, true)", [escopo.organizacaoId, escopo.unidadeId]);
+    if (escopo) await cliente.query("select fv2_assumir_sessao($1)", [await tokenDeTeste(pool, escopo)]);
     const r = await fn(cliente);
     await cliente.query("commit");
     return r;
@@ -66,9 +66,9 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   assert.deepEqual(await aplicarMigracoes(dono), []); // segunda vez: nada a fazer
   const tabelas = (await dono.query("select table_name from information_schema.tables where table_schema = 'public' and table_name like 'fv2\\_%' order by 1")).rows.map((r) => r.table_name);
   assert.deepEqual(tabelas, [
-    "fv2_ajuste", "fv2_atribuicao_pendencia", "fv2_canal_processador", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_configuracao_unidade", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
+    "fv2_ajuste", "fv2_atribuicao_pendencia", "fv2_auditoria_concessao", "fv2_canal_processador", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_configuracao_unidade", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
     "fv2_estorno", "fv2_historico", "fv2_importacao", "fv2_lancamento", "fv2_liquidacao", "fv2_migracao", "fv2_movimentacao", "fv2_obrigacao",
-    "fv2_pagamento_venda", "fv2_proposta", "fv2_recebivel", "fv2_registro_fonte", "fv2_saldo_conta", "fv2_sessao_caixa", "fv2_transferencia", "fv2_venda", "fv2_versao_fechamento", "fv2_vinculo_documental",
+    "fv2_pagamento_venda", "fv2_proposta", "fv2_provisionamento_inicial", "fv2_recebivel", "fv2_registro_fonte", "fv2_saldo_conta", "fv2_sessao_banco", "fv2_sessao_caixa", "fv2_transferencia", "fv2_venda", "fv2_versao_fechamento", "fv2_vinculo_documental",
   ]);
   assert.deepEqual((await dono.query("select nome, sha256 from fv2_migracao order by 1")).rows, listarMigracoes().map((m) => ({ nome: m.nome, sha256: m.sha256 })));
 
@@ -80,7 +80,10 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   assert.deepEqual(monetarias.filter((x) => x.data_type !== "bigint"), []);
 
   // Toda tabela de dados tem RLS ligado E forçado, e nenhuma dá DELETE/TRUNCATE ao papel de aplicação.
-  const rls = (await dono.query("select relname, relrowsecurity, relforcerowsecurity from pg_class where relkind = 'r' and relname like 'fv2\\_%' and relname <> 'fv2_migracao'")).rows;
+  // 07B: as três tabelas GUARDADAS (sessões, auditoria e provisionamento) não têm RLS porque a aplicação não tem NENHUM
+  // privilégio sobre elas — só as funções do guardião as tocam (conferido logo abaixo).
+  const GUARDADAS = ["fv2_auditoria_concessao", "fv2_provisionamento_inicial", "fv2_sessao_banco"];
+  const rls = (await dono.query("select relname, relrowsecurity, relforcerowsecurity from pg_class where relkind = 'r' and relname like 'fv2\\_%' and relname <> 'fv2_migracao' and relname <> all($1::text[])", [GUARDADAS])).rows;
   assert.equal(rls.length, 30); // 19 da 0001 + 2 da 0002 + concessão (0003) + proposta e divergência (0004) + saldo e sessão de caixa (0006) + versão, atribuição, canal/processador e configuração (0009)
   assert.deepEqual(rls.filter((x) => !x.relrowsecurity || !x.relforcerowsecurity), []);
   const privilegios = (await dono.query("select table_name, privilege_type from information_schema.role_table_grants where grantee = 'fv2_app'")).rows;
@@ -88,6 +91,8 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   assert.deepEqual(privilegios.filter((x) => x.table_name === "fv2_historico").map((x) => x.privilege_type).sort(), ["INSERT", "SELECT"]);
   assert.deepEqual(privilegios.filter((x) => x.table_name === "fv2_escopo").map((x) => x.privilege_type), ["SELECT"]);
   assert.deepEqual(privilegios.filter((x) => x.table_name === "fv2_migracao"), []);
+  assert.deepEqual(privilegios.filter((x) => GUARDADAS.includes(x.table_name)), []);
+  assert.deepEqual(privilegios.filter((x) => x.table_name === "fv2_concessao").map((x) => x.privilege_type), ["SELECT"]); // escrita só pela função guardada
 
   // Arquivo de migração alterado depois de aplicado: o aplicador para, em vez de seguir com esquema divergente.
   const copia = mkdtempSync(join(tmpdir(), "fv2-migracoes-"));
@@ -172,7 +177,8 @@ test("isolamento no banco (RLS): sem escopo nada aparece; com escopo, só o pró
   assert.equal(await contar(A), 1);
   assert.equal(await contar(B), 1);
   assert.equal(await contar(B, "fv2_escopo"), 1); // nem a lista de organizações é visível
-  assert.equal(await contar({ organizacaoId: ORG_A, unidadeId: UNI_B }), 0); // par organização+unidade que não existe
+  // 07B: para um par organização+unidade que não existe, a autoridade nem emite sessão de banco.
+  await recusa(tokenDeTeste(pool, { organizacaoId: ORG_A, unidadeId: UNI_B }), "FV020");
 
   // Ler, alterar ou escrever dados de OUTRA organização pedindo pelo id exato:
   const ler = (escopo, id) => comoAplicacao(pool, escopo, async (cl) => (await cl.query("select nome from fv2_conta where id = $1", [id])).rows);

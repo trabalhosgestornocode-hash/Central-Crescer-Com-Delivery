@@ -38,13 +38,26 @@ export function operacoesDeAcesso(b, { politica = null, autoridade = null, acess
   const exigirNaoProprio = (cx, usuarioId) => {
     if (usuarioId === cx.usuarioId) falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Ninguém concede nem revoga o próprio acesso.");
   };
+  /**
+   * 07B — quem concede ou revoga precisa ter a concessão GRAVADA (ativa, com `conceder`), lida na mesma transação.
+   * O contexto sozinho não basta: as ações que alguém pode repassar são as que ele tem gravadas E no contexto.
+   * (No PostgreSQL a mesma regra é conferida de novo pela função guardada do banco.)
+   */
+  async function acoesGravadasDoConcedente(tx, cx) {
+    const minha = await tx.buscarPorChave(cx, TIPO.CONCESSAO, chave(cx.usuarioId));
+    if (!minha || minha.situacao !== SITUACAO_CONCESSAO.ATIVA || !minha.acoes.includes(ACAO.CONCEDER)) {
+      falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Sem concessão gravada para conceder nesta unidade.");
+    }
+    return minha.acoes.filter((a) => cx.permissoes.includes(a));
+  }
 
   return {
     concederAcesso(ctx, entrada) {
       const c = validar(entrada, { acoesObrigatorias: true });
       return b.executar(ctx, ACAO.CONCEDER, async (cx, tx) => {
         exigirNaoProprio(cx, c.usuarioId);
-        const alheias = c.acoes.filter((a) => !cx.permissoes.includes(a));
+        const possuidas = await acoesGravadasDoConcedente(tx, cx);
+        const alheias = c.acoes.filter((a) => !possuidas.includes(a));
         if (alheias.length) falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Não é possível conceder uma ação que você não possui.", { acoes: alheias });
         const atual = await tx.buscarPorChave(cx, TIPO.CONCESSAO, chave(c.usuarioId));
         if (!atual) {
@@ -64,6 +77,7 @@ export function operacoesDeAcesso(b, { politica = null, autoridade = null, acess
       const c = validar(entrada, { acoesObrigatorias: false });
       return b.executar(ctx, ACAO.CONCEDER, async (cx, tx) => {
         exigirNaoProprio(cx, c.usuarioId);
+        await acoesGravadasDoConcedente(tx, cx);
         const atual = await tx.buscarPorChave(cx, TIPO.CONCESSAO, chave(c.usuarioId));
         if (!atual || atual.situacao === SITUACAO_CONCESSAO.REVOGADA) return atual;
         const acoes = c.acoes ? atual.acoes.filter((a) => !c.acoes.includes(a)) : [];
@@ -136,6 +150,11 @@ export function operacoesDeAcesso(b, { politica = null, autoridade = null, acess
       }
       const autoridadeId = exigirUuid(verificado.autoridadeId, "autoridadeId").toLowerCase();
       if (autoridadeId === c.usuarioId) falhar(CODIGO.PROVISIONAMENTO_RECUSADO, "A autoridade não provisiona o próprio acesso.");
+      // 07B: o atestante precisa estar com autenticação multifator (nível declarado pela autoridade; conferido de novo no banco).
+      if (verificado.nivelAutenticacao !== "aal2") {
+        await acessosNegados?.registrar?.({ evento: "PROVISIONAMENTO", codigo: "PROVISIONAMENTO_SEM_MFA", usuarioId: c.usuarioId, organizacaoId, unidadeId, em: b.agora() });
+        falhar(CODIGO.PROVISIONAMENTO_RECUSADO, "O atestante precisa estar autenticado com fator múltiplo (aal2).");
+      }
       // Contexto da AUTORIDADE (autoria do registro). Não carrega permissões financeiras: a operação é exclusiva desta função.
       const ctxAutoridade = { organizacaoId, unidadeId, usuarioId: autoridadeId, permissoes: [] };
       politica?.exigir(ctxAutoridade);
@@ -148,7 +167,7 @@ export function operacoesDeAcesso(b, { politica = null, autoridade = null, acess
         const texto = `${c.justificativa} — evidência: ${evidencia}`;
         if (atual) return b.alterar(tx, cx, TIPO.CONCESSAO, atual, { acoes: c.acoes, situacao: SITUACAO_CONCESSAO.ATIVA, concedidoPor: autoridadeId, justificativa: texto }, EVENTO_HISTORICO.PROVISIONAMENTO, texto);
         return b.criar(tx, cx, TIPO.CONCESSAO, { usuarioId: c.usuarioId, acoes: c.acoes, situacao: SITUACAO_CONCESSAO.ATIVA, concedidoPor: autoridadeId, justificativa: texto, chaveIdempotencia: chave(c.usuarioId), impressao: null }, texto);
-      });
+      }, { atestanteId: autoridadeId, usuarioId: c.usuarioId, organizacaoId, unidadeId, acoes: c.acoes, nivelAutenticacao: verificado.nivelAutenticacao, justificativa: c.justificativa, evidencia });
     },
   };
 }

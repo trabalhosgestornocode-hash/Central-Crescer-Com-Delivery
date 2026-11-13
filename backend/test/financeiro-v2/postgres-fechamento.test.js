@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ESCOPOS_PADRAO, ORG_A, UNI_A, ctx, entrada, montar, montarComCadastros } from "./helpers/cenario.js";
-import { motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
+import { motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
 const A = { organizacaoId: ORG_A, unidadeId: UNI_A };
@@ -15,7 +15,7 @@ async function comoAplicacao(pool, fn) {
   const cliente = await pool.connect();
   try {
     await cliente.query("begin");
-    await cliente.query("select set_config('fv2.organizacao_id', $1, true), set_config('fv2.unidade_id', $2, true)", [A.organizacaoId, A.unidadeId]);
+    await cliente.query("select fv2_assumir_sessao($1)", [await tokenDeTeste(pool, A)]);
     const r = await fn(cliente);
     await cliente.query("commit");
     return r;
@@ -98,5 +98,5 @@ test("concessão aceita a nova ação financeiro_v2.documentos e continua recusa
   const { pool } = await repositorio.interno();
   const c = await n.concederAcesso(ctx(), { usuarioId: "cccccccc-0000-4000-8000-000000000002", acoes: ["financeiro_v2.ver", "financeiro_v2.documentos"], justificativa: "Acesso a documentos." });
   assert.deepEqual(c.acoes, ["financeiro_v2.documentos", "financeiro_v2.ver"]);
-  await recusa(comoAplicacao(pool, (cl) => cl.query(`update fv2_concessao set acoes = '["financeiro_v2.superadmin"]'::jsonb, versao = versao + 1 where id = $1`, [c.id])), "23514");
+  await recusa(comoAplicacao(pool, (cl) => cl.query(`update fv2_concessao set acoes = '["financeiro_v2.superadmin"]'::jsonb, versao = versao + 1 where id = $1`, [c.id])), "42501"); // 07B: sem UPDATE para a aplicação
 });

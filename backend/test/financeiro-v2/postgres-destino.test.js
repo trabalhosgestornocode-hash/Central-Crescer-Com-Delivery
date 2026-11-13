@@ -89,9 +89,13 @@ test("destino efetivo: resposta do servidor que não comprova o ambiente isolado
 test("o adaptador não abre transação sem escopo e não aceita pool inválido", async () => {
   assert.throws(() => criarRepositorioPostgres({ pool: null }), (e) => e.codigo === CODIGO.REPOSITORIO_INVALIDO);
   let conectou = false;
-  const repo = criarRepositorioPostgres({ pool: { connect: async () => { conectou = true; throw new Error("não deveria conectar"); } } });
+  // 07B: sem a autoridade de sessões de banco, o adaptador nem é montado (a aplicação não escolhe escopo sozinha).
+  assert.throws(() => criarRepositorioPostgres({ pool: { connect: async () => 1 } }), (e) => e.codigo === CODIGO.REPOSITORIO_INVALIDO);
+  const sessoes = { emitir: async () => { conectou = true; throw new Error("não deveria emitir"); } };
+  const repo = criarRepositorioPostgres({ sessoes, pool: { connect: async () => { conectou = true; throw new Error("não deveria conectar"); } } });
   await rejeita(async () => repo.transacao(async () => 1), CODIGO.REPOSITORIO_INVALIDO);
   await rejeita(async () => repo.leitura(async () => 1, { escopo: { organizacaoId: ORG_A } }), CODIGO.REPOSITORIO_INVALIDO);
+  await rejeita(async () => repo.leitura(async () => 1, { escopo: { organizacaoId: ORG_A, unidadeId: UNI_A } }), CODIGO.REPOSITORIO_INVALIDO); // sem usuário
   assert.equal(conectou, false);
   assert.equal(UNI_A.length, 36);
 });

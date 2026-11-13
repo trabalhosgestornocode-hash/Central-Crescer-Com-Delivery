@@ -1,20 +1,25 @@
-// Medição de DESEMPENHO do Financeiro v2 (Execução 07) — somente no PostgreSQL LOCAL ISOLADO, com dados SINTÉTICOS.
+// Medição de DESEMPENHO do Financeiro v2 (Execuções 07 e 07B) — somente no PostgreSQL LOCAL ISOLADO, dados SINTÉTICOS.
 //   node scripts/fv2-desempenho.mjs [meses=6] [vendasPorMes=400]
-// Gera vários meses de operação sintética pelo próprio núcleo (vendas por canal e processador, taxas, obrigações,
-// pagamentos e movimentações) e mede as consultas das telas. Não lê .env, não abre nada além do banco de teste isolado.
-// Os tempos são OBSERVAÇÕES deste computador, não metas: não há requisito de desempenho aprovado.
+// Gera vários meses de operação sintética pelo próprio núcleo — vendas por canal e processador, taxas, obrigações,
+// pagamentos, movimentações sem classificação (pendências), importações SAIPOS com propostas, documentos no cofre,
+// candidatas de conciliação e versões de fechamento — e mede as consultas das telas.
+// Não lê .env, não abre nada além do banco de teste isolado. Os tempos são OBSERVAÇÕES deste computador, não metas.
 import { performance } from "node:perf_hooks";
 import { ESCOPOS_PADRAO, ctx, montar } from "../test/financeiro-v2/helpers/cenario.js";
+import { saiposVendas } from "../test/financeiro-v2/helpers/arquivos.js";
 import { repositorioPostgresDeTeste } from "../test/financeiro-v2/helpers/postgres.js";
 
 const MESES = Number(process.argv[2] ?? 6);
 const VENDAS = Number(process.argv[3] ?? 400);
 const c = ctx();
 const repositorio = repositorioPostgresDeTeste(ESCOPOS_PADRAO);
-const { nucleo: n } = montar({ repositorio });
+const { nucleo: n, cofre } = montar({ repositorio });
 const { pool } = await repositorio.interno();
-const mesesAte = (fim, qtd) => Array.from({ length: qtd }, (_, i) => { const d = new Date(Date.UTC(2026, 8 - (qtd - 1 - i), 1)); return d.toISOString().slice(0, 7); });
-const competencias = mesesAte("2026-09", MESES);
+const mesesAte = (qtd) => Array.from({ length: qtd }, (_, i) => new Date(Date.UTC(2026, 8 - (qtd - 1 - i), 1)).toISOString().slice(0, 7));
+const competencias = mesesAte(MESES);
+const ultimoDia = (comp) => new Date(Date.UTC(Number(comp.slice(0, 4)), Number(comp.slice(5)), 0)).getUTCDate();
+const falhasDeCarga = {};
+const tentar = async (nome, fn) => { try { return await fn(); } catch (e) { falhasDeCarga[nome] = (falhasDeCarga[nome] ?? 0) + 1; falhasDeCarga[`${nome}:ultimo`] = e?.codigo ?? e?.message; return null; } };
 
 const t0 = performance.now();
 const caixa = await n.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa" });
@@ -38,37 +43,69 @@ for (const comp of competencias) {
       await n.registrarLiquidacao(c, { movimentacaoId: m.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: o.id, valorCentavos: 5000 + j * 10 }] });
     }
   }
+  // Pendências: saídas bancárias sem classificação.
+  for (let j = 0; j < 5; j += 1) await n.registrarMovimentacao(c, { contaId: banco.id, dataEfetiva: `${comp}-2${j}`, sentido: "SAIDA", valorCentavos: 300 + j, natureza: "OUTRA" });
+  // Importação SAIPOS do mês → propostas em aberto (formação).
+  const pedidos = Array.from({ length: 40 }, (_, i) => ({ pedido: `P-${comp}-${i}`, data: `${String(1 + (i % 27)).padStart(2, "0")}/${comp.slice(5)}/${comp.slice(0, 4)} 12:00`, canal: "Balcão", itens: 1200 + i, forma: "Dinheiro" }));
+  await tentar("importacao", async () => {
+    const r = await n.receberArquivoParaImportacao(c, { fonte: "SAIPOS", tipoRelatorio: "SAIPOS_VENDAS", tipoMime: "text/csv", periodoInicio: `${comp}-01`, periodoFim: `${comp}-${ultimoDia(comp)}`, conteudo: saiposVendas(pedidos) });
+    const conf = await n.confirmarImportacao(c, { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia });
+    await n.gerarPropostas(c, { importacaoId: conf.importacao.id, contaCaixaId: caixa.id });
+  });
+  // Documentos no cofre.
+  for (let j = 0; j < 6; j += 1) {
+    await tentar("documento", async () => {
+      const g = await cofre.guardar(c, { conteudo: new TextEncoder().encode(`%PDF-1.4\n% ${comp} ${j}\n%%EOF\n`), tipoMime: "application/pdf" });
+      await n.registrarDocumento(c, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: "COMPROVANTE", recebidoEm: `${comp}-15`, descricao: `Comprovante ${comp} ${j}` });
+    });
+  }
+  // Candidatas de conciliação do mês.
+  await tentar("conciliacao", () => n.gerarCandidatasDeConciliacao(c, { relacao: "SAIPOS_X_STONE", periodoInicio: `${comp}-01`, periodoFim: `${comp}-${ultimoDia(comp)}` }));
+}
+// Versões de fechamento: todo mês anterior ao último fecha COM PENDÊNCIAS documentadas (preliminar → com pendências).
+for (const comp of competencias.slice(0, -1)) {
+  await tentar("fechamento", async () => {
+    await n.alterarEstadoDaCompetencia(c, { competencia: comp, novoEstado: "FECHAMENTO_PRELIMINAR" });
+    await n.alterarEstadoDaCompetencia(c, { competencia: comp, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Propostas da importação ainda em revisão (sintético)", impacto: "Pode alterar o resultado (sintético)." }], justificativa: "Fechamento sintético com pendências." });
+  });
 }
 const carga = performance.now() - t0;
-// Contagem pelo núcleo (o papel da aplicação sem escopo declarado não enxerga nada: RLS).
-const contagem = { vendas: (await n.consultarRegistros(c, { tipo: "VENDA" })).length, lancamentos: (await n.consultarRegistros(c, { tipo: "LANCAMENTO" })).length, obrigacoes: (await n.consultarRegistros(c, { tipo: "OBRIGACAO" })).length };
+// Contagem pelo núcleo (o papel da aplicação sem sessão de banco não enxerga nada: RLS).
+const contagem = {};
+for (const tipo of ["VENDA", "RECEBIVEL", "OBRIGACAO", "MOVIMENTACAO", "LANCAMENTO", "DOCUMENTO", "PROPOSTA", "CORRESPONDENCIA"]) {
+  contagem[tipo] = await tentar(`contar ${tipo}`, async () => (await n.consultarRegistros(c, { tipo })).length);
+}
 
 const medir = async (nome, fn, vezes = 3) => {
   const tempos = [];
-  let r;
-  for (let i = 0; i < vezes; i += 1) { const a = performance.now(); r = await fn(); tempos.push(performance.now() - a); }
+  for (let i = 0; i < vezes; i += 1) { const a = performance.now(); await fn(); tempos.push(performance.now() - a); }
   tempos.sort((x, y) => x - y);
-  return { nome, medianaMs: Math.round(tempos[Math.floor(tempos.length / 2)]), r };
+  return { nome, medianaMs: Math.round(tempos[Math.floor(tempos.length / 2)]) };
 };
-const SET = { competencia: "2026-09" };
+const ULT = competencias.at(-1);
+const MES = { competencia: ULT };
 const resultados = [];
-resultados.push(await medir("Apuração / DRE (mês)", () => n.apurarCompetencia(c, SET)));
-resultados.push(await medir("Visão Geral (apuração + resumo)", async () => [await n.apurarVisaoGeral(c, SET), await n.consultarResumoFinanceiro(c, SET)]));
-resultados.push(await medir("Composição de um indicador", () => n.composicaoDoIndicador(c, { ...SET, codigo: "DESPESAS_OPERACIONAIS" })));
+resultados.push(await medir("Apuração / DRE (mês)", () => n.apurarCompetencia(c, MES)));
+resultados.push(await medir("Visão Geral (apuração + resumo)", async () => [await n.apurarVisaoGeral(c, MES), await n.consultarResumoFinanceiro(c, MES)]));
+resultados.push(await medir("Composição de um indicador", () => n.composicaoDoIndicador(c, { ...MES, codigo: "DESPESAS_OPERACIONAIS" })));
 resultados.push(await medir("Contas a pagar (página)", () => n.consultarContasAPagar(c, { tamanho: 25 })));
 resultados.push(await medir("Contas a receber (página)", () => n.consultarContasAReceber(c, { tamanho: 25 })));
-resultados.push(await medir("Caixa e bancos (mês)", () => n.consultarCaixaEBancos(c, { inicio: "2026-09-01", fim: "2026-09-30" })));
-resultados.push(await medir("Vendas (página)", () => n.consultarVendas(c, { ...SET, tamanho: 25 })));
-resultados.push(await medir("Central de Conferências", () => n.consultarCentralDeConferencias(c, SET)));
-resultados.push(await medir("Pendências (página)", () => n.consultarPendencias(c, { ...SET, tamanho: 25 })));
-resultados.push(await medir("Fechamento (situação)", () => n.consultarFechamento(c, SET)));
-resultados.push(await medir("Prévia de homologação", () => n.previaDaMudancaDeEstado(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO" })));
-const simultaneas = await medir("10 apurações simultâneas", () => Promise.all(Array.from({ length: 10 }, () => n.apurarCompetencia(c, SET))), 1);
-resultados.push(simultaneas);
+resultados.push(await medir("Caixa e bancos (mês)", () => n.consultarCaixaEBancos(c, { inicio: `${ULT}-01`, fim: `${ULT}-${ultimoDia(ULT)}` })));
+resultados.push(await medir("Vendas (página)", () => n.consultarVendas(c, { ...MES, tamanho: 25 })));
+resultados.push(await medir("Central de Conferências", () => n.consultarCentralDeConferencias(c, MES)));
+resultados.push(await medir("Pendências (página)", () => n.consultarPendencias(c, { ...MES, tamanho: 25 })));
+resultados.push(await medir("Fechamento (situação)", () => n.consultarFechamento(c, MES)));
+resultados.push(await medir("Prévia de homologação", () => n.previaDaMudancaDeEstado(c, { ...MES, novoEstado: "FECHAMENTO_HOMOLOGADO" })));
+resultados.push(await medir("10 apurações simultâneas", () => Promise.all(Array.from({ length: 10 }, () => n.apurarCompetencia(c, MES))), 1));
+resultados.push(await medir("10 telas simultâneas (mistas)", () => Promise.all([
+  n.apurarVisaoGeral(c, MES), n.consultarResumoFinanceiro(c, MES), n.consultarContasAPagar(c, { tamanho: 25 }), n.consultarContasAReceber(c, { tamanho: 25 }),
+  n.consultarVendas(c, { ...MES, tamanho: 25 }), n.consultarCentralDeConferencias(c, MES), n.consultarPendencias(c, { ...MES, tamanho: 25 }),
+  n.consultarFechamento(c, MES), n.apurarCompetencia(c, MES), n.composicaoDoIndicador(c, { ...MES, codigo: "DESPESAS_OPERACIONAIS" }),
+]), 1));
 const mem = process.memoryUsage();
 console.log(JSON.stringify({
-  meses: MESES, vendasPorMes: VENDAS, registros: contagem, cargaS: Math.round(carga / 1000),
-  medicoes: resultados.map(({ nome, medianaMs }) => ({ nome, medianaMs })),
+  meses: MESES, vendasPorMes: VENDAS, registros: contagem, falhasDeCarga, cargaS: Math.round(carga / 1000),
+  medicoes: resultados,
   memoriaMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576) },
 }, null, 2));
 await pool.end?.();

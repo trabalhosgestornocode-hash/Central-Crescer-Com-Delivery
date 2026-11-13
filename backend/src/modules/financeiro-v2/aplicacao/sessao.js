@@ -95,9 +95,17 @@ export function criarConcessoesDoRepositorio({ repositorio, escopos }) {
   return Object.freeze({
     async listar({ organizacaoId, usuarioId }) {
       const saida = [];
-      for (const escopo of lista.filter((e) => e.organizacaoId === organizacaoId)) {
-        const c = await repositorio.leitura((tx) => tx.buscarPorChave(escopo, "CONCESSAO", `concessao:${usuarioId}`), { escopo });
-        if (c && c.situacao === "ATIVA" && c.usuarioId === usuarioId) saida.push({ unidadeId: escopo.unidadeId, acoes: [...c.acoes] });
+      for (const unidade of lista.filter((e) => e.organizacaoId === organizacaoId)) {
+        // 07B: a leitura é feita COMO o próprio usuário. No PostgreSQL, sem concessão ativa a autoridade nem emite sessão
+        // de banco — e isso significa, corretamente, "nenhuma concessão nesta unidade".
+        const escopo = { ...unidade, usuarioId };
+        let c = null;
+        try {
+          c = await repositorio.leitura((tx) => tx.buscarPorChave(escopo, "CONCESSAO", `concessao:${usuarioId}`), { escopo });
+        } catch (e) {
+          if (e?.codigo !== CODIGO.PERMISSAO_INSUFICIENTE) throw e;
+        }
+        if (c && c.situacao === "ATIVA" && c.usuarioId === usuarioId) saida.push({ unidadeId: unidade.unidadeId, acoes: [...c.acoes] });
       }
       return saida;
     },

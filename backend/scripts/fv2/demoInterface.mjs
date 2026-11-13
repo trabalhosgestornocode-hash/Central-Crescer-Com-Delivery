@@ -114,7 +114,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   // ---- 06D: permissões GRAVADAS. Autoridade sintética atesta o administrador de cada unidade; ele concede o resto.
   const chaveAutoridade = randomBytes(32);
   const atestar = (ato) => createHmac("sha256", chaveAutoridade).update(JSON.stringify([ato.organizacaoId, ato.unidadeId, ato.usuarioId, [...ato.acoes].sort()])).digest("hex");
-  const autoridade = { verificar: async (ato) => ({ ok: ato.organizacaoId === ORG && ato.atestado === atestar(ato), autoridadeId: AUTORIDADE_DEMO }) };
+  const autoridade = { verificar: async (ato) => ({ ok: ato.organizacaoId === ORG && ato.atestado === atestar(ato), autoridadeId: AUTORIDADE_DEMO, nivelAutenticacao: "aal2" }) };
   nucleo = m.criarNucleoFinanceiro({ repositorio, escoposAutorizados: escopos, relogio, cofre, exigirConcessaoPersistida: true, autoridadeDeProvisionamento: autoridade });
   const tudoMenosNada = Object.values(m.ACAO);
   for (const u of UNIDADES) {

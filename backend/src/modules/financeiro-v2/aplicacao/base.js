@@ -69,10 +69,11 @@ export function criarBase({ repositorio, politica, relogio, gerarId, fuso, exigi
    * 06D — transação do PROVISIONAMENTO do administrador inicial. Usada SOMENTE por provisionarAdministradorInicial, depois
    * que a autoridade externa atestou o ato e o escopo foi conferido. Não aceita contexto vindo do cliente.
    */
-  function provisionar(ctxAutoridade, fn) {
+  function provisionar(ctxAutoridade, fn, ato = null) {
     const ctx = exigirContexto(ctxAutoridade);
     politica.exigir(ctx);
-    return repositorio.transacao((tx) => fn(ctx, tx), { escopo: ctx });
+    // 07B: o ato atestado segue para a persistência — no PostgreSQL vira a sessão especial de provisionamento.
+    return repositorio.transacao((tx) => fn(ctx, tx), { escopo: ctx, provisionamento: ato });
   }
 
   function consultar(ctxBruto, fn) {
