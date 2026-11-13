@@ -106,6 +106,8 @@ export function operacoesDeTesouraria(b) {
         const conta = await b.obterOuFalhar(tx, cx, TIPO.CONTA, c.contaId, "Conta financeira");
         if (conta.tipo === TIPO_CONTA.CAIXA_FISICO && c.valorCentavos < 0) falhar(CODIGO.VALOR_INVALIDO, "Caixa físico não tem saldo negativo.", { campo: "valorCentavos" });
         b.exigirNaoFutura(c.data, "data");
+        // 07: extrato que chega depois do fechamento é evidência legítima; a competência do saldo recebe a marca de auditoria.
+        await b.exigirCompetenciasDoVinculo(tx, cx, { referenciadas: [competenciaDe(c.data)], motivo: "saldo informado" });
         // O fim do dia de hoje ainda não aconteceu: um "saldo final" de hoje deixaria de fora movimentos que ainda virão.
         if (c.referencia === REFERENCIA_SALDO.FIM_DO_DIA && c.data >= b.hoje()) falhar(CODIGO.DATA_INVALIDA, "Saldo de fim do dia só para dias já encerrados.", { campo: "data" });
         if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");

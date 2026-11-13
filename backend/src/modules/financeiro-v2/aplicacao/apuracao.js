@@ -3,7 +3,7 @@
 import { createHash } from "node:crypto";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { TIPO } from "../dominio/catalogos.js";
-import { exigirCompetencia } from "../dominio/tempo.js";
+import { exigirCompetencia, primeiroDiaDe, ultimoDiaDe } from "../dominio/tempo.js";
 import { semCamposDesconhecidos } from "../dominio/validacao.js";
 import { apurar } from "../dominio/apuracao.js";
 
@@ -14,9 +14,21 @@ const canonico = (v) => (Array.isArray(v) ? `[${v.map(canonico).join(",")}]` : v
 export function operacoesDeApuracao(b) {
   async function calcular(cx, tx, competencia) {
     const listar = (tipo) => tx.listar(cx, tipo);
+    // 07 (desempenho): a apuração de UM mês só lê os registros DESSE mês — filtrados no banco. Antes lia o histórico
+    // inteiro (o tempo crescia com os meses acumulados). Lançamentos, vendas, propostas, títulos e ajustes que a apuração
+    // cruza pertencem sempre à competência do lançamento; movimentações, pelo período do mês (paginado no banco).
+    const doMes = (tipo) => tx.listar(cx, tipo, { onde: { competencia } });
+    const movimentacoesDoMes = async () => {
+      const saida = [];
+      for (let deslocamento = 0; ; deslocamento += 500) {
+        const pg = await tx.paginar(cx, TIPO.MOVIMENTACAO, { desde: { dataEfetiva: primeiroDiaDe(competencia) }, ate: { dataEfetiva: ultimoDiaDe(competencia) }, limite: 500, deslocamento, ordem: [{ campo: "dataEfetiva" }] });
+        saida.push(...pg.itens);
+        if (saida.length >= pg.total || !pg.itens.length) return saida;
+      }
+    };
     const dados = {
-      lancamentos: await listar(TIPO.LANCAMENTO), categorias: await listar(TIPO.CATEGORIA), vendas: await listar(TIPO.VENDA), propostas: await listar(TIPO.PROPOSTA),
-      obrigacoes: await listar(TIPO.OBRIGACAO), movimentacoes: await listar(TIPO.MOVIMENTACAO), recebiveis: await listar(TIPO.RECEBIVEL), ajustes: await listar(TIPO.AJUSTE),
+      lancamentos: await doMes(TIPO.LANCAMENTO), categorias: await listar(TIPO.CATEGORIA), vendas: await doMes(TIPO.VENDA), propostas: await doMes(TIPO.PROPOSTA),
+      obrigacoes: await doMes(TIPO.OBRIGACAO), movimentacoes: await movimentacoesDoMes(), recebiveis: await doMes(TIPO.RECEBIVEL), ajustes: await doMes(TIPO.AJUSTE),
       competencias: await listar(TIPO.COMPETENCIA),
     };
     const r = apurar(dados, { competencia, escopo: { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, apuradoEm: b.agora() });
@@ -30,7 +42,17 @@ export function operacoesDeApuracao(b) {
       const v = versoes.sort((a, b) => b.numero - a.numero)[0] ?? null;
       if (v) versaoHomologada = { numero: v.numero, decididoEm: v.decididoEm, metodologiaVersao: v.metodologiaVersao, impressao: v.impressao, reproduz: v.impressao === impressao, apuracao: v.apuracao };
     }
-    return { ...r, impressao, versaoHomologada };
+    // 07: competência homologada com retrato completo → a APRESENTAÇÃO (indicadores, DRE, composição, cada R$ 100) vem da
+    // versão homologada, congelada; a apuração atual fica só como conferência (impressão, `atual`).
+    if (versaoHomologada?.apuracao?.completo) {
+      const v = versaoHomologada.apuracao;
+      return {
+        ...r, impressao, versaoHomologada, fonteDaApresentacao: "VERSAO_HOMOLOGADA",
+        indicadores: v.indicadores, dre: { ...v.dre, estadoDaCompetencia: "FECHAMENTO_HOMOLOGADO" }, cadaCem: v.cadaCem ?? r.cadaCem,
+        atual: { impressao, indicadores: r.indicadores },
+      };
+    }
+    return { ...r, impressao, versaoHomologada, fonteDaApresentacao: "APURACAO_ATUAL" };
   }
   const entrada = (e, extras = []) => {
     semCamposDesconhecidos(e, ["competencia", ...extras], "apuracao");
@@ -50,6 +72,7 @@ export function operacoesDeApuracao(b) {
         return {
           competencia: comp, impressao: r.impressao, faturamentoBruto: r.indicadores.FATURAMENTO_BRUTO_PROPRIO,
           faturamentoLiquidoGerencial: r.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL, resultadoGerencial: r.indicadores.RESULTADO_GERENCIAL, cadaCem: r.cadaCem,
+          fonteDaApresentacao: r.fonteDaApresentacao, versaoHomologada: r.versaoHomologada ? { numero: r.versaoHomologada.numero, decididoEm: r.versaoHomologada.decididoEm, reproduz: r.versaoHomologada.reproduz } : null,
         };
       });
     },
@@ -60,7 +83,7 @@ export function operacoesDeApuracao(b) {
         const r = await calcular(cx, tx, comp);
         const ind = r.indicadores[e.codigo];
         if (!ind) falhar(CODIGO.ENTRADA_INVALIDA, "Indicador desconhecido.", { codigo: typeof e.codigo === "string" ? e.codigo.slice(0, 60) : null });
-        return ind;
+        return { ...ind, fonte: r.fonteDaApresentacao, versaoHomologada: r.versaoHomologada ? { numero: r.versaoHomologada.numero, decididoEm: r.versaoHomologada.decididoEm } : null };
       });
     },
   };

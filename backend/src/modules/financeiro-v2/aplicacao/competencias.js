@@ -17,13 +17,15 @@ import { CODIGO, falhar } from "../dominio/erros.js";
 import { impedimentosDeHomologacao } from "../dominio/conferencias.js";
 import { apurarRegistros, carregarRegistros } from "./conferencias.js";
 
-/** Retrato compacto e imutável da apuração (o que a DRE e a Visão Geral mostram da versão homologada). */
+/**
+ * Retrato COMPLETO e imutável da apuração (07): indicadores com a composição inteira, DRE com a árvore e "cada R$ 100".
+ * É o que a DRE, a Visão Geral e "Ver composição completa" apresentam de uma competência homologada — inclusive a posição
+ * dos títulos NA DATA DA HOMOLOGAÇÃO. Pagamentos e recebimentos posteriores aparecem nas telas de tesouraria, nunca aqui.
+ */
 export function retratoDa(apuracao) {
-  const ind = (x) => (x ? { codigo: x.codigo, nome: x.nome, valorCentavos: x.valorCentavos, situacao: x.situacao, percentualDoBruto: x.percentualDoBruto ?? null } : null);
+  const copia = (v) => JSON.parse(JSON.stringify(v));
   return {
-    metodologia: apuracao.metodologia,
-    indicadores: Object.fromEntries(Object.entries(apuracao.indicadores).map(([k, v]) => [k, ind(v)])),
-    dre: { titulo: apuracao.dre.titulo, linhas: apuracao.dre.linhas.map((l) => ({ codigo: l.codigo, nome: l.nome, valorCentavos: l.valorCentavos, percentualDoBruto: l.percentualDoBruto ?? null, situacao: l.situacao })) },
+    completo: true, metodologia: apuracao.metodologia, indicadores: copia(apuracao.indicadores), dre: copia(apuracao.dre), cadaCem: copia(apuracao.cadaCem ?? null),
     pendencias: apuracao.pendencias.map((p) => ({ tipo: p.tipo, mensagem: p.mensagem, valorCentavos: p.valorCentavos ?? null })),
   };
 }
@@ -97,10 +99,12 @@ export function operacoesDeCompetencia(b, { repositorio, politica }) {
         const tipoVersao = { [ESTADO_COMPETENCIA.FECHAMENTO_PRELIMINAR]: TIPO_VERSAO_FECHAMENTO.PRELIMINAR, [ESTADO_COMPETENCIA.FECHAMENTO_COM_PENDENCIAS]: TIPO_VERSAO_FECHAMENTO.COM_PENDENCIAS, [ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO]: TIPO_VERSAO_FECHAMENTO.HOMOLOGADA }[c.novoEstado];
         let versao = null;
         if (tipoVersao) {
+          // 07: o retrato reflete o estado NOVO (ex.: situação "Confirmado" na homologada). A impressão não depende do estado.
+          const apuracaoDoRetrato = apurarRegistros({ ...d, competencias: [...d.competencias.filter((x) => x.competencia !== c.competencia), competencia] }, c.competencia, escopo, b.agora());
           versao = await b.criar(tx, ctx, TIPO.VERSAO_FECHAMENTO, {
             competencia: c.competencia, tipo: tipoVersao, numero: versoes.length + 1, revisao: competencia.revisoes,
             metodologia: competencia.metodologia, metodologiaVersao: metodologiaVersao ?? identificadorDa(metodologiaVigente(c.competencia)),
-            impressao: impressaoDaApuracao(apuracao, c.competencia), apuracao: retratoDa(apuracao), pendencias: c.pendencias,
+            impressao: impressaoDaApuracao(apuracaoDoRetrato, c.competencia), apuracao: retratoDa(apuracaoDoRetrato), pendencias: c.pendencias,
             verificacoes: { impedimentos: impedimentos.map((x) => x.codigo), pendenciasDaApuracao: apuracao.pendencias.length },
             decididoPor: ctx.usuarioId, decididoEm: b.agora(), justificativa: c.justificativa,
             chaveIdempotencia: `versao:${c.competencia}:${versoes.length + 1}`,
@@ -241,7 +245,10 @@ export function operacoesDeCompetencia(b, { repositorio, politica }) {
           const pago = somarLista(daVenda, (p) => subtrair(p.valorCentavos, p.estornadoCentavos));
           const devolucoes = lancamentos.filter((l) => l.origem?.tipo === TIPO.ESTORNO && l.origem.vendaId === v.id && l.situacao === SITUACAO_LANCAMENTO.ATIVO);
           if (pago !== v.pagoCentavos || pago + v.devolvidoCentavos > v.brutoCentavos) erro("PAGAMENTOS_NAO_FECHAM", TIPO.VENDA, v.id);
-          if (!v.pagamentoParcial && v.devolvidoCentavos === 0 && pago !== v.brutoCentavos && daVenda.every((p) => p.estornadoCentavos === 0)) erro("PAGAMENTOS_NAO_FECHAM", TIPO.VENDA, v.id);
+          // 07: o consumidor paga a receita MENOS os descontos (da loja, pendentes; subsídio comprovado vira pagamento do
+          // terceiro). Antes da correção, toda venda com desconto aparecia como violação (falso positivo).
+          const devido = subtrair(v.brutoCentavos, v.descontosCentavos ?? 0);
+          if (!v.pagamentoParcial && v.devolvidoCentavos === 0 && pago !== devido && daVenda.every((p) => p.estornadoCentavos === 0)) erro("PAGAMENTOS_NAO_FECHAM", TIPO.VENDA, v.id);
           if (somarLista(devolucoes, (l) => l.valorCentavos) !== v.devolvidoCentavos) erro("DEVOLUCAO_DIFERE_DOS_LANCAMENTOS", TIPO.VENDA, v.id);
           if (receitas.length !== 1 || receitas[0].valorCentavos !== v.brutoCentavos) erro("VENDA_SEM_RECEITA_UNICA", TIPO.VENDA, v.id);
         }

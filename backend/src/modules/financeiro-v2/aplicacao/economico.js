@@ -137,7 +137,9 @@ export function operacoesEconomicas(b) {
         const tipo = ehObrigacao ? TIPO.OBRIGACAO : TIPO.RECEBIVEL;
         const alvo = await b.obterOuFalhar(tx, cx, tipo, c.alvoId, "Título");
         const competencia = c.competencia ?? alvo.competencia;
-        await b.exigirCompetenciaEditavel(tx, cx, competencia);
+        // 07: o lançamento do ajuste nasce na competência informada (precisa aceitar escrita); o título de um mês homologado
+        // só muda a posição — atualização posterior auditada.
+        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competencia], referenciadas: [alvo.competencia], motivo: "ajuste de título" });
         if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
         const categoria = await b.categoriaLancavel(tx, cx, c.categoria);
         const mudancas = aplicarAjuste(alvo, c.valorCentavos);

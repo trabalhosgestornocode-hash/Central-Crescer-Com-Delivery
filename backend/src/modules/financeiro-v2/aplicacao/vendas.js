@@ -53,7 +53,8 @@ export function operacoesDeVendas(b) {
     if (p.processador) {
       recebivel = await b.criar(tx, cx, TIPO.RECEBIVEL, {
         processador: p.processador, contraparteId: null, canal: venda.canal, vendaId: venda.id, pagamentoId, pagamentoIndice: indice, forma: p.forma,
-        brutoCentavos: p.valorCentavos, moeda: venda.moeda, retencoes: [], dataPrevista: null, competencia: venda.competencia,
+        // 07: com data de pagamento informada, o recebível é um fato do mês do pagamento; sem ela, o da venda.
+        brutoCentavos: p.valorCentavos, moeda: venda.moeda, retencoes: [], dataPrevista: null, competencia: p.dataPagamento ? competenciaDe(p.dataPagamento) : venda.competencia,
         descricao: null, documentoIds: [], fonte: null, chaveIdempotencia: null, impressao: null, ...tituloNovo(p.valorCentavos),
       });
     } else if (p.contaId) {
@@ -147,7 +148,12 @@ export function operacoesDeVendas(b) {
         if (c.valorCentavos > pendenteDe(venda)) {
           falhar(CODIGO.PAGAMENTOS_NAO_FECHAM, "O pagamento supera o valor pendente da venda.", { pendenteCentavos: pendenteDe(venda) });
         }
-        const criado = await criarPagamento(tx, cx, venda, c, venda.pagamentoIds.length, { chaveIdempotencia: chave, impressao: chave ? impressao : null });
+        // 07: pagamento posterior é fato do mês do pagamento (precisa aceitar escrita); a venda, se de mês homologado, só muda
+        // a posição (pago) — auditado como atualização posterior.
+        const dataDoPagamento = c.dataPagamento ?? venda.dataVenda;
+        b.exigirNaoFutura(dataDoPagamento, "dataPagamento");
+        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(dataDoPagamento)], referenciadas: [venda.competencia], motivo: "pagamento posterior de venda" });
+        const criado = await criarPagamento(tx, cx, venda, { ...c, dataPagamento: dataDoPagamento }, venda.pagamentoIds.length, { chaveIdempotencia: chave, impressao: chave ? impressao : null });
         const vendaAtualizada = await b.alterar(tx, cx, TIPO.VENDA, venda, {
           pagoCentavos: somar(venda.pagoCentavos, c.valorCentavos), pagamentoIds: [...venda.pagamentoIds, criado.pagamento.id],
         }, EVENTO_HISTORICO.PAGAMENTO);
@@ -176,7 +182,10 @@ export function operacoesDeVendas(b) {
         const dataEfetiva = c.dataEfetiva ?? b.hoje();
         b.exigirNaoFutura(dataEfetiva, "dataEfetiva");
         const competencia = competenciaDe(dataEfetiva);
-        await b.exigirCompetenciaEditavel(tx, cx, competencia);
+        // 07: o estorno é um fato do mês da data efetiva (precisa aceitar escrita). Venda e recebível de um mês homologado
+        // só mudam a POSIÇÃO (pago, devolvido, saldo devido): atualização posterior auditada, sem tocar o resultado de lá.
+        const recebivelDoPagamento = pag.recebivelId ? await tx.obter(cx, TIPO.RECEBIVEL, pag.recebivelId) : null;
+        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competencia], referenciadas: [venda.competencia, recebivelDoPagamento?.competencia], motivo: "estorno de pagamento de venda" });
         if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
         const devolucao = c.motivo === MOTIVO_ESTORNO.DEVOLUCAO_AO_CLIENTE;
         const estornoId = b.gerarId();
