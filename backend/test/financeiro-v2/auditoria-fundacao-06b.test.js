@@ -94,7 +94,8 @@ test("A.2 — despesa a classificar fica FORA da DRE; OUTRAS_DESPESAS é classif
   assert.deepEqual([to.classificacaoEconomica, to.efeitoNaDre], ["CONFIRMADA", "NA_LINHA_DA_CATEGORIA"]);
   assert.ok(!to.pendencias.includes("CLASSIFICACAO_PROVISORIA"));
   // Classificada com justificativa: entra na DRE uma única vez e a pendência some.
-  await nucleo.reclassificarLancamento(c, { lancamentoId: pendente.lancamento.id, categoria: "EMBALAGENS", justificativa: "Nota do fornecedor identificou a compra." });
+  // 08C: sair de "a classificar" exige evidência (a nota) e a versão vista na prévia.
+  await nucleo.reclassificarLancamento(c, { lancamentoId: pendente.lancamento.id, categoria: "EMBALAGENS", justificativa: "Nota do fornecedor identificou a compra.", versaoEsperada: pendente.lancamento.versao, documentoId: (await nucleo.registrarDocumento(c, { origem: "MANUAL", arquivoId: "cofre:evidencia-sintetica-e", hashSha256: "e".repeat(64), tipo: "NOTA_FISCAL", recebidoEm: "2026-09-10" })).documento.id });
   const depois = await nucleo.apurarCompetencia(c, { competencia: "2026-09" });
   assert.equal(depois.dre.linhas.find((l) => l.codigo === "CUSTOS_OPERACIONAIS").valorCentavos, -40000);
   assert.equal(depois.dre.foraDoResultado.aClassificar.length, 0);

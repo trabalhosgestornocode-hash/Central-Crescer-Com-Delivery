@@ -152,6 +152,9 @@ const RECUSAS_DE_ACESSO = {
   FV034: [CODIGO.PERMISSAO_INSUFICIENTE, "Não é possível conceder uma ação que você não possui (conferido no banco)."],
   FV036: [CODIGO.PERMISSAO_INSUFICIENTE, "Sem concessão para revogar nesta unidade (conferido no banco)."],
   FV035: [CODIGO.PROVISIONAMENTO_RECUSADO, "O provisionamento só grava o que foi atestado, numa unidade sem administrador."],
+  // 08C — regras da reclassificação conferidas no banco (gatilho de fv2_lancamento).
+  FV037: [CODIGO.OPERACAO_INVALIDA, "A reclassificação muda só a categoria de um lançamento ativo (conferido no banco)."],
+  FV038: [CODIGO.CATEGORIA_INVALIDA, "Categoria de destino incompatível com o lançamento (conferido no banco)."],
 };
 
 function traduzir(e) {

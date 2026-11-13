@@ -10,7 +10,7 @@ import { somarMeses } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
 import {
   validarAjuste, validarCancelamentoObrigacao, validarCancelamentoRecebivel, validarConta, validarContraparte, validarCorrecaoLancamento,
-  validarCorrecaoObrigacao, validarObrigacao, validarRecebivel, validarReclassificacao,
+  validarCorrecaoObrigacao, validarObrigacao, validarRecebivel,
 } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
 
@@ -207,21 +207,8 @@ export function operacoesEconomicas(b) {
       });
     },
 
-    /** Muda a categoria de um lançamento (e, com ela, classificação e natureza). A receita de uma venda continua sendo receita. */
-    reclassificarLancamento(ctx, entrada) {
-      const c = validarReclassificacao(entrada);
-      return b.executar(ctx, ACAO.CORRIGIR, async (cx, tx) => {
-        const l = await b.obterOuFalhar(tx, cx, TIPO.LANCAMENTO, c.lancamentoId, "Lançamento");
-        if (l.situacao !== SITUACAO_LANCAMENTO.ATIVO) falhar(CODIGO.OPERACAO_INVALIDA, "Lançamento cancelado não pode ser reclassificado.");
-        await b.exigirCompetenciaEditavel(tx, cx, l.competencia);
-        const categoria = await b.categoriaLancavel(tx, cx, c.categoria);
-        const eraReceita = l.natureza === NATUREZA_LANCAMENTO.RECEITA;
-        if (eraReceita !== (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA)) {
-          falhar(CODIGO.CATEGORIA_INVALIDA, "Reclassificação não transforma receita em despesa nem o contrário: cancele e registre de novo.", { categoria: categoria.codigo });
-        }
-        return b.alterar(tx, cx, TIPO.LANCAMENTO, l, { categoriaId: categoria.id, categoria: categoria.codigo, classificacao: categoria.classificacao, natureza: categoria.natureza }, EVENTO_HISTORICO.RECLASSIFICACAO, c.justificativa);
-      });
-    },
+    // Reclassificação (mudar a categoria de um lançamento) vive em aplicacao/reclassificacao.js desde a Execução 08C:
+    // permissão própria (financeiro_v2.reclassificar), prévia de impacto, versão obrigatória e evidência.
 
     /** Correção cadastral de lançamento (descrição, data da operação), com antes/depois e justificativa no histórico. */
     corrigirLancamento(ctx, entrada) {

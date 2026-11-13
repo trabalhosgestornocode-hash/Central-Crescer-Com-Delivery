@@ -25,7 +25,7 @@ import { dirname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as m from "../src/modules/financeiro-v2/index.js";
 import { abrirPoolSeguro, lerAmbiente, urlDoBanco } from "./fv2/ambiente.mjs";
-import { ORG, UNIDADES, USUARIOS, criarDemo } from "./fv2/demoInterface.mjs";
+import { ORG, UNIDADES, USUARIOS, criarDemo, pdfSintetico } from "./fv2/demoInterface.mjs";
 
 const PASTA_HOMOLOGACAO = process.env.FV2_HOMOLOGACAO_DIR || join(process.env.LOCALAPPDATA || join(homedir(), ".local", "share"), "fv2-homologacao");
 const PASTA_FRONT = normalize(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "frontend", "financeiro-v2"));
@@ -86,6 +86,9 @@ async function preparar() {
   const id = (login) => identidades.find((i) => i.login === login).usuarioId;
   await n.concederAcesso(adm, { usuarioId: id("aprovador"), acoes: [m.ACAO.VER, m.ACAO.APROVAR], justificativa: "Aprovador de propostas (homologação sintética)." });
   await n.concederAcesso(adm, { usuarioId: id("aplicador"), acoes: [m.ACAO.VER, m.ACAO.APLICAR, m.ACAO.REGISTRAR], justificativa: "Aplicador de propostas (homologação sintética)." });
+  // 08C: evidência SINTÉTICA de outubro no cofre (registrada antes da jornada; a jornada só a vincula pela tela).
+  const g = await cofre.guardar(adm, { conteudo: pdfSintetico("Relatorio sintetico do canal - outubro - financiador dos descontos: loja"), tipoMime: "application/pdf" });
+  await n.registrarDocumento(adm, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: "DEMONSTRATIVO_REPASSE", recebidoEm: "2026-11-05", competencia: "2026-10", descricao: "Relatório do canal de outubro (sintético)" });
   dizer(`Homologação preparada em ${PASTA_HOMOLOGACAO} (banco ${banco}). Credenciais SINTÉTICAS em credenciais-sinteticas.txt.`);
   process.exit(0);
 }

@@ -374,9 +374,25 @@ export function validarCancelamentoObrigacao(e) {
   return { obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }) };
 }
 
+/**
+ * Execução 08C — confirmação de reclassificação. `versaoEsperada` (a versão vista na prévia) é OBRIGATÓRIA: uma prévia
+ * antiga nunca autoriza alterar um lançamento que mudou. `documentoId`: evidência EXISTENTE no escopo a vincular.
+ */
 export function validarReclassificacao(e) {
-  semCamposDesconhecidos(e, ["lancamentoId", "categoria", "justificativa"], "reclassificacao");
-  return { lancamentoId: exigirUuid(e.lancamentoId, "lancamentoId"), categoria: codigoDeCategoria(e.categoria), justificativa: justificativa(e.justificativa) };
+  semCamposDesconhecidos(e, ["lancamentoId", "categoria", "justificativa", "versaoEsperada", "documentoId"], "reclassificacao");
+  return {
+    lancamentoId: exigirUuid(e.lancamentoId, "lancamentoId"), categoria: codigoDeCategoria(e.categoria), justificativa: justificativa(e.justificativa),
+    versaoEsperada: exigirInteiro(e.versaoEsperada, "versaoEsperada", { min: 1 }),
+    documentoId: e.documentoId === undefined || e.documentoId === null ? null : exigirUuid(e.documentoId, "documentoId"),
+  };
+}
+
+/** Consulta/prévia de reclassificação: um lançamento (com categoria opcional para a prévia) OU uma movimentação. */
+export function validarConsultaDeReclassificacao(e) {
+  semCamposDesconhecidos(e, ["lancamentoId", "movimentacaoId", "categoria"], "consulta");
+  if ((e.lancamentoId === undefined) === (e.movimentacaoId === undefined)) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o lançamento OU a movimentação.");
+  if (e.movimentacaoId !== undefined) return { movimentacaoId: exigirUuid(e.movimentacaoId, "movimentacaoId"), lancamentoId: null, categoria: null };
+  return { lancamentoId: exigirUuid(e.lancamentoId, "lancamentoId"), movimentacaoId: null, categoria: e.categoria === undefined || e.categoria === null || e.categoria === "" ? null : codigoDeCategoria(e.categoria) };
 }
 
 /** Correção cadastral de lançamento. Valor, competência e natureza NÃO se corrigem aqui: cancela-se e registra-se de novo. */

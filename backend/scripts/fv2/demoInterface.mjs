@@ -212,6 +212,10 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       return { ...f, acoes, versoes: versoes.versoes };
     },
     // 06D — configurações, permissões, documentos, pessoas com acesso (para escolher responsável).
+    // 08C — reclassificação: consulta + prévia (nada é gravado). Lançamento OU movimentação, sempre por referência opaca.
+    "/api/fv2/reclassificacao": (ctx, p) => nucleo.consultarReclassificacao(ctx, p.movimentacao
+      ? { movimentacaoId: reverso.get(p.movimentacao) ?? NENHUM }
+      : { lancamentoId: reverso.get(p.id) ?? NENHUM, ...(p.categoria ? { categoria: String(p.categoria) } : {}) }),
     "/api/fv2/configuracoes": (ctx) => nucleo.consultarConfiguracoes(ctx),
     "/api/fv2/configuracoes/plano": (ctx) => nucleo.consultarPlanoDeContas(ctx),
     "/api/fv2/configuracoes/categoria": (ctx, p) => nucleo.consultarCategoria(ctx, { codigo: String(p.codigo ?? "") }),
@@ -251,6 +255,10 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/acoes/propostas/aprovar": { campos: ["proposta", "justificativa"], fazer: (ctx, b) => nucleo.aprovarProposta(ctx, { propostaId: id(b.proposta), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
     "/api/fv2/acoes/propostas/rejeitar": { campos: ["proposta", "justificativa"], fazer: (ctx, b) => nucleo.rejeitarProposta(ctx, { propostaId: id(b.proposta), justificativa: b.justificativa }) },
     "/api/fv2/acoes/propostas/aplicar": { campos: ["proposta"], fazer: (ctx, b) => nucleo.aplicarProposta(ctx, { propostaId: id(b.proposta) }) },
+    "/api/fv2/acoes/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (ctx, b) => nucleo.reclassificarLancamento(ctx, {
+      lancamentoId: id(b.lancamento), categoria: b.categoria, justificativa: b.justificativa,
+      versaoEsperada: /^\d{1,9}$/.test(String(b.versaoEsperada ?? "")) ? Number(b.versaoEsperada) : b.versaoEsperada, ...(b.documento ? { documentoId: id(b.documento) } : {}),
+    }) },
     "/api/fv2/acoes/conciliacoes/confirmar": { campos: ["correspondencia", "justificativa"], fazer: (ctx, b) => nucleo.confirmarConciliacao(ctx, { correspondenciaId: id(b.correspondencia), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
     // ---- 06D: fechamento mensal. Pendências documentadas são montadas a partir da Central (núcleo), não do cliente.
     "/api/fv2/acoes/fechamento/alterar": { campos: ["competencia", "novoEstado", "metodologia", "justificativa", "decisao", "documentacaoFaltante"], fazer: async (ctx, b) => {
@@ -301,7 +309,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     [m.CODIGO.TRANSICAO_INVALIDA]: 409, [m.CODIGO.CONCILIACAO_INVALIDA]: 409, [m.CODIGO.CONFLITO_IDEMPOTENCIA]: 409, [m.CODIGO.CONFLITO_VERSAO]: 409,
     [m.CODIGO.IMPORTACAO_INVALIDA]: 422, [m.CODIGO.HOMOLOGACAO_BLOQUEADA]: 409, [m.CODIGO.COMPETENCIA_HOMOLOGADA]: 409,
     [m.CODIGO.CONFIRMACAO_EXIGIDA]: 400, [m.CODIGO.CATEGORIA_INVALIDA]: 409, [m.CODIGO.OPERACAO_INVALIDA]: 409, [m.CODIGO.DOCUMENTO_INDISPONIVEL]: 409,
-    [m.CODIGO.DOCUMENTO_ADULTERADO]: 409, [m.CODIGO.COFRE_INDISPONIVEL]: 503,
+    [m.CODIGO.DOCUMENTO_ADULTERADO]: 409, [m.CODIGO.COFRE_INDISPONIVEL]: 503, [m.CODIGO.EVIDENCIA_EXIGIDA]: 409,
   });
   const acoesMarcadas = (b) => Object.values(m.ACAO).filter((a) => b[`acao_${a.split(".")[1]}`] === "on" || b[`acao_${a.split(".")[1]}`] === true);
   const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !== undefined && b[k] !== "").map((k) => [k, b[k]]));
@@ -514,7 +522,7 @@ async function tesouraria(nucleo, A, { caixa, banco, ifoodRecebivel }) {
 }
 
 /** Documentos SINTÉTICOS no cofre da demonstração (06D): PDF íntegro com duas versões, PDF com conteúdo ativo e CSV. */
-function pdfSintetico(texto, extra = "") {
+export function pdfSintetico(texto, extra = "") {
   const conteudo = `BT /F1 12 Tf 72 720 Td (${texto}) Tj ET`;
   return new TextEncoder().encode(`%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R ${extra} >> endobj

@@ -174,7 +174,7 @@ test("14, 15 — estorno parcial é dedução própria; venda cancelada após re
 });
 
 test("16, 17 — competência homologada bloqueia; fonte corrigida exige revisão sem sobrescrever a composição aplicada", async () => {
-  const { n, caixa } = await base();
+  const { n, caixa, doc } = await base();
   const imp = await importar(n, "SAIPOS", "SAIPOS_VENDAS", saiposVendas([{ pedido: "P-1", data: "02/09/2026 12:00", itens: 3000, desconto: 300, forma: "Dinheiro" }]));
   await n.gerarPropostas(c, { importacaoId: imp.id, contaCaixaId: caixa.id });
   const [p] = await n.listarPropostas(c, { operacao: "VENDA" });
@@ -191,7 +191,7 @@ test("16, 17 — competência homologada bloqueia; fonte corrigida exige revisã
   await n.rejeitarProposta(c, { propostaId: nova.id, justificativa: "Retificação será tratada em revisão formal." });
   // O desconto sem financiador comprovado ficou "a classificar" (provisório): classifica-se antes de homologar.
   for (const l of (await n.consultarRegistros(c, { tipo: "LANCAMENTO" })).filter((x) => x.categoria === "DESCONTOS_A_CLASSIFICAR" && x.situacao === "ATIVO")) {
-    await n.reclassificarLancamento(c, { lancamentoId: l.id, categoria: "DESCONTOS_COMERCIAIS", justificativa: "Desconto concedido pela loja (sintético)." });
+    await n.reclassificarLancamento(c, { lancamentoId: l.id, categoria: "DESCONTOS_COMERCIAIS", justificativa: "Desconto concedido pela loja (sintético).", versaoEsperada: l.versao, documentoId: doc });
   }
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação sintética." });
   await rejeita(n.registrarVenda(c, venda({ brutoCentavos: 1000, composicao: { itensCentavos: 1000, descontos: [{ valorCentavos: 100, financiador: "LOJA" }] }, pagamentos: [{ forma: "DINHEIRO", valorCentavos: 900 }] })), CODIGO.COMPETENCIA_HOMOLOGADA);

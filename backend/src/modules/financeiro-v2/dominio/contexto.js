@@ -27,6 +27,8 @@ export const ACAO = Object.freeze({
   REVOGAR: "financeiro_v2.revogar", // revogar permissões (conceder não revoga; revogar não concede)
   CONFIRMAR_IMPORTACAO: "financeiro_v2.confirmar_importacao", // confirmar ou rejeitar importação revisada
   REABRIR: "financeiro_v2.reabrir", // reabrir competência homologada (com justificativa)
+  // Execução 08C — mudar a categoria de um lançamento existente. Separada de `corrigir`: nenhuma concessão anterior a recebe.
+  RECLASSIFICAR: "financeiro_v2.reclassificar",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

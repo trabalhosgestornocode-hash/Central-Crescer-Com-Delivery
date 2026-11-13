@@ -69,7 +69,7 @@ test("cancelamento é lógico: o registro continua existindo, com motivo, e sai 
 test("reclassificação de lançamento fica no histórico", async () => {
   const { nucleo, c, fornecedor } = await montarComCadastros();
   const { lancamento } = await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id));
-  const novo = await nucleo.reclassificarLancamento(c, { lancamentoId: lancamento.id, categoria: "EMBALAGENS", justificativa: "Classificação inicial errada" });
+  const { lancamento: novo } = await nucleo.reclassificarLancamento(c, { lancamentoId: lancamento.id, categoria: "EMBALAGENS", justificativa: "Classificação inicial errada", versaoEsperada: lancamento.versao });
   assert.deepEqual([novo.categoria, novo.valorCentavos, novo.versao], ["EMBALAGENS", 100000, 2]);
   const h = await historico(nucleo, c, "LANCAMENTO", lancamento.id);
   assert.deepEqual([h[1].evento, h[1].antes.categoria, h[1].depois.categoria], ["RECLASSIFICACAO", "INSUMOS", "EMBALAGENS"]);
@@ -139,7 +139,7 @@ test("competência homologada não sofre alteração silenciosa; revisão é exp
     () => nucleo.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 100, motivo: "juros", categoria: "JUROS_E_TARIFAS_BANCARIAS" }),
     () => nucleo.corrigirObrigacao(c, { obrigacaoId: ob.id, mudancas: { descricao: "x" }, justificativa: "y" }),
     () => nucleo.cancelarObrigacao(c, { obrigacaoId: ob.id, justificativa: "y" }),
-    () => nucleo.reclassificarLancamento(c, { lancamentoId: lancamento.id, categoria: "OUTRAS_DESPESAS", justificativa: "y" }),
+    () => nucleo.reclassificarLancamento(c, { lancamentoId: lancamento.id, categoria: "OUTRAS_DESPESAS", justificativa: "y", versaoEsperada: lancamento.versao }),
   ];
   for (const t of tentativas) await rejeita(t, CODIGO.COMPETENCIA_HOMOLOGADA);
   const depois = JSON.stringify([await nucleo.consultarRegistros(c, { tipo: "OBRIGACAO" }), await nucleo.consultarRegistros(c, { tipo: "LANCAMENTO" }), await nucleo.consultarRegistros(c, { tipo: "MOVIMENTACAO" }), await nucleo.consultarRegistros(c, { tipo: "LIQUIDACAO" })]);

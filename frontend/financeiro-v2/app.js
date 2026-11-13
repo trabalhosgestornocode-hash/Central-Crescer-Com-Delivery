@@ -198,12 +198,16 @@ const DETALHES = {
   documento: ["conferencias/documento", (d) => conf.detalheDocumento(d, ctxPainel())], proposta: ["conferencias/proposta", (d) => conf.detalheProposta(d, ctxPainel())],
   correspondencia: ["conferencias/correspondencia", (d) => conf.detalheCorrespondencia(d)],
 };
+/** 08C — reclassificação: "reclassificacao:<lançamento>[|<categoria da prévia>]" e "reclassificacao-mov:<movimentação>". */
+const DETALHE_RECLASSIFICACAO = (d) => conf.detalheReclassificacao(d);
 /** URL e desenho do detalhe. A chave é "tipo:resto" — o resto pode conter ":" (chave de pendência). */
 function detalheDe(chave) {
   const i = chave.indexOf(":");
   const [tipo, id] = [chave.slice(0, i), chave.slice(i + 1)];
   if (tipo === "pendencia") return [`/api/fv2/conferencias/pendencia?${qs({ chave: id })}`, (d) => conf.detalhePendencia(d, { pessoas: estado.pessoas ?? [], competencia: estado.competencia })];
   if (tipo === "categoria") return [`/api/fv2/configuracoes/categoria?${qs({ competencia: undefined, codigo: id })}`, (d) => adm.detalheCategoria(d, { podeConfigurar: permissoesDaUnidade().includes("financeiro_v2.configurar") })];
+  if (tipo === "reclassificacao") { const [lanc, categoria] = id.split("|"); return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, id: lanc, categoria })}`, DETALHE_RECLASSIFICACAO]; }
+  if (tipo === "reclassificacao-mov") return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, movimentacao: id })}`, DETALHE_RECLASSIFICACAO];
   if (tipo === "importar") return [`/api/fv2/conferencias/catalogo?${qs({ competencia: undefined })}`, (d) => conf.escolherArquivo(d)];
   const [rota, desenho] = DETALHES[tipo] ?? DETALHES.receber;
   return [`/api/fv2/${rota}?${qs({ competencia: undefined, id })}`, desenho];
@@ -410,6 +414,9 @@ document.addEventListener("submit", (e) => {
   e.preventDefault();
   const acao = e.target.closest("[data-acao]");
   if (acao) { executarAcao(acao); return; }
+  // 08C: a prévia da reclassificação é uma CONSULTA ao núcleo (nada é gravado); só a ação confirma.
+  const previa = e.target.closest("[data-previa-reclassificacao]");
+  if (previa) { const cat = new FormData(previa).get("categoria"); if (cat) abrirDetalhe(`reclassificacao:${previa.dataset.previaReclassificacao}|${cat}`, previa); return; }
   const form = e.target.closest("[data-filtro-local]");
   if (form) aplicarFiltroLocal(form);
 });

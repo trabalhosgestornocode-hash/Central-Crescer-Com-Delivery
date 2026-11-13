@@ -163,12 +163,12 @@ test("taxas e retenções são classificadas pela natureza econômica, não por 
 
   // Reclassificar muda a categoria (com histórico), não o resultado; receita não vira despesa por reclassificação.
   const comissao = lancamentosDeRetencao[1];
-  const reclass = await nucleo.reclassificarLancamento(c, { lancamentoId: comissao.id, categoria: "ANUNCIOS_IFOOD", justificativa: "Era anúncio, não comissão" });
+  const { lancamento: reclass } = await nucleo.reclassificarLancamento(c, { lancamentoId: comissao.id, categoria: "ANUNCIOS_IFOOD", justificativa: "Era anúncio, não comissão", versaoEsperada: comissao.versao });
   assert.deepEqual([reclass.categoria, reclass.classificacao, reclass.natureza, reclass.valorCentavos], ["ANUNCIOS_IFOOD", "MARKETING", "DESPESA", 12000]);
   assert.equal(await total(nucleo, c, "DESPESAS", { classificacao: "MARKETING" }), 14000);
   assert.equal(await total(nucleo, c, "RESULTADO_ECONOMICO"), 46500);
   const receita = (await nucleo.consultarRegistros(c, { tipo: "LANCAMENTO" })).find((l) => l.natureza === "RECEITA");
-  await rejeita(nucleo.reclassificarLancamento(c, { lancamentoId: receita.id, categoria: "FRUTAS", justificativa: "x" }), CODIGO.CATEGORIA_INVALIDA);
+  await rejeita(nucleo.reclassificarLancamento(c, { lancamentoId: receita.id, categoria: "FRUTAS", justificativa: "x", versaoEsperada: receita.versao }), CODIGO.CATEGORIA_INVALIDA);
   assert.deepEqual(await nucleo.verificarConservacao(c), []);
 });
 

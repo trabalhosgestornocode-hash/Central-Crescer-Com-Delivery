@@ -37,6 +37,8 @@ export const CODIGO = Object.freeze({
   DOCUMENTO_INDISPONIVEL: "FV2_DOCUMENTO_INDISPONIVEL",
   DOCUMENTO_ADULTERADO: "FV2_DOCUMENTO_ADULTERADO",
   PROVISIONAMENTO_RECUSADO: "FV2_PROVISIONAMENTO_RECUSADO",
+  // Execução 08C: classificação que depende de documento sem a evidência necessária (a pendência continua aberta).
+  EVIDENCIA_EXIGIDA: "FV2_EVIDENCIA_EXIGIDA",
 });
 
 export class ErroFinanceiro extends Error {

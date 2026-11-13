@@ -179,7 +179,7 @@ test("08 — competência sintética completa: vendas, recebimentos, despesas, c
   assert.ok(pendente, "o desconto sem financiador gerou lançamento provisório");
   const categoriaLoja = lancs.find((l) => l.natureza === "DEDUCAO" && !/A_CLASSIFICAR|PENDENTE|DEVOLU/.test(l.categoria))?.categoria;
   assert.ok(categoriaLoja && !descontoLoja);
-  await n.reclassificarLancamento(c, { lancamentoId: pendente.id, categoria: categoriaLoja, justificativa: "Ata de caixa sintética: desconto concedido pela loja." });
+  await n.reclassificarLancamento(c, { lancamentoId: pendente.id, categoria: categoriaLoja, justificativa: "Ata de caixa sintética: desconto concedido pela loja.", versaoEsperada: pendente.versao, documentoId: (await n.registrarDocumento(c, { origem: "MANUAL", arquivoId: "cofre:evidencia-sintetica-a", hashSha256: "a".repeat(64), tipo: "NOTA_FISCAL", recebidoEm: "2026-09-10" })).documento.id });
   const v1 = await estado("FECHAMENTO_HOMOLOGADO", { metodologia: "Homologação gerencial sintética.", confirmar: true });
   const apV1 = await conferir("homologada v1", ESPERADO.recebiveis30set, ESPERADO.banco30set, "2026-09-30");
   assert.equal(apV1.fonteDaApresentacao, "VERSAO_HOMOLOGADA");

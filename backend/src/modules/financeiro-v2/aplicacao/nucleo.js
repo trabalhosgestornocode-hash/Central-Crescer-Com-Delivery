@@ -21,6 +21,7 @@ import { criarRegistroDeFontes } from "../importacao/fontes/index.js";
 import { criarRegistroDeAcessosNegadosMemoria } from "../infra/cofreDisco.js";
 import { operacoesDePlano } from "./plano.js";
 import { operacoesDeVendas } from "./vendas.js";
+import { operacoesDeReclassificacao } from "./reclassificacao.js";
 
 /**
  * @param {object} deps
@@ -50,6 +51,7 @@ export function criarNucleoFinanceiro({
   const operacoes = {
     ...operacoesDePlano(base),
     ...operacoesEconomicas(base),
+    ...operacoesDeReclassificacao(base),
     ...operacoesDeVendas(base),
     ...operacoesDeCaixa(base),
     ...operacoesDeDocumentos(base),

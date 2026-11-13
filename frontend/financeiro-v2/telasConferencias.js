@@ -111,6 +111,7 @@ ${p.outrosMotivos.length ? `<h3>Outros motivos sobre o mesmo fato</h3><ul class=
 <h3>O que pode ser feito</h3>${p.opcoes.length ? `<ul class="mini">${p.opcoes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : nenhum("Nenhuma ação: registro informativo.")}
 <p class="nota">A pendência só deixa de existir com o documento ou a decisão registrada — nunca por hipótese.</p>
 ${ligacaoDaPendencia(p)}
+${reclassificacaoDaPendencia(p)}
 <h3>Histórico de decisões</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li><strong>${esc(EVENTOS[h.evento] ?? "Alteração registrada")}</strong> · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem decisões registradas.")}
 ${p.apontadoPor.length > 1 ? `<p class="nota">Este fato foi apontado por ${p.apontadoPor.length} conferências diferentes e conta uma única vez.</p>` : ""}
 ${tecnico({ chave: p.chave, codigo: p.codigo, referencia: p.referencia, apontadoPor: p.apontadoPor, outrosCodigos: p.outrosMotivos.map((x) => x.codigo), ...p.tecnico })}`;
@@ -135,6 +136,90 @@ ${acao({ url: "/api/fv2/acoes/pendencias/atribuir", rotulo: a ? "Atualizar atrib
 ${a ? acao({ url: "/api/fv2/acoes/pendencias/acompanhar", rotulo: "Registrar acompanhamento", aviso: "Confirmo o registro do acompanhamento.", recarregar: `pendencia:${d.pendencia.chave}`,
     campos: `${chave}<label>Situação <select name="situacao">${Object.entries(SITUACOES_ATRIBUICAO).map(([k, v]) => `<option value="${esc(k)}"${k === a.situacao ? " selected" : ""}>${esc(v)}</option>`).join("")}</select></label><label>Comentário (obrigatório para concluir) <input name="comentario" maxlength="500"></label>` }) : ""}
 ${comentarios}${historico}`;
+}
+
+/**
+ * 08C — classificação pendente: abre a reclassificação do LANÇAMENTO; saída bancária sem natureza abre a explicação de por que
+ * ela não é reclassificada (vincula-se a uma conta). A decisão e a prévia vêm do núcleo.
+ */
+function reclassificacaoDaPendencia(p) {
+  const lancamento = p.codigo === "DESPESA_A_CLASSIFICAR" ? p.referencia?.id : p.codigo === "DESCONTO_A_CLASSIFICAR" ? p.tecnico?.lancamentoId : null;
+  if (lancamento) return `<p class="ligacoes">${botao("reclassificacao", lancamento, "Revisar e reclassificar o lançamento")}</p>`;
+  if (p.codigo === "SAIDA_SEM_CLASSIFICACAO" && p.referencia?.id) return `<p class="ligacoes">${botao("reclassificacao-mov", p.referencia.id, "Como classificar esta saída")}</p>`;
+  return "";
+}
+
+const NATUREZA_TXT = Object.freeze({ RECEITA: "receita", DEDUCAO: "dedução da receita", DESPESA: "despesa", PATRIMONIAL: "patrimonial (fora do resultado)" });
+const EFEITO_DRE_TXT = Object.freeze({ FORA_ATE_CLASSIFICAR: "fora da DRE até classificar", NA_LINHA_DA_CATEGORIA: "na linha da categoria", FORA_DO_RESULTADO: "fora do resultado (patrimonial)" });
+
+/** 08C — reclassificação: origem, categoria atual, sugestão, evidência, prévia (do núcleo) e confirmação. Nunca simula sucesso. */
+export function detalheReclassificacao(d) {
+  if (d.caso === "MOVIMENTACAO_SEM_NATUREZA") {
+    return `${fechar("Saída bancária sem natureza comprovada")}
+<p>${esc(d.explicacao)}</p>
+<dl class="ficha"><dt>Data</dt><dd>${esc(dataBR(d.movimentacao.data))}</dd><dt>Valor</dt><dd>${valor(d.movimentacao.valorCentavos)}</dd></dl>
+<p class="nota">Nenhuma despesa é criada a partir da saída: o caminho é vincular a saída a uma conta a pagar com documento.</p>`;
+  }
+  const l = d.lancamento;
+  const atual = d.categoriaAtual;
+  const escolha = d.impacto?.categoriaNova?.codigo ?? "";
+  const formPrevia = d.podeReclassificar ? `<form class="filtros-locais" data-previa-reclassificacao="${esc(l.id)}" aria-label="Escolher a nova categoria">
+  <label>Nova categoria <select name="categoria" required>${opcao("", "Escolha…", escolha)}${d.categoriasPermitidas.map((c) => opcao(c.codigo, `${c.nome} — ${NATUREZA_TXT[c.natureza] ?? c.natureza}`, escolha)).join("")}</select></label>
+  <button type="submit" class="botao">Ver prévia do impacto</button>
+</form>` : `<p class="aviso aviso--alerta">${esc(d.motivoBloqueio ?? "Reclassificação indisponível.")}</p>`;
+  return `${fechar("Reclassificar lançamento")}
+<p><span class="selo selo--${atual.provisoria ? "alerta" : "neutro"}">${atual.provisoria ? "classificação provisória" : "categoria confirmada"}</span> <span class="selo selo--neutro">${esc(l.origem.nome)}</span> <span class="selo selo--neutro">competência ${esc(competencia(l.competencia))} · ${esc(ESTADOS_COMPETENCIA[d.competencia.estado]?.rotulo ?? d.competencia.estado)}</span></p>
+<p>${esc(d.explicacao)}</p>
+<dl class="ficha">
+  <dt>Lançamento</dt><dd>${esc(l.descricao ?? "—")}</dd>
+  <dt>Valor</dt><dd>${valor(l.valorCentavos)}</dd>
+  <dt>Data</dt><dd>${esc(dataBR(l.data))}${l.canal ? ` · canal ${esc(l.canal)}` : " · sem canal"}</dd>
+  <dt>Origem</dt><dd>${esc(l.origem.nome)}${l.fonte ? ` · ${esc(fonte(l.fonte))}` : ""}</dd>
+  <dt>Classificação atual</dt><dd>${esc(atual.nome)} — ${esc(NATUREZA_TXT[atual.natureza] ?? atual.natureza)}</dd>
+  <dt>Sugestão</dt><dd>${d.sugestao ? `${esc(d.sugestao.nome)} <span class="nota">(${esc(d.sugestao.motivo)})</span>` : "Nenhuma sugestão: a escolha é de uma pessoa, com evidência."}</dd>
+</dl>
+<h3>Evidências já vinculadas</h3>${documentos(d.evidencias)}
+${d.exigeEvidenciaParaSairDaProvisoria ? '<p class="nota">Sair da classificação provisória exige documento (nota, boleto, contrato ou relatório do canal). Sem ele, a pendência continua aberta.</p>' : ""}
+${formPrevia}
+${d.impacto ? previaDeReclassificacao(d) : ""}
+<h3>Histórico de reclassificações</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li><strong>${esc(h.de)} → ${esc(h.para)}</strong> · ${esc(dataBR(h.em))}${h.porVoce ? " (você)" : ""}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Nenhuma reclassificação registrada.")}
+${tecnico({ caso: d.caso, versao: l.versao, categoria: atual.codigo, permitidas: d.categoriasPermitidas.length })}`;
+}
+
+function previaDeReclassificacao(d) {
+  const i = d.impacto;
+  const l = d.lancamento;
+  const linhas = i.dre.linhasAlteradas;
+  const tabela = linhas.length ? `<table class="tabela"><caption class="sr">Efeito na DRE</caption><thead><tr><th scope="col">Linha da DRE</th><th scope="col">Antes</th><th scope="col">Depois</th></tr></thead><tbody>${linhas.map((x) => `<tr>${td("Linha", esc(x.nome))}${td("Antes", valor(x.antesCentavos), "num")}${td("Depois", valor(x.depoisCentavos), "num")}</tr>`).join("")}</tbody></table>` : nenhum("Nenhuma linha da DRE muda (a natureza e a linha continuam as mesmas).");
+  const exigeDoc = i.exigeEvidencia && !i.evidenciaDisponivel;
+  const docs = d.documentosDisponiveis;
+  const rotuloDoc = (x) => `${x.descricao ?? x.tipo ?? "Documento"}${x.recebidoEm ? ` · ${dataBR(x.recebidoEm)}` : ""}`;
+  let campoDoc = "";
+  if (exigeDoc && docs.length) campoDoc = `<label>Evidência (documento existente) <select name="documento" required>${opcao("", "Escolha o documento…", "")}${docs.map((x) => opcao(x.referencia, rotuloDoc(x), "")).join("")}</select></label>`;
+  else if (exigeDoc) campoDoc = '<p class="aviso aviso--alerta">Nenhum documento disponível nesta competência. Registre a evidência no cofre antes: sem ela a classificação continua pendente.</p>';
+  else if (docs.length) campoDoc = `<label>Vincular evidência (opcional) <select name="documento">${opcao("", "Nenhum documento novo", "")}${docs.map((x) => opcao(x.referencia, rotuloDoc(x), "")).join("")}</select></label>`;
+  const podeEnviar = !(exigeDoc && !docs.length);
+  const titulos = i.titulos.length ? i.titulos.map((t) => `${esc(t.descricao ?? "Conta")}: saldo ${valor(t.saldoCentavos)} (não muda) · ${esc(EFEITO_DRE_TXT[t.efeitoNaDreAntes] ?? t.efeitoNaDreAntes)} → ${esc(EFEITO_DRE_TXT[t.efeitoNaDreDepois] ?? t.efeitoNaDreDepois)}`).join("<br>") : "Sem conta a pagar ligada a este lançamento.";
+  const canais = i.canais.alterados.length ? i.canais.alterados.map((c) => `${esc(c.canal)}: ${valor(c.antesCentavos)} → ${valor(c.depoisCentavos)}`).join("<br>") : esc(i.canais.observacao);
+  return `<section class="card" aria-labelledby="t-previa"><h3 id="t-previa">Prévia do impacto (nada foi gravado)</h3>
+<dl class="ficha">
+  <dt>Valor original</dt><dd>${valor(i.valorCentavos)}</dd>
+  <dt>Competência</dt><dd>${esc(competencia(i.competencia))}</dd>
+  <dt>Categoria anterior</dt><dd>${esc(d.categoriaAtual.nome)} — ${esc(NATUREZA_TXT[i.categoriaAnterior.natureza] ?? i.categoriaAnterior.natureza)}</dd>
+  <dt>Categoria nova</dt><dd>${esc(i.categoriaNova.nome)} — ${esc(NATUREZA_TXT[i.categoriaNova.natureza] ?? i.categoriaNova.natureza)}</dd>
+  <dt>Caixa e bancos</dt><dd>${esc(i.caixa.explicacao)}</dd>
+  <dt>Composição por canal</dt><dd>${canais}</dd>
+  <dt>Contas a pagar</dt><dd>${titulos}</dd>
+  <dt>Impedimentos do fechamento</dt><dd>${i.impedimentos.quantidadeAntes} → ${i.impedimentos.quantidadeDepois}</dd>
+</dl>
+<h4>Efeito na DRE</h4>${tabela}
+<h4>Pendências que permanecem</h4>${i.pendenciasQuePermanecem.length ? `<ul class="mini">${i.pendenciasQuePermanecem.map((x) => `<li>${esc(x.mensagem)}</li>`).join("")}</ul>` : nenhum("Nenhum impedimento de homologação restaria nesta competência.")}
+${podeEnviar ? acao({ url: "/api/fv2/acoes/reclassificar", rotulo: "Confirmar reclassificação", recarregar: `reclassificacao:${l.id}`,
+    campos: `<input type="hidden" name="lancamento" value="${esc(l.id)}"><input type="hidden" name="categoria" value="${esc(i.categoriaNova.codigo)}"><input type="hidden" name="versaoEsperada" value="${esc(String(l.versao))}">
+${campoDoc}<label>Justificativa <input type="text" name="justificativa" maxlength="500" required></label>`,
+    aviso: "Confirmo a reclassificação: a categoria muda; o valor e o fato econômico não mudam." }) : ""}
+<p class="nota">Ao confirmar, o servidor confere de novo a permissão, a versão do lançamento e a competência. Se o lançamento mudou depois desta prévia, nada é gravado.</p>
+</section>`;
 }
 
 /** Ligação real para o registro da pendência (quando existe uma tela para ele); senão, nada — nunca link falso. */
@@ -401,6 +486,7 @@ export function resultadoDaAcao(r) {
   if (d.versao?.tipo) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado]?.rotulo ?? d.estado)}. Versão nº ${d.versao.numero} registrada.`;
   if (d.estado && ESTADOS_COMPETENCIA[d.estado]) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado].rotulo)}.`;
   if (d.responsavelId) return "Atribuição registrada no histórico.";
+  if (d.lancamento && d.anterior) return `Reclassificado: ${esc(d.anterior.categoria)} → ${esc(d.lancamento.categoria)} (versão ${d.lancamento.versao}). DRE, Visão Geral e fechamento passam a refletir a mudança.`;
   if (d.conferido !== undefined) return d.conferido ? "Integridade conferida: o arquivo confere com o hash registrado." : `<span class="valor--negativo">${esc(d.motivo)}</span>`;
   if (d.acoes && d.usuarioId) return `Permissões atualizadas: ${d.acoes.length} ação(ões) ativa(s).`;
   if (d.estado) return `Feito: ${esc(ESTADOS_PROPOSTA[d.estado]?.rotulo ?? ESTADOS_IMPORTACAO[d.estado]?.rotulo ?? d.estado)}.`;
