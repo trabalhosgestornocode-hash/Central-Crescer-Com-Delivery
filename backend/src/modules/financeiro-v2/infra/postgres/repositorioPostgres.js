@@ -356,10 +356,16 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
 
   async function comCliente(fn) {
     const cliente = await pool.connect();
+    // 08: conexão perdida no meio (servidor encerrou, rede caiu) NUNCA volta ao pool — é descartada. E o erro emitido
+    // pela conexão enquanto estava conosco não derruba o processo.
+    let perdida = false;
+    const aoErro = () => { perdida = true; };
+    cliente.on?.("error", aoErro);
     try {
-      return await fn(cliente);
+      return await fn(cliente, () => { perdida = true; });
     } finally {
-      cliente.release();
+      cliente.removeListener?.("error", aoErro);
+      cliente.release(perdida ? new Error("Financeiro v2: conexão perdida descartada do pool.") : undefined);
     }
   }
 
@@ -379,7 +385,7 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
   }
 
   async function umaTentativa(fn, escopo, provisionamento) {
-    return comCliente(async (cliente) => {
+    return comCliente(async (cliente, descartar) => {
       await cliente.query("begin");
       try {
         await declararSessao(cliente, escopo, provisionamento);
@@ -390,7 +396,8 @@ export function criarRepositorioPostgres({ pool, sessoes, tentativas = 5, reusoD
         try {
           await cliente.query("rollback");
         } catch {
-          // a conexão já caiu; o banco desfaz a transação sozinho
+          // a conexão já caiu; o banco desfaz a transação sozinho — e a conexão é descartada (não volta ao pool)
+          descartar();
         }
         throw traduzir(e);
       }
