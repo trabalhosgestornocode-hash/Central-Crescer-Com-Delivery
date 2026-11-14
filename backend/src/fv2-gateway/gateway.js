@@ -10,6 +10,7 @@
 // Registros saem sem token, senha ou chave (eventoSemSegredos). Nada aqui lê dados financeiros.
 import { FINALIDADE_DO_GATEWAY as FINALIDADE, decidirEmissao, eventoSemSegredos } from "../modules/financeiro-v2/index.js";
 import { CABECALHO, conferirPedido, exigirChaveDoCanal } from "../modules/fv2-integracao/canalGateway.js";
+import { criarEmissorDeSessoes } from "../modules/fv2-integracao/emissorDeSessoes.js";
 
 const LIMITE_CORPO = 32 * 1024;
 const SENSIVEIS = new Set([FINALIDADE.ACAO_SENSIVEL, FINALIDADE.PROVISIONAMENTO, FINALIDADE.LIBERACAO]);
@@ -56,29 +57,13 @@ export function criarGateway({ poolAutoridade, chave, obterUsuario, mfa, relogio
     return { ok: true, contaId: String(usuario.id).toLowerCase() };
   }
 
+  // A regra de emissão é a MESMA do modo co-localizado (emissorDeSessoes.js); aqui só muda o transporte (canal assinado).
+  const emissor = criarEmissorDeSessoes({ poolAutoridade, obterUsuario, mfa, relogio, registrar });
   async function sessoes(corpo, token, res) {
-    const { sessao, escopo, permissoes, contaPessoal, finalidade } = corpo;
-    const id = await conferirIdentidade(token, sessao);
-    if (!id.ok) return recusar(res, 401, id.motivo);
-    const agoraMs = relogio().getTime();
-    const prova = SENSIVEIS.has(finalidade) ? await mfa.provar({ tokenDeAcesso: token, contaId: id.contaId }).catch(() => ({ ok: false })) : null;
-    // A concessão VIGENTE é conferida pelo BANCO em fv2_abrir_sessao (a autoridade não lê concessões): o que o backend
-    // diz das ações é só informativo e não amplia nada; sem concessão ativa o banco recusa (FV020).
-    void permissoes;
-    const d = decidirEmissao({ sessao, pedido: { finalidade, unidadeId: escopo?.unidadeId }, prova, contaPessoal: contaPessoal === true, acoesConcedidas: ["CONFERIDA_PELO_BANCO"], agoraMs });
-    if (!d.emitir) return recusar(res, 403, d.motivo, { finalidade });
-    // O escopo pedido pelo repositório tem de ser EXATAMENTE o da sessão verificada (organização, unidade e pessoa).
-    if (!escopo || String(escopo.organizacaoId).toLowerCase() !== d.escopo.organizacaoId || String(escopo.unidadeId).toLowerCase() !== d.escopo.unidadeId || String(escopo.usuarioId).toLowerCase() !== d.escopo.usuarioId) {
-      return recusar(res, 403, "ESCOPO_DIFERENTE_DA_SESSAO", { finalidade });
-    }
-    try {
-      const { rows } = await poolAutoridade.query("select fv2_abrir_sessao($1::uuid, $2::uuid, $3::uuid, $4::integer, $5::text) as t",
-        [d.escopo.usuarioId, d.escopo.organizacaoId, d.escopo.unidadeId, d.validadeSegundos, `gateway:${finalidade}`]);
-      log({ tipo: "SESSAO_EMITIDA", finalidade, organizacaoId: d.escopo.organizacaoId, unidadeId: d.escopo.unidadeId, pessoa: d.escopo.usuarioId, validadeSegundos: d.validadeSegundos, segundoFator: d.exigiuSegundoFator });
-      return responder(res, 200, { token: rows[0].t, validadeSegundos: d.validadeSegundos });
-    } catch (e) {
-      return recusar(res, 403, "BANCO_RECUSOU", { codigoBanco: e?.code ?? null });
-    }
+    const { sessao, escopo, contaPessoal, finalidade } = corpo;
+    const r = await emissor.emitirSessao({ sessao, escopo, contaPessoal, finalidade, token });
+    if (!r.ok) return responder(res, r.status, { motivo: r.motivo, mensagem: "Pedido recusado pela autoridade financeira.", ...(r.codigoBanco ? { codigoBanco: r.codigoBanco } : {}) });
+    return responder(res, 200, { token: r.token, validadeSegundos: r.validadeSegundos });
   }
 
   async function provisionamentos(corpo, token, res) {

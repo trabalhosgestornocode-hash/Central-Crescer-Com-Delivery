@@ -13,21 +13,27 @@
 import pg from "pg";
 import { criarAdaptadorDaPlataforma, criarLiberacoesPostgres, criarRepositorioPostgres } from "../financeiro-v2/index.js";
 import { criarClienteDoGateway } from "./clienteGateway.js";
+import { criarAutoridadeCoLocalizada } from "./autoridadeCoLocalizada.js";
 import { criarMfaPeloProvedor } from "./mfaPeloProvedor.js";
 import { criarConcessoesDaSessao, criarVinculosDaPlataforma } from "./portasPlataforma.js";
 import { criarRotasFinanceiroV2 } from "./rotas.js";
 
 export { criarRotasFinanceiroV2 } from "./rotas.js";
 
-const OBRIGATORIAS = ["FV2_APP_DATABASE_URL", "FV2_GATEWAY_URL", "FV2_GATEWAY_CHAVE"];
+// Dois modos de autoridade: "servico" (gateway separado, isolamento de processo) ou "local" (co-localizada no backend,
+// decisão do proprietário de 14/11: um só serviço no Render; isolamento só de credencial — ver autoridadeCoLocalizada.js).
+const OBRIGATORIAS = { servico: ["FV2_APP_DATABASE_URL", "FV2_GATEWAY_URL", "FV2_GATEWAY_CHAVE"], local: ["FV2_APP_DATABASE_URL", "FV2_AUTORIDADE_DATABASE_URL", "FV2_AUTORIDADE_COLOCALIZADA_ACEITA"] };
 
 /** Lê a configuração (sem imprimir valores). */
 export function lerConfiguracaoFv2(env = process.env) {
   if (env.FV2_HABILITADO !== "1") return { habilitado: false, motivo: "DESLIGADO" };
-  const faltando = OBRIGATORIAS.filter((k) => !env[k]);
+  const modo = env.FV2_AUTORIDADE_MODO === "local" ? "local" : "servico";
+  const faltando = OBRIGATORIAS[modo].filter((k) => !env[k]);
   if (faltando.length) return { habilitado: false, motivo: "CONFIGURACAO_INCOMPLETA", faltando };
-  if (String(env.FV2_GATEWAY_CHAVE).length < 32) return { habilitado: false, motivo: "CONFIGURACAO_INCOMPLETA", faltando: ["FV2_GATEWAY_CHAVE"] };
-  return { habilitado: true, escritaHabilitada: env.FV2_ESCRITA_HABILITADA === "1", homologacaoHabilitada: env.FV2_HOMOLOGACAO_HABILITADA === "1", appUrl: env.FV2_APP_DATABASE_URL, gatewayUrl: env.FV2_GATEWAY_URL, gatewayChave: env.FV2_GATEWAY_CHAVE, ca: env.FV2_PG_CA ?? null, poolMax: Math.min(Number(env.FV2_APP_POOL_MAX ?? 4) || 4, 8) };
+  if (modo === "servico" && String(env.FV2_GATEWAY_CHAVE).length < 32) return { habilitado: false, motivo: "CONFIGURACAO_INCOMPLETA", faltando: ["FV2_GATEWAY_CHAVE"] };
+  if (modo === "local" && env.FV2_AUTORIDADE_COLOCALIZADA_ACEITA !== "1") return { habilitado: false, motivo: "CONFIGURACAO_INCOMPLETA", faltando: ["FV2_AUTORIDADE_COLOCALIZADA_ACEITA"] };
+  if (modo === "local" && env.FV2_AUTORIDADE_DATABASE_URL === env.FV2_APP_DATABASE_URL) return { habilitado: false, motivo: "CREDENCIAIS_IGUAIS", faltando: [] };
+  return { habilitado: true, modo, ...(modo === "local" ? { autoridadeUrl: env.FV2_AUTORIDADE_DATABASE_URL } : {}), escritaHabilitada: env.FV2_ESCRITA_HABILITADA === "1", homologacaoHabilitada: env.FV2_HOMOLOGACAO_HABILITADA === "1", appUrl: env.FV2_APP_DATABASE_URL, gatewayUrl: env.FV2_GATEWAY_URL, gatewayChave: env.FV2_GATEWAY_CHAVE, ca: env.FV2_PG_CA ?? null, poolMax: Math.min(Number(env.FV2_APP_POOL_MAX ?? 4) || 4, 8) };
 }
 
 /**
@@ -45,11 +51,20 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
     dependencias: () => {
       const pool = new pg.Pool({ connectionString: cfg.appUrl, max: cfg.poolMax, idleTimeoutMillis: 30000, ssl: cfg.ca ? { ca: cfg.ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
       pool.on("error", () => {});
-      const repositorio = criarRepositorioPostgres({ pool, sessoes: criarClienteDoGateway({ url: cfg.gatewayUrl, chave: cfg.gatewayChave }) });
       const obterUsuario = async (token) => {
         const { data, error } = await supabase.auth.getUser(token);
         return error ? null : data?.user ?? null;
       };
+      let sessoes;
+      if (cfg.modo === "local") {
+        // pool PRÓPRIO da autoridade (outro papel de login, máx. 2 conexões) — nunca o pool da aplicação
+        const poolAutoridade = new pg.Pool({ connectionString: cfg.autoridadeUrl, max: 2, idleTimeoutMillis: 30000, ssl: cfg.ca ? { ca: cfg.ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
+        poolAutoridade.on("error", () => {});
+        sessoes = criarAutoridadeCoLocalizada({ poolAutoridade, obterUsuario, mfa: criarMfaPeloProvedor({ obterUsuario }), registrar });
+      } else {
+        sessoes = criarClienteDoGateway({ url: cfg.gatewayUrl, chave: cfg.gatewayChave });
+      }
+      const repositorio = criarRepositorioPostgres({ pool, sessoes });
       const vinculos = criarVinculosDaPlataforma(supabase);
       const adaptador = criarAdaptadorDaPlataforma({
         liberacoes: criarLiberacoesPostgres({ poolApp: pool }),

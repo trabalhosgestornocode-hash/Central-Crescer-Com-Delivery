@@ -82,8 +82,12 @@ test("10 — o núcleo só é usado pela camada de integração e pelo gateway; 
   assert.match(rotas, /tenant\.use\("\/financeiro-v2", criarFinanceiroV2DaPlataforma\(\{ supabase \}\)\);/);
   // o gateway (credencial de autoridade) não é importado pela aplicação comum
   assert.deepEqual(varrer(src, []).filter((p) => !relative(src, p).replaceAll("\\", "/").startsWith("fv2-gateway/") && /fv2-gateway/.test(readFileSync(p, "utf8"))).map((p) => relative(src, p)), []);
-  // a integração não lê a credencial de autoridade
-  for (const p of varrer(join(src, "modules", "fv2-integracao"), [])) assert.doesNotMatch(readFileSync(p, "utf8"), /FV2_AUTORIDADE/, relative(src, p));
+  // a credencial de autoridade só aparece no ponto único, e só no modo CO-LOCALIZADO com aceite explícito (decisão de 14/11)
+  for (const p of varrer(join(src, "modules", "fv2-integracao"), [])) {
+    const t = readFileSync(p, "utf8");
+    if (p.endsWith("index.js")) assert.match(t, /FV2_AUTORIDADE_COLOCALIZADA_ACEITA !== "1"/, "modo co-localizado exige aceite");
+    else assert.doesNotMatch(t, /FV2_AUTORIDADE_DATABASE_URL|process\.env/, relative(src, p));
+  }
 });
 
 test("o financeiro antigo não foi alterado para conhecer o novo", () => {

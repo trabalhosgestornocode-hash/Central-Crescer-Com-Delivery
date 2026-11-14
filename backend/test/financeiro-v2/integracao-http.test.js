@@ -15,6 +15,7 @@ import { criarConcessoesDaSessao } from "../../src/modules/fv2-integracao/portas
 import { criarMfaPeloProvedor } from "../../src/modules/fv2-integracao/mfaPeloProvedor.js";
 import { CABECALHO, assinarPedido } from "../../src/modules/fv2-integracao/canalGateway.js";
 import { criarGateway } from "../../src/fv2-gateway/gateway.js";
+import { criarAutoridadeCoLocalizada } from "../../src/modules/fv2-integracao/autoridadeCoLocalizada.js";
 import { ORG_A, UNI_A, UNI_A2, ORG_B, UNI_B } from "./helpers/cenario.js";
 import { abrirPool, criarAutoridadeDeTeste, criarBancoDeTeste, motivoParaPular } from "./helpers/postgres.js";
 import { SEGREDO_SINTETICO, tokenSintetico } from "./helpers/tokens.js";
@@ -28,13 +29,15 @@ const PESSOA_SEM = "dddddddd-0000-4000-8000-0000000000a2";
 const CONTA_COMP = "dddddddd-0000-4000-8000-0000000000c3";
 const PESSOA_COMP = "dddddddd-0000-4000-8000-0000000000a3";
 const ADMIN = "dddddddd-0000-4000-8000-0000000000c9";
+const CONTA_NADA = "dddddddd-0000-4000-8000-0000000000c4";
+const PESSOA_NADA = "dddddddd-0000-4000-8000-0000000000a4";
 const ESCOPOS = [{ organizacaoId: ORG_A, unidadeId: UNI_A }, { organizacaoId: ORG_A, unidadeId: UNI_A2 }, { organizacaoId: ORG_B, unidadeId: UNI_B }];
 
 /** "Provedor de identidade" sintético: só aceita tokens assinados com o segredo de teste. */
 const provedor = verificadorHs256(SEGREDO_SINTETICO);
 const obterUsuario = async (token) => { const p = provedor(token); return p && p.exp * 1000 > Date.now() ? { id: p.sub } : null; };
 /** Vínculos da plataforma (memória): pessoa → conta, unidades; conta compartilhada tem 2 pessoas. */
-const VINCULOS = { [PESSOA]: { conta: CONTA, unidades: [UNI_A, UNI_A2] }, [PESSOA_SEM]: { conta: CONTA_SEM, unidades: [UNI_A] }, [PESSOA_COMP]: { conta: CONTA_COMP, unidades: [UNI_A] } };
+const VINCULOS = { [PESSOA]: { conta: CONTA, unidades: [UNI_A, UNI_A2] }, [PESSOA_SEM]: { conta: CONTA_SEM, unidades: [UNI_A] }, [PESSOA_COMP]: { conta: CONTA_COMP, unidades: [UNI_A] }, [PESSOA_NADA]: { conta: CONTA_NADA, unidades: [UNI_A] } };
 const vinculos = {
   contaDoPerfil: async ({ perfilId }) => VINCULOS[perfilId]?.conta ?? null,
   perfisAtivosDaConta: async ({ contaId }) => (contaId === CONTA_COMP ? 2 : Object.values(VINCULOS).filter((v) => v.conta === contaId).length),
@@ -80,6 +83,10 @@ async function montar() {
   app.use((req, _res, next) => { const s = JSON.parse(req.header("x-teste-sessao") ?? "null"); if (s) Object.assign(req, s); next(); });
   app.use("/ligado", criarRotasFinanceiroV2({ habilitado: true, dependencias: () => ({ repositorio, adaptador, vinculos }) }));
   app.use("/escrita", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: true, dependencias: () => ({ repositorio, adaptador, vinculos: { ...vinculos, nomesDosPerfis: async ({ perfilIds }) => new Map(perfilIds.map((x) => [x, x === PESSOA ? "Pessoa Sintética" : null])) } }) }));
+  // MODO CO-LOCALIZADO (um só serviço): a mesma regra da autoridade, no processo, com o pool PRÓPRIO da autoridade
+  const repoLocal = criarRepositorioPostgres({ pool: poolApp, sessoes: criarAutoridadeCoLocalizada({ poolAutoridade: poolAut, obterUsuario, mfa }) });
+  const adaptadorLocal = criarAdaptadorDaPlataforma({ liberacoes: criarLiberacoesPostgres({ poolApp }), vinculos, concessoes: criarConcessoesDaSessao({ repositorio: repoLocal }), mfa });
+  app.use("/local", criarRotasFinanceiroV2({ habilitado: true, dependencias: () => ({ repositorio: repoLocal, adaptador: adaptadorLocal, vinculos }) }));
   app.use("/desligado", criarRotasFinanceiroV2({ habilitado: false, dependencias: () => { throw new Error("não deveria criar nada desligado"); } }));
   const servidorApp = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
   const urlApp = `http://127.0.0.1:${servidorApp.address().port}`;
@@ -209,4 +216,16 @@ test("10 — sessão e AÇÕES: escrita só com a chave própria, JSON estrito, 
   assert.equal((await get("/escrita/acoes/fechamento/alterar", { metodo: "POST", corpo: { competencia: "2026-09", novoEstado: "ABERTA", justificativa: "Reabertura sintética." }, t: token(CONTA, { metodo: null }) })).corpo.motivo, "MFA_SEM_SEGUNDO_FATOR");
   // cofre desligado: envio de arquivo indisponível
   assert.equal((await get("/escrita/acoes/documentos/enviar", { metodo: "POST", corpo: {} })).status, 503);
+});
+
+test("10 — modo CO-LOCALIZADO (um só serviço): mesma regra da autoridade — consulta, recusas da plataforma e do banco", pular, async () => {
+  const r = await get(`/local/api/caixa-e-bancos${PERIODO}`);
+  assert.equal(r.status, 200, JSON.stringify(r.corpo));
+  assert.ok(r.corpo.contas.some((c) => c.nome === "Banco Sintético da Rota"));
+  const semConc = await get(`/local/api/caixa-e-bancos${PERIODO}`, { s: sessao({ conta: CONTA_NADA, pessoa: PESSOA_NADA }) });
+  assert.equal(semConc.corpo.motivo, "SEM_CONCESSAO", `o banco recusa sem concessão (FV020): ${JSON.stringify(semConc)}`);
+  assert.equal((await get(`/local/api/caixa-e-bancos${PERIODO}`, { s: sessao({ extra: { impersonando: true, impersonadoPor: ADMIN } }) })).status, 403);
+  assert.equal((await get(`/local/api/caixa-e-bancos${PERIODO}`, { s: sessao({ conta: CONTA_COMP, pessoa: PESSOA_COMP }) })).corpo.motivo, "CONTA_COMPARTILHADA");
+  assert.equal((await get(`/local/api/caixa-e-bancos${PERIODO}`, { s: sessao({ unidade: UNI_A2 }) })).corpo.motivo, "UNIDADE_NAO_LIBERADA");
+  assert.equal((await get("/local/acoes/obrigacoes/registrar", { metodo: "POST", corpo: {} })).corpo.codigo, "ESCRITA_DESLIGADA", "consulta apenas");
 });
