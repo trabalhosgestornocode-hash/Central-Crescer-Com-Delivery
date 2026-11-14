@@ -122,6 +122,40 @@ registros reais:
 Nenhuma fórmula no frontend: a tela só exibe. A prévia não grava (teste: DRE, versão, categoria e histórico idênticos
 depois da consulta). A confirmação revalida tudo na transação; prévia velha não autoriza.
 
+## 5. Jornada de fechamento (Fase D) — pelo navegador
+
+**Ambiente:** pilha completa isolada (`fv2-homologacao`):
+- serviço em 127.0.0.1:5181;
+- gateway sintético em processo separado;
+- PostgreSQL próprio (banco `fv2_teste_homologacao_*`);
+- cofre em disco.
+
+Sem nenhuma alteração manual no banco.
+
+**Preparação (antes da jornada, como documentos recebidos normalmente):** o cofre recebeu a nota fiscal sintética
+que identifica o "boleto sem identificação" de outubro.
+- **Por quê:** a interface não tem envio de documento (só lista e detalha — ver § 13). Nenhum documento existente
+  comprovava esse boleto, e vincular um documento que não o comprova (relatório do canal, comprovante da energia)
+  seria evidência falsa.
+
+| Passo | Quem | Resultado observado |
+|---|---|---|
+| Conceder `reclassificar` | Administrador (MFA) | Configurações → Usuários e permissões; concessão gravada com justificativa e histórico |
+| 1. Abrir a Central (outubro) | Gestor | Fechamento: **1 impedimento** — 1 lançamento em classificação provisória (R$ 189,90) |
+| 2. Identificar o lançamento | Gestor | Pendências → "Despesa sem classificação" (Contas a pagar, R$ 189,90, fora da DRE) |
+| 3. Revisar documentação | Gestor | Nenhum documento vinculado; documentos necessários: nota, boleto ou contrato |
+| 4. Reclassificar | Gestor | Caso "conta a pagar sem categoria confirmada"; só categorias de despesa/patrimonial; prévia: Despesas Operacionais e Resultado −3.447,30 → −3.637,20; caixa sem efeito; título "fora até classificar" → "na linha"; impedimentos 1 → 0. Evidência: a nota fiscal do boleto; justificativa; confirmação |
+| 5. Confirmar a persistência | Gestor | Painel relido do servidor: categoria confirmada, nota vinculada, histórico "DESPESAS_A_CLASSIFICAR → DESPESAS_ADMINISTRATIVAS_GERAIS (você)" |
+| 6–7. DRE | Gestor | Despesas Operacionais −R$ 3.637,20; Resultado −R$ 3.637,20 (igual à prévia); "fora até classificar" sumiu |
+| 8. Voltar à Central | Gestor | Pendência resolvida saiu (9 → 8); as independentes continuam (saída bancária sem conta, conciliação a decidir, contas sem comprovante, relatórios faltantes) |
+| 9. Situação do fechamento | Administrador | **0 impedimentos**; 6 pendências a documentar (não bloqueiam) |
+| 10. Homologar | Administrador | Preliminar (versão nº 1) → **homologado** (versão nº 2 vigente, −R$ 3.637,20, metodologia `DRE_GERENCIAL_SEM_AJUSTE_DE_ESTOQUE@v1`); a preliminar preservada |
+
+O resultado de outubro continua "pendente de classificação" por um fato independente e verdadeiro: a saída bancária de
+R$ 618,50 sem conta vinculada. Ela não foi "resolvida" por atalho.
+
+**Classificação: PASS** (fechamento sintético concluído pelo navegador, sem mudar regra nem banco).
+
 ## 6. Consultas otimizadas (Fase E)
 
 **Antes:** `carregarRegistros` lia 23 tabelas inteiras do escopo em cada consulta de Vendas, Recebimentos consolidados,
@@ -174,7 +208,7 @@ Detalhes de PostgreSQL:
    processador, páginas). Igualdade profunda e estrita (valores, contagens, estados, vínculos, pendências, documentos,
    histórico, confiabilidade, saldos, versões).
 2. **A suíte inteira como prova**: com `FV2_CONFERIR_CARGA=1`, cada consulta otimizada também calcula com a carga
-   completa e falha se diferir. Resultado: **319/319 em memória e 319/319 no PostgreSQL** — todos os cenários das
+   completa e falha se diferir. Resultado final: **324/324 em memória e 324/324 no PostgreSQL** — todos os cenários das
    execuções 01–08C (vendas, estornos, reaberturas, homologações, conciliações, importações, concorrência...) produziram
    resultado idêntico.
 3. **A prova tem dentes**: um repositório que "perde" uma liquidação só nas consultas da carga dirigida é recusado pela
@@ -245,3 +279,171 @@ fica como item de operação: rodar `ANALYZE` depois de cargas grandes, como a i
 5. Carga de dados da medição: 3 dos 11 fechamentos "com pendências" do gerador foram recusados com
    `TRANSICAO_INVALIDA` (causa no gerador de dados não investigada nesta execução). As telas medidas são
    do último mês, que fica aberto, e a equivalência foi conferida em todos os meses mesmo assim.
+
+## 9. Mutações (Fase H)
+
+**Método:** o roteiro troca UM trecho por vez, numa cópia do arquivo guardada fora do repositório. Nas mutações de
+SQL, o banco-modelo descartável é reconstruído no cluster isolado de testes. Em seguida rodam os testes que deveriam
+detectar a mudança, e o original é restaurado **com hash conferido**. Ao final, o banco-modelo é reconstruído com as
+migrações originais. Nenhum arquivo ficou alterado.
+
+| # | Mutação | Resultado |
+|---|---|---|
+| M1 | aplicar proposta sem `aplicar` (gatilho da 0013) | **sobreviveu na 1ª rodada** → teste novo isolando o gatilho → **detectada** |
+| M2 | aprovar proposta sem `aprovar` | detectada |
+| M3 | revogar sem `revogar` (função de concessão) | **sobreviveu na 1ª rodada** → teste de SQL direto na função → **detectada** (FV036) |
+| M4 | confirmar importação só com `importar` | detectada (teste novo da 08C) |
+| M5 | homologar com `fechar` | detectada |
+| M6 | reabrir com `conciliar` | **sobreviveu na 1ª rodada** → teste novo (quem fecha e concilia) → **detectada** |
+| M7a | `fv2_tem_acao` ignora a situação ATIVA da concessão | **sobrevive — mutante equivalente** (ver abaixo) |
+| M7b | sessão de banco não é revogada quando a concessão muda | detectada |
+| M8 | ação concedida em outra unidade vale nesta | detectada (teste novo da 08C) |
+| M9 | sessão vale por qualquer ação (ação forjada) | detectada (4 testes) |
+| M10 | competência homologada aceita escrita | detectada |
+| M11 | reclassificar sem `reclassificar` (gatilho 0014) | detectada |
+| M12 | gatilho deixa mudar valor junto com a categoria | detectada |
+| M13 | núcleo reclassifica com `corrigir` | detectada |
+| M14 | núcleo dispensa evidência ao sair da provisória | detectada |
+| M15 | prévia antiga autoriza (versão ignorada) | detectada |
+| M16 | carga dirigida perde liquidações dos títulos | detectada ("Carga dirigida diverge da carga completa") |
+| M17 | carga dirigida perde a aresta `origem.vendaId` | **sobrevive — redundante** (ver abaixo) |
+| M18 | conciliação só por valor e data confirma sem justificativa | detectada |
+
+**Total: 17 de 19 detectadas.** As 2 sobreviventes foram analisadas:
+- **M7a — equivalente:** depois de uma revogação, a função de concessão revoga a sessão de banco do usuário (M7b mostra
+  que essa é a barreira efetiva), e a autoridade não emite sessão nova para concessão inativa. Nenhum caminho alcança
+  `fv2_tem_acao` com sessão válida e concessão inativa; a checagem é defesa em profundidade e foi mantida.
+- **M17 — redundante nos dados existentes:** todo lançamento com `origem.vendaId` (estorno, devolução) também é
+  alcançado pela própria origem (o estorno ou a venda). A suíte INTEIRA no modo de conferência continua idêntica sem a
+  aresta. Ela foi mantida como salvaguarda barata.
+
+As 3 sobreviventes da 1ª rodada eram **lacunas reais de teste**: os testes da 08B eram barrados antes pela política
+da tabela, e o gatilho específico nunca era exercitado. Elas viraram testes em `postgres-barreiras-08c.test.js`.
+
+## 10. Recuperação (Fase I)
+
+**Instância:** PostgreSQL **próprio desta verificação** (pasta `fv2-pg-teste-recuperacao-08c`, porta 54339).
+- O script recusa rodar sem pasta própria e nunca reinicia o cluster compartilhado.
+- O cluster compartilhado roda deliberadamente sem durabilidade (`fsync`/`synchronous_commit` desligados, por
+  velocidade). Na primeira tentativa, uma queda abrupta perdeu commits recentes; isso é da configuração de teste, não da
+  aplicação.
+- Por isso a instância de recuperação liga `fsync`, `synchronous_commit` e `full_page_writes` antes de começar.
+
+Script: `scripts/fv2-recuperacao-pg.mjs`. Mesmo banco e mesmo cofre religados; nada é recriado vazio.
+
+| Item | Resultado |
+|---|---|
+| 1. Reinício limpo, dados persistidos | PASS (1 falha de conexão até o servidor voltar; retrato idêntico) |
+| 2. Queda ABRUPTA (modo imediato) durante 150 registros | PASS: 7 concluídos antes; na retomada 8 "já gravados" (um foi confirmado pelo banco mas o cliente recebeu erro) e 142 gravados; total exato 150, todos com lançamento |
+| 3. Conexões da aplicação derrubadas no meio (`pg_terminate_backend`) | PASS: 6 conexões derrubadas, 4 operações falharam na hora, a repetição completou as 10 sem duplicar |
+| 4. Repetição após falha e concorrência atravessando a queda | PASS: 150 obrigações e 10 movimentações, nenhuma duplicada |
+| 5. Sessão de banco recuperada | PASS: o mesmo núcleo opera sem novo provisionamento |
+| 6. Integridade (conservação) após as quedas | PASS: 0 violações |
+| 7. Versão homologada reproduzida | PASS: versões e DRE idênticas antes/depois |
+| 8. Auditoria e histórico | PASS: 473/473 eventos de histórico; 1/1 auditoria de concessão |
+| 9. Cofre documental | PASS: integridade conferida pelo hash depois da queda |
+
+## 11. Jornada no navegador (Fases D, G e J)
+
+Tudo na pilha completa (gateway sintético + serviço + PostgreSQL + cofre), com usuários sintéticos.
+
+**Conciliação (Fase G), como operador:**
+1. Importou pela tela as vendas por pedido do SAIPOS e as vendas da Stone de 01/10, ambas do catálogo sintético
+   (receber, prévia, confirmar).
+2. "Procurar candidatas SAIPOS × Stone": 1 criada.
+3. Investigou: os dois lados, critério "mesmo código de autorização", confiabilidade "forte", as duas evidências
+   (relatórios de origem) e o histórico.
+4. Confirmou com justificativa → "Confirmada", com histórico.
+5. Repetiu a confirmação (reenvio com a mesma sessão e o mesmo token): **409 "Esta correspondência já foi decidida"**,
+   sem duplicidade.
+6. Efeito nas telas: o resumo da Central passou a mostrar "1 conciliação(ões) confirmada(s)" e "Nenhuma divergência
+   relevante sem justificativa".
+7. Depois da homologação, recusar a candidata manual de outubro → **"A competência está homologada. Alterações exigem
+   revisão formal com justificativa."**; a candidata ficou intacta.
+- **Ambígua:** o catálogo sintético não gera candidatas que disputem o mesmo registro. A recusa de ambígua está provada
+  na suíte (núcleo e PostgreSQL) e na renderização da tela (botão "Recusar", sem "Confirmar"), não no navegador.
+- **Proximidade:** candidata "só valor e data" agora exige justificativa sobre a evidência (núcleo); a tela avisa que
+  proximidade não é prova.
+
+**Sete áreas (Fase J), desktop e celular (375 px):**
+- Visão Geral, DRE, Vendas e Recebimentos, Contas a Pagar e a Receber, Caixa e Bancos (e Fluxo), Importações e
+  Conferências, Documentos e Configurações renderizaram, **sem estouro horizontal da página**. Os itens além da borda
+  no celular estão todos dentro de áreas de rolagem intencionais (barra de abas e tabelas roláveis).
+- Console: só os dois 409 esperados (reenvio da conciliação e recusa na homologada).
+- Autenticação: login sintético por perfil, "Sair" leva a `/entrar`, e o administrador entra com segundo fator.
+- Troca de competência (setembro ⇄ outubro) e de unidade: a Unidade 2 mostra os próprios dados (setembro homologado,
+  faturamento zero confirmado), sem misturar.
+- Teclado: Enter abre o detalhe; o foco vai para "Fechar"; Esc fecha e devolve o foco ao botão de origem; o painel é
+  `role="dialog"` com `aria-modal`.
+- Permissões: o gestor sem `reclassificar` não vê o formulário (motivo explicado); o operador recebe 403 ao reclassificar
+  (teste da tela).
+- Indicadores: a DRE, a Central e o fechamento refletiram a reclassificação imediatamente.
+
+**Não verificado nesta rodada:** leitor de tela real, navegação completa só por Tab em todas as telas, e paginação
+longa no navegador (coberta em teste).
+
+## 12. Matriz de homologação (18 domínios)
+
+| # | Domínio | 08B | Alterações e evidências na 08C | Testes | 08C | Pendências |
+|---|---|---|---|---|---|---|
+| 1 | Segurança por ação | PASS | `reclassificar` no núcleo e no banco; 17/19 mutações detectadas (2 analisadas como equivalente/redundante); 3 lacunas fechadas | reclassificação, barreiras 08C, granulares, mutação | **PASS** | — |
+| 2 | Isolamento entre unidades | PASS | Ação de outra unidade não vale nesta (teste + M8); troca de unidade no navegador | barreiras 08C, navegador | **PASS** | — |
+| 3 | Gateway sintético | PASS (sintético) | Sem mudança; usado em todas as jornadas | navegador | **PASS (sintético)** | Autenticação real é dependência externa |
+| 4 | Provisionamento sintético | PASS | Sem mudança | suíte | **PASS** | — |
+| 5 | Integridade de vendas | PASS | Vendas com carga dirigida idêntica à completa | equivalência + conferência da suíte | **PASS** | — |
+| 6 | Recebíveis | PASS | Recebimentos consolidados com carga dirigida; venda de setembro recebida em outubro | equivalência | **PASS** | — |
+| 7 | Obrigações | PASS | Conta "a classificar" → categoria com evidência; despesa ⇄ patrimonial | reclassificação | **PASS** | — |
+| 8 | Tesouraria | PASS | Fluxo de caixa: livro da 08B continua passando | suíte | **PASS** | — |
+| 9 | Importações | PASS | Importar ≠ confirmar provado no banco (M4) | barreiras 08C, navegador | **PASS** | — |
+| 10 | Conciliações | PASS (suíte) | Pilha completa: confirmar, repetir sem duplicar, recusar na homologada; FRACA exige justificativa; recusa pela tela | suíte + navegador | **PASS** | Ambígua não reproduzida no navegador (catálogo sintético) — provada na suíte |
+| 11 | DRE | PASS | Reclassificação refletida; prévia = resultado gravado | navegador + suíte | **PASS** | — |
+| 12 | Documentos | PASS | Evidência vinculada à reclassificação; cofre íntegro após queda | reclassificação, recuperação | **PASS** | Sem envio de documento pela interface |
+| 13 | Fechamento | PARCIAL | Reclassificação na interface; outubro homologado pelo navegador sem mexer no banco nem nas regras | navegador | **PASS** | — |
+| 14 | Concorrência | PASS | Reclassificações concorrentes: uma vence; operações atravessando queda | reclassificação, recuperação | **PASS** | — |
+| 15 | Recuperação | PARCIAL | Reinício e queda abrupta do PostgreSQL, conexões derrubadas, sessão, versão, auditoria, cofre | recuperação (9/9) | **PASS** | Em produção depende da infraestrutura real (dependência externa) |
+| 16 | Interface operacional | PARCIAL | Reclassificação, recusa de conciliação, 7 áreas desktop/celular, teclado no painel | navegador + frontend | **PARCIAL** | Sem envio de documento; leitor de tela real e Tab completo não verificados |
+| 17 | Desempenho | FAIL | Carga dirigida + índices; antes→depois 12 meses ~510→~260 ms; mesmas linhas em 3 e 12 meses; equivalência total | desempenho, equivalência | **PARCIAL** | Crescimento residual (~1,3×), histórico curto mais lento, Visão Geral/Caixa/Contas a Receber e detalhes ainda crescem (§ 8) |
+| 18 | Plano de integração | PASS (doc) / BLOQUEADO | Decisão mantida (§ 0 do doc 18) | — | **PASS (doc) / BLOQUEADO POR DEPENDÊNCIA EXTERNA** | Autenticação real, infraestrutura de produção, políticas, documentos reais |
+
+**PASS sintético ≠ autorização de produção.**
+
+### Testes e regressões (Fase K)
+
+| Suíte | `5aa3d12` | 08C |
+|---|---|---|
+| Financeiro v2 em memória | 306/306 | **324/324** |
+| Financeiro v2 no PostgreSQL | 306/306 | **324/324** |
+| Idem, modo de conferência da carga (memória / PostgreSQL) | — | **324/324 / 324/324** |
+| Frontend | 1.931 aprovados, 0 falhas, 26 pulados | **1.935 aprovados, 0 falhas, 26 pulados** |
+| Backend completo (worktree limpa, ambiente fictício) | 6.469; 16 falhas + 1 cancelado | **6.469; 16 falhas + 1 cancelado — mesma lista** |
+| Mutação | — | 17/19 detectadas (2 analisadas) |
+| Recuperação PostgreSQL | — | 9/9 |
+| Desempenho (12 meses) | Vendas/Central/Pendências/Fechamento ~0,4–0,75 s | ~0,26 s, equivalência IDÊNTICA nos 12 meses |
+
+Os 18 testes financeiros novos: reclassificação (10), equivalência por competência (3) e barreiras de banco (5). Os
+existentes foram ajustados só onde a regra endureceu: reclassificação exige `versaoEsperada` e evidência para sair
+da provisória, e devolve `{ lancamento, repetido }`. As 16 falhas do backend são preexistentes e não tocam o
+Financeiro v2.
+
+## 13. Pendências externas
+
+1. Login da plataforma com nível de autenticação (`aal`) confiável e revogação de contexto (o gateway é sintético).
+2. Onde roda a credencial da autoridade de banco (`fv2_autoridade`), fora do processo da aplicação.
+3. Infraestrutura PostgreSQL de produção: conexão direta, papéis, durabilidade (`fsync`/`synchronous_commit` ligados),
+   `ANALYZE`/autovacuum, backup.
+4. Cofre real de documentos e o **envio de documentos pela interface** — hoje a evidência precisa já estar no cofre.
+5. Aprovação das políticas: materialidade, retenção e quem recebe `reclassificar`/`reabrir`.
+6. Documentos financeiros reais e homologação de setembro real (fora desta execução por regra).
+
+## 14. Riscos remanescentes
+
+- **Desempenho:** crescimento residual da carga dirigida; histórico curto mais lento que a carga completa; Visão Geral,
+  Caixa, Contas a Receber e os detalhes de venda/recebimento ainda leem mais que a competência (planos no § 8).
+- **Planejador sem estatísticas** ignora os índices novos: depende de `ANALYZE` depois de cargas grandes.
+- **Mutante equivalente M7a** e **aresta redundante M17**: a checagem e a aresta foram mantidas, mas nenhum teste as
+  exercita isoladamente.
+- **Interface:** sem envio de documento, sem leitor de tela real, Tab completo não verificado.
+- **Ambiguidade de conciliação** não reproduzida no navegador (só na suíte).
+- **Gerador de desempenho:** 3 fechamentos recusados com `TRANSICAO_INVALIDA` na carga de dados (causa não
+  investigada; não afeta as telas medidas).
+- Tudo aqui é sintético: nada disso autoriza produção.
