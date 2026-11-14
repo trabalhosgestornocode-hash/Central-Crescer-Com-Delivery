@@ -166,6 +166,11 @@ test("7, 8 — divergência de conciliação sem resolução comprovada bloqueia
   await rejeita(n.resolverDivergenciaDeConciliacao(c, { correspondenciaId: corr.id, justificativa: "Taxa", evidenciaDocumentoIds: [] }), CODIGO.ENTRADA_INVALIDA);
   const doc = await guardarDocumento(n, cofre, c, pdf(), "application/pdf");
   await n.resolverDivergenciaDeConciliacao(c, { correspondenciaId: corr.id, justificativa: "Taxa de antecipação comprovada no extrato.", evidenciaDocumentoIds: [doc.id] });
+  // 09 (revisão da matriz): explicar a diferença não basta — a taxa de R$ 5,00 fora da DRE SUPERESTIMA o resultado. O
+  // caminho certo é registrar a taxa (ajuste com documento) e dar baixa no recebível com o crédito.
+  await rejeita(homologar(n, c), CODIGO.HOMOLOGACAO_BLOQUEADA);
+  await n.registrarAjuste(c, { alvoTipo: "RECEBIVEL", alvoId: r.id, valorCentavos: -500, motivo: "Taxa de antecipação (sintético)", categoria: "TAXAS_ANTECIPACAO", documentoId: doc.id });
+  await n.registrarLiquidacao(c, { movimentacaoId: credito.id, alocacoes: [{ alvoTipo: "RECEBIVEL", alvoId: r.id, valorCentavos: 9500 }] });
   // 08E: com a divergência resolvida, as ressalvas documentadas podem passar por "com pendências documentadas".
   assert.equal((await n.consultarCompetencia(c, { competencia: SET })).estado, "FECHAMENTO_PRELIMINAR", "com o impedimento, não entrou em 'com pendências'");
   await prepararHomologacao(n, c, SET);

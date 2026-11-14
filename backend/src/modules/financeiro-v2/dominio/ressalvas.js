@@ -32,7 +32,9 @@ export const EFEITO_POR_CODIGO = Object.freeze({
   FONTE_SEM_DOCUMENTO: E.SEM_EFEITO,
   // Efeito conhecido e quantificado.
   OBRIGACAO_SEM_COMPROVANTE: E.CONHECIDO, // despesa reconhecida pelo valor da conta; falta o documento que a comprova
-  TAXA_OU_VALOR_DIVERGENTE: E.CONHECIDO, // diferença de taxa/valor apurada
+  // Execução 09 (revisão da matriz): crédito do processador MENOR que o esperado é taxa/perda fora da DRE — o resultado
+  // fica SUPERESTIMADO. Não é ressalva: resolve-se registrando o ajuste (taxa) com evidência. Ver doc 22, § 7.
+  TAXA_OU_VALOR_DIVERGENTE: E.INDETERMINADO,
   TOTAIS_DE_RELATORIOS_DIFERENTES: E.CONHECIDO, // só chega aqui JUSTIFICADA (aberta é bloqueio)
   // Entrada sem origem / transação sem pedido: no pior caso, receita não registrada ATÉ o valor (resultado subestimado,
   // nunca superestimado) — efeito limitado e conhecido.
