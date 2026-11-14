@@ -15,7 +15,9 @@ export function filtro(params, campos, numeros = []) {
 const PAGINA = ["pagina", "tamanho"];
 const VENDAS = ["competencia", "inicio", "fim", "canal", "forma", "processador", "situacao", "valorMinimoCentavos", "valorMaximoCentavos", "identificador", "pagina", "tamanho"];
 const VENDAS_N = ["pagina", "tamanho", "valorMinimoCentavos", "valorMaximoCentavos"];
-const id = (p) => (typeof p.id === "string" && p.id ? p.id : NENHUM);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const uuidOu = (v) => (typeof v === "string" && UUID.test(v) ? v.toLowerCase() : NENHUM);
+const id = (p) => uuidOu(p.id);
 const competencia = (p) => ({ competencia: typeof p.competencia === "string" ? p.competencia : "" });
 
 /** caminho → (núcleo, contexto, parâmetros) → resultado */
@@ -34,8 +36,17 @@ export const CONSULTAS = Object.freeze({
     if (!INDICADORES.has(p.codigo)) throw Object.assign(new Error("Indicador desconhecido."), { codigoHttp: 400, codigo: "INDICADOR_DESCONHECIDO" });
     return n.composicaoDoIndicador(c, { ...competencia(p), codigo: p.codigo });
   },
-  "/contas-a-pagar": (n, c, p) => n.consultarContasAPagar(c, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", ...PAGINA], PAGINA)),
-  "/conta-a-pagar": (n, c, p) => n.detalharContaAPagar(c, { id: id(p) }),
+  "/contas-a-pagar": async (n, c, p) => {
+    const r = await n.consultarContasAPagar(c, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", ...PAGINA], PAGINA));
+    const cats = (await n.consultarRegistros(c, { tipo: "CATEGORIA" })).filter((x) => x.aceitaLancamento && x.ativa !== false && x.natureza !== "RECEITA").map((x) => ({ codigo: x.codigo, nome: x.nome })).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+    const fornecedores = (await n.consultarRegistros(c, { tipo: "CONTRAPARTE" })).map((x) => ({ id: x.id, nome: x.nome })).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+    return { ...r, opcoesDeRegistro: { categorias: cats, fornecedores } };
+  },
+  "/conta-a-pagar": async (n, c, p) => ({
+    ...(await n.detalharContaAPagar(c, { id: id(p) })),
+    contasParaPagar: (await n.consultarRegistros(c, { tipo: "CONTA" })).filter((x) => x.ativa).map((x) => ({ id: x.id, nome: x.nome })),
+    vinculoExtrato: await n.previaDoVinculoDoExtrato(c, { obrigacaoId: id(p) }),
+  }),
   "/contas-a-receber": (n, c, p) => n.consultarContasAReceber(c, filtro(p, ["competencia", "previstoDe", "previstoAte", "processador", "canal", "tipo", "situacao", ...PAGINA], PAGINA)),
   "/posicao-a-receber": (n, c, p) => n.consultarPosicaoAReceber(c, filtro(p, ["competencia", ...PAGINA], PAGINA)),
   "/conta-a-receber": (n, c, p) => n.detalharContaAReceber(c, { id: id(p) }),
@@ -56,5 +67,38 @@ export const CONSULTAS = Object.freeze({
   "/conferencias/pendencias": (n, c, p) => n.consultarPendencias(c, filtro(p, ["competencia", "grupo", "situacao", ...PAGINA], PAGINA)),
   "/fechamento": (n, c, p) => n.consultarFechamento(c, filtro(p, ["competencia"])),
   "/configuracoes": (n, c) => n.consultarConfiguracoes(c),
+  "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),
+  "/configuracoes/categoria": (n, c, p) => n.consultarCategoria(c, { codigo: String(p.codigo ?? "") }),
   "/permissoes": (n, c) => n.consultarPermissoes(c),
+  // Detalhes usados pelos painéis (somente leitura; ids são UUIDs conferidos no escopo pelo núcleo/RLS)
+  "/conferencias/documento": (n, c, p) => n.detalharImportacao(c, { id: id(p) }),
+  "/conferencias/proposta": (n, c, p) => n.detalharProposta(c, { id: id(p) }),
+  "/conferencias/correspondencia": (n, c, p) => n.detalharCorrespondencia(c, { id: id(p) }),
+  "/conferencias/pendencia": async (n, c, p) => {
+    const d = await n.detalharPendencia(c, { competencia: p.competencia, chave: String(p.chave ?? "").slice(0, 400) });
+    const f = await n.consultarFechamento(c, { competencia: d.pendencia.competencia ?? p.competencia });
+    const a = f.avaliacaoDasPendencias;
+    const item = [...a.ressalvas, ...a.bloqueantes, ...a.naoDocumentadas, ...a.semEvidencia].find((x) => x.chave === p.chave) ?? null;
+    return { ...d, fechamentoDaPendencia: { estado: f.estado, competencia: f.competencia, item, documentavel: ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS"].includes(f.estado) && d.pendencia.efeitoNoFechamento === "EXIGE_DOCUMENTACAO" && d.pendencia.situacao !== "INFORMATIVA" } };
+  },
+  "/conferencias/fechamento": async (n, c, p) => {
+    const f = await n.consultarFechamento(c, filtro(p, ["competencia"]));
+    const destinos = { ABERTA: ["FECHAMENTO_PRELIMINAR"], FECHAMENTO_PRELIMINAR: ["FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO", "ABERTA"], FECHAMENTO_COM_PENDENCIAS: ["FECHAMENTO_HOMOLOGADO", "FECHAMENTO_PRELIMINAR", "ABERTA"], FECHAMENTO_HOMOLOGADO: ["ABERTA"] }[f.estado] ?? [];
+    const acoes = [];
+    for (const novoEstado of destinos) acoes.push(await n.previaDaMudancaDeEstado(c, { competencia: f.competencia, novoEstado }));
+    return { ...f, acoes, versoes: (await n.consultarVersoesDeFechamento(c, { competencia: f.competencia })).versoes };
+  },
+  "/conferencias/catalogo": () => ({ arquivos: [], observacao: "Envio de arquivos indisponível: o cofre documental ainda não tem verificação antimalware." }),
+  "/documentos": (n, c, p) => n.consultarDocumentos(c, filtro(p, ["competencia", "situacao", ...PAGINA], PAGINA)),
+  "/documento": (n, c, p) => n.detalharDocumento(c, { id: id(p) }),
+  "/reclassificacao": (n, c, p) => n.consultarReclassificacao(c, p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : { lancamentoId: id(p), ...(p.categoria ? { categoria: String(p.categoria) } : {}) }),
+  "/vinculo-extrato": (n, c, p) => n.previaDoVinculoDoExtrato(c, { obrigacaoId: uuidOu(p.obrigacao), ...(p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : {}) }),
 });
+
+/** Pessoas com concessão ATIVA nesta unidade (para escolher responsável/conceder), com o nome da plataforma. */
+export async function pessoasDaUnidade(n, c, nomeDe) {
+  const { itens } = await n.consultarPermissoes(c);
+  const ativas = itens.filter((i) => i.situacao === "ATIVA");
+  const nomes = await nomeDe(ativas.map((i) => i.usuarioId));
+  return { pessoas: ativas.map((i) => ({ perfil: i.usuarioId, nome: nomes.get(i.usuarioId) ?? "Pessoa sem nome cadastrado" })) };
+}

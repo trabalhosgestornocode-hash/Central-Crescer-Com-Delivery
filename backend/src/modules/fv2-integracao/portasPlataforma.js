@@ -24,6 +24,12 @@ export function criarVinculosDaPlataforma(db) {
       if (r?.error || !Number.isInteger(r?.count)) throw new Error("Financeiro v2: falha ao contar pessoas da conta.");
       return r.count;
     },
+    /** Nomes das pessoas (só para exibição; nunca decide acesso). */
+    async nomesDosPerfis({ perfilIds }) {
+      if (!perfilIds?.length) return new Map();
+      const linhas = exigir(await db.from("perfis_operacionais").select("id, nome").in("id", perfilIds.slice(0, 200))) ?? [];
+      return new Map(linhas.map((l) => [String(l.id).toLowerCase(), l.nome ?? null]));
+    },
     async unidadesDoPerfil({ perfilId, organizacaoId }) {
       const linhas = exigir(await db.from("usuarios_unidades").select("unidade_id, ativo, unidades(organizacao_id)").eq("perfil_id", perfilId).eq("ativo", true)) ?? [];
       return linhas.filter((l) => l?.ativo === true && String(l?.unidades?.organizacao_id ?? "").toLowerCase() === String(organizacaoId).toLowerCase()).map((l) => String(l.unidade_id).toLowerCase());

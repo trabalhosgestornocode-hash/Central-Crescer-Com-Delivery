@@ -59,6 +59,7 @@ async function montar() {
   const semente = criarRepositorioPostgres({ pool: poolApp, sessoes: criarAutoridadeDeTeste({ urlAutoridade: b.urlAutoridade, urlAdmin: b.urlAdmin }) });
   const n = criarNucleoFinanceiro({ repositorio: semente, escoposAutorizados: ESCOPOS });
   const c = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: PESSOA, permissoes: Object.values(ACAO) };
+  await n.implantarPlanoDeContas(c, { modelo: "ACAITERIA" });
   const conta = await n.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco Sintético da Rota" });
   await n.registrarSaldoDeConta(c, { contaId: conta.id, data: "2026-10-01", valorCentavos: 123456 });
   // Liberação: empresa A e SÓ a unidade A (pela autoridade, com prova sintética de 2º fator do administrador).
@@ -78,6 +79,7 @@ async function montar() {
   const app = express();
   app.use((req, _res, next) => { const s = JSON.parse(req.header("x-teste-sessao") ?? "null"); if (s) Object.assign(req, s); next(); });
   app.use("/ligado", criarRotasFinanceiroV2({ habilitado: true, dependencias: () => ({ repositorio, adaptador, vinculos }) }));
+  app.use("/escrita", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: true, dependencias: () => ({ repositorio, adaptador, vinculos: { ...vinculos, nomesDosPerfis: async ({ perfilIds }) => new Map(perfilIds.map((x) => [x, x === PESSOA ? "Pessoa Sintética" : null])) } }) }));
   app.use("/desligado", criarRotasFinanceiroV2({ habilitado: false, dependencias: () => { throw new Error("não deveria criar nada desligado"); } }));
   const servidorApp = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
   const urlApp = `http://127.0.0.1:${servidorApp.address().port}`;
@@ -87,9 +89,9 @@ async function montar() {
 }
 
 const token = (conta = CONTA, o = {}) => tokenSintetico({ agoraMs: Date.now(), conta, ...o });
-async function get(caminho, { s = sessao(), t = token(s.user.id), metodo = "GET" } = {}) {
+async function get(caminho, { s = sessao(), t = token(s.user.id), metodo = "GET", corpo, tipo = "application/json" } = {}) {
   const { urlApp } = await montar();
-  const r = await fetch(`${urlApp}${caminho}`, { method: metodo, headers: { authorization: `Bearer ${t}`, "x-teste-sessao": JSON.stringify(s) } });
+  const r = await fetch(`${urlApp}${caminho}`, { method: metodo, headers: { authorization: `Bearer ${t}`, "x-teste-sessao": JSON.stringify(s), ...(corpo !== undefined ? { "content-type": tipo } : {}) }, ...(corpo !== undefined ? { body: typeof corpo === "string" ? corpo : JSON.stringify(corpo) } : {}) });
   return { status: r.status, corpo: await r.json() };
 }
 const PERIODO = "?inicio=2026-10-01&fim=2026-10-31";
@@ -170,4 +172,41 @@ test("10 — gateway: canal assinado (sem assinatura, adulterado, repetido), esc
   // provisionamento sem fator recente é recusado antes do banco
   assert.equal((await pedir({ caminho: "/v1/provisionamentos", corpoObj: { sessao: s, ato: { atestanteId: CONTA } }, t: token(CONTA, { metodo: null }) })).status, 403);
   assert.equal((await fetch(`${urlGateway}/v1/outra`, { method: "POST" })).status, 404);
+});
+
+test("10 — sessão e AÇÕES: escrita só com a chave própria, JSON estrito, operação comum grava pelo gateway; sensíveis exigem 2º fator recente; homologar aguarda a matriz", pular, async () => {
+  const ses = await get("/escrita/sessao");
+  assert.equal(ses.status, 200);
+  assert.equal(ses.corpo.modo, "PLATAFORMA");
+  assert.deepEqual(ses.corpo.unidades.map((u) => u.id), [UNI_A], "a unidade é a da sessão, nunca a do cliente");
+  assert.ok(ses.corpo.unidades[0].permissoes.includes(ACAO.VER));
+  const pessoas = await get("/escrita/api/pessoas");
+  assert.equal(pessoas.status, 200);
+  assert.ok(pessoas.corpo.pessoas.some((x) => x.perfil === PESSOA && x.nome === "Pessoa Sintética"));
+  const obrig = { descricao: "Conta sintética pela rota", valor: "1.234,56", categoria: "INSUMOS", competencia: "2026-10", dataEmissao: "2026-10-02", vencimento: "2026-10-20", fornecedorNovo: "Fornecedor Sintético da Rota" };
+  // escrita desligada (padrão)
+  assert.equal((await get("/ligado/acoes/obrigacoes/registrar", { metodo: "POST", corpo: obrig })).corpo.codigo, "ESCRITA_DESLIGADA");
+  // formato
+  assert.equal((await get("/escrita/acoes/obrigacoes/registrar", { metodo: "POST", corpo: "descricao=x", tipo: "application/x-www-form-urlencoded" })).status, 415);
+  assert.equal((await get("/escrita/acoes/obrigacoes/registrar", { metodo: "POST", corpo: { ...obrig, unidade: UNI_A2 } })).corpo.codigo, "CAMPO_DESCONHECIDO", "a unidade nunca vem do corpo");
+  // operação comum: grava e aparece na consulta
+  const r = await get("/escrita/acoes/obrigacoes/registrar", { metodo: "POST", corpo: obrig });
+  assert.equal(r.status, 200, JSON.stringify(r.corpo));
+  const lista = await get("/escrita/api/contas-a-pagar?competencia=2026-10");
+  assert.ok(lista.corpo.itens.some((i) => i.valorOriginalCentavos === 123456 || i.valorCentavos === 123456 || JSON.stringify(i).includes("Conta sintética pela rota")));
+  // pessoa sem concessão não grava
+  assert.equal((await get("/escrita/acoes/obrigacoes/registrar", { metodo: "POST", corpo: obrig, s: sessao({ conta: CONTA_SEM, pessoa: PESSOA_SEM }) })).status, 403);
+  // sensível sem 2º fator / com fator antigo → recusa; com fator recente passa da barreira (o núcleo decide o resto)
+  const conceder = { usuario: PESSOA_SEM, justificativa: "Concessão sintética de teste da rota.", acao_ver: true };
+  const semFator = await get("/escrita/acoes/permissoes/conceder", { metodo: "POST", corpo: conceder, t: token(CONTA, { metodo: null }) });
+  assert.equal(semFator.status, 403);
+  assert.equal(semFator.corpo.motivo, "MFA_SEM_SEGUNDO_FATOR");
+  assert.equal((await get("/escrita/acoes/permissoes/conceder", { metodo: "POST", corpo: conceder, t: token(CONTA, { fatorHaS: 7200, iatHaS: 5 }) })).corpo.motivo, "REAUTENTICACAO_RECENTE");
+  const comFator = await get("/escrita/acoes/permissoes/conceder", { metodo: "POST", corpo: conceder, t: token(CONTA, { fatorHaS: 20 }) });
+  assert.ok(!String(comFator.corpo.motivo ?? "").startsWith("MFA") && comFator.corpo.motivo !== "REAUTENTICACAO_RECENTE", JSON.stringify(comFator.corpo));
+  // homologar: bloqueado pela matriz ANTES de qualquer coisa; reabrir exige 2º fator
+  assert.equal((await get("/escrita/acoes/fechamento/alterar", { metodo: "POST", corpo: { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "x" }, t: token(CONTA, { fatorHaS: 20 }) })).corpo.codigo, "HOMOLOGACAO_AGUARDA_MATRIZ");
+  assert.equal((await get("/escrita/acoes/fechamento/alterar", { metodo: "POST", corpo: { competencia: "2026-09", novoEstado: "ABERTA", justificativa: "Reabertura sintética." }, t: token(CONTA, { metodo: null }) })).corpo.motivo, "MFA_SEM_SEGUNDO_FATOR");
+  // cofre desligado: envio de arquivo indisponível
+  assert.equal((await get("/escrita/acoes/documentos/enviar", { metodo: "POST", corpo: {} })).status, 503);
 });
