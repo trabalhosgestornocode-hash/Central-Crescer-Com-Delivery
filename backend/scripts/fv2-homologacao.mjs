@@ -92,6 +92,16 @@ async function preparar() {
   // 08C: nota fiscal SINTÉTICA que identifica o "boleto sem identificação" de outubro (evidência da reclassificação).
   const nf = await cofre.guardar(adm, { conteudo: pdfSintetico("Nota fiscal sintetica - servico de contabilidade de outubro - R$ 189,90"), tipoMime: "application/pdf" });
   await n.registrarDocumento(adm, { origem: "MANUAL", arquivoId: nf.arquivoId, hashSha256: nf.hashSha256, tipo: "NOTA_FISCAL", recebidoEm: "2026-11-03", competencia: "2026-10", descricao: "Nota fiscal do boleto de outubro: serviço de contabilidade (sintética)" });
+  // 08E (Cenário 3 — pagamento agrupado): duas contas de NOVEMBRO e UMA saída bancária já registrada que paga as duas.
+  // Só a preparação é por script; o vínculo (A R$ 600,00 + B R$ 400,00 = R$ 1.000,00) é feito pela tela na jornada.
+  const fornAgrupado = await n.registrarContraparte(adm, { tipo: "FORNECEDOR", nome: "Manutenção Agrupada (sintético)" });
+  for (const [valor, descricao] of [[60000, "Manutenção do freezer (sintética) — A"], [40000, "Manutenção da coifa (sintética) — B"]]) {
+    await n.registrarObrigacao(adm, { contraparteId: fornAgrupado.id, valorOriginalCentavos: valor, categoria: "DESPESAS_ADMINISTRATIVAS_GERAIS", descricao, competencia: "2026-11", dataEmissao: "2026-11-02", vencimento: "2026-11-10" });
+  }
+  const cp = await cofre.guardar(adm, { conteudo: pdfSintetico("Comprovante sintetico - pagamento unico de R$ 1.000,00 - manutencoes A (600,00) e B (400,00)"), tipoMime: "application/pdf" });
+  const comprovanteAgrupado = (await n.registrarDocumento(adm, { origem: "MANUAL", arquivoId: cp.arquivoId, hashSha256: cp.hashSha256, tipo: "COMPROVANTE", recebidoEm: "2026-11-10", competencia: "2026-11", descricao: "Comprovante do pagamento agrupado das manutenções (sintético)" })).documento.id;
+  const bancoU1 = (await n.consultarCaixaEBancos(adm, { inicio: "2026-11-01", fim: "2026-11-30", tamanho: 1 })).contas.find((c) => c.tipo === "BANCARIA");
+  await n.registrarMovimentacao(adm, { contaId: bancoU1.id, dataEfetiva: "2026-11-10", sentido: "SAIDA", valorCentavos: 100000, natureza: "PAGAMENTO", descricao: "PAG AGRUPADO MANUTENCAO SINT", documentoId: comprovanteAgrupado });
   dizer(`Homologação preparada em ${PASTA_HOMOLOGACAO} (banco ${banco}). Credenciais SINTÉTICAS em credenciais-sinteticas.txt.`);
   process.exit(0);
 }
