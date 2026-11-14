@@ -84,6 +84,8 @@ for (const comp of competencias.slice(0, -1)) {
   });
 }
 const carga = performance.now() - t0;
+// 08C: estatísticas do planejador, como o autovacuum faria num banco em uso (sem elas os índices novos são ignorados).
+await (await (await repositorio.interno()).dono()).query("analyze");
 // Contagem pelo núcleo (o papel da aplicação sem sessão de banco não enxerga nada: RLS).
 const contagem = {};
 for (const tipo of ["VENDA", "RECEBIVEL", "OBRIGACAO", "MOVIMENTACAO", "LANCAMENTO", "DOCUMENTO", "PROPOSTA", "CORRESPONDENCIA"]) {
@@ -143,10 +145,24 @@ resultados.push(await medir("10 telas simultâneas (mistas)", () => Promise.all(
   n.consultarVendas(c, { ...MES, tamanho: 25 }), n.consultarCentralDeConferencias(c, MES), n.consultarPendencias(c, { ...MES, tamanho: 25 }),
   n.consultarFechamento(c, MES), n.apurarCompetencia(c, MES), n.composicaoDoIndicador(c, { ...MES, codigo: "DESPESAS_OPERACIONAIS" }),
 ]), 1));
+// 08C: PERFIL da carga dirigida — tempo por (operação da porta, tabela) numa consulta da Central (onde o tempo cresce?).
+const perfil = {};
+const perfilado = {
+  transacao: (fn, op) => repositorio.transacao(fn, op),
+  leitura: (fn, op) => repositorio.leitura((tx) => fn(new Proxy(tx, { get: (alvo, prop) => (typeof alvo[prop] !== "function" ? alvo[prop] : async (...a) => {
+    const t = performance.now(); const r = await alvo[prop](...a); const k = `${String(prop)} ${typeof a[1] === "string" ? a[1] : ""}`;
+    const e = (perfil[k] ??= { chamadas: 0, ms: 0, linhas: 0 }); e.chamadas += 1; e.ms += performance.now() - t; e.linhas += Array.isArray(r) ? r.length : r?.itens?.length ?? 0; return r;
+  }) })), op),
+};
+const nPerfil = criarNucleoFinanceiro({ repositorio: perfilado, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, cofre });
+const tPerfil = performance.now();
+await nPerfil.consultarCentralDeConferencias(c, MES);
+const totalPerfil = Math.round(performance.now() - tPerfil);
+const perfilOrdenado = Object.entries(perfil).map(([k, v]) => ({ k, chamadas: v.chamadas, ms: Math.round(v.ms), linhas: v.linhas })).sort((a, b) => b.ms - a.ms).slice(0, 15);
 const mem = process.memoryUsage();
 console.log(JSON.stringify({
   meses: MESES, vendasPorMes: VENDAS, registros: contagem, falhasDeCarga, cargaS: Math.round(carga / 1000),
-  medicoes: resultados, antesDepois, equivalencia,
+  medicoes: resultados, antesDepois, equivalencia, perfilCentral: { totalMs: totalPerfil, porOperacao: perfilOrdenado },
   memoriaMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576) },
 }, null, 2));
 await pool.end?.();

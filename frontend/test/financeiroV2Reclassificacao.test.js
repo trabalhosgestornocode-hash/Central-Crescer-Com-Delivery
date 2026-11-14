@@ -88,3 +88,17 @@ test("08C — leitor vê a explicação e o motivo do bloqueio, sem formulário 
     assert.ok(!html.includes("Ver prévia do impacto") && !html.includes("Confirmar reclassificação"));
   }
 });
+
+test("08C — conciliação: candidata aberta oferece RECUSAR com motivo; só valor e data avisa que proximidade não é prova", () => {
+  const lado = { itens: [], total: 1, valorCentavos: 1000 };
+  const base = { id: "ref-abcdef0123", nome: "Venda SAIPOS × transação Stone", situacao: "CANDIDATA", ambigua: true, concorrentes: 1, ladoA: lado, ladoB: lado, criterio: "Valor igual e horário até 10 min", confiabilidade: "FRACA", confiabilidadeTexto: "Só valor e data coincidem: é candidata, nunca prova.", diferencaCentavos: 0, evidencias: [], podeConfirmar: false, motivoDeNaoConfirmar: "Correspondência ambígua: outras candidatas disputam os mesmos registros.", voceTemPermissao: true, relacao: "SAIPOS_X_STONE" };
+  const html = conf.detalheCorrespondencia({ correspondencia: base, historico: [] });
+  assert.match(html, /data-acao="\/api\/fv2\/acoes\/conciliacoes\/rejeitar"/);
+  assert.match(html, /name="justificativa" maxlength="300" required/);
+  assert.match(html, /proximidade não é prova/);
+  assert.ok(!html.includes("Confirmar conciliação"), "ambígua não oferece confirmar");
+  const semPermissao = conf.detalheCorrespondencia({ correspondencia: { ...base, voceTemPermissao: false }, historico: [] });
+  assert.ok(!semPermissao.includes("conciliacoes/rejeitar"));
+  const decidida = conf.detalheCorrespondencia({ correspondencia: { ...base, situacao: "REJEITADA" }, historico: [] });
+  assert.ok(!decidida.includes("conciliacoes/rejeitar"));
+});
