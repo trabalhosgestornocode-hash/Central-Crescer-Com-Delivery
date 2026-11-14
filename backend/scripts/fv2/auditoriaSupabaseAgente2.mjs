@@ -18,10 +18,10 @@
 // remoto. As migrações 0001–0021 NÃO são alteradas: o texto aplicado recebe só as adaptações A1–A4 do doc 24 § 11.
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listarMigracoes } from "./ambiente.mjs";
+import { PASTA_DE_MIGRACOES, listarMigracoes } from "./ambiente.mjs";
 
 const args = process.argv.slice(2);
 const PORTA = Number(args[args.indexOf("--porta") + 1] || 54369) || 54369;
@@ -49,7 +49,7 @@ const rodar = (bin, a, semSaida = false) => {
 };
 const pg = (await import("pg")).default;
 
-async function cenario(id, { padraoGlobal, publicacaoTotal, a5 = false }) {
+async function cenario(id, { padraoGlobal, publicacaoTotal, a5 = false, pacote = false }) {
   const pasta = join(tmpdir(), `fv2-auditoria-agente2-${randomBytes(4).toString("hex")}`);
   const nonce = `fv2aud${randomBytes(8).toString("hex")}`;
   const dados = join(pasta, "dados");
@@ -63,6 +63,7 @@ async function cenario(id, { padraoGlobal, publicacaoTotal, a5 = false }) {
   };
   const tentar = async (cl, sql, p = []) => { try { const r = await cl.query(sql, p); return { ok: true, linhas: r.rowCount, rows: r.rows }; } catch (e) { return { ok: false, erro: `${e.code}: ${e.message}` }; } };
   const r = [];
+  const formatar = () => r.map((x) => `  ${x.situacao.padEnd(8)} ${x.k.padEnd(4)} ${x.texto}${x.detalhe ? ` — ${x.detalhe}` : ""}`).join("\n");
   const registrar = (k, situacao, texto, detalhe = "") => r.push({ k, situacao, texto, detalhe });
   let ligado = false;
   try {
@@ -87,6 +88,19 @@ async function cenario(id, { padraoGlobal, publicacaoTotal, a5 = false }) {
 
     // ---- aplicação como `postgres` (não superusuário) com A1–A4
     const p = await conectar("postgres", "sim");
+    if (pacote) {
+      // O PACOTE DE PRODUÇÃO exatamente como seria aplicado: instalar.sql inteiro, numa transação, como `postgres`.
+      const instalar = readFileSync(join(PASTA_DE_MIGRACOES, "..", "producao", "instalar.sql"), "utf8");
+      const inst = await tentar(p, `begin;\n${instalar}\ncommit;`);
+      if (!inst.ok) await tentar(p, "rollback");
+      const existe = (await p.query("select exists (select 1 from pg_namespace where nspname = $1) s, (select count(*)::int from pg_roles where rolname like 'fv2\\_%') papeis", [SCHEMA])).rows[0];
+      if (pacote === "deve-abortar") {
+        registrar("K0", !inst.ok && !existe.s && existe.papeis === 0 ? "OK" : "FALHA", "instalar.sql ABORTA antes de qualquer alteração (publicação FOR ALL TABLES)", inst.ok ? "INSTALOU" : `${inst.erro.slice(0, 170)}; schema criado=${existe.s}; papéis fv2_*=${existe.papeis}`);
+        await p.end();
+        return formatar();
+      }
+      if (!inst.ok) throw new Error(`instalar.sql falhou: ${inst.erro}`);
+    } else {
     await p.query(`create schema ${SCHEMA}; revoke all on schema ${SCHEMA} from public; set search_path = ${SCHEMA}, pg_catalog`);
     await p.query(`do $$ begin
       if not exists (select 1 from pg_roles where rolname = 'fv2_app') then create role fv2_app nologin; end if;
@@ -116,10 +130,11 @@ async function cenario(id, { padraoGlobal, publicacaoTotal, a5 = false }) {
         await p.query("commit");
       } catch (e) { await p.query("rollback"); throw new Error(`${m.nome} → ${e.code}: ${e.message}`); }
     }
+    }
     // Logins próprios do módulo (como no doc 24): search_path NO PAPEL, nunca no banco da plataforma.
     await p.query(`create role fv2_app_login login in role fv2_app; alter role fv2_app_login set search_path = ${SCHEMA}, pg_catalog;
       create role fv2_gateway_login login in role fv2_autoridade; alter role fv2_gateway_login set search_path = ${SCHEMA}, pg_catalog;`);
-    registrar("K0", "OK", `0001–0021 aplicadas como postgres no schema ${SCHEMA} (${padraoGlobal ? "padrões GLOBAIS do postgres" : "padrões só no public"}${publicacaoTotal ? ", publicação FOR ALL TABLES" : ""})`);
+    registrar("K0", "OK", `${pacote ? "PACOTE instalar.sql (A1–A5, pré e pós-condições) aplicado" : "0001–0021 aplicadas"} como postgres no schema ${SCHEMA} (${padraoGlobal ? "padrões GLOBAIS do postgres" : "padrões só no public"}${publicacaoTotal ? ", publicação FOR ALL TABLES" : ""})`);
 
     const sa = await conectar("sim_admin", "sim");
     // K1 — privilégios por papel e tabela
@@ -203,13 +218,16 @@ async function cenario(id, { padraoGlobal, publicacaoTotal, a5 = false }) {
     await p.end();
   } finally {
     if (ligado) { try { rodar("pg_ctl", ["stop", "-D", dados, "-m", "fast", "-w"], true); } catch { /* parado */ } }
-    rmSync(pasta, { recursive: true, force: true, maxRetries: 20, retryDelay: 500 });
+    // O Windows às vezes segura a pasta por instantes depois do pg_ctl stop: limpeza não derruba a auditoria.
+    try { rmSync(pasta, { recursive: true, force: true, maxRetries: 40, retryDelay: 500 }); } catch (e) { process.stderr.write(`aviso: pasta temporária não apagada (${pasta}): ${e.code}\n`); }
   }
-  return r.map((x) => `  ${x.situacao.padEnd(8)} ${x.k.padEnd(4)} ${x.texto}${x.detalhe ? ` — ${x.detalhe}` : ""}`).join("\n");
+  return formatar();
 }
 
 const saida = [];
 saida.push("S1 — Supabase simulado com privilégios padrão do postgres só no public:", await cenario("S1", { padraoGlobal: false, publicacaoTotal: false }));
 saida.push("", "S2 — Supabase simulado HOSTIL: privilégios padrão GLOBAIS do postgres + publicação FOR ALL TABLES:", await cenario("S2", { padraoGlobal: true, publicacaoTotal: true }));
 saida.push("", "S3 — o mesmo cenário HOSTIL com a adaptação A5 (revogação explícita ao fim de cada migração):", await cenario("S3", { padraoGlobal: true, publicacaoTotal: true, a5: true }));
+saida.push("", "S4 — PACOTE DE PRODUÇÃO (instalar.sql) com padrões GLOBAIS hostis e publicação normal:", await cenario("S4", { padraoGlobal: true, publicacaoTotal: false, pacote: true }));
+saida.push("", "S5 — PACOTE DE PRODUÇÃO com publicação FOR ALL TABLES (deve abortar sem alterar nada):", await cenario("S5", { padraoGlobal: true, publicacaoTotal: true, pacote: "deve-abortar" }));
 process.stdout.write(`${saida.join("\n")}\nClusters descartáveis parados e apagados.\n`);
