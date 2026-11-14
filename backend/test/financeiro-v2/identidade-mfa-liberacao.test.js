@@ -123,6 +123,7 @@ test("09B — liberação: desligada por padrão; unidade só com a empresa; lib
   assert.equal((await vazio.a.disponibilidade(sessao())).liberado, false, "rota direta numa unidade não liberada: nada");
   const soUnidade = await montarAdaptador({ liberar: [[ORG_A, UNI_A]] });
   await recusa(soUnidade.a.contexto(sessao()), MOTIVO.EMPRESA_NAO_LIBERADA);
+  assert.deepEqual(await soUnidade.liberacoes.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false }, "o registro segue o contrato do banco (0021): unidade só com a empresa");
   const { a, liberacoes, estado } = await montarAdaptador({ liberar: [[ORG_A, null], [ORG_A, UNI_A]] });
   assert.equal((await a.contexto(sessao())).contexto.unidadeId, UNI_A);
   await recusa(a.contexto(sessao({ uni: UNI_A2 })), MOTIVO.UNIDADE_NAO_LIBERADA, "troca para unidade não liberada");
