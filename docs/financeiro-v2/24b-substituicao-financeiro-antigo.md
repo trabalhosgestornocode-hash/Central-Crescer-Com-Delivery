@@ -63,6 +63,7 @@ Parser e administrativo não dependem do legado.
 | `src/shared/gestaoFinanceira.permissoes.js` usado por `src/shared/setores.js` (L-1) | A regra de SETORES operacionais da plataforma depende do módulo financeiro antigo | **Não remover** com o legado; antes, mover a constante para a plataforma (teste `L-1` impede a remoção acidental) |
 | `/plataforma/financeiro` (planos e assinaturas) | **Não é o legado** (cobrança da plataforma) | Fora do escopo; não tocar |
 | `adminUnidadeWizard.js` (exclui o módulo do assistente) | Comportamento da plataforma | Rever na fase de ativação |
+| **L-1** — Setores de navegação de TODOS os usuários: `GET /api/v1/sessao/setores` (`sessao.controller.js`) → `calcularSetores` (`shared/setores.js`, que importa `MODULO_FINANCEIRO` de `gestaoFinanceira.permissoes.js`) ← `resolverAcessoFinanceiro` (`middlewares/financeiro.js`), que lê `gestao_financeira_concessoes` (`nivel`, `somente_financeiro`) | Achado da auditoria do Agente 2. É a ÚNICA fonte de "somente financeiro". Por desenho (teste "somente_financeiro sem financeiro vigente não esconde o operacional"), sem concessão vigente a restrição não vale. Por isso, revogar ou apagar a concessão antiga devolve o setor **operacional** a quem é exclusivamente financeiro. É regra de **navegação**: as rotas operacionais continuam protegidas pelas permissões do perfil. Sem a tabela, a rota de setores falha fechado (500 para todos) | **Não remover** roteador, middleware, `gestaoFinanceira.permissoes.js` nem a tabela enquanto não houver **fonte substituta** de "financeiro"/"somente financeiro", por exemplo as concessões do v2 (D-24b-1, D-24b-6). Testes: `backend/test/financeiro-setores-legado.test.js` (perfis sintéticos, risco fixado, falha fechada e alarme que falha se a fonte mudar sem atualizar este plano); aceite P17 |
 
 ## 4. Avaliação de retenção
 
@@ -96,7 +97,7 @@ Parser e administrativo não dependem do legado.
 | F2 | Demais unidades, em lotes, mesmo mecanismo | idem, por unidade |
 | F3 | Legado **congelado** para todas: rotas de escrita desligadas no backend (somente consulta, para conferência) | religar as rotas |
 | F4 | Backup e ensaio de restauração (§ 5) aprovados | — |
-| F5 | Remoção do **código** do legado (frontend e backend) e do bloqueio de dois estados no menu | reverter o commit |
+| F5 | Remoção do **código** do legado (frontend e backend) e do bloqueio de dois estados no menu. **Pré-condição (L-1):** a rota de setores já usa a fonte substituta de "financeiro"/"somente financeiro" e o aceite P17 passa (usuário exclusivamente financeiro continua sem o setor operacional; operador continua com o dele) | reverter o commit |
 | F6 | Remoção das **estruturas** no banco (§ 8) — **irreversível**, exige autorização específica | só pelo backup (§ 5) |
 
 Regra: em nenhum momento a mesma unidade tem os dois financeiros ativos (o encaixe da 09 já impõe isso: com o v2
@@ -150,3 +151,4 @@ Sem migrar registros, a abertura vem de **documentos de origem**:
 | D-24b-3 | Prazo de guarda do backup do legado | empresa + contador |
 | D-24b-4 | Competência inicial e unidade piloto | empresa |
 | D-24b-5 | Autorização específica para F6 em produção | empresa (por escrito) |
+| D-24b-6 | (L-1) Fonte de "exclusivamente financeiro" depois do legado: atributo da concessão do v2, do perfil da plataforma, ou deixar de existir. E se a restrição deve continuar valendo quando a concessão financeira é revogada (hoje não vale) | empresa + técnica |

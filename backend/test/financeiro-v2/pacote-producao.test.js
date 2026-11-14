@@ -41,6 +41,21 @@ test("10 — instalar.sql é aditivo e não toca no sistema atual", () => {
   assert.match(sql, /schema financeiro_v2 já existe/); // pré-condição: não reinstala por cima
 });
 
+test("auditoria do Agente 2 — A-2 aborta antes de alterar; A5 revoga explicitamente; pós-condições não confiam só no USAGE", () => {
+  const sql = ler("instalar.sql");
+  const pre = sql.indexOf("pré-condições (abortam)");
+  const criar = sql.indexOf("create schema financeiro_v2;");
+  const a2 = sql.indexOf("from pg_publication where puballtables");
+  assert.ok(pre >= 0 && a2 > pre && a2 < criar, "a checagem da publicação FOR ALL TABLES vem ANTES de qualquer alteração");
+  const a5 = sql.indexOf("A5: revogação explícita");
+  const ultima = sql.lastIndexOf("insert into financeiro_v2.fv2_migracao");
+  const pos = sql.indexOf("pós-condições (abortam)");
+  assert.ok(a5 > ultima && a5 < pos, "A5 depois da última migração e antes das pós-condições");
+  for (const t of ["revoke all on all tables in schema financeiro_v2 from %I", "revoke all on all sequences in schema financeiro_v2 from %I", "revoke all on all functions in schema financeiro_v2 from %I"]) assert.ok(sql.includes(t), t);
+  assert.match(sql.slice(a5, pos), /grant fv2_guardiao to current_user;[\s\S]*revoke fv2_guardiao from current_user;/, "participação temporária desfeita");
+  for (const t of ["privilégio(s) de PUBLIC ou credencial comum em tabela/sequência", "EXECUTE concedido a credencial comum", "tabela(s) do v2 em publicação de replicação"]) assert.ok(sql.slice(pos).includes(t), t);
+});
+
 test("10 — desativar.sql não apaga nada", () => {
   const sql = ler("desativar.sql").replace(/--[^\n]*/g, "");
   assert.doesNotMatch(sql, /\b(drop|truncate|delete)\b/i);

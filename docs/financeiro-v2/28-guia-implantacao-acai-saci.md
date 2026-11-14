@@ -1,4 +1,4 @@
-# Financeiro v2 — 27. Guia de implantação e ativação controlada (Açaí no Grau Saci)
+# Financeiro v2 — 28. Guia de implantação e ativação controlada (Açaí no Grau Saci)
 
 Data: 14/11/2026. Branch local `feat/financeiro-v2-producao`. **Nada deste guia foi executado.** Cada etapa marcada
 com 🔒 exige a autorização específica do proprietário, em palavras próprias, para aquela operação.
@@ -7,7 +7,7 @@ com 🔒 exige a autorização específica do proprietário, em palavras própri
 
 | Artefato | Conferência |
 |---|---|
-| `database/financeiro-v2/producao/instalar.sql` | sha256 `309b142981b8d8714c01de57aaeca1c4bbbfbc1f8c2d7062f0ae24cc18323c03` (`node backend/scripts/fv2/pacoteProducao.mjs --conferir` = "em dia") |
+| `database/financeiro-v2/producao/instalar.sql` | sha256 `b5daa3cbbea6a9ec6f78507deb9576be059abab1528bb9992da8a5701f477a76` (`node backend/scripts/fv2/pacoteProducao.mjs --conferir` = "em dia") |
 | `database/financeiro-v2/producao/inventario.sql` | só leitura; sha256 `2dad513548d38ab80cd03c75451adea4fcf095eb450bd48e6f2374521e51c005` |
 | `database/financeiro-v2/producao/desativar.sql` | reversão não destrutiva; sha256 `db9bafe89bd1fe024e30b2d47d45420db53cc05f1fcbb75141e9e4242413ca17` |
 | Código | backend `src/modules/fv2-integracao/` + `src/fv2-gateway/`; interface `frontend/financeiro-v2/` (modo plataforma) |

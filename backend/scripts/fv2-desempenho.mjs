@@ -85,8 +85,21 @@ for (const comp of competencias) {
 const diagnosticoFechamentos = [];
 for (const comp of competencias.slice(0, -1)) {
   for (const [passo, cmd] of [["preliminar", { competencia: comp, novoEstado: "FECHAMENTO_PRELIMINAR" }],
-    ["com_pendencias", { competencia: comp, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Propostas da importação ainda em revisão (sintético)", impacto: "Pode alterar o resultado (sintético)." }], justificativa: "Fechamento sintético com pendências." }]]) {
+    ["com_pendencias", { competencia: comp, novoEstado: "FECHAMENTO_COM_PENDENCIAS", justificativa: "Fechamento sintético com pendências." }]]) {
     const antes = (await n.consultarFechamento(c, { competencia: comp })).estado;
+    // Agente 2 (após 08E/0019): "com pendências documentadas" exige cada pendência documentada e admissível. O gerador
+    // documenta as admissíveis (dados SINTÉTICOS); se sobrar bloqueante, o mês fica no preliminar — é a REGRA, não falha.
+    if (passo === "com_pendencias") {
+      const f = await n.consultarFechamento(c, { competencia: comp });
+      for (const x of [...f.avaliacaoDasPendencias.naoDocumentadas, ...f.avaliacaoDasPendencias.semEvidencia]) {
+        await n.documentarPendenciaDoFechamento(c, { competencia: comp, pendencia: { chave: x.chave, descricao: x.titulo ?? "Pendência", impacto: "Ressalva do gerador sintético.", decisao: "Admitida no cenário sintético.", documentacaoFaltante: "Documento sintético." } });
+      }
+      const bloqueantes = (await n.consultarFechamento(c, { competencia: comp })).avaliacaoDasPendencias.bloqueantes;
+      if (bloqueantes.length) {
+        diagnosticoFechamentos.push({ comp, passo, de: antes, ok: false, esperado: true, codigo: "PENDENCIA_BLOQUEANTE", mensagem: `${bloqueantes.length} pendência(s) bloqueante(s): o mês fica no fechamento preliminar (regra F-1).`, detalhes: { codigos: [...new Set(bloqueantes.map((b) => b.codigo))] } });
+        break;
+      }
+    }
     try {
       await n.alterarEstadoDaCompetencia(c, cmd);
       diagnosticoFechamentos.push({ comp, passo, de: antes, ok: true });

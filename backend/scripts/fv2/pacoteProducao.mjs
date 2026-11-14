@@ -41,8 +41,12 @@ function instalar() {
   if (select rolsuper from pg_roles where rolname = current_user) then raise exception 'FV2 instalação: não aplicar como superusuário'; end if;
   if not (select rolcreaterole from pg_roles where rolname = current_user) then raise exception 'FV2 instalação: o executor precisa de CREATEROLE'; end if;
   if current_setting('server_version_num')::int < 130000 then raise exception 'FV2 instalação: PostgreSQL 13+ exigido'; end if;
-  -- auditoria A-2: publicação de tempo real que inclui TODAS as tabelas levaria as tabelas novas junto — bloqueia
-  if exists (select 1 from pg_publication where puballtables) then raise exception 'FV2 instalação: há publicação FOR ALL TABLES (ex.: supabase_realtime) — nada foi feito'; end if;
+  -- A-2 (auditoria do Agente 2): publicação FOR ALL TABLES incluiria AUTOMATICAMENTE as tabelas do v2 na replicação lógica
+  -- (Realtime). A publicação é da plataforma: a instalação PARA antes de qualquer alteração e a decisão é humana.
+  if exists (select 1 from pg_publication where puballtables) then
+    raise exception 'FV2 instalação: existe publicação FOR ALL TABLES (%) — as tabelas do v2 entrariam na replicação; nada foi feito',
+      (select string_agg(pubname, ', ') from pg_publication where puballtables);
+  end if;
 end $$;`,
     "",
     "-- ================================================================================ A1/A4: schema, papéis, uso",
@@ -70,6 +74,22 @@ end $$;`,
   }
   partes.push("-- ======================================================== A5: nenhuma função do módulo executável por PUBLIC", `${sqlSemExecucaoPublica(S)};`, "");
   partes.push(
+    "-- ======================================================================= A5: revogação explícita (Agente 2, A-1)",
+    "-- Privilégio padrão GLOBAL do executor (sem IN SCHEMA) não se revoga por schema e daria às credenciais comuns acesso",
+    "-- aos objetos criados acima. Não se confia só na falta de USAGE: retira-se tudo explicitamente. As funções protegidas",
+    "-- são do guardião: a revogação usa a MESMA participação temporária da A3, desfeita na sequência.",
+    `grant fv2_guardiao to current_user;
+do $$ declare r text; begin
+  foreach r in array array['anon','authenticated','service_role','authenticator'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('revoke all on all tables in schema ${S} from %I', r);
+      execute format('revoke all on all sequences in schema ${S} from %I', r);
+      execute format('revoke all on all functions in schema ${S} from %I', r);
+    end if;
+  end loop;
+end $$;
+revoke fv2_guardiao from current_user;`,
+    "",
     "-- ===================================================================================== pós-condições (abortam)",
     `do $$
 declare n int; txt text;
@@ -97,6 +117,19 @@ begin
       and c.relname in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
       and (has_table_privilege(g.r, c.oid, 'select') or has_table_privilege(g.r, c.oid, 'insert') or has_table_privilege(g.r, c.oid, 'update') or has_table_privilege(g.r, c.oid, 'delete'));
   if n > 0 then raise exception 'FV2 pós: tabela guardada acessível por papel não autorizado (% casos)', n; end if;
+  -- A5: NENHUM privilégio de credencial comum em tabela, sequência ou função do schema (não só falta de USAGE).
+  select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace,
+    lateral aclexplode(coalesce(c.relacl, acldefault((case when c.relkind = 'S' then 's' else 'r' end)::"char", c.relowner))) x
+    where s.nspname = '${S}' and c.relkind in ('r','p','v','m','S')
+      and (x.grantee = 0 or pg_get_userbyid(x.grantee) in ('anon','authenticated','service_role','authenticator'));
+  if n > 0 then raise exception 'FV2 pós: % privilégio(s) de PUBLIC ou credencial comum em tabela/sequência do schema', n; end if;
+  select count(*) into n from pg_proc p join pg_namespace s on s.oid = p.pronamespace,
+    lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x
+    where s.nspname = '${S}' and pg_get_userbyid(x.grantee) in ('anon','authenticated','service_role','authenticator');
+  if n > 0 then raise exception 'FV2 pós: % EXECUTE concedido a credencial comum em função do schema', n; end if;
+  -- A-2: nenhuma tabela do v2 em publicação de replicação.
+  select count(*) into n from pg_publication_tables where schemaname = '${S}';
+  if n > 0 then raise exception 'FV2 pós: % tabela(s) do v2 em publicação de replicação', n; end if;
   -- funções protegidas: dono guardião, search_path no schema, sem EXECUTE para PUBLIC nem credenciais comuns
   select string_agg(p.oid::regprocedure::text, ', ') into txt from pg_proc p join pg_namespace s on s.oid = p.pronamespace
     where s.nspname = '${S}' and p.prosecdef and (
