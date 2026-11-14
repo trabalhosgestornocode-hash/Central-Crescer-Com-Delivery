@@ -67,7 +67,7 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   const tabelas = (await dono.query("select table_name from information_schema.tables where table_schema = 'public' and table_name like 'fv2\\_%' order by 1")).rows.map((r) => r.table_name);
   assert.deepEqual(tabelas, [
     "fv2_ajuste", "fv2_atribuicao_pendencia", "fv2_auditoria_concessao", "fv2_canal_processador", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_configuracao_unidade", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
-    "fv2_estorno", "fv2_historico", "fv2_importacao", "fv2_lancamento", "fv2_liquidacao", "fv2_migracao", "fv2_movimentacao", "fv2_obrigacao",
+    "fv2_estorno", "fv2_historico", "fv2_importacao", "fv2_lancamento", "fv2_liberacao", "fv2_liberacao_historico", "fv2_liquidacao", "fv2_migracao", "fv2_movimentacao", "fv2_obrigacao",
     "fv2_pagamento_venda", "fv2_proposta", "fv2_provisionamento_inicial", "fv2_recebivel", "fv2_registro_fonte", "fv2_saldo_conta", "fv2_sessao_banco", "fv2_sessao_caixa", "fv2_transferencia", "fv2_venda", "fv2_versao_fechamento", "fv2_vinculo_documental",
   ]);
   assert.deepEqual((await dono.query("select nome, sha256 from fv2_migracao order by 1")).rows, listarMigracoes().map((m) => ({ nome: m.nome, sha256: m.sha256 })));
@@ -82,7 +82,8 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   // Toda tabela de dados tem RLS ligado E forçado, e nenhuma dá DELETE/TRUNCATE ao papel de aplicação.
   // 07B: as três tabelas GUARDADAS (sessões, auditoria e provisionamento) não têm RLS porque a aplicação não tem NENHUM
   // privilégio sobre elas — só as funções do guardião as tocam (conferido logo abaixo).
-  const GUARDADAS = ["fv2_auditoria_concessao", "fv2_provisionamento_inicial", "fv2_sessao_banco"];
+  // 09B: liberação por empresa/unidade e o histórico dela também são guardadas (só funções do guardião; 0021).
+  const GUARDADAS = ["fv2_auditoria_concessao", "fv2_liberacao", "fv2_liberacao_historico", "fv2_provisionamento_inicial", "fv2_sessao_banco"];
   const rls = (await dono.query("select relname, relrowsecurity, relforcerowsecurity from pg_class where relkind = 'r' and relname like 'fv2\\_%' and relname <> 'fv2_migracao' and relname <> all($1::text[])", [GUARDADAS])).rows;
   assert.equal(rls.length, 30); // 19 da 0001 + 2 da 0002 + concessão (0003) + proposta e divergência (0004) + saldo e sessão de caixa (0006) + versão, atribuição, canal/processador e configuração (0009)
   assert.deepEqual(rls.filter((x) => !x.relrowsecurity || !x.relforcerowsecurity), []);

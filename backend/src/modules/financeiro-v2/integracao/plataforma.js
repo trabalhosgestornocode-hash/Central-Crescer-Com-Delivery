@@ -19,6 +19,7 @@
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { ACAO, exigirContexto } from "../dominio/contexto.js";
 import { ehUuid } from "../dominio/validacao.js";
+import { MOTIVO_PROVA } from "./provaDeAutenticacao.js";
 
 /** Motivos estáveis (vão em `detalhes.motivo`; a interface traduz). */
 export const MOTIVO = Object.freeze({
@@ -39,6 +40,9 @@ export const MOTIVO = Object.freeze({
   MFA_REQUERIDA: "MFA_REQUERIDA",
   REAUTENTICACAO_RECENTE: "REAUTENTICACAO_RECENTE",
   FALHA_FECHADA: "FALHA_FECHADA",
+  // 09B
+  PESSOA_SEM_IDENTIDADE: "PESSOA_SEM_IDENTIDADE",
+  MFA_INDISPONIVEL: "MFA_INDISPONIVEL",
 });
 
 /** Papel do perfil de exibição (TV da loja) na plataforma: nunca enxerga o financeiro. */
@@ -117,9 +121,11 @@ async function lerComFalhaFechada(leitura) {
  *        concessões EXPLÍCITAS do Financeiro v2 (por pessoa operacional)
  * @param {() => Date} [portas.relogio]
  * @param {boolean} [portas.permitirContaCompartilhada] padrão false (decisão pendente do responsável)
+ * @param {{provar:({tokenDeAcesso, contaId})=>Promise<{ok:boolean, motivo?:string}>}|null} [portas.mfa] 09B: verificador da
+ *        prova de segundo fator (provaDeAutenticacao.js). Sem ele, as ações de ACOES_COM_MFA_RECENTE ficam BLOQUEADAS.
  */
-export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, relogio = () => new Date(), permitirContaCompartilhada = false }) {
-  if (typeof liberacoes?.consultar !== "function" || typeof vinculos?.unidadesDoPerfil !== "function" || typeof vinculos?.perfisAtivosDaConta !== "function" || typeof concessoes?.listar !== "function") {
+export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, mfa = null, relogio = () => new Date(), permitirContaCompartilhada = false }) {
+  if (typeof liberacoes?.consultar !== "function" || typeof vinculos?.unidadesDoPerfil !== "function" || typeof vinculos?.perfisAtivosDaConta !== "function" || typeof vinculos?.contaDoPerfil !== "function" || typeof concessoes?.listar !== "function") {
     falhar(CODIGO.CONTEXTO_INVALIDO, "O adaptador da plataforma exige as portas de liberação, vínculos e concessões.");
   }
   const agora = () => relogio().getTime();
@@ -143,6 +149,10 @@ export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, r
       const n = await lerComFalhaFechada(() => vinculos.perfisAtivosDaConta({ contaId: s.contaId }));
       if (!Number.isInteger(n) || n !== 1) recusar(CODIGO.PERMISSAO_INSUFICIENTE, MOTIVO.CONTA_COMPARTILHADA, "Conta compartilhada por várias pessoas não opera o financeiro: use uma conta pessoal.");
     }
+    // 09B: a PESSOA operacional precisa estar ativa e pertencer à conta que autenticou (a plataforma relê o perfil da
+    // sessão; aqui se confere de novo, pela porta, para nenhuma pessoa de outra conta agir com este login).
+    const contaDaPessoa = await lerComFalhaFechada(() => vinculos.contaDoPerfil({ perfilId: s.perfilId }));
+    if (!ehUuid(contaDaPessoa) || minusc(contaDaPessoa) !== s.contaId) recusar(CODIGO.PERMISSAO_INSUFICIENTE, MOTIVO.PESSOA_SEM_IDENTIDADE, "A pessoa operacional não está ativa ou não pertence a esta conta.");
     const unidades = await unidadesDaPessoa(s);
     if (!unidades.has(s.unidadeId)) recusar(CODIGO.ESCOPO_NAO_AUTORIZADO, MOTIVO.UNIDADE_NAO_AUTORIZADA, "Sem acesso a esta unidade na plataforma.");
     return { s, unidades };
@@ -152,22 +162,29 @@ export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, r
    * Contexto do Financeiro v2 para a unidade ATIVA da sessão. Chamar a CADA operação (nada fica em cache): revogação
    * na plataforma ou no v2, troca de unidade e expiração valem na operação seguinte.
    * @param {object} sessao { user, tenant, acesso } da plataforma
-   * @param {{acao?: string}} [opcoes] ação pretendida: as de ACOES_COM_MFA_RECENTE exigem segundo fator recente
+   * @param {{acao?: string, tokenDeAcesso?: string}} [opcoes] ação pretendida; as de ACOES_COM_MFA_RECENTE exigem a
+   *        prova de segundo fator RECENTE derivada do token de acesso (verificado pela porta `mfa`, nunca do cliente)
    */
-  async function contexto(sessao, { acao = null } = {}) {
+  async function contexto(sessao, { acao = null, tokenDeAcesso = null } = {}) {
       const { s, unidades } = await verificarBase(sessao);
       const concessao = (await concedidas(s)).find((c) => c.unidadeId === s.unidadeId);
       if (!concessao) recusar(CODIGO.PERMISSAO_INSUFICIENTE, MOTIVO.SEM_CONCESSAO, "Sem concessão do Financeiro v2 nesta unidade.");
+      // Informativo (o que a plataforma declarou); NÃO autoriza nada. A autorização usa a prova verificada abaixo.
       const autenticacao = avaliarAutenticacao(sessao.user, agora());
-      if (acao && ACOES_COM_MFA_RECENTE.includes(acao) && !autenticacao.mfaRecente) {
-        recusar(CODIGO.PERMISSAO_INSUFICIENTE, autenticacao.motivo, autenticacao.motivo === MOTIVO.MFA_REQUERIDA
-          ? "Esta ação exige verificação em duas etapas." : "Esta ação exige confirmar o segundo fator de novo (últimos 10 minutos).", { acao });
+      let prova = null;
+      if (acao && ACOES_COM_MFA_RECENTE.includes(acao)) {
+        if (!mfa || typeof mfa.provar !== "function") recusar(CODIGO.PERMISSAO_INSUFICIENTE, MOTIVO.MFA_INDISPONIVEL, "A verificação em duas etapas ainda não está disponível neste ambiente: a ação fica bloqueada.", { acao });
+        try { prova = await mfa.provar({ tokenDeAcesso, contaId: s.contaId }); } catch { prova = { ok: false, motivo: MOTIVO_PROVA.ASSINATURA_INVALIDA }; }
+        if (!prova?.ok) {
+          recusar(CODIGO.PERMISSAO_INSUFICIENTE, prova?.motivo ?? MOTIVO_PROVA.ASSINATURA_INVALIDA, prova?.motivo === MOTIVO_PROVA.ANTIGA
+            ? "Esta ação exige confirmar o segundo fator de novo (últimos 10 minutos)." : "Esta ação exige verificação em duas etapas comprovada.", { acao });
+        }
       }
       return Object.freeze({
         contexto: exigirContexto({ organizacaoId: s.organizacaoId, unidadeId: s.unidadeId, usuarioId: s.perfilId, permissoes: concessao.acoes }),
         ator: Object.freeze({ perfilId: s.perfilId, contaId: s.contaId }),
         unidadesDaPessoa: Object.freeze([...unidades].sort()),
-        autenticacao: Object.freeze(autenticacao),
+        autenticacao: Object.freeze({ ...autenticacao, provaVerificada: Boolean(prova?.ok), segundoFatorEm: prova?.segundoFatorEm ?? null }),
         origem: Object.freeze({ tipo: "PLATAFORMA", sessaoId: s.sessaoId, expiraEm: s.expiraEm }),
       });
   }
@@ -233,7 +250,7 @@ export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, r
  * @param {{unidadesDoPerfil:Function, perfisAtivosDaConta:Function}} portas.vinculos
  * @param {string[]} [portas.tiposAceitos] tipos de autoridade da plataforma aceitos como atestantes
  */
-export function criarAutoridadeDaPlataforma({ administracao, vinculos, relogio = () => new Date(), tiposAceitos = ["ADMIN_EMPRESA"] }) {
+export function criarAutoridadeDaPlataforma({ administracao, vinculos, mfa = null, relogio = () => new Date(), tiposAceitos = ["ADMIN_EMPRESA"] }) {
   if (typeof administracao?.autoridadeSobre !== "function" || typeof administracao?.contaDoPerfil !== "function" || typeof vinculos?.unidadesDoPerfil !== "function") {
     falhar(CODIGO.CONTEXTO_INVALIDO, "A autoridade da plataforma exige as portas de administração e vínculos.");
   }
@@ -245,8 +262,10 @@ export function criarAutoridadeDaPlataforma({ administracao, vinculos, relogio =
         const user = sessao?.user;
         if (!user || !ehUuid(user.id) || user.ativo === false || user.senhaProvisoria === true) return nao("ATESTANTE_NAO_AUTENTICADO");
         if (sessao.acesso?.impersonando === true || sessao.acesso?.impersonadoPor) return nao("ATESTANTE_EM_IMPERSONACAO");
-        const autenticacao = avaliarAutenticacao(user, relogio().getTime());
-        if (!autenticacao.mfaRecente) return nao(autenticacao.motivo);
+        // 09B: a prova vem do TOKEN do atestante, verificado pela porta `mfa` (sem ela, nada é atestado).
+        if (!mfa || typeof mfa.provar !== "function") return nao(MOTIVO.MFA_INDISPONIVEL);
+        const prova = await mfa.provar({ tokenDeAcesso: ato.atestado.tokenDeAcesso, contaId: minusc(user.id) });
+        if (!prova?.ok) return nao(prova?.motivo ?? MOTIVO_PROVA.ASSINATURA_INVALIDA);
         if (typeof ato.justificativa !== "string" || ato.justificativa.trim().length < 20) return nao("JUSTIFICATIVA_INSUFICIENTE");
         const contaAtestante = minusc(user.id);
         const autoridade = await administracao.autoridadeSobre({ contaId: contaAtestante, organizacaoId: ato.organizacaoId, unidadeId: ato.unidadeId });

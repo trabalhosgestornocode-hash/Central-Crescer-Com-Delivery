@@ -51,6 +51,14 @@ test("regra por código: SEM_EFEITO/CONHECIDO(com valor) documentados viram ress
   }
 });
 
+test("09B — versão para APROVAÇÃO (23a): mesmos códigos da 22a, nenhum aprovado, campo de decisão em branco", () => {
+  const aprovacao = readFileSync(join(raiz, "docs", "financeiro-v2", "23a-matriz-pendencias-aprovacao.md"), "utf8");
+  for (const c of [...Object.keys(EFEITO_POR_CODIGO), ...IMPEDIMENTOS]) assert.ok(aprovacao.includes(`\`${c}\``), `${c} ausente da 23a`);
+  assert.match(aprovacao, /NÃO APROVADA PELA EMPRESA/);
+  assert.ok(!/\(x\) aprovo|\[x\]/i.test(aprovacao), "nenhuma decisão marcada sem aprovação explícita");
+  assert.equal((aprovacao.match(/\( \) aprovo \( \) altero/g) ?? []).length, Object.keys(EFEITO_POR_CODIGO).length + IMPEDIMENTOS.length);
+});
+
 test("09 — revisão da matriz: diferença de taxa/valor do processador não é mais ressalva (crédito menor superestima o resultado)", () => {
   assert.equal(EFEITO_POR_CODIGO.TAXA_OU_VALOR_DIVERGENTE, "INDETERMINADO");
   assert.match(matriz, /\| `TAXA_OU_VALOR_DIVERGENTE` \|[^\n]*\*\*Não\*\* \(corrigido na 09/);

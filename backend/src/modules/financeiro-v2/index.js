@@ -9,6 +9,11 @@ export { criarCofreDisco, criarRegistroDeAcessosNegadosEmDisco, criarRegistroDeA
 export { criarAdaptadorDeSessao, criarConcessoesDoRepositorio, criarConcessoesMemoria } from "./aplicacao/sessao.js";
 // Execução 09 — adaptador da sessão da PLATAFORMA e autoridade de provisionamento (puros; nada montado em rotas).
 export { ACOES_COM_MFA_RECENTE, MOTIVO as MOTIVO_INTEGRACAO, avaliarAutenticacao, criarAdaptadorDaPlataforma, criarAutoridadeDaPlataforma, identificarSessao } from "./integracao/plataforma.js";
+// Execução 09B — prova verificada de segundo fator, liberação por empresa/unidade e política do gateway.
+export { JANELA_SEGUNDO_FATOR_MS, METODOS_DE_SEGUNDO_FATOR, MOTIVO_PROVA, criarVerificadorDeMfa, verificadorHs256 } from "./integracao/provaDeAutenticacao.js";
+export { criarLiberacoesMemoria, validarAtoDeLiberacao } from "./integracao/liberacoes.js";
+export { alterarLiberacaoPostgres, criarLiberacoesPostgres } from "./infra/postgres/liberacoesPostgres.js";
+export { FINALIDADE as FINALIDADE_DO_GATEWAY, decidirEmissao, eventoSemSegredos } from "./integracao/politicaDoGateway.js";
 export { FONTES_PADRAO, criarRegistroDeFontes } from "./importacao/fontes/index.js";
 export { analisarArquivo } from "./importacao/motor.js";
 export { proporCandidatas } from "./importacao/correspondencias.js";

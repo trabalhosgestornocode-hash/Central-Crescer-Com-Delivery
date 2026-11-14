@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import { ACAO, CODIGO, criarConcessoesMemoria, criarNucleoFinanceiro } from "../../src/modules/financeiro-v2/index.js";
 import { ACOES_COM_MFA_RECENTE, MOTIVO, avaliarAutenticacao, criarAdaptadorDaPlataforma, criarAutoridadeDaPlataforma } from "../../src/modules/financeiro-v2/integracao/plataforma.js";
 import { AGORA, ESCOPOS_PADRAO, ORG_A, ORG_B, UNI_A, UNI_A2, UNI_B, montar } from "./helpers/cenario.js";
+import { criarVerificadorDeMfa, verificadorHs256 } from "../../src/modules/financeiro-v2/integracao/provaDeAutenticacao.js";
+import { tokenSintetico, SEGREDO_SINTETICO } from "./helpers/tokens.js";
 
 const aqui = dirname(fileURLToPath(import.meta.url));
 const backend = resolve(aqui, "..", "..");
@@ -41,11 +43,16 @@ function portas({ liberadas = [[ORG_A, UNI_A], [ORG_A, UNI_A2]], empresas = [ORG
     vinculos: {
       async unidadesDoPerfil({ perfilId, organizacaoId }) { return organizacaoId === ORG_A ? (unidades[perfilId] ?? []) : []; },
       async perfisAtivosDaConta({ contaId }) { return perfisPorConta[contaId] ?? 0; },
+      // 09B: conta da pessoa ATIVA (null = inativa ou inexistente)
+      async contaDoPerfil({ perfilId }) { return { [PESSOA]: CONTA, [PESSOA_ADMIN]: CONTA_ADMIN, [PESSOA_COMPARTILHADA]: CONTA_COMPARTILHADA }[perfilId] ?? null; },
     },
     concessoes: { listar: (q) => criarConcessoesMemoria(estado.concessoes).listar(q) },
   };
 }
-const adaptador = (p = portas(), extra = {}) => criarAdaptadorDaPlataforma({ ...p, relogio, ...extra });
+/** 09B: o segundo fator é provado pelo TOKEN do provedor (assinado), nunca por campos declarados. */
+const mfa = criarVerificadorDeMfa({ verificarAssinatura: verificadorHs256(SEGREDO_SINTETICO), relogio });
+const tokenMfa = (extra = {}) => tokenSintetico({ agoraMs, conta: CONTA, ...extra });
+const adaptador = (p = portas(), extra = {}) => criarAdaptadorDaPlataforma({ ...p, mfa, relogio, ...extra });
 const recusa = async (promessa, motivo) => assert.rejects(promessa, (e) => { assert.equal(e?.detalhes?.motivo, motivo, `${e?.codigo} ${e?.detalhes?.motivo}: ${e?.message}`); return true; });
 
 test("1, 9 — sessão válida da plataforma vira contexto do v2 com o ATOR = pessoa operacional; papel/superadmin/permissões antigas não concedem nada", async () => {
@@ -124,11 +131,14 @@ test("8 — revogação da concessão vale na operação seguinte (nada fica em 
 test("10 — MFA: ações sensíveis exigem segundo fator RECENTE comprovado pelo JWT; ver e registrar não", async () => {
   const a = adaptador();
   assert.equal((await a.contexto(sessao(), { acao: ACAO.VER })).autenticacao.mfaRecente, false);
-  await recusa(a.contexto(sessao(), { acao: ACAO.HOMOLOGAR }), MOTIVO.MFA_REQUERIDA);
-  await recusa(a.contexto(sessao({ aal: "aal2", mfaEm: agoraMs - 11 * 60_000 }), { acao: ACAO.HOMOLOGAR }), MOTIVO.REAUTENTICACAO_RECENTE);
-  await recusa(a.contexto(sessao({ aal: "aal2", mfaEm: agoraMs + 5 * 60_000 }), { acao: ACAO.HOMOLOGAR }), MOTIVO.REAUTENTICACAO_RECENTE);
-  await recusa(a.contexto(sessao({ aal: "aal2", mfaEm: null }), { acao: ACAO.HOMOLOGAR }), MOTIVO.REAUTENTICACAO_RECENTE);
-  assert.equal((await a.contexto(sessao({ aal: "aal2", mfaEm: agoraMs - 60_000 }), { acao: ACAO.HOMOLOGAR })).autenticacao.mfaRecente, true);
+  // 09B: sem token → recusa; aal1 → MFA_REQUERIDA; fator antigo → reautenticação; e a sessão DECLARAR aal2 não basta.
+  await recusa(a.contexto(sessao({ aal: "aal2", mfaEm: agoraMs - 60_000 }), { acao: ACAO.HOMOLOGAR }), "MFA_SEM_TOKEN");
+  await recusa(a.contexto(sessao(), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: tokenMfa({ aal: "aal1", metodo: null }) }), MOTIVO.MFA_REQUERIDA);
+  await recusa(a.contexto(sessao(), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: tokenMfa({ fatorHaS: 11 * 60, iatHaS: 11 * 60 - 5 }) }), MOTIVO.REAUTENTICACAO_RECENTE);
+  const ok = await a.contexto(sessao(), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: tokenMfa() });
+  assert.deepEqual([ok.autenticacao.provaVerificada, ok.autenticacao.segundoFatorEm], [true, agoraMs - 60_000]);
+  // sem verificador configurado no ambiente: a ação sensível fica BLOQUEADA (dependência registrada)
+  await recusa(adaptador(portas(), { mfa: null }).contexto(sessao(), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: tokenMfa() }), MOTIVO.MFA_INDISPONIVEL);
   // nível declarado fora do formato não vale como aal2
   assert.equal(avaliarAutenticacao({ aal: "AAL2", mfaEm: agoraMs }, agoraMs).mfaRecente, false);
   assert.deepEqual([...ACOES_COM_MFA_RECENTE].sort(), [ACAO.CONCEDER, ACAO.HOMOLOGAR, ACAO.REABRIR, ACAO.REVOGAR].sort());
@@ -157,12 +167,13 @@ function administracao({ autoridades = { [CONTA_ADMIN]: "ADMIN_EMPRESA" }, conta
 }
 const ATO = (extra = {}) => ({ organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: PESSOA, acoes: [ACAO.VER, ACAO.CONCEDER, ACAO.REVOGAR], justificativa: "Administrador financeiro inicial da unidade, indicado pela gestão (sintético).", evidencia: "Ata sintética de designação", ...extra });
 const atestante = (extra = {}) => sessao({ conta: CONTA_ADMIN, pessoa: PESSOA_ADMIN, aal: "aal2", mfaEm: agoraMs - 2 * 60_000, ...extra });
+const tokenAdmin = (extra = {}) => tokenSintetico({ agoraMs, conta: CONTA_ADMIN, ...extra });
 
 test("11, 12 — provisionamento: administrador da empresa com MFA recente atesta; a pessoa indicada recebe a concessão; o atestante não recebe nada", async () => {
   const m = montar();
-  const autoridade = criarAutoridadeDaPlataforma({ administracao: administracao(), vinculos: portas().vinculos, relogio });
+  const autoridade = criarAutoridadeDaPlataforma({ administracao: administracao(), vinculos: portas().vinculos, mfa, relogio });
   const n = criarNucleoFinanceiro({ repositorio: m.repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio, autoridadeDeProvisionamento: autoridade });
-  const r = await n.provisionarAdministradorInicial({ ...ATO(), atestado: { sessao: atestante() } });
+  const r = await n.provisionarAdministradorInicial({ ...ATO(), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } });
   assert.ok(r);
   const c = await criarAdaptadorDaPlataforma({ ...portas({ concessoes: [] }), relogio, concessoes: { listar: async ({ usuarioId }) => (usuarioId === PESSOA ? [{ unidadeId: UNI_A, acoes: [ACAO.VER, ACAO.CONCEDER, ACAO.REVOGAR] }] : []) } }).contexto(sessao());
   assert.equal(c.contexto.usuarioId, PESSOA);
@@ -172,25 +183,25 @@ test("11, 12 — provisionamento: administrador da empresa com MFA recente atest
 });
 
 test("12 — autoconcessão, falta de MFA, de autoridade, conta compartilhada, impersonação e justificativa curta são recusadas; superadmin não é aceito por padrão", async () => {
-  const verif = (ato, opcoes = {}) => criarAutoridadeDaPlataforma({ administracao: administracao(opcoes.adm), vinculos: portas().vinculos, relogio, ...(opcoes.tipos ? { tiposAceitos: opcoes.tipos } : {}) }).verificar(ato);
-  assert.deepEqual(await verif({ ...ATO(), atestado: { sessao: atestante() } }), { ok: true, autoridadeId: CONTA_ADMIN, nivelAutenticacao: "aal2", tipo: "ADMIN_EMPRESA" });
-  assert.equal((await verif({ ...ATO({ usuarioId: PESSOA_ADMIN }), atestado: { sessao: atestante() } })).motivo, "AUTOCONCESSAO");
+  const verif = (ato, opcoes = {}) => criarAutoridadeDaPlataforma({ administracao: administracao(opcoes.adm), vinculos: portas().vinculos, mfa, relogio, ...(opcoes.tipos ? { tiposAceitos: opcoes.tipos } : {}) }).verificar(ato);
+  assert.deepEqual(await verif({ ...ATO(), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } }), { ok: true, autoridadeId: CONTA_ADMIN, nivelAutenticacao: "aal2", tipo: "ADMIN_EMPRESA" });
+  assert.equal((await verif({ ...ATO({ usuarioId: PESSOA_ADMIN }), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } })).motivo, "AUTOCONCESSAO");
   // outra pessoa da MESMA conta do atestante também é autoconcessão
-  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante() } }, { adm: { contaDe: { [PESSOA]: CONTA_ADMIN } } })).motivo, "AUTOCONCESSAO");
-  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante({ aal: "aal1" }) } })).motivo, MOTIVO.MFA_REQUERIDA);
-  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante({ mfaEm: agoraMs - 30 * 60_000 }) } })).motivo, MOTIVO.REAUTENTICACAO_RECENTE);
-  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante() } }, { adm: { autoridades: {} } })).motivo, "SEM_AUTORIDADE_ADMINISTRATIVA");
-  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante() } }, { adm: { autoridades: { [CONTA_ADMIN]: "SUPERADMIN" } } })).motivo, "SEM_AUTORIDADE_ADMINISTRATIVA");
-  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante() } }, { adm: { autoridades: { [CONTA_ADMIN]: "SUPERADMIN" } }, tipos: ["ADMIN_EMPRESA", "SUPERADMIN"] })).ok, true);
-  assert.equal((await verif({ ...ATO({ usuarioId: PESSOA_COMPARTILHADA }), atestado: { sessao: atestante() } })).motivo, "CONTA_COMPARTILHADA");
-  assert.equal((await verif({ ...ATO({ unidadeId: UNI_B }), atestado: { sessao: atestante() } })).motivo, "PESSOA_SEM_ACESSO_A_UNIDADE");
-  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante({ acesso: { impersonando: true, impersonadoPor: CONTA_ADMIN } }) } })).motivo, "ATESTANTE_EM_IMPERSONACAO");
-  assert.equal((await verif({ ...ATO({ justificativa: "curta" }), atestado: { sessao: atestante() } })).motivo, "JUSTIFICATIVA_INSUFICIENTE");
+  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } }, { adm: { contaDe: { [PESSOA]: CONTA_ADMIN } } })).motivo, "AUTOCONCESSAO");
+  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin({ aal: "aal1", metodo: null }) } })).motivo, MOTIVO.MFA_REQUERIDA);
+  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin({ fatorHaS: 30 * 60, iatHaS: 30 * 60 - 5 }) } })).motivo, MOTIVO.REAUTENTICACAO_RECENTE);
+  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } }, { adm: { autoridades: {} } })).motivo, "SEM_AUTORIDADE_ADMINISTRATIVA");
+  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } }, { adm: { autoridades: { [CONTA_ADMIN]: "SUPERADMIN" } } })).motivo, "SEM_AUTORIDADE_ADMINISTRATIVA");
+  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } }, { adm: { autoridades: { [CONTA_ADMIN]: "SUPERADMIN" } }, tipos: ["ADMIN_EMPRESA", "SUPERADMIN"] })).ok, true);
+  assert.equal((await verif({ ...ATO({ usuarioId: PESSOA_COMPARTILHADA }), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } })).motivo, "CONTA_COMPARTILHADA");
+  assert.equal((await verif({ ...ATO({ unidadeId: UNI_B }), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } })).motivo, "PESSOA_SEM_ACESSO_A_UNIDADE");
+  assert.equal((await verif({ ...ATO(), atestado: { sessao: atestante({ acesso: { impersonando: true, impersonadoPor: CONTA_ADMIN } }), tokenDeAcesso: tokenAdmin() } })).motivo, "ATESTANTE_EM_IMPERSONACAO");
+  assert.equal((await verif({ ...ATO({ justificativa: "curta" }), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } })).motivo, "JUSTIFICATIVA_INSUFICIENTE");
   assert.equal((await verif({ ...ATO(), atestado: {} })).motivo, "ATESTANTE_NAO_AUTENTICADO");
   // pelo núcleo: recusa vira PROVISIONAMENTO_RECUSADO e nada é gravado
   const m = montar();
-  const n = criarNucleoFinanceiro({ repositorio: m.repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio, autoridadeDeProvisionamento: criarAutoridadeDaPlataforma({ administracao: administracao(), vinculos: portas().vinculos, relogio }) });
-  await assert.rejects(n.provisionarAdministradorInicial({ ...ATO({ usuarioId: PESSOA_ADMIN }), atestado: { sessao: atestante() } }), (e) => e.codigo === CODIGO.PROVISIONAMENTO_RECUSADO);
+  const n = criarNucleoFinanceiro({ repositorio: m.repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio, autoridadeDeProvisionamento: criarAutoridadeDaPlataforma({ administracao: administracao(), vinculos: portas().vinculos, mfa, relogio }) });
+  await assert.rejects(n.provisionarAdministradorInicial({ ...ATO({ usuarioId: PESSOA_ADMIN }), atestado: { sessao: atestante(), tokenDeAcesso: tokenAdmin() } }), (e) => e.codigo === CODIGO.PROVISIONAMENTO_RECUSADO);
 });
 
 // ---------------------------------------------------------------------------------- contrato, gateway, produção
