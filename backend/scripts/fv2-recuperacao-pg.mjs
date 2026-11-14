@@ -39,9 +39,6 @@ const raizCofre = join(PASTA, "..", `${basename(PASTA)}-cofre`);
 mkdirSync(raizCofre, { recursive: true });
 const cofre = criarCofreDisco({ raiz: raizCofre });
 const { nucleo: n } = montar({ repositorio, cofre });
-const interno = await repositorio.interno();
-const dono = await interno.dono();
-
 /** Repetição após falha: a operação é refeita (mesma chave de idempotência) até o banco voltar. */
 async function repetir(fn, { tentativas = 40, intervalo = 250 } = {}) {
   let ultima;
@@ -51,6 +48,16 @@ async function repetir(fn, { tentativas = 40, intervalo = 250 } = {}) {
   throw ultima;
 }
 
+const interno = await repositorio.interno();
+let dono = await interno.dono();
+// Durabilidade de PRODUÇÃO nesta instância própria. O cluster de testes compartilhado roda com fsync/synchronous_commit
+// desligados (velocidade): numa queda abrupta ele perde os últimos commits — isso não serve para testar recuperação.
+for (const g of ["fsync = on", "synchronous_commit = on", "full_page_writes = on"]) await dono.query(`alter system set ${g}`);
+banco("parar");
+banco("iniciar");
+dono = await interno.dono();
+const durabilidade = (await repetir(() => dono.query("select current_setting('fsync') f, current_setting('synchronous_commit') s, current_setting('full_page_writes') p"))).valor.rows[0];
+
 // ----------------------------------------------------------------------------------------------- dados sintéticos
 const conta = await n.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco sintético" });
 const forn = await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "Fornecedor sintético" });
@@ -59,6 +66,8 @@ for (let i = 0; i < 20; i += 1) {
 }
 await n.registrarObrigacao(c, obrigacao(forn.id, { competencia: "2026-08", dataEmissao: "2026-08-02", vencimento: "2026-08-20", fonte: { sistema: "MANUAL", idExterno: "OB-AGO" } }));
 const g = await cofre.guardar(c, { conteudo: new TextEncoder().encode("%PDF-1.4\n% comprovante sintetico de recuperacao\n%%EOF\n"), tipoMime: "application/pdf" });
+// Auditoria de concessões: uma concessão REAL pela função guardada (a fixture dos testes não passa por ela).
+await n.concederAcesso(c, { usuarioId: "dddddddd-0000-4000-8000-000000000501", acoes: ["financeiro_v2.ver"], justificativa: "Leitura (recuperação sintética)." });
 const { documento } = await n.registrarDocumento(c, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: "COMPROVANTE", recebidoEm: "2026-08-25", competencia: "2026-08", descricao: "Comprovante sintético" });
 await n.alterarEstadoDaCompetencia(c, { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
 await n.alterarEstadoDaCompetencia(c, { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética (recuperação).", confirmar: true });
@@ -84,7 +93,7 @@ const r1 = await repetir(() => retrato());
 marcar("1_reinicio_limpo_dados_persistidos", igual(r1.valor, antes), { falhasAteVoltar: r1.falhasAntes });
 
 // 2 + 4. Queda ABRUPTA durante 30 registros de obrigação (cada um atômico, com chave de idempotência); repetição depois.
-const lote = Array.from({ length: 30 }, (_, i) => obrigacao(forn.id, { valorOriginalCentavos: 1000 + i, descricao: `Compra ${i}`, fonte: { sistema: "MANUAL", idExterno: `QUEDA-${i}` } }));
+const lote = Array.from({ length: 150 }, (_, i) => obrigacao(forn.id, { valorOriginalCentavos: 1000 + i, descricao: `Compra ${i}`, fonte: { sistema: "MANUAL", idExterno: `QUEDA-${i}` } }));
 let concluidasAntesDaQueda = 0;
 const corrida = (async () => {
   for (const o of lote) {
@@ -94,7 +103,7 @@ const corrida = (async () => {
 // Concorrência atravessando a queda: um segundo fluxo registra movimentações ao mesmo tempo.
 const movs = Array.from({ length: 10 }, (_, i) => ({ contaId: conta.id, dataEfetiva: "2026-09-05", sentido: "SAIDA", valorCentavos: 100 + i, natureza: "PAGAMENTO", fonte: { sistema: "MANUAL", idExterno: `MOV-${i}` } }));
 const corrida2 = (async () => { for (const mv of movs) { try { await n.registrarMovimentacao(c, mv); } catch { /* queda */ } } })();
-await esperar(400);
+await esperar(150);
 banco("derrubar");
 await Promise.all([corrida, corrida2]);
 banco("iniciar");
@@ -105,8 +114,8 @@ const obrigacoesDoLote = (await n.consultarRegistros(c, { tipo: "OBRIGACAO" })).
 const movsDoLote = (await n.consultarRegistros(c, { tipo: "MOVIMENTACAO" })).filter((m) => /^MOV-/.test(m.fonte?.idExterno ?? ""));
 const lancs = await n.consultarRegistros(c, { tipo: "LANCAMENTO" });
 const semLancamento = obrigacoesDoLote.filter((o) => !lancs.some((l) => l.id === o.lancamentoId));
-marcar("2_queda_abrupta_durante_operacao", obrigacoesDoLote.length === 30 && semLancamento.length === 0, { concluidasAntesDaQueda, repetidasNaRetomada: repeticoes.filter(Boolean).length, gravadasNaRetomada: repeticoes.filter((x) => !x).length, total: obrigacoesDoLote.length });
-marcar("4_repeticao_e_concorrencia_sem_duplicidade", obrigacoesDoLote.length === 30 && movsDoLote.length === 10 && new Set(obrigacoesDoLote.map((o) => o.fonte.idExterno)).size === 30, { obrigacoes: obrigacoesDoLote.length, movimentacoes: movsDoLote.length });
+marcar("2_queda_abrupta_durante_operacao", obrigacoesDoLote.length === 150 && semLancamento.length === 0 && concluidasAntesDaQueda < 150, { concluidasAntesDaQueda, repetidasNaRetomada: repeticoes.filter(Boolean).length, gravadasNaRetomada: repeticoes.filter((x) => !x).length, total: obrigacoesDoLote.length });
+marcar("4_repeticao_e_concorrencia_sem_duplicidade", obrigacoesDoLote.length === 150 && movsDoLote.length === 10 && new Set(obrigacoesDoLote.map((o) => o.fonte.idExterno)).size === 150, { obrigacoes: obrigacoesDoLote.length, movimentacoes: movsDoLote.length });
 const conservacao = await n.verificarConservacao(c);
 marcar("6_integridade_apos_queda", conservacao.length === 0, { violacoes: conservacao.length });
 
@@ -132,12 +141,12 @@ banco("derrubar");
 banco("iniciar");
 const depois = (await repetir(() => retrato())).valor;
 marcar("7_versao_homologada_reproduzida", igual(depois.versoes, antes.versoes) && igual(depois.dre, antes.dre), { versoes: (depois.versoes.versoes ?? depois.versoes).length });
-marcar("8_auditoria_e_historico_preservados", depois.historico === historicoAntes && depois.auditoria === auditoriaAntes, { historico: depois.historico, auditoria: depois.auditoria });
+marcar("8_auditoria_e_historico_preservados", depois.historico === historicoAntes && depois.auditoria === auditoriaAntes && auditoriaAntes > 0, { historicoAntes, historico: depois.historico, auditoriaAntes, auditoria: depois.auditoria });
 const integridade = await repetir(() => n.verificarIntegridadeDoDocumento(c, { id: documento.id }));
 const arquivo = await n.obterArquivoDoDocumento(c, { id: documento.id, finalidade: "baixar" }).catch((e) => ({ erro: e.codigo }));
 const hashLido = arquivo?.conteudo ? createHash("sha256").update(Buffer.from(arquivo.conteudo)).digest("hex") : null;
 marcar("9_cofre_documental", integridade.valor?.conferido === true && (hashLido === null || hashLido === g.hashSha256), { conferido: integridade.valor?.conferido ?? null, hashConfere: hashLido === null ? "não lido" : hashLido === g.hashSha256, pastaDoCofre: existsSync(raizCofre) });
 
-console.log(JSON.stringify({ instancia: { pasta: PASTA, porta: process.env.FV2_PG_PORTA ?? null }, resultado }, null, 2));
+console.log(JSON.stringify({ instancia: { pasta: PASTA, porta: process.env.FV2_PG_PORTA ?? null, durabilidade }, resultado }, null, 2));
 banco("parar");
 process.exit(Object.values(resultado).every((x) => x.situacao === "PASS") ? 0 : 1);

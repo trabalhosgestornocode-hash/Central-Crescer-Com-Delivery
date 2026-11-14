@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { ACAO, CODIGO, criarNucleoFinanceiro } from "../../src/modules/financeiro-v2/index.js";
 import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, UNI_A2, ctx, montar, obrigacao, provisionarAdministrador } from "./helpers/cenario.js";
 import { PERIODO_SETEMBRO, saiposVendas } from "./helpers/arquivos.js";
-import { motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
+import { comoAplicacao, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular(), timeout: 300000 };
 const recusado = (p) => assert.rejects(p, (e) => [CODIGO.PERMISSAO_INSUFICIENTE, CODIGO.INTEGRIDADE_VIOLADA, CODIGO.NAO_ENCONTRADO].includes(e.codigo));
@@ -43,4 +43,48 @@ test("08C banco — ação concedida em OUTRA unidade não vale nesta (reclassif
   const [atual] = (await n.consultarRegistros(adm(), { tipo: "LANCAMENTO" })).filter((x) => x.id === l.id);
   assert.deepEqual([atual.categoria, atual.versao], ["INSUMOS", l.versao]);
   assert.equal((await n.consultarRegistros(adm(), { tipo: "COMPETENCIA" })).length, 0);
+});
+
+// ---------------------------------------------------------------------------- isolando cada gatilho da 0013 (mutação 08C)
+// Os testes da 08B eram barrados ANTES pela política da tabela; aqui o usuário tem tudo o que a tabela pede, e só o
+// gatilho específico da transição (ou a regra da função de concessão) pode recusar.
+
+test("08C banco — aplicar proposta exige `aplicar` mesmo para quem registra e aprova (gatilho da proposta)", pular, async () => {
+  const { m, n, ingenuo, adm } = await cenario();
+  await n.concederAcesso(adm(), { usuarioId: U(3), acoes: [ACAO.VER, ACAO.REGISTRAR, ACAO.APROVAR], justificativa: "Registra e aprova, não aplica (sintético)." });
+  const caixa = await m.nucleo.configurarContaFinanceira(adm(), { tipo: "CAIXA_FISICO", nome: "Caixa" });
+  const r = await m.nucleo.receberArquivoParaImportacao(adm(), { fonte: "SAIPOS", tipoRelatorio: "SAIPOS_VENDAS", tipoMime: "text/csv", ...PERIODO_SETEMBRO, conteudo: saiposVendas([{ pedido: "AP-1", data: "05/09/2026 12:00", itens: 2000, forma: "Dinheiro" }]) });
+  const conf = await m.nucleo.confirmarImportacao(adm(), { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia });
+  await m.nucleo.gerarPropostas(adm(), { importacaoId: conf.importacao.id, contaCaixaId: caixa.id });
+  const [p] = (await n.consultarRegistros(adm(), { tipo: "PROPOSTA" })).filter((x) => x.importacaoId === conf.importacao.id);
+  await n.aprovarProposta(adm(), { propostaId: p.id, justificativa: "Conferida (sintético)." });
+  await recusado(ingenuo.aplicarProposta(ctx(ORG_A, UNI_A, TODAS, U(3)), { propostaId: p.id }));
+  assert.equal((await n.consultarRegistros(adm(), { tipo: "VENDA" })).length, 0);
+  const [depois] = (await n.consultarRegistros(adm(), { tipo: "PROPOSTA" })).filter((x) => x.id === p.id);
+  assert.equal(depois.estado, "APROVADA");
+});
+
+test("08C banco — reabrir competência homologada exige `reabrir` mesmo para quem fecha (gatilho da transição)", pular, async () => {
+  const { n, ingenuo, adm } = await cenario();
+  await n.concederAcesso(adm(), { usuarioId: U(4), acoes: [ACAO.VER, ACAO.FECHAR, ACAO.CONCILIAR], justificativa: "Fecha e concilia, não reabre (sintético)." });
+  await n.alterarEstadoDaCompetencia(adm(), { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  await n.alterarEstadoDaCompetencia(adm(), { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true });
+  await recusado(ingenuo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, TODAS, U(4)), { competencia: "2026-08", novoEstado: "ABERTA", justificativa: "Tentativa sem reabrir (sintético).", confirmar: true }));
+  const [c] = (await n.consultarRegistros(adm(), { tipo: "COMPETENCIA" })).filter((x) => x.competencia === "2026-08");
+  assert.equal(c.estado, "FECHAMENTO_HOMOLOGADO");
+});
+
+test("08C banco — SQL direto na função de concessão: quem só concede não revoga (FV036)", pular, async () => {
+  const { repositorio, n, adm } = await cenario();
+  await n.concederAcesso(adm(), { usuarioId: U(5), acoes: [ACAO.VER, ACAO.CONCEDER], justificativa: "Só concede (sintético)." });
+  await n.concederAcesso(adm(), { usuarioId: U(6), acoes: [ACAO.VER, ACAO.REGISTRAR], justificativa: "Alvo (sintético)." });
+  const interno = await repositorio.interno();
+  const dono = await interno.dono();
+  const { rows: [alvo] } = await dono.query("select to_jsonb(c) as j, versao from fv2_concessao c where usuario_id = $1 and unidade_id = $2", [U(6), UNI_A]);
+  const p = { ...alvo.j, acoes: ["financeiro_v2.ver"], versao: alvo.versao + 1, atualizado_por: U(5), concedido_por: U(5), atualizado_em: new Date().toISOString(), justificativa: "Revogação sem a ação revogar (sintético)." };
+  const escopo = { organizacaoId: ORG_A, unidadeId: UNI_A, usuarioId: U(5), permissoes: [ACAO.VER, ACAO.CONCEDER] };
+  const token = await interno.sessoes.emitir(escopo);
+  await assert.rejects(comoAplicacao(interno, escopo, (cl) => cl.query("select fv2_gravar_concessao($1::jsonb, $2)", [JSON.stringify(p), alvo.versao]), { token }), (e) => e.code === "FV036");
+  const { rows: [depois] } = await dono.query("select acoes from fv2_concessao where usuario_id = $1 and unidade_id = $2", [U(6), UNI_A]);
+  assert.ok(depois.acoes.includes("financeiro_v2.registrar"));
 });
