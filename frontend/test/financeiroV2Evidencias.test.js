@@ -55,6 +55,8 @@ test("08D — envio pelo serviço: valida, guarda, vincula, não duplica e não 
   assert.equal(rep.corpo.repetido, true);
   const depois = await ok("/api/fv2/conferencias/pendencia", { competencia: "2026-10", chave: d.pendencia.chave });
   assert.equal(depois.pendencia.codigo, "DESPESA_A_CLASSIFICAR", "a pendência continua até a decisão");
+  assert.equal(d.pendencia.documentosExistentes.length, 0);
+  assert.deepEqual(depois.pendencia.documentosExistentes.map((x) => x.descricao), ["Nota fiscal do boleto (sintética)"], "a pendência mostra o documento enviado (achado da jornada no navegador)");
   const rc = await ok("/api/fv2/reclassificacao", { competencia: "2026-10", id: registro, categoria: "DESPESAS_ADMINISTRATIVAS_GERAIS" });
   assert.equal(rc.impacto.evidenciaDisponivel, true, "a reclassificação enxerga a evidência enviada");
 });

@@ -129,7 +129,12 @@ export function pendenciasDaCompetencia(e) {
         referencia: l?.origem?.tipo === TIPO.VENDA ? { tipo: "VENDA", id: l.origem.id } : l?.origem?.tipo === TIPO.PROPOSTA ? { tipo: "AGREGADO_DIARIO", id: [...(p.lancamentos ?? [])].find((y) => y.origem?.id === l.origem.id && y.natureza === "RECEITA")?.id ?? null } : null,
         tecnico: { motor: "apuracao", tipo: x.tipo, lancamentoId: x.lancamentoId } });
     } else if (x.tipo === "DESPESA_A_CLASSIFICAR") {
-      add({ chave: `LANCAMENTO:${x.lancamentoId}`, grupo: GRUPO.CLASSIFICACOES, codigo: "DESPESA_A_CLASSIFICAR", titulo: "Despesa sem classificação", valorCentavos: x.valorCentavos,
+      // 08D: os documentos já vinculados ao lançamento (ou à conta que o originou) aparecem na pendência — anexar NÃO a
+      // resolve; só mostra a evidência disponível para a decisão de reclassificar.
+      const l = p.lancamentoPorId.get(x.lancamentoId);
+      const daConta = (p.obrigacoes ?? []).filter((o) => o.lancamentoId === x.lancamentoId).flatMap((o) => docs(TIPO.OBRIGACAO, o));
+      const existentes = [...new Map([...(l ? docs(TIPO.LANCAMENTO, l) : []), ...daConta].map((d) => [d.referencia, d])).values()];
+      add({ chave: `LANCAMENTO:${x.lancamentoId}`, documentosExistentes: existentes, grupo: GRUPO.CLASSIFICACOES, codigo: "DESPESA_A_CLASSIFICAR", titulo: "Despesa sem classificação", valorCentavos: x.valorCentavos,
         motivo: "A natureza econômica da despesa não foi comprovada; ela fica fora da DRE.", oQueAconteceu: "Uma conta foi registrada na categoria \"a classificar\".",
         origem: "Contas a pagar", impacto: "O resultado da DRE não inclui este valor até a classificação.", documentosNecessarios: ["Nota fiscal, boleto ou contrato que identifique a despesa"],
         opcoes: ["Reclassificar a despesa (com justificativa)"], referencia: { tipo: "LANCAMENTO", id: x.lancamentoId }, tecnico: { motor: "apuracao", tipo: x.tipo } });
