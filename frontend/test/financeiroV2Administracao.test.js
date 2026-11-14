@@ -54,12 +54,22 @@ test("33–36 — fechamento na Central: prévia do núcleo, botão desabilitado
   assert.match(html, /Impacto: /, "pendências documentadas com impacto");
   assert.match(html, /Documentar não resolve/);
   assert.match(html, /Versões do fechamento/);
-  // Outubro: preliminar → com pendências (montadas a partir da Central) → reabrir com justificativa.
+  // Outubro: preliminar → com pendências documentadas → reabrir com justificativa.
+  // 08E (F-1): nada é documentado em nome da pessoa (antes a demonstração documentava TODAS com o mesmo texto: contorno).
   await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  const cp = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "FECHAMENTO_COM_PENDENCIAS", justificativa: "Documentando.", documentacaoFaltante: "Extrato de outubro", decisao: "Aguardar extrato" });
+  const antigo = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "FECHAMENTO_COM_PENDENCIAS", justificativa: "Documentando.", documentacaoFaltante: "Extrato de outubro", decisao: "Aguardar extrato" });
+  assert.equal(antigo.status, 400, "a documentação em lote pela transição não existe mais");
+  const semDoc = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "FECHAMENTO_COM_PENDENCIAS", justificativa: "Documentando." });
+  assert.equal(semDoc.status, 409, "sem nenhuma pendência documentada, não há fechamento com pendências");
+  const lista = await ok("/api/fv2/conferencias/pendencias", { competencia: "2026-10", tamanho: "100" });
+  const alvo = lista.itens.find((p) => p.codigo === "FONTE_SEM_DOCUMENTO");
+  const docum = await agir("/api/fv2/acoes/pendencias/documentar", { competencia: "2026-10", chave: alvo.chave, descricao: alvo.titulo, impacto: "Conferência cruzada incompleta (sintético).", decisao: "Aguardar extrato", documentacaoFaltante: "Extrato de outubro" });
+  assert.equal(docum.status, 200, JSON.stringify(docum.corpo));
+  assert.equal(docum.corpo.avaliacao.situacao, "DOCUMENTADA_ADMISSIVEL");
+  assert.match(conf.resultadoDaAcao({ ok: true, dados: docum.corpo }), /Documentar não resolve/);
+  const cp = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "FECHAMENTO_COM_PENDENCIAS", justificativa: "Documentando." });
   assert.equal(cp.status, 200, JSON.stringify(cp.corpo));
-  assert.ok(cp.corpo.pendencias.length > 0);
-  assert.ok(cp.corpo.pendencias.every((p) => p.descricao && p.impacto && p.documentacaoFaltante === "Extrato de outubro"));
+  assert.ok(cp.corpo.pendencias.some((p) => p.descricao && p.impacto && p.documentacaoFaltante === "Extrato de outubro" && p.decisao === "Aguardar extrato"));
   const semJust = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "ABERTA" });
   assert.equal(semJust.status, 409);
   const reaberta = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "ABERTA", justificativa: "Extrato chegou." });
@@ -70,12 +80,20 @@ test("33–36 — fechamento na Central: prévia do núcleo, botão desabilitado
   assert.match(ago.corpo.versaoHomologadaAnteriorId, /^ref-/);
   const vAgo = (await ok("/api/fv2/conferencias/fechamento", { competencia: "2026-08" })).versoes;
   assert.ok(vAgo.some((v) => v.tipo === "HOMOLOGADA" && !v.vigente));
-  // Homologar de novo agosto (sem impedimentos): botão habilitado, ação real.
+  // Homologar de novo agosto: as ressalvas documentadas continuam; do preliminar o botão fica desabilitado (passar por
+  // "com pendências documentadas"); depois dele, habilitado — ação real.
   await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  const doPreliminar = (await ok("/api/fv2/conferencias/fechamento", { competencia: "2026-08" })).acoes.find((a) => a.estadoProposto === "FECHAMENTO_HOMOLOGADO");
+  assert.equal(doPreliminar.permitida, false);
+  assert.ok(doPreliminar.bloqueios.some((b) => /com pendências documentadas/.test(b)), JSON.stringify(doPreliminar.bloqueios));
+  assert.equal((await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-08", novoEstado: "FECHAMENTO_COM_PENDENCIAS", justificativa: "Ressalvas mantidas." })).status, 200);
   const prev = (await ok("/api/fv2/conferencias/fechamento", { competencia: "2026-08" })).acoes.find((a) => a.estadoProposto === "FECHAMENTO_HOMOLOGADO");
   assert.equal(prev.permitida, true, JSON.stringify(prev.bloqueios));
   const h = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Conferência sintética de agosto." });
-  assert.deepEqual([h.status, h.corpo.estado, h.corpo.versao.tipo], [200, "FECHAMENTO_HOMOLOGADO", "HOMOLOGADA"]);
+  assert.deepEqual([h.status, h.corpo.estado, h.corpo.versao.tipo, h.corpo.versao.comRessalvas], [200, "FECHAMENTO_HOMOLOGADO", "HOMOLOGADA", true]);
+  const telaAgo = conf.central({ ...(await ok("/api/fv2/conferencias/fechamento", { competencia: "2026-08" })), dataBase: "2026-10-15" }, { secao: "fechamento" }, { competencia: "2026-08", unidadeNome: "U", permissoes: [] });
+  assert.match(telaAgo, /Pendências diante da homologação/);
+  assert.match(telaAgo, /Com \d+ ressalva\(s\) aprovada\(s\)/);
 });
 
 test("41 — DRE e Visão Geral da competência homologada: versão homologada reproduzível e situação visível", async () => {

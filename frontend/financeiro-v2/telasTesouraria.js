@@ -25,6 +25,7 @@ const formAcao = ({ url, titulo, campos, aviso, rotulo, recarregar = "lista" }) 
 <button type="submit" class="botao botao--primario">${esc(rotulo)}</button><p class="resultado-acao" role="status" aria-live="polite"></p></form></section>`;
 };
 const podeRegistrar = (ctx) => (ctx?.permissoes ?? []).includes("financeiro_v2.registrar");
+const podeVincular = (ctx) => (ctx?.permissoes ?? []).includes("financeiro_v2.vincular_pagamento");
 
 export function documentos(lista = []) {
   if (!lista.length) return '<p class="nota">Nenhum documento vinculado. A pendência fica visível; nenhum documento é presumido.</p>';
@@ -109,10 +110,81 @@ export function detalheAPagar(d, ctx = {}) {
 ${d.lancamento ? `<p class="nota">Efeito no resultado: <strong>um</strong> lançamento de ${esc(moeda(d.lancamento.valorCentavos))} em ${esc(competencia(d.lancamento.competencia))}${d.lancamento.natureza === "PATRIMONIAL" ? " (patrimonial: fora da DRE)" : ""}. Pagar ou antecipar parcelas não cria outra despesa.</p>` : ""}
 ${d.parcelas.length > 1 ? `<h3>Parcelas</h3><ul class="lista-simples">${d.parcelas.map((p) => `<li${p.id === t.id ? ' class="atual"' : ""}><span>${p.parcela.numero}/${p.parcela.total} · vence ${esc(dataBR(p.vencimento))}</span><span>${valor(p.saldoCentavos)} ${selo(p.situacao)}</span></li>`).join("")}</ul>` : ""}
 <h3>Pagamentos</h3>
-${t.pagamentos.length ? `<ul class="lista-simples">${t.pagamentos.map((g) => `<li><span>${esc(dataBR(g.data))} · ${esc(g.conta ?? "conta não identificada")}${g.titulosNaMesmaMovimentacao > 1 ? ` · saída agrupada com ${g.titulosNaMesmaMovimentacao - 1} outra(s) conta(s)` : ""}</span><span>${valor(g.valorCentavos)}</span></li>`).join("")}</ul>` : nenhum("Nenhum pagamento vinculado.")}
+${t.pagamentos.length ? `<ul class="lista-simples">${t.pagamentos.map((g, i) => `<li><span>${esc(dataBR(g.data))} · ${esc(g.conta ?? "conta não identificada")}${g.titulosNaMesmaMovimentacao > 1 ? ` · saída agrupada com ${g.titulosNaMesmaMovimentacao - 1} outra(s) conta(s)` : ""}${d.vinculoExtrato?.obrigacao?.pagamentos?.[i]?.viaExtrato ? ' · <span class="selo selo--info">vinculado do extrato</span>' : ""}</span><span>${valor(g.valorCentavos)}</span></li>`).join("")}</ul>` : nenhum("Nenhum pagamento vinculado.")}
 <h3>Documentos</h3>${documentos(t.documentos)}
+${t.saldoCentavos > 0 && t.situacao !== "CANCELADO" && (podeRegistrar(ctx) || podeVincular(ctx)) ? `<section class="card" aria-labelledby="t-como-pagar"><h3 id="t-como-pagar">Como dar baixa nesta conta</h3>
+<ul class="mini"><li><strong>Vincular pagamento do extrato</strong>: o dinheiro já saiu e a saída já está no sistema (extrato importado ou movimento registrado). A baixa usa essa saída: <strong>não cria outra saída nem outra despesa</strong>.</li>
+<li><strong>Registrar pagamento</strong>: o pagamento ainda NÃO está no sistema. Cria a saída da conta e a baixa juntas. Se a saída já estiver no extrato, registrar de novo duplicaria o dinheiro: use o vínculo.</li></ul></section>` : ""}
+${vincularDoExtrato(d, ctx)}
 ${pagar}
 <h3>Histórico</h3>${historico(d.historico)}`;
+}
+
+/**
+ * 08E (F-2) — "Vincular pagamento do extrato": escolher uma saída JÁ registrada. Nada é pré-selecionado por valor ou
+ * data: a pessoa escolhe, vê a prévia (efeito em cada tela) e só então confirma com evidência.
+ */
+function vincularDoExtrato(d, ctx) {
+  const t = d.titulo;
+  const v = d.vinculoExtrato;
+  if (!v || !podeVincular(ctx) || !(t.saldoCentavos > 0) || t.situacao === "CANCELADO") return "";
+  const saidas = v.saidasElegiveis ?? [];
+  return `<section class="card" aria-labelledby="t-vinc-${esc(t.id)}"><h3 id="t-vinc-${esc(t.id)}">Vincular pagamento do extrato</h3>
+${saidas.length ? `<form class="filtros-locais" data-previa-vinculo="${esc(t.id)}" aria-label="Escolher a saída do extrato">
+<label>Saída já registrada <select name="movimentacao" required><option value="">Escolha…</option>${saidas.map((s) => `<option value="${esc(s.id)}"${s.competenciaAceitaBaixa ? "" : " disabled"}>${esc(dataBR(s.data))} · ${esc(s.conta)}${s.descricao ? ` · ${esc(descricaoLegivel(s.descricao))}` : ""} · disponível ${esc(moeda(s.disponivelCentavos))}${s.competenciaAceitaBaixa ? "" : " (competência homologada)"}</option>`).join("")}</select></label>
+<button type="submit" class="botao">Ver prévia da baixa</button></form>
+<p class="nota">Nenhuma saída é escolhida automaticamente: valor e data iguais não provam que é o mesmo pagamento.</p>` : nenhum("Nenhuma saída do extrato com valor ainda não vinculado.")}
+</section>`;
+}
+
+/** 08E (F-2) — prévia e confirmação do vínculo de UMA saída do extrato com a conta. */
+export function detalheVinculoExtrato(d, ctx = {}) {
+  const o = d.obrigacao;
+  const e = d.escolhida;
+  if (!e) return `${fechar("Vincular pagamento do extrato")}${nenhum("Escolha uma saída para ver a prévia.")}`;
+  const docs = e.documentosDisponiveis ?? [];
+  const pode = podeVincular(ctx) && !e.bloqueios.length;
+  const evidencia = e.evidencia.conciliacaoConfirmadaComEvidencia
+    ? '<p class="nota">Há conciliação CONFIRMADA, com evidência, entre esta saída e esta conta: ela comprova o vínculo.</p>'
+    : '<p class="aviso">Escolha o documento que comprova este pagamento (comprovante ou boleto pago). Sem ele a baixa é recusada.</p>';
+  const form = pode ? formAcao({ url: "/api/fv2/acoes/obrigacoes/vincular-extrato", titulo: "Confirmar a baixa com esta saída", rotulo: "Vincular pagamento", recarregar: `vinculo:${o.id}|${e.id}`,
+    aviso: "Confirmo: a saída já registrada quita esta conta. Nenhuma saída nova e nenhuma despesa nova são criadas.",
+    campos: `<input type="hidden" name="obrigacao" value="${esc(o.id)}"><input type="hidden" name="movimentacao" value="${esc(e.id)}"><input type="hidden" name="versao" value="${esc(String(e.versao))}">
+<label>Valor a vincular (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(e.valorPropostoCentavos).replace(/[^0-9.,]/g, ""))}" required></label>
+<label>Documento que comprova o pagamento <select name="documento"${e.evidencia.exigeDocumento ? " required" : ""}><option value="">${e.evidencia.exigeDocumento ? "Escolha…" : "Usar a conciliação confirmada"}</option>${docs.map((x) => `<option value="${esc(x.id)}">${esc(TIPOS_DOCUMENTO[x.tipo] ?? "Documento")} — ${esc(x.descricao)}</option>`).join("")}</select></label>
+<label>Justificativa <input name="justificativa" required maxlength="500"></label>` }) : "";
+  return `${fechar("Vincular pagamento do extrato")}
+<p class="nota">Prévia: nada foi gravado.</p>
+<h3>Conta a pagar</h3>
+<dl class="ficha">
+  <dt>Conta</dt><dd>${esc(descricaoLegivel(o.descricao))}</dd>
+  <dt>Competência</dt><dd>${esc(competencia(o.competencia))}</dd>
+  <dt>Vencimento</dt><dd>${esc(dataBR(o.vencimento))}</dd>
+  <dt>Valor original</dt><dd>${valor(o.valorOriginalCentavos)}</dd>
+  <dt>Pago</dt><dd>${valor(o.pagoCentavos)}</dd>
+  <dt>Saldo em aberto</dt><dd>${valor(o.saldoCentavos)}</dd>
+</dl>
+<h3>Saída do extrato escolhida</h3>
+<dl class="ficha">
+  <dt>Data do pagamento</dt><dd>${esc(dataBR(e.data))}</dd>
+  <dt>Conta utilizada</dt><dd>${esc(e.conta)}</dd>
+  <dt>Valor da saída</dt><dd>${valor(e.valorCentavos)}</dd>
+  <dt>Já vinculado a outras contas</dt><dd>${valor(e.alocadoCentavos)}</dd>
+  <dt>Disponível para vincular</dt><dd>${valor(e.disponivelCentavos)}</dd>
+</dl>
+<h3>Histórico desta saída</h3>
+${e.historico.liquidacoes.length ? `<ul class="lista-simples">${e.historico.liquidacoes.map((l) => `<li><span>${esc(dataBR(l.dataEfetiva))} · baixa de outra conta${l.viaExtrato ? " (vínculo do extrato)" : ""}</span>${valor(l.valorCentavos)}</li>`).join("")}</ul>` : nenhum("Nenhuma baixa anterior com esta saída.")}
+${e.historico.conciliacoes.length ? `<ul class="mini">${e.historico.conciliacoes.map((c) => `<li>Conciliação ${esc(String(c.situacao).toLowerCase())}${c.evidencias ? ` · ${c.evidencias} evidência(s)` : ""}</li>`).join("")}</ul>` : ""}
+<h3>Efeito da baixa</h3>
+<ul class="mini">
+  <li>Saldo da conta a pagar: ${valor(e.efeito.obrigacao.saldoAntesCentavos)} → ${valor(e.efeito.obrigacao.saldoDepoisCentavos)}${e.efeito.obrigacao.quitada ? " (quitada)" : ""}.</li>
+  <li>Disponível na saída: ${valor(e.efeito.saida.disponivelAntesCentavos)} → ${valor(e.efeito.saida.disponivelDepoisCentavos)}.</li>
+  <li>${esc(e.efeito.banco)}</li><li>${esc(e.efeito.dre)}</li><li>${esc(e.efeito.fluxo)}</li>
+  ${e.efeito.diferenca ? `<li>Sobra da saída: ${valor(e.efeito.saida.disponivelDepoisCentavos)} continua como saída a classificar — nada é lançado como taxa, juro ou desconto.</li>` : ""}
+</ul>
+${e.bloqueios.length ? `<p class="aviso aviso--alerta" role="alert"><strong>Não disponível:</strong> ${e.bloqueios.map(esc).join(" ")}</p>` : ""}
+${evidencia}
+${form}`;
 }
 
 // ----------------------------------------------------------------------------------------------- contas a receber

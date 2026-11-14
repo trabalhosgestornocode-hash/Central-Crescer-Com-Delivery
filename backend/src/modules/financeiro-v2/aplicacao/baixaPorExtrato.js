@@ -44,7 +44,7 @@ export function operacoesDeBaixaPorExtrato(b) {
     return {
       liquidacoes: liqs.map((l) => ({ id: l.id, obrigacaoId: l.alvoId, valorCentavos: subtrair(l.valorCentavos, l.estornadoCentavos ?? 0), dataEfetiva: l.dataEfetiva, viaExtrato: Boolean(l.origemDoVinculo) })),
       conciliacoes: corr.map((c) => ({ id: c.id, situacao: c.situacao, forca: c.forca ?? null, evidencias: (c.evidenciaDocumentoIds ?? []).length })),
-      documentoIds: docs.map((v) => v.documentoId),
+      documentoIds: [...new Set([...(m.documentoId ? [m.documentoId] : []), ...docs.map((v) => v.documentoId)])],
     };
   }
 

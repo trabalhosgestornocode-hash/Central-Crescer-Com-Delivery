@@ -115,7 +115,7 @@ export function operacoesDeCompetencia(b, { repositorio, politica, cargaCompleta
           metodologiaVersao = identificadorDa(exigirMetodologiaAplicavel(c.competencia, c.metodologiaVersao));
           impedimentos = impedimentosDeHomologacao(d, c.competencia, b.hoje(), apuracao);
           if (impedimentos.length) {
-            falhar(CODIGO.HOMOLOGACAO_BLOQUEADA, "Há divergência relevante sem resolução comprovada: a competência não pode ser homologada.", { impedimentos: impedimentos.map((x) => x.codigo) });
+            falhar(CODIGO.HOMOLOGACAO_BLOQUEADA, "Há divergência relevante sem resolução comprovada: a competência não pode ser homologada.", { impedimentos: impedimentos.map((x) => x.codigo), motivos: impedimentos.map((x) => x.mensagem) });
           }
           // 08E (F-1): pendências que exigem documentação. Do PRELIMINAR só se homologa sem nada a ressalvar; ressalvas
           // passam por "com pendências documentadas" e precisam ser admissíveis (natureza + impacto, não o texto).

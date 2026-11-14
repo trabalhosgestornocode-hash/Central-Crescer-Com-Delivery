@@ -208,6 +208,8 @@ function detalheDe(chave) {
   if (tipo === "categoria") return [`/api/fv2/configuracoes/categoria?${qs({ competencia: undefined, codigo: id })}`, (d) => adm.detalheCategoria(d, { podeConfigurar: permissoesDaUnidade().includes("financeiro_v2.configurar") })];
   if (tipo === "reclassificacao") { const [lanc, categoria] = id.split("|"); return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, id: lanc, categoria })}`, DETALHE_RECLASSIFICACAO]; }
   if (tipo === "reclassificacao-mov") return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, movimentacao: id })}`, DETALHE_RECLASSIFICACAO];
+  // 08E: prévia do vínculo de uma saída do extrato com a conta — "vinculo:<conta>|<saída>".
+  if (tipo === "vinculo") { const [obrigacao, movimentacao] = id.split("|"); return [`/api/fv2/vinculo-extrato?${qs({ competencia: undefined, obrigacao, movimentacao })}`, (d) => tes.detalheVinculoExtrato(d, ctxPainel())]; }
   if (tipo === "importar") return [`/api/fv2/conferencias/catalogo?${qs({ competencia: undefined })}`, (d) => conf.escolherArquivo(d)];
   const [rota, desenho] = DETALHES[tipo] ?? DETALHES.receber;
   return [`/api/fv2/${rota}?${qs({ competencia: undefined, id })}`, desenho];
@@ -438,6 +440,9 @@ document.addEventListener("submit", (e) => {
   // 08C: a prévia da reclassificação é uma CONSULTA ao núcleo (nada é gravado); só a ação confirma.
   const previa = e.target.closest("[data-previa-reclassificacao]");
   if (previa) { const cat = new FormData(previa).get("categoria"); if (cat) abrirDetalhe(`reclassificacao:${previa.dataset.previaReclassificacao}|${cat}`, previa); return; }
+  // 08E: prévia do vínculo com a saída do extrato (consulta; só a ação confirma).
+  const previaVinculo = e.target.closest("[data-previa-vinculo]");
+  if (previaVinculo) { const mov = new FormData(previaVinculo).get("movimentacao"); if (mov) abrirDetalhe(`vinculo:${previaVinculo.dataset.previaVinculo}|${mov}`, previaVinculo); return; }
   const form = e.target.closest("[data-filtro-local]");
   if (form) aplicarFiltroLocal(form);
 });

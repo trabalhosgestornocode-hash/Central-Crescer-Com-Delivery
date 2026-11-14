@@ -75,6 +75,7 @@ export const MOTIVOS_PARCIAL = Object.freeze({
 export const EVENTOS = Object.freeze({
   CRIACAO: "Registrado", LIQUIDACAO: "Pagamento/recebimento vinculado", ESTORNO: "Estorno", AJUSTE: "Ajuste documentado", CORRECAO: "Correção",
   CANCELAMENTO: "Cancelado", CONCILIACAO: "Conciliação", RECLASSIFICACAO: "Reclassificação", OPERACAO_DE_CAIXA: "Operação de caixa", FECHAMENTO_DE_CAIXA: "Fechamento de caixa",
+  DOCUMENTACAO_DE_PENDENCIA: "Pendência documentada no fechamento",
 });
 export const OPERACOES_CAIXA = Object.freeze({ ENTRADA: "Entrada", SAIDA: "Saída", SANGRIA: "Sangria", SUPRIMENTO: "Suprimento" });
 export const TIPOS_DOCUMENTO = Object.freeze({
@@ -190,5 +191,5 @@ export const PERMISSOES = Object.freeze({
   "financeiro_v2.documentos": "abrir documentos do cofre",
   // 08B: ações separadas de decisões sensíveis.
   "financeiro_v2.aprovar": "aprovar ou rejeitar propostas", "financeiro_v2.aplicar": "aplicar propostas aprovadas",
-  "financeiro_v2.revogar": "revogar acessos", "financeiro_v2.confirmar_importacao": "confirmar importações", "financeiro_v2.reabrir": "reabrir competência homologada", "financeiro_v2.reclassificar": "reclassificar lançamentos", "financeiro_v2.enviar_documento": "enviar documentos de evidência",
+  "financeiro_v2.revogar": "revogar acessos", "financeiro_v2.confirmar_importacao": "confirmar importações", "financeiro_v2.reabrir": "reabrir competência homologada", "financeiro_v2.reclassificar": "reclassificar lançamentos", "financeiro_v2.enviar_documento": "enviar documentos de evidência", "financeiro_v2.vincular_pagamento": "vincular pagamentos do extrato",
 });

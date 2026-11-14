@@ -110,12 +110,40 @@ ${p.outrosMotivos.length ? `<h3>Outros motivos sobre o mesmo fato</h3><ul class=
 <h3>Documentos necessários</h3>${p.documentosNecessarios.length ? `<ul class="mini">${p.documentosNecessarios.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : nenhum("Nenhum documento adicional indicado.")}
 <h3>O que pode ser feito</h3>${p.opcoes.length ? `<ul class="mini">${p.opcoes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : nenhum("Nenhuma ação: registro informativo.")}
 <p class="nota">A pendência só deixa de existir com o documento ou a decisão registrada — nunca por hipótese.</p>
+${documentacaoNoFechamento(d, ctx)}
 ${ligacaoDaPendencia(p)}
 ${reclassificacaoDaPendencia(p)}
 ${evidenciaDaPendencia(p, ctx)}
 <h3>Histórico de decisões</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li><strong>${esc(EVENTOS[h.evento] ?? "Alteração registrada")}</strong> · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem decisões registradas.")}
 ${p.apontadoPor.length > 1 ? `<p class="nota">Este fato foi apontado por ${p.apontadoPor.length} conferências diferentes e conta uma única vez.</p>` : ""}
 ${tecnico({ chave: p.chave, codigo: p.codigo, referencia: p.referencia, apontadoPor: p.apontadoPor, outrosCodigos: p.outrosMotivos.map((x) => x.codigo), ...p.tecnico })}`;
+}
+
+const SITUACAO_NO_FECHAMENTO = Object.freeze({
+  DOCUMENTADA_ADMISSIVEL: { rotulo: "Documentada: ressalva admissível", classe: "ok" }, BLOQUEANTE: { rotulo: "Bloqueia a homologação", classe: "erro" },
+  NAO_DOCUMENTADA: { rotulo: "Precisa ser documentada", classe: "alerta" }, SEM_EVIDENCIA_SUFICIENTE: { rotulo: "Documentação insuficiente", classe: "alerta" },
+});
+
+/**
+ * 08E (F-1) — a pendência no FECHAMENTO: como o núcleo a avalia e, quando cabe, o formulário para documentá-la (decisão e
+ * o que falta). Documentar não resolve nem torna admissível o que tem impacto indeterminado: quem decide é a natureza.
+ */
+function documentacaoNoFechamento(d, ctx) {
+  const f = d.fechamentoDaPendencia;
+  if (!f) return "";
+  const p = d.pendencia;
+  const item = f.item;
+  const sit = item ? SITUACAO_NO_FECHAMENTO[item.situacao] : null;
+  const situacao = sit ? `<p>${seloDe(sit)} ${esc(item.motivo ?? "")}</p>` : "";
+  const doc = item?.decisao ? `<p class="nota">Decisão registrada: ${esc(item.decisao)}${item.documentacaoFaltante ? ` · falta: ${esc(item.documentacaoFaltante)}` : ""}</p>` : "";
+  const form = f.documentavel && tem(ctx.permissoes, "financeiro_v2.fechar") ? acao({ url: "/api/fv2/acoes/pendencias/documentar", rotulo: item?.decisao ? "Atualizar a documentação" : "Documentar no fechamento", recarregar: `pendencia:${p.chave}`,
+    aviso: "Confirmo a documentação: ela não resolve a pendência e fica no histórico do fechamento.",
+    campos: `<input type="hidden" name="competencia" value="${esc(f.competencia)}"><input type="hidden" name="chave" value="${esc(p.chave)}"><input type="hidden" name="descricao" value="${esc(p.titulo)}">
+<label>Impacto (como afeta o resultado) <input name="impacto" required maxlength="500" value="${esc(p.impacto ?? "")}"></label>
+<label>Decisão registrada <input name="decisao" required maxlength="500"></label>
+<label>O que falta (documento ou providência) <input name="documentacaoFaltante" required maxlength="500"></label>` }) : "";
+  if (!situacao && !form) return "";
+  return `<h3>No fechamento de ${esc(competencia(f.competencia))}</h3>${situacao}${doc}${form}`;
 }
 
 const SITUACOES_ATRIBUICAO = Object.freeze({ ATRIBUIDA: "Atribuída", EM_ANALISE: "Em análise", AGUARDANDO_TERCEIRO: "Aguardando terceiro", CONCLUIDA: "Concluída (aguarda a causa sumir)" });
@@ -447,8 +475,8 @@ function fechamento(r, _f, ctx = {}) {
 </section>
 <section class="card" aria-labelledby="t-imped"><h2 id="t-imped">Impedimentos de homologação</h2>
 ${r.impedimentos.length ? `<ul class="lista-simples">${r.impedimentos.map((x) => `<li><span>${esc(x.mensagem)}</span>${valor(x.valorCentavos)}</li>`).join("")}</ul>` : nenhum("Nenhuma divergência relevante sem justificativa.")}
-${r.exigemDocumentacao ? `<p class="nota">${r.exigemDocumentacao} pendência(s) precisam estar documentadas no fechamento. <a class="botao-link" href="#/conferencias?secao=pendencias&amp;situacao=A_RESOLVER">Ver pendências</a></p>` : ""}
 </section>
+${avaliacaoDoFechamento(r)}
 <section class="card" aria-labelledby="t-secoes"><h2 id="t-secoes">Conferência por assunto</h2>
 <ul class="secoes-fechamento">${r.secoes.map((s) => `<li><div class="pendencia-topo"><strong>${esc(s.nome)}</strong>${seloDe(SITUACOES_SECAO[s.situacao])}</div><p class="nota">${esc(s.resumo)}</p></li>`).join("")}</ul>
 </section>
@@ -457,6 +485,28 @@ ${acoesDeFechamento(r, ctx)}
 ${versoesDeFechamento(r.versoes ?? [])}
 <section class="card" aria-labelledby="t-hist"><h2 id="t-hist">Histórico de revisões</h2>
 ${r.historico.length ? `<ol class="historico">${r.historico.map((h) => `<li><strong>${esc(ESTADOS_COMPETENCIA[h.para]?.rotulo ?? h.para ?? h.evento)}</strong> · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}${h.metodologia && h.para === "FECHAMENTO_HOMOLOGADO" ? ` · metodologia: ${esc(h.metodologia)}` : ""}</li>`).join("")}</ol>` : nenhum("Nenhuma mudança de estado registrada.")}
+</section>`;
+}
+
+/**
+ * 08E (F-1) — o que a homologação enxerga: resolvidas, documentadas como ressalva, bloqueantes, por documentar e sem
+ * evidência suficiente, com os motivos. A homologada mostra as ressalvas aprovadas.
+ */
+function avaliacaoDoFechamento(r) {
+  const a = r.avaliacaoDasPendencias;
+  if (!a) return "";
+  const lista = (titulo, itens, vazio, explicacao) => `<h3>${esc(titulo)} (${itens.length})</h3>${explicacao ? `<p class="nota">${esc(explicacao)}</p>` : ""}${itens.length
+    ? `<ul class="lista-simples">${itens.map((x) => `<li><span><button type="button" class="botao-link" data-detalhe="pendencia:${esc(x.chave)}">${esc(x.titulo ?? x.codigo ?? "Pendência")}</button>${x.motivo ? `<br><span class="nota">${esc(x.motivo)}</span>` : ""}${x.decisao ? `<br><span class="nota">Decisão: ${esc(x.decisao)}${x.documentacaoFaltante ? ` · falta: ${esc(x.documentacaoFaltante)}` : ""}</span>` : ""}</span>${x.valorCentavos !== null && x.valorCentavos !== undefined ? valor(x.valorCentavos) : '<span class="nota">impacto não quantificado</span>'}</li>`).join("")}</ul>`
+    : nenhum(vazio)}`;
+  const reg = r.homologacaoRegistrada;
+  return `<section class="card" aria-labelledby="t-aval-fech"><h2 id="t-aval-fech">Pendências diante da homologação</h2>
+${a.motivos.length ? `<p class="aviso aviso--alerta"><strong>O que impede homologar:</strong> ${a.motivos.map(esc).join(" ")}</p>` : '<p class="nota">Nada impede a homologação pelas pendências (a decisão continua sendo humana).</p>'}
+${lista("Bloqueantes", a.bloqueantes, "Nenhuma pendência bloqueante.", "Podem distorcer o resultado de modo ainda não esclarecido (ou bloqueiam por natureza): precisam ser resolvidas, nunca ressalvadas.")}
+${lista("Precisam ser documentadas", a.naoDocumentadas, "Nenhuma pendência por documentar.", "Documente cada uma no painel dela (decisão e o que falta).")}
+${lista("Documentação insuficiente", a.semEvidencia, "Nenhuma.", "Falta decisão, o que falta ou evidência — ou o impacto mudou depois da documentação.")}
+${lista("Documentadas: ressalvas admissíveis", a.ressalvas, "Nenhuma ressalva.", "Efeito no resultado conhecido e conservador; ficam guardadas na versão homologada.")}
+${lista("Resolvidas", a.resolvidas, "Nenhuma pendência documentada foi resolvida ainda.", "Estavam documentadas e deixaram de existir.")}
+${reg ? `<h3>Homologação registrada</h3><p>${reg.comRessalvas ? `<span class="selo selo--alerta">Com ${reg.ressalvas.length} ressalva(s) aprovada(s)</span>` : '<span class="selo selo--ok">Sem ressalvas</span>'}</p>${reg.ressalvas.length ? `<ul class="mini">${reg.ressalvas.map((x) => `<li>${esc(x.titulo ?? x.codigo)} — ${esc(x.decisao ?? "")}${x.valorCentavos !== null && x.valorCentavos !== undefined ? ` (${esc(moeda(x.valorCentavos))})` : ""}</li>`).join("")}</ul>` : ""}` : ""}
 </section>`;
 }
 
@@ -482,7 +532,7 @@ function acoesDeFechamento(r, ctx = {}) {
     const campos = [
       `<input type="hidden" name="competencia" value="${esc(a.competencia)}"><input type="hidden" name="novoEstado" value="${esc(a.estadoProposto)}">`,
       a.exigeMetodologia ? `<label>Critério da decisão (metodologia aplicada) <textarea name="metodologia" rows="2" required maxlength="2000"></textarea></label><p class="nota">Metodologia vigente: ${esc(a.metodologiaVigente ?? "não publicada")}.</p>` : "",
-      a.exigePendencias ? `<p class="nota">As pendências a resolver da Central entram na documentação, com o impacto e o responsável já atribuídos.</p><label>Documentação faltante <input name="documentacaoFaltante" maxlength="500"></label><label>Decisão registrada <input name="decisao" maxlength="500"></label>` : "",
+      a.exigePendencias ? '<p class="nota">Entram as pendências que você documentou, uma a uma, no painel de cada uma. Nada é documentado automaticamente.</p>' : "",
       `<label>Justificativa${a.exigeJustificativa ? " (obrigatória)" : ""} <textarea name="justificativa" rows="2" maxlength="500"${a.exigeJustificativa ? " required" : ""}></textarea></label>`,
     ].join("");
     const formulario = a.permitida
@@ -510,7 +560,7 @@ function versoesDeFechamento(versoes) {
   const TIPO = { PRELIMINAR: "Preliminar", COM_PENDENCIAS: "Com pendências", HOMOLOGADA: "Homologada" };
   return `<section class="card" aria-labelledby="t-versoes"><h2 id="t-versoes">Versões do fechamento</h2>
 <div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Versões do fechamento</caption><thead><tr><th scope="col" class="esquerda">Versão</th><th scope="col">Faturamento bruto</th><th scope="col">Resultado gerencial</th><th scope="col">Metodologia</th><th scope="col">Decisão</th></tr></thead><tbody>
-${versoes.map((v) => `<tr>${td("Versão", `<strong>nº ${v.numero} · ${esc(TIPO[v.tipo] ?? v.tipo)}</strong>${v.vigente ? ' <span class="selo selo--ok">vigente</span>' : ""}<br><span class="nota">revisão ${v.revisao}${v.justificativa ? ` · ${esc(v.justificativa)}` : ""}</span>`, "esquerda")}${td("Faturamento bruto", valor(v.faturamentoBrutoCentavos))}${td("Resultado gerencial", valor(v.resultadoGerencialCentavos))}${td("Metodologia", esc(v.metodologiaVersao))}${td("Decisão", `${esc(dataBR(v.decididoEm))} · ${esc(v.responsavel)}`)}</tr>`).join("")}
+${versoes.map((v) => `<tr>${td("Versão", `<strong>nº ${v.numero} · ${esc(TIPO[v.tipo] ?? v.tipo)}</strong>${v.vigente ? ' <span class="selo selo--ok">vigente</span>' : ""}${v.tipo === "HOMOLOGADA" && v.verificacoes?.comRessalvas ? ` <span class="selo selo--alerta">com ${v.verificacoes.ressalvas.length} ressalva(s)</span>` : v.tipo === "HOMOLOGADA" && v.verificacoes?.comRessalvas === false ? ' <span class="selo selo--neutro">sem ressalvas</span>' : ""}<br><span class="nota">revisão ${v.revisao}${v.justificativa ? ` · ${esc(v.justificativa)}` : ""}</span>`, "esquerda")}${td("Faturamento bruto", valor(v.faturamentoBrutoCentavos))}${td("Resultado gerencial", valor(v.resultadoGerencialCentavos))}${td("Metodologia", esc(v.metodologiaVersao))}${td("Decisão", `${esc(dataBR(v.decididoEm))} · ${esc(v.responsavel)}`)}</tr>`).join("")}
 </tbody></table></div>
 <p class="nota">Versões nunca são alteradas. Reabrir uma competência homologada preserva a versão anterior; a próxima homologação gera outra.</p></section>`;
 }
@@ -524,7 +574,9 @@ export function resultadoDaAcao(r) {
   if (d.importacao) return `Arquivo recebido: ${esc(ESTADOS_IMPORTACAO[d.importacao.estado]?.rotulo ?? d.importacao.estado)}.`;
   if (d.proposta && d.efeitos) return `Proposta aplicada: ${d.efeitos.length} registro(s) criado(s) numa única transação.`;
   if (d.criadas !== undefined) return `${d.criadas} criada(s), ${d.existentes ?? 0} já existente(s)${d.bloqueadasPorHomologacao ? `, ${d.bloqueadasPorHomologacao} não criada(s) por competência homologada` : ""}.`;
-  if (d.versao?.tipo) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado]?.rotulo ?? d.estado)}. Versão nº ${d.versao.numero} registrada.`;
+  if (d.efeito?.novasSaidas === 0 && d.liquidacoes) return `Baixa vinculada à saída do extrato: ${esc(moeda(d.efeito.vinculadoCentavos))}. Nenhuma saída nova, nenhuma despesa nova; disponível na saída: ${esc(moeda(d.efeito.disponivelDepoisCentavos))}.`;
+  if (d.pendencia && d.avaliacao !== undefined) return `Pendência documentada no fechamento: ${esc(SITUACAO_NO_FECHAMENTO[d.avaliacao?.situacao]?.rotulo ?? "registrada")}. Documentar não resolve a pendência.`;
+  if (d.versao?.tipo) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado]?.rotulo ?? d.estado)}${d.versao.comRessalvas ? " com ressalvas" : ""}. Versão nº ${d.versao.numero} registrada.`;
   if (d.estado && ESTADOS_COMPETENCIA[d.estado]) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado].rotulo)}.`;
   if (d.responsavelId) return "Atribuição registrada no histórico.";
   if (d.movimentacao && d.titulo) return `Pagamento registrado: saída e baixa da conta gravadas juntas (saldo da conta agora ${esc(moeda(d.titulo.saldoCentavos))}).`;

@@ -64,11 +64,22 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const banco = await nucleo.configurarContaFinanceira(A, { tipo: "BANCARIA", nome: "Unicred (demonstração)", instituicao: "Conta sintética" });
   let n = 0;
   const venda = (canal, data, bruto, extra = {}) => nucleo.registrarVenda(A, { canal, dataVenda: data, brutoCentavos: bruto, fonte: { sistema: "MANUAL", idExterno: `DEMO-${(n += 1)}` }, composicao: { itensCentavos: bruto }, pagamentos: [{ forma: "DINHEIRO", valorCentavos: bruto, contaId: caixa.id }], ...extra });
-  // Agosto: competência homologada, sem pendências → CONFIRMADO.
+  // 08E (F-1): a semente homologa pelo caminho certo — documenta cada pendência como ressalva SINTÉTICA, passa por "com
+  // pendências documentadas" e só então homologa. Pendência bloqueante na semente é erro (falha alto).
+  const homologarSemente = async (ctx, competencia) => {
+    await nucleo.alterarEstadoDaCompetencia(ctx, { competencia, novoEstado: "FECHAMENTO_PRELIMINAR" });
+    const f = await nucleo.consultarFechamento(ctx, { competencia });
+    if (f.avaliacaoDasPendencias.bloqueantes.length) throw new Error(`Semente da demonstração com pendência bloqueante em ${competencia}.`);
+    for (const x of [...f.avaliacaoDasPendencias.naoDocumentadas, ...f.avaliacaoDasPendencias.semEvidencia]) {
+      await nucleo.documentarPendenciaDoFechamento(ctx, { competencia, pendencia: { chave: x.chave, descricao: x.titulo ?? "Pendência", impacto: "Ressalva da demonstração (sintética).", decisao: "Admitida como ressalva na demonstração.", documentacaoFaltante: "Documento sintético da demonstração." } });
+    }
+    if ((await nucleo.consultarFechamento(ctx, { competencia })).avaliacaoDasPendencias.ressalvas.length) await nucleo.alterarEstadoDaCompetencia(ctx, { competencia, novoEstado: "FECHAMENTO_COM_PENDENCIAS" });
+    return nucleo.alterarEstadoDaCompetencia(ctx, { competencia, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação da demonstração." });
+  };
+  // Agosto: competência homologada (com ressalvas sintéticas documentadas).
   await venda("BALCAO", "2026-08-10", 380000);
   await nucleo.registrarObrigacao(A, { contraparteId: (await nucleo.registrarContraparte(A, { tipo: "FORNECEDOR", nome: "Fornecedor Demonstração" })).id, valorOriginalCentavos: 120000, categoria: "INSUMOS", descricao: "Insumos (demonstração)", competencia: "2026-08", dataEmissao: "2026-08-05", vencimento: "2026-08-20" });
-  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação da demonstração." });
+  await homologarSemente(A, "2026-08");
   // Setembro: canais, taxas, descontos (inclusive a classificar), agregado sem canal, motoboys, saída sem classificação.
   await venda("BALCAO", "2026-09-05", 412350);
   await nucleo.registrarVenda(A, { canal: "BALCAO", dataVenda: "2026-09-06", brutoCentavos: 250000, fonte: { sistema: "MANUAL", idExterno: "DEMO-C1" }, composicao: { itensCentavos: 240000, acrescimosCentavos: 10000, descontos: [{ valorCentavos: 12500, financiador: "LOJA" }] }, pagamentos: [{ forma: "CREDITO", processador: "STONE", valorCentavos: 237500 }] })
@@ -109,8 +120,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const B = c(UNIDADES[1].id);
   const f2 = await nucleo.registrarContraparte(B, { tipo: "FORNECEDOR", nome: "Fornecedor (demonstração 2)" });
   await nucleo.registrarObrigacao(B, { contraparteId: f2.id, valorOriginalCentavos: 50000, categoria: "INSUMOS", descricao: "Insumos (demonstração 2)", competencia: "2026-09", dataEmissao: "2026-09-02", vencimento: "2026-09-20" });
-  await nucleo.alterarEstadoDaCompetencia(B, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(B, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação da demonstração." });
+  await homologarSemente(B, "2026-09");
 
   await conciliacoesDemo(nucleo, A, { banco });
   // Fechamento de setembro com pendências DOCUMENTADAS (Execução 06C): a Central mostra o que impede a homologação.
@@ -188,7 +198,22 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/fluxo-de-caixa": (ctx, p) => nucleo.consultarFluxoDeCaixa(ctx, filtro(p, ["inicio", "fim", "granularidade"])),
     "/api/fv2/calendario": (ctx, p) => nucleo.consultarCalendarioFinanceiro(ctx, filtro(p, ["mes"])),
     // 08D: o detalhe leva as contas ativas (para o formulário de pagamento) — só nome e referência opaca.
-    "/api/fv2/conta-a-pagar": async (ctx, p) => ({ ...(await nucleo.detalharContaAPagar(ctx, { id: reverso.get(p.id) ?? NENHUM })), contasParaPagar: (await nucleo.consultarRegistros(ctx, { tipo: "CONTA" })).filter((c) => c.ativa).map((c) => ({ id: c.id, nome: c.nome })) }),
+    "/api/fv2/conta-a-pagar": async (ctx, p) => ({
+      ...(await nucleo.detalharContaAPagar(ctx, { id: reverso.get(p.id) ?? NENHUM })),
+      contasParaPagar: (await nucleo.consultarRegistros(ctx, { tipo: "CONTA" })).filter((c) => c.ativa).map((c) => ({ id: c.id, nome: c.nome })),
+      // 08E: saídas do extrato que podem quitar esta conta (nenhuma pré-selecionada).
+      vinculoExtrato: await nucleo.previaDoVinculoDoExtrato(ctx, { obrigacaoId: reverso.get(p.id) ?? NENHUM }),
+    }),
+    // 08E: prévia do vínculo com a saída ESCOLHIDA (nada é gravado). Documentos ganham descrição legível.
+    "/api/fv2/vinculo-extrato": async (ctx, p) => {
+      const r = await nucleo.previaDoVinculoDoExtrato(ctx, { obrigacaoId: reverso.get(p.obrigacao) ?? NENHUM, ...(p.movimentacao ? { movimentacaoId: reverso.get(p.movimentacao) ?? NENHUM } : {}) });
+      if (r.escolhida) {
+        const docs = new Map((await nucleo.consultarRegistros(ctx, { tipo: "DOCUMENTO" })).map((d) => [d.id, d]));
+        const legivel = (ids) => [...new Set(ids)].map((x) => ({ id: x, tipo: docs.get(x)?.tipo ?? null, descricao: docs.get(x)?.descricao ?? "Documento" }));
+        r.escolhida.documentosDisponiveis = legivel([...r.escolhida.evidencia.documentosDaConta, ...r.escolhida.evidencia.documentosDaSaida]);
+      }
+      return r;
+    },
     "/api/fv2/conta-a-receber": (ctx, p) => nucleo.detalharContaAReceber(ctx, { id: reverso.get(p.id) ?? NENHUM }),
     // Vendas e Recebimentos (06B) — somente leitura.
     "/api/fv2/vendas": (ctx, p) => nucleo.consultarVendas(ctx, filtro(p, FILTRO_VENDAS, NUMEROS_VENDAS)),
@@ -208,7 +233,15 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/conferencias/correspondencia": (ctx, p) => nucleo.detalharCorrespondencia(ctx, { id: reverso.get(p.id) ?? NENHUM }),
     "/api/fv2/conferencias/pendencias": (ctx, p) => nucleo.consultarPendencias(ctx, filtro(p, ["competencia", "grupo", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
     // A chave da pendência carrega referências opacas: cada uma volta a ser o id (só as já emitidas).
-    "/api/fv2/conferencias/pendencia": (ctx, p) => nucleo.detalharPendencia(ctx, { competencia: p.competencia, chave: String(p.chave ?? "").split(":").map((x) => (x.startsWith("ref-") ? reverso.get(x) ?? NENHUM : x)).join(":") }),
+    "/api/fv2/conferencias/pendencia": async (ctx, p) => {
+      const chave = String(p.chave ?? "").split(":").map((x) => (x.startsWith("ref-") ? reverso.get(x) ?? NENHUM : x)).join(":");
+      const d = await nucleo.detalharPendencia(ctx, { competencia: p.competencia, chave });
+      // 08E: como esta pendência está no fechamento (documentada? admissível como ressalva? bloqueante?).
+      const f = await nucleo.consultarFechamento(ctx, { competencia: d.pendencia.competencia ?? p.competencia });
+      const a = f.avaliacaoDasPendencias;
+      const item = [...a.ressalvas, ...a.bloqueantes, ...a.naoDocumentadas, ...a.semEvidencia].find((x) => x.chave === chave) ?? null;
+      return { ...d, fechamentoDaPendencia: { estado: f.estado, competencia: f.competencia, item, documentavel: ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS"].includes(f.estado) && d.pendencia.efeitoNoFechamento === "EXIGE_DOCUMENTACAO" && d.pendencia.situacao !== "INFORMATIVA" } };
+    },
     "/api/fv2/conferencias/fechamento": async (ctx, p) => {
       const f = await nucleo.consultarFechamento(ctx, filtro(p, ["competencia"]));
       // 06D: prévias das mudanças possíveis a partir do estado atual (as MESMAS regras do núcleo, sem gravar) e versões.
@@ -279,6 +312,16 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       const contraparteId = b.fornecedor ? id(b.fornecedor) : (await nucleo.registrarContraparte(ctx, { tipo: "FORNECEDOR", nome: String(b.fornecedorNovo ?? "").slice(0, 120) })).id;
       return nucleo.registrarObrigacao(ctx, { contraparteId, valorOriginalCentavos: centavos(b.valor), categoria: b.categoria, descricao: b.descricao, competencia: b.competencia, dataEmissao: b.dataEmissao, vencimento: b.vencimento });
     } },
+    // 08E (F-2): vincular saída JÁ registrada (extrato) à conta — nenhuma saída nova, nenhuma despesa nova.
+    "/api/fv2/acoes/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "documento", "justificativa"], fazer: (ctx, b) => nucleo.vincularPagamentoDoExtrato(ctx, {
+      movimentacaoId: id(b.movimentacao), versaoMovimentacao: /^\d{1,9}$/.test(String(b.versao ?? "")) ? Number(b.versao) : b.versao,
+      alocacoes: [{ obrigacaoId: id(b.obrigacao), valorCentavos: centavos(b.valor) }], ...(b.documento ? { documentoId: id(b.documento) } : {}), justificativa: b.justificativa, confirmar: true,
+    }) },
+    // 08E (F-1): documentar UMA pendência no fechamento (decisão + o que falta). Documentar não resolve.
+    "/api/fv2/acoes/pendencias/documentar": { campos: ["competencia", "chave", "descricao", "impacto", "decisao", "documentacaoFaltante", "justificativa"], fazer: (ctx, b) => nucleo.documentarPendenciaDoFechamento(ctx, {
+      competencia: b.competencia, ...(b.justificativa ? { justificativa: b.justificativa } : {}),
+      pendencia: { chave: String(b.chave ?? "").split(":").map((x) => (x.startsWith("ref-") ? reverso.get(x) ?? NENHUM : x)).join(":"), descricao: b.descricao, impacto: b.impacto, ...(b.decisao ? { decisao: b.decisao } : {}), ...(b.documentacaoFaltante ? { documentacaoFaltante: b.documentacaoFaltante } : {}) },
+    }) },
     "/api/fv2/acoes/obrigacoes/pagar": { campos: ["obrigacao", "conta", "dataEfetiva", "valor"], fazer: (ctx, b) => nucleo.pagarContaAPagar(ctx, { obrigacaoId: id(b.obrigacao), contaId: id(b.conta), dataEfetiva: b.dataEfetiva, valorCentavos: centavos(b.valor) }) },
     "/api/fv2/acoes/saldos/registrar": { campos: ["conta", "data", "referencia", "valor", "observacao"], fazer: (ctx, b) => nucleo.registrarSaldoDeConta(ctx, { contaId: id(b.conta), data: b.data, referencia: b.referencia, valorCentavos: centavos(b.valor), ...(b.observacao ? { observacao: b.observacao } : {}) }) },
     "/api/fv2/acoes/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (ctx, b) => nucleo.reclassificarLancamento(ctx, {
@@ -287,24 +330,12 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     }) },
     "/api/fv2/acoes/conciliacoes/confirmar": { campos: ["correspondencia", "justificativa"], fazer: (ctx, b) => nucleo.confirmarConciliacao(ctx, { correspondenciaId: id(b.correspondencia), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
     // ---- 06D: fechamento mensal. Pendências documentadas são montadas a partir da Central (núcleo), não do cliente.
-    "/api/fv2/acoes/fechamento/alterar": { campos: ["competencia", "novoEstado", "metodologia", "justificativa", "decisao", "documentacaoFaltante"], fazer: async (ctx, b) => {
-      const pendencias = [];
-      if (b.novoEstado === "FECHAMENTO_COM_PENDENCIAS") {
-        const lista = await nucleo.consultarPendencias(ctx, { competencia: b.competencia, situacao: "A_RESOLVER", tamanho: 100 });
-        for (const x of lista.itens) {
-          pendencias.push({
-            chave: x.chave.slice(0, 200), descricao: String(x.titulo ?? x.motivo ?? "Pendência").slice(0, 500),
-            impacto: x.efeitoNoFechamento === "BLOQUEIA" ? "Bloqueia a homologação até ser resolvida." : x.efeitoNoFechamento === "NAO_BLOQUEIA" ? "Não altera o resultado; acompanhamento." : "Pode alterar o resultado: precisa estar documentada.",
-            ...(x.atribuicao?.responsavelId ? { responsavelId: x.atribuicao.responsavelId } : {}),
-            ...(b.documentacaoFaltante ? { documentacaoFaltante: String(b.documentacaoFaltante).slice(0, 500) } : {}), ...(b.decisao ? { decisao: String(b.decisao).slice(0, 500) } : {}),
-          });
-        }
-      }
-      return nucleo.alterarEstadoDaCompetencia(ctx, {
-        competencia: b.competencia, novoEstado: b.novoEstado, confirmar: true,
-        ...(b.metodologia ? { metodologia: b.metodologia } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}), ...(pendencias.length ? { pendencias } : {}),
-      });
-    } },
+    // 08E (F-1): "com pendências documentadas" usa SÓ as pendências documentadas uma a uma (no painel de cada uma). A
+    // demonstração não documenta nada em nome da pessoa — isso era um contorno da regra.
+    "/api/fv2/acoes/fechamento/alterar": { campos: ["competencia", "novoEstado", "metodologia", "justificativa"], fazer: (ctx, b) => nucleo.alterarEstadoDaCompetencia(ctx, {
+      competencia: b.competencia, novoEstado: b.novoEstado, confirmar: true,
+      ...(b.metodologia ? { metodologia: b.metodologia } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}),
+    }) },
     "/api/fv2/acoes/pendencias/atribuir": { campos: ["competencia", "chave", "responsavel", "dataRevisao", "comentario", "justificativa"], fazer: (ctx, b) => nucleo.atribuirResponsavelDePendencia(ctx, {
       competencia: b.competencia, chave: String(b.chave ?? "").split(":").map((x) => (x.startsWith("ref-") ? reverso.get(x) ?? NENHUM : x)).join(":"), responsavelId: usuarioDoPerfil(b.responsavel),
       ...(b.dataRevisao ? { dataRevisao: b.dataRevisao } : {}), ...(b.comentario ? { comentario: b.comentario } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}),
@@ -361,7 +392,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       return { status: 200, corpo: sanitizarComRef(await acao.fazer(ctx, corpo)) };
     } catch (e) {
       const status = e?.codigo ? ERROS()[e.codigo] : null;
-      if (status) return { status, corpo: { erro: e.codigo, mensagem: e.message } };
+      if (status) return { status, corpo: { erro: e.codigo, mensagem: [e.message, ...(Array.isArray(e.detalhes?.motivos) ? e.detalhes.motivos : [])].join(" ") } };
       return { status: 500, corpo: { erro: "FALHA_DA_ACAO", mensagem: "A ação não foi concluída. Nada foi gravado parcialmente." } };
     }
   }
