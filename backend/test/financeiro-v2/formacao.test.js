@@ -236,7 +236,7 @@ test("18, 19 — candidata conta a pagar × saída: ambígua é recusada; confir
   await rejeita(n.confirmarConciliacao(c, { correspondenciaId: cands[0].id }), CODIGO.CONCILIACAO_INVALIDA);
   await rejeita(n.confirmarConciliacao(ctx(undefined, undefined, [ACAO.VER]), { correspondenciaId: cands[1].id }), CODIGO.PERMISSAO_INSUFICIENTE);
   await n.rejeitarCorrespondencia(c, { correspondenciaId: cands[0].id, justificativa: "Boleto é da Compra B (código de barras)." });
-  assert.equal((await n.confirmarConciliacao(c, { correspondenciaId: cands[1].id, justificativa: "Comprovante do boleto anexado." })).situacao, "CONFIRMADA");
+  assert.equal((await n.confirmarConciliacao(c, { correspondenciaId: cands[1].id, justificativa: "Comprovante do boleto anexado.", evidenciaDocumentoIds: [(await n.registrarDocumento(c, { origem: "MANUAL", arquivoId: "cofre:prova-vinculo-d", hashSha256: "d".repeat(64).slice(0, 64), tipo: "COMPROVANTE", recebidoEm: "2026-09-20", descricao: "Comprovante que liga os dois lados (sintético)" })).documento.id] })).situacao, "CONFIRMADA");
   assert.ok(cands[1].evidenciaDocumentoIds.length >= 1);
 });
 

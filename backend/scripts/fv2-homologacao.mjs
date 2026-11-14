@@ -128,7 +128,9 @@ async function iniciar() {
   const TIPOS = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
   const CSP = "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-src blob:; object-src blob:; base-uri 'none'; form-action 'self'";
   const sidDe = (req) => /(?:^|;\s*)fv2_sid=([A-Za-z0-9_-]{30,80})/.exec(req.headers.cookie ?? "")?.[1] ?? null;
-  const lerCorpo = async (req) => { let b = ""; for await (const p of req) { b += p; if (b.length > 8192) throw new Error("grande"); } return JSON.parse(b || "{}"); };
+  // 08D: só a rota de envio de evidência aceita corpo maior (arquivo em base64, até 10 MiB); as demais seguem com 8 KiB.
+  const ROTA_DE_ENVIO = "/api/fv2/acoes/documentos/enviar";
+  const lerCorpo = async (req, limite = 8192) => { let b = ""; for await (const p of req) { b += p; if (b.length > limite) throw Object.assign(new Error("grande"), { status: 413 }); } return JSON.parse(b || "{}"); };
 
   createServer(async (req, res) => {
     const url = new URL(req.url, ORIGEM);
@@ -156,7 +158,9 @@ async function iniciar() {
       }
       if (url.pathname.startsWith("/api/fv2/acoes/")) {
         if (req.method !== "POST") return res.writeHead(405, base).end();
-        const r = await demo.agir(url.pathname, await lerCorpo(req), sidDe(req), { csrf: req.headers["x-fv2-csrf"] });
+        let corpo;
+        try { corpo = await lerCorpo(req, url.pathname === ROTA_DE_ENVIO ? 15 * 1024 * 1024 : 8192); } catch (e) { return json(e?.status ?? 400, { erro: e?.status === 413 ? "TAMANHO" : "JSON", mensagem: e?.status === 413 ? "Corpo grande demais." : "JSON inválido." }); }
+        const r = await demo.agir(url.pathname, corpo, sidDe(req), { csrf: req.headers["x-fv2-csrf"] });
         return json(r.status, r.corpo);
       }
       if (url.pathname.startsWith("/api/fv2/")) {

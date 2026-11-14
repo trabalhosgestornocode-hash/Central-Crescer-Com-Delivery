@@ -49,6 +49,13 @@ export function criarCofreMemoria() {
       return gaveta(escopo).has(arquivoId);
     },
 
+    /** 08D — identificadores guardados no escopo (para achar arquivo sem ficha no banco). */
+    async inventario(escopo) {
+      return [...gaveta(escopo).keys()].sort();
+    },
+
+    async limparTemporarios() { return 0; },
+
     /** SOMENTE PARA TESTES: simula adulteração do arquivo guardado, para provar que a leitura a detecta. */
     __adulterarParaTeste(escopo, arquivoId) {
       const guardado = gaveta(escopo).get(arquivoId);

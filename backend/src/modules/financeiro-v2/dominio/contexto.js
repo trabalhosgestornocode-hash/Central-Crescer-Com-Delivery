@@ -29,6 +29,9 @@ export const ACAO = Object.freeze({
   REABRIR: "financeiro_v2.reabrir", // reabrir competência homologada (com justificativa)
   // Execução 08C — mudar a categoria de um lançamento existente. Separada de `corrigir`: nenhuma concessão anterior a recebe.
   RECLASSIFICAR: "financeiro_v2.reclassificar",
+  // Execução 08D — ENVIAR evidência pela interface (guardar no cofre e vincular). Não abre arquivos (documentos) nem
+  // decide nada financeiro (reclassificar, conciliar, homologar). Nenhuma concessão anterior a recebe.
+  ENVIAR_DOCUMENTO: "financeiro_v2.enviar_documento",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

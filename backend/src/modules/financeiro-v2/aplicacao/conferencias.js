@@ -391,7 +391,11 @@ export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conf
     }
     const docs = new Map();
     for (const did of c.evidenciaDocumentoIds ?? []) docs.set(did, await tx.obter(cx, TIPO.DOCUMENTO, did));
-    const podeConfirmar = abertas.includes(c.situacao) && c.diferencaCentavos === 0 && concorrentes === 0;
+    // 08D: evidência PRÓPRIA do vínculo (enviada pela tela ou vinculada à correspondência) — distinta dos relatórios de origem.
+    const doVinculo = resumida ? [] : (await tx.listar(cx, TIPO.VINCULO_DOCUMENTAL, { onde: { registroTipo: TIPO.CORRESPONDENCIA, registroId: c.id } })).map((v) => v.documentoId);
+    for (const did of doVinculo) if (!docs.has(did)) docs.set(did, await tx.obter(cx, TIPO.DOCUMENTO, did));
+    const fracaSemProva = c.forca === "FRACA" && !doVinculo.length;
+    const podeConfirmar = abertas.includes(c.situacao) && c.diferencaCentavos === 0 && concorrentes === 0 && !fracaSemProva;
     return {
       id: c.id, relacao: c.relacao ?? "MANUAL", nome: nomeDaRelacao(c.relacao ?? "MANUAL"), situacao: c.situacao, competencia: c.competencia ?? null,
       ladoA: await lado(c.ladoA), ladoB: await lado(c.ladoB), diferencaCentavos: c.diferencaCentavos,
@@ -399,7 +403,10 @@ export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conf
       confiabilidadeTexto: c.forca === "FORTE" ? "Identificador comum nos dois lados." : c.forca === "FRACA" ? "Só valor e data coincidem: é candidata, nunca prova." : "Montada por uma pessoa, com justificativa.",
       ambigua: concorrentes > 0, concorrentes, evidencias: docsDe(c.evidenciaDocumentoIds, docs), justificativa: c.justificativa ?? null, decisao: c.justificativaDecisao ?? null,
       decididaEm: c.decididoEm ?? null,
-      podeConfirmar, motivoDeNaoConfirmar: podeConfirmar ? null : !abertas.includes(c.situacao) ? "Já decidida." : c.diferencaCentavos !== 0 ? "Os lados não fecham: registre a divergência com justificativa." : "Correspondência ambígua: outras candidatas disputam os mesmos registros.",
+      evidenciasDoVinculo: docsDe(doVinculo, docs),
+      podeConfirmar, motivoDeNaoConfirmar: podeConfirmar ? null : !abertas.includes(c.situacao) ? "Já decidida." : c.diferencaCentavos !== 0 ? "Os lados não fecham: registre a divergência com justificativa."
+        : concorrentes > 0 ? "Correspondência ambígua: outras candidatas disputam os mesmos registros. Recuse a indevida antes."
+          : "Só valor e data coincidem: anexe um documento que prove o vínculo (os relatórios de origem não bastam).",
       permissaoExigida: ACAO.CONCILIAR, voceTemPermissao: cx.permissoes.includes(ACAO.CONCILIAR),
     };
   }

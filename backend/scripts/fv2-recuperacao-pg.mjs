@@ -143,7 +143,7 @@ const depois = (await repetir(() => retrato())).valor;
 marcar("7_versao_homologada_reproduzida", igual(depois.versoes, antes.versoes) && igual(depois.dre, antes.dre), { versoes: (depois.versoes.versoes ?? depois.versoes).length });
 marcar("8_auditoria_e_historico_preservados", depois.historico === historicoAntes && depois.auditoria === auditoriaAntes && auditoriaAntes > 0, { historicoAntes, historico: depois.historico, auditoriaAntes, auditoria: depois.auditoria });
 const integridade = await repetir(() => n.verificarIntegridadeDoDocumento(c, { id: documento.id }));
-const arquivo = await n.obterArquivoDoDocumento(c, { id: documento.id, finalidade: "baixar" }).catch((e) => ({ erro: e.codigo }));
+const arquivo = await n.obterArquivoDoDocumento(c, { id: documento.id, finalidade: "BAIXAR" }).catch((e) => ({ erro: e.codigo }));
 const hashLido = arquivo?.conteudo ? createHash("sha256").update(Buffer.from(arquivo.conteudo)).digest("hex") : null;
 marcar("9_cofre_documental", integridade.valor?.conferido === true && (hashLido === null || hashLido === g.hashSha256), { conferido: integridade.valor?.conferido ?? null, hashConfere: hashLido === null ? "não lido" : hashLido === g.hashSha256, pastaDoCofre: existsSync(raizCofre) });
 

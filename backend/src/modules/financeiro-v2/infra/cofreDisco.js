@@ -8,8 +8,8 @@
 //     um arquivo corrompido existente não é trocado em silêncio — a operação falha;
 //   - leitura confere o hash; não existe exclusão nem URL pública;
 //   - o registro de acessos negados guarda só metadados (quem, quando, qual documento, por quê) — nunca conteúdo.
-import { createHash } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { appendFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { ehUuid } from "../dominio/validacao.js";
@@ -38,11 +38,46 @@ function gavetaDe(raiz, escopo) {
   return join(raiz, "escopos", sha256(`${escopo.organizacaoId.toLowerCase()}|${escopo.unidadeId.toLowerCase()}`).slice(0, 32));
 }
 
-export function criarCofreDisco({ raiz }) {
+/** Temporários (gravações em andamento) com mais desta idade são restos de falha e podem ser limpos. */
+export const IDADE_DE_TEMPORARIO_ABANDONADO_MS = 15 * 60 * 1000;
+
+export function criarCofreDisco({ raiz, agora = () => Date.now() }) {
   const pasta = exigirPastaPrivada(raiz);
   mkdirSync(pasta, { recursive: true });
   const marca = join(pasta, MARCA_DO_COFRE);
   if (!existsSync(marca)) writeFileSync(marca, "Cofre local do Financeiro v2. Não versionar. Não sincronizar.\n", { flag: "wx" });
+  // 08D: gravação em DUAS FASES. O conteúdo é escrito numa área temporária, conferido pelo hash e só então publicado no
+  // endereço definitivo por LIGAÇÃO atômica (link: falha se já existir, nunca sobrescreve). Um arquivo pela metade
+  // (queda no meio da escrita) fica só na área temporária e nunca é tomado por válido.
+  const temporarios = join(pasta, "temporarios");
+  mkdirSync(temporarios, { recursive: true });
+
+  /** Limpeza CONTROLADA: só a área temporária, só arquivos abandonados (nunca evidências publicadas). */
+  function limparTemporarios(idadeMinimaMs = IDADE_DE_TEMPORARIO_ABANDONADO_MS) {
+    let removidos = 0;
+    for (const nome of readdirSync(temporarios)) {
+      if (!/^g-[0-9a-f]{32}$/.test(nome)) continue;
+      const p = join(temporarios, nome);
+      if (agora() - statSync(p).mtimeMs >= idadeMinimaMs) { unlinkSync(p); removidos += 1; }
+    }
+    return removidos;
+  }
+  limparTemporarios();
+
+  /** Escreve na área temporária e publica por ligação atômica; devolve false se o destino já existia. */
+  function publicar(destino, bytes) {
+    const tmp = join(temporarios, `g-${randomBytes(16).toString("hex")}`);
+    writeFileSync(tmp, bytes, { flag: "wx" });
+    try {
+      linkSync(tmp, destino);
+      return true;
+    } catch (e) {
+      if (e?.code !== "EEXIST") throw e;
+      return false;
+    } finally {
+      unlinkSync(tmp);
+    }
+  }
 
   const caminho = (escopo, hash) => {
     const p = join(gavetaDe(pasta, escopo), hash.slice(0, 2), hash);
@@ -66,16 +101,11 @@ export function criarCofreDisco({ raiz }) {
       const hashSha256 = sha256(conteudo);
       const arquivo = caminho(escopo, hashSha256);
       mkdirSync(dirname(arquivo), { recursive: true });
-      let repetido = false;
-      try {
-        writeFileSync(arquivo, conteudo, { flag: "wx" });
-        writeFileSync(`${arquivo}.json`, JSON.stringify({ tipoMime: entrada.tipoMime, tamanhoBytes: conteudo.byteLength }), { flag: "wx" });
-      } catch (e) {
-        if (e?.code !== "EEXIST") throw e;
-        lerConferido(arquivo, hashSha256); // existente precisa ser íntegro: nunca é sobrescrito
-        repetido = true;
-      }
-      return { arquivoId: `cofre:${hashSha256}`, hashSha256, tamanhoBytes: conteudo.byteLength, repetido };
+      const novo = publicar(arquivo, conteudo);
+      // Existente precisa ser íntegro: nunca é sobrescrito. Publicado agora: confere o que ficou no disco.
+      lerConferido(arquivo, hashSha256);
+      if (!existsSync(`${arquivo}.json`)) publicar(`${arquivo}.json`, JSON.stringify({ tipoMime: entrada.tipoMime, tamanhoBytes: conteudo.byteLength }));
+      return { arquivoId: `cofre:${hashSha256}`, hashSha256, tamanhoBytes: conteudo.byteLength, repetido: !novo };
     },
 
     async ler(escopo, arquivoId) {
@@ -97,6 +127,18 @@ export function criarCofreDisco({ raiz }) {
       const m = typeof arquivoId === "string" ? ID.exec(arquivoId) : null;
       return !!m && existsSync(caminho(escopo, m[1]));
     },
+
+    /** 08D — identificadores guardados no escopo (para achar arquivo sem ficha no banco). Nunca devolve caminho. */
+    async inventario(escopo) {
+      const g = gavetaDe(pasta, escopo);
+      if (!existsSync(g)) return [];
+      const ids = [];
+      for (const sub of readdirSync(g)) for (const nome of readdirSync(join(g, sub))) if (/^[0-9a-f]{64}$/.test(nome)) ids.push(`cofre:${nome}`);
+      return ids.sort();
+    },
+
+    /** 08D — limpeza controlada da área temporária (restos de gravação interrompida). */
+    async limparTemporarios(idadeMinimaMs) { return limparTemporarios(idadeMinimaMs); },
   });
 }
 

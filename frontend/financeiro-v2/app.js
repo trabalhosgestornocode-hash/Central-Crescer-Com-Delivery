@@ -196,7 +196,7 @@ const DETALHES = {
   venda: ["venda", (d) => ven.detalheDaVenda(d)], recebimento: ["recebimento", (d) => ven.detalheDoRecebimento(d)],
   "documento-cofre": ["documento", (d) => adm.detalheDocumentoCofre(d)],
   documento: ["conferencias/documento", (d) => conf.detalheDocumento(d, ctxPainel())], proposta: ["conferencias/proposta", (d) => conf.detalheProposta(d, ctxPainel())],
-  correspondencia: ["conferencias/correspondencia", (d) => conf.detalheCorrespondencia(d)],
+  correspondencia: ["conferencias/correspondencia", (d) => conf.detalheCorrespondencia(d, ctxPainel())],
 };
 /** 08C — reclassificação: "reclassificacao:<lançamento>[|<categoria da prévia>]" e "reclassificacao-mov:<movimentação>". */
 const DETALHE_RECLASSIFICACAO = (d) => conf.detalheReclassificacao(d);
@@ -204,7 +204,7 @@ const DETALHE_RECLASSIFICACAO = (d) => conf.detalheReclassificacao(d);
 function detalheDe(chave) {
   const i = chave.indexOf(":");
   const [tipo, id] = [chave.slice(0, i), chave.slice(i + 1)];
-  if (tipo === "pendencia") return [`/api/fv2/conferencias/pendencia?${qs({ chave: id })}`, (d) => conf.detalhePendencia(d, { pessoas: estado.pessoas ?? [], competencia: estado.competencia })];
+  if (tipo === "pendencia") return [`/api/fv2/conferencias/pendencia?${qs({ chave: id })}`, (d) => conf.detalhePendencia(d, { pessoas: estado.pessoas ?? [], competencia: estado.competencia, permissoes: permissoesDaUnidade() })];
   if (tipo === "categoria") return [`/api/fv2/configuracoes/categoria?${qs({ competencia: undefined, codigo: id })}`, (d) => adm.detalheCategoria(d, { podeConfigurar: permissoesDaUnidade().includes("financeiro_v2.configurar") })];
   if (tipo === "reclassificacao") { const [lanc, categoria] = id.split("|"); return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, id: lanc, categoria })}`, DETALHE_RECLASSIFICACAO]; }
   if (tipo === "reclassificacao-mov") return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, movimentacao: id })}`, DETALHE_RECLASSIFICACAO];
@@ -282,12 +282,26 @@ function fecharPainel(restaurarFoco = true) {
  * Executa uma AÇÃO da demonstração (formulário `data-acao`): exige a caixa de confirmação, envia o token CSRF e mostra o
  * resultado real. Botão desabilitado durante o envio (sem confirmação duplicada por clique repetido).
  */
+/** 08D: arquivo → base64 (o servidor decodifica; o núcleo confere formato, tamanho e conteúdo). */
+const LIMITE_DE_EVIDENCIA = 10 * 1024 * 1024;
+async function arquivoEmBase64(arquivo) {
+  const bytes = new Uint8Array(await arquivo.arrayBuffer());
+  let binario = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binario += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binario);
+}
 async function executarAcao(form) {
   const saida = form.querySelector(".resultado-acao");
   const botao = form.querySelector('button[type="submit"]');
-  const dados = Object.fromEntries(new FormData(form).entries());
+  const dados = Object.fromEntries([...new FormData(form).entries()].filter(([, v]) => typeof v === "string"));
   if (!form.querySelector('[name="confirmar"]')?.checked) { saida.textContent = "Marque a confirmação para continuar."; return; }
   const corpo = { ...dados, confirmar: true, unidade: estado.unidade };
+  if (form.hasAttribute("data-envio-evidencia")) {
+    const arquivo = form.querySelector('input[type="file"]')?.files?.[0];
+    if (!arquivo) { saida.textContent = "Escolha um arquivo."; form.querySelector('input[type="file"]')?.focus(); return; }
+    if (arquivo.size > LIMITE_DE_EVIDENCIA) { saida.textContent = "Arquivo maior que 10 MiB: nada foi enviado."; return; }
+    Object.assign(corpo, { arquivoBase64: await arquivoEmBase64(arquivo), nomeArquivo: arquivo.name, tipoMime: arquivo.type });
+  }
   if ("aceitarPendencias" in dados) corpo.aceitarPendencias = true;
   botao.disabled = true;
   saida.textContent = "Enviando…";
@@ -407,6 +421,13 @@ document.addEventListener("click", (e) => {
   if (e.target.closest("[data-fechar-painel]") || e.target.id === "painel") fecharPainel();
 });
 document.addEventListener("change", (e) => {
+  // 08D: mostra (e anuncia) nome, tipo e tamanho do arquivo escolhido antes do envio.
+  if (e.target.matches?.('[data-envio-evidencia] input[type="file"]')) {
+    const a = e.target.files?.[0];
+    const alvo = e.target.closest("form").querySelector("[data-arquivo-escolhido]");
+    if (alvo) alvo.textContent = a ? `Escolhido: ${a.name} · ${a.type || "tipo desconhecido"} · ${Math.max(1, Math.round(a.size / 1024))} KB${a.size > LIMITE_DE_EVIDENCIA ? " — acima do limite de 10 MiB" : ""}` : "Nenhum arquivo escolhido.";
+    return;
+  }
   const form = e.target.closest("[data-filtro-local]");
   if (form) aplicarFiltroLocal(form);
 });

@@ -22,6 +22,7 @@ import { criarRegistroDeAcessosNegadosMemoria } from "../infra/cofreDisco.js";
 import { operacoesDePlano } from "./plano.js";
 import { operacoesDeVendas } from "./vendas.js";
 import { operacoesDeReclassificacao } from "./reclassificacao.js";
+import { operacoesDeEvidencias } from "./evidencias.js";
 
 /**
  * @param {object} deps
@@ -62,6 +63,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeAcesso(base, { politica, autoridade: autoridadeDeProvisionamento, acessosNegados }),
     ...operacoesDeConfiguracao(base),
     ...operacoesDeCofreDocumental(base, { cofre, acessosNegados }),
+    ...operacoesDeEvidencias(base, { cofre }),
     ...operacoesDeFormacao(base),
     ...operacoesDeApuracao(base),
     ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia }),

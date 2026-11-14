@@ -125,12 +125,15 @@ export function operacoesDeConciliacao(b) {
         if (corr.diferencaCentavos !== 0) {
           falhar(CODIGO.CONCILIACAO_INVALIDA, "Os lados não fecham. Registre a divergência em vez de confirmar.", { diferencaCentavos: corr.diferencaCentavos });
         }
-        // 08C: candidata FRACA (só valor e data coincidem) nunca é confirmada por proximidade: exige documento que prove o
-        // mesmo dinheiro nos dois lados (o já citado na candidata ou o informado na decisão) e justificativa.
+        // 08C/08D: candidata FRACA (só valor e data coincidem) nunca é confirmada por proximidade. Os relatórios de ORIGEM
+        // (já citados na candidata) são justamente o que gerou a suspeita: não provam o vínculo. Exige evidência PRÓPRIA do
+        // vínculo — informada na decisão ou vinculada à correspondência (ex.: enviada pela tela) — e justificativa.
         for (const id of c.evidenciaDocumentoIds) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, id, "Documento de evidência");
-        const evidencias = [...new Set([...(corr.evidenciaDocumentoIds ?? []), ...c.evidenciaDocumentoIds])];
-        if (corr.forca === "FRACA" && (!evidencias.length || !c.justificativa)) {
-          falhar(CODIGO.CONCILIACAO_INVALIDA, "Correspondência só por valor e data: confirmar exige documento que prove o mesmo dinheiro nos dois lados e justificativa.", { forca: corr.forca });
+        const vinculadas = (await tx.listar(cx, TIPO.VINCULO_DOCUMENTAL, { onde: { registroTipo: TIPO.CORRESPONDENCIA, registroId: corr.id } })).map((v) => v.documentoId);
+        const doVinculo = [...new Set([...c.evidenciaDocumentoIds, ...vinculadas])];
+        const evidencias = [...new Set([...(corr.evidenciaDocumentoIds ?? []), ...doVinculo])];
+        if (corr.forca === "FRACA" && (!doVinculo.length || !c.justificativa)) {
+          falhar(CODIGO.CONCILIACAO_INVALIDA, "Correspondência só por valor e data: confirmar exige justificativa e um documento que prove o vínculo (os relatórios de origem não bastam).", { forca: corr.forca });
         }
         for (const ref of refs(corr)) {
           const registro = await carregar(tx, cx, ref);
@@ -141,7 +144,7 @@ export function operacoesDeConciliacao(b) {
             await b.alterar(tx, cx, TIPO.MOVIMENTACAO, registro, { situacaoConciliacao: total === limite ? SITUACAO_CONCILIACAO.CONCILIADA : SITUACAO_CONCILIACAO.PARCIAL }, EVENTO_HISTORICO.CONCILIACAO);
           }
         }
-        return { situacao: S.CONFIRMADA, ...(c.evidenciaDocumentoIds.length ? { evidenciaDocumentoIds: evidencias } : {}) };
+        return { situacao: S.CONFIRMADA, ...(doVinculo.length ? { evidenciaDocumentoIds: evidencias } : {}) };
       }, { alteraMovimentacoes: true });
     },
 

@@ -112,6 +112,7 @@ ${p.outrosMotivos.length ? `<h3>Outros motivos sobre o mesmo fato</h3><ul class=
 <p class="nota">A pendência só deixa de existir com o documento ou a decisão registrada — nunca por hipótese.</p>
 ${ligacaoDaPendencia(p)}
 ${reclassificacaoDaPendencia(p)}
+${evidenciaDaPendencia(p, ctx)}
 <h3>Histórico de decisões</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li><strong>${esc(EVENTOS[h.evento] ?? "Alteração registrada")}</strong> · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem decisões registradas.")}
 ${p.apontadoPor.length > 1 ? `<p class="nota">Este fato foi apontado por ${p.apontadoPor.length} conferências diferentes e conta uma única vez.</p>` : ""}
 ${tecnico({ chave: p.chave, codigo: p.codigo, referencia: p.referencia, apontadoPor: p.apontadoPor, outrosCodigos: p.outrosMotivos.map((x) => x.codigo), ...p.tecnico })}`;
@@ -220,6 +221,42 @@ ${campoDoc}<label>Justificativa <input type="text" name="justificativa" maxlengt
     aviso: "Confirmo a reclassificação: a categoria muda; o valor e o fato econômico não mudam." }) : ""}
 <p class="nota">Ao confirmar, o servidor confere de novo a permissão, a versão do lançamento e a competência. Se o lançamento mudou depois desta prévia, nada é gravado.</p>
 </section>`;
+}
+
+// ---------------------------------------------------------------------------------------------------- 08D: envio
+const TIPOS_DE_EVIDENCIA = Object.freeze([["NOTA_FISCAL", "Nota fiscal"], ["BOLETO", "Boleto"], ["COMPROVANTE", "Comprovante"], ["CONTRATO", "Contrato"], ["DEMONSTRATIVO_REPASSE", "Demonstrativo de repasse"], ["EXTRATO_BANCARIO", "Extrato bancário"], ["RELATORIO_PROCESSADOR", "Relatório do processador"], ["OUTRO", "Outro"]]);
+let sequenciaDoEnvio = 0;
+/**
+ * Formulário de ENVIO de evidência (o arquivo vai ao cofre e é vinculado ao registro). Não decide nada: a pendência só
+ * muda com a operação própria (reclassificar, conciliar...). Aparece só para quem tem financeiro_v2.enviar_documento.
+ */
+export function formularioDeEvidencia({ registroTipo, registro, competencia, recarregar, titulo = "Adicionar documento" }) {
+  const k = (sequenciaDoEnvio += 1);
+  return `<section class="card envio-evidencia" aria-labelledby="t-envio-${k}"><h3 id="t-envio-${k}">${esc(titulo)}</h3>
+<form class="acao" data-acao="/api/fv2/acoes/documentos/enviar" data-envio-evidencia${recarregar ? ` data-recarregar="${esc(recarregar)}"` : ""}>
+  <label for="arq-${k}">Arquivo</label>
+  <input id="arq-${k}" type="file" name="arquivo" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" required aria-describedby="arq-ajuda-${k} arq-escolhido-${k}">
+  <p id="arq-ajuda-${k}" class="nota">PDF, PNG ou JPEG, até 10 MiB. O conteúdo é conferido; o nome do arquivo serve só para identificação.</p>
+  <p id="arq-escolhido-${k}" class="nota" data-arquivo-escolhido aria-live="polite">Nenhum arquivo escolhido.</p>
+  <label for="tipo-${k}">Tipo de documento</label>
+  <select id="tipo-${k}" name="tipo" required>${TIPOS_DE_EVIDENCIA.map(([v, r]) => opcao(v, r, "")).join("")}</select>
+  <label for="fin-${k}">Finalidade (o que este documento mostra)</label>
+  <input id="fin-${k}" type="text" name="descricao" maxlength="300" required>
+  <input type="hidden" name="registroTipo" value="${esc(registroTipo)}"><input type="hidden" name="registro" value="${esc(registro)}"><input type="hidden" name="competencia" value="${esc(competencia ?? "")}">
+  <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo o envio: o documento fica guardado e vinculado. Anexar não resolve a pendência sozinho.</label>
+  <button type="submit" class="botao botao--primario">Enviar documento</button>
+  <p class="resultado-acao" role="status" aria-live="polite"></p>
+</form></section>`;
+}
+const REGISTRO_DA_PENDENCIA = Object.freeze({ LANCAMENTO: "LANCAMENTO", OBRIGACAO: "OBRIGACAO", MOVIMENTACAO: "MOVIMENTACAO", RECEBIVEL: "RECEBIVEL", VENDA: "VENDA", CORRESPONDENCIA: "CORRESPONDENCIA", PROPOSTA: "PROPOSTA", IMPORTACAO: "IMPORTACAO", DIVERGENCIA_FONTE: "DIVERGENCIA_FONTE" });
+function evidenciaDaPendencia(p, ctx) {
+  if (!tem(ctx.permissoes, "financeiro_v2.enviar_documento")) return "";
+  // Classificação: o documento comprova o LANÇAMENTO (é ele que a reclassificação decide).
+  const lanc = p.codigo === "DESPESA_A_CLASSIFICAR" ? p.referencia?.id : p.codigo === "DESCONTO_A_CLASSIFICAR" ? p.tecnico?.lancamentoId : null;
+  const registroTipo = lanc ? "LANCAMENTO" : REGISTRO_DA_PENDENCIA[p.referencia?.tipo];
+  const registro = lanc ?? p.referencia?.id;
+  if (!registroTipo || !registro) return "";
+  return formularioDeEvidencia({ registroTipo, registro, competencia: ctx.competencia, recarregar: `pendencia:${p.chave}` });
 }
 
 /** Ligação real para o registro da pendência (quando existe uma tela para ele); senão, nada — nunca link falso. */
@@ -373,7 +410,7 @@ ${paginacao(r.paginacao, ROTA)}
 </section>`;
 }
 
-export function detalheCorrespondencia(d) {
+export function detalheCorrespondencia(d, ctx = {}) {
   const c = d.correspondencia;
   return `${fechar(c.nome)}
 <p>${seloDe(SITUACOES_CORRESPONDENCIA[c.situacao])}${c.ambigua ? ` <span class="selo selo--erro">ambígua: ${c.concorrentes} outra(s) candidata(s) disputam os mesmos registros</span>` : ""}</p>
@@ -385,6 +422,8 @@ export function detalheCorrespondencia(d) {
   ${c.decisao ? `<dt>Decisão</dt><dd>${esc(c.decisao)}</dd>` : ""}
 </dl>
 <h3>Evidências</h3>${documentos(c.evidencias)}
+${c.evidenciasDoVinculo?.length ? `<h4>Documentos que provam o vínculo</h4>${documentos(c.evidenciasDoVinculo)}` : ""}
+${["CANDIDATA", "AGUARDANDO_DOCUMENTO"].includes(c.situacao) && tem(ctx.permissoes, "financeiro_v2.enviar_documento") ? formularioDeEvidencia({ registroTipo: "CORRESPONDENCIA", registro: c.id, competencia: c.competencia, recarregar: `correspondencia:${c.id}`, titulo: "Anexar documento que prove o vínculo" }) : ""}
 ${c.podeConfirmar && c.voceTemPermissao ? acao({ url: "/api/fv2/acoes/conciliacoes/confirmar", rotulo: "Confirmar conciliação", recarregar: `correspondencia:${c.id}`, campos: `<input type="hidden" name="correspondencia" value="${esc(c.id)}"><label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>`, aviso: "Confirmo que as evidências provam o mesmo dinheiro nos dois lados." })
     : `<p class="nota">${esc(c.motivoDeNaoConfirmar ?? (c.voceTemPermissao ? "" : "Confirmar exige a permissão \"conciliar\"."))}</p>`}
 ${c.voceTemPermissao && ["CANDIDATA", "AGUARDANDO_DOCUMENTO"].includes(c.situacao) ? acao({ url: "/api/fv2/acoes/conciliacoes/rejeitar", rotulo: "Recusar esta correspondência", perigo: true, recarregar: `correspondencia:${c.id}`, campos: `<input type="hidden" name="correspondencia" value="${esc(c.id)}"><label>Motivo da recusa <input type="text" name="justificativa" maxlength="300" required></label>`, aviso: "Confirmo a recusa: os registros continuam não conciliados e podem formar outra correspondência." }) : ""}
@@ -488,6 +527,7 @@ export function resultadoDaAcao(r) {
   if (d.versao?.tipo) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado]?.rotulo ?? d.estado)}. Versão nº ${d.versao.numero} registrada.`;
   if (d.estado && ESTADOS_COMPETENCIA[d.estado]) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado].rotulo)}.`;
   if (d.responsavelId) return "Atribuição registrada no histórico.";
+  if (d.validacao && d.documento) return d.repetido ? "Este documento já estava guardado e vinculado: nada foi duplicado." : `Documento guardado e vinculado (${esc(d.validacao.formato)}, ${Math.max(1, Math.round(d.validacao.tamanhoBytes / 1024))} KB, integridade conferida${d.validacao.conteudoAtivo ? "; tem conteúdo ativo: só download" : ""}). Anexar não resolve a pendência sozinho.`;
   if (d.lancamento && d.anterior) return `Reclassificado: ${esc(d.anterior.categoria)} → ${esc(d.lancamento.categoria)} (versão ${d.lancamento.versao}). DRE, Visão Geral e fechamento passam a refletir a mudança.`;
   if (d.conferido !== undefined) return d.conferido ? "Integridade conferida: o arquivo confere com o hash registrado." : `<span class="valor--negativo">${esc(d.motivo)}</span>`;
   if (d.acoes && d.usuarioId) return `Permissões atualizadas: ${d.acoes.length} ação(ões) ativa(s).`;

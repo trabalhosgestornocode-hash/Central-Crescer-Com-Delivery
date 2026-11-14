@@ -43,7 +43,8 @@ test("repasse Stone de várias transações × um crédito Unicred: candidata N:
   assert.ok(cand.evidenciaDocumentoIds.length >= 2); // documentos de origem dos dois lados
   // 08C: só por valor e data nunca confirma sem decisão humana justificada sobre a evidência.
   await rejeita(nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id }), CODIGO.CONCILIACAO_INVALIDA);
-  const conf = await nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id, justificativa: "Repasse do dia conferido no extrato e no relatório (sintético)." });
+  // 08D: os relatórios de origem não provam o vínculo — a decisão apresenta um comprovante próprio.
+  const conf = await nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id, justificativa: "Repasse do dia conferido no extrato e no relatório (sintético).", evidenciaDocumentoIds: [(await nucleo.registrarDocumento(ctx(), { origem: "MANUAL", arquivoId: "cofre:prova-vinculo-a", hashSha256: "a".repeat(64).slice(0, 64), tipo: "COMPROVANTE", recebidoEm: "2026-09-20", descricao: "Comprovante que liga os dois lados (sintético)" })).documento.id] });
   assert.equal(conf.situacao, "CONFIRMADA");
   // Repetir não duplica: a decisão já existe.
   await rejeita(nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id, justificativa: "De novo." }), CODIGO.CONCILIACAO_INVALIDA);
@@ -66,7 +67,7 @@ test("confirmação AMBÍGUA é recusada: dois créditos iguais disputam o mesmo
   await rejeita(nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cands[1].id }), CODIGO.CONCILIACAO_INVALIDA);
   await rejeita(nucleo.rejeitarCorrespondencia(ctx(), { correspondenciaId: cands[0].id }), CODIGO.CONCILIACAO_INVALIDA); // rejeitar exige justificativa
   await nucleo.rejeitarCorrespondencia(ctx(), { correspondenciaId: cands[0].id, justificativa: "Crédito é Pix de cliente, não repasse." });
-  const ok = await nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cands[1].id, justificativa: "Histórico do extrato identifica o repasse." });
+  const ok = await nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cands[1].id, justificativa: "Histórico do extrato identifica o repasse.", evidenciaDocumentoIds: [(await nucleo.registrarDocumento(ctx(), { origem: "MANUAL", arquivoId: "cofre:prova-vinculo-b", hashSha256: "b".repeat(64).slice(0, 64), tipo: "COMPROVANTE", recebidoEm: "2026-09-20", descricao: "Comprovante que liga os dois lados (sintético)" })).documento.id] });
   assert.equal(ok.situacao, "CONFIRMADA");
 });
 
@@ -97,7 +98,7 @@ test("Foody × Unicred: pagamento do entregador fica AGUARDANDO DOCUMENTO até h
   await rejeita(nucleo.marcarAguardandoDocumento(ctx(), { correspondenciaId: cand.id }), CODIGO.CONCILIACAO_INVALIDA);
   const aguardando = await nucleo.marcarAguardandoDocumento(ctx(), { correspondenciaId: cand.id, justificativa: "Falta comprovante do Pix com o destinatário." });
   assert.equal(aguardando.situacao, "AGUARDANDO_DOCUMENTO");
-  const decidida = await nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id, justificativa: "Comprovante anexado (sintético)." });
+  const decidida = await nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id, justificativa: "Comprovante anexado (sintético).", evidenciaDocumentoIds: [(await nucleo.registrarDocumento(ctx(), { origem: "MANUAL", arquivoId: "cofre:prova-vinculo-c", hashSha256: "c".repeat(64).slice(0, 64), tipo: "COMPROVANTE", recebidoEm: "2026-09-20", descricao: "Comprovante que liga os dois lados (sintético)" })).documento.id] });
   assert.equal(decidida.situacao, "CONFIRMADA");
   // Registro já conciliado não entra de novo em outra confirmação acima do próprio valor (regra herdada da 01).
   await rejeita(nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id }), CODIGO.CONCILIACAO_INVALIDA);

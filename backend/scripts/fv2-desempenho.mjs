@@ -77,11 +77,23 @@ for (const comp of competencias) {
   await tentar("conciliacao", () => n.gerarCandidatasDeConciliacao(c, { relacao: "SAIPOS_X_STONE", periodoInicio: `${comp}-01`, periodoFim: `${comp}-${ultimoDia(comp)}` }));
 }
 // Versões de fechamento: todo mês anterior ao último fecha COM PENDÊNCIAS documentadas (preliminar → com pendências).
+// 08D: diagnóstico por mês e por passo (antes: um contador "fechamento" sem dizer qual mês nem qual passo falhou).
+const diagnosticoFechamentos = [];
 for (const comp of competencias.slice(0, -1)) {
-  await tentar("fechamento", async () => {
-    await n.alterarEstadoDaCompetencia(c, { competencia: comp, novoEstado: "FECHAMENTO_PRELIMINAR" });
-    await n.alterarEstadoDaCompetencia(c, { competencia: comp, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Propostas da importação ainda em revisão (sintético)", impacto: "Pode alterar o resultado (sintético)." }], justificativa: "Fechamento sintético com pendências." });
-  });
+  for (const [passo, cmd] of [["preliminar", { competencia: comp, novoEstado: "FECHAMENTO_PRELIMINAR" }],
+    ["com_pendencias", { competencia: comp, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Propostas da importação ainda em revisão (sintético)", impacto: "Pode alterar o resultado (sintético)." }], justificativa: "Fechamento sintético com pendências." }]]) {
+    const antes = (await n.consultarFechamento(c, { competencia: comp })).estado;
+    try {
+      await n.alterarEstadoDaCompetencia(c, cmd);
+      diagnosticoFechamentos.push({ comp, passo, de: antes, ok: true });
+    } catch (e) {
+      // Competência anterior à vigência da metodologia publicada: a recusa é a REGRA (nada para homologar sem critério).
+      const esperado = e?.codigo === "FV2_TRANSICAO_INVALIDA" && /metodologia vigente/.test(e?.message ?? "");
+      diagnosticoFechamentos.push({ comp, passo, de: antes, ok: false, esperado, codigo: e?.codigo ?? null, mensagem: e?.message, detalhes: e?.detalhes ?? null });
+      if (!esperado) falhasDeCarga.fechamento = (falhasDeCarga.fechamento ?? 0) + 1;
+      break;
+    }
+  }
 }
 const carga = performance.now() - t0;
 // 08C: estatísticas do planejador, como o autovacuum faria num banco em uso (sem elas os índices novos são ignorados).
@@ -162,7 +174,7 @@ const perfilOrdenado = Object.entries(perfil).map(([k, v]) => ({ k, chamadas: v.
 const mem = process.memoryUsage();
 console.log(JSON.stringify({
   meses: MESES, vendasPorMes: VENDAS, registros: contagem, falhasDeCarga, cargaS: Math.round(carga / 1000),
-  medicoes: resultados, antesDepois, equivalencia, perfilCentral: { totalMs: totalPerfil, porOperacao: perfilOrdenado },
+  diagnosticoFechamentos: diagnosticoFechamentos.filter((x) => !x.ok), medicoes: resultados, antesDepois, equivalencia, perfilCentral: { totalMs: totalPerfil, porOperacao: perfilOrdenado },
   memoriaMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576) },
 }, null, 2));
 await pool.end?.();

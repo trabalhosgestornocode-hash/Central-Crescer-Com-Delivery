@@ -255,6 +255,16 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/acoes/propostas/aprovar": { campos: ["proposta", "justificativa"], fazer: (ctx, b) => nucleo.aprovarProposta(ctx, { propostaId: id(b.proposta), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
     "/api/fv2/acoes/propostas/rejeitar": { campos: ["proposta", "justificativa"], fazer: (ctx, b) => nucleo.rejeitarProposta(ctx, { propostaId: id(b.proposta), justificativa: b.justificativa }) },
     "/api/fv2/acoes/propostas/aplicar": { campos: ["proposta"], fazer: (ctx, b) => nucleo.aplicarProposta(ctx, { propostaId: id(b.proposta) }) },
+    // 08D — evidência enviada pela tela: base64 estrito, decodificado aqui; o núcleo valida formato, nome e escopo.
+    "/api/fv2/acoes/documentos/enviar": { campos: ["arquivoBase64", "nomeArquivo", "tipoMime", "tipo", "descricao", "registroTipo", "registro", "competencia"], fazer: (ctx, b) => {
+      const b64 = String(b.arquivoBase64 ?? "");
+      if (!b64 || b64.length > 14 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) throw Object.assign(new Error("Arquivo ausente ou codificação inválida."), { codigo: m.CODIGO.DOCUMENTO_INVALIDO });
+      return nucleo.enviarEvidencia(ctx, {
+        arquivo: { conteudo: new Uint8Array(Buffer.from(b64, "base64")), nome: String(b.nomeArquivo ?? "").slice(0, 300), tipoMime: String(b.tipoMime ?? "").slice(0, 80) },
+        tipo: b.tipo, descricao: b.descricao, ...(b.competencia ? { competencia: b.competencia } : {}),
+        vinculo: { registroTipo: b.registroTipo, registroId: id(b.registro) },
+      });
+    } },
     "/api/fv2/acoes/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (ctx, b) => nucleo.reclassificarLancamento(ctx, {
       lancamentoId: id(b.lancamento), categoria: b.categoria, justificativa: b.justificativa,
       versaoEsperada: /^\d{1,9}$/.test(String(b.versaoEsperada ?? "")) ? Number(b.versaoEsperada) : b.versaoEsperada, ...(b.documento ? { documentoId: id(b.documento) } : {}),
@@ -311,7 +321,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     [m.CODIGO.TRANSICAO_INVALIDA]: 409, [m.CODIGO.CONCILIACAO_INVALIDA]: 409, [m.CODIGO.CONFLITO_IDEMPOTENCIA]: 409, [m.CODIGO.CONFLITO_VERSAO]: 409,
     [m.CODIGO.IMPORTACAO_INVALIDA]: 422, [m.CODIGO.HOMOLOGACAO_BLOQUEADA]: 409, [m.CODIGO.COMPETENCIA_HOMOLOGADA]: 409,
     [m.CODIGO.CONFIRMACAO_EXIGIDA]: 400, [m.CODIGO.CATEGORIA_INVALIDA]: 409, [m.CODIGO.OPERACAO_INVALIDA]: 409, [m.CODIGO.DOCUMENTO_INDISPONIVEL]: 409,
-    [m.CODIGO.DOCUMENTO_ADULTERADO]: 409, [m.CODIGO.COFRE_INDISPONIVEL]: 503, [m.CODIGO.EVIDENCIA_EXIGIDA]: 409,
+    [m.CODIGO.DOCUMENTO_ADULTERADO]: 409, [m.CODIGO.COFRE_INDISPONIVEL]: 503, [m.CODIGO.EVIDENCIA_EXIGIDA]: 409, [m.CODIGO.DOCUMENTO_INVALIDO]: 422,
   });
   const acoesMarcadas = (b) => Object.values(m.ACAO).filter((a) => b[`acao_${a.split(".")[1]}`] === "on" || b[`acao_${a.split(".")[1]}`] === true);
   const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !== undefined && b[k] !== "").map((k) => [k, b[k]]));

@@ -25,7 +25,8 @@ createServer(async (req, res) => {
     if (!/^application\/json(;|$)/.test(req.headers["content-type"] ?? "")) { json(415, { erro: "TIPO", mensagem: "Envie JSON." }); return; }
     let bruto = "";
     let excedeu = false;
-    for await (const parte of req) { bruto += parte; if (bruto.length > 8192) { excedeu = true; break; } }
+    const limite = url.pathname === "/api/fv2/acoes/documentos/enviar" ? 15 * 1024 * 1024 : 8192; // 08D: só o envio de evidência
+    for await (const parte of req) { bruto += parte; if (bruto.length > limite) { excedeu = true; break; } }
     if (excedeu) { json(413, { erro: "TAMANHO", mensagem: "Corpo grande demais." }); return; }
     let corpo;
     try { corpo = JSON.parse(bruto || "{}"); } catch { json(400, { erro: "JSON", mensagem: "JSON inválido." }); return; }
