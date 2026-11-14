@@ -239,8 +239,10 @@ test("25 — ausência de acesso a produção: integração e jornadas não leem
     const s = readFileSync(f, "utf8").replace(/\/\/.*$/gm, "");
     assert.ok(!/supabase|["'`/\\]\.env\b|env-file|SUPABASE_|https?:\/\/(?!127\.0\.0\.1)[a-z]/i.test(s), f);
   }
-  // o módulo continua sem montagem em rotas (guarda da fundação) e o encaixe não está ligado ao menu publicado
-  assert.ok(readFileSync(join(aqui, "isolamento-estatico.test.js"), "utf8").includes("o módulo não está montado em rotas"));
+  // 10: o módulo é montado por um ponto ÚNICO, DESLIGADO por padrão (guarda em isolamento-estatico.test.js); o encaixe
+  // do menu continua sem ligação com o menu publicado
+  assert.ok(readFileSync(join(aqui, "isolamento-estatico.test.js"), "utf8").includes("routes.js só monta o ponto único (desligado por padrão)"));
+  assert.match(readFileSync(join(backend, "src", "modules", "fv2-integracao", "index.js"), "utf8"), /if \(env\.FV2_HABILITADO !== "1"\) return \{ habilitado: false/);
 });
 
 void ORG_B;

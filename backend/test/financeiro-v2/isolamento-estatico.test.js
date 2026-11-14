@@ -72,10 +72,18 @@ test("não existe exclusão física em lugar nenhum do módulo", () => {
   assert.deepEqual(ruins, []);
 });
 
-test("o módulo não está montado em rotas nem é importado pelo restante do backend", () => {
-  const fora = varrer(src, []).filter((p) => !p.startsWith(raiz));
+test("10 — o núcleo só é usado pela camada de integração e pelo gateway; routes.js só monta o ponto único (desligado por padrão)", () => {
+  const fora = varrer(src, []).filter((p) => !p.startsWith(join(raiz, "")) && !relative(src, p).replaceAll("\\", "/").startsWith("modules/financeiro-v2/"));
   const usam = fora.filter((p) => /financeiro-v2/.test(readFileSync(p, "utf8"))).map((p) => relative(src, p).replaceAll("\\", "/"));
-  assert.deepEqual(usam, []);
+  const permitidos = (x) => x.startsWith("modules/fv2-integracao/") || x.startsWith("fv2-gateway/") || x === "routes.js";
+  assert.deepEqual(usam.filter((x) => !permitidos(x)), []);
+  const rotas = readFileSync(join(src, "routes.js"), "utf8");
+  assert.deepEqual(rotas.match(/from "[^"]*fv2[^"]*"/g), ['from "./modules/fv2-integracao/index.js"'], "routes.js importa só o ponto único");
+  assert.match(rotas, /tenant\.use\("\/financeiro-v2", criarFinanceiroV2DaPlataforma\(\{ supabase \}\)\);/);
+  // o gateway (credencial de autoridade) não é importado pela aplicação comum
+  assert.deepEqual(varrer(src, []).filter((p) => !relative(src, p).replaceAll("\\", "/").startsWith("fv2-gateway/") && /fv2-gateway/.test(readFileSync(p, "utf8"))).map((p) => relative(src, p)), []);
+  // a integração não lê a credencial de autoridade
+  for (const p of varrer(join(src, "modules", "fv2-integracao"), [])) assert.doesNotMatch(readFileSync(p, "utf8"), /FV2_AUTORIDADE/, relative(src, p));
 });
 
 test("o financeiro antigo não foi alterado para conhecer o novo", () => {
