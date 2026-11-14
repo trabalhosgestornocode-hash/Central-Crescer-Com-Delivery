@@ -100,6 +100,10 @@ export function avaliarPendenciasDoFechamento({ pendencias, documentadas = [], i
     semRessalvas: limpo && ressalvas.length === 0,
     // Com pendências documentadas → homologada: nada impeditivo; as admissíveis viram ressalvas guardadas na versão.
     comRessalvas: limpo,
+    // Preliminar → "com pendências documentadas" (08E, achado da jornada): o estado só vale quando TUDO o que resta são
+    // ressalvas admissíveis. Nada por documentar, nada insuficiente, nenhuma bloqueante, nenhum impedimento — o estado
+    // não serve para "estacionar" pendências não tratadas (e nele as escritas viram correção auditada).
+    podeRegistrarComPendencias: limpo && ressalvas.length > 0,
   };
 }
 

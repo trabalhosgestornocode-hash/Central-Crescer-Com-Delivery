@@ -106,13 +106,15 @@ test("estados de fechamento seguem a ordem prevista e exigem o que cada um pede"
 
   assert.equal((await mudar("FECHAMENTO_PRELIMINAR")).estado, "FECHAMENTO_PRELIMINAR");
   await rejeita(mudar("FECHAMENTO_COM_PENDENCIAS"), CODIGO.TRANSICAO_INVALIDA); // pendências precisam ser listadas
-  const comPend = await mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: [{ descricao: "Composição do Balcão não conciliada", impacto: "Pode alterar o resultado da competência (sintético)." }] });
-  assert.deepEqual(comPend.pendencias.map((p) => [p.descricao, p.impacto]), [["Composição do Balcão não conciliada", "Pode alterar o resultado da competência (sintético)."]]);
+  // 08E: uma descrição livre na transição não documenta as pendências REAIS da competência — recusado.
+  await rejeita(mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: [{ descricao: "Composição do Balcão não conciliada", impacto: "Pode alterar o resultado da competência (sintético)." }] }), CODIGO.TRANSICAO_INVALIDA);
   // Texto solto não documenta pendência (06D): exige descrição e impacto.
   await rejeita(mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: ["só um texto"] }), CODIGO.ENTRADA_INVALIDA);
   await rejeita(mudar("FECHAMENTO_HOMOLOGADO"), CODIGO.TRANSICAO_INVALIDA); // sem metodologia
-  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
-  await prepararHomologacao(nucleo, c, "2026-09");
+  // 08E (F-1): as pendências reais são documentadas (ressalvas) e a competência passa por "com pendências documentadas".
+  const comPend = await prepararHomologacao(nucleo, c, "2026-09");
+  assert.equal(comPend.estado, "FECHAMENTO_COM_PENDENCIAS");
+  assert.ok(comPend.pendenciasDocumentadas.every((p) => p.chave && p.descricao && p.impacto && p.decisao));
   const homologada = await mudar("FECHAMENTO_HOMOLOGADO", { metodologia: "Regime de competência; conciliação por extrato" });
   assert.deepEqual([homologada.estado, homologada.metodologia, homologada.decididoPor], ["FECHAMENTO_HOMOLOGADO", "Regime de competência; conciliação por extrato", USUARIO]);
   await rejeita(mudar("FECHAMENTO_PRELIMINAR"), CODIGO.TRANSICAO_INVALIDA); // homologada só sai por revisão

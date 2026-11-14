@@ -132,16 +132,20 @@ test("4, 8 — pendência bloqueante documentada continua bloqueando; nova pend�
   await preliminar(n, c);
   const pendentes = (await pendenciasDe(n, c)).filter((p) => p.efeitoNoFechamento === "EXIGE_DOCUMENTACAO" && p.situacao !== "INFORMATIVA");
   for (const p of pendentes) await documentar(n, c, p.chave);
-  await comPendencias(n, c);
+  // A bloqueante (saída sem vínculo) impede tanto homologar quanto "estacionar" em "com pendências documentadas".
+  const recusa = await comPendencias(n, c).then(() => null, (e) => e);
+  assert.equal(recusa?.codigo, CODIGO.TRANSICAO_INVALIDA);
+  assert.ok(recusa.detalhes.impeditivas.some((x) => x.codigo === "SAIDA_SEM_CLASSIFICACAO" && x.situacao === "BLOQUEANTE"), "documentar não torna admissível uma saída sem vínculo");
   const erro = await homologar(n, c).then(() => null, (e) => e);
   assert.equal(erro?.codigo, CODIGO.HOMOLOGACAO_BLOQUEADA);
-  assert.ok(erro.detalhes.impeditivas.some((x) => x.codigo === "SAIDA_SEM_CLASSIFICACAO" && x.situacao === "BLOQUEANTE"), "documentar não torna admissível uma saída sem vínculo");
+  assert.ok(erro.detalhes.impeditivas.some((x) => x.codigo === "SAIDA_SEM_CLASSIFICACAO" && x.situacao === "BLOQUEANTE"));
   // Resolve a bloqueante com evidência (baixa pela saída do extrato) — sem criar outra saída.
   const doc = await documento(m);
   await n.vincularPagamentoDoExtrato(c, { movimentacaoId: mov.id, versaoMovimentacao: mov.versao, alocacoes: [{ obrigacaoId: conta.id, valorCentavos: 61850 }], documentoId: doc.id, justificativa: "Comprovante confere.", confirmar: true });
   // Uma pendência NOVA, ainda não documentada, também bloqueia (o estado "com pendências" não é passe livre).
   await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 1000, descricao: "Chegou depois" }));
   await bloqueada(homologar(n, c));
+  await rejeita(comPendencias(n, c), CODIGO.TRANSICAO_INVALIDA);
   await prepararHomologacao(n, c, SET);
   const h = await homologar(n, c);
   assert.equal(h.versao.comRessalvas, true);
@@ -394,8 +398,8 @@ test("banco — homologar à mão sem avaliação, com ressalva vinda do prelimi
   await assert.rejects(tentar({ de: "FECHAMENTO_PRELIMINAR", ressalvas: [], pendenciasNaoTratadas: 0 }, ", pendencias = '[{\"descricao\":\"reescrita\"}]'::jsonb"), erroDoBanco(["FV040"]));
   // Com pendências documentadas: ressalva não documentada, indeterminada, ou "conhecida" sem valor → recusada.
   const p = (await n.consultarPendencias(adm, { competencia: SET, tamanho: 100 })).itens.find((x) => x.codigo === "OBRIGACAO_SEM_COMPROVANTE");
-  await documentar(n, adm, p.chave);
-  await comPendencias(n, adm);
+  await prepararHomologacao(n, adm, SET); // documenta todas (entre elas p) e passa por "com pendências documentadas"
+  assert.equal((await n.consultarCompetencia(adm, { competencia: SET })).estado, "FECHAMENTO_COM_PENDENCIAS");
   const de = "FECHAMENTO_COM_PENDENCIAS";
   await assert.rejects(tentar({ de, ressalvas: [{ chave: "NAO-DOCUMENTADA", efeitoNoResultado: "SEM_EFEITO" }], pendenciasNaoTratadas: 0 }), erroDoBanco(["FV040"]));
   await assert.rejects(tentar({ de, ressalvas: [{ chave: p.chave, efeitoNoResultado: "INDETERMINADO" }], pendenciasNaoTratadas: 0 }), erroDoBanco(["FV040"]));
@@ -407,4 +411,53 @@ test("banco — homologar à mão sem avaliação, com ressalva vinda do prelimi
   await assert.rejects(sqlAdm(`insert into fv2_competencia (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, competencia, estado, metodologia, pendencias, revisoes, decidido_por, decidido_em)
     values ($1, $2, $3, 1, now(), $4, now(), $4, '2026-07', 'FECHAMENTO_HOMOLOGADO', 'm', '[]'::jsonb, 0, $4, now())`, [randomUUID(), ORG_A, UNI_A, adm.usuarioId]), erroDoBanco(["FV040", "42501"]));
   assert.equal((await n.consultarCompetencia(adm, { competencia: SET })).estado, "FECHAMENTO_COM_PENDENCIAS");
+});
+
+// ======================================================= achado da jornada 08E: "com pendências" não serve de contorno
+test("1b — 'com pendências documentadas' só com ressalvas admissíveis: não documentada, bloqueante ou sem ressalva → recusado", async () => {
+  const m = await montarComCadastros();
+  const { nucleo: n, c, banco, fornecedor } = m;
+  await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 30000 }));
+  await preliminar(n, c);
+  // Nada documentado: recusa, com os motivos; a competência fica no preliminar.
+  await rejeita(comPendencias(n, c), CODIGO.TRANSICAO_INVALIDA);
+  assert.equal((await n.consultarCompetencia(c, { competencia: SET })).estado, "FECHAMENTO_PRELIMINAR");
+  const previa = await n.previaDaMudancaDeEstado(c, { competencia: SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS" });
+  assert.equal(previa.permitida, false, "a tela não oferece o atalho");
+  assert.ok(previa.bloqueios.some((x) => /não documentada/.test(x)), previa.bloqueios.join(" | "));
+  // Tudo documentado, mas uma saída sem vínculo (bloqueante) aparece: recusa de novo — documentar a bloqueante não ajuda.
+  await n.registrarMovimentacao(c, saida(banco.id, 4321, { dataEfetiva: "2026-09-27" }));
+  for (const p of await pendenciasDe(n, c)) if (p.efeitoNoFechamento !== "NAO_BLOQUEIA" && p.situacao !== "INFORMATIVA") await documentar(n, c, p.chave);
+  const e2 = await comPendencias(n, c).then(() => null, (e) => e);
+  assert.equal(e2?.codigo, CODIGO.TRANSICAO_INVALIDA);
+  assert.ok(e2.detalhes.impeditivas.some((x) => x.codigo === "SAIDA_SEM_CLASSIFICACAO" && x.situacao === "BLOQUEANTE"));
+  assert.equal((await n.consultarCompetencia(c, { competencia: SET })).estado, "FECHAMENTO_PRELIMINAR");
+});
+
+test("1c — sem nada a ressalvar, 'com pendências' é recusado (homologa-se direto do preliminar)", async () => {
+  const { nucleo: n, c } = await montarComCadastros();
+  await preliminar(n, c, "2026-07");
+  const e = await comPendencias(n, c, "2026-07").then(() => null, (x) => x);
+  if (e) assert.equal(e.codigo, CODIGO.TRANSICAO_INVALIDA);
+  else assert.fail("entrou em 'com pendências' sem nenhuma ressalva");
+});
+
+test("banco — entrar em 'com pendências' à mão sem documentação suficiente, com saída sem vínculo, ou nascer nesse estado é recusado (FV040, 0019)", pular, async () => {
+  const { m, adm, interno } = await cenarioBanco();
+  const n = m.nucleo;
+  const sqlAdm = async (texto, valores = []) => comoAplicacao(interno, adm, (cl) => cl.query(texto, valores));
+  const forn = await n.registrarContraparte(adm, { tipo: "FORNECEDOR", nome: "Fornecedor" });
+  const banco = await n.configurarContaFinanceira(adm, { tipo: "BANCARIA", nome: "Banco" });
+  await n.registrarObrigacao(adm, obrigacao(forn.id, { valorOriginalCentavos: 1000 }));
+  await preliminar(n, adm);
+  const tentar = (pendencias) => sqlAdm("update fv2_competencia set estado = 'FECHAMENTO_COM_PENDENCIAS', versao = versao + 1, pendencias = $1::jsonb where competencia = '2026-09'", [JSON.stringify(pendencias)]);
+  await assert.rejects(tentar([]), erroDoBanco(["FV040"]));
+  await assert.rejects(tentar([{ chave: "X", descricao: "só texto", impacto: "bonito" }]), erroDoBanco(["FV040"]));
+  await assert.rejects(tentar([{ chave: "X", descricao: "d", decisao: "Ressalvar", documentacaoFaltante: "" }]), erroDoBanco(["FV040"]));
+  // Documentação "completa", mas há saída do período sem vínculo: recusa objetiva.
+  await n.registrarMovimentacao(adm, saida(banco.id, 777, { dataEfetiva: "2026-09-27" }));
+  await assert.rejects(tentar([{ chave: "X", descricao: "d", decisao: "Ressalvar", documentacaoFaltante: "Relatório" }]), erroDoBanco(["FV040"]));
+  await assert.rejects(sqlAdm(`insert into fv2_competencia (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, competencia, estado, metodologia, pendencias, revisoes, decidido_por, decidido_em)
+    values ($1, $2, $3, 1, now(), $4, now(), $4, '2026-07', 'FECHAMENTO_COM_PENDENCIAS', null, '[{"chave":"X","decisao":"d","documentacaoFaltante":"f"}]'::jsonb, 0, $4, now())`, [randomUUID(), ORG_A, UNI_A, adm.usuarioId]), erroDoBanco(["FV040", "42501"]));
+  assert.equal((await n.consultarCompetencia(adm, { competencia: SET })).estado, "FECHAMENTO_PRELIMINAR");
 });

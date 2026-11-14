@@ -73,7 +73,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     for (const x of [...f.avaliacaoDasPendencias.naoDocumentadas, ...f.avaliacaoDasPendencias.semEvidencia]) {
       await nucleo.documentarPendenciaDoFechamento(ctx, { competencia, pendencia: { chave: x.chave, descricao: x.titulo ?? "Pendência", impacto: "Ressalva da demonstração (sintética).", decisao: "Admitida como ressalva na demonstração.", documentacaoFaltante: "Documento sintético da demonstração." } });
     }
-    if ((await nucleo.consultarFechamento(ctx, { competencia })).avaliacaoDasPendencias.ressalvas.length) await nucleo.alterarEstadoDaCompetencia(ctx, { competencia, novoEstado: "FECHAMENTO_COM_PENDENCIAS" });
+    if ((await nucleo.consultarFechamento(ctx, { competencia })).avaliacaoDasPendencias.podeRegistrarComPendencias) await nucleo.alterarEstadoDaCompetencia(ctx, { competencia, novoEstado: "FECHAMENTO_COM_PENDENCIAS" });
     return nucleo.alterarEstadoDaCompetencia(ctx, { competencia, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação da demonstração." });
   };
   // Agosto: competência homologada (com ressalvas sintéticas documentadas).
@@ -123,9 +123,10 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   await homologarSemente(B, "2026-09");
 
   await conciliacoesDemo(nucleo, A, { banco });
-  // Fechamento de setembro com pendências DOCUMENTADAS (Execução 06C): a Central mostra o que impede a homologação.
+  // Fechamento PRELIMINAR de setembro: a Central mostra o que impede a homologação. 08E: setembro tem bloqueantes
+  // (saída sem classificação, desconto a classificar), então NÃO pode ficar "com pendências documentadas" — esse
+  // estado só vale quando tudo o que resta são ressalvas admissíveis (antes, a semente o usava com texto livre).
   await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await nucleo.alterarEstadoDaCompetencia(A, { competencia: "2026-09", novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Extrato bancário de setembro não importado", impacto: "Pode alterar o resultado da competência (sintético)." }, { descricao: "Diferença entre faturamento diário e formas de pagamento de 02/09 sem causa comprovada", impacto: "Pode alterar o resultado da competência (sintético)." }], justificativa: "Fechamento da demonstração com pendências documentadas." });
 
   await documentosDemo(nucleo, A, cofre);
 

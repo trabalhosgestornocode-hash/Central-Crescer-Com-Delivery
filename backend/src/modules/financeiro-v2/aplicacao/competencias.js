@@ -133,6 +133,17 @@ export function operacoesDeCompetencia(b, { repositorio, politica, cargaCompleta
             contagem: av.contagem, pendenciasNaoTratadas: av.impeditivas.length, resolvidas: av.resolvidas.map((x) => x.chave),
           };
         }
+        // 08E: "com pendências documentadas" só quando o que resta são ressalvas admissíveis (sem contorno pelo estado).
+        if (c.novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_COM_PENDENCIAS) {
+          const imp = impedimentosDeHomologacao(d, c.competencia, b.hoje(), apuracao);
+          const av = avaliarPendenciasDoFechamento({ pendencias: atuais, documentadas, impedimentos: imp });
+          if (!av.podeRegistrarComPendencias) {
+            const motivos = av.motivos.length ? [...av.motivos] : ["Não há pendência documentada como ressalva admissível: se nada impede, homologue direto do preliminar."];
+            falhar(CODIGO.TRANSICAO_INVALIDA, "O fechamento com pendências documentadas exige que todas as pendências restantes estejam documentadas e sejam admissíveis como ressalva.", {
+              motivos, impedimentos: imp.map((x) => x.codigo), impeditivas: av.impeditivas.map((x) => ({ chave: x.chave, codigo: x.codigo, situacao: x.situacao, motivo: x.motivo })),
+            });
+          }
+        }
         const reabertura = c.novoEstado === ESTADO_COMPETENCIA.ABERTA;
         const versoes = await tx.listar(ctx, TIPO.VERSAO_FECHAMENTO, { onde: { competencia: c.competencia } });
         const homologadaAnterior = versoes.filter((v) => v.tipo === TIPO_VERSAO_FECHAMENTO.HOMOLOGADA).sort((a, b2) => b2.numero - a.numero)[0] ?? null;
@@ -216,13 +227,16 @@ export function operacoesDeCompetencia(b, { repositorio, politica, cargaCompleta
         const { acao, motivos } = avaliarTransicao(estadoAtual, novoEstado, { pendencias: [1], metodologia: "x", justificativa: "x" });
         const d = await registrosDaCompetencia(tx, cx, [competencia], { cargaCompleta, conferir: conferirCarga, derivar: derivarFechamento(competencia, { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, b.agora(), b.hoje()), tela: `prévia ${competencia}` });
         const escopoP = { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId };
-        const impedimentos = novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO ? impedimentosDeHomologacao(d, competencia, b.hoje(), apurarRegistros(d, competencia, escopoP, b.agora())) : [];
+        const impedimentos = [ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO, ESTADO_COMPETENCIA.FECHAMENTO_COM_PENDENCIAS].includes(novoEstado) ? impedimentosDeHomologacao(d, competencia, b.hoje(), apurarRegistros(d, competencia, escopoP, b.agora())) : [];
         // 08E: a mesma avaliação de pendências da homologação.
         const av = avaliarPendenciasDoFechamento({ pendencias: pendenciasDosRegistros(d, competencia, { escopo: escopoP, hoje: b.hoje(), agora: b.agora() }).pendencias, documentadas: atual?.pendencias ?? [], impedimentos });
         const temPermissao = acao ? cx.permissoes.includes(acao) : false;
         const bloqueios = estadoAtual === novoEstado ? ["A competência já está neste estado: nada a fazer."] : [...motivos];
         if (acao && !temPermissao) bloqueios.push("Você não tem a permissão exigida para esta mudança.");
         if (impedimentos.length) bloqueios.push("Há divergência relevante sem resolução comprovada: o núcleo recusa a homologação.");
+        if (novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_COM_PENDENCIAS && !av.podeRegistrarComPendencias) {
+          for (const m of av.motivos.filter((x) => !/impedimento/.test(x))) bloqueios.push(m);
+        }
         if (novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO) {
           for (const m of av.motivos.filter((x) => !/impedimento/.test(x))) bloqueios.push(m);
           if (estadoAtual !== ESTADO_COMPETENCIA.FECHAMENTO_COM_PENDENCIAS && av.ressalvas.length) bloqueios.push(PASSAR_POR_COM_PENDENCIAS);

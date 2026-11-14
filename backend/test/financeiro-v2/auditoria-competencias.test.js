@@ -106,6 +106,7 @@ test("A6 — homologação concorrente com liquidação: a liquidação nunca al
   if (hom.status === "rejected") {
     assert.equal(hom.reason.codigo, CODIGO.HOMOLOGACAO_BLOQUEADA);
     assert.equal(liq.status, "fulfilled");
+    await prepararHomologacao(n, c, SET); // sem a bloqueante, as ressalvas passam por "com pendências documentadas"
     assert.equal((await n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "x", confirmar: true })).estado, "FECHAMENTO_HOMOLOGADO");
   }
   const final = (await n.consultarRegistros(c, { tipo: "OBRIGACAO" }))[0];

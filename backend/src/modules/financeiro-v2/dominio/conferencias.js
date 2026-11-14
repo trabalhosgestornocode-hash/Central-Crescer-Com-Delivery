@@ -413,7 +413,7 @@ export function situacaoDoFechamento({ d, competencia, hoje, apuracao, pendencia
     },
     // 08E — o que a tela de fechamento mostra separado.
     avaliacaoDasPendencias: {
-      contagem: av.contagem, motivos: av.motivos,
+      contagem: av.contagem, motivos: av.motivos, podeRegistrarComPendencias: av.podeRegistrarComPendencias && impedimentos.length === 0,
       resolvidas: av.resolvidas.map(resumo), ressalvas: av.ressalvas.map(resumo),
       bloqueantes: av.itens.filter((x) => x.situacao === "BLOQUEANTE").map(resumo),
       naoDocumentadas: av.itens.filter((x) => x.situacao === "NAO_DOCUMENTADA").map(resumo),

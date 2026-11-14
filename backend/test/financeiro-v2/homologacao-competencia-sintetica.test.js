@@ -169,7 +169,8 @@ test("08 — competência sintética completa: vendas, recebimentos, despesas, c
   // --------------------------------------------------------------------------------------------- ciclo de fechamento
   const estado = (novoEstado, extra = {}) => n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado, ...extra });
   await estado("FECHAMENTO_PRELIMINAR");
-  await estado("FECHAMENTO_COM_PENDENCIAS", { pendencias: [{ descricao: "Desconto sem financiador na venda S9", impacto: "Pode alterar as deduções (sintético)." }], justificativa: "Pendência documentada (sintético).", confirmar: true });
+  // 08E: o desconto sem financiador é BLOQUEANTE (classificação provisória): não se "estaciona" em com pendências.
+  await rejeita(estado("FECHAMENTO_COM_PENDENCIAS", { pendencias: [{ descricao: "Desconto sem financiador na venda S9", impacto: "Pode alterar as deduções (sintético)." }], justificativa: "Pendência documentada (sintético).", confirmar: true }), CODIGO.TRANSICAO_INVALIDA);
   // Pendência que DEVE bloquear: desconto sem financiador (classificação provisória). Demonstra o bloqueio antes de resolver.
   await rejeita(estado("FECHAMENTO_HOMOLOGADO", { metodologia: "Homologação gerencial sintética.", confirmar: true }), CODIGO.HOMOLOGACAO_BLOQUEADA);
   // Resolução documentada: o desconto é reconhecido como da LOJA (mesma categoria do desconto da loja de S7).

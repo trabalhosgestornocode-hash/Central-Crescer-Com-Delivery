@@ -6,7 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CODIGO, criarNucleoFinanceiro } from "../../src/modules/financeiro-v2/index.js";
-import { AGORA, ESCOPOS_PADRAO, montarComCadastros, obrigacao, saida } from "./helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, montarComCadastros, obrigacao, prepararHomologacao, saida } from "./helpers/cenario.js";
 
 const MESES = ["2026-07", "2026-08", "2026-09", "2026-10"];
 
@@ -66,7 +66,9 @@ async function cenarioEntreMeses() {
   await n.confirmarConciliacao(c, { correspondenciaId: corr.id, justificativa: "Comprovante confere (sintético)." });
   // Agosto: homologada, REABERTA e homologada de novo (versões homologadas).
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-07", novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-07", novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Classificação de desconto pendente (sintético)", impacto: "Pode mudar deduções (sintético)." }], justificativa: "Fechamento sintético com pendências." });
+  // 08E: as pendências reais de julho são documentadas; passa por "com pendências documentadas" só se o que resta forem
+  // ressalvas admissíveis (senão fica no preliminar — para a equivalência basta um estado de fechamento).
+  await prepararHomologacao(n, c, "2026-07");
   void liq;
   return m;
 }

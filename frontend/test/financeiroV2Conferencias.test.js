@@ -31,8 +31,9 @@ before(async () => {
 test("resumo: situação do fechamento, contagens (não somas), documentos faltantes e o que impede o fechamento", async () => {
   const r = await ok("/api/fv2/conferencias", SET);
   const html = conf.central(r, { secao: "resumo" }, { competencia: "2026-09", unidadeNome: "Unidade" });
-  assert.equal(r.fechamento.estado, "FECHAMENTO_COM_PENDENCIAS");
-  assert.match(html, /Fechamento com pendências documentadas/);
+  // 08E: setembro tem bloqueantes, então fica no preliminar ("com pendências documentadas" só com ressalvas admissíveis).
+  assert.equal(r.fechamento.estado, "FECHAMENTO_PRELIMINAR");
+  assert.match(html, /Fechamento preliminar/);
   assert.match(html, /impedem a homologação/);
   assert.match(html, /É uma contagem: valores de pendências diferentes não são somados/);
   assert.match(html, /Extrato da Unicred<\/span><span class="selo selo--alerta">falta o documento/);
@@ -187,13 +188,14 @@ test("17–20 — pendências agrupadas, Revisar com o que aconteceu, documentos
 test("21–25 — fechamento: etapas, metodologia, impedimentos, materialidade não presumida, histórico de revisões", async () => {
   const f = await ok("/api/fv2/conferencias/fechamento", SET);
   const html = conf.central(f, { secao: "fechamento" }, { competencia: "2026-09" });
-  assert.match(html, /aria-current="step">Fechamento com pendências documentadas/);
+  assert.match(html, /aria-current="step">Fechamento preliminar/);
   assert.match(html, /Impedimentos de homologação/);
   assert.match(html, /Nenhuma tolerância é aplicada/);
   assert.match(html, /Nunca é automática/);
   assert.match(html, /Em aberto \(não bloqueia\)|Conferido/);
-  assert.match(html, /Diferença entre faturamento diário e formas de pagamento/);
-  assert.deepEqual(f.historico.map((h) => h.para), ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS"]);
+  assert.match(html, /Pendências diante da homologação/);
+  assert.match(html, /O que impede homologar/);
+  assert.deepEqual(f.historico.map((h) => h.para), ["FECHAMENTO_PRELIMINAR"]);
   assert.ok(!/homologar"|data-acao="[^"]*competencia/.test(html), "a demonstração não oferece homologar");
   const ago = await ok("/api/fv2/conferencias/fechamento", { competencia: "2026-08" });
   assert.equal(ago.estado, "FECHAMENTO_HOMOLOGADO");

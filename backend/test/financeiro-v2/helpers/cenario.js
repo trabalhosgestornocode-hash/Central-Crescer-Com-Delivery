@@ -105,7 +105,9 @@ export async function prepararHomologacao(n, c, competencia) {
     await n.documentarPendenciaDoFechamento(c, { competencia, pendencia: { chave: p.chave, descricao: p.titulo ?? "Pendência", impacto: "Ressalva do cenário sintético.", decisao: "Admitida como ressalva no cenário sintético.", documentacaoFaltante: "Documento do cenário sintético não fornecido." } });
   }
   const f2 = await n.consultarFechamento(c, { competencia });
-  if (f2.avaliacaoDasPendencias.ressalvas.length && f2.estado !== "FECHAMENTO_COM_PENDENCIAS") {
+  // 08E: só passa por "com pendências documentadas" quando o que resta são ressalvas admissíveis; com bloqueante, fica
+  // no preliminar (a homologação seguinte é que falha, como o teste espera).
+  if (f2.avaliacaoDasPendencias.podeRegistrarComPendencias && f2.estado !== "FECHAMENTO_COM_PENDENCIAS") {
     await n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_COM_PENDENCIAS" });
   }
   return n.consultarFechamento(c, { competencia });

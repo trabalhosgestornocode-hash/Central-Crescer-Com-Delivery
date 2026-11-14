@@ -223,9 +223,11 @@ test("21, 22, 23, 25 — fechamento: preliminar, com pendências, homologação 
   assert.ok(f.impedimentos.some((x) => x.codigo === "DIVERGENCIA_ENTRE_RELATORIOS_SEM_JUSTIFICATIVA" && x.valorCentavos === 10000));
   assert.equal(f.secoes.find((s) => s.codigo === "VENDAS").situacao, "BLOQUEIA");
   await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_PRELIMINAR" });
-  await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Diferença entre faturamento e formas de 05/09 em investigação", impacto: "Pode alterar o resultado da competência (sintético)." }], justificativa: "Documentando pendências." });
+  // 08E: texto livre na transição não documenta a divergência real (sem justificativa = impedimento): "com pendências
+  // documentadas" é recusado — o estado não serve para estacionar o que impede a homologação.
+  await rejeita(n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Diferença entre faturamento e formas de 05/09 em investigação", impacto: "Pode alterar o resultado da competência (sintético)." }], justificativa: "Documentando pendências." }), CODIGO.TRANSICAO_INVALIDA);
   f = await n.consultarFechamento(c, SET);
-  assert.deepEqual([f.estado, f.pendenciasDocumentadas.length, f.etapas.filter((e) => e.concluida).length], ["FECHAMENTO_COM_PENDENCIAS", 1, 2]);
+  assert.deepEqual([f.estado, f.pendenciasDocumentadas.length, f.etapas.filter((e) => e.concluida).length], ["FECHAMENTO_PRELIMINAR", 0, 1]);
   // O núcleo recusa a homologação (não só a tela).
   await rejeita(n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética." }), CODIGO.HOMOLOGACAO_BLOQUEADA);
   // Com explicação registrada (justificativa), a divergência deixa de ser "sem justificativa"; continua documentada.

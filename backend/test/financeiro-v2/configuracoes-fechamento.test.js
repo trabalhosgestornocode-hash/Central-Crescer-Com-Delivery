@@ -106,10 +106,17 @@ test("5, 6, 9, 32–36 — preliminar, com pendências, homologação, reabertur
   assert.deepEqual([p1.versao.tipo, p1.versao.numero], ["PRELIMINAR", 1]);
   await rejeita(n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Extrato não importado" }] }), CODIGO.ENTRADA_INVALIDA);
   await rejeita(n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Extrato", impacto: "x", responsavelId: OUTRO_USUARIO }] }), CODIGO.ENTRADA_INVALIDA);
-  const p2 = await n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Extrato bancário não importado", impacto: "Saldo do banco não conferido", documentacaoFaltante: "Extrato de setembro", decisao: "Fechar com pendência documentada" }], justificativa: "Documentando." });
+  // 08E: texto livre na transição, sem ligar às pendências reais, não documenta nada — recusado.
+  await rejeita(n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", pendencias: [{ descricao: "Extrato bancário não importado", impacto: "Saldo do banco não conferido", documentacaoFaltante: "Extrato de setembro", decisao: "Fechar com pendência documentada" }], justificativa: "Documentando." }), CODIGO.TRANSICAO_INVALIDA);
+  const reais = (await n.consultarFechamento(c, { competencia: SET })).avaliacaoDasPendencias.naoDocumentadas;
+  assert.ok(reais.length > 0);
+  for (const [i, x] of reais.entries()) {
+    await n.documentarPendenciaDoFechamento(c, { competencia: SET, pendencia: { chave: x.chave, descricao: i === 0 ? "Extrato bancário não importado" : x.titulo, impacto: i === 0 ? "Saldo do banco não conferido" : "Ressalva sintética.", documentacaoFaltante: "Extrato de setembro", decisao: "Fechar com pendência documentada" } });
+  }
+  const p2 = await n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_COM_PENDENCIAS", justificativa: "Documentando." });
   assert.equal(p2.versao.tipo, "COM_PENDENCIAS");
   const fech = await n.consultarFechamento(c, { competencia: SET });
-  assert.equal(fech.pendenciasDocumentadas[0].impacto, "Saldo do banco não conferido");
+  assert.ok(fech.pendenciasDocumentadas.some((x) => x.impacto === "Saldo do banco não conferido"));
   // Homologar exige confirmação explícita e responsável (o usuário da sessão).
   await rejeita(n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "m" }), CODIGO.CONFIRMACAO_EXIGIDA);
   const h = await homologar(n, c);
@@ -159,6 +166,9 @@ test("7, 8 — divergência de conciliação sem resolução comprovada bloqueia
   await rejeita(n.resolverDivergenciaDeConciliacao(c, { correspondenciaId: corr.id, justificativa: "Taxa", evidenciaDocumentoIds: [] }), CODIGO.ENTRADA_INVALIDA);
   const doc = await guardarDocumento(n, cofre, c, pdf(), "application/pdf");
   await n.resolverDivergenciaDeConciliacao(c, { correspondenciaId: corr.id, justificativa: "Taxa de antecipação comprovada no extrato.", evidenciaDocumentoIds: [doc.id] });
+  // 08E: com a divergência resolvida, as ressalvas documentadas podem passar por "com pendências documentadas".
+  assert.equal((await n.consultarCompetencia(c, { competencia: SET })).estado, "FECHAMENTO_PRELIMINAR", "com o impedimento, não entrou em 'com pendências'");
+  await prepararHomologacao(n, c, SET);
   assert.equal((await n.previaDaMudancaDeEstado(c, { competencia: SET, novoEstado: "FECHAMENTO_HOMOLOGADO" })).permitida, true);
   assert.equal((await homologar(n, c)).estado, "FECHAMENTO_HOMOLOGADO");
 });

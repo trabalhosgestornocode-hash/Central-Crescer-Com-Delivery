@@ -51,8 +51,7 @@ test("33–36 — fechamento na Central: prévia do núcleo, botão desabilitado
   assert.match(html, /<button type="button" class="botao" disabled aria-describedby="bloq-FECHAMENTO_HOMOLOGADO">/, "botão desabilitado quando o núcleo não permite");
   assert.match(html, /Estado atual<\/dt>/);
   assert.match(html, /Permissão exigida<\/dt><dd>homologar · você tem/);
-  assert.match(html, /Impacto: /, "pendências documentadas com impacto");
-  assert.match(html, /Documentar não resolve/);
+  assert.match(html, /Pendências diante da homologação/);
   assert.match(html, /Versões do fechamento/);
   // Outubro: preliminar → com pendências documentadas → reabrir com justificativa.
   // 08E (F-1): nada é documentado em nome da pessoa (antes a demonstração documentava TODAS com o mesmo texto: contorno).
@@ -67,9 +66,18 @@ test("33–36 — fechamento na Central: prévia do núcleo, botão desabilitado
   assert.equal(docum.status, 200, JSON.stringify(docum.corpo));
   assert.equal(docum.corpo.avaliacao.situacao, "DOCUMENTADA_ADMISSIVEL");
   assert.match(conf.resultadoDaAcao({ ok: true, dados: docum.corpo }), /Documentar não resolve/);
+  // A documentação fica na competência e aparece na tela (com impacto, decisão e o que falta).
+  const fOut = await ok("/api/fv2/conferencias/fechamento", { competencia: "2026-10" });
+  assert.ok(fOut.pendenciasDocumentadas.some((p) => p.descricao && p.impacto && p.documentacaoFaltante === "Extrato de outubro" && p.decisao === "Aguardar extrato"));
+  const htmlOut = conf.central({ ...fOut, dataBase: fOut.dataBase }, { secao: "fechamento" }, { competencia: "2026-10", unidadeNome: "U", permissoes: [] });
+  assert.match(htmlOut, /Impacto: /, "pendências documentadas com impacto");
+  assert.match(htmlOut, /Documentar não resolve/);
+  // 08E (achado da jornada): outubro ainda tem bloqueantes e pendências não documentadas — "com pendências documentadas"
+  // não serve para estacioná-las: recusado, com os motivos; a tela também não oferece.
   const cp = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "FECHAMENTO_COM_PENDENCIAS", justificativa: "Documentando." });
-  assert.equal(cp.status, 200, JSON.stringify(cp.corpo));
-  assert.ok(cp.corpo.pendencias.some((p) => p.descricao && p.impacto && p.documentacaoFaltante === "Extrato de outubro" && p.decisao === "Aguardar extrato"));
+  assert.equal(cp.status, 409, JSON.stringify(cp.corpo));
+  assert.match(cp.corpo.mensagem, /bloqueante|não documentada/);
+  assert.equal(fOut.acoes.find((a) => a.estadoProposto === "FECHAMENTO_COM_PENDENCIAS").permitida, false);
   const semJust = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "ABERTA" });
   assert.equal(semJust.status, 409);
   const reaberta = await agir("/api/fv2/acoes/fechamento/alterar", { competencia: "2026-10", novoEstado: "ABERTA", justificativa: "Extrato chegou." });

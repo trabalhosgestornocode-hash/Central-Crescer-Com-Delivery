@@ -30,7 +30,9 @@ test("fechamento com pendências: só correções auditadas — exige permissão
   const { obrigacoes: [ob] } = await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id));
   await estado(nucleo, c, "FECHAMENTO_PRELIMINAR");
   await rejeita(estado(nucleo, c, "FECHAMENTO_COM_PENDENCIAS"), CODIGO.TRANSICAO_INVALIDA); // pendências precisam estar documentadas
-  await estado(nucleo, c, "FECHAMENTO_COM_PENDENCIAS", { pendencias: [{ descricao: "Nota do fornecedor sintético ainda não recebida", impacto: "Pode alterar o resultado da competência (sintético)." }] });
+  // 08E: documenta as pendências REAIS (conta sem comprovante = ressalva admissível) e então passa pelo estado.
+  await prepararHomologacao(nucleo, c, "2026-09");
+  assert.equal((await nucleo.consultarCompetencia(c, { competencia: "2026-09" })).estado, "FECHAMENTO_COM_PENDENCIAS");
 
   // Quem só registra não escreve mais nesta competência; nada é gravado.
   const operador = so(ACAO.VER, ACAO.REGISTRAR);
@@ -43,7 +45,7 @@ test("fechamento com pendências: só correções auditadas — exige permissão
   const corretor = so(ACAO.VER, ACAO.REGISTRAR, ACAO.CORRIGIR);
   const nova = await nucleo.registrarObrigacao(corretor, obrigacao(fornecedor.id, { descricao: "Nota que faltava" }));
   await nucleo.corrigirObrigacao(corretor, { obrigacaoId: ob.id, mudancas: { descricao: "Descrição corrigida no fechamento" }, justificativa: "Conferência com a nota" });
-  const eventos = await eventosDaCompetencia(nucleo, c);
+  const eventos = (await eventosDaCompetencia(nucleo, c)).filter((e) => e.evento !== "DOCUMENTACAO_DE_PENDENCIA");
   assert.deepEqual(eventos.map((e) => e.evento), ["CRIACAO", "MUDANCA_ESTADO", "CORRECAO_EM_FECHAMENTO", "CORRECAO_EM_FECHAMENTO"]);
   assert.deepEqual(eventos.slice(2).map((e) => [e.usuarioId, e.depois.estado]), [[corretor.usuarioId, "FECHAMENTO_COM_PENDENCIAS"], [corretor.usuarioId, "FECHAMENTO_COM_PENDENCIAS"]]);
   assert.equal((await nucleo.consultarHistorico(c, { registroTipo: "OBRIGACAO", registroId: nova.obrigacoes[0].id })).length, 1);
