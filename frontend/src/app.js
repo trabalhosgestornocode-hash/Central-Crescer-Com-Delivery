@@ -27,7 +27,7 @@ import {
   carregarPerfis, selecionarPerfil, limparPerfilPendente, carregarSetores, http,
 } from "./sessao.js";
 import { SETOR, SETOR_ROTULO, decidirSetor, chaveDoContexto, lerPreferencia, gravarPreferencia } from "./setores.js";
-import { ESTADO_FINANCEIRO, CARREGAMENTO_NEUTRO, menuDoEstado, rotaDeEntrada, resolverAcessoFinanceiro, guardarStatusPreResolvido } from "./financeiroAcesso.js";
+import { ESTADO_FINANCEIRO, CARREGAMENTO_NEUTRO, menuDoEstado, rotaDeEntrada, resolverAcessoFinanceiro, guardarStatusPreResolvido, resolverFinanceiroV2, ENDERECO_FINANCEIRO_V2 } from "./financeiroAcesso.js";
 import {
   montarSelecaoPerfil, abrirPinDoPerfil, setErroPin, setPinCarregando,
   fecharPinDoPerfil, mostrarSemPerfil,
@@ -449,6 +449,17 @@ function mostrarCarregamentoFinanceiro() {
  */
 async function entrarNoFinanceiro(g, rotaInicial) {
   mostrarCarregamentoFinanceiro();
+  // Execução 10: unidade LIBERADA no Financeiro v2 → só o v2 (nunca os dois). Não liberada/desligado → segue igual.
+  const v2 = await resolverFinanceiroV2(http);
+  if (contextoMudou(g) || state.sessao.setor !== SETOR.FINANCEIRO) return;
+  if (!v2.ok || v2.liberado) {
+    if (v2.ok && v2.operavel) { window.location.assign(ENDERECO_FINANCEIRO_V2); return; }
+    el("#view").innerHTML = v2.ok
+      ? `<div class="fin-estado fin-estado--vazio" role="alert"><h3>Sem acesso ao Financeiro v2</h3><p>O financeiro desta unidade agora é o Financeiro v2 e você ainda não tem permissão nele. Peça acesso ao administrador financeiro.</p></div>`
+      : `<div class="fin-estado fin-estado--vazio" role="alert"><h3>Não foi possível abrir o Dashboard Financeiro agora</h3><p>Não conseguimos confirmar qual financeiro vale para esta unidade. Tente novamente.</p><p><button type="button" class="btn btn-primary" id="fin-tentar-novamente">Tentar novamente</button></p></div>`;
+    el("#fin-tentar-novamente")?.addEventListener("click", () => { if (!contextoMudou(g)) entrarNoFinanceiro(g, rotaInicial); }, { once: true });
+    return;
+  }
   const acesso = await resolverAcessoFinanceiro(http);
   if (contextoMudou(g) || state.sessao.setor !== SETOR.FINANCEIRO) return; // trocou de unidade/empresa/setor no meio
   state.financeiroEstado = acesso.estado;

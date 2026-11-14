@@ -43,6 +43,23 @@ export async function resolverAcessoFinanceiro(http) {
   }
 }
 
+/** Endereço do Financeiro v2 dentro da plataforma (mesma aba, mesma origem, mesmo login). */
+export const ENDERECO_FINANCEIRO_V2 = "/financeiro-v2/?modo=plataforma#/visao-geral";
+
+/**
+ * Execução 10 — o Financeiro v2 SUBSTITUI o painel atual só na unidade LIBERADA. Desligado ou não liberado = nada muda.
+ * @returns {Promise<{ok:true, liberado:boolean, operavel:boolean, motivo:string|null}|{ok:false}>} falha = ERRO (nunca legado)
+ */
+export async function resolverFinanceiroV2(http) {
+  try {
+    const s = (await http.get("/api/v1/financeiro-v2/status"))?.data;
+    if (!s || typeof s.liberado !== "boolean") return { ok: false };
+    return { ok: true, liberado: s.liberado, operavel: s.liberado && s.disponivel === true && s.operavel === true, motivo: s.motivo ?? null };
+  } catch {
+    return { ok: false };
+  }
+}
+
 /**
  * Itens do menu financeiro para um estado já RESOLVIDO. Em `loading`/`error`/`access_denied` não há menu algum —
  * nada do legado é desenhado enquanto não se sabe qual interface é a certa.

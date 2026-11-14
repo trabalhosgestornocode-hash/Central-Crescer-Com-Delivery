@@ -57,11 +57,15 @@ test("6 — troca de unidade: resposta pedida no contexto anterior é descartada
   assert.equal(respostaVale("", ""), false);
 });
 
-test("não ativado — nenhum arquivo da aplicação importa o encaixe; o menu financeiro publicado não muda", () => {
+test("10 — o encaixe antigo não é importado; o v2 entra só pelo status do servidor e o menu financeiro publicado não muda", () => {
   const varrer = (d) => readdirSync(d, { withFileTypes: true }).flatMap((f) => (f.isDirectory() ? varrer(join(d, f.name)) : f.name.endsWith(".js") ? [join(d, f.name)] : []));
   const usam = varrer(SRC).filter((p) => !p.endsWith("financeiroV2Encaixe.js") && /financeiroV2Encaixe/.test(readFileSync(p, "utf8")));
   assert.deepEqual(usam, []);
-  assert.ok(!/financeiroV2|financeiro-v2/.test(readFileSync(join(SRC, "financeiroAcesso.js"), "utf8")));
+  // Execução 10: a ligação é INTENCIONAL e por um ponto único — o status do servidor (desligado por padrão) decide; o
+  // menu financeiro publicado continua sem nenhum item do v2 (o v2 abre a própria página, mesma aba e mesmo login).
+  const acesso = readFileSync(join(SRC, "financeiroAcesso.js"), "utf8");
+  assert.deepEqual(acesso.match(/\/api\/v1\/financeiro-v2\/[a-z]+/g), ["/api/v1/financeiro-v2/status"]);
+  assert.match(acesso, /ENDERECO_FINANCEIRO_V2 = "\/financeiro-v2\/\?modo=plataforma#\/visao-geral"/);
   assert.ok(!/financeiroV2|financeiro-v2/.test(readFileSync(join(SRC, "financeiroMenu.js"), "utf8")));
 });
 

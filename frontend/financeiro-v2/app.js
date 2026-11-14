@@ -1,7 +1,8 @@
 // Aplicação do Financeiro v2 (demonstração local): roteamento por hash, filtros, carregamento sem flash de dados antigos,
 // expansões acessíveis, painel "Ver composição completa" e detalhes de títulos. Nenhum cálculo financeiro: só consome as
 // consultas do motor. Datas de período (início/fim do mês, +30 dias) são só calendário, nunca valores.
-import { criarConsultor, enviar } from "./consulta.js";
+import { criarConsultor, definirTransporte, enviar } from "./consulta.js";
+import { credenciaisDaPlataforma, criarTransportePlataforma, emModoPlataforma, estadoDoErro } from "./plataforma.js";
 import * as adm from "./telasAdministracao.js";
 import * as conf from "./telasConferencias.js";
 import * as telas from "./telas.js";
@@ -10,6 +11,12 @@ import * as ven from "./telasVendas.js";
 import { esc } from "./formatar.js";
 
 const $ = (s) => document.querySelector(s);
+/** Execução 10: dentro da Crescer (mesmo login, mesma unidade da sessão). Fora disso, é a demonstração local. */
+const MODO_PLATAFORMA = emModoPlataforma();
+if (MODO_PLATAFORMA) {
+  definirTransporte(criarTransportePlataforma({ credenciais: credenciaisDaPlataforma }));
+  document.documentElement.dataset.modo = "plataforma";
+}
 const consultor = criarConsultor();
 const consultorPainel = criarConsultor();
 const estado = {
@@ -34,6 +41,32 @@ const FILTROS_URL_VENDAS = ["aba", "canal", "forma", "processador", "situacao", 
 const ENDPOINT_DA_ABA = { vendas: "vendas", pagamentos: "vendas/pagamentos", taxas: "vendas/taxas", recebiveis: "vendas/recebiveis", divergencias: "vendas/divergencias" };
 
 const cabecalhos = () => ({ "x-fv2-demo-sessao": estado.sessao });
+/**
+ * Execução 10 — modo plataforma: sem seletor de sessão nem de unidade (a unidade é a da sessão da Crescer); competência
+ * inicial = mês da data-base do servidor; ações escondidas quando a escrita está desligada (o servidor recusa de todo jeito).
+ */
+function modoPlataforma(dados) {
+  const seletor = document.querySelector("#filtro-sessao");
+  if (seletor) (seletor.closest("label") ?? seletor).hidden = true;
+  const unidade = document.querySelector("#filtro-unidade");
+  if (unidade) unidade.disabled = true;
+  if (!estado.competenciaDaSessao && typeof dados.dataBase === "string") {
+    estado.competenciaDaSessao = true;
+    estado.competencia = dados.dataBase.slice(0, 7);
+    const campo = document.querySelector("#filtro-competencia");
+    if (campo) campo.value = estado.competencia;
+  }
+  document.documentElement.dataset.escrita = dados.escritaHabilitada ? "sim" : "nao";
+  if (!document.querySelector(".usuario-logado")) {
+    const quem = document.createElement("span");
+    quem.className = "usuario-logado";
+    quem.textContent = `Usuário: ${dados.usuario ?? "autenticado"}`;
+    const voltar = document.createElement("a");
+    voltar.href = "/";
+    voltar.textContent = "Voltar para a plataforma";
+    (unidade?.closest("label") ?? document.querySelector(".filtros"))?.after(quem, voltar);
+  }
+}
 /** 08B: homologação full stack — esconde o seletor de perfil da demonstração; mostra quem entrou e permite sair. */
 function modoHomologacao(usuario) {
   const seletor = document.querySelector("#filtro-sessao");
@@ -65,6 +98,7 @@ const fimDoMes = (m) => { const [a, mm] = m.split("-").map(Number); return iso(n
 const somarMes = (m, n) => { const [a, mm] = m.split("-").map(Number); const d = new Date(Date.UTC(a, mm - 1 + n, 1)); return iso(d).slice(0, 7); };
 
 function mensagemDeErro(r) {
+  if (MODO_PLATAFORMA) { const e = estadoDoErro(r); return telas.estado(e.tipo, e.mensagem); }
   if (r.status === 401) return telas.estado("sem-sessao", /expirad/i.test(r.mensagem ?? "") ? "Sua sessão expirou. Entre novamente: nada foi gravado." : "");
   if (r.status === 403) return telas.estado("negado", r.mensagem);
   return telas.estado("erro", r.mensagem);
@@ -146,6 +180,7 @@ async function carregar() {
     if (!s.ok && s.erro === "LOGIN_EXIGIDO") { window.location.assign("/entrar"); return; }
     if (!s.ok) { conteudo.innerHTML = mensagemDeErro(s); conteudo.removeAttribute("aria-busy"); return; }
     if (s.dados.modo === "HOMOLOGACAO") modoHomologacao(s.dados.usuario);
+    if (s.dados.modo === "PLATAFORMA") modoPlataforma(s.dados);
     estado.unidades = s.dados.unidades;
     estado.dataBase = s.dados.dataBase ?? null;
     estado.csrf = s.dados.csrf ?? null;

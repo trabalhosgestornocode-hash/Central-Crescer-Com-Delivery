@@ -199,3 +199,9 @@ details.tecnico pre { font-size: 11px; background: var(--bg); padding: 10px; bor
 .quadro-pdf { width: 100%; height: min(70vh, 640px); border: 1px solid var(--linha); border-radius: 10px; background: #fff; }
 .historico details summary { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Execução 10 — modo plataforma com escrita desligada: os formulários de AÇÃO não aparecem (o servidor recusa de todo
+   jeito); consultas, painéis e prévias continuam. */
+html[data-escrita="nao"] form[data-acao] { display: none; }
+/* Modo plataforma: dados REAIS da unidade — a faixa da demonstração não aparece. */
+html[data-modo="plataforma"] .faixa-demo { display: none; }
