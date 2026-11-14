@@ -89,6 +89,9 @@ async function preparar() {
   // 08C: evidência SINTÉTICA de outubro no cofre (registrada antes da jornada; a jornada só a vincula pela tela).
   const g = await cofre.guardar(adm, { conteudo: pdfSintetico("Relatorio sintetico do canal - outubro - financiador dos descontos: loja"), tipoMime: "application/pdf" });
   await n.registrarDocumento(adm, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: "DEMONSTRATIVO_REPASSE", recebidoEm: "2026-11-05", competencia: "2026-10", descricao: "Relatório do canal de outubro (sintético)" });
+  // 08C: nota fiscal SINTÉTICA que identifica o "boleto sem identificação" de outubro (evidência da reclassificação).
+  const nf = await cofre.guardar(adm, { conteudo: pdfSintetico("Nota fiscal sintetica - servico de contabilidade de outubro - R$ 189,90"), tipoMime: "application/pdf" });
+  await n.registrarDocumento(adm, { origem: "MANUAL", arquivoId: nf.arquivoId, hashSha256: nf.hashSha256, tipo: "NOTA_FISCAL", recebidoEm: "2026-11-03", competencia: "2026-10", descricao: "Nota fiscal do boleto de outubro: serviço de contabilidade (sintética)" });
   dizer(`Homologação preparada em ${PASTA_HOMOLOGACAO} (banco ${banco}). Credenciais SINTÉTICAS em credenciais-sinteticas.txt.`);
   process.exit(0);
 }
