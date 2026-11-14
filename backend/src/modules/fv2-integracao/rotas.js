@@ -11,7 +11,7 @@
 //                                     segundo fator recente comprovado; homologar exige ainda a matriz aprovada
 // Desligado (padrão): nada responde além de /status ("não liberado"); a plataforma segue com o financeiro atual.
 import { Router, json } from "express";
-import { ACAO, CODIGO, FINALIDADE_DO_GATEWAY, criarNucleoFinanceiro, tempo } from "../financeiro-v2/index.js";
+import { ACAO, CODIGO, FINALIDADE_DO_GATEWAY, alterarLiberacaoPostgres, criarAutoridadeDaPlataforma, criarNucleoFinanceiro, identificarSessao, tempo } from "../financeiro-v2/index.js";
 import { comIdentidadeDaRequisicao, resumoDaSessao } from "./clienteGateway.js";
 import { CONSULTAS, pessoasDaUnidade } from "./consultas.js";
 import { ESCRITAS } from "./escritas.js";
@@ -23,7 +23,7 @@ const STATUS_POR_CODIGO = Object.freeze({
   [CODIGO.TRANSICAO_INVALIDA]: 409, [CODIGO.CONCILIACAO_INVALIDA]: 409, [CODIGO.CONFLITO_IDEMPOTENCIA]: 409, [CODIGO.CONFLITO_VERSAO]: 409,
   [CODIGO.IMPORTACAO_INVALIDA]: 422, [CODIGO.HOMOLOGACAO_BLOQUEADA]: 409, [CODIGO.COMPETENCIA_HOMOLOGADA]: 409, [CODIGO.CONFIRMACAO_EXIGIDA]: 400,
   [CODIGO.CATEGORIA_INVALIDA]: 409, [CODIGO.OPERACAO_INVALIDA]: 409, [CODIGO.DOCUMENTO_INDISPONIVEL]: 409, [CODIGO.DOCUMENTO_ADULTERADO]: 409,
-  [CODIGO.COFRE_INDISPONIVEL]: 503, [CODIGO.EVIDENCIA_EXIGIDA]: 409, [CODIGO.DOCUMENTO_INVALIDO]: 422, [CODIGO.LIQUIDACAO_EXCEDE_SALDO]: 409,
+  [CODIGO.COFRE_INDISPONIVEL]: 503, [CODIGO.PROVISIONAMENTO_RECUSADO]: 403, [CODIGO.EVIDENCIA_EXIGIDA]: 409, [CODIGO.DOCUMENTO_INVALIDO]: 422, [CODIGO.LIQUIDACAO_EXCEDE_SALDO]: 409,
   [CODIGO.LIQUIDACAO_EXCEDE_MOVIMENTACAO]: 409, [CODIGO.LIQUIDACAO_INCOMPATIVEL]: 409, [CODIGO.AJUSTE_EXCEDE_SALDO]: 409, [CODIGO.INTEGRIDADE_VIOLADA]: 409,
 });
 const DESLIGADO = Object.freeze({ liberado: false, disponivel: false, operavel: false, motivo: "FINANCEIRO_V2_DESLIGADO" });
@@ -53,15 +53,17 @@ function responderErro(res, e, registrar) {
  * @param {() => {repositorio:object, adaptador:object, vinculos:object, relogio?:Function}} p.dependencias
  * @param {(evento:object)=>void} [p.registrar]
  */
-export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, homologacaoHabilitada = false, dependencias, registrar = () => {} }) {
+export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, homologacaoHabilitada = false, provisionamentoHabilitado = false, dependencias, registrar = () => {} }) {
   const r = Router();
   let deps = null;
   const obter = () => (deps ??= dependencias());
 
   r.use((req, res, next) => {
     const acao = req.method === "POST" && req.path.startsWith("/acoes/");
-    if (req.method !== "GET" && !acao) return res.status(405).json({ erro: "METODO_NAO_PERMITIDO", codigo: "METODO_NAO_PERMITIDO", mensagem: "Método não permitido." });
+    const adm = req.path.startsWith("/administracao/");
+    if (req.method !== "GET" && !acao && !(adm && req.method === "POST")) return res.status(405).json({ erro: "METODO_NAO_PERMITIDO", codigo: "METODO_NAO_PERMITIDO", mensagem: "Método não permitido." });
     if (!habilitado) return req.path === "/status" && req.method === "GET" ? res.json(DESLIGADO) : res.status(404).json({ erro: "FINANCEIRO_V2_DESLIGADO", codigo: "FINANCEIRO_V2_DESLIGADO", mensagem: "O Financeiro v2 não está ativo." });
+    if (adm && !provisionamentoHabilitado) return res.status(404).json({ erro: "PROVISIONAMENTO_DESLIGADO", codigo: "PROVISIONAMENTO_DESLIGADO", mensagem: "O procedimento de ativação não está ligado." });
     if (acao && !escritaHabilitada) return res.status(403).json({ erro: "ESCRITA_DESLIGADA", codigo: "ESCRITA_DESLIGADA", mensagem: "Nesta fase o Financeiro v2 está liberado só para consulta." });
     for (const v of Object.values(req.query)) if (typeof v !== "string") return res.status(400).json({ erro: "PARAMETRO_INVALIDO", codigo: "PARAMETRO_INVALIDO", mensagem: "Parâmetro repetido ou inválido." });
     return next();
@@ -177,5 +179,88 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
       }
     });
   }
+  // ---------------------------------------------------------------- ATIVAÇÃO (administrador inicial + liberação)
+  // Só com FV2_PROVISIONAMENTO_HABILITADO=1 (ligar para ativar e desligar em seguida). Quem age é ADMINISTRADOR DA EMPRESA
+  // (vínculo da plataforma), com 2º fator RECENTE; a pessoa beneficiada é escolhida por ele (nunca automaticamente), tem
+  // conta pessoal e vínculo com a unidade, e nunca é da conta de quem atesta. A unidade é SEMPRE a da sessão.
+  const ADMINISTRADOR_INICIAL = Object.freeze(Object.values(ACAO)); // as operações seguem bloqueadas pelas chaves
+  async function exigirAdministradorDaEmpresa(sessao) {
+    const s = identificarSessao(sessao, Date.now());
+    const adm = await obter().administracao.autoridadeSobre({ contaId: s.contaId, organizacaoId: s.organizacaoId, unidadeId: s.unidadeId });
+    if (!adm) throw Object.assign(new Error("Só o administrador da empresa ativa o Financeiro v2."), { codigo: CODIGO.PERMISSAO_INSUFICIENTE, detalhes: { motivo: "SEM_AUTORIDADE_ADMINISTRATIVA" } });
+    return s;
+  }
+  const texto = (v, min, max) => (typeof v === "string" && v.trim().length >= min && v.trim().length <= max ? v.trim() : null);
+
+  r.get("/administracao/contexto", async (req, res) => {
+    try {
+      const corpo = await comIdentidade(req, async (sessao) => {
+        const s = await exigirAdministradorDaEmpresa(sessao);
+        const { administracao, vinculos, liberacoes } = obter();
+        const candidatos = [];
+        for (const c of await administracao.pessoasDaUnidade({ unidadeId: s.unidadeId })) {
+          if (c.contaId === s.contaId) continue; // quem atesta não se beneficia
+          candidatos.push({ perfilId: c.perfilId, nome: c.nome ?? "Pessoa sem nome", contaPessoal: (await vinculos.perfisAtivosDaConta({ contaId: c.contaId })) === 1 });
+        }
+        return {
+          organizacao: { id: s.organizacaoId, nome: req.acesso?.empresa?.nome ?? null }, unidade: { id: s.unidadeId, nome: req.acesso?.unidade?.nome ?? null },
+          liberacao: await liberacoes.consultar({ organizacaoId: s.organizacaoId, unidadeId: s.unidadeId }), candidatos,
+          modoDaAutoridade: obter().poolAutoridade ? "CO_LOCALIZADA" : "SERVICO",
+        };
+      });
+      res.set("cache-control", "no-store");
+      return res.json(corpo);
+    } catch (e) {
+      return responderErro(res, e, registrar);
+    }
+  });
+
+  r.post("/administracao/provisionar", json({ limit: "8kb", strict: true }), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      if (Object.keys(b).some((k) => !["perfilId", "justificativa", "evidencia"].includes(k))) throw recusa(400, "CAMPO_DESCONHECIDO", "Campos não aceitos.");
+      const corpo = await comIdentidade(req, async (sessao, token) => {
+        const s = await exigirAdministradorDaEmpresa(sessao);
+        const { repositorio, administracao, vinculos, mfa } = obter();
+        const nucleo = criarNucleoFinanceiro({
+          repositorio, exigirConcessaoPersistida: true, escoposAutorizados: [{ organizacaoId: s.organizacaoId, unidadeId: s.unidadeId }],
+          autoridadeDeProvisionamento: criarAutoridadeDaPlataforma({ administracao, vinculos, mfa }),
+        });
+        await nucleo.provisionarAdministradorInicial({
+          organizacaoId: s.organizacaoId, unidadeId: s.unidadeId, usuarioId: String(b.perfilId ?? ""), acoes: [...ADMINISTRADOR_INICIAL],
+          justificativa: b.justificativa, evidencia: b.evidencia, atestado: { sessao, tokenDeAcesso: token },
+        });
+        registrar({ tipo: "ADMINISTRADOR_INICIAL_PROVISIONADO", unidadeId: s.unidadeId, pessoa: String(b.perfilId), atestante: s.contaId });
+        return { ok: true, concessao: { usuarioId: String(b.perfilId).toLowerCase(), acoes: [...ADMINISTRADOR_INICIAL] } };
+      }, FINALIDADE_DO_GATEWAY.PROVISIONAMENTO);
+      return res.json(corpo);
+    } catch (e) {
+      return responderErro(res, e, registrar);
+    }
+  });
+
+  r.post("/administracao/liberacao", json({ limit: "8kb", strict: true }), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      if (Object.keys(b).some((k) => !["ativa", "justificativa"].includes(k)) || typeof b.ativa !== "boolean") throw recusa(400, "CAMPO_DESCONHECIDO", "Informe só ativa (sim/não) e a justificativa.");
+      const justificativa = texto(b.justificativa, 20, 500);
+      if (!justificativa) throw recusa(400, "JUSTIFICATIVA_INSUFICIENTE", "Justificativa obrigatória (mínimo 20 caracteres).");
+      const corpo = await comIdentidade(req, async (sessao, token) => {
+        const s = await exigirAdministradorDaEmpresa(sessao);
+        const { mfa, poolAutoridade, liberacoes } = obter();
+        if (!poolAutoridade) throw recusa(501, "LIBERACAO_PELO_SERVICO_DA_AUTORIDADE", "Neste modo a liberação é feita pelo serviço da autoridade.");
+        const prova = await mfa.provar({ tokenDeAcesso: token, contaId: s.contaId }).catch(() => ({ ok: false }));
+        if (!prova?.ok) throw Object.assign(new Error("Liberar ou desligar exige o código do autenticador nos últimos 10 minutos."), { codigo: CODIGO.PERMISSAO_INSUFICIENTE, detalhes: { motivo: prova?.motivo ?? "SEM_PROVA_DE_SEGUNDO_FATOR" } });
+        const ato = (unidadeId) => ({ organizacaoId: s.organizacaoId, unidadeId, ativa: b.ativa, atorContaId: s.contaId, justificativa, provaDeSegundoFator: prova });
+        if (b.ativa && !(await liberacoes.consultar({ organizacaoId: s.organizacaoId, unidadeId: s.unidadeId })).empresa) await alterarLiberacaoPostgres(poolAutoridade, ato(null));
+        await alterarLiberacaoPostgres(poolAutoridade, ato(s.unidadeId)); // SÓ a unidade da sessão (nunca "todas")
+        registrar({ tipo: b.ativa ? "UNIDADE_LIBERADA" : "UNIDADE_DESLIGADA", unidadeId: s.unidadeId, ator: s.contaId });
+        return { ok: true, liberacao: await liberacoes.consultar({ organizacaoId: s.organizacaoId, unidadeId: s.unidadeId }) };
+      }, FINALIDADE_DO_GATEWAY.LIBERACAO);
+      return res.json(corpo);
+    } catch (e) {
+      return responderErro(res, e, registrar);
+    }
+  });
   return r;
 }

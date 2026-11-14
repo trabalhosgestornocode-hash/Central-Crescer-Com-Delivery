@@ -31,13 +31,14 @@ const PESSOA_COMP = "dddddddd-0000-4000-8000-0000000000a3";
 const ADMIN = "dddddddd-0000-4000-8000-0000000000c9";
 const CONTA_NADA = "dddddddd-0000-4000-8000-0000000000c4";
 const PESSOA_NADA = "dddddddd-0000-4000-8000-0000000000a4";
+const PESSOA_ADMIN = "dddddddd-0000-4000-8000-0000000000a9";
 const ESCOPOS = [{ organizacaoId: ORG_A, unidadeId: UNI_A }, { organizacaoId: ORG_A, unidadeId: UNI_A2 }, { organizacaoId: ORG_B, unidadeId: UNI_B }];
 
 /** "Provedor de identidade" sintético: só aceita tokens assinados com o segredo de teste. */
 const provedor = verificadorHs256(SEGREDO_SINTETICO);
 const obterUsuario = async (token) => { const p = provedor(token); return p && p.exp * 1000 > Date.now() ? { id: p.sub } : null; };
 /** Vínculos da plataforma (memória): pessoa → conta, unidades; conta compartilhada tem 2 pessoas. */
-const VINCULOS = { [PESSOA]: { conta: CONTA, unidades: [UNI_A, UNI_A2] }, [PESSOA_SEM]: { conta: CONTA_SEM, unidades: [UNI_A] }, [PESSOA_COMP]: { conta: CONTA_COMP, unidades: [UNI_A] }, [PESSOA_NADA]: { conta: CONTA_NADA, unidades: [UNI_A] } };
+const VINCULOS = { [PESSOA]: { conta: CONTA, unidades: [UNI_A, UNI_A2] }, [PESSOA_SEM]: { conta: CONTA_SEM, unidades: [UNI_A] }, [PESSOA_COMP]: { conta: CONTA_COMP, unidades: [UNI_A, UNI_A2] }, [PESSOA_NADA]: { conta: CONTA_NADA, unidades: [UNI_A] }, [PESSOA_ADMIN]: { conta: ADMIN, unidades: [UNI_A, UNI_A2] } };
 const vinculos = {
   contaDoPerfil: async ({ perfilId }) => VINCULOS[perfilId]?.conta ?? null,
   perfisAtivosDaConta: async ({ contaId }) => (contaId === CONTA_COMP ? 2 : Object.values(VINCULOS).filter((v) => v.conta === contaId).length),
@@ -86,6 +87,13 @@ async function montar() {
   // MODO CO-LOCALIZADO (um só serviço): a mesma regra da autoridade, no processo, com o pool PRÓPRIO da autoridade
   const repoLocal = criarRepositorioPostgres({ pool: poolApp, sessoes: criarAutoridadeCoLocalizada({ poolAutoridade: poolAut, obterUsuario, mfa }) });
   const adaptadorLocal = criarAdaptadorDaPlataforma({ liberacoes: criarLiberacoesPostgres({ poolApp }), vinculos, concessoes: criarConcessoesDaSessao({ repositorio: repoLocal }), mfa });
+  // ATIVAÇÃO: administrador da EMPRESA (só a conta ADMIN), candidatos = pessoas com vínculo na unidade
+  const administracao = {
+    autoridadeSobre: async ({ contaId }) => (contaId === ADMIN ? { tipo: "ADMIN_EMPRESA" } : null),
+    contaDoPerfil: vinculos.contaDoPerfil,
+    pessoasDaUnidade: async ({ unidadeId }) => Object.entries(VINCULOS).filter(([, v]) => v.unidades.includes(unidadeId)).map(([perfilId, v]) => ({ perfilId, nome: `Pessoa ${perfilId.slice(-2)}`, contaId: v.conta })),
+  };
+  app.use("/ativacao", criarRotasFinanceiroV2({ habilitado: true, provisionamentoHabilitado: true, dependencias: () => ({ repositorio: repoLocal, adaptador: adaptadorLocal, vinculos, liberacoes: criarLiberacoesPostgres({ poolApp }), mfa, poolAutoridade: poolAut, administracao }) }));
   app.use("/local", criarRotasFinanceiroV2({ habilitado: true, dependencias: () => ({ repositorio: repoLocal, adaptador: adaptadorLocal, vinculos }) }));
   app.use("/desligado", criarRotasFinanceiroV2({ habilitado: false, dependencias: () => { throw new Error("não deveria criar nada desligado"); } }));
   const servidorApp = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
@@ -228,4 +236,47 @@ test("10 — modo CO-LOCALIZADO (um só serviço): mesma regra da autoridade —
   assert.equal((await get(`/local/api/caixa-e-bancos${PERIODO}`, { s: sessao({ conta: CONTA_COMP, pessoa: PESSOA_COMP }) })).corpo.motivo, "CONTA_COMPARTILHADA");
   assert.equal((await get(`/local/api/caixa-e-bancos${PERIODO}`, { s: sessao({ unidade: UNI_A2 }) })).corpo.motivo, "UNIDADE_NAO_LIBERADA");
   assert.equal((await get("/local/acoes/obrigacoes/registrar", { metodo: "POST", corpo: {} })).corpo.codigo, "ESCRITA_DESLIGADA", "consulta apenas");
+});
+
+test("10 — ATIVAÇÃO: administrador da empresa com TOTP recente provisiona a 1ª administração (nunca a si mesmo, nunca duas) e libera SÓ a unidade da sessão; revogação volta ao financeiro atual", pular, async () => {
+  const adm = (extra = {}) => sessao({ conta: ADMIN, pessoa: PESSOA_ADMIN, unidade: UNI_A2, ...extra });
+  const tkAdm = (o = {}) => token(ADMIN, { fatorHaS: 30, ...o });
+  // quem não é administrador da empresa não vê nem faz nada
+  assert.equal((await get("/ativacao/administracao/contexto", { s: sessao({ unidade: UNI_A2 }) })).corpo.motivo, "SEM_AUTORIDADE_ADMINISTRATIVA");
+  // contexto: unidade da SESSÃO, candidatos com vínculo (sem o próprio atestante)
+  const ctx = await get("/ativacao/administracao/contexto", { s: adm(), t: tkAdm() });
+  assert.equal(ctx.status, 200, JSON.stringify(ctx.corpo));
+  assert.equal(ctx.corpo.unidade.id, UNI_A2);
+  assert.deepEqual(ctx.corpo.liberacao, { empresa: true, unidade: false });
+  assert.ok(ctx.corpo.candidatos.some((c) => c.perfilId === PESSOA && c.contaPessoal === true));
+  assert.ok(ctx.corpo.candidatos.some((c) => c.perfilId === PESSOA_COMP && c.contaPessoal === false), "conta compartilhada aparece marcada");
+  assert.ok(!ctx.corpo.candidatos.some((c) => c.perfilId === PESSOA_ADMIN), "o atestante não aparece");
+  const prov = (corpo, o = {}) => get("/ativacao/administracao/provisionar", { metodo: "POST", corpo, s: adm(), t: tkAdm(o) });
+  const ato = { perfilId: PESSOA, justificativa: "Administradora financeira inicial indicada pela gestão (sintético).", evidencia: "Ata sintética 001" };
+  // sem 2º fator recente, autoconcessão e conta compartilhada: recusados
+  assert.equal((await prov(ato, { metodo: null })).corpo.codigo, "FV2_PROVISIONAMENTO_RECUSADO", "sem 2º fator recente");
+  assert.ok([403, 409].includes((await prov({ ...ato, perfilId: PESSOA_ADMIN })).status), "autoconcessão");
+  assert.ok([403, 409].includes((await prov({ ...ato, perfilId: PESSOA_COMP })).status), "conta compartilhada");
+  assert.equal((await prov({ ...ato, unidadeId: UNI_A })).corpo.codigo, "CAMPO_DESCONHECIDO", "a unidade nunca vem do corpo");
+  // provisiona e não deixa provisionar de novo
+  const ok = await prov(ato);
+  assert.equal(ok.status, 200, JSON.stringify(ok.corpo));
+  assert.ok((await prov({ ...ato, perfilId: PESSOA_NADA })).status >= 400, "a unidade já tem administrador");
+  // antes da liberação, a pessoa provisionada ainda vê o financeiro atual
+  assert.equal((await get("/ativacao/status", { s: sessao({ unidade: UNI_A2 }) })).corpo.liberado, false);
+  const lib = (corpo, o = {}) => get("/ativacao/administracao/liberacao", { metodo: "POST", corpo, s: adm(), t: tkAdm(o) });
+  const J = "Ativação controlada da unidade 2 (sintética) aprovada.";
+  assert.equal((await lib({ ativa: true, justificativa: J }, { metodo: null })).corpo.motivo, "MFA_SEM_SEGUNDO_FATOR");
+  assert.equal((await lib({ ativa: true, justificativa: "curta" })).corpo.codigo, "JUSTIFICATIVA_INSUFICIENTE");
+  const ligada = await lib({ ativa: true, justificativa: J });
+  assert.equal(ligada.status, 200, JSON.stringify(ligada.corpo));
+  assert.deepEqual(ligada.corpo.liberacao, { empresa: true, unidade: true });
+  assert.deepEqual((await get("/ativacao/status", { s: sessao({ unidade: UNI_A2 }) })).corpo, { liberado: true, disponivel: true, operavel: true, motivo: null });
+  assert.equal((await get(`/ativacao/api/caixa-e-bancos${PERIODO}`, { s: sessao({ unidade: UNI_A2 }) })).status, 200, "consulta liberada (sem dados presumidos)");
+  // revogação
+  const desligada = await lib({ ativa: false, justificativa: "Revogação sintética da ativação da unidade 2." });
+  assert.deepEqual(desligada.corpo.liberacao, { empresa: true, unidade: false });
+  assert.equal((await get("/ativacao/status", { s: sessao({ unidade: UNI_A2 }) })).corpo.liberado, false, "volta ao financeiro atual");
+  // chave desligada (padrão): nada do procedimento responde
+  assert.equal((await get("/local/administracao/contexto", { s: adm(), t: tkAdm() })).status, 404);
 });

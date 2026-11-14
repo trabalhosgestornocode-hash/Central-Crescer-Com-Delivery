@@ -41,6 +41,7 @@ const P = { // pessoa → conta
   gestora: { pessoa: "dddddddd-0000-4000-8000-0000000000a1", conta: "dddddddd-0000-4000-8000-0000000000c1", nome: "Gestora Sintética" },
   semAcesso: { pessoa: "dddddddd-0000-4000-8000-0000000000a2", conta: "dddddddd-0000-4000-8000-0000000000c2", nome: "Sem Acesso Sintético" },
   nova: { pessoa: "dddddddd-0000-4000-8000-0000000000a3", conta: "dddddddd-0000-4000-8000-0000000000c3", nome: "Pessoa Nova Sintética" },
+  admin: { pessoa: "dddddddd-0000-4000-8000-0000000000a9", conta: "dddddddd-0000-4000-8000-0000000000c9", nome: "Administrador da Empresa Sintético" },
 };
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
 const jwt = (p) => { const c = b64({ alg: "HS256", typ: "JWT" }); const d = b64(p); return `${c}.${d}.${createHmac("sha256", SEGREDO).update(`${c}.${d}`).digest("base64url")}`; };
@@ -101,7 +102,7 @@ const vinculos = {
 };
 const adaptador = criarAdaptadorDaPlataforma({ liberacoes: criarLiberacoesPostgres({ poolApp }), vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
 const CONTEXTOS = { // x-context-token sintético → sessão de contexto
-  "ctx-gestora": { quem: P.gestora, unidade: UNI }, "ctx-sem": { quem: P.semAcesso, unidade: UNI }, "ctx-gestora-u2": { quem: P.gestora, unidade: UNI2 }, "ctx-nova": { quem: P.nova, unidade: UNI },
+  "ctx-gestora": { quem: P.gestora, unidade: UNI }, "ctx-admin-u2": { quem: P.admin, unidade: UNI2 }, "ctx-sem": { quem: P.semAcesso, unidade: UNI }, "ctx-gestora-u2": { quem: P.gestora, unidade: UNI2 }, "ctx-nova": { quem: P.nova, unidade: UNI },
 };
 const app = express();
 app.use("/api/v1", express.json(), (req, res, next) => { // requireAuth + requireContexto (simulados)
@@ -115,7 +116,13 @@ app.use("/api/v1", express.json(), (req, res, next) => { // requireAuth + requir
   req.acesso = { sessionId: `s-${ctx.quem.pessoa}-${ctx.unidade}`, expiraEm: new Date(Date.now() + 3600_000).toISOString(), perfilId: ctx.quem.pessoa, papel: "finance", impersonando: false, impersonadoPor: null, empresa: { id: ORG }, unidade: { id: ctx.unidade, nome: ctx.unidade === UNI ? "Açaí Sintético (unidade 1)" : "Unidade Sintética 2" } };
   return next();
 });
-app.use("/api/v1/financeiro-v2", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: true, dependencias: () => ({ repositorio, adaptador, vinculos }) }));
+const administracao = {
+  autoridadeSobre: async ({ contaId }) => (contaId === P.admin.conta ? { tipo: "ADMIN_EMPRESA" } : null),
+  contaDoPerfil: vinculos.contaDoPerfil,
+  pessoasDaUnidade: async () => PESSOAS.map((x) => ({ perfilId: x.pessoa, nome: x.nome, contaId: x.conta })),
+};
+app.use("/api/v1/financeiro-v2", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: true, provisionamentoHabilitado: true,
+  dependencias: () => ({ repositorio, adaptador, vinculos, liberacoes: criarLiberacoesPostgres({ poolApp }), mfa, poolAutoridade: poolAut, administracao }) }));
 app.use(express.static(FRONTEND));
 const servidor = await new Promise((ok) => { const s = app.listen(0, "127.0.0.1", () => ok(s)); });
 const ORIGEM = `http://127.0.0.1:${servidor.address().port}`;
@@ -190,18 +197,47 @@ try {
   exigir(/não está liberado/.test(await texto(p3)), "unidade não liberada");
   passo(11, "troca para unidade NÃO liberada: o v2 não abre (nenhum dado da unidade 1 aparece)");
   exigir(!/Banco Sintético da Jornada/.test(await texto(p3)), "sem vazamento entre unidades");
+  // ATIVAÇÃO pela página do procedimento: administrador da empresa (TOTP recente) → gestora como administração inicial da
+  // unidade 2 → liberação SÓ da unidade 2 → a gestora abre o v2 na unidade 2.
+  const pa = await navegador.newPage({ viewport: { width: 1100, height: 900 } });
+  pa.on("pageerror", (e) => erros.push(String(e)));
+  await pa.route("https://cdn.jsdelivr.net/**", (r) => r.fulfill({ contentType: "application/javascript", body: "window.supabase = {};" }));
+  await pa.route("**/src/supabaseClient.js", (r) => r.fulfill({ contentType: "application/javascript", body: `export async function tokenAtual() { return ${JSON.stringify(tokenDe(P.admin.conta))}; }` }));
+  await pa.route("**/src/sessao.js", (r) => r.fulfill({ contentType: "application/javascript", body: 'export function contextTokenAtual() { return "ctx-admin-u2"; }' }));
+  await pa.goto(`${ORIGEM}/financeiro-v2/ativacao.html`);
+  await pa.waitForFunction(() => !document.querySelector("#conteudo")?.getAttribute("aria-busy"), null, { timeout: 15000 });
+  exigir(/Unidade Sintética 2/.test(await pa.locator("#ctx").innerText()), "contexto da sessão do administrador");
+  exigir(!(await pa.locator('#form-prov option[value="' + P.admin.pessoa + '"]').count()), "o administrador não aparece como candidato");
+  await pa.selectOption('#form-prov select[name="perfilId"]', P.gestora.pessoa);
+  await pa.fill('#form-prov textarea[name="justificativa"]', "Gestora sintética indicada como administração financeira inicial da unidade 2.");
+  await pa.fill('#form-prov input[name="evidencia"]', "Ata sintética da jornada 10");
+  await pa.check('#form-prov input[name="confirmar"]');
+  await pa.click('#form-prov button[type="submit"]');
+  await pa.waitForFunction(() => /registrada|não|Só|exige/.test(document.querySelector("#form-prov .resultado-acao")?.textContent ?? ""), null, { timeout: 15000 });
+  exigir(/registrada/.test(await pa.locator("#form-prov .resultado-acao").innerText()), `provisionamento: ${await pa.locator("#form-prov .resultado-acao").innerText()}`);
+  passo(12, "ativação: administrador da empresa provisionou a administração inicial pela página (TOTP recente, sem autoconcessão)");
+  await pa.fill('#form-lib textarea[name="justificativa"]', "Liberação sintética da unidade 2 para a jornada 10.");
+  await pa.check('#form-lib input[name="confirmar"]');
+  await pa.click('#form-lib button[data-ativa="true"]');
+  await pa.waitForFunction(() => /liberada|não|exige/.test(document.querySelector("#form-lib .resultado-acao")?.textContent ?? ""), null, { timeout: 15000 });
+  exigir(/liberada no Financeiro v2/.test(await pa.locator("#form-lib .resultado-acao").innerText()), "liberação");
+  await foto(pa, "12-ativacao");
+  const pu2 = await abrir("ctx-gestora-u2", tk);
+  exigir(/Visão Geral/.test(await texto(pu2)) && !/não está liberado/.test(await texto(pu2)), "unidade 2 liberada abre o v2");
+  exigir(!/Banco Sintético da Jornada/.test(await texto(pu2)), "a unidade 2 não mostra dados da unidade 1");
+  passo(13, "unidade 2 liberada: a administradora provisionada abre o v2 (sem dados da unidade 1, sem saldos presumidos)");
   const p4 = await abrir("ctx-gestora", tokenDe(P.gestora.conta, { expEmS: -10 }));
   exigir(/sessão expirou/i.test(await texto(p4)), "sessão expirada");
-  passo(12, "sessão expirada: pede novo login pela plataforma, nada gravado");
+  passo(14, "sessão expirada: pede novo login pela plataforma, nada gravado");
   gateway.close();
   gateway.closeAllConnections?.();
   const p5 = await abrir("ctx-nova", tokenDe(P.nova.conta));
   const t5 = await texto(p5);
   exigir(/indisponível|Não foi possível/.test(t5) && !/Banco Sintético/.test(t5), `gateway fora do ar: ${t5.slice(0, 200)}`);
-  passo(13, "gateway fora do ar: tela de indisponibilidade, nenhum dado sintético no lugar");
+  passo(15, "gateway fora do ar: tela de indisponibilidade, nenhum dado sintético no lugar");
   await foto(p5, "13-gateway-indisponivel");
   exigir(erros.length === 0, `erros de JavaScript na página: ${erros.join(" | ")}`);
-  passo(14, "nenhum erro de JavaScript nas páginas");
+  passo(16, "nenhum erro de JavaScript nas páginas");
 } catch (e) {
   falhou = e;
   process.stdout.write(`${e.message}\n`);

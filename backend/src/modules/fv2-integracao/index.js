@@ -15,7 +15,7 @@ import { criarAdaptadorDaPlataforma, criarLiberacoesPostgres, criarRepositorioPo
 import { criarClienteDoGateway } from "./clienteGateway.js";
 import { criarAutoridadeCoLocalizada } from "./autoridadeCoLocalizada.js";
 import { criarMfaPeloProvedor } from "./mfaPeloProvedor.js";
-import { criarConcessoesDaSessao, criarVinculosDaPlataforma } from "./portasPlataforma.js";
+import { criarAdministracaoDaPlataforma, criarConcessoesDaSessao, criarVinculosDaPlataforma } from "./portasPlataforma.js";
 import { criarRotasFinanceiroV2 } from "./rotas.js";
 
 export { criarRotasFinanceiroV2 } from "./rotas.js";
@@ -47,32 +47,33 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
     habilitado: cfg.habilitado,
     escritaHabilitada: cfg.habilitado && cfg.escritaHabilitada === true,
     homologacaoHabilitada: cfg.habilitado && cfg.homologacaoHabilitada === true,
+    // ativação (administrador inicial + liberação da unidade): ligar SÓ para ativar e desligar em seguida
+    provisionamentoHabilitado: cfg.habilitado && env.FV2_PROVISIONAMENTO_HABILITADO === "1",
     registrar,
     dependencias: () => {
-      const pool = new pg.Pool({ connectionString: cfg.appUrl, max: cfg.poolMax, idleTimeoutMillis: 30000, ssl: cfg.ca ? { ca: cfg.ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
+      const ssl = cfg.ca ? { ca: cfg.ca, rejectUnauthorized: true } : { rejectUnauthorized: true };
+      const pool = new pg.Pool({ connectionString: cfg.appUrl, max: cfg.poolMax, idleTimeoutMillis: 30000, ssl });
       pool.on("error", () => {});
       const obterUsuario = async (token) => {
         const { data, error } = await supabase.auth.getUser(token);
         return error ? null : data?.user ?? null;
       };
+      const mfa = criarMfaPeloProvedor({ obterUsuario });
       let sessoes;
+      let poolAutoridade = null;
       if (cfg.modo === "local") {
         // pool PRÓPRIO da autoridade (outro papel de login, máx. 2 conexões) — nunca o pool da aplicação
-        const poolAutoridade = new pg.Pool({ connectionString: cfg.autoridadeUrl, max: 2, idleTimeoutMillis: 30000, ssl: cfg.ca ? { ca: cfg.ca, rejectUnauthorized: true } : { rejectUnauthorized: true } });
+        poolAutoridade = new pg.Pool({ connectionString: cfg.autoridadeUrl, max: 2, idleTimeoutMillis: 30000, ssl });
         poolAutoridade.on("error", () => {});
-        sessoes = criarAutoridadeCoLocalizada({ poolAutoridade, obterUsuario, mfa: criarMfaPeloProvedor({ obterUsuario }), registrar });
+        sessoes = criarAutoridadeCoLocalizada({ poolAutoridade, obterUsuario, mfa, registrar });
       } else {
         sessoes = criarClienteDoGateway({ url: cfg.gatewayUrl, chave: cfg.gatewayChave });
       }
       const repositorio = criarRepositorioPostgres({ pool, sessoes });
       const vinculos = criarVinculosDaPlataforma(supabase);
-      const adaptador = criarAdaptadorDaPlataforma({
-        liberacoes: criarLiberacoesPostgres({ poolApp: pool }),
-        vinculos,
-        concessoes: criarConcessoesDaSessao({ repositorio }),
-        mfa: criarMfaPeloProvedor({ obterUsuario }),
-      });
-      return { repositorio, adaptador, vinculos };
+      const liberacoes = criarLiberacoesPostgres({ poolApp: pool });
+      const adaptador = criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
+      return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, administracao: criarAdministracaoDaPlataforma(supabase) };
     },
   });
 }

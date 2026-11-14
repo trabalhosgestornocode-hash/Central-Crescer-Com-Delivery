@@ -48,6 +48,29 @@ export function criarEmissorDeSessoes({ poolAutoridade, obterUsuario, mfa, relog
         return recusa(403, "BANCO_RECUSOU", { codigoBanco: e?.code ?? null });
       }
     },
+    /**
+     * Sessão de PROVISIONAMENTO do administrador financeiro inicial: o atestante é a conta do token (validado no
+     * provedor), com 2º fator RECENTE comprovado; a empresa é a da sessão; o banco grava e audita.
+     */
+    async emitirProvisionamento({ sessao, ato, token }) {
+      const id = await conferirIdentidade(token, sessao);
+      if (!id.ok) return recusa(401, id.motivo);
+      const prova = await mfa.provar({ tokenDeAcesso: token, contaId: id.contaId }).catch(() => ({ ok: false }));
+      if (!prova?.ok) return recusa(403, prova?.motivo ?? "SEM_PROVA_DE_SEGUNDO_FATOR", { finalidade: "PROVISIONAMENTO" });
+      if (!ato || String(ato.atestanteId ?? "").toLowerCase() !== id.contaId) return recusa(403, "ATESTANTE_DIFERENTE_DO_TOKEN");
+      if (String(ato.organizacaoId ?? "").toLowerCase() !== String(sessao?.tenant?.organizacaoId ?? "").toLowerCase()
+        || String(ato.unidadeId ?? "").toLowerCase() !== String(sessao?.tenant?.unidadeId ?? "").toLowerCase()) return recusa(403, "ESCOPO_DIFERENTE_DA_SESSAO");
+      try {
+        const { rows } = await poolAutoridade.query(
+          "select fv2_abrir_sessao_de_provisionamento($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::jsonb, $6::text, $7::text, $8::text) as t",
+          [ato.atestanteId, ato.usuarioId, ato.organizacaoId, ato.unidadeId, JSON.stringify(ato.acoes ?? []), "aal2", ato.justificativa, ato.evidencia],
+        );
+        log({ tipo: "PROVISIONAMENTO_EMITIDO", organizacaoId: ato.organizacaoId, unidadeId: ato.unidadeId, pessoa: ato.usuarioId, atestante: id.contaId });
+        return { ok: true, token: rows[0].t };
+      } catch (e) {
+        return recusa(403, "BANCO_RECUSOU", { codigoBanco: e?.code ?? null });
+      }
+    },
     conferirIdentidade,
     log,
     recusa,

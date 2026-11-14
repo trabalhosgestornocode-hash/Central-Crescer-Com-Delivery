@@ -14,6 +14,7 @@ export function traduzirEndereco(url) {
   const u = String(url);
   if (u === "/api/fv2/sessao" || u.startsWith("/api/fv2/sessao?")) return `/api/v1/financeiro-v2/sessao${u.slice("/api/fv2/sessao".length)}`;
   if (u.startsWith("/api/fv2/acoes/")) return `/api/v1/financeiro-v2/acoes/${u.slice("/api/fv2/acoes/".length)}`;
+  if (u.startsWith("/api/fv2/administracao/")) return `/api/v1/financeiro-v2/administracao/${u.slice("/api/fv2/administracao/".length)}`;
   if (u.startsWith("/api/fv2/login") || u.startsWith("/api/fv2/logout") || u.startsWith("/api/fv2/documentos/arquivo")) return null;
   if (u.startsWith("/api/fv2/")) return `/api/v1/financeiro-v2/api/${u.slice("/api/fv2/".length)}`;
   return null;

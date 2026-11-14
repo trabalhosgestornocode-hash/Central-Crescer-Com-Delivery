@@ -67,29 +67,42 @@ pessoas com concessão e contornar no código o 2º fator das ações sensíveis
 | `FV2_APP_POOL_MAX` | 4 (autoridade: 2 fixo) |
 | `FV2_ESCRITA_HABILITADA` | `0` (só consulta) |
 | `FV2_HOMOLOGACAO_HABILITADA` | `0` (matriz 24a não aprovada) |
+| `FV2_PROVISIONAMENTO_HABILITADO` | `0`; `1` só durante a ativação (§ 5.2) |
 
 Faltando qualquer variável, o v2 **fica desligado** (registro `FV2_DESLIGADO_POR_CONFIGURACAO`).
 
 ## 5. Ativação exclusiva do Açaí no Grau Saci 🔒
 
 ### 5.1 Publicação desligada
-- [ ] Deploy do backend com `FV2_HABILITADO=0` (o menu segue idêntico; `/api/v1/financeiro-v2/status` responde "desligado").
+- [ ] Deploy do `crescercomdelivery` com `FV2_HABILITADO=0` (o menu segue idêntico; `/api/v1/financeiro-v2/status`
+      responde "desligado"; nenhum pool é aberto).
 - [ ] Demais módulos conferidos (login, seleção de unidade, Dashboard Financeiro atual, checklist, iFood, Foody).
 
-### 5.2 Ligar para consulta
-- [ ] IDs reais de empresa e unidade obtidos da **sessão autenticada** de quem vai liberar (nunca digitados de memória).
-- [ ] `FV2_HABILITADO=1` com gateway no ar (`GET /saude` do gateway pela rede privada).
-- [ ] Administradora financeira indicada (conta pessoal, TOTP ativo, vínculo com a unidade) — provisionamento com
-      atestante administrador da empresa, TOTP recente (doc 26, § 4).
-- [ ] Liberação da **empresa e só desta unidade** pela autoridade, com TOTP recente (`fv2_liberacao_alterar`).
-- [ ] Verificação final (§ 7) sem criar nenhum lançamento.
+### 5.2 Ativação (procedimento implementado e testado: página `/financeiro-v2/ativacao.html`)
+1. 🔒 Variáveis do § 4 + `FV2_HABILITADO=1` + `FV2_PROVISIONAMENTO_HABILITADO=1` (só durante a ativação).
+2. O **administrador da empresa** (vínculo `organization_admin`) entra na plataforma **com TOTP** e escolhe a unidade
+   Açaí no Grau Saci. Abre `/financeiro-v2/ativacao.html`: a página mostra empresa e unidade **da sessão** com os IDs.
+3. 🔒 **Escopo da unidade** (como `postgres`): `node backend/scripts/fv2/pacoteProducao.mjs --escopo <empresa> <unidade>`
+   com os IDs da página → SQL que confere a unidade na empresa (`public.unidades`) e registra o par; conferir o sha256
+   impresso antes de aplicar.
+4. Na página, o administrador escolhe a **pessoa** (conta pessoal, vínculo com a unidade, TOTP ativo; nunca ele mesmo;
+   conta compartilhada aparece bloqueada), informa justificativa e evidência e **provisiona** a administração inicial.
+   O núcleo recusa se a unidade já tiver administrador; o banco grava e audita.
+5. Na mesma página, **libera esta unidade** (TOTP dos últimos 10 min). Libera a empresa (se ainda não estava) e SÓ esta
+   unidade; as demais seguem no painel atual.
+6. 🔒 `FV2_PROVISIONAMENTO_HABILITADO=0` de novo.
+7. Verificação final (§ 7) sem criar lançamento.
 
-### 5.3 Abertura financeira (sem importar saldos antigos; nada começa em zero presumido)
-- [ ] Plano de contas implantado do modelo (`/acoes/configuracoes/implantar-plano`).
-- [ ] Contas bancárias e caixa cadastrados; **saldo de abertura** de cada uma registrado com o extrato do último dia
-      antes da competência inicial (sem extrato = "saldo desconhecido" visível, nunca zero).
-- [ ] Contas a pagar/receber em aberto na data de corte registradas a partir dos documentos de origem.
-- [ ] Escrita (`FV2_ESCRITA_HABILITADA=1`) só depois do TOTP comprovado em login real e com a pessoa provisionada.
+### 5.3 Abertura financeira (fase seguinte; nada começa em zero presumido)
+- [ ] Plano de contas do modelo, contas e saldos de abertura com extrato, títulos em aberto por documento.
+- [ ] Escrita (`FV2_ESCRITA_HABILITADA=1`) só depois do TOTP comprovado em login real e da decisão sobre o risco do § 4.
+
+### Riscos residuais desta ativação (registrados, não resolvidos por variável)
+- `FV2_AUTORIDADE_COLOCALIZADA_ACEITA=1` **não é prova de segurança**: é o registro de que o proprietário aceitou que a
+  credencial da autoridade fique no mesmo processo do backend comum. Comprometido esse processo, a ativação e o 2º
+  fator podem ser contornados no código, e sessões de pessoas com concessão podem ser abertas.
+- A prova de TOTP depende do carimbo `amr` do Supabase; ainda **não comprovada com login real** (fica para o passo 5.2.2).
+- O `postgres`/`supabase_admin`/editor SQL leem os dados do v2 (aceito em 14/11).
 
 ## 6. Reversão (sem apagar nada)
 

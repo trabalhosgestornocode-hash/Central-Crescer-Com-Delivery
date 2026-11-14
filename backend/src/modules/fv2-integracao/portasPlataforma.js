@@ -38,6 +38,29 @@ export function criarVinculosDaPlataforma(db) {
 }
 
 /**
+ * ADMINISTRAÇÃO da plataforma para o atesto do administrador financeiro inicial: só quem é ADMINISTRADOR DA EMPRESA
+ * (vínculo ativo em usuarios_organizacoes com papel organization_admin). Superadministrador NÃO conta por ser superadmin.
+ */
+export function criarAdministracaoDaPlataforma(db) {
+  const vinculos = criarVinculosDaPlataforma(db);
+  return Object.freeze({
+    async autoridadeSobre({ contaId, organizacaoId }) {
+      const r = exigir(await db.from("usuarios_organizacoes").select("papel, ativo").eq("usuario_id", contaId).eq("organizacao_id", organizacaoId).eq("ativo", true)) ?? [];
+      return r.some((x) => x?.ativo === true && x?.papel === "organization_admin") ? { tipo: "ADMIN_EMPRESA" } : null;
+    },
+    contaDoPerfil: vinculos.contaDoPerfil,
+    /** Pessoas com vínculo ATIVO na unidade (candidatas; a escolha é humana). */
+    async pessoasDaUnidade({ unidadeId }) {
+      const linhas = exigir(await db.from("usuarios_unidades").select("perfil_id, ativo").eq("unidade_id", unidadeId).eq("ativo", true)) ?? [];
+      const ids = [...new Set(linhas.filter((l) => l?.perfil_id).map((l) => String(l.perfil_id).toLowerCase()))].slice(0, 200);
+      if (!ids.length) return [];
+      const perfis = exigir(await db.from("perfis_operacionais").select("id, nome, conta_id, ativo").in("id", ids)) ?? [];
+      return perfis.filter((p) => p.ativo === true).map((p) => ({ perfilId: String(p.id).toLowerCase(), nome: p.nome ?? null, contaId: String(p.conta_id).toLowerCase() }));
+    },
+  });
+}
+
+/**
  * Concessões do v2 lidas COMO a própria pessoa, só na unidade da SESSÃO corrente (o gateway só emite sessão de banco
  * para essa unidade). Sem concessão ativa o banco recusa a sessão → "nenhuma concessão".
  */

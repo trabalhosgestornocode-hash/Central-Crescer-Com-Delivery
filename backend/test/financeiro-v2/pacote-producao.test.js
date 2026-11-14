@@ -66,3 +66,16 @@ test("10 — inventario.sql é só leitura", () => {
   const sql = ler("inventario.sql").replace(/--[^\n]*/g, "");
   assert.doesNotMatch(sql, /\b(insert|update|delete|drop|alter|create|grant|revoke|truncate)\b/i);
 });
+
+test("10 — escopo da unidade (passo da ativação): só UUIDs, confere a unidade na empresa e o v2 instalado; idempotente; não libera nada", async () => {
+  const { sqlEscopoDaUnidade } = await import("../../scripts/fv2/pacoteProducao.mjs");
+  const O = "aaaaaaaa-0000-4000-8000-000000000001";
+  const U = "aaaaaaaa-0000-4000-8000-0000000000a1";
+  const sql = sqlEscopoDaUnidade(O, U);
+  assert.match(sql, /from public\.unidades where id = 'aaaaaaaa-0000-4000-8000-0000000000a1'::uuid and organizacao_id = 'aaaaaaaa-0000-4000-8000-000000000001'::uuid/);
+  assert.match(sql, /on conflict \(organizacao_id, unidade_id\) do nothing/);
+  assert.doesNotMatch(sql, /fv2_liberacao|update|delete|drop|truncate/i);
+  assert.throws(() => sqlEscopoDaUnidade("x", U));
+  assert.throws(() => sqlEscopoDaUnidade(O, "'; drop table x; --"));
+  assert.throws(() => sqlEscopoDaUnidade(O, U, "rótulo'; drop"));
+});

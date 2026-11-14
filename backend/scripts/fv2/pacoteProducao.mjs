@@ -19,6 +19,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { ESQUEMA_FINANCEIRO, PASTA_DE_MIGRACOES, listarMigracoes, sqlSemExecucaoPublica, textoAplicado } from "./ambiente.mjs";
 
 const S = ESQUEMA_FINANCEIRO;
@@ -191,8 +192,39 @@ revoke usage on schema ${S} from fv2_app, fv2_autoridade;
 -- Reativar: grant usage on schema ${S} to fv2_app, fv2_autoridade; alter role <papel de conexão> login;
 `;
 
+/**
+ * ESCOPO DA UNIDADE (passo da ativação, como `postgres`): registra o par empresa+unidade em que o v2 pode operar. Os
+ * IDs vêm da página de ativação (contexto da SESSÃO do administrador), nunca digitados de memória; o SQL confere que a
+ * unidade existe e pertence à empresa na tabela da plataforma, e é idempotente. Não libera nada (a liberação é outro ato).
+ */
+export function sqlEscopoDaUnidade(organizacaoId, unidadeId, rotulo = "Açaí no Grau Saci") {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(organizacaoId) || !uuid.test(unidadeId)) throw new Error("IDs de empresa/unidade inválidos.");
+  if (!/^[\p{L}\p{N} ().-]{1,120}$/u.test(rotulo)) throw new Error("Rótulo inválido.");
+  const o = organizacaoId.toLowerCase();
+  const u = unidadeId.toLowerCase();
+  return `-- Financeiro v2 — ESCOPO da unidade ${u} (empresa ${o}). Uma transação, como postgres.
+do $$ begin
+  if not exists (select 1 from public.unidades where id = '${u}'::uuid and organizacao_id = '${o}'::uuid) then
+    raise exception 'FV2 escopo: a unidade não existe ou não pertence a esta empresa — nada foi feito';
+  end if;
+  if (select count(*) from financeiro_v2.fv2_migracao) < 21 then raise exception 'FV2 escopo: o Financeiro v2 não está instalado'; end if;
+end $$;
+insert into financeiro_v2.fv2_escopo (organizacao_id, unidade_id, rotulo) values ('${o}'::uuid, '${u}'::uuid, ${literal(rotulo)})
+  on conflict (organizacao_id, unidade_id) do nothing;
+select organizacao_id, unidade_id, rotulo, criado_em from financeiro_v2.fv2_escopo where organizacao_id = '${o}'::uuid and unidade_id = '${u}'::uuid;
+`;
+}
+
+const executadoDireto = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (executadoDireto && process.argv[2] === "--escopo") {
+  const t = sqlEscopoDaUnidade(process.argv[3], process.argv[4]);
+  process.stdout.write(`${t}-- sha256 ${sha(t)}\n`);
+  process.exit(0);
+}
+
 const arquivos = { "instalar.sql": instalar(), "inventario.sql": INVENTARIO, "desativar.sql": DESATIVAR };
-if (process.argv.includes("--conferir")) {
+if (!executadoDireto) { /* importado (testes): só exporta as funções */ } else if (process.argv.includes("--conferir")) {
   const fora = Object.entries(arquivos).filter(([n, t]) => !existsSync(join(DESTINO, n)) || readFileSync(join(DESTINO, n), "utf8") !== t).map(([n]) => n);
   if (fora.length) { process.stderr.write(`Desatualizados: ${fora.join(", ")} (rode node scripts/fv2/pacoteProducao.mjs)\n`); process.exit(1); }
   process.stdout.write("Pacote de produção em dia.\n");

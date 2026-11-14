@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="pt-BR" data-modo="plataforma">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ativação do Financeiro v2</title>
+  <link rel="stylesheet" href="fv2.css">
+</head>
+<body>
+  <main class="principal ativacao" id="conteudo" aria-busy="true">
+    <header class="cabecalho"><div><h1>Ativação do Financeiro v2</h1>
+      <p class="subtitulo">Procedimento do administrador da empresa. Exige ter entrado com o código do autenticador (TOTP) nos últimos 10 minutos.</p></div></header>
+    <section class="card" aria-labelledby="t-ctx"><h2 id="t-ctx">Empresa e unidade da sua sessão</h2><div id="ctx" role="status">Carregando…</div></section>
+    <section class="card" aria-labelledby="t-prov"><h2 id="t-prov">1. Administração financeira inicial</h2>
+      <p>Escolha a pessoa (conta pessoal, com vínculo nesta unidade). Você não pode escolher a si mesmo; a unidade não pode já ter administrador.</p>
+      <form id="form-prov">
+        <label>Pessoa <select name="perfilId" required></select></label>
+        <label>Justificativa <textarea name="justificativa" minlength="20" maxlength="500" required></textarea></label>
+        <label>Evidência (ex.: ata, mensagem de aprovação) <input name="evidencia" maxlength="300" required></label>
+        <label><input type="checkbox" name="confirmar" required> Confirmo a indicação (fica registrada com meu nome).</label>
+        <button type="submit">Provisionar administração inicial</button>
+        <p class="resultado-acao" role="status"></p>
+      </form>
+    </section>
+    <section class="card" aria-labelledby="t-lib"><h2 id="t-lib">2. Liberação desta unidade</h2>
+      <p>Libera o Financeiro v2 só nesta unidade (as demais continuam no painel atual). Desligar volta ao painel atual sem apagar nada.</p>
+      <form id="form-lib">
+        <label>Justificativa <textarea name="justificativa" minlength="20" maxlength="500" required></textarea></label>
+        <label><input type="checkbox" name="confirmar" required> Confirmo.</label>
+        <button type="submit" data-ativa="true">Liberar esta unidade</button>
+        <button type="submit" data-ativa="false">Desligar esta unidade</button>
+        <p class="resultado-acao" role="status"></p>
+      </form>
+    </section>
+    <p><a href="/">Voltar para a plataforma</a></p>
+  </main>
+  <script type="module" src="ativacao.js"></script>
+</body>
+</html>

@@ -14,6 +14,7 @@ test("10 — modo plataforma só com ?modo=plataforma; endereços da demonstraç
   assert.equal(traduzirEndereco("/api/fv2/dre?competencia=2026-10&unidade=x"), "/api/v1/financeiro-v2/api/dre?competencia=2026-10&unidade=x");
   assert.equal(traduzirEndereco("/api/fv2/conferencias/pendencias?competencia=2026-10"), "/api/v1/financeiro-v2/api/conferencias/pendencias?competencia=2026-10");
   assert.equal(traduzirEndereco("/api/fv2/acoes/obrigacoes/registrar"), "/api/v1/financeiro-v2/acoes/obrigacoes/registrar");
+  assert.equal(traduzirEndereco("/api/fv2/administracao/contexto"), "/api/v1/financeiro-v2/administracao/contexto");
   for (const u of ["/api/fv2/login", "/api/fv2/logout", "/api/fv2/documentos/arquivo?id=1", "/api/v1/outra", "https://exemplo.test/api/fv2/dre"]) assert.equal(traduzirEndereco(u), null, u);
 });
 

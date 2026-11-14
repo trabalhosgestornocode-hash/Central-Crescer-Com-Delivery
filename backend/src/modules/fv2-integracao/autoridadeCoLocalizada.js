@@ -29,9 +29,13 @@ export function criarAutoridadeCoLocalizada(p) {
       if (!r.ok) throw erro(r);
       return r.token;
     },
-    // Provisionamento e liberação NÃO passam por aqui nesta fase (consulta): ficam no procedimento operacional próprio.
-    async emitirProvisionamento() {
-      throw erro({ status: 403, motivo: "PROVISIONAMENTO_FORA_DA_APLICACAO" });
+    // Provisionamento do administrador inicial (rota própria, chave FV2_PROVISIONAMENTO_HABILITADO): mesma regra do gateway.
+    async emitirProvisionamento(ato) {
+      const id = identidadeDaRequisicao();
+      if (!id?.tokenDeAcesso || !id?.sessao) throw erro({ status: 401, motivo: "SEM_IDENTIDADE_DA_REQUISICAO" });
+      const r = await emissor.emitirProvisionamento({ sessao: id.sessao, ato, token: id.tokenDeAcesso });
+      if (!r.ok) throw erro(r);
+      return r.token;
     },
   });
 }
