@@ -148,9 +148,13 @@ test("5, 6, 12 — identidade forjada, variáveis manipuladas e atalhos de auten
   const { rows: [papeis] } = await dono.query(`select (select rolbypassrls from pg_roles where rolname = 'fv2_app') as app_bypass,
       (select rolbypassrls from pg_roles where rolname = 'fv2_guardiao') as guardiao_bypass,
       (select rolcanlogin from pg_roles where rolname = 'fv2_guardiao') as guardiao_login,
-      (select count(*)::int from pg_auth_members m join pg_roles r on r.oid = m.roleid where r.rolname = 'fv2_guardiao') as membros_guardiao,
+      -- 10: participação UTILIZÁVEL (SET ou INHERIT) no guardião = nenhuma. O migrador não superusuário fica com ADMIN
+      -- implícito do PostgreSQL 16+ (sem SET/INHERIT), como o papel postgres do Supabase — conferido logo abaixo (C5, doc 25).
+      (select count(*)::int from pg_auth_members m join pg_roles r on r.oid = m.roleid where r.rolname = 'fv2_guardiao' and (m.set_option or m.inherit_option)) as membros_guardiao,
       has_schema_privilege('fv2_app', current_schema(), 'CREATE') as app_cria`);
   assert.deepEqual(papeis, { app_bypass: false, guardiao_bypass: false, guardiao_login: false, membros_guardiao: 0, app_cria: false });
+  const { rows: soAdmin } = await dono.query("select u.rolname, m.admin_option from pg_auth_members m join pg_roles r on r.oid = m.roleid join pg_roles u on u.oid = m.member where r.rolname = 'fv2_guardiao'");
+  assert.deepEqual(soAdmin.filter((x) => !(x.rolname === 'fv2_teste_migrador' && x.admin_option)), [], 'só o migrador, e só com ADMIN');
   assert.ok(contaB.id && interno.pool);
 });
 

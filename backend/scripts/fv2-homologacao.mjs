@@ -24,7 +24,7 @@ import { homedir } from "node:os";
 import { dirname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as m from "../src/modules/financeiro-v2/index.js";
-import { abrirPoolSeguro, lerAmbiente, urlDoBanco } from "./fv2/ambiente.mjs";
+import { abrirPoolSeguro, fixarSearchPathDoBanco, lerAmbiente, urlDoBanco } from "./fv2/ambiente.mjs";
 import { ORG, UNIDADES, USUARIOS, criarDemo, pdfSintetico } from "./fv2/demoInterface.mjs";
 
 const PASTA_HOMOLOGACAO = process.env.FV2_HOMOLOGACAO_DIR || join(process.env.LOCALAPPDATA || join(homedir(), ".local", "share"), "fv2-homologacao");
@@ -45,6 +45,7 @@ async function preparar() {
   const banco = `fv2_teste_homologacao_${randomBytes(4).toString("hex")}`; // a guarda de destino só aceita bancos de teste
   const controle = await abrirPoolSeguro(a.urlAdmin, a.marcador, { max: 1 });
   await controle.query(`create database ${banco} template ${a.bancoModelo}`);
+  await fixarSearchPathDoBanco(controle, banco);
   await controle.query(`comment on database ${banco} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
   await controle.end();
   const dono = await abrirPoolSeguro(urlDoBanco(a.urlAdmin, banco), a.marcador, { max: 1 });

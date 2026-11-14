@@ -21,7 +21,7 @@ import { randomBytes } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { basename, join } from "node:path";
-import { abrirPoolSeguro, aplicarMigracoes, arquivoDoAmbiente, lerAmbiente, listarMigracoes, pastaDoAmbiente, urlDoBanco } from "./fv2/ambiente.mjs";
+import { ESQUEMA_FINANCEIRO, abrirPoolSeguro, aplicarMigracoes, arquivoDoAmbiente, lerAmbiente, listarMigracoes, pastaDoAmbiente, urlDoBanco } from "./fv2/ambiente.mjs";
 
 const ENDERECO = "127.0.0.1";
 const PORTA = process.env.FV2_PG_PORTA || "54329";
@@ -109,7 +109,9 @@ async function iniciar() {
   if (!ambiente) parar(`ambiente sem ${arquivoDoAmbiente()}. Rode "destruir" e depois "iniciar".`);
 
   // Banco-modelo: um por conjunto de migrações. Os testes clonam o modelo; nunca escrevem nele.
-  const assinatura = listarMigracoes().map((m) => `${m.nome}:${m.sha256}`).join("|");
+  // 10 (produção): o modelo é migrado no schema DEDICADO por um papel SEM superusuário (CREATEROLE + BYPASSRLS, como o
+  // `postgres` do Supabase). O aplicador e o schema entram na assinatura: mudou → modelo novo.
+  const assinatura = `schema:${ESQUEMA_FINANCEIRO}|migrador:fv2_teste_migrador|aplicador:2|${listarMigracoes().map((m) => `${m.nome}:${m.sha256}`).join("|")}`;
   // 07B: papel de LOGIN da autoridade de sessões (o "gateway"), com credencial própria — separada da aplicação.
   if (!ambiente.urlAutoridade) {
     const controle = await abrirPoolSeguro(ambiente.urlAdmin, ambiente.marcador, { max: 1 });
@@ -123,10 +125,18 @@ async function iniciar() {
   if (ambiente.migracoes !== assinatura) {
     const controle = await abrirPoolSeguro(ambiente.urlAdmin, ambiente.marcador, { max: 1 });
     const modelo = `fv2_teste_modelo_${randomBytes(4).toString("hex")}`;
-    await controle.query(`create database ${modelo} template template0`);
+    const { rows: migrador } = await controle.query("select 1 from pg_roles where rolname = 'fv2_teste_migrador'");
+    if (!migrador.length) await controle.query("create role fv2_teste_migrador nologin nosuperuser createrole bypassrls");
+    // Papéis do módulo criados antes por um superusuário (ambientes antigos): o migrador recebe o mesmo ADMIN sem SET/
+    // INHERIT que o PostgreSQL 16+ dá a quem cria o papel — nada além do que teria num ambiente novo.
+    for (const r of ["fv2_app", "fv2_autoridade", "fv2_guardiao"]) {
+      const { rows } = await controle.query("select 1 from pg_roles where rolname = $1", [r]);
+      if (rows.length) await controle.query(`grant ${r} to fv2_teste_migrador with admin option, inherit false, set false`);
+    }
+    await controle.query(`create database ${modelo} owner fv2_teste_migrador template template0`);
     await controle.query(`comment on database ${modelo} is 'FV2_ISOLADO_TESTE:${ambiente.marcador}'`);
     const noModelo = await abrirPoolSeguro(urlDoBanco(ambiente.urlAdmin, modelo), ambiente.marcador, { max: 1 });
-    const aplicadas = await aplicarMigracoes(noModelo);
+    const aplicadas = await aplicarMigracoes(noModelo, { papel: "fv2_teste_migrador" });
     await noModelo.query("grant fv2_app to fv2_teste_app");
     await noModelo.query("grant fv2_autoridade to fv2_teste_autoridade");
     await noModelo.end();

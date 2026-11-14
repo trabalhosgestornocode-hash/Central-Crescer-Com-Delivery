@@ -8,7 +8,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CODIGO, criarCofreDisco, criarNucleoFinanceiro, criarRepositorioPostgres } from "../../src/modules/financeiro-v2/index.js";
-import { urlDoBanco } from "../../scripts/fv2/ambiente.mjs";
+import { fixarSearchPathDoBanco, urlDoBanco } from "../../scripts/fv2/ambiente.mjs";
 import { AGORA, ESCOPOS_PADRAO, ctx, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida } from "./helpers/cenario.js";
 import { abrirPool, ambiente, criarAutoridadeDeTeste, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 
@@ -57,6 +57,9 @@ test("08 — backup e restauração do banco sintético: tudo volta, inclusive a
   const adm = await abrirPool(a.urlAdmin, { max: 1 });
   await adm.query(`create database ${destino} template template0`);
   await adm.query(`comment on database ${destino} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
+  // 10: o módulo vive no schema dedicado; o banco restaurado precisa do mesmo search_path (em produção ele está nos
+  // papéis de login do módulo, que não fazem parte do dump)
+  await fixarSearchPathDoBanco(adm, destino);
   rodar(pgRestore, ["--no-owner", "--exit-on-error"], urlDoBanco(a.urlAdmin, destino), arquivo);
   const repoRest = criarRepositorioPostgres({ pool: await abrirPool(urlDoBanco(a.urlApp, destino)), sessoes: criarAutoridadeDeTeste({ urlAutoridade: urlDoBanco(a.urlAutoridade, destino), urlAdmin: urlDoBanco(a.urlAdmin, destino) }) });
   const nRest = criarNucleoFinanceiro({ repositorio: repoRest, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA });

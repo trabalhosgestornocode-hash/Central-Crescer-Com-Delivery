@@ -3,12 +3,12 @@
 // tentando contornar o núcleo — o banco tem de recusar sozinho. Dados sintéticos.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CODIGO } from "../../src/modules/financeiro-v2/index.js";
-import { PASTA_DE_MIGRACOES, aplicarMigracoes, listarMigracoes } from "../../scripts/fv2/ambiente.mjs";
+import { PASTA_DE_MIGRACOES, aplicarMigracoes, listarMigracoes, textoAplicado } from "../../scripts/fv2/ambiente.mjs";
 import { ESCOPOS_PADRAO, ORG_A, ORG_B, UNI_A, UNI_B, USUARIO, ctx, montar, obrigacao, prepararHomologacao, rejeita, saida, sha } from "./helpers/cenario.js";
 import { abrirPool, criarBancoDeTeste, motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
@@ -64,16 +64,21 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
 
   assert.deepEqual(await aplicarMigracoes(dono), listarMigracoes().map((m) => m.nome));
   assert.deepEqual(await aplicarMigracoes(dono), []); // segunda vez: nada a fazer
-  const tabelas = (await dono.query("select table_name from information_schema.tables where table_schema = 'public' and table_name like 'fv2\\_%' order by 1")).rows.map((r) => r.table_name);
+  // 10: tudo no schema DEDICADO; nada no public da plataforma
+  assert.equal((await dono.query("select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name like 'fv2\\_%'")).rows[0].n, 0);
+  const tabelas = (await dono.query("select table_name from information_schema.tables where table_schema = 'financeiro_v2' and table_name like 'fv2\\_%' order by 1")).rows.map((r) => r.table_name);
   assert.deepEqual(tabelas, [
     "fv2_ajuste", "fv2_atribuicao_pendencia", "fv2_auditoria_concessao", "fv2_canal_processador", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_configuracao_unidade", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
     "fv2_estorno", "fv2_historico", "fv2_importacao", "fv2_lancamento", "fv2_liberacao", "fv2_liberacao_historico", "fv2_liquidacao", "fv2_migracao", "fv2_movimentacao", "fv2_obrigacao",
     "fv2_pagamento_venda", "fv2_proposta", "fv2_provisionamento_inicial", "fv2_recebivel", "fv2_registro_fonte", "fv2_saldo_conta", "fv2_sessao_banco", "fv2_sessao_caixa", "fv2_transferencia", "fv2_venda", "fv2_versao_fechamento", "fv2_vinculo_documental",
   ]);
   assert.deepEqual((await dono.query("select nome, sha256 from fv2_migracao order by 1")).rows, listarMigracoes().map((m) => ({ nome: m.nome, sha256: m.sha256 })));
+  // hash do texto EFETIVAMENTE aplicado (search_path adaptado) também fica registrado e é reproduzível
+  assert.deepEqual((await dono.query("select nome, sha256_aplicado from fv2_migracao order by 1")).rows,
+    listarMigracoes().map((m) => ({ nome: m.nome, sha256_aplicado: createHash("sha256").update(textoAplicado(m.sql)).digest("hex") })));
 
   // Dinheiro só em BIGINT de centavos: nenhuma coluna de ponto flutuante ou decimal nas tabelas do módulo.
-  const colunas = (await dono.query("select table_name, column_name, data_type from information_schema.columns where table_schema = 'public' and table_name like 'fv2\\_%'")).rows;
+  const colunas = (await dono.query("select table_name, column_name, data_type from information_schema.columns where table_schema = 'financeiro_v2' and table_name like 'fv2\\_%'")).rows;
   assert.deepEqual(colunas.filter((x) => ["numeric", "real", "double precision", "money"].includes(x.data_type)), []);
   const monetarias = colunas.filter((x) => x.column_name.endsWith("_centavos"));
   assert.ok(monetarias.length >= 20);

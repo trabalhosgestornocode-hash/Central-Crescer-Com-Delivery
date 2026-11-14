@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { after } from "node:test";
 import { ACAO, criarRepositorioPostgres } from "../../../src/modules/financeiro-v2/index.js";
-import { abrirPoolSeguro, lerAmbiente, urlDoBanco } from "../../../scripts/fv2/ambiente.mjs";
+import { abrirPoolSeguro, fixarSearchPathDoBanco, lerAmbiente, urlDoBanco } from "../../../scripts/fv2/ambiente.mjs";
 
 export const EM_POSTGRES = process.env.FV2_REPOSITORIO === "postgres";
 const EXIGIR = process.env.FV2_EXIGIR_BANCO === "1" || EM_POSTGRES;
@@ -60,6 +60,7 @@ export async function criarBancoDeTeste(escopos = [], { vazio = false } = {}) {
   const adm = await poolAdmin();
   await adm.query(`create database ${banco} template ${vazio ? "template0" : a.bancoModelo}`);
   await adm.query(`comment on database ${banco} is 'FV2_ISOLADO_TESTE:${a.marcador}'`);
+  await fixarSearchPathDoBanco(adm, banco); // o módulo vive no schema dedicado (financeiro_v2)
   const urlAdmin = urlDoBanco(a.urlAdmin, banco);
   const urlApp = urlDoBanco(a.urlApp, banco);
   if (!a.urlAutoridade) throw new Error("Financeiro v2: ambiente sem a credencial da autoridade (rode: node scripts/fv2-banco-teste.mjs iniciar).");

@@ -83,27 +83,89 @@ export function listarMigracoes(pasta = PASTA_DE_MIGRACOES) {
   });
 }
 
+/** Schema DEDICADO do Financeiro v2 (decisão de infraestrutura da 09C: projeto Supabase existente, schema próprio). */
+export const ESQUEMA_FINANCEIRO = "financeiro_v2";
 /**
- * Aplica as migrações pendentes, em ordem, cada uma em sua transação, e registra nome + hash.
- * Migração já aplicada é pulada; se o arquivo de uma migração já aplicada mudou, PARA (migração aplicada não se edita).
- * Só aceita pool vindo de abrirPoolSeguro — ou seja, só roda no ambiente isolado.
+ * search_path das conexões ao banco do módulo. No ambiente isolado vai no BANCO (cada teste usa um banco novo); em
+ * produção vai nos papéis de LOGIN do módulo (`alter role … set search_path`), nunca no banco inteiro da plataforma.
  */
-export async function aplicarMigracoes(poolSeguro, { pasta = PASTA_DE_MIGRACOES } = {}) {
+export const SEARCH_PATH_DO_MODULO = `${ESQUEMA_FINANCEIRO}, pg_catalog`;
+export const fixarSearchPathDoBanco = (poolControle, banco) => {
+  if (!/^fv2_[a-z0-9_]+$/.test(banco)) throw new Error("Financeiro v2: nome de banco inesperado.");
+  return poolControle.query(`alter database ${banco} set search_path = ${SEARCH_PATH_DO_MODULO}`);
+};
+const SEARCH_PATH_ORIGINAL = "set search_path = pg_catalog, public, pg_temp";
+const PAPEIS_DO_MODULO = ["fv2_app", "fv2_autoridade", "fv2_guardiao"];
+
+/**
+ * Texto EFETIVAMENTE aplicado de uma migração no schema dedicado (A2): o search_path fixo das funções protegidas passa a
+ * ser `pg_catalog, financeiro_v2, pg_temp`. O arquivo 0001–0021 não muda (o hash original continua sendo a identidade
+ * da migração); o hash do texto aplicado também é registrado. Sobrou "public" num search_path → erro (nunca adivinha).
+ */
+export function textoAplicado(sql, schema = ESQUEMA_FINANCEIRO) {
+  const t = sql.replaceAll(SEARCH_PATH_ORIGINAL, `set search_path = pg_catalog, ${schema}, pg_temp`);
+  if (/search_path\s*=\s*[^;$]*\bpublic\b/i.test(t)) throw new Error("Financeiro v2: migração com search_path apontando para public que o aplicador não sabe adaptar.");
+  return t;
+}
+
+/** A migração transfere ou recria função do guardião? (precisa da participação temporária A3) */
+async function tocaFuncoesDoGuardiao(cliente, sql) {
+  if (/owner\s+to\s+fv2_guardiao/i.test(sql)) return true;
+  const { rows } = await cliente.query("select distinct p.proname from pg_proc p join pg_roles r on r.oid = p.proowner where r.rolname = 'fv2_guardiao'");
+  return rows.some(({ proname }) => new RegExp(String.raw`create\s+or\s+replace\s+function\s+${proname}\s*\(`, "i").test(sql));
+}
+
+/**
+ * Aplica as migrações pendentes NO SCHEMA DEDICADO, em ordem, cada uma em sua transação, e registra nome + hash do
+ * arquivo + hash do texto aplicado. Migração já aplicada é pulada; se o arquivo de uma migração já aplicada mudou, PARA
+ * (migração aplicada não se edita). Só aceita pool vindo de abrirPoolSeguro — ou seja, só roda no ambiente isolado.
+ *
+ * Adaptações para um papel de migração SEM superusuário (o `postgres` do Supabase), comprovadas pela sonda da 09C:
+ *   A1 schema próprio sem acesso de PUBLIC; papéis do módulo criados antes, se faltarem (as migrações já usam "se não existir")
+ *   A2 search_path das funções protegidas no schema dedicado (textoAplicado)
+ *   A3 participação TEMPORÁRIA no guardião + CREATE temporário no schema, na MESMA transação da migração que transfere ou
+ *      recria função dele; revogados antes do commit (o guardião termina sem membro utilizável)
+ *   A4 USAGE no schema só para os três papéis do módulo
+ * `papel`: executa como esse papel (SET ROLE), para reproduzir os privilégios do migrador gerenciado.
+ */
+export async function aplicarMigracoes(poolSeguro, { pasta = PASTA_DE_MIGRACOES, schema = ESQUEMA_FINANCEIRO, papel = null } = {}) {
   if (!poolSeguro?.declarado) throw new Error("Financeiro v2: migrações só rodam por conexão conferida pela guarda de destino.");
+  if (!/^[a-z_][a-z0-9_]*$/.test(schema) || schema === "public") throw new Error("Financeiro v2: schema dedicado inválido.");
+  if (papel !== null && !/^[a-z_][a-z0-9_]*$/.test(papel)) throw new Error("Financeiro v2: papel de migração inválido.");
   const cliente = await poolSeguro.connect();
   const aplicadas = [];
   try {
-    await cliente.query("create table if not exists fv2_migracao (nome text primary key, sha256 text not null, aplicada_em timestamptz not null default now())");
+    if (papel) await cliente.query(`set role ${papel}`);
+    await cliente.query("begin");
+    try {
+      await cliente.query(`create schema if not exists ${schema}`);
+      await cliente.query(`revoke all on schema ${schema} from public`);
+      await cliente.query(`do $$ begin
+        ${PAPEIS_DO_MODULO.map((r) => `if not exists (select 1 from pg_roles where rolname = '${r}') then create role ${r} nologin; end if;`).join("\n        ")}
+      end $$`);
+      await cliente.query(`grant usage on schema ${schema} to ${PAPEIS_DO_MODULO.join(", ")}`);
+      await cliente.query(`create table if not exists ${schema}.fv2_migracao (nome text primary key, sha256 text not null, sha256_aplicado text, aplicada_em timestamptz not null default now())`);
+      await cliente.query("commit");
+    } catch (e) {
+      await cliente.query("rollback");
+      throw e;
+    }
+    await cliente.query(`set search_path = ${schema}, pg_catalog`);
     for (const m of listarMigracoes(pasta)) {
       const { rows } = await cliente.query("select sha256 from fv2_migracao where nome = $1", [m.nome]);
       if (rows.length) {
         if (rows[0].sha256 !== m.sha256) throw new Error(`Financeiro v2: a migração ${m.nome} já foi aplicada com outro conteúdo. Crie uma nova migração em vez de editar.`);
         continue;
       }
+      const sql = textoAplicado(m.sql, schema);
+      const sha256Aplicado = createHash("sha256").update(sql).digest("hex");
       await cliente.query("begin");
       try {
-        await cliente.query(m.sql);
-        await cliente.query("insert into fv2_migracao (nome, sha256) values ($1, $2)", [m.nome, m.sha256]);
+        const guardiao = await tocaFuncoesDoGuardiao(cliente, sql);
+        if (guardiao) await cliente.query(`grant fv2_guardiao to current_user; grant create on schema ${schema} to fv2_guardiao`);
+        await cliente.query(sql);
+        if (guardiao) await cliente.query(`revoke create on schema ${schema} from fv2_guardiao; revoke fv2_guardiao from current_user`);
+        await cliente.query("insert into fv2_migracao (nome, sha256, sha256_aplicado) values ($1, $2, $3)", [m.nome, m.sha256, sha256Aplicado]);
         await cliente.query("commit");
       } catch (e) {
         await cliente.query("rollback");
@@ -112,6 +174,8 @@ export async function aplicarMigracoes(poolSeguro, { pasta = PASTA_DE_MIGRACOES 
       aplicadas.push(m.nome);
     }
   } finally {
+    await cliente.query("reset search_path").catch(() => {});
+    if (papel) await cliente.query("reset role").catch(() => {});
     cliente.release();
   }
   return aplicadas;

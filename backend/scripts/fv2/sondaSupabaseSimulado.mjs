@@ -24,10 +24,10 @@
 // preparadas no doc 24 § 11 para quando houver autorização específica.
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listarMigracoes } from "./ambiente.mjs";
+import { PASTA_DE_MIGRACOES, listarMigracoes } from "./ambiente.mjs";
 
 const args = process.argv.slice(2);
 const PORTA = Number(args[args.indexOf("--porta") + 1] || 54339) || 54339;
@@ -80,7 +80,11 @@ const PAPEIS_SUPABASE = `
   create role authenticator login noinherit;
   grant anon, authenticated, service_role to authenticator;
   create role supabase_auth_admin nologin noinherit createrole;
-  create role supabase_storage_admin nologin noinherit createrole;`;
+  create role supabase_storage_admin nologin noinherit createrole;
+  -- 10: atributos CONFIRMADOS na inspeção só-leitura do projeto real (14/11/2026): o postgres herda pg_read_all_data e é
+  -- membro (ADMIN/INHERIT/SET) dos papéis da API; createrole_self_grant vazio; nenhum privilégio padrão global.
+  grant pg_read_all_data to postgres;
+  grant anon, authenticated, service_role, authenticator to postgres with admin option;`;
 
 async function montarPlataforma(admin, banco) {
   await admin.query(`create database ${banco} owner postgres`);
@@ -209,6 +213,10 @@ async function verificar(admin, banco, schema) {
   const leitura = await tentar(a, `select count(*) from ${schema}.fv2_lancamento`);
   await a.query("reset role");
   ok("C3", "service_role (BYPASSRLS) NÃO consegue ler fv2_lancamento", leitura !== null, leitura ?? "LEU a tabela (RLS não protege papel com BYPASSRLS)");
+  await a.query("set role authenticated");
+  const leituraAuth = await tentar(a, `select count(*) from ${schema}.fv2_lancamento`);
+  await a.query("reset role");
+  ok("C3b", "authenticated NÃO consegue ler fv2_lancamento", leituraAuth !== null, leituraAuth ?? "LEU a tabela");
   const funcs = (await a.query(`select p.oid::regprocedure::text f, p.proowner::regrole::text dono, p.proconfig::text cfg,
       exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x where x.grantee = 0 and x.privilege_type = 'EXECUTE') publico,
       (select string_agg(g.r, ',') from unnest(array['anon','authenticated','service_role']) g(r) where has_function_privilege(g.r, p.oid, 'execute')) comuns
@@ -267,6 +275,42 @@ try {
     saida.push(`  ${igual ? "OK      " : "FALHA   "} C0   objetos, ACLs, políticas, privilégios padrão e papéis do sistema atual INALTERADOS (sha256 ${antes.slice(0, 12)}…${igual ? "" : ` → ${depois.slice(0, 12)}…: ${diferencas(antes, depois).join(" ; ")}`})`);
     if (!res.erro) for (const x of await verificar(admin, banco, schema)) saida.push(`  ${x.situacao.padEnd(8)} ${x.id.padEnd(4)} ${x.texto}${x.detalhe ? ` — ${x.detalhe}` : ""}`);
     await admin.query(`drop database ${banco} with (force)`);
+    await limparPapeisFv2(admin);
+  }
+  // E4 — o PACOTE DE PRODUÇÃO (database/financeiro-v2/producao), exatamente como seria aplicado: uma transação, como
+  // `postgres`; foto do sistema atual antes/depois (inventario.sql); reaplicar tem de abortar; desativar não apaga nada.
+  {
+    const pasta = join(PASTA_DE_MIGRACOES, "..", "producao");
+    const [instalar, inventario, desativar] = ["instalar.sql", "inventario.sql", "desativar.sql"].map((n) => readFileSync(join(pasta, n), "utf8"));
+    const banco = "sim_pacote";
+    await montarPlataforma(admin, banco);
+    const p = await conectar("postgres", banco);
+    const foto = async () => (await p.query(inventario)).rows[0];
+    const antes = await foto();
+    let erro = null;
+    try { await p.query("begin"); await p.query(instalar); await p.query("commit"); } catch (e) { erro = `${e.code}: ${e.message}`; await p.query("rollback"); }
+    const depois = await foto();
+    saida.push("", "E4 — pacote de produção (instalar.sql numa transação, como postgres):");
+    saida.push(`  aplicação: ${erro ? `FALHOU → ${erro}` : "OK (pré e pós-condições do próprio pacote passaram)"}`);
+    saida.push(`  ${antes.sha256 === depois.sha256 ? "OK      " : "FALHA   "} C0   foto do sistema atual (inventario.sql, ${antes.itens} itens) idêntica antes/depois: ${antes.sha256.slice(0, 12)}…${antes.sha256 === depois.sha256 ? "" : ` → ${depois.sha256.slice(0, 12)}…`}`);
+    let segunda = null;
+    try { await p.query("begin"); await p.query(instalar); await p.query("commit"); } catch (e) { segunda = e.message; await p.query("rollback"); }
+    saida.push(`  ${segunda && /já existe/.test(segunda) ? "OK      " : "FALHA   "} R    reaplicar é recusado sem efeito: ${segunda ?? "NÃO abortou"}`);
+    if (!erro) for (const x of await verificar(admin, banco, SCHEMA)) saida.push(`  ${x.situacao.padEnd(8)} ${x.id.padEnd(4)} ${x.texto}${x.detalhe ? ` — ${x.detalhe}` : ""}`);
+    if (!erro) {
+      await p.query("create role fv2_app_login login password 'sintetica-descartavel' in role fv2_app");
+      const n0 = (await p.query("select count(*)::int n from financeiro_v2.fv2_migracao")).rows[0].n;
+      await p.query(desativar);
+      const login = (await p.query("select rolcanlogin from pg_roles where rolname = 'fv2_app_login'")).rows[0].rolcanlogin;
+      const uso = (await p.query("select has_schema_privilege('fv2_app', 'financeiro_v2', 'usage') u")).rows[0].u;
+      const n1 = (await p.query("select count(*)::int n from financeiro_v2.fv2_migracao")).rows[0].n;
+      saida.push(`  ${!login && !uso && n0 === n1 ? "OK      " : "FALHA   "} D    desativar.sql: login cortado=${!login}, USAGE retirado=${!uso}, objetos e registros preservados (${n1}/${n0})`);
+      const depoisDesativar = await foto();
+      saida.push(`  ${depoisDesativar.sha256 === antes.sha256 ? "OK      " : "FALHA   "} C0'  sistema atual intacto também depois da desativação`);
+    }
+    await p.end();
+    await admin.query(`drop database ${banco} with (force)`);
+    await tentar(admin, "drop role if exists fv2_app_login");
     await limparPapeisFv2(admin);
   }
   await admin.end();
