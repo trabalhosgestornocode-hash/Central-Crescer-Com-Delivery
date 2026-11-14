@@ -1,0 +1,224 @@
+// Operações ECONÔMICAS de títulos: o que a empresa deve e tem a receber. Nenhuma delas movimenta dinheiro.
+// Cada fato econômico gera UM lançamento; pagar ou receber depois (liquidação) nunca gera outro.
+// A natureza de cada lançamento vem da CATEGORIA do plano de contas — nunca do fato de ter sido "descontado do repasse".
+import { CODIGO, falhar } from "../dominio/erros.js";
+import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, NATUREZA_LANCAMENTO, SITUACAO_LANCAMENTO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
+import { ACAO } from "../dominio/contexto.js";
+import { ratear, somarLista, subtrair } from "../dominio/dinheiro.js";
+import { CATEGORIA_DESPESA_A_CLASSIFICAR, valorDoLancamentoDeAjuste } from "../dominio/planoDeContas.js";
+import { somarMeses } from "../dominio/tempo.js";
+import { aplicarAjuste } from "../dominio/titulos.js";
+import {
+  validarAjuste, validarCancelamentoObrigacao, validarCancelamentoRecebivel, validarConta, validarContraparte, validarCorrecaoLancamento,
+  validarCorrecaoObrigacao, validarObrigacao, validarRecebivel,
+} from "../contratos/comandos.js";
+import { tituloNovo } from "./base.js";
+
+export function operacoesEconomicas(b) {
+  /** Cancela os lançamentos nascidos de ajustes de um conjunto de títulos (juros, taxas, descontos). */
+  async function cancelarLancamentosDeAjustes(tx, cx, alvoTipo, ids, justificativa) {
+    for (const id of ids) {
+      for (const a of await tx.listar(cx, TIPO.AJUSTE, { onde: { alvoTipo, alvoId: id } })) {
+        if (a.lancamentoId) await b.cancelarLancamento(tx, cx, a.lancamentoId, justificativa);
+      }
+    }
+  }
+
+  return {
+    configurarContaFinanceira(ctx, entrada) {
+      const c = validarConta(entrada);
+      return b.executar(ctx, ACAO.CONFIGURAR, (cx, tx) => b.criar(tx, cx, TIPO.CONTA, { ...c, ativa: true }));
+    },
+
+    registrarContraparte(ctx, entrada) {
+      const c = validarContraparte(entrada);
+      return b.executar(ctx, ACAO.REGISTRAR, (cx, tx) => b.criar(tx, cx, TIPO.CONTRAPARTE, c));
+    },
+
+    /**
+     * Obrigação a pagar. Parcelada: UM lançamento pelo total e N obrigações cujos valores somam exatamente o total.
+     * A categoria decide a natureza: despesa/custo, dedução (tributo sobre venda) ou patrimonial (sem efeito no resultado).
+     */
+    registrarObrigacao(ctx, entrada) {
+      const c = validarObrigacao(entrada);
+      const impressao = JSON.stringify(c);
+      return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
+        const chave = b.chaveDe(c.fonte);
+        const existente = await b.jaRegistrado(tx, cx, TIPO.OBRIGACAO, chave ? `${chave}#1` : null, impressao);
+        if (existente) {
+          return {
+            lancamento: await tx.obter(cx, TIPO.LANCAMENTO, existente.lancamentoId),
+            obrigacoes: (await tx.listar(cx, TIPO.OBRIGACAO, { onde: { grupoId: existente.grupoId } })).sort((x, y) => x.parcela.numero - y.parcela.numero),
+            repetido: true,
+          };
+        }
+        await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
+        await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
+        await b.exigirDocumentos(tx, cx, c.documentoIds);
+        // "A classificar" é categoria do sistema: existe mesmo em plano implantado antes dela (criada sob demanda).
+        const categoria = c.categoria === CATEGORIA_DESPESA_A_CLASSIFICAR ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);
+        if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
+          falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
+        }
+        const grupoId = b.gerarId();
+        const lancamento = await b.lancar(tx, cx, categoria, {
+          valorCentavos: c.valorOriginalCentavos, moeda: c.moeda, descricao: c.descricao, dataOperacao: c.dataEmissao,
+          competencia: c.competencia, fonte: c.fonte, origem: { tipo: TIPO.OBRIGACAO, id: grupoId },
+        }, { documentado: c.documentoIds.length > 0 });
+        const valores = ratear(c.valorOriginalCentavos, Array(c.parcelas).fill(1));
+        const obrigacoes = [];
+        for (const [i, valor] of valores.entries()) {
+          obrigacoes.push(await b.criar(tx, cx, TIPO.OBRIGACAO, {
+            grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
+            competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: somarMeses(c.vencimento, i),
+            parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
+            chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
+          }));
+        }
+        return { lancamento, obrigacoes, repetido: false };
+      });
+    },
+
+    /**
+     * Recebível avulso (ex.: demonstrativo de repasse). NÃO gera receita — a receita nasce da venda.
+     * Cada RETENÇÃO gera UM lançamento na categoria informada: a natureza econômica é a da categoria
+     * (comissão = despesa comercial, taxa = despesa de recebimento, desconto comercial = dedução...).
+     * O lançamento fica marcado como `retidoNoRepasse`, o que permite a visão de faturamento líquido do canal
+     * sem contar o mesmo valor duas vezes no resultado.
+     */
+    registrarRecebivel(ctx, entrada) {
+      const c = validarRecebivel(entrada);
+      const impressao = JSON.stringify(c);
+      return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
+        const chave = b.chaveDe(c.fonte);
+        const existente = await b.jaRegistrado(tx, cx, TIPO.RECEBIVEL, chave, impressao);
+        if (existente) {
+          const lancamentosDeRetencao = await tx.listar(cx, TIPO.LANCAMENTO, (l) => l.origem?.tipo === TIPO.RECEBIVEL && l.origem.id === existente.id);
+          return { recebivel: existente, lancamentosDeRetencao, repetido: true };
+        }
+        await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
+        if (c.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
+        let canal = c.canal;
+        if (c.vendaId) {
+          const venda = await b.obterOuFalhar(tx, cx, TIPO.VENDA, c.vendaId, "Venda");
+          canal ??= venda.canal;
+        }
+        await b.exigirDocumentos(tx, cx, c.documentoIds);
+        const categorias = [];
+        for (const r of c.retencoes) {
+          const categoria = await b.categoriaLancavel(tx, cx, r.categoria);
+          if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
+            falhar(CODIGO.CATEGORIA_INVALIDA, "Uma retenção do repasse não pode ser classificada como receita.", { categoria: categoria.codigo });
+          }
+          categorias.push(categoria);
+        }
+        const liquido = subtrair(c.brutoCentavos, somarLista(c.retencoes, (d) => d.valorCentavos));
+        const recebivel = await b.criar(tx, cx, TIPO.RECEBIVEL, { ...c, canal, pagamentoId: null, forma: null, chaveIdempotencia: chave, impressao: chave ? impressao : null, ...tituloNovo(liquido) });
+        const lancamentosDeRetencao = [];
+        for (const [indice, r] of c.retencoes.entries()) {
+          lancamentosDeRetencao.push(await b.lancar(tx, cx, categorias[indice], {
+            valorCentavos: r.valorCentavos, moeda: c.moeda, descricao: r.descricao ?? c.descricao ?? categorias[indice].nome,
+            dataOperacao: c.dataPrevista, competencia: c.competencia, fonte: c.fonte, canal, retidoNoRepasse: true,
+            origem: { tipo: TIPO.RECEBIVEL, id: recebivel.id, retencaoIndice: indice },
+          }, { documentado: c.documentoIds.length > 0 }));
+        }
+        return { recebivel, lancamentosDeRetencao, repetido: false };
+      });
+    },
+
+    /**
+     * Ajuste documentado no saldo de um título (juros, multa, desconto, taxa descoberta depois).
+     * Gera UM lançamento na categoria informada; o sinal segue a natureza da categoria.
+     */
+    registrarAjuste(ctx, entrada) {
+      const c = validarAjuste(entrada);
+      return b.executar(ctx, ACAO.CORRIGIR, async (cx, tx) => {
+        const ehObrigacao = c.alvoTipo === ALVO_LIQUIDACAO.OBRIGACAO;
+        const tipo = ehObrigacao ? TIPO.OBRIGACAO : TIPO.RECEBIVEL;
+        const alvo = await b.obterOuFalhar(tx, cx, tipo, c.alvoId, "Título");
+        const competencia = c.competencia ?? alvo.competencia;
+        // 07: o lançamento do ajuste nasce na competência informada (precisa aceitar escrita); o título de um mês homologado
+        // só muda a posição — atualização posterior auditada.
+        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competencia], referenciadas: [alvo.competencia], motivo: "ajuste de título" });
+        if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
+        const categoria = await b.categoriaLancavel(tx, cx, c.categoria);
+        const mudancas = aplicarAjuste(alvo, c.valorCentavos);
+        const ajusteId = b.gerarId();
+        const lancamento = await b.lancar(tx, cx, categoria, {
+          valorCentavos: valorDoLancamentoDeAjuste(ehObrigacao, categoria.natureza, c.valorCentavos),
+          moeda: alvo.moeda, descricao: c.motivo, dataOperacao: b.hoje(), competencia, canal: alvo.canal ?? null,
+          retidoNoRepasse: !ehObrigacao, origem: { tipo: TIPO.AJUSTE, id: ajusteId },
+        }, { documentado: Boolean(c.documentoId) });
+        const ajuste = await b.criar(tx, cx, TIPO.AJUSTE, { id: ajusteId, alvoTipo: c.alvoTipo, alvoId: c.alvoId, valorCentavos: c.valorCentavos, motivo: c.motivo, competencia, documentoId: c.documentoId, lancamentoId: lancamento.id, estornoId: null }, c.motivo);
+        const alvoAtualizado = await b.alterar(tx, cx, tipo, alvo, mudancas, EVENTO_HISTORICO.AJUSTE, c.motivo);
+        return { ajuste, lancamento, alvo: alvoAtualizado };
+      });
+    },
+
+    /** Correção cadastral de obrigação (vencimento, descrição). Valor não se corrige aqui: usa-se ajuste ou cancelamento. */
+    corrigirObrigacao(ctx, entrada) {
+      const c = validarCorrecaoObrigacao(entrada);
+      return b.executar(ctx, ACAO.CORRIGIR, async (cx, tx) => {
+        const atual = await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, c.obrigacaoId, "Obrigação");
+        if (atual.situacao === SITUACAO_TITULO.CANCELADA) falhar(CODIGO.OPERACAO_INVALIDA, "Obrigação cancelada não pode ser corrigida.");
+        if (c.versaoEsperada !== null && c.versaoEsperada !== atual.versao) falhar(CODIGO.CONFLITO_VERSAO, "A obrigação foi alterada por outra operação.");
+        if (c.mudancas.vencimento && c.mudancas.vencimento < atual.dataEmissao) falhar(CODIGO.DATA_INVALIDA, "O vencimento não pode ser anterior à emissão.");
+        await b.exigirCompetenciaEditavel(tx, cx, atual.competencia);
+        return b.alterar(tx, cx, TIPO.OBRIGACAO, atual, c.mudancas, EVENTO_HISTORICO.CORRECAO, c.justificativa);
+      });
+    },
+
+    /** Cancelamento LÓGICO do grupo inteiro (todas as parcelas + lançamento). Recusado se alguma parcela já teve liquidação. */
+    cancelarObrigacao(ctx, entrada) {
+      const c = validarCancelamentoObrigacao(entrada);
+      return b.executar(ctx, ACAO.CANCELAR, async (cx, tx) => {
+        const alvo = await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, c.obrigacaoId, "Obrigação");
+        if (alvo.situacao === SITUACAO_TITULO.CANCELADA) falhar(CODIGO.OPERACAO_INVALIDA, "Obrigação já cancelada.");
+        await b.exigirCompetenciaEditavel(tx, cx, alvo.competencia);
+        const grupo = await tx.listar(cx, TIPO.OBRIGACAO, { onde: { grupoId: alvo.grupoId } });
+        if (grupo.some((o) => o.liquidadoCentavos > 0)) {
+          falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "Há pagamento vinculado. Estorne as liquidações antes de cancelar.");
+        }
+        const obrigacoes = [];
+        for (const o of grupo) obrigacoes.push(await b.alterar(tx, cx, TIPO.OBRIGACAO, o, { situacao: SITUACAO_TITULO.CANCELADA }, EVENTO_HISTORICO.CANCELAMENTO, c.justificativa));
+        await b.cancelarLancamento(tx, cx, alvo.lancamentoId, c.justificativa);
+        await cancelarLancamentosDeAjustes(tx, cx, ALVO_LIQUIDACAO.OBRIGACAO, grupo.map((o) => o.id), c.justificativa);
+        return { obrigacoes };
+      });
+    },
+
+    /**
+     * Cancela um recebível AVULSO ainda não liquidado, com suas retenções e ajustes. Nada é apagado.
+     * Recebível nascido de pagamento de venda não se cancela sozinho: estorna-se o pagamento ou cancela-se a venda.
+     */
+    cancelarRecebivel(ctx, entrada) {
+      const c = validarCancelamentoRecebivel(entrada);
+      return b.executar(ctx, ACAO.CANCELAR, async (cx, tx) => {
+        const alvo = await b.obterOuFalhar(tx, cx, TIPO.RECEBIVEL, c.recebivelId, "Recebível");
+        if (alvo.situacao === SITUACAO_TITULO.CANCELADA) falhar(CODIGO.OPERACAO_INVALIDA, "Recebível já cancelado.");
+        if (alvo.pagamentoId) falhar(CODIGO.OPERACAO_INVALIDA, "Este recebível pertence a um pagamento de venda: estorne o pagamento ou cancele a venda.");
+        if (alvo.liquidadoCentavos > 0) falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "Há recebimento vinculado. Estorne as liquidações antes de cancelar.");
+        await b.exigirCompetenciaEditavel(tx, cx, alvo.competencia);
+        const recebivel = await b.alterar(tx, cx, TIPO.RECEBIVEL, alvo, { situacao: SITUACAO_TITULO.CANCELADA }, EVENTO_HISTORICO.CANCELAMENTO, c.justificativa);
+        const lancamentos = await tx.listar(cx, TIPO.LANCAMENTO, (l) => l.origem?.tipo === TIPO.RECEBIVEL && l.origem.id === alvo.id);
+        for (const l of lancamentos) await b.cancelarLancamento(tx, cx, l.id, c.justificativa);
+        await cancelarLancamentosDeAjustes(tx, cx, ALVO_LIQUIDACAO.RECEBIVEL, [alvo.id], c.justificativa);
+        return { recebivel };
+      });
+    },
+
+    // Reclassificação (mudar a categoria de um lançamento) vive em aplicacao/reclassificacao.js desde a Execução 08C:
+    // permissão própria (financeiro_v2.reclassificar), prévia de impacto, versão obrigatória e evidência.
+
+    /** Correção cadastral de lançamento (descrição, data da operação), com antes/depois e justificativa no histórico. */
+    corrigirLancamento(ctx, entrada) {
+      const c = validarCorrecaoLancamento(entrada);
+      return b.executar(ctx, ACAO.CORRIGIR, async (cx, tx) => {
+        const l = await b.obterOuFalhar(tx, cx, TIPO.LANCAMENTO, c.lancamentoId, "Lançamento");
+        if (l.situacao !== SITUACAO_LANCAMENTO.ATIVO) falhar(CODIGO.OPERACAO_INVALIDA, "Lançamento cancelado não pode ser corrigido.");
+        await b.exigirCompetenciaEditavel(tx, cx, l.competencia);
+        return b.alterar(tx, cx, TIPO.LANCAMENTO, l, c.mudancas, EVENTO_HISTORICO.CORRECAO, c.justificativa);
+      });
+    },
+  };
+}

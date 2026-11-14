@@ -34,6 +34,9 @@ const { unidadeRouter } = await import("../../src/modules/unidade/unidade.routes
 const { realtimeRouter } = await import("../../src/modules/realtime/realtime.routes.js");
 const { checklistOperacionalRouter } = await import("../../src/modules/checklist-operacional/checklistOperacional.routes.js");
 const { gestaoFinanceiraRouter } = await import("../../src/modules/gestao-financeira/index.js");
+// Financeiro v2 (Execução 10): o MESMO router de produção, no estado padrão (desligado). As rotas existem e entram na matriz.
+const { criarRotasFinanceiroV2 } = await import("../../src/modules/fv2-integracao/rotas.js");
+const financeiroV2Router = criarRotasFinanceiroV2({ habilitado: false, dependencias: () => { throw new Error("desligado: nada é criado"); } });
 const { notificacoesRouter } = await import("../../src/modules/notificacoes/notificacoes.routes.js");
 const { foodyAdminRouter } = await import("../../src/modules/foody-admin/foodyAdmin.routes.js");
 const { foodySyncRouter } = await import("../../src/modules/foody-admin/foodyAdmin.sync.routes.js");
@@ -47,7 +50,7 @@ export const MONTAGENS_TENANT = [
   ["/integracoes/foody/sincronizacoes", foodySyncRouter], ["/integracoes/foody", foodyAdminRouter],
   ["/checklist-operacional", checklistOperacionalRouter], ["/parser-food-delivery", parserFoodDeliveryRouter],
   ["/inteligencia", inteligenciaRouter], ["/agente", agenteRouter],
-  ["/gestao-financeira", gestaoFinanceiraRouter],
+  ["/gestao-financeira", gestaoFinanceiraRouter], ["/financeiro-v2", financeiroV2Router],
 ];
 
 /**

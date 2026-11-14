@@ -2,6 +2,8 @@ import { Router } from "express";
 import { requireContexto, exigirSenhaDefinitiva, requireModulo, requireAlgumModulo } from "./middlewares/auth.js";
 import { requireFinanceiro } from "./middlewares/financeiro.js";
 import { gestaoFinanceiraRouter } from "./modules/gestao-financeira/index.js";
+import { supabase } from "./config/supabase.js";
+import { criarFinanceiroV2DaPlataforma } from "./modules/fv2-integracao/index.js";
 import { restringirPerfilExibicao } from "./middlewares/perfilExibicao.js";
 import { MODULOS } from "./shared/modulos.js";
 import { produtosRouter } from "./modules/produtos/produtos.routes.js";
@@ -106,6 +108,9 @@ tenant.use("/checklist-operacional", requireAlgumModulo(MODULOS.CHECKLIST_OPERAC
 // Dashboard Financeiro: gate PRÓPRIO (módulo empresa + módulo unidade + concessão explícita do perfil, relida a cada
 // requisição; sem bypass de impersonação). NÃO usar requireModulo/requirePermissao aqui — ambos bypassam.
 tenant.use("/gestao-financeira", requireFinanceiro(), gestaoFinanceiraRouter);
+// Financeiro v2 (Execução 10): DESLIGADO por padrão (FV2_HABILITADO). Gate PRÓPRIO a cada requisição — adaptador do v2
+// (sem bypass de impersonação, sem perfil de exibição, concessão própria, unidade liberada); somente leitura nesta fase.
+tenant.use("/financeiro-v2", criarFinanceiroV2DaPlataforma({ supabase }));
 tenant.use("/parser-food-delivery", requireModulo(MODULOS.PARSER_FOOD_DELIVERY), parserFoodDeliveryRouter);
 // Seção "INTELIGÊNCIA" do menu (Agente Crescer · Relatórios · Integrações).
 // `inteligencia` é o gate-pai: sem ele, NADA da área responde. O catálogo de
