@@ -60,6 +60,7 @@ Parser e administrativo não dependem do legado.
 | `requireFinanceiro` + `gestao_financeira_concessoes` | Gate do legado (concessão por perfil) | O v2 tem concessões próprias (`fv2_concessao`); decidir se a concessão antiga continua como pré-requisito do menu ou é substituída (D-24b-1) |
 | Gatilho `trg_unidades_guarda_financeiro` em `public.unidades` (+ `gestao_financeira_unidades_guarda_org`) | Impede mover unidade de organização quando há dados financeiros | **Não remover sem substituto:** o v2 precisa da mesma guarda para os seus dados antes da remoção (D-24b-2) |
 | Restrição `modulos_categoria_check` (categoria `financeiro`) | Criada pela 120 na tabela da plataforma | Manter (o módulo continua na categoria `financeiro`) |
+| `src/shared/gestaoFinanceira.permissoes.js` usado por `src/shared/setores.js` (L-1) | A regra de SETORES operacionais da plataforma depende do módulo financeiro antigo | **Não remover** com o legado; antes, mover a constante para a plataforma (teste `L-1` impede a remoção acidental) |
 | `/plataforma/financeiro` (planos e assinaturas) | **Não é o legado** (cobrança da plataforma) | Fora do escopo; não tocar |
 | `adminUnidadeWizard.js` (exclui o módulo do assistente) | Comportamento da plataforma | Rever na fase de ativação |
 
