@@ -9,6 +9,8 @@ do $$ begin
   if (select rolsuper from pg_roles where rolname = current_user) then raise exception 'FV2 instalação: não aplicar como superusuário'; end if;
   if not (select rolcreaterole from pg_roles where rolname = current_user) then raise exception 'FV2 instalação: o executor precisa de CREATEROLE'; end if;
   if current_setting('server_version_num')::int < 130000 then raise exception 'FV2 instalação: PostgreSQL 13+ exigido'; end if;
+  -- auditoria A-2: publicação de tempo real que inclui TODAS as tabelas levaria as tabelas novas junto — bloqueia
+  if exists (select 1 from pg_publication where puballtables) then raise exception 'FV2 instalação: há publicação FOR ALL TABLES (ex.: supabase_realtime) — nada foi feito'; end if;
 end $$;
 
 -- ================================================================================ A1/A4: schema, papéis, uso
@@ -3129,6 +3131,18 @@ grant execute on function fv2_liberacao_alterar(uuid, uuid, boolean, uuid, text,
 revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
 insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0021_liberacao_por_unidade.sql', 'b24ed9c2e8f18e4f881f76d3e7e7f3d2bb3eec24637c1a40189e75073c1a4b64', 'fd829c5c35ba04744989f410a5a2bf341e87d58d8b7e03f44ca2ec0324366248');
 
+-- ======================================================== A5: nenhuma função do módulo executável por PUBLIC
+do $$ declare f record; begin
+  -- A5 (auditoria A-1): nenhuma função do módulo fica executável por PUBLIC (o padrão do PostgreSQL). Quem tinha o
+  -- EXECUTE de PUBLIC passa a ter EXECUTE só para os três papéis do módulo; as funções protegidas já sem PUBLIC ficam
+  -- exatamente como as migrações deixaram.
+  for f in select p.oid::regprocedure as fn from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'financeiro_v2' and exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x where x.grantee = 0 and x.privilege_type = 'EXECUTE') loop
+    execute format('grant execute on function %s to fv2_app, fv2_autoridade, fv2_guardiao', f.fn);
+    execute format('revoke execute on function %s from public', f.fn);
+  end loop;
+end $$;
+
 -- ===================================================================================== pós-condições (abortam)
 do $$
 declare n int; txt text;
@@ -3166,6 +3180,14 @@ begin
   if txt is not null then raise exception 'FV2 pós: função protegida fora da regra: %', txt; end if;
   select count(*) into n from pg_proc p join pg_namespace s on s.oid = p.pronamespace where s.nspname = 'financeiro_v2' and p.prosecdef;
   if n < 8 then raise exception 'FV2 pós: só % funções protegidas (esperado ≥ 8)', n; end if;
+  -- A-1: NENHUMA função do schema (protegida ou não) executável pelas credenciais comuns
+  select string_agg(p.oid::regprocedure::text || ':' || g.r, ', ') into txt from pg_proc p join pg_namespace s on s.oid = p.pronamespace,
+    unnest(array['anon','authenticated','service_role','authenticator']) g(r)
+    where s.nspname = 'financeiro_v2' and exists (select 1 from pg_roles where rolname = g.r) and has_function_privilege(g.r, p.oid, 'execute');
+  if txt is not null then raise exception 'FV2 pós: função executável por credencial comum: %', txt; end if;
+  -- A-2: nenhuma tabela do módulo em publicação de replicação/tempo real
+  select count(*) into n from pg_publication_tables where schemaname = 'financeiro_v2';
+  if n > 0 then raise exception 'FV2 pós: % tabelas do módulo em publicação de replicação', n; end if;
   -- guardião: nenhum membro com SET ou INHERIT; sem CREATE no schema
   select count(*) into n from pg_auth_members m join pg_roles r on r.oid = m.roleid where r.rolname = 'fv2_guardiao' and (m.set_option or m.inherit_option);
   if n > 0 then raise exception 'FV2 pós: guardião com participação utilizável'; end if;

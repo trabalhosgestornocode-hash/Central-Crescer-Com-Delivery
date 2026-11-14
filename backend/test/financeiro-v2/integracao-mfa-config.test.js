@@ -54,3 +54,13 @@ test("10 — configuração: desligada por padrão; incompleta ou com chave curt
   // a integração nunca recebe a credencial da autoridade
   assert.ok(!("autoridadeUrl" in ok));
 });
+
+test("10 — L-1: a regra de SETORES da plataforma ainda depende do módulo financeiro antigo — a dependência continua no lugar (não remover junto com o legado)", async () => {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const src = join(process.cwd(), "src");
+  assert.ok(existsSync(join(src, "shared", "gestaoFinanceira.permissoes.js")), "gestaoFinanceira.permissoes.js precisa continuar existindo");
+  assert.match(readFileSync(join(src, "shared", "setores.js"), "utf8"), /import \{ MODULO_FINANCEIRO \} from "\.\/gestaoFinanceira\.permissoes\.js";/);
+  // e o Financeiro v2 não tocou nessa regra
+  assert.doesNotMatch(readFileSync(join(src, "shared", "setores.js"), "utf8"), /financeiro-v2|fv2/);
+});

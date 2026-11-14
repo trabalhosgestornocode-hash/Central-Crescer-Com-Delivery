@@ -111,7 +111,7 @@ async function iniciar() {
   // Banco-modelo: um por conjunto de migrações. Os testes clonam o modelo; nunca escrevem nele.
   // 10 (produção): o modelo é migrado no schema DEDICADO por um papel SEM superusuário (CREATEROLE + BYPASSRLS, como o
   // `postgres` do Supabase). O aplicador e o schema entram na assinatura: mudou → modelo novo.
-  const assinatura = `schema:${ESQUEMA_FINANCEIRO}|migrador:fv2_teste_migrador|aplicador:2|${listarMigracoes().map((m) => `${m.nome}:${m.sha256}`).join("|")}`;
+  const assinatura = `schema:${ESQUEMA_FINANCEIRO}|migrador:fv2_teste_migrador|aplicador:3-a5|${listarMigracoes().map((m) => `${m.nome}:${m.sha256}`).join("|")}`;
   // 07B: papel de LOGIN da autoridade de sessões (o "gateway"), com credencial própria — separada da aplicação.
   if (!ambiente.urlAutoridade) {
     const controle = await abrirPoolSeguro(ambiente.urlAdmin, ambiente.marcador, { max: 1 });

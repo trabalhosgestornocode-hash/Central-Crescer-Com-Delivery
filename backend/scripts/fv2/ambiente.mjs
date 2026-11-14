@@ -85,6 +85,17 @@ export function listarMigracoes(pasta = PASTA_DE_MIGRACOES) {
 
 /** Schema DEDICADO do Financeiro v2 (decisão de infraestrutura da 09C: projeto Supabase existente, schema próprio). */
 export const ESQUEMA_FINANCEIRO = "financeiro_v2";
+/** A5 — retira o EXECUTE de PUBLIC das funções do schema (idempotente). Usado pelo aplicador e pelo pacote de produção. */
+export const sqlSemExecucaoPublica = (schema = ESQUEMA_FINANCEIRO) => `do $$ declare f record; begin
+  -- A5 (auditoria A-1): nenhuma função do módulo fica executável por PUBLIC (o padrão do PostgreSQL). Quem tinha o
+  -- EXECUTE de PUBLIC passa a ter EXECUTE só para os três papéis do módulo; as funções protegidas já sem PUBLIC ficam
+  -- exatamente como as migrações deixaram.
+  for f in select p.oid::regprocedure as fn from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = '${schema}' and exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) x where x.grantee = 0 and x.privilege_type = 'EXECUTE') loop
+    execute format('grant execute on function %s to fv2_app, fv2_autoridade, fv2_guardiao', f.fn);
+    execute format('revoke execute on function %s from public', f.fn);
+  end loop;
+end $$`;
 /**
  * search_path das conexões ao banco do módulo. No ambiente isolado vai no BANCO (cada teste usa um banco novo); em
  * produção vai nos papéis de LOGIN do módulo (`alter role … set search_path`), nunca no banco inteiro da plataforma.
@@ -173,6 +184,7 @@ export async function aplicarMigracoes(poolSeguro, { pasta = PASTA_DE_MIGRACOES,
       }
       aplicadas.push(m.nome);
     }
+    await cliente.query(sqlSemExecucaoPublica(schema)); // A5: sempre ao fim (inclusive sem migração nova)
   } finally {
     await cliente.query("reset search_path").catch(() => {});
     if (papel) await cliente.query("reset role").catch(() => {});

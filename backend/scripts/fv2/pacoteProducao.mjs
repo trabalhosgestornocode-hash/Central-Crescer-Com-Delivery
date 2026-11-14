@@ -19,7 +19,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ESQUEMA_FINANCEIRO, PASTA_DE_MIGRACOES, listarMigracoes, textoAplicado } from "./ambiente.mjs";
+import { ESQUEMA_FINANCEIRO, PASTA_DE_MIGRACOES, listarMigracoes, sqlSemExecucaoPublica, textoAplicado } from "./ambiente.mjs";
 
 const S = ESQUEMA_FINANCEIRO;
 const PAPEIS = ["fv2_app", "fv2_autoridade", "fv2_guardiao"];
@@ -41,6 +41,8 @@ function instalar() {
   if (select rolsuper from pg_roles where rolname = current_user) then raise exception 'FV2 instalação: não aplicar como superusuário'; end if;
   if not (select rolcreaterole from pg_roles where rolname = current_user) then raise exception 'FV2 instalação: o executor precisa de CREATEROLE'; end if;
   if current_setting('server_version_num')::int < 130000 then raise exception 'FV2 instalação: PostgreSQL 13+ exigido'; end if;
+  -- auditoria A-2: publicação de tempo real que inclui TODAS as tabelas levaria as tabelas novas junto — bloqueia
+  if exists (select 1 from pg_publication where puballtables) then raise exception 'FV2 instalação: há publicação FOR ALL TABLES (ex.: supabase_realtime) — nada foi feito'; end if;
 end $$;`,
     "",
     "-- ================================================================================ A1/A4: schema, papéis, uso",
@@ -66,6 +68,7 @@ end $$;`,
     for (const [, nome] of t.matchAll(/create\s+temporary\s+table\s+([a-z0-9_]+)/gi)) partes.push(`drop table if exists pg_temp.${nome};`);
     partes.push(`insert into ${S}.fv2_migracao (nome, sha256, sha256_aplicado) values (${literal(m.nome)}, ${literal(m.sha256)}, ${literal(sha(t))});`, "");
   }
+  partes.push("-- ======================================================== A5: nenhuma função do módulo executável por PUBLIC", `${sqlSemExecucaoPublica(S)};`, "");
   partes.push(
     "-- ===================================================================================== pós-condições (abortam)",
     `do $$
@@ -104,6 +107,14 @@ begin
   if txt is not null then raise exception 'FV2 pós: função protegida fora da regra: %', txt; end if;
   select count(*) into n from pg_proc p join pg_namespace s on s.oid = p.pronamespace where s.nspname = '${S}' and p.prosecdef;
   if n < 8 then raise exception 'FV2 pós: só % funções protegidas (esperado ≥ 8)', n; end if;
+  -- A-1: NENHUMA função do schema (protegida ou não) executável pelas credenciais comuns
+  select string_agg(p.oid::regprocedure::text || ':' || g.r, ', ') into txt from pg_proc p join pg_namespace s on s.oid = p.pronamespace,
+    unnest(array['anon','authenticated','service_role','authenticator']) g(r)
+    where s.nspname = '${S}' and exists (select 1 from pg_roles where rolname = g.r) and has_function_privilege(g.r, p.oid, 'execute');
+  if txt is not null then raise exception 'FV2 pós: função executável por credencial comum: %', txt; end if;
+  -- A-2: nenhuma tabela do módulo em publicação de replicação/tempo real
+  select count(*) into n from pg_publication_tables where schemaname = '${S}';
+  if n > 0 then raise exception 'FV2 pós: % tabelas do módulo em publicação de replicação', n; end if;
   -- guardião: nenhum membro com SET ou INHERIT; sem CREATE no schema
   select count(*) into n from pg_auth_members m join pg_roles r on r.oid = m.roleid where r.rolname = 'fv2_guardiao' and (m.set_option or m.inherit_option);
   if n > 0 then raise exception 'FV2 pós: guardião com participação utilizável'; end if;
