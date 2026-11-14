@@ -204,10 +204,50 @@ const tPerfil = performance.now();
 await nPerfil.consultarCentralDeConferencias(c, MES);
 const totalPerfil = Math.round(performance.now() - tPerfil);
 const perfilOrdenado = Object.entries(perfil).map(([k, v]) => ({ k, chamadas: v.chamadas, ms: Math.round(v.ms), linhas: v.linhas })).sort((a, b) => b.ms - a.ms).slice(0, 15);
+// 08D: EXPLAIN (ANALYZE, BUFFERS) das consultas REAIS que a Central dirigida emite — texto e parâmetros capturados do
+// driver durante uma chamada da tela. O EXPLAIN roda como dono (sem RLS): mostra a escolha de índice para o filtro da
+// própria consulta; a RLS só acrescenta o filtro de escopo (organização/unidade), coberto pelos mesmos índices.
+const capturadas = new Map();
+let capturando = false;
+const conectarOriginal = pool.connect.bind(pool);
+pool.connect = async (...a) => {
+  const cl = await conectarOriginal(...a);
+  if (!cl.__fv2Explain) {
+    const q = cl.query.bind(cl);
+    cl.query = (texto, params, ...r) => {
+      const res = q(texto, params, ...r);
+      if (!capturando || typeof texto !== "string" || !/^\s*select/i.test(texto) || !/fv2_/.test(texto)) return res;
+      const t = performance.now();
+      return Promise.resolve(res).then((x) => {
+        const k = texto.replace(/\s+/g, " ").trim();
+        const e = capturadas.get(k) ?? { texto, params, ms: 0, vezes: 0, linhas: 0 };
+        e.ms += performance.now() - t; e.vezes += 1; e.linhas = Math.max(e.linhas, x?.rowCount ?? 0); capturadas.set(k, e);
+        return x;
+      });
+    };
+    cl.__fv2Explain = true;
+  }
+  return cl;
+};
+capturando = true;
+await n.consultarCentralDeConferencias(c, MES);
+capturando = false;
+const donoExplain = await (await repositorio.interno()).dono();
+const planos = [];
+for (const e of [...capturadas.values()].sort((a, b) => b.ms - a.ms).slice(0, 8)) {
+  try {
+    const { rows } = await donoExplain.query(`explain (analyze, buffers, format json) ${e.texto}`, e.params);
+    const p = rows[0]["QUERY PLAN"][0];
+    const nos = [];
+    const visitar = (x) => { nos.push(`${x["Node Type"]}${x["Index Name"] ? ` ${x["Index Name"]}` : ""}${x["Relation Name"] ? ` em ${x["Relation Name"]}` : ""}`); for (const f of x.Plans ?? []) visitar(f); };
+    visitar(p.Plan);
+    planos.push({ consulta: e.texto.replace(/\s+/g, " ").slice(0, 180), vezes: e.vezes, linhas: e.linhas, msNaTela: Math.round(e.ms), execucaoMs: p["Execution Time"], planejamentoMs: p["Planning Time"], blocosLidos: (p.Plan["Shared Hit Blocks"] ?? 0) + (p.Plan["Shared Read Blocks"] ?? 0), nos: nos.slice(0, 8) });
+  } catch (erro) { planos.push({ consulta: e.texto.replace(/\s+/g, " ").slice(0, 180), erro: erro.message }); }
+}
 const mem = process.memoryUsage();
 console.log(JSON.stringify({
   meses: MESES, vendasPorMes: VENDAS, semEstatisticas: process.env.FV2_SEM_ESTATISTICAS === "1", registros: contagem, falhasDeCarga, cargaS: Math.round(carga / 1000),
-  diagnosticoFechamentos: diagnosticoFechamentos.filter((x) => !x.ok), medicoes: resultados, antesDepois, equivalencia, perfilCentral: { totalMs: totalPerfil, porOperacao: perfilOrdenado }, consultasPorTela,
+  diagnosticoFechamentos: diagnosticoFechamentos.filter((x) => !x.ok), medicoes: resultados, antesDepois, equivalencia, perfilCentral: { totalMs: totalPerfil, porOperacao: perfilOrdenado }, consultasPorTela, explainCentral: planos,
   memoriaMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576) },
 }, null, 2));
 await pool.end?.();
