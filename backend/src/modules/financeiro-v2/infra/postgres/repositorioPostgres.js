@@ -11,7 +11,7 @@
 // - Não existe método de exclusão, e o papel de banco da aplicação nem tem esse privilégio.
 import { CODIGO, ErroFinanceiro, falhar } from "../../dominio/erros.js";
 import { congelar } from "../../dominio/validacao.js";
-import { normalizarConsulta, normalizarFiltro } from "../../contratos/repositorio.js";
+import { ORDEM_DE_GRAVACAO, normalizarConsulta, normalizarFiltro } from "../../contratos/repositorio.js";
 import { ESQUEMA, HISTORICO } from "./esquema.js";
 
 const INSTANTE = `'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'`;
@@ -72,16 +72,17 @@ function gravacaoDe(def, registro, { comExtras, semImutaveis = false }) {
 }
 
 function registroDe(def, linha, { comExtras }) {
-  const { extras, ...campos } = linha;
+  const { extras, seq, ...campos } = linha;
   const registro = comExtras ? { ...(extras ?? {}) } : {};
   for (const [campo, { tipo }] of Object.entries(def.campos)) {
     const v = campos[campo];
     registro[campo] = v === null || v === undefined ? null : tipo === "centavos" ? centavosDoBanco(v, campo) : v;
   }
+  if (seq !== undefined && seq !== null) Object.defineProperty(registro, ORDEM_DE_GRAVACAO, { value: Number(seq) });
   return congelar(registro);
 }
 
-const selecao = (def, comExtras) => [...Object.entries(def.campos).map(([campo, col]) => leituraDe(campo, col)), ...(comExtras ? ["extras"] : [])].join(", ");
+const selecao = (def, comExtras) => [...Object.entries(def.campos).map(([campo, col]) => leituraDe(campo, col)), ...(comExtras ? ["extras"] : []), "seq"].join(", ");
 
 /** Condições SQL de escopo + igualdades simples (`onde`). Campo fora do mapa é procurado em `extras`. */
 function condicoes(def, escopo, onde, comExtras) {
@@ -117,6 +118,14 @@ function condicoesDaConsulta(def, escopo, q) {
     }
   }
   for (const [campo, lista] of Object.entries(q.em)) {
+    // 08C: subcampo de coluna JSON (ex.: "origem.id"), comparado como texto — com índice de expressão na migração 0015.
+    if (campo.includes(".")) {
+      const [raiz, sub] = campo.split(".");
+      const cj = def.campos[raiz];
+      if (!cj || cj.tipo !== "json" || !/^[A-Za-z0-9_]+$/.test(sub ?? "")) falhar(CODIGO.REPOSITORIO_INVALIDO, "Subcampo só em coluna JSON mapeada.", { campo });
+      partes.push(`${cj.coluna}->>'${sub}' = any(${marca(lista.map(String), "::text[]")})`);
+      continue;
+    }
     const col = def.campos[campo];
     if (!col) { partes.push(`extras->>'${campo.replace(/[^A-Za-z0-9_]/g, "")}' = any(${marca(lista.map(String), "::text[]")})`); continue; }
     const c = colunaComparavel(def, campo);

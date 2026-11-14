@@ -387,6 +387,8 @@ export function detalheCorrespondencia(d) {
 <h3>Evidências</h3>${documentos(c.evidencias)}
 ${c.podeConfirmar && c.voceTemPermissao ? acao({ url: "/api/fv2/acoes/conciliacoes/confirmar", rotulo: "Confirmar conciliação", recarregar: `correspondencia:${c.id}`, campos: `<input type="hidden" name="correspondencia" value="${esc(c.id)}"><label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>`, aviso: "Confirmo que as evidências provam o mesmo dinheiro nos dois lados." })
     : `<p class="nota">${esc(c.motivoDeNaoConfirmar ?? (c.voceTemPermissao ? "" : "Confirmar exige a permissão \"conciliar\"."))}</p>`}
+${c.voceTemPermissao && ["CANDIDATA", "AGUARDANDO_DOCUMENTO"].includes(c.situacao) ? acao({ url: "/api/fv2/acoes/conciliacoes/rejeitar", rotulo: "Recusar esta correspondência", perigo: true, recarregar: `correspondencia:${c.id}`, campos: `<input type="hidden" name="correspondencia" value="${esc(c.id)}"><label>Motivo da recusa <input type="text" name="justificativa" maxlength="300" required></label>`, aviso: "Confirmo a recusa: os registros continuam não conciliados e podem formar outra correspondência." }) : ""}
+${c.confiabilidade === "FRACA" ? '<p class="nota">Só valor e data coincidem: confirmar exige justificativa sobre os documentos de evidência — proximidade não é prova.</p>' : ""}
 <h3>Histórico</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li>${esc(SITUACOES_CORRESPONDENCIA[h.situacao]?.rotulo ?? h.evento)} · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem histórico.")}
 ${tecnico({ relacao: c.relacao, situacao: c.situacao, confiabilidade: c.confiabilidade, concorrentes: c.concorrentes })}`;
 }

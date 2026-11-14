@@ -18,7 +18,8 @@ import {
   impactoDaReclassificacao, sugestaoPorHistorico,
 } from "../dominio/reclassificacao.js";
 import { validarConsultaDeReclassificacao, validarReclassificacao } from "../contratos/comandos.js";
-import { apurarRegistros, carregarRegistros } from "./conferencias.js";
+import { apurarRegistros } from "./conferencias.js";
+import { carregarDaCompetencia, porLista } from "./cargaDaCompetencia.js";
 
 const ORIGEM_LEGIVEL = Object.freeze({ OBRIGACAO: "Conta a pagar", VENDA: "Venda", RECEBIVEL: "Retenção de repasse", AJUSTE: "Ajuste de título", PROPOSTA: "Operação importada", ESTORNO: "Estorno" });
 
@@ -58,6 +59,15 @@ export function operacoesDeReclassificacao(b) {
     });
   }
 
+  /** Sugestão pelo histórico da MESMA contraparte (todas as competências, só as contas dela e os lançamentos delas). */
+  async function sugestao(tx, cx, l, d) {
+    const minha = d.obrigacoes.find((o) => o.lancamentoId === l.id);
+    if (!minha?.contraparteId) return null;
+    const obrigacoes = await tx.listar(cx, TIPO.OBRIGACAO, { onde: { contraparteId: minha.contraparteId } });
+    const lancamentos = await porLista(tx, cx, TIPO.LANCAMENTO, "id", obrigacoes.map((o) => o.lancamentoId));
+    return sugestaoPorHistorico(l, { obrigacoes, lancamentos, categorias: d.categorias });
+  }
+
   return {
     /**
      * Tudo o que a tela precisa para decidir — sem gravar nada. Com `categoria`, inclui a prévia do impacto.
@@ -66,14 +76,15 @@ export function operacoesDeReclassificacao(b) {
     consultarReclassificacao(ctx, e) {
       const c = validarConsultaDeReclassificacao(e);
       return b.consultar(ctx, async (cx, tx) => {
-        const d = await carregarRegistros(tx, cx);
         if (c.movimentacaoId) {
-          const m = d.movimentacoes.find((x) => x.id === c.movimentacaoId);
+          const m = await tx.obter(cx, TIPO.MOVIMENTACAO, c.movimentacaoId);
           if (!m) falhar(CODIGO.NAO_ENCONTRADO, "Movimentação não encontrada.");
           return { caso: CASO.MOVIMENTACAO_SEM_NATUREZA, explicacao: TEXTO_DO_CASO.MOVIMENTACAO_SEM_NATUREZA, permitida: false, movimentacao: { id: m.id, data: m.dataEfetiva, sentido: m.sentido, valorCentavos: m.valorCentavos } };
         }
-        const l = d.lancamentos.find((x) => x.id === c.lancamentoId);
+        const l = await tx.obter(cx, TIPO.LANCAMENTO, c.lancamentoId);
         if (!l) falhar(CODIGO.NAO_ENCONTRADO, "Lançamento não encontrado.");
+        // 08C: carga DIRIGIDA à competência do lançamento (equivalente à completa — ver cargaDaCompetencia.js).
+        const d = await carregarDaCompetencia(tx, cx, [l.competencia]);
         const caso = casoDoLancamento(l);
         const comp = d.competencias.find((x) => x.competencia === l.competencia) ?? null;
         const estado = comp?.estado ?? ESTADO_COMPETENCIA.ABERTA;
@@ -106,7 +117,7 @@ export function operacoesDeReclassificacao(b) {
           categoriaAtual: atual ? { codigo: atual.codigo, nome: atual.nome, natureza: atual.natureza, classificacao: atual.classificacao, provisoria: ehProvisoria(atual.codigo) } : { codigo: l.categoria, nome: l.categoria, natureza: l.natureza, classificacao: l.classificacao, provisoria: ehProvisoria(l.categoria) },
           caso, explicacao: TEXTO_DO_CASO[caso], competencia: { codigo: l.competencia, estado },
           categoriasPermitidas: destinos.map((x) => ({ codigo: x.codigo, nome: x.nome, natureza: x.natureza, classificacao: x.classificacao, exigeDocumento: x.exigeDocumento === true })),
-          sugestao: caso === CASO.OPERACAO_CANCELADA_OU_ESTORNADA ? null : sugestaoPorHistorico(l, d),
+          sugestao: caso === CASO.OPERACAO_CANCELADA_OU_ESTORNADA ? null : await sugestao(tx, cx, l, d),
           evidencias, exigeEvidenciaParaSairDaProvisoria: ehProvisoria(l.categoria), documentosDisponiveis, historico,
           podeReclassificar: motivoBloqueio === null, motivoBloqueio, impacto,
         };

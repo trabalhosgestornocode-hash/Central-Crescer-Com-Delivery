@@ -4,6 +4,7 @@
 //   node scripts/fv2-banco-teste.mjs iniciar    cria (se preciso) e liga o servidor; aplica as migrações no banco-modelo
 //   node scripts/fv2-banco-teste.mjs estado     mostra se está ligado e onde
 //   node scripts/fv2-banco-teste.mjs parar      desliga o servidor (os dados ficam)
+//   node scripts/fv2-banco-teste.mjs derrubar   desliga ABRUPTAMENTE (modo imediato, como uma queda); os dados ficam
 //   node scripts/fv2-banco-teste.mjs destruir   desliga e APAGA a pasta do ambiente (só ela)
 //
 // O que este script faz e NÃO faz:
@@ -148,6 +149,12 @@ async function principal() {
     if (ligado()) rodar("pg_ctl", ["stop", "-D", DADOS, "-m", "fast", "-w"]);
     return dizer("Servidor desligado.");
   }
+  // 08C: queda ABRUPTA (como falta de energia/crash), SEM apagar nada — só para testes de recuperação da instância própria.
+  if (comando === "derrubar") {
+    exigirPastaPropria();
+    if (ligado()) rodar("pg_ctl", ["stop", "-D", DADOS, "-m", "immediate", "-w"]);
+    return dizer("Servidor derrubado (modo imediato); os dados ficam na pasta:", PASTA);
+  }
   if (comando === "destruir") {
     if (!existsSync(PASTA)) return dizer("Nada a destruir.");
     exigirPastaPropria();
@@ -155,7 +162,7 @@ async function principal() {
     rmSync(PASTA, { recursive: true, force: true });
     return dizer("Ambiente isolado apagado:", PASTA);
   }
-  return parar("uso: node scripts/fv2-banco-teste.mjs iniciar | estado | parar | destruir");
+  return parar("uso: node scripts/fv2-banco-teste.mjs iniciar | estado | parar | derrubar | destruir");
 }
 
 principal().catch((e) => parar(e?.message ?? String(e)));

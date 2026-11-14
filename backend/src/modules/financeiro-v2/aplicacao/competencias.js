@@ -15,7 +15,8 @@ import { exigirUmDe, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { validarConsultaComposicao, validarConsultaHistorico, validarMudancaDeEstado } from "../contratos/comandos.js";
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { impedimentosDeHomologacao } from "../dominio/conferencias.js";
-import { apurarRegistros, carregarRegistros } from "./conferencias.js";
+import { apurarRegistros } from "./conferencias.js";
+import { registrosDaCompetencia } from "./cargaDaCompetencia.js";
 
 /**
  * Retrato COMPLETO e imutável da apuração (07): indicadores com a composição inteira, DRE com a árvore e "cada R$ 100".
@@ -30,7 +31,9 @@ export function retratoDa(apuracao) {
   };
 }
 
-export function operacoesDeCompetencia(b, { repositorio, politica }) {
+export function operacoesDeCompetencia(b, { repositorio, politica, cargaCompleta = false, conferirCarga = false }) {
+  /** 08C — apuração + impedimentos da competência sobre a carga dirigida (conferida contra a completa nos testes). */
+  const derivarFechamento = (competencia, escopo, agora, hoje) => (d) => { const ap = apurarRegistros(d, competencia, escopo, agora); return { apuracao: ap, impedimentos: impedimentosDeHomologacao(d, competencia, hoje, ap) }; };
   /** Responsável de pendência: precisa ser um usuário com acesso ATIVO a esta unidade (nunca um nome livre). */
   async function exigirResponsavelValido(tx, ctx, usuarioId) {
     const c = await tx.buscarPorChave(ctx, TIPO.CONCESSAO, `concessao:${usuarioId}`);
@@ -71,8 +74,8 @@ export function operacoesDeCompetencia(b, { repositorio, politica }) {
           if (p.responsavelId) await exigirResponsavelValido(tx, ctx, p.responsavelId);
           for (const id of p.evidenciaDocumentoIds) await b.obterOuFalhar(tx, ctx, TIPO.DOCUMENTO, id, "Documento de evidência");
         }
-        const d = await carregarRegistros(tx, ctx);
         const escopo = { organizacaoId: ctx.organizacaoId, unidadeId: ctx.unidadeId };
+        const d = await registrosDaCompetencia(tx, ctx, [c.competencia], { cargaCompleta, conferir: conferirCarga, derivar: derivarFechamento(c.competencia, escopo, b.agora(), b.hoje()), tela: `mudança de estado ${c.competencia}` });
         const apuracao = apurarRegistros(d, c.competencia, escopo, b.agora());
         let metodologiaVersao = null;
         let impedimentos = [];
@@ -126,7 +129,7 @@ export function operacoesDeCompetencia(b, { repositorio, politica }) {
         const atual = await b.competenciaAtual(tx, cx, competencia);
         const estadoAtual = atual?.estado ?? ESTADO_COMPETENCIA.ABERTA;
         const { acao, motivos } = avaliarTransicao(estadoAtual, novoEstado, { pendencias: [1], metodologia: "x", justificativa: "x" });
-        const d = await carregarRegistros(tx, cx);
+        const d = await registrosDaCompetencia(tx, cx, [competencia], { cargaCompleta, conferir: conferirCarga, derivar: derivarFechamento(competencia, { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, b.agora(), b.hoje()), tela: `prévia ${competencia}` });
         const impedimentos = novoEstado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO ? impedimentosDeHomologacao(d, competencia, b.hoje(), apurarRegistros(d, competencia, { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, b.agora())) : [];
         const temPermissao = acao ? cx.permissoes.includes(acao) : false;
         const bloqueios = estadoAtual === novoEstado ? ["A competência já está neste estado: nada a fazer."] : [...motivos];

@@ -35,7 +35,9 @@ export function montar({
   concessoesDeTeste = true,
 } = {}) {
   const repo = repositorio ?? (EM_POSTGRES ? repositorioPostgresDeTeste(escopos, { concessoesDeTeste }) : criarRepositorioMemoria());
-  const real = criarNucleoFinanceiro({ repositorio: repo, escoposAutorizados: escopos, relogio, cofre, acessosNegados, estabelecimentosDaUnidade });
+  // 08C: com FV2_CONFERIR_CARGA=1, TODA consulta otimizada (Vendas, Recebimentos, Central, Pendências, Fechamento e a guarda
+  // de homologação) também calcula com a carga completa e falha se o resultado diferir — a suíte inteira vira prova de equivalência.
+  const real = criarNucleoFinanceiro({ repositorio: repo, escoposAutorizados: escopos, relogio, cofre, acessosNegados, estabelecimentosDaUnidade, conferirCargaDirigida: process.env.FV2_CONFERIR_CARGA === "1" });
   if (!plano) return { nucleo: real, repositorio: repo, cofre, acessosNegados };
   const implantados = new Map();
   const garantirPlano = (c) => {

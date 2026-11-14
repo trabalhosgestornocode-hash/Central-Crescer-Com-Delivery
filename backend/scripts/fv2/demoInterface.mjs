@@ -296,6 +296,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     "/api/fv2/acoes/configuracoes/categoria": { campos: ["codigo", "nome", "ativa", "justificativa"], fazer: (ctx, b) => nucleo.alterarCategoria(ctx, { codigo: b.codigo, mudancas: { ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}) }, justificativa: b.justificativa }) },
     // ---- 06D: integridade de documento (grava o resultado no histórico).
     "/api/fv2/acoes/documentos/verificar": { campos: ["documento"], fazer: (ctx, b) => nucleo.verificarIntegridadeDoDocumento(ctx, { id: id(b.documento) }) },
+    // 08C: recusar candidata (ambígua ou errada), sempre com justificativa — libera a correta sem "escolha da máquina".
+    "/api/fv2/acoes/conciliacoes/rejeitar": { campos: ["correspondencia", "justificativa"], fazer: (ctx, b) => nucleo.rejeitarCorrespondencia(ctx, { correspondenciaId: id(b.correspondencia), justificativa: b.justificativa }) },
     "/api/fv2/acoes/conciliacoes/gerar": { campos: ["competencia"], fazer: (ctx, b) => {
       if (!/^\d{4}-\d{2}$/.test(String(b.competencia ?? ""))) throw Object.assign(new Error("Competência inválida."), { codigo: m.CODIGO.ENTRADA_INVALIDA });
       const fim = m.tempo.ultimoDiaDe(b.competencia);

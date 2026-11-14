@@ -13,6 +13,7 @@ import {
   validarDetalheDeVenda, validarFiltroDeDivergencias, validarFiltroDePagamentos, validarFiltroDeRecebiveis, validarFiltroDeTaxas, validarFiltroDeVendas,
 } from "../contratos/vendasRecebimentos.js";
 import { SEM_CANAL } from "../dominio/apuracao.js";
+import { carregarDaCompetencia, exigirEquivalencia } from "./cargaDaCompetencia.js";
 
 /** Competências cobertas pelo filtro (para a apuração central). */
 function competenciasDo(f) {
@@ -29,7 +30,7 @@ const itemDeVenda = (o) => ({
 });
 const resumoDaVenda = (o) => ({ id: o.id, tipo: o.tipo, identificador: o.identificador, titulo: o.titulo, data: o.data, canal: o.canal, situacao: o.situacao });
 
-export function operacoesDeVendasERecebimentos(b) {
+export function operacoesDeVendasERecebimentos(b, { cargaCompleta = false, conferirCarga = false } = {}) {
   async function carregar(cx, tx) {
     const l = (tipo, filtro) => tx.listar(cx, tipo, filtro);
     return {
@@ -44,8 +45,8 @@ export function operacoesDeVendasERecebimentos(b) {
     };
   }
   /** Monta a visão do escopo para o filtro (apuração central só das competências do filtro). */
-  function visao(cx, tx, f) {
-    return carregar(cx, tx).then((d) => {
+  function visao(cx, tx, f, carga = carregar) {
+    return carga(cx, tx).then((d) => {
       const comps = competenciasDo(f);
       const v = montarVisao(d, b.hoje(), { escopo: { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, apuradoEm: b.agora(), competencias: comps });
       const ops = v.ops.filter((o) => atendeFiltro(o, f));
@@ -53,6 +54,17 @@ export function operacoesDeVendasERecebimentos(b) {
       return { ...v, d, ops, apuracao, resumo: resumoDeVendas(ops, apuracao, f) };
     });
   }
+  /**
+   * 08C — listas de vendas e recebimentos com CARGA DIRIGIDA às competências do filtro (e ao fecho dos vínculos). O corpo
+   * da consulta é o mesmo; no modo de conferência, o resultado é comparado com o da carga completa.
+   */
+  const consultaDeVendas = (ctx, f, corpo) => b.consultar(ctx, async (cx, tx) => {
+    const comps = competenciasDo(f);
+    const dirigida = (c, t) => carregarDaCompetencia(t, c, comps);
+    const r = await corpo(await visao(cx, tx, f, cargaCompleta ? carregar : dirigida));
+    if (conferirCarga && !cargaCompleta) exigirEquivalencia(r, await corpo(await visao(cx, tx, f, carregar)), `vendas ${comps.join(",")}`);
+    return r;
+  });
   /** Recebíveis avulsos de processador (sem venda: ex. vale-refeição) que atendem ao filtro (sem forma/situação de venda). */
   const avulsosDo = (avulsos, f) => avulsos.filter((r) => (!f.competencia || r.competencia === f.competencia)
     && (!f.inicio || r.competencia >= competenciaDe(f.inicio)) && (!f.fim || r.competencia <= competenciaDe(f.fim))
@@ -64,8 +76,7 @@ export function operacoesDeVendasERecebimentos(b) {
     /** Lista de vendas (individuais e agregadas) com resumo, paginação e filtros disponíveis. */
     consultarVendas(ctx, e) {
       const f = validarFiltroDeVendas(e);
-      return b.consultar(ctx, async (cx, tx) => {
-        const v = await visao(cx, tx, f);
+      return consultaDeVendas(ctx, f, async (v) => {
         const pg = paginar(v.ops.map(itemDeVenda), f.pagina, f.tamanho);
         const todas = v.ops;
         return {
@@ -81,8 +92,7 @@ export function operacoesDeVendasERecebimentos(b) {
     /** Pagamentos das vendas (forma × processador × destino), consolidado por processador e transações sem venda. */
     consultarPagamentosDeVendas(ctx, e) {
       const f = validarFiltroDePagamentos(e);
-      return b.consultar(ctx, async (cx, tx) => {
-        const v = await visao(cx, tx, f);
+      return consultaDeVendas(ctx, f, async (v) => {
         const vendas = v.ops.filter((o) => o.tipo === TIPO_OPERACAO.VENDA);
         const pagamentos = vendas.flatMap((o) => o.pagamentos.map((pg) => ({ ...pg, venda: resumoDaVenda(o), recebimento: o.recebiveis.find((r) => r.id === pg.recebivelId)?.situacaoRecebimento ?? null })))
           .filter((pg) => (!f.forma || pg.forma === f.forma || (f.forma === "DESCONHECIDA" && !pg.formaConhecida)) && (!f.processador || (f.processador === "SEM_PROCESSADOR" ? !pg.processador : pg.processador === f.processador)))
@@ -111,8 +121,7 @@ export function operacoesDeVendasERecebimentos(b) {
     /** Taxas, comissões e descontos de cada venda e recebível, com a linha da DRE e a fração de centavo quando houver. */
     consultarTaxasEDescontos(ctx, e) {
       const f = validarFiltroDeTaxas(e);
-      return b.consultar(ctx, async (cx, tx) => {
-        const v = await visao(cx, tx, f);
+      return consultaDeVendas(ctx, f, async (v) => {
         const ativas = v.ops.filter((o) => o.situacao !== SITUACAO_OPERACAO.CANCELADA);
         const itens = [
           ...ativas.flatMap((o) => [...o.descontos, ...o.devolucoes].map((c) => ({ ...c, venda: resumoDaVenda(o), processador: null, canal: o.canal }))),
@@ -139,8 +148,7 @@ export function operacoesDeVendasERecebimentos(b) {
     /** Cadeia venda → recebível → repasse → crédito, e os créditos (repasses) agrupados por movimentação. */
     consultarRecebiveisERepasses(ctx, e) {
       const f = validarFiltroDeRecebiveis(e);
-      return b.consultar(ctx, async (cx, tx) => {
-        const v = await visao(cx, tx, f);
+      return consultaDeVendas(ctx, f, async (v) => {
         const daVenda = v.ops.filter((o) => o.tipo === TIPO_OPERACAO.VENDA).flatMap((o) => o.recebiveis.map((r) => ({ ...r, venda: resumoDaVenda(o) })));
         const todos = [...daVenda, ...avulsosDo(v.avulsos, f).map((r) => ({ ...r, venda: null }))]
           .filter((r) => (!f.recebimento || r.situacaoRecebimento === f.recebimento) && (!f.processador || r.processador === f.processador));
@@ -172,8 +180,7 @@ export function operacoesDeVendasERecebimentos(b) {
     /** Divergências de vendas e recebimentos: descrição, impacto, fonte, período, motivo, evidência, situação e próxima ação. */
     consultarDivergenciasDeVendas(ctx, e) {
       const f = validarFiltroDeDivergencias(e);
-      return b.consultar(ctx, async (cx, tx) => {
-        const v = await visao(cx, tx, f);
+      return consultaDeVendas(ctx, f, async (v) => {
         const noPeriodo = (x) => (!f.competencia || x.competencia === f.competencia) && (!f.inicio || !x.periodo.inicio || x.periodo.inicio >= f.inicio) && (!f.fim || !x.periodo.inicio || x.periodo.inicio <= f.fim);
         const semVenda = v.semVenda.filter((t) => (!f.processador || t.processador === f.processador));
         const todas = divergenciasDeVendas(v.ix, v.ops, avulsosDo(v.avulsos, f), semVenda, [...v.apuracoes.values()], b.hoje()).filter(noPeriodo);

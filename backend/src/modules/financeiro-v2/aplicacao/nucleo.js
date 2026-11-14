@@ -39,11 +39,13 @@ import { operacoesDeReclassificacao } from "./reclassificacao.js";
  *        06D/07B: autoridade externa, já autenticada (aal2), que atesta o administrador inicial de uma unidade
  * @param {boolean} [deps.cargaCompletaDeReferencia] 07B — SOMENTE testes de equivalência: as telas otimizadas voltam a
  *        ler o histórico inteiro, para comparar o resultado com a carga dirigida
+ * @param {boolean} [deps.conferirCargaDirigida] 08C — SOMENTE testes: cada consulta otimizada também calcula com a carga
+ *        completa e falha (INTEGRIDADE_VIOLADA) se o resultado diferir
  */
 export function criarNucleoFinanceiro({
   repositorio, escoposAutorizados, relogio = () => new Date(), gerarId = randomUUID, fuso = "America/Sao_Paulo",
   cofre = null, fontes = criarRegistroDeFontes(), estabelecimentosDaUnidade = null, acessosNegados = criarRegistroDeAcessosNegadosMemoria(),
-  exigirConcessaoPersistida = false, autoridadeDeProvisionamento = null, cargaCompletaDeReferencia = false,
+  exigirConcessaoPersistida = false, autoridadeDeProvisionamento = null, cargaCompletaDeReferencia = false, conferirCargaDirigida = false,
 }) {
   exigirRepositorio(repositorio);
   const politica = criarPoliticaDeEscopo(escoposAutorizados);
@@ -63,9 +65,9 @@ export function criarNucleoFinanceiro({
     ...operacoesDeFormacao(base),
     ...operacoesDeApuracao(base),
     ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia }),
-    ...operacoesDeVendasERecebimentos(base),
-    ...operacoesDeConferencias(base, { fontes }),
-    ...operacoesDeCompetencia(base, { repositorio, politica }),
+    ...operacoesDeVendasERecebimentos(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
+    ...operacoesDeConferencias(base, { fontes, cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
+    ...operacoesDeCompetencia(base, { repositorio, politica, cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
   };
   // Toda operação é assíncrona e falha por rejeição (nunca por exceção síncrona), inclusive erros de validação.
   return Object.freeze(Object.fromEntries(Object.entries(operacoes).map(([nome, op]) => [nome, async (...args) => op(...args)])));

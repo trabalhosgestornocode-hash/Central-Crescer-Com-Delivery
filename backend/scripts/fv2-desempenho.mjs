@@ -5,7 +5,8 @@
 // candidatas de conciliação e versões de fechamento — e mede as consultas das telas.
 // Não lê .env, não abre nada além do banco de teste isolado. Os tempos são OBSERVAÇÕES deste computador, não metas.
 import { performance } from "node:perf_hooks";
-import { ESCOPOS_PADRAO, ctx, montar } from "../test/financeiro-v2/helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ctx, montar } from "../test/financeiro-v2/helpers/cenario.js";
+import { criarNucleoFinanceiro } from "../src/modules/financeiro-v2/index.js";
 import { saiposVendas } from "../test/financeiro-v2/helpers/arquivos.js";
 import { repositorioPostgresDeTeste } from "../test/financeiro-v2/helpers/postgres.js";
 
@@ -42,6 +43,19 @@ for (const comp of competencias) {
       const m = (await n.registrarMovimentacao(c, { contaId: banco.id, dataEfetiva: `${comp}-20`, sentido: "SAIDA", valorCentavos: 5000 + j * 10, natureza: "PAGAMENTO" })).movimentacao;
       await n.registrarLiquidacao(c, { movimentacaoId: m.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: o.id, valorCentavos: 5000 + j * 10 }] });
     }
+  }
+  // 08C: repasses AGREGADOS do mês seguinte liquidando recebíveis Stone do mês anterior (vínculos entre competências).
+  if (comp !== competencias[0]) {
+    await tentar("repasse", async () => {
+      const anterior = competencias[competencias.indexOf(comp) - 1];
+      const abertos = (await n.consultarContasAReceber(c, { competencia: anterior, processador: "STONE", tamanho: 100 })).itens.filter((t) => t.saldoCentavos > 0).slice(0, 80);
+      for (let s0 = 0; s0 < abertos.length; s0 += 20) {
+        const lote = abertos.slice(s0, s0 + 20);
+        const total = lote.reduce((x, t) => x + t.saldoCentavos, 0);
+        const mov = (await n.registrarMovimentacao(c, { contaId: banco.id, dataEfetiva: `${comp}-0${1 + s0 / 20}`, sentido: "ENTRADA", valorCentavos: total, natureza: "RECEBIMENTO" })).movimentacao;
+        await n.registrarLiquidacao(c, { movimentacaoId: mov.id, alocacoes: lote.map((t) => ({ alvoTipo: "RECEBIVEL", alvoId: t.id, valorCentavos: t.saldoCentavos })) });
+      }
+    });
   }
   // Pendências: saídas bancárias sem classificação.
   for (let j = 0; j < 5; j += 1) await n.registrarMovimentacao(c, { contaId: banco.id, dataEfetiva: `${comp}-2${j}`, sentido: "SAIDA", valorCentavos: 300 + j, natureza: "OUTRA" });
@@ -85,6 +99,33 @@ const medir = async (nome, fn, vezes = 3) => {
 const ULT = competencias.at(-1);
 const MES = { competencia: ULT };
 const resultados = [];
+// 08C: ANTES × DEPOIS nas MESMAS condições (mesmo banco, dados e máquina): a referência lê o histórico inteiro, como até a 08B.
+const antes = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, cofre, cargaCompletaDeReferencia: true });
+const telas = {
+  "Vendas (página)": (x) => x.consultarVendas(c, { ...MES, tamanho: 25 }),
+  "Recebimentos consolidados": (x) => x.consultarRecebiveisERepasses(c, { ...MES, tamanho: 25 }),
+  "Central de Conferências": (x) => x.consultarCentralDeConferencias(c, MES),
+  "Pendências (página)": (x) => x.consultarPendencias(c, { ...MES, tamanho: 25 }),
+  "Fechamento (situação)": (x) => x.consultarFechamento(c, MES),
+  "Prévia de homologação": (x) => x.previaDaMudancaDeEstado(c, { ...MES, novoEstado: "FECHAMENTO_HOMOLOGADO" }),
+};
+const antesDepois = [];
+for (const [nome, fn] of Object.entries(telas)) {
+  const a = await medir(nome, () => fn(antes), 5);
+  const d = await medir(nome, () => fn(n), 5);
+  antesDepois.push({ nome, antesMs: a.medianaMs, depoisMs: d.medianaMs });
+}
+// Equivalência no conjunto de 12 meses: cada mês, cada tela otimizada, dirigida = completa.
+const { primeiraDiferenca } = await import("../src/modules/financeiro-v2/aplicacao/cargaDaCompetencia.js");
+const equivalencia = {};
+for (const comp of competencias) {
+  const M = { competencia: comp };
+  const pares = [["central", (x) => x.consultarCentralDeConferencias(c, M)], ["pendencias", (x) => x.consultarPendencias(c, { ...M, tamanho: 100 })], ["fechamento", (x) => x.consultarFechamento(c, M)],
+    ["vendas", (x) => x.consultarVendas(c, { ...M, tamanho: 50 })], ["recebimentos", (x) => x.consultarRecebiveisERepasses(c, { ...M, tamanho: 50 })], ["divergencias", (x) => x.consultarDivergenciasDeVendas(c, { ...M, tamanho: 50 })]];
+  const difs = [];
+  for (const [nome, fn] of pares) { const dif = primeiraDiferenca(await fn(n), await fn(antes)); if (dif) difs.push(`${nome}: ${dif}`); }
+  equivalencia[comp] = difs.length ? difs : "IDENTICO";
+}
 resultados.push(await medir("Apuração / DRE (mês)", () => n.apurarCompetencia(c, MES)));
 resultados.push(await medir("Visão Geral (apuração + resumo)", async () => [await n.apurarVisaoGeral(c, MES), await n.consultarResumoFinanceiro(c, MES)]));
 resultados.push(await medir("Composição de um indicador", () => n.composicaoDoIndicador(c, { ...MES, codigo: "DESPESAS_OPERACIONAIS" })));
@@ -105,7 +146,7 @@ resultados.push(await medir("10 telas simultâneas (mistas)", () => Promise.all(
 const mem = process.memoryUsage();
 console.log(JSON.stringify({
   meses: MESES, vendasPorMes: VENDAS, registros: contagem, falhasDeCarga, cargaS: Math.round(carga / 1000),
-  medicoes: resultados,
+  medicoes: resultados, antesDepois, equivalencia,
   memoriaMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576) },
 }, null, 2));
 await pool.end?.();

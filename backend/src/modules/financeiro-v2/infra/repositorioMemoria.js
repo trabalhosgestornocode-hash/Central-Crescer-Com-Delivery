@@ -5,17 +5,21 @@
 // Transações são serializadas (uma por vez), então não há leitura suja nem escrita perdida — e as travas são triviais.
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { congelar } from "../dominio/validacao.js";
-import { normalizarConsulta, normalizarFiltro } from "../contratos/repositorio.js";
+import { ORDEM_DE_GRAVACAO, normalizarConsulta, normalizarFiltro } from "../contratos/repositorio.js";
 
 const mesmoEscopo = (r, e) => r.organizacaoId === e.organizacaoId && r.unidadeId === e.unidadeId;
 const copia = (v) => congelar(structuredClone(v));
+/** Cópia com a ordem de gravação (posição na tabela, que preserva a ordem de inserção). */
+const copiaOrdenada = (v, i) => { const c = structuredClone(v); Object.defineProperty(c, ORDEM_DE_GRAVACAO, { value: i }); return congelar(c); };
 const atende = (r, filtro) => Object.entries(filtro.onde).every(([campo, valor]) => r[campo] === valor) && filtro.predicado(r);
 const vazio = (v) => v === null || v === undefined;
 /** Mesma semântica do adaptador PostgreSQL: `onde` nulo = "is null"; faixas inclusivas ignoram nulos; `em` = lista. */
 const atendeConsulta = (r, q) => Object.entries(q.onde).every(([k, v]) => (vazio(v) ? vazio(r[k]) : r[k] === v))
   && Object.entries(q.desde).every(([k, v]) => !vazio(r[k]) && r[k] >= v)
   && Object.entries(q.ate).every(([k, v]) => !vazio(r[k]) && r[k] <= v)
-  && Object.entries(q.em).every(([k, lista]) => lista.some((v) => (typeof r[k] === "string" ? r[k] === String(v) : r[k] === v)));
+  && Object.entries(q.em).every(([k, lista]) => { const x = valorDoCampo(r, k); return lista.some((v) => (typeof x === "string" ? x === String(v) : x === v)); });
+/** 08C: `em` aceita um subcampo de objeto (ex.: "origem.id"), como o adaptador PostgreSQL faz com colunas JSON. */
+const valorDoCampo = (r, k) => (k.includes(".") ? k.split(".").reduce((o, p) => (o === null || o === undefined ? o : o[p]), r) : r[k]);
 const comparar = (a, b) => (a === b ? 0 : vazio(a) ? 1 : vazio(b) ? -1 : a < b ? -1 : 1);
 
 function criarTx(estado, { somenteLeitura = false } = {}) {
@@ -53,7 +57,7 @@ function criarTx(estado, { somenteLeitura = false } = {}) {
     },
     listar(escopo, tipo, filtro) {
       const f = normalizarFiltro(filtro);
-      return Object.values(tabela(tipo)).filter((r) => mesmoEscopo(r, escopo) && atende(r, f)).map(copia);
+      return Object.values(tabela(tipo)).map((r, i) => [r, i]).filter(([r]) => mesmoEscopo(r, escopo) && atende(r, f)).map(([r, i]) => copiaOrdenada(r, i));
     },
     buscarPorChave(escopo, tipo, chave) {
       const r = Object.values(tabela(tipo)).find((x) => mesmoEscopo(x, escopo) && x.chaveIdempotencia === chave);
@@ -81,7 +85,7 @@ function criarTx(estado, { somenteLeitura = false } = {}) {
         }
         return ia - ib;
       });
-      return { itens: filtrados.slice(q.deslocamento, q.deslocamento + q.limite).map(([r]) => copia(r)), total: filtrados.length };
+      return { itens: filtrados.slice(q.deslocamento, q.deslocamento + q.limite).map(([r, i]) => copiaOrdenada(r, i)), total: filtrados.length };
     },
     agregar(escopo, tipo, consulta) {
       const q = normalizarConsulta(consulta, { paginada: false });

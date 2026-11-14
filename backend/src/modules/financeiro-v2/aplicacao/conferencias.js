@@ -19,6 +19,7 @@ import {
 } from "../dominio/conferencias.js";
 import { divergenciasDeVendas, montarVisao } from "../dominio/vendasRecebimentos.js";
 import { paginar } from "../dominio/tesouraria.js";
+import { registrosDaCompetencia } from "./cargaDaCompetencia.js";
 import {
   validarCompetenciaDaCentral, validarDetalhe, validarDetalheDePendencia, validarFiltroDeCorrespondencias, validarFiltroDeDocumentos, validarFiltroDePendencias,
   validarFiltroDePropostas,
@@ -36,19 +37,8 @@ const tamanho = (f) => ({ limite: f.tamanho, deslocamento: (f.pagina - 1) * f.ta
 const paginacao = (f, total) => ({ pagina: f.pagina, tamanho: f.tamanho, total, paginas: Math.max(1, Math.ceil(total / f.tamanho)) });
 const docsDe = (ids, docs) => (ids ?? []).map((id) => ({ referencia: id, tipo: docs.get(id)?.tipo ?? null, descricao: docs.get(id)?.descricao ?? null }));
 
-/** Registros do escopo usados pelas leituras derivadas (pendências e fechamento). Exportado para a guarda de homologação. */
-export async function carregarRegistros(tx, cx) {
-  const l = (tipo, filtro) => tx.listar(cx, tipo, filtro);
-  return {
-    vendas: await l(TIPO.VENDA), pagamentos: await l(TIPO.PAGAMENTO_VENDA), recebiveis: await l(TIPO.RECEBIVEL), ajustes: await l(TIPO.AJUSTE),
-    lancamentos: await l(TIPO.LANCAMENTO), categorias: await l(TIPO.CATEGORIA), liquidacoes: await l(TIPO.LIQUIDACAO), movimentacoes: await l(TIPO.MOVIMENTACAO),
-    estornos: await l(TIPO.ESTORNO), documentos: await l(TIPO.DOCUMENTO), vinculos: await l(TIPO.VINCULO_DOCUMENTAL), propostas: await l(TIPO.PROPOSTA),
-    registros: await l(TIPO.REGISTRO_FONTE, { onde: { tipoRegistro: "PEDIDO" } }), correspondencias: await l(TIPO.CORRESPONDENCIA),
-    divergenciasFonte: await l(TIPO.DIVERGENCIA_FONTE), competencias: await l(TIPO.COMPETENCIA), contas: await l(TIPO.CONTA), saldos: await l(TIPO.SALDO_CONTA),
-    sessoes: await l(TIPO.SESSAO_CAIXA), contrapartes: await l(TIPO.CONTRAPARTE), obrigacoes: await l(TIPO.OBRIGACAO), transferencias: await l(TIPO.TRANSFERENCIA),
-    importacoes: await l(TIPO.IMPORTACAO),
-  };
-}
+/** Carga completa (referência) — agora em cargaDaCompetencia.js; reexportada para quem já a usava. */
+export { carregarRegistros } from "./cargaDaCompetencia.js";
 
 /** Apuração central de uma competência sobre registros já carregados. */
 export const apurarRegistros = (d, competencia, escopo, apuradoEm) => apurar({
@@ -56,17 +46,32 @@ export const apurarRegistros = (d, competencia, escopo, apuradoEm) => apurar({
   recebiveis: d.recebiveis, ajustes: d.ajustes, competencias: d.competencias,
 }, { competencia, escopo, apuradoEm });
 
-export function operacoesDeConferencias(b, { fontes }) {
+export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conferirCarga = false }) {
   const escopoDe = (cx) => ({ organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId });
 
-  /** Pendências unificadas + apuração + visão de vendas da competência. */
+  /**
+   * Pendências unificadas + apuração + visão de vendas da competência. 08C: carga DIRIGIDA à competência e ao fecho dos
+   * vínculos dela (cargaDaCompetencia.js); no modo de conferência, o derivado é comparado com o da carga completa.
+   */
   async function analisar(cx, tx, competencia) {
-    const d = await carregarRegistros(tx, cx);
-    const v = montarVisao(d, b.hoje(), { escopo: escopoDe(cx), apuradoEm: b.agora(), competencias: [competencia] });
-    const apuracao = v.apuracoes.get(competencia);
-    const divergenciasVendas = divergenciasDeVendas(v.ix, v.ops, v.avulsos, v.semVenda, [apuracao], b.hoje());
-    const pendencias = pendenciasDaCompetencia({ d, competencia, hoje: b.hoje(), apuracao, vendas: v, divergenciasVendas });
-    return { d, v, apuracao, pendencias };
+    const agora = b.agora();
+    const hoje = b.hoje();
+    const montar = (d) => {
+      const v = montarVisao(d, hoje, { escopo: escopoDe(cx), apuradoEm: agora, competencias: [competencia] });
+      const apuracao = v.apuracoes.get(competencia);
+      const divergenciasVendas = divergenciasDeVendas(v.ix, v.ops, v.avulsos, v.semVenda, [apuracao], hoje);
+      const pendencias = pendenciasDaCompetencia({ d, competencia, hoje, apuracao, vendas: v, divergenciasVendas });
+      return { d, v, apuracao, pendencias };
+    };
+    const derivar = (d) => {
+      const a = montar(d);
+      const atual = d.competencias.find((x) => x.competencia === competencia) ?? null;
+      return {
+        apuracao: a.apuracao, pendencias: a.pendencias, impedimentos: impedimentosDeHomologacao(d, competencia, hoje, a.apuracao), fontes: fontesDaCompetencia(d, competencia),
+        fechamento: situacaoDoFechamento({ d, competencia, hoje, apuracao: a.apuracao, pendencias: a.pendencias, competenciaAtual: atual, historico: [] }), competencias: d.competencias,
+      };
+    };
+    return montar(await registrosDaCompetencia(tx, cx, [competencia], { cargaCompleta, conferir: conferirCarga, derivar, tela: `conferências ${competencia}` }));
   }
 
   /** Filtro de período das importações (sobreposição com a competência) — resolvido no banco. */

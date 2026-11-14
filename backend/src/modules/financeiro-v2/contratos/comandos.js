@@ -451,8 +451,9 @@ export function validarCorrespondencia(e) {
 }
 
 export function validarDecisaoConciliacao(e) {
-  semCamposDesconhecidos(e, ["correspondenciaId", "justificativa"], "decisao");
-  return { correspondenciaId: exigirUuid(e.correspondenciaId, "correspondenciaId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500, opcional: true }) };
+  semCamposDesconhecidos(e, ["correspondenciaId", "justificativa", "evidenciaDocumentoIds"], "decisao");
+  const evidencias = e.evidenciaDocumentoIds === undefined ? [] : [...new Set(exigirLista(e.evidenciaDocumentoIds, "evidenciaDocumentoIds", { min: 1, max: 20 }).map((x, i) => exigirUuid(x, `evidenciaDocumentoIds[${i}]`)))];
+  return { correspondenciaId: exigirUuid(e.correspondenciaId, "correspondenciaId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500, opcional: true }), evidenciaDocumentoIds: evidencias };
 }
 
 /**

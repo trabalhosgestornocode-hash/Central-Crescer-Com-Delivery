@@ -34,6 +34,13 @@
 // TODA leitura é filtrada por escopo dentro do repositório.
 import { CODIGO, falhar } from "../dominio/erros.js";
 
+/**
+ * 08C — ordem de GRAVAÇÃO de um registro lido (listar/paginar), como propriedade NÃO enumerável: a carga dirigida junta
+ * lotes de consultas diferentes e precisa devolver os registros na mesma ordem que `listar` devolveria (a de gravação).
+ * Não entra em JSON, cópias por espalhamento nem comparações.
+ */
+export const ORDEM_DE_GRAVACAO = Symbol.for("financeiro-v2.ordemDeGravacao");
+
 export const METODOS_DA_TRANSACAO = Object.freeze(["inserir", "atualizar", "obter", "listar", "buscarPorChave", "travar", "anexarHistorico", "listarHistorico", "paginar", "agregar"]);
 export const LIMITE_DA_PAGINA = 500;
 const PROIBIDOS = Object.freeze(["remover", "excluir", "apagar", "deletar", "delete", "remove"]);

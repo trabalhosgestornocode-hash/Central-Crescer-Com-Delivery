@@ -41,8 +41,12 @@ test("repasse Stone de várias transações × um crédito Unicred: candidata N:
   assert.equal(cand.forca, "FRACA");
   assert.equal(cand.diferencaCentavos, 0);
   assert.ok(cand.evidenciaDocumentoIds.length >= 2); // documentos de origem dos dois lados
+  // 08C: só por valor e data nunca confirma sem decisão humana justificada sobre a evidência.
+  await rejeita(nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id }), CODIGO.CONCILIACAO_INVALIDA);
   const conf = await nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id, justificativa: "Repasse do dia conferido no extrato e no relatório (sintético)." });
   assert.equal(conf.situacao, "CONFIRMADA");
+  // Repetir não duplica: a decisão já existe.
+  await rejeita(nucleo.confirmarConciliacao(ctx(), { correspondenciaId: cand.id, justificativa: "De novo." }), CODIGO.CONCILIACAO_INVALIDA);
 });
 
 test("confirmação AMBÍGUA é recusada: dois créditos iguais disputam o mesmo repasse — rejeitar o errado libera o certo", async () => {
