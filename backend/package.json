@@ -52,10 +52,8 @@
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
     "pdf-parse": "^1.1.1",
+    "pg": "^8.23.1",
     "ws": "^8.21.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
-  },
-  "devDependencies": {
-    "pg": "^8.23.1"
   }
 }
