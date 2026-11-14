@@ -492,7 +492,7 @@ export function validarMudancaDeEstado(e) {
  * despesa: só liquida (baixa) as contas com parte do valor ainda não alocado da saída.
  */
 export function validarVinculoDeExtrato(e) {
-  semCamposDesconhecidos(e, ["movimentacaoId", "versaoMovimentacao", "alocacoes", "documentoId", "justificativa", "confirmar"], "vinculo");
+  semCamposDesconhecidos(e, ["movimentacaoId", "versaoMovimentacao", "alocacoes", "documentoId", "justificativa", "confirmar", "pagamentoAntecipado"], "vinculo");
   const alocacoes = exigirLista(e.alocacoes, "alocacoes", { min: 1, max: 50 }).map((a, i) => {
     semCamposDesconhecidos(a, ["obrigacaoId", "valorCentavos"], `alocacoes[${i}]`);
     return { obrigacaoId: exigirUuid(a.obrigacaoId, `alocacoes[${i}].obrigacaoId`), valorCentavos: exigirCentavos(a.valorCentavos, `alocacoes[${i}].valorCentavos`, { positivo: true }) };
@@ -504,6 +504,8 @@ export function validarVinculoDeExtrato(e) {
     alocacoes, documentoId: uuidOpcional(e.documentoId, "documentoId"),
     justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }),
     confirmar: e.confirmar === true,
+    // Execução 09: identificação EXPLÍCITA de pagamento antecipado (saída anterior à emissão da conta).
+    pagamentoAntecipado: e.pagamentoAntecipado === true,
   };
 }
 

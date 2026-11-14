@@ -461,3 +461,106 @@ test("banco — entrar em 'com pendências' à mão sem documentação suficient
     values ($1, $2, $3, 1, now(), $4, now(), $4, '2026-07', 'FECHAMENTO_COM_PENDENCIAS', null, '[{"chave":"X","decisao":"d","documentacaoFaltante":"f"}]'::jsonb, 0, $4, now())`, [randomUUID(), ORG_A, UNI_A, adm.usuarioId]), erroDoBanco(["FV040", "42501"]));
   assert.equal((await n.consultarCompetencia(adm, { competencia: SET })).estado, "FECHAMENTO_PRELIMINAR");
 });
+
+// ============================================================== Execução 09 — baixa com saída ANTERIOR à emissão da conta
+async function documentoDoTipo(m, tipo, descricao) {
+  const g = await m.cofre.guardar(m.c, { conteudo: pdf(), tipoMime: "application/pdf" });
+  return (await m.nucleo.registrarDocumento(m.c, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo, recebidoEm: "2026-10-05", descricao })).documento;
+}
+const JUST_ANTECIPADA = "Sinal pago ao fornecedor sintético antes da nota; comprovante confere valor e beneficiário.";
+
+test("16, 17 — 09: saída anterior à emissão — alerta na prévia; sem identificação, sem documento compatível ou sem justificativa é recusado; com tudo, baixa auditada sem duplicar", async () => {
+  const m = await contaESaida(61850, 61850);
+  const { n, c, fornecedor } = m;
+  const conta = (await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 30000, competencia: OUT, dataEmissao: "2026-10-12", vencimento: "2026-10-30", descricao: "Conta emitida depois do pagamento (sintética)" }))).obrigacoes[0];
+  const mov = (await n.registrarMovimentacao(c, saida(m.banco.id, 30000, { dataEfetiva: "2026-10-07", fonte: { sistema: "UNICRED", idExterno: `EXT-${randomUUID().slice(0, 8)}` } }))).movimentacao;
+  const prev = await n.previaDoVinculoDoExtrato(c, { obrigacaoId: conta.id, movimentacaoId: mov.id });
+  assert.equal(prev.escolhida.antecipacao.dias, 5);
+  assert.equal(prev.escolhida.antecipacao.contraparte, "Fornecedor Sintético");
+  assert.match(prev.escolhida.antecipacao.alerta, /ANTERIOR à emissão/);
+  assert.equal(prev.escolhida.evidencia.exigeDocumento, true);
+  const antes = await retrato(n, c);
+  const al = [{ obrigacaoId: conta.id, valorCentavos: 30000 }];
+  const motivo = (m2) => (e) => e?.detalhes?.motivo === m2;
+  const comprovante = await documento(m);
+  // sem identificar a antecipação (mesmo com comprovante)
+  await assert.rejects(vincular(n, c, mov, al, { documentoId: comprovante.id, justificativa: JUST_ANTECIPADA }), motivo("ANTECIPACAO_NAO_IDENTIFICADA"));
+  // identificada, mas sem documento — conciliação confirmada com evidência NÃO basta aqui
+  const conc = await n.criarCorrespondenciaCandidata(c, { ladoA: [{ tipo: "OBRIGACAO", id: conta.id, valorCentavos: 30000 }], ladoB: [{ tipo: "MOVIMENTACAO", id: mov.id, valorCentavos: 30000 }], evidenciaDocumentoIds: [comprovante.id], justificativa: "Mesmo valor (sintético)." });
+  await n.confirmarConciliacao(c, { correspondenciaId: conc.id, justificativa: "Confere (sintético)." });
+  const atual = async () => ({ ...mov, versao: (await n.consultarRegistros(c, { tipo: "MOVIMENTACAO" })).find((x) => x.id === mov.id).versao });
+  await assert.rejects(vincular(n, c, await atual(), al, { pagamentoAntecipado: true, justificativa: JUST_ANTECIPADA }), motivo("ANTECIPACAO_SEM_DOCUMENTO"));
+  // documento de tipo incompatível (extrato não prova o beneficiário)
+  const extrato = await documentoDoTipo(m, "EXTRATO_BANCARIO", "Extrato sintético");
+  await assert.rejects(vincular(n, c, await atual(), al, { pagamentoAntecipado: true, documentoId: extrato.id, justificativa: JUST_ANTECIPADA }), motivo("ANTECIPACAO_DOCUMENTO_INCOMPATIVEL"));
+  // justificativa curta
+  await assert.rejects(vincular(n, c, await atual(), al, { pagamentoAntecipado: true, documentoId: comprovante.id, justificativa: "Pago antes." }), motivo("ANTECIPACAO_SEM_JUSTIFICATIVA"));
+  const intacto = await retrato(n, c);
+  assert.deepEqual(intacto, antes, "recusas sem efeito parcial");
+  // com tudo: grava, marca a antecipação e não duplica nada
+  const versao = (await n.consultarRegistros(c, { tipo: "MOVIMENTACAO" })).find((x) => x.id === mov.id).versao;
+  const r = await vincular(n, c, { ...mov, versao }, al, { pagamentoAntecipado: true, documentoId: comprovante.id, justificativa: JUST_ANTECIPADA });
+  assert.equal(r.titulos[0].situacao, "QUITADA");
+  const liq = r.liquidacoes[0];
+  assert.deepEqual([liq.antecipacao.dias, liq.antecipacao.dataSaida, liq.antecipacao.dataEmissao, liq.antecipacao.documentoTipo, liq.antecipacao.identificadaPor], [5, "2026-10-07", "2026-10-12", "COMPROVANTE", c.usuarioId]);
+  const hist = await n.consultarHistorico(c, { registroTipo: "OBRIGACAO", registroId: conta.id });
+  assert.ok(hist.some((h) => /\[Pagamento antecipado: saída 5 dia\(s\) antes da emissão\]/.test(h.justificativa ?? "")), "histórico marca a antecipação");
+  const depois = await retrato(n, c);
+  for (const k of ["movimentacoes", "lancamentos", "saidasDoBanco", "realizadoSaidas", "despesas", "resultado"]) assert.equal(depois[k], antes[k], k);
+});
+
+test("16 — 09: marcar como antecipado o que NÃO é anterior à emissão é recusado; conta normal segue sem exigência extra", async () => {
+  const m = await contaESaida(61850, 61850);
+  const { n, c, conta, mov } = m;
+  const comprovante = await documento(m);
+  await assert.rejects(vincular(n, c, mov, [{ obrigacaoId: conta.id, valorCentavos: 61850 }], { pagamentoAntecipado: true, documentoId: comprovante.id, justificativa: JUST_ANTECIPADA }), (e) => e?.detalhes?.motivo === "ANTECIPACAO_INDEVIDA");
+  const ok = await vincular(n, c, mov, [{ obrigacaoId: conta.id, valorCentavos: 61850 }], { documentoId: comprovante.id });
+  assert.equal(ok.liquidacoes[0].antecipacao, null);
+});
+
+test("17 — 09: agrupado com uma conta antecipada e outra normal, parcial, entre competências (saída de setembro, conta de outubro)", async () => {
+  const m = await montarComCadastros();
+  const { nucleo: n, c, banco, fornecedor } = m;
+  const normal = (await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 20000, competencia: "2026-09", dataEmissao: "2026-09-10", vencimento: "2026-09-30", descricao: "Normal (sintética)" }))).obrigacoes[0];
+  const futura = (await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 50000, competencia: OUT, dataEmissao: "2026-10-01", vencimento: "2026-10-20", descricao: "Emitida em outubro (sintética)" }))).obrigacoes[0];
+  const mov = (await n.registrarMovimentacao(c, saida(banco.id, 45000, { dataEfetiva: "2026-09-28", fonte: { sistema: "UNICRED", idExterno: `EXT-${randomUUID().slice(0, 8)}` } }))).movimentacao;
+  const g = await m.cofre.guardar(c, { conteudo: pdf(), tipoMime: "application/pdf" });
+  const doc = (await n.registrarDocumento(c, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: "CONTRATO", recebidoEm: "2026-09-28", descricao: "Contrato com sinal (sintético)" })).documento;
+  const al = [{ obrigacaoId: normal.id, valorCentavos: 20000 }, { obrigacaoId: futura.id, valorCentavos: 25000 }];
+  const movs = (await n.consultarRegistros(c, { tipo: "MOVIMENTACAO" })).length;
+  await assert.rejects(n.vincularPagamentoDoExtrato(c, { movimentacaoId: mov.id, versaoMovimentacao: mov.versao, alocacoes: al, documentoId: doc.id, justificativa: JUST_ANTECIPADA, confirmar: true }), (e) => e?.detalhes?.motivo === "ANTECIPACAO_NAO_IDENTIFICADA" && e.detalhes.antecipadas.length === 1 && e.detalhes.antecipadas[0].obrigacaoId === futura.id);
+  const r = await n.vincularPagamentoDoExtrato(c, { movimentacaoId: mov.id, versaoMovimentacao: mov.versao, alocacoes: al, documentoId: doc.id, justificativa: JUST_ANTECIPADA, confirmar: true, pagamentoAntecipado: true });
+  const porConta = Object.fromEntries(r.liquidacoes.map((l) => [l.alvoId, l]));
+  assert.equal(porConta[normal.id].antecipacao, null);
+  assert.deepEqual([porConta[futura.id].antecipacao.dias, porConta[futura.id].antecipacao.documentoTipo], [3, "CONTRATO"]);
+  const t = Object.fromEntries(r.titulos.map((x) => [x.id, x]));
+  assert.deepEqual([t[normal.id].situacao, t[futura.id].situacao, t[futura.id].saldoCentavos], ["QUITADA", "PARCIAL", 25000]);
+  assert.equal((await n.consultarRegistros(c, { tipo: "MOVIMENTACAO" })).length, movs, "nenhuma saída nova");
+});
+
+test("banco — 0020: liquidação de extrato com saída anterior à emissão sem marca de antecipação, com dias incoerentes ou documento incompatível é recusada (FV041)", pular, async () => {
+  const { m, adm, interno } = await cenarioBanco();
+  const n = m.nucleo;
+  const sqlAdm = async (texto, valores = []) => comoAplicacao(interno, adm, (cl) => cl.query(texto, valores));
+  const banco = await n.configurarContaFinanceira(adm, { tipo: "BANCARIA", nome: "Banco" });
+  const forn = await n.registrarContraparte(adm, { tipo: "FORNECEDOR", nome: "Fornecedor" });
+  const conta = (await n.registrarObrigacao(adm, obrigacao(forn.id, { valorOriginalCentavos: 9000, competencia: OUT, dataEmissao: "2026-10-12", vencimento: "2026-10-30" }))).obrigacoes[0];
+  const mov = (await n.registrarMovimentacao(adm, saida(banco.id, 9000, { dataEfetiva: "2026-10-07" }))).movimentacao;
+  const g = await m.cofre.guardar(adm, { conteudo: pdf(), tipoMime: "application/pdf" });
+  const comp = (await n.registrarDocumento(adm, { origem: "MANUAL", arquivoId: g.arquivoId, hashSha256: g.hashSha256, tipo: "COMPROVANTE", recebidoEm: "2026-10-07", descricao: "Comprovante" })).documento;
+  const g2 = await m.cofre.guardar(adm, { conteudo: pdf(), tipoMime: "application/pdf" });
+  const ext = (await n.registrarDocumento(adm, { origem: "MANUAL", arquivoId: g2.arquivoId, hashSha256: g2.hashSha256, tipo: "EXTRATO_BANCARIO", recebidoEm: "2026-10-07", descricao: "Extrato" })).documento;
+  const inserir = (extras) => sqlAdm("insert into fv2_liquidacao (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, movimentacao_id, alvo_tipo, alvo_id, valor_centavos, estornado_centavos, data_efetiva, situacao, extras) values ($1, $2, $3, 1, now(), $4, now(), $4, $5, 'OBRIGACAO', $6, 9000, 0, '2026-10-07', 'VALIDA', $7::jsonb)",
+    [randomUUID(), adm.organizacaoId, adm.unidadeId, adm.usuarioId, mov.id, conta.id, JSON.stringify(extras)]);
+  const base = { origemDoVinculo: "EXTRATO", documentoId: comp.id };
+  await assert.rejects(inserir(base), erroDoBanco(["FV041"]));
+  await assert.rejects(inserir({ ...base, antecipacao: { dias: 1, dataSaida: "2026-10-07", dataEmissao: "2026-10-12" } }), erroDoBanco(["FV041"]));
+  await assert.rejects(inserir({ ...base, documentoId: ext.id, antecipacao: { dias: 5, dataSaida: "2026-10-07", dataEmissao: "2026-10-12" } }), erroDoBanco(["FV041"]));
+  // conta normal (saída depois da emissão) marcada como antecipada também é recusada
+  const normal = (await n.registrarObrigacao(adm, obrigacao(forn.id, { valorOriginalCentavos: 9000, competencia: OUT, dataEmissao: "2026-10-01", vencimento: "2026-10-30" }))).obrigacoes[0];
+  await assert.rejects(sqlAdm("insert into fv2_liquidacao (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por, movimentacao_id, alvo_tipo, alvo_id, valor_centavos, estornado_centavos, data_efetiva, situacao, extras) values ($1, $2, $3, 1, now(), $4, now(), $4, $5, 'OBRIGACAO', $6, 1000, 0, '2026-10-07', 'VALIDA', $7::jsonb)",
+    [randomUUID(), adm.organizacaoId, adm.unidadeId, adm.usuarioId, mov.id, normal.id, JSON.stringify({ ...base, antecipacao: { dias: 0 } })]), erroDoBanco(["FV041"]));
+  // pelo núcleo, com tudo, passa no banco
+  const r = await n.vincularPagamentoDoExtrato(adm, { movimentacaoId: mov.id, versaoMovimentacao: mov.versao, alocacoes: [{ obrigacaoId: conta.id, valorCentavos: 9000 }], documentoId: comp.id, justificativa: JUST_ANTECIPADA, confirmar: true, pagamentoAntecipado: true });
+  assert.equal(r.liquidacoes[0].antecipacao.dias, 5);
+});

@@ -314,9 +314,10 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       return nucleo.registrarObrigacao(ctx, { contraparteId, valorOriginalCentavos: centavos(b.valor), categoria: b.categoria, descricao: b.descricao, competencia: b.competencia, dataEmissao: b.dataEmissao, vencimento: b.vencimento });
     } },
     // 08E (F-2): vincular saída JÁ registrada (extrato) à conta — nenhuma saída nova, nenhuma despesa nova.
-    "/api/fv2/acoes/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "documento", "justificativa"], fazer: (ctx, b) => nucleo.vincularPagamentoDoExtrato(ctx, {
+    "/api/fv2/acoes/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "documento", "justificativa", "pagamentoAntecipado"], fazer: (ctx, b) => nucleo.vincularPagamentoDoExtrato(ctx, {
       movimentacaoId: id(b.movimentacao), versaoMovimentacao: /^\d{1,9}$/.test(String(b.versao ?? "")) ? Number(b.versao) : b.versao,
       alocacoes: [{ obrigacaoId: id(b.obrigacao), valorCentavos: centavos(b.valor) }], ...(b.documento ? { documentoId: id(b.documento) } : {}), justificativa: b.justificativa, confirmar: true,
+      ...(b.pagamentoAntecipado === "on" || b.pagamentoAntecipado === true || b.pagamentoAntecipado === "true" ? { pagamentoAntecipado: true } : {}),
     }) },
     // 08E (F-1): documentar UMA pendência no fechamento (decisão + o que falta). Documentar não resolve.
     "/api/fv2/acoes/pendencias/documentar": { campos: ["competencia", "chave", "descricao", "impacto", "decisao", "documentacaoFaltante", "justificativa"], fazer: (ctx, b) => nucleo.documentarPendenciaDoFechamento(ctx, {
@@ -567,7 +568,7 @@ async function tesouraria(nucleo, A, { caixa, banco, ifoodRecebivel }) {
   const nota = await doc("n", "NOTA_FISCAL", "Nota do freezer (demonstração)");
   const eq = await nucleo.registrarObrigacao(A, { contraparteId: equipamentos.id, valorOriginalCentavos: 360000, parcelas: 3, categoria: "IMOBILIZADO", descricao: "Freezer", competencia: "2026-10", dataEmissao: "2026-10-01", vencimento: "2026-10-15", documentoIds: [nota] });
   await pagar(eq.obrigacoes[0].id, 120000, "2026-10-15", "PAG PARC 1/3 SINT");
-  await nucleo.registrarObrigacao(A, { contraparteId: energia.id, valorOriginalCentavos: 61850, categoria: "DESPESAS_ADMINISTRATIVAS_GERAIS", descricao: "Conta de energia", competencia: "2026-10", dataEmissao: "2026-11-01", vencimento: "2026-11-20" });
+  await nucleo.registrarObrigacao(A, { contraparteId: energia.id, valorOriginalCentavos: 61850, categoria: "DESPESAS_ADMINISTRATIVAS_GERAIS", descricao: "Conta de energia", competencia: "2026-10", dataEmissao: "2026-10-20", vencimento: "2026-11-20" });
   const frutas = (await nucleo.consultarContasAPagar(A, { categoria: "FRUTAS" })).itens[0];
   await pagar(frutas.id, 200000, "2026-09-18", "PAG FORNEC FRUTAS SINT");
   // Recebimentos (o recebível iFood já tem as taxas abatidas como ajustes; recebe-se o saldo).

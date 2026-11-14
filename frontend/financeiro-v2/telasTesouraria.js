@@ -144,15 +144,19 @@ export function detalheVinculoExtrato(d, ctx = {}) {
   if (!e) return `${fechar("Vincular pagamento do extrato")}${nenhum("Escolha uma saída para ver a prévia.")}`;
   const docs = e.documentosDisponiveis ?? [];
   const pode = podeVincular(ctx) && !e.bloqueios.length;
-  const evidencia = e.evidencia.conciliacaoConfirmadaComEvidencia
+  const ant = e.antecipacao;
+  const evidencia = ant
+    ? `<p class="aviso">Pagamento antecipado: anexe o comprovante (ou contrato, nota fiscal, boleto) e explique em pelo menos ${esc(String(ant.justificativaMinima))} caracteres quem recebeu, por quê e como conferiu o valor. Conciliação ou valor parecido não bastam.</p>`
+    : e.evidencia.conciliacaoConfirmadaComEvidencia
     ? '<p class="nota">Há conciliação CONFIRMADA, com evidência, entre esta saída e esta conta: ela comprova o vínculo.</p>'
     : '<p class="aviso">Escolha o documento que comprova este pagamento (comprovante ou boleto pago). Sem ele a baixa é recusada.</p>';
   const form = pode ? formAcao({ url: "/api/fv2/acoes/obrigacoes/vincular-extrato", titulo: "Confirmar a baixa com esta saída", rotulo: "Vincular pagamento", recarregar: `vinculo:${o.id}|${e.id}`,
     aviso: "Confirmo: a saída já registrada quita esta conta. Nenhuma saída nova e nenhuma despesa nova são criadas.",
     campos: `<input type="hidden" name="obrigacao" value="${esc(o.id)}"><input type="hidden" name="movimentacao" value="${esc(e.id)}"><input type="hidden" name="versao" value="${esc(String(e.versao))}">
 <label>Valor a vincular (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(e.valorPropostoCentavos).replace(/[^0-9.,]/g, ""))}" required></label>
-<label>Documento que comprova o pagamento <select name="documento"${e.evidencia.exigeDocumento ? " required" : ""}><option value="">${e.evidencia.exigeDocumento ? "Escolha…" : "Usar a conciliação confirmada"}</option>${docs.map((x) => `<option value="${esc(x.id)}">${esc(TIPOS_DOCUMENTO[x.tipo] ?? "Documento")} — ${esc(x.descricao)}</option>`).join("")}</select></label>
-<label>Justificativa <input name="justificativa" required maxlength="500"></label>` }) : "";
+<label>Documento que comprova o pagamento <select name="documento"${e.evidencia.exigeDocumento ? " required" : ""}><option value="">${e.evidencia.exigeDocumento ? "Escolha…" : "Usar a conciliação confirmada"}</option>${docs.filter((x) => !ant || (e.evidencia.tiposAceitos ?? []).includes(x.tipo)).map((x) => `<option value="${esc(x.id)}">${esc(TIPOS_DOCUMENTO[x.tipo] ?? "Documento")} — ${esc(x.descricao)}</option>`).join("")}</select></label>
+<label>Justificativa <input name="justificativa" required maxlength="500"${ant ? ` minlength="${esc(String(ant.justificativaMinima))}"` : ""}></label>
+${ant ? `<label class="caixa-marcar"><input type="checkbox" name="pagamentoAntecipado" required> É pagamento ANTECIPADO de ${esc(ant.contraparte ?? "este beneficiário")}: conferi beneficiário e valor no comprovante (saída ${esc(dataBR(ant.dataSaida))}, ${esc(String(ant.dias))} dia(s) antes da emissão em ${esc(dataBR(ant.dataEmissao))}).</label>` : ""}` }) : "";
   return `${fechar("Vincular pagamento do extrato")}
 <p class="nota">Prévia: nada foi gravado.</p>
 <h3>Conta a pagar</h3>
@@ -182,6 +186,7 @@ ${e.historico.conciliacoes.length ? `<ul class="mini">${e.historico.conciliacoes
   <li>${esc(e.efeito.banco)}</li><li>${esc(e.efeito.dre)}</li><li>${esc(e.efeito.fluxo)}</li>
   ${e.efeito.diferenca ? `<li>Sobra da saída: ${valor(e.efeito.saida.disponivelDepoisCentavos)} continua como saída a classificar — nada é lançado como taxa, juro ou desconto.</li>` : ""}
 </ul>
+${ant ? `<p class="aviso aviso--alerta" role="alert"><strong>Atenção — saída anterior à emissão da conta.</strong> ${esc(ant.alerta)}</p>` : ""}
 ${e.bloqueios.length ? `<p class="aviso aviso--alerta" role="alert"><strong>Não disponível:</strong> ${e.bloqueios.map(esc).join(" ")}</p>` : ""}
 ${evidencia}
 ${form}`;

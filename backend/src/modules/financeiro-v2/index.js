@@ -7,6 +7,8 @@ export { comprovarDestinoIsolado, exigirDestinoLocal } from "./infra/postgres/de
 export { criarCofreMemoria } from "./infra/cofreMemoria.js";
 export { criarCofreDisco, criarRegistroDeAcessosNegadosEmDisco, criarRegistroDeAcessosNegadosMemoria, exigirPastaPrivada } from "./infra/cofreDisco.js";
 export { criarAdaptadorDeSessao, criarConcessoesDoRepositorio, criarConcessoesMemoria } from "./aplicacao/sessao.js";
+// Execução 09 — adaptador da sessão da PLATAFORMA e autoridade de provisionamento (puros; nada montado em rotas).
+export { ACOES_COM_MFA_RECENTE, MOTIVO as MOTIVO_INTEGRACAO, avaliarAutenticacao, criarAdaptadorDaPlataforma, criarAutoridadeDaPlataforma, identificarSessao } from "./integracao/plataforma.js";
 export { FONTES_PADRAO, criarRegistroDeFontes } from "./importacao/fontes/index.js";
 export { analisarArquivo } from "./importacao/motor.js";
 export { proporCandidatas } from "./importacao/correspondencias.js";
