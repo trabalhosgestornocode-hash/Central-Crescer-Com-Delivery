@@ -122,9 +122,9 @@ function desenhar(dados) {
       return adm.configuracoes(corpo, f, ctx);
     }
     case "documentos": return adm.documentos(dados, f);
-    case "contas-a-pagar": return tes.contasAPagar(dados, f);
+    case "contas-a-pagar": return tes.contasAPagar(dados, f, { permissoes: permissoesDaUnidade() });
     case "contas-a-receber": return tes.contasAReceber(dados, f);
-    case "caixa-e-bancos": if (!f.contaId) f.contas = dados.contas.map((c) => ({ id: c.id, nome: c.nome })); return tes.caixaEBancos(dados, f);
+    case "caixa-e-bancos": if (!f.contaId) f.contas = dados.contas.map((c) => ({ id: c.id, nome: c.nome })); return tes.caixaEBancos(dados, f, { permissoes: permissoesDaUnidade() });
     case "calendario": estado.calendario = dados; return tes.calendario(dados, { selecionado: estado.diaSelecionado?.startsWith(dados.mes) ? estado.diaSelecionado : null });
     case "fluxo-de-caixa": return tes.fluxoDeCaixa(dados, f);
     case "vendas-e-recebimentos": return ven.vendasERecebimentos(dados, f);
@@ -192,7 +192,7 @@ async function abrirNoPainel(url, desenhar, origem) {
 const abrirPainel = (codigo, origem) => abrirNoPainel(`/api/fv2/composicao?${qs({ codigo })}`, (d) => telas.composicao(d, { unidadeNome: nomeUnidade() }), origem);
 const ctxPainel = () => ({ permissoes: permissoesDaUnidade(), competencia: estado.competencia });
 const DETALHES = {
-  pagar: ["conta-a-pagar", (d) => tes.detalheAPagar(d)], receber: ["conta-a-receber", (d) => tes.detalheAReceber(d)],
+  pagar: ["conta-a-pagar", (d) => tes.detalheAPagar(d, ctxPainel())], receber: ["conta-a-receber", (d) => tes.detalheAReceber(d)],
   venda: ["venda", (d) => ven.detalheDaVenda(d)], recebimento: ["recebimento", (d) => ven.detalheDoRecebimento(d)],
   "documento-cofre": ["documento", (d) => adm.detalheDocumentoCofre(d)],
   documento: ["conferencias/documento", (d) => conf.detalheDocumento(d, ctxPainel())], proposta: ["conferencias/proposta", (d) => conf.detalheProposta(d, ctxPainel())],

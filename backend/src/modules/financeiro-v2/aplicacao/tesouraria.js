@@ -17,6 +17,9 @@ import {
 import { baseNaTransacao } from "./base.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { exigirEquivalencia } from "./cargaDaCompetencia.js";
+import { exigirCentavos } from "../dominio/dinheiro.js";
+import { exigirData } from "../dominio/tempo.js";
+import { exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
 
 const ROTULO = Object.freeze({ ENTRADA: "Entrada de dinheiro", SAIDA: "Saída de dinheiro", SANGRIA: "Sangria", SUPRIMENTO: "Suprimento" });
 
@@ -173,6 +176,29 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
         const r = p.recebivelPorId.get(id);
         if (!r) falhar(CODIGO.NAO_ENCONTRADO, "Conta a receber não encontrada.");
         return { dataBase: b.hoje(), titulo: tituloAReceber(p, r, b.hoje()), historico: await historicoDe(cx, tx, TIPO.RECEBIVEL, id) };
+      });
+    },
+
+    /**
+     * 08D — PAGAR uma conta a pagar pela tela: saída da conta + liquidação do título na MESMA transação (nunca sobra
+     * saída sem vínculo se algo falhar no meio). Idempotente: o mesmo pagamento (título, conta, data, valor) não se repete.
+     * A competência da SAÍDA precisa aceitar escrita; o título pode ser de competência homologada (posição posterior,
+     * registrada como atualização posterior ao fechamento — regra comum da liquidação).
+     */
+    pagarContaAPagar(ctx, entrada) {
+      semCamposDesconhecidos(entrada ?? {}, ["obrigacaoId", "contaId", "dataEfetiva", "valorCentavos", "documentoId"], "pagamento");
+      const c = { ...entrada, obrigacaoId: exigirUuid(entrada?.obrigacaoId, "obrigacaoId"), contaId: exigirUuid(entrada?.contaId, "contaId"), dataEfetiva: exigirData(entrada?.dataEfetiva, "dataEfetiva"), valorCentavos: exigirCentavos(entrada?.valorCentavos, "valorCentavos", { positivo: true }) };
+      return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
+        const caixa = operacoesDeCaixa(baseNaTransacao(b, tx, cx));
+        const o = await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, c.obrigacaoId, "Conta a pagar");
+        const m = await caixa.registrarMovimentacao(cx, {
+          contaId: c.contaId, dataEfetiva: c.dataEfetiva, sentido: SENTIDO.SAIDA, valorCentavos: c.valorCentavos, natureza: NATUREZA_MOVIMENTACAO.PAGAMENTO,
+          descricao: `Pagamento: ${o.descricao ?? "conta a pagar"}`, ...(c.documentoId ? { documentoId: c.documentoId } : {}),
+          fonte: { sistema: "MANUAL", idExterno: `PAGAR:${o.id}:${c.dataEfetiva}:${c.valorCentavos}` },
+        });
+        if (m.repetido && m.movimentacao.alocadoCentavos >= m.movimentacao.valorCentavos) return { movimentacao: m.movimentacao, repetido: true };
+        const l = await caixa.registrarLiquidacao(cx, { movimentacaoId: m.movimentacao.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: o.id, valorCentavos: c.valorCentavos }] });
+        return { movimentacao: l.movimentacao, liquidacoes: l.liquidacoes, titulo: l.titulos[0], repetido: false };
       });
     },
 

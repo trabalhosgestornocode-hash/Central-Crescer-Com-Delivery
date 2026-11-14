@@ -176,12 +176,19 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const FILTRO_VENDAS = ["competencia", "inicio", "fim", "canal", "forma", "processador", "situacao", "valorMinimoCentavos", "valorMaximoCentavos", "identificador", "pagina", "tamanho"];
   const NUMEROS_VENDAS = ["pagina", "tamanho", "valorMinimoCentavos", "valorMaximoCentavos"];
   const TESOURARIA = {
-    "/api/fv2/contas-a-pagar": (ctx, p) => nucleo.consultarContasAPagar(ctx, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
+    "/api/fv2/contas-a-pagar": async (ctx, p) => {
+      const r = await nucleo.consultarContasAPagar(ctx, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"]));
+      // 08D: opções do formulário "Registrar conta a pagar": categorias lançáveis que não são receita (inclui "a classificar") e fornecedores.
+      const cats = (await nucleo.consultarRegistros(ctx, { tipo: "CATEGORIA" })).filter((c) => c.aceitaLancamento && c.ativa !== false && c.natureza !== "RECEITA").map((c) => ({ codigo: c.codigo, nome: c.nome })).sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR"));
+      const fornecedores = (await nucleo.consultarRegistros(ctx, { tipo: "CONTRAPARTE" })).map((c) => ({ id: c.id, nome: c.nome })).sort((a, b2) => a.nome.localeCompare(b2.nome, "pt-BR"));
+      return { ...r, opcoesDeRegistro: { categorias: cats, fornecedores } };
+    },
     "/api/fv2/contas-a-receber": (ctx, p) => nucleo.consultarContasAReceber(ctx, filtro(p, ["competencia", "previstoDe", "previstoAte", "processador", "canal", "tipo", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"])),
     "/api/fv2/caixa-e-bancos": (ctx, p) => nucleo.consultarCaixaEBancos(ctx, filtro(p, ["inicio", "fim", "contaId", "pagina", "tamanho"], ["pagina", "tamanho"])),
     "/api/fv2/fluxo-de-caixa": (ctx, p) => nucleo.consultarFluxoDeCaixa(ctx, filtro(p, ["inicio", "fim", "granularidade"])),
     "/api/fv2/calendario": (ctx, p) => nucleo.consultarCalendarioFinanceiro(ctx, filtro(p, ["mes"])),
-    "/api/fv2/conta-a-pagar": (ctx, p) => nucleo.detalharContaAPagar(ctx, { id: reverso.get(p.id) ?? NENHUM }),
+    // 08D: o detalhe leva as contas ativas (para o formulário de pagamento) — só nome e referência opaca.
+    "/api/fv2/conta-a-pagar": async (ctx, p) => ({ ...(await nucleo.detalharContaAPagar(ctx, { id: reverso.get(p.id) ?? NENHUM })), contasParaPagar: (await nucleo.consultarRegistros(ctx, { tipo: "CONTA" })).filter((c) => c.ativa).map((c) => ({ id: c.id, nome: c.nome })) }),
     "/api/fv2/conta-a-receber": (ctx, p) => nucleo.detalharContaAReceber(ctx, { id: reverso.get(p.id) ?? NENHUM }),
     // Vendas e Recebimentos (06B) — somente leitura.
     "/api/fv2/vendas": (ctx, p) => nucleo.consultarVendas(ctx, filtro(p, FILTRO_VENDAS, NUMEROS_VENDAS)),
@@ -242,6 +249,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     return recebido.length === esperado.length && timingSafeEqual(recebido, esperado);
   };
   const id = (v) => (typeof v === "string" && v.startsWith("ref-") ? reverso.get(v) ?? NENHUM : NENHUM);
+  /** 08D: "1.234,56" → 123456 (estrito; nada de ponto flutuante). Inválido → o núcleo recusa (valor não inteiro). */
+  const centavos = (v) => { const t = String(v ?? "").trim().replace(/\./g, ""); const m = /^(\d{1,9})(?:,(\d{1,2}))?$/.exec(t); return m ? Number(m[1]) * 100 + Number((m[2] ?? "0").padEnd(2, "0")) : t; };
   /** Ações LOCAIS da demonstração: cada uma chama a operação REAL do núcleo (permissão, transação, idempotência, histórico). */
   const ACOES = {
     "/api/fv2/acoes/importacao/receber": { campos: ["arquivo"], fazer: (ctx, b) => {
@@ -265,6 +274,13 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
         vinculo: { registroTipo: b.registroTipo, registroId: id(b.registro) },
       });
     } },
+    // 08D — operações do dia a dia pela tela (jornada completa): registrar conta, pagar conta, informar saldo.
+    "/api/fv2/acoes/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento"], fazer: async (ctx, b) => {
+      const contraparteId = b.fornecedor ? id(b.fornecedor) : (await nucleo.registrarContraparte(ctx, { tipo: "FORNECEDOR", nome: String(b.fornecedorNovo ?? "").slice(0, 120) })).id;
+      return nucleo.registrarObrigacao(ctx, { contraparteId, valorOriginalCentavos: centavos(b.valor), categoria: b.categoria, descricao: b.descricao, competencia: b.competencia, dataEmissao: b.dataEmissao, vencimento: b.vencimento });
+    } },
+    "/api/fv2/acoes/obrigacoes/pagar": { campos: ["obrigacao", "conta", "dataEfetiva", "valor"], fazer: (ctx, b) => nucleo.pagarContaAPagar(ctx, { obrigacaoId: id(b.obrigacao), contaId: id(b.conta), dataEfetiva: b.dataEfetiva, valorCentavos: centavos(b.valor) }) },
+    "/api/fv2/acoes/saldos/registrar": { campos: ["conta", "data", "referencia", "valor", "observacao"], fazer: (ctx, b) => nucleo.registrarSaldoDeConta(ctx, { contaId: id(b.conta), data: b.data, referencia: b.referencia, valorCentavos: centavos(b.valor), ...(b.observacao ? { observacao: b.observacao } : {}) }) },
     "/api/fv2/acoes/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (ctx, b) => nucleo.reclassificarLancamento(ctx, {
       lancamentoId: id(b.lancamento), categoria: b.categoria, justificativa: b.justificativa,
       versaoEsperada: /^\d{1,9}$/.test(String(b.versaoEsperada ?? "")) ? Number(b.versaoEsperada) : b.versaoEsperada, ...(b.documento ? { documentoId: id(b.documento) } : {}),
@@ -321,7 +337,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
     [m.CODIGO.TRANSICAO_INVALIDA]: 409, [m.CODIGO.CONCILIACAO_INVALIDA]: 409, [m.CODIGO.CONFLITO_IDEMPOTENCIA]: 409, [m.CODIGO.CONFLITO_VERSAO]: 409,
     [m.CODIGO.IMPORTACAO_INVALIDA]: 422, [m.CODIGO.HOMOLOGACAO_BLOQUEADA]: 409, [m.CODIGO.COMPETENCIA_HOMOLOGADA]: 409,
     [m.CODIGO.CONFIRMACAO_EXIGIDA]: 400, [m.CODIGO.CATEGORIA_INVALIDA]: 409, [m.CODIGO.OPERACAO_INVALIDA]: 409, [m.CODIGO.DOCUMENTO_INDISPONIVEL]: 409,
-    [m.CODIGO.DOCUMENTO_ADULTERADO]: 409, [m.CODIGO.COFRE_INDISPONIVEL]: 503, [m.CODIGO.EVIDENCIA_EXIGIDA]: 409, [m.CODIGO.DOCUMENTO_INVALIDO]: 422,
+    [m.CODIGO.DOCUMENTO_ADULTERADO]: 409, [m.CODIGO.COFRE_INDISPONIVEL]: 503, [m.CODIGO.EVIDENCIA_EXIGIDA]: 409, [m.CODIGO.DOCUMENTO_INVALIDO]: 422, [m.CODIGO.LIQUIDACAO_EXCEDE_SALDO]: 409, [m.CODIGO.LIQUIDACAO_EXCEDE_MOVIMENTACAO]: 409, [m.CODIGO.LIQUIDACAO_INCOMPATIVEL]: 409,
   });
   const acoesMarcadas = (b) => Object.values(m.ACAO).filter((a) => b[`acao_${a.split(".")[1]}`] === "on" || b[`acao_${a.split(".")[1]}`] === true);
   const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !== undefined && b[k] !== "").map((k) => [k, b[k]]));

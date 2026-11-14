@@ -16,6 +16,15 @@ const card = (titulo, conteudo, explicacao = "", extra = "") => `<article class=
 const td = (rotulo, conteudo, classe = "") => `<td data-rotulo="${esc(rotulo)}"${classe ? ` class="${classe}"` : ""}>${conteudo}</td>`;
 const opcao = (v, rotulo, atual) => `<option value="${esc(v)}"${v === (atual ?? "") ? " selected" : ""}>${esc(rotulo)}</option>`;
 const nenhum = (texto) => `<p class="nota vazio-lista">${esc(texto)}</p>`;
+/** 08D — formulário de AÇÃO (grava de verdade; exige confirmação; resultado anunciado). */
+let seqForm = 0;
+const formAcao = ({ url, titulo, campos, aviso, rotulo, recarregar = "lista" }) => {
+  const k = (seqForm += 1);
+  return `<section class="card" aria-labelledby="t-acao-${k}"><h3 id="t-acao-${k}">${esc(titulo)}</h3><form class="acao" data-acao="${esc(url)}" data-recarregar="${esc(recarregar)}">${campos}
+<label class="caixa-marcar"><input type="checkbox" name="confirmar" required> ${esc(aviso)}</label>
+<button type="submit" class="botao botao--primario">${esc(rotulo)}</button><p class="resultado-acao" role="status" aria-live="polite"></p></form></section>`;
+};
+const podeRegistrar = (ctx) => (ctx?.permissoes ?? []).includes("financeiro_v2.registrar");
 
 export function documentos(lista = []) {
   if (!lista.length) return '<p class="nota">Nenhum documento vinculado. A pendência fica visível; nenhum documento é presumido.</p>';
@@ -35,10 +44,21 @@ const historico = (lista = []) => (lista.length ? `<ol class="historico">${lista
 const fechar = (titulo) => `<div class="painel-cabeca"><h2 id="painel-titulo">${esc(titulo)}</h2><button type="button" class="botao-fechar" data-fechar-painel aria-label="Fechar detalhe">×</button></div>`;
 
 // ------------------------------------------------------------------------------------------------- contas a pagar
-export function contasAPagar(r, f = {}) {
+export function contasAPagar(r, f = {}, ctx = {}) {
   const t = r.totais;
+  const o = r.opcoesDeRegistro;
+  const registrar = podeRegistrar(ctx) && o ? formAcao({ url: "/api/fv2/acoes/obrigacoes/registrar", titulo: "Registrar conta a pagar", rotulo: "Registrar conta", aviso: "Confirmo o registro da conta (a categoria decide a natureza; \"a classificar\" fica fora da DRE até haver evidência).",
+    campos: `<label>Fornecedor existente <select name="fornecedor">${opcao("", "— novo fornecedor —", "")}${o.fornecedores.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
+<label>Ou novo fornecedor <input name="fornecedorNovo" maxlength="120"></label>
+<label>Descrição <input name="descricao" maxlength="200" required></label>
+<label>Valor (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" required></label>
+<label>Categoria <select name="categoria" required>${o.categorias.map((x) => opcao(x.codigo, x.nome, "")).join("")}</select></label>
+<label>Competência <input type="month" name="competencia" value="${esc(f.competencia ?? "")}" required></label>
+<label>Emissão <input type="date" name="dataEmissao" required></label>
+<label>Vencimento <input type="date" name="vencimento" required></label>` }) : "";
   return `${cabecalho("Contas a Pagar", `Posição em ${esc(dataBR(r.dataBase))} · ${t.registros} conta(s) no filtro`)}
 ${abas("contas-a-pagar")}
+${registrar}
 <section class="resumo" aria-label="Resumo das contas a pagar">
   ${card("Em aberto", valor(t.saldoCentavos), "Saldo que ainda falta pagar (inclui vencidas). Pagamento parcial reduz o saldo; não cria despesa nova.")}
   ${card("Vencido", valor(t.vencidoCentavos), "Contas com vencimento passado e saldo em aberto. Vencer nunca marca a conta como paga.")}
@@ -63,8 +83,14 @@ ${paginacao(r.paginacao, "contas-a-pagar")}
 ${r.porFornecedor.length ? `<details class="card"><summary><h2 class="inline">Por fornecedor</h2></summary><ul class="lista-simples">${r.porFornecedor.map((g) => `<li><span>${esc(g.fornecedor?.nome ?? "Fornecedor não identificado")} · ${g.quantidade} conta(s)</span><span>${valor(g.saldoCentavos)}${g.vencidoCentavos ? ` <small class="valor--negativo">vencido ${esc(moeda(g.vencidoCentavos))}</small>` : ""}</span></li>`).join("")}</ul></details>` : ""}`;
 }
 
-export function detalheAPagar(d) {
+export function detalheAPagar(d, ctx = {}) {
   const t = d.titulo;
+  const pagar = podeRegistrar(ctx) && t.saldoCentavos > 0 && t.situacao !== "CANCELADO" && d.contasParaPagar?.length ? formAcao({ url: "/api/fv2/acoes/obrigacoes/pagar", titulo: "Registrar pagamento", rotulo: "Registrar pagamento", recarregar: `pagar:${t.id}`,
+    aviso: "Confirmo o pagamento: a saída e a baixa do título são gravadas juntas; pagar não cria despesa nova.",
+    campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
+<label>Conta de saída <select name="conta" required>${d.contasParaPagar.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
+<label>Data do pagamento <input type="date" name="dataEfetiva" required></label>
+<label>Valor (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(t.saldoCentavos).replace(/[^0-9.,]/g, ""))}" required></label>` }) : "";
   return `${fechar(`${t.fornecedor?.nome ?? "Conta a pagar"} · ${descricaoLegivel(t.descricao)}`)}
 <dl class="ficha">
   <dt>Situação</dt><dd>${selo(t.situacao)}</dd>
@@ -85,6 +111,7 @@ ${d.parcelas.length > 1 ? `<h3>Parcelas</h3><ul class="lista-simples">${d.parcel
 <h3>Pagamentos</h3>
 ${t.pagamentos.length ? `<ul class="lista-simples">${t.pagamentos.map((g) => `<li><span>${esc(dataBR(g.data))} · ${esc(g.conta ?? "conta não identificada")}${g.titulosNaMesmaMovimentacao > 1 ? ` · saída agrupada com ${g.titulosNaMesmaMovimentacao - 1} outra(s) conta(s)` : ""}</span><span>${valor(g.valorCentavos)}</span></li>`).join("")}</ul>` : nenhum("Nenhum pagamento vinculado.")}
 <h3>Documentos</h3>${documentos(t.documentos)}
+${pagar}
 <h3>Histórico</h3>${historico(d.historico)}`;
 }
 
@@ -175,10 +202,18 @@ function contaFinanceira(c) {
 </article>`;
 }
 
-export function caixaEBancos(r, f = {}) {
+export function caixaEBancos(r, f = {}, ctx = {}) {
   const k = r.consolidado;
+  const saldo = podeRegistrar(ctx) && r.contas?.length ? formAcao({ url: "/api/fv2/acoes/saldos/registrar", titulo: "Informar saldo de conta (extrato)", rotulo: "Registrar saldo informado",
+    aviso: "Confirmo o saldo informado: ele não corrige nada — se não conferir com o calculado, a diferença aparece como divergência.",
+    campos: `<label>Conta <select name="conta" required>${r.contas.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
+<label>Data <input type="date" name="data" required></label>
+<label>Referência <select name="referencia">${opcao("FIM_DO_DIA", "Fim do dia (depois dos movimentos)", "FIM_DO_DIA")}${opcao("INICIO_DO_DIA", "Início do dia", "")}</select></label>
+<label>Saldo (R$) <input name="valor" inputmode="decimal" pattern="-?[0-9.]{1,13}(,[0-9]{1,2})?" required></label>
+<label>Observação <input name="observacao" maxlength="300"></label>` }) : "";
   return `${cabecalho("Caixa e Bancos", `${esc(dataBR(r.periodo.inicio))} a ${esc(dataBR(r.periodo.fim))} · posição em ${esc(dataBR(r.dataBase))}`)}
 <p class="aviso">Saldo bancário não é faturamento. Entradas e saídas sem vínculo ficam pendentes: nada vira receita ou despesa pelo sinal do valor.</p>
+${saldo}
 <form class="filtros-locais" data-filtro-local="caixa-e-bancos" aria-label="Período e conta">
   <label>De <input type="date" name="inicio" value="${esc(r.periodo.inicio)}"></label>
   <label>Até <input type="date" name="fim" value="${esc(r.periodo.fim)}"></label>

@@ -527,6 +527,9 @@ export function resultadoDaAcao(r) {
   if (d.versao?.tipo) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado]?.rotulo ?? d.estado)}. Versão nº ${d.versao.numero} registrada.`;
   if (d.estado && ESTADOS_COMPETENCIA[d.estado]) return `Feito: ${esc(ESTADOS_COMPETENCIA[d.estado].rotulo)}.`;
   if (d.responsavelId) return "Atribuição registrada no histórico.";
+  if (d.movimentacao && d.titulo) return `Pagamento registrado: saída e baixa da conta gravadas juntas (saldo da conta agora ${esc(moeda(d.titulo.saldoCentavos))}).`;
+  if (d.lancamento && d.obrigacoes) return d.repetido ? "Esta conta já estava registrada: nada foi duplicado." : `Conta registrada: ${d.obrigacoes.length} parcela(s), categoria ${esc(d.lancamento.categoria)}.`;
+  if (d.saldo?.contaId) return d.repetido ? "Este saldo já estava informado: nada foi duplicado." : `Saldo informado registrado: ${esc(moeda(d.saldo.valorCentavos))} em ${esc(dataBR(d.saldo.data))}.`;
   if (d.validacao && d.documento) return d.repetido ? "Este documento já estava guardado e vinculado: nada foi duplicado." : `Documento guardado e vinculado (${esc(d.validacao.formato)}, ${Math.max(1, Math.round(d.validacao.tamanhoBytes / 1024))} KB, integridade conferida${d.validacao.conteudoAtivo ? "; tem conteúdo ativo: só download" : ""}). Anexar não resolve a pendência sozinho.`;
   if (d.lancamento && d.anterior) return `Reclassificado: ${esc(d.anterior.categoria)} → ${esc(d.lancamento.categoria)} (versão ${d.lancamento.versao}). DRE, Visão Geral e fechamento passam a refletir a mudança.`;
   if (d.conferido !== undefined) return d.conferido ? "Integridade conferida: o arquivo confere com o hash registrado." : `<span class="valor--negativo">${esc(d.motivo)}</span>`;
