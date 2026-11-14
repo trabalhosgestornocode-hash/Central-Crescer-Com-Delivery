@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACAO, CODIGO } from "../../src/modules/financeiro-v2/index.js";
-import { ORG_A, ORG_B, UNI_A, UNI_A2, UNI_B, ctx, entrada, montarComCadastros, obrigacao, rejeita, saida, sha } from "./helpers/cenario.js";
+import { ORG_A, ORG_B, UNI_A, UNI_A2, UNI_B, ctx, entrada, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida, sha } from "./helpers/cenario.js";
 import { PERIODO_SETEMBRO, saiposFormas, saiposVendas, texto } from "./helpers/arquivos.js";
 import { faturamentoSaiposPdf } from "./helpers/formatos.js";
 
@@ -236,6 +236,8 @@ test("21, 22, 23, 25 — fechamento: preliminar, com pendências, homologação 
   for (const p of (await n.listarPropostas(c, {})).filter((x) => ["PROPOSTA", "AGUARDANDO_EVIDENCIA", "AGUARDANDO_REVISAO", "APROVADA"].includes(x.estado) && x.competencia === "2026-09")) {
     await n.rejeitarProposta(c, { propostaId: p.id, justificativa: "Fora do escopo desta conferência sintética." });
   }
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(n, c, SET.competencia);
   f = await n.consultarFechamento(c, SET);
   assert.equal(f.impedimentos.length, 0);
   assert.ok(f.exigemDocumentacao > 0);
@@ -245,7 +247,9 @@ test("21, 22, 23, 25 — fechamento: preliminar, com pendências, homologação 
   await n.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.REABRIR]), { ...SET, novoEstado: "ABERTA", confirmar: true, justificativa: "Relatório por pedido chegou: revisão." });
   f = await n.consultarFechamento(c, SET);
   assert.equal(f.revisoes, 1);
-  assert.deepEqual(f.historico.map((x) => x.para), ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO", "ABERTA"]);
+  // 08E: o histórico também traz a documentação de cada pendência (DOCUMENTACAO_DE_PENDENCIA); fora ela, os estados:
+  assert.deepEqual(f.historico.filter((x) => x.evento !== "DOCUMENTACAO_DE_PENDENCIA").map((x) => x.para), ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO", "ABERTA"]);
+  assert.ok(f.historico.some((x) => x.evento === "DOCUMENTACAO_DE_PENDENCIA"));
   assert.equal(f.historico.at(-1).justificativa, "Relatório por pedido chegou: revisão.");
 });
 
@@ -256,6 +260,7 @@ test("23 — saldo de conta divergente também bloqueia a homologação; 24 — 
   await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_PRELIMINAR" });
   let f = await n.consultarFechamento(c, SET);
   assert.deepEqual([f.impedimentos.length, f.secoes.find((s) => s.codigo === "RECEBIVEIS").situacao], [0, "EM_ABERTO_NAO_BLOQUEIA"]);
+  await prepararHomologacao(n, c, SET.competencia);
   assert.equal((await n.alterarEstadoDaCompetencia(c, { ...SET, novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética." })).estado, "FECHAMENTO_HOMOLOGADO");
   // Outubro: saldos informados que não fecham com o movimento → bloqueia.
   const OUT = { competencia: "2026-10" };

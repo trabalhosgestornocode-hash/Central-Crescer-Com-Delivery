@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACAO, CODIGO, METODOS_DO_COFRE, conferirCofre, criarCofreMemoria } from "../../src/modules/financeiro-v2/index.js";
-import { ORG_A, ORG_B, UNI_A, UNI_A2, UNI_B, ctx, montarComCadastros, obrigacao, rejeita, saida } from "./helpers/cenario.js";
+import { ORG_A, ORG_B, UNI_A, UNI_A2, UNI_B, ctx, entrada, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida } from "./helpers/cenario.js";
 
 const SET = "2026-09";
 const estado = (nucleo, c, novoEstado, extra = {}) => nucleo.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado, confirmar: true, ...extra });
@@ -55,8 +55,14 @@ test("homologada bloqueia escrita ordinária; reabrir exige permissão própria,
   const { nucleo, c, banco, fornecedor } = await montarComCadastros();
   const { obrigacoes: [ob], lancamento } = await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id));
   const pg = (await nucleo.registrarMovimentacao(c, saida(banco.id, 1000))).movimentacao;
+  // 08E: saída sem vínculo bloqueia a homologação (pode ser despesa não reconhecida): ela paga parte da conta antes.
+  await nucleo.registrarLiquidacao(c, { movimentacaoId: pg.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 1000 }] });
+  // Entrada sem origem: ressalva admissível (efeito limitado e conservador) — usada abaixo na tentativa de estorno.
+  const en = (await nucleo.registrarMovimentacao(c, entrada(banco.id, 500))).movimentacao;
   await estado(nucleo, c, "FECHAMENTO_PRELIMINAR");
   await rejeita(estado(nucleo, c, "FECHAMENTO_HOMOLOGADO"), CODIGO.TRANSICAO_INVALIDA); // sem metodologia
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(nucleo, c, SET);
   await estado(nucleo, c, "FECHAMENTO_HOMOLOGADO", { metodologia: "Conferência sintética com o extrato" });
 
   const antes = { ob: (await nucleo.consultarRegistros(c, { tipo: "OBRIGACAO" })).length, mov: (await nucleo.consultarRegistros(c, { tipo: "MOVIMENTACAO" })).length, lan: (await nucleo.consultarRegistros(c, { tipo: "LANCAMENTO" })).length };
@@ -68,7 +74,7 @@ test("homologada bloqueia escrita ordinária; reabrir exige permissão própria,
     () => nucleo.corrigirObrigacao(c, { obrigacaoId: ob.id, mudancas: { descricao: "x" }, justificativa: "y" }),
     () => nucleo.cancelarObrigacao(c, { obrigacaoId: ob.id, justificativa: "y" }),
     () => nucleo.corrigirLancamento(c, { lancamentoId: lancamento.id, mudancas: { descricao: "x" }, justificativa: "y" }),
-    () => nucleo.estornarMovimentacao(c, { movimentacaoId: pg.id, justificativa: "y" }),
+    () => nucleo.estornarMovimentacao(c, { movimentacaoId: en.id, justificativa: "y" }),
   ]) {
     await rejeita(tentativa, CODIGO.COMPETENCIA_HOMOLOGADA);
   }

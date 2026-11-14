@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CODIGO } from "../../src/modules/financeiro-v2/index.js";
 import { PASTA_DE_MIGRACOES, aplicarMigracoes, listarMigracoes } from "../../scripts/fv2/ambiente.mjs";
-import { ESCOPOS_PADRAO, ORG_A, ORG_B, UNI_A, UNI_B, USUARIO, ctx, montar, obrigacao, rejeita, saida, sha } from "./helpers/cenario.js";
+import { ESCOPOS_PADRAO, ORG_A, ORG_B, UNI_A, UNI_B, USUARIO, ctx, montar, obrigacao, prepararHomologacao, rejeita, saida, sha } from "./helpers/cenario.js";
 import { abrirPool, criarBancoDeTeste, motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
@@ -243,7 +243,8 @@ test("competência homologada é protegida também no banco; reabrir sem justifi
   const conta = await nucleo.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco" });
   const fornecedor = await nucleo.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "Fornecedor" });
   const { lancamento } = await nucleo.registrarObrigacao(c, obrigacao(fornecedor.id));
-  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas (ressalva sintética) antes de homologar.
+  await prepararHomologacao(nucleo, c, "2026-09");
   await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Conferência sintética" });
 
   const movimentacao = (data) => comoAplicacao(pool, A, async (cl) => {

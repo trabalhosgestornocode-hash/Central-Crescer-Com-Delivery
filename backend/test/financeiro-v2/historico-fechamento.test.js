@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CODIGO, conferirTransacao, criarRepositorioMemoria } from "../../src/modules/financeiro-v2/index.js";
-import { ORG_A, OUTRO_USUARIO, UNI_A, USUARIO, ctx, montarComCadastros, obrigacao, rejeita, saida } from "./helpers/cenario.js";
+import { ORG_A, OUTRO_USUARIO, UNI_A, USUARIO, ctx, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida } from "./helpers/cenario.js";
 
 const historico = (nucleo, c, registroTipo, registroId) => nucleo.consultarHistorico(c, { registroTipo, registroId });
 
@@ -111,11 +111,14 @@ test("estados de fechamento seguem a ordem prevista e exigem o que cada um pede"
   // Texto solto não documenta pendência (06D): exige descrição e impacto.
   await rejeita(mudar("FECHAMENTO_COM_PENDENCIAS", { pendencias: ["só um texto"] }), CODIGO.ENTRADA_INVALIDA);
   await rejeita(mudar("FECHAMENTO_HOMOLOGADO"), CODIGO.TRANSICAO_INVALIDA); // sem metodologia
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(nucleo, c, "2026-09");
   const homologada = await mudar("FECHAMENTO_HOMOLOGADO", { metodologia: "Regime de competência; conciliação por extrato" });
   assert.deepEqual([homologada.estado, homologada.metodologia, homologada.decididoPor], ["FECHAMENTO_HOMOLOGADO", "Regime de competência; conciliação por extrato", USUARIO]);
   await rejeita(mudar("FECHAMENTO_PRELIMINAR"), CODIGO.TRANSICAO_INVALIDA); // homologada só sai por revisão
   const h = await historico(nucleo, c, "COMPETENCIA", homologada.id);
-  assert.deepEqual(h.map((e) => e.depois.estado), ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO"]);
+  // 08E: documentar pendências também fica no histórico da competência; fora isso, os estados seguem a ordem.
+  assert.deepEqual(h.filter((e) => e.evento !== "DOCUMENTACAO_DE_PENDENCIA").map((e) => e.depois.estado), ["FECHAMENTO_PRELIMINAR", "FECHAMENTO_COM_PENDENCIAS", "FECHAMENTO_HOMOLOGADO"]);
 });
 
 test("competência homologada não sofre alteração silenciosa; revisão é explícita e auditada", async () => {
@@ -125,6 +128,7 @@ test("competência homologada não sofre alteração silenciosa; revisão é exp
   const { liquidacoes: [liq] } = await nucleo.registrarLiquidacao(c, { movimentacaoId: pg.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: ob.id, valorCentavos: 40000 }] });
   const mudar = (novoEstado, extra = {}) => nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado, confirmar: true, ...extra });
   await mudar("FECHAMENTO_PRELIMINAR");
+  await prepararHomologacao(nucleo, c, "2026-09");
   await mudar("FECHAMENTO_HOMOLOGADO", { metodologia: "Metodologia sintética" });
   const retrato = JSON.stringify([await nucleo.consultarRegistros(c, { tipo: "OBRIGACAO" }), await nucleo.consultarRegistros(c, { tipo: "LANCAMENTO" }), await nucleo.consultarRegistros(c, { tipo: "MOVIMENTACAO" }), await nucleo.consultarRegistros(c, { tipo: "LIQUIDACAO" })]);
 

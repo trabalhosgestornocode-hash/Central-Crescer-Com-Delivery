@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACAO, CODIGO, criarNucleoFinanceiro } from "../../src/modules/financeiro-v2/index.js";
-import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, UNI_A2, ctx, montar, obrigacao, provisionarAdministrador } from "./helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, UNI_A2, ctx, montar, obrigacao, prepararHomologacao, provisionarAdministrador } from "./helpers/cenario.js";
 import { PERIODO_SETEMBRO, saiposVendas } from "./helpers/arquivos.js";
 import { comoAplicacao, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 
@@ -67,7 +67,8 @@ test("08C banco — aplicar proposta exige `aplicar` mesmo para quem registra e 
 test("08C banco — reabrir competência homologada exige `reabrir` mesmo para quem fecha (gatilho da transição)", pular, async () => {
   const { n, ingenuo, adm } = await cenario();
   await n.concederAcesso(adm(), { usuarioId: U(4), acoes: [ACAO.VER, ACAO.FECHAR, ACAO.CONCILIAR], justificativa: "Fecha e concilia, não reabre (sintético)." });
-  await n.alterarEstadoDaCompetencia(adm(), { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas (ressalva sintética) antes de homologar.
+  await prepararHomologacao(n, adm(), "2026-08");
   await n.alterarEstadoDaCompetencia(adm(), { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true });
   await recusado(ingenuo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, TODAS, U(4)), { competencia: "2026-08", novoEstado: "ABERTA", justificativa: "Tentativa sem reabrir (sintético).", confirmar: true }));
   const [c] = (await n.consultarRegistros(adm(), { tipo: "COMPETENCIA" })).filter((x) => x.competencia === "2026-08");

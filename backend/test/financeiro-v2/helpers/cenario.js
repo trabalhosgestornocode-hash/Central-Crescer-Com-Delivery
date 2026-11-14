@@ -91,6 +91,30 @@ export const obrigacao = (fornecedorId, extra = {}) => ({
 export const saida = (contaId, valorCentavos, extra = {}) => ({ contaId, dataEfetiva: "2026-09-20", sentido: "SAIDA", valorCentavos, natureza: "PAGAMENTO", ...extra });
 export const entrada = (contaId, valorCentavos, extra = {}) => ({ contaId, dataEfetiva: "2026-09-22", sentido: "ENTRADA", valorCentavos, natureza: "RECEBIMENTO", ...extra });
 
+/**
+ * 08E (F-1) — leva a competência até a homologação PELO CAMINHO CERTO: preliminar; documenta cada pendência que exige
+ * documentação (decisão + o que falta — dados SINTÉTICOS de teste); e, se houver ressalva, passa por "com pendências
+ * documentadas". Não resolve nem esconde nada: pendência bloqueante continua bloqueando a homologação.
+ */
+export async function prepararHomologacao(n, c, competencia) {
+  const atual = await n.consultarCompetencia(c, { competencia });
+  if (atual.estado === "FECHAMENTO_HOMOLOGADO") return null;
+  if (atual.estado === "ABERTA") await n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_PRELIMINAR" });
+  const f = await n.consultarFechamento(c, { competencia });
+  for (const p of [...f.avaliacaoDasPendencias.naoDocumentadas, ...f.avaliacaoDasPendencias.semEvidencia]) {
+    await n.documentarPendenciaDoFechamento(c, { competencia, pendencia: { chave: p.chave, descricao: p.titulo ?? "Pendência", impacto: "Ressalva do cenário sintético.", decisao: "Admitida como ressalva no cenário sintético.", documentacaoFaltante: "Documento do cenário sintético não fornecido." } });
+  }
+  const f2 = await n.consultarFechamento(c, { competencia });
+  if (f2.avaliacaoDasPendencias.ressalvas.length && f2.estado !== "FECHAMENTO_COM_PENDENCIAS") {
+    await n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_COM_PENDENCIAS" });
+  }
+  return n.consultarFechamento(c, { competencia });
+}
+export const homologarComRessalvas = async (n, c, competencia, extra = {}) => {
+  await prepararHomologacao(n, c, competencia);
+  return n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Conferência sintética.", confirmar: true, ...extra });
+};
+
 export async function rejeita(promessaOuFn, codigo) {
   await assert.rejects(typeof promessaOuFn === "function" ? promessaOuFn : () => promessaOuFn, (e) => {
     assert.ok(e instanceof ErroFinanceiro, `esperava ErroFinanceiro, veio ${e?.name}: ${e?.message}`);

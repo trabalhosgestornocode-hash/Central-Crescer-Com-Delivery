@@ -46,6 +46,17 @@ export const apurarRegistros = (d, competencia, escopo, apuradoEm) => apurar({
   recebiveis: d.recebiveis, ajustes: d.ajustes, competencias: d.competencias,
 }, { competencia, escopo, apuradoEm });
 
+/**
+ * 08E — pendências unificadas de uma competência sobre registros JÁ carregados (a mesma conta da Central). Usada também
+ * pela mudança de estado do fechamento: a homologação avalia exatamente as pendências que a tela mostra.
+ */
+export function pendenciasDosRegistros(d, competencia, { escopo, hoje, agora }) {
+  const v = montarVisao(d, hoje, { escopo, apuradoEm: agora, competencias: [competencia] });
+  const apuracao = v.apuracoes.get(competencia);
+  const divergenciasVendas = divergenciasDeVendas(v.ix, v.ops, v.avulsos, v.semVenda, [apuracao], hoje);
+  return { v, apuracao, pendencias: pendenciasDaCompetencia({ d, competencia, hoje, apuracao, vendas: v, divergenciasVendas }) };
+}
+
 export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conferirCarga = false }) {
   const escopoDe = (cx) => ({ organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId });
 
@@ -56,13 +67,7 @@ export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conf
   async function analisar(cx, tx, competencia) {
     const agora = b.agora();
     const hoje = b.hoje();
-    const montar = (d) => {
-      const v = montarVisao(d, hoje, { escopo: escopoDe(cx), apuradoEm: agora, competencias: [competencia] });
-      const apuracao = v.apuracoes.get(competencia);
-      const divergenciasVendas = divergenciasDeVendas(v.ix, v.ops, v.avulsos, v.semVenda, [apuracao], hoje);
-      const pendencias = pendenciasDaCompetencia({ d, competencia, hoje, apuracao, vendas: v, divergenciasVendas });
-      return { d, v, apuracao, pendencias };
-    };
+    const montar = (d) => ({ d, ...pendenciasDosRegistros(d, competencia, { escopo: escopoDe(cx), hoje, agora }) });
     const derivar = (d) => {
       const a = montar(d);
       const atual = d.competencias.find((x) => x.competencia === competencia) ?? null;

@@ -7,11 +7,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACAO, CODIGO, criarCofreDisco, criarCofreMemoria, criarNucleoFinanceiro, criarRegistroDeAcessosNegadosMemoria } from "../../src/modules/financeiro-v2/index.js";
-import { AGORA, ESCOPOS_PADRAO, ORG_A, ORG_B, OUTRO_USUARIO, UNI_A, UNI_A2, UNI_B, USUARIO, ctx, entrada, montar, montarComCadastros, obrigacao, provisionarAdministrador, rejeita, saida, sha } from "./helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ORG_A, ORG_B, OUTRO_USUARIO, UNI_A, UNI_A2, UNI_B, USUARIO, ctx, entrada, montar, montarComCadastros, obrigacao, prepararHomologacao, provisionarAdministrador, rejeita, saida, sha } from "./helpers/cenario.js";
 
 const SET = "2026-09";
 const OUT = "2026-10";
-const homologar = (n, c, competencia = SET, extra = {}) => n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Conferência sintética.", confirmar: true, ...extra });
+// 08E: homologar passa pelo caminho certo (pendências que exigem documentação são documentadas como ressalva sintética).
+const homologar = async (n, c, competencia = SET, extra = {}) => { await prepararHomologacao(n, c, competencia); return n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Conferência sintética.", confirmar: true, ...extra }); };
 const preliminar = (n, c, competencia = SET) => n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_PRELIMINAR" });
 const fechar = async (n, c, competencia = SET) => { await preliminar(n, c, competencia); return homologar(n, c, competencia); };
 const vendaStone = (id, valor, data = "2026-09-10") => ({ canal: "BALCAO", dataVenda: data, brutoCentavos: valor, fonte: { sistema: "MANUAL", idExterno: id }, pagamentos: [{ forma: "CREDITO", processador: "STONE", valorCentavos: valor }] });
@@ -131,11 +132,15 @@ test("5, 6, 9, 32–36 — preliminar, com pendências, homologação, reabertur
   await preliminar(n, c);
   const h2 = await homologar(n, c);
   const versoes = (await n.consultarVersoesDeFechamento(c, { competencia: SET })).versoes;
-  assert.deepEqual(versoes.map((v) => [v.numero, v.tipo, v.vigente]), [[5, "HOMOLOGADA", true], [4, "PRELIMINAR", false], [3, "HOMOLOGADA", false], [2, "COM_PENDENCIAS", false], [1, "PRELIMINAR", false]]);
-  assert.equal(versoes[2].faturamentoBrutoCentavos, 5000);
+  // 08E: depois da reabertura, as pendências novas precisam ser documentadas: a segunda homologação passa por
+  // "com pendências documentadas" (v5) e homologa com ressalvas (v6). A documentação anterior não se perde.
+  assert.deepEqual(versoes.map((v) => [v.numero, v.tipo, v.vigente]), [[6, "HOMOLOGADA", true], [5, "COM_PENDENCIAS", false], [4, "PRELIMINAR", false], [3, "HOMOLOGADA", false], [2, "COM_PENDENCIAS", false], [1, "PRELIMINAR", false]]);
+  assert.equal(versoes[3].faturamentoBrutoCentavos, 5000);
   assert.equal(versoes[0].faturamentoBrutoCentavos, 6000);
-  assert.notEqual(versoes[0].impressao, versoes[2].impressao);
-  assert.equal(h2.versao.numero, 5);
+  assert.notEqual(versoes[0].impressao, versoes[3].impressao);
+  assert.equal(h2.versao.numero, 6);
+  assert.equal(versoes[0].verificacoes.comRessalvas, true);
+  assert.ok(versoes[0].pendencias.some((x) => x.descricao === "Extrato bancário não importado"), "a nota documentada na primeira rodada continua guardada");
 });
 
 test("7, 8 — divergência de conciliação sem resolução comprovada bloqueia; recebível em aberto não bloqueia", async () => {

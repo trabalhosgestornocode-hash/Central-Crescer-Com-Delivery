@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CODIGO } from "../../src/modules/financeiro-v2/index.js";
-import { entrada, montarComCadastros, obrigacao, rejeita, saida, sha } from "./helpers/cenario.js";
+import { entrada, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida, sha } from "./helpers/cenario.js";
 
 const venda = (extra = {}) => ({ canal: "BALCAO", dataVenda: "2026-09-10", brutoCentavos: 10000, fonte: { sistema: "SAIPOS", idExterno: "V-1" }, ...extra });
 const total = async (nucleo, c, indicador) => (await nucleo.consultarComposicao(c, { indicador, competencia: "2026-09" })).totalCentavos;
@@ -157,6 +157,8 @@ test("competência homologada: cancelar ou estornar ali é recusado, sem efeito"
   const { nucleo, c, caixa } = await montarComCadastros();
   const r = await nucleo.registrarVenda(c, venda({ pagamentos: [{ forma: "DINHEIRO", valorCentavos: 10000, contaId: caixa.id }] }));
   await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(nucleo, c, "2026-09");
   await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Conferência sintética" });
   await rejeita(nucleo.cancelarVenda(c, { vendaId: r.venda.id, justificativa: "Tarde demais" }), CODIGO.COMPETENCIA_HOMOLOGADA);
   await rejeita(nucleo.estornarPagamentoDeVenda(c, { pagamentoId: r.pagamentos[0].id, motivo: "DEVOLUCAO_AO_CLIENTE", justificativa: "x", dataEfetiva: "2026-09-20" }), CODIGO.COMPETENCIA_HOMOLOGADA);

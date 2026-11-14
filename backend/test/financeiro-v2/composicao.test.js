@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CODIGO, composicaoIfood } from "../../src/modules/financeiro-v2/index.js";
-import { ctx, montar, rejeita } from "./helpers/cenario.js";
+import { ctx, montar, prepararHomologacao, rejeita } from "./helpers/cenario.js";
 import { PERIODO_SETEMBRO, saiposDiarias, saiposVendas } from "./helpers/arquivos.js";
 import { faturamentoSaiposPdf } from "./helpers/formatos.js";
 
@@ -193,6 +193,8 @@ test("16, 17 — competência homologada bloqueia; fonte corrigida exige revisã
   for (const l of (await n.consultarRegistros(c, { tipo: "LANCAMENTO" })).filter((x) => x.categoria === "DESCONTOS_A_CLASSIFICAR" && x.situacao === "ATIVO")) {
     await n.reclassificarLancamento(c, { lancamentoId: l.id, categoria: "DESCONTOS_COMERCIAIS", justificativa: "Desconto concedido pela loja (sintético).", versaoEsperada: l.versao, documentoId: doc });
   }
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(n, c, "2026-09");
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação sintética." });
   await rejeita(n.registrarVenda(c, venda({ brutoCentavos: 1000, composicao: { itensCentavos: 1000, descontos: [{ valorCentavos: 100, financiador: "LOJA" }] }, pagamentos: [{ forma: "DINHEIRO", valorCentavos: 900 }] })), CODIGO.COMPETENCIA_HOMOLOGADA);
 });

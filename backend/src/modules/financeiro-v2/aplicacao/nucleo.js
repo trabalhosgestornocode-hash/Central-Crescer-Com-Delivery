@@ -23,6 +23,7 @@ import { operacoesDePlano } from "./plano.js";
 import { operacoesDeVendas } from "./vendas.js";
 import { operacoesDeReclassificacao } from "./reclassificacao.js";
 import { operacoesDeEvidencias } from "./evidencias.js";
+import { operacoesDeBaixaPorExtrato } from "./baixaPorExtrato.js";
 
 /**
  * @param {object} deps
@@ -64,6 +65,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeConfiguracao(base),
     ...operacoesDeCofreDocumental(base, { cofre, acessosNegados }),
     ...operacoesDeEvidencias(base, { cofre }),
+    ...operacoesDeBaixaPorExtrato(base),
     ...operacoesDeFormacao(base),
     ...operacoesDeApuracao(base),
     ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),

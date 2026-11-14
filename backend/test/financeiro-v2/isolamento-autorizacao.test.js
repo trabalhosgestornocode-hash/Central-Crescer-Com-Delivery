@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACAO, CODIGO, criarNucleoFinanceiro, criarRepositorioMemoria } from "../../src/modules/financeiro-v2/index.js";
-import { ORG_A, ORG_B, OUTRO_USUARIO, UNI_A, UNI_A2, UNI_B, ctx, entrada, montar, montarComCadastros, obrigacao, rejeita, saida } from "./helpers/cenario.js";
+import { ORG_A, ORG_B, OUTRO_USUARIO, UNI_A, UNI_A2, UNI_B, ctx, entrada, montar, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida } from "./helpers/cenario.js";
 
 test("registros de uma organização são invisíveis e intocáveis para outra", async () => {
   const { nucleo, c, banco, fornecedor } = await montarComCadastros();
@@ -108,6 +108,8 @@ test("homologar e revisar são permissões separadas de fechar", async () => {
   const fechador = ctx(ORG_A, UNI_A, [ACAO.VER, ACAO.FECHAR]);
   await nucleo.alterarEstadoDaCompetencia(fechador, { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
   await rejeita(nucleo.alterarEstadoDaCompetencia(fechador, { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "m" }), CODIGO.PERMISSAO_INSUFICIENTE);
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(nucleo, ctx(), "2026-08");
   await nucleo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.HOMOLOGAR]), { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Metodologia sintética" });
   await rejeita(nucleo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, [ACAO.FECHAR, ACAO.HOMOLOGAR]), { competencia: "2026-08", novoEstado: "ABERTA", confirmar: true, justificativa: "erro" }), CODIGO.PERMISSAO_INSUFICIENTE);
 });

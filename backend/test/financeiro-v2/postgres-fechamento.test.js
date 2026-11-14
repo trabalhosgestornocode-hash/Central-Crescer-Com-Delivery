@@ -4,7 +4,7 @@
 //   - versão homologada imutável e coerente; nova ação financeiro_v2.documentos aceita na concessão.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ESCOPOS_PADRAO, ORG_A, UNI_A, ctx, entrada, montar, montarComCadastros } from "./helpers/cenario.js";
+import { ESCOPOS_PADRAO, ORG_A, UNI_A, ctx, entrada, montar, montarComCadastros, prepararHomologacao } from "./helpers/cenario.js";
 import { motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
@@ -61,6 +61,8 @@ test("4 (determinístico) — decisão de conciliação iniciada antes não cont
   const r2 = (await n.registrarVenda(c, vendaStone("V-2", 700))).recebiveis[0];
   const credito2 = (await n.registrarMovimentacao(c, entrada(banco.id, 700, { dataEfetiva: "2026-09-22" }))).movimentacao;
   const cand2 = await n.criarCorrespondenciaCandidata(c, { ladoA: [{ tipo: "RECEBIVEL", id: r2.id, valorCentavos: 700 }], ladoB: [{ tipo: "MOVIMENTACAO", id: credito2.id, valorCentavos: 700 }] });
+  // 08E (F-1): pendências que exigem documentação são documentadas (ressalva sintética) antes de homologar.
+  await prepararHomologacao(n, c, "2026-09");
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true });
   await assert.rejects(n.confirmarConciliacao(c, { correspondenciaId: cand2.id }), (e) => e.codigo === "FV2_COMPETENCIA_HOMOLOGADA");
 });
@@ -70,7 +72,8 @@ test("persistência protege a competência homologada mesmo com SQL escrito à m
   const r = (await n.registrarVenda(c, vendaStone("V-1", 9000))).recebiveis[0];
   const credito = (await n.registrarMovimentacao(c, entrada(banco.id, 9000, { dataEfetiva: "2026-09-21" }))).movimentacao;
   const cand = await n.criarCorrespondenciaCandidata(c, { ladoA: [{ tipo: "RECEBIVEL", id: r.id, valorCentavos: 9000 }], ladoB: [{ tipo: "MOVIMENTACAO", id: credito.id, valorCentavos: 9000 }] });
-  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas (ressalva sintética) antes de homologar.
+  await prepararHomologacao(n, c, "2026-09");
   const h = await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true });
   // Vínculo de conciliação de setembro: decidir "por fora" é recusado.
   await recusa(comoAplicacao(pool, (cl) => cl.query("update fv2_correspondencia set situacao = 'CONFIRMADA', versao = versao + 1 where id = $1", [cand.id])), "FV001");

@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CODIGO } from "../../src/modules/financeiro-v2/index.js";
-import { ORG_A, ORG_B, UNI_A, UNI_A2, UNI_B, ctx, entrada, montarComCadastros, obrigacao, rejeita, saida, sha } from "./helpers/cenario.js";
+import { ORG_A, ORG_B, UNI_A, UNI_A2, UNI_B, ctx, entrada, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida, sha } from "./helpers/cenario.js";
 
 const doc = (nucleo, c, n, tipo = "BOLETO") => nucleo.registrarDocumento(c, { origem: "MANUAL", arquivoId: `arquivo-sintetico-${n}`, hashSha256: sha(n), tipo, recebidoEm: "2026-09-01", descricao: `Documento sintético ${n}` });
 const pagar = async (nucleo, c, contaId, obrigacaoId, valor, data = "2026-09-20") => {
@@ -301,6 +301,8 @@ test("23–25 — isolamento por organização/unidade, permissões de leitura e
   await rejeita(nucleo.consultarFluxoDeCaixa(ctx(ORG_A, UNI_A, ["financeiro_v2.registrar"]), { inicio: "2026-10-01", fim: "2026-10-31" }), CODIGO.PERMISSAO_INSUFICIENTE);
   // Competência homologada: consulta mostra a marca; abrir caixa naquele mês é recusado.
   await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(nucleo, c, "2026-09");
   await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética." });
   assert.equal((await nucleo.consultarContasAPagar(c, {})).itens[0].competenciaHomologada, true);
   await rejeita(nucleo.abrirCaixa(c, { contaId: caixa.id, dataAbertura: "2026-09-30", saldoContadoCentavos: 0 }), CODIGO.COMPETENCIA_HOMOLOGADA);

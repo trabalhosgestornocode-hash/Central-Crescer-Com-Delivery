@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACAO, CODIGO, criarNucleoFinanceiro } from "../../src/modules/financeiro-v2/index.js";
-import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, ctx, montar, provisionarAdministrador, rejeita } from "./helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, ctx, montar, prepararHomologacao, provisionarAdministrador, rejeita } from "./helpers/cenario.js";
 import { PERIODO_SETEMBRO, saiposVendas } from "./helpers/arquivos.js";
 import { abrirPool, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 
@@ -70,7 +70,8 @@ test("08B — revogar ≠ conceder; importar não confirma nem homologa; concili
   await n.concederAcesso(adm, { usuarioId: U(90), acoes: [ACAO.VER, ACAO.CONCEDER], justificativa: "Concedente limitado." });
   await rejeita(ingenuo.revogarAcesso(ctx(ORG_A, UNI_A, TODAS, U(90)), { usuarioId: ids.conciliador, justificativa: "x" }), CODIGO.PERMISSAO_INSUFICIENTE);
   // Importar não confirma nem homologa; conciliar não reabre.
-  await n.alterarEstadoDaCompetencia(adm, { competencia: "2026-08", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas (ressalva sintética) antes de homologar.
+  await prepararHomologacao(n, adm, "2026-08");
   await recusadoPeloBanco(ingenuo.alterarEstadoDaCompetencia(como("importador"), { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "x", confirmar: true }));
   await n.alterarEstadoDaCompetencia(adm, { competencia: "2026-08", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true });
   await recusadoPeloBanco(ingenuo.alterarEstadoDaCompetencia(como("conciliador"), { competencia: "2026-08", novoEstado: "ABERTA", justificativa: "x", confirmar: true }));

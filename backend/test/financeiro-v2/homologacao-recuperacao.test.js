@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CODIGO, criarCofreDisco, criarNucleoFinanceiro, criarRepositorioPostgres } from "../../src/modules/financeiro-v2/index.js";
 import { urlDoBanco } from "../../scripts/fv2/ambiente.mjs";
-import { AGORA, ESCOPOS_PADRAO, ctx, montarComCadastros, rejeita, saida } from "./helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ctx, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida } from "./helpers/cenario.js";
 import { abrirPool, ambiente, criarAutoridadeDeTeste, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular(), timeout: 300000 };
@@ -27,9 +27,13 @@ const rodar = (bin, args, url, entrada = null) => {
 };
 
 async function homologarSetembro(n, c, banco) {
-  await n.registrarMovimentacao(c, saida(banco.id, 1234, { dataEfetiva: "2026-09-12" }));
+  // 08E: a saída paga uma conta registrada (saída sem vínculo bloqueia a homologação — pode ser despesa não reconhecida).
+  const fornecedor = await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome: "Fornecedor sintético 08E" });
+  const conta = (await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 1234 }))).obrigacoes[0];
+  const pago = (await n.registrarMovimentacao(c, saida(banco.id, 1234, { dataEfetiva: "2026-09-12" }))).movimentacao;
+  await n.registrarLiquidacao(c, { movimentacaoId: pago.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: conta.id, valorCentavos: 1234 }] });
   await n.registrarVenda(c, { canal: "BALCAO", dataVenda: "2026-09-10", brutoCentavos: 9900, fonte: { sistema: "MANUAL", idExterno: "R-1" }, pagamentos: [{ forma: "PIX", valorCentavos: 9900, contaId: banco.id }] });
-  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  await prepararHomologacao(n, c, "2026-09");
   return n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true });
 }
 

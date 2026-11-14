@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACAO, CODIGO } from "../../src/modules/financeiro-v2/index.js";
-import { ORG_B, UNI_A2, UNI_B, USUARIO, ctx, montar, rejeita } from "./helpers/cenario.js";
+import { ORG_B, UNI_A2, UNI_B, USUARIO, ctx, montar, prepararHomologacao, rejeita } from "./helpers/cenario.js";
 import { PERIODO_SETEMBRO, saiposFormas, saiposVendas, saiposDiarias, stoneVendas } from "./helpers/arquivos.js";
 
 const PEDIDOS = [
@@ -236,6 +236,8 @@ test("SAIPOS: faturamento × formas de pagamento — a diferença é detectada e
 test("competência homologada não recebe importação confirmada", async () => {
   const { nucleo } = montar();
   await nucleo.alterarEstadoDaCompetencia(ctx(), { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(nucleo, ctx(), "2026-09");
   await nucleo.alterarEstadoDaCompetencia(ctx(), { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética de teste.", confirmar: true });
   // Arquivo do período recebido DEPOIS da homologação (06D: importação em validação impediria homologar antes).
   const r = await nucleo.receberArquivoParaImportacao(ctx(), arquivo(saiposVendas(PEDIDOS)));

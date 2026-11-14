@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACAO, CODIGO, criarNucleoFinanceiro } from "../../src/modules/financeiro-v2/index.js";
-import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, UNI_A2, ctx, montar, montarComCadastros, obrigacao, provisionarAdministrador, rejeita, saida, sha } from "./helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, UNI_A2, ctx, montar, montarComCadastros, obrigacao, prepararHomologacao, provisionarAdministrador, rejeita, saida, sha } from "./helpers/cenario.js";
 import { comoAplicacao, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 
 const SO_PG = { skip: motivoParaPular(), timeout: 300000 };
@@ -146,6 +146,8 @@ test("08C — permissão própria: corrigir não reclassifica; competência homo
   // Homologada: recusa; reabertura formal (reabrir + justificativa) e então reclassifica.
   await n.reclassificarLancamento(c, { lancamentoId: l.id, categoria: "EMBALAGENS", justificativa: "Nota (sintético).", versaoEsperada: l.versao, documentoId: nota });
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(n, c, "2026-09");
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Homologação sintética.", confirmar: true });
   const [atual] = (await n.consultarRegistros(c, { tipo: "LANCAMENTO" })).filter((x) => x.id === l.id);
   await rejeita(n.reclassificarLancamento(c, { lancamentoId: l.id, categoria: "FRUTAS", justificativa: "Depois da homologação.", versaoEsperada: atual.versao }), CODIGO.COMPETENCIA_HOMOLOGADA);

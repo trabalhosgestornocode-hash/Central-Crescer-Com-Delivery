@@ -13,6 +13,7 @@ import { ESTADO_COMPETENCIA, ESTADO_DIVERGENCIA_FONTE, ESTADO_IMPORTACAO, ESTADO
 import { primeiroDiaDe, ultimoDiaDe } from "./tempo.js";
 import { caixaEBancos, documentosDe, preparar as prepararTesouraria, tituloAPagar } from "./tesouraria.js";
 import { DIVERGENCIA_VENDA } from "./vendasRecebimentos.js";
+import { avaliarPendenciasDoFechamento } from "./ressalvas.js";
 import { CATEGORIA_DESCONTO_A_CLASSIFICAR, CATEGORIA_DESPESA_A_CLASSIFICAR } from "./planoDeContas.js";
 
 /** Categorias do sistema que marcam classificação PROVISÓRIA (a definitiva pode mudar o resultado). */
@@ -388,6 +389,11 @@ export function situacaoDoFechamento({ d, competencia, hoje, apuracao, pendencia
   ];
   const exigemDocumentacao = pendencias.filter((x) => x.situacao !== SITUACAO_PENDENCIA.INFORMATIVA && x.efeitoNoFechamento === EFEITO_NO_FECHAMENTO.EXIGE_DOCUMENTACAO).length;
   const i = ESTADOS_DO_FECHAMENTO.indexOf(estado);
+  // 08E: a MESMA avaliação que o núcleo aplica ao homologar (resolvidas, documentadas, bloqueantes, ressalvas).
+  const av = avaliarPendenciasDoFechamento({ pendencias, documentadas: competenciaAtual?.pendencias ?? [], impedimentos });
+  const comPendencias = estado === ESTADO_COMPETENCIA.FECHAMENTO_COM_PENDENCIAS;
+  const homologavel = estado !== ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO && estado !== ESTADO_COMPETENCIA.ABERTA && (comPendencias ? av.comRessalvas : av.semRessalvas);
+  const resumo = (x) => ({ chave: x.chave, codigo: x.codigo, titulo: x.titulo, situacao: x.situacao, motivo: x.motivo ?? null, efeitoNoResultado: x.efeitoNoResultado ?? null, valorCentavos: x.valorCentavos ?? null, decisao: x.documentacao?.decisao ?? null, documentacaoFaltante: x.documentacao?.documentacaoFaltante ?? null });
   return {
     competencia, estado, metodologia: competenciaAtual?.metodologia ?? null, revisoes: competenciaAtual?.revisoes ?? 0,
     pendenciasDocumentadas: competenciaAtual?.pendencias ?? [], decididoEm: competenciaAtual?.decididoEm ?? null,
@@ -395,10 +401,25 @@ export function situacaoDoFechamento({ d, competencia, hoje, apuracao, pendencia
     etapas: ESTADOS_DO_FECHAMENTO.map((e, k) => ({ estado: e, concluida: k < i, atual: k === i })),
     secoes, impedimentos, exigemDocumentacao, materialidade: POLITICA_DE_MATERIALIDADE,
     homologacao: {
-      possivel: estado !== ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO && estado !== ESTADO_COMPETENCIA.ABERTA && impedimentos.length === 0,
+      possivel: homologavel,
       automatica: false,
-      motivo: estado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO ? "Competência já homologada." : estado === ESTADO_COMPETENCIA.ABERTA ? "É preciso passar pelo fechamento preliminar antes." : impedimentos.length ? "Há divergência relevante sem justificativa: o núcleo recusa a homologação." : exigemDocumentacao ? "Possível somente com decisão humana e metodologia registrada; há pendências que devem ser documentadas." : "Possível somente com decisão humana e metodologia registrada.",
+      comRessalvas: homologavel && comPendencias && av.ressalvas.length > 0,
+      motivo: estado === ESTADO_COMPETENCIA.FECHAMENTO_HOMOLOGADO ? (competenciaAtual?.homologacao?.comRessalvas ? `Competência homologada com ${competenciaAtual.homologacao.ressalvas.length} ressalva(s).` : "Competência já homologada.")
+        : estado === ESTADO_COMPETENCIA.ABERTA ? "É preciso passar pelo fechamento preliminar antes."
+        : impedimentos.length ? "Há divergência relevante sem justificativa: o núcleo recusa a homologação."
+        : !homologavel && av.impeditivas.length ? "Há pendências não tratadas: o núcleo recusa a homologação até resolvê-las ou documentá-las como ressalva admissível."
+        : !homologavel && av.ressalvas.length ? "Há ressalvas documentadas: passe por \"Fechamento com pendências documentadas\" antes de homologar."
+        : av.ressalvas.length ? "Possível com ressalvas, com decisão humana e metodologia registrada." : "Possível somente com decisão humana e metodologia registrada.",
     },
+    // 08E — o que a tela de fechamento mostra separado.
+    avaliacaoDasPendencias: {
+      contagem: av.contagem, motivos: av.motivos,
+      resolvidas: av.resolvidas.map(resumo), ressalvas: av.ressalvas.map(resumo),
+      bloqueantes: av.itens.filter((x) => x.situacao === "BLOQUEANTE").map(resumo),
+      naoDocumentadas: av.itens.filter((x) => x.situacao === "NAO_DOCUMENTADA").map(resumo),
+      semEvidencia: av.itens.filter((x) => x.situacao === "SEM_EVIDENCIA_SUFICIENTE").map(resumo),
+    },
+    homologacaoRegistrada: competenciaAtual?.homologacao ?? null,
     historico: (historico ?? []).map((h) => ({ evento: h.evento, em: h.em, de: h.antes?.estado ?? null, para: h.depois?.estado ?? null, justificativa: h.justificativa ?? null, metodologia: h.depois?.metodologia ?? null })),
   };
 }

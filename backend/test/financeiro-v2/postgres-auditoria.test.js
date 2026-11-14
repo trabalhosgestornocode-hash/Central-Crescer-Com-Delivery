@@ -3,7 +3,7 @@
 //   - homologação × liquidação concorrentes, segurando a trava de verdade (determinístico).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ESCOPOS_PADRAO, ORG_A, UNI_A, montarComCadastros, obrigacao, saida } from "./helpers/cenario.js";
+import { ESCOPOS_PADRAO, ORG_A, UNI_A, montarComCadastros, obrigacao, prepararHomologacao, saida } from "./helpers/cenario.js";
 import { motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
@@ -24,7 +24,7 @@ async function comoAplicacao(pool, fn) {
   }
 }
 const homologar = async (n, c) => {
-  await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  await prepararHomologacao(n, c, "2026-09"); // 08E (F-1): pendências documentadas como ressalva sintética
   return n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true });
 };
 
@@ -62,9 +62,11 @@ test("banco (determinístico): liquidação iniciada durante a homologação esp
   cl.release();
   assert.equal(esperando, true, "a liquidação espera a trava de setembro");
   await liq; // sem homologação de fato, ela segue
-  // Agora o caminho real: homologa e só então tenta liquidar outra saída de setembro → recusada (núcleo e banco).
+  // Agora o caminho real: homologa e só então tenta gravar outra liquidação com a saída de setembro → recusada.
+  // 08E: uma saída de setembro SEM vínculo bloquearia a homologação; a tentativa usa a saída de setembro já vinculada
+  // (a competência é conferida antes do valor: a recusa é por homologação, não por saldo).
   const o2 = (await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 900, descricao: "Outra" }))).obrigacoes[0];
-  const pg2 = (await n.registrarMovimentacao(c, saida(banco.id, 900, { dataEfetiva: "2026-09-26" }))).movimentacao;
+  await prepararHomologacao(n, c, "2026-09");
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true });
-  await assert.rejects(n.registrarLiquidacao(c, { movimentacaoId: pg2.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: o2.id, valorCentavos: 900 }] }), (e) => e.codigo === "FV2_COMPETENCIA_HOMOLOGADA");
+  await assert.rejects(n.registrarLiquidacao(c, { movimentacaoId: pg.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: o2.id, valorCentavos: 900 }] }), (e) => e.codigo === "FV2_COMPETENCIA_HOMOLOGADA");
 });

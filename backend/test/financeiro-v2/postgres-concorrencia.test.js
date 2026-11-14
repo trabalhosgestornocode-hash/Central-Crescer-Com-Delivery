@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { CODIGO, ErroFinanceiro } from "../../src/modules/financeiro-v2/index.js";
-import { ESCOPOS_PADRAO, ctx, entrada, montar, obrigacao, saida } from "./helpers/cenario.js";
+import { ESCOPOS_PADRAO, ctx, entrada, montar, obrigacao, prepararHomologacao, saida } from "./helpers/cenario.js";
 import { motivoParaPular, repositorioPostgresDeTeste, tokenDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular() };
@@ -129,12 +129,15 @@ test("homologação concorrendo com escritas: nada entra depois da homologação
     const { pool } = await repositorio.interno();
     const c = ctx();
     const banco = await nucleo.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco" });
-    await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
-    const escritas = Array.from({ length: 2 * N }, (_, i) => () => nucleo.registrarMovimentacao(c, saida(banco.id, 100 + i)));
+    const caixa = await nucleo.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa" });
+    // 08E (F-1): pendências documentadas antes; as escritas concorrentes são TRANSFERÊNCIAS entre contas próprias, que
+    // não criam pendência (uma saída sem vínculo bloquearia, com razão, a homologação — e a prova ficaria fraca).
+    await prepararHomologacao(nucleo, c, "2026-09");
+    const escritas = Array.from({ length: 2 * N }, (_, i) => () => nucleo.registrarTransferencia(c, { contaOrigemId: banco.id, contaDestinoId: caixa.id, valorCentavos: 100 + i, dataEfetiva: "2026-09-20" }));
     const homologar = () => nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Sintética" });
     const { ok, falhas } = await simultaneas([...escritas.slice(0, N), homologar, ...escritas.slice(N)]);
-    assert.ok(falhas.every((f) => f === CODIGO.COMPETENCIA_HOMOLOGADA));
-    assert.equal(await qtd(nucleo, c, "MOVIMENTACAO"), ok.length - 1); // aceita = gravada; recusada não deixa rastro
+    assert.ok(falhas.every((f) => f === CODIGO.COMPETENCIA_HOMOLOGADA), JSON.stringify(falhas));
+    assert.equal(await qtd(nucleo, c, "TRANSFERENCIA"), ok.length - 1); // aceita = gravada; recusada não deixa rastro
     // Ordem REAL de gravação (sequência do banco, não relógio): toda movimentação foi criada antes da homologação.
     const cliente = await pool.connect();
     try {
@@ -158,7 +161,7 @@ test("trava de competência (determinística): homologação espera escritas em 
   const { pool } = await repositorio.interno();
   const c = ctx();
   const banco = await nucleo.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco" });
-  await nucleo.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  await prepararHomologacao(nucleo, c, "2026-09"); // 08E (F-1)
   const chave = `fv2|${c.organizacaoId}|${c.unidadeId}|competencia:2026-09`;
   const segurar = async (funcao) => {
     const cliente = await pool.connect();

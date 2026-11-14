@@ -4,11 +4,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ACAO, CODIGO } from "../../src/modules/financeiro-v2/index.js";
-import { ORG_A, UNI_A, ctx, entrada, montarComCadastros, obrigacao, rejeita, saida } from "./helpers/cenario.js";
+import { ORG_A, UNI_A, ctx, entrada, montarComCadastros, obrigacao, prepararHomologacao, rejeita, saida } from "./helpers/cenario.js";
 
 const SET = "2026-09";
 const homologar = async (n, c, competencia = SET) => {
-  await n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(n, c, competencia);
   return n.alterarEstadoDaCompetencia(c, { competencia, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Conferência sintética.", confirmar: true });
 };
 const vendaStone = (id, valor, extra = {}) => ({ canal: "BALCAO", dataVenda: "2026-09-10", brutoCentavos: valor, fonte: { sistema: "MANUAL", idExterno: id }, pagamentos: [{ forma: "CREDITO", processador: "STONE", valorCentavos: valor }], ...extra });
@@ -95,12 +96,18 @@ test("A6 — homologação concorrente com liquidação: a liquidação nunca al
   const { nucleo: n, c, banco, fornecedor } = await montarComCadastros();
   const o = (await n.registrarObrigacao(c, obrigacao(fornecedor.id, { valorOriginalCentavos: 3000 }))).obrigacoes[0];
   const pg = (await n.registrarMovimentacao(c, saida(banco.id, 3000, { dataEfetiva: "2026-09-25" }))).movimentacao;
-  await n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_PRELIMINAR" });
+  await prepararHomologacao(n, c, SET);
   const [liq, hom] = await Promise.allSettled([
     n.registrarLiquidacao(c, { movimentacaoId: pg.id, alocacoes: [{ alvoTipo: "OBRIGACAO", alvoId: o.id, valorCentavos: 3000 }] }),
     n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "x", confirmar: true }),
   ]);
-  assert.equal(hom.status, "fulfilled");
+  // 08E (F-1): a saída de setembro sem vínculo bloqueia a homologação. Se a homologação for avaliada ANTES da
+  // liquidação, é recusada (e a liquidação entra normalmente); se DEPOIS, homologa com a conta paga.
+  if (hom.status === "rejected") {
+    assert.equal(hom.reason.codigo, CODIGO.HOMOLOGACAO_BLOQUEADA);
+    assert.equal(liq.status, "fulfilled");
+    assert.equal((await n.alterarEstadoDaCompetencia(c, { competencia: SET, novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "x", confirmar: true })).estado, "FECHAMENTO_HOMOLOGADO");
+  }
   const final = (await n.consultarRegistros(c, { tipo: "OBRIGACAO" }))[0];
   if (liq.status === "fulfilled") {
     // A liquidação veio antes: a versão homologada já mostra a obrigação paga.

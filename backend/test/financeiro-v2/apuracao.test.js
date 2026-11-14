@@ -2,7 +2,7 @@
 // Memória e PostgreSQL isolado (FV2_REPOSITORIO=postgres).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ORG_B, UNI_A2, UNI_B, ctx, montar } from "./helpers/cenario.js";
+import { ORG_B, UNI_A2, UNI_B, ctx, montar, prepararHomologacao } from "./helpers/cenario.js";
 import { PERIODO_SETEMBRO, saiposDiarias, saiposVendas } from "./helpers/arquivos.js";
 import { faturamentoSaiposPdf } from "./helpers/formatos.js";
 
@@ -217,6 +217,8 @@ test("27, 28, 29 — reprodutível, CONFIRMADO só na competência homologada se
   assert.deepEqual(a1.dre.linhas.map((l) => l.valorCentavos), a2.dre.linhas.map((l) => l.valorCentavos));
   assert.equal((await n.composicaoDoIndicador(c, { ...SET, codigo: "FATURAMENTO_BRUTO_PROPRIO" })).valorCentavos, 2500);
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_PRELIMINAR" });
+  // 08E (F-1): pendências que exigem documentação são documentadas como ressalva sintética antes de homologar.
+  await prepararHomologacao(n, c, "2026-09");
   await n.alterarEstadoDaCompetencia(c, { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", confirmar: true, metodologia: "Homologação sintética." });
   const h = await n.apurarCompetencia(c, SET);
   assert.equal(h.indicadores.RESULTADO_GERENCIAL.situacao, "CONFIRMADO");

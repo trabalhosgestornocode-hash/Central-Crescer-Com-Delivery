@@ -32,6 +32,9 @@ export const ACAO = Object.freeze({
   // Execução 08D — ENVIAR evidência pela interface (guardar no cofre e vincular). Não abre arquivos (documentos) nem
   // decide nada financeiro (reclassificar, conciliar, homologar). Nenhuma concessão anterior a recebe.
   ENVIAR_DOCUMENTO: "financeiro_v2.enviar_documento",
+  // Execução 08E — VINCULAR uma saída bancária JÁ registrada (extrato) a contas a pagar: baixa sem criar movimento nem
+  // despesa. Separada de `registrar` (pagamento novo), `conciliar` e `reclassificar`. Nenhuma concessão anterior a recebe.
+  VINCULAR_PAGAMENTO: "financeiro_v2.vincular_pagamento",
 });
 const ACOES = Object.freeze(Object.values(ACAO));
 

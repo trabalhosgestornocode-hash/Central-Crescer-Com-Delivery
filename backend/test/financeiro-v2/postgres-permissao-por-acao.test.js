@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { ACAO, CODIGO, criarNucleoFinanceiro } from "../../src/modules/financeiro-v2/index.js";
-import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, ctx, montar, provisionarAdministrador, rejeita } from "./helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ORG_A, TODAS, UNI_A, ctx, montar, prepararHomologacao, provisionarAdministrador, rejeita } from "./helpers/cenario.js";
 import { comoAplicacao, motivoParaPular, repositorioPostgresDeTeste } from "./helpers/postgres.js";
 
 const pular = { skip: motivoParaPular(), timeout: 300000 };
@@ -88,6 +88,8 @@ test("08 — pelo núcleo, a mesma barreira: ação errada é recusada antes; e 
   // Núcleo SEM exigir concessão gravada (um núcleo "ingênuo") e contexto que ALEGA homologar: o BANCO recusa pela
   // concessão real do usuário da sessão (só tem `fechar`).
   const ingenuo = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA });
+  // 08E (F-1): pendências que exigem documentação são documentadas (ressalva sintética) antes de homologar.
+  await prepararHomologacao(n, ctx(ORG_A, UNI_A, TODAS), "2026-09");
   await rejeita(ingenuo.alterarEstadoDaCompetencia(ctx(ORG_A, UNI_A, TODAS, ids.fechador), { competencia: "2026-09", novoEstado: "FECHAMENTO_HOMOLOGADO", metodologia: "Sintética.", confirmar: true }), CODIGO.INTEGRIDADE_VIOLADA);
   await rejeita(ingenuo.registrarContraparte(ctx(ORG_A, UNI_A, TODAS, ids.conciliador), { tipo: "FORNECEDOR", nome: "Alegado" }), CODIGO.INTEGRIDADE_VIOLADA);
   // O dono de verdade da ação passa pelo mesmo núcleo ingênuo.

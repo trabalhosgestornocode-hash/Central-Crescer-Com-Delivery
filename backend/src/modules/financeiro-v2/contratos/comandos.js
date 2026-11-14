@@ -487,6 +487,45 @@ export function validarMudancaDeEstado(e) {
   };
 }
 
+/**
+ * 08E (F-2) — vincular uma SAÍDA bancária já registrada (extrato) a uma ou mais contas a pagar. Não cria movimento nem
+ * despesa: só liquida (baixa) as contas com parte do valor ainda não alocado da saída.
+ */
+export function validarVinculoDeExtrato(e) {
+  semCamposDesconhecidos(e, ["movimentacaoId", "versaoMovimentacao", "alocacoes", "documentoId", "justificativa", "confirmar"], "vinculo");
+  const alocacoes = exigirLista(e.alocacoes, "alocacoes", { min: 1, max: 50 }).map((a, i) => {
+    semCamposDesconhecidos(a, ["obrigacaoId", "valorCentavos"], `alocacoes[${i}]`);
+    return { obrigacaoId: exigirUuid(a.obrigacaoId, `alocacoes[${i}].obrigacaoId`), valorCentavos: exigirCentavos(a.valorCentavos, `alocacoes[${i}].valorCentavos`, { positivo: true }) };
+  });
+  if (new Set(alocacoes.map((a) => a.obrigacaoId)).size !== alocacoes.length) falhar(CODIGO.ENTRADA_INVALIDA, "A mesma conta aparece mais de uma vez no vínculo.", { campo: "alocacoes" });
+  return {
+    movimentacaoId: exigirUuid(e.movimentacaoId, "movimentacaoId"),
+    versaoMovimentacao: exigirInteiro(e.versaoMovimentacao, "versaoMovimentacao", { min: 1 }),
+    alocacoes, documentoId: uuidOpcional(e.documentoId, "documentoId"),
+    justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500 }),
+    confirmar: e.confirmar === true,
+  };
+}
+
+export function validarPreviaDeVinculo(e) {
+  semCamposDesconhecidos(e, ["obrigacaoId", "movimentacaoId", "valorCentavos"], "previa");
+  return {
+    obrigacaoId: exigirUuid(e.obrigacaoId, "obrigacaoId"), movimentacaoId: uuidOpcional(e.movimentacaoId, "movimentacaoId"),
+    valorCentavos: e.valorCentavos === undefined || e.valorCentavos === null ? null : exigirCentavos(e.valorCentavos, "valorCentavos", { positivo: true }),
+  };
+}
+
+/**
+ * 08E — documentar UMA pendência no fechamento (ressalva candidata). A chave é obrigatória: só se documenta pendência que
+ * existe na competência. Decisão e "o que falta"/evidência são exigidas na avaliação (ressalvas.js), não aqui.
+ */
+export function validarDocumentacaoDePendencia(e) {
+  semCamposDesconhecidos(e, ["competencia", "pendencia", "justificativa"], "documentacao");
+  const pendencia = pendenciaDocumentada(e.pendencia ?? {}, "pendencia");
+  if (!pendencia.chave) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a pendência (chave) a documentar.", { campo: "pendencia.chave" });
+  return { competencia: exigirCompetencia(e.competencia), pendencia, justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500, opcional: true }) };
+}
+
 export function validarConsultaComposicao(e) {
   semCamposDesconhecidos(e, ["indicador", "competencia", "canal", "classificacao"], "consulta");
   return {
