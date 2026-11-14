@@ -198,9 +198,13 @@ export function operacoesDeVendasERecebimentos(b, { cargaCompleta = false, confe
     detalharVenda(ctx, e) {
       const { id } = validarDetalheDeVenda(e);
       return b.consultar(ctx, async (cx, tx) => {
-        const d = await carregar(cx, tx);
-        const v = montarVisao(d, b.hoje(), { escopo: { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, apuradoEm: b.agora() });
-        const op = v.ops.find((o) => o.id === id);
+        // 08D: carga dirigida à competência da venda (ou do total agregado) e ao fecho dos vínculos dela.
+        const reg = (await tx.obter(cx, TIPO.VENDA, id)) ?? (await tx.obter(cx, TIPO.LANCAMENTO, id));
+        if (!reg?.competencia) falhar(CODIGO.NAO_ENCONTRADO, "Venda não encontrada.");
+        const montar = (d) => { const v = montarVisao(d, b.hoje(), { escopo: { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, apuradoEm: b.agora() }); const op = v.ops.find((o) => o.id === id); return { v, op, saida: op ? [op, linhaDoTempoDaVenda(op, v.ix)] : null }; };
+        const dirigida = montar(cargaCompleta ? await carregar(cx, tx) : await carregarDaCompetencia(tx, cx, [reg.competencia]));
+        if (conferirCarga && !cargaCompleta) exigirEquivalencia(dirigida.saida, montar(await carregar(cx, tx)).saida, "detalhe da venda");
+        const { v, op } = dirigida;
         if (!op) falhar(CODIGO.NAO_ENCONTRADO, "Venda não encontrada.");
         const historico = op.tipo === TIPO_OPERACAO.VENDA ? (await tx.listarHistorico(cx, { onde: { registroTipo: TIPO.VENDA, registroId: id } })).map((h) => ({ evento: h.evento, em: h.em, justificativa: h.justificativa ?? null })) : [];
         return { dataBase: b.hoje(), operacao: op, linhaDoTempo: linhaDoTempoDaVenda(op, v.ix), historico };
@@ -211,12 +215,20 @@ export function operacoesDeVendasERecebimentos(b, { cargaCompleta = false, confe
     detalharRecebimento(ctx, e) {
       const { id } = validarDetalheDeVenda(e);
       return b.consultar(ctx, async (cx, tx) => {
-        const d = await carregar(cx, tx);
-        const v = montarVisao(d, b.hoje(), { escopo: { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, apuradoEm: b.agora() });
-        const bruto = d.recebiveis.find((r) => r.id === id);
-        if (!bruto) falhar(CODIGO.NAO_ENCONTRADO, "Recebível não encontrado.");
-        const r = cadeiaDoRecebivel(v.ix, bruto, b.hoje());
-        const op = r.vendaId ? v.ops.find((o) => o.id === r.vendaId) : null;
+        // 08D: carga dirigida à competência do recebível e ao fecho dos vínculos (venda, liquidações, créditos).
+        const reg = await tx.obter(cx, TIPO.RECEBIVEL, id);
+        if (!reg) falhar(CODIGO.NAO_ENCONTRADO, "Recebível não encontrado.");
+        const montar = (d) => {
+          const v = montarVisao(d, b.hoje(), { escopo: { organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId }, apuradoEm: b.agora() });
+          const bruto = d.recebiveis.find((x) => x.id === id);
+          const r2 = bruto ? cadeiaDoRecebivel(v.ix, bruto, b.hoje()) : null;
+          const op2 = r2?.vendaId ? v.ops.find((o) => o.id === r2.vendaId) : null;
+          return { r: r2, op: op2, saida: [r2, op2 ? resumoDaVenda(op2) : null] };
+        };
+        const dirigida = montar(cargaCompleta ? await carregar(cx, tx) : await carregarDaCompetencia(tx, cx, [reg.competencia]));
+        if (conferirCarga && !cargaCompleta) exigirEquivalencia(dirigida.saida, montar(await carregar(cx, tx)).saida, "detalhe do recebimento");
+        const { r, op } = dirigida;
+        if (!r) falhar(CODIGO.NAO_ENCONTRADO, "Recebível não encontrado.");
         const historico = (await tx.listarHistorico(cx, { onde: { registroTipo: TIPO.RECEBIVEL, registroId: id } })).map((h) => ({ evento: h.evento, em: h.em, justificativa: h.justificativa ?? null }));
         return { dataBase: b.hoje(), recebivel: r, venda: op ? resumoDaVenda(op) : null, linhaDoTempo: linhaDoTempoDoRecebivel(r), historico };
       });

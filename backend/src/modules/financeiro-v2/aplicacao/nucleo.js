@@ -66,7 +66,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeEvidencias(base, { cofre }),
     ...operacoesDeFormacao(base),
     ...operacoesDeApuracao(base),
-    ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia }),
+    ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
     ...operacoesDeVendasERecebimentos(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
     ...operacoesDeConferencias(base, { fontes, cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
     ...operacoesDeCompetencia(base, { repositorio, politica, cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),

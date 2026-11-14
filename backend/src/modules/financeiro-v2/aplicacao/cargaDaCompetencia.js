@@ -26,9 +26,10 @@ const ordenar = (lista) => lista.sort((a, b) => (a[ORDEM_DE_GRAVACAO] ?? 0) - (b
 async function todasAsPaginas(tx, cx, tipo, consulta) {
   const saida = [];
   for (let deslocamento = 0; ; deslocamento += PAGINA) {
-    const pg = await tx.paginar(cx, tipo, { ...consulta, limite: PAGINA, deslocamento });
+    // 08D: sem contagem total (uma consulta a menos por página); página incompleta = fim.
+    const pg = await tx.paginar(cx, tipo, { ...consulta, limite: PAGINA, deslocamento, contar: false });
     saida.push(...pg.itens);
-    if (deslocamento + pg.itens.length >= pg.total || !pg.itens.length) return saida;
+    if (pg.itens.length < PAGINA) return saida;
   }
 }
 

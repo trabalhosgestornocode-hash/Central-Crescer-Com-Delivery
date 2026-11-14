@@ -64,7 +64,7 @@ export function normalizarFiltro(filtro) {
  * nunca vira "listar tudo".
  */
 export function normalizarConsulta(consulta = {}, { paginada = true } = {}) {
-  const permitidos = ["onde", "desde", "ate", "em", "ordem", "limite", "deslocamento", "agruparPor", "somar"];
+  const permitidos = ["onde", "desde", "ate", "em", "ordem", "limite", "deslocamento", "agruparPor", "somar", "contar"];
   const desconhecidos = Object.keys(consulta).filter((k) => !permitidos.includes(k));
   if (desconhecidos.length) falhar(CODIGO.REPOSITORIO_INVALIDO, "Consulta com campos desconhecidos.", { campos: desconhecidos });
   const objeto = (v, nome) => {
@@ -76,7 +76,9 @@ export function normalizarConsulta(consulta = {}, { paginada = true } = {}) {
   for (const [campo, lista] of Object.entries(em)) if (!Array.isArray(lista) || !lista.length || lista.length > 200) falhar(CODIGO.REPOSITORIO_INVALIDO, "Consulta: `em` exige lista de 1 a 200 valores.", { campo });
   const ordem = consulta.ordem ?? [];
   if (!Array.isArray(ordem) || ordem.some((o) => typeof o?.campo !== "string")) falhar(CODIGO.REPOSITORIO_INVALIDO, "Consulta: ordem inválida.");
-  const n = { onde: objeto(consulta.onde, "onde"), desde: objeto(consulta.desde, "desde"), ate: objeto(consulta.ate, "ate"), em, ordem, agruparPor: consulta.agruparPor ?? null, somar: consulta.somar ?? null };
+  // 08D: `contar: false` dispensa a contagem total (quem percorre todas as páginas não precisa dela): total = null.
+  if (consulta.contar !== undefined && typeof consulta.contar !== "boolean") falhar(CODIGO.REPOSITORIO_INVALIDO, "Consulta: contar deve ser booleano.");
+  const n = { onde: objeto(consulta.onde, "onde"), desde: objeto(consulta.desde, "desde"), ate: objeto(consulta.ate, "ate"), em, ordem, agruparPor: consulta.agruparPor ?? null, somar: consulta.somar ?? null, contar: consulta.contar !== false };
   if (paginada) {
     n.limite = consulta.limite ?? 50;
     n.deslocamento = consulta.deslocamento ?? 0;

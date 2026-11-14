@@ -429,6 +429,13 @@ function catalogoSintetico() {
     { id: "pedidos-saipos-0110-copia", nome: "Mesmo arquivo de vendas por pedido (repetido)", fonte: "SAIPOS", tipoRelatorio: "SAIPOS_VENDAS", periodoInicio: "2026-10-01", periodoFim: "2026-10-01", leitor: "Não homologado (contrato sintético)", conteudo: pedidos },
     { id: "stone-0110", nome: "Vendas da Stone — 01/10 (sintético, CSV)", fonte: "STONE", tipoRelatorio: "STONE_VENDAS", periodoInicio: "2026-10-01", periodoFim: "2026-10-01", leitor: "Homologado em XLSX; este CSV é formato não homologado",
       conteudo: () => stoneCsv([{ id: "DEMO-SO2", quando: "01/10/2026 12:31", bruto: "36,000000", liquido: "35,154000", unificado: "-0,846000", aut: "AUT-DEMO-O2" }, { id: "DEMO-SO9", quando: "01/10/2026 18:02", bruto: "21,500000", liquido: "21,000000", unificado: "-0,500000" }]) },
+    // 08D — cenário AMBÍGUO: dois pedidos de mesmo valor com 6 minutos de diferença e UMA transação Stone sem código de
+    // autorização entre eles. A regra gera duas candidatas FRACAS disputando a mesma transação: nenhuma confirma por
+    // proximidade; só um documento (ex.: comprovante da maquininha) decide qual pedido é.
+    { id: "pedidos-saipos-0510-ambiguo", nome: "Vendas por pedido do SAIPOS — 05/10, dois pedidos iguais (sintético, CSV)", fonte: "SAIPOS", tipoRelatorio: "SAIPOS_VENDAS", periodoInicio: "2026-10-05", periodoFim: "2026-10-05", leitor: "Não homologado (contrato sintético)",
+      conteudo: () => saiposVendas([{ pedido: "DEMO-A1", data: "05/10/2026 12:00", canal: "Balcão", itens: 4200, forma: "Débito" }, { pedido: "DEMO-A2", data: "05/10/2026 12:06", canal: "Balcão", itens: 4200, forma: "Débito" }]) },
+    { id: "stone-0510-ambiguo", nome: "Vendas da Stone — 05/10, transação sem autorização (sintético, CSV)", fonte: "STONE", tipoRelatorio: "STONE_VENDAS", periodoInicio: "2026-10-05", periodoFim: "2026-10-05", leitor: "Homologado em XLSX; este CSV é formato não homologado",
+      conteudo: () => stoneCsv([{ id: "DEMO-SA1", quando: "05/10/2026 12:03", produto: "Debito", bruto: "42,000000", liquido: "41,580000", unificado: "-0,420000" }]) },
     { id: "faturamento-saipos-0310", nome: "Faturamento diário do SAIPOS — 03/10 (sintético, PDF)", fonte: "SAIPOS", tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", periodoInicio: "2026-10-03", periodoFim: "2026-10-03", leitor: "Homologado (PDF)",
       conteudo: () => faturamentoSaiposPdf([{ data: "03/10/2026", valor: 96000, desconto: 2400 }]) },
     { id: "arquivo-incompativel", nome: "Arquivo que não é relatório da Stone (deve ser rejeitado)", fonte: "STONE", tipoRelatorio: "STONE_VENDAS", periodoInicio: "2026-10-02", periodoFim: "2026-10-02", leitor: "—",

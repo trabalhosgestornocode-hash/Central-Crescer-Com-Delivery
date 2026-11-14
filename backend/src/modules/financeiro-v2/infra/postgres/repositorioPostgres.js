@@ -291,6 +291,7 @@ function criarTx(cliente, { somenteLeitura }) {
       const ordem = [...q.ordem.map((o) => `${colunaComparavel(def, o.campo).coluna} ${o.desc ? "desc" : "asc"} nulls last`), "seq asc"].join(", ");
       const n = cond.valores.length;
       const { rows } = await consulta(`select ${selecao(def, true)} from ${def.tabela} where ${cond.sql} order by ${ordem} limit $${n + 1}::integer offset $${n + 2}::integer`, [...cond.valores, q.limite, q.deslocamento]);
+      if (!q.contar) return { itens: rows.map((linha) => registroDe(def, linha, { comExtras: true })), total: null };
       const { rows: [contagem] } = await consulta(`select count(*)::int as total from ${def.tabela} where ${cond.sql}`, cond.valores);
       return { itens: rows.map((linha) => registroDe(def, linha, { comExtras: true })), total: contagem.total };
     },

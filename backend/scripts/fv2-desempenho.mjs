@@ -5,7 +5,7 @@
 // candidatas de conciliação e versões de fechamento — e mede as consultas das telas.
 // Não lê .env, não abre nada além do banco de teste isolado. Os tempos são OBSERVAÇÕES deste computador, não metas.
 import { performance } from "node:perf_hooks";
-import { AGORA, ESCOPOS_PADRAO, ctx, montar } from "../test/financeiro-v2/helpers/cenario.js";
+import { AGORA, ESCOPOS_PADRAO, ORG_A, UNI_A2, ctx, montar } from "../test/financeiro-v2/helpers/cenario.js";
 import { criarNucleoFinanceiro } from "../src/modules/financeiro-v2/index.js";
 import { saiposVendas } from "../test/financeiro-v2/helpers/arquivos.js";
 import { repositorioPostgresDeTeste } from "../test/financeiro-v2/helpers/postgres.js";
@@ -22,6 +22,10 @@ const ultimoDia = (comp) => new Date(Date.UTC(Number(comp.slice(0, 4)), Number(c
 const falhasDeCarga = {};
 const tentar = async (nome, fn) => { try { return await fn(); } catch (e) { falhasDeCarga[nome] = (falhasDeCarga[nome] ?? 0) + 1; falhasDeCarga[`${nome}:ultimo`] = e?.codigo ?? e?.message; return null; } };
 
+if (process.env.FV2_SEM_ESTATISTICAS === "1") {
+  const dono = await (await repositorio.interno()).dono();
+  for (const { relname } of (await dono.query("select relname from pg_class where relkind = 'r' and relname like 'fv2\_%'")).rows) await dono.query(`alter table ${relname} set (autovacuum_enabled = false)`);
+}
 const t0 = performance.now();
 const caixa = await n.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa" });
 const banco = await n.configurarContaFinanceira(c, { tipo: "BANCARIA", nome: "Banco" });
@@ -95,9 +99,17 @@ for (const comp of competencias.slice(0, -1)) {
     }
   }
 }
+// 08D: SEGUNDA unidade, pequena (distribuição desigual entre unidades no mesmo banco).
+const c2 = ctx(ORG_A, UNI_A2);
+await tentar("unidade pequena", async () => {
+  const cx2 = await n.configurarContaFinanceira(c2, { tipo: "CAIXA_FISICO", nome: "Caixa 2" });
+  for (let i = 0; i < 20; i += 1) await n.registrarVenda(c2, { canal: "BALCAO", dataVenda: `${competencias.at(-1)}-${String(1 + (i % 28)).padStart(2, "0")}`, brutoCentavos: 1000 + i, fonte: { sistema: "MANUAL", idExterno: `P2-${i}` }, pagamentos: [{ forma: "DINHEIRO", valorCentavos: 1000 + i, contaId: cx2.id }] });
+});
 const carga = performance.now() - t0;
-// 08C: estatísticas do planejador, como o autovacuum faria num banco em uso (sem elas os índices novos são ignorados).
-await (await (await repositorio.interno()).dono()).query("analyze");
+// 08C/08D: estatísticas do planejador, como o autovacuum faria num banco em uso. Com FV2_SEM_ESTATISTICAS=1 mede o pior
+// caso (banco recém-carregado): autovacuum desligado nas tabelas antes da carga e nenhum ANALYZE.
+const SEM_ESTATISTICAS = process.env.FV2_SEM_ESTATISTICAS === "1";
+if (!SEM_ESTATISTICAS) await (await (await repositorio.interno()).dono()).query("analyze");
 // Contagem pelo núcleo (o papel da aplicação sem sessão de banco não enxerga nada: RLS).
 const contagem = {};
 for (const tipo of ["VENDA", "RECEBIVEL", "OBRIGACAO", "MOVIMENTACAO", "LANCAMENTO", "DOCUMENTO", "PROPOSTA", "CORRESPONDENCIA"]) {
@@ -115,7 +127,20 @@ const MES = { competencia: ULT };
 const resultados = [];
 // 08C: ANTES × DEPOIS nas MESMAS condições (mesmo banco, dados e máquina): a referência lê o histórico inteiro, como até a 08B.
 const antes = criarNucleoFinanceiro({ repositorio, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, cofre, cargaCompletaDeReferencia: true });
+const umaVenda = (await n.consultarVendas(c, { ...MES, tamanho: 1 })).itens[0]?.id;
+const umRecebivel = (await n.consultarContasAReceber(c, { competencia: ULT, tamanho: 1 })).itens[0]?.id;
+const umaConta = (await n.consultarContasAPagar(c, { competencia: ULT, tamanho: 1 })).itens[0]?.id;
 const telas = {
+  "Visão Geral (resumo)": (x) => x.consultarResumoFinanceiro(c, MES),
+  "Caixa e bancos (mês)": (x) => x.consultarCaixaEBancos(c, { inicio: `${ULT}-01`, fim: `${ULT}-${ultimoDia(ULT)}` }),
+  "Fluxo de caixa (mês)": (x) => x.consultarFluxoDeCaixa(c, { inicio: `${ULT}-01`, fim: `${ULT}-${ultimoDia(ULT)}`, granularidade: "DIA" }),
+  "Contas a receber (página)": (x) => x.consultarContasAReceber(c, { tamanho: 25 }),
+  "Contas a pagar (página)": (x) => x.consultarContasAPagar(c, { tamanho: 25 }),
+  "Detalhe de venda": (x) => x.detalharVenda(c, { id: umaVenda }),
+  "Detalhe de recebível": (x) => x.detalharRecebimento(c, { id: umRecebivel }),
+  "Detalhe de conta a pagar": (x) => x.detalharContaAPagar(c, { id: umaConta }),
+  "Central — unidade pequena": (x) => x.consultarCentralDeConferencias(c2, MES),
+  "Vendas — unidade pequena": (x) => x.consultarVendas(c2, { ...MES, tamanho: 25 }),
   "Vendas (página)": (x) => x.consultarVendas(c, { ...MES, tamanho: 25 }),
   "Recebimentos consolidados": (x) => x.consultarRecebiveisERepasses(c, { ...MES, tamanho: 25 }),
   "Central de Conferências": (x) => x.consultarCentralDeConferencias(c, MES),
@@ -127,7 +152,8 @@ const antesDepois = [];
 for (const [nome, fn] of Object.entries(telas)) {
   const a = await medir(nome, () => fn(antes), 5);
   const d = await medir(nome, () => fn(n), 5);
-  antesDepois.push({ nome, antesMs: a.medianaMs, depoisMs: d.medianaMs });
+  const { primeiraDiferenca: dif } = await import("../src/modules/financeiro-v2/aplicacao/cargaDaCompetencia.js");
+  antesDepois.push({ nome, antesMs: a.medianaMs, depoisMs: d.medianaMs, identico: dif(await fn(n), await fn(antes)) ?? "IDENTICO" });
 }
 // Equivalência no conjunto de 12 meses: cada mês, cada tela otimizada, dirigida = completa.
 const { primeiraDiferenca } = await import("../src/modules/financeiro-v2/aplicacao/cargaDaCompetencia.js");
@@ -167,14 +193,21 @@ const perfilado = {
   }) })), op),
 };
 const nPerfil = criarNucleoFinanceiro({ repositorio: perfilado, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, cofre });
+const nPerfilCompleto = criarNucleoFinanceiro({ repositorio: perfilado, escoposAutorizados: ESCOPOS_PADRAO, relogio: () => AGORA, cofre, cargaCompletaDeReferencia: true });
+const consultasPorTela = [];
+for (const [nome, fn] of Object.entries(telas)) {
+  const medir2 = async (nucleo) => { for (const k of Object.keys(perfil)) delete perfil[k]; await fn(nucleo); return Object.values(perfil).reduce((a, v) => ({ consultas: a.consultas + v.chamadas, linhas: a.linhas + v.linhas }), { consultas: 0, linhas: 0 }); };
+  consultasPorTela.push({ nome, dirigida: await medir2(nPerfil), completa: await medir2(nPerfilCompleto) });
+}
+for (const k of Object.keys(perfil)) delete perfil[k];
 const tPerfil = performance.now();
 await nPerfil.consultarCentralDeConferencias(c, MES);
 const totalPerfil = Math.round(performance.now() - tPerfil);
 const perfilOrdenado = Object.entries(perfil).map(([k, v]) => ({ k, chamadas: v.chamadas, ms: Math.round(v.ms), linhas: v.linhas })).sort((a, b) => b.ms - a.ms).slice(0, 15);
 const mem = process.memoryUsage();
 console.log(JSON.stringify({
-  meses: MESES, vendasPorMes: VENDAS, registros: contagem, falhasDeCarga, cargaS: Math.round(carga / 1000),
-  diagnosticoFechamentos: diagnosticoFechamentos.filter((x) => !x.ok), medicoes: resultados, antesDepois, equivalencia, perfilCentral: { totalMs: totalPerfil, porOperacao: perfilOrdenado },
+  meses: MESES, vendasPorMes: VENDAS, semEstatisticas: process.env.FV2_SEM_ESTATISTICAS === "1", registros: contagem, falhasDeCarga, cargaS: Math.round(carga / 1000),
+  diagnosticoFechamentos: diagnosticoFechamentos.filter((x) => !x.ok), medicoes: resultados, antesDepois, equivalencia, perfilCentral: { totalMs: totalPerfil, porOperacao: perfilOrdenado }, consultasPorTela,
   memoriaMb: { rss: Math.round(mem.rss / 1048576), heap: Math.round(mem.heapUsed / 1048576) },
 }, null, 2));
 await pool.end?.();

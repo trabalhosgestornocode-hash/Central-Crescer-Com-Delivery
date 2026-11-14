@@ -58,3 +58,36 @@ test("08D — envio pelo serviço: valida, guarda, vincula, não duplica e não 
   const rc = await ok("/api/fv2/reclassificacao", { competencia: "2026-10", id: registro, categoria: "DESPESAS_ADMINISTRATIVAS_GERAIS" });
   assert.equal(rc.impacto.evidenciaDisponivel, true, "a reclassificação enxerga a evidência enviada");
 });
+
+test("08D — conciliação AMBÍGUA: proximidade não confirma; recusar a indevida; só o comprovante do vínculo libera a certa", async () => {
+  const OUT = { competencia: "2026-10" };
+  const op = (c, corpo) => agir(c, corpo, "operador");
+  for (const arquivo of ["pedidos-saipos-0510-ambiguo", "stone-0510-ambiguo"]) {
+    const r = await op("/api/fv2/acoes/importacao/receber", { arquivo });
+    assert.equal(r.status, 200, JSON.stringify(r.corpo));
+    const c = await op("/api/fv2/acoes/importacao/confirmar", { importacao: r.corpo.importacao.id, impressaoPrevia: r.corpo.importacao.impressaoPrevia });
+    assert.equal(c.status, 200, JSON.stringify(c.corpo));
+  }
+  assert.equal((await op("/api/fv2/acoes/conciliacoes/gerar", { competencia: "2026-10" })).status, 200);
+  const lista = (await ok("/api/fv2/conferencias/correspondencias", { ...OUT, situacao: "CANDIDATA", tamanho: "50" }, "operador")).itens.filter((x) => x.confiabilidade === "FRACA");
+  assert.equal(lista.length, 2, "duas candidatas disputam a mesma transação");
+  const det = await Promise.all(lista.map((x) => ok("/api/fv2/conferencias/correspondencia", { ...OUT, id: x.id }, "operador")));
+  assert.ok(det.every((d) => d.correspondencia.ambigua && !d.correspondencia.podeConfirmar));
+  const [errada, certa] = det.map((d) => d.correspondencia).sort((a, b) => (a.ladoA.itens[0].identificador.includes("DEMO-A2") ? 1 : -1));
+  assert.equal((await op("/api/fv2/acoes/conciliacoes/confirmar", { correspondencia: certa.id, justificativa: "Mesmo valor e horário próximo." })).status, 409, "ambígua não confirma");
+  assert.equal((await op("/api/fv2/acoes/conciliacoes/rejeitar", { correspondencia: errada.id, justificativa: "Comprovante da maquininha aponta o outro pedido (sintético)." })).status, 200);
+  const semProva = await ok("/api/fv2/conferencias/correspondencia", { ...OUT, id: certa.id }, "operador");
+  assert.deepEqual([semProva.correspondencia.ambigua, semProva.correspondencia.podeConfirmar], [false, false]);
+  assert.match(semProva.correspondencia.motivoDeNaoConfirmar, /anexe um documento que prove o vínculo/);
+  assert.equal((await op("/api/fv2/acoes/conciliacoes/confirmar", { correspondencia: certa.id, justificativa: "Só proximidade." })).status, 409, "sem prova do vínculo não confirma");
+  const prova = b64("%PDF-1.4\n% Comprovante sintetico da maquininha: NSU 000123, 05/10/2026 12:03, R$ 42,00 - pedido DEMO-A2\n%%EOF\n");
+  const env = await agir("/api/fv2/acoes/documentos/enviar", { arquivoBase64: prova, nomeArquivo: "comprovante-maquininha.pdf", tipoMime: "application/pdf", tipo: "COMPROVANTE", descricao: "Comprovante da maquininha liga a transação ao pedido DEMO-A2 (sintético)", registroTipo: "CORRESPONDENCIA", registro: certa.id, competencia: "2026-10" });
+  assert.equal(env.status, 200, JSON.stringify(env.corpo));
+  const comProva = await ok("/api/fv2/conferencias/correspondencia", { ...OUT, id: certa.id }, "operador");
+  assert.deepEqual([comProva.correspondencia.podeConfirmar, comProva.correspondencia.evidenciasDoVinculo.length], [true, 1]);
+  const ok2 = await op("/api/fv2/acoes/conciliacoes/confirmar", { correspondencia: certa.id, justificativa: "Comprovante da maquininha identifica o pedido DEMO-A2 (sintético)." });
+  assert.equal(ok2.status, 200, JSON.stringify(ok2.corpo));
+  assert.equal((await op("/api/fv2/acoes/conciliacoes/confirmar", { correspondencia: certa.id, justificativa: "De novo." })).status, 409, "sem duplicidade");
+  const fim = await ok("/api/fv2/conferencias/correspondencia", { ...OUT, id: certa.id }, "operador");
+  assert.deepEqual(fim.historico.map((h) => h.situacao ?? h.evento).slice(-1), ["CONFIRMADA"]);
+});

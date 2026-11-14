@@ -85,7 +85,7 @@ function criarTx(estado, { somenteLeitura = false } = {}) {
         }
         return ia - ib;
       });
-      return { itens: filtrados.slice(q.deslocamento, q.deslocamento + q.limite).map(([r, i]) => copiaOrdenada(r, i)), total: filtrados.length };
+      return { itens: filtrados.slice(q.deslocamento, q.deslocamento + q.limite).map(([r, i]) => copiaOrdenada(r, i)), total: q.contar ? filtrados.length : null };
     },
     agregar(escopo, tipo, consulta) {
       const q = normalizarConsulta(consulta, { paginada: false });
