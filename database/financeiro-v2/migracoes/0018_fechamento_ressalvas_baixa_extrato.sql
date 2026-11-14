@@ -17,7 +17,8 @@
 --     cria saída nova; também não insere lançamento (nunca cria despesa);
 --   * a liquidação gravada só por `vincular_pagamento` precisa apontar para uma SAÍDA válida, que já existia ANTES desta
 --     transação, e para uma conta a pagar; e precisa carregar a evidência (documento) ou uma conciliação confirmada;
---   * na saída, só pode AUMENTAR o valor alocado; na conta, só mudar a posição (liquidado, saldo, situação).
+--   * na saída, só pode AUMENTAR o valor alocado; na conta, só mudar a posição (liquidado, saldo e situação, que só pode
+--     ficar parcial ou quitada).
 -- =====================================================================================================================
 
 -- 1) Catálogo do banco.
@@ -115,12 +116,16 @@ begin
   if (to_jsonb(new)->>tg_argv[1])::bigint < (to_jsonb(old)->>tg_argv[1])::bigint then
     raise exception 'Financeiro v2: vincular pagamento do extrato não desfaz baixas (use o estorno, com a permissão própria).' using errcode = '42501';
   end if;
+  -- Na conta, a situação resultante de uma baixa só pode ser parcial ou quitada (nunca cancelar ou reabrir).
+  if tg_table_name = 'fv2_obrigacao' and (to_jsonb(new)->>'situacao') not in ('PARCIAL', 'QUITADA') then
+    raise exception 'Financeiro v2: vincular pagamento do extrato só deixa a conta parcial ou quitada.' using errcode = '42501';
+  end if;
   return new;
 end $$;
 create trigger fv2_movimentacao_vinculo_extrato before update on fv2_movimentacao for each row
   execute function fv2_vinculo_extrato_posicao('{alocado_centavos}', 'alocado_centavos');
 create trigger fv2_obrigacao_vinculo_extrato before update on fv2_obrigacao for each row
-  execute function fv2_vinculo_extrato_posicao('{liquidado_centavos,saldo_centavos,situacao_financeira}', 'liquidado_centavos');
+  execute function fv2_vinculo_extrato_posicao('{liquidado_centavos,saldo_centavos,situacao}', 'liquidado_centavos');
 
 -- 5) F-1 no banco: homologação só com pendências tratadas.
 create or replace function fv2_homologacao_com_ressalvas() returns trigger language plpgsql as $$
