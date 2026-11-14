@@ -44,24 +44,31 @@ select count(*) from pg_publication_tables where pubname = 'supabase_realtime';
    seguir (não é para seguir "porque parece ok").
 3. Resultado: **instalado mas desativado** (sem papéis de login, sem rota ligada).
 
-## 4. Credenciais e gateway 🔒 (o proprietário executa; nada passa pelo Git nem pelo chat)
+## 4. Credenciais e autoridade 🔒 (o proprietário executa; nada passa pelo Git nem pelo chat)
+
+**Decisão de 14/11: um só serviço no Render (`crescercomdelivery`), sem gateway separado.** A autoridade roda
+CO-LOCALIZADA no backend (`FV2_AUTORIDADE_MODO=local`), com a mesma regra do gateway, papel de login e pool próprios.
+**Não é isolamento forte:** quem comprometer o processo do backend obtém as duas credenciais (pode abrir sessões de
+pessoas com concessão e contornar no código o 2º fator das ações sensíveis). Por isso: aceite explícito
+(`FV2_AUTORIDADE_COLOCALIZADA_ACEITA=1`), primeira ativação **só consulta**, ações sensíveis fora da aplicação.
 
 - Papéis de login e senhas: doc 26, § 3 (`\password` no psql; nunca no editor SQL).
-- Gateway no Render: *Private Service* (mesmo padrão do `gateway-whatsapp`), `rootDir: backend`, build `npm ci`,
-  start `node src/fv2-gateway/servidor.js`, região Ohio, porta 10000, plano Starter (custo a confirmar no painel).
 
-### Variáveis (sem valores)
+### Variáveis no serviço `crescercomdelivery` (sem valores)
 
-| Serviço | Variável | Valor na ativação |
-|---|---|---|
-| backend | `FV2_HABILITADO` | `0` até o § 5; depois `1` |
-| backend | `FV2_ESCRITA_HABILITADA` | `0` (só consulta) até as condições do § 5.3 |
-| backend | `FV2_HOMOLOGACAO_HABILITADA` | `0` até a matriz 24a aprovada |
-| backend | `FV2_APP_DATABASE_URL`, `FV2_GATEWAY_URL`, `FV2_GATEWAY_CHAVE`, `FV2_PG_CA`, `FV2_APP_POOL_MAX` (4) | doc 26 |
-| gateway | `FV2_AUTORIDADE_DATABASE_URL`, `FV2_GATEWAY_CHAVE`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `FV2_PG_CA`, `PORT=10000`, `FV2_AUTORIDADE_POOL_MAX` (2) | doc 26 |
+| Variável | Valor na ativação |
+|---|---|
+| `FV2_HABILITADO` | `0` até o § 5.2; depois `1` |
+| `FV2_AUTORIDADE_MODO` | `local` |
+| `FV2_AUTORIDADE_COLOCALIZADA_ACEITA` | `1` (aceite do risco acima) |
+| `FV2_APP_DATABASE_URL` | pooler do Supabase com `fv2_app_login` |
+| `FV2_AUTORIDADE_DATABASE_URL` | pooler com `fv2_autoridade_login` (**diferente** da anterior; igual = desligado) |
+| `FV2_PG_CA` | certificado-raiz público do Supabase |
+| `FV2_APP_POOL_MAX` | 4 (autoridade: 2 fixo) |
+| `FV2_ESCRITA_HABILITADA` | `0` (só consulta) |
+| `FV2_HOMOLOGACAO_HABILITADA` | `0` (matriz 24a não aprovada) |
 
-Faltando qualquer variável obrigatória, o v2 **fica desligado** (o backend registra `FV2_DESLIGADO_POR_CONFIGURACAO`;
-o gateway não sobe).
+Faltando qualquer variável, o v2 **fica desligado** (registro `FV2_DESLIGADO_POR_CONFIGURACAO`).
 
 ## 5. Ativação exclusiva do Açaí no Grau Saci 🔒
 
