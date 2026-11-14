@@ -221,3 +221,25 @@ test("banco — 0021: liberação desligada por padrão; aplicação só LÊ; s�
   assert.equal((await dono.query("select count(*)::int as n from fv2_liberacao_historico")).rows[0].n, 3);
   await assert.rejects(dono.query("update fv2_liberacao_historico set justificativa = 'x'"), fv042);
 });
+
+// ------------------------------------------------------------------------------------------------ 09C (revisão do MFA)
+test("09C — emissão do token NÃO é o instante do 2º fator: token renovado agora com fator de 2 h atrás é recusado", async () => {
+  const p = (t) => mfa.provar({ tokenDeAcesso: t, contaId: CONTA });
+  const renovado = token({ fatorHaS: 2 * 3600, iatHaS: 5 }); // iat de 5 s (renovação), fator usado há 2 h
+  assert.equal((await p(renovado)).motivo, MOTIVO_PROVA.ANTIGA);
+  const recemDesafiado = token({ fatorHaS: 30, iatHaS: 20 }); // desafio de MFA agora → token novo com fator recente
+  assert.equal((await p(recemDesafiado)).ok, true);
+  assert.equal((await p(recemDesafiado)).segundoFatorEm, agoraMs - 30_000, "o instante vem do método em amr, não do iat");
+});
+
+test("09C — token válido não salva sessão revogada/expirada, não troca empresa/unidade e não serve a conta compartilhada", async () => {
+  const { a } = await montarAdaptador();
+  await recusa(a.contexto(sessao({ acesso: { expiraEm: new Date(agoraMs - 1).toISOString() } }), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: token() }), MOTIVO.SESSAO_EXPIRADA);
+  await recusa(a.contexto(sessao({ uni: "aaaaaaaa-0000-4000-8000-0000000000ff" }), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: token() }), MOTIVO.UNIDADE_NAO_LIBERADA);
+  await recusa(a.contexto(sessao({ acesso: { empresa: { id: ORG_B } } }), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: token() }), MOTIVO.CONTEXTO_DIVERGENTE);
+  await recusa(a.contexto(sessao({ conta: CONTA_LOJA, pessoa: PESSOA_LOJA_1 }), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: token({ conta: CONTA_LOJA }) }), MOTIVO.CONTA_COMPARTILHADA);
+  await recusa(a.contexto(sessao({ acesso: { impersonando: true, impersonadoPor: CONTA_ADMIN } }), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: token() }), MOTIVO.IMPERSONACAO);
+  // a ação sensível com tudo certo passa; troca de pessoa na mesma sessão (outro perfil) não herda a prova
+  assert.equal((await a.contexto(sessao(), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: token() })).autenticacao.provaVerificada, true);
+  await recusa(a.contexto(sessao({ pessoa: PESSOA_ADMIN }), { acao: ACAO.HOMOLOGAR, tokenDeAcesso: token() }), MOTIVO.PESSOA_SEM_IDENTIDADE);
+});

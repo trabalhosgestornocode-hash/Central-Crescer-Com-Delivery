@@ -36,6 +36,12 @@ export function validarFiltroAReceber(e = {}) {
   return f;
 }
 
+/** 09C — posição de contas a receber no FIM de uma competência (obrigatória: nunca "todo o histórico"). */
+export function validarPosicaoAReceber(e = {}) {
+  semCamposDesconhecidos(e, ["competencia", "pagina", "tamanho"], "posicaoAReceber");
+  return { competencia: exigirCompetencia(e.competencia), ...pagina(e) };
+}
+
 function periodo(e) {
   const inicio = exigirData(e.inicio, "inicio");
   const fim = exigirData(e.fim, "fim");

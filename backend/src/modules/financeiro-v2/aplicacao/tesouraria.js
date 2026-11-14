@@ -3,16 +3,16 @@
 // Escritas novas: saldo INFORMADO de conta (âncora documentada) e sessão de caixa físico (abertura, operações, fechamento).
 // Nenhuma delas cria lançamento econômico; diferença de caixa é registrada e NUNCA ajustada automaticamente.
 import { CODIGO, falhar } from "../dominio/erros.js";
-import { EVENTO_HISTORICO, NATUREZA_MOVIMENTACAO, OPERACAO_CAIXA, SENTIDO, SITUACAO_SESSAO_CAIXA, TIPO, TIPO_CONTA } from "../dominio/catalogos.js";
+import { EVENTO_HISTORICO, NATUREZA_MOVIMENTACAO, OPERACAO_CAIXA, SENTIDO, SITUACAO_MOVIMENTACAO, SITUACAO_SESSAO_CAIXA, SITUACAO_TITULO, TIPO, TIPO_CONTA } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { subtrair } from "../dominio/dinheiro.js";
-import { competenciaDe } from "../dominio/tempo.js";
+import { competenciaDe, primeiroDiaDe, somarDias, somarMeses, ultimoDiaDe } from "../dominio/tempo.js";
 import {
-  REFERENCIA_SALDO, caixaEBancos, calendarioFinanceiro, contasAPagar, contasAReceber, fluxoDeCaixa, preparar, resumoFinanceiro, teoricoDaSessao, tituloAPagar, tituloAReceber,
+  REFERENCIA_SALDO, caixaEBancos, posicaoAReceberEm, calendarioFinanceiro, contasAPagar, contasAReceber, fluxoDeCaixa, preparar, resumoFinanceiro, teoricoDaSessao, tituloAPagar, tituloAReceber,
 } from "../dominio/tesouraria.js";
 import {
   validarAberturaDeCaixa, validarDetalheDeTitulo, validarFechamentoDeCaixa, validarFiltroAPagar, validarFiltroAReceber, validarFiltroCaixaEBancos,
-  validarFiltroCalendario, validarFiltroFluxo, validarFiltroResumo, validarOperacaoDeCaixa, validarSaldoDeConta,
+  validarFiltroCalendario, validarFiltroFluxo, validarPosicaoAReceber, validarFiltroResumo, validarOperacaoDeCaixa, validarSaldoDeConta,
 } from "../contratos/tesouraria.js";
 import { baseNaTransacao } from "./base.js";
 import { operacoesDeCaixa } from "./caixa.js";
@@ -33,7 +33,7 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
       liquidacoes: await l(TIPO.LIQUIDACAO), obrigacoes: await l(TIPO.OBRIGACAO), recebiveis: await l(TIPO.RECEBIVEL), contrapartes: await l(TIPO.CONTRAPARTE),
       lancamentos: await l(TIPO.LANCAMENTO), categorias: await l(TIPO.CATEGORIA), ajustes: await l(TIPO.AJUSTE), correspondencias: await l(TIPO.CORRESPONDENCIA),
       sessoes: await l(TIPO.SESSAO_CAIXA), documentos: await l(TIPO.DOCUMENTO), vinculos: await l(TIPO.VINCULO_DOCUMENTAL), pagamentos: await l(TIPO.PAGAMENTO_VENDA),
-      competencias: await l(TIPO.COMPETENCIA), propostas: await l(TIPO.PROPOSTA),
+      competencias: await l(TIPO.COMPETENCIA), propostas: await l(TIPO.PROPOSTA), estornos: await l(TIPO.ESTORNO),
     };
   }
   // 08D: no modo de conferência (testes), cada consulta calcula também com a carga completa e exige igualdade.
@@ -41,7 +41,7 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
     const filtro = validar(e);
     return b.consultar(ctx, async (cx, tx) => {
       const hoje = b.hoje();
-      const r = calcular(await (cargaCompleta ? carregar : carregador)(cx, tx), hoje, filtro);
+      const r = calcular(await (cargaCompleta ? carregar : carregador)(cx, tx, filtro), hoje, filtro);
       if (conferirCarga && !cargaCompleta) exigirEquivalencia(r, calcular(await carregar(cx, tx), hoje, filtro), tela);
       return r;
     });
@@ -86,6 +86,114 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
     };
   }
 
+  /**
+   * 09C — carga dirigida de CAIXA E BANCOS (perfil de CPU da 09C: o custo era transferir e converter o histórico inteiro).
+   * Lê só os movimentos DO PERÍODO, com tudo o que eles referenciam (liquidações, títulos, transferências, pagamentos,
+   * documentos, sugestão do extrato). Fora do período, o saldo precisa só de SOMAS: o banco devolve um RESUMO por conta,
+   * sentido e dia (só movimentos válidos), com soma e quantidade. As fórmulas são as mesmas; movimento retroativo entra
+   * na soma automaticamente (nada é guardado em cache). Equivalência provada no modo de conferência.
+   */
+  async function carregarCaixaEBancos(cx, tx, filtro) {
+    const l = (tipo, f) => tx.listar(cx, tipo, f);
+    const contas = await l(TIPO.CONTA);
+    const alvo = contas.filter((c) => !filtro.contaId || c.id === filtro.contaId);
+    const doPeriodo = [];
+    for (let deslocamento = 0; ; deslocamento += 500) {
+      const pg = await tx.paginar(cx, TIPO.MOVIMENTACAO, { desde: { dataEfetiva: filtro.inicio }, ate: { dataEfetiva: filtro.fim }, limite: 500, deslocamento, contar: false });
+      doPeriodo.push(...pg.itens);
+      if (pg.itens.length < 500) break;
+    }
+    const resumos = [];
+    for (const conta of alvo) {
+      for (const sentido of [SENTIDO.ENTRADA, SENTIDO.SAIDA]) {
+        for (const faixa of [{ ate: { dataEfetiva: somarDias(filtro.inicio, -1) } }, { desde: { dataEfetiva: somarDias(filtro.fim, 1) } }]) {
+          const grupos = await tx.agregar(cx, TIPO.MOVIMENTACAO, { onde: { contaId: conta.id, sentido, situacao: SITUACAO_MOVIMENTACAO.VALIDA }, ...faixa, agruparPor: "dataEfetiva", somar: "valorCentavos" });
+          for (const g of grupos) {
+            resumos.push({ id: `resumo:${conta.id}:${sentido}:${g.grupo}`, contaId: conta.id, dataEfetiva: g.grupo, sentido, valorCentavos: g.somaCentavos, situacao: SITUACAO_MOVIMENTACAO.VALIDA, quantidade: g.quantidade, resumoDiario: true });
+          }
+        }
+      }
+    }
+    const movIds = doPeriodo.map((m) => m.id);
+    const liquidacoes = await ligados(cx, tx, TIPO.LIQUIDACAO, "movimentacaoId", movIds);
+    const titulos = unicos(liquidacoes.map((q) => q.alvoId));
+    const saldos = await l(TIPO.SALDO_CONTA);
+    const competenciasDoPeriodo = [];
+    for (let c = competenciaDe(filtro.inicio); c <= competenciaDe(filtro.fim); c = competenciaDe(somarMeses(`${c}-01`, 1))) competenciasDoPeriodo.push(c);
+    const propostas = (await ligados(cx, tx, TIPO.PROPOSTA, "competencia", competenciasDoPeriodo)).filter((pr) => pr.operacao === "MOVIMENTACAO_BANCARIA");
+    return {
+      contas, saldos, movimentacoes: [...doPeriodo, ...resumos], liquidacoes,
+      transferencias: await ligados(cx, tx, TIPO.TRANSFERENCIA, "id", unicos(doPeriodo.map((m) => m.transferenciaId))),
+      pagamentos: await ligados(cx, tx, TIPO.PAGAMENTO_VENDA, "id", unicos(doPeriodo.map((m) => m.pagamentoId))),
+      obrigacoes: await ligados(cx, tx, TIPO.OBRIGACAO, "id", titulos), recebiveis: await ligados(cx, tx, TIPO.RECEBIVEL, "id", titulos),
+      contrapartes: await l(TIPO.CONTRAPARTE), categorias: await l(TIPO.CATEGORIA), sessoes: await l(TIPO.SESSAO_CAIXA), competencias: await l(TIPO.COMPETENCIA),
+      ...(await documentosDosRegistros(cx, tx, [...doPeriodo, ...saldos])),
+      propostas,
+    };
+  }
+
+  /**
+   * 09C — carga dirigida da POSIÇÃO A RECEBER no fim da competência C (D = último dia). Candidatos lidos NO BANCO:
+   * em aberto hoje (ABERTA/PARCIAL), liquidados DEPOIS de D e ajustados em competência posterior a C — um título antigo
+   * ainda pendente nunca se perde (está em aberto hoje ou foi pago/ajustado depois de D). Dos candidatos, só os de
+   * competência ≤ C, com liquidações, estornos dessas liquidações e ajustes. Equivalência provada no modo de conferência.
+   */
+  async function carregarPosicaoAReceber(cx, tx, filtro) {
+    const D = ultimoDiaDe(filtro.competencia);
+    const abertos = await tx.listar(cx, TIPO.RECEBIVEL, { onde: { situacao: SITUACAO_TITULO.ABERTA } });
+    const parciais = await tx.listar(cx, TIPO.RECEBIVEL, { onde: { situacao: SITUACAO_TITULO.PARCIAL } });
+    const pagosDepois = [];
+    for (let deslocamento = 0; ; deslocamento += 500) {
+      const pg = await tx.paginar(cx, TIPO.LIQUIDACAO, { onde: { alvoTipo: "RECEBIVEL" }, desde: { dataEfetiva: somarDias(D, 1) }, limite: 500, deslocamento, contar: false });
+      pagosDepois.push(...pg.itens);
+      if (pg.itens.length < 500) break;
+    }
+    // Só ajustes de competência POSTERIOR a C, filtrados no banco (sem competência = a do título: nunca posterior).
+    const ajustadosDepois = [];
+    for (let deslocamento = 0; ; deslocamento += 500) {
+      const pg = await tx.paginar(cx, TIPO.AJUSTE, { onde: { alvoTipo: "RECEBIVEL" }, desde: { competencia: competenciaDe(somarMeses(`${filtro.competencia}-01`, 1)) }, limite: 500, deslocamento, contar: false });
+      ajustadosDepois.push(...pg.itens);
+      if (pg.itens.length < 500) break;
+    }
+    const candidatos = unicos([...abertos, ...parciais].map((r) => r.id).concat(pagosDepois.map((q) => q.alvoId), ajustadosDepois.map((a) => a.alvoId)));
+    const recebiveis = (await ligados(cx, tx, TIPO.RECEBIVEL, "id", candidatos)).filter((r) => r.competencia <= filtro.competencia);
+    const ids = recebiveis.map((r) => r.id);
+    const liquidacoes = await ligados(cx, tx, TIPO.LIQUIDACAO, "alvoId", ids);
+    return {
+      ...(await cadastros(cx, tx)), recebiveis, liquidacoes, ajustes: await ligados(cx, tx, TIPO.AJUSTE, "alvoId", ids),
+      estornos: await ligados(cx, tx, TIPO.ESTORNO, "alvoId", liquidacoes.map((q) => q.id)),
+    };
+  }
+
+  /**
+   * 09C — carga dirigida do RESUMO da Visão Geral. Movimentos reais só no intervalo exibido (competência e hoje); fora
+   * dele, resumos diários somados no banco (saldo). Obrigações inteiras (previsto e recorrências). Recebíveis só os EM
+   * ABERTO (o fluxo previsto e os totais em aberto só usam eles) + a CONTAGEM dos não cancelados vinda do banco.
+   */
+  async function carregarResumo(cx, tx, filtro) {
+    const hoje = b.hoje();
+    const inicio = [primeiroDiaDe(filtro.competencia), hoje].sort()[0];
+    const fim = [ultimoDiaDe(filtro.competencia), hoje].sort()[1];
+    const caixa = await carregarCaixaEBancos(cx, tx, { inicio, fim });
+    const obrigacoes = await tx.listar(cx, TIPO.OBRIGACAO);
+    const abertos = [...await tx.listar(cx, TIPO.RECEBIVEL, { onde: { situacao: SITUACAO_TITULO.ABERTA } }), ...await tx.listar(cx, TIPO.RECEBIVEL, { onde: { situacao: SITUACAO_TITULO.PARCIAL } })];
+    const contagem = await tx.agregar(cx, TIPO.RECEBIVEL, { agruparPor: "situacao" });
+    // Ajustes e documentos só dos títulos EM ABERTO: os totais usam os campos gravados de cada título, e as recorrências
+    // usam todas as obrigações + categoria (lançamentos, abaixo). Os PAGAMENTOS dos títulos não são lidos: no resumo eles
+    // só serviriam ao detalhe de cada item, que o resumo descarta (mutante M62 equivalente; conferido no modo de conferência).
+    // As liquidações das movimentações do período já vêm da carga do caixa (movimentações sem vínculo).
+    const titulos = [...obrigacoes.filter((o) => o.situacao === SITUACAO_TITULO.ABERTA || o.situacao === SITUACAO_TITULO.PARCIAL), ...abertos];
+    const ajustes = await ligados(cx, tx, TIPO.AJUSTE, "alvoId", titulos.map((t) => t.id));
+    const docs = await documentosDosRegistros(cx, tx, [...titulos, ...caixa.movimentacoes.filter((m) => !m.resumoDiario), ...caixa.saldos]);
+    return {
+      ...caixa,
+      obrigacoes, recebiveis: abertos, ajustes, ...docs,
+      lancamentos: await ligados(cx, tx, TIPO.LANCAMENTO, "id", unicos([...obrigacoes.map((o) => o.lancamentoId), ...ajustes.map((a) => a.lancamentoId)])),
+      correspondencias: await tx.listar(cx, TIPO.CORRESPONDENCIA, { onde: { situacao: "DIVERGENTE" } }),
+      recebiveisNaoCancelados: contagem.filter((g) => g.grupo !== SITUACAO_TITULO.CANCELADA).reduce((n, g) => n + g.quantidade, 0),
+    };
+  }
+
   /** Liquidações dos títulos, as movimentações que as pagaram e as OUTRAS liquidações dessas mesmas movimentações. */
   async function pagamentosDosTitulos(cx, tx, ids) {
     const diretas = await ligados(cx, tx, TIPO.LIQUIDACAO, "alvoId", ids);
@@ -107,8 +215,9 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
     const lancamentos = await ligados(cx, tx, TIPO.LANCAMENTO, "id", unicos(obrigacoes.map((o) => o.lancamentoId)));
     return { ...(await cadastros(cx, tx)), obrigacoes, liquidacoes, movimentacoes, lancamentos, ...(await documentosDosRegistros(cx, tx, [...obrigacoes, ...movimentacoes])) };
   }
-  async function carregarContasAReceber(cx, tx) {
-    const recebiveis = await tx.listar(cx, TIPO.RECEBIVEL);
+  async function carregarContasAReceber(cx, tx, filtro = {}) {
+    // 09C: com competência no filtro, só os recebíveis DELA (a tela filtra por competência antes de qualquer total).
+    const recebiveis = await tx.listar(cx, TIPO.RECEBIVEL, filtro.competencia ? { onde: { competencia: filtro.competencia } } : undefined);
     const ids = recebiveis.map((r) => r.id);
     const { liquidacoes, movimentacoes } = await pagamentosDosTitulos(cx, tx, ids);
     const ajustes = await ligados(cx, tx, TIPO.AJUSTE, "alvoId", ids);
@@ -137,10 +246,12 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
     // ----------------------------------------------------------------------------------------------------- consultas
     consultarContasAPagar: consulta(validarFiltroAPagar, contasAPagar, carregarContasAPagar, "contas a pagar"),
     consultarContasAReceber: consulta(validarFiltroAReceber, contasAReceber, carregarContasAReceber, "contas a receber"),
-    consultarCaixaEBancos: consulta(validarFiltroCaixaEBancos, caixaEBancos, carregarTesouraria, "caixa e bancos"),
+    consultarCaixaEBancos: consulta(validarFiltroCaixaEBancos, caixaEBancos, carregarCaixaEBancos, "caixa e bancos"),
+    // 09C — posição a receber no fim da competência (histórica: pagamentos e estornos posteriores não a mudam).
+    consultarPosicaoAReceber: consulta(validarPosicaoAReceber, (d, _hoje, f) => posicaoAReceberEm(d, f.competencia, f), carregarPosicaoAReceber, "posição a receber"),
     consultarFluxoDeCaixa: consulta(validarFiltroFluxo, fluxoDeCaixa, carregarTesouraria, "fluxo de caixa"),
     consultarCalendarioFinanceiro: consulta(validarFiltroCalendario, calendarioFinanceiro, carregarTesouraria, "calendário"),
-    consultarResumoFinanceiro: consulta(validarFiltroResumo, resumoFinanceiro, carregarTesouraria, "visão geral (resumo)"),
+    consultarResumoFinanceiro: consulta(validarFiltroResumo, resumoFinanceiro, carregarResumo, "visão geral (resumo)"),
 
     /** Conta a pagar → parcelas do mesmo grupo → pagamentos → documentos → histórico. */
     detalharContaAPagar(ctx, e) {

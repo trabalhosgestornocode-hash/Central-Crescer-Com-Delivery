@@ -135,6 +135,9 @@ const telas = {
   "Caixa e bancos (mês)": (x) => x.consultarCaixaEBancos(c, { inicio: `${ULT}-01`, fim: `${ULT}-${ultimoDia(ULT)}` }),
   "Fluxo de caixa (mês)": (x) => x.consultarFluxoDeCaixa(c, { inicio: `${ULT}-01`, fim: `${ULT}-${ultimoDia(ULT)}`, granularidade: "DIA" }),
   "Contas a receber (página)": (x) => x.consultarContasAReceber(c, { tamanho: 25 }),
+  // 09C: consultas dirigidas de recebíveis
+  "Contas a receber (competência)": (x) => x.consultarContasAReceber(c, { ...MES, tamanho: 25 }),
+  "Posição a receber (fim do mês)": (x) => x.consultarPosicaoAReceber(c, { ...MES, tamanho: 25 }),
   "Contas a pagar (página)": (x) => x.consultarContasAPagar(c, { tamanho: 25 }),
   "Detalhe de venda": (x) => x.detalharVenda(c, { id: umaVenda }),
   "Detalhe de recebível": (x) => x.detalharRecebimento(c, { id: umRecebivel }),
@@ -171,6 +174,11 @@ resultados.push(await medir("Visão Geral (apuração + resumo)", async () => [a
 resultados.push(await medir("Composição de um indicador", () => n.composicaoDoIndicador(c, { ...MES, codigo: "DESPESAS_OPERACIONAIS" })));
 resultados.push(await medir("Contas a pagar (página)", () => n.consultarContasAPagar(c, { tamanho: 25 })));
 resultados.push(await medir("Contas a receber (página)", () => n.consultarContasAReceber(c, { tamanho: 25 })));
+// 09C: as consultas dirigidas de recebíveis (a página SEM filtro continua sendo, por definição, o histórico inteiro).
+if (typeof n.consultarPosicaoAReceber === "function") {
+  resultados.push(await medir("Contas a receber (competência)", () => n.consultarContasAReceber(c, { ...MES, tamanho: 25 })));
+  resultados.push(await medir("Posição a receber (fim do mês)", () => n.consultarPosicaoAReceber(c, { ...MES, tamanho: 25 })));
+}
 resultados.push(await medir("Caixa e bancos (mês)", () => n.consultarCaixaEBancos(c, { inicio: `${ULT}-01`, fim: `${ULT}-${ultimoDia(ULT)}` })));
 resultados.push(await medir("Vendas (página)", () => n.consultarVendas(c, { ...MES, tamanho: 25 })));
 resultados.push(await medir("Central de Conferências", () => n.consultarCentralDeConferencias(c, MES)));

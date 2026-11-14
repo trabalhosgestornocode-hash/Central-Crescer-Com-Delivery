@@ -49,6 +49,12 @@ const agrupar = (lista, chave) => {
   return mapa;
 };
 const valida = (m) => m.situacao !== SITUACAO_MOVIMENTACAO.ESTORNADA;
+/**
+ * 09C — quantos movimentos uma lista representa. A carga dirigida de Caixa e Bancos pode trazer, FORA do período
+ * consultado, RESUMOS DIÁRIOS somados no banco (um por conta, sentido e dia, só válidos: `quantidade` = movimentos
+ * somados). Somas são idênticas (o resumo carrega o total do dia); contagens somam `quantidade`.
+ */
+const quantos = (lista) => lista.reduce((n, m) => n + (m.resumoDiario ? m.quantidade : 1), 0);
 const sinal = (m) => (m.sentido === SENTIDO.ENTRADA ? m.valorCentavos : -m.valorCentavos);
 const validoDaLiquidacao = (q) => subtrair(q.valorCentavos, q.estornadoCentavos ?? 0);
 const FORMAS = Object.freeze({ DINHEIRO: "em dinheiro", PIX: "por Pix", DEBITO: "no débito", CREDITO: "no crédito", VALE: "em vale", OUTRA: "" });
@@ -271,6 +277,58 @@ export function contasAReceber(d, hoje, filtro = {}) {
   };
 }
 
+
+/**
+ * 09C — POSIÇÃO DE CONTAS A RECEBER NO FIM DA COMPETÊNCIA `competencia` (dia D = último dia do mês).
+ * Mesma conservação dos títulos (saldo = base − Σ(liquidação − estornado) + Σ ajustes), mas só com o que existia em D:
+ *   - entram os recebíveis da competência ou anteriores; CANCELADOS ficam fora (cancelamento é correção e retroage —
+ *     e só é permitido com a competência aberta);
+ *   - esperado = base + ajustes de competência ≤ C;
+ *   - recebido até D = liquidações com data ≤ D, menos os estornos delas com data ≤ D (pagamento de outubro não muda a
+ *     posição de 30/09; estorno de outubro também não);
+ *   - em aberto em D = saldo na data > 0. Para D no presente, o saldo na data é o saldo gravado do título (testado).
+ */
+export function posicaoAReceberEm(d, competencia, filtro = {}) {
+  const p = preparar(d);
+  const D = ultimoDiaDe(competencia);
+  const estornosPorLiquidacao = agrupar((d.estornos ?? []).filter((e) => e.alvoTipo === "LIQUIDACAO"), (e) => e.alvoId);
+  const liquidacoesPorRecebivel = agrupar((d.liquidacoes ?? []).filter((q) => q.alvoTipo === "RECEBIVEL"), (q) => q.alvoId);
+  const itens = [];
+  for (const r of p.recebiveis) {
+    if (r.situacao === SITUACAO_TITULO.CANCELADA || r.competencia > competencia) continue;
+    const ajustes = (p.ajustesPorAlvo.get(r.id) ?? []).filter((a) => (a.competencia ?? r.competencia) <= competencia);
+    const esperado = somar(r.valorBaseCentavos, ...ajustes.map((a) => a.valorCentavos));
+    let recebido = 0;
+    let recebidoDepois = 0;
+    for (const q of liquidacoesPorRecebivel.get(r.id) ?? []) {
+      if (q.dataEfetiva <= D) {
+        const estornadoAteD = somarLista((estornosPorLiquidacao.get(q.id) ?? []).filter((e) => e.dataEfetiva <= D), (e) => e.valorCentavos);
+        recebido = somar(recebido, subtrair(q.valorCentavos, estornadoAteD));
+      } else {
+        recebidoDepois = somar(recebidoDepois, subtrair(q.valorCentavos, q.estornadoCentavos ?? 0));
+      }
+    }
+    const saldo = subtrair(esperado, recebido);
+    if (saldo <= 0) continue;
+    const contraparte = r.contraparteId ? p.contrapartePorId.get(r.contraparteId) ?? null : null;
+    itens.push({
+      id: r.id, competencia: r.competencia, devedor: r.processador ? { tipo: "PROCESSADORA", nome: r.processador } : { tipo: contraparte?.tipo ?? "OUTRO", nome: contraparte?.nome ?? null },
+      canal: r.canal ?? null, descricao: r.descricao ?? null, vencimentoPrevisto: r.dataPrevista ?? null,
+      esperadoNaDataCentavos: esperado, recebidoAteADataCentavos: recebido, saldoNaDataCentavos: saldo, recebidoDepoisCentavos: recebidoDepois,
+      vencidoNaData: Boolean(r.dataPrevista && r.dataPrevista < D), semPrevisao: !r.dataPrevista, saldoAtualCentavos: r.saldoCentavos,
+    });
+  }
+  itens.sort((a, b) => String(a.vencimentoPrevisto ?? "9999").localeCompare(String(b.vencimentoPrevisto ?? "9999")) || String(a.id).localeCompare(String(b.id)));
+  return {
+    competencia, data: D, quantidade: itens.length,
+    totais: {
+      saldoNaDataCentavos: somarLista(itens, (t) => t.saldoNaDataCentavos), vencidoNaDataCentavos: somarLista(itens.filter((t) => t.vencidoNaData), (t) => t.saldoNaDataCentavos),
+      semPrevisaoCentavos: somarLista(itens.filter((t) => t.semPrevisao), (t) => t.saldoNaDataCentavos), recebidoDepoisCentavos: somarLista(itens, (t) => t.recebidoDepoisCentavos),
+    },
+    ...paginar(itens, filtro.pagina, filtro.tamanho),
+  };
+}
+
 // ------------------------------------------------------------------------------------------------------ caixa e bancos
 
 /**
@@ -377,12 +435,12 @@ function contaNoPeriodo(p, conta, inicio, fim, hoje) {
     const diferenca = subtrair(a.valorCentavos, calculado);
     return {
       data: a.data, referencia: a.referencia, anterior: { data: anterior.data, referencia: anterior.referencia, valorCentavos: anterior.valorCentavos },
-      informadoCentavos: a.valorCentavos, calculadoCentavos: calculado, diferencaCentavos: diferenca, movimentosConsiderados: movs.length,
+      informadoCentavos: a.valorCentavos, calculadoCentavos: calculado, diferencaCentavos: diferenca, movimentosConsiderados: quantos(movs),
       situacao: diferenca === 0 ? "CONFERE" : "DIVERGENTE", documentos: documentosDe(p, TIPO.SALDO_CONTA, a),
     };
   });
   // Movimentos com data ANTERIOR à primeira referência já estão dentro do saldo informado: nunca são somados a ele.
-  const anterioresAReferencia = ancoras.length ? movimentosDa(p, conta.id).filter((m) => m.dataEfetiva < ancoras[0].inicioEfetivo).length : 0;
+  const anterioresAReferencia = ancoras.length ? quantos(movimentosDa(p, conta.id).filter((m) => m.dataEfetiva < ancoras[0].inicioEfetivo)) : 0;
   const semVinculo = movs.filter((m) => !m.transferenciaId && !m.pagamentoId && !(p.liquidacoesPorMov.get(m.id) ?? []).length);
   const conc = (sit) => movs.filter((m) => m.situacaoConciliacao === sit).length;
   const ultima = ancoras.filter((a) => a.inicioEfetivo <= somarDias(fim, 1)).pop() ?? null;
@@ -650,9 +708,11 @@ export function resumoFinanceiro(d, hoje, { competencia }) {
     saldoBancario: saldo(bancos.consolidado.saldoBancarioCentavos, conta(TIPO_CONTA.BANCARIA)),
     saldoCaixaFisico: saldo(bancos.consolidado.saldoCaixaFisicoCentavos, conta(TIPO_CONTA.CAIXA_FISICO)),
     contasAPagar: { registros: pagar.totais.registros, ...posicao(pagar.totais.registros, { saldoCentavos: pagar.totais.saldoCentavos, vencidoCentavos: pagar.totais.vencidoCentavos }) },
+    // 09C: a carga dirigida do resumo lê só os recebíveis EM ABERTO e traz do banco a CONTAGEM dos não cancelados
+    // (pagos incluídos), que é o que decide "sem registros" × "calculado". Sem ela, conta os carregados (como antes).
     contasAReceber: {
-      registros: receber.totais.registros,
-      ...posicao(receber.totais.registros, { saldoCentavos: receber.totais.saldoCentavos, atrasadoCentavos: receber.totais.atrasadoCentavos, semPrevisaoCentavos: receber.totais.semPrevisaoCentavos, comPrevisaoCentavos: receber.totais.comPrevisaoCentavos }),
+      registros: d.recebiveisNaoCancelados ?? receber.totais.registros,
+      ...posicao(d.recebiveisNaoCancelados ?? receber.totais.registros, { saldoCentavos: receber.totais.saldoCentavos, atrasadoCentavos: receber.totais.atrasadoCentavos, semPrevisaoCentavos: receber.totais.semPrevisaoCentavos, comPrevisaoCentavos: receber.totais.comPrevisaoCentavos }),
     },
     previsto30Dias: { ate: horizonte, entradasCentavos: proximos.previsto.entradasCentavos, saidasCentavos: proximos.previsto.saidasCentavos, parcial: proximos.projecao.parcial, motivos: proximos.projecao.motivos },
     fluxoDeCaixa: {

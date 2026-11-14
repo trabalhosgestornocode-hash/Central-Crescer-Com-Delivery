@@ -59,6 +59,14 @@ test("09B — versão para APROVAÇÃO (23a): mesmos códigos da 22a, nenhum apr
   assert.equal((aprovacao.match(/\( \) aprovo \( \) altero/g) ?? []).length, Object.keys(EFEITO_POR_CODIGO).length + IMPEDIMENTOS.length);
 });
 
+test("09C — apresentação para DECISÃO (24a): mesmos códigos, nenhuma aprovação, decisão em branco em cada linha", () => {
+  const decisao = readFileSync(join(raiz, "docs", "financeiro-v2", "24a-matriz-pendencias-decisao.md"), "utf8");
+  for (const c of [...Object.keys(EFEITO_POR_CODIGO), ...IMPEDIMENTOS]) assert.ok(decisao.includes(`\`${c}\``), `${c} ausente da 24a`);
+  assert.match(decisao, /NÃO APROVADA/);
+  assert.ok(!/\(x\) aprovo|\[x\]/i.test(decisao));
+  assert.equal((decisao.match(/\( \) aprovo \( \) altero — nome\/data: ____/g) ?? []).length, Object.keys(EFEITO_POR_CODIGO).length + IMPEDIMENTOS.length);
+});
+
 test("09 — revisão da matriz: diferença de taxa/valor do processador não é mais ressalva (crédito menor superestima o resultado)", () => {
   assert.equal(EFEITO_POR_CODIGO.TAXA_OU_VALOR_DIVERGENTE, "INDETERMINADO");
   assert.match(matriz, /\| `TAXA_OU_VALOR_DIVERGENTE` \|[^\n]*\*\*Não\*\* \(corrigido na 09/);
