@@ -88,7 +88,9 @@ function plano(dados, ctx) {
 ${linhas.map((x) => `<tr>${td("Categoria", `<span class="nivel-${Math.min(x.nivel, 3)}">${esc(x.nome)}</span><br><span class="nota">${esc(x.codigo)}${x.doSistema ? " · do sistema" : ""}${x.aceitaLancamento ? "" : " · agrupadora"}</span>`, "esquerda")}${td("Natureza", esc(x.natureza))}${td("Situação", x.ativa ? selo("Ativa", "ok") : selo("Inativa", "neutro"))}${td("Ações", `<button type="button" class="botao-link" data-detalhe="categoria:${esc(x.codigo)}">Histórico e uso</button>`)}</tr>`).join("")}
 </tbody></table></div></section>
 <details class="card"><summary><h2 class="inline">Regras de classificação</h2></summary><ul class="lista-simples">${(dados.configuracoes?.planoDeContas?.regras ?? []).map((r) => `<li><span>${esc(r.classificacao)}</span><span>${esc(r.naturezas.join(" ou "))}</span></li>`).join("")}</ul></details>
-${ctx.podeConfigurar ? "" : exige("Alterar categorias exige a permissão \"configurar\".")}`;
+${ctx.podeConfigurar ? `<section class="card" aria-labelledby="t-cat-nova"><h2 id="t-cat-nova">Nova categoria</h2>${acao({ url: "/api/fv2/acoes/configuracoes/categoria-nova", rotulo: "Criar categoria", aviso: "Confirmo a criação (fica no histórico).",
+    campos: `<label>Nome <input name="nome" required maxlength="120"></label><label>Dentro de (grupo) <select name="paiCodigo" required>${linhas.filter((x) => x.ativa && !x.aceitaLancamento).map((x) => `<option value="${esc(x.codigo)}">${esc(x.nome)}</option>`).join("")}</select></label>` })}
+<p class="nota">A categoria herda a classificação do grupo escolhido. Para renomear ou mover lançamentos, abra "Histórico e uso" da categoria.</p></section>` : exige("Alterar categorias exige a permissão \"configurar\".")}`;
 }
 
 export function detalheCategoria(d, ctx = {}) {
@@ -97,6 +99,9 @@ export function detalheCategoria(d, ctx = {}) {
 <dt>Uso</dt><dd>${d.uso.lancamentos} lançamento(s)${d.uso.competencias.length ? ` em ${d.uso.competencias.map((x) => esc(competencia(x))).join(", ")}` : ""}</dd><dt>Exclusão</dt><dd>${esc(d.observacao)}</dd></dl>
 ${ctx.podeConfigurar && !d.doSistema ? acao({ url: "/api/fv2/acoes/configuracoes/categoria", rotulo: d.ativa ? "Inativar categoria" : "Reativar categoria", aviso: d.ativa ? "Confirmo: lançamentos novos nesta categoria serão recusados; o histórico continua." : "Confirmo a reativação.", recarregar: `categoria:${d.codigo}`, perigo: d.ativa,
     campos: `<input type="hidden" name="codigo" value="${esc(d.codigo)}"><input type="hidden" name="ativa" value="${d.ativa ? "false" : "true"}">${justificativa()}` }) : d.doSistema ? exige("Categoria usada pelo próprio sistema: não pode ser inativada.") : ""}
+${ctx.podeConfigurar ? `<h3>Renomear</h3>${acao({ url: "/api/fv2/acoes/configuracoes/categoria", rotulo: "Salvar novo nome", aviso: "Confirmo o novo nome (o código e o histórico não mudam).", recarregar: `categoria:${d.codigo}`,
+    campos: `<input type="hidden" name="codigo" value="${esc(d.codigo)}"><label>Novo nome <input name="nome" required maxlength="120" value="${esc(d.nome)}"></label>${justificativa()}` })}` : ""}
+<h3>Lançamentos nesta categoria</h3>${d.lancamentos?.length ? `<ul class="lista-simples">${d.lancamentos.map((l) => `<li><span>${esc(l.descricao ?? "Sem descrição")} · ${esc(l.data ? dataBR(l.data) : competencia(l.competencia))} · R$ ${(l.valorCentavos / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}</span><button type="button" class="botao-link" data-detalhe="reclassificacao:${esc(l.id)}">Mover para outra categoria</button></li>`).join("")}</ul>` : nenhum("Nenhum lançamento ativo.")}
 <h3>Histórico</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li><strong>${esc(h.evento === "CRIACAO" ? "Criada" : "Alterada")}</strong> · ${esc(dataBR(h.em))}${h.nomeAntes && h.nomeAntes !== h.nomeDepois ? ` · nome: ${esc(h.nomeAntes)} → ${esc(h.nomeDepois)}` : ""}${h.ativaAntes !== null && h.ativaAntes !== h.ativaDepois ? ` · ${h.ativaDepois ? "reativada" : "inativada"}` : ""}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem histórico.")}`;
 }
 

@@ -137,6 +137,8 @@ export function operacoesDeConfiguracao(b) {
         return {
           codigo: cat.codigo, nome: cat.nome, classificacao: cat.classificacao, natureza: cat.natureza, ativa: cat.ativa, doSistema: cat.doSistema, aceitaLancamento: cat.aceitaLancamento,
           uso: { lancamentos: lancs.length, ativos: lancs.filter((l) => l.situacao === "ATIVO").length, competencias: [...new Set(lancs.map((l) => l.competencia))].sort() },
+          lancamentos: lancs.filter((l) => l.situacao === "ATIVO").sort((a, b2) => String(b2.data ?? "").localeCompare(String(a.data ?? ""))).slice(0, 50)
+            .map((l) => ({ id: l.id, descricao: l.descricao ?? null, valorCentavos: l.valorCentavos, data: l.data ?? null, competencia: l.competencia })),
           podeExcluir: false, observacao: lancs.length ? "Categoria com lançamentos: pode ser inativada (bloqueia lançamentos novos), nunca excluída — o histórico continua apurável." : "Categoria nunca é excluída; sem uso, pode ser inativada.",
           historico: historico.map((h) => ({ evento: h.evento, em: h.em, justificativa: h.justificativa ?? null, ativaAntes: h.antes?.ativa ?? null, ativaDepois: h.depois?.ativa ?? null, nomeAntes: h.antes?.nome ?? null, nomeDepois: h.depois?.nome ?? null })),
         };

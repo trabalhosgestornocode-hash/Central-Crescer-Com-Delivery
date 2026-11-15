@@ -113,7 +113,14 @@ export function escritasDaAbertura({ hoje = () => tempo.hojeEm(new Date()), ref 
     }) },
     "/vendas/cancelar": { campos: ["venda", "justificativa"], fazer: (n, c, b) => n.cancelarVenda(c, { vendaId: ref(b.venda), justificativa: b.justificativa }) },
     // Plano de contas: implantação só com o NOME do modelo redigitado (confirmação que o servidor confere). Idempotente.
-    "/configuracoes/implantar-plano": { campos: ["modelo", "modeloConfirmado"], fazer: (n, c, b) => {
+    // Categoria nova: o código é gerado do nome (sem acento, maiúsculas, _); classificação e natureza vêm da categoria superior.
+  "/configuracoes/categoria-nova": { campos: ["nome", "paiCodigo"], fazer: (n, c, b) => {
+    const nome = String(b.nome ?? "").trim();
+    let codigo = nome.normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 70);
+    if (!/^[A-Z]/.test(codigo)) codigo = `CAT_${codigo}`;
+    return n.registrarCategoria(c, { codigo, nome, paiCodigo: b.paiCodigo });
+  } },
+  "/configuracoes/implantar-plano": { campos: ["modelo", "modeloConfirmado"], fazer: (n, c, b) => {
       if (typeof b.modelo !== "string" || b.modeloConfirmado !== b.modelo) throw erroDeEntrada("Para implantar, digite o nome do modelo exatamente como aparece.", CODIGO.CONFIRMACAO_EXIGIDA, "modeloConfirmado");
       return n.implantarPlanoDeContas(c, { modelo: b.modelo });
     } },
