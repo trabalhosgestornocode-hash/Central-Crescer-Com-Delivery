@@ -3,30 +3,52 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Financeiro v2 — demonstração local</title>
+  <title>Crescer Com Delivery Financeiro</title>
+  <!-- Mesmo tema da plataforma: claro por padrão, escuro só quando a pessoa escolheu na Crescer (antes da pintura). -->
+  <script src="tema.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Archivo+Black&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
   <link rel="stylesheet" href="fv2.css">
 </head>
 <body>
   <a class="pular" href="#conteudo">Pular para o conteúdo</a>
   <div class="faixa-demo" role="note">Ambiente demonstrativo local · dados sintéticos · não publicado</div>
   <div class="layout">
-    <nav class="navegacao" aria-label="Financeiro v2">
-      <p class="marca">Financeiro <span>v2</span></p>
-      <ul>
-        <li><a href="#/visao-geral" data-rota="visao-geral">Visão Geral</a></li>
-        <li><a href="#/dre" data-rota="dre">DRE Gerencial</a></li>
-        <li><a href="#/contas-a-pagar" data-rota="contas-a-pagar">Contas a Pagar</a></li>
-        <li><a href="#/calendario" data-rota="calendario">Calendário</a></li>
-        <li><a href="#/contas-a-receber" data-rota="contas-a-receber">Contas a Receber</a></li>
-        <li><a href="#/caixa-e-bancos" data-rota="caixa-e-bancos">Caixa e Bancos</a></li>
-        <li><a href="#/fluxo-de-caixa" data-rota="fluxo-de-caixa">Fluxo de Caixa</a></li>
-        <li><a href="#/vendas-e-recebimentos" data-rota="vendas-e-recebimentos">Vendas e Recebimentos</a></li>
-        <li><a href="#/conferencias" data-rota="conferencias">Importações e Conferências</a></li>
-        <li><a href="#/documentos" data-rota="documentos">Documentos</a></li>
-        <li><a href="#/configuracoes" data-rota="configuracoes">Configurações</a></li>
-      </ul>
+    <nav class="navegacao" aria-label="Crescer Com Delivery Financeiro">
+      <p class="marca"><span class="marca-empresa">Crescer Com Delivery</span><span class="marca-produto">Financeiro</span></p>
+      <div class="nav-grupos">
+      <div class="nav-grupo">
+        <p class="nav-titulo" id="nav-analise">Análise</p>
+        <ul aria-labelledby="nav-analise">
+          <li><a href="#/visao-geral" data-rota="visao-geral">Visão Geral</a></li>
+          <li><a href="#/dre" data-rota="dre">DRE Gerencial</a></li>
+        </ul>
+      </div>
+      <div class="nav-grupo">
+        <p class="nav-titulo" id="nav-tesouraria">Contas e caixa</p>
+        <ul aria-labelledby="nav-tesouraria">
+          <li><a href="#/contas-a-pagar" data-rota="contas-a-pagar">Contas a Pagar</a></li>
+          <li><a href="#/calendario" data-rota="calendario">Calendário</a></li>
+          <li><a href="#/contas-a-receber" data-rota="contas-a-receber">Contas a Receber</a></li>
+          <li><a href="#/caixa-e-bancos" data-rota="caixa-e-bancos">Caixa e Bancos</a></li>
+          <li><a href="#/fluxo-de-caixa" data-rota="fluxo-de-caixa">Fluxo de Caixa</a></li>
+        </ul>
+      </div>
+      <div class="nav-grupo">
+        <p class="nav-titulo" id="nav-operacao">Operação</p>
+        <ul aria-labelledby="nav-operacao">
+          <li><a href="#/vendas-e-recebimentos" data-rota="vendas-e-recebimentos">Vendas e Recebimentos</a></li>
+          <li><a href="#/conferencias" data-rota="conferencias">Importações e Conferências</a></li>
+          <li><a href="#/documentos" data-rota="documentos">Documentos</a></li>
+        </ul>
+      </div>
+      <div class="nav-grupo">
+        <p class="nav-titulo" id="nav-administracao">Administração</p>
+        <ul aria-labelledby="nav-administracao">
+          <li><a href="#/configuracoes" data-rota="configuracoes">Configurações</a></li>
+        </ul>
+      </div>
+      </div>
     </nav>
     <div class="principal">
       <form class="filtros" aria-label="Filtros">
