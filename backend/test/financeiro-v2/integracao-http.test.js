@@ -356,6 +356,7 @@ test("abertura — rotas NOVAS no modo CO-LOCALIZADO: contas, saldo de abertura,
   const contar = async (q, p = []) => Number((await dono.query(q, p)).rows[0].n);
   const W = (caminho, corpo, o = {}) => get(`/localescrita/acoes${caminho}`, { metodo: "POST", corpo, ...o });
   const COMP = "2026-11";
+  const dreAntes = (await get(`/local/api/dre?competencia=${COMP}`)).corpo;
   const unicred = { tipo: "BANCARIA", nome: "Unicred Sintética", instituicao: "Unicred" };
   // Produção hoje (FV2_ESCRITA_HABILITADA=0): as rotas novas também só respondem "somente consulta".
   for (const [caminho, corpo] of [["/configuracoes/conta/criar", unicred], ["/caixa/abrir", { conta: "x", data: "2026-11-01", contado: "1,00" }], ["/abertura/obrigacao-anterior", {}]]) {
@@ -405,7 +406,8 @@ test("abertura — rotas NOVAS no modo CO-LOCALIZADO: contas, saldo de abertura,
   // DRE da competência de início: nada de receita ou despesa nascida da abertura.
   const dre = await get(`/local/api/dre?competencia=${COMP}`);
   assert.equal(dre.status, 200);
-  for (const k of ["FATURAMENTO_BRUTO_PROPRIO", "RESULTADO_GERENCIAL"]) assert.ok([null, 0].includes(dre.corpo.indicadores?.[k]?.valorCentavos ?? null), `${k}: ${JSON.stringify(dre.corpo.indicadores?.[k])}`);
+  for (const k of ["faturamentoBruto", "resultadoGerencial"]) assert.equal(dre.corpo[k].valorCentavos, dreAntes[k].valorCentavos, k);
+  assert.ok(dre.corpo.dre.foraDoResultado.patrimoniais.some((x) => x.valorCentavos === 30000), "título anterior fora do resultado");
   // Plano: sem o nome do modelo redigitado, nada é implantado.
   assert.equal((await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA" })).corpo.codigo, CODIGO.CONFIRMACAO_EXIGIDA);
 });

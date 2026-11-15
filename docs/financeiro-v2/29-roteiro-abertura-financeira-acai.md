@@ -7,23 +7,25 @@ de infraestrutura) e 0 lançamentos. Este roteiro **não contém valores**: os n
 
 | # | Condição | Situação |
 |---|---|---|
-| P1 | Rotas de **criar conta financeira**, **registrar recebível** e **abrir caixa** (o núcleo já tem as três) | ❌ falta a rota + formulário |
-| P2 | Formulário de **implantar plano de contas** (a rota já existe) | ❌ falta o formulário |
+| P1 | Rotas de **criar conta financeira**, **registrar recebível** e **abrir/operar/fechar caixa** | ✅ local (doc 30), sem publicar |
+| P2 | Formulário de **implantar plano de contas**, com o modelo redigitado | ✅ local (doc 30), sem publicar |
 | P3 | Obrigação com fornecedor novo numa única transação, com reenvio idempotente | ✅ corrigido localmente (sem publicar) |
 | P4 | Teste de escrita no modo co-localizado (o modo de produção) | ✅ local, 1 teste com 13 verificações |
 | P5 | Decisão do proprietário sobre o risco da autoridade co-localizada (§ 6) | ⏳ |
 | P6 | Documentos de origem: o cofre continua **desligado** (envio responde 503). Os saldos registram a referência em texto, sem anexo | ⏳ decisão: aceitar a abertura sem anexo ou esperar o cofre |
+| P7 | **Rotação** das senhas `fv2_*_login` (doc 31) | ⏳ execução pelo proprietário |
+| P8 | Publicar as mudanças locais (com a escrita ainda desligada) | ⏳ autorização |
 
 ## 2. Decisões do proprietário
 
-1. **Competência de início.** Recomendação: 1º dia de um mês sem fechamento pendente (ex.: 2026-12-01 ou 2026-11-01).
-   Os meses anteriores não são apurados no v2.
+1. **Competência de início.** Proposta: **2026-11** (início em 01/11/2026), sujeita à sua confirmação. Os saldos iniciais
+   são a posição comprovada no encerramento de 31/10/2026. Os meses anteriores não são apurados no v2.
 2. **Contas financeiras.** Unicred (bancária), caixa físico, e outras somente se tiverem extrato (ex.: conta de recebíveis).
 3. **Títulos anteriores ao início.** O plano não tem uma categoria de "saldo de abertura". Há duas opções:
    - **A:** cada título entra na **competência original**, com a categoria real. A DRE dos meses anteriores fica parcial e
      não é considerada.
-   - **B:** criar a categoria patrimonial "Títulos anteriores à abertura", fora do resultado. É uma alteração no plano e
-     depende de autorização.
+   - **B (recomendada, preparada):** categoria patrimonial do sistema `TITULOS_ANTERIORES_A_ABERTURA`, fora do resultado
+     (doc 30 § 2). Os recebíveis anteriores não precisam de categoria: são marcados como anteriores à abertura.
 4. **CMV.** Não é lançado sem os relatórios de compras e estoque. Fica "a classificar" (fora da DRE) até haver evidência.
 5. **Quem valida os valores.** Uma pessoa diferente de quem digita, por exemplo o contador ou a sócia. A conferência
    fica registrada no fechamento.
@@ -38,13 +40,13 @@ de infraestrutura) e 0 lançamentos. Este roteiro **não contém valores**: os n
 
 ## 4. Execução (quando autorizada; tudo pela tela, com o login da Crescer)
 
-1. Ligar `FV2_ESCRITA_HABILITADA=1`. A homologação, o provisionamento e o envio de arquivos continuam desligados.
+1. Depois da rotação (P7) e da publicação (P8), ligar `FV2_ESCRITA_HABILITADA=1`. A homologação, o provisionamento e o envio de arquivos continuam desligados.
 2. Implantar o plano (ACAITERIA). A operação é idempotente.
-3. Criar as contas Unicred e Caixa físico. Depende de P1.
+3. Criar as contas Unicred e Caixa físico (Configurações → Abertura financeira).
 4. Registrar os saldos de abertura: Unicred com o saldo de **FIM_DO_DIA** do dia anterior ao início, e o caixa com a
    contagem. Na observação, informar a referência do extrato ou da contagem.
 5. Registrar as contas a pagar em aberto, uma por documento. O reenvio do mesmo formulário não duplica.
-6. Registrar os recebíveis em aberto, com a operadora e o demonstrativo. Depende de P1.
+6. Registrar os recebíveis em aberto, com a operadora e o demonstrativo (sem taxas presumidas).
 7. Conferências **depois**: o saldo de cada conta na data é igual ao extrato ou à contagem; o total a pagar em aberto
    é igual à lista; o total a receber é igual aos demonstrativos; a DRE do mês de início está vazia ou só com o que de
    fato é do mês.

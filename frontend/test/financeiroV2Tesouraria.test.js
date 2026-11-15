@@ -87,7 +87,7 @@ test("caixa e bancos: saldo informado + movimentos; transferência se anula; sem
   assert.deepEqual([fechada.teoricoCentavos, fechada.contadoCentavos, fechada.diferencaCentavos], [29500, 29000, -500]);
   assert.equal(caixa.diferencasDeCaixaNaoAjustadasCentavos, -500);
   assert.match(html, /não é ajustado automaticamente/);
-  assert.match(html, /não estão habilitados nesta demonstração/);
+  assert.match(html, /exigem a permissão "registrar"/);
   // Sem escrita na demonstração: o tratador só conhece consultas.
   assert.equal((await get("/api/fv2/fechar-caixa", {})).status, 404);
 });

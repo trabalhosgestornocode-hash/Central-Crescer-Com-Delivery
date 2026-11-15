@@ -105,6 +105,10 @@ test("títulos ANTERIORES (opção B): posição patrimonial, fora da DRE; pagos
   await rejeita(A("/abertura/obrigacao-anterior", { ...corpo, chave: randomUUID(), fornecedorNovo: "Órfão Sintético", dataEmissao: "2026-11-01" }), CODIGO.DATA_INVALIDA);
   const pagar = await nucleo.consultarContasAPagar(c, {});
   assert.equal(pagar.itens.length, 1);
+  // Segundo título do MESMO fornecedor (grafia diferente): mesmo cadastro, nenhum fornecedor repetido. Cancelado em seguida.
+  const o2 = await A("/abertura/obrigacao-anterior", { ...corpo, chave: randomUUID(), fornecedorNovo: " fornecedor sintético A ", descricao: "NF 102 (sintética)", valor: "120,00" });
+  assert.equal(o2.obrigacoes[0].contraparteId, o.obrigacoes[0].contraparteId);
+  await nucleo.cancelarObrigacao(c, { obrigacaoId: o2.obrigacoes[0].id, justificativa: "Cancelamento sintético do segundo título." });
   assert.ok(!JSON.stringify(pagar).includes("Órfão Sintético"), "nenhum fornecedor órfão");
 
   const rec = await A("/abertura/recebivel-anterior", { processador: "IFOOD", descricao: "Repasse iFood da semana de 27/10 (sintético)", valor: "800,00", competencia: COMP, dataOrigem: "2026-10-28", vencimento: "2026-11-05", origem: "Demonstrativo iFood (sintético)", chave: randomUUID() });
@@ -113,6 +117,8 @@ test("títulos ANTERIORES (opção B): posição patrimonial, fora da DRE; pagos
   await rejeita(nucleo.registrarRecebivel(c, { processador: "STONE", brutoCentavos: 1000, competencia: COMP, anteriorAAbertura: true, dataOrigem: "2026-10-30", retencoes: [{ categoria: "TAXAS_STONE", valorCentavos: 10 }] }), CODIGO.ENTRADA_INVALIDA);
 
   const antes = await nucleo.apurarCompetencia(c, { competencia: COMP });
+  assert.equal(antes.indicadores.FATURAMENTO_BRUTO_PROPRIO.valorCentavos, null, "só patrimoniais: a DRE continua SEM registros (nunca R$ 0,00 confirmado)");
+  assert.equal(antes.indicadores.RESULTADO_GERENCIAL.valorCentavos, null);
   semEfeito(antes.indicadores, "RESULTADO_GERENCIAL");
   semEfeito(antes.indicadores, "FATURAMENTO_BRUTO_PROPRIO");
   assert.deepEqual(antes.dre.foraDoResultado.patrimoniais.map((x) => [x.categoria, x.valorCentavos]), [[CATEGORIA_TITULOS_ANTERIORES, 50000]]);

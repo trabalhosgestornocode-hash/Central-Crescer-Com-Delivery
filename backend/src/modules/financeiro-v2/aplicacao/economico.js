@@ -28,6 +28,13 @@ export function operacoesEconomicas(b) {
     }
   }
 
+  /** Fornecedor/cliente digitado no formulário: reaproveita o MESMO cadastro (tipo + nome normalizado), nunca duplica. */
+  async function contraparteDoFormulario(tx, cx, nova) {
+    await tx.travar(cx, "contrapartes", "EXCLUSIVA");
+    const igual = (await tx.listar(cx, TIPO.CONTRAPARTE)).find((x) => x.tipo === nova.tipo && nomeNormalizado(x.nome) === nomeNormalizado(nova.nome));
+    return igual ?? b.criar(tx, cx, TIPO.CONTRAPARTE, nova);
+  }
+
   return {
     /**
      * Cadastra uma conta (Unicred, caixa físico, outras). Nunca recebe saldo: saldo é registrado à parte, com referência.
@@ -75,7 +82,7 @@ export function operacoesEconomicas(b) {
           if (c.dataEmissao >= `${c.competencia}-01`) falhar(CODIGO.DATA_INVALIDA, "Título anterior à abertura tem emissão antes do 1º dia da competência de início.", { campo: "dataEmissao" });
           if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra um por documento, pelo saldo em aberto (sem parcelar nem repetir).", { campo: "parcelas" });
         }
-        if (c.contraparteNova) c.contraparteId = (await b.criar(tx, cx, TIPO.CONTRAPARTE, c.contraparteNova)).id; // mesma transação
+        if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
         else await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         await b.exigirDocumentos(tx, cx, c.documentoIds);
         // "A classificar" e "títulos anteriores" são categorias do sistema: existem mesmo em plano implantado antes delas.
@@ -120,7 +127,7 @@ export function operacoesEconomicas(b) {
           return { recebivel: existente, lancamentosDeRetencao, repetido: true };
         }
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
-        if (c.contraparteNova) c.contraparteId = (await b.criar(tx, cx, TIPO.CONTRAPARTE, c.contraparteNova)).id; // mesma transação
+        if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
         else if (c.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         let canal = c.canal;
         if (c.vendaId) {
