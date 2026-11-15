@@ -166,6 +166,9 @@ export const ESCRITAS = Object.freeze({
     processador: b.processador || "STONE", vigenciaInicio: b.vigenciaInicio, ...(b.vigenciaFim ? { vigenciaFim: b.vigenciaFim } : {}), fonte: b.fonte,
     ...(b.prazoDeRecebimento ? { prazoDeRecebimento: b.prazoDeRecebimento } : {}), taxas: taxasDoTexto(b.taxas), justificativa: b.justificativa,
   }) },
+  // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
+  "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
+  "/importacao/estornar-taxas": { campos: ["importacao", "competencia", "justificativa"], fazer: (n, c, b) => n.estornarTaxasDoPeriodo(c, { importacaoId: id(b.importacao), competencia: b.competencia, justificativa: b.justificativa }) },
   "/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.configurarUnidade(c, semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/canal": { campos: ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarCanalOuProcessador(c, semVazios(b, ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/conta": { campos: ["conta", "nome", "ativa", "justificativa"], fazer: (n, c, b) => n.alterarContaFinanceira(c, { contaId: id(b.conta), ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}), justificativa: b.justificativa }) },

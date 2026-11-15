@@ -25,6 +25,7 @@ import { baseNaTransacao } from "./base.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { operacoesEconomicas } from "./economico.js";
 import { operacoesDeVendas } from "./vendas.js";
+import { taxasDoPeriodo } from "./taxasContratadas.js";
 import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
 
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 40);
@@ -374,6 +375,9 @@ export function operacoesDeFormacao(b) {
       }
     } else if (p.operacao === OP.PAGAMENTO_STONE) {
       if (!c.vendaId) falhar(CODIGO.OPERACAO_INVALIDA, "Transação sem venda vinculada: não há o que aplicar.");
+      // doc 36: taxas desta importação já reconhecidas pelo total do período → aplicar por venda contaria a tarifa duas vezes.
+      const doPeriodo = (await taxasDoPeriodo(tx, cx, p.importacaoId, p.competencia)).ativa;
+      if (doPeriodo) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "As taxas Stone desta importação já estão na DRE pelo total do período: estorne-as (com justificativa) antes de aplicar por venda.", { lancamentoId: doPeriodo.id });
       const r = await n.registrarPagamentoDeVenda(cx, { vendaId: c.vendaId, forma: c.forma, processador: c.processador, valorCentavos: c.valorCentavos, dataPagamento: c.dataPagamento, fonte: c.fonte });
       efeitos.push({ tipo: TIPO.PAGAMENTO_VENDA, id: r.pagamento.id }, { tipo: TIPO.RECEBIVEL, id: r.recebivel.id });
       for (const t of c.taxas) {
@@ -451,7 +455,7 @@ export function operacoesDeFormacao(b) {
       return b.executar(ctx, ACAO.APLICAR, async (cx, tx) => {
         const previa = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
         // doc 34: receitas de venda da competência em fila (o total do período cobre vários dias), depois a do dia.
-        if ([OP.VENDA, OP.VENDA_AGREGADA].includes(previa.operacao)) await tx.travar(cx, `formacao-competencia:${previa.competencia}`, "EXCLUSIVA");
+        if ([OP.VENDA, OP.VENDA_AGREGADA, OP.PAGAMENTO_STONE].includes(previa.operacao)) await tx.travar(cx, `formacao-competencia:${previa.competencia}`, "EXCLUSIVA");
         await tx.travar(cx, `formacao-dia:${previa.dataOperacao}`, "EXCLUSIVA");
         const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
         if (p.estado === E.APLICADA) return { proposta: p, efeitos: p.efeitos, repetido: true };

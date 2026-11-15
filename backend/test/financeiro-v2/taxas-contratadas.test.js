@@ -66,3 +66,81 @@ test("crédito parcelado (o Açaí só vende à vista) vira divergência, sem de
   assert.deepEqual([p.situacao, p.brutoCentavos, p.cobradoCentavos], ["PARCELADA_A_CONFERIR", 30000, 1500]);
   assert.deepEqual([a.situacao, a.esperadoCentavos], ["SEM_TABELA_VIGENTE", null]);
 });
+
+// ------------------------------------------------------------------------------------------- doc 36: taxas na DRE
+const ACEITE36 = { aceitarPendencias: true, justificativa: "Sintético." };
+async function importar36(n, fonte, tipoRelatorio, conteudo) {
+  const r = await n.receberArquivoParaImportacao(c, { fonte, tipoRelatorio, tipoMime: "application/octet-stream", conteudo, periodoInicio: "2026-09-01", periodoFim: "2026-09-30" });
+  if (r.repetido) return { ...r.importacao, repetido: true };
+  return (await n.confirmarImportacao(c, { importacaoId: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia, ...(r.previa.totalDivergencias ? ACEITE36 : {}) })).importacao;
+}
+const aplicarTodas36 = async (n, operacao) => {
+  for (const p of await n.listarPropostas(c, { operacao })) {
+    if (!["PROPOSTA", "AGUARDANDO_REVISAO"].includes(p.estado)) continue;
+    await n.aprovarProposta(c, { propostaId: p.id, justificativa: "Sintético." });
+    await n.aplicarProposta(c, { propostaId: p.id });
+  }
+};
+const STONE36 = [
+  { id: "S1", quando: "02/09/2026 12:00", produto: "Credito", bandeira: "MasterCard", bruto: "100,000000", liquido: "96,100000", unificado: "-3,900000" },
+  { id: "S2", quando: "02/09/2026 12:05", produto: "Credito", bandeira: "Visa", bruto: "17,610000", liquido: "16,923210", unificado: "-0,686790" },
+  { id: "S3", quando: "03/09/2026 12:00", produto: "Debito", bandeira: "Visa", bruto: "50,000000", liquido: "49,450000", unificado: "-0,550000" },
+  { id: "S4", quando: "04/09/2026 12:00", produto: "Pix", bandeira: "Pix", bruto: "19,880000", liquido: "19,810000", unificado: "-0,070000" },
+  { id: "S5", quando: "05/09/2026 12:00", produto: "Voucher", bandeira: "Elo", bruto: "30,000000", liquido: "28,920000", unificado: "-1,080000" },
+];
+const MICROS36 = 3900000 + 686790 + 550000 + 70000 + 1080000;
+const resultado36 = async (n) => (await n.apurarCompetencia(c, { competencia: "2026-09" })).indicadores;
+
+test("taxas Stone do período na DRE: soma exata uma vez; bruto e líquido Stone não viram receita; reimportações não duplicam; vale com tarifa efetiva entra", async () => {
+  const { nucleo: n } = montar();
+  const cab = "ATENDENTE;QUANTIDADE_VENDAS;VALOR_TOTAL_VENDAS;CATEGORIA;ITEM;QUANTIDADE_ITEM;VALOR_TOTAL_ITEM";
+  const canais = texto([cab, "Loja Sintética;10;500,00;Copos;Copo;10;500,00", "integration-ifood;5;300,00;Diversos;Diversos;5;300,00", "integration-api-int-sale;2;120,00;Diversos;Diversos;2;120,00"].join(String.fromCharCode(10)));
+  const impC = await importar36(n, "SAIPOS", "SAIPOS_DESEMPENHO_POR_ATENDENTE", canais);
+  await n.gerarPropostas(c, { importacaoId: impC.id });
+  await aplicarTodas36(n, "VENDA_AGREGADA");
+  const antes = await resultado36(n);
+  const impS = await importar36(n, "STONE", "STONE_VENDAS", stoneCsv(STONE36));
+  await n.gerarPropostas(c, { importacaoId: impS.id }); // sem pedidos: nenhuma venda a ligar
+  const depoisImport = await resultado36(n);
+  assert.deepEqual([depoisImport.FATURAMENTO_BRUTO_PROPRIO.valorCentavos, depoisImport.RESULTADO_GERENCIAL.valorCentavos], [92000, antes.RESULTADO_GERENCIAL.valorCentavos], "importar a Stone não muda receita nem resultado");
+  const r = await ESCRITAS["/importacao/reconhecer-taxas"].fazer(n, c, { importacao: impS.id, justificativa: "Tarifas conferidas por transação (sintético)." });
+  const taxa = Math.floor((MICROS36 + 5000) / 10000);
+  assert.deepEqual([r.resultado.length, r.resultado[0].lancamento.valorCentavos, r.resultado[0].lancamento.categoria, r.resultado[0].lancamento.taxasDoPeriodo.transacoes], [1, taxa, "TAXAS_STONE", 5]);
+  const depois = await resultado36(n);
+  assert.equal(depois.FATURAMENTO_BRUTO_PROPRIO.valorCentavos, 92000, "nem o bruto nem o líquido Stone viram receita");
+  assert.equal(depois.RESULTADO_GERENCIAL.valorCentavos, antes.RESULTADO_GERENCIAL.valorCentavos - taxa, "a tarifa entra uma única vez");
+  // Repetir, reimportar a Stone e reimportar os canais: nada muda.
+  assert.equal((await n.reconhecerTaxasDoPeriodo(c, { importacaoId: impS.id, justificativa: "De novo." })).resultado[0].repetido, true);
+  assert.equal((await importar36(n, "STONE", "STONE_VENDAS", stoneCsv(STONE36))).repetido, true);
+  assert.equal((await importar36(n, "SAIPOS", "SAIPOS_DESEMPENHO_POR_ATENDENTE", canais)).repetido, true);
+  assert.equal((await resultado36(n)).RESULTADO_GERENCIAL.valorCentavos, depois.RESULTADO_GERENCIAL.valorCentavos);
+  const q = await n.consultarTaxasContratadas(c, { competencia: "2026-09" });
+  assert.deepEqual(q.reconhecimento.map((x) => [x.situacao, x.valorCentavos]), [["RECONHECIDA", taxa]]);
+  assert.equal(q.total.cobradoCentavos, taxa, "DRE = soma exata das tarifas efetivas");
+  // Estorno autorizado: cancela (não apaga) e o resultado volta.
+  await ESCRITAS["/importacao/estornar-taxas"].fazer(n, c, { importacao: impS.id, competencia: "2026-09", justificativa: "Teste de estorno (sintético)." });
+  assert.equal((await resultado36(n)).RESULTADO_GERENCIAL.valorCentavos, antes.RESULTADO_GERENCIAL.valorCentavos);
+  assert.equal((await n.consultarTaxasContratadas(c, { competencia: "2026-09" })).reconhecimento[0].situacao, "ESTORNADA");
+});
+
+test("substituição por pedidos: com as taxas do período ativas, a taxa por venda é recusada; após o estorno, entra por venda e o período reconhece só o resto", async () => {
+  const { nucleo: n } = montar();
+  const caixa = await n.configurarContaFinanceira(c, { tipo: "CAIXA_FISICO", nome: "Caixa" });
+  const { saiposVendas } = await import("./helpers/arquivos.js");
+  const ped = await importar36(n, "SAIPOS", "SAIPOS_VENDAS", saiposVendas([{ pedido: "P-1", data: "02/09/2026 11:59", canal: "Balcão", itens: 10000, forma: "Crédito", autorizacao: "S1" }]));
+  await n.gerarPropostas(c, { importacaoId: ped.id, contaCaixaId: caixa.id });
+  await aplicarTodas36(n, "VENDA");
+  const impS = await importar36(n, "STONE", "STONE_VENDAS", stoneCsv(STONE36.slice(0, 2)));
+  await n.gerarPropostas(c, { importacaoId: impS.id });
+  const [pS1] = (await n.listarPropostas(c, { operacao: "PAGAMENTO_STONE" })).filter((p) => p.comando.vendaId);
+  assert.ok(pS1, "a transação S1 liga à venda P-1");
+  await n.reconhecerTaxasDoPeriodo(c, { importacaoId: impS.id, justificativa: "Período (sintético)." });
+  await n.aprovarProposta(c, { propostaId: pS1.id, justificativa: "Revisado (sintético)." });
+  await rejeita(n.aplicarProposta(c, { propostaId: pS1.id }), CODIGO.CONFLITO_IDEMPOTENCIA);
+  await n.estornarTaxasDoPeriodo(c, { importacaoId: impS.id, competencia: "2026-09", justificativa: "Substituição pelos pedidos (sintético)." });
+  await n.aplicarProposta(c, { propostaId: pS1.id });
+  const r = await n.reconhecerTaxasDoPeriodo(c, { importacaoId: impS.id, justificativa: "Período sem as vendas detalhadas (sintético)." });
+  assert.deepEqual([r.resultado[0].lancamento.taxasDoPeriodo.transacoes, r.resultado[0].lancamento.valorCentavos], [1, Math.floor((686790 + 5000) / 10000)], "só a S2 (sem venda)");
+  const ind = await resultado36(n);
+  assert.equal(ind.RESULTADO_GERENCIAL.valorCentavos, 10000 - 390 - 69, "cada tarifa uma vez: S1 pela venda, S2 pelo período");
+});
