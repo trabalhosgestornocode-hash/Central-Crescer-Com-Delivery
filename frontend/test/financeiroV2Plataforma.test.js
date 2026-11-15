@@ -70,3 +70,12 @@ test("10 — Dashboard Financeiro: v2 só com status liberado; desligado/não li
   assert.deepEqual(await resolverFinanceiroV2(http({ liberado: "sim" })), { ok: false }, "resposta malformada não vira legado");
   assert.equal(ENDERECO_FINANCEIRO_V2, "/financeiro-v2/?modo=plataforma#/visao-geral");
 });
+
+test("10 — Dashboard Financeiro: o cliente REAL da plataforma (sessao.js#chamar) devolve o JSON sem envelope — status do v2 é lido assim", async () => {
+  // Regressão de 15/11: o resolvedor lia `.data`; com o cliente real (JSON direto) TODA unidade caía em "não foi possível abrir".
+  const direto = (corpo) => ({ get: async () => corpo });
+  assert.deepEqual(await resolverFinanceiroV2(direto({ liberado: false, disponivel: false, operavel: false, motivo: "DESLIGADO" })), { ok: true, liberado: false, operavel: false, motivo: "DESLIGADO" });
+  assert.deepEqual(await resolverFinanceiroV2(direto({ liberado: true, disponivel: true, operavel: true, motivo: null })), { ok: true, liberado: true, operavel: true, motivo: null });
+  assert.deepEqual(await resolverFinanceiroV2(direto({ liberado: false, disponivel: false, operavel: false, motivo: "UNIDADE_NAO_LIBERADA" })), { ok: true, liberado: false, operavel: false, motivo: "UNIDADE_NAO_LIBERADA" });
+  assert.deepEqual(await resolverFinanceiroV2(direto({})), { ok: false });
+});
