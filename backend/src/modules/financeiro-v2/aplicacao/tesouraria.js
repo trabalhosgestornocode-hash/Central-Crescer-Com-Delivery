@@ -191,6 +191,8 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
       lancamentos: await ligados(cx, tx, TIPO.LANCAMENTO, "id", unicos([...obrigacoes.map((o) => o.lancamentoId), ...ajustes.map((a) => a.lancamentoId)])),
       correspondencias: await tx.listar(cx, TIPO.CORRESPONDENCIA, { onde: { situacao: "DIVERGENTE" } }),
       recebiveisNaoCancelados: contagem.filter((g) => g.grupo !== SITUACAO_TITULO.CANCELADA).reduce((n, g) => n + g.quantidade, 0),
+      // Dinheiro em espécie (doc 33): todas as vendas pagas em dinheiro (com ou sem entrada no caixa); o período filtra no domínio.
+      pagamentosEmDinheiro: await tx.listar(cx, TIPO.PAGAMENTO_VENDA, { onde: { forma: "DINHEIRO" } }),
     };
   }
 

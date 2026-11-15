@@ -100,6 +100,12 @@ export function escritasDaAbertura({ hoje = () => tempo.hojeEm(new Date()), ref 
       const h = hoje();
       return n.gerarCandidatasDeConciliacao(c, { relacao: "SAIPOS_X_STONE", periodoInicio: `${b.competencia}-01`, periodoFim: fim < h ? fim : h });
     } },
+    // doc 33: contas a pagar × saídas do extrato da competência (sugestões; forte só quando inequívoca; nada é baixado aqui).
+    "/conciliacoes/gerar-contas-a-pagar": { campos: ["competencia"], fazer: (n, c, b) => {
+      const fim = tempo.ultimoDiaDe(competenciaValida(b.competencia));
+      const h = hoje();
+      return n.gerarCandidatasObrigacaoMovimentacao(c, { periodoInicio: `${b.competencia}-01`, periodoFim: fim < h ? fim : h });
+    } },
   });
 }
 
@@ -122,9 +128,10 @@ export const ESCRITAS = Object.freeze({
   "/propostas/rejeitar": { campos: ["proposta", "justificativa"], fazer: (n, c, b) => n.rejeitarProposta(c, { propostaId: id(b.proposta), justificativa: b.justificativa }) },
   "/propostas/aplicar": { campos: ["proposta"], fazer: (n, c, b) => n.aplicarProposta(c, { propostaId: id(b.proposta) }) },
   // `chave` (UUID do formulário): o MESMO envio repetido (clique duplo, rede) devolve o registro já gravado, sem duplicar.
-  "/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {
+  "/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento", "identificador", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {
     ...(b.fornecedor ? { contraparteId: id(b.fornecedor) } : { contraparteNova: { tipo: "FORNECEDOR", nome: String(b.fornecedorNovo ?? "").slice(0, 120) } }),
     valorOriginalCentavos: centavos(b.valor), categoria: b.categoria, descricao: b.descricao, competencia: b.competencia, dataEmissao: b.dataEmissao, vencimento: b.vencimento,
+    ...(b.identificador ? { identificador: String(b.identificador).slice(0, 60) } : {}),
     ...(b.chave ? { fonte: { sistema: "MANUAL", idExterno: `formulario:${id(b.chave)}` } } : {}),
   }) },
   "/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "documento", "justificativa", "pagamentoAntecipado"], fazer: (n, c, b) => n.vincularPagamentoDoExtrato(c, {
@@ -136,7 +143,8 @@ export const ESCRITAS = Object.freeze({
   "/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (n, c, b) => n.reclassificarLancamento(c, {
     lancamentoId: id(b.lancamento), categoria: b.categoria, justificativa: b.justificativa, versaoEsperada: inteiro(b.versaoEsperada), ...(b.documento ? { documentoId: id(b.documento) } : {}),
   }) },
-  "/conciliacoes/confirmar": { campos: ["correspondencia", "justificativa"], fazer: (n, c, b) => n.confirmarConciliacao(c, { correspondenciaId: id(b.correspondencia), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
+  // doc 33: "baixar" (caixa marcada) confirma a conta × saída e dá baixa na conta na MESMA transação.
+  "/conciliacoes/confirmar": { campos: ["correspondencia", "justificativa", "baixar"], fazer: (n, c, b) => n.confirmarConciliacao(c, { correspondenciaId: id(b.correspondencia), ...(b.justificativa ? { justificativa: b.justificativa } : {}), ...(b.baixar === "1" || b.baixar === true ? { baixar: true } : {}) }) },
   "/conciliacoes/rejeitar": { campos: ["correspondencia", "justificativa"], fazer: (n, c, b) => n.rejeitarCorrespondencia(c, { correspondenciaId: id(b.correspondencia), justificativa: b.justificativa }) },
   "/pendencias/documentar": { campos: ["competencia", "chave", "descricao", "impacto", "decisao", "documentacaoFaltante", "justificativa"], fazer: (n, c, b) => n.documentarPendenciaDoFechamento(c, {
     competencia: b.competencia, ...(b.justificativa ? { justificativa: b.justificativa } : {}),

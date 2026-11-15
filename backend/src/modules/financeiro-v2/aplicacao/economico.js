@@ -92,7 +92,8 @@ export function operacoesEconomicas(b) {
           const ab = await exigirAberturaPara(tx, cx, c.competencia);
           if (c.dataEmissao > ab.dataDeCorte) falhar(CODIGO.DATA_INVALIDA, `Título anterior à abertura tem emissão até ${ab.dataDeCorte} (data de corte).`, { campo: "dataEmissao" });
           if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra um por documento, pelo saldo em aberto (sem parcelar nem repetir).", { campo: "parcelas" });
-        } else if (c.identificador) falhar(CODIGO.ENTRADA_INVALIDA, "O identificador do título só se usa em título anterior à abertura.", { campo: "identificador" });
+        }
+        // doc 33: o identificador (NF, boleto) vale para QUALQUER conta a pagar — é o que torna inequívoca a baixa pelo extrato.
         if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
         else await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         await b.exigirDocumentos(tx, cx, c.documentoIds);

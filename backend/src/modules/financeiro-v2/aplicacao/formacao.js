@@ -535,15 +535,35 @@ export function operacoesDeFormacao(b) {
       });
     },
 
-    /** Candidatas conta a pagar × saída bancária (valor igual ao saldo, saída depois da emissão). Sempre FRACA. */
+    /**
+     * Candidatas conta a pagar × saída bancária (valor igual ao saldo, saída depois da emissão). FRACA por padrão.
+     * doc 33: FORTE só quando o par é INEQUÍVOCO — a saída casa com uma única conta, a conta com uma única saída — E o
+     * histórico do extrato traz o identificador da conta (NF, boleto) ou o nome completo do beneficiário. Forte não é
+     * automática: continua exigindo a confirmação (que pode dar a baixa na mesma transação).
+     */
     gerarCandidatasObrigacaoMovimentacao(ctx, entrada) {
       const p = validarPeriodo(entrada);
       return b.executar(ctx, ACAO.CONCILIAR, async (cx, tx) => {
         const saidas = await tx.listar(cx, TIPO.MOVIMENTACAO, { predicado: (m) => m.situacao === SITUACAO_MOVIMENTACAO.VALIDA && m.sentido === "SAIDA" && m.alocadoCentavos === 0 && !m.transferenciaId && m.dataEfetiva >= p.periodoInicio && m.dataEfetiva <= p.periodoFim && m.documentoId });
         const abertas = await tx.listar(cx, TIPO.OBRIGACAO, { predicado: (o) => [SITUACAO_TITULO.ABERTA, SITUACAO_TITULO.PARCIAL].includes(o.situacao) });
+        const nomes = new Map((await tx.listar(cx, TIPO.CONTRAPARTE)).map((x) => [x.id, x.nome]));
+        const norm = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+        const casa = (m, o) => o.saldoCentavos === m.valorCentavos && o.dataEmissao <= m.dataEfetiva;
+        const evidenciaNoHistorico = (m, o) => {
+          const h = norm(m.descricao);
+          const ident = norm(o.identificador).replace(/ /g, "");
+          if (ident.length >= 3 && h.replace(/ /g, "").includes(ident)) return "IDENTIFICADOR_NO_HISTORICO";
+          const palavras = norm(nomes.get(o.contraparteId)).split(" ").filter((x) => x.length >= 3);
+          const doHistorico = new Set(h.split(" "));
+          return palavras.length && palavras.every((x) => doHistorico.has(x)) ? "BENEFICIARIO_NO_HISTORICO" : null;
+        };
         let criadas = 0;
         for (const m of saidas) {
-          for (const o of abertas.filter((x) => x.saldoCentavos === m.valorCentavos && x.dataEmissao <= m.dataEfetiva)) {
+          const daSaida = abertas.filter((x) => casa(m, x));
+          for (const o of daSaida) {
+            const evidencia = evidenciaNoHistorico(m, o);
+            const inequivoca = daSaida.length === 1 && saidas.filter((y) => casa(y, o)).length === 1;
+            const forte = Boolean(evidencia) && inequivoca;
             const chave = `${RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO}|${o.id}|${m.id}`;
             if (await tx.buscarPorChave(cx, TIPO.CORRESPONDENCIA, chave)) continue;
             // 06D: a competência da conciliação é a mais recente; se homologada, a candidata não nasce.
@@ -552,9 +572,9 @@ export function operacoesDeFormacao(b) {
             if ((await b.competenciaAtual(tx, cx, comps[1]))?.estado === "FECHAMENTO_HOMOLOGADO") continue;
             await b.criar(tx, cx, TIPO.CORRESPONDENCIA, {
               ladoA: [{ tipo: TIPO.OBRIGACAO, id: o.id, valorCentavos: m.valorCentavos }], ladoB: [{ tipo: TIPO.MOVIMENTACAO, id: m.id, valorCentavos: m.valorCentavos }],
-              evidenciaDocumentoIds: [...new Set([m.documentoId, ...(o.documentoIds ?? [])])], justificativa: "Proposta automática (SALDO_IGUAL_A_SAIDA).",
+              evidenciaDocumentoIds: [...new Set([m.documentoId, ...(o.documentoIds ?? [])])], justificativa: forte ? `Proposta automática inequívoca (saldo igual à saída; ${evidencia === "IDENTIFICADOR_NO_HISTORICO" ? "identificador da conta" : "beneficiário"} no histórico do extrato).` : "Proposta automática (SALDO_IGUAL_A_SAIDA).",
               diferencaCentavos: 0, situacao: SITUACAO_CORRESPONDENCIA.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null,
-              relacao: RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO, regra: "SALDO_IGUAL_A_SAIDA", forca: "FRACA", chaveIdempotencia: chave, impressao: null,
+              relacao: RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO, regra: forte ? `SALDO_IGUAL_E_${evidencia}` : "SALDO_IGUAL_A_SAIDA", forca: forte ? "FORTE" : "FRACA", chaveIdempotencia: chave, impressao: null,
               competencia: comps[0], competenciaDaConciliacao: comps[1],
             });
             criadas += 1;
