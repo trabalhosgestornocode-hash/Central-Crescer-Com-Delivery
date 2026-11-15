@@ -145,7 +145,25 @@ export const ESCRITAS = Object.freeze({
   "/documentos/verificar": { campos: [], fazer: indisponivel("Verificação de arquivos indisponível enquanto o cofre estiver desligado.") },
   "/importacao/confirmar": { campos: ["importacao", "impressaoPrevia", "aceitarPendencias", "justificativa"], fazer: (n, c, b) => n.confirmarImportacao(c, { importacaoId: id(b.importacao), impressaoPrevia: b.impressaoPrevia, ...(b.aceitarPendencias === true ? { aceitarPendencias: true } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
   "/importacao/rejeitar": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.rejeitarImportacao(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
-  "/propostas/gerar": { campos: ["importacao"], fazer: (n, c, b) => n.gerarPropostas(c, { importacaoId: id(b.importacao) }) },
+  // doc 38: a conta vem da unidade quando é INEQUÍVOCA (extrato Unicred → a única conta bancária "Unicred" ativa; dinheiro
+  // de pedidos → o único caixa físico ativo). Ambígua ou ausente: recusa e pede o cadastro/escolha — nunca "chuta".
+  "/propostas/gerar": { campos: ["importacao", "contaBancaria", "contaCaixa"], fazer: async (n, c, b) => {
+    const importacaoId = id(b.importacao);
+    const imp = await n.consultarImportacao(c, { importacaoId });
+    const contas = (await n.consultarConfiguracoes(c)).contas.filter((x) => x.ativa);
+    const unica = (lista, oQue) => {
+      if (lista.length === 1) return lista[0].id;
+      throw erroDeEntrada(lista.length ? `Há mais de uma ${oQue} ativa: informe qual usar.` : `Cadastre a ${oQue} antes de gerar as propostas.`, CODIGO.OPERACAO_INVALIDA, "conta");
+    };
+    const extra = {};
+    if (imp.fonte === "UNICRED") extra.contaBancariaId = b.contaBancaria ? id(b.contaBancaria) : unica(contas.filter((x) => x.tipo === "BANCARIA" && /unicred/i.test(`${x.nome} ${x.instituicao ?? ""}`)), "conta bancária Unicred");
+    if (imp.fonte === "SAIPOS") {
+      const caixas = contas.filter((x) => x.tipo === "CAIXA_FISICO");
+      if (b.contaCaixa) extra.contaCaixaId = id(b.contaCaixa);
+      else if (caixas.length === 1) extra.contaCaixaId = caixas[0].id;
+    }
+    return n.gerarPropostas(c, { importacaoId, ...extra });
+  } },
   "/propostas/aprovar": { campos: ["proposta", "justificativa"], fazer: (n, c, b) => n.aprovarProposta(c, { propostaId: id(b.proposta), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
   "/propostas/rejeitar": { campos: ["proposta", "justificativa"], fazer: (n, c, b) => n.rejeitarProposta(c, { propostaId: id(b.proposta), justificativa: b.justificativa }) },
   "/propostas/aplicar": { campos: ["proposta"], fazer: (n, c, b) => n.aplicarProposta(c, { propostaId: id(b.proposta) }) },
@@ -190,6 +208,12 @@ export const ESCRITAS = Object.freeze({
   // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
   "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
   "/importacao/estornar-taxas": { campos: ["importacao", "competencia", "justificativa"], fazer: (n, c, b) => n.estornarTaxasDoPeriodo(c, { importacaoId: id(b.importacao), competencia: b.competencia, justificativa: b.justificativa }) },
+  // doc 38: demonstrativo OFICIAL do iFood do período (faturamento do canal iFood; retenções; ajustes; líquido conferido).
+  "/vendas/demonstrativo-ifood": { campos: ["periodoInicio", "periodoFim", "vendas", "comissoes", "taxaPagamento", "mensalidade", "servicosEPromocoes", "ajustes", "liquido", "origem", "justificativa"], fazer: (n, c, b) => n.registrarDemonstrativoIfood(c, {
+    periodoInicio: b.periodoInicio, periodoFim: b.periodoFim, vendasCentavos: centavos(b.vendas), comissoesCentavos: centavos(b.comissoes || "0,00"), taxaPagamentoCentavos: centavos(b.taxaPagamento || "0,00"),
+    mensalidadeCentavos: centavos(b.mensalidade || "0,00"), servicosEPromocoesCentavos: centavos(b.servicosEPromocoes || "0,00"), ajustesCentavos: centavos(b.ajustes || "0,00"),
+    liquidoInformadoCentavos: centavos(b.liquido), origem: b.origem, justificativa: b.justificativa,
+  }) },
   "/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.configurarUnidade(c, semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/canal": { campos: ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarCanalOuProcessador(c, semVazios(b, ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/conta": { campos: ["conta", "nome", "ativa", "justificativa"], fazer: (n, c, b) => n.alterarContaFinanceira(c, { contaId: id(b.conta), ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}), justificativa: b.justificativa }) },
