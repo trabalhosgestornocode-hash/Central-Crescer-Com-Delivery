@@ -52,7 +52,9 @@ export const ENDERECO_FINANCEIRO_V2 = "/financeiro-v2/?modo=plataforma#/visao-ge
  */
 export async function resolverFinanceiroV2(http) {
   try {
-    const s = (await http.get("/api/v1/financeiro-v2/status"))?.data;
+    // O cliente da plataforma (sessao.js#chamar) devolve o JSON da rota SEM envelope; aceita também `{ data }`.
+    const r = await http.get("/api/v1/financeiro-v2/status");
+    const s = typeof r?.liberado === "boolean" ? r : r?.data;
     if (!s || typeof s.liberado !== "boolean") return { ok: false };
     return { ok: true, liberado: s.liberado, operavel: s.liberado && s.disponivel === true && s.operavel === true, motivo: s.motivo ?? null };
   } catch {
