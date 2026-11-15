@@ -243,6 +243,9 @@ export function sqlBootstrapAdministrador({ organizacaoId, unidadeId, usuarioId,
   const just = `Administração financeira inicial por bootstrap de infraestrutura (sem segundo atestador, decisão do proprietário). Autorização: ${autorizacao}.`;
   return `-- Financeiro v2 — BOOTSTRAP ADMINISTRATIVO ÚNICO. Unidade ${u} (empresa ${o}), pessoa ${p}, autorização ${autorizacao}.
 -- Executar como ${executor}, numa ÚNICA transação. Não apaga nada, não libera a unidade, não muda regra alguma.
+-- O caminho de busca vale só nesta transação: os gatilhos do módulo conferidos no COMMIT (histórico obrigatório) usam
+-- nomes sem schema, e o papel executor tem o caminho padrão da plataforma (sem financeiro_v2).
+set local search_path = financeiro_v2, pg_catalog, public;
 do $$
 declare
   v_org  uuid := '${o}'; v_uni uuid := '${u}'; v_usr uuid := '${p}'; v_exec uuid := '${EXECUTOR_BOOTSTRAP}';

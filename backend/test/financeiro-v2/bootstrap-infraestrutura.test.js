@@ -52,6 +52,8 @@ async function montar() {
     const c = await dono.connect();
     try {
       await c.query(ESPELHO);
+      // Como em produção: o papel executor (postgres) usa o caminho de busca PADRÃO, sem o schema do módulo.
+      await c.query(`set search_path = "$user", public`);
       await c.query("begin");
       try {
         const r = await c.query(texto);
@@ -62,6 +64,7 @@ async function montar() {
         throw e;
       }
     } finally {
+      await c.query("reset search_path");
       await c.query(SEM_ESPELHO);
       c.release();
     }
