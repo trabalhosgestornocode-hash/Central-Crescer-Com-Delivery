@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import express from "express";
 import {
-  ACAO, alterarLiberacaoPostgres, criarAdaptadorDaPlataforma, criarLiberacoesPostgres, criarNucleoFinanceiro, criarRepositorioPostgres, verificadorHs256,
+  ACAO, CODIGO, alterarLiberacaoPostgres, criarAdaptadorDaPlataforma, criarLiberacoesPostgres, criarNucleoFinanceiro, criarRepositorioPostgres, verificadorHs256,
 } from "../../src/modules/financeiro-v2/index.js";
 import { criarRotasFinanceiroV2 } from "../../src/modules/fv2-integracao/rotas.js";
 import { criarClienteDoGateway } from "../../src/modules/fv2-integracao/clienteGateway.js";
@@ -288,10 +288,10 @@ test("abertura — ESCRITA no modo CO-LOCALIZADO (produção): identidade, conce
   const contar = async (q, p = []) => Number((await dono.query(q, p)).rows[0].n);
   const W = (caminho, corpo, o = {}) => get(`/localescrita/acoes${caminho}`, { metodo: "POST", corpo, ...o });
   // plano: idempotente (já implantado na semente) — repetir não cria nada
-  const plano = await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA" });
+  const plano = await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA", modeloConfirmado: "ACAITERIA" });
   assert.equal(plano.status, 200, JSON.stringify(plano.corpo));
   const categorias = await contar("select count(*) n from financeiro_v2.fv2_categoria where unidade_id = $1", [UNI_A]);
-  await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA" });
+  await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA", modeloConfirmado: "ACAITERIA" });
   assert.equal(await contar("select count(*) n from financeiro_v2.fv2_categoria where unidade_id = $1", [UNI_A]), categorias);
   // saldo de abertura: grava com autoria individual e histórico; repetir é idempotente; 5 envios simultâneos = 1 registro
   const contas = await get(`/local/api/caixa-e-bancos${PERIODO}`);
@@ -349,4 +349,63 @@ test("abertura — ESCRITA no modo CO-LOCALIZADO (produção): identidade, conce
   assert.equal((await get("/desligado/acoes/saldos/registrar", { metodo: "POST", corpo: saldo })).status, 404);
   // auditoria de concessões: conceder e revogar registrados com o ator individual
   assert.equal(await contar("select count(*) n from financeiro_v2.fv2_auditoria_concessao where usuario_alvo = $1 and ator = $2", [PESSOA_NADA, PESSOA]), 2);
+});
+
+test("abertura — rotas NOVAS no modo CO-LOCALIZADO: contas, saldo de abertura, títulos anteriores, recebíveis e caixa (escrita desligada, escopo, duplicidade, concorrência, transação)", pular, async () => {
+  const { dono } = await montar();
+  const contar = async (q, p = []) => Number((await dono.query(q, p)).rows[0].n);
+  const W = (caminho, corpo, o = {}) => get(`/localescrita/acoes${caminho}`, { metodo: "POST", corpo, ...o });
+  const COMP = "2026-11";
+  const unicred = { tipo: "BANCARIA", nome: "Unicred Sintética", instituicao: "Unicred" };
+  // Produção hoje (FV2_ESCRITA_HABILITADA=0): as rotas novas também só respondem "somente consulta".
+  for (const [caminho, corpo] of [["/configuracoes/conta/criar", unicred], ["/caixa/abrir", { conta: "x", data: "2026-11-01", contado: "1,00" }], ["/abertura/obrigacao-anterior", {}]]) {
+    assert.equal((await get(`/local/acoes${caminho}`, { metodo: "POST", corpo })).corpo.codigo, "ESCRITA_DESLIGADA");
+  }
+  // Conta: 5 envios simultâneos = 1 conta; o campo "saldo" não existe; a unidade nunca vem do corpo.
+  const contasAntes = await contar("select count(*) n from financeiro_v2.fv2_conta where unidade_id = $1", [UNI_A]);
+  const rs = await Promise.all(Array.from({ length: 5 }, () => W("/configuracoes/conta/criar", unicred)));
+  assert.ok(rs.every((r) => r.status === 200), JSON.stringify(rs.map((r) => r.corpo)));
+  assert.equal(new Set(rs.map((r) => r.corpo.id)).size, 1);
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_conta where unidade_id = $1", [UNI_A]), contasAntes + 1);
+  const conta = rs[0].corpo.id;
+  assert.equal((await W("/configuracoes/conta/criar", { ...unicred, saldo: "100,00" })).corpo.codigo, "CAMPO_DESCONHECIDO");
+  assert.equal((await W("/configuracoes/conta/criar", { ...unicred, unidade: UNI_A2 })).corpo.codigo, "CAMPO_DESCONHECIDO");
+  assert.equal((await W("/configuracoes/conta/criar", unicred, { s: sessao({ unidade: UNI_A2 }) })).corpo.motivo, "UNIDADE_NAO_LIBERADA");
+  assert.equal((await W("/configuracoes/conta/criar", unicred, { s: sessao({ conta: CONTA_NADA, pessoa: PESSOA_NADA }) })).corpo.motivo, "SEM_CONCESSAO");
+  // Saldo de abertura: origem obrigatória; grava na véspera (31/10) com a pessoa individual.
+  assert.equal((await W("/abertura/saldo", { conta, competencia: COMP, valor: "1.000,00" })).status, 400);
+  const s = await W("/abertura/saldo", { conta, competencia: COMP, valor: "1.000,00", origem: "Extrato sintético de 31/10" });
+  assert.equal(s.status, 200, JSON.stringify(s.corpo));
+  assert.deepEqual([s.corpo.saldo.data, s.corpo.saldo.referencia, s.corpo.saldo.criadoPor], ["2026-10-31", "FIM_DO_DIA", PESSOA]);
+  // Título anterior: inválido não deixa fornecedor órfão; reenvio simultâneo = 1 título; fora da DRE.
+  const forn = () => contar("select count(*) n from financeiro_v2.fv2_contraparte where unidade_id = $1", [UNI_A]);
+  const fornAntes = await forn();
+  const base = { fornecedorNovo: "Fornecedor Anterior Sintético", descricao: "NF sintética", valor: "300,00", competencia: COMP, dataEmissao: "2026-10-15", vencimento: "2026-11-12", origem: "Lista sintética de 31/10" };
+  assert.equal((await W("/abertura/obrigacao-anterior", { ...base, dataEmissao: "2026-11-03", chave: "11111111-1111-4111-8111-111111111111" })).status, 400);
+  assert.equal(await forn(), fornAntes, "transação inteira desfeita");
+  const ob = { ...base, chave: "22222222-2222-4222-8222-222222222222" };
+  const os = await Promise.all([W("/abertura/obrigacao-anterior", ob), W("/abertura/obrigacao-anterior", ob), W("/abertura/obrigacao-anterior", ob)]);
+  assert.ok(os.every((r) => r.status === 200), JSON.stringify(os.map((r) => r.corpo)));
+  assert.equal(new Set(os.map((r) => r.corpo.obrigacoes[0].id)).size, 1);
+  assert.equal(await forn(), fornAntes + 1);
+  assert.equal(os[0].corpo.lancamento.natureza, "PATRIMONIAL");
+  // Recebível: repasse de processador do período recusado; anterior aceito sem receita.
+  assert.equal((await W("/recebiveis/registrar", { processador: "STONE", valor: "10,00", competencia: COMP })).status, 400);
+  const rec = await W("/abertura/recebivel-anterior", { processador: "IFOOD", descricao: "Repasse sintético", valor: "400,00", competencia: COMP, dataOrigem: "2026-10-27", origem: "Demonstrativo sintético", chave: "33333333-3333-4333-8333-333333333333" });
+  assert.equal(rec.status, 200, JSON.stringify(rec.corpo));
+  assert.equal(rec.corpo.lancamentosDeRetencao.length, 0);
+  // Caixa físico: abrir com o contado; operação reenviada 3× ao mesmo tempo = 1.
+  const caixa = (await W("/configuracoes/conta/criar", { tipo: "CAIXA_FISICO", nome: "Caixa físico sintético" })).corpo.id;
+  const ab = await W("/caixa/abrir", { conta: caixa, data: "2026-11-01", contado: "200,00" });
+  assert.equal(ab.status, 200, JSON.stringify(ab.corpo));
+  const op = { sessao: ab.corpo.sessao.id, operacao: "SAIDA", valor: "15,00", data: "2026-11-01", descricao: "Saída sintética", chave: "44444444-4444-4444-8444-444444444444" };
+  const ops = await Promise.all([W("/caixa/operacao", op), W("/caixa/operacao", op), W("/caixa/operacao", op)]);
+  assert.ok(ops.every((r) => r.status === 200), JSON.stringify(ops.map((r) => r.corpo)));
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_movimentacao where conta_id = $1", [caixa]), 1);
+  // DRE da competência de início: nada de receita ou despesa nascida da abertura.
+  const dre = await get(`/local/api/dre?competencia=${COMP}`);
+  assert.equal(dre.status, 200);
+  for (const k of ["FATURAMENTO_BRUTO_PROPRIO", "RESULTADO_GERENCIAL"]) assert.ok([null, 0].includes(dre.corpo.indicadores?.[k]?.valorCentavos ?? null), `${k}: ${JSON.stringify(dre.corpo.indicadores?.[k])}`);
+  // Plano: sem o nome do modelo redigitado, nada é implantado.
+  assert.equal((await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA" })).corpo.codigo, CODIGO.CONFIRMACAO_EXIGIDA);
 });

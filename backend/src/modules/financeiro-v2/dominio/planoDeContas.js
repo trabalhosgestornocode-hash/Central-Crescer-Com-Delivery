@@ -58,6 +58,13 @@ export const CATEGORIA_DESCONTO_A_CLASSIFICAR = "DESCONTOS_A_CLASSIFICAR";
  * (Execução 06B, auditoria A.2). "OUTRAS_DESPESAS" é categoria confirmada — não serve de provisória.
  */
 export const CATEGORIA_DESPESA_A_CLASSIFICAR = "DESPESAS_A_CLASSIFICAR";
+/**
+ * ABERTURA FINANCEIRA (opção B, doc 29): conta a pagar que JÁ EXISTIA antes da competência de início do v2. A despesa
+ * pertence a um período que o v2 não apura; aqui ela é só a POSIÇÃO INICIAL do passivo. Natureza PATRIMONIAL: nunca entra
+ * na DRE de nenhuma competência; o pagamento posterior é liquidação (não gera despesa). Recebíveis anteriores não precisam
+ * de categoria (recebível não gera receita) — são marcados `anteriorAAbertura`.
+ */
+export const CATEGORIA_TITULOS_ANTERIORES = "TITULOS_ANTERIORES_A_ABERTURA";
 
 /** Modelo genérico: serve a qualquer empresa. As categorias `doSistema` são usadas pelo próprio núcleo. */
 const BASE = [
@@ -103,6 +110,7 @@ const BASE = [
   f("EMPRESTIMOS_E_FINANCIAMENTOS", "Empréstimos e financiamentos (principal)", "MOVIMENTACOES_PATRIMONIAIS"),
   f("APORTES_E_RETIRADAS", "Aportes e retiradas de sócios", "MOVIMENTACOES_PATRIMONIAIS"),
   f("IMOBILIZADO", "Compra de equipamentos e bens", "MOVIMENTACOES_PATRIMONIAIS"),
+  f(CATEGORIA_TITULOS_ANTERIORES, "Saldos patrimoniais de abertura — títulos anteriores", "MOVIMENTACOES_PATRIMONIAIS", { doSistema: true }),
 ];
 
 /** Complemento OPCIONAL de uma açaiteria. Outra empresa implanta só o BASE ou cadastra as próprias categorias. */

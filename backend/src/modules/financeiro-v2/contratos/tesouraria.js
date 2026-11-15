@@ -100,7 +100,7 @@ export function validarAberturaDeCaixa(e) {
 
 /** Sangria/suprimento com `contraContaId` é transferência interna (ex.: caixa → banco); sem ela, é dinheiro que saiu/entrou de fora. */
 export function validarOperacaoDeCaixa(e) {
-  semCamposDesconhecidos(e, ["sessaoId", "operacao", "valorCentavos", "data", "descricao", "contraContaId"], "operacaoDeCaixa");
+  semCamposDesconhecidos(e, ["sessaoId", "operacao", "valorCentavos", "data", "descricao", "contraContaId", "chave"], "operacaoDeCaixa");
   const operacao = exigirUmDe(e.operacao, OPERACAO_CAIXA, "operacao");
   const contraContaId = uuidOpcional(e.contraContaId, "contraContaId");
   if (contraContaId && ![OPERACAO_CAIXA.SANGRIA, OPERACAO_CAIXA.SUPRIMENTO].includes(operacao)) {
@@ -109,6 +109,8 @@ export function validarOperacaoDeCaixa(e) {
   return {
     sessaoId: exigirUuid(e.sessaoId, "sessaoId"), operacao, valorCentavos: exigirCentavos(e.valorCentavos, "valorCentavos", { positivo: true }),
     data: exigirData(e.data, "data"), descricao: exigirTexto(e.descricao, "descricao", { max: 200 }), contraContaId,
+    // Chave do formulário (UUID): o MESMO envio repetido devolve a operação já registrada, sem dinheiro em dobro.
+    ...(e.chave !== undefined && e.chave !== null ? { chave: exigirUuid(e.chave, "chave") } : {}),
   };
 }
 

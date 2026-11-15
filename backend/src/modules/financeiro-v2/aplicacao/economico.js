@@ -5,7 +5,7 @@ import { CODIGO, falhar } from "../dominio/erros.js";
 import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, NATUREZA_LANCAMENTO, SITUACAO_LANCAMENTO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { ratear, somarLista, subtrair } from "../dominio/dinheiro.js";
-import { CATEGORIA_DESPESA_A_CLASSIFICAR, valorDoLancamentoDeAjuste } from "../dominio/planoDeContas.js";
+import { CATEGORIA_DESPESA_A_CLASSIFICAR, CATEGORIA_TITULOS_ANTERIORES, valorDoLancamentoDeAjuste } from "../dominio/planoDeContas.js";
 import { somarMeses } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
 import {
@@ -13,6 +13,10 @@ import {
   validarCorrecaoObrigacao, validarObrigacao, validarRecebivel,
 } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
+
+const DO_SISTEMA_NA_OBRIGACAO = Object.freeze([CATEGORIA_DESPESA_A_CLASSIFICAR, CATEGORIA_TITULOS_ANTERIORES]);
+/** "Unicred ", "unicred" e "Unicréd" são a mesma conta. */
+const nomeNormalizado = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").replace(/\s+/g, " ").trim().toLowerCase();
 
 export function operacoesEconomicas(b) {
   /** Cancela os lançamentos nascidos de ajustes de um conjunto de títulos (juros, taxas, descontos). */
@@ -25,9 +29,22 @@ export function operacoesEconomicas(b) {
   }
 
   return {
+    /**
+     * Cadastra uma conta (Unicred, caixa físico, outras). Nunca recebe saldo: saldo é registrado à parte, com referência.
+     * Sem duplicidade: dentro da trava da unidade, o mesmo nome (sem diferença de maiúsculas, acentos ou espaços) já
+     * cadastrado devolve a conta existente quando é a MESMA conta (reenvio) e é recusado quando difere no tipo/instituição.
+     */
     configurarContaFinanceira(ctx, entrada) {
       const c = validarConta(entrada);
-      return b.executar(ctx, ACAO.CONFIGURAR, (cx, tx) => b.criar(tx, cx, TIPO.CONTA, { ...c, ativa: true }));
+      return b.executar(ctx, ACAO.CONFIGURAR, async (cx, tx) => {
+        await tx.travar(cx, "contas-financeiras", "EXCLUSIVA");
+        const igual = (await tx.listar(cx, TIPO.CONTA)).find((x) => nomeNormalizado(x.nome) === nomeNormalizado(c.nome));
+        if (igual) {
+          if (igual.tipo === c.tipo && (igual.instituicao ?? null) === (c.instituicao ?? null)) return { ...igual, repetido: true };
+          falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe uma conta com este nome. Use outro nome ou altere a conta existente.", { contaId: igual.id });
+        }
+        return b.criar(tx, cx, TIPO.CONTA, { ...c, ativa: true });
+      });
     },
 
     registrarContraparte(ctx, entrada) {
@@ -53,11 +70,16 @@ export function operacoesEconomicas(b) {
           };
         }
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
+        // Abertura (opção B): a dívida anterior é POSIÇÃO INICIAL do passivo, nunca despesa da competência de início.
+        if (c.categoria === CATEGORIA_TITULOS_ANTERIORES) {
+          if (c.dataEmissao >= `${c.competencia}-01`) falhar(CODIGO.DATA_INVALIDA, "Título anterior à abertura tem emissão antes do 1º dia da competência de início.", { campo: "dataEmissao" });
+          if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra um por documento, pelo saldo em aberto (sem parcelar nem repetir).", { campo: "parcelas" });
+        }
         if (c.contraparteNova) c.contraparteId = (await b.criar(tx, cx, TIPO.CONTRAPARTE, c.contraparteNova)).id; // mesma transação
         else await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         await b.exigirDocumentos(tx, cx, c.documentoIds);
-        // "A classificar" é categoria do sistema: existe mesmo em plano implantado antes dela (criada sob demanda).
-        const categoria = c.categoria === CATEGORIA_DESPESA_A_CLASSIFICAR ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);
+        // "A classificar" e "títulos anteriores" são categorias do sistema: existem mesmo em plano implantado antes delas.
+        const categoria = DO_SISTEMA_NA_OBRIGACAO.includes(c.categoria) ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);
         if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
         }
@@ -98,7 +120,8 @@ export function operacoesEconomicas(b) {
           return { recebivel: existente, lancamentosDeRetencao, repetido: true };
         }
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
-        if (c.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
+        if (c.contraparteNova) c.contraparteId = (await b.criar(tx, cx, TIPO.CONTRAPARTE, c.contraparteNova)).id; // mesma transação
+        else if (c.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         let canal = c.canal;
         if (c.vendaId) {
           const venda = await b.obterOuFalhar(tx, cx, TIPO.VENDA, c.vendaId, "Venda");
@@ -114,7 +137,8 @@ export function operacoesEconomicas(b) {
           categorias.push(categoria);
         }
         const liquido = subtrair(c.brutoCentavos, somarLista(c.retencoes, (d) => d.valorCentavos));
-        const recebivel = await b.criar(tx, cx, TIPO.RECEBIVEL, { ...c, canal, pagamentoId: null, forma: null, chaveIdempotencia: chave, impressao: chave ? impressao : null, ...tituloNovo(liquido) });
+        const { contraparteNova: _nova, ...dados } = c; // o cadastro novo já virou contraparteId
+        const recebivel = await b.criar(tx, cx, TIPO.RECEBIVEL, { ...dados, canal, pagamentoId: null, forma: null, chaveIdempotencia: chave, impressao: chave ? impressao : null, ...tituloNovo(liquido) });
         const lancamentosDeRetencao = [];
         for (const [indice, r] of c.retencoes.entries()) {
           lancamentosDeRetencao.push(await b.lancar(tx, cx, categorias[indice], {

@@ -6,7 +6,8 @@
 //   - envio e abertura de arquivos (cofre sem antimalware efetivo) → 503;
 //   - homologar: além do segundo fator, exige FV2_HOMOLOGACAO_HABILITADA=1 (matriz 24a ainda não aprovada).
 // Conceder, revogar, homologar e reabrir exigem prova de segundo fator RECENTE (adaptador + verificador do provedor).
-import { ACAO } from "../financeiro-v2/index.js";
+import { ACAO, CODIGO, ErroFinanceiro, tempo } from "../financeiro-v2/index.js";
+import { CATEGORIA_TITULOS_ANTERIORES } from "../financeiro-v2/dominio/planoDeContas.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NENHUM = "00000000-0000-4000-8000-000000000000";
@@ -21,6 +22,85 @@ const marcado = (v) => v === true || v === "on" || v === "true";
 const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !== undefined && b[k] !== "").map((k) => [k, b[k]]));
 const acoesMarcadas = (b) => Object.values(ACAO).filter((a) => marcado(b[`acao_${a.split(".")[1]}`]));
 const indisponivel = (mensagem) => () => { throw Object.assign(new Error(mensagem), { codigoHttp: 503, codigo: "COFRE_INDISPONIVEL" }); };
+
+const erroDeEntrada = (mensagem, codigo = CODIGO.ENTRADA_INVALIDA, campo = null) => new ErroFinanceiro(codigo, mensagem, campo ? { campo } : {});
+/** Referência documental EXTERNA (cofre desligado): só texto; nunca afirma que um anexo foi conferido. */
+const referenciaExterna = (v) => {
+  const t = String(v ?? "").replace(/\s+/g, " ").trim();
+  if (t.length < 5 || t.length > 160) throw erroDeEntrada("Informe a origem do valor (documento, extrato ou contagem), com 5 a 160 caracteres.", CODIGO.ENTRADA_INVALIDA, "origem");
+  return t;
+};
+export const SEM_ANEXO = "referência externa; sem anexo verificado no sistema";
+const competenciaValida = (v) => { if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(v ?? ""))) throw erroDeEntrada("Competência inválida (AAAA-MM).", CODIGO.ENTRADA_INVALIDA, "competencia"); return v; };
+/** Véspera da competência de início: o saldo de abertura é a posição comprovada no ENCERRAMENTO desse dia. */
+export const vesperaDaCompetencia = (competencia) => tempo.somarDias(`${competenciaValida(competencia)}-01`, -1);
+const chaveDoFormulario = (b, prefixo) => (b.chave ? { fonte: { sistema: "MANUAL", idExterno: `${prefixo}:${id(b.chave)}` } } : {});
+/** Devedor de um recebível manual: processador (só título ANTERIOR), cliente existente ou cliente novo (mesma transação). */
+function devedor(b, { aceitaProcessador, ref }) {
+  const informados = [b.processador, b.cliente, b.clienteNovo].filter((v) => v !== undefined && v !== null && v !== "");
+  if (informados.length !== 1) throw erroDeEntrada("Informe quem deve: um processador, um cliente cadastrado ou o nome de um cliente novo (só um).", CODIGO.ENTRADA_INVALIDA, "processador");
+  if (b.processador) {
+    // Recebível do período com processador nasce da VENDA e do demonstrativo; registrá-lo à mão duplicaria o repasse.
+    if (!aceitaProcessador) throw erroDeEntrada("Repasses de processadores (Stone, iFood…) do período nascem das vendas e demonstrativos: não registre à mão.", CODIGO.ENTRADA_INVALIDA, "processador");
+    return { processador: String(b.processador) };
+  }
+  if (b.cliente) return { contraparteId: ref(b.cliente) };
+  return { contraparteNova: { tipo: "CLIENTE", nome: String(b.clienteNovo).slice(0, 120) } };
+}
+const fornecedor = (b, ref) => (b.fornecedor ? { contraparteId: ref(b.fornecedor) } : { contraparteNova: { tipo: "FORNECEDOR", nome: String(b.fornecedorNovo ?? "").slice(0, 120) } });
+const comOrigem = (descricao, origem) => `${String(descricao ?? "").trim()} · origem: ${referenciaExterna(origem)} (${SEM_ANEXO})`.slice(0, 500);
+
+/**
+ * ABERTURA FINANCEIRA (doc 29) — formulários que faltavam para receber os primeiros dados reais. Mesma regra de todas as
+ * escritas: só a operação do núcleo decide; escopo da sessão; histórico na transação; reenvio do mesmo formulário (chave)
+ * não duplica. Nenhum valor é presumido: todo número vem do formulário, com a origem informada.
+ * @param {{ hoje?: () => string, ref?: (v:any) => string }} [o] data de hoje e tradução de identificadores (a demonstração usa
+ *   o relógio e as referências opacas dela; a plataforma, UUID)
+ */
+export function escritasDaAbertura({ hoje = () => tempo.hojeEm(new Date()), ref = id } = {}) {
+  return Object.freeze({
+    // Contas: Unicred, caixa físico e as que vierem depois. Sem campo de saldo (saldo é registrado à parte, com origem).
+    "/configuracoes/conta/criar": { campos: ["tipo", "nome", "instituicao"], fazer: (n, c, b) => n.configurarContaFinanceira(c, { tipo: b.tipo, nome: b.nome, ...(b.instituicao ? { instituicao: b.instituicao } : {}) }) },
+    // Saldo de ABERTURA: posição comprovada no FIM da véspera da competência de início (ex.: 31/10 para 2026-11).
+    "/abertura/saldo": { campos: ["conta", "competencia", "valor", "origem"], fazer: (n, c, b) => n.registrarSaldoDeConta(c, {
+      contaId: ref(b.conta), data: vesperaDaCompetencia(b.competencia), referencia: "FIM_DO_DIA", valorCentavos: centavos(b.valor),
+      observacao: `Saldo de abertura da competência ${b.competencia} · origem: ${referenciaExterna(b.origem)} (${SEM_ANEXO})`.slice(0, 300),
+    }) },
+    // Conta a pagar ANTERIOR à abertura: posição inicial do passivo (categoria patrimonial do sistema, fora da DRE).
+    "/abertura/obrigacao-anterior": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "competencia", "dataEmissao", "vencimento", "origem", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {
+      ...fornecedor(b, ref), valorOriginalCentavos: centavos(b.valor), categoria: CATEGORIA_TITULOS_ANTERIORES, descricao: comOrigem(b.descricao, b.origem),
+      competencia: competenciaValida(b.competencia), dataEmissao: b.dataEmissao, vencimento: b.vencimento, ...chaveDoFormulario(b, "abertura-obrigacao"),
+    }) },
+    // Conta a receber ANTERIOR à abertura: o saldo a receber (sem retenções, sem venda, nenhuma receita nova).
+    "/abertura/recebivel-anterior": { campos: ["processador", "cliente", "clienteNovo", "descricao", "valor", "competencia", "dataOrigem", "vencimento", "origem", "chave"], fazer: (n, c, b) => n.registrarRecebivel(c, {
+      ...devedor(b, { aceitaProcessador: true, ref }), brutoCentavos: centavos(b.valor), competencia: competenciaValida(b.competencia), dataOrigem: b.dataOrigem,
+      ...(b.vencimento ? { dataPrevista: b.vencimento } : {}), anteriorAAbertura: true, descricao: comOrigem(b.descricao, b.origem), ...chaveDoFormulario(b, "abertura-recebivel"),
+    }) },
+    // Conta a receber do período (cliente): repasse de processador NÃO entra por aqui (nasce da venda).
+    "/recebiveis/registrar": { campos: ["processador", "cliente", "clienteNovo", "descricao", "valor", "competencia", "vencimento", "chave"], fazer: (n, c, b) => n.registrarRecebivel(c, {
+      ...devedor(b, { aceitaProcessador: false, ref }), brutoCentavos: centavos(b.valor), competencia: b.competencia, ...(b.vencimento ? { dataPrevista: b.vencimento } : {}),
+      ...(b.descricao ? { descricao: b.descricao } : {}), ...chaveDoFormulario(b, "recebivel"),
+    }) },
+    // Caixa físico: abertura com o dinheiro CONTADO (não é faturamento nem receita), operações e fechamento.
+    "/caixa/abrir": { campos: ["conta", "data", "contado", "observacao"], fazer: (n, c, b) => n.abrirCaixa(c, { contaId: ref(b.conta), dataAbertura: b.data, saldoContadoCentavos: centavos(b.contado), ...(b.observacao ? { observacao: b.observacao } : {}) }) },
+    "/caixa/operacao": { campos: ["sessao", "operacao", "valor", "data", "descricao", "contraConta", "chave"], fazer: (n, c, b) => n.registrarOperacaoDeCaixa(c, {
+      sessaoId: ref(b.sessao), operacao: b.operacao, valorCentavos: centavos(b.valor), data: b.data, descricao: b.descricao,
+      ...(b.contraConta ? { contraContaId: ref(b.contraConta) } : {}), ...(b.chave ? { chave: id(b.chave) } : {}),
+    }) },
+    "/caixa/fechar": { campos: ["sessao", "data", "contado", "justificativa"], fazer: (n, c, b) => n.fecharCaixa(c, { sessaoId: ref(b.sessao), dataFechamento: b.data, contadoCentavos: centavos(b.contado), ...(b.justificativa ? { justificativa: b.justificativa } : {}), confirmar: true }) },
+    // Plano de contas: implantação só com o NOME do modelo redigitado (confirmação que o servidor confere). Idempotente.
+    "/configuracoes/implantar-plano": { campos: ["modelo", "modeloConfirmado"], fazer: (n, c, b) => {
+      if (typeof b.modelo !== "string" || b.modeloConfirmado !== b.modelo) throw erroDeEntrada("Para implantar, digite o nome do modelo exatamente como aparece.", CODIGO.CONFIRMACAO_EXIGIDA, "modeloConfirmado");
+      return n.implantarPlanoDeContas(c, { modelo: b.modelo });
+    } },
+    // Conciliação: procurar candidatas (a tela já chamava esta ação; nenhuma candidata é confirmada automaticamente).
+    "/conciliacoes/gerar": { campos: ["competencia"], fazer: (n, c, b) => {
+      const fim = tempo.ultimoDiaDe(competenciaValida(b.competencia));
+      const h = hoje();
+      return n.gerarCandidatasDeConciliacao(c, { relacao: "SAIPOS_X_STONE", periodoInicio: `${b.competencia}-01`, periodoFim: fim < h ? fim : h });
+    } },
+  });
+}
 
 /** Ação de MFA exigida por uma mudança de estado da competência (conservador: voltar a ABERTA é reabrir). */
 export function acaoSensivelDoFechamento(b) {
@@ -71,10 +151,9 @@ export const ESCRITAS = Object.freeze({
   }) },
   "/permissoes/conceder": { campos: ["usuario", "justificativa", ...Object.values(ACAO).map((a) => `acao_${a.split(".")[1]}`)], sensivel: () => ACAO.CONCEDER, fazer: (n, c, b) => n.concederAcesso(c, { usuarioId: id(b.usuario), acoes: acoesMarcadas(b), justificativa: b.justificativa }) },
   "/permissoes/revogar": { campos: ["usuario", "justificativa", ...Object.values(ACAO).map((a) => `acao_${a.split(".")[1]}`)], sensivel: () => ACAO.REVOGAR, fazer: (n, c, b) => n.revogarAcesso(c, { usuarioId: id(b.usuario), ...(acoesMarcadas(b).length ? { acoes: acoesMarcadas(b) } : {}), justificativa: b.justificativa }) },
-  // Abertura da unidade no v2: implanta o plano de contas de um MODELO do núcleo (nada vem do legado).
-  "/configuracoes/implantar-plano": { campos: ["modelo"], fazer: (n, c, b) => n.implantarPlanoDeContas(c, { modelo: b.modelo }) },
   "/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.configurarUnidade(c, semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/canal": { campos: ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarCanalOuProcessador(c, semVazios(b, ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/conta": { campos: ["conta", "nome", "ativa", "justificativa"], fazer: (n, c, b) => n.alterarContaFinanceira(c, { contaId: id(b.conta), ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}), justificativa: b.justificativa }) },
   "/configuracoes/categoria": { campos: ["codigo", "nome", "ativa", "justificativa"], fazer: (n, c, b) => n.alterarCategoria(c, { codigo: b.codigo, mudancas: { ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}) }, justificativa: b.justificativa }) },
+  ...escritasDaAbertura(),
 });
