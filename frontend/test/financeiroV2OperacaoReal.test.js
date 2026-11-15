@@ -43,3 +43,19 @@ test("conciliação conta × saída: confirmar oferece 'dar baixa' (marcado) só
   assert.ok(ESCRITAS["/conciliacoes/gerar-contas-a-pagar"]);
   assert.ok(ESCRITAS["/obrigacoes/registrar"].campos.includes("identificador"));
 });
+
+test("Configurações → Taxas Stone: composição por modalidade e bandeira, soma exata × por transação, sem taxa ≠ 0%", async () => {
+  const adm = await import("../financeiro-v2/telasAdministracao.js");
+  assert.ok(adm.SECOES_CONFIG.some(([k]) => k === "taxas"));
+  const html = adm.configuracoes({
+    competencia: "2026-09", tabelas: [{ vigenciaInicio: "2026-09-01", vigenciaFim: null, fonte: "Captura sintética", prazoDeRecebimento: "Mesmo dia", taxas: [{ modalidade: "CREDITO_A_VISTA", bandeira: "VISA", milesimos: 3900 }] }],
+    total: { transacoes: 2, brutoCentavos: 13000, cobradoCentavos: 390, cobradoArredondadoPorTransacaoCentavos: 391, liquidoInformadoCentavos: 12610 },
+    composicao: [
+      { modalidade: "CREDITO_A_VISTA", bandeira: "VISA", transacoes: 1, brutoCentavos: 10000, percentualContratado: 3.9, esperadoCentavos: 390, cobradoCentavos: 390, cobradoArredondadoPorTransacaoCentavos: 390, liquidoInformadoCentavos: 9610, porSituacao: { CONFERE: 1 } },
+      { modalidade: "VALE", bandeira: "ALELO", transacoes: 1, brutoCentavos: 3000, percentualContratado: null, esperadoCentavos: null, cobradoCentavos: 0, cobradoArredondadoPorTransacaoCentavos: 0, liquidoInformadoCentavos: 3000, porSituacao: { SEM_TAXA_CONTRATADA: 1 } },
+    ],
+    fracaoDeCentavo: { centavos: 1, explicacao: "milionésimos" }, pendencias: [],
+  }, { secao: "taxas" }, { podeConfigurar: true, permissoes: ["financeiro_v2.configurar"] });
+  for (const t of ["Crédito à vista · VISA", "3,9%", "sem taxa contratada", "soma exata", "arredondadas por transação", "Registrar tabela de taxas"]) assert.ok(html.includes(t), t);
+  assert.ok(ESCRITAS["/configuracoes/taxas-contratadas"].campos.includes("taxas"));
+});

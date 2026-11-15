@@ -68,6 +68,8 @@ export const CONSULTAS = Object.freeze({
   "/fechamento": (n, c, p) => n.consultarFechamento(c, filtro(p, ["competencia"])),
   "/configuracoes": (n, c) => n.consultarConfiguracoes(c),
   // Abertura + o necessário do roteiro (contas, plano): uma consulta por tela, como as demais.
+  // doc 35: taxas contratadas × cobradas (Stone), por modalidade e bandeira, transação a transação.
+  "/taxas-contratadas": (n, c, p) => n.consultarTaxasContratadas(c, { competencia: p.competencia, ...(p.processador ? { processador: p.processador } : {}) }),
   "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),
   "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),
   "/configuracoes/categoria": (n, c, p) => n.consultarCategoria(c, { codigo: String(p.codigo ?? "") }),
