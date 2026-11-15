@@ -58,3 +58,19 @@ test("importar pela rota sem guarda: prévia → confirmação; expirado pede re
   // Envio de documento avulso e verificação continuam indisponíveis (o cofre documental segue desligado).
   assert.throws(() => ESCRITAS["/documentos/enviar"].fazer(n, c, {}), (e) => e.codigoHttp === 503);
 });
+
+test("doc 38 — gerar propostas do extrato pela rota: a conta Unicred vem da unidade quando é única; sem ela, recusa; com ela, as movimentações são aplicáveis", async () => {
+  const { nucleo: n } = montar({ cofre: criarCofreTemporario() });
+  const W = async (k, b) => ESCRITAS[k].fazer(n, c, b);
+  const arquivo = unicredExtrato({ saldoInicial: 10000, lancamentos: [{ data: "02/09/2026", historico: "PIX RECEBIDO SINTETICO", valor: 5000 }, { data: "03/09/2026", historico: "TARIFA SINTETICA", valor: -1000 }] });
+  const r = await W("/importacao/receber", { tipoRelatorio: "UNICRED_EXTRATO", periodoInicio: "2026-09-01", periodoFim: "2026-09-30", arquivoBase64: base64(arquivo), nomeArquivo: "extrato.csv" });
+  await W("/importacao/confirmar", { importacao: r.importacao.id, impressaoPrevia: r.importacao.impressaoPrevia, ...(r.previa.totalDivergencias ? { aceitarPendencias: true, justificativa: "Sintético." } : {}) });
+  await rejeita(W("/propostas/gerar", { importacao: r.importacao.id }), CODIGO.OPERACAO_INVALIDA); // sem conta Unicred
+  const conta = await W("/configuracoes/conta/criar", { tipo: "BANCARIA", nome: "Unicred AF" });
+  await W("/propostas/gerar", { importacao: r.importacao.id });
+  const ps = await n.listarPropostas(c, { operacao: "MOVIMENTACAO_BANCARIA" });
+  assert.equal(ps.length, 2);
+  assert.ok(ps.every((p) => p.comando.contaId === conta.id));
+  for (const p of ps) { await W("/propostas/aprovar", { proposta: p.id, justificativa: "Sintético." }); await W("/propostas/aplicar", { proposta: p.id }); }
+  assert.equal((await n.consultarResumoFinanceiro(c, { competencia: "2026-09" })).fluxoDeCaixa.realizadoNaCompetencia.saidasCentavos, 1000);
+});
