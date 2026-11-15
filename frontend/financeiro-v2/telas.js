@@ -33,6 +33,9 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   const zeroConfirmado = fb.valorCentavos === 0 && fb.situacao === "CONFIRMADO";
   const grupos = Object.fromEntries((vg.cadaCem?.grupos ?? []).map((g) => [g.codigo, g]));
   const rec = liq.reconciliacaoComDre;
+  const rl = vg.receitaLiquidaComercial ?? null;
+  const deducoes = vg.deducoesComerciaisCentavos ?? null;
+  const custosEDespesas = vg.custosEDespesasCentavos ?? null;
   // Barra de participação por canal: os pesos são os percentuais que o motor já entregou (só largura visual).
   const comPeso = canais.filter((c) => (c.percentualDoBruto ?? 0) > 0);
   const alertas = [...(fb.pendencias ?? []), ...(res.pendencias ?? [])].filter((p, i, a) => a.findIndex((x) => x.mensagem === p.mensagem) === i);
@@ -48,13 +51,27 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   <div class="bloco-acoes">${botaoComposicao("FATURAMENTO_BRUTO_PROPRIO")}</div>
 </section>
 <section class="bloco bloco--liquido" id="card-faturamento-liquido" aria-labelledby="t-fl" data-ordem="2">
-  <div class="card-topo"><h2 id="t-fl">Faturamento Líquido Gerencial</h2>${selo(liq.situacao)}${explicar("Faturamento Líquido Gerencial", "Por canal: bruto próprio − deduções do canal − despesas atribuídas ao canal (comissões, taxas, promoções, plataforma). É uma leitura analítica: não é receita nova nem valor depositado.")}</div>
-  <p class="numero-principal numero-principal--medio">${valor(liq.valorCentavos)}</p>
-  <p class="aviso aviso--discreto">Líquido gerencial não é o valor depositado no banco.</p>
-  <div class="tabela-rolavel"><table class="tabela tabela--canais tabela--cartoes"><caption class="sr">Líquido gerencial por canal</caption><thead><tr><th scope="col">Canal</th><th scope="col">Bruto</th><th scope="col">Deduções</th><th scope="col">Despesas atribuídas</th><th scope="col">Líquido</th></tr></thead><tbody>
-  ${liq.porCanal.filter((c) => c.registros.length).map((c) => `<tr><th scope="row"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(nomeCanal(c.canal))}</th><td data-rotulo="Bruto"><span class="cel">${valor(c.brutoCentavos)}</span></td><td data-rotulo="Deduções"><span class="cel">${valor(c.deducoesCentavos)}</span></td><td data-rotulo="Despesas atribuídas"><span class="cel">${valor(c.despesasAtribuidasCentavos)}${Object.keys(c.despesasPorClassificacao).length ? `<ul class="mini">${Object.entries(c.despesasPorClassificacao).map(([k, v]) => `<li>${esc(CLASSIFICACOES[k] ?? k)}: ${esc(moeda(v))}</li>`).join("")}</ul>` : ""}</span></td><td class="coluna-destaque" data-rotulo="Líquido"><span class="cel">${valor(c.liquidoGerencialCentavos)}</span></td></tr>`).join("")}
+  <div class="card-topo"><h2 id="t-fl">Faturamento Líquido</h2>${selo(rl?.situacao)}${explicar("Faturamento Líquido", "Faturamento bruto − deduções comerciais (descontos, promoções, devoluções e tributos sobre vendas), atribuídas ou não a canal. Não é lucro nem depósito bancário.")}</div>
+  <p class="numero-principal numero-principal--medio">${valor(rl ? rl.valorCentavos : null)}</p>
+  <p class="nota">Deduções comerciais: ${esc(moeda(deducoes))}.</p>
+  <p class="aviso aviso--discreto">Faturamento líquido não é o valor depositado no banco nem o lucro.</p>
+</section>
+<section class="bloco" id="card-custos-despesas" aria-labelledby="t-cd" data-ordem="3">
+  <div class="card-topo"><h2 id="t-cd">Custos e despesas</h2>${explicar("Custos e despesas", "Custos operacionais (insumos, embalagens), despesas operacionais (pessoal, administrativas, comissões e taxas de plataformas e adquirentes, entregadores), resultado financeiro e demais efeitos, pela competência.")}</div>
+  <p class="numero-principal numero-principal--medio">${valor(custosEDespesas)}</p>
+</section>
+<section class="bloco" id="card-resultado" aria-labelledby="t-rg" data-ordem="4">
+  <div class="card-topo"><h2 id="t-rg">Resultado Gerencial</h2>${selo(res.situacao)}${explicar("Resultado Gerencial", "Faturamento líquido − custos e despesas. Sem ajuste de estoque; não é lucro contábil auditado. Enquanto a competência não estiver homologada, é preliminar.")}</div>
+  <p class="numero-principal numero-principal--medio">${valor(res.valorCentavos)}</p>
+  ${vg.fechamento?.estado !== "FECHAMENTO_HOMOLOGADO" ? '<p class="aviso aviso--discreto">Preliminar: a competência não está homologada.</p>' : ""}
+</section>
+<section class="bloco bloco--canais-contribuicao" aria-labelledby="t-cc" data-ordem="5">
+  <div class="card-topo"><h2 id="t-cc">Contribuição por canal</h2>${explicar("Contribuição por canal", "Por canal: bruto − deduções do canal − despesas comprovadamente do canal (ex.: comissões do iFood). O que não tem canal comprovado fica em \"Não atribuído\" — nada é rateado.")}</div>
+  <div class="tabela-rolavel"><table class="tabela tabela--canais tabela--cartoes"><caption class="sr">Contribuição por canal</caption><thead><tr><th scope="col">Canal</th><th scope="col">Bruto</th><th scope="col">Deduções</th><th scope="col">Despesas do canal</th><th scope="col">Contribuição</th></tr></thead><tbody>
+  ${liq.porCanal.filter((c) => c.registros.length).map((c) => `<tr><th scope="row"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(nomeCanal(c.canal))}</th><td data-rotulo="Bruto"><span class="cel">${valor(c.brutoCentavos)}</span></td><td data-rotulo="Deduções"><span class="cel">${valor(c.deducoesCentavos)}</span></td><td data-rotulo="Despesas do canal"><span class="cel">${valor(c.despesasAtribuidasCentavos)}${Object.keys(c.despesasPorClassificacao).length ? `<ul class="mini">${Object.entries(c.despesasPorClassificacao).map(([k, v]) => `<li>${esc(CLASSIFICACOES[k] ?? k)}: ${esc(moeda(v))}</li>`).join("")}</ul>` : ""}</span></td><td class="coluna-destaque" data-rotulo="Contribuição"><span class="cel">${valor(c.liquidoGerencialCentavos)}</span></td></tr>`).join("")}
+  ${rec && rec.somaNaoAtribuidosCentavos ? `<tr class="linha--nao-atribuido"><th scope="row">Não atribuído a canal</th><td data-rotulo="Bruto"><span class="cel">—</span></td><td colspan="2" data-rotulo="Composição"><span class="cel"><ul class="mini">${Object.entries(rec.naoAtribuidos).map(([k, x]) => `<li>${esc(CLASSIFICACOES[k] ?? k)}: ${esc(moeda(x.valorCentavos))}</li>`).join("")}</ul></span></td><td class="coluna-destaque" data-rotulo="Contribuição"><span class="cel">${valor(rec.somaNaoAtribuidosCentavos)}</span></td></tr>` : ""}
   </tbody></table></div>
-  ${rec ? `<p class="reconciliacao ${rec.reconcilia ? "" : "reconciliacao--limite"}">Canais ${esc(moeda(rec.somaDosCanaisCentavos))} + não atribuídos ${esc(moeda(rec.somaNaoAtribuidosCentavos))} = ${esc(moeda(rec.totalReconciliadoCentavos))} · Resultado da DRE ${esc(moeda(rec.resultadoDaDreCentavos))} ${rec.reconcilia ? "✓ reconciliado" : "— decomposição incompleta: a DRE prevalece"}</p>` : ""}
+  ${rec ? `<p class="reconciliacao ${rec.reconcilia ? "" : "reconciliacao--limite"}">Canais ${esc(moeda(rec.somaDosCanaisCentavos))} + não atribuído ${esc(moeda(rec.somaNaoAtribuidosCentavos))} = ${esc(moeda(rec.totalReconciliadoCentavos))} · Resultado Gerencial ${esc(moeda(rec.resultadoDaDreCentavos))} ${rec.reconcilia ? "✓ reconciliado" : "— a DRE prevalece"}</p>` : ""}
   <div class="bloco-acoes">${botaoComposicao("FATURAMENTO_LIQUIDO_GERENCIAL")}</div>
 </section>
 </div>

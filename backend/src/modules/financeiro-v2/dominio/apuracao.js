@@ -261,7 +261,11 @@ export function apurar(d, p) {
   // ela (ou a venda sem canal) vão para NAO_IDENTIFICADO; o resto (custos, despesas gerais, financeiro, demais efeitos,
   // deduções avulsas) é NÃO ATRIBUÍDO — nunca é empurrado para um canal.
   const doAgregadoOuVenda = (l) => l.origem?.tipo === TIPO.PROPOSTA || l.origem?.tipo === TIPO.VENDA;
-  const canalDe = (l) => (l.canal ? l.canal : (l.natureza === N.RECEITA && l.classificacao === K.RECEITA_OPERACIONAL) || (l.natureza === N.DEDUCAO && doAgregadoOuVenda(l)) ? SEM_CANAL : null);
+  // doc 39: retenções/ajustes de um RECEBÍVEL cuja receita tem canal (ex.: demonstrativo oficial do iFood) pertencem a esse
+  // canal — vínculo documental (o mesmo recebível), nunca rateio.
+  const canalDoRecebivel = new Map(ativos.filter((l) => l.origem?.tipo === TIPO.RECEBIVEL && l.natureza === N.RECEITA && l.canal).map((l) => [l.origem.id, l.canal]));
+  const canalDe = (l) => (l.canal ? l.canal : l.origem?.tipo === TIPO.RECEBIVEL && canalDoRecebivel.has(l.origem.id) ? canalDoRecebivel.get(l.origem.id)
+    : (l.natureza === N.RECEITA && l.classificacao === K.RECEITA_OPERACIONAL) || (l.natureza === N.DEDUCAO && doAgregadoOuVenda(l)) ? SEM_CANAL : null);
   const liquidoPorCanal = canais.map((canal) => {
     const doCanal = ativos.filter((l) => canalDe(l) === canal && l.natureza !== N.PATRIMONIAL && naDre(l));
     const brutoC = doCanal.filter(LINHAS[0].filtro).reduce((s, l) => somar(s, l.valorCentavos), 0);
