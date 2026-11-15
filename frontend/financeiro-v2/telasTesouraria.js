@@ -5,6 +5,7 @@ import {
   CATEGORIAS_BANCARIAS, EVENTOS, MOTIVOS_PARCIAL, NATUREZAS_FLUXO, OPERACOES_CAIXA, SITUACOES_TITULO, TIPOS_DOCUMENTO, TIPOS_RECEBIVEL, competencia, dataBR, descricaoLegivel, esc, moeda, nomeCanal,
   nomeDevedor, situacaoTitulo,
 } from "./formatar.js";
+import { formRecebivelDoPeriodo, formulariosDeCaixa } from "./telasAbertura.js";
 const REFERENCIA_SALDO = { INICIO_DO_DIA: "início do dia", FIM_DO_DIA: "fim do dia" };
 
 const valorClasse = (c) => (c === null || c === undefined ? "valor valor--desconhecido" : c < 0 ? "valor valor--negativo" : "valor");
@@ -49,7 +50,8 @@ export function contasAPagar(r, f = {}, ctx = {}) {
   const t = r.totais;
   const o = r.opcoesDeRegistro;
   const registrar = podeRegistrar(ctx) && o ? formAcao({ url: "/api/fv2/acoes/obrigacoes/registrar", titulo: "Registrar conta a pagar", rotulo: "Registrar conta", aviso: "Confirmo o registro da conta (a categoria decide a natureza; \"a classificar\" fica fora da DRE até haver evidência).",
-    campos: `<label>Fornecedor existente <select name="fornecedor">${opcao("", "— novo fornecedor —", "")}${o.fornecedores.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
+    campos: `<input type="hidden" name="chave" value="${esc(globalThis.crypto?.randomUUID?.() ?? "")}">
+<label>Fornecedor existente <select name="fornecedor">${opcao("", "— novo fornecedor —", "")}${o.fornecedores.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
 <label>Ou novo fornecedor <input name="fornecedorNovo" maxlength="120"></label>
 <label>Descrição <input name="descricao" maxlength="200" required></label>
 <label>Valor (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" required></label>
@@ -193,10 +195,11 @@ ${form}`;
 }
 
 // ----------------------------------------------------------------------------------------------- contas a receber
-export function contasAReceber(r, f = {}) {
+export function contasAReceber(r, f = {}, ctx = {}) {
   const t = r.totais;
   return `${cabecalho("Contas a Receber", `Posição em ${esc(dataBR(r.dataBase))} · ${t.registros} título(s) no filtro`)}
 <p class="aviso">Stone, iFood e Anota AI são devedores, não contas bancárias: o valor só entra no saldo quando o crédito aparece na conta.</p>
+${formRecebivelDoPeriodo(ctx)}
 <section class="resumo" aria-label="Resumo das contas a receber">
   ${card("A receber", valor(t.saldoCentavos), "Saldo pendente de todos os títulos do filtro (esperado − recebido).")}
   ${card("Com previsão documentada", valor(t.comPrevisaoCentavos), "Só estes valores entram no fluxo previsto.")}
@@ -291,6 +294,7 @@ export function caixaEBancos(r, f = {}, ctx = {}) {
   return `${cabecalho("Caixa e Bancos", `${esc(dataBR(r.periodo.inicio))} a ${esc(dataBR(r.periodo.fim))} · posição em ${esc(dataBR(r.dataBase))}`)}
 <p class="aviso">Saldo bancário não é faturamento. Entradas e saídas sem vínculo ficam pendentes: nada vira receita ou despesa pelo sinal do valor.</p>
 ${saldo}
+${formulariosDeCaixa(r.contas, ctx)}
 <form class="filtros-locais" data-filtro-local="caixa-e-bancos" aria-label="Período e conta">
   <label>De <input type="date" name="inicio" value="${esc(r.periodo.inicio)}"></label>
   <label>Até <input type="date" name="fim" value="${esc(r.periodo.fim)}"></label>
@@ -311,7 +315,7 @@ ${r.movimentos.map((m) => `<tr${m.situacao === "ESTORNADA" ? ' class="estornada"
 </tbody></table></div>` : nenhum("Nenhuma movimentação no período.")}
 ${paginacao(r.paginacao, "caixa-e-bancos")}
 </section>
-<p class="nota">Abertura, sangria, suprimento e fechamento de caixa e registro de saldo informado existem no núcleo (com permissão, confirmação e auditoria), mas não estão habilitados nesta demonstração: a sessão aqui é simulada.</p>`;
+<p class="nota">Abertura, operações e fechamento de caixa exigem a permissão "registrar", confirmação e ficam no histórico.</p>`;
 }
 
 // ----------------------------------------------------------------------------------------------------- calendário

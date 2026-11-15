@@ -367,6 +367,18 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
     registrarOperacaoDeCaixa(ctx, entrada) {
       const c = validarOperacaoDeCaixa(entrada);
       return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
+        const previa = await b.obterOuFalhar(tx, cx, TIPO.SESSAO_CAIXA, c.sessaoId, "Sessão de caixa");
+        await tx.travar(cx, `caixa:${previa.contaId}`, "EXCLUSIVA"); // reenvios simultâneos esperam aqui
+        const { chave, ...semChave } = c;
+        if (chave) {
+          const atual = await b.obterOuFalhar(tx, cx, TIPO.SESSAO_CAIXA, c.sessaoId, "Sessão de caixa");
+          const ja = (atual.operacoes ?? []).find((o) => o.chave === chave);
+          if (ja) {
+            // campo a campo (o JSONB do PostgreSQL não preserva a ordem das chaves)
+            if (["operacao", "valorCentavos", "data", "descricao"].some((k) => ja[k] !== semChave[k])) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Este formulário já foi enviado com outro conteúdo.", { tipo: TIPO.SESSAO_CAIXA });
+            return { sessao: atual, operacao: ja, repetido: true };
+          }
+        }
         const sessao = await sessaoAberta(tx, cx, c.sessaoId);
         if (c.data < sessao.dataAbertura) falhar(CODIGO.DATA_INVALIDA, "A operação não pode ser anterior à abertura do caixa.", { campo: "data" });
         const caixa = operacoesDeCaixa(baseNaTransacao(b, tx, cx));
@@ -387,7 +399,7 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
           });
           movimentacaoId = m.movimentacao.id;
         }
-        const operacao = { operacao: c.operacao, valorCentavos: c.valorCentavos, data: c.data, descricao: c.descricao, movimentacaoId, transferenciaId, registradoEm: b.agora() };
+        const operacao = { operacao: c.operacao, valorCentavos: c.valorCentavos, data: c.data, descricao: c.descricao, movimentacaoId, transferenciaId, registradoEm: b.agora(), ...(chave ? { chave } : {}) };
         const atualizada = await b.alterar(tx, cx, TIPO.SESSAO_CAIXA, sessao, { operacoes: [...sessao.operacoes, operacao] }, EVENTO_HISTORICO.OPERACAO_DE_CAIXA, descricao);
         return { sessao: atualizada, operacao };
       });

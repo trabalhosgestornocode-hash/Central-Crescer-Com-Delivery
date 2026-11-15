@@ -129,7 +129,9 @@ export function apurar(d, p) {
   }
 
   const estadoComp = d.competencias.find((c) => c.competencia === comp)?.estado ?? "ABERTA";
-  const temRegistros = ativos.length > 0;
+  // Só lançamentos que PODEM entrar no resultado tornam a DRE conhecida. Um mês só com patrimoniais (ex.: títulos anteriores à
+  // abertura, aporte) continua "sem registros" — nunca vira faturamento ou resultado R$ 0,00 confirmado.
+  const temRegistros = ativos.some((l) => l.natureza !== N.PATRIMONIAL);
   function situacaoDe(codigo) {
     const minhas = pendencias.filter((x) => x.afeta.includes(codigo));
     if (!temRegistros || minhas.some((x) => x.gravidade === "BLOQUEIO")) return S.BLOQUEADO_POR_EVIDENCIA_INSUFICIENTE;

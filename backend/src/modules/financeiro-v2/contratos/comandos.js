@@ -211,7 +211,9 @@ export function validarImplantacaoDePlano(e) {
 }
 
 export function validarObrigacao(e) {
-  semCamposDesconhecidos(e, ["contraparteId", "valorOriginalCentavos", "moeda", "categoria", "descricao", "competencia", "dataEmissao", "vencimento", "parcelas", "recorrencia", "documentoIds", "fonte"], "obrigacao");
+  semCamposDesconhecidos(e, ["contraparteId", "contraparteNova", "valorOriginalCentavos", "moeda", "categoria", "descricao", "competencia", "dataEmissao", "vencimento", "parcelas", "recorrencia", "documentoIds", "fonte"], "obrigacao");
+  // Abertura: fornecedor NOVO criado na MESMA transação da obrigação (nunca fica órfão se a obrigação for recusada).
+  if ((e.contraparteId === undefined) === (e.contraparteNova === undefined)) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a contraparte existente OU a nova (exatamente uma).", { campo: "contraparteId" });
   const dataEmissao = exigirData(e.dataEmissao, "dataEmissao");
   const vencimento = exigirData(e.vencimento, "vencimento");
   if (vencimento < dataEmissao) falhar(CODIGO.DATA_INVALIDA, "O vencimento não pode ser anterior à emissão.", { campo: "vencimento" });
@@ -224,7 +226,7 @@ export function validarObrigacao(e) {
     recorrencia = { periodicidade: exigirUmDe(e.recorrencia.periodicidade, ["MENSAL"], "recorrencia.periodicidade"), diaDoMes: exigirInteiro(e.recorrencia.diaDoMes, "recorrencia.diaDoMes", { min: 1, max: 31 }) };
   }
   return {
-    contraparteId: exigirUuid(e.contraparteId, "contraparteId"),
+    ...(e.contraparteNova !== undefined ? { contraparteNova: validarContraparte(e.contraparteNova) } : { contraparteId: exigirUuid(e.contraparteId, "contraparteId") }),
     valorOriginalCentavos,
     moeda: moeda(e.moeda),
     categoria: codigoDeCategoria(e.categoria),
@@ -240,10 +242,20 @@ export function validarObrigacao(e) {
 }
 
 export function validarRecebivel(e) {
-  semCamposDesconhecidos(e, ["processador", "contraparteId", "canal", "vendaId", "brutoCentavos", "moeda", "retencoes", "dataPrevista", "competencia", "descricao", "documentoIds", "fonte"], "recebivel");
+  semCamposDesconhecidos(e, ["processador", "contraparteId", "contraparteNova", "canal", "vendaId", "brutoCentavos", "moeda", "retencoes", "dataPrevista", "competencia", "descricao", "documentoIds", "fonte", "anteriorAAbertura", "dataOrigem"], "recebivel");
   const processador = e.processador === undefined || e.processador === null ? null : exigirUmDe(e.processador, PROCESSADOR, "processador");
   const contraparteId = uuidOpcional(e.contraparteId, "contraparteId");
-  if (!processador === !contraparteId) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o devedor: processador OU contraparte (exatamente um).");
+  const contraparteNova = e.contraparteNova === undefined || e.contraparteNova === null ? null : validarContraparte(e.contraparteNova);
+  if ([processador, contraparteId, contraparteNova].filter(Boolean).length !== 1) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o devedor: processador OU contraparte (exatamente um).");
+  // Abertura: título que já estava em aberto ANTES da competência de início. Sem retenções (pertencem ao período anterior,
+  // que o v2 não apura) e sem venda (a venda é de antes do v2): é só a posição inicial do ativo.
+  const anteriorAAbertura = booleano(e.anteriorAAbertura, "anteriorAAbertura");
+  let dataOrigem = null;
+  if (anteriorAAbertura) {
+    dataOrigem = exigirData(e.dataOrigem, "dataOrigem");
+    if ((e.retencoes ?? []).length) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra pelo saldo a receber, sem retenções.", { campo: "retencoes" });
+    if (e.vendaId !== undefined && e.vendaId !== null) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura não se vincula a venda do v2.", { campo: "vendaId" });
+  } else if (e.dataOrigem !== undefined && e.dataOrigem !== null) falhar(CODIGO.ENTRADA_INVALIDA, "dataOrigem só vale para título anterior à abertura.", { campo: "dataOrigem" });
   const brutoCentavos = exigirCentavos(e.brutoCentavos, "brutoCentavos", { positivo: true });
   // Retenção = o que o processador/canal desconta do repasse. A CATEGORIA de cada uma define a natureza econômica
   // (dedução comercial, despesa de recebimento, despesa comercial, marketing, encargo financeiro...).
@@ -256,16 +268,21 @@ export function validarRecebivel(e) {
     };
   });
   if (somarLista(retencoes, (d) => d.valorCentavos) > brutoCentavos) falhar(CODIGO.VALOR_INVALIDO, "As retenções não podem superar o valor bruto.", { campo: "retencoes" });
+  const competencia = exigirCompetencia(e.competencia);
+  if (anteriorAAbertura && dataOrigem >= `${competencia}-01`) falhar(CODIGO.DATA_INVALIDA, "Título anterior à abertura tem origem antes do 1º dia da competência de início.", { campo: "dataOrigem" });
   return {
     processador,
     contraparteId,
+    // Campos novos só aparecem quando usados: a impressão de idempotência dos recebíveis já existentes não muda.
+    ...(contraparteNova ? { contraparteNova } : {}),
+    ...(anteriorAAbertura ? { anteriorAAbertura: true, dataOrigem } : {}),
     canal: e.canal === undefined || e.canal === null ? null : exigirUmDe(e.canal, CANAL, "canal"),
     vendaId: uuidOpcional(e.vendaId, "vendaId"),
     brutoCentavos,
     moeda: moeda(e.moeda),
     retencoes,
     dataPrevista: e.dataPrevista === undefined || e.dataPrevista === null ? null : exigirData(e.dataPrevista, "dataPrevista"),
-    competencia: exigirCompetencia(e.competencia),
+    competencia,
     descricao: exigirTexto(e.descricao, "descricao", { opcional: true }),
     documentoIds: documentos(e.documentoIds),
     fonte: fonte(e.fonte),
