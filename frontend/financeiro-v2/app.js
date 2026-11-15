@@ -115,7 +115,7 @@ function consultaDaRota() {
   const pagina = estado.pagina[estado.rota] ?? 1;
   switch (estado.rota) {
     case "dre": return `/api/fv2/dre?${qs()}`;
-    case "configuracoes": return f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
+    case "configuracoes": return f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : f.secao === "abertura" ? `/api/fv2/abertura?${qs({ competencia: undefined })}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
     case "documentos": return `/api/fv2/documentos?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, pagina, tamanho: 25 })}`;
     case "contas-a-pagar": return `/api/fv2/contas-a-pagar?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, contraparteId: f.contraparteId, categoria: f.categoria, vencimentoDe: f.vencimentoDe, vencimentoAte: f.vencimentoAte, pagina, tamanho: 25 })}`;
     case "contas-a-receber": return `/api/fv2/contas-a-receber?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, tipo: f.tipo, processador: f.processador, pagina, tamanho: 25 })}`;
@@ -150,14 +150,15 @@ function desenhar(dados) {
     case "dre": return telas.dre(dados, { unidadeNome: nomeUnidade() });
     case "configuracoes": {
       const perm = permissoesDaUnidade();
-      const ctx = { unidadeNome: nomeUnidade(), podeConfigurar: perm.includes("financeiro_v2.configurar"), pessoasDemo: estado.pessoasDemo ?? [] };
+      const ctx = { unidadeNome: nomeUnidade(), podeConfigurar: perm.includes("financeiro_v2.configurar"), pessoasDemo: estado.pessoasDemo ?? [], permissoes: perm };
       const corpo = f.secao === "plano" ? { plano: dados, configuracoes: estado.configuracoes } : f.secao === "permissoes" ? { permissoes: dados } : dados;
-      if (!f.secao || !["plano", "permissoes"].includes(f.secao)) estado.configuracoes = dados;
+      if (!f.secao || !["plano", "permissoes", "abertura"].includes(f.secao)) estado.configuracoes = dados;
+      if (f.secao === "abertura" && dados?.configuracoes) estado.configuracoes = dados.configuracoes;
       return adm.configuracoes(corpo, f, ctx);
     }
     case "documentos": return adm.documentos(dados, f);
     case "contas-a-pagar": return tes.contasAPagar(dados, f, { permissoes: permissoesDaUnidade() });
-    case "contas-a-receber": return tes.contasAReceber(dados, f);
+    case "contas-a-receber": return tes.contasAReceber(dados, f, { permissoes: permissoesDaUnidade(), competencia: estado.competencia });
     case "caixa-e-bancos": if (!f.contaId) f.contas = dados.contas.map((c) => ({ id: c.id, nome: c.nome })); return tes.caixaEBancos(dados, f, { permissoes: permissoesDaUnidade() });
     case "calendario": estado.calendario = dados; return tes.calendario(dados, { selecionado: estado.diaSelecionado?.startsWith(dados.mes) ? estado.diaSelecionado : null });
     case "fluxo-de-caixa": return tes.fluxoDeCaixa(dados, f);
@@ -188,7 +189,7 @@ async function carregar() {
     estado.pessoas = null;
     estado.unidade = s.dados.unidades[0]?.id ?? null;
     preencherUnidades();
-    if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Financeiro v2."); conteudo.removeAttribute("aria-busy"); return; }
+    if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Crescer Com Delivery Financeiro."); conteudo.removeAttribute("aria-busy"); return; }
   }
   const r = await consultor.consultar(consultaDaRota(), cabecalhos());
   if (r === null) return; // resposta obsoleta: outra consulta mais nova já está em andamento

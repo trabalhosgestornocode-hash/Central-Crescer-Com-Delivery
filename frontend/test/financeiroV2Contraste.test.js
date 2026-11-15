@@ -7,7 +7,8 @@ import { readFileSync } from "node:fs";
 
 const css = readFileSync(new URL("../financeiro-v2/fv2.css", import.meta.url), "utf8");
 const tokens = (trecho) => Object.fromEntries([...trecho.matchAll(/--([a-z-]+):\s*(#[0-9a-fA-F]{6})/g)].map((m) => [m[1], m[2]]));
-const inicioEscuro = css.indexOf("@media (prefers-color-scheme: dark)");
+// Tema escuro = o da plataforma (data-theme="dark", aplicado por financeiro-v2/tema.js com a regra de src/tema.js), não a preferência do sistema.
+const inicioEscuro = css.indexOf(":root[data-theme=\"dark\"]");
 const CLARO = tokens(css.slice(0, inicioEscuro));
 const ESCURO = { ...CLARO, ...tokens(css.slice(inicioEscuro, css.indexOf("* { box-sizing"))) };
 const luminancia = (h) => {

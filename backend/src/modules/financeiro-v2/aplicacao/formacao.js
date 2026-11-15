@@ -25,12 +25,24 @@ import { baseNaTransacao } from "./base.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { operacoesEconomicas } from "./economico.js";
 import { operacoesDeVendas } from "./vendas.js";
+import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
 
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 40);
 const CONCLUIDAS = ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"];
 const FINAIS = [E.APLICADA, E.REJEITADA, E.SUBSTITUIDA];
 const arredondar = (micros) => { const n = micros < 0; const a = BigInt(Math.abs(micros)); const c = Number((a + 5000n) / 10000n); return n ? -c : c; };
 const produtoParaForma = { CREDITO: "CREDITO", DEBITO: "DEBITO", PIX: "PIX", VALE: "VALE" };
+
+// ---------------------------------------------------------------------------------- barreira da ABERTURA (doc 32)
+// Operações que criam efeito ECONÔMICO (receita, despesa, recebível de venda, taxa, obrigação). A movimentação bancária
+// do extrato NÃO entra aqui: ela é necessária para conciliar e nunca cria receita nem despesa.
+export const ECONOMICAS = Object.freeze([OP.VENDA, OP.VENDA_AGREGADA, OP.PAGAMENTO_STONE, OP.OBRIGACAO_ENTREGADOR]);
+/** Data que decide o lado do corte: obrigação de entregadores usa o INÍCIO do período (qualquer entrega até o corte). */
+export const dataDeCorteDaProposta = (p) => (p.operacao === OP.OBRIGACAO_ENTREGADOR ? (p.periodo?.[0] ?? p.extras?.periodo?.[0] ?? p.dataOperacao) : p.dataOperacao);
+export const anteriorAoCorte = (abertura, p) => Boolean(abertura) && ECONOMICAS.includes(p.operacao) && dataDeCorteDaProposta(p) <= abertura.dataDeCorte;
+export const CORRESPONDENCIA_ABERTURA = Object.freeze({ COBERTO: "COBERTO_POR_TITULO_ANTERIOR", POSSIVEL: "CORRESPONDENCIA_POSSIVEL", SEM: "SEM_CORRESPONDENCIA" });
+const normalizarId = (v) => String(v ?? "").replace(/\s+/g, "").toUpperCase();
+const normalizarNome = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").replace(/\s+/g, " ").trim().toLowerCase();
 
 function validarGeracao(e) {
   semCamposDesconhecidos(e, ["importacaoId", "contaBancariaId", "contaCaixaId"], "geracao");
@@ -187,6 +199,61 @@ export function operacoesDeFormacao(b) {
     });
   }
 
+  /**
+   * Regra DETERMINÍSTICA de correspondência entre um efeito importado anterior ao corte e as posições de abertura:
+   *   1. mesmo devedor/credor (processador; entregador pelo nome) E identificador igual (pedido, Stone ID, autorização,
+   *      ID do repasse ou documento) → COBERTO_POR_TITULO_ANTERIOR;
+   *   2. mesmo devedor/credor E mesmo valor → CORRESPONDENCIA_POSSIVEL (confirmação humana);
+   *   3. nada disso → SEM_CORRESPONDENCIA.
+   * Em qualquer caso a proposta vai para a conferência e NUNCA é aplicada (o título já é, ou deveria ser, posição de
+   * abertura); a resolução é rejeitá-la com justificativa, ou registrar o título anterior que faltou.
+   */
+  async function correspondenciaComAbertura(tx, cx, r) {
+    const ids = new Set([r.registro?.idExterno, r.extras?.autorizacao, r.registro?.dados?.autorizacao, ...(r.extras?.pedidos ?? [])].filter(Boolean).map(normalizarId));
+    let candidatos = [];
+    if (r.operacao === OP.OBRIGACAO_ENTREGADOR) {
+      const lancs = (await tx.listar(cx, TIPO.LANCAMENTO, { onde: { categoria: CATEGORIA_TITULOS_ANTERIORES } })).filter((l) => l.situacao === "ATIVO");
+      for (const l of lancs) {
+        for (const o of await tx.listar(cx, TIPO.OBRIGACAO, { onde: { lancamentoId: l.id } })) {
+          const credor = o.contraparteId ? await tx.obter(cx, TIPO.CONTRAPARTE, o.contraparteId) : null;
+          if (normalizarNome(credor?.nome) === normalizarNome(r.comando.entregador)) candidatos.push({ tipo: TIPO.OBRIGACAO, id: o.id, identificador: o.identificador ?? null, valorCentavos: o.valorBaseCentavos });
+        }
+      }
+    } else {
+      const processador = r.operacao === OP.PAGAMENTO_STONE ? "STONE" : (r.comando.pagamentos ?? []).find((x) => x.processador)?.processador ?? null;
+      if (processador) {
+        candidatos = (await tx.listar(cx, TIPO.RECEBIVEL)).filter((x) => x.anteriorAAbertura && x.processador === processador && x.situacao !== SITUACAO_TITULO.CANCELADA)
+          .map((x) => ({ tipo: TIPO.RECEBIVEL, id: x.id, identificador: x.identificador ?? null, valorCentavos: x.valorBaseCentavos }));
+      }
+    }
+    const cobertos = candidatos.filter((x) => x.identificador && ids.has(normalizarId(x.identificador)));
+    const possiveis = cobertos.length ? [] : candidatos.filter((x) => x.valorCentavos === r.valorCentavos);
+    const classificacao = cobertos.length ? CORRESPONDENCIA_ABERTURA.COBERTO : possiveis.length ? CORRESPONDENCIA_ABERTURA.POSSIVEL : CORRESPONDENCIA_ABERTURA.SEM;
+    return { classificacao, titulos: (cobertos.length ? cobertos : possiveis).map(({ tipo, id }) => ({ tipo, id })) };
+  }
+
+  /** Aplica a barreira ao rascunho: anterior ao corte → conferência, com a correspondência calculada. */
+  async function barreiraDaAbertura(tx, cx, abertura, r) {
+    if (!anteriorAoCorte(abertura, r)) return r;
+    const correspondencia = await correspondenciaComAbertura(tx, cx, r);
+    const mensagem = {
+      [CORRESPONDENCIA_ABERTURA.COBERTO]: "Já representado por título anterior à abertura (mesmo identificador): rejeite esta proposta; o título de abertura segue valendo.",
+      [CORRESPONDENCIA_ABERTURA.POSSIVEL]: "Possível título anterior à abertura (mesmo devedor e valor): confira o documento e rejeite esta proposta se for o mesmo.",
+      [CORRESPONDENCIA_ABERTURA.SEM]: "Nenhum título de abertura correspondente: se o valor estava em aberto na data de corte, registre-o como título anterior; se já estava liquidado, rejeite.",
+    }[correspondencia.classificacao];
+    return {
+      ...r, estado: E.AGUARDANDO_REVISAO, confianca: CONFIANCA.BAIXA,
+      divergencias: [...r.divergencias, { codigo: "ANTERIOR_A_ABERTURA", mensagem: `Data até o corte da abertura (${abertura.dataDeCorte}). ${mensagem}` }],
+      extras: { ...r.extras, correspondenciaAbertura: correspondencia },
+    };
+  }
+  const recusarAnteriorAoCorte = async (tx, cx, p) => {
+    const abertura = await tx.buscarPorChave(cx, TIPO.ABERTURA, "abertura");
+    if (anteriorAoCorte(abertura, p)) {
+      falhar(CODIGO.OPERACAO_INVALIDA, `Efeito anterior ao corte da abertura (${abertura.dataDeCorte}): já é posição de abertura. Rejeite a proposta ou registre o título anterior.`, { motivo: "ANTERIOR_A_ABERTURA" });
+    }
+  };
+
   // ------------------------------------------------------------------------------------- persistência das propostas
   async function persistir(tx, cx, imp, rascunho, contagem) {
     const registros = rascunho.registros ?? [rascunho.registro];
@@ -301,7 +368,8 @@ export function operacoesDeFormacao(b) {
         };
         const rascunhos = porFonte[imp.fonte] ? await porFonte[imp.fonte]() : [];
         const contagem = { criadas: 0, existentes: 0, reavaliadas: 0, substituidas: 0, porEstado: {} };
-        for (const r of rascunhos) await persistir(tx, cx, imp, r, contagem);
+        const abertura = await tx.buscarPorChave(cx, TIPO.ABERTURA, "abertura");
+        for (const r of rascunhos) await persistir(tx, cx, imp, await barreiraDaAbertura(tx, cx, abertura, r), contagem);
         return { importacaoId: imp.id, ...contagem, semProposta: registros.length - rascunhos.reduce((s, r) => s + (r.registros?.length ?? 1), 0) };
       });
     },
@@ -319,6 +387,7 @@ export function operacoesDeFormacao(b) {
           if (anterior?.estado === E.APLICADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Reverta o efeito da proposta anterior (fonte retificada) antes de aprovar esta.");
         }
         if (p.operacao === OP.PAGAMENTO_STONE && !p.comando.vendaId) falhar(CODIGO.TRANSICAO_INVALIDA, "Vínculo ambíguo ou ausente: a proposta não indica uma venda.");
+        await recusarAnteriorAoCorte(tx, cx, p);
         return b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.APROVADA, decididoPor: cx.usuarioId, decididoEm: b.agora() }, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa);
       });
     },
@@ -341,6 +410,7 @@ export function operacoesDeFormacao(b) {
         const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
         if (p.estado === E.APLICADA) return { proposta: p, efeitos: p.efeitos, repetido: true };
         if (p.estado !== E.APROVADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só proposta aprovada pode ser aplicada.", { estado: p.estado });
+        await recusarAnteriorAoCorte(tx, cx, p); // aprovada ANTES de a abertura existir: a barreira vale na aplicação
         const conflito = await conflitoDeGranularidade(tx, cx, p);
         if (conflito) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe receita do mesmo dia pela outra granularidade (agregado × por pedido): reverta uma antes de aplicar a outra.", { propostaId: conflito.id });
         const efeitos = await aplicar(tx, cx, p);

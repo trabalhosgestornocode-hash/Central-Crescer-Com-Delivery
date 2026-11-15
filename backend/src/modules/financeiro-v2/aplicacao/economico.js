@@ -5,7 +5,7 @@ import { CODIGO, falhar } from "../dominio/erros.js";
 import { ALVO_LIQUIDACAO, EVENTO_HISTORICO, NATUREZA_LANCAMENTO, SITUACAO_LANCAMENTO, SITUACAO_TITULO, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { ratear, somarLista, subtrair } from "../dominio/dinheiro.js";
-import { CATEGORIA_DESPESA_A_CLASSIFICAR, valorDoLancamentoDeAjuste } from "../dominio/planoDeContas.js";
+import { CATEGORIA_DESPESA_A_CLASSIFICAR, CATEGORIA_TITULOS_ANTERIORES, valorDoLancamentoDeAjuste } from "../dominio/planoDeContas.js";
 import { somarMeses } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
 import {
@@ -13,6 +13,10 @@ import {
   validarCorrecaoObrigacao, validarObrigacao, validarRecebivel,
 } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
+
+const DO_SISTEMA_NA_OBRIGACAO = Object.freeze([CATEGORIA_DESPESA_A_CLASSIFICAR, CATEGORIA_TITULOS_ANTERIORES]);
+/** "Unicred ", "unicred" e "Unicréd" são a mesma conta. */
+const nomeNormalizado = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").replace(/\s+/g, " ").trim().toLowerCase();
 
 export function operacoesEconomicas(b) {
   /** Cancela os lançamentos nascidos de ajustes de um conjunto de títulos (juros, taxas, descontos). */
@@ -24,10 +28,39 @@ export function operacoesEconomicas(b) {
     }
   }
 
+  /** Abertura configurada, em andamento e da MESMA competência (posição de abertura nunca entra em outra competência). */
+  async function exigirAberturaPara(tx, cx, competencia) {
+    const ab = await tx.buscarPorChave(cx, TIPO.ABERTURA, "abertura");
+    if (!ab) falhar(CODIGO.OPERACAO_INVALIDA, "Configure a abertura financeira (competência de início) antes de registrar títulos anteriores.", { motivo: "ABERTURA_NAO_CONFIGURADA" });
+    if (ab.situacao !== "CONFIGURADA") falhar(CODIGO.OPERACAO_INVALIDA, "A abertura já foi concluída: novos títulos anteriores exigem reabri-la.", { motivo: "ABERTURA_CONCLUIDA" });
+    if (competencia !== ab.competenciaInicio) falhar(CODIGO.OPERACAO_INVALIDA, `Título anterior entra na competência de início da abertura (${ab.competenciaInicio}).`, { motivo: "COMPETENCIA_DIFERENTE_DA_ABERTURA" });
+    return ab;
+  }
+
+  /** Fornecedor/cliente digitado no formulário: reaproveita o MESMO cadastro (tipo + nome normalizado), nunca duplica. */
+  async function contraparteDoFormulario(tx, cx, nova) {
+    await tx.travar(cx, "contrapartes", "EXCLUSIVA");
+    const igual = (await tx.listar(cx, TIPO.CONTRAPARTE)).find((x) => x.tipo === nova.tipo && nomeNormalizado(x.nome) === nomeNormalizado(nova.nome));
+    return igual ?? b.criar(tx, cx, TIPO.CONTRAPARTE, nova);
+  }
+
   return {
+    /**
+     * Cadastra uma conta (Unicred, caixa físico, outras). Nunca recebe saldo: saldo é registrado à parte, com referência.
+     * Sem duplicidade: dentro da trava da unidade, o mesmo nome (sem diferença de maiúsculas, acentos ou espaços) já
+     * cadastrado devolve a conta existente quando é a MESMA conta (reenvio) e é recusado quando difere no tipo/instituição.
+     */
     configurarContaFinanceira(ctx, entrada) {
       const c = validarConta(entrada);
-      return b.executar(ctx, ACAO.CONFIGURAR, (cx, tx) => b.criar(tx, cx, TIPO.CONTA, { ...c, ativa: true }));
+      return b.executar(ctx, ACAO.CONFIGURAR, async (cx, tx) => {
+        await tx.travar(cx, "contas-financeiras", "EXCLUSIVA");
+        const igual = (await tx.listar(cx, TIPO.CONTA)).find((x) => nomeNormalizado(x.nome) === nomeNormalizado(c.nome));
+        if (igual) {
+          if (igual.tipo === c.tipo && (igual.instituicao ?? null) === (c.instituicao ?? null)) return { ...igual, repetido: true };
+          falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe uma conta com este nome. Use outro nome ou altere a conta existente.", { contaId: igual.id });
+        }
+        return b.criar(tx, cx, TIPO.CONTA, { ...c, ativa: true });
+      });
     },
 
     registrarContraparte(ctx, entrada) {
@@ -53,10 +86,18 @@ export function operacoesEconomicas(b) {
           };
         }
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
-        await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
+        // Abertura (opção B): a dívida anterior é POSIÇÃO INICIAL do passivo, nunca despesa da competência de início. Só com a
+        // abertura CONFIGURADA da unidade (competência e corte persistidos), nunca pelo que veio no formulário.
+        if (c.categoria === CATEGORIA_TITULOS_ANTERIORES) {
+          const ab = await exigirAberturaPara(tx, cx, c.competencia);
+          if (c.dataEmissao > ab.dataDeCorte) falhar(CODIGO.DATA_INVALIDA, `Título anterior à abertura tem emissão até ${ab.dataDeCorte} (data de corte).`, { campo: "dataEmissao" });
+          if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra um por documento, pelo saldo em aberto (sem parcelar nem repetir).", { campo: "parcelas" });
+        } else if (c.identificador) falhar(CODIGO.ENTRADA_INVALIDA, "O identificador do título só se usa em título anterior à abertura.", { campo: "identificador" });
+        if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
+        else await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         await b.exigirDocumentos(tx, cx, c.documentoIds);
-        // "A classificar" é categoria do sistema: existe mesmo em plano implantado antes dela (criada sob demanda).
-        const categoria = c.categoria === CATEGORIA_DESPESA_A_CLASSIFICAR ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);
+        // "A classificar" e "títulos anteriores" são categorias do sistema: existem mesmo em plano implantado antes delas.
+        const categoria = DO_SISTEMA_NA_OBRIGACAO.includes(c.categoria) ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);
         if (categoria.natureza === NATUREZA_LANCAMENTO.RECEITA) {
           falhar(CODIGO.CATEGORIA_INVALIDA, "Uma obrigação a pagar não pode ser classificada como receita.", { categoria: categoria.codigo });
         }
@@ -72,6 +113,7 @@ export function operacoesEconomicas(b) {
             grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
             competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: somarMeses(c.vencimento, i),
             parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
+            ...(c.identificador ? { identificador: c.identificador } : {}),
             chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
           }));
         }
@@ -97,7 +139,12 @@ export function operacoesEconomicas(b) {
           return { recebivel: existente, lancamentosDeRetencao, repetido: true };
         }
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
-        if (c.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
+        if (c.anteriorAAbertura) {
+          const ab = await exigirAberturaPara(tx, cx, c.competencia);
+          if (c.dataOrigem > ab.dataDeCorte) falhar(CODIGO.DATA_INVALIDA, `Título anterior à abertura tem origem até ${ab.dataDeCorte} (data de corte).`, { campo: "dataOrigem" });
+        }
+        if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
+        else if (c.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         let canal = c.canal;
         if (c.vendaId) {
           const venda = await b.obterOuFalhar(tx, cx, TIPO.VENDA, c.vendaId, "Venda");
@@ -113,7 +160,8 @@ export function operacoesEconomicas(b) {
           categorias.push(categoria);
         }
         const liquido = subtrair(c.brutoCentavos, somarLista(c.retencoes, (d) => d.valorCentavos));
-        const recebivel = await b.criar(tx, cx, TIPO.RECEBIVEL, { ...c, canal, pagamentoId: null, forma: null, chaveIdempotencia: chave, impressao: chave ? impressao : null, ...tituloNovo(liquido) });
+        const { contraparteNova: _nova, ...dados } = c; // o cadastro novo já virou contraparteId
+        const recebivel = await b.criar(tx, cx, TIPO.RECEBIVEL, { ...dados, canal, pagamentoId: null, forma: null, chaveIdempotencia: chave, impressao: chave ? impressao : null, ...tituloNovo(liquido) });
         const lancamentosDeRetencao = [];
         for (const [indice, r] of c.retencoes.entries()) {
           lancamentosDeRetencao.push(await b.lancar(tx, cx, categorias[indice], {

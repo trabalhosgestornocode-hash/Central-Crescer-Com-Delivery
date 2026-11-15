@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { exigirRepositorio } from "../contratos/repositorio.js";
 import { criarPoliticaDeEscopo } from "../dominio/contexto.js";
 import { criarBase } from "./base.js";
+import { operacoesDeAbertura } from "./abertura.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { operacoesDeCompetencia } from "./competencias.js";
 import { operacoesDeConciliacao } from "./conciliacao.js";
@@ -67,6 +68,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeEvidencias(base, { cofre }),
     ...operacoesDeBaixaPorExtrato(base),
     ...operacoesDeFormacao(base),
+    ...operacoesDeAbertura(base),
     ...operacoesDeApuracao(base),
     ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
     ...operacoesDeVendasERecebimentos(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),

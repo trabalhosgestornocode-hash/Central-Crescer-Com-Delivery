@@ -3,8 +3,9 @@
 // para quem tem a permissão exigida e sempre pedem confirmação; o servidor confere tudo de novo.
 import { ESTADOS_COMPETENCIA, PERMISSOES, TIPOS_DOCUMENTO, competencia, dataBR, esc } from "./formatar.js";
 import { paginacao } from "./telasTesouraria.js";
+import { abertura } from "./telasAbertura.js";
 
-export const SECOES_CONFIG = Object.freeze([["unidade", "Organização e unidade"], ["plano", "Plano de contas"], ["canais", "Canais e processadores"], ["contas", "Contas financeiras"], ["metodologia", "Competências e metodologia"], ["permissoes", "Usuários e permissões"]]);
+export const SECOES_CONFIG = Object.freeze([["unidade", "Organização e unidade"], ["plano", "Plano de contas"], ["canais", "Canais e processadores"], ["contas", "Contas financeiras"], ["metodologia", "Competências e metodologia"], ["permissoes", "Usuários e permissões"], ["abertura", "Abertura financeira"]]);
 const nenhum = (texto) => `<p class="nota vazio-lista">${esc(texto)}</p>`;
 const selo = (texto, classe) => `<span class="selo selo--${classe}">${esc(texto)}</span>`;
 const td = (rotulo, conteudo, classe = "") => `<td data-rotulo="${esc(rotulo)}"${classe ? ` class="${classe}"` : ""}><span class="cel">${conteudo}</span></td>`;
@@ -27,7 +28,7 @@ const justificativa = (obrigatoria = true) => `<label>Justificativa${obrigatoria
 // --------------------------------------------------------------------------------------------------- configurações
 export function configuracoes(dados, f = {}, ctx = {}) {
   const secao = f.secao ?? "unidade";
-  const corpo = { unidade, plano, canais, contas, metodologia, permissoes }[secao] ?? unidade;
+  const corpo = { unidade, plano, canais, contas, metodologia, permissoes, abertura }[secao] ?? unidade;
   return `<div class="configuracoes"><header class="cabecalho"><div><h1>Configurações</h1><p class="subtitulo">${esc(ctx.unidadeNome ?? "")} · organização e unidade vêm da sua sessão</p></div></header>
 <nav class="abas abas--botoes" aria-label="Seções de configurações">${SECOES_CONFIG.map(([k, t]) => `<button type="button" data-secao-config="${k}"${k === secao ? ' aria-current="page"' : ""}>${esc(t)}</button>`).join("")}</nav>
 ${corpo(dados, ctx)}</div>`;
@@ -39,7 +40,7 @@ function unidade(c) {
 <dl class="ficha">
   <dt>Nome de exibição</dt><dd>${esc(u?.nomeExibicao ?? "Ainda não configurado")}</dd>
   <dt>Identificação da empresa</dt><dd>${esc(u?.identificacaoEmpresa ?? "—")}</dd>
-  <dt>Situação no Financeiro v2</dt><dd>${u ? selo(u.situacao === "ATIVA" ? "Ativa" : "Inativa", u.situacao === "ATIVA" ? "ok" : "neutro") : "—"}</dd>
+  <dt>Situação no Crescer Com Delivery Financeiro</dt><dd>${u ? selo(u.situacao === "ATIVA" ? "Ativa" : "Inativa", u.situacao === "ATIVA" ? "ok" : "neutro") : "—"}</dd>
   <dt>Contas vinculadas</dt><dd>${c.contas.length ? c.contas.map((x) => esc(x.nome)).join(", ") : "Nenhuma"}</dd>
   <dt>Canais ativos</dt><dd>${c.canais.filter((x) => x.situacao === "ATIVO").map((x) => esc(x.nome)).join(", ") || "Nenhum cadastrado"}</dd>
 </dl>

@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 const aqui = dirname(fileURLToPath(import.meta.url));
 const m = await import(pathToFileURL(join(aqui, "..", "..", "src", "modules", "financeiro-v2", "index.js")));
 const { faturamentoSaiposPdf } = await import(pathToFileURL(join(aqui, "..", "..", "test", "financeiro-v2", "helpers", "formatos.js")));
+const { escritasDaAbertura } = await import(pathToFileURL(join(aqui, "..", "..", "src", "modules", "fv2-integracao", "escritas.js")));
 const { foodyEntregas, saiposFormas, saiposVendas, texto, unicredExtrato } = await import(pathToFileURL(join(aqui, "..", "..", "test", "financeiro-v2", "helpers", "arquivos.js")));
 /** Stone no layout homologado (texto, 6 casas, desconto no "unificado"), em CSV SINTÉTICO. */
 const stoneCsv = (linhas) => texto(["STONE ID;DATA DA VENDA;PRODUTO;BANDEIRA;VALOR BRUTO;VALOR LIQUIDO;DESCONTO DE MDR;DESCONTO DE ANTECIPACAO;DESCONTO UNIFICADO;ULTIMO STATUS;CÓDIGO DE AUTORIZAÇÃO",
@@ -258,6 +259,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       ? { movimentacaoId: reverso.get(p.movimentacao) ?? NENHUM }
       : { lancamentoId: reverso.get(p.id) ?? NENHUM, ...(p.categoria ? { categoria: String(p.categoria) } : {}) }),
     "/api/fv2/configuracoes": (ctx) => nucleo.consultarConfiguracoes(ctx),
+    "/api/fv2/abertura": async (ctx) => ({ ...(await nucleo.consultarAbertura(ctx)), configuracoes: await nucleo.consultarConfiguracoes(ctx) }),
     "/api/fv2/configuracoes/plano": (ctx) => nucleo.consultarPlanoDeContas(ctx),
     "/api/fv2/configuracoes/categoria": (ctx, p) => nucleo.consultarCategoria(ctx, { codigo: String(p.codigo ?? "") }),
     "/api/fv2/permissoes": (ctx) => nucleo.consultarPermissoes(ctx),
@@ -287,6 +289,9 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const centavos = (v) => { const t = String(v ?? "").trim().replace(/\./g, ""); const m = /^(\d{1,9})(?:,(\d{1,2}))?$/.exec(t); return m ? Number(m[1]) * 100 + Number((m[2] ?? "0").padEnd(2, "0")) : t; };
   /** Ações LOCAIS da demonstração: cada uma chama a operação REAL do núcleo (permissão, transação, idempotência, histórico). */
   const ACOES = {
+    // Abertura financeira (doc 29): as MESMAS ações da plataforma (contas, saldos de abertura, títulos anteriores, recebíveis,
+    // caixa físico, implantação do plano), com as referências opacas e o relógio da demonstração.
+    ...Object.fromEntries(Object.entries(escritasDaAbertura({ hoje: () => m.tempo.hojeEm(relogio()), ref: id })).filter(([k]) => k !== "/conciliacoes/gerar").map(([k, e]) => [`/api/fv2/acoes${k}`, { campos: e.campos, fazer: (ctx, b) => e.fazer(nucleo, ctx, b) }])),
     "/api/fv2/acoes/importacao/receber": { campos: ["arquivo"], fazer: (ctx, b) => {
       const arq = CATALOGO.find((x) => x.id === b.arquivo);
       if (!arq) throw Object.assign(new Error("Arquivo fora do catálogo sintético da demonstração."), { codigo: m.CODIGO.ENTRADA_INVALIDA });
@@ -309,10 +314,12 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       });
     } },
     // 08D — operações do dia a dia pela tela (jornada completa): registrar conta, pagar conta, informar saldo.
-    "/api/fv2/acoes/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento"], fazer: async (ctx, b) => {
-      const contraparteId = b.fornecedor ? id(b.fornecedor) : (await nucleo.registrarContraparte(ctx, { tipo: "FORNECEDOR", nome: String(b.fornecedorNovo ?? "").slice(0, 120) })).id;
-      return nucleo.registrarObrigacao(ctx, { contraparteId, valorOriginalCentavos: centavos(b.valor), categoria: b.categoria, descricao: b.descricao, competencia: b.competencia, dataEmissao: b.dataEmissao, vencimento: b.vencimento });
-    } },
+    "/api/fv2/acoes/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento", "chave"], fazer: (ctx, b) => nucleo.registrarObrigacao(ctx, {
+      // fornecedor novo na MESMA transação da conta; a chave do formulário torna o reenvio idempotente (como na plataforma)
+      ...(b.fornecedor ? { contraparteId: id(b.fornecedor) } : { contraparteNova: { tipo: "FORNECEDOR", nome: String(b.fornecedorNovo ?? "").slice(0, 120) } }),
+      valorOriginalCentavos: centavos(b.valor), categoria: b.categoria, descricao: b.descricao, competencia: b.competencia, dataEmissao: b.dataEmissao, vencimento: b.vencimento,
+      ...(b.chave ? { fonte: { sistema: "MANUAL", idExterno: `formulario:${String(b.chave).slice(0, 60)}` } } : {}),
+    }) },
     // 08E (F-2): vincular saída JÁ registrada (extrato) à conta — nenhuma saída nova, nenhuma despesa nova.
     "/api/fv2/acoes/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "documento", "justificativa", "pagamentoAntecipado"], fazer: (ctx, b) => nucleo.vincularPagamentoDoExtrato(ctx, {
       movimentacaoId: id(b.movimentacao), versaoMovimentacao: /^\d{1,9}$/.test(String(b.versao ?? "")) ? Number(b.versao) : b.versao,

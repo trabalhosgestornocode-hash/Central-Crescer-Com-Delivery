@@ -313,6 +313,36 @@ try {
     await tentar(admin, "drop role if exists fv2_app_login");
     await limparPapeisFv2(admin);
   }
+  // E5 — ATUALIZAÇÃO incremental (atualizar.sql) sobre o estado de PRODUÇÃO (instalação 0001–0021): aplica só o que falta,
+  // sistema atual intacto, reaplicar aborta, tabela nova com RLS forçada e sem acesso das credenciais comuns.
+  {
+    const { instalar: instalarAte, BASE_INSTALADA } = await import("./pacoteProducao.mjs");
+    const pasta = join(PASTA_DE_MIGRACOES, "..", "producao");
+    const [atualizar, inventario] = ["atualizar.sql", "inventario.sql"].map((n) => readFileSync(join(pasta, n), "utf8"));
+    const banco = "sim_atualizacao";
+    await montarPlataforma(admin, banco);
+    const p = await conectar("postgres", banco);
+    const foto = async () => (await p.query(inventario)).rows[0];
+    let erro = null;
+    try { await p.query("begin"); await p.query(instalarAte(BASE_INSTALADA)); await p.query("commit"); } catch (e) { erro = `instalação base: ${e.code}: ${e.message}`; await p.query("rollback"); }
+    const antes = await foto();
+    if (!erro) { try { await p.query("begin"); await p.query(atualizar); await p.query("commit"); } catch (e) { erro = `${e.code}: ${e.message}`; await p.query("rollback"); } }
+    const depois = await foto();
+    saida.push("", `E5 — atualização incremental (atualizar.sql sobre a instalação até ${BASE_INSTALADA}, como postgres):`);
+    saida.push(`  aplicação: ${erro ? `FALHOU → ${erro}` : "OK (pré e pós-condições do próprio pacote passaram)"}`);
+    saida.push(`  ${antes.sha256 === depois.sha256 ? "OK      " : "FALHA   "} C0   sistema atual idêntico antes/depois da atualização`);
+    let segunda = null;
+    try { await p.query("begin"); await p.query(atualizar); await p.query("commit"); } catch (e) { segunda = e.message; await p.query("rollback"); }
+    saida.push(`  ${segunda && /migrações registradas/.test(segunda) ? "OK      " : "FALHA   "} R    reaplicar é recusado sem efeito: ${segunda ?? "NÃO abortou"}`);
+    if (!erro) {
+      const t = (await p.query("select c.relrowsecurity r, c.relforcerowsecurity f, (select count(*)::int from pg_policies where tablename = 'fv2_abertura') pol, has_table_privilege('anon', c.oid, 'select') anon, has_table_privilege('fv2_app', c.oid, 'insert') app from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'financeiro_v2' and c.relname = 'fv2_abertura'")).rows[0];
+      saida.push(`  ${t && t.r && t.f && t.pol === 4 && !t.anon && t.app ? "OK      " : "FALHA   "} T    fv2_abertura: RLS forçada, 4 políticas, anon sem acesso, fv2_app grava (${JSON.stringify(t)})`);
+      for (const x of await verificar(admin, banco, SCHEMA)) saida.push(`  ${x.situacao.padEnd(8)} ${x.id.padEnd(4)} ${x.texto}${x.detalhe ? ` — ${x.detalhe}` : ""}`);
+    }
+    await p.end();
+    await admin.query(`drop database ${banco} with (force)`);
+    await limparPapeisFv2(admin);
+  }
   await admin.end();
   process.stdout.write(`${saida.join("\n")}\n`);
 } finally {

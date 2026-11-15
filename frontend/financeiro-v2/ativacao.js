@@ -8,7 +8,7 @@ import { esc } from "./formatar.js";
 definirTransporte(criarTransportePlataforma({ credenciais: credenciaisDaPlataforma }));
 const $ = (s) => document.querySelector(s);
 const MOTIVOS = {
-  SEM_AUTORIDADE_ADMINISTRATIVA: "Só o administrador da empresa pode ativar o Financeiro v2.",
+  SEM_AUTORIDADE_ADMINISTRATIVA: "Só o administrador da empresa pode ativar o Crescer Com Delivery Financeiro.",
   PROVISIONAMENTO_DESLIGADO: "O procedimento de ativação não está ligado no servidor.",
 };
 const mensagem = (r) => MOTIVOS[r.motivo] ?? MOTIVOS[r.erro] ?? estadoDoErro(r).mensagem ?? r.mensagem;
@@ -44,7 +44,7 @@ $("#form-lib").addEventListener("submit", async (e) => {
   const ativa = e.submitter?.dataset.ativa === "true";
   saida.textContent = "Enviando…";
   const r = await enviar("/api/fv2/administracao/liberacao", { ativa, justificativa: new FormData(f).get("justificativa") });
-  saida.textContent = r.ok ? (ativa ? "Unidade liberada no Financeiro v2." : "Unidade desligada: volta ao painel atual.") : mensagem(r);
+  saida.textContent = r.ok ? (ativa ? "Unidade liberada no Crescer Com Delivery Financeiro." : "Unidade desligada: volta ao painel atual.") : mensagem(r);
   if (r.ok) carregar();
 });
 carregar();

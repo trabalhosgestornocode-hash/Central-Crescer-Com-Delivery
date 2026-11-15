@@ -319,8 +319,9 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
      * do dia (depois deles). É o ponto de partida do saldo calculado — só movimentos POSTERIORES à referência se somam a
      * ele. Um segundo saldo informado não corrige nada: a diferença para o calculado aparece na consulta como divergência.
      */
-    registrarSaldoDeConta(ctx, entrada) {
+    registrarSaldoDeConta(ctx, entrada, interno = {}) {
       const c = validarSaldoDeConta(entrada);
+      const marca = interno.aberturaId ? { aberturaId: interno.aberturaId } : {}; // só uso interno (abertura.js); fora da impressão
       const impressao = JSON.stringify(c);
       return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
         const chave = c.referencia === REFERENCIA_SALDO.FIM_DO_DIA ? `saldo:${c.contaId}:${c.data}:fim` : `saldo:${c.contaId}:${c.data}`;
@@ -334,7 +335,7 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
         // O fim do dia de hoje ainda não aconteceu: um "saldo final" de hoje deixaria de fora movimentos que ainda virão.
         if (c.referencia === REFERENCIA_SALDO.FIM_DO_DIA && c.data >= b.hoje()) falhar(CODIGO.DATA_INVALIDA, "Saldo de fim do dia só para dias já encerrados.", { campo: "data" });
         if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
-        return { saldo: await b.criar(tx, cx, TIPO.SALDO_CONTA, { ...c, chaveIdempotencia: chave, impressao }), repetido: false };
+        return { saldo: await b.criar(tx, cx, TIPO.SALDO_CONTA, { ...c, ...marca, chaveIdempotencia: chave, impressao }), repetido: false };
       });
     },
 
@@ -367,6 +368,18 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
     registrarOperacaoDeCaixa(ctx, entrada) {
       const c = validarOperacaoDeCaixa(entrada);
       return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
+        const previa = await b.obterOuFalhar(tx, cx, TIPO.SESSAO_CAIXA, c.sessaoId, "Sessão de caixa");
+        await tx.travar(cx, `caixa:${previa.contaId}`, "EXCLUSIVA"); // reenvios simultâneos esperam aqui
+        const { chave, ...semChave } = c;
+        if (chave) {
+          const atual = await b.obterOuFalhar(tx, cx, TIPO.SESSAO_CAIXA, c.sessaoId, "Sessão de caixa");
+          const ja = (atual.operacoes ?? []).find((o) => o.chave === chave);
+          if (ja) {
+            // campo a campo (o JSONB do PostgreSQL não preserva a ordem das chaves)
+            if (["operacao", "valorCentavos", "data", "descricao"].some((k) => ja[k] !== semChave[k])) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Este formulário já foi enviado com outro conteúdo.", { tipo: TIPO.SESSAO_CAIXA });
+            return { sessao: atual, operacao: ja, repetido: true };
+          }
+        }
         const sessao = await sessaoAberta(tx, cx, c.sessaoId);
         if (c.data < sessao.dataAbertura) falhar(CODIGO.DATA_INVALIDA, "A operação não pode ser anterior à abertura do caixa.", { campo: "data" });
         const caixa = operacoesDeCaixa(baseNaTransacao(b, tx, cx));
@@ -387,7 +400,7 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
           });
           movimentacaoId = m.movimentacao.id;
         }
-        const operacao = { operacao: c.operacao, valorCentavos: c.valorCentavos, data: c.data, descricao: c.descricao, movimentacaoId, transferenciaId, registradoEm: b.agora() };
+        const operacao = { operacao: c.operacao, valorCentavos: c.valorCentavos, data: c.data, descricao: c.descricao, movimentacaoId, transferenciaId, registradoEm: b.agora(), ...(chave ? { chave } : {}) };
         const atualizada = await b.alterar(tx, cx, TIPO.SESSAO_CAIXA, sessao, { operacoes: [...sessao.operacoes, operacao] }, EVENTO_HISTORICO.OPERACAO_DE_CAIXA, descricao);
         return { sessao: atualizada, operacao };
       });
