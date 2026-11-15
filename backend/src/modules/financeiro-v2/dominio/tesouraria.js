@@ -458,6 +458,8 @@ function contaNoPeriodo(p, conta, inicio, fim, hoje) {
       : null,
     conciliacao: { conciliadas: conc(SITUACAO_CONCILIACAO.CONCILIADA), parciais: conc(SITUACAO_CONCILIACAO.PARCIAL), naoConciliadas: conc(SITUACAO_CONCILIACAO.NAO_CONCILIADA) },
     pendencias: { semVinculo: semVinculo.length, semVinculoCentavos: somarLista(semVinculo, (m) => m.valorCentavos) },
+    // Sessão ABERTA do caixa, qualquer que seja o período da tela (abrir/operar/fechar não pode depender do filtro de datas).
+    sessaoAberta: conta.tipo === TIPO_CONTA.CAIXA_FISICO ? ((p.sessoes ?? []).filter((s) => s.contaId === conta.id && s.situacao === SITUACAO_SESSAO_CAIXA.ABERTA).map((s) => ({ id: s.id, dataAbertura: s.dataAbertura }))[0] ?? null) : null,
     sessoesDeCaixa: conta.tipo === TIPO_CONTA.CAIXA_FISICO
       ? (p.sessoes ?? []).filter((s) => s.contaId === conta.id && s.dataAbertura <= fim && (s.dataFechamento ?? hoje) >= inicio).sort((a, b) => (a.dataAbertura < b.dataAbertura ? 1 : -1)).map((s) => sessaoLegivel(p, s, hoje))
       : [],

@@ -90,7 +90,7 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   // 09B: liberação por empresa/unidade e o histórico dela também são guardadas (só funções do guardião; 0021).
   const GUARDADAS = ["fv2_auditoria_concessao", "fv2_liberacao", "fv2_liberacao_historico", "fv2_provisionamento_inicial", "fv2_sessao_banco"];
   const rls = (await dono.query("select relname, relrowsecurity, relforcerowsecurity from pg_class where relkind = 'r' and relname like 'fv2\\_%' and relname <> 'fv2_migracao' and relname <> all($1::text[])", [GUARDADAS])).rows;
-  assert.equal(rls.length, 30); // 19 da 0001 + 2 da 0002 + concessão (0003) + proposta e divergência (0004) + saldo e sessão de caixa (0006) + versão, atribuição, canal/processador e configuração (0009)
+  assert.equal(rls.length, 31); // 19 da 0001 + 2 da 0002 + concessão (0003) + proposta e divergência (0004) + saldo e sessão de caixa (0006) + versão, atribuição, canal/processador e configuração (0009) + abertura (0022)
   assert.deepEqual(rls.filter((x) => !x.relrowsecurity || !x.relforcerowsecurity), []);
   const privilegios = (await dono.query("select table_name, privilege_type from information_schema.role_table_grants where grantee = 'fv2_app'")).rows;
   assert.deepEqual(privilegios.filter((x) => ["DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"].includes(x.privilege_type)), []);

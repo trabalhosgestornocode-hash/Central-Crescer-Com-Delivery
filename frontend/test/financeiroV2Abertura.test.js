@@ -77,6 +77,8 @@ test("caixa físico e contas a receber: formulários só para quem registra, con
   assert.deepEqual(fs.map((f) => f.caminho), ["/caixa/operacao", "/caixa/fechar"]);
   exigirContrato([...formularios(semSessao), ...fs]);
   assert.equal(ab.formulariosDeCaixa([{ id: "cx", tipo: "CAIXA_FISICO", sessoesDeCaixa: [] }], { permissoes: ["financeiro_v2.ver"] }), "");
+  // Sessão aberta FORA do período exibido: não oferece "abrir"; oferece operar e fechar.
+  assert.deepEqual(formularios(ab.formulariosDeCaixa([{ id: "cx", nome: "Caixa", tipo: "CAIXA_FISICO", sessoesDeCaixa: [], sessaoAberta: { id: "s9", dataAbertura: "2026-11-10" } }], ctx)).map((f) => f.caminho), ["/caixa/operacao", "/caixa/fechar"]);
   const receber = formularios(ab.formRecebivelDoPeriodo(ctx));
   exigirContrato(receber);
   assert.ok(!receber[0].campos.includes("processador"), "repasse de processador não entra à mão");

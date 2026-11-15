@@ -169,8 +169,10 @@ export function formulariosDeCaixa(contas = [], ctx = {}) {
   if (!(ctx.permissoes ?? []).includes("financeiro_v2.registrar")) return "";
   const caixas = contas.filter((c) => c.tipo === "CAIXA_FISICO");
   if (!caixas.length) return `<p class="nota">Nenhuma conta de caixa físico cadastrada: cadastre em Configurações → Abertura financeira.</p>`;
-  const abertas = caixas.flatMap((c) => (c.sessoesDeCaixa ?? []).filter((s) => s.situacao === "ABERTA").map((s) => ({ ...s, contaNome: c.nome })));
-  const semSessao = caixas.filter((c) => !(c.sessoesDeCaixa ?? []).some((s) => s.situacao === "ABERTA"));
+  // A sessão aberta vem da conta (independe do período exibido); sessoesDeCaixa só cobre o período.
+  const abertaDe = (c) => c.sessaoAberta ?? (c.sessoesDeCaixa ?? []).find((s) => s.situacao === "ABERTA") ?? null;
+  const abertas = caixas.filter(abertaDe).map((c) => ({ ...abertaDe(c), contaNome: c.nome }));
+  const semSessao = caixas.filter((c) => !abertaDe(c));
   const bancos = contas.filter((c) => c.tipo !== "CAIXA_FISICO");
   const sessoes = abertas.map((s) => opcao(s.id, `${s.contaNome} · aberta em ${dataCurta(s.dataAbertura)}`)).join("");
   return `<div class="formularios-caixa">${semSessao.length ? formulario({ url: "/api/fv2/acoes/caixa/abrir", titulo: "Abrir caixa", rotulo: "Abrir caixa",
