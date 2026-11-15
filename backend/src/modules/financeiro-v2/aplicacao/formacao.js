@@ -26,6 +26,7 @@ import { operacoesDeCaixa } from "./caixa.js";
 import { operacoesEconomicas } from "./economico.js";
 import { operacoesDeVendas } from "./vendas.js";
 import { taxasDoPeriodo } from "./taxasContratadas.js";
+import { demonstrativoIfoodQueCobre } from "./demonstrativoIfood.js";
 import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
 
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 40);
@@ -325,6 +326,11 @@ export function operacoesDeFormacao(b) {
     const outra = proposta.operacao === OP.VENDA ? OP.VENDA_AGREGADA : OP.VENDA;
     const aplicadas = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: outra, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
     if (aplicadas[0]) return aplicadas[0];
+    // doc 38: o demonstrativo oficial do iFood cobre o canal iFood no período — nenhuma venda/agregado iFood convive com ele.
+    if (proposta.comando?.canal === "IFOOD") {
+      const dem = await demonstrativoIfoodQueCobre(tx, cx, proposta.comando.periodoInicio ?? proposta.dataOperacao) ?? await demonstrativoIfoodQueCobre(tx, cx, proposta.comando.periodoFim ?? proposta.dataOperacao);
+      if (dem) return { id: dem.id };
+    }
     const periodo = (p) => (p.operacao === OP.VENDA_AGREGADA && p.comando?.periodoInicio ? p.comando : null);
     const canalDe = (p) => (p.operacao === OP.VENDA ? p.comando?.canal ?? null : p.comando?.canal ?? null);
     const cobre = (per, data) => data >= per.periodoInicio && data <= per.periodoFim;

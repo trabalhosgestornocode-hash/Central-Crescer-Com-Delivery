@@ -5,6 +5,7 @@ import { criarPoliticaDeEscopo } from "../dominio/contexto.js";
 import { criarBase } from "./base.js";
 import { operacoesDeAbertura } from "./abertura.js";
 import { operacoesDeTaxasContratadas } from "./taxasContratadas.js";
+import { operacoesDoDemonstrativoIfood } from "./demonstrativoIfood.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { operacoesDeCompetencia } from "./competencias.js";
 import { operacoesDeConciliacao } from "./conciliacao.js";
@@ -71,6 +72,7 @@ export function criarNucleoFinanceiro({
     ...operacoesDeFormacao(base),
     ...operacoesDeAbertura(base),
     ...operacoesDeTaxasContratadas(base),
+    ...operacoesDoDemonstrativoIfood(base),
     ...operacoesDeApuracao(base),
     ...operacoesDeTesouraria(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),
     ...operacoesDeVendasERecebimentos(base, { cargaCompleta: cargaCompletaDeReferencia, conferirCarga: conferirCargaDirigida }),

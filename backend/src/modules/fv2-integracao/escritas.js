@@ -208,6 +208,12 @@ export const ESCRITAS = Object.freeze({
   // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
   "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
   "/importacao/estornar-taxas": { campos: ["importacao", "competencia", "justificativa"], fazer: (n, c, b) => n.estornarTaxasDoPeriodo(c, { importacaoId: id(b.importacao), competencia: b.competencia, justificativa: b.justificativa }) },
+  // doc 38: demonstrativo OFICIAL do iFood do período (faturamento do canal iFood; retenções; ajustes; líquido conferido).
+  "/vendas/demonstrativo-ifood": { campos: ["periodoInicio", "periodoFim", "vendas", "comissoes", "taxaPagamento", "mensalidade", "servicosEPromocoes", "ajustes", "liquido", "origem", "justificativa"], fazer: (n, c, b) => n.registrarDemonstrativoIfood(c, {
+    periodoInicio: b.periodoInicio, periodoFim: b.periodoFim, vendasCentavos: centavos(b.vendas), comissoesCentavos: centavos(b.comissoes || "0,00"), taxaPagamentoCentavos: centavos(b.taxaPagamento || "0,00"),
+    mensalidadeCentavos: centavos(b.mensalidade || "0,00"), servicosEPromocoesCentavos: centavos(b.servicosEPromocoes || "0,00"), ajustesCentavos: centavos(b.ajustes || "0,00"),
+    liquidoInformadoCentavos: centavos(b.liquido), origem: b.origem, justificativa: b.justificativa,
+  }) },
   "/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.configurarUnidade(c, semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/canal": { campos: ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarCanalOuProcessador(c, semVazios(b, ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/conta": { campos: ["conta", "nome", "ativa", "justificativa"], fazer: (n, c, b) => n.alterarContaFinanceira(c, { contaId: id(b.conta), ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}), justificativa: b.justificativa }) },
