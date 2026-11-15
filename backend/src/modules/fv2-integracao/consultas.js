@@ -21,6 +21,15 @@ const id = (p) => uuidOu(p.id);
 const competencia = (p) => ({ competencia: typeof p.competencia === "string" ? p.competencia : "" });
 
 /** caminho → (núcleo, contexto, parâmetros) → resultado */
+/** doc 37: relatórios aceitos na importação pela plataforma (rótulo para a tela). */
+const RELATORIOS_DA_PLATAFORMA = Object.freeze([
+  { tipoRelatorio: "SAIPOS_DESEMPENHO_POR_ATENDENTE", nome: "SAIPOS — Canais de venda (desempenho por atendente, XLSX)" },
+  { tipoRelatorio: "UNICRED_EXTRATO", nome: "Unicred — Extrato (PDF)" },
+  { tipoRelatorio: "STONE_VENDAS", nome: "Stone — Vendas (XLSX)" },
+  { tipoRelatorio: "SAIPOS_FORMAS_PAGAMENTO", nome: "SAIPOS — Formas de pagamento (XLSX)" },
+  { tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "SAIPOS — Faturamento por dia (PDF)" },
+]);
+
 export const CONSULTAS = Object.freeze({
   "/visao-geral": async (n, c, p) => {
     const vg = await n.apurarVisaoGeral(c, competencia(p));
@@ -92,7 +101,9 @@ export const CONSULTAS = Object.freeze({
     for (const novoEstado of destinos) acoes.push(await n.previaDaMudancaDeEstado(c, { competencia: f.competencia, novoEstado }));
     return { ...f, acoes, versoes: (await n.consultarVersoesDeFechamento(c, { competencia: f.competencia })).versoes };
   },
-  "/conferencias/catalogo": () => ({ arquivos: [], observacao: "Envio de arquivos indisponível: o cofre documental ainda não tem verificação antimalware." }),
+  // doc 37: na plataforma o envio é REAL e sem guarda do arquivo (lido, conferido e descartado).
+  "/conferencias/catalogo": () => ({ arquivos: [], envioReal: true, relatorios: RELATORIOS_DA_PLATAFORMA,
+    observacao: "O arquivo é lido e descartado: ficam só a impressão digital (SHA-256) e as linhas extraídas. Revise a prévia e confirme em até 30 minutos; depois disso, envie o mesmo arquivo de novo (é a mesma importação)." }),
   "/documentos": (n, c, p) => n.consultarDocumentos(c, filtro(p, ["competencia", "situacao", ...PAGINA], PAGINA)),
   "/documento": (n, c, p) => n.detalharDocumento(c, { id: id(p) }),
   "/reclassificacao": (n, c, p) => n.consultarReclassificacao(c, p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : { lancamentoId: id(p), ...(p.categoria ? { categoria: String(p.categoria) } : {}) }),

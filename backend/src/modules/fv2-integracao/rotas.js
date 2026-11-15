@@ -15,6 +15,7 @@ import { ACAO, CODIGO, FINALIDADE_DO_GATEWAY, alterarLiberacaoPostgres, criarAut
 import { comIdentidadeDaRequisicao, resumoDaSessao } from "./clienteGateway.js";
 import { CONSULTAS, pessoasDaUnidade } from "./consultas.js";
 import { ESCRITAS } from "./escritas.js";
+import { criarCofreTemporario } from "./cofreTemporario.js";
 import { lerPayloadSemConfiar } from "./mfaPeloProvedor.js";
 
 const STATUS_POR_CODIGO = Object.freeze({
@@ -55,6 +56,8 @@ function responderErro(res, e, registrar) {
  */
 export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, homologacaoHabilitada = false, provisionamentoHabilitado = false, dependencias, registrar = () => {} }) {
   const r = Router();
+  // doc 37: importar SEM GUARDAR o arquivo — ele vive só na memória do processo (30 min) entre a prévia e a confirmação.
+  const cofreTemporario = criarCofreTemporario();
   let deps = null;
   const obter = () => (deps ??= dependencias());
 
@@ -91,7 +94,7 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
     const { adaptador, repositorio, relogio } = obter();
     const c = await adaptador.contexto(sessao, opcoes);
     const nucleo = criarNucleoFinanceiro({
-      repositorio, ...(relogio ? { relogio } : {}), exigirConcessaoPersistida: true,
+      repositorio, ...(relogio ? { relogio } : {}), exigirConcessaoPersistida: true, cofre: cofreTemporario,
       escoposAutorizados: [{ organizacaoId: c.contexto.organizacaoId, unidadeId: c.contexto.unidadeId }],
     });
     return { c, nucleo };
@@ -153,8 +156,10 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
   }
 
   const corpoJson = json({ limit: "64kb", strict: true });
+  // doc 37: só o recebimento de arquivo para importação aceita corpo maior (arquivo em base64, até 5 MiB decodificado).
+  const corpoDeArquivo = json({ limit: "8mb", strict: true });
   for (const [caminho, escrita] of Object.entries(ESCRITAS)) {
-    r.post(`/acoes${caminho}`, corpoJson, async (req, res) => {
+    r.post(`/acoes${caminho}`, caminho === "/importacao/receber" ? corpoDeArquivo : corpoJson, async (req, res) => {
       try {
         // Ações só por JSON (formulário/navegador sem script não dispara) e sem campos fora da lista.
         if (!req.is("application/json")) throw recusa(415, "TIPO_DE_CONTEUDO", "Envie a ação como JSON.");

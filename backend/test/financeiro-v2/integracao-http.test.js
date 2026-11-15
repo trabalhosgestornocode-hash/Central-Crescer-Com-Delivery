@@ -423,3 +423,23 @@ test("abertura — rotas NOVAS no modo CO-LOCALIZADO: contas, saldo de abertura,
   // Plano: sem o nome do modelo redigitado, nada é implantado.
   assert.equal((await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA" })).corpo.codigo, CODIGO.CONFIRMACAO_EXIGIDA);
 });
+
+test("doc 37 — importação SEM GUARDA pela rota (co-localizado): corpo maior só nesta ação, prévia e confirmação no mesmo processo, documento avulso segue indisponível", pular, async () => {
+  await montar();
+  const W = (caminho, corpo, o = {}) => get(`/localescrita/acoes${caminho}`, { metodo: "POST", corpo, ...o });
+  // Extrato sintético grande o bastante para passar do limite comum de 64 KB (em base64).
+  const linhas = [["Data", "Histórico", "Documento", "Valor", "Saldo"], ["01/12/2025", "SALDO ANTERIOR", "", "", "1.000,00"]];
+  let saldo = 100000;
+  for (let i = 0; i < 1500; i += 1) { saldo += 1; linhas.push(["02/12/2025", `CREDITO SINTETICO NUMERO ${i} COM HISTORICO LONGO PARA OCUPAR ESPACO`, `D${i}`, "0,01", `${Math.floor(saldo / 100)},${String(saldo % 100).padStart(2, "0")}`]); }
+  linhas.push(["31/12/2025", "SALDO FINAL", "", "", `${Math.floor(saldo / 100)},${String(saldo % 100).padStart(2, "0")}`]);
+  const bytes = new TextEncoder().encode(`${linhas.map((l) => l.join(";")).join("\r\n")}\r\n`);
+  const corpo = { tipoRelatorio: "UNICRED_EXTRATO", periodoInicio: "2025-12-01", periodoFim: "2025-12-31", arquivoBase64: Buffer.from(bytes).toString("base64"), nomeArquivo: "extrato-sintetico.csv", tipoMime: "text/csv" };
+  assert.ok(corpo.arquivoBase64.length > 64 * 1024, "o teste precisa passar do limite comum");
+  const r = await W("/importacao/receber", corpo);
+  assert.equal(r.status, 200, JSON.stringify(r.corpo).slice(0, 300));
+  assert.equal(r.corpo.importacao.estado, "PRONTO_PARA_IMPORTAR");
+  const conf = await W("/importacao/confirmar", { importacao: r.corpo.importacao.id, impressaoPrevia: r.corpo.importacao.impressaoPrevia, ...(r.corpo.previa.totalDivergencias ? { aceitarPendencias: true, justificativa: "Sintético." } : {}) });
+  assert.equal(conf.status, 200, JSON.stringify(conf.corpo).slice(0, 300));
+  assert.equal(conf.corpo.importacao.estado, "IMPORTADO");
+  assert.equal((await W("/documentos/enviar", {})).status, 503, "documento avulso continua sem cofre");
+});

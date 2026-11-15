@@ -21,6 +21,18 @@ const inteiro = (v) => (/^\d{1,9}$/.test(String(v ?? "")) ? Number(v) : v);
 const marcado = (v) => v === true || v === "on" || v === "true";
 const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !== undefined && b[k] !== "").map((k) => [k, b[k]]));
 const acoesMarcadas = (b) => Object.values(ACAO).filter((a) => marcado(b[`acao_${a.split(".")[1]}`]));
+/** doc 37: relatórios aceitos na importação pela plataforma (os conferidos com arquivo real) → fonte. */
+export const FONTE_DO_RELATORIO = Object.freeze({
+  SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED",
+});
+const MIME_DA_EXTENSAO = Object.freeze({ pdf: "application/pdf", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", ofx: "application/x-ofx" });
+/** Base64 estrito → bytes (até 5 MiB). */
+function arquivoDoBase64(texto) {
+  if (typeof texto !== "string" || !texto || texto.length > 7 * 1024 * 1024 || !/^[A-Za-z0-9+/]+={0,2}$/.test(texto)) throw erroDeEntrada("Arquivo ausente, inválido ou maior que 5 MiB.", CODIGO.ENTRADA_INVALIDA, "arquivoBase64");
+  const bytes = new Uint8Array(Buffer.from(texto, "base64"));
+  if (!bytes.byteLength || bytes.byteLength > 5 * 1024 * 1024) throw erroDeEntrada("Arquivo vazio ou maior que 5 MiB.", CODIGO.ENTRADA_INVALIDA, "arquivoBase64");
+  return bytes;
+}
 const indisponivel = (mensagem) => () => { throw Object.assign(new Error(mensagem), { codigoHttp: 503, codigo: "COFRE_INDISPONIVEL" }); };
 
 const erroDeEntrada = (mensagem, codigo = CODIGO.ENTRADA_INVALIDA, campo = null) => new ErroFinanceiro(codigo, mensagem, campo ? { campo } : {});
@@ -119,7 +131,16 @@ export function acaoSensivelDoFechamento(b) {
 
 /** caminho → { campos, sensivel?(corpo) → ACAO|null, fazer(núcleo, contexto, corpo) } */
 export const ESCRITAS = Object.freeze({
-  "/importacao/receber": { campos: [], fazer: indisponivel("Envio de arquivos indisponível: o cofre documental ainda não tem verificação antimalware.") },
+  // doc 37: importação SEM GUARDA do arquivo (o cofre documental segue desligado): o arquivo é lido, conferido e descartado;
+  // ficam a impressão digital (SHA-256) e as linhas extraídas. A fonte vem do tipo de relatório (lista fechada).
+  "/importacao/receber": { campos: ["tipoRelatorio", "periodoInicio", "periodoFim", "arquivoBase64", "nomeArquivo", "tipoMime", "descricao"], fazer: (n, c, b) => {
+    const fonte = FONTE_DO_RELATORIO[b.tipoRelatorio];
+    if (!fonte) throw erroDeEntrada("Escolha um dos relatórios aceitos.", CODIGO.ENTRADA_INVALIDA, "tipoRelatorio");
+    const conteudo = arquivoDoBase64(b.arquivoBase64);
+    const tipoMime = MIME_DA_EXTENSAO[String(b.nomeArquivo ?? "").toLowerCase().split(".").pop()] ?? (typeof b.tipoMime === "string" && b.tipoMime ? b.tipoMime : "application/octet-stream");
+    return n.receberArquivoParaImportacao(c, { fonte, tipoRelatorio: b.tipoRelatorio, tipoMime, conteudo, periodoInicio: b.periodoInicio, periodoFim: b.periodoFim,
+      descricao: `${String(b.nomeArquivo ?? "arquivo").slice(0, 120)} (arquivo não guardado: só a impressão digital e as linhas extraídas)` });
+  } },
   "/documentos/enviar": { campos: [], fazer: indisponivel("Envio de arquivos indisponível: o cofre documental ainda não tem verificação antimalware.") },
   "/documentos/verificar": { campos: [], fazer: indisponivel("Verificação de arquivos indisponível enquanto o cofre estiver desligado.") },
   "/importacao/confirmar": { campos: ["importacao", "impressaoPrevia", "aceitarPendencias", "justificativa"], fazer: (n, c, b) => n.confirmarImportacao(c, { importacaoId: id(b.importacao), impressaoPrevia: b.impressaoPrevia, ...(b.aceitarPendencias === true ? { aceitarPendencias: true } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
