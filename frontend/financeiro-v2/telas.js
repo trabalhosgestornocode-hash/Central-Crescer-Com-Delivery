@@ -16,7 +16,7 @@ const pendenciasCurtas = (lista = [], max = 3) => (lista.length ? `<ul class="pe
 // ------------------------------------------------------------------------------------------- estados
 export function estado(tipo, mensagem = "") {
   const t = {
-    carregando: ["Carregando dados da competência…", "carregando"], erro: ["Não foi possível carregar.", "erro"], negado: ["Acesso negado ao Financeiro v2 nesta unidade.", "erro"],
+    carregando: ["Carregando dados da competência…", "carregando"], erro: ["Não foi possível carregar.", "erro"], negado: ["Acesso negado ao Crescer Com Delivery Financeiro nesta unidade.", "erro"],
     "sem-sessao": ["Sessão ausente ou expirada. Entre novamente para ver o financeiro.", "erro"], vazio: ["Sem dados para esta competência.", "info"],
   }[tipo] ?? ["", "info"];
   return `<div class="estado estado--${t[1]}" role="${tipo === "carregando" ? "status" : "alert"}" ${tipo === "carregando" ? 'aria-busy="true"' : ""}><p>${esc(t[0])}</p>${mensagem ? `<p class="estado-detalhe">${esc(mensagem)}</p>` : ""}${tipo === "carregando" ? '<div class="esqueleto"></div><div class="esqueleto"></div>' : ""}</div>`;
@@ -33,33 +33,45 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   const zeroConfirmado = fb.valorCentavos === 0 && fb.situacao === "CONFIRMADO";
   const grupos = Object.fromEntries((vg.cadaCem?.grupos ?? []).map((g) => [g.codigo, g]));
   const rec = liq.reconciliacaoComDre;
+  // Barra de participação por canal: os pesos são os percentuais que o motor já entregou (só largura visual).
+  const comPeso = canais.filter((c) => (c.percentualDoBruto ?? 0) > 0);
+  const alertas = [...(fb.pendencias ?? []), ...(res.pendencias ?? [])].filter((p, i, a) => a.findIndex((x) => x.mensagem === p.mensagem) === i);
   return `
-<header class="cabecalho"><div><h1>Visão Geral</h1><p class="subtitulo">${esc(competencia(vg.competencia))} · ${esc(unidadeNome)}${vg.fechamento ? ` · <span class="selo selo--${vg.fechamento.estado === "FECHAMENTO_HOMOLOGADO" ? "ok" : vg.fechamento.estado === "ABERTA" ? "info" : "alerta"}" data-estado-competencia="${esc(vg.fechamento.estado)}">${esc(ESTADO_DA_COMPETENCIA[vg.fechamento.estado] ?? vg.fechamento.estado)}</span>` : ""}</p></div></header>
-<section class="card card--destaque" id="card-faturamento-bruto" aria-labelledby="t-fb" data-ordem="1">
+<header class="cabecalho"><div><h1>Visão Geral</h1><p class="subtitulo">${esc(competencia(vg.competencia))} · ${esc(unidadeNome)}</p></div>${vg.fechamento ? `<span class="selo selo--${vg.fechamento.estado === "FECHAMENTO_HOMOLOGADO" ? "ok" : vg.fechamento.estado === "ABERTA" ? "info" : "alerta"}" data-estado-competencia="${esc(vg.fechamento.estado)}">${esc(ESTADO_DA_COMPETENCIA[vg.fechamento.estado] ?? vg.fechamento.estado)}</span>` : ""}</header>
+<div class="card card--receitas">
+<section class="bloco bloco--bruto" id="card-faturamento-bruto" aria-labelledby="t-fb" data-ordem="1">
   <div class="card-topo"><h2 id="t-fb">Faturamento Bruto Próprio</h2>${selo(fb.situacao)}${explicar("Faturamento Bruto Próprio", "Soma das vendas pelo valor bruto próprio (produtos, acréscimos e serviços da loja), antes de descontos. Não é saldo bancário, depósito, total Stone nem soma de formas de pagamento.")}</div>
   <p class="numero-principal">${valor(fb.valorCentavos)}${zeroConfirmado ? '<span class="nota-zero">zero confirmado</span>' : ""}</p>
-  <ul class="canais" aria-label="Faturamento bruto por canal">${canais.map((c) => `<li class="canal${c.comprovado ? "" : " canal--sem"}"><span class="canal-nome">${esc(nomeCanal(c.canal))}</span>${valor(c.valorCentavos)}<span class="canal-pct">${esc(percentual(c.percentualDoBruto))}</span>${c.comprovado ? "" : `<small>${esc(c.observacao ?? "Canal não comprovado.")}</small>`}${(c.valorCentavos ?? 0) !== 0 ? `<a class="botao-link" href="#/vendas-e-recebimentos?aba=vendas&amp;canal=${esc(c.canal)}">Ver vendas<span class="sr"> — ${esc(nomeCanal(c.canal))}</span></a>` : ""}</li>`).join("")}</ul>
+  ${comPeso.length ? `<div class="barra barra--canais" role="img" aria-label="Participação por canal: ${esc(comPeso.map((c) => `${nomeCanal(c.canal)} ${percentual(c.percentualDoBruto)}`).join(", "))}">${comPeso.map((c) => `<span class="segmento segmento--canal-${esc(classeCanal(c.canal))}" data-peso="${c.percentualDoBruto}" title="${esc(`${nomeCanal(c.canal)}: ${percentual(c.percentualDoBruto)}`)}"></span>`).join("")}</div>` : ""}
+  <ul class="canais" aria-label="Faturamento bruto por canal">${canais.map((c) => `<li class="canal${c.comprovado ? "" : " canal--sem"}"><span class="canal-nome"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(nomeCanal(c.canal))}</span>${valor(c.valorCentavos)}<span class="canal-pct">${esc(percentual(c.percentualDoBruto))}</span>${c.comprovado ? "" : `<small>${esc(c.observacao ?? "Canal não comprovado.")}</small>`}${(c.valorCentavos ?? 0) !== 0 ? `<a class="botao-link" href="#/vendas-e-recebimentos?aba=vendas&amp;canal=${esc(c.canal)}">Ver vendas<span class="sr"> — ${esc(nomeCanal(c.canal))}</span></a>` : ""}</li>`).join("")}</ul>
   ${pendenciasCurtas(fb.pendencias)}
-  ${botaoComposicao("FATURAMENTO_BRUTO_PROPRIO")}
+  <div class="bloco-acoes">${botaoComposicao("FATURAMENTO_BRUTO_PROPRIO")}</div>
 </section>
-<section class="card" id="card-faturamento-liquido" aria-labelledby="t-fl" data-ordem="2">
+<section class="bloco bloco--liquido" id="card-faturamento-liquido" aria-labelledby="t-fl" data-ordem="2">
   <div class="card-topo"><h2 id="t-fl">Faturamento Líquido Gerencial</h2>${selo(liq.situacao)}${explicar("Faturamento Líquido Gerencial", "Por canal: bruto próprio − deduções do canal − despesas atribuídas ao canal (comissões, taxas, promoções, plataforma). É uma leitura analítica: não é receita nova nem valor depositado.")}</div>
   <p class="numero-principal numero-principal--medio">${valor(liq.valorCentavos)}</p>
-  <p class="aviso">Líquido gerencial não é o valor depositado no banco.</p>
-  <div class="tabela-rolavel"><table class="tabela"><caption class="sr">Líquido gerencial por canal</caption><thead><tr><th scope="col">Canal</th><th scope="col">Bruto</th><th scope="col">Deduções</th><th scope="col">Despesas atribuídas</th><th scope="col">Líquido</th></tr></thead><tbody>
-  ${liq.porCanal.filter((c) => c.registros.length).map((c) => `<tr><th scope="row">${esc(nomeCanal(c.canal))}</th><td>${valor(c.brutoCentavos)}</td><td>${valor(c.deducoesCentavos)}</td><td>${valor(c.despesasAtribuidasCentavos)}${Object.keys(c.despesasPorClassificacao).length ? `<ul class="mini">${Object.entries(c.despesasPorClassificacao).map(([k, v]) => `<li>${esc(CLASSIFICACOES[k] ?? k)}: ${esc(moeda(v))}</li>`).join("")}</ul>` : ""}</td><td>${valor(c.liquidoGerencialCentavos)}</td></tr>`).join("")}
+  <p class="aviso aviso--discreto">Líquido gerencial não é o valor depositado no banco.</p>
+  <div class="tabela-rolavel"><table class="tabela tabela--canais tabela--cartoes"><caption class="sr">Líquido gerencial por canal</caption><thead><tr><th scope="col">Canal</th><th scope="col">Bruto</th><th scope="col">Deduções</th><th scope="col">Despesas atribuídas</th><th scope="col">Líquido</th></tr></thead><tbody>
+  ${liq.porCanal.filter((c) => c.registros.length).map((c) => `<tr><th scope="row"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(nomeCanal(c.canal))}</th><td data-rotulo="Bruto"><span class="cel">${valor(c.brutoCentavos)}</span></td><td data-rotulo="Deduções"><span class="cel">${valor(c.deducoesCentavos)}</span></td><td data-rotulo="Despesas atribuídas"><span class="cel">${valor(c.despesasAtribuidasCentavos)}${Object.keys(c.despesasPorClassificacao).length ? `<ul class="mini">${Object.entries(c.despesasPorClassificacao).map(([k, v]) => `<li>${esc(CLASSIFICACOES[k] ?? k)}: ${esc(moeda(v))}</li>`).join("")}</ul>` : ""}</span></td><td class="coluna-destaque" data-rotulo="Líquido"><span class="cel">${valor(c.liquidoGerencialCentavos)}</span></td></tr>`).join("")}
   </tbody></table></div>
   ${rec ? `<p class="reconciliacao ${rec.reconcilia ? "" : "reconciliacao--limite"}">Canais ${esc(moeda(rec.somaDosCanaisCentavos))} + não atribuídos ${esc(moeda(rec.somaNaoAtribuidosCentavos))} = ${esc(moeda(rec.totalReconciliadoCentavos))} · Resultado da DRE ${esc(moeda(rec.resultadoDaDreCentavos))} ${rec.reconcilia ? "✓ reconciliado" : "— decomposição incompleta: a DRE prevalece"}</p>` : ""}
-  ${botaoComposicao("FATURAMENTO_LIQUIDO_GERENCIAL")}
+  <div class="bloco-acoes">${botaoComposicao("FATURAMENTO_LIQUIDO_GERENCIAL")}</div>
 </section>
+</div>
 <section class="grade-secundaria" aria-label="Indicadores secundários">
+  <div class="faixa" aria-labelledby="t-resultado"><h2 class="faixa-titulo" id="t-resultado">Resultado da competência</h2><div class="indicadores">
   ${cardSec("Resultado Gerencial", valor(res.valorCentavos), selo(res.situacao), "RESULTADO_GERENCIAL", "Sem ajuste de estoque. Não é lucro contábil auditado.")}
   ${cardSec("Custos operacionais", valor(grupos.CUSTOS_OPERACIONAIS ? grupos.CUSTOS_OPERACIONAIS.valorCentavos : null), "", "CUSTOS_OPERACIONAIS")}
   ${cardSec("Despesas operacionais", valor(grupos.DESPESAS_OPERACIONAIS ? grupos.DESPESAS_OPERACIONAIS.valorCentavos : null), "", "DESPESAS_OPERACIONAIS")}
+  </div></div>
+  <div class="faixa" aria-labelledby="t-posicao"><h2 class="faixa-titulo" id="t-posicao">Posição financeira</h2><div class="indicadores">
   ${vg.financeiro ? cardsFinanceirosDaVisaoGeral(vg.financeiro) : ["Saldo bancário", "Caixa físico", "Contas a pagar", "Contas a receber", "Fluxo de caixa"].map((t) => `<article class="card card--sec card--indisponivel"><h3>${esc(t)}</h3><p class="valor valor--desconhecido">Indisponível</p><p class="nota">A consulta financeira não respondeu; nenhum valor é estimado.</p></article>`).join("")}
-  <article class="card card--sec"><h3>Alertas de conferência</h3>${pendenciasCurtas([...(fb.pendencias ?? []), ...(res.pendencias ?? [])].filter((p, i, a) => a.findIndex((x) => x.mensagem === p.mensagem) === i), 5) || '<p class="nota">Sem alertas.</p>'}<a class="botao-link" href="#/conferencias">Abrir a Central de Conferências</a></article>
+  </div></div>
+  <article class="card card--alertas${alertas.length ? "" : " card--alertas-vazio"}"><div class="card-topo"><h2>Alertas de conferência</h2>${alertas.length ? `<span class="contador" aria-label="${alertas.length} alerta(s)">${alertas.length}</span>` : ""}</div>${pendenciasCurtas(alertas, 5) || '<p class="nota">Sem alertas nesta competência.</p>'}<a class="botao-link" href="#/conferencias">Abrir a Central de Conferências</a></article>
 </section>`;
 }
+const CLASSE_CANAL = { BALCAO: "balcao", IFOOD: "ifood", ANOTA_AI: "anota-ai", OUTRO: "outro", NAO_IDENTIFICADO: "sem-canal" };
+const classeCanal = (c) => CLASSE_CANAL[c] ?? "outro";
 function cardSec(titulo, v, s, codigo, nota = "") {
   return `<article class="card card--sec"><h3>${esc(titulo)}</h3><p>${v}</p>${s}${nota ? `<p class="nota">${esc(nota)}</p>` : ""}${codigo ? botaoComposicao(codigo) : ""}</article>`;
 }
@@ -101,14 +113,14 @@ export function dre(r, { unidadeNome = "" } = {}) {
   const L = Object.fromEntries(linhas.map((l) => [l.codigo, l]));
   const subtotal = (c) => ["RECEITA_LIQUIDA_COMERCIAL", "RESULTADO_APOS_CUSTOS", "RESULTADO_GERENCIAL"].includes(c);
   return `
-<header class="cabecalho"><div><h1>DRE Gerencial</h1><p class="subtitulo">${esc(competencia(r.competencia))} · ${esc(unidadeNome)} · ${esc(r.dre.estadoDaCompetencia === "FECHAMENTO_HOMOLOGADO" ? "competência homologada" : "competência não homologada")}</p></div></header>
+<header class="cabecalho"><div><h1>DRE Gerencial</h1><p class="subtitulo">${esc(competencia(r.competencia))} · ${esc(unidadeNome)}</p></div><span class="selo selo--${r.dre.estadoDaCompetencia === "FECHAMENTO_HOMOLOGADO" ? "ok" : "neutro"}">${esc(r.dre.estadoDaCompetencia === "FECHAMENTO_HOMOLOGADO" ? "Competência homologada" : "Competência não homologada")}</span></header>
 ${r.versaoHomologada ? `<p class="${r.versaoHomologada.reproduz ? "nota nota--homologada" : "aviso aviso--alerta"}" data-versao-homologada="${r.versaoHomologada.numero}">Versão homologada nº ${r.versaoHomologada.numero} (${esc(dataBR(r.versaoHomologada.decididoEm))}, metodologia ${esc(r.versaoHomologada.metodologiaVersao)}). ${r.versaoHomologada.reproduz ? "A apuração atual reproduz exatamente esta versão." : "A apuração atual difere da versão homologada: os valores abaixo são os da VERSÃO HOMOLOGADA; a diferença exige revisão formal."}</p>` : ""}
 <section class="resumo" aria-label="Resumo">
   ${["FATURAMENTO_BRUTO_PROPRIO", "RECEITA_LIQUIDA_COMERCIAL", "RESULTADO_GERENCIAL"].map((c) => `<article class="card card--sec"><h3>${esc(L[c].nome.replace(/^\([^)]*\)\s*/, ""))}</h3><p>${valor(L[c].valorCentavos)}</p>${selo(L[c].situacao)}</article>`).join("")}
 </section>
 ${barraCadaCem(r.cadaCem)}
-<section class="card" aria-labelledby="t-dre"><h2 id="t-dre">Demonstrativo</h2>
-  <ol class="dre">${linhas.map((l) => `<li class="dre-linha${subtotal(l.codigo) ? " dre-linha--subtotal" : ""}" data-codigo="${esc(l.codigo)}">
+<section class="card card--dre" aria-labelledby="t-dre"><div class="card-topo"><h2 id="t-dre">Demonstrativo</h2><p class="nota">Valores e % do faturamento bruto. Abra uma linha para ver a composição.</p></div>
+  <ol class="dre">${linhas.map((l) => `<li class="dre-linha${subtotal(l.codigo) ? " dre-linha--subtotal" : ""}${l.codigo === "RESULTADO_GERENCIAL" ? " dre-linha--resultado" : ""}" data-codigo="${esc(l.codigo)}">
     ${l.componentes.length ? `<button type="button" class="no-alternar" aria-expanded="false" aria-controls="dre-${esc(l.codigo)}" data-alternar>` : '<div class="no-folha">'}
       <span class="no-nome">${esc(l.nome)}</span>${valor(l.valorCentavos)}<span class="no-pct">${esc(percentual(l.percentualDoBruto))}</span>${selo(l.situacao)}
     ${l.componentes.length ? "</button>" : "</div>"}
@@ -128,10 +140,10 @@ export function barraCadaCem(cc) {
   const positivos = cc.grupos.filter((g) => g.centesimosDePonto > 0);
   return `<section class="card barra-cem" aria-label="Para onde vai cada R$ 100">
   <h2>Para onde vai cada R$ 100 faturados?</h2>
-  <div class="barra" role="img" aria-label="${esc(positivos.map((g) => `${NOMES_GRUPO[g.codigo]} ${percentual(g.centesimosDePonto)}`).join(", "))}">${positivos.map((g) => `<span class="segmento segmento--${esc(g.codigo.toLowerCase())}" data-peso="${g.centesimosDePonto}"></span>`).join("")}</div>
+  <div class="barra" role="img" aria-label="${esc(positivos.map((g) => `${NOMES_GRUPO[g.codigo]} ${percentual(g.centesimosDePonto)}`).join(", "))}">${positivos.map((g) => `<span class="segmento segmento--${esc(g.codigo.toLowerCase())}" data-peso="${g.centesimosDePonto}" title="${esc(`${NOMES_GRUPO[g.codigo]}: ${percentual(g.centesimosDePonto)}`)}"></span>`).join("")}</div>
   ${cc.prejuizo ? '<p class="aviso aviso--erro">Prejuízo: os componentes consomem mais que o faturamento; o resultado aparece como parte negativa.</p>' : ""}
-  <ul class="legenda">${cc.grupos.map((g) => `<li><span class="ponto segmento--${esc(g.codigo.toLowerCase())}"></span>${esc(NOMES_GRUPO[g.codigo])}: <strong class="${g.centesimosDePonto < 0 ? "valor--negativo" : ""}">${esc(percentual(g.centesimosDePonto))}</strong> <span class="nota" title="Exato e diferença de arredondamento">(${esc(moeda(g.valorCentavos))}; ajuste de arredondamento ${esc(String(g.diferencaDeArredondamentoMilionesimos ?? 0))} milionésimos de ponto)</span>${g.acimaDeCem ? ' <span class="selo selo--alerta">acima de 100%</span>' : ""}</li>`).join("")}</ul>
-  <p class="nota">${esc(cc.regra)}</p>
+  <ul class="legenda">${cc.grupos.map((g) => `<li${g.codigo === "RESULTADO_GERENCIAL" ? ' class="legenda-resultado"' : ""}><span class="ponto segmento--${esc(g.codigo.toLowerCase())}" aria-hidden="true"></span><span class="legenda-nome">${esc(NOMES_GRUPO[g.codigo])}</span><strong class="legenda-pct${g.centesimosDePonto < 0 ? " valor--negativo" : ""}">${esc(percentual(g.centesimosDePonto))}</strong><span class="legenda-valor">${esc(moeda(g.valorCentavos))}</span>${g.acimaDeCem ? '<span class="selo selo--alerta">acima de 100%</span>' : ""}</li>`).join("")}</ul>
+  <details class="tecnico"><summary>Como os percentuais são arredondados</summary><p class="nota">${esc(cc.regra)}</p><ul class="mini">${cc.grupos.map((g) => `<li>${esc(NOMES_GRUPO[g.codigo])}: ajuste de arredondamento ${esc(String(g.diferencaDeArredondamentoMilionesimos ?? 0))} milionésimos de ponto</li>`).join("")}</ul></details>
 </section>`;
 }
 
