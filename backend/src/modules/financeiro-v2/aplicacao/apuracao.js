@@ -72,6 +72,11 @@ export function operacoesDeApuracao(b) {
         return {
           competencia: comp, impressao: r.impressao, faturamentoBruto: r.indicadores.FATURAMENTO_BRUTO_PROPRIO,
           faturamentoLiquidoGerencial: r.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL, resultadoGerencial: r.indicadores.RESULTADO_GERENCIAL, cadaCem: r.cadaCem,
+          receitaLiquidaComercial: r.indicadores.RECEITA_LIQUIDA_COMERCIAL,
+          // doc 39: os quatro números da Visão Geral saem do MESMO cálculo da DRE (a tela não faz conta).
+          deducoesComerciaisCentavos: r.indicadores.DEDUCOES_COMERCIAIS?.valorCentavos ?? null,
+          custosEDespesasCentavos: r.indicadores.RECEITA_LIQUIDA_COMERCIAL?.valorCentavos != null && r.indicadores.RESULTADO_GERENCIAL?.valorCentavos != null
+            ? r.indicadores.RECEITA_LIQUIDA_COMERCIAL.valorCentavos - r.indicadores.RESULTADO_GERENCIAL.valorCentavos : null,
           fonteDaApresentacao: r.fonteDaApresentacao, versaoHomologada: r.versaoHomologada ? { numero: r.versaoHomologada.numero, decididoEm: r.versaoHomologada.decididoEm, reproduz: r.versaoHomologada.reproduz } : null,
         };
       });
