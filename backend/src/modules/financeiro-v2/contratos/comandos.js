@@ -474,9 +474,10 @@ export function validarCorrespondencia(e) {
 }
 
 export function validarDecisaoConciliacao(e) {
-  semCamposDesconhecidos(e, ["correspondenciaId", "justificativa", "evidenciaDocumentoIds"], "decisao");
+  semCamposDesconhecidos(e, ["correspondenciaId", "justificativa", "evidenciaDocumentoIds", "baixar"], "decisao");
   const evidencias = e.evidenciaDocumentoIds === undefined ? [] : [...new Set(exigirLista(e.evidenciaDocumentoIds, "evidenciaDocumentoIds", { min: 1, max: 20 }).map((x, i) => exigirUuid(x, `evidenciaDocumentoIds[${i}]`)))];
-  return { correspondenciaId: exigirUuid(e.correspondenciaId, "correspondenciaId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500, opcional: true }), evidenciaDocumentoIds: evidencias };
+  // doc 33: "baixar" = ao confirmar conta × saída do extrato, dá baixa na conta na MESMA transação (nunca por padrão).
+  return { correspondenciaId: exigirUuid(e.correspondenciaId, "correspondenciaId"), justificativa: exigirTexto(e.justificativa, "justificativa", { max: 500, opcional: true }), evidenciaDocumentoIds: evidencias, baixar: e.baixar === true };
 }
 
 /**

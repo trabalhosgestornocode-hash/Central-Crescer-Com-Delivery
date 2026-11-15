@@ -25,6 +25,7 @@ import { baseNaTransacao } from "./base.js";
 import { operacoesDeCaixa } from "./caixa.js";
 import { operacoesEconomicas } from "./economico.js";
 import { operacoesDeVendas } from "./vendas.js";
+import { taxasDoPeriodo } from "./taxasContratadas.js";
 import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
 
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 40);
@@ -114,6 +115,24 @@ export function operacoesDeFormacao(b) {
         comando: { data: r.dataReferencia, metodologia, receitaBrutaCentavos: bruto, descontosCentavos: d.descontosCentavos ?? null, valorCentavos: r.valorCentavos, quantidadeVendas: d.quantidadeVendas ?? null },
         extras: {}, divergencias, confianca: metodologia === "DESCONHECIDA" ? CONFIANCA.BAIXA : CONFIANCA.MEDIA, estado: metodologia === "DESCONHECIDA" ? E.AGUARDANDO_EVIDENCIA : E.PROPOSTA,
         justificativa: "Relatório AGREGADO por dia: vira receita agregada sem canal, pedido ou forma de pagamento; nada é distribuído por suposição.",
+      });
+    }
+    // doc 34: TOTAL DO PERÍODO POR CANAL (relatório de canais / desempenho por atendente). Uma receita agregada por canal,
+    // datada no último dia do período, sem pedido nem forma de pagamento inventados. Nunca convive com pedidos do mesmo
+    // canal nem com o agregado diário (sem canal) no período — a aplicação recusa (conflitoDeGranularidade).
+    for (const r of registros.filter((x) => x.tipoRegistro === "TOTAL_CANAL")) {
+      const d = r.dados;
+      const inicio = d.periodoInicio ?? r.dataReferencia;
+      const fim = d.periodoFim ?? r.dataReferencia;
+      const divergencias = [{ codigo: "TOTAL_DO_PERIODO_SEM_PEDIDOS", mensagem: `Total de ${inicio} a ${fim} por canal: valor como informado pela fonte (líquido de descontos quando a fonte assim o apura); sem pedidos, formas ou descontos por canal.` }];
+      if (d.canalDeduzidoDoAtendente) divergencias.push({ codigo: "CANAL_DEDUZIDO_DO_ATENDENTE", mensagem: `Atendente "${d.canalOriginal}" sem integração: tratado como Balcão.` });
+      if (!d.canal) divergencias.push({ codigo: "CANAL_NAO_RECONHECIDO", mensagem: `Canal "${d.canalOriginal}" não reconhecido.` });
+      saida.push({
+        operacao: OP.VENDA_AGREGADA, registro: r, competencia: r.competencia, dataOperacao: fim, natureza: "RECEITA", valorCentavos: r.valorCentavos,
+        categoriaSugerida: d.canal ? CATEGORIA_DE_VENDA[d.canal] : CATEGORIA_VENDA_AGREGADA,
+        comando: { data: fim, periodoInicio: inicio, periodoFim: fim, canal: d.canal ?? null, metodologia: "TOTAL_DO_PERIODO_POR_CANAL", receitaBrutaCentavos: r.valorCentavos, descontosCentavos: 0, valorCentavos: r.valorCentavos, quantidadeVendas: d.quantidade ?? null },
+        extras: {}, divergencias, confianca: d.canal ? CONFIANCA.MEDIA : CONFIANCA.BAIXA, estado: d.canal ? E.PROPOSTA : E.AGUARDANDO_REVISAO,
+        justificativa: "Relatório de TOTAIS POR CANAL do período: uma receita agregada por canal, sem pedidos; substituível pelos pedidos quando houver o relatório detalhado.",
       });
     }
     return saida;
@@ -296,12 +315,29 @@ export function operacoesDeFormacao(b) {
     contagem.porEstado[estado] = (contagem.porEstado[estado] ?? 0) + 1;
   }
 
-  /** Conflito agregado × por pedido do MESMO dia: nunca as duas receitas ao mesmo tempo. */
+  /**
+   * Conflito de granularidade: nunca duas receitas do mesmo fato. Agregado × por pedido do MESMO dia (como antes) e, doc 34,
+   * TOTAL DO PERÍODO POR CANAL × (pedidos daquele canal no período | agregado diário sem canal no período | outro total do
+   * mesmo canal com período sobreposto).
+   */
   async function conflitoDeGranularidade(tx, cx, proposta) {
     if (![OP.VENDA, OP.VENDA_AGREGADA].includes(proposta.operacao)) return null;
     const outra = proposta.operacao === OP.VENDA ? OP.VENDA_AGREGADA : OP.VENDA;
     const aplicadas = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: outra, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
-    return aplicadas[0] ?? null;
+    if (aplicadas[0]) return aplicadas[0];
+    const periodo = (p) => (p.operacao === OP.VENDA_AGREGADA && p.comando?.periodoInicio ? p.comando : null);
+    const canalDe = (p) => (p.operacao === OP.VENDA ? p.comando?.canal ?? null : p.comando?.canal ?? null);
+    const cobre = (per, data) => data >= per.periodoInicio && data <= per.periodoFim;
+    const vendas = [...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA } }), ...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } })]
+      .filter((x) => x.id !== proposta.id && x.competencia === proposta.competencia);
+    const meu = periodo(proposta);
+    for (const x of vendas) {
+      const dele = periodo(x);
+      if (meu && dele) { if (canalDe(x) === canalDe(proposta) && dele.periodoInicio <= meu.periodoFim && meu.periodoInicio <= dele.periodoFim) return x; continue; }
+      if (meu && cobre(meu, x.dataOperacao) && (x.operacao === OP.VENDA_AGREGADA || canalDe(x) === canalDe(proposta))) return x;
+      if (dele && cobre(dele, proposta.dataOperacao) && (proposta.operacao === OP.VENDA_AGREGADA || canalDe(x) === canalDe(proposta))) return x;
+    }
+    return null;
   }
 
   async function aplicar(tx, cx, p) {
@@ -311,6 +347,15 @@ export function operacoesDeFormacao(b) {
     if (p.operacao === OP.VENDA) {
       const r = await n.registrarVenda(cx, c);
       efeitos.push({ tipo: TIPO.VENDA, id: r.venda.id }, { tipo: TIPO.LANCAMENTO, id: r.lancamento.id }, ...r.recebiveis.map((x) => ({ tipo: TIPO.RECEBIVEL, id: x.id })), ...r.movimentacoes.map((x) => ({ tipo: TIPO.MOVIMENTACAO, id: x.id })));
+    } else if (p.operacao === OP.VENDA_AGREGADA && c.metodologia === "TOTAL_DO_PERIODO_POR_CANAL") {
+      // doc 34: total do período por canal — receita do canal, uma vez, rastreável à proposta e ao relatório.
+      await b.exigirCompetenciaEditavel(tx, cx, p.competencia);
+      if (!c.canal) falhar(CODIGO.OPERACAO_INVALIDA, "Total sem canal reconhecido não gera receita por canal.");
+      const receita = await b.lancar(tx, cx, await b.categoriaDoSistema(tx, cx, CATEGORIA_DE_VENDA[c.canal]), {
+        valorCentavos: c.receitaBrutaCentavos, moeda: "BRL", descricao: `Vendas ${c.canal} de ${c.periodoInicio} a ${c.periodoFim} (total do período, fonte agregada)`, dataOperacao: c.data, competencia: p.competencia,
+        fonte: { sistema: p.fonte, idExterno: `periodo:${c.periodoInicio}:${c.periodoFim}:${c.canal}` }, canal: c.canal, origem: { tipo: TIPO.PROPOSTA, id: p.id },
+      });
+      efeitos.push({ tipo: TIPO.LANCAMENTO, id: receita.id });
     } else if (p.operacao === OP.VENDA_AGREGADA) {
       await b.exigirCompetenciaEditavel(tx, cx, p.competencia);
       const receita = await b.lancar(tx, cx, await b.categoriaDoSistema(tx, cx, CATEGORIA_VENDA_AGREGADA), {
@@ -330,6 +375,9 @@ export function operacoesDeFormacao(b) {
       }
     } else if (p.operacao === OP.PAGAMENTO_STONE) {
       if (!c.vendaId) falhar(CODIGO.OPERACAO_INVALIDA, "Transação sem venda vinculada: não há o que aplicar.");
+      // doc 36: taxas desta importação já reconhecidas pelo total do período → aplicar por venda contaria a tarifa duas vezes.
+      const doPeriodo = (await taxasDoPeriodo(tx, cx, p.importacaoId, p.competencia)).ativa;
+      if (doPeriodo) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "As taxas Stone desta importação já estão na DRE pelo total do período: estorne-as (com justificativa) antes de aplicar por venda.", { lancamentoId: doPeriodo.id });
       const r = await n.registrarPagamentoDeVenda(cx, { vendaId: c.vendaId, forma: c.forma, processador: c.processador, valorCentavos: c.valorCentavos, dataPagamento: c.dataPagamento, fonte: c.fonte });
       efeitos.push({ tipo: TIPO.PAGAMENTO_VENDA, id: r.pagamento.id }, { tipo: TIPO.RECEBIVEL, id: r.recebivel.id });
       for (const t of c.taxas) {
@@ -406,6 +454,8 @@ export function operacoesDeFormacao(b) {
       const c = validarDecisao(entrada);
       return b.executar(ctx, ACAO.APLICAR, async (cx, tx) => {
         const previa = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
+        // doc 34: receitas de venda da competência em fila (o total do período cobre vários dias), depois a do dia.
+        if ([OP.VENDA, OP.VENDA_AGREGADA, OP.PAGAMENTO_STONE].includes(previa.operacao)) await tx.travar(cx, `formacao-competencia:${previa.competencia}`, "EXCLUSIVA");
         await tx.travar(cx, `formacao-dia:${previa.dataOperacao}`, "EXCLUSIVA");
         const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
         if (p.estado === E.APLICADA) return { proposta: p, efeitos: p.efeitos, repetido: true };
@@ -535,15 +585,35 @@ export function operacoesDeFormacao(b) {
       });
     },
 
-    /** Candidatas conta a pagar × saída bancária (valor igual ao saldo, saída depois da emissão). Sempre FRACA. */
+    /**
+     * Candidatas conta a pagar × saída bancária (valor igual ao saldo, saída depois da emissão). FRACA por padrão.
+     * doc 33: FORTE só quando o par é INEQUÍVOCO — a saída casa com uma única conta, a conta com uma única saída — E o
+     * histórico do extrato traz o identificador da conta (NF, boleto) ou o nome completo do beneficiário. Forte não é
+     * automática: continua exigindo a confirmação (que pode dar a baixa na mesma transação).
+     */
     gerarCandidatasObrigacaoMovimentacao(ctx, entrada) {
       const p = validarPeriodo(entrada);
       return b.executar(ctx, ACAO.CONCILIAR, async (cx, tx) => {
         const saidas = await tx.listar(cx, TIPO.MOVIMENTACAO, { predicado: (m) => m.situacao === SITUACAO_MOVIMENTACAO.VALIDA && m.sentido === "SAIDA" && m.alocadoCentavos === 0 && !m.transferenciaId && m.dataEfetiva >= p.periodoInicio && m.dataEfetiva <= p.periodoFim && m.documentoId });
         const abertas = await tx.listar(cx, TIPO.OBRIGACAO, { predicado: (o) => [SITUACAO_TITULO.ABERTA, SITUACAO_TITULO.PARCIAL].includes(o.situacao) });
+        const nomes = new Map((await tx.listar(cx, TIPO.CONTRAPARTE)).map((x) => [x.id, x.nome]));
+        const norm = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+        const casa = (m, o) => o.saldoCentavos === m.valorCentavos && o.dataEmissao <= m.dataEfetiva;
+        const evidenciaNoHistorico = (m, o) => {
+          const h = norm(m.descricao);
+          const ident = norm(o.identificador).replace(/ /g, "");
+          if (ident.length >= 3 && h.replace(/ /g, "").includes(ident)) return "IDENTIFICADOR_NO_HISTORICO";
+          const palavras = norm(nomes.get(o.contraparteId)).split(" ").filter((x) => x.length >= 3);
+          const doHistorico = new Set(h.split(" "));
+          return palavras.length && palavras.every((x) => doHistorico.has(x)) ? "BENEFICIARIO_NO_HISTORICO" : null;
+        };
         let criadas = 0;
         for (const m of saidas) {
-          for (const o of abertas.filter((x) => x.saldoCentavos === m.valorCentavos && x.dataEmissao <= m.dataEfetiva)) {
+          const daSaida = abertas.filter((x) => casa(m, x));
+          for (const o of daSaida) {
+            const evidencia = evidenciaNoHistorico(m, o);
+            const inequivoca = daSaida.length === 1 && saidas.filter((y) => casa(y, o)).length === 1;
+            const forte = Boolean(evidencia) && inequivoca;
             const chave = `${RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO}|${o.id}|${m.id}`;
             if (await tx.buscarPorChave(cx, TIPO.CORRESPONDENCIA, chave)) continue;
             // 06D: a competência da conciliação é a mais recente; se homologada, a candidata não nasce.
@@ -552,9 +622,9 @@ export function operacoesDeFormacao(b) {
             if ((await b.competenciaAtual(tx, cx, comps[1]))?.estado === "FECHAMENTO_HOMOLOGADO") continue;
             await b.criar(tx, cx, TIPO.CORRESPONDENCIA, {
               ladoA: [{ tipo: TIPO.OBRIGACAO, id: o.id, valorCentavos: m.valorCentavos }], ladoB: [{ tipo: TIPO.MOVIMENTACAO, id: m.id, valorCentavos: m.valorCentavos }],
-              evidenciaDocumentoIds: [...new Set([m.documentoId, ...(o.documentoIds ?? [])])], justificativa: "Proposta automática (SALDO_IGUAL_A_SAIDA).",
+              evidenciaDocumentoIds: [...new Set([m.documentoId, ...(o.documentoIds ?? [])])], justificativa: forte ? `Proposta automática inequívoca (saldo igual à saída; ${evidencia === "IDENTIFICADOR_NO_HISTORICO" ? "identificador da conta" : "beneficiário"} no histórico do extrato).` : "Proposta automática (SALDO_IGUAL_A_SAIDA).",
               diferencaCentavos: 0, situacao: SITUACAO_CORRESPONDENCIA.CANDIDATA, responsavelId: null, decididoEm: null, justificativaDecisao: null,
-              relacao: RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO, regra: "SALDO_IGUAL_A_SAIDA", forca: "FRACA", chaveIdempotencia: chave, impressao: null,
+              relacao: RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO, regra: forte ? `SALDO_IGUAL_E_${evidencia}` : "SALDO_IGUAL_A_SAIDA", forca: forte ? "FORTE" : "FRACA", chaveIdempotencia: chave, impressao: null,
               competencia: comps[0], competenciaDaConciliacao: comps[1],
             });
             criadas += 1;

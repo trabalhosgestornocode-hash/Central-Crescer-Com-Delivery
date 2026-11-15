@@ -688,6 +688,52 @@ export function calendarioFinanceiro(d, hoje, { mes }) {
   };
 }
 
+// -------------------------------------------------------------------------------------------- dinheiro em espécie
+
+/**
+ * DINHEIRO EM ESPÉCIE no período (doc 33). Não é canal nem receita: é a forma de pagamento "dinheiro" e o seu caminho no
+ * caixa físico. Separa o que costuma ser confundido:
+ *   - vendasEmDinheiro: pagamentos de venda na forma DINHEIRO pela DATA DO PAGAMENTO (o que o cliente pagou em espécie);
+ *   - recebidoNoCaixa: desses, o que efetivamente ENTROU no caixa físico (movimento ligado ao pagamento);
+ *   - semEntradaNoCaixa: venda em dinheiro sem entrada no caixa (pendência de conferência, nunca presumida);
+ *   - outrasEntradas / suprimentos: entradas no caixa que não são venda (não viram receita);
+ *   - depositosNoBanco: saídas do caixa para conta bancária própria (transferência interna, nunca receita nem despesa);
+ *   - sangriasERetiradas: saídas do caixa sem destino em conta própria; pagamentosEmEspecie: demais saídas.
+ * Movimentos estornados não contam; transferência interna nunca é receita. Por dia, para conferir com a contagem do caixa.
+ */
+export function dinheiroEmEspecie(d, { inicio, fim }) {
+  const tipoDe = new Map((d.contas ?? []).map((c) => [c.id, c.tipo]));
+  const transf = new Map((d.transferencias ?? []).map((t) => [t.id, t]));
+  const noPeriodo = (data) => Boolean(data) && data >= inicio && data <= fim;
+  const pagamentos = (d.pagamentosEmDinheiro ?? d.pagamentos ?? []).filter((p) => p.forma === "DINHEIRO" && noPeriodo(p.dataPagamento));
+  const valido = (p) => subtrair(p.valorCentavos, p.estornadoCentavos ?? 0);
+  const movs = (d.movimentacoes ?? []).filter((m) => !m.resumoDiario && tipoDe.get(m.contaId) === TIPO_CONTA.CAIXA_FISICO
+    && m.situacao === SITUACAO_MOVIMENTACAO.VALIDA && noPeriodo(m.dataEfetiva));
+  const destinoBancario = (m) => { const t = m.transferenciaId ? transf.get(m.transferenciaId) : null; return t ? tipoDe.get(m.sentido === SENTIDO.SAIDA ? t.contaDestinoId : t.contaOrigemId) === TIPO_CONTA.BANCARIA : false; };
+  const grupo = (m) => {
+    if (m.sentido === SENTIDO.ENTRADA) return m.pagamentoId ? "recebidoNoCaixa" : m.transferenciaId || /^Suprimento:/.test(m.descricao ?? "") ? "suprimentos" : "outrasEntradas";
+    if (m.transferenciaId && destinoBancario(m)) return "depositosNoBanco";
+    if (m.transferenciaId || /^Sangria:/.test(m.descricao ?? "")) return "sangriasERetiradas";
+    return "pagamentosEmEspecie";
+  };
+  const zerado = () => ({ recebidoNoCaixa: 0, suprimentos: 0, outrasEntradas: 0, depositosNoBanco: 0, sangriasERetiradas: 0, pagamentosEmEspecie: 0 });
+  const totais = zerado();
+  const porDia = new Map();
+  const dia = (data) => { if (!porDia.has(data)) porDia.set(data, { data, vendasEmDinheiro: 0, ...zerado() }); return porDia.get(data); };
+  for (const m of movs) { const g = grupo(m); totais[g] = somar(totais[g], m.valorCentavos); dia(m.dataEfetiva)[g] = somar(dia(m.dataEfetiva)[g], m.valorCentavos); }
+  const vendas = somarLista(pagamentos, valido);
+  for (const p of pagamentos) dia(p.dataPagamento).vendasEmDinheiro = somar(dia(p.dataPagamento).vendasEmDinheiro, valido(p));
+  const semEntrada = pagamentos.filter((p) => !p.movimentacaoId && valido(p) > 0);
+  const temCaixa = (d.contas ?? []).some((c) => c.tipo === TIPO_CONTA.CAIXA_FISICO);
+  return {
+    periodo: { inicio, fim }, situacao: !pagamentos.length && !movs.length ? "SEM_REGISTROS" : "CALCULADO", temCaixaFisico: temCaixa,
+    vendasEmDinheiroCentavos: vendas, ...Object.fromEntries(Object.entries(totais).map(([k, v]) => [`${k}Centavos`, v])),
+    semEntradaNoCaixa: { quantidade: semEntrada.length, valorCentavos: somarLista(semEntrada, valido) },
+    porDia: [...porDia.values()].sort((a, b) => a.data.localeCompare(b.data)),
+    observacao: "Dinheiro é forma de pagamento, não canal: as vendas em dinheiro já estão no faturamento do canal (Balcão, iFood ou Anota Aí). Depósito do caixa no banco é transferência interna — nunca receita nova.",
+  };
+}
+
 // -------------------------------------------------------------------------------------------- resumo para a Visão Geral
 
 /**
@@ -722,5 +768,6 @@ export function resumoFinanceiro(d, hoje, { competencia }) {
       saldoProjetado30DiasCentavos: proximos.projecao.saldoProjetadoCentavos, parcial: proximos.projecao.parcial, motivos: proximos.projecao.motivos,
     },
     pendencias: { movimentacoesSemVinculo: caixaEBancos(d, hoje, { inicio, fim, pagina: 1, tamanho: 1 }).pendencias.semVinculo, recorrenciasSemRegistro: pagar.recorrenciasSemRegistro.length },
+    dinheiroEmEspecie: dinheiroEmEspecie(d, { inicio, fim }),
   };
 }

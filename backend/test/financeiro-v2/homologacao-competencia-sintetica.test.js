@@ -46,8 +46,8 @@ test("08 — competência sintética completa: vendas, recebimentos, despesas, c
   const venda = (canal, bruto, pagamentos, extra = {}) => n.registrarVenda(c, { canal, dataVenda: "2026-09-10", brutoCentavos: bruto, fonte: { sistema: "MANUAL", idExterno: `HS-${(k += 1)}` }, pagamentos, ...extra });
   const dinheiro = (v) => ({ forma: "DINHEIRO", valorCentavos: v, contaId: caixa.id });
 
-  // Configurações: categorias que o plano-modelo não tem (administração de categorias).
-  for (const [codigo, nome] of [["ALUGUEL", "Aluguel"], ["ENERGIA", "Energia elétrica"], ["AGUA", "Água"], ["SERVICOS_CONTABEIS", "Serviços contábeis"]]) {
+  // Configurações: categoria que o plano-modelo não tem (administração de categorias). Aluguel, energia e água já vêm no ACAITERIA.
+  for (const [codigo, nome] of [["SERVICOS_CONTABEIS", "Serviços contábeis"]]) {
     await n.registrarCategoria(c, { codigo, nome, paiCodigo: "DESPESAS_ADMINISTRATIVAS_GERAIS" });
   }
   // Saldos de referência.

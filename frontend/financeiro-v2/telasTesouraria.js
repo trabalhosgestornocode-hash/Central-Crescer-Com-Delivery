@@ -54,6 +54,7 @@ export function contasAPagar(r, f = {}, ctx = {}) {
 <label>Fornecedor existente <select name="fornecedor">${opcao("", "— novo fornecedor —", "")}${o.fornecedores.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
 <label>Ou novo fornecedor <input name="fornecedorNovo" maxlength="120"></label>
 <label>Descrição <input name="descricao" maxlength="200" required></label>
+<label>Nº do documento (NF, boleto) <input name="identificador" maxlength="60" placeholder="opcional: ajuda a baixar pelo extrato"></label>
 <label>Valor (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" required></label>
 <label>Categoria <select name="categoria" required>${o.categorias.map((x) => opcao(x.codigo, x.nome, "")).join("")}</select></label>
 <label>Competência <input type="month" name="competencia" value="${esc(f.competencia ?? "")}" required></label>
@@ -385,6 +386,20 @@ ${fl.semPrevisao.quantidade ? `<section class="card" aria-labelledby="t-semprev"
 }
 
 // ------------------------------------------------------------------------------------- cards da Visão Geral (06A)
+/**
+ * Dinheiro em espécie (doc 33): forma de pagamento, não canal. Recebido no caixa × vendas em dinheiro × saídas do caixa,
+ * pela data do pagamento/movimento. Sem registros fica "sem registros" (nunca R$ 0,00 confirmado).
+ */
+function cardDinheiroEmEspecie(d, link) {
+  if (!d) return "";
+  const linha = (rotulo, v, nota = "") => `<li><span>${esc(rotulo)}</span> <strong>${esc(moeda(v))}</strong>${nota ? ` <span class="nota">${esc(nota)}</span>` : ""}</li>`;
+  const corpo = d.situacao === "SEM_REGISTROS"
+    ? '<p><span class="valor valor--desconhecido">Sem registros em dinheiro</span></p>'
+    : `<p>${valor(d.recebidoNoCaixaCentavos)}</p><p class="nota">Entrou no caixa físico pelas vendas em dinheiro na competência.</p>
+  <ul class="mini">${linha("Vendas pagas em dinheiro", d.vendasEmDinheiroCentavos, "pela data do pagamento")}${linha("Depositado no banco", d.depositosNoBancoCentavos, "transferência interna, não é receita")}${linha("Sangrias e retiradas", d.sangriasERetiradasCentavos)}${linha("Pagamentos em espécie", d.pagamentosEmEspecieCentavos)}${d.suprimentosCentavos || d.outrasEntradasCentavos ? linha("Suprimentos e outras entradas", d.suprimentosCentavos + d.outrasEntradasCentavos, "não são venda") : ""}</ul>
+  ${d.semEntradaNoCaixa.quantidade ? `<p class="nota"><span class="valor--negativo">${esc(String(d.semEntradaNoCaixa.quantidade))} venda(s) em dinheiro sem entrada no caixa: ${esc(moeda(d.semEntradaNoCaixa.valorCentavos))}</span> — conferir com a contagem.</p>` : ""}`;
+  return `<article class="card card--sec" data-financeiro="dinheiro-em-especie"><h3>Dinheiro em espécie recebido</h3>${corpo}<p class="nota">Dinheiro é forma de pagamento: já está no faturamento do canal, não é canal a mais.</p>${link("caixa-e-bancos", "Ver caixa por dia")}</article>`;
+}
 /** Cards financeiros da Visão Geral a partir do resumo central. Desconhecido nunca vira R$ 0,00. */
 export function cardsFinanceirosDaVisaoGeral(fin) {
   const motivoSaldo = (s) => (s.situacao === "SEM_CONTA" ? "Nenhuma conta deste tipo cadastrada." : s.situacao === "DESCONHECIDO" ? "Falta saldo informado (extrato ou contagem)." : `Posição em ${dataBR(fin.dataBase)}.`);
@@ -394,6 +409,7 @@ export function cardsFinanceirosDaVisaoGeral(fin) {
   return [
     `<article class="card card--sec" data-financeiro="saldo-bancario"><h3>Saldo bancário</h3><p>${valor(fin.saldoBancario.valorCentavos)}</p><p class="nota">${esc(motivoSaldo(fin.saldoBancario))} Não é faturamento.</p>${link("caixa-e-bancos", "Ver contas")}</article>`,
     `<article class="card card--sec" data-financeiro="caixa-fisico"><h3>Caixa físico</h3><p>${valor(fin.saldoCaixaFisico.valorCentavos)}</p><p class="nota">${esc(motivoSaldo(fin.saldoCaixaFisico))}</p>${link("caixa-e-bancos", "Ver caixa")}</article>`,
+    cardDinheiroEmEspecie(fin.dinheiroEmEspecie, link),
     `<article class="card card--sec" data-financeiro="contas-a-pagar"><h3>Contas a pagar</h3><p>${semRegistros(fin.contasAPagar) ? '<span class="valor valor--desconhecido">Sem contas registradas</span>' : valor(fin.contasAPagar.saldoCentavos)}</p>${!semRegistros(fin.contasAPagar) && fin.contasAPagar.vencidoCentavos ? `<p class="nota"><span class="valor--negativo">Vencido ${esc(moeda(fin.contasAPagar.vencidoCentavos))}</span></p>` : ""}${link("contas-a-pagar", "Ver contas a pagar")}</article>`,
     `<article class="card card--sec" data-financeiro="contas-a-receber"><h3>Contas a receber</h3><p>${semRegistros(fin.contasAReceber) ? '<span class="valor valor--desconhecido">Sem títulos registrados</span>' : valor(fin.contasAReceber.saldoCentavos)}</p>${!semRegistros(fin.contasAReceber) && fin.contasAReceber.semPrevisaoCentavos ? `<p class="nota">Sem previsão confiável: ${esc(moeda(fin.contasAReceber.semPrevisaoCentavos))}</p>` : ""}${link("contas-a-receber", "Ver contas a receber")}</article>`,
     `<article class="card card--sec" data-financeiro="fluxo-de-caixa"><h3>Fluxo de caixa</h3><p>${f.realizadoNaCompetencia.movimentacoes ? valor(f.realizadoNaCompetencia.variacaoCentavos) : '<span class="valor valor--desconhecido">Sem movimentações registradas</span>'}</p><p class="nota">Realizado na competência (até ${esc(dataBR(f.realizadoNaCompetencia.ate))}). Saldo projetado em 30 dias: ${esc(moeda(f.saldoProjetado30DiasCentavos))}${f.parcial ? " (parcial)" : ""}.</p>${link("fluxo-de-caixa", "Ver fluxo")}</article>`,

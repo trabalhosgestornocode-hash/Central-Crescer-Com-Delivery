@@ -7,6 +7,7 @@
 //   - homologar: além do segundo fator, exige FV2_HOMOLOGACAO_HABILITADA=1 (matriz 24a ainda não aprovada).
 // Conceder, revogar, homologar e reabrir exigem prova de segundo fator RECENTE (adaptador + verificador do provedor).
 import { ACAO, CODIGO, ErroFinanceiro, tempo } from "../financeiro-v2/index.js";
+import { taxasDoTexto } from "../financeiro-v2/dominio/taxasContratadas.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NENHUM = "00000000-0000-4000-8000-000000000000";
@@ -100,6 +101,12 @@ export function escritasDaAbertura({ hoje = () => tempo.hojeEm(new Date()), ref 
       const h = hoje();
       return n.gerarCandidatasDeConciliacao(c, { relacao: "SAIPOS_X_STONE", periodoInicio: `${b.competencia}-01`, periodoFim: fim < h ? fim : h });
     } },
+    // doc 33: contas a pagar × saídas do extrato da competência (sugestões; forte só quando inequívoca; nada é baixado aqui).
+    "/conciliacoes/gerar-contas-a-pagar": { campos: ["competencia"], fazer: (n, c, b) => {
+      const fim = tempo.ultimoDiaDe(competenciaValida(b.competencia));
+      const h = hoje();
+      return n.gerarCandidatasObrigacaoMovimentacao(c, { periodoInicio: `${b.competencia}-01`, periodoFim: fim < h ? fim : h });
+    } },
   });
 }
 
@@ -122,9 +129,10 @@ export const ESCRITAS = Object.freeze({
   "/propostas/rejeitar": { campos: ["proposta", "justificativa"], fazer: (n, c, b) => n.rejeitarProposta(c, { propostaId: id(b.proposta), justificativa: b.justificativa }) },
   "/propostas/aplicar": { campos: ["proposta"], fazer: (n, c, b) => n.aplicarProposta(c, { propostaId: id(b.proposta) }) },
   // `chave` (UUID do formulário): o MESMO envio repetido (clique duplo, rede) devolve o registro já gravado, sem duplicar.
-  "/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {
+  "/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento", "identificador", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {
     ...(b.fornecedor ? { contraparteId: id(b.fornecedor) } : { contraparteNova: { tipo: "FORNECEDOR", nome: String(b.fornecedorNovo ?? "").slice(0, 120) } }),
     valorOriginalCentavos: centavos(b.valor), categoria: b.categoria, descricao: b.descricao, competencia: b.competencia, dataEmissao: b.dataEmissao, vencimento: b.vencimento,
+    ...(b.identificador ? { identificador: String(b.identificador).slice(0, 60) } : {}),
     ...(b.chave ? { fonte: { sistema: "MANUAL", idExterno: `formulario:${id(b.chave)}` } } : {}),
   }) },
   "/obrigacoes/vincular-extrato": { campos: ["obrigacao", "movimentacao", "versao", "valor", "documento", "justificativa", "pagamentoAntecipado"], fazer: (n, c, b) => n.vincularPagamentoDoExtrato(c, {
@@ -136,7 +144,8 @@ export const ESCRITAS = Object.freeze({
   "/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (n, c, b) => n.reclassificarLancamento(c, {
     lancamentoId: id(b.lancamento), categoria: b.categoria, justificativa: b.justificativa, versaoEsperada: inteiro(b.versaoEsperada), ...(b.documento ? { documentoId: id(b.documento) } : {}),
   }) },
-  "/conciliacoes/confirmar": { campos: ["correspondencia", "justificativa"], fazer: (n, c, b) => n.confirmarConciliacao(c, { correspondenciaId: id(b.correspondencia), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
+  // doc 33: "baixar" (caixa marcada) confirma a conta × saída e dá baixa na conta na MESMA transação.
+  "/conciliacoes/confirmar": { campos: ["correspondencia", "justificativa", "baixar"], fazer: (n, c, b) => n.confirmarConciliacao(c, { correspondenciaId: id(b.correspondencia), ...(b.justificativa ? { justificativa: b.justificativa } : {}), ...(b.baixar === "1" || b.baixar === true ? { baixar: true } : {}) }) },
   "/conciliacoes/rejeitar": { campos: ["correspondencia", "justificativa"], fazer: (n, c, b) => n.rejeitarCorrespondencia(c, { correspondenciaId: id(b.correspondencia), justificativa: b.justificativa }) },
   "/pendencias/documentar": { campos: ["competencia", "chave", "descricao", "impacto", "decisao", "documentacaoFaltante", "justificativa"], fazer: (n, c, b) => n.documentarPendenciaDoFechamento(c, {
     competencia: b.competencia, ...(b.justificativa ? { justificativa: b.justificativa } : {}),
@@ -152,6 +161,14 @@ export const ESCRITAS = Object.freeze({
   }) },
   "/permissoes/conceder": { campos: ["usuario", "justificativa", ...Object.values(ACAO).map((a) => `acao_${a.split(".")[1]}`)], sensivel: () => ACAO.CONCEDER, fazer: (n, c, b) => n.concederAcesso(c, { usuarioId: id(b.usuario), acoes: acoesMarcadas(b), justificativa: b.justificativa }) },
   "/permissoes/revogar": { campos: ["usuario", "justificativa", ...Object.values(ACAO).map((a) => `acao_${a.split(".")[1]}`)], sensivel: () => ACAO.REVOGAR, fazer: (n, c, b) => n.revogarAcesso(c, { usuarioId: id(b.usuario), ...(acoesMarcadas(b).length ? { acoes: acoesMarcadas(b) } : {}), justificativa: b.justificativa }) },
+  // doc 35: tabela de taxas contratadas (uma linha por taxa: "DEBITO;MASTERCARD;2,15"), com vigência e fonte documental.
+  "/configuracoes/taxas-contratadas": { campos: ["processador", "vigenciaInicio", "vigenciaFim", "fonte", "prazoDeRecebimento", "taxas", "justificativa"], fazer: (n, c, b) => n.registrarTaxasContratadas(c, {
+    processador: b.processador || "STONE", vigenciaInicio: b.vigenciaInicio, ...(b.vigenciaFim ? { vigenciaFim: b.vigenciaFim } : {}), fonte: b.fonte,
+    ...(b.prazoDeRecebimento ? { prazoDeRecebimento: b.prazoDeRecebimento } : {}), taxas: taxasDoTexto(b.taxas), justificativa: b.justificativa,
+  }) },
+  // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
+  "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },
+  "/importacao/estornar-taxas": { campos: ["importacao", "competencia", "justificativa"], fazer: (n, c, b) => n.estornarTaxasDoPeriodo(c, { importacaoId: id(b.importacao), competencia: b.competencia, justificativa: b.justificativa }) },
   "/configuracoes/unidade": { campos: ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.configurarUnidade(c, semVazios(b, ["nomeExibicao", "identificacaoEmpresa", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/canal": { campos: ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarCanalOuProcessador(c, semVazios(b, ["papel", "codigo", "codigoBase", "nome", "situacao", "observacao", "justificativa"])) },
   "/configuracoes/conta": { campos: ["conta", "nome", "ativa", "justificativa"], fazer: (n, c, b) => n.alterarContaFinanceira(c, { contaId: id(b.conta), ...(b.nome ? { nome: b.nome } : {}), ...(b.ativa === "true" || b.ativa === "false" ? { ativa: b.ativa === "true" } : {}), justificativa: b.justificativa }) },

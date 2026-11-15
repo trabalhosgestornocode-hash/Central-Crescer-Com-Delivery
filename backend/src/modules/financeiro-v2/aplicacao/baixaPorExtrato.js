@@ -42,12 +42,13 @@ export const antecipacaoDe = (mov, o) => (o.dataEmissao && mov.dataEfetiva < o.d
 const chaveDoVinculo = (movId, alocacoes) => `vinculo-extrato:${movId}:${alocacoes.map((a) => `${a.obrigacaoId}=${a.valorCentavos}`).sort().join(",")}`;
 const lados = (c) => [...(c.ladoA ?? []), ...(c.ladoB ?? [])];
 
+/** Conciliação CONFIRMADA, com evidência, que liga esta saída a esta conta (prova do vínculo sem documento novo). */
+async function conciliacaoComprovada(tx, cx, movId, obrigacaoId) {
+  const cs = await tx.listar(cx, TIPO.CORRESPONDENCIA, { onde: { situacao: "CONFIRMADA" } });
+  return cs.find((c) => lados(c).some((r) => r.tipo === TIPO.MOVIMENTACAO && r.id === movId) && lados(c).some((r) => r.tipo === TIPO.OBRIGACAO && r.id === obrigacaoId) && (c.evidenciaDocumentoIds ?? []).length > 0) ?? null;
+}
+
 export function operacoesDeBaixaPorExtrato(b) {
-  /** Conciliação CONFIRMADA, com evidência, que liga esta saída a esta conta (prova do vínculo sem documento novo). */
-  async function conciliacaoComprovada(tx, cx, movId, obrigacaoId) {
-    const cs = await tx.listar(cx, TIPO.CORRESPONDENCIA, { onde: { situacao: "CONFIRMADA" } });
-    return cs.find((c) => lados(c).some((r) => r.tipo === TIPO.MOVIMENTACAO && r.id === movId) && lados(c).some((r) => r.tipo === TIPO.OBRIGACAO && r.id === obrigacaoId) && (c.evidenciaDocumentoIds ?? []).length > 0) ?? null;
-  }
   async function historicoDaSaida(tx, cx, m) {
     const liqs = (await tx.listar(cx, TIPO.LIQUIDACAO, { onde: { movimentacaoId: m.id } })).filter((l) => l.situacao !== SITUACAO_LIQUIDACAO.ESTORNADA);
     const corr = (await tx.listar(cx, TIPO.CORRESPONDENCIA)).filter((c) => lados(c).some((r) => r.tipo === TIPO.MOVIMENTACAO && r.id === m.id));
@@ -129,80 +130,89 @@ export function operacoesDeBaixaPorExtrato(b) {
     /** Vincula a saída existente às contas (baixa). Transacional, idempotente, protegido por trava, versão e escopo. */
     vincularPagamentoDoExtrato(ctx, entrada) {
       const c = validarVinculoDeExtrato(entrada);
-      return b.executar(ctx, ACAO.VINCULAR_PAGAMENTO, async (cx, tx) => {
-        // Trava EXCLUSIVA na saída: duas sessões nunca consomem o mesmo saldo alocável (a outra espera e vê a versão nova).
-        await tx.travar(cx, `movimentacao:${c.movimentacaoId}`, "EXCLUSIVA");
-        const chave = chaveDoVinculo(c.movimentacaoId, c.alocacoes);
-        const ja = await tx.buscarPorChave(cx, TIPO.LIQUIDACAO, `${chave}#${c.alocacoes[0].obrigacaoId}`);
-        if (ja) {
-          const liquidacoes = [];
-          for (const a of c.alocacoes) liquidacoes.push(await tx.buscarPorChave(cx, TIPO.LIQUIDACAO, `${chave}#${a.obrigacaoId}`));
-          return { repetido: true, liquidacoes, movimentacao: await tx.obter(cx, TIPO.MOVIMENTACAO, c.movimentacaoId) };
-        }
-        if (!c.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a prévia e confirme a baixa.");
-        const mov = await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, c.movimentacaoId, "Saída bancária");
-        if (mov.versao !== c.versaoMovimentacao) {
-          falhar(CODIGO.CONFLITO_VERSAO, "A saída mudou desde a prévia (outra baixa, conciliação ou correção). Atualize e confira de novo.", { versaoAtual: mov.versao, versaoEsperada: c.versaoMovimentacao });
-        }
-        const inelegivel = motivoDeSaidaInelegivel(mov);
-        if (inelegivel) falhar(/integralmente/.test(inelegivel) ? CODIGO.LIQUIDACAO_EXCEDE_MOVIMENTACAO : CODIGO.LIQUIDACAO_INCOMPATIVEL, inelegivel);
-        const disponivel = subtrair(mov.valorCentavos, mov.alocadoCentavos ?? 0);
-        const total = somarLista(c.alocacoes, (a) => a.valorCentavos);
-        if (total > disponivel) falhar(CODIGO.LIQUIDACAO_EXCEDE_MOVIMENTACAO, "O total vinculado supera o saldo ainda não vinculado da saída.", { disponivelCentavos: disponivel, totalCentavos: total });
-        // Contas: travadas em ordem (sem impasse), carregadas no escopo (outra unidade simplesmente não existe aqui).
-        for (const id of c.alocacoes.map((a) => a.obrigacaoId).sort()) await tx.travar(cx, `obrigacao:${id}`, "EXCLUSIVA");
-        const contas = [];
-        for (const a of c.alocacoes) contas.push(await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, a.obrigacaoId, "Conta a pagar"));
-        // Evidência: documento que comprove o pagamento OU conciliação confirmada com evidência para CADA conta.
-        const documento = c.documentoId ? await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento de evidência") : null;
-        // 09: pagamento ANTECIPADO (saída anterior à emissão) — identificação explícita + documento compatível + justificativa.
-        const antecipacoes = contas.map((o) => antecipacaoDe(mov, o));
-        if (antecipacoes.some(Boolean)) {
-          const quais = contas.flatMap((o, i) => (antecipacoes[i] ? [{ obrigacaoId: o.id, ...antecipacoes[i] }] : []));
-          if (!c.pagamentoAntecipado) falhar(CODIGO.EVIDENCIA_EXIGIDA, "A saída é anterior à emissão da conta: só vincule identificando o PAGAMENTO ANTECIPADO e anexando o comprovante.", { motivo: "ANTECIPACAO_NAO_IDENTIFICADA", antecipadas: quais });
-          if (!documento) falhar(CODIGO.EVIDENCIA_EXIGIDA, "Pagamento antecipado exige o documento que o comprove (conciliação ou coincidência de valor não bastam).", { motivo: "ANTECIPACAO_SEM_DOCUMENTO", antecipadas: quais });
-          if (!DOCUMENTOS_DE_ANTECIPACAO.includes(documento.tipo)) falhar(CODIGO.EVIDENCIA_EXIGIDA, "O documento não comprova pagamento antecipado: use comprovante, contrato, nota fiscal ou boleto.", { motivo: "ANTECIPACAO_DOCUMENTO_INCOMPATIVEL", tipo: documento.tipo });
-          if (c.justificativa.trim().length < JUSTIFICATIVA_MINIMA_ANTECIPACAO) falhar(CODIGO.ENTRADA_INVALIDA, `Explique o pagamento antecipado (mínimo ${JUSTIFICATIVA_MINIMA_ANTECIPACAO} caracteres): beneficiário, motivo e conferência do valor.`, { motivo: "ANTECIPACAO_SEM_JUSTIFICATIVA", campo: "justificativa" });
-        } else if (c.pagamentoAntecipado) {
-          falhar(CODIGO.ENTRADA_INVALIDA, "A saída não é anterior à emissão da conta: não marque como pagamento antecipado.", { motivo: "ANTECIPACAO_INDEVIDA", campo: "pagamentoAntecipado" });
-        }
-        // Sem documento: cada conta precisa de conciliação confirmada com evidência (antecipada já foi recusada acima).
-        if (!documento) {
-          for (const o of contas) {
-            if (!(await conciliacaoComprovada(tx, cx, mov.id, o.id))) {
-              falhar(CODIGO.EVIDENCIA_EXIGIDA, "Vincular exige o documento que comprova o pagamento (comprovante, boleto pago) ou uma conciliação confirmada com evidência. Valor e data iguais não bastam.", { obrigacaoId: o.id });
-            }
-          }
-        }
-        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(mov.dataEfetiva)], referenciadas: contas.map((o) => o.competencia), motivo: "baixa de conta com saída do extrato" });
-        const liquidacoes = [];
-        const titulos = [];
-        const rotulo = (ant) => (ant ? `[Pagamento antecipado: saída ${ant.dias} dia(s) antes da emissão] ${c.justificativa}` : c.justificativa);
-        for (const [i, a] of c.alocacoes.entries()) {
-          const o = contas[i];
-          const mudancas = aplicarLiquidacao(o, a.valorCentavos); // saldo nunca negativo; conta cancelada é recusada
-          liquidacoes.push(await b.criar(tx, cx, TIPO.LIQUIDACAO, {
-            movimentacaoId: mov.id, alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: a.valorCentavos, estornadoCentavos: 0, dataEfetiva: mov.dataEfetiva,
-            situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: `${chave}#${o.id}`, origemDoVinculo: "EXTRATO", documentoId: c.documentoId, justificativa: c.justificativa,
-            antecipacao: antecipacoes[i] ? { ...antecipacoes[i], identificadaPor: cx.usuarioId, documentoTipo: documento?.tipo ?? null } : null,
-          }, rotulo(antecipacoes[i])));
-          titulos.push(await b.alterar(tx, cx, TIPO.OBRIGACAO, o, mudancas, EVENTO_HISTORICO.LIQUIDACAO, rotulo(antecipacoes[i])));
-        }
-        const movimentacao = await b.alterar(tx, cx, TIPO.MOVIMENTACAO, mov, { alocadoCentavos: somar(mov.alocadoCentavos, total) }, EVENTO_HISTORICO.LIQUIDACAO, c.justificativa);
-        // A evidência fica vinculada à saída e a cada conta (rastreável dos dois lados).
-        if (c.documentoId) {
-          for (const [tipo, id] of [[TIPO.MOVIMENTACAO, mov.id], ...contas.map((o) => [TIPO.OBRIGACAO, o.id])]) {
-            const chaveV = `${c.documentoId}|${tipo}|${id}`;
-            if (!(await tx.buscarPorChave(cx, TIPO.VINCULO_DOCUMENTAL, chaveV))) {
-              await b.criar(tx, cx, TIPO.VINCULO_DOCUMENTAL, { documentoId: c.documentoId, registroTipo: tipo, registroId: id, chaveIdempotencia: chaveV, finalidade: "Comprova o pagamento vinculado do extrato" }, c.justificativa);
-            }
-          }
-        }
-        return {
-          repetido: false, movimentacao, liquidacoes, titulos,
-          efeito: { novasSaidas: 0, novasDespesas: 0, vinculadoCentavos: total, disponivelDepoisCentavos: subtrair(disponivel, total) },
-        };
-      });
+      return b.executar(ctx, ACAO.VINCULAR_PAGAMENTO, (cx, tx) => baixarSaidaNaTransacao(b, tx, cx, c));
     },
+  };
+}
+
+/**
+ * A BAIXA propriamente dita, dentro da transação de quem chama: pelo vínculo manual (acima) ou pela confirmação da
+ * conciliação conta × saída (conciliacao.js, doc 33), que assim baixa a conta NA MESMA transação em que confirma.
+ * Mesmas travas, versão, idempotência, regras de antecipação e auditoria nos dois caminhos.
+ * @param {{conciliacaoConfirmadaId?: string|null}} [opcoes]
+ */
+export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
+  // Trava EXCLUSIVA na saída: duas sessões nunca consomem o mesmo saldo alocável (a outra espera e vê a versão nova).
+  await tx.travar(cx, `movimentacao:${c.movimentacaoId}`, "EXCLUSIVA");
+  const chave = chaveDoVinculo(c.movimentacaoId, c.alocacoes);
+  const ja = await tx.buscarPorChave(cx, TIPO.LIQUIDACAO, `${chave}#${c.alocacoes[0].obrigacaoId}`);
+  if (ja) {
+    const liquidacoes = [];
+    for (const a of c.alocacoes) liquidacoes.push(await tx.buscarPorChave(cx, TIPO.LIQUIDACAO, `${chave}#${a.obrigacaoId}`));
+    return { repetido: true, liquidacoes, movimentacao: await tx.obter(cx, TIPO.MOVIMENTACAO, c.movimentacaoId) };
+  }
+  if (!c.confirmar) falhar(CODIGO.CONFIRMACAO_EXIGIDA, "Confira a prévia e confirme a baixa.");
+  const mov = await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, c.movimentacaoId, "Saída bancária");
+  if (mov.versao !== c.versaoMovimentacao) {
+    falhar(CODIGO.CONFLITO_VERSAO, "A saída mudou desde a prévia (outra baixa, conciliação ou correção). Atualize e confira de novo.", { versaoAtual: mov.versao, versaoEsperada: c.versaoMovimentacao });
+  }
+  const inelegivel = motivoDeSaidaInelegivel(mov);
+  if (inelegivel) falhar(/integralmente/.test(inelegivel) ? CODIGO.LIQUIDACAO_EXCEDE_MOVIMENTACAO : CODIGO.LIQUIDACAO_INCOMPATIVEL, inelegivel);
+  const disponivel = subtrair(mov.valorCentavos, mov.alocadoCentavos ?? 0);
+  const total = somarLista(c.alocacoes, (a) => a.valorCentavos);
+  if (total > disponivel) falhar(CODIGO.LIQUIDACAO_EXCEDE_MOVIMENTACAO, "O total vinculado supera o saldo ainda não vinculado da saída.", { disponivelCentavos: disponivel, totalCentavos: total });
+  // Contas: travadas em ordem (sem impasse), carregadas no escopo (outra unidade simplesmente não existe aqui).
+  for (const id of c.alocacoes.map((a) => a.obrigacaoId).sort()) await tx.travar(cx, `obrigacao:${id}`, "EXCLUSIVA");
+  const contas = [];
+  for (const a of c.alocacoes) contas.push(await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, a.obrigacaoId, "Conta a pagar"));
+  // Evidência: documento que comprove o pagamento OU conciliação confirmada com evidência para CADA conta.
+  const documento = c.documentoId ? await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento de evidência") : null;
+  // 09: pagamento ANTECIPADO (saída anterior à emissão) — identificação explícita + documento compatível + justificativa.
+  const antecipacoes = contas.map((o) => antecipacaoDe(mov, o));
+  if (antecipacoes.some(Boolean)) {
+    const quais = contas.flatMap((o, i) => (antecipacoes[i] ? [{ obrigacaoId: o.id, ...antecipacoes[i] }] : []));
+    if (!c.pagamentoAntecipado) falhar(CODIGO.EVIDENCIA_EXIGIDA, "A saída é anterior à emissão da conta: só vincule identificando o PAGAMENTO ANTECIPADO e anexando o comprovante.", { motivo: "ANTECIPACAO_NAO_IDENTIFICADA", antecipadas: quais });
+    if (!documento) falhar(CODIGO.EVIDENCIA_EXIGIDA, "Pagamento antecipado exige o documento que o comprove (conciliação ou coincidência de valor não bastam).", { motivo: "ANTECIPACAO_SEM_DOCUMENTO", antecipadas: quais });
+    if (!DOCUMENTOS_DE_ANTECIPACAO.includes(documento.tipo)) falhar(CODIGO.EVIDENCIA_EXIGIDA, "O documento não comprova pagamento antecipado: use comprovante, contrato, nota fiscal ou boleto.", { motivo: "ANTECIPACAO_DOCUMENTO_INCOMPATIVEL", tipo: documento.tipo });
+    if (c.justificativa.trim().length < JUSTIFICATIVA_MINIMA_ANTECIPACAO) falhar(CODIGO.ENTRADA_INVALIDA, `Explique o pagamento antecipado (mínimo ${JUSTIFICATIVA_MINIMA_ANTECIPACAO} caracteres): beneficiário, motivo e conferência do valor.`, { motivo: "ANTECIPACAO_SEM_JUSTIFICATIVA", campo: "justificativa" });
+  } else if (c.pagamentoAntecipado) {
+    falhar(CODIGO.ENTRADA_INVALIDA, "A saída não é anterior à emissão da conta: não marque como pagamento antecipado.", { motivo: "ANTECIPACAO_INDEVIDA", campo: "pagamentoAntecipado" });
+  }
+  // Sem documento: cada conta precisa de conciliação confirmada com evidência (antecipada já foi recusada acima).
+  // Na confirmação da conciliação (mesma transação), a correspondência que está sendo confirmada É a evidência do vínculo.
+  if (!documento && !opcoes.conciliacaoConfirmadaId) {
+    for (const o of contas) {
+      if (!(await conciliacaoComprovada(tx, cx, mov.id, o.id))) {
+        falhar(CODIGO.EVIDENCIA_EXIGIDA, "Vincular exige o documento que comprova o pagamento (comprovante, boleto pago) ou uma conciliação confirmada com evidência. Valor e data iguais não bastam.", { obrigacaoId: o.id });
+      }
+    }
+  }
+  await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competenciaDe(mov.dataEfetiva)], referenciadas: contas.map((o) => o.competencia), motivo: "baixa de conta com saída do extrato" });
+  const liquidacoes = [];
+  const titulos = [];
+  const rotulo = (ant) => (ant ? `[Pagamento antecipado: saída ${ant.dias} dia(s) antes da emissão] ${c.justificativa}` : c.justificativa);
+  for (const [i, a] of c.alocacoes.entries()) {
+    const o = contas[i];
+    const mudancas = aplicarLiquidacao(o, a.valorCentavos); // saldo nunca negativo; conta cancelada é recusada
+    liquidacoes.push(await b.criar(tx, cx, TIPO.LIQUIDACAO, {
+      movimentacaoId: mov.id, alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: a.valorCentavos, estornadoCentavos: 0, dataEfetiva: mov.dataEfetiva,
+      situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: `${chave}#${o.id}`, origemDoVinculo: "EXTRATO", ...(opcoes.conciliacaoConfirmadaId ? { conciliacaoId: opcoes.conciliacaoConfirmadaId } : {}), documentoId: c.documentoId, justificativa: c.justificativa,
+      antecipacao: antecipacoes[i] ? { ...antecipacoes[i], identificadaPor: cx.usuarioId, documentoTipo: documento?.tipo ?? null } : null,
+    }, rotulo(antecipacoes[i])));
+    titulos.push(await b.alterar(tx, cx, TIPO.OBRIGACAO, o, mudancas, EVENTO_HISTORICO.LIQUIDACAO, rotulo(antecipacoes[i])));
+  }
+  const movimentacao = await b.alterar(tx, cx, TIPO.MOVIMENTACAO, mov, { alocadoCentavos: somar(mov.alocadoCentavos, total) }, EVENTO_HISTORICO.LIQUIDACAO, c.justificativa);
+  // A evidência fica vinculada à saída e a cada conta (rastreável dos dois lados).
+  if (c.documentoId) {
+    for (const [tipo, id] of [[TIPO.MOVIMENTACAO, mov.id], ...contas.map((o) => [TIPO.OBRIGACAO, o.id])]) {
+      const chaveV = `${c.documentoId}|${tipo}|${id}`;
+      if (!(await tx.buscarPorChave(cx, TIPO.VINCULO_DOCUMENTAL, chaveV))) {
+        await b.criar(tx, cx, TIPO.VINCULO_DOCUMENTAL, { documentoId: c.documentoId, registroTipo: tipo, registroId: id, chaveIdempotencia: chaveV, finalidade: "Comprova o pagamento vinculado do extrato" }, c.justificativa);
+      }
+    }
+  }
+  return {
+    repetido: false, movimentacao, liquidacoes, titulos,
+    efeito: { novasSaidas: 0, novasDespesas: 0, vinculadoCentavos: total, disponivelDepoisCentavos: subtrair(disponivel, total) },
   };
 }

@@ -126,6 +126,27 @@ const ACAITERIA = [
   f("TAXAS_STONE", "Taxas Stone", "DESPESAS_RECEBIMENTO_PROCESSAMENTO"),
   f("MENSALIDADE_IFOOD", "Mensalidade iFood", "DESPESAS_PLATAFORMAS"),
   f("ANUNCIOS_IFOOD", "Anúncios iFood", "MARKETING"),
+  // Destinos que a operação real do Açaí já usava no plano gerencial anterior (doc 33). Só categorias: nenhuma regra nova.
+  f("ACAI_DISTRIBUIDORA", "Açaí e insumos da distribuidora", "INSUMOS"),
+  f("OUTROS_INSUMOS", "Outros insumos", "INSUMOS"),
+  f("BENEFICIOS", "Benefícios de pessoal", "PESSOAL"),
+  f("FERIAS_E_RESCISOES", "Férias e rescisões", "PESSOAL"),
+  f("EXAMES_OCUPACIONAIS", "Exames ocupacionais", "PESSOAL"),
+  f("DIARIAS_EXTRAS", "Diárias extras", "PESSOAL"),
+  f("ALUGUEL", "Aluguel", "DESPESAS_ADMINISTRATIVAS"),
+  f("ENERGIA", "Energia elétrica", "DESPESAS_ADMINISTRATIVAS"),
+  f("AGUA", "Água", "DESPESAS_ADMINISTRATIVAS"),
+  f("SISTEMAS", "Sistemas e softwares", "DESPESAS_ADMINISTRATIVAS"),
+  f("CONTABILIDADE", "Contabilidade", "DESPESAS_ADMINISTRATIVAS"),
+  f("JURIDICO", "Jurídico", "DESPESAS_ADMINISTRATIVAS"),
+  f("ASSOCIACAO", "Associação", "DESPESAS_ADMINISTRATIVAS"),
+  f("MATERIAL_DE_ESCRITORIO", "Material de escritório", "DESPESAS_ADMINISTRATIVAS"),
+  f("MANUTENCAO", "Manutenção predial e de equipamentos", "DESPESAS_ADMINISTRATIVAS"),
+  f("SERVICOS_DE_TERCEIROS", "Consultoria e serviços de terceiros", "DESPESAS_ADMINISTRATIVAS"),
+  f("SEGURO_PRESTAMISTA", "Seguro prestamista", "DESPESAS_FINANCEIRAS"),
+  f("PARCELAMENTO_TRIBUTARIO", "Parcelamento tributário (principal)", "MOVIMENTACOES_PATRIMONIAIS"),
+  f("OPERACOES_ENTRE_EMPRESAS", "Operações entre empresas do grupo", "MOVIMENTACOES_PATRIMONIAIS"),
+  f("VALORES_DE_TERCEIROS", "Valores retidos ou recebidos em nome de terceiros", "MOVIMENTACOES_PATRIMONIAIS"),
 ];
 
 export const MODELO_DE_PLANO = Object.freeze({ BASE: Object.freeze(BASE), ACAITERIA: Object.freeze([...BASE, ...ACAITERIA]) });

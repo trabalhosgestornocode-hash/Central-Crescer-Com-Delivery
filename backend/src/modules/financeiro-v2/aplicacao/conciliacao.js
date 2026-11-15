@@ -7,6 +7,7 @@ import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { validarCorrespondencia, validarDecisaoConciliacao } from "../contratos/comandos.js";
 import { competenciaDe } from "../dominio/tempo.js";
+import { baixarSaidaNaTransacao } from "./baixaPorExtrato.js";
 import { exigirLista, exigirTexto, exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
 
 /** Competência de um registro conciliável (movimentação pela data efetiva; os demais pela própria competência). */
@@ -120,7 +121,13 @@ export function operacoesDeConciliacao(b) {
 
     /** Só confirma quando os lados FECHAM e nenhum registro fica conciliado acima do próprio valor. */
     confirmarConciliacao(ctx, entrada) {
+      let baixa = null;
       return decidir(ctx, entrada, async (cx, tx, corr, c) => {
+        // doc 33: confirmar conta × saída COM baixa — exige a permissão própria da baixa e roda na MESMA transação.
+        if (c.baixar) {
+          if (corr.relacao !== RELACAO_CORRESPONDENCIA.OBRIGACAO_X_MOVIMENTACAO) falhar(CODIGO.OPERACAO_INVALIDA, "Só a conciliação de conta a pagar com saída bancária dá baixa na conta.", { relacao: corr.relacao ?? null });
+          if (!cx.permissoes.includes(ACAO.VINCULAR_PAGAMENTO)) falhar(CODIGO.PERMISSAO_INSUFICIENTE, "Dar baixa pela conciliação exige a permissão de vincular pagamento do extrato.", { acao: ACAO.VINCULAR_PAGAMENTO });
+        }
         await exigirSemAmbiguidade(tx, cx, corr);
         if (corr.diferencaCentavos !== 0) {
           falhar(CODIGO.CONCILIACAO_INVALIDA, "Os lados não fecham. Registre a divergência em vez de confirmar.", { diferencaCentavos: corr.diferencaCentavos });
@@ -144,8 +151,19 @@ export function operacoesDeConciliacao(b) {
             await b.alterar(tx, cx, TIPO.MOVIMENTACAO, registro, { situacaoConciliacao: total === limite ? SITUACAO_CONCILIACAO.CONCILIADA : SITUACAO_CONCILIACAO.PARCIAL }, EVENTO_HISTORICO.CONCILIACAO);
           }
         }
+        if (c.baixar) {
+          const todos = [...(corr.ladoA ?? []), ...(corr.ladoB ?? [])];
+          const saida = todos.find((r) => r.tipo === TIPO.MOVIMENTACAO);
+          const mov = await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, saida.id, "Saída bancária"); // relida: a confirmação acima mudou a versão
+          baixa = await baixarSaidaNaTransacao(b, tx, cx, {
+            movimentacaoId: mov.id, versaoMovimentacao: mov.versao,
+            alocacoes: todos.filter((r) => r.tipo === TIPO.OBRIGACAO).map((r) => ({ obrigacaoId: r.id, valorCentavos: r.valorCentavos })),
+            documentoId: null, confirmar: true, pagamentoAntecipado: false,
+            justificativa: c.justificativa ?? `Baixa pela conciliação confirmada (${corr.regra ?? "manual"}).`,
+          }, { conciliacaoConfirmadaId: corr.id });
+        }
         return { situacao: S.CONFIRMADA, ...(doVinculo.length ? { evidenciaDocumentoIds: evidencias } : {}) };
-      }, { alteraMovimentacoes: true });
+      }, { alteraMovimentacoes: true }).then((r) => (baixa ? { ...r, baixa } : r));
     },
 
     /** Diferença conhecida e NÃO resolvida: fica registrada como divergência, com justificativa obrigatória. */
