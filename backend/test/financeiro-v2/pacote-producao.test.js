@@ -28,7 +28,7 @@ test("10 — instalar.sql é aditivo e não toca no sistema atual", () => {
   const sql = ler("instalar.sql").replace(/--[^\n]*/g, "");
   // DROP só da tabela temporária das próprias migrações; nenhum TRUNCATE/DELETE em massa; nada de ALTER em objeto alheio
   const drops = [...sql.matchAll(/\bdrop\s+(\w+)\s+(?:if\s+exists\s+)?([\w.]+)/gi)].map((x) => `${x[1].toLowerCase()} ${x[2]}`);
-  assert.deepEqual([...new Set(drops)].filter((d) => !/^(table (pg_temp\.)?fv2__\w+|policy fv2_\w+|trigger fv2_\w+|function fv2_\w+|index fv2_\w+|constraint fv2_\w+)$/.test(d)), []);
+  assert.deepEqual([...new Set(drops)].filter((d) => !/^(table (pg_temp\.)?fv2__\w+|policy fv2_\w+|trigger fv2_\w+|function fv2_\w+|index fv2_\w+|constraint fv2_\w+|not null)$/.test(d)), []);
   // comandos (não as palavras: os gatilhos de proteção citam "before truncate" para PROIBIR exclusão)
   assert.doesNotMatch(sql, /(^|;)\s*truncate\s/im);
   assert.doesNotMatch(sql, /(^|;)\s*delete\s+from\s/im);

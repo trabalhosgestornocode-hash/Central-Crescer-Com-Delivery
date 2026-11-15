@@ -8,8 +8,8 @@ export function criarLiberacoesPostgres({ poolApp }) {
   if (typeof poolApp?.query !== "function") throw new Error("Liberações: pool da aplicação ausente.");
   return Object.freeze({
     async consultar({ organizacaoId, unidadeId }) {
-      const r = await poolApp.query("select empresa, unidade from fv2_liberacao_estado($1, $2)", [organizacaoId, unidadeId]);
-      return { empresa: r.rows[0]?.empresa === true, unidade: r.rows[0]?.unidade === true };
+      const r = await poolApp.query("select empresa, unidade, escrita from fv2_liberacao_estado($1, $2)", [organizacaoId, unidadeId]);
+      return { empresa: r.rows[0]?.empresa === true, unidade: r.rows[0]?.unidade === true, escrita: r.rows[0]?.escrita === true };
     },
   });
 }

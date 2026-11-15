@@ -106,7 +106,7 @@ begin
   -- RLS forçada em todas as tabelas de dados (as 5 GUARDADAS não têm RLS por desenho e nenhum papel além do guardião as acessa)
   select string_agg(c.relname, ', ') into txt from pg_class c join pg_namespace s on s.oid = c.relnamespace
     where s.nspname = '${S}' and c.relkind = 'r' and c.relname <> 'fv2_migracao'
-      and c.relname not in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
+      and c.relname not in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_administrador_corporativo','fv2_administrador_corporativo_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
       and not (c.relrowsecurity and c.relforcerowsecurity);
   if txt is not null then raise exception 'FV2 pós: tabelas sem RLS forçada: %', txt; end if;
   -- credenciais comuns sem nenhum caminho
@@ -116,7 +116,7 @@ begin
   select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace,
     unnest(array['anon','authenticated','service_role','authenticator','fv2_app','fv2_autoridade']) g(r)
     where s.nspname = '${S}' and exists (select 1 from pg_roles where rolname = g.r)
-      and c.relname in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
+      and c.relname in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_administrador_corporativo','fv2_administrador_corporativo_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
       and (has_table_privilege(g.r, c.oid, 'select') or has_table_privilege(g.r, c.oid, 'insert') or has_table_privilege(g.r, c.oid, 'update') or has_table_privilege(g.r, c.oid, 'delete'));
   if n > 0 then raise exception 'FV2 pós: tabela guardada acessível por papel não autorizado (% casos)', n; end if;
   -- A5: NENHUM privilégio de credencial comum em tabela, sequência ou função do schema (não só falta de USAGE).
@@ -314,7 +314,7 @@ if (executadoDireto && process.argv[2] === "--bootstrap") {
  * UMA transação: confere que as migrações já registradas são EXATAMENTE as do Git (nome + hash), aplica só as novas com as
  * mesmas adaptações da instalação (A3, A5) e aborta se qualquer pós-condição falhar. Não cria papéis nem toca no sistema atual.
  */
-export const BASE_INSTALADA = "0021";
+export const BASE_INSTALADA = "0022";
 export function atualizar(base = BASE_INSTALADA) {
   const ms = listarMigracoes();
   const ja = ms.filter((m) => m.nome.slice(0, 4) <= base);
@@ -362,7 +362,7 @@ revoke fv2_guardiao from current_user;`,
   if n <> ${ms.length} then raise exception 'FV2 pós: % migrações registradas (esperado ${ms.length})', n; end if;
   select string_agg(c.relname, ', ') into txt from pg_class c join pg_namespace s on s.oid = c.relnamespace
     where s.nspname = '${S}' and c.relkind = 'r' and c.relname <> 'fv2_migracao'
-      and c.relname not in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
+      and c.relname not in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_administrador_corporativo','fv2_administrador_corporativo_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
       and not (c.relrowsecurity and c.relforcerowsecurity);
   if txt is not null then raise exception 'FV2 pós: tabelas sem RLS forçada: %', txt; end if;
   select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace,

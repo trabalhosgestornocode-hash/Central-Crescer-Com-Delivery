@@ -31,7 +31,7 @@ function filtrosIniciais() {
 let focoAntesDoPainel = null;
 let recarregarAoFechar = false;
 let revisarAoCarregar = null;
-const ROTAS = ["visao-geral", "dre", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias", "configuracoes", "documentos"];
+const ROTAS = ["visao-geral", "dre", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias", "configuracoes", "documentos"];
 /** Filtros aceitos na URL da Central (ligações de outras telas). `revisar` abre o painel da pendência indicada. */
 const FILTROS_URL_CONFERENCIAS = ["secao", "grupo", "situacao", "estado"];
 const ENDPOINT_DA_SECAO = { resumo: "conferencias", pendencias: "conferencias/pendencias", documentos: "conferencias/documentos", propostas: "conferencias/propostas", conciliacoes: "conferencias/correspondencias", fechamento: "conferencias/fechamento" };
@@ -119,6 +119,7 @@ function consultaDaRota() {
     case "documentos": return `/api/fv2/documentos?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, pagina, tamanho: 25 })}`;
     case "contas-a-pagar": return `/api/fv2/contas-a-pagar?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, contraparteId: f.contraparteId, categoria: f.categoria, vencimentoDe: f.vencimentoDe, vencimentoAte: f.vencimentoAte, pagina, tamanho: 25 })}`;
     case "contas-a-receber": return `/api/fv2/contas-a-receber?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, tipo: f.tipo, processador: f.processador, pagina, tamanho: 25 })}`;
+    case "lancamentos": return `/api/fv2/caixa-e-bancos?${qs({ competencia: undefined, inicio: inicioDoMes(estado.competencia), fim: fimDoMes(estado.competencia), pagina: 1, tamanho: 30 })}`;
     case "caixa-e-bancos": return `/api/fv2/caixa-e-bancos?${qs({ competencia: undefined, inicio: f.inicio || inicioDoMes(estado.competencia), fim: f.fim || fimDoMes(estado.competencia), contaId: f.contaId, pagina, tamanho: 30 })}`;
     case "calendario": return `/api/fv2/calendario?${qs({ competencia: undefined, mes: estado.competencia })}`;
     case "conferencias": {
@@ -159,6 +160,7 @@ function desenhar(dados) {
     case "documentos": return adm.documentos(dados, f);
     case "contas-a-pagar": return tes.contasAPagar(dados, f, { permissoes: permissoesDaUnidade() });
     case "contas-a-receber": return tes.contasAReceber(dados, f, { permissoes: permissoesDaUnidade(), competencia: estado.competencia });
+    case "lancamentos": return tes.lancamentos(dados, f, { permissoes: permissoesDaUnidade() });
     case "caixa-e-bancos": if (!f.contaId) f.contas = dados.contas.map((c) => ({ id: c.id, nome: c.nome })); return tes.caixaEBancos(dados, f, { permissoes: permissoesDaUnidade() });
     case "calendario": estado.calendario = dados; return tes.calendario(dados, { selecionado: estado.diaSelecionado?.startsWith(dados.mes) ? estado.diaSelecionado : null });
     case "fluxo-de-caixa": return tes.fluxoDeCaixa(dados, f);

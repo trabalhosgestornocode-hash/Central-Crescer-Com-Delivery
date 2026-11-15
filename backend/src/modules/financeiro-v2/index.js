@@ -13,6 +13,7 @@ export { ACOES_COM_MFA_RECENTE, MOTIVO as MOTIVO_INTEGRACAO, avaliarAutenticacao
 export { JANELA_SEGUNDO_FATOR_MS, METODOS_DE_SEGUNDO_FATOR, MOTIVO_PROVA, criarVerificadorDeMfa, verificadorHs256 } from "./integracao/provaDeAutenticacao.js";
 export { criarLiberacoesMemoria, validarAtoDeLiberacao } from "./integracao/liberacoes.js";
 export { alterarLiberacaoPostgres, criarLiberacoesPostgres } from "./infra/postgres/liberacoesPostgres.js";
+export { PERFIS_DE_ACESSO, criarAdministracaoCorporativaPostgres } from "./infra/postgres/administracaoPostgres.js";
 export { FINALIDADE as FINALIDADE_DO_GATEWAY, decidirEmissao, eventoSemSegredos } from "./integracao/politicaDoGateway.js";
 export { FONTES_PADRAO, criarRegistroDeFontes } from "./importacao/fontes/index.js";
 export { analisarArquivo } from "./importacao/motor.js";

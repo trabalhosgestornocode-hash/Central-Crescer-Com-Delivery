@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR" data-modo="plataforma">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ativação do Financeiro v2 por unidade</title>
+  <link rel="stylesheet" href="fv2.css">
+</head>
+<body>
+  <main class="principal ativacao" id="conteudo" aria-busy="true">
+    <header class="cabecalho"><div><h1>Ativação do Financeiro v2</h1>
+      <p class="subtitulo">Painel do administrador financeiro da empresa: ative uma ou várias unidades e defina quem opera. Tudo fica registrado com o seu nome.</p></div></header>
+    <p id="estado" role="status">Carregando…</p>
+    <section class="card" id="sec-inicial" aria-labelledby="t-ini" hidden><h2 id="t-ini">Primeiro administrador financeiro da empresa</h2>
+      <p>A empresa ainda não tem administrador financeiro. Só um administrador da empresa na plataforma pode se registrar aqui, e só com o código do autenticador (TOTP) dos últimos 10 minutos. Isso acontece uma única vez por empresa e só com o procedimento de ativação ligado no servidor.</p>
+      <form id="form-inicial">
+        <label>Justificativa <textarea name="justificativa" minlength="20" maxlength="500" required></textarea></label>
+        <label><input type="checkbox" name="confirmar" required> Confirmo: assumo a administração financeira desta empresa (fica registrado com o meu nome).</label>
+        <button type="submit" class="botao botao--primario">Tornar-me administrador financeiro</button>
+        <p class="resultado-acao" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+    <section class="card" id="sec-unidades" aria-labelledby="t-un" hidden><h2 id="t-un">1. Unidades</h2>
+      <p>Marque as unidades e escolha a ação. Ativar libera o Financeiro v2 e os lançamentos da unidade; desligar volta ao painel atual sem apagar nada.</p>
+      <form id="form-lib">
+        <ul id="lista-unidades" class="mini"></ul>
+        <label>Justificativa <textarea name="justificativa" minlength="20" maxlength="500" required></textarea></label>
+        <button type="submit" class="botao botao--primario" data-ativa="true">Ativar unidades marcadas</button>
+        <button type="submit" class="botao" data-ativa="true" data-escrita="false">Ativar só para consulta</button>
+        <button type="submit" class="botao" data-ativa="false">Desligar unidades marcadas</button>
+        <p class="resultado-acao" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+    <section class="card" id="sec-acessos" aria-labelledby="t-ac" hidden><h2 id="t-ac">2. Quem pode usar</h2>
+      <p>Escolha a unidade e o nível de cada pessoa (conta pessoal com vínculo na unidade). Você não altera o próprio acesso por aqui.</p>
+      <label>Unidade <select id="un-acessos"></select></label>
+      <div id="pessoas"></div>
+      <form id="form-acesso" hidden>
+        <label>Pessoa <select name="perfil" required></select></label>
+        <label>Nível <select name="nivel" required>
+          <option value="OPERADOR">Operador: lança receitas, despesas, caixa e contas</option>
+          <option value="FINANCEIRO">Financeiro: opera, concilia, importa, configura e fecha</option>
+          <option value="CONSULTA">Consulta: só vê</option>
+          <option value="NENHUM">Sem acesso (revogar)</option>
+        </select></label>
+        <label>Justificativa <textarea name="justificativa" minlength="20" maxlength="500" required></textarea></label>
+        <button type="submit" class="botao botao--primario">Salvar acesso</button>
+        <p class="resultado-acao" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+    <section class="card" id="sec-adm" aria-labelledby="t-adm" hidden><h2 id="t-adm">3. Administradores financeiros da empresa</h2>
+      <ul id="lista-adm" class="mini"></ul>
+      <form id="form-adm">
+        <label>Novo administrador (já administrador da empresa na plataforma) <select name="conta" required></select></label>
+        <label>Justificativa <textarea name="justificativa" minlength="20" maxlength="500" required></textarea></label>
+        <button type="submit" class="botao">Adicionar administrador financeiro</button>
+        <p class="resultado-acao" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+    <p><a href="/financeiro-v2/?modo=plataforma">Voltar para o Financeiro</a> · <a href="/">Voltar para a plataforma</a></p>
+  </main>
+  <script type="module" src="corporativo.js"></script>
+</body>
+</html>
