@@ -114,6 +114,54 @@ function relatorioDeTotais({ tipoRelatorio, descricao, tipoRegistro, chave, rotu
   });
 }
 
+/**
+ * doc 34 — "Desempenho por atendente" do SAIPOS (layout REAL de setembro/2026: ATENDENTE, QUANTIDADE_VENDAS,
+ * VALOR_TOTAL_VENDAS, CATEGORIA, ITEM, QUANTIDADE_ITEM, VALOR_TOTAL_ITEM). O total de vendas se repete em cada item do
+ * atendente: um registro por ATENDENTE (repetições idênticas ficam como duplicadas no arquivo, nunca somadas). As
+ * integrações identificam o canal; atendente humano é venda do Balcão (anotado como canal deduzido do atendente).
+ * Valor é TOTAL DO PERÍODO por canal — sem pedido, sem forma de pagamento.
+ */
+export function canalDoAtendente(texto) {
+  const r = rotulo(texto);
+  if (r.startsWith("integration") && r.split(" ").includes("ifood")) return { canal: "IFOOD", deduzido: false };
+  if (r.startsWith("integration api int sale") || r.includes("anota ai") || r.includes("anotaai")) return { canal: "ANOTA_AI", deduzido: false };
+  if (r.startsWith("integration")) return { canal: null, deduzido: false };
+  return { canal: "BALCAO", deduzido: true };
+}
+export const SAIPOS_DESEMPENHO_POR_ATENDENTE = definirFonte({
+  fonte: "SAIPOS",
+  tipoRelatorio: "SAIPOS_DESEMPENHO_POR_ATENDENTE",
+  tipoDocumento: "RELATORIO_VENDAS",
+  descricao: "relatório de desempenho por atendente do SAIPOS (canais de venda)",
+  formatosHomologados: ["xlsx"],
+  colunas: {
+    atendente: col(["ATENDENTE", "Atendente"]),
+    quantidade: col(["QUANTIDADE_VENDAS", "Quantidade de vendas"]),
+    valor: col(["VALOR_TOTAL_VENDAS", "Valor total das vendas"]),
+  },
+  ehTotal: (u) => /^total/.test(rotulo(u.bruto("atendente"))),
+  lerTotal: (u) => ({ valorCentavos: u.valor("valor") }),
+  converter(u) {
+    const valor = u.valor("valor");
+    if (u.erros.length) return null;
+    const original = u.bruto("atendente");
+    const { canal, deduzido } = canalDoAtendente(original);
+    return {
+      tipoRegistro: "TOTAL_CANAL", idExterno: `atendente:${rotulo(original)}:${u.periodo.inicio}:${u.periodo.fim}`, data: u.periodo.fim, valorCentavos: valor,
+      dados: { canal, canalOriginal: original, canalDeduzidoDoAtendente: deduzido, quantidade: /^\d+$/.test(u.bruto("quantidade")) ? Number(u.bruto("quantidade")) : null, periodoInicio: u.periodo.inicio, periodoFim: u.periodo.fim },
+    };
+  },
+  fechar(registros) {
+    const divergencias = [];
+    const porCanal = {};
+    for (const r of registros) {
+      porCanal[r.dados.canal ?? "NAO_IDENTIFICADO"] = somar(porCanal[r.dados.canal ?? "NAO_IDENTIFICADO"] ?? 0, r.valorCentavos);
+      if (!r.dados.canal) divergencias.push({ codigo: DIVERGENCIA.VALOR_A_CLASSIFICAR, mensagem: `Atendente "${r.dados.canalOriginal}": integração sem canal reconhecido.`, linha: r.linha, valorCentavos: r.valorCentavos });
+    }
+    return { controles: { totalCentavos: registros.reduce((s, r) => somar(s, r.valorCentavos), 0), porCanal, atendentes: registros.length }, divergencias };
+  },
+});
+
 export const SAIPOS_VENDAS_POR_CANAL = relatorioDeTotais({
   tipoRelatorio: "SAIPOS_VENDAS_POR_CANAL", descricao: "relatório de vendas por canal do SAIPOS", tipoRegistro: "TOTAL_CANAL", chave: "canal", rotulos: ["Canal", "Canal de venda", "Origem"],
 });
@@ -319,4 +367,4 @@ export const SAIPOS_FATURAMENTO_POR_DIA = definirFonte({
   },
 });
 
-export const FONTES_SAIPOS = Object.freeze([SAIPOS_VENDAS, SAIPOS_VENDAS_POR_CANAL, SAIPOS_FORMAS_PAGAMENTO, SAIPOS_VENDAS_DIARIAS, SAIPOS_FATURAMENTO_POR_DIA]);
+export const FONTES_SAIPOS = Object.freeze([SAIPOS_VENDAS, SAIPOS_VENDAS_POR_CANAL, SAIPOS_DESEMPENHO_POR_ATENDENTE, SAIPOS_FORMAS_PAGAMENTO, SAIPOS_VENDAS_DIARIAS, SAIPOS_FATURAMENTO_POR_DIA]);

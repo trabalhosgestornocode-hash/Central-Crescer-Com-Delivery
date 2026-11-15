@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { ACAO, CODIGO } from "../../src/modules/financeiro-v2/index.js";
 import { ESCRITAS } from "../../src/modules/fv2-integracao/escritas.js";
 import { ORG_A, TODAS, ctx, montar, rejeita, sha } from "./helpers/cenario.js";
-import { saiposVendas, unicredExtrato } from "./helpers/arquivos.js";
+import { saiposVendas, texto, unicredExtrato } from "./helpers/arquivos.js";
 
 const RELOGIO = () => new Date("2026-11-16T15:00:00.000Z");
 const c = ctx();
@@ -203,4 +203,36 @@ test("3 — baixa de contas a pagar pela conciliação do extrato: inequívoca f
   // A tarifa sem conta correspondente segue sem vínculo (em conferência), nunca classificada por conta própria.
   assert.ok((await n.consultarResumoFinanceiro(c, SET)).pendencias.movimentacoesSemVinculo >= 1);
   assert.deepEqual(await n.verificarConservacao(c), []);
+});
+
+test("1b — total do período por canal (desempenho por atendente): Balcão, iFood e Anota AI sem pedidos inventados; nunca junto com pedidos do mesmo canal", async () => {
+  const { n, W, importar, aplicarTodas } = preparar();
+  const caixa = await W("/configuracoes/conta/criar", { tipo: "CAIXA_FISICO", nome: "Caixa da loja" });
+  const cab = "ATENDENTE;QUANTIDADE_VENDAS;VALOR_TOTAL_VENDAS;CATEGORIA;ITEM;QUANTIDADE_ITEM;VALOR_TOTAL_ITEM";
+  const arquivo = texto([cab, "Loja Sintética;10;500,00;Copos;Copo A;9;450,00", "Loja Sintética;10;500,00;Copos;Copo B;1;50,00",
+    "integration-api-int-sale;2;120,00;Diversos;Diversos;3;100,00", "integration-ifood;5;300,00;Diversos;Diversos;6;280,00"].join(String.fromCharCode(10)));
+  const SETEMBRO = { periodoInicio: "2026-09-01", periodoFim: "2026-09-30" };
+  const imp = await importar("SAIPOS", "SAIPOS_DESEMPENHO_POR_ATENDENTE", arquivo, SETEMBRO);
+  await n.gerarPropostas(c, { importacaoId: imp.id });
+  const props = await n.listarPropostas(c, { operacao: "VENDA_AGREGADA" });
+  assert.deepEqual(props.map((p) => [p.comando.canal, p.comando.receitaBrutaCentavos, p.dataOperacao]).sort(), [["ANOTA_AI", 12000, "2026-09-30"], ["BALCAO", 50000, "2026-09-30"], ["IFOOD", 30000, "2026-09-30"]]);
+  assert.ok(props.find((p) => p.comando.canal === "BALCAO").divergencias.some((d) => d.codigo === "CANAL_DEDUZIDO_DO_ATENDENTE"));
+  await aplicarTodas("VENDA_AGREGADA");
+  const vg = await n.apurarVisaoGeral(c, SET);
+  const canal = (k) => vg.faturamentoBruto.porCanal.find((x) => x.canal === k)?.valorCentavos ?? 0;
+  assert.deepEqual([canal("BALCAO"), canal("IFOOD"), canal("ANOTA_AI"), vg.faturamentoBruto.valorCentavos], [50000, 30000, 12000, 92000]);
+  // Mesmo arquivo de novo: a mesma importação, nada a mais.
+  assert.equal((await importar("SAIPOS", "SAIPOS_DESEMPENHO_POR_ATENDENTE", arquivo, SETEMBRO)).repetido, true);
+  // Pedidos do mesmo período: o do iFood (canal com total) é recusado na aplicação — nunca duas receitas do mesmo fato.
+  const ped = await importar("SAIPOS", "SAIPOS_VENDAS", saiposVendas([{ pedido: "P-IF", data: "10/09/2026 20:00", canal: "iFood", itens: 3000, forma: "Pago online" }]), SETEMBRO);
+  await n.gerarPropostas(c, { importacaoId: ped.id, contaCaixaId: caixa.id });
+  const [pp] = await n.listarPropostas(c, { operacao: "VENDA" });
+  await n.aprovarProposta(c, { propostaId: pp.id, justificativa: "Revisado (sintético)." });
+  await rejeita(n.aplicarProposta(c, { propostaId: pp.id }), CODIGO.CONFLITO_IDEMPOTENCIA);
+  // Substituição explícita: reverte o total do iFood (lançamento cancelado, nunca apagado) e então o pedido entra.
+  const totalIfood = (await n.listarPropostas(c, { operacao: "VENDA_AGREGADA" })).find((p) => p.comando.canal === "IFOOD");
+  await n.reverterPropostaAgregada(c, { propostaId: totalIfood.id, justificativa: "Substituído pelos pedidos detalhados (sintético)." });
+  await n.aplicarProposta(c, { propostaId: pp.id });
+  const vg2 = await n.apurarVisaoGeral(c, SET);
+  assert.equal(vg2.faturamentoBruto.valorCentavos, 50000 + 12000 + 3000);
 });

@@ -116,6 +116,24 @@ export function operacoesDeFormacao(b) {
         justificativa: "Relatório AGREGADO por dia: vira receita agregada sem canal, pedido ou forma de pagamento; nada é distribuído por suposição.",
       });
     }
+    // doc 34: TOTAL DO PERÍODO POR CANAL (relatório de canais / desempenho por atendente). Uma receita agregada por canal,
+    // datada no último dia do período, sem pedido nem forma de pagamento inventados. Nunca convive com pedidos do mesmo
+    // canal nem com o agregado diário (sem canal) no período — a aplicação recusa (conflitoDeGranularidade).
+    for (const r of registros.filter((x) => x.tipoRegistro === "TOTAL_CANAL")) {
+      const d = r.dados;
+      const inicio = d.periodoInicio ?? r.dataReferencia;
+      const fim = d.periodoFim ?? r.dataReferencia;
+      const divergencias = [{ codigo: "TOTAL_DO_PERIODO_SEM_PEDIDOS", mensagem: `Total de ${inicio} a ${fim} por canal: valor como informado pela fonte (líquido de descontos quando a fonte assim o apura); sem pedidos, formas ou descontos por canal.` }];
+      if (d.canalDeduzidoDoAtendente) divergencias.push({ codigo: "CANAL_DEDUZIDO_DO_ATENDENTE", mensagem: `Atendente "${d.canalOriginal}" sem integração: tratado como Balcão.` });
+      if (!d.canal) divergencias.push({ codigo: "CANAL_NAO_RECONHECIDO", mensagem: `Canal "${d.canalOriginal}" não reconhecido.` });
+      saida.push({
+        operacao: OP.VENDA_AGREGADA, registro: r, competencia: r.competencia, dataOperacao: fim, natureza: "RECEITA", valorCentavos: r.valorCentavos,
+        categoriaSugerida: d.canal ? CATEGORIA_DE_VENDA[d.canal] : CATEGORIA_VENDA_AGREGADA,
+        comando: { data: fim, periodoInicio: inicio, periodoFim: fim, canal: d.canal ?? null, metodologia: "TOTAL_DO_PERIODO_POR_CANAL", receitaBrutaCentavos: r.valorCentavos, descontosCentavos: 0, valorCentavos: r.valorCentavos, quantidadeVendas: d.quantidade ?? null },
+        extras: {}, divergencias, confianca: d.canal ? CONFIANCA.MEDIA : CONFIANCA.BAIXA, estado: d.canal ? E.PROPOSTA : E.AGUARDANDO_REVISAO,
+        justificativa: "Relatório de TOTAIS POR CANAL do período: uma receita agregada por canal, sem pedidos; substituível pelos pedidos quando houver o relatório detalhado.",
+      });
+    }
     return saida;
   }
 
@@ -296,12 +314,29 @@ export function operacoesDeFormacao(b) {
     contagem.porEstado[estado] = (contagem.porEstado[estado] ?? 0) + 1;
   }
 
-  /** Conflito agregado × por pedido do MESMO dia: nunca as duas receitas ao mesmo tempo. */
+  /**
+   * Conflito de granularidade: nunca duas receitas do mesmo fato. Agregado × por pedido do MESMO dia (como antes) e, doc 34,
+   * TOTAL DO PERÍODO POR CANAL × (pedidos daquele canal no período | agregado diário sem canal no período | outro total do
+   * mesmo canal com período sobreposto).
+   */
   async function conflitoDeGranularidade(tx, cx, proposta) {
     if (![OP.VENDA, OP.VENDA_AGREGADA].includes(proposta.operacao)) return null;
     const outra = proposta.operacao === OP.VENDA ? OP.VENDA_AGREGADA : OP.VENDA;
     const aplicadas = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: outra, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
-    return aplicadas[0] ?? null;
+    if (aplicadas[0]) return aplicadas[0];
+    const periodo = (p) => (p.operacao === OP.VENDA_AGREGADA && p.comando?.periodoInicio ? p.comando : null);
+    const canalDe = (p) => (p.operacao === OP.VENDA ? p.comando?.canal ?? null : p.comando?.canal ?? null);
+    const cobre = (per, data) => data >= per.periodoInicio && data <= per.periodoFim;
+    const vendas = [...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA } }), ...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } })]
+      .filter((x) => x.id !== proposta.id && x.competencia === proposta.competencia);
+    const meu = periodo(proposta);
+    for (const x of vendas) {
+      const dele = periodo(x);
+      if (meu && dele) { if (canalDe(x) === canalDe(proposta) && dele.periodoInicio <= meu.periodoFim && meu.periodoInicio <= dele.periodoFim) return x; continue; }
+      if (meu && cobre(meu, x.dataOperacao) && (x.operacao === OP.VENDA_AGREGADA || canalDe(x) === canalDe(proposta))) return x;
+      if (dele && cobre(dele, proposta.dataOperacao) && (proposta.operacao === OP.VENDA_AGREGADA || canalDe(x) === canalDe(proposta))) return x;
+    }
+    return null;
   }
 
   async function aplicar(tx, cx, p) {
@@ -311,6 +346,15 @@ export function operacoesDeFormacao(b) {
     if (p.operacao === OP.VENDA) {
       const r = await n.registrarVenda(cx, c);
       efeitos.push({ tipo: TIPO.VENDA, id: r.venda.id }, { tipo: TIPO.LANCAMENTO, id: r.lancamento.id }, ...r.recebiveis.map((x) => ({ tipo: TIPO.RECEBIVEL, id: x.id })), ...r.movimentacoes.map((x) => ({ tipo: TIPO.MOVIMENTACAO, id: x.id })));
+    } else if (p.operacao === OP.VENDA_AGREGADA && c.metodologia === "TOTAL_DO_PERIODO_POR_CANAL") {
+      // doc 34: total do período por canal — receita do canal, uma vez, rastreável à proposta e ao relatório.
+      await b.exigirCompetenciaEditavel(tx, cx, p.competencia);
+      if (!c.canal) falhar(CODIGO.OPERACAO_INVALIDA, "Total sem canal reconhecido não gera receita por canal.");
+      const receita = await b.lancar(tx, cx, await b.categoriaDoSistema(tx, cx, CATEGORIA_DE_VENDA[c.canal]), {
+        valorCentavos: c.receitaBrutaCentavos, moeda: "BRL", descricao: `Vendas ${c.canal} de ${c.periodoInicio} a ${c.periodoFim} (total do período, fonte agregada)`, dataOperacao: c.data, competencia: p.competencia,
+        fonte: { sistema: p.fonte, idExterno: `periodo:${c.periodoInicio}:${c.periodoFim}:${c.canal}` }, canal: c.canal, origem: { tipo: TIPO.PROPOSTA, id: p.id },
+      });
+      efeitos.push({ tipo: TIPO.LANCAMENTO, id: receita.id });
     } else if (p.operacao === OP.VENDA_AGREGADA) {
       await b.exigirCompetenciaEditavel(tx, cx, p.competencia);
       const receita = await b.lancar(tx, cx, await b.categoriaDoSistema(tx, cx, CATEGORIA_VENDA_AGREGADA), {
@@ -406,6 +450,8 @@ export function operacoesDeFormacao(b) {
       const c = validarDecisao(entrada);
       return b.executar(ctx, ACAO.APLICAR, async (cx, tx) => {
         const previa = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
+        // doc 34: receitas de venda da competência em fila (o total do período cobre vários dias), depois a do dia.
+        if ([OP.VENDA, OP.VENDA_AGREGADA].includes(previa.operacao)) await tx.travar(cx, `formacao-competencia:${previa.competencia}`, "EXCLUSIVA");
         await tx.travar(cx, `formacao-dia:${previa.dataOperacao}`, "EXCLUSIVA");
         const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
         if (p.estado === E.APLICADA) return { proposta: p, efeitos: p.efeitos, repetido: true };
