@@ -53,7 +53,8 @@ export function operacoesEconomicas(b) {
           };
         }
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
-        await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
+        if (c.contraparteNova) c.contraparteId = (await b.criar(tx, cx, TIPO.CONTRAPARTE, c.contraparteNova)).id; // mesma transação
+        else await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         await b.exigirDocumentos(tx, cx, c.documentoIds);
         // "A classificar" é categoria do sistema: existe mesmo em plano implantado antes dela (criada sob demanda).
         const categoria = c.categoria === CATEGORIA_DESPESA_A_CLASSIFICAR ? await b.categoriaDoSistema(tx, cx, c.categoria) : await b.categoriaLancavel(tx, cx, c.categoria);

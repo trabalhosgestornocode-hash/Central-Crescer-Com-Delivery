@@ -95,11 +95,13 @@ async function montar() {
   };
   app.use("/ativacao", criarRotasFinanceiroV2({ habilitado: true, provisionamentoHabilitado: true, dependencias: () => ({ repositorio: repoLocal, adaptador: adaptadorLocal, vinculos, liberacoes: criarLiberacoesPostgres({ poolApp }), mfa, poolAutoridade: poolAut, administracao }) }));
   app.use("/local", criarRotasFinanceiroV2({ habilitado: true, dependencias: () => ({ repositorio: repoLocal, adaptador: adaptadorLocal, vinculos }) }));
+  // PRODUÇÃO com escrita ligada (só para o teste da abertura): co-localizado + FV2_ESCRITA_HABILITADA=1
+  app.use("/localescrita", criarRotasFinanceiroV2({ habilitado: true, escritaHabilitada: true, dependencias: () => ({ repositorio: repoLocal, adaptador: adaptadorLocal, vinculos }) }));
   app.use("/desligado", criarRotasFinanceiroV2({ habilitado: false, dependencias: () => { throw new Error("não deveria criar nada desligado"); } }));
   const servidorApp = await new Promise((r) => { const s = app.listen(0, "127.0.0.1", () => r(s)); });
   const urlApp = `http://127.0.0.1:${servidorApp.address().port}`;
   fechar.push(() => servidorGateway.close(), () => servidorApp.close());
-  ambiente = { urlApp, urlGateway, eventos, poolApp };
+  ambiente = { urlApp, urlGateway, eventos, poolApp, poolAut, dono: await abrirPool(b.urlAdmin, { max: 2 }) };
   return ambiente;
 }
 
@@ -279,4 +281,72 @@ test("10 — ATIVAÇÃO: administrador da empresa com TOTP recente provisiona a 
   assert.equal((await get("/ativacao/status", { s: sessao({ unidade: UNI_A2 }) })).corpo.liberado, false, "volta ao financeiro atual");
   // chave desligada (padrão): nada do procedimento responde
   assert.equal((await get("/local/administracao/contexto", { s: adm(), t: tkAdm() })).status, 404);
+});
+
+test("abertura — ESCRITA no modo CO-LOCALIZADO (produção): identidade, concessão, escopo/RLS, auditoria, idempotência, transação, concorrência, revogação e desligamento imediatos", pular, async () => {
+  const { dono, poolAut } = await montar();
+  const contar = async (q, p = []) => Number((await dono.query(q, p)).rows[0].n);
+  const W = (caminho, corpo, o = {}) => get(`/localescrita/acoes${caminho}`, { metodo: "POST", corpo, ...o });
+  // plano: idempotente (já implantado na semente) — repetir não cria nada
+  const plano = await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA" });
+  assert.equal(plano.status, 200, JSON.stringify(plano.corpo));
+  const categorias = await contar("select count(*) n from financeiro_v2.fv2_categoria where unidade_id = $1", [UNI_A]);
+  await W("/configuracoes/implantar-plano", { modelo: "ACAITERIA" });
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_categoria where unidade_id = $1", [UNI_A]), categorias);
+  // saldo de abertura: grava com autoria individual e histórico; repetir é idempotente; 5 envios simultâneos = 1 registro
+  const contas = await get(`/local/api/caixa-e-bancos${PERIODO}`);
+  const conta = contas.corpo.contas.find((c) => c.nome === "Banco Sintético da Rota").id;
+  const saldo = { conta, data: "2026-10-31", referencia: "FIM_DO_DIA", valor: "2.500,00", observacao: "Saldo sintético conferido com extrato sintético." };
+  const r1 = await W("/saldos/registrar", saldo);
+  assert.equal(r1.status, 200, JSON.stringify(r1.corpo));
+  await Promise.all(Array.from({ length: 5 }, () => W("/saldos/registrar", saldo)));
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_saldo_conta where conta_id = $1 and data = '2026-10-31'", [conta]), 1, "idempotente e sem duplicar sob concorrência");
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_saldo_conta s join financeiro_v2.fv2_historico h on h.registro_id = s.id where s.conta_id = $1 and s.data = '2026-10-31' and h.usuario_id = $2", [conta, PESSOA]), 1, "auditoria com a pessoa individual");
+  // mesmo dia/conta com OUTRO valor: conflito, nunca sobrescreve
+  assert.ok((await W("/saldos/registrar", { ...saldo, valor: "9,99" })).status >= 400);
+  // transação: obrigação inválida não grava nada
+  const antes = await contar("select count(*) n from financeiro_v2.fv2_obrigacao");
+  assert.ok((await W("/obrigacoes/registrar", { descricao: "Inválida", valor: "10,00", categoria: "NAO_EXISTE", competencia: "2026-10", dataEmissao: "2026-10-02", vencimento: "2026-10-20", fornecedor: "dddddddd-0000-4000-8000-00000000ffff" })).status >= 400);
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_obrigacao"), antes);
+  const fornecedores = await contar("select count(*) n from financeiro_v2.fv2_contraparte");
+  assert.ok((await W("/obrigacoes/registrar", { descricao: "Inválida", valor: "10,00", categoria: "NAO_EXISTE", competencia: "2026-10", dataEmissao: "2026-10-02", vencimento: "2026-10-20", fornecedorNovo: "Fornecedor Órfão Sintético" })).status >= 400);
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_contraparte"), fornecedores, "fornecedor novo + obrigação inválida: nada fica gravado");
+  // reenvio do MESMO formulário (mesma chave): 1 obrigação e 1 fornecedor, nunca duplicados — mesmo com envios simultâneos
+  const form = { descricao: "Boleto sintético de abertura", valor: "321,00", categoria: "INSUMOS", competencia: "2026-10", dataEmissao: "2026-10-05", vencimento: "2026-11-05", fornecedorNovo: "Fornecedor Sintético da Abertura", chave: "eeeeeeee-0000-4000-8000-000000000001" };
+  const obrigacoes = await contar("select count(*) n from financeiro_v2.fv2_obrigacao");
+  const respostas = await Promise.all([W("/obrigacoes/registrar", form), W("/obrigacoes/registrar", form), W("/obrigacoes/registrar", form)]);
+  assert.ok(respostas.every((x) => x.status === 200), JSON.stringify(respostas.map((x) => x.corpo)));
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_obrigacao"), obrigacoes + 1);
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_contraparte"), fornecedores + 1);
+  assert.ok((await W("/obrigacoes/registrar", { ...form, valor: "999,00" })).status >= 400, "mesma chave com outro conteúdo: conflito, nunca sobrescreve");
+  // escopo: a unidade nunca vem do corpo; unidade não liberada e outra empresa recusadas; RLS: nada da unidade A visto pela B
+  assert.equal((await W("/saldos/registrar", { ...saldo, unidade: UNI_A2 })).corpo.codigo, "CAMPO_DESCONHECIDO");
+  assert.equal((await W("/saldos/registrar", saldo, { s: sessao({ unidade: UNI_A2 }) })).corpo.motivo, "UNIDADE_NAO_LIBERADA");
+  assert.ok((await W("/saldos/registrar", saldo, { s: sessao({ org: ORG_B, unidade: UNI_B }) })).status >= 400);
+  // sem concessão / impersonação / conta compartilhada: recusados
+  assert.equal((await W("/saldos/registrar", saldo, { s: sessao({ conta: CONTA_NADA, pessoa: PESSOA_NADA }) })).corpo.motivo, "SEM_CONCESSAO");
+  assert.equal((await W("/saldos/registrar", saldo, { s: sessao({ extra: { impersonando: true, impersonadoPor: ADMIN } }) })).status, 403);
+  assert.equal((await W("/saldos/registrar", saldo, { s: sessao({ conta: CONTA_COMP, pessoa: PESSOA_COMP }) })).corpo.motivo, "CONTA_COMPARTILHADA");
+  // sensível (conceder) exige TOTP recente também no co-localizado
+  const conceder = { usuario: PESSOA_NADA, justificativa: "Concessão sintética para testar a revogação imediata.", acao_ver: true, acao_registrar: true };
+  assert.equal((await W("/permissoes/conceder", conceder, { t: token(CONTA, { metodo: null }) })).corpo.motivo, "MFA_SEM_SEGUNDO_FATOR");
+  const concedida = await W("/permissoes/conceder", conceder, { t: token(CONTA, { fatorHaS: 20 }) });
+  assert.equal(concedida.status, 200, JSON.stringify(concedida.corpo));
+  const sNada = sessao({ conta: CONTA_NADA, pessoa: PESSOA_NADA });
+  assert.equal((await W("/saldos/registrar", { ...saldo, data: "2026-10-30" }, { s: sNada })).status, 200, "a concessão vale na hora");
+  // revogação: vale na PRÓXIMA requisição (o banco derruba as sessões da pessoa)
+  const rev = await W("/permissoes/revogar", { usuario: PESSOA_NADA, justificativa: "Revogação sintética imediata (teste da abertura)." }, { t: token(CONTA, { fatorHaS: 20 }) });
+  assert.equal(rev.status, 200, JSON.stringify(rev.corpo));
+  assert.equal((await W("/saldos/registrar", { ...saldo, data: "2026-10-29" }, { s: sNada })).corpo.motivo, "SEM_CONCESSAO");
+  // desligamento imediato pela LIBERAÇÃO (sem deploy): desligar a unidade recusa a próxima escrita; religar volta
+  const prova = { ok: true, contaId: ADMIN, segundoFatorEm: Date.now() - 60_000 };
+  const lib = (ativa) => alterarLiberacaoPostgres(poolAut, { organizacaoId: ORG_A, unidadeId: UNI_A, ativa, atorContaId: ADMIN, justificativa: "Desligamento sintético para o teste da abertura.", provaDeSegundoFator: prova });
+  await lib(false);
+  assert.equal((await W("/saldos/registrar", { ...saldo, data: "2026-10-28" })).corpo.motivo, "UNIDADE_NAO_LIBERADA");
+  await lib(true);
+  assert.equal((await W("/saldos/registrar", { ...saldo, data: "2026-10-28" })).status, 200);
+  // chave geral desligada: nada responde
+  assert.equal((await get("/desligado/acoes/saldos/registrar", { metodo: "POST", corpo: saldo })).status, 404);
+  // auditoria de concessões: conceder e revogar registrados com o ator individual
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_auditoria_concessao where usuario_alvo = $1 and ator = $2", [PESSOA_NADA, PESSOA]), 2);
 });

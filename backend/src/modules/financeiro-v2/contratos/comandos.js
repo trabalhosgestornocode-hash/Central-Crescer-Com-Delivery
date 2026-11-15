@@ -211,7 +211,9 @@ export function validarImplantacaoDePlano(e) {
 }
 
 export function validarObrigacao(e) {
-  semCamposDesconhecidos(e, ["contraparteId", "valorOriginalCentavos", "moeda", "categoria", "descricao", "competencia", "dataEmissao", "vencimento", "parcelas", "recorrencia", "documentoIds", "fonte"], "obrigacao");
+  semCamposDesconhecidos(e, ["contraparteId", "contraparteNova", "valorOriginalCentavos", "moeda", "categoria", "descricao", "competencia", "dataEmissao", "vencimento", "parcelas", "recorrencia", "documentoIds", "fonte"], "obrigacao");
+  // Abertura: fornecedor NOVO criado na MESMA transação da obrigação (nunca fica órfão se a obrigação for recusada).
+  if ((e.contraparteId === undefined) === (e.contraparteNova === undefined)) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a contraparte existente OU a nova (exatamente uma).", { campo: "contraparteId" });
   const dataEmissao = exigirData(e.dataEmissao, "dataEmissao");
   const vencimento = exigirData(e.vencimento, "vencimento");
   if (vencimento < dataEmissao) falhar(CODIGO.DATA_INVALIDA, "O vencimento não pode ser anterior à emissão.", { campo: "vencimento" });
@@ -224,7 +226,7 @@ export function validarObrigacao(e) {
     recorrencia = { periodicidade: exigirUmDe(e.recorrencia.periodicidade, ["MENSAL"], "recorrencia.periodicidade"), diaDoMes: exigirInteiro(e.recorrencia.diaDoMes, "recorrencia.diaDoMes", { min: 1, max: 31 }) };
   }
   return {
-    contraparteId: exigirUuid(e.contraparteId, "contraparteId"),
+    ...(e.contraparteNova !== undefined ? { contraparteNova: validarContraparte(e.contraparteNova) } : { contraparteId: exigirUuid(e.contraparteId, "contraparteId") }),
     valorOriginalCentavos,
     moeda: moeda(e.moeda),
     categoria: codigoDeCategoria(e.categoria),

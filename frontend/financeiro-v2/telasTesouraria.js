@@ -49,7 +49,8 @@ export function contasAPagar(r, f = {}, ctx = {}) {
   const t = r.totais;
   const o = r.opcoesDeRegistro;
   const registrar = podeRegistrar(ctx) && o ? formAcao({ url: "/api/fv2/acoes/obrigacoes/registrar", titulo: "Registrar conta a pagar", rotulo: "Registrar conta", aviso: "Confirmo o registro da conta (a categoria decide a natureza; \"a classificar\" fica fora da DRE até haver evidência).",
-    campos: `<label>Fornecedor existente <select name="fornecedor">${opcao("", "— novo fornecedor —", "")}${o.fornecedores.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
+    campos: `<input type="hidden" name="chave" value="${esc(globalThis.crypto?.randomUUID?.() ?? "")}">
+<label>Fornecedor existente <select name="fornecedor">${opcao("", "— novo fornecedor —", "")}${o.fornecedores.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
 <label>Ou novo fornecedor <input name="fornecedorNovo" maxlength="120"></label>
 <label>Descrição <input name="descricao" maxlength="200" required></label>
 <label>Valor (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" required></label>
