@@ -366,6 +366,7 @@ function totais(controles) {
 
 /** Passo 1 do fluxo local: escolher um arquivo SINTÉTICO do catálogo e enviá-lo ao cofre (gera a prévia). */
 export function escolherArquivo(c) {
+  if (c.envioReal) return envioReal(c);
   return `${fechar("Importar arquivo sintético")}
 <p class="aviso">${esc(c.observacao)}</p>
 <ol class="passos"><li>Escolher o arquivo</li><li>Receber no cofre e validar</li><li>Revisar a prévia</li><li>Confirmar a importação</li></ol>
@@ -374,6 +375,24 @@ ${acao({
     campos: `<fieldset class="escolha"><legend>Arquivo</legend>${c.arquivos.map((a, i) => `<label class="opcao-arquivo"><input type="radio" name="arquivo" value="${esc(a.id)}"${i === 0 ? " checked" : ""} required> <span><strong>${esc(a.nome)}</strong><br><span class="nota">${esc(fonte(a.fonte))} · ${esc(periodo({ inicio: a.periodoInicio, fim: a.periodoFim }))} · leitor: ${esc(a.leitor)}</span></span></label>`).join("")}</fieldset>`,
     aviso: "Confirmo o envio deste arquivo sintético ao cofre da demonstração (nada entra no financeiro neste passo).",
   })}`;
+}
+
+/** doc 37: envio REAL pela plataforma, sem guarda do arquivo (lido, conferido e descartado). */
+function envioReal(c) {
+  return `${fechar("Importar relatório")}
+<p class="aviso">${esc(c.observacao)}</p>
+<ol class="passos"><li>Escolher o relatório e o período</li><li>Enviar e conferir a prévia</li><li>Confirmar a importação</li><li>Gerar e revisar as propostas</li></ol>
+<form class="acao acao--formulario" data-acao="/api/fv2/acoes/importacao/receber" data-recarregar="resultado:documento" data-envio-evidencia>
+  <div class="campos-form">
+  <label class="campo--largo">Relatório <select name="tipoRelatorio" required>${(c.relatorios ?? []).map((r) => `<option value="${esc(r.tipoRelatorio)}">${esc(r.nome)}</option>`).join("")}</select></label>
+  <label>Início do período <input type="date" name="periodoInicio" required></label>
+  <label>Fim do período <input type="date" name="periodoFim" required></label>
+  <label class="campo--largo">Arquivo <input type="file" name="arquivo" accept=".pdf,.xlsx,.csv,.ofx" required></label>
+  </div>
+  <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que é o arquivo original exportado da fonte, do período informado (nada entra no financeiro antes da confirmação da prévia).</label>
+  <div class="acoes-form"><button type="submit" class="botao botao--primario">Enviar e gerar a prévia</button></div>
+  <p class="resultado-acao" role="status" aria-live="polite"></p>
+</form>`;
 }
 
 // --------------------------------------------------------------------------------------------------------- propostas
