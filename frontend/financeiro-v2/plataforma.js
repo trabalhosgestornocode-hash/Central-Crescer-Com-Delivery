@@ -30,7 +30,7 @@ const respostaLocal = (status, corpo) => new Response(JSON.stringify(corpo), { s
 export function criarTransportePlataforma({ credenciais, fetchFn = (...a) => fetch(...a) }) {
   return async (url, opcoes = {}) => {
     const alvo = traduzirEndereco(url);
-    if (!alvo) return respostaLocal(404, { erro: "INDISPONIVEL_NA_PLATAFORMA", mensagem: "Este recurso não está disponível no Financeiro v2 da plataforma." });
+    if (!alvo) return respostaLocal(404, { erro: "INDISPONIVEL_NA_PLATAFORMA", mensagem: "Este recurso não está disponível no Crescer Com Delivery Financeiro." });
     let c;
     try { c = await credenciais(); } catch { c = { token: null, contexto: null }; }
     if (!c?.token) return respostaLocal(401, { erro: "SEM_SESSAO", mensagem: "Sua sessão expirou. Entre novamente pela plataforma." });
@@ -66,9 +66,9 @@ export function estadoDoErro(r) {
   const e = r?.erro ?? null;
   if (r?.status === 401 || e === "SEM_SESSAO" || m === "SESSAO_EXPIRADA" || m === "TOKEN_DE_OUTRA_CONTA") return { tipo: "sem-sessao", mensagem: "Sua sessão expirou. Entre novamente pela plataforma: nada foi gravado." };
   if (r?.status === 409 && e === "SEM_CONTEXTO") return { tipo: "sem-sessao", mensagem: r.mensagem };
-  if (e === "FINANCEIRO_V2_DESLIGADO") return { tipo: "negado", mensagem: "O Financeiro v2 está desativado. O financeiro desta unidade segue no painel atual." };
-  if (m === "UNIDADE_NAO_LIBERADA" || m === "EMPRESA_NAO_LIBERADA") return { tipo: "negado", mensagem: "O Financeiro v2 não está liberado para esta unidade." };
-  if (m === "SEM_CONCESSAO") return { tipo: "negado", mensagem: "Você não tem permissão no Financeiro v2 nesta unidade. Peça ao administrador financeiro." };
+  if (e === "FINANCEIRO_V2_DESLIGADO") return { tipo: "negado", mensagem: "O Crescer Com Delivery Financeiro está desativado. O financeiro desta unidade segue no painel atual." };
+  if (m === "UNIDADE_NAO_LIBERADA" || m === "EMPRESA_NAO_LIBERADA") return { tipo: "negado", mensagem: "O Crescer Com Delivery Financeiro não está liberado para esta unidade." };
+  if (m === "SEM_CONCESSAO") return { tipo: "negado", mensagem: "Você não tem permissão no Crescer Com Delivery Financeiro nesta unidade. Peça ao administrador financeiro." };
   if (["IMPERSONACAO", "PERFIL_DE_EXIBICAO", "CONTA_COMPARTILHADA", "PESSOA_SEM_IDENTIDADE", "UNIDADE_NAO_AUTORIZADA", "SEM_UNIDADE"].includes(m)) return { tipo: "negado", mensagem: r.mensagem };
   if (e === "AUTORIZACAO_FINANCEIRA_INDISPONIVEL") return { tipo: "erro", mensagem: "O serviço de autorização financeira está indisponível. Tente de novo em instantes; nada foi alterado." };
   if (String(m ?? "").startsWith("MFA") || m === "REAUTENTICACAO_RECENTE") return { tipo: "negado", mensagem: "Esta operação exige confirmar o segundo fator (código do aplicativo autenticador) nos últimos 10 minutos." };

@@ -188,7 +188,7 @@ async function carregar() {
     estado.pessoas = null;
     estado.unidade = s.dados.unidades[0]?.id ?? null;
     preencherUnidades();
-    if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Financeiro v2."); conteudo.removeAttribute("aria-busy"); return; }
+    if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Crescer Com Delivery Financeiro."); conteudo.removeAttribute("aria-busy"); return; }
   }
   const r = await consultor.consultar(consultaDaRota(), cabecalhos());
   if (r === null) return; // resposta obsoleta: outra consulta mais nova já está em andamento

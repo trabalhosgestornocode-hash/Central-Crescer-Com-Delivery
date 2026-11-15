@@ -39,7 +39,7 @@ function unidade(c) {
 <dl class="ficha">
   <dt>Nome de exibição</dt><dd>${esc(u?.nomeExibicao ?? "Ainda não configurado")}</dd>
   <dt>Identificação da empresa</dt><dd>${esc(u?.identificacaoEmpresa ?? "—")}</dd>
-  <dt>Situação no Financeiro v2</dt><dd>${u ? selo(u.situacao === "ATIVA" ? "Ativa" : "Inativa", u.situacao === "ATIVA" ? "ok" : "neutro") : "—"}</dd>
+  <dt>Situação no Crescer Com Delivery Financeiro</dt><dd>${u ? selo(u.situacao === "ATIVA" ? "Ativa" : "Inativa", u.situacao === "ATIVA" ? "ok" : "neutro") : "—"}</dd>
   <dt>Contas vinculadas</dt><dd>${c.contas.length ? c.contas.map((x) => esc(x.nome)).join(", ") : "Nenhuma"}</dd>
   <dt>Canais ativos</dt><dd>${c.canais.filter((x) => x.situacao === "ATIVO").map((x) => esc(x.nome)).join(", ") || "Nenhum cadastrado"}</dd>
 </dl>
