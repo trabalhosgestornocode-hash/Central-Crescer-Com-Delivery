@@ -137,7 +137,7 @@ test("5, 6, 12 — identidade forjada, variáveis manipuladas e atalhos de auten
   const { rows: funcoes } = await dono.query(`select p.proname, pg_get_userbyid(p.proowner) as dono, p.prosecdef, p.proconfig,
       has_function_privilege('public', p.oid, 'execute') as publico, has_function_privilege('fv2_app', p.oid, 'execute') as app
       from pg_proc p where p.prosecdef and p.proname like 'fv2%' order by 1`);
-  assert.deepEqual(funcoes.map((f) => f.proname), ["fv2__sessao_vigente", "fv2_abrir_sessao", "fv2_abrir_sessao_de_provisionamento", "fv2_encerrar_sessoes", "fv2_gravar_concessao", "fv2_liberacao_alterar", "fv2_liberacao_estado", "fv2_tem_acao"]);
+  assert.deepEqual(funcoes.map((f) => f.proname), ["fv2__sessao_vigente", "fv2_abrir_sessao", "fv2_abrir_sessao_de_provisionamento", "fv2_administrador_corporativo_ativo", "fv2_administrador_corporativo_definir", "fv2_conceder_por_administrador", "fv2_encerrar_sessoes", "fv2_gravar_concessao", "fv2_liberacao_alterar", "fv2_liberacao_alterar_lote", "fv2_liberacao_estado", "fv2_painel_acessos", "fv2_painel_administradores", "fv2_painel_liberacoes", "fv2_tem_acao"]);
   for (const f of funcoes) {
     assert.equal(f.dono, "fv2_guardiao", f.proname);
     assert.ok(f.proconfig?.some((c) => c.startsWith("search_path=pg_catalog")), f.proname);

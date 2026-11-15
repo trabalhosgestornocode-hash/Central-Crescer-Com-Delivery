@@ -49,6 +49,16 @@ export function criarAdministracaoDaPlataforma(db) {
       return r.some((x) => x?.ativo === true && x?.papel === "organization_admin") ? { tipo: "ADMIN_EMPRESA" } : null;
     },
     contaDoPerfil: vinculos.contaDoPerfil,
+    /** Administradores da empresa na plataforma (candidatos a administrador financeiro corporativo; a escolha é humana). */
+    async administradoresDaEmpresa({ organizacaoId }) {
+      const r = exigir(await db.from("usuarios_organizacoes").select("usuario_id, papel, ativo").eq("organizacao_id", organizacaoId).eq("ativo", true).eq("papel", "organization_admin")) ?? [];
+      return [...new Set(r.map((x) => String(x.usuario_id).toLowerCase()))];
+    },
+    /** Unidades da empresa (id e nome) — só leitura, para o painel de ativação. */
+    async unidadesDaEmpresa({ organizacaoId }) {
+      const r = exigir(await db.from("unidades").select("id, nome").eq("organizacao_id", organizacaoId)) ?? [];
+      return r.map((u) => ({ unidadeId: String(u.id).toLowerCase(), nome: u.nome ?? null }));
+    },
     /** Pessoas com vínculo ATIVO na unidade (candidatas; a escolha é humana). */
     async pessoasDaUnidade({ unidadeId }) {
       const linhas = exigir(await db.from("usuarios_unidades").select("perfil_id, ativo").eq("unidade_id", unidadeId).eq("ativo", true)) ?? [];

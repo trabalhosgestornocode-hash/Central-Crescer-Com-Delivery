@@ -11,7 +11,7 @@
 //   FV2_ESCRITA_HABILITADA=1      (opcional) libera as AÇÕES; sem ela, só consulta
 //   FV2_HOMOLOGACAO_HABILITADA=1  (opcional) só depois da matriz 24a aprovada; homologar exige ainda 2º fator recente
 import pg from "pg";
-import { criarAdaptadorDaPlataforma, criarLiberacoesPostgres, criarRepositorioPostgres } from "../financeiro-v2/index.js";
+import { criarAdaptadorDaPlataforma, criarAdministracaoCorporativaPostgres, criarLiberacoesPostgres, criarRepositorioPostgres } from "../financeiro-v2/index.js";
 import { criarClienteDoGateway } from "./clienteGateway.js";
 import { criarAutoridadeCoLocalizada } from "./autoridadeCoLocalizada.js";
 import { criarMfaPeloProvedor } from "./mfaPeloProvedor.js";
@@ -73,7 +73,7 @@ export function criarFinanceiroV2DaPlataforma({ supabase, env = process.env, reg
       const vinculos = criarVinculosDaPlataforma(supabase);
       const liberacoes = criarLiberacoesPostgres({ poolApp: pool });
       const adaptador = criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes: criarConcessoesDaSessao({ repositorio }), mfa });
-      return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, administracao: criarAdministracaoDaPlataforma(supabase) };
+      return { repositorio, adaptador, vinculos, liberacoes, mfa, poolAutoridade, administracao: criarAdministracaoDaPlataforma(supabase), corporativo: poolAutoridade ? criarAdministracaoCorporativaPostgres(poolAutoridade) : null };
     },
   });
 }

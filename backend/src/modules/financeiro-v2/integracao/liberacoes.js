@@ -31,11 +31,17 @@ export function validarAtoDeLiberacao(ato) {
 /** Registro em memória (testes e homologação local). Mesma semântica da 0021. */
 export function criarLiberacoesMemoria({ relogio = () => new Date() } = {}) {
   const estado = new Map();
+  const escritaPorUnidade = new Map();
   const historico = [];
   return Object.freeze({
     async consultar({ organizacaoId, unidadeId }) {
       const empresa = estado.get(chave(organizacaoId, null))?.ativa === true;
-      return { empresa, unidade: empresa && estado.get(chave(organizacaoId, unidadeId))?.ativa === true };
+      const unidade = empresa && estado.get(chave(organizacaoId, unidadeId))?.ativa === true;
+      return { empresa, unidade, escrita: unidade && escritaPorUnidade.get(chave(organizacaoId, unidadeId)) === true };
+    },
+    /** Liga/desliga a ESCRITA de uma unidade (espelho de fv2_liberacao_alterar_lote; a unidade precisa estar ligada). */
+    definirEscrita({ organizacaoId, unidadeId, escrita }) {
+      escritaPorUnidade.set(chave(organizacaoId, unidadeId), escrita === true);
     },
     async alterar(ato) {
       const a = validarAtoDeLiberacao(ato);

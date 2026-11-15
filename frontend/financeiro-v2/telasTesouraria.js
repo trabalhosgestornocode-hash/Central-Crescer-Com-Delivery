@@ -283,6 +283,29 @@ function contaFinanceira(c) {
 </article>`;
 }
 
+// ------------------------------------------------------------------------------------- receita manual (venda)
+const FORMAS = { DINHEIRO: "Dinheiro", PIX: "Pix", DEBITO: "Débito", CREDITO: "Crédito", VALE: "Vale", OUTRA: "Outra forma" };
+const PROCESSADORES = { STONE: "Stone", IFOOD: "iFood", ANOTA_AI: "Anota AI", OPERADORA_BENEFICIOS: "Operadora de benefícios", MAQUINA_TERCEIROS: "Máquina de terceiros", OUTRO: "Outro" };
+const CANAIS_LANC = { BALCAO: "Balcão", IFOOD: "iFood", ANOTA_AI: "Anota AI", OUTRO: "Outro canal" };
+const novaChave = () => (globalThis.crypto?.randomUUID?.() ?? "");
+/** Lançamento manual de receita, sem depender de SAIPOS, iFood, Foody nem banco. A chave de envio impede duplicar. */
+export function lancamentos(r, f = {}, ctx = {}) {
+  const contas = r.contas ?? [];
+  const pode = podeRegistrar(ctx);
+  const form = pode ? formAcao({ url: "/api/fv2/acoes/vendas/registrar", titulo: "Registrar receita (venda)", rotulo: "Registrar venda", aviso: "Confirmo a venda e a forma de recebimento. Reenviar o mesmo formulário não duplica.",
+    campos: `<input type="hidden" name="chave" value="${esc(novaChave())}">
+<label>Canal <select name="canal">${Object.entries(CANAIS_LANC).map(([k, v]) => opcao(k, v, "BALCAO")).join("")}</select></label>
+<label>Data da venda <input type="date" name="dataVenda" value="${esc(r.dataBase ?? "")}" required></label>
+<label>Valor (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" placeholder="0,00" required></label>
+<label>Forma de pagamento <select name="forma">${opcao("", "Ainda sem pagamento (a receber)", "")}${Object.entries(FORMAS).map(([k, v]) => opcao(k, v, "")).join("")}</select></label>
+<label>Cai na conta (dinheiro, Pix) <select name="conta">${opcao("", "—", "")}${contas.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
+<label>Operadora (cartão, apps) <select name="processador">${opcao("", "—", "")}${Object.entries(PROCESSADORES).map(([k, v]) => opcao(k, v, "")).join("")}</select></label>
+<label>Descrição <input name="descricao" maxlength="200"></label>` }) : nenhum("Você não tem permissão para lançar nesta unidade. Peça ao administrador financeiro.");
+  return `${cabecalho("Lançamentos", "Receitas lançadas à mão, sem depender de integrações")}
+<p class="aviso">Despesas e contas a pagar: <a href="#/contas-a-pagar">Contas a Pagar</a>. Saldos, contas e caixa: <a href="#/caixa-e-bancos">Caixa e Bancos</a> e Configurações › Abertura. Nada é lançado sem a sua confirmação.</p>
+${form}`;
+}
+
 export function caixaEBancos(r, f = {}, ctx = {}) {
   const k = r.consolidado;
   const saldo = podeRegistrar(ctx) && r.contas?.length ? formAcao({ url: "/api/fv2/acoes/saldos/registrar", titulo: "Informar saldo de conta (extrato)", rotulo: "Registrar saldo informado",

@@ -11,7 +11,7 @@
 //                                     segundo fator recente comprovado; homologar exige ainda a matriz aprovada
 // Desligado (padrão): nada responde além de /status ("não liberado"); a plataforma segue com o financeiro atual.
 import { Router, json } from "express";
-import { ACAO, CODIGO, FINALIDADE_DO_GATEWAY, alterarLiberacaoPostgres, criarAutoridadeDaPlataforma, criarNucleoFinanceiro, identificarSessao, tempo } from "../financeiro-v2/index.js";
+import { ACAO, CODIGO, FINALIDADE_DO_GATEWAY, PERFIS_DE_ACESSO, alterarLiberacaoPostgres, criarAutoridadeDaPlataforma, criarNucleoFinanceiro, identificarSessao, tempo } from "../financeiro-v2/index.js";
 import { comIdentidadeDaRequisicao, resumoDaSessao } from "./clienteGateway.js";
 import { CONSULTAS, pessoasDaUnidade } from "./consultas.js";
 import { ESCRITAS } from "./escritas.js";
@@ -64,7 +64,8 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
   r.use((req, res, next) => {
     const acao = req.method === "POST" && req.path.startsWith("/acoes/");
     const adm = req.path.startsWith("/administracao/");
-    if (req.method !== "GET" && !acao && !(adm && req.method === "POST")) return res.status(405).json({ erro: "METODO_NAO_PERMITIDO", codigo: "METODO_NAO_PERMITIDO", mensagem: "Método não permitido." });
+    const corp = req.path.startsWith("/corporativo/");
+    if (req.method !== "GET" && !acao && !((adm || corp) && req.method === "POST")) return res.status(405).json({ erro: "METODO_NAO_PERMITIDO", codigo: "METODO_NAO_PERMITIDO", mensagem: "Método não permitido." });
     if (!habilitado) return req.path === "/status" && req.method === "GET" ? res.json(DESLIGADO) : res.status(404).json({ erro: "FINANCEIRO_V2_DESLIGADO", codigo: "FINANCEIRO_V2_DESLIGADO", mensagem: "O Financeiro v2 não está ativo." });
     if (adm && !provisionamentoHabilitado) return res.status(404).json({ erro: "PROVISIONAMENTO_DESLIGADO", codigo: "PROVISIONAMENTO_DESLIGADO", mensagem: "O procedimento de ativação não está ligado." });
     if (acao && !escritaHabilitada) return res.status(403).json({ erro: "ESCRITA_DESLIGADA", codigo: "ESCRITA_DESLIGADA", mensagem: "Nesta fase o Financeiro v2 está liberado só para consulta." });
@@ -115,7 +116,7 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
         const { relogio } = obter();
         return {
           modo: "PLATAFORMA", dataBase: tempo.hojeEm(relogio ? relogio() : new Date()), csrf: null, usuario: req.user?.nome ?? null,
-          escritaHabilitada, homologacaoHabilitada, pessoasDemo: [],
+          escritaHabilitada: escritaHabilitada && c.escritaDaUnidade === true, homologacaoHabilitada, pessoasDemo: [],
           unidades: [{ id: c.contexto.unidadeId, nome: req.acesso?.unidade?.nome ?? "Unidade", permissoes: [...c.contexto.permissoes] }],
         };
       });
@@ -173,6 +174,8 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
         const finalidade = acaoSensivel ? FINALIDADE_DO_GATEWAY.ACAO_SENSIVEL : FINALIDADE_DO_GATEWAY.OPERACAO;
         const corpo = await comIdentidade(req, async (sessao, token) => {
           const { c, nucleo } = await preparar(sessao, acaoSensivel ? { acao: acaoSensivel, tokenDeAcesso: token } : {});
+          // Liberação operacional INDIVIDUAL: a chave geral não basta; a unidade precisa estar com a escrita ligada.
+          if (c.escritaDaUnidade !== true) throw recusa(403, "ESCRITA_DA_UNIDADE_DESLIGADA", "Esta unidade ainda não foi liberada para lançamentos. Peça ao administrador financeiro da empresa.");
           const resultado = await escrita.fazer(nucleo, c.contexto, b);
           registrar({ tipo: "ACAO_FINANCEIRA", acao: caminho, unidadeId: c.contexto.unidadeId, pessoa: c.contexto.usuarioId, segundoFator: Boolean(acaoSensivel) });
           return resultado ?? { ok: true };
@@ -266,6 +269,161 @@ export function criarRotasFinanceiroV2({ habilitado, escritaHabilitada = false, 
     } catch (e) {
       return responderErro(res, e, registrar);
     }
+  });
+  // PRIMEIRO administrador financeiro corporativo da empresa — uma vez por empresa, só com o procedimento de ativação ligado
+  // (FV2_PROVISIONAMENTO_HABILITADO=1, decisão de infraestrutura do proprietário), por administrador da EMPRESA na plataforma,
+  // com segundo fator recente comprovado. Depois disso, os demais administradores são definidos por quem já é administrador.
+  r.post("/administracao/administrador-corporativo-inicial", json({ limit: "8kb", strict: true }), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      if (Object.keys(b).some((k) => !["conta", "justificativa"].includes(k))) throw recusa(400, "CAMPO_DESCONHECIDO", "Campos não aceitos.");
+      const justificativa = texto(b.justificativa, 20, 500);
+      if (!justificativa) throw recusa(400, "JUSTIFICATIVA_INSUFICIENTE", "Justificativa obrigatória (mínimo 20 caracteres).");
+      const corpo = await comIdentidade(req, async (sessao, token) => {
+        const s = await exigirAdministradorDaEmpresa(sessao);
+        const { mfa, corporativo, administracao, vinculos } = obter();
+        if (!corporativo) throw recusa(501, "ADMINISTRACAO_PELO_SERVICO_DA_AUTORIDADE", "Neste modo a administração é feita pelo serviço da autoridade.");
+        const prova = await mfa.provar({ tokenDeAcesso: token, contaId: s.contaId }).catch(() => ({ ok: false }));
+        if (!prova?.ok) throw Object.assign(new Error("Esta ação exige o código do autenticador nos últimos 10 minutos."), { codigo: CODIGO.PERMISSAO_INSUFICIENTE, detalhes: { motivo: prova?.motivo ?? "SEM_PROVA_DE_SEGUNDO_FATOR" } });
+        const conta = b.conta === undefined ? s.contaId : String(b.conta).toLowerCase();
+        if (!(await administracao.administradoresDaEmpresa({ organizacaoId: s.organizacaoId })).includes(conta)) throw recusa(403, "NAO_E_ADMIN_DA_EMPRESA", "Só um administrador da empresa na plataforma pode ser o administrador financeiro.");
+        if ((await vinculos.perfisAtivosDaConta({ contaId: conta })) !== 1) throw recusa(409, "CONTA_COMPARTILHADA", "Conta compartilhada não pode administrar o financeiro.");
+        const r1 = await corporativo.definirAdministrador({ organizacaoId: s.organizacaoId, contaId: conta, ativo: true, atorContaId: s.contaId, justificativa, segundoFatorEm: prova.segundoFatorEm });
+        registrar({ tipo: "ADMINISTRADOR_CORPORATIVO_INICIAL", conta, ator: s.contaId });
+        return { ok: true, ...r1 };
+      }, FINALIDADE_DO_GATEWAY.LIBERACAO);
+      return res.json(corpo);
+    } catch (e) {
+      return responderErro(res, e, registrar);
+    }
+  });
+  // ---------------------------------------------------------------- ADMINISTRAÇÃO CORPORATIVA (migração 0022)
+  // Ativação simples: o ADMINISTRADOR FINANCEIRO CORPORATIVO (decidido no banco, por empresa) libera unidades em lote e
+  // concede acessos, sem segundo atestante e sem código a cada ato. Exige, juntas: sessão autenticada, ser administrador da
+  // empresa na plataforma E constar como administrador financeiro corporativo. A empresa é SEMPRE a da sessão.
+  const NIVEIS = Object.freeze({ ...PERFIS_DE_ACESSO, NENHUM: [] });
+  async function exigirCorporativo(sessao) {
+    const s = identificarSessao(sessao, Date.now());
+    const { administracao, corporativo } = obter();
+    if (!corporativo) throw recusa(501, "ADMINISTRACAO_PELO_SERVICO_DA_AUTORIDADE", "Neste modo a administração é feita pelo serviço da autoridade.");
+    if (!(await administracao.autoridadeSobre({ contaId: s.contaId, organizacaoId: s.organizacaoId }))) {
+      throw Object.assign(new Error("Só o administrador da empresa acessa a ativação do Financeiro v2."), { codigo: CODIGO.PERMISSAO_INSUFICIENTE, detalhes: { motivo: "SEM_AUTORIDADE_ADMINISTRATIVA" } });
+    }
+    if (!(await corporativo.ehAdministrador({ organizacaoId: s.organizacaoId, contaId: s.contaId }))) {
+      throw Object.assign(new Error("Você ainda não é administrador financeiro corporativo desta empresa."), { codigo: CODIGO.PERMISSAO_INSUFICIENTE, detalhes: { motivo: "NAO_E_ADMINISTRADOR_CORPORATIVO" } });
+    }
+    return s;
+  }
+  const justificativaDe = (b) => { const j = texto(b.justificativa, 20, 500); if (!j) throw recusa(400, "JUSTIFICATIVA_INSUFICIENTE", "Justificativa obrigatória (mínimo 20 caracteres)."); return j; };
+  const semCamposAlemDe = (b, permitidos) => { if (Object.keys(b).some((k) => !permitidos.includes(k))) throw recusa(400, "CAMPO_DESCONHECIDO", "Campos não aceitos."); };
+  const idMin = (v) => (typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) ? v.toLowerCase() : null);
+
+  r.get("/corporativo/contexto", async (req, res) => {
+    try {
+      const corpo = await comIdentidade(req, async (sessao) => {
+        const s = await exigirCorporativo(sessao);
+        const { administracao, corporativo } = obter();
+        const nomes = new Map((await administracao.unidadesDaEmpresa({ organizacaoId: s.organizacaoId })).map((u) => [u.unidadeId, u.nome]));
+        const painel = await corporativo.painel({ organizacaoId: s.organizacaoId, atorContaId: s.contaId });
+        return {
+          organizacao: { id: s.organizacaoId, nome: req.acesso?.empresa?.nome ?? null },
+          unidades: painel.map((u) => ({ id: u.unidadeId, nome: nomes.get(u.unidadeId) ?? u.rotulo, liberada: u.liberada, escrita: u.escrita })),
+          administradores: (await corporativo.listarAdministradores({ organizacaoId: s.organizacaoId, atorContaId: s.contaId })).filter((a) => a.ativo).map((a) => ({ contaId: a.contaId, eu: a.contaId === s.contaId })),
+          candidatosAAdministrador: (await administracao.administradoresDaEmpresa({ organizacaoId: s.organizacaoId })).filter((c) => c !== s.contaId),
+          niveis: Object.keys(NIVEIS),
+        };
+      });
+      res.set("cache-control", "no-store");
+      return res.json(corpo);
+    } catch (e) { return responderErro(res, e, registrar); }
+  });
+
+  r.get("/corporativo/pessoas", async (req, res) => {
+    try {
+      const corpo = await comIdentidade(req, async (sessao) => {
+        const s = await exigirCorporativo(sessao);
+        const unidadeId = idMin(req.query.unidade);
+        if (!unidadeId) throw recusa(400, "UNIDADE_INVALIDA", "Escolha uma unidade.");
+        const { administracao, vinculos, corporativo } = obter();
+        if (!(await administracao.unidadesDaEmpresa({ organizacaoId: s.organizacaoId })).some((u) => u.unidadeId === unidadeId)) throw recusa(403, "UNIDADE_FORA_DA_EMPRESA", "Unidade fora desta empresa.");
+        const acessos = new Map((await corporativo.acessosDaUnidade({ organizacaoId: s.organizacaoId, unidadeId, atorContaId: s.contaId })).map((a) => [a.perfilId, a]));
+        const pessoas = [];
+        for (const p of await administracao.pessoasDaUnidade({ unidadeId })) {
+          const a = acessos.get(p.perfilId);
+          const nivel = !a?.ativa ? "NENHUM" : (Object.entries(NIVEIS).filter(([, acoes]) => acoes.length && acoes.every((x) => a.acoes.includes(x))).sort((x, y) => y[1].length - x[1].length)[0]?.[0] ?? "PERSONALIZADO");
+          pessoas.push({ perfilId: p.perfilId, nome: p.nome ?? "Pessoa sem nome", contaPessoal: (await vinculos.perfisAtivosDaConta({ contaId: p.contaId })) === 1, nivel, euMesmo: p.perfilId === s.perfilId });
+        }
+        return { unidadeId, pessoas };
+      });
+      res.set("cache-control", "no-store");
+      return res.json(corpo);
+    } catch (e) { return responderErro(res, e, registrar); }
+  });
+
+  r.post("/corporativo/liberacao", json({ limit: "8kb", strict: true }), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      semCamposAlemDe(b, ["unidades", "ativa", "escrita", "justificativa"]);
+      if (!Array.isArray(b.unidades) || typeof b.ativa !== "boolean" || (b.escrita !== undefined && typeof b.escrita !== "boolean")) throw recusa(400, "ENTRADA_INVALIDA", "Informe as unidades e se liga ou desliga.");
+      const justificativa = justificativaDe(b);
+      const corpo = await comIdentidade(req, async (sessao) => {
+        const s = await exigirCorporativo(sessao);
+        const { administracao, corporativo } = obter();
+        const daEmpresa = new Set((await administracao.unidadesDaEmpresa({ organizacaoId: s.organizacaoId })).map((u) => u.unidadeId));
+        const unidades = [...new Set(b.unidades.map(idMin))];
+        if (!unidades.length || unidades.some((u) => !u || !daEmpresa.has(u))) throw recusa(403, "UNIDADE_FORA_DA_EMPRESA", "Alguma unidade não pertence a esta empresa.");
+        const r1 = await corporativo.liberarEmLote({ organizacaoId: s.organizacaoId, unidades, ativa: b.ativa, escrita: b.escrita ?? b.ativa, atorContaId: s.contaId, justificativa });
+        registrar({ tipo: b.ativa ? "UNIDADES_LIBERADAS_EM_LOTE" : "UNIDADES_DESLIGADAS_EM_LOTE", unidades: unidades.length, ator: s.contaId });
+        return { ok: true, ...r1 };
+      }, FINALIDADE_DO_GATEWAY.LIBERACAO);
+      return res.json(corpo);
+    } catch (e) { return responderErro(res, e, registrar); }
+  });
+
+  r.post("/corporativo/acessos", json({ limit: "8kb", strict: true }), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      semCamposAlemDe(b, ["unidade", "perfil", "nivel", "justificativa"]);
+      const unidadeId = idMin(b.unidade); const perfilId = idMin(b.perfil);
+      if (!unidadeId || !perfilId || !Object.hasOwn(NIVEIS, b.nivel)) throw recusa(400, "ENTRADA_INVALIDA", "Informe unidade, pessoa e nível.");
+      const justificativa = justificativaDe(b);
+      const corpo = await comIdentidade(req, async (sessao) => {
+        const s = await exigirCorporativo(sessao);
+        const { administracao, vinculos, corporativo } = obter();
+        if (!(await administracao.unidadesDaEmpresa({ organizacaoId: s.organizacaoId })).some((u) => u.unidadeId === unidadeId)) throw recusa(403, "UNIDADE_FORA_DA_EMPRESA", "Unidade fora desta empresa.");
+        // O beneficiário é uma PESSOA com vínculo ativo na unidade e conta pessoal (nunca conta compartilhada); não é quem age.
+        const pessoa = (await administracao.pessoasDaUnidade({ unidadeId })).find((p) => p.perfilId === perfilId);
+        if (!pessoa) throw recusa(403, "PESSOA_SEM_VINCULO", "A pessoa não tem vínculo ativo com a unidade.");
+        if (b.nivel !== "NENHUM" && (await vinculos.perfisAtivosDaConta({ contaId: pessoa.contaId })) !== 1) throw recusa(409, "CONTA_COMPARTILHADA", "Conta compartilhada não opera o financeiro: use uma conta pessoal.");
+        const r1 = await corporativo.conceder({ organizacaoId: s.organizacaoId, unidadeId, perfilId, acoes: NIVEIS[b.nivel], atorContaId: s.contaId, atorPerfilId: s.perfilId, justificativa });
+        registrar({ tipo: "ACESSO_FINANCEIRO_ALTERADO", unidadeId, pessoa: perfilId, nivel: b.nivel, ator: s.contaId });
+        return { ok: true, ...r1 };
+      }, FINALIDADE_DO_GATEWAY.LIBERACAO);
+      return res.json(corpo);
+    } catch (e) { return responderErro(res, e, registrar); }
+  });
+
+  r.post("/corporativo/administradores", json({ limit: "8kb", strict: true }), async (req, res) => {
+    try {
+      const b = req.body ?? {};
+      semCamposAlemDe(b, ["conta", "ativo", "justificativa"]);
+      const conta = idMin(b.conta);
+      if (!conta || typeof b.ativo !== "boolean") throw recusa(400, "ENTRADA_INVALIDA", "Informe a conta e se liga ou desliga.");
+      const justificativa = justificativaDe(b);
+      const corpo = await comIdentidade(req, async (sessao) => {
+        const s = await exigirCorporativo(sessao);
+        const { administracao, vinculos, corporativo } = obter();
+        // O novo administrador já tem de ser administrador da empresa na plataforma e usar conta pessoal.
+        if (b.ativo) {
+          if (!(await administracao.administradoresDaEmpresa({ organizacaoId: s.organizacaoId })).includes(conta)) throw recusa(403, "NAO_E_ADMIN_DA_EMPRESA", "Só administradores da empresa na plataforma podem ser administradores financeiros.");
+          if ((await vinculos.perfisAtivosDaConta({ contaId: conta })) !== 1) throw recusa(409, "CONTA_COMPARTILHADA", "Conta compartilhada não pode administrar o financeiro.");
+        }
+        const r1 = await corporativo.definirAdministrador({ organizacaoId: s.organizacaoId, contaId: conta, ativo: b.ativo, atorContaId: s.contaId, justificativa });
+        registrar({ tipo: b.ativo ? "ADMINISTRADOR_CORPORATIVO_ADICIONADO" : "ADMINISTRADOR_CORPORATIVO_REMOVIDO", conta, ator: s.contaId });
+        return { ok: true, ...r1 };
+      }, FINALIDADE_DO_GATEWAY.LIBERACAO);
+      return res.json(corpo);
+    } catch (e) { return responderErro(res, e, registrar); }
   });
   return r;
 }

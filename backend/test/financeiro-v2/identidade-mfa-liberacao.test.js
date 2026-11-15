@@ -123,7 +123,7 @@ test("09B — liberação: desligada por padrão; unidade só com a empresa; lib
   assert.equal((await vazio.a.disponibilidade(sessao())).liberado, false, "rota direta numa unidade não liberada: nada");
   const soUnidade = await montarAdaptador({ liberar: [[ORG_A, UNI_A]] });
   await recusa(soUnidade.a.contexto(sessao()), MOTIVO.EMPRESA_NAO_LIBERADA);
-  assert.deepEqual(await soUnidade.liberacoes.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false }, "o registro segue o contrato do banco (0021): unidade só com a empresa");
+  assert.deepEqual(await soUnidade.liberacoes.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false, escrita: false }, "o registro segue o contrato do banco (0021): unidade só com a empresa");
   const { a, liberacoes, estado } = await montarAdaptador({ liberar: [[ORG_A, null], [ORG_A, UNI_A]] });
   assert.equal((await a.contexto(sessao())).contexto.unidadeId, UNI_A);
   await recusa(a.contexto(sessao({ uni: UNI_A2 })), MOTIVO.UNIDADE_NAO_LIBERADA, "troca para unidade não liberada");
@@ -142,7 +142,7 @@ test("09B — alterar liberação exige justificativa e prova de segundo fator D
   await assert.rejects(l.alterar(ATO_LIGAR({ provaDeSegundoFator: null })), (e) => e.detalhes.motivo === "SEM_PROVA_DE_SEGUNDO_FATOR");
   await assert.rejects(l.alterar(ATO_LIGAR({ provaDeSegundoFator: { ok: true, contaId: CONTA, segundoFatorEm: agoraMs } })), (e) => e.detalhes.motivo === "SEM_PROVA_DE_SEGUNDO_FATOR");
   await assert.rejects(l.alterar(ATO_LIGAR({ atorContaId: null })), (e) => e.detalhes.motivo === "ATOR_AUSENTE");
-  assert.deepEqual(await l.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false });
+  assert.deepEqual(await l.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false, escrita: false });
 });
 
 // ------------------------------------------------------------------------------------------------ gateway
@@ -198,16 +198,16 @@ test("banco — 0021: liberação desligada por padrão; aplicação só LÊ; s�
   const lib = criarLiberacoesPostgres({ poolApp: app });
   // o banco confere o carimbo contra o relógio REAL (não o relógio sintético da suíte)
   const ATO_PG = (extra = {}) => ATO_LIGAR({ provaDeSegundoFator: { ok: true, contaId: CONTA_ADMIN, segundoFatorEm: Date.now() - 60_000 }, ...extra });
-  assert.deepEqual(await lib.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false });
+  assert.deepEqual(await lib.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false, escrita: false });
   const negado = (e) => ["42501"].includes(e.code);
   await assert.rejects(app.query("insert into fv2_liberacao (organizacao_id, unidade_id, ativa, alterada_por, justificativa) values ($1, null, true, $2, 'Tentativa direta da aplicação (sintético)')", [ORG_A, CONTA]), negado);
   await assert.rejects(app.query("select fv2_liberacao_alterar($1, null, true, $2, 'Tentativa da aplicação pela função (sintético)', now())", [ORG_A, CONTA]), negado);
   await assert.rejects(app.query("select * from fv2_liberacao_historico"), negado);
   // pela autoridade, com tudo
   await alterarLiberacaoPostgres(autoridade, ATO_PG());
-  assert.deepEqual(await lib.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: true, unidade: false }, "a unidade continua desligada");
+  assert.deepEqual(await lib.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: true, unidade: false, escrita: false }, "a unidade continua desligada");
   await alterarLiberacaoPostgres(autoridade, ATO_PG({ unidadeId: UNI_A }));
-  assert.deepEqual(await lib.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: true, unidade: true });
+  assert.deepEqual(await lib.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: true, unidade: true, escrita: false });
   // barreiras da função (mesmo chamada direto pela autoridade)
   const fv042 = (e) => e.code === "FV042";
   await assert.rejects(autoridade.query("select fv2_liberacao_alterar($1, $2, true, $3, 'curta', now())", [ORG_A, UNI_A2, CONTA_ADMIN]), fv042);
@@ -215,7 +215,7 @@ test("banco — 0021: liberação desligada por padrão; aplicação só LÊ; s�
   await assert.rejects(autoridade.query("select fv2_liberacao_alterar($1, $2, true, $3, 'Justificativa longa o bastante (sintético)', now())", [ORG_A, "aaaaaaaa-0000-4000-8000-0000000000ff", CONTA_ADMIN]), fv042, "unidade fora dos escopos do banco");
   // desligar a empresa derruba a unidade
   await alterarLiberacaoPostgres(autoridade, ATO_PG({ ativa: false, justificativa: "Empresa desligada para revisão (sintético)." }));
-  assert.deepEqual(await lib.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false });
+  assert.deepEqual(await lib.consultar({ organizacaoId: ORG_A, unidadeId: UNI_A }), { empresa: false, unidade: false, escrita: false });
   // histórico imutável (nem o dono o apaga)
   const dono = await abrirPool(b.urlAdmin, { max: 1 });
   assert.equal((await dono.query("select count(*)::int as n from fv2_liberacao_historico")).rows[0].n, 3);

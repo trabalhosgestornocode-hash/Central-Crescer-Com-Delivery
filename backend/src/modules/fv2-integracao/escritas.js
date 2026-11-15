@@ -46,6 +46,7 @@ export const SEM_ANEXO = "referência externa; sem anexo verificado no sistema";
 const competenciaValida = (v) => { if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(String(v ?? ""))) throw erroDeEntrada("Competência inválida (AAAA-MM).", CODIGO.ENTRADA_INVALIDA, "competencia"); return v; };
 /** Véspera da competência de início: o saldo de abertura é a posição comprovada no ENCERRAMENTO desse dia. */
 export const vesperaDaCompetencia = (competencia) => tempo.somarDias(`${competenciaValida(competencia)}-01`, -1);
+const fonteObrigatoria = (v) => { if (typeof v !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) throw erroDeEntrada("Formulário sem chave de envio: recarregue a tela.", CODIGO.ENTRADA_INVALIDA, "chave"); return { sistema: "MANUAL", idExterno: `formulario:${v.toLowerCase()}` }; };
 const chaveDoFormulario = (b, prefixo) => (b.chave ? { fonte: { sistema: "MANUAL", idExterno: `${prefixo}:${id(b.chave)}` } } : {});
 /** Devedor de um recebível manual: processador (só título ANTERIOR), cliente existente ou cliente novo (mesma transação). */
 function devedor(b, { aceitaProcessador, ref }) {
@@ -102,6 +103,15 @@ export function escritasDaAbertura({ hoje = () => tempo.hojeEm(new Date()), ref 
       ...(b.contraConta ? { contraContaId: ref(b.contraConta) } : {}), ...(b.chave ? { chave: id(b.chave) } : {}),
     }) },
     "/caixa/fechar": { campos: ["sessao", "data", "contado", "justificativa"], fazer: (n, c, b) => n.fecharCaixa(c, { sessaoId: ref(b.sessao), dataFechamento: b.data, contadoCentavos: centavos(b.contado), ...(b.justificativa ? { justificativa: b.justificativa } : {}), confirmar: true }) },
+    // RECEITA manual (venda): sem depender de SAIPOS/iFood. A chave do formulário é OBRIGATÓRIA: o mesmo envio repetido devolve o
+    // registro já gravado; outro formulário é outra venda. Dinheiro/Pix entram na conta informada; cartão/app ficam a receber
+    // da operadora (o repasse nasce da venda). Nada é presumido.
+    "/vendas/registrar": { campos: ["canal", "dataVenda", "valor", "forma", "processador", "conta", "dataPagamento", "descricao", "chave"], fazer: (n, c, b) => n.registrarVenda(c, {
+      canal: b.canal, dataVenda: b.dataVenda, brutoCentavos: centavos(b.valor),
+      pagamentos: b.forma ? [{ forma: b.forma, valorCentavos: centavos(b.valor), ...(b.processador ? { processador: b.processador } : {}), ...(b.conta ? { contaId: ref(b.conta) } : {}), ...(b.dataPagamento ? { dataPagamento: b.dataPagamento } : {}) }] : [],
+      ...(b.forma ? {} : { pagamentoParcial: true }), ...(b.descricao ? { descricao: b.descricao } : {}), fonte: fonteObrigatoria(b.chave),
+    }) },
+    "/vendas/cancelar": { campos: ["venda", "justificativa"], fazer: (n, c, b) => n.cancelarVenda(c, { vendaId: ref(b.venda), justificativa: b.justificativa }) },
     // Plano de contas: implantação só com o NOME do modelo redigitado (confirmação que o servidor confere). Idempotente.
     "/configuracoes/implantar-plano": { campos: ["modelo", "modeloConfirmado"], fazer: (n, c, b) => {
       if (typeof b.modelo !== "string" || b.modeloConfirmado !== b.modelo) throw erroDeEntrada("Para implantar, digite o nome do modelo exatamente como aparece.", CODIGO.CONFIRMACAO_EXIGIDA, "modeloConfirmado");

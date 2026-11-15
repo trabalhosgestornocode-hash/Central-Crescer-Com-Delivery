@@ -71,6 +71,8 @@ async function montar() {
   const ato = (unidadeId) => ({ organizacaoId: ORG_A, unidadeId, ativa: true, atorContaId: ADMIN, justificativa: "Liberação sintética do teste de rotas (Execução 10).", provaDeSegundoFator: prova });
   await alterarLiberacaoPostgres(poolAut, ato(null));
   await alterarLiberacaoPostgres(poolAut, ato(UNI_A));
+  // Escrita INDIVIDUAL da unidade A (migração 0022): sem ela, a chave geral de escrita não basta.
+  await (await abrirPool(b.urlAdmin, { max: 1 })).query("update fv2_liberacao set escrita_ativa = true where unidade_id = $1", [UNI_A]);
   // Gateway real em processo
   const eventos = [];
   const mfa = criarMfaPeloProvedor({ obterUsuario });
@@ -249,7 +251,7 @@ test("10 — ATIVAÇÃO: administrador da empresa com TOTP recente provisiona a 
   const ctx = await get("/ativacao/administracao/contexto", { s: adm(), t: tkAdm() });
   assert.equal(ctx.status, 200, JSON.stringify(ctx.corpo));
   assert.equal(ctx.corpo.unidade.id, UNI_A2);
-  assert.deepEqual(ctx.corpo.liberacao, { empresa: true, unidade: false });
+  assert.deepEqual(ctx.corpo.liberacao, { empresa: true, unidade: false, escrita: false });
   assert.ok(ctx.corpo.candidatos.some((c) => c.perfilId === PESSOA && c.contaPessoal === true));
   assert.ok(ctx.corpo.candidatos.some((c) => c.perfilId === PESSOA_COMP && c.contaPessoal === false), "conta compartilhada aparece marcada");
   assert.ok(!ctx.corpo.candidatos.some((c) => c.perfilId === PESSOA_ADMIN), "o atestante não aparece");
@@ -272,12 +274,12 @@ test("10 — ATIVAÇÃO: administrador da empresa com TOTP recente provisiona a 
   assert.equal((await lib({ ativa: true, justificativa: "curta" })).corpo.codigo, "JUSTIFICATIVA_INSUFICIENTE");
   const ligada = await lib({ ativa: true, justificativa: J });
   assert.equal(ligada.status, 200, JSON.stringify(ligada.corpo));
-  assert.deepEqual(ligada.corpo.liberacao, { empresa: true, unidade: true });
+  assert.deepEqual(ligada.corpo.liberacao, { empresa: true, unidade: true, escrita: false });
   assert.deepEqual((await get("/ativacao/status", { s: sessao({ unidade: UNI_A2 }) })).corpo, { liberado: true, disponivel: true, operavel: true, motivo: null });
   assert.equal((await get(`/ativacao/api/caixa-e-bancos${PERIODO}`, { s: sessao({ unidade: UNI_A2 }) })).status, 200, "consulta liberada (sem dados presumidos)");
   // revogação
   const desligada = await lib({ ativa: false, justificativa: "Revogação sintética da ativação da unidade 2." });
-  assert.deepEqual(desligada.corpo.liberacao, { empresa: true, unidade: false });
+  assert.deepEqual(desligada.corpo.liberacao, { empresa: true, unidade: false, escrita: false });
   assert.equal((await get("/ativacao/status", { s: sessao({ unidade: UNI_A2 }) })).corpo.liberado, false, "volta ao financeiro atual");
   // chave desligada (padrão): nada do procedimento responde
   assert.equal((await get("/local/administracao/contexto", { s: adm(), t: tkAdm() })).status, 404);

@@ -131,7 +131,7 @@ export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, m
   const agora = () => relogio().getTime();
   const liberada = async (organizacaoId, unidadeId) => {
     const l = await lerComFalhaFechada(() => liberacoes.consultar({ organizacaoId, unidadeId }));
-    return { empresa: l?.empresa === true, unidade: l?.empresa === true && l?.unidade === true };
+    return { empresa: l?.empresa === true, unidade: l?.empresa === true && l?.unidade === true, escrita: l?.empresa === true && l?.unidade === true && l?.escrita === true };
   };
   const unidadesDaPessoa = async (s) => new Set(((await lerComFalhaFechada(() => vinculos.unidadesDoPerfil({ perfilId: s.perfilId, organizacaoId: s.organizacaoId }))) ?? []).filter(ehUuid).map(minusc));
   const concedidas = async (s) => ((await lerComFalhaFechada(() => concessoes.listar({ organizacaoId: s.organizacaoId, usuarioId: s.perfilId }))) ?? [])
@@ -155,7 +155,7 @@ export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, m
     if (!ehUuid(contaDaPessoa) || minusc(contaDaPessoa) !== s.contaId) recusar(CODIGO.PERMISSAO_INSUFICIENTE, MOTIVO.PESSOA_SEM_IDENTIDADE, "A pessoa operacional não está ativa ou não pertence a esta conta.");
     const unidades = await unidadesDaPessoa(s);
     if (!unidades.has(s.unidadeId)) recusar(CODIGO.ESCOPO_NAO_AUTORIZADO, MOTIVO.UNIDADE_NAO_AUTORIZADA, "Sem acesso a esta unidade na plataforma.");
-    return { s, unidades };
+    return { s, unidades, liberacao: l };
   }
 
   /**
@@ -166,7 +166,7 @@ export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, m
    *        prova de segundo fator RECENTE derivada do token de acesso (verificado pela porta `mfa`, nunca do cliente)
    */
   async function contexto(sessao, { acao = null, tokenDeAcesso = null } = {}) {
-      const { s, unidades } = await verificarBase(sessao);
+      const { s, unidades, liberacao } = await verificarBase(sessao);
       const concessao = (await concedidas(s)).find((c) => c.unidadeId === s.unidadeId);
       if (!concessao) recusar(CODIGO.PERMISSAO_INSUFICIENTE, MOTIVO.SEM_CONCESSAO, "Sem concessão do Financeiro v2 nesta unidade.");
       // Informativo (o que a plataforma declarou); NÃO autoriza nada. A autorização usa a prova verificada abaixo.
@@ -184,6 +184,7 @@ export function criarAdaptadorDaPlataforma({ liberacoes, vinculos, concessoes, m
         contexto: exigirContexto({ organizacaoId: s.organizacaoId, unidadeId: s.unidadeId, usuarioId: s.perfilId, permissoes: concessao.acoes }),
         ator: Object.freeze({ perfilId: s.perfilId, contaId: s.contaId }),
         unidadesDaPessoa: Object.freeze([...unidades].sort()),
+        escritaDaUnidade: liberacao.escrita === true, // liberação operacional INDIVIDUAL da unidade (migração 0022)
         autenticacao: Object.freeze({ ...autenticacao, provaVerificada: Boolean(prova?.ok), segundoFatorEm: prova?.segundoFatorEm ?? null }),
         origem: Object.freeze({ tipo: "PLATAFORMA", sessaoId: s.sessaoId, expiraEm: s.expiraEm }),
       });
