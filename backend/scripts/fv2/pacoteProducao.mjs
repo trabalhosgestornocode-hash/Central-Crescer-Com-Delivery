@@ -216,9 +216,91 @@ select organizacao_id, unidade_id, rotulo, criado_em from financeiro_v2.fv2_esco
 `;
 }
 
+/** Executor sintético do bootstrap (não é conta da plataforma; o papel de banco real fica em papel_de_banco). */
+export const EXECUTOR_BOOTSTRAP = "00000000-0000-4000-8000-0000000b0075";
+
+/**
+ * BOOTSTRAP ADMINISTRATIVO ÚNICO (decisão do proprietário, 15/11): a PRIMEIRA administração financeira de UMA unidade,
+ * sem segundo atestador, executada pela autoridade de infraestrutura (`postgres`, mesma credencial da instalação).
+ * Não altera nenhuma função, política ou regra: a concessão nasce no mesmo formato do núcleo (concessão + histórico) e a
+ * trilha fica em fv2_auditoria_concessao (finalidade BOOTSTRAP_INFRAESTRUTURA, papel_de_banco = executor) e numa sessão
+ * de PROVISIONAMENTO que já nasce revogada (nunca utilizável). Travas:
+ *   - só o papel executor; v2 instalado; unidade da empresa; conta ativa, PESSOAL (1 pessoa), com TOTP verificado,
+ *     vinculada à unidade e à empresa;
+ *   - USO ÚNICO no sistema inteiro (qualquer bootstrap anterior recusa outro); a unidade não pode ter administrador;
+ *   - idempotente: repetir com a MESMA pessoa/unidade depois de concluído não faz nada.
+ * NÃO libera a unidade: a liberação exige 2º fator real e recente (fv2_liberacao_alterar) e é feita pela própria pessoa
+ * na página de ativação, com o login da plataforma — o que também comprova o TOTP em uso.
+ */
+export function sqlBootstrapAdministrador({ organizacaoId, unidadeId, usuarioId, autorizacao, acoes, executor = "postgres" }) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  for (const [n, v] of Object.entries({ organizacaoId, unidadeId, usuarioId })) if (!uuid.test(String(v))) throw new Error(`${n} inválido.`);
+  if (!/^[A-Za-z0-9._:-]{6,80}$/.test(String(autorizacao))) throw new Error("Identificador da autorização inválido.");
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(executor)) throw new Error("Papel executor inválido.");
+  if (!Array.isArray(acoes) || !acoes.length || acoes.some((a) => !/^financeiro_v2\.[a-z_]+$/.test(a))) throw new Error("Ações inválidas.");
+  const [o, u, p] = [organizacaoId, unidadeId, usuarioId].map((x) => x.toLowerCase());
+  const lista = JSON.stringify([...new Set(acoes)].sort());
+  const just = `Administração financeira inicial por bootstrap de infraestrutura (sem segundo atestador, decisão do proprietário). Autorização: ${autorizacao}.`;
+  return `-- Financeiro v2 — BOOTSTRAP ADMINISTRATIVO ÚNICO. Unidade ${u} (empresa ${o}), pessoa ${p}, autorização ${autorizacao}.
+-- Executar como ${executor}, numa ÚNICA transação. Não apaga nada, não libera a unidade, não muda regra alguma.
+do $$
+declare
+  v_org  uuid := '${o}'; v_uni uuid := '${u}'; v_usr uuid := '${p}'; v_exec uuid := '${EXECUTOR_BOOTSTRAP}';
+  v_acoes jsonb := ${literal(lista)}::jsonb; v_just text := ${literal(just)};
+  v_id uuid := gen_random_uuid(); v_sess uuid; v_agora timestamptz := clock_timestamp(); v_ant record;
+begin
+  if session_user <> ${literal(executor)} then raise exception 'FV2 bootstrap: só o papel ${executor} executa — nada foi feito'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('fv2|' || v_org || '|' || v_uni || '|concessoes', 0));
+  if (select count(*) from financeiro_v2.fv2_migracao) < 21 then raise exception 'FV2 bootstrap: o Financeiro v2 não está instalado'; end if;
+  if not exists (select 1 from public.unidades where id = v_uni and organizacao_id = v_org) then raise exception 'FV2 bootstrap: unidade fora da empresa'; end if;
+  if not exists (select 1 from auth.users where id = v_usr and deleted_at is null and (banned_until is null or banned_until < now())) then raise exception 'FV2 bootstrap: conta inexistente, excluída ou bloqueada'; end if;
+  if not exists (select 1 from auth.mfa_factors where user_id = v_usr and factor_type::text = 'totp' and status::text = 'verified') then raise exception 'FV2 bootstrap: a conta não tem TOTP verificado'; end if;
+  if (select count(*) from public.perfis_operacionais where conta_id = v_usr and ativo) <> 1
+     or not exists (select 1 from public.perfis_operacionais where id = v_usr and conta_id = v_usr and ativo) then raise exception 'FV2 bootstrap: a conta não é pessoal (exige exatamente uma pessoa ativa)'; end if;
+  if not exists (select 1 from public.usuarios_unidades where perfil_id = v_usr and unidade_id = v_uni and ativo) then raise exception 'FV2 bootstrap: a pessoa não está vinculada à unidade'; end if;
+  if not exists (select 1 from public.usuarios_organizacoes where usuario_id = v_usr and organizacao_id = v_org and ativo) then raise exception 'FV2 bootstrap: a pessoa não está vinculada à empresa'; end if;
+  -- uso único no sistema inteiro (idempotente para a mesma pessoa e unidade)
+  select a.organizacao_id, a.unidade_id, a.usuario_alvo into v_ant from financeiro_v2.fv2_auditoria_concessao a where a.finalidade = 'BOOTSTRAP_INFRAESTRUTURA' limit 1;
+  if found then
+    if v_ant.organizacao_id = v_org and v_ant.unidade_id = v_uni and v_ant.usuario_alvo = v_usr then raise notice 'FV2 bootstrap: já concluído para esta pessoa e unidade — nada a fazer'; return; end if;
+    raise exception 'FV2 bootstrap: o bootstrap já foi usado — novos administradores só pelo fluxo normal de concessão';
+  end if;
+  if exists (select 1 from financeiro_v2.fv2_concessao c where c.organizacao_id = v_org and c.unidade_id = v_uni and c.situacao = 'ATIVA' and c.acoes ? 'financeiro_v2.conceder') then raise exception 'FV2 bootstrap: a unidade já tem administrador'; end if;
+  if exists (select 1 from financeiro_v2.fv2_concessao c where c.organizacao_id = v_org and c.unidade_id = v_uni and c.usuario_id = v_usr) then raise exception 'FV2 bootstrap: a pessoa já tem concessão nesta unidade — usar o fluxo normal'; end if;
+  insert into financeiro_v2.fv2_escopo (organizacao_id, unidade_id, rotulo) values (v_org, v_uni, 'Açaí no Grau Saci') on conflict (organizacao_id, unidade_id) do nothing;
+  -- trilha: sessão de provisionamento que já nasce revogada (nunca abre nada)
+  insert into financeiro_v2.fv2_sessao_banco (token_hash, usuario_id, organizacao_id, unidade_id, finalidade, pode_escrever, alvo, acoes_autorizadas, referencia, expira_em, revogada_em, motivo_revogacao)
+  values (sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), v_exec, v_org, v_uni, 'PROVISIONAMENTO', false, v_usr, v_acoes,
+          left('BOOTSTRAP_INFRAESTRUTURA ' || ${literal(autorizacao)}, 200), clock_timestamp() + interval '1 minute', clock_timestamp(), 'bootstrap de infraestrutura: só trilha')
+  returning id into v_sess;
+  insert into financeiro_v2.fv2_concessao (id, organizacao_id, unidade_id, versao, criado_em, criado_por, atualizado_em, atualizado_por,
+                                           chave_idempotencia, impressao, extras, usuario_id, acoes, situacao, concedido_por, justificativa)
+  values (v_id, v_org, v_uni, 1, v_agora, v_exec, v_agora, v_exec, 'concessao:' || v_usr, null, '{}'::jsonb, v_usr, v_acoes, 'ATIVA', v_exec, v_just);
+  insert into financeiro_v2.fv2_historico (id, organizacao_id, unidade_id, registro_tipo, registro_id, evento, antes, depois, justificativa, usuario_id, em)
+  values (gen_random_uuid(), v_org, v_uni, 'CONCESSAO', v_id, 'CRIACAO', null,
+          jsonb_build_object('id', v_id, 'organizacaoId', v_org, 'unidadeId', v_uni, 'versao', 1, 'criadoEm', v_agora, 'criadoPor', v_exec,
+                             'atualizadoEm', v_agora, 'atualizadoPor', v_exec, 'chaveIdempotencia', 'concessao:' || v_usr, 'impressao', null,
+                             'usuarioId', v_usr, 'acoes', v_acoes, 'situacao', 'ATIVA', 'concedidoPor', v_exec, 'justificativa', v_just),
+          v_just, v_exec, v_agora);
+  insert into financeiro_v2.fv2_auditoria_concessao (organizacao_id, unidade_id, concessao_id, usuario_alvo, ator, sessao_id, finalidade, operacao, acoes_antes, acoes_depois, situacao_depois, justificativa)
+  values (v_org, v_uni, v_id, v_usr, v_exec, v_sess, 'BOOTSTRAP_INFRAESTRUTURA', 'PROVISIONAMENTO', '[]'::jsonb, v_acoes, 'ATIVA', v_just);
+end $$;
+select a.em, a.papel_de_banco as executor, a.usuario_alvo as beneficiario, a.unidade_id, a.finalidade, a.justificativa, c.situacao, jsonb_array_length(c.acoes) as acoes,
+       (select count(*) from financeiro_v2.fv2_liberacao l where l.organizacao_id = '${o}'::uuid and l.ativa) as liberacoes_ativas
+  from financeiro_v2.fv2_auditoria_concessao a join financeiro_v2.fv2_concessao c on c.id = a.concessao_id
+ where a.finalidade = 'BOOTSTRAP_INFRAESTRUTURA';
+`;
+}
+
 const executadoDireto = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (executadoDireto && process.argv[2] === "--escopo") {
   const t = sqlEscopoDaUnidade(process.argv[3], process.argv[4]);
+  process.stdout.write(`${t}-- sha256 ${sha(t)}\n`);
+  process.exit(0);
+}
+if (executadoDireto && process.argv[2] === "--bootstrap") {
+  const { ACAO } = await import("../../src/modules/financeiro-v2/dominio/contexto.js");
+  const t = sqlBootstrapAdministrador({ organizacaoId: process.argv[3], unidadeId: process.argv[4], usuarioId: process.argv[5], autorizacao: process.argv[6], acoes: Object.values(ACAO) });
   process.stdout.write(`${t}-- sha256 ${sha(t)}\n`);
   process.exit(0);
 }
