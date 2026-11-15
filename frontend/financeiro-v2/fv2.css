@@ -236,6 +236,8 @@ button.botao-link[data-composicao]:hover { background: var(--hover); color: var(
 
 /* ------------------------------------------------------------------ tabelas */
 .tabela-rolavel { overflow-x: auto; }
+/* Referência de posição: textos só para leitor de tela (.sr, absolutos) ficam DENTRO da rolagem e não alargam a página. */
+.tabela-rolavel { position: relative; }
 .tabela { width: 100%; border-collapse: collapse; font-size: 14px; }
 .tabela th, .tabela td { text-align: right; padding: 12px; border-bottom: 1px solid var(--linha); vertical-align: top; }
 .tabela thead th { font-size: 12.5px; font-weight: 600; color: var(--suave); padding-top: 8px; padding-bottom: 10px; border-bottom-color: var(--linha-forte); white-space: nowrap; }
