@@ -211,7 +211,7 @@ export function validarImplantacaoDePlano(e) {
 }
 
 export function validarObrigacao(e) {
-  semCamposDesconhecidos(e, ["contraparteId", "contraparteNova", "valorOriginalCentavos", "moeda", "categoria", "descricao", "competencia", "dataEmissao", "vencimento", "parcelas", "recorrencia", "documentoIds", "fonte"], "obrigacao");
+  semCamposDesconhecidos(e, ["contraparteId", "contraparteNova", "valorOriginalCentavos", "moeda", "categoria", "descricao", "competencia", "dataEmissao", "vencimento", "parcelas", "recorrencia", "documentoIds", "fonte", "identificador"], "obrigacao");
   // Abertura: fornecedor NOVO criado na MESMA transação da obrigação (nunca fica órfão se a obrigação for recusada).
   if ((e.contraparteId === undefined) === (e.contraparteNova === undefined)) falhar(CODIGO.ENTRADA_INVALIDA, "Informe a contraparte existente OU a nova (exatamente uma).", { campo: "contraparteId" });
   const dataEmissao = exigirData(e.dataEmissao, "dataEmissao");
@@ -238,11 +238,16 @@ export function validarObrigacao(e) {
     recorrencia,
     documentoIds: documentos(e.documentoIds),
     fonte: fonte(e.fonte),
+    // Título anterior à abertura: número do documento/repasse/pedido, usado na conferência das importações posteriores.
+    ...(e.identificador !== undefined && e.identificador !== null && e.identificador !== "" ? { identificador: identificadorDoTitulo(e.identificador) } : {}),
   };
 }
 
+/** Identificador externo de um título (NF, ID do repasse, pedido, Stone ID): comparado sem maiúsculas nem espaços. */
+export const identificadorDoTitulo = (v) => exigirTexto(v, "identificador", { max: 80 }).replace(/\s+/g, "").toUpperCase();
+
 export function validarRecebivel(e) {
-  semCamposDesconhecidos(e, ["processador", "contraparteId", "contraparteNova", "canal", "vendaId", "brutoCentavos", "moeda", "retencoes", "dataPrevista", "competencia", "descricao", "documentoIds", "fonte", "anteriorAAbertura", "dataOrigem"], "recebivel");
+  semCamposDesconhecidos(e, ["processador", "contraparteId", "contraparteNova", "canal", "vendaId", "brutoCentavos", "moeda", "retencoes", "dataPrevista", "competencia", "descricao", "documentoIds", "fonte", "anteriorAAbertura", "dataOrigem", "identificador"], "recebivel");
   const processador = e.processador === undefined || e.processador === null ? null : exigirUmDe(e.processador, PROCESSADOR, "processador");
   const contraparteId = uuidOpcional(e.contraparteId, "contraparteId");
   const contraparteNova = e.contraparteNova === undefined || e.contraparteNova === null ? null : validarContraparte(e.contraparteNova);
@@ -255,7 +260,7 @@ export function validarRecebivel(e) {
     dataOrigem = exigirData(e.dataOrigem, "dataOrigem");
     if ((e.retencoes ?? []).length) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra pelo saldo a receber, sem retenções.", { campo: "retencoes" });
     if (e.vendaId !== undefined && e.vendaId !== null) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura não se vincula a venda do v2.", { campo: "vendaId" });
-  } else if (e.dataOrigem !== undefined && e.dataOrigem !== null) falhar(CODIGO.ENTRADA_INVALIDA, "dataOrigem só vale para título anterior à abertura.", { campo: "dataOrigem" });
+  } else if ((e.dataOrigem ?? null) !== null || (e.identificador ?? "") !== "") falhar(CODIGO.ENTRADA_INVALIDA, "dataOrigem e identificador só valem para título anterior à abertura.", { campo: "dataOrigem" });
   const brutoCentavos = exigirCentavos(e.brutoCentavos, "brutoCentavos", { positivo: true });
   // Retenção = o que o processador/canal desconta do repasse. A CATEGORIA de cada uma define a natureza econômica
   // (dedução comercial, despesa de recebimento, despesa comercial, marketing, encargo financeiro...).
@@ -270,12 +275,13 @@ export function validarRecebivel(e) {
   if (somarLista(retencoes, (d) => d.valorCentavos) > brutoCentavos) falhar(CODIGO.VALOR_INVALIDO, "As retenções não podem superar o valor bruto.", { campo: "retencoes" });
   const competencia = exigirCompetencia(e.competencia);
   if (anteriorAAbertura && dataOrigem >= `${competencia}-01`) falhar(CODIGO.DATA_INVALIDA, "Título anterior à abertura tem origem antes do 1º dia da competência de início.", { campo: "dataOrigem" });
+  const identificador = anteriorAAbertura && (e.identificador ?? "") !== "" ? identificadorDoTitulo(e.identificador) : null;
   return {
     processador,
     contraparteId,
     // Campos novos só aparecem quando usados: a impressão de idempotência dos recebíveis já existentes não muda.
     ...(contraparteNova ? { contraparteNova } : {}),
-    ...(anteriorAAbertura ? { anteriorAAbertura: true, dataOrigem } : {}),
+    ...(anteriorAAbertura ? { anteriorAAbertura: true, dataOrigem, ...(identificador ? { identificador } : {}) } : {}),
     canal: e.canal === undefined || e.canal === null ? null : exigirUmDe(e.canal, CANAL, "canal"),
     vendaId: uuidOpcional(e.vendaId, "vendaId"),
     brutoCentavos,

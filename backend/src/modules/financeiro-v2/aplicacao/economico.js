@@ -28,6 +28,15 @@ export function operacoesEconomicas(b) {
     }
   }
 
+  /** Abertura configurada, em andamento e da MESMA competência (posição de abertura nunca entra em outra competência). */
+  async function exigirAberturaPara(tx, cx, competencia) {
+    const ab = await tx.buscarPorChave(cx, TIPO.ABERTURA, "abertura");
+    if (!ab) falhar(CODIGO.OPERACAO_INVALIDA, "Configure a abertura financeira (competência de início) antes de registrar títulos anteriores.", { motivo: "ABERTURA_NAO_CONFIGURADA" });
+    if (ab.situacao !== "CONFIGURADA") falhar(CODIGO.OPERACAO_INVALIDA, "A abertura já foi concluída: novos títulos anteriores exigem reabri-la.", { motivo: "ABERTURA_CONCLUIDA" });
+    if (competencia !== ab.competenciaInicio) falhar(CODIGO.OPERACAO_INVALIDA, `Título anterior entra na competência de início da abertura (${ab.competenciaInicio}).`, { motivo: "COMPETENCIA_DIFERENTE_DA_ABERTURA" });
+    return ab;
+  }
+
   /** Fornecedor/cliente digitado no formulário: reaproveita o MESMO cadastro (tipo + nome normalizado), nunca duplica. */
   async function contraparteDoFormulario(tx, cx, nova) {
     await tx.travar(cx, "contrapartes", "EXCLUSIVA");
@@ -77,11 +86,13 @@ export function operacoesEconomicas(b) {
           };
         }
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
-        // Abertura (opção B): a dívida anterior é POSIÇÃO INICIAL do passivo, nunca despesa da competência de início.
+        // Abertura (opção B): a dívida anterior é POSIÇÃO INICIAL do passivo, nunca despesa da competência de início. Só com a
+        // abertura CONFIGURADA da unidade (competência e corte persistidos), nunca pelo que veio no formulário.
         if (c.categoria === CATEGORIA_TITULOS_ANTERIORES) {
-          if (c.dataEmissao >= `${c.competencia}-01`) falhar(CODIGO.DATA_INVALIDA, "Título anterior à abertura tem emissão antes do 1º dia da competência de início.", { campo: "dataEmissao" });
+          const ab = await exigirAberturaPara(tx, cx, c.competencia);
+          if (c.dataEmissao > ab.dataDeCorte) falhar(CODIGO.DATA_INVALIDA, `Título anterior à abertura tem emissão até ${ab.dataDeCorte} (data de corte).`, { campo: "dataEmissao" });
           if (c.parcelas !== 1 || c.recorrencia) falhar(CODIGO.ENTRADA_INVALIDA, "Título anterior à abertura entra um por documento, pelo saldo em aberto (sem parcelar nem repetir).", { campo: "parcelas" });
-        }
+        } else if (c.identificador) falhar(CODIGO.ENTRADA_INVALIDA, "O identificador do título só se usa em título anterior à abertura.", { campo: "identificador" });
         if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
         else await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         await b.exigirDocumentos(tx, cx, c.documentoIds);
@@ -102,6 +113,7 @@ export function operacoesEconomicas(b) {
             grupoId, lancamentoId: lancamento.id, contraparteId: c.contraparteId, descricao: c.descricao, moeda: c.moeda,
             competencia: c.competencia, dataEmissao: c.dataEmissao, vencimento: somarMeses(c.vencimento, i),
             parcela: { numero: i + 1, total: c.parcelas }, recorrencia: c.recorrencia, documentoIds: c.documentoIds, fonte: c.fonte,
+            ...(c.identificador ? { identificador: c.identificador } : {}),
             chaveIdempotencia: chave ? `${chave}#${i + 1}` : null, impressao: chave ? impressao : null, ...tituloNovo(valor),
           }));
         }
@@ -127,6 +139,10 @@ export function operacoesEconomicas(b) {
           return { recebivel: existente, lancamentosDeRetencao, repetido: true };
         }
         await b.exigirCompetenciaEditavel(tx, cx, c.competencia);
+        if (c.anteriorAAbertura) {
+          const ab = await exigirAberturaPara(tx, cx, c.competencia);
+          if (c.dataOrigem > ab.dataDeCorte) falhar(CODIGO.DATA_INVALIDA, `Título anterior à abertura tem origem até ${ab.dataDeCorte} (data de corte).`, { campo: "dataOrigem" });
+        }
         if (c.contraparteNova) c.contraparteId = (await contraparteDoFormulario(tx, cx, c.contraparteNova)).id; // mesma transação
         else if (c.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.contraparteId, "Contraparte");
         let canal = c.canal;

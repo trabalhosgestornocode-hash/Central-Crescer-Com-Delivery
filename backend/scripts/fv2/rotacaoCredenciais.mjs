@@ -10,6 +10,7 @@
 //
 //   node --env-file=.env scripts/fv2/rotacaoCredenciais.mjs plano                       (só leitura; padrão)
 //   node --env-file=.env scripts/fv2/rotacaoCredenciais.mjs criar --ca <arquivo.crt> --servico <srv-…> --confirmar
+//   node --env-file=.env scripts/fv2/rotacaoCredenciais.mjs criar ... --retomar B --confirmar   (só se a anterior parou no meio)
 //   node --env-file=.env scripts/fv2/rotacaoCredenciais.mjs validar
 //   node --env-file=.env scripts/fv2/rotacaoCredenciais.mjs revogar-antigas --antigo A --confirmar
 //
@@ -62,6 +63,16 @@ export function comandosDoPapel(p, existe, verificador) {
     : [`create role ${p.login} login noinherit connection limit ${p.limite} password '${verificador}'`, `grant ${p.grupo} to ${p.login} with inherit true`, `alter role ${p.login} set search_path = financeiro_v2, pg_catalog`];
 }
 
+/**
+ * Revogar o par antigo só é seguro se CADA papel novo (app e autoridade, separadamente) já tem conexões: se o Render aceitou
+ * só uma das variáveis, a outra credencial ainda é a antiga e desligá-la derrubaria o módulo.
+ */
+export function podeRevogar(papeis, antigo) {
+  const novo = antigo === "A" ? "B" : "A";
+  const faltando = PARES[novo].filter((p) => !(papeis.find((x) => x.rolname === p.login)?.rolcanlogin && Number(papeis.find((x) => x.rolname === p.login)?.conexoes ?? 0) > 0)).map((p) => p.login);
+  return { ok: faltando.length === 0, faltando };
+}
+
 /** Desliga um papel antigo: sem login, sem senha, conexões encerradas. Não exclui nada. */
 export function comandosDeRevogacao(p) {
   if (!IDENTIFICADOR.test(p.login)) throw new Error("papel fora da lista");
@@ -112,12 +123,18 @@ async function principal(argv) {
     }
     if (!confirmado) pare("acrescente --confirmar para executar");
     if (modo === "criar") {
-      if (s.emAndamento) pare("já há uma rotação em andamento: valide e revogue antes de começar outra");
-      if (!s.proximo) pare("não encontrei o par em uso");
+      // RETOMADA: rotação interrompida (ex.: o Render aceitou só uma variável). Gera senhas NOVAS para o MESMO par novo e regrava
+      // as duas variáveis; o par antigo segue ativo até "revogar-antigas". Sem --retomar, uma rotação em andamento é recusada.
+      const retomar = opc("--retomar");
+      if (s.emAndamento && !retomar) pare("já há uma rotação em andamento: termine-a (validar + revogar-antigas) ou retome com --retomar <par novo>");
+      if (retomar && (!s.emAndamento || !["A", "B"].includes(retomar))) pare("--retomar só vale com rotação em andamento e indica o par NOVO (A ou B)");
+      const parNovo = retomar ?? s.proximo;
+      const parAntigo = parNovo === "A" ? "B" : "A";
+      if (!parNovo) pare("não encontrei o par em uso");
       const ca = readFileSync(opc("--ca") ?? pare("informe --ca <arquivo do certificado da CA>"), "utf8");
       const servico = opc("--servico") ?? pare("informe --servico <srv-…>");
       const chave = process.env.RENDER_API_KEY ?? pare("defina RENDER_API_KEY no próprio terminal");
-      const novos = PARES[s.proximo].map((p) => ({ ...p, senha: randomBytes(32).toString("base64url"), existe: papeis.some((x) => x.rolname === p.login) }));
+      const novos = PARES[parNovo].map((p) => ({ ...p, senha: randomBytes(32).toString("base64url"), existe: papeis.some((x) => x.rolname === p.login) }));
       await dono.query("begin");
       try {
         for (const p of novos) for (const c of comandosDoPapel(p, p.existe, verificadorScram(p.senha))) await dono.query(c);
@@ -126,7 +143,7 @@ async function principal(argv) {
         await dono.query("rollback").catch(() => {});
         pare(`erro no banco — ROLLBACK, nada mudou: ${e.code ?? ""}`);
       }
-      console.log(`1. par ${s.proximo} pronto no banco (senha só como verificador)`);
+      console.log(`1. par ${parNovo} pronto no banco (senha só como verificador)`);
       for (const p of novos) {
         const c = new pg.Client({ connectionString: urlDoPapel(p.login, p.senha), ssl: { ca, rejectUnauthorized: true }, connectionTimeoutMillis: 15000 });
         try { await c.connect(); const r = (await c.query("select current_user u, has_schema_privilege('financeiro_v2','usage') uso")).rows[0]; console.log(`2. ${p.login} conecta pelo pooler com TLS verificado: usuário=${r.u} uso=${r.uso}`); }
@@ -134,7 +151,7 @@ async function principal(argv) {
         finally { await c.end().catch(() => {}); }
       }
       for (const p of novos) console.log(`3. Render ${p.variavel}: HTTP ${await gravarNoRender({ chave, servico, variavel: p.variavel, valor: urlDoPapel(p.login, p.senha) })}`);
-      console.log(`4. deploy disparado: ${await dispararDeploy({ chave, servico }) ?? "(id não informado)"} — acompanhe até 'live', rode "validar" e depois "revogar-antigas --antigo ${s.ativo} --confirmar".`);
+      console.log(`4. deploy disparado: ${await dispararDeploy({ chave, servico }) ?? "(id não informado)"} — acompanhe até 'live', rode "validar" e depois "revogar-antigas --antigo ${parAntigo} --confirmar".`);
       return;
     }
     if (modo === "revogar-antigas") {
@@ -142,8 +159,8 @@ async function principal(argv) {
       // O par antigo é dito EXPLICITAMENTE (o pooler pode manter conexões ociosas do antigo por um tempo: contar não basta).
       const antigo = opc("--antigo");
       if (!["A", "B"].includes(antigo)) pare("informe --antigo A ou --antigo B (o par que o 'criar' indicou como antigo)");
-      const novo = antigo === "A" ? "B" : "A";
-      if (s[novo].conexoes === 0) pare("o par novo não tem conexões: o serviço ainda usa o antigo. Nada foi revogado.");
+      const r = podeRevogar(papeis, antigo);
+      if (!r.ok) pare(`sem conexões pelo papel novo ${r.faltando.join(", ")}: o serviço ainda usa o antigo nessa credencial (variável não atualizada ou deploy não concluído). Nada foi revogado.`);
       for (const p of PARES[antigo]) {
         const [desligar, encerrar] = comandosDeRevogacao(p);
         await dono.query(desligar);

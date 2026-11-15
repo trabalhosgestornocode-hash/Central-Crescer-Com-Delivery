@@ -405,6 +405,23 @@ details.tecnico pre { font-size: 11px; background: var(--superficie); padding: 1
 html[data-escrita="nao"] form[data-acao] { display: none; }
 /* Modo plataforma: dados REAIS da unidade — a faixa da demonstração não aparece. */
 html[data-modo="plataforma"] .faixa-demo { display: none; }
+/* Abertura financeira e formulários de operação (mesmos tokens do sistema visual; claro e escuro vêm das variáveis). */
+.acao--formulario { gap: 14px; }
+.campos-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px 16px; }
+.campos-form .campo--largo { grid-column: 1 / -1; }
+.acao input:not([type="checkbox"]):not([type="hidden"]):not([type="file"]), .acao select { font: inherit; font-size: 14px; padding: 8px 10px; border: 1px solid var(--linha-forte); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); min-height: 40px; width: 100%; min-width: 0; }
+.acao input:not([type="checkbox"]):invalid:not(:placeholder-shown) { border-color: var(--erro); }
+.acoes-form { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.acao--perigo { border-color: var(--erro); }
+.card--formulario > .nota { margin: 0 0 4px; max-width: 72ch; }
+.resultado-acao:empty { display: none; }
+.roteiro-abertura { list-style: none; margin: 14px 0 10px; padding: 0; display: grid; gap: 2px; counter-reset: passo; }
+.roteiro-abertura .passo { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--linha); }
+.roteiro-abertura .passo:last-child { border-bottom: 0; }
+.roteiro-abertura .passo-texto { display: grid; gap: 2px; min-width: 0; }
+.roteiro-abertura .passo-texto .nota { margin: 0; overflow-wrap: anywhere; }
+.formularios-caixa { display: grid; gap: 0; }
+
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 @media (forced-colors: active) { .segmento, .ponto { forced-color-adjust: none; } .selo { border: 1px solid CanvasText; } }
 
@@ -467,4 +484,6 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
   .abas, .abas--botoes { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
   .abas--botoes { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; padding-bottom: 0; } .abas--botoes button, .abas a { flex: 0 0 auto; }
   .ficha { grid-template-columns: minmax(0, 1fr); gap: 2px; } .ficha dd { margin: 0 0 8px; }
+  .roteiro-abertura .passo { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .acoes-form .botao { width: 100%; }
 }

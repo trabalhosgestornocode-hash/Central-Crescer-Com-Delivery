@@ -7,7 +7,6 @@
 //   - homologar: além do segundo fator, exige FV2_HOMOLOGACAO_HABILITADA=1 (matriz 24a ainda não aprovada).
 // Conceder, revogar, homologar e reabrir exigem prova de segundo fator RECENTE (adaptador + verificador do provedor).
 import { ACAO, CODIGO, ErroFinanceiro, tempo } from "../financeiro-v2/index.js";
-import { CATEGORIA_TITULOS_ANTERIORES } from "../financeiro-v2/dominio/planoDeContas.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const NENHUM = "00000000-0000-4000-8000-000000000000";
@@ -61,20 +60,22 @@ export function escritasDaAbertura({ hoje = () => tempo.hojeEm(new Date()), ref 
   return Object.freeze({
     // Contas: Unicred, caixa físico e as que vierem depois. Sem campo de saldo (saldo é registrado à parte, com origem).
     "/configuracoes/conta/criar": { campos: ["tipo", "nome", "instituicao"], fazer: (n, c, b) => n.configurarContaFinanceira(c, { tipo: b.tipo, nome: b.nome, ...(b.instituicao ? { instituicao: b.instituicao } : {}) }) },
-    // Saldo de ABERTURA: posição comprovada no FIM da véspera da competência de início (ex.: 31/10 para 2026-11).
-    "/abertura/saldo": { campos: ["conta", "competencia", "valor", "origem"], fazer: (n, c, b) => n.registrarSaldoDeConta(c, {
-      contaId: ref(b.conta), data: vesperaDaCompetencia(b.competencia), referencia: "FIM_DO_DIA", valorCentavos: centavos(b.valor),
-      observacao: `Saldo de abertura da competência ${b.competencia} · origem: ${referenciaExterna(b.origem)} (${SEM_ANEXO})`.slice(0, 300),
-    }) },
+    // ABERTURA persistida (0022): competência de início e data de corte da unidade. Os formulários seguintes NÃO informam
+    // competência: o núcleo usa a abertura gravada (e recusa sem ela, ou depois de concluída).
+    "/abertura/configurar": { campos: ["competencia", "observacao", "justificativa"], fazer: (n, c, b) => n.configurarAbertura(c, { competencia: competenciaValida(b.competencia), ...(b.observacao ? { observacao: b.observacao } : {}), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
+    "/abertura/concluir": { campos: ["justificativa"], fazer: (n, c, b) => n.concluirAbertura(c, { justificativa: b.justificativa }) },
+    "/abertura/reabrir": { campos: ["justificativa"], sensivel: () => ACAO.REABRIR, fazer: (n, c, b) => n.reabrirAbertura(c, { justificativa: b.justificativa }) },
+    // Saldo de ABERTURA: posição comprovada no FIM do dia de corte (ex.: 31/10 para início em 2026-11).
+    "/abertura/saldo": { campos: ["conta", "valor", "origem"], fazer: (n, c, b) => n.registrarSaldoDeAbertura(c, { contaId: ref(b.conta), valorCentavos: centavos(b.valor), origem: referenciaExterna(b.origem) }) },
     // Conta a pagar ANTERIOR à abertura: posição inicial do passivo (categoria patrimonial do sistema, fora da DRE).
-    "/abertura/obrigacao-anterior": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "competencia", "dataEmissao", "vencimento", "origem", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {
-      ...fornecedor(b, ref), valorOriginalCentavos: centavos(b.valor), categoria: CATEGORIA_TITULOS_ANTERIORES, descricao: comOrigem(b.descricao, b.origem),
-      competencia: competenciaValida(b.competencia), dataEmissao: b.dataEmissao, vencimento: b.vencimento, ...chaveDoFormulario(b, "abertura-obrigacao"),
+    "/abertura/obrigacao-anterior": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "dataEmissao", "vencimento", "origem", "identificador", "chave"], fazer: (n, c, b) => n.registrarObrigacaoAnterior(c, {
+      ...fornecedor(b, ref), valorOriginalCentavos: centavos(b.valor), descricao: comOrigem(b.descricao, b.origem),
+      dataEmissao: b.dataEmissao, vencimento: b.vencimento, ...(b.identificador ? { identificador: b.identificador } : {}), ...chaveDoFormulario(b, "abertura-obrigacao"),
     }) },
     // Conta a receber ANTERIOR à abertura: o saldo a receber (sem retenções, sem venda, nenhuma receita nova).
-    "/abertura/recebivel-anterior": { campos: ["processador", "cliente", "clienteNovo", "descricao", "valor", "competencia", "dataOrigem", "vencimento", "origem", "chave"], fazer: (n, c, b) => n.registrarRecebivel(c, {
-      ...devedor(b, { aceitaProcessador: true, ref }), brutoCentavos: centavos(b.valor), competencia: competenciaValida(b.competencia), dataOrigem: b.dataOrigem,
-      ...(b.vencimento ? { dataPrevista: b.vencimento } : {}), anteriorAAbertura: true, descricao: comOrigem(b.descricao, b.origem), ...chaveDoFormulario(b, "abertura-recebivel"),
+    "/abertura/recebivel-anterior": { campos: ["processador", "cliente", "clienteNovo", "descricao", "valor", "dataOrigem", "vencimento", "origem", "identificador", "chave"], fazer: (n, c, b) => n.registrarRecebivelAnterior(c, {
+      ...devedor(b, { aceitaProcessador: true, ref }), brutoCentavos: centavos(b.valor), dataOrigem: b.dataOrigem,
+      ...(b.vencimento ? { dataPrevista: b.vencimento } : {}), ...(b.identificador ? { identificador: b.identificador } : {}), descricao: comOrigem(b.descricao, b.origem), ...chaveDoFormulario(b, "abertura-recebivel"),
     }) },
     // Conta a receber do período (cliente): repasse de processador NÃO entra por aqui (nasce da venda).
     "/recebiveis/registrar": { campos: ["processador", "cliente", "clienteNovo", "descricao", "valor", "competencia", "vencimento", "chave"], fazer: (n, c, b) => n.registrarRecebivel(c, {

@@ -259,6 +259,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
       ? { movimentacaoId: reverso.get(p.movimentacao) ?? NENHUM }
       : { lancamentoId: reverso.get(p.id) ?? NENHUM, ...(p.categoria ? { categoria: String(p.categoria) } : {}) }),
     "/api/fv2/configuracoes": (ctx) => nucleo.consultarConfiguracoes(ctx),
+    "/api/fv2/abertura": async (ctx) => ({ ...(await nucleo.consultarAbertura(ctx)), configuracoes: await nucleo.consultarConfiguracoes(ctx) }),
     "/api/fv2/configuracoes/plano": (ctx) => nucleo.consultarPlanoDeContas(ctx),
     "/api/fv2/configuracoes/categoria": (ctx, p) => nucleo.consultarCategoria(ctx, { codigo: String(p.codigo ?? "") }),
     "/api/fv2/permissoes": (ctx) => nucleo.consultarPermissoes(ctx),

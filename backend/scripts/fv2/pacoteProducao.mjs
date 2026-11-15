@@ -28,8 +28,9 @@ const DESTINO = resolve(PASTA_DE_MIGRACOES, "..", "producao");
 const sha = (t) => createHash("sha256").update(t).digest("hex");
 const literal = (t) => `'${t.replaceAll("'", "''")}'`;
 
-function instalar() {
-  const ms = listarMigracoes();
+/** @param {string|null} [ate] gera a instalação só até esta migração (ex.: "0021" = o que está em produção desde 15/11) */
+export function instalar(ate = null) {
+  const ms = listarMigracoes().filter((m) => !ate || m.nome.slice(0, 4) <= ate);
   const partes = [
     `-- Financeiro v2 — INSTALAÇÃO no schema dedicado ${S} (gerado por backend/scripts/fv2/pacoteProducao.mjs; NÃO editar à mão).`,
     "-- Aplicar como `postgres` (não superusuário, com CREATEROLE), numa ÚNICA transação. Qualquer falha desfaz tudo.",
@@ -308,7 +309,75 @@ if (executadoDireto && process.argv[2] === "--bootstrap") {
   process.exit(0);
 }
 
-const arquivos = { "instalar.sql": instalar(), "inventario.sql": INVENTARIO, "desativar.sql": DESATIVAR };
+/**
+ * ATUALIZAÇÃO incremental de um banco que já tem o Financeiro v2 instalado (produção: 0001–0021, instalação de 15/11).
+ * UMA transação: confere que as migrações já registradas são EXATAMENTE as do Git (nome + hash), aplica só as novas com as
+ * mesmas adaptações da instalação (A3, A5) e aborta se qualquer pós-condição falhar. Não cria papéis nem toca no sistema atual.
+ */
+export const BASE_INSTALADA = "0021";
+export function atualizar(base = BASE_INSTALADA) {
+  const ms = listarMigracoes();
+  const ja = ms.filter((m) => m.nome.slice(0, 4) <= base);
+  const novas = ms.filter((m) => m.nome.slice(0, 4) > base);
+  if (!novas.length) return `-- Financeiro v2 — nada a atualizar além de ${base}.\n`;
+  const partes = [
+    `-- Financeiro v2 — ATUALIZAÇÃO do schema ${S} (gerado por backend/scripts/fv2/pacoteProducao.mjs; NÃO editar à mão).`,
+    "-- Aplicar como `postgres` (não superusuário), numa ÚNICA transação, só com autorização específica. Qualquer falha desfaz tudo.",
+    `-- Já instaladas (conferidas por nome e hash): ${ja.map((m) => m.nome).join(", ")}`,
+    `-- Novas: ${novas.map((m) => m.nome).join(", ")}`,
+    "",
+    `do $$ declare n int; begin
+  if not exists (select 1 from pg_namespace where nspname = '${S}') then raise exception 'FV2 atualização: schema ${S} não existe — nada foi feito'; end if;
+  if (select rolsuper from pg_roles where rolname = current_user) then raise exception 'FV2 atualização: não aplicar como superusuário'; end if;
+  if exists (select 1 from pg_publication where puballtables) then raise exception 'FV2 atualização: existe publicação FOR ALL TABLES — nada foi feito'; end if;
+  select count(*) into n from ${S}.fv2_migracao;
+  if n <> ${ja.length} then raise exception 'FV2 atualização: % migrações registradas (esperado ${ja.length}) — nada foi feito', n; end if;
+  select count(*) into n from ${S}.fv2_migracao m join (values ${ja.map((m) => `(${literal(m.nome)}, ${literal(m.sha256)})`).join(", ")}) v(nome, sha) on v.nome = m.nome and v.sha = m.sha256;
+  if n <> ${ja.length} then raise exception 'FV2 atualização: migrações instaladas diferem do Git (nome/hash) — nada foi feito'; end if;
+end $$;`,
+    `set local search_path = ${S}, pg_catalog;`,
+    "",
+  ];
+  for (const m of novas) {
+    const t = textoAplicado(m.sql, S);
+    partes.push(`-- ------------------------------------------------------------------------- ${m.nome} (arquivo ${m.sha256})`);
+    partes.push(`grant fv2_guardiao to current_user; grant create on schema ${S} to fv2_guardiao;`, t.trimEnd(), `revoke create on schema ${S} from fv2_guardiao; revoke fv2_guardiao from current_user;`);
+    for (const [, nome] of t.matchAll(/create\s+temporary\s+table\s+([a-z0-9_]+)/gi)) partes.push(`drop table if exists pg_temp.${nome};`);
+    partes.push(`insert into ${S}.fv2_migracao (nome, sha256, sha256_aplicado) values (${literal(m.nome)}, ${literal(m.sha256)}, ${literal(sha(t))});`, "");
+  }
+  partes.push(`${sqlSemExecucaoPublica(S)};`,
+    `grant fv2_guardiao to current_user;
+do $$ declare r text; begin
+  foreach r in array array['anon','authenticated','service_role','authenticator'] loop
+    if exists (select 1 from pg_roles where rolname = r) then
+      execute format('revoke all on all tables in schema ${S} from %I', r);
+      execute format('revoke all on all sequences in schema ${S} from %I', r);
+      execute format('revoke all on all functions in schema ${S} from %I', r);
+    end if;
+  end loop;
+end $$;
+revoke fv2_guardiao from current_user;`,
+    `do $$ declare n int; txt text; begin
+  select count(*) into n from ${S}.fv2_migracao;
+  if n <> ${ms.length} then raise exception 'FV2 pós: % migrações registradas (esperado ${ms.length})', n; end if;
+  select string_agg(c.relname, ', ') into txt from pg_class c join pg_namespace s on s.oid = c.relnamespace
+    where s.nspname = '${S}' and c.relkind = 'r' and c.relname <> 'fv2_migracao'
+      and c.relname not in ('fv2_auditoria_concessao','fv2_liberacao','fv2_liberacao_historico','fv2_provisionamento_inicial','fv2_sessao_banco')
+      and not (c.relrowsecurity and c.relforcerowsecurity);
+  if txt is not null then raise exception 'FV2 pós: tabelas sem RLS forçada: %', txt; end if;
+  select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace,
+    lateral aclexplode(coalesce(c.relacl, acldefault((case when c.relkind = 'S' then 's' else 'r' end)::"char", c.relowner))) x
+    where s.nspname = '${S}' and c.relkind in ('r','p','v','m','S') and (x.grantee = 0 or pg_get_userbyid(x.grantee) in ('anon','authenticated','service_role','authenticator'));
+  if n > 0 then raise exception 'FV2 pós: % privilégio(s) de PUBLIC ou credencial comum em tabela do schema', n; end if;
+  select count(*) into n from pg_publication_tables where schemaname = '${S}';
+  if n > 0 then raise exception 'FV2 pós: % tabela(s) do v2 em publicação de replicação', n; end if;
+  select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace where s.nspname <> '${S}' and s.nspname not like 'pg\\_%' and c.relname like 'fv2\\_%';
+  if n > 0 then raise exception 'FV2 pós: % relações fv2_* fora do schema', n; end if;
+end $$;`, "");
+  return partes.join("\n");
+}
+
+const arquivos = { "instalar.sql": instalar(), "atualizar.sql": atualizar(), "inventario.sql": INVENTARIO, "desativar.sql": DESATIVAR };
 if (!executadoDireto) { /* importado (testes): só exporta as funções */ } else if (process.argv.includes("--conferir")) {
   const fora = Object.entries(arquivos).filter(([n, t]) => !existsSync(join(DESTINO, n)) || readFileSync(join(DESTINO, n), "utf8") !== t).map(([n]) => n);
   if (fora.length) { process.stderr.write(`Desatualizados: ${fora.join(", ")} (rode node scripts/fv2/pacoteProducao.mjs)\n`); process.exit(1); }

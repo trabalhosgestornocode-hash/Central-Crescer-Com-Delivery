@@ -25,6 +25,7 @@ async function preparar() {
   const A = acao(m.nucleo, c);
   const unicred = await A("/configuracoes/conta/criar", { tipo: "BANCARIA", nome: "Unicred", instituicao: "Unicred" });
   const caixa = await A("/configuracoes/conta/criar", { tipo: "CAIXA_FISICO", nome: "Caixa físico" });
+  await A("/abertura/configurar", { competencia: COMP }); // abertura PERSISTIDA (0022): proposta 11/2026, corte 31/10
   return { ...m, c, A, unicred, caixa };
 }
 
@@ -73,16 +74,16 @@ test("contas financeiras: Unicred e caixa físico sem saldo presumido; sem dupli
 test("saldos de abertura: véspera da competência, FIM_DO_DIA, origem obrigatória, sem afirmar anexo; reenvio e conflito", async () => {
   const { nucleo, c, A, unicred, caixa } = await preparar();
   assert.equal(vesperaDaCompetencia(COMP), "2026-10-31");
-  await rejeita(A("/abertura/saldo", { conta: unicred.id, competencia: COMP, valor: "1.234,56" }), CODIGO.ENTRADA_INVALIDA);
-  await rejeita(A("/abertura/saldo", { conta: unicred.id, competencia: "2026-13", valor: "1,00", origem: "Extrato sintético" }), CODIGO.ENTRADA_INVALIDA);
-  const s = (await A("/abertura/saldo", { conta: unicred.id, competencia: COMP, valor: "1.234,56", origem: "Extrato Unicred de 31/10 (sintético)" })).saldo;
+  await rejeita(A("/abertura/saldo", { conta: unicred.id, valor: "1.234,56" }), CODIGO.ENTRADA_INVALIDA);
+  await rejeita(A("/abertura/configurar", { competencia: "2026-13" }), CODIGO.ENTRADA_INVALIDA);
+  const s = (await A("/abertura/saldo", { conta: unicred.id, valor: "1.234,56", origem: "Extrato Unicred de 31/10 (sintético)" })).saldo;
   assert.deepEqual([s.data, s.referencia, s.valorCentavos], ["2026-10-31", "FIM_DO_DIA", 123456]);
   assert.ok(s.observacao.includes("Extrato Unicred de 31/10") && s.observacao.includes(SEM_ANEXO) && !s.documentoId, "referência externa, sem anexo");
   assert.ok(s.criadoPor, "quem registrou fica gravado");
-  assert.equal((await A("/abertura/saldo", { conta: unicred.id, competencia: COMP, valor: "1.234,56", origem: "Extrato Unicred de 31/10 (sintético)" })).repetido, true);
-  await rejeita(A("/abertura/saldo", { conta: unicred.id, competencia: COMP, valor: "1.234,57", origem: "Extrato Unicred de 31/10 (sintético)" }), CODIGO.CONFLITO_IDEMPOTENCIA);
-  await A("/abertura/saldo", { conta: caixa.id, competencia: COMP, valor: "350,00", origem: "Contagem do caixa em 31/10 (sintética)" });
-  await rejeita(A("/abertura/saldo", { conta: caixa.id, competencia: "2026-12", valor: "-1,00", origem: "Contagem sintética" }), CODIGO.VALOR_INVALIDO);
+  assert.equal((await A("/abertura/saldo", { conta: unicred.id, valor: "1.234,56", origem: "Extrato Unicred de 31/10 (sintético)" })).repetido, true);
+  await rejeita(A("/abertura/saldo", { conta: unicred.id, valor: "1.234,57", origem: "Extrato Unicred de 31/10 (sintético)" }), CODIGO.CONFLITO_IDEMPOTENCIA);
+  await A("/abertura/saldo", { conta: caixa.id, valor: "350,00", origem: "Contagem do caixa em 31/10 (sintética)" });
+  await rejeita(A("/abertura/saldo", { conta: caixa.id, valor: "-1,00", origem: "Contagem sintética" }), CODIGO.VALOR_INVALIDO);
   const cb = await nucleo.consultarCaixaEBancos(c, { inicio: "2026-11-01", fim: "2026-11-20" });
   assert.deepEqual(cb.contas.map((x) => [x.nome, x.saldoFinalCentavos]).sort(), [["Caixa físico", 35000], ["Unicred", 123456]]);
   // Saldo de abertura não é receita: a DRE do mês de início segue vazia.
@@ -91,9 +92,9 @@ test("saldos de abertura: véspera da competência, FIM_DO_DIA, origem obrigató
 
 test("títulos ANTERIORES (opção B): posição patrimonial, fora da DRE; pagos/recebidos depois não viram despesa nem receita", async () => {
   const { nucleo, c, A, unicred } = await preparar();
-  await A("/abertura/saldo", { conta: unicred.id, competencia: COMP, valor: "1.000,00", origem: "Extrato Unicred de 31/10 (sintético)" });
+  await A("/abertura/saldo", { conta: unicred.id, valor: "1.000,00", origem: "Extrato Unicred de 31/10 (sintético)" });
   const chave = randomUUID();
-  const corpo = { fornecedorNovo: "Fornecedor Sintético A", descricao: "NF 101 (sintética)", valor: "500,00", competencia: COMP, dataEmissao: "2026-10-20", vencimento: "2026-11-10", origem: "Lista de contas a pagar em 31/10", chave };
+  const corpo = { fornecedorNovo: "Fornecedor Sintético A", descricao: "NF 101 (sintética)", valor: "500,00", dataEmissao: "2026-10-20", vencimento: "2026-11-10", origem: "Lista de contas a pagar em 31/10", chave };
   const o = await A("/abertura/obrigacao-anterior", corpo);
   assert.deepEqual([o.lancamento.categoria, o.lancamento.natureza, o.obrigacoes.length, o.obrigacoes[0].vencimento, o.obrigacoes[0].saldoCentavos], [CATEGORIA_TITULOS_ANTERIORES, "PATRIMONIAL", 1, "2026-11-10", 50000]);
   assert.ok(o.obrigacoes[0].descricao.includes(SEM_ANEXO));
@@ -111,9 +112,9 @@ test("títulos ANTERIORES (opção B): posição patrimonial, fora da DRE; pagos
   await nucleo.cancelarObrigacao(c, { obrigacaoId: o2.obrigacoes[0].id, justificativa: "Cancelamento sintético do segundo título." });
   assert.ok(!JSON.stringify(pagar).includes("Órfão Sintético"), "nenhum fornecedor órfão");
 
-  const rec = await A("/abertura/recebivel-anterior", { processador: "IFOOD", descricao: "Repasse iFood da semana de 27/10 (sintético)", valor: "800,00", competencia: COMP, dataOrigem: "2026-10-28", vencimento: "2026-11-05", origem: "Demonstrativo iFood (sintético)", chave: randomUUID() });
+  const rec = await A("/abertura/recebivel-anterior", { processador: "IFOOD", descricao: "Repasse iFood da semana de 27/10 (sintético)", valor: "800,00", dataOrigem: "2026-10-28", vencimento: "2026-11-05", origem: "Demonstrativo iFood (sintético)", chave: randomUUID() });
   assert.deepEqual([rec.recebivel.anteriorAAbertura, rec.recebivel.dataOrigem, rec.recebivel.saldoCentavos, rec.lancamentosDeRetencao.length], [true, "2026-10-28", 80000, 0]);
-  await rejeita(A("/abertura/recebivel-anterior", { processador: "STONE", descricao: "Agenda Stone", valor: "10,00", competencia: COMP, dataOrigem: "2026-11-01", origem: "Agenda Stone (sintética)", chave: randomUUID() }), CODIGO.DATA_INVALIDA);
+  await rejeita(A("/abertura/recebivel-anterior", { processador: "STONE", descricao: "Agenda Stone", valor: "10,00", dataOrigem: "2026-11-01", origem: "Agenda Stone (sintética)", chave: randomUUID() }), CODIGO.DATA_INVALIDA);
   await rejeita(nucleo.registrarRecebivel(c, { processador: "STONE", brutoCentavos: 1000, competencia: COMP, anteriorAAbertura: true, dataOrigem: "2026-10-30", retencoes: [{ categoria: "TAXAS_STONE", valorCentavos: 10 }] }), CODIGO.ENTRADA_INVALIDA);
 
   const antes = await nucleo.apurarCompetencia(c, { competencia: COMP });

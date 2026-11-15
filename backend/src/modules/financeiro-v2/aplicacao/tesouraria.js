@@ -319,8 +319,9 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
      * do dia (depois deles). É o ponto de partida do saldo calculado — só movimentos POSTERIORES à referência se somam a
      * ele. Um segundo saldo informado não corrige nada: a diferença para o calculado aparece na consulta como divergência.
      */
-    registrarSaldoDeConta(ctx, entrada) {
+    registrarSaldoDeConta(ctx, entrada, interno = {}) {
       const c = validarSaldoDeConta(entrada);
+      const marca = interno.aberturaId ? { aberturaId: interno.aberturaId } : {}; // só uso interno (abertura.js); fora da impressão
       const impressao = JSON.stringify(c);
       return b.executar(ctx, ACAO.REGISTRAR, async (cx, tx) => {
         const chave = c.referencia === REFERENCIA_SALDO.FIM_DO_DIA ? `saldo:${c.contaId}:${c.data}:fim` : `saldo:${c.contaId}:${c.data}`;
@@ -334,7 +335,7 @@ export function operacoesDeTesouraria(b, { cargaCompleta = false, conferirCarga 
         // O fim do dia de hoje ainda não aconteceu: um "saldo final" de hoje deixaria de fora movimentos que ainda virão.
         if (c.referencia === REFERENCIA_SALDO.FIM_DO_DIA && c.data >= b.hoje()) falhar(CODIGO.DATA_INVALIDA, "Saldo de fim do dia só para dias já encerrados.", { campo: "data" });
         if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
-        return { saldo: await b.criar(tx, cx, TIPO.SALDO_CONTA, { ...c, chaveIdempotencia: chave, impressao }), repetido: false };
+        return { saldo: await b.criar(tx, cx, TIPO.SALDO_CONTA, { ...c, ...marca, chaveIdempotencia: chave, impressao }), repetido: false };
       });
     },
 

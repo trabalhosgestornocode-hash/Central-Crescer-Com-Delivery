@@ -67,6 +67,8 @@ export const CONSULTAS = Object.freeze({
   "/conferencias/pendencias": (n, c, p) => n.consultarPendencias(c, filtro(p, ["competencia", "grupo", "situacao", ...PAGINA], PAGINA)),
   "/fechamento": (n, c, p) => n.consultarFechamento(c, filtro(p, ["competencia"])),
   "/configuracoes": (n, c) => n.consultarConfiguracoes(c),
+  // Abertura + o necessário do roteiro (contas, plano): uma consulta por tela, como as demais.
+  "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),
   "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),
   "/configuracoes/categoria": (n, c, p) => n.consultarCategoria(c, { codigo: String(p.codigo ?? "") }),
   "/permissoes": (n, c) => n.consultarPermissoes(c),

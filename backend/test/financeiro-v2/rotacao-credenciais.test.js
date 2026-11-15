@@ -2,7 +2,7 @@
 // PostgreSQL (executados numa transação DESFEITA no banco local isolado). Nada aqui toca o Supabase ou o Render reais.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PARES, comandosDeRevogacao, comandosDoPapel, dispararDeploy, gravarNoRender, situacaoDosPares, urlDoPapel, verificadorScram } from "../../scripts/fv2/rotacaoCredenciais.mjs";
+import { PARES, comandosDeRevogacao, podeRevogar, comandosDoPapel, dispararDeploy, gravarNoRender, situacaoDosPares, urlDoPapel, verificadorScram } from "../../scripts/fv2/rotacaoCredenciais.mjs";
 import { abrirPool, criarBancoDeTeste, motivoParaPular } from "./helpers/postgres.js";
 
 const papel = (rolname, rolcanlogin, conexoes = 0) => ({ rolname, rolcanlogin, conexoes, existe: true });
@@ -15,6 +15,13 @@ test("pares azul/verde: em uso, próximo e rotação em andamento", () => {
   const soB = situacaoDosPares([papel("fv2_app_login", false), papel("fv2_autoridade_login", false), papel("fv2_app_login_b", true, 2), papel("fv2_autoridade_login_b", true)]);
   assert.deepEqual([soB.ativo, soB.proximo], ["B", "A"], "a rotação seguinte reativa o par A com senha nova");
   assert.deepEqual(PARES.A.map((p) => p.limite), PARES.B.map((p) => p.limite), "mesmos limites de conexão");
+});
+
+test("revogar só quando CADA papel novo já conecta (variável parcial no Render não derruba o módulo)", () => {
+  const base = [papel("fv2_app_login", true, 1), papel("fv2_autoridade_login", true, 1)];
+  assert.deepEqual(podeRevogar([...base, papel("fv2_app_login_b", true, 2), papel("fv2_autoridade_login_b", true, 0)], "A"), { ok: false, faltando: ["fv2_autoridade_login_b"] });
+  assert.deepEqual(podeRevogar([...base, papel("fv2_app_login_b", true, 2), papel("fv2_autoridade_login_b", true, 1)], "A"), { ok: true, faltando: [] });
+  assert.equal(podeRevogar(base, "A").ok, false, "par novo inexistente");
 });
 
 test("comandos: só papéis da lista, verificador SCRAM (nunca a senha), revogação sem exclusão", () => {

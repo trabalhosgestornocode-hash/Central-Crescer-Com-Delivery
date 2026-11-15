@@ -68,7 +68,7 @@ test("migrações: aplicam do zero num banco vazio, são idempotentes e não ace
   assert.equal((await dono.query("select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name like 'fv2\\_%'")).rows[0].n, 0);
   const tabelas = (await dono.query("select table_name from information_schema.tables where table_schema = 'financeiro_v2' and table_name like 'fv2\\_%' order by 1")).rows.map((r) => r.table_name);
   assert.deepEqual(tabelas, [
-    "fv2_ajuste", "fv2_atribuicao_pendencia", "fv2_auditoria_concessao", "fv2_canal_processador", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_configuracao_unidade", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
+    "fv2_abertura", "fv2_ajuste", "fv2_atribuicao_pendencia", "fv2_auditoria_concessao", "fv2_canal_processador", "fv2_categoria", "fv2_competencia", "fv2_concessao", "fv2_configuracao_unidade", "fv2_conta", "fv2_contraparte", "fv2_correspondencia", "fv2_divergencia_fonte", "fv2_documento", "fv2_escopo",
     "fv2_estorno", "fv2_historico", "fv2_importacao", "fv2_lancamento", "fv2_liberacao", "fv2_liberacao_historico", "fv2_liquidacao", "fv2_migracao", "fv2_movimentacao", "fv2_obrigacao",
     "fv2_pagamento_venda", "fv2_proposta", "fv2_provisionamento_inicial", "fv2_recebivel", "fv2_registro_fonte", "fv2_saldo_conta", "fv2_sessao_banco", "fv2_sessao_caixa", "fv2_transferencia", "fv2_venda", "fv2_versao_fechamento", "fv2_vinculo_documental",
   ]);

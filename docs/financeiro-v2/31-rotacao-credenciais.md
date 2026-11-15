@@ -37,7 +37,8 @@ cd backend
 node --env-file=.env scripts/fv2/rotacaoCredenciais.mjs plano
 
 # 1. Chave do Render digitada SEM eco (não vai para o histórico do terminal nem para o chat)
-$env:RENDER_API_KEY = Read-Host -MaskInput "Chave da API do Render"
+$s = Read-Host -AsSecureString "Chave da API do Render"   # Windows PowerShell 5.1 (no PowerShell 7: Read-Host -MaskInput)
+$env:RENDER_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s)); Remove-Variable s
 
 # 2. Cria o par novo, testa a conexão pelo pooler com TLS verificado, grava as 2 variáveis no Render e dispara o deploy
 node --env-file=.env scripts/fv2/rotacaoCredenciais.mjs criar --ca <caminho\da\ca.crt> --servico srv-d96rl5naqgkc73ccflr0 --confirmar
@@ -82,8 +83,9 @@ O que o script garante:
 
 - **Se o passo 2 falhar no Render** (HTTP diferente de 200):
   - o par novo existe, mas não está em uso;
-  - rodar `plano`, corrigir a chave e repetir. O script recusa repetir enquanto os dois pares tiverem login; nesse caso,
-    rodar `revogar-antigas --antigo` com o par **novo**, para desligá-lo, e recomeçar.
+  - corrigir a chave e rodar `criar ... --retomar <par novo> --confirmar`: gera senhas **novas** para o mesmo par novo, regrava
+    as **duas** variáveis e dispara o deploy. Não desligue o par novo nesse caso: uma das variáveis do Render já aponta para ele.
+  - `revogar-antigas` confere **cada** papel novo (app e autoridade) separadamente: se só um conecta, nada é revogado.
 - **Se o deploy novo falhar:** o Render mantém a instância anterior, que continua no par antigo, ainda ativo. Corrigir e
   disparar outro deploy. O par antigo só é desligado no passo 4.
 - **Próxima rotação:** o script reativa o par A com senha nova (`alter role … login password …`). Os pares alternam.

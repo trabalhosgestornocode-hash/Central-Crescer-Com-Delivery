@@ -355,7 +355,12 @@ test("abertura — rotas NOVAS no modo CO-LOCALIZADO: contas, saldo de abertura,
   const { dono } = await montar();
   const contar = async (q, p = []) => Number((await dono.query(q, p)).rows[0].n);
   const W = (caminho, corpo, o = {}) => get(`/localescrita/acoes${caminho}`, { metodo: "POST", corpo, ...o });
-  const COMP = "2026-11";
+  // O banco deste arquivo é COMPARTILHADO: os testes anteriores deixam lançamentos de set/out. Um início em 11/2026 é então
+  // (corretamente) incompatível; o fluxo usa um início anterior a eles.
+  const outubro = await W("/obrigacoes/registrar", { fornecedorNovo: "Fornecedor Sintético de Outubro", descricao: "Compra sintética de outubro", valor: "10,00", categoria: "INSUMOS", competencia: "2026-10", dataEmissao: "2026-10-05", vencimento: "2026-10-20", chave: "55555555-5555-4555-8555-555555555555" });
+  assert.equal(outubro.status, 200, JSON.stringify(outubro.corpo));
+  assert.equal((await W("/abertura/configurar", { competencia: "2026-11" })).corpo.motivo, "ABERTURA_INCOMPATIVEL");
+  const COMP = "2026-01";
   const dreAntes = (await get(`/local/api/dre?competencia=${COMP}`)).corpo;
   const unicred = { tipo: "BANCARIA", nome: "Unicred Sintética", instituicao: "Unicred" };
   // Produção hoje (FV2_ESCRITA_HABILITADA=0): as rotas novas também só respondem "somente consulta".
@@ -373,16 +378,23 @@ test("abertura — rotas NOVAS no modo CO-LOCALIZADO: contas, saldo de abertura,
   assert.equal((await W("/configuracoes/conta/criar", { ...unicred, unidade: UNI_A2 })).corpo.codigo, "CAMPO_DESCONHECIDO");
   assert.equal((await W("/configuracoes/conta/criar", unicred, { s: sessao({ unidade: UNI_A2 }) })).corpo.motivo, "UNIDADE_NAO_LIBERADA");
   assert.equal((await W("/configuracoes/conta/criar", unicred, { s: sessao({ conta: CONTA_NADA, pessoa: PESSOA_NADA }) })).corpo.motivo, "SEM_CONCESSAO");
+  // Abertura PERSISTIDA (0022): sem ela, nenhuma posição de abertura; depois, a competência vem dela.
+  assert.equal((await W("/abertura/saldo", { conta, valor: "1,00", origem: "Extrato sintético de 31/10" })).corpo.motivo, "ABERTURA_NAO_CONFIGURADA");
+  const cfg = await W("/abertura/configurar", { competencia: COMP });
+  assert.equal(cfg.status, 200, JSON.stringify(cfg.corpo));
+  assert.equal(cfg.corpo.abertura.criadoPor, PESSOA, "abertura gravada com a pessoa individual");
+  assert.equal((await W("/abertura/configurar", { competencia: COMP }, { s: sessao({ conta: CONTA_NADA, pessoa: PESSOA_NADA }) })).corpo.motivo, "SEM_CONCESSAO");
+  assert.equal(await contar("select count(*) n from financeiro_v2.fv2_historico where registro_tipo = 'ABERTURA'"), 1);
   // Saldo de abertura: origem obrigatória; grava na véspera (31/10) com a pessoa individual.
-  assert.equal((await W("/abertura/saldo", { conta, competencia: COMP, valor: "1.000,00" })).status, 400);
-  const s = await W("/abertura/saldo", { conta, competencia: COMP, valor: "1.000,00", origem: "Extrato sintético de 31/10" });
+  assert.equal((await W("/abertura/saldo", { conta, valor: "1.000,00" })).status, 400);
+  const s = await W("/abertura/saldo", { conta, valor: "1.000,00", origem: "Extrato sintético de 31/10" });
   assert.equal(s.status, 200, JSON.stringify(s.corpo));
-  assert.deepEqual([s.corpo.saldo.data, s.corpo.saldo.referencia, s.corpo.saldo.criadoPor], ["2026-10-31", "FIM_DO_DIA", PESSOA]);
+  assert.deepEqual([s.corpo.saldo.data, s.corpo.saldo.referencia, s.corpo.saldo.criadoPor], ["2025-12-31", "FIM_DO_DIA", PESSOA]);
   // Título anterior: inválido não deixa fornecedor órfão; reenvio simultâneo = 1 título; fora da DRE.
   const forn = () => contar("select count(*) n from financeiro_v2.fv2_contraparte where unidade_id = $1", [UNI_A]);
   const fornAntes = await forn();
-  const base = { fornecedorNovo: "Fornecedor Anterior Sintético", descricao: "NF sintética", valor: "300,00", competencia: COMP, dataEmissao: "2026-10-15", vencimento: "2026-11-12", origem: "Lista sintética de 31/10" };
-  assert.equal((await W("/abertura/obrigacao-anterior", { ...base, dataEmissao: "2026-11-03", chave: "11111111-1111-4111-8111-111111111111" })).status, 400);
+  const base = { fornecedorNovo: "Fornecedor Anterior Sintético", descricao: "NF sintética", valor: "300,00", dataEmissao: "2025-12-15", vencimento: "2026-11-12", origem: "Lista sintética de 31/10" };
+  assert.equal((await W("/abertura/obrigacao-anterior", { ...base, dataEmissao: "2026-01-03", chave: "11111111-1111-4111-8111-111111111111" })).status, 400);
   assert.equal(await forn(), fornAntes, "transação inteira desfeita");
   const ob = { ...base, chave: "22222222-2222-4222-8222-222222222222" };
   const os = await Promise.all([W("/abertura/obrigacao-anterior", ob), W("/abertura/obrigacao-anterior", ob), W("/abertura/obrigacao-anterior", ob)]);
@@ -392,7 +404,7 @@ test("abertura — rotas NOVAS no modo CO-LOCALIZADO: contas, saldo de abertura,
   assert.equal(os[0].corpo.lancamento.natureza, "PATRIMONIAL");
   // Recebível: repasse de processador do período recusado; anterior aceito sem receita.
   assert.equal((await W("/recebiveis/registrar", { processador: "STONE", valor: "10,00", competencia: COMP })).status, 400);
-  const rec = await W("/abertura/recebivel-anterior", { processador: "IFOOD", descricao: "Repasse sintético", valor: "400,00", competencia: COMP, dataOrigem: "2026-10-27", origem: "Demonstrativo sintético", chave: "33333333-3333-4333-8333-333333333333" });
+  const rec = await W("/abertura/recebivel-anterior", { processador: "IFOOD", descricao: "Repasse sintético", valor: "400,00", dataOrigem: "2025-12-27", origem: "Demonstrativo sintético", chave: "33333333-3333-4333-8333-333333333333" });
   assert.equal(rec.status, 200, JSON.stringify(rec.corpo));
   assert.equal(rec.corpo.lancamentosDeRetencao.length, 0);
   // Caixa físico: abrir com o contado; operação reenviada 3× ao mesmo tempo = 1.
