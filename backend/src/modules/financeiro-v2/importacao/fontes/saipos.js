@@ -172,6 +172,31 @@ export const SAIPOS_VENDAS_POR_CANAL = relatorioDeTotais({
  * cadastrado", máquina de outra marca, voucher de desconto) ficam como pendência — nunca são somadas como venda em silêncio.
  */
 const DIA_COLUNA = /^Dia - (\d{2})\/(\d{2})\/(\d{4})$/;
+
+/**
+ * De-para das formas do SAIPOS (rótulos REAIS do relatório de formas de pagamento) → venda do dia por forma: canal de
+ * origem, forma, processador que fica devendo e se o dinheiro cai no caixa físico. Definido pelo proprietário (16/11/2026):
+ * cartões de bandeira = maquininha Stone no balcão; "Pago Online via Pix" = maquininha do iFood na loja; "Pago Online"
+ * (sem mais nada) = pedidos 99 Food; "Pix na Entrega" = Stone levada pelo entregador. Nulo = sem venda automática (fica
+ * pendência): voucher de desconto (natureza a definir) e qualquer forma não listada — nunca é presumida.
+ */
+const DE_PARA_FORMAS = Object.freeze({
+  "online ifood": { canal: "IFOOD", forma: "OUTRA", processador: "IFOOD" },
+  "pago online via pix": { canal: "BALCAO", forma: "PIX", processador: "IFOOD", descricao: "Pix na maquininha do iFood" },
+  dinheiro: { canal: "BALCAO", forma: "DINHEIRO", caixa: true },
+  vale: { canal: "BALCAO", forma: "VALE", processador: "OPERADORA_BENEFICIOS" },
+  "online anotaai": { canal: "ANOTA_AI", forma: "OUTRA", processador: "ANOTA_AI" },
+  "online anota ai": { canal: "ANOTA_AI", forma: "OUTRA", processador: "ANOTA_AI" },
+  "pago online": { canal: "OUTRO", forma: "OUTRA", processador: "OUTRO", descricao: "99 Food" },
+  "pix na entrega": { canal: "OUTRO", forma: "PIX", processador: "STONE", descricao: "Pix na entrega (Stone com o entregador)" },
+  "pagamento nao cadastrado": { canal: "OUTRO", forma: null, revisar: true, descricao: "Pagamento a identificar" },
+});
+export function deParaFormaSaipos(texto) {
+  const r = rotulo(texto);
+  const cartao = /^(debito|credito) (master|mastercard|visa|elo|amex|hipercard|hiper|diners|cabal|banescard)$/.exec(r);
+  if (cartao) return { canal: "BALCAO", forma: cartao[1] === "debito" ? "DEBITO" : "CREDITO", processador: "STONE" };
+  return DE_PARA_FORMAS[r] ?? null;
+}
 export const SAIPOS_FORMAS_PAGAMENTO = definirFonte({
   fonte: "SAIPOS",
   tipoRelatorio: "SAIPOS_FORMAS_PAGAMENTO",
