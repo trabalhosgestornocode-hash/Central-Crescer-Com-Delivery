@@ -94,7 +94,8 @@ export function detalheAPagar(d, ctx = {}) {
     campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
 <label>Conta de saída <select name="conta" required>${d.contasParaPagar.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
 <label>Data do pagamento <input type="date" name="dataEfetiva" required></label>
-<label>Valor (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(t.saldoCentavos).replace(/[^0-9.,]/g, ""))}" required></label>` }) : "";
+<label>Valor pago (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(t.saldoCentavos).replace(/[^0-9.,]/g, ""))}" required></label>
+<p class="nota">Pagou mais que o saldo? Digite o valor realmente pago: a diferença é lançada sozinha como juros/multa (despesa financeira) e a conta é quitada.</p>` }) : "";
   return `${fechar(`${t.fornecedor?.nome ?? "Conta a pagar"} · ${descricaoLegivel(t.descricao)}`)}
 <dl class="ficha">
   <dt>Situação</dt><dd>${selo(t.situacao)}</dd>

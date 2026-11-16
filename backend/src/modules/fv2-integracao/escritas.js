@@ -213,7 +213,21 @@ export const ESCRITAS = Object.freeze({
     else if (b.fornecedor) mudancas.contraparteId = id(b.fornecedor);
     return n.corrigirObrigacao(c, { obrigacaoId: id(b.obrigacao), mudancas, justificativa: b.justificativa });
   } },
-  "/obrigacoes/pagar": { campos: ["obrigacao", "conta", "dataEfetiva", "valor"], fazer: (n, c, b) => n.pagarContaAPagar(c, { obrigacaoId: id(b.obrigacao), contaId: id(b.conta), dataEfetiva: b.dataEfetiva, valorCentavos: centavos(b.valor) }) },
+  // Pagar. Se o valor pago é MAIOR que o saldo, a diferença é juros/multa: entra antes como ajuste (despesa financeira, na
+  // competência do pagamento, com motivo) e o pagamento quita o total. Se o pagamento falhar, o ajuste é desfeito por outro ajuste.
+  "/obrigacoes/pagar": { campos: ["obrigacao", "conta", "dataEfetiva", "valor"], fazer: async (n, c, b) => {
+    const entrada = { obrigacaoId: id(b.obrigacao), contaId: id(b.conta), dataEfetiva: b.dataEfetiva, valorCentavos: centavos(b.valor) };
+    const saldo = (await n.detalharContaAPagar(c, { id: entrada.obrigacaoId })).titulo.saldoCentavos;
+    const juros = Number.isInteger(entrada.valorCentavos) ? entrada.valorCentavos - saldo : 0;
+    if (juros <= 0) return n.pagarContaAPagar(c, entrada);
+    const ajuste = { alvoTipo: "OBRIGACAO", alvoId: entrada.obrigacaoId, categoria: "JUROS_E_TARIFAS_BANCARIAS", competencia: String(b.dataEfetiva ?? "").slice(0, 7) };
+    const real = (v) => `R$ ${(v / 100).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
+    await n.registrarAjuste(c, { ...ajuste, valorCentavos: juros, motivo: `Juros/multa: pago ${real(entrada.valorCentavos)} sobre o saldo de ${real(saldo)} em ${b.dataEfetiva}` });
+    try { return { ...(await n.pagarContaAPagar(c, entrada)), jurosCentavos: juros }; } catch (e) {
+      await n.registrarAjuste(c, { ...ajuste, valorCentavos: -juros, motivo: "Desfeito: o pagamento não foi concluído" }).catch(() => {});
+      throw e;
+    }
+  } },
   "/saldos/registrar": { campos: ["conta", "data", "referencia", "valor", "observacao"], fazer: (n, c, b) => n.registrarSaldoDeConta(c, { contaId: id(b.conta), data: b.data, referencia: b.referencia, valorCentavos: centavos(b.valor), ...(b.observacao ? { observacao: b.observacao } : {}) }) },
   "/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (n, c, b) => n.reclassificarLancamento(c, {
     lancamentoId: id(b.lancamento), categoria: b.categoria, justificativa: b.justificativa, versaoEsperada: inteiro(b.versaoEsperada), ...(b.documento ? { documentoId: id(b.documento) } : {}),
