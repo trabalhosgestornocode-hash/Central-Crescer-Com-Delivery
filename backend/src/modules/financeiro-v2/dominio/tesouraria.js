@@ -11,6 +11,13 @@ import {
   SITUACAO_SESSAO_CAIXA, SITUACAO_TITULO, TIPO, TIPO_CONTA, ESTADO_COMPETENCIA,
 } from "./catalogos.js";
 import { somar, somarLista, subtrair } from "./dinheiro.js";
+
+/** Situação de conciliação que a pessoa vê: saída toda vinculada a contas a pagar = conciliada; parte vinculada = parcial. */
+export function conciliacaoEfetiva(m) {
+  if (m.situacaoConciliacao !== "NAO_CONCILIADA" || m.sentido !== "SAIDA") return m.situacaoConciliacao;
+  const alocado = m.alocadoCentavos ?? 0;
+  return alocado <= 0 ? m.situacaoConciliacao : alocado >= m.valorCentavos ? "CONCILIADA" : "PARCIAL";
+}
 import { competenciaDe, diaDaSemana, diaNoMes, inicioDaSemana, primeiroDiaDe, somarDias, somarMeses, ultimoDiaDe } from "./tempo.js";
 
 const enumerar = (...v) => Object.freeze(Object.fromEntries(v.map((x) => [x, x])));
@@ -391,7 +398,7 @@ export function movimentoLegivel(p, m) {
   return {
     id: m.id, data: m.dataEfetiva, conta: conta ? { id: conta.id, nome: conta.nome, tipo: conta.tipo } : null, sentido: m.sentido, valorCentavos: m.valorCentavos,
     natureza: m.natureza, titulo, descricaoOriginal: m.descricao ?? null, vinculo, categoriaBancariaSugerida: p.categoriaBancariaPorMov?.get(m.id) ?? null, classificacaoEconomica, naoVinculadoCentavos: liquidacoes.length ? subtrair(m.valorCentavos, m.alocadoCentavos) : null,
-    situacao: m.situacao, situacaoConciliacao: m.situacaoConciliacao, documentos: documentosDe(p, TIPO.MOVIMENTACAO, m), fonte: m.fonte?.sistema ?? null, pendencias,
+    situacao: m.situacao, situacaoConciliacao: conciliacaoEfetiva(m), documentos: documentosDe(p, TIPO.MOVIMENTACAO, m), fonte: m.fonte?.sistema ?? null, pendencias,
   };
 }
 
@@ -442,7 +449,7 @@ function contaNoPeriodo(p, conta, inicio, fim, hoje) {
   // Movimentos com data ANTERIOR à primeira referência já estão dentro do saldo informado: nunca são somados a ele.
   const anterioresAReferencia = ancoras.length ? quantos(movimentosDa(p, conta.id).filter((m) => m.dataEfetiva < ancoras[0].inicioEfetivo)) : 0;
   const semVinculo = movs.filter((m) => !m.transferenciaId && !m.pagamentoId && !(p.liquidacoesPorMov.get(m.id) ?? []).length);
-  const conc = (sit) => movs.filter((m) => m.situacaoConciliacao === sit).length;
+  const conc = (sit) => movs.filter((m) => conciliacaoEfetiva(m) === sit).length;
   const ultima = ancoras.filter((a) => a.inicioEfetivo <= somarDias(fim, 1)).pop() ?? null;
   return {
     id: conta.id, nome: conta.nome, tipo: conta.tipo, instituicao: conta.instituicao ?? null, ativa: conta.ativa,

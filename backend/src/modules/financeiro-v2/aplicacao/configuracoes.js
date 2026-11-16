@@ -11,6 +11,7 @@
 import { CODIGO, falhar } from "../dominio/erros.js";
 import { CANAL, EVENTO_HISTORICO, NATUREZAS_DA_CLASSIFICACAO, PAPEL_COMERCIAL, PROCESSADOR, SITUACAO_CADASTRO, SITUACAO_SESSAO_CAIXA, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
+import { conciliacaoEfetiva } from "../dominio/tesouraria.js";
 import { METODOLOGIAS, identificadorDa, metodologiaVigente } from "../dominio/metodologias.js";
 import { exigirTexto, exigirUmDe, exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
 
@@ -48,7 +49,7 @@ export function operacoesDeConfiguracao(b) {
           unidade: unidade ? { nomeExibicao: unidade.nomeExibicao, identificacaoEmpresa: unidade.identificacaoEmpresa ?? null, situacao: unidade.situacao, observacao: unidade.observacao ?? null, atualizadoEm: unidade.atualizadoEm } : null,
           contas: contas.map((c) => ({
             id: c.id, nome: c.nome, tipo: c.tipo, instituicao: c.instituicao ?? null, ativa: c.ativa,
-            movimentacoes: movs.filter((m) => m.contaId === c.id).length, naoConciliadas: movs.filter((m) => m.contaId === c.id && m.situacaoConciliacao === "NAO_CONCILIADA" && m.situacao !== "ESTORNADA").length,
+            movimentacoes: movs.filter((m) => m.contaId === c.id).length, naoConciliadas: movs.filter((m) => m.contaId === c.id && conciliacaoEfetiva(m) === "NAO_CONCILIADA" && m.situacao !== "ESTORNADA").length,
             sessaoDeCaixaAberta: sessoes.some((s) => s.contaId === c.id && s.situacao === SITUACAO_SESSAO_CAIXA.ABERTA),
           })),
           canais: [...base(PAPEL_COMERCIAL.CANAL, CANAL), ...extras.filter((x) => x.papel === PAPEL_COMERCIAL.CANAL)],
