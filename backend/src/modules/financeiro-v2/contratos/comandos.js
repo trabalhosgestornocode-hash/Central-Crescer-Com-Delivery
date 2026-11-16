@@ -379,8 +379,9 @@ export function validarAjuste(e) {
 
 export function validarCorrecaoObrigacao(e) {
   semCamposDesconhecidos(e, ["obrigacaoId", "mudancas", "justificativa", "versaoEsperada"], "correcao");
-  semCamposDesconhecidos(e.mudancas, ["vencimento", "descricao"], "mudancas");
+  semCamposDesconhecidos(e.mudancas, ["vencimento", "descricao", "contraparteId"], "mudancas");
   const mudancas = {};
+  if (e.mudancas.contraparteId !== undefined) mudancas.contraparteId = exigirUuid(e.mudancas.contraparteId, "mudancas.contraparteId");
   if (e.mudancas.vencimento !== undefined) mudancas.vencimento = exigirData(e.mudancas.vencimento, "mudancas.vencimento");
   if (e.mudancas.descricao !== undefined) mudancas.descricao = exigirTexto(e.mudancas.descricao, "mudancas.descricao");
   if (!Object.keys(mudancas).length) falhar(CODIGO.ENTRADA_INVALIDA, "Nenhuma mudança informada.");

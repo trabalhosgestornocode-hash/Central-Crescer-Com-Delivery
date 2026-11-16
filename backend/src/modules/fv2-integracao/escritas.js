@@ -203,6 +203,16 @@ export const ESCRITAS = Object.freeze({
     if (!Number.isInteger(diferenca) || diferenca === 0) throw new ErroFinanceiro(CODIGO.ENTRADA_INVALIDA, "Informe um valor diferente do atual.");
     return n.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: id(b.obrigacao), valorCentavos: diferenca, motivo: b.justificativa, categoria: d.lancamento.categoria });
   } },
+  // Corrigir descrição, vencimento ou fornecedor de uma conta a pagar (valor: "/obrigacoes/corrigir-valor"). Só o que mudou vai ao núcleo.
+  "/obrigacoes/corrigir": { campos: ["obrigacao", "descricao", "vencimento", "fornecedor", "novoFornecedor", "justificativa"], fazer: async (n, c, b) => {
+    const mudancas = {};
+    if (b.descricao) mudancas.descricao = String(b.descricao).trim();
+    if (b.vencimento) mudancas.vencimento = b.vencimento;
+    const novo = String(b.novoFornecedor ?? "").trim();
+    if (novo) mudancas.contraparteId = (await n.registrarContraparte(c, { tipo: "FORNECEDOR", nome: novo })).id;
+    else if (b.fornecedor) mudancas.contraparteId = id(b.fornecedor);
+    return n.corrigirObrigacao(c, { obrigacaoId: id(b.obrigacao), mudancas, justificativa: b.justificativa });
+  } },
   "/obrigacoes/pagar": { campos: ["obrigacao", "conta", "dataEfetiva", "valor"], fazer: (n, c, b) => n.pagarContaAPagar(c, { obrigacaoId: id(b.obrigacao), contaId: id(b.conta), dataEfetiva: b.dataEfetiva, valorCentavos: centavos(b.valor) }) },
   "/saldos/registrar": { campos: ["conta", "data", "referencia", "valor", "observacao"], fazer: (n, c, b) => n.registrarSaldoDeConta(c, { contaId: id(b.conta), data: b.data, referencia: b.referencia, valorCentavos: centavos(b.valor), ...(b.observacao ? { observacao: b.observacao } : {}) }) },
   "/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (n, c, b) => n.reclassificarLancamento(c, {

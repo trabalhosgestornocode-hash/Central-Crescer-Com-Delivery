@@ -213,7 +213,14 @@ export function operacoesEconomicas(b) {
         if (c.versaoEsperada !== null && c.versaoEsperada !== atual.versao) falhar(CODIGO.CONFLITO_VERSAO, "A obrigação foi alterada por outra operação.");
         if (c.mudancas.vencimento && c.mudancas.vencimento < atual.dataEmissao) falhar(CODIGO.DATA_INVALIDA, "O vencimento não pode ser anterior à emissão.");
         await b.exigirCompetenciaEditavel(tx, cx, atual.competencia);
-        return b.alterar(tx, cx, TIPO.OBRIGACAO, atual, c.mudancas, EVENTO_HISTORICO.CORRECAO, c.justificativa);
+        if (c.mudancas.contraparteId) await b.obterOuFalhar(tx, cx, TIPO.CONTRAPARTE, c.mudancas.contraparteId, "Fornecedor");
+        const corrigida = await b.alterar(tx, cx, TIPO.OBRIGACAO, atual, c.mudancas, EVENTO_HISTORICO.CORRECAO, c.justificativa);
+        // A descrição aparece também no lançamento da despesa: os dois andam juntos (cada um com o seu histórico).
+        if (c.mudancas.descricao && atual.lancamentoId) {
+          const l = await b.obterOuFalhar(tx, cx, TIPO.LANCAMENTO, atual.lancamentoId, "Lançamento");
+          if (l.descricao !== c.mudancas.descricao) await b.alterar(tx, cx, TIPO.LANCAMENTO, l, { descricao: c.mudancas.descricao }, EVENTO_HISTORICO.CORRECAO, c.justificativa);
+        }
+        return corrigida;
       });
     },
 

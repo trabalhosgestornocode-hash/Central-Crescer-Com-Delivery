@@ -112,6 +112,14 @@ export function detalheAPagar(d, ctx = {}) {
 </dl>
 ${d.lancamento ? `<p class="nota">Efeito no resultado: <strong>um</strong> lançamento de ${esc(moeda(d.lancamento.valorCentavos))} em ${esc(competencia(d.lancamento.competencia))}${d.lancamento.natureza === "PATRIMONIAL" ? " (patrimonial: fora da DRE)" : ""}. Pagar ou antecipar parcelas não cria outra despesa.</p>` : ""}
 ${d.parcelas.length > 1 ? `<h3>Parcelas</h3><ul class="lista-simples">${d.parcelas.map((p) => `<li${p.id === t.id ? ' class="atual"' : ""}><span>${p.parcela.numero}/${p.parcela.total} · vence ${esc(dataBR(p.vencimento))}</span><span>${valor(p.saldoCentavos)} ${selo(p.situacao)}</span></li>`).join("")}</ul>` : ""}
+${(ctx?.permissoes ?? []).includes("financeiro_v2.corrigir") && t.situacao !== "CANCELADO" ? formAcao({ url: "/api/fv2/acoes/obrigacoes/corrigir", titulo: "Corrigir descrição, vencimento ou fornecedor", rotulo: "Salvar correção", recarregar: `pagar:${t.id}`,
+    aviso: "Confirmo a correção: o antes e o depois ficam no histórico, com o motivo. Preencha só o que for mudar.",
+    campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
+<label>Nova descrição <input name="descricao" maxlength="200" value="${esc(descricaoLegivel(t.descricao))}"></label>
+<label>Novo vencimento <input type="date" name="vencimento" value="${esc(t.vencimento ?? "")}"></label>
+<label>Trocar o fornecedor para <select name="fornecedor">${opcao("", "Manter o atual", "")}${(d.fornecedores ?? []).map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
+<label>Ou novo fornecedor (nome) <input name="novoFornecedor" maxlength="120"></label>
+<label>Motivo (obrigatório) <input name="justificativa" maxlength="500" required></label>` }) : ""}
 ${(ctx?.permissoes ?? []).includes("financeiro_v2.corrigir") && t.situacao !== "CANCELADO" && d.lancamento ? formAcao({ url: "/api/fv2/acoes/obrigacoes/corrigir-valor", titulo: "Corrigir valor", rotulo: "Corrigir valor", recarregar: `pagar:${t.id}`,
     aviso: "Confirmo a correção: o valor antigo e o novo ficam no histórico, com o motivo.",
     campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
