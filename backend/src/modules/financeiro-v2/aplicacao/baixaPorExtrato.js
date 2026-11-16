@@ -105,10 +105,11 @@ export function operacoesDeBaixaPorExtrato(b) {
           const historico = await historicoDaSaida(tx, cx, m);
           const conc = await conciliacaoComprovada(tx, cx, m.id, o.id);
           const docsDaConta = (await tx.listar(cx, TIPO.VINCULO_DOCUMENTAL, { onde: { registroTipo: TIPO.OBRIGACAO, registroId: o.id } })).map((v) => v.documentoId);
+          const docAutomatico = !antecipacao && m.documentoId ? await tx.obter(cx, TIPO.DOCUMENTO, m.documentoId) : null;
           const diferenca = subtrair(disponivel, valor);
           escolhida = {
-            id: m.id, versao: m.versao, data: m.dataEfetiva, conta: contas.get(m.contaId) ?? "Conta", valorCentavos: m.valorCentavos, alocadoCentavos: m.alocadoCentavos, disponivelCentavos: disponivel,
-            historico, evidencia: { conciliacaoConfirmadaComEvidencia: conc ? conc.id : null, documentosDaSaida: historico.documentoIds, documentosDaConta: docsDaConta, exigeDocumento: !conc || Boolean(antecipacao), tiposAceitos: antecipacao ? DOCUMENTOS_DE_ANTECIPACAO : null },
+            id: m.id, versao: m.versao, data: m.dataEfetiva, conta: contas.get(m.contaId) ?? "Conta", descricao: m.descricao ?? null, valorCentavos: m.valorCentavos, alocadoCentavos: m.alocadoCentavos, disponivelCentavos: disponivel,
+            historico, evidencia: { conciliacaoConfirmadaComEvidencia: conc ? conc.id : null, documentosDaSaida: historico.documentoIds, documentosDaConta: docsDaConta, exigeDocumento: Boolean(antecipacao) || (!conc && !docAutomatico), documentoAutomatico: docAutomatico ? { id: docAutomatico.id, tipo: docAutomatico.tipo, descricao: docAutomatico.descricao ?? null, periodoInicio: docAutomatico.periodoInicio ?? null, periodoFim: docAutomatico.periodoFim ?? null } : null, tiposAceitos: antecipacao ? DOCUMENTOS_DE_ANTECIPACAO : null },
             // 09: alerta de PAGAMENTO ANTECIPADO — a pessoa confere beneficiário e valor no comprovante e identifica a antecipação.
             antecipacao: antecipacao ? { ...antecipacao, contraparte, justificativaMinima: JUSTIFICATIVA_MINIMA_ANTECIPACAO,
               alerta: `A saída (${antecipacao.dataSaida}) é ${antecipacao.dias} dia(s) ANTERIOR à emissão da conta (${antecipacao.dataEmissao}). Só vincule se for pagamento antecipado comprovado deste beneficiário: valor e data parecidos não provam o vínculo.` } : null,
@@ -166,9 +167,13 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
   const contas = [];
   for (const a of c.alocacoes) contas.push(await b.obterOuFalhar(tx, cx, TIPO.OBRIGACAO, a.obrigacaoId, "Conta a pagar"));
   // Evidência: documento que comprove o pagamento OU conciliação confirmada com evidência para CADA conta.
-  const documento = c.documentoId ? await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento de evidência") : null;
+  const documentoExplicito = c.documentoId ? await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento de evidência") : null;
   // 09: pagamento ANTECIPADO (saída anterior à emissão) — identificação explícita + documento compatível + justificativa.
   const antecipacoes = contas.map((o) => antecipacaoDe(mov, o));
+  // A saída escolhida veio de um extrato importado: esse extrato É o documento que comprova o pagamento (a pessoa não precisa escolhê-lo).
+  // Pagamento antecipado continua exigindo comprovante/contrato/nota/boleto escolhido de propósito.
+  const documento = documentoExplicito ?? (!antecipacoes.some(Boolean) && mov.documentoId ? await tx.obter(cx, TIPO.DOCUMENTO, mov.documentoId) : null);
+  const documentoId = documento?.id ?? null;
   if (antecipacoes.some(Boolean)) {
     const quais = contas.flatMap((o, i) => (antecipacoes[i] ? [{ obrigacaoId: o.id, ...antecipacoes[i] }] : []));
     if (!c.pagamentoAntecipado) falhar(CODIGO.EVIDENCIA_EXIGIDA, "A saída é anterior à emissão da conta: só vincule identificando o PAGAMENTO ANTECIPADO e anexando o comprovante.", { motivo: "ANTECIPACAO_NAO_IDENTIFICADA", antecipadas: quais });
@@ -196,18 +201,18 @@ export async function baixarSaidaNaTransacao(b, tx, cx, c, opcoes = {}) {
     const mudancas = aplicarLiquidacao(o, a.valorCentavos); // saldo nunca negativo; conta cancelada é recusada
     liquidacoes.push(await b.criar(tx, cx, TIPO.LIQUIDACAO, {
       movimentacaoId: mov.id, alvoTipo: ALVO_LIQUIDACAO.OBRIGACAO, alvoId: o.id, valorCentavos: a.valorCentavos, estornadoCentavos: 0, dataEfetiva: mov.dataEfetiva,
-      situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: `${chave}#${o.id}`, origemDoVinculo: "EXTRATO", ...(opcoes.conciliacaoConfirmadaId ? { conciliacaoId: opcoes.conciliacaoConfirmadaId } : {}), documentoId: c.documentoId, justificativa: c.justificativa,
+      situacao: SITUACAO_LIQUIDACAO.VALIDA, chaveIdempotencia: `${chave}#${o.id}`, origemDoVinculo: "EXTRATO", ...(opcoes.conciliacaoConfirmadaId ? { conciliacaoId: opcoes.conciliacaoConfirmadaId } : {}), documentoId: documentoId, justificativa: c.justificativa,
       antecipacao: antecipacoes[i] ? { ...antecipacoes[i], identificadaPor: cx.usuarioId, documentoTipo: documento?.tipo ?? null } : null,
     }, rotulo(antecipacoes[i])));
     titulos.push(await b.alterar(tx, cx, TIPO.OBRIGACAO, o, mudancas, EVENTO_HISTORICO.LIQUIDACAO, rotulo(antecipacoes[i])));
   }
   const movimentacao = await b.alterar(tx, cx, TIPO.MOVIMENTACAO, mov, { alocadoCentavos: somar(mov.alocadoCentavos, total) }, EVENTO_HISTORICO.LIQUIDACAO, c.justificativa);
   // A evidência fica vinculada à saída e a cada conta (rastreável dos dois lados).
-  if (c.documentoId) {
+  if (documentoId) {
     for (const [tipo, id] of [[TIPO.MOVIMENTACAO, mov.id], ...contas.map((o) => [TIPO.OBRIGACAO, o.id])]) {
-      const chaveV = `${c.documentoId}|${tipo}|${id}`;
+      const chaveV = `${documentoId}|${tipo}|${id}`;
       if (!(await tx.buscarPorChave(cx, TIPO.VINCULO_DOCUMENTAL, chaveV))) {
-        await b.criar(tx, cx, TIPO.VINCULO_DOCUMENTAL, { documentoId: c.documentoId, registroTipo: tipo, registroId: id, chaveIdempotencia: chaveV, finalidade: "Comprova o pagamento vinculado do extrato" }, c.justificativa);
+        await b.criar(tx, cx, TIPO.VINCULO_DOCUMENTAL, { documentoId: documentoId, registroTipo: tipo, registroId: id, chaveIdempotencia: chaveV, finalidade: "Comprova o pagamento vinculado do extrato" }, c.justificativa);
       }
     }
   }

@@ -91,7 +91,7 @@ export const CONSULTAS = Object.freeze({
   },
   "/conta-a-pagar": async (n, c, p) => ({
     ...(await n.detalharContaAPagar(c, { id: id(p) })),
-    contasParaPagar: (await n.consultarRegistros(c, { tipo: "CONTA" })).filter((x) => x.ativa).map((x) => ({ id: x.id, nome: x.nome })),
+    contasParaPagar: (await n.consultarRegistros(c, { tipo: "CONTA" })).filter((x) => x.ativa).map((x) => ({ id: x.id, nome: x.nome, tipo: x.tipo })),
     vinculoExtrato: await n.previaDoVinculoDoExtrato(c, { obrigacaoId: id(p) }),
     fornecedores: (await n.consultarRegistros(c, { tipo: "CONTRAPARTE" })).map((x) => ({ id: x.id, nome: x.nome })).sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR")),
   }),

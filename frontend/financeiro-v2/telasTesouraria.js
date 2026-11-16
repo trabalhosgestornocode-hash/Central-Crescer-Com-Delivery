@@ -19,8 +19,13 @@ const opcao = (v, rotulo, atual) => `<option value="${esc(v)}"${v === (atual ?? 
 const nenhum = (texto) => `<p class="nota vazio-lista">${esc(texto)}</p>`;
 /** 08D — formulário de AÇÃO (grava de verdade; exige confirmação; resultado anunciado). */
 let seqForm = 0;
-const formAcao = ({ url, titulo, campos, aviso, rotulo, recarregar = "lista" }) => {
+const formAcao = ({ url, titulo, campos, aviso, rotulo, recarregar = "lista", embutido = false }) => {
   const k = (seqForm += 1);
+  if (embutido) {
+    return `<form class="acao acao--embutida" data-acao="${esc(url)}" data-recarregar="${esc(recarregar)}">${campos}
+<label class="caixa-marcar"><input type="checkbox" name="confirmar" required> ${esc(aviso)}</label>
+<button type="submit" class="botao botao--primario">${esc(rotulo)}</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>`;
+  }
   return `<section class="card" aria-labelledby="t-acao-${k}"><h3 id="t-acao-${k}">${esc(titulo)}</h3><form class="acao" data-acao="${esc(url)}" data-recarregar="${esc(recarregar)}">${campos}
 <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> ${esc(aviso)}</label>
 <button type="submit" class="botao botao--primario">${esc(rotulo)}</button><p class="resultado-acao" role="status" aria-live="polite"></p></form></section>`;
@@ -87,74 +92,125 @@ ${paginacao(r.paginacao, "contas-a-pagar")}
 ${r.porFornecedor.length ? `<details class="card"><summary><h2 class="inline">Por fornecedor</h2></summary><ul class="lista-simples">${r.porFornecedor.map((g) => `<li><span>${esc(g.fornecedor?.nome ?? "Fornecedor não identificado")} · ${g.quantidade} conta(s)</span><span>${valor(g.saldoCentavos)}${g.vencidoCentavos ? ` <small class="valor--negativo">vencido ${esc(moeda(g.vencidoCentavos))}</small>` : ""}</span></li>`).join("")}</ul></details>` : ""}`;
 }
 
+/* ===== NOVO: baixa de conta a pagar (escolha visual da forma de pagamento) ===== */
+const nomeDaSaida = (txt) => String(txt ?? "").replace(/^.*Doc\.:\s*/, "").replace(/\s*\)\s*$/, "").replace(/^(DEB PIX|CRED PIX|PGTO PIX)\s*\/\s*/i, "").replace(/^\d+\s*\/\s*\d+\s*-\s*/, "").replace(/^\d{6,}\s+/, "").trim() || "Saída do extrato";
+const hojeISO = () => { const h = new Date(); return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, "0")}-${String(h.getDate()).padStart(2, "0")}`; };
+const inteiroEmMoeda = (c) => moeda(c).replace(/[^0-9.,]/g, "");
+
+/** Cartão de seleção (radio) — a escolha mais importante da tela. */
+const ICONES_BAIXA = {
+  extrato: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 11h7M9 14.5h7M9 18h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  banco: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9l9-5 9 5M5 10v8M9.5 10v8M14.5 10v8M19 10v8M3 20h18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  dinheiro: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6.5" width="18" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+};
+
+function seletorDeConta(contas, nome) {
+  if (contas.length === 1) return `<input type="hidden" name="${nome}" value="${esc(contas[0].id)}"><p class="conta-fixa">Sai de <strong>${esc(contas[0].nome)}</strong></p>`;
+  return `<fieldset class="escolha-chips"><legend>De qual conta saiu?</legend>${contas.map((c, i) => `<label class="chip-escolha"><input type="radio" name="${nome}" value="${esc(c.id)}"${i === 0 ? " checked" : ""} required><span>${esc(c.nome)}</span></label>`).join("")}</fieldset>`;
+}
+
+function listaDeSaidas(t, saidas) {
+  const alvo = t.saldoCentavos;
+  const dias = (a, b) => Math.abs((Date.parse(`${a}T12:00:00Z`) - Date.parse(`${b}T12:00:00Z`)) / 86400000);
+  const ordenadas = [...saidas].sort((x, y) => (Number(y.disponivelCentavos === alvo) - Number(x.disponivelCentavos === alvo)) || (dias(x.data, t.vencimento) - dias(y.data, t.vencimento)));
+  const linha = (s) => `<label class="saida${s.competenciaAceitaBaixa ? "" : " saida--bloqueada"}"><input type="radio" name="movimentacao" value="${esc(s.id)}"${s.competenciaAceitaBaixa ? "" : " disabled"} required>
+<span class="saida__corpo"><span class="saida__topo"><strong>${esc(nomeDaSaida(s.descricao))}</strong><span class="saida__valor">${esc(moeda(s.disponivelCentavos))}</span></span>
+<span class="saida__meta">${esc(dataBR(s.data))} · ${esc(s.conta)}${s.disponivelCentavos === alvo ? ' <span class="selo selo--ok">mesmo valor da conta</span>' : ""}${s.alocadoCentavos ? ` <span class="selo selo--neutro">parte já usada</span>` : ""}${s.competenciaAceitaBaixa ? "" : ' <span class="selo selo--alerta">competência homologada</span>'}</span></span></label>`;
+  const primeiras = ordenadas.slice(0, 6);
+  const resto = ordenadas.slice(6);
+  return `${primeiras.map(linha).join("")}${resto.length ? `<details class="mais-saidas"><summary>Mostrar mais ${resto.length} saída(s)</summary>${resto.map(linha).join("")}</details>` : ""}`;
+}
+
+function comoDarBaixa(d, ctx) {
+  const t = d.titulo;
+  if (!(t.saldoCentavos > 0) || t.situacao === "CANCELADO") return "";
+  const saidas = d.vinculoExtrato?.saidasElegiveis ?? [];
+  const contas = d.contasParaPagar ?? [];
+  const bancos = contas.filter((c) => c.tipo !== "CAIXA_FISICO");
+  const caixas = contas.filter((c) => c.tipo === "CAIXA_FISICO");
+  const k = t.id.slice(0, 8);
+  const formas = [
+    { id: "extrato", titulo: "Já saiu no extrato", texto: saidas.length ? `${saidas.length} saída(s) no banco para escolher` : "Nenhuma saída disponível no extrato", ok: podeVincular(ctx) && d.vinculoExtrato && saidas.length > 0 },
+    { id: "banco", titulo: "Paguei pelo banco", texto: "Ainda não está no extrato: registra a saída", ok: podeRegistrar(ctx) && bancos.length > 0 },
+    { id: "dinheiro", titulo: "Paguei em dinheiro", texto: caixas.length ? `Sai do ${caixas[0].nome.toLowerCase()}` : "Sem caixa da loja cadastrado", ok: podeRegistrar(ctx) && caixas.length > 0 },
+  ];
+  if (!formas.some((f) => f.ok)) return "";
+  const inicial = formas.find((f) => f.ok).id;
+  const valorPadrao = inteiroEmMoeda(t.saldoCentavos);
+  const formPagamento = (conta, rotulo) => formAcao({ embutido: true, url: "/api/fv2/acoes/obrigacoes/pagar", rotulo, recarregar: `pagar:${t.id}`,
+    aviso: "Confirmo o pagamento: a saída e a baixa são gravadas juntas; pagar não cria despesa nova.",
+    campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">${conta}
+<div class="linha-campos"><label>Data do pagamento <input type="date" name="dataEfetiva" value="${esc(hojeISO())}" required></label>
+<label>Valor pago (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(valorPadrao)}" required></label></div>
+<p class="nota">Pagou a mais que o saldo? Digite o valor real: a diferença vira juros/multa sozinha e a conta é quitada.</p>` });
+  const painelExtrato = formas[0].ok
+    ? `<form class="escolha-saida" data-previa-vinculo="${esc(t.id)}" aria-label="Escolher a saída do extrato">
+<p class="painel-guia">Escolha a linha do extrato que pagou esta conta. Ela já está no sistema: nada é lançado de novo.</p>
+<div class="lista-saidas">${listaDeSaidas(t, saidas)}</div>
+<button type="submit" class="botao botao--primario">Continuar</button></form>`
+    : nenhum("Nenhuma saída do extrato com valor disponível.");
+  return `<section class="baixa" aria-labelledby="t-baixa-${k}">
+<h3 id="t-baixa-${k}">Como esta conta foi paga?</h3>
+<div class="baixa-escolha" role="radiogroup" aria-labelledby="t-baixa-${k}">
+${formas.map((f) => `<input type="radio" class="baixa-radio" name="forma-${k}" id="bx-${f.id}-${k}"${f.id === inicial ? " checked" : ""}${f.ok ? "" : " disabled"}><label class="baixa-tile${f.ok ? "" : " baixa-tile--off"}" for="bx-${f.id}-${k}"><span class="baixa-tile__icone">${ICONES_BAIXA[f.id]}</span><span class="baixa-tile__titulo">${esc(f.titulo)}</span><span class="baixa-tile__texto">${esc(f.texto)}</span></label>`).join("")}
+<div class="baixa-painel baixa-painel--extrato">${painelExtrato}</div>
+<div class="baixa-painel baixa-painel--banco">${bancos.length ? formPagamento(seletorDeConta(bancos, "conta"), "Registrar pagamento") : ""}</div>
+<div class="baixa-painel baixa-painel--dinheiro">${caixas.length ? formPagamento(seletorDeConta(caixas, "conta"), "Registrar pagamento em dinheiro") : ""}</div>
+</div></section>`;
+}
+
+const heroDaConta = (t) => {
+  const total = (t.valorOriginalCentavos ?? 0) + (t.ajustesCentavos ?? 0);
+  return `<header class="conta-hero">
+<p class="conta-hero__forn">${esc(t.fornecedor?.nome ?? "Fornecedor não identificado")}</p>
+<p class="conta-hero__desc">${esc(descricaoLegivel(t.descricao))}</p>
+<div class="conta-hero__linha"><div><span class="conta-hero__rotulo">${t.saldoCentavos > 0 ? "Falta pagar" : "Saldo"}</span><strong class="conta-hero__valor">${esc(moeda(t.saldoCentavos))}</strong>
+${t.pagoCentavos ? `<span class="conta-hero__nota">de ${esc(moeda(total))} · já pago ${esc(moeda(t.pagoCentavos))}</span>` : ""}</div>
+<dl class="conta-hero__meta"><div><dt>Vence em</dt><dd>${esc(dataBR(t.vencimento))}</dd></div><div><dt>Situação</dt><dd>${selo(t.situacao)}</dd></div><div><dt>Categoria</dt><dd>${esc(t.categoria?.nome ?? "—")}</dd></div></dl></div></header>`;
+};
+
 export function detalheAPagar(d, ctx = {}) {
   const t = d.titulo;
-  const pagar = podeRegistrar(ctx) && t.saldoCentavos > 0 && t.situacao !== "CANCELADO" && d.contasParaPagar?.length ? formAcao({ url: "/api/fv2/acoes/obrigacoes/pagar", titulo: "Registrar pagamento", rotulo: "Registrar pagamento", recarregar: `pagar:${t.id}`,
-    aviso: "Confirmo o pagamento: a saída e a baixa do título são gravadas juntas; pagar não cria despesa nova.",
-    campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
-<label>Conta de saída <select name="conta" required>${d.contasParaPagar.map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
-<label>Data do pagamento <input type="date" name="dataEfetiva" required></label>
-<label>Valor pago (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(t.saldoCentavos).replace(/[^0-9.,]/g, ""))}" required></label>
-<p class="nota">Pagou mais que o saldo? Digite o valor realmente pago: a diferença é lançada sozinha como juros/multa (despesa financeira) e a conta é quitada.</p>` }) : "";
-  return `${fechar(`${t.fornecedor?.nome ?? "Conta a pagar"} · ${descricaoLegivel(t.descricao)}`)}
-<dl class="ficha">
-  <dt>Situação</dt><dd>${selo(t.situacao)}</dd>
-  <dt>Valor original</dt><dd>${valor(t.valorOriginalCentavos)}</dd>
-  ${t.ajustesCentavos ? `<dt>Ajustes</dt><dd>${valor(t.ajustesCentavos)}</dd>` : ""}
-  <dt>Pago</dt><dd>${valor(t.pagoCentavos)}</dd>
-  <dt>Saldo restante</dt><dd>${valor(t.saldoCentavos)}</dd>
-  <dt>Vencimento</dt><dd>${esc(dataBR(t.vencimento))}</dd>
-  <dt>Emissão</dt><dd>${esc(dataBR(t.dataEmissao))}</dd>
-  <dt>Competência</dt><dd>${esc(competencia(t.competencia))}${t.competenciaHomologada ? " · homologada" : ""}</dd>
-  <dt>Categoria</dt><dd>${esc(t.categoria?.nome ?? "—")}</dd>
-  <dt>Classificação econômica</dt><dd>${t.classificacaoEconomica === "PENDENTE_DE_CLASSIFICACAO" ? '<span class="selo selo--alerta">Pendente</span> fora da DRE até ser classificada' : t.classificacaoEconomica === "PATRIMONIAL" ? "Patrimonial (fora do resultado)" : "Confirmada"}</dd>
-  ${t.parcela?.total > 1 ? `<dt>Parcela</dt><dd>${t.parcela.numero} de ${t.parcela.total}</dd>` : ""}
-  ${t.recorrencia ? `<dt>Recorrência</dt><dd>Mensal, dia ${t.recorrencia.diaDoMes}</dd>` : ""}
-</dl>
-${d.lancamento ? `<p class="nota">Efeito no resultado: <strong>um</strong> lançamento de ${esc(moeda(d.lancamento.valorCentavos))} em ${esc(competencia(d.lancamento.competencia))}${d.lancamento.natureza === "PATRIMONIAL" ? " (patrimonial: fora da DRE)" : ""}. Pagar ou antecipar parcelas não cria outra despesa.</p>` : ""}
-${d.parcelas.length > 1 ? `<h3>Parcelas</h3><ul class="lista-simples">${d.parcelas.map((p) => `<li${p.id === t.id ? ' class="atual"' : ""}><span>${p.parcela.numero}/${p.parcela.total} · vence ${esc(dataBR(p.vencimento))}</span><span>${valor(p.saldoCentavos)} ${selo(p.situacao)}</span></li>`).join("")}</ul>` : ""}
-${(ctx?.permissoes ?? []).includes("financeiro_v2.corrigir") && t.situacao !== "CANCELADO" ? formAcao({ url: "/api/fv2/acoes/obrigacoes/corrigir", titulo: "Corrigir descrição, vencimento ou fornecedor", rotulo: "Salvar correção", recarregar: `pagar:${t.id}`,
+  const corrigir = (ctx?.permissoes ?? []).includes("financeiro_v2.corrigir") && t.situacao !== "CANCELADO";
+  const blocoCorrigir = corrigir ? `<details class="card corrigir"><summary><h3 class="inline">Corrigir descrição, vencimento, fornecedor ou valor</h3></summary>
+${formAcao({ url: "/api/fv2/acoes/obrigacoes/corrigir", titulo: "Descrição, vencimento ou fornecedor", rotulo: "Salvar correção", recarregar: `pagar:${t.id}`,
     aviso: "Confirmo a correção: o antes e o depois ficam no histórico, com o motivo. Preencha só o que for mudar.",
     campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
 <label>Nova descrição <input name="descricao" maxlength="200" value="${esc(descricaoLegivel(t.descricao))}"></label>
 <label>Novo vencimento <input type="date" name="vencimento" value="${esc(t.vencimento ?? "")}"></label>
 <label>Trocar o fornecedor para <select name="fornecedor">${opcao("", "Manter o atual", "")}${(d.fornecedores ?? []).map((x) => opcao(x.id, x.nome, "")).join("")}</select></label>
 <label>Ou novo fornecedor (nome) <input name="novoFornecedor" maxlength="120"></label>
-<label>Motivo (obrigatório) <input name="justificativa" maxlength="500" required></label>` }) : ""}
-${(ctx?.permissoes ?? []).includes("financeiro_v2.corrigir") && t.situacao !== "CANCELADO" && d.lancamento ? formAcao({ url: "/api/fv2/acoes/obrigacoes/corrigir-valor", titulo: "Corrigir valor", rotulo: "Corrigir valor", recarregar: `pagar:${t.id}`,
+<label>Motivo (obrigatório) <input name="justificativa" maxlength="500" required></label>` })}
+${d.lancamento ? formAcao({ url: "/api/fv2/acoes/obrigacoes/corrigir-valor", titulo: "Valor", rotulo: "Corrigir valor", recarregar: `pagar:${t.id}`,
     aviso: "Confirmo a correção: o valor antigo e o novo ficam no histórico, com o motivo.",
     campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
-<label>Valor correto (R$) <input name="novoValor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(t.valorOriginalCentavos + (t.ajustesCentavos ?? 0)).replace(/[^0-9.,]/g, ""))}" required></label>
-<label>Motivo (obrigatório) <input name="justificativa" maxlength="500" required></label>` }) : ""}
+<label>Valor correto (R$) <input name="novoValor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(inteiroEmMoeda(t.valorOriginalCentavos + (t.ajustesCentavos ?? 0)))}" required></label>
+<label>Motivo (obrigatório) <input name="justificativa" maxlength="500" required></label>` }) : ""}</details>` : "";
+  return `${fechar("Conta a pagar")}
+${heroDaConta(t)}
+${comoDarBaixa(d, ctx)}
 <h3>Pagamentos</h3>
 ${t.pagamentos.length ? `<ul class="lista-simples">${t.pagamentos.map((g, i) => `<li><span>${esc(dataBR(g.data))} · ${esc(g.conta ?? "conta não identificada")}${g.titulosNaMesmaMovimentacao > 1 ? ` · saída agrupada com ${g.titulosNaMesmaMovimentacao - 1} outra(s) conta(s)` : ""}${d.vinculoExtrato?.obrigacao?.pagamentos?.[i]?.viaExtrato ? ' · <span class="selo selo--info">vinculado do extrato</span>' : ""}</span><span>${valor(g.valorCentavos)}</span></li>`).join("")}</ul>` : nenhum("Nenhum pagamento vinculado.")}
+<details class="card dados-conta"><summary><h3 class="inline">Todos os dados da conta</h3></summary>
+<dl class="ficha">
+  <dt>Valor original</dt><dd>${valor(t.valorOriginalCentavos)}</dd>
+  ${t.ajustesCentavos ? `<dt>Ajustes</dt><dd>${valor(t.ajustesCentavos)}</dd>` : ""}
+  <dt>Pago</dt><dd>${valor(t.pagoCentavos)}</dd>
+  <dt>Emissão</dt><dd>${esc(dataBR(t.dataEmissao))}</dd>
+  <dt>Competência</dt><dd>${esc(competencia(t.competencia))}${t.competenciaHomologada ? " · homologada" : ""}</dd>
+  <dt>Classificação econômica</dt><dd>${t.classificacaoEconomica === "PENDENTE_DE_CLASSIFICACAO" ? '<span class="selo selo--alerta">Pendente</span> fora da DRE até ser classificada' : t.classificacaoEconomica === "PATRIMONIAL" ? "Patrimonial (fora do resultado)" : "Confirmada"}</dd>
+  ${t.parcela?.total > 1 ? `<dt>Parcela</dt><dd>${t.parcela.numero} de ${t.parcela.total}</dd>` : ""}
+  ${t.recorrencia ? `<dt>Recorrência</dt><dd>Mensal, dia ${t.recorrencia.diaDoMes}</dd>` : ""}
+</dl>
+${d.lancamento ? `<p class="nota">Efeito no resultado: <strong>um</strong> lançamento de ${esc(moeda(d.lancamento.valorCentavos))} em ${esc(competencia(d.lancamento.competencia))}${d.lancamento.natureza === "PATRIMONIAL" ? " (patrimonial: fora da DRE)" : ""}. Pagar ou antecipar parcelas não cria outra despesa.</p>` : ""}
 <h3>Documentos</h3>${documentos(t.documentos)}
-${t.saldoCentavos > 0 && t.situacao !== "CANCELADO" && (podeRegistrar(ctx) || podeVincular(ctx)) ? `<section class="card" aria-labelledby="t-como-pagar"><h3 id="t-como-pagar">Como dar baixa nesta conta</h3>
-<ul class="mini"><li><strong>Vincular pagamento do extrato</strong>: o dinheiro já saiu e a saída já está no sistema (extrato importado ou movimento registrado). A baixa usa essa saída: <strong>não cria outra saída nem outra despesa</strong>.</li>
-<li><strong>Registrar pagamento</strong>: o pagamento ainda NÃO está no sistema. Cria a saída da conta e a baixa juntas. Se a saída já estiver no extrato, registrar de novo duplicaria o dinheiro: use o vínculo.</li></ul></section>` : ""}
-${vincularDoExtrato(d, ctx)}
-${pagar}
+</details>
+${d.parcelas.length > 1 ? `<h3>Parcelas</h3><ul class="lista-simples">${d.parcelas.map((p) => `<li${p.id === t.id ? ' class="atual"' : ""}><span>${p.parcela.numero}/${p.parcela.total} · vence ${esc(dataBR(p.vencimento))}</span><span>${valor(p.saldoCentavos)} ${selo(p.situacao)}</span></li>`).join("")}</ul>` : ""}
+${blocoCorrigir}
 <h3>Histórico</h3>${historico(d.historico)}`;
 }
 
-/**
- * 08E (F-2) — "Vincular pagamento do extrato": escolher uma saída JÁ registrada. Nada é pré-selecionado por valor ou
- * data: a pessoa escolhe, vê a prévia (efeito em cada tela) e só então confirma com evidência.
- */
-function vincularDoExtrato(d, ctx) {
-  const t = d.titulo;
-  const v = d.vinculoExtrato;
-  if (!v || !podeVincular(ctx) || !(t.saldoCentavos > 0) || t.situacao === "CANCELADO") return "";
-  const saidas = v.saidasElegiveis ?? [];
-  return `<section class="card" aria-labelledby="t-vinc-${esc(t.id)}"><h3 id="t-vinc-${esc(t.id)}">Vincular pagamento do extrato</h3>
-${saidas.length ? `<form class="filtros-locais" data-previa-vinculo="${esc(t.id)}" aria-label="Escolher a saída do extrato">
-<label>Saída já registrada <select name="movimentacao" required><option value="">Escolha…</option>${saidas.map((s) => `<option value="${esc(s.id)}"${s.competenciaAceitaBaixa ? "" : " disabled"}>${esc(dataBR(s.data))} · ${esc(s.conta)}${s.descricao ? ` · ${esc(descricaoLegivel(s.descricao))}` : ""} · disponível ${esc(moeda(s.disponivelCentavos))}${s.competenciaAceitaBaixa ? "" : " (competência homologada)"}</option>`).join("")}</select></label>
-<button type="submit" class="botao">Ver prévia da baixa</button></form>
-<p class="nota">Nenhuma saída é escolhida automaticamente: valor e data iguais não provam que é o mesmo pagamento.</p>` : nenhum("Nenhuma saída do extrato com valor ainda não vinculado.")}
-</section>`;
-}
-
-/** 08E (F-2) — prévia e confirmação do vínculo de UMA saída do extrato com a conta. */
+/** Prévia + confirmação do vínculo de UMA saída do extrato com a conta (o comprovante é o próprio extrato). */
 export function detalheVinculoExtrato(d, ctx = {}) {
   const o = d.obrigacao;
   const e = d.escolhida;
@@ -162,51 +218,63 @@ export function detalheVinculoExtrato(d, ctx = {}) {
   const docs = e.documentosDisponiveis ?? [];
   const pode = podeVincular(ctx) && !e.bloqueios.length;
   const ant = e.antecipacao;
-  const evidencia = ant
+  const auto = e.evidencia.documentoAutomatico;
+  const comprovante = ant
     ? `<p class="aviso">Pagamento antecipado: anexe o comprovante (ou contrato, nota fiscal, boleto) e explique em pelo menos ${esc(String(ant.justificativaMinima))} caracteres quem recebeu, por quê e como conferiu o valor. Conciliação ou valor parecido não bastam.</p>`
+    : auto
+    ? `<p class="comprovante-auto"><span class="comprovante-auto__marca" aria-hidden="true">✓</span><span><strong>Comprovante: ${esc(TIPOS_DOCUMENTO[auto.tipo] ?? "Documento")}</strong><br><span class="nota">${esc(auto.descricao ?? "Extrato importado")}${auto.periodoInicio ? ` · ${esc(dataBR(auto.periodoInicio))} a ${esc(dataBR(auto.periodoFim))}` : ""}. O sistema usa o extrato onde esta saída está registrada.</span></span></p>`
     : e.evidencia.conciliacaoConfirmadaComEvidencia
-    ? '<p class="nota">Há conciliação CONFIRMADA, com evidência, entre esta saída e esta conta: ela comprova o vínculo.</p>'
+    ? '<p class="comprovante-auto"><span class="comprovante-auto__marca" aria-hidden="true">✓</span><span><strong>Comprovante: conciliação confirmada</strong><br><span class="nota">Há conciliação confirmada, com evidência, entre esta saída e esta conta.</span></span></p>'
     : '<p class="aviso">Escolha o documento que comprova este pagamento (comprovante ou boleto pago). Sem ele a baixa é recusada.</p>';
-  const form = pode ? formAcao({ url: "/api/fv2/acoes/obrigacoes/vincular-extrato", titulo: "Confirmar a baixa com esta saída", rotulo: "Vincular pagamento", recarregar: `vinculo:${o.id}|${e.id}`,
+  const precisaEscolher = Boolean(ant) || (e.evidencia.exigeDocumento && !auto);
+  const form = pode ? formAcao({ embutido: true, url: "/api/fv2/acoes/obrigacoes/vincular-extrato", rotulo: "Confirmar baixa", recarregar: `vinculo:${o.id}|${e.id}`,
     aviso: "Confirmo: a saída já registrada quita esta conta. Nenhuma saída nova e nenhuma despesa nova são criadas.",
     campos: `<input type="hidden" name="obrigacao" value="${esc(o.id)}"><input type="hidden" name="movimentacao" value="${esc(e.id)}"><input type="hidden" name="versao" value="${esc(String(e.versao))}">
-<label>Valor a vincular (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(e.valorPropostoCentavos).replace(/[^0-9.,]/g, ""))}" required></label>
-<label>Documento que comprova o pagamento <select name="documento"${e.evidencia.exigeDocumento ? " required" : ""}><option value="">${e.evidencia.exigeDocumento ? "Escolha…" : "Usar a conciliação confirmada"}</option>${docs.filter((x) => !ant || (e.evidencia.tiposAceitos ?? []).includes(x.tipo)).map((x) => `<option value="${esc(x.id)}">${esc(TIPOS_DOCUMENTO[x.tipo] ?? "Documento")} — ${esc(x.descricao)}</option>`).join("")}</select></label>
-<label>Justificativa <input name="justificativa" required maxlength="500"${ant ? ` minlength="${esc(String(ant.justificativaMinima))}"` : ""}></label>
+<label>Valor a vincular (R$) <input name="valor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(inteiroEmMoeda(e.valorPropostoCentavos))}" required></label>
+${precisaEscolher ? `<label>Documento que comprova o pagamento <select name="documento"${e.evidencia.exigeDocumento ? " required" : ""}><option value="">${e.evidencia.exigeDocumento ? "Escolha…" : "Usar a conciliação confirmada"}</option>${docs.filter((x) => !ant || (e.evidencia.tiposAceitos ?? []).includes(x.tipo)).map((x) => `<option value="${esc(x.id)}">${esc(TIPOS_DOCUMENTO[x.tipo] ?? "Documento")} — ${esc(x.descricao)}</option>`).join("")}</select></label>` : ""}
+<label>Observação <input name="justificativa" required maxlength="500"${ant ? ` minlength="${esc(String(ant.justificativaMinima))}"` : ` value="Pago conforme o extrato de ${esc(dataBR(e.data))}"`}></label>
 ${ant ? `<label class="caixa-marcar"><input type="checkbox" name="pagamentoAntecipado" required> É pagamento ANTECIPADO de ${esc(ant.contraparte ?? "este beneficiário")}: conferi beneficiário e valor no comprovante (saída ${esc(dataBR(ant.dataSaida))}, ${esc(String(ant.dias))} dia(s) antes da emissão em ${esc(dataBR(ant.dataEmissao))}).</label>` : ""}` }) : "";
-  return `${fechar("Vincular pagamento do extrato")}
-<p class="nota">Prévia: nada foi gravado.</p>
-<h3>Conta a pagar</h3>
-<dl class="ficha">
-  <dt>Conta</dt><dd>${esc(descricaoLegivel(o.descricao))}</dd>
-  <dt>Competência</dt><dd>${esc(competencia(o.competencia))}</dd>
-  <dt>Vencimento</dt><dd>${esc(dataBR(o.vencimento))}</dd>
-  <dt>Valor original</dt><dd>${valor(o.valorOriginalCentavos)}</dd>
-  <dt>Pago</dt><dd>${valor(o.pagoCentavos)}</dd>
-  <dt>Saldo em aberto</dt><dd>${valor(o.saldoCentavos)}</dd>
-</dl>
-<h3>Saída do extrato escolhida</h3>
-<dl class="ficha">
-  <dt>Data do pagamento</dt><dd>${esc(dataBR(e.data))}</dd>
-  <dt>Conta utilizada</dt><dd>${esc(e.conta)}</dd>
-  <dt>Valor da saída</dt><dd>${valor(e.valorCentavos)}</dd>
-  <dt>Já vinculado a outras contas</dt><dd>${valor(e.alocadoCentavos)}</dd>
-  <dt>Disponível para vincular</dt><dd>${valor(e.disponivelCentavos)}</dd>
-</dl>
-<h3>Histórico desta saída</h3>
-${e.historico.liquidacoes.length ? `<ul class="lista-simples">${e.historico.liquidacoes.map((l) => `<li><span>${esc(dataBR(l.dataEfetiva))} · baixa de outra conta${l.viaExtrato ? " (vínculo do extrato)" : ""}</span>${valor(l.valorCentavos)}</li>`).join("")}</ul>` : nenhum("Nenhuma baixa anterior com esta saída.")}
-${e.historico.conciliacoes.length ? `<ul class="mini">${e.historico.conciliacoes.map((c) => `<li>Conciliação ${esc(String(c.situacao).toLowerCase())}${c.evidencias ? ` · ${c.evidencias} evidência(s)` : ""}</li>`).join("")}</ul>` : ""}
-<h3>Efeito da baixa</h3>
+  const antes = e.efeito.obrigacao.saldoAntesCentavos;
+  return `${fechar("Confirmar pagamento pelo extrato")}
+<div class="par-vinculo" role="group" aria-label="Conta e saída que serão ligadas">
+  <div class="par-vinculo__lado"><span class="par-vinculo__rotulo">A conta</span><strong>${esc(o.fornecedor?.nome ?? descricaoLegivel(o.descricao))}</strong><span class="nota">${esc(descricaoLegivel(o.descricao))} · vence ${esc(dataBR(o.vencimento))}</span><span class="par-vinculo__valor">${esc(moeda(antes))}</span></div>
+  <span class="par-vinculo__liga" aria-hidden="true">⇄</span>
+  <div class="par-vinculo__lado"><span class="par-vinculo__rotulo">A saída do extrato</span><strong>${esc(nomeDaSaida(e.descricao ?? ""))}</strong><span class="nota">${esc(dataBR(e.data))} · ${esc(e.conta)}</span><span class="par-vinculo__valor">${esc(moeda(e.disponivelCentavos))}</span></div>
+</div>
+<p class="resultado-vinculo"><span class="selo selo--${e.efeito.obrigacao.quitada ? "ok" : "info"}">${e.efeito.obrigacao.quitada ? "Conta quitada" : "Pagamento parcial"}</span> Saldo da conta: ${valor(antes)} → ${valor(e.efeito.obrigacao.saldoDepoisCentavos)}</p>
+${ant ? `<p class="aviso aviso--alerta" role="alert"><strong>Atenção — saída anterior à emissão da conta.</strong> ${esc(ant.alerta)}</p>` : ""}
+${e.bloqueios.length ? `<p class="aviso aviso--alerta" role="alert"><strong>Não disponível:</strong> ${e.bloqueios.map(esc).join(" ")}</p>` : ""}
+${comprovante}
+${form}
+<details class="card dados-conta"><summary><h3 class="inline">O que muda em cada tela</h3></summary>
 <ul class="mini">
-  <li>Saldo da conta a pagar: ${valor(e.efeito.obrigacao.saldoAntesCentavos)} → ${valor(e.efeito.obrigacao.saldoDepoisCentavos)}${e.efeito.obrigacao.quitada ? " (quitada)" : ""}.</li>
   <li>Disponível na saída: ${valor(e.efeito.saida.disponivelAntesCentavos)} → ${valor(e.efeito.saida.disponivelDepoisCentavos)}.</li>
   <li>${esc(e.efeito.banco)}</li><li>${esc(e.efeito.dre)}</li><li>${esc(e.efeito.fluxo)}</li>
   ${e.efeito.diferenca ? `<li>Sobra da saída: ${valor(e.efeito.saida.disponivelDepoisCentavos)} continua como saída a classificar — nada é lançado como taxa, juro ou desconto.</li>` : ""}
 </ul>
-${ant ? `<p class="aviso aviso--alerta" role="alert"><strong>Atenção — saída anterior à emissão da conta.</strong> ${esc(ant.alerta)}</p>` : ""}
-${e.bloqueios.length ? `<p class="aviso aviso--alerta" role="alert"><strong>Não disponível:</strong> ${e.bloqueios.map(esc).join(" ")}</p>` : ""}
-${evidencia}
-${form}`;
+<h3>Histórico desta saída</h3>
+${e.historico.liquidacoes.length ? `<ul class="lista-simples">${e.historico.liquidacoes.map((l) => `<li><span>${esc(dataBR(l.dataEfetiva))} · baixa de outra conta${l.viaExtrato ? " (vínculo do extrato)" : ""}</span>${valor(l.valorCentavos)}</li>`).join("")}</ul>` : nenhum("Nenhuma baixa anterior com esta saída.")}
+${e.historico.conciliacoes.length ? `<ul class="mini">${e.historico.conciliacoes.map((c) => `<li>Conciliação ${esc(String(c.situacao).toLowerCase())}${c.evidencias ? ` · ${c.evidencias} evidência(s)` : ""}</li>`).join("")}</ul>` : ""}
+</details>`;
+}
+
+/** Dia do calendário: cada conta é um cartão com a ação principal ao lado. */
+export function diaDoCalendario(d) {
+  if (!d) return "";
+  const dia = new Intl.DateTimeFormat("pt-BR", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(`${d.data}T12:00:00Z`));
+  const emAberto = d.titulos.filter((t) => t.saldoCentavos > 0);
+  const totalAberto = emAberto.reduce((s, t) => s + t.saldoCentavos, 0);
+  const cartao = (t) => {
+    const quitada = !(t.saldoCentavos > 0);
+    return `<li class="conta-dia${quitada ? " conta-dia--quitada" : ""}"><div class="conta-dia__txt"><strong>${esc(t.fornecedor ?? "Fornecedor não identificado")}</strong><span>${esc(descricaoLegivel(t.descricao))}${t.parcela?.total > 1 ? ` (${t.parcela.numero}/${t.parcela.total})` : ""}${t.recorrente ? " · recorrente" : ""}</span></div>
+<div class="conta-dia__val"><span class="conta-dia__valor">${esc(moeda(t.saldoCentavos))}</span>${selo(t.situacao)}</div>
+<button type="button" class="botao${quitada ? "" : " botao--primario"} conta-dia__acao" data-detalhe="pagar:${esc(t.id)}">${quitada ? "Ver conta" : "Dar baixa"}</button></li>`;
+  };
+  return `<div class="dia-cab"><h2>${esc(dia)}</h2>${d.titulos.length ? `<p class="dia-resumo">${d.titulos.length} conta(s) vencendo${totalAberto ? ` · <strong>${esc(moeda(totalAberto))}</strong> em aberto` : " · tudo pago"}</p>` : ""}</div>
+${d.titulos.length ? `<ul class="contas-dia">${d.titulos.map(cartao).join("")}</ul>` : ""}
+${d.pagamentos.length ? `<h3>Pagamentos feitos no dia</h3><ul class="lista-simples">${d.pagamentos.map((g) => `<li><span>${esc(g.fornecedor ?? "")} · ${esc(descricaoLegivel(g.descricao))} · ${esc(g.conta ?? "")}</span>${valor(g.valorCentavos)}</li>`).join("")}</ul>` : ""}
+${d.recorrentes.length ? `<h3>Recorrências previstas (estimadas)</h3><ul class="lista-simples">${d.recorrentes.map((x) => `<li><span>${esc(x.fornecedor ?? "")} · ${esc(descricaoLegivel(x.descricao))}</span>${valor(x.valorCentavos)}</li>`).join("")}</ul>` : ""}
+${d.titulos.length + d.pagamentos.length + d.recorrentes.length ? "" : nenhum("Nada vence nem foi pago neste dia.")}`;
 }
 
 // ----------------------------------------------------------------------------------------------- contas a receber
@@ -381,15 +449,6 @@ ${abas("calendario")}
   }).join("")}
 </div>
 <section id="dia-detalhe" class="card" aria-live="polite">${selecionado ? diaDoCalendario(cal.dias.find((d) => d.data === selecionado)) : '<p class="nota">Toque em um dia para ver as contas.</p>'}</section>`;
-}
-
-export function diaDoCalendario(d) {
-  if (!d) return "";
-  return `<h2>${esc(dataBR(d.data))}</h2>
-${d.titulos.length ? `<h3>Contas com vencimento no dia</h3><ul class="lista-simples">${d.titulos.map((t) => `<li><span>${esc(t.fornecedor ?? "")} · ${esc(descricaoLegivel(t.descricao))}${t.parcela?.total > 1 ? ` (${t.parcela.numero}/${t.parcela.total})` : ""}${t.recorrente ? " · recorrente" : ""}</span><span>${valor(t.saldoCentavos)} ${selo(t.situacao)} <button type="button" class="botao-link" data-detalhe="pagar:${esc(t.id)}">Detalhar</button></span></li>`).join("")}</ul>` : ""}
-${d.pagamentos.length ? `<h3>Pagamentos feitos no dia</h3><ul class="lista-simples">${d.pagamentos.map((g) => `<li><span>${esc(g.fornecedor ?? "")} · ${esc(descricaoLegivel(g.descricao))} · ${esc(g.conta ?? "")}</span>${valor(g.valorCentavos)}</li>`).join("")}</ul>` : ""}
-${d.recorrentes.length ? `<h3>Recorrências previstas (estimadas)</h3><ul class="lista-simples">${d.recorrentes.map((x) => `<li><span>${esc(x.fornecedor ?? "")} · ${esc(descricaoLegivel(x.descricao))}</span>${valor(x.valorCentavos)}</li>`).join("")}</ul>` : ""}
-${d.titulos.length + d.pagamentos.length + d.recorrentes.length ? "" : nenhum("Nada vence nem foi pago neste dia.")}`;
 }
 
 // ------------------------------------------------------------------------------------------------- fluxo de caixa
