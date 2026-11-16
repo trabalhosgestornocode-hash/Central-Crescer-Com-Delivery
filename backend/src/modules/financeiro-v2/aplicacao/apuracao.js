@@ -35,6 +35,15 @@ export function operacoesDeApuracao(b) {
     // 06D: competência homologada → a versão homologada (retrato imutável) acompanha a apuração atual, com a conferência
     // de reprodutibilidade. A tela apresenta a versão homologada; a atual só aparece como comparação.
     const impressao = impressaoDaApuracao(r, competencia);
+    // Só para exibir: o nome do fornecedor entra DEPOIS da impressão (não altera a reprodutibilidade das versões homologadas).
+    const nomes = new Map((await listar(TIPO.CONTRAPARTE)).map((x) => [x.id, x.nome]));
+    const nomear = (no) => {
+      if (Array.isArray(no)) { no.forEach(nomear); return; }
+      if (!no || typeof no !== "object") return;
+      for (const o of no.detalhe?.obrigacoes ?? []) if (o.contraparteId && nomes.has(o.contraparteId)) o.fornecedor = nomes.get(o.contraparteId);
+      Object.values(no).forEach(nomear);
+    };
+    nomear(r);
     const estado = dados.competencias.find((x) => x.competencia === competencia);
     let versaoHomologada = null;
     if (estado?.estado === "FECHAMENTO_HOMOLOGADO") {
