@@ -34,6 +34,21 @@ const MAX_PAGINAS = 50;
 const OPERACAO_FOODY_PARA_PARSER = Object.freeze({ subway: "subway", acai_no_grau: "acai_no_grau", triagem: "revisao_necessaria" });
 export const operacaoFoodyParaParser = (op) => OPERACAO_FOODY_PARA_PARSER[op] ?? "revisao_necessaria";
 
+/**
+ * Operação própria da unidade no relatório Food Delivery (independe das flags: vale também para a planilha importada).
+ * Destino ATIVO de uma conexão Foody compartilhada (ex.: Açaí no Grau) ou Subway (titular / sem destino).
+ * @returns {Promise<{ operacaoPropria: string } | { erro: string }>}
+ */
+export async function lerOperacaoPropria({ db, organizacaoId, unidadeId }) {
+  const { data, error } = await db.from("foody_conexao_destinos")
+    .select("organizacao_id, unidade_id, operacao, estado")
+    .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("estado", "ATIVO");
+  if (error) return { erro: "FONTE_FOODY_INDISPONIVEL" };
+  const operacoes = [...new Set((data ?? []).filter((d) => d.organizacao_id === organizacaoId && d.unidade_id === unidadeId).map((d) => d.operacao))];
+  if (operacoes.length > 1) return { erro: "FONTE_FOODY_OPERACAO_AMBIGUA" };
+  return { operacaoPropria: operacoes.length ? operacaoFoodyParaParser(operacoes[0]) : "subway" };
+}
+
 export function pedidosFoodyNoParserPermitidos(env, unidadeId) {
   if (String(env?.[FLAG_PEDIDOS] ?? "").trim().toLowerCase() !== "true") return false;
   const lista = new Set(String(env?.[FLAG_PEDIDOS_UNIDADES] ?? "").split(",").map((s) => s.trim().toLowerCase()).filter((s) => UUID.test(s)));
@@ -117,13 +132,9 @@ export async function carregarPedidosFoody({ db, env = process.env, organizacaoI
     const diasPlanilha = diasCobertosPorPlanilha(imps, dataInicio, dataFim);
 
     // 2) Operação própria da unidade: destino ATIVO de uma conexão compartilhada (ex.: Açaí) ou Subway (titular).
-    const { data: dest, error: eDest } = await db.from("foody_conexao_destinos")
-      .select("organizacao_id, unidade_id, operacao, estado")
-      .eq("organizacao_id", organizacaoId).eq("unidade_id", unidadeId).eq("estado", "ATIVO");
-    if (eDest) return { erro: "FONTE_FOODY_INDISPONIVEL" };
-    const operacoesDestino = [...new Set((dest ?? []).filter((d) => d.organizacao_id === organizacaoId && d.unidade_id === unidadeId).map((d) => d.operacao))];
-    if (operacoesDestino.length > 1) return { erro: "FONTE_FOODY_OPERACAO_AMBIGUA" };
-    const operacaoPropria = operacoesDestino.length ? operacaoFoodyParaParser(operacoesDestino[0]) : "subway";
+    const op = await lerOperacaoPropria({ db, organizacaoId, unidadeId });
+    if (op.erro) return { erro: op.erro };
+    const { operacaoPropria } = op;
 
     // 3) Pedidos sincronizados do intervalo (hora de parede), paginados.
     const linhas = [];

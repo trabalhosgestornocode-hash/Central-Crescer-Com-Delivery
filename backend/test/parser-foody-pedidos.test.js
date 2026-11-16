@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  carregarPedidosFoody, pedidosFoodyNoParserPermitidos, diasCobertosPorPlanilha, linhaFoodyParaParser, operacaoFoodyParaParser,
+  carregarPedidosFoody, lerOperacaoPropria, pedidosFoodyNoParserPermitidos, diasCobertosPorPlanilha, linhaFoodyParaParser, operacaoFoodyParaParser,
   fonteFoodyParaApi, ORIGEM_FOODY_API, compararPlanilhaComFoody, montarCobertura, carregarCoberturaFoody, FONTE_DIA,
 } from "../src/modules/parser-food-delivery/parserFoodDelivery.foodyPedidos.js";
 
@@ -234,5 +234,20 @@ describe("estrutural", () => {
     assert.doesNotMatch(s, /fetch\(|whatsapp|notifica|comunicacao/i);
     const servico = readFileSync(join(RAIZ, "src", "modules", "parser-food-delivery", "parserFoodDelivery.service.js"), "utf8");
     assert.equal((servico.match(/carregarPedidosFoody\(/g) ?? []).length, 1, "só em analisarPeriodo");
+  });
+});
+
+describe("lerOperacaoPropria (vale também para a planilha importada, sem depender das flags)", () => {
+  const a = (db) => ({ db, organizacaoId: ORG, unidadeId: UNI });
+  test("destino ATIVO de acai_no_grau → Açaí; sem destino → Subway", async () => {
+    assert.deepEqual(await lerOperacaoPropria(a(dbFalso({ foody_conexao_destinos: [{ organizacao_id: ORG, unidade_id: UNI, operacao: "acai_no_grau", estado: "ATIVO" }] }))), { operacaoPropria: "acai_no_grau" });
+    assert.deepEqual(await lerOperacaoPropria(a(dbFalso({}))), { operacaoPropria: "subway" });
+  });
+  test("linha de outra unidade não conta; erro e ambiguidade nunca viram Subway", async () => {
+    assert.deepEqual(await lerOperacaoPropria(a(dbFalso({ foody_conexao_destinos: [{ organizacao_id: ORG, unidade_id: OUTRA, operacao: "acai_no_grau", estado: "ATIVO" }] }))), { operacaoPropria: "subway" });
+    assert.deepEqual(await lerOperacaoPropria(a(dbFalso({}, { erroEm: "foody_conexao_destinos" }))), { erro: "FONTE_FOODY_INDISPONIVEL" });
+    assert.deepEqual(await lerOperacaoPropria(a(dbFalso({ foody_conexao_destinos: [
+      { organizacao_id: ORG, unidade_id: UNI, operacao: "acai_no_grau", estado: "ATIVO" },
+      { organizacao_id: ORG, unidade_id: UNI, operacao: "subway", estado: "ATIVO" }] }))), { erro: "FONTE_FOODY_OPERACAO_AMBIGUA" });
   });
 });

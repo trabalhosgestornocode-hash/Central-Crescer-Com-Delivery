@@ -36,10 +36,10 @@ const linha = (id, extra = {}) => ({ id, numero_pedido: id, importacao_id: "imp-
 
 // Executa o service real, substituindo somente I/O. O fake aplica filtros,
 // inner join, ordenação e limite PostgREST; não calcula nenhum KPI.
-async function ambiente({ pedidos = [], importacoes = [fonte("imp-a")], relatorio, falharLote = false } = {}) {
+async function ambiente({ pedidos = [], importacoes = [fonte("imp-a")], relatorio, falharLote = false, destinos = [] } = {}) {
   const tabelas = { unidades: [{ id: "un-a", organizacao_id: "org-a" }, { id: "un-b", organizacao_id: "org-b" }],
     parser_fd_pedidos: pedidos, parser_fd_importacoes: importacoes, parser_fd_auditoria: [],
-    parser_fd_lancamentos: [], parser_fd_pedido_overrides: [], parser_fd_entregadores: [] };
+    parser_fd_lancamentos: [], parser_fd_pedido_overrides: [], parser_fd_entregadores: [], foody_conexao_destinos: destinos };
   const chamadas = [];
   let ids = 0;
   const db = { storage: { from: () => ({ upload: async () => ({ error: null }) }) }, from(tabela) {
@@ -254,4 +254,53 @@ test("falha de persistência não publica uma importação parcial na análise",
   const a = await ambiente({ relatorio, importacoes: [], falharLote: true });
   await assert.rejects(() => a.service.confirmarImportacao({ ...tenant, usuario: {}, arquivo: {} }), /Falha ao gravar/);
   assert.equal(a.tabelas.parser_fd_importacoes[0].status, "erro");
+});
+
+// O relatório Food Delivery é único para a conta Foody (Subway Saci + Açaí no Grau). Importado na unidade do Açaí,
+// só os pedidos do Açaí entram na conta; Subway e indefinidos ficam como ignorados (nunca somam).
+const relatorioMisto = { hash: "misto-hash", periodoInicio: "2026-09-01", periodoFim: "2026-09-05", colunaDetalhesEncontrada: true,
+  pedidos: [
+    { numeroPedido: "S1", dataHora: "2026-09-01T12:00:00", situacao: "Entregue", entregador: "Ana", taxaEntregador: 8, detalhesPedido: "1x Sub Frango Teriyaki 15cm", dadosBrutos: {} },
+    { numeroPedido: "A1", dataHora: "2026-09-01T13:00:00", situacao: "Entregue", entregador: "Bia", taxaEntregador: 7, detalhesPedido: "1x Açaí 500ml com granola", dadosBrutos: {} },
+    { numeroPedido: "A2", dataHora: "2026-09-02T13:00:00", situacao: "Entregue", entregador: "Bia", taxaEntregador: 6, detalhesPedido: "1x Açaí 300ml", dadosBrutos: {} },
+    { numeroPedido: "A3", dataHora: "2026-09-02T14:00:00", situacao: "Entregue", entregador: "", taxaEntregador: 0, detalhesPedido: "1x Açaí 700ml", dadosBrutos: {} },
+    { numeroPedido: "X1", dataHora: "2026-09-03T14:00:00", situacao: "Entregue", entregador: "Caio", taxaEntregador: 9, detalhesPedido: "", dadosBrutos: {} },
+  ] };
+const destinoAcai = [{ organizacao_id: "org-a", unidade_id: "un-a", operacao: "acai_no_grau", estado: "ATIVO" }];
+
+test("Açaí no Grau: prévia, confirmação e análise do período contam só os pedidos do Açaí", async () => {
+  const a = await ambiente({ relatorio: relatorioMisto, importacoes: [], destinos: destinoAcai });
+  const p = await a.service.previewArquivo({ ...tenant, arquivo: {} });
+  assert.equal(p.operacaoPropria, "acai_no_grau");
+  assert.deepEqual(p.filtragem, { subway: 2, semEntregador: 1, acaiNoGrau: 1, revisaoNecessaria: 1 });
+  const c = await a.service.conciliarPreview({ ...tenant, arquivo: {} });
+  assert.deepEqual(c.pedidos.map((x) => x.numeroPedido), ["A1", "A2"]);
+  assert.equal(c.resumo.taxasValidas, 13);
+  assert.deepEqual(c.entregadores.map((e) => e.entregador), ["Bia"]);
+  const d = await a.service.confirmarImportacao({ ...tenant, usuario: {}, arquivo: { nomeArquivo: "foody.xls" } });
+  assert.equal(d.importacao.operacaoPropria, "acai_no_grau");
+  assert.deepEqual(d.pedidos.map((x) => x.numeroPedido), ["A1", "A2"]);
+  assert.equal(d.pedidosIgnorados.length, 3);
+  const grava = a.chamadas.find((x) => x.tabela === "parser_fd_importacoes" && x.op === "insert");
+  assert.equal(grava.valor.pedidos_subway, 2); // coluna = "operação própria com entregador" (Açaí aqui)
+  assert.equal(grava.valor.taxas_validas, 13);
+  const per = await a.service.analisarPeriodo({ ...tenant, dataInicio: "2026-09-01", dataFim: "2026-09-05" });
+  assert.equal(per.importacao.operacaoPropria, "acai_no_grau");
+  assert.deepEqual(per.pedidos.map((x) => x.numeroPedido), ["A1", "A2"]);
+  assert.equal(per.resumo.taxasValidas, 13);
+});
+
+test("Subway Saci (sem destino): o mesmo relatório conta só a Subway, sem campo novo na resposta", async () => {
+  const a = await ambiente({ relatorio: relatorioMisto, importacoes: [] });
+  const c = await a.service.conciliarPreview({ ...tenant, arquivo: {} });
+  assert.equal("operacaoPropria" in c, false);
+  assert.deepEqual(c.pedidos.map((x) => x.numeroPedido), ["S1"]);
+  assert.deepEqual(c.filtragem, { subway: 1, semEntregador: 0, acaiNoGrau: 3, revisaoNecessaria: 1 });
+});
+
+test("falha ao ler a operação da unidade aborta a importação (nunca cai em Subway)", async () => {
+  const a = await ambiente({ relatorio: relatorioMisto, importacoes: [], destinos: [
+    ...destinoAcai, { organizacao_id: "org-a", unidade_id: "un-a", operacao: "subway", estado: "ATIVO" }] });
+  await assert.rejects(() => a.service.confirmarImportacao({ ...tenant, usuario: {}, arquivo: {} }), /operação desta unidade/);
+  assert.equal(a.tabelas.parser_fd_importacoes.length, 0);
 });
