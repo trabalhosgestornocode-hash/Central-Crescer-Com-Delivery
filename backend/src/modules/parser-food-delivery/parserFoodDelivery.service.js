@@ -21,7 +21,7 @@ import { carregarOverridesPorUnidade, aplicarOverridesPersistidos, definirOverri
 import { lancamentosDoPeriodo, lancamentosDaImportacao } from "./parserFoodDelivery.lancamentos.js";
 import { comporCustoReal, mesclarEntregadores } from "./parserFoodDelivery.lancamentos.calc.js";
 import { carregarFonteLogistica } from "./parserFoodDelivery.foody.js";
-import { carregarPedidosFoody, fonteFoodyParaApi, compararPlanilhaComFoody, carregarCoberturaFoody, MAX_DIAS_COBERTURA, ORIGEM_FOODY_API } from "./parserFoodDelivery.foodyPedidos.js";
+import { lerOperacaoPropria, carregarPedidosFoody, fonteFoodyParaApi, compararPlanilhaComFoody, carregarCoberturaFoody, MAX_DIAS_COBERTURA, ORIGEM_FOODY_API } from "./parserFoodDelivery.foodyPedidos.js";
 
 const TABELA_IMPORT = "parser_fd_importacoes";
 const TABELA_PEDIDOS = "parser_fd_pedidos";
@@ -176,7 +176,33 @@ function paraApiPedido(row) {
 }
 
 /** Só entra na conciliação/cálculos/entregadores: Subway E com entregador atribuído. */
-const ehElegivelConciliacao = (p) => p.operacao === OPERACAO.SUBWAY && temEntregador(p.entregador);
+const elegivelPara = (operacaoPropria) => (p) => p.operacao === operacaoPropria && temEntregador(p.entregador);
+
+/**
+ * Regras de filtragem da unidade: qual operação do relatório Food Delivery é a DELA. O relatório da Foody é único para
+ * as lojas que dividem a conta (Subway Saci + Açaí no Grau); cada unidade só concilia/calcula os próprios pedidos.
+ * Fonte: destino ATIVO de conexão Foody compartilhada (ex.: Açaí no Grau); sem destino = Subway (titular, comportamento
+ * original, byte a byte igual). Falha de leitura NUNCA cai em Subway: aborta (importar com a operação errada gravaria
+ * pedidos de outra loja como válidos).
+ */
+async function regrasDaUnidade({ organizacaoId, unidadeId }) {
+  const r = await lerOperacaoPropria({ db: supabase, organizacaoId, unidadeId });
+  if (r.erro) throw ApiError.internal("Não consegui identificar a operação desta unidade (Subway Saci ou Açaí no Grau). Nada foi gravado; tente novamente.");
+  return regrasParaOperacao(r.operacaoPropria);
+}
+
+/** Parte pura de regrasDaUnidade (testável sem banco). */
+export function regrasParaOperacao(operacaoPropria) {
+  const subway = operacaoPropria === OPERACAO.SUBWAY;
+  return {
+    operacaoPropria,
+    elegivel: elegivelPara(operacaoPropria),
+    ignorado: (p) => paraApiPedidoIgnoradoOperacao(p, operacaoPropria),
+    filtragem: (pedidos) => (subway ? resumoFiltragem(pedidos) : resumoFiltragemOperacaoPropria(pedidos, operacaoPropria)),
+    /** Campo extra na resposta só fora da Subway (resposta da Subway idêntica à anterior). */
+    extra: subway ? {} : { operacaoPropria },
+  };
+}
 
 /**
  * Pedido "ignorado" (fora da conciliação) sempre por UM de dois motivos:
@@ -299,6 +325,7 @@ function resumoFiltragem(pedidosComOperacao) {
 // ---------------------------------------------------------------------------
 export async function previewArquivo({ organizacaoId, unidadeId, arquivo }) {
   const unidade = await resolverUnidade({ organizacaoId, unidadeId });
+  const regras = await regrasDaUnidade({ organizacaoId, unidadeId });
   const buf = decodificarArquivo(arquivo);
   const relatorio = await lerRelatorio(buf, arquivo?.nomeArquivo);
   const pedidosComOperacao = classificarOperacoes(relatorio.pedidos, relatorio.colunaDetalhesEncontrada);
@@ -309,7 +336,7 @@ export async function previewArquivo({ organizacaoId, unidadeId, arquivo }) {
     totalPedidos: relatorio.pedidos.length, porSituacao: contarPorSituacao(relatorio.pedidos),
     colunasEncontradas: relatorio.colunasEncontradas,
     colunaDetalhesEncontrada: relatorio.colunaDetalhesEncontrada,
-    filtragem: resumoFiltragem(pedidosComOperacao),
+    filtragem: regras.filtragem(pedidosComOperacao), ...regras.extra,
   };
 }
 
@@ -336,6 +363,7 @@ async function avisosDuplicidade({ unidadeId, hash, periodoInicio, periodoFim })
 // ---------------------------------------------------------------------------
 export async function conciliarPreview({ organizacaoId, unidadeId, arquivo, codigosSemTaxa = [], periodoInicioManual, periodoFimManual }) {
   const unidade = await resolverUnidade({ organizacaoId, unidadeId });
+  const regras = await regrasDaUnidade({ organizacaoId, unidadeId });
   const buf = decodificarArquivo(arquivo);
   const relatorio = await lerRelatorio(buf, arquivo?.nomeArquivo);
 
@@ -346,8 +374,8 @@ export async function conciliarPreview({ organizacaoId, unidadeId, arquivo, codi
   // quem não tem entregador atribuído -> só então "pedidos válidos" entram
   // na conciliação/cálculo/entregadores (ordem obrigatória do pedido).
   const todosPedidos = classificarOperacoes(relatorio.pedidos, relatorio.colunaDetalhesEncontrada);
-  const pedidosElegiveis = todosPedidos.filter(ehElegivelConciliacao);
-  const pedidosIgnorados = todosPedidos.filter((p) => !ehElegivelConciliacao(p));
+  const pedidosElegiveis = todosPedidos.filter(regras.elegivel);
+  const pedidosIgnorados = todosPedidos.filter((p) => !regras.elegivel(p));
 
   const codigosSet = new Set((codigosSemTaxa || []).map((c) => String(c).trim()).filter(Boolean));
   // Validação do código contra TODOS os pedidos (não só os elegíveis) — só
@@ -371,11 +399,11 @@ export async function conciliarPreview({ organizacaoId, unidadeId, arquivo, codi
     nomeArquivo: relatorio.nomeArquivo, hash: relatorio.hash,
     periodoInicio, periodoFim, periodoDetectado: relatorio.periodoDetectado,
     colunaDetalhesEncontrada: relatorio.colunaDetalhesEncontrada,
-    filtragem: resumoFiltragem(todosPedidos),
+    filtragem: regras.filtragem(todosPedidos), ...regras.extra,
     codigosSemTaxa: [...codigosSet], validacaoCodigos,
     resumo, entregadores,
     pedidos: classificados.map(paraApiPedido),
-    pedidosIgnorados: pedidosIgnorados.map(paraApiPedidoIgnorado),
+    pedidosIgnorados: pedidosIgnorados.map(regras.ignorado),
     avisos,
   };
 }
@@ -454,6 +482,7 @@ function paraLinhaPedido(p, { importacaoId, organizacaoId, unidadeId }) {
 // ---------------------------------------------------------------------------
 export async function confirmarImportacao({ organizacaoId, unidadeId, usuario, arquivo, codigosSemTaxa = [], periodoInicioManual, periodoFimManual }) {
   await resolverUnidade({ organizacaoId, unidadeId });
+  const regras = await regrasDaUnidade({ organizacaoId, unidadeId });
   const buf = decodificarArquivo(arquivo);
   const relatorio = await lerRelatorio(buf, arquivo?.nomeArquivo);
 
@@ -474,11 +503,11 @@ export async function confirmarImportacao({ organizacaoId, unidadeId, usuario, a
   // (ordem obrigatória do pedido).
   const todosPedidos = classificarOperacoes(relatorio.pedidos, relatorio.colunaDetalhesEncontrada);
   const codigosSet = new Set((codigosSemTaxa || []).map((c) => String(c).trim()).filter(Boolean));
-  const pedidosProcessados = todosPedidos.map((p) => (ehElegivelConciliacao(p)
+  const pedidosProcessados = todosPedidos.map((p) => (regras.elegivel(p)
     ? classificarComMotor(p, codigosSet)
     : { ...p, statusConciliacao: null, semTaxaInformado: false, classificacaoCancelamento: null, classificacaoMotivo: null, classificacaoNivelConfianca: null, classificacaoRegra: null }));
-  const pedidosElegiveis = pedidosProcessados.filter(ehElegivelConciliacao);
-  const filtragem = resumoFiltragem(pedidosProcessados);
+  const pedidosElegiveis = pedidosProcessados.filter(regras.elegivel);
+  const filtragem = regras.filtragem(pedidosProcessados);
   const resumo = resumoConciliacao(pedidosElegiveis);
 
   const storage = await uploadOriginal({ buf, unidadeId, hash: relatorio.hash, nomeArquivo: arquivo?.nomeArquivo });
@@ -518,7 +547,7 @@ export async function confirmarImportacao({ organizacaoId, unidadeId, usuario, a
   let resumoFinal = resumo;
   if (overrides.size) {
     const rows = await buscarTodosPedidos({ importacaoId: importacao.id });
-    const comOverride = aplicarOverridesPersistidos(rows.map(paraApiPedido), overrides).filter(ehElegivelConciliacao);
+    const comOverride = aplicarOverridesPersistidos(rows.map(paraApiPedido), overrides).filter(regras.elegivel);
     const r = resumoConciliacao(comOverride);
     if (r.taxasValidas !== resumo.taxasValidas || r.canceladosRecebemTaxa !== resumo.canceladosRecebemTaxa) {
       resumoFinal = r;
@@ -585,6 +614,7 @@ function anexarAjustesOperacionais({ pedidos, entregadores, resumo, lancamentos 
 
 export async function obterImportacao({ organizacaoId, unidadeId, importacaoId }) {
   await resolverUnidade({ organizacaoId, unidadeId });
+  const regras = await regrasDaUnidade({ organizacaoId, unidadeId });
   const { data: importacao, error } = await supabase.from(TABELA_IMPORT).select("*").eq("unidade_id", unidadeId).eq("id", importacaoId).maybeSingle();
   if (error) throw ApiError.internal(error.message);
   if (!importacao) throw ApiError.notFound("Importação não encontrada.");
@@ -593,8 +623,8 @@ export async function obterImportacao({ organizacaoId, unidadeId, importacaoId }
   const overrides = await carregarOverridesPorUnidade({ organizacaoId, unidadeId });
 
   const todosPedidos = aplicarOverridesPersistidos(pedidosRows.map(paraApiPedido), overrides);
-  const pedidos = todosPedidos.filter(ehElegivelConciliacao);
-  const pedidosIgnorados = todosPedidos.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado);
+  const pedidos = todosPedidos.filter(regras.elegivel);
+  const pedidosIgnorados = todosPedidos.filter((p) => !regras.elegivel(p)).map(regras.ignorado);
   const resumo = resumoConciliacao(pedidos);
   const entregadores = entregadoresParaApi(pedidos);
   const lancamentos = await lancamentosDaImportacao({
@@ -604,7 +634,7 @@ export async function obterImportacao({ organizacaoId, unidadeId, importacaoId }
 
   const ajustes = anexarAjustesOperacionais({ pedidos, entregadores, resumo, lancamentos });
   return {
-    importacao: paraApiImportacao(importacao),
+    importacao: { ...paraApiImportacao(importacao), ...regras.extra },
     resumo: ajustes.resumo, pedidos: ajustes.pedidos, pedidosIgnorados,
     entregadores: ajustes.entregadores, lancamentos: ajustes.lancamentos,
     // Aba Dashboard — sempre a partir dos pedidos elegíveis PRÉ-ajustes (taxa
@@ -630,6 +660,7 @@ export async function arquivoOriginal({ organizacaoId, unidadeId, importacaoId }
 // ---------------------------------------------------------------------------
 export async function editarCodigosSemTaxa({ organizacaoId, unidadeId, importacaoId, novosCodigos, usuario }) {
   const unidade = await resolverUnidade({ organizacaoId, unidadeId });
+  const regras = await regrasDaUnidade({ organizacaoId, unidadeId: unidade.id });
   const { data: importacao, error } = await supabase.from(TABELA_IMPORT).select("*").eq("unidade_id", unidade.id).eq("id", importacaoId).maybeSingle();
   if (error) throw ApiError.internal(error.message);
   if (!importacao) throw ApiError.notFound("Importação não encontrada.");
@@ -645,12 +676,12 @@ export async function editarCodigosSemTaxa({ organizacaoId, unidadeId, importaca
   // continuam de fora dela (status_conciliacao permanece null, mesmo
   // espírito do pipeline de import).
   const classificados = (pedidosRows || []).map((row) => {
-    if (!ehElegivelConciliacao(row)) return { ...row, statusConciliacao: null, semTaxaInformado: false };
+    if (!regras.elegivel(row)) return { ...row, statusConciliacao: null, semTaxaInformado: false };
     const statusConciliacao = classificarPedido({ numeroPedido: row.numero_pedido, situacao: row.situacao }, codigosSet);
     return { ...row, statusConciliacao, semTaxaInformado: codigosSet.has(row.numero_pedido) };
   });
 
-  const alterados = classificados.filter((p) => ehElegivelConciliacao(p)
+  const alterados = classificados.filter((p) => regras.elegivel(p)
     && (p.statusConciliacao !== p.status_conciliacao || p.semTaxaInformado !== p.sem_taxa_informado));
   for (const p of alterados) {
     const { error: eUp } = await supabase.from(TABELA_PEDIDOS)
@@ -658,7 +689,7 @@ export async function editarCodigosSemTaxa({ organizacaoId, unidadeId, importaca
     if (eUp) throw ApiError.internal(`Falha ao atualizar pedido ${p.numero_pedido}: ${eUp.message}`);
   }
 
-  const resumo = resumoConciliacao(classificados.filter(ehElegivelConciliacao).map((p) => ({
+  const resumo = resumoConciliacao(classificados.filter(regras.elegivel).map((p) => ({
     situacao: p.situacao, taxaEntregador: numOuNulo(p.taxa_entregador), statusConciliacao: p.statusConciliacao,
     classificacaoCancelamento: p.classificacao_cancelamento ?? null,
   })));
@@ -682,10 +713,10 @@ export async function editarCodigosSemTaxa({ organizacaoId, unidadeId, importaca
   // soma sempre 0 de taxa (bug real já visto em produção). Mapeia uma vez e
   // reaproveita tanto no agrupamento quanto no retorno de pedidos.
   const pedidosApi = classificados.map(paraApiPedido);
-  const pedidosElegiveisApi = pedidosApi.filter(ehElegivelConciliacao);
-  const pedidosIgnoradosApi = pedidosApi.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado);
+  const pedidosElegiveisApi = pedidosApi.filter(regras.elegivel);
+  const pedidosIgnoradosApi = pedidosApi.filter((p) => !regras.elegivel(p)).map(regras.ignorado);
   const entregadores = entregadoresParaApi(pedidosElegiveisApi);
-  return { importacao: paraApiImportacao(salvo), resumo, entregadores, pedidos: pedidosElegiveisApi, pedidosIgnorados: pedidosIgnoradosApi };
+  return { importacao: { ...paraApiImportacao(salvo), ...regras.extra }, resumo, entregadores, pedidos: pedidosElegiveisApi, pedidosIgnorados: pedidosIgnoradosApi };
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +729,7 @@ export async function editarCodigosSemTaxa({ organizacaoId, unidadeId, importaca
 // ---------------------------------------------------------------------------
 export async function alterarClassificacaoCancelamento({ organizacaoId, unidadeId, importacaoId, pedidoId, classificacaoFinal, motivo: motivoRaw, usuario }) {
   const unidade = await resolverUnidade({ organizacaoId, unidadeId });
+  const regras = await regrasDaUnidade({ organizacaoId, unidadeId: unidade.id });
   if (![CLASSIFICACAO_CANCELAMENTO.RECEBE_TAXA, CLASSIFICACAO_CANCELAMENTO.NAO_RECEBE_TAXA].includes(classificacaoFinal)) {
     throw ApiError.badRequest('Classificação inválida — informe "recebe_taxa" ou "nao_recebe_taxa".');
   }
@@ -743,8 +775,8 @@ export async function alterarClassificacaoCancelamento({ organizacaoId, unidadeI
   const pedidosRows = await buscarTodosPedidos({ importacaoId });
   const overrides = await carregarOverridesPorUnidade({ organizacaoId, unidadeId: unidade.id });
   const pedidosApi = aplicarOverridesPersistidos(pedidosRows.map(paraApiPedido), overrides);
-  const pedidosElegiveisApi = pedidosApi.filter(ehElegivelConciliacao);
-  const pedidosIgnoradosApi = pedidosApi.filter((p) => !ehElegivelConciliacao(p)).map(paraApiPedidoIgnorado);
+  const pedidosElegiveisApi = pedidosApi.filter(regras.elegivel);
+  const pedidosIgnoradosApi = pedidosApi.filter((p) => !regras.elegivel(p)).map(regras.ignorado);
   const resumo = resumoConciliacao(pedidosElegiveisApi);
   const entregadores = entregadoresParaApi(pedidosElegiveisApi);
 
@@ -756,7 +788,7 @@ export async function alterarClassificacaoCancelamento({ organizacaoId, unidadeI
   }).eq("id", importacaoId).select("*").single();
   if (eImp2) throw ApiError.badRequest(eImp2.message);
 
-  return { importacao: paraApiImportacao(salvo), resumo, entregadores, pedidos: pedidosElegiveisApi, pedidosIgnorados: pedidosIgnoradosApi };
+  return { importacao: { ...paraApiImportacao(salvo), ...regras.extra }, resumo, entregadores, pedidos: pedidosElegiveisApi, pedidosIgnorados: pedidosIgnoradosApi };
 }
 
 // ---------------------------------------------------------------------------
@@ -957,7 +989,9 @@ export async function analisarPeriodo({ organizacaoId, unidadeId, dataInicio, da
   // null = flag desligada (nada consultado; resposta idêntica). { erro } = segue só com a planilha e avisa.
   const foody = await carregarPedidosFoody({ db: supabase, organizacaoId, unidadeId, dataInicio: periodo.dataInicio, dataFim: periodo.dataFim });
   const foodyOk = foody && !foody.erro;
-  const operacaoPropria = foodyOk ? foody.operacaoPropria : OPERACAO.SUBWAY;
+  // Operação própria: a da ponte Foody quando ela respondeu; senão, a do cadastro da unidade (planilha importada no
+  // Açaí no Grau também só mostra os pedidos do Açaí). Subway sem destino = Subway, como antes.
+  const operacaoPropria = foodyOk ? foody.operacaoPropria : (await regrasDaUnidade({ organizacaoId, unidadeId })).operacaoPropria;
   const elegivel = (p) => p.operacao === operacaoPropria && temEntregador(p.entregador);
   const doFoody = foodyOk
     ? foody.linhas.map((l) => {

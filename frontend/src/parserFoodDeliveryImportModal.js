@@ -129,12 +129,20 @@ async function analisarArquivo(m, ctx) {
   }
 }
 
+/** O relatório Food Delivery é único para as lojas da conta Foody: cada unidade só conta a própria operação. */
+function nomesDaOperacao(operacaoPropria) {
+  return operacaoPropria === "acai_no_grau"
+    ? { propria: "Açaí no Grau", outras: "Outras operações (Subway etc.)", subway: false }
+    : { propria: "Subway Saci", outras: "Açaí no Grau", subway: true };
+}
+
 function renderPreview1(m, ctx) {
   const p = ctx.previewArquivo;
   const box = m.querySelector("#pfd-preview-1");
   const item = (lbl, val) => `<div class="vd-pv-item"><span>${lbl}</span><b>${val}</b></div>`;
   const situacoes = Object.entries(p.porSituacao || {}).map(([s, n]) => `${escapeHtml(s)}: ${n}`).join(" · ");
   const f = p.filtragem || {};
+  const nomes = nomesDaOperacao(p.operacaoPropria);
   box.innerHTML = `
     <div class="vd-preview">
       <div class="vd-pv-titulo">Relatório lido com sucesso</div>
@@ -147,12 +155,12 @@ function renderPreview1(m, ctx) {
       <div class="bm-pv-bloco" style="margin-top:10px">
         <b>${icon("filter", { size: 14 })} Filtragem</b>
         <div class="vd-pv-grid" style="margin-top:8px">
-          ${item("Subway Saci (entram na conta)", f.subway ?? "—")}
+          ${item(`${nomes.propria} (entram na conta)`, f.subway ?? "—")}
           ${item("Sem entregador (ignorados)", f.semEntregador ?? 0)}
-          ${item("Açaí no Grau (ignorados)", f.acaiNoGrau ?? 0)}
+          ${item(`${nomes.outras} (ignorados)`, f.acaiNoGrau ?? 0)}
           ${item("Operação indefinida", f.revisaoNecessaria ?? 0)}
         </div>
-        ${p.colunaDetalhesEncontrada === false ? `<p class="dex-diag-vazio">${icon("alert-triangle", { size: 13 })} Não encontrei a coluna "Detalhes do pedido" — não foi possível separar por operação; todos os pedidos serão tratados como Subway Saci.</p>` : ""}
+        ${p.colunaDetalhesEncontrada === false ? `<p class="dex-diag-vazio">${icon("alert-triangle", { size: 13 })} Não encontrei a coluna "Detalhes do pedido" — não foi possível separar por operação; todos os pedidos serão tratados como Subway Saci${nomes.subway ? "" : " e nenhum entra na conta do Açaí no Grau"}.</p>` : ""}
       </div>
       ${!p.periodoDetectado ? `
         <div class="cfg-form-grid" style="margin-top:10px">
@@ -205,6 +213,7 @@ function renderRevisaoFinal(m, ctx) {
   const corpo = m.querySelector(".pfd-imp-corpo");
   const d = ctx.conciliacao;
   const r = d.resumo;
+  const nomes = nomesDaOperacao(d.operacaoPropria);
   const avisos = [];
   if (d.avisos?.hashDuplicado) avisos.push(`Este arquivo já foi importado (${escapeHtml(d.avisos.hashDuplicado.nomeArquivo || "importação anterior")}) — não será possível confirmar.`);
   for (const s of d.avisos?.periodosSobrepostos || []) avisos.push(`Já existe uma importação cobrindo parte deste período (${fmtPeriodo(s.periodoInicio, s.periodoFim)}, ${escapeHtml(s.nomeArquivo || "arquivo")}).`);
@@ -212,9 +221,9 @@ function renderRevisaoFinal(m, ctx) {
   corpo.innerHTML = `
     <div class="vd-preview">
       <div class="vd-pv-titulo">${icon("check-circle", { size: 15 })} Relatório processado com sucesso — ${fmtPeriodo(d.periodoInicio, d.periodoFim)}</div>
-      <p class="dex-diag-vazio">Filtragem: ${d.filtragem?.subway ?? r.totalPedidos} Subway com entregador · ${d.filtragem?.semEntregador ?? 0} sem entregador · ${d.filtragem?.acaiNoGrau ?? 0} Açaí no Grau · ${d.filtragem?.revisaoNecessaria ?? 0} indefinidos ignorados.</p>
+      <p class="dex-diag-vazio">Filtragem: ${d.filtragem?.subway ?? r.totalPedidos} ${nomes.propria} com entregador · ${d.filtragem?.semEntregador ?? 0} sem entregador · ${d.filtragem?.acaiNoGrau ?? 0} ${nomes.outras} · ${d.filtragem?.revisaoNecessaria ?? 0} indefinidos ignorados.</p>
       <div class="vd-pv-grid">
-        <div class="vd-pv-item"><span>Total de pedidos Subway</span><b>${r.totalPedidos}</b></div>
+        <div class="vd-pv-item"><span>Total de pedidos ${nomes.propria}</span><b>${r.totalPedidos}</b></div>
         <div class="vd-pv-item"><span>Entregues/finalizados</span><b>${r.entregues}</b></div>
         <div class="vd-pv-item"><span>Cancelados</span><b>${r.cancelados}</b></div>
       </div>
