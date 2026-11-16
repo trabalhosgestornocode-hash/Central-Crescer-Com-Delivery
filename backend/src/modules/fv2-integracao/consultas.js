@@ -58,7 +58,11 @@ async function comFornecedores(n, c, resultado) {
       const f = nomes.get(obrig.get(ajustes.get(no.origem.id)?.alvoId)?.contraparteId);
       if (f) no.nome = `${f} · ajuste de valor · ${no.nome}`;
     }
-    for (const o of no.detalhe?.obrigacoes ?? []) if (o.contraparteId && nomes.has(o.contraparteId)) o.fornecedor = nomes.get(o.contraparteId);
+    for (const o of no.detalhe?.obrigacoes ?? []) {
+      if (o.contraparteId && nomes.has(o.contraparteId)) o.fornecedor = nomes.get(o.contraparteId);
+      const juros = [...ajustes.values()].filter((a) => a.alvoId === o.obrigacaoId && /^Juros\/multa/.test(a.motivo ?? "")).reduce((t, a) => t + (a.valorCentavos ?? 0), 0);
+      if (juros) o.jurosCentavos = juros;
+    }
     Object.values(no).forEach(nomear);
   };
   nomear(resultado);
