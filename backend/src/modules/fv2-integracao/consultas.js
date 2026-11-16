@@ -30,6 +30,18 @@ const RELATORIOS_DA_PLATAFORMA = Object.freeze([
   { tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "SAIPOS — Faturamento por dia (PDF)" },
 ]);
 
+/** Só para exibir: acrescenta o NOME do fornecedor às contas a pagar da composição (a apuração em si não muda). */
+async function comFornecedores(n, c, resultado) {
+  const nomes = new Map((await n.consultarRegistros(c, { tipo: "CONTRAPARTE" })).map((x) => [x.id, x.nome]));
+  const nomear = (no) => {
+    if (Array.isArray(no)) { no.forEach(nomear); return; }
+    if (!no || typeof no !== "object") return;
+    for (const o of no.detalhe?.obrigacoes ?? []) if (o.contraparteId && nomes.has(o.contraparteId)) o.fornecedor = nomes.get(o.contraparteId);
+    Object.values(no).forEach(nomear);
+  };
+  nomear(resultado);
+  return resultado;
+}
 export const CONSULTAS = Object.freeze({
   "/visao-geral": async (n, c, p) => {
     const vg = await n.apurarVisaoGeral(c, competencia(p));
@@ -38,12 +50,12 @@ export const CONSULTAS = Object.freeze({
   },
   "/dre": async (n, c, p) => {
     const ap = await n.apurarCompetencia(c, competencia(p));
-    return { competencia: p.competencia, impressao: ap.impressao, versaoHomologada: ap.versaoHomologada, dre: ap.dre, cadaCem: ap.cadaCem, pendencias: ap.pendencias,
+    return { competencia: p.competencia, impressao: ap.impressao, versaoHomologada: ap.versaoHomologada, dre: await comFornecedores(n, c, structuredClone(ap.dre)), cadaCem: ap.cadaCem, pendencias: ap.pendencias,
       faturamentoBruto: ap.indicadores.FATURAMENTO_BRUTO_PROPRIO, resultadoGerencial: ap.indicadores.RESULTADO_GERENCIAL, faturamentoLiquidoGerencial: ap.indicadores.FATURAMENTO_LIQUIDO_GERENCIAL };
   },
-  "/composicao": (n, c, p) => {
+  "/composicao": async (n, c, p) => {
     if (!INDICADORES.has(p.codigo)) throw Object.assign(new Error("Indicador desconhecido."), { codigoHttp: 400, codigo: "INDICADOR_DESCONHECIDO" });
-    return n.composicaoDoIndicador(c, { ...competencia(p), codigo: p.codigo });
+    return comFornecedores(n, c, structuredClone(await n.composicaoDoIndicador(c, { ...competencia(p), codigo: p.codigo })));
   },
   "/contas-a-pagar": async (n, c, p) => {
     const r = await n.consultarContasAPagar(c, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", ...PAGINA], PAGINA));
