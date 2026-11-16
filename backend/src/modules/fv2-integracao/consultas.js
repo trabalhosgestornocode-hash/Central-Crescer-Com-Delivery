@@ -35,9 +35,25 @@ async function comFornecedores(n, c, resultado) {
   const nomes = new Map((await n.consultarRegistros(c, { tipo: "CONTRAPARTE" })).map((x) => [x.id, x.nome]));
   const ajustes = new Map((await n.consultarRegistros(c, { tipo: "AJUSTE" })).map((x) => [x.id, x]));
   const obrig = new Map((await n.consultarRegistros(c, { tipo: "OBRIGACAO" })).map((x) => [x.id, x]));
+  // Ajuste de valor de uma conta a pagar entra na linha da própria conta (uma linha por pessoa); o total do grupo não muda.
+  const fundirAjustes = (lista) => {
+    const dono = new Map();
+    for (const f of lista) for (const o of f.detalhe?.obrigacoes ?? []) dono.set(o.obrigacaoId, f);
+    return lista.filter((f) => {
+      if (f.origem?.tipo !== "AJUSTE") return true;
+      const aj = ajustes.get(f.origem.id);
+      const alvo = dono.get(aj?.alvoId);
+      if (!alvo || typeof aj.valorCentavos !== "number") return true;
+      alvo.valorCentavos += f.valorCentavos;
+      if (typeof alvo.percentualDoBruto === "number" && typeof f.percentualDoBruto === "number") alvo.percentualDoBruto += f.percentualDoBruto;
+      for (const o of alvo.detalhe.obrigacoes) if (o.obrigacaoId === aj.alvoId) o.valorReconhecidoCentavos += aj.valorCentavos;
+      return false;
+    });
+  };
   const nomear = (no) => {
     if (Array.isArray(no)) { no.forEach(nomear); return; }
     if (!no || typeof no !== "object") return;
+    if (Array.isArray(no.filhos)) no.filhos = fundirAjustes(no.filhos);
     if (no.origem?.tipo === "AJUSTE" && typeof no.nome === "string" && !no.nome.includes("·")) {
       const f = nomes.get(obrig.get(ajustes.get(no.origem.id)?.alvoId)?.contraparteId);
       if (f) no.nome = `${f} · ajuste de valor · ${no.nome}`;
