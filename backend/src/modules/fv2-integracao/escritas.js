@@ -184,6 +184,26 @@ export const ESCRITAS = Object.freeze({
   "/propostas/aprovar": { campos: ["proposta", "justificativa"], fazer: (n, c, b) => n.aprovarProposta(c, { propostaId: id(b.proposta), ...(b.justificativa ? { justificativa: b.justificativa } : {}) }) },
   "/propostas/rejeitar": { campos: ["proposta", "justificativa"], fazer: (n, c, b) => n.rejeitarProposta(c, { propostaId: id(b.proposta), justificativa: b.justificativa }) },
   "/propostas/aplicar": { campos: ["proposta"], fazer: (n, c, b) => n.aplicarProposta(c, { propostaId: id(b.proposta) }) },
+  // Lote: aprova e aplica, uma a uma (cada uma na sua transação, com as mesmas checagens), as propostas PRONTAS (estado
+  // PROPOSTA) da importação. As em revisão/aguardando evidência ficam para a revisão individual. Falha de uma não para o resto.
+  "/propostas/aprovar-e-aplicar-prontas": { campos: ["importacao"], fazer: async (n, c, b) => {
+    const importacaoId = id(b.importacao);
+    const prontas = (await n.listarPropostas(c, { importacaoId, estado: "PROPOSTA" })).sort((x, y) => String(x.dataOperacao).localeCompare(String(y.dataOperacao))).slice(0, 400);
+    let aplicadas = 0;
+    let valorCentavos = 0;
+    const falhas = [];
+    for (const p of prontas) {
+      try {
+        await n.aprovarProposta(c, { propostaId: p.id, justificativa: "Aprovada em lote (propostas prontas da importação)." });
+        await n.aplicarProposta(c, { propostaId: p.id });
+        aplicadas += 1;
+        valorCentavos += p.valorCentavos ?? 0;
+      } catch (e) {
+        falhas.push({ propostaId: p.id, data: p.dataOperacao, mensagem: e?.message ?? "Falha ao aplicar." });
+      }
+    }
+    return { importacaoId, prontas: prontas.length, aplicadas, valorCentavos, falhas };
+  } },
   // `chave` (UUID do formulário): o MESMO envio repetido (clique duplo, rede) devolve o registro já gravado, sem duplicar.
   "/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento", "identificador", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {
     ...(b.fornecedor ? { contraparteId: id(b.fornecedor) } : { contraparteNova: { tipo: "FORNECEDOR", nome: String(b.fornecedorNovo ?? "").slice(0, 120) } }),

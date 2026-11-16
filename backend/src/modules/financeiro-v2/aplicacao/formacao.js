@@ -28,8 +28,12 @@ import { operacoesDeVendas } from "./vendas.js";
 import { taxasDoPeriodo } from "./taxasContratadas.js";
 import { demonstrativoIfoodQueCobre } from "./demonstrativoIfood.js";
 import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
+import { deParaFormaSaipos } from "../importacao/fontes/saipos.js";
+import { rotulo } from "../importacao/leitor.js";
 
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 40);
+/** Venda formada do relatório de formas de pagamento (total do dia por forma), não de pedido. */
+export const GRANULARIDADE_DIA_POR_FORMA = "DIA_POR_FORMA";
 const CONCLUIDAS = ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"];
 const FINAIS = [E.APLICADA, E.REJEITADA, E.SUBSTITUIDA];
 const arredondar = (micros) => { const n = micros < 0; const a = BigInt(Math.abs(micros)); const c = Number((a + 5000n) / 10000n); return n ? -c : c; };
@@ -98,6 +102,35 @@ export function operacoesDeFormacao(b) {
         estado: d.canal && !(d.canal === "IFOOD" && d.taxaEntregaCentavos) ? E.PROPOSTA : E.AGUARDANDO_REVISAO,
         justificativa: "Pedido do relatório de vendas por pedido: uma venda, um canal, uma receita.",
       });
+    }
+    // Relatório de FORMAS DE PAGAMENTO por dia: uma venda por dia × forma, com o canal, a forma e o processador do de-para
+    // (deParaFormaSaipos). Valor = o que o consumidor pagou naquela forma. Forma fora do de-para (ex.: voucher de desconto)
+    // não vira venda: fica pendência na importação. Nunca convive com pedidos nem agregado do mesmo dia (conflitoDeGranularidade).
+    // O dia de HOJE ainda não fechou (o relatório traz um parcial): não vira venda; entra quando o relatório for reimportado.
+    const hoje = b.hoje();
+    for (const r of registros.filter((x) => x.tipoRegistro === "TOTAL_FORMA")) {
+      const dp = deParaFormaSaipos(r.dados.formaOriginal);
+      if (!dp) continue;
+      for (const [dia, valor] of Object.entries(r.dados.porDia ?? {}).sort()) {
+        if (!(valor > 0) || dia >= hoje) continue;
+        const chaveForma = `forma-dia:${rotulo(r.dados.formaOriginal)}:${dia}`;
+        const pagamentos = dp.forma ? [{ forma: dp.forma, valorCentavos: valor, ...(dp.processador ? { processador: dp.processador } : {}), ...(dp.caixa && g.contaCaixaId ? { contaId: g.contaCaixaId } : {}) }] : [];
+        const divergencias = [];
+        if (dp.revisar) divergencias.push({ codigo: "PAGAMENTO_A_IDENTIFICAR", mensagem: `Forma "${r.dados.formaOriginal}": venda sem forma de pagamento conhecida (fica a receber até ser identificada).` });
+        if (dp.caixa && !g.contaCaixaId) divergencias.push({ codigo: "CAIXA_NAO_INFORMADO", mensagem: "Dinheiro sem caixa físico cadastrado: o recebimento fica pendente." });
+        saida.push({
+          operacao: OP.VENDA, registro: r, competencia: dia.slice(0, 7), dataOperacao: dia, natureza: "RECEITA", valorCentavos: valor,
+          categoriaSugerida: CATEGORIA_DE_VENDA[dp.canal],
+          comando: {
+            canal: dp.canal, dataVenda: dia, brutoCentavos: valor, pagamentos, ...(pagamentos.length ? {} : { pagamentoParcial: true }),
+            fonte: { sistema: "SAIPOS", idExterno: chaveForma }, descricao: `SAIPOS ${dia.split("-").reverse().join("/")}: ${r.dados.formaOriginal}${dp.descricao ? ` (${dp.descricao})` : ""}`,
+          },
+          origemChave: chaveForma, conteudo: hash(`${chaveForma}:${valor}`),
+          extras: { granularidade: GRANULARIDADE_DIA_POR_FORMA, formaOriginal: r.dados.formaOriginal }, divergencias,
+          confianca: dp.revisar ? CONFIANCA.BAIXA : CONFIANCA.ALTA, estado: dp.revisar ? E.AGUARDANDO_REVISAO : E.PROPOSTA,
+          justificativa: "Relatório de formas de pagamento por dia: uma venda por dia e forma, com canal e processador do de-para da loja.",
+        });
+      }
     }
     for (const r of registros.filter((x) => x.tipoRegistro === "TOTAL_DIA")) {
       const d = r.dados;
@@ -277,8 +310,8 @@ export function operacoesDeFormacao(b) {
   // ------------------------------------------------------------------------------------- persistência das propostas
   async function persistir(tx, cx, imp, rascunho, contagem) {
     const registros = rascunho.registros ?? [rascunho.registro];
-    const origemChave = rascunho.operacao === OP.OBRIGACAO_ENTREGADOR ? `entregador:${rascunho.comando.entregador}:${imp.periodoInicio}:${imp.periodoFim}` : rascunho.registro.chaveIdempotencia;
-    const conteudo = hash(registros.map((r) => r.impressao).join("|"));
+    const origemChave = rascunho.origemChave ?? (rascunho.operacao === OP.OBRIGACAO_ENTREGADOR ? `entregador:${rascunho.comando.entregador}:${imp.periodoInicio}:${imp.periodoFim}` : rascunho.registro.chaveIdempotencia);
+    const conteudo = rascunho.conteudo ?? hash(registros.map((r) => r.impressao).join("|"));
     const chave = `proposta:${rascunho.operacao}:${hash(origemChave)}:${conteudo}`;
     const mesma = await tx.buscarPorChave(cx, TIPO.PROPOSTA, chave);
     if (mesma) {
@@ -326,6 +359,13 @@ export function operacoesDeFormacao(b) {
     const outra = proposta.operacao === OP.VENDA ? OP.VENDA_AGREGADA : OP.VENDA;
     const aplicadas = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: outra, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
     if (aplicadas[0]) return aplicadas[0];
+    // Venda do dia por FORMA (relatório de formas) × venda por PEDIDO do mesmo dia: o mesmo faturamento por dois caminhos.
+    if (proposta.operacao === OP.VENDA) {
+      const porForma = (p) => p.granularidade === GRANULARIDADE_DIA_POR_FORMA;
+      const mesmoDia = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
+      const outraGranularidade = mesmoDia.find((x) => x.id !== proposta.id && porForma(x) !== porForma(proposta));
+      if (outraGranularidade) return outraGranularidade;
+    }
     // doc 38: o demonstrativo oficial do iFood cobre o canal iFood no período — nenhuma venda/agregado iFood convive com ele.
     if (proposta.comando?.canal === "IFOOD") {
       const dem = await demonstrativoIfoodQueCobre(tx, cx, proposta.comando.periodoInicio ?? proposta.dataOperacao) ?? await demonstrativoIfoodQueCobre(tx, cx, proposta.comando.periodoFim ?? proposta.dataOperacao);
@@ -424,7 +464,7 @@ export function operacoesDeFormacao(b) {
         const contagem = { criadas: 0, existentes: 0, reavaliadas: 0, substituidas: 0, porEstado: {} };
         const abertura = await tx.buscarPorChave(cx, TIPO.ABERTURA, "abertura");
         for (const r of rascunhos) await persistir(tx, cx, imp, await barreiraDaAbertura(tx, cx, abertura, r), contagem);
-        return { importacaoId: imp.id, ...contagem, semProposta: registros.length - rascunhos.reduce((s, r) => s + (r.registros?.length ?? 1), 0) };
+        return { importacaoId: imp.id, ...contagem, semProposta: registros.length - new Set(rascunhos.flatMap((r) => (r.registros ?? [r.registro]).map((x) => x.id))).size };
       });
     },
 
