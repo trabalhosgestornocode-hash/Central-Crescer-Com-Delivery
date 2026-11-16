@@ -33,9 +33,15 @@ const RELATORIOS_DA_PLATAFORMA = Object.freeze([
 /** Só para exibir: acrescenta o NOME do fornecedor às contas a pagar da composição (a apuração em si não muda). */
 async function comFornecedores(n, c, resultado) {
   const nomes = new Map((await n.consultarRegistros(c, { tipo: "CONTRAPARTE" })).map((x) => [x.id, x.nome]));
+  const ajustes = new Map((await n.consultarRegistros(c, { tipo: "AJUSTE" })).map((x) => [x.id, x]));
+  const obrig = new Map((await n.consultarRegistros(c, { tipo: "OBRIGACAO" })).map((x) => [x.id, x]));
   const nomear = (no) => {
     if (Array.isArray(no)) { no.forEach(nomear); return; }
     if (!no || typeof no !== "object") return;
+    if (no.origem?.tipo === "AJUSTE" && typeof no.nome === "string" && !no.nome.includes("·")) {
+      const f = nomes.get(obrig.get(ajustes.get(no.origem.id)?.alvoId)?.contraparteId);
+      if (f) no.nome = `${f} · ajuste de valor · ${no.nome}`;
+    }
     for (const o of no.detalhe?.obrigacoes ?? []) if (o.contraparteId && nomes.has(o.contraparteId)) o.fornecedor = nomes.get(o.contraparteId);
     Object.values(no).forEach(nomear);
   };
