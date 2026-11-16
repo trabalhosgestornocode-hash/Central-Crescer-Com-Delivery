@@ -195,6 +195,14 @@ export const ESCRITAS = Object.freeze({
     movimentacaoId: id(b.movimentacao), versaoMovimentacao: inteiro(b.versao), alocacoes: [{ obrigacaoId: id(b.obrigacao), valorCentavos: centavos(b.valor) }],
     ...(b.documento ? { documentoId: id(b.documento) } : {}), justificativa: b.justificativa, confirmar: true, ...(marcado(b.pagamentoAntecipado) ? { pagamentoAntecipado: true } : {}),
   }) },
+  // Corrigir o VALOR de uma conta a pagar: o histórico é preservado — grava um ajuste (diferença) com motivo, na mesma categoria.
+  "/obrigacoes/corrigir-valor": { campos: ["obrigacao", "novoValor", "justificativa"], fazer: async (n, c, b) => {
+    const d = await n.detalharContaAPagar(c, { id: id(b.obrigacao) });
+    const atual = (d.titulo.valorOriginalCentavos ?? 0) + (d.titulo.ajustesCentavos ?? 0);
+    const diferenca = centavos(b.novoValor) - atual;
+    if (!Number.isInteger(diferenca) || diferenca === 0) throw new ErroFinanceiro(CODIGO.ENTRADA_INVALIDA, "Informe um valor diferente do atual.");
+    return n.registrarAjuste(c, { alvoTipo: "OBRIGACAO", alvoId: id(b.obrigacao), valorCentavos: diferenca, motivo: b.justificativa, categoria: d.lancamento.categoria });
+  } },
   "/obrigacoes/pagar": { campos: ["obrigacao", "conta", "dataEfetiva", "valor"], fazer: (n, c, b) => n.pagarContaAPagar(c, { obrigacaoId: id(b.obrigacao), contaId: id(b.conta), dataEfetiva: b.dataEfetiva, valorCentavos: centavos(b.valor) }) },
   "/saldos/registrar": { campos: ["conta", "data", "referencia", "valor", "observacao"], fazer: (n, c, b) => n.registrarSaldoDeConta(c, { contaId: id(b.conta), data: b.data, referencia: b.referencia, valorCentavos: centavos(b.valor), ...(b.observacao ? { observacao: b.observacao } : {}) }) },
   "/reclassificar": { campos: ["lancamento", "categoria", "justificativa", "versaoEsperada", "documento"], fazer: (n, c, b) => n.reclassificarLancamento(c, {

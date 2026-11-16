@@ -112,6 +112,11 @@ export function detalheAPagar(d, ctx = {}) {
 </dl>
 ${d.lancamento ? `<p class="nota">Efeito no resultado: <strong>um</strong> lançamento de ${esc(moeda(d.lancamento.valorCentavos))} em ${esc(competencia(d.lancamento.competencia))}${d.lancamento.natureza === "PATRIMONIAL" ? " (patrimonial: fora da DRE)" : ""}. Pagar ou antecipar parcelas não cria outra despesa.</p>` : ""}
 ${d.parcelas.length > 1 ? `<h3>Parcelas</h3><ul class="lista-simples">${d.parcelas.map((p) => `<li${p.id === t.id ? ' class="atual"' : ""}><span>${p.parcela.numero}/${p.parcela.total} · vence ${esc(dataBR(p.vencimento))}</span><span>${valor(p.saldoCentavos)} ${selo(p.situacao)}</span></li>`).join("")}</ul>` : ""}
+${(ctx?.permissoes ?? []).includes("financeiro_v2.corrigir") && t.situacao !== "CANCELADO" && d.lancamento ? formAcao({ url: "/api/fv2/acoes/obrigacoes/corrigir-valor", titulo: "Corrigir valor", rotulo: "Corrigir valor", recarregar: `pagar:${t.id}`,
+    aviso: "Confirmo a correção: o valor antigo e o novo ficam no histórico, com o motivo.",
+    campos: `<input type="hidden" name="obrigacao" value="${esc(t.id)}">
+<label>Valor correto (R$) <input name="novoValor" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" value="${esc(moeda(t.valorOriginalCentavos + (t.ajustesCentavos ?? 0)).replace(/[^0-9.,]/g, ""))}" required></label>
+<label>Motivo (obrigatório) <input name="justificativa" maxlength="500" required></label>` }) : ""}
 <h3>Pagamentos</h3>
 ${t.pagamentos.length ? `<ul class="lista-simples">${t.pagamentos.map((g, i) => `<li><span>${esc(dataBR(g.data))} · ${esc(g.conta ?? "conta não identificada")}${g.titulosNaMesmaMovimentacao > 1 ? ` · saída agrupada com ${g.titulosNaMesmaMovimentacao - 1} outra(s) conta(s)` : ""}${d.vinculoExtrato?.obrigacao?.pagamentos?.[i]?.viaExtrato ? ' · <span class="selo selo--info">vinculado do extrato</span>' : ""}</span><span>${valor(g.valorCentavos)}</span></li>`).join("")}</ul>` : nenhum("Nenhum pagamento vinculado.")}
 <h3>Documentos</h3>${documentos(t.documentos)}
