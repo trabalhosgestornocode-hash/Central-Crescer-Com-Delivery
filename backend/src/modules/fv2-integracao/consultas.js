@@ -146,7 +146,16 @@ export const CONSULTAS = Object.freeze({
   "/documentos": (n, c, p) => n.consultarDocumentos(c, filtro(p, ["competencia", "situacao", ...PAGINA], PAGINA)),
   "/documento": (n, c, p) => n.detalharDocumento(c, { id: id(p) }),
   "/reclassificacao": (n, c, p) => n.consultarReclassificacao(c, p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : { lancamentoId: id(p), ...(p.categoria ? { categoria: String(p.categoria) } : {}) }),
-  "/vinculo-extrato": (n, c, p) => n.previaDoVinculoDoExtrato(c, { obrigacaoId: uuidOu(p.obrigacao), ...(p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : {}) }),
+  "/vinculo-extrato": async (n, c, p) => {
+    const r = await n.previaDoVinculoDoExtrato(c, { obrigacaoId: uuidOu(p.obrigacao), ...(p.movimentacao ? { movimentacaoId: uuidOu(p.movimentacao) } : {}) });
+    if (!r?.escolhida) return r;
+    // Documentos que podem comprovar a baixa: o extrato de onde a saída veio vem primeiro (a tela não os listava e a baixa ficava sem como confirmar).
+    let docs = [];
+    try { docs = (await n.consultarDocumentos(c, { situacao: "VIGENTE", tamanho: 100 })).itens ?? []; } catch { docs = []; }
+    const da = new Set(r.escolhida.evidencia?.documentosDaSaida ?? []);
+    const lista = docs.map((d) => ({ id: d.id, tipo: d.tipo, descricao: d.descricao ?? "" })).sort((a, b) => Number(da.has(b.id)) - Number(da.has(a.id)));
+    return { ...r, escolhida: { ...r.escolhida, documentosDisponiveis: lista } };
+  },
 });
 
 /** Pessoas com concessão ATIVA nesta unidade (para escolher responsável/conceder), com o nome da plataforma. */
