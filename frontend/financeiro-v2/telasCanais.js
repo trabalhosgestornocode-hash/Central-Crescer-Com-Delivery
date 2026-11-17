@@ -3,6 +3,7 @@
 // núcleo (nenhum cálculo de dinheiro aqui). Taxa pendente nunca aparece como zero; estimativa nunca aparece como recebido.
 import { dataBR, esc, moeda, percentual } from "./formatar.js";
 import { calendarioCanal } from "./telasCalendarioCanais.js";
+import { conferenciaDoDinheiro, movimentosDoDia } from "./telasMovimentosCaixa.js";
 import { importacoesDoCanal } from "./telasImportacoesCanais.js";
 
 const valor = (c) => `<span class="${c === null || c === undefined ? "valor valor--desconhecido" : c < 0 ? "valor valor--negativo" : "valor"}">${esc(moeda(c))}</span>`;
@@ -216,6 +217,7 @@ export function fechamentoManual(d, ctx = {}) {
     const [r, c] = SITUACAO_DIA[dia.situacao] ?? [dia.situacao, "neutro"];
     return `<section class="card" aria-label="Dia ${esc(dataBR(dia.data))}"><div class="card-topo"><h2>${esc(dataBR(dia.data))}</h2>${selo(r, c)}</div><p class="nota">${esc(dia.observacao)}</p>
 ${dia.fechamentos.map(caixaRegistrado).join("")}
+${movimentosDoDia(dia.movimentosDeCaixa)}${dia.movimentosDeCaixa ? conferenciaDoDinheiro(dia.dinheiroDoDia) : ""}
 ${dia.provisorias?.length ? `<p class="aviso aviso--alerta">${dia.provisorias.length} faturamento(s) manual(is) PROVISÓRIO(S) neste dia: ${dia.provisorias.map((x) => `${esc(x.canal === "ANOTA_AI" ? "Anota Aí" : "Presencial")} · caixa ${esc(x.caixa)} · ${esc(moeda(x.brutoCentavos))}`).join("; ")}. A importação SAIPOS do dia só entra depois da substituição.</p>` : ""}
 ${dia.comparacao.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Fechamento manual × importação em ${esc(dataBR(dia.data))}</caption><thead><tr><th scope="col">Forma</th><th scope="col">Fechamento</th><th scope="col">Vendas registradas</th><th scope="col">Diferença</th><th scope="col">Situação</th></tr></thead><tbody>
 ${dia.comparacao.map((l) => { const [rr, cc] = SITUACAO_LINHA[l.situacao] ?? [l.situacao, "neutro"]; return `<tr>${td("Forma", `${esc(ROTULO_LINHA[l.grupo] ?? l.grupo)}${l.sub ? ` · ${esc(l.grupo === "PIX" ? OPERADORAS[l.sub] ?? l.sub : BANDEIRAS[l.sub] ?? l.sub)}` : ""}`, "esquerda")}${td("Fechamento", l.manualCentavos === null ? "—" : valor(l.manualCentavos))}${td("Vendas registradas", l.importadoCentavos === null ? "—" : valor(l.importadoCentavos))}${td("Diferença", l.diferencaCentavos === null ? "—" : valor(l.diferencaCentavos))}${td("Situação", selo(rr, cc))}</tr>`; }).join("")}

@@ -20,7 +20,7 @@ const td = (rotulo, conteudo, classe = "") => `<td data-rotulo="${esc(rotulo)}"$
 function formatosDoCanal(d) {
   return `<h3>O que esta página importa</h3><ul class="formatos-canal">${d.formatos.map((f) => `<li class="formato formato--${f.disponivel ? "ok" : "off"}">
 <div class="formato-topo"><strong>${esc(f.nome)}</strong>${f.disponivel ? selo("Disponível", "ok") : selo("Indisponível", "neutro")}${f.principal ? selo("Principal", "info") : ""}${f.aceitaArquivo ? (f.homologado ? selo(`Leitor homologado (${f.extensoesHomologadas.join(", ").toUpperCase()})`, "ok") : selo("Leitor não homologado", "alerta")) : ""}</div>
-<p class="nota">${esc(f.disponivel ? f.descricao : f.motivo)}</p></li>`).join("")}</ul>`;
+<p class="nota">${esc(f.disponivel ? f.descricao : f.motivo)}</p>${f.dica ? `<p class="nota imp-dica">${esc(f.dica)}</p>` : ""}</li>`).join("")}</ul>`;
 }
 
 // -------------------------------------------------------------------------------------------------- envio de arquivo

@@ -31,6 +31,7 @@ const RELATORIOS_DA_PLATAFORMA = Object.freeze([
   { tipoRelatorio: "SAIPOS_VENDAS", nome: "SAIPOS — Vendas por período (XLSX, por pedido: Presencial e Anota Aí)" },
   { tipoRelatorio: "SAIPOS_FORMAS_PAGAMENTO", nome: "SAIPOS — Formas de pagamento (XLSX)" },
   { tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "SAIPOS — Faturamento por dia (PDF)" },
+  { tipoRelatorio: "SAIPOS_MOVIMENTOS_CAIXA", nome: "SAIPOS — Movimentações de Frente de Caixa (XLSX do Financeiro)" },
 ]);
 
 /** Só para exibir: acrescenta o NOME do fornecedor às contas a pagar da composição (a apuração em si não muda). */
@@ -133,6 +134,8 @@ export const CONSULTAS = Object.freeze({
   "/canal-plataforma": (n, c, p) => n.consultarCanalPlataforma(c, { canal: p.canal, competencia: p.competencia }),
   // Fase 10 (doc 47): calendário de controle de faturamento — UMA consulta mensal consolidada por canal.
   "/calendario-faturamento": (n, c, p) => n.consultarCalendarioDeFaturamento(c, { canal: p.canal, mes: p.mes }),
+  // Sangrias, reforços e transferências em dinheiro importados da SAIPOS (nunca faturamento): totais por dia e a lista que os compõe.
+  "/movimentos-caixa": (n, c, p) => n.consultarMovimentosDeCaixa(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim }),
   // Fase 11 (doc 48): importações por canal (formatos, estado de cada um e histórico) e a PRÉVIA do demonstrativo oficial do iFood.
   "/importacoes-canal": (n, c, p) => n.consultarImportacoesDoCanal(c, { canal: p.canal }),
   "/previa-demonstrativo-ifood": (n, c, p) => n.previaDoDemonstrativoIfood(c, {

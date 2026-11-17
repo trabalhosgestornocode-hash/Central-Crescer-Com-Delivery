@@ -28,7 +28,7 @@ import {
 const NOME_DO_RELATORIO = Object.freeze({
   SAIPOS_VENDAS: "Vendas por pedido do SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "Faturamento diário do SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento do SAIPOS",
   SAIPOS_VENDAS_DIARIAS: "Vendas diárias do SAIPOS", SAIPOS_VENDAS_POR_CANAL: "Vendas por canal do SAIPOS", STONE_VENDAS: "Vendas da Stone", STONE_RECEBIMENTOS: "Recebimentos da Stone",
-  UNICRED_EXTRATO: "Extrato da Unicred", FOODY_ENTREGAS: "Entregas do Foody", IFOOD_APURACAO: "Apuração do iFood",
+  UNICRED_EXTRATO: "Extrato da Unicred", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa do SAIPOS", FOODY_ENTREGAS: "Entregas do Foody", IFOOD_APURACAO: "Apuração do iFood",
 });
 export const nomeDoRelatorio = (t) => NOME_DO_RELATORIO[t] ?? FONTES_DA_COMPETENCIA.find((f) => f.tipoRelatorio === t)?.nome ?? "Relatório";
 const NATUREZA_DA_OPERACAO = Object.freeze({ VENDA: "Receita de venda", VENDA_AGREGADA: "Receita agregada do dia", PAGAMENTO_STONE: "Recebível e taxas", OBRIGACAO_ENTREGADOR: "Despesa e obrigação", MOVIMENTACAO_BANCARIA: "Movimentação de conta" });
@@ -204,7 +204,7 @@ export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conf
           registrosPorTipo: (await tx.agregar(cx, TIPO.REGISTRO_FONTE, { onde: { importacaoId: id }, agruparPor: "tipoRegistro" })).map((x) => ({ tipo: x.grupo, quantidade: x.quantidade })),
           propostasGeradas: Object.fromEntries((await tx.agregar(cx, TIPO.PROPOSTA, { onde: { importacaoId: id }, agruparPor: "estado" })).map((x) => [x.grupo, x.quantidade])),
           limitacoes: [compatibilidadeDe(imp).texto, "Importar não confirma, não concilia e não homologa: os registros entram não conferidos e sem efeito financeiro."],
-          acoes: { confirmar: imp.estado === ESTADO_IMPORTACAO.PRONTO_PARA_IMPORTAR, exigeAceiteDePendencias: (pv?.totalDivergencias ?? 0) > 0, gerarPropostas: [ESTADO_IMPORTACAO.IMPORTADO, ESTADO_IMPORTACAO.IMPORTADO_COM_PENDENCIAS].includes(imp.estado), permissaoExigida: ACAO.IMPORTAR },
+          acoes: { confirmar: imp.estado === ESTADO_IMPORTACAO.PRONTO_PARA_IMPORTAR, exigeAceiteDePendencias: (pv?.totalDivergencias ?? 0) > 0, gerarPropostas: [ESTADO_IMPORTACAO.IMPORTADO, ESTADO_IMPORTACAO.IMPORTADO_COM_PENDENCIAS].includes(imp.estado) && imp.tipoRelatorio !== "SAIPOS_MOVIMENTOS_CAIXA", permissaoExigida: ACAO.IMPORTAR },
           historico: (await tx.listarHistorico(cx, { onde: { registroTipo: TIPO.IMPORTACAO, registroId: id } })).map((h) => ({ evento: h.evento, em: h.em, estado: h.depois?.estado ?? null, justificativa: h.justificativa ?? null })),
         };
       });

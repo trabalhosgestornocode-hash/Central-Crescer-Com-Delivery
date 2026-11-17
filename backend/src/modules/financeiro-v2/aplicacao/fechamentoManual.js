@@ -8,6 +8,7 @@ import { exigirTexto, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { operadoraNaData } from "../dominio/operadoras.js";
 import { operacoesDeVendas } from "./vendas.js";
 import { validarFaturamentoManual } from "../dominio/fechamentoManual.js";
+import { dinheiroDoDia, movimentosDoPeriodo, resumirMovimentosDoDia } from "./movimentosDeCaixa.js";
 
 /** Venda de faturamento manual provisório: origem MANUAL com este prefixo no identificador. */
 export const PREFIXO_PROVISORIO = "faturamento-manual:";
@@ -24,12 +25,20 @@ export async function diasDeFechamento(tx, cx, inicio, fim) {
   const pagamentos = (await tx.listar(cx, TIPO.PAGAMENTO_VENDA)).filter((p) => ids.has(p.vendaId) && p.situacao === "VALIDO");
   const porVenda = new Map();
   for (const p of pagamentos) { if (!porVenda.has(p.vendaId)) porVenda.set(p.vendaId, []); porVenda.get(p.vendaId).push(p); }
-  const datas = [...new Set([...fechamentos.map((f) => f.data), ...vendas.map((v) => v.dataVenda)])].sort();
+  // Sangrias/reforços/transferências importados da SAIPOS: só LEITURA para conferir o dinheiro do dia (nunca viram faturamento nem somam sozinhos ao fechamento).
+  const movimentos = await movimentosDoPeriodo(tx, cx, inicio, fim);
+  const datas = [...new Set([...fechamentos.map((f) => f.data), ...vendas.map((v) => v.dataVenda), ...movimentos.map((r) => r.dataReferencia)])].sort();
   return datas.map((data) => {
     const doDia = fechamentos.filter((f) => f.data === data).sort((a, x) => a.caixa.localeCompare(x.caixa));
     const vendasDoDia = vendas.filter((v) => v.dataVenda === data).map((v) => ({ ...v, pagamentos: porVenda.get(v.id) ?? [] }));
     const provisorias = vendasDoDia.filter(ehProvisoria).map((v) => ({ id: v.id, canal: v.canal, brutoCentavos: v.brutoCentavos, descricao: v.descricao, caixa: String(v.fonte.idExterno).split(":").at(-1) }));
-    return { data, fechamentos: doDia, provisorias, ...compararDia({ fechamentos: doDia, vendas: vendasDoDia }) };
+    const movDoDia = movimentos.filter((r) => r.dataReferencia === data);
+    const vendasEmDinheiroCentavos = vendasDoDia.length ? vendasDoDia.reduce((s, v) => s + v.pagamentos.filter((p) => p.forma === "DINHEIRO").reduce((t, p) => t + p.valorCentavos - (p.estornadoCentavos ?? 0), 0), 0) : null;
+    const movimentosDeCaixa = movDoDia.length ? resumirMovimentosDoDia({ data, movimentos: movDoDia, fechamentos: doDia, vendasEmDinheiroCentavos }) : null;
+    return {
+      data, fechamentos: doDia, provisorias, ...compararDia({ fechamentos: doDia, vendas: vendasDoDia }),
+      movimentosDeCaixa, dinheiroDoDia: movDoDia.length || doDia.length ? dinheiroDoDia({ resumo: movimentosDeCaixa, fechamentos: doDia, vendasEmDinheiroCentavos }) : null,
+    };
   });
 }
 

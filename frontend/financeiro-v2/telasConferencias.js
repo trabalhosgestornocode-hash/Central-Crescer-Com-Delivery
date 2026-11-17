@@ -8,6 +8,7 @@ import {
   SITUACOES_SECAO, competencia, dataBR, esc, moeda,
 } from "./formatar.js";
 import { documentos, paginacao } from "./telasTesouraria.js";
+import { previaDeMovimentos } from "./telasMovimentosCaixa.js";
 
 export const SECOES = Object.freeze([["resumo", "Resumo"], ["pendencias", "Pendências"], ["documentos", "Documentos e importações"], ["propostas", "Propostas para revisão"], ["conciliacoes", "Conciliações"], ["fechamento", "Fechamento mensal"]]);
 const ROTA = "conferencias";
@@ -345,7 +346,7 @@ export function detalheDocumento(d, ctx = {}) {
   <dt>Recebido em</dt><dd>${esc(dataBR(doc.recebidoEm))} · ${esc(doc.responsavel)}</dd>
   <dt>Versão</dt><dd>${doc.versao}${doc.substituiOutra ? " (substitui a anterior)" : ""}${doc.substituidaPorOutra ? " (substituída por outra versão)" : ""}</dd>
 </dl>
-${previaPorCanal(pv?.controles)}${conflitosDeGranularidade(d.conflitosDeGranularidade)}
+${previaPorCanal(pv?.controles)}${previaDeMovimentos(pv?.controles)}${conflitosDeGranularidade(d.conflitosDeGranularidade)}
 <h3>Prévia do motor de importação</h3>
 ${pv ? `<ul class="lista-simples">
   <li><span>Registros válidos (novos)</span><strong>${pv.validos ?? "—"}</strong></li>

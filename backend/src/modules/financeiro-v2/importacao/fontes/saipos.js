@@ -2,7 +2,7 @@
 // Regras: forma de pagamento NÃO é canal; o total do relatório de formas de pagamento NÃO é faturamento bruto;
 // diferença entre relatórios é DETECTADA (aplicacao/importacoes.js → compararRelatoriosSaipos), nunca ajustada.
 // Os valores financeiros do iFood são reconciliados com a apuração oficial do iFood (fontes/ifood.js), não com o SAIPOS.
-import { somar, subtrair } from "../../dominio/dinheiro.js";
+import { formatarBRL, somar, subtrair } from "../../dominio/dinheiro.js";
 import { centavos, rotulo } from "../leitor.js";
 import { DIVERGENCIA, conferirTotalDeclarado, diferenca } from "../motor.js";
 import { classificarPorPalavras, col, definirFonte, formaDePagamento } from "./comum.js";
@@ -436,4 +436,128 @@ export const SAIPOS_FATURAMENTO_POR_DIA = definirFonte({
   },
 });
 
-export const FONTES_SAIPOS = Object.freeze([SAIPOS_VENDAS, SAIPOS_VENDAS_POR_CANAL, SAIPOS_DESEMPENHO_POR_ATENDENTE, SAIPOS_FORMAS_PAGAMENTO, SAIPOS_VENDAS_DIARIAS, SAIPOS_FATURAMENTO_POR_DIA]);
+// ------------------------------------------------------------------------------------------ movimentações de Frente de Caixa
+/**
+ * Natureza de uma movimentação de dinheiro em espécie das frentes de caixa. Só é reconhecida com TODOS os sinais do layout real
+ * (descrição + conta Cofre + categoria Frente de Caixa + sinal do valor); qualquer dúvida vira DESCONHECIDA (pendência), nunca palpite.
+ * Convenção do export (conta Cofre): valor POSITIVO = dinheiro que ENTRA no cofre (retirada do caixa); NEGATIVO = SAI do cofre (reforço).
+ * Nenhuma dessas movimentações é receita, despesa ou faturamento: são transferências entre o caixa e o cofre.
+ */
+export const NATUREZA_MOVIMENTO_CAIXA = Object.freeze({ SANGRIA: "SANGRIA", REFORCO: "REFORCO", TRANSFERENCIA: "TRANSFERENCIA", DESCONHECIDA: "DESCONHECIDA" });
+
+export function classificarMovimentoDeCaixa({ descricao, conta, categoria, valorCentavos }) {
+  const d = rotulo(descricao);
+  const noCofre = /(^| )cofre( |$)/.test(rotulo(conta));
+  const frenteDeCaixa = rotulo(categoria).includes("frente de caixa");
+  const N = NATUREZA_MOVIMENTO_CAIXA;
+  const desconhecida = (motivo, anomalia = null) => ({ natureza: N.DESCONHECIDA, motivo, anomalia });
+  if (!valorCentavos) return desconhecida("Valor zero.", "VALOR_ZERO");
+  if (/^retirada de frente de caixa( |$)/.test(d)) {
+    if (!noCofre || !frenteDeCaixa) return desconhecida("Descrição de retirada, mas a conta não é o Cofre ou a categoria não é Frente de Caixa.", "CONTA_OU_CATEGORIA_INESPERADA");
+    if (valorCentavos < 0) return desconhecida("Retirada com valor negativo: o sinal contradiz a natureza.", "SINAL_INESPERADO");
+    return { natureza: N.SANGRIA, motivo: "Retirada de Frente de Caixa para o Cofre.", anomalia: null };
+  }
+  if (/^reforco de frente de caixa( |$)/.test(d)) {
+    if (!noCofre || !frenteDeCaixa) return desconhecida("Descrição de reforço, mas a conta não é o Cofre ou a categoria não é Frente de Caixa.", "CONTA_OU_CATEGORIA_INESPERADA");
+    if (valorCentavos > 0) return desconhecida("Reforço com valor positivo: o sinal contradiz a natureza.", "SINAL_INESPERADO");
+    return { natureza: N.REFORCO, motivo: "Reforço de Frente de Caixa, saído do Cofre.", anomalia: null };
+  }
+  if (/^transferencia( |$)/.test(d) && frenteDeCaixa) return { natureza: N.TRANSFERENCIA, motivo: "Transferência interna (origem e destino a confirmar: o export não os informa).", anomalia: null };
+  return desconhecida("Descrição não reconhecida como retirada, reforço ou transferência.", "DESCRICAO_NAO_RECONHECIDA");
+}
+
+export const SAIPOS_MOVIMENTOS_CAIXA = definirFonte({
+  fonte: "SAIPOS",
+  tipoRelatorio: "SAIPOS_MOVIMENTOS_CAIXA",
+  tipoDocumento: "OUTRO",
+  descricao: "relatório Financeiro do SAIPOS (movimentações de Frente de Caixa)",
+  // Layout REAL conferido com um export "Financeiro" exportado de uma loja (nov/2026). CSV segue sintético.
+  formatosHomologados: ["xlsx"],
+  colunas: {
+    vencimento: col(["Vencimento"]),
+    emissao: col(["Emissão", "Emissao"], false),
+    pagamento: col(["Pagamento", "Data do pagamento"]),
+    conta: col(["Conta"]),
+    metodo: col(["Método de Pagamento", "Metodo de pagamento"], false),
+    categoria: col(["Categoria"]),
+    valor: col(["Valor"]),
+    pago: col(["Pago", "Situação", "Situacao"]),
+    fornecedor: col(["Fornecedor"], false),
+    descricao: col(["Descrição", "Descricao"]),
+  },
+  converter(u) {
+    const valor = u.valor("valor");
+    const vencimento = u.data("vencimento");
+    const pagamento = u.data("pagamento", { opcional: true });
+    const emissao = u.data("emissao", { opcional: true });
+    const descricao = u.texto("descricao");
+    const conta = u.texto("conta");
+    const categoria = u.texto("categoria");
+    if (u.erros.length) return null;
+    const pagoTexto = rotulo(u.bruto("pago"));
+    const pago = ["sim", "pago", "s"].includes(pagoTexto) ? true : ["nao", "n", "pendente", "em aberto"].includes(pagoTexto) ? false : null;
+    const classe = classificarMovimentoDeCaixa({ descricao, conta, categoria, valorCentavos: valor });
+    const data = pagamento ?? vencimento;
+    return {
+      tipoRegistro: "MOVIMENTO_CAIXA", idExterno: null, data, valorCentavos: valor,
+      dados: {
+        natureza: classe.natureza, naturezaMotivo: classe.motivo, anomalia: classe.anomalia ?? (pago === null ? "PAGO_NAO_INTERPRETADO" : null),
+        valorAbsolutoCentavos: Math.abs(valor), descricaoOriginal: descricao, contaOriginal: conta, categoriaOriginal: categoria,
+        metodoPagamento: u.bruto("metodo") || null, fornecedor: u.bruto("fornecedor") || null,
+        vencimento, emissao, pagamento, pago,
+        // Só entra nos totais quando foi efetivamente pago E o sentido é conhecido. Transferência NÃO entra: o export não diz se o dinheiro
+        // sai ou entra no caixa, e abater do dinheiro esperado sem saber falsearia a conferência — fica "a confirmar", visível e fora da conta.
+        considerar: pago === true && ![NATUREZA_MOVIMENTO_CAIXA.DESCONHECIDA, NATUREZA_MOVIMENTO_CAIXA.TRANSFERENCIA].includes(classe.natureza),
+        // O export não traz caixa, operador nem horário: o vínculo com a frente de caixa fica PENDENTE (nunca inventado).
+        caixa: null, vinculoComCaixa: "PENDENTE",
+      },
+      identidade: { tipoRegistro: "MOVIMENTO_CAIXA", chave: `${rotulo(descricao)}|${rotulo(conta)}|${rotulo(categoria)}`, data, valorCentavos: valor },
+    };
+  },
+  /**
+   * Contradição com o que JÁ foi importado (provável arquivo corrigido): no período deste arquivo, para cada tipo de movimento presente nele,
+   * há linhas ativas de importações anteriores que ele NÃO traz? Somar duplicaria o dinheiro. O sistema NÃO decide sozinho: mostra a divergência e,
+   * SÓ com aceite explícito + justificativa na confirmação, marca essas linhas anteriores como SUBSTITUÍDAS (preservadas no histórico, fora dos
+   * totais). Linhas iguais ficam como "já importadas". Devolve { divergencias, ausentes } (ausentes = registros anteriores que seriam substituídos).
+   */
+  conflitosComImportadas({ registros, anteriores, periodo }) {
+    const chaves = new Set(registros.map((r) => r.chave));
+    const naturezas = new Set(registros.map((r) => r.dados.natureza));
+    const ausentes = anteriores.filter((a) => a.dataReferencia >= periodo.inicio && a.dataReferencia <= periodo.fim && naturezas.has(a.dados?.natureza) && !chaves.has(a.chaveIdempotencia));
+    const porDia = new Map();
+    for (const a of ausentes) porDia.set(a.dataReferencia, [...(porDia.get(a.dataReferencia) ?? []), a]);
+    const nome = { SANGRIA: "retirada(s)", REFORCO: "reforço(s)", TRANSFERENCIA: "transferência(s)", DESCONHECIDA: "movimentação(ões) sem classificação" };
+    const divergencias = [...porDia].sort(([x], [y]) => x.localeCompare(y)).map(([data, lista]) => ({
+      codigo: DIVERGENCIA.CONFLITO_COM_IMPORTADO, linha: null, quantidade: lista.length,
+      mensagem: `Dia ${data.slice(8, 10)}/${data.slice(5, 7)}: já há ${lista.length} ${nome[lista[0].dados.natureza] ?? "movimentação(ões)"} importada(s) (${lista.map((a) => formatarBRL(a.dados.valorAbsolutoCentavos)).join(", ")}) que este arquivo NÃO traz. Se este arquivo CORRIGE a importação anterior, confirme: essas linhas anteriores ficam SUBSTITUÍDAS (preservadas no histórico, fora dos totais). Se é só outro recorte, NÃO confirme: tire este dia do período.`,
+    }));
+    return { divergencias, ausentes };
+  },
+  fechar(registros) {
+    const divergencias = [];
+    const N = NATUREZA_MOVIMENTO_CAIXA;
+    const soma = (natureza) => registros.filter((r) => r.dados.natureza === natureza && r.dados.considerar).reduce((s, r) => somar(s, r.dados.valorAbsolutoCentavos), 0);
+    const qtd = (natureza) => registros.filter((r) => r.dados.natureza === natureza && r.dados.considerar).length;
+    for (const r of registros) {
+      const d = r.dados;
+      if (d.natureza === N.DESCONHECIDA) divergencias.push({ codigo: DIVERGENCIA.VALOR_A_CLASSIFICAR, mensagem: `Movimentação "${d.descricaoOriginal}" não classificada (${d.naturezaMotivo}) — fica pendente, fora dos totais.`, linha: r.linha, valorCentavos: r.valorCentavos });
+      else if (d.natureza === N.TRANSFERENCIA) divergencias.push({ codigo: DIVERGENCIA.VALOR_A_CLASSIFICAR, mensagem: `Transferência "${d.descricaoOriginal}": origem e destino não constam no relatório — fica a confirmar, fora do dinheiro esperado.`, linha: r.linha, valorCentavos: r.valorCentavos });
+      if (d.pago === false) divergencias.push({ codigo: DIVERGENCIA.ANOMALIA_DE_PLANILHA, mensagem: `Movimentação "${d.descricaoOriginal}" ainda não paga no relatório: fica fora dos totais.`, linha: r.linha, valorCentavos: r.valorCentavos });
+      else if (d.pago === null) divergencias.push({ codigo: DIVERGENCIA.ANOMALIA_DE_PLANILHA, mensagem: `A coluna "Pago" não foi interpretada: a linha "${d.descricaoOriginal}" fica fora dos totais.`, linha: r.linha, valorCentavos: r.valorCentavos });
+    }
+    const dias = new Set(registros.filter((r) => r.dados.considerar).map((r) => r.data));
+    return {
+      controles: {
+        sangrias: qtd(N.SANGRIA), sangriasCentavos: soma(N.SANGRIA), reforcos: qtd(N.REFORCO), reforcosCentavos: soma(N.REFORCO),
+        transferenciasAConfirmar: registros.filter((r) => r.dados.natureza === N.TRANSFERENCIA && r.dados.pago === true).length,
+        desconhecidas: registros.filter((r) => r.dados.natureza === N.DESCONHECIDA).length,
+        naoPagas: registros.filter((r) => r.dados.pago === false).length, diasComMovimento: dias.size, semCaixaIdentificado: registros.length,
+        // Conferência das classificações (a prévia mostra linha a linha; até 100 linhas).
+        movimentos: registros.slice(0, 100).map((r) => ({ linha: r.linha, data: r.data, natureza: r.dados.natureza, valorCentavos: r.dados.valorAbsolutoCentavos, descricao: r.dados.descricaoOriginal, considerar: r.dados.considerar, pago: r.dados.pago, motivo: r.dados.naturezaMotivo })),
+      },
+      divergencias,
+    };
+  },
+});
+
+export const FONTES_SAIPOS = Object.freeze([SAIPOS_VENDAS, SAIPOS_VENDAS_POR_CANAL, SAIPOS_DESEMPENHO_POR_ATENDENTE, SAIPOS_FORMAS_PAGAMENTO, SAIPOS_VENDAS_DIARIAS, SAIPOS_FATURAMENTO_POR_DIA, SAIPOS_MOVIMENTOS_CAIXA]);

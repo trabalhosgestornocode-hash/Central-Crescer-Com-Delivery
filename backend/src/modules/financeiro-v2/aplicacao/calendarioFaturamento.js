@@ -58,7 +58,7 @@ const marcacaoDoDia = (semOp, data) => {
   return fixa ? { origem: "DIA_DA_SEMANA", justificativa: fixa.justificativa ?? null, em: fixa.em ?? null } : null;
 };
 
-const vazio = () => ({ estados: new Set(), registro: null, fechamento: null, importacoes: [], pendencias: [], divergencias: [], observacoes: [], cobertura: null, temEvidenciaDeSemMovimento: false });
+const vazio = () => ({ estados: new Set(), registro: null, fechamento: null, movimentosDeCaixa: null, importacoes: [], pendencias: [], divergencias: [], observacoes: [], cobertura: null, temEvidenciaDeSemMovimento: false });
 
 // ------------------------------------------------------------------------------------------------------ SAIPOS (Presencial e Anota Aí)
 async function fonteSaipos(tx, cx, { canal, inicio, fim, hoje }) {
@@ -83,8 +83,10 @@ async function fonteSaipos(tx, cx, { canal, inicio, fim, hoje }) {
     const total = its.length ? resumoPorModalidade(its.map((x) => ({ ...x, modalidade: "TOTAL", bandeira: "TOTAL" })))[0] : null;
     const provisorias = lista.filter(ehProvisoria);
     const daSaipos = lista.filter((v) => v.fonte?.sistema === "SAIPOS");
-    const cobrem = importacoes.filter((i) => i.periodoInicio <= data && data <= i.periodoFim);
-    dia.importacoes = cobrem.map((i) => ({ id: i.id, tipoRelatorio: i.tipoRelatorio, periodoInicio: i.periodoInicio, periodoFim: i.periodoFim, estado: i.estado }));
+    // Só RELATÓRIOS DE VENDAS são evidência de "dia sem venda": o relatório de movimentações de caixa (sangrias) cobre o dia sem dizer nada sobre vendas.
+    const cobremTodas = importacoes.filter((i) => i.periodoInicio <= data && data <= i.periodoFim);
+    const cobrem = cobremTodas.filter((i) => i.tipoRelatorio !== "SAIPOS_MOVIMENTOS_CAIXA");
+    dia.importacoes = cobremTodas.map((i) => ({ id: i.id, tipoRelatorio: i.tipoRelatorio, periodoInicio: i.periodoInicio, periodoFim: i.periodoFim, estado: i.estado }));
 
     if (lista.length) {
       const calculado = total && total.brutoCalculadoCentavos > 0;
@@ -103,6 +105,15 @@ async function fonteSaipos(tx, cx, { canal, inicio, fim, hoje }) {
     const linhas = (fd?.comparacao ?? []).filter((l) => (canal === "ANOTA_AI" ? l.grupo === "ANOTA_AI" : l.grupo !== "ANOTA_AI"));
     if (caixas.length) {
       dia.fechamento = { caixas: caixas.length, situacao: fd.situacao, linhasDivergentes: linhas.filter((l) => l.situacao === "DIVERGENTE").length, linhasSoDeUmLado: linhas.filter((l) => l.situacao === "SO_MANUAL" || l.situacao === "SO_IMPORTADO").length };
+    }
+
+    // Sangrias, reforços e transferências importados (só no Presencial: são do caixa físico). Informação do dia; NÃO é faturamento.
+    // Duplicidade possível, retirada acima do dinheiro do dia, divergência com o fechamento e movimento sem classificação entram como pendência/divergência.
+    const mov = canal === "BALCAO" ? fd?.movimentosDeCaixa ?? null : null;
+    if (mov) {
+      dia.movimentosDeCaixa = mov;
+      for (const a of mov.alertas) dia.pendencias.push({ codigo: a.codigo, quantidade: 1, mensagem: a.mensagem });
+      for (const d of mov.divergencias) dia.divergencias.push({ codigo: d.codigo, quantidade: d.quantidade ?? 1, mensagem: d.mensagem });
     }
 
     // Pendências (o que ainda precisa de alguém).
