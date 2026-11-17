@@ -168,7 +168,8 @@ test("payload REAL do backend renderiza as três seções, com os estados certos
   const { nucleo: n } = montar({ relogio: () => new Date("2026-11-25T15:00:00.000Z") });
   await ESCRITAS["/configuracoes/unidade"].fazer(n, c, { nomeExibicao: "Unidade sintética", justificativa: "Teste." });
   const s = imp.importacoesDoCanal(await CONSULTAS["/importacoes-canal"](n, c, { canal: "SAIPOS" }));
-  assert.equal((s.match(/formato--ok/g) ?? []).length, 4);
+  assert.equal((s.match(/formato--ok/g) ?? []).length, 5, "os 4 de vendas + as movimentações de Frente de Caixa");
+  assert.match(s, /Movimentações de Frente de Caixa/);
   assert.match(s, /Unidade sintética/);
   const i = imp.importacoesDoCanal(await CONSULTAS["/importacoes-canal"](n, c, { canal: "IFOOD" }));
   assert.equal((i.match(/formato--ok/g) ?? []).length, 1);

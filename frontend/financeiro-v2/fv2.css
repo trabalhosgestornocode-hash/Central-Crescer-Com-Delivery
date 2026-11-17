@@ -730,3 +730,12 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .acao .escolha-diferenca input { width: 18px; height: 18px; min-height: 0; padding: 0; margin: 2px 0 0; accent-color: var(--marca-escura); }
 .escolha-diferenca > span { display: grid; gap: 2px; min-width: 0; }
 .escolha-diferenca .nota { font-size: 13px; color: var(--suave); }
+
+/* Retiradas e reforços de caixa (SAIPOS): bloco do dia no calendário e no fechamento manual */
+.mov-caixa { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--linha); border-left: 4px solid var(--info); border-radius: var(--raio-sm); background: var(--superficie); }
+.mov-caixa h3 { margin: 0 0 4px; font-size: 14px; }
+.mov-caixa .nota { margin: 0 0 8px; }
+.mov-caixa__avisos { color: var(--alerta); }
+.mov-caixa__lista summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 6px 0; }
+.mov-caixa .ficha dd { margin: 0; }
+.imp-dica { margin-top: 2px; font-size: 12.5px; color: var(--suave); }

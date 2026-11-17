@@ -54,7 +54,7 @@ test("importar pela rota sem guarda: prévia → confirmação; expirado pede re
   // O catálogo da plataforma anuncia o envio real, sem guarda, só com os relatórios conferidos com arquivo real.
   const cat = CONSULTAS["/conferencias/catalogo"]();
   assert.equal(cat.envioReal, true);
-  assert.deepEqual(cat.relatorios.map((x) => x.tipoRelatorio).sort(), ["SAIPOS_DESEMPENHO_POR_ATENDENTE", "SAIPOS_FATURAMENTO_POR_DIA", "SAIPOS_FORMAS_PAGAMENTO", "SAIPOS_VENDAS", "STONE_VENDAS", "UNICRED_EXTRATO"]);
+  assert.deepEqual(cat.relatorios.map((x) => x.tipoRelatorio).sort(), ["SAIPOS_DESEMPENHO_POR_ATENDENTE", "SAIPOS_FATURAMENTO_POR_DIA", "SAIPOS_FORMAS_PAGAMENTO", "SAIPOS_MOVIMENTOS_CAIXA", "SAIPOS_VENDAS", "STONE_VENDAS", "UNICRED_EXTRATO"]);
   // Envio de documento avulso e verificação continuam indisponíveis (o cofre documental segue desligado).
   assert.throws(() => ESCRITAS["/documentos/enviar"].fazer(n, c, {}), (e) => e.codigoHttp === 503);
 });

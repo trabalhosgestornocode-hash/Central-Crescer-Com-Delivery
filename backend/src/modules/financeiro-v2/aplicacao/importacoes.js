@@ -60,6 +60,14 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
       bytes, adaptador, periodo: { inicio: imp.periodoInicio, fim: imp.periodoFim },
       estabelecimentosDaUnidade: estabelecimentosDaUnidade?.(cx, adaptador.fonte) ?? null,
     });
+    // Relatórios que sabem detectar contradição com importações anteriores (ex.: movimentações de caixa): divergência que exige aceite explícito;
+    // as linhas anteriores ausentes neste arquivo só são substituídas na CONFIRMAÇÃO aceita, nunca antes (e nunca apagadas: ficam no histórico).
+    let contradicoes = { divergencias: [], ausentes: [] };
+    if (adaptador.conflitosComImportadas && analise.registros.length) {
+      const anteriores = (await tx.listar(cx, TIPO.REGISTRO_FONTE, { onde: { fonte: imp.fonte, tipoRelatorio: imp.tipoRelatorio } }))
+        .filter((r) => r.situacao === SITUACAO_REGISTRO_FONTE.ATIVO && r.importacaoId !== imp.id && r.importacaoId !== imp.substituiImportacaoId);
+      contradicoes = adaptador.conflitosComImportadas({ registros: analise.registros, anteriores, periodo: { inicio: imp.periodoInicio, fim: imp.periodoFim } });
+    }
     const novos = [];
     const jaImportados = [];
     const conflitos = [];
@@ -72,9 +80,10 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
     const divergencias = [
       ...analise.divergencias,
       ...conflitos.map((r) => ({ codigo: DIVERGENCIA.CONFLITO_COM_IMPORTADO, mensagem: `Linha ${r.linha}: esta origem já foi importada com conteúdo diferente (envie como versão corrigida).`, linha: r.linha })),
+      ...contradicoes.divergencias,
     ];
     const impressao = sha256(canonico({
-      importacao: imp.id, documento: imp.documentoId, erros: analise.erros, divergencias,
+      importacao: imp.id, documento: imp.documentoId, erros: analise.erros, divergencias, substituir: contradicoes.ausentes.map((r) => r.id),
       novos: novos.map((r) => [r.chave, r.impressao]), jaImportados: jaImportados.map((r) => r.chave), conflitos: conflitos.map((r) => r.chave),
     }));
     const resumo = {
@@ -84,12 +93,12 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
       controles: analise.controles,
       contagens: {
         linhasLidas: analise.controles.linhasLidas ?? 0, registros: analise.registros.length, novos: novos.length, jaImportados: jaImportados.length,
-        conflitos: conflitos.length, duplicadosNoArquivo: analise.duplicadosNoArquivo.length,
+        conflitos: conflitos.length, duplicadosNoArquivo: analise.duplicadosNoArquivo.length, substituiriam: contradicoes.ausentes.length,
       },
       duplicadosNoArquivo: analise.duplicadosNoArquivo.slice(0, 50),
       amostra: analise.registros.slice(0, 10).map((r) => ({ linha: r.linha, tipoRegistro: r.tipoRegistro, idExterno: r.idExterno, data: r.data, valorCentavos: r.valorCentavos })),
     };
-    return { analise, novos, jaImportados, conflitos, divergencias, erros: analise.erros, impressao, resumo };
+    return { analise, novos, jaImportados, conflitos, divergencias, erros: analise.erros, paraSubstituir: contradicoes.ausentes, impressao, resumo };
   }
 
   async function registrarNegado(ctx, documentoId, erro) {
@@ -208,6 +217,11 @@ export function operacoesDeImportacao(b, { cofre, fontes, estabelecimentosDaUnid
           }
         }
 
+        // Linhas anteriores que este arquivo contradiz (aceite explícito já exigido acima): ficam SUBSTITUÍDAS, preservadas no histórico, fora dos totais.
+        for (const r of previa.paraSubstituir) {
+          await b.alterar(tx, cx, TIPO.REGISTRO_FONTE, r, { situacao: SITUACAO_REGISTRO_FONTE.SUBSTITUIDO, substituidoPorImportacaoId: imp.id, chaveIdempotencia: `substituido:${r.id}` }, EVENTO_HISTORICO.SUBSTITUICAO, c.justificativa);
+          substituidos += 1;
+        }
         for (const r of previa.novos) {
           await b.criar(tx, cx, TIPO.REGISTRO_FONTE, {
             importacaoId: imp.id, documentoId: documento.id, fonte: imp.fonte, tipoRelatorio: imp.tipoRelatorio, tipoRegistro: r.tipoRegistro,

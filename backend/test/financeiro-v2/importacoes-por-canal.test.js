@@ -44,7 +44,7 @@ test("formatos por canal: SAIPOS pronto; iFood só o demonstrativo oficial; 99Fo
   const { canal } = await unidade();
   const s = await canal("SAIPOS");
   assert.equal(s.unidade.nome, "Unidade sintética");
-  assert.deepEqual(s.formatos.map((f) => f.id), ["SAIPOS_VENDAS", "SAIPOS_FORMAS_PAGAMENTO", "SAIPOS_DESEMPENHO_POR_ATENDENTE", "SAIPOS_FATURAMENTO_POR_DIA"]);
+  assert.deepEqual(s.formatos.map((f) => f.id), ["SAIPOS_VENDAS", "SAIPOS_FORMAS_PAGAMENTO", "SAIPOS_DESEMPENHO_POR_ATENDENTE", "SAIPOS_FATURAMENTO_POR_DIA", "SAIPOS_MOVIMENTOS_CAIXA"]);
   assert.ok(s.formatos.every((f) => f.disponivel && f.aceitaArquivo));
   const vendas = s.formatos[0];
   assert.deepEqual([vendas.principal, vendas.homologado, vendas.extensoesHomologadas], [true, true, ["xlsx"]], "o leitor real da Fase 03");

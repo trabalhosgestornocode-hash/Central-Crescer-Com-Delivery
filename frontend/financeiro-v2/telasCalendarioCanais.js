@@ -3,6 +3,7 @@
 // Nenhuma soma, nenhum percentual e nenhuma regra de dinheiro acontecem aqui. Estado nunca depende só de cor: todo estado
 // tem ícone e texto, e o botão de cada dia descreve os estados por extenso para leitor de tela.
 import { competencia as nomeDoMes, dataBR, esc, moeda } from "./formatar.js";
+import { movimentosDoDia } from "./telasMovimentosCaixa.js";
 
 const NOME_DO_CANAL = Object.freeze({ BALCAO: "SAIPOS — Presencial", ANOTA_AI: "SAIPOS — Anota Aí", IFOOD: "iFood", NOVENTA_E_NOVE_FOOD: "99Food" });
 export const SEMANA = Object.freeze(["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]);
@@ -25,7 +26,7 @@ const CONFERENCIA = Object.freeze({
   CONCILIADO: "Conciliado: recebido igual ao esperado", DIVERGENTE: "Divergente: recebido diferente do esperado", PENDENTE: "Pendente: há taxa ou recebimento sem confirmação",
   AGUARDANDO_EXTRATO: "Aguardando extrato: recebimento ainda não confirmado", PARCIAL: "Parcial: só parte foi recebida",
 });
-const RELATORIO = Object.freeze({ SAIPOS_VENDAS: "Vendas por período (por pedido)", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento (por dia)" });
+const RELATORIO = Object.freeze({ SAIPOS_VENDAS: "Vendas por período (por pedido)", SAIPOS_FORMAS_PAGAMENTO: "Formas de pagamento (por dia)", SAIPOS_MOVIMENTOS_CAIXA: "Movimentações de Frente de Caixa" });
 const REPASSE = Object.freeze({ RECEBIDO: "Recebido", PARCIAL: "Recebido em parte", PREVISTO: "Previsto", ATRASADO: "Atrasado", SEM_RECEBIVEL: "Sem recebível" });
 const ORIGEM_DA_MARCACAO = Object.freeze({ DATA: "Marcado para esta data", DIA_DA_SEMANA: "Marcado para este dia da semana" });
 
@@ -172,6 +173,7 @@ export function diaDoCanal(d, cal) {
 <ul class="lista-estados">${estados}</ul>
 <dl class="ficha ficha--compacta"><dt>Canal</dt><dd>${esc(NOME_DO_CANAL[cal.canal])}</dd><dt>Data</dt><dd>${esc(dataPorExtenso(d))}</dd><dt>Origem da informação</dt><dd>${esc(origem)}</dd></dl>
 <h3>Valores</h3>${valores}${fech}${sped}
+${movimentosDoDia(d.movimentosDeCaixa)}
 ${importacoes ? `<h3>Importações que cobrem o dia</h3>${importacoes}` : ""}
 ${pend}${dive}${obs}
 ${marcarSemOperacao(d, cal)}

@@ -27,6 +27,9 @@ export const FORMATOS_POR_CANAL = Object.freeze({
       descricao: "Total do período por canal, sem pedidos. Não convive com pedidos do mesmo canal e período." },
     { id: "SAIPOS_FATURAMENTO_POR_DIA", tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "Faturamento por dia (PDF)", principal: false, arquivo: true, disponivel: true,
       descricao: "Total por dia, sem pedidos nem canal. Receita agregada, quando a metodologia do valor está comprovada." },
+    { id: "SAIPOS_MOVIMENTOS_CAIXA", tipoRelatorio: "SAIPOS_MOVIMENTOS_CAIXA", nome: "Movimentações de Frente de Caixa (XLSX do Financeiro)", principal: false, arquivo: true, disponivel: true,
+      descricao: "Sangrias, reforços e transferências em dinheiro. Não é faturamento: não altera vendas, recebíveis nem a DRE. Alimenta a conferência do fechamento e o calendário.",
+      dica: "Na SAIPOS: Lançamentos financeiros, categoria Frente de Caixa, descrição Retirada (para reforços, descrição Reforço). Exporte em XLSX." },
   ]),
   IFOOD: Object.freeze([
     { id: "IFOOD_DEMONSTRATIVO", tipoRelatorio: null, nome: "Demonstrativo financeiro oficial do iFood", principal: true, arquivo: false, disponivel: true, modo: "DEMONSTRATIVO",
@@ -57,7 +60,7 @@ export function operacoesDeImportacoesPorCanal(b, { fontes }) {
         const formatos = FORMATOS_POR_CANAL[canal].map((f) => {
           const c = f.tipoRelatorio ? compat.get(f.tipoRelatorio) : null;
           return {
-            id: f.id, tipoRelatorio: f.tipoRelatorio, nome: f.nome, principal: f.principal, descricao: f.descricao ?? null, modo: f.modo ?? (f.arquivo ? "ARQUIVO" : null),
+            id: f.id, tipoRelatorio: f.tipoRelatorio, nome: f.nome, principal: f.principal, descricao: f.descricao ?? null, dica: f.dica ?? null, modo: f.modo ?? (f.arquivo ? "ARQUIVO" : null),
             disponivel: f.disponivel, motivo: f.motivo ?? null, aceitaArquivo: f.arquivo === true && f.disponivel === true,
             extensoes: c ? [...c.formatos] : [], homologado: c ? c.formatosHomologados.length > 0 : false, extensoesHomologadas: c ? [...c.formatosHomologados] : [],
           };
