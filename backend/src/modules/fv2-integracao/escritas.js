@@ -112,6 +112,9 @@ export function escritasDaAbertura({ hoje = () => tempo.hojeEm(new Date()), ref 
       ...(b.forma ? {} : { pagamentoParcial: true }), ...(b.descricao ? { descricao: b.descricao } : {}), fonte: fonteObrigatoria(b.chave),
     }) },
     "/vendas/cancelar": { campos: ["venda", "justificativa"], fazer: (n, c, b) => n.cancelarVenda(c, { vendaId: ref(b.venda), justificativa: b.justificativa }) },
+    // 17/11/2026 — correção de ENTRADA EM CONTA de um pagamento de venda (dinheiro de importação errada): estorno total por
+    // correção, do mesmo motor do núcleo. Exige corrigir + cancelar, venda + pagamento + justificativa; recusa entrada conciliada.
+    "/vendas/pagamento/corrigir-entrada": { campos: ["venda", "pagamento", "justificativa"], fazer: (n, c, b) => n.corrigirEntradaDePagamentoDeVenda(c, { vendaId: ref(b.venda), pagamentoId: ref(b.pagamento), justificativa: b.justificativa }) },
     // Plano de contas: implantação só com o NOME do modelo redigitado (confirmação que o servidor confere). Idempotente.
     // Categoria nova: o código é gerado do nome (sem acento, maiúsculas, _); classificação e natureza vêm da categoria superior.
   "/configuracoes/categoria-nova": { campos: ["nome", "paiCodigo"], fazer: (n, c, b) => {

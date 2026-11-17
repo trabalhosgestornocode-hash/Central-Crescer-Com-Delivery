@@ -215,6 +215,13 @@ test("10 — sessão e AÇÕES: escrita só com a chave própria, JSON estrito, 
   assert.ok(lista.corpo.itens.some((i) => i.valorOriginalCentavos === 123456 || i.valorCentavos === 123456 || JSON.stringify(i).includes("Conta sintética pela rota")));
   // pessoa sem concessão não grava
   assert.equal((await get("/escrita/acoes/obrigacoes/registrar", { metodo: "POST", corpo: obrig, s: sessao({ conta: CONTA_SEM, pessoa: PESSOA_SEM }) })).status, 403);
+  // 17/11/2026 — correção de entrada de pagamento: desligada sem a chave de escrita, só os 3 campos, venda inexistente não é encontrada, sem concessão recusa.
+  const corrigirEntrada = { venda: "aaaaaaaa-0000-4000-8000-00000000fff1", pagamento: "aaaaaaaa-0000-4000-8000-00000000fff2", justificativa: "Correção sintética pela rota." };
+  assert.equal((await get("/ligado/acoes/vendas/pagamento/corrigir-entrada", { metodo: "POST", corpo: corrigirEntrada })).corpo.codigo, "ESCRITA_DESLIGADA");
+  assert.equal((await get("/escrita/acoes/vendas/pagamento/corrigir-entrada", { metodo: "POST", corpo: { ...corrigirEntrada, valor: "10,00" } })).corpo.codigo, "CAMPO_DESCONHECIDO");
+  const naoAchou = await get("/escrita/acoes/vendas/pagamento/corrigir-entrada", { metodo: "POST", corpo: corrigirEntrada });
+  assert.equal(naoAchou.corpo.codigo, "FV2_NAO_ENCONTRADO", JSON.stringify(naoAchou.corpo));
+  assert.equal((await get("/escrita/acoes/vendas/pagamento/corrigir-entrada", { metodo: "POST", corpo: corrigirEntrada, s: sessao({ conta: CONTA_SEM, pessoa: PESSOA_SEM }) })).status, 403);
   // sensível sem 2º fator / com fator antigo → recusa; com fator recente passa da barreira (o núcleo decide o resto)
   const conceder = { usuario: PESSOA_SEM, justificativa: "Concessão sintética de teste da rota.", acao_ver: true };
   const semFator = await get("/escrita/acoes/permissoes/conceder", { metodo: "POST", corpo: conceder, t: token(CONTA, { metodo: null }) });
