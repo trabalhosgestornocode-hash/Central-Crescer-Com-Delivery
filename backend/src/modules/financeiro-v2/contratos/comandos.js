@@ -8,6 +8,8 @@ import {
   TIPO_DOCUMENTO, VINCULAVEIS,
 } from "../dominio/catalogos.js";
 import { MODELO_DE_PLANO } from "../dominio/planoDeContas.js";
+import { codigoDeOperadora } from "../dominio/operadoras.js";
+import { bandeiraNormalizada } from "../dominio/taxasContratadas.js";
 import { MOEDA_PADRAO, exigirCentavos, somar, somarLista } from "../dominio/dinheiro.js";
 import { competenciaDe, exigirCompetencia, exigirData } from "../dominio/tempo.js";
 import { exigirInteiro, exigirLista, exigirObjeto, exigirTexto, exigirUmDe, exigirUuid, semCamposDesconhecidos, uuidOpcional } from "../dominio/validacao.js";
@@ -56,7 +58,7 @@ const justificativa = (v) => exigirTexto(v, "justificativa", { max: 500 });
  *    sem `contaId`, a entrada será reconhecida depois, pelo extrato, via conciliação.
  */
 function pagamentoDeVenda(p, campo) {
-  semCamposDesconhecidos(p, ["forma", "processador", "valorCentavos", "contaId", "dataPagamento"], campo);
+  semCamposDesconhecidos(p, ["forma", "processador", "valorCentavos", "contaId", "dataPagamento", "bandeira", "operadora", "descricaoOriginal"], campo);
   const forma = exigirUmDe(p.forma, FORMA_PAGAMENTO, `${campo}.forma`);
   const processador = p.processador === undefined || p.processador === null ? null : exigirUmDe(p.processador, PROCESSADOR, `${campo}.processador`);
   if (forma === FORMA_PAGAMENTO.DINHEIRO && processador) falhar(CODIGO.ENTRADA_INVALIDA, "Pagamento em dinheiro não tem processador.", { campo: `${campo}.processador` });
@@ -66,6 +68,16 @@ function pagamentoDeVenda(p, campo) {
   // Campos opcionais só aparecem quando informados: a impressão de idempotência de quem não os usa continua a mesma.
   if (contaId) saida.contaId = contaId;
   if (p.dataPagamento !== undefined && p.dataPagamento !== null) saida.dataPagamento = dataOpcional(p.dataPagamento, `${campo}.dataPagamento`);
+  // Fase 02: bandeira (cartão/voucher), operadora (código do cadastro) e a descrição ORIGINAL da fonte (auditoria).
+  if (p.bandeira !== undefined && p.bandeira !== null && p.bandeira !== "") {
+    if (![FORMA_PAGAMENTO.DEBITO, FORMA_PAGAMENTO.CREDITO, FORMA_PAGAMENTO.VALE].includes(forma)) falhar(CODIGO.ENTRADA_INVALIDA, "Bandeira só em débito, crédito ou vale.", { campo: `${campo}.bandeira` });
+    saida.bandeira = bandeiraNormalizada(exigirTexto(p.bandeira, `${campo}.bandeira`, { max: 30 }));
+  }
+  if (p.operadora !== undefined && p.operadora !== null && p.operadora !== "") {
+    if (!processador) falhar(CODIGO.ENTRADA_INVALIDA, "Operadora só em pagamento com processador.", { campo: `${campo}.operadora` });
+    saida.operadora = codigoDeOperadora(p.operadora, `${campo}.operadora`);
+  }
+  if (p.descricaoOriginal !== undefined && p.descricaoOriginal !== null && p.descricaoOriginal !== "") saida.descricaoOriginal = exigirTexto(p.descricaoOriginal, `${campo}.descricaoOriginal`, { max: 120 });
   return saida;
 }
 

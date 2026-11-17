@@ -10,6 +10,7 @@ import { classificarPorPalavras, col, definirFonte, formaDePagamento } from "./c
 /** Canal de ORIGEM do pedido. Desconhecido fica nulo (pendência), nunca vira Balcão por padrão. */
 export function canalSaipos(texto) {
   return classificarPorPalavras(texto, [
+    ["NOVENTA_E_NOVE_FOOD", ["99 food", "99food"]],
     ["IFOOD", ["ifood"]],
     ["ANOTA_AI", ["anota ai", "anotaai"]],
     ["BALCAO", ["balcao", "loja", "salao", "mesa", "retirada no balcao"]],
@@ -25,9 +26,11 @@ export const SAIPOS_VENDAS = definirFonte({
   tipoRelatorio: "SAIPOS_VENDAS",
   tipoDocumento: "RELATORIO_VENDAS",
   descricao: "relatório de vendas por pedido do SAIPOS",
+  // Layout REAL "Vendas por período" conferido com novembro/2026 (doc 39 §2, doc 41). CSV segue sintético.
+  formatosHomologados: ["xlsx"],
   colunas: {
     pedido: col(["Pedido", "Nº Pedido", "Numero do pedido", "Código do pedido"]),
-    data: col(["Data", "Data do pedido", "Data/Hora"]),
+    data: col(["Data", "Data do pedido", "Data/Hora", "Data da venda"]),
     canal: col(["Canal", "Canal de venda", "Origem"]),
     itens: col(["Itens", "Valor dos itens", "Subtotal"]),
     desconto: col(["Desconto", "Descontos"]),
@@ -35,7 +38,11 @@ export const SAIPOS_VENDAS = definirFonte({
     taxaEntrega: col(["Taxa de entrega", "Entrega"]),
     total: col(["Total", "Valor total", "Valor da venda"]),
     forma: col(["Forma de pagamento", "Pagamento"]),
-    situacao: col(["Situação", "Status"]),
+    // Layout sintético antigo: "Situação". Layout REAL "Vendas por período" (doc 39): "Está cancelado" (S/N).
+    situacao: col(["Situação", "Status"], false),
+    estaCancelado: col(["Está cancelado"], false),
+    tipoPedido: col(["Tipo do pedido"], false),
+    idParceiro: col(["Id do pedido no parceiro"], false),
     autorizacao: col(["Autorização", "NSU", "Código de autorização"], false),
     loja: col(["Loja", "Estabelecimento"], false),
   },
@@ -44,20 +51,33 @@ export const SAIPOS_VENDAS = definirFonte({
   converter(u) {
     const quando = u.dataHora("data");
     const itens = u.valor("itens");
-    const desconto = u.valor("desconto");
-    const acrescimo = u.valor("acrescimo");
-    const taxa = u.valor("taxaEntrega");
+    // Fichas presenciais do layout real vêm com entrega/acréscimo/desconto vazios: vazio = 0 (o total confere a fórmula).
+    const desconto = u.valor("desconto", { opcional: true }) ?? 0;
+    const acrescimo = u.valor("acrescimo", { opcional: true }) ?? 0;
+    const taxa = u.valor("taxaEntrega", { opcional: true }) ?? 0;
     const total = u.valor("total");
     const pedido = u.texto("pedido");
     if (u.erros.length) return null;
+    const layoutReal = u.bruto("tipoPedido") !== undefined && u.bruto("tipoPedido") !== null && u.bruto("tipoPedido") !== "";
     const canalOriginal = u.bruto("canal");
     const formaOriginal = u.bruto("forma");
+    const pagamentosOriginais = String(formaOriginal ?? "").split(",").map((x) => x.trim()).filter(Boolean);
+    // Canal vazio + ficha (tipo F) no layout real = PRESENCIAL. Sem esse indício, canal vazio segue pendência (nunca Balcão por padrão).
+    const tipo = String(u.bruto("tipoPedido") ?? "").trim().toUpperCase();
+    const canal = canalSaipos(canalOriginal) ?? (layoutReal && !String(canalOriginal ?? "").trim() && tipo === "F" ? "BALCAO" : null);
+    const idParceiro = String(u.bruto("idParceiro") ?? "").trim();
+    // Identidade (doc 39 §2): integração → canal + id do pedido no parceiro; ficha (sem identificador) → impressão digital
+    // dos campos da linha + ocorrência (o motor numera repetições idênticas); layout antigo → o número do pedido.
+    const idExterno = idParceiro ? `${canal ?? rotulo(canalOriginal)}:${idParceiro}` : layoutReal ? null : pedido;
+    const identidade = idExterno ? undefined : { tipoRegistro: "PEDIDO", data: quando.data, hora: quando.hora, tipo, canal: canalOriginal ?? null, total, itens, desconto, taxa, acrescimo, pagamento: formaOriginal ?? null };
+    const cancelado = /^s/i.test(String(u.bruto("estaCancelado") ?? "").trim()) || CANCELADO(u.bruto("situacao"));
     return {
-      tipoRegistro: "PEDIDO", idExterno: pedido, data: quando.data, valorCentavos: total,
+      tipoRegistro: "PEDIDO", idExterno, ...(identidade ? { identidade } : {}), data: quando.data, valorCentavos: total,
       dados: {
-        hora: quando.hora, canal: canalSaipos(canalOriginal), canalOriginal, formaPagamento: formaDePagamento(formaOriginal), formaOriginal,
+        hora: quando.hora, canal, canalOriginal, formaPagamento: pagamentosOriginais.length > 1 ? "MULTIPLAS" : formaDePagamento(formaOriginal), formaOriginal,
+        pagamentosOriginais, tipoPedido: tipo || null, pedidoOriginal: pedido, idParceiro: idParceiro || null,
         itensCentavos: itens, descontoCentavos: desconto, acrescimoCentavos: acrescimo, taxaEntregaCentavos: taxa, totalCentavos: total,
-        cancelado: CANCELADO(u.bruto("situacao")), situacaoOriginal: u.bruto("situacao"),
+        cancelado, situacaoOriginal: u.bruto("situacao") ?? u.bruto("estaCancelado") ?? null,
         autorizacao: u.bruto("autorizacao") || null, estabelecimento: u.bruto("loja") || null,
       },
     };
@@ -75,10 +95,13 @@ export const SAIPOS_VENDAS = definirFonte({
     const porCanal = {};
     for (const r of registros.filter(validos)) porCanal[r.dados.canal ?? "NAO_IDENTIFICADO"] = somar(porCanal[r.dados.canal ?? "NAO_IDENTIFICADO"] ?? 0, r.valorCentavos);
     const cancelados = registros.filter((r) => r.dados.cancelado);
+    // Quantos pedidos válidos de cada canal (a prévia por canal mostra valor E quantidade; iFood e 99Food só como conferência).
+    const pedidosPorCanal = {};
+    for (const r of registros.filter(validos)) { const k = r.dados.canal ?? "NAO_IDENTIFICADO"; pedidosPorCanal[k] = (pedidosPorCanal[k] ?? 0) + 1; }
     return {
       controles: {
-        faturamentoCentavos: total.encontrado, pedidosValidos: registros.length - cancelados.length,
-        canceladosCentavos: cancelados.reduce((s, r) => somar(s, r.valorCentavos), 0), porCanal,
+        faturamentoCentavos: total.encontrado, pedidosValidos: registros.length - cancelados.length, pedidosCancelados: cancelados.length,
+        canceladosCentavos: cancelados.reduce((s, r) => somar(s, r.valorCentavos), 0), porCanal, pedidosPorCanal,
       },
       divergencias: [...divergencias, ...total.divergencias],
     };
@@ -196,6 +219,27 @@ export function deParaFormaSaipos(texto) {
   const cartao = /^(debito|credito) (master|mastercard|visa|elo|amex|hipercard|hiper|diners|cabal|banescard)$/.exec(r);
   if (cartao) return { canal: "BALCAO", forma: cartao[1] === "debito" ? "DEBITO" : "CREDITO", processador: "STONE" };
   return DE_PARA_FORMAS[r] ?? null;
+}
+
+/**
+ * Fase 03 (doc 41) — UMA descrição do campo "Pagamento" do relatório por pedido → pagamento da venda (sem canal: o canal é
+ * a ORIGEM do pedido). `adquirente: true` = cartão cuja operadora (Stone/PagBank…) é decidida pela data (operadoraNaData).
+ * Nulo = sem pagamento automático (fica pendência): voucher de desconto, "Online iFood" numa ficha, não cadastrado, desconhecida.
+ * "Pago Online via Pix" = maquininha do iFood no balcão (D2, 17/11/2026); "Pix na Entrega" NÃO herda isso (Stone, de-para 16/11).
+ */
+export function pagamentoDaDescricaoSaipos(texto) {
+  const r = rotulo(texto);
+  const cartao = /^(debito|credito) (master|mastercard|visa|elo|amex|hipercard|hiper|diners|cabal|banescard)$/.exec(r);
+  if (cartao) return { forma: cartao[1] === "debito" ? "DEBITO" : "CREDITO", bandeira: cartao[2], adquirente: true };
+  const tabela = {
+    dinheiro: { forma: "DINHEIRO", caixa: true },
+    "pago online via pix": { forma: "PIX", processador: "MAQUININHA_IFOOD" },
+    "pix na entrega": { forma: "PIX", processador: "STONE" },
+    vale: { forma: "VALE", processador: "OPERADORA_BENEFICIOS" },
+    "online anotaai": { forma: "OUTRA", processador: "ANOTA_AI", canais: ["ANOTA_AI"] },
+    "online anota ai": { forma: "OUTRA", processador: "ANOTA_AI", canais: ["ANOTA_AI"] },
+  };
+  return tabela[r] ?? null;
 }
 export const SAIPOS_FORMAS_PAGAMENTO = definirFonte({
   fonte: "SAIPOS",

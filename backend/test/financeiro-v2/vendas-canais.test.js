@@ -17,7 +17,7 @@ const total = async (nucleo, c, indicador) => (await nucleo.consultarComposicao(
 
 test("canal, forma de pagamento e processador são catálogos independentes", () => {
   const { CANAL, FORMA_PAGAMENTO, PROCESSADOR, TIPO_CONTA } = catalogos;
-  assert.deepEqual(Object.keys(CANAL), ["BALCAO", "IFOOD", "ANOTA_AI", "OUTRO"]);
+  assert.deepEqual(Object.keys(CANAL), ["BALCAO", "IFOOD", "ANOTA_AI", "NOVENTA_E_NOVE_FOOD", "OUTRO"]);
   assert.deepEqual(Object.keys(FORMA_PAGAMENTO), ["DINHEIRO", "PIX", "DEBITO", "CREDITO", "VALE", "OUTRA"]);
   assert.ok(Object.keys(PROCESSADOR).includes("STONE") && Object.keys(PROCESSADOR).includes("MAQUINA_TERCEIROS"));
   // Processadores não são contas financeiras.

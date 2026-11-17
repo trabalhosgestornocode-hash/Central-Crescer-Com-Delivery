@@ -1,0 +1,140 @@
+// Fase 11 (doc 48) — IMPORTAÇÕES dentro da página de cada canal (SAIPOS, iFood, 99Food), no mesmo padrão visual.
+// Só apresentação: o servidor diz quais formatos existem, quais estão indisponíveis (e por quê), o histórico e a prévia do
+// demonstrativo do iFood (a conta é conferida lá). O envio do arquivo, a prévia do arquivo e a confirmação são os MESMOS da Central.
+// Nada aqui soma, calcula ou presume: formato sem leitor validado aparece bloqueado, com o motivo, e não há como confirmá-lo.
+import { dataBR, esc, moeda } from "./formatar.js";
+
+const NOME_DO_CANAL = Object.freeze({ SAIPOS: "SAIPOS", IFOOD: "iFood", NOVENTA_E_NOVE_FOOD: "99Food" });
+const ESTADO = Object.freeze({
+  RECEBIDO: ["Recebido", "neutro"], EM_VALIDACAO: ["Em validação", "info"], PRONTO_PARA_IMPORTAR: ["Prévia pronta: aguardando confirmação", "alerta"],
+  IMPORTADO: ["Importado", "ok"], IMPORTADO_COM_PENDENCIAS: ["Importado com pendências", "alerta"], REJEITADO: ["Rejeitado", "erro"], SUBSTITUIDO: ["Substituído", "neutro"],
+});
+const REPASSE = Object.freeze({ RECEBIDO: "Recebido", PARCIAL: "Recebido em parte", PREVISTO: "Previsto", ATRASADO: "Atrasado", SEM_RECEBIVEL: "Sem recebível" });
+const selo = (rotulo, classe) => `<span class="selo selo--${classe}">${esc(rotulo)}</span>`;
+const valor = (c) => `<span class="${c === null || c === undefined ? "valor valor--desconhecido" : c < 0 ? "valor valor--negativo" : "valor"}">${c === null || c === undefined ? "—" : esc(moeda(c))}</span>`;
+const lista = (itens) => (itens.length ? `<ul class="lista-simples">${itens.join("")}</ul>` : "");
+const fechar = (titulo) => `<div class="painel-cabeca"><h2 id="painel-titulo">${esc(titulo)}</h2><button type="button" class="botao-fechar" data-fechar-painel aria-label="Fechar detalhe">×</button></div>`;
+const td = (rotulo, conteudo, classe = "") => `<td data-rotulo="${esc(rotulo)}"${classe ? ` class="${classe}"` : ""}><span class="cel">${conteudo}</span></td>`;
+
+// ------------------------------------------------------------------------------------------------------ formatos
+function formatosDoCanal(d) {
+  return `<h3>O que esta página importa</h3><ul class="formatos-canal">${d.formatos.map((f) => `<li class="formato formato--${f.disponivel ? "ok" : "off"}">
+<div class="formato-topo"><strong>${esc(f.nome)}</strong>${f.disponivel ? selo("Disponível", "ok") : selo("Indisponível", "neutro")}${f.principal ? selo("Principal", "info") : ""}${f.aceitaArquivo ? (f.homologado ? selo(`Leitor homologado (${f.extensoesHomologadas.join(", ").toUpperCase()})`, "ok") : selo("Leitor não homologado", "alerta")) : ""}</div>
+<p class="nota">${esc(f.disponivel ? f.descricao : f.motivo)}</p></li>`).join("")}</ul>`;
+}
+
+// -------------------------------------------------------------------------------------------------- envio de arquivo
+function formularioDeArquivo(d, ctx) {
+  const aceitos = d.formatos.filter((f) => f.aceitaArquivo);
+  const nome = NOME_DO_CANAL[d.canal];
+  const unidade = `<p class="conta-fixa"><strong>Unidade:</strong> ${esc(d.unidade?.nome ?? "—")}</p>`;
+  if (!aceitos.length) {
+    // 99Food (e iFood sem arquivo): o formulário existe para o usuário ver o que virá, mas NADA pode ser enviado nem confirmado.
+    const motivo = d.formatos.find((f) => !f.disponivel && f.principal)?.motivo ?? d.formatos.find((f) => !f.disponivel)?.motivo ?? "";
+    return `<section class="card imp-envio imp-envio--bloqueado" aria-labelledby="t-env-${esc(d.canal)}"><h3 id="t-env-${esc(d.canal)}">Enviar relatório ${esc(nome)}</h3>${unidade}
+<p class="aviso aviso--alerta" role="status">${esc(motivo)}</p>
+<form class="acao acao--formulario" aria-label="Envio de relatório ${esc(nome)} (indisponível)" data-envio-bloqueado><fieldset disabled><legend class="sr">Envio indisponível</legend><div class="campos-form">
+  <label class="campo--largo">Relatório <select name="tipoRelatorio"><option>Relatório oficial ${esc(nome)} (aguardando validação do primeiro arquivo)</option></select></label>
+  <label>Início do período <input type="date" name="periodoInicio"></label>
+  <label>Fim do período <input type="date" name="periodoFim"></label>
+  <label class="campo--largo">Arquivo <input type="file" name="arquivo"></label></div>
+  <div class="acoes-form"><button type="submit" class="botao botao--primario">Enviar e gerar a prévia</button></div></fieldset></form>
+<p class="nota">Quando o primeiro relatório oficial for validado, este envio passa a funcionar. Até lá nenhum formato é aceito nem presumido.</p></section>`;
+  }
+  if (!d.acoes.importar) {
+    return `<section class="card imp-envio" aria-labelledby="t-env-${esc(d.canal)}"><h3 id="t-env-${esc(d.canal)}">Enviar relatório ${esc(nome)}</h3>${unidade}<p class="nota">Você não tem permissão para importar nesta unidade (exige "Importar"). O histórico abaixo continua visível.</p></section>`;
+  }
+  const hoje = ctx.periodoPadrao ?? { inicio: "", fim: "" };
+  return `<section class="card imp-envio" aria-labelledby="t-env-${esc(d.canal)}"><h3 id="t-env-${esc(d.canal)}">Enviar relatório ${esc(nome)}</h3>${unidade}
+<ol class="passos"><li>Escolher o relatório e o período</li><li>Enviar e conferir a prévia</li><li>Confirmar a importação</li><li>Gerar e aplicar as propostas</li><li>Conferir o calendário e os cards</li></ol>
+<form class="acao acao--formulario" data-acao="/api/fv2/acoes/importacao/receber" data-recarregar="resultado:documento" data-envio-evidencia>
+  <div class="campos-form">
+  <label class="campo--largo">Relatório <select name="tipoRelatorio" required>${aceitos.map((f) => `<option value="${esc(f.tipoRelatorio)}"${f.principal ? " selected" : ""}>${esc(f.nome)}${f.principal ? " — recomendado" : ""}</option>`).join("")}</select></label>
+  <label>Início do período <input type="date" name="periodoInicio" value="${esc(hoje.inicio)}" required></label>
+  <label>Fim do período <input type="date" name="periodoFim" value="${esc(hoje.fim)}" required></label>
+  <label class="campo--largo">Arquivo <input type="file" name="arquivo" accept=".xlsx,.pdf,.csv" required></label>
+  </div>
+  <label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que é o arquivo original exportado da ${esc(nome)}, do período informado, para a unidade ${esc(d.unidade?.nome ?? "")}. Nada entra no financeiro antes da confirmação da prévia.</label>
+  <div class="acoes-form"><button type="submit" class="botao botao--primario">Enviar e gerar a prévia</button></div>
+  <p class="resultado-acao" role="status" aria-live="polite"></p>
+</form>
+<p class="nota">O arquivo é lido e descartado: ficam só a impressão digital e as linhas extraídas. A prévia mostra os pedidos por canal, as duplicidades, as pendências e os erros antes de você confirmar.</p></section>`;
+}
+
+// ---------------------------------------------------------------------------- demonstrativo oficial do iFood (prévia)
+function formularioDoDemonstrativo(d) {
+  if (!d.acoes.registrarDemonstrativo) return `<section class="card imp-envio"><h3>Registrar demonstrativo oficial do iFood</h3><p class="nota">Você não tem permissão para registrar o demonstrativo nesta unidade (exige "Registrar").</p></section>`;
+  const reais = (nome, rotulo, extra = "") => `<label>${esc(rotulo)} <input type="text" name="${nome}" inputmode="decimal" pattern="[0-9.]{1,13}(,[0-9]{1,2})?" placeholder="0,00"${extra}></label>`;
+  return `<section class="card imp-envio" aria-labelledby="t-dem"><h3 id="t-dem">Registrar demonstrativo oficial do iFood</h3>
+<p class="conta-fixa"><strong>Unidade:</strong> ${esc(d.unidade?.nome ?? "—")}</p>
+<ol class="passos"><li>Informar os valores do demonstrativo</li><li>Conferir a prévia (a conta precisa fechar)</li><li>Confirmar o registro</li><li>Conferir o calendário e os repasses</li></ol>
+<form class="acao acao--formulario" data-previa-demonstrativo aria-label="Conferir prévia do demonstrativo do iFood">
+  <div class="campos-form">
+  <label>Início do período <input type="date" name="periodoInicio" required></label>
+  <label>Fim do período <input type="date" name="periodoFim" required></label>
+  ${reais("vendas", "Faturamento (vendas)", " required")}${reais("comissoes", "Comissões")}${reais("taxaPagamento", "Taxa de pagamento online")}
+  ${reais("mensalidade", "Mensalidade")}${reais("servicosEPromocoes", "Serviços e promoções")}${reais("ajustes", "Ajustes (positivo ou negativo)")}
+  ${reais("liquido", "Faturamento líquido informado", " required")}
+  <label class="campo--largo">Origem do dado <input type="text" name="origem" maxlength="300" required placeholder="Ex.: demonstrativo financeiro do portal do iFood, período 01 a 08/11"></label>
+  <label class="campo--largo">Justificativa <input type="text" name="justificativa" maxlength="500" required placeholder="Por que este demonstrativo está sendo registrado"></label>
+  </div>
+  <div class="acoes-form"><button type="submit" class="botao botao--primario">Conferir prévia</button></div>
+</form>
+<p class="nota">O demonstrativo cobre o período inteiro: o detalhamento por dia depende do relatório oficial de pedidos, que ainda não é suportado.</p></section>`;
+}
+
+// ------------------------------------------------------------------------------------------------------- histórico
+function historico(d) {
+  const linhas = d.historico.map((i) => {
+    const [rotulo, classe] = ESTADO[i.estado] ?? [i.estado, "neutro"];
+    return `<tr>${td("Período", `${esc(dataBR(i.periodoInicio))} a ${esc(dataBR(i.periodoFim))}`, "esquerda")}${td("Relatório", esc(i.relatorio), "esquerda")}${td("Situação", selo(rotulo, classe))}
+${td("Erros", String(i.erros))}${td("Divergências", String(i.divergencias))}${td("Já existentes", String(i.jaExistentes))}
+${td("Ações", `<button type="button" class="botao-link" data-detalhe="documento:${esc(i.id)}">${i.estado === "PRONTO_PARA_IMPORTAR" ? "Conferir prévia e confirmar" : "Ver prévia e propostas"}</button>`)}</tr>`;
+  }).join("");
+  const demos = d.canal === "IFOOD" ? (d.demonstrativos.length ? `<h4>Demonstrativos oficiais registrados</h4><div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Demonstrativos oficiais do iFood</caption><thead><tr><th scope="col">Período</th><th scope="col">Faturamento</th><th scope="col">Comissões</th><th scope="col">Taxas</th><th scope="col">Ajustes</th><th scope="col">Repasse previsto</th><th scope="col">Repasse</th></tr></thead><tbody>
+${d.demonstrativos.map((x) => `<tr>${td("Período", `${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))}`, "esquerda")}${td("Faturamento", valor(x.brutoCentavos))}${td("Comissões", valor(x.comissoesCentavos))}${td("Taxas", valor(x.taxasCentavos))}${td("Ajustes", valor(x.ajustesCentavos))}${td("Repasse previsto", valor(x.repassePrevistoCentavos))}${td("Repasse", esc(REPASSE[x.situacaoRepasse] ?? x.situacaoRepasse))}</tr>`).join("")}</tbody></table></div>` : '<p class="nota">Nenhum demonstrativo oficial registrado.</p>') : "";
+  return `<section class="card" aria-labelledby="t-hist-${esc(d.canal)}"><div class="card-topo"><h3 id="t-hist-${esc(d.canal)}">Histórico de importações ${esc(NOME_DO_CANAL[d.canal])}</h3><a class="botao-link" href="#/conferencias">Central de Importações e Conferências</a></div>
+${d.historico.length ? `<div class="tabela-rolavel"><table class="tabela tabela--cartoes"><caption class="sr">Importações de arquivo de ${esc(NOME_DO_CANAL[d.canal])}</caption><thead><tr><th scope="col">Período</th><th scope="col">Relatório</th><th scope="col">Situação</th><th scope="col">Erros</th><th scope="col">Divergências</th><th scope="col">Já existentes</th><th scope="col"><span class="sr">Ações</span></th></tr></thead><tbody>${linhas}</tbody></table></div>`
+    : `<p class="nota vazio-lista">${d.canal === "IFOOD" ? "Nenhum arquivo importado. O iFood entra pelo demonstrativo oficial." : d.canal === "NOVENTA_E_NOVE_FOOD" ? "Nenhuma importação: ainda não há relatório oficial validado." : "Nenhum relatório SAIPOS importado."}</p>`}${demos}</section>`;
+}
+
+/** A seção "Importações" de um canal. `d` = resposta de /importacoes-canal; `erro` quando a consulta falhou. */
+export function importacoesDoCanal(d, ctx = {}) {
+  if (ctx.erro) return `<section class="card" aria-label="Importações"><h2>Importações</h2><p class="aviso aviso--alerta" role="alert">${esc(ctx.erro)}</p></section>`;
+  if (!d) return "";
+  return `<div class="imp-canal" data-importacoes-canal="${esc(d.canal)}"><h2>Importações ${esc(NOME_DO_CANAL[d.canal])}</h2>
+${formatosDoCanal(d)}
+${d.canal === "IFOOD" ? formularioDoDemonstrativo(d) : ""}
+${formularioDeArquivo(d, ctx)}
+${historico(d)}</div>`;
+}
+
+// ------------------------------------------------------------------------------------- painel: prévia do demonstrativo
+/** `p` = resposta de /previa-demonstrativo-ifood; `params` = o que foi digitado (reenviado na confirmação). */
+export function previaDoDemonstrativo(p, { params = {}, podeRegistrar = false } = {}) {
+  if (!p?.valido) return `${fechar("Prévia do demonstrativo do iFood")}<p class="aviso aviso--erro" role="alert">${esc(p?.erro ?? "Não foi possível conferir os dados.")}</p><p class="nota">Corrija o formulário e confira a prévia de novo. Nada foi registrado.</p>`;
+  const conta = p.fecha ? '<p class="aviso" role="status"><strong>✓ A conta fecha.</strong> Vendas − comissões − taxa de pagamento − mensalidade − serviços e promoções + ajustes = líquido informado.</p>'
+    : `<p class="aviso aviso--erro" role="alert"><strong>✗ A conta não fecha.</strong> O líquido calculado é ${esc(moeda(p.liquidoCalculadoCentavos))} e o informado é ${esc(moeda(p.liquidoInformadoCentavos))} (diferença de ${esc(moeda(p.diferencaCentavos))}).</p>`;
+  const oculto = ["periodoInicio", "periodoFim", "vendas", "comissoes", "taxaPagamento", "mensalidade", "servicosEPromocoes", "ajustes", "liquido", "origem", "justificativa"]
+    .map((k) => `<input type="hidden" name="${k}" value="${esc(params[k] ?? "")}">`).join("");
+  return `${fechar("Prévia do demonstrativo do iFood")}
+<p class="nota">Nada foi registrado ainda. Confira e só então confirme.</p>
+<dl class="ficha">
+  <dt>Período coberto</dt><dd>${esc(dataBR(p.periodoInicio))} a ${esc(dataBR(p.periodoFim))}</dd>
+  <dt>Faturamento</dt><dd>${valor(p.faturamentoCentavos)}</dd>
+  <dt>Comissões</dt><dd>${valor(p.comissoesCentavos)}</dd>
+  <dt>Taxas (pagamento online)</dt><dd>${valor(p.taxasCentavos)}</dd>
+  <dt>Mensalidade</dt><dd>${valor(p.mensalidadeCentavos)}</dd>
+  <dt>Serviços e promoções</dt><dd>${valor(p.servicosEPromocoesCentavos)}</dd>
+  <dt>Ajustes</dt><dd>${valor(p.ajustesCentavos)}</dd>
+  <dt>Líquido informado</dt><dd>${valor(p.liquidoInformadoCentavos)}</dd>
+  <dt>Repasse previsto</dt><dd>${valor(p.repasse.previstoCentavos)} <span class="nota">até ${esc(dataBR(p.repasse.dataPrevista))}. ${esc(p.repasse.observacao)}</span></dd>
+</dl>${conta}
+${p.bloqueios.length ? `<h3>O que impede o registro</h3>${lista(p.bloqueios.map((x) => `<li><span>${esc(x.mensagem)}</span></li>`))}` : ""}
+${p.jaRegistrado ? '<p class="aviso" role="status">Este demonstrativo já está registrado: confirmar de novo não duplica nada.</p>' : ""}
+${p.pendencias.length ? `<h3>Pendências</h3>${lista(p.pendencias.map((x) => `<li><span>${esc(x.mensagem)}</span></li>`))}` : ""}
+${p.podeConfirmar && podeRegistrar ? `<form class="acao acao--embutida" data-acao="/api/fv2/acoes/vendas/demonstrativo-ifood" data-recarregar="lista" aria-label="Confirmar o registro do demonstrativo">${oculto}
+<label class="caixa-marcar"><input type="checkbox" name="confirmar" required> Confirmo que conferi a prévia. O faturamento do iFood, as retenções e o repasse previsto serão registrados uma única vez.</label>
+<button type="submit" class="botao botao--primario">Confirmar e registrar demonstrativo</button><p class="resultado-acao" role="status" aria-live="polite"></p></form>`
+    : `<p class="nota">${p.podeConfirmar ? 'Registrar exige a permissão "Registrar".' : "A confirmação está bloqueada até resolver o que foi apontado acima."}</p>`}`;
+}

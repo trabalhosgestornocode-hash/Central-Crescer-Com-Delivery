@@ -133,8 +133,9 @@ test("29 — segurança das ações: CSRF, confirmação explícita, campos, cat
   assert.match(srv, /origem !== `http:\/\/127\.0\.0\.1:\$\{PORTA\}`/);
   assert.match(srv, /\^application\\\/json\(;\|\$\)/);
   assert.match(srv, /bruto\.length > limite/);
-  // 08D: 8 KiB para todas as ações; limite maior SÓ na rota de envio de evidência.
-  assert.match(srv, /const limite = url\.pathname === "\/api\/fv2\/acoes\/documentos\/enviar" \? 15 \* 1024 \* 1024 : 8192;/);
+  // 08D: 8 KiB para todas as ações; limite maior SÓ na rota de envio de evidência e (17/11/2026) no envio de relatório para a
+  // prévia — 8 MiB, o mesmo teto da plataforma (relatório real da SAIPOS tem ~760 KB, ~1 MB em base64).
+  assert.match(srv, /const limite = url\.pathname === "\/api\/fv2\/acoes\/documentos\/enviar" \? 15 \* 1024 \* 1024 : url\.pathname === "\/api\/fv2\/acoes\/importacao\/receber" \? 8 \* 1024 \* 1024 : 8192;/);
   assert.match(srv, /\.listen\(PORTA, "127\.0\.0\.1"/);
   // Ação no navegador: sem 2xx nunca vira sucesso.
   const falso = await enviar("/x", {}, {}, async () => ({ ok: false, status: 403, json: async () => ({ erro: "CSRF", mensagem: "Token inválido" }) }));

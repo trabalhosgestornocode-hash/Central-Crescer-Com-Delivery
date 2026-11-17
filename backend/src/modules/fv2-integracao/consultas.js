@@ -4,6 +4,8 @@
 // homologação e reabertura NÃO estão aqui: só entram quando as dependências (cofre com antimalware, MFA comprovado em
 // login real, matriz aprovada) estiverem comprovadas.
 
+import { centavos } from "./escritas.js"; // mesma leitura de "1.234,56" da ação de registro (a prévia e o registro não podem divergir)
+
 const INDICADORES = new Set(["FATURAMENTO_BRUTO_PROPRIO", "FATURAMENTO_LIQUIDO_GERENCIAL", "DEDUCOES_COMERCIAIS", "RECEITA_LIQUIDA_COMERCIAL", "CUSTOS_OPERACIONAIS", "RESULTADO_APOS_CUSTOS", "DESPESAS_OPERACIONAIS", "RESULTADO_FINANCEIRO", "DEMAIS_EFEITOS_GERENCIAIS", "RESULTADO_GERENCIAL"]);
 const NUMERO = /^\d{1,9}$/;
 const NENHUM = "00000000-0000-4000-8000-000000000000";
@@ -26,6 +28,7 @@ const RELATORIOS_DA_PLATAFORMA = Object.freeze([
   { tipoRelatorio: "SAIPOS_DESEMPENHO_POR_ATENDENTE", nome: "SAIPOS — Canais de venda (desempenho por atendente, XLSX)" },
   { tipoRelatorio: "UNICRED_EXTRATO", nome: "Unicred — Extrato (PDF)" },
   { tipoRelatorio: "STONE_VENDAS", nome: "Stone — Vendas (XLSX)" },
+  { tipoRelatorio: "SAIPOS_VENDAS", nome: "SAIPOS — Vendas por período (XLSX, por pedido: Presencial e Anota Aí)" },
   { tipoRelatorio: "SAIPOS_FORMAS_PAGAMENTO", nome: "SAIPOS — Formas de pagamento (XLSX)" },
   { tipoRelatorio: "SAIPOS_FATURAMENTO_POR_DIA", nome: "SAIPOS — Faturamento por dia (PDF)" },
 ]);
@@ -118,6 +121,26 @@ export const CONSULTAS = Object.freeze({
   // Abertura + o necessário do roteiro (contas, plano): uma consulta por tela, como as demais.
   // doc 35: taxas contratadas × cobradas (Stone), por modalidade e bandeira, transação a transação.
   "/taxas-contratadas": (n, c, p) => n.consultarTaxasContratadas(c, { competencia: p.competencia, ...(p.processador ? { processador: p.processador } : {}) }),
+  // Fase 02 (doc 40): operadoras e o líquido esperado (ESTIMATIVA) por modalidade × bandeira do período.
+  "/operadoras": (n, c) => n.consultarOperadoras(c),
+  "/vendas/liquido-esperado": (n, c, p) => n.consultarLiquidoEsperado(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim, ...(p.canal ? { canal: p.canal } : {}), ...(p.modalidade ? { modalidade: p.modalidade } : {}), ...(p.chave ? { chave: p.chave } : {}) }),
+  // Fases 04/05 (docs 42/43): área SAIPOS (resumo + cards de Presencial e Anota Aí) e fechamento manual com a comparação diária.
+  "/saipos": async (n, c, p) => {
+    const periodo = { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim };
+    return { ...(await n.consultarCanalSaipos(c, periodo)), cards: Object.fromEntries(await Promise.all(["BALCAO", "ANOTA_AI"].map(async (canal) => { const r = await n.consultarLiquidoEsperado(c, { ...periodo, canal }); return [canal, { modalidades: r.modalidades, total: r.total }]; }))) };
+  },
+  // Fase 07 (doc 44): iFood e 99Food só pela fonte oficial (demonstrativo iFood; 99Food aguarda o relatório real).
+  "/canal-plataforma": (n, c, p) => n.consultarCanalPlataforma(c, { canal: p.canal, competencia: p.competencia }),
+  // Fase 10 (doc 47): calendário de controle de faturamento — UMA consulta mensal consolidada por canal.
+  "/calendario-faturamento": (n, c, p) => n.consultarCalendarioDeFaturamento(c, { canal: p.canal, mes: p.mes }),
+  // Fase 11 (doc 48): importações por canal (formatos, estado de cada um e histórico) e a PRÉVIA do demonstrativo oficial do iFood.
+  "/importacoes-canal": (n, c, p) => n.consultarImportacoesDoCanal(c, { canal: p.canal }),
+  "/previa-demonstrativo-ifood": (n, c, p) => n.previaDoDemonstrativoIfood(c, {
+    periodoInicio: p.periodoInicio, periodoFim: p.periodoFim, vendasCentavos: centavos(p.vendas), comissoesCentavos: centavos(p.comissoes || "0,00"), taxaPagamentoCentavos: centavos(p.taxaPagamento || "0,00"),
+    mensalidadeCentavos: centavos(p.mensalidade || "0,00"), servicosEPromocoesCentavos: centavos(p.servicosEPromocoes || "0,00"), ajustesCentavos: centavos(p.ajustes || "0,00"),
+    liquidoInformadoCentavos: centavos(p.liquido), origem: p.origem, justificativa: p.justificativa || "Prévia: justificativa informada na confirmação.",
+  }),
+  "/fechamento-manual": async (n, c, p) => ({ ...(await n.consultarFechamentoManual(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim })), operadoras: (await n.consultarOperadoras(c)).operadoras.map((o) => ({ codigo: o.codigo, nome: o.nome, processador: o.processador, modalidades: o.modalidades, situacao: o.situacao ?? "ATIVA" })) }),
   "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),
   "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),
   "/configuracoes/categoria": (n, c, p) => n.consultarCategoria(c, { codigo: String(p.codigo ?? "") }),

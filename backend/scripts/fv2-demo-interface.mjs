@@ -7,10 +7,12 @@ import { dirname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { criarDemo } from "./fv2/demoInterface.mjs";
 
-const PORTA = Number(process.env.FV2_DEMO_PORTA || 5179);
+const PORTA = Number(process.argv.find((x) => x.startsWith("--porta="))?.slice(8) || process.env.FV2_DEMO_PORTA || 5179);
 const PASTA = normalize(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "frontend", "financeiro-v2"));
 const TIPOS = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
-const demo = await criarDemo();
+// --agora=AAAA-MM-DDTHH:MM:SSZ: relógio da demonstração (ex.: conferir no navegador um relatório real de um período recente).
+const agora = process.argv.find((x) => x.startsWith("--agora="))?.slice("--agora=".length);
+const demo = await criarDemo(agora ? { relogio: () => new Date(agora) } : {});
 
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://127.0.0.1");
@@ -25,7 +27,7 @@ createServer(async (req, res) => {
     if (!/^application\/json(;|$)/.test(req.headers["content-type"] ?? "")) { json(415, { erro: "TIPO", mensagem: "Envie JSON." }); return; }
     let bruto = "";
     let excedeu = false;
-    const limite = url.pathname === "/api/fv2/acoes/documentos/enviar" ? 15 * 1024 * 1024 : 8192; // 08D: só o envio de evidência
+    const limite = url.pathname === "/api/fv2/acoes/documentos/enviar" ? 15 * 1024 * 1024 : url.pathname === "/api/fv2/acoes/importacao/receber" ? 8 * 1024 * 1024 : 8192; // 08D: só o envio de evidência
     for await (const parte of req) { bruto += parte; if (bruto.length > limite) { excedeu = true; break; } }
     if (excedeu) { json(413, { erro: "TAMANHO", mensagem: "Corpo grande demais." }); return; }
     let corpo;

@@ -18,8 +18,8 @@ import { exigirTexto, exigirUmDe, exigirUuid, semCamposDesconhecidos } from "../
 const CODIGO_LIVRE = /^[A-Z][A-Z0-9_]{1,39}$/;
 const SITUACAO_UNIDADE = Object.freeze(["ATIVA", "INATIVA"]);
 const NOMES_BASE = Object.freeze({
-  CANAL: { BALCAO: "Balcão", IFOOD: "iFood", ANOTA_AI: "Anota AI", OUTRO: "Outro canal" },
-  PROCESSADOR: { STONE: "Stone", IFOOD: "iFood (repasse)", ANOTA_AI: "Anota AI (repasse)", OPERADORA_BENEFICIOS: "Operadora de vale", MAQUINA_TERCEIROS: "Máquina de terceiros", OUTRO: "Outro processador" },
+  CANAL: { BALCAO: "Presencial (balcão)", IFOOD: "iFood", ANOTA_AI: "Anota AI", NOVENTA_E_NOVE_FOOD: "99Food", OUTRO: "Outro canal" },
+  PROCESSADOR: { STONE: "Stone", PAGBANK: "PagBank", MAQUININHA_IFOOD: "Maquininha do iFood (presencial)", IFOOD: "iFood (repasse do marketplace)", ANOTA_AI: "Anota AI (repasse)", NOVENTA_E_NOVE_FOOD: "99Food (repasse)", OPERADORA_BENEFICIOS: "Operadora de vale", MAQUINA_TERCEIROS: "Máquina de terceiros", OUTRO: "Outro processador" },
 });
 
 export function operacoesDeConfiguracao(b) {

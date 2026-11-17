@@ -28,12 +28,15 @@ import { operacoesDeVendas } from "./vendas.js";
 import { taxasDoPeriodo } from "./taxasContratadas.js";
 import { demonstrativoIfoodQueCobre } from "./demonstrativoIfood.js";
 import { CATEGORIA_TITULOS_ANTERIORES } from "../dominio/planoDeContas.js";
-import { deParaFormaSaipos } from "../importacao/fontes/saipos.js";
+import { deParaFormaSaipos, pagamentoDaDescricaoSaipos } from "../importacao/fontes/saipos.js";
+import { operadoraNaData } from "../dominio/operadoras.js";
 import { rotulo } from "../importacao/leitor.js";
 
 const hash = (s) => createHash("sha256").update(s).digest("hex").slice(0, 40);
 /** Venda formada do relatório de formas de pagamento (total do dia por forma), não de pedido. */
 export const GRANULARIDADE_DIA_POR_FORMA = "DIA_POR_FORMA";
+/** Canais cujo faturamento vem SÓ da fonte oficial da plataforma (doc 38/39): o pedido da SAIPOS fica só para conferência. */
+export const CANAIS_SO_PELA_FONTE_OFICIAL = Object.freeze(["IFOOD", "NOVENTA_E_NOVE_FOOD"]);
 const CONCLUIDAS = ["IMPORTADO", "IMPORTADO_COM_PENDENCIAS"];
 const FINAIS = [E.APLICADA, E.REJEITADA, E.SUBSTITUIDA];
 const arredondar = (micros) => { const n = micros < 0; const a = BigInt(Math.abs(micros)); const c = Number((a + 5000n) / 10000n); return n ? -c : c; };
@@ -76,13 +79,30 @@ export function operacoesDeFormacao(b) {
   // ------------------------------------------------------------------------------------- interpretação por fonte
   async function propostasDeVendas(tx, cx, registros, g) {
     const saida = [];
+    const config = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
     for (const r of registros.filter((x) => x.tipoRegistro === "PEDIDO")) {
       const d = r.dados;
       if (d.cancelado) continue; // cancelado não forma venda; permanece no registro de origem
+      // Doc 38/39: iFood e 99Food têm faturamento SÓ pelas fontes oficiais. O pedido fica no registro (conferência), sem venda.
+      if (CANAIS_SO_PELA_FONTE_OFICIAL.includes(d.canal)) continue;
       const divergencias = [];
       const pagamentos = [];
-      if (d.formaPagamento === "DINHEIRO") pagamentos.push({ forma: "DINHEIRO", valorCentavos: r.valorCentavos, ...(g.contaCaixaId ? { contaId: g.contaCaixaId } : {}) });
-      else if (d.formaPagamento === "ONLINE_PLATAFORMA" && d.canal === "IFOOD") pagamentos.push({ forma: "OUTRA", processador: "IFOOD", valorCentavos: r.valorCentavos });
+      const descricoes = d.pagamentosOriginais ?? [d.formaOriginal].filter(Boolean);
+      const dp = descricoes.length === 1 ? pagamentoDaDescricaoSaipos(descricoes[0]) : null;
+      if (d.pagamentosOriginais && descricoes.length > 1) {
+        divergencias.push({ codigo: "PAGAMENTO_MULTIPLO_SEM_VALOR", mensagem: `Pagamento com ${descricoes.length} formas ("${d.formaOriginal}") e sem o valor de cada uma: nada é dividido por suposição; o pagamento fica a conferir.` });
+      } else if (dp && (!dp.canais || dp.canais.includes(d.canal))) {
+        const base = { forma: dp.forma, valorCentavos: r.valorCentavos, descricaoOriginal: descricoes[0] };
+        if (dp.caixa) pagamentos.push({ ...base, ...(g.contaCaixaId ? { contaId: g.contaCaixaId } : {}) });
+        else if (dp.adquirente) {
+          // Operadora pela DATA da venda: única ativa decide; duas ativas → conferência; nenhuma operadora de CARTÃO cadastrada → Stone (de-para da loja).
+          const op = operadoraNaData({ config, data: r.dataReferencia, forma: dp.forma, processadores: ["STONE", "PAGBANK", "MAQUINA_TERCEIROS"] });
+          const cadastradas = (Array.isArray(config?.operadoras) ? config.operadoras : []).some((o) => ["STONE", "PAGBANK", "MAQUINA_TERCEIROS"].includes(o.processador));
+          if (op.operadora) pagamentos.push({ ...base, processador: op.processador, operadora: op.operadora, bandeira: dp.bandeira });
+          else if (!cadastradas && op.situacao === "SEM_OPERADORA") pagamentos.push({ ...base, processador: "STONE", bandeira: dp.bandeira });
+          else divergencias.push({ codigo: op.situacao, mensagem: `"${descricoes[0]}" em ${r.dataReferencia}: ${op.candidatas.length ? `operadoras ativas ao mesmo tempo (${op.candidatas.join(", ")})` : "nenhuma operadora ativa"} — o pagamento fica a conferir.` });
+        } else pagamentos.push({ ...base, processador: dp.processador });
+      } else if (d.formaPagamento === "DINHEIRO") pagamentos.push({ forma: "DINHEIRO", valorCentavos: r.valorCentavos, ...(g.contaCaixaId ? { contaId: g.contaCaixaId } : {}) });
       else if (d.formaPagamento === "ONLINE_PLATAFORMA" && d.canal === "ANOTA_AI") pagamentos.push({ forma: "OUTRA", processador: "ANOTA_AI", valorCentavos: r.valorCentavos });
       else divergencias.push({ codigo: "PAGAMENTO_A_EVIDENCIAR", mensagem: `Forma "${d.formaOriginal}" sem processador identificado: o pagamento entra quando houver evidência (ex.: transação Stone).` });
       if (!d.canal) divergencias.push({ codigo: "CANAL_NAO_RECONHECIDO", mensagem: `Canal "${d.canalOriginal}" não reconhecido.` });
@@ -96,7 +116,11 @@ export function operacoesDeFormacao(b) {
       saida.push({
         operacao: OP.VENDA, registro: r, competencia: r.competencia, dataOperacao: r.dataReferencia, natureza: "RECEITA", valorCentavos: receitaPropria,
         categoriaSugerida: d.canal ? CATEGORIA_DE_VENDA[d.canal] : null,
-        comando: { canal: d.canal, dataVenda: r.dataReferencia, brutoCentavos: receitaPropria, composicao, pagamentos, ...(pagamentos.length ? {} : { pagamentoParcial: true }), fonte: { sistema: "SAIPOS", idExterno: r.idExterno }, descricao: `Pedido ${r.idExterno}` },
+        comando: {
+          canal: d.canal, dataVenda: r.dataReferencia, brutoCentavos: receitaPropria, composicao, pagamentos, ...(pagamentos.length ? {} : { pagamentoParcial: true }),
+          fonte: { sistema: "SAIPOS", idExterno: r.idExterno ?? r.chaveIdempotencia },
+          descricao: r.idExterno ? `Pedido ${d.pedidoOriginal && d.idParceiro ? `${d.pedidoOriginal} (${d.canalOriginal})` : r.idExterno}` : `Ficha ${r.dataReferencia.split("-").reverse().join("/")} ${(d.hora ?? "").slice(0, 5)}`.trim(),
+        },
         extras: { autorizacao: d.autorizacao ?? null }, divergencias,
         confianca: d.canal && pagamentos.length ? CONFIANCA.ALTA : CONFIANCA.MEDIA,
         estado: d.canal && !(d.canal === "IFOOD" && d.taxaEntregaCentavos) ? E.PROPOSTA : E.AGUARDANDO_REVISAO,
@@ -155,6 +179,7 @@ export function operacoesDeFormacao(b) {
     // datada no último dia do período, sem pedido nem forma de pagamento inventados. Nunca convive com pedidos do mesmo
     // canal nem com o agregado diário (sem canal) no período — a aplicação recusa (conflitoDeGranularidade).
     for (const r of registros.filter((x) => x.tipoRegistro === "TOTAL_CANAL")) {
+      if (CANAIS_SO_PELA_FONTE_OFICIAL.includes(r.dados.canal)) continue; // iFood/99Food: só pela fonte oficial (doc 38/39)
       const d = r.dados;
       const inicio = d.periodoInicio ?? r.dataReferencia;
       const fim = d.periodoFim ?? r.dataReferencia;
@@ -354,15 +379,36 @@ export function operacoesDeFormacao(b) {
    * TOTAL DO PERÍODO POR CANAL × (pedidos daquele canal no período | agregado diário sem canal no período | outro total do
    * mesmo canal com período sobreposto).
    */
+  /**
+   * Proposta de VENDA cuja venda foi CANCELADA não bloqueia mais nada: o faturamento que ela representava saiu (cancelamento
+   * lógico, com histórico). É o que permite corrigir uma importação por forma de pagamento reimportando por pedido (doc 45 §7).
+   * Proposta sem venda própria (agregada, total do período) continua valendo como antes.
+   */
+  async function semVendaCancelada(tx, cx, lista) {
+    const vivas = [];
+    for (const x of lista) {
+      const ef = x.operacao === OP.VENDA ? (x.efeitos ?? []).find((e) => e.tipo === TIPO.VENDA) : null;
+      if (ef && (await tx.obter(cx, TIPO.VENDA, ef.id))?.situacao === "CANCELADA") continue;
+      vivas.push(x);
+    }
+    return vivas;
+  }
+
   async function conflitoDeGranularidade(tx, cx, proposta) {
     if (![OP.VENDA, OP.VENDA_AGREGADA].includes(proposta.operacao)) return null;
     const outra = proposta.operacao === OP.VENDA ? OP.VENDA_AGREGADA : OP.VENDA;
     const aplicadas = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: outra, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
     if (aplicadas[0]) return aplicadas[0];
     // Venda do dia por FORMA (relatório de formas) × venda por PEDIDO do mesmo dia: o mesmo faturamento por dois caminhos.
+    // Doc 44: faturamento manual PROVISÓRIO do mesmo dia × canal bloqueia a venda importada até a substituição auditada.
+    if (proposta.operacao === OP.VENDA && proposta.comando?.fonte?.sistema === "SAIPOS") {
+      const provisoria = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: "ATIVA", canal: proposta.comando.canal, dataVenda: proposta.dataOperacao } }))
+        .find((v) => v.dataVenda === proposta.dataOperacao && v.fonte?.sistema === "MANUAL" && String(v.fonte.idExterno ?? "").startsWith("faturamento-manual:"));
+      if (provisoria) return { id: provisoria.id, motivo: "FATURAMENTO_PROVISORIO" };
+    }
     if (proposta.operacao === OP.VENDA) {
       const porForma = (p) => p.granularidade === GRANULARIDADE_DIA_POR_FORMA;
-      const mesmoDia = await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } });
+      const mesmoDia = await semVendaCancelada(tx, cx, await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA, dataOperacao: proposta.dataOperacao } }));
       const outraGranularidade = mesmoDia.find((x) => x.id !== proposta.id && porForma(x) !== porForma(proposta));
       if (outraGranularidade) return outraGranularidade;
     }
@@ -374,8 +420,14 @@ export function operacoesDeFormacao(b) {
     const periodo = (p) => (p.operacao === OP.VENDA_AGREGADA && p.comando?.periodoInicio ? p.comando : null);
     const canalDe = (p) => (p.operacao === OP.VENDA ? p.comando?.canal ?? null : p.comando?.canal ?? null);
     const cobre = (per, data) => data >= per.periodoInicio && data <= per.periodoFim;
-    const vendas = [...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA } }), ...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } })]
-      .filter((x) => x.id !== proposta.id && x.competencia === proposta.competencia);
+    // Desempenho (validação de 17/11/2026): sem período próprio (venda por pedido ou agregado do dia), só um TOTAL DO
+    // PERÍODO já aplicado pode cobrir esta data — lista só os agregados aplicados (poucos) em vez de todas as vendas
+    // aplicadas (crescia com o volume: 825 pedidos levavam minutos). Com período próprio, a busca completa continua.
+    const meuPeriodo = periodo(proposta);
+    const candidatos = meuPeriodo
+      ? [...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA } }), ...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } })]
+      : await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } });
+    const vendas = await semVendaCancelada(tx, cx, candidatos.filter((x) => x.id !== proposta.id && x.competencia === proposta.competencia));
     const meu = periodo(proposta);
     for (const x of vendas) {
       const dele = periodo(x);
@@ -508,6 +560,7 @@ export function operacoesDeFormacao(b) {
         if (p.estado !== E.APROVADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só proposta aprovada pode ser aplicada.", { estado: p.estado });
         await recusarAnteriorAoCorte(tx, cx, p); // aprovada ANTES de a abertura existir: a barreira vale na aplicação
         const conflito = await conflitoDeGranularidade(tx, cx, p);
+        if (conflito?.motivo === "FATURAMENTO_PROVISORIO") falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Há faturamento manual provisório deste dia e canal: substitua-o (operação auditada) antes de aplicar a venda importada — nunca duas receitas do mesmo fato.", { vendaId: conflito.id, motivo: conflito.motivo });
         if (conflito) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe receita do mesmo dia pela outra granularidade (agregado × por pedido): reverta uma antes de aplicar a outra.", { propostaId: conflito.id });
         const efeitos = await aplicar(tx, cx, p);
         const aplicada = await b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.APLICADA, efeitos }, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa);

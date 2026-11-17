@@ -164,6 +164,10 @@ export const ESQUEMA = Object.freeze({
     nomeExibicao: c("nome_exibicao"), identificacaoEmpresa: c("identificacao_empresa"), situacao: c("situacao"), observacao: c("observacao"),
   }),
   // 0022: abertura financeira da unidade (competência de início e data de corte persistidas; uma por unidade).
+  // 0025: fechamento manual de caixa (um por dia × caixa; conferência, sem efeito financeiro).
+  [TIPO.FECHAMENTO_CAIXA]: tabela("fv2_fechamento_caixa", {
+    data: c("data", "data"), caixa: c("caixa"), situacao: c("situacao"), dados: c("dados", "json"), observacao: c("observacao"),
+  }),
   [TIPO.ABERTURA]: tabela("fv2_abertura", {
     competenciaInicio: c("competencia_inicio"), dataDeCorte: c("data_de_corte", "data"), situacao: c("situacao"), observacao: c("observacao"),
   }),

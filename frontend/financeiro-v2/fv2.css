@@ -88,7 +88,8 @@ h1, h2, h3, h4 { line-height: 1.25; }
 /* números */
 .valor { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .valor--negativo { color: var(--erro); }
-.valor--desconhecido { color: var(--suave); font-style: italic; font-weight: 400; }
+.valor--desconhecido { color: var(--suave); font-style: italic; font-weight: 400; white-space: normal; overflow-wrap: anywhere; }
+.card--sec .card-topo + p .valor--desconhecido, .card--sec h3 + p .valor--desconhecido { font-size: 15px; line-height: 1.35; letter-spacing: 0; }
 .numero-principal { font-size: clamp(32px, 5.4vw, 46px); font-weight: 700; line-height: 1.1; letter-spacing: -.025em; margin: 10px 0 18px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .numero-principal--medio { font-size: clamp(26px, 4vw, 32px); margin-bottom: 6px; letter-spacing: -.02em; }
 .nota-zero { display: inline-block; margin-left: 12px; font-size: 13px; font-weight: 600; color: var(--ok); vertical-align: middle; letter-spacing: 0; }
@@ -177,6 +178,7 @@ button.botao-link[data-composicao]:hover { background: var(--hover); color: var(
 .segmento { min-width: 3px; }
 .segmento--canal-balcao { background: var(--c-balcao); } .segmento--canal-ifood { background: var(--c-ifood); }
 .segmento--canal-anota-ai { background: var(--c-anota-ai); } .segmento--canal-outro { background: var(--c-outro); }
+.segmento--canal-noventa-e-nove-food { background: var(--c-outro); }
 .segmento--canal-sem-canal { background: repeating-linear-gradient(135deg, var(--c-sem-a) 0 3px, var(--c-sem-b) 3px 6px); }
 .segmento--deducoes_comerciais { background: var(--s-deducoes); } .segmento--custos_operacionais { background: var(--s-custos); }
 .segmento--despesas_operacionais { background: var(--s-despesas); } .segmento--resultado_financeiro { background: var(--s-financeiro); }
@@ -432,6 +434,78 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
   .dre .dre-linha > * > .selo { grid-column: 1 / -1; justify-self: start; margin-top: -4px; }
 }
 
+/* ------------------------------------------------------------------ canais de faturamento (Fases 04–06) */
+.canal-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; align-items: start; }
+.card--canal { margin-bottom: 0; }
+.card--canal .card-topo h3 { font-size: 15px; color: var(--texto); }
+.canal-numeros { margin: 8px 0 4px; }
+.canal-numeros dd .valor { font-weight: 600; }
+.canal-expandir { display: flex; grid-template-columns: none; justify-content: flex-start; padding: 8px 10px 8px 30px; margin-top: 8px; min-height: 40px; font-weight: 600; font-size: 13px; }
+.card--canal [hidden] { display: none; }
+.card--canal .tabela-rolavel { margin-top: 8px; }
+.grade-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 14px; }
+.grade-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 14px; }
+.grade-fechamento { border: 1px solid var(--linha); border-radius: var(--raio-sm); padding: 10px 14px 4px; margin: 4px 0; background: var(--card); min-width: 0; }
+.grade-fechamento legend { font-weight: 650; font-size: 13px; padding: 0 4px; color: var(--texto); }
+.linha-fechamento { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 1fr) minmax(0, 1fr); gap: 0 12px; align-items: end; }
+.linha-fechamento__nome { font-size: 13px; padding-bottom: 16px; color: var(--texto); }
+.acao input[type="date"], .acao input[type="time"], .acao select, .acao textarea, .grade-fechamento input { font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--linha-forte); border-radius: var(--raio-sm); background: var(--card); color: var(--texto); min-width: 0; width: 100%; box-sizing: border-box; }
+.caixa-fechado, .versao-taxas { border-top: 1px solid var(--linha); padding: 8px 0; }
+.caixa-fechado summary, .versao-taxas summary { cursor: pointer; font-size: 14px; padding: 4px 0; }
+.canal-operadoras { display: grid; gap: 0; }
+/* ------------------------------------------------------------------ calendário de faturamento dos canais (doc 47) */
+.cal-canal { display: grid; gap: 12px; margin: 0 0 24px; }
+.cal-canal > h2 { margin: 0; font-size: 18px; }
+.resumo--calendario { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-bottom: 4px; }
+.valor-grande { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin: 0 0 4px; font-variant-numeric: tabular-nums; }
+.cal-canal .cal-nav { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 0; }
+.cal-canal .cal-nav strong { flex: 1 1 auto; text-align: center; display: block; } .cal-canal .cal-nav strong::first-letter { text-transform: uppercase; }
+.legenda--estados { margin: 0; gap: 8px 16px; }
+.legenda--estados li { display: inline-flex; align-items: center; gap: 6px; }
+.est { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 4px; border-radius: 6px; font-size: 12px; font-weight: 700; line-height: 1; border: 1px solid transparent; }
+.est--neutro { background: var(--neutro-bg); color: var(--suave); border-color: var(--linha-forte); }
+.est--info { background: var(--info-bg); color: var(--info); } .est--alerta { background: var(--alerta-bg); color: var(--alerta); }
+.est--erro { background: var(--erro-bg); color: var(--erro); } .est--ok { background: var(--ok-bg); color: var(--ok); }
+.cal-dia--canal { min-height: 92px; border-left-width: 4px; }
+.cal-dia--canal[data-principal="DIVERGENCIA"] { border-left-color: var(--erro); }
+.cal-dia--canal[data-principal="CONFERENCIA_PENDENTE"], .cal-dia--canal[data-principal="PROVISORIO"] { border-left-color: var(--alerta); }
+.cal-dia--canal[data-principal="CONCILIADO"] { border-left-color: var(--ok); }
+.cal-dia--canal[data-principal="IMPORTADO"], .cal-dia--canal[data-principal="FECHAMENTO_MANUAL"] { border-left-color: var(--info); }
+.cal-dia--canal[data-principal="SEM_MOVIMENTO_CONFIRMADO"] { border-left-color: var(--suave); }
+.cal-dia--canal[data-principal="SEM_REGISTRO"] { border-style: dashed; border-left-color: var(--linha-forte); background: transparent; }
+.cal-dia--futuro { opacity: .62; }
+.cal-estados { display: flex; flex-wrap: wrap; gap: 3px; }
+.cal-dia--canal:focus-visible { outline: 2px solid var(--foco); outline-offset: 2px; }
+.lista-estados { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; }
+.lista-estados li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+.cal-detalhe-cab h3 { margin: 0 0 8px; font-size: 16px; }
+#cal-dia-detalhe h3 { margin: 14px 0 6px; font-size: 14px; }
+.cal-acoes { display: flex; flex-wrap: wrap; gap: 8px; }
+.cal-config summary { cursor: pointer; padding: 4px 0; }
+@media (max-width: 640px) {
+  .cal-dia--canal { min-height: 62px; padding: 4px 3px 4px 5px; border-left-width: 3px; }
+  .cal-dia--canal .est { min-width: 15px; height: 15px; font-size: 10px; padding: 0 2px; border-radius: 4px; }
+  .cal-canal .cal-nav strong { order: -1; flex: 1 0 100%; }
+  .resumo--calendario { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .legenda--estados { gap: 6px 12px; font-size: 12px; }
+}
+/* ------------------------------------------------------------------ importações dentro da página do canal (doc 48) */
+.imp-canal { display: grid; gap: 16px; margin: 0 0 24px; }
+.imp-canal > h2 { margin: 0; font-size: 18px; }
+.imp-canal h3 { margin: 0 0 8px; font-size: 15px; }
+.formatos-canal { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.formato { padding: 10px 14px; border: 1px solid var(--linha); border-left: 4px solid var(--ok); border-radius: var(--raio-sm); background: var(--card); }
+.formato--off { border-left-color: var(--linha-forte); border-style: dashed; background: transparent; }
+.formato-topo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.formato p { margin: 4px 0 0; }
+.imp-envio--bloqueado fieldset { opacity: .55; border: 0; padding: 0; margin: 0; display: grid; gap: 12px; min-width: 0; } .imp-envio--bloqueado .acoes-form { display: flex; justify-content: flex-end; }
+.imp-envio .passos { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0 0 12px; padding: 0 0 0 18px; font-size: 13px; color: var(--suave); } .imp-envio .passos li { padding-left: 2px; }
+@media (max-width: 760px) {
+  .grade-2, .grade-3 { grid-template-columns: minmax(0, 1fr); }
+  .linha-fechamento { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .linha-fechamento__nome { grid-column: 1 / -1; padding-bottom: 2px; }
+}
+
 /* ------------------------------------------------------------------ celular */
 @media (max-width: 760px) {
   body { font-size: 14.5px; }
@@ -559,3 +633,4 @@ html[data-modo="plataforma"] .faixa-demo { display: none; }
 .corrigir > summary h3, .dados-conta > summary h3 { margin: 0; font-size: 14.5px; }
 @media (max-width: 640px) { .par-vinculo { grid-template-columns: 1fr; } .par-vinculo__liga { justify-self: center; transform: rotate(90deg); } }
 @media (prefers-reduced-motion: reduce) { .baixa-tile { transition: none; } }
+

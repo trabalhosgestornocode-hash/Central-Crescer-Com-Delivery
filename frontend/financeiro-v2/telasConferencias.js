@@ -315,6 +315,24 @@ ${paginacao(r.paginacao, ROTA)}
 <p class="nota">Outras variantes de arquivo só passam a valer depois de comprovadas com amostra real.</p></details>`;
 }
 
+const CANAIS_DA_PREVIA = Object.freeze([["BALCAO", "Presencial", "Vira faturamento do Presencial"], ["ANOTA_AI", "Anota Aí", "Vira faturamento do Anota Aí"]]);
+const CANAIS_SO_CONFERENCIA = Object.freeze([["IFOOD", "iFood"], ["NOVENTA_E_NOVE_FOOD", "99Food"]]);
+/** Fase 11: o relatório SAIPOS por pedido separado por canal — quanto entra em cada um e o que fica fora da receita. Números do servidor. */
+function previaPorCanal(c) {
+  if (!c?.porCanal || !c.pedidosPorCanal) return "";
+  const n = (k) => c.pedidosPorCanal[k] ?? 0;
+  const linha = ([k, nome, texto]) => `<li><span><strong>${esc(nome)}</strong><br><span class="nota">${esc(texto)}</span></span><span>${n(k)} pedido(s) · ${esc(moeda(c.porCanal[k] ?? 0))}</span></li>`;
+  const fora = CANAIS_SO_CONFERENCIA.filter(([k]) => n(k)).map(([k, nome]) => `<li><span><strong>${esc(nome)}</strong><br><span class="nota">Só conferência: NÃO vira receita (a SAIPOS não é a fonte oficial)</span></span><span>${n(k)} pedido(s) · ${esc(moeda(c.porCanal[k] ?? 0))}</span></li>`);
+  const semCanal = n("NAO_IDENTIFICADO") ? `<li><span><strong>Canal não identificado</strong><br><span class="nota">Pendência de classificação: nenhum faturamento é criado por suposição</span></span><span>${n("NAO_IDENTIFICADO")} pedido(s) · ${esc(moeda(c.porCanal.NAO_IDENTIFICADO ?? 0))}</span></li>` : "";
+  return `<h3>Prévia por canal</h3><ul class="lista-simples">${CANAIS_DA_PREVIA.map(linha).join("")}${fora.join("")}${semCanal}
+${c.pedidosCancelados ? `<li><span><strong>Cancelados</strong><br><span class="nota">Ficam registrados, não viram venda</span></span><span>${c.pedidosCancelados} pedido(s) · ${esc(moeda(c.canceladosCentavos ?? 0))}</span></li>` : ""}</ul>`;
+}
+/** Importação de outra granularidade nos mesmos dias, já aplicada: a aplicação desta seria recusada. */
+function conflitosDeGranularidade(lista) {
+  if (!lista?.length) return "";
+  return `<p class="aviso aviso--alerta" role="alert"><strong>Atenção: conflito com outra importação.</strong> ${lista.map((x) => `${esc(x.relatorio)} de ${esc(dataBR(x.periodoInicio))} a ${esc(dataBR(x.periodoFim))} já tem ${x.propostasAplicadas} proposta(s) aplicada(s)`).join("; ")}. Confirmar este arquivo é possível, mas a aplicação será recusada para não contar o mesmo faturamento duas vezes: reverta a anterior antes.</p>`;
+}
+
 export function detalheDocumento(d, ctx = {}) {
   const doc = d.documento;
   const pv = d.previa;
@@ -327,6 +345,7 @@ export function detalheDocumento(d, ctx = {}) {
   <dt>Recebido em</dt><dd>${esc(dataBR(doc.recebidoEm))} · ${esc(doc.responsavel)}</dd>
   <dt>Versão</dt><dd>${doc.versao}${doc.substituiOutra ? " (substitui a anterior)" : ""}${doc.substituidaPorOutra ? " (substituída por outra versão)" : ""}</dd>
 </dl>
+${previaPorCanal(pv?.controles)}${conflitosDeGranularidade(d.conflitosDeGranularidade)}
 <h3>Prévia do motor de importação</h3>
 ${pv ? `<ul class="lista-simples">
   <li><span>Registros válidos (novos)</span><strong>${pv.validos ?? "—"}</strong></li>
@@ -349,7 +368,7 @@ ${d.acoes.confirmar && podeImportar ? acao({
   }) : ""}
 ${d.acoes.confirmar && podeImportar ? acao({ url: "/api/fv2/acoes/importacao/rejeitar", rotulo: "Rejeitar arquivo", recarregar: `documento:${doc.id}`, perigo: true, campos: `<input type="hidden" name="importacao" value="${esc(doc.id)}"><label>Justificativa <input type="text" name="justificativa" maxlength="300" required></label>`, aviso: "Confirmo a rejeição deste arquivo." }) : ""}
 ${d.acoes.gerarPropostas && tem(ctx.permissoes, "financeiro_v2.registrar") ? acao({ url: "/api/fv2/acoes/propostas/gerar", rotulo: "Gerar propostas para revisão", recarregar: `documento:${doc.id}`, campos: `<input type="hidden" name="importacao" value="${esc(doc.id)}">`, aviso: "Confirmo: propostas são só sugestões; nada entra no financeiro até ser aprovado E aplicado." }) : ""}
-${d.propostasGeradas?.PROPOSTA > 0 && tem(ctx.permissoes, "financeiro_v2.aprovar") && tem(ctx.permissoes, "financeiro_v2.aplicar") ? acao({ url: "/api/fv2/acoes/propostas/aprovar-e-aplicar-prontas", rotulo: `Aprovar e aplicar as ${d.propostasGeradas.PROPOSTA} propostas prontas`, recarregar: `documento:${doc.id}`, campos: `<input type="hidden" name="importacao" value="${esc(doc.id)}">`, aviso: "Confirmo que revisei os totais acima: as propostas prontas desta importação viram vendas no financeiro. As que estão em revisão ficam para análise individual." }) : ""}
+${(d.propostasGeradas?.PROPOSTA ?? 0) + (d.propostasGeradas?.APROVADA ?? 0) > 0 && tem(ctx.permissoes, "financeiro_v2.aprovar") && tem(ctx.permissoes, "financeiro_v2.aplicar") ? acao({ url: "/api/fv2/acoes/propostas/aprovar-e-aplicar-prontas", rotulo: `Aprovar e aplicar as ${(d.propostasGeradas.PROPOSTA ?? 0) + (d.propostasGeradas.APROVADA ?? 0)} propostas prontas`, recarregar: `documento:${doc.id}`, campos: `<input type="hidden" name="importacao" value="${esc(doc.id)}">`, aviso: "Confirmo que revisei os totais acima: as propostas prontas desta importação viram vendas no financeiro. As que estão em revisão ficam para análise individual." }) : ""}
 ${!podeImportar && d.acoes.confirmar ? `<p class="nota">Confirmar exige a permissão "${esc(PERMISSOES[d.acoes.permissaoExigida])}".</p>` : ""}
 <h3>Histórico</h3>${d.historico.length ? `<ol class="historico">${d.historico.map((h) => `<li>${esc(ESTADOS_IMPORTACAO[h.estado]?.rotulo ?? h.evento)} · ${esc(dataBR(h.em))}${h.justificativa ? ` — ${esc(h.justificativa)}` : ""}</li>`).join("")}</ol>` : nenhum("Sem histórico.")}
 ${tecnico({ registrosPorTipo: d.registrosPorTipo, amostra: pv?.amostra ?? [], controles: pv?.controles ?? null })}`;

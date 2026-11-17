@@ -1,6 +1,6 @@
 // Telas do Financeiro v2 como funções PURAS (dados do motor → HTML escapado). Nenhuma fórmula financeira aqui:
 // valores, subtotais, percentuais e situações chegam prontos do backend e só são apresentados.
-import { CLASSIFICACOES, competencia, dataBR, descricaoLegivel, esc, moeda, nomeCanal, percentual, situacao } from "./formatar.js";
+import { CLASSIFICACOES, LINHAS_DRE, competencia, dataBR, descricaoLegivel, esc, moeda, nomeCanal, percentual, situacao } from "./formatar.js";
 import { cardsFinanceirosDaVisaoGeral } from "./telasTesouraria.js";
 
 const selo = (codigo) => { const s = situacao(codigo); return `<span class="selo selo--${s.classe}" title="${esc(s.explicacao)}">${esc(s.rotulo)}</span>`; };
@@ -25,6 +25,10 @@ export function estado(tipo, mensagem = "") {
 const ESTADO_DA_COMPETENCIA = Object.freeze({ ABERTA: "Competência aberta", FECHAMENTO_PRELIMINAR: "Fechamento preliminar", FECHAMENTO_COM_PENDENCIAS: "Fechamento com pendências documentadas", FECHAMENTO_HOMOLOGADO: "Competência homologada" });
 
 // ------------------------------------------------------------------------------------------- visão geral
+/** Fase 08: origem de cada canal na Visão Geral e onde consultar a composição (SAIPOS até os lançamentos; plataformas pela fonte oficial). */
+const ORIGEM_CANAL = Object.freeze({ BALCAO: "Presencial — SAIPOS", ANOTA_AI: "Anota Aí — SAIPOS", IFOOD: "iFood — fonte oficial", NOVENTA_E_NOVE_FOOD: "99Food — fonte oficial" });
+const COMPOSICAO_CANAL = Object.freeze({ BALCAO: "#/saipos", ANOTA_AI: "#/saipos", IFOOD: "#/ifood", NOVENTA_E_NOVE_FOOD: "#/noventa-e-nove-food" });
+const rotuloCanal = (c) => ORIGEM_CANAL[c] ?? nomeCanal(c);
 export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   const fb = vg.faturamentoBruto;
   const liq = vg.faturamentoLiquidoGerencial;
@@ -46,7 +50,7 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   <div class="card-topo"><h2 id="t-fb">Faturamento Bruto Próprio</h2>${selo(fb.situacao)}${explicar("Faturamento Bruto Próprio", "Soma das vendas pelo valor bruto próprio (produtos, acréscimos e serviços da loja), antes de descontos. Não é saldo bancário, depósito, total Stone nem soma de formas de pagamento.")}</div>
   <p class="numero-principal">${valor(fb.valorCentavos)}${zeroConfirmado ? '<span class="nota-zero">zero confirmado</span>' : ""}</p>
   ${comPeso.length ? `<div class="barra barra--canais" role="img" aria-label="Participação por canal: ${esc(comPeso.map((c) => `${nomeCanal(c.canal)} ${percentual(c.percentualDoBruto)}`).join(", "))}">${comPeso.map((c) => `<span class="segmento segmento--canal-${esc(classeCanal(c.canal))}" data-peso="${c.percentualDoBruto}" title="${esc(`${nomeCanal(c.canal)}: ${percentual(c.percentualDoBruto)}`)}"></span>`).join("")}</div>` : ""}
-  <ul class="canais" aria-label="Faturamento bruto por canal">${canais.map((c) => `<li class="canal${c.comprovado ? "" : " canal--sem"}"><span class="canal-nome"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(nomeCanal(c.canal))}</span>${valor(c.valorCentavos)}<span class="canal-pct">${esc(percentual(c.percentualDoBruto))}</span>${c.comprovado ? "" : `<small>${esc(c.observacao ?? "Canal não comprovado.")}</small>`}${(c.valorCentavos ?? 0) !== 0 ? `<a class="botao-link" href="#/vendas-e-recebimentos?aba=vendas&amp;canal=${esc(c.canal)}">Ver vendas<span class="sr"> — ${esc(nomeCanal(c.canal))}</span></a>` : ""}</li>`).join("")}</ul>
+  <ul class="canais" aria-label="Faturamento bruto por canal">${canais.map((c) => { const semDados = !(c.registros ?? []).length; return `<li class="canal${c.comprovado && !semDados ? "" : " canal--sem"}"><span class="canal-nome"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(rotuloCanal(c.canal))}</span>${semDados ? '<span class="valor valor--desconhecido">Sem dados</span>' : valor(c.valorCentavos)}<span class="canal-pct">${semDados ? "" : esc(percentual(c.percentualDoBruto))}</span>${semDados ? `<small>${c.canal === "IFOOD" || c.canal === "NOVENTA_E_NOVE_FOOD" ? "Sem relatório oficial da plataforma nesta competência (não é zero)." : "Sem vendas registradas nesta competência (não é zero confirmado)."}</small>` : c.comprovado ? "" : `<small>${esc(c.observacao ?? "Canal não comprovado.")}</small>`}${COMPOSICAO_CANAL[c.canal] ? `<a class="botao-link" href="${COMPOSICAO_CANAL[c.canal]}">Ver composição<span class="sr"> — ${esc(rotuloCanal(c.canal))}</span></a>` : ""}${!semDados ? `<a class="botao-link" href="#/vendas-e-recebimentos?aba=vendas&amp;canal=${esc(c.canal)}">Ver vendas<span class="sr"> — ${esc(nomeCanal(c.canal))}</span></a>` : ""}</li>`; }).join("")}</ul>
   ${pendenciasCurtas(fb.pendencias)}
   <div class="bloco-acoes">${botaoComposicao("FATURAMENTO_BRUTO_PROPRIO")}</div>
 </section>
@@ -69,7 +73,7 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   <div class="card-topo"><h2 id="t-cc">Contribuição por canal</h2>${explicar("Contribuição por canal", "Por canal: bruto − deduções do canal − despesas comprovadamente do canal (ex.: comissões do iFood). O que não tem canal comprovado fica em \"Não atribuído\" — nada é rateado.")}</div>
   <div class="tabela-rolavel"><table class="tabela tabela--canais tabela--cartoes"><caption class="sr">Contribuição por canal</caption><thead><tr><th scope="col">Canal</th><th scope="col">Bruto</th><th scope="col">Deduções</th><th scope="col">Despesas do canal</th><th scope="col">Contribuição</th></tr></thead><tbody>
   ${liq.porCanal.filter((c) => c.registros.length).map((c) => `<tr><th scope="row"><span class="ponto segmento--canal-${esc(classeCanal(c.canal))}" aria-hidden="true"></span>${esc(nomeCanal(c.canal))}</th><td data-rotulo="Bruto"><span class="cel">${valor(c.brutoCentavos)}</span></td><td data-rotulo="Deduções"><span class="cel">${valor(c.deducoesCentavos)}</span></td><td data-rotulo="Despesas do canal"><span class="cel">${valor(c.despesasAtribuidasCentavos)}${Object.keys(c.despesasPorClassificacao).length ? `<ul class="mini">${Object.entries(c.despesasPorClassificacao).map(([k, v]) => `<li>${esc(CLASSIFICACOES[k] ?? k)}: ${esc(moeda(v))}</li>`).join("")}</ul>` : ""}</span></td><td class="coluna-destaque" data-rotulo="Contribuição"><span class="cel">${valor(c.liquidoGerencialCentavos)}</span></td></tr>`).join("")}
-  ${rec && rec.somaNaoAtribuidosCentavos ? `<tr class="linha--nao-atribuido"><th scope="row">Não atribuído a canal</th><td data-rotulo="Bruto"><span class="cel">—</span></td><td colspan="2" data-rotulo="Composição"><span class="cel"><ul class="mini">${Object.entries(rec.naoAtribuidos).map(([k, x]) => `<li>${esc(CLASSIFICACOES[k] ?? k)}: ${esc(moeda(x.valorCentavos))}</li>`).join("")}</ul></span></td><td class="coluna-destaque" data-rotulo="Contribuição"><span class="cel">${valor(rec.somaNaoAtribuidosCentavos)}</span></td></tr>` : ""}
+  ${rec && rec.somaNaoAtribuidosCentavos ? `<tr class="linha--nao-atribuido"><th scope="row">Não atribuído a canal</th><td data-rotulo="Bruto"><span class="cel">—</span></td><td colspan="2" data-rotulo="Composição"><span class="cel"><ul class="mini">${Object.entries(rec.naoAtribuidos).map(([k, x]) => `<li>${esc(CLASSIFICACOES[k] ?? LINHAS_DRE[k] ?? k)}: ${esc(moeda(x.valorCentavos))}</li>`).join("")}</ul></span></td><td class="coluna-destaque" data-rotulo="Contribuição"><span class="cel">${valor(rec.somaNaoAtribuidosCentavos)}</span></td></tr>` : ""}
   </tbody></table></div>
   ${rec ? `<p class="reconciliacao ${rec.reconcilia ? "" : "reconciliacao--limite"}">Canais ${esc(moeda(rec.somaDosCanaisCentavos))} + não atribuído ${esc(moeda(rec.somaNaoAtribuidosCentavos))} = ${esc(moeda(rec.totalReconciliadoCentavos))} · Resultado Gerencial ${esc(moeda(rec.resultadoDaDreCentavos))} ${rec.reconcilia ? "✓ reconciliado" : "— a DRE prevalece"}</p>` : ""}
   <div class="bloco-acoes">${botaoComposicao("FATURAMENTO_LIQUIDO_GERENCIAL")}</div>
@@ -87,7 +91,7 @@ export function visaoGeral(vg, { unidadeNome = "" } = {}) {
   <article class="card card--alertas${alertas.length ? "" : " card--alertas-vazio"}"><div class="card-topo"><h2>Alertas de conferência</h2>${alertas.length ? `<span class="contador" aria-label="${alertas.length} alerta(s)">${alertas.length}</span>` : ""}</div>${pendenciasCurtas(alertas, 5) || '<p class="nota">Sem alertas nesta competência.</p>'}<a class="botao-link" href="#/conferencias">Abrir a Central de Conferências</a></article>
 </section>`;
 }
-const CLASSE_CANAL = { BALCAO: "balcao", IFOOD: "ifood", ANOTA_AI: "anota-ai", OUTRO: "outro", NAO_IDENTIFICADO: "sem-canal" };
+const CLASSE_CANAL = { BALCAO: "balcao", IFOOD: "ifood", ANOTA_AI: "anota-ai", NOVENTA_E_NOVE_FOOD: "noventa-e-nove-food", OUTRO: "outro", NAO_IDENTIFICADO: "sem-canal" };
 const classeCanal = (c) => CLASSE_CANAL[c] ?? "outro";
 function cardSec(titulo, v, s, codigo, nota = "") {
   return `<article class="card card--sec"><h3>${esc(titulo)}</h3><p>${v}</p>${s}${nota ? `<p class="nota">${esc(nota)}</p>` : ""}${codigo ? botaoComposicao(codigo) : ""}</article>`;

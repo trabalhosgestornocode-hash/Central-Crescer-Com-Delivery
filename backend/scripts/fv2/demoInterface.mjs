@@ -23,8 +23,9 @@ import { fileURLToPath } from "node:url";
 
 const aqui = dirname(fileURLToPath(import.meta.url));
 const m = await import(pathToFileURL(join(aqui, "..", "..", "src", "modules", "financeiro-v2", "index.js")));
-const { faturamentoSaiposPdf } = await import(pathToFileURL(join(aqui, "..", "..", "test", "financeiro-v2", "helpers", "formatos.js")));
-const { escritasDaAbertura } = await import(pathToFileURL(join(aqui, "..", "..", "src", "modules", "fv2-integracao", "escritas.js")));
+const { faturamentoSaiposPdf, xlsx } = await import(pathToFileURL(join(aqui, "..", "..", "test", "financeiro-v2", "helpers", "formatos.js")));
+const { escritasDaAbertura, ESCRITAS } = await import(pathToFileURL(join(aqui, "..", "..", "src", "modules", "fv2-integracao", "escritas.js")));
+const { CONSULTAS } = await import(pathToFileURL(join(aqui, "..", "..", "src", "modules", "fv2-integracao", "consultas.js")));
 const { foodyEntregas, saiposFormas, saiposVendas, texto, unicredExtrato } = await import(pathToFileURL(join(aqui, "..", "..", "test", "financeiro-v2", "helpers", "arquivos.js")));
 /** Stone no layout homologado (texto, 6 casas, desconto no "unificado"), em CSV SINTÉTICO. */
 const stoneCsv = (linhas) => texto(["STONE ID;DATA DA VENDA;PRODUTO;BANDEIRA;VALOR BRUTO;VALOR LIQUIDO;DESCONTO DE MDR;DESCONTO DE ANTECIPACAO;DESCONTO UNIFICADO;ULTIMO STATUS;CÓDIGO DE AUTORIZAÇÃO",
@@ -116,6 +117,7 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   await nucleo.registrarObrigacao(A, { contraparteId: forn.id, valorOriginalCentavos: 3200, categoria: "JUROS_E_TARIFAS_BANCARIAS", descricao: "Tarifa bancária (demonstração)", competencia: "2026-09", dataEmissao: "2026-09-10", vencimento: "2026-09-10" });
   await nucleo.registrarMovimentacao(A, { contaId: banco.id, dataEfetiva: "2026-09-21", sentido: "SAIDA", valorCentavos: 15000, natureza: "PAGAMENTO" });
   await vendasERecebimentos(nucleo, A, { banco, importar });
+  await canaisDeFaturamento(nucleo, A, { caixa, importar });
   await tesouraria(nucleo, A, { caixa, banco, ifoodRecebivel: ifood.recebiveis[0] });
   // Unidade 2: só uma despesa e competência homologada → faturamento ZERO CONFIRMADO.
   const B = c(UNIDADES[1].id);
@@ -188,6 +190,8 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const FILTRO_VENDAS = ["competencia", "inicio", "fim", "canal", "forma", "processador", "situacao", "valorMinimoCentavos", "valorMaximoCentavos", "identificador", "pagina", "tamanho"];
   const NUMEROS_VENDAS = ["pagina", "tamanho", "valorMinimoCentavos", "valorMaximoCentavos"];
   const TESOURARIA = {
+    // Fases 04–06 (docs 42–44): as MESMAS consultas da plataforma (área SAIPOS, fechamento manual, operadoras, cards).
+    ...Object.fromEntries(["/saipos", "/fechamento-manual", "/operadoras", "/vendas/liquido-esperado", "/canal-plataforma", "/calendario-faturamento", "/importacoes-canal", "/previa-demonstrativo-ifood"].map((k) => [`/api/fv2${k}`, (ctx, p) => CONSULTAS[k](nucleo, ctx, p)])),
     "/api/fv2/contas-a-pagar": async (ctx, p) => {
       const r = await nucleo.consultarContasAPagar(ctx, filtro(p, ["competencia", "vencimentoDe", "vencimentoAte", "contraparteId", "categoria", "situacao", "pagina", "tamanho"], ["pagina", "tamanho"]));
       // 08D: opções do formulário "Registrar conta a pagar": categorias lançáveis que não são receita (inclui "a classificar") e fornecedores.
@@ -289,10 +293,15 @@ export async function criarDemo({ relogio = () => new Date("2026-11-12T15:00:00Z
   const centavos = (v) => { const t = String(v ?? "").trim().replace(/\./g, ""); const m = /^(\d{1,9})(?:,(\d{1,2}))?$/.exec(t); return m ? Number(m[1]) * 100 + Number((m[2] ?? "0").padEnd(2, "0")) : t; };
   /** Ações LOCAIS da demonstração: cada uma chama a operação REAL do núcleo (permissão, transação, idempotência, histórico). */
   const ACOES = {
+    // Fases 04–06: as MESMAS ações da plataforma (fechamento manual, operadoras e taxas, lote de propostas prontas).
+    ...Object.fromEntries(["/fechamento-manual/registrar", "/faturamento-manual/registrar", "/faturamento-manual/substituir", "/calendario-faturamento/sem-operacao", "/vendas/demonstrativo-ifood", "/configuracoes/operadoras", "/configuracoes/operadoras/situacao", "/configuracoes/taxas-contratadas", "/propostas/aprovar-e-aplicar-prontas"]
+      .map((k) => [`/api/fv2/acoes${k}`, { campos: ESCRITAS[k].campos, fazer: (ctx, b) => ESCRITAS[k].fazer(nucleo, ctx, k === "/propostas/aprovar-e-aplicar-prontas" ? { ...b, importacao: id(b.importacao) } : b) }])),
     // Abertura financeira (doc 29): as MESMAS ações da plataforma (contas, saldos de abertura, títulos anteriores, recebíveis,
     // caixa físico, implantação do plano), com as referências opacas e o relógio da demonstração.
     ...Object.fromEntries(Object.entries(escritasDaAbertura({ hoje: () => m.tempo.hojeEm(relogio()), ref: id })).filter(([k]) => k !== "/conciliacoes/gerar").map(([k, e]) => [`/api/fv2/acoes${k}`, { campos: e.campos, fazer: (ctx, b) => e.fazer(nucleo, ctx, b) }])),
-    "/api/fv2/acoes/importacao/receber": { campos: ["arquivo"], fazer: (ctx, b) => {
+    "/api/fv2/acoes/importacao/receber": { campos: ["arquivo", "tipoRelatorio", "periodoInicio", "periodoFim", "arquivoBase64", "nomeArquivo", "tipoMime", "descricao"], fazer: (ctx, b) => {
+      // Fase 11: as páginas dos canais enviam o arquivo escolhido (SINTÉTICO, no seu computador) pelo MESMO caminho da plataforma.
+      if (b.arquivoBase64) return ESCRITAS["/importacao/receber"].fazer(nucleo, ctx, b);
       const arq = CATALOGO.find((x) => x.id === b.arquivo);
       if (!arq) throw Object.assign(new Error("Arquivo fora do catálogo sintético da demonstração."), { codigo: m.CODIGO.ENTRADA_INVALIDA });
       return nucleo.receberArquivoParaImportacao(ctx, { fonte: arq.fonte, tipoRelatorio: arq.tipoRelatorio, tipoMime: "application/octet-stream", conteudo: arq.conteudo(), periodoInicio: arq.periodoInicio, periodoFim: arq.periodoFim, descricao: arq.nome });
@@ -597,6 +606,40 @@ async function tesouraria(nucleo, A, { caixa, banco, ifoodRecebivel }) {
 }
 
 /** Documentos SINTÉTICOS no cofre da demonstração (06D): PDF íntegro com duas versões, PDF com conteúdo ativo e CSV. */
+/** Fases 03–06: canais SAIPOS (Presencial e Anota Aí) com operadoras e taxas FICTÍCIAS, importação e fechamento manual. */
+async function canaisDeFaturamento(nucleo, A, { caixa, importar }) {
+  const W = (k, b) => ESCRITAS[k].fazer(nucleo, A, b);
+  try { await W("/configuracoes/unidade", { nomeExibicao: "Unidade Centro (demonstração)", justificativa: "Demonstração." }); } catch { /* já configurada */ }
+  const op = (codigo, processador, inicio, modalidades) => W("/configuracoes/operadoras", { codigo, nome: { STONE: "Stone", MAQUININHA_IFOOD: "Maquininha do iFood (presencial)", PAGBANK: "PagBank" }[codigo], processador, inicio, modalidades, justificativa: "Demonstração (taxas fictícias)." });
+  await op("STONE", "STONE", "2026-01-01", "DEBITO,CREDITO_A_VISTA,PIX,VOUCHER");
+  await op("MAQUININHA_IFOOD", "MAQUININHA_IFOOD", "2026-11-01", "PIX");
+  await W("/configuracoes/taxas-contratadas", { operadora: "STONE", vigenciaInicio: "2026-01-01", fonte: "Tabela fictícia da demonstração", justificativa: "Demonstração.",
+    taxas: ["DEBITO;MASTERCARD;1,10", "DEBITO;VISA;1,10", "CREDITO_A_VISTA;MASTERCARD;2,90", "CREDITO_A_VISTA;VISA;2,90"].join(String.fromCharCode(10)) });
+  // Fase 10: demonstrativo OFICIAL fictício do iFood cobrindo 01 a 08/11 (um período; o calendário não o reparte por dia).
+  // Só com FV2_DEMO_IFOOD_DEMONSTRATIVO=1 (roteiro de navegador do calendário): os testes de tela usam a demonstração SEM ele.
+  if (process.env.FV2_DEMO_IFOOD_DEMONSTRATIVO === "1") await W("/vendas/demonstrativo-ifood", { periodoInicio: "2026-11-01", periodoFim: "2026-11-08", vendas: "1.000,00", comissoes: "120,00", taxaPagamento: "20,00", mensalidade: "10,00", servicosEPromocoes: "50,00", ajustes: "0,00", liquido: "800,00", origem: "Demonstrativo fictício da demonstração", justificativa: "Demonstração: demonstrativo sintético do iFood." });
+  await W("/configuracoes/taxas-contratadas", { operadora: "MAQUININHA_IFOOD", vigenciaInicio: "2026-11-01", fonte: "Tabela fictícia da demonstração", taxas: "PIX;PIX;0,80", justificativa: "Demonstração." });
+  const CAB = ["Pedido", "Código da loja", "Nome da loja", "Tipo do pedido", "Turno", "Canal de venda", "Id do pedido no parceiro", "Número do pedido no parceiro", "Data da venda", "Consumidor", "Tem cupom", "Pagamento", "Está cancelado", "Motivo do cancelamento", "Itens", "Entrega", "Valor Entregador", "Entregador", "Bairro", "CEP", "Acréscimo", "Motivo de acréscimo", "Desconto", "Motivo do desconto", "Total", "Total taxa de serviço"];
+  const ficha = (q, pag, v) => ["Ficha", null, null, "F", "Dia", null, null, null, q, "Consumidor não identificado", "N", pag, "N", null, v, null, null, null, null, "", 0, "", 0, "", v, 0];
+  let n = 0;
+  const integ = (canal, q, pag, v) => { n += 1; return [n, "loja", "Loja (demonstração)", "D", "Dia", canal, `00000000-0000-4000-8000-0000000d${String(n).padStart(4, "0")}`, String(500 + n), q, "Cliente (demonstração)", "N", pag, "N", null, v, 0, 0, null, "Bairro", "00000-000", 0, null, 0, null, v, 0]; };
+  const linhas = [
+    ficha("03/11/2026 12:00", "Débito Master", 32.9), ficha("03/11/2026 12:15", "Débito Visa", 18.5), ficha("03/11/2026 12:40", "Crédito Master", 54.8), ficha("03/11/2026 13:05", "Crédito Visa", 27.4),
+    ficha("03/11/2026 13:20", "Crédito Elo", 22), ficha("03/11/2026 14:00", "Pago Online via Pix", 41.9), ficha("03/11/2026 15:10", "Pago Online via Pix", 23.5), ficha("03/11/2026 16:30", "Dinheiro", 19.9),
+    ficha("03/11/2026 17:00", "Vale", 25), ficha("04/11/2026 12:10", "Débito Master", 29.9), ficha("04/11/2026 13:30", "Pago Online via Pix", 36), ficha("04/11/2026 18:00", "Débito Elo, Dinheiro", 31),
+    integ("Anota.ai", "03/11/2026 19:00", "Online Anotaai", 48.9), integ("Anota.ai", "04/11/2026 20:00", "Dinheiro", 33.5),
+    integ("iFood", "03/11/2026 19:30", "Online iFood, Voucher Parceiro Desconto", 62.9), integ("99 Food", "04/11/2026 19:45", "Pago Online, Pago Online", 44),
+  ];
+  const imp = await importar("SAIPOS", "SAIPOS_VENDAS", xlsx([{ nome: "Vendas por período", linhas: [CAB, ...linhas] }]), { periodoInicio: "2026-11-03", periodoFim: "2026-11-04" });
+  await nucleo.gerarPropostas(A, { importacaoId: imp.id, contaCaixaId: caixa.id });
+  await W("/propostas/aprovar-e-aplicar-prontas", { importacao: imp.id });
+  await W("/fechamento-manual/registrar", { data: "2026-11-03", caixa: "1", responsavelAbertura: "Equipe manhã", responsavelFechamento: "Equipe tarde", horaAbertura: "11:00", horaFechamento: "18:00",
+    din_abertura: "150,00", din_vendas: "19,90", din_retiradas: "50,00", din_reforcos: "0", din_transferencias: "0", din_informado: "119,90",
+    f_DEBITO_MASTERCARD_inf: "32,90", f_DEBITO_VISA_inf: "18,50", f_CREDITO_MASTERCARD_inf: "54,80", f_CREDITO_VISA_inf: "27,40", f_CREDITO_ELO_inf: "22,00",
+    f_PIX_MAQUININHA_IFOOD_inf: "60,40", f_VOUCHER_OUTRA_inf: "25,00", f_IFOOD_CONFERENCIA_inf: "62,90" });
+  await W("/fechamento-manual/registrar", { data: "2026-11-03", caixa: "2", responsavelFechamento: "Equipe noite", horaAbertura: "18:00", horaFechamento: "23:30", f_ANOTA_AI_inf: "48,90" });
+}
+
 export function pdfSintetico(texto, extra = "") {
   const conteudo = `BT /F1 12 Tf 72 720 Td (${texto}) Tj ET`;
   return new TextEncoder().encode(`%PDF-1.4

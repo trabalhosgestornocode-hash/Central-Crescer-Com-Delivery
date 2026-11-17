@@ -23,7 +23,7 @@ const semVazios = (b, campos) => Object.fromEntries(campos.filter((k) => b[k] !=
 const acoesMarcadas = (b) => Object.values(ACAO).filter((a) => marcado(b[`acao_${a.split(".")[1]}`]));
 /** doc 37: relatórios aceitos na importação pela plataforma (os conferidos com arquivo real) → fonte. */
 export const FONTE_DO_RELATORIO = Object.freeze({
-  SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED",
+  SAIPOS_VENDAS: "SAIPOS", SAIPOS_DESEMPENHO_POR_ATENDENTE: "SAIPOS", SAIPOS_FORMAS_PAGAMENTO: "SAIPOS", SAIPOS_FATURAMENTO_POR_DIA: "SAIPOS", STONE_VENDAS: "STONE", UNICRED_EXTRATO: "UNICRED",
 });
 const MIME_DA_EXTENSAO = Object.freeze({ pdf: "application/pdf", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", csv: "text/csv", ofx: "application/x-ofx" });
 /** Base64 estrito → bytes (até 5 MiB). */
@@ -146,6 +146,46 @@ export function acaoSensivelDoFechamento(b) {
   return null;
 }
 
+/**
+ * Fase 04 (doc 42) — grade FIXA do formulário de fechamento manual: grupo × bandeira (cartões/voucher) ou operadora (Pix).
+ * Campo `f_<GRUPO>_<SUB>_inf` = informado e `_esp` = esperado (opcional), em reais. Só as linhas preenchidas são enviadas.
+ */
+export const GRADE_FECHAMENTO = Object.freeze([
+  ...["MASTERCARD", "VISA", "ELO", "AMEX", "HIPERCARD", "OUTRA"].map((s) => ["CREDITO", s]),
+  ...["MASTERCARD", "VISA", "ELO", "OUTRA"].map((s) => ["DEBITO", s]),
+  ...["MAQUININHA_IFOOD", "STONE", "PAGBANK", "DIRETO"].map((s) => ["PIX", s]),
+  ...["ALELO", "PLUXEE", "VR", "TICKET", "OUTRA"].map((s) => ["VOUCHER", s]),
+  ["ANOTA_AI", ""], ["OUTRA", ""], ["IFOOD_CONFERENCIA", ""], ["NOVENTA_E_NOVE_FOOD_CONFERENCIA", ""],
+]);
+const campoDaGrade = (g, s, k) => `f_${g}${s ? `_${s}` : ""}_${k}`;
+const DINHEIRO_FECHAMENTO = ["abertura", "vendas", "retiradas", "reforcos", "transferencias", "informado"];
+const CAMPOS_FECHAMENTO = Object.freeze(["data", "caixa", "responsavelAbertura", "responsavelFechamento", "horaAbertura", "horaFechamento", "observacao", "justificativa",
+  ...DINHEIRO_FECHAMENTO.map((k) => `din_${k}`), ...GRADE_FECHAMENTO.flatMap(([g, s]) => [campoDaGrade(g, s, "inf"), campoDaGrade(g, s, "esp")])]);
+const reaisOuNulo = (v) => (v === undefined || v === null || String(v).trim() === "" ? null : centavos(v));
+const CAMPOS_FATURAMENTO = Object.freeze(["data", "caixa", "canal", "justificativa", "din_vendas", ...GRADE_FECHAMENTO.filter(([g]) => !g.endsWith("_CONFERENCIA")).map(([g, s]) => campoDaGrade(g, s, "inf"))]);
+/** Faturamento manual: os MESMOS campos "Informado" da grade (sem as linhas só de conferência) + vendas em dinheiro. */
+function corpoDoFaturamento(b) {
+  const formas = [
+    ...(reaisOuNulo(b.din_vendas) ? [{ grupo: "DINHEIRO", valorCentavos: reaisOuNulo(b.din_vendas) }] : []),
+    ...GRADE_FECHAMENTO.filter(([g]) => !g.endsWith("_CONFERENCIA")).filter(([g, s]) => reaisOuNulo(b[campoDaGrade(g, s, "inf")])).map(([g, s]) => ({
+      grupo: g, ...(["CREDITO", "DEBITO", "VOUCHER"].includes(g) ? { bandeira: s } : {}), ...(g === "PIX" ? { operadora: s } : {}), valorCentavos: reaisOuNulo(b[campoDaGrade(g, s, "inf")]),
+    })),
+  ];
+  return { data: b.data, caixa: b.caixa, canal: b.canal, justificativa: b.justificativa, formas };
+}
+function corpoDoFechamento(b) {
+  const texto = (k) => (b[k] === undefined || String(b[k]).trim() === "" ? undefined : String(b[k]));
+  const dinheiro = Object.fromEntries(DINHEIRO_FECHAMENTO.map((k) => [`${k}Centavos`, reaisOuNulo(b[`din_${k}`])]));
+  const formas = GRADE_FECHAMENTO.filter(([g, s]) => reaisOuNulo(b[campoDaGrade(g, s, "inf")]) !== null).map(([g, s]) => ({
+    grupo: g, ...(["CREDITO", "DEBITO", "VOUCHER"].includes(g) ? { bandeira: s } : {}), ...(g === "PIX" ? { operadora: s } : {}),
+    informadoCentavos: reaisOuNulo(b[campoDaGrade(g, s, "inf")]), ...(reaisOuNulo(b[campoDaGrade(g, s, "esp")]) !== null ? { esperadoCentavos: reaisOuNulo(b[campoDaGrade(g, s, "esp")]) } : {}),
+  }));
+  return {
+    data: b.data, caixa: b.caixa, ...Object.fromEntries(["responsavelAbertura", "responsavelFechamento", "horaAbertura", "horaFechamento", "observacao", "justificativa"].filter((k) => texto(k)).map((k) => [k, texto(k)])),
+    dinheiro, formas,
+  };
+}
+
 /** caminho → { campos, sensivel?(corpo) → ACAO|null, fazer(núcleo, contexto, corpo) } */
 export const ESCRITAS = Object.freeze({
   // doc 37: importação SEM GUARDA do arquivo (o cofre documental segue desligado): o arquivo é lido, conferido e descartado;
@@ -188,13 +228,15 @@ export const ESCRITAS = Object.freeze({
   // PROPOSTA) da importação. As em revisão/aguardando evidência ficam para a revisão individual. Falha de uma não para o resto.
   "/propostas/aprovar-e-aplicar-prontas": { campos: ["importacao"], fazer: async (n, c, b) => {
     const importacaoId = id(b.importacao);
-    const prontas = (await n.listarPropostas(c, { importacaoId, estado: "PROPOSTA" })).sort((x, y) => String(x.dataOperacao).localeCompare(String(y.dataOperacao))).slice(0, 400);
+    // Prontas = PROPOSTA (aprova e aplica) e APROVADA ainda não aplicada (ex.: recusada antes por conflito já resolvido: só aplica).
+    const todas = [...await n.listarPropostas(c, { importacaoId, estado: "PROPOSTA" }), ...await n.listarPropostas(c, { importacaoId, estado: "APROVADA" })].sort((x, y) => String(x.dataOperacao).localeCompare(String(y.dataOperacao)));
+    const prontas = todas.slice(0, 400); // por chamada; o restante sai no clique seguinte (a resposta informa quantas faltam)
     let aplicadas = 0;
     let valorCentavos = 0;
     const falhas = [];
     for (const p of prontas) {
       try {
-        await n.aprovarProposta(c, { propostaId: p.id, justificativa: "Aprovada em lote (propostas prontas da importação)." });
+        if (p.estado === "PROPOSTA") await n.aprovarProposta(c, { propostaId: p.id, justificativa: "Aprovada em lote (propostas prontas da importação)." });
         await n.aplicarProposta(c, { propostaId: p.id });
         aplicadas += 1;
         valorCentavos += p.valorCentavos ?? 0;
@@ -202,7 +244,7 @@ export const ESCRITAS = Object.freeze({
         falhas.push({ propostaId: p.id, data: p.dataOperacao, mensagem: e?.message ?? "Falha ao aplicar." });
       }
     }
-    return { importacaoId, prontas: prontas.length, aplicadas, valorCentavos, falhas };
+    return { importacaoId, prontas: prontas.length, aplicadas, valorCentavos, falhas, restantes: todas.length - prontas.length };
   } },
   // `chave` (UUID do formulário): o MESMO envio repetido (clique duplo, rede) devolve o registro já gravado, sem duplicar.
   "/obrigacoes/registrar": { campos: ["fornecedor", "fornecedorNovo", "descricao", "valor", "categoria", "competencia", "dataEmissao", "vencimento", "identificador", "chave"], fazer: (n, c, b) => n.registrarObrigacao(c, {
@@ -270,9 +312,28 @@ export const ESCRITAS = Object.freeze({
   "/permissoes/conceder": { campos: ["usuario", "justificativa", ...Object.values(ACAO).map((a) => `acao_${a.split(".")[1]}`)], sensivel: () => ACAO.CONCEDER, fazer: (n, c, b) => n.concederAcesso(c, { usuarioId: id(b.usuario), acoes: acoesMarcadas(b), justificativa: b.justificativa }) },
   "/permissoes/revogar": { campos: ["usuario", "justificativa", ...Object.values(ACAO).map((a) => `acao_${a.split(".")[1]}`)], sensivel: () => ACAO.REVOGAR, fazer: (n, c, b) => n.revogarAcesso(c, { usuarioId: id(b.usuario), ...(acoesMarcadas(b).length ? { acoes: acoesMarcadas(b) } : {}), justificativa: b.justificativa }) },
   // doc 35: tabela de taxas contratadas (uma linha por taxa: "DEBITO;MASTERCARD;2,15"), com vigência e fonte documental.
-  "/configuracoes/taxas-contratadas": { campos: ["processador", "vigenciaInicio", "vigenciaFim", "fonte", "prazoDeRecebimento", "taxas", "justificativa"], fazer: (n, c, b) => n.registrarTaxasContratadas(c, {
-    processador: b.processador || "STONE", vigenciaInicio: b.vigenciaInicio, ...(b.vigenciaFim ? { vigenciaFim: b.vigenciaFim } : {}), fonte: b.fonte,
+  "/configuracoes/taxas-contratadas": { campos: ["processador", "operadora", "vigenciaInicio", "vigenciaFim", "fonte", "prazoDeRecebimento", "taxas", "justificativa"], fazer: (n, c, b) => n.registrarTaxasContratadas(c, {
+    ...(b.operadora ? { operadora: b.operadora } : { processador: b.processador || "STONE" }), vigenciaInicio: b.vigenciaInicio, ...(b.vigenciaFim ? { vigenciaFim: b.vigenciaFim } : {}), fonte: b.fonte,
     ...(b.prazoDeRecebimento ? { prazoDeRecebimento: b.prazoDeRecebimento } : {}), taxas: taxasDoTexto(b.taxas), justificativa: b.justificativa,
+  }) },
+  // Fase 04 (doc 42): fechamento manual de UM caixa num dia (conferência; nunca receita). Grade fixa de formas (GRADE_FECHAMENTO).
+  "/fechamento-manual/registrar": { campos: CAMPOS_FECHAMENTO, fazer: (n, c, b) => n.registrarFechamentoManual(c, corpoDoFechamento(b)) },
+  // Fase 08 (doc 44): faturamento manual PROVISÓRIO (ação explícita, separada do fechamento) e a substituição auditada.
+  "/faturamento-manual/registrar": { campos: CAMPOS_FATURAMENTO, fazer: (n, c, b) => n.registrarFaturamentoManual(c, corpoDoFaturamento(b)) },
+  // Fase 10 (doc 47): dias (ou dias da semana) sem operação de um canal, com justificativa e histórico.
+  "/calendario-faturamento/sem-operacao": { campos: ["canal", "data", "diaDaSemana", "situacao", "justificativa"], fazer: (n, c, b) => n.registrarDiaSemOperacao(c, {
+    canal: b.canal, ...(b.data ? { data: b.data } : {}), ...(b.diaDaSemana !== undefined && b.diaDaSemana !== "" ? { diaDaSemana: b.diaDaSemana } : {}),
+    ...(b.situacao ? { situacao: b.situacao } : {}), justificativa: b.justificativa,
+  }) },
+  "/faturamento-manual/substituir": { campos: ["data", "canal", "justificativa"], fazer: (n, c, b) => n.substituirFaturamentoProvisorio(c, { data: b.data, canal: b.canal, justificativa: b.justificativa }) },
+  // Fase 02 (doc 40): operadoras de pagamento da unidade (cadastro, ativação/desativação, encerramento; nada é apagado).
+  "/configuracoes/operadoras": { campos: ["codigo", "nome", "processador", "inicio", "encerramento", "modalidades", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarOperadora(c, {
+    codigo: b.codigo, nome: b.nome, processador: b.processador, inicio: b.inicio, ...(b.encerramento ? { encerramento: b.encerramento } : {}),
+    modalidades: Array.isArray(b.modalidades) ? b.modalidades : String(b.modalidades ?? "").split(/[,;\s]+/).filter(Boolean), ...(b.observacao ? { observacao: b.observacao } : {}), justificativa: b.justificativa,
+  }) },
+  "/configuracoes/operadoras/situacao": { campos: ["codigo", "situacao", "encerramento", "nome", "observacao", "justificativa"], fazer: (n, c, b) => n.alterarSituacaoOperadora(c, {
+    codigo: b.codigo, ...(b.situacao ? { situacao: b.situacao } : {}), ...(b.encerramento !== undefined ? { encerramento: b.encerramento || null } : {}),
+    ...(b.nome ? { nome: b.nome } : {}), ...(b.observacao !== undefined ? { observacao: b.observacao } : {}), justificativa: b.justificativa,
   }) },
   // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
   "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },

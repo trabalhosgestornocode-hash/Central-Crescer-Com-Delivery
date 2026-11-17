@@ -37,7 +37,7 @@ function preparar() {
   return { n, W, importar, aplicarTodas };
 }
 
-test("1 — faturamento bruto por canal: Balcão + iFood + Anota AI = total; repasse posterior não soma de novo", async () => {
+test("1 — faturamento bruto por canal: Presencial + Anota AI pela SAIPOS; o iFood da SAIPOS fica só para conferência (doc 38/39); repasse posterior não soma de novo", async () => {
   const { n, W, importar, aplicarTodas } = preparar();
   const caixa = await W("/configuracoes/conta/criar", { tipo: "CAIXA_FISICO", nome: "Caixa da loja" });
   const banco = await W("/configuracoes/conta/criar", { tipo: "BANCARIA", nome: "Unicred" });
@@ -53,23 +53,23 @@ test("1 — faturamento bruto por canal: Balcão + iFood + Anota AI = total; rep
 
   const vg = await n.apurarVisaoGeral(c, SET);
   const canal = (k) => vg.faturamentoBruto.porCanal.find((x) => x.canal === k)?.valorCentavos ?? 0;
-  assert.deepEqual([canal("BALCAO"), canal("IFOOD"), canal("ANOTA_AI")], [5000, 6000, 4000]);
-  assert.equal(vg.faturamentoBruto.valorCentavos, 15000);
+  assert.deepEqual([canal("BALCAO"), canal("IFOOD"), canal("ANOTA_AI")], [5000, 0, 4000]); // iFood: só pelo demonstrativo oficial
+  assert.equal(vg.faturamentoBruto.valorCentavos, 9000);
   assert.equal(vg.faturamentoBruto.porCanal.reduce((s, x) => s + (x.valorCentavos ?? 0), 0), vg.faturamentoBruto.valorCentavos, "a soma dos canais é o total");
   // Cada canal aponta os registros que o compõem (conferível até a venda e o pedido de origem).
-  assert.equal(vg.faturamentoBruto.porCanal.find((x) => x.canal === "IFOOD").registros.length, 1);
+  assert.equal(vg.faturamentoBruto.porCanal.find((x) => x.canal === "ANOTA_AI").registros.length, 1);
 
-  // Repasse do iFood em outubro liquida o recebível da venda: não é receita de novo (nem em setembro, nem em outubro).
-  const rec = (await n.consultarContasAReceber(c, { tamanho: 50 })).itens.find((x) => x.canal === "IFOOD");
-  const e = await n.registrarMovimentacao(c, { contaId: banco.id, dataEfetiva: "2026-10-08", sentido: "ENTRADA", valorCentavos: 6000, natureza: "RECEBIMENTO", descricao: "Repasse iFood (sintético)" });
-  await n.registrarLiquidacao(c, { movimentacaoId: e.movimentacao.id, alocacoes: [{ alvoTipo: "RECEBIVEL", alvoId: rec.id, valorCentavos: 6000 }] });
-  assert.equal((await n.apurarVisaoGeral(c, SET)).faturamentoBruto.valorCentavos, 15000);
+  // Repasse do Anota AI em outubro liquida o recebível da venda: não é receita de novo (nem em setembro, nem em outubro).
+  const rec = (await n.consultarContasAReceber(c, { tamanho: 50 })).itens.find((x) => x.canal === "ANOTA_AI");
+  const e = await n.registrarMovimentacao(c, { contaId: banco.id, dataEfetiva: "2026-10-08", sentido: "ENTRADA", valorCentavos: 4000, natureza: "RECEBIMENTO", descricao: "Repasse Anota AI (sintético)" });
+  await n.registrarLiquidacao(c, { movimentacaoId: e.movimentacao.id, alocacoes: [{ alvoTipo: "RECEBIVEL", alvoId: rec.id, valorCentavos: 4000 }] });
+  assert.equal((await n.apurarVisaoGeral(c, SET)).faturamentoBruto.valorCentavos, 9000);
   assert.equal((await n.apurarVisaoGeral(c, { competencia: "2026-10" })).faturamentoBruto.valorCentavos, null);
 
   // O mesmo relatório de novo: a mesma importação, nenhuma venda a mais.
   const de_novo = await importar("SAIPOS", "SAIPOS_VENDAS", arquivo, { periodoInicio: "2026-09-01", periodoFim: "2026-09-30" });
   assert.equal(de_novo.repetido, true);
-  assert.equal((await n.apurarVisaoGeral(c, SET)).faturamentoBruto.valorCentavos, 15000);
+  assert.equal((await n.apurarVisaoGeral(c, SET)).faturamentoBruto.valorCentavos, 9000);
 });
 
 test("2 — dinheiro em espécie: vendas em dinheiro × entrada no caixa × depósito × sangria; não é canal nem receita a mais", async () => {
@@ -96,9 +96,9 @@ test("2 — dinheiro em espécie: vendas em dinheiro × entrada no caixa × dep�
     ["CALCULADO", 6500, 5500, 4000, 500]);
   assert.deepEqual(d.semEntradaNoCaixa, { quantidade: 1, valorCentavos: 1000 });
   assert.deepEqual(d.porDia.map((x) => [x.data, x.vendasEmDinheiro, x.recebidoNoCaixa]), [["2026-09-02", 3000, 3000], ["2026-09-03", 2500, 2500], ["2026-09-04", 1000, 0], ["2026-09-05", 0, 0]]);
-  // Não é canal nem receita a mais: o bruto é a soma das vendas (Balcão + iFood) e o depósito não entra.
+  // Não é canal nem receita a mais: o bruto é a soma das vendas do Balcão (o pedido iFood da SAIPOS fica só para conferência, doc 38/39); o depósito não entra.
   const vg = await n.apurarVisaoGeral(c, SET);
-  assert.equal(vg.faturamentoBruto.valorCentavos, 3000 + 2500 + 1000 + 5000);
+  assert.equal(vg.faturamentoBruto.valorCentavos, 3000 + 2500 + 1000);
   assert.ok(!vg.faturamentoBruto.porCanal.some((x) => x.canal === "DINHEIRO"));
   // Outubro sem dinheiro: "sem registros", nunca R$ 0,00 confirmado.
   assert.equal((await n.consultarResumoFinanceiro(c, { competencia: "2026-10" })).dinheiroEmEspecie.situacao, "SEM_REGISTROS");
@@ -205,7 +205,7 @@ test("3 — baixa de contas a pagar pela conciliação do extrato: inequívoca f
   assert.deepEqual(await n.verificarConservacao(c), []);
 });
 
-test("1b — total do período por canal (desempenho por atendente): Balcão, iFood e Anota AI sem pedidos inventados; nunca junto com pedidos do mesmo canal", async () => {
+test("1b — total do período por canal (desempenho por atendente): Balcão e Anota AI sem pedidos inventados; iFood da SAIPOS fica fora; nunca junto com pedidos do mesmo canal", async () => {
   const { n, W, importar, aplicarTodas } = preparar();
   const caixa = await W("/configuracoes/conta/criar", { tipo: "CAIXA_FISICO", nome: "Caixa da loja" });
   const cab = "ATENDENTE;QUANTIDADE_VENDAS;VALOR_TOTAL_VENDAS;CATEGORIA;ITEM;QUANTIDADE_ITEM;VALOR_TOTAL_ITEM";
@@ -215,24 +215,24 @@ test("1b — total do período por canal (desempenho por atendente): Balcão, iF
   const imp = await importar("SAIPOS", "SAIPOS_DESEMPENHO_POR_ATENDENTE", arquivo, SETEMBRO);
   await n.gerarPropostas(c, { importacaoId: imp.id });
   const props = await n.listarPropostas(c, { operacao: "VENDA_AGREGADA" });
-  assert.deepEqual(props.map((p) => [p.comando.canal, p.comando.receitaBrutaCentavos, p.dataOperacao]).sort(), [["ANOTA_AI", 12000, "2026-09-30"], ["BALCAO", 50000, "2026-09-30"], ["IFOOD", 30000, "2026-09-30"]]);
+  assert.deepEqual(props.map((p) => [p.comando.canal, p.comando.receitaBrutaCentavos, p.dataOperacao]).sort(), [["ANOTA_AI", 12000, "2026-09-30"], ["BALCAO", 50000, "2026-09-30"]]); // iFood: só pelo demonstrativo oficial
   assert.ok(props.find((p) => p.comando.canal === "BALCAO").divergencias.some((d) => d.codigo === "CANAL_DEDUZIDO_DO_ATENDENTE"));
   await aplicarTodas("VENDA_AGREGADA");
   const vg = await n.apurarVisaoGeral(c, SET);
   const canal = (k) => vg.faturamentoBruto.porCanal.find((x) => x.canal === k)?.valorCentavos ?? 0;
-  assert.deepEqual([canal("BALCAO"), canal("IFOOD"), canal("ANOTA_AI"), vg.faturamentoBruto.valorCentavos], [50000, 30000, 12000, 92000]);
+  assert.deepEqual([canal("BALCAO"), canal("IFOOD"), canal("ANOTA_AI"), vg.faturamentoBruto.valorCentavos], [50000, 0, 12000, 62000]);
   // Mesmo arquivo de novo: a mesma importação, nada a mais.
   assert.equal((await importar("SAIPOS", "SAIPOS_DESEMPENHO_POR_ATENDENTE", arquivo, SETEMBRO)).repetido, true);
-  // Pedidos do mesmo período: o do iFood (canal com total) é recusado na aplicação — nunca duas receitas do mesmo fato.
-  const ped = await importar("SAIPOS", "SAIPOS_VENDAS", saiposVendas([{ pedido: "P-IF", data: "10/09/2026 20:00", canal: "iFood", itens: 3000, forma: "Pago online" }]), SETEMBRO);
+  // Pedidos do mesmo período: o do Anota AI (canal com total) é recusado na aplicação — nunca duas receitas do mesmo fato.
+  const ped = await importar("SAIPOS", "SAIPOS_VENDAS", saiposVendas([{ pedido: "P-AA", data: "10/09/2026 20:00", canal: "Anota AI", itens: 3000, forma: "Pago online" }]), SETEMBRO);
   await n.gerarPropostas(c, { importacaoId: ped.id, contaCaixaId: caixa.id });
   const [pp] = await n.listarPropostas(c, { operacao: "VENDA" });
   await n.aprovarProposta(c, { propostaId: pp.id, justificativa: "Revisado (sintético)." });
   await rejeita(n.aplicarProposta(c, { propostaId: pp.id }), CODIGO.CONFLITO_IDEMPOTENCIA);
-  // Substituição explícita: reverte o total do iFood (lançamento cancelado, nunca apagado) e então o pedido entra.
-  const totalIfood = (await n.listarPropostas(c, { operacao: "VENDA_AGREGADA" })).find((p) => p.comando.canal === "IFOOD");
+  // Substituição explícita: reverte o total do Anota AI (lançamento cancelado, nunca apagado) e então o pedido entra.
+  const totalIfood = (await n.listarPropostas(c, { operacao: "VENDA_AGREGADA" })).find((p) => p.comando.canal === "ANOTA_AI");
   await n.reverterPropostaAgregada(c, { propostaId: totalIfood.id, justificativa: "Substituído pelos pedidos detalhados (sintético)." });
   await n.aplicarProposta(c, { propostaId: pp.id });
   const vg2 = await n.apurarVisaoGeral(c, SET);
-  assert.equal(vg2.faturamentoBruto.valorCentavos, 50000 + 12000 + 3000);
+  assert.equal(vg2.faturamentoBruto.valorCentavos, 50000 + 3000);
 });

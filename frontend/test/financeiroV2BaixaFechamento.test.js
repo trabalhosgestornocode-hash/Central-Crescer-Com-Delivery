@@ -23,8 +23,10 @@ test("08E — conta a pagar: explica registrar × vincular; vincular usa a saíd
   const energia = (await ok("/api/fv2/contas-a-pagar", { ...OUT, tamanho: "100" })).itens.find((t) => t.fornecedor?.nome?.startsWith("Energia"));
   const det = await ok("/api/fv2/conta-a-pagar", { ...OUT, id: energia.id });
   const html = tes.detalheAPagar(det, { permissoes: TODAS });
-  assert.match(html, /Como dar baixa nesta conta/);
-  assert.match(html, /não cria outra saída nem outra despesa/);
+  // 85f3fa7: o painel passou a perguntar como a conta foi paga (extrato, banco ou dinheiro) — mesmo propósito.
+  assert.match(html, /Como esta conta foi paga\?/);
+  assert.match(html, /Já saiu no extrato/);
+  assert.match(html, /nada é lançado de novo/); // vincular não cria outra saída nem outra despesa (texto do 85f3fa7)
   assert.match(html, /data-previa-vinculo="/);
   assert.deepEqual(auditarHtml(html), []);
   assert.ok(!tes.detalheAPagar(det, { permissoes: ["financeiro_v2.ver", "financeiro_v2.registrar"] }).includes("data-previa-vinculo"), "só quem tem vincular_pagamento vê o vínculo");

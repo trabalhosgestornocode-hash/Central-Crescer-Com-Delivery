@@ -36,7 +36,7 @@ test("reconstrução 09→11/2026: abertura em 31/08, posições patrimoniais, v
   assert.deepEqual([sb.data, sb.referencia], ["2026-08-31", "FIM_DO_DIA"]);
   const nf = await W("/abertura/obrigacao-anterior", { fornecedorNovo: "Distribuidora Sintética", descricao: "NF 100", valor: "1.200,00", dataEmissao: "2026-08-20", vencimento: "2026-09-10", origem: "Lista sintética", identificador: "NF 100", chave: randomUUID() });
   assert.equal(nf.lancamento.competencia, "2026-09");
-  const recIfood = (await W("/abertura/recebivel-anterior", { processador: "IFOOD", descricao: "Pedido iFood de 30/08", valor: "90,00", dataOrigem: "2026-08-30", vencimento: "2026-09-03", origem: "Demonstrativo sintético", identificador: "P-AGO1", chave: randomUUID() })).recebivel;
+  const recIfood = (await W("/abertura/recebivel-anterior", { processador: "ANOTA_AI", descricao: "Pedido Anota AI de 30/08", valor: "90,00", dataOrigem: "2026-08-30", vencimento: "2026-09-03", origem: "Demonstrativo sintético", identificador: "P-AGO1", chave: randomUUID() })).recebivel;
   const recStone = (await W("/abertura/recebivel-anterior", { processador: "STONE", descricao: "Agenda Stone de 31/08", valor: "250,00", dataOrigem: "2026-08-31", origem: "Agenda sintética", chave: randomUUID() })).recebivel;
   // Títulos da abertura nunca são receita nem despesa de setembro.
   assert.equal(await bruto(n, "2026-09"), null, "setembro sem venda continua sem registros");
@@ -45,7 +45,7 @@ test("reconstrução 09→11/2026: abertura em 31/08, posições patrimoniais, v
   // 6. Vendas de setembro importadas (SAIPOS) — inclui um pedido de 30/08 (antes do corte) que já é título de abertura.
   const periodo = { periodoInicio: "2026-08-30", periodoFim: "2026-09-30" };
   const arquivo = saiposVendas([
-    { pedido: "P-AGO1", data: "30/08/2026 20:00", canal: "iFood", itens: 9000, forma: "Pago online" },
+    { pedido: "P-AGO1", data: "30/08/2026 20:00", canal: "Anota AI", itens: 9000, forma: "Pago online" },
     { pedido: "P-SET1", data: "05/09/2026 12:00", canal: "Balcão", itens: 5000, forma: "Dinheiro" },
   ]);
   const r1 = await n.receberArquivoParaImportacao(c, { fonte: "SAIPOS", tipoRelatorio: "SAIPOS_VENDAS", tipoMime: "application/octet-stream", conteudo: arquivo, ...periodo });

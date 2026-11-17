@@ -9,13 +9,16 @@
 import { CODIGO, falhar } from "../dominio/erros.js";
 import {
   ALVO_ESTORNO, ALVO_LIQUIDACAO, EVENTO_HISTORICO, FORMA_PAGAMENTO, MOTIVO_ESTORNO, NATUREZA_MOVIMENTACAO, SENTIDO,
-  SITUACAO_CONCILIACAO, SITUACAO_MOVIMENTACAO, SITUACAO_PAGAMENTO, SITUACAO_TITULO, SITUACAO_VENDA, TIPO, TIPO_CONTA,
+  CANAL, SITUACAO_CONCILIACAO, SITUACAO_MOVIMENTACAO, SITUACAO_PAGAMENTO, SITUACAO_TITULO, SITUACAO_VENDA, TIPO, TIPO_CONTA,
 } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { CATEGORIA_DE_VENDA, CATEGORIA_DESCONTO_A_CLASSIFICAR, CATEGORIA_DEVOLUCAO } from "../dominio/planoDeContas.js";
 import { competenciaDe } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
+import { MODALIDADE_DA_FORMA, SITUACAO_TAXA_ESTIMADA, calcularTaxaEstimada, resumoPorModalidade } from "../dominio/operadoras.js";
+import { exigirData } from "../dominio/tempo.js";
+import { exigirUmDe, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { validarCancelamentoVenda, validarEstornoDePagamento, validarPagamentoDeVenda, validarVenda } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
 
@@ -26,6 +29,32 @@ const situacaoDoPagamento = (p) => {
   if (p.estornadoCentavos === 0) return SITUACAO_PAGAMENTO.VALIDO;
   return p.estornadoCentavos === p.valorCentavos ? SITUACAO_PAGAMENTO.ESTORNADO : SITUACAO_PAGAMENTO.ESTORNADO_PARCIAL;
 };
+
+/**
+ * Pagamentos VÁLIDOS das vendas ativas do período (data da venda), com a taxa ESTIMADA gravada e o recebido CONFIRMADO. É a
+ * base dos cards por modalidade e do calendário de faturamento: uma só fonte para os dois (nada é recalculado em outro lugar).
+ */
+export async function itensDoLiquidoEsperado(tx, cx, { inicio, fim, canal = null }) {
+  const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, ...(canal ? { canal } : {}) } }))
+    .filter((v) => v.dataVenda >= inicio && v.dataVenda <= fim);
+  const ids = new Set(vendas.map((v) => v.id));
+  const daVenda = new Map(vendas.map((v) => [v.id, v]));
+  const pagamentos = (await tx.listar(cx, TIPO.PAGAMENTO_VENDA)).filter((p) => ids.has(p.vendaId) && p.situacao === SITUACAO_PAGAMENTO.VALIDO);
+  const recebiveis = new Map((await tx.listar(cx, TIPO.RECEBIVEL)).filter((r) => ids.has(r.vendaId)).map((r) => [r.id, r]));
+  return pagamentos.map((p) => {
+    const t = p.taxaEstimada;
+    const modalidade = t?.modalidade ?? MODALIDADE_DA_FORMA[p.forma] ?? p.forma;
+    const rec = p.recebivelId ? recebiveis.get(p.recebivelId) : null;
+    // Recebido CONFIRMADO: entrada no caixa/conta (pagamento direto) ou liquidação registrada no recebível. Nunca presumido.
+    const recebidoCentavos = p.movimentacaoId ? p.valorCentavos : rec && rec.liquidadoCentavos > 0 ? rec.liquidadoCentavos : null;
+    const v = daVenda.get(p.vendaId);
+    return {
+      modalidade, bandeira: modalidade === "PIX" ? (p.operadora ?? t?.operadora ?? p.processador ?? "DIRETO") : (t?.bandeira ?? p.bandeira ?? null), brutoCentavos: p.valorCentavos,
+      situacao: t?.situacao ?? SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA, taxaCentavos: t?.taxaCentavos ?? null, liquidoEsperadoCentavos: t?.liquidoEsperadoCentavos ?? null, operadora: p.operadora ?? null, recebidoCentavos,
+      venda: { id: v.id, data: v.dataVenda, descricao: v.descricao ?? null, canal: v.canal, fonte: v.fonte?.sistema ?? null }, descricaoOriginal: p.descricaoOriginal ?? null,
+    };
+  });
+}
 
 export function operacoesDeVendas(b) {
   async function contaDeEntrada(tx, cx, contaId, forma) {
@@ -66,10 +95,19 @@ export function operacoesDeVendas(b) {
         natureza: NATUREZA_MOVIMENTACAO.RECEBIMENTO, descricao: `Recebimento direto de venda (${p.forma})`, pagamentoId,
       }));
     }
+    // Fase 02: taxa ESTIMADA (tabela vigente na data da VENDA, versão gravada). Informativa: não lança despesa nem muda o
+    // recebível — a tarifa da DRE é a efetivamente cobrada (doc 36). Só pagamentos com processador adquirente.
+    const taxaEstimada = p.processador
+      ? calcularTaxaEstimada({ config: await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade"), data: venda.dataVenda, processador: p.processador, operadora: p.operadora ?? null, forma: p.forma, bandeira: p.bandeira ?? null, brutoCentavos: p.valorCentavos })
+      : null;
+    const detalhe = {
+      ...(p.bandeira ? { bandeira: p.bandeira } : {}), ...(p.descricaoOriginal ? { descricaoOriginal: p.descricaoOriginal } : {}),
+      ...(taxaEstimada && taxaEstimada.situacao !== SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA ? { operadora: taxaEstimada.operadora, taxaEstimada } : p.operadora ? { operadora: p.operadora } : {}),
+    };
     const pagamento = await b.criar(tx, cx, TIPO.PAGAMENTO_VENDA, {
       id: pagamentoId, vendaId: venda.id, indice, forma: p.forma, processador: p.processador, valorCentavos: p.valorCentavos, estornadoCentavos: 0,
       moeda: venda.moeda, dataPagamento, contaId: p.contaId ?? null, recebivelId: recebivel?.id ?? null, movimentacaoId: movimentacao?.id ?? null,
-      situacao: SITUACAO_PAGAMENTO.VALIDO, chaveIdempotencia: null, impressao: null, ...extra,
+      situacao: SITUACAO_PAGAMENTO.VALIDO, chaveIdempotencia: null, impressao: null, ...detalhe, ...extra,
     });
     return { pagamento, recebivel, movimentacao };
   }
@@ -77,6 +115,31 @@ export function operacoesDeVendas(b) {
   const pagamentosDa = async (tx, cx, vendaId) => (await tx.listar(cx, TIPO.PAGAMENTO_VENDA, { onde: { vendaId } })).sort((x, y) => x.indice - y.indice);
 
   return {
+    /**
+     * Fase 02 — cards por modalidade × bandeira do período (data da VENDA): bruto, taxa ESTIMADA, líquido esperado e
+     * percentual efetivo (dos totais). Estimativa ≠ recebido: nada aqui é conciliação nem despesa. Canal opcional.
+     */
+    consultarLiquidoEsperado(ctx, entrada = {}) {
+      semCamposDesconhecidos(entrada, ["periodoInicio", "periodoFim", "canal", "modalidade", "chave"], "consulta");
+      const inicio = exigirData(entrada.periodoInicio, "periodoInicio");
+      const fim = exigirData(entrada.periodoFim, "periodoFim");
+      if (fim < inicio) falhar(CODIGO.ENTRADA_INVALIDA, "Período invertido.");
+      const canal = entrada.canal ? exigirUmDe(entrada.canal, CANAL, "canal") : null;
+      return b.consultar(ctx, async (cx, tx) => {
+        const itens = await itensDoLiquidoEsperado(tx, cx, { inicio, fim, canal });
+        const base = { periodoInicio: inicio, periodoFim: fim, canal, natureza: "ESTIMATIVA", observacao: "Taxa estimada pela tabela vigente na data da venda. Não é despesa lançada nem valor recebido." };
+        // Detalhe de um card: os pagamentos (e vendas) que compõem o total da modalidade/bandeira (ou operadora, no Pix).
+        if (entrada.modalidade) {
+          const lista = itens.filter((x) => x.modalidade === String(entrada.modalidade) && (!entrada.chave || (x.bandeira ?? "—") === String(entrada.chave)))
+            .sort((a, x) => a.venda.data.localeCompare(x.venda.data));
+          return { ...base, modalidade: String(entrada.modalidade), chave: entrada.chave ?? null, itens: lista.slice(0, 500), total: lista.length };
+        }
+        // Total do canal (todas as modalidades) calculado AQUI: a tela não soma dinheiro.
+        const [total] = itens.length ? resumoPorModalidade(itens.map((x) => ({ ...x, modalidade: "TOTAL", bandeira: "TOTAL" }))) : [null];
+        return { ...base, modalidades: resumoPorModalidade(itens), total };
+      });
+    },
+
     /** Venda: UM canal, zero ou mais pagamentos. Gera a receita (uma única vez) e o efeito de cada pagamento. */
     registrarVenda(ctx, entrada) {
       const c = validarVenda(entrada);

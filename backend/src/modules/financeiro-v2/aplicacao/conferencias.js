@@ -57,6 +57,24 @@ export function pendenciasDosRegistros(d, competencia, { escopo, hoje, agora }) 
   return { v, apuracao, pendencias: pendenciasDaCompetencia({ d, competencia, hoje, apuracao, vendas: v, divergenciasVendas }) };
 }
 
+const TIPOS_DE_VENDA_SAIPOS = ["SAIPOS_VENDAS", "SAIPOS_FORMAS_PAGAMENTO", "SAIPOS_FATURAMENTO_POR_DIA", "SAIPOS_DESEMPENHO_POR_ATENDENTE", "SAIPOS_VENDAS_DIARIAS", "SAIPOS_VENDAS_POR_CANAL"];
+/**
+ * Outras importações SAIPOS de OUTRA granularidade (pedido × forma × dia × total do período) com efeito JÁ APLICADO em dias deste
+ * período: a aplicação desta importação seria recusada por contar o mesmo faturamento duas vezes. A prévia avisa ANTES de confirmar.
+ */
+async function conflitosDeGranularidadeDaImportacao(tx, cx, imp) {
+  if (imp.fonte !== "SAIPOS" || !TIPOS_DE_VENDA_SAIPOS.includes(imp.tipoRelatorio)) return [];
+  const outras = (await tx.listar(cx, TIPO.IMPORTACAO, { onde: { fonte: "SAIPOS" } }))
+    .filter((o) => o.id !== imp.id && o.tipoRelatorio !== imp.tipoRelatorio && TIPOS_DE_VENDA_SAIPOS.includes(o.tipoRelatorio)
+      && [ESTADO_IMPORTACAO.IMPORTADO, ESTADO_IMPORTACAO.IMPORTADO_COM_PENDENCIAS].includes(o.estado) && o.periodoInicio <= imp.periodoFim && imp.periodoInicio <= o.periodoFim);
+  const saida = [];
+  for (const o of outras) {
+    const aplicadas = (await tx.agregar(cx, TIPO.PROPOSTA, { onde: { importacaoId: o.id }, agruparPor: "estado" })).find((x) => x.grupo === "APLICADA")?.quantidade ?? 0;
+    if (aplicadas) saida.push({ importacaoId: o.id, tipoRelatorio: o.tipoRelatorio, relatorio: nomeDoRelatorio(o.tipoRelatorio), periodoInicio: o.periodoInicio, periodoFim: o.periodoFim, propostasAplicadas: aplicadas });
+  }
+  return saida;
+}
+
 export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conferirCarga = false }) {
   const escopoDe = (cx) => ({ organizacaoId: cx.organizacaoId, unidadeId: cx.unidadeId });
 
@@ -182,6 +200,7 @@ export function operacoesDeConferencias(b, { fontes, cargaCompleta = false, conf
             conflitos: pv.contagens?.conflitos ?? 0, divergencias: pv.divergencias ?? [], totalDivergencias: pv.totalDivergencias, controles: pv.controles ?? null, amostra: pv.amostra ?? [],
           } : null,
           impressaoPrevia: imp.impressaoPrevia ?? null, relatorio: imp.relatorio ?? null,
+          conflitosDeGranularidade: await conflitosDeGranularidadeDaImportacao(tx, cx, imp),
           registrosPorTipo: (await tx.agregar(cx, TIPO.REGISTRO_FONTE, { onde: { importacaoId: id }, agruparPor: "tipoRegistro" })).map((x) => ({ tipo: x.grupo, quantidade: x.quantidade })),
           propostasGeradas: Object.fromEntries((await tx.agregar(cx, TIPO.PROPOSTA, { onde: { importacaoId: id }, agruparPor: "estado" })).map((x) => [x.grupo, x.quantidade])),
           limitacoes: [compatibilidadeDe(imp).texto, "Importar não confirma, não concilia e não homologa: os registros entram não conferidos e sem efeito financeiro."],
@@ -445,7 +464,7 @@ const REGRAS = Object.freeze({
   SALDO_IGUAL_A_SAIDA: "Saldo da conta a pagar igual à saída bancária, depois da emissão",
 });
 const textoDaRegra = (r) => REGRAS[r] ?? "Regra automática de semelhança (valor e data)";
-const CANAL_TXT = Object.freeze({ BALCAO: "no Balcão", IFOOD: "no iFood", ANOTA_AI: "pelo Anota AI", OUTRO: "em outro canal" });
+const CANAL_TXT = Object.freeze({ BALCAO: "no Balcão", IFOOD: "no iFood", ANOTA_AI: "pelo Anota AI", NOVENTA_E_NOVE_FOOD: "pela 99Food", OUTRO: "em outro canal" });
 const exato = (m) => `${Math.trunc(m / 1000000)},${String(m % 1000000).padStart(6, "0")}`;
 
 /**

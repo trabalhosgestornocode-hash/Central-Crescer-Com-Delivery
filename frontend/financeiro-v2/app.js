@@ -8,6 +8,9 @@ import * as conf from "./telasConferencias.js";
 import * as telas from "./telas.js";
 import * as tes from "./telasTesouraria.js";
 import * as ven from "./telasVendas.js";
+import * as can from "./telasCanais.js";
+import * as calCanais from "./telasCalendarioCanais.js";
+import * as impCanais from "./telasImportacoesCanais.js";
 import { esc } from "./formatar.js";
 
 const $ = (s) => document.querySelector(s);
@@ -19,19 +22,25 @@ if (MODO_PLATAFORMA) {
 }
 const consultor = criarConsultor();
 const consultorPainel = criarConsultor();
+const consultorCalendario = criarConsultor();
+const consultorImportacoes = criarConsultor();
 const estado = {
   rota: "visao-geral", competencia: "2026-09", unidade: null, sessao: "gestor", unidades: [], dataBase: null,
   // Filtros locais de cada tela (sobrevivem à troca de rota; são zerados ao trocar de unidade ou sessão).
   filtros: filtrosIniciais(),
   pagina: {}, calendario: null, diaSelecionado: null,
+  // Fase 10: calendário de faturamento do canal da tela (dados do servidor) e o dia escolhido nele.
+  calCanal: null, calDia: null,
+  // Fase 11: importações do canal da tela (formatos, histórico, demonstrativos) — só quando a aba Importações está aberta.
+  impCanal: null,
 };
 function filtrosIniciais() {
-  return { "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {} };
+  return { saipos: { aba: "resumo" }, ifood: { aba: "resumo" }, "noventa-e-nove-food": { aba: "resumo" }, "contas-a-pagar": {}, "contas-a-receber": {}, "caixa-e-bancos": {}, "fluxo-de-caixa": { preset: "competencia", granularidade: "SEMANA" }, "vendas-e-recebimentos": { aba: "vendas" }, conferencias: { secao: "resumo" }, configuracoes: { secao: "unidade" }, documentos: {} };
 }
 let focoAntesDoPainel = null;
 let recarregarAoFechar = false;
 let revisarAoCarregar = null;
-const ROTAS = ["visao-geral", "dre", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias", "configuracoes", "documentos"];
+const ROTAS = ["visao-geral", "dre", "saipos", "ifood", "noventa-e-nove-food", "operadoras-taxas", "lancamentos", "contas-a-pagar", "calendario", "contas-a-receber", "caixa-e-bancos", "fluxo-de-caixa", "vendas-e-recebimentos", "conferencias", "configuracoes", "documentos"];
 /** Filtros aceitos na URL da Central (ligações de outras telas). `revisar` abre o painel da pendência indicada. */
 const FILTROS_URL_CONFERENCIAS = ["secao", "grupo", "situacao", "estado"];
 const ENDPOINT_DA_SECAO = { resumo: "conferencias", pendencias: "conferencias/pendencias", documentos: "conferencias/documentos", propostas: "conferencias/propostas", conciliacoes: "conferencias/correspondencias", fechamento: "conferencias/fechamento" };
@@ -109,12 +118,42 @@ function aplicarPesos(raiz) {
   for (const el of raiz.querySelectorAll("[data-peso]")) el.style.flexGrow = el.dataset.peso;
 }
 
+/** Fase 10 — calendário de faturamento do canal da tela (SAIPOS Presencial/Anota Aí, iFood, 99Food): UMA consulta mensal consolidada. */
+function consultaDoCalendario() {
+  const canal = estado.rota === "saipos" ? { presencial: "BALCAO", anota: "ANOTA_AI" }[estado.filtros.saipos?.aba] : estado.rota === "ifood" && estado.filtros.ifood?.aba !== "importacoes" ? "IFOOD" : estado.rota === "noventa-e-nove-food" && estado.filtros["noventa-e-nove-food"]?.aba !== "importacoes" ? "NOVENTA_E_NOVE_FOOD" : null;
+  return canal ? `/api/fv2/calendario-faturamento?${qs({ competencia: undefined, canal, mes: estado.competencia })}` : null;
+}
+/** Fase 11 — importações do canal da tela, só quando a aba "Importações" está aberta (SAIPOS, iFood ou 99Food). */
+function consultaDasImportacoes() {
+  const canal = { saipos: estado.filtros.saipos?.aba === "importacoes" ? "SAIPOS" : null, ifood: estado.filtros.ifood?.aba === "importacoes" ? "IFOOD" : null,
+    "noventa-e-nove-food": estado.filtros["noventa-e-nove-food"]?.aba === "importacoes" ? "NOVENTA_E_NOVE_FOOD" : null }[estado.rota] ?? null;
+  return canal ? `/api/fv2/importacoes-canal?${qs({ competencia: undefined, canal })}` : null;
+}
+const contextoDasImportacoes = () => ({ importacoes: estado.impCanal?.dados ?? null, importacoesErro: estado.impCanal?.erro ?? null });
+/** Contexto do calendário que as telas de canal recebem (só dados do servidor e o dia escolhido). */
+const contextoDoCalendario = () => ({
+  calendario: estado.calCanal?.dados ?? null, calendarioErro: estado.calCanal?.erro ?? null,
+  calDia: estado.calDia && estado.calDia.startsWith(estado.competencia) ? estado.calDia : null,
+});
+
 /** Consulta de cada rota: caminho + parâmetros, montados SÓ a partir do estado da tela. */
 function consultaDaRota() {
   const f = estado.filtros[estado.rota] ?? {};
   const pagina = estado.pagina[estado.rota] ?? 1;
   switch (estado.rota) {
     case "dre": return `/api/fv2/dre?${qs()}`;
+    case "saipos": {
+      // Período da área SAIPOS: o escolhido; senão o mês da competência (até a data-base, se for o mês corrente).
+      if (f.competenciaBase !== estado.competencia || !f.inicio || !f.fim) {
+        const fimMes = fimDoMes(estado.competencia);
+        Object.assign(f, { competenciaBase: estado.competencia, inicio: inicioDoMes(estado.competencia), fim: estado.dataBase && estado.dataBase >= inicioDoMes(estado.competencia) && estado.dataBase < fimMes ? estado.dataBase : fimMes });
+        estado.filtros.saipos = f;
+      }
+      const periodo = { competencia: undefined, periodoInicio: f.inicio, periodoFim: f.fim };
+      return f.aba === "fechamento" ? `/api/fv2/fechamento-manual?${qs(periodo)}` : `/api/fv2/saipos?${qs(periodo)}`;
+    }
+    case "operadoras-taxas": return `/api/fv2/operadoras?${qs({ competencia: undefined })}`;
+    case "ifood": case "noventa-e-nove-food": return `/api/fv2/canal-plataforma?${qs({ canal: estado.rota === "ifood" ? "IFOOD" : "NOVENTA_E_NOVE_FOOD" })}`;
     case "configuracoes": return f.secao === "plano" ? `/api/fv2/configuracoes/plano?${qs({ competencia: undefined })}` : f.secao === "permissoes" ? `/api/fv2/permissoes?${qs({ competencia: undefined })}` : f.secao === "abertura" ? `/api/fv2/abertura?${qs({ competencia: undefined })}` : f.secao === "taxas" ? `/api/fv2/taxas-contratadas?${qs({})}` : `/api/fv2/configuracoes?${qs({ competencia: undefined })}`;
     case "documentos": return `/api/fv2/documentos?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, pagina, tamanho: 25 })}`;
     case "contas-a-pagar": return `/api/fv2/contas-a-pagar?${qs({ competencia: f.soCompetencia ? estado.competencia : "", situacao: f.situacao, contraparteId: f.contraparteId, categoria: f.categoria, vencimentoDe: f.vencimentoDe, vencimentoAte: f.vencimentoAte, pagina, tamanho: 25 })}`;
@@ -149,6 +188,9 @@ function desenhar(dados) {
   const f = estado.filtros[estado.rota] ?? {};
   switch (estado.rota) {
     case "dre": return telas.dre(dados, { unidadeNome: nomeUnidade() });
+    case "saipos": return can.saipos(dados, estado.filtros.saipos ?? {}, { permissoes: permissoesDaUnidade(), ...contextoDoCalendario(), ...contextoDasImportacoes(), abrirProvisorio: estado.filtros.saipos?.foco === "provisorio" });
+    case "operadoras-taxas": return can.operadorasTaxas(dados, { permissoes: permissoesDaUnidade() });
+    case "ifood": case "noventa-e-nove-food": return can.plataforma(dados, { permissoes: permissoesDaUnidade(), aba: f.aba, ...contextoDoCalendario(), ...contextoDasImportacoes() });
     case "configuracoes": {
       const perm = permissoesDaUnidade();
       const ctx = { unidadeNome: nomeUnidade(), podeConfigurar: perm.includes("financeiro_v2.configurar"), pessoasDemo: estado.pessoasDemo ?? [], permissoes: perm };
@@ -193,10 +235,26 @@ async function carregar() {
     preencherUnidades();
     if (!estado.unidade) { conteudo.innerHTML = telas.estado("negado", "Nenhuma unidade liberada para o Crescer Com Delivery Financeiro."); conteudo.removeAttribute("aria-busy"); return; }
   }
+  const urlDoCalendario = consultaDoCalendario();
+  const doCalendario = urlDoCalendario ? consultorCalendario.consultar(urlDoCalendario, cabecalhos()) : null;
+  const urlDasImportacoes = consultaDasImportacoes();
+  const dasImportacoes = urlDasImportacoes ? consultorImportacoes.consultar(urlDasImportacoes, cabecalhos()) : null;
   const r = await consultor.consultar(consultaDaRota(), cabecalhos());
   if (r === null) return; // resposta obsoleta: outra consulta mais nova já está em andamento
   conteudo.removeAttribute("aria-busy");
   if (!r.ok) { conteudo.innerHTML = mensagemDeErro(r); return; }
+  estado.calCanal = null;
+  estado.impCanal = null;
+  if (dasImportacoes) {
+    const ri = await dasImportacoes;
+    if (ri === null) return;
+    estado.impCanal = ri.ok ? { dados: ri.dados } : { erro: ri.mensagem || "Não foi possível carregar as importações deste canal." };
+  }
+  if (doCalendario) {
+    const rc = await doCalendario;
+    if (rc === null) return; // outro calendário mais novo já foi pedido
+    estado.calCanal = rc.ok ? { dados: rc.dados } : { erro: rc.mensagem || "Não foi possível carregar o calendário deste canal." };
+  }
   conteudo.innerHTML = desenhar(r.dados);
   aplicarPesos(conteudo);
   if (revisarAoCarregar && estado.rota === "conferencias") {
@@ -248,6 +306,10 @@ function detalheDe(chave) {
   if (tipo === "reclassificacao-mov") return [`/api/fv2/reclassificacao?${qs({ competencia: undefined, movimentacao: id })}`, DETALHE_RECLASSIFICACAO];
   // 08E: prévia do vínculo de uma saída do extrato com a conta — "vinculo:<conta>|<saída>".
   if (tipo === "vinculo") { const [obrigacao, movimentacao] = id.split("|"); return [`/api/fv2/vinculo-extrato?${qs({ competencia: undefined, obrigacao, movimentacao })}`, (d) => tes.detalheVinculoExtrato(d, ctxPainel())]; }
+  // Fase 05: lançamentos que compõem um card — "card:<canal>|<modalidade>|<bandeira/operadora>|<início>|<fim>".
+  if (tipo === "card") { const [canal, modalidade, chave, periodoInicio, periodoFim] = id.split("|"); return [`/api/fv2/vendas/liquido-esperado?${qs({ competencia: undefined, canal, modalidade, chave, periodoInicio, periodoFim })}`, (d) => can.detalheDoCard(d)]; }
+  // Fase 11: prévia do demonstrativo oficial do iFood — "demonstrativo:<valores digitados, em query string>" (nada é gravado).
+  if (tipo === "demonstrativo") { const params = Object.fromEntries(new URLSearchParams(id)); return [`/api/fv2/previa-demonstrativo-ifood?${qs({ competencia: undefined, ...params })}`, (d) => impCanais.previaDoDemonstrativo(d, { params, podeRegistrar: permissoesDaUnidade().includes("financeiro_v2.registrar") })]; }
   if (tipo === "importar") return [`/api/fv2/conferencias/catalogo?${qs({ competencia: undefined })}`, (d) => conf.escolherArquivo(d)];
   const [rota, desenho] = DETALHES[tipo] ?? DETALHES.receber;
   return [`/api/fv2/${rota}?${qs({ competencia: undefined, id })}`, desenho];
@@ -355,6 +417,58 @@ async function executarAcao(form) {
   if (proximo.includes(":")) abrirDetalhe(proximo, form);
 }
 
+// ---- Fase 10: calendário de faturamento dos canais (só apresentação; os dados vêm do servidor)
+function selecionarDiaDoCanal(data, botao) {
+  const cal = estado.calCanal?.dados;
+  if (!cal) return;
+  estado.calDia = data;
+  for (const b of document.querySelectorAll("[data-cal-dia]")) {
+    const ativo = b === botao;
+    b.classList.toggle("cal-dia--sel", ativo);
+    b.setAttribute("aria-pressed", String(ativo));
+    b.tabIndex = ativo ? 0 : -1;
+  }
+  const alvo = $("#cal-dia-detalhe");
+  alvo.innerHTML = calCanais.diaDoCanal(cal.dias.find((d) => d.data === data), cal);
+  alvo.scrollIntoView({ block: "nearest" });
+}
+/** Setas andam pelos dias (←→ um dia, ↑↓ uma semana), Home/End vão ao início/fim da semana. Enter e espaço já abrem o dia (é um botão). */
+function navegarNoCalendario(e, atual) {
+  const botoes = [...document.querySelectorAll("[data-cal-dia]")];
+  const i = botoes.indexOf(atual);
+  const passo = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+  let alvo = null;
+  if (passo !== undefined) alvo = botoes[i + passo];
+  else if (e.key === "Home" || e.key === "End") {
+    const col = (new Date(`${atual.dataset.calDia}T00:00:00Z`).getUTCDay() + 6) % 7;
+    alvo = botoes[e.key === "Home" ? i - col : Math.min(botoes.length - 1, i + (6 - col))];
+  } else return;
+  e.preventDefault();
+  if (!alvo) return;
+  for (const b of botoes) b.tabIndex = b === alvo ? 0 : -1;
+  alvo.focus();
+}
+function irParaHojeNoCalendario() {
+  const hoje = estado.dataBase;
+  if (!hoje) return;
+  estado.competencia = hoje.slice(0, 7);
+  $("#filtro-competencia").value = estado.competencia;
+  estado.calDia = hoje;
+  carregar();
+}
+/** Ações de um dia do calendário: abrem a MESMA tela já existente (importações, fechamento, conferências) com o período do dia. */
+function acaoDoDiaDoCanal(acao, data, origem) {
+  const canal = estado.calCanal?.dados?.canal;
+  if (acao === "vendas") {
+    abrirNoPainel(`/api/fv2/vendas?${qs({ competencia: undefined, canal, inicio: data, fim: data, pagina: 1, tamanho: 25 })}`, (d) => calCanais.vendasDoDia(d, { canal, data }), origem);
+    return;
+  }
+  const aba = { importacoes: "importacoes", fechamentos: "fechamento", provisorio: "fechamento", conferencias: "conferencias" }[acao];
+  if (!aba) return;
+  estado.filtros.saipos = { ...(estado.filtros.saipos ?? {}), aba, inicio: data, fim: data, competenciaBase: estado.competencia, foco: acao === "provisorio" ? "provisorio" : undefined };
+  carregar().then(() => { if (estado.filtros.saipos) estado.filtros.saipos.foco = undefined; });
+}
+
 function rotear() {
   aplicarFiltrosDaUrl({ comRevisao: true });
   for (const a of document.querySelectorAll("[data-rota]")) a.setAttribute("aria-current", a.dataset.rota === estado.rota ? "page" : "false");
@@ -390,8 +504,24 @@ function aplicarFiltrosDaUrl({ comRevisao = false } = {}) {
 function aplicarFiltroLocal(form) {
   const rota = form.dataset.filtroLocal;
   const dados = Object.fromEntries(new FormData(form).entries());
+  // Início depois do fim: avisa AQUI, sem recarregar. Recarregar trocaria a tela (e o próprio filtro) por um erro e a pessoa
+  // não teria onde corrigir a data.
+  let aviso = form.parentElement?.querySelector("[data-aviso-periodo]");
+  if (dados.inicio && dados.fim && dados.fim < dados.inicio) {
+    if (!aviso) {
+      aviso = document.createElement("p");
+      aviso.className = "aviso aviso--alerta";
+      aviso.setAttribute("role", "alert");
+      aviso.dataset.avisoPeriodo = "";
+      form.after(aviso);
+    }
+    aviso.textContent = "A data inicial está depois da final. Corrija o período para atualizar a tela.";
+    return;
+  }
+  aviso?.remove();
   const anterior = estado.filtros[rota] ?? {};
   estado.filtros[rota] = { ...dados, soCompetencia: form.querySelector('[name="soCompetencia"]')?.checked ?? false };
+  if (rota === "saipos") estado.filtros.saipos.competenciaBase = estado.competencia; // período escolhido vale para a competência atual
   if (rota === "vendas-e-recebimentos") {
     // Valor digitado em reais → centavos por texto (sem ponto flutuante); inválido é ignorado.
     estado.filtros[rota].valorMinimoCentavos = ven.reaisParaCentavos(dados.valorMinimo);
@@ -426,6 +556,18 @@ document.addEventListener("click", (e) => {
     carregar().then(() => document.querySelector(`[data-aba="${aba.dataset.aba}"]`)?.focus());
     return;
   }
+  const abaCanal = e.target.closest("[data-aba-canal]");
+  if (abaCanal) {
+    estado.filtros[estado.rota] = { ...(estado.filtros[estado.rota] ?? {}), aba: abaCanal.dataset.abaCanal };
+    carregar().then(() => document.querySelector(`nav [data-aba-canal="${abaCanal.dataset.abaCanal}"]`)?.focus());
+    return;
+  }
+  const abaSaipos = e.target.closest("[data-aba-saipos]");
+  if (abaSaipos) {
+    estado.filtros.saipos = { ...(estado.filtros.saipos ?? {}), aba: abaSaipos.dataset.abaSaipos };
+    carregar().then(() => document.querySelector(`nav [data-aba-saipos="${abaSaipos.dataset.abaSaipos}"]`)?.focus());
+    return;
+  }
   const secaoConfig = e.target.closest("[data-secao-config]");
   if (secaoConfig) {
     estado.filtros.configuracoes = { secao: secaoConfig.dataset.secaoConfig };
@@ -449,8 +591,13 @@ document.addEventListener("click", (e) => {
   if (det) { abrirDetalhe(det.dataset.detalhe, det); return; }
   const pag = e.target.closest("[data-pagina]");
   if (pag && !pag.disabled) { estado.pagina[pag.dataset.alvo] = Number(pag.dataset.pagina); carregar(); return; }
+  const diaDoCanal = e.target.closest("[data-cal-dia]");
+  if (diaDoCanal && estado.calCanal?.dados) { selecionarDiaDoCanal(diaDoCanal.dataset.calDia, diaDoCanal); return; }
+  const acaoDoDia = e.target.closest("[data-cal-acao]");
+  if (acaoDoDia) { acaoDoDiaDoCanal(acaoDoDia.dataset.calAcao, acaoDoDia.dataset.calData, acaoDoDia); return; }
+  if (e.target.closest("[data-cal-hoje]")) { irParaHojeNoCalendario(); return; }
   const mes = e.target.closest("[data-mes]");
-  if (mes) { estado.competencia = somarMes(estado.competencia, Number(mes.dataset.mes)); $("#filtro-competencia").value = estado.competencia; estado.diaSelecionado = null; carregar(); return; }
+  if (mes) { estado.competencia = somarMes(estado.competencia, Number(mes.dataset.mes)); $("#filtro-competencia").value = estado.competencia; estado.diaSelecionado = null; estado.calDia = null; carregar(); return; }
   const dia = e.target.closest("[data-dia]");
   if (dia && estado.calendario) {
     estado.diaSelecionado = dia.dataset.dia;
@@ -478,6 +625,9 @@ document.addEventListener("submit", (e) => {
   // 08C: a prévia da reclassificação é uma CONSULTA ao núcleo (nada é gravado); só a ação confirma.
   const previa = e.target.closest("[data-previa-reclassificacao]");
   if (previa) { const cat = new FormData(previa).get("categoria"); if (cat) abrirDetalhe(`reclassificacao:${previa.dataset.previaReclassificacao}|${cat}`, previa); return; }
+  // Fase 11: prévia do demonstrativo oficial do iFood (consulta; só a confirmação dentro do painel registra).
+  const previaDemonstrativo = e.target.closest("[data-previa-demonstrativo]");
+  if (previaDemonstrativo) { abrirDetalhe(`demonstrativo:${new URLSearchParams(new FormData(previaDemonstrativo)).toString()}`, previaDemonstrativo); return; }
   // 08E: prévia do vínculo com a saída do extrato (consulta; só a ação confirma).
   const previaVinculo = e.target.closest("[data-previa-vinculo]");
   if (previaVinculo) { const mov = new FormData(previaVinculo).get("movimentacao"); if (mov) abrirDetalhe(`vinculo:${previaVinculo.dataset.previaVinculo}|${mov}`, previaVinculo); return; }
@@ -485,9 +635,10 @@ document.addEventListener("submit", (e) => {
   if (form) aplicarFiltroLocal(form);
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") fecharPainel(); });
+document.addEventListener("keydown", (e) => { const dia = e.target.closest?.("[data-cal-dia]"); if (dia) navegarNoCalendario(e, dia); });
 window.addEventListener("hashchange", rotear);
-$("#filtro-competencia").addEventListener("change", (e) => { estado.competencia = e.target.value; estado.pagina = {}; estado.diaSelecionado = null; carregar(); });
-const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; estado.pessoas = null; estado.configuracoes = null; aplicarFiltrosDaUrl(); };
+$("#filtro-competencia").addEventListener("change", (e) => { estado.competencia = e.target.value; estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; carregar(); });
+const reiniciarFiltros = () => { estado.filtros = filtrosIniciais(); estado.pagina = {}; estado.diaSelecionado = null; estado.calDia = null; estado.calCanal = null; estado.pessoas = null; estado.configuracoes = null; aplicarFiltrosDaUrl(); };
 $("#filtro-unidade").addEventListener("change", (e) => { estado.unidade = e.target.value; reiniciarFiltros(); carregar(); });
 $("#filtro-sessao").addEventListener("change", (e) => { estado.sessao = e.target.value; estado.unidade = null; estado.unidades = []; reiniciarFiltros(); carregar(); });
 rotear();

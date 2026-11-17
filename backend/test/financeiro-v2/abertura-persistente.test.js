@@ -82,13 +82,13 @@ test("barreira: importação com data até o corte vai à conferência, classifi
   await W("/abertura/configurar", { competencia: "2026-11" });
   await W("/abertura/saldo", { conta: banco.id, valor: "0,00", origem: "Extrato sintético de 31/10" });
   // Posição de abertura: iFood devia o pedido P-OUT1 (identificador) e o Stone devia 40,00 (sem identificador).
-  const ifood = await W("/abertura/recebivel-anterior", { processador: "IFOOD", descricao: "Pedido iFood de 28/10", valor: "45,00", dataOrigem: "2026-10-28", vencimento: "2026-11-04", origem: "Demonstrativo iFood (sintético)", identificador: "P-OUT1", chave: randomUUID() });
+  const ifood = await W("/abertura/recebivel-anterior", { processador: "ANOTA_AI", descricao: "Pedido Anota AI de 28/10", valor: "45,00", dataOrigem: "2026-10-28", vencimento: "2026-11-04", origem: "Demonstrativo iFood (sintético)", identificador: "P-OUT1", chave: randomUUID() });
   await W("/abertura/recebivel-anterior", { processador: "STONE", descricao: "Agenda Stone de 30/10", valor: "40,00", dataOrigem: "2026-10-30", origem: "Agenda Stone (sintética)", chave: randomUUID() });
   const dreAntes = await n.apurarCompetencia(c, { competencia: "2026-11" });
 
   // SAIPOS de 27/10 a 03/11: dois pedidos ANTES do corte (um coberto pelo identificador, um sem título) e um DEPOIS.
   const imp = await importar(n, "SAIPOS", "SAIPOS_VENDAS", saiposVendas([
-    { pedido: "P-OUT1", data: "28/10/2026 20:00", canal: "iFood", itens: 4500, forma: "Pago online" },
+    { pedido: "P-OUT1", data: "28/10/2026 20:00", canal: "Anota AI", itens: 4500, forma: "Pago online" },
     { pedido: "P-OUT2", data: "29/10/2026 20:00", canal: "Balcão", itens: 1200, forma: "Dinheiro" },
     { pedido: "P-NOV1", data: "02/11/2026 20:00", canal: "Balcão", itens: 3000, forma: "Dinheiro" },
   ]), { periodoInicio: "2026-10-27", periodoFim: "2026-11-03" });

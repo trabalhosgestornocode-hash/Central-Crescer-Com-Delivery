@@ -5,7 +5,8 @@ import { CODIGO, falhar } from "../dominio/erros.js";
 import { EVENTO_HISTORICO, ESTADO_PROPOSTA, OPERACAO_PROPOSTA, SITUACAO_LANCAMENTO, SITUACAO_REGISTRO_FONTE, TIPO } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { conferirTaxas, validarTabelaDeTaxas } from "../dominio/taxasContratadas.js";
-import { exigirCompetencia } from "../dominio/tempo.js";
+import { SITUACAO_OPERADORA, codigoDeOperadora, operadorasEfetivas, validarOperadora } from "../dominio/operadoras.js";
+import { exigirCompetencia, exigirData } from "../dominio/tempo.js";
 import { exigirTexto, exigirUuid, semCamposDesconhecidos } from "../dominio/validacao.js";
 
 /** Chave do lançamento das taxas do período de UMA importação Stone numa competência (uma vez só). */
@@ -40,13 +41,71 @@ export function operacoesDeTaxasContratadas(b) {
         const tabelas = tabelasDa(atual);
         const { justificativa, ...tabela } = t;
         const igual = tabelas.find((x) => x.processador === tabela.processador && x.vigenciaInicio === tabela.vigenciaInicio);
-        const chaveDasTaxas = (l) => l.map((x) => `${x.modalidade}|${x.bandeira}|${x.milesimos}`).sort().join(",");
+        const chaveDasTaxas = (l) => l.map((x) => `${x.modalidade}|${x.bandeira}|${x.milesimos}|${x.tarifaFixaCentavos ?? 0}`).sort().join(",");
         if (igual && chaveDasTaxas(igual.taxas) === chaveDasTaxas(tabela.taxas) && (igual.vigenciaFim ?? null) === tabela.vigenciaFim) return { tabela: igual, repetido: true };
         const sobrepoe = tabelas.some((x) => x.processador === tabela.processador && x.vigenciaInicio <= (tabela.vigenciaFim ?? "9999-12-31") && tabela.vigenciaInicio <= (x.vigenciaFim ?? "9999-12-31"));
         if (sobrepoe) falhar(CODIGO.OPERACAO_INVALIDA, "Já há tabela deste processador com vigência sobreposta: encerre a anterior (vigência final) antes.", { processador: tabela.processador });
         const nova = { ...tabela, registradaEm: b.agora(), registradaPor: cx.usuarioId };
         await b.alterar(tx, cx, TIPO.CONFIGURACAO_UNIDADE, atual, { taxasContratadas: [...tabelas, nova] }, EVENTO_HISTORICO.CONFIGURACAO, justificativa);
         return { tabela: nova, repetido: false };
+      });
+    },
+
+    /**
+     * Fase 02 — cadastra uma OPERADORA da unidade (Stone, PagBank, maquininha do iFood…). Mesmo código = mesma operadora:
+     * repetir igual não faz nada; dados diferentes exigem a alteração de situação/encerramento (nada é sobrescrito).
+     */
+    registrarOperadora(ctx, entrada) {
+      const o = validarOperadora(entrada);
+      return b.executar(ctx, ACAO.CONFIGURAR, async (cx, tx) => {
+        await tx.travar(cx, "configuracao-unidade", "EXCLUSIVA");
+        const atual = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
+        if (!atual) falhar(CODIGO.OPERACAO_INVALIDA, "Configure a unidade (nome de exibição) antes de cadastrar operadoras.");
+        const lista = Array.isArray(atual.operadoras) ? atual.operadoras : [];
+        const { justificativa, ...dados } = o;
+        const existente = lista.find((x) => x.codigo === dados.codigo);
+        if (existente) {
+          const mesmo = ["nome", "processador", "inicio", "encerramento"].every((k) => (existente[k] ?? null) === (dados[k] ?? null)) && existente.modalidades.join() === dados.modalidades.join();
+          if (mesmo) return { operadora: existente, repetido: true };
+          falhar(CODIGO.OPERACAO_INVALIDA, "Já existe operadora com este código: para mudar, encerre ou desative a existente (o histórico é preservado).", { codigo: dados.codigo });
+        }
+        const nova = { ...dados, situacao: SITUACAO_OPERADORA.ATIVA, historico: [{ evento: "CADASTRO", em: b.agora(), por: cx.usuarioId, justificativa }] };
+        await b.alterar(tx, cx, TIPO.CONFIGURACAO_UNIDADE, atual, { operadoras: [...lista, nova] }, EVENTO_HISTORICO.CONFIGURACAO, justificativa);
+        return { operadora: nova, repetido: false };
+      });
+    },
+
+    /** Ativa/desativa uma operadora ou define o encerramento — sem apagar nada; vendas já registradas guardam a versão usada. */
+    alterarSituacaoOperadora(ctx, entrada) {
+      semCamposDesconhecidos(entrada, ["codigo", "situacao", "encerramento", "nome", "observacao", "justificativa"], "situacaoOperadora");
+      const codigo = codigoDeOperadora(entrada.codigo, "codigo");
+      const situacao = entrada.situacao === undefined ? null : String(entrada.situacao).toUpperCase();
+      if (situacao !== null && !SITUACAO_OPERADORA[situacao]) falhar(CODIGO.ENTRADA_INVALIDA, "situacao: use ATIVA ou INATIVA.", { campo: "situacao" });
+      const encerramento = entrada.encerramento === undefined ? undefined : entrada.encerramento === null ? null : exigirData(entrada.encerramento, "encerramento");
+      const nome = entrada.nome === undefined ? undefined : exigirTexto(entrada.nome, "nome", { max: 80 });
+      const observacao = entrada.observacao === undefined ? undefined : exigirTexto(entrada.observacao, "observacao", { max: 300, opcional: true }) ?? null;
+      if (situacao === null && encerramento === undefined && nome === undefined && observacao === undefined) falhar(CODIGO.ENTRADA_INVALIDA, "Informe o que muda (situação, encerramento, nome ou observação).");
+      const justificativa = exigirTexto(entrada.justificativa, "justificativa", { max: 500 });
+      return b.executar(ctx, ACAO.CONFIGURAR, async (cx, tx) => {
+        await tx.travar(cx, "configuracao-unidade", "EXCLUSIVA");
+        const atual = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
+        const lista = Array.isArray(atual?.operadoras) ? atual.operadoras : [];
+        const o = lista.find((x) => x.codigo === codigo);
+        if (!o) falhar(CODIGO.NAO_ENCONTRADO, "Operadora não cadastrada nesta unidade.", { codigo });
+        if (encerramento && encerramento < o.inicio) falhar(CODIGO.DATA_INVALIDA, "Encerramento antes do início da operadora.", { campo: "encerramento" });
+        const mudou = { ...(situacao !== null ? { situacao } : {}), ...(encerramento !== undefined ? { encerramento } : {}), ...(nome !== undefined && nome !== o.nome ? { nome } : {}), ...(observacao !== undefined ? { observacao } : {}) };
+        const nova = { ...o, ...mudou, historico: [...(o.historico ?? []), { evento: "ALTERACAO", ...mudou, antes: { situacao: o.situacao, encerramento: o.encerramento ?? null, nome: o.nome }, em: b.agora(), por: cx.usuarioId, justificativa }] };
+        await b.alterar(tx, cx, TIPO.CONFIGURACAO_UNIDADE, atual, { operadoras: lista.map((x) => (x.codigo === codigo ? nova : x)) }, EVENTO_HISTORICO.CONFIGURACAO, justificativa);
+        return { operadora: nova };
+      });
+    },
+
+    /** Operadoras da unidade (cadastradas + implícitas das tabelas legadas) com as tabelas de taxas de cada uma. */
+    consultarOperadoras(ctx) {
+      return b.consultar(ctx, async (cx, tx) => {
+        const config = await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade");
+        const tabelas = tabelasDa(config);
+        return { operadoras: operadorasEfetivas(config).map((o) => ({ ...o, tabelas: tabelas.filter((t) => (t.operadora ?? t.processador) === o.codigo) })) };
       });
     },
 
