@@ -239,8 +239,9 @@ export const ESCRITAS = Object.freeze({
     const falhas = [];
     for (const p of prontas) {
       try {
-        if (p.estado === "PROPOSTA") await n.aprovarProposta(c, { propostaId: p.id, justificativa: "Aprovada em lote (propostas prontas da importação)." });
-        await n.aplicarProposta(c, { propostaId: p.id });
+        // 17/11/2026: aprovar e aplicar numa só transação (mesmas regras; menos idas ao banco por proposta).
+        if (p.estado === "PROPOSTA") await n.aprovarEAplicarProposta(c, { propostaId: p.id, justificativa: "Aprovada em lote (propostas prontas da importação)." });
+        else await n.aplicarProposta(c, { propostaId: p.id });
         aplicadas += 1;
         valorCentavos += p.valorCentavos ?? 0;
       } catch (e) {
