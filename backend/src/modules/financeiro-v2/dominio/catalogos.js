@@ -10,7 +10,7 @@ export const TIPO = enumerar(
   "CATEGORIA", "PAGAMENTO_VENDA", "ESTORNO", "IMPORTACAO", "REGISTRO_FONTE", "CONCESSAO", "PROPOSTA", "DIVERGENCIA_FONTE",
   "SALDO_CONTA", "SESSAO_CAIXA",
   "VERSAO_FECHAMENTO", "ATRIBUICAO_PENDENCIA", "CANAL_PROCESSADOR", "CONFIGURACAO_UNIDADE",
-  "ABERTURA",
+  "ABERTURA", "FECHAMENTO_CAIXA",
 );
 
 /** Conta financeira = onde o dinheiro DA EMPRESA está. Processadores (Stone, iFood, vales) NÃO são contas: geram recebíveis. */

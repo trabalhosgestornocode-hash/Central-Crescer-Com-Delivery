@@ -108,7 +108,7 @@ test("pagamentos: bandeira, maquininha do iFood, Pix na Entrega, múltiplas form
   // Líquido esperado (estimativa): Pix da maquininha 0,80% de 100,00 = 0,80; débito Master 1% de 40,00 = 0,40; crédito Visa 3% de 30,00 = 0,90.
   const r = await n.consultarLiquidoEsperado(c, { periodoInicio: "2026-11-01", periodoFim: "2026-11-02", canal: "BALCAO" });
   const m = (k) => r.modalidades.find((x) => x.modalidade === k);
-  assert.deepEqual([m("PIX").bandeiras.find((b) => b.bandeira === "PIX").taxaCentavos, m("DEBITO").taxaCentavos, m("CREDITO_A_VISTA").taxaCentavos], [80, 40, 90]);
+  assert.deepEqual([m("PIX").bandeiras.find((b) => b.bandeira === "MAQUININHA_IFOOD").taxaCentavos, m("DEBITO").taxaCentavos, m("CREDITO_A_VISTA").taxaCentavos], [80, 40, 90]);
   assert.equal(m("PIX").situacao, "PARCIAL", "o Pix na Entrega (Stone, sem taxa Pix na tabela) não herda a taxa da maquininha");
 });
 

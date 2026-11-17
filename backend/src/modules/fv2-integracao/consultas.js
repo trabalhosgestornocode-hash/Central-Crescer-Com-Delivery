@@ -121,7 +121,13 @@ export const CONSULTAS = Object.freeze({
   "/taxas-contratadas": (n, c, p) => n.consultarTaxasContratadas(c, { competencia: p.competencia, ...(p.processador ? { processador: p.processador } : {}) }),
   // Fase 02 (doc 40): operadoras e o líquido esperado (ESTIMATIVA) por modalidade × bandeira do período.
   "/operadoras": (n, c) => n.consultarOperadoras(c),
-  "/vendas/liquido-esperado": (n, c, p) => n.consultarLiquidoEsperado(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim, ...(p.canal ? { canal: p.canal } : {}) }),
+  "/vendas/liquido-esperado": (n, c, p) => n.consultarLiquidoEsperado(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim, ...(p.canal ? { canal: p.canal } : {}), ...(p.modalidade ? { modalidade: p.modalidade } : {}), ...(p.chave ? { chave: p.chave } : {}) }),
+  // Fases 04/05 (docs 42/43): área SAIPOS (resumo + cards de Presencial e Anota Aí) e fechamento manual com a comparação diária.
+  "/saipos": async (n, c, p) => {
+    const periodo = { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim };
+    return { ...(await n.consultarCanalSaipos(c, periodo)), cards: { BALCAO: (await n.consultarLiquidoEsperado(c, { ...periodo, canal: "BALCAO" })).modalidades, ANOTA_AI: (await n.consultarLiquidoEsperado(c, { ...periodo, canal: "ANOTA_AI" })).modalidades } };
+  },
+  "/fechamento-manual": async (n, c, p) => ({ ...(await n.consultarFechamentoManual(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim })), operadoras: (await n.consultarOperadoras(c)).operadoras.map((o) => ({ codigo: o.codigo, nome: o.nome, processador: o.processador, modalidades: o.modalidades, situacao: o.situacao ?? "ATIVA" })) }),
   "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),
   "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),
   "/configuracoes/categoria": (n, c, p) => n.consultarCategoria(c, { codigo: String(p.codigo ?? "") }),

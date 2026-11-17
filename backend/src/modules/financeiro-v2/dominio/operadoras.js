@@ -147,11 +147,19 @@ export function resumoPorModalidade(itens) {
     const taxaCentavos = calculados.reduce((s, x) => s + x.taxaCentavos, 0);
     const pendentes = lista.filter((x) => x.situacao !== SITUACAO_TAXA_ESTIMADA.CALCULADA && x.situacao !== SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA);
     const situacoes = [...new Set(lista.map((x) => x.situacao))].sort();
+    const situacao = !pendentes.length ? (calculados.length ? "CALCULADO" : "NAO_SE_APLICA") : calculados.length ? "PARCIAL" : "PENDENTE";
+    // Recebido CONFIRMADO (liquidação registrada / entrada no caixa): nunca presumido. Conferência só fecha com tudo recebido.
+    const comRecebido = lista.filter((x) => typeof x.recebidoCentavos === "number");
+    const recebidoCentavos = comRecebido.length ? comRecebido.reduce((s, x) => s + x.recebidoCentavos, 0) : null;
+    const esperadoParaConferir = lista.reduce((s, x) => s + (x.situacao === SITUACAO_TAXA_ESTIMADA.CALCULADA ? x.brutoCentavos - x.taxaCentavos : x.situacao === SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA ? x.brutoCentavos : 0), 0);
+    const situacaoConferencia = pendentes.length ? "PENDENTE"
+      : comRecebido.length < lista.length ? (comRecebido.length ? "PARCIAL" : situacao === "NAO_SE_APLICA" ? "PENDENTE" : "AGUARDANDO_EXTRATO")
+      : recebidoCentavos === esperadoParaConferir ? "CONCILIADO" : "DIVERGENTE";
     return {
       quantidade: lista.length, brutoCentavos, brutoCalculadoCentavos: brutoCalculado, taxaCentavos, liquidoEsperadoCentavos: brutoCalculado - taxaCentavos,
       percentualEfetivoCentesimos: percentualEfetivo(taxaCentavos, brutoCalculado),
-      brutoSemCalculoCentavos: pendentes.reduce((s, x) => s + x.brutoCentavos, 0), situacoes,
-      situacao: !pendentes.length ? (calculados.length ? "CALCULADO" : "NAO_SE_APLICA") : calculados.length ? "PARCIAL" : "PENDENTE",
+      brutoSemCalculoCentavos: pendentes.reduce((s, x) => s + x.brutoCentavos, 0), situacoes, situacao,
+      recebidoCentavos, diferencaCentavos: situacaoConferencia === "CONCILIADO" || situacaoConferencia === "DIVERGENTE" ? recebidoCentavos - esperadoParaConferir : null, situacaoConferencia,
     };
   };
   return [...grupos.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([modalidade, porBandeira]) => ({

@@ -94,7 +94,7 @@ export function operacoesDeVendas(b) {
      * percentual efetivo (dos totais). Estimativa ≠ recebido: nada aqui é conciliação nem despesa. Canal opcional.
      */
     consultarLiquidoEsperado(ctx, entrada = {}) {
-      semCamposDesconhecidos(entrada, ["periodoInicio", "periodoFim", "canal"], "consulta");
+      semCamposDesconhecidos(entrada, ["periodoInicio", "periodoFim", "canal", "modalidade", "chave"], "consulta");
       const inicio = exigirData(entrada.periodoInicio, "periodoInicio");
       const fim = exigirData(entrada.periodoFim, "periodoFim");
       if (fim < inicio) falhar(CODIGO.ENTRADA_INVALIDA, "Período invertido.");
@@ -102,18 +102,31 @@ export function operacoesDeVendas(b) {
       return b.consultar(ctx, async (cx, tx) => {
         const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, ...(canal ? { canal } : {}) } }))
           .filter((v) => v.dataVenda >= inicio && v.dataVenda <= fim);
-        const itens = [];
-        for (const v of vendas) {
-          for (const p of await pagamentosDa(tx, cx, v.id)) {
-            if (p.situacao !== SITUACAO_PAGAMENTO.VALIDO) continue;
-            const t = p.taxaEstimada;
-            itens.push({
-              modalidade: t?.modalidade ?? MODALIDADE_DA_FORMA[p.forma] ?? p.forma, bandeira: t?.bandeira ?? p.bandeira ?? null, brutoCentavos: p.valorCentavos,
-              situacao: t?.situacao ?? SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA, taxaCentavos: t?.taxaCentavos ?? null, operadora: p.operadora ?? null,
-            });
-          }
+        const ids = new Set(vendas.map((v) => v.id));
+        const daVenda = new Map(vendas.map((v) => [v.id, v]));
+        const pagamentos = (await tx.listar(cx, TIPO.PAGAMENTO_VENDA)).filter((p) => ids.has(p.vendaId) && p.situacao === SITUACAO_PAGAMENTO.VALIDO);
+        const recebiveis = new Map((await tx.listar(cx, TIPO.RECEBIVEL)).filter((r) => ids.has(r.vendaId)).map((r) => [r.id, r]));
+        const itens = pagamentos.map((p) => {
+          const t = p.taxaEstimada;
+          const modalidade = t?.modalidade ?? MODALIDADE_DA_FORMA[p.forma] ?? p.forma;
+          const rec = p.recebivelId ? recebiveis.get(p.recebivelId) : null;
+          // Recebido CONFIRMADO: entrada no caixa/conta (pagamento direto) ou liquidação registrada no recebível. Nunca presumido.
+          const recebidoCentavos = p.movimentacaoId ? p.valorCentavos : rec && rec.liquidadoCentavos > 0 ? rec.liquidadoCentavos : null;
+          const v = daVenda.get(p.vendaId);
+          return {
+            modalidade, bandeira: modalidade === "PIX" ? (p.operadora ?? t?.operadora ?? p.processador ?? "DIRETO") : (t?.bandeira ?? p.bandeira ?? null), brutoCentavos: p.valorCentavos,
+            situacao: t?.situacao ?? SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA, taxaCentavos: t?.taxaCentavos ?? null, operadora: p.operadora ?? null, recebidoCentavos,
+            venda: { id: v.id, data: v.dataVenda, descricao: v.descricao ?? null, canal: v.canal, fonte: v.fonte?.sistema ?? null }, descricaoOriginal: p.descricaoOriginal ?? null,
+          };
+        });
+        const base = { periodoInicio: inicio, periodoFim: fim, canal, natureza: "ESTIMATIVA", observacao: "Taxa estimada pela tabela vigente na data da venda. Não é despesa lançada nem valor recebido." };
+        // Detalhe de um card: os pagamentos (e vendas) que compõem o total da modalidade/bandeira (ou operadora, no Pix).
+        if (entrada.modalidade) {
+          const lista = itens.filter((x) => x.modalidade === String(entrada.modalidade) && (!entrada.chave || (x.bandeira ?? "—") === String(entrada.chave)))
+            .sort((a, x) => a.venda.data.localeCompare(x.venda.data));
+          return { ...base, modalidade: String(entrada.modalidade), chave: entrada.chave ?? null, itens: lista.slice(0, 500), total: lista.length };
         }
-        return { periodoInicio: inicio, periodoFim: fim, canal, natureza: "ESTIMATIVA", observacao: "Taxa estimada pela tabela vigente na data da venda. Não é despesa lançada nem valor recebido.", modalidades: resumoPorModalidade(itens) };
+        return { ...base, modalidades: resumoPorModalidade(itens) };
       });
     },
 

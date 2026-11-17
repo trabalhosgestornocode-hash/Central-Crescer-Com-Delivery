@@ -146,6 +146,35 @@ export function acaoSensivelDoFechamento(b) {
   return null;
 }
 
+/**
+ * Fase 04 (doc 42) — grade FIXA do formulário de fechamento manual: grupo × bandeira (cartões/voucher) ou operadora (Pix).
+ * Campo `f_<GRUPO>_<SUB>_inf` = informado e `_esp` = esperado (opcional), em reais. Só as linhas preenchidas são enviadas.
+ */
+export const GRADE_FECHAMENTO = Object.freeze([
+  ...["MASTERCARD", "VISA", "ELO", "AMEX", "HIPERCARD", "OUTRA"].map((s) => ["CREDITO", s]),
+  ...["MASTERCARD", "VISA", "ELO", "OUTRA"].map((s) => ["DEBITO", s]),
+  ...["MAQUININHA_IFOOD", "STONE", "PAGBANK", "DIRETO"].map((s) => ["PIX", s]),
+  ...["ALELO", "PLUXEE", "VR", "TICKET", "OUTRA"].map((s) => ["VOUCHER", s]),
+  ["ANOTA_AI", ""], ["OUTRA", ""], ["IFOOD_CONFERENCIA", ""], ["NOVENTA_E_NOVE_FOOD_CONFERENCIA", ""],
+]);
+const campoDaGrade = (g, s, k) => `f_${g}${s ? `_${s}` : ""}_${k}`;
+const DINHEIRO_FECHAMENTO = ["abertura", "vendas", "retiradas", "reforcos", "transferencias", "informado"];
+const CAMPOS_FECHAMENTO = Object.freeze(["data", "caixa", "responsavelAbertura", "responsavelFechamento", "horaAbertura", "horaFechamento", "observacao", "justificativa",
+  ...DINHEIRO_FECHAMENTO.map((k) => `din_${k}`), ...GRADE_FECHAMENTO.flatMap(([g, s]) => [campoDaGrade(g, s, "inf"), campoDaGrade(g, s, "esp")])]);
+const reaisOuNulo = (v) => (v === undefined || v === null || String(v).trim() === "" ? null : centavos(v));
+function corpoDoFechamento(b) {
+  const texto = (k) => (b[k] === undefined || String(b[k]).trim() === "" ? undefined : String(b[k]));
+  const dinheiro = Object.fromEntries(DINHEIRO_FECHAMENTO.map((k) => [`${k}Centavos`, reaisOuNulo(b[`din_${k}`])]));
+  const formas = GRADE_FECHAMENTO.filter(([g, s]) => reaisOuNulo(b[campoDaGrade(g, s, "inf")]) !== null).map(([g, s]) => ({
+    grupo: g, ...(["CREDITO", "DEBITO", "VOUCHER"].includes(g) ? { bandeira: s } : {}), ...(g === "PIX" ? { operadora: s } : {}),
+    informadoCentavos: reaisOuNulo(b[campoDaGrade(g, s, "inf")]), ...(reaisOuNulo(b[campoDaGrade(g, s, "esp")]) !== null ? { esperadoCentavos: reaisOuNulo(b[campoDaGrade(g, s, "esp")]) } : {}),
+  }));
+  return {
+    data: b.data, caixa: b.caixa, ...Object.fromEntries(["responsavelAbertura", "responsavelFechamento", "horaAbertura", "horaFechamento", "observacao", "justificativa"].filter((k) => texto(k)).map((k) => [k, texto(k)])),
+    dinheiro, formas,
+  };
+}
+
 /** caminho → { campos, sensivel?(corpo) → ACAO|null, fazer(núcleo, contexto, corpo) } */
 export const ESCRITAS = Object.freeze({
   // doc 37: importação SEM GUARDA do arquivo (o cofre documental segue desligado): o arquivo é lido, conferido e descartado;
@@ -275,6 +304,8 @@ export const ESCRITAS = Object.freeze({
     ...(b.operadora ? { operadora: b.operadora } : { processador: b.processador || "STONE" }), vigenciaInicio: b.vigenciaInicio, ...(b.vigenciaFim ? { vigenciaFim: b.vigenciaFim } : {}), fonte: b.fonte,
     ...(b.prazoDeRecebimento ? { prazoDeRecebimento: b.prazoDeRecebimento } : {}), taxas: taxasDoTexto(b.taxas), justificativa: b.justificativa,
   }) },
+  // Fase 04 (doc 42): fechamento manual de UM caixa num dia (conferência; nunca receita). Grade fixa de formas (GRADE_FECHAMENTO).
+  "/fechamento-manual/registrar": { campos: CAMPOS_FECHAMENTO, fazer: (n, c, b) => n.registrarFechamentoManual(c, corpoDoFechamento(b)) },
   // Fase 02 (doc 40): operadoras de pagamento da unidade (cadastro, ativação/desativação, encerramento; nada é apagado).
   "/configuracoes/operadoras": { campos: ["codigo", "nome", "processador", "inicio", "encerramento", "modalidades", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarOperadora(c, {
     codigo: b.codigo, nome: b.nome, processador: b.processador, inicio: b.inicio, ...(b.encerramento ? { encerramento: b.encerramento } : {}),
