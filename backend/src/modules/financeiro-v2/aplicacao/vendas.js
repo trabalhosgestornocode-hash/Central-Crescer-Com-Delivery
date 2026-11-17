@@ -19,7 +19,7 @@ import { aplicarAjuste } from "../dominio/titulos.js";
 import { MODALIDADE_DA_FORMA, SITUACAO_TAXA_ESTIMADA, calcularTaxaEstimada, resumoPorModalidade } from "../dominio/operadoras.js";
 import { exigirData } from "../dominio/tempo.js";
 import { exigirUmDe, semCamposDesconhecidos } from "../dominio/validacao.js";
-import { validarCancelamentoVenda, validarEstornoDePagamento, validarPagamentoDeVenda, validarVenda } from "../contratos/comandos.js";
+import { validarCancelamentoVenda, validarCorrecaoDeEntrada, validarEstornoDePagamento, validarPagamentoDeVenda, validarVenda } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
 
 const restante = (p) => subtrair(p.valorCentavos, p.estornadoCentavos);
@@ -113,6 +113,78 @@ export function operacoesDeVendas(b) {
   }
 
   const pagamentosDa = async (tx, cx, vendaId) => (await tx.listar(cx, TIPO.PAGAMENTO_VENDA, { onde: { vendaId } })).sort((x, y) => x.indice - y.indice);
+
+  /** Motor ÚNICO do estorno de pagamento de venda (dentro de uma transação já autorizada). Usado pelo estorno genérico do
+   *  núcleo, pela substituição do faturamento provisório e pela correção de entrada em conta (rota restrita). */
+  async function estornarNaTransacao(cx, tx, c) {
+    const pag = await b.obterOuFalhar(tx, cx, TIPO.PAGAMENTO_VENDA, c.pagamentoId, "Pagamento");
+    if (pag.situacao === SITUACAO_PAGAMENTO.CANCELADO || restante(pag) === 0) falhar(CODIGO.OPERACAO_INVALIDA, "Este pagamento não tem valor a estornar.");
+    const valor = c.valorCentavos ?? restante(pag);
+    if (valor > restante(pag)) falhar(CODIGO.OPERACAO_INVALIDA, "O estorno supera o valor ainda válido do pagamento.", { restanteCentavos: restante(pag) });
+    const venda = await b.obterOuFalhar(tx, cx, TIPO.VENDA, pag.vendaId, "Venda");
+    if (venda.situacao !== SITUACAO_VENDA.ATIVA) falhar(CODIGO.OPERACAO_INVALIDA, "A venda está cancelada.");
+    const dataEfetiva = c.dataEfetiva ?? b.hoje();
+    b.exigirNaoFutura(dataEfetiva, "dataEfetiva");
+    const competencia = competenciaDe(dataEfetiva);
+    // 07: o estorno é um fato do mês da data efetiva (precisa aceitar escrita). Venda e recebível de um mês homologado
+    // só mudam a POSIÇÃO (pago, devolvido, saldo devido): atualização posterior auditada, sem tocar o resultado de lá.
+    const recebivelDoPagamento = pag.recebivelId ? await tx.obter(cx, TIPO.RECEBIVEL, pag.recebivelId) : null;
+    await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competencia], referenciadas: [venda.competencia, recebivelDoPagamento?.competencia], motivo: "estorno de pagamento de venda" });
+    if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
+    const devolucao = c.motivo === MOTIVO_ESTORNO.DEVOLUCAO_AO_CLIENTE;
+    const estornoId = b.gerarId();
+
+    let lancamento = null;
+    if (devolucao) {
+      const categoria = await b.categoriaDoSistema(tx, cx, CATEGORIA_DEVOLUCAO);
+      lancamento = await b.lancar(tx, cx, categoria, {
+        valorCentavos: valor, moeda: venda.moeda, descricao: c.justificativa, dataOperacao: dataEfetiva, competencia, canal: venda.canal,
+        origem: { tipo: TIPO.ESTORNO, id: estornoId, vendaId: venda.id },
+      });
+    }
+
+    let recebivel = null;
+    let movimentacao = null;
+    if (pag.recebivelId) {
+      const atual = await b.obterOuFalhar(tx, cx, TIPO.RECEBIVEL, pag.recebivelId, "Recebível");
+      if (valor > atual.saldoCentavos) {
+        falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "O repasse deste pagamento já foi recebido. Estorne a liquidação antes de estornar o pagamento.", { saldoCentavos: atual.saldoCentavos });
+      }
+      await b.criar(tx, cx, TIPO.AJUSTE, {
+        alvoTipo: ALVO_LIQUIDACAO.RECEBIVEL, alvoId: atual.id, valorCentavos: -valor, motivo: c.justificativa, competencia,
+        documentoId: c.documentoId, lancamentoId: null, estornoId,
+      }, c.justificativa);
+      recebivel = await b.alterar(tx, cx, TIPO.RECEBIVEL, atual, aplicarAjuste(atual, -valor), EVENTO_HISTORICO.ESTORNO, c.justificativa);
+    } else if (pag.movimentacaoId) {
+      const original = await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, pag.movimentacaoId, "Movimentação");
+      if (devolucao) {
+        const conta = await contaDeEntrada(tx, cx, c.contaId ?? original.contaId, pag.forma);
+        movimentacao = await b.criar(tx, cx, TIPO.MOVIMENTACAO, movimento({
+          contaId: conta.id, dataEfetiva, sentido: SENTIDO.SAIDA, valorCentavos: valor, moeda: venda.moeda, natureza: NATUREZA_MOVIMENTACAO.DEVOLUCAO,
+          descricao: c.justificativa, documentoId: c.documentoId, pagamentoId: pag.id, estornoId,
+        }), c.justificativa);
+      } else {
+        // Correção: a entrada registrada estava errada. Ela é anulada por inteiro (não existe "meia entrada errada").
+        if (valor !== pag.valorCentavos) falhar(CODIGO.OPERACAO_INVALIDA, "Correção de pagamento recebido direto em conta deve ser total.");
+        if (original.situacaoConciliacao !== SITUACAO_CONCILIACAO.NAO_CONCILIADA) {
+          falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "A entrada deste pagamento já está conciliada com o extrato: trate como devolução ou revise a conciliação.");
+        }
+        await b.exigirCompetenciaEditavel(tx, cx, competenciaDe(original.dataEfetiva));
+        movimentacao = await b.alterar(tx, cx, TIPO.MOVIMENTACAO, original, { situacao: SITUACAO_MOVIMENTACAO.ESTORNADA, estornoId }, EVENTO_HISTORICO.ESTORNO, c.justificativa);
+      }
+    }
+
+    const estornado = somar(pag.estornadoCentavos, valor);
+    const pagamento = await b.alterar(tx, cx, TIPO.PAGAMENTO_VENDA, pag, { estornadoCentavos: estornado, situacao: situacaoDoPagamento({ ...pag, estornadoCentavos: estornado }) }, EVENTO_HISTORICO.ESTORNO, c.justificativa);
+    const vendaAtualizada = await b.alterar(tx, cx, TIPO.VENDA, venda, {
+      pagoCentavos: subtrair(venda.pagoCentavos, valor), devolvidoCentavos: devolucao ? somar(venda.devolvidoCentavos, valor) : venda.devolvidoCentavos,
+    }, EVENTO_HISTORICO.ESTORNO, c.justificativa);
+    const estorno = await b.criar(tx, cx, TIPO.ESTORNO, {
+      id: estornoId, alvoTipo: ALVO_ESTORNO.PAGAMENTO_VENDA, alvoId: pag.id, valorCentavos: valor, motivo: c.motivo, justificativa: c.justificativa,
+      dataEfetiva, documentoId: c.documentoId, lancamentoId: lancamento?.id ?? null, movimentacaoId: movimentacao?.id ?? null,
+    }, c.justificativa);
+    return { estorno, pagamento, venda: vendaAtualizada, lancamento, recebivel, movimentacao };
+  }
 
   return {
     /**
@@ -235,74 +307,36 @@ export function operacoesDeVendas(b) {
      */
     estornarPagamentoDeVenda(ctx, entrada) {
       const c = validarEstornoDePagamento(entrada);
+      return b.executar(ctx, ACAO.CANCELAR, (cx, tx) => estornarNaTransacao(cx, tx, c));
+    },
+
+    /**
+     * 17/11/2026 — CORREÇÃO de uma entrada em conta de UM pagamento de venda (ex.: dinheiro registrado por uma importação
+     * errada). Rota restrita, sem valor, conta, data nem motivo escolhidos pelo cliente: sempre o estorno TOTAL por
+     * CORRECAO_DE_PAGAMENTO do mesmo motor (estornarNaTransacao). Exige as ações CORRIGIR e CANCELAR (o banco grava o estorno
+     * pela ação CANCELAR); o pagamento precisa pertencer à venda informada, ter entrado direto em conta (sem recebível) e a
+     * entrada não pode estar conciliada. Idempotente: repetir o mesmo pedido devolve o estorno já gravado (repetido: true).
+     */
+    corrigirEntradaDePagamentoDeVenda(ctx, entrada) {
+      const c = validarCorrecaoDeEntrada(entrada);
+      b.autorizarContexto(ctx, ACAO.CORRIGIR);
       return b.executar(ctx, ACAO.CANCELAR, async (cx, tx) => {
+        await b.exigirConcessaoVigente(tx, cx, ACAO.CORRIGIR);
+        const venda = await b.obterOuFalhar(tx, cx, TIPO.VENDA, c.vendaId, "Venda");
         const pag = await b.obterOuFalhar(tx, cx, TIPO.PAGAMENTO_VENDA, c.pagamentoId, "Pagamento");
-        if (pag.situacao === SITUACAO_PAGAMENTO.CANCELADO || restante(pag) === 0) falhar(CODIGO.OPERACAO_INVALIDA, "Este pagamento não tem valor a estornar.");
-        const valor = c.valorCentavos ?? restante(pag);
-        if (valor > restante(pag)) falhar(CODIGO.OPERACAO_INVALIDA, "O estorno supera o valor ainda válido do pagamento.", { restanteCentavos: restante(pag) });
-        const venda = await b.obterOuFalhar(tx, cx, TIPO.VENDA, pag.vendaId, "Venda");
-        if (venda.situacao !== SITUACAO_VENDA.ATIVA) falhar(CODIGO.OPERACAO_INVALIDA, "A venda está cancelada.");
-        const dataEfetiva = c.dataEfetiva ?? b.hoje();
-        b.exigirNaoFutura(dataEfetiva, "dataEfetiva");
-        const competencia = competenciaDe(dataEfetiva);
-        // 07: o estorno é um fato do mês da data efetiva (precisa aceitar escrita). Venda e recebível de um mês homologado
-        // só mudam a POSIÇÃO (pago, devolvido, saldo devido): atualização posterior auditada, sem tocar o resultado de lá.
-        const recebivelDoPagamento = pag.recebivelId ? await tx.obter(cx, TIPO.RECEBIVEL, pag.recebivelId) : null;
-        await b.exigirCompetenciasDoVinculo(tx, cx, { gravadas: [competencia], referenciadas: [venda.competencia, recebivelDoPagamento?.competencia], motivo: "estorno de pagamento de venda" });
-        if (c.documentoId) await b.obterOuFalhar(tx, cx, TIPO.DOCUMENTO, c.documentoId, "Documento");
-        const devolucao = c.motivo === MOTIVO_ESTORNO.DEVOLUCAO_AO_CLIENTE;
-        const estornoId = b.gerarId();
-
-        let lancamento = null;
-        if (devolucao) {
-          const categoria = await b.categoriaDoSistema(tx, cx, CATEGORIA_DEVOLUCAO);
-          lancamento = await b.lancar(tx, cx, categoria, {
-            valorCentavos: valor, moeda: venda.moeda, descricao: c.justificativa, dataOperacao: dataEfetiva, competencia, canal: venda.canal,
-            origem: { tipo: TIPO.ESTORNO, id: estornoId, vendaId: venda.id },
-          });
+        if (pag.vendaId !== venda.id) falhar(CODIGO.OPERACAO_INVALIDA, "O pagamento informado não pertence a esta venda.");
+        if (!pag.movimentacaoId || pag.recebivelId) falhar(CODIGO.OPERACAO_INVALIDA, "Só a entrada direta em conta (ex.: dinheiro no caixa) é corrigida por aqui; pagamento com repasse de processador não.");
+        if (restante(pag) === 0) {
+          const anteriores = await tx.listar(cx, TIPO.ESTORNO, (e) => e.alvoTipo === ALVO_ESTORNO.PAGAMENTO_VENDA && e.alvoId === pag.id);
+          const correcao = anteriores.find((e) => e.motivo === MOTIVO_ESTORNO.CORRECAO_DE_PAGAMENTO && e.valorCentavos === pag.valorCentavos);
+          if (!correcao) falhar(CODIGO.OPERACAO_INVALIDA, "Este pagamento já foi estornado por outro motivo ou parcialmente: nada a corrigir.");
+          return { repetido: true, estorno: correcao, pagamento: pag, venda, movimentacao: await tx.obter(cx, TIPO.MOVIMENTACAO, pag.movimentacaoId) };
         }
-
-        let recebivel = null;
-        let movimentacao = null;
-        if (pag.recebivelId) {
-          const atual = await b.obterOuFalhar(tx, cx, TIPO.RECEBIVEL, pag.recebivelId, "Recebível");
-          if (valor > atual.saldoCentavos) {
-            falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "O repasse deste pagamento já foi recebido. Estorne a liquidação antes de estornar o pagamento.", { saldoCentavos: atual.saldoCentavos });
-          }
-          await b.criar(tx, cx, TIPO.AJUSTE, {
-            alvoTipo: ALVO_LIQUIDACAO.RECEBIVEL, alvoId: atual.id, valorCentavos: -valor, motivo: c.justificativa, competencia,
-            documentoId: c.documentoId, lancamentoId: null, estornoId,
-          }, c.justificativa);
-          recebivel = await b.alterar(tx, cx, TIPO.RECEBIVEL, atual, aplicarAjuste(atual, -valor), EVENTO_HISTORICO.ESTORNO, c.justificativa);
-        } else if (pag.movimentacaoId) {
-          const original = await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, pag.movimentacaoId, "Movimentação");
-          if (devolucao) {
-            const conta = await contaDeEntrada(tx, cx, c.contaId ?? original.contaId, pag.forma);
-            movimentacao = await b.criar(tx, cx, TIPO.MOVIMENTACAO, movimento({
-              contaId: conta.id, dataEfetiva, sentido: SENTIDO.SAIDA, valorCentavos: valor, moeda: venda.moeda, natureza: NATUREZA_MOVIMENTACAO.DEVOLUCAO,
-              descricao: c.justificativa, documentoId: c.documentoId, pagamentoId: pag.id, estornoId,
-            }), c.justificativa);
-          } else {
-            // Correção: a entrada registrada estava errada. Ela é anulada por inteiro (não existe "meia entrada errada").
-            if (valor !== pag.valorCentavos) falhar(CODIGO.OPERACAO_INVALIDA, "Correção de pagamento recebido direto em conta deve ser total.");
-            if (original.situacaoConciliacao !== SITUACAO_CONCILIACAO.NAO_CONCILIADA) {
-              falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "A entrada deste pagamento já está conciliada com o extrato: trate como devolução ou revise a conciliação.");
-            }
-            await b.exigirCompetenciaEditavel(tx, cx, competenciaDe(original.dataEfetiva));
-            movimentacao = await b.alterar(tx, cx, TIPO.MOVIMENTACAO, original, { situacao: SITUACAO_MOVIMENTACAO.ESTORNADA, estornoId }, EVENTO_HISTORICO.ESTORNO, c.justificativa);
-          }
-        }
-
-        const estornado = somar(pag.estornadoCentavos, valor);
-        const pagamento = await b.alterar(tx, cx, TIPO.PAGAMENTO_VENDA, pag, { estornadoCentavos: estornado, situacao: situacaoDoPagamento({ ...pag, estornadoCentavos: estornado }) }, EVENTO_HISTORICO.ESTORNO, c.justificativa);
-        const vendaAtualizada = await b.alterar(tx, cx, TIPO.VENDA, venda, {
-          pagoCentavos: subtrair(venda.pagoCentavos, valor), devolvidoCentavos: devolucao ? somar(venda.devolvidoCentavos, valor) : venda.devolvidoCentavos,
-        }, EVENTO_HISTORICO.ESTORNO, c.justificativa);
-        const estorno = await b.criar(tx, cx, TIPO.ESTORNO, {
-          id: estornoId, alvoTipo: ALVO_ESTORNO.PAGAMENTO_VENDA, alvoId: pag.id, valorCentavos: valor, motivo: c.motivo, justificativa: c.justificativa,
-          dataEfetiva, documentoId: c.documentoId, lancamentoId: lancamento?.id ?? null, movimentacaoId: movimentacao?.id ?? null,
-        }, c.justificativa);
-        return { estorno, pagamento, venda: vendaAtualizada, lancamento, recebivel, movimentacao };
+        if (pag.estornadoCentavos > 0) falhar(CODIGO.OPERACAO_INVALIDA, "Este pagamento já tem estorno parcial: a correção é sempre total.");
+        const mov = await b.obterOuFalhar(tx, cx, TIPO.MOVIMENTACAO, pag.movimentacaoId, "Movimentação");
+        if (mov.situacaoConciliacao !== SITUACAO_CONCILIACAO.NAO_CONCILIADA) falhar(CODIGO.ESTORNO_EXIGE_COMPENSACAO, "A entrada deste pagamento já está conciliada com o extrato: não é corrigida por esta rota.");
+        const r = await estornarNaTransacao(cx, tx, { pagamentoId: pag.id, valorCentavos: null, motivo: MOTIVO_ESTORNO.CORRECAO_DE_PAGAMENTO, justificativa: c.justificativa, contaId: null, dataEfetiva: null, documentoId: null });
+        return { repetido: false, ...r };
       });
     },
 

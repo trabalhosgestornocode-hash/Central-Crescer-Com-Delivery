@@ -182,6 +182,12 @@ export function validarEstornoDePagamento(e) {
   };
 }
 
+/** 17/11/2026 — correção de entrada em conta de um pagamento de venda: só venda, pagamento e justificativa (nada de valor/conta/data). */
+export function validarCorrecaoDeEntrada(e) {
+  semCamposDesconhecidos(e, ["vendaId", "pagamentoId", "justificativa"], "correção de entrada");
+  return { vendaId: exigirUuid(e.vendaId, "vendaId"), pagamentoId: exigirUuid(e.pagamentoId, "pagamentoId"), justificativa: justificativa(e.justificativa) };
+}
+
 const cancelamento = (campoId, nome) => (e) => {
   semCamposDesconhecidos(e, [campoId, "justificativa"], nome);
   return { [campoId]: exigirUuid(e[campoId], campoId), justificativa: justificativa(e.justificativa) };
