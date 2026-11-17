@@ -384,8 +384,9 @@ export function operacoesDeFormacao(b) {
    * lógico, com histórico). É o que permite corrigir uma importação por forma de pagamento reimportando por pedido (doc 45 §7).
    * Proposta sem venda própria (agregada, total do período) continua valendo como antes.
    */
-  async function aprovarNaTransacao(cx, tx, c) {
-    const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
+  /** `lida`: a proposta já lida NESTA transação, depois das travas (evita reler o mesmo registro). */
+  async function aprovarNaTransacao(cx, tx, c, lida = null) {
+    const p = lida ?? await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
     if (p.estado === E.APROVADA) return p;
     if (FINAIS.includes(p.estado)) falhar(CODIGO.TRANSICAO_INVALIDA, "Proposta já decidida.", { estado: p.estado });
     if (p.estado === E.AGUARDANDO_EVIDENCIA) falhar(CODIGO.TRANSICAO_INVALIDA, "Falta evidência: a proposta não pode ser aprovada assim.");
@@ -406,11 +407,12 @@ export function operacoesDeFormacao(b) {
     await tx.travar(cx, `formacao-dia:${previa.dataOperacao}`, "EXCLUSIVA");
   }
 
-  async function aplicarNaTransacao(cx, tx, c) {
-    const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
+  /** `lida`: a proposta já lida/atualizada NESTA transação; `corteConferido`: a barreira de corte já foi conferida nela. */
+  async function aplicarNaTransacao(cx, tx, c, { lida = null, corteConferido = false } = {}) {
+    const p = lida ?? await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
     if (p.estado === E.APLICADA) return { proposta: p, efeitos: p.efeitos, repetido: true };
     if (p.estado !== E.APROVADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só proposta aprovada pode ser aplicada.", { estado: p.estado });
-    await recusarAnteriorAoCorte(tx, cx, p); // aprovada ANTES de a abertura existir: a barreira vale na aplicação
+    if (!corteConferido) await recusarAnteriorAoCorte(tx, cx, p); // aprovada ANTES de a abertura existir: a barreira vale na aplicação
     const conflito = await conflitoDeGranularidade(tx, cx, p);
     if (conflito?.motivo === "FATURAMENTO_PROVISORIO") falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Há faturamento manual provisório deste dia e canal: substitua-o (operação auditada) antes de aplicar a venda importada — nunca duas receitas do mesmo fato.", { vendaId: conflito.id, motivo: conflito.motivo });
     if (conflito) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe receita do mesmo dia pela outra granularidade (agregado × por pedido): reverta uma antes de aplicar a outra.", { propostaId: conflito.id });
@@ -595,8 +597,10 @@ export function operacoesDeFormacao(b) {
         await b.exigirConcessaoVigente(tx, cx, ACAO.APROVAR);
         await travarParaAplicar(cx, tx, c.propostaId);
         const atual = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
-        if (atual.estado !== E.APLICADA && atual.estado !== E.APROVADA) await aprovarNaTransacao(cx, tx, c);
-        return aplicarNaTransacao(cx, tx, { ...c, justificativa: null });
+        if (atual.estado === E.APLICADA || atual.estado === E.APROVADA) return aplicarNaTransacao(cx, tx, { ...c, justificativa: null }, { lida: atual });
+        // Aprovada agora, nesta transação: a barreira de corte acabou de ser conferida e o registro devolvido é o atual.
+        const aprovada = await aprovarNaTransacao(cx, tx, c, atual);
+        return aplicarNaTransacao(cx, tx, { ...c, justificativa: null }, { lida: aprovada, corteConferido: true });
       });
     },
 
