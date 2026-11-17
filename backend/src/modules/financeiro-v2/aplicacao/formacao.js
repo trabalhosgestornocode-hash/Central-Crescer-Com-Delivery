@@ -384,14 +384,55 @@ export function operacoesDeFormacao(b) {
    * lógico, com histórico). É o que permite corrigir uma importação por forma de pagamento reimportando por pedido (doc 45 §7).
    * Proposta sem venda própria (agregada, total do período) continua valendo como antes.
    */
-  async function semVendaCancelada(tx, cx, lista) {
-    const vivas = [];
-    for (const x of lista) {
-      const ef = x.operacao === OP.VENDA ? (x.efeitos ?? []).find((e) => e.tipo === TIPO.VENDA) : null;
-      if (ef && (await tx.obter(cx, TIPO.VENDA, ef.id))?.situacao === "CANCELADA") continue;
-      vivas.push(x);
+  /** `lida`: a proposta já lida NESTA transação, depois das travas (evita reler o mesmo registro). */
+  async function aprovarNaTransacao(cx, tx, c, lida = null) {
+    const p = lida ?? await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
+    if (p.estado === E.APROVADA) return p;
+    if (FINAIS.includes(p.estado)) falhar(CODIGO.TRANSICAO_INVALIDA, "Proposta já decidida.", { estado: p.estado });
+    if (p.estado === E.AGUARDANDO_EVIDENCIA) falhar(CODIGO.TRANSICAO_INVALIDA, "Falta evidência: a proposta não pode ser aprovada assim.");
+    if (p.estado === E.AGUARDANDO_REVISAO && !c.justificativa) falhar(CODIGO.TRANSICAO_INVALIDA, "Proposta em revisão exige justificativa para aprovar.");
+    for (const d of p.duplicidades.filter((x) => x.tipo === "EFEITO_ANTERIOR_APLICADO")) {
+      const anterior = await tx.obter(cx, TIPO.PROPOSTA, d.propostaId);
+      if (anterior?.estado === E.APLICADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Reverta o efeito da proposta anterior (fonte retificada) antes de aprovar esta.");
     }
-    return vivas;
+    if (p.operacao === OP.PAGAMENTO_STONE && !p.comando.vendaId) falhar(CODIGO.TRANSICAO_INVALIDA, "Vínculo ambíguo ou ausente: a proposta não indica uma venda.");
+    await recusarAnteriorAoCorte(tx, cx, p);
+    return b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.APROVADA, decididoPor: cx.usuarioId, decididoEm: b.agora() }, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa);
+  }
+
+  /** doc 34: receitas de venda da competência em fila (o total do período cobre vários dias), depois a do dia. */
+  async function travarParaAplicar(cx, tx, propostaId) {
+    const previa = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, propostaId, "Proposta");
+    if ([OP.VENDA, OP.VENDA_AGREGADA, OP.PAGAMENTO_STONE].includes(previa.operacao)) await tx.travar(cx, `formacao-competencia:${previa.competencia}`, "EXCLUSIVA");
+    await tx.travar(cx, `formacao-dia:${previa.dataOperacao}`, "EXCLUSIVA");
+  }
+
+  /** `lida`: a proposta já lida/atualizada NESTA transação; `corteConferido`: a barreira de corte já foi conferida nela. */
+  async function aplicarNaTransacao(cx, tx, c, { lida = null, corteConferido = false } = {}) {
+    const p = lida ?? await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
+    if (p.estado === E.APLICADA) return { proposta: p, efeitos: p.efeitos, repetido: true };
+    if (p.estado !== E.APROVADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só proposta aprovada pode ser aplicada.", { estado: p.estado });
+    if (!corteConferido) await recusarAnteriorAoCorte(tx, cx, p); // aprovada ANTES de a abertura existir: a barreira vale na aplicação
+    const conflito = await conflitoDeGranularidade(tx, cx, p);
+    if (conflito?.motivo === "FATURAMENTO_PROVISORIO") falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Há faturamento manual provisório deste dia e canal: substitua-o (operação auditada) antes de aplicar a venda importada — nunca duas receitas do mesmo fato.", { vendaId: conflito.id, motivo: conflito.motivo });
+    if (conflito) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe receita do mesmo dia pela outra granularidade (agregado × por pedido): reverta uma antes de aplicar a outra.", { propostaId: conflito.id });
+    const efeitos = await aplicar(tx, cx, p);
+    const aplicada = await b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.APLICADA, efeitos }, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa);
+    return { proposta: aplicada, efeitos, repetido: false };
+  }
+
+  // 17/11/2026: as vendas das propostas são lidas numa consulta por lote de ids (antes, uma por proposta: em produção cada
+  // leitura é uma ida ao banco e o conflito do dia chegava a ~55 leituras por proposta aplicada). Mesma regra.
+  async function semVendaCancelada(tx, cx, lista) {
+    const vendaDe = (x) => (x.operacao === OP.VENDA ? (x.efeitos ?? []).find((e) => e.tipo === TIPO.VENDA)?.id ?? null : null);
+    const ids = [...new Set(lista.map(vendaDe).filter(Boolean))];
+    const canceladas = new Set();
+    for (let i = 0; i < ids.length; i += 500) {
+      const lote = ids.slice(i, i + 500);
+      const { itens } = await tx.paginar(cx, TIPO.VENDA, { em: { id: lote }, onde: { situacao: "CANCELADA" }, limite: lote.length });
+      for (const v of itens) canceladas.add(v.id);
+    }
+    return lista.filter((x) => !canceladas.has(vendaDe(x)));
   }
 
   async function conflitoDeGranularidade(tx, cx, proposta) {
@@ -522,20 +563,7 @@ export function operacoesDeFormacao(b) {
 
     aprovarProposta(ctx, entrada) {
       const c = validarDecisao(entrada);
-      return b.executar(ctx, ACAO.APROVAR, async (cx, tx) => {
-        const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
-        if (p.estado === E.APROVADA) return p;
-        if (FINAIS.includes(p.estado)) falhar(CODIGO.TRANSICAO_INVALIDA, "Proposta já decidida.", { estado: p.estado });
-        if (p.estado === E.AGUARDANDO_EVIDENCIA) falhar(CODIGO.TRANSICAO_INVALIDA, "Falta evidência: a proposta não pode ser aprovada assim.");
-        if (p.estado === E.AGUARDANDO_REVISAO && !c.justificativa) falhar(CODIGO.TRANSICAO_INVALIDA, "Proposta em revisão exige justificativa para aprovar.");
-        for (const d of p.duplicidades.filter((x) => x.tipo === "EFEITO_ANTERIOR_APLICADO")) {
-          const anterior = await tx.obter(cx, TIPO.PROPOSTA, d.propostaId);
-          if (anterior?.estado === E.APLICADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Reverta o efeito da proposta anterior (fonte retificada) antes de aprovar esta.");
-        }
-        if (p.operacao === OP.PAGAMENTO_STONE && !p.comando.vendaId) falhar(CODIGO.TRANSICAO_INVALIDA, "Vínculo ambíguo ou ausente: a proposta não indica uma venda.");
-        await recusarAnteriorAoCorte(tx, cx, p);
-        return b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.APROVADA, decididoPor: cx.usuarioId, decididoEm: b.agora() }, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa);
-      });
+      return b.executar(ctx, ACAO.APROVAR, (cx, tx) => aprovarNaTransacao(cx, tx, c));
     },
 
     rejeitarProposta(ctx, entrada) {
@@ -551,20 +579,28 @@ export function operacoesDeFormacao(b) {
     aplicarProposta(ctx, entrada) {
       const c = validarDecisao(entrada);
       return b.executar(ctx, ACAO.APLICAR, async (cx, tx) => {
-        const previa = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
-        // doc 34: receitas de venda da competência em fila (o total do período cobre vários dias), depois a do dia.
-        if ([OP.VENDA, OP.VENDA_AGREGADA, OP.PAGAMENTO_STONE].includes(previa.operacao)) await tx.travar(cx, `formacao-competencia:${previa.competencia}`, "EXCLUSIVA");
-        await tx.travar(cx, `formacao-dia:${previa.dataOperacao}`, "EXCLUSIVA");
-        const p = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
-        if (p.estado === E.APLICADA) return { proposta: p, efeitos: p.efeitos, repetido: true };
-        if (p.estado !== E.APROVADA) falhar(CODIGO.TRANSICAO_INVALIDA, "Só proposta aprovada pode ser aplicada.", { estado: p.estado });
-        await recusarAnteriorAoCorte(tx, cx, p); // aprovada ANTES de a abertura existir: a barreira vale na aplicação
-        const conflito = await conflitoDeGranularidade(tx, cx, p);
-        if (conflito?.motivo === "FATURAMENTO_PROVISORIO") falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Há faturamento manual provisório deste dia e canal: substitua-o (operação auditada) antes de aplicar a venda importada — nunca duas receitas do mesmo fato.", { vendaId: conflito.id, motivo: conflito.motivo });
-        if (conflito) falhar(CODIGO.CONFLITO_IDEMPOTENCIA, "Já existe receita do mesmo dia pela outra granularidade (agregado × por pedido): reverta uma antes de aplicar a outra.", { propostaId: conflito.id });
-        const efeitos = await aplicar(tx, cx, p);
-        const aplicada = await b.alterar(tx, cx, TIPO.PROPOSTA, p, { estado: E.APLICADA, efeitos }, EVENTO_HISTORICO.MUDANCA_ESTADO, c.justificativa);
-        return { proposta: aplicada, efeitos, repetido: false };
+        await travarParaAplicar(cx, tx, c.propostaId);
+        return aplicarNaTransacao(cx, tx, c);
+      });
+    },
+
+    /**
+     * 17/11/2026 — aprovar E aplicar UMA proposta na MESMA transação (lote de propostas prontas). Mesmas regras, travas e
+     * histórico das duas operações separadas; exige as ações APROVAR e APLICAR. Em produção cada transação custa idas ao banco
+     * (sessão, travas, releituras): juntar as duas corta o custo por proposta. Se a aplicação falhar, a aprovação também é
+     * desfeita (a proposta continua pronta para a próxima tentativa).
+     */
+    aprovarEAplicarProposta(ctx, entrada) {
+      const c = validarDecisao(entrada);
+      b.autorizarContexto(ctx, ACAO.APROVAR);
+      return b.executar(ctx, ACAO.APLICAR, async (cx, tx) => {
+        await b.exigirConcessaoVigente(tx, cx, ACAO.APROVAR);
+        await travarParaAplicar(cx, tx, c.propostaId);
+        const atual = await b.obterOuFalhar(tx, cx, TIPO.PROPOSTA, c.propostaId, "Proposta");
+        if (atual.estado === E.APLICADA || atual.estado === E.APROVADA) return aplicarNaTransacao(cx, tx, { ...c, justificativa: null }, { lida: atual });
+        // Aprovada agora, nesta transação: a barreira de corte acabou de ser conferida e o registro devolvido é o atual.
+        const aprovada = await aprovarNaTransacao(cx, tx, c, atual);
+        return aplicarNaTransacao(cx, tx, { ...c, justificativa: null }, { lida: aprovada, corteConferido: true });
       });
     },
 
