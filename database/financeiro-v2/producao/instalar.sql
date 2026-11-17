@@ -1,6 +1,6 @@
 -- Financeiro v2 — INSTALAÇÃO no schema dedicado financeiro_v2 (gerado por backend/scripts/fv2/pacoteProducao.mjs; NÃO editar à mão).
 -- Aplicar como `postgres` (não superusuário, com CREATEROLE), numa ÚNICA transação. Qualquer falha desfaz tudo.
--- Migrações: 0001_fundacao.sql, 0002_importacoes.sql, 0003_concessoes.sql, 0004_formacao.sql, 0005_composicao_venda.sql, 0006_tesouraria.sql, 0007_saldo_referencia.sql, 0008_conferencias_indices.sql, 0009_configuracoes_fechamento.sql, 0010_auditoria_posicao_posterior.sql, 0011_sessao_banco_e_concessoes.sql, 0012_permissao_por_acao.sql, 0013_acoes_granulares.sql, 0014_reclassificacao.sql, 0015_indices_carga_por_competencia.sql, 0016_envio_de_evidencias.sql, 0017_indices_seletivos.sql, 0018_fechamento_ressalvas_baixa_extrato.sql, 0019_com_pendencias_sem_contorno.sql, 0020_baixa_antecipada.sql, 0021_liberacao_por_unidade.sql, 0022_abertura_da_unidade.sql, 0023_administracao_corporativa.sql
+-- Migrações: 0001_fundacao.sql, 0002_importacoes.sql, 0003_concessoes.sql, 0004_formacao.sql, 0005_composicao_venda.sql, 0006_tesouraria.sql, 0007_saldo_referencia.sql, 0008_conferencias_indices.sql, 0009_configuracoes_fechamento.sql, 0010_auditoria_posicao_posterior.sql, 0011_sessao_banco_e_concessoes.sql, 0012_permissao_por_acao.sql, 0013_acoes_granulares.sql, 0014_reclassificacao.sql, 0015_indices_carga_por_competencia.sql, 0016_envio_de_evidencias.sql, 0017_indices_seletivos.sql, 0018_fechamento_ressalvas_baixa_extrato.sql, 0019_com_pendencias_sem_contorno.sql, 0020_baixa_antecipada.sql, 0021_liberacao_por_unidade.sql, 0022_abertura_da_unidade.sql, 0023_administracao_corporativa.sql, 0024_canais_e_operadoras.sql
 
 -- ===================================================================================== pré-condições (abortam)
 do $$ begin
@@ -3550,6 +3550,57 @@ grant execute on function fv2_painel_administradores(uuid, uuid) to fv2_autorida
 revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
 insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0023_administracao_corporativa.sql', 'ddc2d8b28694ea3b982114e879474e16d5041277d1f2b6f5653f48768e47ca23', '7cf93b58ab340e8da8b4414205cac63155129e20bbf5525d8338fcdaa3514687');
 
+-- ------------------------------------------------------------------------- 0024_canais_e_operadoras.sql (arquivo 72073c2d5864e050081f042722fb135be6e43756b9c2cb8f19eeb1530176e0a4)
+grant fv2_guardiao to current_user; grant create on schema financeiro_v2 to fv2_guardiao;
+-- =====================================================================================================================
+-- Financeiro v2 — migração 0024: CANAL 99FOOD e OPERADORAS de pagamento (Fase 02, doc 40)
+--
+-- Só é aplicada no PostgreSQL local isolado e, depois de autorizada, no schema dedicado. Não pertence a database/migrations/.
+--
+-- O que muda (e o que NÃO muda):
+--   * canal NOVENTA_E_NOVE_FOOD passa a ser aceito (lançamento, venda, recebível, cadastro de canais). Os canais existentes
+--     continuam iguais e nenhum registro é alterado.
+--   * processadores PAGBANK, MAQUININHA_IFOOD (maquininha do iFood usada no balcão: operadora, não canal) e
+--     NOVENTA_E_NOVE_FOOD (repasse do marketplace 99Food) passam a ser aceitos (pagamento, recebível, cadastro).
+--   * Operadoras, tabelas de taxas e taxa estimada vivem nas extensões (`extras`) já existentes: nenhuma coluna nova.
+--   * Só troca restrições CHECK por versões mais amplas: nenhuma linha atual deixa de valer.
+-- =====================================================================================================================
+
+do $$
+declare
+  r record;
+begin
+  -- Remove as CHECK antigas de canal/processador (nomes gerados pelo PostgreSQL) — identificadas pela definição.
+  for r in
+    select c.conname, t.relname
+      from pg_constraint c
+      join pg_class t on t.oid = c.conrelid
+      join pg_namespace n on n.oid = t.relnamespace
+     where c.contype = 'c'
+       and n.nspname = current_schema()
+       and t.relname in ('fv2_lancamento', 'fv2_venda', 'fv2_pagamento_venda', 'fv2_recebivel', 'fv2_canal_processador')
+       and pg_get_constraintdef(c.oid) like '%ANOTA_AI%'
+  loop
+    execute format('alter table %I drop constraint %I', r.relname, r.conname);
+  end loop;
+end $$;
+
+alter table fv2_lancamento add constraint fv2_lancamento_canal_valido
+  check (canal is null or canal in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'));
+alter table fv2_venda add constraint fv2_venda_canal_valido
+  check (canal in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'));
+alter table fv2_pagamento_venda add constraint fv2_pagamento_venda_processador_valido
+  check (processador is null or processador in ('STONE', 'PAGBANK', 'MAQUININHA_IFOOD', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OPERADORA_BENEFICIOS', 'MAQUINA_TERCEIROS', 'OUTRO'));
+alter table fv2_recebivel add constraint fv2_recebivel_processador_valido
+  check (processador is null or processador in ('STONE', 'PAGBANK', 'MAQUININHA_IFOOD', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OPERADORA_BENEFICIOS', 'MAQUINA_TERCEIROS', 'OUTRO'));
+alter table fv2_recebivel add constraint fv2_recebivel_canal_valido
+  check (canal is null or canal in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'));
+alter table fv2_canal_processador add constraint fv2_canal_processador_codigo_base_valido
+  check ((papel = 'CANAL' and codigo_base in ('BALCAO', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OUTRO'))
+      or (papel = 'PROCESSADOR' and codigo_base in ('STONE', 'PAGBANK', 'MAQUININHA_IFOOD', 'IFOOD', 'ANOTA_AI', 'NOVENTA_E_NOVE_FOOD', 'OPERADORA_BENEFICIOS', 'MAQUINA_TERCEIROS', 'OUTRO')));
+revoke create on schema financeiro_v2 from fv2_guardiao; revoke fv2_guardiao from current_user;
+insert into financeiro_v2.fv2_migracao (nome, sha256, sha256_aplicado) values ('0024_canais_e_operadoras.sql', '72073c2d5864e050081f042722fb135be6e43756b9c2cb8f19eeb1530176e0a4', '72073c2d5864e050081f042722fb135be6e43756b9c2cb8f19eeb1530176e0a4');
+
 -- ======================================================== A5: nenhuma função do módulo executável por PUBLIC
 do $$ declare f record; begin
   -- A5 (auditoria A-1): nenhuma função do módulo fica executável por PUBLIC (o padrão do PostgreSQL). Quem tinha o
@@ -3583,7 +3634,7 @@ do $$
 declare n int; txt text;
 begin
   select count(*) into n from financeiro_v2.fv2_migracao;
-  if n <> 23 then raise exception 'FV2 pós: % migrações registradas (esperado 23)', n; end if;
+  if n <> 24 then raise exception 'FV2 pós: % migrações registradas (esperado 24)', n; end if;
   -- nada do módulo fora do schema dedicado
   select count(*) into n from pg_class c join pg_namespace s on s.oid = c.relnamespace where c.relname like 'fv2\_%' and s.nspname <> 'financeiro_v2' and s.nspname not like 'pg\_%';
   if n > 0 then raise exception 'FV2 pós: % relações fv2_* fora do schema', n; end if;

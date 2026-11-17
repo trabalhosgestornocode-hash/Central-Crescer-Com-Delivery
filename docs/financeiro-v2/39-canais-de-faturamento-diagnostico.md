@@ -77,8 +77,8 @@ Observações do arquivo real (sem valores):
   - Exemplos: "Online iFood, Voucher Parceiro Desconto" e "Pago Online, Pago Online".
 - **"Voucher Parceiro Desconto":** no período examinado aparece **somente em pedidos iFood**. É desconto de parceiro do iFood. Fica fora da apuração SAIPOS junto com o iFood.
 - **"Pago Online via Pix":** aparece somente em fichas presenciais.
-  - É Pix em maquininha na loja.
-  - **A operadora está pendente de confirmação** (ver §5).
+  - É Pix na **maquininha do iFood usada na loja** (confirmado pelo proprietário; ver §5, D2).
+  - A maquininha é uma **operadora de pagamento**, não o canal iFood: a venda é **Presencial — SAIPOS**.
 - **"Pix na Entrega":** no período, só em pedido iFood.
 - Uma ficha presencial com pagamento "Online iFood" aparece como exceção e deve ir para conferência.
 - **Fórmula do total:** `Itens − Desconto + Entrega + Acréscimo = Total` fechou em todas as fichas presenciais.
@@ -124,15 +124,17 @@ Observações do arquivo real (sem valores):
      - cancelar essas vendas pela rota existente `/vendas/cancelar`, com justificativa e trilha;
      - reimportar o período pelo relatório **por pedido**, que separa os canais.
    - O leitor de formas de pagamento passa a servir só para conferência do caixa.
-2. **De-para de "Pago Online via Pix":**
-   - Em 16/11 foi informado como "maquininha do iFood na loja".
-   - O pedido atual diz que é Stone.
-   - A classificação depende dessa confirmação. Até lá: **operadora pendente** (vai para conferência, sem taxa).
+2. **De-para de "Pago Online via Pix":** resolvido (D2). É Pix na maquininha do iFood, venda Presencial. O de-para do
+   importador de formas de pagamento (PR #118) já usava essa operadora; nenhum registro de produção foi alterado.
 
 ## 5. Decisões necessárias do proprietário
 
 - **D1:** autorizar o cancelamento das vendas criadas em 16/11 pela importação de formas de pagamento e a reimportação pelo relatório por pedido.
-- **D2:** confirmar a operadora de "Pago Online via Pix": Stone, maquininha do iFood ou outra.
+- **D2 — resolvida (17/11):** "Pago Online via Pix" = modalidade Pix, operadora **maquininha do iFood** (processador
+  `MAQUININHA_IFOOD`), uso presencial, faturamento **Presencial — SAIPOS**.
+  - Não é Stone, não é o canal iFood e não é comissão do marketplace.
+  - Taxa contratada informada pelo proprietário, a cadastrar na unidade (a vigência ainda será confirmada).
+  - A taxa **não** se estende a "Pix na Entrega" nem a outras descrições.
 - **D3:** fornecer as taxas reais de cada operadora (Stone e, se houver, PagBank). Sem elas, os cards mostram "Taxa não configurada".
 - **D4:** amostras reais dos relatórios oficiais do iFood (repasse ou financeiro) e da 99Food, para os parsers.
 

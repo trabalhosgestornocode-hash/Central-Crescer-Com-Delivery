@@ -15,7 +15,7 @@ const stoneCsv = (linhas) => texto(["STONE ID;DATA DA VENDA;PRODUTO;BANDEIRA;VAL
 
 test("tabela contratada: validação (sem 0%, sem repetição, modalidades praticadas) e vigência sem sobreposição", async () => {
   assert.throws(() => validarTabelaDeTaxas({ processador: "STONE", vigenciaInicio: "2026-09-01", fonte: "x", justificativa: "x", taxas: [{ modalidade: "DEBITO", bandeira: "Visa", percentual: "0" }] }), /maior que zero/);
-  assert.throws(() => validarTabelaDeTaxas({ processador: "STONE", vigenciaInicio: "2026-09-01", fonte: "x", justificativa: "x", taxas: [{ modalidade: "CREDITO_PARCELADO", bandeira: "Visa", percentual: "5" }] }), /DEBITO, CREDITO_A_VISTA ou PIX/);
+  assert.throws(() => validarTabelaDeTaxas({ processador: "STONE", vigenciaInicio: "2026-09-01", fonte: "x", justificativa: "x", taxas: [{ modalidade: "CREDITO_PARCELADO", bandeira: "Visa", percentual: "5" }] }), /DEBITO, CREDITO_A_VISTA, PIX ou VOUCHER/);
   assert.throws(() => validarTabelaDeTaxas({ processador: "STONE", vigenciaInicio: "2026-09-01", fonte: "x", justificativa: "x", taxas: [{ modalidade: "DEBITO", bandeira: "Master", percentual: "1,10" }, { modalidade: "DEBITO", bandeira: "MasterCard", percentual: "1,10" }] }), /duas vezes/);
   const { nucleo: n } = montar();
   const W = (k, b) => ESCRITAS[k].fazer(n, c, b);

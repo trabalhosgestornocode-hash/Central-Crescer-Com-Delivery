@@ -445,7 +445,7 @@ const REGRAS = Object.freeze({
   SALDO_IGUAL_A_SAIDA: "Saldo da conta a pagar igual à saída bancária, depois da emissão",
 });
 const textoDaRegra = (r) => REGRAS[r] ?? "Regra automática de semelhança (valor e data)";
-const CANAL_TXT = Object.freeze({ BALCAO: "no Balcão", IFOOD: "no iFood", ANOTA_AI: "pelo Anota AI", OUTRO: "em outro canal" });
+const CANAL_TXT = Object.freeze({ BALCAO: "no Balcão", IFOOD: "no iFood", ANOTA_AI: "pelo Anota AI", NOVENTA_E_NOVE_FOOD: "pela 99Food", OUTRO: "em outro canal" });
 const exato = (m) => `${Math.trunc(m / 1000000)},${String(m % 1000000).padStart(6, "0")}`;
 
 /**

@@ -13,7 +13,9 @@ import { CODIGO, falhar } from "./erros.js";
 import { exigirData } from "./tempo.js";
 import { exigirLista, exigirTexto, semCamposDesconhecidos } from "./validacao.js";
 
-export const MODALIDADE_TAXA = Object.freeze({ DEBITO: "DEBITO", CREDITO_A_VISTA: "CREDITO_A_VISTA", PIX: "PIX" });
+import { codigoDeOperadora } from "./operadoras.js";
+
+export const MODALIDADE_TAXA = Object.freeze({ DEBITO: "DEBITO", CREDITO_A_VISTA: "CREDITO_A_VISTA", PIX: "PIX", VOUCHER: "VOUCHER" });
 const BANDEIRAS = [["MASTERCARD", ["MASTERCARD", "MASTER"]], ["VISA", ["VISA"]], ["ELO", ["ELO"]], ["AMEX", ["AMEX", "AMERICANEXPRESS"]],
   ["UNIONPAY", ["UNIONPAY"]], ["CABAL", ["CABAL"]], ["HIPERCARD", ["HIPERCARD"]], ["PIX", ["PIX"]]];
 /** Nome da bandeira normalizado (sem espaço, acento ou caixa); desconhecida fica como veio (normalizada). */
@@ -23,29 +25,41 @@ export function bandeiraNormalizada(texto) {
 }
 
 /** Percentual "2,15" ou "2.15" → milésimos de ponto percentual inteiros (2,15% = 2150). Até 3 casas; 0 < p < 100. */
-function percentualEmMilesimos(v, campo) {
+function percentualEmMilesimos(v, campo, { aceitaZero = false } = {}) {
   const s = String(v ?? "").trim().replace(",", ".");
   if (!/^\d{1,2}(\.\d{1,3})?$/.test(s)) falhar(CODIGO.ENTRADA_INVALIDA, `${campo}: percentual inválido (ex.: 2,15).`, { campo });
   const [i, d = ""] = s.split(".");
   const m = Number(i) * 1000 + Number(d.padEnd(3, "0"));
-  if (m <= 0) falhar(CODIGO.ENTRADA_INVALIDA, `${campo}: percentual precisa ser maior que zero (modalidade sem taxa não entra na tabela).`, { campo });
+  if (m <= 0 && !aceitaZero) falhar(CODIGO.ENTRADA_INVALIDA, `${campo}: percentual precisa ser maior que zero (modalidade sem taxa não entra na tabela).`, { campo });
   return m;
 }
+/** Tarifa fixa por transação "0,10" → centavos (opcional; só quando contratada). */
+function tarifaEmCentavos(v, campo) {
+  if (v === undefined || v === null || v === "") return 0;
+  const s = String(v).trim().replace(",", ".");
+  if (!/^\d{1,4}(\.\d{1,2})?$/.test(s)) falhar(CODIGO.ENTRADA_INVALIDA, `${campo}: tarifa fixa inválida (ex.: 0,10).`, { campo });
+  const [i, d = ""] = s.split(".");
+  return Number(`${i}${d.padEnd(2, "0")}`);
+}
 
-/** Tabela contratada: processador, vigência, fonte documental e as taxas por modalidade × bandeira (sem repetição). */
+/** Tabela contratada: operadora, vigência, fonte documental e as taxas por modalidade × bandeira (sem repetição). */
 export function validarTabelaDeTaxas(e) {
-  semCamposDesconhecidos(e, ["processador", "vigenciaInicio", "vigenciaFim", "fonte", "prazoDeRecebimento", "taxas", "justificativa"], "tabelaDeTaxas");
-  const processador = exigirTexto(e.processador, "processador", { max: 30 }).toUpperCase();
-  if (processador !== "STONE") falhar(CODIGO.ENTRADA_INVALIDA, "Por enquanto só a tabela da Stone.", { campo: "processador" });
+  semCamposDesconhecidos(e, ["processador", "operadora", "vigenciaInicio", "vigenciaFim", "fonte", "prazoDeRecebimento", "taxas", "justificativa"], "tabelaDeTaxas");
+  // Fase 02: a tabela é de uma OPERADORA (código do cadastro). "processador" segue aceito como sinônimo (tabela Stone legada);
+  // o campo gravado continua `processador` para as tabelas antigas valerem sem conversão.
+  const processador = codigoDeOperadora(e.operadora ?? e.processador, e.operadora !== undefined ? "operadora" : "processador");
   const vigenciaInicio = exigirData(e.vigenciaInicio, "vigenciaInicio");
   const vigenciaFim = e.vigenciaFim ? exigirData(e.vigenciaFim, "vigenciaFim") : null;
   if (vigenciaFim && vigenciaFim < vigenciaInicio) falhar(CODIGO.DATA_INVALIDA, "Fim da vigência antes do início.", { campo: "vigenciaFim" });
   const taxas = exigirLista(e.taxas, "taxas", { min: 1, max: 40 }).map((t, i) => {
-    semCamposDesconhecidos(t, ["modalidade", "bandeira", "percentual"], `taxas[${i}]`);
+    semCamposDesconhecidos(t, ["modalidade", "bandeira", "percentual", "tarifaFixa"], `taxas[${i}]`);
     const modalidade = String(t.modalidade ?? "").toUpperCase();
-    if (!MODALIDADE_TAXA[modalidade]) falhar(CODIGO.ENTRADA_INVALIDA, `taxas[${i}].modalidade: use DEBITO, CREDITO_A_VISTA ou PIX.`, { campo: `taxas[${i}].modalidade` });
+    if (!MODALIDADE_TAXA[modalidade]) falhar(CODIGO.ENTRADA_INVALIDA, `taxas[${i}].modalidade: use DEBITO, CREDITO_A_VISTA, PIX ou VOUCHER.`, { campo: `taxas[${i}].modalidade` });
     const bandeira = modalidade === "PIX" ? "PIX" : bandeiraNormalizada(exigirTexto(t.bandeira, `taxas[${i}].bandeira`, { max: 30 }));
-    return { modalidade, bandeira, milesimos: percentualEmMilesimos(t.percentual, `taxas[${i}].percentual`) };
+    const tarifaFixaCentavos = tarifaEmCentavos(t.tarifaFixa, `taxas[${i}].tarifaFixa`);
+    // Percentual zero só vale com tarifa fixa contratada: modalidade sem custo algum não entra na tabela (nunca 0% presumido).
+    const milesimos = percentualEmMilesimos(t.percentual, `taxas[${i}].percentual`, { aceitaZero: tarifaFixaCentavos > 0 });
+    return { modalidade, bandeira, milesimos, ...(tarifaFixaCentavos ? { tarifaFixaCentavos } : {}) };
   });
   const chaves = taxas.map((t) => `${t.modalidade}|${t.bandeira}`);
   if (new Set(chaves).size !== chaves.length) falhar(CODIGO.ENTRADA_INVALIDA, "A mesma modalidade e bandeira aparece duas vezes.", { campo: "taxas" });
@@ -59,8 +73,8 @@ export function validarTabelaDeTaxas(e) {
 /** Linhas "DEBITO;MASTERCARD;2,15" (uma por linha) → taxas. Para o formulário. */
 export function taxasDoTexto(texto) {
   return String(texto ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
-    const [modalidade, bandeira, percentual] = l.split(/[;\t]/).map((x) => x.trim());
-    return { modalidade, bandeira: bandeira || "PIX", percentual };
+    const [modalidade, bandeira, percentual, tarifaFixa] = l.split(/[;\t]/).map((x) => x.trim());
+    return { modalidade, bandeira: bandeira || "PIX", percentual, ...(tarifaFixa ? { tarifaFixa } : {}) };
   });
 }
 

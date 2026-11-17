@@ -9,13 +9,16 @@
 import { CODIGO, falhar } from "../dominio/erros.js";
 import {
   ALVO_ESTORNO, ALVO_LIQUIDACAO, EVENTO_HISTORICO, FORMA_PAGAMENTO, MOTIVO_ESTORNO, NATUREZA_MOVIMENTACAO, SENTIDO,
-  SITUACAO_CONCILIACAO, SITUACAO_MOVIMENTACAO, SITUACAO_PAGAMENTO, SITUACAO_TITULO, SITUACAO_VENDA, TIPO, TIPO_CONTA,
+  CANAL, SITUACAO_CONCILIACAO, SITUACAO_MOVIMENTACAO, SITUACAO_PAGAMENTO, SITUACAO_TITULO, SITUACAO_VENDA, TIPO, TIPO_CONTA,
 } from "../dominio/catalogos.js";
 import { ACAO } from "../dominio/contexto.js";
 import { somar, somarLista, subtrair } from "../dominio/dinheiro.js";
 import { CATEGORIA_DE_VENDA, CATEGORIA_DESCONTO_A_CLASSIFICAR, CATEGORIA_DEVOLUCAO } from "../dominio/planoDeContas.js";
 import { competenciaDe } from "../dominio/tempo.js";
 import { aplicarAjuste } from "../dominio/titulos.js";
+import { MODALIDADE_DA_FORMA, SITUACAO_TAXA_ESTIMADA, calcularTaxaEstimada, resumoPorModalidade } from "../dominio/operadoras.js";
+import { exigirData } from "../dominio/tempo.js";
+import { exigirUmDe, semCamposDesconhecidos } from "../dominio/validacao.js";
 import { validarCancelamentoVenda, validarEstornoDePagamento, validarPagamentoDeVenda, validarVenda } from "../contratos/comandos.js";
 import { tituloNovo } from "./base.js";
 
@@ -66,10 +69,19 @@ export function operacoesDeVendas(b) {
         natureza: NATUREZA_MOVIMENTACAO.RECEBIMENTO, descricao: `Recebimento direto de venda (${p.forma})`, pagamentoId,
       }));
     }
+    // Fase 02: taxa ESTIMADA (tabela vigente na data da VENDA, versão gravada). Informativa: não lança despesa nem muda o
+    // recebível — a tarifa da DRE é a efetivamente cobrada (doc 36). Só pagamentos com processador adquirente.
+    const taxaEstimada = p.processador
+      ? calcularTaxaEstimada({ config: await tx.buscarPorChave(cx, TIPO.CONFIGURACAO_UNIDADE, "unidade"), data: venda.dataVenda, processador: p.processador, operadora: p.operadora ?? null, forma: p.forma, bandeira: p.bandeira ?? null, brutoCentavos: p.valorCentavos })
+      : null;
+    const detalhe = {
+      ...(p.bandeira ? { bandeira: p.bandeira } : {}), ...(p.descricaoOriginal ? { descricaoOriginal: p.descricaoOriginal } : {}),
+      ...(taxaEstimada && taxaEstimada.situacao !== SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA ? { operadora: taxaEstimada.operadora, taxaEstimada } : p.operadora ? { operadora: p.operadora } : {}),
+    };
     const pagamento = await b.criar(tx, cx, TIPO.PAGAMENTO_VENDA, {
       id: pagamentoId, vendaId: venda.id, indice, forma: p.forma, processador: p.processador, valorCentavos: p.valorCentavos, estornadoCentavos: 0,
       moeda: venda.moeda, dataPagamento, contaId: p.contaId ?? null, recebivelId: recebivel?.id ?? null, movimentacaoId: movimentacao?.id ?? null,
-      situacao: SITUACAO_PAGAMENTO.VALIDO, chaveIdempotencia: null, impressao: null, ...extra,
+      situacao: SITUACAO_PAGAMENTO.VALIDO, chaveIdempotencia: null, impressao: null, ...detalhe, ...extra,
     });
     return { pagamento, recebivel, movimentacao };
   }
@@ -77,6 +89,34 @@ export function operacoesDeVendas(b) {
   const pagamentosDa = async (tx, cx, vendaId) => (await tx.listar(cx, TIPO.PAGAMENTO_VENDA, { onde: { vendaId } })).sort((x, y) => x.indice - y.indice);
 
   return {
+    /**
+     * Fase 02 — cards por modalidade × bandeira do período (data da VENDA): bruto, taxa ESTIMADA, líquido esperado e
+     * percentual efetivo (dos totais). Estimativa ≠ recebido: nada aqui é conciliação nem despesa. Canal opcional.
+     */
+    consultarLiquidoEsperado(ctx, entrada = {}) {
+      semCamposDesconhecidos(entrada, ["periodoInicio", "periodoFim", "canal"], "consulta");
+      const inicio = exigirData(entrada.periodoInicio, "periodoInicio");
+      const fim = exigirData(entrada.periodoFim, "periodoFim");
+      if (fim < inicio) falhar(CODIGO.ENTRADA_INVALIDA, "Período invertido.");
+      const canal = entrada.canal ? exigirUmDe(entrada.canal, CANAL, "canal") : null;
+      return b.consultar(ctx, async (cx, tx) => {
+        const vendas = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: SITUACAO_VENDA.ATIVA, ...(canal ? { canal } : {}) } }))
+          .filter((v) => v.dataVenda >= inicio && v.dataVenda <= fim);
+        const itens = [];
+        for (const v of vendas) {
+          for (const p of await pagamentosDa(tx, cx, v.id)) {
+            if (p.situacao !== SITUACAO_PAGAMENTO.VALIDO) continue;
+            const t = p.taxaEstimada;
+            itens.push({
+              modalidade: t?.modalidade ?? MODALIDADE_DA_FORMA[p.forma] ?? p.forma, bandeira: t?.bandeira ?? p.bandeira ?? null, brutoCentavos: p.valorCentavos,
+              situacao: t?.situacao ?? SITUACAO_TAXA_ESTIMADA.NAO_SE_APLICA, taxaCentavos: t?.taxaCentavos ?? null, operadora: p.operadora ?? null,
+            });
+          }
+        }
+        return { periodoInicio: inicio, periodoFim: fim, canal, natureza: "ESTIMATIVA", observacao: "Taxa estimada pela tabela vigente na data da venda. Não é despesa lançada nem valor recebido.", modalidades: resumoPorModalidade(itens) };
+      });
+    },
+
     /** Venda: UM canal, zero ou mais pagamentos. Gera a receita (uma única vez) e o efeito de cada pagamento. */
     registrarVenda(ctx, entrada) {
       const c = validarVenda(entrada);

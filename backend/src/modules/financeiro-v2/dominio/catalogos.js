@@ -51,11 +51,11 @@ export const NATUREZAS_DA_CLASSIFICACAO = Object.freeze({
 });
 
 /** Canal de origem da venda (um por venda). */
-export const CANAL = enumerar("BALCAO", "IFOOD", "ANOTA_AI", "OUTRO");
+export const CANAL = enumerar("BALCAO", "IFOOD", "ANOTA_AI", "NOVENTA_E_NOVE_FOOD", "OUTRO");
 /** Forma de pagamento (uma venda pode ter várias). */
 export const FORMA_PAGAMENTO = enumerar("DINHEIRO", "PIX", "DEBITO", "CREDITO", "VALE", "OUTRA");
 /** Processador/intermediário que fica devendo o repasse. */
-export const PROCESSADOR = enumerar("STONE", "IFOOD", "ANOTA_AI", "OPERADORA_BENEFICIOS", "MAQUINA_TERCEIROS", "OUTRO");
+export const PROCESSADOR = enumerar("STONE", "PAGBANK", "MAQUININHA_IFOOD", "IFOOD", "ANOTA_AI", "NOVENTA_E_NOVE_FOOD", "OPERADORA_BENEFICIOS", "MAQUINA_TERCEIROS", "OUTRO");
 
 /** Sistema de onde um dado veio. */
 export const SISTEMA_FONTE = enumerar("SAIPOS", "IFOOD", "ANOTA_AI", "STONE", "UNICRED", "FOODY", "MANUAL", "OUTRO");

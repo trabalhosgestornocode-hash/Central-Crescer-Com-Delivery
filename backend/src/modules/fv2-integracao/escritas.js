@@ -270,9 +270,17 @@ export const ESCRITAS = Object.freeze({
   "/permissoes/conceder": { campos: ["usuario", "justificativa", ...Object.values(ACAO).map((a) => `acao_${a.split(".")[1]}`)], sensivel: () => ACAO.CONCEDER, fazer: (n, c, b) => n.concederAcesso(c, { usuarioId: id(b.usuario), acoes: acoesMarcadas(b), justificativa: b.justificativa }) },
   "/permissoes/revogar": { campos: ["usuario", "justificativa", ...Object.values(ACAO).map((a) => `acao_${a.split(".")[1]}`)], sensivel: () => ACAO.REVOGAR, fazer: (n, c, b) => n.revogarAcesso(c, { usuarioId: id(b.usuario), ...(acoesMarcadas(b).length ? { acoes: acoesMarcadas(b) } : {}), justificativa: b.justificativa }) },
   // doc 35: tabela de taxas contratadas (uma linha por taxa: "DEBITO;MASTERCARD;2,15"), com vigência e fonte documental.
-  "/configuracoes/taxas-contratadas": { campos: ["processador", "vigenciaInicio", "vigenciaFim", "fonte", "prazoDeRecebimento", "taxas", "justificativa"], fazer: (n, c, b) => n.registrarTaxasContratadas(c, {
-    processador: b.processador || "STONE", vigenciaInicio: b.vigenciaInicio, ...(b.vigenciaFim ? { vigenciaFim: b.vigenciaFim } : {}), fonte: b.fonte,
+  "/configuracoes/taxas-contratadas": { campos: ["processador", "operadora", "vigenciaInicio", "vigenciaFim", "fonte", "prazoDeRecebimento", "taxas", "justificativa"], fazer: (n, c, b) => n.registrarTaxasContratadas(c, {
+    ...(b.operadora ? { operadora: b.operadora } : { processador: b.processador || "STONE" }), vigenciaInicio: b.vigenciaInicio, ...(b.vigenciaFim ? { vigenciaFim: b.vigenciaFim } : {}), fonte: b.fonte,
     ...(b.prazoDeRecebimento ? { prazoDeRecebimento: b.prazoDeRecebimento } : {}), taxas: taxasDoTexto(b.taxas), justificativa: b.justificativa,
+  }) },
+  // Fase 02 (doc 40): operadoras de pagamento da unidade (cadastro, ativação/desativação, encerramento; nada é apagado).
+  "/configuracoes/operadoras": { campos: ["codigo", "nome", "processador", "inicio", "encerramento", "modalidades", "observacao", "justificativa"], fazer: (n, c, b) => n.registrarOperadora(c, {
+    codigo: b.codigo, nome: b.nome, processador: b.processador, inicio: b.inicio, ...(b.encerramento ? { encerramento: b.encerramento } : {}),
+    modalidades: Array.isArray(b.modalidades) ? b.modalidades : String(b.modalidades ?? "").split(/[,;\s]+/).filter(Boolean), ...(b.observacao ? { observacao: b.observacao } : {}), justificativa: b.justificativa,
+  }) },
+  "/configuracoes/operadoras/situacao": { campos: ["codigo", "situacao", "encerramento", "justificativa"], fazer: (n, c, b) => n.alterarSituacaoOperadora(c, {
+    codigo: b.codigo, ...(b.situacao ? { situacao: b.situacao } : {}), ...(b.encerramento !== undefined ? { encerramento: b.encerramento || null } : {}), justificativa: b.justificativa,
   }) },
   // doc 36: taxas Stone do período na DRE (uma vez por importação e competência) e o estorno autorizado.
   "/importacao/reconhecer-taxas": { campos: ["importacao", "justificativa"], fazer: (n, c, b) => n.reconhecerTaxasDoPeriodo(c, { importacaoId: id(b.importacao), justificativa: b.justificativa }) },

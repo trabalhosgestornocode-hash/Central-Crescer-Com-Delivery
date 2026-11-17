@@ -118,6 +118,9 @@ export const CONSULTAS = Object.freeze({
   // Abertura + o necessário do roteiro (contas, plano): uma consulta por tela, como as demais.
   // doc 35: taxas contratadas × cobradas (Stone), por modalidade e bandeira, transação a transação.
   "/taxas-contratadas": (n, c, p) => n.consultarTaxasContratadas(c, { competencia: p.competencia, ...(p.processador ? { processador: p.processador } : {}) }),
+  // Fase 02 (doc 40): operadoras e o líquido esperado (ESTIMATIVA) por modalidade × bandeira do período.
+  "/operadoras": (n, c) => n.consultarOperadoras(c),
+  "/vendas/liquido-esperado": (n, c, p) => n.consultarLiquidoEsperado(c, { periodoInicio: p.periodoInicio, periodoFim: p.periodoFim, ...(p.canal ? { canal: p.canal } : {}) }),
   "/abertura": async (n, c) => ({ ...(await n.consultarAbertura(c)), configuracoes: await n.consultarConfiguracoes(c) }),
   "/configuracoes/plano": (n, c) => n.consultarPlanoDeContas(c),
   "/configuracoes/categoria": (n, c, p) => n.consultarCategoria(c, { codigo: String(p.codigo ?? "") }),
