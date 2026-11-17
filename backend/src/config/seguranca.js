@@ -166,7 +166,10 @@ export const LIMITES_CORPO = {
   // pro mesmo tipo de payload. Sem isto a rota caía no limite `padrao` de 1 MB e
   // falhava com "Arquivo(s) grande(s) demais" em qualquer relatório acima de ~730 KB.
   parserFoodDeliveryImportacao: "30mb",
-  martinBrowerImportacao: "8mb", // JSON do loadItens colado pelo admin
+  martinBrowerImportacao: "8mb",
+  // Financeiro v2 — envio de relatório (XLSX/PDF em base64) para a prévia da importação. A rota do módulo aceita 8 MB, mas
+  // o parser global de 1 MB roda antes e barrava relatórios reais acima de ~760 KB (achado na validação de 17/11/2026).
+  financeiroV2Importacao: "8mb", // JSON do loadItens colado pelo admin
   // Bonificação Mensal (lançamento diário E fechamento mensal) manda os DOIS
   // PDFs da Visio no mesmo corpo em base64 — até 15 MB cada (MAX_ARQUIVO em
   // visio-parser.js#decodificarPdfVisio), +33% do base64: pior caso ~40 MB de

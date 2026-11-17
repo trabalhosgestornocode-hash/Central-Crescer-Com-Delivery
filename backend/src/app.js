@@ -60,6 +60,8 @@ export function createApp() {
   // amostra pequena (achado real ao testar um relatório de ~3 MB/1578 pedidos).
   app.use("/api/v1/parser-food-delivery", express.json({ limit: LIMITES_CORPO.parserFoodDeliveryImportacao }));
   app.use("/api/v1/integracoes/martin-brower/import-manual", express.json({ limit: LIMITES_CORPO.martinBrowerImportacao }));
+  // Financeiro v2: só o envio do relatório para a prévia (o resto do módulo segue no teto padrão).
+  app.use("/api/v1/financeiro-v2/acoes/importacao/receber", express.json({ limit: LIMITES_CORPO.financeiroV2Importacao }));
   // Bonificação Mensal — os 2 PDFs da Visio (Geral + Loja / Vendas + Produtos)
   // vão em base64 no mesmo corpo, tanto no LANÇAMENTO DIÁRIO (/importar,
   // /importar/preview) quanto no FECHAMENTO MENSAL (/fechamento-mensal,

@@ -402,7 +402,7 @@ export function operacoesDeFormacao(b) {
     // Venda do dia por FORMA (relatório de formas) × venda por PEDIDO do mesmo dia: o mesmo faturamento por dois caminhos.
     // Doc 44: faturamento manual PROVISÓRIO do mesmo dia × canal bloqueia a venda importada até a substituição auditada.
     if (proposta.operacao === OP.VENDA && proposta.comando?.fonte?.sistema === "SAIPOS") {
-      const provisoria = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: "ATIVA", canal: proposta.comando.canal } }))
+      const provisoria = (await tx.listar(cx, TIPO.VENDA, { onde: { situacao: "ATIVA", canal: proposta.comando.canal, dataVenda: proposta.dataOperacao } }))
         .find((v) => v.dataVenda === proposta.dataOperacao && v.fonte?.sistema === "MANUAL" && String(v.fonte.idExterno ?? "").startsWith("faturamento-manual:"));
       if (provisoria) return { id: provisoria.id, motivo: "FATURAMENTO_PROVISORIO" };
     }
@@ -420,8 +420,14 @@ export function operacoesDeFormacao(b) {
     const periodo = (p) => (p.operacao === OP.VENDA_AGREGADA && p.comando?.periodoInicio ? p.comando : null);
     const canalDe = (p) => (p.operacao === OP.VENDA ? p.comando?.canal ?? null : p.comando?.canal ?? null);
     const cobre = (per, data) => data >= per.periodoInicio && data <= per.periodoFim;
-    const vendas = await semVendaCancelada(tx, cx, [...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA } }), ...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } })]
-      .filter((x) => x.id !== proposta.id && x.competencia === proposta.competencia));
+    // Desempenho (validação de 17/11/2026): sem período próprio (venda por pedido ou agregado do dia), só um TOTAL DO
+    // PERÍODO já aplicado pode cobrir esta data — lista só os agregados aplicados (poucos) em vez de todas as vendas
+    // aplicadas (crescia com o volume: 825 pedidos levavam minutos). Com período próprio, a busca completa continua.
+    const meuPeriodo = periodo(proposta);
+    const candidatos = meuPeriodo
+      ? [...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA, estado: E.APLICADA } }), ...await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } })]
+      : await tx.listar(cx, TIPO.PROPOSTA, { onde: { operacao: OP.VENDA_AGREGADA, estado: E.APLICADA } });
+    const vendas = await semVendaCancelada(tx, cx, candidatos.filter((x) => x.id !== proposta.id && x.competencia === proposta.competencia));
     const meu = periodo(proposta);
     for (const x of vendas) {
       const dele = periodo(x);
